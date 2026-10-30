@@ -147,9 +147,16 @@ REVIEW_CORRECTIONS = [
 ]
 
 
+# 表项各字段之间允许夹 Rust 注释（`//`/`///` 行注释与 `/* */` 块注释）。
+# 卡 `openmir2-gm-registry-rebuild`：`ChangeMasterName` / `ShowDenyChrNameLogon` 两条
+# 在 `CommandDef {` 与 `name:` 之间带了 oracle 出处注释，旧正则（要求 `{` 后紧跟 `name:`）
+# 会静默漏掉它们，导致 table_total=183≠185。注释是合法源码，不得改变表项计数。
+_RUST_GAP = r"(?:\s|//[^\n]*(?:\n|$)|/\*.*?\*/)*"
 CMD_DEF_RE = re.compile(
-    r"CommandDef\s*\{\s*name:\s*\"(?P<name>[^\"]+)\",\s*perm_min:\s*(?P<perm>\d+),"
-    r"\s*params:\s*(?P<params>\d+),\s*imp:\s*Imp::(?P<imp>\w+)\s*,\s*\}", re.S)
+    r"CommandDef\s*\{" + _RUST_GAP + r"name:\s*\"(?P<name>[^\"]+)\"," + _RUST_GAP +
+    r"perm_min:\s*(?P<perm>\d+)," + _RUST_GAP +
+    r"params:\s*(?P<params>\d+)," + _RUST_GAP +
+    r"imp:\s*Imp::(?P<imp>\w+)\s*," + _RUST_GAP + r"\}", re.S)
 GC_REG_RE = re.compile(
     r"\[RegisterCommand\(\s*\(?\s*typeof\(\s*(?P<cls>\w+)\s*\)\s*\)?\s*\)\]\s*"
     r"public\s+readonly\s+GameCmd\s+(?P<field>\w+)\s*;", re.S)
@@ -1335,11 +1342,13 @@ def cmd_selftest(args):
 
     def t_j():
         doc = copy.deepcopy(base)
-        row = next(r for r in doc["commands"] if r["cmd"].lower() == "fdgfdg56")
-        assert row["handler"] and row["handler"].endswith("SetPassWordCommand.cs:177"), \
-            "conf 键 StorageLock ⇒ field Lock ⇒ SetPassWordCommand.cs:177 的口径没生效：%r" % row["handler"]
-        row["cmd_name"] = "StorageLock"  # v1 的错误口径：把 conf 键当 CmdName
-        gate_red(doc, "fdgfdg56", "J conf 键当 CmdName")
+        # 样本随实现推进而换：`fdgfdg56`/`StorageLock` 已实现后改取 `s`/`Make`
+        # （conf[Command].Make=s ⇒ 字段 Make 的最终名是值 `s`，键 `Make` 不是命令名）。
+        row = next(r for r in doc["commands"] if r["field"] == "Make")
+        assert row["cmd"] == "s" and row["cmd_name"] == "s", \
+            "conf 键 Make ⇒ 字段 Make 的最终名应为值 `s`：%r" % row["cmd_name"]
+        row["cmd_name"] = "Make"  # v1 的错误口径：把 conf 键当 CmdName
+        gate_red(doc, "s.cmd_name:", "J conf 键当 CmdName", needle2="Make")
 
     def t_k():
         doc = copy.deepcopy(base)
@@ -1370,13 +1379,21 @@ def cmd_selftest(args):
             "结构性不可达的行在 StartPermission 假设下被翻掉了（I3）"
 
     def t_m():
-        # 名字口径的独立自证：Map / MapInfo 必须分别指向 MapInfoCommand / ShowMapInfoCommand
-        m_map = next((r for r in base["commands"] if r["cmd"] == "Map"), None)
-        m_info = next((r for r in base["commands"] if r["cmd"] == "MapInfo"), None)
-        assert m_map and m_map["handler"] and m_map["handler"].endswith("MapInfoCommand.cs:8"), \
-            "Map 的 handler 应为 MapInfoCommand.cs:8，实际 %r" % (m_map or {}).get("handler")
-        assert m_info and m_info["handler"] and m_info["handler"].endswith("ShowMapInfoCommand.cs:6"), \
-            "MapInfo 的 handler 应为 ShowMapInfoCommand.cs:6，实际 %r" % (m_info or {}).get("handler")
+        # 名字口径的独立自证：Map / MapInfo 必须分别指向 MapInfoCommand / ShowMapInfoCommand。
+        # 两条都已实现 ⇒ 不再出现在 `commands` 行里（行只收 Unimplemented），故直接核推导表；
+        # 若将来又落回未实现，同时核登记行，保持原覆盖面。
+        maps, _custom, _w = resolve_command_maps(parse_gamecommands(), parse_gamecmdconf(),
+                                                 parse_conf(args.conf)[0], parse_command_classes())
+        assert maps["Map"]["handler"].endswith("MapInfoCommand.cs:8"), \
+            "Map 的 handler 应为 MapInfoCommand.cs:8，实际 %r" % maps["Map"]["handler"]
+        assert maps["MapInfo"]["handler"].endswith("ShowMapInfoCommand.cs:6"), \
+            "MapInfo 的 handler 应为 ShowMapInfoCommand.cs:6，实际 %r" % maps["MapInfo"]["handler"]
+        for cmd, want in (("Map", "MapInfoCommand.cs:8"),
+                          ("MapInfo", "ShowMapInfoCommand.cs:6")):
+            row = next((r for r in base["commands"] if r["cmd"] == cmd), None)
+            if row is not None:
+                assert row["handler"] and row["handler"].endswith(want), \
+                    "%s 登记行 handler 应为 %s，实际 %r" % (cmd, want, row["handler"])
 
     tooth("A 在界指错命令 ⇒ gate 红", t_a)
     tooth("B perm 10→8 ⇒ gate 红", t_b)
@@ -1401,8 +1418,84 @@ def cmd_selftest(args):
         row["child_card"] = None
         gate_red(doc, row["cmd"], "N script-reachable 未链接子卡")
 
+    def t_o():
+        # 承重牙（卡 openmir2-gm-registry-rebuild）：parser 少解析一个表项 ⇒ crosscheck/gate 必红。
+        # 走真实 build 路径复现旧正则漏项（注释夹在 `{` 与 `name:` 之间）的后果。
+        orig = globals()["parse_rust"]
+
+        def broken(path=RUST_TABLE):
+            return [r for r in orig(path) if r["name"] != "MasterName"]
+
+        globals()["parse_rust"] = broken
+        try:
+            broken_fresh = build(args.conf, args.envir, args.deploy)
+        finally:
+            globals()["parse_rust"] = orig
+        assert broken_fresh["crosscheck"]["ok"] is False, \
+            "parser 少一项后 crosscheck 仍 ok（牙失效）"
+        probs = check_registry(base, args.conf, args.envir, args.deploy,
+                               recomputed=broken_fresh)
+        hits = [p for p in probs if "取数口径自校验失败" in p]
+        assert hits, "parser 少一项后 gate 未报取数口径失败（前 6 条=%r）" % probs[:6]
+        assert any("MasterName" in p for p in hits), \
+            "诊断未点名被漏掉的 MasterName（%r）" % hits
+
+    def t_p():
+        # parser 口径牙：注释是合法源码，不得改变表项计数；两个活名必须在表。
+        rows = parse_rust()
+        names = [r["name"] for r in rows]
+        assert len(rows) == 185, "COMMANDS 表项应为 185，实际 %d" % len(rows)
+        assert len(set(names)) == len(names), "COMMANDS 表有重名"
+        for n in ("MasterName", "ShowDenyCharNameLogon"):
+            assert n in names, "表项缺 %s" % n
+        sample = (
+            'CommandDef {\n'
+            '    // 出处注释\n'
+            '    /// doc 注释\n'
+            '    name: "X",\n'
+            '    perm_min: 1,\n'
+            '    params: 2,\n'
+            '    imp: Imp::Unimplemented,\n'
+            '},'
+        )
+        m = CMD_DEF_RE.search(sample)
+        assert m and m.group("name") == "X", "带注释的 CommandDef 解析失败"
+
+    def t_q():
+        # 变异（卡 openmir2-gm-registry-rebuild）：把两条 name 改回类属性名/conf 键拼写
+        # ⇒ 推导表与 gmcmd.rs 的 crosscheck 必红（证明 gate 确实钉住这两个 oracle 活名）。
+        orig = globals()["parse_rust"]
+        ren = {"MasterName": "ChangeMasterName",
+               "ShowDenyCharNameLogon": "ShowDenyChrNameLogon"}
+
+        def reverted(path=RUST_TABLE):
+            rows = []
+            for r in orig(path):
+                row = dict(r)
+                row["name"] = ren.get(row["name"], row["name"])
+                rows.append(row)
+            return rows
+
+        globals()["parse_rust"] = reverted
+        try:
+            bad = build(args.conf, args.envir, args.deploy)
+        finally:
+            globals()["parse_rust"] = orig
+        cc = bad["crosscheck"]
+        assert cc["ok"] is False, "改回类属性名后 crosscheck 仍 ok（牙失效）"
+        for n in ("ChangeMasterName", "ShowDenyChrNameLogon"):
+            assert n in cc["missing_in_model"], "crosscheck 未点名 missing %s：%r" % (n, cc)
+        for n in ("MasterName", "ShowDenyCharNameLogon"):
+            assert n in cc["extra_in_model"], "crosscheck 未点名 extra %s：%r" % (n, cc)
+        probs = check_registry(base, args.conf, args.envir, args.deploy, recomputed=bad)
+        assert any("取数口径自校验失败" in p for p in probs), \
+            "改回类属性名后 gate 未报取数口径失败（前 6 条=%r）" % probs[:6]
+
     tooth("M Map / MapInfo handler 未对调", t_m)
     tooth("N script-reachable 未链接子卡 ⇒ gate 红", t_n)
+    tooth("O parser 少解析一项 ⇒ crosscheck/gate 红", t_o)
+    tooth("P parser 容忍表项内注释：185 项、活名在表、无重名", t_p)
+    tooth("Q 两条 name 改回类属性名 ⇒ crosscheck/gate 红", t_q)
 
     if base_sha != hashlib.sha256(open(REGISTRY, "rb").read()).hexdigest():
         fails.append("牙把登记表写坏了（sha256 变化）")
@@ -1415,7 +1508,7 @@ def cmd_selftest(args):
             print("  -", f)
         return 1
     extra = ("；skipped=%s" % ",".join(skips)) if skips else ""
-    print("gm_registry selftest: OK (14 teeth%s; registry sha256=%s 未变)"
+    print("gm_registry selftest: OK (17 teeth%s; registry sha256=%s 未变)"
           % (extra, base_sha[:16]))
     return 0
 

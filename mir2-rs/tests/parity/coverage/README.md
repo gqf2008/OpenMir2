@@ -268,7 +268,7 @@ python mir2-rs/tests/parity/coverage/recon_gates.py dispatch   # 出表；RED �
 python -I -B mir2-rs/tests/parity/coverage/gm_registry.py build     # 生成/刷新 gm_registry.json（utf-8 + LF，可逐字节复现）
 python -I -B mir2-rs/tests/parity/coverage/gm_registry.py gate      # 门禁（红=1 / 绿=0 / 判不了=2）
 python -I -B mir2-rs/tests/parity/coverage/gm_registry.py summary   # 一条命令复算汇总
-python -I -B mir2-rs/tests/parity/coverage/gm_registry.py selftest  # 14 颗牙（逐颗校验登记表 sha256 未变）
+python -I -B mir2-rs/tests/parity/coverage/gm_registry.py selftest  # 17 颗牙（逐颗校验登记表 sha256 未变）
 ```
 
 数据源路径可用 `--conf`（部署 `Command.conf`）、`--envir`（部署 `Envir` 根）、`--deploy`（部署根，判构型）覆盖；
@@ -354,7 +354,7 @@ RegisterCommandGroups: 遍历 Commands 程序集里所有带 [Command] 的类；
 - `unreachable ⇒ 本次源码扫描里没有该命令的可达脚本调用`；`structural-unreachable ⇒ 命令表里确实解析不出 handler`；
 - `crosscheck.ok` 必须为真（推导表 vs `gmcmd.rs`）；`deployment.oracle.build` 与 `debug_caveat` 必须显式。
 
-**14 颗牙**（`selftest`，每颗跑完都校验登记表 sha256 不变）：
+**17 颗牙**（`selftest`，每颗跑完都校验登记表 sha256 不变）：
 
 ```
 A 在界指错命令   B perm 10→8      C 改 cmd 名      D register_command=true + handler=null
@@ -363,6 +363,9 @@ G handler 行号越界                 H script-reachable 无证据
 I 伪造脚本证据（非 GMEXECUTE 行）  J 把 conf 键当 CmdName（B2 原缺陷）
 K 证据指向未加载的副本脚本         L StartPermission=1/10 重算（结构性行不被翻、perm=10 不被 sp=1 翻）
 M Map / MapInfo handler 未对调     N script-reachable 未链接子卡
+O parser 少解析一项 ⇒ crosscheck/gate 红（`CommandDef {` 与 `name:` 之间夹注释不得漏项）
+P parser 容忍表项内注释：185 项、两个活名在表、无重名
+Q 两条命令名改回类属性名拼写 ⇒ crosscheck/gate 红（钉 oracle 活名）
 ```
 
 > 改了 `gmcmd.rs`、`GameCommands.cs`、`GameCmdConf.cs`、`Commands/*.cs`、部署 `Command.conf` **或部署 Envir 脚本**

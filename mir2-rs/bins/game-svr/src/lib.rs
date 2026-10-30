@@ -43177,7 +43177,7 @@ break
         "DenyChrNameLogon",
         "+jip",
         "+-jid",
-        "ShowDenyChrNameLogon",
+        "ShowDenyCharNameLogon",
         "+-jip",
         // 重载/管理（14）
         "LoadAdmin",
@@ -43263,7 +43263,7 @@ break
             "@DelDenyChrNameLogon 张三",
             "@-jip 1.2.3.4",
             "@+-jid",
-            "@ShowDenyChrNameLogon",
+            "@ShowDenyCharNameLogon",
             "@+-jip",
         ] {
             let frames = rig.say_gm(line);
