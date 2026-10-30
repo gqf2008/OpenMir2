@@ -1,7 +1,7 @@
 # GM 命令 `Imp::Unimplemented` 74 条对 oracle 钉性盘点（2026-10-30）
 
-> **计数订正**：同日族 P（密码锁门 7）、族 T（会话开关/骑马 7）与族 Q（查询/展示 10）已落地，
-> 现存 `Imp::Unimplemented` = **50**——见 §7；§1–§6 保留盘点时点值。
+> **计数订正**：同日族 P（密码锁门 7）、族 T（会话开关/骑马 7）、族 Q（查询/展示 10）与
+> 族 X1（禁言名单 5）已落地，现存 `Imp::Unimplemented` = **45**——见 §7；§1–§6 保留盘点时点值。
 
 - 卡：`openmir2-gm-unimpl-inventory`（tier=L，worker=openmir2-dev-3，分支 `card/gm-unimpl-inventory-dev3`，基线 `walgit/master` `26f88f483`）。
 - 写集：仅本文档。不改 `mir2-rs/**`、不实现任何命令、不动 `Command.conf`。
@@ -182,6 +182,11 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   越界零帧+%s 格式串字面输出）+ LotteryTicket 8 配置值（部署全 0，格式串尾随空格照抄）+ 其余
   红绿回执逐字节；`showflag` 的目标 QuestFlag 位阵在宿主未建模 ⇒ 恒零值模型（seam
   `target_quest_flag_status`，在线恒走 OFF 支；族 F 落地时接真位阵后 ON 支可达）。
-- **现存 `Imp::Unimplemented` = 74 − 24 = 50**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
-  thirty_command_bodies` 的 135 已接 / 50 未接断言；改坏任一计数 ⇒ 该测试红）。
-- 剩余缺口族：F3 / M6 / C5 / W4 / X1 5 / X2 18（§4.3 分族索引不变）。
+- **族 X1 5 条已落地**：卡 `openmir2-gm-family-x1-denywhisper`（worker-85，本卡）——`+jy`
+  无条件入 `DisableSendMsgList` 内存面 + 绿字（FilterSendMsg 位与 SaveDisableSendMsgList 落盘面
+  登记）；`+-jy` 空/非空两支恒字（非空只出蓝头=循环体注释）；`-jy` 恒红「没有被禁言!!!」；
+  `查看禁言` 恒绿「禁言列表为空!!!」（DenySayMsgList 全仓无写点 ⇒ 恒空模型）；`查看私聊`
+  单字符名越界零帧 + `listening_to` 镜像 toggle 双绿字。
+- **现存 `Imp::Unimplemented` = 74 − 29 = 45**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
+  thirty_command_bodies` 的 140 已接 / 45 未接断言；改坏任一计数 ⇒ 该测试红）。
+- 剩余缺口族：F3 / M6 / C5 / W4 / X2 18（§4.3 分族索引不变）。

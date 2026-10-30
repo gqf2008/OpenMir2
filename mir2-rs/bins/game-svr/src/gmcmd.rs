@@ -220,6 +220,23 @@ pub const LOTTERY_MSG_FMT: &str =
 /// ⇒ **原样输出、逐件相同**（内容冻结怪癖，不许「修」）。
 pub const Q_SHOW_USE_ITEM_LITERAL: &str = "%s[%s]IDX[%d]系列号[%d]持久[%d-%d]";
 
+// ===== 族 X1 · 禁言名单（卡 `openmir2-gm-family-x1-denywhisper`，tier=L）的 SysMsg 正文 =====
+//
+// 文本取 `CommandHelp.cs` / 命令体内联字面量，逐字节照抄。两条恒字来自 oracle 循环体**整段
+// 注释**（`-jy` 删除循环 / +-jy 非空逐条循环）——不许补「应该能用」的实现（卡面 forbidden）。
+/// `DisableSendMsgCommand` 的 `Command.CommandHelp`（Help=`人物名称`；现网名 `+jy`）。
+pub const X1_HELP_DISABLE_SEND_MSG: &str = "命令格式: @+jy 人物名称";
+/// `EnableSendMsgCommand` 的 `Command.CommandHelp`（Help=`人物名称`；现网名 `-jy`）。
+pub const X1_HELP_ENABLE_SEND_MSG: &str = "命令格式: @-jy 人物名称";
+/// `ViewWhisperCommand` 的 `Command.CommandHelp`——Help=`GameCommandViewWhisperHelpMsg`
+/// = `" 人物名称"`（**带前导空格**，`CommandHelp.cs:91`）⇒ 拼出**双空格**
+/// `@查看私聊  人物名称`（`CommandAttribute.cs:53` 的 `$"@{Name} {Help}"`）。
+pub const X1_HELP_VIEW_WHISPER: &str = "命令格式: @查看私聊  人物名称";
+/// `CommandHelp.GameCommandViewWhisperMsg1`（`CommandHelp.cs:92`；toggle 回 Msg1）。
+pub const X1_VIEW_WHISPER_STOP_FMT: &str = "已停止侦听{0}的私聊信息...";
+/// `CommandHelp.GameCommandViewWhisperMsg2`（`CommandHelp.cs:93`；toggle 开 Msg2）。
+pub const X1_VIEW_WHISPER_START_FMT: &str = "正在侦听{0}的私聊信息...";
+
 // ===== 批次 4（数值/角色族，设计件 §4.3 第 72–115 行，44 条）的 CommandHelp 常量 =====
 //
 // 口径同上：`命令格式: @{现网名} {Help}`（`CommandAttribute.cs:53`）；`Help` 为空时**末尾空格保留**
@@ -661,6 +678,25 @@ pub enum Imp {
     /// （部署全 0：`GameSvrConf.cs:1688-1695` ctor 0 + `GameApp.cs:75-81` 启动清零 + 部署
     /// `Server.conf` 无这些键），格式串尾**带一个空格**。
     LotteryTicket,
+
+    // ---- 族 X1 · 禁言名单（5，卡 `openmir2-gm-family-x1-denywhisper`，tier=L）----
+    /// `DisableSendMsgCommand`（现网 `@+jy`）：空名红帮助；在线置目标 `FilterSendMsg=true`
+    /// （宿主未建模该位，消费点未接）⇒ **无条件** `DisableSendMsgList.Add`（重复名照加）+
+    /// 绿字 `{名} 已加入禁言列表。`；`SaveDisableSendMsgList` 落盘面 forbidden ⇒ `log_note`。
+    DisableSendMsg,
+    /// `DisableSendMsgListCommand`（现网 `@+-jy`）：列表空红「禁言列表为空!!!」；非空蓝
+    /// 「禁言列表:」**只出头不逐条**（循环体整段注释 ⇒ 恒字）。
+    DisableSendMsgListCmd,
+    /// `EnableSendMsgCommand`（现网 `@-jy`）：删除循环体整段注释 ⇒ **恒**红
+    /// `{名} 没有被禁言!!!`（名字回显、永不真删——恒字照抄）。
+    EnableSendMsg,
+    /// `ShutupListCommand`（现网 `@查看禁言`）：读的是 **DenySayMsgList**（与 DisableSendMsgList
+    /// 是两张表！）——全仓无活跃写点 ⇒ 恒空模型 ⇒ 恒绿「禁言列表为空!!!」。
+    ShutupList,
+    /// `ViewWhisperCommand`（现网 `@查看私聊`）：`sChrName[1]` 判空下标怪癖（单字符名越界
+    /// ⇒ 零帧）；离线红；在线 toggle 说话者侧 `listening_to` 镜像（= 目标 `WhisperHuman` 的
+    /// 等价观测面）⇒ 两条绿字。
+    ViewWhisper,
     Unimplemented,
 }
 
@@ -891,6 +927,12 @@ pub struct GmSession {
     /// 同一事件内按「翻转后的会话态」现算 feature/feature_ex 并走
     /// [`crate::downlink`] 的视距广播（与换装路径同一收口，见 lib.rs `apply_pending_gm_feature_changed`）。
     pub pending_feature_changed: bool,
+    /// **族 X1**：`@查看私聊` 的监听位镜像——oracle 写**目标** `WhisperHuman = PlayerActor`
+    /// （谁在监听我；`ViewWhisperCommand.cs:33-39`）。本仓写面消费点（私聊回声路由）未接
+    /// ⇒ 该位唯一可观测面 = 本命令的 toggle 回执，故以**说话者侧** `listening_to` 承载
+    /// （`Some(目标名)` = 正在监听该目标）：单命令驱动流下与 oracle 逐支等价；
+    /// 多听者覆盖差异（oracle 目标仅一个监听位）登记于 [`Imp::ViewWhisper`] 文档。
+    pub listening_to: Option<String>,
 }
 
 impl Default for GmSession {
@@ -935,6 +977,7 @@ impl Default for GmSession {
             on_horse: false,
             horse_type: 0,
             pending_feature_changed: false,
+            listening_to: None,
         }
     }
 }
@@ -1301,6 +1344,11 @@ pub struct GmWorld<'a> {
     /// 跨会话/跨事件同一份；`None` = 构造处未注入（测试/`ScriptGmEnv::bridge` 的脚本
     /// GMEXECUTE 路径）⇒ 命令体走 `log_note` 登记零帧（不静默伪造翻转）。
     pub filter_word: Option<&'a std::cell::Cell<bool>>,
+    /// **族 X1**：`SystemShare.DisableSendMsgList`（全局名单，内存面；部署启动恒空——
+    /// `LoadDisableSendMsgList` 全注释 ⇒ 什么都不读；`+jy` 无条件 `Add`、`+-jy` 读 Count，
+    /// `-jy` 的删除循环整段注释 ⇒ 名单只增不删）。`RefCell<Vec<String>>` 共享引用；
+    /// `None` = 构造处未注入（脚本桥）⇒ 命令体走 `log_note` 登记（不伪造名单状态）。
+    pub disable_send_msg_list: Option<&'a std::cell::RefCell<Vec<String>>>,
 }
 
 impl<'a> GmWorld<'a> {
@@ -1315,6 +1363,7 @@ impl<'a> GmWorld<'a> {
             speaker_id: 0,
             now_ms: 0,
             filter_word: None,
+            disable_send_msg_list: None,
         }
     }
 
@@ -1346,6 +1395,13 @@ impl<'a> GmWorld<'a> {
     #[must_use]
     pub fn with_filter_word(mut self, filter_word: &'a std::cell::Cell<bool>) -> Self {
         self.filter_word = Some(filter_word);
+        self
+    }
+
+    /// 注入宿主的 `SystemShare.DisableSendMsgList` 内存名单（族 X1 用）。
+    #[must_use]
+    pub fn with_disable_send_msg_list(mut self, list: &'a std::cell::RefCell<Vec<String>>) -> Self {
+        self.disable_send_msg_list = Some(list);
         self
     }
 
@@ -2088,6 +2144,115 @@ fn lottery_ticket(cfg: &GmConfig) -> GmResult {
     ))
 }
 
+// ---------------------------- 族 X1 · 禁言名单（5，卡 `openmir2-gm-family-x1-denywhisper`）----------------------------
+//
+// oracle：DisableSendMsgCommand（现网 `+jy`）/ EnableSendMsgCommand（`-jy`）/
+// DisableSendMsgListCommand（`+-jy`）三条 `Execute(string[], IPlayerActor)` + ShutupListCommand
+// （`查看禁言`）/ ViewWhisperCommand（`查看私聊`）两条单参。perm 全 10（`[Permission]`
+// DisableSendMsg/EnableSendMsg/DisableSendMsgList/ShutupList/ViewWhisper 与构造缺省一致）。
+//
+// 两张**不同的**全局表：`DisableSendMsgList`（+jy 无条件 Add；`+-jy` 读 Count；`-jy` 的删除
+// 循环**整段注释** ⇒ 只增不删；`LoadDisableSendMsgList` 全注释 ⇒ 启动恒空 ⇒ 内存面建模精确）
+// 与 `DenySayMsgList`（**仅** `查看禁言` 读它，全仓无活跃写点 ⇒ 恒空模型 ⇒ 恒绿）。
+//
+// **恒字**（oracle 循环体整段注释 ⇒ 不许补「应该能用」的实现，卡面 forbidden）：
+// `-jy` 恒红 `{名} 没有被禁言!!!`（名字回显）；`+-jy` 非空只出蓝头「禁言列表:」不逐条。
+//
+/// `DisableSendMsgCommand.Execute`（`DisableSendMsgCommand.cs:12-33`，现网 `@+jy`）。
+///
+/// 顺序：空名红帮助 ⇒ 在线置**目标** `FilterSendMsg = true`（宿主未建模该位、消费点未接
+/// ⇒ 零可观测差异，登记）⇒ **无条件** `DisableSendMsgList.Add(sHumanName)`（离线也加、
+/// 重复名照加）⇒ `SaveDisableSendMsgList()`（落盘面 forbidden ⇒ 登记）⇒ 绿字
+/// `{名} 已加入禁言列表。`。
+fn disable_send_msg(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let s_human = split_params(parameters).first().copied().unwrap_or("");
+    if s_human.is_empty() {
+        return red(X1_HELP_DISABLE_SEND_MSG);
+    }
+    let mut r = green(format!("{s_human} 已加入禁言列表。"));
+    match world.disable_send_msg_list {
+        Some(list) => {
+            list.borrow_mut().push(s_human.to_string());
+            let online = world.play_by_name(s_human).is_some();
+            r.log_note = Some(if online {
+                "+jy：已置目标 FilterSendMsg=true（宿主未建模该位、消费点未接）+ SaveDisableSendMsgList 落盘面未实现（卡 openmir2-gm-family-x1-denywhisper forbidden 登记）"
+            } else {
+                "+jy：目标离线 ⇒ oracle 不置 FilterSendMsg；SaveDisableSendMsgList 落盘面未实现（卡 openmir2-gm-family-x1-denywhisper forbidden 登记）"
+            });
+        }
+        None => {
+            r.log_note = Some(NOTE_X1_LIST_NOT_INJECTED);
+        }
+    }
+    r
+}
+
+/// `DisableSendMsgListCommand.Execute`（`DisableSendMsgListCommand.cs:11-29`，现网 `@+-jy`）：
+/// `Count <= 0` 红「禁言列表为空!!!」；非空蓝「禁言列表:」后循环体**整段注释** ⇒ 只出头、
+/// 不逐条（恒字）。
+fn disable_send_msg_list(world: &GmWorld<'_>) -> GmResult {
+    match world.disable_send_msg_list {
+        Some(list) => {
+            if list.borrow().is_empty() {
+                red("禁言列表为空!!!")
+            } else {
+                blue("禁言列表:")
+            }
+        }
+        None => no_frames(NOTE_X1_LIST_NOT_INJECTED),
+    }
+}
+
+/// `EnableSendMsgCommand.Execute`（`EnableSendMsgCommand.cs:13-40`，现网 `@-jy`）：
+/// 空名红帮助；删除 for 循环体**整段注释**（比较/移除/回执全被注释）⇒ 循环空转后
+/// 恒红 `{名} 没有被禁言!!!`——无论名单里有没有该名（恒字照抄）。
+fn enable_send_msg(parameters: &str) -> GmResult {
+    let s_human = split_params(parameters).first().copied().unwrap_or("");
+    if s_human.is_empty() {
+        return red(X1_HELP_ENABLE_SEND_MSG);
+    }
+    red(format!("{s_human} 没有被禁言!!!"))
+}
+
+/// `ShutupListCommand.Execute`（`ShutupListCommand.cs:13-40`，现网 `@查看禁言`）：
+/// 读 **DenySayMsgList**（与 `DisableSendMsgList` 是两张表）——全仓无活跃写点（`禁言`
+/// 命令的名单写段同样整段注释）⇒ 恒空模型 ⇒ 恒绿「禁言列表为空!!!」；非空遍历段整段
+/// 注释 ⇒ 即便非空也只静默（本仓恒空 ⇒ 该支不可达，登记语义于 Imp 文档）。
+fn shutup_list(_world: &GmWorld<'_>) -> GmResult {
+    green("禁言列表为空!!!")
+}
+
+/// `ViewWhisperCommand.Execute`（`ViewWhisperCommand.cs:14-42`，现网 `@查看私聊`）：
+/// `sChrName[1]` 判空下标怪癖（单字符名越界被吞 ⇒ 零帧）；离线红 NowNotOnLine；在线按
+/// `listening_to` 镜像 toggle ⇒ Msg2「正在侦听…」（开）/ Msg1「已停止侦听…」（关）。
+fn view_whisper(parameters: &str, world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
+    let s_chr = split_params(parameters).first().copied().unwrap_or("");
+    if s_chr.is_empty() {
+        return red(X1_HELP_VIEW_WHISPER);
+    }
+    match second_utf16_is_question(s_chr) {
+        Some(true) => return red(X1_HELP_VIEW_WHISPER),
+        Some(false) => {}
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+    }
+    if world.play_by_name(s_chr).is_none() {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[s_chr.to_string()]));
+    }
+    if sess.listening_to.as_deref() == Some(s_chr) {
+        sess.listening_to = None;
+        green(dotnet_format(
+            X1_VIEW_WHISPER_STOP_FMT,
+            &[s_chr.to_string()],
+        ))
+    } else {
+        sess.listening_to = Some(s_chr.to_string());
+        green(dotnet_format(
+            X1_VIEW_WHISPER_START_FMT,
+            &[s_chr.to_string()],
+        ))
+    }
+}
+
 // ---------------------------- 宿主未接 / oracle 注释的登记文案 ----------------------------
 const NOTE_EVENT_MGR: &str =
     "FireBurnEvent+SystemShare.EventMgr 宿主未接 ⇒ 未入事件队列（oracle 帧面同样零帧）";
@@ -2153,6 +2318,8 @@ const NOTE_KICK_HUMAN_PENDING: &str =
     "KickHuman：已置目标 BoKickFlag/BoEmergencyClose（命令无回帧，宿主 drain_kicks 落地）";
 const NOTE_NO_MAP_REGISTRY: &str =
     "GmWorld 未注入 Envir 地图注册表 ⇒ 无法执行 MapMgr.FindMap（oracle 按 FindMap 结果分支）";
+const NOTE_X1_LIST_NOT_INJECTED: &str =
+    "DisableSendMsgList 全局名单未注入（构造缺口）⇒ 不伪造 Add/Count（卡 openmir2-gm-family-x1-denywhisper）";
 const NOTE_RECALL_HUMAN: &str =
     "RecallHuman: GetPlayObject/GetRecallXy/SpaceMove 未接 ⇒ 不移动、不抽 SpaceMoveGetRandXY（oracle 本支零文本）";
 const NOTE_MAP_RANDOM_MOVE: &str =
@@ -3412,6 +3579,13 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::HumanInfo => human_info(parameters, world),
         Imp::ShowUseItemInfo => show_use_item_info(parameters, world),
         Imp::LotteryTicket => lottery_ticket(cfg),
+
+        // ---- 族 X1 · 禁言名单（5，卡 `openmir2-gm-family-x1-denywhisper`）----
+        Imp::DisableSendMsg => disable_send_msg(parameters, world),
+        Imp::DisableSendMsgListCmd => disable_send_msg_list(world),
+        Imp::EnableSendMsg => enable_send_msg(parameters),
+        Imp::ShutupList => shutup_list(world),
+        Imp::ViewWhisper => view_whisper(parameters, world, sess),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -3597,7 +3771,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "+-jy",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::DisableSendMsgListCmd,
     },
     CommandDef {
         name: "+jid",
@@ -3621,7 +3795,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "+jy",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::DisableSendMsg,
     },
     CommandDef {
         name: "-jid",
@@ -3639,7 +3813,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "-jy",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::EnableSendMsg,
     },
     CommandDef {
         name: "1",
@@ -4541,13 +4715,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "查看禁言",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShutupList,
     },
     CommandDef {
         name: "查看私聊",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ViewWhisper,
     },
     CommandDef {
         name: "沙城",
@@ -5669,6 +5843,7 @@ mod tests {
             speaker_id: 7,
             now_ms: 0,
             filter_word: None,
+            disable_send_msg_list: None,
         };
         assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
         let mut sess = GmSession {
@@ -5973,8 +6148,9 @@ mod tests {
     /// 以及批次 5A（卡 `openmir2-gm-batch-5a-guild-impl` 的 6 条行会族）、
     /// 族 P（卡 `openmir2-gm-family-p-passwordlock` 的 7 条密码锁门）、
     /// 族 T（卡 `openmir2-gm-family-t-toggle-horse` 的 7 条会话开关/骑马）与
-    /// 族 Q（卡 `openmir2-gm-family-q-query-display` 的 10 条查询/展示）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 50），且命令名 → 实现标签固定。
+    /// 族 Q（卡 `openmir2-gm-family-q-query-display` 的 10 条查询/展示）与
+    /// 族 X1（卡 `openmir2-gm-family-x1-denywhisper` 的 5 条禁言名单）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 45），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -5982,16 +6158,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            135,
-            "135 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）"
+            140,
+            "140 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）+ 族 X1（禁言名单 5）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            50,
-            "185 - 135"
+            45,
+            "185 - 140"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -9229,6 +9405,215 @@ mod tests {
             assert!(r.msgs.is_empty(), "{line} 未注入 ⇒ 零帧");
             let note = r.log_note.expect("{line} 必须登记");
             assert!(note.contains("地图注册表"), "{line}: {note}");
+        }
+    }
+
+    // ---------------------------- 族 X1 · 禁言名单（5，卡 `openmir2-gm-family-x1-denywhisper`）----------------------------
+
+    /// 5 条全部接线：现网名/perm 10/params（`+-jy`/`查看禁言` 单参，其余双参）；
+    /// 出厂名不注册。牙：任一条回退 `Unimplemented` / 改名 / 改权限 ⇒ 红。
+    #[test]
+    fn x1_family_table_entries_are_wired() {
+        for (name, imp, params) in [
+            ("+jy", Imp::DisableSendMsg, 2),
+            ("+-jy", Imp::DisableSendMsgListCmd, 1),
+            ("-jy", Imp::EnableSendMsg, 2),
+            ("查看禁言", Imp::ShutupList, 1),
+            ("查看私聊", Imp::ViewWhisper, 2),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, params, "{name} 的 Execute 形参个数");
+        }
+        for factory in [
+            "DisableSendMsg",
+            "EnableSendMsg",
+            "DisableSendMsgList",
+            "ShutupList",
+            "ViewWhisper",
+        ] {
+            assert!(
+                find(factory).is_none(),
+                "{factory} 出厂名不该命中（conf 覆盖后只认现网名）"
+            );
+        }
+    }
+
+    /// **A1 + A2**：`@+jy` 空名红帮助；**无条件**入名单（离线也加、重复名照加）+ 绿字
+    /// `{名} 已加入禁言列表。` + note（FilterSendMsg 位与落盘面登记）；`@+-jy` 空名单红
+    /// 「禁言列表为空!!!」、非空蓝「禁言列表:」**只一行**（循环体注释 ⇒ 恒字，多条也不逐条）。
+    /// 变异红：M-X5（只在线才加）⇒ 离线加断言红；M-X2（非空补逐条）⇒ 蓝头-only 断言红。
+    #[test]
+    fn x1_jy_add_and_list() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let list = std::cell::RefCell::new(Vec::new());
+        let view = q_view(&fx, &w, &guilds).with_disable_send_msg_list(&list);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // 空名 ⇒ 红帮助。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@+jy")),
+            vec![(GmColor::Red, X1_HELP_DISABLE_SEND_MSG)]
+        );
+        // 名单初始为空 ⇒ +-jy 红「禁言列表为空!!!」。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@+-jy")),
+            vec![(GmColor::Red, "禁言列表为空!!!")]
+        );
+        // A1：在线目标 ⇒ 绿字 + 无条件入名单 + note（位/落盘登记）。
+        let r = execute(&mut sess, &cfg, &view, "@+jy bob");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "bob 已加入禁言列表。")]);
+        assert!(r
+            .log_note
+            .expect("必须登记落盘/位面")
+            .contains("FilterSendMsg"));
+        assert_eq!(list.borrow().as_slice(), ["bob".to_string()]);
+        // A1'：离线名也**无条件**加（oracle 无在线门）。
+        let r = execute(&mut sess, &cfg, &view, "@+jy nowhere");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Green, "nowhere 已加入禁言列表。")]
+        );
+        assert_eq!(
+            list.borrow().as_slice(),
+            ["bob".to_string(), "nowhere".to_string()]
+        );
+        // 重复名照加（oracle `Add` 无去重）。
+        let r = execute(&mut sess, &cfg, &view, "@+jy bob");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "bob 已加入禁言列表。")]);
+        assert_eq!(list.borrow().len(), 3);
+        // A2：非空 ⇒ 蓝「禁言列表:」**只一行**（循环体注释 ⇒ 多条也不逐条列出）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@+-jy")),
+            vec![(GmColor::Blue, "禁言列表:")]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@+-jy");
+        assert!(r.frames.is_empty() && r.log_note.is_none(), "恒字支无 note");
+        // 退化形态：名单未注入（脚本桥）⇒ +jy 仍绿字但登记不伪造 Add；+-jy 登记零帧。
+        let bare = GmWorld::new(&guilds);
+        let r = execute(&mut sess, &cfg, &bare, "@+jy bob");
+        assert_eq!(texts(&r), vec![(GmColor::Green, "bob 已加入禁言列表。")]);
+        assert!(r.log_note.expect("未注入必须登记").contains("名单未注入"));
+        let r = execute(&mut sess, &cfg, &bare, "@+-jy");
+        assert!(r.msgs.is_empty() && r.log_note.is_some());
+    }
+
+    /// **A3**：`@-jy` **恒**红 `{名} 没有被禁言!!!`——即便名字刚被 +jy 加入名单
+    /// （删除循环体整段注释 ⇒ 永不真删；名单只增不删断言）；空名红帮助。
+    /// `@查看禁言` 恒绿「禁言列表为空!!!」——读的是**另一张表** DenySayMsgList
+    /// （全仓无写点 ⇒ 恒空），即便 DisableSendMsgList 非空也恒绿。
+    /// 变异红：M-X1（补真删除）⇒ 恒字断言红；M-X3（查看禁言改读名单）⇒ 恒绿断言红。
+    #[test]
+    fn x1_jy_always_not_muted_and_shutup_list() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let list = std::cell::RefCell::new(Vec::new());
+        let view = q_view(&fx, &w, &guilds).with_disable_send_msg_list(&list);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // 空名 ⇒ 红帮助。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@-jy")),
+            vec![(GmColor::Red, X1_HELP_ENABLE_SEND_MSG)]
+        );
+        // +jy bob 入名单后：-jy bob **仍**恒红「没有被禁言!!！」且名单不变（只增不删）。
+        let _ = execute(&mut sess, &cfg, &view, "@+jy bob");
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@-jy bob")),
+            vec![(GmColor::Red, "bob 没有被禁言!!!")]
+        );
+        assert_eq!(list.borrow().as_slice(), ["bob".to_string()]);
+        // 离线名同答（名字回显）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@-jy nowhere")),
+            vec![(GmColor::Red, "nowhere 没有被禁言!!!")]
+        );
+        // 查看禁言：恒绿「禁言列表为空!!!」——即便 DisableSendMsgList 非空（两张表）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@查看禁言")),
+            vec![(GmColor::Green, "禁言列表为空!!!")]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@查看禁言");
+        assert!(r.frames.is_empty() && r.log_note.is_none(), "恒绿支无 note");
+    }
+
+    /// **A4**：`@查看私聊` 四怪癖/分支——空名红帮助（**双空格**帮助串逐字节）；单字符名
+    /// `sChrName[1]` 越界 ⇒ 零帧；`a?` 红帮助 / `?a` 离线红；在线 toggle `listening_to`
+    /// 镜像 ⇒ Msg2「正在侦听…」→ Msg1「已停止侦听…」→ Msg2（与 oracle `WhisperHuman`
+    /// 比对同构）。变异红：M-X4（[1]→[0]）⇒ 零帧用例红；M-X6（丢 Msg1 分支）⇒ 红。
+    #[test]
+    fn x1_view_whisper_quirks() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let view = q_view(&fx, &w, &guilds);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // 空名 ⇒ 红帮助（Help=" 人物名称" 带前导空格 ⇒ 双空格）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@查看私聊")),
+            vec![(GmColor::Red, X1_HELP_VIEW_WHISPER)]
+        );
+        assert_eq!(X1_HELP_VIEW_WHISPER, "命令格式: @查看私聊  人物名称");
+        // 单字符名 ⇒ 越界零帧（有 note 登记）。
+        let r = execute(&mut sess, &cfg, &view, "@查看私聊 a");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "单字符名应零帧");
+        assert!(r.log_note.is_some(), "越界必须登记");
+        // `a?`：[1]=='?' ⇒ 红帮助；`?a`：[1]=='a' ⇒ 不命中 ⇒ 离线红。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@查看私聊 a?")),
+            vec![(GmColor::Red, X1_HELP_VIEW_WHISPER)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@查看私聊 ?a")),
+            vec![(GmColor::Red, "?a 现在不在线，或在其它服务器上!!!")]
+        );
+        // 在线 toggle：Msg2（开）→ Msg1（关）→ Msg2（再开）；镜像位随动、其余会话态零变化。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@查看私聊 bob")),
+            vec![(GmColor::Green, "正在侦听bob的私聊信息...")]
+        );
+        assert_eq!(sess.listening_to.as_deref(), Some("bob"));
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@查看私聊 bob")),
+            vec![(GmColor::Green, "已停止侦听bob的私聊信息...")]
+        );
+        assert_eq!(sess.listening_to, None);
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@查看私聊 bob")),
+            vec![(GmColor::Green, "正在侦听bob的私聊信息...")]
+        );
+        assert_eq!(sess.listening_to.as_deref(), Some("bob"));
+        // 换目标 ⇒ oracle 目标 WhisperHuman != 发起者 ⇒ 仍 Msg2（开）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@查看私聊 gm")),
+            vec![(GmColor::Green, "正在侦听gm的私聊信息...")]
+        );
+        assert_eq!(sess.listening_to.as_deref(), Some("gm"));
+        // 会话其余字段零变化（只 listening_to 动）。
+        assert_eq!(
+            sess,
+            GmSession {
+                permission: 10,
+                listening_to: Some("gm".to_string()),
+                ..GmSession::default()
+            }
+        );
+    }
+
+    /// 族 X1 权限门（5 条全 perm 10）：`Permission < 10` ⇒ 恰一条红字 `权限不够!!!`。
+    #[test]
+    fn x1_family_permission_gate_blocks_body() {
+        for name in ["+jy", "+-jy", "-jy", "查看禁言", "查看私聊"] {
+            let (r, sess) = run(&format!("@{name}"));
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, PERMISSION_TOO_LOW)],
+                "{name}"
+            );
+            assert!(r.frames.is_empty(), "{name}");
+            assert_eq!(sess, GmSession::default(), "{name} 零状态变化");
         }
     }
 }

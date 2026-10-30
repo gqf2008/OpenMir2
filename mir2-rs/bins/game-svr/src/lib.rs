@@ -1496,6 +1496,10 @@ struct ChatHost<'a> {
     /// 经 `GmWorld.filter_word` 注入 `@DisableFilter` 命令体（卡
     /// `openmir2-gm-family-t-toggle-horse`）。进程级单例 ⇒ 由 `sim_loop` 持有。
     filter_word: &'a std::cell::Cell<bool>,
+    /// **族 X1**：`SystemShare.DisableSendMsgList` 内存名单（部署启动恒空）；
+    /// 经 `GmWorld.disable_send_msg_list` 注入 `@+jy`/`@+-jy`（卡
+    /// `openmir2-gm-family-x1-denywhisper`）。进程级单例 ⇒ 由 `sim_loop` 持有。
+    disable_send_msg_list: &'a std::cell::RefCell<Vec<String>>,
     /// `[Setup] CanShoutMsgLevel`。
     can_shout_level: i32,
     /// `Envir.Flag` 来源；`None`（S1 占位世界）⇒ `boQUIZ=false`（登记）。
@@ -1826,6 +1830,7 @@ fn handle_gm_command(
         speaker_id: speaker.actor_id,
         now_ms: host.world.clock_ms,
         filter_word: Some(host.filter_word),
+        disable_send_msg_list: Some(host.disable_send_msg_list),
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
@@ -7789,9 +7794,10 @@ impl ScriptGmEnv<'_> {
                 speaker: chr_name,
                 speaker_id: actor_id,
                 now_ms: world.clock_ms,
-                // 脚本 GMEXECUTE 桥不持全局单元 ⇒ `@DisableFilter` 走 `log_note` 登记零帧
-                // （命令体退化形态有答案；脚本面本卡 forbidden）。
+                // 脚本 GMEXECUTE 桥不持全局单元 ⇒ `@DisableFilter`/`@+jy` 走 `log_note`
+                // 登记零帧（命令体退化形态有答案；脚本面本卡 forbidden）。
                 filter_word: None,
+                disable_send_msg_list: None,
             },
             pwd_busy: self.pwd_busy(chr_name),
         }
@@ -22817,6 +22823,10 @@ fn sim_loop(
     // `ChatHost.filter_word` → `GmWorld.filter_word` 注入命令体（卡
     // `openmir2-gm-family-t-toggle-horse`；跨会话同一份）。
     let gm_filter_word = std::cell::Cell::new(true);
+    // **族 X1**：`SystemShare.DisableSendMsgList` 内存名单（进程级单例；部署启动恒空——
+    // `LoadDisableSendMsgList` 全注释 ⇒ 什么都不读；`+jy` 无条件 Add、`+-jy` 读 Count、
+    // `-jy` 删除循环整段注释 ⇒ 只增不删；落盘面 forbidden ⇒ 不实现 Save）。
+    let gm_disable_send_msg_list = std::cell::RefCell::new(Vec::new());
     // 存档用：登入时留下的原始记录 + 进图逻辑名（断线/`MakeGhost` 时合成存档请求）。
     let mut saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
     glog!(
@@ -22937,6 +22947,7 @@ fn sim_loop(
                             can_shout_level: enter_cfg.can_shout_msg_level,
                             registry: registry.as_ref(),
                             filter_word: &gm_filter_word,
+                            disable_send_msg_list: &gm_disable_send_msg_list,
                         };
                         // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
                         // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
@@ -24803,8 +24814,12 @@ fn sim_loop(
                                                                 speaker_id: id,
                                                                 now_ms: world.clock_ms,
                                                                 // 与 CM_SAY 支同一份全局单元
-                                                                // （`SystemShare.FilterWord` 进程单例）。
+                                                                // （`SystemShare.FilterWord`/
+                                                                // `DisableSendMsgList` 进程单例）。
                                                                 filter_word: Some(&gm_filter_word),
+                                                                disable_send_msg_list: Some(
+                                                                    &gm_disable_send_msg_list,
+                                                                ),
                                                             };
                                                             if let Some(sg) = ground_sessions
                                                                 .get_mut(&head.chr_name)
@@ -40029,6 +40044,8 @@ break
         can_shout_level: i32,
         /// `SystemShare.FilterWord` 全局位（部署启动 true；`@DisableFilter` 翻转）。
         filter_word: std::cell::Cell<bool>,
+        /// **族 X1**：`DisableSendMsgList` 内存名单（部署启动恒空）。
+        disable_send_msg_list: std::cell::RefCell<Vec<String>>,
     }
 
     impl TestChatCtx {
@@ -40045,6 +40062,7 @@ break
                 strings: crate::strings::StringConf::defaults(),
                 can_shout_level: 0,
                 filter_word: std::cell::Cell::new(true),
+                disable_send_msg_list: std::cell::RefCell::new(Vec::new()),
             }
         }
 
@@ -40068,6 +40086,7 @@ break
                 can_shout_level: self.can_shout_level,
                 registry: None,
                 filter_word: &self.filter_word,
+                disable_send_msg_list: &self.disable_send_msg_list,
             }
         }
     }
