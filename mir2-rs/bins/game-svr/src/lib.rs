@@ -1182,6 +1182,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     green_msg_f_color: cfg.green_msg_f_color,
                     green_msg_b_color: cfg.green_msg_b_color,
                     test_server: cfg.test_server,
+                    make_random_add_value: cfg.make_random_add_value,
+                    item_number_ex: cfg.item_number_ex,
                     service_mode: cfg.service_mode,
                     disable_in_safe_zone_fire_cross: cfg.disable_in_safe_zone_fire_cross,
                     save_human_rcd_time: i64::from(cfg.save_human_rcd_time),
@@ -1869,6 +1871,9 @@ fn handle_gm_command(
             )
         })
         .collect();
+    // **族 M**：`@怪` 的 `GetFrontPosition` 入参 = `PlayerActor.Dir`（玩家权威 Dir 在展示表，
+    // `actor_dir` 优先实体 `ai.dir`、回落到展示表——与 `pose_create` 同口径）。
+    let speaker_dir = actor_dir(host.world, host.displays, speaker.actor_id);
     let world_view = gmcmd::GmWorld {
         guilds: host.guilds,
         maps: host.registry,
@@ -1881,6 +1886,10 @@ fn handle_gm_command(
         mission: Some(host.mission),
         spirit_mutiny_tick: Some(host.spirit_mutiny_tick),
         quests: Some(&quests),
+        speaker_dir,
+        // 生产 `CM_SAY` 路径：宿主在**同一事件内**由 `apply_pending_gm_m_commands` 落地
+        // 刷怪/造物（含 RNG）；`m_host` 只是「命令体可以装 pending」的接线标记。
+        m_host: true,
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
@@ -7854,6 +7863,10 @@ impl ScriptGmEnv<'_> {
                 // `@setflag/@setopen/@setunit` 经 `GMEXECUTE` 走 `log_note` 退化形态；
                 // 部署脚本无这三条命令的可达调用（`coverage/gm_registry.json`）。
                 quests: None,
+                // 族 M：脚本桥没有 `&mut World`/`MonGenHost`/物品目录/RNG 通道 ⇒ 有副作用的
+                // 6 条走退化零帧（部署脚本无其可达调用）。
+                speaker_dir: 0,
+                m_host: false,
             },
             pwd_busy: self.pwd_busy(chr_name),
         }
@@ -19686,6 +19699,448 @@ fn apply_pending_gm_target_ops(
     }
 }
 
+/// `M2Share.GetItemNumberEx()`（`M2Share.cs:557-569`）的计数器一步。
+///
+/// 逐行：`++` → `< int.MaxValue/2` 回到 `int.MaxValue/2` → `> int.MaxValue-1` 回到
+/// `int.MaxValue/2`。**登记**（与 `GetItemNumber` 同口径）：oracle 返回
+/// `Config.ItemNumberEx + HUtil32.GetTickCount()`，本宿主只返回计数器值（tick 项不可对拍，
+/// 既有 `item_number` 亦然；见 `config.rs` 的 `ItemNumber` 注）。
+fn next_item_number_ex(counter: &mut i32) -> i32 {
+    let mut v = counter.wrapping_add(1);
+    if v < i32::MAX / 2 {
+        v = i32::MAX / 2;
+    }
+    if v > i32::MAX - 1 {
+        v = i32::MAX / 2;
+    }
+    *counter = v;
+    v
+}
+
+/// `WorldEngine.RegenMonsterByName(map, x, y, name)`（`WorldServer.MonGen.cs:382-438`）的宿主入口：
+/// 走与 `MONGENEX`/守卫同一条 `create_monster_oracle` 链，抽数用**世界同一条** `world.rng`
+/// （移出→造怪→归位，与 `step_mon_gen`/`summon_slave` 同法）。
+#[allow(clippy::too_many_arguments)]
+fn gm_regen_monster(
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    host: &mut game_svr::mongen::MonGenHost,
+    registry: &mir2_envir::MapRegistry,
+    table: &game_svr::mongen::MonsterTable,
+    map_name: &str,
+    x: i16,
+    y: i16,
+    name: &str,
+) -> Option<i32> {
+    let mut rng = std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
+    let id = {
+        let mut sink = game_svr::mongen::WorldMonsterSink {
+            world,
+            registry,
+            table,
+            displays,
+        };
+        game_svr::guardlist::regen_monster_by_name(
+            &mut rng,
+            &mut sink,
+            table,
+            &mut host.state,
+            map_name,
+            x,
+            y,
+            name,
+        )
+    };
+    world.rng = rng;
+    id
+}
+
+/// `@怪` 的 `monster.SlaveExpLevel = nLevel; RecalcAbilitys();`（`MobCommand.cs:48-54`）。
+///
+/// `Master == null` ⇒ `ApplySlaveLevelAbilitys` 的 `Master != null` 支不命中；新生成怪的
+/// `WAbil == Abil`（惰性快照）⇒ 基础重算恒等。只有三族派生召唤物的覆写改速度
+/// （`WhiteSkeleton/ElfMonster/ElfWarriormon`，与 `crates/world::slave::apply_derived_slave_recalc`
+/// **逐行同式**——该函数 `pub(crate)`，宿主按源码复刻，登记为漂移点）。`AntiMagic` 置 1
+/// 同 `BaseObject.Abil.cs:30`。
+fn gm_mob_recalc(world: &mut mir2_world::World, id: i32, level: u8, now: i64) {
+    let Some(e) = world.entities.get_mut(id) else {
+        return;
+    };
+    e.slave_exp_level = level;
+    e.anti_magic = 1;
+    let lvl = i64::from(e.slave_make_level);
+    match e.race {
+        mir2_world::entity::ACTOR_RACE_WHITE_SKELETON => {
+            e.ai.next_hit_time = 3000 - lvl * 600;
+            e.ai.walk_speed = 1200 - lvl * 250;
+            e.ai.walk_tick = now + 2000;
+        }
+        mir2_world::entity::ACTOR_RACE_ELF_MONSTER => {
+            e.ai.walk_speed = 500 - lvl * 50;
+            e.ai.walk_tick = now + 2000;
+        }
+        mir2_world::entity::ACTOR_RACE_ELF_WARRIORMON => {
+            e.ai.next_hit_time = 1500 - lvl * 100;
+            e.ai.walk_speed = 500 - lvl * 50;
+            e.ai.walk_tick = now + 2000;
+        }
+        _ => {}
+    }
+}
+
+/// `@ReCallMobEx` 的落尾（`ReCallMobExCommand.cs:37-49`）：
+/// `Master=调用者`、`SlaveExpLevel=1`、`NameColor=(byte)nNameColor`、`RecalcAbilitys()`、
+/// `RefNameColor()`、`SlaveList.Add`。
+///
+/// 复用 `World::make_slave_adopt` 的 `RecalcAbilitys`（含 `ApplySlaveLevelAbilitys` 与派生覆写，
+/// `pub(crate)` 无法直调）后**撤回** oracle 此处没有的三项（`MakeSlave` 才有）：`IsSlave=true`、
+/// `MasterRoyaltyTick=now`、HP 补半；`SlaveMakeLevel` 传 0（ctor 缺省，oracle 此处未赋值）。
+fn gm_recall_ex_adopt(world: &mut mir2_world::World, caster_id: i32, mon_id: i32, name_color: u8) {
+    let hp_before = world.entities.get(mon_id).map_or(0, |e| e.hp);
+    let adopted = world.make_slave_adopt(caster_id, mon_id, 0, 1, 0);
+    if let Some(e) = world.entities.get_mut(mon_id) {
+        e.name_color = name_color;
+        if adopted {
+            e.is_slave = false;
+            e.master_royalty_tick = 0;
+            e.hp = hp_before;
+        } else {
+            // `make_slave_adopt` 只在「主人不是玩家/实体缺失」时返回 false（生产不可达）；
+            // 兜底仍按 oracle 的两个必写字段落账。
+            e.master = Some(caster_id);
+            e.slave_exp_level = 1;
+        }
+    }
+}
+
+/// `RefNameColor()`（`BaseObject.cs:730-733`）在宿主侧的 656 帧：色彩由接收者侧
+/// `GetChrColor(baseObject)` 现算（`crates/world::slave::get_chr_color`；NPC 支传 oracle 缺省 255）。
+fn gm_push_name_color(
+    buf: &mut SpellFrameBuf,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    mon_id: i32,
+    slave_color: &[u8],
+) {
+    let Some(e) = world.entities.get(mon_id) else {
+        return;
+    };
+    let color = mir2_world::slave::get_chr_color(e, slave_color, 255);
+    push_name_color(buf, world, online, mon_id, color);
+}
+
+/// 族 M 的宿主落地段（卡 `openmir2-gm-family-m-spawn-make`，tier=R）：
+/// 把命令体在**同一事件内**装好的刷怪/造物请求落地。
+///
+/// - 刷怪：`RegenMonsterByName`（世界同一条 RNG 流）+ 逐请求落尾（`@怪` 的
+///   `SlaveExpLevel/Recalc/RefNameColor`；`@ReCallMobEx` 的 `Master/1 级/NameColor/SlaveList`；
+///   `@MobPlace` 的 `Mission` 标记——**宿主 `Entity` 未建模三元，登记**）。
+/// - 造物：`@GiveMine` 的 `Random(18)+3`（**恰一次**，仅 `nDura<=0`）+ `StdMode==43`/负重/Dura 钳；
+///   `@s` 的 `Random(MakeRandomAddValue)`（**每件一次**）+ `GetItemNumberEx` 重取 MakeIndex。
+///   `CopyToUserItemFromName` 的 `MakeIndex=GetItemNumber()` 消费照抄（每件一次）。
+///
+/// **RNG 次序**：与 oracle 同一事件内的调用点序（`GiveMine` 的 1 抽在循环前；`@s` 的抽在
+/// 每件的价格门之后、`MakeIndex` 之前；刷怪的创建抽数在 `regen_monster_by_name` 内）。
+#[allow(clippy::too_many_arguments)]
+fn apply_pending_gm_m_commands(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    mon_host: Option<&mut game_svr::mongen::MonGenHost>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    table: &game_svr::mongen::MonsterTable,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    colors: &MsgColors,
+    test_server: bool,
+    make_random_add_value: u8,
+    item_number: &mut i32,
+    item_number_ex: &mut i32,
+) {
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        return;
+    };
+    // 一次性取走（防陈旧；脚本桥不会装 pending，见 `GmWorld.m_host`）。
+    let spawn = sg.gm.pending_spawn.take();
+    let make = sg.gm.pending_make.take();
+    let mine = sg.gm.pending_give_mine.take();
+    if spawn.is_none() && make.is_none() && mine.is_none() {
+        return;
+    }
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name).cloned() else {
+        glog!(
+            "WRN",
+            "M 族落地：ChrName={chr_name} 不在在线表 ⇒ 丢弃刷怪/造物请求"
+        );
+        return;
+    };
+    let caller_map = registry
+        .and_then(|r| {
+            world
+                .entities
+                .get(entry.actor_id)
+                .and_then(|e| r.name_of(e.map_id))
+        })
+        .map(str::to_string);
+    let now = world.clock_ms;
+
+    // ---- 刷怪 ----
+    if let Some(req) = spawn {
+        match req {
+            gmcmd::GmSpawnRequest::Mob {
+                name,
+                count,
+                level,
+                x,
+                y,
+            } => {
+                let Some(host) = mon_host else {
+                    glog!("WRN", "@怪：无 MonGenHost ⇒ 刷怪丢弃 ChrName={chr_name}");
+                    return;
+                };
+                let (Some(reg), Some(map_name)) = (registry, caller_map.as_deref()) else {
+                    // oracle `PlayerActor.Envir.MapName` 对应的 `FindMap` 失败 ⇒
+                    // `RegenMonsterByName == null` ⇒ 红 `GameCommandMobMsg` + break。
+                    glog!("WRN", "@怪：说话者地图未解析 ⇒ 视为生成失败");
+                    send_gm_sysmsg(
+                        gates,
+                        &entry,
+                        colors.red_f,
+                        colors.red_b,
+                        gmcmd::MOB_SPAWN_FAIL,
+                    );
+                    return;
+                };
+                let mut buf = SpellFrameBuf::new();
+                for _ in 0..count {
+                    let Some(id) =
+                        gm_regen_monster(world, displays, host, reg, table, map_name, x, y, &name)
+                    else {
+                        // `MobCommand.cs:56`：失败 ⇒ 红 `GameCommandMobMsg` + break。
+                        send_gm_sysmsg(
+                            gates,
+                            &entry,
+                            colors.red_f,
+                            colors.red_b,
+                            gmcmd::MOB_SPAWN_FAIL,
+                        );
+                        break;
+                    };
+                    gm_mob_recalc(world, id, level, now);
+                    gm_push_name_color(&mut buf, world, online, id, &pet_cfg.slave_color);
+                }
+                buf.flush(online, gates);
+            }
+            gmcmd::GmSpawnRequest::RecallEx {
+                name,
+                name_color,
+                x,
+                y,
+            } => {
+                let Some(host) = mon_host else {
+                    glog!(
+                        "WRN",
+                        "@ReCallMobEx：无 MonGenHost ⇒ 丢弃 ChrName={chr_name}"
+                    );
+                    return;
+                };
+                let (Some(reg), Some(map_name)) = (registry, caller_map.as_deref()) else {
+                    return;
+                };
+                if let Some(id) =
+                    gm_regen_monster(world, displays, host, reg, table, map_name, x, y, &name)
+                {
+                    gm_recall_ex_adopt(world, entry.actor_id, id, name_color);
+                    let mut buf = SpellFrameBuf::new();
+                    gm_push_name_color(&mut buf, world, online, id, &pet_cfg.slave_color);
+                    buf.flush(online, gates);
+                }
+            }
+            gmcmd::GmSpawnRequest::MobPlace {
+                name,
+                count,
+                x,
+                y,
+                mission_map,
+                mission_x,
+                mission_y,
+            } => {
+                let Some(host) = mon_host else {
+                    glog!("WRN", "@MobPlace：无 MonGenHost ⇒ 丢弃 ChrName={chr_name}");
+                    return;
+                };
+                let Some(reg) = registry else {
+                    return;
+                };
+                // `Mission/MissionX/MissionY` 三元在 Rust `Entity` 未建模（无消费者）⇒ 只刷怪，
+                // 标记登记（见卡面 forbidden：不新增存储列/不动 crates/world）。
+                glog!(
+                    "DBG",
+                    "@MobPlace：Mission/MissionX/MissionY 标记未建模（Entity 无字段）⇒ 只按数量刷怪，标记登记"
+                );
+                let mut last_race: Option<u8> = None;
+                for _ in 0..count {
+                    let Some(id) = gm_regen_monster(
+                        world,
+                        displays,
+                        host,
+                        reg,
+                        table,
+                        &mission_map,
+                        x,
+                        y,
+                        &name,
+                    ) else {
+                        last_race = None;
+                        break;
+                    };
+                    last_race = world.entities.get(id).map(|e| e.race);
+                }
+                if last_race != Some(136) {
+                    let text = format!(
+                        "{count} 只 {name} 已正在往地图 {mission_map} {mission_x}:{mission_y} 集中。"
+                    );
+                    send_gm_sysmsg(gates, &entry, colors.green_f, colors.green_b, &text);
+                }
+            }
+        }
+    }
+
+    // ---- 造物 ----
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        return;
+    };
+    if let Some(req) = mine {
+        // `GiveMineCommand.cs:41`：`nDura<=0 ⇒ Random(18)+3`（循环**之前**恰一次）。
+        let n_dura = if req.dura <= 0 {
+            let draw = world.rng.random_below(18); // gm-givemine-rng
+            draw + 3
+        } else {
+            req.dura
+        };
+        for _ in 0..req.count {
+            // `CopyToUserItemFromName`（`GameItemSystem.cs:113-140`）：名字未命中 ⇒ break（零文本）。
+            let Some(index) = catalog.find_by_name(&req.name) else {
+                break;
+            };
+            let Some(tpl) = catalog.get(index) else {
+                // oracle `stdItem != null && StdMode==43`：null ⇒ 跳过该件（循环继续）。
+                continue;
+            };
+            // `item.MakeIndex = M2Share.GetItemNumber()`：每件消费一次。
+            *item_number += 1;
+            let mut item = game_svr::bag::BagItem {
+                make_index: *item_number,
+                index,
+                dura: tpl.dura_max,
+                dura_max: tpl.dura_max,
+                desc: [0; 14],
+            };
+            // `StdMode == 43` 门；不满足 ⇒ 静默丢弃该件（循环继续，计数器已消费）。
+            if tpl.std_mode != 43 {
+                continue;
+            }
+            // `IsAddWeightAvailable(stdItem.Weight * nMineCount)`：用**当前** WAbil.Weight
+            // （`ItemList.Add` 不刷新 Weight）⇒ 逐件同值判定。
+            let n_weight = i32::from(tpl.weight).wrapping_mul(req.count);
+            // `WAbil.Weight/nWeight` 在 C# 是 `ushort + int` ⇒ int 提升（回绕）。
+            let now_weight = i32::from(sg.state.wabil.weight).wrapping_add(n_weight);
+            if now_weight > i32::from(sg.state.wabil.max_weight) {
+                continue;
+            }
+            // `Convert.ToUInt16(nDura * 1000)`：越界/负（int 回绕）⇒ OverflowException 被外层
+            // catch 吞 ⇒ **停止**本命令（已入包/已发帧保留）。
+            let d = n_dura.wrapping_mul(1000);
+            if !(0..=65535).contains(&d) {
+                break;
+            }
+            item.dura = d as u16;
+            if item.dura > item.dura_max {
+                item.dura = item.dura_max;
+            }
+            // `PlayerActor.ItemList.Add(userItem)`（**无满包门**，oracle List 直加）+ `SendAddItem`。
+            sg.state.item_list.push(item.clone());
+            if let Some(body) = game_svr::trade::send_add_item_body(entry.actor_id, &item, catalog)
+            {
+                if let Some(tx) =
+                    route_to_gate(gates, entry.gate_idx, entry.socket, "GM 造矿 SM_ADDITEM")
+                {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: entry.socket,
+                        body,
+                    });
+                }
+            }
+        }
+    }
+    if let Some(req) = make {
+        for _ in 0..req.count {
+            // `MakeItemCommand.cs:58`：满 46 格 ⇒ `return`（整条命令停，零文本）。
+            if sg.state.item_list.len() >= game_svr::bag::MAX_BAG_ITEM {
+                return;
+            }
+            let Some(index) = catalog.find_by_name(&req.name) else {
+                send_gm_sysmsg(
+                    gates,
+                    &entry,
+                    colors.red_f,
+                    colors.red_b,
+                    &format!("{} 物品名称不正确!!!", req.name),
+                );
+                break;
+            };
+            let Some(tpl) = catalog.get(index) else {
+                break;
+            };
+            // `CopyToUserItemFromName`：每件消费一次 `GetItemNumber()`。
+            *item_number += 1;
+            let mut item = game_svr::bag::BagItem {
+                make_index: *item_number,
+                index,
+                dura: tpl.dura_max,
+                dura_max: tpl.dura_max,
+                desc: [0; 14],
+            };
+            // `Price>=15000 && !Config.TestServer && Permission<5` ⇒ 静默 `return`。
+            if tpl.price >= 15000 && !test_server && req.permission < 5 {
+                return;
+            }
+            // `Random(Config.MakeRandomAddValue)`：升级逻辑整段注释，但**抽数照消费**
+            // （`MakeItemCommand.cs:76`；每件一次）。
+            let _ = world.rng.random_below(i32::from(make_random_add_value)); // gm-make-rng
+
+            // `Permission >= Command.PermissionMax(10)` ⇒ `GetItemNumberEx()` 重取 MakeIndex。
+            if req.permission >= 10 {
+                item.make_index = next_item_number_ex(item_number_ex);
+            }
+            sg.state.item_list.push(item.clone());
+            if let Some(body) = game_svr::trade::send_add_item_body(entry.actor_id, &item, catalog)
+            {
+                if let Some(tx) =
+                    route_to_gate(gates, entry.gate_idx, entry.socket, "GM 造物 SM_ADDITEM")
+                {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket: entry.socket,
+                        body,
+                    });
+                }
+            }
+            if req.permission >= 6 {
+                glog!(
+                    "INF",
+                    "[制造物品] {} {}({})",
+                    chr_name,
+                    req.name,
+                    item.make_index
+                );
+            }
+        }
+    }
+}
+
 /// `TRouteInfo`（`src/OpenMir2/Data/TRouteInfo.cs:3-16`）：`!servertable.txt` 的一行。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 struct RouteInfo {
@@ -20099,6 +20554,12 @@ struct EnterConfig {
     green_msg_b_color: u8,
     /// `[Server] TestServer`（`ServerConf.cs:23`）：登录第三条 `SysMsg` 与 `PayMent=3` 覆盖。
     test_server: bool,
+    /// **族 M**：`[Setup] MakeRandomAddValue`（部署 100）——`@s` 的
+    /// `Random(Config.MakeRandomAddValue)`（每件一次）。
+    make_random_add_value: u8,
+    /// **族 M**：`[Setup] ItemNumberEx`（部署 1073741872）——`@s` 的
+    /// `GetItemNumberEx()` 计数器初值。
+    item_number_ex: i32,
     /// `[Server] ServiceMode`（`ServerConf.cs:27`）：与 `TestServer` 一同覆盖 `PayMent=3`。
     service_mode: bool,
     /// `[Setup] DisableInSafeZoneFireCross`（P3-B5 的 22 安全区门；现网 = 1）。
@@ -20270,6 +20731,8 @@ impl EnterConfig {
             green_msg_f_color: 0xDB,
             green_msg_b_color: 0xFF,
             test_server: false,
+            make_random_add_value: 10,
+            item_number_ex: i32::MAX / 2,
             service_mode: false,
             disable_in_safe_zone_fire_cross: false,
             save_human_rcd_time: 600_000,
@@ -23333,6 +23796,9 @@ fn sim_loop(
     let mut item_number =
         game_svr::ctor_fold::item_number_counter_init(enter_cfg.newbie.item_number, &barrier_a)
             .unwrap_or_else(|e| panic!("屏障 A 落账失败（fail-closed）：{e}"));
+    // `M2Share.GetItemNumberEx()`（`M2Share.cs:557-569`）的计数器：初值 = `[Setup] ItemNumberEx`
+    // （部署 1073741872；`GetItemNumberEx` 自身的复位/加法在 `next_item_number_ex` 内逐行复刻）。
+    let mut item_number_ex = enter_cfg.item_number_ex;
     // **结果值日志**（`[Setup] ItemNumber` + 屏障 A 抽数）——与上面那条「只印事实」的日志配对：
     // 两条合起来才能读出真实的加法是否发生（独立复验 surviving ⑤ 的缓解；该绑定本身仍无进程级牙，
     // 见卡 `openmir2-ctor-barrier-a-draw` 的残余 ①）。
@@ -23616,6 +24082,30 @@ fn sim_loop(
                             enter_cfg.shop.send_ref_msg_range,
                             &chr_name,
                         );
+                        // **族 M（卡 `openmir2-gm-family-m-spawn-make`）**：刷怪/造物落地
+                        // （同事件内；`@怪`/`@ReCallMobEx`/`@MobPlace` 的 `RegenMonsterByName`
+                        // 与世界同一条 RNG 流、`@GiveMine` 的 `Random(18)+3`、`@s` 的
+                        // `Random(MakeRandomAddValue)` 与 `GetItemNumberEx`）。
+                        if gm_drain_gate(tail.as_deref()) {
+                            apply_pending_gm_m_commands(
+                                &mut ground_sessions,
+                                &chr_name,
+                                &mut world,
+                                &mut displays,
+                                mon_gen_host.as_mut(),
+                                registry.as_ref(),
+                                &enter_cfg.mon_gen.table,
+                                &enter_cfg.catalog,
+                                &enter_cfg.pet_cfg,
+                                &online,
+                                &gates,
+                                &colors,
+                                enter_cfg.test_server,
+                                enter_cfg.make_random_add_value,
+                                &mut item_number,
+                                &mut item_number_ex,
+                            );
+                        }
                         // 203 之后再发 GM 的 `SysMsg(100)`（`MsgQueue` 投影在命令之后）；
                         // 非 SysMsg 直发帧（`@AttackMode` 的 213）照 oracle 排在绿字之后。
                         if !gm_deferred.is_empty() || !gm_frames.is_empty() {
@@ -25418,6 +25908,10 @@ fn sim_loop(
                                                                 // 脚本 `GMEXECUTE` 的写不落地
                                                                 // （部署无这些命令的可达调用）。
                                                                 quests: None,
+                                                                // 族 M：`@Login` 脚本不走刷怪/造物
+                                                                // 落地通道（同桥口径）。
+                                                                speaker_dir: 0,
+                                                                m_host: false,
                                                             };
                                                             if let Some(sg) = ground_sessions
                                                                 .get_mut(&head.chr_name)
@@ -43055,6 +43549,641 @@ break
         assert_eq!(show[0].2, "hero: [5] = ON");
         assert_eq!(show[0].0, 219, "Green F");
         assert_eq!(show[0].1, 255, "Green B");
+    }
+
+    // ==================== 族 M · 刷怪/造物宿主落地（卡 `openmir2-gm-family-m-spawn-make`）====================
+
+    /// M 宿主夹具：32×32 全零地图注册表（`map`）+ 刷怪宿主（含 `mob` 的线程表项）+
+    /// 玩家 `hero`（actor id 1，socket 901）+ 空会话/收帧通道。
+    struct MGmRig {
+        fx: ClearMapRegistry,
+        world: mir2_world::World,
+        host: game_svr::mongen::MonGenHost,
+        table: game_svr::mongen::MonsterTable,
+        displays: downlink::DisplayTable,
+        sessions: std::collections::HashMap<String, SessionGround>,
+        online: OnlineRegistry,
+        gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        catalog: game_svr::ability::StdItemCatalog,
+        pet_cfg: mir2_data::pet_slave::PetSlaveConfig,
+        item_number: i32,
+        item_number_ex: i32,
+        actor: i32,
+    }
+
+    impl MGmRig {
+        fn new() -> Self {
+            let fx = clear_map_registry("map");
+            let mut world = mir2_world::World::new(32, 32);
+            world.rng = mir2_shared::rng::RandomNumber::with_seed(2026_1031);
+            let mut e = mir2_world::Entity::new(0, "hero".to_string(), 5, 5);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let actor = world.add_entity(e);
+            let table = game_svr::mongen::MonsterTable::new(vec![clear_map_monster_row("mob")]);
+            let host = game_svr::mongen::MonGenHost::start(
+                vec![mir2_world::mongen::MonGenEntry::new(
+                    "map", 5, 5, "mob", 1, 1, 0, 0,
+                )],
+                &table,
+                false,
+                mir2_world::mongen::MonGenConfig::default(),
+                &mut world.rng,
+            );
+            let mut sessions = std::collections::HashMap::new();
+            let mut sg = test_session_ground(actor);
+            sg.gm.permission = 10;
+            // `test_ability()` 的 `max_weight=0/weight=100` ⇒ GiveMine 负重门恒拒；给可容纳的值。
+            sg.state.wabil.weight = 0;
+            sg.state.wabil.max_weight = 10_000;
+            sessions.insert("hero".to_string(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates = std::collections::HashMap::new();
+            gates.insert(0, tx);
+            Self {
+                fx,
+                world,
+                host,
+                table,
+                displays: downlink::DisplayTable::new(),
+                sessions,
+                online,
+                gates,
+                rx,
+                catalog: game_svr::ability::StdItemCatalog::new(),
+                pet_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
+                item_number: 1000,
+                item_number_ex: 1_073_741_872,
+                actor,
+            }
+        }
+
+        fn apply(&mut self) {
+            apply_pending_gm_m_commands(
+                &mut self.sessions,
+                "hero",
+                &mut self.world,
+                &mut self.displays,
+                Some(&mut self.host),
+                Some(&self.fx.registry),
+                &self.table,
+                &self.catalog,
+                &self.pet_cfg,
+                &self.online,
+                &self.gates,
+                &MsgColors {
+                    red_f: 255,
+                    red_b: 56,
+                    hear_f: 0,
+                    hear_b: 255,
+                    whisper_f: 0,
+                    whisper_b: 0,
+                    green_f: 219,
+                    green_b: 255,
+                    blue_f: 251,
+                    blue_b: 252,
+                },
+                false,
+                100,
+                &mut self.item_number,
+                &mut self.item_number_ex,
+            );
+        }
+
+        fn drain(&mut self) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            while let Ok(msg) = self.rx.try_recv() {
+                match msg {
+                    SimToGate::SendFrame { socket, body } => {
+                        assert_eq!(socket, 901, "M 族回帧只投 hero");
+                        out.push(body);
+                    }
+                    other => panic!("M 族不应产生非帧消息: {other:?}"),
+                }
+            }
+            out
+        }
+
+        fn entity_ids(&self) -> Vec<i32> {
+            self.world.entities.iter().map(|e| e.id).collect()
+        }
+    }
+
+    fn m_item(
+        name: &str,
+        std_mode: u8,
+        weight: u8,
+        dura_max: u16,
+        price: i32,
+    ) -> mir2_data::StdItem {
+        mir2_data::StdItem {
+            name: name.to_string(),
+            std_mode,
+            weight,
+            dura_max,
+            price,
+            ..mir2_data::StdItem::default()
+        }
+    }
+
+    /// 源文件里带唯一标记的**调用行**（`#[track_caller]` 的 `rng_trace` 记 `file:line`）。
+    fn marked_line(marker: &str) -> u32 {
+        let src = include_str!("lib.rs");
+        // 静态唯一性牙：标记在源文件里必须恰出现一次（否则 site 行会指错/重名而静默假绿）。
+        let comment = format!("// {marker}");
+        assert_eq!(
+            src.matches(comment.as_str()).count(),
+            1,
+            "RNG 站点标记注释必须唯一：{marker}"
+        );
+        u32::try_from(
+            src.lines()
+                .position(|l| l.contains(marker))
+                .unwrap_or_else(|| panic!("源码里找不到 RNG 站点标记 {marker}")),
+        )
+        .unwrap()
+            + 1
+    }
+
+    fn trace_lines(path: &std::path::Path, site_line: u32) -> Vec<(String, i64)> {
+        let text = std::fs::read_to_string(path).unwrap_or_default();
+        text.lines()
+            .filter(|l| l.ends_with(&format!("lib.rs:{site_line}")))
+            .map(|l| {
+                let cols: Vec<&str> = l.split('\t').collect();
+                assert!(cols.len() >= 5, "trace 行格式 {l:?}");
+                (cols[1].to_string(), cols[2].parse::<i64>().unwrap())
+            })
+            .collect()
+    }
+
+    /// **RNG 账本 site 登记 + 抽数次数断言**（卡 A3/A4 的 R 级核心）：
+    /// - `@GiveMine` 未给持久 ⇒ `Random(18)` **恰一次**（在循环之前）；
+    /// - `@s` ⇒ `Random(MakeRandomAddValue=100)` **每件一次**（3 件 ⇒ 3 抽，且都带 arg=100）。
+    ///
+    /// 同时钉：`CopyToUserItemFromName` 的 `item_number` 每件消费、`GetItemNumberEx` 重取
+    /// MakeIndex（1073741873..）、`SM_ADDITEM` 每件一条、负重/StdMode/Dura 钳与 `Convert.ToUInt16`
+    /// 越界中止。
+    ///
+    /// 变异红：删任一 RNG 调用（抽数 0）／把 `Random(18)` 挪进循环（次数=count）／
+    /// 把 Make 的抽数改成循环外一次 ⇒ 本用例红。
+    #[test]
+    fn gm_m_rng_sites_and_item_gates() {
+        let mut rig = MGmRig::new();
+        rig.catalog.insert(1, m_item("矿石", 43, 1, 20_000, 10));
+        rig.catalog.insert(2, m_item("布衣", 5, 1, 20_000, 10));
+        rig.catalog.insert(3, m_item("重矿", 43, 100, 100, 10));
+        rig.catalog.insert(4, m_item("木剑", 5, 1, 1_000, 100));
+        rig.catalog.insert(5, m_item("高价物", 5, 1, 1_000, 15_000));
+        // rng trace：一次开启（进程级 OnceLock），用两处站点行过滤。
+        let trace = std::env::temp_dir().join(format!(
+            "gs-m-rng-{}-{}.log",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let seed = 7_i32;
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let givemine_site = marked_line("gm-givemine-rng");
+        let make_site = marked_line("gm-make-rng");
+        assert_ne!(givemine_site, 0);
+        assert_ne!(make_site, 0);
+
+        // ---- GiveMine：nDura=0 ⇒ 恰 1 抽 Random(18)，Dura=(draw+3)*1000 ----
+        let mut ctrl = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let expected_dura = ctrl.random_below(18) + 3;
+        rig.sessions.get_mut("hero").unwrap().gm.pending_give_mine =
+            Some(gmcmd::GmGiveMineRequest {
+                name: "矿石".into(),
+                count: 2,
+                dura: 0,
+            });
+        let start_number = rig.item_number;
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 2, "两块矿石 ⇒ 两条 SM_ADDITEM");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_ADDITEM
+        );
+        let items = &rig.sessions["hero"].state.item_list;
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].make_index, start_number + 1);
+        assert_eq!(items[1].make_index, start_number + 2);
+        assert_eq!(
+            items[0].dura,
+            u16::try_from(expected_dura * 1000).unwrap(),
+            "Dura = (Random(18)+3)*1000"
+        );
+        assert_eq!(items[0].dura_max, 20_000);
+        let got = trace_lines(&trace, givemine_site);
+        assert_eq!(got.len(), 1, "GiveMine 未给持久 ⇒ 恰 1 抽；实得 {got:?}");
+        assert_eq!(got[0], ("Next(max)".to_string(), 18));
+
+        // ---- GiveMine：StdMode!=43 / 负重不足 ⇒ 不落包不发帧，但 item_number 仍每件消费 ----
+        rig.sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .clear();
+        rig.sessions.get_mut("hero").unwrap().gm.pending_give_mine =
+            Some(gmcmd::GmGiveMineRequest {
+                name: "布衣".into(),
+                count: 1,
+                dura: 1,
+            });
+        let n0 = rig.item_number;
+        rig.apply();
+        assert!(rig.drain().is_empty());
+        assert!(rig.sessions["hero"].state.item_list.is_empty());
+        assert_eq!(rig.item_number, n0 + 1, "CopyToUserItemFromName 仍消费一次");
+        // 负重门：max_weight 压到 0 ⇒ 两块重矿都不落包（item_number 仍 +2）。
+        rig.sessions.get_mut("hero").unwrap().state.wabil.max_weight = 0;
+        rig.sessions.get_mut("hero").unwrap().gm.pending_give_mine =
+            Some(gmcmd::GmGiveMineRequest {
+                name: "重矿".into(),
+                count: 2,
+                dura: 5,
+            });
+        let n1 = rig.item_number;
+        rig.apply();
+        assert!(rig.drain().is_empty());
+        assert!(rig.sessions["hero"].state.item_list.is_empty());
+        assert_eq!(rig.item_number, n1 + 2);
+
+        // ---- GiveMine：Dura 钳 DuraMax（4000 > 100 ⇒ 100）；越界 100000 ⇒ 中止 ----
+        rig.sessions.get_mut("hero").unwrap().state.wabil.max_weight = 1000;
+        rig.sessions.get_mut("hero").unwrap().gm.pending_give_mine =
+            Some(gmcmd::GmGiveMineRequest {
+                name: "重矿".into(),
+                count: 1,
+                dura: 4,
+            });
+        rig.apply();
+        let _ = rig.drain();
+        assert_eq!(rig.sessions["hero"].state.item_list[0].dura, 100);
+        rig.sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .clear();
+        rig.sessions.get_mut("hero").unwrap().gm.pending_give_mine =
+            Some(gmcmd::GmGiveMineRequest {
+                name: "重矿".into(),
+                count: 1,
+                dura: 100, // 100000 > u16::MAX ⇒ Convert.ToUInt16 溢出差 ⇒ 中止
+            });
+        rig.apply();
+        assert!(rig.drain().is_empty());
+        assert!(
+            rig.sessions["hero"].state.item_list.is_empty(),
+            "Convert.ToUInt16 溢出 ⇒ 本件不落包"
+        );
+
+        // ---- Make：3 件 ⇒ 3 抽 Random(100) + GetItemNumberEx 重取 MakeIndex ----
+        rig.sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .clear();
+        rig.item_number_ex = 1_073_741_872;
+        rig.sessions.get_mut("hero").unwrap().gm.pending_make = Some(gmcmd::GmMakeRequest {
+            name: "木剑".into(),
+            count: 3,
+            permission: 10,
+        });
+        let start_ex = rig.item_number_ex;
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 3, "三件木剑 ⇒ 三条 SM_ADDITEM");
+        let items = &rig.sessions["hero"].state.item_list;
+        assert_eq!(items.len(), 3);
+        let got = trace_lines(&trace, make_site);
+        assert_eq!(got.len(), 3, "@s 每件恰一抽；实得 {got:?}");
+        assert!(
+            got.iter()
+                .all(|(kind, arg)| kind == "Next(max)" && *arg == 100),
+            "Random(MakeRandomAddValue=100)：{got:?}"
+        );
+        for (i, it) in items.iter().enumerate() {
+            assert_eq!(
+                it.make_index,
+                start_ex + 1 + i as i32,
+                "permission>=10 ⇒ MakeIndex=GetItemNumberEx"
+            );
+        }
+        assert_eq!(rig.item_number_ex, start_ex + 3);
+        let draws_before = trace_lines(&trace, make_site).len();
+
+        // ---- Make：满包 ⇒ 整条停（无抽数、无帧）；名字未命中 ⇒ 红且无抽数 ----
+        rig.sessions.get_mut("hero").unwrap().state.item_list = vec![
+            game_svr::bag::BagItem {
+                make_index: 0,
+                index: 4,
+                dura: 1,
+                dura_max: 1,
+                desc: [0; 14],
+            };
+            game_svr::bag::MAX_BAG_ITEM
+        ];
+        rig.sessions.get_mut("hero").unwrap().gm.pending_make = Some(gmcmd::GmMakeRequest {
+            name: "木剑".into(),
+            count: 1,
+            permission: 10,
+        });
+        rig.apply();
+        assert!(rig.drain().is_empty(), "满包 ⇒ 零帧");
+        assert_eq!(
+            rig.sessions["hero"].state.item_list.len(),
+            game_svr::bag::MAX_BAG_ITEM
+        );
+        assert_eq!(
+            trace_lines(&trace, make_site).len(),
+            draws_before,
+            "满包不抽数"
+        );
+        rig.sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .clear();
+        rig.sessions.get_mut("hero").unwrap().gm.pending_make = Some(gmcmd::GmMakeRequest {
+            name: "不存在".into(),
+            count: 1,
+            permission: 10,
+        });
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 1, "名字未命中 ⇒ 一条红 SysMsg");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_SYSMESSAGE
+        );
+        assert_eq!(
+            trace_lines(&trace, make_site).len(),
+            draws_before,
+            "未命中不抽数"
+        );
+
+        // ---- Make：高价物门（perm<5 且非 TestServer）⇒ 静默 return，不抽数不落包 ----
+        rig.sessions.get_mut("hero").unwrap().gm.pending_make = Some(gmcmd::GmMakeRequest {
+            name: "高价物".into(),
+            count: 1,
+            permission: 3,
+        });
+        rig.apply();
+        assert!(rig.drain().is_empty());
+        assert!(rig.sessions["hero"].state.item_list.is_empty());
+        assert_eq!(
+            trace_lines(&trace, make_site).len(),
+            draws_before,
+            "高价门不抽数"
+        );
+        // TestServer=true 时门失效：抽数照消费，且 perm<10 ⇒ MakeIndex 用 GetItemNumber（非 Ex）。
+        rig.sessions.get_mut("hero").unwrap().gm.pending_make = Some(gmcmd::GmMakeRequest {
+            name: "高价物".into(),
+            count: 1,
+            permission: 3,
+        });
+        apply_pending_gm_m_commands(
+            &mut rig.sessions,
+            "hero",
+            &mut rig.world,
+            &mut rig.displays,
+            Some(&mut rig.host),
+            Some(&rig.fx.registry),
+            &rig.table,
+            &rig.catalog,
+            &rig.pet_cfg,
+            &rig.online,
+            &rig.gates,
+            &MsgColors {
+                red_f: 255,
+                red_b: 56,
+                hear_f: 0,
+                hear_b: 255,
+                whisper_f: 0,
+                whisper_b: 0,
+                green_f: 219,
+                green_b: 255,
+                blue_f: 251,
+                blue_b: 252,
+            },
+            true, // TestServer
+            100,
+            &mut rig.item_number,
+            &mut rig.item_number_ex,
+        );
+        let _ = rig.drain();
+        assert_eq!(rig.sessions["hero"].state.item_list.len(), 1);
+        assert_eq!(trace_lines(&trace, make_site).len(), draws_before + 1);
+        assert_ne!(
+            rig.sessions["hero"].state.item_list[0].make_index, rig.item_number_ex,
+            "perm<10 ⇒ MakeIndex 取 GetItemNumber（已消费），不是 Ex 值"
+        );
+
+        std::fs::remove_file(&trace).ok();
+    }
+
+    /// 刷怪三条的宿主落尾：
+    /// `@怪` ⇒ 数量/等级/面前坐标 + `SlaveExpLevel/Recalc/RefNameColor(656)`；
+    /// 失败 ⇒ 红；`@ReCallMobEx` ⇒ `Master/SlaveExpLevel=1/NameColor`+`SlaveList`+`IsSlave=false`；
+    /// `@MobPlace` ⇒ 按数量刷 + 绿字（Race==136 抑制支不可达：`race_is_spawnable` 不含 136，登记）。
+    #[test]
+    fn gm_m_spawn_recall_and_mobplace_land() {
+        let mut rig = MGmRig::new();
+        // @怪：3 只 2 级。
+        let before = rig.entity_ids();
+        rig.sessions.get_mut("hero").unwrap().gm.pending_spawn = Some(gmcmd::GmSpawnRequest::Mob {
+            name: "mob".into(),
+            count: 3,
+            level: 2,
+            x: 6,
+            y: 5,
+        });
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 3, "三只怪 ⇒ 三条 656（RefNameColor）");
+        for b in &frames {
+            assert_eq!(
+                u16::from_le_bytes([b[4], b[5]]),
+                mir2_protocol::messages::SM_CHANGENAMECOLOR
+            );
+            assert_eq!(
+                u16::from_le_bytes([b[6], b[7]]),
+                255,
+                "Master==null ⇒ GetChrColor=NameColor(ctor 255)"
+            );
+        }
+        let after = rig.entity_ids();
+        let new: Vec<i32> = after
+            .iter()
+            .copied()
+            .filter(|id| !before.contains(id))
+            .collect();
+        assert_eq!(new.len(), 3);
+        for id in &new {
+            let e = rig.world.entities.get(*id).unwrap();
+            assert_eq!(e.slave_exp_level, 2, "@怪 置 SlaveExpLevel=nLevel");
+            assert_eq!(e.anti_magic, 1, "RecalcAbilitys 置 AntiMagic=1");
+            assert!(e.master.is_none(), "@怪 不设 Master");
+        }
+        // @怪 失败（名字不在 MonsterTable）⇒ 红 + break，零新实体。
+        let before = rig.entity_ids();
+        rig.sessions.get_mut("hero").unwrap().gm.pending_spawn = Some(gmcmd::GmSpawnRequest::Mob {
+            name: "nope".into(),
+            count: 2,
+            level: 0,
+            x: 6,
+            y: 5,
+        });
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 1, "首次生成失败 ⇒ 恰一条红");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_SYSMESSAGE
+        );
+        assert_eq!(rig.entity_ids().len(), before.len(), "失败不生成实体");
+
+        // @ReCallMobEx：Master=调用者 + SlaveExpLevel=1 + NameColor=200 + SlaveList；IsSlave=false。
+        let before = rig.entity_ids();
+        rig.sessions.get_mut("hero").unwrap().gm.pending_spawn =
+            Some(gmcmd::GmSpawnRequest::RecallEx {
+                name: "mob".into(),
+                name_color: 200,
+                x: 6,
+                y: 5,
+            });
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 1, "RefNameColor ⇒ 一条 656");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][6], frames[0][7]]),
+            u16::from(rig.pet_cfg.slave_color[1]),
+            "Master!=null ⇒ GetChrColor=SlaveColor[SlaveExpLevel=1]"
+        );
+        let after = rig.entity_ids();
+        let new: Vec<i32> = after
+            .iter()
+            .copied()
+            .filter(|id| !before.contains(id))
+            .collect();
+        assert_eq!(new.len(), 1);
+        let mon = rig.world.entities.get(new[0]).unwrap();
+        assert_eq!(mon.master, Some(rig.actor));
+        assert_eq!(mon.slave_exp_level, 1);
+        assert_eq!(mon.name_color, 200, "NameColor=(byte)nNameColor");
+        assert!(!mon.is_slave, "ReCallMobEx 不置 IsSlave（MakeSlave 才置）");
+        assert_eq!(mon.master_royalty_tick, 0, "oracle 不设 MasterRoyaltyTick");
+        assert!(
+            rig.world
+                .entities
+                .get(rig.actor)
+                .unwrap()
+                .slave_list
+                .contains(&new[0]),
+            "SlaveList.Add"
+        );
+
+        // @MobPlace：Mission 集中点刷 2 只 + 绿字（无 656）。
+        let before = rig.entity_ids();
+        rig.sessions.get_mut("hero").unwrap().gm.pending_spawn =
+            Some(gmcmd::GmSpawnRequest::MobPlace {
+                name: "mob".into(),
+                count: 2,
+                x: 3,
+                y: 4,
+                mission_map: "map".into(),
+                mission_x: 7,
+                mission_y: 8,
+            });
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 1, "MobPlace 只回一条绿字（不 RefNameColor）");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_SYSMESSAGE
+        );
+        assert_eq!(
+            gbk_decode(&mir2_protocol::edcode::decode(&frames[0][12..])),
+            "2 只 mob 已正在往地图 map 7:8 集中。"
+        );
+        let after = rig.entity_ids();
+        assert_eq!(
+            after.iter().filter(|id| !before.contains(id)).count(),
+            2,
+            "按数量刷 2 只"
+        );
+    }
+
+    /// **端到端**：`@GiveMine`/`@怪` 经生产入口 `handle_say_with_saves`（`GmWorld` 注入
+    /// `m_host=true` + `speaker_dir`）→ pending → `apply_pending_gm_m_commands` 落地。
+    /// 变异红：`handle_gm_command` 不注入 `m_host`/`speaker_dir` ⇒ 命令体退化零帧 ⇒ 本用例红。
+    #[test]
+    fn gm_m_end_to_end_through_handle_say() {
+        let mut rig = MGmRig::new();
+        rig.catalog.insert(1, m_item("矿石", 43, 1, 20_000, 10));
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 219,
+            green_b: 255,
+            blue_f: 251,
+            blue_b: 252,
+        };
+        let saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
+        // @GiveMine 3 1 5：dura=5 给定 ⇒ 不抽 Random(18)；落 1 件 + 1 条 200。
+        {
+            let ctx = TestChatCtx::new();
+            let host = ctx.host(&rig.online, &rig.world, &rig.gates, &colors);
+            let (deferred, direct) = handle_say_with_saves(
+                &host,
+                &mut rig.sessions,
+                &saves,
+                "hero",
+                901,
+                Some("@GiveMine 矿石 1 5"),
+            );
+            assert!(deferred.is_empty() && direct.is_empty(), "命令体零帧");
+        }
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 1, "一件矿石 ⇒ 一条 SM_ADDITEM");
+        assert_eq!(rig.sessions["hero"].state.item_list.len(), 1);
+        // @怪 mob 2：面前格（dir 默认 0 = Up ⇒ (5,4)）刷 2 只 + 两条 656。
+        let before = rig.entity_ids();
+        {
+            let ctx = TestChatCtx::new();
+            let host = ctx.host(&rig.online, &rig.world, &rig.gates, &colors);
+            let (deferred, direct) = handle_say_with_saves(
+                &host,
+                &mut rig.sessions,
+                &saves,
+                "hero",
+                901,
+                Some("@怪 mob 2"),
+            );
+            assert!(deferred.is_empty() && direct.is_empty(), "命令体零帧");
+        }
+        rig.apply();
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 2, "两只怪 ⇒ 两条 656");
+        let after = rig.entity_ids();
+        assert_eq!(after.iter().filter(|id| !before.contains(id)).count(), 2);
     }
 
     /// `@时间`（`DataCommand`）：`SysMsg(当前日期时间: yyyy-MM-dd HH:mm:ss, Blue, Hint)`

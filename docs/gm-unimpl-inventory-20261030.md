@@ -225,9 +225,27 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   到此被取代）。脚本桥 `GmWorld.quests=None` ⇒ 退化零帧 + `log_note`（部署脚本三条均
   unreachable）。牙：A1 写调用者/目标位不混入 + A2 离线/缺参零帧零写 + A3 open/unit 同构 +
   A4 写后读回 + 宿主级 saves 只落调用者且目标 socket 恰一条 100；变异 6 发全红。
-- **现存 `Imp::Unimplemented` = 74 − 50 = 24**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
-  thirty_command_bodies` 的 161 已接 / 24 未接断言；改坏任一计数 ⇒ 该测试红）。
-- 剩余缺口族：M6 / C5 / W4（§4.3 分族索引不变；X2 全 18 条、F 全 3 条已结）。
+- **族 M 6 条已落地**：卡 `openmir2-gm-family-m-spawn-make`（worker-85，tier=R）——
+  MobNpc（缺参/`?` ⇒ 红帮助；足参**静默**——建 NPC 体整段注释）/MobPlace（Mission 未设或图
+  不存在 ⇒ **两条红**；已设 ⇒ `_MIN(500,n)` 只 `RegenMonsterByName` + 带 Mission 三元的绿字；
+  `Mission/MissionX/MissionY` 三元宿主 `Entity` **未建模**（无消费者）⇒ 只刷怪、标记登记）/
+  ReCallMobEx（守卫 `Length>0` 怪癖：实参 <4 越界零帧；足参 ⇒ 刷一只 + `Master=调用者` +
+  `SlaveExpLevel=1` + `NameColor` 钳 [0,255] + `RecalcAbilitys` + `RefNameColor(656)` +
+  `SlaveList.Add`，**不置 IsSlave/不补 HP**）/怪（`(byte)_MIN(64,n)` + `nLevel=(byte)` 后
+  `>10⇒0` + 说话者面前格刷怪；任一失败 ⇒ 红 `GameCommandMobMsg` + break）/
+  GiveMine（守卫 `Length>0` 怪癖：实参 <3 越界零帧；`nDura<=0 ⇒ Random(18)+3` **恰一次**
+  （宿主同一事件、世界同一条 RNG 流）+ `StdMode==43` 门 + 负重门 + `Dura=nDura*1000` 钳
+  DuraMax、`Convert.ToUInt16` 越界中止）/s（Make：`nCount` 夹 `1..=10`；权限 10 下四门
+  **不可达**（`CanMakeItem` oracle 函数体整段注释 ⇒ 恒 false；结构照抄）；满包停 /
+  `CopyToUserItemFromName` 未命中红 / 高价物门 / `Random(MakeRandomAddValue=100)` **每件一次** /
+  `perm>=PermissionMax ⇒ GetItemNumberEx` 重取 MakeIndex）。宿主
+  `apply_pending_gm_m_commands` 同事件落地；RNG 站点在 `bins/game-svr/src/lib.rs` 以唯一
+  标记登记，牙用 `rng_trace` 按 `file:line` 断言**次数与参数**（GiveMine 恰 1 抽 arg=18；
+  Make 每件 1 抽 arg=100）。变异 8 发全红（钳位/颜色钳/抽数参数/删抽数/删 MakeIndex 重取/
+  负重门/MobPlace 绿字/SlaveExpLevel 写）。
+- **现存 `Imp::Unimplemented` = 74 − 56 = 18**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
+  thirty_command_bodies` 的 167 已接 / 18 未接断言；改坏任一计数 ⇒ 该测试红）。
+- 剩余缺口族：C5 / W4（§4.3 分族索引不变；X2 全 18 条、F 全 3 条、M 全 6 条已结）。
 
 ## 8. SystemShare null 字段扫盲（卡 `openmir2-gm-systemshare-null-sweep`，tier=R）
 

@@ -326,6 +326,14 @@ pub struct GateConfig {
     /// 判据与可复跑证据见 `docs/itemnumber-persist-writeback-判据-20261017.md`
     /// （卡 `openmir2-itemnumber-persist-writeback`，2026-10-17 判定「前提不成立」）。
     pub item_number: i32,
+    /// `[Setup] MakeRandomAddValue`（oracle `GameSvrConf.cs:566/1551` 初值 `10`；
+    /// `ServerConf.cs:342` 的 `ReadWriteByte`，**部署件 = 100**）——`MakeItemCommand.cs:76`
+    /// 的 `Random(Config.MakeRandomAddValue)`（每件一次；升级逻辑整段注释，但**抽数仍消费**）。
+    pub make_random_add_value: u8,
+    /// `[Setup] ItemNumberEx`（oracle `GameSvrConf.cs:724/1700` 初值 `int.MaxValue/2`；
+    /// `ServerConf.cs:115` 的 `ReadWriteInteger`，部署件 = 1073741872）——`GetItemNumberEx()`
+    /// （`M2Share.cs:557-569`）的计数器；`MakeItemCommand.cs:82` 重取 `MakeItem.MakeIndex` 的源。
+    pub item_number_ex: i32,
     /// `[Setup] SaveHumanRcdTime`（oracle `GameSvrConf.cs:423/1484`，缺省 `10*60*1000`，**毫秒**；
     /// `ServerConf.cs:566` 的 `ReadWriteInteger("Setup", "SaveHumanRcdTime", …)`）——
     /// `WorldServer.ProcessPlayObjectData`（`WorldServer.cs:698-703`）的**周期存档**间隔。
@@ -505,6 +513,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut cloths_man: Option<String> = None;
     let mut cloths_woman: Option<String> = None;
     let mut item_number: Option<i32> = None;
+    let mut make_random_add_value: Option<u8> = None;
+    let mut item_number_ex: Option<i32> = None;
     let mut save_human_rcd_time: Option<i32> = None;
     let mut health_fill_time: Option<i32> = None;
     let mut spell_fill_time: Option<i32> = None;
@@ -961,6 +971,13 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                             .with_context(|| format!("ItemNumber 不是合法整数：{v:?}"))?,
                     );
                 }
+                // 造物 RNG 参数与 `GetItemNumberEx` 计数器（`ServerConf.cs:342/115`）。
+                "MAKERANDOMADDVALUE" => {
+                    make_random_add_value = Some(read_u8_or_default(v, 10, "MakeRandomAddValue")?);
+                }
+                "ITEMNUMBEREX" => {
+                    item_number_ex = Some(read_i32_or_default(v, i32::MAX / 2, "ItemNumberEx")?);
+                }
                 // 周期存档（`ServerConf.cs:566`；现网 `Server.conf` 未写 ⇒ 缺省 10 分钟）。
                 "SAVEHUMANRCDTIME" => {
                     save_human_rcd_time = Some(
@@ -1306,6 +1323,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         cloths_man: cloths_man.unwrap_or_else(|| "布衣(男)".to_string()),
         cloths_woman: cloths_woman.unwrap_or_else(|| "布衣(女)".to_string()),
         item_number: item_number.unwrap_or(0),
+        make_random_add_value: make_random_add_value.unwrap_or(10),
+        item_number_ex: item_number_ex.unwrap_or(i32::MAX / 2),
         // oracle 缺省值（`GameSvrConf.cs:1484` 的 `SaveHumanRcdTime = 10 * 60 * 1000`）。
         save_human_rcd_time: save_human_rcd_time.unwrap_or(10 * 60 * 1000),
         // oracle 缺省值（`GameSvrConf.cs:1323-1324` 的 `HealthFillTime = 300` / `SpellFillTime = 800`）。
@@ -2156,6 +2175,33 @@ CryMsgBColor=151
                 "DisableInSafeZoneFireCross={v:?}"
             );
         }
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **族 M**：`[Setup] MakeRandomAddValue`（部署 100 ≠ 源码缺省 10）与
+    /// `[Setup] ItemNumberEx`（部署 1073741872 ≠ 源码缺省 `int.MaxValue/2`）必须实读；
+    /// 缺键回落 oracle 初值；非整数/越界报错（fail-closed）。
+    /// 红检：把缺省 10 写成 0、或把 ItemNumberEx 缺省写成 0 ⇒ 缺键断言必红。
+    #[test]
+    fn make_random_add_value_and_item_number_ex_parsed() {
+        let dir = std::env::temp_dir().join(format!("gs-make-cfg-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=1\nIDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        let p_missing = write(&dir, base);
+        let c = load(&p_missing).unwrap();
+        assert_eq!(c.make_random_add_value, 10, "缺键 ⇒ GameSvrConf 初值 10");
+        assert_eq!(c.item_number_ex, i32::MAX / 2, "缺键 ⇒ 初值 int.MaxValue/2");
+        let p = write(
+            &dir,
+            &format!("{base}[Setup]\nMakeRandomAddValue=100\nItemNumberEx=1073741872\n"),
+        );
+        let c = load(&p).unwrap();
+        assert_eq!(c.make_random_add_value, 100, "部署值必须实读（≠ 缺省 10）");
+        assert_eq!(c.item_number_ex, 1073741872, "部署值必须实读");
+        // byte 越界 / 非整数 ⇒ 报错（`ReadWriteByte` fail-closed）。
+        let p_bad = write(&dir, &format!("{base}[Setup]\nMakeRandomAddValue=300\n"));
+        assert!(load(&p_bad).is_err(), "MakeRandomAddValue=300 越界必须报错");
+        let p_bad2 = write(&dir, &format!("{base}[Setup]\nItemNumberEx=abc\n"));
+        assert!(load(&p_bad2).is_err(), "ItemNumberEx 非整数必须报错");
         std::fs::remove_dir_all(&dir).ok();
     }
 
