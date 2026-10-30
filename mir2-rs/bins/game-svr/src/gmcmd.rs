@@ -179,6 +179,47 @@ pub const DISABLE_FILTER_DISABLED: &str = "已禁止文字过滤。";
 /// 全仓**无赋值点**（`feature.rs` 模块文档 §4 实证）⇒ 现网恒 0 ⇒ 本红字是**唯一可达支**。
 pub const ON_HORSE_NEED_TAG: &str = "骑马必须先戴上马牌!!!";
 
+// ===== 族 Q · 查询/展示（卡 `openmir2-gm-family-q-query-display`，tier=L）的 SysMsg 正文 =====
+//
+// 文本取 `CommandHelp.cs` / 命令体内联字面量，逐字节照抄。`{n}` 是 .NET `string.Format`
+// 占位——输出由 [`dotnet_format`] 单遍替换（值原样插入，不递归展开）。
+/// `CommandHelp.NowNotOnLineOrOnOtherServer`（`CommandHelp.cs:18`；离线红字）。
+pub const NOW_NOT_ON_LINE_FMT: &str = "{0} 现在不在线，或在其它服务器上!!!";
+/// `CommandHelp.GameCommandMobCountMapNotFound`（`CommandHelp.cs:20`）。
+pub const MOB_COUNT_MAP_NOT_FOUND: &str = "指定的地图不存在!!!";
+/// `CommandHelp.GameCommandMobCountMonsterCount`（`CommandHelp.cs:21`；**全角冒号**；
+/// HumanCount 复用它计玩家数——oracle 就这么写）。
+pub const MOB_COUNT_MONSTER_COUNT_FMT: &str = "怪物数量：{0}";
+/// `HumanCountCommand` 的 `Command.CommandHelp`（`[Command]` Help=`地图号`；现网名 `HumanCountwa`）。
+pub const Q_HELP_HUMAN_COUNT: &str = "命令格式: @HumanCountwa 地图号";
+/// `MobCountCommand` 的 `Command.CommandHelp`（Help=`地图号`；现网名 `MobCountwa`）。
+pub const Q_HELP_MOB_COUNT: &str = "命令格式: @MobCountwa 地图号";
+/// `ShowMapModeCommand` 的 `Command.CommandHelp`（Help=`地图号`；现网名 `ShowMapMode`）。
+pub const Q_HELP_SHOW_MAP_MODE: &str = "命令格式: @ShowMapMode 地图号";
+/// `ShowHumanFlagCommand` 的 `Command.CommandHelp`（Help=`人物名称 标识号`；现网名 `showflag`）。
+pub const Q_HELP_SHOW_FLAG: &str = "命令格式: @showflag 人物名称 标识号";
+/// `HumanLocalCommand` 的 `Command.CommandHelp`（Help=`人物名称`；现网名 `IP`）。
+pub const Q_HELP_HUMAN_LOCAL: &str = "命令格式: @IP 人物名称";
+/// `HumanInfoCommand` 的 `Command.CommandHelp`（Help=`人物名称`——与 HumanLocal 同一条 Help
+/// 常量 `GameCommandHumanLocalHelpMsg`；现网名 `信息`）。
+pub const Q_HELP_HUMAN_INFO: &str = "命令格式: @信息 人物名称";
+/// `ShowUseItemInfoCommand` 的 `Command.CommandHelp`（Help=`人物名称`；现网名 `Showuseiteminfo`）。
+pub const Q_HELP_SHOW_USE_ITEM: &str = "命令格式: @Showuseiteminfo 人物名称";
+/// `CommandHelp.GameCommandMapInfoMsg`（`CommandHelp.cs:39`）。
+pub const Q_MAP_INFO_NAME_FMT: &str = "地图名称: {0}({1})";
+/// `CommandHelp.GameCommandMapInfoSizeMsg`（`CommandHelp.cs:40`）。
+pub const Q_MAP_INFO_SIZE_FMT: &str = "地图大小: X({0}) Y({1})";
+/// `CommandHelp.GameCommandShowHumanFlagONMsg`（`CommandHelp.cs:52`）。
+pub const Q_FLAG_ON_FMT: &str = "{0}: [{1}] = ON";
+/// `CommandHelp.GameCommandShowHumanFlagOFFMsg`（`CommandHelp.cs:53`）。
+pub const Q_FLAG_OFF_FMT: &str = "{0}: [{1}] = OFF";
+/// `CommandHelp.GameCommandLotteryTicketMsg`（`CommandHelp.cs:65`；**尾随一个空格**）。
+pub const LOTTERY_MSG_FMT: &str =
+    "已中彩票数:{0} 未中彩票数:{1} 一等奖:{2} 二等奖:{3} 三等奖:{4} 四等奖:{5} 五等奖:{6} 六等奖:{7} ";
+/// `ShowUseItemInfoCommand.cs:33` 的格式串字面量——.NET `string.Format` 不认识 `%s/%d`
+/// ⇒ **原样输出、逐件相同**（内容冻结怪癖，不许「修」）。
+pub const Q_SHOW_USE_ITEM_LITERAL: &str = "%s[%s]IDX[%d]系列号[%d]持久[%d-%d]";
+
 // ===== 批次 4（数值/角色族，设计件 §4.3 第 72–115 行，44 条）的 CommandHelp 常量 =====
 //
 // 口径同上：`命令格式: @{现网名} {Help}`（`CommandAttribute.cs:53`）；`Help` 为空时**末尾空格保留**
@@ -582,6 +623,44 @@ pub enum Imp {
     /// `DisableFilterCommand`（现网 `@DisableFilter`）：翻转**全局** `SystemShare.FilterWord`
     /// （部署启动 true，`GameApp.cs:70`）+ 绿字「已启用文字过滤。」/「已禁止文字过滤。」。
     DisableFilter,
+
+    // ---- 族 Q · 查询/展示（10，卡 `openmir2-gm-family-q-query-display`，tier=L）----
+    /// `HumanCountCommand`（现网 `@HumanCountwa`）：地图不存在红字 `指定的地图不存在!!!`；
+    /// 否则绿字 `怪物数量：{n}`（复用 MobCount 文案——oracle 就这么写）计**在线玩家**数。
+    HumanCount,
+    /// `MobCountCommand`（现网 `@MobCountwa`）：同上门；绿字计**怪物**数。
+    MobCount,
+    /// `MapInfoCommand`（现网 `@Map`；类名/出厂名都是 `MapInfo`，conf 键 `Map=Map`）：
+    /// **直取 `@params[2]`** ⇒ 实参 <3 抛越界被吞 ⇒ 零帧；足参 ⇒ 格子 `标志: Walk` 绿字、
+    /// 有对象再补 `对象数: N` 绿字；一切非可走格（HighWall/LowWall/越界）⇒ `GetCellInfo`
+    /// success=false ⇒ 红字 `取地图单元信息失败: {图名}`；图不存在**静默**（无 else）；
+    /// `nX<0 || nY<0 || 图名空` ⇒ 绿字「请按正确格式输入: Map 地图号 X Y」（注意是**绿**字）。
+    MapInfo,
+    /// `ShowMapInfoCommand`（现网 `@MapInfo`）：两条绿字——当前图 `地图名称: 名(描述)` +
+    /// `地图大小: X(W) Y(H)`。
+    ShowMapInfo,
+    /// `ShowMapModeCommand`（现网 `@ShowMapMode`；conf 键是死键拼写 `ShoweMapMode`）：地图不存在
+    /// 红字 `{图名} 不存在!!!`；否则蓝字 `地图模式: ` + `GetEnvirInfo()` 长串（TRUE/FALSE 布尔）。
+    ShowMapMode,
+    /// `ShowHumanFlagCommand`（现网 `@showflag`；conf 键 `Flag=showflag`）：空名/`?` 名红字帮助；
+    /// 离线红字 `{名} 现在不在线，或在其它服务器上!!!`；在线 ⇒ 目标 QuestFlag 位阵读源在宿主
+    /// 未建模（恒零值模型）⇒ 恒走 OFF 绿字支（ON 支结构保留）。
+    ShowFlag,
+    /// `HumanLocalCommand`（现网 `@IP`）：**判空恒真怪癖**（`IsNullOrEmpty(s) || !IsNullOrEmpty(s)`
+    /// ⇒ 任何输入同答红字帮助；`GetPlayObject` 之后的支全部不可达）。
+    HumanLocal,
+    /// `HumanInfoCommand`（现网 `@信息`）：空名/`?` 名红字帮助；离线红字；**在线零帧**
+    /// （`GetBaseObjectInfo` 的 SysMsg 被注释）。
+    HumanInfo,
+    /// `ShowUseItemInfoCommand`（现网 `@Showuseiteminfo`）：**判空下标怪癖**（`sHumanName[1]`，
+    /// 单字符名越界被吞 ⇒ 零帧；[1]=='?' 红字帮助）；离线红字；在线 ⇒ 逐**非空佩戴位**发
+    /// **字面**蓝字 `%s[%s]IDX[%d]系列号[%d]持久[%d-%d]`（.NET `string.Format` 无 `{n}` 占位
+    /// ⇒ 原样输出、逐件相同）。
+    ShowUseItemInfo,
+    /// `LotteryTicketCommandL`（现网 `@LotteryTicket`；类名带尾 L）：一条绿字彩票 8 配置值
+    /// （部署全 0：`GameSvrConf.cs:1688-1695` ctor 0 + `GameApp.cs:75-81` 启动清零 + 部署
+    /// `Server.conf` 无这些键），格式串尾**带一个空格**。
+    LotteryTicket,
     Unimplemented,
 }
 
@@ -938,6 +1017,25 @@ pub struct GmConfig {
     /// 的命令体第一道门。部署恒 false ⇒ 恒回红字 [`NO_PASSWORD_LOCK_SYSTEM_MSG`]。
     /// 本仓不解析 `[Setup]`（部署值即常量，族 P 卡面口径；启用分支现网不可达）。
     pub password_lock_system: bool,
+    /// `Config.WinLotteryCount`（`ServerConf.cs:645` 读 `[Setup] WinLotteryCount`；
+    /// `GameSvrConf.cs:1688` ctor 0、`GameApp.cs:75` 启动再清零；部署 `Server.conf` **无此键**
+    /// ⇒ 0）。`@LotteryTicket` 的 8 配置值之一。
+    pub win_lottery_count: i32,
+    /// `Config.NoWinLotteryCount`（同上口径 ⇒ 0）。
+    pub no_win_lottery_count: i32,
+    /// `Config.WinLotteryLevel1..6`（`ServerConf.cs:647-652`；ctor/启动双清零 + 无部署键
+    /// ⇒ 全 0）。格式串 `GameCommandLotteryTicketMsg` 的 {2}..{7}。
+    pub win_lottery_level1: i32,
+    /// 见 [`Self::win_lottery_level1`]。
+    pub win_lottery_level2: i32,
+    /// 见 [`Self::win_lottery_level1`]。
+    pub win_lottery_level3: i32,
+    /// 见 [`Self::win_lottery_level1`]。
+    pub win_lottery_level4: i32,
+    /// 见 [`Self::win_lottery_level1`]。
+    pub win_lottery_level5: i32,
+    /// 见 [`Self::win_lottery_level1`]。
+    pub win_lottery_level6: i32,
     /// `SystemShare.ServerIndex`（`SystemShare.cs:45` 缺省 0）。全仓**无写点**
     /// （只有 `AppService.cs:211` 读）⇒ 部署恒 0 = 主服 ⇒ `ReloadGuild`/`ReloadGuildAll` 永远走成功支。
     pub server_index: u8,
@@ -969,6 +1067,14 @@ impl Default for GmConfig {
         Self {
             lock_human_login: false,
             password_lock_system: false,
+            win_lottery_count: 0,
+            no_win_lottery_count: 0,
+            win_lottery_level1: 0,
+            win_lottery_level2: 0,
+            win_lottery_level3: 0,
+            win_lottery_level4: 0,
+            win_lottery_level5: 0,
+            win_lottery_level6: 0,
             server_index: 0,
             manage_npc_present: true,
             function_npc_present: true,
@@ -1557,6 +1663,429 @@ fn disable_filter(world: &GmWorld<'_>) -> GmResult {
             "DisableFilter：SystemShare.FilterWord 全局位未注入（构造处未接全局单元）⇒ 零帧登记（不伪造翻转）",
         ),
     }
+}
+
+// ---------------------------- 族 Q · 查询/展示（10，卡 `openmir2-gm-family-q-query-display`）----------------------------
+//
+// oracle：HumanCount/MobCount/MapInfo(Map 类)/ShowMapMode/ShowHumanFlag/HumanLocal/HumanInfo/
+// ShowUseItemInfo 八条 `Execute(string[], IPlayerActor)`（case 2 拆参）+ ShowMapInfo/
+// LotteryTicketCommandL 两条 `Execute(IPlayerActor)`（case 1 不拆参）。
+// 现网名三层链：`HumanCount=HumanCountwa` / `MobCount=MobCountwa` / `Map=Map`（类名 MapInfo）/
+// `MapInfo=MapInfo`（类 ShowMapInfo）/ `ShoweMapMode=ShowMapMode`（conf 键是死键拼写）/
+// `Flag=showflag` / `HumanLocal=IP` / `Info=信息` / `LotteryTicket=LotteryTicket`（出厂名
+// `Namecolor` 被覆盖）/ ShowUseItemInfo 无键 ⇒ 出厂名 `Showuseiteminfo`。perm 全 10
+// （`[Permission]` HumanLocal/MobCount/HumanCount/Map/LotteryTicket/MapInfo/ShoweMapMode/Info/Flag
+// 与构造缺省一致；ShowUseItemInfo 无键 ⇒ 构造 10）。**只读命令：不写任何状态**（卡面 forbidden）。
+//
+// 四个怪癖逐条照抄（不许「修」，内容冻结）：① IP 判空恒真；② 信息在线零帧（SysMsg 被注释）；
+// ③ Map 直取 `@params[2]` 越界零帧 + 图不存在/格子无效静默；④ Showuseiteminfo `sHumanName[1]`
+// 单字符名越界零帧 + `%s/%d` 格式串字面输出。
+
+/// .NET `string.Format(template, args)` 的 {n} 占位替换：**单遍扫描**，值原样插入、
+/// 不再参与后续展开（与 C# 语义一致——值里带 `{1}` 不会被二次替换）。
+fn dotnet_format(template: &str, args: &[String]) -> String {
+    let b = template.as_bytes();
+    let mut out =
+        String::with_capacity(template.len() + args.iter().map(String::len).sum::<usize>());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'{' {
+            let mut j = i + 1;
+            let mut idx = 0usize;
+            let mut has_digit = false;
+            while j < b.len() && b[j].is_ascii_digit() {
+                idx = idx * 10 + usize::from(b[j] - b'0');
+                j += 1;
+                has_digit = true;
+            }
+            if has_digit && j < b.len() && b[j] == b'}' && idx < args.len() {
+                out.push_str(&args[idx]);
+                i = j + 1;
+                continue;
+            }
+        }
+        // 非占位（含 `{` 后不合法）按字面拷贝——C# 里模板写坏会抛 FormatException 被吞，
+        // 但本仓全部模板都是常量、占位合法，这条字面支只为健全性。
+        let ch_len = template[i..].chars().next().map_or(1, char::len_utf8);
+        out.push_str(&template[i..i + ch_len]);
+        i += ch_len;
+    }
+    out
+}
+
+/// `CellAttribute` 枚举名的 C# `ToString()` 字面（`标志: {name}` 用）。
+/// `GetCellInfo` success 门要求 `Valid`（= Walk）⇒ 命令实际只可能输出 `Walk`；
+/// 另两名为结构完备保留。
+fn cell_attribute_name(a: mir2_world::CellAttribute) -> &'static str {
+    match a {
+        mir2_world::CellAttribute::Walk => "Walk",
+        mir2_world::CellAttribute::HighWall => "HighWall",
+        mir2_world::CellAttribute::LowWall => "LowWall",
+    }
+}
+
+/// `MapManager.FindMap(sMapName)` 的两级判定：`Some(None)` = 注册表在、图不在（oracle
+/// `FindMap` 落空 ⇒ 调用方走「图不存在」红字/静默）；`None` = 注册表未注入（构造缺口 ⇒
+/// 调用方按 [`NOTE_NO_MAP_REGISTRY`] 登记零帧，不当「图不存在」）；`Some(Some(id))` = 命中。
+fn find_map_registered(world: &GmWorld<'_>, name: &str) -> Option<Option<usize>> {
+    let reg = world.maps.as_ref()?;
+    Some(reg.id_of(name))
+}
+
+/// `WorldServer.GetMapHuman(sMapName)`（`WorldServer.cs:1678-1694`）：!Death && !Ghost &&
+/// `Envir == envir` 的 PlayObjectList 计数。世界未注入 ⇒ `None`（[`NOTE_NO_WORLD`]）。
+fn map_human_count(world: &GmWorld<'_>, map_id: usize) -> Option<i32> {
+    let w = world.world?;
+    Some(
+        w.entities
+            .iter()
+            .filter(|e| {
+                e.race == mir2_world::ACTOR_RACE_PLAY && !e.death && !e.ghost && e.map_id == map_id
+            })
+            .count() as i32,
+    )
+}
+
+/// `WorldServer.GetMapMonster(envir, null)`（`WorldServer.cs:1639-1677`）：!Death && !Ghost &&
+/// `Envir == envir` 的 MonGen CertList（怪物）计数。宿主怪物是普通实体 ⇒ 按
+/// `race >= ACTOR_RACE_ANIMAL`（oracle `Envirnoment.AddObject` 的怪物判据同式）过滤镜像；
+/// NPC（10/15）天然排除。
+fn map_monster_count(world: &GmWorld<'_>, map_id: usize) -> Option<i32> {
+    let w = world.world?;
+    Some(
+        w.entities
+            .iter()
+            .filter(|e| {
+                e.race >= mir2_world::ACTOR_RACE_ANIMAL
+                    && !e.death
+                    && !e.ghost
+                    && e.map_id == map_id
+            })
+            .count() as i32,
+    )
+}
+
+/// 目标 `GetQuestFalgStatus(nFlag)`（`PlayObject.cs:3966-3989`：`nFlag-1` → 位
+/// `128 >> (n-1)%8` 于字节 `(n-1)/8`）的**读源接缝**。宿主未建模 `QuestFlag` 位阵
+/// （族 F 的 setflag/setopen/setunit 尚未落地、无任何写点）⇒ 恒零值模型：任何目标/任何
+/// 位号读 0（= 新角色位阵全零语义）。族 F 落地时把本函数换成真位阵读，`showflag` 的
+/// ON 支随之可达——命令体结构已按 oracle 写全，不随接缝改动。
+fn target_quest_flag_status(_target: &mir2_world::Entity, _n_flag: i32) -> i32 {
+    0
+}
+
+/// `HumanCountCommand.Execute`（`HumanCountCommand.cs:13-33`，现网 `@HumanCountwa`）。
+fn human_count(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let s_map = split_params(parameters).first().copied().unwrap_or("");
+    if s_map.is_empty() {
+        return red(Q_HELP_HUMAN_COUNT);
+    }
+    let Some(map_id) = find_map_registered(world, s_map) else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let Some(map_id) = map_id else {
+        return red(MOB_COUNT_MAP_NOT_FOUND);
+    };
+    let Some(n) = map_human_count(world, map_id) else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    green(dotnet_format(MOB_COUNT_MONSTER_COUNT_FMT, &[n.to_string()]))
+}
+
+/// `MobCountCommand.Execute`（`MobCountCommand.cs:13-33`，现网 `@MobCountwa`）。
+fn mob_count(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let s_map = split_params(parameters).first().copied().unwrap_or("");
+    if s_map.is_empty() {
+        return red(Q_HELP_MOB_COUNT);
+    }
+    let Some(map_id) = find_map_registered(world, s_map) else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let Some(map_id) = map_id else {
+        return red(MOB_COUNT_MAP_NOT_FOUND);
+    };
+    let Some(n) = map_monster_count(world, map_id) else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    green(dotnet_format(MOB_COUNT_MONSTER_COUNT_FMT, &[n.to_string()]))
+}
+
+/// `MapInfoCommand.Execute`（`MapInfoCommand.cs:12-46`，现网 `@Map`）。
+///
+/// 支结构（含怪癖）：`sMap = @params[2]` **直取下标** ⇒ 实参 <3 抛越界被吞 ⇒ 零帧；
+/// `!IsNullOrEmpty(sMap) && nX>=0 && nY>=0` 不成立 ⇒ **绿**字格式提示（Name=现网名 `Map`）；
+/// 图不存在 ⇒ **静默**（无 else；`IsValidCell` 的 false 臂不可达——success ⇒ Walk ⇒ 永非
+/// LowWall，见 [`q_map`] 内注）；`GetCellInfo` success ⇒ 绿字 `标志: {Attribute}`（success 门
+/// 要求 Valid ⇒ 恒 `Walk`）+ `IsAvailable` 再补绿字 `对象数: {Count}`；失败（HighWall/
+/// LowWall/越界）⇒ 红字 `取地图单元信息失败: {图名}`。
+fn q_map(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let Some(&s_map) = params.get(2) else {
+        return no_frames(NOTE_INDEX_OUT_OF_RANGE);
+    };
+    let n_x = str_to_int16(params.first().copied().unwrap_or(""), 0);
+    let n_y = str_to_int16(params.get(1).copied().unwrap_or(""), 0);
+    if s_map.is_empty() || n_x < 0 || n_y < 0 {
+        return green("请按正确格式输入: Map 地图号 X Y");
+    }
+    let Some(map_id) = find_map_registered(world, s_map) else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let Some(map_id) = map_id else {
+        // oracle：`map == null` 时该 if 整支不进、也没有 else ⇒ 静默。
+        return GmResult::empty();
+    };
+    let Some(w) = world.world else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    let Some(grid) = w.maps.get(map_id) else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    // oracle 判据逐行（`Envirnoment.cs:1422-1429/322-335` + `MapCellInfo.cs:19`）：
+    // `Valid` = `Attribute == Walk` ⇒ `GetCellInfo` 对「越界或非 Walk」一律 `success=false`；
+    // `IsValidCell` 的 false 臂（`success && Attribute==LowWall`）因此**不可达**（success ⇒
+    // Walk ⇒ 永非 LowWall）⇒ `@Map` 的静默支只由 `FindMap == null` 到达；其余一切非可走格
+    // （HighWall/LowWall/越界）都走 `success=false` ⇒ 红字失败。
+    let (cell, success) = grid.get_cell_info(i32::from(n_x), i32::from(n_y));
+    if !success {
+        return red(format!("取地图单元信息失败: {s_map}"));
+    }
+    let mut r = GmResult::one(
+        GmColor::Green,
+        format!("标志: {}", cell_attribute_name(cell.attribute)),
+    );
+    if cell.is_available() {
+        r.msgs.push(GmMsg {
+            color: GmColor::Green,
+            text: format!("对象数: {}", cell.count()),
+        });
+    }
+    r
+}
+
+/// `ShowMapInfoCommand.Execute`（`ShowMapInfoCommand.cs:10-17`，现网 `@MapInfo`）：
+/// 说话者当前图的两条绿字。
+fn show_map_info(world: &GmWorld<'_>) -> GmResult {
+    let Some((map_id, _, _)) = world.self_pos() else {
+        return no_frames(NOTE_NO_WORLD);
+    };
+    let Some(reg) = world.maps else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let Some(name) = reg.name_of(map_id).map(str::to_string) else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let desc = reg.map_desc_of(map_id).unwrap_or_default().to_string();
+    let Some(map_file) = reg.maps().get(map_id) else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    GmResult {
+        found: true,
+        parsed: true,
+        msgs: vec![
+            GmMsg {
+                color: GmColor::Green,
+                text: dotnet_format(Q_MAP_INFO_NAME_FMT, &[name, desc]),
+            },
+            GmMsg {
+                color: GmColor::Green,
+                text: dotnet_format(
+                    Q_MAP_INFO_SIZE_FMT,
+                    &[map_file.width.to_string(), map_file.height.to_string()],
+                ),
+            },
+        ],
+        frames: Vec::new(),
+        log_note: None,
+    }
+}
+
+/// `Envirnoment.GetEnvirInfo()`（`Envirnoment.cs:1432-1448`）逐段重建：
+/// `HUtil32.BoolToStr` = `TRUE`/`FALSE`；`EXPRATE` 的第二槽是 `Flag.ExpRate / 100`（**整数除**）。
+fn get_envir_info(name: &str, desc: &str, f: &mir2_envir::MapInfoFlag) -> String {
+    let bt = |v: bool| if v { "TRUE" } else { "FALSE" };
+    format!(
+        "Map:{name}({desc}) DAY:{0} DARK:{1} SAFE:{2} FIGHT:{3} FIGHT3:{4} QUIZ:{5} \
+         NORECONNECT:{6}({7}) MUSIC:{8}({9}) EXPRATE:{10}({11}) PKWINLEVEL:{12}({13}) \
+         PKLOSTLEVEL:{14}({15}) PKWINEXP:{16}({17}) \
+         PKLOSTEXP:{18}({19}) DECHP:{20}({21}/{22}) INCHP:{23}({24}/{25}) \
+         DECGAMEGOLD:{26}({27}/{28}) INCGAMEGOLD:{29}({30}/{31}) INCGAMEPOINT:{32}({33}/{34}) \
+         RUNHUMAN:{35} RUNMON:{36} NEEDHOLE:{37} NORECALL:{38} \
+         NOGUILDRECALL:{39} NODEARRECALL:{40} NOMASTERRECALL:{41} NODRUG:{42} MINE:{43} \
+         MINE2:{44} NODROPITEM:{45} NOTHROWITEM:{46} NOPOSITIONMOVE:{47} NOHORSE:{48} \
+         NOHUMNOMON:{49} NOCHAT:{50}",
+        bt(f.day_light),
+        bt(f.bo_darkness),
+        bt(f.safe_area),
+        bt(f.fight_zone),
+        bt(f.fight3_zone),
+        bt(f.bo_quiz),
+        bt(f.bo_noreconnect),
+        f.s_no_reconnect_map,
+        bt(f.music),
+        f.music_id,
+        bt(f.bo_exprate),
+        f.exp_rate / 100,
+        bt(f.bo_pkwinlevel),
+        f.n_pkwinlevel,
+        bt(f.bo_pklostlevel),
+        f.n_pklostlevel,
+        bt(f.bo_pkwinexp),
+        f.n_pkwinexp,
+        bt(f.bo_pklostexp),
+        f.n_pklostexp,
+        bt(f.bo_dechp),
+        f.n_dechptime,
+        f.n_dechppoint,
+        bt(f.bo_inchp),
+        f.n_inchptime,
+        f.n_inchppoint,
+        bt(f.bo_decgamegold),
+        f.n_decgamegoldtime,
+        f.n_decgamegold,
+        bt(f.bo_incgamegold),
+        f.n_incgamegoldtime,
+        f.n_incgamegold,
+        bt(f.bo_incgamepoint),
+        f.n_incgamepointtime,
+        f.n_incgamepoint,
+        bt(f.run_human),
+        bt(f.run_mon),
+        bt(f.bo_needhole),
+        bt(f.no_re_call),
+        bt(f.no_guild_re_call),
+        bt(f.bo_nodearrecall),
+        bt(f.master_re_call),
+        bt(f.bo_nodrug),
+        bt(f.mine),
+        bt(f.bo_mine2),
+        bt(f.no_drop_item),
+        bt(f.no_throw_item),
+        bt(f.bo_nopositionmove),
+        bt(f.no_horse),
+        bt(f.bo_nohumnomon),
+        bt(f.bo_nochat),
+    )
+}
+
+/// `ShowMapModeCommand.Execute`（`ShowMapModeCommand.cs:13-35`，现网 `@ShowMapMode`）。
+fn show_map_mode(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let s_map = split_params(parameters).first().copied().unwrap_or("");
+    if s_map.is_empty() {
+        return red(Q_HELP_SHOW_MAP_MODE);
+    }
+    let Some(map_id) = find_map_registered(world, s_map) else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let Some(map_id) = map_id else {
+        return red(format!("{s_map} 不存在!!!"));
+    };
+    let Some(reg) = world.maps else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let Some(name) = reg.name_of(map_id) else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    let desc = reg.map_desc_of(map_id).unwrap_or_default();
+    let Some(flag) = reg.flag_of(map_id) else {
+        return no_frames(NOTE_NO_MAP_REGISTRY);
+    };
+    blue(format!("地图模式: {}", get_envir_info(name, desc, flag)))
+}
+
+/// `ShowHumanFlagCommand.Execute`（`ShowHumanFlagCommand.cs:14-41`，现网 `@showflag`）。
+fn show_flag(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let params = split_params(parameters);
+    let s_human = params.first().copied().unwrap_or("");
+    let s_flag = params.get(1).copied().unwrap_or("");
+    if s_human.is_empty() || s_human.starts_with('?') {
+        return red(Q_HELP_SHOW_FLAG);
+    }
+    let Some(target) = world.play_by_name(s_human) else {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[s_human.to_string()]));
+    };
+    let n_flag = str_to_int(s_flag, 0);
+    // 读源接缝：宿主位阵恒零值模型 ⇒ 恒走 OFF 支（ON 支结构保留，见 seam 文档）。
+    let status = target_quest_flag_status(target, n_flag);
+    if status == 1 {
+        green(dotnet_format(
+            Q_FLAG_ON_FMT,
+            &[target.name.clone(), n_flag.to_string()],
+        ))
+    } else {
+        green(dotnet_format(
+            Q_FLAG_OFF_FMT,
+            &[target.name.clone(), n_flag.to_string()],
+        ))
+    }
+}
+
+/// `HumanLocalCommand.Execute`（`HumanLocalCommand.cs:14-36`，现网 `@IP`）：
+/// **判空恒真怪癖**——`IsNullOrEmpty(sHumanName) || !IsNullOrEmpty(sHumanName)` 恒成立
+/// ⇒ 任何输入同答红字帮助；查在线/IP 支全部不可达（照抄不修）。
+fn human_local(_world: &GmWorld<'_>) -> GmResult {
+    red(Q_HELP_HUMAN_LOCAL)
+}
+
+/// `HumanInfoCommand.Execute`（`HumanInfoCommand.cs:14-36`，现网 `@信息`）：
+/// 空名/`?` 名红字帮助；离线红字；**在线零帧**（末行 SysMsg 被注释——非注释是没写，
+/// 1:1 只留静默）。
+fn human_info(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let s_human = split_params(parameters).first().copied().unwrap_or("");
+    if s_human.is_empty() || s_human.starts_with('?') {
+        return red(Q_HELP_HUMAN_INFO);
+    }
+    if world.play_by_name(s_human).is_none() {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[s_human.to_string()]));
+    }
+    GmResult::empty()
+}
+
+/// `ShowUseItemInfoCommand.Execute`（`ShowUseItemInfoCommand.cs:13-41`，现网 `@Showuseiteminfo`）：
+/// `sHumanName[1]` 判空下标怪癖（单字符名越界 ⇒ 零帧）+ 离线红字 + 在线逐**非空佩戴位**
+/// 发**字面**蓝字（.NET `string.Format` 无 `{n}` 占位 ⇒ 每件同文）。
+fn show_use_item_info(parameters: &str, world: &GmWorld<'_>) -> GmResult {
+    let s_human = split_params(parameters).first().copied().unwrap_or("");
+    if s_human.is_empty() {
+        return red(Q_HELP_SHOW_USE_ITEM);
+    }
+    match second_utf16_is_question(s_human) {
+        Some(true) => return red(Q_HELP_SHOW_USE_ITEM),
+        Some(false) => {}
+        None => return no_frames(NOTE_INDEX_OUT_OF_RANGE),
+    }
+    let Some(target) = world.play_by_name(s_human) else {
+        return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[s_human.to_string()]));
+    };
+    let mut r = GmResult::empty();
+    for slot in &target.use_items {
+        if slot.index == 0 {
+            continue;
+        }
+        r.msgs.push(GmMsg {
+            color: GmColor::Blue,
+            text: Q_SHOW_USE_ITEM_LITERAL.to_string(),
+        });
+    }
+    r
+}
+
+/// `LotteryTicketCommandL.Execute`（`LotteryTicketCommand.cs:11-19`，现网 `@LotteryTicket`）：
+/// 一条绿字 8 配置值（部署全 0），格式串尾随一个空格照抄。
+fn lottery_ticket(cfg: &GmConfig) -> GmResult {
+    green(dotnet_format(
+        LOTTERY_MSG_FMT,
+        &[
+            cfg.win_lottery_count.to_string(),
+            cfg.no_win_lottery_count.to_string(),
+            cfg.win_lottery_level1.to_string(),
+            cfg.win_lottery_level2.to_string(),
+            cfg.win_lottery_level3.to_string(),
+            cfg.win_lottery_level4.to_string(),
+            cfg.win_lottery_level5.to_string(),
+            cfg.win_lottery_level6.to_string(),
+        ],
+    ))
 }
 
 // ---------------------------- 宿主未接 / oracle 注释的登记文案 ----------------------------
@@ -2229,6 +2758,11 @@ fn green(text: impl Into<String>) -> GmResult {
     GmResult::one(GmColor::Green, text.into())
 }
 
+/// 蓝字单条 SysMsg（`ShowMapMode`/`@Showuseiteminfo` 的信息面）。
+fn blue(text: impl Into<String>) -> GmResult {
+    GmResult::one(GmColor::Blue, text.into())
+}
+
 /// `!string.IsNullOrEmpty(s) && s[1] == '?'` 的逐 UTF-16 码元等价。
 ///
 /// `Some(true)` = 命中 `?`；`Some(false)` = 不命中；`None` = C# `s[1]` 越界
@@ -2866,6 +3400,18 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::TakeOffHorse => take_off_horse(sess),
         Imp::TakeOnHorse => take_on_horse(sess),
         Imp::DisableFilter => disable_filter(world),
+
+        // ---- 族 Q · 查询/展示（10，卡 `openmir2-gm-family-q-query-display`）----
+        Imp::HumanCount => human_count(parameters, world),
+        Imp::MobCount => mob_count(parameters, world),
+        Imp::MapInfo => q_map(parameters, world),
+        Imp::ShowMapInfo => show_map_info(world),
+        Imp::ShowMapMode => show_map_mode(parameters, world),
+        Imp::ShowFlag => show_flag(parameters, world),
+        Imp::HumanLocal => human_local(world),
+        Imp::HumanInfo => human_info(parameters, world),
+        Imp::ShowUseItemInfo => show_use_item_info(parameters, world),
+        Imp::LotteryTicket => lottery_ticket(cfg),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -3363,7 +3909,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "HumanCountwa",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::HumanCount,
     },
     CommandDef {
         name: "Hunger",
@@ -3375,7 +3921,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "IP",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::HumanLocal,
     },
     CommandDef {
         name: "jkt76",
@@ -3405,7 +3951,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "LotteryTicket",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::LotteryTicket,
     },
     CommandDef {
         name: "LuckyPoint",
@@ -3417,13 +3963,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Map",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MapInfo,
     },
     CommandDef {
         name: "MapInfo",
         perm_min: 10,
         params: 1,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowMapInfo,
     },
     CommandDef {
         // oracle 活名 = **类属性默认名** `ChangeMasterName`（`ChangeMasterNameCommand.cs:10`；
@@ -3451,7 +3997,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "MobCountwa",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::MobCount,
     },
     CommandDef {
         name: "MobFireBurn",
@@ -3659,13 +4205,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "showflag",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowFlag,
     },
     CommandDef {
         name: "ShowMapMode",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowMapMode,
     },
     CommandDef {
         name: "showopen",
@@ -3683,7 +4229,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "Showuseiteminfo",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::ShowUseItemInfo,
     },
     CommandDef {
         name: "SignMapMove",
@@ -3809,7 +4355,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "信息",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::HumanInfo,
     },
     CommandDef {
         name: "停止叛变",
@@ -5425,9 +5971,10 @@ mod tests {
     /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`、
     /// 卡 `openmir2-gm-impl-clearbag` 的 `ClearBagItem`）
     /// 以及批次 5A（卡 `openmir2-gm-batch-5a-guild-impl` 的 6 条行会族）、
-    /// 族 P（卡 `openmir2-gm-family-p-passwordlock` 的 7 条密码锁门）与
-    /// 族 T（卡 `openmir2-gm-family-t-toggle-horse` 的 7 条会话开关/骑马）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 60），且命令名 → 实现标签固定。
+    /// 族 P（卡 `openmir2-gm-family-p-passwordlock` 的 7 条密码锁门）、
+    /// 族 T（卡 `openmir2-gm-family-t-toggle-horse` 的 7 条会话开关/骑马）与
+    /// 族 Q（卡 `openmir2-gm-family-q-query-display` 的 10 条查询/展示）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 50），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -5435,16 +5982,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            125,
-            "125 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）"
+            135,
+            "135 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）+ 族 T（会话开关/骑马 7）+ 族 Q（查询/展示 10）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            60,
-            "185 - 125"
+            50,
+            "185 - 135"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -8189,6 +8736,499 @@ mod tests {
             );
             assert!(r.frames.is_empty(), "{name}");
             assert_eq!(sess, GmSession::default(), "{name} 零状态变化");
+        }
+    }
+
+    // ---------------------------- 族 Q · 查询/展示（10，卡 `openmir2-gm-family-q-query-display`）----------------------------
+
+    /// 族 Q 夹具：`map_fixture`（图名 `map`/描述 `测试地图`/20×20，默认 Flag）+ 双玩家世界，
+    /// 返回 (fixture, world, gm_id, bob_id)。**只读命令**：命令体不得改任何状态（卡面 forbidden）。
+    fn q_fixture() -> (MapFixture, mir2_world::World, i32, i32) {
+        let fx = map_fixture(mir2_envir::MapInfoFlag::default());
+        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let gm_id = w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
+        let bob_id = w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        (fx, w, gm_id, bob_id)
+    }
+
+    fn q_view<'a>(
+        fx: &'a MapFixture,
+        w: &'a mir2_world::World,
+        guilds: &'a mir2_world::GuildManager,
+    ) -> GmWorld<'a> {
+        GmWorld::new(guilds)
+            .with_maps(&fx.registry)
+            .with_world(w)
+            .with_speaker("gm")
+    }
+
+    /// 10 条全部接线：现网名/perm 10/params（8 条 case 2 双参 + `MapInfo`/`LotteryTicket`
+    /// case 1 单参）；出厂名不注册（含 LotteryTicket 的出厂默认 `Namecolor`）。
+    /// 牙：任一条回退 `Unimplemented` / 改名 / 改权限 ⇒ 红。
+    #[test]
+    fn q_family_table_entries_are_wired() {
+        for (name, imp, params) in [
+            ("HumanCountwa", Imp::HumanCount, 2),
+            ("MobCountwa", Imp::MobCount, 2),
+            ("Map", Imp::MapInfo, 2),
+            ("MapInfo", Imp::ShowMapInfo, 1),
+            ("ShowMapMode", Imp::ShowMapMode, 2),
+            ("showflag", Imp::ShowFlag, 2),
+            ("IP", Imp::HumanLocal, 2),
+            ("信息", Imp::HumanInfo, 2),
+            ("Showuseiteminfo", Imp::ShowUseItemInfo, 2),
+            ("LotteryTicket", Imp::LotteryTicket, 1),
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, imp, "{name} 的实现标签");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, params, "{name} 的 Execute 形参个数");
+        }
+        for factory in [
+            "HumanCount",
+            "MobCount",
+            "ShowHumanFlag",
+            "HumanLocal",
+            "HumanInfo",
+            "ShowUseItem",
+            "ShowMapInfo",
+            "Namecolor",
+        ] {
+            assert!(
+                find(factory).is_none(),
+                "{factory} 出厂名不该命中（conf 覆盖后只认现网名）"
+            );
+        }
+    }
+
+    /// **A6**：`@HumanCountwa`/`@MobCountwa`——空参红字帮助、图不存在红字
+    /// `指定的地图不存在!!!`（HumanCount/MobCount **共用**这一条文本）、命中绿字
+    /// `怪物数量：{n}`（**全角冒号**；HumanCount 复用 MobCount 文案计**玩家**数——oracle 原样）。
+    /// 死亡/Ghost 排除；怪物按 `race >= ACTOR_RACE_ANIMAL` 计。
+    #[test]
+    fn q_family_counts_help_not_found_and_green_counts() {
+        let (fx, mut w, gm_id, bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let exec_at = |w: &mir2_world::World,
+                       fx: &MapFixture,
+                       guilds: &mir2_world::GuildManager,
+                       sess: &mut GmSession,
+                       line: &str|
+         -> GmResult {
+            let view = q_view(fx, w, guilds);
+            execute(sess, &cfg, &view, line)
+        };
+        // 空参 ⇒ 各自红字帮助（两个现网名两份帮助文本）。
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@HumanCountwa")),
+            vec![(GmColor::Red, Q_HELP_HUMAN_COUNT)]
+        );
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@MobCountwa")),
+            vec![(GmColor::Red, Q_HELP_MOB_COUNT)]
+        );
+        // 图不存在 ⇒ 红字（两类共用）。
+        assert_eq!(
+            texts(&exec_at(
+                &w,
+                &fx,
+                &guilds,
+                &mut sess,
+                "@HumanCountwa nowhere"
+            )),
+            vec![(GmColor::Red, MOB_COUNT_MAP_NOT_FOUND)]
+        );
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@MobCountwa nowhere")),
+            vec![(GmColor::Red, MOB_COUNT_MAP_NOT_FOUND)]
+        );
+        // 命中：gm+bob 两个 Play 实体 ⇒ 玩家数 2；怪物 0。
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@HumanCountwa map")),
+            vec![(GmColor::Green, "怪物数量：2")]
+        );
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@MobCountwa map")),
+            vec![(GmColor::Green, "怪物数量：0")]
+        );
+        // 怪物实体：race >= ACTOR_RACE_ANIMAL ⇒ MobCount +1；HumanCount 不变。
+        let mut mon = mir2_world::Entity::new(0, "怪甲", 7, 7);
+        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        w.add_entity(mon);
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@MobCountwa map")),
+            vec![(GmColor::Green, "怪物数量：1")]
+        );
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@HumanCountwa map")),
+            vec![(GmColor::Green, "怪物数量：2")]
+        );
+        // 死亡/Ghost 排除：bob 死亡 + gm Ghost ⇒ 玩家数 0；怪甲存活 ⇒ 怪物数仍 1；
+        // 怪乙 Ghost ⇒ 不计。
+        w.entities.get_mut(bob_id).unwrap().death = true;
+        w.entities.get_mut(gm_id).unwrap().ghost = true;
+        let mut mon2 = mir2_world::Entity::new(0, "怪乙", 8, 8);
+        mon2.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mon2_id = w.add_entity(mon2);
+        w.entities.get_mut(mon2_id).unwrap().ghost = true;
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@HumanCountwa map")),
+            vec![(GmColor::Green, "怪物数量：0")]
+        );
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@MobCountwa map")),
+            vec![(GmColor::Green, "怪物数量：1")]
+        );
+    }
+
+    /// **A3**：`@Map`（MapInfoCommand）三怪癖——① 实参 <3 ⇒ `@params[2]` 直取越界被吞
+    /// ⇒ **零帧**（有 note 登记）；② 图不存在/格子无效（界内 LowWall）⇒ **静默**（无 else，
+    /// 零帧零 note）；界外 ⇒ `IsValidCell` 仍 true ⇒ `GetCellInfo` 失败 ⇒ **红字**失败文本；
+    /// ③ `nX<0/nY<0/图名空` ⇒ **绿**字格式提示（Name=现网名 `Map`）。命中 ⇒ 绿字
+    /// `标志: Walk`（success 门要求 Valid）+ 有对象再补绿字 `对象数: N`。
+    /// 变异红：M3（越界支改安全取参）⇒ 本用例红。
+    #[test]
+    fn q_family_map_param_quirks() {
+        let (fx, mut w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        let exec_at = |w: &mir2_world::World,
+                       fx: &MapFixture,
+                       guilds: &mir2_world::GuildManager,
+                       sess: &mut GmSession,
+                       line: &str|
+         -> GmResult {
+            let view = q_view(fx, w, guilds);
+            execute(sess, &cfg, &view, line)
+        };
+        // ① 越界零帧（0/1/2 个实参都一样：oracle 第一句就直取 [2]）。
+        for line in ["@Map", "@Map 5", "@Map 5 5"] {
+            let r = exec_at(&w, &fx, &guilds, &mut sess, line);
+            assert!(r.found && r.parsed, "{line}");
+            assert!(r.msgs.is_empty() && r.frames.is_empty(), "{line} 应零帧");
+            assert!(r.log_note.is_some(), "{line} 越界必须登记");
+        }
+        // ② 图不存在 ⇒ 静默零帧零 note。
+        let r = exec_at(&w, &fx, &guilds, &mut sess, "@Map 1 1 nowhere");
+        assert!(r.msgs.is_empty() && r.log_note.is_none(), "图不存在应静默");
+        // ②' 界内 LowWall ⇒ GetCellInfo success=false ⇒ **红字**失败（oracle IsValidCell
+        // 的 false 臂不可达：success ⇒ Walk ⇒ 永非 LowWall；静默只由图不存在到达）。
+        w.maps
+            .get_mut(0)
+            .expect("map 0")
+            .set_map_xy_flag(12, 12, false);
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@Map 12 12 map")),
+            vec![(GmColor::Red, "取地图单元信息失败: map")]
+        );
+        // ②'' 界外（20×20 图取 500,500）⇒ IsValidCell true（越界不算 LowWall）⇒ 红字失败。
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@Map 500 500 map")),
+            vec![(GmColor::Red, "取地图单元信息失败: map")]
+        );
+        // ③ 负坐标 ⇒ 绿字格式提示（不是红字）。
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@Map -1 5 map")),
+            vec![(GmColor::Green, "请按正确格式输入: Map 地图号 X Y")]
+        );
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@Map 5 -1 map")),
+            vec![(GmColor::Green, "请按正确格式输入: Map 地图号 X Y")]
+        );
+        // ① 命中：空格（10,10 无人）⇒ 恰一条绿字 `标志: Walk`（无对象数）。
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@Map 10 10 map")),
+            vec![(GmColor::Green, "标志: Walk")]
+        );
+        // ①' 有对象 ⇒ 两条绿字（标志 + 对象数）。
+        w.maps
+            .get_mut(0)
+            .expect("map 0")
+            .add_map_object(5, 5, mir2_world::CellType::Play, 777, 0);
+        assert_eq!(
+            texts(&exec_at(&w, &fx, &guilds, &mut sess, "@Map 5 5 map")),
+            vec![
+                (GmColor::Green, "标志: Walk"),
+                (GmColor::Green, "对象数: 1")
+            ]
+        );
+    }
+
+    /// **A6**：`@MapInfo`（说话者当前图两条绿字）与 `@ShowMapMode`（不存在红字 / 命中蓝字
+    /// `GetEnvirInfo` 长串——默认 Flag 全 FALSE/0、`NORECONNECT:FALSE()` 空括号、
+    /// `EXPRATE:FALSE(0)` 整除）逐字节。
+    #[test]
+    fn q_family_show_map_info_and_mode() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let view = q_view(&fx, &w, &guilds);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // MapInfo：两条绿字，顺序固定。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@MapInfo")),
+            vec![
+                (GmColor::Green, "地图名称: map(测试地图)"),
+                (GmColor::Green, "地图大小: X(20) Y(20)")
+            ]
+        );
+        // 说话者不在世界 ⇒ NOTE_NO_WORLD 登记零帧（构造缺口，不伪造当前图）。
+        let bare_view = GmWorld::new(&guilds).with_maps(&fx.registry);
+        let r = execute(&mut sess, &cfg, &bare_view, "@MapInfo");
+        assert!(r.msgs.is_empty());
+        assert!(r.log_note.is_some());
+        // ShowMapMode：空参红帮助 / 不存在红字 / 命中蓝字长串。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@ShowMapMode")),
+            vec![(GmColor::Red, Q_HELP_SHOW_MAP_MODE)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@ShowMapMode nowhere")),
+            vec![(GmColor::Red, "nowhere 不存在!!!")]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@ShowMapMode map")),
+            vec![(
+                GmColor::Blue,
+                "地图模式: Map:map(测试地图) DAY:FALSE DARK:FALSE SAFE:FALSE FIGHT:FALSE \
+                 FIGHT3:FALSE QUIZ:FALSE NORECONNECT:FALSE() MUSIC:FALSE(0) EXPRATE:FALSE(0) \
+                 PKWINLEVEL:FALSE(0) PKLOSTLEVEL:FALSE(0) PKWINEXP:FALSE(0) PKLOSTEXP:FALSE(0) \
+                 DECHP:FALSE(0/0) INCHP:FALSE(0/0) DECGAMEGOLD:FALSE(0/0) INCGAMEGOLD:FALSE(0/0) \
+                 INCGAMEPOINT:FALSE(0/0) RUNHUMAN:FALSE RUNMON:FALSE NEEDHOLE:FALSE NORECALL:FALSE \
+                 NOGUILDRECALL:FALSE NODEARRECALL:FALSE NOMASTERRECALL:FALSE NODRUG:FALSE \
+                 MINE:FALSE MINE2:FALSE NODROPITEM:FALSE NOTHROWITEM:FALSE NOPOSITIONMOVE:FALSE \
+                 NOHORSE:FALSE NOHUMNOMON:FALSE NOCHAT:FALSE"
+            )]
+        );
+    }
+
+    /// **A1 + A2**：`@IP` **判空恒真怪癖**——任何输入（空/有参/问号/在线名）同答红字帮助；
+    /// 变异红：M1 改回正常判空 ⇒ 非「帮助」支可达 ⇒ 本用例红。
+    /// `@信息`：空名/`?` 名红帮助、离线红格式串、**在线零帧**（SysMsg 被注释）；
+    /// 变异红：M2 在线支补发文本 ⇒ 本用例红。
+    #[test]
+    fn q_family_ip_always_help_and_info_online_silent() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let view = q_view(&fx, &w, &guilds);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // A1：恒红帮助。
+        for line in ["@IP", "@IP bob", "@IP ?", "@IP 任何输入"] {
+            assert_eq!(
+                texts(&execute(&mut sess, &cfg, &view, line)),
+                vec![(GmColor::Red, Q_HELP_HUMAN_LOCAL)],
+                "{line} 恒真判空 ⇒ 同答帮助"
+            );
+            let r = execute(&mut sess, &cfg, &view, line);
+            assert!(r.frames.is_empty() && r.log_note.is_none(), "{line}");
+        }
+        // A2：信息四支。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@信息")),
+            vec![(GmColor::Red, Q_HELP_HUMAN_INFO)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@信息 ?gm")),
+            vec![(GmColor::Red, Q_HELP_HUMAN_INFO)]
+        );
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@信息 nowhere")),
+            vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
+        );
+        // 在线 ⇒ 零帧零状态（SysMsg 被注释 ⇒ 1:1 静默）。
+        let r = execute(&mut sess, &cfg, &view, "@信息 bob");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "在线应零帧");
+        assert!(r.log_note.is_none(), "被注释支不是未接项");
+        assert_eq!(
+            sess,
+            GmSession {
+                permission: 10,
+                ..GmSession::default()
+            },
+            "查询命令零状态（卡面 forbidden）"
+        );
+    }
+
+    /// **A4**：`@Showuseiteminfo` 判空下标怪癖——单字符名（`sHumanName[1]` 越界）⇒ 零帧；
+    /// `a?`（[1]=='?'）红帮助；`?a`（[1]=='a'）不命中帮助 ⇒ 走在线查找 ⇒ 离线红；
+    /// 在线空佩戴位零帧；非空位逐件**字面**蓝字 `%s[%s]IDX[%d]系列号[%d]持久[%d-%d]`
+    /// （.NET 无 `{n}` 占位 ⇒ 原样输出，Index==0 的槽跳过）。变异红：M4 改 [1]→[0] 或
+    /// 字面改真替换 ⇒ 本用例红。
+    #[test]
+    fn q_family_show_use_item_info_quirks() {
+        let (fx, mut w, _gm_id, bob_id) = q_fixture();
+        {
+            let bob = w.entities.get_mut(bob_id).unwrap();
+            bob.use_items[3].index = 15;
+            bob.use_items[3].make_index = 12345;
+            bob.use_items[3].dura = 100;
+            bob.use_items[3].dura_max = 200;
+            bob.use_items[7].index = 42; // 第二件
+            bob.use_items[9].index = 0; // Index==0 ⇒ 跳过
+        }
+        let guilds = mir2_world::GuildManager::new();
+        let view = q_view(&fx, &w, &guilds);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        // 空名红帮助。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@Showuseiteminfo")),
+            vec![(GmColor::Red, Q_HELP_SHOW_USE_ITEM)]
+        );
+        // 单字符名 ⇒ 越界零帧（有 note 登记）。
+        let r = execute(&mut sess, &cfg, &view, "@Showuseiteminfo a");
+        assert!(r.msgs.is_empty() && r.frames.is_empty(), "单字符名应零帧");
+        assert!(r.log_note.is_some(), "越界必须登记");
+        // `a?`：[1]=='?' ⇒ 红帮助。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@Showuseiteminfo a?")),
+            vec![(GmColor::Red, Q_HELP_SHOW_USE_ITEM)]
+        );
+        // `?a`：[1]=='a' ⇒ 不命中帮助 ⇒ 在线查找落空 ⇒ 离线红。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@Showuseiteminfo ?a")),
+            vec![(GmColor::Red, "?a 现在不在线，或在其它服务器上!!!")]
+        );
+        // 在线 bob：2 个非空位 ⇒ 恰 2 条**字面**蓝字（逐件同文）。
+        assert_eq!(
+            texts(&execute(&mut sess, &cfg, &view, "@Showuseiteminfo bob")),
+            vec![
+                (GmColor::Blue, Q_SHOW_USE_ITEM_LITERAL),
+                (GmColor::Blue, Q_SHOW_USE_ITEM_LITERAL)
+            ]
+        );
+        let r = execute(&mut sess, &cfg, &view, "@Showuseiteminfo bob");
+        assert!(r.log_note.is_none(), "字面输出不是未接项");
+    }
+
+    /// **A5 + A6**：`@showflag` 红绿回执（空/`?` 帮助、离线红格式串、在线 OFF 绿字——
+    /// 目标位阵恒零值模型）+ `@LotteryTicket` 绿字 8 配置值（部署全 0 + 构造非 0 按序，
+    /// 尾随空格逐字节）。
+    #[test]
+    fn q_family_showflag_and_lottery() {
+        let (fx, w, _gm_id, _bob_id) = q_fixture();
+        let guilds = mir2_world::GuildManager::new();
+        let view = q_view(&fx, &w, &guilds);
+        let mut sess = gm_session();
+        // showflag 四支。
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@showflag"
+            )),
+            vec![(GmColor::Red, Q_HELP_SHOW_FLAG)]
+        );
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@showflag ?x 1"
+            )),
+            vec![(GmColor::Red, Q_HELP_SHOW_FLAG)]
+        );
+        assert_eq!(
+            texts(&execute(
+                &mut sess,
+                &GmConfig::default(),
+                &view,
+                "@showflag nowhere 5"
+            )),
+            vec![(GmColor::Red, "nowhere 现在不在线，或在其它服务器上!!!")]
+        );
+        // 在线（位阵恒零值模型）⇒ OFF，标识号按 StrToInt 原值回显（7 ⇒ [7]；非法 ⇒ 0）。
+        for (arg, want) in [
+            ("7", "bob: [7] = OFF"),
+            ("0", "bob: [0] = OFF"),
+            ("abc", "bob: [0] = OFF"),
+        ] {
+            assert_eq!(
+                texts(&execute(
+                    &mut sess,
+                    &GmConfig::default(),
+                    &view,
+                    &format!("@showflag bob {arg}")
+                )),
+                vec![(GmColor::Green, want)],
+                "{arg}"
+            );
+        }
+        // LotteryTicket：部署全 0（格式串尾随一个空格）。
+        let (r, _) = run_gm("@LotteryTicket");
+        assert_eq!(
+            texts(&r),
+            vec![(
+                GmColor::Green,
+                "已中彩票数:0 未中彩票数:0 一等奖:0 二等奖:0 三等奖:0 四等奖:0 五等奖:0 六等奖:0 "
+            )]
+        );
+        // 构造非 0：8 值按 {0}..{7} 顺序。
+        let cfg = GmConfig {
+            win_lottery_count: 11,
+            no_win_lottery_count: 22,
+            win_lottery_level1: 1,
+            win_lottery_level2: 2,
+            win_lottery_level3: 3,
+            win_lottery_level4: 4,
+            win_lottery_level5: 5,
+            win_lottery_level6: 6,
+            ..GmConfig::default()
+        };
+        let (r, _) = run_gm_with(&cfg, "@LotteryTicket");
+        assert_eq!(
+            texts(&r),
+            vec![(
+                GmColor::Green,
+                "已中彩票数:11 未中彩票数:22 一等奖:1 二等奖:2 三等奖:3 四等奖:4 五等奖:5 六等奖:6 "
+            )]
+        );
+    }
+
+    /// 族 Q 权限门（10 条全 perm 10）：`Permission < 10` ⇒ 恰一条红字 `权限不够!!!`。
+    #[test]
+    fn q_family_permission_gate_blocks_body() {
+        for name in [
+            "HumanCountwa",
+            "MobCountwa",
+            "Map",
+            "MapInfo",
+            "ShowMapMode",
+            "showflag",
+            "IP",
+            "信息",
+            "Showuseiteminfo",
+            "LotteryTicket",
+        ] {
+            let (r, sess) = run(&format!("@{name}"));
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, PERMISSION_TOO_LOW)],
+                "{name}"
+            );
+            assert!(r.frames.is_empty(), "{name}");
+            assert_eq!(sess, GmSession::default(), "{name} 零状态变化");
+        }
+    }
+
+    /// **退化形态**：注册表未注入（`GmWorld::new`）≠「图不存在」——`@HumanCountwa`/
+    /// `@ShowMapMode`/`@Map` 都按 [`NOTE_NO_MAP_REGISTRY`] 登记零帧，不当图不存在红字。
+    #[test]
+    fn q_family_registry_not_injected_is_not_map_not_found() {
+        let guilds = mir2_world::GuildManager::new();
+        let view = GmWorld::new(&guilds);
+        let cfg = GmConfig::default();
+        let mut sess = gm_session();
+        for line in ["@HumanCountwa map", "@ShowMapMode map", "@Map 1 1 map"] {
+            let r = execute(&mut sess, &cfg, &view, line);
+            assert!(r.msgs.is_empty(), "{line} 未注入 ⇒ 零帧");
+            let note = r.log_note.expect("{line} 必须登记");
+            assert!(note.contains("地图注册表"), "{line}: {note}");
         }
     }
 }
