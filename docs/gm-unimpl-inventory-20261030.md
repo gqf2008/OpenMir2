@@ -191,9 +191,17 @@ oracle 状态缩写：**缺口·全实现** = 命令体整段活跃（含副作�
   为 NRE 前真实副作用（非帧，note 记语义）；`+jy`/`-jy` 空名红帮助与 `查看私聊` 全支
   （只触已初始化 WorldEngine/actor 字段）可达。同镜头盲区（批次 5 `@禁言` 等触
   SystemShare 集合的命令体）已开 follow-up 卡 `openmir2-gm-systemshare-null-sweep`。
-- **现存 `Imp::Unimplemented` = 74 − 29 = 45**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
-  thirty_command_bodies` 的 140 已接 / 45 未接断言；改坏任一计数 ⇒ 该测试红）。
-- 剩余缺口族：F3 / M6 / C5 / W4 / X2 18（§4.3 分族索引不变）。
+- **族 X2 批 A 12 条已落地**：卡 `openmir2-gm-family-x2-target-control`（worker-85）——
+  L 子项 6 恒字面（DelNpc 恒红=删除循环注释 / 清除任务四支含清零代码不存在只回执 /
+  清除怪物恒红=杀怪循环注释 / Mission 写全局四元+绿字 / 祈祷生效 SpiritMutinyTick 三形态 /
+  停止叛变 tick=0）+ 轻 R 子项 6（探测：门+10s ProbeTick（perm≥3 免）+蓝字尾坐标 y 用
+  **调用者 CurrY** 怪癖/离线红；fdht7ed 师徒（MasterList 在线徒弟互发，对方消息接缝登记）/
+  sdasdert 配偶（性别分支含「他」字怪癖）；Reconnection：RM_RECONNECTION ⇒ 宿主
+  `sm_reconnect` 出 SM_RECONNECT 线上帧；MemberFuncEx/是我 GotoLable 接缝 log_note）。
+  **批 B 待续**：重 R 子项 6（vv杀死/复活/VV给予权限/删除技能/ClearCopyItem/清除仓库密码）。
+- **现存 `Imp::Unimplemented` = 74 − 41 = 33**（= 机器台账 `gmcmd.rs::tests::batch2_table_wires_
+  thirty_command_bodies` 的 152 已接 / 33 未接断言；改坏任一计数 ⇒ 该测试红）。
+- 剩余缺口族：F3 / M6 / C5 / W4 / X2 批 B 6（§4.3 分族索引不变）。
 
 ## 8. SystemShare null 字段扫盲（卡 `openmir2-gm-systemshare-null-sweep`，tier=R）
 
