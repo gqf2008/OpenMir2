@@ -240,6 +240,14 @@ pub const ATTACK_MODE_GROUP: &str = "[攻击模式: 编组攻击]";
 pub const ATTACK_MODE_GUILD: &str = "[攻击模式: 行会攻击]";
 pub const ATTACK_MODE_RED_WHITE: &str = "[攻击模式: 红名攻击]";
 
+// ---- 族 P · 密码锁门（卡 `openmir2-gm-family-p-passwordlock`，tier=L）的 SysMsg 正文 ----
+/// `MessageSettings.NoPasswordLockSystemMsg`（`MessageSettings.cs:99` 构造缺省；
+/// 部署 `String.conf:75` 覆盖为**同一文本**；GBK 线上字节逐对：游`D3CE` 戏`CFB7` 密`C3DC`
+/// 码`C2EB` 保`B1A3` 护`BBA4` 系`CFB5` 统`CDB3` 还`BBB9` 没`C3BB` 有`D3D0` 启`C6F4` 用`D3C3`
+/// 加三个 ASCII `!`(0x21)，共 29 字节）。
+/// 密码锁族 7 命令在部署 `PasswordLockSystem=0` 下的恒定红字。
+pub const NO_PASSWORD_LOCK_SYSTEM_MSG: &str = "游戏密码保护系统还没有启用!!!";
+
 /// 内建命令名（`CommandSystem.cs:255-307` 的两个嵌套类，**不属于** 185 个命令类）。
 pub const BUILTIN_HELP: &str = "help";
 pub const BUILTIN_COMMANDS: &str = "commands";
@@ -512,6 +520,13 @@ pub enum Imp {
     GuildWar,
     /// `SbkDoorControlCommand`（`SbkDoorControlCommand.cs:5`；注册名 `@SbkDoor`，perm 10）：空体 ⇒ 真 no-op。
     SbkDoorControl,
+
+    // ---- 族 P · 密码锁门（7，卡 `openmir2-gm-family-p-passwordlock`，tier=L）----
+    /// 密码锁 7 命令（`@hjhgj67` SetPassWord / `@sadsa54` UnPasswWord / `@ghjhg6` ChgpassWord /
+    /// `@hjhg556` UnlockStorage / `@gfh678dfg` UnLock / `@fdgfdg56` Lock / `@PasswordLock`）：
+    /// 部署 `PasswordLockSystem=0` ⇒ 命令体第一句恒回红字 `NoPasswordLockSystemMsg`，
+    /// 零状态、零额外帧；启用分支（RM_PASSWORD 状态机）现网不可达 ⇒ `log_note` 登记。
+    PasswordLockGate,
     Unimplemented,
 }
 
@@ -827,13 +842,19 @@ impl GmSession {
 
 /// 命令体要读的配置（`SystemShare.Config` / `SystemShare` 启动态的等价物）。
 ///
-/// 除 `lock_human_login` 外都是批次 2/3 引入的**启动期常量**：oracle 部署的取值在字段注释里
-/// 写明出处，[`Default`] 就取部署值（重载/管理族的分支正是由它们决定）。
+/// 除 `lock_human_login`（真配置解析）外都是**启动期常量**（批次 2/3 与族 P）：oracle 部署的
+/// 取值在字段注释里写明出处，[`Default`] 就取部署值（重载/管理族与密码锁门族的分支正是由它们决定）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GmConfig {
     /// `Config.LockHumanLogin`（`ServerConf.cs:574` 读 `[Setup] PasswordLockHumanLogin`；
     /// `GameSvrConf.cs:1493` 缺省 false，部署 = 0）。
     pub lock_human_login: bool,
+    /// `Config.PasswordLockSystem`（`ServerConf.cs:570` 读 `[Setup] PasswordLockSystem`；
+    /// `GameSvrConf.cs:1489` 缺省 false，部署 `Server.conf:382` = 0）：密码锁族 7 命令
+    /// （`@hjhgj67`/`@sadsa54`/`@ghjhg6`/`@hjhg556`/`@gfh678dfg`/`@fdgfdg56`/`@PasswordLock`）
+    /// 的命令体第一道门。部署恒 false ⇒ 恒回红字 [`NO_PASSWORD_LOCK_SYSTEM_MSG`]。
+    /// 本仓不解析 `[Setup]`（部署值即常量，族 P 卡面口径；启用分支现网不可达）。
+    pub password_lock_system: bool,
     /// `SystemShare.ServerIndex`（`SystemShare.cs:45` 缺省 0）。全仓**无写点**
     /// （只有 `AppService.cs:211` 读）⇒ 部署恒 0 = 主服 ⇒ `ReloadGuild`/`ReloadGuildAll` 永远走成功支。
     pub server_index: u8,
@@ -864,6 +885,7 @@ impl Default for GmConfig {
     fn default() -> Self {
         Self {
             lock_human_login: false,
+            password_lock_system: false,
             server_index: 0,
             manage_npc_present: true,
             function_npc_present: true,
@@ -1287,6 +1309,44 @@ fn one_note(color: GmColor, text: impl Into<String>, note: &'static str) -> GmRe
         frames: Vec::new(),
         log_note: Some(note),
     }
+}
+
+// ---------------------------- 族 P · 密码锁门（7，卡 `openmir2-gm-family-p-passwordlock`）----------------------------
+//
+// oracle：`SetPassWordCommand.cs`（6 类同文件：SetPassWord `:17` / UnPassWord `:44` /
+// ChgpassWord `:70` / UnlockStorage `:103` / UnLock `:143` / Lock `:183` 同一句配置门）+
+// `PasswordLockCommand.cs:21`。部署 `Server.conf:382 PasswordLockSystem=0`
+// （`GameSvrConf.cs:1489` 缺省 false，`ServerConf.cs:570` 读 `[Setup]`）⇒ 过权限门
+// （7 条全 perm 10：`GameCommands.cs:381-388` 构造缺省，`[Permission]` 段对 7 条都无键）后
+// 命令体第一句恒 `SysMsg(NoPasswordLockSystemMsg, Red, Hint)` —— 零状态、零额外帧。
+//
+// 三层名链（`CommandSystem.cs:39-113`）：`Command.conf [Command]` 把 6 条改成混淆现网名
+// （`StorageSetPassword=hjhgj67` / `StorageUserClearPassword=sadsa54` / `StorageChgPassword=ghjhg6` /
+// `StorageUnLock=hjhg556` / `PasswordUnLock=gfh678dfg` / `StorageLock=fdgfdg56`），
+// `PasswordLock=PasswordLock` 不改名。
+//
+// **启用分支不实现**（卡面 forbidden：RM_PASSWORD 设/改/解密状态机 + `Lock` 的
+// `IsPasswordLocked`/`IsCanGetBackItem` 写面）：部署门恒 0 ⇒ 该面对现网不可达，只 `log_note` 登记。
+
+/// 密码锁族 7 命令的共享命令体：配置门红字 + 不可达启用支登记。
+///
+/// 各类命令体逐行：`if (!SystemShare.Config.PasswordLockSystem) { SysMsg(...Red...); return; }`
+/// 之后才是各自的状态机——部署取值恒 false ⇒ 状态机段现网不可达。
+fn password_lock_gate(parameters: &str, cfg: &GmConfig) -> GmResult {
+    // `PasswordLockCommand.cs:17-19` 的前置静默支（**仅** PasswordLock 类有；其余 6 类无此支）：
+    // `if (@params == null || @params.Length <= 0) return;`。oracle `GameCommand.Handle`
+    // （`GameCommand.cs:46`）case 2 恒 `parameters.Split(' ')`，而 C# `"".Split(' ')` 也返回
+    // 长度 1 的数组（`[""]`）⇒ `@params.Length <= 0` 对客户端路径**恒假**（死分支照抄）。
+    // Rust `split` 同样恒产 ≥ 1 段 ⇒ 本支永不命中——两侧由同一语言事实证明死支。
+    if parameters.split(' ').next().is_none() {
+        return GmResult::empty();
+    }
+    if !cfg.password_lock_system {
+        return red(NO_PASSWORD_LOCK_SYSTEM_MSG);
+    }
+    no_frames(
+        "密码锁启用分支未实现：PasswordLockSystem=true 时 oracle 走 RM_PASSWORD 设/改/解密状态机与 IsPasswordLocked/IsCanGetBackItem 写面（SetPassWordCommand.cs / PasswordLockCommand.cs）；部署 Server.conf:382 PasswordLockSystem=0 ⇒ 现网不可达（卡 openmir2-gm-family-p-passwordlock forbidden）",
+    )
 }
 
 // ---------------------------- 宿主未接 / oracle 注释的登记文案 ----------------------------
@@ -2584,6 +2644,8 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::SbkDoorControl => {
             no_frames("SbkDoorControl：SbkDoorControlCommand.cs:7-9 空体 ⇒ 真 no-op（零帧）")
         }
+        // ---- 族 P · 密码锁门（7，卡 `openmir2-gm-family-p-passwordlock`）----
+        Imp::PasswordLockGate => password_lock_gate(parameters, cfg),
         Imp::Unimplemented => GmResult {
             found: true,
             parsed: true,
@@ -2991,7 +3053,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "fdgfdg56",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PasswordLockGate,
     },
     CommandDef {
         name: "fdgh56j",
@@ -3045,13 +3107,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "gfh678dfg",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PasswordLockGate,
     },
     CommandDef {
         name: "ghjhg6",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PasswordLockGate,
     },
     CommandDef {
         name: "GiveMine",
@@ -3069,13 +3131,13 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "hjhg556",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PasswordLockGate,
     },
     CommandDef {
         name: "hjhgj67",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PasswordLockGate,
     },
     CommandDef {
         name: "HumanCountwa",
@@ -3217,7 +3279,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "PasswordLock",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PasswordLockGate,
     },
     CommandDef {
         name: "RecallHuman",
@@ -3313,7 +3375,7 @@ pub const COMMANDS: &[CommandDef] = &[
         name: "sadsa54",
         perm_min: 10,
         params: 2,
-        imp: Imp::Unimplemented,
+        imp: Imp::PasswordLockGate,
     },
     CommandDef {
         name: "SbkDoor",
@@ -5142,7 +5204,8 @@ mod tests {
     /// 卡 `openmir2-gm-impl-mobfireburn` 的 `MobFireBurn`、卡 `openmir2-gm-impl-smake` 的 `SmakeItem`、
     /// 卡 `openmir2-gm-impl-clearbag` 的 `ClearBagItem`）
     /// 以及批次 5A（卡 `openmir2-gm-batch-5a-guild-impl` 的 6 条行会族）
-    /// 的命令体接上（`Unimplemented` 从 180 降到 75），且命令名 → 实现标签固定。
+    /// 与族 P（卡 `openmir2-gm-family-p-passwordlock` 的 7 条密码锁门）
+    /// 的命令体接上（`Unimplemented` 从 180 降到 67），且命令名 → 实现标签固定。
     #[test]
     fn batch2_table_wires_thirty_command_bodies() {
         assert_eq!(
@@ -5150,16 +5213,16 @@ mod tests {
                 .iter()
                 .filter(|d| d.imp != Imp::Unimplemented)
                 .count(),
-            111,
-            "111 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条"
+            118,
+            "118 = G1 的 5 条 + 批次 2/3 30 条 + 批次 3（传送/召唤）18 条 + 批次 4（数值/角色）44 条 + 批次 5（禁言 1 + ShowEffect 1 + StartQuest 1 + VV踢人 1 + MobFireBurn 1 + SmakeItem 1 + ClearBagItem 1 + 取消禁言 1）8 条 + 批次 5A（Announcement/联盟/允许联盟/取消联盟/GuildWar/SbkDoor）6 条 + 族 P（密码锁门 7）"
         );
         assert_eq!(
             COMMANDS
                 .iter()
                 .filter(|d| d.imp == Imp::Unimplemented)
                 .count(),
-            74,
-            "185 - 111"
+            67,
+            "185 - 118"
         );
         let cases: &[(&str, Imp)] = &[
             ("LoadAdmin", Imp::LoadAdmin),
@@ -7468,5 +7531,185 @@ mod tests {
             );
         }
         assert_eq!(sess.permission, 0, "抬权临时生效并还原");
+    }
+
+    // ---------------------------- 族 P · 密码锁门（7，卡 `openmir2-gm-family-p-passwordlock`）----------------------------
+
+    /// 族 P 的 7 条现网名全部在 `COMMANDS` 表且 **imp = [`Imp::PasswordLockGate`]、
+    /// **perm 10**（`GameCommands.cs:381-388` 构造缺省；`[Permission]` 段对 7 条都无键）。
+    /// 牙：任一条回退 `Unimplemented` / 改名 / 改权限 ⇒ 本用例红。
+    #[test]
+    fn password_lock_family_table_entries_are_wired() {
+        for name in [
+            "hjhgj67",
+            "sadsa54",
+            "ghjhg6",
+            "hjhg556",
+            "gfh678dfg",
+            "fdgfdg56",
+            "PasswordLock",
+        ] {
+            let def = find(name).unwrap_or_else(|| panic!("{name} 不在 COMMANDS 表"));
+            assert_eq!(def.imp, Imp::PasswordLockGate, "{name} 应是密码锁门实现");
+            assert_eq!(def.perm_min, 10, "{name} 的 PermissionMin");
+            assert_eq!(def.params, 2, "{name} 的 Execute 形参个数");
+        }
+        // 出厂英文名不注册（`CommandMaps` 键 = 配置覆盖后的现网名；`PasswordLock=PasswordLock`
+        // 不改名 ⇒ 两名同名，不在本对照里）。忽略大小写口径与 `CommandMaps` 同（Ordinal）。
+        for factory in [
+            "SetPassWord",
+            "UnPassWord",
+            "ChgpassWordCommand",
+            "UnlockStorage",
+            "UnLock",
+            "Lock",
+        ] {
+            assert!(
+                find(factory).is_none(),
+                "{factory} 出厂名不该命中（conf 覆盖后只认现网名）"
+            );
+        }
+    }
+
+    /// **T1（卡 `openmir2-gm-family-p-passwordlock`）**：部署 `PasswordLockSystem=0`
+    /// （`Server.conf:382`）⇒ 7 条命令 perm=10 抬权后**恰好一条** Red `SysMsg` 且正文
+    /// 逐字节 = `NO_PASSWORD_LOCK_SYSTEM_MSG`（`MessageSettings.cs:99` / `String.conf:75`）；
+    /// `found=true`（不走未知命令回落）、零额外帧、无吞异常登记。带参与不带参同答
+    /// （`GameCommand.Handle` case 2 的 `@params` 与各命令体首句无关）。
+    ///
+    /// 变异红：删 [`password_lock_gate`] 的配置门 ⇒ 全体走 `log_note` 臂，`msgs` 空 ⇒ 红。
+    #[test]
+    fn password_lock_gate_deployment_reports_exactly_one_red_sysmsg() {
+        let cfg = GmConfig::default();
+        assert!(
+            !cfg.password_lock_system,
+            "部署缺省即门关（Server.conf:382）"
+        );
+        for name in [
+            "hjhgj67",
+            "sadsa54",
+            "ghjhg6",
+            "hjhg556",
+            "gfh678dfg",
+            "fdgfdg56",
+            "PasswordLock",
+        ] {
+            for line in [format!("@{name}"), format!("@{name} 参数1 参数2")] {
+                let (r, _) = run_gm_with(&cfg, &line);
+                assert!(r.found && r.parsed, "{line} 必须命中命令体");
+                assert_eq!(
+                    texts(&r),
+                    vec![(GmColor::Red, NO_PASSWORD_LOCK_SYSTEM_MSG)],
+                    "{line}"
+                );
+                assert!(r.frames.is_empty(), "{line} 不得有额外帧");
+                assert!(r.log_note.is_none(), "{line} 门红字支不登记 note");
+            }
+        }
+        // `@PasswordLock` 的前置静默支是**死分支**：oracle `GameCommand.Handle`（case 2）恒
+        // `parameters.Split(' ')` ⇒ `"".Split(' ')` 也长 1 ⇒ `@params.Length <= 0` 恒假。
+        // 上面第二组循环已覆盖带参形态；这里补「不带参」单独断言与其它 6 条同答。
+        let (r, _) = run_gm_with(&cfg, "@PasswordLock");
+        assert_eq!(texts(&r), vec![(GmColor::Red, NO_PASSWORD_LOCK_SYSTEM_MSG)]);
+    }
+
+    /// **T1 线上字节面**：门红字的 GBK 编码逐字节断言（与 `shutup_release_help_is_gbk_bytes_
+    /// on_the_wire` 同口径）——13 个汉字各一对 GBK + 三个 ASCII `!`(0x21)，与部署
+    /// `String.conf:75` 的原始字节一致。牙：常量里任何一个字被换 ⇒ 红。
+    #[test]
+    fn password_lock_msg_is_gbk_bytes_on_the_wire() {
+        let (r, _) = run_gm("@hjhgj67");
+        assert_eq!(r.msgs.len(), 1, "恰好一条 SysMsg");
+        assert_eq!(
+            crate::downlink::gbk(&r.msgs[0].text),
+            vec![
+                0xd3, 0xce, // 游
+                0xcf, 0xb7, // 戏
+                0xc3, 0xdc, // 密
+                0xc2, 0xeb, // 码
+                0xb1, 0xa3, // 保
+                0xbb, 0xa4, // 护
+                0xcf, 0xb5, // 系
+                0xcd, 0xb3, // 统
+                0xbb, 0xb9, // 还
+                0xc3, 0xbb, // 没
+                0xd3, 0xd0, // 有
+                0xc6, 0xf4, // 启
+                0xd3, 0xc3, // 用
+                0x21, 0x21, 0x21, // !!!
+            ]
+        );
+    }
+
+    /// **T2（卡 `openmir2-gm-family-p-passwordlock`）**：零副作用——执行前后整个
+    /// [`GmSession`] 逐字段相等（除构造时抬的 `permission`），门关（部署缺省）与门开
+    /// （`password_lock_system=true` 的不可达臂）都一样；门开时多一条 `log_note` 登记
+    /// 启用分支未实现、但仍零帧零消息。零额外帧在 T1 已断言，这里补状态面。
+    ///
+    /// 变异红：伪实现启用分支（翻转任意会话位/发任何帧）⇒ 门开组红。
+    #[test]
+    fn password_lock_gate_zero_side_effects() {
+        let closed = GmConfig::default();
+        let open = GmConfig {
+            password_lock_system: true,
+            ..GmConfig::default()
+        };
+        for (label, cfg) in [("门关=部署", &closed), ("门开=不可达臂", &open)] {
+            for name in [
+                "hjhgj67",
+                "sadsa54",
+                "ghjhg6",
+                "hjhg556",
+                "gfh678dfg",
+                "fdgfdg56",
+                "PasswordLock",
+            ] {
+                for line in [format!("@{name}"), format!("@{name} 参数")] {
+                    let (r, sess) = run_gm_with(cfg, &line);
+                    assert_eq!(
+                        sess,
+                        GmSession {
+                            permission: 10,
+                            ..GmSession::default()
+                        },
+                        "{label} {line} 不得改任何会话状态"
+                    );
+                    assert!(r.frames.is_empty(), "{label} {line} 零额外帧");
+                    assert_eq!(
+                        r.log_note.is_some(),
+                        cfg.password_lock_system,
+                        "{label} {line}：只有门开的不可达臂登记 note"
+                    );
+                }
+            }
+        }
+    }
+
+    /// 权限门先于命令体（`GameCommand.cs:37-40`）：`Permission < 10` ⇒ 恰一条红字
+    /// `权限不够!!!`，会话零变化——7 条全是 perm 10（`GameCommands.cs:381-388`）。
+    #[test]
+    fn password_lock_family_permission_gate_blocks_body() {
+        for name in [
+            "hjhgj67",
+            "sadsa54",
+            "ghjhg6",
+            "hjhg556",
+            "gfh678dfg",
+            "fdgfdg56",
+            "PasswordLock",
+        ] {
+            let (r, sess) = run(&format!("@{name}"));
+            assert_eq!(
+                texts(&r),
+                vec![(GmColor::Red, PERMISSION_TOO_LOW)],
+                "{name}"
+            );
+            assert!(r.frames.is_empty(), "{name}");
+            assert_eq!(
+                sess,
+                GmSession::default(),
+                "{name} 被权限门挡下后零状态变化"
+            );
+        }
     }
 }
