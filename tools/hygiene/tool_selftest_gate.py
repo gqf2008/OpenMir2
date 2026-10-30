@@ -1283,6 +1283,10 @@ def selftest():
 
         # F1rev（Leader 2026-10-27 反向要求）：`skip()` 是「把红变不红」的通道，必须证明它**不能**
         # 掩盖真正的 FAIL——PS 在场（which 假返回）且 PS 牙真失败 ⇒ 自测必须仍红。
+        # 退化形态（A3/规则 19 空输入）：若内层 selftest 已无任何 ps_ 项可咬（PS 分发牙整块被删），
+        # 内层会绿（rc=0）⇒ 下方 chk 立即 FAIL——本牙红，**不许静默空过**；
+        # 把 ps_ 项改名则假 which 指向不存在的 shell，内层在 run_one 的 Popen 处炸（异常外泄，
+        # run_one 只兜 build_cmd 的 RuntimeError）⇒ 同样不静默。
         if not _PROBE["active"]:
             _PROBE["active"] = True
             _real_which_f1 = shutil.which
