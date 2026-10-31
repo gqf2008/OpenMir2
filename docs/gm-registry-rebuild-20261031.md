@@ -122,8 +122,9 @@ extra_in_model  =["MasterName","ShowDenyCharNameLogon"]
 
 ## F4 订正（第二轮）：`sources.rust_table.sha256` 口径（卡 `openmir2-gm-residual-round2`）
 
-**背景（残余登记，非阻塞）**：本文件上文与 `docs/gm-implementation-report-20261031.md` §6
-「X2 R1/R2/R3」把「registry 在 HEAD 上不可复现」登记为残余。实测（`walgit/master 38439f539`）：
+**背景（残余登记，非阻塞）**：本文件上文与 `docs/gm-implementation-report-20261031.md` §6 F4 条
+（`report:119`）及 `openmir2-gm-residual-teeth` 复审的 F4 Info，把「registry 在 HEAD 上不可复现」
+登记为残余。实测（`walgit/master 38439f539`）：
 
 | 项 | 值 |
 |---|---|
