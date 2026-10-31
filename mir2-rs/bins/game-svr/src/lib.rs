@@ -5396,7 +5396,7 @@ fn handle_soft_close_cmd(
     // 实体已摘，`cur_x/cur_y/dir/attatck_mode` 会回落到**载入记录**。离世**之前**取一份实体
     // 派生快照挂到 `SavedHuman.derived`（第二档）；`build_save_record` 的优先级是
     // 实体 → 快照 → 载入记录（第三档 WRN）。
-    // 快照只经 [`entity_derived_snapshot`] 一个接缝产出（六项全取，禁止在此散写）。
+    // 快照只经 [`entity_derived_snapshot`] 一个接缝产出（全部派生字段一次取全，禁止在此散写）。
     if let Some(d) = world
         .session(chr_name)
         .and_then(|s| s.actor_id)
@@ -9657,7 +9657,7 @@ fn use_items_from(
 /// **实体 → 快照 → 载入记录**（第三档 WRN，见 [`warn_save_fallback`]）。
 /// (b′) 的 MakeGhost 非销毁改造另开卡 `openmir2-makeghost-lifecycle`，它落地后本快照层可删。
 ///
-/// **六项全取**（只快照 `Dir` = 只修今天现形的那一个；同族字段只是被 placement 掩盖了）：
+/// **全部派生字段一次取全**（`x/y/dir/attack_mode/allow_group/allow_group_re_call/use_items`；只快照 `Dir` = 只修今天现形的那一个；同族字段只是被 placement 掩盖了）：
 /// `x/y/dir/attack_mode` 回落的是**载入记录**；`use_items` 的兜底是会话克隆（每 tick 回写，
 /// 只丢 ≤1 tick），快照只为覆盖离世那一刻的精确值（§11.1）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9681,9 +9681,9 @@ struct EntityDerived {
     use_items: [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
 }
 
-/// **单一接缝**：实体 → 派生快照。六项一次取全。
+/// **单一接缝**：实体 → 派生快照。全部派生字段一次取全（`x/y/dir/attack_mode/allow_group/allow_group_re_call/use_items`）。
 ///
-/// 禁止在 soft-close / 存档处散写这六个字段（散写必然与实体漂移，也必然漏字段）。
+/// 禁止在 soft-close / 存档处散写这些字段（散写必然与实体漂移，也必然漏字段）。
 fn entity_derived_snapshot(e: &mir2_world::Entity) -> EntityDerived {
     EntityDerived {
         x: e.x,
