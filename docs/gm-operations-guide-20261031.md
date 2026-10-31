@@ -29,7 +29,7 @@ GMEXECUTE <命令名> [参数1] [参数2] [参数3] [参数4] [参数5]
 - 动作参数最多 6 槽：第 1 槽是**命令名**，后 5 槽是参数；动作把它们拼成一行 `@命令 参数1 … 参数5` 交给 `ProcessUserLineMsg`（与客户端输入同一条分发链）。
 - 参数 2 若**恰好**是 `Self`（ASCII 大小写不敏感）⇒ 替换成执行脚本的玩家名；其余位置、其余写法（含 `<$USERNAME>`）一律**不替换**。
 - **`GMEXECUTE` 不展开 `<$...>` 变量**：`<$STR(M3)>`、`<$CURRENTMAP>`、`<$USERNAME>` 会作为字面量进入参数。这是 oracle `ActionOfGmExecute` 直接拼接 `sParam1..sParam6` 的原样行为（变量展开只发生在普通脚本动作参数，且命名变量同样原样，见 `whitelist.md` T-165）。
-- 命令名按 `OrdinalIgnoreCase` 查表 ⇒ ASCII 大小写不敏感；分隔符只有**单个 ASCII 空格**（连续空格会产生空参，不是「跳过」）。
+- 命令名按 `OrdinalIgnoreCase` 查表 ⇒ ASCII 大小写不敏感；分隔符只有**单个 ASCII 空格**：参数串**内部**的连续空格会保留为空参（不是「跳过」），首个空格后的多余前导空格会被 `Trim` 吞掉（首个参数不会因此变空槽）。
 - 脚本文件是 GBK；本文引用时已转 UTF-8 展示。
 
 ### 2.2 真实脚本示例（原文摘录，不发明语法）
@@ -78,19 +78,19 @@ Gmexecute 禁言 self 10000                    # QuestDiary/游戏登陆/登陆�
 
 | 族 | 条数 | 命令面与 oracle 事实 | 经 GMEXECUTE 的现状（本仓） | 证据 |
 |---|---:|---|---|---|
-| P 密码锁门 | 7 | 部署 `PasswordLockSystem=0` ⇒ 7 条第一句恒红「游戏密码保护系统还没有启用!!!」，零状态 | 抬权后同样只回红字；启用分支现网不可达 | `gmcmd.rs` `Imp::PasswordLockGate`；报告 §2-P |
-| T 会话开关/骑马 | 7 | 4 条会话开关（`@交易`/`@加入门派`/`@拒绝组队聊天`/`@禁止行会信息`）翻会话态并回绿字；`@OnHorse` 因 `HorseType` 恒 0 只回「骑马必须先戴上马牌!!!」；`@OffHorse` 未骑马静默；`@DisableFilter` 翻全局 `FilterWord` | 4 条开关回绿字且会话镜像翻转（`ban_shout` 有真实消费点）；`@OnHorse` 红字可达；`@DisableFilter` 因全局位未注入 ⇒ 零帧；`SM_FEATURECHANGED(41)` 外观帧只在客户端直呼路径排水 | `gmcmd.rs` `take_on_horse`/`disable_filter`/`Imp::LetTrade`；报告 §2-T |
-| Q 查询/展示 | 10 | 只读；含 oracle 怪癖：`@IP` 判空恒真恒红帮助、`@信息` 在线零帧、`@Showuseiteminfo` 单字符名越界零帧且 `%s` 字面输出、`@Map` 缺参越界零帧 | 地图/世界视图已注入 ⇒ 绝大多数查询可用；`@showflag` 因无任务位快照 ⇒ 恒走 OFF 绿字支 | `gmcmd.rs` `show_flag`/`human_local`/`show_use_item_info`；报告 §2-Q |
-| X1 禁言名单 | 5 | `DisableSendMsgList`/`DenySayMsgList` 声明即 null、全仓零赋值 ⇒ 触表四命令真机 NRE 被吞 = 零帧 | `@+jy`（非空）/`@-jy`/`@+-jy`/`@查看禁言` 均零帧；`@查看私聊` 正常双绿字（只触已初始化数据） | `gmcmd.rs` `disable_send_msg`/`enable_send_msg`/`view_whisper`；报告 §3.2 |
-| X2 目标控制/杂项 | 18 | 10 条文本/查询/全局开关（`@DelNpc`/`@清除任务`/`@清除怪物`/`@Mission`/`@祈祷生效`/`@停止叛变`/`@探测`/`@fdht7ed`/`@sdasdert`/`@Reconnection`）；6 条重副作用写面；2 条宿主脚本接缝 | 纯文本/查询多数可用；`@Mission`/`@祈祷生效`/`@停止叛变` 因全局单元未注入 ⇒ 零帧；`@vv杀死`/`@复活`/`@VV给予权限`/`@删除技能`/`@ClearCopyItem`/`@清除仓库密码` 只回文字（`@复活`/`@VV给予权限`/`@清除仓库密码`）或零帧，**副作用因 `pending_*` 不在脚本桥排水而不落地**；`@MemberFuncEx`/`@是我` 零帧；`@Reconnection` 的 `SM_RECONNECT` 只在客户端直呼路径排水 | `gmcmd.rs` `kill_cmd`/`realive`/`set_permission`；`lib.rs` `apply_pending_gm_target_ops` 仅在 CM_SAY 分支调用；报告 §2-X2 |
-| F 脚本标志 | 3 | `@setflag`/`@setopen`/`@setunit` 写**调用者**任务位（不是目标）并对目标回绿字；quest 数组不落库 | 脚本桥 `quests=None` ⇒ 三条全部 `log_note` 零帧（部署脚本无这三条的可达调用） | `gmcmd.rs` `set_flag`/`set_open`/`set_unit`；报告 §4-F |
-| M 刷怪/造物 | 6 | `@MobNpc`/`@MobPlace`/`@ReCallMobEx`/`@怪`/`@GiveMine`/`@s`；含 RNG 抽数（`Random(18)+3`、每件 `Random(MakeRandomAddValue)`） | 六条都以 `if !world.m_host` 开头 ⇒ 脚本桥 `m_host=false` ⇒ 全部 `log_note` 零帧。刷怪/造物需宿主 `MonGenHost` + `&mut World` + RNG 通道，脚本桥没有 | `gmcmd.rs` `mob_spawn`/`make_item`/`give_mine` 的 `m_host` 门；报告 §4-M |
-| C 城堡/赛事 | 5 | `@ContestPoint` 只读；`@开始攻城`/`@SabukWallGold`/`@沙城`/`@StartContest` 写城堡/赛事；三处源码文本不可达（无参 SbkGold / `GetCastle` NotImpl / 零 cry） | `@ContestPoint` 文字可用；`@开始攻城`/`@SabukWallGold`/`@StartContest` 走 `m_host` 门 ⇒ 脚本桥零帧；`@沙城` 无 `m_host` 门但本身是 oracle `NotImplementedException` 零帧；宿主落地（TotalGold/UnderWar/门格掩码/FightZoneDieCount）只在客户端直呼路径 | `gmcmd.rs` `sbk_gold`/`change_sabuk_lord`/`forced_wall_war`；`lib.rs` `apply_pending_gm_castle_commands` 仅在 CM_SAY 分支；报告 §4-C |
-| W 行会 | 4 | `@创建行会`/`@删除行会`/`@退出门派`/`@允许天地合一`；`AllowGroupReCall` 是独立字段；落库有 T-272 oracle 原样 bind | 四条命令体同样 `m_host` 门 ⇒ 脚本桥零帧；宿主落地（GuildMgr 写 + 文件/列表落盘 + 750/42/100 帧序）只在客户端直呼路径 | `gmcmd.rs` `add_guild`/`del_guild`/`end_guild`；`lib.rs` `apply_pending_gm_guild_commands` 仅在 CM_SAY 分支；报告 §4-W |
+| P 密码锁门 | 7 | 部署 `PasswordLockSystem=0` ⇒ 7 条第一句恒红「游戏密码保护系统还没有启用!!!」，零状态 | 抬权后同样只回红字；启用分支现网不可达 | `gmcmd.rs` `Imp::PasswordLockGate`；报告 §2（九族总表 P）/ §4（P 共享门死支） |
+| T 会话开关/骑马 | 7 | 4 条会话开关（`@交易`/`@加入门派`/`@拒绝组队聊天`/`@禁止行会信息`）翻会话态并回绿字；`@OnHorse` 因 `HorseType` 恒 0 只回「骑马必须先戴上马牌!!!」；`@OffHorse` 未骑马静默；`@DisableFilter` 翻全局 `FilterWord` | 4 条开关回绿字且会话镜像翻转（`ban_shout` 有真实消费点）；`@OnHorse` 红字可达；`@DisableFilter` 因全局位未注入 ⇒ 零帧；`SM_FEATURECHANGED(41)` 外观帧只在客户端直呼路径排水 | `gmcmd.rs` `take_on_horse`/`disable_filter`/`Imp::LetTrade`；报告 §2（T 行）/ §4（T 骑马） |
+| Q 查询/展示 | 10 | 只读；含 oracle 怪癖：`@IP` 判空恒真恒红帮助、`@信息` 在线零帧、`@Showuseiteminfo` 单字符名越界零帧且 `%s` 字面输出、`@Map` 缺参越界零帧 | 地图/世界视图已注入 ⇒ 绝大多数查询可用；`@showflag` 因无任务位快照 ⇒ 恒走 OFF 绿字支 | `gmcmd.rs` `show_flag`/`human_local`/`show_use_item_info`；报告 §2（Q 行）/ §4（Q 展示怪癖） |
+| X1 禁言名单 | 5 | `DisableSendMsgList`/`DenySayMsgList` 声明即 null、全仓零赋值 ⇒ 触表四命令真机 NRE 被吞 = 零帧 | `@+jy`（非空）/`@-jy`/`@+-jy`/`@查看禁言` 均零帧；`@查看私聊` 正常双绿字（只触已初始化数据） | `gmcmd.rs` `disable_send_msg`/`enable_send_msg`/`view_whisper`；报告 §3.2（A2 偏差清单）/ §4（X1 四命令体零帧） |
+| X2 目标控制/杂项 | 18 | 10 条文本/查询/全局开关（`@DelNpc`/`@清除任务`/`@清除怪物`/`@Mission`/`@祈祷生效`/`@停止叛变`/`@探测`/`@fdht7ed`/`@sdasdert`/`@Reconnection`）；6 条重副作用写面；2 条宿主脚本接缝 | 纯文本/查询多数可用；`@Mission`/`@祈祷生效`/`@停止叛变` 因全局单元未注入 ⇒ 零帧；`@vv杀死`/`@复活`/`@VV给予权限`/`@删除技能`/`@ClearCopyItem`/`@清除仓库密码` 只回文字（`@复活`/`@VV给予权限`/`@清除仓库密码`）或零帧，**副作用因 `pending_*` 不在脚本桥排水而不落地**；`@MemberFuncEx`/`@是我` 零帧；`@Reconnection` 的 `SM_RECONNECT` 只在客户端直呼路径排水 | `gmcmd.rs` `kill_cmd`/`realive`/`set_permission`；`lib.rs` `apply_pending_gm_target_ops` 仅在 CM_SAY 分支调用；报告 §2（X2 行）/ §4（X2 复活/删除技能/ClearCopyItem） |
+| F 脚本标志 | 3 | `@setflag`/`@setopen`/`@setunit` 写**调用者**任务位（不是目标）并对目标回绿字；quest 数组不落库 | 脚本桥 `quests=None` ⇒ 三条全部 `log_note` 零帧（部署脚本无这三条的可达调用） | `gmcmd.rs` `set_flag`/`set_open`/`set_unit`；报告 §2（F 行）/ §4（F tier R→L / F 写调用者怪癖） |
+| M 刷怪/造物 | 6 | `@MobNpc`/`@MobPlace`/`@ReCallMobEx`/`@怪`/`@GiveMine`/`@s`；含 RNG 抽数（`Random(18)+3`、每件 `Random(MakeRandomAddValue)`） | `@MobNpc` **无** `m_host` 门：缺参/`?` 回红帮助，足参静默零帧且无 `log_note`；其余 5 条（`@MobPlace`/`@ReCallMobEx`/`@怪`/`@GiveMine`/`@s`）以 `if !world.m_host` 开头 ⇒ 脚本桥 `m_host=false` ⇒ `log_note` 零帧。刷怪/造物需宿主 `MonGenHost` + `&mut World` + RNG 通道，脚本桥没有 | `gmcmd.rs` `mob_npc`/`mob_place`/`mob_spawn`/`make_item`/`give_mine`；报告 §2（M 行）/ §4（M I1/RNG/T-271） |
+| C 城堡/赛事 | 5 | `@ContestPoint` 只读；`@开始攻城`/`@SabukWallGold`/`@沙城`/`@StartContest` 写城堡/赛事；三处源码文本不可达（无参 SbkGold / `GetCastle` NotImpl / 零 cry） | `@ContestPoint` 文字可用；`@开始攻城`/`@SabukWallGold`/`@StartContest` 走 `m_host` 门 ⇒ 脚本桥零帧；`@沙城` 无 `m_host` 门但本身是 oracle `NotImplementedException` 零帧；宿主落地（TotalGold/UnderWar/门格掩码/FightZoneDieCount）只在客户端直呼路径 | `gmcmd.rs` `sbk_gold`/`change_sabuk_lord`/`forced_wall_war`；`lib.rs` `apply_pending_gm_castle_commands` 仅在 CM_SAY 分支；报告 §2（C 行）/ §4（C 三处源码不可达/C I1/C 怪癖） |
+| W 行会 | 4 | `@创建行会`/`@删除行会`/`@退出门派`/`@允许天地合一`；`AllowGroupReCall` 是独立字段；落库有 T-272 oracle 原样 bind | `@创建行会`/`@删除行会`/`@退出门派` 三条有 `m_host` 门 ⇒ 脚本桥零帧；`@允许天地合一` **无** `m_host` 门 ⇒ 脚本桥无条件回绿字并把新值装进 `pending_entity`，但 `apply_pending_gm_entity` 只在 CM_SAY 分支执行、且 `execute()` 入口会清空 pending ⇒ 权威 Entity/存档不落地。三条行会的宿主落地（GuildMgr 写 + 文件/列表落盘 + 750/42/100 帧序）也只在客户端直呼路径 | `gmcmd.rs` `add_guild`/`del_guild`/`end_guild`/`allow_group_recall`；`lib.rs` `apply_pending_gm_entity`/`apply_pending_gm_guild_commands`；报告 §2（W 行）/ §4（W I1/I2 / T-272） |
 
 > 另有 9 条「已对齐」（`ClearItemMap`/`EndContest`/`ServerInfo`/`SetMapMode`/`showopen`/`showunit`/`Total`/`who`/`查看周围`）：oracle 过权限门后恒零帧，本仓按 `no_frames` + `log_note` 照抄，不计入 65 条。
 >
-> 结论：**脚本 GMEXECUTE 今天真正能落地的只有「改属性 / 清理垃圾 / VV踢人 / 查询类文字 / 会话开关回执」这一小片**；M/C/W/F 与 X2 重副作用是「命令体与宿主落地已实现，但脚本桥没接写通道」。要让它们经脚本可用，需要把对应的 `pending_*` 收口接进脚本执行路径；这不是内容问题，是宿主接线问题。
+> 结论：**脚本 GMEXECUTE 今天真正能落地的只有「改属性 / 清理垃圾 / VV踢人 / 查询类文字 / 会话开关回执」这一小片**；M/C/F、W 的三条行会命令与 X2 重副作用是「命令体与宿主落地已实现，但脚本桥没接写通道」（W 的 `@允许天地合一` 无 `m_host` 门，只到 `pending_entity` 为止）。要让它们经脚本可用，需要把对应的 `pending_*` 收口接进脚本执行路径；这不是内容问题，是宿主接线问题。
 
 ## 4. 开区改游戏参数
 
@@ -103,7 +103,7 @@ Gmexecute 禁言 self 10000                    # QuestDiary/游戏登陆/登陆�
 
 | 键（`[Setup]`） | 部署值 | 缺省 | 含义与生效点 |
 |---|---:|---:|---|
-| `MonsterPowerRate` | 10 | 10 | 怪物 HP/MP/AC/MAC/DC/DCMAX/MC/SC 按 `rate/10` 缩放（`MySqlDB.LoadMonsterDB`）；**怪物模板装载时**生效，重启才变 |
+| `MonsterPowerRate` | 10 | 10 | 怪物 HP/MP/AC/MAC/DC/DCMAX/MC/SC 按 `rate/10` 缩放（`MySqlDB.LoadMonsterDB`）；**例外**：`Race` 为 `SabukWall`/`SabukDoor` 时 HP 不乘（仅 HP；MP/AC/MAC/DC/DCMAX/MC/SC 仍乘）。**怪物模板装载时**生效，重启才变 |
 | `GenMonRate` | 10 | 10 | 刷怪目标数除数：`目标数 = max(1, round(max(1, Count) / (rate/10)))`（`WorldServer.MonGen.cs` 的刷怪循环 `genModCount`；Rust `crates/world/src/mongen.rs`）。**值越大刷得越少**；重启生效 |
 | `MonGenRate` | 1 | — | **死键**：oracle/Rust 读的是 `GenMonRate`；`MonGenRate=1` 不参与计算（部署文件同时存在两键，以 `GenMonRate=10` 为准） |
 | `MonUpLvRate` | 16 | 16 | 宠物/宝宝升级所需杀怪数（`MonsterObject.cs`）；重启生效 |
