@@ -7956,7 +7956,17 @@ impl ScriptGmEnv<'_> {
         actor_id: i32,
     ) -> game_svr::npc::NpcGm<'g> {
         // 说话者 `Dir`：`actor_dir` 在实体存在时读 `e.ai.dir`（脚本调用者必在世界）。
-        let speaker_dir = world.entities.get(actor_id).map_or(0, |e| e.ai.dir);
+        //
+        // **m3 登记**：`speaker_dir` **不是**宿主通道字段（`ScriptGmHost` 里没有它），而是从
+        // `world` 实体派生；未装配（`m_host=false`）时**强制 0**，保持「未装配 ≡ 卡前行为」
+        // 的逐字口径。它唯一的消费者是 M 族 `self_front_pos`（`@怪` 面前格），而 M 族命令体
+        // 先过 `m_host` 门 ⇒ 未装配时该值不可达；装配后取值来源 = 说话者实体 `ai.dir`
+        // （与 `actor_dir` 在实体存在时同源；实体缺失才回落 0）。
+        let speaker_dir = if self.host.m_host {
+            world.entities.get(actor_id).map_or(0, |e| e.ai.dir)
+        } else {
+            0
+        };
         game_svr::npc::NpcGm {
             sess,
             cfg: self.cfg,
@@ -20804,6 +20814,61 @@ fn drain_script_gm_pendings(
     );
 }
 
+/// 命令事件末尾的脚本 GM 收口**入口**（`sim_loop` 与本文件构造级用例共用）。
+///
+/// m4 说明：把「事件末 drain」收敛成一个**命名接缝**，`ScriptBridgeRig::drain` 调本函数 ⇒
+/// 行为用例覆盖到「删掉本函数体内的 drain 调用就红」（见卡面变异证据）。`sim_loop` 对它的
+/// 调用本身仍是结构牙（`sim_loop` 是进程级 tokio 循环，没有单测 harness；把整个
+/// `GateEvent::Command` 臂抽成可单测函数属独立重构，登记为 m4 的剩余面）。
+#[allow(clippy::too_many_arguments)]
+fn command_event_tail_gm_drain(
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    mon_table: &game_svr::mongen::MonsterTable,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
+    guilds: &mut mir2_world::GuildManager,
+    guild_cfg: &mir2_world::GuildConfig,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    colors: &MsgColors,
+    enter_cfg: &EnterConfig,
+    chr_name: &str,
+    reconnect_pending: &mut Vec<ReconnectPending>,
+    castle_broadcasts: &mut Vec<String>,
+    item_number: &mut i32,
+    item_number_ex: &mut i32,
+) {
+    drain_script_gm_pendings(
+        ground_sessions,
+        pwd_sessions,
+        saves,
+        world,
+        displays,
+        online,
+        gates,
+        mon_gen_host,
+        registry,
+        mon_table,
+        castle_war_states,
+        guilds,
+        guild_cfg,
+        guild_store,
+        colors,
+        enter_cfg,
+        chr_name,
+        reconnect_pending,
+        castle_broadcasts,
+        item_number,
+        item_number_ex,
+    );
+}
+
 /// `HUtil32.GetValidStr3(source, ref dest, new[]{" ", "\t"})`（`HUtil32.cs:391-402`）：
 /// `source.Split(div, 2, RemoveEmptyEntries)` ⇒ `dest` = 第一段，返回值 = 第二段（其余原样）。
 ///
@@ -25466,7 +25531,15 @@ fn sim_loop(
                     // 直呼一样只装 `pending_*` ⇒ 在**每个命令事件末尾**对说话者做一次与
                     // `CM_SAY` 支同序的落地。`apply_pending_*` 全是 `take()` 语义 ⇒ `CM_SAY`
                     // 已在支内落地的项在此为 no-op（帧序不变）。
-                    drain_script_gm_pendings(
+                    //
+                    // **m2 不变式（与本支 CM_SAY 的 `gm_drain_gate` 同序）**：`CM_SAY` 支用
+                    // `gm_drain_gate` 只让 `@` 行排水，是为了不让**陈旧** pending 被一条普通聊天
+                    // 顺带发出。本调用对所有 `GateEvent::Command` 无条件跑，成立的前提是
+                    // **每条脚本接缝必须在同一事件内把移出的 `sg.gm` 原样放回**（商人/QFunction/
+                    // 组队/固定 NPC 均如此）且 `execute()` 入口清空全部 `pending_*` ⇒ 事件末不会
+                    // 出现跨事件的陈旧值。新增任何「取出 `sg.gm` 后提前 return / 不归还」的脚本
+                    // 路径都会破坏该前提，必须同时在这里补门控或归还（review m2）。
+                    command_event_tail_gm_drain(
                         &mut ground_sessions,
                         &mut pwd_sessions,
                         &mut saves,
@@ -82512,6 +82585,7 @@ fn ",
         saves: HashMap<String, SavedHuman>,
         online: OnlineRegistry,
         gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
         guilds: mir2_world::GuildManager,
         guild_cfg: mir2_world::GuildConfig,
         colors: MsgColors,
@@ -82570,9 +82644,13 @@ fn ",
             let mut online: OnlineRegistry = Vec::new();
             online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
             online_set(&mut online, entry("v", "victim", 2, 0, 902, victim));
-            let (tx, _rx) = mpsc::unbounded_channel::<SimToGate>();
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
             let mut gates = HashMap::new();
             gates.insert(0, tx);
+            // `@Level0` 的 `HasLevelUp` 读 `Config.NeedExps[nLevel]`（`get_level_exp` 直接下标）
+            // ⇒ 夹具必须给足长度（生产来自 `Exps.conf`）。
+            let mut enter_cfg = EnterConfig::for_test(strings::parse(b"[String]\n"));
+            enter_cfg.need_exps = vec![1000; mir2_data::models::MAX_LEVEL as usize + 1];
             Self {
                 fx,
                 world,
@@ -82583,10 +82661,11 @@ fn ",
                 saves,
                 online,
                 gates,
+                rx,
                 guilds: mir2_world::GuildManager::new(),
                 guild_cfg: mir2_world::GuildConfig::default(),
                 colors: w_colors(),
-                enter_cfg: EnterConfig::for_test(strings::parse(b"[String]\n")),
+                enter_cfg,
                 filter_word: std::cell::Cell::new(true),
                 mission: std::cell::RefCell::new(gmcmd::GmMissionState::default()),
                 spirit_mutiny_tick: std::cell::Cell::new(0),
@@ -82637,13 +82716,14 @@ fn ",
             self.run_with_host(line, true)
         }
 
-        /// 命令事件末尾的宿主收口（与 `sim_loop` 调用的同一个函数）。
-        fn drain(&mut self) {
+        /// 命令事件末尾的宿主收口（与 `sim_loop` 调用的**同一个入口函数**）。
+        /// 返回重连队列/城堡广播正文（构造级用例按需断言）。
+        fn drain(&mut self) -> ScriptDrainOutcome {
             let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
             let mut reconnect_pending = Vec::new();
             let mut castle_broadcasts = Vec::new();
             let castle_war_states = HashMap::new();
-            drain_script_gm_pendings(
+            command_event_tail_gm_drain(
                 &mut self.sessions,
                 &mut pwd_sessions,
                 &mut self.saves,
@@ -82666,7 +82746,28 @@ fn ",
                 &mut self.item_number,
                 &mut self.item_number_ex,
             );
+            ScriptDrainOutcome {
+                reconnect: reconnect_pending,
+            }
         }
+
+        /// 取本夹具网关通道里的所有帧（按发出顺序）。
+        fn frames(&mut self) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            while let Ok(msg) = self.rx.try_recv() {
+                match msg {
+                    SimToGate::SendFrame { body, .. } => out.push(body),
+                    other => panic!("脚本 GM 收口不得发非帧消息：{other:?}"),
+                }
+            }
+            out
+        }
+    }
+
+    /// 事件末收口的可观察产物（构造级用例读重连队列）。
+    #[derive(Debug, Default)]
+    struct ScriptDrainOutcome {
+        reconnect: Vec<ReconnectPending>,
     }
 
     /// **A1/A2（六组通道之一：全局单元）**：脚本桥注入 `FilterWord`/`Mission`/`SpiritMutinyTick`
@@ -82887,10 +82988,273 @@ fn ",
         );
     }
 
-    /// 生产接线牙：`sim_loop` 必须在命令事件末尾恰好一处调用 [`drain_script_gm_pendings`]
-    /// （脚本桥注入的 `pending_*` 才能落地；删/注释该调用 ⇒ 本用例红）。
+    /// **I1（review reviewer-20 required）**：脚本桥 drain **步骤①**
+    /// （`apply_pending_gm_entity`）的构造级牙——卡面 A2 点名的 `@允许天地合一` 经
+    /// `GMEXECUTE`：命令体翻转会话位并装 `pending_entity`；事件末收口把权威
+    /// `Entity.allow_group_re_call` 写穿，且该字段随存档记录写出
+    /// （`characters.AllowGroupReCall`）。
+    ///
+    /// 变异红：注释掉 drain 步骤① 的 `apply_pending_gm_entity` 调用 ⇒ drain 后实体仍 false、
+    /// `pending_entity` 仍在（本用例红）。
     #[test]
-    fn script_gm_pending_drain_is_wired_in_sim_loop() {
+    fn script_bridge_allow_group_recall_writes_entity_and_record() {
+        let mut rig = ScriptBridgeRig::new();
+        let r = rig.run("@允许天地合一");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "装配后不得退化：{:?}", r.log_note);
+        assert_eq!(r.msgs.len(), 1, "回执一条绿字");
+        assert_eq!(r.msgs[0].text, gmcmd::ALLOW_GROUP_ON);
+        assert!(
+            rig.sessions["hero"].gm.allow_group_re_call,
+            "命令体翻转会话位（读自 characters.AllowGroupReCall 的缺省 false）"
+        );
+        assert!(
+            rig.sessions["hero"].gm.pending_entity.is_some(),
+            "命令体必须装 pending_entity（真路径）"
+        );
+        rig.drain();
+        assert!(
+            rig.sessions["hero"].gm.pending_entity.is_none(),
+            "收口一次性取走"
+        );
+        assert!(
+            rig.world
+                .entities
+                .get(rig.actor)
+                .unwrap()
+                .allow_group_re_call,
+            "drain 步骤① 必须把权威 Entity 写穿"
+        );
+        // `characters.AllowGroupReCall` 的存档源 = `EntityDerived`（`build_save_record` 的
+        // `rec.data.allow_group_re_call = d.allow_group_re_call`）⇒ 断言该接缝已采集真值；
+        // 实体 → 记录的最终写库断言见既有 `w_allow_group_recall_persists_to_record`。
+        let derived = entity_derived_snapshot(rig.world.entities.get(rig.actor).unwrap());
+        assert!(
+            derived.allow_group_re_call,
+            "EntityDerived 必须采集 allow_group_re_call（characters.AllowGroupReCall 的存档源）"
+        );
+    }
+
+    /// **m1 · drain 步骤②（`apply_pending_level_up`）脚本桥独立牙**：
+    /// `@Level0 60` 经 `GMEXECUTE` 装 `pending_level_up`；事件末收口落会话等级 + 权威实体等级
+    /// + `HasLevelUp` 三帧。
+    ///
+    /// 变异红：注释掉 drain 步骤② ⇒ 会话等级仍 1、`pending_level_up` 仍在、零帧。
+    #[test]
+    fn script_bridge_drain_level0_lands_level_and_frames() {
+        let mut rig = ScriptBridgeRig::new();
+        let r = rig.run("@Level0 60");
+        assert!(r.found, "命令必须命中");
+        assert!(
+            rig.sessions["hero"].gm.pending_level_up.is_some(),
+            "命令体必须装 pending_level_up"
+        );
+        assert!(
+            rig.sessions["hero"]
+                .gm
+                .pending_entity
+                .as_ref()
+                .is_some_and(|e| e.level == Some(60)),
+            "命令体同时装 pending_entity.level"
+        );
+        rig.drain();
+        assert_eq!(
+            rig.sessions["hero"].equip.abil.level, 60,
+            "drain 步骤② 必须落会话等级（Abil.Level 源）"
+        );
+        assert_eq!(
+            rig.world.entities.get(rig.actor).unwrap().level,
+            60,
+            "权威实体等级"
+        );
+        assert!(
+            rig.sessions["hero"].gm.pending_level_up.is_none(),
+            "落地即清"
+        );
+        let idents: Vec<u16> = rig.frames().iter().map(|b| hdr(b.as_slice()).0).collect();
+        assert!(
+            !idents.is_empty(),
+            "HasLevelUp(1) 必须下发等级帧（45/52/752），实得 {idents:?}"
+        );
+    }
+
+    /// **m1 · drain 步骤③（`apply_pending_gm_use_item`）脚本桥独立牙**：
+    /// `@改属性 3 2 15` 经 `GMEXECUTE` 装 `pending_use_item`；事件末收口把 `Desc[2]=15`
+    /// 落到会话佩戴位（本夹具不跑组队 seam，故只可能由 drain 步骤③ 落地）。
+    ///
+    /// 变异红：注释掉 drain 步骤③ ⇒ `Desc[2]` 仍 0、`pending_use_item` 仍在。
+    #[test]
+    fn script_bridge_drain_smake_lands_use_item_write() {
+        let mut rig = ScriptBridgeRig::new();
+        // 命令体读的是**世界实体**的佩戴位（`GmWorld.self_use_item`）；收口落的是**会话**
+        // 佩戴位（oracle 里是同一个 `PlayObject`，本仓两份同源）。
+        let slot = mir2_world::entity::UseItemSlot {
+            make_index: 7,
+            index: 1,
+            dura: 100,
+            dura_max: 200,
+            desc: [0; 14],
+        };
+        rig.world.entities.get_mut(rig.actor).unwrap().use_items[3] = slot;
+        rig.sessions.get_mut("hero").unwrap().use_items[3] = Some(game_svr::bag::BagItem {
+            make_index: 7,
+            index: 1,
+            dura: 100,
+            dura_max: 200,
+            desc: [0; 14],
+        });
+        let r = rig.run("@改属性 3 2 15");
+        assert!(r.found, "命令必须命中");
+        assert_eq!(r.msgs.len(), 1, "蓝字回执");
+        assert!(
+            rig.sessions["hero"].gm.pending_use_item.is_some(),
+            "命令体必须装 pending_use_item"
+        );
+        rig.drain();
+        let item = rig.sessions["hero"].use_items[3]
+            .as_ref()
+            .expect("佩戴位仍在");
+        assert_eq!(item.desc[2], 15, "drain 步骤③ 必须落 Desc[2]");
+        assert_eq!(item.desc[9], 1, "升级次数 +1（命令体已算）");
+        assert!(
+            rig.sessions["hero"].gm.pending_use_item.is_none(),
+            "落地即清"
+        );
+    }
+
+    /// **m1 · drain 步骤④（`apply_pending_gm_clear_bag`）脚本桥独立牙**：
+    /// `@清理垃圾 hero` 经 `GMEXECUTE` 装 `pending_clear_bag`；事件末收口清空目标背包并下发
+    /// `SM_DELITEMS(709)`。
+    ///
+    /// 变异红：注释掉 drain 步骤④ ⇒ 背包仍在、零帧。
+    #[test]
+    fn script_bridge_drain_clearbag_lands_delitems() {
+        let mut rig = ScriptBridgeRig::new();
+        rig.sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem {
+                make_index: 11,
+                index: 1,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            });
+        let r = rig.run("@清理垃圾 hero");
+        assert!(r.found, "命令必须命中");
+        assert_eq!(
+            rig.sessions["hero"].gm.pending_clear_bag.as_deref(),
+            Some("hero"),
+            "存的是实体规范名"
+        );
+        rig.drain();
+        assert!(
+            rig.sessions["hero"].state.item_list.is_empty(),
+            "drain 步骤④ 必须清空目标背包"
+        );
+        assert!(
+            rig.frames()
+                .iter()
+                .any(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_DELITEMS),
+            "必须下发 SM_DELITEMS(709)"
+        );
+    }
+
+    /// **m1 · drain 步骤⑤（`apply_pending_gm_feature_changed`）脚本桥独立牙**：
+    /// `@OffHorse` 经 `GMEXECUTE` 置 `pending_feature_changed`；事件末收口广播
+    /// `SM_FEATURECHANGED(41)`。
+    ///
+    /// 变异红：注释掉 drain 步骤⑤ ⇒ pending 仍在、零 41 帧。
+    #[test]
+    fn script_bridge_drain_feature_changed_broadcasts() {
+        let mut rig = ScriptBridgeRig::new();
+        rig.sessions.get_mut("hero").unwrap().gm.on_horse = true;
+        let r = rig.run("@OffHorse");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "下马支零登记");
+        assert!(
+            rig.sessions["hero"].gm.pending_feature_changed,
+            "命令体置 pending_feature_changed"
+        );
+        rig.drain();
+        assert!(!rig.sessions["hero"].gm.pending_feature_changed, "落地即清");
+        assert!(
+            rig.frames()
+                .iter()
+                .any(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_FEATURECHANGED),
+            "必须广播 SM_FEATURECHANGED(41)"
+        );
+    }
+
+    /// **m1 · drain 步骤⑥（`pending_reconnect` → `ReconnectPending`）脚本桥独立牙**：
+    /// `@Reconnection 127.0.0.1 7200` 经 `GMEXECUTE` 装 `pending_reconnect`；事件末收口把它
+    /// 推进 `drain_reconnects` 的唯一队列。
+    ///
+    /// 变异红：注释掉 drain 步骤⑥ ⇒ 队列为空、pending 仍在。
+    #[test]
+    fn script_bridge_drain_reconnect_enqueues() {
+        let mut rig = ScriptBridgeRig::new();
+        let r = rig.run("@Reconnection 127.0.0.1 7200");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "足参零登记");
+        assert_eq!(
+            rig.sessions["hero"].gm.pending_reconnect.as_deref(),
+            Some("127.0.0.1/7200")
+        );
+        let out = rig.drain();
+        assert!(
+            rig.sessions["hero"].gm.pending_reconnect.is_none(),
+            "落地即清"
+        );
+        assert_eq!(out.reconnect.len(), 1, "drain 步骤⑥ 必须入重连队列");
+        assert_eq!(out.reconnect[0].socket, 901);
+        assert_eq!(
+            out.reconnect[0].msg.as_slice(),
+            b"127.0.0.1/7200".as_slice()
+        );
+    }
+
+    /// **m1 · drain 步骤⑨（`apply_pending_gm_castle_commands`）脚本桥独立牙**：
+    /// `@SabukWallGold 沙巴克 x= 500` 经 `GMEXECUTE` 装 `pending_sbk_gold`；事件末收口写
+    /// `Castle.TotalGold`。
+    ///
+    /// 变异红：注释掉 drain 步骤⑨ ⇒ TotalGold 仍 0、pending 仍在。
+    #[test]
+    fn script_bridge_drain_castle_gold_lands() {
+        let mut rig = ScriptBridgeRig::new();
+        rig.world.castles.push(mir2_world::UserCastle::new(
+            "沙巴克",
+            mir2_world::CastleSiegeConfig::default(),
+        ));
+        let r = rig.run("@SabukWallGold 沙巴克 x= 500");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "三参足 ⇒ 零登记");
+        assert!(
+            rig.sessions["hero"].gm.pending_sbk_gold.is_some(),
+            "命令体必须装 pending_sbk_gold"
+        );
+        rig.drain();
+        assert!(
+            rig.sessions["hero"].gm.pending_sbk_gold.is_none(),
+            "落地即清"
+        );
+        assert_eq!(
+            rig.world.castles[0].total_gold, 500,
+            "drain 步骤⑨ 必须写 Castle.TotalGold"
+        );
+    }
+
+    /// 接线结构牙（m4 加强）：`sim_loop` 必须恰好一处调用事件末收口**入口**
+    /// [`command_event_tail_gm_drain`]；该入口体内的 drain 调用由本文件的构造级用例行为覆盖
+    /// （`ScriptBridgeRig::drain` 调同一入口 ⇒ 删掉入口体内的调用 ⇒ 步骤①-⑩ 用例红）。
+    ///
+    /// 剩余面（登记 m4）：`sim_loop` 是进程级 tokio 循环、无单测 harness，因此「删掉
+    /// `sim_loop` 这一行调用」仍由本结构牙兜住，不是行为红；把整个 `GateEvent::Command` 臂
+    /// 抽成可单测函数属独立重构。
+    #[test]
+    fn script_gm_event_tail_is_wired_in_sim_loop() {
         let src = include_str!("lib.rs");
         let lines: Vec<&str> = src.lines().collect();
         let tests_start = lines
@@ -82905,14 +83269,14 @@ fn ",
             .iter()
             .enumerate()
             .filter(|(i, l)| {
-                *i > sim_loop && *i < tests_start && l.contains("drain_script_gm_pendings(")
+                *i > sim_loop && *i < tests_start && l.contains("command_event_tail_gm_drain(")
             })
             .map(|(i, _)| i)
             .collect();
         assert_eq!(
             hits.len(),
             1,
-            "`sim_loop` 必须恰好一处调用 `drain_script_gm_pendings`（实际 {:?}）",
+            "`sim_loop` 必须恰好一处调用 `command_event_tail_gm_drain`（实际 {:?}）",
             hits
         );
     }
