@@ -625,8 +625,8 @@ pub struct Entity {
     /// C# `BaseObject.InSafeZone()`（`BaseObject.cs:1777`）的结果折叠。
     ///
     /// oracle 的 `IsProtectTarget`（`BaseObject.Base.cs:360`）用它做 PvP 门槛；本骨架未建模
-    /// 地图 Flag/StartPoint 安全区，由接线层在入图/换图时按 `Envir` 算好后写入；默认 `false`
-    /// （= 非安全区，写清了才允许 PvP，与真机 pin 到比奇城东空地一致）。
+    /// 地图 Flag/StartPoint 安全区。**生产代码当前无写入点（该字段恒 `false`），仅测试夹具赋值**；
+    /// 若将来接线层在入图/换图时按 `Envir` 写入，须同步 whitelist T-75。
     pub in_safe_zone: bool,
     /// C# `BaseObject.AdminMode`（`BaseObject.IsAttackTarget` 首判：管理员不可被攻击）。
     pub admin_mode: bool,
