@@ -9375,7 +9375,16 @@ mod tests {
                 vec![(GmColor::Red, "张三 现在不在线，或在其它服务器上!!!")],
                 "{slot_name}（槽位 {idx}）必须解析成功 ⇒ 离线红，不是帮助"
             );
+            // 逐值钉住 `use_item_idx`（M-R21-3：此前只钉「项链」=3，其余 12 个索引值无牙）。
+            assert_eq!(
+                use_item_idx(slot_name),
+                idx,
+                "{slot_name} ⇒ use_item_idx 必须是 {idx}"
+            );
         }
+        // 未知名 / 空名 ⇒ -1（命令层落到红帮助门，见 `bind_use_item_empty_params_is_red_help`）。
+        assert_eq!(use_item_idx("未知槽"), -1);
+        assert_eq!(use_item_idx(""), -1);
         // 在线三支：bob 在 world 里。
         let (fx, mut w, _gm_id, bob_id) = q_fixture();
         let guilds = mir2_world::GuildManager::new();
@@ -11828,6 +11837,413 @@ mod tests {
             ]
         );
         assert_eq!(sess.pending_clear_password.as_deref(), Some("bob"));
+    }
+
+    /// **N1 牙（review cb7519e2，返工）**：`@删除技能` 末尾 RecalcAbilitys 的三条正支
+    /// （宿主 `apply_pending_gm_target_ops`；命令体在 gmcmd、落地在 lib.rs 同一实现）：
+    /// ① 目标实体带 **Sticky FlameRing**（`entity.flame_ring=true`）⇒ 审计输入必须取实体粘滞位
+    ///    （`flame_ring_in=true`）走 Add 支：魔法表里的「火球术」不被删、无审计 212，
+    ///    且实体粘滞位保持 true；
+    /// ② 目标装备复活戒指（Shape 114、Dura>0，戒指槽）⇒ `effect.revival=true` 必须写回实体；
+    /// ③ 目标装备火焰戒指（Shape 115、Dura>0）且实体粘滞位 false ⇒ 本次命中
+    ///    （`recalc.flame_ring=true`）必须经 `e.flame_ring |= effect.flame_ring` 落到实体。
+    /// 变异红：`flame_ring_in` 改恒 false ⇒ ①红（火球术被审计删 + 212）；
+    /// 删 `if effect.revival { e.revival = true; }` ⇒ ②红；
+    /// 删 `e.flame_ring |= effect.flame_ring;` ⇒ ③红。
+    #[test]
+    fn x2b_del_skill_recalc_writes_back_flame_ring_and_revival() {
+        use crate::apply_pending_gm_target_ops;
+        use crate::downlink::DisplayTable;
+        use crate::tests::test_session_ground;
+        use crate::{
+            magic_list_mut, online_set, MagicCfg, MsgColors, OnlineEntry, SavedHuman, SimToGate,
+        };
+        use game_svr::bag::BagItem;
+        use std::collections::HashMap;
+
+        let ring = |index: u16| BagItem {
+            make_index: 0,
+            index,
+            dura: 5000,
+            dura_max: 5000,
+            desc: [0; 14],
+        };
+        let mut world = mir2_world::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world::Entity::new(0, "victim", 11, 11));
+        // 10 = 复活戒指（Shape 114），11 = 火焰戒指（Shape 115）。
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            10,
+            mir2_data::StdItem {
+                name: "复活戒指".into(),
+                std_mode: 22,
+                shape: 114,
+                dura_max: 5000,
+                ..Default::default()
+            },
+        );
+        catalog.insert(
+            11,
+            mir2_data::StdItem {
+                name: "火焰戒指".into(),
+                std_mode: 22,
+                shape: 115,
+                dura_max: 5000,
+                ..Default::default()
+            },
+        );
+        let magic_table = crate::magics::MagicTable::new(vec![
+            mir2_data::MagicInfo {
+                magic_id: 1,
+                magic_name: "火球术".into(),
+                desc: "烈火球".into(),
+                ..Default::default()
+            },
+            mir2_data::MagicInfo {
+                magic_id: 2,
+                magic_name: "治愈术".into(),
+                desc: "回春术".into(),
+                ..Default::default()
+            },
+        ]);
+        let magic_cfg = MagicCfg {
+            table: &magic_table,
+            fire_ball_skill: "火球术",
+            heal_skill: "治愈术",
+        };
+        let mut sessions: HashMap<String, crate::SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero_id));
+        let mut victim_sg = test_session_ground(victim_id);
+        victim_sg.equip.job = 2; // TAOIST：治愈审计支跳过，主看火球支
+        sessions.insert("victim".into(), victim_sg);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "victim".into(),
+            SavedHuman {
+                account: "v".into(),
+                record: crate::record::PlayerRecord::default(),
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        let mag = |mag_idx: u16| {
+            Some(crate::record::MagicRcd {
+                mag_idx,
+                level: 1,
+                magic_key: 0,
+                tran_point: 0,
+            })
+        };
+        magic_list_mut(saves.get_mut("victim").unwrap()).push(mag(1));
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let mut online = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero_id,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "v".into(),
+                chr_name: "victim".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: victim_id,
+            },
+        );
+        let (tx0, mut rx0) = tokio::sync::mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let displays = DisplayTable::new();
+        let collect = |rx: &mut tokio::sync::mpsc::UnboundedReceiver<SimToGate>| -> Vec<u16> {
+            std::iter::from_fn(|| rx.try_recv().ok())
+                .filter_map(|m| match m {
+                    SimToGate::SendFrame { body, .. } if body.len() >= 6 => {
+                        Some(u16::from_le_bytes([body[4], body[5]]))
+                    }
+                    _ => None,
+                })
+                .collect()
+        };
+
+        // ---- ① flame_ring_in=true（实体粘滞位）必须真被传进审计：火球术不被删 ----
+        world.entities.get_mut(victim_id).unwrap().flame_ring = true;
+        sessions.get_mut("hero").unwrap().gm.pending_del_skill =
+            Some(("victim".into(), "不存在的技能".into()));
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            magic_cfg,
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        {
+            let list = saves["victim"].record.data.magic.as_ref().unwrap();
+            assert_eq!(
+                list.len(),
+                1,
+                "flame_ring_in=true 走 Add 支：火球术不得被审计删"
+            );
+            assert_eq!(list[0].as_ref().unwrap().mag_idx, 1);
+        }
+        assert!(
+            collect(&mut rx0).is_empty(),
+            "Add 支（火球已在训练）不得出 210/212"
+        );
+        assert!(
+            world.entities.get(victim_id).unwrap().flame_ring,
+            "实体粘滞位必须保持 true"
+        );
+
+        // ---- ② revival=true（复活戒指本次命中）必须写回实体 ----
+        world.entities.get_mut(victim_id).unwrap().revival = false;
+        sessions.get_mut("victim").unwrap().use_items[game_svr::ability::SLOT_RING_L] =
+            Some(ring(10));
+        sessions.get_mut("hero").unwrap().gm.pending_del_skill =
+            Some(("victim".into(), "不存在的技能".into()));
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            magic_cfg,
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        assert!(
+            world.entities.get(victim_id).unwrap().revival,
+            "effect.revival=true 必须写回实体"
+        );
+        assert!(collect(&mut rx0).is_empty(), "复活戒指不产生 210/212");
+
+        // ---- ③ 本次命中 FlameRing（实体粘滞位 false）必须 |= 落到实体 ----
+        world.entities.get_mut(victim_id).unwrap().flame_ring = false;
+        {
+            let victim = sessions.get_mut("victim").unwrap();
+            victim.use_items[game_svr::ability::SLOT_RING_L] = None;
+            victim.use_items[game_svr::ability::SLOT_RING_R] = Some(ring(11));
+        }
+        sessions.get_mut("hero").unwrap().gm.pending_del_skill =
+            Some(("victim".into(), "不存在的技能".into()));
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            magic_cfg,
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        assert!(
+            world.entities.get(victim_id).unwrap().flame_ring,
+            "recalc 本次命中 FlameRing 必须 |= 到实体"
+        );
+        assert!(collect(&mut rx0).is_empty(), "火球已在训练 ⇒ 无 210/212");
+    }
+
+    /// **N2 牙（review cb7519e2，返工）**：`@删除技能`「只删命中项」的**独立列表断言**。
+    /// 旧主案例的 `len/mag_idx` 断言可被同一调用末尾的审计删除掩蔽（S2：命令查找键
+    /// desc→magic_name 时审计仍删火球术，列表恰好仍 `len=1`）。本用例把夹具设计成
+    /// **审计面不可能命中**：目标 job=TAOIST（治愈支跳过）+ 无火焰戒指/无 Sticky（火球支
+    /// 找不到「火球术」）+ 列表里也没有「火球术」⇒ 列表的前后差集只可能来自命令命中删除。
+    /// 断言差集恰为命中项、非命中项原样保留（不是「最终列表不含 X」）。
+    /// 变异红：S2（desc→magic_name）⇒ 命令不命中、差集为空 ⇒ 红；「删全部/删错项」⇒ 差集多/少 ⇒ 红。
+    #[test]
+    fn x2b_del_skill_only_removes_matching_item_unmasked() {
+        use crate::apply_pending_gm_target_ops;
+        use crate::downlink::DisplayTable;
+        use crate::tests::test_session_ground;
+        use crate::{
+            magic_list_mut, online_set, MagicCfg, MsgColors, OnlineEntry, SavedHuman, SimToGate,
+        };
+        use std::collections::HashMap;
+
+        let mut world = mir2_world::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world::Entity::new(0, "victim", 11, 11));
+        // 5 = 命中项（Desc=「目标技能」、MagicName 与火球/治愈均不同）；
+        // 6 = 非命中项（Desc/MagicName 都不匹配命令与审计）。
+        let magic_table = crate::magics::MagicTable::new(vec![
+            mir2_data::MagicInfo {
+                magic_id: 5,
+                magic_name: "冰咆哮".into(),
+                desc: "目标技能".into(),
+                ..Default::default()
+            },
+            mir2_data::MagicInfo {
+                magic_id: 6,
+                magic_name: "雷电术".into(),
+                desc: "狂龙紫电".into(),
+                ..Default::default()
+            },
+        ]);
+        let magic_cfg = MagicCfg {
+            table: &magic_table,
+            fire_ball_skill: "火球术",
+            heal_skill: "治愈术",
+        };
+        let mut sessions: HashMap<String, crate::SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), test_session_ground(hero_id));
+        let mut victim_sg = test_session_ground(victim_id);
+        victim_sg.equip.job = 2; // TAOIST：治愈审计支跳过
+        sessions.insert("victim".into(), victim_sg);
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        saves.insert(
+            "victim".into(),
+            SavedHuman {
+                account: "v".into(),
+                record: crate::record::PlayerRecord::default(),
+                enter_map: "0".into(),
+                derived: None,
+            },
+        );
+        let mag = |mag_idx: u16| {
+            Some(crate::record::MagicRcd {
+                mag_idx,
+                level: 1,
+                magic_key: 0,
+                tran_point: 0,
+            })
+        };
+        magic_list_mut(saves.get_mut("victim").unwrap()).extend([mag(5), mag(6)]);
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let mut online = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero_id,
+            },
+        );
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "v".into(),
+                chr_name: "victim".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: victim_id,
+            },
+        );
+        let (tx0, mut rx0) = tokio::sync::mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let displays = DisplayTable::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let before: Vec<u16> = saves["victim"]
+            .record
+            .data
+            .magic
+            .as_ref()
+            .unwrap()
+            .iter()
+            .flatten()
+            .map(|m| m.mag_idx)
+            .collect();
+        sessions.get_mut("hero").unwrap().gm.pending_del_skill =
+            Some(("victim".into(), "目标技能".into()));
+        apply_pending_gm_target_ops(
+            &mut sessions,
+            &mut pwd_sessions,
+            &mut saves,
+            &mut world,
+            &catalog,
+            magic_cfg,
+            &displays,
+            &online,
+            &gates,
+            &colors,
+            12,
+            "hero",
+        );
+        let after: Vec<u16> = saves["victim"]
+            .record
+            .data
+            .magic
+            .as_ref()
+            .unwrap()
+            .iter()
+            .flatten()
+            .map(|m| m.mag_idx)
+            .collect();
+        let removed: Vec<u16> = before
+            .iter()
+            .copied()
+            .filter(|id| !after.contains(id))
+            .collect();
+        assert_eq!(removed, vec![5], "列表前后差集恰为命中项（审计不得掩蔽）");
+        assert_eq!(after, vec![6], "非命中项必须原样保留");
+        let frames: Vec<(i32, u16, i32)> = std::iter::from_fn(|| rx0.try_recv().ok())
+            .filter_map(|m| match m {
+                SimToGate::SendFrame { socket, body } if body.len() >= 6 => Some((
+                    socket,
+                    u16::from_le_bytes([body[4], body[5]]),
+                    i32::from_le_bytes([body[0], body[1], body[2], body[3]]),
+                )),
+                _ => None,
+            })
+            .collect();
+        let dels: Vec<(i32, i32)> = frames
+            .iter()
+            .filter(|(_, id, _)| *id == mir2_protocol::messages::SM_DELMAGIC)
+            .map(|(socket, _, recog)| (*socket, *recog))
+            .collect();
+        assert_eq!(dels, vec![(902, 5)], "恰一条命令 212 投目标，无审计 212");
     }
 
     /// 批 A 12 条全部接线：现网名/impl/perm 10/params。

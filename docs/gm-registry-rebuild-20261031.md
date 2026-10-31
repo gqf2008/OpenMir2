@@ -10,12 +10,17 @@
 由卡 `openmir2-gm-command-name-typos`（`f40303917`）引入。全部修复后：
 
 ```
-build   rc=0   WROTE gm_registry.json (99269 bytes)
+build   rc=0   WROTE gm_registry.json (97262 bytes)
 gate    rc=0   GREEN: gm_registry 24 条与源码逐字段一致
 selftest rc=0  OK (17 teeth; skipped=K,N)
 table_total=185  imp_breakdown={"Implemented": 161, "Unimplemented": 24}
 third_state=21   complete=140   crosscheck={"ok": true, rust_total/ model_total=185}
 ```
+
+> **F4 订正（review m4）**：摘要块原写 `99269 bytes`，与本节下方重跑证据不一致；在卡合并点
+> `53973b7e9` 上重跑 `gm_registry.py build` 得 `WROTE ... (97262 bytes)`，产物 sha256
+> `aa3583e205a11f369cf6c06d5413bb9afdfb1f5991a628ca615eddeaef8f44f5` 与提交的 `gm_registry.json`
+> 相同（逐字节可复现）⇒ 实跑值为 **97262 bytes**。
 
 > 卡片原来写的「源码 156/27」是**旧 parser 的视角**：它漏掉的两条恰是 `Implemented`，
 > 所以旧口径少算 2 条已实现。在 `1115bd1ef` 上修好 parser 的真值是 **158/27**；
