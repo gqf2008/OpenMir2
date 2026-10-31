@@ -104,12 +104,12 @@ Gmexecute 禁言 self 10000                    # QuestDiary/游戏登陆/登陆�
 | 键（`[Setup]`） | 部署值 | 缺省 | 含义与生效点 |
 |---|---:|---:|---|
 | `MonsterPowerRate` | 10 | 10 | 怪物 HP/MP/AC/MAC/DC/DCMAX/MC/SC 按 `rate/10` 缩放（`MySqlDB.LoadMonsterDB`）；**怪物模板装载时**生效，重启才变 |
-| `GenMonRate` | 10 | 10 | 刷怪目标数除数：`目标数 = max(1, round(max(1, Count) / (rate/10)))`（`WorldServer.MonGen.cs` `MonGetRandomItems` 上游；Rust `crates/world/src/mongen.rs`）。**值越大刷得越少**；重启生效 |
+| `GenMonRate` | 10 | 10 | 刷怪目标数除数：`目标数 = max(1, round(max(1, Count) / (rate/10)))`（`WorldServer.MonGen.cs` 的刷怪循环 `genModCount`；Rust `crates/world/src/mongen.rs`）。**值越大刷得越少**；重启生效 |
 | `MonGenRate` | 1 | — | **死键**：oracle/Rust 读的是 `GenMonRate`；`MonGenRate=1` 不参与计算（部署文件同时存在两键，以 `GenMonRate=10` 为准） |
 | `MonUpLvRate` | 16 | 16 | 宠物/宝宝升级所需杀怪数（`MonsterObject.cs`）；重启生效 |
 | `MonRandomAddValue` | 40 | 10 | 掉落「极品」判定：`Random(MonRandomAddValue) == 0` ⇒ 1/40；重启生效 |
 | `MakeRandomAddValue` | 100 | 10 | `@s` 造物每件一次 `Random(MakeRandomAddValue)`（品质抽数）；重启生效 |
-| `DropItemRage` | 未写 | 3 | **爆物散布半径**，不是爆率；实际取 `MIN(值, 3/7)` |
+| `DropItemRage` | 未写 | 3 | **爆物散布半径**，不是爆率；按调用点取 `MIN(值,3)` 或 `MIN(值,7)` |
 | `ItemPowerRate` | 10000 | 10000 | **解析但无消费点**（oracle 全仓只声明+读取，无使用）⇒ 改了不生效 |
 | `ItemExpRate` | 10000 | 10000 | 同上，**无消费点** |
 | `PKDieLostExpRate` | 1000 | 1000 | 同上，**无消费点** |
