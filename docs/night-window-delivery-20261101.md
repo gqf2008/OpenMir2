@@ -27,7 +27,7 @@
 | 交易链四步（V-dealtry-e2e） | REAL-MACHINE 四步全 PASS | T2/T3 `social-20261101-003010-861`、`013200-652`；T4 `social-20261101-020223-688`（`Ident=1026 Recog=14296908`）；T5 `social-20261101-025625-807`（`Ident=1029 Recog=1`）；T6/T7 `social-20261101-021820-433`（1030→687、1028→681） |
 | V-allowgroup-save-writeback | REAL-MACHINE PASS（`social-20261101-024918-770` 开 / `social-20261101-024938-486` 关） | 断线存档 queryId=20（Recog=1）⇒ `characters.AllowGroupReCall=1`；queryId=22（Recog=1）⇒ 0；`AllowGroup` 列四查均 0（与 oracle UPDATE 清单一致） |
 
-窗口纪律：窗口期内我方 cargo 零运行、生产栈不重建；窗口结束后现场已还原（条目 `3cd25bd5`）。S8 窗口生产栈为 master `a46d3e3c3` 重建，后两轮（DEALTRY/交易、allowgroup）生产栈 HEAD 为 `aad30901`、exe sha256 前缀 `593de33a…`（条目 `d9c1d09e`）。
+窗口纪律：窗口期内我方 cargo 零运行、生产栈不重建；窗口结束后现场已还原（条目 `3cd25bd5`）。已登记的栈口径：S8 窗口为 master `a46d3e3c3` 重建（条目 `0c248e08`）；DEALTRY/659 轮为 master `38439f539`、exe sha256 `45f02a27…`（条目 `26e1dd41`）；allowgroup 轮为 HEAD `aad30901`、exe sha256 `593de33a…`（条目 `d9c1d09e`）；交易四步条目未登记栈 stamp（未覆盖）。
 
 ## §3 台账状态
 
