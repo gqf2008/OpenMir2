@@ -1858,19 +1858,7 @@ fn handle_gm_command(
         .map(|e| e.name.clone());
     // **族 F**：会话任务态只读快照（`saves.record` 三列；oracle 的会话内 `CharacterData`）。
     // `@setflag` 用它算「写后读回」，`@showflag` 用它读目标真位阵（此前是恒零接缝）。
-    let quests: std::collections::HashMap<String, gmcmd::GmQuestFlags> = saves
-        .iter()
-        .map(|(name, saved)| {
-            (
-                name.clone(),
-                gmcmd::GmQuestFlags::from_record(
-                    saved.record.data.quest_flag.as_deref(),
-                    saved.record.data.quest_unit.as_deref(),
-                    saved.record.data.quest_unit_open.as_deref(),
-                ),
-            )
-        })
-        .collect();
+    let quests = gm_quest_snapshot(saves);
     // **族 M**：`@怪` 的 `GetFrontPosition` 入参 = `PlayerActor.Dir`（玩家权威 Dir 在展示表，
     // `actor_dir` 优先实体 `ai.dir`、回落到展示表——与 `pose_create` 同口径）。
     let speaker_dir = actor_dir(host.world, host.displays, speaker.actor_id);
@@ -3721,8 +3709,15 @@ fn pose_create(
     displays: &downlink::DisplayTable,
     actor_id: i32,
 ) -> Option<i32> {
+    pose_create_dir(world, actor_dir(world, displays, actor_id), actor_id)
+}
+
+/// [`pose_create`] 的**方向已解析**版本：脚本 `GMEXECUTE` 桥只借得到 `&World`（宿主 handler
+/// 同一时刻持着 `&mut displays`），拿不到 `&DisplayTable`。`actor_dir` 在实体**存在**时读
+/// `e.ai.dir`（`displays` 只在实体缺失时兜底，而 `pose_create` 那时已返回 `None`）⇒ 用调用者
+/// 实体的 `ai.dir` 直接调本函数，与客户端直呼路径逐字节同值。
+fn pose_create_dir(world: &mir2_world::World, dir: u8, actor_id: i32) -> Option<i32> {
     let e = world.entities.get(actor_id)?;
-    let dir = actor_dir(world, displays, actor_id);
     let (width, height) = world
         .maps
         .get(e.map_id)
@@ -7793,15 +7788,119 @@ fn write_back_player_use_items(
 /// 卡 `openmir2-gm-script-exec-seams`：固定 NPC 一路的 handler 同时持 `&mut world` 与
 /// `&mut guilds`，脚本执行点只能**在调用点**把它们重借成只读 ⇒ 构造上下文时只存另外三件，
 /// `guilds`/`world` 由 `FixedNpcScript::goto_label` 的形参即时给出。
-#[derive(Clone, Copy)]
+/// 脚本 `GMEXECUTE` 桥的**宿主通道快照**（卡 `openmir2-gmexe-bridge-channels`）。
+///
+/// 六组通道（`quests`/`m_host`/`filter_word`/`mission`/`spirit_mutiny_tick`/`caller_guild`）
+/// 与 `pose_target` 在 oracle 里都来自**同一个 `PlayObject` + `SystemShare` 进程单例**
+/// （`ActionOfGmExecute` 只是调用方，`ExecutionProcessingSys.cs:4925-4947`）⇒ 脚本桥必须与
+/// 客户端直呼路径持同一份上下文。本结构是宿主在**事件入口**取的快照：
+///
+/// - 全局单元（`filter_word`/`mission`/`spirit_mutiny_tick`）是引用：进程级单例，跨会话同一份；
+/// - `quests`/`caller_guild`/`pose_target` 是**本事件的会话快照**（`saves`/`ground_sessions`/
+///   世界实体随后会被 handler `&mut` 借走 ⇒ 只能先取出来，与 `LoginScriptWriteBack` 同法：
+///   块内取值、块外按同值写回）；
+/// - `m_host` = 宿主在同一事件末尾有刷怪/造物/城堡/行会的落地通道
+///   （[`drain_script_gm_pendings`]）。
+///
+/// 全部 `None`/`false`（[`Default`]）= 未装配 ⇒ `bridge` 落回命令体的退化形态
+/// （`log_note` 零帧、不伪造写）：这是旧脚本桥/测试夹具的行为，卡面要求保留作兜底。
+#[derive(Clone, Default)]
+pub struct ScriptGmHost<'a> {
+    /// `SystemShare.FilterWord`（`@DisableFilter` 翻转）。
+    pub filter_word: Option<&'a std::cell::Cell<bool>>,
+    /// `SystemShare.BoMission/MissionMap/MissionX/MissionY`（`@Mission` 写、`@MobPlace` 读）。
+    pub mission: Option<&'a std::cell::RefCell<gmcmd::GmMissionState>>,
+    /// `SystemShare.SpiritMutinyTick`（`@祈祷生效`/`@停止叛变` 写）。
+    pub spirit_mutiny_tick: Option<&'a std::cell::Cell<i64>>,
+    /// 会话任务态位阵快照（`@setflag/@setopen/@setunit` 的写后读回基准）。
+    pub quests: Option<std::collections::HashMap<String, gmcmd::GmQuestFlags>>,
+    /// 说话者 `MyGuild`/`GuildRankNo` 快照（`@退出门派` 的门）。
+    pub caller_guild: Option<gmcmd::GmGuildState>,
+    /// `GetPoseCreate()` 的前方格目标名（`@vv杀死` 无参支）。
+    pub pose_target: Option<String>,
+    /// 宿主已接刷怪/造物/城堡/行会落地通道（`@MobPlace` 等 `m_host` 门）。
+    pub m_host: bool,
+}
+
+impl<'a> ScriptGmHost<'a> {
+    /// 生产装配：进程级全局单元 + 本事件的会话快照。
+    ///
+    /// `chr_name` 必须是在线说话者（`ground_sessions` 有会话、世界有实体）；未命中时对应
+    /// 通道为 `None` ⇒ 命令体走退化形态（不伪造）。
+    fn for_event(
+        filter_word: &'a std::cell::Cell<bool>,
+        mission: &'a std::cell::RefCell<gmcmd::GmMissionState>,
+        spirit_mutiny_tick: &'a std::cell::Cell<i64>,
+        saves: &std::collections::HashMap<String, SavedHuman>,
+        ground_sessions: &std::collections::HashMap<String, SessionGround>,
+        world: &mir2_world::World,
+        chr_name: &str,
+    ) -> Self {
+        let session = ground_sessions.get(chr_name);
+        Self {
+            filter_word: Some(filter_word),
+            mission: Some(mission),
+            spirit_mutiny_tick: Some(spirit_mutiny_tick),
+            quests: Some(gm_quest_snapshot(saves)),
+            caller_guild: session.map(gm_caller_guild),
+            pose_target: session
+                .map(|sg| sg.actor_id)
+                .and_then(|id| script_pose_target(world, id)),
+            m_host: true,
+        }
+    }
+}
+
+/// `saves` → `GmQuestFlags` 只读快照（`@setflag` 的写后读回基准 / `@showflag` 的读源）。
+fn gm_quest_snapshot(
+    saves: &std::collections::HashMap<String, SavedHuman>,
+) -> std::collections::HashMap<String, gmcmd::GmQuestFlags> {
+    saves
+        .iter()
+        .map(|(name, saved)| {
+            (
+                name.clone(),
+                gmcmd::GmQuestFlags::from_record(
+                    saved.record.data.quest_flag.as_deref(),
+                    saved.record.data.quest_unit.as_deref(),
+                    saved.record.data.quest_unit_open.as_deref(),
+                ),
+            )
+        })
+        .collect()
+}
+
+/// 会话缓存里的 `PlayObject.MyGuild/GuildRankNo` 快照（`@退出门派` 的门读源）。
+fn gm_caller_guild(sg: &SessionGround) -> gmcmd::GmGuildState {
+    gmcmd::GmGuildState {
+        guild_name: sg.guild.guild_name.clone(),
+        rank_no: sg.guild.rank_no,
+    }
+}
+
+/// 脚本 `GMEXECUTE` 的 `GetPoseCreate()` 目标名快照（`@vv杀死` 无参支）。
+///
+/// 与客户端直呼路径的 `pose_create(world, displays, speaker)` 同源：`actor_dir` 在实体
+/// **存在**时读 `e.ai.dir`（`displays` 只在实体缺失时兜底，而 `pose_create` 那时已返回
+/// `None`）⇒ 脚本桥只需要 `&World`，不必把宿主的 `&mut displays` 再借一次。
+fn script_pose_target(world: &mir2_world::World, actor_id: i32) -> Option<String> {
+    let dir = world.entities.get(actor_id)?.ai.dir;
+    pose_create_dir(world, dir, actor_id)
+        .and_then(|id| world.entities.get(id))
+        .map(|e| e.name.clone())
+}
+
+#[derive(Clone)]
 pub struct ScriptGmParts<'a> {
     pub maps: Option<&'a mir2_envir::MapRegistry>,
     pub cfg: &'a gmcmd::GmConfig,
     pub pwd_sessions: &'a std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    /// 宿主通道快照（见 [`ScriptGmHost`]）；`None`/`false` 通道 = 未装配的退化兜底。
+    pub host: ScriptGmHost<'a>,
 }
 
 impl<'a> ScriptGmParts<'a> {
-    fn with<'g>(self, guilds: &'g mir2_world::GuildManager) -> ScriptGmEnv<'g>
+    fn with<'g>(&'g self, guilds: &'g mir2_world::GuildManager) -> ScriptGmEnv<'g>
     where
         'a: 'g,
     {
@@ -7810,6 +7909,7 @@ impl<'a> ScriptGmParts<'a> {
             maps: self.maps,
             cfg: self.cfg,
             pwd_sessions: self.pwd_sessions,
+            host: self.host.clone(),
         }
     }
 }
@@ -7823,6 +7923,8 @@ pub struct ScriptGmEnv<'a> {
     pub cfg: &'a gmcmd::GmConfig,
     /// `CM_PASSWORD` 驱动的会话层密码状态机（oracle `PlayObject.Chat.cs:241-362`）。
     pub pwd_sessions: &'a std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    /// 宿主通道快照（六组通道 + `pose_target`；见 [`ScriptGmHost`]）。
+    pub host: ScriptGmHost<'a>,
 }
 
 impl ScriptGmEnv<'_> {
@@ -7842,6 +7944,10 @@ impl ScriptGmEnv<'_> {
     /// 装配 `game_svr::npc::NpcGm`（`Permission` 权威 = 会话 `GmSession`）。
     ///
     /// `now_ms` 取 `world.clock_ms`：与 `@Login` 装配处（T-210）**同一口径**。
+    ///
+    /// 六组宿主通道按 [`ScriptGmHost`] 的快照注入：装配了就与客户端直呼路径同上下文
+    /// （卡 `openmir2-gmexe-bridge-channels`）；未装配的通道保持 `None`/`false`，
+    /// 命令体落回既有退化形态（`log_note` 零帧，不伪造写）。
     fn bridge<'g>(
         &'g self,
         sess: &'g mut gmcmd::GmSession,
@@ -7849,6 +7955,18 @@ impl ScriptGmEnv<'_> {
         chr_name: &'g str,
         actor_id: i32,
     ) -> game_svr::npc::NpcGm<'g> {
+        // 说话者 `Dir`：`actor_dir` 在实体存在时读 `e.ai.dir`（脚本调用者必在世界）。
+        //
+        // **m3 登记**：`speaker_dir` **不是**宿主通道字段（`ScriptGmHost` 里没有它），而是从
+        // `world` 实体派生；未装配（`m_host=false`）时**强制 0**，保持「未装配 ≡ 卡前行为」
+        // 的逐字口径。它唯一的消费者是 M 族 `self_front_pos`（`@怪` 面前格），而 M 族命令体
+        // 先过 `m_host` 门 ⇒ 未装配时该值不可达；装配后取值来源 = 说话者实体 `ai.dir`
+        // （与 `actor_dir` 在实体存在时同源；实体缺失才回落 0）。
+        let speaker_dir = if self.host.m_host {
+            world.entities.get(actor_id).map_or(0, |e| e.ai.dir)
+        } else {
+            0
+        };
         game_svr::npc::NpcGm {
             sess,
             cfg: self.cfg,
@@ -7859,21 +7977,14 @@ impl ScriptGmEnv<'_> {
                 speaker: chr_name,
                 speaker_id: actor_id,
                 now_ms: world.clock_ms,
-                // 脚本 GMEXECUTE 桥不持全局单元 ⇒ `@DisableFilter` 走 `log_note` 登记零帧
-                // （命令体退化形态有答案；脚本面本卡 forbidden）。
-                pose_target: None,
-                filter_word: None,
-                mission: None,
-                spirit_mutiny_tick: None,
-                // 族 F：脚本桥不持会话任务态快照（`saves` 不在 `ScriptGmEnv` 里）⇒
-                // `@setflag/@setopen/@setunit` 经 `GMEXECUTE` 走 `log_note` 退化形态；
-                // 部署脚本无这三条命令的可达调用（`coverage/gm_registry.json`）。
-                quests: None,
-                // 族 M：脚本桥没有 `&mut World`/`MonGenHost`/物品目录/RNG 通道 ⇒ 有副作用的
-                // 6 条走退化零帧（部署脚本无其可达调用）。
-                speaker_dir: 0,
-                m_host: false,
-                caller_guild: None,
+                pose_target: self.host.pose_target.as_deref(),
+                filter_word: self.host.filter_word,
+                mission: self.host.mission,
+                spirit_mutiny_tick: self.host.spirit_mutiny_tick,
+                quests: self.host.quests.as_ref(),
+                speaker_dir,
+                m_host: self.host.m_host,
+                caller_guild: self.host.caller_guild.as_ref(),
             },
             pwd_busy: self.pwd_busy(chr_name),
         }
@@ -8557,7 +8668,7 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
         Vec<usize>,
     ) {
         // 卡 `openmir2-gm-script-exec-seams`：固定 NPC 路的 GM 跳线（与商人/点击同一桥）。
-        let env = self.gm.map(|p| p.with(guilds));
+        let env = self.gm.as_ref().map(|p| p.with(guilds));
         let (says, frames, slots, _actions) = run_merchant_goto(
             self.book,
             npc_actor_id,
@@ -20537,6 +20648,227 @@ struct RouteInfo {
     game_gate_ports: Vec<i32>,
 }
 
+/// 脚本 `GMEXECUTE` 的 `pending_*` 收口（卡 `openmir2-gmexe-bridge-channels`）。
+///
+/// 背景：oracle 的 `ActionOfGmExecute` 调 `ProcessUserLineMsg`，命令体与客户端直呼**同一个
+/// `PlayObject` 上下文** ⇒ 副作用当场落地。本仓脚本桥通过 [`ScriptGmHost`] 注入了六组通道后，
+/// 命令体与直呼路径一样只把权威写装进 `GmSession.pending_*`；脚本三处接缝（商人/QFunction/
+/// 组队）与固定 NPC 路都把会话 GM 态原样放回 `SessionGround.gm`，因此宿主在**每个命令事件
+/// 末尾**对本事件说话者做一次与 `CM_SAY` 支同序的收口（`apply_pending_*` 都是 `take()` 语义
+/// ⇒ 与 `CM_SAY` 支重复调用是 no-op，帧序不变）。
+///
+/// 时序口径：脚本内的 GM 副作用帧排在脚本帧之后（oracle 是动作内同步）；R 级脚本桥副作用
+/// 面的真机帧序已挂台账，见卡面 `window_items`。
+#[allow(clippy::too_many_arguments)]
+fn drain_script_gm_pendings(
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    mon_table: &game_svr::mongen::MonsterTable,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
+    guilds: &mut mir2_world::GuildManager,
+    guild_cfg: &mir2_world::GuildConfig,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    colors: &MsgColors,
+    enter_cfg: &EnterConfig,
+    chr_name: &str,
+    reconnect_pending: &mut Vec<ReconnectPending>,
+    castle_broadcasts: &mut Vec<String>,
+    item_number: &mut i32,
+    item_number_ex: &mut i32,
+) {
+    // ① 权威 `Entity` 写（`@1/@2/@3/@Rest/@AttackMode`，`@允许天地合一` 同 pending 通道）。
+    apply_pending_gm_entity(ground_sessions, chr_name, world);
+    // ② `@Level0` 的 `HasLevelUp(1)`。
+    apply_pending_level_up(
+        ground_sessions,
+        chr_name,
+        &enter_cfg.catalog,
+        &enter_cfg.need_exps,
+        world,
+        online,
+        gates,
+    );
+    // ③ `@改属性` 的佩戴位写 + 203。
+    if let Some(body) =
+        apply_pending_gm_use_item(ground_sessions, chr_name, world, &enter_cfg.catalog)
+    {
+        if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+            if let Some(tx) =
+                route_to_gate(gates, e.gate_idx, e.socket, "脚本 GM 改属性 SM_UPDATEITEM")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: e.socket,
+                    body,
+                });
+            }
+        }
+    }
+    // ④ `@清理垃圾` 的 709（发给目标）。
+    if let Some((target, body)) =
+        apply_pending_gm_clear_bag(ground_sessions, chr_name, &enter_cfg.catalog)
+    {
+        if let Some(e) = online.iter().find(|e| e.chr_name == target) {
+            if let Some(tx) =
+                route_to_gate(gates, e.gate_idx, e.socket, "脚本 GM 清理垃圾 SM_DELITEMS")
+            {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: e.socket,
+                    body,
+                });
+            }
+        }
+    }
+    // ⑤ `@OnHorse`/`@OffHorse` 的 41 视距广播。
+    apply_pending_gm_feature_changed(
+        ground_sessions,
+        chr_name,
+        &enter_cfg.catalog,
+        world,
+        online,
+        gates,
+        enter_cfg.shop.send_ref_msg_range,
+    );
+    // ⑥ `@Reconnection` 的 `RM_RECONNECTION`（唯一排水点 `drain_reconnects`）。
+    if let Some(addr) = ground_sessions
+        .get_mut(chr_name)
+        .and_then(|sg| sg.gm.pending_reconnect.take())
+    {
+        if let Some(e) = online.iter().find(|e| e.chr_name == chr_name) {
+            reconnect_pending.push(ReconnectPending {
+                gate_idx: e.gate_idx,
+                socket: e.socket,
+                chr_name: e.chr_name.clone(),
+                msg: addr.into_bytes(),
+            });
+        }
+    }
+    // ⑦ 族 X2 批 B：vv杀死/复活/VV给予权限/ClearCopyItem/清除仓库密码/删除技能 + 族 F 任务位写。
+    apply_pending_gm_target_ops(
+        ground_sessions,
+        pwd_sessions,
+        saves,
+        world,
+        &enter_cfg.catalog,
+        magic_cfg_of(enter_cfg),
+        displays,
+        online,
+        gates,
+        colors,
+        enter_cfg.shop.send_ref_msg_range,
+        chr_name,
+    );
+    // ⑧ 族 M 刷怪/造物（与世界同一条 RNG 流）。
+    apply_pending_gm_m_commands(
+        ground_sessions,
+        chr_name,
+        world,
+        displays,
+        mon_gen_host,
+        registry,
+        mon_table,
+        &enter_cfg.catalog,
+        &enter_cfg.pet_cfg,
+        online,
+        gates,
+        colors,
+        enter_cfg.test_server,
+        enter_cfg.make_random_add_value,
+        item_number,
+        item_number_ex,
+    );
+    // ⑨ 族 C 城堡/赛事。
+    apply_pending_gm_castle_commands(
+        ground_sessions,
+        chr_name,
+        world,
+        displays,
+        saves,
+        castle_war_states,
+        online,
+        gates,
+        castle_broadcasts,
+    );
+    // ⑩ 族 W 行会。
+    apply_pending_gm_guild_commands(
+        ground_sessions,
+        chr_name,
+        world,
+        guilds,
+        guild_cfg,
+        guild_store,
+        &enter_cfg.guild_sections,
+        i32::from(enter_cfg.server_index),
+        displays,
+        online,
+        gates,
+        colors,
+        world.clock_ms as i32,
+        enter_cfg.shop.send_ref_msg_range,
+    );
+}
+
+/// 命令事件末尾的脚本 GM 收口**入口**（`sim_loop` 与本文件构造级用例共用）。
+///
+/// m4 说明：把「事件末 drain」收敛成一个**命名接缝**，`ScriptBridgeRig::drain` 调本函数 ⇒
+/// 行为用例覆盖到「删掉本函数体内的 drain 调用就红」（见卡面变异证据）。`sim_loop` 对它的
+/// 调用本身仍是结构牙（`sim_loop` 是进程级 tokio 循环，没有单测 harness；把整个
+/// `GateEvent::Command` 臂抽成可单测函数属独立重构，登记为 m4 的剩余面）。
+#[allow(clippy::too_many_arguments)]
+fn command_event_tail_gm_drain(
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    mon_table: &game_svr::mongen::MonsterTable,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
+    guilds: &mut mir2_world::GuildManager,
+    guild_cfg: &mir2_world::GuildConfig,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    colors: &MsgColors,
+    enter_cfg: &EnterConfig,
+    chr_name: &str,
+    reconnect_pending: &mut Vec<ReconnectPending>,
+    castle_broadcasts: &mut Vec<String>,
+    item_number: &mut i32,
+    item_number_ex: &mut i32,
+) {
+    drain_script_gm_pendings(
+        ground_sessions,
+        pwd_sessions,
+        saves,
+        world,
+        displays,
+        online,
+        gates,
+        mon_gen_host,
+        registry,
+        mon_table,
+        castle_war_states,
+        guilds,
+        guild_cfg,
+        guild_store,
+        colors,
+        enter_cfg,
+        chr_name,
+        reconnect_pending,
+        castle_broadcasts,
+        item_number,
+        item_number_ex,
+    );
+}
+
 /// `HUtil32.GetValidStr3(source, ref dest, new[]{" ", "\t"})`（`HUtil32.cs:391-402`）：
 /// `source.Split(div, 2, RemoveEmptyEntries)` ⇒ `dest` = 第一段，返回值 = 第二段（其余原样）。
 ///
@@ -24675,6 +25007,18 @@ fn sim_loop(
                             maps: registry.as_ref(),
                             cfg: &gm_cfg,
                             pwd_sessions: &pwd_sessions,
+                            // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
+                            // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
+                            // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
+                            host: ScriptGmHost::for_event(
+                                &gm_filter_word,
+                                &gm_mission,
+                                &gm_spirit_mutiny_tick,
+                                &saves,
+                                &ground_sessions,
+                                &world,
+                                &chr_name,
+                            ),
                         };
                         handle_eat_cmd(
                             cmd.recog,
@@ -24722,6 +25066,18 @@ fn sim_loop(
                             maps: registry.as_ref(),
                             cfg: &gm_cfg,
                             pwd_sessions: &pwd_sessions,
+                            // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
+                            // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
+                            // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
+                            host: ScriptGmHost::for_event(
+                                &gm_filter_word,
+                                &gm_mission,
+                                &gm_spirit_mutiny_tick,
+                                &saves,
+                                &ground_sessions,
+                                &world,
+                                &chr_name,
+                            ),
                         };
                         // **卡 `openmir2-clearmapmon-impl`**：脚本 `CLEARMAPMON`/`MONGENEX` 的
                         // 世界副作用上下文（刷怪宿主 + 地图注册表 + 模板表 + 展示表）。
@@ -24823,6 +25179,18 @@ fn sim_loop(
                                 maps: registry.as_ref(),
                                 cfg: &gm_cfg,
                                 pwd_sessions: &pwd_sessions,
+                                // **卡 `openmir2-gmexe-bridge-channels`**：固定 NPC 路与商人/
+                                // 点击/组队同一份宿主通道快照（`guilds`/`world` 仍由
+                                // `handle_select` 的形参在调用点重借）。
+                                host: ScriptGmHost::for_event(
+                                    &gm_filter_word,
+                                    &gm_mission,
+                                    &gm_spirit_mutiny_tick,
+                                    &saves,
+                                    &ground_sessions,
+                                    &world,
+                                    &chr_name,
+                                ),
                             }),
                             // `SENDMSG 0-3` 的全服扇出正文（`handle_select` 排水后取走并扇出）。
                             broadcasts: Vec::new(),
@@ -24892,6 +25260,18 @@ fn sim_loop(
                             maps: registry.as_ref(),
                             cfg: &gm_cfg,
                             pwd_sessions: &pwd_sessions,
+                            // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
+                            // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
+                            // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
+                            host: ScriptGmHost::for_event(
+                                &gm_filter_word,
+                                &gm_mission,
+                                &gm_spirit_mutiny_tick,
+                                &saves,
+                                &ground_sessions,
+                                &world,
+                                &chr_name,
+                            ),
                         };
                         // **卡 `openmir2-clearmapmon-impl`**：脚本 `CLEARMAPMON`/`MONGENEX` 的
                         // 世界副作用上下文（刷怪宿主 + 地图注册表 + 模板表 + 展示表）。
@@ -25002,6 +25382,18 @@ fn sim_loop(
                             maps: registry.as_ref(),
                             cfg: &gm_cfg,
                             pwd_sessions: &pwd_sessions,
+                            // **卡 `openmir2-gmexe-bridge-channels`**：六组宿主通道 + 面前格
+                            // 目标快照（`saves`/`ground_sessions`/`world` 随后会被 handler
+                            // `&mut` 借走 ⇒ 在事件入口按同值取快照，见 `ScriptGmHost`）。
+                            host: ScriptGmHost::for_event(
+                                &gm_filter_word,
+                                &gm_mission,
+                                &gm_spirit_mutiny_tick,
+                                &saves,
+                                &ground_sessions,
+                                &world,
+                                &chr_name,
+                            ),
                         };
                         handle_party_cmd(
                             cmd.ident,
@@ -25133,6 +25525,43 @@ fn sim_loop(
                             },
                         );
                     }
+                    // **卡 `openmir2-gmexe-bridge-channels`**：脚本 `GMEXECUTE` 的 `pending_*`
+                    // 收口。三处脚本接缝（商人/QFunction/组队）与固定 NPC 路都把脚本期移出的
+                    // 会话 GM 态原样放回 `SessionGround.gm`；脚本桥注入六组通道后命令体与客户端
+                    // 直呼一样只装 `pending_*` ⇒ 在**每个命令事件末尾**对说话者做一次与
+                    // `CM_SAY` 支同序的落地。`apply_pending_*` 全是 `take()` 语义 ⇒ `CM_SAY`
+                    // 已在支内落地的项在此为 no-op（帧序不变）。
+                    //
+                    // **m2 不变式（与本支 CM_SAY 的 `gm_drain_gate` 同序）**：`CM_SAY` 支用
+                    // `gm_drain_gate` 只让 `@` 行排水，是为了不让**陈旧** pending 被一条普通聊天
+                    // 顺带发出。本调用对所有 `GateEvent::Command` 无条件跑，成立的前提是
+                    // **每条脚本接缝必须在同一事件内把移出的 `sg.gm` 原样放回**（商人/QFunction/
+                    // 组队/固定 NPC 均如此）且 `execute()` 入口清空全部 `pending_*` ⇒ 事件末不会
+                    // 出现跨事件的陈旧值。新增任何「取出 `sg.gm` 后提前 return / 不归还」的脚本
+                    // 路径都会破坏该前提，必须同时在这里补门控或归还（review m2）。
+                    command_event_tail_gm_drain(
+                        &mut ground_sessions,
+                        &mut pwd_sessions,
+                        &mut saves,
+                        &mut world,
+                        &mut displays,
+                        &online,
+                        &gates,
+                        mon_gen_host.as_mut(),
+                        registry.as_ref(),
+                        &enter_cfg.mon_gen.table,
+                        &castle_war_states,
+                        &mut guilds,
+                        &guild_cfg,
+                        guild_store.as_ref(),
+                        &colors,
+                        &enter_cfg,
+                        &chr_name,
+                        &mut reconnect_pending,
+                        &mut pending_gm_castle_broadcasts,
+                        &mut item_number,
+                        &mut item_number_ex,
+                    );
                 }
                 GateEvent::CertificationPending { index, ip } => {
                     glog!(
@@ -35212,6 +35641,8 @@ mod tests {
             maps: None,
             cfg: &cfg,
             pwd_sessions: &pwd,
+            // 未装配宿主通道（退化兜底形态；卡 `openmir2-gmexe-bridge-channels` 前的行为）。
+            host: ScriptGmHost::default(),
         };
         rig.dlg_select_with_gm("@main", Some(&env));
         let frames = rig.drain();
@@ -35267,6 +35698,8 @@ mod tests {
             maps: None,
             cfg: &cfg,
             pwd_sessions: &pwd,
+            // 未装配宿主通道（退化兜底形态；卡 `openmir2-gmexe-bridge-channels` 前的行为）。
+            host: ScriptGmHost::default(),
         };
         assert!(rig.click_with_gm(Some(&env)), "点击必须命中商人");
         let frames = rig.drain();
@@ -43309,6 +43742,7 @@ break
                 maps: None,
                 cfg: &cfg,
                 pwd_sessions: &pwd,
+                host: ScriptGmHost::default(),
             }),
         );
         let frames = f.drain();
@@ -43470,6 +43904,7 @@ break
                 maps: None,
                 cfg: &cfg,
                 pwd_sessions: &pwd,
+                host: ScriptGmHost::default(),
             }),
         );
         assert_eq!(
@@ -43527,6 +43962,7 @@ break
                 maps: None,
                 cfg: &cfg,
                 pwd_sessions: &pwd,
+                host: ScriptGmHost::default(),
             }),
         );
         assert!(
@@ -47342,6 +47778,8 @@ SendRefMsgRange=15
             maps: None,
             cfg: &cfg,
             pwd_sessions: &pwd,
+            // 未装配宿主通道（退化兜底形态；卡 `openmir2-gmexe-bridge-channels` 前的行为）。
+            host: ScriptGmHost::default(),
         };
         handle_eat_cmd(
             make_index,
@@ -61245,6 +61683,8 @@ SendRefMsgRange=15
             maps: None,
             cfg: &cfg,
             pwd_sessions: &pwd,
+            // 未装配宿主通道（退化兜底形态；卡 `openmir2-gmexe-bridge-channels` 前的行为）。
+            host: ScriptGmHost::default(),
         };
         let eat = |make_index: i32,
                    sessions: &mut HashMap<String, SessionGround>,
@@ -61472,6 +61912,8 @@ SendRefMsgRange=15
             maps: None,
             cfg: &cfg,
             pwd_sessions: &pwd,
+            // 未装配宿主通道（退化兜底形态；卡 `openmir2-gmexe-bridge-channels` 前的行为）。
+            host: ScriptGmHost::default(),
         };
         handle_eat_cmd(
             1001,
@@ -76666,6 +77108,7 @@ GMEXECUTE f
                 maps: None,
                 cfg: &cfg,
                 pwd_sessions: &pwd,
+                host: ScriptGmHost::default(),
             }),
         );
         let frames = f.drain();
@@ -76893,6 +77336,8 @@ GMEXECUTE f
             maps: None,
             cfg: &cfg,
             pwd_sessions: &pwd,
+            // 未装配宿主通道（退化兜底形态；卡 `openmir2-gmexe-bridge-channels` 前的行为）。
+            host: ScriptGmHost::default(),
         };
         run_party_goto_label(
             "@GroupCreate",
@@ -82124,6 +82569,716 @@ fn ",
         let mut c = mir2_shared::rng::RandomNumber::with_seed(SEED);
         let _ = c.random_below(16);
         assert_eq!(c.random_below(200), 165, "200 侧字面量（对照）");
+    }
+    // ==================== 脚本 GMEXECUTE 桥宿主通道（卡 `openmir2-gmexe-bridge-channels`）====================
+
+    /// 脚本桥夹具：32×32 全零地图（逻辑名 `map` ⇒ map_id 0）+ 刷怪宿主（`mob`）+ 玩家
+    /// `hero`（ActorId=1，`ai.dir=2` ⇒ 面前格 (6,5)）+ 前方活人 `victim` + 会话/存档/收帧
+    /// 通道 + 进程级全局单元（`FilterWord`/`Mission`/`SpiritMutinyTick`）。
+    struct ScriptBridgeRig {
+        fx: ClearMapRegistry,
+        world: mir2_world::World,
+        mon_host: game_svr::mongen::MonGenHost,
+        table: game_svr::mongen::MonsterTable,
+        displays: downlink::DisplayTable,
+        sessions: HashMap<String, SessionGround>,
+        saves: HashMap<String, SavedHuman>,
+        online: OnlineRegistry,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        guilds: mir2_world::GuildManager,
+        guild_cfg: mir2_world::GuildConfig,
+        colors: MsgColors,
+        enter_cfg: EnterConfig,
+        filter_word: std::cell::Cell<bool>,
+        mission: std::cell::RefCell<gmcmd::GmMissionState>,
+        spirit_mutiny_tick: std::cell::Cell<i64>,
+        actor: i32,
+        victim: i32,
+        item_number: i32,
+        item_number_ex: i32,
+    }
+
+    impl ScriptBridgeRig {
+        fn new() -> Self {
+            let fx = clear_map_registry("map");
+            let mut world = mir2_world::World::new(32, 32);
+            world.rng = mir2_shared::rng::RandomNumber::with_seed(2026_1031);
+            let mut hero = mir2_world::Entity::new(1, "hero", 5, 5);
+            hero.race = mir2_world::ACTOR_RACE_PLAY;
+            hero.ai.dir = 2; // `Direction.Right` ⇒ 面前格 (x+1, y) = (6,5)
+            let actor = world.add_entity(hero);
+            let mut victim = mir2_world::Entity::new(2, "victim", 6, 5);
+            victim.race = mir2_world::ACTOR_RACE_PLAY;
+            let victim = world.add_entity(victim);
+            let table =
+                game_svr::mongen::MonsterTable::new(vec![m_monster_row("mob", 80, 5, 10, 100)]);
+            let entries = vec![mir2_world::mongen::MonGenEntry::new(
+                "map", 5, 5, "mob", 1, 1, 0, 0,
+            )];
+            let mon_host = game_svr::mongen::MonGenHost::start(
+                entries,
+                &table,
+                false,
+                mir2_world::mongen::MonGenConfig::default(),
+                &mut world.rng,
+            );
+            let mut sessions = HashMap::new();
+            let mut sg = test_session_ground(actor);
+            sg.gm.permission = 10;
+            sg.state.wabil.weight = 0;
+            sg.state.wabil.max_weight = 10_000;
+            sessions.insert("hero".to_string(), sg);
+            let mut saves = HashMap::new();
+            for (name, account) in [("hero", "h"), ("victim", "v")] {
+                saves.insert(
+                    name.to_string(),
+                    SavedHuman {
+                        account: account.to_string(),
+                        record: record::PlayerRecord::default(),
+                        enter_map: "0".to_string(),
+                        derived: None,
+                    },
+                );
+            }
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(&mut online, entry("h", "hero", 1, 0, 901, actor));
+            online_set(&mut online, entry("v", "victim", 2, 0, 902, victim));
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates = HashMap::new();
+            gates.insert(0, tx);
+            // `@Level0` 的 `HasLevelUp` 读 `Config.NeedExps[nLevel]`（`get_level_exp` 直接下标）
+            // ⇒ 夹具必须给足长度（生产来自 `Exps.conf`）。
+            let mut enter_cfg = EnterConfig::for_test(strings::parse(b"[String]\n"));
+            enter_cfg.need_exps = vec![1000; mir2_data::models::MAX_LEVEL as usize + 1];
+            Self {
+                fx,
+                world,
+                mon_host,
+                table,
+                displays: downlink::DisplayTable::new(),
+                sessions,
+                saves,
+                online,
+                gates,
+                rx,
+                guilds: mir2_world::GuildManager::new(),
+                guild_cfg: mir2_world::GuildConfig::default(),
+                colors: w_colors(),
+                enter_cfg,
+                filter_word: std::cell::Cell::new(true),
+                mission: std::cell::RefCell::new(gmcmd::GmMissionState::default()),
+                spirit_mutiny_tick: std::cell::Cell::new(0),
+                actor,
+                victim,
+                item_number: 1000,
+                item_number_ex: 1_073_741_872,
+            }
+        }
+
+        /// 经**脚本桥**执行一行 `@…`：等价 `ActionOfGmExecute` → `ProcessUserLineMsg`
+        /// （脚本动作把 `Permission` 临时抬到 10，`NpcGm.GmWorld` 由 [`ScriptGmEnv::bridge`]
+        /// 装配）。`wired=false` ⇒ 用未装配的 [`ScriptGmHost::default`]（退化兜底形态）。
+        fn run_with_host(&mut self, line: &str, wired: bool) -> gmcmd::GmResult {
+            let cfg = gmcmd::GmConfig::default();
+            let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+            let host = if wired {
+                ScriptGmHost::for_event(
+                    &self.filter_word,
+                    &self.mission,
+                    &self.spirit_mutiny_tick,
+                    &self.saves,
+                    &self.sessions,
+                    &self.world,
+                    "hero",
+                )
+            } else {
+                ScriptGmHost::default()
+            };
+            let env = ScriptGmEnv {
+                guilds: &self.guilds,
+                maps: Some(&self.fx.registry),
+                cfg: &cfg,
+                pwd_sessions: &pwd,
+                host,
+            };
+            let mut sess = std::mem::take(&mut self.sessions.get_mut("hero").unwrap().gm);
+            sess.permission = 10; // `ActionOfGmExecute` 的 `PermissionGuard`
+            let r = {
+                let bridge = env.bridge(&mut sess, &self.world, "hero", self.actor);
+                gmcmd::execute(bridge.sess, bridge.cfg, &bridge.world, line)
+            };
+            self.sessions.get_mut("hero").unwrap().gm = sess;
+            r
+        }
+
+        fn run(&mut self, line: &str) -> gmcmd::GmResult {
+            self.run_with_host(line, true)
+        }
+
+        /// 命令事件末尾的宿主收口（与 `sim_loop` 调用的**同一个入口函数**）。
+        /// 返回重连队列/城堡广播正文（构造级用例按需断言）。
+        fn drain(&mut self) -> ScriptDrainOutcome {
+            let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+            let mut reconnect_pending = Vec::new();
+            let mut castle_broadcasts = Vec::new();
+            let castle_war_states = HashMap::new();
+            command_event_tail_gm_drain(
+                &mut self.sessions,
+                &mut pwd_sessions,
+                &mut self.saves,
+                &mut self.world,
+                &mut self.displays,
+                &self.online,
+                &self.gates,
+                Some(&mut self.mon_host),
+                Some(&self.fx.registry),
+                &self.table,
+                &castle_war_states,
+                &mut self.guilds,
+                &self.guild_cfg,
+                None,
+                &self.colors,
+                &self.enter_cfg,
+                "hero",
+                &mut reconnect_pending,
+                &mut castle_broadcasts,
+                &mut self.item_number,
+                &mut self.item_number_ex,
+            );
+            ScriptDrainOutcome {
+                reconnect: reconnect_pending,
+            }
+        }
+
+        /// 取本夹具网关通道里的所有帧（按发出顺序）。
+        fn frames(&mut self) -> Vec<Vec<u8>> {
+            let mut out = Vec::new();
+            while let Ok(msg) = self.rx.try_recv() {
+                match msg {
+                    SimToGate::SendFrame { body, .. } => out.push(body),
+                    other => panic!("脚本 GM 收口不得发非帧消息：{other:?}"),
+                }
+            }
+            out
+        }
+    }
+
+    /// 事件末收口的可观察产物（构造级用例读重连队列）。
+    #[derive(Debug, Default)]
+    struct ScriptDrainOutcome {
+        reconnect: Vec<ReconnectPending>,
+    }
+
+    /// **A1/A2（六组通道之一：全局单元）**：脚本桥注入 `FilterWord`/`Mission`/`SpiritMutinyTick`
+    /// 后，`@DisableFilter`/`@Mission`/`@祈祷生效`/`@停止叛变` 经 `GMEXECUTE` 路径产生**真副作用**
+    /// （进程级单元被写），而不是 `log_note` 退化零帧。
+    ///
+    /// 变异红：删 `for_event` 的任一全局单元注入 ⇒ 对应用例段 `log_note.is_some()` 红。
+    #[test]
+    fn script_bridge_injects_global_units_filter_mission_spirit() {
+        let mut rig = ScriptBridgeRig::new();
+        // @DisableFilter：`SystemShare.FilterWord` 翻转（部署启动 true）。
+        assert!(rig.filter_word.get());
+        let r = rig.run("@DisableFilter");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "装配后不得走退化：{:?}", r.log_note);
+        assert!(!rig.filter_word.get(), "脚本桥必须真翻转全局 FilterWord");
+        let _ = rig.run("@DisableFilter");
+        assert!(rig.filter_word.get(), "第二敲翻回 true");
+        // @Mission：写全局四元（图名取说话者当前图）+ 绿字。
+        let r = rig.run("@Mission 100 200");
+        assert!(r.log_note.is_none(), "装配后不得退化：{:?}", r.log_note);
+        assert_eq!(r.msgs.len(), 1, "足参 ⇒ 一条绿字");
+        {
+            let m = rig.mission.borrow();
+            assert!(m.bo_mission, "BoMission 必须置真");
+            assert_eq!(m.mission_map, "map", "地图名取说话者当前图");
+            assert_eq!((m.mission_x, m.mission_y), (100, 200));
+        }
+        // @祈祷生效 / @停止叛变：写 `SystemShare.SpiritMutinyTick`。
+        let r = rig.run("@祈祷生效 30");
+        assert!(r.log_note.is_none(), "装配后不得退化：{:?}", r.log_note);
+        assert_eq!(
+            rig.spirit_mutiny_tick.get(),
+            rig.world.clock_ms + 30_000,
+            "tick = now + 参数秒*1000"
+        );
+        let r = rig.run("@停止叛变");
+        assert!(r.log_note.is_none(), "装配后不得退化：{:?}", r.log_note);
+        assert_eq!(rig.spirit_mutiny_tick.get(), 0, "停止叛变清零");
+    }
+
+    /// **A3（退化兜底必须保留）**：同一批命令在**未装配** [`ScriptGmHost`] 时仍走原退化形态
+    /// （`log_note` 登记、零帧、不写全局）——脚本桥未接线/测试夹具的行为不回归。
+    ///
+    /// 变异红：删命令体的 `None` 退化分支（改成按全零伪造写）⇒ 本用例红。
+    #[test]
+    fn script_bridge_unwired_keeps_degenerate_fallbacks() {
+        let mut rig = ScriptBridgeRig::new();
+        let mission_before = rig.mission.borrow().clone();
+        let r = rig.run_with_host("@Mission 100 200", false);
+        assert!(r.msgs.is_empty(), "未装配 ⇒ 退化零帧");
+        assert!(r.log_note.is_some(), "退化必须留痕（不静默伪造写）");
+        assert_eq!(*rig.mission.borrow(), mission_before, "不得写全局四元");
+        let r = rig.run_with_host("@DisableFilter", false);
+        assert!(r.log_note.is_some(), "退化必须留痕");
+        assert!(rig.filter_word.get(), "未装配 ⇒ 不得翻转全局位");
+        let r = rig.run_with_host("@祈祷生效 30", false);
+        assert!(r.log_note.is_some(), "退化必须留痕");
+        assert_eq!(rig.spirit_mutiny_tick.get(), 0, "未装配 ⇒ 不得写 tick");
+        let r = rig.run_with_host("@setflag victim 5 1", false);
+        assert!(r.log_note.is_some(), "quests 未装配 ⇒ 退化留痕");
+        assert!(
+            rig.sessions["hero"].gm.pending_quest.is_none(),
+            "未装配 ⇒ 不得装 pending（防陈旧写）"
+        );
+        let r = rig.run_with_host("@MobPlace 3 4 mob 1", false);
+        assert!(r.log_note.is_some(), "m_host=false ⇒ 退化留痕");
+        assert!(
+            rig.sessions["hero"].gm.pending_spawn.is_none(),
+            "未装配 ⇒ 不得装刷怪 pending"
+        );
+    }
+
+    /// **A2（quests 通道）**：脚本桥注入会话任务位阵快照后，`@setflag` 经 `GMEXECUTE` 走真
+    /// 路径（命令体装 `pending_quest`）⇒ 宿主收口把**调用者**位阵落进 `saves`（oracle 怪癖：
+    /// 写调用者，不写目标）。
+    #[test]
+    fn script_bridge_quests_write_caller_flags_through_host_drain() {
+        let mut rig = ScriptBridgeRig::new();
+        let r = rig.run("@setflag victim 5 1");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "装配后不得退化：{:?}", r.log_note);
+        assert!(
+            rig.sessions["hero"].gm.pending_quest.is_some(),
+            "命令体必须装 pending_quest（真路径）"
+        );
+        rig.drain();
+        assert!(
+            rig.sessions["hero"].gm.pending_quest.is_none(),
+            "落地即清（一次性）"
+        );
+        let flag = rig.saves["hero"]
+            .record
+            .data
+            .quest_flag
+            .as_ref()
+            .expect("写后必须建 128B 位阵");
+        assert_eq!(flag.len(), 128, "oracle `new byte[128]`");
+        let mut arr = [0u8; 128];
+        arr.copy_from_slice(flag);
+        let bits = mir2_script::engine::quest_state::QuestBitmap::from_bytes(arr);
+        assert_eq!(bits.get(5), 1, "调用者 hero 的 QuestFlag 位 5 = ON");
+        assert!(
+            rig.saves["victim"].record.data.quest_flag.is_none(),
+            "写调用者，不写目标（oracle 怪癖）"
+        );
+    }
+
+    /// **A2（m_host + mission 通道）**：脚本桥注入 `mission` + `m_host` 后，`@MobPlace` 经
+    /// `GMEXECUTE` 走真路径（命令体装 `pending_spawn`）⇒ 宿主收口**真刷出怪**。
+    #[test]
+    fn script_bridge_m_host_mobplace_spawns_real_monster() {
+        let mut rig = ScriptBridgeRig::new();
+        let before = rig.world.entities.len();
+        let r = rig.run("@Mission 3 4");
+        assert!(
+            r.log_note.is_none(),
+            "@Mission 必须先落地：{:?}",
+            r.log_note
+        );
+        let r = rig.run("@MobPlace 3 4 mob 2");
+        assert!(r.found, "命令必须命中");
+        assert!(
+            r.log_note.is_none(),
+            "m_host 装配后不得退化：{:?}",
+            r.log_note
+        );
+        assert!(
+            rig.sessions["hero"].gm.pending_spawn.is_some(),
+            "命令体必须装 pending_spawn（真路径）"
+        );
+        rig.drain();
+        assert_eq!(
+            rig.world.entities.len(),
+            before + 2,
+            "@MobPlace 2 只 ⇒ 世界真新增 2 个实体"
+        );
+        assert_eq!(
+            rig.world
+                .entities
+                .iter()
+                .filter(|e| e.name == "mob")
+                .count(),
+            2,
+            "刷出的实体名必须是被请求的怪"
+        );
+    }
+
+    /// **A2（caller_guild + m_host 通道）**：脚本桥注入说话者 `MyGuild/GuildRankNo` 后，
+    /// `@退出门派` 经 `GMEXECUTE` 过门（装 `pending_end_guild`）⇒ 宿主收口 `DelMember` 真落地。
+    #[test]
+    fn script_bridge_caller_guild_ends_guild_through_host_drain() {
+        let mut rig = ScriptBridgeRig::new();
+        assert!(rig.guilds.add_guild("测试会", "boss", &rig.guild_cfg));
+        rig.guilds
+            .find_guild_mut("测试会")
+            .unwrap()
+            .add_member("hero", &rig.guild_cfg.clone(), 0);
+        {
+            let sg = rig.sessions.get_mut("hero").unwrap();
+            sg.guild.guild_name = Some("测试会".into());
+            sg.guild.rank_no = 2; // 非掌门（>1）⇒ 允许退会
+        }
+        let r = rig.run("@退出门派");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "装配后不得退化：{:?}", r.log_note);
+        assert!(
+            r.msgs.is_empty(),
+            "成功支零 SysMsg（帧由收口发）：{:?}",
+            r.msgs
+        );
+        assert!(
+            rig.sessions["hero"].gm.pending_end_guild.is_some(),
+            "命令体必须装 pending_end_guild（真路径）"
+        );
+        rig.drain();
+        assert!(
+            !rig.guilds.find_guild("测试会").unwrap().is_member("hero"),
+            "宿主收口必须 DelMember"
+        );
+        assert!(
+            rig.sessions["hero"].guild.guild_name.is_none(),
+            "MyGuild=null ⇒ 会话清空"
+        );
+    }
+
+    /// **A2（pose_target 通道）**：脚本桥注入 `GetPoseCreate()` 目标名后，`@vv杀死` 无参支经
+    /// `GMEXECUTE` 命中面前格活人（`pending_gm_die`）⇒ 宿主收口入队 `World::kill`，tick 后死亡。
+    #[test]
+    fn script_bridge_pose_target_feeds_vvkill_face_branch() {
+        let mut rig = ScriptBridgeRig::new();
+        let victim_id = rig.victim;
+        let r = rig.run("@vv杀死");
+        assert!(r.found, "命令必须命中");
+        assert!(
+            r.msgs.is_empty(),
+            "面前有人 ⇒ 零回帧（Die 支）；实得 {:?}",
+            r.msgs
+        );
+        assert!(
+            rig.sessions["hero"].gm.pending_gm_die.is_some(),
+            "命令体必须装 pending_gm_die（真路径）"
+        );
+        rig.drain();
+        for _ in 0..4 {
+            rig.world.tick();
+        }
+        assert!(
+            rig.world.entities.get(victim_id).unwrap().death,
+            "面前格实体必须被杀死（注入链命中的真副作用）"
+        );
+        // 前方无人（victim 已死 ⇒ `!death` 过滤）⇒ 红面对面失败。
+        let r = rig.run("@vv杀死");
+        assert_eq!(r.msgs.len(), 1, "前方无人 ⇒ 恰一条红字");
+        assert_eq!(
+            r.msgs[0].text,
+            "命令使用方法不正确，必须与角色面对面站好!!!"
+        );
+    }
+
+    /// **I1（review reviewer-20 required）**：脚本桥 drain **步骤①**
+    /// （`apply_pending_gm_entity`）的构造级牙——卡面 A2 点名的 `@允许天地合一` 经
+    /// `GMEXECUTE`：命令体翻转会话位并装 `pending_entity`；事件末收口把权威
+    /// `Entity.allow_group_re_call` 写穿，且该字段随存档记录写出
+    /// （`characters.AllowGroupReCall`）。
+    ///
+    /// 变异红：注释掉 drain 步骤① 的 `apply_pending_gm_entity` 调用 ⇒ drain 后实体仍 false、
+    /// `pending_entity` 仍在（本用例红）。
+    #[test]
+    fn script_bridge_allow_group_recall_writes_entity_and_record() {
+        let mut rig = ScriptBridgeRig::new();
+        let r = rig.run("@允许天地合一");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "装配后不得退化：{:?}", r.log_note);
+        assert_eq!(r.msgs.len(), 1, "回执一条绿字");
+        assert_eq!(r.msgs[0].text, gmcmd::ALLOW_GROUP_ON);
+        assert!(
+            rig.sessions["hero"].gm.allow_group_re_call,
+            "命令体翻转会话位（读自 characters.AllowGroupReCall 的缺省 false）"
+        );
+        assert!(
+            rig.sessions["hero"].gm.pending_entity.is_some(),
+            "命令体必须装 pending_entity（真路径）"
+        );
+        rig.drain();
+        assert!(
+            rig.sessions["hero"].gm.pending_entity.is_none(),
+            "收口一次性取走"
+        );
+        assert!(
+            rig.world
+                .entities
+                .get(rig.actor)
+                .unwrap()
+                .allow_group_re_call,
+            "drain 步骤① 必须把权威 Entity 写穿"
+        );
+        // `characters.AllowGroupReCall` 的存档源 = `EntityDerived`（`build_save_record` 的
+        // `rec.data.allow_group_re_call = d.allow_group_re_call`）⇒ 断言该接缝已采集真值；
+        // 实体 → 记录的最终写库断言见既有 `w_allow_group_recall_persists_to_record`。
+        let derived = entity_derived_snapshot(rig.world.entities.get(rig.actor).unwrap());
+        assert!(
+            derived.allow_group_re_call,
+            "EntityDerived 必须采集 allow_group_re_call（characters.AllowGroupReCall 的存档源）"
+        );
+    }
+
+    /// **m1 · drain 步骤②（`apply_pending_level_up`）脚本桥独立牙**：
+    /// `@Level0 60` 经 `GMEXECUTE` 装 `pending_level_up`；事件末收口落会话等级 + 权威实体等级
+    /// + `HasLevelUp` 三帧。
+    ///
+    /// 变异红：注释掉 drain 步骤② ⇒ 会话等级仍 1、`pending_level_up` 仍在、零帧。
+    #[test]
+    fn script_bridge_drain_level0_lands_level_and_frames() {
+        let mut rig = ScriptBridgeRig::new();
+        let r = rig.run("@Level0 60");
+        assert!(r.found, "命令必须命中");
+        assert!(
+            rig.sessions["hero"].gm.pending_level_up.is_some(),
+            "命令体必须装 pending_level_up"
+        );
+        assert!(
+            rig.sessions["hero"]
+                .gm
+                .pending_entity
+                .as_ref()
+                .is_some_and(|e| e.level == Some(60)),
+            "命令体同时装 pending_entity.level"
+        );
+        rig.drain();
+        assert_eq!(
+            rig.sessions["hero"].equip.abil.level, 60,
+            "drain 步骤② 必须落会话等级（Abil.Level 源）"
+        );
+        assert_eq!(
+            rig.world.entities.get(rig.actor).unwrap().level,
+            60,
+            "权威实体等级"
+        );
+        assert!(
+            rig.sessions["hero"].gm.pending_level_up.is_none(),
+            "落地即清"
+        );
+        let idents: Vec<u16> = rig.frames().iter().map(|b| hdr(b.as_slice()).0).collect();
+        assert!(
+            !idents.is_empty(),
+            "HasLevelUp(1) 必须下发等级帧（45/52/752），实得 {idents:?}"
+        );
+    }
+
+    /// **m1 · drain 步骤③（`apply_pending_gm_use_item`）脚本桥独立牙**：
+    /// `@改属性 3 2 15` 经 `GMEXECUTE` 装 `pending_use_item`；事件末收口把 `Desc[2]=15`
+    /// 落到会话佩戴位（本夹具不跑组队 seam，故只可能由 drain 步骤③ 落地）。
+    ///
+    /// 变异红：注释掉 drain 步骤③ ⇒ `Desc[2]` 仍 0、`pending_use_item` 仍在。
+    #[test]
+    fn script_bridge_drain_smake_lands_use_item_write() {
+        let mut rig = ScriptBridgeRig::new();
+        // 命令体读的是**世界实体**的佩戴位（`GmWorld.self_use_item`）；收口落的是**会话**
+        // 佩戴位（oracle 里是同一个 `PlayObject`，本仓两份同源）。
+        let slot = mir2_world::entity::UseItemSlot {
+            make_index: 7,
+            index: 1,
+            dura: 100,
+            dura_max: 200,
+            desc: [0; 14],
+        };
+        rig.world.entities.get_mut(rig.actor).unwrap().use_items[3] = slot;
+        rig.sessions.get_mut("hero").unwrap().use_items[3] = Some(game_svr::bag::BagItem {
+            make_index: 7,
+            index: 1,
+            dura: 100,
+            dura_max: 200,
+            desc: [0; 14],
+        });
+        let r = rig.run("@改属性 3 2 15");
+        assert!(r.found, "命令必须命中");
+        assert_eq!(r.msgs.len(), 1, "蓝字回执");
+        assert!(
+            rig.sessions["hero"].gm.pending_use_item.is_some(),
+            "命令体必须装 pending_use_item"
+        );
+        rig.drain();
+        let item = rig.sessions["hero"].use_items[3]
+            .as_ref()
+            .expect("佩戴位仍在");
+        assert_eq!(item.desc[2], 15, "drain 步骤③ 必须落 Desc[2]");
+        assert_eq!(item.desc[9], 1, "升级次数 +1（命令体已算）");
+        assert!(
+            rig.sessions["hero"].gm.pending_use_item.is_none(),
+            "落地即清"
+        );
+    }
+
+    /// **m1 · drain 步骤④（`apply_pending_gm_clear_bag`）脚本桥独立牙**：
+    /// `@清理垃圾 hero` 经 `GMEXECUTE` 装 `pending_clear_bag`；事件末收口清空目标背包并下发
+    /// `SM_DELITEMS(709)`。
+    ///
+    /// 变异红：注释掉 drain 步骤④ ⇒ 背包仍在、零帧。
+    #[test]
+    fn script_bridge_drain_clearbag_lands_delitems() {
+        let mut rig = ScriptBridgeRig::new();
+        rig.sessions
+            .get_mut("hero")
+            .unwrap()
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem {
+                make_index: 11,
+                index: 1,
+                dura: 0,
+                dura_max: 0,
+                desc: [0; 14],
+            });
+        let r = rig.run("@清理垃圾 hero");
+        assert!(r.found, "命令必须命中");
+        assert_eq!(
+            rig.sessions["hero"].gm.pending_clear_bag.as_deref(),
+            Some("hero"),
+            "存的是实体规范名"
+        );
+        rig.drain();
+        assert!(
+            rig.sessions["hero"].state.item_list.is_empty(),
+            "drain 步骤④ 必须清空目标背包"
+        );
+        assert!(
+            rig.frames()
+                .iter()
+                .any(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_DELITEMS),
+            "必须下发 SM_DELITEMS(709)"
+        );
+    }
+
+    /// **m1 · drain 步骤⑤（`apply_pending_gm_feature_changed`）脚本桥独立牙**：
+    /// `@OffHorse` 经 `GMEXECUTE` 置 `pending_feature_changed`；事件末收口广播
+    /// `SM_FEATURECHANGED(41)`。
+    ///
+    /// 变异红：注释掉 drain 步骤⑤ ⇒ pending 仍在、零 41 帧。
+    #[test]
+    fn script_bridge_drain_feature_changed_broadcasts() {
+        let mut rig = ScriptBridgeRig::new();
+        rig.sessions.get_mut("hero").unwrap().gm.on_horse = true;
+        let r = rig.run("@OffHorse");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "下马支零登记");
+        assert!(
+            rig.sessions["hero"].gm.pending_feature_changed,
+            "命令体置 pending_feature_changed"
+        );
+        rig.drain();
+        assert!(!rig.sessions["hero"].gm.pending_feature_changed, "落地即清");
+        assert!(
+            rig.frames()
+                .iter()
+                .any(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_FEATURECHANGED),
+            "必须广播 SM_FEATURECHANGED(41)"
+        );
+    }
+
+    /// **m1 · drain 步骤⑥（`pending_reconnect` → `ReconnectPending`）脚本桥独立牙**：
+    /// `@Reconnection 127.0.0.1 7200` 经 `GMEXECUTE` 装 `pending_reconnect`；事件末收口把它
+    /// 推进 `drain_reconnects` 的唯一队列。
+    ///
+    /// 变异红：注释掉 drain 步骤⑥ ⇒ 队列为空、pending 仍在。
+    #[test]
+    fn script_bridge_drain_reconnect_enqueues() {
+        let mut rig = ScriptBridgeRig::new();
+        let r = rig.run("@Reconnection 127.0.0.1 7200");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "足参零登记");
+        assert_eq!(
+            rig.sessions["hero"].gm.pending_reconnect.as_deref(),
+            Some("127.0.0.1/7200")
+        );
+        let out = rig.drain();
+        assert!(
+            rig.sessions["hero"].gm.pending_reconnect.is_none(),
+            "落地即清"
+        );
+        assert_eq!(out.reconnect.len(), 1, "drain 步骤⑥ 必须入重连队列");
+        assert_eq!(out.reconnect[0].socket, 901);
+        assert_eq!(
+            out.reconnect[0].msg.as_slice(),
+            b"127.0.0.1/7200".as_slice()
+        );
+    }
+
+    /// **m1 · drain 步骤⑨（`apply_pending_gm_castle_commands`）脚本桥独立牙**：
+    /// `@SabukWallGold 沙巴克 x= 500` 经 `GMEXECUTE` 装 `pending_sbk_gold`；事件末收口写
+    /// `Castle.TotalGold`。
+    ///
+    /// 变异红：注释掉 drain 步骤⑨ ⇒ TotalGold 仍 0、pending 仍在。
+    #[test]
+    fn script_bridge_drain_castle_gold_lands() {
+        let mut rig = ScriptBridgeRig::new();
+        rig.world.castles.push(mir2_world::UserCastle::new(
+            "沙巴克",
+            mir2_world::CastleSiegeConfig::default(),
+        ));
+        let r = rig.run("@SabukWallGold 沙巴克 x= 500");
+        assert!(r.found, "命令必须命中");
+        assert!(r.log_note.is_none(), "三参足 ⇒ 零登记");
+        assert!(
+            rig.sessions["hero"].gm.pending_sbk_gold.is_some(),
+            "命令体必须装 pending_sbk_gold"
+        );
+        rig.drain();
+        assert!(
+            rig.sessions["hero"].gm.pending_sbk_gold.is_none(),
+            "落地即清"
+        );
+        assert_eq!(
+            rig.world.castles[0].total_gold, 500,
+            "drain 步骤⑨ 必须写 Castle.TotalGold"
+        );
+    }
+
+    /// 接线结构牙（m4 加强）：`sim_loop` 必须恰好一处调用事件末收口**入口**
+    /// [`command_event_tail_gm_drain`]；该入口体内的 drain 调用由本文件的构造级用例行为覆盖
+    /// （`ScriptBridgeRig::drain` 调同一入口 ⇒ 删掉入口体内的调用 ⇒ 步骤①-⑩ 用例红）。
+    ///
+    /// 剩余面（登记 m4）：`sim_loop` 是进程级 tokio 循环、无单测 harness，因此「删掉
+    /// `sim_loop` 这一行调用」仍由本结构牙兜住，不是行为红；把整个 `GateEvent::Command` 臂
+    /// 抽成可单测函数属独立重构。
+    #[test]
+    fn script_gm_event_tail_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let tests_start = lines
+            .iter()
+            .position(|l| l.trim() == "mod tests {")
+            .expect("`mod tests {` 行");
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(i, l)| {
+                *i > sim_loop && *i < tests_start && l.contains("command_event_tail_gm_drain(")
+            })
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "`sim_loop` 必须恰好一处调用 `command_event_tail_gm_drain`（实际 {:?}）",
+            hits
+        );
     }
 }
 
