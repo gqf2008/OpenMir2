@@ -16,11 +16,11 @@
     "total_defaults": 168,
     "player_defaults": 165,
     "npc_defaults": 3,
-    "safe": 70,
-    "needs_card": 96,
+    "safe": 71,
+    "needs_card": 95,
     "covered": 2,
     "safe_kind": {
-      "overridden": 67,
+      "overridden": 68,
       "equivalent": 2,
       "approximation": 1
     }
@@ -797,7 +797,7 @@
       "name": "use_items_upper_bound",
       "trait": "player",
       "line": 291,
-      "overridden": false,
+      "overridden": true,
       "direct_handlers": [],
       "direct_commands": [],
       "direct_count": 0,
@@ -823,15 +823,19 @@
       },
       "kind": "const",
       "semantics": "恒 -1",
-      "verdict": "needs_card",
+      "verdict": "safe",
       "group": "item_use",
       "priority": "P1",
       "side_effect": "读写装备/发帧",
       "consequence": "装备槽读值恒缺省（上限 -1、附加属性 None、持久 0），写回与 SendUpdateItem 全空 ⇒ CHECKUSEITEM/CHECKITEMADDVALUE/REPAIRALL/UPGRADEITEMEX 等装备类脚本行为与 oracle 不一致。",
-      "reason": "装备槽读值恒缺省（上限 -1、附加属性 None、持久 0），写回与 SendUpdateItem 全空 ⇒ CHECKUSEITEM/CHECKITEMADDVALUE/REPAIRALL/UPGRADEITEMEX 等装备类脚本行为与 oracle 不一致。",
-      "safe_kind": null,
-      "evidence": {},
-      "host_overridden": false,
+      "reason": "已于 719afd480 由卡 `openmir2-npcplayer-use-items-upper-bound` 覆写：`ScriptPlayer for NpcPlayer::use_items_upper_bound` = `self.use_items_len() - 1`（UseItems 13 ⇒ upper_bound=12），对齐 oracle `ConditionProcessingSys.cs:4378` 的 `playerActor.UseItems.GetUpperBound(0)`；此前 bound 恒 -1 致 CHECKUSEITEM 恒假，已同批修复。",
+      "safe_kind": "overridden",
+      "evidence": {
+        "impl": "ScriptPlayer for NpcPlayer",
+        "method": "use_items_upper_bound",
+        "line": 2355
+      },
+      "host_overridden": true,
       "mod_file": "mir2-rs/crates/script/src/engine/mod.rs",
       "mod_line": 291,
       "mod_ref": "mir2-rs/crates/script/src/engine/mod.rs:291",
@@ -5716,7 +5720,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "drop_item_on_full_bag",
-        "line": 2390
+        "line": 2401
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7108,7 +7112,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "send_del_use_item",
-        "line": 2380
+        "line": 2391
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7155,7 +7159,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_use_item_index",
-        "line": 2355
+        "line": 2366
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8059,7 +8063,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_item_index",
-        "line": 2347
+        "line": 2358
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8112,7 +8116,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_item_std_name",
-        "line": 2364
+        "line": 2375
       },
       "side_effect": "-",
       "consequence": "-",
