@@ -12541,6 +12541,77 @@ mod tests {
         // `gm_reconnection_emits_sm_reconnect_through_handle_say` 覆盖。
     }
 
+    /// **X2 F3 顺序牙（报告 §6「X2 R1/R2/R3」/ reviewer-21 `65ec7767` R3）**：
+    /// `@Reconnection` 的宿主唯一排水点 `crate::drain_reconnects` 必须**先置
+    /// `BoReconnection=true`，再尝试发 `SM_RECONNECT`**（oracle `PlayObject.Message.cs:1989-1990`：
+    /// `BoReconnection = true; SendDefMessage(SM_RECONNECT, …)`）。
+    ///
+    /// 「先置后发」只有从**发帧未发生**一侧可观测：路由失败（gates 空）时帧发不出，
+    /// 但置位必须已经落地 ⇒ 证明置位在 `route_to_gate`/`tx.send` 之前（①）。
+    /// 再加成功路（gates 在）保证置位不是只写在失败分支、且帧恰一条投到 `[gate_idx, socket]`（②）。
+    ///
+    /// 变异红：
+    /// - 把 `sg.bo_reconnection = true;` 挪到 `tx.send` 之后 ⇒ ①红（路由失败则永不置位）；
+    /// - 把它挪进 `route_to_gate` 失败的 `else` 分支（只在失败路置）⇒ ②红（成功路不置位）。
+    #[test]
+    fn x2_f3_drain_sets_bo_before_send() {
+        use crate::tests::test_session_ground;
+        use crate::{drain_reconnects, ReconnectPending, SessionGround, SimToGate};
+        use std::collections::HashMap;
+
+        let pending_one = || {
+            vec![ReconnectPending {
+                gate_idx: 0,
+                socket: 901,
+                chr_name: "hero".to_string(),
+                msg: b"1.2.3.4/7200".to_vec(),
+            }]
+        };
+
+        // ---- ① 路由失败：gates 空 ⇒ 帧发不出，但 BoReconnection 必须已置 ----
+        {
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".into(), test_session_ground(7));
+            let gates: HashMap<u8, tokio::sync::mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            let mut pending = pending_one();
+            drain_reconnects(&mut pending, &mut sessions, &gates);
+            assert!(
+                sessions["hero"].bo_reconnection,
+                "① 路由失败也必须已置 BoReconnection（置位先于/独立于发帧）"
+            );
+            assert!(pending.is_empty(), "队列取尽");
+        }
+
+        // ---- ② 成功路：BoReconnection 已置 + 帧恰一条投到 [0, 901] ----
+        {
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".into(), test_session_ground(7));
+            let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<SimToGate>();
+            let mut gates = HashMap::new();
+            gates.insert(0u8, tx);
+            let mut pending = pending_one();
+            drain_reconnects(&mut pending, &mut sessions, &gates);
+            assert!(
+                sessions["hero"].bo_reconnection,
+                "② 成功发帧后 BoReconnection 必须为真（置位不能只写在路由失败分支）"
+            );
+            let frames: Vec<SimToGate> = std::iter::from_fn(|| rx.try_recv().ok()).collect();
+            assert_eq!(frames.len(), 1, "恰一条 SM_RECONNECT");
+            match &frames[0] {
+                SimToGate::SendFrame { socket, body } => {
+                    assert_eq!(*socket, 901, "投到请求时的 socket");
+                    assert_eq!(
+                        body,
+                        &crate::smframe_ext::sm_reconnect(b"1.2.3.4/7200"),
+                        "载荷 = SM_RECONNECT(802) + EncodeString(\"{{ip}}/{{port}}\")"
+                    );
+                }
+                other => panic!("期望 SendFrame，实得 {other:?}"),
+            }
+            assert!(pending.is_empty(), "队列取尽");
+        }
+    }
+
     /// 族 X1 权限门（5 条全 perm 10）：`Permission < 10` ⇒ 恰一条红字 `权限不够!!!`。
     #[test]
     fn x1_family_permission_gate_blocks_body() {

@@ -120,6 +120,42 @@ extra_in_model  =["MasterName","ShowDenyCharNameLogon"]
   在仓内不存在；真实 gate 位于 **`mir2-rs/tests/parity/coverage/gm_registry.py`**（登记表同目录
   `gm_registry.json`，README 同目录）。本文件与 patch/status 交付说明按真实路径书写。
 
+## F4 订正（第二轮）：`sources.rust_table.sha256` 口径（卡 `openmir2-gm-residual-round2`）
+
+**背景（残余登记，非阻塞）**：本文件上文与 `docs/gm-implementation-report-20261031.md` §6 F4 条
+（`report:119`）及 `openmir2-gm-residual-teeth` 复审的 F4 Info，把「registry 在 HEAD 上不可复现」
+登记为残余。实测（`walgit/master 38439f539`）：
+
+| 项 | 值 |
+|---|---|
+| 已提交 `gm_registry.json` | **86974 bytes**（`sources.rust_table.sha256 = 66579bc9…`） |
+| HEAD 重跑 `gm_registry.py build` | **86974 bytes**，且**只差该 sha 一行**：`66579bc9… → c929f62d…`（= 残余牙批次给 `gmcmd.rs` 加测试行后的整文件 sha） |
+| `gate` | 同一 HEAD 上 **GREEN**（gate 不校验 `sources.*`，判据是逐字段复算） |
+
+> 订正一处旧数：上文 §结论/F4 写的 `97262 bytes` 是**基线 `98979d829`（161/24）时的历史值**；
+> 现态表是 176/9，产物为 86974 bytes。「HEAD 重跑 86974 vs 仓库 97262」的表述把历史值当成了仓库现值。
+
+**处置 = 方案 A（改变指纹语义，不改 gate）**。`sources.rust_table.sha256` 现为
+**`COMMANDS` 表被解析后的规范化 payload** 的 sha256（`[{name,perm_min,params,imp}…]` 以
+`sort_keys` + 紧凑分隔符序列化），并加 `sha256_scope: "parsed_table_normalized"` 显式标注。
+动机：`gmcmd.rs` 同时承载命令表与大量 `#[cfg(test)]` 用例；整文件指纹会把纯测试变动算进
+provenance，使已提交登记表在 HEAD 上「不可复现」，而该 sha 本就不参与门禁判定。
+
+**证据（本 worktree，`gmcmd.rs` 已含本卡新增的顺序牙）**：
+
+- `gate` rc=0：`GREEN: gm_registry 9 条与源码逐字段一致`。
+- 同输入两次 `build` 逐字节一致：`sha256(gm_registry.json) = 42b1c123…`（两次相同）。
+- **有牙**：把真实表项 `+-jid` 的 `perm_min 10 → 11` ⇒ 表指纹 `ab565da4… → 68ba9d94…`；
+  还原后 `sha256(gmcmd.rs)=7e6a9f12…` 相等、`sha256(gm_registry.json)=42b1c123…` 相等，无残留。
+- **测试行不污染 provenance**：`git show HEAD:…/gmcmd.rs`（raw sha `c929f62d…`，无本卡测试）
+  与当前工作树（raw sha `7e6a9f12…`，含本卡测试）解析出的表 payload 相同 ⇒ 表指纹同为
+  `ab565da4…`；即「只加测试行」不再改变已提交登记表的可复现性。
+
+**gate 为何不校验该 sha**：gate 的合同是「登记行与 oracle/Rust 源码逐字段复算一致」（见 §3 与
+`check_registry`），`sources` 是归档溯源信息。把整文件 sha 纳入 gate 会把「测试行」耦合进门禁，
+正是本卡要消除的失效模式；纳入表 payload sha 则与 gate 已有的逐字段复算重复。故 gate 维持不校验，
+仅由本文与产物字段声明语义。**未放宽任何既有判红**（gate 代码零改动）。
+
 ## 残留物清单
 
 - 无新增临时文件；变异备份仅在分析期使用，已还原并校验 sha256，不入库。
