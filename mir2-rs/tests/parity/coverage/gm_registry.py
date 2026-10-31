@@ -30,6 +30,15 @@
    `cmd`；`register_command=true ⇒ handler 非空`；`perm_min=null ⇒ verdict=undetermined`；
    `script-reachable ⇒ 证据非空且逐条可复算`；`unreachable ⇒ 部署脚本里确无该命令的可达调用`。
 
+源码指纹口径（F4 订正，卡 `openmir2-gm-residual-round2`）
+----------------------------------------------------------
+`sources.rust_table.sha256` = **`COMMANDS` 表被解析后的规范化 payload** 的 sha256
+（`[{name,perm_min,params,imp}…]` 以 `sort_keys` + 紧凑分隔符序列化），**不再覆盖整个 `gmcmd.rs`**；
+`sha256_scope="parsed_table_normalized"` 显式标注该语义。理由：`gmcmd.rs` 同时承载命令表与大量
+`#[cfg(test)]` 用例，整文件指纹会让「只加测试行」使已提交登记表在 HEAD 上不可复现；而 gate 的判据是
+**逐字段复算**（§3），本就不校验该指纹。表项 payload 指纹保持等价强度：表一变 ⇒ 指纹变；
+测试/注释变动 ⇒ 指纹不变。其它 `sources.*.sha256` 仍是所读文件的整文件指纹（它们不是高频测试载体）。
+
 判据（写死在工具里）
 --------------------
   perm_min == 0                                   ⇒ reachable（玩家自然可达，必须开实现卡）
@@ -219,6 +228,16 @@ def parse_rust(path=RUST_TABLE):
     if not rows:
         fail("无法判定：COMMANDS 表解析为空（格式变了？）")
     return rows
+
+
+def table_digest(rows):
+    """`COMMANDS` 表**规范化 payload** 的 sha256（语义见模块文档「源码指纹口径」）。
+
+    只覆盖 `parse_rust()` 解析出的表项（name/perm_min/params/imp），与表区之外的测试/注释行无关：
+    改测试行 ⇒ 指纹不变（已提交的登记表在 HEAD 上仍可逐字节复现），改任一表项 ⇒ 指纹必变。
+    """
+    payload = json.dumps(rows, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 # --------------------------------------------------------------------------
@@ -893,7 +912,9 @@ def build(conf_path, envir_path, deploy_dir):
             },
         },
         "sources": {
-            "rust_table": {"path": relpath(RUST_TABLE), "sha256": sha256(RUST_TABLE)},
+            "rust_table": {"path": relpath(RUST_TABLE),
+                           "sha256": table_digest(rust),
+                           "sha256_scope": "parsed_table_normalized"},
             "gamecommands": {"path": gamecmds["path"], "sha256": gamecmds["sha256"],
                              "fields": len(gamecmds["register"])},
             "gamecmd_conf": {"path": gamecmdconf["path"], "sha256": gamecmdconf["sha256"],
