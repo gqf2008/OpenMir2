@@ -20092,8 +20092,8 @@ fn apply_pending_gm_m_commands(
                 // `Mission/MissionX/MissionY` 三元在 Rust `Entity` **未建模**（无字段）⇒ 只刷怪、
                 // 不置标记。**oracle 确有消费者**（`MonsterObject` 无目标时以 MissionX/Y 为
                 // Target；`SuperGuard` 忽略 Mission 目标的攻击），故这是真实 AI 建模缺口——
-                // 但 `@MobPlace` perm_min=10、生产 Permission 恒 0 ⇒ 生产不可达（脚本桥也按
-                // `m_host=false` 退化零帧）⇒ 以白名单 T-271 登记，不动 crates/world（卡面 forbidden）。
+                // 但 `@MobPlace` perm_min=10、生产 Permission 恒 0 ⇒ 生产不可达（脚本桥未装配
+                // `ScriptGmHost`（缺省）时退化零帧）⇒ 以白名单 T-271 登记，不动 crates/world（卡面 forbidden）。
                 glog!(
                     "DBG",
                     "@MobPlace：Mission/MissionX/MissionY 标记未建模（Entity 无字段）⇒ 只按数量刷怪，标记登记"
