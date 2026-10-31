@@ -11,7 +11,7 @@
 
 | 路径 | 权限来源 | 现网结果 | 判据 |
 |---|---|---|---|
-| 客户端 `@` 直呼 | `PlayObject.Permission` | **恒 0** ⇒ 185 条里只有 perm 0 的 5 条 + 内建 `@help` 可达；其余一律红字 `权限不够!!!` | `gmcmd.rs` 模块头「现网可达性」；`adminlist.rs` 模块头事实 2 |
+| 客户端 `@` 直呼 | `PlayObject.Permission` | **恒 0** ⇒ 185 条里只有 perm 0 的 5 条可达，另加内建 `@help`；其余一律红字 `权限不够!!!` | `gmcmd.rs` 模块头「现网可达性」；`adminlist.rs` 模块头事实 2 |
 | 脚本 `GMEXECUTE` | 动作内**临时置 10**，`finally` 还原 | **唯一可用通道**；但本仓脚本桥是裁剪视图，只有一部分族的副作用真落地（§3） | `crates/script/src/engine/actions.rs` `ActionOfGmExecute` / `PermissionGuard` |
 | D-* 偏差 | 接 `GetHumPermission` 或另设认证 | 需 owner 裁决；只写建议不动手（§5） | `adminlist.rs` 模块头「本片边界」 |
 
@@ -82,7 +82,7 @@ Gmexecute 禁言 self 10000                    # QuestDiary/游戏登陆/登陆�
 | T 会话开关/骑马 | 7 | 4 条会话开关（`@交易`/`@加入门派`/`@拒绝组队聊天`/`@禁止行会信息`）翻会话态并回绿字；`@OnHorse` 因 `HorseType` 恒 0 只回「骑马必须先戴上马牌!!!」；`@OffHorse` 未骑马静默；`@DisableFilter` 翻全局 `FilterWord` | 4 条开关回绿字且会话镜像翻转（`ban_shout` 有真实消费点）；`@OnHorse` 红字可达；`@DisableFilter` 因全局位未注入 ⇒ 零帧；`SM_FEATURECHANGED(41)` 外观帧只在客户端直呼路径排水 | `gmcmd.rs` `take_on_horse`/`disable_filter`/`Imp::LetTrade`；报告 §2-T |
 | Q 查询/展示 | 10 | 只读；含 oracle 怪癖：`@IP` 判空恒真恒红帮助、`@信息` 在线零帧、`@Showuseiteminfo` 单字符名越界零帧且 `%s` 字面输出、`@Map` 缺参越界零帧 | 地图/世界视图已注入 ⇒ 绝大多数查询可用；`@showflag` 因无任务位快照 ⇒ 恒走 OFF 绿字支 | `gmcmd.rs` `show_flag`/`human_local`/`show_use_item_info`；报告 §2-Q |
 | X1 禁言名单 | 5 | `DisableSendMsgList`/`DenySayMsgList` 声明即 null、全仓零赋值 ⇒ 触表四命令真机 NRE 被吞 = 零帧 | `@+jy`（非空）/`@-jy`/`@+-jy`/`@查看禁言` 均零帧；`@查看私聊` 正常双绿字（只触已初始化数据） | `gmcmd.rs` `disable_send_msg`/`enable_send_msg`/`view_whisper`；报告 §3.2 |
-| X2 目标控制/杂项 | 18 | 10 条纯文本/查询（`@DelNpc`/`@清除任务`/`@清除怪物`/`@Mission`/`@祈祷生效`/`@停止叛变`/`@探测`/`@fdht7ed`/`@sdasdert`/`@Reconnection`）；6 条重副作用写面；2 条宿主脚本接缝 | 纯文本/查询多数可用；`@Mission`/`@祈祷生效`/`@停止叛变` 因全局单元未注入 ⇒ 零帧；`@vv杀死`/`@复活`/`@VV给予权限`/`@删除技能`/`@ClearCopyItem`/`@清除仓库密码` 只回文字（`@复活`/`@VV给予权限`/`@清除仓库密码`）或零帧，**副作用因 `pending_*` 不在脚本桥排水而不落地**；`@MemberFuncEx`/`@是我` 零帧；`@Reconnection` 的 `SM_RECONNECT` 只在客户端直呼路径排水 | `gmcmd.rs` `kill_cmd`/`realive`/`set_permission`；`lib.rs` `apply_pending_gm_target_ops` 仅在 CM_SAY 分支调用；报告 §2-X2 |
+| X2 目标控制/杂项 | 18 | 10 条文本/查询/全局开关（`@DelNpc`/`@清除任务`/`@清除怪物`/`@Mission`/`@祈祷生效`/`@停止叛变`/`@探测`/`@fdht7ed`/`@sdasdert`/`@Reconnection`）；6 条重副作用写面；2 条宿主脚本接缝 | 纯文本/查询多数可用；`@Mission`/`@祈祷生效`/`@停止叛变` 因全局单元未注入 ⇒ 零帧；`@vv杀死`/`@复活`/`@VV给予权限`/`@删除技能`/`@ClearCopyItem`/`@清除仓库密码` 只回文字（`@复活`/`@VV给予权限`/`@清除仓库密码`）或零帧，**副作用因 `pending_*` 不在脚本桥排水而不落地**；`@MemberFuncEx`/`@是我` 零帧；`@Reconnection` 的 `SM_RECONNECT` 只在客户端直呼路径排水 | `gmcmd.rs` `kill_cmd`/`realive`/`set_permission`；`lib.rs` `apply_pending_gm_target_ops` 仅在 CM_SAY 分支调用；报告 §2-X2 |
 | F 脚本标志 | 3 | `@setflag`/`@setopen`/`@setunit` 写**调用者**任务位（不是目标）并对目标回绿字；quest 数组不落库 | 脚本桥 `quests=None` ⇒ 三条全部 `log_note` 零帧（部署脚本无这三条的可达调用） | `gmcmd.rs` `set_flag`/`set_open`/`set_unit`；报告 §4-F |
 | M 刷怪/造物 | 6 | `@MobNpc`/`@MobPlace`/`@ReCallMobEx`/`@怪`/`@GiveMine`/`@s`；含 RNG 抽数（`Random(18)+3`、每件 `Random(MakeRandomAddValue)`） | 六条都以 `if !world.m_host` 开头 ⇒ 脚本桥 `m_host=false` ⇒ 全部 `log_note` 零帧。刷怪/造物需宿主 `MonGenHost` + `&mut World` + RNG 通道，脚本桥没有 | `gmcmd.rs` `mob_spawn`/`make_item`/`give_mine` 的 `m_host` 门；报告 §4-M |
 | C 城堡/赛事 | 5 | `@ContestPoint` 只读；`@开始攻城`/`@SabukWallGold`/`@沙城`/`@StartContest` 写城堡/赛事；三处源码文本不可达（无参 SbkGold / `GetCastle` NotImpl / 零 cry） | `@ContestPoint` 文字可用；`@开始攻城`/`@SabukWallGold`/`@StartContest` 走 `m_host` 门 ⇒ 脚本桥零帧；`@沙城` 无 `m_host` 门但本身是 oracle `NotImplementedException` 零帧；宿主落地（TotalGold/UnderWar/门格掩码/FightZoneDieCount）只在客户端直呼路径 | `gmcmd.rs` `sbk_gold`/`change_sabuk_lord`/`forced_wall_war`；`lib.rs` `apply_pending_gm_castle_commands` 仅在 CM_SAY 分支；报告 §4-C |
@@ -140,7 +140,7 @@ Gmexecute 禁言 self 10000                    # QuestDiary/游戏登陆/登陆�
 
 现状：客户端直呼的 `CM_SAY` 路径其实**已经具备完整视图**——`handle_say_with_saves` 注入 `quests: Some(...)`、`m_host: true`、`filter_word/mission/spirit_mutiny_tick/caller_guild`，并在命令后同一事件内调用 `apply_pending_gm_target_ops`/`_m_commands`/`_castle_commands`/`_guild_commands`。**唯一缺的是权限来源**。两条方案：
 
-1. **接 `GetHumPermission`（推荐先评估）**：在登录支调用 `AdminList::get_hum_permission`，把命中级写到 `GmSession.permission`；同时修 `Envir/AdminList.txt`（必须有「名字 + IP 段」的有效行，当前单行缺 IP 会被 `LoadAdminList` 丢弃）。这是**偏差**（oracle 的调用点被注释），须开 `D-*` 卡并登记 `whitelist.md`。收益：一次接通，九族在客户端直呼路径全部按已实现行为可用。
+1. **接 `GetHumPermission`（推荐先评估）**：在登录支调用 `AdminList::get_hum_permission`，把命中级写到 `GmSession.permission`；同时修 `Envir/AdminList.txt`（必须有「名字 + IP 段」的有效行，当前单行缺 IP 会被 `LoadAdminList` 丢弃）。这是**偏差**（oracle 的调用点被注释），须开 `D-*` 卡并登记 `whitelist.md`。收益：一次接通，九族命令体在客户端直呼路径全部可达（含 oracle 原样的恒红/零帧项，不再是权限门挡下）。
 2. **另设 GM 认证**：例如控制台/一次性令牌/独立管理端口，把认证结果写 `GmSession.permission`。改动面更大、可观测面更多，且与 oracle 无对应物，建议仅在方案 1 不可行时考虑。
 
 > 只修 `AdminList.txt` 不接 `GetHumPermission` 仍然无效（读取调用是死的）；反过来只接调用不修文件也永远查不到行。两半必须一起做。
