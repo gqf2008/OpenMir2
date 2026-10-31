@@ -42,8 +42,8 @@
 ## §4 当前状态
 
 - **master**：`aad30901ff994557806e8203533efc5e66d1b963`。四张卡按序合并为 `b999f4139` → `a46d3e3c3` → `38439f539` → `aad30901f`（均为 master 祖先）。
-- **goal_gate**：完整模式四条件 PASS（总体 PASS，RC=0；条目 `f10093cd`，基线 master `842da407e`）：① 脚本派发 PASS（parse-stats 106/106 去重目标、调用 11829、未实现 0）；② R 卡证据 PASS（290 张：已完成 279 / window_required 8 / 三者皆无 0 / merged 未 closed 无登记 0）；③ B 类清零 PASS（tracked=0）；④ 门禁恒绿 PASS（8 项 8 绿 0 红 0 需人工，含 cargo test workspace 全量实跑）。
-  - 说明：`842da407e` 之后到 `aad30901f` 的合并含一张 R 卡（`a46d3e3c3`，存档回写；真机窗口已在条目 `d9c1d09e` 取得 PASS），其余为 L 级；`aad30901f` 上未记录新的 goal_gate 完整模式复跑（未取证）。
+- **goal_gate**：完整模式四条件 PASS（总体 PASS，RC=0；条目 `9aeda4fa`，基线 master `aad30901f`）：① 脚本派发 PASS（parse-stats 106/106 去重目标、调用 11829、未实现 0）；② R 卡证据 PASS（R 卡 291 张 @ aad30901f：已完成 280 @ aad30901f / 三者皆无 0）；③ B 类清零 PASS（tracked=0 @ aad30901f）；④ 门禁恒绿 PASS（8 项 8 绿 0 红 0 需人工，含 cargo test workspace 全量实跑）。
+  - 说明：`842da407e` 之后到 `aad30901f` 的合并含一张 R 卡（`a46d3e3c3`，存档回写；真机窗口已在条目 `d9c1d09e` 取得 PASS），其余为 L 级；`aad30901f` 的完整模式复跑见条目 `9aeda4fa`。
 - **tester**：GREEN，last-tested 推进到 `aad30901f`（条目 `a333d0ca`）：running 3550 / passed 3481 / ignored 69 / failed 0（143 suites）；fmt、clippy、msgcodegen 全 rc=0；卫生门 9/9 rc=0。
 - **生产栈 exe**：sha256 `593de33a50f23e12176721a2f1af3ea4296e076eea1c5c95c43d7e523c37c333`（交付时实测 `mir2-rs/target/release/mir2-server.exe`，mtime 2026-11-01 02:01；台账 `d9c1d09e` 记前缀 `593de33a…` 与之一致，其 HEAD 为 `aad30901`）。
 - **cargo**：空闲（交付时 tasklist 无 cargo/rustc 进程）。
