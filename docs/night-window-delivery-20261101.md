@@ -22,7 +22,7 @@
 |---|---|---|
 | S8 买药背包（V-bag-layout / V-buy-stock） | REAL-MACHINE PASS（`shop-20261031-225838-246`） | 服务端 `ident=200` apply 后 `bag_total=2`，随后 81 重发回 `201 series=2`；对照满包轮 `shop-20261031-225554-575` 为 `bag_total=25` |
 | V-bag-layout 收口 | RECLASSIFIED→L（条目 `7e75f5b2`） | 服务端 124B 布局=C# 契约（200/201/652 同一 `ClientItem` 结构）；冻结 oracle 栈上背包同样错位（条目 `714cf921`）；客户端侧缺陷不属本仓 |
-| DEALTRY 定案（V-dealtry-e2e） | REAL-MACHINE PASS（`social-20261101-003010-861`） | 前置周期行 `nearest=1` 后两端 `ident=673`（解码长−12=3/8，尾名互指）；此前「零帧」复盘为发 1025 时已隔 2 格，属 oracle null-pose 原样 |
+| DEALTRY 定案（V-dealtry-e2e） | REAL-MACHINE PASS（`social-20261101-003010-861`；更早一轮 `social-20261101-001610-811` 同样两端 673） | 前置周期行 `nearest=1` 后两端 `ident=673`（解码长−12=3/8，尾名互指）；此前「零帧」复盘为发 1025 时已隔 2 格，属 oracle null-pose 原样 |
 | 659 全分支（V-groupmode-659-g2） | REAL-MACHINE 全分支 PASS（`social-20261101-003739-026` + `lmz-20261101-004104-240`） | 成员/团长开组 ⇒ 659 `param=1`、建组 `ident=660`、成员关 ⇒ 659=0 且双方 666；团长 MODE=0 ⇒ 659 `param=1` + SysMsg、无 666 |
 | 交易链四步（V-dealtry-e2e） | REAL-MACHINE 四步全 PASS | T2/T3 `social-20261101-003010-861`、`013200-652`；T4 `social-20261101-020223-688`（`Ident=1026 Recog=14296908`）；T5 `social-20261101-025625-807`（`Ident=1029 Recog=1`）；T6/T7 `social-20261101-021820-433`（1030→687、1028→681） |
 | V-allowgroup-save-writeback | REAL-MACHINE PASS（`social-20261101-024918-770` 开 / `social-20261101-024938-486` 关） | 断线存档 queryId=20（Recog=1）⇒ `characters.AllowGroupReCall=1`；queryId=22（Recog=1）⇒ 0；`AllowGroup` 列四查均 0（与 oracle UPDATE 清单一致） |
@@ -43,7 +43,7 @@
 
 - **master**：`aad30901ff994557806e8203533efc5e66d1b963`。四张卡按序合并为 `b999f4139` → `a46d3e3c3` → `38439f539` → `aad30901f`（均为 master 祖先）。
 - **goal_gate**：完整模式四条件 PASS（总体 PASS，RC=0；条目 `f10093cd`，基线 master `842da407e`）：① 脚本派发 PASS（parse-stats 106/106 去重目标、调用 11829、未实现 0）；② R 卡证据 PASS（290 张：已完成 279 / window_required 8 / 三者皆无 0 / merged 未 closed 无登记 0）；③ B 类清零 PASS（tracked=0）；④ 门禁恒绿 PASS（8 项 8 绿 0 红 0 需人工，含 cargo test workspace 全量实跑）。
-  - 说明：`842da407e` 之后到 `aad30901f` 的合并均为 L 级（测试/工具/文档）；`aad30901f` 上未记录新的 goal_gate 完整模式复跑（未取证）。
+  - 说明：`842da407e` 之后到 `aad30901f` 的合并含一张 R 卡（`a46d3e3c3`，存档回写；真机窗口已在条目 `d9c1d09e` 取得 PASS），其余为 L 级；`aad30901f` 上未记录新的 goal_gate 完整模式复跑（未取证）。
 - **tester**：GREEN，last-tested 推进到 `aad30901f`（条目 `a333d0ca`）：running 3550 / passed 3481 / ignored 69 / failed 0（143 suites）；fmt、clippy、msgcodegen 全 rc=0；卫生门 9/9 rc=0。
 - **生产栈 exe**：sha256 `593de33a50f23e12176721a2f1af3ea4296e076eea1c5c95c43d7e523c37c333`（交付时实测 `mir2-rs/target/release/mir2-server.exe`，mtime 2026-11-01 02:01；台账 `d9c1d09e` 记前缀 `593de33a…` 与之一致，其 HEAD 为 `aad30901`）。
 - **cargo**：空闲（交付时 tasklist 无 cargo/rustc 进程）。
