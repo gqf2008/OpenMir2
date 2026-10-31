@@ -9,7 +9,7 @@
 //! | [`UserCastle::inc_rate_gold`] | `src/M2Server/Castle/UserCastle.cs:768-812`（`IncRateGold`） |
 //! | [`CastleManager::inc_rate_gold`] | `src/M2Server/Castle/CastleManager.cs:209-215`（升序遍历 `CastleList`） |
 //! | [`CastleManager::get_castle`] | `CastleManager.cs:184-192`（越界 ⇒ `null`） |
-//! | [`merchant_tax_target`] / [`merchant_tax_amount`] | `src/GameSrv/Npc/Merchant.cs:544-553` / `:1250-1259` / `:1385-1393` / `:1637-1645`（四个沙巴克商人税调用点） |
+//! | [`merchant_tax_target`] / [`merchant_tax_amount`] | `src/GameSrv/Npc/Merchant.cs:544-553` / `:1263-1266` / `:1398-1401` / `:1650-1653`（四个沙巴克商人税调用点） |
 //! | 成员价 80% | `Merchant.cs:765-782`（`GetUserPrice`）——定价本体已在 `crates/formula/src/shop.rs::get_user_price` 落地（⑤ 家族）；本模块只做四调用点取价链/税意图的纯封装（[`merchant_call_price`] / [`merchant_tax_intent`]），**不重写公式** |
 //! | 金库提取/上缴 | `UserCastle.cs:814-889`（真身重载 `PlayObject`）+ `:599-602` / `:911-914`（接口重载 **N1**） |
 //!
@@ -27,10 +27,10 @@
 //!
 //! ## 照搬的 oracle 行为（**不是**差异）
 //!
-//! 1. **`CastleMgr` 分支恒用 `UpgradeWeaponPrice`**：`Merchant.cs:1250-1259/1385-1393/1637-1645`
+//! 1. **`CastleMgr` 分支恒用 `UpgradeWeaponPrice`**：`Merchant.cs:1263-1266/1398-1401/1650-1653`
 //!    的 `else if (GetAllNpcTax)` 分支传的是 `SystemShare.Config.UpgradeWeaponPrice`，**不是**本次
 //!    交易的 `nPrice`/`nRepairPrice`。白名单 **B-16** 登记（⑤-4 的 T-47 只登记了「条件照抄」，
-//!    本行钉死「税基常量」这条更具体的怪行为）。
+//!    本行钉死「税基常量」这条更具体的怪行为）（锚已随 whitelist B-16 独立复核订正，2026-11-01）。
 //! 2. **`TodayIncome` 日上限的裁剪**（`UserCastle.cs:771-788`）：超额时 `nInGold` 取
 //!    「上限 − 当前」，**已到顶**时取 `0`；`TotalGold` 的封顶用**严格小于**判断
 //!    （`:789`），相等时走 `= CastleGoldMax` 分支（结果同值）。
@@ -218,7 +218,7 @@ pub enum MerchantTaxTarget {
     CastleManager,
 }
 
-/// oracle `Merchant.cs:544-553/1250-1259/1385-1393/1637-1645` 的**目的地判定**：
+/// oracle `Merchant.cs:544-553/1263-1266/1398-1401/1650-1653` 的**目的地判定**：
 ///
 /// ```text
 /// if (CastleMerchant || Config.GetAllNpcTax) {
@@ -264,8 +264,8 @@ pub fn merchant_tax_amount(
 
 /// 一次成交调用点的**税意图**（纯计算：只决定「税进哪座城、按多少钱计税」，不改状态）。
 ///
-/// `Merchant.cs` 的四个调用点（`:544-553` 升级 / `:1250-1259` 买入 / `:1385-1393` 卖出 /
-/// `:1637-1645` 修理）形状完全相同：先 [`merchant_tax_target`] 判目的地，再
+/// `Merchant.cs` 的四个调用点（`:544-553` 升级 / `:1263-1266` 买入 / `:1398-1401` 卖出 /
+/// `:1650-1653` 修理）形状完全相同：先 [`merchant_tax_target`] 判目的地，再
 /// [`merchant_tax_amount`] 取税基。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MerchantTaxIntent {
