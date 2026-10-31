@@ -1017,7 +1017,7 @@ pub enum Imp {
     /// DelMember + SS_207 + 清标记 + `RefRankInfo(0,"")`(750) + `RefShowName`(42) + 绿字。
     EndGuildCmd,
     /// `AllowGroupReCallCommand`（现网 `@允许天地合一`）：toggle `AllowGroupReCall` + 双绿字；
-    /// 字段随存档写 `characters.AllowGroupReCall`。
+    /// 字段随存档写 `PlayerRecordData.allow_group_re_call`（DB 列绑定见 whitelist T-272）。
     AllowGroupRecall,
     Unimplemented,
 }
@@ -1253,8 +1253,8 @@ pub struct GmEntityState {
     /// 卡 `openmir2-gm-target-state-write`。
     pub level: Option<u8>,
     /// `@允许天地合一` 写回 `PlayObject.AllowGroupReCall`（`AllowGroupReCallCommand.cs:14`）。
-    /// **R 级落库面**：`EntityDerived` 采集本字段，存档写 `characters.AllowGroupReCall`
-    /// （`PlayerRecordData.allow_group_re_call`，列已存在、不改 schema）。
+    /// **R 级落库面**：`EntityDerived` 采集本字段，存档写 `PlayerRecordData.allow_group_re_call`
+    /// （列已存在、不改 schema；DB 列绑定见 whitelist T-272）。
     pub allow_group_re_call: Option<bool>,
 }
 
@@ -3470,7 +3470,7 @@ fn end_guild(world: &GmWorld<'_>, sess: &mut GmSession) -> GmResult {
 ///
 /// 翻转 `PlayObject.AllowGroupReCall` + 双绿字（`[允许天地合一]`/`[禁止天地合一]`）；
 /// 新值经 `pending_entity` 在同一事件内落到权威 `Entity.allow_group_re_call`，并由存档
-/// `EntityDerived` 写 `characters.AllowGroupReCall`（R 级落库面）。
+/// `EntityDerived` 写 `PlayerRecordData.allow_group_re_call`（R 级落库面；DB 列绑定见 whitelist T-272）。
 fn allow_group_recall(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
     // **review I1**：oracle 的 `AllowGroupReCall` 与 `@sadasd` 的 `AllowGuildReCall` 是两个
     // 独立 `PlayObject` 字段（`AllowGroupReCallCommand.cs:15` vs `AllowGuildRecallCommand.cs:15`）

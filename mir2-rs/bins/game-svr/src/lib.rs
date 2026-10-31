@@ -5396,7 +5396,7 @@ fn handle_soft_close_cmd(
     // 实体已摘，`cur_x/cur_y/dir/attatck_mode` 会回落到**载入记录**。离世**之前**取一份实体
     // 派生快照挂到 `SavedHuman.derived`（第二档）；`build_save_record` 的优先级是
     // 实体 → 快照 → 载入记录（第三档 WRN）。
-    // 快照只经 [`entity_derived_snapshot`] 一个接缝产出（五项全取，禁止在此散写）。
+    // 快照只经 [`entity_derived_snapshot`] 一个接缝产出（六项全取，禁止在此散写）。
     if let Some(d) = world
         .session(chr_name)
         .and_then(|s| s.actor_id)
@@ -9657,7 +9657,7 @@ fn use_items_from(
 /// **实体 → 快照 → 载入记录**（第三档 WRN，见 [`warn_save_fallback`]）。
 /// (b′) 的 MakeGhost 非销毁改造另开卡 `openmir2-makeghost-lifecycle`，它落地后本快照层可删。
 ///
-/// **五项全取**（只快照 `Dir` = 只修今天现形的那一个；同族字段只是被 placement 掩盖了）：
+/// **六项全取**（只快照 `Dir` = 只修今天现形的那一个；同族字段只是被 placement 掩盖了）：
 /// `x/y/dir/attack_mode` 回落的是**载入记录**；`use_items` 的兜底是会话克隆（每 tick 回写，
 /// 只丢 ≤1 tick），快照只为覆盖离世那一刻的精确值（§11.1）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -9667,17 +9667,23 @@ struct EntityDerived {
     dir: u8,
     attack_mode: u8,
     /// `PlayObject.AllowGroupReCall`（`AllowGroupReCallCommand.cs:14` 的唯一生产写点；
-    /// 登录从记录装入、存档写回 `characters.AllowGroupReCall`——族 W 的 R 级落库面）。
+    /// 登录从记录装入、存档写回 `PlayerRecordData.allow_group_re_call`——族 W 的 R 级落库面；
+    /// DB 列绑定见 whitelist T-272）。
     allow_group_re_call: bool,
+    /// `PlayObject.AllowGroup`：`CM_GROUPMODE(param2!=0)`/建组/退组 的权威源；oracle
+    /// `WorldServer.cs:1294`（`MakeSaveRcd`）：`playerInfo.AllowGroup = playObject.AllowGroup ? (byte)1 : (byte)0;`。
+    /// 存档回写 `PlayerRecordData.allow_group`，DB 列 `characters.AllowGroupReCall` 绑定它
+    /// （`@AllowGroupReCall` ← `hd.AllowGroup`，bug-for-bug，见 whitelist T-272）。
+    allow_group: bool,
     /// ⚠ **可能是全零**（该路径的实体块从未同步装备）⇒ 消费端**必须先过
     /// [`use_items_loaded`]** 再采用，禁止直接写库——否则会把会话里已装备的物品写成
     /// `Index=0/Dura=0`（G-06 物资丢失形态）。接缝无条件拷 `e.use_items`，本不变量不在接缝里。
     use_items: [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
 }
 
-/// **单一接缝**：实体 → 派生快照。五项一次取全。
+/// **单一接缝**：实体 → 派生快照。六项一次取全。
 ///
-/// 禁止在 soft-close / 存档处散写这五个字段（散写必然与实体漂移，也必然漏字段）。
+/// 禁止在 soft-close / 存档处散写这六个字段（散写必然与实体漂移，也必然漏字段）。
 fn entity_derived_snapshot(e: &mir2_world::Entity) -> EntityDerived {
     EntityDerived {
         x: e.x,
@@ -9685,6 +9691,7 @@ fn entity_derived_snapshot(e: &mir2_world::Entity) -> EntityDerived {
         dir: e.dir(),
         attack_mode: e.attack_mode,
         allow_group_re_call: e.allow_group_re_call,
+        allow_group: e.allow_group,
         use_items: e.use_items,
     }
 }
@@ -10118,10 +10125,16 @@ fn build_save_record(
         // 实体是权威（登录装入 + `@AttackMode` 写穿）⇒ 记录随会话实时值落库，
         // 否则 `@AttackMode` 只在本会话生效、登出即丢（review `2c5cb955` m-1）。
         rec.data.attatck_mode = d.attack_mode;
-        // `@允许天地合一` 的同源写回：oracle `PlayObject.AllowGroupReCall` 随
-        // `characters.AllowGroupReCall` 落库（`PlayerRecordData.allow_group_re_call`，
-        // 列已存在；族 W 的 R 级字段 diff 面）。
+        // `@允许天地合一` 的同源写回：oracle `PlayObject.AllowGroupReCall` 落库为
+        // `PlayerRecordData.allow_group_re_call`（列已存在；族 W 的 R 级字段 diff 面；
+        // DB 列绑定见 whitelist T-272）。
         rec.data.allow_group_re_call = d.allow_group_re_call;
+        // `MakeSaveRcd` `:1294`：`playerInfo.AllowGroup = playObject.AllowGroup ? (byte)1 : (byte)0;`
+        // live `Entity.allow_group`（`CM_GROUPMODE`/建组/退组 的权威源）必须回写；旧实现只写
+        // `allow_group_re_call`，`rec.data.allow_group` 停留载入值 ⇒ SQL 的 `@AllowGroupReCall`
+        // （绑 `hd.AllowGroup`，bug-for-bug 见 whitelist T-272）落库取陈旧值。
+        // 卡 `openmir2-save-allowgroup-writeback`。
+        rec.data.allow_group = u8::from(d.allow_group);
     } else if world.session(chr_name).is_some() {
         // 第三档：会话在、实体无、快照无 ⇒ 只能回落载入记录（必须留 WRN 痕迹）。
         warn_save_fallback(chr_name);
@@ -45559,8 +45572,8 @@ break
     }
 
     /// **A4（R 级核心）**：`@允许天地合一` 翻转后，权威 `Entity.allow_group_re_call` 被写穿，
-    /// 且 `build_save_record` 把它写进 `characters.AllowGroupReCall`（`PlayerRecordData`
-    /// 的既存列，不改 schema）——完整「toggle → 实体 → 记录」链；再翻一次回 false。
+    /// 且 `build_save_record` 把它写进 `PlayerRecordData.allow_group_re_call`（DB 列绑定见
+    /// whitelist T-272，不改 schema）——完整「toggle → 实体 → 记录」链；再翻一次回 false。
     /// 变异红：删 `EntityDerived` 采集或 `build_save_record` 写回 ⇒ 落库断言红。
     #[test]
     fn w_allow_group_recall_persists_to_record() {
@@ -45607,7 +45620,7 @@ break
         let rec = build_save_record(&saved, "hero", &world, &sessions["hero"], None);
         assert!(
             rec.data.allow_group_re_call,
-            "characters.AllowGroupReCall 必须随存档写 true"
+            "PlayerRecordData.allow_group_re_call 必须随存档写 true"
         );
         // 第二次：true → false。
         {
@@ -45622,6 +45635,75 @@ break
         apply_pending_gm_entity(&mut sessions, "hero", &mut world);
         let rec = build_save_record(&saved, "hero", &world, &sessions["hero"], None);
         assert!(!rec.data.allow_group_re_call, "再翻一次 ⇒ 落库字段回 false");
+    }
+
+    /// **A1（卡 `openmir2-save-allowgroup-writeback`，tier=R）**：存档回写 live `Entity.allow_group`。
+    ///
+    /// oracle `WorldServer.cs:1294`（`MakeSaveRcd`）：
+    /// `playerInfo.AllowGroup = playObject.AllowGroup ? (byte)1 : (byte)0;`。旧实现只回写
+    /// `allow_group_re_call`，`rec.data.allow_group` 停留载入值 ⇒ SQL 的 `@AllowGroupReCall`
+    /// （bug-for-bug 绑 `hd.AllowGroup`，见 whitelist T-272）落库取陈旧值。
+    ///
+    /// 覆盖：① 未发 `CM_GROUPMODE` ⇒ 实体 false ⇒ 记录 0（不误写 1）；② `CM_GROUPMODE(param2!=0)`
+    /// ⇒ 实体/快照/记录皆 1；③ `param2==0`（未组队 ⇒ `GroupOwner==0` 支置 false）⇒ 0；
+    /// ④ 第三档回落（实体+快照皆无）⇒ 保持载入值（此处载入值特意置 1，证不误清）。
+    ///
+    /// 变异红：删 `rec.data.allow_group = u8::from(d.allow_group);` ⇒ ② 红；
+    /// 删 `EntityDerived` 的 `allow_group` 采集 ⇒ 编译错。
+    #[test]
+    fn w_allow_group_mode_persists_live_allow_group_to_record() {
+        let cfg = mir2_world::PartyConfig::default();
+        let (mut world, actor) = w_session_world("hero");
+        let mut sessions = std::collections::HashMap::new();
+        sessions.insert("hero".to_string(), test_session_ground(actor));
+        let saved = SavedHuman {
+            account: "h".into(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".into(),
+            derived: None,
+        };
+        // ① 负例：未发 CM_GROUPMODE（实体 allow_group 缺省 false）⇒ 记录 0。
+        assert!(!world.entities.get(actor).unwrap().allow_group);
+        assert_eq!(
+            build_save_record(&saved, "hero", &world, &sessions["hero"], None)
+                .data
+                .allow_group,
+            0,
+            "未发 CM_GROUPMODE ⇒ live AllowGroup=false ⇒ 记录 0"
+        );
+        // ② CM_GROUPMODE(param2!=0) ⇒ Entity.allow_group = true ⇒ 实体/快照/记录一致为 1。
+        let _ = world.party_group_mode(actor, 1, &cfg);
+        assert!(
+            world.entities.get(actor).unwrap().allow_group,
+            "CM_GROUPMODE(param2!=0) 必须写穿 Entity.allow_group"
+        );
+        let derived = entity_derived_snapshot(world.entities.get(actor).expect("实体在场"));
+        assert!(derived.allow_group, "EntityDerived 必须采集 allow_group");
+        let rec = build_save_record(&saved, "hero", &world, &sessions["hero"], None);
+        assert_eq!(rec.data.allow_group, 1, "live AllowGroup=true ⇒ 记录 1");
+        // ③ CM_GROUPMODE(param2==0)：未组队 ⇒ GroupOwner==0 支置 false ⇒ 记录 0。
+        let _ = world.party_group_mode(actor, 0, &cfg);
+        assert!(!world.entities.get(actor).unwrap().allow_group);
+        let rec = build_save_record(&saved, "hero", &world, &sessions["hero"], None);
+        assert_eq!(rec.data.allow_group, 0, "live AllowGroup=false ⇒ 记录 0");
+        // ④ 第三档回落不变：会话在、实体无、快照无 ⇒ 保持载入值（不误清）。
+        let mut saved_loaded_on = SavedHuman {
+            account: "h".into(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".into(),
+            derived: None,
+        };
+        saved_loaded_on.record.data.allow_group = 1;
+        let mut orphan_world = mir2_world::World::with_maps(vec![(100, 100)]);
+        orphan_world.open_session("hero");
+        let rec = build_save_record(
+            &saved_loaded_on,
+            "hero",
+            &orphan_world,
+            &sessions["hero"],
+            None,
+        );
+        assert_eq!(rec.data.allow_group, 1, "第三档回落载入值（不误清）");
     }
 
     /// **A3 宿主**：`@退出门派` 成功 ⇒ DelMember + SS_207 登记 + 会话清 `MyGuild` +
@@ -82992,7 +83074,7 @@ fn ",
     /// （`apply_pending_gm_entity`）的构造级牙——卡面 A2 点名的 `@允许天地合一` 经
     /// `GMEXECUTE`：命令体翻转会话位并装 `pending_entity`；事件末收口把权威
     /// `Entity.allow_group_re_call` 写穿，且该字段随存档记录写出
-    /// （`characters.AllowGroupReCall`）。
+    /// （`PlayerRecordData.allow_group_re_call`；DB 列绑定见 whitelist T-272）。
     ///
     /// 变异红：注释掉 drain 步骤① 的 `apply_pending_gm_entity` 调用 ⇒ drain 后实体仍 false、
     /// `pending_entity` 仍在（本用例红）。
@@ -83025,13 +83107,13 @@ fn ",
                 .allow_group_re_call,
             "drain 步骤① 必须把权威 Entity 写穿"
         );
-        // `characters.AllowGroupReCall` 的存档源 = `EntityDerived`（`build_save_record` 的
+        // `PlayerRecordData.allow_group_re_call` 的存档源 = `EntityDerived`（`build_save_record` 的
         // `rec.data.allow_group_re_call = d.allow_group_re_call`）⇒ 断言该接缝已采集真值；
         // 实体 → 记录的最终写库断言见既有 `w_allow_group_recall_persists_to_record`。
         let derived = entity_derived_snapshot(rig.world.entities.get(rig.actor).unwrap());
         assert!(
             derived.allow_group_re_call,
-            "EntityDerived 必须采集 allow_group_re_call（characters.AllowGroupReCall 的存档源）"
+            "EntityDerived 必须采集 allow_group_re_call（PlayerRecordData.allow_group_re_call 的存档源）"
         );
     }
 
