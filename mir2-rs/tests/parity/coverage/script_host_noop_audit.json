@@ -5720,7 +5720,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "drop_item_on_full_bag",
-        "line": 2390
+        "line": 2401
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7112,7 +7112,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "send_del_use_item",
-        "line": 2380
+        "line": 2391
       },
       "side_effect": "-",
       "consequence": "-",
@@ -7159,7 +7159,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "set_use_item_index",
-        "line": 2355
+        "line": 2366
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8063,7 +8063,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_item_index",
-        "line": 2347
+        "line": 2358
       },
       "side_effect": "-",
       "consequence": "-",
@@ -8116,7 +8116,7 @@
         "file": "mir2-rs/bins/game-svr/src/npc.rs",
         "impl": "ScriptPlayer for NpcPlayer",
         "method": "use_item_std_name",
-        "line": 2364
+        "line": 2375
       },
       "side_effect": "-",
       "consequence": "-",
