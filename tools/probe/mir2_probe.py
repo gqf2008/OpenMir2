@@ -923,10 +923,16 @@ def _check_blocked(bl):
 
     schema（顶层 `blocked`）：:
 
-        "blocked": {"reason": "<非空 str>", "missing_fixture": "<str，可选>"}
+        "blocked": {"reason": "<非空 str>",
+                    "missing_fixture": "<str，可选>",
+                    "not_in_run3_reason": "<非空 str|object，可选>"}
 
     * `reason` 必填、非空字符串（缺/空/非字符串 ⇒ rc=2 点名 `scenario.blocked.reason`）；
     * `missing_fixture` 可选，给了就必须是**非空**字符串（空串按「没写」处理会掩盖信息，fail-closed）；
+    * `not_in_run3_reason` 可选，给了就必须**非空**（字符串或对象）；它是
+      `tools/window/blocked_sources_check.py:591` 读取的结构化封存理由（`{reason, evidence[]}`），
+      **接受集合与那边对齐**（卡 `openmir2-probe-blocked-schema-align`）；空串/空对象/其它类型
+      ⇒ rc=2 点名本键（不放宽）；
     * 未知键 fail-closed（与 `scenario.placement` 同口径）。
 
     消费侧：`tools/conformance/card_window.py` 在起栈前见到 `blocked` 一律 rc=2，不建 out、
@@ -935,7 +941,8 @@ def _check_blocked(bl):
     """
     if bl is None:
         return
-    _need_keys(bl, "scenario.blocked", required=("reason",), optional=("missing_fixture",))
+    _need_keys(bl, "scenario.blocked", required=("reason",),
+               optional=("missing_fixture", "not_in_run3_reason"))
     reason = bl["reason"]
     if not isinstance(reason, str) or not reason.strip():
         raise ScenarioError("scenario.blocked.reason must be a non-empty string, got %r"
@@ -944,6 +951,17 @@ def _check_blocked(bl):
     if mf is not None and (not isinstance(mf, str) or not mf.strip()):
         raise ScenarioError("scenario.blocked.missing_fixture must be a non-empty string "
                             "when present, got %r" % (mf,))
+    # 卡 `openmir2-probe-blocked-schema-align`（口径订正：参照 `blocked_sources_check.py:591`，
+    # 不是 scenario_manifest_gate）：`not_in_run3_reason` 是那边读取的**结构化**封存理由
+    # （`{reason, evidence[]}`）。本驱动器过去把它当未知键拒绝 ⇒ 同一场景一个门合法、另一个
+    # 门 rc=2。这里只补「接受 + 非空」，不放宽：空串/空对象/其它类型仍点名本键 fail-closed。
+    nr3 = bl.get("not_in_run3_reason")
+    if nr3 is not None:
+        nr3_ok = ((isinstance(nr3, str) and bool(nr3.strip()))
+                  or (isinstance(nr3, dict) and bool(nr3)))
+        if not nr3_ok:
+            raise ScenarioError("scenario.blocked.not_in_run3_reason must be a non-empty "
+                                "string or object, got %r" % (nr3,))
 
 
 def _check_requires(rq):
@@ -4008,8 +4026,8 @@ def _selftest_scenario_validation():
             raise AssertionError("direction-table drift %r accepted (fail-closed broken)" % label)
 
     # BLOCKED：顶层 `blocked` 是**合法的形状**（rc=0，只是不可跑）；结构非法才 rc=2。
-    # 牙：① 合法 blocked 必须放行（否则所有封存场景都会被 --check-scenario 判死）；
-    #     ② 缺 reason / reason 非字符串 / 未知键 / 空串 必须点名 scenario.blocked.*
+    # 牙：① 合法 blocked 必须放行（含结构化 not_in_run3_reason；否则所有封存场景都会被判死）；
+    #     ② 缺 reason / reason 非字符串 / 未知键 / 空串 / not_in_run3_reason 非空校验 必须点名
     import shutil
     bl_dir = tempfile.mkdtemp(prefix="pd-blocked-")
 
@@ -4029,6 +4047,18 @@ def _selftest_scenario_validation():
         only_reason["blocked"] = {"reason": "只写理由，不写 missing_fixture"}
         orr = _load_doc("only-reason", only_reason)   # missing_fixture 可选
         check_scenario(orr, expand_scenario(orr, dict(ok_vars))[0], ok_vars, messages)
+        # 卡 openmir2-probe-blocked-schema-align：结构化 `not_in_run3_reason`（与
+        # tools/window/blocked_sources_check.py:591 同径）必须放行（正例）。
+        with_nr3 = clone(base)
+        with_nr3["blocked"] = {
+            "reason": "缺夹具",
+            "not_in_run3_reason": {
+                "reason": "结构性不可判，故不进 run3",
+                "evidence": [{"kind": "path", "value": "tools/probe/mir2_probe.py"}],
+            },
+        }
+        wr = _load_doc("with-not-in-run3-reason", with_nr3)
+        check_scenario(wr, expand_scenario(wr, dict(ok_vars))[0], ok_vars, messages)
 
         for i, (label, blocked, needle) in enumerate((
             ("缺 reason", {"missing_fixture": "x"}, "scenario.blocked missing key(s): ['reason']"),
@@ -4039,6 +4069,13 @@ def _selftest_scenario_validation():
             ("未知键", {"reason": "x", "note": "y"}, "scenario.blocked has unknown key(s)"),
             ("missing_fixture 空串", {"reason": "x", "missing_fixture": ""},
              "scenario.blocked.missing_fixture must be a non-empty string"),
+            ("not_in_run3_reason 空串", {"reason": "x", "not_in_run3_reason": ""},
+             "scenario.blocked.not_in_run3_reason must be a non-empty"),
+            ("not_in_run3_reason 空对象", {"reason": "x", "not_in_run3_reason": {}},
+             "scenario.blocked.not_in_run3_reason must be a non-empty"),
+            ("not_in_run3_reason 非字符串/对象", {"reason": "x", "not_in_run3_reason": 123},
+             "scenario.blocked.not_in_run3_reason must be a non-empty"),
+            ("空 blocked（无任何 reason 键）", {}, "scenario.blocked missing key(s): ['reason']"),
         )):
             d = clone(base)
             d["blocked"] = blocked
@@ -4055,7 +4092,7 @@ def _selftest_scenario_validation():
     for name in ("login_only.json", "dice_chain.json"):
         d = load_scenario(os.path.join(SCENARIO_DIR, name))
         check_scenario(d, expand_scenario(d)[0], None, messages)
-    return "R1-R5 硬牙（含 R3 方向：send=CM_*/wait=SM_*）+ R6 tag WARN + 取表 drift 五例 + blocked 形状（6 坏例）+ 不误伤"
+    return "R1-R5 硬牙（含 R3 方向：send=CM_*/wait=SM_*）+ R6 tag WARN + 取表 drift 五例 + blocked 形状（10 坏例 + 3 正例，含 not_in_run3_reason）+ 不误伤"
 
 
 class _TimedSock:
