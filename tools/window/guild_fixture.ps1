@@ -219,7 +219,12 @@ function Invoke-Prepare {
   $iniFile = Join-Path $guildsDir ($Name + '.ini')
 
   $beforeExists = Test-Path -LiteralPath $listFile -PathType Leaf
-  $beforeBytes = if ($beforeExists) { [System.IO.File]::ReadAllBytes($listFile) } else { $null }
+  # 不能写成 `$beforeBytes = if (...) { ReadAllBytes(...) } else { ... }`：if 表达式会把 byte[]
+  # 展开进管道——0 字节文件变成 $null（Get-Sha256HexBytes/ComputeHash 报「多个不明确的重载」），
+  # 单字节文件变成标量 [byte]（.Length 恒 1、末字节判断失真）。先置空数组再**直接**赋值，保住
+  # byte[] 语义。触发输入：既有 GuildList.txt 为 0 字节（部署现网即如此）或单字节。
+  [byte[]]$beforeBytes = @()
+  if ($beforeExists) { $beforeBytes = [System.IO.File]::ReadAllBytes($listFile) }
   $beforeSha = if ($beforeExists) { Get-Sha256HexBytes $beforeBytes } else { 'ABSENT' }
 
   # ---- fail-closed 前置校验（-WhatIf 也照做，保持与真实执行同判） ----
@@ -385,8 +390,10 @@ function Invoke-PrepareCli {
 
 # ---------------------------------------------------------------- selftest ----
 $script:SelFail = 0
+$script:SelPass = 0
 function Assert-True([bool]$cond, [string]$msg) {
   if ($cond) {
+    $script:SelPass++
     Write-Host ('PASS ' + $msg)
   } else {
     $script:SelFail++
@@ -498,6 +505,51 @@ function Invoke-Selftest {
     } finally { Remove-Item -LiteralPath $t2 -Recurse -Force -ErrorAction SilentlyContinue }
   }
 
+  Write-Host '--- T2b 既有 GuildList 为 0 字节 / 单字节（无尾 LF）：prep -> restore 往返 ---'
+  # 回归牙：if 表达式会把 byte[] 展开进管道（0 字节 -> $null，单字节 -> 标量 [byte]），
+  # 旧实现在 0 字节既有文件上 prep 必崩（ComputeHash 多个不明确的重载）。
+  $t2bCases = @(
+    @{ tag = 'empty'; seed = [byte[]]::new(0) },
+    @{ tag = 'one-byte'; seed = [byte[]](0x41) }
+  )
+  foreach ($case in $t2bCases) {
+    $t2b = New-TempRoot ('t2b-' + $case.tag)
+    try {
+      $root = Join-Path $t2b 'M2GameSvr'
+      $guildBase = Join-Path $root 'GuildBase'
+      [void](New-Item -ItemType Directory -Path $guildBase -Force)
+      $listFile = Join-Path $guildBase 'GuildList.txt'
+      [System.IO.File]::WriteAllBytes($listFile, $case.seed)
+      $seedSha = Get-Sha256HexBytes $case.seed
+      $treeBefore = Get-TreeSnapshot $guildBase
+      $backup = Join-Path $t2b 'backup'
+      $r = Invoke-Prepare -RootDir $root -Name $g -MemberName $m -BackupDirPath $backup
+      Assert-Equal $seedSha $r.BeforeSha ('T2b[' + $case.tag + '] before_sha = 原字节')
+      $suffix = $enc.GetBytes($g)
+      if ($case.seed.Length -gt 0 -and $case.seed[$case.seed.Length - 1] -ne 0x0A) {
+        $suffix = New-SequenceBytes ([byte[]](0x0D, 0x0A)) $suffix
+      }
+      $expectedList = New-SequenceBytes $case.seed (New-SequenceBytes $suffix ([byte[]](0x0D, 0x0A)))
+      Assert-Equal (Get-Sha256HexBytes $expectedList) $r.AfterSha ('T2b[' + $case.tag + '] after_sha = 原字节+GBK(名)+CRLF')
+      Assert-Equal (Get-Sha256HexBytes $expectedList) (Get-Sha256Hex $listFile) ('T2b[' + $case.tag + '] 磁盘字节与期望一致')
+      # Get-GuildListNames 返回单元素时会被管道展开成标量字符串，必须 @() 包裹后再取下标。
+      $got = @(Get-GuildListNames $listFile)
+      $expectedCount = if ($case.seed.Length -gt 0) { 2 } else { 1 }
+      Assert-Equal $expectedCount $got.Count ('T2b[' + $case.tag + '] 名单条数')
+      Assert-Equal $g $got[$got.Count - 1] ('T2b[' + $case.tag + '] 新行会在名单末尾')
+
+      $restore = Join-Path $PSScriptRoot 'guild_fixture_restore.ps1'
+      $out = & (Get-HostExe) -NoProfile -ExecutionPolicy Bypass -File $restore -Root $root -GuildName $g -BackupDir $backup 2>&1
+      $restoreRc = $LASTEXITCODE
+      Assert-Equal 0 $restoreRc ('T2b[' + $case.tag + '] restore 退出码 0')
+      Assert-True (($out | Out-String) -match ('RESTORED_SHA ' + $seedSha)) ('T2b[' + $case.tag + '] restore 输出 restored_sha = 原 sha')
+      Assert-True (Test-Path -LiteralPath $listFile -PathType Leaf) ('T2b[' + $case.tag + '] restore 后 GuildList 仍在（原有文件不当 ABSENT）')
+      Assert-Equal $seedSha (Get-Sha256Hex $listFile) ('T2b[' + $case.tag + '] restored_sha == before_sha')
+      Assert-Equal $case.seed.Length ([System.IO.File]::ReadAllBytes($listFile)).Length ('T2b[' + $case.tag + '] 恢复后字节数一致')
+      Assert-Equal $treeBefore (Get-TreeSnapshot $guildBase) ('T2b[' + $case.tag + '] 往返后 GuildBase 树一致')
+    } finally { Remove-Item -LiteralPath $t2b -Recurse -Force -ErrorAction SilentlyContinue }
+  }
+
   Write-Host '--- T3 目标已存在 => 拒绝 ---'
   $t3 = New-TempRoot 't3'
   try {
@@ -569,6 +621,9 @@ function Invoke-Selftest {
   # T7 生产根零触碰（只读旁观）
   $watchAfter = if (Test-Path -LiteralPath $watchRoot) { Get-TreeDigest $watchRoot } else { 'ABSENT' }
   Assert-Equal $watchBefore $watchAfter 'T7 E:/MirServer/M2GameSvr/GuildBase 自测前后一致（零写入）'
+
+  # 元断言：断言条数只增不减（防新增用例被静默跳过而假绿）。基线 56 + T2b 22 = 78。
+  Assert-True ($script:SelPass -ge 78) ('TM 自测断言条数 >= 78（当前 ' + $script:SelPass + '）')
 
   if ($script:SelFail -ne 0) { throw ("SELFTEST FAILED: " + $script:SelFail + " 项失败") }
   Write-Host 'SELFTEST PASS guild_fixture.ps1'
