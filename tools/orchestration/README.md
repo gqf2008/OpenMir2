@@ -21,12 +21,12 @@
         │
         ▼
    merge 车道（role=merge，principal=`openmir2-coordinator`）：把「非作者 approve 覆盖当前 head」的卡
-   合入 master（准入判据 + 合并树四门禁 + 推 origin/walgit）→ 写 `merge_result` + `status`
+   合入 master（准入判据 + 合并树五门禁：4 条 cargo（fmt/clippy/test/msgcodegen）+ 散文锚 `python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <合并目标 ref>`（在待合并分支上跑）；推 origin/walgit）→ 写 `merge_result` + `status`
 ```
 
 **要点：控制台（交互会话）不在这个循环里。** 它只是人的面（观察 `lane-status.log`/看板、派活、验收）。循环必须由**独立进程**拥有——起在交互会话的进程树里会被误杀，这是本项目反复踩过的坑。
 
-**合并为什么要独立成一条车道（owner 2026-10-13 同意）**：approve 之后就只能等人来合，等于把流水线出口绑在控制台的在场时间上。实测（本日）：【待审】堆到 7 张，人工清一轮的同时车道又交了 6 张 ⇒ 队列只涨不降。把合并判据写成 brief（`briefs/brief-merge.md`）交给一条常驻车道后，出口不再依赖人；合并仍是「非作者 approve + 四门禁全绿」才动，质量下限不变。
+**合并为什么要独立成一条车道（owner 2026-10-13 同意）**：approve 之后就只能等人来合，等于把流水线出口绑在控制台的在场时间上。实测（本日）：【待审】堆到 7 张，人工清一轮的同时车道又交了 6 张 ⇒ 队列只涨不降。把合并判据写成 brief（`briefs/brief-merge.md`）交给一条常驻车道后，出口不再依赖人；合并仍是「非作者 approve + 五门禁（4 条 cargo + 散文锚）全绿」才动，质量下限不变。
 
 ## 文件
 | 文件 | 作用 |
