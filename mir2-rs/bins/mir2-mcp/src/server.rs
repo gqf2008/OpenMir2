@@ -122,6 +122,8 @@ impl Mir2Mcp {
     /// `gm_execute` 的目标地址：env `MIR2_MCP_ADMIN_ADDR` > `127.0.0.1:<[Admin] AdminPort>`。
     ///
     /// `AdminPort` 缺省 0（game-svr 不监听）⇒ 结构化 `admin_not_configured`。
+    /// 解析结果必须落在**回环**（`crate::admin::resolve_loopback`），否则结构化
+    /// `admin_addr_not_loopback`（客户端侧纵深防御，服务端 accept 层同样只收回环）。
     fn admin_addr(&self) -> Result<String, Value> {
         if let Some(addr) = self.config.admin_addr.as_deref() {
             return Ok(addr.to_string());
@@ -305,9 +307,12 @@ impl Mir2Mcp {
     /// 经 game-svr 本机 admin 通道执行一条 GM 命令（`{chr, cmd}`）。
     ///
     /// 执行核心在 game-svr（`gmcmd::execute` + 事件末 GM 收口），本工具只传命令并透传结果：
-    /// 未配置/连不上/超时/未知角色/未知命令全部返回结构化错误，不伪造执行。
+    /// 未配置/地址非回环/连不上/超时/未知角色/未知命令全部返回结构化错误，不伪造执行。
+    ///
+    /// 透传的 `frames` 是 game-svr 的**直接应答帧数**（`SysMsg` + 未知命令回落 + 直发帧），
+    /// **不含**事件末 `command_event_tail_gm_drain` 落地的副作用广播帧（与 `AdminGmReply` 一致）。
     #[tool(
-        description = "经 game-svr 本机 admin 通道执行 GM 命令：入参 {chr, cmd}（cmd 为完整 @ 命令行，如 \"@时间\"）。返回 game-svr 的 {ok,error,frames,note}；未配置通道/连不上/超时/未知角色/未知命令均为结构化错误，不会伪造执行。",
+        description = "经 game-svr 本机 admin 通道执行 GM 命令：入参 {chr, cmd}（cmd 为完整 @ 命令行，如 \"@时间\"）。返回 game-svr 的 {ok,error,frames,note}（frames = 直接应答帧数，不含事件末副作用广播帧）；未配置通道/地址非回环/连不上/超时/未知角色/未知命令均为结构化错误，不会伪造执行。",
         annotations(destructive_hint = true, open_world_hint = true)
     )]
     fn gm_execute(&self, Parameters(req): Parameters<GmExecuteReq>) -> CallToolResult {
