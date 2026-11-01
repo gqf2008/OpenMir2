@@ -649,7 +649,7 @@ def _audit_teeth():
         rc3, red3, undec3 = audit_baseline(tmp, os.path.join(tmp, "no-such.json"))
         chk(rc3 == 2, "牙⑤：baseline 文件缺失 ⇒ rc=2")
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(tmp, onerror=_rmtree_force)   # 同上：只读 loose object 需去只读位
     return ok
 
 def main(argv=None):
@@ -725,13 +725,36 @@ def main(argv=None):
     return rc
 
 
+def _rmtree_force(func, path, _exc_info):
+    """T1：Windows 上 git 的 loose object 是只读文件，直接 rmtree 会 PermissionError；
+    先去只读位再删（只对本进程自建的临时树调用）。"""
+    import stat
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        pass
+    func(path)
+
+
 def selfcheck():
     """合成夹具自证：临时 git 仓库，**不碰真仓库**。"""
     global _IN_SELFTEST
     if _IN_SELFTEST:
         return 0        # 由 `gate` 间接调用时不再跑夹具（防递归）；真仓库 check 不受影响
     _IN_SELFTEST = True
+    import shutil
     import tempfile
+    tmp = tempfile.mkdtemp(prefix="oid-gate-")
+    try:
+        return _selfcheck_in(tmp)
+    finally:
+        # T1（卡 openmir2-collab-tool-tails）：只清理**本进程用 mkdtemp 建的这一棵**
+        # （路径已知）；绝不按通配扫临时目录——非本进程创建的 `oid-gate-*` 一律不碰。
+        # git loose object 是只读文件，Windows 下需先去只读位（_rmtree_force）。
+        shutil.rmtree(tmp, onerror=_rmtree_force)
+
+
+def _selfcheck_in(tmp):
     ok = bad = 0
 
     def chk(cond, name):
@@ -743,7 +766,6 @@ def selfcheck():
             bad += 1
             print("FAIL " + name)
 
-    tmp = tempfile.mkdtemp(prefix="oid-gate-")
     env = dict(_clean_env(), GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@t",
                GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@t")
     subprocess.run(["git", "init", "-q", tmp], check=True, env=env)
