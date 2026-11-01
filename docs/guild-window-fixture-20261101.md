@@ -325,10 +325,10 @@ Select-String -Path <game-svr.log> -Pattern '保存行会信息失败|行会断�
 ## 9. 自测记录（本卡交付时实跑，均在 tempdir）
 
 ```
-pwsh -NoProfile -File tools/window/guild_fixture.ps1         -Selftest   # rc=0, PASS 110, FAIL 0, SELFTEST PASS
-pwsh -NoProfile -File tools/window/guild_fixture_restore.ps1 -Selftest   # rc=0, PASS  20, FAIL 0, SELFTEST PASS
-pwsh -NoProfile -File tools/window/guild_fixture_suspend.ps1 -Selftest   # rc=0, PASS  21, FAIL 0, SELFTEST PASS
-pwsh -NoProfile -File tools/window/guild_fixture_resume.ps1  -Selftest   # rc=0, PASS  23, FAIL 0, SELFTEST PASS
+pwsh -NoProfile -File tools/window/guild_fixture.ps1         -Selftest   # rc=0, PASS 110 @ 0d963b8f, FAIL 0, SELFTEST PASS
+pwsh -NoProfile -File tools/window/guild_fixture_restore.ps1 -Selftest   # rc=0, PASS  20 @ 0d963b8f, FAIL 0, SELFTEST PASS
+pwsh -NoProfile -File tools/window/guild_fixture_suspend.ps1 -Selftest   # rc=0, PASS  21 @ 0d963b8f, FAIL 0, SELFTEST PASS
+pwsh -NoProfile -File tools/window/guild_fixture_resume.ps1  -Selftest   # rc=0, PASS  23 @ 0d963b8f, FAIL 0, SELFTEST PASS
 ```
 
 覆盖：prep→restore 往返字节一致（含原文件带/不带尾 CRLF、0 字节、单字节四种）、目标已存在拒绝、
