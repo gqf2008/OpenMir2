@@ -6,8 +6,10 @@
 //! ```
 //!
 //! root 解析优先级：`--root` > env `MIR2_MCP_ROOT` > `E:/MirServer`。
+//! `gm_execute` 的 admin 地址：env `MIR2_MCP_ADMIN_ADDR` > `127.0.0.1:<Server.conf [Admin] AdminPort>`。
 //! 传输永远是**本地 stdio**，不监听端口；工具清单见 `docs/mcp-gm-server-20261101.md`。
 
+mod admin;
 mod catalog;
 mod conf;
 mod server;
@@ -33,6 +35,10 @@ mir2-mcp — OpenMir2 的本地 MCP（stdio）服务
   --registry <文件>     gm_list 改为实读该 gm_registry.json（缺省用编译期嵌入副本）
   -h, --help            打印本帮助
   --version             打印版本
+
+环境变量:
+  MIR2_MCP_ROOT         MirServer 根目录（--root 压过它）
+  MIR2_MCP_ADMIN_ADDR   game-svr 本机 admin 通道地址（缺省 127.0.0.1:<[Admin] AdminPort>）
 
 工具: gm_list / gm_help / conf_get / conf_keys / conf_set / gm_execute
 传输: stdio（不监听任何端口）

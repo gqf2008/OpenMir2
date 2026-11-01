@@ -2,7 +2,8 @@
 //!
 //! 覆盖卡面 M1-2（initialize + tools/list ≥6 + tools/call）与 M1-3/M1-5 的端到端面：
 //! `gm_list` 条数断言（= gm_registry.json 的 table_total）、`conf_get`/`conf_set`（dry_run 零写、
-//! 真实写的备份/回读）、`gm_execute` 的结构化 `not_wired`。
+//! 真实写的备份/回读）、`gm_execute` 的结构化错误，以及经 game-svr 本机 admin 通道
+//! （进程内假通道）的原样透传。
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -25,6 +26,15 @@ struct McpProc {
 
 impl McpProc {
     fn start(root: Option<&Path>, env_root: Option<&Path>) -> Self {
+        Self::start_with_env(root, env_root, &[])
+    }
+
+    /// 同 [`Self::start`]，额外注入环境变量（`gm_execute` 的 `MIR2_MCP_ADMIN_ADDR` 等）。
+    fn start_with_env(
+        root: Option<&Path>,
+        env_root: Option<&Path>,
+        extra_env: &[(&str, String)],
+    ) -> Self {
         let exe = env!("CARGO_BIN_EXE_mir2-mcp");
         let mut command = Command::new(exe);
         if let Some(root) = root {
@@ -32,6 +42,9 @@ impl McpProc {
         }
         if let Some(env_root) = env_root {
             command.env("MIR2_MCP_ROOT", env_root);
+        }
+        for (key, value) in extra_env {
+            command.env(key, value);
         }
         let mut child = command
             .stdin(Stdio::piped())
@@ -291,14 +304,14 @@ fn mcp_stdio_end_to_end() {
     let after = proc.call_tool("conf_get", json!({"section": "Setup", "key": "GenMonRate"}));
     assert_eq!(structured(&after)["value"], "25");
 
-    // 8) tools/call gm_execute：结构化 not_wired（isError，不 panic）
-    let exec = proc.call_tool("gm_execute", json!({"name": "Tingwa", "params": ["x"]}));
+    // 8) tools/call gm_execute：本夹具未配置 [Admin] AdminPort ⇒ 结构化 admin_not_configured
+    //    （isError，不 panic、不伪造执行）。
+    let exec = proc.call_tool("gm_execute", json!({"chr": "aaa", "cmd": "@时间"}));
     assert_eq!(exec["result"]["isError"], true);
     let body = structured(&exec);
-    assert_eq!(body["status"], "not_wired");
-    assert_eq!(body["code"], "not_wired");
-    assert_eq!(body["command_found"], true);
-    assert_eq!(body["slice"], "slice-2");
+    assert_eq!(body["code"], "admin_not_configured");
+    assert_eq!(body["ok"], false);
+    assert_eq!(body["wrote"], false);
 
     proc.shutdown();
 }
@@ -336,4 +349,104 @@ fn lookup_rate(proc: &mut McpProc) -> String {
         .as_str()
         .expect("value 必须是字符串")
         .to_string()
+}
+
+/// 卡 `openmir2-mcp-gm-execute`（T-273）：`gm_execute` 的默认地址来自
+/// `Server.conf [Admin] AdminPort`；请求 `{chr,cmd}` 原样发给通道，响应原样透传。
+#[test]
+fn gm_execute_roundtrips_through_admin_channel() {
+    use std::net::TcpListener;
+
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind fake admin");
+    let port = listener.local_addr().expect("addr").port();
+    let server = std::thread::spawn(move || {
+        let (mut stream, peer) = listener.accept().expect("accept");
+        assert!(peer.ip().is_loopback(), "客户端必须来自回环：{peer}");
+        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+        let mut line = String::new();
+        reader.read_line(&mut line).expect("读请求");
+        let req: Value = serde_json::from_str(line.trim()).expect("请求必须是 JSON");
+        assert_eq!(req["chr"], "aaa", "{req}");
+        assert_eq!(req["cmd"], "@时间", "{req}");
+        writeln!(
+            stream,
+            "{}",
+            json!({
+                "ok": true,
+                "error": Value::Null,
+                "frames": 1,
+                "note": "当前日期时间: 2026-11-01 00:00:00",
+            })
+        )
+        .expect("写响应");
+        stream.flush().expect("flush");
+    });
+
+    let root = TempRoot::new("admin-ok");
+    // 默认地址 = 127.0.0.1:<Server.conf [Admin] AdminPort>（不设 MIR2_MCP_ADMIN_ADDR）。
+    let mut conf = Vec::from(&b"\xEF\xBB\xBF"[..]);
+    conf.extend_from_slice(
+        format!("[Setup]\r\nGenMonRate=10\r\n[Admin]\r\nAdminPort={port}\r\n").as_bytes(),
+    );
+    std::fs::write(root.conf_path(), conf).expect("写 [Admin] 夹具");
+
+    let mut proc = McpProc::start(Some(&root.path), None);
+    proc.request(
+        "initialize",
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "mir2-mcp-e2e", "version": "0"},
+        }),
+    );
+    proc.notify("notifications/initialized");
+    let got = proc.call_tool("gm_execute", json!({"chr": "aaa", "cmd": "@时间"}));
+    let body = structured(&got);
+    assert_eq!(body["ok"], true, "{got}");
+    assert_eq!(body["frames"], 1, "{got}");
+    assert_eq!(body["chr"], "aaa");
+    assert_eq!(body["cmd"], "@时间");
+    assert!(
+        body["note"]
+            .as_str()
+            .is_some_and(|n| n.contains("当前日期时间")),
+        "{got}"
+    );
+    proc.shutdown();
+    server.join().expect("fake admin 线程");
+}
+
+/// 失败面全是结构化错误码：缺 `chr` / 非 `@` 命令行 / 通道连不上（不 panic、不静默）。
+#[test]
+fn gm_execute_errors_are_structured() {
+    // 先占一个回环端口再立刻释放 ⇒ 大概率无人监听（不依赖固定端口）。
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
+    let addr = listener.local_addr().expect("addr").to_string();
+    drop(listener);
+
+    let root = TempRoot::new("admin-err");
+    let mut proc =
+        McpProc::start_with_env(Some(&root.path), None, &[("MIR2_MCP_ADMIN_ADDR", addr)]);
+    proc.request(
+        "initialize",
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "mir2-mcp-e2e", "version": "0"},
+        }),
+    );
+    proc.notify("notifications/initialized");
+
+    let missing = proc.call_tool("gm_execute", json!({"cmd": "@时间"}));
+    assert_eq!(missing["result"]["isError"], true, "{missing}");
+    assert_eq!(structured(&missing)["code"], "missing_chr");
+
+    let bad_line = proc.call_tool("gm_execute", json!({"chr": "aaa", "cmd": "hello"}));
+    assert_eq!(structured(&bad_line)["code"], "invalid_command");
+
+    let unreachable = proc.call_tool("gm_execute", json!({"chr": "aaa", "cmd": "@时间"}));
+    assert_eq!(unreachable["result"]["isError"], true, "{unreachable}");
+    assert_eq!(structured(&unreachable)["code"], "admin_connect_failed");
+
+    proc.shutdown();
 }

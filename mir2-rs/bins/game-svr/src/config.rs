@@ -70,6 +70,16 @@ pub struct GateConfig {
     /// `[Share] NoticeDir`（oracle `SystemShare.Config.NoticeDir`，默认 `Notice`）——
     /// `Notice.txt` 所在目录（`openmir2-m2-enter-world-frames` 的 658 `SM_SENDNOTICE` 用它）。
     pub notice_dir: String,
+    /// `[Admin] AdminPort`（本仓新增管理面，oracle 没有该段；卡 `openmir2-mcp-gm-execute`，T-273）。
+    ///
+    /// **缺省 0 = 不监听**：默认关闭，生产行为与 oracle 完全一致。只有显式写
+    /// `[Admin] AdminPort=<非 0>` 才在回环地址上开本机 admin 通道（逐行 JSON）。
+    pub admin_port: u16,
+    /// `[Admin] AdminBind`（缺省 `127.0.0.1`）：admin 通道的监听地址。
+    ///
+    /// **只接受回环地址**（`IpAddr::is_loopback`）；非回环（含 `0.0.0.0`、局域网 IP）在
+    /// [`load`] 里直接拒绝启动（fail-closed），避免把 GM 执行面暴露到本机之外。
+    pub admin_bind: std::net::IpAddr,
     /// `[Setup] RedMsgFColor`（oracle `GameSvrConf.cs:1540` 缺省 `0xFF`）——`SysMsg(..., Red, ...)`
     /// 的前景色，落在 `SM_SYSMESSAGE` 的 `Param` 低字节。
     ///
@@ -532,6 +542,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut db_addr: Option<String> = None;
     let mut db_port: Option<u16> = None;
     let mut db_conn_string: Option<String> = None;
+    // `[Admin]`（本仓新增；卡 `openmir2-mcp-gm-execute`，T-273）。缺键 ⇒ 缺省（AdminPort=0 关闭）。
+    let mut admin_port: Option<u16> = None;
+    let mut admin_bind: Option<std::net::IpAddr> = None;
     for raw in text.lines() {
         let line = raw.trim();
         if line.is_empty() || line.starts_with(';') || line.starts_with('#') {
@@ -679,6 +692,19 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     db_conn_string = Some(v.to_string());
                 }
             }
+            // **本仓新增管理面**（卡 `openmir2-mcp-gm-execute`，T-273）：oracle 没有 `[Admin]` 段。
+            // 缺键 ⇒ AdminPort=0（不监听）/ AdminBind=127.0.0.1。`AdminBind` 只接受回环地址，
+            // 非回环在解析时直接拒绝启动（见 [`parse_admin_bind`]）。
+            "ADMIN" => match k.as_str() {
+                "ADMINPORT" => {
+                    admin_port = Some(
+                        v.parse()
+                            .with_context(|| format!("AdminPort 不是合法端口：{v:?}"))?,
+                    );
+                }
+                "ADMINBIND" => admin_bind = Some(parse_admin_bind(v)?),
+                _ => {}
+            },
             // 消息颜色（`SystemShare.Config.RedMsgFColor/BColor`，`ServerConf.cs:333-334` 的 `ReadWriteByte`）。
             // 缺键不是错误（oracle 读不到就沿用 `GameSvrConf` 的缺省 0xFF/0x38）；写了但非法才报错。
             "SETUP" => match k.as_str() {
@@ -1216,6 +1242,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         envir_dir: envir_dir.unwrap_or_else(|| "Envir".to_string()),
         map_dir: map_dir.unwrap_or_else(|| "Map".to_string()),
         notice_dir: notice_dir.unwrap_or_else(|| "Notice".to_string()),
+        // 本仓新增管理面（T-273）：缺键 = 关闭 + 回环缺省。
+        admin_port: admin_port.unwrap_or(0),
+        admin_bind: admin_bind.unwrap_or(std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)),
         // oracle 缺省值（`GameSvrConf.cs:1540-1541`）：`[Setup]` 里没写也照常起。
         red_msg_f_color: red_msg_f_color.unwrap_or(0xFF),
         red_msg_b_color: red_msg_b_color.unwrap_or(0x38),
@@ -1386,6 +1415,21 @@ fn read_u8_or_default(v: &str, def_value: u8, name: &str) -> Result<u8> {
     }
     v.parse()
         .with_context(|| format!("{name} 不是合法字节：{v:?}"))
+}
+
+/// `[Admin] AdminBind`：只接受**回环 IP 字面量**（`127.0.0.0/8` 或 `::1`）。
+///
+/// 非回环（`0.0.0.0`、局域网/公网 IP）在**配置解析期**直接拒绝启动——admin 通道能执行 GM
+/// 命令，绝不能暴露到本机之外；主机名（含 `localhost`）也不接受，避免依赖 DNS/解析歧义。
+fn parse_admin_bind(v: &str) -> Result<std::net::IpAddr> {
+    let ip: std::net::IpAddr = v
+        .trim()
+        .parse()
+        .with_context(|| format!("AdminBind 不是合法 IP 字面量：{v:?}"))?;
+    if !ip.is_loopback() {
+        bail!("AdminBind 只接受回环地址（实际 {ip}）；拒绝在非本机地址上暴露 GM 执行面");
+    }
+    Ok(ip)
 }
 
 fn parse_bool(v: &str, key: &str) -> Result<bool> {
@@ -2443,5 +2487,65 @@ HungerSystem=garbage
             &format!("{base}[Setup]\nPKFlagNameColor=abc\n")
         ))
         .is_err());
+    }
+
+    /// `[Admin]`（卡 `openmir2-mcp-gm-execute`，T-273）：缺省关闭、回环绑定解析、
+    /// **非回环地址拒绝启动**（M2-1 的负例）。
+    #[test]
+    fn admin_section_defaults_off_and_rejects_non_loopback() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-admin-{}", std::process::id()));
+        let base = "[Server]\nGateAddr=127.0.0.1\nGatePort=5000\nCheckBlock=12288\n\
+                    IDSAddr=127.0.0.1\nIDSPort=5600\nDBAddr=127.0.0.1\nDBPort=6000\n";
+        // 缺 [Admin] 段 ⇒ 关闭 + 回环缺省（生产零行为差）。
+        let c = load(&write(&dir, base)).unwrap();
+        assert_eq!(c.admin_port, 0, "缺省 AdminPort=0 = 不监听");
+        assert_eq!(
+            c.admin_bind,
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)
+        );
+
+        // 显式开启 + 回环绑定 ⇒ 解析成功。
+        let c = load(&write(
+            &dir,
+            &format!("{base}[Admin]\nAdminPort=7946\nAdminBind=127.0.0.2\n"),
+        ))
+        .unwrap();
+        assert_eq!(c.admin_port, 7946);
+        assert_eq!(c.admin_bind.to_string(), "127.0.0.2");
+
+        // IPv6 回环也接受。
+        let c = load(&write(
+            &dir,
+            &format!("{base}[Admin]\nAdminPort=1\nAdminBind=::1\n"),
+        ))
+        .unwrap();
+        assert!(c.admin_bind.is_loopback());
+
+        // 负例：非回环地址（0.0.0.0 / 局域网 IP）⇒ 拒绝启动。
+        for bad in ["0.0.0.0", "192.168.1.10", "10.0.0.5"] {
+            let err = load(&write(
+                &dir,
+                &format!("{base}[Admin]\nAdminPort=7946\nAdminBind={bad}\n"),
+            ))
+            .expect_err("非回环 AdminBind 必须拒绝启动");
+            assert!(
+                format!("{err:#}").contains("回环"),
+                "错误信息要点名回环限制：{err:#}"
+            );
+        }
+        // 负例：主机名/非法 IP 字面量也拒绝（不依赖 DNS）。
+        for bad in ["localhost", "example.com", "127.0.0.1.1"] {
+            assert!(
+                load(&write(
+                    &dir,
+                    &format!("{base}[Admin]\nAdminPort=7946\nAdminBind={bad}\n"),
+                ))
+                .is_err(),
+                "AdminBind={bad} 必须拒绝"
+            );
+        }
+        // 非法端口 ⇒ 报错。
+        assert!(load(&write(&dir, &format!("{base}[Admin]\nAdminPort=70000\n"))).is_err());
+        std::fs::remove_dir_all(&dir).ok();
     }
 }
