@@ -33,7 +33,7 @@
 ### 1.1 已知实现事实（会影响第 ③ 步的操作选择）
 
 - **Rust 栈 `CM_GUILDADDMEMBER(1038)` 生产恒返回 `758/5`**：`allow_guild` 唯一生产写点是 GM `@Letguild`，本仓未接 ⇒ 恒 `false`
-  （`mir2-rs/bins/game-svr/src/guild_cmd.rs:30-33`，`:553-556` 的注释「生产恒走这支」）。
+  （`mir2-rs/bins/game-svr/src/guild_cmd.rs:30-33`，`:547-548` 的注释「生产恒走这支」）。
   ⇒ **在 Rust 栈上「加成员」无法成功**，不能拿它当保存触发器。
 - **C# 栈**可以用 GM `@Letguild` 打开 `AllowGuild`（`LetGuildCommand.cs:12`），再走 1038；但 GM 权限本身可能是 0
   （见 `docs` 中 GM 权限 oracle 事实），是否可用由对方在窗口内确认。
@@ -101,6 +101,7 @@ pwsh -NoProfile -File tools/window/guild_fixture_restore.ps1 -Selftest
 `GuildList.txt` 原字节拷回（原 `ABSENT` 则删除）→ **断言 `restored_sha == before_sha`**（备份先自校验 sha；不符即 rc=2）→
 删空 `Guilds/`（仅当预置前不存在）与空 `GuildBase/`（仅当预置前不存在）。
 输出：`RESTORED_SHA / BEFORE_SHA / MATCH / DELETED …`。
+`-WhatIf` 也**必须**给 `-BackupDir`（状态文件在其中；缺则 rc=2 并明确提示）。
 
 ### 3.3 `guild_fixture_suspend.ps1` / `guild_fixture_resume.ps1`（B 失败形态）
 

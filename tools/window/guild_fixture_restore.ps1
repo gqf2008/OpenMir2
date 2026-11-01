@@ -239,14 +239,12 @@ function Invoke-RestoreCli {
   if ($GuildName -match '[\\/:*?"<>|]') { throw "GuildName 含非法文件名字符：$GuildName" }
   $rootPath = Get-NormalizedFullPath $Root
   Assert-SafeRoot $rootPath $false $Force.IsPresent
-  if ($WhatIf -and [string]::IsNullOrWhiteSpace($BackupDir)) {
-    $backupPath = ''
-  } elseif ([string]::IsNullOrWhiteSpace($BackupDir)) {
-    throw '缺少 -BackupDir（必须与 guild_fixture.ps1 使用同一目录）'
-  } else {
-    $backupPath = Get-NormalizedFullPath $BackupDir
+  # 状态文件在 -BackupDir 下：-WhatIf 同样必须显式给出，否则连计划都无从读取。
+  if ([string]::IsNullOrWhiteSpace($BackupDir)) {
+    throw '缺少 -BackupDir（-WhatIf 也必须显式给出：状态文件在 -BackupDir 下，且必须与 guild_fixture.ps1 使用同一目录）'
   }
-  if (-not $WhatIf -and -not (Test-Path -LiteralPath $backupPath -PathType Container)) {
+  $backupPath = Get-NormalizedFullPath $BackupDir
+  if (-not (Test-Path -LiteralPath $backupPath -PathType Container)) {
     throw "备份目录不存在：$backupPath"
   }
 
