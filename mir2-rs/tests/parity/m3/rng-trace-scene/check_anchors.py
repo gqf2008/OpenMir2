@@ -52,10 +52,18 @@ client-e2e 两次合并而行号增长，`enable_production_monster_ai` 调用�
     python -I check_anchors.py check       # 检查本目录 DRIVER-CONTRACT.md（默认）
     python -I check_anchors.py check --doc <path>   # 检查任意副本（用于「改前/改后」对照）
     python -I check_anchors.py selftest    # check + 改坏必红（含同名目录串台 / 裸 :NN / 未知扩展名）
+    python -I check_anchors.py --help      # 打印用法
 
-退出码：0 = GREEN，1 = RED。
+退出码：0 = GREEN，1 = RED，2 = 用法错（未知参数 fail-closed，见下）。
+
+**参数 fail-closed**（卡 `openmir2-gate-ref-residuals`）：本门只认 `check` / `selftest` /
+`--doc <path>` / `-h` / `--help`；任何其它 token（例如 `--ref`、`--ref=HEAD`）都 ⇒ rc=2
+并在 stderr 打印 `unknown argument '<token>'` + 一行 usage。**不静默忽略未知 flag**——
+否则「我按 ref 跑了门」会变成假绿（本门判据与 ref 无关，但拒绝必须显式）。
 """
 import bisect
+import contextlib
+import io
 import os
 import re
 import sys
@@ -510,6 +518,31 @@ def selftest():
                any("BARE_REF_OUT_OF_RANGE" in p for p in bad12),
                "; ".join(bad12))
 
+    # ⑭ CLI 参数 fail-closed（卡 `openmir2-gate-ref-residuals`）：未知参数 ⇒ rc=2 + 用法，
+    #    判定逻辑不动。**关键**：`--ref HEAD`（两 token）与 `--ref=HEAD`（单 token）两种形态
+    #    都必须被**明确拒绝**——断言 stderr 点名 `unknown argument '<token>'` 且含 `usage:`，
+    #    这样「碰巧 rc=2」或「值被当子命令」都不能冒充真拒绝（check_anchors 旧行为是
+    #    静默忽略 ⇒ rc 与裸跑相同，不是拒绝）。
+    def run_cli(argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    for tag, argv, want in (
+            ("cli-unknown-ref-two-token-rejected", ["--ref", "HEAD"], "--ref"),
+            ("cli-unknown-ref-equals-rejected", ["--ref=HEAD"], "--ref=HEAD"),
+            ("cli-unknown-ref-bare-rejected", ["--ref"], "--ref"),
+    ):
+        rc, _out, err = run_cli(argv)
+        check_case(tag,
+                   rc == 2 and ("unknown argument '%s'" % want) in err and "usage:" in err,
+                   "rc=%d stderr=%r" % (rc, err.strip()))
+
+    rc_help, out_help, _err_help = run_cli(["--help"])
+    check_case("cli-help-ok", rc_help == 0 and "usage:" in out_help,
+               "rc=%d stdout=%r" % (rc_help, out_help.strip()))
+
     total = len(checks)
     badn = [(n, d) for n, ok, d in checks if not ok]
     for n, ok, d in checks:
@@ -520,19 +553,71 @@ def selftest():
     print("SELFTEST GREEN: check_anchors selftest %d/%d（含 16 条改坏必红：符号唯一性锚写回行号 / "
           "文件引用删除 / 符号重复 / 符号同行重复 / 符号缺失 / 行号锚缺失 / 行号锚歧义 / 未登记引用 / "
           "折叠定义回退 / 同名目录串台 / 裸续引用未登记 / 裸续内容漂移 / 未识别扩展名 / "
-          "裸续引用归属未登记 / 裸续引用归属文件缺失 / 裸续引用登记行越界）"
+          "裸续引用归属未登记 / 裸续引用归属文件缺失 / 裸续引用登记行越界；"
+          "以及 4 条 CLI fail-closed 用例：--ref HEAD / --ref=HEAD / 裸 --ref / --help）"
           % (total, total))
     return 0
 
 
-if __name__ == "__main__":
-    argv = sys.argv[1:]
+# ---------------------------------------------------------------------------
+# CLI 参数处理（fail-closed）。**只做参数校验，不触碰任何判定逻辑**：
+# 未知 token ⇒ rc=2 + usage；值位上的 flag（如 `--doc --ref`）不被吞成值。
+# ---------------------------------------------------------------------------
+_BOOL_FLAGS = frozenset({"-h", "--help"})
+_VALUE_FLAGS = frozenset({"--doc"})
+_SUBCOMMANDS = frozenset({"check", "selftest"})
+USAGE = "usage: check_anchors.py [check|selftest] [--doc <path>]"
+
+
+def unknown_argument(argv):
+    """返回本门不认识的**第一个** token，全认识则 None。
+
+    与 `tools/hygiene/*` 同口径：带值 flag 的**值**（且不是 flag 形态）被跳过，
+    所以 `--doc <path>` 合法，而 `--doc --ref` 里的 `--ref` 仍会被判未知
+    （不允许把未知 flag 当成值吞掉）。
+    """
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in _VALUE_FLAGS:
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                i += 2
+            else:
+                i += 1
+            continue
+        if arg in _BOOL_FLAGS or arg in _SUBCOMMANDS:
+            i += 1
+            continue
+        return arg
+    return None
+
+
+def main(argv):
+    bad = unknown_argument(argv)
+    if bad is not None:
+        print("unknown argument '%s'" % bad, file=sys.stderr)
+        print(USAGE, file=sys.stderr)
+        return 2
+    if "-h" in argv or "--help" in argv:
+        print(USAGE)
+        return 0
+    doc = None
+    if "--doc" in argv:
+        i = argv.index("--doc")
+        if i + 1 >= len(argv) or argv[i + 1].startswith("-"):
+            print("missing value for '--doc'", file=sys.stderr)
+            print(USAGE, file=sys.stderr)
+            return 2
+        doc = argv[i + 1]
     mode = argv[0] if argv and not argv[0].startswith("--") else "check"
-    doc = argv[argv.index("--doc") + 1] if "--doc" in argv else None
     if mode == "check":
         problems = check(doc=doc)
-        raise SystemExit(_print(problems, "GREEN" if not problems else "RED"))
+        return _print(problems, "GREEN" if not problems else "RED")
     if mode == "selftest":
-        raise SystemExit(selftest())
-    print("usage: check_anchors.py [check|selftest] [--doc <path>]", file=sys.stderr)
-    raise SystemExit(2)
+        return selftest()
+    print(USAGE, file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

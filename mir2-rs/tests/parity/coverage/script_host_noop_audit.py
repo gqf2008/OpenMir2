@@ -6,7 +6,13 @@
 
   check [--strict-lines]   校验台账（JSON）与仓库现状一致；rc=0 绿 / rc=1 红
   selftest                 跑 check 绿 + 三颗牙（各自期望红），并证明真实台账未被动过（sha256）
-  mutate X                 打印牙 X 的变异说明（调试用），不改文件
+  mutate X                 历史文档中的调试形态（未实现）；现按未知参数 rc=2 fail-closed
+
+**参数 fail-closed**（卡 `openmir2-gate-ref-residuals`）：本门只认 `check` / `selftest` /
+`--strict-lines` / `-h` / `--help`；任何其它 token（例如 `--ref`、`--ref=HEAD`）都 ⇒ rc=2
+并在 stderr 打印 `unknown argument '<token>'` + 一行 usage。旧行为把非 `--` token 当子命令，
+于是 `--ref HEAD` 的 rc=2 只是「`HEAD` 被当成子命令」而**不是参数校验**；现在两种形态都被
+明确拒绝（selftest 断言 stderr 点名未知参数，避免「碰巧 rc=2」冒充真拒绝）。
 
 台账：同目录 `script_host_noop_audit.json`
 
@@ -29,7 +35,9 @@
   ⑧ 四张子卡 id 都在 `subcards` 里，被引用的行确实指向该卡
 """
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import re
@@ -382,6 +390,39 @@ def cmd_selftest():
            run_case('tooth3', mut_tooth3, strict=True),
            run_case('tooth4', mut_tooth4, strict=False, expect_red=False),
            run_moved_impl_case()]
+
+    # CLI 参数 fail-closed 牙（卡 `openmir2-gate-ref-residuals`）：未知参数 ⇒ rc=2 + usage，
+    # **关键**是证明「真拒绝」而非「值被当子命令」——旧实现下 `--ref HEAD` 也会 rc=2
+    # （`HEAD` 被当子命令、stderr 为空），所以用例必须断言 stderr 点名 `unknown argument`
+    # 且含 `usage:`，否则「碰巧 rc=2」会冒充真拒绝。
+    def cli_case(argv, want):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = main(['script_host_noop_audit.py'] + argv)
+        err_s = err.getvalue()
+        ok = rc == 2 and ("unknown argument '%s'" % want) in err_s and 'usage:' in err_s
+        if ok:
+            print('  RED（期望）: %s ⇒ rc=2 + usage（点名 %s）'
+                  % (' '.join(argv), want))
+            return 0
+        print('  %s（非期望！）: %s ⇒ rc=%d stderr=%r（期望真拒绝，不是「值当子命令」）'
+              % ('GREEN' if rc == 0 else 'rc!=2', ' '.join(argv), rc,
+                 err_s.strip()[:200]))
+        return 1
+
+    rcs += [cli_case(['--ref', 'HEAD'], '--ref'),
+            cli_case(['--ref=HEAD'], '--ref=HEAD'),
+            cli_case(['--ref'], '--ref')]
+    out_h, err_h = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out_h), contextlib.redirect_stderr(err_h):
+        rc_h = main(['script_host_noop_audit.py', '--help'])
+    if rc_h == 0 and 'usage:' in out_h.getvalue():
+        print('  RED（期望）: --help ⇒ rc=0 + usage')
+        rcs.append(0)
+    else:
+        print('  %s（非期望！）: --help ⇒ rc=%d stdout=%r'
+              % ('GREEN' if rc_h == 0 else 'rc!=0', rc_h, out_h.getvalue().strip()[:200]))
+        rcs.append(1)
     after = sha256(LEDGER)
     print('== 台账 sha256（运行后）: %s' % after)
     if after != before:
@@ -389,11 +430,38 @@ def cmd_selftest():
         return 1
     print('== 还原证明: sha256 前后一致（%s）' % before)
     ok = all(rc == 0 for rc in rcs)
-    print('== selftest %s（默认模式永不因行号误红；--strict-lines 逐行精确）' % ('GREEN' if ok else 'RED'))
+    print('== selftest %s（默认模式永不因行号误红；--strict-lines 逐行精确；含 4 条 CLI fail-closed 牙）' % ('GREEN' if ok else 'RED'))
     return 0 if ok else 1
 
 
+# ---------------------------------------------------------------------------
+# CLI 参数处理（fail-closed）。**只做参数校验，不触碰任何判定逻辑**：
+# 未知 token ⇒ rc=2 + usage。旧实现把非 `--` token 当子命令，`--ref HEAD` 的 rc=2
+# 其实是值 `HEAD` 被当子命令（stderr 为空、走 __doc__ 分支）——不是参数校验。
+# ---------------------------------------------------------------------------
+_BOOL_FLAGS = frozenset({'-h', '--help', '--strict-lines'})
+_SUBCOMMANDS = frozenset({'check', 'selftest'})
+USAGE = 'usage: script_host_noop_audit.py [check|selftest] [--strict-lines]'
+
+
+def unknown_argument(argv):
+    """argv[0] 是程序名；返回本门不认识的**第一个** token，全认识则 None。"""
+    for arg in argv[1:]:
+        if arg in _BOOL_FLAGS or arg in _SUBCOMMANDS:
+            continue
+        return arg
+    return None
+
+
 def main(argv):
+    bad = unknown_argument(argv)
+    if bad is not None:
+        print("unknown argument '%s'" % bad, file=sys.stderr)
+        print(USAGE, file=sys.stderr)
+        return 2
+    if '-h' in argv or '--help' in argv:
+        print(USAGE)
+        return 0
     args = [a for a in argv[1:] if not a.startswith('--')]
     strict = '--strict-lines' in argv
     cmd = args[0] if args else 'check'
