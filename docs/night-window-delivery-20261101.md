@@ -98,3 +98,79 @@
 | G11 豁免落地说明 | `d1d117d067d3593c947d8e71895434d6943c3c6f` |
 
 run id 清单（逐字取自台账条目；`013200-652` 为台账原文缩写）：`shop-20261031-225838-246`、`shop-20261031-225554-575`、`social-20261101-003010-861`、`social-20261101-001610-811`、`social-20261101-003739-026`、`lmz-20261101-004104-240`、`013200-652`、`social-20261101-020223-688`、`social-20261101-025625-807`、`social-20261101-021820-433`、`social-20261101-024918-770`、`social-20261101-024938-486`。
+
+## §7 11-01 上午追加（whitelist 复核与工具面）
+
+- 覆盖区间：昨夜报告交付点 master `aad30901f`（§4）→ 本节收口的 master `3994ce468`。本节只补记上午工作，**不改 §1–§6 的任何结论**。
+- 口径：oid / run id / 数字均从对应线程与台账实读；未取证处显式标注。本节涉及的卡片全部 tier=L，无真机窗口项。
+
+### 7.1 ① whitelist 独立复核 10 批（`openmir2-whitelist-independent-review-1..10`）
+
+收口 status `a9ce30ca`（review-10）：**10 批共核 176 条**（D/B 7 + S4B/M1-EXIT 12 + T 157）；**T-* 非 legacy 待复核清零**；`legacy` 82 条按 owner 裁定保留历史留痕、不做独立复核。
+
+| 批 | worker | 范围 | 结论 | review（reviewer） | merge oid |
+|---|---|---|---|---|---|
+| 1 | dev-3 | D-9/D-10/D-13/D-14/B-116/B-117/B-16（7 条） | 6 CONFIRMED + B-16 STALE-ANCHOR（正文锚订正 1263-1266 / 1398-1401 / 1650-1653） | `a5283ecf`（reviewer-21） | `729f1e385` |
+| 2 | dev-1 | S4B-1..10 + M1-EXIT-1/2（12 条） | 12/12 CONFIRMED（S4B-1 范围缩窄、S4B-4 引用订正后收口，DISCREPANCY 清零） | `62a675cf`（reviewer-21） | `4d57f4f62` |
+| 3 | dev-2 | T-* 非 legacy 前 20 条 | 18 CONFIRMED + T-65/T-47 STALE-ANCHOR（10 处锚订正、T-31 残余句订正） | `3f37a4f0`（reviewer-20） | `ad6872a0d` |
+| 4 | dev-1 | T-* 第 21–40 条 | 19 CONFIRMED + T-72 STALE-ANCHOR（T-79/T-120 订正） | `f057d433`（reviewer-21） | `4c78241ef` |
+| 5 | dev-2 | T-* 第 41–60 条 | 17 CONFIRMED + 2 STALE-ANCHOR（T-137/T-140/T-162 三处订正） | `ad3dec62`（reviewer-21） | `c743e34ce` |
+| 6 | dev-1 | T-* 第 61–80 条 | 11 CONFIRMED + 9 处接线/引用订正（T-174/180→T-199、T-178→T-205、T-182→T-202、T-183→T-206 等） | `d7c20788`（reviewer-20） | `40b456042` |
+| 7 | dev-2 | T-* 第 81–100 条 | 20/20 CONFIRMED（T-223 引用、T-210 接线状态、T-206 哈希快照三处订正） | `e9286f7d`（reviewer-21） | `83d6c53b8` |
+| 8 | dev-1 | T-* 第 101–120 条 | 20/20 CONFIRMED（T-214 oracle 顺序、章节引用 §1→§3、承接卡状态订正） | `65a71e72`（reviewer-20） | `fcd8db521` |
+| 9 | dev-2 | T-* 第 121–140 条 | 20/20 CONFIRMED（含 13 处 §1→§3、T-117/T-208/T-242 订正）+ T-212 锚订正 | `b9f8724d`（reviewer-21） | `09b2c2328` |
+| 10 | dev-2 | T-* 非 legacy 剩余 17 条 | 17/17 CONFIRMED（§1→§3、T-262 §4 节锚、T-266 bag.rs:667-668、T-270 形状 5→7）；F7/F8 minor 收口后复审 | `1651dd9a` 首轮 / `8cb60ffe` 复审（reviewer-21） | `3994ce468` |
+
+代表性发现（逐条可在对应 review 内定位）：
+
+- **「登记落后于代码」批量订正**：第 4 批 T-79 的 ①武器升级 / ④LAMPCHANGEDURA 已由 T-199（`d99d4badc`）接线、⑤SM_PLAYDICE 由 T-142（`4dce0717e`）接线；第 6 批 T-174/T-180→T-199、T-178→T-205（`aoi::search_view_range_events`）、T-182→T-202、T-183→T-206 的「登记不接线 / 生产点零命中」全部改记为已接线；第 7 批 T-210 接线状态按 T-211 五路入口订正。
+- **T-268/T-269 自审标记改双 principal**：原「已复核」的作者与验证同为 `openmir2-dev-2`；第 10 批复审 F7 指出后改为「openmir2-dev-2 验证 + openmir2-reviewer-21 独立复核」（status `1be40b43`，复审 `8cb60ffe` G2 核实）。
+- **T-270 枚举补全**：`oracle_extra_shapes` 实际 7 形状，逐形状 decision 细目补 `327,327,3→449cd0c9…`、`327,327,4→811aff9f…`（F8）。
+- **T-212 锚订正**：`CommandAttribute.cs:56-58` 订正为 `:53`（:56-58 实为下一类的 XML 注释，oracle :53 = CommandHelp 属性）；第 8 批 review 记 minor，第 9 批落地，anchor gate 仍 611（`b9f8724d`）。
+
+### 7.2 ② 工具面：`mir2_probe._check_blocked` 接受结构化 `blocked.not_in_run3_reason`（`openmir2-probe-blocked-schema-align`）
+
+- 来源：whitelist 第 9 批 T-242 记录的工具 schema 漂移 —— `scenario_manifest_gate` 接受该结构化键，而 `mir2_probe._check_blocked` 只接受 `reason` / `missing_fixture`，同一场景一个门判合法、另一个判死。
+- 症状（master 基线）：`clearmapmon_t118` / `combat_hit` / `combat_strike` / `p21_unequip` / `pickup_item` 五场景 `--check-scenario` **rc=2**，错误 `scenario.blocked has unknown key(s): ['not_in_run3_reason'] (fail-closed)`（patch `8423ecc3` 的 `repro_before`）。
+- 修法：`_check_blocked` 的 optional 键集合加入 `not_in_run3_reason`，要求**非空**（非空字符串或非空对象）（`tools/probe/mir2_probe.py:945`、`:958-963`）。
+- **未放宽**：`reason` 仍必填、未知键仍拒、`not_in_run3_reason` 空串 / 空对象 / `null` / 其它类型仍点名本键 rc=2；负例 10 坏例 + 3 正例；5 支变异（删 optional 键 / 删非空校验 / 仅放开空对象臂 / 仅放开类型臂 / 去 `reason` 必填）均使 selftest rc=2，恢复后 blob `2c3fc68e…`；selftest 29 checks OK（status `568cc8e3`）。
+- 参照方订正：卡面原写 `scenario_manifest_gate`，实际读场景 `blocked.not_in_run3_reason` 的是 **`tools/window/blocked_sources_check.py:591`**（`scenario_manifest_gate.py:159` 读的是豁免 TOML，不解析场景 blocked）——审者 `4b5cf9ed` 复核确认。
+- 复跑：5 个场景 + `login_only` / `softclose_relogin` 全 rc=0（`568cc8e3`）。
+- 收口：review `4b5cf9ed`（reviewer-20，approve，tier=L；2 条 nit 非阻塞：docstring 措辞比参照方宽、显式 `null` 被当缺省放过，深判仍在 `blocked_sources_check`）→ merge `1f23c0c9e` → closed `44246b49`。
+
+### 7.3 ③ 注释卡两张（whitelist 复核中的非阻塞观察开卡，均 tier=L、零代码行）
+
+- **`openmir2-castle-tax-anchor-sync`**：第 1 批复审发现 `mir2-rs/crates/world/src/castle_tax.rs:12` 模块文档仍引旧行号（anchor gate 不扫 Rust 注释，故未红）。三处 `Merchant.cs` 锚由 1250-1259 / 1385-1393 / 1637-1645 同步为 **1263-1266 / 1398-1401 / 1650-1653**（544-553 不变），并注明「锚已随 B-16 复核订正 2026-11-01」。审者逐行过滤 12 条 +/- 行全为 `//!` / `///`（`08388344` F1）；`cargo test -p mir2-world --lib castle` 105 passed。patch `bd21310e`（head `2cbde5b9`）→ review `08388344`（reviewer-20）→ merge `fceaa6ba7` → closed `448ee0ea`。
+- **`openmir2-entity-safezone-comment`**：第 4 批复审观察 `mir2-rs/crates/world/src/entity.rs:625-630` 原注释称「接线层会写 `in_safe_zone`」，而生产代码无任何写入点。注释改为「生产代码当前无写入点（该字段恒 false），仅测试夹具赋值；若将来接线写入，须同步 whitelist T-75」。审者核全部赋值点位于 `#[cfg(test)] mod tests` / 集成测试（`fac17fb9`），diff 2+/2- 全为 doc 注释。patch `42f53074`（head `f834fdcf`）→ review `fac17fb9`（reviewer-20）→ merge `6b66e17f2` → closed `eecb75a0`；`cargo test -p mir2-world --lib safe_zone` 1 passed。
+
+### 7.4 ④ 窗口证据回登 8 卡（`openmir2-window-evidence-backfill`，issue `c20127aa`）
+
+边界：只对 8 张 `window_required` R 卡加**签名 comment** 引用既有真机证据，不改卡片 status、不改代码/测试/台账。
+
+8/8 covered（汇总 comment `39d282a3`）：
+
+| # | 卡 | 证据引用 |
+|---|---|---|
+| 1 | `openmir2-groupmode-659-always-reply` | 台账 `26e1dd41` + run `social-20261101-003739-026` / `lmz-20261101-004104-240` |
+| 2 | `openmir2-login-srv-bind-addr` | 台账 `00ccdfa9` + `2e439135` / smoke-recut6-login；`docs/cutover-report-20261030.md:38,107-108` |
+| 3 | `openmir2-login-srv-dsn-source` | `ef440c86` / `59e15ac6` + `2e439135` |
+| 4 | `openmir2-login-srv-illegal-addr-filter` | `9807cc4e` + `ef440c86` 529 + `2e439135` |
+| 5 | `openmir2-login-srv-reply-chain` | `668050b6` + `ef440c86` 529 + `2e439135` |
+| 6 | `openmir2-login-srv-select-route-match` | `69e3014a` + smoke-final-login_only `frames.ndjson:2` + `2e439135` |
+| 7 | `openmir2-selgate-dbsrv-handshake` | 生产栈 `d3a22e63` 的 5100 面长连（`db-srv.out.log:13-14/35/49` 03:49→08:55、`sel-gate.out.log:3`；C# 基线 review `cc715978`） |
+| 8 | `openmir2-selgate-dbsrv-query-chain` | `21294f00` + smoke-recut6-login `frames.ndjson:3` + recut8 |
+
+两条披露（台账 `3ad8654e`）：
+
+1. **handshake 卡面 A3 端口不符**：卡面写 7100↔6000，部署为 `ServerPort0=5100` ⇒ 字面 6000 面的长观测未单列；是否修改卡面措辞属 owner 裁决。
+2. **`sel-gate.log` 4 条断开是探针会话**：属探针客户端会话断开，不是上游链断开。
+
+机制说明（台账 `3ad8654e`）：`goal_gate` 的 `r_category` 把 `window_required` 判在 `evidence_entries` 之前 ⇒ 回登 comment **不会改变分桶**（设计如此）；不为改桶而把 `window_required` 裁定为 false（原审查设该标记时所要求的窗口面与现有证据并非逐项一一对应，强行裁定会弱化标记原意）。
+
+收口：dev-1 汇总 comment `39d282a3` → review `bd99621d`（reviewer-21，approve，抽核 3 条引用可定位、确认 8 卡 status 未改）→ 卡 `status: closed` `cee51dcf`（本卡无代码合并）。
+
+### 7.5 ⑤ 最终状态（master `3994ce468`）
+
+- **master**：`3994ce468`（review-10 的合并节点）；自 `aad30901f` 起共 13 次合并（whitelist / 工具 / 注释面），台账 `c3f98adc`。
+- **goal_gate --full 四条件 PASS**（台账 `c3f98adc`，基线 master `3994ce468`）：①脚本派发 106/106（调用 11829，未实现 0）；②R 卡 291 张 @ 3994ce468（三者皆无 0）；③B 类 tracked=0 @ 3994ce468；④门禁 8 项 8 绿。
+- **cargo test**：running 3550 / passed 3481 / ignored 69 / failed 0（143 suites，rc=0），tester verdict **GREEN**（条目 `a333d0ca`）。注意实测点是 `aad30901f`，`last-tested` 未推进到 `3994ce468`；`aad30901f`→`3994ce468` 的合并面为 docs / whitelist / tools 与 `.rs` 注释行，各卡 review 已逐行确认零代码行，故三元组沿用；`3994ce468` 上未单独重跑全量 cargo（未取证）。
