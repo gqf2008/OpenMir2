@@ -190,7 +190,7 @@ AdminBind=127.0.0.1   ; 缺省 127.0.0.1；只接受回环 IP 字面量
 | `gm_execute`，`AdminPort=0`（默认） | **不可达**（`admin_not_configured`） | 生产默认即此状态 |
 | `gm_execute`，通道已开 + 角色在线 | **在线可达** | 与客户端 `@` 命令同一权限口径；命令表 `PermissionMin` 只有 0（5 条）与 10（180 条）两档 ⇒ 抬到 10 后权限门全过，命令体自带的运行期门仍照 oracle |
 | `gm_execute`，通道已开 + 角色**不在线** | **不可达**（`unknown_character`） | oracle 的命令对象必须是在线 `PlayObject`；本通道不伪造离线执行 |
-| 有副作用/抽 RNG 的命令（`@刷怪`/`@清除怪物`/`@召唤`/`@怪`…） | **在线可达** | 走同一 `gmcmd::execute` + `drain_script_gm_pendings`；RNG 抽数序列与帧面的真机双栈对拍属 **R 级窗口项**（见 `T-273` 与卡 `openmir2-mcp-gm-execute` 的 `window`） |
+| 有副作用/抽 RNG 的命令（`@怪`/`@清除怪物`…） | **在线可达** | 走同一 `gmcmd::execute` + `drain_script_gm_pendings`；RNG 抽数序列与帧面的真机双栈对拍属 **R 级窗口项**（见 `T-273` 与卡 `openmir2-mcp-gm-execute` 的 `window`） |
 | 未知命令 / 非 `@` 命令行 | **结构化拒绝** | `unknown_command` / `invalid_command`，不 panic、不静默 |
 
 ## 9. 安全边界
@@ -233,6 +233,6 @@ cargo test -p game-svr --lib config::tests::admin_section_defaults_off_and_rejec
   ⇒ 结构化错误；`127.0.0.1:0` 传输往返（真实 `run_admin_listener` + 同一执行收口）；
   accept 层回环守卫的负例（判据语义 + 拒绝即丢连接的接线牙）。
 - **配置负例**：`AdminBind=0.0.0.0 / 192.168.1.10 / localhost` ⇒ 拒绝启动。
-- **真机窗口（R 级，合并后回登台账）**：① `@刷怪`/`@清除怪物`/`@召唤` 经 admin 通道与脚本
+- **真机窗口（R 级，合并后回登台账）**：① `@怪`/`@清除怪物` 经 admin 通道与脚本
   `GMEXECUTE` 路径的**抽数序列与帧面**等价（需真机双栈对拍）；② `AdminPort` 开/关两种配置下
   客户端帧面无差异。
