@@ -31,7 +31,14 @@ python -I -B tools/hygiene/scenario_manifest_gate.py --audit-exempt  # 列出全
 python -I -B tools/hygiene/scenario_manifest_gate.py --selftest      # 合成夹具自测
 python -I -B tools/hygiene/scenario_manifest_gate.py --json          # 机读输出
 ```
+
+**未知参数 ⇒ rc=2（fail-closed）**：本门只扫工作树/账本，不按 ref 取内容。旧版把
+``--ref`` 之类未识别的 flag 静默忽略，输出与不传时逐字节相同（卡
+``openmir2-gate-ref-flag-asymmetry``）——「按 ref 跑过」于是成了假绿。现在未知 flag
+一律点名并打印用法。
 """
+import contextlib
+import io
 import json
 import os
 import re
@@ -382,7 +389,45 @@ def render(rc, red, undec, info, struct_ok, manual_ok, bad_exempt, scanned=None)
     print("RESULT: %s" % {0: "GREEN", 1: "RED", 2: "UNDECIDABLE"}[rc])
 
 
+_BOOL_FLAGS = ("-h", "--help", "--selftest", "--audit-exempt", "--json")
+_VALUE_FLAGS = ("--repo",)
+
+
+def unknown_argument(argv):
+    """Return the first token the gate does not understand, else ``None``.
+
+    Silently ignored flags are a false-green channel: this gate always reads
+    the worktree, so ``--ref`` cannot change what is judged (card
+    ``openmir2-gate-ref-flag-asymmetry``).
+    """
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in _VALUE_FLAGS:
+            # Only a non-flag token is a value; ``--repo --ref`` must reject
+            # ``--ref`` instead of swallowing it as the repo path.
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                i += 2
+            else:
+                i += 1
+            continue
+        if arg in _BOOL_FLAGS:
+            i += 1
+            continue
+        return arg
+    return None
+
+
 def main(argv):
+    bad = unknown_argument(argv)
+    if bad is not None:
+        print("scenario-manifest gate: unknown argument %r" % bad, file=sys.stderr)
+        print("usage: scenario_manifest_gate.py [-h|--help] [--selftest] "
+              "[--repo R] [--audit-exempt] [--json]", file=sys.stderr)
+        return 2
+    if "-h" in argv or "--help" in argv:
+        print(__doc__.strip())
+        return 0
     if "--selftest" in argv:
         return selftest()
     repo = REPO
@@ -676,6 +721,28 @@ def selftest():
         check("接缝③：entry_of 抛非 EntryRefError ⇒ 冒出去（不当作正常跳过）", seam_ok)
     finally:
         shutil.rmtree(tmp2, ignore_errors=True)
+
+    # 未知参数必须 fail-closed（卡 openmir2-gate-ref-flag-asymmetry）。
+    def call_main(argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    rc, _, err = call_main(["--ref", "HEAD"])
+    check("未知参数 --ref ⇒ rc=2 且 stderr 点名",
+          rc == 2 and "unknown argument '--ref'" in err and "usage:" in err, (rc, err))
+    rc, _, err = call_main(["--repo", ".", "--ref", "HEAD"])
+    check("--repo 的值不被误判，--ref 仍被拒",
+          rc == 2 and "unknown argument '--ref'" in err, (rc, err))
+    rc, _, err = call_main(["--frobnicate"])
+    check("任意未知 flag ⇒ rc=2", rc == 2 and "--frobnicate" in err, (rc, err))
+    rc, _, err = call_main(["--repo", "--ref"])
+    check("带值 flag 后紧跟未知 flag ⇒ 未知 flag 仍被拒（不被当成值吞掉）",
+          rc == 2 and "unknown argument '--ref'" in err, (rc, err))
+    rc, out, _ = call_main(["--help"])
+    check("已知 --help 仍可用（rc=0）", rc == 0 and "scenario_manifest_gate" in out,
+          (rc, out[:80]))
 
     fails = [(n, d) for n, good, d in ok if not good]
     for n, good, d in ok:
