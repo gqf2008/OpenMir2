@@ -211,6 +211,18 @@ cargo test --workspace
 cargo run -p msgcodegen -- --check   # 消息号表与 C# 源漂移门禁
 ```
 
+散文锚（增量，**在待合并分支上**跑、`--base` 取**合并目标 ref**）：
+
+```sh
+python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master
+```
+
+只核 `git diff $(git merge-base <base> HEAD) HEAD` 的**新增行**（域：`docs/` 下 `.md` 新增行里、反引号内的 `.rs`/`.cs`
+`path:line` 锚），输出「检查 N / 悬空 M / 越界 K」，M+K>0 ⇒ rc≠0。
+**为什么必须在待合并分支上、`--base` 取合并目标 ref**：合并之后再在 master 上以 `--base master` 跑，
+`merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，**什么都没扫**。
+该门是**增量**口径（只看新增行），对历史悬空锚无感；历史清理仍归 `stale_pointer_gate`，二者不可互相替代。
+
 ### 判据分级（tiered acceptance，owner 2026-10-13 裁决，卡 `openmir2-tiered-acceptance-policy`）
 
 「逐字节/逐字段等价」仍是**质量下限**，但**哪些片必须占用独占窗口**按级判定；**判级在审查时显式写进 `review`**，

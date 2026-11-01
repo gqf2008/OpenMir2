@@ -41,6 +41,15 @@
    CARGO_TARGET_DIR=E:/tmp/openmir2-merge-target cargo test --workspace
    CARGO_TARGET_DIR=E:/tmp/openmir2-merge-target cargo run -p msgcodegen -- --check
    ```
+
+   **散文锚（增量）**（同样在待合并内容上跑；本车道 merge 后 HEAD 的 merge-base 即 `origin/master`）：
+   ```
+   python -I -B tools/hygiene/docs_anchor_gate.py --prose --base origin/master
+   ```
+   `--base` 取**合并目标 ref**（本车道为 `origin/master`），**不要**在合入 master 之后才用 `--base master` 跑：
+   那时 `merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，什么都没扫。
+   只核新增行（域：`docs/` 下 `.md` 反引号内的 `.rs`/`.cs` `path:line`），对历史悬空锚无感；
+   历史清理仍归 `stale_pointer_gate`，二者不可互相替代。
    任一红 ⇒ `git reset --hard origin/master` 撤掉这次合并，在卡上 `comment` 记录红项原文，**不许"先推了再说"**。
 6. 推送：`git push origin HEAD:refs/heads/master` + `git push walgit HEAD:refs/heads/master`，
    然后 `git ls-remote --heads origin master` 与 `walgit master` **复核两边都等于刚推的 oid**。
