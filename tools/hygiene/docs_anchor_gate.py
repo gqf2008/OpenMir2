@@ -730,6 +730,21 @@ def scan_prose(repo, base, reg_path=None, pathspecs=("docs/",), list_only=False)
 
 # ---------------------------------------------------------------- selftest
 
+def _rmtree_force(func, path, _exc_info):
+    """Windows 上 git 的 loose object 是只读文件，`rmtree(..., ignore_errors=True)` 会
+    **静默吞掉** PermissionError（卡 `openmir2-docs-anchor-selftest-tmp-leak`）；
+    先去只读位再重试删除。只对**本进程 mkdtemp 自建**的树调用（绝不按通配删 $TMP）。
+
+    与 `tools/collab/oid_gate.py` / `tools/collab/sign_entry.py` 的同名实现一致。
+    """
+    import stat
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        pass
+    func(path)
+
+
 def selftest():
     ok = []
 
@@ -796,7 +811,7 @@ def selftest():
         item, why = locate_item(sp, 11)
         check("定位不到（多解）⇒ fail-closed", item is None and "多解" in (why or ""), (item, why))
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(tmp, onerror=_rmtree_force)
 
     ok.extend(_extra_teeth())
     ok.extend(_prose_teeth())
@@ -945,7 +960,7 @@ def _prose_teeth():
         check("git 注入牙已还原 GIT_BIN（接缝元断言）", globals()["GIT_BIN"] == old_git,
               globals()["GIT_BIN"])
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(tmp, onerror=_rmtree_force)
     return ok
 
 
@@ -1022,7 +1037,7 @@ def _extra_teeth():
         check("单行 fn `fn alpha() {{}}` 不吞掉后面的 `fn beta`",
               rc2 == 0 and "RESULT: GREEN" in out2, out2[-300:])
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(tmp, onerror=_rmtree_force)
 
     # ③ O1 兜底：无 `fn <sym>(` 声明、命中行落在两个嵌套 item ⇒ rc=2 且 detail 含「定位不到」
     tmp2 = tempfile.mkdtemp(prefix="dag-o1-")
@@ -1046,7 +1061,7 @@ def _extra_teeth():
         check("O1：无声明 + 命中行落在嵌套 item ⇒ rc=2 且 detail 含「定位不到」",
               rc3 == 2 and "UNDECIDABLE" in out3 and "定位不到" in out3, out3[-300:])
     finally:
-        shutil.rmtree(tmp2, ignore_errors=True)
+        shutil.rmtree(tmp2, onerror=_rmtree_force)
 
     return ok
 
