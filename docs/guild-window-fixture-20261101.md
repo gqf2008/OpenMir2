@@ -143,14 +143,15 @@ b9abb8e60d0a200d0ab5d0b6d4d0d0bbe10d0a200d0ac1aac3cbd0d0bbe10d0a200d0ad0d0bbe1b3
 |---|---|
 | 帧头 | `ident=756`、`Series=1`（`MakeMessage(756,0,0,0,1)`） |
 | payload 文本（GBK） | `#1/*掌门人/winplay0/#2/*行会成员/aaa/` |
-| 客户端显示 | `(1) 掌门人 winplay0` / `(2) 行会成员 aaa` |
+| 客户端显示 | 非 commander：`<掌门人>` / `winplay0`（另一项）/ `<行会成员>` / `aaa`（另一项）；commander：`(1) <掌门人>` / `winplay0` / `(2) <行会成员>` / `aaa`。`(n)` 仅 `GuildCommanderMode` 下出现（`fmstr('(n)',3)` 尾随一空格）；成员名**另起项**并按 18 列宽填充——`MirClient/Source/MirClient/ClMain.pas:13779-13826`、`ClFunc.pas:226-236` |
 
 判据：
 
-- `winplay0` 登录：756 含两行；面板管理按钮可见（对照基线与上轮一致）。
-- `aaa` 登录：756 含两行（普通成员可看名单）；**管理按钮/掌门命令被拒**（非掌门门）。
-- `753` 面板文本不含 `aaa` 的掌门位；`aaa` 的 `CM_GUILDUPDATENOTICE(1040)` 等掌门命令返回拒绝码
-  （具体码按本轮触发操作记录；若非掌门路径根本不发帧，照实记「零帧」）。
+- `winplay0` 登录：756 含两个 rank 段（各 1 名成员）；面板管理按钮可见（对照基线与上轮一致）。
+- `aaa` 登录：756 含两个 rank 段（普通成员可看名单）；**管理按钮不可见**，掌门命令静默零帧（见下条）。
+- `753` 面板文本不含 `aaa` 的掌门位；`aaa` 的掌门命令（如 `CM_GUILDUPDATENOTICE(1040)`）在 `GuildRankNo != 1`
+  时**静默零帧（静默丢弃，不是拒绝码）**：`PlayObject.Operate.cs:1426-1430`（`if (MyGuild == null || GuildRankNo != 1) return;`），
+  Rust `guild_cmd.rs::update_notice` 同形。取证口径：`frames.ndjson` 里 `aaa` 侧**无 1040 相关回帧**，不得记为「收到拒绝码」。
 
 > 注意：`756` 只在请求成员列表时重建（`member_list_text`），重启后从 `<名>.txt` 装载；因此文件段名与
 > `String.conf` 段名必须一致（默认即部署值），否则客户端显示与判据不符。
