@@ -71,7 +71,13 @@ python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master   # 
 python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <sha> --paths docs/some.md --list
 python -I -B tools/hygiene/docs_anchor_gate.py --selftest
 ```
+
+**未知参数 ⇒ rc=2（fail-closed）**：本门只扫工作树。旧版把 ``--ref`` 之类未识别的
+flag 静默忽略，输出与不传时逐字节相同（卡 ``openmir2-gate-ref-flag-asymmetry``）
+——「我按 ref 跑了锚门」于是成了假绿。现在未知 flag 一律点名并打印用法。
 """
+import contextlib
+import io
 import os
 import re
 import shutil
@@ -98,6 +104,33 @@ PROSE_SYM_BEFORE_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`\s+$")
 GIT_ENV_DROP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
 #: git 可执行名（自测用假名注入「git 不在 PATH」的负例，见 `_prose_teeth`）
 GIT_BIN = "git"
+
+#: Flags the gate understands (boolean) and those that take one value.  Any
+#: other token is a usage error: this gate always scans the worktree, so a
+#: silently ignored ``--ref`` would be a false green (card
+#: ``openmir2-gate-ref-flag-asymmetry``).
+_BOOL_FLAGS = ("-h", "--help", "--selftest", "--prose", "--list")
+_VALUE_FLAGS = ("--base", "--repo", "--registry", "--paths")
+
+
+def unknown_argument(argv):
+    """Return the first token the gate does not understand, else ``None``.
+
+    The token right after a value-taking flag is its value and is skipped, so
+    ``--base walgit/master`` is understood while ``--base walgit/master --ref``
+    still rejects ``--ref``.
+    """
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg in _VALUE_FLAGS:
+            i += 2
+            continue
+        if arg in _BOOL_FLAGS:
+            i += 1
+            continue
+        return arg
+    return None
 
 
 # ---------------------------------------------------------------- 剥离层
@@ -815,6 +848,7 @@ def selftest():
 
     ok.extend(_extra_teeth())
     ok.extend(_prose_teeth())
+    ok.extend(_argv_teeth())
     fails = [(n, d) for n, good, d in ok if not good]
     for n, good, d in ok:
         print("%s %s%s" % ("PASS" if good else "FAIL", n, "" if good else "  %r" % (d,)))
@@ -964,7 +998,52 @@ def _prose_teeth():
     return ok
 
 
+def _argv_teeth():
+    """Unknown flags fail closed (卡 ``openmir2-gate-ref-flag-asymmetry``).
+
+    Before the fix ``main(["--ref", "HEAD"])`` silently scanned the worktree and
+    returned the same output as no flag at all.  These teeth pin rc=2 + usage.
+    """
+    ok = []
+
+    def check(name, cond, detail=""):
+        ok.append((name, bool(cond), detail))
+
+    def call(argv):
+        out, err = io.StringIO(), io.StringIO()
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            rc = main(argv)
+        return rc, out.getvalue(), err.getvalue()
+
+    rc, _, err = call(["--ref", "HEAD"])
+    check("未知参数 --ref ⇒ rc=2 且 stderr 点名",
+          rc == 2 and "unknown argument '--ref'" in err and "usage:" in err, (rc, err))
+
+    rc, _, err = call(["--prose", "--base", "HEAD", "--ref", "HEAD"])
+    check("散文模式同样拒未知参数（--base 的值不被当成 flag）",
+          rc == 2 and "unknown argument '--ref'" in err, (rc, err))
+
+    rc, _, err = call(["--frobnicate"])
+    check("任意未知 flag ⇒ rc=2", rc == 2 and "--frobnicate" in err, (rc, err))
+
+    rc, out, _ = call(["--help"])
+    check("已知 --help 仍可用（rc=0）", rc == 0 and "docs_anchor_gate" in out,
+          (rc, out[:80]))
+    return ok
+
+
 def main(argv):
+    bad = unknown_argument(argv)
+    if bad is not None:
+        print("docs-anchor gate: unknown argument %r" % bad, file=sys.stderr)
+        print("usage: docs_anchor_gate.py [-h|--help] [--selftest] [--list]",
+              file=sys.stderr)
+        print("       docs_anchor_gate.py --prose --base <ref> [--repo R] "
+              "[--registry F] [--paths P] [--list]", file=sys.stderr)
+        return 2
+    if "-h" in argv or "--help" in argv:
+        print(__doc__.strip())
+        return 0
     if "--selftest" in argv:
         return selftest()
     if "--prose" in argv:

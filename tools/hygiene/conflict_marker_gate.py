@@ -25,9 +25,13 @@ Usage (run from anywhere inside the repo):
   python -I tools/hygiene/conflict_marker_gate.py --help
 
 Exit codes: 0 clean (or selftest passed); 1 markers found, a tracked file was
-unreadable (fail-closed), or selftest failed; 2 not inside a git repository.
+unreadable (fail-closed), or selftest failed; 2 not inside a git repository or
+an unknown argument was given (usage error, fail-closed — an ignored ``--ref``
+must never look like "scanned that ref").
 """
 
+import contextlib
+import io
 import os
 import re
 import subprocess
@@ -41,6 +45,20 @@ _THEIRS = re.compile(rb"^>{7}(?: |$)")
 _BASE = re.compile(rb"^={7}$")
 
 _BINARY_PROBE = 8192
+
+#: The gate has no scan-ref: it always reads the worktree.  Silently accepting
+#: an unknown flag such as ``--ref`` would turn "I scanned ref X" into a false
+#: green (card ``openmir2-gate-ref-flag-asymmetry``), so anything outside this
+#: set is a usage error (rc=2).
+_ALLOWED_FLAGS = ("-h", "--help", "--selftest")
+
+
+def unknown_argument(argv):
+    """Return the first argument the gate does not understand, else ``None``."""
+    for arg in argv:
+        if arg not in _ALLOWED_FLAGS:
+            return arg
+    return None
 
 
 def scan_text(data):
@@ -113,6 +131,31 @@ def selftest():
             ("binary body is skipped", scan_file(binary) == []),
         ]
 
+        # Unknown flags must fail closed.  Before the fix, ``--ref HEAD`` was
+        # silently ignored and the gate scanned the worktree (identical output),
+        # so "ran the gate against ref X" was a false green.
+        def run_main(argv):
+            out, err = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                rc = main(argv)
+            return rc, out.getvalue(), err.getvalue()
+
+        rc_ref, _, err_ref = run_main(["--ref", "HEAD"])
+        checks.append((
+            "unknown --ref is rejected: rc=2 + usage on stderr",
+            rc_ref == 2 and "unknown argument '--ref'" in err_ref and "usage:" in err_ref,
+        ))
+        rc_bogus, _, err_bogus = run_main(["--frobnicate"])
+        checks.append((
+            "any unknown flag is rejected (fail-closed)",
+            rc_bogus == 2 and "--frobnicate" in err_bogus,
+        ))
+        rc_help, out_help, _ = run_main(["--help"])
+        checks.append((
+            "--help still works (known flag, rc=0)",
+            rc_help == 0 and "conflict_marker_gate" in out_help,
+        ))
+
     failed = 0
     for name, ok in checks:
         print(("PASS " if ok else "FAIL ") + name)
@@ -122,6 +165,12 @@ def selftest():
 
 
 def main(argv):
+    bad = unknown_argument(argv)
+    if bad is not None:
+        print("conflict-marker gate: unknown argument %r" % bad, file=sys.stderr)
+        print("usage: conflict_marker_gate.py [-h|--help] [--selftest]",
+              file=sys.stderr)
+        return 2
     if "-h" in argv or "--help" in argv:
         print(__doc__.strip())
         return 0
