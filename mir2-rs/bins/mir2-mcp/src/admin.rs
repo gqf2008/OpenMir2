@@ -2,7 +2,10 @@
 //!
 //! 协议：TCP 回环、**逐行 JSON**。请求 `{"chr":"<角色名>","cmd":"@..."}`；响应
 //! `{"ok":bool,"error":?string,"frames":N,"note":?string}`（见 game-svr 侧
-//! `AdminGmReply`）。本模块只做「连接 → 发一行 → 读一行 → 解析」，不做任何本地 GM 语义：
+//! `AdminGmReply`）。`frames` = 本次调用的**直接应答帧数**（`SysMsg` + 未知命令回落 +
+//! 直发帧），**不含**事件末 `command_event_tail_gm_drain` 落地的副作用广播帧（刷怪/清除/203/709/41…）。
+//! 目标地址解析后必须是**回环**，否则在连接前返回结构化 `admin_addr_not_loopback`。
+//! 本模块只做「连接 → 发一行 → 读一行 → 解析」，不做任何本地 GM 语义：
 //! 命令解析/执行全部在 game-svr 的同一执行核心（`gmcmd::execute` + 事件末 drain）。
 //!
 //! 失败面全部结构化：未配置/连不上/超时/协议不符都映射到稳定 `code`，不 panic。
@@ -23,6 +26,9 @@ pub const IO_TIMEOUT: Duration = Duration::from_secs(10);
 pub enum AdminFailure {
     /// 地址无法解析（例如 `MIR2_MCP_ADMIN_ADDR` 写坏）。
     BadAddr(String),
+    /// 地址解析成功但**不是回环**（`MIR2_MCP_ADMIN_ADDR` 指向本机之外）。客户端侧纵深防御：
+    /// 服务端 accept 层同样只接受回环对端，这里在连接前拒绝。
+    NotLoopback(String),
     /// 连不上（通道未开 / 端口错 / game-svr 未起）。
     Connect(String),
     /// 读写超时。
@@ -37,6 +43,7 @@ impl AdminFailure {
     pub fn code(&self) -> &'static str {
         match self {
             Self::BadAddr(_) => "admin_bad_addr",
+            Self::NotLoopback(_) => "admin_addr_not_loopback",
             Self::Connect(_) => "admin_connect_failed",
             Self::Timeout(_) => "admin_timeout",
             Self::Protocol(_) => "admin_protocol_error",
@@ -47,7 +54,11 @@ impl AdminFailure {
     #[must_use]
     pub fn message(&self) -> &str {
         match self {
-            Self::BadAddr(m) | Self::Connect(m) | Self::Timeout(m) | Self::Protocol(m) => m,
+            Self::BadAddr(m)
+            | Self::NotLoopback(m)
+            | Self::Connect(m)
+            | Self::Timeout(m)
+            | Self::Protocol(m) => m,
         }
     }
 
@@ -66,17 +77,41 @@ impl AdminFailure {
     }
 }
 
+/// 解析 `addr`（`host:port`）并只取回**环地址**（卡 `openmir2-mcp-admin-review-minors` F4）。
+///
+/// 客户端侧纵深防御：`MIR2_MCP_ADMIN_ADDR` 来自环境变量，可能被指到任意主机。服务端
+/// （game-svr accept 层）同样只接受回环对端，这里在**连接前**拒绝，把失败稳定成结构化
+/// `admin_addr_not_loopback`。同名解析出多个地址（IPv4/IPv6/混合）⇒ 取**第一个回环地址**；
+/// 一个回环地址都没有才拒绝。
+fn resolve_loopback(addr: &str) -> Result<std::net::SocketAddr, AdminFailure> {
+    let addrs: Vec<std::net::SocketAddr> = addr
+        .to_socket_addrs()
+        .map_err(|e| AdminFailure::BadAddr(format!("解析 admin 地址 {addr:?} 失败：{e}")))?
+        .collect();
+    if addrs.is_empty() {
+        return Err(AdminFailure::BadAddr(format!(
+            "admin 地址 {addr:?} 无可用套接字"
+        )));
+    }
+    addrs
+        .into_iter()
+        .find(|candidate| candidate.ip().is_loopback())
+        .ok_or_else(|| {
+            AdminFailure::NotLoopback(format!(
+                "admin 地址 {addr:?} 不是回环地址（admin 通道只在本机回环监听）"
+            ))
+        })
+}
+
 /// 向 `addr`（`host:port`）投一条 GM 命令并返回对端的 JSON 响应（原样透传）。
+///
+/// 目标必须是**回环**地址（[`resolve_loopback`]）；非回环 ⇒ [`AdminFailure::NotLoopback`]。
 ///
 /// # Errors
 ///
-/// 地址非法/连不上/超时/响应不是约定的 JSON 对象（含 `ok: bool`）。
+/// 地址非法/非回环/连不上/超时/响应不是约定的 JSON 对象（含 `ok: bool`）。
 pub fn execute(addr: &str, chr: &str, cmd: &str) -> Result<Value, AdminFailure> {
-    let sock_addr = addr
-        .to_socket_addrs()
-        .map_err(|e| AdminFailure::BadAddr(format!("解析 admin 地址 {addr:?} 失败：{e}")))?
-        .next()
-        .ok_or_else(|| AdminFailure::BadAddr(format!("admin 地址 {addr:?} 无可用套接字")))?;
+    let sock_addr = resolve_loopback(addr)?;
     let mut stream = TcpStream::connect_timeout(&sock_addr, CONNECT_TIMEOUT)
         .map_err(|e| AdminFailure::Connect(format!("连接 admin 通道 {addr} 失败：{e}")))?;
     let _ = stream.set_write_timeout(Some(IO_TIMEOUT));
@@ -150,5 +185,46 @@ mod tests {
         let err = execute("not-an-addr-without-port", "aaa", "@时间").expect_err("必须失败");
         assert!(matches!(err, AdminFailure::BadAddr(_)), "{err:?}");
         assert_eq!(err.code(), "admin_bad_addr");
+    }
+
+    /// F4：`MIR2_MCP_ADMIN_ADDR` 指向非回环地址时，客户端必须在**连接前**结构化拒绝。
+    ///
+    /// 用 TEST-NET-1（RFC 5737，`192.0.2.0/24`）保证不指向真实可达主机；错误变体是
+    /// `NotLoopback`（而不是 `Connect`）本身就证明没有发出连接尝试。
+    ///
+    /// 变异自证：把 [`resolve_loopback`] 的 `.find(|c| c.ip().is_loopback())` 换成
+    /// `.next()`（=删掉回环校验）⇒ 这里会变成 `Connect`/`Timeout` ⇒ 必红。
+    #[test]
+    fn non_loopback_admin_addr_is_rejected_before_connect() {
+        let err = execute("192.0.2.1:7946", "aaa", "@时间").expect_err("必须失败");
+        assert!(matches!(err, AdminFailure::NotLoopback(_)), "{err:?}");
+        assert_eq!(err.code(), "admin_addr_not_loopback");
+        assert!(
+            err.message().contains("不是回环地址"),
+            "人读消息必须说清原因：{err:?}"
+        );
+    }
+
+    /// F4 判据面：回环字面量（v4/v6）放行，私网/公网/未指定地址拒绝。
+    #[test]
+    fn loopback_resolution_accepts_only_loopback_literals() {
+        for addr in ["127.0.0.1:7946", "127.255.255.254:7946", "[::1]:7946"] {
+            let resolved = resolve_loopback(addr).expect("回环地址必须放行");
+            assert!(resolved.ip().is_loopback(), "{addr}");
+        }
+        for addr in [
+            "192.168.1.10:7946",
+            "10.0.0.5:7946",
+            "8.8.8.8:7946",
+            "0.0.0.0:7946",
+            "[::]:7946",
+            "192.0.2.1:7946",
+        ] {
+            assert!(
+                matches!(resolve_loopback(addr), Err(AdminFailure::NotLoopback(_))),
+                "非回环地址必须拒绝：{addr} ⇒ {:?}",
+                resolve_loopback(addr)
+            );
+        }
     }
 }

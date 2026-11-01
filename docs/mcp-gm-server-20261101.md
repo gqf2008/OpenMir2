@@ -21,7 +21,7 @@
 | `conf_get` | `{section,key}` | 读 `Server.conf` 一个键（任意段/键，只读；`OrdinalIgnoreCase`） | 无 |
 | `conf_keys` | `{}` | 白名单键清单：当前值、缺省、允许范围、语义、是否活键 | 无 |
 | `conf_set` | `{section,key,value,dry_run?}` | 白名单写：备份 → 临时文件+rename 原子替换 → 回读校验；`dry_run=true` 零写 | `M2GameSvr/Server.conf` |
-| `gm_execute` | `{chr,cmd}`（兼容 `name,params?`） | 经 game-svr 本机 admin 通道执行一条 `@` 命令，透传 `{ok,error,frames,note}`；通道未配置/连不上/超时/未知角色/未知命令 ⇒ 结构化错误。`name/params` 只在 `cmd` 缺失时合成 `@name params…`，**同一条执行路径** | 游戏侧状态（**不含**配置文件） |
+| `gm_execute` | `{chr,cmd}`（兼容 `name,params?`） | 经 game-svr 本机 admin 通道执行一条 `@` 命令，透传 `{ok,error,frames,note}`（`frames` = 本次调用的**直接应答帧数**，不含事件末 drain 的副作用广播帧）；通道未配置/地址非回环/连不上/超时/未知角色/未知命令 ⇒ 结构化错误。`name/params` 只在 `cmd` 缺失时合成 `@name params…`，**同一条执行路径** | 游戏侧状态（**不含**配置文件） |
 
 成功回包是 MCP `structuredContent`（`{"ok":true,…}`）；拒绝/失败是 `isError=true` +
 `{"ok":false,"code":…,"wrote":false,…}`。所有校验失败都返回结构化错误，**不 panic**。
@@ -133,6 +133,8 @@ claude mcp add mir2 -- E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/deb
 
 - **MCP 传输仍是纯本地 stdio**：不监听端口；唯一「外连」是 `gm_execute` 向
   **本机回环** admin 通道投一条命令（`MIR2_MCP_ADMIN_ADDR` 或 `127.0.0.1:<AdminPort>`）；
+  地址解析结果必须是回环 IP——客户端在**连接前**校验，非回环（如 `MIR2_MCP_ADMIN_ADDR=10.0.0.5:7946`）
+  ⇒ 结构化 `admin_addr_not_loopback`，不发起连接（客户端侧纵深防御；服务端 accept 层同样只收回环）；
 - 读：`<root>/M2GameSvr/Server.conf`、可选 `--registry` 指定的 registry JSON；
 - 写：只有 `<root>/M2GameSvr/Server.conf` 的**白名单既有键**值区间；备份写到系统临时目录；
   `gm_execute` **不写配置文件**，它改变的是游戏世界状态（与客户端 `@` 命令同源）；
@@ -153,11 +155,14 @@ AdminBind=127.0.0.1   ; 缺省 127.0.0.1；只接受回环 IP 字面量
 - **非回环 = 拒绝启动**：`AdminBind` 只接受 `127.0.0.0/8` 或 `::1` 的 IP 字面量；`0.0.0.0`、
   局域网/公网 IP、主机名（含 `localhost`）都在**配置解析期**报错（负例测试见
   `config.rs::admin_section_defaults_off_and_rejects_non_loopback`）。accept 时再按
-  `peer.ip().is_loopback()` 做一次纵深防御。
+  `peer.ip().is_loopback()`（`admin_peer_is_allowed`）做一次纵深防御；该守卫的负例牙见
+  `admin_channel_tests::admin_peer_guard_rejects_non_loopback_peers`（判据语义）与
+  `admin_channel_tests::admin_listener_drops_peer_rejected_by_guard`（接线：拒绝即丢连接）。
 - **协议**：TCP 回环、**逐行 JSON**。
   - 请求：`{"chr":"<角色名>","cmd":"@..."}`（`cmd` 必须是 `@` 开头的完整命令行）；
   - 响应：`{"ok":bool,"error":?string,"frames":N,"note":?string}`；
-  - `error` 形如 `"<code>: <detail>"`；`frames` = 客户端可见帧数（`SysMsg` + 未知命令回落 + 直发帧）；
+  - `error` 形如 `"<code>: <detail>"`；`frames` = **直接应答帧数**（`SysMsg` + 未知命令回落 +
+    直发帧），**不含**事件末 `command_event_tail_gm_drain` 落地的副作用广播帧（刷怪/清除/203/709/41…）；
   - `note` = 命令回帧文本（`@时间` 等无副作用命令在这里返回文本）。
 - **执行路径**：`GateEvent::AdminGm` 投进 sim 线程（世界唯一写者），`execute_admin_gm_command`：
   1. 查 `ground_sessions[chr]`（不在线 ⇒ `unknown_character`）；
@@ -169,8 +174,10 @@ AdminBind=127.0.0.1   ; 缺省 127.0.0.1；只接受回环 IP 字面量
      （刷怪/造物与世界同一条 RNG 流；203/709/41/… 帧与 `CM_SAY` 同序）；
   5. 回 `{ok,error,frames,note}`。
 - **超时/失败**：连接建立 2s、读写 10s（MCP 侧）；sim 回包 5s、连接空闲 60s（game-svr 侧）。
-  连不上/超时/响应不是约定 JSON ⇒ 结构化 `admin_connect_failed` / `admin_timeout` /
-  `admin_protocol_error`；`AdminPort=0` 且未设 `MIR2_MCP_ADMIN_ADDR` ⇒ `admin_not_configured`。
+  地址解析结果非回环 ⇒ **连接前**即拒绝，结构化 `admin_addr_not_loopback`（`MIR2_MCP_ADMIN_ADDR`
+  指向本机之外时不会发起连接）；连不上/超时/响应不是约定 JSON ⇒ 结构化
+  `admin_connect_failed` / `admin_timeout` / `admin_protocol_error`；`AdminPort=0` 且未设
+  `MIR2_MCP_ADMIN_ADDR` ⇒ `admin_not_configured`。
 - **不启动默认端口栈**：开发/测试用进程内 `127.0.0.1:0` 临时端口 + 既有 GM 测试夹具驱动
   同一执行收口；`E:\MirServer` 默认端口栈（5000/6000/7000/7100/7200…）只在真机窗口操作。
 
@@ -205,13 +212,14 @@ cargo test -p game-svr --lib admin_channel_tests
 cargo test -p game-svr --lib config::tests::admin_section_defaults_off_and_rejects_non_loopback
 ```
 
-- **mir2-mcp 单元（27 条）**：目录 185 条 / 176 implemented / 9 unimplemented / perm0=5；目录条数 =
+- **mir2-mcp 单元（29 条）**：目录 185 条 / 176 implemented / 9 unimplemented / perm0=5；目录条数 =
   registry `table_total`；`gm_help` 取到 oracle 描述（`Tingwa`→`TingCommand`、`清理垃圾`→`清理包裹物品`）；
   `conf_get` 大小写/注释/重复段；`conf_set` 往返（before/after sha、备份逐字节、回读、备份恢复 sha
   相等）；`dry_run` 零写；非白名单/非活键/非法值/缺键拒绝且零写；同值 no-op；无 `.tmp` 残留；
   CLI 参数/`--help`；`[Admin] AdminPort` 读侧（缺段/空值 ⇒ 0、显式端口、越界报错）；
-  admin 客户端连不上/地址非法 ⇒ 结构化错误。
-- **mir2-mcp 端到端（4 条，真起子进程走 stdio JSON-RPC）**：
+  admin 客户端连不上/地址非法 ⇒ 结构化错误；`MIR2_MCP_ADMIN_ADDR` 非回环 ⇒
+  `admin_addr_not_loopback`（连接前拒绝）。
+- **mir2-mcp 端到端（5 条，真起子进程走 stdio JSON-RPC）**：
   1. 主链路：`initialize` → `tools/list`（6 个工具）→ `gm_list`（`catalog_total=table_total=185`）→
      `conf_get` → `gm_help` → `conf_set dry_run`（零写）→ `conf_set` 真写（备份/回读 25）→
      `gm_execute`（未配置通道 ⇒ `admin_not_configured`）。
@@ -219,9 +227,11 @@ cargo test -p game-svr --lib config::tests::admin_section_defaults_off_and_rejec
   3. `gm_execute` 经 `[Admin] AdminPort` 的**默认地址**投递到进程内假通道：请求 `{chr,cmd}` 原样、
      响应 `{ok,frames,note}` 原样透传。
   4. 失败面：缺 `chr` ⇒ `missing_chr`；非 `@` ⇒ `invalid_command`；通道连不上 ⇒ `admin_connect_failed`。
-- **game-svr（6 条）**：`@时间` ⇒ `ok` + 文本 + 1 条 `SM_SYSMESSAGE(100)`；`@LoadAdmin`
+  5. 非回环：`MIR2_MCP_ADMIN_ADDR=192.0.2.1:7946` ⇒ `admin_addr_not_loopback`（连接前拒绝）。
+- **game-svr（8 条）**：`@时间` ⇒ `ok` + 文本 + 1 条 `SM_SYSMESSAGE(100)`；`@LoadAdmin`
   （`PermissionMin=10`）经抬权成功且**执行后 `permission` 仍为 0**；未知角色/未知命令/非 `@`
-  ⇒ 结构化错误；`127.0.0.1:0` 传输往返（真实 `run_admin_listener` + 同一执行收口）。
+  ⇒ 结构化错误；`127.0.0.1:0` 传输往返（真实 `run_admin_listener` + 同一执行收口）；
+  accept 层回环守卫的负例（判据语义 + 拒绝即丢连接的接线牙）。
 - **配置负例**：`AdminBind=0.0.0.0 / 192.168.1.10 / localhost` ⇒ 拒绝启动。
 - **真机窗口（R 级，合并后回登台账）**：① `@刷怪`/`@清除怪物`/`@召唤` 经 admin 通道与脚本
   `GMEXECUTE` 路径的**抽数序列与帧面**等价（需真机双栈对拍）；② `AdminPort` 开/关两种配置下

@@ -213,7 +213,9 @@ enum GateEvent {
 ///
 /// 线上字段固定为 `{"ok":bool,"error":?string,"frames":N,"note":?string}`：
 /// - `error` = `"<code>: <detail>"`（`unknown_character` / `unknown_command` / `invalid_command` …）；
-/// - `frames` = 本次执行**产生的客户端帧数**（`SysMsg` + 非 `SysMsg` 直发帧）；
+/// - `frames` = 本次调用**直接应答的客户端帧数**（`SysMsg` + 未知命令回落 + 非 `SysMsg` 直发帧）；
+///   **不含**事件末 `command_event_tail_gm_drain` 落地的副作用广播帧（刷怪/清除/203/709/41…）——
+///   那些帧由世界 tick 的既有广播路径产生，与本次命令的应答不在同一个可计数面；
 /// - `note` = 命令回帧文本（无回帧则 `None`）。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AdminGmReply {
@@ -21129,7 +21131,8 @@ fn execute_admin_gm_command(
             }
         }
     }
-    // ⑤ 结构化结果：`frames` = 客户端可见帧数（SysMsg + 未知命令回落 + 直发帧）。
+    // ⑤ 结构化结果：`frames` = 本次调用的**直接应答帧数**（SysMsg + 未知命令回落 + 直发帧）；
+    //    不含事件末 `command_event_tail_gm_drain` 产生的副作用广播帧（与 `AdminGmReply` 文档一致）。
     let frames = result.msgs.len() + usize::from(unknown) + result.frames.len();
     if let Some(log) = result.log_note {
         texts.push(format!("log: {log}"));
@@ -24021,14 +24024,36 @@ async fn serve_admin_connection(
     }
 }
 
+/// accept 层准入判据（卡 `openmir2-mcp-gm-execute` 的纵深防御；卡
+/// `openmir2-mcp-admin-review-minors` F2 补牙）。
+///
+/// 配置层 `parse_admin_bind` 已把 `AdminBind` 限制到回环字面量（**承重牙**在那里）；这里再按
+/// **对端** IP 复核一次，防止「绑定地址」单一判据被绕过。判据独立成函数，才能给负例
+/// （真实 TCP 测试无法伪造非回环 peer）：见 `admin_channel_tests::admin_peer_guard_rejects_non_loopback_peers`。
+fn admin_peer_is_allowed(peer: std::net::SocketAddr) -> bool {
+    peer.ip().is_loopback()
+}
+
 /// admin 通道 accept 循环（卡 `openmir2-mcp-gm-execute`，T-273）。
 ///
-/// **只接受回环对端**：配置层已把 `AdminBind` 限制到回环地址，这里再按 `peer.ip().is_loopback()`
+/// **只接受回环对端**：配置层已把 `AdminBind` 限制到回环地址，这里再按 [`admin_peer_is_allowed`]
 /// 做一次纵深防御（不依赖绑定地址的单一判据）。
 async fn run_admin_listener(
     listener: tokio::net::TcpListener,
     ev_tx: std::sync::mpsc::Sender<GateEvent>,
     shutdown: std::sync::Arc<tokio::sync::Notify>,
+) {
+    run_admin_listener_with(listener, ev_tx, shutdown, admin_peer_is_allowed).await;
+}
+
+/// [`run_admin_listener`] 的本体：`allow_peer` 是**对端准入接缝**（生产传
+/// [`admin_peer_is_allowed`]；测试注入「一律拒绝」的判据，证明这条守卫真的接线——见
+/// `admin_channel_tests::admin_listener_drops_peer_rejected_by_guard`）。
+async fn run_admin_listener_with(
+    listener: tokio::net::TcpListener,
+    ev_tx: std::sync::mpsc::Sender<GateEvent>,
+    shutdown: std::sync::Arc<tokio::sync::Notify>,
+    allow_peer: fn(std::net::SocketAddr) -> bool,
 ) {
     let addr = listener
         .local_addr()
@@ -24048,7 +24073,7 @@ async fn run_admin_listener(
                 break;
             }
         };
-        if !peer.ip().is_loopback() {
+        if !allow_peer(peer) {
             glog!("WRN", "admin 拒绝非回环连接 {peer}（纵深防御）");
             drop(stream);
             continue;
@@ -86054,6 +86079,110 @@ mod admin_channel_tests {
         notify.notify_one();
         drop(ev_tx);
         // 不 join：listener/serve 任务在 tokio 运行期结束时释放自己持有的 sender，worker 随之退出。
+        drop(worker);
+    }
+
+    /// F2（卡 `openmir2-mcp-admin-review-minors`）：accept 层准入判据**本身**必须拒绝非回环对端。
+    ///
+    /// 变异自证：把 [`admin_peer_is_allowed`] 的函数体改成 `true`（等价于删掉
+    /// `peer.ip().is_loopback()` 校验）⇒ 非回环分支的断言必红。
+    #[test]
+    fn admin_peer_guard_rejects_non_loopback_peers() {
+        let parse = |s: &str| s.parse::<std::net::SocketAddr>().expect("SocketAddr");
+        for peer in ["127.0.0.1:7946", "127.1.2.3:7946", "[::1]:7946"] {
+            assert!(
+                admin_peer_is_allowed(parse(peer)),
+                "回环对端必须放行：{peer}"
+            );
+        }
+        for peer in [
+            "192.168.1.10:7946",
+            "10.0.0.5:7946",
+            "8.8.8.8:7946",
+            "0.0.0.0:7946",
+            "[::]:7946",
+            "[2001:db8::1]:7946",
+        ] {
+            assert!(
+                !admin_peer_is_allowed(parse(peer)),
+                "非回环对端必须拒绝：{peer}"
+            );
+        }
+    }
+
+    /// F2 接线牙：真实的 [`run_admin_listener_with`] 在判据拒绝对端时必须**直接丢连接**
+    /// （不投 `AdminGm`、不写任何响应）。
+    ///
+    /// 真实 TCP 测试无法伪造「非回环 peer」（连接必然来自本机回环），因此这里注入
+    /// 「一律拒绝」的判据来模拟 accept 层的拒绝分支；判据语义由
+    /// [`admin_peer_guard_rejects_non_loopback_peers`] 单独钉住，两者合起来 = 生产调用点
+    /// [`run_admin_listener`] 传入 [`admin_peer_is_allowed`]。
+    ///
+    /// 变异自证：删掉 accept 循环里的 `if !allow_peer(peer) { … continue; }` 守卫 ⇒ 对端会被
+    /// 正常服务并收到 JSON 回包（`Ok(n)` 分支）⇒ 本用例必红。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admin_listener_drops_peer_rejected_by_guard() {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel::<GateEvent>();
+        // 执行 worker：守卫缺失时请求会真的被执行并回包，让变异**立刻**现形（不靠 5s 超时）。
+        let handled = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let worker_handled = std::sync::Arc::clone(&handled);
+        let worker = std::thread::spawn(move || {
+            let mut rig = AdminRig::new();
+            while let Ok(ev) = ev_rx.recv() {
+                if let GateEvent::AdminGm { chr, cmd, reply } = ev {
+                    worker_handled.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    let _ = reply.send(rig.exec(&chr, &cmd));
+                }
+            }
+        });
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind 127.0.0.1:0");
+        let addr = listener.local_addr().expect("local_addr");
+        let notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        tokio::spawn(run_admin_listener_with(
+            listener,
+            ev_tx.clone(),
+            std::sync::Arc::clone(&notify),
+            |_peer| false,
+        ));
+
+        let stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+        let (read_half, mut write_half) = stream.into_split();
+        // 先发一条**合法**请求：守卫缺失时它会被服务并把 JSON 回包写回来。
+        //
+        // 守卫拒绝时连接在 accept 后立刻被 drop，客户端侧可能已收到 RST（Windows 上写会
+        // 报 `ConnectionAborted`/`ConnectionReset`）——**写失败本身也是「被丢弃」的合法形态**，
+        // 因此这里忽略写/刷新的错误，判据只看「有没有收到响应」（下一步）。
+        let _ = write_half
+            .write_all(r#"{"chr":"aaa","cmd":"@时间"}"#.as_bytes())
+            .await;
+        let _ = write_half.write_all(b"\n").await;
+        let _ = write_half.flush().await;
+
+        let mut reader = BufReader::new(read_half);
+        let mut response = String::new();
+        let read = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            reader.read_line(&mut response),
+        )
+        .await
+        .expect("accept 层必须立刻丢弃被拒绝的对端（5s 内连接应关闭，而不是挂着等请求）");
+        match read {
+            Ok(0) | Err(_) => {} // 干净 EOF / 连接被重置，都算「丢弃」
+            Ok(n) => panic!("被拒绝的对端不得收到任何响应，实际 {n} 字节：{response:?}"),
+        }
+        assert_eq!(
+            handled.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "被拒绝的对端不得投递 GateEvent::AdminGm"
+        );
+
+        notify.notify_one();
+        drop(ev_tx);
         drop(worker);
     }
 }

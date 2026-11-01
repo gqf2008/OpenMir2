@@ -450,3 +450,40 @@ fn gm_execute_errors_are_structured() {
 
     proc.shutdown();
 }
+
+/// F4（卡 `openmir2-mcp-admin-review-minors`）：`MIR2_MCP_ADMIN_ADDR` 指向非回环地址时，
+/// `gm_execute` 必须在**连接前**结构化拒绝（`admin_addr_not_loopback`），不 panic、不伪造执行。
+///
+/// `192.0.2.1` 是 TEST-NET-1（RFC 5737），永不指向真实主机。
+///
+/// 变异自证：删掉客户端回环校验（`admin::resolve_loopback` 的 `.find(|c| c.ip().is_loopback())`
+/// 换成 `.next()`）⇒ 会真去连 192.0.2.1 ⇒ 错误码变成 `admin_timeout`
+/// （本机实测；不同网络下也可能是 `admin_connect_failed`）⇒ 本用例红。
+#[test]
+fn gm_execute_rejects_non_loopback_admin_addr() {
+    let root = TempRoot::new("admin-nonloopback");
+    let mut proc = McpProc::start_with_env(
+        Some(&root.path),
+        None,
+        &[("MIR2_MCP_ADMIN_ADDR", "192.0.2.1:7946".to_string())],
+    );
+    proc.request(
+        "initialize",
+        json!({
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {},
+            "clientInfo": {"name": "mir2-mcp-e2e", "version": "0"},
+        }),
+    );
+    proc.notify("notifications/initialized");
+
+    let got = proc.call_tool("gm_execute", json!({"chr": "aaa", "cmd": "@时间"}));
+    assert_eq!(got["result"]["isError"], true, "{got}");
+    let body = structured(&got);
+    assert_eq!(body["code"], "admin_addr_not_loopback", "{got}");
+    assert_eq!(body["ok"], false, "{got}");
+    assert_eq!(body["wrote"], false, "{got}");
+    assert_eq!(body["admin_addr"], "192.0.2.1:7946", "{got}");
+
+    proc.shutdown();
+}
