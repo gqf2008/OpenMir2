@@ -14,7 +14,7 @@
 ## 每 burst 硬流程（一步都不许跳）
 
 1. `cd` 到你自己的 worktree（`lanes.conf` 第 2 列，`lane-run.sh` 已经 `cd` 进去）；然后
-   `git fetch walgit '+refs/collab/*:refs/collab/*'`、`git fetch walgit master`（`origin` 仅人工同步镜像，不参与本车道）。
+   `git fetch walgit '+refs/collab/*:refs/collab/*'`、`git fetch walgit`（无 refspec，刷新全部分支；`origin` 仅人工同步镜像，不参与本车道）。
 2. `walgit collab board` 取【待审】。对每一张：`walgit collab thread <id>`，读出
    **最后一条 `patch` 的 `head`/`base`/`branch`** 与**所有 `review` 条目的 `{actor, decision, reviewed_head}`**。
 3. **准入判据（四条全过才合；缺任何一条 ⇒ 跳过并在该卡留一条 `comment` 说明原因）**：
