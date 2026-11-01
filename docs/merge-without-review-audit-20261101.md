@@ -3,7 +3,7 @@
 - 卡：`openmir2-merge-without-review-audit`（tier=L）
 - 快照：`5f5ec4243154ceff6074c07e794f3f402f4a8df0`（`refs/remotes/walgit/master`，本卡分支 base）
 - 工具：`tools/collab/merge_without_review_audit.py`（**只读**；selftest **38/38**；已登记
-  `tools/hygiene/tool_selftest_gate.py` 的 `REGISTRY`，认树锚同步为 60 项 / 清点 65 = 60 + 5 + 0）
+  `tools/hygiene/tool_selftest_gate.py` 的 `REGISTRY`，认树锚同步为 60 项 / 清点 65 = 60 + 5 + 0；同日并入 `wl_status_audit`（卡 `openmir2-whitelist-status-audit`）后为 **61 项 / 清点 66 = 61 + 5 + 0**）
 - 普查域：本地 `refs/collab/inbox/*` 的全部条目 blob。快照时共 13829 条；本卡自身另有 1 条
   认领 `status`（不构成已合并卡，不影响三张表）。
 
