@@ -81,6 +81,9 @@ REGISTRY = [
     ("docs_anchor_gate", ["tools/hygiene/docs_anchor_gate.py", "--selftest"], False),
     ("t_reservation_gate", ["tools/whitelist/t_reservation_gate.py", "selftest"], False),
     ("next_t", ["tools/whitelist/next_t.py", "selftest"], False),
+    # 卡 `openmir2-whitelist-status-audit`：只读普查 whitelist 的「待独立 principal 复核」
+    # 状态（认 review 的 decision/verdict 两字段）。离线合成夹具 14/14，0.0s。
+    ("wl_status_audit", ["tools/whitelist/wl_status_audit.py", "selftest"], False),
     # dbsnap 的自测会连**本机 MySQL** 读 13 张库表（mir2_account.* / mir2_db.*，mysql.exe 路径硬编码）
     # ⇒ 无库环境下的红属**环境**而非工具回归（runbook §7「判定域」F2）。
     ("dbsnap", ["tools/dbsnap/dbsnap.py", "selftest"], False),
