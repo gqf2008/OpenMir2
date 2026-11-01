@@ -270,3 +270,17 @@ cd mir2-rs && python -I -B tests/parity/m3/rng-trace-scene/check_anchors.py chec
 ## 5. 本追加文档自身的门禁（rc 表）
 
 在交付 head（本分支最后一次提交）上直取退出码；命令按书写顺序运行。
+
+| 门 | 命令 | rc |
+|---|---|---|
+| docs_delivery_gate | `python -I -B tools/hygiene/docs_delivery_gate.py` | 0 |
+| docs_anchor_gate（表格） | `python -I -B tools/hygiene/docs_anchor_gate.py` | 0 |
+| docs_anchor_gate（散文） | `python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master` | 0（检查 0） |
+| dynamic_count_stamp_gate | `python -I -B tools/hygiene/dynamic_count_stamp_gate.py --ref HEAD` | 0 |
+| stale_pointer_gate | `python -I -B tools/hygiene/stale_pointer_gate.py --ref HEAD` | 0 |
+| conflict_marker_gate | `python -I -B tools/hygiene/conflict_marker_gate.py` | 0 |
+| t_reservation_gate | `python -I -B tools/whitelist/t_reservation_gate.py check` | 0 |
+| tool_selftest_gate --inventory | `python -I -B tools/hygiene/tool_selftest_gate.py --inventory` | 0（66/61/5/0） |
+| git diff --check | `git diff --check $(git merge-base HEAD walgit/master) HEAD` | 0 |
+
+> 散文锚读数「检查 0」表示**增量域内没有 `.rs`/`.cs` 锚**，不代表全仓锚干净（域限制见 §2.4）。
