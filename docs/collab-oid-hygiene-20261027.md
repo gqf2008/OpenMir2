@@ -89,8 +89,9 @@ tools/collab/sign_entry.sh --repo . --kind patch --id <thread> \
   tools/collab/sign_entry.sh --repo . --kind issue --id <thread> \
       --root --body-file body.json [--push walgit]
   ```
-- **`--root` 只允许线程首条目**：非 `kind=issue` 时会 `walgit collab thread <id>` 判空；
-  已有任何条目、或判不了线程是否为空 ⇒ 拒签。`--root` 与 `--parent` 同时给也拒签。
+- **`--root` 只允许线程首条目**：**任何 kind（含建线用的 `issue`）都会先 `walgit collab thread <id>`
+  探测线程历史**（F1：`issue` 不得绕过）；已有任何条目、或判不了线程是否为空 ⇒ 拒签。
+  `--root` 与 `--parent` 同时给也拒签。
 - **陈旧 body ⇒ rc=1 拒签**：`--body-file` 的 mtime 超过 `--max-body-age`（默认 **1800 秒**）时拒绝，
   错误里打印 `body_sha256=<hex>` 与 `mtime=<ISO>（epoch=…）`；确认不是上一张卡的残留后加
   `--allow-stale-body` 显式放行，或用 `--max-body-age <秒>` 调阈值。

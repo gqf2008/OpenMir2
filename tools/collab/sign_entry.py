@@ -4,7 +4,7 @@
 写侧 fail-closed，三层：
   1. head/base/parent 一律实取并 **assert 全 40 位小写 hex**；非 hex（含 %P/散文/缩写）拒签；
   2. `--parent` **缺席或为空** ⇒ 拒签（除非显式 `--root`）；`--root` 只能用于
-     「该 thread 尚无任何条目」（`--kind issue` 建线也不例外，同样要探测历史），
+     「该 thread 尚无任何条目」（建线用的 `kind=issue` 也不例外，同样要探测历史），
      有历史条目 ⇒ 拒签；
   3. `--body-file` 的 mtime 超过 `--max-body-age`（默认 1800s）⇒ 拒签，
      错误里打印 body 的 `sha256` 与 `mtime`；确认不是旧卡残留后加 `--allow-stale-body` 放行。
@@ -312,6 +312,17 @@ def _refs_snapshot(repo):
     return pr.stdout if pr.returncode == 0 else None
 
 
+def _rmtree_force(func, path, _exc_info):
+    """T1（卡 openmir2-sign-entry-selftest-tmp-leak）：Windows 上 git 的 `.git`/loose object
+    是只读的，直接 rmtree 会 PermissionError；先去只读位再删（只对**本进程 mkdtemp 自建**的树调用）。"""
+    import stat
+    try:
+        os.chmod(path, stat.S_IWRITE)
+    except OSError:
+        pass
+    func(path)
+
+
 def selftest(repo):
     """离线夹具：临时 git 仓 + 假 probe，覆盖既有 head 占位符与新增三件事。"""
     cases = []
@@ -508,7 +519,12 @@ def selftest(repo):
         cases.append(("N3:stale-body", True))
     finally:
         import shutil
-        shutil.rmtree(tmp, ignore_errors=True)
+        # T1（卡 openmir2-sign-entry-selftest-tmp-leak）：只清理**本进程用 mkdtemp 建的这一棵**
+        # （路径已知）；绝不按通配扫临时目录——非本进程创建的 `sign-entry-selftest-*` 一律不碰。
+        # 旧实现 `rmtree(..., ignore_errors=True)` 把只读 loose object 的 PermissionError 吞掉，
+        # 每跑一次 `--selftest` 静默泄漏一个目录；改为先去只读位再删（_rmtree_force），
+        # 残余失败照常抛出（与 oid_gate.py 的已合入修法一致）。
+        shutil.rmtree(tmp, onerror=_rmtree_force)
 
     after_refs = _refs_snapshot(repo)
     assert before_refs == after_refs, "selftest 改动/新增了真实仓库的 refs（夹具泄漏）"
