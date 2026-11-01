@@ -155,9 +155,13 @@ AdminBind=127.0.0.1   ; 缺省 127.0.0.1；只接受回环 IP 字面量
 - **非回环 = 拒绝启动**：`AdminBind` 只接受 `127.0.0.0/8` 或 `::1` 的 IP 字面量；`0.0.0.0`、
   局域网/公网 IP、主机名（含 `localhost`）都在**配置解析期**报错（负例测试见
   `config.rs::admin_section_defaults_off_and_rejects_non_loopback`）。accept 时再按
-  `peer.ip().is_loopback()`（`admin_peer_is_allowed`）做一次纵深防御；该守卫的负例牙见
-  `admin_channel_tests::admin_peer_guard_rejects_non_loopback_peers`（判据语义）与
-  `admin_channel_tests::admin_listener_drops_peer_rejected_by_guard`（接线：拒绝即丢连接）。
+  `peer.ip().is_loopback()`（`admin_peer_is_allowed`）做一次纵深防御；生产调用点只能传
+  `AdminPeerPolicy::LoopbackOnly`（该枚举在生产构建里**只有一个臂** ⇒ `run_admin_listener`
+  写 `|_peer| true` 这类恒真闭包会**编译失败**，卡 `openmir2-admin-loopback-wiring-tooth` F2-a）。
+  守卫的负例牙见 `admin_channel_tests::admin_peer_guard_rejects_non_loopback_peers`（判据语义）、
+  `admin_channel_tests::admin_peer_guard_rejects_ipv4_mapped_ipv6_loopback`（`[::ffff:127.0.0.1]`
+  刻意 fail-closed）与 `admin_channel_tests::admin_listener_drops_peer_rejected_by_guard`
+  （接线：拒绝即丢连接）。
 - **协议**：TCP 回环、**逐行 JSON**。
   - 请求：`{"chr":"<角色名>","cmd":"@..."}`（`cmd` 必须是 `@` 开头的完整命令行）；
   - 响应：`{"ok":bool,"error":?string,"frames":N,"note":?string}`；
@@ -178,6 +182,11 @@ AdminBind=127.0.0.1   ; 缺省 127.0.0.1；只接受回环 IP 字面量
   指向本机之外时不会发起连接）；连不上/超时/响应不是约定 JSON ⇒ 结构化
   `admin_connect_failed` / `admin_timeout` / `admin_protocol_error`；`AdminPort=0` 且未设
   `MIR2_MCP_ADMIN_ADDR` ⇒ `admin_not_configured`。
+- **地址写法**：`MIR2_MCP_ADMIN_ADDR` 按 `host:port` 解析。IPv6 常规写法需带方括号
+  （`[::1]:7946`）；**无括号**的 `::1:7946` 会被 std `ToSocketAddrs` 解析为 host `::1` + port
+  `7946` ⇒ 回环校验**放行**并尝试连接，最终以 `admin_connect_failed` 结构化失败（**不是**解析
+  错误）——这是 std 的行为，本通道不改；带方括号是唯一无歧义的形式（卡
+  `openmir2-admin-loopback-wiring-tooth` F4-a）。
 - **不启动默认端口栈**：开发/测试用进程内 `127.0.0.1:0` 临时端口 + 既有 GM 测试夹具驱动
   同一执行收口；`E:\MirServer` 默认端口栈（5000/6000/7000/7100/7200…）只在真机窗口操作。
 
@@ -200,6 +209,11 @@ AdminBind=127.0.0.1   ; 缺省 127.0.0.1；只接受回环 IP 字面量
   `127.0.0.1:<AdminPort>`，因此**不要在生产常开**；需要时开窗、用完关闭（改 `AdminPort=0` 并重启）。
 - 抬权只作用于**单次调用**（执行前 10 / 执行后立即还原），不写会话持久权限、不改 `AdminList` 判定；
 - 不新增客户端可见帧面（除命令本身的效果）；不改客户端协议、DB schema、Envir 脚本格式；
+- **fail-closed 的刻意取舍**：IPv4-mapped IPv6 回环（`[::ffff:127.0.0.1]`）被 std 的
+  `Ipv6Addr::is_loopback()` 判为**非回环** ⇒ accept 层与 `parse_admin_bind` 都**拒绝**。宁可
+  连不上，也不把 GM 执行面暴露给「看起来像回环」的地址；放行它需要显式 `to_ipv4_mapped()`
+  映射，属安全边界变更，本卡不做（用例
+  `admin_channel_tests::admin_peer_guard_rejects_ipv4_mapped_ipv6_loopback`）。
 - `T-273`：新增 `[Admin]` 管理面与 MCP 执行能力是 oracle 没有的能力，按「默认关闭 ⇒ 生产零行为差」
   登记（`mir2-rs/tests/parity/whitelist.md` / `T-RESERVATIONS.md`）。
 
@@ -228,10 +242,11 @@ cargo test -p game-svr --lib config::tests::admin_section_defaults_off_and_rejec
      响应 `{ok,frames,note}` 原样透传。
   4. 失败面：缺 `chr` ⇒ `missing_chr`；非 `@` ⇒ `invalid_command`；通道连不上 ⇒ `admin_connect_failed`。
   5. 非回环：`MIR2_MCP_ADMIN_ADDR=192.0.2.1:7946` ⇒ `admin_addr_not_loopback`（连接前拒绝）。
-- **game-svr（8 条）**：`@时间` ⇒ `ok` + 文本 + 1 条 `SM_SYSMESSAGE(100)`；`@LoadAdmin`
+- **game-svr（9 条）**：`@时间` ⇒ `ok` + 文本 + 1 条 `SM_SYSMESSAGE(100)`；`@LoadAdmin`
   （`PermissionMin=10`）经抬权成功且**执行后 `permission` 仍为 0**；未知角色/未知命令/非 `@`
   ⇒ 结构化错误；`127.0.0.1:0` 传输往返（真实 `run_admin_listener` + 同一执行收口）；
-  accept 层回环守卫的负例（判据语义 + 拒绝即丢连接的接线牙）。
+  accept 层回环守卫的负例（判据语义 + `[::ffff:127.0.0.1]` 刻意 fail-closed + 拒绝即丢连接的
+  接线牙；生产准入只能传 `AdminPeerPolicy::LoopbackOnly`，换成恒真闭包编译失败）。
 - **配置负例**：`AdminBind=0.0.0.0 / 192.168.1.10 / localhost` ⇒ 拒绝启动。
 - **真机窗口（R 级，合并后回登台账）**：① `@怪`/`@清除怪物` 经 admin 通道与脚本
   `GMEXECUTE` 路径的**抽数序列与帧面**等价（需真机双栈对拍）；② `AdminPort` 开/关两种配置下
