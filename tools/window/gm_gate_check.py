@@ -201,6 +201,21 @@ def selftest():
     ]
 
     ok = True
+    # 绝对锚（A1）：字面量必须**写在测试里**，不得从 RED_PARAM / REAL_CAPTURE_RED_PARAM 派生。
+    # 否则两个常量被同时改（reviewer-21 变异 M5：两者都改成 9999）时，同源比较仍然自洽、牙齿空转。
+    # 0x38FF = 14591 的三重 oracle 锚（与字面量并列，不是又一个同源常量）：
+    #   * C# `HUtil32.MakeWord(low, high) = low | (high << 8)`（`src/OpenMir2/HUtil32.cs:66-69`）；
+    #     部署 RedMsgFColor=255 / RedMsgBColor=56 ⇒ 255 | (56 << 8) = 0x38FF。
+    #   * Rust `make_word16(f, b) = f | (b << 8)` 同序（`mir2-rs/bins/game-svr/src/smframe.rs:39-51`）。
+    #   * Rust 单测钉死该值（`mir2-rs/bins/game-svr/src/lib.rs:46536`）。
+    # 真机捕获同向（见上方 REAL_CAPTURE_RED_PARAM 注释：49 条 14591、0 条 65336）。
+    for const_name, const_val in (('RED_PARAM', RED_PARAM),
+                                  ('REAL_CAPTURE_RED_PARAM', REAL_CAPTURE_RED_PARAM)):
+        if const_val != 0x38FF:
+            print('  selftest red-param-abs MISMATCH  (%s=%d ≠ 字面量 0x38FF/14591)' % (const_name, const_val))
+            ok = False
+        else:
+            print('  selftest red-param-abs OK  (%s=%d == 0x38FF)' % (const_name, const_val))
     # 牙齿：实现常量必须仍与真机捕获的独立值一致（单边改 RED_PARAM 会在这里先红）。
     if RED_PARAM != REAL_CAPTURE_RED_PARAM:
         print('  selftest red-param-source MISMATCH  (RED_PARAM=%d ≠ 真机捕获 %d)' % (RED_PARAM, REAL_CAPTURE_RED_PARAM))
