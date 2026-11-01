@@ -10,8 +10,8 @@
 #
 # 2026-11-01 增补（卡 `openmir2-collab-sign-entry-hardening`，两起写侧误签事故）：
 #   * `--parent` **缺席或为空 ⇒ 拒签**（不再静默按「根条目」照签）；建线请显式 `--root`；
-#   * `--root` 只允许在「该 thread 尚无任何条目」或 `--kind issue` 建线时使用，
-#     有历史条目却声明根条目 ⇒ 拒签（用 `walgit collab thread <id>` 判空）；
+#   * `--root` 只允许在「该 thread 尚无任何条目」时使用——**任何 kind（含 `--kind issue`
+#     建线）都要先探测线程历史**，有历史条目却声明根条目 ⇒ 拒签（用 `walgit collab thread <id>` 判空）；
 #   * `--body-file` 的 mtime 超过 `--max-body-age`（默认 1800 秒）⇒ 拒签，
 #     错误里打印 body 的 `sha256` 与 `mtime`；确认不是上一张卡的残留后加 `--allow-stale-body` 显式放行；
 #   * 校验通过后打印 `body_sha256=<hex>`，供签后回读比对。
@@ -22,7 +22,7 @@
 #   tools/collab/sign_entry.sh --repo . --kind patch --id <thread> \
 #       --parent <entry-id> --base <oid> --head <oid> --body-file body.json \
 #       [--push walgit] [--check-only]
-#   # 建线（kind=issue）：**必须显式 --root**，不能靠「不写 --parent」
+#   # 建线（kind=issue）：**必须显式 --root**（不能靠「不写 --parent」），且该 thread 必须为空
 #   tools/collab/sign_entry.sh --repo . --kind issue --id <thread> \
 #       --root --body-file body.json [--push walgit]
 #   # 需要重签旧 body 时（先确认不是上一张卡的残留）
