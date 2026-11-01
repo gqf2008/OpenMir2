@@ -8,6 +8,12 @@
 2. 逐张待审卡：读卡内 patch 的验收判据 → **自己重跑**判据（不采信作者自述）→ 签 `review`：
    - 全绿且无 Critical/Important ⇒ `{"decision":"approve","agent":"<你本轮身份>","note":"<你实跑的命令+结果+证据路径>"}`；
    - 否则 `request_changes` + 具体「哪条判据、什么证据、要求什么」。
+   - **散文锚（增量）**：在**待审 head 所在分支**上跑
+     `python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <合并目标 ref>`
+     （本仓通常是 `walgit/master`）。`--base` 取**合并目标 ref**、在**待合并分支**上跑：
+     合并后再在 master 上以 `--base master` 跑，`merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，**什么都没扫**。
+     该门只核新增行（域：`docs/` 下 `.md` 反引号内的 `.rs`/`.cs` `path:line`），对历史悬空锚无感；
+     历史清理仍归 `stale_pointer_gate`，二者不可互相替代。M+K>0 ⇒ rc≠0 ⇒ 按该条 `request_changes`。
 3. 每张卡的 parent 用该线程最后一条 entry 的 oid；`--push walgit`。
 4. **不要 merge**（合入由 coordinator/owner）。
 
