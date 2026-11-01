@@ -39,7 +39,7 @@
 
 | # | 命令 | 改动前 | 改动后 |
 |---|---|---|---|
-| 1 | `python -I tools/collab/oid_gate.py check --limit 400`（**不带** `--baseline`） | rc=1 | rc=1 |
+| 1 | `python -I tools/collab/oid_gate.py check --limit 400`（**不带** `--baseline`；**该行是 2026-11-01 当时状态**，见下方 as-of 注） | rc=1 | rc=1 |
 | 2 | `python -I tools/collab/oid_gate.py check --limit 400 --baseline tools/collab/oid_gate_baseline.json` | rc=1，未豁免 | **rc=0** |
 | 3 | `python -I tools/collab/oid_gate.py gate --baseline tools/collab/oid_gate_baseline.json`（`tool_selftest_gate` 的实际调用形态） | rc=1 | **rc=0** |
 | 4 | `python tools/hygiene/tool_selftest_gate.py --inventory` | rc=0 | rc=0 |
@@ -52,6 +52,12 @@
 真正会被 goal_gate 条件④触发的是 `tool_selftest_gate`，它调用的是 `gate --baseline …`（第 3/5 行），
 改动后已 rc=0。想让「裸 check」也绿，需要改 `oid_gate.py` 的默认加载逻辑 —— 本卡禁止改该文件，
 故**不在本卡范围**，作为发现登记。
+
+**as-of 注（2026-11-01 之后补，不改写历史数字）**：上表第 1 行的 `rc=1` 是 **2026-11-01 当时**
+（`81c8fd6a2` 之前）的快照。`81c8fd6a2` 起 `check` / `gate` 在**不传 `--baseline`** 时
+会缺省加载仓库内 `tools/collab/oid_gate_baseline.json`，因此裸 `check` 现在 **rc=0**；
+只有显式 `--no-baseline` 才恢复严格判定、回到 **rc=1**。上表「改动前 / 改动后」两列（第 3/4 列）
+保持当时事实，**不改写**。
 
 改动后第 2 行关键输出（原文）：
 

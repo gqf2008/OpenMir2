@@ -4,7 +4,8 @@
 写侧 fail-closed，三层：
   1. head/base/parent 一律实取并 **assert 全 40 位小写 hex**；非 hex（含 %P/散文/缩写）拒签；
   2. `--parent` **缺席或为空** ⇒ 拒签（除非显式 `--root`）；`--root` 只能用于
-     「该 thread 尚无任何条目」或 `--kind issue` 建线，有历史条目 ⇒ 拒签；
+     「该 thread 尚无任何条目」（`--kind issue` 建线也不例外，同样要探测历史），
+     有历史条目 ⇒ 拒签；
   3. `--body-file` 的 mtime 超过 `--max-body-age`（默认 1800s）⇒ 拒签，
      错误里打印 body 的 `sha256` 与 `mtime`；确认不是旧卡残留后加 `--allow-stale-body` 放行。
      签名成功后打印 `body_sha256=<hex>`，供签后回读比对。
@@ -24,7 +25,7 @@ body.json 里若含 "head"/"base" 键：
   * 值不是 hex 且不是 @rev 形态 ⇒ 拒签。
 
 --selftest：离线夹具（临时 git 仓 + 假 probe），覆盖 head 占位符、parent 缺席/根条目、
-陈旧 body、body_sha256 五类；跑完断言真实仓库 refs 未被改动。
+`--kind issue` 的线程历史探测（F1）、陈旧 body、body_sha256；跑完断言真实仓库 refs 未被改动。
 """
 import argparse
 import contextlib
@@ -133,7 +134,7 @@ def thread_entry_count(repo, thread_id, run=subprocess.run):
 
 
 def guard_parent_mode(repo, kind, thread_id, parent, want_root, probe=None):
-    """--parent 缺席即拒签；--root 只能用于线程首条目（或 kind=issue 建线）。"""
+    """--parent 缺席即拒签；--root 只能用于线程首条目（kind=issue 建线亦然）。"""
     has_parent = isinstance(parent, str) and parent.strip() != ""
     if want_root and has_parent:
         refuse("--root 与 --parent 互斥：已给 --parent=%s 就不能声明根条目" % parent)
@@ -142,8 +143,8 @@ def guard_parent_mode(repo, kind, thread_id, parent, want_root, probe=None):
     if not want_root:
         refuse("--parent 缺席或为空：拒绝静默签「根条目」（常见于取值管道空转）；"
                "建线/首条目请显式加 --root")
-    if kind == "issue":
-        return
+    # F1（卡 openmir2-collab-tool-tails）：`--kind issue` 不再早退——它同样要探测线程历史，
+    # 否则把 kind 错写成 issue 就能在有历史的线程上再落一个根条目（oid_gate 对空 parent 跳过）。
     if probe is None:
         probe = lambda: thread_entry_count(repo, thread_id)  # noqa: E731
     count, detail = probe()
@@ -161,7 +162,7 @@ def main():
     ap.add_argument("--id", default=None)
     ap.add_argument("--parent", default=None, help="线程尾 entry oid（40 hex）")
     ap.add_argument("--root", action="store_true",
-                    help="显式声明根条目（仅 thread 首条目 / kind=issue 建线）")
+                    help="显式声明根条目（仅 thread 首条目，kind=issue 建线亦然）")
     ap.add_argument("--body-file", default=None)
     ap.add_argument("--allow-stale-body", action="store_true",
                     help="显式放行陈旧 body（默认 mtime > 1800s 拒签）")
@@ -271,6 +272,22 @@ def _capture_refusal(fn):
     return None, buf.getvalue()
 
 
+def _capture_main(argv):
+    """在**当前进程**里跑一次 main()（便于注入探针），返回 (SystemExit.code|返回值, stderr)。"""
+    buf = io.StringIO()
+    out = io.StringIO()
+    orig_argv = sys.argv
+    try:
+        sys.argv = [__file__] + list(argv)
+        with contextlib.redirect_stdout(out), contextlib.redirect_stderr(buf):
+            rc = main()
+    except SystemExit as ex:
+        return ex.code, buf.getvalue()
+    finally:
+        sys.argv = orig_argv
+    return rc, buf.getvalue()
+
+
 def _run_cli(extra, env=None):
     return subprocess.run([sys.executable, "-B", __file__] + list(extra),
                           capture_output=True, text=True, env=env)
@@ -378,22 +395,76 @@ def selftest(repo):
         assert code == 1 and "--root" in out, ("N2 rc=%r out=%s" % (code, out))
         cases.append(("N2:root-with-history", True))
 
-        # N2b：空线程 / kind=issue 建线 ⇒ --root 放行（负例对照）。
+        # N2b：空线程 ⇒ --root 放行（负例对照；patch 与 issue 的首条目都允许）。
         code, out = _capture_refusal(lambda: guard_parent_mode(
             frepo, "patch", "selftest-signing-case", None, True,
             probe=lambda: (0, "thread 尚无条目")))
         assert code is None, ("N2b 空线程 --root 被误拒：%r %s" % (code, out))
         code, out = _capture_refusal(lambda: guard_parent_mode(
             frepo, "issue", "selftest-signing-case", None, True,
-            probe=lambda: (3, "thread 已有 3 条条目")))
-        assert code is None, ("N2b kind=issue --root 被误拒：%r %s" % (code, out))
-        # CLI 层同样验证 --root --kind issue 放行（不走 walgit）。
-        pr = _run_cli(["--precheck", "--repo", frepo, "--kind", "issue",
-                       "--id", "selftest-signing-case", "--root",
-                       "--body-file", body], env=env)
-        assert pr.returncode == 0, ("N2b CLI --root --kind issue rc=%r %s"
-                                    % (pr.returncode, pr.stderr))
+            probe=lambda: (0, "thread 尚无条目")))
+        assert code is None, ("N2b 空线程 kind=issue --root 被误拒：%r %s"
+                              % (code, out))
         cases.append(("N2b:root-allowed", False))
+
+        # ---- F1（卡 openmir2-collab-tool-tails）：`--kind issue` 不得绕过历史探测 ----
+        # 旧实现 `if kind == "issue": return` 早退 ⇒ 把 kind 写成 issue 就能在有历史的
+        # 线程上再落一个根条目（oid_gate 对空 parent 跳过，抓不到）。
+        # 牙②：有历史 + issue + --root ⇒ 必须拒签（单元层）。
+        code, out = _capture_refusal(lambda: guard_parent_mode(
+            frepo, "issue", "selftest-signing-case", None, True,
+            probe=lambda: (3, "thread 已有 3 条条目")))
+        assert code == 1 and "--root" in out, (
+            "F1 牙② kind=issue 有历史 --root 未拒签：%r %s" % (code, out))
+        cases.append(("F1:issue-root-with-history", True))
+
+        # 牙③：CLI 层（跑真 main()）——有历史 + issue + --root ⇒ rc=1，且 **walgit
+        # 调用 0 次**。探针注入：thread 探测顶替成「有 1 条历史」，subprocess.run 顶替成
+        # 记录器；记录器一旦看到 walgit 就说明拒绝路径仍在动 walgit（拒绝必须早于它）。
+        orig_probe = globals()["thread_entry_count"]
+        orig_run = subprocess.run
+        walgit_calls = []
+
+        def _spy_run(cmd, *a, **kw):
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "walgit":
+                walgit_calls.append(list(cmd))
+                return subprocess.CompletedProcess(cmd, 1, "", "spy: no walgit")
+            return orig_run(cmd, *a, **kw)
+
+        try:
+            globals()["thread_entry_count"] = (
+                lambda repo, thread_id, run=None: (1, "thread 已有 1 条条目"))
+            subprocess.run = _spy_run
+            code, out = _capture_main([
+                "--repo", frepo, "--kind", "issue", "--id",
+                "selftest-signing-case", "--root", "--body-file", body])
+        finally:
+            subprocess.run = orig_run
+            globals()["thread_entry_count"] = orig_probe
+        assert code == 1 and "--root" in out, (
+            "F1 牙③ CLI 有历史 issue --root 未拒签：%r %s" % (code, out))
+        assert walgit_calls == [], (
+            "F1 牙③ 拒绝路径仍调用了 walgit %d 次：%r"
+            % (len(walgit_calls), walgit_calls))
+        cases.append(("F1:cli-refuse-zero-walgit", True))
+
+        # 牙①：CLI 层空线程 + issue + --root ⇒ 放行（main 返回 0，同样零 walgit）。
+        try:
+            globals()["thread_entry_count"] = (
+                lambda repo, thread_id, run=None: (0, "thread 尚无条目"))
+            subprocess.run = _spy_run
+            code, out = _capture_main([
+                "--repo", frepo, "--kind", "issue", "--id",
+                "selftest-signing-case", "--root", "--body-file", body,
+                "--precheck"])
+        finally:
+            subprocess.run = orig_run
+            globals()["thread_entry_count"] = orig_probe
+        assert code == 0, (
+            "F1 牙① CLI 空线程 issue --root 被误拒：%r %s" % (code, out))
+        assert walgit_calls == [], (
+            "F1 牙① 放行路径不应调用 walgit：%r" % (walgit_calls,))
+        cases.append(("F1:cli-empty-allowed", False))
 
         # N2c：--root 与 --parent 互斥 ⇒ 拒签（CLI 层，不走 walgit）。
         pr = cli("--root", "--parent", good)
@@ -443,9 +514,10 @@ def selftest(repo):
     assert before_refs == after_refs, "selftest 改动/新增了真实仓库的 refs（夹具泄漏）"
 
     print("sign_entry selftest: OK (%d cases：legacy head 占位符 5 + "
-          "N1 缺/空 parent 拒签 / N2 有历史 --root 拒签 / N2b 空线程与 issue 放行 / "
+          "N1 缺/空 parent 拒签 / N2 有历史 --root 拒签 / N2b 空线程 --root 放行 / "
           "N2c --root+--parent 拒签 / N3 陈旧 body 拒签 / N4 新鲜 body 通过 / "
-          "N5 --allow-stale-body 放行)" % len(cases))
+          "N5 --allow-stale-body 放行 / F1 issue 也探测历史：空线程放行、"
+          "有历史拒签（拒绝路径 walgit 调用 0 次）)" % len(cases))
     return 0
 
 
