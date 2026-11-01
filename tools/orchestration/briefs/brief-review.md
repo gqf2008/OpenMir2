@@ -4,7 +4,7 @@
 本轮身份：从 `openmir2-reviewer-1..4` 里挑一个**当前没被占用**的（看各 reviewer 最近签发）用于本轮所有 review 条目。
 
 ## 做什么
-1. `git fetch walgit '+refs/collab/*:refs/collab/*'`；`walgit collab board` 找【待审】。
+1. `git fetch walgit '+refs/collab/*:refs/collab/*'` + `git fetch walgit master`（刷新 `walgit/master`——下面散文锚的 `--base` 默认取它；不刷新就按**过期 base** 算 diff，会漏扫/错扫新提交；`walgit/master` 缺失时该门 rc=2 判不了）；`walgit collab board` 找【待审】。
 2. 逐张待审卡：读卡内 patch 的验收判据 → **自己重跑**判据（不采信作者自述）→ 签 `review`：
    - 全绿且无 Critical/Important ⇒ `{"decision":"approve","agent":"<你本轮身份>","note":"<你实跑的命令+结果+证据路径>"}`；
    - 否则 `request_changes` + 具体「哪条判据、什么证据、要求什么」。
@@ -13,7 +13,9 @@
      （本仓通常是 `walgit/master`）。`--base` 取**合并目标 ref**、在**待合并分支**上跑：
      合并后再在 master 上以 `--base master` 跑，`merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，**什么都没扫**。
      该门只核新增行（域：`docs/` 下 `.md` 反引号内的 `.rs`/`.cs` `path:line`），对历史悬空锚无感；
-     历史清理仍归 `stale_pointer_gate`，二者不可互相替代。M+K>0 ⇒ rc≠0 ⇒ 按该条 `request_changes`。
+     历史清理仍归 `stale_pointer_gate`，二者不可互相替代。四档计数：检查 N（域内锚总数）/ 悬空 M（文件不存在）/
+     越界 K（行号超文件长度）/ 符号缺失 S（锚紧邻声明的反引号符号不在锚定行/区间内）；
+     **M+K+S>0 ⇒ rc=1** ⇒ 按该条 `request_changes`；检查 0 ⇒ rc=0；`git`/`--base` 解析失败 ⇒ rc=2（判不了，同样按该条 `request_changes` 并写明缺什么）。
 3. 每张卡的 parent 用该线程最后一条 entry 的 oid；`--push walgit`。
 4. **不要 merge**（合入由 coordinator/owner）。
 

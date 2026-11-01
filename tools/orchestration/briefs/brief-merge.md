@@ -33,8 +33,8 @@
      needs-review（head 变化须重审）"，跳过。**绝不手工解冲突**（那等于改了被审内容）。
    - 无冲突 ⇒ 提交，标题按既有约定：
      `Merge <短sha> (<branch>): <卡的标题> - approve <principal> @reviewed_head <短sha>`
-     正文第二段写：`root/checkpoint: boundary=<...>; approve covers this exact head; merge-tree four gates re-run before push.`
-5. **四门禁（本 worktree 内，`CARGO_TARGET_DIR` 指向 `E:/tmp` 数据卷，绝不放检出内）**：
+     正文第二段写：`root/checkpoint: boundary=<...>; approve covers this exact head; merge-tree five gates (fmt/clippy/test/msgcodegen + prose_anchor) re-run before push.`
+5. **五门禁（4 条 cargo + 散文锚；本 worktree 内，`CARGO_TARGET_DIR` 指向 `E:/tmp` 数据卷，绝不放检出内）**：
    ```
    CARGO_TARGET_DIR=E:/tmp/openmir2-merge-target cargo fmt --all -- --check
    CARGO_TARGET_DIR=E:/tmp/openmir2-merge-target cargo clippy --workspace --all-targets -- -D warnings
@@ -50,12 +50,15 @@
    那时 `merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，什么都没扫。
    只核新增行（域：`docs/` 下 `.md` 反引号内的 `.rs`/`.cs` `path:line`），对历史悬空锚无感；
    历史清理仍归 `stale_pointer_gate`，二者不可互相替代。
+   四档计数：检查 N（域内锚总数）/ 悬空 M（文件不存在）/ 越界 K（行号超文件长度）/ 符号缺失 S（锚紧邻声明的反引号符号
+   不在锚定行/区间内）；**M+K+S>0 ⇒ rc=1**，检查 0 ⇒ rc=0，`git`/`--base` 解析失败 ⇒ rc=2（判不了）。
    任一红 ⇒ `git reset --hard origin/master` 撤掉这次合并，在卡上 `comment` 记录红项原文，**不许"先推了再说"**。
 6. 推送：`git push origin HEAD:refs/heads/master` + `git push walgit HEAD:refs/heads/master`，
    然后 `git ls-remote --heads origin master` 与 `walgit master` **复核两边都等于刚推的 oid**。
 7. 落两条记录（`--parent` 用**当场重读**的该线程最后一条 entry 的 oid，别凭记忆）：
    - `merge_result`：`{"card","merged":true,"oid","head","base","approve","gates","boundary","pushed"}`
-     （`gates` 写实测读数：`fmt/clippy/test suites/passed/failed/ignored/msgcodegen`）
+     （`gates` 写实测读数：`fmt/clippy/test suites/passed/failed/ignored/msgcodegen/prose_anchor`
+     ——`prose_anchor` 记四档 `检查/悬空/越界/符号缺失` 与 rc）
    - `status`：**夹具卡/离线片 = `in-progress`**（`work` 里写清剩余 DoD，例如"等真机窗口"）；
      **实现卡且 DoD 全达 = `closed`**。`owner`/`worktree`/`branch` **沿用卡上现有值**（不要改成自己）。
    两条都 `--push walgit`；写完 `walgit collab thread <id>` 回读：`verified=true`、链不断（parent 指向真实上一条）。
