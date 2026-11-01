@@ -165,10 +165,11 @@ def choose_evidence(candidates, cur_cell, phrase, ancestor_ok, status_of):
             continue
         approves = status_of(card).get("approves") or []
         if approves:
-            return "APPROVED_MERGED", {"card": card, "merge": merge,
+            return "APPROVED_MERGED", {"path": "window", "card": card, "merge": merge,
                                        "approve": approves[0], "added": added}
         if unapproved is None:
-            unapproved = {"card": card, "merge": merge, "approve": None, "added": added}
+            unapproved = {"path": "window", "card": card, "merge": merge,
+                          "approve": None, "added": added}
     if unapproved:
         return "MERGED_NO_REVIEW", unapproved
     return None, {}
@@ -216,7 +217,7 @@ class Trace:
         pos_of = {c: i for i, c in enumerate(chain)}
         mcommit = {c: card for c, card in commit_card.items() if c in pos_of}
         msorted = sorted(mcommit.items(), key=lambda kv: pos_of[kv[0]])  # 新→旧
-        self.pos_of, self.msorted = pos_of, msorted
+        self.chain, self.pos_of, self.msorted = chain, pos_of, msorted
         self.mpos = [pos_of[c] for c, _ in msorted]
         self.merges_by_card = {}
         for c, card in commit_card.items():
@@ -263,8 +264,7 @@ class Trace:
         lo, hi, ans = 0, len(self.msorted) - 1, None
         while lo <= hi:
             mid = (lo + hi) // 2
-            if subprocess.run(["git", "-C", self.repo, "merge-base", "--is-ancestor",
-                               commit, self.msorted[mid][0]]).returncode == 0:
+            if self._is_ancestor(commit, self.msorted[mid][0]):
                 ans = mid
                 lo = mid + 1
             else:
@@ -306,6 +306,53 @@ class Trace:
         self._row_cache[key] = line
         return line
 
+    def _is_ancestor(self, a, b):
+        return subprocess.run(["git", "-C", self.repo, "merge-base", "--is-ancestor",
+                               a, b]).returncode == 0
+
+    def _parents(self, commit):
+        out = self._git("rev-list", "--parents", "-n", "1", commit).split()
+        return out[1:] if out else []
+
+    def merge_info(self, oid):
+        """oid 是否解析、父数、类型（真实合并 / 账本值 / 未解析）。"""
+        try:
+            full = self._git("rev-parse", "--verify", "--quiet",
+                             str(oid) + "^{commit}").strip()
+        except subprocess.CalledProcessError:
+            full = ""
+        if not full:
+            return {"oid": str(oid), "full": None, "resolved": False, "kind": "未解析"}
+        ps = self._parents(full)
+        return {"oid": str(oid), "full": full, "resolved": True,
+                "kind": "真实合并" if len(ps) >= 2 else "账本值/单亲"}
+
+    def _real_merge(self, intro):
+        """把 intro 首次并入 first-parent 主线的 commit（可判定时返回）。
+
+        在 first-parent 链上二分找**第一个包含 intro 的 commit**：side-branch 的 patch head
+        被合并时，这条 commit 就是真正的 merge commit（例如 s1 的 1894ccd50）。
+        """
+        if not intro or not OID40_RE.match(intro) or not self.chain:
+            return None
+        lo, hi, ans = 0, len(self.chain) - 1, None
+        while lo <= hi:                      # chain[0]=base（最新），向后是更旧
+            mid = (lo + hi) // 2
+            if self._is_ancestor(intro, self.chain[mid]):
+                ans = mid                    # True 区在“更新”的一侧；最后一个 True = 引入 merge
+                lo = mid + 1
+            else:
+                hi = mid - 1
+        if ans is None:
+            return None
+        M = self.chain[ans]
+        if M == intro:                       # intro 本身就在 first-parent 链上
+            return M if len(self._parents(M)) >= 2 else None
+        ps = self._parents(M)
+        if len(ps) >= 2 and self._is_ancestor(intro, ps[1]):
+            return M
+        return None
+
     def _trace_intro(self, tid, current_line):
         """`git log -S` 引入 commit → patch head/delivery 卡 → merge（reviewer 口径）。"""
         cur_cell = first_cell(current_line)
@@ -324,13 +371,9 @@ class Trace:
                 cards.append(d)
             for card in cards:
                 for merge in self.merges_by_card.get(card, []):
-                    if subprocess.run(
-                            ["git", "-C", self.repo, "merge-base", "--is-ancestor", merge, self.base]
-                    ).returncode != 0:
+                    if not self._is_ancestor(merge, self.base):
                         continue
-                    if subprocess.run(
-                            ["git", "-C", self.repo, "merge-base", "--is-ancestor", c, merge]
-                    ).returncode != 0:
+                    if not self._is_ancestor(c, merge):
                         continue
                     line = self._row_at(merge, tid)
                     if line is None or PHRASE not in line:
@@ -339,9 +382,14 @@ class Trace:
                         continue
                     st = thread_status(self.threads.get(card) or [])
                     if st["approves"]:
-                        return "APPROVED_MERGED", {"card": card, "merge": merge,
-                                                   "approve": st["approves"][0]}
-                    return "MERGED_NO_REVIEW", {"card": card, "merge": merge, "approve": None}
+                        return "APPROVED_MERGED", {
+                            "path": "intro", "intro": c, "card": card,
+                            "merge": merge, "real_merge": self._real_merge(c),
+                            "approve": st["approves"][0]}
+                    return "MERGED_NO_REVIEW", {
+                        "path": "intro", "intro": c, "card": card,
+                        "merge": merge, "real_merge": self._real_merge(c),
+                        "approve": None}
         return None, {}
 
     def trace(self, tid, current_line):
@@ -483,6 +531,11 @@ def classify(row, threads, trace):
                                   if any(a["oid"].startswith(p) for p in aps)]
                 st["merges"] = [m for m in st["merges"]
                                 if any(str(m["oid"]).startswith(p) for p in mps)]
+            if trace is not None:
+                for m in st.get("merges", []):
+                    mi = trace.merge_info(m["oid"])
+                    m["kind"] = mi["kind"]
+                    m["resolved"] = mi["resolved"]
             per.append({"card": c, **st})
         if missing:
             return {"kind": "NO_THREAD", "cards": cards, "status": per,
@@ -499,18 +552,32 @@ def classify(row, threads, trace):
 
     if row["tid"] and row["tid"] != "PROSE-useitem" and trace is not None:
         kind, ev = trace.trace(row["tid"], row["text"])
-        if kind == "APPROVED_MERGED":
+        if kind in ("APPROVED_MERGED", "MERGED_NO_REVIEW"):
+            mi = trace.merge_info(ev["merge"])
+            rm = ev.get("real_merge")
+            merge_status = {"oid": ev["merge"], "full": mi.get("full"),
+                            "kind": mi["kind"], "resolved": mi["resolved"],
+                            "real_merge": rm, "path": ev.get("path")}
+            if ev.get("path") == "intro":
+                if rm and rm != mi.get("full"):
+                    actual = "；实际 merge `%s`" % rm[:8]
+                elif rm:
+                    actual = ""
+                else:
+                    actual = "；引入 merge 未解析"
+                evidence = ("引入 commit `%s` → 卡 `%s` → merge_result oid `%s`（账本值%s）"
+                            % (ev.get("intro", "")[:8], ev["card"], ev["merge"][:8],
+                               actual))
+            else:
+                evidence = ("merge 窗口 `%s` 加了本行（内容锚 + 实质变更 + 短语；%s）"
+                            % (ev["merge"][:8], mi["kind"]))
+            if kind == "MERGED_NO_REVIEW":
+                evidence += "；该卡无线程 review"
             return {"kind": kind, "cards": [ev["card"]],
-                    "status": [{"card": ev["card"], "approves": [ev["approve"]],
-                                "merges": [{"oid": ev["merge"]}]}],
-                    "evidence": "git 溯源：merge 窗口 `%s` 加了本行（内容锚 + 实质变更 + 短语）"
-                                % ev["merge"][:8]}
-        if kind == "MERGED_NO_REVIEW":
-            return {"kind": kind, "cards": [ev["card"]],
-                    "status": [{"card": ev["card"], "approves": [],
-                                "merges": [{"oid": ev["merge"]}]}],
-                    "evidence": "git 溯源：merge 窗口 `%s` 加了本行，但该卡无线程 review"
-                                % ev["merge"][:8]}
+                    "status": [{"card": ev["card"],
+                                "approves": [ev["approve"]] if ev.get("approve") else [],
+                                "merges": [merge_status]}],
+                    "evidence": evidence}
     if row["tid"] is None:
         return {"kind": "PROSE_UNCLOSED", "cards": [], "status": [],
                 "evidence": "非 T 表行（引用块散文），无行级卡号"}
@@ -535,7 +602,23 @@ def fmt_approve(p):
 def fmt_merge(p):
     if not p["merges"]:
         return "—"
-    return "<br>".join("`%s`" % m["oid"] for m in p["merges"])
+    parts = []
+    for m in p["merges"]:
+        oid, full = m["oid"], m.get("full")
+        rm = m.get("real_merge")
+        kind = m.get("kind", "未解析")
+        if rm and full and rm != full:
+            parts.append("实际 merge `%s`（引入）；账本 merge_result oid `%s`"
+                         % (rm[:8], oid[:8]))
+        elif rm and full and rm == full:
+            parts.append("`%s`（真实合并，引入）" % oid[:8])
+        elif kind == "真实合并":
+            parts.append("`%s`（真实合并；引入 merge 未解析）" % oid[:8])
+        elif m.get("path") == "intro":
+            parts.append("`%s`（%s；引入 merge 未解析）" % (oid, kind))
+        else:
+            parts.append("`%s`（%s）" % (oid, kind))
+    return "<br>".join(parts)
 
 
 def verdict_text(kind):
@@ -553,7 +636,7 @@ def verdict_text(kind):
 
 def render_markdown(census):
     counts = {}
-    lines = ["| 行 | T 号 | 交付卡 | 独立 approve（字段 + 条目 oid） | merge oid | 当前文字 | 判定 | 溯源 |",
+    lines = ["| 行 | T 号 | 交付卡 | 独立 approve（字段 + 条目 oid） | merge_result oid（类型） | 当前文字 | 判定 | 溯源 |",
              "|---:|---|---|---|---|---|---|---|"]
     for item in census:
         res = item["result"]
@@ -730,6 +813,49 @@ def _selftest():
     check("溯源：内容锚不符 ⇒ 不认（防 T 号复用）", kind4 is None)
     kind5, _ = choose_evidence([], first_cell(cur), PHRASE, lambda m: True, lambda c: st[c])
     check("溯源：空候选 ⇒ 不认（退化形态）", kind5 is None)
+
+    # 主路径 `Trace._trace_intro`（F4）：合成假 Trace，删掉/置空该分支即红。
+    class _FakeTrace(Trace):
+        def __init__(self):
+            self.repo = "."
+            self.base = "b" * 40
+            self.threads = {"openmir2-card-t": [
+                ({"kind": "patch", "actor": "w", "body": {}, "ts": 1}, "0" * 40),
+                ({"kind": "review", "actor": "r", "body": {"decision": "approve"}, "ts": 2},
+                 "0" * 40)]}
+            self.cands = {}
+            self.head2card = {"c" * 40: "openmir2-card-t"}
+            self.merges_by_card = {"openmir2-card-t": ["d" * 40]}
+            self.chain = ["d" * 40]
+            self.pos_of = {"d" * 40: 0}
+            self.msorted = [("d" * 40, "openmir2-card-t")]
+            self.mpos = [0]
+            self._row_cache = {}
+            self._intro_cache = {}
+            self._built = True
+
+        def build(self):
+            pass
+
+        def _git(self, *args, text=True):
+            if args[:2] == ("log", "-S"):
+                return "c" * 40 + "\n"
+            if args[0] == "show":
+                spec = args[1]
+                if spec.startswith("c" * 40 + "^:"):
+                    return "\n"
+                if spec.startswith("c" * 40 + ":") or spec.startswith("d" * 40 + ":"):
+                    return ("| T-X | **Title**：detail | why | 待独立 principal 复核 |\n")
+            return ""
+
+        def _is_ancestor(self, a, b):
+            return True
+
+    ft = _FakeTrace()
+    fk, fe = ft.trace("T-X", "| T-X | **Title**：detail | why | 待独立 principal 复核 |")
+    check("主路径 _trace_intro 覆盖（置空该分支必红）",
+          fk == "APPROVED_MERGED" and fe.get("card") == "openmir2-card-t"
+          and fe.get("path") == "intro")
 
     if fail:
         print("SELFTEST FAIL %d/%d: %s" % (len(fail), ok + len(fail), ", ".join(fail)),
