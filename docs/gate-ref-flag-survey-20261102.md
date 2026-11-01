@@ -3,7 +3,8 @@
 卡：`openmir2-gate-ref-flag-asymmetry`（tier=L）。
 范围：`tools/hygiene/*.py` 与 `mir2-rs/tests/parity/**/*.py` 中**带 main/argparse 的门**。
 判据：**实跑**同一脚本「不带 `--ref`」与「带 `--ref HEAD`」，比较退出码与输出
-（输出哈希 = `sha256(stdout + stderr)` 前 16 位）。
+（输出哈希 = `sha256(stdout + stderr)` 前 16 位，仅作「两跑是否相同」的**单次样本**证据；
+输出含实时状态或行序不稳的门**不复制具体值**，只记 rc 与「相同 / 不同」。见 §2 注记。）
 
 ## 1. 结论
 
@@ -18,7 +19,9 @@
 - **修了 3 处**，都在 `tools/hygiene/`：`conflict_marker_gate.py`、`docs_anchor_gate.py`、
   `scenario_manifest_gate.py`。三处统一改成「未知参数 ⇒ rc=2 + 打印用法」，**没有改动任何判定逻辑**。
 - 剩余 2 处静默忽略都在 `mir2-rs/tests/parity/`（`check_anchors.py`、`script_host_noop_audit.py`），
-  **不在本卡 write_set**，见 §7，建议另开卡。
+  **不在本卡 write_set**，见 §7，建议另开卡。后续卡 `openmir2-gate-ref-residuals` 已把这两处
+  也改成 fail-closed，收口后「静默忽略」= **0**；上表数字保留本卡（`openmir2-gate-ref-flag-asymmetry`）
+  当时的实跑快照。
 - 没有发现「接受但未用」：三个定义 `--ref` 的门禁都用**不同 ref**实跑证明会改变结论（见 §3、§4）。
 
 ### 类别口径（本卡采用的判定）
@@ -46,6 +49,9 @@ python -I <script> --ref HEAD
 - 对 argparse 门，`--ref` 未登记时 argparse 在 `parse_args` 末尾以 rc=2 拒绝
   （输出含 `unrecognized arguments`）；这是**真拒绝**，不执行门体。
 - 对自定义 `main(argv)` 门，才需要看输出哈希是否相同——相同即静默忽略。
+- **哈希只作单次样本**：`dynamic_count_stamp_gate` 输出行序不稳、`stale_pointer_gate` 含实时
+  ledger 与 ref sha、`scenario_manifest_gate` 读实时 `refs/collab`，其哈希**不可复现**，
+  故 §3 不再登记这些门的具体值（结论以 rc 与「两跑相同 / 不同」为准）。
 - 需要参数的观察员门（如 `review_principal_check.py --card ...`、`merge_tree_helper.py --base ...`）
   用其正常参数跑基线，再追加 `--ref HEAD`。
 - 对会默认读取 `E:/MirServer` 的 parity 门，本机对照命令显式给 `--mongen` / `--mapinfo`
@@ -56,15 +62,15 @@ python -I <script> --ref HEAD
 | 脚本 | 无 `--ref` rc | 有 `--ref` rc | 类别 | 备注 |
 |---|---:|---:|---|---|
 | `board_coverage_gate.py` | 0 | 2 | 报错 | 自定义解析器，显式 `unknown argument '--ref'` |
-| `conflict_marker_gate.py` | 0 | 2 | 报错（本次修复） | 修复前两跑均 rc=0 且哈希相同 `22fc85078e6b29be` ⇒ 静默忽略 |
-| `docs_anchor_gate.py` | 0 | 2 | 报错（本次修复） | 修复前两跑均 rc=0 且哈希相同 `275ab36b4d94d288`；`--prose --base ...` 加 `--ref` 亦相同 |
+| `conflict_marker_gate.py` | 0 | 2 | 报错（本次修复） | 修复前两跑均 rc=0 且输出相同（单次样本，未留存具体哈希）⇒ 静默忽略 |
+| `docs_anchor_gate.py` | 0 | 2 | 报错（本次修复） | 修复前两跑均 rc=0 且输出相同（单次样本）；`--prose --base ...` 加 `--ref` 亦相同 |
 | `docs_delivery_gate.py` | 0 | 2 | 报错 | argparse 拒绝 |
-| `dynamic_count_stamp_gate.py` | 0 | 0 | 接受并生效 | 默认 ref 与 `--ref HEAD` 相同（本 worktree 两者同 commit）；`--ref <root>` ⇒ rc=1，输出哈希 `1a2bae9036bca463` vs `eee8a7115c618c40` |
+| `dynamic_count_stamp_gate.py` | 0 | 0 | 接受并生效 | 默认 ref = `refs/remotes/walgit/master`，`--ref HEAD` = HEAD；两者**不保证同一 commit**，输出相同只因 `master` 是 `HEAD` 的**祖先**（判定为祖先关系，链不变则结论不变）。`--ref <root>`（与 HEAD 无祖先关系）⇒ rc=1。输出行序不稳、哈希不可复现 ⇒ 只记 rc：0 / 0 / 1 |
 | `merge_tree_helper.py` | 0 | 2 | 报错 | `--base HEAD --json` 基线；加 `--ref` ⇒ 用法 rc=2 |
 | `review_principal_check.py` | 0 | 2 | 报错 | `--card <id>` 基线；加 `--ref` ⇒ 用法 rc=2 |
-| `scenario_manifest_gate.py` | 0 | 2 | 报错（本次修复） | 修复前两跑均 rc=0 且哈希相同 `602d97e75e290bcf` ⇒ 静默忽略 |
+| `scenario_manifest_gate.py` | 0 | 2 | 报错（本次修复） | 修复前两跑均 rc=0 且输出相同（单次样本；该门读实时 `refs/collab`，哈希不可复现，故不复制）⇒ 静默忽略 |
 | `scenario_undecidable_audit.py` | 0 | 2 | 报错 | argparse 拒绝 |
-| `stale_pointer_gate.py` | 0 | 0 | 接受并生效 | 默认 ref 与 `--ref HEAD` 相同；`--ref <root>` ⇒ rc=1，输出哈希 `2af2290e9b4829be` vs `5b2d191a08593186` |
+| `stale_pointer_gate.py` | 0 | 0 | 接受并生效 | 默认 ref = `refs/remotes/walgit/master`，`--ref HEAD` = HEAD；两者**不保证同一 commit**，输出相同只因 `master` 是 `HEAD` 的**祖先**。`--ref <root>` ⇒ rc=1。输出含实时 ledger 与 ref sha、哈希不可复现 ⇒ 只记 rc：0 / 0 / 1 |
 | `tool_selftest_gate.py` | 0 | 2 | 报错 | 基线 `--inventory`；加 `--ref` ⇒ 用法 rc=2 |
 | `wallclock_scan.py` | 0 | 2 | 报错 | 只读清点器，非判红门；argparse 拒绝 |
 
@@ -82,7 +88,7 @@ python -I <script> --ref HEAD
 | `M4/npc_window_readiness.py` | 0 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
 | `coverage/gm_registry.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
 | `coverage/recon_gates.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
-| `coverage/script_host_noop_audit.py` | 0 | 2 | 静默忽略 | `--ref=HEAD` / 裸 `--ref` ⇒ rc=0 且输出与裸跑相同；只有两 token 形态 `--ref HEAD` 误把 `HEAD` 当子命令 ⇒ rc=2（不是真拒绝） |
+| `coverage/script_host_noop_audit.py` | 0 | 2 | 静默忽略（后续卡已修） | 修复前 `--ref=HEAD` / 裸 `--ref` 静默忽略且 rc=0，而 `--ref HEAD` 的 rc=2 只是值 `HEAD` 被当子命令（**不是**参数校验）。后续卡 `openmir2-gate-ref-residuals` 改为未知参数 ⇒ 三形态均 rc=2 + usage 并点名（见 §7） |
 | `m3/attack_diff.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
 | `m3/attack_rng_ledger.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
 | `m3/attack_stream_gate.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
@@ -111,7 +117,7 @@ python -I <script> --ref HEAD
 | `m3/rng-trace-probe/analyze_rng_trace.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
 | `m3/rng-trace-probe/rng_consumer_groups.py` | 0 | 2 | 报错 | 自定义 argv：首参当模式，`--ref` 不是 `selftest` ⇒ 用法 rc=2 |
 | `m3/rng-trace-probe/rng_ledger_diff.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
-| `m3/rng-trace-scene/check_anchors.py` | 1 | 1 | 静默忽略 | 裸 rc=1 与带 `--ref HEAD` rc=1、输出哈希相同（cf8890808a1d7fac） |
+| `m3/rng-trace-scene/check_anchors.py` | 1 | 1 | 静默忽略（后续卡已修） | 修复前裸跑与 `--ref HEAD` 都是 rc=1、输出相同（单次样本，不复制哈希）。后续卡 `openmir2-gate-ref-residuals` 改为未知参数 ⇒ rc=2 + usage；裸跑仍 rc=1，是**既有锚点漂移**（§7.1），不在该卡修 |
 | `m3/rng-trace-scene/check_evidence_counts.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
 | `m3/rng-trace-scene/check_evidence_head.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
 | `m3/rng-trace-scene/check_window_batch.py` | 2 | 2 | 报错 | argparse 不识别 `--ref`（rc=2，usage） |
@@ -148,10 +154,11 @@ python -I <script> --ref HEAD
 - **接受并生效 1**：`world/client-e2e-enter-gaps-20261013/check_rust_window_preflight.py`。
   `--ref HEAD` 五项 R1 全 OK；`--ref <root>` 同一命令输出 `RED R1 … 不含 d16b5199d9`，
   证明 ref 真的进了 `git merge-base --is-ancestor` 判定。
-- **静默忽略 2**：
-  - `m3/rng-trace-scene/check_anchors.py`：裸跑与 `--ref HEAD` 都是 rc=1、输出哈希同为
-    `cf8890808a1d7fac`（哈希相同是关键字面证据）；未知 flag 被 `argv` 手工解析逻辑忽略。
-  - `coverage/script_host_noop_audit.py`：`--ref=HEAD` 与裸 `--ref` 都是 rc=0 且输出与裸跑相同；
+- **静默忽略 2（后续卡 `openmir2-gate-ref-residuals` 已收口，见 §7）**：
+  - `m3/rng-trace-scene/check_anchors.py`：修复前裸跑与 `--ref HEAD` 都是 rc=1、输出相同
+    （单次样本，不复制具体哈希；哈希相同是关键字面证据）；未知 flag 被 `argv` 手工解析逻辑忽略。
+    该门裸跑现仍 rc=1，属**既有锚点漂移**，与参数处理无关（§7.1）。
+  - `coverage/script_host_noop_audit.py`：修复前 `--ref=HEAD` 与裸 `--ref` 都是 rc=0 且输出与裸跑相同；
     只有两 token 形态 `--ref HEAD` 会 rc=2，但原因是值 `HEAD` 被当成子命令，**不是参数校验**。
 
 ## 5. 非门脚本（不计入门禁计数）
@@ -215,12 +222,30 @@ python -I <script> --ref HEAD
   - `--help` 仍可用。
 - 变异自证：删拒绝分支后 selftest rc=1，四条未知参数用例变红；恢复后 sha256 相等。
 
-## 7. 未修 / 后续
+## 7. 后续收口（卡 `openmir2-gate-ref-residuals`）
 
-| 脚本 | 类别 | 为什么不在本卡修 |
+原「未修 / 后续」的两处已由后续卡收口。收口口径与本卡一致：**只改参数处理，判定逻辑零改动**；
+未知参数 ⇒ rc=2 + stderr `unknown argument '<token>'` + 一行 usage。
+
+| 脚本 | 收口前 | 收口后 |
 |---|---|---|
-| `mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py` | 静默忽略 | 路径在 `mir2-rs/tests/parity/`，不在本卡 write_set（`tools/hygiene/` + `docs/`）。建议另开卡，同样按「未知参数 ⇒ rc=2」处理。 |
-| `mir2-rs/tests/parity/coverage/script_host_noop_audit.py` | 静默忽略（部分形态误报错） | 同上。注意其自定义 argv 把非 `--` 开头的 token 当子命令，直接照抄「拒绝未知 flag」会改变 `--ref HEAD` 现有 rc=2 的原因；应改成真正的 flag 校验。 |
+| `mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py` | 未知 flag 被手工 argv 解析静默忽略（裸跑与 `--ref HEAD` 输出相同） | `--ref` / `--ref HEAD` / `--ref=HEAD` 均 rc=2 + usage；`check` / `selftest` / `--doc <path>` / `-h/--help` 照旧 |
+| `mir2-rs/tests/parity/coverage/script_host_noop_audit.py` | `--ref=HEAD` / 裸 `--ref` 静默忽略（rc=0）；`--ref HEAD` 的 rc=2 来自值 `HEAD` 被当子命令，**不是参数校验** | `--ref` / `--ref HEAD` / `--ref=HEAD` 均 rc=2 + usage 且**点名 `--ref`**；`check [--strict-lines]` / `selftest` / `-h/--help` 照旧 |
+
+两门的 selftest 各新增 4 条 CLI 用例（同形：`--ref HEAD`、`--ref=HEAD`、裸 `--ref`、`--help`）。
+断言**不是**「rc 非零」，而是「stderr 点名 `unknown argument '<token>'` 且含 `usage:`」——
+否则 `script_host_noop_audit.py` 旧行为（值被当子命令）的 rc=2 会冒充真拒绝。
+变异自证：删掉拒绝分支后两门 selftest 均变红（`check_anchors` 3 条 CLI 用例、
+`script_host_noop_audit` 3 条 CLI 用例）；恢复后文件 sha256 与变异前相等。
+
+### 7.1 既有问题（登记，不在本卡修）
+
+`check_anchors.py check` 在本 tip 仍 **rc=1**，原因是 `DRIVER-CONTRACT.md` 的两处源码锚点漂移：
+
+- `mir2-rs/crates/world/src/monai.rs`：文档写 `:5227`，`pub fn monster_ai_tick(` 的首个匹配在 **`:5259`**；
+- 同一文件：文档写 `:234`，`pub fn wondering(` 的首个匹配在 **`:236`**。
+
+这是**既有锚点漂移**，与本卡（参数处理）无关；按卡面要求只登记不修（另案重钉）。
 
 `window_handoff.py` 虽然是生成器而非门，但其 `--ref` 是**接受并生效**的（参与计划文本与检查），
 无需处理。
@@ -236,8 +261,13 @@ python -I tools/hygiene/docs_anchor_gate.py --prose --base walgit/master
 python -I tools/hygiene/dynamic_count_stamp_gate.py --ref HEAD
 python -I tools/hygiene/stale_pointer_gate.py --ref HEAD
 python -I tools/whitelist/t_reservation_gate.py check
+python -I mir2-rs/tests/parity/m3/rng-trace-scene/check_anchors.py --ref HEAD      # 期望 rc=2（fail-closed）
+python -I mir2-rs/tests/parity/coverage/script_host_noop_audit.py selftest        # 期望 rc=0
 git diff --check <merge-base> <head>
 ```
+
+> `check_anchors.py selftest` 现为 20/21：唯一红是 §7.1 的既有锚点漂移（`real-doc-fresh`），
+> 属另案；新增的 4 条 CLI fail-closed 用例全绿。`script_host_noop_audit.py selftest` 全绿（含 CLI 牙）。
 
 ## 9. 残留物
 
@@ -246,3 +276,5 @@ git diff --check <merge-base> <head>
   `mir2-rs/tests/parity/evidence/M4/parse-stats-cs.json` 与
   `mir2-rs/tests/parity/evidence/M4/macro/parse-stats-cs.json`（内容相同、仅行尾差异）。
   已用 `git restore` 还原，**两个文件不在本卡补丁内**；后续普查未再裸跑该脚本。
+- 后续卡 `openmir2-gate-ref-residuals`：无新增临时物 / 进程 / 栈。两门变异自证只在自身
+  worktree 内改-跑-还原，恢复后 sha256 与变异前相等、无 `MUTATION` 残留。
