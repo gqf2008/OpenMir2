@@ -1,32 +1,59 @@
 # -*- coding: utf-8 -*-
-"""dev-2 车道签名脚本（卡 openmir2-signing-script-head-placeholder，A1/A2）。
+"""collab 条目签名脚本（卡 openmir2-signing-script-head-placeholder / openmir2-collab-sign-entry-hardening）。
 
-修复点：head/base 一律 `git rev-parse <arg>` 实取并 **assert 全 40 位小写 hex**；
-非 hex（含 %P/散文/缩写）**拒签**（exit 2，不产出条目）。parent 同样必须 40 位 hex。
+写侧 fail-closed，三层：
+  1. head/base/parent 一律实取并 **assert 全 40 位小写 hex**；非 hex（含 %P/散文/缩写）拒签；
+  2. `--parent` **缺席或为空** ⇒ 拒签（除非显式 `--root`）；`--root` 只能用于
+     「该 thread 尚无任何条目」或 `--kind issue` 建线，有历史条目 ⇒ 拒签；
+  3. `--body-file` 的 mtime 超过 `--max-body-age`（默认 1800s）⇒ 拒签，
+     错误里打印 body 的 `sha256` 与 `mtime`；确认不是旧卡残留后加 `--allow-stale-body` 放行。
+     签名成功后打印 `body_sha256=<hex>`，供签后回读比对。
 
 用法：
   python sign_entry.py --repo <worktree> --kind patch --id <thread> \\
-      --parent <40hex|tail> --body-file body.json \\
-      [--head HEAD] [--base <rev>] [--push]
+      --parent <40hex> --body-file body.json \\
+      [--head HEAD] [--base <rev>] [--refs-head @rev] [--refs-base @rev] [--push]
+  python sign_entry.py --repo <worktree> --kind issue --id <thread> \\
+      --root --body-file body.json          # 建线：显式声明根条目
+
+`--precheck`（sign_entry.sh 调用，也供测试）：只做 parent/root 与 body 新鲜度校验，
+stdout 打印 `body_sha256=<hex>`，不签名。
 
 body.json 里若含 "head"/"base" 键：
   * 值为 "@HEAD"/"@<rev>" 形态 ⇒ 由本脚本 rev-parse 展开为全 40 位小写 hex；
-  * 值不是 hex 且不是 @rev 形态 ⇒ 拒签（复现夹具即此形态）。
+  * 值不是 hex 且不是 @rev 形态 ⇒ 拒签。
 
---selftest：离线跑 A2 复现夹具（坏占位符 ⇒ 拒签；@HEAD ⇒ 展开成 hex）。
+--selftest：离线夹具（临时 git 仓 + 假 probe），覆盖 head 占位符、parent 缺席/根条目、
+陈旧 body、body_sha256 五类；跑完断言真实仓库 refs 未被改动。
 """
 import argparse
+import contextlib
+import datetime
+import hashlib
+import io
 import json
+import os
 import re
 import subprocess
 import sys
+import tempfile
+import time
 
 HEX40 = re.compile(r"^[0-9a-f]{40}$")
+DEFAULT_MAX_BODY_AGE = 1800  # 30 分钟
+KINDS = ("issue", "status", "patch", "review", "merge_result",
+         "comment", "review_request")
 
 
 def die(msg):
     print("sign_entry: REFUSED: %s" % msg, file=sys.stderr)
     sys.exit(2)
+
+
+def refuse(msg):
+    """写侧校验失败（与 sign_entry.sh 的 rc 契约一致：1 = 拒签）。"""
+    print("sign_entry: REFUSED: %s" % msg, file=sys.stderr)
+    sys.exit(1)
 
 
 def rev_parse(repo, rev):
@@ -57,13 +84,89 @@ def check_hex(name, value):
     return value
 
 
+def body_fingerprint(path):
+    """返回 (sha256 小写 hex, mtime epoch)。读不到 ⇒ 拒签。"""
+    try:
+        st = os.stat(path)
+    except OSError as ex:
+        refuse("body 文件不可读：%s（%s）" % (path, ex))
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(65536), b""):
+            h.update(chunk)
+    return h.hexdigest(), st.st_mtime
+
+
+def guard_body_freshness(path, max_age, allow_stale, now=None):
+    """body mtime 超过 max_age ⇒ 拒签（除非 allow_stale）；返回 body sha256。"""
+    sha, mtime = body_fingerprint(path)
+    age = (time.time() if now is None else now) - mtime
+    if age > max_age and not allow_stale:
+        when = datetime.datetime.fromtimestamp(mtime).astimezone().isoformat()
+        refuse(
+            "body 文件陈旧：%s mtime=%s（epoch=%.0f，已 %.0fs > 阈值 %ds）"
+            " body_sha256=%s；确认不是上一张卡的残留后显式加 --allow-stale-body"
+            "（或用 --max-body-age <秒> 调阈值）"
+            % (path, when, mtime, age, max_age, sha))
+    return sha
+
+
+def thread_entry_count(repo, thread_id, run=subprocess.run):
+    """`walgit collab thread <id>` 判空。返回 (count|None, detail)；None = 判不了。"""
+    try:
+        pr = run(["walgit", "collab", "thread", thread_id, "--repo", repo],
+                 capture_output=True, text=True, timeout=60)
+    except Exception as ex:
+        return None, "调用 walgit collab thread 失败：%s" % ex
+    if pr.returncode != 0:
+        err = (pr.stderr or "").strip()
+        if "no entries for thread" in err:
+            return 0, "thread 尚无条目（walgit: %s）" % err
+        return None, "walgit collab thread rc=%d stderr=%r" % (pr.returncode, err)
+    try:
+        data = json.loads(pr.stdout or "")
+    except Exception:
+        return None, "walgit collab thread 输出不是 JSON：%r" % (pr.stdout or "")[:200]
+    if not isinstance(data, list):
+        return None, "walgit collab thread 输出不是数组（%s）" % type(data).__name__
+    return len(data), "thread 已有 %d 条条目" % len(data)
+
+
+def guard_parent_mode(repo, kind, thread_id, parent, want_root, probe=None):
+    """--parent 缺席即拒签；--root 只能用于线程首条目（或 kind=issue 建线）。"""
+    has_parent = isinstance(parent, str) and parent.strip() != ""
+    if want_root and has_parent:
+        refuse("--root 与 --parent 互斥：已给 --parent=%s 就不能声明根条目" % parent)
+    if has_parent:
+        return
+    if not want_root:
+        refuse("--parent 缺席或为空：拒绝静默签「根条目」（常见于取值管道空转）；"
+               "建线/首条目请显式加 --root")
+    if kind == "issue":
+        return
+    if probe is None:
+        probe = lambda: thread_entry_count(repo, thread_id)  # noqa: E731
+    count, detail = probe()
+    if count is None:
+        refuse("--root 无法判定该 thread 是否已有历史：%s（按 fail-closed 拒绝）" % detail)
+    if count > 0:
+        refuse("--root 只允许用于线程首条目：%s；有历史就必须给 --parent=<线程尾 entry oid>"
+               % detail)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--repo", default=".")
     ap.add_argument("--kind", default=None)
     ap.add_argument("--id", default=None)
     ap.add_argument("--parent", default=None, help="线程尾 entry oid（40 hex）")
+    ap.add_argument("--root", action="store_true",
+                    help="显式声明根条目（仅 thread 首条目 / kind=issue 建线）")
     ap.add_argument("--body-file", default=None)
+    ap.add_argument("--allow-stale-body", action="store_true",
+                    help="显式放行陈旧 body（默认 mtime > 1800s 拒签）")
+    ap.add_argument("--max-body-age", type=int, default=DEFAULT_MAX_BODY_AGE,
+                    help="body mtime 容忍秒数（默认 %d）" % DEFAULT_MAX_BODY_AGE)
     ap.add_argument("--head", default=None, help="body.head 的取值来源 rev（默认 HEAD）")
     ap.add_argument("--base", default=None, help="body.base 的取值来源 rev")
     ap.add_argument("--refs-head", default=None,
@@ -73,13 +176,31 @@ def main():
     ap.add_argument("--push", action="store_true")
     ap.add_argument("--dry-run", action="store_true",
                     help="只校验并打印将签的 body，不调 walgit")
+    ap.add_argument("--precheck", action="store_true",
+                    help="只做 parent/root 与 body 新鲜度校验，打印 body_sha256")
     ap.add_argument("--selftest", action="store_true")
     args = ap.parse_args()
     if args.selftest:
         return selftest(args.repo)
 
-    if args.selftest:
-        return selftest(args.repo)
+    if not args.body_file:
+        die("--body-file 必填")
+    if not os.path.isfile(args.body_file):
+        die("body 文件不存在：%s" % args.body_file)
+    if args.kind not in KINDS:
+        die("kind=%r 不在允许集合" % args.kind)
+    if not args.id or not re.match(r"^[\w\-]{4,80}$", args.id):
+        die("id=%r 形状不像线程 id" % args.id)
+    if args.max_body_age < 0:
+        die("--max-body-age 不能为负（%d）" % args.max_body_age)
+
+    # ---- 写侧 fail-closed：先于 JSON 解析与任何签名动作 ----
+    guard_parent_mode(args.repo, args.kind, args.id, args.parent, args.root)
+    body_sha = guard_body_freshness(args.body_file, args.max_body_age,
+                                    args.allow_stale_body)
+    if args.precheck:
+        print("body_sha256=%s" % body_sha)
+        return 0
 
     body = json.load(open(args.body_file, encoding="utf-8"))
 
@@ -107,23 +228,23 @@ def main():
     if args.refs_base is not None:
         refs_base = expand_rev(args.repo, args.refs_base, "refs_base")
     # parent（线程尾）也必须是 hex：防「从散文里截一段」当 parent。
-    check_hex("parent", args.parent)
-    # kind/id 白名单形状（防手滑把 body 文件当 kind）。
-    if args.kind not in ("issue", "status", "patch", "review", "merge_result",
-                         "comment", "review_request"):
-        die("kind=%r 不在允许集合" % args.kind)
-    if not args.id or not re.match(r"^[\w\-]{4,80}$", args.id):
-        die("id=%r 形状不像线程 id" % args.id)
+    if args.parent:
+        check_hex("parent", args.parent)
 
     payload = json.dumps(body, ensure_ascii=False)
     print("sign_entry: OK head=%s base=%s parent=%s"
-          % (body.get("head", "-"), body.get("base", "-"), args.parent[:12]))
+          % (body.get("head", "-"), body.get("base", "-"),
+             args.parent[:12] if args.parent else "<root>"))
     if args.dry_run:
+        print("body_sha256=%s" % body_sha)
         print(payload)
         return 0
 
     cmd = ["walgit", "collab", "entry", "--repo", args.repo, "--kind", args.kind,
-           "--id", args.id, "--parent", args.parent, "--body", payload]
+           "--id", args.id]
+    if args.parent:
+        cmd += ["--parent", args.parent]
+    cmd += ["--body", payload]
     if refs_head is not None:
         cmd += ["--head", refs_head]
     if refs_base is not None:
@@ -135,37 +256,69 @@ def main():
     sys.stderr.write(pr.stderr or "")
     if pr.returncode != 0:
         die("walgit collab entry 失败 rc=%d" % pr.returncode)
+    print("sign_entry: body_sha256=%s" % body_sha)
     return pr.returncode
 
 
-def selftest(repo):
-    """A2 复现夹具：坏占位符走签单流程。
+def _capture_refusal(fn):
+    """跑一个应当 refuse 的函数，返回 (SystemExit.code|None, stderr 文本)。"""
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stderr(buf):
+            fn()
+    except SystemExit as ex:
+        return ex.code, buf.getvalue()
+    return None, buf.getvalue()
 
-    * 修复前形态（body.head = 字面 %P 散文）⇒ 本脚本**拒签** exit 2（旧流程会照签）；
-    * @HEAD 形态 ⇒ 展开成 40 位小写 hex；
-    * parent 非 hex ⇒ 拒签。
-    """
-    import tempfile, os
+
+def _run_cli(extra, env=None):
+    return subprocess.run([sys.executable, "-B", __file__] + list(extra),
+                          capture_output=True, text=True, env=env)
+
+
+def _selftest_env():
+    """剥离会污染夹具的 git 环境变量（绝不把 GIT_DIR 指到真实仓库）。"""
+    env = dict(os.environ)
+    for k in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_OBJECT_DIRECTORY",
+              "GIT_ALTERNATE_OBJECT_DIRECTORIES", "GIT_COMMON_DIR"):
+        env.pop(k, None)
+    return env
+
+
+def _refs_snapshot(repo):
+    try:
+        pr = subprocess.run(["git", "-C", repo, "for-each-ref", "refs/heads",
+                             "--format=%(refname) %(objectname)"],
+                            capture_output=True, text=True, timeout=30)
+    except Exception:
+        return None
+    return pr.stdout if pr.returncode == 0 else None
+
+
+def selftest(repo):
+    """离线夹具：临时 git 仓 + 假 probe，覆盖既有 head 占位符与新增三件事。"""
     cases = []
+    good = "0123456789abcdef0123456789abcdef01234567"
 
     def run_case(body, parent, want_refuse):
         f = tempfile.NamedTemporaryFile(
             mode="w", suffix=".json", delete=False, encoding="utf-8")
         json.dump(body, f, ensure_ascii=False)
         f.close()
-        pr = subprocess.run(
-            [sys.executable, "-B", __file__, "--repo", repo, "--kind", "patch",
-             "--id", "selftest-signing-case", "--parent", parent,
-             "--body-file", f.name, "--dry-run"],
-            capture_output=True, text=True)
-        os.unlink(f.name)
+        try:
+            pr = subprocess.run(
+                [sys.executable, "-B", __file__, "--repo", repo, "--kind", "patch",
+                 "--id", "selftest-signing-case", "--parent", parent,
+                 "--body-file", f.name, "--dry-run"],
+                capture_output=True, text=True, env=_selftest_env())
+        finally:
+            os.unlink(f.name)
         refused = (pr.returncode == 2)
         assert refused == want_refuse, (
             "case head=%r parent=%r: refused=%r want=%r stderr=%s"
             % (body.get("head"), parent[:12], refused, want_refuse, pr.stderr))
-        cases.append((body.get("head"), refused))
+        cases.append(("legacy:%r" % body.get("head"), refused))
 
-    good = "0123456789abcdef0123456789abcdef01234567"
     # ① 事故原形态：字面 %P 散文 ⇒ 必须拒签（旧流程会照签产出 refs.head 缺失条目）。
     run_case({"head": "docs 片单提交（parent=b5442dbd4，%P 实取）", "base": "b5442dbd4"},
              good, True)
@@ -178,8 +331,121 @@ def selftest(repo):
     # ⑤ 全 hex 直填 ⇒ 放行。
     run_case({"head": good, "base": good}, good, False)
 
-    print("sign_entry selftest: OK (%d cases：散文拒签/缩写拒签/@HEAD 展开/"
-          "parent 非 hex 拒签/全 hex 放行)" % len(cases))
+    # ---- 新增：parent/root 与 body 新鲜度（真实临时 git 仓，不碰本仓 refs）----
+    before_refs = _refs_snapshot(repo)
+    tmp = tempfile.mkdtemp(prefix="sign-entry-selftest-")
+    try:
+        env = _selftest_env()
+        frepo = os.path.join(tmp, "repo")
+        os.makedirs(frepo)
+        for cmd in (["git", "init", "-q", frepo],
+                    ["git", "-C", frepo, "config", "user.email", "selftest@example.invalid"],
+                    ["git", "-C", frepo, "config", "user.name", "selftest"]):
+            pr = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            assert pr.returncode == 0, ("夹具 git 失败：%r %s" % (cmd, pr.stderr))
+        seed = os.path.join(frepo, "seed.txt")
+        open(seed, "w", encoding="utf-8").write("selftest\n")
+        for cmd in (["git", "-C", frepo, "add", "seed.txt"],
+                    ["git", "-C", frepo, "commit", "-q", "-m", "seed"]):
+            pr = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            assert pr.returncode == 0, ("夹具 git 失败：%r %s" % (cmd, pr.stderr))
+
+        body = os.path.join(tmp, "body.json")
+        open(body, "w", encoding="utf-8").write('{"status": "selftest"}\n')
+        body_sha = hashlib.sha256(open(body, "rb").read()).hexdigest()
+
+        def cli(*extra):
+            return _run_cli(["--precheck", "--repo", frepo, "--kind", "patch",
+                             "--id", "selftest-signing-case",
+                             "--body-file", body] + list(extra), env=env)
+
+        # N1：缺 --parent ⇒ 拒签（rc=1，不静默签根条目）。
+        pr = cli()
+        assert pr.returncode == 1, ("N1 缺 --parent 未拒签 rc=%r stderr=%s"
+                                    % (pr.returncode, pr.stderr))
+        assert "REFUSED" in pr.stderr and "--parent" in pr.stderr, pr.stderr
+        cases.append(("N1:missing-parent", True))
+
+        # N1b：--parent 传空串（事故①形态）同样拒签。
+        pr = cli("--parent", "")
+        assert pr.returncode == 1, ("N1b 空 parent 未拒签 rc=%r" % pr.returncode)
+        cases.append(("N1b:empty-parent", True))
+
+        # N2：有历史线程上用 --root ⇒ 拒签（假 probe：1 条历史）。
+        code, out = _capture_refusal(lambda: guard_parent_mode(
+            frepo, "patch", "selftest-signing-case", None, True,
+            probe=lambda: (1, "thread 已有 1 条条目")))
+        assert code == 1 and "--root" in out, ("N2 rc=%r out=%s" % (code, out))
+        cases.append(("N2:root-with-history", True))
+
+        # N2b：空线程 / kind=issue 建线 ⇒ --root 放行（负例对照）。
+        code, out = _capture_refusal(lambda: guard_parent_mode(
+            frepo, "patch", "selftest-signing-case", None, True,
+            probe=lambda: (0, "thread 尚无条目")))
+        assert code is None, ("N2b 空线程 --root 被误拒：%r %s" % (code, out))
+        code, out = _capture_refusal(lambda: guard_parent_mode(
+            frepo, "issue", "selftest-signing-case", None, True,
+            probe=lambda: (3, "thread 已有 3 条条目")))
+        assert code is None, ("N2b kind=issue --root 被误拒：%r %s" % (code, out))
+        # CLI 层同样验证 --root --kind issue 放行（不走 walgit）。
+        pr = _run_cli(["--precheck", "--repo", frepo, "--kind", "issue",
+                       "--id", "selftest-signing-case", "--root",
+                       "--body-file", body], env=env)
+        assert pr.returncode == 0, ("N2b CLI --root --kind issue rc=%r %s"
+                                    % (pr.returncode, pr.stderr))
+        cases.append(("N2b:root-allowed", False))
+
+        # N2c：--root 与 --parent 互斥 ⇒ 拒签（CLI 层，不走 walgit）。
+        pr = cli("--root", "--parent", good)
+        assert pr.returncode == 1 and "互斥" in pr.stderr, (
+            "N2c rc=%r stderr=%s" % (pr.returncode, pr.stderr))
+        cases.append(("N2c:root+parent", True))
+
+        # 陈旧 body 夹具（mtime 1 小时前，内容与新鲜 body 不同）。
+        stale = os.path.join(tmp, "stale.json")
+        open(stale, "w", encoding="utf-8").write('{"status": "selftest-stale"}\n')
+        old_t = time.time() - 3600
+        os.utime(stale, (old_t, old_t))
+        stale_sha = hashlib.sha256(open(stale, "rb").read()).hexdigest()
+
+        # N4：新鲜 body ⇒ 通过，并打印 body_sha256（供签后回读）。
+        pr = cli("--parent", good)
+        assert pr.returncode == 0, ("N4 新鲜 body 被误拒 rc=%r stderr=%s"
+                                    % (pr.returncode, pr.stderr))
+        assert ("body_sha256=%s" % body_sha) in pr.stdout, (
+            "N4 body_sha256 不匹配：%r" % pr.stdout)
+        cases.append(("N4:fresh-body", False))
+
+        # N5：--allow-stale-body ⇒ 陈旧 body 显式放行。
+        pr = _run_cli(["--precheck", "--repo", frepo, "--kind", "patch",
+                       "--id", "selftest-signing-case", "--parent", good,
+                       "--body-file", stale, "--allow-stale-body"], env=env)
+        assert pr.returncode == 0, ("N5 --allow-stale-body 仍被拒 rc=%r stderr=%s"
+                                    % (pr.returncode, pr.stderr))
+        assert ("body_sha256=%s" % stale_sha) in pr.stdout, (
+            "N5 body_sha256 不匹配：%r" % pr.stdout)
+        cases.append(("N5:allow-stale", False))
+
+        # N3：陈旧 body ⇒ 拒签，错误含 body_sha256 与 mtime。
+        pr = _run_cli(["--precheck", "--repo", frepo, "--kind", "patch",
+                       "--id", "selftest-signing-case", "--parent", good,
+                       "--body-file", stale], env=env)
+        assert pr.returncode == 1, ("N3 陈旧 body 未拒签 rc=%r" % pr.returncode)
+        assert ("body_sha256=%s" % stale_sha) in pr.stderr, (
+            "N3 拒绝信息缺 body_sha256：%r" % pr.stderr)
+        assert "mtime=" in pr.stderr, ("N3 拒绝信息缺 mtime：%r" % pr.stderr)
+        cases.append(("N3:stale-body", True))
+    finally:
+        import shutil
+        shutil.rmtree(tmp, ignore_errors=True)
+
+    after_refs = _refs_snapshot(repo)
+    assert before_refs == after_refs, "selftest 改动/新增了真实仓库的 refs（夹具泄漏）"
+
+    print("sign_entry selftest: OK (%d cases：legacy head 占位符 5 + "
+          "N1 缺/空 parent 拒签 / N2 有历史 --root 拒签 / N2b 空线程与 issue 放行 / "
+          "N2c --root+--parent 拒签 / N3 陈旧 body 拒签 / N4 新鲜 body 通过 / "
+          "N5 --allow-stale-body 放行)" % len(cases))
     return 0
 
 
