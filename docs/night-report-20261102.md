@@ -200,7 +200,7 @@ git log --first-parent --merges \
   用同一个错常量造夹具 ⇒ 自洽却与现实相反。
 - **根因**：`MakeWord` 位序反了——工具用 `(f<<8)|b`，实现/oracle 是 `f | (b<<8)`
   （低位=前景色、高位=背景色）；oracle 锚：`src/OpenMir2/HUtil32.cs:66-69`、
-  `mir2-rs/crates/protocol/src/smframe.rs:39-51`、`bins/game-svr/src/lib.rs:46536` 的单测。
+  `mir2-rs/bins/game-svr/src/smframe.rs:39-51`、`mir2-rs/bins/game-svr/src/lib.rs:46536` 的单测。
   同类问题还有 G1 把登录/公告的 `65499` 帧也计入、G3 用冻结 schema 不存在的 `characters_ablity.ChrName`。
 - **当场证据**：
 
@@ -341,10 +341,10 @@ cd mir2-rs && python -I -B tests/parity/m3/whitelist_anchor_gate.py check
 ### 4.5 本轮新发现的观察（写进报告，供后续开卡）
 
 - **O1（重要）：baseline 豁免在默认扫描域内没有被行使。** `oid_gate check` 默认只扫最近 200 条；
-  当前库 13889 条，登记的历史坏 parent 已不在窗口内，于是 `baseline 命中 0 / 未命中 10`，
+  起草时库 13889 条（本卡 patch/status 签出后为 13891），登记的历史坏 parent 已不在窗口内，于是 `baseline 命中 0 / 未命中 10`，
   `--no-baseline` 也 rc=0。**这不代表坏条目已修**：`verify-entry 2113986cd0e8…` 仍 rc=1。
   建议：定期跑一次更大 `--limit` 的全库检查，或给审计路径一个「至少覆盖 baseline 全部 entry_oid」的断言。
-- **O2：`%TEMP%/mir2-mcp-backups/` 当前 155 个 `.bak`**（`conf_set` 测试留下，单文件 76–143 B），
+- **O2：`%TEMP%/mir2-mcp-backups/` 当前 155 个 `.bak`**（`conf_set` 测试留下，单文件 39–143 B、多数 76–143 B），
   文档 §5 已登记「本片不做自动清理」，属已知未变项，不是泄漏回归。
 - **O3：`sign_entry` F2 仍开**：30 分钟内残留 body 不会被拦；`--allow-stale-body` 放行无痕迹。
 
