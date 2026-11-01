@@ -69,7 +69,7 @@ REGISTRY = [
     ("oid_gate", ["tools/collab/oid_gate.py", "gate",
                   "--baseline", "tools/collab/oid_gate_baseline.json"], False),
     # 卡 openmir2-merge-without-review-audit：只读普查「已合并且缺非作者 approve」的卡。
-    # selftest 34 项（verdict/decision 双认、作者集合排除、临时仓库求真实合并提交、只读守卫、
+    # selftest 38 项（verdict/decision 双认、作者集合排除、临时仓库求真实合并提交、只读守卫、
     # 空输入/渲染）；`_git` 对写子命令 fail-closed，跑普查不可能写 refs。
     ("merge_without_review_audit",
      ["tools/collab/merge_without_review_audit.py", "selftest"], False),

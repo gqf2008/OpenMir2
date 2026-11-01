@@ -152,19 +152,20 @@ def group_threads(entries):
 
 
 # ------------------------------------------------------------------------ classify
-def _verdict(body, fields):
-    """返回 (field, value)；body 不是 dict 时返回 (None, None)。"""
-    if not isinstance(body, dict):
-        return None, None
-    for f in fields:
-        if f in body:
-            return f, body.get(f)
-    return None, None
-
-
 def _is_approve(body, fields):
-    _f, val = _verdict(body, fields)
-    return val == "approve"
+    """approve 判定：**任一**承载字段为 ``"approve"`` 即为真（卡面要求同时认 verdict/decision）。
+
+    但若另一字段显式为 ``"request_changes"``，按**矛盾**处理、不算 approve（保守方向：
+    既不会因为「结论写在另一个字段」漏掉真实 approve，也不会把矛盾条目录成通过）。
+    快照里有 7 条 review 同时带 decision/verdict 且内容不同；其中 approve 侧的另一个字段
+    都是散文说明而非 request_changes，故该口径不改变任何计数。
+    """
+    if not isinstance(body, dict):
+        return False
+    vals = [body[f] for f in fields if f in body]
+    if "request_changes" in vals:
+        return False
+    return "approve" in vals
 
 
 def authors_of(entries):
@@ -514,6 +515,15 @@ def selftest():
           "legacy review field recognised separately")
     check(not _is_approve({"review": "approve"}, VERDICT_FIELDS),
           "legacy field must NOT count in main predicate")
+    # 同时带 decision/verdict 且内容不同（快照实测 7 条）——任一字段 approve 即认，矛盾保守判否
+    check(_is_approve({"decision": "approve", "verdict": "四项满足，批准合并（tier=L）"},
+                      VERDICT_FIELDS), "approve in decision + prose verdict -> approve")
+    check(_is_approve({"decision": "F1/F2 成立，放行", "verdict": "approve"},
+                      VERDICT_FIELDS), "approve in verdict + prose decision -> approve")
+    check(not _is_approve({"decision": "**不予合并（暂缓）**", "verdict": "request_changes"},
+                          VERDICT_FIELDS), "prose decision + request_changes verdict -> no")
+    check(not _is_approve({"decision": "request_changes", "verdict": "approve"},
+                          VERDICT_FIELDS), "contradictory approve/req_changes -> conservative no")
 
     # --- 作者集合：patch 与 issue 都算 ---
     es = [

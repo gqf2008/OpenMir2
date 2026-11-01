@@ -2,7 +2,7 @@
 
 - 卡：`openmir2-merge-without-review-audit`（tier=L）
 - 快照：`5f5ec4243154ceff6074c07e794f3f402f4a8df0`（`refs/remotes/walgit/master`，本卡分支 base）
-- 工具：`tools/collab/merge_without_review_audit.py`（**只读**；selftest **34/34**；已登记
+- 工具：`tools/collab/merge_without_review_audit.py`（**只读**；selftest **38/38**；已登记
   `tools/hygiene/tool_selftest_gate.py` 的 `REGISTRY`，认树锚同步为 60 项 / 清点 65 = 60 + 5 + 0）
 - 普查域：本地 `refs/collab/inbox/*` 的全部条目 blob。快照时共 13829 条；本卡自身另有 1 条
   认领 `status`（不构成已合并卡，不影响三张表）。
@@ -204,7 +204,7 @@ python -I -B tools/collab/merge_without_review_audit.py report --ref refs/remote
   任何写子命令（commit/merge/push/update-ref/…）直接抛 `ReadOnlyViolation`（selftest 有负例）。
 - 条目读取：`git for-each-ref refs/collab/inbox` + `git cat-file --batch`，按 `id` 分组；
   条目是**扁平 JSON**（inbox blob 没有 `entry` 包层）。
-- 自测 **34/34**：verdict/decision 双认、`review` 字段只另计、作者集合排除
+- 自测 **38/38**：verdict/decision 双认（含同时出现且内容不同的 7 条实测）、`review` 字段只另计、作者集合排除
   （patch 与 issue 都算）、四桶分类、空输入退化、tier 回退、只读守卫负例，
   以及**临时 git 仓库**里的真实合并提交解析（merge 提交 / fast-forward 未解析 / 不可解析 head 未解析 /
   账本 oid 相等与不等两种标注）。
