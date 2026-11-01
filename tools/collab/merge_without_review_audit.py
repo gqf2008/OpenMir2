@@ -13,12 +13,13 @@ review 的卡，供 owner/Leader 决定是否补做追溯审查。
 ## 判据（卡面 A1，逐条可复核）
 
 1. **已合并**：该线程任一 ``kind=merge_result`` 且 ``body.merged is True``。
-2. **approve**：``kind=review`` 的条目，verdict 取 ``body.decision`` 或 ``body.verdict``
-   （两者都认；卡面要求）。值 == ``"approve"``。
-   * 第三个承载字段 ``body.review``（reviewer-20/21 有 9 条）**不计入主判据**（卡面只要求
-     verdict+decision），但单独统计并在报告里列出被它「救回」的卡，避免把真实 approve 藏掉。
-3. **作者集合** = 该线程 ``kind in {patch, issue}`` 的 actor 集合（卡面口径）。approve 的
-   actor 必须**不在**作者集合里；否则算作者自审。
+2. **approve**（owner 2026-11-01 已定口径）：``kind=review`` 的条目，判定字段为
+   ``body.decision`` / ``body.verdict`` / ``body.review`` 三类，值 == ``"approve"``。
+   * ``body.review`` 是 **legacy** 承载字段：输出与文档一律标 ``legacy(body.review)``。
+   * **一条 review 只按一个字段计**（优先级 decision > verdict > review），不重复计数。
+   * 三字段**任一**为 ``"request_changes"`` ⇒ 不算 approve（保守方向）。
+3. **作者集合**（owner 2026-11-01 已定口径，保守）= 该线程 ``kind in {patch, issue}``
+   的 actor **并集**。approve 的 actor 必须**不在**作者集合里；否则算作者自审。
 4. **三张表**：
    * ① 已合并且有 >=1 非作者 approve —— 只给计数；
    * ② 已合并但**零 review**（线程里没有任何 ``kind=review``）—— 逐卡；
@@ -56,9 +57,13 @@ READ_ONLY_SUBCOMMANDS = frozenset({
     "for-each-ref", "cat-file", "rev-parse", "rev-list", "merge-base",
 })
 
-#: 承载 approve verdict 的字段：主判据（卡面要求）与「另计」的第三个字段。
+#: 承载 approve 的字段。owner 2026-11-01 裁决：三类全部计入主判据；
+#: ``body.review`` 属 **legacy** 承载字段（输出/文档标 ``legacy(body.review)``）。
+#: 优先级即元组顺序（decision > verdict > review）——**一条 review 只取一个来源**，
+#: 不重复计数；任一字段为 ``request_changes`` 则整条不算 approve（见 ``approve_source``）。
 VERDICT_FIELDS = ("decision", "verdict")
 LEGACY_VERDICT_FIELDS = ("review",)
+APPROVE_FIELDS = VERDICT_FIELDS + LEGACY_VERDICT_FIELDS
 
 #: 构成「作者集合」的条目 kind（卡面口径：patch/issue 作者）。
 AUTHOR_KINDS = ("patch", "issue")
@@ -168,6 +173,26 @@ def _is_approve(body, fields):
     return "approve" in vals
 
 
+def approve_source(body):
+    """返回认定该条 review 为 approve 的**单一**字段名；否则 None。
+
+    owner 2026-11-01 裁决：``decision`` / ``verdict`` / ``review`` 三字段都认，但
+    **一条 review 只按一个字段计**（优先级 decision > verdict > review），故返回字段名
+    而非布尔——调用方据此标 ``legacy(body.review)`` 且不会重复计数。
+
+    保守方向：三字段中**任一**为 ``"request_changes"`` ⇒ 整条不算 approve
+    （即使另一字段写着 approve，也是矛盾；不许把 request_changes 计成通过）。
+    """
+    if not isinstance(body, dict):
+        return None
+    if any(body.get(f) == "request_changes" for f in APPROVE_FIELDS):
+        return None
+    for f in APPROVE_FIELDS:
+        if body.get(f) == "approve":
+            return f
+    return None
+
+
 def authors_of(entries):
     return sorted({e.get("actor") for e in entries if e.get("kind") in AUTHOR_KINDS})
 
@@ -216,13 +241,18 @@ def classify_thread(entries):
     """单线程分类。返回 dict（含 bucket / 作者 / review / approve 明细）。"""
     authors = set(authors_of(entries))
     reviews = [e for e in entries if e.get("kind") == "review"]
-    nonauthor_approves = [e for e in reviews
-                          if e.get("actor") not in authors
-                          and _is_approve(e.get("body"), VERDICT_FIELDS)]
-    legacy_approves = [e for e in reviews
-                       if e.get("actor") not in authors
-                       and _is_approve(e.get("body"), LEGACY_VERDICT_FIELDS)
-                       and not _is_approve(e.get("body"), VERDICT_FIELDS)]
+    # owner 2026-11-01 已定口径：三字段都认，但每条 review 只取一个来源字段。
+    nonauthor_approves = []
+    legacy_approves = []
+    for e in reviews:
+        if e.get("actor") in authors:
+            continue
+        src = approve_source(e.get("body"))
+        if src is None:
+            continue
+        nonauthor_approves.append(e)
+        if src == "review":
+            legacy_approves.append(e)
     nonauthor_reviews = [e for e in reviews if e.get("actor") not in authors]
     if nonauthor_approves:
         bucket = "with_nonauthor_approve"
@@ -387,7 +417,7 @@ def build_report(repo, ref="refs/remotes/walgit/master"):
         "legacy_field_approve": 0,
     }
     tables = {"zero_review": [], "only_self_review": [],
-              "nonauthor_review_no_approve": []}
+              "nonauthor_review_no_approve": [], "legacy_field_approve": []}
     for card_id, es in sorted(threads.items(), key=lambda kv: str(kv[0])):
         if not is_merged(es):
             continue
@@ -396,10 +426,12 @@ def build_report(repo, ref="refs/remotes/walgit/master"):
         bucket = cls["bucket"]
         if bucket == "with_nonauthor_approve":
             counts["with_nonauthor_approve"] += 1
+            row = card_row(repo, card_id, es, snapshot)
+            if cls["legacy_approves"]:
+                counts["legacy_field_approve"] += 1
+                tables["legacy_field_approve"].append(row)
             continue
         counts[bucket] = counts.get(bucket, 0) + 1
-        if bucket == "nonauthor_review_no_approve" and cls["legacy_approves"]:
-            counts["legacy_field_approve"] += 1
         tables[bucket].append(card_row(repo, card_id, es, snapshot))
     return {"snapshot": snapshot, "ref": ref, "counts": counts, "tables": tables}
 
@@ -414,12 +446,26 @@ def render_markdown(data):
     c = data["counts"]
     lines.append("快照：`%s`（`%s`）" % (data["snapshot"], data["ref"]))
     lines.append("")
-    lines.append("条数：线程 %d；已合并 %d；非作者 approve %d；"
-                 "零 review %d；仅作者自审 %d；非作者 review 但无 approve %d。"
+    lines.append("条数：线程 %d；已合并 %d；非作者 approve %d（其中 approve 来源含 "
+                 "legacy `body.review` 的卡 %d）；零 review %d；仅作者自审 %d；"
+                 "非作者 review 但无 approve %d。"
                  % (c["threads_total"], c["merged_threads"],
-                    c["with_nonauthor_approve"], c["zero_review"],
-                    c["only_self_review"], c["nonauthor_review_no_approve"]))
+                    c["with_nonauthor_approve"], c.get("legacy_field_approve", 0),
+                    c["zero_review"], c["only_self_review"],
+                    c["nonauthor_review_no_approve"]))
     lines.append("")
+    legacy_rows = data["tables"].get("legacy_field_approve", [])
+    if legacy_rows:
+        lines.append("① 中有 %d 张卡的非作者 approve 来自 legacy 字段 `body.review`"
+                     "（字段来源标 `legacy(body.review)`；一条 review 只按一个字段计，"
+                     "不重复计数）：" % len(legacy_rows))
+        lines.append("")
+        lines.append("| 卡 id | review actor | 条目 oid |")
+        lines.append("|---|---|---|")
+        for r in legacy_rows:
+            for actor, oid in r["legacy_approves"]:
+                lines.append("| %s | %s | `%s` |" % (r["card"], actor, oid))
+        lines.append("")
     header = ("| 卡 id | merge_result.oid | 真实合并提交 | patch 作者 | 是否 R 卡 | 时间 |")
     sep = "|---|---|---|---|---|---|"
 
@@ -460,14 +506,6 @@ def render_markdown(data):
         lines.append("")
     table("④ 非作者 review 存在但无 approve（卡面 ②/③ 之外）",
           data["tables"]["nonauthor_review_no_approve"])
-    legacy = [r for r in data["tables"]["nonauthor_review_no_approve"] if r["legacy_approves"]]
-    if legacy:
-        lines.append("其中 %d 张的 approve 写在 `body.review`（非 card 面要求的 decision/verdict）："
-                     % len(legacy))
-        for r in legacy:
-            lines.append("- %s：%s" % (r["card"],
-                                       ", ".join("%s `%s`" % (a, o) for a, o in r["legacy_approves"])))
-        lines.append("")
     return "\n".join(lines)
 
 
@@ -514,7 +552,24 @@ def selftest():
     check(_is_approve({"review": "approve"}, LEGACY_VERDICT_FIELDS),
           "legacy review field recognised separately")
     check(not _is_approve({"review": "approve"}, VERDICT_FIELDS),
-          "legacy field must NOT count in main predicate")
+          "field-scoped helper: review not in VERDICT_FIELDS")
+
+    # --- owner 2026-11-01 裁决：三字段都认，但一条 review 只按一个字段计 ---
+    check(approve_source({"review": "approve"}) == "review",
+          "approve_source: legacy body.review recognised")
+    check(approve_source({"decision": "approve"}) == "decision",
+          "approve_source: decision")
+    check(approve_source({"verdict": "approve"}) == "verdict",
+          "approve_source: verdict")
+    check(approve_source({"review": "request_changes"}) is None,
+          "approve_source: legacy request_changes not approve")
+    check(approve_source({}) is None, "approve_source: empty body -> None")
+    check(approve_source(None) is None, "approve_source: non-dict -> None")
+    check(approve_source({"review": "approve", "decision": "request_changes"}) is None,
+          "approve_source: request_changes vetoes legacy approve (conservative)")
+    check(approve_source({"decision": "approve", "verdict": "approve",
+                          "review": "approve"}) == "decision",
+          "approve_source: three fields -> single source (no double count)")
     # 同时带 decision/verdict 且内容不同（快照实测 7 条）——任一字段 approve 即认，矛盾保守判否
     check(_is_approve({"decision": "approve", "verdict": "四项满足，批准合并（tier=L）"},
                       VERDICT_FIELDS), "approve in decision + prose verdict -> approve")
@@ -561,8 +616,33 @@ def selftest():
         {"kind": "review", "actor": "rev", "body": {"review": "approve"}, "_oid": "e2"},
     ]
     c5 = classify_thread(es5)
-    check(c5["bucket"] == "nonauthor_review_no_approve", "legacy still 4th bucket")
-    check(len(c5["legacy_approves"]) == 1, "legacy approve detected")
+    check(c5["bucket"] == "with_nonauthor_approve",
+          "legacy body.review counts as approve (owner 2026-11-01)")
+    check(len(c5["legacy_approves"]) == 1, "legacy approve source marked")
+    check(c5["nonauthor_approves"] == c5["legacy_approves"],
+          "legacy approve counted exactly once (same entry, no double count)")
+
+    # --- 三字段并存的同一条 review：只算一次，legacy 不额外计数 ---
+    es6 = [
+        {"kind": "patch", "actor": "worker", "refs": {}, "_oid": "f1"},
+        {"kind": "review", "actor": "rev",
+         "body": {"decision": "approve", "verdict": "approve", "review": "approve"},
+         "_oid": "f2"},
+    ]
+    c6 = classify_thread(es6)
+    check(c6["bucket"] == "with_nonauthor_approve", "three-field review -> approve bucket")
+    check(len(c6["nonauthor_approves"]) == 1, "three-field review counted once")
+    check(c6["legacy_approves"] == [], "three-field review not also counted as legacy")
+
+    # --- legacy 的 request_changes 不算 approve，也不救回桶④ ---
+    es7 = [
+        {"kind": "patch", "actor": "worker", "refs": {}, "_oid": "g1"},
+        {"kind": "review", "actor": "rev", "body": {"review": "request_changes"}, "_oid": "g2"},
+    ]
+    c7 = classify_thread(es7)
+    check(c7["bucket"] == "nonauthor_review_no_approve",
+          "legacy request_changes stays 4th bucket")
+    check(c7["legacy_approves"] == [], "legacy request_changes is not an approve")
 
     # --- 空输入 ---
     check(classify_thread([])["bucket"] == "zero_review", "empty -> zero_review")
