@@ -1,10 +1,10 @@
 # 已合并且无独立审查的卡：只读普查（2026-11-01）
 
-- 卡：`openmir2-merge-without-review-audit`（tier=L）
-- 快照：`5f5ec4243154ceff6074c07e794f3f402f4a8df0`（`refs/remotes/walgit/master`，本卡分支 base）
-- 工具：`tools/collab/merge_without_review_audit.py`（**只读**；selftest **38/38**；已登记
+- 卡：`openmir2-merge-without-review-audit`（tier=L）；口径定稿与重跑卡：`openmir2-census-caliber-owner-decision`（owner **2026-11-01 裁决**）
+- 快照：`f40235b1b95e6756a6e2bab1bf676d2220674e16`（`refs/remotes/walgit/master`；口径定稿重跑时）
+- 工具：`tools/collab/merge_without_review_audit.py`（**只读**；selftest **52/52**；已登记
   `tools/hygiene/tool_selftest_gate.py` 的 `REGISTRY`，认树锚同步为 60 项 / 清点 65 = 60 + 5 + 0；同日并入 `wl_status_audit`（卡 `openmir2-whitelist-status-audit`）后为 **61 项 / 清点 66 = 61 + 5 + 0**）
-- 普查域：本地 `refs/collab/inbox/*` 的全部条目 blob。快照时共 13829 条；本卡自身另有 1 条
+- 普查域：本地 `refs/collab/inbox/*` 的全部条目 blob。产出该表时共 13846 条，其中含本卡 1 条
   认领 `status`（不构成已合并卡，不影响三张表）。
 
 复跑（在仓库根）：
@@ -18,11 +18,11 @@ python -I -B tools/collab/merge_without_review_audit.py report --ref refs/remote
 
 | 桶 | 判定 | 卡数 |
 |---|---|---:|
-| ① | 已合并且有 ≥1 条非作者 approve（`decision` 或 `verdict`） | 845 |
+| ① | 已合并且有 ≥1 条非作者 approve（`decision` / `verdict` / legacy `body.review`） | 854 |
 | ② | 已合并但**零 review**（线程里没有任何 `kind=review` 条目） | 13 |
 | ③ | 已合并且**只有作者自审**（每条 review 的 actor 都在 patch/issue 作者集合里） | 5 |
-| ④ | 已合并、有非作者 review 但**无 approve**（卡面 ②/③ 之外） | 7 |
-| 合计 | 已合并线程 | 870 |
+| ④ | 已合并、有非作者 review 但**无 approve**（卡面 ②/③ 之外） | 0 |
+| 合计 | 已合并线程 | 872 |
 
 补充两个计数：**7 张**卡的账本 `merge_result.oid` 与真实合并提交不同（§4）；
 **7 张**卡的真实合并提交未解析（§5，原因逐条给出，未猜）。
@@ -31,23 +31,34 @@ python -I -B tools/collab/merge_without_review_audit.py report --ref refs/remote
 
 ### 1.1 已合并
 
-该线程任一 `kind=merge_result` 条目的 `body.merged is True`。普查共 986 个线程，其中 870 个已合并。
+该线程任一 `kind=merge_result` 条目的 `body.merged is True`。普查共 987 个线程，其中 872 个已合并。
 
-### 1.2 approve 认两个字段（另计第三个）
+### 1.2 approve 认三个字段（`body.review` 标 legacy）
 
-- **主判据**（卡面要求）：`body.decision == "approve"` **或** `body.verdict == "approve"`。
-  快照里 `decision` 独占 757 条、`verdict` 独占 948 条、两者同时出现 111 条。
-- **另计的第三个字段**：快照里有 9 条 review 把结论写在 `body.review`（reviewer-20/21）。
-  卡面只要求认 `verdict` 与 `decision`，所以它们**不进主判据**，但单独列出：
-  7 张卡（§3 的「④」表）正是靠 `body.review: "approve"` 才有的非作者 approve。若把该字段也认进主判据，
-  桶①变成 852、桶④清零；**桶②/③ 不变**。
+**owner 2026-11-01 已定口径**：`body.decision == "approve"` **或** `body.verdict == "approve"`
+**或** `body.review == "approve"` 即算非作者 approve。第三条是 **legacy 承载字段**，输出与文档
+一律标 `legacy(body.review)`。
 
-### 1.3 作者集合（卡面口径）
+- **一条 review 只按一个字段计**：优先级 `decision` > `verdict` > `review`；同一条 review 即使
+  三字段并存，也只按其一个字段计入一次，**不重复计数**。
+- **`request_changes` 仍不算 approve**：三字段中任一为 `"request_changes"` ⇒ 整条判否（保守）。
+- 快照里 `decision` 独占 757 条、`verdict` 独占 948 条、两者同时出现 111 条；另有 9 条 review
+  把结论写在 `body.review`（reviewer-20/21；8 条 `approve`、1 条 `request_changes`，跨 7 张卡）。
+- 按已定口径，**7 张卡**（§2 补充表）由 legacy 字段取得非作者 approve：本次快照
+  `f40235b1b` 上，旧口径（只认 decision/verdict）测得桶① = 847、桶④ = 7；已定口径下
+  **桶① = 847 + 7 = 854、桶④ = 0**，桶②/③ 不变。
+- **历史并列值（仅供追溯，不再使用）**：更早快照 `5f5ec4243` 上记录的 ① = 845、④ = 7、
+  已合并 870；那组数字对应更小的快照，不是当前口径值。
 
-`kind in {patch, issue}` 的 actor 集合。approve 的 actor 必须**不在**这个集合里，否则算作者自审。
-**定义敏感性**：若把「作者」收窄为**只看 patch 作者**，桶③ 只剩 1 张（`openmir2-aoi-verify-maptime`，
-审阅者本人也是 patch 作者），另外 4 张会回到桶①（审阅者只是 issue 作者、并非 patch 作者）。
-本表按卡面的 patch/issue 并集口径给出 ③=5，并在 §3 的「③ 补充」表里逐张标出审阅者与两种作者身份的关系。
+### 1.3 作者集合（owner 2026-11-01 已定：patch ∪ issue）
+
+**已定口径（保守）**：作者 = 该线程 `kind in {patch, issue}` 的 actor **并集**。
+approve 的 actor 必须**不在**这个集合里，否则算作者自审。本表按此口径给出 ③ = 5，
+并在 §3 的「③ 补充」表里逐张标出审阅者与两种作者身份的关系。
+
+**历史并列值（仅供追溯，不再作为备选口径）**：若把「作者」收窄为**只看 patch 作者**，桶③ 只剩
+1 张（`openmir2-aoi-verify-maptime`，审阅者本人也是 patch 作者），另外 4 张会回到桶①
+（审阅者只是 issue 作者、并非 patch 作者）。owner 已裁决采用**并集**，窄口径不采用。
 
 ### 1.4 真实合并提交（不猜）
 
@@ -65,8 +76,25 @@ python -I -B tools/collab/merge_without_review_audit.py report --ref refs/remote
 
 ## 2. ① 已合并且有非作者 approve
 
-**845 张**，按卡面只给计数，不逐卡列出。判据：存在 `kind=review` 且 actor 不在作者集合、
-且 `body.decision` 或 `body.verdict` 为 `"approve"`。
+**854 张**，按卡面只给计数，不逐卡列出。判据：存在 `kind=review` 且 actor 不在作者集合、
+且 `body.decision` / `body.verdict` / `body.review`（legacy，标 `legacy(body.review)`）任一为 `"approve"`。
+
+### ① 补充：legacy `body.review` 取得 approve 的 7 张卡
+
+| 卡 id | review actor | 条目 oid |
+|---|---|---|
+| openmir2-gm-residual-round2 | openmir2-reviewer-20 | `4900aeb298dc0a7b7daecf5f60e41f38cd498bae` |
+| openmir2-gm-residual-round2 | openmir2-reviewer-20 | `06a157e0c2f1f761bc8c948bfcaca371d13894e2` |
+| openmir2-gm-residual-teeth | openmir2-reviewer-21 | `65f66e3011bc21476ca7239273ec58490e5f40a6` |
+| openmir2-night-report-dyncount-fix | openmir2-reviewer-20 | `df532c79f7554a8fa31d057db38350e899f30dff` |
+| openmir2-night-window-delivery-report | openmir2-reviewer-21 | `4881446f9b3a811ffb690eef02710cdad8fa0e93` |
+| openmir2-noop-audit-stale-row | openmir2-reviewer-21 | `5cf5a1705720a8b0e60fdfc45102cd28a7da84b4` |
+| openmir2-save-allowgroup-writeback | openmir2-reviewer-20 | `918e0702e3145c9b2baa2bdff41840c0c5323eba` |
+| openmir2-whitelist-independent-review-1 | openmir2-reviewer-21 | `a5283ecf6ddb26936cce0ad23542e714cfb9000d` |
+
+（`openmir2-gm-residual-round2` 有两条 legacy approve；这 7 张卡共 8 条 legacy `body.review: "approve"`，
+另有 1 条 `request_changes` 位于 `openmir2-save-allowgroup-writeback` 线程，但按 `request_changes`
+不计为 approve。）
 
 ## 3. 逐卡普查表
 
@@ -111,26 +139,10 @@ python -I -B tools/collab/merge_without_review_audit.py report --ref refs/remote
 | openmir2-m2-map-loading | openmir2-reviewer-3 | 否 | 是 |
 | openmir2-rewrite-inventory | openmir2-reviewer-14 | 否 | 是 |
 
-### ④ 非作者 review 存在但无 approve（卡面 ②/③ 之外）（7）
+### ④ 非作者 review 存在但无 approve（卡面 ②/③ 之外）（0）
 
-| 卡 id | merge_result.oid | 真实合并提交 | patch 作者 | 是否 R 卡 | 时间 |
-|---|---|---|---|---|---|
-| openmir2-gm-residual-round2 | aad30901ff994557806e8203533efc5e66d1b963 | aad30901ff994557806e8203533efc5e66d1b963 | openmir2-dev-1 | L | 2026-11-01 01:39 |
-| openmir2-gm-residual-teeth | 38439f539fd82fa0c88c62a197621960c37818b5 | 38439f539fd82fa0c88c62a197621960c37818b5 | openmir2-dev-2 | L | 2026-10-31 23:11 |
-| openmir2-night-report-dyncount-fix | dce1098c3f0190a041549873952aaa141a8f4e2d | dce1098c3f0190a041549873952aaa141a8f4e2d | openmir2-dev-2 | L | 2026-11-01 03:48 |
-| openmir2-night-window-delivery-report | bcf323eab18cca113d46d4e2ffaa34ff6e2da482 | bcf323eab18cca113d46d4e2ffaa34ff6e2da482 | openmir2-dev-2 | L | 2026-11-01 03:48 |
-| openmir2-noop-audit-stale-row | b999f41397846dbcb622cdeec81914599e0b4b39 | b999f41397846dbcb622cdeec81914599e0b4b39 | openmir2-dev-3 | L | 2026-10-31 22:20 |
-| openmir2-save-allowgroup-writeback | a46d3e3c3eb3ae805b88627bb95157ef56413e3d | a46d3e3c3eb3ae805b88627bb95157ef56413e3d | openmir2-dev-1 | R | 2026-10-31 22:26 |
-| openmir2-whitelist-independent-review-1 | 729f1e385f638abcddb1edac40618f38510b1573 | 729f1e385f638abcddb1edac40618f38510b1573 | openmir2-dev-3 | L | 2026-11-01 04:44 |
-
-其中 7 张的 approve 写在 `body.review`（非 card 面要求的 decision/verdict）：
-- openmir2-gm-residual-round2：openmir2-reviewer-20 `4900aeb298dc0a7b7daecf5f60e41f38cd498bae`, openmir2-reviewer-20 `06a157e0c2f1f761bc8c948bfcaca371d13894e2`
-- openmir2-gm-residual-teeth：openmir2-reviewer-21 `65f66e3011bc21476ca7239273ec58490e5f40a6`
-- openmir2-night-report-dyncount-fix：openmir2-reviewer-20 `df532c79f7554a8fa31d057db38350e899f30dff`
-- openmir2-night-window-delivery-report：openmir2-reviewer-21 `4881446f9b3a811ffb690eef02710cdad8fa0e93`
-- openmir2-noop-audit-stale-row：openmir2-reviewer-21 `5cf5a1705720a8b0e60fdfc45102cd28a7da84b4`
-- openmir2-save-allowgroup-writeback：openmir2-reviewer-20 `918e0702e3145c9b2baa2bdff41840c0c5323eba`
-- openmir2-whitelist-independent-review-1：openmir2-reviewer-21 `a5283ecf6ddb26936cce0ad23542e714cfb9000d`
+按 owner 2026-11-01 已定口径（认 legacy `body.review`），本桶为空——原先的 7 张已按 legacy 字段
+计入桶①（见 §2 补充表）。
 
 ## 4. 账本 oid ≠ 真实合并提交（已解析部分的 7 张）
 
@@ -195,7 +207,8 @@ python -I -B tools/collab/merge_without_review_audit.py report --ref refs/remote
   openmir2-worker-11**」——即当时按 **patch 作者** 判非作者。若按这个更窄口径，
   该卡回桶①，③ 只剩 1 张。
 
-**本表不替 owner 选口径**：两种口径的差异已在此列明；主表按卡面文字（patch/issue 并集）给 ③=5。
+**口径已由 owner 2026-11-01 定死**：作者 = **patch ∪ issue**（保守）。历史窄口径（只看 patch 作者 ⇒ ③=1）
+仅供追溯，不再作为备选口径；主表按已定并集口径给 ③ = 5。
 
 ## 7. 方法与只读保证
 
@@ -204,7 +217,8 @@ python -I -B tools/collab/merge_without_review_audit.py report --ref refs/remote
   任何写子命令（commit/merge/push/update-ref/…）直接抛 `ReadOnlyViolation`（selftest 有负例）。
 - 条目读取：`git for-each-ref refs/collab/inbox` + `git cat-file --batch`，按 `id` 分组；
   条目是**扁平 JSON**（inbox blob 没有 `entry` 包层）。
-- 自测 **38/38**：verdict/decision 双认（含同时出现且内容不同的 7 条实测）、`review` 字段只另计、作者集合排除
+- 自测 **52/52**：verdict/decision/legacy `review` 三字段判定（含 `approve_source` 单字段来源）、
+  `request_changes` 不算 approve（三字段任一即否）、三字段并存只计一次、作者集合排除
   （patch 与 issue 都算）、四桶分类、空输入退化、tier 回退、只读守卫负例，
   以及**临时 git 仓库**里的真实合并提交解析（merge 提交 / fast-forward 未解析 / 不可解析 head 未解析 /
   账本 oid 相等与不等两种标注）。
