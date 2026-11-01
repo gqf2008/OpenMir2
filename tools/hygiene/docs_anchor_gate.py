@@ -124,7 +124,12 @@ def unknown_argument(argv):
     while i < len(argv):
         arg = argv[i]
         if arg in _VALUE_FLAGS:
-            i += 2
+            # Only a non-flag token is a value; ``--repo --ref`` must reject
+            # ``--ref`` instead of swallowing it as the repo path.
+            if i + 1 < len(argv) and not argv[i + 1].startswith("-"):
+                i += 2
+            else:
+                i += 1
             continue
         if arg in _BOOL_FLAGS:
             i += 1
@@ -1025,6 +1030,10 @@ def _argv_teeth():
 
     rc, _, err = call(["--frobnicate"])
     check("任意未知 flag ⇒ rc=2", rc == 2 and "--frobnicate" in err, (rc, err))
+
+    rc, _, err = call(["--repo", "--ref"])
+    check("带值 flag 后紧跟未知 flag ⇒ 未知 flag 仍被拒（不被当成值吞掉）",
+          rc == 2 and "unknown argument '--ref'" in err, (rc, err))
 
     rc, out, _ = call(["--help"])
     check("已知 --help 仍可用（rc=0）", rc == 0 and "docs_anchor_gate" in out,

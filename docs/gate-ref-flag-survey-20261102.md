@@ -191,26 +191,29 @@ python -I <script> --ref HEAD
 ### 6.2 `tools/hygiene/docs_anchor_gate.py`
 
 - 新增 `unknown_argument(argv)`：布尔 flag 集合 `-h/--help/--selftest/--prose/--list`；
-  带值 flag 集合 `--base/--repo/--registry/--paths`（**值 token 被跳过**，不会被误判为 flag）。
+  带值 flag 集合 `--base/--repo/--registry/--paths`（**非 flag 值 token 被跳过**；
+  `--repo --ref` 这种「值位上是 flag」形态仍判 `--ref` 为未知，避免把未知 flag 当成值吞掉）。
   未知 token ⇒ rc=2 + 两行 usage。
 - 顺带补 `-h/--help` 打印文档并 rc=0（旧版会静默落回判定路径）。
-- 牙（selftest 从 31 条增至 35 条）：
+- 牙（selftest 从 31 条增至 36 条）：
   - 未知 `--ref` ⇒ rc=2 且 stderr 点名；
   - `--prose --base HEAD --ref HEAD` ⇒ 仍拒（证明 `--base` 的值没有被当成 flag）；
   - 任意未知 flag ⇒ rc=2；
+  - `--repo --ref` ⇒ `--ref` 不被当成值吞掉，仍 rc=2；
   - `--help` 仍可用。
-- 变异自证：删拒绝分支后 selftest rc=1，三条未知参数用例变红；恢复后 sha256 相等。
+- 变异自证：删拒绝分支后 selftest rc=1，四条未知参数用例变红；恢复后 sha256 相等。
 
 ### 6.3 `tools/hygiene/scenario_manifest_gate.py`
 
 - 新增 `unknown_argument(argv)`：布尔 `-h/--help/--selftest/--audit-exempt/--json`，
-  带值 `--repo`；未知 token ⇒ rc=2 + usage。同样补 `-h/--help`。
-- 牙（selftest 从 34 条增至 38 条）：
+  带值 `--repo`（值位是 flag 时不吞）；未知 token ⇒ rc=2 + usage。同样补 `-h/--help`。
+- 牙（selftest 从 34 条增至 39 条）：
   - 未知 `--ref` ⇒ rc=2 且点名；
   - `--repo . --ref HEAD` ⇒ 值不被误判，`--ref` 仍被拒；
   - 任意未知 flag ⇒ rc=2；
+  - `--repo --ref` ⇒ `--ref` 不被当成值吞掉，仍 rc=2；
   - `--help` 仍可用。
-- 变异自证：删拒绝分支后 selftest rc=1，三条未知参数用例变红；恢复后 sha256 相等。
+- 变异自证：删拒绝分支后 selftest rc=1，四条未知参数用例变红；恢复后 sha256 相等。
 
 ## 7. 未修 / 后续
 
