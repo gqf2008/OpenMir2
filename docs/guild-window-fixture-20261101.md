@@ -1,8 +1,10 @@
 # 行会窗夹具执行单（2026-11-01）
 
-- 卡：`openmir2-guild-window-fixture`（tier=L，纯运维夹具 + 文档，无服务端行为改动）
+- 卡：`openmir2-guild-window-fixture`（tier=L，纯运维夹具 + 文档，无服务端行为改动）；
+  后续扩能 `openmir2-guild-fixture-members`（tier=L，加多成员/段名参数，单成员字节不变）
 - 交付：四个 PowerShell 脚本 + 本执行单
-  - `tools/window/guild_fixture.ps1` — 预置一个「文件形态」行会（`GuildList.txt` + `Guilds/<名>.txt`）
+  - `tools/window/guild_fixture.ps1` — 预置一个「文件形态」行会（`GuildList.txt` + `Guilds/<名>.txt`）；
+    `-Member` 单成员 / `-Members` 多成员（首个=掌门 rank#1，其余=rank#2 普通成员）
   - `tools/window/guild_fixture_restore.ps1` — 恢复 `GuildList.txt` 原字节、删 `<名>.txt`、删空 `Guilds/`
   - `tools/window/guild_fixture_suspend.ps1` — **B 失败形态**：把 `Guilds/<名>.txt` 改名成 `.suspended`
   - `tools/window/guild_fixture_resume.ps1` — 把 `.suspended` 改回并断言 sha 还原
@@ -22,6 +24,9 @@
 | 文本一律 **GBK(cp936) + CRLF** | `guild.rs` 模块头 ⑥；C# `StringList.SaveToFile` |
 | `<名>.txt` 四段头 + 段间单空格行 + 成员段 `#<RankNo> <RankName>` / `+<成员>` | `GuildInfo.cs:384-431`（`SaveGuildFile`）；`guild_store_vectors.rs:319` |
 | 掌门默认 `RankNo=1` / `RankName=掌门人` | `GuildInfo.cs:468-472`（`SetGuildInfo`） |
+| 多成员文件形态：`行会成员` 段下逐 rank `#<n> <rank名>` + 该 rank 每个成员 `+<name>`；夹具映射「首个=rank#1（掌门），其余=同一条 rank#2（普通成员）」 | `mir2-rs/crates/data/src/guild.rs::serialize_guild_file:643-648`；C# `GuildInfo.cs:384-431` |
+| 段名缺省取部署 `String.conf:289-291`：`GuildChief=掌门人`、`GuildMemberRank=行会成员`（GBK）；装载段名上限 `GuildRankNameLen=16` | `E:/MirServer/M2GameSvr/String.conf:289-291`；`GameSvrConf.cs:1720`、`GuildInfo.cs:314` |
+| `756` 成员列表 payload = 逐 rank `#<RankNo>/*<RankName>/` + 每个成员 `<name>/` | `PlayObject.Operate.cs:1283-1306`；Rust `crates/world/src/guild.rs::member_list_text:702-721` |
 | **坑 1**：`SaveToFile` 用 `FileMode.Open` ⇒ 目标 `<名>.txt` 不存在时静默失败，被 `try/catch` 吞掉，只记 `ERR 保存行会信息失败!!!` | `GuildInfo.cs:425-428`；Rust 对应 `guild_cmd.rs:361-374`、`lib.rs:18618` |
 | **坑 2**：`<名>.ini` 只在 `GuildConf` ctor 被建成空文件，五键永不落盘 | `guild.rs` 模块头 ② |
 | 装载时机：服务端启动 `LoadGuildInfo/LoadGuild`；改文件后必须**重启 game-svr** | `GuildManager.cs:78-110`；Rust `guild_runtime.rs:131` |
@@ -75,8 +80,14 @@
 ### 3.1 `guild_fixture.ps1`（预置）
 
 ```powershell
+# 单成员（旧用法；文件字节与扩能前完全一致）：
 pwsh -NoProfile -File tools/window/guild_fixture.ps1 -Root <部署根> -GuildName e2e-guild -Member <角色名> `
      -BackupDir E:/tmp/guild-window-20261101/backup -Force
+# 两成员（掌门 winplay0 + 普通成员 aaa）：第一个 = rank#1 掌门，其余 = 同一条 rank#2
+pwsh -NoProfile -File tools/window/guild_fixture.ps1 -Root <部署根> -GuildName e2e-guild -Members winplay0,aaa `
+     -BackupDir E:/tmp/guild-window-20261101/backup -Force
+# 可选段名（缺省即 String.conf:289-291 的 GuildChief / GuildMemberRank）：
+pwsh -NoProfile -File tools/window/guild_fixture.ps1 ... -Members a,b -ChiefRank 掌门人 -MemberRank 行会成员
 # 只打印不写：
 pwsh -NoProfile -File tools/window/guild_fixture.ps1 -Root <部署根> -GuildName e2e-guild -Member <角色名> -BackupDir ... -WhatIf
 # 自测（tempdir）：
@@ -84,10 +95,65 @@ pwsh -NoProfile -File tools/window/guild_fixture.ps1 -Selftest
 ```
 
 行为：登记 `GuildList.txt` 原字节+sha → 备份到 `-BackupDir` → 建 `GuildBase/Guilds/` → 写 `Guilds/<名>.txt`
-（GBK+CRLF：`公告 / 空格行 / 敌对行会 / 空格行 / 联盟行会 / 空格行 / 行会成员 / #1 掌门人 / +<角色名>`）→
-在 `GuildList.txt` 追加 `<名>`+CRLF（内存一次构造，避免半写）→ 打印 before/after sha。
-**fail-closed**：目标 `<名>.txt`/`<名>.ini` 已存在、名单已有同名、参数含路径分隔符/空格/逗号 ⇒ rc=2。
+（GBK+CRLF，`serialize_guild_file:643-648` 形态）→ 在 `GuildList.txt` 追加 `<名>`+CRLF（内存一次构造，避免半写）→
+打印 before/after sha。
+
+`<名>.txt` 成员段：
+
+- **单成员**（`-Member x`）：`行会成员` → `#1 掌门人` → `+x`（9 行；与扩能前逐字节一致，回归见 §9 T9）。
+- **多成员**（`-Members x,y[,z…]`）：`#1 <ChiefRank>` / `+x`，随后**所有其余成员**落在同一条 `#2 <MemberRank>` 段内逐行 `+`：
+  ```
+  公告 / 空格行 / 敌对行会 / 空格行 / 联盟行会 / 空格行 / 行会成员
+  #1 掌门人 / +winplay0
+  #2 行会成员 / +aaa
+  ```
+- `-Member` 与 `-Members` **二选一**；`-Members` 按逗号分隔（`-Members "a,b"` 与 `-Members a,b` 等价）。
+- 段名缺省 = 部署 `String.conf:289-291` 的实际值（`GuildChief=掌门人` / `GuildMemberRank=行会成员`）；
+  `-ChiefRank` / `-MemberRank` 可覆盖，受 oracle 装载上限 `GuildRankNameLen=16` 约束。
+
+**fail-closed**：目标 `<名>.txt`/`<名>.ini` 已存在、名单已有同名、参数含路径分隔符/空格/逗号、
+`-Member` 与 `-Members` 同时给、`-Members` 含空项或重复成员、段名过长/含首尾空白 ⇒ rc=2。
 `-WhatIf` 零写（连备份目录都不建）。
+
+输出增补（机器可读，供窗口取证）：`MEMBERS <逗号名单>`、`CHIEF_RANK <段名>`、`MEMBER_RANK <段名>`。
+
+### 3.1.1 两成员模式（非掌门权限门）
+
+用途：上一轮真机观测 `winplay0` 为掌门 ⇒ 8 个管理按钮全可见（`commander=true`）。要验证**非掌门**权限门，
+需要预置一个「掌门 + 普通成员」的行会，用普通成员账号登录观察按钮/命令被拒。
+
+预置（两栈同一文件形态；停服后执行，见 §2）：
+
+```powershell
+pwsh -NoProfile -File tools/window/guild_fixture.ps1 -Root E:/MirServer/M2GameSvr -GuildName e2e-guild `
+     -Members winplay0,aaa -BackupDir E:/tmp/guild-window-20261101/backup -Force
+```
+
+`Guilds/e2e-guild.txt` 期望（GBK+CRLF，86 字节，sha256
+`9ae0997e7efa8094b0c4d43e890e8634b1b17d46538c94f2c3ba196c86188e61`）：
+
+```
+b9abb8e60d0a200d0ab5d0b6d4d0d0bbe10d0a200d0ac1aac3cbd0d0bbe10d0a200d0ad0d0bbe1b3c9d4b10d0a
+233120d5c6c3c5c8cb0d0a2b77696e706c6179300d0a233220d0d0bbe1b3c9d4b10d0a2b6161610d0a
+```
+
+`756`（`SM_SENDGUILDMEMBERLIST`）期望：
+
+| 项 | 值 |
+|---|---|
+| 帧头 | `ident=756`、`Series=1`（`MakeMessage(756,0,0,0,1)`） |
+| payload 文本（GBK） | `#1/*掌门人/winplay0/#2/*行会成员/aaa/` |
+| 客户端显示 | `(1) 掌门人 winplay0` / `(2) 行会成员 aaa` |
+
+判据：
+
+- `winplay0` 登录：756 含两行；面板管理按钮可见（对照基线与上轮一致）。
+- `aaa` 登录：756 含两行（普通成员可看名单）；**管理按钮/掌门命令被拒**（非掌门门）。
+- `753` 面板文本不含 `aaa` 的掌门位；`aaa` 的 `CM_GUILDUPDATENOTICE(1040)` 等掌门命令返回拒绝码
+  （具体码按本轮触发操作记录；若非掌门路径根本不发帧，照实记「零帧」）。
+
+> 注意：`756` 只在请求成员列表时重建（`member_list_text`），重启后从 `<名>.txt` 装载；因此文件段名与
+> `String.conf` 段名必须一致（默认即部署值），否则客户端显示与判据不符。
 
 ### 3.2 `guild_fixture_restore.ps1`（恢复）
 
@@ -136,10 +202,15 @@ resume：读 state → 断言 suspended 的 sha == `before_sha` → 断言目标
 1. 停 game-svr（记录起停命令与时间）。
 2. `-WhatIf` 预览，再真跑 fixture：
    ```powershell
+   # 单成员（成功对照）：
    pwsh -NoProfile -File tools/window/guild_fixture.ps1 -Root E:/MirServer/M2GameSvr -GuildName e2e-guild `
         -Member <掌门角色名> -BackupDir E:/tmp/guild-window-20261101/backup -Force
+   # 需要非掌门权限门时改用两成员（掌门 + 普通成员），见 §3.1.1：
+   pwsh -NoProfile -File tools/window/guild_fixture.ps1 -Root E:/MirServer/M2GameSvr -GuildName e2e-guild `
+        -Members winplay0,aaa -BackupDir E:/tmp/guild-window-20261101/backup -Force
    ```
-   记录：`BEFORE_SHA`（现网应为空文件 sha `e3b0c442…`）、`AFTER_SHA`、`STATE_FILE`、`LIST_FILE`、`GUILD_FILE`。
+   记录：`BEFORE_SHA`（现网应为空文件 sha `e3b0c442…`）、`AFTER_SHA`、`MEMBERS`、`CHIEF_RANK`、`MEMBER_RANK`、
+   `STATE_FILE`、`LIST_FILE`、`GUILD_FILE`。
 3. 落盘核对（只读）：`GuildBase/GuildList.txt` 含 `e2e-guild`（GBK+CRLF）；
    `Guilds/e2e-guild.txt` 字节 = 四段头 + `#1 掌门人` + `+<掌门角色名>`，无 UTF-8 BOM、无裸 LF。
    留 `Get-FileHash -Algorithm SHA256`（用 `pwsh`；Windows PowerShell 5.1 本机可能没有该 cmdlet）与 hex 首尾。
@@ -253,15 +324,24 @@ Select-String -Path <game-svr.log> -Pattern '保存行会信息失败|行会断�
 ## 9. 自测记录（本卡交付时实跑，均在 tempdir）
 
 ```
-pwsh -NoProfile -File tools/window/guild_fixture.ps1         -Selftest   # rc=0, SELFTEST PASS
-pwsh -NoProfile -File tools/window/guild_fixture_restore.ps1 -Selftest   # rc=0, SELFTEST PASS
-pwsh -NoProfile -File tools/window/guild_fixture_suspend.ps1 -Selftest   # rc=0, SELFTEST PASS
-pwsh -NoProfile -File tools/window/guild_fixture_resume.ps1  -Selftest   # rc=0, SELFTEST PASS
+pwsh -NoProfile -File tools/window/guild_fixture.ps1         -Selftest   # rc=0, PASS 110, FAIL 0, SELFTEST PASS
+pwsh -NoProfile -File tools/window/guild_fixture_restore.ps1 -Selftest   # rc=0, PASS  20, FAIL 0, SELFTEST PASS
+pwsh -NoProfile -File tools/window/guild_fixture_suspend.ps1 -Selftest   # rc=0, PASS  21, FAIL 0, SELFTEST PASS
+pwsh -NoProfile -File tools/window/guild_fixture_resume.ps1  -Selftest   # rc=0, PASS  23, FAIL 0, SELFTEST PASS
 ```
 
-覆盖：prep→restore 往返字节一致（含原文件带/不带尾 CRLF 两种）、目标已存在拒绝、GBK+CRLF+无 BOM 字节断言、
-`-WhatIf` 零写、suspend→resume sha 还原、篡改 `.suspended`/备份拒绝、真实根护栏；
-每个自测前后对 `E:/MirServer/M2GameSvr/GuildBase` 做只读树摘要并断言一致（零写入证明）。
+覆盖：prep→restore 往返字节一致（含原文件带/不带尾 CRLF、0 字节、单字节四种）、目标已存在拒绝、
+GBK+CRLF+无 BOM 字节断言、`-WhatIf` 零写、suspend→resume sha 还原、篡改 `.suspended`/备份拒绝、真实根护栏；
+多成员扩能（`openmir2-guild-fixture-members`）新增：
+
+- **T8 两成员**：`-Members winplay0,aaa` 落盘字节逐字节断言（86 字节，见 §3.1.1 的 hex/sha）→ restore 往返后树一致；
+- **T8b 自定义段名**：`-ChiefRank/-MemberRank` 覆盖值落盘（`#1 会长` / `#2 成员`）；
+- **T9 单成员回归**：单成员文件逐字节 == 扩能前基线（`282b71a4…4fd8`），且不含 `#2` 段；
+- **T10 参数解析**：`-Member` ≡ 单元素、`-Members` 逗号拆分、顺序保持、冲突/空项/重复拒绝；
+- 元断言条数门槛 109 → 现为 110（只增不减）。
+
+每个自测前后对 `E:/MirServer/M2GameSvr/GuildBase` 做只读树摘要并断言一致（零写入证明；
+本轮实测前后均为 `bfc15ff5cdd4fc8c6acc798b480b4502636b1adf14f36f2a75573bb4fd658995`）。
 
 CLI 护栏实测（不写任何文件，rc=2）：
 
