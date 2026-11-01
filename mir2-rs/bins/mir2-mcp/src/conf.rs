@@ -347,6 +347,23 @@ pub fn conf_set(
     value: &str,
     dry_run: bool,
 ) -> Result<SetOutcome, ConfError> {
+    conf_set_with_readback(cfg, section, key, value, dry_run, &|path: &Path| {
+        fs::read(path)
+    })
+}
+
+/// [`conf_set`] 的本体：`readback` 是回读接缝（生产传 `fs::read`，单测可注入错误/不符内容）。
+fn conf_set_with_readback<F>(
+    cfg: &AppConfig,
+    section: &str,
+    key: &str,
+    value: &str,
+    dry_run: bool,
+    readback: &F,
+) -> Result<SetOutcome, ConfError>
+where
+    F: Fn(&Path) -> io::Result<Vec<u8>>,
+{
     let white = whitelist_lookup(section, key).ok_or_else(|| ConfError::NotWhitelisted {
         section: section.to_string(),
         key: key.to_string(),
@@ -440,13 +457,19 @@ pub fn conf_set(
         source,
     })?;
 
-    // 写后回读校验：文件 sha 与值都要一致；不一致则用备份回滚。
-    let readback = fs::read(&path).map_err(|source| ConfError::Io {
-        path: path.clone(),
-        source,
-    })?;
-    let after_sha = sha256_hex(&readback);
-    let readback_value = scan(&readback)
+    // 写后回读校验：文件 sha 与值都要一致；读失败或校验不符都要用备份回滚。
+    let readback_bytes = match readback(&path) {
+        Ok(bytes) => bytes,
+        Err(source) => {
+            let _ = fs::copy(&backup, &path);
+            return Err(ConfError::Io {
+                path: path.clone(),
+                source,
+            });
+        }
+    };
+    let after_sha = sha256_hex(&readback_bytes);
+    let readback_value = scan(&readback_bytes)
         .ok()
         .and_then(|s| find_entry(&s, white.section, white.key).map(|e| e.value.clone()))
         .unwrap_or_default();
@@ -549,10 +572,15 @@ fn scan(bytes: &[u8]) -> Result<Scan, ConfError> {
                 }
             } else if let Some(sec) = section_name(text) {
                 let sec = trim_slice(sec).to_vec();
-                if sec.starts_with(b";;") {
+                // C# `ConfigFile.cs:293-301`：只有 `sec.Length >= 2` 才判 `;;` 段注释并复位
+                // `isCurSecComment`。单字符段名（如 `[a]`）**不复位**：段仍登记，但其后的键继续
+                // 处在段注释状态而被跳过（`[;;Disabled]` → `[a]` → `Hidden=2` 不装载）。
+                if sec.len() >= 2 && sec.starts_with(b";;") {
                     is_cur_sec_comment = true;
                 } else {
-                    is_cur_sec_comment = false;
+                    if sec.len() >= 2 {
+                        is_cur_sec_comment = false;
+                    }
                     let low = ascii_lower(&sec);
                     if !seen_sections.insert(low.clone()) {
                         out.aborted = true;
@@ -979,6 +1007,90 @@ ProcessMonRandRate=5\r\n",
         let read = conf_get(&root.cfg(), "Setup", "GenMonRate").expect("get");
         assert_eq!(read.value.as_deref(), Some("10"), "段注释里的键不生效");
         assert_eq!(read.line, Some(6));
+    }
+
+    /// C# `ConfigFile.cs:293-301`：`;;` 段注释只由 **长度 ≥2** 的段名复位；
+    /// 单字符段名（`[a]`）登记段但保持注释状态 ⇒ 其后的键不装载。
+    #[test]
+    fn single_char_section_does_not_reset_section_comment_like_oracle() {
+        let root = TempRoot::new("sec-comment");
+        root.write_conf(
+            b"[z]\r\nLoaded=9\r\n[;;Disabled]\r\n[a]\r\nHidden=2\r\n[bb]\r\nShown=3\r\n[;;Again]\r\n[c]\r\nHidden2=4\r\n",
+        );
+
+        // 长度 ≥2 的普通段名复位注释状态 ⇒ 键装载（负例的对照）。
+        let shown = conf_get(&root.cfg(), "bb", "Shown").expect("get");
+        assert!(shown.found, "≥2 字符段名必须复位段注释");
+        assert_eq!(shown.value.as_deref(), Some("3"));
+
+        // 单字符段名不复位 ⇒ 键仍被段注释挡掉。
+        let hidden = conf_get(&root.cfg(), "a", "Hidden").expect("get");
+        assert!(!hidden.found, "[;;Disabled] 后的 [a] 不得复位注释状态");
+
+        // 第二次进入段注释后同样如此。
+        let hidden2 = conf_get(&root.cfg(), "c", "Hidden2").expect("get");
+        assert!(!hidden2.found, "[;;Again] 后的 [c] 不得复位注释状态");
+
+        // 非注释状态下单字符段仍正常装载（复位不是「单字符段全禁」）。
+        let loaded = conf_get(&root.cfg(), "z", "Loaded").expect("get");
+        assert!(loaded.found, "无段注释时单字符段应正常装载");
+        assert_eq!(loaded.value.as_deref(), Some("9"));
+    }
+
+    /// F2：回读内容与写前/预期不符 ⇒ 用备份回滚，盘上字节回到写前，报 `readback_mismatch`。
+    #[test]
+    fn readback_mismatch_rolls_back_from_backup() {
+        let root = TempRoot::new("rb-mismatch");
+        root.write_conf(&fixture());
+        let before_bytes = fs::read(root.conf_path()).expect("read");
+        let before_sha = find_conf_sha(&root.path);
+
+        let err = conf_set_with_readback(
+            &root.cfg(),
+            "Setup",
+            "GenMonRate",
+            "42",
+            false,
+            &|_path: &Path| Ok(b"not the conf".to_vec()),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "readback_mismatch");
+        match &err {
+            ConfError::ReadbackMismatch { restored, .. } => assert!(*restored, "必须回滚成功"),
+            other => panic!("错误变体不对：{other:?}"),
+        }
+        assert_eq!(
+            fs::read(root.conf_path()).expect("read"),
+            before_bytes,
+            "回滚后盘上字节必须等于写前"
+        );
+        assert_eq!(find_conf_sha(&root.path), before_sha);
+    }
+
+    /// F2：回读 IO 失败同样走备份回滚（不能把写了一半的文件留在盘上）。
+    #[test]
+    fn readback_io_error_rolls_back() {
+        let root = TempRoot::new("rb-io");
+        root.write_conf(&fixture());
+        let before_bytes = fs::read(root.conf_path()).expect("read");
+        let before_sha = find_conf_sha(&root.path);
+
+        let err = conf_set_with_readback(
+            &root.cfg(),
+            "Setup",
+            "GenMonRate",
+            "43",
+            false,
+            &|_path: &Path| Err(io::Error::other("injected readback failure")),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "io_error");
+        assert_eq!(
+            fs::read(root.conf_path()).expect("read"),
+            before_bytes,
+            "读失败分支也必须回滚到写前字节"
+        );
+        assert_eq!(find_conf_sha(&root.path), before_sha);
     }
 
     fn tree_sha(root: &Path) -> String {

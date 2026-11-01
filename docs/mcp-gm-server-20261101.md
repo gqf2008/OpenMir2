@@ -99,6 +99,9 @@ claude mcp add mir2 -- E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/deb
 `dry_run=true`：只返回 `before_sha`、预览 `after_sha`、变更前后整行；**不建备份、不落盘**
 （调用前后目录内容 sha 相等）。
 
+备份保留期：本片**不做自动清理**（`%TEMP%/mir2-mcp-backups/` 由调用方 / 系统临时目录策略负责；
+每次真实写入都会留一份 `.bak`）。如需保留期/轮转策略另开卡（F3 登记不改）。
+
 ### 拒绝码（`code` 字段，全部零写）
 
 | code | 触发 |
@@ -121,6 +124,9 @@ claude mcp add mir2 -- E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/deb
 
 写侧**不用** `ConfigFile.Save()`：oracle 的 Save 会按内存字典整文件重写（丢注释、重排），
 本工具只在原始字节上替换目标行的**值区间**，其余字节（BOM/CRLF/注释/顺序）逐字节保留。
+
+- `conf_get` 的**展示层**对非 ASCII 值按 UTF-8 lossy 解码（只影响显示）；`conf_set` 的写路径在原始
+  字节上替换值区间，**逐字节保留**（含 GBK/BOM/CRLF）——F4 登记不改。
 
 ## 6. 权限面
 
