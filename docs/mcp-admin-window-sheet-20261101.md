@@ -43,14 +43,16 @@
 
 | 命令 | 现网名 | `Imp` | `PermissionMin` | `CommandDef.params` | 用户参数（Help 原文） | 真实行为（oracle 照抄） |
 |---|---|---:|---:|---:|---|---|
-| 刷怪 | `怪` | `MobSpawn` | **10** | 2 | `命令格式: @怪 怪物名称 数量 等级(0-7)` | `怪物名称` 空 ⇒ 红 `怪物名称不正确或其它未问题!!!`；`数量` 缺省 1、`<=0` 钳 1、上限 **64**；`等级` 缺省 0、`>10` 归 0（`(byte)` 截断后判）；落点 = **调用者身前格**（`world.self_front_pos()`），身前格不可站会走 oracle 的地形移位循环（抽 RNG）。 |
-| 清怪 | `清除怪物` | `ClearMapMonster` | **10** | 2 | `命令格式: @清除怪物 地图号(* 为所有) 怪物名称(* 为所有) 掉物品(0,1)` | 三个用户参数**全必填**（缺一个 ⇒ 红 Help）；**杀怪循环整段注释**（`ClearMapMonsterCommand.cs:30-72`）⇒ `envir` 恒 null ⇒ **恒回红 `输入的地图不存在!!!`**，「已清除怪物数: 0」不可达。⇒ 本命令**不改变世界状态、不抽 RNG**。见 `gmcmd.rs` 的常量 `CLEAR_MAP_MONSTER_HELP` / `CLEAR_MAP_MONSTER_NO_MAP` 与函数 `clear_map_monster`。 |
+| 刷怪 | `怪` | `MobSpawn` | **10** | 2 | `命令格式: @怪 怪物名称 数量 等级(0-7)` | `怪物名称` **为空 ⇒ 回 Help**（`命令格式: @怪 怪物名称 数量 等级(0-7)`，`gmcmd.rs` 的 `if s_name.is_empty() { return red(MOB_SPAWN_HELP) }`）；红字 `怪物名称不正确或其它未问题!!!` 只用于「名字生不出来 / 说话者地图解析失败」这类失败支。`数量` 缺省 1、`<=0` 钳 1、上限 **64**；`等级` 缺省 0、`>10` 归 0（`(byte)` 截断后判）；落点 = **调用者身前格**（`world.self_front_pos()`），身前格不可站会走 oracle 的地形移位循环（抽 RNG）。 |
+| 清怪 | `清除怪物` | `ClearMapMonster` | **10** | 2 | `命令格式: @清除怪物 地图号(* 为所有) 怪物名称(* 为所有) 掉物品(0,1)` | 三个用户参数**全必填**（缺一个 ⇒ 红 Help）；**杀怪循环整段注释**（`src/Modules/GameCommand/Commands/ClearMapMonsterCommand.cs` 第 40–73 行，`if (envir == null)` 在 74 行）⇒ `envir` 恒 null ⇒ **恒回红 `输入的地图不存在!!!`**，「已清除怪物数: 0」（79 行）不可达。⇒ 本命令**不改变世界状态、不抽 RNG**。见 `gmcmd.rs` 的常量 `CLEAR_MAP_MONSTER_HELP` / `CLEAR_MAP_MONSTER_NO_MAP` 与函数 `clear_map_monster`。 |
 | 重载管理员 | `LoadAdmin` | `LoadAdmin` | **10** | 1 | 无用户参数 | 体内 `Permission < 6` 在门 10 之后是死支；`LocalDB.LoadAdminList()` 与 `SendServerGroupMsg(213,…)` **两条都被注释** ⇒ 只回绿 `管理员列表重新加载成功...`，**不改任何权限**。见 `gmcmd.rs` 的 `fn load_admin`。 |
 
-三条命令都 **不在 perm 0 的 5 条里** ⇒ 客户端 `CM_SAY` 直呼一律被权限门拦成 `权限不够!!!`（红字，`Param = MakeWord(255,56) = 65336`）。
+三条命令都 **不在 perm 0 的 5 条里** ⇒ 客户端 `CM_SAY` 直呼一律被权限门拦成 `权限不够!!!`（红字，`Param = make_word16(255,56) = 0xFF | (0x38<<8) = 0x38FF = 14591`；
+`smframe.rs` 的 `make_word16(low, high) = low | (high << 8)`，入参是 `(f_color, b_color)`，
+`lib.rs` 的单测钉 `0x38FF`）。**不要**写成 `65336`（那是把 low/high 反着算出来的 `0xFF38`）。
 可达路径只有两条，且都**临时**把会话权限抬到 10：
 
-- **脚本 `GMEXECUTE`**：`ActionOfGmExecute` 抬权 → `ProcessUserLineMsg` → `finally` 还原（`PermissionGuard`，唯一抬权地址在 `crates/script/src/engine/actions.rs`）；
+- **脚本 `GMEXECUTE`**：`ActionOfGmExecute` 抬权 → `ProcessUserLineMsg` → `finally` 还原（`PermissionGuard`，唯一抬权地址在 `mir2-rs/crates/script/src/engine/actions.rs`）；
 - **admin 通道**：`execute_admin_gm_command` 抬权 → `gmcmd::execute` → **立刻还原**（`mir2-rs/bins/game-svr/src/lib.rs`，抬权常量 `ADMIN_GM_PERMISSION`），且与脚本/`CM_SAY` 走**同一个事件末收口** `command_event_tail_gm_drain`。
 
 ### 1.3 工具门清点（本卡实测）
@@ -302,7 +304,8 @@ python -I -B tools/probe/mir2_probe.py `
 ```
 
 - 产物：`<RUN>\frames.ndjson`（s2c 帧，每行含 `seq/ident/recog/param/tag/series/body_len/body_hex/body_sha256/body_text/frame_class`）、
-  `<RUN>\c2s.ndjson`、`<RUN>\run.json`（含逐 step 记录与 `t_ms`）。
+  `<RUN>\c2s.ndjson`、`<RUN>\run.json`（逐 step 记录；**注意 `sleep` 步只有 `index/kind/ms`，不记 `t_ms`**，
+  `send`/`wait_*`/`click_npc`/`dlg_select` 才记）。
 - **停栈**（每轮结束、还原配置之前）：
 
 ```powershell
@@ -429,7 +432,8 @@ Copy-Item -LiteralPath 'E:\tmp\admin-window-20261101\fixture\药店-0153.txt.bef
 }
 ```
 
-`...\admin_spawn.json` / `...\admin_clear.json`（admin 路径；客户端只留窗口，命令由外部进程投递）：
+`...\admin_spawn.json` / `...\admin_clear.json`（admin 路径；客户端做**同样的点 NPC / 643**
+——选帧要拿第一条 643 当锚；命令由外部进程投递）：
 
 ```json
 {
@@ -437,14 +441,20 @@ Copy-Item -LiteralPath 'E:\tmp\admin-window-20261101\fixture\药店-0153.txt.bef
   "placement": {"map": "0153", "x": 15, "y": 7},
   "params": {"self_pos": 458767, "turn_dir": 4},
   "steps": [
-    {"send": {"ident": 3010, "recog": "self_pos", "tag": "turn_dir"}},
+    {"send": {"ident": 3010, "recog": "self_pos", "tag": "turn_dir"},
+     "note": "CM_TURN 朝下：身前格 (15,8) 可走"},
     {"sleep": 400},
-    {"sleep": 6000, "note": "窗口：外部 admin 客户端在此期间投递 @怪 鸡 1"},
+    {"click_npc": "pos:14,7",
+     "note": "与脚本路径同一步：选帧要的 643 页锚点，两条路径都产生同一张 @main 页"},
+    {"wait_for": 643, "timeout_ms": 3000},
+    {"sleep": 6000, "note": "窗口：外部 admin 客户端在此期间投递 @怪 鸡 1（先等 @时间 ok 证明在线）"},
     {"send": {"ident": 3014, "recog": "self_pos", "param": 0, "tag": "turn_dir"}},
     {"sleep": 1200}
   ]
 }
 ```
+
+`admin_clear.json` 同形：`sleep 6000` 窗口里改投 `@清除怪物 3 * 0`，末尾不加 CM_HIT（换成 `sleep 1200`）。
 
 admin 版 `clear` 同形（窗口内投递 `@清除怪物 3 * 0`，窗口后不加 CM_HIT）。
 
@@ -499,23 +509,31 @@ $spawn
   **`frames=0` 不代表没刷**——刷怪帧是发给客户端的，要看 probe 的 `frames.ndjson`。
 - `@清除怪物` 期望 `{"ok": true, ..., "frames": 1, "note": "输入的地图不存在!!!"}`（红字由 drain 之外的回帧路径发）。
 
-#### 4.1.4 帧面比对（按 step 时间窗切，逐字段）
+#### 4.1.4 帧面比对（按「帧归属」选帧，逐字段）
 
-两条路径的客户端动作不同（脚本路径多一次点 NPC / 对话框），所以**不是整条流对比**，
-而是「**命令窗口内的帧**」对比。窗口边界从 `run.json` 的 `steps[].t_ms` 取（probe 每个 step 都记 `t_ms`）。
+两条路径的客户端动作不同（脚本路径多一次点 NPC / 对话框），所以**不是整条流对比**。
 
-切片（一行命令；参数 = run 目录、输出目录、起始 step、结束 step）：
+**不能用 step 时间窗切**：`mir2_probe.py` 的 `sleep` 步只记 `{"index","kind","ms"}`、**不记 `t_ms`**
+（驱动器的 `if kind == "sleep"` 分支），按 sleep 下标取 `steps[i]["t_ms"]` 会 `KeyError`；
+而且两条路径的对话框帧本来就不同，时间窗即使能取到也对不齐。
+
+⇒ 改成**按帧归属选帧**（与时间、step 类型都无关）：
+
+- 先定位本 run 的「第一张商人页」：`frames.ndjson` 里第一条 `ident == 643` 的下标 `k`；
+- `pre` = 该帧之前出现过的所有 `recog`（= 进场快照里已有的对象）；
+- **`@怪`**：选 `k` 之后、`ident ∈ {10,41}` 且 `recog ∉ pre` 的帧 —— 即**新生成怪物**的出生帧组；
+- **`@清除怪物`**：选 `k` 之后、`ident == 100` 且 `param == 14591`（`0x38FF` 红字）的帧 —— 即命令回的红字。
+
+选择器（一行命令；参数 = run 目录、输出目录、模式 `spawn|clear`）：
 
 ```powershell
-python -I -c "import json,io,os,sys;d,o,i,j=sys.argv[1],sys.argv[2],int(sys.argv[3]),int(sys.argv[4]);st=json.load(io.open(d+'/run.json',encoding='utf-8'))['steps'];t0=st[i]['t_ms'];t1=st[j]['t_ms'] if j<len(st) else 10**15;os.makedirs(o,exist_ok=True);out=[json.loads(l) for l in io.open(d+'/frames.ndjson',encoding='utf-8') if l.strip()];sel=[f for f in out if t0<=f['t_ms']<t1];io.open(o+'/frames.ndjson','w',encoding='utf-8').write(''.join(json.dumps(f,ensure_ascii=False)+chr(10) for f in sel));print('WINDOW',o,'step',i,'->',j,'t_ms',t0,t1,'frames',len(sel))" `
-  "$dir\A-spawn" "$dir\wins\A-spawn\rust" 4 5
+python -I -c "import json,io,os,sys;d,o,m=sys.argv[1],sys.argv[2],sys.argv[3];fr=[json.loads(l) for l in io.open(d+'/frames.ndjson',encoding='utf-8') if l.strip()];k=next((i for i,f in enumerate(fr) if f.get('ident')==643),None);assert k is not None,'no SM_MERCHANTSAY(643): click did not produce a page';pre={f.get('recog') for f in fr[:k]};sel=[f for f in fr[k+1:] if ((m=='spawn' and f.get('ident') in (10,41) and f.get('recog') not in pre) or (m=='clear' and f.get('ident')==100 and f.get('param')==14591))];os.makedirs(o,exist_ok=True);io.open(o+'/frames.ndjson','w',encoding='utf-8').write(''.join(json.dumps(f,ensure_ascii=False)+chr(10) for f in sel));print('SELECT',o,'mode',m,'frames',len(sel))" `
+  "$dir\A-spawn" "$dir\wins\A-spawn\rust" spawn
 ```
 
-> step 下标按场景里 `steps` 的**0 基**序号：
-> `script_spawn.json` 的命令窗口 = `4 -> 5`；`admin_spawn.json` 的窗口 = `2 -> 3`；
-> `script_clear.json` = `4 -> 5`；`admin_clear.json` = `2 -> 3`。
-
-把两边的窗口目录放在 `wins\<对比名>\rust` 与 `wins\<对比名>\csharp` 下，然后：
+- 期望 `frames >= 1`；两边都 ≥1 才有可比性。`frames 0` ⇒ 命令没落地 / 怪物名不可生成 / 红字没出现
+  ⇒ **UNDECIDABLE**（按 §6 记），**不要**拿「零 == 零」当等价。
+- 选帧目录放成 `wins\<对比名>\rust` 与 `wins\<对比名>\csharp` 两个子目录，再跑比较器：
 
 ```powershell
 python -I -B tools/conformance/compare_runs.py compare `
@@ -528,12 +546,10 @@ python -I -B tools/conformance/compare_runs.py compare `
   body 与 `param/tag/series/ident` **逐字节比**。掩码都会在 `report.json` 的
   `whitelisted` / `coverage.global_masks` 里显式登记，不是静默放行。
 - 判据：`EXIT 0`（PASS）**且** `report.json` 的 `undecidable` 为空。
-  `EXIT 2` = 判不了（含 `UNCLASSIFIED`/空窗口/缺字段），**不是通过**。
-- **空窗口守卫**：切片打印的 `frames=N` 若为 0 或两边不等 ⇒ 判据作废（UNDECIDABLE），
-  先排查「命令是不是没落地」，不要拿「零帧 == 零帧」当等价。
+  `EXIT 2` = 判不了（含 `UNCLASSIFIED`/空集合/缺字段），**不是通过**。
 - **`@清除怪物` 的特别口径**：它**恒回红**（杀怪循环整段注释），所以本项的帧判据只要求
-  「两侧窗口内都是同一条红字 `SM_SYSMESSAGE(100)`，`Param=65336`，正文 `输入的地图不存在!!!`」，
-  **不得**把它写成「清怪成功 / 怪物被清掉」。RNG 面两侧同样应**零新增抽数**（见 4.1.5 的空窗口守卫口径）。
+  「两侧各恰好 1 条红字 `SM_SYSMESSAGE(100)`，`Param=14591`，正文 `输入的地图不存在!!!`」，
+  **不得**把它写成「清怪成功 / 怪物被清掉」。RNG 面**不作判据**（该命令不抽数，空账本不能自证零抽数）。
 
 #### 4.1.5 RNG 账本比对（`site` + 顺序）
 
@@ -583,7 +599,7 @@ python -I -B $rl diff "$dir\rng\A-spawn.tsv" "$dir\rng\B-spawn.tsv" `
   这条流同时覆盖**登录 + 移动（转向）+ 战斗（CM_HIT）**。记作 `run-on`。
 - **OFF**：§3.5 还原配置后（**没有 `[Admin]` 段**，即 `AdminPort=0`）用同一脚本夹具、同一场景、
   同一 `-Seed 42` 再跑一次。记作 `run-off`。
-- 比对**整条**帧流（不是窗口）：
+- 比对**整条**帧流（不做选帧/不做窗口）：
 
 ```powershell
 python -I -B tools/conformance/compare_runs.py compare `
@@ -606,10 +622,13 @@ Get-Content -LiteralPath "$dir\run-on-vs-off\report.json" -TotalCount 40
   命令体只看 `sess.permission < 6`（门 10 之后是死支），成功回绿 `管理员列表重新加载成功...`。
   admin 通道在**这次调用内**把权限抬到 10，**执行完立刻还原**（`execute_admin_gm_command`：`old` → `ADMIN_GM_PERMISSION` → `execute` → `old`）。
 - **可观测的「权限」= 权限门本身**：用 `@Level0 5`（`ChangeLevel`，`PermissionMin=10`）做探针。
-  - 重登**前**：`@Level0 5` 必须仍被拦（`SM_SYSMESSAGE(100)`，`Param=65336`，正文 `权限不够!!!`）；
-  - 通过 admin 通道执行 `@LoadAdmin`（成功、回绿文本）；
-  - 退出重登（probe 的 `relogin` 步）；
-  - 重登**后**：`@Level0 5` **仍**被拦，且 `characters_ablity.Level` 前后不变。
+  三次都要**被拦**（红字 `SM_SYSMESSAGE(100)`、`Param=14591`、正文 `权限不够!!!`）：
+  1. **基线（重登前）**：证明这条会话本来就没有权限；
+  2. **单次调用还原（同会话、softclose 之前）**：`@LoadAdmin` 走完 admin 通道后**立刻**再发一条，
+     证明「抬权只作用于那一次调用」——这一条不能省：**重登会从 DB 重载权限**，
+     只看重登后无法区分「单次还原」和「根本没抬过权」；
+  3. **重登后**：证明没有把权限写进持久状态。
+- 另配 `characters_ablity.Level` 前后不变（三次都被拦 ⇒ 命令体从未执行 ⇒ 等级不该动）。
 
 场景 `E:\tmp\admin-window-20261101\scenarios\perm_roundtrip.json`：
 
@@ -619,13 +638,15 @@ Get-Content -LiteralPath "$dir\run-on-vs-off\report.json" -TotalCount 40
   "placement": {"map": "0153", "x": 15, "y": 7},
   "params": {"self_pos": 458767, "turn_dir": 4},
   "steps": [
-    {"say": "@Level0 5", "note": "基线：权限门必须拦（不该进命令体）"},
+    {"say": "@Level0 5", "note": "① 基线：权限门必须拦（不该进命令体）"},
     {"wait_for": 100, "timeout_ms": 3000},
     {"sleep": 6000, "note": "窗口：外部 admin 客户端在此期间投递 @LoadAdmin（先等 @时间 ok 证明在线）"},
+    {"say": "@Level0 5", "note": "② 同会话、softclose 之前：证明单次调用已还原（不是靠重登重载）"},
+    {"wait_for": 100, "timeout_ms": 3000},
     {"send": {"ident": 1009, "recog": 0, "param": 0}, "note": "CM_SOFTCLOSE 小退"},
     {"sleep": 300},
     {"relogin": {"settle_ms": 1500, "assert_same_actor": false}},
-    {"say": "@Level0 5", "note": "重登后：权限必须仍是原值（仍被拦）"},
+    {"say": "@Level0 5", "note": "③ 重登后：权限必须仍是原值（仍被拦）"},
     {"wait_for": 100, "timeout_ms": 3000},
     {"sleep": 800}
   ]
@@ -670,28 +691,35 @@ Remove-Job -Job $job
 - 帧面判据（整条流，单侧）：
 
 ```powershell
-python -I -c "import json,io;fr=[json.loads(l) for l in io.open(r'$dir\RUN-perm\frames.ndjson',encoding='utf-8') if l.strip()];s=[f for f in fr if f.get('ident')==100];bad=[f.get('ident') for f in fr if f.get('ident') in (200,202,622,45,52,752)];print('SYS100_COUNT',len(s));print('SYS100_PARAMS',[f.get('param') for f in s]);print('SYS100_TEXTS',[f.get('body_text') for f in s]);print('FORBIDDEN',bad);print('VERDICT', 'PASS' if len(s)==2 and all(f.get('param')==65336 and '权限不够!!!' in (f.get('body_text') or '') for f in s) and not bad else 'FAIL')"
+python -I -c "import json,io;fr=[json.loads(l) for l in io.open(r'$dir\RUN-perm\frames.ndjson',encoding='utf-8') if l.strip()];s=[f for f in fr if f.get('ident')==100 and f.get('param')==14591];bad=[f.get('ident') for f in fr if f.get('ident') in (200,202,622,45,52,752)];print('RED100_COUNT',len(s));print('RED100_TEXTS',[f.get('body_text') for f in s]);print('FORBIDDEN',bad);print('VERDICT', 'PASS' if len(s)==3 and all('权限不够!!!' in (f.get('body_text') or '') for f in s) and not bad else 'FAIL')"
 ```
 
-  期望：`SYS100_COUNT 2`（重登前后各一条）、两条 `param=65336`、正文含 `权限不够!!!`、
+  期望：`RED100_COUNT 3`（基线 / 单次调用后 / 重登后各一条）、三条正文都含 `权限不够!!!`、
   `FORBIDDEN []`、`VERDICT PASS`。任何一条 45/52/752（等级/属性帧）出现 ⇒ 权限门被绕过 ⇒ FAIL。
-- DB 面（前后各取一次，跑完比对时**逐字节相等**）：
+  **必须按 `param == 14591` 过滤**：`ident == 100` 的帧还包含登录/公告类 SysMsg（例如绿字 `Param=65499`），
+  不按 param 过滤会把它们算进条数，判据恒不成立。
+- DB 面（前后各取一次，跑完比对）：`characters_ablity` 只有 `PlayerId / Level / ModifyTime`，
+  **没有 `ChrName`、没有 `LastUpdate`**（`DESCRIBE mir2_db.characters_ablity` 实测）⇒ 必须 join `characters`：
 
 ```powershell
 $mysql = 'D:\mysql\mariadb-10.11.19-winx64\bin\mysql.exe'
-& $mysql -h127.0.0.1 -P3306 -uroot -N -e "SELECT ChrName,Level,LastUpdate FROM mir2_db.characters_ablity WHERE ChrName='winplay0';" |
-  Tee-Object -FilePath "$dir\db\level-before.txt"
+$sql = "SELECT c.ChrName, a.Level, a.ModifyTime FROM mir2_db.characters c JOIN mir2_db.characters_ablity a ON a.PlayerId = c.Id WHERE c.ChrName='winplay0';"
+& $mysql -h127.0.0.1 -P3306 -uroot -N -e $sql | Tee-Object -FilePath "$dir\db\level-before.txt"
 # ……跑完……
-& $mysql -h127.0.0.1 -P3306 -uroot -N -e "SELECT ChrName,Level,LastUpdate FROM mir2_db.characters_ablity WHERE ChrName='winplay0';" |
-  Tee-Object -FilePath "$dir\db\level-after.txt"
+& $mysql -h127.0.0.1 -P3306 -uroot -N -e $sql | Tee-Object -FilePath "$dir\db\level-after.txt"
 Compare-Object (Get-Content "$dir\db\level-before.txt") (Get-Content "$dir\db\level-after.txt")
 ```
 
   - `Level` 必须相同（期望 1）。
-  - `LastUpdate` 会因正常登录/存档链变化 —— 记成**已知簿记差异**，不作为判据，也不能据此说「DB 无差异」。
+  - `ModifyTime` 会因正常登录/存档链变化 —— 记成**已知簿记差异**，不作为判据，也不能据此说「DB 无差异」。
 - `tools/window/gm_gate_check.py` **不能直接用于本项**：它按 `<run-dir>/csharp|<side>/frames.ndjson`
-  取两侧、且 G1 要求 **恰 1 条** 100；本项是单侧、两条 100（重登前后各一）。
+  取两侧、且 G1 要求 **恰 1 条** 100；本项是单侧、三条 100（基线 / 单次调用后 / 重登后）。
   如要复用，只能作为「G2/G3 口径参考」，结论以上面的单侧断言为准。
+  > **已登记的工具偏差（不在本卡写集，单独开卡）**：`gm_gate_check.py` 的
+  > `RED_PARAM = (255 << 8) | 56 = 65336` 与本机实现相反——`smframe.rs` 的
+  > `make_word16(f_color, b_color) = f_color | (b_color << 8)`，红字实际是 **`0x38FF = 14591`**
+  > （`lib.rs` 单测逐个钉 `0x38FF`）。⇒ 该工具的 G1 判据按现网帧**不可能通过**；
+  > 本执行单所有判据一律用 `14591`，不要用 `65336`。
 
 ### 4.4 收窗顺序（每次窗口都一样）
 
@@ -752,7 +780,7 @@ NOTES     <口令等凭据不得出现在本文件>
 | 判据 | 必须有的文件 |
 |---|---|
 | ① `@怪` 脚本 vs admin | `A-spawn/`、`B-spawn/`、`wins/A-vs-B-spawn/report.json`、`rng/A-spawn.tsv`、`rng/B-spawn.tsv`、`rng/A-vs-B-spawn.json`（groupdiff）、`rng/A-vs-B-spawn.diff.json`、两端 `SHA256SUMS` |
-| ① `@清除怪物` 脚本 vs admin | `A-clear/`、`B-clear/`、`wins/A-vs-B-clear/report.json`；两端 `groups` 输出（证明无新增 spawn 抽数） |
+| ① `@清除怪物` 脚本 vs admin | `A-clear/`、`B-clear/`、`wins/A-vs-B-clear/report.json`；两端 `groups` 输出**只作观测、不作判据**（该命令不抽数，空账本不能自证零抽数，见 §4.1.5） |
 | ② OFF vs ON | `run-on/`、`run-off/`、`run-on-vs-off/report.json`、7946 监听对照（ON 有 / OFF 无）、§3.4 负例 `logs/bind-negative.txt` |
 | ③ `@LoadAdmin` 重登 | `RUN-perm/`、`logs/admin-loadadmin.jsonl`、`db/level-before.txt`、`db/level-after.txt`、单侧断言输出 |
 | 配置改动 | `conf/Server.conf.before`、启用后 `Server.conf` 副本、`conf/RESTORED_SHA256` |
@@ -765,14 +793,14 @@ NOTES     <口令等凭据不得出现在本文件>
 | 现象 | 记法 |
 |---|---|
 | 命令没落地（`unknown_character` / 角色不在线 / 场景超时） | **`NOT_RUN`（前置不满足）** + 原始回包与日志路径。**不是失败，也不是通过。** |
-| 窗口内零帧、零抽数（空判据） | **`UNDECIDABLE(empty)`** + 说明「命令是否落地」的证据。**绝不**把「零 == 零」记成等价。 |
+| 选帧为空 / 账本无 spawn 抽数（空判据） | **`UNDECIDABLE(empty)`** + 说明「命令是否落地」的证据。**绝不**把「零 == 零」记成等价。 |
 | `compare_runs` rc=2 | **`UNDECIDABLE`**，把 `report.json` 的 `undecidable[]` 逐条抄出来；不降级成 PASS。 |
 | `compare_runs` rc=1 | **`FAIL`**，逐帧写清 ident / 帧序号 / 字节偏移 / 首个不同字节（工具已给）。 |
 | RNG `groupdiff` 出旗 | **`FAIL`**，点名 `GROUP_SET_DIFF` / `SHARED_REL_ORDER_DIFF` / `FOLDED_COUNT_DIFF` / `ROW_COVERAGE_DRIFT` 与首个分歧。 |
 | RNG 首处分歧在噪声站点 | **`UNDECIDABLE(noise)`**，写下首个分歧下标、站点名、重跑次数。**不许**写「语义等价 / 看起来一样 / 与 oracle 同构」。 |
 | 权限门被绕过（出现 45/52/752） | **`FAIL`**（`T-273` 的「抬权只作用于单次调用」被证伪），保留现场，转 `needs-human`。 |
 | 非回环 `AdminBind` 竟然起来了 | **`FAIL`**（安全边界被证伪），立即停栈，转 `needs-human`。 |
-| DB `Level` 变了 | **`FAIL`**；`LastUpdate` 等簿记列变化单列为**已知差异**。 |
+| DB `Level` 变了 | **`FAIL`**；`ModifyTime` 等簿记列变化单列为**已知差异**。 |
 | 中途停了 cargo / 有人动了树 | 本次窗口**判作废**（`VOID`），重开窗，不挑「好的那几条」上报。 |
 
 **红线**：
