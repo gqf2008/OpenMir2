@@ -30,7 +30,8 @@
 「**写**进去的值是否真实存在」。
 
 用法：
-  python -I tools/collab/oid_gate.py check [--limit N] [--json out.json]
+  python -I tools/collab/oid_gate.py check [--limit N] [--json out.json]   # 默认读 tools/collab/oid_gate_baseline.json
+  python -I tools/collab/oid_gate.py check --no-baseline                   # 关闭豁免（恢复严格判定）
   python -I tools/collab/oid_gate.py verify <oid> [...]        # 全 oid 才过，打印解析结果
   python -I tools/collab/oid_gate.py --selftest                # 合成夹具自证
 """
@@ -140,6 +141,15 @@ def load_entry_ids(repo, git_cmd=("git",)):
     out = _git(repo, ["for-each-ref", "--format=%(refname)", "refs/collab/inbox/"],
                git_cmd=git_cmd).stdout
     return {ln.rsplit("/", 1)[-1] for ln in out.splitlines() if ln.strip()}
+
+
+#: 仓库内缺省豁免清单（卡 `openmir2-oid-gate-default-baseline`；与 `--audit-baseline` 现有口径对齐）。
+DEFAULT_BASELINE_REL = ("tools", "collab", "oid_gate_baseline.json")
+
+
+def default_baseline_path(repo):
+    """仓库内缺省 baseline 的路径（不判断存在性；缺失交给 `load_baseline` ⇒ rc=2）。"""
+    return os.path.join(repo, *DEFAULT_BASELINE_REL)
 
 
 def load_baseline(path):
@@ -649,7 +659,10 @@ def main(argv=None):
     ap.add_argument("--repo", default=".")
     ap.add_argument("--limit", type=int, default=DEFAULT_LIMIT)
     ap.add_argument("--json")
-    ap.add_argument("--baseline", help="逐条豁免清单（历史坏条目）；缺失/空 ⇒ rc=2")
+    _bl = ap.add_mutually_exclusive_group()
+    _bl.add_argument("--baseline", help="逐条豁免清单（历史坏条目）；缺失/空 ⇒ rc=2")
+    _bl.add_argument("--no-baseline", action="store_true",
+                     help="显式关闭豁免（恢复严格判定；此时历史坏条目重新判红）")
     ap.add_argument("--audit-baseline", action="store_true",
                     help="逐条核 baseline 的 entry_oid：必须是 blob 且 principal/thread/field/value 绑定一致"
                          "（0 全核过 / 1 不一致并点名 / 2 判不了）")
@@ -668,8 +681,11 @@ def main(argv=None):
                 print(r)
     elif args.cmd in ("check", "gate"):
         if args.audit_baseline:
-            bpath = args.baseline or os.path.join(
-                repo, "tools", "collab", "oid_gate_baseline.json")
+            if args.no_baseline:
+                print("用法错：--no-baseline 与 --audit-baseline 互斥（审计必须有一个 baseline 可核）",
+                      file=sys.stderr)
+                return 2
+            bpath = args.baseline or default_baseline_path(repo)
             # **C1（reviewer-21 `5b2b7171`）**：审计通过后 main 会继续跑真仓库 check；
             # 必须把 bpath 一起传下去，否则 args.baseline=None ⇒ 历史豁免按「已豁免 0」全红、
             # 把 `--audit-baseline` 的返回码覆盖掉。
@@ -686,6 +702,13 @@ def main(argv=None):
             # N1：通过也必须说话（静默成功与「没跑」在日志里分不开）
             print("AUDIT-OK %d 条（entry_oid 均为 blob，principal/thread/field/value 与条目一致）"
                   % _baseline_count(bpath))
+        # 卡 `openmir2-oid-gate-default-baseline`：**不传 `--baseline` 时缺省加载仓库内清单**
+        # （与 `--audit-baseline` 同口径）；`--no-baseline` 显式关闭豁免 ⇒ 恢复严格判定。
+        # 默认文件缺失/不可解析**不在这里吞掉**：交给 `load_baseline` 抛 GitUnavailable ⇒ rc=2（fail-closed）。
+        if args.no_baseline:
+            args.baseline = None
+        elif args.baseline is None:
+            args.baseline = default_baseline_path(repo)
         if args.cmd == "gate":
             st = selfcheck()
             if st != 0:
@@ -943,6 +966,47 @@ def selfcheck():
     finally:
         globals()["check_entries"] = _orig_check
     chk(rc_gate == 1, "接线牙：把真仓库 check 换成必红 ⇒ `gate` 必须红（只跑自测不算接入；rc=%d）" % rc_gate)
+
+    # ---- 卡 `openmir2-oid-gate-default-baseline`：默认加载 / `--no-baseline` / fail-closed ----
+    # 三颗牙都走 **CLI（main）**，因为缺省取参就发生在那一层。
+    _default_bl = os.path.join(tmp, "tools", "collab", "oid_gate_baseline.json")
+    os.makedirs(os.path.dirname(_default_bl), exist_ok=True)
+    subprocess.run(["git", "-C", tmp, "update-ref", "refs/collab/inbox/dev/fixture-bad-entry",
+                    blob_oid], check=True, env=env)       # 重新挂上上面删掉的坏条目
+    with io.open(_default_bl, "w", encoding="utf-8", newline="") as fh:
+        fh.write(_json_b.dumps({"format": "oid-gate-baseline/1", "entries": [{
+            "principal": "dev", "thread": "th-fixture", "entry_oid": blob_oid,
+            "field": "refs.head", "value": missing,
+            "reason": "默认加载牙（夹具）", "added_at": "2026-11-01", "added_by": "t"}]}))
+    _buf_d = io.StringIO()
+    with _cl_gate.redirect_stdout(_buf_d):
+        rc_def = main(["check", "--repo", tmp])
+    _out_def = _buf_d.getvalue()
+    chk(rc_def == 0 and "豁免 1 处" in _out_def and "baseline 共 1 条" in _out_def,
+        "默认加载牙①：不带 --baseline ⇒ 读仓库内 tools/collab/oid_gate_baseline.json"
+        "并豁免（rc=%d，%r）" % (rc_def, _out_def[:110]))
+    _buf_nb = io.StringIO()
+    with _cl_gate.redirect_stdout(_buf_nb):
+        rc_nb = main(["check", "--repo", tmp, "--no-baseline"])
+    _out_nb = _buf_nb.getvalue()
+    chk(rc_nb == 1 and "th-fixture" in _out_nb and "已豁免 0" in _out_nb,
+        "默认加载牙②：--no-baseline ⇒ 恢复严格 rc=1 并点名（rc=%d，%r）"
+        % (rc_nb, _out_nb[:110]))
+    os.replace(_default_bl, _default_bl + ".bak")          # 让**默认**文件缺失
+    try:
+        _buf_m = io.StringIO()
+        with _cl_gate.redirect_stdout(_buf_m):
+            rc_missing = main(["check", "--repo", tmp])
+        chk(rc_missing == 2 and "baseline 文件缺失" in _buf_m.getvalue(),
+            "默认加载牙③：默认 baseline 缺失 ⇒ rc=2 fail-closed（rc=%d）" % (rc_missing,))
+    finally:
+        os.replace(_default_bl + ".bak", _default_bl)
+    _buf_a = io.StringIO()
+    with _cl_gate.redirect_stdout(_buf_a):
+        rc_absent = main(["check", "--repo", tmp, "--baseline", os.path.join(tmp, "nope.json")])
+    chk(rc_absent == 2, "默认加载牙④：显式 --baseline 指向不存在路径 ⇒ rc=2（rc=%d）" % (rc_absent,))
+    subprocess.run(["git", "-C", tmp, "update-ref", "-d", "refs/collab/inbox/dev/fixture-bad-entry"],
+                   check=True, env=env)
 
     print("%s: oid_gate selftest %d/%d" % ("GREEN" if not bad else "RED", ok, ok + bad))
     return 0 if not bad else 1

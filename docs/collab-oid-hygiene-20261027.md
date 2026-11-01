@@ -41,6 +41,25 @@ python -I tools/collab/oid_gate.py check --limit 1000 --json out.json
 ——两处都是 `openmir2-dev-2` 的 `parent` 写成了 40 位臆造值（`4da5b01a…`、`66fda9a7…`）。
 按卡的 forbidden「**只报不改**」，仅在此登记，不回写历史。
 
+### 缺省 baseline 与 `--no-baseline`（2026-11-01，卡 `openmir2-oid-gate-default-baseline`）
+
+`check` / `gate` **不传 `--baseline`** 时，缺省加载仓库内
+`tools/collab/oid_gate_baseline.json`（与 `--audit-baseline` 现有口径对齐）：
+
+```sh
+python -I tools/collab/oid_gate.py check                 # 默认扫 200 条 + 读仓库内 baseline
+python -I tools/collab/oid_gate.py check --no-baseline    # 关闭豁免，恢复严格判定
+python -I tools/collab/oid_gate.py check --baseline <path>  # 显式清单（旧行为，不变）
+```
+
+- **`--no-baseline` 是逃生口，不是掩码开关**：显式不带豁免跑 ⇒ 历史坏条目重新判红（rc=1），
+  证明「豁免可关、逐条可核」；
+- **fail-closed**：默认清单文件**缺失 / 读不了 / 为空** ⇒ **rc=2**（判不了），
+  绝不退化成「空清单 ⇒ 全绿」；显式 `--baseline <不存在路径>` 同样 rc=2；
+- `--no-baseline` 与 `--audit-baseline` 互斥（审计必须有清单可核）；
+- 豁免仍是**逐条精确匹配**（键含 `entry_oid`），默认加载不会掩掉新错误：
+  新坏条目不在清单里 ⇒ 仍 rc=1。
+
 ## 写侧：`tools/collab/sign_entry.sh`（fail-closed 包装）
 
 ```sh
