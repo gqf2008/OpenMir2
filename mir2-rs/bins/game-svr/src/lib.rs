@@ -24034,26 +24034,52 @@ fn admin_peer_is_allowed(peer: std::net::SocketAddr) -> bool {
     peer.ip().is_loopback()
 }
 
+/// accept 层对端准入策略（卡 `openmir2-admin-loopback-wiring-tooth` F2-a）。
+///
+/// **生产构建只有 [`Self::LoopbackOnly`] 一个臂**（测试构建额外有 [`Self::DenyAll`]）：
+/// 把 [`run_admin_listener_with`] 的准入接缝从裸 `fn(SocketAddr) -> bool` 收紧为这个
+/// 「唯一生产构造」的枚举，于是「生产传的就是这个判据」不再是人工审计，而是**编译期约束**——
+/// 生产路径写 `|_peer| true` 这类恒真闭包会类型不匹配、**编译失败**（变异记录见卡）。
+#[derive(Clone, Copy, Debug)]
+enum AdminPeerPolicy {
+    /// 生产策略：只接受回环对端（唯一的生产构造）。
+    LoopbackOnly,
+    /// 测试策略：一律拒绝（仅用于证明 accept 层的丢弃分支真的接线）。
+    #[cfg(test)]
+    DenyAll,
+}
+
+impl AdminPeerPolicy {
+    /// 该策略是否放行 `peer`。
+    fn allows(self, peer: std::net::SocketAddr) -> bool {
+        match self {
+            Self::LoopbackOnly => admin_peer_is_allowed(peer),
+            #[cfg(test)]
+            Self::DenyAll => false,
+        }
+    }
+}
+
 /// admin 通道 accept 循环（卡 `openmir2-mcp-gm-execute`，T-273）。
 ///
-/// **只接受回环对端**：配置层已把 `AdminBind` 限制到回环地址，这里再按 [`admin_peer_is_allowed`]
-/// 做一次纵深防御（不依赖绑定地址的单一判据）。
+/// **只接受回环对端**：配置层已把 `AdminBind` 限制到回环地址，这里再按
+/// [`AdminPeerPolicy::LoopbackOnly`]（唯一生产构造）做一次纵深防御（不依赖绑定地址的单一判据）。
 async fn run_admin_listener(
     listener: tokio::net::TcpListener,
     ev_tx: std::sync::mpsc::Sender<GateEvent>,
     shutdown: std::sync::Arc<tokio::sync::Notify>,
 ) {
-    run_admin_listener_with(listener, ev_tx, shutdown, admin_peer_is_allowed).await;
+    run_admin_listener_with(listener, ev_tx, shutdown, AdminPeerPolicy::LoopbackOnly).await;
 }
 
-/// [`run_admin_listener`] 的本体：`allow_peer` 是**对端准入接缝**（生产传
-/// [`admin_peer_is_allowed`]；测试注入「一律拒绝」的判据，证明这条守卫真的接线——见
-/// `admin_channel_tests::admin_listener_drops_peer_rejected_by_guard`）。
+/// [`run_admin_listener`] 的本体：`policy` 是**对端准入接缝**（生产传
+/// [`AdminPeerPolicy::LoopbackOnly`]；测试注入 [`AdminPeerPolicy::DenyAll`]，证明这条守卫
+/// 真的接线——见 `admin_channel_tests::admin_listener_drops_peer_rejected_by_guard`）。
 async fn run_admin_listener_with(
     listener: tokio::net::TcpListener,
     ev_tx: std::sync::mpsc::Sender<GateEvent>,
     shutdown: std::sync::Arc<tokio::sync::Notify>,
-    allow_peer: fn(std::net::SocketAddr) -> bool,
+    policy: AdminPeerPolicy,
 ) {
     let addr = listener
         .local_addr()
@@ -24073,7 +24099,7 @@ async fn run_admin_listener_with(
                 break;
             }
         };
-        if !allow_peer(peer) {
+        if !policy.allows(peer) {
             glog!("WRN", "admin 拒绝非回环连接 {peer}（纵深防御）");
             drop(stream);
             continue;
@@ -86084,14 +86110,18 @@ mod admin_channel_tests {
 
     /// F2（卡 `openmir2-mcp-admin-review-minors`）：accept 层准入判据**本身**必须拒绝非回环对端。
     ///
-    /// 变异自证：把 [`admin_peer_is_allowed`] 的函数体改成 `true`（等价于删掉
-    /// `peer.ip().is_loopback()` 校验）⇒ 非回环分支的断言必红。
+    /// 判据经**生产策略** [`AdminPeerPolicy::LoopbackOnly`] 驱动（而不是直接调
+    /// [`admin_peer_is_allowed`]），因此既钉住函数体，又钉住「生产臂确实委托给它」。
+    ///
+    /// 变异自证：把 [`admin_peer_is_allowed`] 的函数体改成 `true`，或把
+    /// [`AdminPeerPolicy::LoopbackOnly`] 臂改成 `true`（等价于删掉 `peer.ip().is_loopback()`
+    /// 校验）⇒ 非回环分支的断言必红。
     #[test]
     fn admin_peer_guard_rejects_non_loopback_peers() {
         let parse = |s: &str| s.parse::<std::net::SocketAddr>().expect("SocketAddr");
         for peer in ["127.0.0.1:7946", "127.1.2.3:7946", "[::1]:7946"] {
             assert!(
-                admin_peer_is_allowed(parse(peer)),
+                AdminPeerPolicy::LoopbackOnly.allows(parse(peer)),
                 "回环对端必须放行：{peer}"
             );
         }
@@ -86104,21 +86134,48 @@ mod admin_channel_tests {
             "[2001:db8::1]:7946",
         ] {
             assert!(
-                !admin_peer_is_allowed(parse(peer)),
+                !AdminPeerPolicy::LoopbackOnly.allows(parse(peer)),
                 "非回环对端必须拒绝：{peer}"
             );
         }
+    }
+
+    /// F2-b（卡 `openmir2-admin-loopback-wiring-tooth`）：IPv4-mapped IPv6 回环
+    /// （`::ffff:127.0.0.1`）被 std 的 `Ipv6Addr::is_loopback()` 判为**非回环** ⇒ 拒绝。
+    ///
+    /// 这是**刻意 fail-closed**（与 `parse_admin_bind` 对同一字面量的行为一致）：宁可连不上，
+    /// 也不把 GM 执行面暴露给一个「看起来像回环」的地址。放行它需要显式
+    /// `to_ipv4_mapped()` 映射，属安全边界变更，不随本卡做。
+    ///
+    /// 变异自证：把回环判据放宽（例如改成 `!ip.is_unspecified()`，或加上
+    /// `to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())`）⇒ 本用例必红。
+    #[test]
+    fn admin_peer_guard_rejects_ipv4_mapped_ipv6_loopback() {
+        let peer: std::net::SocketAddr = "[::ffff:127.0.0.1]:7946".parse().expect("SocketAddr");
+        assert!(
+            peer.ip().is_ipv6(),
+            "前提：该字面量必须解析成 IPv6 套接字：{peer}"
+        );
+        assert!(
+            !peer.ip().is_loopback(),
+            "前提：std 对 IPv4-mapped 回环返回 false（若标准库改变，此断言先红）"
+        );
+        assert!(
+            !AdminPeerPolicy::LoopbackOnly.allows(peer),
+            "IPv4-mapped IPv6 回环是刻意 fail-closed（拒绝）：{peer}"
+        );
     }
 
     /// F2 接线牙：真实的 [`run_admin_listener_with`] 在判据拒绝对端时必须**直接丢连接**
     /// （不投 `AdminGm`、不写任何响应）。
     ///
     /// 真实 TCP 测试无法伪造「非回环 peer」（连接必然来自本机回环），因此这里注入
-    /// 「一律拒绝」的判据来模拟 accept 层的拒绝分支；判据语义由
-    /// [`admin_peer_guard_rejects_non_loopback_peers`] 单独钉住，两者合起来 = 生产调用点
-    /// [`run_admin_listener`] 传入 [`admin_peer_is_allowed`]。
+    /// [`AdminPeerPolicy::DenyAll`] 来模拟 accept 层的拒绝分支；判据语义由
+    /// [`admin_peer_guard_rejects_non_loopback_peers`] 单独钉住，而生产调用点
+    /// [`run_admin_listener`] 只能传 [`AdminPeerPolicy::LoopbackOnly`]（枚举唯一生产构造 ⇒
+    /// 换成恒真闭包会编译失败，见卡 `openmir2-admin-loopback-wiring-tooth` F2-a）。
     ///
-    /// 变异自证：删掉 accept 循环里的 `if !allow_peer(peer) { … continue; }` 守卫 ⇒ 对端会被
+    /// 变异自证：删掉 accept 循环里的 `if !policy.allows(peer) { … continue; }` 守卫 ⇒ 对端会被
     /// 正常服务并收到 JSON 回包（`Ok(n)` 分支）⇒ 本用例必红。
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn admin_listener_drops_peer_rejected_by_guard() {
@@ -86147,7 +86204,7 @@ mod admin_channel_tests {
             listener,
             ev_tx.clone(),
             std::sync::Arc::clone(&notify),
-            |_peer| false,
+            AdminPeerPolicy::DenyAll,
         ));
 
         let stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
