@@ -14,7 +14,7 @@ fi
 cd "$wt" || exit 1
 common="Read $brief and execute it (the brief is on this machine). Work ONLY inside your own worktree (the cd above; NEVER edit, commit or push in the shared main checkout E:/Users/gxh/Documents/GitHub/OpenMir2 -- it is the rev lane's worktree; if you need a build use your own worktree with CARGO_TARGET_DIR under E:/tmp). Deliver via walgit as the brief says; "
 if [ "$role" = "merge" ]; then
-  exec pi -p -- "$common YOU ARE THE MERGE CHECKPOINT LANE: merging approved cards into master IS your job -- follow the brief's admission criteria, four gates and dual push exactly; never review, never author, never hand-resolve conflicts (abort instead). Do NOT self-sign: never sign a review of your own patch. Tag: $tag" \
+  exec pi -p -- "$common YOU ARE THE MERGE CHECKPOINT LANE: merging approved cards into master IS your job -- follow the brief's admission criteria, five gates (4 cargo: fmt/clippy/test/msgcodegen + prose anchor: python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <merge-target ref>, run it on the branch being merged) and push walgit only (origin is a manual mirror, never auto-push) exactly; never review, never author, never hand-resolve conflicts (abort instead). Do NOT self-sign: never sign a review of your own patch. Tag: $tag" \
     < /dev/null >> "$watch/agent-$tag.log" 2>&1
 fi
 exec pi -p -- "$common do NOT merge. Do NOT self-sign: never sign a review of your own patch. If you are a reviewer lane, you MUST sign a 'kind=review' entry (approve/request_changes) for the patch you audited, per your brief. Tag: $tag" \

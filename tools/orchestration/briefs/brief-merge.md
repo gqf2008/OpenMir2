@@ -5,7 +5,7 @@
 
 ## 你的职责（只做这一件事）
 
-把看板【待审】列里**已经有非作者 approve 覆盖当前 head** 的卡合入 `master`，推 `origin` + `walgit`，并落 `merge_result` + `status`。
+把看板【待审】列里**已经有非作者 approve 覆盖当前 head** 的卡合入 `master`，推 `walgit`（代码主源；`origin` 仅人工同步镜像，本车道不自动推），并落 `merge_result` + `status`。
 
 - **你不写代码、不改卡内容、不做审查结论**：审查由 `rev`/`rev2` 车道出 `review`，你只消费它。
 - 你不替作者解冲突；有冲突就退回并留证据。
@@ -14,19 +14,19 @@
 ## 每 burst 硬流程（一步都不许跳）
 
 1. `cd` 到你自己的 worktree（`lanes.conf` 第 2 列，`lane-run.sh` 已经 `cd` 进去）；然后
-   `git fetch walgit '+refs/collab/*:refs/collab/*'`、`git fetch origin`、`git fetch walgit`。
+   `git fetch walgit '+refs/collab/*:refs/collab/*'`、`git fetch walgit`（无 refspec，刷新全部分支；`origin` 仅人工同步镜像，不参与本车道）。
 2. `walgit collab board` 取【待审】。对每一张：`walgit collab thread <id>`，读出
    **最后一条 `patch` 的 `head`/`base`/`branch`** 与**所有 `review` 条目的 `{actor, decision, reviewed_head}`**。
 3. **准入判据（四条全过才合；缺任何一条 ⇒ 跳过并在该卡留一条 `comment` 说明原因）**：
    1. 存在 `decision=approve` 且 `reviewed_head` **等于**该卡当前被审 head，且 approve 的 `actor` ≠ patch 作者；
-   2. `git ls-remote --heads origin <branch>` / `walgit <branch>` 的 tip **等于** `reviewed_head`
+   2. `git ls-remote --heads walgit <branch>` 的 tip **等于** `reviewed_head`（`origin` 仅人工同步镜像，不作准入依据）
       （tip 动过 ⇒ 新内容没被审过 ⇒ 跳过）；
    3. 边界干净：`git diff --name-only <merge-base(master,head)> <head>` 不含 `src/`（`src/BotSrv/` 例外，须有
       whitelist `T-*` 登记）、`sql/`、`MirClient`、`mir2-rs/crates/protocol`、`mir2-rs/crates/storage`；
    4. 该 head **尚未**在 master 里（`git merge-base --is-ancestor <head> master` 为假）。
 4. 合并（你自己一份 master 副本，别用主检出）：
    ```
-   git fetch origin && git reset --hard origin/master
+   git fetch walgit && git reset --hard walgit/master
    git merge --no-commit --no-ff <reviewed_head>
    ```
    - **有冲突 ⇒ `git merge --abort`**，在该卡 `comment` 写冲突文件清单 + "需作者 rebase 到 master `<oid>` 后重交
@@ -42,19 +42,19 @@
    CARGO_TARGET_DIR=E:/tmp/openmir2-merge-target cargo run -p msgcodegen -- --check
    ```
 
-   **散文锚（增量）**（同样在待合并内容上跑；本车道 merge 后 HEAD 的 merge-base 即 `origin/master`）：
+   **散文锚（增量）**（同样在待合并内容上跑；本车道 merge 后 HEAD 的 merge-base 即 `walgit/master`；`origin` 仅人工同步镜像）：
    ```
-   python -I -B tools/hygiene/docs_anchor_gate.py --prose --base origin/master
+   python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master
    ```
-   `--base` 取**合并目标 ref**（本车道为 `origin/master`），**不要**在合入 master 之后才用 `--base master` 跑：
+   `--base` 取**合并目标 ref**（本车道为 `walgit/master`），**不要**在合入 master 之后才用 `--base master` 跑：
    那时 `merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，什么都没扫。
    只核新增行（域：`docs/` 下 `.md` 反引号内的 `.rs`/`.cs` `path:line`），对历史悬空锚无感；
    历史清理仍归 `stale_pointer_gate`，二者不可互相替代。
    四档计数：检查 N（域内锚总数）/ 悬空 M（文件不存在）/ 越界 K（行号超文件长度）/ 符号缺失 S（锚紧邻声明的反引号符号
    不在锚定行/区间内）；**M+K+S>0 ⇒ rc=1**，检查 0 ⇒ rc=0，`git`/`--base` 解析失败 ⇒ rc=2（判不了）。
-   任一红 ⇒ `git reset --hard origin/master` 撤掉这次合并，在卡上 `comment` 记录红项原文，**不许"先推了再说"**。
-6. 推送：`git push origin HEAD:refs/heads/master` + `git push walgit HEAD:refs/heads/master`，
-   然后 `git ls-remote --heads origin master` 与 `walgit master` **复核两边都等于刚推的 oid**。
+   任一红 ⇒ `git reset --hard walgit/master` 撤掉这次合并，在卡上 `comment` 记录红项原文，**不许"先推了再说"**。
+6. 推送：`git push walgit HEAD:refs/heads/master`（`origin` 仅人工同步镜像，本车道不自动推），
+   然后 `git ls-remote --heads walgit master` **复核等于刚推的 oid**；GitHub 镜像由人工另行同步，不在本车道判据内。
 7. 落两条记录（`--parent` 用**当场重读**的该线程最后一条 entry 的 oid，别凭记忆）：
    - `merge_result`：`{"card","merged":true,"oid","head","base","approve","gates","boundary","pushed"}`
      （`gates` 写实测读数：`fmt/clippy/test suites/passed/failed/ignored/msgcodegen/prose_anchor`
