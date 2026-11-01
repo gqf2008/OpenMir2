@@ -173,4 +173,4 @@ run id 清单（逐字取自台账条目；`013200-652` 为台账原文缩写）
 
 - **master**：`3994ce468`（review-10 的合并节点）；自 `aad30901f` 起共 13 次合并（whitelist / 工具 / 注释面），台账 `c3f98adc`。
 - **goal_gate --full 四条件 PASS**（台账 `c3f98adc`，基线 master `3994ce468`）：①脚本派发 106/106（调用 11829，未实现 0）；②R 卡 291 张 @ 3994ce468（三者皆无 0）；③B 类 tracked=0 @ 3994ce468；④门禁 8 项 8 绿。
-- **cargo test**：running 3550 / passed 3481 / ignored 69 / failed 0（143 suites，rc=0），tester verdict **GREEN**（条目 `a333d0ca`）。注意实测点是 `aad30901f`，`last-tested` 未推进到 `3994ce468`；`aad30901f`→`3994ce468` 的合并面为 docs / whitelist / tools 与 `.rs` 注释行，各卡 review 已逐行确认零代码行，故三元组沿用；`3994ce468` 上未单独重跑全量 cargo（未取证）。
+- **cargo test**：`3994ce468` 上 goal_gate 完整模式实跑（台账 `c3f98adc`）与合并树门禁各一次（merge_result `d8b1dd22`），running 3550 / passed 3481 / ignored 69 / failed 0（143 suites，rc=0）；tester 独立复核的三元组实测点为 `aad30901f`（条目 `a333d0ca`，verdict GREEN）。
