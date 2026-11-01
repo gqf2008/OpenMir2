@@ -105,6 +105,7 @@ SERVER_EXE_BUILD Release
 | 6 | 端口基线 | `powershell -NoProfile -ExecutionPolicy Bypass -File E:\MirServer\port-status.ps1 -Out <证据目录>\port-before.txt` | 十端口在听 + 3306 UP；落盘后再读文件（不要管道截输出） |
 | 7 | 规则登记齐 | 见 `docs/window-runbook-20261023.md` §1 第 5 条的 `missing: []` 自查 | `missing: []` |
 | 8 | 方案确认 | 本文件的 `NOT_RUN` 项在台账里仍是「未跑」 | 台账/看板一致 |
+| 9 | 桌面可用（三信号，缺一不可） | 见 §2.3：开窗前跑 ① / ②，开窗后、采集前跑 ③ | `SIG1_OK` + `SIG2_OK` + 客户端日志新增 `key_char`；任一不满足 ⇒ `NOT_RUN (desktop-locked)`，**窗口不开** |
 
 ### 2.2 窗口期硬纪律
 
@@ -128,6 +129,136 @@ SERVER_EXE_BUILD Release
    窗口内**不再起**任何第二套 conformance 栈（同库并发会互相污染 DB 后态）。
 7. **证据目录**：`E:\tmp\admin-window-20261101\`（本次窗口新建；收窗把路径登记进交付报告 §残留物）。
 8. **不许把「没跑到」写成「通过」**：见 §6。
+
+### 2.3 开窗前的桌面可用性检查（机判，三信号缺一不可）
+
+**为什么**：锁屏（或前台是安全桌面）时，客户端 SDL 收不到键盘焦点与鼠标 motion，采到的帧面 / RNG 证据**不可信**。
+2026-11-02 对端实测：`OpenInputDesktop` 返回 0 / err=5（ACCESS_DENIED），`LockApp`(11472) 与 `LogonUI`(7328) 在场、
+`GetForegroundWindow()` 为空。本条把「桌面是否真的可用」固化成**开窗前机判**，不靠人回忆；**不许写成可选**。
+
+**判据（三条全部为真才算可用，缺一不可）**
+
+| # | 信号 | 通过条件 | 失败通常意味着 |
+|---:|---|---|---|
+| ① | 输入桌面可访问 | `OpenInputDesktop(0,false,DESKTOP_READOBJECTS)` 返回非 0（调用后立即 `CloseDesktop`） | 锁屏 / 无交互会话：返回 0，`GetLastWin32Error()` 常见 5（ACCESS_DENIED） |
+| ② | 前台窗口不是安全桌面 | `GetForegroundWindow()` 非空，且其所属进程名不是 `LockApp` / `LogonUI` | 锁屏（前台属 `LockApp`）或登录界面（`LogonUI`） |
+| ③ | 客户端确实收到字符输入 | 向客户端窗口 `PostMessage(WM_CHAR)` 后，客户端日志新增一行 `key_char` | 桌面看着没锁，但 SDL 没拿到键盘焦点（② 会漏掉这一类） |
+
+> **不要把 ① 当唯一判据**：2026-11-02 在 dev-1 车道同一锁屏会话上实测，① 仍返回非 0
+> （`SIG1_OK hWnd=2016`），而 ② 判出前台属 `LockApp`。所以三条必须同时为真。
+
+#### ① 输入桌面可访问（逐字可复制）
+
+```powershell
+if (-not ('Win32.InputDesktop' -as [type])) {
+Add-Type -Namespace Win32 -Name InputDesktop -MemberDefinition @'
+[DllImport("user32.dll", SetLastError=true)]
+public static extern System.IntPtr OpenInputDesktop(uint dwFlags, bool fInherit, uint dwDesiredAccess);
+[DllImport("user32.dll", SetLastError=true)]
+public static extern bool CloseDesktop(System.IntPtr hDesktop);
+'@
+}
+$DESKTOP_READOBJECTS = 0x0001
+$h = [Win32.InputDesktop]::OpenInputDesktop(0, $false, $DESKTOP_READOBJECTS)
+if ($h -eq [System.IntPtr]::Zero) {
+  $err = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
+  "SIG1_FAIL err=$err"
+} else {
+  [void][Win32.InputDesktop]::CloseDesktop($h)
+  "SIG1_OK hWnd=$h"
+}
+```
+
+期望末行 `SIG1_OK ...`；出现 `SIG1_FAIL ...` ⇒ 中止（见本节末「处置」）。
+
+#### ② 前台窗口不是安全桌面（逐字可复制）
+
+```powershell
+if (-not ('Win32.Foreground' -as [type])) {
+Add-Type -Namespace Win32 -Name Foreground -MemberDefinition @'
+[DllImport("user32.dll")]
+public static extern System.IntPtr GetForegroundWindow();
+[DllImport("user32.dll")]
+public static extern uint GetWindowThreadProcessId(System.IntPtr hWnd, out uint lpdwProcessId);
+'@
+}
+$fg = [Win32.Foreground]::GetForegroundWindow()
+if ($fg -eq [System.IntPtr]::Zero) {
+  "SIG2_FAIL err=foreground-window-empty"
+} else {
+  $procId = 0   # 不要用 $pid：PowerShell 只读自动变量
+  [void][Win32.Foreground]::GetWindowThreadProcessId($fg, [ref]$procId)
+  $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+  if (-not $proc) {
+    "SIG2_FAIL err=foreground-owner-gone pid=$procId"
+  } else {
+    "SIG2_INFO hwnd=$fg pid=$procId name=$($proc.ProcessName)"
+    if ($proc.ProcessName -in @('LockApp','LogonUI')) {
+      "SIG2_FAIL err=secure-desktop-owner name=$($proc.ProcessName)"
+    } else {
+      "SIG2_OK"
+    }
+  }
+}
+# 诊断（不参与判定）：LockApp / LogonUI 是否在跑
+$secure = @(Get-Process -Name LockApp,LogonUI -ErrorAction SilentlyContinue)
+if ($secure) { "SIG2_DIAG secure_process_present=" + (($secure | ForEach-Object { "$($_.ProcessName):$($_.Id)" }) -join ',') }
+```
+
+期望同时出现 `SIG2_OK`（且没有 `SIG2_FAIL`）。
+
+#### ③ WM_CHAR 探针（开窗后、采集前）
+
+③ 需要**客户端已经起来**，所以放在开窗之后、任何帧面 / RNG 采集之前。它依赖客户端侧 harness 把收到的字符
+写进日志（事件名 `key_char`）；harness 由对端维护，本仓只消费它的日志，日志路径以对端当轮给出的为准
+（下面用 `<客户端日志路径>` 占位，替换后再跑）。片段用 pwsh 7 / PowerShell 5.1 均可（只用 `Add-Type` 与 `Get-Process`）。
+
+```powershell
+$ProcName   = 'MirClinet'          # 用 MirClientZig 时改成 MirClientZig
+$LogPath    = '<客户端日志路径>'
+$CharCode   = 0x41                 # 'A'
+$TimeoutSec = 5
+if (-not ('Win32.CharProbe' -as [type])) {
+Add-Type -Namespace Win32 -Name CharProbe -MemberDefinition @'
+[DllImport("user32.dll", CharSet=CharSet.Unicode, SetLastError=true)]
+public static extern bool PostMessageW(System.IntPtr hWnd, uint Msg, System.IntPtr wParam, System.IntPtr lParam);
+'@
+}
+$WM_CHAR = 0x0102
+if (-not (Test-Path -LiteralPath $LogPath)) { "SIG3_FAIL err=log-missing path=$LogPath"; return }
+$p = Get-Process -Name $ProcName -ErrorAction SilentlyContinue |
+     Where-Object { $_.MainWindowHandle -ne [System.IntPtr]::Zero } |
+     Select-Object -First 1
+if (-not $p) { "SIG3_FAIL err=no-client-window process=$ProcName"; return }
+$hwnd = $p.MainWindowHandle
+"SIG3_TARGET hwnd=$hwnd pid=$($p.Id)"
+$before = @(Select-String -LiteralPath $LogPath -Pattern 'key_char' -ErrorAction SilentlyContinue).Count
+if (-not [Win32.CharProbe]::PostMessageW($hwnd, $WM_CHAR, [System.IntPtr]$CharCode, [System.IntPtr]1)) {
+  "SIG3_FAIL err=PostMessage rc=$([System.Runtime.InteropServices.Marshal]::GetLastWin32Error())"; return
+}
+$deadline = (Get-Date).AddSeconds($TimeoutSec)
+$after = $before
+while ($after -le $before -and (Get-Date) -lt $deadline) {
+  Start-Sleep -Milliseconds 250
+  $after = @(Select-String -LiteralPath $LogPath -Pattern 'key_char' -ErrorAction SilentlyContinue).Count
+}
+if ($after -gt $before) { "SIG3_OK key_char +$($after - $before)" }
+else { "SIG3_FAIL err=no-key_char timeout=${TimeoutSec}s log=$LogPath" }
+```
+
+期望末行 `SIG3_OK key_char +1`（或更多）；出现 `SIG3_FAIL err=no-key_char` ⇒ 桌面看着没锁、
+但客户端没拿到键盘输入 ⇒ 中止。
+
+#### 处置（任一不满足）
+
+- **窗口不开**；台账该项记 **`NOT_RUN (desktop-locked)`**，不采集任何帧面 / RNG 证据。
+- **不得**记「未通过」（那是环境不满足、不是判据失败，口径同 §6 第一行），也**不得**「跳过即通过」（不跑 ≠ 通过）。
+- 先解决桌面（解锁 / 换到有交互的会话 / 等锁屏退出），再从头跑 ①②；③ 在客户端起来后重跑。
+
+> 片段自测（2026-11-02，dev-1 车道，只跑只读探测、未起客户端 / 栈）：① 输出 `SIG1_OK hWnd=2016`；
+> ② 在同一锁屏会话上输出 `SIG2_INFO ... name=LockApp` + `SIG2_FAIL err=secure-desktop-owner`；
+> ③ 只做了编译与「日志缺失 / 无客户端窗口」两个失败分支的自测（`SIG3_FAIL err=log-missing`、
+> `SIG3_FAIL err=no-client-window`），未向任何窗口发键。
 
 ---
 
