@@ -931,7 +931,8 @@ def _check_blocked(bl):
     * `missing_fixture` 可选，给了就必须是**非空**字符串（空串按「没写」处理会掩盖信息，fail-closed）；
     * `not_in_run3_reason` 可选，给了就必须**非空**（字符串或对象）；它是
       `tools/window/blocked_sources_check.py:591` 读取的结构化封存理由（`{reason, evidence[]}`），
-      **接受集合与那边对齐**（卡 `openmir2-probe-blocked-schema-align`）；空串/空对象/其它类型
+      **接受该键的结构化形态；纯文本的取舍由 `tools/window/blocked_sources_check.py` 深门判定
+      （本驱动为浅层装载器）**（卡 `openmir2-probe-blocked-schema-align`）；空串/空对象/其它类型
       ⇒ rc=2 点名本键（不放宽）；
     * 未知键 fail-closed（与 `scenario.placement` 同口径）。
 
