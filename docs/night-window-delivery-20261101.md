@@ -134,7 +134,7 @@ run id 清单（逐字取自台账条目；`013200-652` 为台账原文缩写）
 - 症状（master 基线）：`clearmapmon_t118` / `combat_hit` / `combat_strike` / `p21_unequip` / `pickup_item` 五场景 `--check-scenario` **rc=2**，错误 `scenario.blocked has unknown key(s): ['not_in_run3_reason'] (fail-closed)`（patch `8423ecc3` 的 `repro_before`）。
 - 修法：`_check_blocked` 的 optional 键集合加入 `not_in_run3_reason`，要求**非空**（非空字符串或非空对象）（`tools/probe/mir2_probe.py:945`、`:958-963`）。
 - **未放宽**：`reason` 仍必填、未知键仍拒、`not_in_run3_reason` 空串 / 空对象 / `null` / 其它类型仍点名本键 rc=2；负例 10 坏例 + 3 正例；5 支变异（删 optional 键 / 删非空校验 / 仅放开空对象臂 / 仅放开类型臂 / 去 `reason` 必填）均使 selftest rc=2，恢复后 blob `2c3fc68e…`；selftest 29 checks OK（status `568cc8e3`）。
-- 参照方订正：卡面原写 `scenario_manifest_gate`，实际读场景 `blocked.not_in_run3_reason` 的是 **`tools/window/blocked_sources_check.py:591`**（`scenario_manifest_gate.py:159` 读的是豁免 TOML，不解析场景 blocked）——审者 `4b5cf9ed` 复核确认。
+- 参照方订正：卡面原写 `scenario_manifest_gate`，实际读场景 `blocked.not_in_run3_reason` 的是 **`tools/window/blocked_sources_check.py:591`**（`tools/hygiene/scenario_manifest_gate.py:159` 读的是豁免 TOML，不解析场景 blocked）——审者 `4b5cf9ed` 复核确认。
 - 复跑：5 个场景 + `login_only` / `softclose_relogin` 全 rc=0（`568cc8e3`）。
 - 收口：review `4b5cf9ed`（reviewer-20，approve，tier=L；2 条 nit 非阻塞：docstring 措辞比参照方宽、显式 `null` 被当缺省放过，深判仍在 `blocked_sources_check`）→ merge `1f23c0c9e` → closed `44246b49`。
 
