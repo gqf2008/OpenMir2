@@ -21,7 +21,7 @@
         │
         ▼
    merge 车道（role=merge，principal=`openmir2-coordinator`）：把「非作者 approve 覆盖当前 head」的卡
-   合入 master（准入判据 + 合并树五门禁：4 条 cargo（fmt/clippy/test/msgcodegen）+ 散文锚 `python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <合并目标 ref>`（在待合并分支上跑）；推 origin/walgit）→ 写 `merge_result` + `status`
+   合入 master（准入判据 + 合并树五门禁：4 条 cargo（fmt/clippy/test/msgcodegen）+ 散文锚 `python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <合并目标 ref>`（在待合并分支上跑）；推 walgit，`origin` 仅人工同步镜像）→ 写 `merge_result` + `status`
 ```
 
 **要点：控制台（交互会话）不在这个循环里。** 它只是人的面（观察 `lane-status.log`/看板、派活、验收）。循环必须由**独立进程**拥有——起在交互会话的进程树里会被误杀，这是本项目反复踩过的坑。

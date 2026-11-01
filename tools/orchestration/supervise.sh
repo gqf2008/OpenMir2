@@ -34,7 +34,7 @@ for tag in $(grep '|reviewer|' "$watch/lanes.conf" | cut -d'|' -f1); do
   if ! alive "$tag"; then echo "$(date '+%H:%M:%S') relaunch reviewer $tag"; bash "$watch/start-lane.sh" "$tag"; fi
 done
 # ---- ④ merge 重拉（owner 2026-10-13 同意：审批通过即自动合并）----
-# 合并检查点车道：把【待审】里「非作者 approve 覆盖当前 head」的卡合入 master（准入判据 + 五门禁（4 条 cargo：fmt/clippy/test/msgcodegen + 散文锚 python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <合并目标 ref>，在待合并分支上跑）+ 双端推送
+# 合并检查点车道：把【待审】里「非作者 approve 覆盖当前 head」的卡合入 master（准入判据 + 五门禁（4 条 cargo：fmt/clippy/test/msgcodegen + 散文锚 python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <合并目标 ref>，在待合并分支上跑）+ 推 walgit（`origin` 仅人工同步镜像）
 # 见 briefs/brief-merge.md）。与 reviewer 车道一样**不受 maxworker 限制**，但**必须每 tick 保证在**
 # —— 它是全流程的出口，缺了它队列只会越堆越长（2026-10-13 实测：待审堆到 7 张，人工清完车道又交 6 张）。
 for tag in $(grep '|merge|' "$watch/lanes.conf" | cut -d'|' -f1); do
