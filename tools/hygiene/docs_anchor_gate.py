@@ -41,11 +41,34 @@ reviewer-21 审 M-1 后记时发现：矩阵里的 oracle/harness 行号**在合
 不剥 / raw string 不剥 / 字符字面量与生命期区分 / **剥后行数不变**。本文件的 `strip_rust_comments`
 与那 6 条逐条对应，且各有单测（**剥离层与判据层分开测**：剥离错了不会被判据的绿盖住）。
 
+## 散文锚模式（卡 `openmir2-docs-prose-anchor-scan`）
+
+上面的 `run()` 只遍历 registry 登记文件、且**只扫表格位置列**（`if not line.startswith("|")`），
+因此 `docs/**` 正文（散文）里的 `path:line` 锚**不在门内**——2026-11-02 夜间报告写了不存在的
+`mir2-rs/crates/protocol/src/smframe.rs:39-51`，本门仍 GREEN。`--prose` 补这个盲区：
+
+* **只扫增量**：`git diff <merge-base(--base, HEAD)> <worktree>` 的**新增行**（默认 pathspec `docs/`，
+  且只判 `.md`）。历史散文锚是当时记录（全量扫会立刻淹在历史烂账里）⇒ 不要求一次清理。
+* 每个 `path:line` / `path:start-end` 逐个核：① 文件存在 ② 行号在文件长度内
+  ③ 锚**紧邻**的反引号标识符（如 `` `src/a.rs:4` `alpha` ``，「能提取时」）出现在锚定行/区间内
+  （`.rs` 先剥注释，注释里的符号不算）。
+* 输出 `检查 N / 悬空 M / 越界 K / 符号缺失 S`；任一非 0 ⇒ rc=1。**空输入显式回答**
+  `检查 0 …（新增行里没有任何 path:line 锚）` 并 rc=0，与「扫了 N 条全过」的输出可区分。
+* **已知域限制（F4，必须知道）**：只识别**反引号包裹的 `.rs`/`.cs`**（`LINE_ANCHOR_RE`）。
+  指向 `.py`/`.md`/`.toml` 等其它扩展名的锚、以及**非反引号**的裸 `path:line` 都**不可见**。
+  因此 `检查 0` 只表示「本模式域内没有锚」，**不等于**「新增行里所有锚都干净」。
+* 行号上界按**真实行数**（`splitlines()`），文件末尾换行不会多算一行：末行合法、
+  末行+1 必红（两种文件形态都有牙与变异钉住）。
+* `git` 无法执行 / `git merge-base` 失败 / base 解析不到 ⇒ **rc=2（判不了）**，绝不静默跳过；
+  绝不与「判出问题（rc=1）」混用同一码。
+
 ## 用法
 
 ```sh
 python -I -B tools/hygiene/docs_anchor_gate.py              # 0 绿 / 1 红 / 2 判不了（含配置坏）
 python -I -B tools/hygiene/docs_anchor_gate.py --list       # 列锚 + 例外
+python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master   # 散文锚增量
+python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <sha> --paths docs/some.md --list
 python -I -B tools/hygiene/docs_anchor_gate.py --selftest
 ```
 """
@@ -68,6 +91,13 @@ RAW_STRING_RE = re.compile(r'(?:b)?r(#*)"')
 LINE_ANCHOR_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.(?:rs|cs)):(\d+)(?:-(\d+))?`")
 #: 位置列里的符号锚：`` `file.rs` `sym` ``
 SYMBOL_ANCHOR_RE = re.compile(r"`([A-Za-z0-9_./\-]+\.(?:rs|cs))`\s+`([A-Za-z_][A-Za-z0-9_]*)`")
+#: 散文锚的**紧邻符号**：`` `file.rs:4` `alpha` ``（锚后）或 `` `alpha` `file.rs:4` ``（锚前）
+PROSE_SYM_AFTER_RE = re.compile(r"\s+`([A-Za-z_][A-Za-z0-9_]*)`")
+PROSE_SYM_BEFORE_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`\s+$")
+#: 去掉会污染 git 子进程的环境变量（`GIT_DIR` 一旦继承，临时仓库的自测会写进真仓库）
+GIT_ENV_DROP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+#: git 可执行名（自测用假名注入「git 不在 PATH」的负例，见 `_prose_teeth`）
+GIT_BIN = "git"
 
 
 # ---------------------------------------------------------------- 剥离层
@@ -543,6 +573,161 @@ def _check_symbol(repo, reg, rel_f, sym, lineno, cache):
             "detail": "剥注释后按完整标识符找不到 `%s`（候选文件都搜过）" % sym}
 
 
+# ---------------------------------------------------------------- 散文锚模式
+# 卡 `openmir2-docs-prose-anchor-scan`：既有 `run()` 只扫 registry 登记文件里的**表格位置列**，
+# `docs/**` 正文里的 `path:line` 锚完全在域外。历史散文锚是当时记录（全量扫会淹在历史烂账里，
+# `stale_pointer_gate` 的 unresolved 即证据）⇒ 本模式**只扫增量**：`git diff` 的新增行。
+
+def _git_env():
+    env = dict(os.environ)
+    for k in GIT_ENV_DROP:
+        env.pop(k, None)
+    return env
+
+
+def _git_out(repo, args):
+    """跑只读 git；返回 (rc, stdout, stderr)，文本按 UTF-8 容错解码。
+
+    git **不存在**（未安装 / 不在 PATH）不是「发现问题」而是「判不了」⇒ 捕获 OSError
+    并返回 rc=127，让调用方收敛到 rc=2（reviewer-21 F3：原实现抛 FileNotFoundError ⇒ rc=1）。
+    """
+    import subprocess
+    try:
+        p = subprocess.run([GIT_BIN, "-C", repo] + list(args), stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, env=_git_env())
+    except (FileNotFoundError, OSError) as e:
+        return 127, "", "git 无法执行（%s）：%s" % (GIT_BIN, e)
+    return (p.returncode,
+            p.stdout.decode("utf-8", "replace"),
+            p.stderr.decode("utf-8", "replace"))
+
+
+def collect_added_lines(repo, base, pathspecs):
+    """取 `git diff <merge-base(base,HEAD)> <worktree>` 的新增行：([(doc, text)], error)。
+
+    用 worktree（而非 `...HEAD`）是有意的：干净树上等价于 `merge-base...HEAD`，
+    而在提交前跑也能抓到**尚未提交**的假锚（A4 自证用）。
+    """
+    rc, out, err = _git_out(repo, ["merge-base", base, "HEAD"])
+    if rc != 0:
+        return None, "git merge-base %s HEAD 失败：%s" % (base, err.strip() or "rc=%d" % rc)
+    mb = out.strip()
+    if not re.fullmatch(r"[0-9a-f]{40}", mb):
+        return None, "merge-base 不是 40 位小写 hex：%r" % mb
+    cmd = ["diff", "--unified=0", "--no-color", "--no-ext-diff", mb, "--"]
+    cmd += list(pathspecs)
+    rc, out, err = _git_out(repo, cmd)
+    if rc != 0:
+        return None, "git diff 失败：%s" % (err.strip() or "rc=%d" % rc)
+    added, cur = [], None
+    for line in out.split("\n"):
+        if line.startswith("+++ "):
+            p = line[4:].strip()
+            cur = None if p == "/dev/null" else (p[2:] if p.startswith("b/") else p)
+            continue
+        if cur is not None and line.startswith("+") and not line.startswith("+++"):
+            added.append((cur, line[1:]))
+    return added, None
+
+
+def _prose_adjacent_symbols(line, m):
+    """锚**紧邻**的反引号标识符（只认纯标识符；`` `fail_frame(x)` `` 这类不认）。"""
+    syms = []
+    mm = PROSE_SYM_AFTER_RE.match(line, m.end())
+    if mm:
+        syms.append(mm.group(1))
+    mm2 = PROSE_SYM_BEFORE_RE.search(line[:m.start()])
+    if mm2:
+        syms.append(mm2.group(1))
+    return syms
+
+
+def _prose_read_lines(repo, path, cache):
+    if path not in cache:
+        with open(os.path.join(repo, path), encoding="utf-8", errors="replace") as fh:
+            raw = fh.read()
+        if path.endswith(".rs"):
+            raw = strip_rust_comments(raw)  # 注释里的符号不算命中
+        # **行数必须是真实行数**：`split("\n")` 在文件以换行结尾时会多出一个空元素
+        #（4 行文件 ⇒ len=5），从而放过 `:(真实行数+1)` 的越界锚（reviewer-21 F1）。
+        cache[path] = raw.splitlines()
+    return cache[path]
+
+
+def scan_prose(repo, base, reg_path=None, pathspecs=("docs/",), list_only=False):
+    """散文锚增量扫描。rc：0 绿 / 1 红 / 2 判不了（git/base/registry 问题）。"""
+    try:
+        reg = load_registry(reg_path or os.path.join(repo, REGISTRY_REL))
+    except Exception as e:
+        print("prose-anchor gate：登记表坏（base_dirs 来源）：%s" % e, file=sys.stderr)
+        return 2
+    added, err = collect_added_lines(repo, base, pathspecs)
+    if added is None:
+        print("prose-anchor gate：%s" % err, file=sys.stderr)
+        return 2
+    findings, checked, cache = [], 0, {}
+    for doc, line in added:
+        if not (doc.startswith("docs/") and doc.endswith(".md")):
+            continue  # 域：docs/** 的 markdown 正文（表格行也照判，是超集）
+        for m in LINE_ANCHOR_RE.finditer(line):
+            checked += 1
+            rel_f, start = m.group(1), int(m.group(2))
+            end = int(m.group(3)) if m.group(3) else start
+            syms = _prose_adjacent_symbols(line, m)
+            cands = [os.path.normpath(b + rel_f).replace("\\", "/") for b in reg["base_dirs"]]
+            cands = [c for c in cands if os.path.isfile(os.path.join(repo, c))]
+            if not cands:
+                findings.append({"why": "PROSE_ANCHOR_PATH_MISSING", "doc": doc,
+                                 "raw": m.group(0), "detail": "base_dirs 都解析不到"})
+                continue
+            line_lists, ok_bounds = [], False
+            for c in cands:
+                lines = _prose_read_lines(repo, c, cache)
+                line_lists.append((c, lines))
+                if 1 <= start <= end <= len(lines):
+                    ok_bounds = True
+            if not ok_bounds:
+                findings.append({"why": "PROSE_ANCHOR_LINE_OUT_OF_RANGE", "doc": doc,
+                                 "raw": m.group(0),
+                                 "detail": "行号区间 %d-%d 越界（候选文件行数 %s）"
+                                           % (start, end, ", ".join(
+                                               "%s=%d" % (c, len(ls)) for c, ls in line_lists))})
+                continue
+            missing = []
+            for sym in syms:
+                pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(sym) + r"(?![A-Za-z0-9_])")
+                hit = any(len(ls) >= end and pat.search("\n".join(ls[start - 1:end]))
+                          for _c, ls in line_lists)
+                if not hit:
+                    missing.append(sym)
+            if missing:
+                findings.append({"why": "PROSE_ANCHOR_SYMBOL_MISSING", "doc": doc,
+                                 "raw": m.group(0),
+                                 "detail": "锚定行 %d-%d 不含声明的符号 %s"
+                                           % (start, end, ", ".join("`%s`" % s for s in missing))})
+    if list_only:
+        for doc, line in added:
+            if doc.startswith("docs/") and doc.endswith(".md"):
+                for m in LINE_ANCHOR_RE.finditer(line):
+                    print("%s  %s" % (doc, m.group(0)))
+        print("检查 %d" % checked)
+        return 0
+    dangling = [f for f in findings if f["why"] == "PROSE_ANCHOR_PATH_MISSING"]
+    oor = [f for f in findings if f["why"] == "PROSE_ANCHOR_LINE_OUT_OF_RANGE"]
+    symmiss = [f for f in findings if f["why"] == "PROSE_ANCHOR_SYMBOL_MISSING"]
+    for f in findings:
+        print("%-30s %s  %s  %s" % (f["why"], f["doc"], f["raw"], f.get("detail", "")))
+    if checked == 0:
+        print("prose-anchor gate：检查 0 / 悬空 0 / 越界 0"
+              "（新增行里没有任何 path:line 锚；仅反引号内 .rs/.cs，检查 0 ≠ 全部锚干净）")
+        print("RESULT: GREEN")
+        return 0
+    print("prose-anchor gate：检查 %d / 悬空 %d / 越界 %d / 符号缺失 %d"
+          % (checked, len(dangling), len(oor), len(symmiss)))
+    print("RESULT: %s" % ("RED" if findings else "GREEN"))
+    return 1 if findings else 0
+
+
 # ---------------------------------------------------------------- selftest
 
 def selftest():
@@ -614,6 +799,7 @@ def selftest():
         shutil.rmtree(tmp, ignore_errors=True)
 
     ok.extend(_extra_teeth())
+    ok.extend(_prose_teeth())
     fails = [(n, d) for n, good, d in ok if not good]
     for n, good, d in ok:
         print("%s %s%s" % ("PASS" if good else "FAIL", n, "" if good else "  %r" % (d,)))
@@ -630,9 +816,159 @@ def _cap(fn, *args):
     return rc, buf.getvalue()
 
 
+def _prose_teeth():
+    """散文锚模式的牙（卡 `openmir2-docs-prose-anchor-scan` A2/A3）。
+
+    在**临时 git 仓库**里造基线与增量，三种坏锚各自必红 + 正例必绿；
+    另钉「空输入回答 检查 0」与「扫了 N 条全过」的**输出必须可区分**。
+    自测只碰 tempdir（不读真仓库状态）。
+    """
+    import subprocess
+    ok = []
+
+    def check(name, cond, detail=""):
+        ok.append((name, bool(cond), detail))
+
+    tmp = tempfile.mkdtemp(prefix="dag-prose-")
+    try:
+        def g(*args):
+            p = subprocess.run(["git", "-C", tmp] + list(args), stdout=subprocess.PIPE,
+                               stderr=subprocess.PIPE, env=_git_env())
+            if p.returncode != 0:
+                raise RuntimeError("git %s: %s"
+                                   % (" ".join(args), p.stderr.decode("utf-8", "replace")))
+            return p.stdout.decode("utf-8", "replace")
+
+        os.makedirs(os.path.join(tmp, "docs"))
+        os.makedirs(os.path.join(tmp, "src"))
+        with open(os.path.join(tmp, "src", "a.rs"), "w", encoding="utf-8") as fh:
+            # 1 fn alpha / 2 注释里有 beta / 3 } / 4 fn beta  —— **带末尾换行**（4 行）
+            fh.write("fn alpha() {\n    // beta only in a comment\n}\nfn beta() {}\n")
+        with open(os.path.join(tmp, "src", "b.rs"), "w", encoding="utf-8") as fh:
+            # 1 fn gamma / 2 fn delta  —— **不带末尾换行**（2 行）
+            fh.write("fn gamma() {}\nfn delta() {}")
+        with open(os.path.join(tmp, "docs", "base.md"), "w", encoding="utf-8") as fh:
+            fh.write("历史散文锚 `src/a.rs:1`（基线，不应被增量模式扫到）\n")
+        g("init", "-q")
+        g("config", "user.email", "selftest@example.invalid")
+        g("config", "user.name", "selftest")
+        g("config", "commit.gpgsign", "false")
+        g("add", "-A")
+        g("commit", "-q", "-m", "base")
+        base = g("rev-parse", "HEAD").strip()
+        reg = os.path.join(tmp, "reg.toml")
+        with open(reg, "w", encoding="utf-8") as fh:
+            fh.write('[[base_dirs]]\ndir = ""\n')
+
+        def write_doc(line):
+            with open(os.path.join(tmp, "docs", "base.md"), "w", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+
+        # ① 正例：文件在、行号在、紧邻符号在 ⇒ 绿，且输出「检查 1」而不是空输入话术
+        write_doc("正例 `src/a.rs:4` `beta`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("散文锚正例 ⇒ 绿（检查 1 / 悬空 0 / 越界 0）",
+              rc == 0 and "RESULT: GREEN" in out and "检查 1 / 悬空 0 / 越界 0" in out,
+              out[-300:])
+        check("正例输出 ≠ 空输入话术（不得出现「没有任何」）", "没有任何" not in out, out[-300:])
+
+        # ② 文件不存在 ⇒ 红
+        write_doc("坏 `src/no_such_file.rs:1`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙①路径不存在 ⇒ 红（悬空 1）",
+              rc == 1 and "PROSE_ANCHOR_PATH_MISSING" in out and "悬空 1" in out, out[-300:])
+
+        # ③ 行号越界 ⇒ 红
+        write_doc("坏 `src/a.rs:99`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙②行号越界 ⇒ 红（越界 1）",
+              rc == 1 and "PROSE_ANCHOR_LINE_OUT_OF_RANGE" in out and "越界 1" in out, out[-300:])
+
+        # ④ 锚定行不含声明符号 ⇒ 红
+        write_doc("坏 `src/a.rs:4` `alpha`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙③行内容不含声明符号 ⇒ 红（符号缺失 1）",
+              rc == 1 and "PROSE_ANCHOR_SYMBOL_MISSING" in out and "符号缺失 1" in out, out[-300:])
+
+        # ⑤ 符号只在注释里（.rs 先剥注释）⇒ 红
+        write_doc("坏 `src/a.rs:2` `beta`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙④符号只在注释里（剥注释后不算命中）⇒ 红",
+              rc == 1 and "PROSE_ANCHOR_SYMBOL_MISSING" in out, out[-300:])
+
+        # ⑤b 边界（reviewer-21 F1/F2）：真实行数上界必须被钉死，且带/不带末尾换行都测
+        #      a.rs 带末尾换行 ⇒ 真实 4 行：:4 绿、:5 红
+        #      b.rs 不带末尾换行 ⇒ 真实 2 行：:2 绿、:3 红
+        write_doc("边界 `src/a.rs:4` `beta`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("边界①带末尾换行：末行 :4 ⇒ 绿", rc == 0 and "越界 0" in out, out[-300:])
+        write_doc("边界 `src/a.rs:5`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("边界②带末尾换行：末行+1 :5 ⇒ 红（越界 1）",
+              rc == 1 and "PROSE_ANCHOR_LINE_OUT_OF_RANGE" in out and "越界 1" in out,
+              out[-300:])
+        write_doc("边界 `src/b.rs:2` `delta`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("边界③不带末尾换行：末行 :2 ⇒ 绿", rc == 0 and "越界 0" in out, out[-300:])
+        write_doc("边界 `src/b.rs:3`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("边界④不带末尾换行：末行+1 :3 ⇒ 红（越界 1）",
+              rc == 1 and "PROSE_ANCHOR_LINE_OUT_OF_RANGE" in out and "越界 1" in out,
+              out[-300:])
+
+        # ⑥ 空输入（新增行没有锚）⇒ 明确「检查 0」rc=0，且与「扫了 N 条全过」可区分
+        write_doc("这一行没有任何锚，只是普通散文")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("空输入 ⇒ rc=0 且显式「检查 0 …（新增行里没有任何 path:line 锚）」",
+              rc == 0 and "检查 0 / 悬空 0 / 越界 0" in out and "没有任何" in out, out[-300:])
+
+        # ⑦ base 解析不到 ⇒ rc=2（判不了，不静默跳过）；stderr 也收进断言，别让 PASS 行带噪声
+        import io
+        from contextlib import redirect_stderr
+        errbuf = io.StringIO()
+        with redirect_stderr(errbuf):
+            rc, out = _cap(scan_prose, tmp, "deadbeef" * 5, reg)
+        check("base 解析不到 ⇒ rc=2（判不了）且点名 merge-base",
+              rc == 2 and "merge-base" in errbuf.getvalue(), (rc, errbuf.getvalue()[-140:]))
+
+        # ⑧ git 无法执行 ⇒ rc=2（判不了），不得抛 traceback / rc=1（reviewer-21 F3）
+        old_git = globals()["GIT_BIN"]
+        globals()["GIT_BIN"] = "definitely-no-such-git-binary-xyz"
+        errbuf2 = io.StringIO()
+        try:
+            with redirect_stderr(errbuf2):
+                rc, out = _cap(scan_prose, tmp, base, reg)
+        finally:
+            globals()["GIT_BIN"] = old_git
+        check("git 无法执行 ⇒ rc=2（判不了，不抛 traceback）",
+              rc == 2 and "无法执行" in errbuf2.getvalue(), (rc, errbuf2.getvalue()[-140:]))
+        check("git 注入牙已还原 GIT_BIN（接缝元断言）", globals()["GIT_BIN"] == old_git,
+              globals()["GIT_BIN"])
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    return ok
+
+
 def main(argv):
     if "--selftest" in argv:
         return selftest()
+    if "--prose" in argv:
+        if "--base" not in argv or argv.index("--base") + 1 >= len(argv):
+            print("prose-anchor gate：--prose 必须配 --base <ref>（如 walgit/master）",
+                  file=sys.stderr)
+            return 2
+        base = argv[argv.index("--base") + 1]
+        repo = argv[argv.index("--repo") + 1] if "--repo" in argv else REPO
+        reg = (argv[argv.index("--registry") + 1] if "--registry" in argv
+               else os.path.join(repo, REGISTRY_REL))
+        pathspecs = ["docs/"]
+        if "--paths" in argv:
+            pathspecs = [argv[i + 1] for i, a in enumerate(argv)
+                         if a == "--paths" and i + 1 < len(argv)]
+            if not pathspecs:
+                print("prose-anchor gate：--paths 缺参数", file=sys.stderr)
+                return 2
+        return scan_prose(repo, base, reg, tuple(pathspecs), list_only="--list" in argv)
     reg = os.path.join(REPO, REGISTRY_REL)
     if "--registry" in argv:
         reg = argv[argv.index("--registry") + 1]
