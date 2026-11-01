@@ -1,6 +1,8 @@
 //! MCP 服务：六个工具（`gm_list` / `gm_help` / `conf_get` / `conf_keys` / `conf_set` / `gm_execute`）。
 //!
-//! 传输是**本地 stdio**，不监听任何端口。工具输出统一走 `structured_content`：
+//! 传输是**本地 stdio**，不监听任何端口。`gm_execute` 经 game-svr 的**本机 admin 通道**
+//! （逐行 JSON，缺省关闭）执行，执行核心在 game-svr 内（与客户端 `@` / 脚本 `GMEXECUTE`
+//! 同一收口）。工具输出统一走 `structured_content`：
 //! 成功 `{"ok":true,…}`；拒绝 `CallToolResult::structured_error({"ok":false,"code":…,"wrote":false})`。
 //! 任何校验失败都返回结构化错误，不 panic。
 
@@ -57,12 +59,19 @@ pub struct ConfSetReq {
     pub dry_run: bool,
 }
 
-/// `gm_execute` 入参（本片只回 `not_wired`）。
+/// `gm_execute` 入参（卡 `openmir2-mcp-gm-execute` 钉扎 `{chr, cmd}`）。
+///
+/// `name`/`params` 是 slice-1 的兼容字段：**只在 `cmd` 缺失时**合成命令行
+/// `@<name> <params…>`，走与 `cmd` 完全相同的执行路径——不是第二套语义。
 #[derive(Debug, Default, Deserialize, JsonSchema)]
 pub struct GmExecuteReq {
-    /// 现网命令名。
-    pub name: String,
-    /// 参数槽（本片不解参数）。
+    /// 在线角色名（必填；game-svr 里按会话名查）。
+    pub chr: Option<String>,
+    /// 完整命令行（权威字段，`@` 开头），如 `@时间` / `@LoadAdmin`。
+    pub cmd: Option<String>,
+    /// 兼容 slice-1：命令名（仅当 `cmd` 缺失时用于合成命令行）。
+    pub name: Option<String>,
+    /// 兼容 slice-1：参数槽（仅当 `cmd` 缺失时拼到合成命令行尾部）。
     #[serde(default)]
     pub params: Option<Vec<String>>,
 }
@@ -108,6 +117,25 @@ impl Mir2Mcp {
 
     fn conf_error(&self, error: ConfError) -> CallToolResult {
         CallToolResult::structured_error(error.to_json())
+    }
+
+    /// `gm_execute` 的目标地址：env `MIR2_MCP_ADMIN_ADDR` > `127.0.0.1:<[Admin] AdminPort>`。
+    ///
+    /// `AdminPort` 缺省 0（game-svr 不监听）⇒ 结构化 `admin_not_configured`。
+    fn admin_addr(&self) -> Result<String, Value> {
+        if let Some(addr) = self.config.admin_addr.as_deref() {
+            return Ok(addr.to_string());
+        }
+        let port = conf::admin_port(&self.config).map_err(|e| e.to_json())?;
+        if port == 0 {
+            return Err(json!({
+                "ok": false,
+                "code": "admin_not_configured",
+                "message": "gm_execute 需要 game-svr 本机 admin 通道：请在 M2GameSvr/Server.conf 写 [Admin] AdminPort=<端口>（缺省 0 = 不监听），或设置 env MIR2_MCP_ADMIN_ADDR",
+                "wrote": false,
+            }));
+        }
+        Ok(format!("127.0.0.1:{port}"))
     }
 }
 
@@ -274,33 +302,96 @@ impl Mir2Mcp {
         }
     }
 
-    /// 本片不接线：返回结构化 `not_wired`（需要 game-svr admin 通道，留 slice-2）。
+    /// 经 game-svr 本机 admin 通道执行一条 GM 命令（`{chr, cmd}`）。
+    ///
+    /// 执行核心在 game-svr（`gmcmd::execute` + 事件末 GM 收口），本工具只传命令并透传结果：
+    /// 未配置/连不上/超时/未知角色/未知命令全部返回结构化错误，不伪造执行。
     #[tool(
-        description = "本片未接线：返回结构化 not_wired（执行 GM 命令需要 game-svr admin 通道，留 slice-2），不会伪造执行。",
-        annotations(read_only_hint = true, open_world_hint = false)
+        description = "经 game-svr 本机 admin 通道执行 GM 命令：入参 {chr, cmd}（cmd 为完整 @ 命令行，如 \"@时间\"）。返回 game-svr 的 {ok,error,frames,note}；未配置通道/连不上/超时/未知角色/未知命令均为结构化错误，不会伪造执行。",
+        annotations(destructive_hint = true, open_world_hint = true)
     )]
     fn gm_execute(&self, Parameters(req): Parameters<GmExecuteReq>) -> CallToolResult {
-        let command = self.catalog().ok().and_then(|c| c.find(req.name.trim()));
-        let mut value = json!({
-            "ok": false,
-            "status": "not_wired",
-            "code": "not_wired",
-            "message": "gm_execute 未接线：执行 GM 命令需要 game-svr admin 通道（slice-2），本片不伪造执行",
-            "slice": "slice-2",
-            "requires": "game-svr admin 通道",
-            "command_found": command.is_some(),
-            "params": req.params.unwrap_or_default(),
-            "wrote": false,
-        });
-        if let Some(command) = command {
-            value["command"] = entry_json(command);
+        // ① `chr` 必填。
+        let Some(chr) = req.chr.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
+            return CallToolResult::structured_error(json!({
+                "ok": false,
+                "code": "missing_chr",
+                "message": "gm_execute 需要 {chr, cmd}：chr = 在线角色名（game-svr 会话名）",
+                "wrote": false,
+            }));
+        };
+        // ② 命令行：`cmd` 权威；`name`/`params` 仅作兼容合成，走同一条执行路径。
+        let cmd = match req.cmd.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+            Some(cmd) => cmd.to_string(),
+            None => {
+                let Some(name) = req.name.as_deref().map(str::trim).filter(|s| !s.is_empty())
+                else {
+                    return CallToolResult::structured_error(json!({
+                        "ok": false,
+                        "code": "missing_cmd",
+                        "message": "gm_execute 需要 {chr, cmd}（cmd 为完整 @ 命令行）",
+                        "wrote": false,
+                    }));
+                };
+                let mut line = format!("@{name}");
+                if let Some(params) = &req.params {
+                    for param in params {
+                        line.push(' ');
+                        line.push_str(param);
+                    }
+                }
+                line
+            }
+        };
+        if !cmd.starts_with('@') {
+            return CallToolResult::structured_error(json!({
+                "ok": false,
+                "code": "invalid_command",
+                "message": format!("`cmd` 必须是 `@` 开头的完整命令行：{cmd:?}"),
+                "chr": chr,
+                "cmd": cmd,
+                "wrote": false,
+            }));
         }
-        CallToolResult::structured_error(value)
+        // ③ 目标地址（未配置 ⇒ 结构化错误）。
+        let addr = match self.admin_addr() {
+            Ok(addr) => addr,
+            Err(value) => return CallToolResult::structured_error(value),
+        };
+        // ④ 投递 + 透传 game-svr 的结构化结果。
+        match crate::admin::execute(&addr, chr, &cmd) {
+            Ok(response) => {
+                let ok = response["ok"].as_bool().unwrap_or(false);
+                let mut out = json!({
+                    "ok": ok,
+                    "chr": chr,
+                    "cmd": cmd,
+                    "admin_addr": addr,
+                    "frames": response.get("frames").cloned().unwrap_or_else(|| json!(0)),
+                    "note": response.get("note").cloned().unwrap_or(Value::Null),
+                    "wrote": false,
+                });
+                if let Some(error) = response.get("error") {
+                    out["error"] = error.clone();
+                }
+                if ok {
+                    CallToolResult::structured(out)
+                } else {
+                    let code = out["error"]
+                        .as_str()
+                        .and_then(|e| e.split(':').next())
+                        .unwrap_or("command_failed");
+                    out["code"] = json!(code);
+                    CallToolResult::structured_error(out)
+                }
+            }
+            Err(failure) => CallToolResult::structured_error(failure.to_json(&addr, chr, &cmd)),
+        }
     }
 }
 
 #[tool_handler(
-    instructions = "OpenMir2 GM/开区配置 MCP 服务：gm_list / gm_help 暴露 185 条 GM 命令目录；conf_get / conf_keys / conf_set 读写 M2GameSvr/Server.conf 的白名单键；gm_execute 在 slice-1 返回结构化 not_wired。纯本地 stdio，不监听端口。"
+    instructions = "OpenMir2 GM/开区配置 MCP 服务：gm_list / gm_help 暴露 185 条 GM 命令目录；conf_get / conf_keys / conf_set 读写 M2GameSvr/Server.conf 的白名单键；gm_execute 经 game-svr 本机 admin 通道（[Admin] AdminPort，缺省关闭）执行 GM 命令并透传结构化结果。纯本地 stdio，不监听端口。"
 )]
 impl ServerHandler for Mir2Mcp {}
 

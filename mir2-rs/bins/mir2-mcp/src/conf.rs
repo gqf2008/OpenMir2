@@ -30,6 +30,11 @@ pub struct AppConfig {
     pub root: PathBuf,
     /// 可选：gm_list 改为实读该 `gm_registry.json`（缺省用编译期嵌入副本）。
     pub registry_path: Option<PathBuf>,
+    /// 可选：game-svr 本机 admin 通道地址（`gm_execute` 用）。
+    ///
+    /// 来源优先级：env `MIR2_MCP_ADMIN_ADDR` > 缺省 `127.0.0.1:<Server.conf [Admin] AdminPort>`。
+    /// 两者都没有（`AdminPort` 缺省 0）⇒ `gm_execute` 返回结构化 `admin_not_configured`。
+    pub admin_addr: Option<String>,
 }
 
 impl AppConfig {
@@ -38,9 +43,14 @@ impl AppConfig {
     pub fn from_env() -> Self {
         let root = std::env::var_os("MIR2_MCP_ROOT")
             .map_or_else(|| PathBuf::from("E:/MirServer"), PathBuf::from);
+        let admin_addr = std::env::var("MIR2_MCP_ADMIN_ADDR")
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty());
         Self {
             root,
             registry_path: None,
+            admin_addr,
         }
     }
 
@@ -330,6 +340,29 @@ pub fn conf_get(cfg: &AppConfig, section: &str, key: &str) -> Result<ConfRead, C
         found: found.is_some(),
         value: found.map(|e| e.value.clone()),
         line: found.map(|e| e.line),
+    })
+}
+
+/// `[Admin] AdminPort`（game-svr 本机 admin 通道端口）。
+///
+/// 缺键 / 空值 ⇒ `0`（与 game-svr `config.rs` 的缺省一致 = 不监听）。非 0 但非法 ⇒
+/// `InvalidValue`（fail-closed，不猜端口）。
+///
+/// # Errors
+///
+/// `Server.conf` 缺失/读失败/编码不支持，或 `AdminPort` 不是 `0..=65535` 的整数。
+pub fn admin_port(cfg: &AppConfig) -> Result<u16, ConfError> {
+    let read = conf_get(cfg, "Admin", "AdminPort")?;
+    let Some(raw) = read.value else {
+        return Ok(0);
+    };
+    let v = raw.trim();
+    if v.is_empty() {
+        return Ok(0);
+    }
+    v.parse::<u16>().map_err(|_| ConfError::InvalidValue {
+        value: v.to_string(),
+        reason: "AdminPort 不是合法端口（0..=65535）".to_string(),
     })
 }
 
@@ -795,6 +828,7 @@ mod tests {
             AppConfig {
                 root: self.path.clone(),
                 registry_path: None,
+                admin_addr: None,
             }
         }
     }
@@ -1123,5 +1157,26 @@ ProcessMonRandRate=5\r\n",
                 out.push((rel, fs::read(&path).unwrap()));
             }
         }
+    }
+
+    /// 卡 `openmir2-mcp-gm-execute`（T-273）：`[Admin] AdminPort` 的读取口径。
+    ///
+    /// 缺段/缺键/空值 ⇒ 0（= game-svr 不监听）；显式端口 ⇒ 解析；非法值 ⇒ fail-closed。
+    #[test]
+    fn admin_port_reads_section_with_zero_default() {
+        let root = TempRoot::new("admin-port");
+        // 缺 [Admin] 段（文件存在）⇒ 0。
+        root.write_conf(b"[Setup]\r\nGenMonRate=10\r\n");
+        assert_eq!(admin_port(&root.cfg()).unwrap(), 0);
+        // 空值 ⇒ 0（game-svr 同口径）。
+        root.write_conf(b"[Setup]\r\nGenMonRate=10\r\n[Admin]\r\nAdminPort=\r\n");
+        assert_eq!(admin_port(&root.cfg()).unwrap(), 0);
+        // 显式端口（大小写不敏感的段/键）⇒ 解析。
+        root.write_conf(b"[admin]\r\nadminport=7946\r\n");
+        assert_eq!(admin_port(&root.cfg()).unwrap(), 7946);
+        // 非法端口 ⇒ fail-closed。
+        root.write_conf(b"[Admin]\r\nAdminPort=70000\r\n");
+        let err = admin_port(&root.cfg()).expect_err("越界端口必须报错");
+        assert_eq!(err.code(), "invalid_value");
     }
 }

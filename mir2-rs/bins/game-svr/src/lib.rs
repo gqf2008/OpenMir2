@@ -197,6 +197,81 @@ enum GateEvent {
     ///
     /// 与 [`Self::Closed`] 的区别：这是**服务器主动**踢（不是对端断线）。
     KickAccount { account: String, session_id: i32 },
+    /// **本机 admin 通道**（卡 `openmir2-mcp-gm-execute`，T-273）：`mir2-mcp` 的 `gm_execute`
+    /// 把一条 `@…` 命令投进 sim 线程，由 [`execute_admin_gm_command`] 在**同一个事件收口**
+    /// （`gmcmd::execute` + `command_event_tail_gm_drain`）里执行，并把结构化结果回传。
+    ///
+    /// 回应走 `tokio::sync::oneshot`：sim 线程 `send` 非阻塞，I/O 任务 `await`。
+    AdminGm {
+        chr: String,
+        cmd: String,
+        reply: tokio::sync::oneshot::Sender<AdminGmReply>,
+    },
+}
+
+/// admin 通道的逐行 JSON 响应（卡 `openmir2-mcp-gm-execute`，T-273）。
+///
+/// 线上字段固定为 `{"ok":bool,"error":?string,"frames":N,"note":?string}`：
+/// - `error` = `"<code>: <detail>"`（`unknown_character` / `unknown_command` / `invalid_command` …）；
+/// - `frames` = 本次执行**产生的客户端帧数**（`SysMsg` + 非 `SysMsg` 直发帧）；
+/// - `note` = 命令回帧文本（无回帧则 `None`）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AdminGmReply {
+    pub ok: bool,
+    pub error: Option<String>,
+    pub frames: usize,
+    pub note: Option<String>,
+}
+
+impl AdminGmReply {
+    /// 结构化错误（不 panic、不静默）。
+    fn error(code: &str, detail: &str) -> Self {
+        Self {
+            ok: false,
+            error: Some(format!("{code}: {detail}")),
+            frames: 0,
+            note: None,
+        }
+    }
+
+    /// 序列化成一行 JSON（写回连接；`serde_json` 负责转义）。
+    fn to_json_line(&self) -> String {
+        serde_json::json!({
+            "ok": self.ok,
+            "error": self.error,
+            "frames": self.frames,
+            "note": self.note,
+        })
+        .to_string()
+    }
+}
+
+/// 从一行 JSON 里取 admin 请求的 `(chr, cmd)`。
+///
+/// 判据：对象里 `chr`/`cmd` 都必须是非空字符串；`cmd` 必须 `@` 开头（GM 命令行的 oracle 口径）。
+/// 任何不满足 ⇒ 结构化 `invalid_request`，不 panic。
+fn parse_admin_request(line: &str) -> Result<(String, String), AdminGmReply> {
+    let value: serde_json::Value = serde_json::from_str(line)
+        .map_err(|e| AdminGmReply::error("invalid_request", &format!("不是合法 JSON：{e}")))?;
+    let chr = value
+        .get("chr")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AdminGmReply::error("invalid_request", "缺非空字符串字段 `chr`"))?;
+    let cmd = value
+        .get("cmd")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| AdminGmReply::error("invalid_request", "缺非空字符串字段 `cmd`"))?;
+    if !cmd.starts_with('@') {
+        return Err(AdminGmReply::error(
+            "invalid_command",
+            &format!("`cmd` 必须以 `@` 开头：{cmd:?}"),
+        ));
+    }
+    Ok((chr.to_string(), cmd.to_string()))
 }
 
 /// C# `CommandMessage`（12B 解码态布局，`:11-24`）。
@@ -1291,6 +1366,27 @@ async fn run_inner(args: &[String]) -> Result<()> {
         });
     }
     spawn_shutdown_pipe_listener(shutdown_tx.clone(), std::sync::Arc::clone(&shutdown_signal));
+
+    // **本机 admin 通道**（卡 `openmir2-mcp-gm-execute`，T-273）：oracle 没有该项能力；
+    // `[Admin] AdminPort` 缺省 0 = 不监听 ⇒ 生产零行为差。只在显式配置时开，且 `AdminBind`
+    // 已在配置解析期限定为回环地址（非回环直接拒绝启动）；绑定失败也 fail-closed。
+    if cfg.admin_port != 0 {
+        let admin_listener = tokio::net::TcpListener::bind((cfg.admin_bind, cfg.admin_port))
+            .await
+            .with_context(|| {
+                format!(
+                    "绑定 admin 通道 {}:{} 失败（端口被占？）",
+                    cfg.admin_bind, cfg.admin_port
+                )
+            })?;
+        let admin_ev_tx = ev_tx.clone();
+        let admin_notify = std::sync::Arc::clone(&shutdown_signal);
+        tokio::spawn(async move {
+            run_admin_listener(admin_listener, admin_ev_tx, admin_notify).await;
+        });
+    } else {
+        glog!("INF", "本机 admin 通道未启用（[Admin] AdminPort=0；T-273）");
+    }
 
     // 登录服务器（IDS）链路：oracle 是 TcpClient 主动连它（`AuthenticationService.cs:22-34`），
     // 会话通知（SS_OPENSESSION/SS_CLOSESESSION）填/删准入表 ⇒ 认证链靠它
@@ -20882,6 +20978,191 @@ fn command_event_tail_gm_drain(
     );
 }
 
+/// admin 通道抬权值（oracle 脚本 `GMEXECUTE` 的 `Permission = 10`，`ExecutionProcessingSys.cs:4938`）。
+const ADMIN_GM_PERMISSION: u8 = 10;
+
+/// **本机 admin 通道的执行核心**（卡 `openmir2-mcp-gm-execute`，T-273）。
+///
+/// 设计约束（卡面 `scope_decisions`）：
+/// 1. **复用** `gmcmd::execute`，不另写一套 GM 执行；
+/// 2. 与客户端 `CM_SAY` / 脚本 `GMEXECUTE` **同一个收口**：本事件内的 `pending_*` 交给
+///    [`command_event_tail_gm_drain`] 落地（刷怪/造物读同一条世界 RNG 流）；
+/// 3. **只对该次调用抬权**到 [`ADMIN_GM_PERMISSION`]（等价脚本 `PermissionGuard`），
+///    执行结束立刻还原 `GmSession.permission`，**不写回会话持久权限**；
+/// 4. 世界视图与 `handle_gm_command`（`CM_SAY` 直呼）逐字段同源：`pose_target`/`quests`/
+///    `caller_guild`/`speaker_dir` 取自同一套宿主快照；
+/// 5. 未知角色/未知命令/非法命令行 ⇒ 结构化错误，不 panic、不静默。
+///
+/// 回帧顺序与 `CM_SAY` 支一致：先落 `pending_*` 的副作用帧（203/709/41/…），再发本次
+/// `SysMsg(100)`，最后发非 `SysMsg` 直发帧（`@AttackMode` 的 213）。
+#[allow(clippy::too_many_arguments)]
+fn execute_admin_gm_command(
+    ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
+    pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
+    saves: &mut std::collections::HashMap<String, SavedHuman>,
+    world: &mut mir2_world::World,
+    displays: &mut downlink::DisplayTable,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    filter_word: &std::cell::Cell<bool>,
+    mission: &std::cell::RefCell<gmcmd::GmMissionState>,
+    spirit_mutiny_tick: &std::cell::Cell<i64>,
+    mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    mon_table: &game_svr::mongen::MonsterTable,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
+    guilds: &mut mir2_world::GuildManager,
+    guild_cfg: &mir2_world::GuildConfig,
+    guild_store: Option<&mir2_data::guild::GuildStore>,
+    colors: &MsgColors,
+    enter_cfg: &EnterConfig,
+    chr: &str,
+    cmd: &str,
+    reconnect_pending: &mut Vec<ReconnectPending>,
+    castle_broadcasts: &mut Vec<String>,
+    item_number: &mut i32,
+    item_number_ex: &mut i32,
+) -> AdminGmReply {
+    // ① 执行前提：`chr` 必须是在线会话（oracle 里命令对象就是那个 `PlayObject`）。
+    let Some(session) = ground_sessions.get(chr) else {
+        return AdminGmReply::error("unknown_character", &format!("角色 {chr} 不在线"));
+    };
+    let actor_id = session.actor_id;
+    let caller_guild = gmcmd::GmGuildState {
+        guild_name: session.guild.guild_name.clone(),
+        rank_no: session.guild.rank_no,
+    };
+    // 与 `handle_gm_command` 同源的只读快照（任务位/面前格/会话 Dir/行会态）。
+    let quests = gm_quest_snapshot(saves);
+    let pose_target = script_pose_target(world, actor_id);
+    let speaker_dir = actor_dir(world, displays, actor_id);
+    let gm_cfg = gmcmd::GmConfig {
+        lock_human_login: enter_cfg.lock_human_login,
+        spirit_mutiny_time: enter_cfg.spirit_mutiny_time,
+        ..gmcmd::GmConfig::default()
+    };
+    // ② 只对该次调用抬权；`view` 借用的 `&world`/`&guilds` 必须在 drain 的 `&mut` 之前结束。
+    let (result, unknown) = {
+        let view = gmcmd::GmWorld {
+            guilds: &*guilds,
+            maps: registry,
+            world: Some(&*world),
+            speaker: chr,
+            speaker_id: actor_id,
+            now_ms: world.clock_ms,
+            pose_target: pose_target.as_deref(),
+            filter_word: Some(filter_word),
+            mission: Some(mission),
+            spirit_mutiny_tick: Some(spirit_mutiny_tick),
+            quests: Some(&quests),
+            speaker_dir,
+            caller_guild: Some(&caller_guild),
+            // 宿主持有刷怪/造物落地通道 ⇒ 有副作用的 M 命令装 `pending_*`（与 CM_SAY 同）。
+            m_host: true,
+        };
+        let sg = ground_sessions.get_mut(chr).expect("上面已确认会话存在");
+        let old = sg.gm.permission;
+        sg.gm.permission = ADMIN_GM_PERMISSION;
+        let result = gmcmd::execute(&mut sg.gm, &gm_cfg, &view, cmd);
+        // 抬权只作用于这次 `execute`：立刻还原（不写回会话持久权限）。
+        sg.gm.permission = old;
+        let unknown = !result.found && result.parsed;
+        (result, unknown)
+    };
+    // ③ 与脚本桥/CM_SAY 同一收口：本事件内装的 `pending_*` 在同一事件末落地。
+    command_event_tail_gm_drain(
+        ground_sessions,
+        pwd_sessions,
+        saves,
+        world,
+        displays,
+        online,
+        gates,
+        mon_gen_host,
+        registry,
+        mon_table,
+        castle_war_states,
+        guilds,
+        guild_cfg,
+        guild_store,
+        colors,
+        enter_cfg,
+        chr,
+        reconnect_pending,
+        castle_broadcasts,
+        item_number,
+        item_number_ex,
+    );
+    // ④ 回帧（与 `CM_SAY` 支同序）：SysMsg(100) → 未知命令回落 → 非 SysMsg 直发帧。
+    let mut texts: Vec<String> = result.msgs.iter().map(|m| m.text.clone()).collect();
+    if unknown {
+        // oracle `PlayObject.Chat.cs:372-400` 的回落第二条；`Permission` 读执行当下的 10。
+        texts.push(gmcmd::incorrect_msg(ADMIN_GM_PERMISSION, cmd));
+    }
+    if let Some(e) = online.iter().find(|e| e.chr_name == chr) {
+        for msg in &result.msgs {
+            let (f, b) = match msg.color {
+                gmcmd::GmColor::Red => (colors.red_f, colors.red_b),
+                gmcmd::GmColor::Green => (colors.green_f, colors.green_b),
+                gmcmd::GmColor::Blue => (colors.blue_f, colors.blue_b),
+            };
+            send_gm_sysmsg(gates, e, f, b, &msg.text);
+        }
+        if unknown {
+            send_gm_sysmsg(
+                gates,
+                e,
+                colors.red_f,
+                colors.red_b,
+                &gmcmd::incorrect_msg(ADMIN_GM_PERMISSION, cmd),
+            );
+        }
+        for frame in &result.frames {
+            let body = match frame {
+                gmcmd::GmFrame::AttackMode(mode) => smframe::sm_attackmode(*mode),
+            };
+            if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "admin GM 命令帧") {
+                let _ = tx.send(SimToGate::SendFrame {
+                    socket: e.socket,
+                    body,
+                });
+            }
+        }
+    }
+    // ⑤ 结构化结果：`frames` = 客户端可见帧数（SysMsg + 未知命令回落 + 直发帧）。
+    let frames = result.msgs.len() + usize::from(unknown) + result.frames.len();
+    if let Some(log) = result.log_note {
+        texts.push(format!("log: {log}"));
+    }
+    let note = if texts.is_empty() {
+        None
+    } else {
+        Some(texts.join("\n"))
+    };
+    if result.parsed && result.found {
+        AdminGmReply {
+            ok: true,
+            error: None,
+            frames,
+            note,
+        }
+    } else if result.parsed {
+        AdminGmReply {
+            ok: false,
+            error: Some(format!("unknown_command: {cmd}")),
+            frames,
+            note,
+        }
+    } else {
+        AdminGmReply {
+            ok: false,
+            error: Some(format!("invalid_command: 命令行无法解析：{cmd}")),
+            frames,
+            note,
+        }
+    }
+}
+
 /// `HUtil32.GetValidStr3(source, ref dest, new[]{" ", "\t"})`（`HUtil32.cs:391-402`）：
 /// `source.Split(div, 2, RemoveEmptyEntries)` ⇒ `dest` = 第一段，返回值 = 第二段（其余原样）。
 ///
@@ -23657,6 +23938,126 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
     }
 }
 
+/// admin 通道单行请求上限（逐行 JSON；防御性上限，正常请求几十字节）。
+const ADMIN_MAX_LINE: usize = 64 * 1024;
+/// admin 通道等待 sim 线程回包的时限（超时 ⇒ 结构化 `admin_timeout`）。
+const ADMIN_REPLY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// admin 通道连接空闲时限（防止半开连接长期占任务）。
+const ADMIN_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// 单条 admin 连接：逐行读 `{"chr","cmd"}`，投递给 sim 线程并写回一行 JSON 响应。
+///
+/// 协议见 [`AdminGmReply`]；所有失败路径都回**结构化错误**并在对端仍可读时写回，
+/// 不 panic、不静默。非回环对端在 [`run_admin_listener`] 已拒绝。
+async fn serve_admin_connection(
+    stream: tokio::net::TcpStream,
+    ev_tx: std::sync::mpsc::Sender<GateEvent>,
+) {
+    use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+    let (read_half, mut write_half) = stream.into_split();
+    let mut reader = BufReader::new(read_half);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        let n = match tokio::time::timeout(ADMIN_IDLE_TIMEOUT, reader.read_line(&mut line)).await {
+            Ok(Ok(n)) => n,
+            Ok(Err(e)) => {
+                glog!("WRN", "admin 读连接失败：{e}");
+                break;
+            }
+            Err(_) => {
+                glog!(
+                    "DBG",
+                    "admin 连接空闲超时（{}s）",
+                    ADMIN_IDLE_TIMEOUT.as_secs()
+                );
+                break;
+            }
+        };
+        if n == 0 {
+            break;
+        }
+        if line.len() > ADMIN_MAX_LINE {
+            let reply = AdminGmReply::error("request_too_large", "请求行超过 64KiB");
+            let _ = write_half.write_all(reply.to_json_line().as_bytes()).await;
+            let _ = write_half.write_all(b"\n").await;
+            let _ = write_half.flush().await;
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        let reply = match parse_admin_request(trimmed) {
+            Ok((chr, cmd)) => {
+                let (reply_tx, reply_rx) = tokio::sync::oneshot::channel();
+                match ev_tx.send(GateEvent::AdminGm {
+                    chr,
+                    cmd,
+                    reply: reply_tx,
+                }) {
+                    Ok(()) => match tokio::time::timeout(ADMIN_REPLY_TIMEOUT, reply_rx).await {
+                        Ok(Ok(reply)) => reply,
+                        Ok(Err(_)) => AdminGmReply::error("admin_unavailable", "sim 线程未回包"),
+                        Err(_) => AdminGmReply::error(
+                            "admin_timeout",
+                            &format!("sim 线程未在 {}s 内回包", ADMIN_REPLY_TIMEOUT.as_secs()),
+                        ),
+                    },
+                    Err(_) => AdminGmReply::error("admin_unavailable", "sim 线程通道已关闭"),
+                }
+            }
+            Err(reply) => reply,
+        };
+        if write_half
+            .write_all(reply.to_json_line().as_bytes())
+            .await
+            .is_err()
+            || write_half.write_all(b"\n").await.is_err()
+            || write_half.flush().await.is_err()
+        {
+            break;
+        }
+    }
+}
+
+/// admin 通道 accept 循环（卡 `openmir2-mcp-gm-execute`，T-273）。
+///
+/// **只接受回环对端**：配置层已把 `AdminBind` 限制到回环地址，这里再按 `peer.ip().is_loopback()`
+/// 做一次纵深防御（不依赖绑定地址的单一判据）。
+async fn run_admin_listener(
+    listener: tokio::net::TcpListener,
+    ev_tx: std::sync::mpsc::Sender<GateEvent>,
+    shutdown: std::sync::Arc<tokio::sync::Notify>,
+) {
+    let addr = listener
+        .local_addr()
+        .map_or_else(|_| "<unknown>".to_string(), |a| a.to_string());
+    glog!("INF", "本机 admin 通道已启动 [{addr}]（逐行 JSON；仅回环）");
+    loop {
+        let (stream, peer) = tokio::select! {
+            r = listener.accept() => match r {
+                Ok(v) => v,
+                Err(e) => {
+                    glog!("WRN", "admin accept 失败：{e}");
+                    continue;
+                }
+            },
+            _ = shutdown.notified() => {
+                glog!("INF", "关服：停止 admin 通道");
+                break;
+            }
+        };
+        if !peer.ip().is_loopback() {
+            glog!("WRN", "admin 拒绝非回环连接 {peer}（纵深防御）");
+            drop(stream);
+            continue;
+        }
+        let ev_tx = ev_tx.clone();
+        tokio::spawn(async move { serve_admin_connection(stream, ev_tx).await });
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     // **T-202**：`!servertable.txt` 路由表（`SendChangeServer` 的 `GetMultiServerAddrPort` 输入）。
@@ -25768,6 +26169,38 @@ fn sim_loop(
                         &account,
                         session_id,
                     );
+                }
+                // 卡 `openmir2-mcp-gm-execute`（T-273）：本机 admin 通道的命令在**同一事件
+                // 收口**里执行；`execute_admin_gm_command` 已含 execute + `pending_*` 落地。
+                GateEvent::AdminGm { chr, cmd, reply } => {
+                    let out = execute_admin_gm_command(
+                        &mut ground_sessions,
+                        &mut pwd_sessions,
+                        &mut saves,
+                        &mut world,
+                        &mut displays,
+                        &online,
+                        &gates,
+                        &gm_filter_word,
+                        &gm_mission,
+                        &gm_spirit_mutiny_tick,
+                        mon_gen_host.as_mut(),
+                        registry.as_ref(),
+                        &enter_cfg.mon_gen.table,
+                        &castle_war_states,
+                        &mut guilds,
+                        &guild_cfg,
+                        guild_store.as_ref(),
+                        &colors,
+                        &enter_cfg,
+                        &chr,
+                        &cmd,
+                        &mut reconnect_pending,
+                        &mut pending_gm_castle_broadcasts,
+                        &mut item_number,
+                        &mut item_number_ex,
+                    );
+                    let _ = reply.send(out);
                 }
             }
         }
@@ -85284,5 +85717,343 @@ mod bind_addr_teeth {
             "127.0.0.1",
             "对网关监听必须按 conf GateAddr 字面绑定（C# parity）"
         );
+    }
+}
+
+#[cfg(test)]
+mod admin_channel_tests {
+    //! 卡 `openmir2-mcp-gm-execute`（T-273）：本机 admin 通道的执行核心与传输面。
+    //!
+    //! 覆盖卡面验收：
+    //! - M2-2：`@时间` 类无副作用命令 ⇒ `ok` + 文本；`@LoadAdmin`（`PermissionMin=10`）
+    //!   经抬权执行成功，且**执行后会话 `permission` 不被写回**（抬权只作用于该次调用）；
+    //! - M2-3：未知角色/未知命令/非法命令行 ⇒ 结构化错误，不 panic、不静默；
+    //! - 传输：进程内监听 `127.0.0.1:0`，逐行 JSON 请求/响应对得上同一执行收口。
+
+    use super::*;
+    use std::cell::{Cell, RefCell};
+    use std::collections::HashMap;
+
+    struct AdminRig {
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        world: mir2_world::World,
+        online: OnlineRegistry,
+        sessions: HashMap<String, SessionGround>,
+        saves: HashMap<String, SavedHuman>,
+        displays: downlink::DisplayTable,
+        guilds: mir2_world::GuildManager,
+        guild_cfg: mir2_world::GuildConfig,
+        filter_word: Cell<bool>,
+        mission: RefCell<gmcmd::GmMissionState>,
+        spirit_mutiny_tick: Cell<i64>,
+        enter_cfg: EnterConfig,
+        colors: MsgColors,
+    }
+
+    impl AdminRig {
+        fn new() -> Self {
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates = HashMap::new();
+            gates.insert(0, tx);
+            let mut world = mir2_world::World::new(64, 64);
+            let mut e = mir2_world::Entity::new(0, "aaa".to_string(), 10, 10);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let actor = world.add_entity(e);
+            let online: OnlineRegistry = vec![OnlineEntry {
+                account: "a".to_string(),
+                chr_name: "aaa".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            }];
+            let mut sessions = HashMap::new();
+            sessions.insert("aaa".to_string(), crate::tests::test_session_ground(actor));
+            let mut saves = HashMap::new();
+            saves.insert(
+                "aaa".to_string(),
+                SavedHuman {
+                    account: "a".to_string(),
+                    record: record::PlayerRecord::default(),
+                    enter_map: "0".to_string(),
+                    derived: None,
+                },
+            );
+            Self {
+                gates,
+                rx,
+                world,
+                online,
+                sessions,
+                saves,
+                displays: downlink::DisplayTable::new(),
+                guilds: mir2_world::GuildManager::default(),
+                guild_cfg: mir2_world::GuildConfig::default(),
+                filter_word: Cell::new(true),
+                mission: RefCell::new(gmcmd::GmMissionState::default()),
+                spirit_mutiny_tick: Cell::new(0),
+                enter_cfg: EnterConfig::for_test(crate::strings::StringConf::defaults()),
+                colors: MsgColors {
+                    red_f: 255,
+                    red_b: 56,
+                    hear_f: 0,
+                    hear_b: 255,
+                    whisper_f: 0,
+                    whisper_b: 0,
+                    green_f: 219,
+                    green_b: 255,
+                    blue_f: 251,
+                    blue_b: 252,
+                },
+            }
+        }
+
+        fn exec(&mut self, chr: &str, cmd: &str) -> AdminGmReply {
+            let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+            let mut reconnect_pending: Vec<ReconnectPending> = Vec::new();
+            let mut castle_broadcasts: Vec<String> = Vec::new();
+            let mut item_number = 0;
+            let mut item_number_ex = 0;
+            let mon_table = &self.enter_cfg.mon_gen.table;
+            execute_admin_gm_command(
+                &mut self.sessions,
+                &mut pwd_sessions,
+                &mut self.saves,
+                &mut self.world,
+                &mut self.displays,
+                &self.online,
+                &self.gates,
+                &self.filter_word,
+                &self.mission,
+                &self.spirit_mutiny_tick,
+                None,
+                None,
+                mon_table,
+                &HashMap::new(),
+                &mut self.guilds,
+                &self.guild_cfg,
+                None,
+                &self.colors,
+                &self.enter_cfg,
+                chr,
+                cmd,
+                &mut reconnect_pending,
+                &mut castle_broadcasts,
+                &mut item_number,
+                &mut item_number_ex,
+            )
+        }
+    }
+
+    fn take_frames(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
+        let mut out = Vec::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let SimToGate::SendFrame { body, .. } = msg {
+                out.push(body);
+            }
+        }
+        out
+    }
+
+    fn frame_ident(body: &[u8]) -> u16 {
+        u16::from_le_bytes([body[4], body[5]])
+    }
+
+    #[test]
+    fn admin_message_command_returns_text_and_emits_one_sysmsg() {
+        let mut rig = AdminRig::new();
+        let reply = rig.exec("aaa", "@时间");
+        assert!(reply.ok, "无副作用命令必须 ok：{reply:?}");
+        assert_eq!(reply.error, None);
+        assert_eq!(reply.frames, 1, "`@时间` 恰好一条 SM_SYSMESSAGE(100)");
+        let note = reply.note.expect("note 应带回帧文本");
+        assert!(
+            note.contains(gmcmd::NOW_CURR_DATETIME),
+            "note 必须是命令回帧文本：{note:?}"
+        );
+        let frames = take_frames(&mut rig.rx);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frame_ident(&frames[0]), 100, "SM_SYSMESSAGE");
+    }
+
+    #[test]
+    fn admin_elevates_only_for_the_call_and_never_writes_back_permission() {
+        let mut rig = AdminRig::new();
+        assert_eq!(
+            rig.sessions.get("aaa").expect("会话").gm.permission,
+            0,
+            "oracle 现网 Permission 恒 0"
+        );
+        // `LoadAdmin` 的 `PermissionMin = 10` ⇒ 只有抬权到 10 才命中。
+        let reply = rig.exec("aaa", "@LoadAdmin");
+        assert!(reply.ok, "抬权后应命中：{reply:?}");
+        assert!(
+            reply
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains("管理员列表重新加载成功")),
+            "命中回帧文本：{reply:?}"
+        );
+        assert_eq!(
+            rig.sessions.get("aaa").expect("会话").gm.permission,
+            0,
+            "抬权只作用于该次调用：执行后必须还原为 0（不得写回会话持久权限）"
+        );
+        let frames = take_frames(&mut rig.rx);
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frame_ident(&frames[0]), 100);
+    }
+
+    #[test]
+    fn admin_pending_effects_land_in_same_event() {
+        // `@1`（`ChangeAdminMode`，`PermissionMin=10`）命令体只装 `pending_entity`；
+        // 落地必须靠事件末的 `command_event_tail_gm_drain`（与 CM_SAY/脚本同一收口）。
+        // 牙：删掉 `execute_admin_gm_command` 里的 drain 调用 ⇒ 本用例红。
+        let mut rig = AdminRig::new();
+        let actor = rig.online[0].actor_id;
+        assert!(!rig.world.entities.get(actor).expect("实体").admin_mode);
+        let reply = rig.exec("aaa", "@1");
+        assert!(reply.ok, "{reply:?}");
+        assert_eq!(reply.frames, 1, "`@1` 一条模式提示 SysMsg：{reply:?}");
+        assert!(
+            rig.world.entities.get(actor).expect("实体").admin_mode,
+            "pending_entity 必须在同一事件末落地（drain 未接则红）"
+        );
+    }
+
+    #[test]
+    fn admin_unknown_character_and_unknown_command_are_structured() {
+        let mut rig = AdminRig::new();
+        let unknown_chr = rig.exec("nobody", "@时间");
+        assert!(!unknown_chr.ok);
+        assert!(
+            unknown_chr
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("unknown_character:")),
+            "未知角色 ⇒ 结构化错误：{unknown_chr:?}"
+        );
+        assert_eq!(unknown_chr.frames, 0);
+        assert!(take_frames(&mut rig.rx).is_empty(), "未知角色不发帧");
+
+        let unknown_cmd = rig.exec("aaa", "@没有这条命令xyz");
+        assert!(!unknown_cmd.ok, "{unknown_cmd:?}");
+        assert!(
+            unknown_cmd
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("unknown_command:")),
+            "未知命令 ⇒ 结构化错误：{unknown_cmd:?}"
+        );
+        let note = unknown_cmd
+            .note
+            .as_ref()
+            .expect("未知命令仍带回 oracle 的两条红字");
+        assert!(note.contains("未知命令"), "{note:?}");
+        // oracle 未知命令回落第二条红字也算一帧（未知命令一条 + 回落一条 = 2）。
+        assert_eq!(unknown_cmd.frames, 2, "{unknown_cmd:?}");
+        assert_eq!(take_frames(&mut rig.rx).len(), 2);
+    }
+
+    #[test]
+    fn admin_non_at_command_line_is_invalid_command() {
+        let mut rig = AdminRig::new();
+        let reply = rig.exec("aaa", "hello");
+        assert!(!reply.ok);
+        assert!(
+            reply
+                .error
+                .as_deref()
+                .is_some_and(|e| e.starts_with("invalid_command:")),
+            "{reply:?}"
+        );
+        assert_eq!(reply.frames, 0);
+        assert_eq!(
+            rig.sessions.get("aaa").expect("会话").gm.permission,
+            0,
+            "非法命令也不得改权限"
+        );
+    }
+
+    /// 传输面：进程内监听 `127.0.0.1:0`，经真实的 [`run_admin_listener`] 收行、投
+    /// `GateEvent::AdminGm`，由同一 `execute_admin_gm_command` 回包。
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn admin_transport_roundtrip_uses_same_execution_closure() {
+        use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
+
+        let (ev_tx, ev_rx) = std::sync::mpsc::channel::<GateEvent>();
+        let worker = std::thread::spawn(move || {
+            let mut rig = AdminRig::new();
+            while let Ok(ev) = ev_rx.recv() {
+                if let GateEvent::AdminGm { chr, cmd, reply } = ev {
+                    let _ = reply.send(rig.exec(&chr, &cmd));
+                }
+            }
+        });
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind 127.0.0.1:0");
+        let addr = listener.local_addr().expect("local_addr");
+        let notify = std::sync::Arc::new(tokio::sync::Notify::new());
+        tokio::spawn(run_admin_listener(
+            listener,
+            ev_tx.clone(),
+            std::sync::Arc::clone(&notify),
+        ));
+
+        // 一次连接一条请求（协议本身支持同连接多行；这里逐条独立连接更易断言）。
+        let request = |line: &'static str| async move {
+            let stream = tokio::net::TcpStream::connect(addr).await.expect("connect");
+            let (read_half, mut write_half) = stream.into_split();
+            write_half.write_all(line.as_bytes()).await.expect("write");
+            write_half.write_all(b"\n").await.expect("write nl");
+            write_half.flush().await.expect("flush");
+            let mut reader = BufReader::new(read_half);
+            let mut response = String::new();
+            reader.read_line(&mut response).await.expect("read");
+            serde_json::from_str::<serde_json::Value>(&response).expect("JSON 响应")
+        };
+
+        let ok = request(r#"{"chr":"aaa","cmd":"@时间"}"#).await;
+        assert_eq!(ok["ok"], serde_json::json!(true), "{ok}");
+        assert_eq!(ok["frames"], serde_json::json!(1), "{ok}");
+        assert!(
+            ok["note"]
+                .as_str()
+                .is_some_and(|n| n.contains(gmcmd::NOW_CURR_DATETIME)),
+            "{ok}"
+        );
+
+        let bad_chr = request(r#"{"chr":"nobody","cmd":"@时间"}"#).await;
+        assert_eq!(bad_chr["ok"], serde_json::json!(false), "{bad_chr}");
+        assert!(
+            bad_chr["error"]
+                .as_str()
+                .is_some_and(|e| e.starts_with("unknown_character:")),
+            "{bad_chr}"
+        );
+
+        // 非 JSON / 非 `@` 命令行都在 listener 侧结构化拒绝（不进 sim）。
+        let bad_json = request("not json").await;
+        assert!(
+            bad_json["error"]
+                .as_str()
+                .is_some_and(|e| e.starts_with("invalid_request:")),
+            "{bad_json}"
+        );
+        let bad_cmd = request(r#"{"chr":"aaa","cmd":"hello"}"#).await;
+        assert!(
+            bad_cmd["error"]
+                .as_str()
+                .is_some_and(|e| e.starts_with("invalid_command:")),
+            "{bad_cmd}"
+        );
+
+        notify.notify_one();
+        drop(ev_tx);
+        // 不 join：listener/serve 任务在 tokio 运行期结束时释放自己持有的 sender，worker 随之退出。
+        drop(worker);
     }
 }
