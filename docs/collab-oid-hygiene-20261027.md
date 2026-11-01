@@ -54,6 +54,35 @@ tools/collab/sign_entry.sh --repo . --kind patch --id <thread> \
 - 任一不满足 ⇒ **rc=1，拒绝调用 walgit**（条目根本不会被写坏）；
 - 通过后把**解析后的全 oid** 传给 `walgit collab entry`（短号也在这一步被补全，而不是手补）。
 
+### 2026-11-01 增补：写侧误签两类（卡 `openmir2-collab-sign-entry-hardening`）
+
+当天两起真实事故都发生在写侧，而 `oid_gate` 的读侧判据都抓不到（空 `parent` 在读侧是**跳过**而非判红）：
+
+| # | 事故 | 形态 | 后果 |
+|---|---|---|---|
+| ① | `walgit collab thread <id> --format json` 不支持该 flag，管道取到空串 | `sign_entry.sh` 打印 `parent=<root>` 后照签 | 落一条 `parent:""` 的游离条目（`openmir2-mcp-gm-conf` `ce176bce`） |
+| ② | `--body-file` 指到 `/tmp` 下上一张卡的残留 | 把旧卡的 patch/status 内容签进新线程 | 指向已合并旧分支的 patch/status（`f0bf7f2e3d` / `826dc73574`） |
+
+现在 `sign_entry.sh`（实现委托 `sign_entry.py --precheck`）对这两类 **fail-closed**：
+
+- **`--parent` 缺席或为空 ⇒ rc=1 拒签**，不再静默按根条目签。**建线必须显式 `--root`**：
+  ```sh
+  tools/collab/sign_entry.sh --repo . --kind issue --id <thread> \
+      --root --body-file body.json [--push walgit]
+  ```
+- **`--root` 只允许线程首条目**：非 `kind=issue` 时会 `walgit collab thread <id>` 判空；
+  已有任何条目、或判不了线程是否为空 ⇒ 拒签。`--root` 与 `--parent` 同时给也拒签。
+- **陈旧 body ⇒ rc=1 拒签**：`--body-file` 的 mtime 超过 `--max-body-age`（默认 **1800 秒**）时拒绝，
+  错误里打印 `body_sha256=<hex>` 与 `mtime=<ISO>（epoch=…）`；确认不是上一张卡的残留后加
+  `--allow-stale-body` 显式放行，或用 `--max-body-age <秒>` 调阈值。
+- 校验通过后（`--check-only` 也会）打印 **`sign_entry: body_sha256=<hex>`**，供签后回读比对。
+- 以上都是**新增**的拒绝面：原有 base/head/parent 可解析性校验与 `--check-only` 语义不变。
+
+自测 `python -B tools/collab/sign_entry.py --selftest --repo .` 新增 N1/N1b/N2/N2b/N2c/N3/N4/N5
+（缺/空 parent、有历史 `--root` 拒签、空线程与 `issue` 放行、`--root`+`--parent` 互斥、
+新鲜 body 通过、`--allow-stale-body` 放行、陈旧 body 拒签），全部在 `mktemp` 下的**临时 git 仓**
++ 假 probe 上跑，结束断言本仓 refs 快照不变；每条都有「改坏实现 ⇒ 用例红」的变异自证。
+
 ## 怎么保证团队都走这条路（可强制执行的部分）
 
 1. **读侧已接入合并门（2026-10-27，`openmir2-oid-gate-realcheck-baseline`）**：
