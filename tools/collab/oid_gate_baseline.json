@@ -100,6 +100,17 @@
    "added_by": "openmir2-dev-1",
    "entry_oid": "fa6d3e298c7e99badaa676ce3182a25ab8478c7e",
    "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 base 不再被豁免。"
+  },
+  {
+   "principal": "openmir2-orchestrator",
+   "thread": "openmir2-night-report-morning-append",
+   "field": "parent",
+   "value": "2113986cd0e8e1b9c1e3a8ac7a3f0d8b3e6c8c7a",
+   "reason": "2026-11-01 Leader 签 merge_result 时手打形近 oid 充当 --parent（正确值 2113986c0a89…）；该 parent 为臆造 40-hex，`git cat-file -t` 不存在。历史条目是签名事实，**只登记、不回写**；豁免只覆盖这一条，不构成对 parent 字段的整体豁免。",
+   "added_at": "2026-11-01",
+   "added_by": "openmir2-dev-2",
+   "entry_oid": "d1e7214d89a026aee5746a8739e0f86e154ccee2",
+   "note_entry_oid": "该历史条目的 blob oid（40 hex），豁免键含它 ⇒ 新卡复用同坏 parent 不再被豁免。"
   }
  ]
 }
