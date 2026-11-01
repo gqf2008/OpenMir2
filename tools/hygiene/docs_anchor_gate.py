@@ -54,7 +54,13 @@ reviewer-21 审 M-1 后记时发现：矩阵里的 oracle/harness 行号**在合
   （`.rs` 先剥注释，注释里的符号不算）。
 * 输出 `检查 N / 悬空 M / 越界 K / 符号缺失 S`；任一非 0 ⇒ rc=1。**空输入显式回答**
   `检查 0 …（新增行里没有任何 path:line 锚）` 并 rc=0，与「扫了 N 条全过」的输出可区分。
-* `git` 失败 / base 解析不到 ⇒ rc=2（判不了，绝不静默跳过）。
+* **已知域限制（F4，必须知道）**：只识别**反引号包裹的 `.rs`/`.cs`**（`LINE_ANCHOR_RE`）。
+  指向 `.py`/`.md`/`.toml` 等其它扩展名的锚、以及**非反引号**的裸 `path:line` 都**不可见**。
+  因此 `检查 0` 只表示「本模式域内没有锚」，**不等于**「新增行里所有锚都干净」。
+* 行号上界按**真实行数**（`splitlines()`），文件末尾换行不会多算一行：末行合法、
+  末行+1 必红（两种文件形态都有牙与变异钉住）。
+* `git` 无法执行 / `git merge-base` 失败 / base 解析不到 ⇒ **rc=2（判不了）**，绝不静默跳过；
+  绝不与「判出问题（rc=1）」混用同一码。
 
 ## 用法
 
@@ -90,6 +96,8 @@ PROSE_SYM_AFTER_RE = re.compile(r"\s+`([A-Za-z_][A-Za-z0-9_]*)`")
 PROSE_SYM_BEFORE_RE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*)`\s+$")
 #: 去掉会污染 git 子进程的环境变量（`GIT_DIR` 一旦继承，临时仓库的自测会写进真仓库）
 GIT_ENV_DROP = ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE", "GIT_COMMON_DIR")
+#: git 可执行名（自测用假名注入「git 不在 PATH」的负例，见 `_prose_teeth`）
+GIT_BIN = "git"
 
 
 # ---------------------------------------------------------------- 剥离层
@@ -578,10 +586,17 @@ def _git_env():
 
 
 def _git_out(repo, args):
-    """跑只读 git；返回 (rc, stdout, stderr)，文本按 UTF-8 容错解码。"""
+    """跑只读 git；返回 (rc, stdout, stderr)，文本按 UTF-8 容错解码。
+
+    git **不存在**（未安装 / 不在 PATH）不是「发现问题」而是「判不了」⇒ 捕获 OSError
+    并返回 rc=127，让调用方收敛到 rc=2（reviewer-21 F3：原实现抛 FileNotFoundError ⇒ rc=1）。
+    """
     import subprocess
-    p = subprocess.run(["git", "-C", repo] + list(args), stdout=subprocess.PIPE,
-                       stderr=subprocess.PIPE, env=_git_env())
+    try:
+        p = subprocess.run([GIT_BIN, "-C", repo] + list(args), stdout=subprocess.PIPE,
+                           stderr=subprocess.PIPE, env=_git_env())
+    except (FileNotFoundError, OSError) as e:
+        return 127, "", "git 无法执行（%s）：%s" % (GIT_BIN, e)
     return (p.returncode,
             p.stdout.decode("utf-8", "replace"),
             p.stderr.decode("utf-8", "replace"))
@@ -633,7 +648,9 @@ def _prose_read_lines(repo, path, cache):
             raw = fh.read()
         if path.endswith(".rs"):
             raw = strip_rust_comments(raw)  # 注释里的符号不算命中
-        cache[path] = raw.split("\n")
+        # **行数必须是真实行数**：`split("\n")` 在文件以换行结尾时会多出一个空元素
+        #（4 行文件 ⇒ len=5），从而放过 `:(真实行数+1)` 的越界锚（reviewer-21 F1）。
+        cache[path] = raw.splitlines()
     return cache[path]
 
 
@@ -702,7 +719,7 @@ def scan_prose(repo, base, reg_path=None, pathspecs=("docs/",), list_only=False)
         print("%-30s %s  %s  %s" % (f["why"], f["doc"], f["raw"], f.get("detail", "")))
     if checked == 0:
         print("prose-anchor gate：检查 0 / 悬空 0 / 越界 0"
-              "（新增行里没有任何 path:line 锚）")
+              "（新增行里没有任何 path:line 锚；仅反引号内 .rs/.cs，检查 0 ≠ 全部锚干净）")
         print("RESULT: GREEN")
         return 0
     print("prose-anchor gate：检查 %d / 悬空 %d / 越界 %d / 符号缺失 %d"
@@ -825,8 +842,11 @@ def _prose_teeth():
         os.makedirs(os.path.join(tmp, "docs"))
         os.makedirs(os.path.join(tmp, "src"))
         with open(os.path.join(tmp, "src", "a.rs"), "w", encoding="utf-8") as fh:
-            # 1 fn alpha / 2 注释里有 beta / 3 } / 4 fn beta
+            # 1 fn alpha / 2 注释里有 beta / 3 } / 4 fn beta  —— **带末尾换行**（4 行）
             fh.write("fn alpha() {\n    // beta only in a comment\n}\nfn beta() {}\n")
+        with open(os.path.join(tmp, "src", "b.rs"), "w", encoding="utf-8") as fh:
+            # 1 fn gamma / 2 fn delta  —— **不带末尾换行**（2 行）
+            fh.write("fn gamma() {}\nfn delta() {}")
         with open(os.path.join(tmp, "docs", "base.md"), "w", encoding="utf-8") as fh:
             fh.write("历史散文锚 `src/a.rs:1`（基线，不应被增量模式扫到）\n")
         g("init", "-q")
@@ -876,6 +896,26 @@ def _prose_teeth():
         check("牙④符号只在注释里（剥注释后不算命中）⇒ 红",
               rc == 1 and "PROSE_ANCHOR_SYMBOL_MISSING" in out, out[-300:])
 
+        # ⑤b 边界（reviewer-21 F1/F2）：真实行数上界必须被钉死，且带/不带末尾换行都测
+        #      a.rs 带末尾换行 ⇒ 真实 4 行：:4 绿、:5 红
+        #      b.rs 不带末尾换行 ⇒ 真实 2 行：:2 绿、:3 红
+        write_doc("边界 `src/a.rs:4` `beta`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("边界①带末尾换行：末行 :4 ⇒ 绿", rc == 0 and "越界 0" in out, out[-300:])
+        write_doc("边界 `src/a.rs:5`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("边界②带末尾换行：末行+1 :5 ⇒ 红（越界 1）",
+              rc == 1 and "PROSE_ANCHOR_LINE_OUT_OF_RANGE" in out and "越界 1" in out,
+              out[-300:])
+        write_doc("边界 `src/b.rs:2` `delta`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("边界③不带末尾换行：末行 :2 ⇒ 绿", rc == 0 and "越界 0" in out, out[-300:])
+        write_doc("边界 `src/b.rs:3`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("边界④不带末尾换行：末行+1 :3 ⇒ 红（越界 1）",
+              rc == 1 and "PROSE_ANCHOR_LINE_OUT_OF_RANGE" in out and "越界 1" in out,
+              out[-300:])
+
         # ⑥ 空输入（新增行没有锚）⇒ 明确「检查 0」rc=0，且与「扫了 N 条全过」可区分
         write_doc("这一行没有任何锚，只是普通散文")
         rc, out = _cap(scan_prose, tmp, base, reg)
@@ -890,6 +930,20 @@ def _prose_teeth():
             rc, out = _cap(scan_prose, tmp, "deadbeef" * 5, reg)
         check("base 解析不到 ⇒ rc=2（判不了）且点名 merge-base",
               rc == 2 and "merge-base" in errbuf.getvalue(), (rc, errbuf.getvalue()[-140:]))
+
+        # ⑧ git 无法执行 ⇒ rc=2（判不了），不得抛 traceback / rc=1（reviewer-21 F3）
+        old_git = globals()["GIT_BIN"]
+        globals()["GIT_BIN"] = "definitely-no-such-git-binary-xyz"
+        errbuf2 = io.StringIO()
+        try:
+            with redirect_stderr(errbuf2):
+                rc, out = _cap(scan_prose, tmp, base, reg)
+        finally:
+            globals()["GIT_BIN"] = old_git
+        check("git 无法执行 ⇒ rc=2（判不了，不抛 traceback）",
+              rc == 2 and "无法执行" in errbuf2.getvalue(), (rc, errbuf2.getvalue()[-140:]))
+        check("git 注入牙已还原 GIT_BIN（接缝元断言）", globals()["GIT_BIN"] == old_git,
+              globals()["GIT_BIN"])
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     return ok
