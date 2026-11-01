@@ -42,11 +42,11 @@
    CARGO_TARGET_DIR=E:/tmp/openmir2-merge-target cargo run -p msgcodegen -- --check
    ```
 
-   **散文锚（增量）**（同样在待合并内容上跑；本车道 merge 后 HEAD 的 merge-base 即 `origin/master`）：
+   **散文锚（增量）**（同样在待合并内容上跑；本车道 merge 后 HEAD 的 merge-base 即 `walgit/master`；`origin` 仅人工同步镜像）：
    ```
-   python -I -B tools/hygiene/docs_anchor_gate.py --prose --base origin/master
+   python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master
    ```
-   `--base` 取**合并目标 ref**（本车道为 `origin/master`），**不要**在合入 master 之后才用 `--base master` 跑：
+   `--base` 取**合并目标 ref**（本车道为 `walgit/master`），**不要**在合入 master 之后才用 `--base master` 跑：
    那时 `merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，什么都没扫。
    只核新增行（域：`docs/` 下 `.md` 反引号内的 `.rs`/`.cs` `path:line`），对历史悬空锚无感；
    历史清理仍归 `stale_pointer_gate`，二者不可互相替代。
