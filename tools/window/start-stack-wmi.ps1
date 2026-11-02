@@ -53,7 +53,10 @@
 #   #   -PinChecks MIR2_CLIENT_ABILITY_LAYOUT=0 -PinLog E:/tmp/conformance/rust-logs/game-svr.out.log
 #   # 冒烟/自检（不起栈、不派生、只做 pin 校验）：-CheckPinsOnly；
 #   # 不等端口（配合真服务端单进程冒烟）：-SkipPortWait；
-#   # 派生链牙（3 负例 + 1 正例，合成夹具，不碰真实端口/栈）：-Selftest。
+#   # 派生链牙（3 负例 + 1 正例，合成夹具，不碰真实端口/栈）：-Selftest；
+#   # 负例端口运行时取空闲端口（本机固定端口被占也不假红），正例还断言内层
+#   # `Get-ExecutionPolicy -Scope Process` = Bypass（删 PSExecutionPolicyPreference
+#   # 转发 env 即红）——见下方 -Selftest 段与卡 `openmir2-wmi-selftest-registry`。
 #
 # 退出码：0 = WMI 派生成功且 $ReadyPorts 全部监听并完成暖机（-SkipPortWait 时免），
 #         且 -PinChecks 全部在调用方 env 与 server 日志自证通过；
@@ -106,36 +109,64 @@ if ($Selftest) {
       $script:fails.Add($name)
     }
   }
+  # 负例端口**运行时取空闲端口**（旧实现写死 65000/65001：本机一旦有别的进程占用，
+  # 「端口未就绪」这个前提就假掉，负例会假红/假绿）。绑 0 让内核分配，拿到后立刻释放。
+  # 注意：Windows 允许非独占 socket 复用地址/端口，分配器**可能返回别人正在监听的端口**
+  # （实测：65000/65001 被占用时 bind(0) 仍返回它们）⇒ 再用 Get-NetTCPConnection 显式排除并重试。
+  function Get-FreeTcpPort {
+    for ($i = 0; $i -lt 40; $i++) {
+      $listener = New-Object System.Net.Sockets.TcpListener -ArgumentList ([System.Net.IPAddress]::Loopback), 0
+      $listener.Start()
+      $p = 0
+      try { $p = [int]$listener.LocalEndpoint.Port } finally { $listener.Stop() }
+      $busy = @(Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue |
+        Where-Object { $_.LocalPort -eq $p })
+      if ($busy.Count -eq 0) { return $p }
+    }
+    throw 'Get-FreeTcpPort: 40 次都没有拿到未被监听的端口'
+  }
   try {
     # N1 「Create 回 0 但进程立即消失」——真实事故形态：必须快速 rc=1 并点名退出，不得静默超时。
     $n1 = Write-TmpScript 'inner-instant.ps1' 'exit 7'
-    $r = Invoke-Wrapper $n1 '65000' 60
+    $r = Invoke-Wrapper $n1 ([string](Get-FreeTcpPort)) 60
     Assert-Case ($r[0] -eq 1 -and $r[1] -lt 30 -and $r[2] -match '已退出|在就绪前退出') `
       'negative: instant death fails fast' ('rc=' + $r[0] + ' sec=' + [int]$r[1] + ' out=' + $r[2])
 
     # N2 内层延时非零退出：必须点名 exit=7，且仍在牙的时限内（不静默等满 60s）。
     $n2 = Write-TmpScript 'inner-exit7.ps1' ("Start-Sleep -Seconds 1" + "`n" + 'exit 7')
-    $r = Invoke-Wrapper $n2 '65000' 60
+    $r = Invoke-Wrapper $n2 ([string](Get-FreeTcpPort)) 60
     Assert-Case ($r[0] -eq 1 -and $r[1] -lt 30 -and $r[2] -match 'exit=7') `
       'negative: nonzero exit names exit=7' ('rc=' + $r[0] + ' sec=' + [int]$r[1] + ' out=' + $r[2])
 
     # N3 内层 exit 0 但端口未就绪：不得因 exit=0 就当成功，必须 rc=1 且点名 exit=0。
     $n3 = Write-TmpScript 'inner-exit0.ps1' ("Start-Sleep -Seconds 1" + "`n" + 'exit 0')
-    $r = Invoke-Wrapper $n3 '65001' 60
+    $r = Invoke-Wrapper $n3 ([string](Get-FreeTcpPort)) 60
     Assert-Case ($r[0] -eq 1 -and $r[1] -lt 30 -and $r[2] -match 'exit=0') `
       'negative: exit 0 without ports still fails' ('rc=' + $r[0] + ' sec=' + [int]$r[1] + ' out=' + $r[2])
 
-    # P1 正例：内层脚本确实被执行（写 marker），-SkipPortWait ⇒ rc=0。
+    # P1 正例：内层脚本确实被执行（写 marker），且**进程作用域**策略 = Bypass。
+    # 只验 marker 存在的话，删掉 wrapper 里的 `PSExecutionPolicyPreference` 转发仍然绿
+    # （review 8f0d2433 Minor 1 的缺口）；这里让内层自己读 Get-ExecutionPolicy -Scope Process
+    # 落盘再断言，删转发 ⇒ Undefined ⇒ 必红。
     $marker = Join-Path $tmp 'marker.txt'
-    $p1 = Write-TmpScript 'inner-marker.ps1' ("Set-Content -LiteralPath '" + $marker + "' -Value OK")
+    $policyFile = Join-Path $tmp 'policy.txt'
+    $p1Body = ("Set-Content -LiteralPath '" + $marker + "' -Value OK") + "`n" +
+      ("Set-Content -LiteralPath '" + $policyFile + "' -Value (Get-ExecutionPolicy -Scope Process)")
+    $p1 = Write-TmpScript 'inner-marker.ps1' $p1Body
     $out = & $psExe -NoProfile -File $self -Script $p1 -ReadyPorts 0 -SkipPortWait 2>&1
     $rc = $LASTEXITCODE
     $deadline = (Get-Date).AddSeconds(10)
-    while (-not (Test-Path -LiteralPath $marker) -and (Get-Date) -lt $deadline) {
+    while ((-not (Test-Path -LiteralPath $marker) -or -not (Test-Path -LiteralPath $policyFile)) -and
+      (Get-Date) -lt $deadline) {
       Start-Sleep -Milliseconds 200
     }
-    Assert-Case ($rc -eq 0 -and (Test-Path -LiteralPath $marker)) `
-      'positive: inner script ran under WMI' ('rc=' + $rc + ' marker=' + (Test-Path -LiteralPath $marker))
+    $policy = ''
+    if (Test-Path -LiteralPath $policyFile) {
+      $policy = ([string](Get-Content -LiteralPath $policyFile -Raw)).Trim()
+    }
+    Assert-Case ($rc -eq 0 -and (Test-Path -LiteralPath $marker) -and $policy -eq 'Bypass') `
+      'positive: inner ran under WMI with process-scope Bypass' `
+      ('rc=' + $rc + ' marker=' + (Test-Path -LiteralPath $marker) + ' policy=' + $policy)
   } finally {
     Remove-Item -LiteralPath $tmp -Recurse -Force -ErrorAction SilentlyContinue
   }
