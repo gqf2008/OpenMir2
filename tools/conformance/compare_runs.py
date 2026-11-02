@@ -831,6 +831,17 @@ def random_pair_shape(pair, fields):
     return tuple(out)
 
 
+def random_pair_recog_match(turn, feature):
+    """随机分支对的「同 recog」谓词：41 的 recog 非空且与 TURN 相同。
+
+    这是登记定义的一部分（rules.json `random_branch_pairs.reason`「紧随**同 recog** 的
+    SM_FEATURECHANGED(41)」）。`extract_random_pairs` 与
+    `tools/conformance/rng_stream_shape.py` 共用同一谓词，避免两处实现漂移
+    （review 0e16482c Important：检查器曾漏掉该条，把另一个 actor 的 41 当成完整对）。
+    """
+    return turn.get("recog") is not None and turn.get("recog") == feature.get("recog")
+
+
 def extract_random_pairs(frames, rule):
     """按**形状**把随机分支成对帧摘出：无名 TURN(10) + 紧随同 recog 的 FEATURECHANGED(41)。
 
@@ -848,7 +859,7 @@ def extract_random_pairs(frames, rule):
                 and len(a["body"]) == rule["turn_body_len"]
                 and b is not None and b["ident"] == rule["feature_ident"]
                 and (b["body"] is None or len(b["body"]) == rule["feature_body_len"])
-                and a.get("recog") is not None and a.get("recog") == b.get("recog")):
+                and random_pair_recog_match(a, b)):
             pairs.append({"turn": a, "feature": b})
             i += 2
             continue
