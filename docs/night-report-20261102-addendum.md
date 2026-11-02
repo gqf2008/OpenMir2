@@ -124,7 +124,7 @@ python -I -B mir2-rs/tests/parity/coverage/script_host_noop_audit.py --ref=HEAD 
 | 对端会话（2026-11-02） | 返回 **0**，`GetLastWin32Error()` = 5（ACCESS_DENIED） | `LockApp`(11472)、`LogonUI`(7328) 在场；`GetForegroundWindow()` 为空 | 锁屏 |
 | 本方 dev-1 车道（同一锁屏会话） | 返回**非 0**；仓内留档句柄为 `SIG1_OK hWnd=2016` | ② 命中 `LockApp` ⇒ `SIG2_FAIL err=secure-desktop-owner` | 锁屏 |
 
-> 卡面把本方这一例记作「2204」。该具体句柄值在仓内文档与协作线程中未检索到留档；
+> 卡面把本方这一例记作「2204」。2204 无证据留档（仅卡面 issue 的对端消息转述）；
 > 本节以可复核的 `hWnd=2016`（`docs/mcp-admin-window-sheet-20261101.md` §2.3、
 > merge_result `95b04a71`）为准。两例相反这一**共同结论**不受影响。
 

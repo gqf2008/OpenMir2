@@ -242,8 +242,8 @@ python -I <script> --ref HEAD
 
 `check_anchors.py check` 在本 tip 仍 **rc=1**，原因是 `DRIVER-CONTRACT.md` 的两处源码锚点漂移：
 
-- `mir2-rs/crates/world/src/monai.rs`：文档写 `:5227`，`pub fn monster_ai_tick(` 的首个匹配在 **`:5259`**；
-- 同一文件：文档写 `:234`，`pub fn wondering(` 的首个匹配在 **`:236`**。
+- `mir2-rs/crates/world/src/monai.rs`：文档写 `:5227`，`pub fn monster_ai_tick(` 的首个匹配在 `mir2-rs/crates/world/src/monai.rs:5259`；
+- 同一文件：文档写 `:234`，`pub fn wondering(` 的首个匹配在 `mir2-rs/crates/world/src/monai.rs:236`。
 
 这是**既有锚点漂移**，与本卡（参数处理）无关；按卡面要求只登记不修（另案重钉）。
 
