@@ -1641,7 +1641,7 @@ def emit_json(path, payload):
 # ---------------------------------------------------------------------------
 # 子命令
 # ---------------------------------------------------------------------------
-def cmd_content(args):
+def cmd_content(args, board_lookup=None):
     repo = Path(args.repo)
     envir_dir, notice_dir = Path(args.envir_dir), Path(args.notice_dir)
     prereq_rc = emit_oracle_prereq(oracle_prereq_problems(repo, [ORACLE_CONTENT]))
@@ -1650,7 +1650,7 @@ def cmd_content(args):
     prereq_rc = emit_deploy_prereq(deploy_prereq_problems(envir_dir, notice_dir), args.allow_missing_deploy)
     if prereq_rc is not None:
         return prereq_rc
-    cards = resolve_cards(load_cards(Path(args.cards)), repo)
+    cards = resolve_cards(load_cards(Path(args.cards)), repo, board_lookup=board_lookup)
     card_rc = emit_card_prereq(cards)
     if card_rc == 2:
         return 2   # 判不了（看板探测失败）⇒ 前置拒跑，不产出「通过」结论
@@ -2496,6 +2496,67 @@ def selftest():
     check("对照（recon-gates-false-green）：rc=0 且空输出 ⇒ 空 set（空看板合法，不误报探测失败）",
           board_card_ids(Path("."), _run=lambda *a, **k: _FakeProc(0, "")) == set())
 
+    # ---- 卡 openmir2-recon-gates-rc1-false-green（F6/F7）：命令本体的前置短路必须有**端到端**牙。
+    #      只测 `emit_card_prereq` 不够——把 `cmd_content` / `cmd_mutate` 里的 `return` 删掉时，
+    #      单元级牙仍全绿（F6）；`cmd_mutate` 只认 rc==2 时缺卡（rc=1）仍会跑完并打印 ALL PASS（F7）。
+    #      夹具自持：注入必然抛 `BoardProbeError` / 返回空看板的 `board_lookup`，不依赖真实看板。
+    _tmp_f67 = Path(tempfile.mkdtemp(prefix="recon-f67-"))
+    try:
+        _missing_f67 = str(_tmp_f67 / "no-such-dir")
+
+        def _boom_board(_repo):
+            _boom_board.calls += 1
+            raise BoardProbeError("selftest 注入：walgit collab ls 不可用")
+        _boom_board.calls = 0
+
+        _cards_f6 = _tmp_f67 / "cards_empty.json"
+        _cards_f6.write_text(json.dumps({"known_cards": [], "assignments": {}}) + NL, encoding="utf-8")
+        _args_f6 = argparse.Namespace(
+            repo=str(REPO_DEFAULT), cards=str(_cards_f6), json=None,
+            envir_dir=_missing_f67, notice_dir=_missing_f67, allow_missing_deploy=True)
+
+        _buf_c = io.StringIO()
+        with contextlib.redirect_stdout(_buf_c):
+            _rc_c = cmd_content(_args_f6, board_lookup=_boom_board)
+        _out_c = _buf_c.getvalue()
+        _calls_after_content = _boom_board.calls
+        check("teeth（F6）：content 看板探测失败 ⇒ 端到端 rc=2 且短路在构表前（不产出 summary）",
+              _rc_c == 2 and "PREREQ_CARD_UNVERIFIED" in _out_c and "summary:" not in _out_c)
+
+        _buf_m = io.StringIO()
+        with contextlib.redirect_stdout(_buf_m):
+            _rc_m = cmd_mutate(_args_f6, board_lookup=_boom_board)
+        _out_m = _buf_m.getvalue()
+        check("teeth（F6）：mutate 看板探测失败 ⇒ 端到端 rc=2 且不执行变异（不打印 ALL PASS）",
+              _rc_m == 2 and "PREREQ_CARD_UNVERIFIED" in _out_m
+              and "RESULT: ALL PASS" not in _out_m and "== recon_gates mutate" not in _out_m)
+
+        # F7 回归牙：缺卡（rc=1）必须与 rc=2 一样前置拒跑，不得跑完变异后打印 ALL PASS 并返回 0。
+        _cards_f7 = _tmp_f67 / "cards_missing.json"
+        _cards_f7.write_text(json.dumps({"known_cards": ["openmir2-selftest-bogus-zzz"],
+                                         "assignments": {}}) + NL, encoding="utf-8")
+        _args_f7 = argparse.Namespace(
+            repo=str(REPO_DEFAULT), cards=str(_cards_f7), json=None,
+            envir_dir=_missing_f67, notice_dir=_missing_f67, allow_missing_deploy=True)
+        _probe_hits = []
+
+        def _empty_board(_repo):
+            _probe_hits.append(1)
+            return set()
+        _buf_f7 = io.StringIO()
+        with contextlib.redirect_stdout(_buf_f7):
+            _rc_f7 = cmd_mutate(_args_f7, board_lookup=_empty_board)
+        _out_f7 = _buf_f7.getvalue()
+        check("teeth（F7）：mutate 缺卡(rc=1) ⇒ 端到端 rc=1 且不打印 RESULT: ALL PASS（修前恒 rc=0）",
+              _rc_f7 == 1 and "PREREQ_CARD_MISSING" in _out_f7
+              and "RESULT: ALL PASS" not in _out_f7 and "== recon_gates mutate" not in _out_f7)
+
+        # 元断言：注入接缝确实被三条命令路径调用（防「参数没接线、靠真实看板碰巧失败」的假绿）。
+        check("meta（F6/F7）：注入的 board_lookup 被 content 调用 1 次、mutate 各调用 1 次",
+              _calls_after_content == 1 and _boom_board.calls == 2 and _probe_hits == [1])
+    finally:
+        shutil.rmtree(_tmp_f67, ignore_errors=True)
+
     # ---- 卡 openmir2-recon-unreachable-registry：豁免登记**证据门**（防「一句散文把条目藏起来」）----
     _tmp_reg = Path(tempfile.mkdtemp(prefix="recon-reg-"))
     try:
@@ -2594,7 +2655,7 @@ def selftest():
     return 0 if ok else 1
 
 
-def cmd_mutate(args):
+def cmd_mutate(args, board_lookup=None):
     """变异实测：对**真实输入**做三处自设计变异，门必须转红（证明判据读侧/方向正确）。
 
     M1 dispatch 注入：临时 oracle 加一条合成 `CM_ZZMUT_GAP` ⇒ 派发门新增 1 条 RED。
@@ -2613,9 +2674,12 @@ def cmd_mutate(args):
                                   args.allow_missing_deploy)
     if prereq_rc is not None:
         return prereq_rc
-    cards = resolve_cards(load_cards(Path(args.cards)), repo)
-    if emit_card_prereq(cards) == 2:
-        return 2   # 看板探测失败 ⇒ 判不了，变异实测不可作数
+    cards = resolve_cards(load_cards(Path(args.cards)), repo, board_lookup=board_lookup)
+    card_rc = emit_card_prereq(cards)
+    if card_rc:
+        # 与 content/dispatch 同口径：缺卡 rc=1（RED）与「判不了」rc=2 都必须前置拒跑。
+        # 旧实现只认 rc==2 ⇒ 缺卡时仍跑完全部变异、打印 RESULT: ALL PASS 并返回 0（F7 假绿）。
+        return card_rc
     results = []
     ok = True
 
