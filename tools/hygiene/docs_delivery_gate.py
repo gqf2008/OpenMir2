@@ -29,8 +29,10 @@
      `git cat-file -t` 逐个解析：
        * `commit` ⇒ 必须 `git merge-base --is-ancestor <oid> HEAD`；不是祖先 ⇒ 红
          （未合并分支 head 属正常事实 ⇒ 在登记表 `[[non_ancestor_commits]]` 里逐条说明后放行）；
-       * 其它类型（blob/tree/tag）或**解析不到** ⇒ 必须登记在 `[hex_allow]`（逐 oid，带理由）；
-       * **不得静默放行**：没登记的 blob / 缺失 oid 一律红。
+       * 其它类型（blob/tree/tag）⇒ 必须登记在 `[hex_allow]`（逐 oid，带理由）；
+       * **解析不到**（干净克隆未 fetch 跨仓对象）⇒ 登记在 `[hex_allow]` 则绿；登记在
+         `[[non_ancestor_commits]]` 则降级 **INFO**（保留登记、不判 rot、不产出 findings）；
+         两处都没登记 ⇒ 红（**不得静默放行**）。
   A2 表格结构：连续 `|` 行成组，逐行 `|` 数必须等于表头；**跳过 fenced code 块（```/~~~）与
      `/* … */` 区**，**内联代码 `` `…` `` 里的 `|` 不算**、`\\|` 不算。不一致 ⇒ 红并点名行号。
   A3 路径引用：`docs/` `tools/` `mir2-rs/` `src/` 形态的 token：
@@ -59,6 +61,8 @@
     （「仍是非 commit」**不复核**：git 对象不可变；而误登记的 commit 会先走祖先检查、
     永远不会被标记 used ⇒ 同样命中这条 rot，不必另写一条。）
   * `[[non_ancestor_commits]]` 必须仍未合并（若已变成 HEAD 祖先 ⇒ 文档里的「未合并」已过时）⇒ rc=2；
+    对象在本机对象库**解析不到**时（典型：跨仓 tip，干净克隆未 fetch 对方仓）无法判祖先关系，
+    按 INFO 保留登记、不算 rot；对象存在时才做祖先检查；
   * `[external_paths]` 登记的路径必须**仍然不存在**（若出现了 ⇒ 该登记过期）⇒ rc=2；
   * `[[claims]]` 的 anchor 必须仍在文档里，且对应命令必须能跑通。
 
@@ -392,7 +396,7 @@ def pipe_count(line):
 # ---------------------------------------------------------------------------
 # 四类检查
 # ---------------------------------------------------------------------------
-def check_hex(repo, docs, registry, cache):
+def check_hex(repo, docs, registry, cache, infos):
     findings = []
     allow = set(registry.get("hex_allow", {}).get("items", []))
     non_anc = {(e["oid"], e["file"]) for e in registry.get("non_ancestor_commits", [])}
@@ -409,10 +413,21 @@ def check_hex(repo, docs, registry, cache):
                     if oid in allow:
                         used_allow.add(oid)
                         continue
+                    if (oid, path) in non_anc:
+                        # 卡 openmir2-docs-gate-non-ancestor-rot：跨仓 tip 在本机对象库不存在
+                        # （干净克隆未 fetch 对方仓）⇒ 祖先关系无法判定，但登记本身就是声明。
+                        # 降级 INFO：保留登记、不判 rot、不产出 findings（不得因此 rc=2）。
+                        # 登记按 (oid, file) 生效；对象一旦可解析，仍走下面的祖先检查（真实漂移照旧红）。
+                        used_non_anc.add((oid, path))
+                        infos.append(dict(
+                            check="hex-external-unresolved", file=path, line=no, oid=oid,
+                            msg="`%s` 在本机对象库解析不到（跨仓 tip？）：按 [[non_ancestor_commits]] "
+                                "登记降级为 INFO，未复核对端仓库" % oid))
+                        continue
                     findings.append(dict(
                         check="hex-missing", file=path, line=no, oid=oid,
-                        msg="`%s` 解析不到（git cat-file -t 失败）：既不是本仓对象，也未登记 [hex_allow]"
-                            % oid))
+                        msg="`%s` 解析不到（git cat-file -t 失败）：既不是本仓对象，也未登记 "
+                            "[hex_allow] / [[non_ancestor_commits]]" % oid))
                     continue
                 if kind == "commit":
                     if cache.is_ancestor(oid):
@@ -648,7 +663,8 @@ def resolve_docs(repo, paths, registry):
     return docs
 
 
-def check(repo, docs, registry):
+def check(repo, docs, registry, infos=None):
+    infos = [] if infos is None else infos
     wt = git(repo, "rev-parse", "--is-inside-work-tree")
     if wt.returncode != 0 or wt.stdout.strip() != "true":
         raise GitUnavailable(
@@ -661,7 +677,7 @@ def check(repo, docs, registry):
     cache = GitCache(repo)
     tracked = set(ls.stdout.splitlines())
     findings, rot = [], []
-    for fn in (lambda: check_hex(repo, docs, registry, cache),
+    for fn in (lambda: check_hex(repo, docs, registry, cache, infos),
                lambda: check_tables(docs),
                lambda: check_paths(repo, docs, registry, tracked),
                lambda: check_claims(repo, docs, registry)):
@@ -671,10 +687,13 @@ def check(repo, docs, registry):
     return findings, rot
 
 
-def print_report(findings, rot, docs, registry):
+def print_report(findings, rot, docs, registry, infos=None):
     for f in findings:
         where = "%s:%d" % (f["file"], f["line"]) if f.get("line") else f["file"]
         print("RED   %-17s %s  %s" % (f["check"], where, f["msg"]))
+    for i in (infos or []):
+        where = "%s:%d" % (i["file"], i["line"]) if i.get("line") else i["file"]
+        print("INFO  %-17s %s  %s" % (i["check"], where, i["msg"]))
     for r in rot:
         print("ROT   %s" % r)
     unsupported = registry.get("unsupported_claims", [])
@@ -705,17 +724,19 @@ def main(argv=None):
                            os.path.dirname(os.path.dirname(os.path.dirname(
                                os.path.abspath(__file__)))))
     reg_path = args.registry or os.path.join(repo, DEFAULT_REGISTRY)
+    infos = []
     try:
         registry = load_registry(reg_path)
         docs = resolve_docs(repo, args.path, registry)
-        findings, rot = check(repo, docs, registry)
+        findings, rot = check(repo, docs, registry, infos)
     except GateError as ex:
         print("docs_delivery_gate: %s" % ex, file=sys.stderr)
         return 2
-    print_report(findings, rot, docs, registry)
+    print_report(findings, rot, docs, registry, infos)
     if args.json:
         with open(args.json, "w", encoding="utf-8") as fh:
-            json.dump({"findings": findings, "rot": rot}, fh, ensure_ascii=False, indent=1)
+            json.dump({"findings": findings, "rot": rot, "infos": infos}, fh,
+                      ensure_ascii=False, indent=1)
     return 2 if rot else (1 if findings else 0)
 
 
@@ -1284,12 +1305,12 @@ def _selftest_run():
         chk(n2c2 == 2 and "判不了" in n2c2_out,
             "N2c2 临时目录建不了（OSError）⇒ selftest rc=2（判不了，不是 rc=1）")
 
-        def run(parts, registry):
-            """parts: [(rel, text)] → (findings, rot)。"""
+        def run(parts, registry, infos=None):
+            """parts: [(rel, text)] → (findings, rot)；infos 给出则原地收集 INFO。"""
             docs = []
             for rel, text in parts:
                 docs.append((rel, text.splitlines()))
-            return check(tmp, docs, registry)
+            return check(tmp, docs, registry, [] if infos is None else infos)
 
         base_reg = {"hex_allow": {"items": []}, "non_ancestor_commits": [],
                     "external_paths": [], "claims": []}
@@ -1315,6 +1336,28 @@ def _selftest_run():
         f, r = run([("docs/delivery-x.md", "ref `deadbeef`\n")],
                    dict(base_reg, hex_allow={"items": ["deadbeef"]}))
         chk(not f and not r, "HEX-11 缺失但已登记 ⇒ 绿（不再报 hex-missing、也不算白名单 rot）")
+        # 卡 openmir2-docs-gate-non-ancestor-rot：跨仓 tip 的登记在**对象解析不到**时必须降级
+        # INFO（保留登记、不判 rot、不产出 findings），否则干净克隆未 fetch 对方仓时门 rc=2。
+        # 删掉 missing 分支里 `(oid, path) in non_anc` 的处理 ⇒ HEX-12 红。
+        _inf12 = []
+        f, r = run([("docs/delivery-x.md", "ref `deadbeef`\n")],
+                   dict(base_reg, non_ancestor_commits=[
+                       {"oid": "deadbeef", "file": "docs/delivery-x.md",
+                        "reason": "fixture：跨仓 tip，本机对象库没有"}]),
+                   _inf12)
+        chk(not f and not r and any(x.get("oid") == "deadbeef" and
+                                    x.get("check") == "hex-external-unresolved"
+                                    for x in _inf12),
+            "HEX-12 对象缺失但已按 (oid, file) 登记为未合并/跨仓 tip ⇒ 不红、不算 rot、报 INFO")
+        # 负例（登记不得变成 glob 放行）：同一 oid 登记在**别的文件**名下，本文档引用仍必须红。
+        _inf13 = []
+        f, r = run([("docs/delivery-x.md", "ref `deadbeef`\n")],
+                   dict(base_reg, non_ancestor_commits=[
+                       {"oid": "deadbeef", "file": "docs/other.md",
+                        "reason": "fixture：登记在别的文件下"}]),
+                   _inf13)
+        chk(any(x["check"] == "hex-missing" for x in f) and not _inf13,
+            "HEX-13 缺失 oid 的登记不在本文档名下 ⇒ 仍 hex-missing（降级不是 glob 放行）")
         f, r = run([("docs/delivery-x.md", "ref `%s`\n" % side_ref)],
                    dict(base_reg, non_ancestor_commits=[
                        {"oid": side_ref, "file": "docs/delivery-x.md", "reason": "未合并"}]))

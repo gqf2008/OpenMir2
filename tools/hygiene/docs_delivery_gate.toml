@@ -114,6 +114,9 @@ items = [
   "b42f20a8",  # 已不可解析（fold/GC 后的条目 oid）；引用见 docs/needs-human-20261023-night.md:38
 ]
 
+# 语义（卡 openmir2-docs-gate-non-ancestor-rot）：对象在**本机对象库**解析不到时（典型是跨仓 tip，
+# 干净克隆未 fetch 对方仓）无法判祖先关系 ⇒ 该条登记降级为 INFO：保留登记、不判 rot、不产出
+# findings；对象一旦可解析，仍按下面的 rot 规则检查（已是 HEAD 祖先 ⇒ rc=2）。
 [[non_ancestor_commits]]
 oid = "30c6de6f1"
 file = "docs/three-day-report-20261025.md"
