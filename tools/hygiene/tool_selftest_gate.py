@@ -126,6 +126,11 @@ REGISTRY = [
     # 依赖 C3：无 PowerShell 的机器会落 NEED（rc=3）而不是把门崩成红。
     ("mir_flow_selftest", ["tools/client/mir_flow.selftest.ps1"], False),
     ("invoke_bounded", ["tools/window/invoke-bounded.ps1", "-Selftest"], False),
+    # 卡 `openmir2-wmi-selftest-registry`：`start-stack-wmi.ps1 -Selftest` 是 WMI 派生链的牙
+    # （3 负例 + 1 正例：Create=0 后进程秒退 / 非零退出点名 / exit 0 但端口未起 / 正例）。
+    # 正例断言内层 `Get-ExecutionPolicy -Scope Process` = Bypass（删 `PSExecutionPolicyPreference`
+    # 转发 env 必红）；负例端口运行时取空闲端口（本机占用不假红）。合成夹具、不碰真实端口/栈、~10s。
+    ("start_stack_wmi", ["tools/window/start-stack-wmi.ps1", "-Selftest"], False),
     ("selftest_mutations", ["tools/conformance/selftest_mutations.py", "--selfcheck"], False),
     ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
     # reviewer-21 实跑：`in_world_stability.py selftest` ⇒ rc=0、7/7（纯合成数据，0.1s）。
