@@ -60,7 +60,15 @@ BUSY_PROCESS_PREFIXES = ("python", "cargo", "rustc")
 _RunResult = collections.namedtuple("_RunResult", "returncode stdout stderr")
 
 
-def _run(argv, cwd=None, timeout=PROCESS_TIMEOUT):
+def _collab_env():
+    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
+    （卡 `openmir2-walgit-local-commands-env`）。"""
+    env = dict(os.environ)
+    env["WALGIT_LOCAL_COMMANDS"] = "1"
+    return env
+
+
+def _run(argv, cwd=None, timeout=PROCESS_TIMEOUT, env=None):
     """Run ``argv``; **never raises** — every failure becomes a nonzero rc.
 
     Output is returned as **bytes** (``text=False``).  Decoding is deliberately
@@ -81,7 +89,7 @@ def _run(argv, cwd=None, timeout=PROCESS_TIMEOUT):
     """
     try:
         done = subprocess.run(argv, cwd=cwd, capture_output=True,
-                              timeout=timeout, check=False)
+                              timeout=timeout, check=False, env=env)
         stdout = done.stdout if isinstance(done.stdout, bytes) else b""
         stderr = done.stderr if isinstance(done.stderr, bytes) else b""
         return _RunResult(done.returncode, stdout, stderr)
@@ -251,6 +259,7 @@ def ledger_thread(repo, card):
     probe = _run(
         ["walgit", "collab", "thread", "--repo", repo, card],
         cwd=repo if repo else None,
+        env=_collab_env(),
     )
     if probe.returncode != 0:
         return None, "cannot read ledger thread %s (rc=%d): %s" % (

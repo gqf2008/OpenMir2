@@ -4,7 +4,7 @@
 本轮身份：从 `openmir2-reviewer-1..4` 里挑一个**当前没被占用**的（看各 reviewer 最近签发）用于本轮所有 review 条目。
 
 ## 做什么
-1. `git fetch walgit '+refs/collab/*:refs/collab/*'` + `git fetch walgit master`（刷新 `walgit/master`——下面散文锚的 `--base` 默认取它；不刷新就按**过期 base** 算 diff，会漏扫/错扫新提交；`walgit/master` 缺失时该门 rc=2 判不了）；`walgit collab board` 找【待审】。
+1. `git fetch walgit '+refs/collab/*:refs/collab/*'` + `git fetch walgit master`（刷新 `walgit/master`——下面散文锚的 `--base` 默认取它；不刷新就按**过期 base** 算 diff，会漏扫/错扫新提交；`walgit/master` 缺失时该门 rc=2 判不了）；`WALGIT_LOCAL_COMMANDS=1 walgit collab board` 找【待审】。
 2. 逐张待审卡：读卡内 patch 的验收判据 → **自己重跑**判据（不采信作者自述）→ 签 `review`：
    - 全绿且无 Critical/Important ⇒ `{"decision":"approve","agent":"<你本轮身份>","note":"<你实跑的命令+结果+证据路径>"}`；
    - 否则 `request_changes` + 具体「哪条判据、什么证据、要求什么」。

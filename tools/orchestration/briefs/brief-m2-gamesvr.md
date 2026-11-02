@@ -25,7 +25,7 @@
    §6（M2/M3 DoD）、§6.0（证据四件套与红检纪律）、§14。
 2. `git fetch walgit '+refs/collab/*:refs/collab/*'` → 读 `collab board` 与 `collab thread openmir2-m2-gamesvr-host`。
 3. 建独立 worktree：`git worktree add .claude\worktrees\m2-svr -b worktree-m2-gamesvr-host`（名字自定，别撞别人）。
-4. `walgit collab join --repo <worktree> --principal <你的 principal> --key %USERPROFILE%\.walgit\keys\<你的 principal>.ed25519 --push walgit`，
+4. `WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo <worktree> --principal <你的 principal> --key %USERPROFILE%\.walgit\keys\<你的 principal>.ed25519 --push walgit`，
    然后在本卡发 `status: in-progress` + `comment` 写清本轮范围（parent 用该线程最后一条 entry 的 oid），再动手。
    若已有别人更早的认领 ⇒ 停手回报。
 

@@ -274,12 +274,20 @@ def commit_landed(repo, sha, master='master'):
     return p is not None and p.returncode == 0
 
 
+def _collab_env():
+    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
+    （卡 `openmir2-walgit-local-commands-env`）。"""
+    env = dict(os.environ)
+    env["WALGIT_LOCAL_COMMANDS"] = "1"
+    return env
+
+
 def load_ledger(repo):
     """一次 `walgit collab board --format json` ⇒ {card_id: status}；不可用返回 None。"""
     try:
         p = subprocess.run(['walgit', 'collab', 'board', '--format', 'json', '--repo', repo],
                            capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                           timeout=120)
+                           timeout=120, env=_collab_env())
     except (OSError, subprocess.TimeoutExpired):
         return None
     if p.returncode != 0:

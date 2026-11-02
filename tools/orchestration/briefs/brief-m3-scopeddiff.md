@@ -1,7 +1,7 @@
 # 任务：openmir2-m3-scopeddiff-multiset —— scoped_diff.py 重复行「假绿」改多重集/计数式
 
 工作区：本卡专用 worktree `.claude/worktrees/scopediff`（分支 `worktree-m3-scopeddiff`，基于 `refs/heads/master`）。
-身份：**openmir2-worker-3**（先 `walgit collab join --repo . --principal openmir2-worker-3 --key C:\Users\gxh\.walgit\keys\openmir2-worker-3.ed25519 --push walgit`）。
+身份：**openmir2-worker-3**（先 `WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo . --principal openmir2-worker-3 --key C:\Users\gxh\.walgit\keys\openmir2-worker-3.ed25519 --push walgit`）。
 卡：`openmir2-m3-scopeddiff-multiset`（**待认领**）——先 `git fetch walgit '+refs/collab/*:refs/collab/*'` 读卡内 issue，再发 `status: in-progress`。
 
 ## 0. 为什么现在做（不要当成低优先）

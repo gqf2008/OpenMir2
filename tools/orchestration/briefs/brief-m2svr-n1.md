@@ -6,7 +6,7 @@
 
 ## 0. 先读后写
 
-`git fetch walgit '+refs/collab/*:refs/collab/*'`；`walgit collab thread openmir2-m2-gamesvr-host`。
+`git fetch walgit '+refs/collab/*:refs/collab/*'`；`WALGIT_LOCAL_COMMANDS=1 walgit collab thread openmir2-m2-gamesvr-host`。
 线程最后一条是 reviewer-3 的 `review`（oid `66c7e33e…`，`reviewed_commit=749ebcea`）：**request_changes**——
 N1 `Important(潜在)` + N2/N3/N4 `Minor`。`status` 的 owner 是你自己（worker-11）⇒ 接着干，别重新认领、别新开线程。
 

@@ -17,8 +17,9 @@
 
 1. 对子进程**显式**设置 `WALGIT_LOCAL_COMMANDS=1`（不依赖调用方 shell 碰巧 export 过）；
 2. stdout 原样透出、stderr 原样透出，**不吞**、不折叠；
-3. 把 CLI 的「接口已切换」哨兵识别为**独立失败**（rc=3）：即使将来 CLI 改成 rc=0、或把提示打到
-   stdout，也不会被当成空看板；
+3. 把 CLI 的「接口已切换」哨兵**行**识别为独立失败（rc=3）：即使将来 CLI 改成 rc=0、或把提示打到
+   stdout，也不会被当成空看板。**边界**：只对**行首锚定的已知哨兵行** fail-closed；其它
+   「Error 文本 + rc=0」仍按子进程 rc 原样透传（真实 CLI 以 rc=1 拒绝，rc 形态的报错一律非零）；
 4. 其它情形**原样返回子进程 rc**（0/1/2/…），绝不把非零折叠成 0。
 
 用法::
@@ -30,10 +31,14 @@
 **127** = 找不到 walgit；**124** = `WALGIT_COLLAB_TIMEOUT` 秒内没跑完（仅在该变量存在时启用）。
 
 自测（`--selftest`）用**替身 walgit** 覆盖：正常成功/rc 透传/哨兵 rc=0/哨兵在 stdout/找不到可执行/
-空参数/下游提前关管道（`| head` 不许崩），以及 `tools/orchestration/*.sh` 里不再出现
-「裸调 `walgit collab`」（注释行不误报）。替身通过 `WALGIT_COLLAB_BIN` 注入（测试缝，生产不设）。
+空参数/下游提前关管道（`| head` 不许崩）。卫生牙覆盖**三个扫描域**，且每域都有合成负例：
+`tools/orchestration/*.sh`（引用感知剥注释）、`tools/**/*.py`（AST：裸调/变量形态红，env 或已证
+helper 绿，helper 被掏空后重新变红）、`tools/orchestration/briefs/**/*.md`（每个命令必须紧跟
+`WALGIT_LOCAL_COMMANDS=1`）。替身通过 `WALGIT_COLLAB_BIN` 注入（测试缝，生产不设）。
 """
+import ast
 import errno
+import glob
 import os
 import re
 import subprocess
@@ -171,6 +176,34 @@ def main(argv=None):
 BARE_COLLAB_RE = re.compile(r"(?<![\w.-])walgit\s+collab\b")
 #: 同一逻辑行显式带开关的写法是允许的（卡面接受「显式带 env」这一等价形态）。
 EXPLICIT_ENV_RE = re.compile(r"WALGIT_LOCAL_COMMANDS\s*=\s*1\s+walgit\s+collab\b")
+#: Markdown 简报里命令的等价形态：`WALGIT_LOCAL_COMMANDS=1 walgit collab …`。
+MD_ENV_RE = re.compile(r"WALGIT_LOCAL_COMMANDS=1\s+walgit\s+collab\b")
+
+
+def _strip_shell_comment(line):
+    """**引用感知**地剥行尾注释：只在引号外的 ` #` 处截断。
+
+    朴素正则 ``\\s+#.*$`` 会把 ``echo " # x"; walgit collab board`` 的
+    真实调用一起剥掉（review F4 实测漏报）。这里用最小状态机：
+    单/双引号内不认注释；只有「前一个字符是空白」的 ``#`` 才开始注释。
+    """
+    quote = None
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if quote:
+            if ch == "\\" and quote == '"':
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+        else:
+            if ch in ("'", '"'):
+                quote = ch
+            elif ch == "#" and (i == 0 or line[i - 1].isspace()):
+                return line[:i]
+        i += 1
+    return line
 
 
 def bare_collab_hits(text):
@@ -178,7 +211,7 @@ def bare_collab_hits(text):
 
     规则（守卫扫代码不扫注释）：
       * 整行注释（首个非空白字符是 ``#``）⇒ 跳过；
-      * 行尾注释（`` #`` 之后）⇒ 先剥掉再判；
+      * 行尾注释（**引号外**的 `` #`` 之后）⇒ 先剥掉再判；
       * 行内显式 ``WALGIT_LOCAL_COMMANDS=1 walgit collab`` ⇒ 放行。
     """
     hits = []
@@ -186,7 +219,7 @@ def bare_collab_hits(text):
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        code = re.sub(r"\s+#.*$", "", stripped)
+        code = _strip_shell_comment(stripped).strip()
         if not BARE_COLLAB_RE.search(code):
             continue
         if EXPLICIT_ENV_RE.search(code):
@@ -195,21 +228,200 @@ def bare_collab_hits(text):
     return hits
 
 
-def scan_orchestration_scripts(root):
-    """扫 ``tools/orchestration/*.sh``；返回 ``(files_scanned, hits)``。"""
-    import glob
+def _is_collab_argv(node):
+    """``["walgit", "collab", …]`` 形态的列表/元组字面量。"""
+    if not isinstance(node, (ast.List, ast.Tuple)):
+        return False
+    values = [e.value for e in node.elts
+              if isinstance(e, ast.Constant) and isinstance(e.value, str)]
+    return "walgit" in values and "collab" in values
 
+
+def _defines_collab_env(fn):
+    """函数体里出现 ``WALGIT_LOCAL_COMMANDS`` 字面量 ⇒ 可作为 env 提供者。"""
+    for node in ast.walk(fn):
+        if isinstance(node, ast.Constant) and node.value == "WALGIT_LOCAL_COMMANDS":
+            return True
+    return False
+
+
+def _call_sets_collab_env(node, collab_env_funcs):
+    """调用的 ``env=`` 是否确实带开关：内联 dict 含字面量，或调用已证的 helper。"""
+    for kw in node.keywords:
+        if kw.arg != "env":
+            continue
+        value = kw.value
+        if (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+                and value.func.id in collab_env_funcs):
+            return True
+        try:
+            return "WALGIT_LOCAL_COMMANDS" in ast.unparse(value)
+        except Exception:  # pragma: no cover - 保守 fail-closed
+            return False
+    return False
+
+
+#: 真正执行子进程的调用名（`subprocess.run` / 本仓的 `_run` / `run_cmd` …）。
+_RUNNER_NAMES = {
+    "run", "call", "check_call", "check_output", "Popen",
+    "run_cmd", "run_cli", "_run", "_run_cli", "spawn", "_spawn",
+}
+
+
+def _callee_name(call):
+    func = call.func
+    if isinstance(func, ast.Name):
+        return func.id
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    return ""
+
+
+def _scope_nodes(scope):
+    """该作用域内的节点，**不下钻**嵌套函数/类（同名变量不跨函数串味）。"""
+    stack = list(ast.iter_child_nodes(scope))
+    while stack:
+        node = stack.pop()
+        yield node
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda,
+                             ast.ClassDef)):
+            continue
+        stack.extend(ast.iter_child_nodes(node))
+
+
+def py_collab_hits(source, filename="<source>"):
+    """扫 Python 源码：``walgit collab`` 的 argv 调用必须带 ``env=``。
+
+    判据是 **AST** 而不是文本（注释/字符串里的字样不误报；换行/别名也不漏报）：
+      * 直接内联的 ``["walgit", "collab", …]``；
+      * 先赋值给名字（如 ``cmd = [...]`` / ``argv += [...]``）再交给**进程执行函数**
+        （``run`` / ``_run`` / ``run_cmd`` …；按**作用域**解析，避免同名变量跨函数误报）。
+    ``env=`` 必须内联含 ``WALGIT_LOCAL_COMMANDS``，或调用本文件里已证
+    （函数体含该字面量）的 helper —— 删掉 helper 里的赋值会让调用点重新变红。
+    """
+    try:
+        tree = ast.parse(source, filename=filename)
+    except SyntaxError as exc:
+        return [(getattr(exc, "lineno", 0) or 0, "SYNTAX ERROR: %s" % exc)]
+
+    collab_env_funcs = {
+        node.name for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+        and _defines_collab_env(node)
+    }
+    scopes = [tree] + [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+
+    hits = []
+    for scope in scopes:
+        nodes = list(_scope_nodes(scope))
+        collab_names = set()
+        for node in nodes:
+            if isinstance(node, ast.Assign) and _is_collab_argv(node.value):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        collab_names.add(target.id)
+            elif isinstance(node, ast.AugAssign) and _is_collab_argv(node.value):
+                if isinstance(node.target, ast.Name):
+                    collab_names.add(node.target.id)
+        for node in nodes:
+            if not isinstance(node, ast.Call):
+                continue
+            if _callee_name(node) not in _RUNNER_NAMES:
+                continue
+            carries_argv = any(
+                _is_collab_argv(arg)
+                or (isinstance(arg, ast.Name) and arg.id in collab_names)
+                for arg in node.args
+            )
+            if not carries_argv or _call_sets_collab_env(node, collab_env_funcs):
+                continue
+            snippet = " ".join((ast.get_source_segment(source, node) or "").split())
+            hits.append((node.lineno, snippet[:140]))
+    hits.sort()
+    return hits
+
+
+def md_collab_hits(text):
+    """扫 Markdown：每个 ``walgit collab`` 都必须紧跟 ``WALGIT_LOCAL_COMMANDS=1``。
+
+    先删掉合规形态再找残留 ⇒ 同一行有多条命令时，漏带开关的那条仍会被抓。
+    """
+    hits = []
+    for lineno, line in enumerate((text or "").splitlines(), 1):
+        residual = MD_ENV_RE.sub("", line)
+        if BARE_COLLAB_RE.search(residual):
+            hits.append((lineno, line.strip()[:140]))
+    return hits
+
+
+def _read(path):
+    with open(path, encoding="utf-8", errors="replace") as fh:
+        return fh.read()
+
+
+def scan_shell_scripts(root):
+    """扫 ``tools/orchestration/*.sh``；返回 ``(files_scanned, hits)``。"""
     files = sorted(glob.glob(os.path.join(root, "tools", "orchestration", "*.sh")))
     hits = []
     for path in files:
         try:
-            with open(path, encoding="utf-8", errors="replace") as fh:
-                text = fh.read()
+            text = _read(path)
         except OSError as exc:
             hits.append((path, 0, "读不了：%s" % exc))
             continue
         for lineno, code in bare_collab_hits(text):
             hits.append((path, lineno, code))
+    return files, hits
+
+
+def scan_python_tools(root):
+    """扫 ``tools/**/*.py``（AST）；返回 ``(files_scanned, hits)``。
+
+    **显式排除** ``mir2-rs/tests/parity/coverage/recon_gates.py``（不在 tools/ 下，
+    且由卡 ``openmir2-recon-gates-false-green`` 覆盖）——本函数的域就是 tools/。
+    """
+    base = os.path.join(root, "tools")
+    files = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+        for name in filenames:
+            if name.endswith(".py"):
+                files.append(os.path.join(dirpath, name))
+    files.sort()
+    hits = []
+    for path in files:
+        try:
+            text = _read(path)
+        except OSError as exc:
+            hits.append((path, 0, "读不了：%s" % exc))
+            continue
+        for lineno, code in py_collab_hits(text, path):
+            hits.append((path, lineno, code))
+    return files, hits
+
+
+def scan_briefs(root):
+    """扫 ``tools/orchestration/briefs/**/*.md``；返回 ``(files_scanned, hits)``。"""
+    base = os.path.join(root, "tools", "orchestration", "briefs")
+    files = []
+    for dirpath, dirnames, filenames in os.walk(base):
+        for name in filenames:
+            if name.endswith(".md"):
+                files.append(os.path.join(dirpath, name))
+    files.sort()
+    hits = []
+    for path in files:
+        try:
+            text = _read(path)
+        except OSError as exc:
+            hits.append((path, 0, "读不了：%s" % exc))
+            continue
+        for lineno, code in md_collab_hits(text):
+            hits.append((path, lineno, code))
+    return files, hits
     return files, hits
 
 
@@ -376,10 +588,57 @@ def selftest():
     add("guard:wrapper-name-not-flagged",
         bare_collab_hits("python walgit_collab.py board") == [])
     add("guard:empty-input", bare_collab_hits("") == [])
+    # F4：引号内的「空格+#」不是注释，后面的真实调用必须仍被抓到。
+    add("guard:quote-hash-not-comment",
+        len(bare_collab_hits('echo " # x"; walgit collab board')) == 1,
+        "hits=%r" % bare_collab_hits('echo " # x"; walgit collab board'))
 
-    files, hits = scan_orchestration_scripts(root)
-    add("guard:scanned-at-least-3-scripts", len(files) >= 3, "files=%r" % files)
-    add("guard:no-bare-collab-in-orchestration", hits == [], "hits=%r" % hits)
+    # --- .py 扫描域（AST）：裸调/变量形态必须红，env 或已证 helper 必须绿 ---
+    py_bare = 'import subprocess\nsubprocess.run(["walgit", "collab", "board"])\n'
+    py_var = ('import subprocess\ncmd = ["walgit", "collab", "board"]\n'
+              'subprocess.run(cmd, capture_output=True)\n')
+    py_inline_ok = ('import os, subprocess\n'
+                    'subprocess.run(["walgit", "collab", "board"],'
+                    ' env=dict(os.environ, WALGIT_LOCAL_COMMANDS="1"))\n')
+    py_helper_ok = ('import os, subprocess\n'
+                    'def _collab_env():\n'
+                    '    e = dict(os.environ)\n'
+                    '    e["WALGIT_LOCAL_COMMANDS"] = "1"\n'
+                    '    return e\n'
+                    'subprocess.run(["walgit", "collab", "board"], env=_collab_env())\n')
+    py_helper_broken = ('import os, subprocess\n'
+                        'def _collab_env():\n'
+                        '    return dict(os.environ)\n'
+                        'subprocess.run(["walgit", "collab", "board"], env=_collab_env())\n')
+    add("guard-py:bare-flagged", len(py_collab_hits(py_bare)) == 1)
+    add("guard-py:variable-flagged", len(py_collab_hits(py_var)) == 1)
+    add("guard-py:inline-env-allowed", py_collab_hits(py_inline_ok) == [])
+    add("guard-py:helper-env-allowed", py_collab_hits(py_helper_ok) == [])
+    # 删掉 helper 里的赋值 ⇒ 调用点重新变红（helper 不能成为免检通道）。
+    add("guard-py:broken-helper-flagged", len(py_collab_hits(py_helper_broken)) == 1,
+        "hits=%r" % py_collab_hits(py_helper_broken))
+    add("guard-py:comment-only", py_collab_hits("# walgit collab board\n") == [])
+    add("guard-py:empty-input", py_collab_hits("") == [])
+
+    # --- .md（briefs）扫描域：命令必须紧跟前缀；同行混排时漏带的那条仍要红 ---
+    add("guard-md:bare-flagged", len(md_collab_hits("run `walgit collab board`")) == 1)
+    add("guard-md:prefixed-allowed",
+        md_collab_hits("run `WALGIT_LOCAL_COMMANDS=1 walgit collab board`") == [])
+    add("guard-md:mixed-line-flagged",
+        len(md_collab_hits(
+            "`WALGIT_LOCAL_COMMANDS=1 walgit collab board`; `walgit collab thread x`")) == 1)
+    add("guard-md:empty-input", md_collab_hits("") == [])
+
+    sh_files, sh_hits = scan_shell_scripts(root)
+    py_files, py_hits = scan_python_tools(root)
+    md_files, md_hits = scan_briefs(root)
+    add("guard:scanned-at-least-3-shell", len(sh_files) >= 3, "files=%r" % sh_files)
+    add("guard:shell-clean", sh_hits == [], "hits=%r" % sh_hits)
+    add("guard:scanned-at-least-20-python", len(py_files) >= 20,
+        "count=%d" % len(py_files))
+    add("guard:python-clean", py_hits == [], "hits=%r" % py_hits)
+    add("guard:scanned-at-least-5-briefs", len(md_files) >= 5, "files=%r" % md_files)
+    add("guard:briefs-clean", md_hits == [], "hits=%r" % md_hits)
 
     failed = [c for c in cases if not c[1]]
     for name, ok, detail in cases:

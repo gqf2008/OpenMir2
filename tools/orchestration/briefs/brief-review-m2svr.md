@@ -9,7 +9,7 @@
 ```powershell
 cd E:\Users\gxh\Documents\GitHub\OpenMir2
 git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*'
-walgit collab thread openmir2-m2-gamesvr-host
+WALGIT_LOCAL_COMMANDS=1 walgit collab thread openmir2-m2-gamesvr-host
 ```
 
 卡上有两个 patch（S1 + S2a）与作者的 `self_correction`：**S1 的槽位语义写错了**（oracle 是"复用最小空闲槽"，
@@ -21,7 +21,7 @@ walgit collab thread openmir2-m2-gamesvr-host
    ```powershell
    git worktree add E:\tmp\openmir2-watch\rev-m2svr 6209aa54
    cd E:\tmp\openmir2-watch\rev-m2svr
-   walgit collab join --repo . --principal openmir2-reviewer-2 `
+   WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo . --principal openmir2-reviewer-2 `
      --key $env:USERPROFILE\.walgit\keys\openmir2-reviewer-2.ed25519 --push walgit
    ```
 2. 取判据用**隔离 target**：`$env:CARGO_TARGET_DIR='E:\tmp\openmir2-watch\rev-m2svr-target'`，然后
@@ -44,7 +44,7 @@ walgit collab thread openmir2-m2-gamesvr-host
 ## 2. 签条目
 
 ```powershell
-walgit collab entry --repo . --kind review --id openmir2-m2-gamesvr-host `
+WALGIT_LOCAL_COMMANDS=1 walgit collab entry --repo . --kind review --id openmir2-m2-gamesvr-host `
   --parent <该线程最后一条 entry 的 oid> `
   --body '{"agent":"openmir2-reviewer-2","decision":"approve|request_changes","reviewed_commit":"6209aa54", ...}' `
   --push walgit
