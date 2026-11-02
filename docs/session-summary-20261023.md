@@ -35,7 +35,7 @@
 1. `openmir2-window-rust-binary-evidence`（**在做**）：`alt` profile 的 `rust.binaries` 指向 .NET 程序集 ⇒ 不修则第一批 173 张的 Rust sha256 全记错。
 2. `openmir2-discovery-bagitems-201`（**在做**）：解锁 `eat_item`；否则 `exec-seams` ② 路恒 rc=2。
 3. `openmir2-scenario-npc-script-chain`（**在做**）：R1，覆盖第 3 批 9 张。
-4. `openmir2-window-gate-two-runs`（**待认领，需栈权限**）：两道真窗口门禁，过后才算「接线可用」。
+4. `openmir2-window-gate-two-runs`（**已关闭**：门禁② 真机 PASS、门禁① 结构性不可达记 N/A）。
 5. `openmir2-script-sendmsg-host`（**待认领**）：部署 806 行 SENDMSG 里 **349 行目前零帧**（case 0-3 全服广播 318 + case 4 NPC 喊话 31），玩家直接可见。
 
 ## 5. 需要 owner 的五件事
