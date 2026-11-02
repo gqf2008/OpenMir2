@@ -6,7 +6,7 @@ runbook `docs/window-run-1-20261024.md` §6.1 条件 1 的**可执行版**：输
 `frames.ndjson`，判断两侧差异形状是否**只能**由 m（m ≥ 1）个完整的
 `(SM_TURN(10), SM_FEATURECHANGED(41))` 对解释：
 
-  * 对齐后除差块外的其余帧（公共前缀 + 公共后缀）必须完全一致；
+  * 对齐后除差块外的其余帧（公共前缀 + 公共后缀）必须在**逐帧判等域**下一致；
   * 差块只能出现在**同一侧**，是 m 个完整对，且每个 `10` 的**紧邻下一帧必须是 `41`**；
   * 两侧帧数差必须恰为 2m；
   * 不允许其它 ident 的多出/缺失、非成对单帧、或非随机帧的相对次序差。
@@ -17,6 +17,13 @@ runbook `docs/window-run-1-20261024.md` §6.1 条件 1 的**可执行版**：输
 `mask_body_ranges` 等 action）。规则表默认读同目录 `rules.json`，**不写死字段**。
 `action=ignore` 的 ident 按比较器口径先剔除（逐帧计数登记，不静默）。
 未登记 ident ⇒ **UNDECIDABLE**（fail-closed，绝不静默当绿）。
+
+**口径边界（review 0e16482c Minor 2）**：复用的是 compare_runs 的**逐帧**判等
+（`mask_for` + `compare_bodies`）。对齐全按**位置**，**不**归一化 compare_runs 的
+块级/可移动规则——ident 100 的 `multiset_by_tick`（同一连续块内顺序不是合同）与
+ident 201 的 movable（T-184）。因此在这两类流上本工具可能比 compare_runs **更严格**：
+块内重排按 §6.1「非随机帧的相对次序差」判 FAIL。若某轮差异只由这两类块内重排构成，
+以 compare_runs 的结论为准；本工具只回答 §6.1 形状是否成立。
 
 退出码（与 `compare_runs.py` 同口径）：
   0 = PASS（形状只由完整对解释；m 可为 0，即两侧在该判等域下全等）
@@ -31,7 +38,8 @@ runbook `docs/window-run-1-20261024.md` §6.1 条件 1 的**可执行版**：输
 
 自测（全离线，不连网/不连库/不起进程）用仓库真实 fixture：
   * `mir2-rs/bins/game-svr/tests/fixtures/npc_click/`：run1 恰好 PASS（30/32、前缀 29、后缀 1、m=1）；
-  * 同一 fixture 的五类反例：`(41,10)` 倒序 / 单 `10` / 单 `41` / 非成对 `41` / 改 643 body ⇒ FAIL；
+  * 同一 fixture 的六类反例：`(41,10)` 倒序 / 单 `10` / 单 `41` / 非成对 `41` / 改 643 body /
+    41 的 recog 与 turn 不同 ⇒ FAIL；
   * `tools/conformance/fixtures/npc_click_w1c/`：w1c 真机证据的真实 FAIL（`643` 提前，index 19）⇒ FAIL。
 """
 import argparse
@@ -124,6 +132,8 @@ def frame_status(rules, fr_a, fr_b):
     detail 用中性键 `a`/`b`（调用方知道哪侧是 oracle/rust）。
     头部与 body 的判等全走 compare_runs：`mask_for` + `compare_bodies`，
     本检查器不另写掩码，也不做 raw bytes 比较。
+    **注意**：这是**逐帧**判等；不含 compare_runs 的块级归一
+    （`multiset_by_tick`/movable，见模块 docstring 的「口径边界」）。
     """
     if fr_a["ident"] != fr_b["ident"]:
         return "diff", {"field": "ident",
@@ -185,6 +195,13 @@ def pair_block_status(rules, block):
                            "reason": "turn_ident=%d 的紧邻下一帧 ident=%d，不是 feature_ident=%d"
                                      "（10 必须紧随 41）"
                                      % (turn["ident"], feat["ident"], rp["feature_ident"])}
+        # 登记定义要求「紧随**同 recog** 的 41」：谓词与 compare_runs.extract_random_pairs
+        # 共用（random_pair_recog_match），不在这里写第二份（review 0e16482c Important）。
+        if not base.random_pair_recog_match(turn, feat):
+            return False, {"field": "recog", "ident": feat["ident"], "offset_in_block": k + 1,
+                           "reason": "turn.recog 与紧邻 feature 的 recog 不同或缺失"
+                                     "（完整对要求同一 actor：turn=%r feature=%r）"
+                                     % (turn.get("recog"), feat.get("recog"))}
         # body 长度也按规则登记值校验（与 compare_runs.extract_random_pairs 同口径）：
         # 带名尾的登录期 TURN（body_len>11）不是随机分支对，不能当差块解释掉。
         if rp.get("turn_body_len") is not None:
@@ -282,24 +299,55 @@ def analyze(oracle_frames, rust_frames, rules):
                 "common_suffix": len(B) - i,
                 "pairs_side": long_side,
                 "detail": ("差块 = %d 个完整 (turn_ident=%d, feature_ident=%d) 对，只在 %s 侧；"
-                           "其余帧在比较器判等域下全等"
+                           "其余帧在**逐帧**判等域（mask_for + compare_bodies）下全等"
+                           "（未归一化 multiset_by_tick/movable 块，见模块口径边界）"
                            % (d // 2, rules.random_branch_pairs["turn_ident"],
                               rules.random_branch_pairs["feature_ident"], long_side))}
 
     if block_bad_ok:
         # 前后缀都能对上，只有差块形状不成立：就是形状本身的判定，最直白。
         i, detail = block_bad_ok[0]
+        off = detail.get("offset_in_block", 0)
+        frame = A[i + off] if i + off < len(A) else A[i]
         return _fail(detail.get("reason", "差块不是 m 个完整 (10,41) 对"),
-                     detail.get("field"), _frame_ref(A[i], side_a),
+                     detail.get("field"), _frame_ref(frame, side_a),
                      ident=detail.get("ident"))
 
     # 前后缀本身就对不上：定位第一处。
     p = lcp()
-    # 帧数差是偶数：先看 p 处的差块（LCP 之后），再看差块之后的错位后缀。
+    # Minor 1（review 0e16482c）：p 处若只是普通字段差（param/tag/series/body），先把
+    # 该字段差报出来；不要拿「差块不是 10/41 对」覆盖它。只有 p 处本身是 ident 差、
+    # 且差块确由 turn/feature 帧组成时，才按差块形状判。
+    if p < len(B):
+        st, dt = frame_status(rules, A[p], B[p])
+        if st == "undecidable":
+            return {"verdict": "UNDECIDABLE", "exit_code": 2, "kind": "frame_undecidable",
+                    "long_side": long_side,
+                    "first_fail": {"reason": dt.get("reason", "帧无法比较"),
+                                   "field": dt.get("field"),
+                                   "frame": _frame_ref(A[p], side_a),
+                                   "counterpart": _frame_ref(B[p], side_b)},
+                    "detail": "公共前缀断点处存在无法比较的帧 ⇒ 判不了（不当 FAIL，也不当 PASS）"}
+        if st == "diff" and dt.get("field") != "ident":
+            return _fail("公共前缀内字段不一致：%s" % dt.get("reason", ""),
+                         dt.get("field"), _frame_ref(A[p], side_a),
+                         counterpart=_frame_ref(B[p], side_b))
+        if st == "diff":
+            rp = rules.random_branch_pairs
+            pair_like = all(f["ident"] in (rp["turn_ident"], rp["feature_ident"])
+                            for f in A[p:p + d])
+            if not pair_like:
+                return _fail("公共前缀内 ident 不一致（差块不是 turn/feature 帧）：%s"
+                             % dt.get("reason", ""), "ident",
+                             _frame_ref(A[p], side_a),
+                             counterpart=_frame_ref(B[p], side_b))
+    # 帧数差是偶数：再看 p 处的差块（LCP 之后）与差块之后的错位后缀。
     block_ok, block_detail = pair_block_status(rules, A[p:p + d])
     if not block_ok:
+        off = block_detail.get("offset_in_block", 0)
+        frame = A[p + off] if p + off < len(A) else A[p]
         return _fail(block_detail.get("reason", "差块不是完整对"),
-                     block_detail.get("field"), _frame_ref(A[p], side_a),
+                     block_detail.get("field"), _frame_ref(frame, side_a),
                      ident=block_detail.get("ident"))
 
     # 差块本身合法，但差块之外的帧在判等域下不一致。
@@ -468,6 +516,12 @@ def _with_body(fr, body):
     return x
 
 
+def _with_recog(fr, recog):
+    x = dict(fr)
+    x["recog"] = recog
+    return x
+
+
 def _load_pair(csharp_path, rust_path):
     o = load_stream_file(csharp_path, "oracle").frames
     r = load_stream_file(rust_path, "rust").frames
@@ -559,7 +613,32 @@ def cmd_selftest(argv=None):
         and ff.get("counterpart", {}).get("frame_index") == 29,
         "改 643 body ⇒ FAIL at rust[31] vs oracle[29] ident 643", repr(ff))
 
-    # ⑦ w1c 真实 FAIL：643 相对其它帧提前（oracle[19]=10 vs rust[19]=643）。
+    # ⑦ 差块 41 的 recog 与 turn 不同 ⇒ 不是同一 actor 的完整对 ⇒ FAIL
+    #    （Important, review 0e16482c：缺该谓词会把不同 actor 的 41 洗成随机对）。
+    recog_bad = _renumber(rs[:30] + [_with_recog(rs[30], 424242)] + rs[31:])
+    res = analyze(cs, recog_bad, rules)
+    ff = res.get("first_fail") or {}
+    chk(res.get("verdict") == "FAIL" and ff.get("field") == "recog"
+        and ff.get("ident") == 41 and ff.get("frame", {}).get("frame_index") == 30,
+        "41 recog != turn recog ⇒ FAIL at rust[30] ident 41", repr(ff))
+    # 交叉验证：同一输入 compare_runs 也必须判红（证明两个工具对「完整对」定义一致）。
+    c = base.compare_streams(
+        base.Stream("oracle", "/dev/null", "/dev/null", cs, []),
+        base.Stream("rust", "/dev/null", "/dev/null", recog_bad, []), rules)
+    chk(c["diffs"] != [], "cross-check: recog 不同时 compare_runs 也有 diffs",
+        repr(c["diffs"][:2]))
+
+    # ⑧ 普通字段差（index5 param）⇒ first_fail 必须是该字段，不能被「差块形状」
+    #    覆盖（Minor 1, review 0e16482c）。
+    param_bad = _renumber(rs)
+    param_bad[5]["param"] = 99999
+    res = analyze(cs, param_bad, rules)
+    ff = res.get("first_fail") or {}
+    chk(res.get("verdict") == "FAIL" and ff.get("field") == "param"
+        and ff.get("frame", {}).get("frame_index") == 5,
+        "index5 param 差 ⇒ first_fail field=param at rust[5]", repr(ff))
+
+    # ⑨ w1c 真实 FAIL：643 相对其它帧提前（oracle[19]=10 vs rust[19]=643）。
     wcs, wrs = _load_pair(os.path.join(w1c_dir, "csharp-frames.ndjson"),
                           os.path.join(w1c_dir, "rust-frames.ndjson"))
     chk(len(wcs) == 30 and len(wrs) == 30, "fixture: w1c 帧数 30/30",
