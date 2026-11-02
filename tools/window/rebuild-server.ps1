@@ -4,10 +4,11 @@
 # 为什么需要它（window-run-1 §0 的「旧二进制假绿」纪律）：
 #   * 真机证据里的 Rust sha256 必须指向**本次窗口、当前 head** 构建出来的
 #     `mir2-rs/target/release/mir2-server.exe`；拿旧构建跑出来的 PASS 不可追溯。
-#   * run-2 的私栈启动脚本 `E:/tmp/conformance/start-rust.ps1` 把默认 `-ServerExe`
-#     钉在 `E:\tmp\wt-worker-73\...`（该 worktree 已删除）；而 `card_window.py` 起栈后
-#     会用 `mir2-server.pid.json` 的 `roles[].exe` 与 profile 的 binaries 对账 —— 不修
-#     直接 rc=2。`-SyncStartRust` 把默认值改到**本检出**的 release 二进制（原文件先备份）。
+#   * 旧的私栈启动脚本会把默认 `-ServerExe` 钉在某个已删除的 worktree；而
+#     `card_window.py` 起栈后会用 `mir2-server.pid.json` 的 `roles[].exe` 与 profile 的
+#     binaries 对账 —— 不修直接 rc=2。仓库版 `tools/window/start-rust.ps1` 已改为用
+#     `$Repo` 解析本检出二进制（卡 `openmir2-window-tmp-hardening`），`-SyncStartRust`
+#     对它直接 no-op（`sync=repo-resolved`）；仍保留给旧的**外部**启动器模板使用。
 #
 # 用法：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/window/rebuild-server.ps1
@@ -27,7 +28,7 @@
 
 param(
   [string]$RepoRoot = '',
-  [string]$StartRustScript = 'E:/tmp/conformance/start-rust.ps1',
+  [string]$StartRustScript = '',
   [switch]$SyncStartRust,
   [switch]$SkipBuild,
   [switch]$RequireClean,
@@ -79,6 +80,11 @@ if ([string]::IsNullOrWhiteSpace($RepoRoot)) {
   $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
 }
 $RepoRoot = (Resolve-Path -LiteralPath $RepoRoot).Path
+
+# 卡 `openmir2-window-tmp-hardening`：启动器收进仓库；缺省指向仓库版（用 $Repo 解析二进制）。
+if ([string]::IsNullOrWhiteSpace($StartRustScript)) {
+  $StartRustScript = Join-Path $RepoRoot 'tools\window\start-rust.ps1'
+}
 $Exe = Join-Path $RepoRoot 'mir2-rs\target\release\mir2-server.exe'
 $Stamp = Join-Path $RepoRoot 'mir2-rs\target\release\mir2-server.build.json'
 $RustRoot = Join-Path $RepoRoot 'mir2-rs'
@@ -203,8 +209,16 @@ if ($SyncStartRust) {
     Fail ("-SyncStartRust 但找不到 " + $StartRustScript)
   }
   $text = [System.IO.File]::ReadAllText($StartRustScript)
-  $norm = { param($p) $p.Replace('/', '\').TrimEnd('\').ToLowerInvariant() }
+  # 仓库版 start-rust.ps1 不再写死字面量（$Repo 解析）；无需改写，直接跳过。
   $starterPath = Join-Path $RepoRoot 'tools\m2-acceptance\start_mir2_server.ps1'
+  $repoResolved = ($text -match 'Join-Path \$Repo') -and ($text -match 'mir2-server\.exe')
+  if ($repoResolved) {
+    $syncResult = 'repo-resolved'
+    Write-Host ("START_RUST_SERVER_EXE repo-resolved (" + $Exe + ")")
+    Write-Host ("START_RUST_STARTER repo-resolved (" + $starterPath + ")")
+  }
+  if (-not $repoResolved) {
+  $norm = { param($p) $p.Replace('/', '\').TrimEnd('\').ToLowerInvariant() }
   $specs = @(
     @{ Label='ServerExe'; Pattern="(\[string\]\s*\`$\s*ServerExe\s*=\s*')([^']*)(')"; Want=$Exe },
     @{ Label='starter';   Pattern="(\`$starter\s*=\s*')([^']*)(')"; Want=$starterPath }
@@ -246,6 +260,7 @@ if ($SyncStartRust) {
     [System.IO.File]::WriteAllText($StartRustScript, $new, $utf8n)
     $syncResult = 'updated'
     Write-Host ("备份：" + $bak)
+  }
   }
 } else {
   Write-Host "START_RUST_SERVER_EXE skipped（未给 -SyncStartRust）"

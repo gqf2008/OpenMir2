@@ -131,6 +131,8 @@ REGISTRY = [
     # 正例断言内层 `Get-ExecutionPolicy -Scope Process` = Bypass（删 `PSExecutionPolicyPreference`
     # 转发 env 必红）；负例端口运行时取空闲端口（本机占用不假红）。合成夹具、不碰真实端口/栈、~10s。
     ("start_stack_wmi", ["tools/window/start-stack-wmi.ps1", "-Selftest"], False),
+    # 卡 `openmir2-window-tmp-hardening`：停止器收进仓库（原 E:/tmp 会被外部清扫）。
+    ("stop_rust", ["tools/window/stop-rust.ps1", "-Selftest"], False),
     ("selftest_mutations", ["tools/conformance/selftest_mutations.py", "--selfcheck"], False),
     ("startup_param", ["tools/window/startup_param.py", "selftest"], False),
     # reviewer-21 实跑：`in_world_stability.py selftest` ⇒ rc=0、7/7（纯合成数据，0.1s）。

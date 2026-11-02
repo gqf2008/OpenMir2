@@ -48,9 +48,9 @@
 #
 # 用法（内置 profile 生成时拼装，见 tools/conformance/card_window.py 的 wmi_stack_argv）：
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/window/start-stack-wmi.ps1 `
-#     -Script E:/tmp/conformance/start-csharp3.ps1 -ReadyPorts 15000,17000,17100,17200
+#     -Script <repo>/tools/window/start-csharp.ps1 -ReadyPorts 15000,17000,17100,17200
 #   # + pin 自证（window-magic 的 rust 侧）：
-#   #   -PinChecks MIR2_CLIENT_ABILITY_LAYOUT=0 -PinLog E:/tmp/conformance/rust-logs/game-svr.out.log
+#   #   -PinChecks MIR2_CLIENT_ABILITY_LAYOUT=0 -PinLog <conformance-root>/rust-logs/game-svr.out.log
 #   # 冒烟/自检（不起栈、不派生、只做 pin 校验）：-CheckPinsOnly；
 #   # 不等端口（配合真服务端单进程冒烟）：-SkipPortWait；
 #   # 派生链牙（3 负例 + 1 正例，合成夹具，不碰真实端口/栈）：-Selftest；

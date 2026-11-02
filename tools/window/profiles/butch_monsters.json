@@ -27,11 +27,13 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-1/tools/window/start-stack-wmi.ps1",
+        "{repo}/tools/window/start-stack-wmi.ps1",
         "-Script",
-        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-1/tools/window/start-csharp.ps1",
+        "{repo}/tools/window/start-csharp.ps1",
         "-ReadyPorts",
-        "15000,17000,17100,17200"
+        "15000,17000,17100,17200",
+        "-InnerArgs",
+        "-Root \"{conformance_root}/csharp-root\""
       ],
       "stop": [
         "powershell",
@@ -39,11 +41,12 @@
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like 'E:\\tmp\\conformance\\csharp-root\\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
+        "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like '{conformance_root_win}\\csharp-root\\*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }"
       ],
       "restore": [
         "C:/Program Files/Git/usr/bin/bash.exe",
-        "E:/tmp/conformance/restore-baseline.sh"
+        "{repo}/tools/window/restore-baseline.sh",
+        "{conformance_root}/baseline"
       ],
       "ports": [
         15000,
@@ -65,9 +68,9 @@
       ],
       "probe_extra": [],
       "binaries": [
-        "E:/tmp/conformance/csharp-root/M2GameSvr/GameSrv.exe"
+        "{conformance_root}/csharp-root/M2GameSvr/GameSrv.exe"
       ],
-      "envir_root": "E:/tmp/conformance/csharp-root/M2GameSvr",
+      "envir_root": "{conformance_root}/csharp-root/M2GameSvr",
       "db": {
         "preset": "test",
         "characters_db": "mir2_test_db"
@@ -81,11 +84,13 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-1/tools/window/start-stack-wmi.ps1",
+        "{repo}/tools/window/start-stack-wmi.ps1",
         "-Script",
-        "E:/tmp/conformance/start-rust.ps1",
+        "{repo}/tools/window/start-rust.ps1",
         "-ReadyPorts",
-        "15000,17000,17100,17600"
+        "15000,17000,17100,17600",
+        "-InnerArgs",
+        "-Root \"{conformance_root}/rust-root\" -LogDir \"{conformance_root}/rust-logs\""
       ],
       "stop": [
         "powershell",
@@ -93,11 +98,16 @@
         "-ExecutionPolicy",
         "Bypass",
         "-File",
-        "E:/tmp/conformance/stop-rust.ps1"
+        "{repo}/tools/window/stop-rust.ps1",
+        "-Root",
+        "{conformance_root}/rust-root",
+        "-LogDir",
+        "{conformance_root}/rust-logs"
       ],
       "restore": [
         "C:/Program Files/Git/usr/bin/bash.exe",
-        "E:/tmp/conformance/restore-baseline-r.sh"
+        "{repo}/tools/window/restore-baseline-r.sh",
+        "{conformance_root}/baseline"
       ],
       "ports": [
         15000,
@@ -120,11 +130,11 @@
         "127.0.0.1:17600"
       ],
       "binaries": [
-        "E:/Users/gxh/Documents/GitHub/OpenMir2/.worktrees/dev-1/mir2-rs/target/release/mir2-server.exe"
+        "{repo}/mir2-rs/target/release/mir2-server.exe"
       ],
       "require_pid_binaries": true,
-      "pid_file": "E:/tmp/conformance/rust-logs/mir2-server.pid.json",
-      "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
+      "pid_file": "{conformance_root}/rust-logs/mir2-server.pid.json",
+      "envir_root": "{conformance_root}/rust-root/M2GameSvr",
       "db": {
         "tables": [
           "mir2_test_account_r.account",

@@ -499,8 +499,10 @@ python -I -B tools/conformance/compare_runs.py selftest
   起栈后还会读 pid 文件的 `roles[].exe` 与登记对账，**不一致或缺文件 ⇒ rc=2 并点名**。
   * **pid 文件路径只认 profile 的 `pid_file`**（`{side_dir}` 占位可用），代码里不写死部署
     绝对路径；开了 `require_pid_binaries` 却缺 `pid_file` ⇒ 加载期 ConfigError。
-    **下一次真窗口（`alt`）读的是 `E:/tmp/conformance/rust-logs/mir2-server.pid.json`**
-    ——那是 `E:/tmp/conformance/start-rust.ps1` 的 `-LogDir`，不是 `<out>/rust/`。
+    **下一次真窗口（`alt`）读的是 `<MIR2_CONFORMANCE_ROOT>/rust-logs/mir2-server.pid.json`**
+    （缺省 `E:/tmp/conformance/rust-logs/mir2-server.pid.json`）——那是仓库内
+    `tools/window/start-rust.ps1` 的 `-LogDir`，不是 `<out>/rust/`。部署根可用
+    `MIR2_CONFORMANCE_ROOT` 指到临时副本/新盘（卡 `openmir2-window-tmp-hardening`）。
   * pid 文件由 `start_mir2_server.ps1` 用 Windows PowerShell 5 的
     `Set-Content -Encoding utf8` 写出，**带 UTF-8 BOM**；`card_window.py` 用
     `encoding="utf-8-sig"` 读（否则真窗口会稳定 rc=2）。

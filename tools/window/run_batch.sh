@@ -30,8 +30,8 @@
 #         UNDECIDABLE/超时/目录不完整（与 card_window 的 fail-closed 一致）。
 #         **UNDECIDABLE 不是通过**，也会让批次 rc=2。
 #
-# 红线（本脚本遵守）：不动 mysqld（清理只按 E:/tmp/conformance/csharp-root 路径杀进程 +
-#   stop-rust.ps1）；不写生产库（profile 固定 alt/window-magic，测试库）；
+# 红线（本脚本遵守）：不动 mysqld（清理用仓库内 start-csharp.ps1 -Stop +
+#   tools/window/stop-rust.ps1，部署根随 MIR2_CONFORMANCE_ROOT）；不写生产库（profile 固定 alt/window-magic，测试库）；
 #   场景 JSON 只读（--dry-run 由 card_window 负责，本脚本不改场景）。
 set -uo pipefail
 
@@ -48,6 +48,7 @@ RUN_DIR=${WINDOW_RUN_DIR:-E:/tmp/window/run3}
 CARD=${WINDOW_CARD:-openmir2-window-run-2}
 TIMEOUT_SEC=${WINDOW_TIMEOUT_SEC:-2700}
 PY=${WINDOW_PYTHON:-python}
+CONF_ROOT=${MIR2_CONFORMANCE_ROOT:-E:/tmp/conformance}
 
 DO_REBUILD=1
 DO_PREFLIGHT=1
@@ -331,11 +332,11 @@ fi
 # ---- ① release 重建（对齐 head + sha256）----
 if [ "$DO_REBUILD" -eq 1 ]; then
     if [ "$DRY_RUN" -eq 1 ]; then
-        log "PLAN rebuild: powershell -NoProfile -ExecutionPolicy Bypass -File $REBUILD_PS1 -SyncStartRust -RequireClean"
+        log "PLAN rebuild: powershell -NoProfile -ExecutionPolicy Bypass -File $REBUILD_PS1 -RequireClean"
     else
-        log "== rebuild release（$REBUILD_PS1 -SyncStartRust -RequireClean）"
+        log "== rebuild release（$REBUILD_PS1 -RequireClean）"
         if powershell -NoProfile -ExecutionPolicy Bypass -File "$REBUILD_PS1" \
-                -SyncStartRust -RequireClean >"$LOG_DIR/rebuild.log" 2>&1; then
+                -RequireClean >"$LOG_DIR/rebuild.log" 2>&1; then
             sed -n '1,40p' "$LOG_DIR/rebuild.log" | while IFS= read -r ln; do log "  $ln"; done
         else
             sed -n '1,80p' "$LOG_DIR/rebuild.log" >&2
@@ -438,8 +439,9 @@ PY
 
 # ---- ④ 场景清理（每个场景后兜底；card_window 自己已在 finally 停栈）----
 cleanup_stack() {
-    powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.ExecutablePath -like 'E:\\tmp\\conformance\\csharp-root\\*' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" >/dev/null 2>&1 || true
-    powershell -NoProfile -ExecutionPolicy Bypass -File E:/tmp/conformance/stop-rust.ps1 >/dev/null 2>&1 || true
+    # 卡 `openmir2-window-tmp-hardening`：停止器全部在仓库内；部署根随 MIR2_CONFORMANCE_ROOT。
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$REPO/tools/window/start-csharp.ps1" -Stop -Root "$CONF_ROOT/csharp-root" >/dev/null 2>&1 || true
+    powershell -NoProfile -ExecutionPolicy Bypass -File "$REPO/tools/window/stop-rust.ps1" -Root "$CONF_ROOT/rust-root" -LogDir "$CONF_ROOT/rust-logs" >/dev/null 2>&1 || true
 }
 
 # ---- ④b castle 状态对比：跑前基线 vs 跑后，分「本轮造成 / 开窗前已存在」两档 ----
