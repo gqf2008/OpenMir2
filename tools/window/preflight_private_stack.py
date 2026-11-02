@@ -5,8 +5,9 @@
 卡：`openmir2-window-run2-prep`（tier L）。补的是 `tools/conformance/preflight.py`
 （文档/二进制/端口/profile/bash/pin 接线）**没有覆盖**的那一层：
 
-  ① inventory    私栈完整性：E:/tmp/conformance 的启动/停止/恢复脚本、六角色部署件、
-                 rust-root 配置、baseline 目录、selgate-build 构建产物。
+  ① inventory    私栈完整性：**外部部署件**（六角色 exe、rust-root 配置、baseline 目录、
+                 selgate-build 构建产物）逐条点名；**启动/停止/恢复脚本已在仓库内**
+                 （tools/window/*，卡 `openmir2-window-tmp-hardening`），缺了同样 FAIL。
   ② selgate      **重建期坑 A：SelGate ListenPort**。私有栈的 C# SelGate 必须是 T-172
                  补丁构建（`config.conf` 的 `ListenPort` 才生效）；stock SelGate 把
                  `GatePort` 写死 7100，17100 永远不监听 ⇒ 登录链在选服处断掉，
@@ -28,9 +29,8 @@
   ⑤ binary       release 二进制与当前 head 对齐：读 `tools/window/rebuild-server.ps1`
                  写的 `mir2-rs/target/release/mir2-server.build.json`（head/sha256/dirty），
                  与当前 `git rev-parse HEAD` 和文件实际 sha256 对账。脏树 ⇒ FAIL。
-  ⑥ start_rust   `E:/tmp/conformance/start-rust.ps1` 的 `-ServerExe` 默认值必须指向
-                 **本检出**的 release 二进制（run-2 遗留值指向已删除的
-                 `E:/tmp/wt-worker-73/...`；不修则 card_window 的 pid/exe 对账必红）。
+  ⑥ start_rust   仓库内 `tools/window/start-rust.ps1` 必须用 `$Repo` 解析**本检出**的
+                 release 二进制（不再写死任何 worktree 绝对路径；残留旧路径 => FAIL）。
   ⑦ roster       run3 的场景清单（`tools/window/run3-scenarios.json`，**条数按清单实况**，不含已封存 pickup_item）与场景文件/
                  profile 名/rules.json 一致性。
 
@@ -60,8 +60,11 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
-DEFAULT_PRIVATE_ROOT = "E:/tmp/conformance"
-DEFAULT_START_RUST = "E:/tmp/conformance/start-rust.ps1"
+DEFAULT_PRIVATE_ROOT = (os.environ.get("MIR2_CONFORMANCE_ROOT") or "E:/tmp/conformance")
+DEFAULT_PRIVATE_ROOT = DEFAULT_PRIVATE_ROOT.replace(chr(92), "/").rstrip("/")
+# 卡 `openmir2-window-tmp-hardening`：启动/停止/恢复脚本收进仓库（E:/tmp 会被外部清扫），
+# 这里只校验**仓库内**脚本；外部只剩体积大的部署件（六角色 exe / 配置 / baseline）。
+DEFAULT_START_RUST = os.path.join(REPO, "tools", "window", "start-rust.ps1")
 MANIFEST = os.path.join(HERE, "run3-scenarios.json")
 RULES = os.path.join(REPO, "tools", "conformance", "rules.json")
 CARD_WINDOW = os.path.join(REPO, "tools", "conformance", "card_window.py")
@@ -184,11 +187,6 @@ def git_head(repo):
 # ① inventory
 # ---------------------------------------------------------------------------
 INVENTORY = [
-    "start-csharp3.ps1",
-    "start-rust.ps1",
-    "stop-rust.ps1",
-    "restore-baseline.sh",
-    "restore-baseline-r.sh",
     "selgate-build/SelGate.exe",
     "csharp-root/DBSrv/DBSrv.exe",
     "csharp-root/LoginSrv/LoginSrv.exe",
@@ -208,6 +206,18 @@ INVENTORY = [
     "rust-root/RunGate/config.conf",
 ]
 
+#: 仓库内编排脚本（卡 `openmir2-window-tmp-hardening` 收进仓库后必须在场）。
+REPO_INVENTORY = [
+    "tools/window/start-csharp.ps1",
+    "tools/window/start-rust.ps1",
+    "tools/window/stop-rust.ps1",
+    "tools/window/start-stack-wmi.ps1",
+    "tools/window/restore-baseline.sh",
+    "tools/window/restore-baseline-r.sh",
+    "tools/m2-acceptance/start_mir2_server.ps1",
+    "tools/m2-acceptance/stop_mir2_server.ps1",
+]
+
 
 def check_inventory(root):
     missing = [rel for rel in INVENTORY if not os.path.isfile(os.path.join(root, rel))]
@@ -216,11 +226,21 @@ def check_inventory(root):
         missing.append("baseline/（基线库快照目录）")
     elif not os.listdir(baseline):
         missing.append("baseline/（目录为空：restore 没有可恢复的基线）")
+    missing_repo = [rel for rel in REPO_INVENTORY
+                    if not os.path.isfile(os.path.join(REPO, rel))]
+    problems = []
     if missing:
-        return FAIL, "缺 %d 项：%s" % (len(missing), ", ".join(missing)), \
-            "按 docs/window-run-1-20261024.md §0/§1 重建 E:/tmp/conformance（六角色 + baseline）"
-    return OK, "%d 个部署件齐全，baseline 非空" % len(INVENTORY), None
-
+        problems.append("外部部署缺 %d 项（%s）：%s"
+                        % (len(missing), root, ", ".join(missing)))
+    if missing_repo:
+        problems.append("仓库内编排脚本缺 %d 项：%s"
+                        % (len(missing_repo), ", ".join(missing_repo)))
+    if problems:
+        return (FAIL, "；".join(problems),
+                "外部件按 docs/window-run-1-20261024.md §0/§1 重建（或设 "
+                "MIR2_CONFORMANCE_ROOT 指向可用副本）；仓库脚本缺失 => 重新 checkout")
+    return (OK, "%d 个外部部署件齐全，baseline 非空，%d 个仓库内脚本齐全"
+            % (len(INVENTORY), len(REPO_INVENTORY)), None)
 
 # ---------------------------------------------------------------------------
 # ② 坑 A：SelGate ListenPort
@@ -482,6 +502,19 @@ def check_start_rust(path, exe, repo=None):
     if not os.path.isfile(path):
         return FAIL, "缺 %s" % path, "按 window-run-1 §0 重建私栈启动脚本"
     text = read_text(path, "utf-8")
+    # 仓库内 start-rust.ps1（卡 openmir2-window-tmp-hardening）不再写死字面量：
+    # 它用 `$Repo` 解析 `mir2-rs` 下的 release 二进制。仓库版必须指向**本检出**；
+    # 任何另一个 worktree 的绝对路径都是旧值。
+    if "Join-Path $Repo" in text and "mir2-server.exe" in text:
+        stale = []
+        for ln in text.splitlines():
+            stale += re.findall("[A-Za-z]:[^']*mir2-server[.]exe", ln)
+        bad = [x for x in stale if norm_path(x) != norm_path(exe)]
+        if bad:
+            return (FAIL, "仓库版 start-rust.ps1 含指向其它路径的 ServerExe：%s"
+                    % ", ".join(bad),
+                    "删掉硬编码路径，交给 `Join-Path $Repo` 解析")
+        return OK, "仓库版 start-rust.ps1 用 $Repo 解析本检出 release 二进制", None
     raw, inner = parse_start_rust_default(text)
     if raw is None:
         return FAIL, "start-rust.ps1 里找不到 `[string]$ServerExe = '...'`", \
@@ -1032,6 +1065,17 @@ def selftest():
             "start-rust: 斜杠/大小写归一 => OK")
         chk(check_start_rust(sr, "E:\\other\\mir2-server.exe")[0] == FAIL,
             "start-rust: 指向旧 worktree => FAIL")
+
+        # 仓库版 start-rust.ps1（$Repo 解析）：干净 => OK；残留旧 worktree 绝对路径 => FAIL
+        sr_repo = os.path.join(tmp, "start-rust-repo.ps1")
+        with open(sr_repo, "w") as fh:
+            fh.write("$ServerExe = Join-Path $Repo 'mir2-rs/target/release/mir2-server.exe'" + chr(10))
+        chk(check_start_rust(sr_repo, "E:/repo/mir2-rs/target/release/mir2-server.exe")[0] == OK,
+            "start-rust(repo): $Repo 解析且无旧路径 => OK")
+        with open(sr_repo, "a") as fh:
+            fh.write("# old E:/tmp/wt-x/mir2-server.exe" + chr(10))
+        chk(check_start_rust(sr_repo, "E:/repo/mir2-rs/target/release/mir2-server.exe")[0] == FAIL,
+            "start-rust(repo): 残留旧 worktree 路径 => FAIL")
 
         # build stamp：head/sha/dirty 三条
         repo2 = os.path.join(tmp, "repo")

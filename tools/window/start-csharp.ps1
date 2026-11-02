@@ -21,7 +21,7 @@
 #
 # 退出码：0 = 全部角色端口就绪（或 -Plan/-Stop 成功）；1 = 缺件/构建失败/端口未就绪；2 = 参数错误。
 param(
-  [string]$Root = 'E:\tmp\conformance\csharp-root',
+  [string]$Root = '',
   [string]$LogDir = '',
   [string]$Seed = '42',
   [string]$RngLog = '',
@@ -36,6 +36,11 @@ $ErrorActionPreference = 'Stop'
 
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = (Resolve-Path (Join-Path $Here '..\..')).Path
+
+# 部署根：MIR2_CONFORMANCE_ROOT 可覆盖（E:/tmp 会被外部清扫；路径不再写死）。
+$Conf = [string]$env:MIR2_CONFORMANCE_ROOT
+if ([string]::IsNullOrWhiteSpace($Conf)) { $Conf = 'E:\tmp\conformance' }
+if ([string]::IsNullOrWhiteSpace($Root)) { $Root = Join-Path $Conf 'csharp-root' }
 if ([string]::IsNullOrWhiteSpace($LogDir)) { $LogDir = Join-Path $Root 'logs' }
 if ([string]::IsNullOrWhiteSpace($Shadow)) { $Shadow = Join-Path $Root 'M2GameSvr-hook' }
 $PidFile = Join-Path $LogDir 'start-csharp.pid.json'

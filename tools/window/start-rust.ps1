@@ -23,8 +23,8 @@
 #         2 = 参数/缺件/自检红。**绝不**把未知退出码当成功。
 param(
   [string]$ServerExe = '',
-  [string]$Root = 'E:\tmp\conformance\rust-root',
-  [string]$LogDir = 'E:\tmp\conformance\rust-logs',
+  [string]$Root = '',
+  [string]$LogDir = '',
   [string]$StarterScript = '',
   [int]$WaitSeconds = 60,
   [switch]$Plan,
@@ -34,6 +34,12 @@ $ErrorActionPreference = 'Stop'
 
 $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $Repo = (Resolve-Path (Join-Path $Here '..\..')).Path
+
+# 部署根：MIR2_CONFORMANCE_ROOT 可覆盖（E:/tmp 会被外部清扫；路径不再写死）。
+$Conf = [string]$env:MIR2_CONFORMANCE_ROOT
+if ([string]::IsNullOrWhiteSpace($Conf)) { $Conf = 'E:\tmp\conformance' }
+if ([string]::IsNullOrWhiteSpace($Root)) { $Root = Join-Path $Conf 'rust-root' }
+if ([string]::IsNullOrWhiteSpace($LogDir)) { $LogDir = Join-Path $Conf 'rust-logs' }
 if ([string]::IsNullOrWhiteSpace($ServerExe)) {
   $ServerExe = Join-Path $Repo 'mir2-rs\target\release\mir2-server.exe'
 }

@@ -70,7 +70,8 @@
 
 profile：
   * 内置 `alt`（默认）= 2026-10-23 双栈窗口所用的备用端口剖面
-    （E:/tmp/conformance 私有根 + mir2_test_* / mir2_test_*_r 测试库）。
+    （私有部署根，缺省 E:/tmp/conformance，可用 MIR2_CONFORMANCE_ROOT 覆盖；
+    + mir2_test_* / mir2_test_*_r 测试库）。
   * 环境加固（卡 `openmir2-window-profile-env-hardening`，window-run-1 §1 三处阻塞固化，
     alt / csharp-default 及其派生 profile 一体生效）：
       - restore 用 **Git bash 绝对路径**（裸 `bash` 会被 CreateProcess 先解析到 System32 的
@@ -257,11 +258,34 @@ MAP_CELL_BYTES = 12
 MAP_WALL_BIT = 0x8000
 
 POWERSHELL = ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass"]
+
+# --- 部署根（卡 `openmir2-window-tmp-hardening`）---------------------------------
+# E:/tmp 会被外部清扫（历史三次）；私有部署件（csharp-root 504MB / rust-root 283MB /
+# baseline 26MB）不能入仓，但**路径不再是硬编码**：`MIR2_CONFORMANCE_ROOT` 可把整组
+# 部署根指到别处（临时副本/新盘）。内置 profile 用本常量；profile JSON 可用
+# `{conformance_root}` / `{conformance_root_win}` 占位符（见 expand_config_path）。
+CONFORMANCE_ROOT = (os.environ.get("MIR2_CONFORMANCE_ROOT") or "E:/tmp/conformance")
+CONFORMANCE_ROOT = CONFORMANCE_ROOT.replace("\\", "/").rstrip("/")
+_CONFORMANCE_ROOT_WIN = CONFORMANCE_ROOT.replace("/", "\\")
+
+
+def expand_config_path(value):
+    """展开 profile 里的路径占位符：`{conformance_root}` / `{conformance_root_win}` /
+    `{repo}`。命令 argv 走 expand_argv（另有 `{side_dir}` 等）；binaries/envir_root/
+    pid_file 这类**非命令**字段在这里展开。"""
+    if not isinstance(value, str):
+        return value
+    out = value.replace("{conformance_root_win}", _CONFORMANCE_ROOT_WIN)
+    out = out.replace("{conformance_root}", CONFORMANCE_ROOT)
+    out = out.replace("{repo}", REPO_ROOT.replace(os.sep, "/"))
+    return out
+
+
 CSHARP_STOP = POWERSHELL + [
     "-Command",
-    "Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "
-    "'E:\\tmp\\conformance\\csharp-root\\*' } | ForEach-Object { "
-    "Stop-Process -Id $_.ProcessId -Force }",
+    ("Get-CimInstance Win32_Process | Where-Object { $_.ExecutablePath -like "
+     "'" + _CONFORMANCE_ROOT_WIN + "\\csharp-root\\*' } | ForEach-Object { "
+     "Stop-Process -Id $_.ProcessId -Force }"),
 ]
 
 # Rust 栈**实际执行的二进制**（卡 `openmir2-window-rust-binary-evidence`）：
@@ -344,7 +368,8 @@ WMI_STACK_WRAPPER = os.path.join(
     REPO_ROOT, "tools", "window", "start-stack-wmi.ps1").replace(os.sep, "/")
 
 
-def wmi_stack_argv(inner_script, ready_ports, pin_checks=None, pin_log=None):
+def wmi_stack_argv(inner_script, ready_ports, pin_checks=None, pin_log=None,
+                   inner_args=None):
     """内置 profile 的 stack 命令：WMI 派生 + 就绪端口（**含网关**）+ 暖机，fail-closed。
 
     卡 `openmir2-window-wmi-env-forwarding`：pin_checks/pin_log 给出时追 `-PinChecks`/
@@ -354,6 +379,10 @@ def wmi_stack_argv(inner_script, ready_ports, pin_checks=None, pin_log=None):
     argv = POWERSHELL + ["-File", WMI_STACK_WRAPPER,
                          "-Script", str(inner_script),
                          "-ReadyPorts", ",".join(str(p) for p in ready_ports)]
+    if inner_args:
+        # 部署根透传给内层启动器（不传就用内层默认 E:/tmp；MIR2_CONFORMANCE_ROOT
+        # 覆盖时必须显式传，否则仍会读到被清扫的原路径）。
+        argv += ["-InnerArgs", str(inner_args)]
     if pin_checks:
         argv += ["-PinChecks", ",".join(str(x) for x in pin_checks)]
     if pin_log:
@@ -370,7 +399,7 @@ def wmi_stack_argv(inner_script, ready_ports, pin_checks=None, pin_log=None):
 PIN_LAYOUT_KEY = "MIR2_CLIENT_ABILITY_LAYOUT"
 WMI_WRAPPER_TOKEN = "start-stack-wmi.ps1"
 # rust 侧 game-svr 自证日志（部署脚本 -LogDir 写死这里，口径同 alt 的 pid_file）。
-RUST_STACK_PIN_LOG = "E:/tmp/conformance/rust-logs/game-svr.out.log"
+RUST_STACK_PIN_LOG = CONFORMANCE_ROOT + "/rust-logs/game-svr.out.log"
 
 
 def is_wmi_stack_argv(argv):
@@ -423,14 +452,14 @@ def resolve_rust_binary():
 def pid_file_path(side_dir, sc):
     """pid 文件路径：**只认 profile 的 `pid_file`**（`{side_dir}` 模板按本侧产物目录展开）。
 
-    部署把 pid 写到 wrapper 的 `-LogDir`（alt = `E:/tmp/conformance/rust-logs`），
+    部署把 pid 写到 wrapper 的 `-LogDir`（alt = `<conformance-root>/rust-logs`；
     不是 `<side_dir>`；所以路径必须在 profile 里显式声明（load_profile 对
     `require_pid_binaries` 强制校验），代码里不写死任何部署绝对路径。
     """
     raw = sc.get("pid_file")
     if not raw:
         return os.path.join(side_dir, PID_FILE_NAME)
-    return str(raw).replace("{side_dir}", side_dir)
+    return expand_config_path(str(raw)).replace("{side_dir}", side_dir)
 
 
 def verify_pid_binaries(side_dir, sc, side):
@@ -440,8 +469,9 @@ def verify_pid_binaries(side_dir, sc, side):
     """
     pid_path = pid_file_path(side_dir, sc)
     norm = lambda p: os.path.normcase(os.path.normpath(str(p).replace("/", os.sep)))
-    registered = [norm(p) for p in (sc.get("binaries") or [])]
-    info = {"pid_file": pid_path, "registered": list(sc.get("binaries") or []), "roles": []}
+    bin_list = [expand_config_path(p) for p in (sc.get("binaries") or [])]
+    registered = [norm(p) for p in bin_list]
+    info = {"pid_file": pid_path, "registered": bin_list, "roles": []}
     if not os.path.exists(pid_path):
         return False, ("缺少 %s：无法核对 %s 栈实际执行的 exe（拒绝只记 sha256 继续跑）"
                        % (PID_FILE_NAME, side)), info
@@ -474,7 +504,8 @@ BUILTIN_PROFILES = {
     "alt": {
         "format": PROFILE_FORMAT,
         "name": "alt",
-        "description": ("备用端口剖面（2026-10-23 双栈窗口）：E:/tmp/conformance 私有根，"
+        "description": ("备用端口剖面（2026-10-23 双栈窗口）：私有部署根（缺省 "
+                        "E:/tmp/conformance，可用 MIR2_CONFORMANCE_ROOT 覆盖），"
                         "测试库 mir2_test_* / mir2_test_*_r，同一组 15xxx/17xxx 端口，两栈串行。"
                         " | 环境加固（卡 openmir2-window-profile-env-hardening，window-run-1 §1）："
                         "restore 用 Git bash 绝对路径（裸 bash 会被 CreateProcess 先解析到 "
@@ -500,18 +531,21 @@ BUILTIN_PROFILES = {
                 # MIR2_RNG_LOG/MIR2_RNG_SITE（影子 M2GameSvr-hook，冻结基线不动）。
                 "stack": wmi_stack_argv(
                     os.path.join(REPO_ROOT, "tools", "window", "start-csharp.ps1").replace(os.sep, "/"),
-                    (15000, 17000, 17100, 17200)),
+                    (15000, 17000, 17100, 17200),
+                    inner_args='-Root "%s/csharp-root"' % CONFORMANCE_ROOT),
                 "stop": CSHARP_STOP,
                 "restore": [GIT_BASH or "bash",
-                            "E:/tmp/conformance/restore-baseline.sh"],
+                            os.path.join(REPO_ROOT, "tools", "window",
+                                         "restore-baseline.sh").replace(os.sep, "/"),
+                            CONFORMANCE_ROOT + "/baseline"],
                 "ports": [15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100,
                           17200, 17201, 17202],
                 # 网关 17200 不进 ready_ports（探针占会话槽）；由 stack 包装的
                 # -ReadyPorts 15000,17000,17100,17200 兜底等齐 + 暖机。
                 "ready_ports": [15000, 17000, 17100],
                 "probe_extra": [],
-                "binaries": ["E:/tmp/conformance/csharp-root/M2GameSvr/GameSrv.exe"],
-                "envir_root": "E:/tmp/conformance/csharp-root/M2GameSvr",
+                "binaries": [CONFORMANCE_ROOT + "/csharp-root/M2GameSvr/GameSrv.exe"],
+                "envir_root": CONFORMANCE_ROOT + "/csharp-root/M2GameSvr",
                 "db": {"preset": "test", "characters_db": "mir2_test_db"},
             },
             "rust": {
@@ -520,22 +554,30 @@ BUILTIN_PROFILES = {
                 # 清扫；且内层 -ExecutionPolicy 会撞 HIPS），见 tools/window/start-rust.ps1。
                 "stack": wmi_stack_argv(
                     os.path.join(REPO_ROOT, "tools", "window", "start-rust.ps1").replace(os.sep, "/"),
-                    (15000, 17000, 17100, 17600)),
-                "stop": POWERSHELL + ["-File", "E:/tmp/conformance/stop-rust.ps1"],
+                    (15000, 17000, 17100, 17600),
+                    inner_args='-Root "%s/rust-root" -LogDir "%s/rust-logs"'
+                               % (CONFORMANCE_ROOT, CONFORMANCE_ROOT)),
+                "stop": POWERSHELL + [
+                    "-File", os.path.join(REPO_ROOT, "tools", "window",
+                                          "stop-rust.ps1").replace(os.sep, "/"),
+                    "-Root", CONFORMANCE_ROOT + "/rust-root",
+                    "-LogDir", CONFORMANCE_ROOT + "/rust-logs"],
                 "restore": [GIT_BASH or "bash",
-                            "E:/tmp/conformance/restore-baseline-r.sh"],
+                            os.path.join(REPO_ROOT, "tools", "window",
+                                         "restore-baseline-r.sh").replace(os.sep, "/"),
+                            CONFORMANCE_ROOT + "/baseline"],
                 "ports": [15000, 15100, 15500, 15600, 15700, 16000, 17000, 17100, 17600],
                 # 网关 17600 同上：不进 ready_ports，由 stack 包装兜底。
                 "ready_ports": [15000, 17000, 17100],
                 "probe_extra": ["--game-gate", "127.0.0.1:17600"],
                 "binaries": [RUST_SERVER_BIN],
                 "require_pid_binaries": True,
-                # 部署把 pid 写到 wrapper 的 `-LogDir`（仓库内 tools/window/start-rust.ps1
-                # 的默认 `E:/tmp/conformance/rust-logs`；部署数据根仍在 E:/tmp），
+                # 部署把 pid 写到 wrapper 的 `-LogDir`（随部署根走：缺省
+                # <conformance-root>/rust-logs，可用 MIR2_CONFORMANCE_ROOT 覆盖），
                 # **不是** `<side_dir>`（review B1）。
                 # 下一次真窗口读的就是这个文件；路径只在这里声明，代码里不写死。
-                "pid_file": "E:/tmp/conformance/rust-logs/mir2-server.pid.json",
-                "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
+                "pid_file": CONFORMANCE_ROOT + "/rust-logs/mir2-server.pid.json",
+                "envir_root": CONFORMANCE_ROOT + "/rust-root/M2GameSvr",
                 "db": {"tables": RUST_DB_TABLES,
                        "characters_db": "mir2_test_db_r",
                        "allow_db": ["mir2_test_db_r", "mir2_test_account_r"]},
@@ -565,7 +607,9 @@ BUILTIN_PROFILES = {
                                         (5000, 7000, 7100, 7200)),
                 "stop": POWERSHELL + ["-File", "E:/MirServer/start-all.ps1", "-Stop"],
                 "restore": [GIT_BASH or "bash",
-                            "E:/tmp/conformance/restore-baseline.sh"],
+                            os.path.join(REPO_ROOT, "tools", "window",
+                                         "restore-baseline.sh").replace(os.sep, "/"),
+                            CONFORMANCE_ROOT + "/baseline"],
                 "ports": [5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200],
                 # GameGate 7200 不进 ready_ports（同 alt 的 17200 口径）。
                 "ready_ports": [5000, 7000, 7100],
@@ -575,11 +619,14 @@ BUILTIN_PROFILES = {
             },
             "rust": {
                 "label": "Rust（默认端口，需部署在 E:/tmp/conformance/rust-default-root）",
-                "stack": wmi_stack_argv("E:/tmp/conformance/start-rust-default.ps1",
+                "stack": wmi_stack_argv(CONFORMANCE_ROOT + "/start-rust-default.ps1",
                                         (5000, 7000, 7100, 7200)),
-                "stop": POWERSHELL + ["-File", "E:/tmp/conformance/stop-rust-default.ps1"],
+                "stop": POWERSHELL + ["-File", os.path.join(
+                    CONFORMANCE_ROOT, "stop-rust-default.ps1").replace("/", os.sep)],
                 "restore": [GIT_BASH or "bash",
-                            "E:/tmp/conformance/restore-baseline.sh"],
+                            os.path.join(REPO_ROOT, "tools", "window",
+                                         "restore-baseline.sh").replace(os.sep, "/"),
+                            CONFORMANCE_ROOT + "/baseline"],
                 "ports": [5000, 5100, 5500, 5600, 5700, 6000, 7000, 7100, 7200],
                 "ready_ports": [5000, 7000, 7100],
                 "probe_extra": [],
@@ -1264,6 +1311,8 @@ def side_ctx(side, out_dir, scenario, card, discovery=None):
     d = discovery or {}
     return {
         "repo": REPO_ROOT,
+        "conformance_root": CONFORMANCE_ROOT,
+        "conformance_root_win": _CONFORMANCE_ROOT_WIN,
         "out": out_dir,
         "side": side,
         "side_dir": side_dir,
@@ -1906,10 +1955,10 @@ def read_map_cell(map_path, x, y):
 
 def placement_envir_root(side, sc):
     """部署内容根目录：`sides.<side>.envir_root`，缺省由 `binaries[0]` 的目录推出。"""
-    er = sc.get("envir_root")
+    er = expand_config_path(sc.get("envir_root"))
     if er:
         return os.path.abspath(er)
-    bins = sc.get("binaries") or []
+    bins = [expand_config_path(b) for b in (sc.get("binaries") or [])]
     if not bins:
         raise ConfigError("profile.sides.%s 缺 binaries/envir_root：无法定位 MapInfo/Map" % side)
     return os.path.dirname(os.path.abspath(bins[0]))
@@ -4735,7 +4784,7 @@ def _fixture_envir_root(sc):
     root = sc.get("envir_root")
     if not root:
         raise ConfigError("fixtures 需要 profile.sides.*.envir_root（当前未声明）")
-    root = str(root)
+    root = expand_config_path(str(root))
     real = os.path.realpath(root)
     prod = os.path.realpath(FIXTURE_PROD_ROOT)
     if real == prod or real.startswith(prod + os.sep):
@@ -5531,7 +5580,7 @@ def run_side(runner, side, prof, ctx, password, placement=None, inventory=None,
             # profile 可显式声明 `server_exe`（窗口从别的检出/worktree 跑时用，review M1）；
             # 缺省按本仓 release → debug 解析。
             if sc.get("server_exe"):
-                path, kind = str(sc["server_exe"]), "profile(server_exe)"
+                path, kind = expand_config_path(str(sc["server_exe"])), "profile(server_exe)"
             else:
                 path, kind = resolve_rust_binary()
             res["binary_profile"] = kind
@@ -5764,7 +5813,7 @@ def read_report(path):
 def bin_info(sc):
     out = []
     for path in sc.get("binaries") or []:
-        path = str(path)
+        path = expand_config_path(str(path))
         item = {"path": path, "sha256": None, "exists": os.path.exists(path)}
         if item["exists"]:
             try:
@@ -7179,7 +7228,7 @@ def _selftest_pid_binaries(tmp):
     ok, _, _ = verify_pid_binaries(d, stale, "rust")
     out.append((not ok, "牙：登记指回 rust-root/GameSrv.exe ⇒ 一致性断言红"))
     # ⑧ 内置 alt profile 显式声明真窗口要读的那个文件（review B1）
-    expected = "E:/tmp/conformance/rust-logs/" + PID_FILE_NAME
+    expected = CONFORMANCE_ROOT + "/rust-logs/" + PID_FILE_NAME
     try:
         alt = load_profile("alt")["sides"]["rust"]
         resolved = pid_file_path(os.path.join(tmp, "side"), alt)

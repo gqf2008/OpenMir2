@@ -38,12 +38,45 @@ import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.abspath(os.path.join(HERE, "..", ".."))
 RUNBOOK = os.path.join(REPO, "docs", "window-runbook-20261023.md")
 SCEN_README = os.path.join(REPO, "tools", "probe", "scenarios", "README.md")
 BIN_SCRIPT = os.path.join(REPO, "tools", "m2-acceptance", "start_mir2_server.ps1")
+#: 私有部署根（卡 `openmir2-window-tmp-hardening`）：E:/tmp 会被外部清扫；路径不再是
+#: 散落的硬编码，`MIR2_CONFORMANCE_ROOT` 可把整组部署件指到临时副本/新盘。
+CONFORMANCE_ROOT = (os.environ.get("MIR2_CONFORMANCE_ROOT") or "E:/tmp/conformance")
+CONFORMANCE_ROOT = CONFORMANCE_ROOT.replace("\\", "/").rstrip("/")
+DEFAULT_ROOT = CONFORMANCE_ROOT + "/rust-root"
+DEFAULT_LOG_DIR = CONFORMANCE_ROOT + "/rust-logs"
+
+#: alt 窗口真正要读的**外部部署件**（体积大，不入仓；缺了必须 fail-closed 点名）。
+DEPLOY_EXTERNAL = [
+    "csharp-root/DBSrv/DBSrv.exe",
+    "csharp-root/LoginSrv/LoginSrv.exe",
+    "csharp-root/M2GameSvr/GameSrv.exe",
+    "csharp-root/LoginGate/LoginGate.exe",
+    "csharp-root/SelGate/SelGate.exe",
+    "csharp-root/RunGate/GameGate.exe",
+    "rust-root/M2GameSvr/Server.conf",
+    "rust-root/alt-port-profile.json",
+    "baseline/mir2_test_db.sql",
+    "baseline/mir2_test_account.sql",
+    "baseline/mir2_test_data.sql",
+]
+#: 窗口编排**仓库内**脚本（收进仓库后不得再缺；缺了说明检出损坏）。
+DEPLOY_REPO_SCRIPTS = [
+    "tools/window/start-csharp.ps1",
+    "tools/window/start-rust.ps1",
+    "tools/window/stop-rust.ps1",
+    "tools/window/start-stack-wmi.ps1",
+    "tools/window/restore-baseline.sh",
+    "tools/window/restore-baseline-r.sh",
+    "tools/m2-acceptance/start_mir2_server.ps1",
+    "tools/m2-acceptance/stop_mir2_server.ps1",
+]
 CARD_WINDOW = os.path.join(HERE, "card_window.py")
 PROFILE_KEYS = ("probe_timeout_ms", "ready_timeout_s")
 SIDE_KEYS = ("pid_file", "require_pid_binaries")
@@ -151,8 +184,42 @@ def _run_ps(argv):
     return proc.returncode, proc.stdout, proc.stderr
 
 
-def check_binary(script=BIN_SCRIPT, root="E:/tmp/conformance/rust-root",
-                 log_dir="E:/tmp/conformance/rust-logs", ports_profile=None,
+def _deploy_conf_root(root):
+    """由 `--root` 反推部署根：默认/常见形态是 `<conf>/rust-root`；其它形态回落到
+    `MIR2_CONFORMANCE_ROOT`（显式覆盖）。"""
+    r = os.path.normpath(os.path.abspath(str(root)))
+    if os.path.basename(r).lower() == "rust-root":
+        return os.path.dirname(r)
+    return CONFORMANCE_ROOT
+
+
+def check_deploy(conf_root=None, repo=REPO):
+    """②b 部署件 fail-closed：外部私有部署缺件逐条点名（不是等 -WhatIf 报晦涩错误）。
+
+    外部件（约 800MB：六角色 exe / rust-root 配置 / baseline SQL）**不入仓**；
+    缺件消息必须给出「重建或 MIR2_CONFORMANCE_ROOT 指向副本」的动作。
+    """
+    conf_root = conf_root or CONFORMANCE_ROOT
+    missing_ext = [rel for rel in DEPLOY_EXTERNAL
+                   if not os.path.isfile(os.path.join(conf_root, rel))]
+    missing_repo = [rel for rel in DEPLOY_REPO_SCRIPTS
+                    if not os.path.isfile(os.path.join(repo, rel))]
+    problems = []
+    if missing_ext:
+        problems.append(
+            "外部部署缺 %d 项（%s）：%s ⇒ 重建私有根，或设 MIR2_CONFORMANCE_ROOT 指向可用副本"
+            % (len(missing_ext), conf_root, ", ".join(missing_ext)))
+    if missing_repo:
+        problems.append("仓库内编排脚本缺 %d 项：%s ⇒ 检出损坏，重新 checkout"
+                        % (len(missing_repo), ", ".join(missing_repo)))
+    if problems:
+        raise StepFail("；".join(problems))
+    return "外部部署 %d 项 + 仓库内脚本 %d 项齐全（conf=%s）" % (
+        len(DEPLOY_EXTERNAL), len(DEPLOY_REPO_SCRIPTS), conf_root)
+
+
+def check_binary(script=BIN_SCRIPT, root=DEFAULT_ROOT,
+                 log_dir=DEFAULT_LOG_DIR, ports_profile=None,
                  require_release=True, runner=None):
     """`runner` 只为 `--selftest` 注入桩：签名 (argv) -> (rc, stdout, stderr)。"""
     if not os.path.isfile(script):
@@ -418,6 +485,7 @@ def run_steps(profile_value, root, log_dir, ports_profile, with_dry_run, with_se
         results.append(False)
 
     one("docs", check_docs)
+    one("deploy", lambda: check_deploy(_deploy_conf_root(root)))
     one("binary", lambda: check_binary(root=root, log_dir=log_dir,
                                        ports_profile=ports_profile,
                                        require_release=not allow_debug))
@@ -434,9 +502,11 @@ def run_steps(profile_value, root, log_dir, ports_profile, with_dry_run, with_se
         one("pin", lambda: check_pin_wiring(prof))
     if with_dry_run:
         scen = os.path.join(REPO, "tools", "probe", "scenarios", "login_only.json")
-        one("dry-run", lambda: check_dry_run(profile_value, scen,
-                                             os.path.join(os.path.abspath("E:/tmp"),
-                                                          "preflight-dry")))
+        dry_dir = tempfile.mkdtemp(prefix="preflight-dry-")
+        try:
+            one("dry-run", lambda: check_dry_run(profile_value, scen, dry_dir))
+        finally:
+            shutil.rmtree(dry_dir, ignore_errors=True)
     if with_selftest:
         one("selftest", check_selftest)
     return results
@@ -663,6 +733,34 @@ def selftest():
     except StepFail as ex:
         chk(False, "⑥d 未声明 pin ⇒ 不适用，通过（%s）" % str(ex)[:70])
 
+    # ②b 部署件 fail-closed（卡 openmir2-window-tmp-hardening）
+    conf = os.path.join(tmp, "conf")
+    for rel in DEPLOY_EXTERNAL:
+        fp = os.path.join(conf, rel)
+        os.makedirs(os.path.dirname(fp), exist_ok=True)
+        with open(fp, "w") as fh:
+            fh.write("x")
+    try:
+        detail = check_deploy(conf)
+        chk("齐全" in detail, "②b 外部部署 + 仓库脚本齐全 ⇒ 通过（%s）" % detail[:60])
+    except StepFail as ex:
+        chk(False, "②b 外部部署 + 仓库脚本齐全 ⇒ 通过（%s）" % str(ex)[:80])
+    os.remove(os.path.join(conf, "baseline", "mir2_test_db.sql"))
+    try:
+        check_deploy(conf)
+        chk(False, "②b 缺 baseline SQL ⇒ 必须红")
+    except StepFail as ex:
+        chk("mir2_test_db.sql" in str(ex) and "MIR2_CONFORMANCE_ROOT" in str(ex),
+            "②b 缺 baseline SQL ⇒ 红并点名缺失项 + 修法（%s）" % str(ex)[:80])
+    with open(os.path.join(conf, "baseline", "mir2_test_db.sql"), "w") as fh:
+        fh.write("x")
+    try:
+        check_deploy(conf, repo=os.path.join(tmp, "empty-repo"))
+        chk(False, "②b 仓库内脚本缺失 ⇒ 必须红")
+    except StepFail as ex:
+        chk("仓库内编排脚本缺" in str(ex),
+            "②b 仓库内脚本缺失 ⇒ 红并点名（%s）" % str(ex)[:80])
+
     # ⑦ 汇总：run_steps 在桩下必须 rc=2（任何一步红），全绿必须 rc=0
     rep = []
     res = run_steps("no-such-profile", "r", "l", None, False, False,
@@ -687,8 +785,8 @@ def selftest():
 def main(argv=None):
     ap = argparse.ArgumentParser(description="开窗前置检查（runbook §0.5 一条命令版）")
     ap.add_argument("--profile", default="alt", help="内建 profile 名或 profile JSON 路径")
-    ap.add_argument("--root", default="E:/tmp/conformance/rust-root", help="传给 start_mir2_server.ps1 -Root")
-    ap.add_argument("--log-dir", default="E:/tmp/conformance/rust-logs", help="-LogDir")
+    ap.add_argument("--root", default=DEFAULT_ROOT, help="传给 start_mir2_server.ps1 -Root")
+    ap.add_argument("--log-dir", default=DEFAULT_LOG_DIR, help="-LogDir")
     ap.add_argument("--ports-profile", default=None, help="-PortsProfile（可选）")
     ap.add_argument("--allow-debug", action="store_true", help="Debug-Fallback 降级为 WARN（默认红）")
     ap.add_argument("--with-dry-run", action="store_true", help="额外跑 card_window --dry-run")

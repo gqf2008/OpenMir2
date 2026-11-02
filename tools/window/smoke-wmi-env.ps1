@@ -20,7 +20,7 @@
 # 退出码：0 = WMI 派生 + pin 自证通过；1 = 自证失败 / server 没打出自证行；2 = 前置不满足。
 param(
   [string]$ServerExe = '',
-  [string]$Root = 'E:/tmp/conformance/rust-root',
+  [string]$Root = '',
   [string]$Pin = 'MIR2_CLIENT_ABILITY_LAYOUT=0',
   [string]$OutDir = 'E:/tmp/w75-smoke-run',
   [string]$Wrapper = '',
@@ -29,6 +29,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..')).Path
+
+# 部署根：MIR2_CONFORMANCE_ROOT 可覆盖（E:/tmp 会被外部清扫）。
+$Conf = [string]$env:MIR2_CONFORMANCE_ROOT
+if ([string]::IsNullOrWhiteSpace($Conf)) { $Conf = 'E:\tmp\conformance' }
+if ([string]::IsNullOrWhiteSpace($Root)) { $Root = Join-Path $Conf 'rust-root' }
 
 # ---- 前置：wrapper / server exe / pin / conf ---------------------------------
 if ([string]::IsNullOrWhiteSpace($Wrapper)) {
