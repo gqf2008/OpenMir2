@@ -145,6 +145,12 @@ REGISTRY = [
     # 的「REGISTRY 显式登记的非 `tools/` 入口」分支收进清点（否则会 INVENTORY_MISMATCH）。
     ("rng_consumer_groups",
      ["mir2-rs/tests/parity/m3/rng-trace-probe/rng_consumer_groups.py", "selftest"], False),
+    # 卡 `openmir2-walgit-local-commands-env`：2026-11-02 12:52 起 `walgit collab` 缺
+    # `WALGIT_LOCAL_COMMANDS=1` 时直接拒绝（stderr + rc=1）；裸调 + `2>/dev/null | grep` 会把
+    # 「接口被拒」吞成「看板为空」的假绿。封装显式带 env + 哨兵 fail-closed（rc=3），
+    # 自测用替身 walgit 覆盖 ok / rc 透传 / 哨兵（rc=0 与打到 stdout 两种）/ 找不到可执行 /
+    # 空参数，并扫 `tools/orchestration/*.sh` 不再出现裸调（注释行不误报）。
+    ("walgit_collab", ["tools/orchestration/walgit_collab.py", "--selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。

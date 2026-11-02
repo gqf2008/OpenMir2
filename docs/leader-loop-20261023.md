@@ -124,7 +124,7 @@ Leader 忙不过来时，**空闲 worker 可以互相审查**：唯一硬约束�
 
 ## D. 重启后的前三步
 
-1. `git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*'` + `walgit collab board`（**看板是权威，本文只是镜像**）；
+1. `git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*'` + `WALGIT_LOCAL_COMMANDS=1 walgit collab board`（**看板是权威，本文只是镜像**；缺该开关时 CLI 直接拒绝、rc=1）；
 2. 读本文件 A/B/C 三节 + `docs/needs-human-20261023-night.md`；
 3. 按「合并 > 派活 > 拆卡」继续；**待认领 0 且无卡可派时**，下一批仍是
    `openmir2-r-window-registry-batch`（第 4 批起，≤10 张/批，名单每次现取）。

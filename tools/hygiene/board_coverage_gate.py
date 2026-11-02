@@ -63,11 +63,19 @@ RUN_TIMEOUT = 120.0
 NON_CARD_KINDS = frozenset(("ci_claim", "ci_result"))
 
 
-def _run(argv, timeout=RUN_TIMEOUT):
+def _collab_env():
+    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
+    （卡 `openmir2-walgit-local-commands-env`）。"""
+    env = dict(os.environ)
+    env["WALGIT_LOCAL_COMMANDS"] = "1"
+    return env
+
+
+def _run(argv, timeout=RUN_TIMEOUT, env=None):
     """Never raises: returns (rc, stdout, stderr); rc 124/127 on timeout/OSError."""
     try:
         done = subprocess.run(argv, capture_output=True, text=True,
-                              timeout=timeout, check=False)
+                              timeout=timeout, check=False, env=env)
         return done.returncode, done.stdout, done.stderr
     except subprocess.TimeoutExpired:
         return 124, "", "timeout after %ss: %s" % (timeout, argv[0])
@@ -216,7 +224,7 @@ def board_ids(repo, board=None):
     argv = ["walgit", "collab", "board", "--repo", repo, "--format", "json"]
     if board:
         argv += ["--board", board]
-    rc, out, err = _run(argv)
+    rc, out, err = _run(argv, env=_collab_env())
     if rc != 0:
         return None, "cannot read board (rc=%d): %s" % (rc, (err or out).strip()[:200])
     try:

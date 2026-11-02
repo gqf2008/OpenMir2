@@ -121,5 +121,7 @@ if [ -n "$FULL_BASE" ]; then set -- "$@" --base "$FULL_BASE"; fi
 if [ -n "$FULL_HEAD" ]; then set -- "$@" --head "$FULL_HEAD"; fi
 if [ -n "$PUSH" ]; then set -- "$@" --push "$PUSH"; fi
 
-walgit collab entry "$@"
+# 卡 openmir2-walgit-local-commands-env：2026-11-02 起必须显式请求本地命令接口，
+# 否则 CLI 直接拒绝（stderr + rc=1）；不要把错误交给管道吞掉。
+WALGIT_LOCAL_COMMANDS=1 walgit collab entry "$@"
 echo "sign_entry: body_sha256=$BODY_SHA" >&2

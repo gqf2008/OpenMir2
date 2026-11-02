@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -82,14 +83,23 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def run_cmd(cmd, cwd, timeout):
+def _collab_env():
+    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
+    （卡 `openmir2-walgit-local-commands-env`）。"""
+    env = dict(os.environ)
+    env["WALGIT_LOCAL_COMMANDS"] = "1"
+    return env
+
+
+def run_cmd(cmd, cwd, timeout, env=None):
     """运行一个只读命令，返回记录（不抛异常，超时/缺失都变成状态）。"""
     cmd = [str(c) for c in cmd]
     rec = {"cmd": cmd, "cwd": str(cwd), "rc": None, "stdout": "", "stderr": "",
            "timed_out": False, "error": None, "duration_s": 0.0}
     started = time.monotonic()
     try:
-        proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, timeout=timeout)
+        proc = subprocess.run(cmd, cwd=str(cwd), capture_output=True, timeout=timeout,
+                              env=env)
         rec["rc"] = proc.returncode
         rec["stdout"] = _decode(proc.stdout)
         rec["stderr"] = _decode(proc.stderr)
@@ -216,7 +226,8 @@ def run_script_coverage(mir2_root: Path, envir: str, script_bin: str, timeout):
 
 def load_board(repo: Path, timeout=180):
     """`walgit collab board --format json` -> ({card_id: card}, rec)。"""
-    rec = run_cmd(["walgit", "collab", "board", "--format", "json"], repo, timeout)
+    rec = run_cmd(["walgit", "collab", "board", "--format", "json"], repo, timeout,
+                  env=_collab_env())
     if rec.get("rc") != 0:
         return None, rec
     try:

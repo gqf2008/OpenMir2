@@ -2,7 +2,7 @@
 
 仓库：`E:\Users\gxh\Documents\GitHub\OpenMir2`。你已在**隔离检出** `.claude/worktrees/recfields`
 （分支 `worktree-m2-record-fields`，**基于** `dc33c1ca` = `worktree-m2-gamesvr-host` 的当前 head，因为是**叠在 m2-svr 之上**的工作）。
-身份：新 principal **openmir2-worker-2**（先 `walgit collab join --repo . --principal openmir2-worker-2 --key C:\Users\gxh\.walgit\keys\openmir2-worker-2.ed25519 --push walgit`）。
+身份：新 principal **openmir2-worker-2**（先 `WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo . --principal openmir2-worker-2 --key C:\Users\gxh\.walgit\keys\openmir2-worker-2.ed25519 --push walgit`）。
 卡：`openmir2-m2-record-fields`（**待认领**，先 `git fetch walgit '+refs/collab/*:refs/collab/*'` 读线程，再发 `status: in-progress`）。
 
 ## 0. 为什么有这张卡（别自己推格式）

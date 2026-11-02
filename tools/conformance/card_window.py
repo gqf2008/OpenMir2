@@ -179,6 +179,15 @@ import traceback
 import uuid
 
 TOOL = "tools/conformance/card_window.py"
+
+
+def _collab_env():
+    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
+    （卡 `openmir2-walgit-local-commands-env`）。"""
+    env = dict(os.environ)
+    env["WALGIT_LOCAL_COMMANDS"] = "1"
+    return env
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.dirname(os.path.dirname(HERE))
 PROBE = os.path.join(REPO_ROOT, "tools", "probe", "mir2_probe.py")
@@ -5891,7 +5900,8 @@ def post_comment(card, body, repo):
     for attempt in (1, 2):
         try:
             p = subprocess.run(thread_cmd, capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=120)
+                               encoding="utf-8", errors="replace", timeout=120,
+                               env=_collab_env())
             if p.returncode == 0:
                 entries = json.loads(p.stdout or "[]")
                 if entries:
@@ -5913,7 +5923,8 @@ def post_comment(card, body, repo):
     for attempt in (1, 2):
         try:
             p = subprocess.run(entry_cmd, capture_output=True, text=True,
-                               encoding="utf-8", errors="replace", timeout=180)
+                               encoding="utf-8", errors="replace", timeout=180,
+                               env=_collab_env())
             if p.returncode == 0:
                 return True, (p.stdout or "").strip()
             last = "发 comment 失败 rc=%s: %s" % (p.returncode,

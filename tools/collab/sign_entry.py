@@ -46,6 +46,17 @@ KINDS = ("issue", "status", "patch", "review", "merge_result",
          "comment", "review_request")
 
 
+def _collab_env():
+    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口。
+
+    所有调用点都走这个函数，保证「带开关」是可 grep 的单一事实源
+    （卡 `openmir2-walgit-local-commands-env`）。
+    """
+    env = dict(os.environ)
+    env["WALGIT_LOCAL_COMMANDS"] = "1"
+    return env
+
+
 def die(msg):
     print("sign_entry: REFUSED: %s" % msg, file=sys.stderr)
     sys.exit(2)
@@ -116,7 +127,7 @@ def thread_entry_count(repo, thread_id, run=subprocess.run):
     """`walgit collab thread <id>` 判空。返回 (count|None, detail)；None = 判不了。"""
     try:
         pr = run(["walgit", "collab", "thread", thread_id, "--repo", repo],
-                 capture_output=True, text=True, timeout=60)
+                 capture_output=True, text=True, timeout=60, env=_collab_env())
     except Exception as ex:
         return None, "调用 walgit collab thread 失败：%s" % ex
     if pr.returncode != 0:
@@ -252,7 +263,7 @@ def main():
         cmd += ["--base", refs_base]
     if args.push:
         cmd += ["--push", "walgit"]
-    pr = subprocess.run(cmd, capture_output=True, text=True)
+    pr = subprocess.run(cmd, capture_output=True, text=True, env=_collab_env())
     sys.stdout.write(pr.stdout or "")
     sys.stderr.write(pr.stderr or "")
     if pr.returncode != 0:

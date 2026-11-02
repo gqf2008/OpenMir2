@@ -15,7 +15,7 @@
 
 1. `cd` 到你自己的 worktree（`lanes.conf` 第 2 列，`lane-run.sh` 已经 `cd` 进去）；然后
    `git fetch walgit '+refs/collab/*:refs/collab/*'`、`git fetch walgit`（无 refspec，刷新全部分支；`origin` 仅人工同步镜像，不参与本车道）。
-2. `walgit collab board` 取【待审】。对每一张：`walgit collab thread <id>`，读出
+2. `WALGIT_LOCAL_COMMANDS=1 walgit collab board` 取【待审】。对每一张：`WALGIT_LOCAL_COMMANDS=1 walgit collab thread <id>`，读出
    **最后一条 `patch` 的 `head`/`base`/`branch`** 与**所有 `review` 条目的 `{actor, decision, reviewed_head}`**。
 3. **准入判据（四条全过才合；缺任何一条 ⇒ 跳过并在该卡留一条 `comment` 说明原因）**：
    1. 存在 `decision=approve` 且 `reviewed_head` **等于**该卡当前被审 head，且 approve 的 `actor` ≠ patch 作者；
@@ -61,7 +61,7 @@
      ——`prose_anchor` 记四档 `检查/悬空/越界/符号缺失` 与 rc）
    - `status`：**夹具卡/离线片 = `in-progress`**（`work` 里写清剩余 DoD，例如"等真机窗口"）；
      **实现卡且 DoD 全达 = `closed`**。`owner`/`worktree`/`branch` **沿用卡上现有值**（不要改成自己）。
-   两条都 `--push walgit`；写完 `walgit collab thread <id>` 回读：`verified=true`、链不断（parent 指向真实上一条）。
+   两条都 `--push walgit`；写完 `WALGIT_LOCAL_COMMANDS=1 walgit collab thread <id>` 回读：`verified=true`、链不断（parent 指向真实上一条）。
 8. 回到第 2 步取下一张，直到合满 3 张或没有合格的卡。
 
 ## 绝对禁止

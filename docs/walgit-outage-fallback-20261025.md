@@ -141,7 +141,8 @@ git bundle list-heads E:/tmp/openmir2-fallback/openmir2-2135f6154.bundle | wc -l
 git ls-remote walgit refs/heads/master
 
 # ② 协作面可读：看板能生成、条目数与本地量级相当
-walgit collab board --format json | python -I -c "import json,sys;d=json.load(sys.stdin);print(sum(len(c['cards']) for c in d['columns']))"
+#    （必须带 WALGIT_LOCAL_COMMANDS=1，否则 2026-11-02 起 CLI 直接拒绝、rc=1）
+WALGIT_LOCAL_COMMANDS=1 walgit collab board --format json | python -I -c "import json,sys;d=json.load(sys.stdin);print(sum(len(c['cards']) for c in d['columns']))"
 
 # ③ 一次 dry-run push（不发对象，只协商）：rc=0 且不报 500
 git push --dry-run walgit master

@@ -856,6 +856,14 @@ def load_board_file(path):
         )
 
 
+def _collab_env():
+    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
+    （卡 `openmir2-walgit-local-commands-env`）。"""
+    env = dict(os.environ)
+    env["WALGIT_LOCAL_COMMANDS"] = "1"
+    return env
+
+
 def _run_board(top):
     """One ``walgit collab board --format json`` call (never per card)."""
     try:
@@ -864,6 +872,7 @@ def _run_board(top):
             capture_output=True,
             check=False,
             timeout=120,
+            env=_collab_env(),
         )
     except subprocess.TimeoutExpired:
         raise GateError(
