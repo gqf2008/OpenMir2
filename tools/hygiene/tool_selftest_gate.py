@@ -48,6 +48,10 @@ REGISTRY = [
     ("card_window", ["tools/conformance/card_window.py", "--selftest"], True),
     ("card_evidence", ["tools/window/card_evidence.py", "--selftest"], False),
     ("compare_runs", ["tools/conformance/compare_runs.py", "selftest"], False),
+    # 卡 openmir2-flaky-shape-checker：runbook §6.1「RNG 流位类差异」形状检查器。
+    # 判等域复用 compare_runs 的规则语义（rules.json + global masks），不是 raw bytes；
+    # 自测用仓库 npc_click run1 fixture（PASS m=1）、五类反例 + w1c 真实 FAIL，离线、<1s。
+    ("rng_stream_shape", ["tools/conformance/rng_stream_shape.py", "selftest"], False),
     ("dbsnap_pair", ["tools/db-parity/dbsnap_pair.py", "selftest"], False),
     ("mir2_probe", ["tools/probe/mir2_probe.py", "--selftest"], True),
     ("selftest_bclass", ["tools/probe/selftest_bclass.py"], False),

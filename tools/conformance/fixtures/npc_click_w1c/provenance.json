@@ -1,0 +1,14 @@
+{
+  "format": "rng-shape-fixture/1",
+  "source": "E:/tmp/window/w1c/npc_click/{csharp,rust}/frames.ndjson",
+  "source_sha256": {
+    "csharp": "349be636bab712771ae54cad35bf3e7b492a70e92be31202cd50233e1289fba2",
+    "rust": "7c5d5c8ef07ec163bc597403e8840b75fd123c743eeeb5ef4ab2c5f3f905b232"
+  },
+  "fixture_sha256": {
+    "csharp-frames.ndjson": "d0b135c385a0065881d32102f8775da118f704c5e842ade116db893d050f952a",
+    "rust-frames.ndjson": "9646d9302bc57dad8cfd44fe2d85f4d41c264707e76b68800aef2f2f37579f71"
+  },
+  "eol_normalization": "源文件为 CRLF；入库副本只做 CRLF→LF 归一（逐行 JSON 内容不变），以满足 git diff --check。source_sha256 是原证据文件，fixture_sha256 是入库副本。",
+  "note": "冻结副本：w1c npc_click 旧 harness 的真实 FAIL（oracle[19]=10 而 rust[19]=643，643 相对其它帧提前）。只用于 rng_stream_shape.py 自测的「非随机帧次序差 ⇒ FAIL」常驻牙；不作为 DB/判据证据。"
+}
