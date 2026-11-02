@@ -230,8 +230,10 @@ python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master
 
 只核 `git diff $(git merge-base <base> HEAD) <worktree>` 的**新增行**（域：`docs/` 下 `.md` 新增行里、反引号内的 `.rs`/`.cs`
 `path:line` 锚）；干净树与 `...HEAD` 等价，**工作树有未提交改动会一并纳入**。
-输出四档计数：检查 N（域内锚总数）/ 悬空 M（文件不存在）/ 越界 K（行号超文件长度）/ 符号缺失 S
-（锚紧邻声明的反引号符号不在锚定行/区间内）；**M+K+S>0 ⇒ rc=1**，检查 0 ⇒ rc=0，`git`/`--base` 解析失败 ⇒ rc=2（判不了）。
+输出五档计数：检查 N（域内锚总数）/ 悬空 M（文件不存在）/ 越界 K（行号超文件长度）/ 符号缺失 S
+（锚紧邻声明的反引号符号不在锚定行/区间内）/ 高churn H（锚指向高 churn 文件：`mir2-rs/crates/world/**`、
+`mir2-rs/bins/game-svr/**`、`mir2-rs/tests/parity/csharp/**`，该档**独立判红**）；
+**M+K+S+H>0 ⇒ rc=1**，检查 0 ⇒ rc=0，`git`/`--base` 解析失败 ⇒ rc=2（判不了）。
 **为什么必须在待合并分支上、`--base` 取合并目标 ref**：合并之后再在 master 上以 `--base master` 跑，
 `merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，**什么都没扫**。
 该门是**增量**口径（只看新增行），对历史悬空锚无感；历史清理仍归 `stale_pointer_gate`，二者不可互相替代。
