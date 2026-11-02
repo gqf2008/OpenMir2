@@ -40,8 +40,15 @@ import subprocess
 import sys
 import tempfile
 
-#: CLI「本地命令接口未启用」的哨兵短语（上游 2026-11-02 原文）。
+#: CLI「本地命令接口未启用」的哨兵（上游 2026-11-02 原文，仅作文档/提示用）。
 SENTINEL = "is not the collaboration interface"
+#: 真正的判定：**行首锚定**的整行错误。
+#: 不能用子串——`thread`/`board` 的输出是数据，条目正文里**合法地**会引用这句话
+#: （本卡自己的线程正文就引用了），子串匹配会把正常数据误判成「接口被拒」。
+SENTINEL_LINE_RE = re.compile(
+    r"^Error: .*is not the collaboration interface any more: it is MCP at /mcp",
+    re.MULTILINE,
+)
 #: 哨兵命中时的专用退出码（区别于子进程 rc，便于机判与排障）。
 RC_SENTINEL = 3
 RC_USAGE = 2
@@ -90,9 +97,12 @@ def run_collab(args):
 
 
 def has_sentinel(out, err):
-    """stdout/stderr 任一处出现哨兵即视为「本地接口未生效」。"""
-    blob = (out or b"") + b"\n" + (err or b"")
-    return SENTINEL in blob.decode("utf-8", "replace")
+    """stdout/stderr 任一处出现**行首锚定**的错误行才算「本地接口未生效」。
+
+    只看行首：正常数据里引用这句话（JSON 字符串、条目正文）不算失败。
+    """
+    blob = ((out or b"") + b"\n" + (err or b"")).decode("utf-8", "replace")
+    return bool(SENTINEL_LINE_RE.search(blob))
 
 
 def _silence(stream):
@@ -227,6 +237,9 @@ if mode == "sentinel_rc0":
 if mode == "sentinel_stdout":
     print("Error: `walgit collab` " + SENTINEL)
     sys.exit(0)
+if mode == "phrase_in_data":
+    print('{"note":"Error: `walgit collab` ' + SENTINEL + ' any more: it is MCP at /mcp"}')
+    sys.exit(0)
 if mode == "fail7":
     sys.stderr.write("boom\n")
     sys.exit(7)
@@ -301,6 +314,11 @@ def selftest():
         # --- 3) 哨兵打到 stdout ⇒ 同样 rc=3（不依赖错误流位置）---
         rc, out, err = _run_wrapper(script, fake, calls, "sentinel_stdout", ["board"])
         add("sentinel-stdout:rc3", rc == RC_SENTINEL, "rc=%r" % rc)
+
+        # --- 3b) 数据里**合法引用**这句话（条目正文/JSON 字符串）⇒ 不许误判成失败 ---
+        rc, out, err = _run_wrapper(script, fake, calls, "phrase_in_data", ["thread", "x"])
+        add("phrase-in-data:rc0", rc == 0, "rc=%r stderr=%r" % (rc, err[:160]))
+        add("phrase-in-data:passthrough", SENTINEL in out, "stdout=%r" % out[:160])
 
         # --- 4) 普通失败 rc=7 ⇒ 原样透传，绝不折叠成 0 ---
         rc, out, err = _run_wrapper(script, fake, calls, "fail7", ["board"])
