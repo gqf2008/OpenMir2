@@ -81,6 +81,10 @@ profile：
         （**含网关**）全监听 + 暖 45s，缺端口非零退出。
       - `ready_ports` **不含网关端口**（17200/17600/7200）：wait_ready 的连接探针会占住
         GameGate user 会话槽，596ms 后 probe 的真实连接复用该槽被丢（no SM_LOGON）。
+      - Rust 启动器收进仓库（卡 `openmir2-window-rust-starter-hips`）：alt 的 rust stack
+        指向 `tools/window/start-rust.ps1`（不再指向会被清扫的 `E:/tmp`）；内层不再把
+        `-ExecutionPolicy` 带上命令行（HIPS 拦截 WMI 派生链上的该开关），改用
+        `PSExecutionPolicyPreference=Bypass` 环境变量；WMI 派生与 fail-fast 不变。
   * 内置 `csharp-default` = C# 默认端口栈（E:/MirServer，**生产库**）。默认拒绝运行，
     必须显式 --allow-production-db，且只有 owner 授权的窗口才允许（见 docs 说明）。
   * `--profile <路径.json>` 也可直接加载自定义 profile（format = card-window-profile/1）。
@@ -512,8 +516,11 @@ BUILTIN_PROFILES = {
             },
             "rust": {
                 "label": "Rust",
-                "stack": wmi_stack_argv("E:/tmp/conformance/start-rust.ps1",
-                                        (15000, 17000, 17100, 17600)),
+                # 卡 openmir2-window-rust-starter-hips：启动器收进仓库（E:/tmp 会被
+                # 清扫；且内层 -ExecutionPolicy 会撞 HIPS），见 tools/window/start-rust.ps1。
+                "stack": wmi_stack_argv(
+                    os.path.join(REPO_ROOT, "tools", "window", "start-rust.ps1").replace(os.sep, "/"),
+                    (15000, 17000, 17100, 17600)),
                 "stop": POWERSHELL + ["-File", "E:/tmp/conformance/stop-rust.ps1"],
                 "restore": [GIT_BASH or "bash",
                             "E:/tmp/conformance/restore-baseline-r.sh"],
@@ -523,8 +530,9 @@ BUILTIN_PROFILES = {
                 "probe_extra": ["--game-gate", "127.0.0.1:17600"],
                 "binaries": [RUST_SERVER_BIN],
                 "require_pid_binaries": True,
-                # 部署把 pid 写到 wrapper 的 `-LogDir`（`start-rust.ps1` 里写死
-                # `E:/tmp/conformance/rust-logs`），**不是** `<side_dir>`（review B1）。
+                # 部署把 pid 写到 wrapper 的 `-LogDir`（仓库内 tools/window/start-rust.ps1
+                # 的默认 `E:/tmp/conformance/rust-logs`；部署数据根仍在 E:/tmp），
+                # **不是** `<side_dir>`（review B1）。
                 # 下一次真窗口读的就是这个文件；路径只在这里声明，代码里不写死。
                 "pid_file": "E:/tmp/conformance/rust-logs/mir2-server.pid.json",
                 "envir_root": "E:/tmp/conformance/rust-root/M2GameSvr",
@@ -9425,6 +9433,22 @@ def selftest():
     # 注：它**故意**放在 `chk` 定义之后而不是函数最开头——最开头处 `chk` 还没定义。
     chk(os.path.realpath(FIXTURE_PROD_ROOT) != os.path.realpath(_prod_root_saved),
         "FX-FAKE-SWITCH 守卫牙必须以假根为靶（切换生效）")
+
+    # W-RUST-STARTER（卡 openmir2-window-rust-starter-hips）：alt 的 rust stack 的 -Script
+    # 必须是**仓库内**启动器（E:/tmp 会被清扫）。内层命令行不含 -ExecutionPolicy 由
+    # start-rust.ps1 自己的 -Selftest 兜（本 argv 最外层是 card_window 直连包装，不是
+    # WMI 派生链，那里带 -ExecutionPolicy 是既有行为且不触发 HIPS）。
+    # 牙：把 -Script 改回 E:/tmp ⇒ 本断言必红。
+    _rust_stack = BUILTIN_PROFILES["alt"]["sides"]["rust"]["stack"]
+    _rust_script = ""
+    if "-Script" in _rust_stack:
+        _rust_script = str(_rust_stack[_rust_stack.index("-Script") + 1])
+    _norm = lambda x: os.path.normcase(os.path.realpath(x))
+    _repo_prefix = _norm(REPO_ROOT) + os.sep
+    chk(bool(_rust_script) and _norm(_rust_script).startswith(_repo_prefix)
+        and os.path.exists(_rust_script)
+        and _norm(_rust_script).endswith(os.sep.join(["tools", "window", "start-rust.ps1"])),
+        "W-RUST-STARTER alt rust stack => 仓库内 tools/window/start-rust.ps1（存在）")
 
     def fresh_log():
         try:
