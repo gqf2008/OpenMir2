@@ -25,12 +25,17 @@
 | 1.2 | `git rev-list --count refs/remotes/walgit/master..master` | 一个整数（今日复算：**81 @ `1c605ca4a`**；**91 @ `02f83a1a2`**；活量以 `rev-list` 现测为准） | 本地领先量；恢复后应回到 0 |
 | 1.3 | `git rev-list --count origin/master..master` | 一个整数（镜像落后量，活量） | GitHub 镜像同步量 |
 | 1.4 | `git for-each-ref refs/heads/card --format='%(refname:short) %(objectname:short)'` | 每行 `分支 短sha`；**活量**（随各线交付变化，执行前现数） | 逐条判「已合并 / 未合并」见 §2.2 |
-| 1.5 | `walgit collab board --format json \| python -I -c "import sys,json;d=json.load(sys.stdin);[print(c['name'],len(c['cards'])) for c in d['columns']]"` | 每行 `看板列 张数`（**七列**：待认领/进行中/待审/需要人/受阻/已完成/已合并未收口，见 `.walgit/board.toml`；活量） | 与 §2.3 卡状态对账 |
+| 1.5 | `WALGIT_LOCAL_COMMANDS=1 walgit collab board --format json \| python -I -c "import sys,json;d=json.load(sys.stdin);[print(c['name'],len(c['cards'])) for c in d['columns']]"` | 每行 `看板列 张数`（**七列**：待认领/进行中/待审/需要人/受阻/已完成/已合并未收口，见 `.walgit/board.toml`；活量） | 与 §2.3 卡状态对账 |
 | 1.6 | `python -I tools/goal/goal_gate.py --full --json > "$TEMP/gate.json"; echo rc=$?` | `rc=0`；JSON 里 `conditions[*].state` 四行 | 恢复前条件④ 的 `master_sync` 必为 need_human |
 | 1.7 | `python -I -c "import json,os;d=json.load(open(os.path.join(os.environ['TEMP'],'gate.json')));print(d['overall']);[print(c['id'],c['name'],c['state']) for c in d['conditions']]"` | `overall` + 4 行 `id 名称 state` | 目标：①pass ②pass（G11 裁决后）③pass ④pass |
 
 > 时间仓促时用 `python -I tools/goal/goal_gate.py --json`（快速模式）先看 ①②③；④ 的 `cargo test` 腿
 > 必须 `--full`。
+>
+> **协作面命令必须带 `WALGIT_LOCAL_COMMANDS=1`**（2026-11-02 12:52 起；缺它就只报
+> `is not the collaboration interface` 并 rc=1）。**别**用 `| grep` / `| tail` 收尾吞错——
+> 管道取的是末段命令的 rc，会把「接口被拒」当成「看板为空」。脚本里统一走
+> `python -I -B tools/orchestration/walgit_collab.py <子命令>`（fail-closed，rc=3）。
 
 ## 2. 路径 A：walgit 恢复后（⚡ 可并行；不需要窗口）
 
