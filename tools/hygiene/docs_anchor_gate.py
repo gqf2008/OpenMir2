@@ -718,12 +718,14 @@ def scan_prose(repo, base, reg_path=None, pathspecs=("docs/",), list_only=False)
                 findings.append({"why": "PROSE_ANCHOR_PATH_MISSING", "doc": doc,
                                  "raw": m.group(0), "detail": "base_dirs 都解析不到"})
                 continue
-            line_lists, ok_bounds = [], False
+            line_lists, ok_bounds, resolved = [], False, None
             for c in cands:
                 lines = _prose_read_lines(repo, c, cache)
                 line_lists.append((c, lines))
                 if 1 <= start <= end <= len(lines):
                     ok_bounds = True
+                    if resolved is None:
+                        resolved = c
             if not ok_bounds:
                 findings.append({"why": "PROSE_ANCHOR_LINE_OUT_OF_RANGE", "doc": doc,
                                  "raw": m.group(0),
@@ -731,6 +733,13 @@ def scan_prose(repo, base, reg_path=None, pathspecs=("docs/",), list_only=False)
                                            % (start, end, ", ".join(
                                                "%s=%d" % (c, len(ls)) for c, ls in line_lists))})
                 continue
+            # **与表模式同口径**（卡 openmir2-prose-highchurn-blindspot）：
+            # 解析到的文件落在 HIGH_CHURN_PREFIXES 内 ⇒ 行号锚一律红（策略禁行号锚）。
+            if resolved is not None and any(
+                    resolved.startswith(h) for h in HIGH_CHURN_PREFIXES):
+                findings.append({"why": "HIGH_CHURN_LINE_ANCHOR", "doc": doc,
+                                 "raw": m.group(0), "path": resolved,
+                                 "detail": "高 churn 文件必须写符号锚"})
             missing = []
             for sym in syms:
                 pat = re.compile(r"(?<![A-Za-z0-9_])" + re.escape(sym) + r"(?![A-Za-z0-9_])")
@@ -753,6 +762,7 @@ def scan_prose(repo, base, reg_path=None, pathspecs=("docs/",), list_only=False)
     dangling = [f for f in findings if f["why"] == "PROSE_ANCHOR_PATH_MISSING"]
     oor = [f for f in findings if f["why"] == "PROSE_ANCHOR_LINE_OUT_OF_RANGE"]
     symmiss = [f for f in findings if f["why"] == "PROSE_ANCHOR_SYMBOL_MISSING"]
+    hichurn = [f for f in findings if f["why"] == "HIGH_CHURN_LINE_ANCHOR"]
     for f in findings:
         print("%-30s %s  %s  %s" % (f["why"], f["doc"], f["raw"], f.get("detail", "")))
     if checked == 0:
@@ -760,8 +770,8 @@ def scan_prose(repo, base, reg_path=None, pathspecs=("docs/",), list_only=False)
               "（新增行里没有任何 path:line 锚；仅反引号内 .rs/.cs，检查 0 ≠ 全部锚干净）")
         print("RESULT: GREEN")
         return 0
-    print("prose-anchor gate：检查 %d / 悬空 %d / 越界 %d / 符号缺失 %d"
-          % (checked, len(dangling), len(oor), len(symmiss)))
+    print("prose-anchor gate：检查 %d / 悬空 %d / 越界 %d / 符号缺失 %d / 高churn %d"
+          % (checked, len(dangling), len(oor), len(symmiss), len(hichurn)))
     print("RESULT: %s" % ("RED" if findings else "GREEN"))
     return 1 if findings else 0
 
@@ -901,6 +911,11 @@ def _prose_teeth():
         with open(os.path.join(tmp, "src", "b.rs"), "w", encoding="utf-8") as fh:
             # 1 fn gamma / 2 fn delta  —— **不带末尾换行**（2 行）
             fh.write("fn gamma() {}\nfn delta() {}")
+        # 高 churn 前缀文件（行号锚判据的靶子；前缀见 HIGH_CHURN_PREFIXES）
+        os.makedirs(os.path.join(tmp, "mir2-rs", "crates", "world", "src"))
+        with open(os.path.join(tmp, "mir2-rs/crates/world/src/hc.rs"), "w",
+                  encoding="utf-8") as fh:
+            fh.write("fn alpha() {}\nfn beta() {}\n")
         with open(os.path.join(tmp, "docs", "base.md"), "w", encoding="utf-8") as fh:
             fh.write("历史散文锚 `src/a.rs:1`（基线，不应被增量模式扫到）\n")
         g("init", "-q")
@@ -975,6 +990,19 @@ def _prose_teeth():
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("空输入 ⇒ rc=0 且显式「检查 0 …（新增行里没有任何 path:line 锚）」",
               rc == 0 and "检查 0 / 悬空 0 / 越界 0" in out and "没有任何" in out, out[-300:])
+
+        # ⑨ HIGH_CHURN 行号锚 ⇒ 红（与表模式同口径）
+        write_doc("高 churn 行号锚 `mir2-rs/crates/world/src/hc.rs:2` `beta`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙⑤HIGH_CHURN 文件行号锚 ⇒ 红（高churn 1）",
+              rc == 1 and "HIGH_CHURN_LINE_ANCHOR" in out and "高churn 1" in out,
+              out[-300:])
+        # ⑩ 同一内容改成路径/符号锚 ⇒ 绿（没有行号锚，prose 域不判）
+        write_doc("高 churn 路径/符号锚 `mir2-rs/crates/world/src/hc.rs` `beta`")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙⑥HIGH_CHURN 改成路径/符号锚 ⇒ 绿",
+              rc == 0 and "RESULT: GREEN" in out and "HIGH_CHURN_LINE_ANCHOR" not in out,
+              out[-300:])
 
         # ⑦ base 解析不到 ⇒ rc=2（判不了，不静默跳过）；stderr 也收进断言，别让 PASS 行带噪声
         import io
