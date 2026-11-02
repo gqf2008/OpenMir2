@@ -111,6 +111,9 @@ items = [
   "f2da46e8d8",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:34
   "f6509d9a",  # blob（协作条目 oid）；引用见 docs/needs-human-20261024.md:390
   "fa86b35b51",  # blob（协作条目 oid）；引用见 docs/three-day-report-20261025.md:46
+  "2269c452e487",  # blob（协作条目 oid）；服务端段交付签字；引用见 docs/delivery-20261102.md
+  "66f09b4f047c",  # blob（协作条目 oid）；用户人工验收留痕；引用见 docs/delivery-20261102.md
+  "17f218366844",  # blob（协作条目 oid）；MCP admin 窗口结果；引用见 docs/delivery-20261102.md
   "b42f20a8",  # 已不可解析（fold/GC 后的条目 oid）；引用见 docs/needs-human-20261023-night.md:38
 ]
 
@@ -133,6 +136,19 @@ reason = "未合并分支的 head / 历史 tip：文档该处已显式标注「�
 # [[external_paths]]
 # path = "docs/foo"
 # reason = "..."
+
+[[non_ancestor_commits]]
+oid = "d16de80"
+file = "docs/delivery-20261102.md"
+reason = "客户端仓（MirClientZig）联合清单 tip，非本仓祖先；文档该处已写明「MirClientZig 仓」并标注 tip。跨仓引用，不会合入本仓。"
+
+[[external_paths]]
+path = "docs/JOINT-DELIVERY-20261102.md"
+reason = "客户端仓（MirClientZig）的联合交付清单；本仓只引用不复制，文档已注明仓名与 tip。"
+
+[[external_paths]]
+path = "tools/e2e/artifacts/joint-20261102-145005-031"
+reason = "客户端侧联合冒烟产物目录（在 MirClientZig 仓/运行机上）；本仓只引用 run 名，不复制产物。"
 
 [[claims]]
 id = "delivery-report-cond6-freeze-baseline"
