@@ -78,8 +78,9 @@
 
 退出码：0 = 无 RED（缺口全部「已实现或已卡」）；1 = 存在 RED；2 = 用法/环境错误或前置缺失
 （PREREQ_RED：部署目录不存在/不可读/不是目录 ⇒ 印 `PREREQ_MISSING` + `RESULT: PREREQ_RED`，**拒跑而不
-静默放行**；判不了缺口时绝不报「无缺口」假绿。诊断需要看表可加 `--allow-missing-deploy` 显式降级为 WARN，
-但此时结论不可作数）。
+静默放行**；看板探测失败——`walgit collab ls` 不可执行/rc≠0/超时——⇒ 印 `PREREQ_CARD_UNVERIFIED` + rc=2，
+**绝不 WARN+0**（卡 `openmir2-recon-gates-false-green`）；判不了缺口时绝不报「无缺口」假绿。诊断需要看表
+可加 `--allow-missing-deploy` 显式降级为 WARN，但此时结论不可作数）。
 """
 
 from __future__ import annotations
@@ -515,38 +516,65 @@ def dead_consumer_evidence(cards: dict, key: str):
     return ev if _evidence_ok(ev) else None
 
 
-def board_card_ids(repo: Path):
-    """看板上存在的卡 id 集合（`walgit collab ls`）。取不到（walgit 不可用）⇒ None（不判缺卡）。"""
+class BoardProbeError(RuntimeError):
+    """看板探测失败（`walgit collab ls` 不可执行/超时/非零退出）⇒ 卡存在性**判不了**。
+
+    卡 `openmir2-recon-gates-false-green`：旧实现把这里的失败折叠成 `None`，`resolve_cards` 再把它
+    当成「看板不可用 ⇒ 不判缺卡」，`emit_card_prereq` 只印 WARN 且 rc=0 ⇒ 缺卡判据静默失效（假绿）。
+    现在失败必须向上抛，由调用方 fail-closed（rc=2 判不了）。
+    """
+
+
+def board_card_ids(repo: Path, _run=None):
+    """看板上存在的卡 id 集合（`walgit collab ls`）。
+
+    子调用失败（不可执行/超时/rc≠0）⇒ 抛 [`BoardProbeError`]（**fail-closed**，不得折叠成
+    「看板为空/不可用」而放行）。空看板是**合法结果**（返回空 set）：known_cards 会逐条判缺卡。
+    `_run` 仅给自测注入失败子调用用（默认 `subprocess.run`）。
+    """
+    runner = _run or subprocess.run
     try:
-        out = subprocess.run(["walgit", "collab", "ls", "--repo", str(repo)],
-                             capture_output=True, text=True, timeout=60)
-    except (OSError, subprocess.SubprocessError):
-        return None
+        out = runner(["walgit", "collab", "ls", "--repo", str(repo)],
+                     capture_output=True, text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise BoardProbeError("walgit collab ls 调用失败：%s" % exc)
     if out.returncode != 0:
-        return None
+        raise BoardProbeError("walgit collab ls rc=%d stderr=%r"
+                              % (out.returncode, (out.stderr or "")[:400]))
     ids = set()
     for line in (out.stdout or "").splitlines():
         line = line.strip()
         if line.startswith("openmir2-"):
             ids.add(line)
-    return ids or None
+    return ids
 
 
 def resolve_cards(cards: dict, repo: Path, board_lookup=None):
     """校验 `known_cards` 引用的卡在**看板上存在**（片 D1-③）。
 
-    `board_lookup(repo) -> set|None`（默认 `board_card_ids`）。取不到看板 ⇒ 不判缺卡（`_board_probed=False`，
-    只印 WARN）。存在的卡写入 `_valid_cards`（`card_for` 以它为准）；看板上不存在的写入 `_missing_cards`。
+    `board_lookup(repo) -> set`（默认 `board_card_ids`）。**探测失败**（抛 [`BoardProbeError`] 或返回
+    None）⇒ `_board_error` 记录原因、`_board_probed=False`，由 `emit_card_prereq` 判 rc=2（判不了就拒跑，
+    **不得**像旧实现那样把 known_cards 全部当合法、只印 WARN + rc=0 假绿）。存在的卡写入 `_valid_cards`
+    （`card_for` 以它为准）；看板上不存在的写入 `_missing_cards`。
     """
     lookup = board_lookup or board_card_ids
     known = list(cards.get("known_cards", []) or [])
-    board = lookup(repo)
-    cards["_board_probed"] = board is not None
+    cards["_board_error"] = None
+    try:
+        board = lookup(repo)
+    except BoardProbeError as exc:
+        board = None
+        cards["_board_error"] = str(exc)
     if board is None:
-        cards["_valid_cards"] = known
+        # 失败路径：不把 known_cards 当合法（fail-closed），也不生成缺卡名单（判不了 ≠ 缺卡）。
+        if cards["_board_error"] is None:
+            cards["_board_error"] = "看板探测未返回可用结果（board_lookup 返回 None）"
+        cards["_board_probed"] = False
+        cards["_valid_cards"] = []
         cards["_missing_cards"] = []
         validate_exemption_registry(cards, repo)
         return cards
+    cards["_board_probed"] = True
     valid = [c for c in known if c in board]
     missing = [c for c in known if c not in board]
     # assignments 里引用的卡也须存在（未列入 known_cards 的由 card_for 门兜底）。
@@ -560,11 +588,17 @@ def resolve_cards(cards: dict, repo: Path, board_lookup=None):
 
 
 def emit_card_prereq(cards: dict) -> int:
-    """印缺卡点名（片 D1-③）：引用了看板上不存在的卡 ⇒ 印 PREREQ_CARD_MISSING，返回 1（计 RED）。"""
+    """印缺卡点名（片 D1-③）：引用了看板上不存在的卡 ⇒ 印 PREREQ_CARD_MISSING，返回 1（计 RED）。
+
+    看板探测失败 ⇒ 印 PREREQ_CARD_UNVERIFIED 并返回 2（判不了，**拒跑**）；绝不 WARN+0 放行
+    （旧的 `return 0` 就是卡 `openmir2-recon-gates-false-green` 要修的假绿）。
+    """
     missing = cards.get("_missing_cards", []) or []
     if not cards.get("_board_probed", False):
-        print("WARN 卡存在性未校验（walgit collab ls 不可用）⇒ 缺卡判据本次不生效")
-        return 0
+        err = cards.get("_board_error") or "看板探测未成功"
+        print("PREREQ_CARD_UNVERIFIED: 卡存在性判不了（walgit collab ls 不可用）"
+              "⇒ 缺卡判据不生效，拒绝给出通过结论（rc=2）：%s" % err)
+        return 2
     for cid in missing:
         print("PREREQ_CARD_MISSING: 卡 %s 在看板上无条目（walgit collab thread 为空）⇒ 该卡所辖缺口按未立卡处理（RED）" % cid)
     return 1 if missing else 0
@@ -1618,6 +1652,8 @@ def cmd_content(args):
         return prereq_rc
     cards = resolve_cards(load_cards(Path(args.cards)), repo)
     card_rc = emit_card_prereq(cards)
+    if card_rc == 2:
+        return 2   # 判不了（看板探测失败）⇒ 前置拒跑，不产出「通过」结论
     reg_rc = emit_exemption_registry_problems(cards)
     rows = build_content_rows(repo, envir_dir, notice_dir, cards)
     counts, reds = summarize(rows)
@@ -1643,6 +1679,8 @@ def cmd_dispatch(args):
         return prereq_rc
     cards = resolve_cards(load_cards(Path(args.cards)), repo)
     card_rc = emit_card_prereq(cards)
+    if card_rc == 2:
+        return 2   # 判不了（看板探测失败）⇒ 前置拒跑，不产出「通过」结论
     reg_rc = emit_exemption_registry_problems(cards)
     rows, cm, rm_groups, sm_all, rm_producers = build_dispatch_rows(repo, cards)
     counts, reds = summarize(rows)
@@ -2182,10 +2220,17 @@ def selftest():
         tmp_cards = tmp_repo / "cards.json"
         tmp_cards.write_text('{"known_cards": [], "assignments": {}}', encoding="utf-8")
         buf = io.StringIO()
-        with contextlib.redirect_stdout(buf):
-            rc_allow = main(["content", "--repo", str(tmp_repo), "--envir-dir", str(miss_e),
-                             "--notice-dir", str(miss_n), "--cards", str(tmp_cards),
-                             "--allow-missing-deploy"])
+        # 夹具不是 git 仓：看板探测必然失败（本卡起 rc=2），会把「--allow-missing-deploy」这条判据
+        # 短路成探测失败。这里只验部署前置降级，故把看板探测钉成「成功、空看板」隔离掉。
+        _orig_board_allow = globals()["board_card_ids"]
+        globals()["board_card_ids"] = lambda _repo: set()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc_allow = main(["content", "--repo", str(tmp_repo), "--envir-dir", str(miss_e),
+                                 "--notice-dir", str(miss_n), "--cards", str(tmp_cards),
+                                 "--allow-missing-deploy"])
+        finally:
+            globals()["board_card_ids"] = _orig_board_allow
         out_allow = buf.getvalue()
     finally:
         shutil.rmtree(tmp_repo, ignore_errors=True)
@@ -2284,7 +2329,8 @@ def selftest():
         _tmp_dc_cards = _tmp_dc / "cards.json"
         _tmp_dc_cards.write_text('{"known_cards": [], "assignments": {}}', encoding="utf-8")
         # 夹具不是 git 仓：别让 resolve_cards 去打真看板（本牙只验 JSON 契约）。
-        globals()["board_card_ids"] = lambda _repo: None
+        # 空 set 表示「探测成功、看板为空」（合法结果），**不是**探测失败（后者 rc=2，见本卡负例牙）。
+        globals()["board_card_ids"] = lambda _repo: set()
         _buf_dc = io.StringIO()
         with contextlib.redirect_stdout(_buf_dc):
             _rc_dc = main(["dispatch", "--repo", str(_tmp_dc), "--cards", str(_tmp_dc_cards),
@@ -2310,6 +2356,16 @@ def selftest():
             check("对照（卡recon-noop-fp B-1）：goal_gate.py 缺席 ⇒ 跳过消费端集成断言（不误红）", True)
         check("对照（卡recon-noop-fp B-1）：有 tracked 行时 counts.tracked 计数不变（不清零不改语义）",
               summarize([dict(status="tracked"), dict(status="implemented")])[0].get("tracked") == 1)
+        # ---- 卡 `openmir2-recon-gates-false-green` 端到端负例牙 ----
+        # 子调用失败（walgit collab ls rc≠0）⇒ dispatch 整体必须 rc=2（判不了），不得 WARN+0 假绿。
+        def _board_fail(_repo):
+            raise BoardProbeError("walgit collab ls rc=1 stderr='spy: local commands disabled'")
+        globals()["board_card_ids"] = _board_fail
+        _buf_fail = io.StringIO()
+        with contextlib.redirect_stdout(_buf_fail):
+            _rc_fail = main(["dispatch", "--repo", str(_tmp_dc), "--cards", str(_tmp_dc_cards)])
+        check("teeth（recon-gates-false-green）：子调用失败 ⇒ dispatch 整体 rc=2 且印 PREREQ_CARD_UNVERIFIED（不得 WARN+0）",
+              _rc_fail == 2 and "PREREQ_CARD_UNVERIFIED" in _buf_fail.getvalue())
     finally:
         if _orig_board is not None:
             globals()["board_card_ids"] = _orig_board
@@ -2398,10 +2454,47 @@ def selftest():
         _card_rc = emit_card_prereq(_cards_bogus)
     check("teeth（片D1-③）：缺卡 ⇒ emit_card_prereq 返回 1 且印 PREREQ_CARD_MISSING + 点名 bogus 卡",
           _card_rc == 1 and "PREREQ_CARD_MISSING" in buf.getvalue() and "openmir2-bogus-zzz" in buf.getvalue())
+    # ---- 卡 `openmir2-recon-gates-false-green`：看板探测失败 ⇒ fail-closed（rc=2，不得 WARN+0）----
     _cards_none = {"known_cards": ["openmir2-x"], "assignments": {}}
     resolve_cards(_cards_none, Path("."), board_lookup=lambda r: None)
-    check("对照（片D1-③）：看板不可用 ⇒ 不判缺卡（_missing_cards 空、_board_probed=False）",
-          _cards_none["_missing_cards"] == [] and _cards_none["_board_probed"] is False)
+    check("teeth（recon-gates-false-green）：看板探测失败 ⇒ 记 _board_error、不把 known_cards 当合法、不判缺卡",
+          bool(_cards_none.get("_board_error")) and _cards_none["_board_probed"] is False
+          and _cards_none["_missing_cards"] == [] and _cards_none["_valid_cards"] == [])
+    _buf_none = io.StringIO()
+    with contextlib.redirect_stdout(_buf_none):
+        _card_rc_none = emit_card_prereq(_cards_none)
+    check("teeth（recon-gates-false-green）：看板探测失败 ⇒ emit_card_prereq=2 且印 PREREQ_CARD_UNVERIFIED",
+          _card_rc_none == 2 and "PREREQ_CARD_UNVERIFIED" in _buf_none.getvalue())
+
+    # 子调用本身失败的三形态（rc≠0 / 不可执行 / 超时）都必须抛 BoardProbeError，而不是折叠成 None。
+    class _FakeProc:
+        def __init__(self, rc, out="", err=""):
+            self.returncode, self.stdout, self.stderr = rc, out, err
+
+    def _probe_raises(fn):
+        try:
+            fn()
+        except BoardProbeError:
+            return True
+        return False
+
+    check("teeth（recon-gates-false-green）：walgit collab ls rc=1 ⇒ BoardProbeError（不折叠成 None）",
+          _probe_raises(lambda: board_card_ids(
+              Path("."), _run=lambda *a, **k: _FakeProc(1, "", "spy: disabled"))))
+
+    def _run_oserror(*a, **k):
+        raise OSError("walgit not found")
+
+    check("teeth（recon-gates-false-green）：walgit 不可执行 ⇒ BoardProbeError",
+          _probe_raises(lambda: board_card_ids(Path("."), _run=_run_oserror)))
+
+    def _run_timeout(*a, **k):
+        raise subprocess.TimeoutExpired("walgit", 60)
+
+    check("teeth（recon-gates-false-green）：walgit collab ls 超时 ⇒ BoardProbeError",
+          _probe_raises(lambda: board_card_ids(Path("."), _run=_run_timeout)))
+    check("对照（recon-gates-false-green）：rc=0 且空输出 ⇒ 空 set（空看板合法，不误报探测失败）",
+          board_card_ids(Path("."), _run=lambda *a, **k: _FakeProc(0, "")) == set())
 
     # ---- 卡 openmir2-recon-unreachable-registry：豁免登记**证据门**（防「一句散文把条目藏起来」）----
     _tmp_reg = Path(tempfile.mkdtemp(prefix="recon-reg-"))
@@ -2521,6 +2614,8 @@ def cmd_mutate(args):
     if prereq_rc is not None:
         return prereq_rc
     cards = resolve_cards(load_cards(Path(args.cards)), repo)
+    if emit_card_prereq(cards) == 2:
+        return 2   # 看板探测失败 ⇒ 判不了，变异实测不可作数
     results = []
     ok = True
 
