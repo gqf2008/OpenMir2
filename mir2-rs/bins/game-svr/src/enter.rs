@@ -400,6 +400,83 @@ pub fn gbk(s: &str) -> Vec<u8> {
     game_svr::downlink::gbk(s)
 }
 
+/// `SM_LEVELRANK(1108)` —— **登记偏差 T-275**（oracle 无此帧；`git grep LEVELRANK` 零命中）。
+///
+/// 客户端契约（跨会话提供：Zig 客户端 `gui/rank.zig` 的 `parseHumanRanksDecoded`）：
+/// 头 `Recog = page`（≥ 0）、`Param = kind`（≤ 3 人物排行，4..=7 英雄排行；本卡只做 `kind = 0`）；
+/// 尾 = `EDCode.Encode(240 字节)`，240B = **10 行 × 24B**：
+///
+/// ```text
+/// 每行：[1] name_len + [15] name（GBK，右补 0x00）+ [4] level（int32 LE）+ [4] index（int32 LE）
+/// ```
+///
+/// 行序 = 在线玩家按 `Abil.Level` **降序**、同等级按 `ChrName` 的 **GBK 字节升序**；
+/// 不足 10 行补空行（`name_len=0`/`level=0`/`index=0`）；`index` = 玩家 `ActorId`。
+///
+/// **缺省关闭**：`[Setup] LevelRankOnLogin` 缺省 0 ⇒ 一帧都不发（parity 基线逐字节不变）。
+pub const SM_LEVELRANK: u16 = 1108;
+/// `SM_LEVELRANK` 的**人物排行** `kind`（英雄排行占 4..=7，本卡不实现）。
+pub const LEVEL_RANK_KIND_HUMAN: u16 = 0;
+/// 固定 10 行。
+pub const LEVEL_RANK_ROWS: usize = 10;
+/// 每行 24 字节。
+pub const LEVEL_RANK_ROW_LEN: usize = 24;
+/// 名字字段 15 字节。
+pub const LEVEL_RANK_NAME_LEN: usize = 15;
+/// 体长 = 10 × 24 = 240 字节。
+pub const LEVEL_RANK_BODY_LEN: usize = LEVEL_RANK_ROWS * LEVEL_RANK_ROW_LEN;
+
+/// 排行体的**纯函数**（不绑会话/世界）：输入 `(ChrName, Abil.Level, ActorId)`，输出 240 字节。
+///
+/// 排序 = `(level desc, GBK name bytes asc)`；`sort_by` 稳定 ⇒ 完全相同的键保持输入序。
+/// 名字的 GBK 字节数超过 15 时**按字节截断**（客户端契约：`name_len` = 实际写入字节数），
+/// 右侧补 `0x00` 到 15 字节。
+#[must_use]
+pub fn level_rank_body(players: &[(&str, i32, i32)]) -> Vec<u8> {
+    let mut rows: Vec<(Vec<u8>, i32, i32)> = players
+        .iter()
+        .map(|&(chr_name, level, actor_id)| (gbk(chr_name), level, actor_id))
+        .collect();
+    rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    let mut body = vec![0u8; LEVEL_RANK_BODY_LEN];
+    for (i, (name, level, actor_id)) in rows.iter().take(LEVEL_RANK_ROWS).enumerate() {
+        let row = &mut body[i * LEVEL_RANK_ROW_LEN..(i + 1) * LEVEL_RANK_ROW_LEN];
+        let n = name.len().min(LEVEL_RANK_NAME_LEN);
+        row[0] = u8::try_from(n).expect("name_len ≤ 15 恒落 u8");
+        row[1..1 + n].copy_from_slice(&name[..n]);
+        row[16..20].copy_from_slice(&level.to_le_bytes());
+        row[20..24].copy_from_slice(&actor_id.to_le_bytes());
+    }
+    body
+}
+
+/// 帧 = 12B 命令头（`Recog=page` / `Ident=1108` / `Param=kind` / `Tag=Series=0`）
+/// ++ `EDCode.Encode(240B 体)`（网关只编码头、尾原样追加，见 `smframe` 文件头）。
+#[must_use]
+pub fn level_rank_frame(page: i32, kind: u16, players: &[(&str, i32, i32)]) -> Vec<u8> {
+    let body = level_rank_body(players);
+    let header = game_svr::smframe::command_header(page, SM_LEVELRANK, kind, 0, 0);
+    game_svr::smframe::gm_data_body(header, &mir2_protocol::edcode::encode(&body))
+}
+
+/// 登录批次装配点：`enabled` 为真时给**本会话**追加一帧 1108，否则**原样返回**（A1 零变化）。
+///
+/// 只由「本次进世界的会话」自己的登录点调用 ⇒ 其他在线会话的批次不会经过这里（A3）。
+#[must_use]
+pub fn append_level_rank(
+    mut frames: Vec<Vec<u8>>,
+    enabled: bool,
+    page: i32,
+    kind: u16,
+    players: &[(&str, i32, i32)],
+) -> Vec<Vec<u8>> {
+    if enabled {
+        frames.push(level_rank_frame(page, kind, players));
+    }
+    frames
+}
+
 /// `SendGoldInfo(true)`（`PlayObject.Base.cs:921-939`）的 `sMsg = GameGoldName + '\r' + GamePointName`。
 #[must_use]
 pub fn game_gold_msg(conf: &GameSvrConf) -> Vec<u8> {
@@ -2468,5 +2545,169 @@ mod tests {
         ));
         expect.push(b'/');
         assert_eq!(tail, expect, "只发有效条目（空槽/缺模板都不进 211）");
+    }
+
+    // ---- T-275（`SM_LEVELRANK(1108)`，缺省关；tier=L）----
+
+    /// A2：240B 布局（10 行 × 24B）+ 行序（level 降序、同级 GBK 名升序）+ index=ActorId。
+    #[test]
+    fn level_rank_body_layout_and_order_match_contract() {
+        let players = [
+            ("甲", 30, 0x11), // GBK 2 字节
+            ("Beta", 20, 0x22),
+            ("Alpha", 20, 0x33),
+            ("", 5, 0x44),
+        ];
+        let body = level_rank_body(&players);
+        assert_eq!(LEVEL_RANK_BODY_LEN, 240);
+        assert_eq!(body.len(), 240, "体恰 240 字节");
+
+        // 第 1 行 = 甲（30 级，最高）
+        assert_eq!(body[0], 2, "name_len = GBK 字节数");
+        assert_eq!(&body[1..3], gbk("甲").as_slice(), "name = GBK 字节");
+        assert_eq!(&body[3..16], &[0u8; 13], "name 右补 0 到 15 字节");
+        assert_eq!(i32::from_le_bytes(body[16..20].try_into().unwrap()), 30);
+        assert_eq!(i32::from_le_bytes(body[20..24].try_into().unwrap()), 0x11);
+
+        // 同 level 20 按 GBK 字节升序：Alpha 先于 Beta
+        assert_eq!(body[24], 5);
+        assert_eq!(&body[25..30], b"Alpha");
+        assert_eq!(
+            i32::from_le_bytes(body[24 + 16..24 + 20].try_into().unwrap()),
+            20
+        );
+        assert_eq!(&body[48 + 1..48 + 5], b"Beta");
+        assert_eq!(
+            i32::from_le_bytes(body[48 + 20..48 + 24].try_into().unwrap()),
+            0x22
+        );
+
+        // 第 4 行 = 空名（5 级，name_len=0）
+        assert_eq!(body[72], 0);
+        assert_eq!(
+            i32::from_le_bytes(body[72 + 16..72 + 20].try_into().unwrap()),
+            5
+        );
+
+        // 其余 6 行全 0
+        assert!(body[96..].iter().all(|b| *b == 0), "不足 10 行补全 0 空行");
+    }
+
+    /// A2：只取前 10 行（11/12 名在线玩家时第 11 名起不进体）。
+    #[test]
+    fn level_rank_body_takes_top_ten_rows_only() {
+        let names: Vec<String> = (0..12).map(|i| format!("P{i:02}")).collect();
+        let players: Vec<(&str, i32, i32)> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                (
+                    n.as_str(),
+                    100 - i32::try_from(i).unwrap(),
+                    i32::try_from(i).unwrap(),
+                )
+            })
+            .collect();
+        let body = level_rank_body(&players);
+        assert_eq!(body.len(), 240);
+        for i in 0..10 {
+            let row = &body[i * LEVEL_RANK_ROW_LEN..(i + 1) * LEVEL_RANK_ROW_LEN];
+            assert_eq!(row[0], 3, "Pxx 名 3 字节");
+            assert_eq!(&row[1..4], format!("P{i:02}").as_bytes());
+            assert_eq!(
+                i32::from_le_bytes(row[16..20].try_into().unwrap()),
+                100 - i32::try_from(i).unwrap()
+            );
+            assert_eq!(
+                i32::from_le_bytes(row[20..24].try_into().unwrap()),
+                i32::try_from(i).unwrap()
+            );
+        }
+    }
+
+    /// A2：名字按 GBK 字节截断到 15（客户端契约：`name_len` = 实际写入字节数）。
+    #[test]
+    fn level_rank_body_truncates_name_to_fifteen_gbk_bytes() {
+        let long = "一二三四五六七八"; // 8 × 2 = 16 GBK 字节
+        let body = level_rank_body(&[(long, 1, 7)]);
+        assert_eq!(body[0], 15, "name_len 截到 15 字节");
+        assert_eq!(&body[1..16], &gbk(long)[..15]);
+        assert_eq!(i32::from_le_bytes(body[16..20].try_into().unwrap()), 1);
+        assert_eq!(i32::from_le_bytes(body[20..24].try_into().unwrap()), 7);
+    }
+
+    /// A2 退化形态：无在线玩家 ⇒ 全 0 的 240B 空排行（不是 0 字节）。
+    #[test]
+    fn level_rank_body_empty_input_is_zero_filled() {
+        assert_eq!(level_rank_body(&[]), vec![0u8; LEVEL_RANK_BODY_LEN]);
+    }
+
+    /// A2：帧头 = `page/1108/kind/0/0`；尾 = `EDCode(240B)`，解码回同一体。
+    #[test]
+    fn level_rank_frame_header_and_edcode_tail() {
+        let players = [("甲", 30, 0x11), ("Beta", 20, 0x22)];
+        let frame = level_rank_frame(0, LEVEL_RANK_KIND_HUMAN, &players);
+        let cmd = CommandMessage::from_bytes(&frame).expect("12B 头");
+        assert_eq!(cmd.ident, SM_LEVELRANK);
+        assert_eq!(cmd.ident, 1108);
+        assert_eq!(cmd.recog, 0, "Recog = page");
+        assert_eq!(cmd.param, 0, "Param = kind");
+        assert_eq!((cmd.tag, cmd.series), (0, 0));
+        assert_eq!(frame.len(), 12 + edcode::encoded_len(LEVEL_RANK_BODY_LEN));
+        assert_eq!(edcode::decode(&frame[12..]), level_rank_body(&players));
+
+        let frame7 = level_rank_frame(7, LEVEL_RANK_KIND_HUMAN, &players);
+        assert_eq!(CommandMessage::from_bytes(&frame7).unwrap().recog, 7);
+        assert_eq!(CommandMessage::from_bytes(&frame7).unwrap().param, 0);
+    }
+
+    /// A1（装配点）：`enabled=false` 时帧集合与输入**逐字节相同**（不插任何帧）。
+    #[test]
+    fn level_rank_disabled_returns_enter_batch_verbatim() {
+        let baseline = vec![
+            CommandMessage::make(658, 0, 0, 0, 0).to_bytes().to_vec(),
+            CommandMessage::make(50, 0x11, 0, 0, 0).to_bytes().to_vec(),
+        ];
+        let players = [("甲", 30, 0x11)];
+        assert_eq!(
+            append_level_rank(baseline.clone(), false, 0, LEVEL_RANK_KIND_HUMAN, &players),
+            baseline,
+            "关闭 ⇒ bodies 原样（A1 零变化）"
+        );
+        assert!(
+            append_level_rank(Vec::new(), false, 0, LEVEL_RANK_KIND_HUMAN, &players).is_empty(),
+            "退化形态：空批次 + 关闭 ⇒ 一帧不发"
+        );
+    }
+
+    /// A3：只有**触发者自己的**登录批次追加 1108；另一在线会话的批次逐字节不变。
+    #[test]
+    fn level_rank_frame_goes_only_to_triggering_session_batch() {
+        let players = [("甲", 30, 0x11), ("Beta", 20, 0x22)];
+        let baseline_a = vec![
+            CommandMessage::make(658, 0, 0, 0, 0).to_bytes().to_vec(),
+            CommandMessage::make(50, 0x11, 0, 0, 0).to_bytes().to_vec(),
+        ];
+        let baseline_b = vec![
+            CommandMessage::make(658, 0, 0, 0, 0).to_bytes().to_vec(),
+            CommandMessage::make(50, 0x22, 0, 0, 0).to_bytes().to_vec(),
+        ];
+        // 生产接线：每个会话只在自己的登录点调用装配点 ⇒ 触发者 A 的批次多一帧；
+        // B 的批次来自它自己的登录点，不经过这里。
+        let a = append_level_rank(baseline_a.clone(), true, 0, LEVEL_RANK_KIND_HUMAN, &players);
+        let b = baseline_b.clone();
+
+        assert_eq!(a.len(), baseline_a.len() + 1);
+        assert_eq!(a[..baseline_a.len()], baseline_a[..], "既有帧逐字节不变");
+        assert_eq!(
+            CommandMessage::from_bytes(a.last().unwrap()).unwrap().ident,
+            SM_LEVELRANK
+        );
+        assert_eq!(b, baseline_b, "另一会话的帧集合逐字节不变");
+        assert!(
+            !b.iter()
+                .any(|f| CommandMessage::from_bytes(f).map(|c| c.ident) == Some(SM_LEVELRANK)),
+            "另一会话不得收到 1108"
+        );
     }
 }

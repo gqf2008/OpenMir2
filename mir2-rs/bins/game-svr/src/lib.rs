@@ -1356,6 +1356,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     red_die_home: game_svr::castle::load_red_die_home(&conf),
                     string_conf,
                     show_rank_level_name,
+                    level_rank_on_login: cfg.level_rank_on_login,
                     server_index: cfg.server_index,
                     lock_human_login: cfg.lock_human_login,
                     spirit_mutiny_time: cfg.spirit_mutiny_time,
@@ -21647,6 +21648,9 @@ struct EnterConfig {
     home_start_points: Vec<mir2_envir::startpoint::StartPoint>,
     string_conf: crate::strings::StringConf,
     show_rank_level_name: bool,
+    /// **T-275**：`[Setup] LevelRankOnLogin`（缺省 0 = 关）——登录 enter 批次是否追加
+    /// `SM_LEVELRANK(1108)`；只发给**本次进世界的会话**自己（A3）。
+    level_rank_on_login: bool,
     /// `[Server] ServerIndex`（`SystemShare.ServerIndex`）：`MakeSaveRcd` 写
     /// `characters.ServerIndex`（`WorldServer.cs:1236`）。
     server_index: u8,
@@ -21863,6 +21867,7 @@ impl EnterConfig {
             home_start_points: Vec::new(),
             string_conf,
             show_rank_level_name: false,
+            level_rank_on_login: false,
             server_index: 0,
             lock_human_login: false,
             spirit_mutiny_time: 600_000,
@@ -27261,6 +27266,29 @@ fn sim_loop(
                                                     // 才出队它们（2026-10-20 真机：10/41×6 → 654 → …），
                                                     // 故由首次 AOI 扫描 tick 的 [`drain_login_tail`] 补发。
                                                     let (bodies, tail_probe) = inputs.frames_split();
+                                                    // **T-275**：`[Setup] LevelRankOnLogin`（缺省 0）——
+                                                    // 只给**本次进世界的会话**自己的批次追加一帧
+                                                    // `SM_LEVELRANK(1108)`；缺省关 ⇒ `bodies` 原样（A1）。
+                                                    // 数据源 = 在线登记表 ∩ 世界实体（非 ghost），排序/编码
+                                                    // 全在纯函数 `enter::level_rank_body`（A2）。
+                                                    let rank_players: Vec<(&str, i32, i32)> = online
+                                                        .iter()
+                                                        .filter_map(|e| {
+                                                            let ent = world.entities.get(e.actor_id)?;
+                                                            (!ent.ghost).then_some((
+                                                                e.chr_name.as_str(),
+                                                                i32::from(ent.level),
+                                                                e.actor_id,
+                                                            ))
+                                                        })
+                                                        .collect();
+                                                    let bodies = enter::append_level_rank(
+                                                        bodies,
+                                                        enter_cfg.level_rank_on_login,
+                                                        0,
+                                                        enter::LEVEL_RANK_KIND_HUMAN,
+                                                        &rank_players,
+                                                    );
                                                     glog!(
                                                         "INF",
                                                         "进世界帧下发：socket={socket} 共 {} 条（输入齐备的），延迟段 {} 条",
@@ -30845,6 +30873,34 @@ mod tests {
         assert!(
             aoi < walk && walk < tail && tail < stamina,
             "补发点必须在 AOI 之后、体力段之前，SM_WALK 夹在 AOI 与 654 之间"
+        );
+    }
+
+    /// **T-275 接线点保鲜门**：`SM_LEVELRANK(1108)` 的生产装配点必须仍在登录路径上，
+    /// 恰一处，且开关直接取 `[Setup] LevelRankOnLogin`（缺省 0 ⇒ 不追加，A1）。
+    ///
+    /// 红检（实测）：删掉生产装配调用那一行 ⇒ 命中 0 ⇒ 必红；
+    /// 把开关实参改成恒 `true` ⇒ 关键字面断言红。
+    #[test]
+    fn level_rank_production_call_is_wired_at_login_point() {
+        let src = include_str!("lib.rs");
+        // `concat!` 拆开字面量 ⇒ 本测试自身的源码文本不会命中锚串，故「恰一处」证明锚的是生产调用。
+        let call = concat!("enter::append_", "level_rank(");
+        assert_eq!(src.matches(call).count(), 1, "生产装配点必须恰一处");
+        let at = src.find(call).expect("生产装配点");
+        let split = src
+            .find("let (bodies, tail_probe) = inputs.frames_split();")
+            .expect("frames_split 切分点");
+        assert!(at > split, "装配点必须在登录帧切分之后");
+        let args_end = src[at..].find(");").map_or(at, |i| at + i);
+        let args = &src[at..args_end];
+        assert!(
+            args.contains("enter_cfg.level_rank_on_login"),
+            "开关必须来自 `[Setup] LevelRankOnLogin`（实参：{args}）"
+        );
+        assert!(
+            args.contains("enter::LEVEL_RANK_KIND_HUMAN"),
+            "kind 必须是人物排行（0）"
         );
     }
 
