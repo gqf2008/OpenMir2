@@ -480,6 +480,7 @@ fn live_holder_lock_is_never_stolen_even_if_old() {
 // ---------------------------------------------------------------------------
 
 /// 在目录里按「名字含 `contains` 且以 `suffix` 结尾」找第一个文件。
+#[cfg(debug_assertions)]
 fn find_residue(dir: &Path, contains: &str, suffix: &str) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
@@ -723,9 +724,21 @@ fn concurrent_stale_takeover_leaves_only_target_file() {
     let root = TempRoot::new("takeover-rounds");
     const ROUNDS: usize = 5;
     const WRITERS: usize = 3;
+    // F7：预算按「timeout + 探测上界 × 轮数」推导，不再写死 8s。
+    // 每个 writer 的 acquire 最坏 = timeout + 一次探测上界；3 个 writer 可能各探测一次，
+    // 外加 2 个探测上界给「winner 释放后重新接管」，再留 20s 满载余量：
+    // 默认探测上界 2000ms ⇒ 2000 × (WRITERS + 2) + 20000 = 30000ms。
+    // （reviewer 在 12 个 CPU burner 下曾见 waited_ms=8421，旧 8000ms 预算被正常满载
+    // 探测/排队打破；30s ≈ 3.5× 该观测值，仍能在真实死锁时于一个有界时间内失败。）
+    const PROBE_TIMEOUT_MS: u64 = 2_000;
+    const LOCK_TIMEOUT_MS: u64 = PROBE_TIMEOUT_MS * (WRITERS as u64 + 2) + 20_000;
     let env = [
-        ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "8000".to_string()),
+        ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", LOCK_TIMEOUT_MS.to_string()),
         ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
+        (
+            "MIR2_MCP_CONF_PROBE_TIMEOUT_MS",
+            PROBE_TIMEOUT_MS.to_string(),
+        ),
     ];
 
     for round in 0..ROUNDS {
@@ -784,6 +797,7 @@ fn concurrent_stale_takeover_leaves_only_target_file() {
 }
 
 /// 等待 marker 文件里出现某一行（按事件同步，而不是固定 sleep 对齐）。
+#[cfg(debug_assertions)]
 fn wait_for_marker(path: &Path, needle: &str, timeout: Duration) {
     let deadline = Instant::now() + timeout;
     loop {
@@ -803,6 +817,7 @@ fn wait_for_marker(path: &Path, needle: &str, timeout: Duration) {
     }
 }
 
+#[cfg(debug_assertions)]
 fn marker_text(path: &Path) -> String {
     std::fs::read_to_string(path).unwrap_or_default()
 }
@@ -976,18 +991,22 @@ fn takeover_race_never_overwrites_third_party_lock_on_putback() {
 #[test]
 fn empty_lock_is_not_stolen_within_grace() {
     let root = TempRoot::new("empty-grace");
-    let lock = root.lock_path();
-    std::fs::write(&lock, b"").expect("写空锁");
-
     let mut proc = McpProc::start(
         &root.path,
         &[
             ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "400".to_string()),
             ("MIR2_MCP_CONF_LOCK_STALE_MS", "50".to_string()),
-            ("MIR2_MCP_CONF_LOCK_EMPTY_GRACE_MS", "2000".to_string()),
+            // F6：宽限必须远大于「进程启动 + handler 排队」延迟。本用例只断言「宽限内不抢」，
+            // 不让满载下的启动抖动把空锁年龄推过宽限（reviewer 曾在 release 满载下看到
+            // 启动 >2000ms ⇒ 空锁按设计被回收 ⇒ ok=true，而非 conf_lock_timeout）。
+            ("MIR2_MCP_CONF_LOCK_EMPTY_GRACE_MS", "600000".to_string()),
         ],
     );
     proc.initialize();
+    // F6：initialize 之后再写 0 字节锁，保证被测时 age≈0（即使 handler 排队，也远小于
+    // 600000ms 宽限）；400ms timeout 断言不受宽限值影响。
+    let lock = root.lock_path();
+    std::fs::write(&lock, b"").expect("写空锁");
     let response = proc.call_tool(
         "conf_set",
         json!({"section": "Setup", "key": "GenMonRate", "value": "91"}),

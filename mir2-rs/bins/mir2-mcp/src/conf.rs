@@ -1455,9 +1455,6 @@ fn test_own_start_marker(line: &str) {
     }
 }
 
-#[cfg(not(debug_assertions))]
-fn test_own_start_marker(_line: &str) {}
-
 /// 测试专用接缝：模拟 Windows delete-pending 的 `ERROR_ACCESS_DENIED`（前 `MS` 毫秒）。
 #[cfg(all(windows, debug_assertions))]
 fn test_create_new_denied() -> bool {
