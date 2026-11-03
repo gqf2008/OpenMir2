@@ -485,7 +485,7 @@ mod tests {
         assert_eq!(g[1].ipaddr, "127.0.0.1");
         assert_eq!(g[1].port, 7200);
         assert!(g[1].enable);
-        assert!(g[2].ipaddr.is_empty());
+        assert_eq!(g[2].ipaddr, "");
         std::fs::remove_dir_all(&d).ok();
     }
 
@@ -527,7 +527,7 @@ mod tests {
         );
         std::fs::remove_file(d.join("ServerAddr.txt")).unwrap();
         let cfg = load(&conf).unwrap();
-        assert!(cfg.server_addrs.is_empty());
+        assert_eq!(cfg.server_addrs, [] as [std::string::String; 0]);
         std::fs::remove_dir_all(&d).ok();
     }
 

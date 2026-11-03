@@ -830,7 +830,7 @@ mod tests {
         let mut sp = FrameSplitter::new();
         let f = encode_client_frame(&CommandMessage::make(100, 9, 0, 0, 0), b"abc");
         let mid = f.len() / 2;
-        assert!(sp.feed(&f[..mid]).is_empty());
+        assert_eq!(sp.feed(&f[..mid]), []);
         assert_eq!(sp.feed(&f[mid..]), vec![SplitOut::Frame(f)]);
     }
 

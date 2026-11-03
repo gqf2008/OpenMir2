@@ -509,7 +509,7 @@ mod tests {
         st.feed(&mut text);
         assert!(st.check_session(b"acc", 7));
         assert!(st.check_session(b"acc2", 8));
-        assert!(text.is_empty());
+        assert_eq!(text, [] as [u8; 0]);
     }
 
     /// C# 的边界口径：`)` 在下标 0 不算（`IndexOf(")") > 0`）；空载荷 `()` 会把 `(` 之前的前缀
@@ -525,7 +525,7 @@ mod tests {
         assert!(text.is_empty(), "空载荷也要消费掉括号");
         let mut text2 = b"(100/acc/5/0/0/1.1.1.1/0)".to_vec();
         st.feed(&mut text2);
-        assert!(text2.is_empty());
+        assert_eq!(text2, [] as [u8; 0]);
         assert!(st.check_session(b"acc", 5));
     }
 

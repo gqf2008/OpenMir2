@@ -487,7 +487,7 @@ async fn responses_match_csharp_oracle_bytes() {
             .find(|m| m.kind == ServerDataType::KeepAlive)
             .expect("C# 心跳帧必须被接受并回 KeepAlive");
         assert_eq!(hb.socket_id, "");
-        assert!(hb.data.is_empty());
+        assert_eq!(hb.data, [] as [u8; 0]);
         assert_eq!(
             hex(&hb.to_wire()),
             "9aaa9aaa0c00040300000000000000000000",

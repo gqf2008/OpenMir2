@@ -903,7 +903,7 @@ mod fault_path_tests {
         assert_eq!(frames.len(), 1);
         let (head, list) = ts::decode_user_reply(&frames[0]);
         assert_eq!((head.ident, head.recog), (SM_QUERYCHR, 0));
-        assert!(list.is_empty());
+        assert_eq!(list, [] as [u8; 0]);
         ts::drop_db(&dsn).await;
     }
 
@@ -931,7 +931,7 @@ mod fault_path_tests {
         assert_eq!(frames.len(), 1, "必须有应答（旧实现零回包）");
         let (head, body) = ts::decode_user_reply(&frames[0]);
         assert_eq!((head.ident, head.recog), (SM_DELCHR_FAIL, 0));
-        assert!(body.is_empty());
+        assert_eq!(body, [] as [u8; 0]);
         ts::drop_db(&dsn).await;
     }
 
@@ -963,7 +963,7 @@ mod fault_path_tests {
             (SM_NEWCHR_FAIL, 2),
             "oracle：计数 0 + Add 失败 ⇒ nCode=2（不是 0/3/4）"
         );
-        assert!(body.is_empty());
+        assert_eq!(body, [] as [u8; 0]);
         ts::drop_db(&dsn).await;
     }
 

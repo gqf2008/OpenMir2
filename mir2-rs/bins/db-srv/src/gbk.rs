@@ -243,7 +243,7 @@ mod tests {
         assert_eq!(tail, b"a".to_vec());
         let (h, t) = split2_nonempty(&v, b"\\");
         assert_eq!(h, v);
-        assert!(t.is_empty());
+        assert_eq!(t, [] as [u8; 0]);
     }
 
     /// E-3 判据 2：切分在**解码后的字符**上做，片段按 cp936 编回字节。
@@ -315,13 +315,13 @@ mod tests {
     fn arrest_extracts_between_delimiters() {
         let (data, rest) = arrest(b"%K7/1.2.3.4/1.2.3.4$", b'%', b'$');
         assert_eq!(data, b"K7/1.2.3.4/1.2.3.4".to_vec());
-        assert!(rest.is_empty());
+        assert_eq!(rest, [] as [u8; 0]);
         let (_, rest) = arrest(b"%x$tail", b'%', b'$');
         assert_eq!(rest, b"tail".to_vec());
         assert_eq!(arrest(b"nope", b'%', b'$'), (Vec::new(), Vec::new()));
         // 缺 `$`：C# 返回 `after + 剩余`（内容取不到）
         let (data, rest) = arrest(b"%partial", b'%', b'$');
-        assert!(data.is_empty());
+        assert_eq!(data, [] as [u8; 0]);
         assert_eq!(rest, b"%partial".to_vec());
         // C# `spanLen < 2` 走向越界 catch ⇒ 空串（旧实现返回 `("%", "")`，E-3 订正）。
         assert_eq!(arrest(b"%", b'%', b'$'), (Vec::new(), Vec::new()));

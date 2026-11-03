@@ -48,7 +48,7 @@ async fn assembled_root_no_password_options_connect_local_mysqld() {
             .await
             .expect("组装选项（root/无 password/127.0.0.1:3306/mir2_account）连接+查询必须成功");
     assert!(id > 0);
-    assert!(!account.is_empty());
+    assert_ne!(account, "");
 }
 
 /// 同选项经 `AccountStore::init_or_empty` ⇒ 账号表必须非空装载（fail-soft 路径不吞差异：

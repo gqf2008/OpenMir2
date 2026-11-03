@@ -1255,7 +1255,7 @@ mod tests {
             gbk::encode(&text),
             b"\xc8\xc8\xd1\xaa\xb4\xab\xc6\xe6/Idle/\xb4\xab\xc6\xe62/Full/".to_vec()
         );
-        assert!(render_server_list(&[]).is_empty());
+        assert_eq!(render_server_list(&[]), "");
     }
 
     /// `WriteAsciiString` 的三个分支（截断 / 填充 / 空串）。
