@@ -7,6 +7,7 @@
 //! 任何校验失败都返回结构化错误，不 panic。
 
 use std::fs;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use rmcp::handler::server::wrapper::Parameters;
@@ -23,6 +24,18 @@ use crate::conf::{self, AppConfig, ConfError, WHITELIST};
 pub struct Mir2Mcp {
     config: AppConfig,
     catalog: Result<Arc<Catalog>, String>,
+}
+
+/// 工具处理器进入次数（进程级）。供端到端测试观察「鉴权失败零触达」（A4）：
+/// 默认只自增；设置 `MIR2_MCP_TOOL_TRACE=1` 时每次进入向 stderr 打一行带序号的日志点。
+static TOOL_INVOCATIONS: AtomicU64 = AtomicU64::new(0);
+
+/// 记录一次工具处理器进入（测试接缝；不改变任何工具语义）。
+fn trace_tool(name: &str) {
+    let count = TOOL_INVOCATIONS.fetch_add(1, Ordering::Relaxed) + 1;
+    if std::env::var_os("MIR2_MCP_TOOL_TRACE").is_some() {
+        eprintln!("mir2-mcp-tool-invoked: {name} #{count}");
+    }
 }
 
 /// 无参工具（MCP `arguments: {}`）。
@@ -149,6 +162,7 @@ impl Mir2Mcp {
         annotations(read_only_hint = true)
     )]
     fn gm_list(&self, Parameters(_): Parameters<NoArgs>) -> CallToolResult {
+        trace_tool("gm_list");
         let catalog = match self.catalog() {
             Ok(c) => c,
             Err(e) => return CallToolResult::structured_error(e),
@@ -201,6 +215,7 @@ impl Mir2Mcp {
         annotations(read_only_hint = true)
     )]
     fn gm_help(&self, Parameters(req): Parameters<GmHelpReq>) -> CallToolResult {
+        trace_tool("gm_help");
         let catalog = match self.catalog() {
             Ok(c) => c,
             Err(e) => return CallToolResult::structured_error(e),
@@ -231,6 +246,7 @@ impl Mir2Mcp {
         annotations(read_only_hint = true)
     )]
     fn conf_get(&self, Parameters(req): Parameters<ConfGetReq>) -> CallToolResult {
+        trace_tool("conf_get");
         match conf::conf_get(&self.config, &req.section, &req.key) {
             Ok(read) => {
                 let mut value = serde_json::to_value(read).unwrap_or(Value::Null);
@@ -247,6 +263,7 @@ impl Mir2Mcp {
         annotations(read_only_hint = true)
     )]
     fn conf_keys(&self, Parameters(_): Parameters<NoArgs>) -> CallToolResult {
+        trace_tool("conf_keys");
         let path = self.config.server_conf_path();
         if !path.exists() {
             return self.conf_error(ConfError::ConfMissing { path });
@@ -288,6 +305,7 @@ impl Mir2Mcp {
         )
     )]
     fn conf_set(&self, Parameters(req): Parameters<ConfSetReq>) -> CallToolResult {
+        trace_tool("conf_set");
         match conf::conf_set(
             &self.config,
             &req.section,
@@ -316,6 +334,7 @@ impl Mir2Mcp {
         annotations(destructive_hint = true, open_world_hint = true)
     )]
     fn gm_execute(&self, Parameters(req): Parameters<GmExecuteReq>) -> CallToolResult {
+        trace_tool("gm_execute");
         // ① `chr` 必填。
         let Some(chr) = req.chr.as_deref().map(str::trim).filter(|s| !s.is_empty()) else {
             return CallToolResult::structured_error(json!({
