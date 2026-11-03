@@ -51,6 +51,7 @@
 
 1. **单线程 executor**：不许 `MultiThreadedExecutor`/`bevy_tasks` 并行/`rayon`/`crossbeam`；世界 tick 由自己的循环驱动。
 2. **遍历顺序显式化**：`Query` 迭代序**不是契约**（archetype/table 顺序）；顺序只能来自自己的有序索引（地图格子 → 实体 id）。
+   **系统间执行顺序同样不是实现细节**：`TickRunner` 只接受带 `TickStage` 的注册入口，阶段链 + 构建期歧义检测把顺序写死（契约见 `mir2-rs/crates/world-bevy/src/tick.rs`）。
 3. **守卫升级**：`no_parallel.rs` 白名单只允许 `bevy_ecs`/`bevy_app`（仍禁并行），保留 `World::tick` 线程断言；
    守卫**扫代码不扫注释/字符串**（曾因文档里写了「禁止 MultiThreadedExecutor」而误报）。
 4. **迁移验收＝原判据不降级**：14 实体×10 tick、session/drop 场景对拍仍 **diff = 0**，P99 基线不劣化；

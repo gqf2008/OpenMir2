@@ -142,6 +142,20 @@ fn scan_parallel_code(code: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// **去掉 `use ...;` 行**：只保留真正生效的调用点，防止「仅 import 就满足正向断言」。
+fn strip_use_lines(code: &str) -> String {
+    code.lines()
+        .filter(|l| !l.trim_start().starts_with("use "))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// 单线程执行器的**调用形态**断言：必须真的 `set_executor(SingleThreadedExecutor...)`；
+/// 仅 `use` 进来不算（F2：删掉 set_executor 只留 import 时旧断言仍绿）。
+fn has_explicit_single_threaded_executor(code: &str) -> bool {
+    strip_use_lines(code).contains("set_executor(SingleThreadedExecutor")
+}
+
 #[test]
 fn world_crate_allows_only_ecs_dependencies() {
     let text = cargo_toml("Cargo.toml");
@@ -210,12 +224,14 @@ fn world_sources_are_single_threaded_ecs_only() {
         joined.contains("TickRunner"),
         "crates/world 必须用单线程 tick 骨架 `TickRunner`（§4.2.2 硬约束①）"
     );
-    // 正面断言：执行器本身在 world-bevy 的 tick 骨架里显式声明为单线程。
+    // 正面断言：执行器本身在 world-bevy 的 tick 骨架里显式**调用**为单线程。
+    // 注意只认 `set_executor(SingleThreadedExecutor...)` 调用形态，先剥掉 `use` 行：
+    // 仅 import 标识符不算（否则删掉真正生效的 set_executor 调用，守卫仍绿 —— F2）。
     let tick_rs = crate_root().join("../world-bevy/src/tick.rs");
     let tick_code = strip_comments_and_strings(&fs::read_to_string(&tick_rs).unwrap());
     assert!(
-        tick_code.contains("SingleThreadedExecutor"),
-        "world-bevy 的 tick 骨架必须显式用 `SingleThreadedExecutor`"
+        has_explicit_single_threaded_executor(&tick_code),
+        "world-bevy 的 tick 骨架必须显式 `set_executor(SingleThreadedExecutor...)`（仅 import 不算）"
     );
     assert!(
         scan_parallel_code(&tick_code).is_empty(),
@@ -250,5 +266,22 @@ fn redcheck_forbidden_dep_detection_works() {
     assert!(
         deps.iter().any(|d| FORBIDDEN_DEPS.contains(&d.as_str())),
         "红检失效：注入的禁用依赖未被识别"
+    );
+}
+
+/// 红检（自动，F2）：只剩 `use` 而没有 `set_executor` 调用时，正向断言必须判假；
+/// 有真实调用时才判真。防止把「标识符出现过」当成「执行器被显式设置」。
+#[test]
+fn redcheck_import_only_does_not_satisfy_executor_guard() {
+    let import_only = "use bevy_ecs::schedule::SingleThreadedExecutor;";
+    assert!(
+        !has_explicit_single_threaded_executor(&strip_comments_and_strings(import_only)),
+        "只留 import 不得满足单线程执行器守卫"
+    );
+    let with_call = "use bevy_ecs::schedule::SingleThreadedExecutor;
+fn f() { s.set_executor(SingleThreadedExecutor::default()); }";
+    assert!(
+        has_explicit_single_threaded_executor(&strip_comments_and_strings(with_call)),
+        "真实 set_executor(SingleThreadedExecutor...) 调用必须被识别"
     );
 }

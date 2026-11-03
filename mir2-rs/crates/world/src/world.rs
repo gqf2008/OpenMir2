@@ -14,7 +14,7 @@ use std::thread::ThreadId;
 use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
-use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner};
+use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner, TickStage};
 
 use crate::aoi::{search_view_range_death, search_view_range_with_updates, CELL_OBJECT_EXPIRE_MS};
 use crate::buff::{
@@ -1333,7 +1333,7 @@ impl World {
             .world_mut()
             .insert_resource(TickOwnerThread::default());
         let mut clock_runner = TickRunner::new();
-        clock_runner.add_systems(advance_clock_system);
+        clock_runner.add_systems(TickStage::Clock, advance_clock_system);
         let mut world = World {
             maps,
             entities,

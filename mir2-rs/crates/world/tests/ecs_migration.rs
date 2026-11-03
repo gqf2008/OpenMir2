@@ -82,7 +82,11 @@ fn tick_order_skeleton_collects_slot_order() {
 
     w.entities.sync_slot_order();
     let mut runner = mir2_world_bevy::TickRunner::new();
-    runner.add_systems(mir2_world::collect_tick_order_system);
+    // 顺序收集属于输出阶段（AOI 按它处理）；阶段契约见 world-bevy 的 tick.rs。
+    runner.add_systems(
+        mir2_world_bevy::TickStage::Output,
+        mir2_world::collect_tick_order_system,
+    );
     runner.run(w.entities.world_mut());
     let order = w.entities.world().resource::<mir2_world_bevy::TickOrder>();
     assert_eq!(order.0, vec![4, 2, 3], "顺序来自槽位索引（空闲槽复用）");

@@ -1,14 +1,20 @@
-//! S1 tick 骨架门禁：单线程推进 + 换线程 panic。
+//! S1 tick 骨架门禁：单线程推进 + 换线程 panic + **系统顺序显式契约**。
 //!
 //! 放在 `tests/`（不在 `src/`）：`no_parallel.rs`/`bevy_drop_parity.rs` 的源码扫描会禁
 //! `std::thread::spawn`，而「把骨架挪到别的线程上必须 panic」这条反证需要开线程。
 
-use bevy_ecs::prelude::World;
-use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner};
+use std::path::{Path, PathBuf};
+
+use bevy_ecs::prelude::{ResMut, Resource, World};
+use bevy_ecs::schedule::{Schedule, SingleThreadedExecutor};
+use mir2_world_bevy::{
+    advance_clock_system, tick_schedule_build_settings, TickClock, TickOwnerThread, TickRunner,
+    TickStage,
+};
 
 fn pinned_runner() -> TickRunner {
     let mut runner = TickRunner::new();
-    runner.add_systems(advance_clock_system);
+    runner.add_systems(TickStage::Clock, advance_clock_system);
     runner
 }
 
@@ -36,4 +42,690 @@ fn clock_advances_and_thread_is_pinned() {
     .join()
     .unwrap();
     assert!(hit, "tick 骨架在别的线程上必须 panic");
+}
+
+// ======================= A2：唯一注册入口必须携带阶段 =======================
+
+#[derive(Resource, Default)]
+struct Trace(Vec<&'static str>);
+
+fn probe_clock(mut t: ResMut<Trace>) {
+    t.0.push("clock");
+}
+
+fn probe_output(mut t: ResMut<Trace>) {
+    t.0.push("output");
+}
+
+/// 阶段顺序覆盖注册顺序：故意**反着**注册（先 Output 后 Clock）。
+///
+/// 若阶段契约失效（退回按注册序跑），结果是 `["output", "clock"]`；
+/// 若阶段存在但链没接上，两个系统都写 `Trace` 会构成歧义，`TickRunner::run` 直接 panic。
+/// 两条路都会让本用例红——这就是 A2 的牙。
+#[test]
+fn stage_order_overrides_registration_order() {
+    let mut world = World::new();
+    world.insert_resource(Trace::default());
+
+    let mut runner = TickRunner::new();
+    runner.add_systems(TickStage::Output, probe_output);
+    runner.add_systems(TickStage::Clock, probe_clock);
+
+    runner.run(&mut world);
+    assert_eq!(
+        world.resource::<Trace>().0,
+        vec!["clock", "output"],
+        "执行顺序必须由 TickStage 阶段链决定，而不是注册序"
+    );
+}
+
+/// 绕过阶段契约必须失败：直接构造裸 `Schedule`（`TickRunner` 不提供此入口），
+/// 用**同一份**契约构建设置加入两个冲突且未显式排序的系统 ⇒ 构建期歧义检测报错。
+///
+/// 这就是「没有不带 ordering 的注册入口」的运行期牙：任何绕过阶段/chain 的冲突顺序
+/// 都不可能静默通过。
+#[test]
+fn bypassing_stage_registration_is_rejected() {
+    fn write_a(mut t: ResMut<Trace>) {
+        t.0.push("a");
+    }
+    fn write_b(mut t: ResMut<Trace>) {
+        t.0.push("b");
+    }
+
+    let mut schedule = Schedule::default();
+    schedule.set_executor(SingleThreadedExecutor::default());
+    schedule.set_build_settings(tick_schedule_build_settings());
+    schedule.add_systems((write_a, write_b));
+
+    let mut world = World::new();
+    world.insert_resource(Trace::default());
+    let err = match schedule.initialize(&mut world) {
+        Err(e) => e,
+        Ok(_) => panic!("绕过阶段/显式排序的冲突系统必须被歧义检测拦下，实际构建成功"),
+    };
+    let err_str = format!("{err:?}");
+    assert!(
+        err_str.contains("Ambiguity"),
+        "构建失败必须来自歧义检测（Ambiguity），实际: {err_str}"
+    );
+}
+
+/// A3：`TickRunner` 自己断言零歧义——同阶段内两个冲突系统未 chain ⇒ run 立即 panic。
+#[test]
+fn tick_runner_asserts_zero_ambiguity() {
+    fn write_a(mut t: ResMut<Trace>) {
+        t.0.push("a");
+    }
+    fn write_b(mut t: ResMut<Trace>) {
+        t.0.push("b");
+    }
+
+    let mut world = World::new();
+    world.insert_resource(Trace::default());
+    let mut runner = TickRunner::new();
+    // 同阶段 + 冲突访问 + 未显式排序：契约要求 run 在跑任何系统前 panic。
+    // （注册入口一次只收一个系统；两系统要分开调用。）
+    runner.add_systems(TickStage::Simulate, write_a);
+    runner.add_systems(TickStage::Simulate, write_b);
+
+    let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.run(&mut world)));
+    let payload = hit.expect_err("TickRunner 必须对歧义 schedule panic");
+    let msg = payload
+        .downcast_ref::<String>()
+        .cloned()
+        .or_else(|| payload.downcast_ref::<&str>().map(|s| (*s).to_string()))
+        .unwrap_or_default();
+    assert!(
+        msg.contains("TickRunner") && msg.contains("契约"),
+        "panic 文案必须指出系统顺序契约被破坏，实际: {msg}"
+    );
+}
+
+// ==================== 顺序契约源码守卫（F4：整文件扫描） ====================
+
+fn strip_comments_and_strings(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            // 字符串字面量：整体丢掉（含转义）
+            out.push(' ');
+            let mut escaped = false;
+            for sc in chars.by_ref() {
+                if escaped {
+                    escaped = false;
+                } else if sc == '\\' {
+                    escaped = true;
+                } else if sc == '"' {
+                    break;
+                } else if sc == '\n' {
+                    out.push('\n');
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'/') {
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut prev = '\0';
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                }
+                if prev == '*' && sc == '/' {
+                    break;
+                }
+                prev = sc;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 配置对象族 / 歧义豁免入口（token 黑名单；剥注释与字符串后扫描）。
+const BANNED_CONFIG_TOKENS: [&str; 5] = [
+    "IntoScheduleConfigs",
+    "ScheduleConfigs",
+    "IntoSystemConfigs",
+    "ambiguous_with",
+    "ignore_ambiguity",
+];
+
+/// 绕过扫描域的「包含指令」族（reviewer F7）：`#[path = "../x.rs"]` 把文件放到 src 外、
+/// `include!` / `OUT_DIR` 把生成代码注入。这些按**保留字符串**的形态扫描
+/// （`env!("OUT_DIR")` 的 token 在字符串里，剥字符串就看不到了）。
+const BANNED_INCLUSION_TOKENS: [&str; 3] = ["include!", "#[path", "OUT_DIR"];
+
+/// `TickRunner` 的**全部方法集合**白名单（crate 级结构白名单，reviewer F8/F9）。
+///
+/// 扫描 `crates/world-bevy/src/**/*.rs` 里**所有** `impl TickRunner`（含子模块文件里的
+/// inherent impl）与**所有** `impl <Trait> for TickRunner`；方法名不分可见性
+/// （`pub` / `pub(crate)` / `pub(super)` / 私有）。任何新增方法都必须显式改这里，否则红。
+const EXPECTED_TICKRUNNER_METHODS: [&str; 5] = [
+    "add_systems",
+    "assert_build_contract",
+    "default",
+    "new",
+    "run",
+];
+
+/// 只去注释、**保留字符串**（用于包含指令族：`env!("OUT_DIR")` 的 token 在字符串里）。
+fn strip_comments_only(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '/' && chars.peek() == Some(&'/') {
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut prev = '\0';
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                }
+                if prev == '*' && sc == '/' {
+                    break;
+                }
+                prev = sc;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 收集 `src/` 下所有 `.rs`（递归）：扫描域是整个 crate 的源码，不只是 tick.rs。
+fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_rs(&p, out);
+        } else if p.extension().is_some_and(|x| x == "rs") {
+            out.push(p);
+        }
+    }
+}
+
+/// 读入 `src/**/*.rs`（按路径排序，保证判定确定性）。
+fn src_documents() -> Vec<(String, String)> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    collect_rs(&root, &mut files);
+    files.sort();
+    assert!(!files.is_empty(), "应能收集到 src/ 下的源文件");
+    files
+        .into_iter()
+        .map(|p| {
+            let text = std::fs::read_to_string(&p).unwrap();
+            (p.display().to_string(), text)
+        })
+        .collect()
+}
+
+fn tick_source(files: &[(String, String)]) -> &str {
+    files
+        .iter()
+        .find(|(p, _)| p.ends_with("tick.rs"))
+        .map(|(_, s)| s.as_str())
+        .expect("src/tick.rs 必须存在")
+}
+
+/// 取 `pub fn add_systems` 的签名区间；用**词边界**匹配，避免 F5 的
+/// `add_systems_unchecked` 前缀误匹配。
+fn narrow_add_systems_signature(code: &str) -> Option<&str> {
+    let name = "pub fn add_systems";
+    let mut from = 0usize;
+    while let Some(rel) = code[from..].find(name) {
+        let start = from + rel;
+        let after = code.as_bytes().get(start + name.len()).copied();
+        // 名字后面不能紧跟标识符字符（否则是 add_systems_unchecked 之类的另一入口）。
+        let boundary = !is_ident_byte(after);
+        if boundary {
+            let rest = &code[start..];
+            let end = rest.find('{').unwrap_or(rest.len());
+            return Some(&rest[..end]);
+        }
+        from = start + name.len();
+    }
+    None
+}
+
+fn is_ident_byte(b: Option<u8>) -> bool {
+    matches!(b, Some(c) if c.is_ascii_alphanumeric() || c == b'_')
+}
+
+fn matching_brace(code: &str, open: usize) -> Option<usize> {
+    let bytes = code.as_bytes();
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(i);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 找出所有 `impl … TickRunner … { … }` 的体内文本：inherent impl（`impl TickRunner`）
+/// 与 trait impl（`impl Trait for TickRunner`）都算——判据是 impl 头里出现 `TickRunner`。
+/// 子模块文件也会被递归扫到（reviewer F8 变体 B）。
+fn tickrunner_impl_bodies(code: &str) -> Vec<&str> {
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = code[from..].find("impl") {
+        let start = from + rel;
+        let before = if start == 0 {
+            None
+        } else {
+            code.as_bytes().get(start - 1).copied()
+        };
+        let after = code.as_bytes().get(start + 4).copied();
+        let after_ok = matches!(after, Some(b' ') | Some(b'<') | Some(b'\t') | Some(b'\n'));
+        if !is_ident_byte(before) && after_ok {
+            if let Some(brace_rel) = code[start..].find('{') {
+                let header = &code[start..start + brace_rel];
+                if header.contains("TickRunner") {
+                    let open = start + brace_rel;
+                    if let Some(end) = matching_brace(code, open) {
+                        out.push(&code[open + 1..end]);
+                    }
+                }
+            }
+        }
+        from = start + 4;
+    }
+    out
+}
+
+/// 从 impl 体里抽取所有 `fn <name>`（不分可见性）及其签名文本（到第一个 `{`）。
+fn impl_methods(body: &str) -> Vec<(String, &str)> {
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = body[from..].find("fn ") {
+        let start = from + rel;
+        let before = if start == 0 {
+            None
+        } else {
+            body.as_bytes().get(start - 1).copied()
+        };
+        if is_ident_byte(before) {
+            from = start + 3;
+            continue;
+        }
+        let name_start = start + 3;
+        let name: String = body[name_start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if name.is_empty() {
+            from = name_start;
+            continue;
+        }
+        let sig_end = body[name_start..]
+            .find('{')
+            .map(|e| name_start + e)
+            .unwrap_or(body.len());
+        out.push((name, &body[start..sig_end]));
+        from = name_start;
+    }
+    out
+}
+
+/// 词边界匹配（`Schedule` 命中 `&mut Schedule`，不命中 `ScheduleConfigs`）。
+fn contains_word(code: &str, word: &str) -> bool {
+    let bytes = code.as_bytes();
+    let mut from = 0usize;
+    while let Some(rel) = code[from..].find(word) {
+        let start = from + rel;
+        let end = start + word.len();
+        let before = if start == 0 {
+            None
+        } else {
+            bytes.get(start - 1).copied()
+        };
+        let after = bytes.get(end).copied();
+        if !is_ident_byte(before) && !is_ident_byte(after) {
+            return true;
+        }
+        from = end;
+    }
+    false
+}
+
+/// crate 级结构白名单校验：
+/// 1) 所有 `impl …TickRunner…` 的方法名（含 trait impl / 子模块 / 各种可见性）
+///    必须精确等于 [`EXPECTED_TICKRUNNER_METHODS`]；
+/// 2) 这些方法的**签名**不得出现裸 `Schedule`（参数/返回类型不得暴露 schedule 句柄）。
+fn tickrunner_impl_violations(files: &[(String, String)]) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut violations = Vec::new();
+    for (file, src) in files {
+        let code = strip_comments_and_strings(src);
+        for body in tickrunner_impl_bodies(&code) {
+            for (name, sig) in impl_methods(body) {
+                if contains_word(sig, "Schedule") {
+                    violations.push(format!(
+                        "{file}: TickRunner impl 的方法 `{name}` 签名不得含裸 `Schedule`（不得暴露 schedule 句柄）: {sig}"
+                    ));
+                }
+                names.push(name);
+            }
+        }
+    }
+    names.sort();
+    names.dedup();
+    let expected: Vec<String> = EXPECTED_TICKRUNNER_METHODS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if names != expected {
+        violations.push(format!(
+            "TickRunner 的方法集合（含 pub/pub(crate)/pub(super)/私有，跨所有 impl 与子模块）必须精确等于 {expected:?}，实际 {names:?}（新增方法必须先显式改白名单）"
+        ));
+    }
+    violations
+}
+
+/// 返回契约违规项（空 = 绿色）。正例与全部反例共用同一判定。
+///
+/// * `files`：**整个 crate 的 src 文档**；
+///   - 配置对象族 token：剥注释/字符串后扫描；
+///   - `include!` / `#[path` / `OUT_DIR`：只剥注释（保留字符串）后扫描；
+///   - `impl …TickRunner…` 方法白名单与 `Schedule` 签名禁令：结构解析；
+/// * `entry_src`：仅 tick.rs——额外断言 `add_systems` 单系统签名。
+fn contract_violations(files: &[(String, String)], entry_src: Option<&str>) -> Vec<String> {
+    let mut violations = Vec::new();
+    for (name, src) in files {
+        let code = strip_comments_and_strings(src);
+        for token in BANNED_CONFIG_TOKENS {
+            if code.contains(token) {
+                violations.push(format!("{name}: 出现被禁 token `{token}`"));
+            }
+        }
+        let code_with_strings = strip_comments_only(src);
+        for token in BANNED_INCLUSION_TOKENS {
+            if code_with_strings.contains(token) {
+                violations.push(format!("{name}: 出现被禁包含指令 token `{token}`"));
+            }
+        }
+    }
+    violations.extend(tickrunner_impl_violations(files));
+    if let Some(src) = entry_src {
+        let code = strip_comments_and_strings(src);
+        match narrow_add_systems_signature(&code) {
+            Some(sig) if sig.contains("impl IntoSystem<(), (), M>") => {}
+            Some(sig) => violations.push(format!(
+                "tick.rs add_systems 必须是单系统签名（impl IntoSystem<(), (), M>），实际: {sig}"
+            )),
+            None => violations.push("tick.rs 缺少 `pub fn add_systems` 入口".to_string()),
+        }
+    }
+    violations
+}
+
+/// 干净的合成 tick.rs：恰好包含白名单里的五个方法（含私有 `assert_build_contract` 与
+/// `impl Default` 的 `default`），签名里没有裸 `Schedule`。
+const CLEAN_TICK: &str = "impl TickRunner {
+    fn new() -> Self { Self }
+    pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }
+    fn run(&mut self, world: &mut World) { }
+    fn assert_build_contract(&mut self, world: &mut World) { }
+}
+impl Default for TickRunner {
+    fn default() -> Self { Self }
+}";
+
+/// 正例：整个 `world-bevy/src/**/*.rs` 必须零违规（整 crate 扫描 + crate 级白名单）。
+#[test]
+fn contract_rejects_schedule_config_escape_hatch() {
+    let files = src_documents();
+    let tick = tick_source(&files);
+    let violations = contract_violations(&files, Some(tick));
+    assert!(
+        violations.is_empty(),
+        "world-bevy 源码违反顺序契约: {violations:?}"
+    );
+}
+
+/// 反例①（F4 绕过①）：新增第二个接受配置对象的方法 ⇒ 守卫必须红。
+#[test]
+fn redcheck_second_config_object_method_is_rejected() {
+    let mut files = src_documents();
+    {
+        let tick = files
+            .iter_mut()
+            .find(|(p, _)| p.ends_with("tick.rs"))
+            .expect("src/tick.rs 必须存在");
+        tick.1.push_str("impl TickRunner { fn add_systems_unchecked<M>(&mut self, systems: impl IntoScheduleConfigs<ScheduleSystem, M>) -> &mut Self { self } }");
+    }
+    let tick = tick_source(&files).to_string();
+    let violations = contract_violations(&files, Some(&tick));
+    assert!(
+        violations.iter().any(|v| v.contains("IntoScheduleConfigs")),
+        "新增的配置对象方法未被守卫发现: {violations:?}"
+    );
+}
+
+/// 反例②（F6 绕过）：别名放在 **lib.rs**，tick.rs 里用 `crate::Cfg`。
+#[test]
+fn redcheck_alias_in_lib_rs_used_from_tick_is_rejected() {
+    let files = vec![
+        (
+            "lib.rs".to_string(),
+            "pub use bevy_ecs::schedule::IntoScheduleConfigs as Cfg;".to_string(),
+        ),
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
+    ];
+    let violations = contract_violations(&files, Some(CLEAN_TICK));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("lib.rs") && v.contains("IntoScheduleConfigs")),
+        "lib.rs 里的别名未被整 crate 扫描发现: {violations:?}"
+    );
+}
+
+/// 反例②b（F6 变体）：lib.rs 直接 `pub use ...IntoScheduleConfigs...` ⇒ 必须红。
+#[test]
+fn redcheck_direct_reexport_of_config_type_is_rejected() {
+    let files = vec![
+        (
+            "lib.rs".to_string(),
+            "pub use bevy_ecs::schedule::IntoScheduleConfigs;".to_string(),
+        ),
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
+    ];
+    let violations = contract_violations(&files, Some(CLEAN_TICK));
+    assert!(
+        violations.iter().any(|v| v.contains("IntoScheduleConfigs")),
+        "lib.rs 的直接再导出未被发现: {violations:?}"
+    );
+}
+
+/// 反例③（F7）：`impl TickRunner` 里新增公开方法 ⇒ 白名单必须红。
+#[test]
+fn redcheck_new_public_method_on_tickrunner_is_rejected() {
+    let clean_files = vec![("tick.rs".to_string(), CLEAN_TICK.to_string())];
+    assert!(
+        contract_violations(&clean_files, Some(CLEAN_TICK)).is_empty(),
+        "白名单基线应绿"
+    );
+
+    let with_new = CLEAN_TICK.replace("    fn run", "    pub fn add_systems_alt() { }\n    fn run");
+    let files = vec![("tick.rs".to_string(), with_new.clone())];
+    let violations = contract_violations(&files, Some(&with_new));
+    assert!(
+        violations.iter().any(|v| v.contains("方法集合")),
+        "新增公开方法未被结构白名单发现: {violations:?}"
+    );
+}
+
+/// 反例④（F8 变体 A）：trait impl 里提供 `schedule_mut -> &mut Schedule`（同模块可碰私有字段）
+/// ⇒ 必须红（方法不在白名单 + 签名含裸 `Schedule`）。
+#[test]
+fn redcheck_trait_impl_on_tickrunner_is_rejected() {
+    let tick = format!(
+        "{CLEAN_TICK}
+pub trait ScheduleAccess {{ fn schedule_mut(&mut self) -> &mut Schedule; }}
+impl ScheduleAccess for TickRunner {{
+    fn schedule_mut(&mut self) -> &mut Schedule {{ todo!() }}
+}}"
+    );
+    let files = vec![("tick.rs".to_string(), tick.clone())];
+    let violations = contract_violations(&files, Some(&tick));
+    assert!(
+        violations.iter().any(|v| v.contains("schedule_mut")),
+        "trait impl 绕过未被发现: {violations:?}"
+    );
+}
+
+/// 反例⑤（F8 变体 B）：新建 `src/tick/foo.rs` 子模块里的 inherent impl ⇒ 必须红。
+#[test]
+fn redcheck_submodule_inherent_impl_on_tickrunner_is_rejected() {
+    let files = vec![
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
+        (
+            "tick/foo.rs".to_string(),
+            "impl TickRunner { fn schedule_mut(&mut self) -> &mut Schedule { todo!() } }"
+                .to_string(),
+        ),
+    ];
+    let violations = contract_violations(&files, Some(CLEAN_TICK));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("tick/foo.rs") && v.contains("schedule_mut")),
+        "子模块 inherent impl 绕过未被发现: {violations:?}"
+    );
+}
+
+/// 反例⑥（F9）：新增 `pub(crate) fn` / `pub(super) fn` / 私有 fn 都必须在白名单里 ⇒ 红。
+#[test]
+fn redcheck_restricted_visibility_fn_is_rejected() {
+    for vis in ["pub(crate) ", "pub(super) ", ""] {
+        let extra = format!("{CLEAN_TICK}\nimpl TickRunner {{ {vis}fn leak() {{ }} }}");
+        let files = vec![("tick.rs".to_string(), extra.clone())];
+        let violations = contract_violations(&files, Some(&extra));
+        assert!(
+            violations.iter().any(|v| v.contains("方法集合")),
+            "可见性 `{vis}` 的新方法未被白名单发现: {violations:?}"
+        );
+    }
+}
+
+/// 反例⑦（F8 规则 2）：方法名都在白名单里，但签名返回 `&mut Schedule` ⇒ 必须红。
+#[test]
+fn redcheck_schedule_in_signature_is_rejected() {
+    let tick = "impl TickRunner {
+    fn new() -> Self { Self }
+    pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }
+    fn run(&mut self) -> &mut Schedule { todo!() }
+    fn assert_build_contract(&mut self) { }
+}
+impl Default for TickRunner {
+    fn default() -> Self { Self }
+}";
+    let files = vec![("tick.rs".to_string(), tick.to_string())];
+    let violations = contract_violations(&files, Some(tick));
+    assert!(
+        violations
+            .iter()
+            .any(|v| v.contains("裸 `Schedule`") && v.contains("`run`")),
+        "签名里的裸 Schedule 未被发现: {violations:?}"
+    );
+}
+
+/// 反例⑧（包含指令）：`#[path = "../..."]` 把别名文件放到 src 外 ⇒ 必须红；
+/// `include!` / `OUT_DIR` 生成注入同样必须红。
+#[test]
+fn redcheck_path_include_alias_file_is_rejected() {
+    let path_bypass = vec![
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
+        (
+            "probe_alias.rs".to_string(),
+            "#[path = \"../probe_alias.rs\"]\nmod probe_alias;".to_string(),
+        ),
+    ];
+    let violations = contract_violations(&path_bypass, Some(CLEAN_TICK));
+    assert!(
+        violations.iter().any(|v| v.contains("#[path")),
+        "src 外别名文件的 #[path] 未被发现: {violations:?}"
+    );
+
+    let include_bypass = vec![
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
+        (
+            "gen.rs".to_string(),
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));".to_string(),
+        ),
+    ];
+    let violations = contract_violations(&include_bypass, Some(CLEAN_TICK));
+    assert!(
+        violations.iter().any(|v| v.contains("include!")),
+        "include!/OUT_DIR 注入未被发现: {violations:?}"
+    );
+}
+
+/// 反例⑨（误报检查）：正常代码必须绿；注释/字符串里的配置 token 不得误报。
+#[test]
+fn redcheck_clean_source_passes_and_comments_do_not_false_positive() {
+    let tick = "// IntoScheduleConfigs ambiguous_with ignore_ambiguity in comment
+impl TickRunner {
+    fn new() -> Self { Self }
+    pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }
+    fn run(&mut self, world: &mut World) { }
+    fn assert_build_contract(&mut self, world: &mut World) { }
+}
+impl Default for TickRunner {
+    fn default() -> Self { Self }
+}";
+    let files = vec![
+        (
+            "lib.rs".to_string(),
+            "pub use crate::tick::TickStage;".to_string(),
+        ),
+        ("tick.rs".to_string(), tick.to_string()),
+    ];
+    let violations = contract_violations(&files, Some(tick));
+    assert!(violations.is_empty(), "正常代码/注释被误判: {violations:?}");
+}
+
+/// F5 回归：`add_systems_unchecked` 不得被当成 `add_systems` 入口的前缀匹配。
+#[test]
+fn redcheck_prefix_named_method_is_not_the_entry() {
+    let only_unchecked = "pub fn add_systems_unchecked<M>(&mut self) -> &mut Self { self }";
+    assert!(
+        narrow_add_systems_signature(&strip_comments_and_strings(only_unchecked)).is_none(),
+        "add_systems_unchecked 不得被当成 add_systems 入口"
+    );
+    let unchecked_first = "pub fn add_systems_unchecked<M>(&mut self) -> &mut Self { self }
+pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }";
+    let code = strip_comments_and_strings(unchecked_first);
+    let sig = narrow_add_systems_signature(&code).expect("应找到真正的 add_systems");
+    assert!(
+        sig.contains("impl IntoSystem<(), (), M>"),
+        "误取了前缀同名方法: {sig}"
+    );
 }
