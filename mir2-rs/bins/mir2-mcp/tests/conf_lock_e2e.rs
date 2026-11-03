@@ -6,6 +6,11 @@
 //!
 //! 用例只依赖公开行为（工具回包 + 盘上文件），不读 `conf.rs` 内部状态；并发窗口用生产代码里
 //! 文档化的测试接缝 `MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS` 放大（未设置时为空操作）。
+//!
+//! 依赖 `MIR2_MCP_CONF_TEST_*` 注入接缝的用例标了 `#[cfg(debug_assertions)]`：A9 要求这些
+//! 接缝在 release 里完全无效，因此同一批用例在 release profile 下按设计不编译；release 的
+//! 对应覆盖是 `conf.rs` 单测 `test_seams_are_inert_in_release` 与不依赖注入的 e2e（活锁超时 /
+//! 死 pid 回收 / 宽限边界 / 拒绝路径零写）。
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -492,6 +497,7 @@ fn find_residue(dir: &Path, contains: &str, suffix: &str) -> Option<PathBuf> {
 ///
 /// 锁里的 pid 已死、年龄远超阈值；唯一让接管失效的是「探测不可用」。把 Unknown 改判成
 /// Dead 会让本用例变红（变异自证见 patch body）。
+#[cfg(debug_assertions)]
 #[test]
 fn unknown_process_probe_never_takes_over_stale_lock() {
     let root = TempRoot::new("probe-unknown");
@@ -535,6 +541,7 @@ fn unknown_process_probe_never_takes_over_stale_lock() {
 }
 
 /// A2：pid 仍活但**启动时刻与锁里记录的不一致** ⇒ 判定 pid 复用（死痕迹），必须可回收。
+#[cfg(debug_assertions)]
 #[test]
 fn reused_pid_lock_is_reclaimed_when_start_time_differs() {
     let root = TempRoot::new("pid-reuse");
@@ -574,6 +581,7 @@ fn reused_pid_lock_is_reclaimed_when_start_time_differs() {
 }
 
 /// A2 负例：pid + 启动时刻都匹配 = 原持有者仍活 ⇒ 即使超龄也不得抢。
+#[cfg(debug_assertions)]
 #[test]
 fn live_holder_with_matching_start_time_is_not_stolen() {
     let root = TempRoot::new("pid-live-match");
@@ -621,6 +629,7 @@ fn live_holder_with_matching_start_time_is_not_stolen() {
 
 /// A3：崩溃残留清理——死痕迹（pid 死 / pid 复用）的 `.tmp`、`.stale.*` 在下次写成功时
 /// 被清掉；**活进程持有**的 `.tmp` 不得删（持有者退出后下一轮再清）。
+#[cfg(debug_assertions)]
 #[test]
 fn crash_residue_is_cleaned_but_live_holder_residue_is_kept() {
     let root = TempRoot::new("residue");
@@ -803,6 +812,7 @@ fn marker_text(path: &Path) -> String {
 ///
 /// A10 哨兵：必须看到 `hold-start`（接管者进入 rename 前窗口）与 `putback-restored`
 /// （确实走到了「搬走替换锁 → 放回」分支）；任一个没出现，用例直接失败。
+#[cfg(debug_assertions)]
 #[test]
 fn takeover_race_restores_replacement_lock_without_residue() {
     let root = TempRoot::new("takeover-race");
@@ -876,6 +886,7 @@ fn takeover_race_restores_replacement_lock_without_residue() {
 
 /// A1/A10：放回时 canonical 已被第三方活锁占用 ⇒ **必须放弃放回**，绝不 rename 覆盖。
 /// 哨兵 `putback-abandoned` 证明走的是「canonical 被占」分支。
+#[cfg(debug_assertions)]
 #[test]
 fn takeover_race_never_overwrites_third_party_lock_on_putback() {
     let root = TempRoot::new("takeover-race-abandon");
@@ -1024,6 +1035,7 @@ fn empty_lock_is_reclaimed_after_grace() {
 }
 
 /// A5：等待循环里同一 pid 只探测一次（缓存），且 waited_ms 不超过 timeout + 一次探测上界。
+#[cfg(debug_assertions)]
 #[test]
 fn probe_results_are_cached_during_lock_wait() {
     let root = TempRoot::new("probe-cache");
@@ -1128,7 +1140,7 @@ fn rejection_and_noop_paths_never_touch_lock() {
 
 /// A8（Windows）：delete-pending 的 `ERROR_ACCESS_DENIED` 必须进入外层重试；
 /// 窗口小于 timeout ⇒ 最终成功；窗口大于 timeout ⇒ `conf_lock_timeout`，绝不是 `io_error`。
-#[cfg(windows)]
+#[cfg(all(windows, debug_assertions))]
 #[test]
 fn delete_pending_access_denied_retries_until_success_or_timeout() {
     let root = TempRoot::new("delete-pending-ok");
@@ -1175,6 +1187,73 @@ fn delete_pending_access_denied_retries_until_success_or_timeout() {
         "delete-pending 持续超过 timeout 必须返回 conf_lock_timeout，而不是 io_error：{response}"
     );
     proc.shutdown();
+}
+
+/// F1/A2：慢的「本进程启动时刻」探测（模拟 1.9s 慢 wmic）必须不再把活持有者的锁暴露成
+/// 可回收空锁。
+///
+/// 修复前：`create_new` 与元数据写入之间包含 `own_process_start` 探测，空窗可超过默认
+/// 2000ms 宽限 ⇒ B 回收 A 的空锁、写 222 并 ok 返回；A 恢复后写 111 ⇒ 最终 111，B 已确认
+/// 的 222 被静默覆盖（双持有者/丢更新）。
+/// 修复后：`create_new` 后立刻写 pid/acq_ms/nonce（不含 start），探测慢只影响 start 后补；
+/// B 只能等 A 释放后再写 ⇒ 最终 222。
+///
+/// 哨兵 `own-start-delay` 证明 A 确实进入了慢探测窗口（按事件同步，不靠固定 sleep）。
+#[cfg(debug_assertions)]
+#[test]
+fn slow_own_start_probe_never_exposes_empty_lock() {
+    let root = TempRoot::new("slow-own-start");
+    let marker = root.path.join("own-start-marker.log");
+    let marker_arg = marker.display().to_string();
+
+    let mut first = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "10000".to_string()),
+            // 模拟慢探测：3s（> 默认空锁宽限 2000ms）。修复前这段落在空锁窗口内。
+            ("MIR2_MCP_CONF_TEST_OWN_START_DELAY_MS", "3000".to_string()),
+            ("MIR2_MCP_CONF_TEST_OWN_START_MARKER", marker_arg),
+        ],
+    );
+    first.initialize();
+    let handle = std::thread::spawn(move || {
+        let response = first.call_tool(
+            "conf_set",
+            json!({"section": "Setup", "key": "GenMonRate", "value": "111"}),
+        );
+        first.shutdown();
+        response
+    });
+
+    // 哨兵：A 已进入慢探测窗口（修复后在最小身份写盘之后；旧代码在空锁期间）。
+    wait_for_marker(&marker, "own-start-delay", Duration::from_secs(15));
+
+    // B 在 A 的窗口内并发写同一个键。
+    let mut second = McpProc::start(
+        &root.path,
+        &[("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "10000".to_string())],
+    );
+    second.initialize();
+    let b = second.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "222"}),
+    );
+    let a = handle.join().expect("A thread");
+
+    let b_body = structured(&b);
+    assert_eq!(b_body["ok"], true, "B 必须成功（不得超时/io_error）：{b}");
+    assert_eq!(b_body["readback_value"], "222", "B 回读必须是自己的值：{b}");
+    let a_body = structured(&a);
+    assert_eq!(a_body["ok"], true, "A 必须成功：{a}");
+    assert_eq!(a_body["readback_value"], "111", "A 回读必须是自己的值：{a}");
+
+    let final_value = genmonrate(&std::fs::read(root.conf_path()).expect("读最终文件"));
+    assert_eq!(
+        final_value, "222",
+        "B 已确认的 222 不得被 A 静默覆盖（慢探测暴露空锁 ⇒ 双持有者/丢更新）"
+    );
+    assert!(!root.lock_path().exists(), "结束后不得残留锁");
+    second.shutdown();
 }
 
 // ---------------------------------------------------------------------------

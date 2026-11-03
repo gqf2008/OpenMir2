@@ -39,10 +39,12 @@
 //!   1. 身份完整的锁：锁文件年龄 ≥ `MIR2_MCP_CONF_LOCK_STALE_MS`（缺省
 //!      [`DEFAULT_LOCK_STALE_MS`]；年龄取 `acq_ms`，缺失时退化为文件 mtime）**且**持有者
 //!      **确证已死**（pid 不存在，或 pid 被复用——探测到的启动时刻与锁里记录的 `start` 不等）。
-//!   2. 空锁/半写锁（`create_new` 之后、元数据写完之前崩溃留下的 0 字节或无 `pid`/`nonce`
-//!      的文件）没有可比较的身份：只有年龄 ≥ `MIR2_MCP_CONF_LOCK_EMPTY_GRACE_MS`（缺省
-//!      [`DEFAULT_EMPTY_LOCK_GRACE_MS`]）才回收。**宽限内绝不接管**，所以不会抢走刚
-//!      `create_new` 出来、正在写元数据的活锁。
+//!   2. 空锁/半写锁（`create_new` 之后、pid/acq_ms/nonce 写盘之前崩溃留下的 0 字节或无
+//!      `pid`/`nonce` 的文件）没有可比较的身份：只有年龄 ≥
+//!      `MIR2_MCP_CONF_LOCK_EMPTY_GRACE_MS`（缺省 [`DEFAULT_EMPTY_LOCK_GRACE_MS`]）才回收。
+//!      **宽限内绝不接管**。`create_new` 之后先写不含 `start` 的最小身份，慢探测
+//!      （tasklist/wmic/PowerShell，最坏数秒）发生在锁体已是有效身份之后，**不再落进这段
+//!      可回收窗口**；宽限判定因此不依赖任何探测结果。
 //!   3. 判定采用「pid + start_time」双元组（Windows 用 `tasklist` 判存活 +
 //!      `wmic`/PowerShell `Win32_Process.CreationDate` 取启动时刻；Unix 用
 //!      `/proc/<pid>/stat` 的 starttime，无 `/proc` 时退化为 `ps -o lstart=`，并固定
@@ -64,6 +66,14 @@
 //!   `.<lock-name>.stale.<pid>.<token>.<stamp>.<counter>`（即 `Server.conf.lock.stale.*`），
 //!   只删「确证持有者已死 + 年龄 ≥ stale 阈值」的；存活进程持有（启动时刻一致）、探测不可用、
 //!   身份不可判定的一律保留。
+//! * **已知残余 TOCTOU（F2，登记为真机观测项）**：rename 接管法无法原子地「确认没变再搬走」。
+//!   极端三路竞态（P 读到旧死锁 → B `create_new` 成功 → P 的 rename 搬走 B 的活锁 → C 在
+//!   P 放回前 `create_new` 成功）下，P 按 A1 放弃放回，B 的活锁被 strand 在 `.stale`，
+//!   而 B 仍自认为持有 ⇒ 短暂双持有者。按卡面既定选择「宁留残片也不误删活锁」不改接管协议；
+//!   真机观测：并发冒烟后若出现 `.stale.*`，核对其身份是否属于仍在运行的进程（命中即该窗口）。
+//! * **预检快照可能过期（F4）**：`key_absent` / 同值 no-op 在取锁前用无锁快照判定后直接返回；
+//!   若并发在预检后把值改成别的值/新增该键，本次返回的是过期快照且零写。**写路径**一律以
+//!   锁内重读为准（并保留锁内同值 no-op 兜底），不会基于过期快照写盘。
 //! * `dry_run=true` **不取锁**：它是零写的纯预览（不备份、不落盘），取排他锁会让只读预演
 //!   被写者阻塞、甚至在并发时返回新的锁错误码，从而改变既有 dry_run 行为；并发下它最多读到
 //!   某一时刻的完整快照（rename 原子替换），不产生持久化副作用。
@@ -75,6 +85,8 @@
 //!   `MIR2_MCP_CONF_TEST_PROCESS_PROBE` 强制覆盖进程探测（`dead` / `unknown` / `alive` /
 //!   `alive:<token>`）；`MIR2_MCP_CONF_TEST_PROBE_LOG` 记录真实探测（证明按 pid 缓存）；
 //!   `MIR2_MCP_CONF_TEST_TAKEOVER_RACE_MARKER` 写竞态分支哨兵；
+//!   `MIR2_MCP_CONF_TEST_OWN_START_DELAY_MS` 模拟慢的本进程启动时刻探测
+//!   （`MIR2_MCP_CONF_TEST_OWN_START_MARKER` 写进入窗口的哨兵）；
 //!   `MIR2_MCP_CONF_TEST_CREATE_NEW_DENIED_MS` 模拟 Windows delete-pending 的
 //!   `ERROR_ACCESS_DENIED`。生产/release 不设置或设置了都无效果。
 
@@ -699,7 +711,11 @@ where
 const DEFAULT_LOCK_TIMEOUT_MS: u64 = 5_000;
 /// 判定「残留锁可接管」的缺省时间阈值（毫秒）。
 const DEFAULT_LOCK_STALE_MS: u64 = 30_000;
-/// 空/半写锁（无可解析持有者身份）的回收宽限（毫秒）：宽限内绝不抢刚 `create_new` 的空锁。
+/// 空/半写锁（无可解析持有者身份）的回收宽限（毫秒）。
+///
+/// A2/F1：`create_new` 后先写最小身份（pid/acq_ms/nonce）、再补 `start`，所以宽限只兜底
+/// 「写最小身份之前崩溃」的微秒级窗口；任何进程探测都发生在锁体已是有效身份之后，
+/// **宽限判定不依赖探测结果**（默认 2s 只是崩溃残留兜底，不再需要大于探测上界）。
 const DEFAULT_EMPTY_LOCK_GRACE_MS: u64 = 2_000;
 /// 单次进程探测命令的墙钟上界（毫秒）；超时按 `Unknown`（保守按活）处理。
 const DEFAULT_PROBE_TIMEOUT_MS: u64 = 2_000;
@@ -780,14 +796,19 @@ struct LockIdentity {
 }
 
 impl LockIdentity {
-    /// 生成一份新的锁身份（`nonce` 含 pid/时刻/进程内计数器，保证唯一）。
-    fn fresh() -> Self {
+    /// 最小可判定身份：pid + acq_ms + nonce（**不做任何探测**）。
+    ///
+    /// A2/F1：`create_new` 之后必须能立刻写出这三项——它们已构成
+    /// [`lock_identity_from_meta`] 认可的完整身份。`start` 是可选字段，探测（tasklist /
+    /// wmic / PowerShell，最坏数秒）放到锁体已是有效身份之后追加，绝不落在「空锁可被回收」
+    /// 的窗口里。
+    fn minimal() -> Self {
         let pid = std::process::id();
         let acquired_ms = now_ms();
         Self {
             pid,
             acquired_ms,
-            start: own_process_start(),
+            start: None,
             nonce: format!("{pid}-{acquired_ms}-{}", unique_counter()),
         }
     }
@@ -897,22 +918,54 @@ impl Drop for ConfLock {
     }
 }
 
-/// 原子创建锁文件并写入持有者元数据（pid / 获取时刻 / 进程启动时刻 / nonce）。
+/// 原子创建锁文件并写入持有者元数据。
 ///
-/// `create_new` 与元数据写入之间有一个极短的空文件窗口（A2）：进程若恰好在此崩溃，盘上会
-/// 留下 0 字节锁。这里不改创建协议（`create_new` 是唯一的原子互斥原语），而是由
-/// [`try_take_over_stale`] 的空锁宽限规则回收：宽限内不抢，超过宽限的 0 字节/半写锁判为
-/// 崩溃残留。
+/// A2/F1：`create_new` 之后**立刻**写 pid/acq_ms/nonce（不含 `start`），空锁窗口只剩这一次
+/// 小写入（微秒级，且不再包含任何进程探测）。`start` 在锁体已是有效身份之后追加（见
+/// [`complete_lock_identity`]），因此即使 tasklist / wmic / PowerShell 很慢（各自有墙钟
+/// 上界），也不会让活持有者的锁被并发方当成「0 字节崩溃残留」回收。
 fn create_lock_file(lock_path: &Path) -> io::Result<LockIdentity> {
     let mut file = open_lock_file(lock_path)?;
-    let identity = LockIdentity::fresh();
+    let identity = LockIdentity::minimal();
     if let Err(source) = file.write_all(identity.to_body().as_bytes()) {
         drop(file);
         let _ = fs::remove_file(lock_path);
         return Err(source);
     }
     let _ = file.sync_all();
-    Ok(identity)
+    drop(file);
+    Ok(complete_lock_identity(lock_path, identity))
+}
+
+/// 把可选的 `start=` 追加到锁体（A2/F1）。
+///
+/// 追加时锁体已经含 pid/acq_ms/nonce，是 [`lock_identity_from_meta`] 认可的有效身份：
+/// 并发方最多判 `Alive`（缺 `start` ⇒ 保守按活），绝不会把这段慢探测当作空锁回收。
+/// 探测/追加失败时保留最小身份即可（pid 复用判定退化为「缺 start ⇒ 按活」，安全）。
+fn complete_lock_identity(lock_path: &Path, mut identity: LockIdentity) -> LockIdentity {
+    let Some(start) = own_process_start() else {
+        return identity;
+    };
+    let appended = fs::OpenOptions::new()
+        .append(true)
+        .open(lock_path)
+        .and_then(|mut file| {
+            writeln!(file, "start={start}")?;
+            let _ = file.sync_all();
+            Ok(())
+        });
+    // 以盘上最终内容为准（追加可能部分成功），让 `Drop` 的逐字段比较与磁盘一致。
+    if appended.is_ok() {
+        identity.start = Some(start);
+    }
+    if let Ok(bytes) = fs::read(lock_path) {
+        if let Some(parsed) = lock_identity_from_meta(&parse_lock_meta(&bytes)) {
+            if parsed.pid == identity.pid && parsed.nonce == identity.nonce {
+                identity = parsed;
+            }
+        }
+    }
+    identity
 }
 
 /// `create_new` 抢锁文件。
@@ -1374,6 +1427,37 @@ fn test_race_marker(line: &str) {
 #[cfg(not(debug_assertions))]
 fn test_race_marker(_line: &str) {}
 
+/// 测试专用接缝：模拟一次慢的「本进程启动时刻」探测（debug-only）。
+/// 进入时先写 `own-start-delay` 哨兵，供用例按事件启动第二个写者。
+#[cfg(debug_assertions)]
+fn test_own_start_delay() {
+    let ms = test_env_u64("MIR2_MCP_CONF_TEST_OWN_START_DELAY_MS", 0);
+    if ms > 0 {
+        test_own_start_marker("own-start-delay");
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn test_own_start_delay() {}
+
+/// 测试专用接缝：慢启动探测的哨兵文件。
+#[cfg(debug_assertions)]
+fn test_own_start_marker(line: &str) {
+    if let Ok(path) = std::env::var("MIR2_MCP_CONF_TEST_OWN_START_MARKER") {
+        if !path.trim().is_empty() {
+            let _ = fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .and_then(|mut f| writeln!(f, "{line}"));
+        }
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn test_own_start_marker(_line: &str) {}
+
 /// 测试专用接缝：模拟 Windows delete-pending 的 `ERROR_ACCESS_DENIED`（前 `MS` 毫秒）。
 #[cfg(all(windows, debug_assertions))]
 fn test_create_new_denied() -> bool {
@@ -1430,9 +1514,14 @@ fn probe_process(pid: u32) -> ProcessProbe {
 fn own_process_start() -> Option<String> {
     static OWN_START: OnceLock<Option<String>> = OnceLock::new();
     OWN_START
-        .get_or_init(|| match probe_process(std::process::id()) {
-            ProcessProbe::Alive { start } => start,
-            ProcessProbe::Dead | ProcessProbe::Unknown => None,
+        .get_or_init(|| {
+            // 测试接缝：模拟慢探测（debug-only）。真实路径里这段探测发生在锁体已写出有效
+            // 身份之后，因此慢探测不会把活锁暴露成「空锁」。
+            test_own_start_delay();
+            match probe_process(std::process::id()) {
+                ProcessProbe::Alive { start } => start,
+                ProcessProbe::Dead | ProcessProbe::Unknown => None,
+            }
         })
         .clone()
 }
@@ -2588,6 +2677,11 @@ note=nonce=999-222-7-other\nnonce=999-222-7-other\n";
             test_env_u64("MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS", 0),
             0,
             "release 下睡眠接缝不得生效"
+        );
+        assert_eq!(
+            test_env_u64("MIR2_MCP_CONF_TEST_OWN_START_DELAY_MS", 7),
+            7,
+            "release 下慢探测接缝不得生效"
         );
         assert!(
             !test_create_new_denied(),
