@@ -27,6 +27,46 @@ use mir2_storage::LegacyDsn;
 /// oracle `GameSvrConf.ConnctionString` 的源码缺省（`GameSvrConf.cs:1921`）。
 pub const DEFAULT_CONN_STRING: &str = "server=127.0.0.1;uid=root;pwd=;database=mir2;";
 
+/// 启动期 DB 探活结果（只判 **connect 相位**，不跑任何 SQL）。
+///
+/// 卡 `openmir2-gamesvr-db-startup-hermeticity` review F1/F3：只有 [`Self::ConnectFailed`]
+/// 才是「同一 DSN 不可达」，才允许跳过其余启动表；查询阶段的超时/报错只在**当前表**
+/// 降级为空表，绝不牵连其它表（「慢但可用」的 DB 不得被误判死）。
+#[derive(Debug)]
+pub enum StartupDbProbe {
+    /// TCP connect 成功。MySQL 握手/认证/SQL 结果由各表加载器各自负责。
+    Connected,
+    /// connect 失败或超过探活上界 ⇒ 判定同一 DSN 不可达。
+    ConnectFailed(String),
+    /// 连接串解析失败 ⇒ 不置「不可达」，交由各表加载器立即报告（它们不会等超时）。
+    DsnError(String),
+}
+
+/// 启动期 DB 探活：`TcpStream::connect`（≤ `bound`），不跑 SQL、不建 sqlx 池。
+///
+/// 只回答「connect 相位是否可达」—— 这是决定「四表是否都不尝试」的唯一判据（F1）。
+/// 探活成功但后续查询超时**不算**不可达（那只让该表降级为空表）。
+pub async fn probe_reachable(conn: &str, bound: std::time::Duration) -> StartupDbProbe {
+    let dsn = match LegacyDsn::parse(conn) {
+        Ok(dsn) => dsn,
+        Err(e) => return StartupDbProbe::DsnError(format!("ConnctionString 解析失败：{e}")),
+    };
+    match tokio::time::timeout(
+        bound,
+        tokio::net::TcpStream::connect((dsn.host.as_str(), dsn.port)),
+    )
+    .await
+    {
+        Ok(Ok(_sock)) => StartupDbProbe::Connected,
+        Ok(Err(e)) => {
+            StartupDbProbe::ConnectFailed(format!("connect 失败（{}:{}）：{e}", dsn.host, dsn.port))
+        }
+        Err(_elapsed) => {
+            StartupDbProbe::ConnectFailed(format!("connect 超时（{}:{}）", dsn.host, dsn.port))
+        }
+    }
+}
+
 /// 直连 MySQL 读 `stditems`（`MySqlDB.LoadItemsDB`，`src/GameSrv/DB/MySqlDB.cs:13`）。
 ///
 /// 连接串走 [`LegacyDsn`]（与 db-srv/login-srv 同一份解析，勿再手写一份）。失败只返回错误，
@@ -76,6 +116,32 @@ mod tests {
             shape,
             ..StdItem::default()
         }
+    }
+
+    /// **探活牙（review F1/A4）**：不可达端口必须判 `ConnectFailed`（快速失败），
+    /// 绝不退化成 `Connected`。
+    ///
+    /// 红检：把 `probe_reachable` 改成恒 `Connected`（去掉快速失败）⇒ 本用例红。
+    #[tokio::test]
+    async fn probe_reports_unreachable_port() {
+        let mut unreachable = None;
+        // `bind(:0)` 拿号后立即 drop ⇒ 该端口无监听；若被并行进程抢走就换一个再试。
+        for _ in 0..5 {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind 临时端口失败");
+            let port = listener.local_addr().expect("读临时端口失败").port();
+            drop(listener);
+            let conn = format!("server=127.0.0.1;uid=root;pwd=;database=mir2;port={port};");
+            if let StartupDbProbe::ConnectFailed(e) =
+                probe_reachable(&conn, std::time::Duration::from_millis(500)).await
+            {
+                unreachable = Some(e);
+                break;
+            }
+        }
+        assert!(
+            unreachable.is_some(),
+            "不可达端口必须判 ConnectFailed（快速失败）；5 次都没拿到不可达端口（被并行进程抢走？）"
+        );
     }
 
     /// 1-based + 空名按缺：`Index=1` ⇒ `items[0]`；空名记录处的位置仍占号。
