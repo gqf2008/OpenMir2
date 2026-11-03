@@ -426,11 +426,28 @@ pub const LEVEL_RANK_NAME_LEN: usize = 15;
 /// 体长 = 10 × 24 = 240 字节。
 pub const LEVEL_RANK_BODY_LEN: usize = LEVEL_RANK_ROWS * LEVEL_RANK_ROW_LEN;
 
+/// 名字字段的**字符安全**截断长度：`≤ LEVEL_RANK_NAME_LEN`，且不落在 GBK 双字节字符中间。
+///
+/// GB2312/GBK 的双字节字符首字节是 `0x81..=0xFE`；ASCII 单字节 `< 0x80`（CP936 的 `0x80`
+/// 也是单字节）。从 0 开始按「首字节定宽」推进，若下一个字符会跨过第 15 字节就停在上一个
+/// 字符边界——16 字节中文名（8 个汉字）因此截到 **14**（7 个完整汉字），不会留下半个汉字。
+fn name_field_len(name: &[u8]) -> usize {
+    let mut end = 0;
+    while end < name.len() {
+        let width = if name[end] >= 0x81 { 2 } else { 1 };
+        if end + width > LEVEL_RANK_NAME_LEN {
+            break;
+        }
+        end += width;
+    }
+    end
+}
+
 /// 排行体的**纯函数**（不绑会话/世界）：输入 `(ChrName, Abil.Level, ActorId)`，输出 240 字节。
 ///
 /// 排序 = `(level desc, GBK name bytes asc)`；`sort_by` 稳定 ⇒ 完全相同的键保持输入序。
-/// 名字的 GBK 字节数超过 15 时**按字节截断**（客户端契约：`name_len` = 实际写入字节数），
-/// 右侧补 `0x00` 到 15 字节。
+/// 名字的 GBK 字节数超过 15 时截断到**字符边界**（客户端契约：`name_len` = 实际写入字节数，
+/// 且必须是一个完整字符序列），右侧补 `0x00` 到 15 字节。
 #[must_use]
 pub fn level_rank_body(players: &[(&str, i32, i32)]) -> Vec<u8> {
     let mut rows: Vec<(Vec<u8>, i32, i32)> = players
@@ -442,7 +459,7 @@ pub fn level_rank_body(players: &[(&str, i32, i32)]) -> Vec<u8> {
     let mut body = vec![0u8; LEVEL_RANK_BODY_LEN];
     for (i, (name, level, actor_id)) in rows.iter().take(LEVEL_RANK_ROWS).enumerate() {
         let row = &mut body[i * LEVEL_RANK_ROW_LEN..(i + 1) * LEVEL_RANK_ROW_LEN];
-        let n = name.len().min(LEVEL_RANK_NAME_LEN);
+        let n = name_field_len(name);
         row[0] = u8::try_from(n).expect("name_len ≤ 15 恒落 u8");
         row[1..1 + n].copy_from_slice(&name[..n]);
         row[16..20].copy_from_slice(&level.to_le_bytes());
@@ -2625,15 +2642,97 @@ mod tests {
         }
     }
 
-    /// A2：名字按 GBK 字节截断到 15（客户端契约：`name_len` = 实际写入字节数）。
+    /// A1：名字按 GBK 字节截断到 15，但**不截在双字节字符中间**。
+    /// 16 字节中文名（8 个汉字）⇒ 回退到 14 字节（7 个完整汉字），`name_len=14`。
     #[test]
-    fn level_rank_body_truncates_name_to_fifteen_gbk_bytes() {
+    fn level_rank_body_truncates_name_on_char_boundary() {
         let long = "一二三四五六七八"; // 8 × 2 = 16 GBK 字节
         let body = level_rank_body(&[(long, 1, 7)]);
-        assert_eq!(body[0], 15, "name_len 截到 15 字节");
-        assert_eq!(&body[1..16], &gbk(long)[..15]);
+        assert_eq!(gbk(long).len(), 16);
+        assert_eq!(body[0], 14, "第 15 字节是 lead byte ⇒ 回退 1 字节");
+        assert_eq!(&body[1..15], &gbk(long)[..14], "只保留 7 个完整汉字");
+        assert_eq!(body[15], 0, "name 字段右侧补 0（半个汉字绝不落盘）");
         assert_eq!(i32::from_le_bytes(body[16..20].try_into().unwrap()), 1);
         assert_eq!(i32::from_le_bytes(body[20..24].try_into().unwrap()), 7);
+    }
+
+    /// A1 边界：恰 15 字节的名字（7 汉字 + ASCII）整段保留，`name_len=15`。
+    #[test]
+    fn level_rank_body_keeps_fifteen_byte_name_whole() {
+        let name = "一二三四五六七A"; // 7 × 2 + 1 = 15 GBK 字节
+        let gbk_name = gbk(name);
+        assert_eq!(gbk_name.len(), 15);
+        let body = level_rank_body(&[(name, 2, 9)]);
+        assert_eq!(body[0], 15, "恰 15 字节不触发回退");
+        assert_eq!(&body[1..16], gbk_name.as_slice());
+        assert_eq!(i32::from_le_bytes(body[16..20].try_into().unwrap()), 2);
+        assert_eq!(i32::from_le_bytes(body[20..24].try_into().unwrap()), 9);
+    }
+
+    /// A1 反例（避免「末字节 ≥0x81 就回退」的假实现）：截断点前的字符**以 trail byte
+    /// ≥0x81 结束**时不是半个字符，15 字节必须整段保留。
+    #[test]
+    fn level_rank_body_trailing_trail_byte_is_not_a_lead_byte() {
+        let name = "一二三四五六A一B"; // 12 + 1 + 2 + 1 = 16 GBK 字节
+        let gbk_name = gbk(name);
+        assert_eq!(gbk_name.len(), 16);
+        assert!(gbk_name[14] >= 0x81, "第 15 字节是『一』的 trail byte");
+        let body = level_rank_body(&[(name, 3, 11)]);
+        assert_eq!(body[0], 15, "15 字节处是完整字符边界");
+        assert_eq!(&body[1..16], &gbk_name[..15]);
+    }
+
+    /// A2：≤15 GBK 字节的所有名字，输出与改动前实现（`name.len().min(15)` 硬切）
+    /// **整条 240 字节体逐字节相同**（13 条向量，含空名/ASCII/中文/混合）。
+    #[test]
+    fn level_rank_body_short_names_are_byte_identical_to_legacy() {
+        // 改动前实现，仅作等价基准：≤15 字节时硬切与整段保留等价。
+        fn legacy_body(players: &[(&str, i32, i32)]) -> Vec<u8> {
+            let mut rows: Vec<(Vec<u8>, i32, i32)> = players
+                .iter()
+                .map(|&(chr_name, level, actor_id)| (gbk(chr_name), level, actor_id))
+                .collect();
+            rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+            let mut body = vec![0u8; LEVEL_RANK_BODY_LEN];
+            for (i, (name, level, actor_id)) in rows.iter().take(LEVEL_RANK_ROWS).enumerate() {
+                let row = &mut body[i * LEVEL_RANK_ROW_LEN..(i + 1) * LEVEL_RANK_ROW_LEN];
+                let n = name.len().min(LEVEL_RANK_NAME_LEN);
+                row[0] = u8::try_from(n).expect("name_len ≤ 15 恒落 u8");
+                row[1..1 + n].copy_from_slice(&name[..n]);
+                row[16..20].copy_from_slice(&level.to_le_bytes());
+                row[20..24].copy_from_slice(&actor_id.to_le_bytes());
+            }
+            body
+        }
+
+        let vectors = [
+            ("", 1, 0x01),
+            ("A", 2, 0x02),
+            ("Hero", 3, 0x03),
+            ("ABCDEFGHIJKLMNO", 4, 0x04), // 15 ASCII
+            ("甲", 5, 0x05),
+            ("一二", 6, 0x06),
+            ("一二三四五六七", 7, 0x07),   // 14
+            ("一二三四五六七A", 8, 0x08),  // 15
+            ("ABCDEFGHIJKLM甲", 9, 0x09),  // 13 + 2
+            ("AB一二三四五六", 10, 0x0A),  // 2 + 12
+            ("玩家123456789", 11, 0x0B),   // 4 + 9
+            ("~!@#$%^&*()_+-=", 12, 0x0C), // 14 ASCII
+            ("甲AB乙", 13, 0x0D),
+        ];
+        for &(name, level, actor_id) in &vectors {
+            assert!(
+                gbk(name).len() <= LEVEL_RANK_NAME_LEN,
+                "向量 {name:?} 必须 ≤15 GBK 字节"
+            );
+            assert_eq!(
+                level_rank_body(&[(name, level, actor_id)]),
+                legacy_body(&[(name, level, actor_id)]),
+                "≤15 字节名字 {name:?} 的 240B 体必须与改动前逐字节相同"
+            );
+        }
+        // 整批一起排（13 条 ≤10 行会被截到 10 行，仍须逐字节相同）。
+        assert_eq!(level_rank_body(&vectors), legacy_body(&vectors));
     }
 
     /// A2 退化形态：无在线玩家 ⇒ 全 0 的 240B 空排行（不是 0 字节）。
