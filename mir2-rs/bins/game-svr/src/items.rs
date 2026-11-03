@@ -118,6 +118,32 @@ mod tests {
         }
     }
 
+    /// **探活牙（review F1/A4）**：不可达端口必须判 `ConnectFailed`（快速失败），
+    /// 绝不退化成 `Connected`。
+    ///
+    /// 红检：把 `probe_reachable` 改成恒 `Connected`（去掉快速失败）⇒ 本用例红。
+    #[tokio::test]
+    async fn probe_reports_unreachable_port() {
+        let mut unreachable = None;
+        // `bind(:0)` 拿号后立即 drop ⇒ 该端口无监听；若被并行进程抢走就换一个再试。
+        for _ in 0..5 {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind 临时端口失败");
+            let port = listener.local_addr().expect("读临时端口失败").port();
+            drop(listener);
+            let conn = format!("server=127.0.0.1;uid=root;pwd=;database=mir2;port={port};");
+            if let StartupDbProbe::ConnectFailed(e) =
+                probe_reachable(&conn, std::time::Duration::from_millis(500)).await
+            {
+                unreachable = Some(e);
+                break;
+            }
+        }
+        assert!(
+            unreachable.is_some(),
+            "不可达端口必须判 ConnectFailed（快速失败）；5 次都没拿到不可达端口（被并行进程抢走？）"
+        );
+    }
+
     /// 1-based + 空名按缺：`Index=1` ⇒ `items[0]`；空名记录处的位置仍占号。
     #[test]
     fn catalog_is_one_based_and_skips_empty_names() {
