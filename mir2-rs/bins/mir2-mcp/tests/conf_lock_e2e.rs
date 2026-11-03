@@ -38,10 +38,21 @@ struct McpProc {
     rx: Receiver<String>,
     next_id: u64,
     reader: Option<std::thread::JoinHandle<()>>,
+    stderr_rx: Option<Receiver<String>>,
+    stderr_reader: Option<std::thread::JoinHandle<()>>,
 }
 
 impl McpProc {
     fn start(root: &Path, extra_env: &[(&str, String)]) -> Self {
+        Self::start_impl(root, extra_env, false)
+    }
+
+    /// 同 [`McpProc::start`]，但把子进程 stderr 逐行接进通道（供断言结构化诊断行）。
+    fn start_capture_stderr(root: &Path, extra_env: &[(&str, String)]) -> Self {
+        Self::start_impl(root, extra_env, true)
+    }
+
+    fn start_impl(root: &Path, extra_env: &[(&str, String)], capture_stderr: bool) -> Self {
         let exe = env!("CARGO_BIN_EXE_mir2-mcp");
         let mut command = Command::new(exe);
         command.arg("--root").arg(root);
@@ -51,7 +62,11 @@ impl McpProc {
         let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
+            .stderr(if capture_stderr {
+                Stdio::piped()
+            } else {
+                Stdio::inherit()
+            })
             .spawn()
             .expect("spawn mir2-mcp");
         let stdin = child.stdin.take();
@@ -65,12 +80,29 @@ impl McpProc {
                 }
             }
         });
+        let (stderr_rx, stderr_reader) = if capture_stderr {
+            let stderr = child.stderr.take().expect("stderr");
+            let (tx, rx) = mpsc::channel();
+            let reader = std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines() {
+                    let Ok(line) = line else { break };
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+            (Some(rx), Some(reader))
+        } else {
+            (None, None)
+        };
         Self {
             child,
             stdin,
             rx,
             next_id: 1,
             reader: Some(reader),
+            stderr_rx,
+            stderr_reader,
         }
     }
 
@@ -103,6 +135,30 @@ impl McpProc {
             let value: Value = serde_json::from_str(&line)
                 .unwrap_or_else(|e| panic!("服务端输出不是 JSON：{e}；原文：{line}"));
             if value.get("id").and_then(Value::as_u64) == Some(id) {
+                return value;
+            }
+        }
+    }
+
+    /// 等一条 `mir2-mcp conf_lock_diagnostic {json}` stderr 行；按 `event` 过滤。
+    ///
+    /// 只用于 `start_capture_stderr` 启动的子进程；非诊断行直接丢弃。
+    fn wait_for_diagnostic(&self, event: &str, timeout: Duration) -> Value {
+        let rx = self
+            .stderr_rx
+            .as_ref()
+            .expect("需 start_capture_stderr 才能读子进程 stderr");
+        let deadline = Instant::now() + timeout;
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "等 stderr 诊断 event={event} 超时");
+            let line = rx.recv_timeout(remaining).expect("stderr 通道提前关闭");
+            let Some(rest) = line.strip_prefix("mir2-mcp conf_lock_diagnostic ") else {
+                continue;
+            };
+            let value: Value = serde_json::from_str(rest)
+                .unwrap_or_else(|e| panic!("诊断行不是 JSON：{e}；原文：{line}"));
+            if value.get("event").and_then(Value::as_str) == Some(event) {
                 return value;
             }
         }
@@ -144,6 +200,9 @@ impl McpProc {
             }
         }
         if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+        if let Some(reader) = self.stderr_reader.take() {
             let _ = reader.join();
         }
     }
@@ -1336,4 +1395,112 @@ fn pid_is_alive(pid: u32) -> bool {
         let _ = pid;
         false
     }
+}
+
+// ---------------------------------------------------------------------------
+// A1/A2/A4：释放失败可观测 + 外部句柄关闭后自愈（真机 Windows 句柄）
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+fn open_without_share_delete(path: &Path) -> std::io::Result<std::fs::File> {
+    use std::os::windows::fs::OpenOptionsExt;
+    // FILE_SHARE_READ(0x1) | FILE_SHARE_WRITE(0x2)：**不含** FILE_SHARE_DELETE(0x4)。
+    std::fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0x1 | 0x2)
+        .open(path)
+}
+
+#[cfg(windows)]
+fn read_lock_pid(path: &Path) -> u32 {
+    let bytes = std::fs::read(path).expect("读锁文件");
+    String::from_utf8_lossy(&bytes)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("pid="))
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .expect("锁文件里必须有 pid")
+}
+
+/// A1/A2：真实外部句柄（不含 `FILE_SHARE_DELETE`）占住锁文件 ⇒ 释放失败必须留下结构化
+/// 诊断；句柄关闭后下一次 conf_set 自愈自己的残留，耗时远小于 5s timeout。
+#[cfg(all(windows, debug_assertions))]
+#[test]
+fn release_failure_is_observable_and_self_heals_after_foreign_handle_closes() {
+    let root = TempRoot::new("release-heal-e2e");
+    let mut proc = McpProc::start_capture_stderr(
+        &root.path,
+        &[("MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS", "800".to_string())],
+    );
+    proc.initialize();
+
+    // 先发请求但不等待：子进程在 `rename` 与回读之间停 800ms，锁文件已存在。
+    let id = proc.next_id;
+    proc.next_id += 1;
+    proc.send(&json!({
+        "jsonrpc": "2.0",
+        "id": id,
+        "method": "tools/call",
+        "params": {"name": "conf_set", "arguments": {
+            "section": "Setup", "key": "GenMonRate", "value": "50"
+        }},
+    }));
+
+    // 外部句柄：模拟第三方进程以不含 FILE_SHARE_DELETE 的方式打开锁文件。
+    let lock_path = root.lock_path();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let foreign = loop {
+        if lock_path.exists() {
+            if let Ok(file) = open_without_share_delete(&lock_path) {
+                break file;
+            }
+        }
+        assert!(Instant::now() < deadline, "等锁文件出现超时");
+        std::thread::sleep(Duration::from_millis(5));
+    };
+
+    let response = proc.wait_for_id(id);
+    assert_eq!(
+        structured(&response)["ok"],
+        json!(true),
+        "首次 conf_set 必须成功：{response}"
+    );
+    assert!(lock_path.exists(), "外部句柄占住时释放必须失败（锁残留）");
+
+    // A1：结构化诊断（路径 / errno / 身份）必须能从 stderr 观察到。
+    let diag = proc.wait_for_diagnostic("release_failed", Duration::from_secs(10));
+    let path_text = lock_path.display().to_string();
+    assert_eq!(diag["lock_path"], json!(path_text));
+    assert_eq!(diag["errno"], json!(32), "Windows sharing violation = 32");
+    let lock_pid = read_lock_pid(&lock_path);
+    assert_eq!(diag["pid"], json!(lock_pid));
+    assert!(diag["nonce"]
+        .as_str()
+        .is_some_and(|nonce| !nonce.is_empty()));
+
+    // A2：关闭外部句柄后立刻写：必须自愈成功，耗时远小于 5s timeout。
+    drop(foreign);
+    let started = Instant::now();
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "51"}),
+    );
+    let elapsed = started.elapsed();
+    assert_eq!(
+        structured(&response)["ok"],
+        json!(true),
+        "句柄关闭后下一次 conf_set 必须自愈成功：{response}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(2500),
+        "自愈后写入不得接近 5s timeout（实测 {elapsed:?}）"
+    );
+
+    // A4：自愈回收留下 `release_recovered` 诊断，且写完后锁已释放。
+    let recovered = proc.wait_for_diagnostic("release_recovered", Duration::from_secs(5));
+    assert_eq!(recovered["lock_path"], json!(path_text));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while lock_path.exists() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(!lock_path.exists(), "自愈写完后锁必须释放");
 }

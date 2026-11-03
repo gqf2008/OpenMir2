@@ -66,6 +66,19 @@
 //!   `.<lock-name>.stale.<pid>.<token>.<stamp>.<counter>`（即 `Server.conf.lock.stale.*`），
 //!   只删「确证持有者已死 + 年龄 ≥ stale 阈值」的；存活进程持有（启动时刻一致）、探测不可用、
 //!   身份不可判定的一律保留。
+//! * **释放失败可观测 + 自愈（A1/A2/A4）**：`ConfLock` 的 `Drop` 删除锁文件失败（典型原因：
+//!   外部进程以**不含 `FILE_SHARE_DELETE`** 的句柄打开锁文件，Windows 返回 sharing
+//!   violation）时不再静默吞掉：失败登记为「本进程自持待释放」记录，并发出结构化诊断
+//!   （[`conf_lock_release_diagnostics`] 快照 + stderr 行
+//!   `mir2-mcp conf_lock_diagnostic {json}`，字段含 `event`/`lock_path`/`pid`/`start`/
+//!   `nonce`/`errno`/`error`）。下一次取锁（同一进程）在进入文件锁等待前先尝试回收该残留：
+//!   只有锁体**逐字段等于**记录的身份（pid + acq_ms + start + nonce，即 A4 的「自己持有且
+//!   身份可证」路径）才 `remove_file`；身份不可读/不符则绝不动。⇒ 外部句柄一关闭，下一次
+//!   `conf_set` 即可在同一调用内自愈成功，不再等满 `MIR2_MCP_CONF_LOCK_TIMEOUT_MS`；
+//!   外部句柄仍在时继续按活锁等待并最终 `conf_lock_timeout`（诊断已先行留下）。
+//! * **进程内临界区互斥（A3）**：同一进程的多个 MCP 会话按**锁文件路径**用一把 `Mutex`
+//!   串行化「取文件锁 → 写 → 释放」整段（同一 `Server.conf` 串行，不同 root 互不阻塞），
+//!   等待同样受 timeout 约束；**不**把 pid 当重入凭证（同 pid 的活锁仍按活锁等待，绝不抢占）。
 //! * **已知残余 TOCTOU（F2，登记为真机观测项）**：rename 接管法无法原子地「确认没变再搬走」。
 //!   极端三路竞态（P 读到旧死锁 → B `create_new` 成功 → P 的 rename 搬走 B 的活锁 → C 在
 //!   P 放回前 `create_new` 成功）下，P 按 A1 放弃放回，B 的活锁被 strand 在 `.stale`，
@@ -95,7 +108,7 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
+use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError, TryLockError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -832,16 +845,33 @@ impl LockIdentity {
 struct ConfLock {
     path: PathBuf,
     identity: LockIdentity,
+    /// 进程内会话互斥（A3）：跨会话串行化「取锁 → 写 → 释放」整段。
+    ///
+    /// 字段在 `Drop::drop` **之后**才释放，所以 `Drop` 的失败登记仍在该临界区内。
+    /// 测试里直接构造 `ConfLock` 时为 `None`（不参与进程内互斥）。
+    _process_guard: Option<MutexGuard<'static, ()>>,
 }
 
 impl ConfLock {
     /// `create_new` 抢锁，失败有界重试；超时返回 [`ConfError::LockConflict`]。
+    ///
+    /// A3：先拿**进程内互斥**再抢文件锁；同一进程的多个 MCP 会话因此不会同时进入临界区
+    /// （也绝不把「同 pid」当作重入凭证）。
+    /// A2/A4：进入等待前先尝试回收「本进程自己持有、上轮 `Drop` 删除失败」的残留锁。
     fn acquire(conf_path: &Path) -> Result<Self, ConfError> {
         let lock_path = lock_path_for(conf_path);
         let opts = lock_options();
         let started = Instant::now();
         // 探测结果按 pid 缓存：等待循环每轮都会做残留判定，但同一次抢锁对同一 pid 只探测一次。
         let mut probes = ProbeCache::default();
+        let process_guard = match acquire_process_guard(&lock_path, started, &opts) {
+            Ok(guard) => guard,
+            Err(elapsed) => {
+                return Err(lock_conflict(conf_path, &lock_path, elapsed, &opts));
+            }
+        };
+        // A2/A4：外部句柄可能已经关闭——先自愈自己的残留，再进入常规抢锁/等待。
+        let _ = self_heal_pending_release(&lock_path);
         loop {
             // deadline 在探测**之前**先查一次（探测本身可能有墙钟上界）。
             let elapsed = started.elapsed();
@@ -853,15 +883,21 @@ impl ConfLock {
                     return Ok(Self {
                         path: lock_path,
                         identity,
+                        _process_guard: Some(process_guard),
                     })
                 }
                 Err(source)
                     if source.kind() == io::ErrorKind::AlreadyExists
                         || is_transient_create_new_error(&source) =>
                 {
-                    // 先看是否是「持有者确证已死且超过时间阈值」的残留锁（或空锁超过宽限）；
-                    // 是则原子接管后立刻重试。
-                    let _ = try_take_over_stale(&lock_path, &opts, &mut probes);
+                    // A2：外部句柄若已关闭，自愈会在本轮把本进程的残留删掉，下一次
+                    // `create_new` 即成功；仍在占用时继续按活锁等待。
+                    let healed = self_heal_pending_release(&lock_path);
+                    if !healed {
+                        // 先看是否是「持有者确证已死且超过时间阈值」的残留锁（或空锁超过宽限）；
+                        // 是则原子接管后立刻重试。
+                        let _ = try_take_over_stale(&lock_path, &opts, &mut probes);
+                    }
                     // deadline 在探测**之后**再查一次：慢探测不能把等待拖成无界。
                     let elapsed = started.elapsed();
                     if elapsed >= opts.timeout {
@@ -908,16 +944,278 @@ impl Drop for ConfLock {
     fn drop(&mut self) {
         // 逐字段精确匹配（pid + acq_ms + start + nonce）；只做子串匹配会让「内容里恰好含
         // 相同 nonce 片段」的他锁被误删。
-        let own = fs::read(&self.path)
-            .ok()
-            .and_then(|bytes| lock_identity_from_meta(&parse_lock_meta(&bytes)))
-            .is_some_and(|current| current == self.identity);
-        if own {
-            let _ = fs::remove_file(&self.path);
+        let current = match fs::read(&self.path) {
+            Ok(bytes) => lock_identity_from_meta(&parse_lock_meta(&bytes)),
+            // 锁文件已不存在：无需释放，也不算失败。
+            Err(source) if source.kind() == io::ErrorKind::NotFound => return,
+            // 读不到锁体（例如外部句柄连 `FILE_SHARE_READ` 都不给）：无法逐字段证明是自己的，
+            // **绝不盲删**；但要留下可观测信号并登记自愈记录，等身份可读时再回收。
+            Err(source) => {
+                register_release_failure(&self.path, &self.identity, "release_unverified", &source);
+                return;
+            }
+        };
+        if current.as_ref() != Some(&self.identity) {
+            return;
+        }
+        if let Err(source) = fs::remove_file(&self.path) {
+            // A1：释放失败**不再静默吞掉**；A2/A4：登记「本进程自持待释放」，
+            // 下一次取锁先尝试自愈。
+            register_release_failure(&self.path, &self.identity, "release_failed", &source);
         }
     }
 }
 
+// ---------------------------------------------------------------------------
+// 释放失败可观测 + 自愈（A1 / A2 / A4）
+// ---------------------------------------------------------------------------
+
+/// 进程内诊断记录上限（环形丢弃最旧的；避免长跑进程无界增长）。
+const MAX_LOCK_DIAGNOSTICS: usize = 32;
+
+/// 一次锁释放诊断（结构化：路径 / 原因 / errno / 持有者身份 / 次数）。
+///
+/// 由 [`conf_lock_release_diagnostics`] 读取，同时以
+/// `mir2-mcp conf_lock_diagnostic {json}` 的 stderr 行发出（生产可观测）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ConfLockDiagnostic {
+    /// `release_failed` / `release_unverified` / `release_recovered` / `release_record_dropped`。
+    pub event: &'static str,
+    /// 锁文件路径（含被外部句柄占住时的那一份）。
+    pub lock_path: String,
+    /// 期望持有者 pid（本进程）。
+    pub pid: u32,
+    /// 期望持有者启动时刻 token（探测不到时为 `None`）。
+    pub start: Option<String>,
+    /// 期望持有者的唯一 nonce（自持身份可证的最后一环）。
+    pub nonce: String,
+    /// 失败的 OS errno（Windows sharing violation = 32；无 OS 错误时为 `None`）。
+    pub errno: Option<i32>,
+    /// OS 错误文本。
+    pub error: String,
+    /// 事件时刻（unix 毫秒）。
+    pub at_ms: u64,
+    /// 该残留被尝试回收的累计次数（首次登记为 1）。
+    pub attempts: u64,
+}
+
+/// 本进程「已登记但还没删掉」的自持锁（按锁路径）。
+#[derive(Debug, Clone)]
+struct PendingRelease {
+    identity: LockIdentity,
+    attempts: u64,
+    errno: Option<i32>,
+    error: String,
+}
+
+fn pending_releases() -> &'static Mutex<HashMap<PathBuf, PendingRelease>> {
+    static PENDING: OnceLock<Mutex<HashMap<PathBuf, PendingRelease>>> = OnceLock::new();
+    PENDING.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn diagnostics_sink() -> &'static Mutex<Vec<ConfLockDiagnostic>> {
+    static SINK: OnceLock<Mutex<Vec<ConfLockDiagnostic>>> = OnceLock::new();
+    SINK.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+fn emit_diagnostic(diagnostic: ConfLockDiagnostic) {
+    if let Ok(line) = serde_json::to_string(&diagnostic) {
+        eprintln!("mir2-mcp conf_lock_diagnostic {line}");
+    }
+    let mut sink = diagnostics_sink()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if sink.len() >= MAX_LOCK_DIAGNOSTICS {
+        sink.remove(0);
+    }
+    sink.push(diagnostic);
+}
+
+/// 读取本进程累计的锁释放诊断（A1/A2/A4 的可观测通道；只读快照）。
+///
+/// 仅测试可见：生产侧消费者是 stderr 的结构化诊断行；二进制 crate 的 `pub` 不会自动
+/// 免于 `dead_code`，所以这里显式按测试编译。
+#[cfg(test)]
+#[must_use]
+pub fn conf_lock_release_diagnostics() -> Vec<ConfLockDiagnostic> {
+    diagnostics_sink()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .clone()
+}
+
+/// 登记一次释放失败（结构化诊断 + 自愈记录）。
+fn register_release_failure(
+    lock_path: &Path,
+    identity: &LockIdentity,
+    event: &'static str,
+    source: &io::Error,
+) {
+    let attempts = pending_releases()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .entry(lock_path.to_path_buf())
+        .and_modify(|pending| {
+            if pending.identity != *identity {
+                // 正常路径不会发生（身份来自本进程刚持有的锁）；以最新身份为准重登记。
+                *pending = PendingRelease {
+                    identity: identity.clone(),
+                    attempts: 0,
+                    errno: None,
+                    error: String::new(),
+                };
+            }
+            pending.attempts = pending.attempts.saturating_add(1);
+            pending.errno = source.raw_os_error();
+            pending.error = source.to_string();
+        })
+        .or_insert_with(|| PendingRelease {
+            identity: identity.clone(),
+            attempts: 1,
+            errno: source.raw_os_error(),
+            error: source.to_string(),
+        })
+        .attempts;
+    emit_diagnostic(ConfLockDiagnostic {
+        event,
+        lock_path: lock_path.display().to_string(),
+        pid: identity.pid,
+        start: identity.start.clone(),
+        nonce: identity.nonce.clone(),
+        errno: source.raw_os_error(),
+        error: source.to_string(),
+        at_ms: now_ms(),
+        attempts,
+    });
+}
+
+/// 更新自愈记录的最近一次失败（不重复发诊断，避免等待循环每 25ms 刷一行）。
+fn note_release_retry(lock_path: &Path, source: &io::Error) {
+    if let Some(pending) = pending_releases()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get_mut(lock_path)
+    {
+        pending.attempts = pending.attempts.saturating_add(1);
+        pending.errno = source.raw_os_error();
+        pending.error = source.to_string();
+    }
+}
+
+/// 移除自愈记录并发出一次「已处理」诊断（`event` 说明为什么可以撤销记录）。
+fn clear_pending_release(lock_path: &Path, event: &'static str, note: &str) {
+    let Some(pending) = pending_releases()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .remove(lock_path)
+    else {
+        return;
+    };
+    emit_diagnostic(ConfLockDiagnostic {
+        event,
+        lock_path: lock_path.display().to_string(),
+        pid: pending.identity.pid,
+        start: pending.identity.start,
+        nonce: pending.identity.nonce,
+        errno: pending.errno,
+        error: note.to_string(),
+        at_ms: now_ms(),
+        attempts: pending.attempts,
+    });
+}
+
+/// 尝试自愈「本进程自己持有、上一轮 `Drop` 删除失败」的残留锁（A2/A4）。
+///
+/// **判定规则（新增的明确路径）：自己持有且身份可证。** 只有锁体当前内容**逐字段等于**
+/// 记录在案的身份（pid + acq_ms + start + nonce）才 `remove_file`；读不到 / 内容不符
+/// （已被他进程接管或清掉）⇒ 绝不动，只撤销或保留记录。
+///
+/// 返回 `true` 表示残留已消失（删除成功或确认记录已失效），调用方可立刻重试 `create_new`。
+fn self_heal_pending_release(lock_path: &Path) -> bool {
+    let Some(pending) = pending_releases()
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .get(lock_path)
+        .cloned()
+    else {
+        return false;
+    };
+    let bytes = match fs::read(lock_path) {
+        Ok(bytes) => bytes,
+        Err(source) if source.kind() == io::ErrorKind::NotFound => {
+            clear_pending_release(lock_path, "release_record_dropped", "锁文件已不存在");
+            return true;
+        }
+        Err(source) => {
+            // 外部句柄仍不给读：继续等（身份不可证 ⇒ 绝不盲删）。
+            note_release_retry(lock_path, &source);
+            return false;
+        }
+    };
+    if lock_identity_from_meta(&parse_lock_meta(&bytes)).as_ref() != Some(&pending.identity) {
+        // 锁体已不是我们那份：他进程接管了或已被回收；记录作废，绝不误删。
+        clear_pending_release(lock_path, "release_record_dropped", "锁体身份已变化");
+        return true;
+    }
+    match fs::remove_file(lock_path) {
+        Ok(()) => {
+            clear_pending_release(
+                lock_path,
+                "release_recovered",
+                "外部句柄已释放，残留锁已回收",
+            );
+            true
+        }
+        Err(source) => {
+            note_release_retry(lock_path, &source);
+            false
+        }
+    }
+}
+
+/// 进程内会话互斥（A3）：**按锁文件路径**，同一进程的多个 MCP 会话串行进入
+/// 「取文件锁 → 写 → 释放」整段。不同 `Server.conf`（不同 root）互不阻塞。
+///
+/// 每个不同路径泄漏一把 `'static` Mutex（进程生命周期内路径数极少：生产通常一个；
+/// 测试每个 TempRoot 一个）。这样 `MutexGuard<'static, ()>` 才能随 [`ConfLock`] 存活到
+/// `Drop` 之后，而无需自引用结构。
+///
+/// **不按 pid 判重入**：同 pid + 同进程的活锁仍按活锁等待（见 [`holder_state`]）。
+fn process_critical_section(lock_path: &Path) -> &'static Mutex<()> {
+    static REGISTRY: OnceLock<Mutex<HashMap<PathBuf, &'static Mutex<()>>>> = OnceLock::new();
+    let mut registry = REGISTRY
+        .get_or_init(|| Mutex::new(HashMap::new()))
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if let Some(existing) = registry.get(lock_path) {
+        return existing;
+    }
+    let created: &'static Mutex<()> = Box::leak(Box::new(Mutex::new(())));
+    registry.insert(lock_path.to_path_buf(), created);
+    created
+}
+
+/// 在 `opts.timeout` 内拿到该锁文件的进程内互斥；超时返回已等待时长。
+fn acquire_process_guard(
+    lock_path: &Path,
+    started: Instant,
+    opts: &LockOptions,
+) -> Result<MutexGuard<'static, ()>, Duration> {
+    loop {
+        match process_critical_section(lock_path).try_lock() {
+            Ok(guard) => return Ok(guard),
+            Err(TryLockError::Poisoned(poisoned)) => return Ok(poisoned.into_inner()),
+            Err(TryLockError::WouldBlock) => {
+                let elapsed = started.elapsed();
+                if elapsed >= opts.timeout {
+                    return Err(elapsed);
+                }
+                let remaining = opts.timeout.saturating_sub(elapsed);
+                std::thread::sleep(Duration::from_millis(LOCK_RETRY_INTERVAL_MS).min(remaining));
+            }
+        }
+    }
+}
 /// 原子创建锁文件并写入持有者元数据。
 ///
 /// A2/F1：`create_new` 之后**立刻**写 pid/acq_ms/nonce（不含 `start`），空锁窗口只剩这一次
@@ -2321,6 +2619,90 @@ ProcessMonRandRate=5\r\n",
         assert!(leftovers.is_empty(), "锁/临时文件残留：{leftovers:?}");
     }
 
+    /// 外部句柄（Windows：不含 `FILE_SHARE_DELETE`）打开锁文件，模拟第三方占用。
+    #[cfg(windows)]
+    fn open_without_share_delete(path: &Path) -> fs::File {
+        use std::os::windows::fs::OpenOptionsExt;
+        // FILE_SHARE_READ(0x1) | FILE_SHARE_WRITE(0x2)：**不含** FILE_SHARE_DELETE(0x4)。
+        fs::OpenOptions::new()
+            .read(true)
+            .share_mode(0x1 | 0x2)
+            .open(path)
+            .expect("打开外部占住句柄")
+    }
+
+    /// A1/A2/A4：释放失败必须可观测；外部句柄关闭后下一次 conf_set 自愈自己的残留。
+    #[cfg(windows)]
+    #[test]
+    fn release_failure_is_observable_and_next_set_self_heals() {
+        let root = TempRoot::new("release-heal");
+        root.write_conf(&fixture());
+        let conf = root.conf_path();
+        let lock_path = conf.with_file_name("Server.conf.lock");
+
+        let live = ConfLock::acquire(&conf).expect("先取锁");
+        let identity = live.identity.clone();
+        let foreign = open_without_share_delete(&lock_path);
+        drop(live);
+        assert!(lock_path.exists(), "外部句柄占住时删除必须失败（锁残留）");
+
+        // A1：结构化诊断（路径 / errno / 身份）必须留下，不得静默吞。
+        let path_text = lock_path.display().to_string();
+        let diags = conf_lock_release_diagnostics();
+        let failed = diags
+            .iter()
+            .find(|d| d.event == "release_failed" && d.lock_path == path_text)
+            .unwrap_or_else(|| panic!("缺 release_failed 诊断：{diags:?}"));
+        assert_eq!(failed.pid, std::process::id());
+        assert_eq!(failed.nonce, identity.nonce);
+        assert_eq!(failed.errno, Some(32), "Windows sharing violation = 32");
+        assert!(!failed.error.is_empty());
+
+        // A4：残留锁的身份逐字段等于「本进程自己那份」（自愈路径的前提）。
+        let residue = lock_identity_from_meta(&parse_lock_meta(&fs::read(&lock_path).unwrap()));
+        assert_eq!(residue.as_ref(), Some(&identity));
+
+        // A2：句柄关闭后，下一次 conf_set 必须自愈成功（无自愈路径会等满 timeout 后报错）。
+        drop(foreign);
+        let out = conf_set(&root.cfg(), "Setup", "GenMonRate", "44", false)
+            .expect("外部句柄关闭后下一次 conf_set 必须自愈成功");
+        assert!(out.wrote);
+        assert!(!lock_path.exists(), "自愈后锁必须释放");
+
+        let recovered = conf_lock_release_diagnostics()
+            .into_iter()
+            .any(|d| d.event == "release_recovered" && d.lock_path == path_text);
+        assert!(recovered, "自愈路径必须留下 release_recovered 诊断");
+    }
+
+    /// A3：同进程两个会话 + 外部句柄 ⇒ 不得双持有者；同 pid 的活锁不得被当重入抢走。
+    #[cfg(windows)]
+    #[test]
+    fn same_process_concurrent_session_never_double_holds() {
+        let root = TempRoot::new("a3-no-double");
+        root.write_conf(&fixture());
+        let conf = root.conf_path();
+        let lock_path = conf.with_file_name("Server.conf.lock");
+
+        let live = ConfLock::acquire(&conf).expect("会话 A 取锁");
+        let identity = live.identity.clone();
+        let foreign = open_without_share_delete(&lock_path);
+
+        // 会话 B（同进程）：A 仍持锁 ⇒ 必须超时，绝不因「同 pid」直接进临界区。
+        let cfg = root.cfg();
+        let err = conf_set(&cfg, "Setup", "GenMonRate", "45", false)
+            .expect_err("会话 B 在 A 持锁期间必须超时");
+        assert_eq!(err.code(), "conf_lock_timeout");
+        let current = lock_identity_from_meta(&parse_lock_meta(&fs::read(&lock_path).unwrap()));
+        assert_eq!(current.as_ref(), Some(&identity), "B 不得抢走/改写 A 的锁");
+
+        drop(live); // 删除失败（外部句柄）⇒ 登记自愈
+        drop(foreign);
+        let out = conf_set(&cfg, "Setup", "GenMonRate", "46", false).expect("句柄关闭后自愈");
+        assert!(out.wrote);
+        assert!(!lock_path.exists());
+    }
+
     /// `dry_run` 不取锁：目录树（含隐藏文件）前后逐字节一致。
     #[test]
     fn dry_run_never_touches_lock_file() {
@@ -2519,6 +2901,7 @@ note=nonce=999-222-7-other\nnonce=999-222-7-other\n";
         drop(ConfLock {
             path: lock.clone(),
             identity,
+            _process_guard: None,
         });
 
         assert!(lock.exists(), "内容含相同 nonce 子串的他锁不得被删");
