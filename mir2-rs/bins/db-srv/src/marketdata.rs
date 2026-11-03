@@ -294,7 +294,10 @@ mod tests {
         assert_eq!(first.desc[13], 0, "C# 只填 Value0..Value12");
 
         // 无匹配组 ⇒ 空（C# 同）。
-        assert!(db.market_query_items(9).await.unwrap().is_empty());
+        assert_eq!(
+            db.market_query_items(9).await.unwrap(),
+            [] as [MarketItem; 0]
+        );
 
         // 保存一行，再查第一行应变成新行（Id 递增 ⇒ 若 C# 只取第一行，会看不到新行）。
         let save = MarketItem {
@@ -317,9 +320,10 @@ mod tests {
 
         // 恒 0 / 恒空（C# 空桩）。
         assert_eq!(db.market_query_items_count(2, "first"), 0);
-        assert!(db
-            .market_search_items(2, "Market", "first", "", 1, 0)
-            .is_empty());
+        assert_eq!(
+            db.market_search_items(2, "Market", "first", "", 1, 0),
+            [] as [MarketItem; 0]
+        );
 
         // 收尾：删临时库（失败不 panic，避免掩盖上面的断言）。
         let _ = sqlx::query(&format!("DROP DATABASE {db_name}"))

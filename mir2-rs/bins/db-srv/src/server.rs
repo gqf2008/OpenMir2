@@ -415,7 +415,7 @@ mod tests {
         let msg = ServerDataMessage::from_bytes(&fixed).expect("归一化后必须能解析");
         assert_eq!(msg.kind, ServerDataType::KeepAlive);
         assert_eq!(msg.socket_id, "");
-        assert!(msg.data.is_empty());
+        assert_eq!(msg.data, [] as [u8; 0]);
     }
 
     /// C# LoginGate 心跳（worker-1 抓的形态）：`SocketId=""`、`Data=null`。
@@ -426,7 +426,7 @@ mod tests {
         )))
         .expect("归一化后必须能解析");
         assert_eq!(msg.kind, ServerDataType::KeepAlive);
-        assert!(msg.data.is_empty());
+        assert_eq!(msg.data, [] as [u8; 0]);
     }
 
     /// 正常帧一个字节都不许动（Data 帧字面量取自 `crates/protocol` 的金标准单测）。

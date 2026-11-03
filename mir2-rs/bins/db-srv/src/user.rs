@@ -208,7 +208,7 @@ mod tests {
         assert_eq!(r.hair, b"1".to_vec());
         assert_eq!(r.job, b"2".to_vec());
         assert_eq!(r.sex, b"0".to_vec());
-        assert!(r.rest.is_empty());
+        assert_eq!(r.rest, [] as [u8; 0]);
     }
 
     /// 角色列表体拼串（含 `*` 前导与字段顺序）。
@@ -222,7 +222,7 @@ mod tests {
             query_chr_body(&items),
             b"*aaa/0/1/1/0/bbb/2/1/1/0/".to_vec()
         );
-        assert!(query_chr_body(&[]).is_empty());
+        assert_eq!(query_chr_body(&[]), [] as [u8; 0]);
     }
 
     /// 下行帧形态：`#` + 16 字符头 + 体 + `!`（与 C# `SendUserSocket` 一字不差）。

@@ -307,7 +307,7 @@ mod tests {
         assert_eq!(s.get_map_index("比奇省"), 7);
         assert_eq!(s.get_map_index("2"), 0);
         assert_eq!(s.get_map_index("nope"), 0);
-        assert!(s.server_ips.is_empty());
+        assert_eq!(s.server_ips, [] as [std::string::String; 0]);
         std::fs::remove_dir_all(&d).ok();
     }
 

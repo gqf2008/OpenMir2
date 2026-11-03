@@ -580,7 +580,7 @@ mod tests {
     #[test]
     fn encode_buffer_threshold() {
         assert_eq!(encode_buffer(&[0u8; 9999]).len(), edcode::encoded_len(9999));
-        assert!(encode_buffer(&vec![0u8; 10_000]).is_empty());
+        assert_eq!(encode_buffer(&vec![0u8; 10_000]), [] as [u8; 0]);
     }
 
     /// 空业务体的 `DBR_FAIL` 信封可被解析回 `ServerRequestMessage`。
