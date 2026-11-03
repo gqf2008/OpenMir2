@@ -140,37 +140,167 @@ fn tick_runner_asserts_zero_ambiguity() {
     );
 }
 
-/// A2（F1 收口）：注册入口签名必须是**单个** `IntoSystem`，不得退回可挂
-/// `.ambiguous_with*()` / `.chain()` 的配置对象族（`IntoScheduleConfigs` /
-/// `ScheduleConfigs` / `IntoSystemConfigs`）。
-///
-/// 这是 F1 的**持久牙**：把 `add_systems` 的参数类型放宽回配置对象 ⇒ 本用例红。
-/// 类型层面的证据（传 `.ambiguous_with_all()` 直接编译失败）见 patch body 的临时
-/// `cargo check` 记录——编译失败无法写成运行时用例，故这里用签名扫描兜住回退。
+// ==================== 顺序契约源码守卫（F4：整文件扫描） ====================
+
+fn strip_comments_and_strings(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '"' {
+            // 字符串字面量：整体丢掉（含转义）
+            out.push(' ');
+            let mut escaped = false;
+            for sc in chars.by_ref() {
+                if escaped {
+                    escaped = false;
+                } else if sc == '\\' {
+                    escaped = true;
+                } else if sc == '"' {
+                    break;
+                } else if sc == '\n' {
+                    out.push('\n');
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'/') {
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut prev = '\0';
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                }
+                if prev == '*' && sc == '/' {
+                    break;
+                }
+                prev = sc;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// 契约禁止出现的标识符：配置对象族（可挂 `.ambiguous_with*()` / `.chain()`）
+/// 与歧义豁免入口。扫描域是**整个 tick.rs 的代码**（剥注释/字符串，但**保留 `use` 行**），
+/// 这样「新增第二个接受配置对象的方法」与「`use ...IntoScheduleConfigs as Cfg` 别名」都会命中。
+const BANNED_CONTRACT_TOKENS: [&str; 5] = [
+    "IntoScheduleConfigs",
+    "ScheduleConfigs",
+    "IntoSystemConfigs",
+    "ambiguous_with",
+    "ignore_ambiguity",
+];
+
+fn tick_rs_source() -> String {
+    std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tick.rs"))
+        .unwrap()
+}
+
+/// 取 `pub fn add_systems` 的签名区间；用**词边界**匹配，避免 F5 的
+/// `add_systems_unchecked` 前缀误匹配。
+fn narrow_add_systems_signature(code: &str) -> Option<&str> {
+    let name = "pub fn add_systems";
+    let mut from = 0usize;
+    while let Some(rel) = code[from..].find(name) {
+        let start = from + rel;
+        let after = code.as_bytes().get(start + name.len()).copied();
+        // 名字后面不能紧跟标识符字符（否则是 add_systems_unchecked 之类的另一入口）。
+        let boundary = !matches!(after, Some(b) if b.is_ascii_alphanumeric() || b == b'_');
+        if boundary {
+            let rest = &code[start..];
+            let end = rest.find('{').unwrap_or(rest.len());
+            return Some(&rest[..end]);
+        }
+        from = start + name.len();
+    }
+    None
+}
+
+/// 返回契约违规项（空 = 绿色）。正例与三条反例共用同一判定。
+fn contract_violations(src: &str) -> Vec<String> {
+    let code = strip_comments_and_strings(src);
+    let mut violations = Vec::new();
+    for token in BANNED_CONTRACT_TOKENS {
+        if code.contains(token) {
+            violations.push(format!("出现被禁 token `{token}`"));
+        }
+    }
+    match narrow_add_systems_signature(&code) {
+        Some(sig) if sig.contains("impl IntoSystem<(), (), M>") => {}
+        Some(sig) => violations.push(format!(
+            "add_systems 必须是单系统签名（impl IntoSystem<(), (), M>），实际: {sig}"
+        )),
+        None => violations.push("缺少 `pub fn add_systems` 入口".to_string()),
+    }
+    violations
+}
+
+/// 正例：真实 tick.rs 必须零违规（整文件、剥注释后扫描）。
 #[test]
 fn contract_rejects_schedule_config_escape_hatch() {
-    let src = std::fs::read_to_string(
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tick.rs"),
-    )
-    .unwrap();
-    let start = src
-        .find("pub fn add_systems")
-        .expect("tick.rs 必须定义 add_systems");
-    let tail = &src[start..];
-    let sig_end = tail.find('{').expect("add_systems 必须有函数体");
-    let sig = &tail[..sig_end];
+    let violations = contract_violations(&tick_rs_source());
+    assert!(
+        violations.is_empty(),
+        "tick.rs 违反顺序契约: {violations:?}"
+    );
+}
+
+/// 反例①（F4 绕过①）：在原入口之后新增第二个接受配置对象的方法 ⇒ 守卫必须红。
+#[test]
+fn redcheck_second_config_object_method_is_rejected() {
+    let mut src = tick_rs_source();
+    src.push_str("pub fn add_systems_unchecked<M>(&mut self, systems: impl IntoScheduleConfigs<ScheduleSystem, M>) -> &mut Self { self }");
+    let violations = contract_violations(&src);
+    assert!(
+        violations.iter().any(|v| v.contains("IntoScheduleConfigs")),
+        "新增的配置对象方法未被守卫发现: {violations:?}"
+    );
+}
+
+/// 反例②（F4 绕过②）：别名 `use ...IntoScheduleConfigs as Cfg` + 注释里写合法签名文字。
+/// 剥注释后别名原始名仍在 ⇒ 守卫必须红；注释里的合法签名字样不得让它变绿。
+#[test]
+fn redcheck_alias_and_comment_bypass_is_rejected() {
+    let src = "use bevy_ecs::schedule::IntoScheduleConfigs as Cfg;
+// impl IntoSystem<(), (), M>
+pub fn add_systems<M>(&mut self, systems: impl Cfg<ScheduleSystem, M>) -> &mut Self { self }";
+    let violations = contract_violations(src);
+    assert!(
+        violations.iter().any(|v| v.contains("IntoScheduleConfigs")),
+        "别名里的原始类型名未被守卫发现: {violations:?}"
+    );
+}
+
+/// 反例③（误报检查）：正常代码必须绿；注释/字符串里的禁用 token 不得误报。
+#[test]
+fn redcheck_clean_source_passes_and_comments_do_not_false_positive() {
+    let clean = "// IntoScheduleConfigs ambiguous_with ignore_ambiguity in comment
+pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }";
+    let violations = contract_violations(clean);
+    assert!(violations.is_empty(), "正常代码/注释被误判: {violations:?}");
+}
+
+/// F5 回归：`add_systems_unchecked` 不得被当成 `add_systems` 入口的前缀匹配。
+#[test]
+fn redcheck_prefix_named_method_is_not_the_entry() {
+    let only_unchecked = "pub fn add_systems_unchecked<M>(&mut self) -> &mut Self { self }";
+    assert!(
+        narrow_add_systems_signature(&strip_comments_and_strings(only_unchecked)).is_none(),
+        "add_systems_unchecked 不得被当成 add_systems 入口"
+    );
+    let unchecked_first = "pub fn add_systems_unchecked<M>(&mut self) -> &mut Self { self }
+pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }";
+    let code = strip_comments_and_strings(unchecked_first);
+    let sig = narrow_add_systems_signature(&code).expect("应找到真正的 add_systems");
     assert!(
         sig.contains("impl IntoSystem<(), (), M>"),
-        "add_systems 必须只接受单个系统（impl IntoSystem<(), (), M>），实际签名: {sig}"
+        "误取了前缀同名方法: {sig}"
     );
-    for banned in [
-        "IntoScheduleConfigs",
-        "ScheduleConfigs",
-        "IntoSystemConfigs",
-    ] {
-        assert!(
-            !sig.contains(banned),
-            "add_systems 不得接受 {banned} 配置对象（否则 .ambiguous_with*() 可绕过零歧义检测）: {sig}"
-        );
-    }
 }
