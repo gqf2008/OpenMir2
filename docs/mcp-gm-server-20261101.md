@@ -1,14 +1,17 @@
-# mir2-mcp：本地 MCP（rmcp/stdio）GM 目录、开区配置与 GM 执行（slice-1 + slice-2）
+# mir2-mcp：本地 MCP（rmcp/stdio；可选 Streamable HTTP）GM 目录、开区配置与 GM 执行（slice-1 + slice-2）
 
-- 卡：`openmir2-mcp-gm-conf`（tier=L，slice-1）、`openmir2-mcp-gm-execute`（tier=R，slice-2，T-273）
+- 卡：`openmir2-mcp-gm-conf`（tier=L，slice-1）、`openmir2-mcp-gm-execute`（tier=R，slice-2，T-273）、
+  `openmir2-mcp-streamable-http`（tier=L，slice-3：opt-in HTTP 传输）
 - 基线：`walgit/master` `13112da07`（slice-1）→ `dcea680f9`（slice-2 起点）
-- crate：`mir2-rs/bins/mir2-mcp`（package `mir2-mcp`，依赖 `rmcp = "3.8.0"`，stdio 传输）；
+- crate：`mir2-rs/bins/mir2-mcp`（package `mir2-mcp`，依赖 `rmcp = "3.8.0"`；
+  传输 = **stdio（缺省）** 或 **Streamable HTTP（opt-in）**）；
   slice-2 同时改 `mir2-rs/bins/game-svr/src/{config.rs,lib.rs}`（`[Admin]` 通道）
 
 ## 1. 一句话
 
 `mir2-mcp` 把**GM 命令目录**（185 条，只读）与**开区配置**（`M2GameSvr/Server.conf`，只读 + 白名单写）
-暴露成 6 个 MCP 工具，走**纯本地 stdio**（不监听任何端口）。`gm_execute` 在 slice-2 起经
+暴露成 6 个 MCP 工具。缺省走**纯本地 stdio**（不监听任何端口）；`--transport http` 是 **opt-in** 的
+Streamable HTTP（只监听回环、必须配 Bearer token，缺省关闭）。`gm_execute` 在 slice-2 起经
 **game-svr 本机 admin 通道**（`[Admin] AdminPort`，**缺省 0 = 关闭**）执行 GM 命令：命令解析/执行
 完全在 game-svr（复用 `gmcmd::execute` + 既有 GM 收口），MCP 只负责投递与结构化透传。
 
@@ -42,6 +45,51 @@ claude mcp add mir2 -- E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/deb
 ```
 
 `--help` / `--version` 不启动传输，直接打印退出。
+
+### 传输：stdio（缺省）与 Streamable HTTP（opt-in）
+
+| 传输 | 开启方式 | 监听 | 鉴权 | 适用 |
+|---|---|---|---|---|
+| **stdio**（缺省，行为与既有版本一字不变） | 不传 `--transport`（或 `--transport stdio`） | **不监听任何端口** | 无（进程 stdio 即信任边界） | 本机 agent 拉起（`claude mcp add` 等） |
+| **Streamable HTTP**（opt-in） | `--transport http` | **只监听回环**（`127.0.0.0/8` 或 `::1`） | **必须** `Authorization: Bearer <token>` | 需要长驻/多客户端连接的本地场景 |
+
+- **fail-closed**：HTTP 模式缺 token、或 bind 不是回环 IP 字面量 ⇒ **启动前拒绝**（rc=2，stderr 点名原因，
+  **不创建监听**）。
+- **`--bind <ip:port>`**：HTTP 模式缺省 `127.0.0.1:7950`。只接受 **IP 字面量**并要求 `IpAddr::is_loopback()`
+  （对齐 game-svr `[Admin] AdminBind` 的口径）；`0.0.0.0`、局域网/公网 IP、主机名（含 `localhost`）一律拒绝。
+- **token 来源**：`--token-file <path>`（读文件并去首尾空白，**优先**）或 env `MIR2_MCP_HTTP_TOKEN`。
+  token **不打印、不进日志、不进文档示例**；请求缺失/错误 token ⇒ `401` + 空响应体，且**不触达任何工具处理器**
+  （常量时间比较）。
+- **端口**：缺省 `7950`，**opt-in 且缺省关闭**，不计入 `E:/MirServer` 十端口基线，也不改 `port-status.ps1`。
+- **Host/Origin**：保留 rmcp 缺省 `allowed_hosts`（`localhost`/`127.0.0.1`/`::1`），并启用
+  `enforce_origin_validation()`（空 Origin 白名单 ⇒ 带 `Origin` 头的请求被拒；CLI/MCP 客户端不发 Origin）。
+- **工具语义零改动**：同一 root/registry、同一参数下，两种传输返回的 `structuredContent` canonical JSON
+  逐字节相等（端到端测试比较 sha256）。
+
+### HTTP 模式自检
+
+```powershell
+# 1) 启动（token 从文件读，避免进 shell 历史/命令行）。文件内容即 token，权限自管。
+E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/debug/mir2-mcp.exe `
+    --root E:/MirServer --transport http --bind 127.0.0.1:7950 --token-file <token 文件路径>
+
+# 2) 监听面：必须只有 127.0.0.1:7950（LocalAddress 不能是 0.0.0.0 / ::）
+Get-NetTCPConnection -State Listen -LocalPort 7950 | Format-Table LocalAddress,LocalPort,OwningProcess
+
+# 3) 无 token ⇒ 期望 401（响应体为空）
+curl.exe -s -o NUL -w "%{http_code}`n" -X POST http://127.0.0.1:7950/mcp `
+    -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" `
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# 4) 带 token ⇒ 期望 200（initialize 需完整参数；此处仅示意鉴权头）
+curl.exe -s -o NUL -w "%{http_code}`n" -X POST http://127.0.0.1:7950/mcp `
+    -H "Authorization: Bearer <token>" -H "Content-Type: application/json" `
+    -H "Accept: application/json, text/event-stream" `
+    -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+```
+
+> 拒绝启动的负例：`--transport http` 不带 token、或 `--bind 0.0.0.0:7950`、或 `--bind localhost:7950`
+> ⇒ rc=2 且 `Get-NetTCPConnection -State Listen -LocalPort 7950` 为空。
 
 ### root 解析
 
@@ -131,7 +179,9 @@ claude mcp add mir2 -- E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/deb
 
 ## 6. 权限面
 
-- **MCP 传输仍是纯本地 stdio**：不监听端口；唯一「外连」是 `gm_execute` 向
+- **MCP 传输缺省是纯本地 stdio**（不监听端口）；`--transport http` 是 opt-in 的回环 HTTP 面
+  （`127.0.0.1:7950` 缺省、必须 Bearer token、非回环/缺 token 拒绝启动，见 §3「传输」）。
+  两种传输下工具语义一致；唯一「外连」是 `gm_execute` 向
   **本机回环** admin 通道投一条命令（`MIR2_MCP_ADMIN_ADDR` 或 `127.0.0.1:<AdminPort>`）；
   地址解析结果必须是回环 IP——客户端在**连接前**校验，非回环（如 `MIR2_MCP_ADMIN_ADDR=10.0.0.5:7946`）
   ⇒ 结构化 `admin_addr_not_loopback`，不发起连接（客户端侧纵深防御；服务端 accept 层同样只收回环）；
@@ -226,13 +276,14 @@ cargo test -p game-svr --lib admin_channel_tests
 cargo test -p game-svr --lib config::tests::admin_section_defaults_off_and_rejects_non_loopback
 ```
 
-- **mir2-mcp 单元（29 条）**：目录 185 条 / 176 implemented / 9 unimplemented / perm0=5；目录条数 =
+- **mir2-mcp 单元（40 条）**：目录 185 条 / 176 implemented / 9 unimplemented / perm0=5；目录条数 =
   registry `table_total`；`gm_help` 取到 oracle 描述（`Tingwa`→`TingCommand`、`清理垃圾`→`清理包裹物品`）；
   `conf_get` 大小写/注释/重复段；`conf_set` 往返（before/after sha、备份逐字节、回读、备份恢复 sha
   相等）；`dry_run` 零写；非白名单/非活键/非法值/缺键拒绝且零写；同值 no-op；无 `.tmp` 残留；
   CLI 参数/`--help`；`[Admin] AdminPort` 读侧（缺段/空值 ⇒ 0、显式端口、越界报错）；
   admin 客户端连不上/地址非法 ⇒ 结构化错误；`MIR2_MCP_ADMIN_ADDR` 非回环 ⇒
-  `admin_addr_not_loopback`（连接前拒绝）。
+  `admin_addr_not_loopback`（连接前拒绝）；传输层单测：`--transport` 缺省 stdio、缺/空 token 拒绝、
+  非回环/主机名 bind 拒绝、回环字面量放行、`--token-file` 压过 env、Bearer 头/常量时间比较。
 - **mir2-mcp 端到端（5 条，真起子进程走 stdio JSON-RPC）**：
   1. 主链路：`initialize` → `tools/list`（6 个工具）→ `gm_list`（`catalog_total=table_total=185`）→
      `conf_get` → `gm_help` → `conf_set dry_run`（零写）→ `conf_set` 真写（备份/回读 25）→
@@ -242,6 +293,15 @@ cargo test -p game-svr --lib config::tests::admin_section_defaults_off_and_rejec
      响应 `{ok,frames,note}` 原样透传。
   4. 失败面：缺 `chr` ⇒ `missing_chr`；非 `@` ⇒ `invalid_command`；通道连不上 ⇒ `admin_connect_failed`。
   5. 非回环：`MIR2_MCP_ADMIN_ADDR=192.0.2.1:7946` ⇒ `admin_addr_not_loopback`（连接前拒绝）。
+- **mir2-mcp HTTP 端到端（6 条，真起子进程 + 手写 HTTP/1.0 客户端）**：
+  1. 缺 token / 空 token 文件 ⇒ rc=2、stderr 点名 token、端口可重新监听（未创建监听）；
+  2. 非回环 bind（`0.0.0.0`、`localhost`）⇒ rc=2、stderr 点名原因；
+  3. **鉴权零触达**：带有效 session 的无 token/错 token `tools/call` ⇒ 401 + 空体，且进程级计数器日志
+     证明鉴权通过后的首次工具调用仍是 `#1`（变异「先触达内层再回 401」会让本用例红）；
+  4. **等价**：同参数 `gm_list`/`conf_get` 在 HTTP 与 stdio 下的 `structuredContent` canonical JSON
+     与 sha256 逐字节相等；
+  5. `--help` 反映两种传输与「stdio 为缺省」；
+  6. A6 的机器可判部分：HTTP 服务可经 `127.0.0.1:<port>` 访问（`LocalAddress` 真机证据在交付 patch body）。
 - **game-svr（9 条）**：`@时间` ⇒ `ok` + 文本 + 1 条 `SM_SYSMESSAGE(100)`；`@LoadAdmin`
   （`PermissionMin=10`）经抬权成功且**执行后 `permission` 仍为 0**；未知角色/未知命令/非 `@`
   ⇒ 结构化错误；`127.0.0.1:0` 传输往返（真实 `run_admin_listener` + 同一执行收口）；
