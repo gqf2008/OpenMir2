@@ -304,21 +304,29 @@ impl Mir2Mcp {
             open_world_hint = false
         )
     )]
-    fn conf_set(&self, Parameters(req): Parameters<ConfSetReq>) -> CallToolResult {
+    async fn conf_set(&self, Parameters(req): Parameters<ConfSetReq>) -> CallToolResult {
         trace_tool("conf_set");
-        match conf::conf_set(
-            &self.config,
-            &req.section,
-            &req.key,
-            &req.value,
-            req.dry_run,
-        ) {
-            Ok(out) => {
+        // F3：conf_set 内含跨进程锁等待（有界 sleep）与进程探测，绝不能在 tokio worker 上
+        // 同步执行——并发 conf_set 数接近 worker 数时会把其它会话（如 gm_list）饿住到秒级。
+        // 整段操作移入 blocking 池：等待/探测阻塞的是 blocking 线程，runtime worker 始终可调度。
+        let config = self.config.clone();
+        let joined = tokio::task::spawn_blocking(move || {
+            conf::conf_set(&config, &req.section, &req.key, &req.value, req.dry_run)
+        })
+        .await;
+        match joined {
+            Ok(Ok(out)) => {
                 let mut value = serde_json::to_value(out).unwrap_or(Value::Null);
                 value["ok"] = true.into();
                 CallToolResult::structured(value)
             }
-            Err(e) => self.conf_error(e),
+            Ok(Err(e)) => self.conf_error(e),
+            Err(error) => CallToolResult::structured_error(json!({
+                "ok": false,
+                "code": "internal_error",
+                "message": format!("conf_set 阻塞任务异常结束：{error}"),
+                "wrote": false,
+            })),
         }
     }
 
@@ -443,4 +451,133 @@ fn error_json(code: &str, message: &str) -> Value {
         "message": message,
         "wrote": false,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+    struct TempRoot {
+        path: PathBuf,
+    }
+
+    impl TempRoot {
+        fn new(tag: &str) -> Self {
+            let path = std::env::temp_dir()
+                .join(format!("mir2-mcp-server-test-{tag}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&path);
+            fs::create_dir_all(path.join("M2GameSvr")).expect("mkdir");
+            fs::write(
+                path.join("M2GameSvr").join("Server.conf"),
+                b"\xEF\xBB\xBF[Setup]\r\nMonsterPowerRate=10\r\nGenMonRate=10\r\n",
+            )
+            .expect("写夹具");
+            Self { path }
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+
+    fn now_ms() -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+    }
+
+    /// F3：N = available_parallelism 个并发 `conf_set`（全部阻塞在跨进程锁等待）时，
+    /// 另一会话的 `gm_list` 不得出现秒级饥饿。
+    ///
+    /// 修复前（同步处理器直接占用 tokio worker）：N 个 conf_set 占满全部 worker，gm_list
+    /// 排队到某个 conf_set 5s 超时后才执行（实测秒级）。修复后（spawn_blocking）：worker
+    /// 不被阻塞，gm_list 为毫秒级。阈值 1000ms 区分两态（不在秒级）。
+    #[test]
+    fn concurrent_conf_set_does_not_starve_other_tool_calls() {
+        let workers = std::thread::available_parallelism()
+            .map_or(4, std::num::NonZeroUsize::get)
+            .clamp(2, 16);
+        let root = TempRoot::new("starvation");
+        // 活锁（pid = 本进程、年龄未超 stale）⇒ 每个 conf_set 都等待到默认 5s timeout。
+        fs::write(
+            root.path.join("M2GameSvr").join("Server.conf.lock"),
+            format!(
+                "pid={}\nacq_ms={}\nnonce=server-test-hold\n",
+                std::process::id(),
+                now_ms()
+            ),
+        )
+        .expect("写活锁");
+
+        let config = AppConfig {
+            root: root.path.clone(),
+            registry_path: None,
+            admin_addr: None,
+        };
+        let mcp = Arc::new(Mir2Mcp::new(config));
+        let rt = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(workers)
+            .enable_all()
+            .build()
+            .expect("multi-thread runtime");
+
+        let started = Arc::new(AtomicUsize::new(0));
+        let mut handles = Vec::with_capacity(workers);
+        for index in 0..workers {
+            let mcp = Arc::clone(&mcp);
+            let started = Arc::clone(&started);
+            handles.push(rt.handle().spawn(async move {
+                started.fetch_add(1, Ordering::SeqCst);
+                mcp.conf_set(Parameters(ConfSetReq {
+                    section: "Setup".to_string(),
+                    key: "GenMonRate".to_string(),
+                    value: (100 + index).to_string(),
+                    dry_run: false,
+                }))
+                .await
+            }));
+        }
+
+        // 不用 tokio 定时器同步：N 个 worker 全被阻塞时定时器也可能不推进。
+        // 在外部线程等计数器到 N，再留 100ms 让它们真正进入锁等待。
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while started.load(Ordering::SeqCst) < workers {
+            assert!(Instant::now() < deadline, "N 个 conf_set 会话未全部启动");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+
+        // 「另一会话」：队列时刻在外部取，任务一旦被 worker 调度立即测 end-to-end 延迟。
+        let queued_at = Instant::now();
+        let probe_mcp = Arc::clone(&mcp);
+        let probe = rt.handle().spawn(async move {
+            let out = probe_mcp.gm_list(Parameters(NoArgs {}));
+            (queued_at.elapsed(), out.is_error == Some(false))
+        });
+        let (gm_latency, gm_ok) = rt.block_on(probe).expect("gm_list task");
+
+        // 收尾：等待 N 个 conf_set 超时返回（默认 5s），并确认它们是有界失败而非 panic。
+        for handle in handles {
+            let out = rt.block_on(handle).expect("conf_set task");
+            assert_eq!(
+                out.is_error,
+                Some(true),
+                "活锁场景 conf_set 必须是结构化错误"
+            );
+        }
+
+        eprintln!(
+            "F3: workers={workers}, gm_list latency under saturated conf_set = {gm_latency:?}"
+        );
+        assert!(gm_ok, "gm_list 必须成功");
+        assert!(
+            gm_latency < Duration::from_millis(1000),
+            "N=worker 并发 conf_set 时 gm_list 被饿住：{gm_latency:?}（基线应为毫秒级）"
+        );
+    }
 }

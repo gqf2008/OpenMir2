@@ -6,6 +6,11 @@
 //!
 //! 用例只依赖公开行为（工具回包 + 盘上文件），不读 `conf.rs` 内部状态；并发窗口用生产代码里
 //! 文档化的测试接缝 `MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS` 放大（未设置时为空操作）。
+//!
+//! 依赖 `MIR2_MCP_CONF_TEST_*` 注入接缝的用例标了 `#[cfg(debug_assertions)]`：A9 要求这些
+//! 接缝在 release 里完全无效，因此同一批用例在 release profile 下按设计不编译；release 的
+//! 对应覆盖是 `conf.rs` 单测 `test_seams_are_inert_in_release` 与不依赖注入的 e2e（活锁超时 /
+//! 死 pid 回收 / 宽限边界 / 拒绝路径零写）。
 
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -475,6 +480,7 @@ fn live_holder_lock_is_never_stolen_even_if_old() {
 // ---------------------------------------------------------------------------
 
 /// 在目录里按「名字含 `contains` 且以 `suffix` 结尾」找第一个文件。
+#[cfg(debug_assertions)]
 fn find_residue(dir: &Path, contains: &str, suffix: &str) -> Option<PathBuf> {
     std::fs::read_dir(dir)
         .ok()?
@@ -492,6 +498,7 @@ fn find_residue(dir: &Path, contains: &str, suffix: &str) -> Option<PathBuf> {
 ///
 /// 锁里的 pid 已死、年龄远超阈值；唯一让接管失效的是「探测不可用」。把 Unknown 改判成
 /// Dead 会让本用例变红（变异自证见 patch body）。
+#[cfg(debug_assertions)]
 #[test]
 fn unknown_process_probe_never_takes_over_stale_lock() {
     let root = TempRoot::new("probe-unknown");
@@ -535,6 +542,7 @@ fn unknown_process_probe_never_takes_over_stale_lock() {
 }
 
 /// A2：pid 仍活但**启动时刻与锁里记录的不一致** ⇒ 判定 pid 复用（死痕迹），必须可回收。
+#[cfg(debug_assertions)]
 #[test]
 fn reused_pid_lock_is_reclaimed_when_start_time_differs() {
     let root = TempRoot::new("pid-reuse");
@@ -574,6 +582,7 @@ fn reused_pid_lock_is_reclaimed_when_start_time_differs() {
 }
 
 /// A2 负例：pid + 启动时刻都匹配 = 原持有者仍活 ⇒ 即使超龄也不得抢。
+#[cfg(debug_assertions)]
 #[test]
 fn live_holder_with_matching_start_time_is_not_stolen() {
     let root = TempRoot::new("pid-live-match");
@@ -621,6 +630,7 @@ fn live_holder_with_matching_start_time_is_not_stolen() {
 
 /// A3：崩溃残留清理——死痕迹（pid 死 / pid 复用）的 `.tmp`、`.stale.*` 在下次写成功时
 /// 被清掉；**活进程持有**的 `.tmp` 不得删（持有者退出后下一轮再清）。
+#[cfg(debug_assertions)]
 #[test]
 fn crash_residue_is_cleaned_but_live_holder_residue_is_kept() {
     let root = TempRoot::new("residue");
@@ -654,7 +664,7 @@ fn crash_residue_is_cleaned_but_live_holder_residue_is_kept() {
         std::process::id()
     ));
     std::fs::write(&reused_tmp, b"junk").expect("伪造 pid 复用 .tmp");
-    let dead_stale = conf_dir.join(format!(".{conf_name}.stale.{dead}.1.{old}.0"));
+    let dead_stale = conf_dir.join(format!(".{conf_name}.lock.stale.{dead}.1.{old}.0"));
     // 内容也写 `start=1`：即使 pid 被后续进程复用，启动时刻不匹配仍判死痕迹。
     std::fs::write(
         &dead_stale,
@@ -714,9 +724,21 @@ fn concurrent_stale_takeover_leaves_only_target_file() {
     let root = TempRoot::new("takeover-rounds");
     const ROUNDS: usize = 5;
     const WRITERS: usize = 3;
+    // F7：预算按「timeout + 探测上界 × 轮数」推导，不再写死 8s。
+    // 每个 writer 的 acquire 最坏 = timeout + 一次探测上界；3 个 writer 可能各探测一次，
+    // 外加 2 个探测上界给「winner 释放后重新接管」，再留 20s 满载余量：
+    // 默认探测上界 2000ms ⇒ 2000 × (WRITERS + 2) + 20000 = 30000ms。
+    // （reviewer 在 12 个 CPU burner 下曾见 waited_ms=8421，旧 8000ms 预算被正常满载
+    // 探测/排队打破；30s ≈ 3.5× 该观测值，仍能在真实死锁时于一个有界时间内失败。）
+    const PROBE_TIMEOUT_MS: u64 = 2_000;
+    const LOCK_TIMEOUT_MS: u64 = PROBE_TIMEOUT_MS * (WRITERS as u64 + 2) + 20_000;
     let env = [
-        ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "8000".to_string()),
+        ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", LOCK_TIMEOUT_MS.to_string()),
         ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
+        (
+            "MIR2_MCP_CONF_PROBE_TIMEOUT_MS",
+            PROBE_TIMEOUT_MS.to_string(),
+        ),
     ];
 
     for round in 0..ROUNDS {
@@ -774,11 +796,43 @@ fn concurrent_stale_takeover_leaves_only_target_file() {
     );
 }
 
-/// ④ 三路竞态：判定「死锁」之后、rename 之前，原位置被**新锁**替换 ⇒ 搬走的是新锁，
-/// 必须放回原处：不得删活锁，也不得留下 `.stale.*`。
+/// 等待 marker 文件里出现某一行（按事件同步，而不是固定 sleep 对齐）。
+#[cfg(debug_assertions)]
+fn wait_for_marker(path: &Path, needle: &str, timeout: Duration) {
+    let deadline = Instant::now() + timeout;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(path) {
+            if text.lines().any(|line| line.trim() == needle) {
+                return;
+            }
+        }
+        if Instant::now() >= deadline {
+            let seen = std::fs::read_to_string(path).unwrap_or_default();
+            panic!(
+                "marker {} 未在 {timeout:?} 内出现 {needle:?}；已见：{seen:?}",
+                path.display()
+            );
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[cfg(debug_assertions)]
+fn marker_text(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap_or_default()
+}
+
+/// ④ 三路竞态（放回成功路径）：判定「死锁」之后、rename 之前，原位置被**新锁**替换 ⇒
+/// 搬走的是新锁，必须放回原处：不得删活锁，也不得留下 `.stale.*`。
+///
+/// A10 哨兵：必须看到 `hold-start`（接管者进入 rename 前窗口）与 `putback-restored`
+/// （确实走到了「搬走替换锁 → 放回」分支）；任一个没出现，用例直接失败。
+#[cfg(debug_assertions)]
 #[test]
 fn takeover_race_restores_replacement_lock_without_residue() {
     let root = TempRoot::new("takeover-race");
+    let marker = root.path.join("race-marker.log");
+    let marker_arg = marker.display().to_string();
     let dead = dead_pid();
     let old = now_ms().saturating_sub(10_000);
     std::fs::write(
@@ -790,11 +844,15 @@ fn takeover_race_restores_replacement_lock_without_residue() {
     let mut proc = McpProc::start(
         &root.path,
         &[
-            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "2000".to_string()),
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "3000".to_string()),
             ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
             (
                 "MIR2_MCP_CONF_TEST_HOLD_BEFORE_TAKEOVER_RENAME_MS",
                 "500".to_string(),
+            ),
+            (
+                "MIR2_MCP_CONF_TEST_TAKEOVER_RACE_MARKER",
+                marker_arg.clone(),
             ),
         ],
     );
@@ -809,15 +867,18 @@ fn takeover_race_restores_replacement_lock_without_residue() {
         response
     });
 
-    // 子进程已读完死锁、进入接缝睡眠；此时把原位置的锁换成「活锁」。
-    std::thread::sleep(Duration::from_millis(250));
-    let live_body = format!(
+    // 哨兵①：子进程已读完死锁、进入接缝睡眠；此刻把原位置的锁换成「活锁」。
+    wait_for_marker(&marker, "hold-start", Duration::from_secs(15));
+    let live_bytes = format!(
         "pid={}\nacq_ms={}\nnonce=live-replacement\n",
         std::process::id(),
         now_ms()
-    );
-    let live_bytes = live_body.into_bytes();
+    )
+    .into_bytes();
     std::fs::write(root.lock_path(), &live_bytes).expect("写活锁");
+
+    // 哨兵②：确实走到了「搬走替换锁 → 放回」分支（没走到就失败）。
+    wait_for_marker(&marker, "putback-restored", Duration::from_secs(15));
 
     let response = handle.join().expect("conf_set thread");
     assert_eq!(
@@ -836,6 +897,382 @@ fn takeover_race_restores_replacement_lock_without_residue() {
         .filter(|name| name.contains(".stale"))
         .collect();
     assert!(stale.is_empty(), "三路竞态不得留下 .stale.*：{stale:?}");
+}
+
+/// A1/A10：放回时 canonical 已被第三方活锁占用 ⇒ **必须放弃放回**，绝不 rename 覆盖。
+/// 哨兵 `putback-abandoned` 证明走的是「canonical 被占」分支。
+#[cfg(debug_assertions)]
+#[test]
+fn takeover_race_never_overwrites_third_party_lock_on_putback() {
+    let root = TempRoot::new("takeover-race-abandon");
+    let marker = root.path.join("race-marker.log");
+    let marker_arg = marker.display().to_string();
+    let dead = dead_pid();
+    let old = now_ms().saturating_sub(10_000);
+    std::fs::write(
+        root.lock_path(),
+        format!("pid={dead}\nacq_ms={old}\nstart=1\nnonce=dead-race2\n"),
+    )
+    .expect("写死锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "3000".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
+            (
+                "MIR2_MCP_CONF_TEST_HOLD_BEFORE_TAKEOVER_RENAME_MS",
+                "400".to_string(),
+            ),
+            (
+                "MIR2_MCP_CONF_TEST_HOLD_BEFORE_PUTBACK_MS",
+                "1200".to_string(),
+            ),
+            (
+                "MIR2_MCP_CONF_TEST_TAKEOVER_RACE_MARKER",
+                marker_arg.clone(),
+            ),
+        ],
+    );
+    proc.initialize();
+
+    let handle = std::thread::spawn(move || {
+        let response = proc.call_tool(
+            "conf_set",
+            json!({"section": "Setup", "key": "GenMonRate", "value": "75"}),
+        );
+        proc.shutdown();
+        response
+    });
+
+    wait_for_marker(&marker, "hold-start", Duration::from_secs(15));
+    let replacement = format!(
+        "pid={}\nacq_ms={}\nnonce=replacement-live\n",
+        std::process::id(),
+        now_ms()
+    )
+    .into_bytes();
+    std::fs::write(root.lock_path(), &replacement).expect("写替换活锁");
+
+    // 接管者搬走替换锁后进入 putback 窗口；此时第三人抢占 canonical。
+    wait_for_marker(&marker, "putback", Duration::from_secs(15));
+    let third = format!(
+        "pid={}\nacq_ms={}\nnonce=third-party-live\n",
+        std::process::id(),
+        now_ms()
+    )
+    .into_bytes();
+    std::fs::write(root.lock_path(), &third).expect("写第三方活锁");
+    wait_for_marker(&marker, "putback-abandoned", Duration::from_secs(15));
+
+    let response = handle.join().expect("conf_set thread");
+    assert_eq!(
+        structured(&response)["code"],
+        "conf_lock_timeout",
+        "canonical 被占时不得覆盖，最终超时：{response}"
+    );
+    assert_eq!(
+        std::fs::read(root.lock_path()).expect("读锁"),
+        third,
+        "放回绝不得覆盖 canonical 上的第三方活锁"
+    );
+    let text = marker_text(&marker);
+    assert!(
+        text.lines().any(|line| line.trim() == "putback-abandoned"),
+        "必须走到「canonical 被占 ⇒ 放弃放回」分支：{text:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A2：空锁宽限 / A5：探测缓存 / A7：拒绝路径零写 / A8：delete-pending 重试
+// ---------------------------------------------------------------------------
+
+/// A2：0 字节锁在宽限内不得被抢（可能是正在写元数据的活锁）。
+#[test]
+fn empty_lock_is_not_stolen_within_grace() {
+    let root = TempRoot::new("empty-grace");
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "400".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "50".to_string()),
+            // F6：宽限必须远大于「进程启动 + handler 排队」延迟。本用例只断言「宽限内不抢」，
+            // 不让满载下的启动抖动把空锁年龄推过宽限（reviewer 曾在 release 满载下看到
+            // 启动 >2000ms ⇒ 空锁按设计被回收 ⇒ ok=true，而非 conf_lock_timeout）。
+            ("MIR2_MCP_CONF_LOCK_EMPTY_GRACE_MS", "600000".to_string()),
+        ],
+    );
+    proc.initialize();
+    // F6：initialize 之后再写 0 字节锁，保证被测时 age≈0（即使 handler 排队，也远小于
+    // 600000ms 宽限）；400ms timeout 断言不受宽限值影响。
+    let lock = root.lock_path();
+    std::fs::write(&lock, b"").expect("写空锁");
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "91"}),
+    );
+    assert_eq!(
+        structured(&response)["code"],
+        "conf_lock_timeout",
+        "宽限内不得接管空锁：{response}"
+    );
+    assert_eq!(
+        std::fs::read(&lock).expect("读锁"),
+        b"",
+        "宽限内空锁必须原样保留"
+    );
+    proc.shutdown();
+}
+
+/// A2：0 字节锁超过短宽限 ⇒ 判为崩溃残留，后续 conf_set 必须能恢复。
+#[test]
+fn empty_lock_is_reclaimed_after_grace() {
+    let root = TempRoot::new("empty-reclaim");
+    let lock = root.lock_path();
+    std::fs::write(&lock, b"").expect("写空锁");
+    std::thread::sleep(Duration::from_millis(400));
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "4000".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "50".to_string()),
+            ("MIR2_MCP_CONF_LOCK_EMPTY_GRACE_MS", "150".to_string()),
+        ],
+    );
+    proc.initialize();
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "92"}),
+    );
+    let body = structured(&response);
+    assert_eq!(body["ok"], true, "超龄空锁必须可回收：{response}");
+    assert_eq!(body["wrote"], true, "{response}");
+    assert_eq!(body["readback_value"], "92", "{response}");
+    assert!(!lock.exists(), "回收后锁文件应被正常释放");
+    proc.shutdown();
+}
+
+/// A5：等待循环里同一 pid 只探测一次（缓存），且 waited_ms 不超过 timeout + 一次探测上界。
+#[cfg(debug_assertions)]
+#[test]
+fn probe_results_are_cached_during_lock_wait() {
+    let root = TempRoot::new("probe-cache");
+    let log = root.path.join("probe.log");
+    let lock = root.lock_path();
+    // 活持有者 + 超龄：每轮都会进入残留判定，但探测应只发生一次。
+    std::fs::write(
+        &lock,
+        lock_body(std::process::id(), now_ms().saturating_sub(60_000)),
+    )
+    .expect("写活锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "600".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
+            ("MIR2_MCP_CONF_PROBE_TIMEOUT_MS", "1500".to_string()),
+            ("MIR2_MCP_CONF_TEST_PROBE_LOG", log.display().to_string()),
+        ],
+    );
+    proc.initialize();
+    let started = Instant::now();
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "93"}),
+    );
+    let elapsed = started.elapsed();
+
+    assert_eq!(
+        structured(&response)["code"],
+        "conf_lock_timeout",
+        "活锁不得被接管：{response}"
+    );
+    let waited = structured(&response)["waited_ms"]
+        .as_u64()
+        .expect("waited_ms");
+    assert!(
+        waited <= 600 + 1500,
+        "等待必须有界（timeout + 一次探测上界）：waited_ms={waited}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(600 + 1500 + 1000),
+        "整体墙钟必须有界：{elapsed:?}"
+    );
+    let text = marker_text(&log);
+    let probes = text.lines().filter(|l| !l.trim().is_empty()).count();
+    assert_eq!(probes, 1, "同一 pid 的探测必须缓存；日志：{text:?}");
+    proc.shutdown();
+}
+
+/// A7：`key_absent` 与同值 no-op 在取锁前判定——持锁者存在时也返回原拒绝码，
+/// 且不建/删/改写锁文件、不跑 cleanup。
+#[test]
+fn rejection_and_noop_paths_never_touch_lock() {
+    let root = TempRoot::new("reject-lock");
+    // 缺 MonsterPowerRate（白名单活键）用于 key_absent；GenMonRate 用于同值 no-op。
+    std::fs::write(
+        root.conf_path(),
+        b"\xEF\xBB\xBF[Setup]\r\nGenMonRate=10\r\n",
+    )
+    .expect("写夹具");
+    let lock = root.lock_path();
+    let lock_bytes = lock_body(std::process::id(), now_ms()).into_bytes();
+    std::fs::write(&lock, &lock_bytes).expect("写活锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "400".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "30000".to_string()),
+        ],
+    );
+    proc.initialize();
+
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "MonsterPowerRate", "value": "20"}),
+    );
+    assert_eq!(
+        structured(&response)["code"],
+        "key_absent",
+        "持锁者存在时 key_absent 也必须原样返回（不得 conf_lock_timeout）：{response}"
+    );
+
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "10"}),
+    );
+    let body = structured(&response);
+    assert_eq!(body["ok"], true, "{response}");
+    assert_eq!(body["wrote"], false, "同值必须 no-op：{response}");
+    assert_eq!(body["changed"], false, "{response}");
+
+    assert_eq!(
+        std::fs::read(&lock).expect("读锁"),
+        lock_bytes,
+        "拒绝/只读路径不得创建、删除或改写锁"
+    );
+    proc.shutdown();
+}
+
+/// A8（Windows）：delete-pending 的 `ERROR_ACCESS_DENIED` 必须进入外层重试；
+/// 窗口小于 timeout ⇒ 最终成功；窗口大于 timeout ⇒ `conf_lock_timeout`，绝不是 `io_error`。
+#[cfg(all(windows, debug_assertions))]
+#[test]
+fn delete_pending_access_denied_retries_until_success_or_timeout() {
+    let root = TempRoot::new("delete-pending-ok");
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "3000".to_string()),
+            ("MIR2_MCP_CONF_TEST_CREATE_NEW_DENIED_MS", "300".to_string()),
+        ],
+    );
+    proc.initialize();
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "94"}),
+    );
+    let body = structured(&response);
+    assert_eq!(
+        body["ok"], true,
+        "delete-pending 必须走外层重试最终成功（不得 io_error）：{response}"
+    );
+    assert_eq!(body["wrote"], true, "{response}");
+    assert_eq!(body["readback_value"], "94", "{response}");
+    proc.shutdown();
+
+    let root = TempRoot::new("delete-pending-timeout");
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "200".to_string()),
+            (
+                "MIR2_MCP_CONF_TEST_CREATE_NEW_DENIED_MS",
+                "3000".to_string(),
+            ),
+        ],
+    );
+    proc.initialize();
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "95"}),
+    );
+    assert_eq!(
+        structured(&response)["code"],
+        "conf_lock_timeout",
+        "delete-pending 持续超过 timeout 必须返回 conf_lock_timeout，而不是 io_error：{response}"
+    );
+    proc.shutdown();
+}
+
+/// F1/A2：慢的「本进程启动时刻」探测（模拟 1.9s 慢 wmic）必须不再把活持有者的锁暴露成
+/// 可回收空锁。
+///
+/// 修复前：`create_new` 与元数据写入之间包含 `own_process_start` 探测，空窗可超过默认
+/// 2000ms 宽限 ⇒ B 回收 A 的空锁、写 222 并 ok 返回；A 恢复后写 111 ⇒ 最终 111，B 已确认
+/// 的 222 被静默覆盖（双持有者/丢更新）。
+/// 修复后：`create_new` 后立刻写 pid/acq_ms/nonce（不含 start），探测慢只影响 start 后补；
+/// B 只能等 A 释放后再写 ⇒ 最终 222。
+///
+/// 哨兵 `own-start-delay` 证明 A 确实进入了慢探测窗口（按事件同步，不靠固定 sleep）。
+#[cfg(debug_assertions)]
+#[test]
+fn slow_own_start_probe_never_exposes_empty_lock() {
+    let root = TempRoot::new("slow-own-start");
+    let marker = root.path.join("own-start-marker.log");
+    let marker_arg = marker.display().to_string();
+
+    let mut first = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "10000".to_string()),
+            // 模拟慢探测：3s（> 默认空锁宽限 2000ms）。修复前这段落在空锁窗口内。
+            ("MIR2_MCP_CONF_TEST_OWN_START_DELAY_MS", "3000".to_string()),
+            ("MIR2_MCP_CONF_TEST_OWN_START_MARKER", marker_arg),
+        ],
+    );
+    first.initialize();
+    let handle = std::thread::spawn(move || {
+        let response = first.call_tool(
+            "conf_set",
+            json!({"section": "Setup", "key": "GenMonRate", "value": "111"}),
+        );
+        first.shutdown();
+        response
+    });
+
+    // 哨兵：A 已进入慢探测窗口（修复后在最小身份写盘之后；旧代码在空锁期间）。
+    wait_for_marker(&marker, "own-start-delay", Duration::from_secs(15));
+
+    // B 在 A 的窗口内并发写同一个键。
+    let mut second = McpProc::start(
+        &root.path,
+        &[("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "10000".to_string())],
+    );
+    second.initialize();
+    let b = second.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "222"}),
+    );
+    let a = handle.join().expect("A thread");
+
+    let b_body = structured(&b);
+    assert_eq!(b_body["ok"], true, "B 必须成功（不得超时/io_error）：{b}");
+    assert_eq!(b_body["readback_value"], "222", "B 回读必须是自己的值：{b}");
+    let a_body = structured(&a);
+    assert_eq!(a_body["ok"], true, "A 必须成功：{a}");
+    assert_eq!(a_body["readback_value"], "111", "A 回读必须是自己的值：{a}");
+
+    let final_value = genmonrate(&std::fs::read(root.conf_path()).expect("读最终文件"));
+    assert_eq!(
+        final_value, "222",
+        "B 已确认的 222 不得被 A 静默覆盖（慢探测暴露空锁 ⇒ 双持有者/丢更新）"
+    );
+    assert!(!root.lock_path().exists(), "结束后不得残留锁");
+    second.shutdown();
 }
 
 // ---------------------------------------------------------------------------
