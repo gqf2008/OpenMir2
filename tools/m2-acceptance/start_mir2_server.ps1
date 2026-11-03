@@ -346,8 +346,10 @@ function Get-PidFileState {
   # 「可证明过期」= 有条目 且 live 为空 且 unconfirmed 为空 且 portsUp 为空（见调用点）。
   #
   # 失败模式边界（review 788628b1 的 F1/F3/F4）：
-  #   * 记录缺 role/pid（或不是对象）**不得在分类前过滤掉**——那会把「合法 JSON 但解释不出」
-  #     变成 entries=0 的静默放行；这里计入 unconfirmed（rc=2），原 pid 文件不被覆盖。
+  #   * 记录缺 role/pid（或不是对象，**含 JSON null**）**不得在分类前过滤掉**——那会把
+  #     「合法 JSON 但解释不出」变成 entries=0 的静默放行；这里计入 unconfirmed（rc=2），
+  #     原 pid 文件不被覆盖。尤其是 [有效记录, null]：过滤掉 null 后只剩一条可解释记录，
+  #     会被误判为「可证明过期」而起第二个栈（reviewer-21 N11）。
   #   * 0 字节/纯空白 pid 文件同理计入 unconfirmed（rc=2）。注意与 stop_mir2_server.ps1 的
   #     「空文件 = NOTHING_TO_STOP 并删除」不同：start 方向会覆盖证据且可能起第二个栈，
   #     所以这里取更严的一档——要起栈请先人工确认并删除该文件。
@@ -380,7 +382,9 @@ function Get-PidFileState {
     elseif ($parsed -is [array]) { $records = @($parsed) }
     else { $records = @($parsed) }
   }
-  $records = @($records | Where-Object { $null -ne $_ })
+  # 注意：这里**不得**用 `Where-Object { $null -ne $_ }` 过滤——JSON null 项同样是
+  # 「解释不出的记录」，过滤掉会让 [有效记录, null] 只剩一条可解释记录从而误判过期；
+  # null 项必须落进下面的「记录不是对象」unconfirmed 分支（rc=2）。
   if ($records.Count -eq 0) {
     $state.unconfirmed += 'pid 文件存在但 roles 为空：解释不出任何角色记录'
     return $state
