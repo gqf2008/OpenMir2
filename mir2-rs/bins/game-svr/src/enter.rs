@@ -434,13 +434,22 @@ pub const LEVEL_RANK_BODY_LEN: usize = LEVEL_RANK_ROWS * LEVEL_RANK_ROW_LEN;
 fn name_field_len(name: &[u8]) -> usize {
     let mut end = 0;
     while end < name.len() {
-        let width = if name[end] >= 0x81 { 2 } else { 1 };
+        // lead 判定必须与上面的区间一致：`0x81..=0xFE`。用 `>= 0x81` 会把非法
+        // `0xFF` 当成 lead，令 `end` 越过 `name.len()`（`[0x81]→2/1`），
+        // 后面 `&name[..n]` 就会 panic。
+        let width = if (0x81..=0xFE).contains(&name[end]) {
+            2
+        } else {
+            1
+        };
         if end + width > LEVEL_RANK_NAME_LEN {
             break;
         }
         end += width;
     }
-    end
+    // 兜底：孤立 lead（如末尾的 `0x81`）会让 `end + width` 超过输入长度（但未超过
+    // 15 字节上限），此时返回长度必须夹回 `name.len()`，保证 `name[..n]` 安全。
+    end.min(name.len())
 }
 
 /// 排行体的**纯函数**（不绑会话/世界）：输入 `(ChrName, Abil.Level, ActorId)`，输出 240 字节。
@@ -2682,29 +2691,72 @@ mod tests {
         assert_eq!(&body[1..16], &gbk_name[..15]);
     }
 
+    /// A1（reviewer-20 minor 的回归牙）：`name_field_len` 对**任意原始字节**必须
+    /// 返回 `≤ name.len()`——这是 `level_rank_body` 里 `&name[..n]` 不 panic 的唯一前提。
+    ///
+    /// 探针覆盖 0x80 / 0xFF / 孤立 lead（末尾 `0x81`）/ 孤立 trail（`0xBB`）/
+    /// `0x41 0xFF` / `0x40 0x40 0xBB` 等 9 条。
+    ///
+    /// **为什么要同时钉期望值**：只断言 `n <= len` 时，`min(len)` 兜底会让
+    /// 「把 0xFF 当 lead」与正确实现都满足上界（两者都被夹到 len），lead 判定失去牙。
+    /// 第 9 条 `[A×14, 0xFF]`（15 字节）正好区分：末字节 0xFF 是单字节 ⇒ 期望 15；
+    /// 旧的 `>= 0x81` 会把它当 lead、跨过 15 字节上限而停在 14。
+    /// 两条变异因此都会让本用例红：
+    /// * lead 判定退回 `>= 0x81` ⇒ 第 9 条返回 14 ≠ 15；
+    /// * 去掉末尾 `min(name.len())` ⇒ `[0x81]` 返回 2 ≠ 1。
+    #[test]
+    fn name_field_len_never_exceeds_input_len_on_raw_gbk_bytes() {
+        let mut ascii14_then_ff = [0x41u8; 15];
+        ascii14_then_ff[14] = 0xFF;
+        let probes: [(&[u8], usize); 9] = [
+            (&[0x81], 1),             // 孤立 lead（末尾）⇒ 无 min 时 end=2 > len=1
+            (&[0x41, 0xFF], 2),       // 非法 0xFF 不是 lead，是单字节
+            (&[0x40, 0x40, 0xBB], 3), // 两个 ASCII + 孤立 trail
+            (&[0x80], 1),             // CP936 里 0x80 是单字节
+            (&[0xFF], 1),             // 非法 0xFF 单字节
+            (&[0xFF, 0x41], 2),
+            (&[0x41, 0x81], 2),     // 孤立 lead 在末尾
+            (&[0x81, 0x41], 2),     // lead + ASCII：宽度推进越过输入尾
+            (&ascii14_then_ff, 15), // 末字节 0xFF ⇒ lead 判定的牙（旧实现给 14）
+        ];
+        for (probe, want) in probes {
+            let n = name_field_len(probe);
+            assert!(
+                n <= probe.len(),
+                "probe {probe:02X?} ⇒ n={n} > len={}（&name[..n] 会 panic）",
+                probe.len()
+            );
+            assert_eq!(
+                n, want,
+                "probe {probe:02X?} 的截断长度必须为 {want}（实测 {n}）"
+            );
+        }
+    }
+
+    /// 改动前实现（`name.len().min(15)` 硬切），仅作 A2 等价基准：
+    /// ≤15 字节时硬切与整段保留等价。
+    fn legacy_body(players: &[(&str, i32, i32)]) -> Vec<u8> {
+        let mut rows: Vec<(Vec<u8>, i32, i32)> = players
+            .iter()
+            .map(|&(chr_name, level, actor_id)| (gbk(chr_name), level, actor_id))
+            .collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let mut body = vec![0u8; LEVEL_RANK_BODY_LEN];
+        for (i, (name, level, actor_id)) in rows.iter().take(LEVEL_RANK_ROWS).enumerate() {
+            let row = &mut body[i * LEVEL_RANK_ROW_LEN..(i + 1) * LEVEL_RANK_ROW_LEN];
+            let n = name.len().min(LEVEL_RANK_NAME_LEN);
+            row[0] = u8::try_from(n).expect("name_len ≤ 15 恒落 u8");
+            row[1..1 + n].copy_from_slice(&name[..n]);
+            row[16..20].copy_from_slice(&level.to_le_bytes());
+            row[20..24].copy_from_slice(&actor_id.to_le_bytes());
+        }
+        body
+    }
+
     /// A2：≤15 GBK 字节的所有名字，输出与改动前实现（`name.len().min(15)` 硬切）
     /// **整条 240 字节体逐字节相同**（13 条向量，含空名/ASCII/中文/混合）。
     #[test]
     fn level_rank_body_short_names_are_byte_identical_to_legacy() {
-        // 改动前实现，仅作等价基准：≤15 字节时硬切与整段保留等价。
-        fn legacy_body(players: &[(&str, i32, i32)]) -> Vec<u8> {
-            let mut rows: Vec<(Vec<u8>, i32, i32)> = players
-                .iter()
-                .map(|&(chr_name, level, actor_id)| (gbk(chr_name), level, actor_id))
-                .collect();
-            rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
-            let mut body = vec![0u8; LEVEL_RANK_BODY_LEN];
-            for (i, (name, level, actor_id)) in rows.iter().take(LEVEL_RANK_ROWS).enumerate() {
-                let row = &mut body[i * LEVEL_RANK_ROW_LEN..(i + 1) * LEVEL_RANK_ROW_LEN];
-                let n = name.len().min(LEVEL_RANK_NAME_LEN);
-                row[0] = u8::try_from(n).expect("name_len ≤ 15 恒落 u8");
-                row[1..1 + n].copy_from_slice(&name[..n]);
-                row[16..20].copy_from_slice(&level.to_le_bytes());
-                row[20..24].copy_from_slice(&actor_id.to_le_bytes());
-            }
-            body
-        }
-
         let vectors = [
             ("", 1, 0x01),
             ("A", 2, 0x02),
@@ -2733,6 +2785,71 @@ mod tests {
         }
         // 整批一起排（13 条 ≤10 行会被截到 10 行，仍须逐字节相同）。
         assert_eq!(level_rank_body(&vectors), legacy_body(&vectors));
+    }
+
+    /// 本卡**之前**的 `name_field_len`（lead 判定 `>= 0x81`、无 `min(len)`），
+    /// 仅作 A2 等价基准。合法 GBK（`encoding_rs` 只产良构序列）永远不会出现
+    /// `0xFF` / 孤立 lead，因此它与修复后的实现对**所有合法输入**必须等长。
+    fn name_field_len_before_card(name: &[u8]) -> usize {
+        let mut end = 0;
+        while end < name.len() {
+            let width = if name[end] >= 0x81 { 2 } else { 1 };
+            if end + width > LEVEL_RANK_NAME_LEN {
+                break;
+            }
+            end += width;
+        }
+        end
+    }
+
+    fn body_before_card(players: &[(&str, i32, i32)]) -> Vec<u8> {
+        let mut rows: Vec<(Vec<u8>, i32, i32)> = players
+            .iter()
+            .map(|&(chr_name, level, actor_id)| (gbk(chr_name), level, actor_id))
+            .collect();
+        rows.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+        let mut body = vec![0u8; LEVEL_RANK_BODY_LEN];
+        for (i, (name, level, actor_id)) in rows.iter().take(LEVEL_RANK_ROWS).enumerate() {
+            let row = &mut body[i * LEVEL_RANK_ROW_LEN..(i + 1) * LEVEL_RANK_ROW_LEN];
+            let n = name_field_len_before_card(name);
+            row[0] = u8::try_from(n).expect("name_len ≤ 15 恒落 u8");
+            row[1..1 + n].copy_from_slice(&name[..n]);
+            row[16..20].copy_from_slice(&level.to_le_bytes());
+            row[20..24].copy_from_slice(&actor_id.to_le_bytes());
+        }
+        body
+    }
+
+    /// A2 穷举（reviewer-20 要求）：`ASCII × 0..=15` × `CJK × 0..=8` 的**所有**组合，
+    /// 240 字节体必须与本卡之前的实现逐字节相同。
+    ///
+    /// 穷举里既有 ≤15 字节（硬切 = 整段保留）也有 >15 字节（回退到字符边界）的形态，
+    /// 用来证明收紧 lead 判定 / 加 `min(len)` 没有改变任何**合法**输入的输出。
+    #[test]
+    fn level_rank_body_ascii_cjk_exhaustive_matches_legacy() {
+        for ascii in 0..=15usize {
+            for cjk in 0..=8usize {
+                let name = format!("{}{}", "A".repeat(ascii), "一".repeat(cjk));
+                let bytes = gbk(&name);
+                assert_eq!(bytes.len(), ascii + 2 * cjk, "夹具长度自证");
+                // 夹具是良构 GBK：不得含非法单字节 `0xFF`（否则旧的 `>=0x81`
+                // 判定会与新实现分叉，等价比较失去意义）。
+                assert!(
+                    !bytes.contains(&0xFF),
+                    "ascii={ascii} cjk={cjk} 的 GBK 夹具意外含 0xFF"
+                );
+                for level in [0i32, 1, 40] {
+                    let players = [(name.as_str(), level, 0x2A)];
+                    assert_eq!(
+                        level_rank_body(&players),
+                        body_before_card(&players),
+                        "ascii={ascii} cjk={cjk} gbk_len={} level={level} \
+                         的 240B 体必须与本卡之前逐字节相同",
+                        bytes.len()
+                    );
+                }
+            }
+        }
     }
 
     /// A2 退化形态：无在线玩家 ⇒ 全 0 的 240B 空排行（不是 0 字节）。
