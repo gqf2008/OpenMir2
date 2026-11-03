@@ -39,7 +39,10 @@ pub mod ecs;
 pub mod tick;
 
 pub use ecs::{EcsStore, SlotOrder};
-pub use tick::{advance_clock_system, TickClock, TickOrder, TickOwnerThread, TickRunner};
+pub use tick::{
+    advance_clock_system, tick_schedule_build_settings, TickClock, TickOrder, TickOwnerThread,
+    TickRunner, TickStage, STAGE_ORDER,
+};
 
 // ============================ 组件 / 资源 ============================
 
