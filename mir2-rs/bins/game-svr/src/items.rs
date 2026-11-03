@@ -109,6 +109,49 @@ fn classify_connect(
     }
 }
 
+/// 主机名解析接口：启动探活的 fast/confirm 两条 connect **共用一次解析结果**
+/// （卡 `openmir2-gamesvr-db-probe-dns-once`）。
+///
+/// 生产实现是 [`SystemResolver`]。抽成可注入接口，是为了让下面三条契约有**确定性**用例
+/// （不依赖真 DNS / fake-IP）：
+/// - 同一主机名在两条 connect 之间**只解析一次**；
+/// - fast 与 confirm 使用**同一个** [`SocketAddr`](std::net::SocketAddr)；
+/// - 解析失败仍按 [`StartupDbProbe::ConnectFailed`] 处理（语义与旧实现一致）。
+///
+/// 背景（reviewer-21 在卡 `openmir2-gamesvr-db-probe-threshold` 的 review `8c40e2b0`）：
+/// fake-IP（FlClash）或负载均衡下，同一主机名两次解析可能落到不同后端；旧实现两条 connect
+/// 各解析一次，fast 命中 down 的后端就会 `ConnectFailed` ⇒ 四表被**假跳过**。
+type ResolveFuture<'a> = std::pin::Pin<
+    Box<dyn std::future::Future<Output = std::io::Result<std::net::SocketAddr>> + Send + 'a>,
+>;
+
+pub trait AddrResolver {
+    /// 把 `host:port` 解析成**一个**地址；多条记录取第一条。
+    ///
+    /// 旧实现 `TcpStream::connect((host, port))` 内部也是「任选其一」；本卡只把
+    /// 「每次连接各选一次」收敛成「选一次后两条连接复用」，不改变选法。
+    fn resolve<'a>(&'a self, host: &'a str, port: u16) -> ResolveFuture<'a>;
+}
+
+/// 生产解析器：走 tokio 系统解析（等价于旧 `TcpStream::connect((host, port))` 内部的解析）。
+pub struct SystemResolver;
+
+impl AddrResolver for SystemResolver {
+    fn resolve<'a>(&'a self, host: &'a str, port: u16) -> ResolveFuture<'a> {
+        Box::pin(async move {
+            tokio::net::lookup_host((host, port))
+                .await?
+                .next()
+                .ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::NotFound,
+                        format!("{host}:{port} 没有可用地址"),
+                    )
+                })
+        })
+    }
+}
+
 /// 启动期 DB 探活：`TcpStream::connect`，不跑 SQL、不建 sqlx 池。
 ///
 /// 只回答「connect 相位是否可达」—— 这是决定「四表是否都不尝试」的唯一判据（F1）。
@@ -126,6 +169,21 @@ pub async fn probe_reachable(
     fast_bound: std::time::Duration,
     confirm_bound: std::time::Duration,
 ) -> StartupDbProbeReport {
+    probe_reachable_with(conn, fast_bound, confirm_bound, &SystemResolver).await
+}
+
+/// [`probe_reachable`] 的可注入版本（生产路径固定用 [`SystemResolver`]）。
+///
+/// **解析只做一次**（卡 `openmir2-gamesvr-db-probe-dns-once`）：先得到 `addr`，fast 与
+/// confirm 两条 connect 都连这一个 `addr`，因此 fake-IP / 负载均衡下不会落到不同后端。
+/// 解析失败 ⇒ [`StartupDbProbe::ConnectFailed`]（与旧实现里 connect 的 DNS 失败同语义：
+/// 明确不可达 ⇒ 跳过四表）。
+pub async fn probe_reachable_with<R: AddrResolver + ?Sized>(
+    conn: &str,
+    fast_bound: std::time::Duration,
+    confirm_bound: std::time::Duration,
+    resolver: &R,
+) -> StartupDbProbeReport {
     let dsn = match LegacyDsn::parse(conn) {
         Ok(dsn) => dsn,
         Err(e) => {
@@ -135,9 +193,65 @@ pub async fn probe_reachable(
             };
         }
     };
-    let target = (dsn.host.as_str(), dsn.port);
-    let fast = tokio::time::timeout(fast_bound, tokio::net::TcpStream::connect(target));
-    let confirm = tokio::time::timeout(confirm_bound, tokio::net::TcpStream::connect(target));
+    // 卡 `openmir2-gamesvr-db-probe-dns-once`：**先解析一次**成 SocketAddr，fast/confirm 复用。
+    //
+    // 解析本身也必须在**扩展观察上界**内给出结论：旧实现把 DNS 解析包在 `TcpStream::connect`
+    // 的 1s/2.5s 上界里；若改成裸 `resolve().await`，DNS 卡死会让启动探活无界（破坏 SLA）。
+    let started = tokio::time::Instant::now();
+    let target =
+        match tokio::time::timeout(confirm_bound, resolver.resolve(&dsn.host, dsn.port)).await {
+            Ok(Ok(addr)) => addr,
+            Ok(Err(e)) => {
+                return StartupDbProbeReport {
+                    outcome: StartupDbProbe::ConnectFailed(format!(
+                        "connect 失败（{}:{}）：{e}",
+                        dsn.host, dsn.port
+                    )),
+                    // 解析在快速观察窗口内失败 ⇒ 明确结论；窗口外才失败 ⇒ 与旧实现一样算「快速观察无结论」。
+                    fast_unknown: started.elapsed() >= fast_bound,
+                };
+            }
+            Err(_) => {
+                return StartupDbProbeReport {
+                    outcome: StartupDbProbe::TimedOut(format!(
+                    "connect 超时（{}:{}；DNS 解析在扩展观察上界 {confirm_bound:?} 内没有结论）",
+                    dsn.host, dsn.port
+                )),
+                    fast_unknown: true,
+                };
+            }
+        };
+    let resolution_elapsed = started.elapsed();
+    if resolution_elapsed >= fast_bound {
+        // 解析已用掉快速观察窗口（旧实现里 DNS 在 fast 的 1s connect 内）⇒ 快速观察无结论；
+        // 扩展观察用**同一地址**定案：明确 refused ⇒ ConnectFailed，连上 ⇒ 仍按未知（A1）。
+        let remaining = confirm_bound.saturating_sub(resolution_elapsed);
+        let outcome = match classify_connect(
+            tokio::time::timeout(remaining, tokio::net::TcpStream::connect(target))
+                .await
+                .ok(),
+            &dsn.host,
+            dsn.port,
+        ) {
+            StartupDbProbe::ConnectFailed(e) => StartupDbProbe::ConnectFailed(e),
+            StartupDbProbe::Connected => StartupDbProbe::TimedOut(format!(
+                "connect 超过快速观察上界 {fast_bound:?}（DNS 解析耗时 {resolution_elapsed:?}；扩展观察确认最终可达：慢连接按未知继续）"
+            )),
+            other => other,
+        };
+        return StartupDbProbeReport {
+            outcome,
+            fast_unknown: true,
+        };
+    }
+    let fast = tokio::time::timeout(
+        fast_bound.saturating_sub(resolution_elapsed),
+        tokio::net::TcpStream::connect(target),
+    );
+    let confirm = tokio::time::timeout(
+        confirm_bound.saturating_sub(resolution_elapsed),
+        tokio::net::TcpStream::connect(target),
+    );
     tokio::pin!(fast);
     tokio::pin!(confirm);
     tokio::select! {
@@ -352,6 +466,146 @@ mod tests {
         );
         let dsn = StartupDbProbe::DsnError("x".to_string());
         assert_eq!(dsn.skip_startup_tables(), None, "DsnError 不触发跨表跳过");
+    }
+
+    /// **A1 牙（卡 `openmir2-gamesvr-db-probe-dns-once`）**：同一主机名的 fast/confirm
+    /// 两条 connect 之间**只解析一次**，且都复用同一个 `SocketAddr`。
+    ///
+    /// 红检（A4 变异）：把实现改回「两条 connect 各自解析」（或各调一次 resolver）⇒
+    /// 计数变 2 ⇒ 本用例红。
+    #[tokio::test]
+    async fn resolution_happens_once_and_both_connects_share_addr() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingResolver {
+            addr: std::net::SocketAddr,
+            calls: AtomicUsize,
+        }
+        impl AddrResolver for CountingResolver {
+            fn resolve<'a>(&'a self, _host: &'a str, _port: u16) -> ResolveFuture<'a> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                let addr = self.addr;
+                Box::pin(async move { Ok(addr) })
+            }
+        }
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .expect("bind 临时监听失败");
+        let addr = listener.local_addr().expect("读临时端口失败");
+        let resolver = CountingResolver {
+            addr,
+            calls: AtomicUsize::new(0),
+        };
+        // 用**主机名**而不是 IP：本用例的契约就是「同一个主机名只解析一次」。
+        let conn = format!(
+            "server=db.example.invalid;uid=root;pwd=;database=mir2;port={};",
+            addr.port()
+        );
+        let report = probe_reachable_with(
+            &conn,
+            std::time::Duration::from_millis(500),
+            std::time::Duration::from_secs(3),
+            &resolver,
+        )
+        .await;
+        assert!(
+            matches!(report.outcome, StartupDbProbe::Connected),
+            "注入解析器返回可达地址 ⇒ Connected；实得 {:?}",
+            report.outcome
+        );
+        assert_eq!(
+            resolver.calls.load(Ordering::SeqCst),
+            1,
+            "fast/confirm 必须复用同一解析结果（解析调用次数 = 1）；变 2 ⇒ 回到「两次解析落到不同后端」的假跳过 bug"
+        );
+    }
+
+    /// **A2 牙**：解析失败 ⇒ `ConnectFailed` ⇒ 跳过四表（与旧实现里 connect 的 DNS
+    /// 失败同语义：明确不可达）。
+    #[tokio::test]
+    async fn resolution_failure_is_connect_failed_and_skips_tables() {
+        struct FailingResolver;
+        impl AddrResolver for FailingResolver {
+            fn resolve<'a>(&'a self, _host: &'a str, _port: u16) -> ResolveFuture<'a> {
+                Box::pin(async move { Err(std::io::Error::other("dns: no such host")) })
+            }
+        }
+
+        let report = probe_reachable_with(
+            "server=db.example.invalid;uid=root;pwd=;database=mir2;port=3306;",
+            std::time::Duration::from_millis(500),
+            std::time::Duration::from_secs(3),
+            &FailingResolver,
+        )
+        .await;
+        match &report.outcome {
+            StartupDbProbe::ConnectFailed(e) => {
+                assert!(
+                    e.contains("db.example.invalid:3306"),
+                    "错误必须点名 host:port；实得 {e}"
+                );
+                assert!(
+                    e.contains("dns: no such host"),
+                    "错误必须保留解析失败原因；实得 {e}"
+                );
+            }
+            other => panic!("解析失败必须判 ConnectFailed，实得 {other:?}"),
+        }
+        assert!(
+            report.skip_startup_tables().is_some(),
+            "解析失败 = 明确不可达 ⇒ 必须跳过四表"
+        );
+        assert!(
+            !report.fast_unknown,
+            "解析失败是明确结论，不得标记 fast_unknown"
+        );
+    }
+
+    /// **解析上界回归牙**：DNS 解析必须像旧实现一样受扩展观察上界约束 —— 裸
+    /// `resolve().await` 会让启动探活无界（旧实现里 DNS 包在 connect 的 1s/2.5s 上界内）。
+    ///
+    /// 红检（A4 同族）：去掉 `timeout(confirm_bound, resolver.resolve(...))` 的外层上界
+    /// ⇒ 内部 future 永不完成 ⇒ 外层 2s 兜底超时 ⇒ 本用例红（而不是挂死）。
+    #[tokio::test]
+    async fn resolution_is_bounded_by_confirm_bound() {
+        struct HangingResolver;
+        impl AddrResolver for HangingResolver {
+            fn resolve<'a>(&'a self, _host: &'a str, _port: u16) -> ResolveFuture<'a> {
+                Box::pin(std::future::pending::<std::io::Result<std::net::SocketAddr>>())
+            }
+        }
+
+        let confirm_bound = std::time::Duration::from_millis(150);
+        let started = std::time::Instant::now();
+        let report = tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            probe_reachable_with(
+                "server=db.example.invalid;uid=root;pwd=;database=mir2;port=3306;",
+                std::time::Duration::from_millis(50),
+                confirm_bound,
+                &HangingResolver,
+            ),
+        )
+        .await
+        .expect("解析必须在扩展观察上界内返回（裸 resolve 无界 ⇒ 外层 2s 兜底触发）");
+        assert!(
+            matches!(report.outcome, StartupDbProbe::TimedOut(_)),
+            "解析无结论 ⇒ TimedOut（未知，继续四表）；实得 {:?}",
+            report.outcome
+        );
+        assert!(report.fast_unknown, "解析无结论 ⇒ fast_unknown=true");
+        assert_eq!(
+            report.skip_startup_tables(),
+            None,
+            "解析无结论 ⇒ 不得跳过四表"
+        );
+        // 下界（安全的墙钟断言）：证明确实等到了上界，而不是提前返回。
+        assert!(
+            started.elapsed() >= confirm_bound,
+            "必须等满上界 {confirm_bound:?}，实测 {:?}",
+            started.elapsed()
+        );
     }
 
     /// 1-based + 空名按缺：`Index=1` ⇒ `items[0]`；空名记录处的位置仍占号。
