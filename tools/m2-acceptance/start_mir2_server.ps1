@@ -58,6 +58,34 @@
 
   旧六个 exe 仍然可用且行为不变；本脚本不依赖它们。
 
+  过期 pid 文件（卡 openmir2-start-stale-pid-rc）：
+      主机重启后 pid 文件可能残留（记录里的 pid 已被别的进程复用，如 svchost）。
+      实跑前按**三条同时成立**判「可证明过期」，缺一条都不得放行：
+          ① pid 文件存在且至少一条角色记录；
+          ② 记录里的**每个端口**都 DOWN（Test-Port，与 stop_mir2_server.ps1 同口径）；
+          ③ 记录里的**每个 pid** 要么进程不存在，要么存活但进程名与记录不符
+             （记录口径：`mir2-server` | 记录 `exe` 的 basename，同 stop 脚本）。
+      三条成立 ⇒ 打印 `STALE_PID_FILE` + `STALE_REASON`（逐条点名判定依据），把 pid 文件
+      改名为 `<pid 文件>.stale-<yyyyMMdd-HHmmss-fff>`（毫秒 + 冲突序号，**不覆盖**既有证据；
+      改名失败 ⇒ RED 且不起栈）保留证据后继续起栈；`-ResetStalePid`
+      只是对**同一判定**的显式确认（不放宽任何一条）。
+      缺任一条 ⇒ RED 拒绝：有记录 pid 存活且进程名匹配（真栈还在）、任一记录端口仍 UP、
+      pid 非法/JSON 损坏（无法确认）。本脚本**绝不**为此结束任何进程。
+
+      「无法确认」的完整清单（一律 RED rc=2，且**不覆盖**原 pid 文件）：
+          · JSON 损坏；pid 非法（非数字）；
+          · 合法 JSON 但记录缺 `role`/`pid`、记录不是对象、`roles` 为空
+            （不得在分类前静默丢弃——那会退化成 entries=0 的静默起栈）；
+          · 0 字节/纯空白 pid 文件。注意与 stop 脚本的契约**不同**：stop 把空文件当
+            `NOTHING_TO_STOP` 并删除；start 会覆盖证据且可能起第二个栈，故取更严的一档，
+            请先人工确认无栈在跑再删除该文件；
+          · pid 路径存在但不是常规文件（目录）或不可读 ⇒ 起任何进程**之前**就 RED。
+
+  退出码：0 = 全部角色就绪（或 -WhatIf 通过）；1 = RED（已有存活栈 / 端口忙 / MySQL 缺失 /
+          角色未就绪 / 过期 pid 文件改名失败）；2 = 参数或前置不满足（未知角色 / 缺配置 /
+          端口剖面非法 / pid 文件无法确认 / pid 路径不可用 / ServerExe 缺失）。
+          **任何 RED/未确认都不返回 0**。
+
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 -WhatIf
 
@@ -70,6 +98,11 @@
 .EXAMPLE
   powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 `
     -Root E:\tmp\altport-deploy -PortsProfile E:\tmp\altport-deploy\alt-port-profile.json -WhatIf
+
+.EXAMPLE
+  # 主机重启后残留 pid 文件被别的进程复用：三条判据成立即自动判过期并保留证据后起栈；
+  # -ResetStalePid 仅作显式确认（判定依据相同，不放宽任何一条）。
+  powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_mir2_server.ps1 -ResetStalePid
 #>
 param(
   [string]$Root = 'E:\MirServer',
@@ -83,7 +116,8 @@ param(
   [string]$PortsProfile = '',
   [hashtable]$Ports = $null,
   [switch]$WhatIf,
-  [switch]$RequireRelease
+  [switch]$RequireRelease,
+  [switch]$ResetStalePid
 )
 
 $ErrorActionPreference = 'Stop'
@@ -290,13 +324,105 @@ function Save-PidFile {
   $payload | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $PidFile -Encoding utf8
 }
 
-function Get-PidFileEntries {
+function Get-ExpectedProcessNames {
+  # 与 stop_mir2_server.ps1 同口径：`mir2-server` | 记录 `exe` 的 basename（防止 pid 复用误判）。
+  param([object]$Entry)
+  $names = @('mir2-server')
+  if ($Entry -and ($Entry.PSObject.Properties.Name -contains 'exe') -and $Entry.exe) {
+    try {
+      $base = [System.IO.Path]::GetFileNameWithoutExtension([string]$Entry.exe)
+      if ($base) { $names += $base }
+    } catch { }
+  }
+  return @($names | Where-Object { $_ } | Select-Object -Unique)
+}
+
+function Get-PidFileState {
+  # 把 pid 文件的每条记录分成三态（卡 openmir2-start-stale-pid-rc）：
+  #   live        = pid 存活且进程名与记录一致 ⇒ 我们的栈还在（不得起第二个）
+  #   stale       = pid 不存在，或存活但进程名不符（典型：重启后 pid 被 svchost 复用）
+  #   unconfirmed = 无法判定（pid 非法 / 记录缺 role|pid / 空文件 / 路径不可用）
+  # 另算 portsUp = 记录里的端口当前仍被监听（Test-Port，与 stop 脚本同口径）。
+  # 「可证明过期」= 有条目 且 live 为空 且 unconfirmed 为空 且 portsUp 为空（见调用点）。
+  #
+  # 失败模式边界（review 788628b1 的 F1/F3/F4）：
+  #   * 记录缺 role/pid（或不是对象）**不得在分类前过滤掉**——那会把「合法 JSON 但解释不出」
+  #     变成 entries=0 的静默放行；这里计入 unconfirmed（rc=2），原 pid 文件不被覆盖。
+  #   * 0 字节/纯空白 pid 文件同理计入 unconfirmed（rc=2）。注意与 stop_mir2_server.ps1 的
+  #     「空文件 = NOTHING_TO_STOP 并删除」不同：start 方向会覆盖证据且可能起第二个栈，
+  #     所以这里取更严的一档——要起栈请先人工确认并删除该文件。
+  #   * pid 路径存在但不是常规文件（目录等）或不可读 ⇒ pathUnusable（rc=2），不起任何进程。
   param([string]$Path)
-  if (-not (Test-Path -LiteralPath $Path)) { return @() }
-  try { $parsed = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop | ConvertFrom-Json } catch { return @() }
-  if ($null -eq $parsed) { return @() }
-  if ($parsed.PSObject.Properties.Name -contains 'roles') { return @($parsed.roles) }
-  return @($parsed)
+  $state = [pscustomobject]@{
+    exists       = $false
+    parseOk      = $true
+    pathUnusable = $false
+    entries      = @()
+    live         = @()
+    stale        = @()
+    unconfirmed  = @()
+    portsUp      = @()
+  }
+  $item = Get-Item -LiteralPath $Path -Force -ErrorAction SilentlyContinue
+  if (-not $item) { return $state }
+  $state.exists = $true
+  if ($item.PSIsContainer) { $state.pathUnusable = $true; return $state }
+  try { $raw = Get-Content -LiteralPath $Path -Raw -ErrorAction Stop }
+  catch { $state.pathUnusable = $true; return $state }
+  if ([string]::IsNullOrWhiteSpace($raw)) {
+    $state.unconfirmed += '空 pid 文件（0 字节/纯空白）：解释不出任何角色记录'
+    return $state
+  }
+  try { $parsed = $raw | ConvertFrom-Json } catch { $state.parseOk = $false; return $state }
+  $records = @()
+  if ($null -ne $parsed) {
+    if ($parsed.PSObject.Properties.Name -contains 'roles') { $records = @($parsed.roles) }
+    elseif ($parsed -is [array]) { $records = @($parsed) }
+    else { $records = @($parsed) }
+  }
+  $records = @($records | Where-Object { $null -ne $_ })
+  if ($records.Count -eq 0) {
+    $state.unconfirmed += 'pid 文件存在但 roles 为空：解释不出任何角色记录'
+    return $state
+  }
+  # 分类之前只做「是不是对象」的判定，不做过滤；缺字段计入 unconfirmed。
+  foreach ($rec in $records) {
+    if (-not ($rec -is [System.Management.Automation.PSCustomObject])) {
+      $state.unconfirmed += ("记录不是对象：{0}" -f ([string]$rec))
+      continue
+    }
+    $names = @($rec.PSObject.Properties.Name)
+    if (($names -notcontains 'role') -or ($names -notcontains 'pid')) {
+      $state.unconfirmed += ("记录缺 role/pid（实际字段：{0}）" -f (($names -join ',') -replace '^$', '<空>'))
+      continue
+    }
+    $state.entries += $rec
+  }
+  foreach ($e in $state.entries) {
+    $procId = 0
+    if (-not [int]::TryParse([string]$e.pid, [ref]$procId)) {
+      $state.unconfirmed += ("{0}(pid 非法:{1})" -f $e.role, $e.pid)
+    } else {
+      $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+      if (-not $p) {
+        $state.stale += ("{0}(pid={1} 进程不存在)" -f $e.role, $procId)
+      } else {
+        $expected = Get-ExpectedProcessNames $e
+        if ($expected -notcontains $p.ProcessName) {
+          $state.stale += ("{0}(pid={1} 进程名={2} 与记录 {3} 不符)" -f $e.role, $procId, $p.ProcessName, ($expected -join '|'))
+        } else {
+          $state.live += ("{0}(pid={1} 进程名={2} 存活)" -f $e.role, $procId, $p.ProcessName)
+        }
+      }
+    }
+    if (($e.PSObject.Properties.Name -contains 'ports') -and $null -ne $e.ports) {
+      foreach ($port in @($e.ports | ForEach-Object { [int]$_ })) {
+        $tag = ("{0}:{1}" -f $e.role, $port)
+        if ((Test-Port ([int]$port)) -and ($state.portsUp -notcontains $tag)) { $state.portsUp += $tag }
+      }
+    }
+  }
+  return $state
 }
 
 # ---- ServerExe 默认值：优先 release，其次 debug（均相对本仓库的 mir2-rs/target）。----
@@ -473,21 +599,56 @@ if (-not (Test-Path -LiteralPath $ServerExe -PathType Leaf)) {
   exit 2
 }
 
-# pid 非法（非数字）不中止：与 stop 同口径打 SKIP 后跳过该条，继续核对其它记录。
-$existing = @()
-foreach ($e in @(Get-PidFileEntries $PidFile)) {
-  if ($null -eq $e) { continue }
-  $ep = 0
-  if (-not [int]::TryParse([string]$e.pid, [ref]$ep)) {
-    Write-Output ("SKIP {0} pid 非法：{1}（忽略该条记录，继续）" -f $e.role, $e.pid)
-    continue
-  }
-  if (Get-Process -Id $ep -ErrorAction SilentlyContinue) { $existing += $e }
+# ---- 现有 pid 文件：live / port-up / unconfirmed / 可证明过期 四选一（卡 openmir2-start-stale-pid-rc）。----
+# 「可证明过期」必须**三条同时成立**（缺一条都不得放行）：
+#   ① pid 文件存在且至少一条角色记录；
+#   ② 记录里的每个端口都 DOWN；
+#   ③ 记录里的每个 pid 都不存在，或存活但进程名与记录不符。
+# 其余一律 RED（非零退出）：live => 1；unconfirmed(pid 非法/JSON 坏) => 2；portsUp => 1。
+$pidState = Get-PidFileState $PidFile
+if ($pidState.pathUnusable) {
+  Write-Output ("RED: pid 路径存在但不是可读的常规文件（目录/无权限等）：{0} —— 无法确认栈状态，不猜、不起任何进程（-ResetStalePid 不绕过）" -f $PidFile)
+  exit 2
 }
-if ($existing.Count -gt 0) {
-  Write-Output ("RED: 已有存活角色（{0}）记录在 {1} —— 先跑 stop_mir2_server.ps1 再起" -f (
-    (($existing | ForEach-Object { $_.role }) -join ',')), $PidFile)
+if (-not $pidState.parseOk) {
+  Write-Output ("RED: pid 文件不是合法 JSON：{0} —— 无法确认是否有存活栈，不猜、不静默（-ResetStalePid 不绕过未确认）" -f $PidFile)
+  exit 2
+}
+if ($pidState.live.Count -gt 0) {
+  Write-Output ("RED: 已有存活角色（{0}）记录在 {1} —— 先跑 stop_mir2_server.ps1 再起" -f (($pidState.live) -join ','), $PidFile)
+  if ($pidState.portsUp.Count -gt 0) { Write-Output ("RED: 记录端口仍 UP：{0}" -f ($pidState.portsUp -join ',')) }
   exit 1
+}
+if ($pidState.unconfirmed.Count -gt 0) {
+  Write-Output ("RED: pid 文件有无法确认的记录：{0} —— 无法证明栈已停，不猜（先跑 stop_mir2_server.ps1 或人工核对 {1}）" -f (($pidState.unconfirmed) -join '; '), $PidFile)
+  exit 2
+}
+if ($pidState.portsUp.Count -gt 0) {
+  Write-Output ("RED: pid 文件记录的端口仍被监听：{0} —— 不能判为过期（先停现有栈或核查占用者；本脚本不杀别人的进程）" -f ($pidState.portsUp -join ','))
+  exit 1
+}
+if ($pidState.entries.Count -gt 0) {
+  # 三条同时成立 => 可证明过期。逐条点名判定依据（运维需要能复核），备份后继续起栈。
+  Write-Output ("STALE_PID_FILE {0}" -f $PidFile)
+  Write-Output ("STALE_REASON ① pid 文件存在（{0} 条角色记录）；② 记录端口全 DOWN；③ 记录进程均不存在或进程名不符：{1}" -f $pidState.entries.Count, (($pidState.stale) -join '; '))
+  if ($ResetStalePid) { Write-Output 'STALE_RESET explicit -ResetStalePid（显式确认；判定依据与自动路径相同，不额外放宽）' }
+  # 保留证据：毫秒时间戳 + 冲突序号，且**不覆盖**既有文件（review F2；Move-Item 不带 -Force）。
+  # MIR2_PID_STALE_STAMP 只用于把备份名钉住做「同名冲突」夹具，不参与任何判定。
+  $stamp = if (-not [string]::IsNullOrWhiteSpace($env:MIR2_PID_STALE_STAMP)) { [string]$env:MIR2_PID_STALE_STAMP }
+           else { (Get-Date).ToString('yyyyMMdd-HHmmss-fff') }
+  $staleBackup = $PidFile + '.stale-' + $stamp
+  $seq = 1
+  while (Test-Path -LiteralPath $staleBackup) {
+    $staleBackup = $PidFile + '.stale-' + $stamp + '-' + $seq
+    $seq++
+  }
+  try {
+    Move-Item -LiteralPath $PidFile -Destination $staleBackup -ErrorAction Stop
+  } catch {
+    Write-Output ("RED: 过期 pid 文件改名失败（不覆盖、不起栈）：{0} -> {1}：{2}" -f $PidFile, $staleBackup, $_.Exception.Message)
+    exit 1
+  }
+  Write-Output ("STALE_PID_FILE_MOVED {0}（保留证据；确认无用后可删）" -f $staleBackup)
 }
 
 if (-not (Test-Port 3306)) {
