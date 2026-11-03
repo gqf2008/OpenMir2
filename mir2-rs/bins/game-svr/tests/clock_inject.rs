@@ -15,6 +15,7 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
+use game_svr::{STARTUP_DB_LOAD_BOUND, STARTUP_DB_TABLE_COUNT};
 use tokio::process::Command;
 
 #[allow(dead_code)] // 共用模块：另一个 target 的条目在本 target 未用
@@ -28,6 +29,29 @@ const INVALID_CLOCK_EXIT_BOUND: Duration = Duration::from_secs(10);
 
 /// 就绪/探针等待上限（正常 <1s 出现）。
 const READY_BOUND: Duration = Duration::from_secs(20);
+
+/// A3 有界性余量：DB 加载上界之外的启动开销（文件装载 + sim 线程 + 绑定监听）；实测 <1s，留 4s。
+const STARTUP_SLACK: Duration = Duration::from_secs(4);
+
+/// **A3 静态上界**（卡 `openmir2-gamesvr-db-startup-hermeticity`）：
+/// - 无 DB 走「首表超时 ⇒ 同 DSN 后续表跳过」⇒ 启动上界 = 单表上界 + 启动余量；
+/// - 有 DB 时逐表加载的硬上限 = 单表上界 × 表数（判据要求的 `总时长 ≤ 上界×表数`）。
+///
+/// 改大上界而不同步 ⇒ 本用例红。
+#[test]
+fn startup_db_load_bound_fits_ready_window() {
+    let table_total = STARTUP_DB_LOAD_BOUND
+        * u32::try_from(STARTUP_DB_TABLE_COUNT).expect("启动期 DB 表数必落 u32");
+    assert!(
+        STARTUP_DB_LOAD_BOUND + STARTUP_SLACK <= READY_BOUND,
+        "无 DB 启动上界（单表 {STARTUP_DB_LOAD_BOUND:?} + 余量 {STARTUP_SLACK:?}）必须 ≤ \
+         READY_BOUND {READY_BOUND:?}；逐表总上界={table_total:?}"
+    );
+    assert_eq!(
+        STARTUP_DB_TABLE_COUNT, 4,
+        "启动期直连 MySQL 的表是 stditems/magics/monsters/goldsales 四张；增减表必须同步常量"
+    );
+}
 
 static TEMP_DIR_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
@@ -195,6 +219,7 @@ async fn unset_clock_env_is_inert() {
     let log = dir.join("stdout.txt");
     let out = std::fs::File::create(&log).unwrap();
     let err = out.try_clone().unwrap();
+    let spawned_at = std::time::Instant::now();
     let mut child = Command::new(env!("CARGO_BIN_EXE_game-svr"))
         .arg(&conf)
         .env_remove("MIR2_CLOCK_MS")
@@ -210,6 +235,7 @@ async fn unset_clock_env_is_inert() {
     };
     // 先等到监听就绪行（sim 线程在此之前已起），再留一个短 settle 读全文。
     let ready = wait_log_contains(&log, "已启动", READY_BOUND).await;
+    let ready_elapsed = spawned_at.elapsed();
     tokio::time::sleep(Duration::from_millis(500)).await;
     let text = std::fs::read_to_string(&log).unwrap_or_default();
     kill_tree_and_reap(&mut child, pid, Duration::from_secs(5)).await;
@@ -222,6 +248,33 @@ async fn unset_clock_env_is_inert() {
         !text.contains("CLOCK_PROBE") && !text.contains("时钟注入"),
         "未设变数时不得出现注入行（生产路径一字不改）；实得日志：\n{text}"
     );
+    // **A3 有界性**（卡 `openmir2-gamesvr-db-startup-hermeticity`）：无 DB 时首表在单表上界处
+    // 超时后，同 DSN 的后续表直接跳过 ⇒ 启动总耗时 ≈ 上界 + 启动开销，而不是 4 × 30s。
+    let db_total_bound = STARTUP_DB_LOAD_BOUND
+        * u32::try_from(STARTUP_DB_TABLE_COUNT).expect("启动期 DB 表数必落 u32");
+    println!(
+        "[db-startup 诊断] 已启动耗时={ready_elapsed:?}；单表上界={STARTUP_DB_LOAD_BOUND:?}；\
+         表数={STARTUP_DB_TABLE_COUNT}；上界×表数={db_total_bound:?}"
+    );
+    assert!(
+        ready_elapsed <= STARTUP_DB_LOAD_BOUND + STARTUP_SLACK,
+        "无 DB 时启动必须在单表上界 + {STARTUP_SLACK:?} 内完成（首表超时 ⇒ 同 DSN 后续表跳过）；\
+         实测 {ready_elapsed:?}（上界×表数={db_total_bound:?}）"
+    );
+    // **A1 登记保留**：无 DB 时各表「读取失败 ⇒ 空表」的 WRN 必须逐表出现（不许删登记/静默跳过）。
+    if text.contains("读 stditems 失败") {
+        for marker in [
+            "读 stditems 失败",
+            "读 magics 失败",
+            "读 monsters 失败",
+            "读取物品寄售列表失败",
+        ] {
+            assert!(
+                text.contains(marker),
+                "无 DB 时缺登记 WRN：`{marker}`；实得日志：\n{text}"
+            );
+        }
+    }
 }
 
 /// 判据 3：非法值 ⇒ **≤N 秒内**非零退出 + 点名变数（fail-closed），且**不留 `game-svr`**。
