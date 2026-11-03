@@ -468,12 +468,28 @@ async fn bind_gate_listener(advertised_addr: &str, gate_port: u16) -> std::io::R
     TcpListener::bind((advertised_addr, gate_port)).await
 }
 
-/// 启动期 **connect 相位**探活上界（卡 `openmir2-gamesvr-db-startup-hermeticity`，review F1/F3）。
+/// 启动期 **connect 相位**的**快速观察**上界（卡 `openmir2-gamesvr-db-startup-hermeticity`，
+/// review F1/F3；三态拆分见卡 `openmir2-gamesvr-db-probe-threshold`）。
 ///
-/// 只判「能不能连上」（`TcpStream::connect`，不跑 SQL、不建 sqlx 池）。连不上 ⇒ 判定同一
-/// DSN 不可达，四张启动表都不尝试，按既有「读取失败 ⇒ 空表」**逐表**登记 WRN；
-/// 无 DB 路径总代价 ≈ 本常量（SLA 2s，见 `clock_inject` 的 `NO_DB_SLA`）。
+/// 只判「能不能连上」（`TcpStream::connect`，不跑 SQL、不建 sqlx 池）。此窗口内的**明确**
+/// 结论立刻生效：连上 ⇒ 逐表加载；refused ⇒ 判定同一 DSN 不可达，四张启动表都不尝试，
+/// 按既有「读取失败 ⇒ 空表」**逐表**登记 WRN。窗口内**没有结论**（超时）⇒ 可达性**未知**，
+/// 由 [`STARTUP_DB_PROBE_CONFIRM_BOUND`] 的扩展观察定案；仍未知才继续逐表尝试（不跳过）。
 pub const STARTUP_DB_PROBE_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// 启动期探活的**扩展观察**上界（卡 `openmir2-gamesvr-db-probe-threshold`，A1/A2/A4）。
+///
+/// 与快速观察**同时发起**的一条 connect；快速观察超时后，它只用来区分「明确 refused」：
+/// - 明确 refused（含本机实测约 2s 才上报的 RST）⇒ `ConnectFailed`，四表跳过，
+///   无 DB 路径 ≈ 该窗口而不是「四表各等 4s」（A2）；
+/// - 慢连接（1.1s/1.5s 档）最终连上 ⇒ 仍按 **`TimedOut`（未知/继续尝试）** 继续加载四表，
+///   不升级成 Ok（A1：结论保持「未知」）；
+/// - 仍无结论（真正丢包/黑洞）⇒ `TimedOut`，继续按每表上界尝试（A4）。
+///
+/// 取 2.5s：覆盖 1.1s/1.5s 慢连接 + 本机 ~2s 的 refused 上报延迟；最坏总时长
+/// `2.5s + 4s×4 = 18.5s`，仍落在 [`clock_inject`] 的 `READY_BOUND`(20s) 内。
+pub const STARTUP_DB_PROBE_CONFIRM_BOUND: std::time::Duration =
+    std::time::Duration::from_millis(2500);
 
 /// 启动期**单张** DB 表加载的端到端上界（含 monsters 的 MonItems 文件挂接；F2）。
 ///
@@ -770,29 +786,49 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .db_conn_string
         .as_deref()
         .unwrap_or(items::DEFAULT_CONN_STRING);
-    let db_unreachable = match items::probe_reachable(db_conn, STARTUP_DB_PROBE_BOUND).await {
+    let db_probe = items::probe_reachable(
+        db_conn,
+        STARTUP_DB_PROBE_BOUND,
+        STARTUP_DB_PROBE_CONFIRM_BOUND,
+    )
+    .await;
+    // 快速观察无结论 ⇒ 先打「未知」过渡态（A3 三态可区分）；扩展观察只用于确认明确 refused。
+    if db_probe.fast_unknown {
+        glog!(
+            "WRN",
+            "启动期 DB 探活：快速观察 {STARTUP_DB_PROBE_BOUND:?} 内无结论（可达性未知）⇒ 扩展观察 {STARTUP_DB_PROBE_CONFIRM_BOUND:?} 仅用于确认明确不可达（超时不当不可达）"
+        );
+    }
+    match &db_probe.outcome {
         items::StartupDbProbe::Connected => {
             glog!(
                 "INF",
                 "启动期 DB 探活成功（connect ≤ {STARTUP_DB_PROBE_BOUND:?}；四表各自上界 {STARTUP_DB_LOAD_BOUND:?}，单表超时不跳过其它表）"
             );
-            None
+        }
+        items::StartupDbProbe::TimedOut(e) => {
+            // 卡 `openmir2-gamesvr-db-probe-threshold`：超时 = **可达性未知**，不是不可达。
+            // 慢连接（1.1s/1.5s）必须继续尝试四表，由各表自己的 4s 上界判定。
+            glog!(
+                "WRN",
+                "启动期 DB 探活超时（{e}）⇒ 可达性未知（并非明确不可达），四张表继续按每表上界 {STARTUP_DB_LOAD_BOUND:?} 尝试加载（不跳过）"
+            );
         }
         items::StartupDbProbe::ConnectFailed(e) => {
             glog!(
                 "WRN",
-                "启动期 DB 探活失败（{e}；上界 {STARTUP_DB_PROBE_BOUND:?}）⇒ 四张表都不尝试，逐表按「读取失败 ⇒ 空表」登记（无 DB 路径）"
+                "启动期 DB 探活失败（{e}；快速观察上界 {STARTUP_DB_PROBE_BOUND:?}，扩展观察上界 {STARTUP_DB_PROBE_CONFIRM_BOUND:?}）⇒ 四张表都不尝试，逐表按「读取失败 ⇒ 空表」登记（无 DB 路径）"
             );
-            Some(e)
         }
         items::StartupDbProbe::DsnError(e) => {
             glog!(
                 "WRN",
                 "启动期 DB 探活跳过（{e}）⇒ 交由各表加载器立即报告同一解析错误（不触发跨表跳过）"
             );
-            None
         }
-    };
+    }
+    // 唯一判据：**只有 ConnectFailed** 允许跳过四表；Timeout 是未知 ⇒ 继续尝试（A1/A3）。
+    let db_unreachable = db_probe.skip_startup_tables().map(str::to_string);
     let item_table = if let Some(why) = &db_unreachable {
         glog!(
             "WRN",
