@@ -308,7 +308,7 @@ mod tests {
         assert_eq!(m.kind, ServerDataType::KeepAlive);
         assert_eq!(m.socket_id, "");
         assert_eq!(m.data_len, 0);
-        assert!(m.data.is_empty());
+        assert_eq!(m.data, []);
         // 回帧（Rust 侧一律写"空"而非 null）必须能被同一解析器读回，且 Type 为 KeepAlive
         let reply = ServerDataMessage {
             kind: ServerDataType::KeepAlive,
@@ -318,7 +318,7 @@ mod tests {
         };
         let back = ServerDataMessage::from_wire(&reply.to_wire()).unwrap();
         assert_eq!(back.kind, ServerDataType::KeepAlive);
-        assert!(back.data.is_empty());
+        assert_eq!(back.data, []);
     }
 
     /// 破坏者自检：把 `-1`（null）改成 `-2` 仍须报错（不把非法长度静默当空）。

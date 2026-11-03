@@ -73,7 +73,7 @@ mod tests {
                 "ident {id} 出现在服务端消息号表里，应走 msgcodegen 重新生成而不是 client_only"
             );
         }
-        assert!(messages::names_of(CM_QUERYDYNCODE).is_empty());
+        assert_eq!(messages::names_of(CM_QUERYDYNCODE), &[] as &[&str]);
         assert_eq!(name_of(CM_QUERYDYNCODE), Some("CM_QUERYDYNCODE"));
         // 邻近的服务端号仍在表内（锚定 3500 = CM_SPEEDHACKMSG）
         assert_eq!(messages::CM_SPEEDHACKMSG, 3500);
