@@ -1,0 +1,534 @@
+//! `conf_set` 跨进程锁的端到端自测（卡 `openmir2-mcp-conf-set-lock`）。
+//!
+//! 真的起多个 `mir2-mcp` 子进程（stdio JSON-RPC），对同一个 `<root>/M2GameSvr/Server.conf`
+//! 并发执行 `conf_set`。覆盖卡面 A1（并发互斥）、A2（锁冲突有界 + 结构化错误）、
+//! A4（残留锁自愈 / 活锁不得被抢）。
+//!
+//! 用例只依赖公开行为（工具回包 + 盘上文件），不读 `conf.rs` 内部状态；并发窗口用生产代码里
+//! 文档化的测试接缝 `MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS` 放大（未设置时为空操作）。
+
+use std::io::{BufRead, BufReader, Write};
+use std::path::{Path, PathBuf};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use serde_json::{json, Value};
+
+const PROTOCOL_VERSION: &str = "2025-11-25";
+
+/// 每个进程的写入轮数（卡面要求 ≥50）。
+const ROUNDS_PER_PROCESS: usize = 50;
+/// 测试接缝：rename 与回读之间停住多久（毫秒），放大互滚窗口。
+const HOLD_AFTER_RENAME_MS: u64 = 25;
+
+// ---------------------------------------------------------------------------
+// MCP 子进程（与 mcp_e2e.rs 同形态的最小副本）
+// ---------------------------------------------------------------------------
+
+struct McpProc {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    rx: Receiver<String>,
+    next_id: u64,
+    reader: Option<std::thread::JoinHandle<()>>,
+}
+
+impl McpProc {
+    fn start(root: &Path, extra_env: &[(&str, String)]) -> Self {
+        let exe = env!("CARGO_BIN_EXE_mir2-mcp");
+        let mut command = Command::new(exe);
+        command.arg("--root").arg(root);
+        for (key, value) in extra_env {
+            command.env(key, value);
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::inherit())
+            .spawn()
+            .expect("spawn mir2-mcp");
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().expect("stdout");
+        let (tx, rx) = mpsc::channel();
+        let reader = std::thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if tx.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            stdin,
+            rx,
+            next_id: 1,
+            reader: Some(reader),
+        }
+    }
+
+    fn send(&mut self, message: &Value) {
+        let stdin = self.stdin.as_mut().expect("stdin 未关闭");
+        writeln!(stdin, "{message}").expect("写 JSON-RPC");
+        stdin.flush().expect("flush");
+    }
+
+    fn notify(&mut self, method: &str) {
+        self.send(&json!({"jsonrpc": "2.0", "method": method}));
+    }
+
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(&json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}));
+        self.wait_for_id(id)
+    }
+
+    fn wait_for_id(&mut self, id: u64) -> Value {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "等 JSON-RPC 响应 id={id} 超时");
+            let line = self
+                .rx
+                .recv_timeout(remaining)
+                .unwrap_or_else(|_| panic!("等 JSON-RPC 响应 id={id} 超时"));
+            let value: Value = serde_json::from_str(&line)
+                .unwrap_or_else(|e| panic!("服务端输出不是 JSON：{e}；原文：{line}"));
+            if value.get("id").and_then(Value::as_u64) == Some(id) {
+                return value;
+            }
+        }
+    }
+
+    fn call_tool(&mut self, name: &str, arguments: Value) -> Value {
+        self.request("tools/call", json!({"name": name, "arguments": arguments}))
+    }
+
+    fn initialize(&mut self) {
+        self.request(
+            "initialize",
+            json!({
+                "protocolVersion": PROTOCOL_VERSION,
+                "capabilities": {},
+                "clientInfo": {"name": "mir2-mcp-conf-lock-e2e", "version": "0"},
+            }),
+        );
+        self.notify("notifications/initialized");
+    }
+
+    fn shutdown(mut self) {
+        drop(self.stdin.take());
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            match self.child.try_wait().expect("try_wait") {
+                Some(status) => {
+                    assert!(status.success(), "子进程非零退出：{status}");
+                    break;
+                }
+                None => {
+                    if Instant::now() >= deadline {
+                        let _ = self.child.kill();
+                        let _ = self.child.wait();
+                        panic!("关闭 stdin 后子进程 30s 内未退出");
+                    }
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+            }
+        }
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
+
+impl Drop for McpProc {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 夹具
+// ---------------------------------------------------------------------------
+
+const FIXTURE: &[u8] = b"\xEF\xBB\xBF[DataBase]\r\nDbType=MySQL\r\n\r\n[Setup]\r\nMonsterPowerRate=10\r\nGenMonRate=10\r\n";
+
+struct TempRoot {
+    path: PathBuf,
+}
+
+impl TempRoot {
+    fn new(tag: &str) -> Self {
+        static SEQ: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "mir2-mcp-conf-lock-{tag}-{}-{}",
+            std::process::id(),
+            SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir_all(path.join("M2GameSvr")).expect("mkdir");
+        std::fs::write(path.join("M2GameSvr").join("Server.conf"), FIXTURE).expect("写夹具");
+        Self { path }
+    }
+
+    fn conf_path(&self) -> PathBuf {
+        self.path.join("M2GameSvr").join("Server.conf")
+    }
+
+    fn lock_path(&self) -> PathBuf {
+        self.path.join("M2GameSvr").join("Server.conf.lock")
+    }
+
+    fn dir_entries(&self) -> Vec<String> {
+        std::fs::read_dir(self.path.join("M2GameSvr"))
+            .expect("read_dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect()
+    }
+
+    fn residue(&self) -> Vec<String> {
+        self.dir_entries()
+            .into_iter()
+            .filter(|n| n.contains(".lock") || n.ends_with(".tmp") || n.contains(".stale"))
+            .collect()
+    }
+}
+
+impl Drop for TempRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.path);
+    }
+}
+
+fn structured(response: &Value) -> &Value {
+    response
+        .get("result")
+        .and_then(|r| r.get("structuredContent"))
+        .unwrap_or_else(|| panic!("响应缺 result.structuredContent：{response}"))
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+fn lock_body(pid: u32, acquired_ms: u64) -> String {
+    format!("pid={pid}\nacq_ms={acquired_ms}\nnonce=test-{pid}-{acquired_ms}\n")
+}
+
+/// 从文件字节里取 `GenMonRate=` 的值（夹具格式固定）。
+fn genmonrate(bytes: &[u8]) -> String {
+    String::from_utf8_lossy(bytes)
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("GenMonRate="))
+        .map(|v| v.trim().to_string())
+        .expect("夹具里必须有 GenMonRate")
+}
+
+/// 按夹具把 `GenMonRate` 替换成 `value` 后的完整文件字节（A1 断言「完整结果」）。
+fn fixture_with_rate(value: &str) -> Vec<u8> {
+    String::from_utf8_lossy(FIXTURE)
+        .replace("GenMonRate=10", &format!("GenMonRate={value}"))
+        .into_bytes()
+}
+
+fn write_rounds(proc: &mut McpProc, start: u32) -> Vec<Value> {
+    let mut out = Vec::with_capacity(ROUNDS_PER_PROCESS);
+    for i in 0..ROUNDS_PER_PROCESS {
+        let value = (start + u32::try_from(i).expect("轮数适合 u32")).to_string();
+        let response = proc.call_tool(
+            "conf_set",
+            json!({"section": "Setup", "key": "GenMonRate", "value": value}),
+        );
+        out.push(response);
+    }
+    out
+}
+
+// ---------------------------------------------------------------------------
+// A1：并发互斥
+// ---------------------------------------------------------------------------
+
+/// 两个进程各写 50 轮同一个键；锁必须让「读 → 备份 → rename → 回读 → 回滚」整段串行。
+///
+/// 断言：所有回包 ok/wrote=true 且 readback 等于请求值（无互滚错误）；最终文件逐字节等于
+/// 某一轮完整结果；目录里没有 `.tmp` / `.lock` / `.stale` 残留。
+#[test]
+fn concurrent_conf_set_is_serialized_across_processes() {
+    let root = TempRoot::new("concurrent");
+    let env = [
+        (
+            "MIR2_MCP_CONF_LOCK_TIMEOUT_MS",
+            (ROUNDS_PER_PROCESS as u64 * HOLD_AFTER_RENAME_MS * 4 + 10_000).to_string(),
+        ),
+        (
+            "MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS",
+            HOLD_AFTER_RENAME_MS.to_string(),
+        ),
+    ];
+
+    let mut first = McpProc::start(&root.path, &env);
+    let mut second = McpProc::start(&root.path, &env);
+    first.initialize();
+    second.initialize();
+
+    // 两段互不重叠的值域（白名单上界 1000）：最终值可以唯一指认「最后一个写者」。
+    let a = std::thread::spawn(move || {
+        let responses = write_rounds(&mut first, 101);
+        first.shutdown();
+        responses
+    });
+    let b = std::thread::spawn(move || {
+        let responses = write_rounds(&mut second, 201);
+        second.shutdown();
+        responses
+    });
+    let mut responses = a.join().expect("A 进程线程");
+    responses.extend(b.join().expect("B 进程线程"));
+
+    assert_eq!(responses.len(), ROUNDS_PER_PROCESS * 2);
+    for response in &responses {
+        let body = structured(response);
+        assert_eq!(body["ok"], true, "并发写不得失败：{response}");
+        assert_eq!(body["wrote"], true, "{response}");
+        assert_eq!(body["changed"], true, "{response}");
+        let value = body["new_value"].as_str().expect("new_value");
+        assert_eq!(
+            body["readback_value"], value,
+            "回读必须是自己写的值：{response}"
+        );
+    }
+
+    let final_bytes = std::fs::read(root.conf_path()).expect("读最终文件");
+    let final_value = genmonrate(&final_bytes);
+    let final_num: u32 = final_value.parse().expect("值必须是整数");
+    assert!(
+        (101..=150).contains(&final_num) || (201..=250).contains(&final_num),
+        "最终值必须来自某一轮的完整结果：{final_value}"
+    );
+    assert_eq!(
+        final_bytes,
+        fixture_with_rate(&final_value),
+        "最终文件必须逐字节等于「夹具 + 某一个完整值」，不得交错"
+    );
+
+    let residue = root.residue();
+    assert!(
+        residue.is_empty(),
+        "结束时不得有锁/临时文件残留：{residue:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// A2：锁冲突有界 + 结构化错误
+// ---------------------------------------------------------------------------
+
+/// 另一进程持有**活锁**（pid = 本测试进程，仍在运行）时，`conf_set` 必须在有界时间内返回
+/// `conf_lock_timeout`，且不改文件、不删/改写他人的锁、不 panic（进程随后仍能正常服务）。
+#[test]
+fn held_lock_times_out_with_structured_error() {
+    let root = TempRoot::new("held");
+    let before = std::fs::read(root.conf_path()).expect("读写前");
+    let lock = root.lock_path();
+    let body = lock_body(std::process::id(), now_ms());
+    std::fs::write(&lock, &body).expect("写活锁");
+    let lock_before = std::fs::read(&lock).expect("读锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "400".to_string()),
+            // 阈值远大于锁年龄 ⇒ 纯「抢不到」，与残留接管路径无关。
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "30000".to_string()),
+        ],
+    );
+    proc.initialize();
+
+    let started = Instant::now();
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "77"}),
+    );
+    let elapsed = started.elapsed();
+
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let body = structured(&response);
+    assert_eq!(body["code"], "conf_lock_timeout", "{response}");
+    assert_eq!(body["ok"], false, "{response}");
+    assert_eq!(body["wrote"], false, "{response}");
+    assert_eq!(body["timeout_ms"], 400, "{response}");
+    assert!(
+        elapsed >= Duration::from_millis(300),
+        "必须有界等待而不是立即失败：{elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "超时必须有界：{elapsed:?}"
+    );
+
+    assert_eq!(
+        std::fs::read(root.conf_path()).expect("读文件"),
+        before,
+        "锁冲突路径不得改文件"
+    );
+    assert_eq!(
+        std::fs::read(&lock).expect("读锁"),
+        lock_before,
+        "不得删除/改写他人持有的活锁"
+    );
+
+    // 进程仍存活且服务正常（没有 panic/退出）。
+    let got = proc.call_tool("conf_get", json!({"section": "Setup", "key": "GenMonRate"}));
+    assert_eq!(structured(&got)["value"], "10", "{got}");
+    proc.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// A4：残留锁自愈 / 活锁不得被抢
+// ---------------------------------------------------------------------------
+
+/// 模拟「持有者被强杀留下锁文件」：pid 已死 + 时间戳超过 stale 阈值 ⇒ 后续 `conf_set`
+/// 接管旧锁并成功写入，结束后锁文件被正常释放。
+#[test]
+fn dead_holder_lock_is_reclaimed_after_timeout() {
+    let root = TempRoot::new("dead-holder");
+    let dead = dead_pid();
+    let lock = root.lock_path();
+    std::fs::write(&lock, lock_body(dead, now_ms().saturating_sub(10_000))).expect("写残留锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "4000".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "500".to_string()),
+        ],
+    );
+    proc.initialize();
+
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "55"}),
+    );
+    let body = structured(&response);
+    assert_eq!(body["ok"], true, "死锁必须可自愈：{response}");
+    assert_eq!(body["wrote"], true, "{response}");
+    assert_eq!(body["readback_value"], "55", "{response}");
+    assert_eq!(
+        genmonrate(&std::fs::read(root.conf_path()).expect("读")),
+        "55"
+    );
+    assert!(!lock.exists(), "接管成功并写完后锁文件应被释放");
+    assert!(root.residue().is_empty(), "残留：{:?}", root.residue());
+
+    proc.shutdown();
+}
+
+/// 负例（证明「进程是否还活着」真的参与判定）：锁文件很老（远超 stale 阈值），但持有者
+/// **仍存活** ⇒ 接管方必须超时失败，绝不能抢走活锁。
+#[test]
+fn live_holder_lock_is_never_stolen_even_if_old() {
+    let root = TempRoot::new("live-holder");
+    let before = std::fs::read(root.conf_path()).expect("读写前");
+    let lock = root.lock_path();
+    let body = lock_body(std::process::id(), now_ms().saturating_sub(60_000));
+    std::fs::write(&lock, &body).expect("写老但活的锁");
+    let lock_before = std::fs::read(&lock).expect("读锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "400".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "200".to_string()),
+        ],
+    );
+    proc.initialize();
+
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "66"}),
+    );
+    let body = structured(&response);
+    assert_eq!(body["code"], "conf_lock_timeout", "{response}");
+    assert_eq!(body["wrote"], false, "{response}");
+    assert_eq!(
+        std::fs::read(root.conf_path()).expect("读"),
+        before,
+        "活锁场景不得改文件"
+    );
+    assert_eq!(
+        std::fs::read(&lock).expect("读锁"),
+        lock_before,
+        "活锁不得被接管/改写"
+    );
+
+    proc.shutdown();
+}
+
+// ---------------------------------------------------------------------------
+// 辅助：拿一个「确定已死」的 pid
+// ---------------------------------------------------------------------------
+
+fn dead_pid() -> u32 {
+    for _ in 0..8 {
+        let mut child = {
+            #[cfg(windows)]
+            {
+                Command::new("cmd")
+                    .args(["/C", "exit", "0"])
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn 短命子进程")
+            }
+            #[cfg(unix)]
+            {
+                Command::new("true")
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .spawn()
+                    .expect("spawn true")
+            }
+        };
+        let pid = child.id();
+        let _ = child.wait();
+        if !pid_is_alive(pid) {
+            return pid;
+        }
+    }
+    panic!("找不到确定的死 pid（连续 8 次短命子进程 pid 都被复用）");
+}
+
+fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(windows)]
+    {
+        let output = Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .expect("tasklist");
+        let wanted = pid.to_string();
+        String::from_utf8_lossy(&output.stdout).lines().any(|line| {
+            line.split(',')
+                .any(|field| field.trim().trim_matches('"') == wanted)
+        })
+    }
+    #[cfg(unix)]
+    {
+        Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        false
+    }
+}
