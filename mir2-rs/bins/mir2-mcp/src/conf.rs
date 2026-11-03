@@ -13,13 +13,42 @@
 //! 写前备份、写时临时文件 + rename 原子替换、写后回读校验（见 [`conf_set`]）。
 //!
 //! **写面固定为 `<root>/M2GameSvr/Server.conf`**：工具没有 path 参数，因此不存在跨文件写入面。
+//!
+//! # 跨进程互斥（`conf_set` 的「读 → 备份 → rename → 回读 → 回滚」整段）
+//!
+//! HTTP 传输下每个 MCP 会话各建一个 `Mir2Mcp`，两个已鉴权客户端可以并发 `conf_set` 同一个
+//! `Server.conf`。没有跨进程互斥时，两侧的「备份 + rename + 回读校验」会交错：A 的 rename 之后
+//! B 又 rename，A 回读到 B 的值 ⇒ A 用自己**陈旧**的备份回滚，把 B 的成功写入覆盖掉（互滚覆盖）。
+//! 同进程 `Mutex` 不够（HTTP 每会话一个实例），所以用**同目录锁文件**：
+//!
+//! * 锁文件 = 目标同目录的 `Server.conf.lock`，用 `OpenOptions::create_new(true)` 原子创建；
+//!   抢不到就**有界重试**（[`LOCK_RETRY_INTERVAL_MS`]），超过 `MIR2_MCP_CONF_LOCK_TIMEOUT_MS`
+//!   （缺省 [`DEFAULT_LOCK_TIMEOUT_MS`]）返回新错误码 [`ConfError::LockConflict`] =
+//!   `conf_lock_timeout`（不 panic、不改文件）。
+//! * 锁覆盖 `conf_set` 的**无锁预检之后的整段临界区**：锁内重读 → 备份 → 临时文件 + rename →
+//!   回读校验 → 必要时回滚。校验失败/IO 失败同样在锁内回滚后才释放。
+//! * 锁文件内容 = `pid=<持有者 pid>` / `acq_ms=<获取时刻 unix 毫秒>` / `nonce=<唯一串>`；
+//!   正常结束由 [`ConfLock`] 的 `Drop` 删除（**只删 nonce 仍属于自己的那份**，避免误删）
+//! * **残留锁接管规则**（`try_take_over_stale`）三条同时成立才接管：
+//!   1. 锁文件年龄 ≥ `MIR2_MCP_CONF_LOCK_STALE_MS`（缺省 [`DEFAULT_LOCK_STALE_MS`]；
+//!      年龄取 `acq_ms`，缺失时退化为文件 mtime）；
+//!   2. 锁里的 `pid` **不是活进程**（Windows 用 `tasklist`、Unix 用 `kill -0` 探测；
+//!      pid 缺失/无法判定时按「非活」处理）；
+//!   3. 接管用**同目录 rename 抢占**（原子，只有一个进程能成功），并把抢到的文件内容与
+//!      判定时读到的字节逐字节比对；不一致说明撞上「刚释放/刚被他人接管」的竞态，放回去重试。
+//!      ⇒ **活进程的锁永不被抢**（规则 2），被强杀的进程留下的锁在超过时间阈值后可自愈。
+//! * `dry_run=true` **不取锁**：它是零写的纯预览（不备份、不落盘），取排他锁会让只读预演
+//!   被写者阻塞、甚至在并发时返回新的锁错误码，从而改变既有 dry_run 行为；并发下它最多读到
+//!   某一时刻的完整快照（rename 原子替换），不产生持久化副作用。
+//! * 测试专用接缝：`MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS` 在 rename 与回读之间睡眠，
+//!   只用于放大并发窗口复现互滚；生产不设置 ⇒ 恒 0 ⇒ 空操作，不改变任何语义。
 
 use std::collections::HashSet;
 use std::fmt;
 use std::fs;
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -203,6 +232,16 @@ pub enum ConfError {
         actual: String,
         restored: bool,
     },
+    /// 跨进程锁在超时内抢不到（另一个 `conf_set` 正在写同一份 `Server.conf`）。
+    LockConflict {
+        path: PathBuf,
+        lock_path: PathBuf,
+        waited_ms: u64,
+        timeout_ms: u64,
+        stale_ms: u64,
+        /// 锁文件里记的持有者 pid（读不到时为 `None`）。
+        holder_pid: Option<u32>,
+    },
 }
 
 impl ConfError {
@@ -218,6 +257,7 @@ impl ConfError {
             Self::UnsupportedEncoding { .. } => "unsupported_encoding",
             Self::Io { .. } => "io_error",
             Self::ReadbackMismatch { .. } => "readback_mismatch",
+            Self::LockConflict { .. } => "conf_lock_timeout",
         }
     }
 
@@ -279,6 +319,24 @@ impl ConfError {
                 object.insert("actual".into(), actual.clone().into());
                 object.insert("restored".into(), (*restored).into());
             }
+            Self::LockConflict {
+                path,
+                lock_path,
+                waited_ms,
+                timeout_ms,
+                stale_ms,
+                holder_pid,
+            } => {
+                object.insert("path".into(), path.display().to_string().into());
+                object.insert("lock_path".into(), lock_path.display().to_string().into());
+                object.insert("waited_ms".into(), (*waited_ms).into());
+                object.insert("timeout_ms".into(), (*timeout_ms).into());
+                object.insert("stale_ms".into(), (*stale_ms).into());
+                object.insert(
+                    "holder_pid".into(),
+                    holder_pid.map_or(serde_json::Value::Null, |pid| pid.into()),
+                );
+            }
         }
         value
     }
@@ -317,6 +375,22 @@ impl fmt::Display for ConfError {
                 f,
                 "{} 回读校验失败（期望 {expected:?}，读到 {actual:?}；已回滚={restored}）",
                 path.display()
+            ),
+            Self::LockConflict {
+                path,
+                lock_path,
+                waited_ms,
+                timeout_ms,
+                holder_pid,
+                ..
+            } => write!(
+                f,
+                "并发写冲突：{} 的跨进程锁 {} 在 {}ms 内未释放（超时 {}ms；持有者 pid={}）",
+                path.display(),
+                lock_path.display(),
+                waited_ms,
+                timeout_ms,
+                holder_pid.map_or_else(|| "未知".to_string(), |pid| pid.to_string())
             ),
         }
     }
@@ -425,7 +499,17 @@ where
     let new_value = parsed.to_string();
 
     let path = cfg.server_conf_path();
-    let bytes = read_conf(&path)?;
+    // 无锁预检读：`conf_missing` / `unsupported_encoding` 等既有错误码必须在创建锁文件之前
+    // 返回（拒绝路径不碰根目录，不留下锁）。
+    let probe = read_conf(&path)?;
+    // `dry_run` 不取锁（理由见模块文档「跨进程互斥」末段）。
+    let _lock = if dry_run {
+        None
+    } else {
+        Some(ConfLock::acquire(&path)?)
+    };
+    // 非 dry-run 在锁内重读：备份 / rename / 回读 / 回滚必须基于同一份无竞态的输入。
+    let bytes = if dry_run { probe } else { read_conf(&path)? };
     let scanned = scan(&bytes)?;
     let entry =
         find_entry(&scanned, white.section, white.key).ok_or_else(|| ConfError::KeyAbsent {
@@ -490,6 +574,8 @@ where
         source,
     })?;
 
+    test_hold_after_rename();
+
     // 写后回读校验：文件 sha 与值都要一致；读失败或校验不符都要用备份回滚。
     let readback_bytes = match readback(&path) {
         Ok(bytes) => bytes,
@@ -533,6 +619,280 @@ where
         after_line,
         semantics: white.semantics,
     })
+}
+
+// ---------------------------------------------------------------------------
+// 跨进程锁（`<dir>/Server.conf.lock`）
+// ---------------------------------------------------------------------------
+
+/// 抢锁的缺省上限（毫秒）：超过就返回 `conf_lock_timeout`，不无限等。
+const DEFAULT_LOCK_TIMEOUT_MS: u64 = 5_000;
+/// 判定「残留锁可接管」的缺省时间阈值（毫秒）。
+const DEFAULT_LOCK_STALE_MS: u64 = 30_000;
+/// 抢锁重试间隔（毫秒）。
+const LOCK_RETRY_INTERVAL_MS: u64 = 25;
+
+/// 锁参数（env 覆盖仅供运维/测试，缺省值见常量）。
+#[derive(Debug, Clone, Copy)]
+struct LockOptions {
+    timeout: Duration,
+    stale_after: Duration,
+}
+
+/// 读取 env 覆盖（非法值按缺省处理，不让配置把工具打挂）。
+fn lock_options() -> LockOptions {
+    LockOptions {
+        timeout: Duration::from_millis(env_u64(
+            "MIR2_MCP_CONF_LOCK_TIMEOUT_MS",
+            DEFAULT_LOCK_TIMEOUT_MS,
+        )),
+        stale_after: Duration::from_millis(env_u64(
+            "MIR2_MCP_CONF_LOCK_STALE_MS",
+            DEFAULT_LOCK_STALE_MS,
+        )),
+    }
+}
+
+fn env_u64(name: &str, default: u64) -> u64 {
+    std::env::var(name)
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(default)
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u64::try_from(d.as_millis()).ok())
+        .unwrap_or(0)
+}
+
+/// 锁文件路径：与 `Server.conf` 同目录（rename/删除都在同一卷，原子性有保证）。
+fn lock_path_for(conf_path: &Path) -> PathBuf {
+    let name = conf_path.file_name().map_or_else(
+        || "Server.conf".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    conf_path.with_file_name(format!("{name}.lock"))
+}
+
+/// 已持有的锁；`Drop` 时**只删 nonce 仍属于自己的那份**（被接管/误删保护）。
+struct ConfLock {
+    path: PathBuf,
+    nonce: String,
+}
+
+impl ConfLock {
+    /// `create_new` 抢锁，失败有界重试；超时返回 [`ConfError::LockConflict`]。
+    fn acquire(conf_path: &Path) -> Result<Self, ConfError> {
+        let lock_path = lock_path_for(conf_path);
+        let opts = lock_options();
+        let started = Instant::now();
+        loop {
+            match create_lock_file(&lock_path) {
+                Ok(nonce) => {
+                    return Ok(Self {
+                        path: lock_path,
+                        nonce,
+                    })
+                }
+                Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
+                    // 先看是否是「进程已死且超过时间阈值」的残留锁；是则原子接管后立刻重试。
+                    if try_take_over_stale(&lock_path, opts.stale_after) {
+                        continue;
+                    }
+                    let elapsed = started.elapsed();
+                    if elapsed >= opts.timeout {
+                        let holder_pid = fs::read(&lock_path)
+                            .ok()
+                            .and_then(|bytes| parse_lock_meta(&bytes).pid);
+                        return Err(ConfError::LockConflict {
+                            path: conf_path.to_path_buf(),
+                            lock_path,
+                            waited_ms: u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX),
+                            timeout_ms: u64::try_from(opts.timeout.as_millis()).unwrap_or(u64::MAX),
+                            stale_ms: u64::try_from(opts.stale_after.as_millis())
+                                .unwrap_or(u64::MAX),
+                            holder_pid,
+                        });
+                    }
+                    let remaining = opts.timeout.saturating_sub(elapsed);
+                    let nap = Duration::from_millis(LOCK_RETRY_INTERVAL_MS).min(remaining);
+                    if !nap.is_zero() {
+                        std::thread::sleep(nap);
+                    }
+                }
+                Err(source) => {
+                    return Err(ConfError::Io {
+                        path: lock_path,
+                        source,
+                    })
+                }
+            }
+        }
+    }
+}
+
+impl Drop for ConfLock {
+    fn drop(&mut self) {
+        let own = fs::read(&self.path)
+            .map(|bytes| String::from_utf8_lossy(&bytes).contains(&format!("nonce={}", self.nonce)))
+            .unwrap_or(false);
+        if own {
+            let _ = fs::remove_file(&self.path);
+        }
+    }
+}
+
+/// 原子创建锁文件并写入持有者元数据（pid / 获取时刻 / nonce）。
+fn create_lock_file(lock_path: &Path) -> io::Result<String> {
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(lock_path)?;
+    let pid = std::process::id();
+    let stamp = now_ms();
+    let nonce = format!("{pid}-{stamp}-{}", unique_counter());
+    let body = format!("pid={pid}\nacq_ms={stamp}\nnonce={nonce}\n");
+    if let Err(source) = file.write_all(body.as_bytes()) {
+        drop(file);
+        let _ = fs::remove_file(lock_path);
+        return Err(source);
+    }
+    let _ = file.sync_all();
+    Ok(nonce)
+}
+
+/// 锁文件内容（只解析需要的两个字段）。
+#[derive(Debug, Default, Clone)]
+struct LockMeta {
+    pid: Option<u32>,
+    acquired_ms: Option<u64>,
+}
+
+fn parse_lock_meta(bytes: &[u8]) -> LockMeta {
+    let mut meta = LockMeta::default();
+    for line in String::from_utf8_lossy(bytes).lines() {
+        let line = line.trim();
+        if let Some(v) = line.strip_prefix("pid=") {
+            meta.pid = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("acq_ms=") {
+            meta.acquired_ms = v.trim().parse().ok();
+        }
+    }
+    meta
+}
+
+/// 锁年龄（毫秒）：优先 `acq_ms`，缺失时退化为锁文件 mtime。
+fn lock_age_ms(lock_path: &Path, meta: &LockMeta) -> Option<u64> {
+    let now = now_ms();
+    if let Some(ts) = meta.acquired_ms {
+        return Some(now.saturating_sub(ts));
+    }
+    let modified = fs::metadata(lock_path).and_then(|m| m.modified()).ok()?;
+    let ts = modified.duration_since(UNIX_EPOCH).ok()?;
+    Some(now.saturating_sub(u64::try_from(ts.as_millis()).unwrap_or(u64::MAX)))
+}
+
+/// 残留锁接管：**时间阈值 + 持有者存活性**双条件；活进程的锁永不接管。
+///
+/// 接管用同目录 `rename` 抢占（同一目录内 rename 是原子的，多个接管者只有一个成功），
+/// 抢到后把文件内容与判定时读到的字节逐字节比对：不一致说明撞上「持有者刚释放 / 刚被他人
+/// 接管」的竞态，放回原处交给下一轮重新判定（拿不回时留在 `.stale.*` 名字下，宁留残片也不
+/// 误删他人活锁）。返回 `true` 表示「旧锁已被移走，可以立刻重新 `create_new`」。
+fn try_take_over_stale(lock_path: &Path, stale_after: Duration) -> bool {
+    let Ok(bytes) = fs::read(lock_path) else {
+        return false;
+    };
+    let meta = parse_lock_meta(&bytes);
+    let Some(age_ms) = lock_age_ms(lock_path, &meta) else {
+        return false;
+    };
+    let stale_ms = u64::try_from(stale_after.as_millis()).unwrap_or(u64::MAX);
+    if age_ms < stale_ms {
+        return false; // 未到时间阈值：即使 pid 已死也先等（避免与「刚创建/刚释放」竞态）
+    }
+    // 活着 ⇒ 绝不接管（A4 的负例：老但活的锁必须让接管方超时失败）。
+    // 已死 / 无法判定（pid 缺失、探测工具不可用）⇒ 超过时间阈值后可接管。
+    if let Some(Some(true)) = meta.pid.map(process_alive) {
+        return false;
+    }
+
+    let name = lock_path.file_name().map_or_else(
+        || "Server.conf.lock".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let stale_path = lock_path.with_file_name(format!(
+        ".{name}.stale.{}.{}.{}",
+        std::process::id(),
+        now_ms(),
+        unique_counter()
+    ));
+    if fs::rename(lock_path, &stale_path).is_err() {
+        return false; // 别的接管者先抢到了
+    }
+    let same = fs::read(&stale_path)
+        .map(|moved| moved == bytes)
+        .unwrap_or(false);
+    if same {
+        let _ = fs::remove_file(&stale_path);
+        true
+    } else if !lock_path.exists() {
+        // 抢错了（判定后文件已被替换）：还回去，交给下一轮。
+        let _ = fs::rename(&stale_path, lock_path);
+        false
+    } else {
+        // 三路竞态：原位置又被新锁占了，无法复原；宁留残片也不删（可能是他人活锁）。
+        false
+    }
+}
+
+/// 进程存活探测：Windows 用 `tasklist`，Unix 用 `kill -0`。
+///
+/// 返回 `None` = 无法判定（探测工具不可用/输出不可解析）——调用方按「非活 + 时间阈值」处理。
+/// 本函数不引入 `unsafe` 与额外依赖（crate 声明 `unsafe_code = "forbid"`）。
+fn process_alive(pid: u32) -> Option<bool> {
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("tasklist")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let wanted = pid.to_string();
+        let text = String::from_utf8_lossy(&output.stdout);
+        Some(text.lines().any(|line| {
+            line.split(',')
+                .any(|field| field.trim().trim_matches('"') == wanted)
+        }))
+    }
+    #[cfg(unix)]
+    {
+        let status = std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .status()
+            .ok()?;
+        Some(status.success())
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        let _ = pid;
+        None
+    }
+}
+
+/// 测试专用接缝：放大「rename 之后、回读之前」的窗口，供 A1 并发用例稳定复现互滚覆盖。
+///
+/// 生产不设置 `MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS` ⇒ 恒 0 ⇒ 空操作，不改变任何语义。
+fn test_hold_after_rename() {
+    let ms = env_u64("MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS", 0);
+    if ms > 0 {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
 }
 
 fn read_conf(path: &Path) -> Result<Vec<u8>, ConfError> {
@@ -1017,6 +1377,52 @@ ProcessMonRandRate=5\r\n",
             .filter(|n| n.ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty(), "临时文件残留：{leftovers:?}");
+    }
+
+    /// 跨进程锁：成功路径与回滚路径都必须在返回前删掉 `Server.conf.lock`（无残留）。
+    #[test]
+    fn conf_lock_is_released_on_success_and_rollback() {
+        let root = TempRoot::new("lockclean");
+        root.write_conf(&fixture());
+        let lock = root.path.join("M2GameSvr").join("Server.conf.lock");
+
+        conf_set(&root.cfg(), "Setup", "GenMonRate", "31", false).expect("set");
+        assert!(!lock.exists(), "成功路径必须释放锁文件");
+
+        let err = conf_set_with_readback(
+            &root.cfg(),
+            "Setup",
+            "GenMonRate",
+            "32",
+            false,
+            &|_path: &Path| Ok(b"not the conf".to_vec()),
+        )
+        .unwrap_err();
+        assert_eq!(err.code(), "readback_mismatch");
+        assert!(!lock.exists(), "回滚路径也必须释放锁文件");
+
+        let leftovers: Vec<String> = fs::read_dir(root.path.join("M2GameSvr"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|n| n.contains(".lock") || n.ends_with(".tmp"))
+            .collect();
+        assert!(leftovers.is_empty(), "锁/临时文件残留：{leftovers:?}");
+    }
+
+    /// `dry_run` 不取锁：目录树（含隐藏文件）前后逐字节一致。
+    #[test]
+    fn dry_run_never_touches_lock_file() {
+        let root = TempRoot::new("drylock");
+        root.write_conf(&fixture());
+        let before = tree_sha(&root.path);
+        conf_set(&root.cfg(), "Setup", "GenMonRate", "33", true).expect("dry");
+        assert_eq!(tree_sha(&root.path), before, "dry_run 目录 sha 前后相等");
+        assert!(!root
+            .path
+            .join("M2GameSvr")
+            .join("Server.conf.lock")
+            .exists());
     }
 
     #[test]
