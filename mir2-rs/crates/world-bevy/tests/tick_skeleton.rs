@@ -189,17 +189,57 @@ fn strip_comments_and_strings(src: &str) -> String {
     out
 }
 
-/// 契约禁止出现的标识符：配置对象族（可挂 `.ambiguous_with*()` / `.chain()`）
-/// 与歧义豁免入口。扫描域是**整个 `crates/world-bevy/src/**/*.rs` 的代码**
-/// （剥注释/字符串，但**保留 `use` 行**）——别名可以挪到 `lib.rs` 或其它同 crate 文件，
-/// 只扫 tick.rs 会被绕过（reviewer F6）。
-const BANNED_CONTRACT_TOKENS: [&str; 5] = [
+/// 配置对象族 / 歧义豁免入口（token 黑名单；剥注释与字符串后扫描）。
+const BANNED_CONFIG_TOKENS: [&str; 5] = [
     "IntoScheduleConfigs",
     "ScheduleConfigs",
     "IntoSystemConfigs",
     "ambiguous_with",
     "ignore_ambiguity",
 ];
+
+/// 绕过扫描域的「包含指令」族（reviewer F7）：`#[path = "../x.rs"]` 把文件放到 src 外、
+/// `include!` / `OUT_DIR` 把生成代码注入。这些按**保留字符串**的形态扫描
+/// （`env!("OUT_DIR")` 的 token 在字符串里，剥字符串就看不到了）。
+const BANNED_INCLUSION_TOKENS: [&str; 3] = ["include!", "#[path", "OUT_DIR"];
+
+/// `impl TickRunner` 允许的**公开方法集合**（结构白名单，reviewer F7）。
+///
+/// 为什么用白名单而不是继续追 token：文本黑名单是「追着补」的——别名可以挪出文件、
+/// 换一种写法，总能绕过。公开方法集合是结构性的：**任何新增公开方法都必须显式改这里**，
+/// 不管它的参数类型叫什么、来自哪个文件。
+const EXPECTED_TICKRUNNER_PUBLIC_METHODS: [&str; 3] = ["add_systems", "new", "run"];
+
+/// 只去注释、**保留字符串**（用于包含指令族：`env!("OUT_DIR")` 的 token 在字符串里）。
+fn strip_comments_only(src: &str) -> String {
+    let mut out = String::with_capacity(src.len());
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '/' && chars.peek() == Some(&'/') {
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                    break;
+                }
+            }
+        } else if c == '/' && chars.peek() == Some(&'*') {
+            chars.next();
+            let mut prev = '\0';
+            for sc in chars.by_ref() {
+                if sc == '\n' {
+                    out.push('\n');
+                }
+                if prev == '*' && sc == '/' {
+                    break;
+                }
+                prev = sc;
+            }
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
 
 /// 收集 `src/` 下所有 `.rs`（递归）：扫描域是整个 crate 的源码，不只是 tick.rs。
 fn collect_rs(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -260,18 +300,85 @@ fn narrow_add_systems_signature(code: &str) -> Option<&str> {
     None
 }
 
-/// 返回契约违规项（空 = 绿色）。正例与三条反例共用同一判定。
+/// 取 `impl TickRunner { ... }` 的**函数体文本**（按花括号配对；输入是剥注释/字符串后的代码）。
+fn impl_tickrunner_body(code: &str) -> Option<&str> {
+    let start = code.find("impl TickRunner")?;
+    let open = start + code[start..].find('{')?;
+    let bytes = code.as_bytes();
+    let mut depth = 0usize;
+    for (i, b) in bytes.iter().enumerate().skip(open) {
+        match b {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(&code[open + 1..i]);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// 从 impl 体里抽取全部 `pub fn <name>` 的方法名（排序去重）。
+fn public_method_names(body: &str) -> Vec<String> {
+    let marker = "pub fn ";
+    let mut out = Vec::new();
+    let mut from = 0usize;
+    while let Some(rel) = body[from..].find(marker) {
+        let start = from + rel + marker.len();
+        let name: String = body[start..]
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_')
+            .collect();
+        if !name.is_empty() {
+            out.push(name);
+        }
+        from = start;
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+/// 结构白名单：`impl TickRunner` 的公开方法集合必须**精确等于**预期集合。
+fn public_method_violations(code: &str) -> Vec<String> {
+    let Some(body) = impl_tickrunner_body(code) else {
+        return vec!["找不到 `impl TickRunner` 块".to_string()];
+    };
+    let actual = public_method_names(body);
+    let expected: Vec<String> = EXPECTED_TICKRUNNER_PUBLIC_METHODS
+        .iter()
+        .map(|s| s.to_string())
+        .collect();
+    if actual != expected {
+        return vec![format!(
+            "TickRunner 公开方法集合必须精确等于 {expected:?}，实际 {actual:?}（新增公开方法必须先显式改白名单）"
+        )];
+    }
+    Vec::new()
+}
+
+/// 返回契约违规项（空 = 绿色）。正例与全部反例共用同一判定。
 ///
-/// * `files`：**整个 crate 的 src 文档**，逐个剥注释/字符串后禁 banned token
-///   （别名/再导出放在 lib.rs 也逃不掉）；
-/// * `entry_src`：仅 tick.rs，额外断言 `add_systems` 是单系统签名（入口契约）。
+/// * `files`：**整个 crate 的 src 文档**；
+///   - 配置对象族 token：剥注释/字符串后扫描；
+///   - `include!` / `#[path` / `OUT_DIR`：只剥注释（保留字符串）后扫描；
+/// * `entry_src`：仅 tick.rs——额外断言 `add_systems` 单系统签名 + 公开方法白名单。
 fn contract_violations(files: &[(String, String)], entry_src: Option<&str>) -> Vec<String> {
     let mut violations = Vec::new();
     for (name, src) in files {
         let code = strip_comments_and_strings(src);
-        for token in BANNED_CONTRACT_TOKENS {
+        for token in BANNED_CONFIG_TOKENS {
             if code.contains(token) {
                 violations.push(format!("{name}: 出现被禁 token `{token}`"));
+            }
+        }
+        let code_with_strings = strip_comments_only(src);
+        for token in BANNED_INCLUSION_TOKENS {
+            if code_with_strings.contains(token) {
+                violations.push(format!("{name}: 出现被禁包含指令 token `{token}`"));
             }
         }
     }
@@ -284,11 +391,19 @@ fn contract_violations(files: &[(String, String)], entry_src: Option<&str>) -> V
             )),
             None => violations.push("tick.rs 缺少 `pub fn add_systems` 入口".to_string()),
         }
+        violations.extend(public_method_violations(&code));
     }
     violations
 }
 
-/// 正例：整个 `world-bevy/src/**/*.rs` 必须零违规（剥注释后扫描；入口签名只查 tick.rs）。
+/// 干净的合成 tick.rs：`impl TickRunner` 恰好有白名单里的三个公开方法。
+const CLEAN_TICK: &str = "impl TickRunner {
+    pub fn new() -> Self { Self }
+    pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }
+    pub fn run(&mut self, world: &mut World) { }
+}";
+
+/// 正例：整个 `world-bevy/src/**/*.rs` 必须零违规（整 crate 扫描 + 入口白名单）。
 #[test]
 fn contract_rejects_schedule_config_escape_hatch() {
     let files = src_documents();
@@ -300,7 +415,7 @@ fn contract_rejects_schedule_config_escape_hatch() {
     );
 }
 
-/// 反例①（F4 绕过①）：在原入口之后新增第二个接受配置对象的方法 ⇒ 守卫必须红。
+/// 反例①（F4 绕过①）：新增第二个接受配置对象的方法 ⇒ 守卫必须红。
 #[test]
 fn redcheck_second_config_object_method_is_rejected() {
     let mut files = src_documents();
@@ -320,18 +435,16 @@ fn redcheck_second_config_object_method_is_rejected() {
 }
 
 /// 反例②（F6 绕过）：别名放在 **lib.rs**，tick.rs 里用 `crate::Cfg`。
-/// tick.rs 内不出现任何 banned token，但整 crate 扫描必须在 lib.rs 命中原始类型名。
 #[test]
 fn redcheck_alias_in_lib_rs_used_from_tick_is_rejected() {
-    let tick = "pub fn add_systems<M>(&mut self, stage: TickStage, systems: impl crate::Cfg<bevy_ecs::system::ScheduleSystem, M>) -> &mut Self { self }";
     let files = vec![
         (
             "lib.rs".to_string(),
             "pub use bevy_ecs::schedule::IntoScheduleConfigs as Cfg;".to_string(),
         ),
-        ("tick.rs".to_string(), tick.to_string()),
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
     ];
-    let violations = contract_violations(&files, Some(tick));
+    let violations = contract_violations(&files, Some(CLEAN_TICK));
     assert!(
         violations
             .iter()
@@ -343,26 +456,81 @@ fn redcheck_alias_in_lib_rs_used_from_tick_is_rejected() {
 /// 反例②b（F6 变体）：lib.rs 直接 `pub use ...IntoScheduleConfigs...` ⇒ 必须红。
 #[test]
 fn redcheck_direct_reexport_of_config_type_is_rejected() {
-    let tick = "pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }";
     let files = vec![
         (
             "lib.rs".to_string(),
             "pub use bevy_ecs::schedule::IntoScheduleConfigs;".to_string(),
         ),
-        ("tick.rs".to_string(), tick.to_string()),
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
     ];
-    let violations = contract_violations(&files, Some(tick));
+    let violations = contract_violations(&files, Some(CLEAN_TICK));
     assert!(
         violations.iter().any(|v| v.contains("IntoScheduleConfigs")),
         "lib.rs 的直接再导出未被发现: {violations:?}"
     );
 }
 
-/// 反例③（误报检查）：正常代码必须绿；注释/字符串里的禁用 token 不得误报。
+/// 反例③（F7 主修）：`impl TickRunner` 里新增**任意**公开方法 ⇒ 结构白名单必须红。
+#[test]
+fn redcheck_new_public_method_on_tickrunner_is_rejected() {
+    let clean_files = vec![("tick.rs".to_string(), CLEAN_TICK.to_string())];
+    assert!(
+        contract_violations(&clean_files, Some(CLEAN_TICK)).is_empty(),
+        "白名单基线应绿"
+    );
+
+    let with_new = CLEAN_TICK.replace(
+        "    pub fn run",
+        "    pub fn add_systems_alt() { }\n    pub fn run",
+    );
+    let files = vec![("tick.rs".to_string(), with_new.clone())];
+    let violations = contract_violations(&files, Some(&with_new));
+    assert!(
+        violations.iter().any(|v| v.contains("公开方法集合")),
+        "新增公开方法未被结构白名单发现: {violations:?}"
+    );
+}
+
+/// 反例④（F7 绕过）：`#[path = "../..."]` 把别名文件放到 src 外再引入 ⇒ 必须红；
+/// `include!` / `OUT_DIR` 生成注入同样必须红。
+#[test]
+fn redcheck_path_include_alias_file_is_rejected() {
+    let path_bypass = vec![
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
+        (
+            "probe_alias.rs".to_string(),
+            "#[path = \"../probe_alias.rs\"]\nmod probe_alias;".to_string(),
+        ),
+    ];
+    let violations = contract_violations(&path_bypass, Some(CLEAN_TICK));
+    assert!(
+        violations.iter().any(|v| v.contains("#[path")),
+        "src 外别名文件的 #[path] 未被发现: {violations:?}"
+    );
+
+    let include_bypass = vec![
+        ("tick.rs".to_string(), CLEAN_TICK.to_string()),
+        (
+            "gen.rs".to_string(),
+            "include!(concat!(env!(\"OUT_DIR\"), \"/gen.rs\"));".to_string(),
+        ),
+    ];
+    let violations = contract_violations(&include_bypass, Some(CLEAN_TICK));
+    assert!(
+        violations.iter().any(|v| v.contains("include!")),
+        "include!/OUT_DIR 注入未被发现: {violations:?}"
+    );
+}
+
+/// 反例⑤（误报检查）：正常代码必须绿；注释/字符串里的配置 token 不得误报。
 #[test]
 fn redcheck_clean_source_passes_and_comments_do_not_false_positive() {
     let tick = "// IntoScheduleConfigs ambiguous_with ignore_ambiguity in comment
-pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }";
+impl TickRunner {
+    pub fn new() -> Self { Self }
+    pub fn add_systems<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) -> &mut Self { self }
+    pub fn run(&mut self, world: &mut World) { }
+}";
     let files = vec![
         (
             "lib.rs".to_string(),
