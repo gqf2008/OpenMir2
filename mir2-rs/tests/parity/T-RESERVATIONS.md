@@ -308,3 +308,4 @@
 | T-271 | openmir2-gm-family-m-spawn-make | 2026-10-30T20:36:55Z | 在用 |
 | T-272 | openmir2-gm-family-w-guild | 2026-10-30T22:22:45Z | 在用 |
 | T-273 | openmir2-mcp-gm-execute | 2026-11-01T10:22:25Z | 在用 |
+| T-275 | openmir2-gm-levelrank-frame | 2026-11-03T17:51:08Z | 在用 |

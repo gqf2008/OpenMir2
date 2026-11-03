@@ -21648,7 +21648,7 @@ struct EnterConfig {
     home_start_points: Vec<mir2_envir::startpoint::StartPoint>,
     string_conf: crate::strings::StringConf,
     show_rank_level_name: bool,
-    /// **T-274**：`[Setup] LevelRankOnLogin`（缺省 0 = 关）——登录 enter 批次是否追加
+    /// **T-275**：`[Setup] LevelRankOnLogin`（缺省 0 = 关）——登录 enter 批次是否追加
     /// `SM_LEVELRANK(1108)`；只发给**本次进世界的会话**自己（A3）。
     level_rank_on_login: bool,
     /// `[Server] ServerIndex`（`SystemShare.ServerIndex`）：`MakeSaveRcd` 写
@@ -27266,7 +27266,7 @@ fn sim_loop(
                                                     // 才出队它们（2026-10-20 真机：10/41×6 → 654 → …），
                                                     // 故由首次 AOI 扫描 tick 的 [`drain_login_tail`] 补发。
                                                     let (bodies, tail_probe) = inputs.frames_split();
-                                                    // **T-274**：`[Setup] LevelRankOnLogin`（缺省 0）——
+                                                    // **T-275**：`[Setup] LevelRankOnLogin`（缺省 0）——
                                                     // 只给**本次进世界的会话**自己的批次追加一帧
                                                     // `SM_LEVELRANK(1108)`；缺省关 ⇒ `bodies` 原样（A1）。
                                                     // 数据源 = 在线登记表 ∩ 世界实体（非 ghost），排序/编码
@@ -30876,7 +30876,7 @@ mod tests {
         );
     }
 
-    /// **T-274 接线点保鲜门**：`SM_LEVELRANK(1108)` 的生产装配点必须仍在登录路径上，
+    /// **T-275 接线点保鲜门**：`SM_LEVELRANK(1108)` 的生产装配点必须仍在登录路径上，
     /// 恰一处，且开关直接取 `[Setup] LevelRankOnLogin`（缺省 0 ⇒ 不追加，A1）。
     ///
     /// 红检（实测）：删掉生产装配调用那一行 ⇒ 命中 0 ⇒ 必红；

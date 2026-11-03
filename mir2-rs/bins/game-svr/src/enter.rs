@@ -400,7 +400,7 @@ pub fn gbk(s: &str) -> Vec<u8> {
     game_svr::downlink::gbk(s)
 }
 
-/// `SM_LEVELRANK(1108)` —— **登记偏差 T-274**（oracle 无此帧；`git grep LEVELRANK` 零命中）。
+/// `SM_LEVELRANK(1108)` —— **登记偏差 T-275**（oracle 无此帧；`git grep LEVELRANK` 零命中）。
 ///
 /// 客户端契约（跨会话提供：Zig 客户端 `gui/rank.zig` 的 `parseHumanRanksDecoded`）：
 /// 头 `Recog = page`（≥ 0）、`Param = kind`（≤ 3 人物排行，4..=7 英雄排行；本卡只做 `kind = 0`）；
@@ -2547,7 +2547,7 @@ mod tests {
         assert_eq!(tail, expect, "只发有效条目（空槽/缺模板都不进 211）");
     }
 
-    // ---- T-274（`SM_LEVELRANK(1108)`，缺省关；tier=L）----
+    // ---- T-275（`SM_LEVELRANK(1108)`，缺省关；tier=L）----
 
     /// A2：240B 布局（10 行 × 24B）+ 行序（level 降序、同级 GBK 名升序）+ index=ActorId。
     #[test]

@@ -397,7 +397,7 @@ pub struct GateConfig {
     /// `ScriptNpc.ScriptGotoCountLimit`（`ScriptEngine.cs:629` 的 `playerActor.ScriptGotoCount >`
     /// 守卫）——NPC 脚本 `goto` 递归上限，`NpcHost` 装载时注入。
     pub script_goto_count_limit: i32,
-    /// `[Setup] LevelRankOnLogin` —— **本仓新增偏差开关**（oracle 无此键/此帧，T-274）。
+    /// `[Setup] LevelRankOnLogin` —— **本仓新增偏差开关**（oracle 无此键/此帧，T-275）。
     ///
     /// 缺省 `0`（关）：登录 enter 批次不追加任何帧，parity 基线逐字节不变（A1）。
     /// 非 0 ⇒ 给进世界的玩家追加一帧 `SM_LEVELRANK(1108)`（人物排行 `kind=0`）。
@@ -577,7 +577,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                     .with_context(|| format!("ScriptGotoCountLimit 不是合法整数：{v:?}"))?,
             );
         }
-        // **T-274**：`[Setup] LevelRankOnLogin`（本仓新增偏差开关，oracle 无此键）。
+        // **T-275**：`[Setup] LevelRankOnLogin`（本仓新增偏差开关，oracle 无此键）。
         // 口径：缺键/空值 = 0（关）；非 0 = 开；**非法值按 0 处理并记 WRN**（不 panic，A4）。
         if section == "SETUP" && k == "LEVELRANKONLOGIN" {
             let (on, warn) = parse_level_rank_on_login(v);
@@ -1395,7 +1395,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         monster_power_rate: monster_power_rate.unwrap_or(10),
         // oracle 缺省值（`GameSvrConf.cs:1527` 的 `ScriptGotoCountLimit = 30`）。
         script_goto_count_limit: script_goto_count_limit.unwrap_or(30),
-        // T-274：本仓新增偏差开关，缺省 0（关）⇒ 零行为变化。
+        // T-275：本仓新增偏差开关，缺省 0（关）⇒ 零行为变化。
         level_rank_on_login: level_rank_on_login.unwrap_or(false),
         // `GameSvrConf.cs:1233` 的 ctor 缺省。
         server_name: server_name.unwrap_or_else(|| "SKY引擎".to_string()),
@@ -2583,7 +2583,7 @@ HungerSystem=garbage
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// A4 + A1（T-274）：`[Setup] LevelRankOnLogin` 缺省 0；非 0 = 开；空/非法值按 0（不 panic）。
+    /// A4 + A1（T-275）：`[Setup] LevelRankOnLogin` 缺省 0；非 0 = 开；空/非法值按 0（不 panic）。
     ///
     /// 缺键路径同时证明 **A1 的默认零变化**：用装载出的开关去调生产装配点
     /// [`crate::enter::append_level_rank`]，帧集合必须**逐字节不变**。
