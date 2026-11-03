@@ -471,6 +471,374 @@ fn live_holder_lock_is_never_stolen_even_if_old() {
 }
 
 // ---------------------------------------------------------------------------
+// 跟进卡 `openmir2-mcp-conf-lock-edge-cases`：探测不可用 / pid 复用 / 残留清理
+// ---------------------------------------------------------------------------
+
+/// 在目录里按「名字含 `contains` 且以 `suffix` 结尾」找第一个文件。
+fn find_residue(dir: &Path, contains: &str, suffix: &str) -> Option<PathBuf> {
+    std::fs::read_dir(dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .find(|p| {
+            let name = p
+                .file_name()
+                .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+            name.contains(contains) && name.ends_with(suffix)
+        })
+}
+
+/// A1：进程探测不可用（`Unknown`）⇒ 保守视为「活」，**不得**接管超龄残留锁。
+///
+/// 锁里的 pid 已死、年龄远超阈值；唯一让接管失效的是「探测不可用」。把 Unknown 改判成
+/// Dead 会让本用例变红（变异自证见 patch body）。
+#[test]
+fn unknown_process_probe_never_takes_over_stale_lock() {
+    let root = TempRoot::new("probe-unknown");
+    let before = std::fs::read(root.conf_path()).expect("读写前");
+    let lock = root.lock_path();
+    let body = lock_body(dead_pid(), now_ms().saturating_sub(60_000));
+    std::fs::write(&lock, &body).expect("写残留锁");
+    let lock_before = std::fs::read(&lock).expect("读锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "400".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
+            ("MIR2_MCP_CONF_TEST_PROCESS_PROBE", "unknown".to_string()),
+        ],
+    );
+    proc.initialize();
+
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "71"}),
+    );
+    assert_eq!(
+        structured(&response)["code"],
+        "conf_lock_timeout",
+        "探测不可用时必须保守放行不了（不得接管）：{response}"
+    );
+    assert_eq!(
+        std::fs::read(&lock).expect("读锁"),
+        lock_before,
+        "探测不可用时不得接管/改写残留锁"
+    );
+    assert_eq!(
+        std::fs::read(root.conf_path()).expect("读文件"),
+        before,
+        "探测不可用时不得改文件"
+    );
+
+    proc.shutdown();
+}
+
+/// A2：pid 仍活但**启动时刻与锁里记录的不一致** ⇒ 判定 pid 复用（死痕迹），必须可回收。
+#[test]
+fn reused_pid_lock_is_reclaimed_when_start_time_differs() {
+    let root = TempRoot::new("pid-reuse");
+    let lock = root.lock_path();
+    // 探测固定返回 `alive:999`；锁里记录的是另一时刻 `1` ⇒ 不是同一个进程。
+    std::fs::write(
+        &lock,
+        format!(
+            "pid={}\nacq_ms={}\nstart=1\nnonce=x\n",
+            std::process::id(),
+            now_ms().saturating_sub(10_000)
+        ),
+    )
+    .expect("写复用 pid 的残留锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "4000".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "500".to_string()),
+            ("MIR2_MCP_CONF_TEST_PROCESS_PROBE", "alive:999".to_string()),
+        ],
+    );
+    proc.initialize();
+
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "72"}),
+    );
+    let body = structured(&response);
+    assert_eq!(body["ok"], true, "pid 复用的死痕迹必须可回收：{response}");
+    assert_eq!(body["wrote"], true, "{response}");
+    assert_eq!(body["readback_value"], "72", "{response}");
+    assert!(!lock.exists(), "接管成功并写完后锁文件应被释放");
+
+    proc.shutdown();
+}
+
+/// A2 负例：pid + 启动时刻都匹配 = 原持有者仍活 ⇒ 即使超龄也不得抢。
+#[test]
+fn live_holder_with_matching_start_time_is_not_stolen() {
+    let root = TempRoot::new("pid-live-match");
+    let before = std::fs::read(root.conf_path()).expect("读写前");
+    let lock = root.lock_path();
+    std::fs::write(
+        &lock,
+        format!(
+            "pid={}\nacq_ms={}\nstart=999\nnonce=x\n",
+            std::process::id(),
+            now_ms().saturating_sub(60_000)
+        ),
+    )
+    .expect("写活锁");
+    let lock_before = std::fs::read(&lock).expect("读锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "400".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
+            ("MIR2_MCP_CONF_TEST_PROCESS_PROBE", "alive:999".to_string()),
+        ],
+    );
+    proc.initialize();
+
+    let response = proc.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "73"}),
+    );
+    assert_eq!(
+        structured(&response)["code"],
+        "conf_lock_timeout",
+        "启动时刻一致 ⇒ 是原持有者，不得接管：{response}"
+    );
+    assert_eq!(
+        std::fs::read(&lock).expect("读锁"),
+        lock_before,
+        "活锁不得被接管/改写"
+    );
+    assert_eq!(std::fs::read(root.conf_path()).expect("读文件"), before);
+
+    proc.shutdown();
+}
+
+/// A3：崩溃残留清理——死痕迹（pid 死 / pid 复用）的 `.tmp`、`.stale.*` 在下次写成功时
+/// 被清掉；**活进程持有**的 `.tmp` 不得删（持有者退出后下一轮再清）。
+#[test]
+fn crash_residue_is_cleaned_but_live_holder_residue_is_kept() {
+    let root = TempRoot::new("residue");
+    let conf_dir = root.path.join("M2GameSvr");
+    let conf_name = "Server.conf";
+    let old = now_ms().saturating_sub(10_000);
+
+    // 1) 活进程持有的 `.tmp`：崩溃接缝让子进程写完 tmp 后失败，子进程继续存活。
+    let mut owner = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_TEST_FAIL_AFTER_TMP_WRITE", "1".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "300".to_string()),
+        ],
+    );
+    owner.initialize();
+    let response = owner.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "81"}),
+    );
+    assert_eq!(response["result"]["isError"], true, "{response}");
+    let live_tmp =
+        find_residue(&conf_dir, ".mir2-mcp.", ".tmp").expect("崩溃接缝必须留下 .tmp 残留");
+
+    // 2) 伪造两类「确证已死」的残留：死 pid；以及 pid 活（本测试进程）但启动时刻不匹配。
+    let dead = dead_pid();
+    let dead_tmp = conf_dir.join(format!(".{conf_name}.mir2-mcp.{dead}.1.{old}.0.tmp"));
+    std::fs::write(&dead_tmp, b"junk").expect("伪造死 pid .tmp");
+    let reused_tmp = conf_dir.join(format!(
+        ".{conf_name}.mir2-mcp.{}.1.{old}.0.tmp",
+        std::process::id()
+    ));
+    std::fs::write(&reused_tmp, b"junk").expect("伪造 pid 复用 .tmp");
+    let dead_stale = conf_dir.join(format!(".{conf_name}.stale.{dead}.1.{old}.0"));
+    // 内容也写 `start=1`：即使 pid 被后续进程复用，启动时刻不匹配仍判死痕迹。
+    std::fs::write(
+        &dead_stale,
+        format!("pid={dead}\nacq_ms={old}\nstart=1\nnonce=x\n"),
+    )
+    .expect("伪造死 pid .stale");
+
+    // 让活进程那份残留超过 stale 阈值（否则「保留」可能只是因为年龄不够）。
+    std::thread::sleep(Duration::from_millis(500));
+
+    // 3) 另一个进程写一次：清理死痕迹，但活进程持有的 tmp 保留。
+    let mut cleaner = McpProc::start(
+        &root.path,
+        &[("MIR2_MCP_CONF_LOCK_STALE_MS", "300".to_string())],
+    );
+    cleaner.initialize();
+    let response = cleaner.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "82"}),
+    );
+    assert_eq!(
+        structured(&response)["ok"],
+        true,
+        "清理轮写成功：{response}"
+    );
+    assert!(!dead_tmp.exists(), "死 pid 的 .tmp 必须被清理");
+    assert!(!reused_tmp.exists(), "pid 复用的 .tmp 必须被清理");
+    assert!(!dead_stale.exists(), "死 pid 的 .stale 必须被清理");
+    assert!(live_tmp.exists(), "活进程持有的 .tmp 不得删除");
+
+    // 4) 持有者退出 ⇒ 变成死痕迹 ⇒ 下一轮写清掉。
+    owner.shutdown();
+    std::thread::sleep(Duration::from_millis(500));
+    let response = cleaner.call_tool(
+        "conf_set",
+        json!({"section": "Setup", "key": "GenMonRate", "value": "83"}),
+    );
+    assert_eq!(
+        structured(&response)["ok"],
+        true,
+        "第二轮写成功：{response}"
+    );
+    assert!(!live_tmp.exists(), "持有者退出后 .tmp 必须被清理");
+    cleaner.shutdown();
+
+    let leftovers = root.residue();
+    assert!(
+        leftovers.is_empty(),
+        "目录里只剩目标文件，残留：{leftovers:?}"
+    );
+}
+
+/// ④ 并发接管：每轮留一个「死持有者 + 超龄」的锁，再让多个进程并发抢；N 轮后目录里
+/// 只剩 `Server.conf`（没有 `.stale.*` / `.tmp` / `.lock` 残留）。
+#[test]
+fn concurrent_stale_takeover_leaves_only_target_file() {
+    let root = TempRoot::new("takeover-rounds");
+    const ROUNDS: usize = 5;
+    const WRITERS: usize = 3;
+    let env = [
+        ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "8000".to_string()),
+        ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
+    ];
+
+    for round in 0..ROUNDS {
+        // 死持有者 + 超龄；`start=1` 保证即使 pid 被新进程复用也判成死痕迹。
+        let dead = dead_pid();
+        let old = now_ms().saturating_sub(5_000);
+        std::fs::write(
+            root.lock_path(),
+            format!("pid={dead}\nacq_ms={old}\nstart=1\nnonce=dead-{round}\n"),
+        )
+        .expect("写死锁");
+        std::thread::sleep(Duration::from_millis(150));
+
+        let writers: Vec<McpProc> = (0..WRITERS)
+            .map(|_| {
+                let mut proc = McpProc::start(&root.path, &env);
+                proc.initialize();
+                proc
+            })
+            .collect();
+        let handles: Vec<_> = writers
+            .into_iter()
+            .enumerate()
+            .map(|(idx, mut proc)| {
+                let value = (101 + round * WRITERS + idx).to_string();
+                std::thread::spawn(move || {
+                    let response = proc.call_tool(
+                        "conf_set",
+                        json!({"section": "Setup", "key": "GenMonRate", "value": value}),
+                    );
+                    proc.shutdown();
+                    response
+                })
+            })
+            .collect();
+        for handle in handles {
+            let response = handle.join().expect("writer thread");
+            let body = structured(&response);
+            assert_eq!(body["ok"], true, "第 {round} 轮接管写必须成功：{response}");
+        }
+
+        let residue = root.residue();
+        assert!(
+            residue.is_empty(),
+            "第 {round} 轮并发接管后不得有残留：{residue:?}"
+        );
+    }
+
+    let mut entries = root.dir_entries();
+    entries.sort();
+    assert_eq!(
+        entries,
+        vec!["Server.conf".to_string()],
+        "目录里只剩目标文件"
+    );
+}
+
+/// ④ 三路竞态：判定「死锁」之后、rename 之前，原位置被**新锁**替换 ⇒ 搬走的是新锁，
+/// 必须放回原处：不得删活锁，也不得留下 `.stale.*`。
+#[test]
+fn takeover_race_restores_replacement_lock_without_residue() {
+    let root = TempRoot::new("takeover-race");
+    let dead = dead_pid();
+    let old = now_ms().saturating_sub(10_000);
+    std::fs::write(
+        root.lock_path(),
+        format!("pid={dead}\nacq_ms={old}\nstart=1\nnonce=dead-race\n"),
+    )
+    .expect("写死锁");
+
+    let mut proc = McpProc::start(
+        &root.path,
+        &[
+            ("MIR2_MCP_CONF_LOCK_TIMEOUT_MS", "2000".to_string()),
+            ("MIR2_MCP_CONF_LOCK_STALE_MS", "100".to_string()),
+            (
+                "MIR2_MCP_CONF_TEST_HOLD_BEFORE_TAKEOVER_RENAME_MS",
+                "500".to_string(),
+            ),
+        ],
+    );
+    proc.initialize();
+
+    let handle = std::thread::spawn(move || {
+        let response = proc.call_tool(
+            "conf_set",
+            json!({"section": "Setup", "key": "GenMonRate", "value": "74"}),
+        );
+        proc.shutdown();
+        response
+    });
+
+    // 子进程已读完死锁、进入接缝睡眠；此时把原位置的锁换成「活锁」。
+    std::thread::sleep(Duration::from_millis(250));
+    let live_body = format!(
+        "pid={}\nacq_ms={}\nnonce=live-replacement\n",
+        std::process::id(),
+        now_ms()
+    );
+    let live_bytes = live_body.into_bytes();
+    std::fs::write(root.lock_path(), &live_bytes).expect("写活锁");
+
+    let response = handle.join().expect("conf_set thread");
+    assert_eq!(
+        structured(&response)["code"],
+        "conf_lock_timeout",
+        "替换进来的活锁不得被接管：{response}"
+    );
+    assert_eq!(
+        std::fs::read(root.lock_path()).expect("读锁"),
+        live_bytes,
+        "三路竞态搬走的新锁必须放回原处"
+    );
+    let stale: Vec<String> = root
+        .dir_entries()
+        .into_iter()
+        .filter(|name| name.contains(".stale"))
+        .collect();
+    assert!(stale.is_empty(), "三路竞态不得留下 .stale.*：{stale:?}");
+}
+
+// ---------------------------------------------------------------------------
 // 辅助：拿一个「确定已死」的 pid
 // ---------------------------------------------------------------------------
 

@@ -21,33 +21,52 @@
 //! B 又 rename，A 回读到 B 的值 ⇒ A 用自己**陈旧**的备份回滚，把 B 的成功写入覆盖掉（互滚覆盖）。
 //! 同进程 `Mutex` 不够（HTTP 每会话一个实例），所以用**同目录锁文件**：
 //!
-//! * 锁文件 = 目标同目录的 `Server.conf.lock`，用 `OpenOptions::create_new(true)` 原子创建；
+//! * 锁文件 = 目标同目录的 `Server.conf.lock`，用 `OpenOptions::create_new(true)` 原子创建
+//!   （Windows delete-pending 窗口里的 `ERROR_ACCESS_DENIED` 按瞬时竞态少量重试）；
 //!   抢不到就**有界重试**（[`LOCK_RETRY_INTERVAL_MS`]），超过 `MIR2_MCP_CONF_LOCK_TIMEOUT_MS`
 //!   （缺省 [`DEFAULT_LOCK_TIMEOUT_MS`]）返回新错误码 [`ConfError::LockConflict`] =
 //!   `conf_lock_timeout`（不 panic、不改文件）。
 //! * 锁覆盖 `conf_set` 的**无锁预检之后的整段临界区**：锁内重读 → 备份 → 临时文件 + rename →
 //!   回读校验 → 必要时回滚。校验失败/IO 失败同样在锁内回滚后才释放。
-//! * 锁文件内容 = `pid=<持有者 pid>` / `acq_ms=<获取时刻 unix 毫秒>` / `nonce=<唯一串>`；
-//!   正常结束由 [`ConfLock`] 的 `Drop` 删除（**只删 nonce 仍属于自己的那份**，避免误删）
+//! * 锁文件内容 = `pid=<持有者 pid>` / `acq_ms=<获取时刻 unix 毫秒>` /
+//!   `start=<持有者进程启动时刻 token>`（探测不到时省略）/ `nonce=<唯一串>`；
+//!   正常结束由 [`ConfLock`] 的 `Drop` 删除（**只删 pid + acq_ms + start + nonce 逐字段
+//!   等于自己那份**；不做子串匹配，避免误删内容里恰好含相同 nonce 片段的他锁）。
 //! * **残留锁接管规则**（`try_take_over_stale`）三条同时成立才接管：
 //!   1. 锁文件年龄 ≥ `MIR2_MCP_CONF_LOCK_STALE_MS`（缺省 [`DEFAULT_LOCK_STALE_MS`]；
 //!      年龄取 `acq_ms`，缺失时退化为文件 mtime）；
-//!   2. 锁里的 `pid` **不是活进程**（Windows 用 `tasklist`、Unix 用 `kill -0` 探测；
-//!      pid 缺失/无法判定时按「非活」处理）；
+//!   2. 持有者**确证已死**：pid 不存在，**或** pid 被复用（探测到的进程启动时刻与锁里记录的
+//!      `start` 不相等）。判定采用「pid + start_time」双元组（Windows 用 `tasklist` 判存活 +
+//!      `wmic`/PowerShell `Win32_Process.CreationDate` 取启动时刻；Unix 用
+//!      `/proc/<pid>/stat` 的 starttime，无 `/proc` 时退化为 `ps -o lstart=`）。
+//!      **探测不可用（None/Unknown）一律保守视为「活」⇒ 不接管**：宁可让一个超龄锁继续挡住
+//!      写者直到超时，也不把不确定的锁抢走。缺 `start` 记录时同理（无法区分原持有者与复用
+//!      pid 的新进程）。
 //!   3. 接管用**同目录 rename 抢占**（原子，只有一个进程能成功），并把抢到的文件内容与
-//!      判定时读到的字节逐字节比对；不一致说明撞上「刚释放/刚被他人接管」的竞态，放回去重试。
+//!      判定时读到的字节逐字节比对；不一致说明撞上「刚释放/刚被他人接管」的竞态，放回去重试；
+//!      放不回（原位置已被新锁占用）时按搬走文件**自己的身份**重新判定：确证已死才删，
+//!      否则留作 `.<name>.stale.*` 交给后续清理（宁留残片也不误删活锁）。
 //!      ⇒ **活进程的锁永不被抢**（规则 2），被强杀的进程留下的锁在超过时间阈值后可自愈。
+//! * **崩溃残留清理**（`cleanup_residue`，每次成功取锁后顺手执行）：识别同目录的
+//!   `.<name>.mir2-mcp.<pid>.<start>.<stamp>.<counter>.tmp` 与
+//!   `.<name>.stale.<pid>.<start>.<stamp>.<counter>`，只删「确证持有者已死 + 年龄 ≥ stale
+//!   阈值」的；存活进程持有（启动时刻一致）、探测不可用、身份不可判定的一律保留。
 //! * `dry_run=true` **不取锁**：它是零写的纯预览（不备份、不落盘），取排他锁会让只读预演
 //!   被写者阻塞、甚至在并发时返回新的锁错误码，从而改变既有 dry_run 行为；并发下它最多读到
 //!   某一时刻的完整快照（rename 原子替换），不产生持久化副作用。
 //! * 测试专用接缝：`MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS` 在 rename 与回读之间睡眠，
-//!   只用于放大并发窗口复现互滚；生产不设置 ⇒ 恒 0 ⇒ 空操作，不改变任何语义。
+//!   只用于放大并发窗口复现互滚；`MIR2_MCP_CONF_TEST_HOLD_BEFORE_TAKEOVER_RENAME_MS` 在
+//!   接管「读锁之后、rename 之前」睡眠，用于稳定复现三路竞态；
+//!   `MIR2_MCP_CONF_TEST_FAIL_AFTER_TMP_WRITE` 在写完临时文件后注入失败（模拟崩溃，留下
+//!   `.tmp` 残留）；`MIR2_MCP_CONF_TEST_PROCESS_PROBE` 强制覆盖进程探测（`dead` / `unknown` /
+//!   `alive` / `alive:<token>`）。生产不设置 ⇒ 全部为空操作/真实探测，不改变任何语义。
 
 use std::collections::HashSet;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
@@ -506,7 +525,10 @@ where
     let _lock = if dry_run {
         None
     } else {
-        Some(ConfLock::acquire(&path)?)
+        let lock = ConfLock::acquire(&path)?;
+        // 持锁后顺手回收「确证已死 + 超龄」的崩溃残留（不误删活进程持有的临时文件）。
+        cleanup_residue(&path, lock_options().stale_after);
+        Some(lock)
     };
     // 非 dry-run 在锁内重读：备份 / rename / 回读 / 回滚必须基于同一份无竞态的输入。
     let bytes = if dry_run { probe } else { read_conf(&path)? };
@@ -677,10 +699,48 @@ fn lock_path_for(conf_path: &Path) -> PathBuf {
     conf_path.with_file_name(format!("{name}.lock"))
 }
 
-/// 已持有的锁；`Drop` 时**只删 nonce 仍属于自己的那份**（被接管/误删保护）。
+/// 锁文件里的持有者身份；`Drop` 只在**逐字段等于自己**时删除（不做子串匹配）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LockIdentity {
+    pid: u32,
+    acquired_ms: u64,
+    /// 持有者进程启动时刻 token（探测不到时为 `None`；跨进程可比较，用于识别 pid 复用）。
+    start: Option<String>,
+    nonce: String,
+}
+
+impl LockIdentity {
+    /// 生成一份新的锁身份（`nonce` 含 pid/时刻/进程内计数器，保证唯一）。
+    fn fresh() -> Self {
+        let pid = std::process::id();
+        let acquired_ms = now_ms();
+        Self {
+            pid,
+            acquired_ms,
+            start: own_process_start(),
+            nonce: format!("{pid}-{acquired_ms}-{}", unique_counter()),
+        }
+    }
+
+    /// 锁文件正文（行式 `key=value`；`start` 探测不到时不写）。
+    fn to_body(&self) -> String {
+        let mut body = format!("pid={}\nacq_ms={}\n", self.pid, self.acquired_ms);
+        if let Some(start) = &self.start {
+            body.push_str("start=");
+            body.push_str(start);
+            body.push('\n');
+        }
+        body.push_str("nonce=");
+        body.push_str(&self.nonce);
+        body.push('\n');
+        body
+    }
+}
+
+/// 已持有的锁；`Drop` 时**只删身份逐字段仍属于自己的那份**（被接管/误删保护）。
 struct ConfLock {
     path: PathBuf,
-    nonce: String,
+    identity: LockIdentity,
 }
 
 impl ConfLock {
@@ -691,14 +751,14 @@ impl ConfLock {
         let started = Instant::now();
         loop {
             match create_lock_file(&lock_path) {
-                Ok(nonce) => {
+                Ok(identity) => {
                     return Ok(Self {
                         path: lock_path,
-                        nonce,
+                        identity,
                     })
                 }
                 Err(source) if source.kind() == io::ErrorKind::AlreadyExists => {
-                    // 先看是否是「进程已死且超过时间阈值」的残留锁；是则原子接管后立刻重试。
+                    // 先看是否是「持有者确证已死且超过时间阈值」的残留锁；是则原子接管后立刻重试。
                     if try_take_over_stale(&lock_path, opts.stale_after) {
                         continue;
                     }
@@ -736,39 +796,79 @@ impl ConfLock {
 
 impl Drop for ConfLock {
     fn drop(&mut self) {
+        // 逐字段精确匹配（pid + acq_ms + start + nonce）；只做子串匹配会让「内容里恰好含
+        // 相同 nonce 片段」的他锁被误删。
         let own = fs::read(&self.path)
-            .map(|bytes| String::from_utf8_lossy(&bytes).contains(&format!("nonce={}", self.nonce)))
-            .unwrap_or(false);
+            .ok()
+            .and_then(|bytes| lock_identity_from_meta(&parse_lock_meta(&bytes)))
+            .is_some_and(|current| current == self.identity);
         if own {
             let _ = fs::remove_file(&self.path);
         }
     }
 }
 
-/// 原子创建锁文件并写入持有者元数据（pid / 获取时刻 / nonce）。
-fn create_lock_file(lock_path: &Path) -> io::Result<String> {
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .open(lock_path)?;
-    let pid = std::process::id();
-    let stamp = now_ms();
-    let nonce = format!("{pid}-{stamp}-{}", unique_counter());
-    let body = format!("pid={pid}\nacq_ms={stamp}\nnonce={nonce}\n");
-    if let Err(source) = file.write_all(body.as_bytes()) {
+/// 原子创建锁文件并写入持有者元数据（pid / 获取时刻 / 进程启动时刻 / nonce）。
+fn create_lock_file(lock_path: &Path) -> io::Result<LockIdentity> {
+    let mut file = open_lock_file(lock_path)?;
+    let identity = LockIdentity::fresh();
+    if let Err(source) = file.write_all(identity.to_body().as_bytes()) {
         drop(file);
         let _ = fs::remove_file(lock_path);
         return Err(source);
     }
     let _ = file.sync_all();
-    Ok(nonce)
+    Ok(identity)
 }
 
-/// 锁文件内容（只解析需要的两个字段）。
+/// `create_new` 抢锁文件。
+///
+/// Windows 上「另一个进程刚删掉锁文件、句柄尚未全部关闭」的 delete-pending 窗口里，
+/// `CREATE_NEW` 会返回 `ERROR_ACCESS_DENIED` 而不是 `AlreadyExists`。这是纯瞬时竞态，
+/// 做少量有界重试后交给外层重试循环；真正的权限问题重试后仍失败，按原样返回 `io_error`
+/// （错误码语义不变）。
+fn open_lock_file(lock_path: &Path) -> io::Result<fs::File> {
+    let mut last = None;
+    for attempt in 0..4 {
+        match fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(lock_path)
+        {
+            Ok(file) => return Ok(file),
+            Err(source) => {
+                let transient = is_transient_create_new_error(&source);
+                last = Some(source);
+                if !transient || attempt == 3 {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+    }
+    Err(last.expect("open_lock_file 至少尝试过一次"))
+}
+
+/// `create_new` 的瞬时失败：Windows `ERROR_ACCESS_DENIED`（delete-pending）。
+fn is_transient_create_new_error(source: &io::Error) -> bool {
+    #[cfg(windows)]
+    {
+        source.raw_os_error() == Some(5)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = source;
+        false
+    }
+}
+
+/// 锁文件内容（只解析需要的字段）。
 #[derive(Debug, Default, Clone)]
 struct LockMeta {
     pid: Option<u32>,
     acquired_ms: Option<u64>,
+    start: Option<String>,
+    nonce: Option<String>,
 }
 
 fn parse_lock_meta(bytes: &[u8]) -> LockMeta {
@@ -779,28 +879,81 @@ fn parse_lock_meta(bytes: &[u8]) -> LockMeta {
             meta.pid = v.trim().parse().ok();
         } else if let Some(v) = line.strip_prefix("acq_ms=") {
             meta.acquired_ms = v.trim().parse().ok();
+        } else if let Some(v) = line.strip_prefix("start=") {
+            let v = v.trim();
+            meta.start = (!v.is_empty()).then(|| v.to_string());
+        } else if let Some(v) = line.strip_prefix("nonce=") {
+            let v = v.trim();
+            meta.nonce = (!v.is_empty()).then(|| v.to_string());
         }
     }
     meta
 }
 
-/// 锁年龄（毫秒）：优先 `acq_ms`，缺失时退化为锁文件 mtime。
-fn lock_age_ms(lock_path: &Path, meta: &LockMeta) -> Option<u64> {
-    let now = now_ms();
-    if let Some(ts) = meta.acquired_ms {
-        return Some(now.saturating_sub(ts));
-    }
-    let modified = fs::metadata(lock_path).and_then(|m| m.modified()).ok()?;
-    let ts = modified.duration_since(UNIX_EPOCH).ok()?;
-    Some(now.saturating_sub(u64::try_from(ts.as_millis()).unwrap_or(u64::MAX)))
+/// 只有 pid / acq_ms / nonce 齐全才构成可比较身份（`start` 可缺）。
+fn lock_identity_from_meta(meta: &LockMeta) -> Option<LockIdentity> {
+    Some(LockIdentity {
+        pid: meta.pid?,
+        acquired_ms: meta.acquired_ms?,
+        start: meta.start.clone(),
+        nonce: meta.nonce.clone()?,
+    })
 }
 
-/// 残留锁接管：**时间阈值 + 持有者存活性**双条件；活进程的锁永不接管。
+/// 锁年龄（毫秒）：优先 `acq_ms`，缺失时退化为锁文件 mtime。
+fn lock_age_ms(lock_path: &Path, meta: &LockMeta) -> Option<u64> {
+    if let Some(ts) = meta.acquired_ms {
+        return Some(now_ms().saturating_sub(ts));
+    }
+    file_age_ms(lock_path)
+}
+
+/// 文件年龄（毫秒）：按 mtime。
+fn file_age_ms(path: &Path) -> Option<u64> {
+    let modified = fs::metadata(path).and_then(|m| m.modified()).ok()?;
+    let ts = modified.duration_since(UNIX_EPOCH).ok()?;
+    Some(now_ms().saturating_sub(u64::try_from(ts.as_millis()).unwrap_or(u64::MAX)))
+}
+
+/// 持有者状态（保守判定）：只有**确证已死**才返回 `Dead`。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum HolderState {
+    Alive,
+    Dead,
+    Unknown,
+}
+
+/// 「pid + 进程启动时刻」双元组判定持有者是否还活着。
+///
+/// * `pid` 不存在 ⇒ `Dead`；
+/// * `pid` 存在但启动时刻与锁里记录的不一致 ⇒ pid 已被复用 ⇒ `Dead`；
+/// * 探测不可用、`pid` 缺失、任一侧缺启动时刻 ⇒ `Unknown`（调用方按「活」处理，绝不接管）；
+/// * 其余 ⇒ `Alive`。
+fn holder_state(meta: &LockMeta) -> HolderState {
+    let Some(pid) = meta.pid else {
+        return HolderState::Unknown;
+    };
+    match probe_process(pid) {
+        ProcessProbe::Dead => HolderState::Dead,
+        ProcessProbe::Unknown => HolderState::Unknown,
+        ProcessProbe::Alive { start } => match (meta.start.as_deref(), start.as_deref()) {
+            // 两边都有启动时刻：相等 ⇒ 原持有者仍活；不等 ⇒ pid 已被复用（死痕迹）。
+            (Some(recorded), Some(probed)) if recorded == probed => HolderState::Alive,
+            (Some(_), Some(_)) => HolderState::Dead,
+            // 任一侧缺启动时刻 ⇒ 无法区分原持有者与复用 pid 的新进程 ⇒ 保守按活。
+            _ => HolderState::Alive,
+        },
+    }
+}
+
+/// 残留锁接管：**时间阈值 + 持有者确证已死**双条件；活锁/无法判定的锁永不接管。
 ///
 /// 接管用同目录 `rename` 抢占（同一目录内 rename 是原子的，多个接管者只有一个成功），
 /// 抢到后把文件内容与判定时读到的字节逐字节比对：不一致说明撞上「持有者刚释放 / 刚被他人
-/// 接管」的竞态，放回原处交给下一轮重新判定（拿不回时留在 `.stale.*` 名字下，宁留残片也不
-/// 误删他人活锁）。返回 `true` 表示「旧锁已被移走，可以立刻重新 `create_new`」。
+/// 接管」的竞态。此时**不无条件删除**（搬走的可能是新持有者的活锁）：按搬走文件自己的身份
+/// 重新判定，确证已死且超龄才删；否则放回原处（放不回时，若原位置内容仍是同一份则删重复
+/// 副本，否则留作 `.stale.*` 交给后续 [`cleanup_residue`]）。返回 `true` 表示「残留已被
+/// 移走，可以立刻重新 `create_new`」。
 fn try_take_over_stale(lock_path: &Path, stale_after: Duration) -> bool {
     let Ok(bytes) = fs::read(lock_path) else {
         return false;
@@ -813,76 +966,395 @@ fn try_take_over_stale(lock_path: &Path, stale_after: Duration) -> bool {
     if age_ms < stale_ms {
         return false; // 未到时间阈值：即使 pid 已死也先等（避免与「刚创建/刚释放」竞态）
     }
-    // 活着 ⇒ 绝不接管（A4 的负例：老但活的锁必须让接管方超时失败）。
-    // 已死 / 无法判定（pid 缺失、探测工具不可用）⇒ 超过时间阈值后可接管。
-    if let Some(Some(true)) = meta.pid.map(process_alive) {
+    // 只有确证已死才接管；Unknown（探测不可用/身份不可判定）保守按活处理。
+    if holder_state(&meta) != HolderState::Dead {
         return false;
     }
+
+    // 测试专用接缝：放大「读锁之后、rename 之前」的窗口，供三路竞态用例稳定复现。
+    test_hold_before_takeover_rename();
 
     let name = lock_path.file_name().map_or_else(
         || "Server.conf.lock".to_string(),
         |n| n.to_string_lossy().into_owned(),
     );
     let stale_path = lock_path.with_file_name(format!(
-        ".{name}.stale.{}.{}.{}",
-        std::process::id(),
+        ".{name}.stale.{}.{}.{}.{}",
+        meta.pid.unwrap_or(0),
+        name_token(meta.start.as_deref()),
         now_ms(),
         unique_counter()
     ));
     if fs::rename(lock_path, &stale_path).is_err() {
         return false; // 别的接管者先抢到了
     }
-    let same = fs::read(&stale_path)
-        .map(|moved| moved == bytes)
-        .unwrap_or(false);
-    if same {
+    let moved = fs::read(&stale_path).unwrap_or_default();
+    if moved == bytes {
         let _ = fs::remove_file(&stale_path);
-        true
-    } else if !lock_path.exists() {
-        // 抢错了（判定后文件已被替换）：还回去，交给下一轮。
-        let _ = fs::rename(&stale_path, lock_path);
-        false
-    } else {
-        // 三路竞态：原位置又被新锁占了，无法复原；宁留残片也不删（可能是他人活锁）。
-        false
+        return true;
+    }
+    // 三路竞态：判定之后原位置被**新锁**替换，我们搬走的是另一份锁。按它自己的身份重判。
+    let moved_meta = parse_lock_meta(&moved);
+    let moved_dead = holder_state(&moved_meta) == HolderState::Dead
+        && lock_age_ms(&stale_path, &moved_meta).is_some_and(|age| age >= stale_ms);
+    if moved_dead {
+        let _ = fs::remove_file(&stale_path);
+        return true;
+    }
+    if fs::rename(&stale_path, lock_path).is_ok() {
+        return false; // 放回原处，交给下一轮重新判定
+    }
+    // 原位置已被占：若内容与搬走的那份相同，它只是重复副本（活锁仍在 canonical 位置），
+    // 删副本是安全的；否则留作 `.stale.*`，由后续清理按「确证已死 + 超龄」决定。
+    if fs::read(lock_path).ok().as_deref() == Some(moved.as_slice()) {
+        let _ = fs::remove_file(&stale_path);
+    }
+    false
+}
+
+/// 清理崩溃残留：`.<name>.mir2-mcp.<pid>.<start>.<stamp>.<counter>.tmp` 与
+/// `.<name>.stale.<pid>.<start>.<stamp>.<counter>`。
+///
+/// 只删「确证持有者已死（pid 不存在或 pid 被复用）+ 年龄 ≥ stale 阈值」的残留；存活进程
+/// 持有（启动时刻一致）、探测不可用、身份不可判定的一律保留（宁留残片也不误删正在用的文件）。
+/// 调用方在**已持锁**时调用，且失败一律吞掉——清理绝不改变 `conf_set` 的成败与错误码。
+fn cleanup_residue(conf_path: &Path, stale_after: Duration) {
+    let lock_path = lock_path_for(conf_path);
+    let Some(dir) = lock_path.parent() else {
+        return;
+    };
+    let base = lock_path.file_name().map_or_else(
+        || "Server.conf.lock".to_string(),
+        |n| n.to_string_lossy().into_owned(),
+    );
+    let conf_name = base.strip_suffix(".lock").unwrap_or(&base);
+    let tmp_prefix = format!(".{conf_name}.mir2-mcp.");
+    let stale_prefix = format!(".{conf_name}.stale.");
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if let Some(rest) = name
+            .strip_prefix(&tmp_prefix)
+            .and_then(|rest| rest.strip_suffix(".tmp"))
+        {
+            let Some((pid, start, stamp)) = residue_fields(rest) else {
+                continue;
+            };
+            let age = stamp
+                .map(|stamp| now_ms().saturating_sub(stamp))
+                .or_else(|| file_age_ms(&path));
+            if residue_reclaimable(Some(pid), start.as_deref(), age, stale_after) {
+                let _ = fs::remove_file(&path);
+            }
+        } else if let Some(rest) = name.strip_prefix(&stale_prefix) {
+            let (pid, start, age) = stale_residue_identity(&path, rest);
+            if residue_reclaimable(pid, start.as_deref(), age, stale_after) {
+                let _ = fs::remove_file(&path);
+            }
+        }
     }
 }
 
-/// 进程存活探测：Windows 用 `tasklist`，Unix 用 `kill -0`。
-///
-/// 返回 `None` = 无法判定（探测工具不可用/输出不可解析）——调用方按「非活 + 时间阈值」处理。
-/// 本函数不引入 `unsafe` 与额外依赖（crate 声明 `unsafe_code = "forbid"`）。
-fn process_alive(pid: u32) -> Option<bool> {
-    #[cfg(windows)]
-    {
-        let output = std::process::Command::new("tasklist")
-            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
-            .output()
-            .ok()?;
-        if !output.status.success() {
-            return None;
+/// 残留名尾部的 `{pid}.{start}.{stamp}.{counter}` → `(pid, start, stamp)`。
+fn residue_fields(rest: &str) -> Option<(u32, Option<String>, Option<u64>)> {
+    let parts: Vec<&str> = rest.rsplitn(4, '.').collect();
+    if parts.len() < 4 {
+        return None;
+    }
+    let pid = parts[3].parse::<u32>().ok()?;
+    let start = (parts[2] != "-").then(|| parts[2].to_string());
+    Some((pid, start, parts[1].parse::<u64>().ok()))
+}
+
+/// `.stale.*` 的持有者身份：锁体（行式元数据）优先，名字兜底。
+fn stale_residue_identity(path: &Path, rest: &str) -> (Option<u32>, Option<String>, Option<u64>) {
+    if let Ok(bytes) = fs::read(path) {
+        let meta = parse_lock_meta(&bytes);
+        if let Some(pid) = meta.pid {
+            let age = lock_age_ms(path, &meta).or_else(|| file_age_ms(path));
+            return (Some(pid), meta.start, age);
         }
-        let wanted = pid.to_string();
-        let text = String::from_utf8_lossy(&output.stdout);
-        Some(text.lines().any(|line| {
-            line.split(',')
-                .any(|field| field.trim().trim_matches('"') == wanted)
-        }))
     }
-    #[cfg(unix)]
+    match residue_fields(rest) {
+        Some((pid, start, stamp)) => {
+            let age = stamp
+                .map(|stamp| now_ms().saturating_sub(stamp))
+                .or_else(|| file_age_ms(path));
+            (Some(pid), start, age)
+        }
+        None => (None, None, file_age_ms(path)),
+    }
+}
+
+/// 残留是否可删：必须先过年龄阈值，再**确证持有者已死**。
+fn residue_reclaimable(
+    pid: Option<u32>,
+    recorded_start: Option<&str>,
+    age_ms: Option<u64>,
+    stale_after: Duration,
+) -> bool {
+    let Some(pid) = pid else {
+        return false;
+    };
+    let Some(age_ms) = age_ms else {
+        return false;
+    };
+    if age_ms < u64::try_from(stale_after.as_millis()).unwrap_or(u64::MAX) {
+        return false;
+    }
+    match probe_process(pid) {
+        ProcessProbe::Dead => true,
+        ProcessProbe::Alive {
+            start: Some(probed),
+        } => recorded_start.is_some_and(|recorded| {
+            name_token(Some(recorded)) != name_token(Some(probed.as_str()))
+        }),
+        ProcessProbe::Alive { start: None } | ProcessProbe::Unknown => false,
+    }
+}
+
+/// 名字里允许的 token：无点、无空格；`None` 记作 `-`。
+fn name_token(token: Option<&str>) -> String {
+    match token {
+        Some(token) => token
+            .chars()
+            .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+            .collect(),
+        None => "-".to_string(),
+    }
+}
+
+/// 进程探测结果。
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum ProcessProbe {
+    /// 活着；`start` = 进程启动时刻 token（探测不到时为 `None`）。
+    Alive { start: Option<String> },
+    /// 确定不存在。
+    Dead,
+    /// 无法判定（探测工具不可用/输出不可解析）；调用方**保守视为活**，绝不据此接管/删除。
+    Unknown,
+}
+
+/// 测试专用接缝：强制覆盖进程探测结果（生产不设置 ⇒ `None`，走真实探测）。
+///
+/// 取值：`dead` / `unknown` / `alive`（启动时刻未知）/ `alive:<token>`。
+fn test_probe_override() -> Option<ProcessProbe> {
+    let raw = std::env::var("MIR2_MCP_CONF_TEST_PROCESS_PROBE").ok()?;
+    let raw = raw.trim();
+    match raw {
+        "dead" => Some(ProcessProbe::Dead),
+        "unknown" => Some(ProcessProbe::Unknown),
+        "alive" => Some(ProcessProbe::Alive { start: None }),
+        _ => raw.strip_prefix("alive:").map(|token| ProcessProbe::Alive {
+            start: Some(token.to_string()),
+        }),
+    }
+}
+
+/// 进程存活 + 启动时刻探测（Windows 用 `tasklist` + `wmic`/PowerShell；
+/// Unix 用 `/proc/<pid>/stat`，无 `/proc` 时退化为 `ps -o lstart=`）。
+fn probe_process(pid: u32) -> ProcessProbe {
+    if let Some(forced) = test_probe_override() {
+        return forced;
+    }
+    probe_process_impl(pid)
+}
+
+/// 本进程的启动时刻 token；只探测一次并缓存（探测失败缓存 `None`，即无法做 pid 复用判定）。
+fn own_process_start() -> Option<String> {
+    static OWN_START: OnceLock<Option<String>> = OnceLock::new();
+    OWN_START
+        .get_or_init(|| match probe_process(std::process::id()) {
+            ProcessProbe::Alive { start } => start,
+            ProcessProbe::Dead | ProcessProbe::Unknown => None,
+        })
+        .clone()
+}
+
+#[cfg(windows)]
+fn probe_process_impl(pid: u32) -> ProcessProbe {
+    match tasklist_process_alive(pid) {
+        None => ProcessProbe::Unknown,
+        Some(false) => ProcessProbe::Dead,
+        Some(true) => ProcessProbe::Alive {
+            start: windows_process_start(pid),
+        },
+    }
+}
+
+/// Windows 存活探测：`tasklist` CSV 里任一列等于 pid 即视为存在。
+///
+/// 命令起不来/输出不可解析 ⇒ `None`（无法判定），由调用方保守处理。
+#[cfg(windows)]
+fn tasklist_process_alive(pid: u32) -> Option<bool> {
+    let output = std::process::Command::new("tasklist")
+        .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let wanted = pid.to_string();
+    let text = String::from_utf8_lossy(&output.stdout);
+    Some(text.lines().any(|line| {
+        line.split(',')
+            .any(|field| field.trim().trim_matches('"') == wanted)
+    }))
+}
+
+/// Windows 进程启动时刻 token：`wmic` 优先（快），不可用时退回 PowerShell CIM。
+#[cfg(windows)]
+fn windows_process_start(pid: u32) -> Option<String> {
+    wmic_process_start(pid).or_else(|| powershell_process_start(pid))
+}
+
+#[cfg(windows)]
+fn wmic_process_start(pid: u32) -> Option<String> {
+    let output = std::process::Command::new("wmic")
+        .args([
+            "process",
+            "where",
+            &format!("ProcessId={pid}"),
+            "get",
+            "CreationDate",
+            "/value",
+        ])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let raw = text
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("CreationDate="))?;
+    dmtf_to_epoch_secs(raw.trim()).map(|secs| secs.to_string())
+}
+
+#[cfg(windows)]
+fn powershell_process_start(pid: u32) -> Option<String> {
+    let script = format!(
+        "$p=Get-CimInstance Win32_Process -Filter 'ProcessId={pid}'; \
+         if($p){{$p.CreationDate.ToFileTimeUtc()}}"
+    );
+    let output = std::process::Command::new("powershell")
+        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let ticks: u64 = text.trim().parse().ok()?;
+    // FILETIME（100ns since 1601）→ Unix epoch 秒的换算常数。
+    const FILETIME_UNIX_EPOCH_SECS: u64 = 11_644_473_600;
+    Some(
+        (ticks / 10_000_000)
+            .saturating_sub(FILETIME_UNIX_EPOCH_SECS)
+            .to_string(),
+    )
+}
+
+/// DMTF/CIM 时间 `YYYYMMDDHHMMSS[.ffffff]±ooo`（offset 为分钟）→ 1970 epoch 秒。
+#[cfg(windows)]
+fn dmtf_to_epoch_secs(raw: &str) -> Option<i64> {
+    let (main, rest) = raw.split_once('.').unwrap_or((raw, ""));
+    let offset_min = match rest.find(['+', '-']) {
+        Some(pos) => {
+            let (_, offset) = rest.split_at(pos);
+            let sign = if offset.starts_with('-') { -1_i64 } else { 1 };
+            offset[1..].parse::<i64>().ok()? * sign
+        }
+        None => 0,
+    };
+    if main.len() != 14 || !main.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let y = main[0..4].parse::<i64>().ok()?;
+    let mo = main[4..6].parse::<u32>().ok()?;
+    let d = main[6..8].parse::<u32>().ok()?;
+    let h = main[8..10].parse::<i64>().ok()?;
+    let mi = main[10..12].parse::<i64>().ok()?;
+    let s = main[12..14].parse::<i64>().ok()?;
+    Some(days_from_civil(y, mo, d) * 86_400 + h * 3_600 + mi * 60 + s - offset_min * 60)
+}
+
+/// civil 日期 → 1970-01-01 起的天数（Howard Hinnant 算法）。
+#[cfg(windows)]
+fn days_from_civil(y: i64, m: u32, d: u32) -> i64 {
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = if y >= 0 { y } else { y - 399 } / 400;
+    let yoe = y - era * 400;
+    let m = i64::from(m);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(d) - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    era * 146_097 + doe - 719_468
+}
+
+#[cfg(unix)]
+fn probe_process_impl(pid: u32) -> ProcessProbe {
+    if let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) {
+        // `comm`（字段 2）可能含空格/右括号，所以从最后一个 ')' 之后切：切出的 fields[0]
+        // 是 state（总字段 3），starttime 是总字段 22 ⇒ fields[19]。
+        let Some(pos) = stat.rfind(')') else {
+            return ProcessProbe::Unknown;
+        };
+        return match stat[pos + 1..]
+            .split_whitespace()
+            .nth(19)
+            .and_then(|v| v.parse::<u64>().ok())
+        {
+            Some(ticks) => ProcessProbe::Alive {
+                start: Some(ticks.to_string()),
+            },
+            None => ProcessProbe::Unknown,
+        };
+    }
+    if Path::new("/proc/self").exists() {
+        // /proc 可用但这 pid 没有目录 ⇒ 进程不存在。
+        return ProcessProbe::Dead;
+    }
+    // 非 Linux（无 /proc）：`ps -o lstart=` 兜底。
+    match std::process::Command::new("ps")
+        .args(["-o", "lstart=", "-p", &pid.to_string()])
+        .output()
     {
-        let status = std::process::Command::new("kill")
-            .arg("-0")
-            .arg(pid.to_string())
-            .status()
-            .ok()?;
-        Some(status.success())
+        Ok(output) if output.status.success() => {
+            let text = String::from_utf8_lossy(&output.stdout);
+            let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+            if text.is_empty() {
+                ProcessProbe::Dead
+            } else {
+                ProcessProbe::Alive {
+                    start: Some(fnv1a_token(&text)),
+                }
+            }
+        }
+        _ => ProcessProbe::Unknown,
     }
-    #[cfg(not(any(windows, unix)))]
-    {
-        let _ = pid;
-        None
+}
+
+/// `lstart` 文本 → 固定长度 hex token（名字/锁体里只允许无点无空格的 token）。
+#[cfg(unix)]
+fn fnv1a_token(text: &str) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in text.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
+    format!("h{hash:016x}")
+}
+
+#[cfg(not(any(windows, unix)))]
+fn probe_process_impl(pid: u32) -> ProcessProbe {
+    let _ = pid;
+    ProcessProbe::Unknown
 }
 
 /// 测试专用接缝：放大「rename 之后、回读之前」的窗口，供 A1 并发用例稳定复现互滚覆盖。
@@ -890,6 +1362,15 @@ fn process_alive(pid: u32) -> Option<bool> {
 /// 生产不设置 `MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS` ⇒ 恒 0 ⇒ 空操作，不改变任何语义。
 fn test_hold_after_rename() {
     let ms = env_u64("MIR2_MCP_CONF_TEST_HOLD_AFTER_RENAME_MS", 0);
+    if ms > 0 {
+        std::thread::sleep(Duration::from_millis(ms));
+    }
+}
+
+/// 测试专用接缝：放大 `try_take_over_stale` 里「读锁之后、rename 之前」的窗口，
+/// 供三路竞态用例稳定复现「判定后原位置被新锁替换」。生产不设置 ⇒ 恒 0 ⇒ 空操作。
+fn test_hold_before_takeover_rename() {
+    let ms = env_u64("MIR2_MCP_CONF_TEST_HOLD_BEFORE_TAKEOVER_RENAME_MS", 0);
     if ms > 0 {
         std::thread::sleep(Duration::from_millis(ms));
     }
@@ -1130,6 +1611,9 @@ fn unique_counter() -> u64 {
 }
 
 /// 临时文件 + `rename`（Windows 上 `MoveFileEx(REPLACE_EXISTING)`）原子替换。
+///
+/// 临时文件名带「pid + 进程启动时刻 + 创建时刻 + 计数器」，供 [`cleanup_residue`] 在后续
+/// 运行中判定「持有者确证已死 + 超龄」后回收崩溃残留。
 fn atomic_replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
     let dir = path.parent().unwrap_or_else(|| Path::new("."));
     let name = path.file_name().map_or_else(
@@ -1140,11 +1624,18 @@ fn atomic_replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_millis());
     let tmp = dir.join(format!(
-        ".{name}.mir2-mcp.{}.{stamp}.{}.tmp",
+        ".{name}.mir2-mcp.{}.{}.{stamp}.{}.tmp",
         std::process::id(),
+        name_token(own_process_start().as_deref()),
         unique_counter()
     ));
     fs::write(&tmp, bytes)?;
+    if env_flag("MIR2_MCP_CONF_TEST_FAIL_AFTER_TMP_WRITE") {
+        // 测试接缝：模拟「写完临时文件后崩溃」，把 `.tmp` 残留留在盘上供清理用例断言。
+        return Err(io::Error::other(
+            "injected failure after tmp write (test seam)",
+        ));
+    }
     match fs::rename(&tmp, path) {
         Ok(()) => Ok(()),
         Err(e) => {
@@ -1152,6 +1643,14 @@ fn atomic_replace(path: &Path, bytes: &[u8]) -> io::Result<()> {
             Err(e)
         }
     }
+}
+
+/// 环境变量开关：未设置 / 空串 / `0` / `false`（大小写不敏感）⇒ `false`。
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).ok().is_some_and(|value| {
+        let value = value.trim();
+        !value.is_empty() && value != "0" && !value.eq_ignore_ascii_case("false")
+    })
 }
 
 #[cfg(test)]
@@ -1584,5 +2083,57 @@ ProcessMonRandRate=5\r\n",
         root.write_conf(b"[Admin]\r\nAdminPort=70000\r\n");
         let err = admin_port(&root.cfg()).expect_err("越界端口必须报错");
         assert_eq!(err.code(), "invalid_value");
+    }
+
+    /// A4：`Drop` 只删**逐字段等于自己**的锁（pid + acq_ms + start + nonce）。
+    ///
+    /// 负例：他锁内容里恰好含「自己 nonce」的子串（更长的 nonce、或在别的字段里出现），
+    /// 子串匹配会误删，精确字段匹配必须保留。
+    #[test]
+    fn drop_keeps_foreign_lock_that_contains_our_nonce_substring() {
+        let root = TempRoot::new("drop-exact");
+        let lock = root.path.join("M2GameSvr").join("Server.conf.lock");
+        let identity = LockIdentity {
+            pid: 111,
+            acquired_ms: 222,
+            start: Some("333".to_string()),
+            nonce: "999-222-7".to_string(),
+        };
+        let foreign = "pid=888\nacq_ms=777\nstart=666\n\
+note=nonce=999-222-7-other\nnonce=999-222-7-other\n";
+        fs::write(&lock, foreign).expect("写他锁");
+        let before = fs::read(&lock).expect("读他锁");
+
+        drop(ConfLock {
+            path: lock.clone(),
+            identity,
+        });
+
+        assert!(lock.exists(), "内容含相同 nonce 子串的他锁不得被删");
+        assert_eq!(fs::read(&lock).expect("读他锁"), before);
+    }
+
+    /// 锁体是行式 `key=value`：解析只认字段名精确前缀，`note=nonce=…` 不算 `nonce` 字段。
+    #[test]
+    fn lock_meta_parses_exact_fields_only() {
+        let meta = parse_lock_meta(b"pid=12\nacq_ms=34\nstart=56\nnonce=78\nnote=nonce=78\n");
+        assert_eq!(meta.pid, Some(12));
+        assert_eq!(meta.acquired_ms, Some(34));
+        assert_eq!(meta.start.as_deref(), Some("56"));
+        assert_eq!(meta.nonce.as_deref(), Some("78"));
+    }
+
+    /// DMTF/CIM 时间（`wmic ... get CreationDate`）→ 1970 epoch 秒。
+    #[cfg(windows)]
+    #[test]
+    fn dmtf_timestamp_parses_to_epoch_seconds() {
+        assert_eq!(dmtf_to_epoch_secs("19700101000000.000000+000"), Some(0));
+        assert_eq!(dmtf_to_epoch_secs("19700101000101.000000+001"), Some(1));
+        assert_eq!(dmtf_to_epoch_secs("19700101000000.123456+000"), Some(0));
+        assert_eq!(
+            dmtf_to_epoch_secs("20261101154902.883908+480"),
+            Some(1_793_519_342)
+        );
+        assert_eq!(dmtf_to_epoch_secs("not-a-timestamp"), None);
     }
 }
