@@ -397,6 +397,12 @@ pub struct GateConfig {
     /// `ScriptNpc.ScriptGotoCountLimit`（`ScriptEngine.cs:629` 的 `playerActor.ScriptGotoCount >`
     /// 守卫）——NPC 脚本 `goto` 递归上限，`NpcHost` 装载时注入。
     pub script_goto_count_limit: i32,
+    /// `[Setup] LevelRankOnLogin` —— **本仓新增偏差开关**（oracle 无此键/此帧，T-274）。
+    ///
+    /// 缺省 `0`（关）：登录 enter 批次不追加任何帧，parity 基线逐字节不变（A1）。
+    /// 非 0 ⇒ 给进世界的玩家追加一帧 `SM_LEVELRANK(1108)`（人物排行 `kind=0`）。
+    /// **非法值按 `0` 处理并记 WRN**（不 panic，A4）。
+    pub level_rank_on_login: bool,
 }
 
 /// 默认配置文件：可执行文件同目录的 `Server.conf`（与 C# `AppContext.BaseDirectory` 一致）。
@@ -536,6 +542,7 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut show_pre_fix_msg: Option<bool> = None;
     let mut monster_power_rate: Option<i32> = None;
     let mut script_goto_count_limit: Option<i32> = None;
+    let mut level_rank_on_login: Option<bool> = None;
     let mut server_name: Option<String> = None;
     let mut ids_addr: Option<String> = None;
     let mut ids_port: Option<u16> = None;
@@ -569,6 +576,18 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                 v.parse()
                     .with_context(|| format!("ScriptGotoCountLimit 不是合法整数：{v:?}"))?,
             );
+        }
+        // **T-274**：`[Setup] LevelRankOnLogin`（本仓新增偏差开关，oracle 无此键）。
+        // 口径：缺键/空值 = 0（关）；非 0 = 开；**非法值按 0 处理并记 WRN**（不 panic，A4）。
+        if section == "SETUP" && k == "LEVELRANKONLOGIN" {
+            let (on, warn) = parse_level_rank_on_login(v);
+            if warn {
+                crate::glog!(
+                    "WRN",
+                    "[Setup] LevelRankOnLogin 非法值 {v:?}（期望整数）⇒ 按 0（关闭）处理"
+                );
+            }
+            level_rank_on_login = Some(on);
         }
         // **P3 收尾残余**：`ServerConf.cs:530` / `:156`。放在 `"SETUP"` match 之前的原因同
         // `ScriptGotoCountLimit`：给共享大 match 加臂会让 rustfmt 把整臂折成块（无谓 diff）。
@@ -1376,6 +1395,8 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         monster_power_rate: monster_power_rate.unwrap_or(10),
         // oracle 缺省值（`GameSvrConf.cs:1527` 的 `ScriptGotoCountLimit = 30`）。
         script_goto_count_limit: script_goto_count_limit.unwrap_or(30),
+        // T-274：本仓新增偏差开关，缺省 0（关）⇒ 零行为变化。
+        level_rank_on_login: level_rank_on_login.unwrap_or(false),
         // `GameSvrConf.cs:1233` 的 ctor 缺省。
         server_name: server_name.unwrap_or_else(|| "SKY引擎".to_string()),
         ids_addr,
@@ -1396,6 +1417,19 @@ fn read_bool_or_false(v: &str) -> bool {
         v.trim().to_uppercase().as_str(),
         "是" | "YES" | "1" | "TRUE"
     )
+}
+
+/// `[Setup] LevelRankOnLogin` 的取值口径（纯函数，A4 可单测）：
+/// 空串 = 缺键/未设 ⇒ `(false, false)`；整数 ⇒ `(n != 0, false)`；
+/// 非法值 ⇒ `(false, true)`（**调用方据此记 WRN 并按 0 处理**，不 panic）。
+fn parse_level_rank_on_login(v: &str) -> (bool, bool) {
+    if v.is_empty() {
+        return (false, false);
+    }
+    match v.parse::<i32>() {
+        Ok(n) => (n != 0, false),
+        Err(_) => (false, true),
+    }
 }
 
 /// `ReadWriteBool` 口径（`ConfigFile.cs` 的布尔读法）：`0/1` + `true/false`（大小写不敏感），其余报错。
@@ -2546,6 +2580,77 @@ HungerSystem=garbage
         }
         // 非法端口 ⇒ 报错。
         assert!(load(&write(&dir, &format!("{base}[Admin]\nAdminPort=70000\n"))).is_err());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A4 + A1（T-274）：`[Setup] LevelRankOnLogin` 缺省 0；非 0 = 开；空/非法值按 0（不 panic）。
+    ///
+    /// 缺键路径同时证明 **A1 的默认零变化**：用装载出的开关去调生产装配点
+    /// [`crate::enter::append_level_rank`]，帧集合必须**逐字节不变**。
+    #[test]
+    fn level_rank_on_login_defaults_off_and_invalid_falls_back_to_zero() {
+        let dir = std::env::temp_dir().join(format!("gs-conf-levelrank-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let nl = "\n";
+        let base = format!(
+            "[Server]{nl}GateAddr=127.0.0.1{nl}GatePort=5000{nl}CheckBlock=12288{nl}IDSAddr=127.0.0.1{nl}IDSPort=5600{nl}DBAddr=127.0.0.1{nl}DBPort=6000{nl}"
+        );
+
+        // 缺键 ⇒ 0（关），且装配点不追加任何帧（A1）。
+        let p = write(&dir, &format!("{base}[Setup]{nl}ShowRankLevelName=1{nl}"));
+        let c = load(&p).unwrap();
+        assert!(!c.level_rank_on_login, "缺键 ⇒ 0（关）");
+        let baseline = vec![mir2_protocol::frame::CommandMessage::make(658, 0, 0, 0, 0)
+            .to_bytes()
+            .to_vec()];
+        assert_eq!(
+            crate::enter::append_level_rank(
+                baseline.clone(),
+                c.level_rank_on_login,
+                0,
+                crate::enter::LEVEL_RANK_KIND_HUMAN,
+                &[("甲", 30, 1)],
+            ),
+            baseline,
+            "缺省关 ⇒ 登录帧集合逐字节不变（A1）"
+        );
+
+        // 非 0 ⇒ 开。
+        let p = write(&dir, &format!("{base}[Setup]{nl}LevelRankOnLogin=1{nl}"));
+        assert!(load(&p).unwrap().level_rank_on_login, "=1 ⇒ 开");
+        let p = write(&dir, &format!("{base}[Setup]{nl}LevelRankOnLogin=7{nl}"));
+        assert!(load(&p).unwrap().level_rank_on_login, "非 0（7）⇒ 开");
+
+        // 0 / 空值 ⇒ 关（空值 = 缺键口径）。
+        let p = write(&dir, &format!("{base}[Setup]{nl}LevelRankOnLogin=0{nl}"));
+        assert!(!load(&p).unwrap().level_rank_on_login, "=0 ⇒ 关");
+        let p = write(&dir, &format!("{base}[Setup]{nl}LevelRankOnLogin={nl}"));
+        assert!(!load(&p).unwrap().level_rank_on_login, "空值 ⇒ 0（关）");
+
+        // 非法值 ⇒ 关且不 panic（A4）。
+        let p = write(&dir, &format!("{base}[Setup]{nl}LevelRankOnLogin=abc{nl}"));
+        assert!(!load(&p).unwrap().level_rank_on_login, "非法值 ⇒ 0（关）");
+
+        // A4 的纯函数口径（WRN 决策 = `warn` 标志；不 panic）。
+        assert_eq!(
+            parse_level_rank_on_login(""),
+            (false, false),
+            "空/缺键 ⇒ 关且不告警"
+        );
+        assert_eq!(parse_level_rank_on_login("0"), (false, false), "0 ⇒ 关");
+        assert_eq!(parse_level_rank_on_login("1"), (true, false), "1 ⇒ 开");
+        assert_eq!(parse_level_rank_on_login("-3"), (true, false), "非 0 ⇒ 开");
+        assert_eq!(
+            parse_level_rank_on_login("abc"),
+            (false, true),
+            "非法 ⇒ 关 + WRN"
+        );
+        assert_eq!(
+            parse_level_rank_on_login("1.5"),
+            (false, true),
+            "非法（小数）⇒ 关 + WRN"
+        );
+
         std::fs::remove_dir_all(&dir).ok();
     }
 }
