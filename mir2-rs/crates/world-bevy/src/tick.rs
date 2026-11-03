@@ -20,18 +20,26 @@
 //!
 //! 契约怎么强制（三处缺一不可）：
 //!
-//! 1. **唯一的注册入口**是 [`TickRunner::add_systems`]，第一个参数**必须**是 [`TickStage`]；
-//!    本类型**不提供**不带阶段的注册方法（不是注释约定，是 API 上不存在这个入口）。
+//! 1. **唯一的注册入口**是 [`TickRunner::add_systems`]，第一个参数**必须**是 [`TickStage`]，
+//!    第二个参数是**单个**系统（`impl IntoSystem<(), (), _>`）；本类型**不提供**不带阶段的
+//!    注册方法，也**不接受**任何 bevy 的系统配置对象（`.chain()` / `.before()` / `.after()` /
+//!    `.ambiguous_with*()` 的返回类型都传不进来，waiver 没有入口）——不是注释约定，是类型上
+//!    根本拿不到那一族 API。多个系统就多次调用。
 //! 2. 每个系统都被 `.in_set(stage)` 收进对应阶段，阶段之间由 [`TickRunner::new`] 里的
-//!    `.chain()` 固定先后。
+//!    `.chain()` 固定先后；**项目里唯一的顺序维度就是阶段**。
 //! 3. 构建期开启 **ambiguity detection = Error**（见 [`tick_schedule_build_settings`]）：
-//!    同阶段内两个系统若有冲突访问却未被 `.chain()` 显式排序，schedule 构建直接失败，
-//!    [`TickRunner::run`] 会在跑**任何**系统之前 panic（不是 warning，不会被静默放过）。
+//!    同阶段内两个系统若有冲突访问，schedule 构建直接失败，[`TickRunner::run`] 会在跑
+//!    **任何**系统之前 panic（不是 warning，也不会被 `.ambiguous_with*()` 静默豁免——该入口
+//!    在类型上不存在）。
 //!
 //! ## 以后加系统怎么加
 //!
-//! * 新系统放进**已有阶段**里语义最合适的一个：`runner.add_systems(TickStage::Simulate, sys)`。
-//! * 同一阶段内多个系统若有数据访问冲突，必须显式排序：`(a, b).chain()` 或 `a.before(b)`。
+//! * 新系统放进**已有阶段**里语义最合适的一个：`runner.add_systems(TickStage::Simulate, sys)`；
+//!   多个系统重复调用即可。
+//! * **同阶段内的系统不得依赖彼此的相对顺序**（包括副作用 / I-O）：同阶段且无访问冲突的系统
+//!   相对次序由 bevy 拓扑序决定，**不是**项目契约；需要顺序就把它们拆到不同阶段。
+//! * 同阶段内两个系统若有数据访问冲突 ⇒ 构建期歧义检测直接让 `run` panic：必须拆阶段，
+//!   不要试图用 `.chain()` / `.ambiguous_with*()` 绕过（注册入口根本不接受配置对象）。
 //! * 只有确实需要新阶段时才扩 [`TickStage`]（同时改 [`STAGE_ORDER`]、[`TickRunner::new`] 里的
 //!   链、本注释的阶段表）——这是**契约变更**，要在评审里单独说明；不要靠注册序或参数依赖碰运气。
 //!
@@ -153,16 +161,21 @@ impl TickRunner {
         TickRunner { schedule }
     }
 
-    /// **唯一的系统注册入口**：必须显式给出 [`TickStage`]。
+    /// **唯一的系统注册入口**：必须显式给出 [`TickStage`]，且**一次只接受一个系统**。
     ///
-    /// 阶段内的多个系统若访问冲突，调用方必须再显式排序（如 `(a, b).chain()`），
-    /// 否则 [`TickRunner::run`] 会因构建期歧义检测 panic——顺序**不会**静默地按注册序发生。
+    /// 参数类型刻意收窄成 `impl IntoSystem<(), (), _>`：调用方拿不到 bevy 的
+    /// `IntoSystemConfigs`/`ScheduleConfigs` 那一族，因而无法挂 `.chain()` / `.before()` /
+    /// `.after()` / `.ambiguous_with_all()` / `.ambiguous_with(...)`——顺序与「零歧义」都不可能
+    /// 被调用方静默豁免。多个系统请多次调用本方法。
+    ///
+    /// 同一阶段内出现两个访问冲突的系统时，[`TickRunner::run`] 会因构建期歧义检测 panic；
+    /// 请把它们拆到不同阶段（同阶段无冲突系统的相对顺序也不是契约，见文件头注释）。
     pub fn add_systems<M>(
         &mut self,
         stage: TickStage,
-        systems: impl IntoScheduleConfigs<bevy_ecs::system::ScheduleSystem, M>,
+        system: impl IntoSystem<(), (), M>,
     ) -> &mut Self {
-        self.schedule.add_systems(systems.in_set(stage));
+        self.schedule.add_systems(system.in_set(stage));
         self
     }
 

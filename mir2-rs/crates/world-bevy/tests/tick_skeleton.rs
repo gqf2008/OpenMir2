@@ -123,7 +123,9 @@ fn tick_runner_asserts_zero_ambiguity() {
     world.insert_resource(Trace::default());
     let mut runner = TickRunner::new();
     // 同阶段 + 冲突访问 + 未显式排序：契约要求 run 在跑任何系统前 panic。
-    runner.add_systems(TickStage::Simulate, (write_a, write_b));
+    // （注册入口一次只收一个系统；两系统要分开调用。）
+    runner.add_systems(TickStage::Simulate, write_a);
+    runner.add_systems(TickStage::Simulate, write_b);
 
     let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.run(&mut world)));
     let payload = hit.expect_err("TickRunner 必须对歧义 schedule panic");
@@ -136,4 +138,39 @@ fn tick_runner_asserts_zero_ambiguity() {
         msg.contains("TickRunner") && msg.contains("契约"),
         "panic 文案必须指出系统顺序契约被破坏，实际: {msg}"
     );
+}
+
+/// A2（F1 收口）：注册入口签名必须是**单个** `IntoSystem`，不得退回可挂
+/// `.ambiguous_with*()` / `.chain()` 的配置对象族（`IntoScheduleConfigs` /
+/// `ScheduleConfigs` / `IntoSystemConfigs`）。
+///
+/// 这是 F1 的**持久牙**：把 `add_systems` 的参数类型放宽回配置对象 ⇒ 本用例红。
+/// 类型层面的证据（传 `.ambiguous_with_all()` 直接编译失败）见 patch body 的临时
+/// `cargo check` 记录——编译失败无法写成运行时用例，故这里用签名扫描兜住回退。
+#[test]
+fn contract_rejects_schedule_config_escape_hatch() {
+    let src = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/tick.rs"),
+    )
+    .unwrap();
+    let start = src
+        .find("pub fn add_systems")
+        .expect("tick.rs 必须定义 add_systems");
+    let tail = &src[start..];
+    let sig_end = tail.find('{').expect("add_systems 必须有函数体");
+    let sig = &tail[..sig_end];
+    assert!(
+        sig.contains("impl IntoSystem<(), (), M>"),
+        "add_systems 必须只接受单个系统（impl IntoSystem<(), (), M>），实际签名: {sig}"
+    );
+    for banned in [
+        "IntoScheduleConfigs",
+        "ScheduleConfigs",
+        "IntoSystemConfigs",
+    ] {
+        assert!(
+            !sig.contains(banned),
+            "add_systems 不得接受 {banned} 配置对象（否则 .ambiguous_with*() 可绕过零歧义检测）: {sig}"
+        );
+    }
 }
