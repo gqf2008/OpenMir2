@@ -468,38 +468,35 @@ async fn bind_gate_listener(advertised_addr: &str, gate_port: u16) -> std::io::R
     TcpListener::bind((advertised_addr, gate_port)).await
 }
 
-/// 启动期**单张**直连 MySQL 表加载的明确上界（卡 `openmir2-gamesvr-db-startup-hermeticity`）。
+/// 启动期 **connect 相位**探活上界（卡 `openmir2-gamesvr-db-startup-hermeticity`，review F1/F3）。
 ///
-/// 背景（2026-11-03 实测，本机 3306 无监听）：sqlx 建池在目标不可达时按默认
-/// `acquire_timeout`(30s) 等「拿到一条连接」，四张启动表串起来 ≈120s，超过
-/// `clock_inject` 的 `READY_BOUND`(20s) ⇒ 无 MySQL 时进程打不出「已启动」。
+/// 只判「能不能连上」（`TcpStream::connect`，不跑 SQL、不建 sqlx 池）。连不上 ⇒ 判定同一
+/// DSN 不可达，四张启动表都不尝试，按既有「读取失败 ⇒ 空表」**逐表**登记 WRN；
+/// 无 DB 路径总代价 ≈ 本常量（SLA 2s，见 `clock_inject` 的 `NO_DB_SLA`）。
+pub const STARTUP_DB_PROBE_BOUND: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// 启动期**单张** DB 表加载的端到端上界（含 monsters 的 MonItems 文件挂接；F2）。
 ///
-/// 口径：单表 6s。**首次超时即认定同一 DSN 不可达**，后续启动表按既有「读取失败 ⇒ 空表」
-/// WRN 跳过（不再各等 30s）⇒ 无 DB 的启动代价 ≈ 本常量一次；有 DB 时每表仍各有 6s 的独立上界。
-/// 最坏（探活通但每表都慢）总上界 = `STARTUP_DB_LOAD_BOUND × STARTUP_DB_TABLE_COUNT`。
-pub const STARTUP_DB_LOAD_BOUND: std::time::Duration = std::time::Duration::from_secs(6);
+/// 探活成功后每张表独立计时；**单表超时只让该表降级为空表，绝不跳过其它表**（F1：
+/// 「慢但可用」的 DB 不得被误判成不可达）。最坏（四表都接近上界）=
+/// `STARTUP_DB_LOAD_BOUND × STARTUP_DB_TABLE_COUNT` = 16s，仍落在 `clock_inject` 的
+/// `READY_BOUND`(20s) 内（F3）。
+pub const STARTUP_DB_LOAD_BOUND: std::time::Duration = std::time::Duration::from_secs(4);
 
 /// 启动期直连 MySQL 逐表加载的表数：`stditems` / `magics` / `monsters` / `goldsales`。
 ///
-/// 新增/删除启动期 DB 表时必须同步本常量（`clock_inject` 的 A3 断言按它算总上界）。
+/// 新增/删除启动期 DB 表时必须同步本常量（`clock_inject` 的 SLA 断言按它算上界×表数）。
 pub const STARTUP_DB_TABLE_COUNT: usize = 4;
 
 /// 启动期一次 DB 表加载的失败形态：区分「加载器自己报错」与「上界超时」。
 ///
-/// 只有 [`Self::Timeout`] 会把启动期判成「同一 DSN 不可达」并跳过后续表
-/// （加载器自己报错仍逐表尝试，行为与未加上界时一致）。
+/// 两者都只在**当前表**走既有「读取失败 ⇒ 空表」的登记 WRN；不置任何跨表状态（F1）。
 #[derive(Debug)]
 enum StartupDbLoadError {
     /// 加载函数返回的错误（连接串解析/连库/SQL 失败），原样透传。
     Load(String),
-    /// 超过 [`STARTUP_DB_LOAD_BOUND`] 仍无结果（DB 不可达或响应过慢）。
+    /// 超过单表上界仍无结果（DB 响应过慢；**不等于** DSN 不可达）。
     Timeout(std::time::Duration),
-}
-
-impl StartupDbLoadError {
-    fn is_timeout(&self) -> bool {
-        matches!(self, Self::Timeout(_))
-    }
 }
 
 impl std::fmt::Display for StartupDbLoadError {
@@ -513,18 +510,50 @@ impl std::fmt::Display for StartupDbLoadError {
     }
 }
 
-/// 给启动期一次 DB 表加载套上 [`STARTUP_DB_LOAD_BOUND`] 的硬上界。
+/// 给启动期一次 DB 表加载套上给定上界（生产路径用 [`STARTUP_DB_LOAD_BOUND`]；单测用短上界）。
 ///
 /// 超时转成 [`StartupDbLoadError::Timeout`]，调用点仍走**既有**「读取失败 ⇒ 空表」的登记
 /// WRN 分支 —— 不 panic、不静默。加载成功时返回值与未加上界时**逐字节相同**（加载函数本体未改）。
+async fn startup_db_load_bounded<T>(
+    bound: std::time::Duration,
+    fut: impl std::future::Future<Output = Result<T, String>>,
+) -> Result<T, StartupDbLoadError> {
+    match tokio::time::timeout(bound, fut).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(e)) => Err(StartupDbLoadError::Load(e)),
+        Err(_elapsed) => Err(StartupDbLoadError::Timeout(bound)),
+    }
+}
+
 async fn startup_db_load<T>(
     fut: impl std::future::Future<Output = Result<T, String>>,
 ) -> Result<T, StartupDbLoadError> {
-    match tokio::time::timeout(STARTUP_DB_LOAD_BOUND, fut).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(e)) => Err(StartupDbLoadError::Load(e)),
-        Err(_elapsed) => Err(StartupDbLoadError::Timeout(STARTUP_DB_LOAD_BOUND)),
+    startup_db_load_bounded(STARTUP_DB_LOAD_BOUND, fut).await
+}
+
+/// 给启动期一次**含同步阻塞**的 DB 表加载（monsters：DB + MonItems 文件挂接）套上端到端上界。
+///
+/// 同步段（`std::fs::read`/`Path::is_file`）在单次 poll 内不可抢占，`tokio::time::timeout`
+/// 对它无效 ⇒ 整段放进 `spawn_blocking`，超时才能真的在上界处返回（review F2）。
+/// 超时后启动继续；阻塞任务在后台自然结束（返回值丢弃，无副作用）。
+async fn startup_db_load_blocking_bounded<T: Send + 'static>(
+    bound: std::time::Duration,
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, StartupDbLoadError> {
+    match tokio::time::timeout(bound, tokio::task::spawn_blocking(work)).await {
+        Ok(Ok(Ok(value))) => Ok(value),
+        Ok(Ok(Err(e))) => Err(StartupDbLoadError::Load(e)),
+        Ok(Err(join_err)) => Err(StartupDbLoadError::Load(format!(
+            "启动期后台加载任务异常：{join_err}"
+        ))),
+        Err(_elapsed) => Err(StartupDbLoadError::Timeout(bound)),
     }
+}
+
+async fn startup_db_load_blocking<T: Send + 'static>(
+    work: impl FnOnce() -> Result<T, String> + Send + 'static,
+) -> Result<T, StartupDbLoadError> {
+    startup_db_load_blocking_bounded(STARTUP_DB_LOAD_BOUND, work).await
 }
 
 async fn run_inner(args: &[String]) -> Result<()> {
@@ -734,15 +763,44 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // 物品模板表（帧 50/41 的 `UseItems[Dress/Weapon].StdItem.Shape` 输入）：oracle 在 `GameApp.Initialize`
     // 直连 MySQL 读 `stditems`（`MySqlDB.LoadItemsDB`，不经 DBSvr）；加载失败 ⇒ 空表
     // （`GetStdItem` 恒 null ⇒ 形态计 0，与 oracle 空物品系统分支同形）。
-    // 启动期 DB 可达性降级标志：首张表**上界超时** ⇒ 同一 DSN 的后续表不再各等一遍
-    // （见 `STARTUP_DB_LOAD_BOUND` 的口径）。加载器自己报错**不**置位（逐表行为不变）。
-    let mut db_load_timed_out = false;
-    let item_table = {
-        let conn = cfg
-            .db_conn_string
-            .as_deref()
-            .unwrap_or(items::DEFAULT_CONN_STRING);
-        match startup_db_load(items::load_items(conn)).await {
+    // 启动期 DB 探活（review F1/F3）：只有 **connect 相位**失败才判「同一 DSN 不可达」并跳过
+    // 四张表；查询阶段的超时只在**当前表**降级为空表，绝不牵连其它表。
+    // 连不上 ⇒ 无 DB 路径总代价 ≈ 探活上界（SLA 2s）；连得上 ⇒ 每表独立上界（SLA 20s）。
+    let db_conn = cfg
+        .db_conn_string
+        .as_deref()
+        .unwrap_or(items::DEFAULT_CONN_STRING);
+    let db_unreachable = match items::probe_reachable(db_conn, STARTUP_DB_PROBE_BOUND).await {
+        items::StartupDbProbe::Connected => {
+            glog!(
+                "INF",
+                "启动期 DB 探活成功（connect ≤ {STARTUP_DB_PROBE_BOUND:?}；四表各自上界 {STARTUP_DB_LOAD_BOUND:?}，单表超时不跳过其它表）"
+            );
+            None
+        }
+        items::StartupDbProbe::ConnectFailed(e) => {
+            glog!(
+                "WRN",
+                "启动期 DB 探活失败（{e}；上界 {STARTUP_DB_PROBE_BOUND:?}）⇒ 四张表都不尝试，逐表按「读取失败 ⇒ 空表」登记（无 DB 路径）"
+            );
+            Some(e)
+        }
+        items::StartupDbProbe::DsnError(e) => {
+            glog!(
+                "WRN",
+                "启动期 DB 探活跳过（{e}）⇒ 交由各表加载器立即报告同一解析错误（不触发跨表跳过）"
+            );
+            None
+        }
+    };
+    let item_table = if let Some(why) = &db_unreachable {
+        glog!(
+            "WRN",
+            "读 stditems 失败（启动期 DB 探活失败：{why}）⇒ 装备形态按 `GetStdItem == null` 计 0（oracle 空物品系统分支）"
+        );
+        Vec::new()
+    } else {
+        match startup_db_load(items::load_items(db_conn)).await {
             Ok(list) => {
                 glog!(
                     "INF",
@@ -752,7 +810,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 list
             }
             Err(e) => {
-                db_load_timed_out = e.is_timeout();
                 glog!(
                     "WRN",
                     "读 stditems 失败（{e}）⇒ 装备形态按 `GetStdItem == null` 计 0（oracle 空物品系统分支）"
@@ -793,18 +850,14 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // `MySqlDB.cs:105`，`GameApp.Initialize` 直连 MySQL 读）。`DoSpell` 取 `Magic.Effect`/
     // `EffectType`（`RM_SPELL`/`RM_MAGICFIRE` 帧参）与熟练度尾的 `TrainLv`/`TrainLevel`/`MaxTrain`。
     // 读不到 ⇒ 空表（调用方按 `GetMagicInfo == null` 降级：不接效果体，登记）。
-    let magic_table = if db_load_timed_out {
+    let magic_table = if let Some(why) = &db_unreachable {
         glog!(
             "WRN",
-            "读 magics 失败（前序表加载已超时 ⇒ 同一 DSN 不可达，跳过；单表上界 {STARTUP_DB_LOAD_BOUND:?}）⇒ 空魔表（GetMagicInfo 恒 null ⇒ 效果体不接，登记）"
+            "读 magics 失败（启动期 DB 探活失败：{why}）⇒ 空魔表（GetMagicInfo 恒 null ⇒ 效果体不接，登记）"
         );
         magics::MagicTable::default()
     } else {
-        let conn = cfg
-            .db_conn_string
-            .as_deref()
-            .unwrap_or(items::DEFAULT_CONN_STRING);
-        match startup_db_load(magics::load_magics(conn)).await {
+        match startup_db_load(magics::load_magics(db_conn)).await {
             Ok(list) => {
                 glog!(
                     "INF",
@@ -814,7 +867,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 magics::MagicTable::new(list)
             }
             Err(e) => {
-                db_load_timed_out = e.is_timeout();
                 glog!(
                     "WRN",
                     "读 magics 失败（{e}）⇒ 空魔表（GetMagicInfo 恒 null ⇒ 效果体不接，登记）"
@@ -844,23 +896,22 @@ async fn run_inner(args: &[String]) -> Result<()> {
     };
     // **M3④-实现 B 第 ③ 片**：怪物模板表（`monsters` + MonItems）+ `Envir/MonGen.txt` 运行时条目
     // + `Server.conf` 刷怪参数。三者任一拿不到时刷怪不启（登记），不影响既有链路。
-    let monster_table = if db_load_timed_out {
+    let monster_table = if let Some(why) = &db_unreachable {
         glog!(
             "WRN",
-            "读 monsters 失败（前序表加载已超时 ⇒ 同一 DSN 不可达，跳过；单表上界 {STARTUP_DB_LOAD_BOUND:?}）⇒ 刷怪表为空（登记：不刷怪）"
+            "读 monsters 失败（启动期 DB 探活失败：{why}）⇒ 刷怪表为空（登记：不刷怪）"
         );
         game_svr::mongen::MonsterTable::new(Vec::new())
     } else {
-        let conn = cfg
-            .db_conn_string
-            .as_deref()
-            .unwrap_or(items::DEFAULT_CONN_STRING);
+        // F2：monsters 的装载含**同步** MonItems 文件挂接（`std::fs::read`/`is_file`），
+        // 单次 poll 内不可抢占 ⇒ 整段放进 spawn_blocking，4s 上界才是端到端上界。
+        let conn = db_conn.to_string();
         let envir_dir = base.join(&cfg.envir_dir);
-        match startup_db_load(game_svr::monitems::load_monsters(
-            conn,
-            &envir_dir,
-            cfg.monster_power_rate,
-        ))
+        let rate = cfg.monster_power_rate;
+        match startup_db_load_blocking(move || {
+            tokio::runtime::Handle::current()
+                .block_on(game_svr::monitems::load_monsters(&conn, &envir_dir, rate))
+        })
         .await
         {
             Ok(load) => {
@@ -875,7 +926,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 game_svr::mongen::MonsterTable::new(load.monsters)
             }
             Err(e) => {
-                db_load_timed_out = e.is_timeout();
                 glog!("WRN", "读 monsters 失败（{e}）⇒ 刷怪表为空（登记：不刷怪）");
                 game_svr::mongen::MonsterTable::new(Vec::new())
             }
@@ -1123,18 +1173,14 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // 失败按 oracle `!Open()` 分支（`MySqlDB.cs:254-258`）降级：记 ERR、列表保持空（登记，不 panic）。
     let sell_off_seed = {
         glog!("INF", "加载物品寄售系统...");
-        if db_load_timed_out {
+        if let Some(why) = &db_unreachable {
             glog!(
                 "ERR",
-                "读取物品寄售列表失败（前序表加载已超时 ⇒ 同一 DSN 不可达，跳过；单表上界 {STARTUP_DB_LOAD_BOUND:?}）；列表保持空（oracle !Open() 分支）"
+                "读取物品寄售列表失败（启动期 DB 探活失败：{why}）；列表保持空（oracle !Open() 分支）"
             );
             Vec::new()
         } else {
-            let conn = cfg
-                .db_conn_string
-                .as_deref()
-                .unwrap_or(items::DEFAULT_CONN_STRING);
-            match startup_db_load(goldsales::load_goldsales(conn)).await {
+            match startup_db_load(goldsales::load_goldsales(db_conn)).await {
                 Ok(rows) => {
                     glog!("INF", "读取物品寄售列表成功...[{}]", rows.len());
                     let mut book = game_svr::selloff::SellOffBook::default();
@@ -29206,28 +29252,80 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    /// **上界牙**（卡 `openmir2-gamesvr-db-startup-hermeticity`）：加载在
-    /// [`STARTUP_DB_LOAD_BOUND`] 内拿不到结果 ⇒ 必须返回 `Timeout`，不许一直等。
+    /// **异步上界牙**（卡 `openmir2-gamesvr-db-startup-hermeticity`）：慢异步加载在给定上界处
+    /// 必须返回 `Timeout`（不许一直等）。生产上界由 [`STARTUP_DB_LOAD_BOUND`] 提供，这里用短
+    /// 上界只测机制、不拖慢套件。
     ///
-    /// 红检：把 [`startup_db_load`] 的上界改成无界（直接 `.await`）⇒ 本用例要等 40s 拿到
-    /// `Ok`，两个断言都会红（无需外部 DB）。
+    /// 红检：把 `startup_db_load_bounded` 改成直接 `.await` ⇒ 600ms 后拿到 `Ok`，本用例红。
     #[tokio::test]
-    async fn startup_db_load_cuts_off_a_slow_load_at_the_bound() {
+    async fn startup_db_load_bounded_cuts_off_a_slow_async_load() {
+        let bound = std::time::Duration::from_millis(100);
         let slow = async {
-            tokio::time::sleep(STARTUP_DB_LOAD_BOUND * 10).await;
+            tokio::time::sleep(std::time::Duration::from_millis(600)).await;
             Ok::<_, String>(())
         };
         let started = std::time::Instant::now();
-        let result = startup_db_load(slow).await;
+        let result = startup_db_load_bounded(bound, slow).await;
         let elapsed = started.elapsed();
         assert!(
             matches!(&result, Err(StartupDbLoadError::Timeout(_))),
             "超过上界必须返回 Timeout（而不是等慢加载自己完成）；实得 {result:?}"
         );
+        assert!(elapsed >= bound, "至少要等满上界；实测 {elapsed:?}");
+    }
+
+    /// **成功路径逐字节透传**（review 牙①）：上界内成功的结果原样返回，不被 timeout 改写。
+    #[tokio::test]
+    async fn startup_db_load_bounded_passes_payload_through() {
+        let payload = vec![1u8, 2, 3];
+        let result = startup_db_load_bounded(
+            std::time::Duration::from_secs(1),
+            std::future::ready(Ok::<_, String>(payload.clone())),
+        )
+        .await;
+        assert_eq!(result.expect("上界内成功必须原样返回"), payload);
+    }
+
+    /// **加载器自身报错 ≠ 不可达**（review 牙②）：原样转成 `Load`，文本逐字透传。
+    #[tokio::test]
+    async fn startup_db_load_bounded_keeps_loader_error() {
+        let result = startup_db_load_bounded(
+            std::time::Duration::from_secs(1),
+            std::future::ready(Err::<(), _>("库表读失败".to_string())),
+        )
+        .await;
+        let err = result.expect_err("加载器报错必须原样成为 Err");
+        assert!(matches!(&err, StartupDbLoadError::Load(_)));
+        assert_eq!(err.to_string(), "库表读失败");
+    }
+
+    /// **同步 IO 上界牙**（review F2）：2s 的**同步**阻塞必须在上界处返回 `Timeout`，
+    /// 而不是被同步段拖到它自己结束。
+    ///
+    /// 红检：把 `startup_db_load_blocking_bounded` 里的 `spawn_blocking` 去掉（直接调用 work）
+    /// ⇒ 本用例要等 2s 才拿到 `Ok`，第一个断言必红。
+    #[tokio::test]
+    async fn startup_db_load_blocking_bounds_synchronous_io() {
+        let bound = std::time::Duration::from_millis(100);
+        let finished = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let finished_in = std::sync::Arc::clone(&finished);
+        let started = std::time::Instant::now();
+        let result = startup_db_load_blocking_bounded(bound, move || {
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            finished_in.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok::<_, String>(())
+        })
+        .await;
+        let elapsed = started.elapsed();
         assert!(
-            elapsed < STARTUP_DB_LOAD_BOUND * 2,
-            "必须在上界附近返回；实测 {elapsed:?}（上界 {STARTUP_DB_LOAD_BOUND:?}）"
+            matches!(&result, Err(StartupDbLoadError::Timeout(_))),
+            "同步阻塞超过上界也必须返回 Timeout；实得 {result:?}"
         );
+        assert!(
+            !finished.load(std::sync::atomic::Ordering::SeqCst),
+            "上界返回时同步段仍未完成（证明 timeout 覆盖了不可抢占的同步 IO）"
+        );
+        assert!(elapsed >= bound, "至少要等满上界；实测 {elapsed:?}");
     }
 
     /// 推进世界到**下一次玩家 AOI 扫描**并返回该 tick 的 `TickRecord`。
