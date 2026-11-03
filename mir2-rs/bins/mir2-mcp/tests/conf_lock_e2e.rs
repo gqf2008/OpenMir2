@@ -21,7 +21,7 @@ const PROTOCOL_VERSION: &str = "2025-11-25";
 /// 每个进程的写入轮数（卡面要求 ≥50）。
 const ROUNDS_PER_PROCESS: usize = 50;
 /// 测试接缝：rename 与回读之间停住多久（毫秒），放大互滚窗口。
-const HOLD_AFTER_RENAME_MS: u64 = 25;
+const HOLD_AFTER_RENAME_MS: u64 = 60;
 
 // ---------------------------------------------------------------------------
 // MCP 子进程（与 mcp_e2e.rs 同形态的最小副本）
