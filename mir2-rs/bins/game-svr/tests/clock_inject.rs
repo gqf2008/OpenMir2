@@ -15,7 +15,10 @@ use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
-use game_svr::{STARTUP_DB_LOAD_BOUND, STARTUP_DB_PROBE_BOUND, STARTUP_DB_TABLE_COUNT};
+use game_svr::{
+    STARTUP_DB_LOAD_BOUND, STARTUP_DB_PROBE_BOUND, STARTUP_DB_PROBE_CONFIRM_BOUND,
+    STARTUP_DB_TABLE_COUNT,
+};
 use tokio::process::Command;
 
 #[allow(dead_code)] // 共用模块：另一个 target 的条目在本 target 未用
@@ -30,9 +33,15 @@ const INVALID_CLOCK_EXIT_BOUND: Duration = Duration::from_secs(10);
 /// 就绪/探针等待上限（正常 <1s 出现）。
 const READY_BOUND: Duration = Duration::from_secs(20);
 
-/// 无 DB 路径 SLA（review F3）：探活上界 1s + 启动开销 1s = 2s。
-/// connect 被 refused 时探活立即返回；被防火墙丢包/挂起时最多等满探活上界。
-const NO_DB_SLA: Duration = Duration::from_secs(2);
+/// 无 DB 路径 SLA（review F3 / 卡 `openmir2-gamesvr-db-probe-threshold`）：
+/// 探活**决策窗口**（快速观察 1s；无结论时并行扩展观察到 `STARTUP_DB_PROBE_CONFIRM_BOUND`
+/// = 2.5s）+ 启动开销余量 1s = 3.5s。
+///
+/// 旧口径「探活上界 1s + 1s」只在**操作系统立刻回 refused** 的栈上成立；本机（HIPS/WFP
+/// 过滤）实测关闭端口的 ECONNREFUSED 约 2.0s 才上报（独立 tokio/Python/.NET 均如此），
+/// 此时必须让扩展观察拿到**明确** refused 才能跳过四表 —— 直接把 1s 超时判死正是本卡要修
+/// 的误判。正常栈上 refused 落在快速窗口内，无 DB 路径仍 ≈ 启动开销（<1s）。
+const NO_DB_SLA: Duration = Duration::from_millis(3500);
 /// 无 DB 路径里「探活上界」之外的启动开销余量。
 const NO_DB_SLACK: Duration = Duration::from_secs(1);
 
@@ -42,9 +51,12 @@ const CONNECTED_SLACK: Duration = Duration::from_secs(4);
 /// 有 DB 路径 SLA：四表各自 4s 上界 + 4s 余量 = READY_BOUND(20s)（review F3：最坏链路也不超窗口）。
 const CONNECTED_SLA: Duration = READY_BOUND;
 
-/// **F3 两条路径的 SLA 静态断言**（卡 `openmir2-gamesvr-db-startup-hermeticity`）：
-/// - 无 DB：探活失败就快速返回，总上界 = 探活上界 + 余量 ≤ 2s；
-/// - 有 DB：逐表独立上界，最坏 = 上界 × 表数 + 余量 ≤ READY_BOUND(20s)。
+/// **F3 两条路径的 SLA 静态断言**（卡 `openmir2-gamesvr-db-startup-hermeticity`；
+/// 无 DB 口径按卡 `openmir2-gamesvr-db-probe-threshold` 改为**探活决策窗口**）：
+/// - 无 DB：跳过的前提是「明确 refused」，最迟由扩展观察（2.5s）给出；
+///   总上界 = 决策窗口 + 余量 ≤ NO_DB_SLA；
+/// - 有 DB：逐表独立上界，最坏 = 上界 × 表数 + 余量 ≤ READY_BOUND(20s)；
+///   扩展观察只发生在快速观察无结论时，其最坏值也计入无 DB 窗口（有 DB 路径不受影响）。
 ///
 /// 改大任一个上界而不同步 ⇒ 本用例红。
 #[test]
@@ -52,9 +64,14 @@ fn startup_db_sla_covers_both_paths() {
     let table_total = STARTUP_DB_LOAD_BOUND
         * u32::try_from(STARTUP_DB_TABLE_COUNT).expect("启动期 DB 表数必落 u32");
     assert!(
-        STARTUP_DB_PROBE_BOUND + NO_DB_SLACK <= NO_DB_SLA,
-        "无 DB 路径上界（探活 {STARTUP_DB_PROBE_BOUND:?} + 余量 {NO_DB_SLACK:?}）必须 \
-         ≤ NO_DB_SLA {NO_DB_SLA:?}"
+        STARTUP_DB_PROBE_CONFIRM_BOUND + NO_DB_SLACK <= NO_DB_SLA,
+        "无 DB 路径上界（探活决策窗口 {STARTUP_DB_PROBE_CONFIRM_BOUND:?} + 余量 {NO_DB_SLACK:?}）\
+         必须 ≤ NO_DB_SLA {NO_DB_SLA:?}"
+    );
+    assert!(
+        STARTUP_DB_PROBE_BOUND <= STARTUP_DB_PROBE_CONFIRM_BOUND,
+        "快速观察 {STARTUP_DB_PROBE_BOUND:?} 不得大于扩展观察 {STARTUP_DB_PROBE_CONFIRM_BOUND:?}\
+         （否则扩展观察先于快速观察结束，fast_unknown 语义失效）"
     );
     assert!(
         table_total + CONNECTED_SLACK <= CONNECTED_SLA,
@@ -341,8 +358,11 @@ const STARTUP_DB_TABLE_MARKERS: [(&str, &str, &str); 4] = [
 const DB_PROBE_FAILED_MARKER: &str = "启动期 DB 探活失败";
 
 /// 探活结论三态标记（必须至少出现一条，F5 fail-closed）。
-const DB_PROBE_CONCLUDED_MARKERS: [&str; 3] = [
+/// 第四态 `超时`（卡 `openmir2-gamesvr-db-probe-threshold`）= 可达性未知、**继续加载四表**，
+/// 与「失败」必须在日志里可区分（A3）。
+const DB_PROBE_CONCLUDED_MARKERS: [&str; 4] = [
     "启动期 DB 探活成功",
+    "启动期 DB 探活超时",
     "启动期 DB 探活失败",
     "启动期 DB 探活跳过",
 ];
@@ -480,6 +500,116 @@ mod registration_audit_teeth {
             .expect_err("有 DB 超 SLA 必须违规");
         assert!(v.iter().any(|m| m.contains("有 DB 路径超 SLA")), "{v:?}");
     }
+
+    /// **A3 牙**：探活「超时」必须算一条结论（不因缺成功/失败标记而违规），且当四表都
+    /// 加载成功时按**有 DB 路径**审计通过 —— 超时 ≠ 跳过（卡 `openmir2-gamesvr-db-probe-threshold`）。
+    #[test]
+    fn timeout_conclusion_is_accepted_and_tables_still_checked() {
+        let text = "启动期 DB 探活超时（connect 超时；探活上界内没有结论）⇒ 可达性未知\n\
+                    物品模板表 stditems：1000 条\n魔法模板表 magics：108 条\n\
+                    怪物模板表 monsters：705 条\n读取物品寄售列表成功...[5]";
+        assert_eq!(
+            audit_startup_db_registration(text, Duration::from_millis(500)),
+            Ok("有DB")
+        );
+    }
+
+    /// **A3 负例**：探活「超时」但四表**一条登记都没有** ⇒ 必须违规（不许把超时当成
+    /// 「反正会继续」就把逐表证据省掉）。红检：把超时标记当成「无 DB 路径」⇒ 会要求四条
+    /// 失败 WRN 而给出 4 条违规，本断言仍绿但路径判错由上一用例咬住。
+    #[test]
+    fn timeout_conclusion_without_table_evidence_is_violation() {
+        let v = audit_startup_db_registration(
+            "启动期 DB 探活超时（connect 超时）⇒ 可达性未知",
+            Duration::from_millis(500),
+        )
+        .expect_err("超时后缺逐表登记必须违规");
+        assert_eq!(v.len(), 4, "四张表都必须有成功或失败登记：{v:?}");
+    }
+}
+
+/// **A2 牙（卡 `openmir2-gamesvr-db-probe-threshold`）**：DB 真没起（端口关闭 ⇒ connect 被
+/// refused）时仍是**明确不可达**：启动 ≤ [`NO_DB_SLA`]、四表按既有 WRN 逐条跳过，且**不得**
+/// 出现「探活超时」第三态（refused 与 timeout 在日志里可区分，A3）。
+///
+/// 红检（A5 变异）：把 Refused 改成「继续尝试」⇒ 四表会各自去连（每条 4s 上界）并打出
+/// 「读 X 失败（启动期加载超时…」而不是「启动期 DB 探活失败」，本用例红。
+#[tokio::test]
+async fn refused_db_probe_fails_fast_and_skips_four_tables() {
+    let dir = unique_temp_dir("refused-db");
+    std::fs::create_dir_all(&dir).unwrap();
+    // `next_port()` 的候选只做 bind 探测后立即释放 ⇒ 该端口无监听，connect 必被 refused。
+    let closed_port = support::next_port();
+    let conf = dir.join("Server.conf");
+    std::fs::write(
+        &conf,
+        format!(
+            "[DataBase]\nDBType=MySQL\nConnctionString=server=127.0.0.1;uid=root;pwd=;database=mir2;port={closed_port};\n\
+             [Server]\nGateAddr=127.0.0.1\nGatePort={}\nCheckBlock=12288\n\
+             IDSAddr=127.0.0.1\nIDSPort={}\nDBAddr=127.0.0.1\nDBPort={}\nWorldMaps=64x64\n",
+            support::next_port(),
+            support::next_port(),
+            support::next_port()
+        ),
+    )
+    .unwrap();
+    let log = dir.join("stdout.txt");
+    let out = std::fs::File::create(&log).unwrap();
+    let err = out.try_clone().unwrap();
+    let spawned_at = std::time::Instant::now();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_game-svr"))
+        .arg(&conf)
+        .env_remove("MIR2_CLOCK_MS")
+        .stdout(out)
+        .stderr(err)
+        .kill_on_drop(true)
+        .spawn()
+        .unwrap();
+    let pid = child.id().unwrap_or(0);
+    let _guard = ProcGuard {
+        pid,
+        dir: dir.clone(),
+    };
+    let ready = wait_log_contains(&log, "已启动", READY_BOUND).await;
+    let elapsed = spawned_at.elapsed();
+    kill_tree_and_reap(&mut child, pid, Duration::from_secs(5)).await;
+    assert_no_leftover_game_svr(&dir).await;
+    assert!(
+        ready.contains("已启动"),
+        "DB 不可达时进程仍必须启动；实得日志：\n{ready}"
+    );
+    assert!(
+        ready.contains("启动期 DB 探活失败"),
+        "端口关闭（refused）必须判「明确不可达」；实得日志：\n{ready}"
+    );
+    assert!(
+        !ready.contains("启动期 DB 探活超时"),
+        "refused 不是 timeout：不得打第三态；实得日志：\n{ready}"
+    );
+    for (table, fail, _ok) in STARTUP_DB_TABLE_MARKERS {
+        assert!(
+            ready.contains(fail),
+            "无 DB 路径缺 {table} 的登记 WRN：`{fail}`；实得日志：\n{ready}"
+        );
+        // A5 牙：必须是因为**明确不可达**而跳过（而不是四表各自去连/各自超时）。
+        // 红检：把 Refused 改成「继续尝试」⇒ 四表 WRN 变成「启动期加载超时」⇒ 本断言红。
+        assert!(
+            ready.contains(&format!("{fail}（启动期 DB 探活失败")),
+            "无 DB 路径 {table} 的 WRN 必须带跳过理由「启动期 DB 探活失败」，不得是四表各自尝试；实得日志：\n{ready}"
+        );
+    }
+    let path = audit_startup_db_registration(&ready, elapsed).unwrap_or_else(|violations| {
+        panic!(
+            "无 DB 路径登记审计失败：\n{}\n实得日志：\n{ready}",
+            violations.join("\n")
+        )
+    });
+    assert_eq!(path, "无DB");
+    assert!(
+        elapsed <= NO_DB_SLA,
+        "无 DB 路径必须 ≤ {NO_DB_SLA:?}（探活上界 {STARTUP_DB_PROBE_BOUND:?} + 余量）；实测 {elapsed:?}"
+    );
+    println!("[db-startup 诊断] refused 路径 已启动耗时={elapsed:?}");
 }
 
 /// **F1 牙（review）**：DB 探活连得上（TCP accept 成功）但查询永不返回 ⇒ 四张表必须
