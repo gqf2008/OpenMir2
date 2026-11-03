@@ -106,6 +106,68 @@ async fn timer_loop(share: std::sync::Arc<state::Share>) {
     }
 }
 
+/// 显式账号库名覆盖的环境变量名（**仅 login-srv 账号库**读取；db-srv/game-srv 不读）。
+const LOGIN_DB_ENV: &str = "MIR2_LOGIN_DB";
+
+/// 解析显式账号库覆盖值：`None`/空串/纯空白 ⇒ `None`（按未设置处理）。
+///
+/// 只为「显式设置」的测试/窗口栈打开入口；缺省路径完全不走这里（见
+/// [`authoritative_account_dsn_with`]）。非法值一律 `Err`（明确报错、不回退、不 panic）：
+/// 允许 ASCII 字母/数字/`_`/`$`/`-`，拒绝引号、分号、空白、路径分隔符等——误设的
+/// 环境变量若静默回退到 `mir2_account`，正是本卡要消灭的「真机写生产账号表」。
+fn parse_account_db_override(raw: Option<&std::ffi::OsStr>) -> Result<Option<String>, String> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let Some(text) = raw.to_str() else {
+        return Err(format!("{LOGIN_DB_ENV} 不是合法 UTF-8"));
+    };
+    let text = text.trim();
+    if text.is_empty() {
+        return Ok(None);
+    }
+    if !text
+        .bytes()
+        .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'$' | b'-'))
+    {
+        return Err(format!(
+            "{LOGIN_DB_ENV}={text:?} 含非法字符（仅允许 ASCII 字母/数字/_/$/-；引号、分号、空白、路径分隔符等一律拒绝）"
+        ));
+    }
+    Ok(Some(text.to_string()))
+}
+
+/// 从进程环境读取覆盖值（口径同 [`parse_account_db_override`]）。
+fn account_db_override_from_env() -> Result<Option<String>, String> {
+    parse_account_db_override(std::env::var_os(LOGIN_DB_ENV).as_deref())
+}
+
+/// 当前实现的账号库 DSN 解析（**逐字段保持原样**），仅把最终 `database` 换成已校验的
+/// 显式覆盖值（`None` ⇒ 完全走原路径，缺省行为零差异）。
+fn authoritative_account_dsn_with(
+    conf_path: &std::path::Path,
+    own: LegacyDsn,
+    override_db: Option<&str>,
+) -> LegacyDsn {
+    let mut dsn = authoritative_account_dsn_default(conf_path, own);
+    if let Some(db) = override_db {
+        dsn.database = db.to_string();
+    }
+    dsn
+}
+
+/// 入口：先解析显式覆盖（非法即启动失败），再套用原 DSN 解析。
+fn authoritative_account_dsn(conf_path: &std::path::Path, own: LegacyDsn) -> Result<LegacyDsn> {
+    let override_db = account_db_override_from_env().map_err(|e| {
+        anyhow::anyhow!("{e}（M1④：显式覆盖非法必须明确报错退出，绝不静默回退 mir2_account）")
+    })?;
+    Ok(authoritative_account_dsn_with(
+        conf_path,
+        own,
+        override_db.as_deref(),
+    ))
+}
+
 /// A2（卡 `openmir2-login-srv-dsn-source`，重切第三层修订 + 第四次重切决定性实验）：
 /// 账号库 DSN = **dbsvr.conf 全套凭据**、仅覆写 `database` → 账号库。
 ///
@@ -120,7 +182,9 @@ async fn timer_loop(share: std::sync::Arc<state::Share>) {
 /// `mir2_account`（account 表仅在 mir2_account——information_schema 与 winplay0
 /// 实证，mir2_db 无此表）。dbsvr.conf 缺失/不可解析 ⇒ 回退 config.conf 原值
 /// （连接失败走 fail-soft，不退）。
-fn authoritative_account_dsn(conf_path: &std::path::Path, own: LegacyDsn) -> LegacyDsn {
+///
+/// 显式覆盖（`MIR2_LOGIN_DB`）由 [`authoritative_account_dsn`] 在外层套用；本函数缺省口径不变。
+fn authoritative_account_dsn_default(conf_path: &std::path::Path, own: LegacyDsn) -> LegacyDsn {
     let Some(root) = conf_path.parent().and_then(|p| p.parent()) else {
         return own;
     };
@@ -204,7 +268,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .with_context(|| "[错误] SQL 连接失败!请检查SQL设置...（连接串缺键）".to_string())?;
     // A2（卡 `openmir2-login-srv-dsn-source`）：DSN 权威源 = dbsvr.conf（host/port/凭据）
     // + 账号库 mir2_account；连接失败按 oracle fail-soft 只记日志继续（A-6 偏离撤销）。
-    let dsn = authoritative_account_dsn(&conf, own_dsn);
+    let dsn = authoritative_account_dsn(&conf, own_dsn)?;
     log_line(
         "INF",
         &format!(
@@ -325,5 +389,185 @@ mod bind_addr_teeth {
             "127.0.0.1",
             "5600 面监听必须落在 127.0.0.1（oracle 生产实况 loopback）"
         );
+    }
+}
+
+#[cfg(test)]
+mod account_db_override_teeth {
+    use super::*;
+    use std::ffi::OsStr;
+    use std::path::{Path, PathBuf};
+
+    /// `dbsvr.conf` 样例：host/port/凭据都与 `logsrv.conf` 的 DSN 不同，
+    /// 便于断言「权威源取 dbsvr.conf、库名固定 mir2_account」。
+    const DBSVR_CONN: &str = "server=10.0.0.9;port=13306;uid=dbuser;pwd=dbpw;database=mir2_db;";
+
+    fn fixture(name: &str, dbsvr_conn: Option<&str>) -> PathBuf {
+        let root =
+            std::env::temp_dir().join(format!("lsrv-db-override-{}-{name}", std::process::id()));
+        std::fs::remove_dir_all(&root).ok();
+        std::fs::create_dir_all(root.join("LoginSrv")).unwrap();
+        if let Some(conn) = dbsvr_conn {
+            std::fs::create_dir_all(root.join("DBServer")).unwrap();
+            std::fs::write(
+                root.join("DBServer").join("dbsvr.conf"),
+                format!("[DataBase]\nConnctionString={conn}\n"),
+            )
+            .unwrap();
+        }
+        root.join("LoginSrv").join("logsrv.conf")
+    }
+
+    fn own_dsn() -> LegacyDsn {
+        LegacyDsn {
+            host: "127.0.0.1".into(),
+            port: 3306,
+            user: "root".into(),
+            password: String::new(),
+            database: "mir2_account".into(),
+        }
+    }
+
+    fn cleanup(conf_path: &Path) {
+        if let Some(root) = conf_path.parent().and_then(Path::parent) {
+            std::fs::remove_dir_all(root).ok();
+        }
+    }
+
+    /// A1：未设覆盖时，权威 DSN 与改动前**逐字段相同**（含 dbsvr.conf 回退路径）。
+    ///
+    /// 变异牙：把缺省改成读 env（未设 ⇒ 空库名）⇒ 本用例的 `database` 断言红。
+    #[test]
+    fn a1_default_path_is_field_identical_to_current_impl() {
+        let conf = fixture("a1", Some(DBSVR_CONN));
+        let dsn = authoritative_account_dsn_with(&conf, own_dsn(), None);
+        assert_eq!(
+            dsn,
+            LegacyDsn {
+                host: "10.0.0.9".into(),
+                port: 13306,
+                user: "dbuser".into(),
+                password: "dbpw".into(),
+                database: "mir2_account".into(),
+            },
+            "缺省必须仍取 dbsvr.conf 的 host/port/凭据 + 固定 mir2_account"
+        );
+        // 无 dbsvr.conf ⇒ 整条 own 原样返回（当前实现的回退口径）。
+        let conf2 = fixture("a1-fallback", None);
+        assert_eq!(
+            authoritative_account_dsn_with(&conf2, own_dsn(), None),
+            own_dsn(),
+            "dbsvr.conf 缺失时必须原样回退 config.conf 的整条 DSN"
+        );
+        cleanup(&conf);
+        cleanup(&conf2);
+    }
+
+    /// A2：显式覆盖只改 `database`，其余四个连接字段与缺省路径逐字段相同；
+    /// 回退路径同样只改库名。
+    ///
+    /// 变异牙：删掉 `authoritative_account_dsn_with` 里的覆盖赋值 ⇒ 本用例红。
+    #[test]
+    fn a2_override_changes_only_database() {
+        let conf = fixture("a2", Some(DBSVR_CONN));
+        let base = authoritative_account_dsn_with(&conf, own_dsn(), None);
+        let over = authoritative_account_dsn_with(&conf, own_dsn(), Some("mir2_test_account"));
+        assert_eq!(over.database, "mir2_test_account");
+        assert_eq!(
+            (
+                over.host.as_str(),
+                over.port,
+                over.user.as_str(),
+                over.password.as_str()
+            ),
+            (
+                base.host.as_str(),
+                base.port,
+                base.user.as_str(),
+                base.password.as_str()
+            ),
+            "覆盖只允许改 database，host/port/user/password 必须不变"
+        );
+        let conf2 = fixture("a2-fallback", None);
+        let over2 = authoritative_account_dsn_with(&conf2, own_dsn(), Some("mir2_test_account"));
+        let mut expected = own_dsn();
+        expected.database = "mir2_test_account".into();
+        assert_eq!(over2, expected, "回退路径也必须只改 database");
+        cleanup(&conf);
+        cleanup(&conf2);
+    }
+
+    /// A2（env 入口）：`MIR2_LOGIN_DB` 设置 ⇒ 读到覆盖；空串/未设 ⇒ None。
+    ///
+    /// 本用例是本测试二进制内**唯一**读写该 env 的用例，避免同进程并发竞争。
+    #[test]
+    fn a2_env_entry_point_reads_override_and_unset() {
+        std::env::remove_var(LOGIN_DB_ENV);
+        assert_eq!(account_db_override_from_env().unwrap(), None);
+        std::env::set_var(LOGIN_DB_ENV, "mir2_test_account");
+        assert_eq!(
+            account_db_override_from_env().unwrap().as_deref(),
+            Some("mir2_test_account")
+        );
+        std::env::set_var(LOGIN_DB_ENV, "");
+        assert_eq!(
+            account_db_override_from_env().unwrap(),
+            None,
+            "空串必须按未设置处理"
+        );
+        std::env::remove_var(LOGIN_DB_ENV);
+        assert_eq!(account_db_override_from_env().unwrap(), None);
+    }
+
+    /// A4：空串/纯空白 ⇒ 未设置（绝不回退成空库名）。
+    #[test]
+    fn a4_blank_is_treated_as_unset() {
+        assert_eq!(parse_account_db_override(None).unwrap(), None);
+        assert_eq!(
+            parse_account_db_override(Some(OsStr::new(""))).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_account_db_override(Some(OsStr::new(" \t\r\n"))).unwrap(),
+            None
+        );
+        assert_eq!(
+            parse_account_db_override(Some(OsStr::new(" mir2_test_account ")))
+                .unwrap()
+                .as_deref(),
+            Some("mir2_test_account"),
+            "首尾空白应被裁掉后接受"
+        );
+    }
+
+    /// A4：注入型输入（引号/分号/空白/路径分隔符）⇒ 明确 `Err`，不 panic、不静默回退。
+    #[test]
+    fn a4_injection_shaped_values_are_rejected_without_panic() {
+        for bad in [
+            "mir2_account;drop",
+            "mir2\"account",
+            "mir2'account",
+            "mir2 account",
+            "mir2/account",
+            "mir2\\account",
+            "mir2\naccount",
+            "mir2.account",
+        ] {
+            let err =
+                parse_account_db_override(Some(OsStr::new(bad))).expect_err("注入型库名必须被拒绝");
+            assert!(
+                err.contains(LOGIN_DB_ENV),
+                "错误串必须点名环境变量，实测 {err:?}"
+            );
+        }
+        for good in ["mir2_test_account", "Mir2-Test$db_01"] {
+            assert_eq!(
+                parse_account_db_override(Some(OsStr::new(good)))
+                    .unwrap()
+                    .as_deref(),
+                Some(good),
+                "常规库名必须接受"
+            );
+        }
     }
 }

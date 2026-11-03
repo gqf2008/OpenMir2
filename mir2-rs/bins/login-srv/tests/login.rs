@@ -164,7 +164,7 @@ fn tooth_mysql_available() -> bool {
         .is_ok_and(|o| o.status.success())
 }
 
-/// 起 login-srv（DSN ⇒ mir2_test_account）并走一次完整 TCP 登录：
+/// 起 login-srv（`MIR2_LOGIN_DB=mir2_test_account`）并走一次完整 TCP 登录：
 /// 连 5500 → Enter(会话"1") → Data(CM_IDPASSWORD) ⇒ 返回首条 Data 回帧的 (ident, recog)。
 async fn login_reply(account: &str, password: &str) -> (u16, i32) {
     use mir2_protocol::frame::ServerDataPacket;
@@ -184,7 +184,10 @@ async fn login_reply(account: &str, password: &str) -> (u16, i32) {
     let out_f = std::fs::File::create(&log).unwrap();
     let err_f = out_f.try_clone().unwrap();
     let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
+    // 本用例的 SQL 夹具全在 mir2_test_account：必须显式覆盖账号库名，
+    // 否则 login-srv 缺省强制 mir2_account ⇒ 读不到夹具（并可能写生产账号表）。
     cmd.arg(&conf)
+        .env("MIR2_LOGIN_DB", "mir2_test_account")
         .stdout(out_f)
         .stderr(err_f)
         .kill_on_drop(true);
@@ -693,7 +696,10 @@ async fn select_server_matches_by_name_regardless_of_client_ip() {
     let out_f = std::fs::File::create(&log).unwrap();
     let err_f = out_f.try_clone().unwrap();
     let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_login-srv"));
+    // 本用例的 SQL 夹具全在 mir2_test_account：必须显式覆盖账号库名，
+    // 否则 login-srv 缺省强制 mir2_account ⇒ 读不到夹具（并可能写生产账号表）。
     cmd.arg(&conf)
+        .env("MIR2_LOGIN_DB", "mir2_test_account")
         .stdout(out_f)
         .stderr(err_f)
         .kill_on_drop(true);
