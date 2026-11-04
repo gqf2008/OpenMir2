@@ -2443,7 +2443,8 @@ fn apply_pending_level_up(
 /// **display 同步（M4 结论，卡 `openmir2-t279-cleanup`）**：本路径只翻转 `OnHorse`，不碰
 /// Dress 槽 ⇒ 41 里的 `DressEffType` 与展示表上次写入值相同（生产 `HorseType` 恒 0；
 /// `@OnHorse` 在 `HorseType == 0` 时直接红字返回），故不重写 `displays.feature_ex`。
-/// T-282 给 `HorseType` 赋值时必须回来同步高位字节，否则观察者下一次 `SM_TURN` 会拿旧值。
+/// T-282 给 `HorseType` 赋值时必须回来同步 `displays.feature_ex`（bits 0..7 / 低字节），
+/// 否则观察者下一次 `SM_TURN` 会拿旧值。
 ///
 /// 标记一次性：先取走再广播。返回是否真落了帧（诊断用）。
 #[allow(clippy::too_many_arguments)]
