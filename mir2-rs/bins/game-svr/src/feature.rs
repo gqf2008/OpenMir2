@@ -311,7 +311,7 @@ mod tests {
         assert_ne!(human_feature(None, Some(1), 1, 2), base);
     }
 
-    /// 未赋值输入下 `GetFeatureEx()` = 0（`DressEffType`/`HorseType` 在 oracle 里无赋值点）——
+    /// 未赋值输入下 `GetFeatureEx()` = 0（`DressEffType`/`HorseType` 在 oracle 里没有赋值点）——
     /// 生产接线只在 Dress 槽有 `AniCount` 时把高字节（bits 8..15）写成非 0（T-279）。
     #[test]
     fn shipped_feature_ex_is_zero_for_unset_inputs() {

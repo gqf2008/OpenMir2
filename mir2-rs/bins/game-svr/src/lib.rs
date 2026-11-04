@@ -2437,7 +2437,13 @@ fn apply_pending_level_up(
 /// **不含骑马位** ⇒ 翻转前后同值，按当前装备集现算（[`game_svr::ability::equipped_feature`]，
 /// 与换装重算同一取值口径）；`GetFeatureEx()`（`CharacterObject.cs:146-149`）=
 /// `MakeWord(OnHorse?HorseType:0, DressEffType)`，按**翻转后**的会话态现算；
-/// `DressEffType` oracle 全仓无赋值点 ⇒ 0（与换装路径同口径，见 [`broadcast_feature_changed`] 调用点）。
+/// `DressEffType` 按当前 Dress 槽模板 `AniCount` 现算（T-279，与换装路径同口径），
+/// `OnHorse`/`HorseType` 取翻转后的会话态（T-282 建模前 `HorseType` 恒 0）。
+///
+/// **display 同步（M4 结论，卡 `openmir2-t279-cleanup`）**：本路径只翻转 `OnHorse`，不碰
+/// Dress 槽 ⇒ 41 里的 `DressEffType` 与展示表上次写入值相同（生产 `HorseType` 恒 0；
+/// `@OnHorse` 在 `HorseType == 0` 时直接红字返回），故不重写 `displays.feature_ex`。
+/// T-282 给 `HorseType` 赋值时必须回来同步高位字节，否则观察者下一次 `SM_TURN` 会拿旧值。
 ///
 /// 标记一次性：先取走再广播。返回是否真落了帧（诊断用）。
 #[allow(clippy::too_many_arguments)]
@@ -7055,6 +7061,9 @@ fn handle_shop_cmd_inner(
                         // **T-279**：`FeatureChanged()` 携带的 `GetFeatureEx()` 的
                         // bits 8..15 = 当前 Dress 槽 `AniCount`；bits 0..7 沿用本路径原口径 0
                         // （T-282）。
+                        // **M4（卡 `openmir2-t279-cleanup`）**：武器升级只改升级字段，不动
+                        // Dress 槽/`Shape` ⇒ `DressEffType`/`feature` 与展示表上次写入值相同，
+                        // 无需回写 `displays.feature_ex`。
                         let dress_index = sg
                             .use_items
                             .get(game_svr::ability::SLOT_DRESS)
@@ -24155,6 +24164,35 @@ fn dress_eff_from_hum_items(
     game_svr::bag::dress_eff_of_index(catalog, dress_index)
 }
 
+/// 登录 `FeatureInputs`（帧 50/41 的 `GetFeatureToLong()`/`GetFeatureEx()` 输入）。
+///
+/// `dress_shape`/`weapon_shape` 由 `enter::feature_shapes` 从 Dress/Weapon 槽模板的
+/// `StdItem.Shape` 现算；`dress_eff_type` 由 [`dress_eff_from_hum_items`] 从 Dress 槽模板的
+/// `stditems.AniCount` 现算（T-279）；登录态未建模骑乘（T-282）⇒ `on_horse=false`/`horse_type=0`。
+///
+/// **单一装配点**：生产登录（`sim_loop`）与端到端用例
+/// `t279_login_e2e_logon_and_featurechanged_carry_dress_eff` 都调本函数，禁止复制第二份。
+fn login_feature_inputs(
+    hum_items: Option<&[Option<record::ServerUserItem>]>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+    gender: u8,
+    hair: u8,
+) -> enter::FeatureInputs {
+    let (dress_shape, weapon_shape, shape_warns) = enter::feature_shapes(hum_items, catalog);
+    for w in shape_warns {
+        glog!("WRN", "入图帧输入：{w}");
+    }
+    enter::FeatureInputs {
+        dress_shape,
+        weapon_shape,
+        gender,
+        hair,
+        on_horse: false,
+        horse_type: 0,
+        dress_eff_type: dress_eff_from_hum_items(hum_items, catalog),
+    }
+}
+
 fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
     let d = i.record;
     let out = i.recalc;
@@ -27111,26 +27149,10 @@ fn sim_loop(
                                                     show_rank_level_name: enter_cfg
                                                         .show_rank_level_name,
                                                 };
-                                                // 帧 50/41 的 `GetFeatureToLong()` 两段输入（Dress/Weapon 的
-                                                // `StdItem.Shape`）：从启动时读入的 `stditems` 表 1-based 查
-                                                // （`GameItemSystem.GetStdItem`）；查不到（越界/空表）计 0
-                                                // （oracle `GetStdItem == null` 分支，见 `enter::feature_shapes`）。
-                                                let (dress_shape, weapon_shape, shape_warns) =
-                                                    enter::feature_shapes(
-                                                        data.and_then(|d| d.hum_items.as_deref()),
-                                                        &enter_cfg.catalog,
-                                                    );
-                                                for w in shape_warns {
-                                                    glog!("WRN", "入图帧输入：{w}");
-                                                }
-                                                // **T-279**：`DressEffType` = `hum_items` 的 Dress 槽模板
-                                                // `stditems.AniCount`（槽空/模板缺失 ⇒ 0）。重连重新读档
-                                                // 后按同一函数现算，不新增角色列（落库载体 = 既有
-                                                // `characters_item` 的 Dress 行）。
-                                                let login_dress_eff = dress_eff_from_hum_items(
-                                                    data.and_then(|d| d.hum_items.as_deref()),
-                                                    &enter_cfg.catalog,
-                                                );
+                                                // 帧 50/41 的 `GetFeatureToLong()`/`GetFeatureEx()` 输入：
+                                                // Dress/Weapon 模板 `Shape` + Dress 槽模板 `AniCount`
+                                                // （T-279），统一由 [`login_feature_inputs`] 现算（单一
+                                                // 装配点；重连重新读档后同函数，不新增角色列）。
                                                 // 帧 50/41/213 的输入（`PlayObject.SendLogon()`，
                                                 // `PlayObject.cs:1128-1147`）：同组连发三条，缺则三条一起跳过。
                                                 //
@@ -27146,18 +27168,12 @@ fn sim_loop(
                                                 // `CharStatus == 0` 一致），但走真实实现而非硬编码。
                                                 let login_char_status: i32 = world.get_char_status(id);
                                                 let logon = data.map(|d| enter::LogonInputs {
-                                                    feature: enter::FeatureInputs {
-                                                        dress_shape,
-                                                        weapon_shape,
-                                                        gender: d.sex,
-                                                        hair: d.hair,
-                                                        // `DressEffType` 来源 = 已装备 Dress 槽模板
-                                                        // `AniCount`（T-279）；`OnHorse/HorseType` 登录态
-                                                        // 未建模（T-282）⇒ 0。
-                                                        on_horse: false,
-                                                        horse_type: 0,
-                                                        dress_eff_type: login_dress_eff,
-                                                    },
+                                                    feature: login_feature_inputs(
+                                                        d.hum_items.as_deref(),
+                                                        &enter_cfg.catalog,
+                                                        d.sex,
+                                                        d.hair,
+                                                    ),
                                                     // `GetCharStatus()` = `ActorBuffSystem.GetBuffStatus()
                                                     // | (CharStatusEx & 0xFFFF)`；会话初生无 buff、`CharStatusEx=0`
                                                     // （`BaseObject.cs:393`）⇒ 0。这里直接调用
@@ -44075,7 +44091,8 @@ break
     /// 的 `FeatureChanged()` 经生产入口（`handle_say` ⇒ [`apply_pending_gm_feature_changed`]
     /// ⇒ 视距广播）出**线上帧** `SM_FEATURECHANGED(41)`：`Recog`=说话者、
     /// `Param=LoWord(feature)`、`Tag=HiWord(feature)`、`Series=GetFeatureEx()`
-    /// （按**翻转后**的 `on_horse/horse_type` 现算；`DressEffType` oracle 无赋值点 ⇒ 0）。
+    /// （按**翻转后**的 `on_horse/horse_type` 现算；`DressEffType` = 当前 Dress 槽模板
+    /// `AniCount`（T-279）；本夹具 Dress 槽为空 ⇒ 0）。
     /// 变异红：删 CM_SAY 支 / `GmRig::say` 的 `apply_pending_gm_feature_changed` 调用，
     /// 或命令体丢 `pending_feature_changed` 置位 ⇒ 本用例红。
     #[test]
@@ -87053,23 +87070,139 @@ mod t279_dress_eff_tests {
         assert_eq!(dress_eff_from_hum_items(None, &cat), 0, "无 hum_items ⇒ 0");
     }
 
-    /// **T-279 接线保鲜**：登录路径必须把 `dress_eff_from_hum_items` 的结果写进
-    /// `FeatureInputs.dress_eff_type`（改回常量 0 ⇒ 本用例红）。
+    /// **T-279 登录接线**（M3：结构化判据 + 明示弱牙边界）。
+    ///
+    /// 主体是**结构化**的：直接调生产装配函数 [`login_feature_inputs`]，断言它把 Dress 槽模板的
+    /// `stditems.AniCount` 写进 `FeatureInputs.dress_eff_type`（不读源码文本）。
+    ///
+    /// 末尾附一条**弱**接线保鲜：`include_str!` 匹配 `LogonInputs.feature` 的实参必须是
+    /// `login_feature_inputs`。**它挡不住**：① 换等价写法/跨行拆分；② 注释里写同串（本用例
+    /// 先剥整行注释，只挡这一种）；③ 调用点还在但返回值没进生产——真正的行为判据是
+    /// `t279_login_e2e_logon_and_featurechanged_carry_dress_eff`。
     #[test]
     fn t279_login_wiring_uses_hum_items_helper() {
-        let src = include_str!("lib.rs");
-        // 拆开字面量 ⇒ 本测试自身源码不会命中锚串（同仓既有 `concat!` 惯例）。
-        let field = concat!("dress_eff_type: login_", "dress_eff,");
+        // 结构化：生产装配函数从 hum_items 的 Dress 槽（AniCount=15）产出 dress_eff_type。
+        let (cat, items) = t279_dress_catalog_and_items();
+        let fi = login_feature_inputs(Some(&items), &cat, 0, 1);
         assert_eq!(
-            src.matches(field).count(),
+            fi.dress_eff_type, 15,
+            "Dress 槽 AniCount 必须进 FeatureInputs"
+        );
+        assert_eq!(fi.dress_shape, Some(9), "同一槽的 Shape 仍按原口径");
+        assert_eq!(
+            login_feature_inputs(None, &cat, 0, 1).dress_eff_type,
+            0,
+            "无 hum_items ⇒ 0"
+        );
+
+        // 弱接线保鲜：剥整行注释后，`LogonInputs.feature` 实参恰接一次生产装配函数。
+        let src = include_str!("lib.rs");
+        let code: String = src
+            .lines()
+            .filter(|l| !l.trim_start().starts_with("//"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let call = concat!("feature: login_", "feature_inputs(");
+        assert_eq!(
+            code.matches(call).count(),
             1,
-            "登录 FeatureInputs 必须接 `login_dress_eff`"
+            "登录 LogonInputs.feature 必须恰接一次 `login_feature_inputs`（弱牙，见文档）"
         );
-        let call = concat!("let login_dress_eff = dress_eff_", "from_hum_items(");
-        assert!(
-            src.contains(call),
-            "login_dress_eff 必须来自 hum_items 现算"
+    }
+
+    /// **T-279 登录端到端（M2 补牙）**：角色记录（`hum_items` 的 Dress 槽）→ 生产装配函数
+    /// [`login_feature_inputs`] → `enter::apply` → `EnterWorldInputs::frames()`，断言
+    /// `SM_LOGON(50)` 的 `Tag1` 高字与 `SM_FEATURECHANGED(41).Series` 的高字节 = 模板 `AniCount`。
+    ///
+    /// 红检（变异自证）：把 `login_feature_inputs` 的 `dress_eff_type` 换回常量 0 ⇒
+    /// `41.Series` 与 `50.Tag1` 两处断言红；改用 Weapon 槽的模板 ⇒ 红。
+    #[test]
+    fn t279_login_e2e_logon_and_featurechanged_carry_dress_eff() {
+        use mir2_protocol::frame::CommandMessage;
+
+        let (cat, items) = t279_dress_catalog_and_items();
+        let feature = login_feature_inputs(Some(&items), &cat, 0, 1);
+        assert_eq!(feature.dress_eff_type, 15, "前置：Dress 槽 AniCount=15");
+
+        let mut base = smframe::EnterWorldInputs {
+            actor_id: 42,
+            cur_x: 10,
+            cur_y: 10,
+            dir: 2,
+            light: 0,
+            ..smframe::EnterWorldInputs::default()
+        };
+        let wx = enter::WorldFrameInputs {
+            logon: Some(enter::LogonInputs {
+                feature,
+                char_status: 0,
+                allow_group: true,
+                attack_mode: 0,
+            }),
+            ..enter::WorldFrameInputs::default()
+        };
+        let _ = enter::apply(&mut base, &wx);
+        let frames = base.frames();
+        let parsed: Vec<CommandMessage> = frames
+            .iter()
+            .map(|f| CommandMessage::from_bytes(f).expect("登录帧 >= 12B"))
+            .collect();
+
+        let cm41 = parsed
+            .iter()
+            .find(|cm| cm.ident == 41)
+            .expect("登录必须发 SM_FEATURECHANGED(41)");
+        assert_eq!(
+            cm41.series,
+            15 << 8,
+            "41.Series 高字节 = DressEffType（bits 8..15）"
         );
+        assert_eq!(cm41.series & 0x00FF, 0, "HorseType 低位登录态为 0（T-282）");
+
+        let raw50 = frames
+            .iter()
+            .find(|f| u16::from_le_bytes([f[4], f[5]]) == 50)
+            .expect("登录必须发 SM_LOGON(50)");
+        let wl = mir2_protocol::edcode::decode(&raw50[12..]);
+        assert_eq!(wl.len(), 16, "SM_LOGON 尾 = 16B MessageBodyWL");
+        let tag1 = i32::from_le_bytes([wl[8], wl[9], wl[10], wl[11]]);
+        assert_eq!(
+            tag1, 0x0F00_0001,
+            "50.Tag1 = MakeLong(MakeWord(1,0), GetFeatureEx()) = 0x0F00_0001"
+        );
+        assert_eq!(base.feature.map(|(_, fe)| fe), Some(15 << 8));
+    }
+
+    /// 测试夹具：`stditems` 目录 + 13 槽 `hum_items`，Dress 槽穿 `AniCount=15/Shape=9` 的翅膀衣服。
+    fn t279_dress_catalog_and_items() -> (
+        game_svr::ability::StdItemCatalog,
+        Vec<Option<record::ServerUserItem>>,
+    ) {
+        let mut cat = game_svr::ability::StdItemCatalog::new();
+        cat.insert(
+            127,
+            mir2_data::StdItem {
+                name: "雷霆战甲(男)".into(),
+                std_mode: 10,
+                shape: 9,
+                ani_count: 15,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let mut items: Vec<Option<record::ServerUserItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        items[game_svr::ability::SLOT_DRESS] = Some(record::ServerUserItem {
+            make_index: 0,
+            index: 127,
+            dura: 0,
+            dura_max: 0,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        });
+        (cat, items)
     }
 
     /// **T-279 / 卡 `openmir2-t283-wings-server`**：`CM_TAKEONITEM`/`CM_TAKEOFFITEM` 的

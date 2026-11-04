@@ -226,7 +226,9 @@ pub struct ActorDisplay {
     /// `GetFeatureToLong()` = `MakeHumanFeature(0, dress*2+gender, gender+weapon*2, hair*2+gender)`。
     pub feature: i32,
     /// `GetFeatureEx()` = `MakeWord(OnHorse ? HorseType : 0, DressEffType)`
-    /// （`CharacterObject.cs:146-149`；`OnHorse`/`HorseType`/`DressEffType` 现网无赋值点 ⇒ 0）。
+    /// （`CharacterObject.cs:146-149`）。oracle 里三者都没有赋值点（C# 恒 0）；本项目按
+    /// **T-279** 从已装备 Dress 槽模板的 `stditems.AniCount` 派生 `DressEffType`
+    /// （见 `game_svr::bag::dress_eff_of_index`），`OnHorse`/`HorseType` 仍为 0（T-282）。
     pub feature_ex: u16,
     /// `GetCharStatus()` = buff 状态位（buff 系统未移植 ⇒ 0，与金标准 #3/#16 的 `Status==0` 一致）。
     pub status: i32,

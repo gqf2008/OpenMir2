@@ -51,7 +51,7 @@
 //!    `UseItems[btWhere]=null` 在成功分支里）。
 //! 5. **take-on 成功后会 `Desc[8]=0`**（仅当 `StdModeMap` 命中，`Operate.cs:444`）。
 //! 6. **`GetFeatureEx()` = `MakeWord(OnHorse?HorseType:0, DressEffType)`**。oracle 里
-//!    `DressEffType` 只有声明与读取（`CharacterObject.cs:48` 声明、`:148` 读取，全仓无赋值点）
+//!    `DressEffType` 只有声明与读取（`CharacterObject.cs:48` 声明、`:148` 读取，全仓没有赋值点）
 //!    ⇒ oracle 恒 0。**T-279 偏差登记**（卡 `openmir2-t283-wings-server`）：本项目按冻结客户端
 //!    的取值契约补上来源——已装备 `ItemLocation::Dress` 模板的 `stditems.AniCount`
 //!    （槽空 / `Index == 0` / 模板缺失 / `AniCount == 0` ⇒ 0），见 [`dress_eff_of_index`]；
