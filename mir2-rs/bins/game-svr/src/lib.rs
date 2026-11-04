@@ -79,6 +79,7 @@ pub mod mapdoor;
 pub mod merchant;
 pub mod mongen;
 pub mod monitems;
+pub mod mount;
 pub mod movewire;
 pub mod msgqueue;
 pub mod npc;
@@ -1782,6 +1783,9 @@ struct ChatHost<'a> {
     can_shout_level: i32,
     /// `Envir.Flag` 来源；`None`（S1 占位世界）⇒ `boQUIZ=false`（登记）。
     registry: Option<&'a mir2_envir::MapRegistry>,
+    /// **T-277**：物品目录（`stditems`）——`@OnHorse` 要用它把背包里的马牌 `StdIndex`
+    /// 解析成 `mount_id`（`StdMode==18 && Shape∈1..=12`）。与能力/帧面同一份目录。
+    catalog: &'a dyn game_svr::ability::ItemCatalog,
 }
 
 /// `CM_SAY`(3030) 落地：`/` 私聊、`!` 频道（`!!`/`!~`/`!`）、普通说话；`@` 命令仍不接。
@@ -2139,6 +2143,8 @@ fn handle_gm_command(
         guild_name: sg.guild.guild_name.clone(),
         rank_no: sg.guild.rank_no,
     };
+    // **T-277**：说话者背包里第一块马牌的 mount_id（顺序 = 会话 `item_list`，确定性）。
+    let horse_plate_mount = game_svr::mount::held_mount_id(host.catalog, sg.state.item_list.iter());
     let world_view = gmcmd::GmWorld {
         guilds: host.guilds,
         maps: host.registry,
@@ -2156,6 +2162,7 @@ fn handle_gm_command(
         // 生产 `CM_SAY` 路径：宿主在**同一事件内**由 `apply_pending_gm_m_commands` 落地
         // 刷怪/造物（含 RNG）；`m_host` 只是「命令体可以装 pending」的接线标记。
         m_host: true,
+        horse_plate_mount,
     };
     let result = gmcmd::execute(&mut sg.gm, &host.gm_cfg, &world_view, line);
     if let Some(note) = result.log_note {
@@ -2476,9 +2483,11 @@ fn apply_pending_gm_feature_changed(
         .get(game_svr::ability::SLOT_DRESS)
         .and_then(Option::as_ref)
         .map_or(0, |it| it.index);
+    // **T-277 / A4**：horse 位段冻结为 0（骑乘态走独立帧 `SM_MOUNTRIDE`；冻结 Delphi
+    // 会把非 0 低字节当武器特效）。oracle 的 `HorseType` 从未被赋值 ⇒ 既有路径字节不变。
     let feature_ex = game_svr::feature::feature_ex(
-        sg.gm.on_horse,
-        sg.gm.horse_type,
+        false,
+        0,
         game_svr::bag::dress_eff_of_index(catalog, dress_index),
     );
     broadcast_feature_changed(
@@ -2490,6 +2499,56 @@ fn apply_pending_gm_feature_changed(
         feature_ex,
         ref_msg_range,
     );
+    true
+}
+
+/// **T-277**：把 `@OnHorse`/`@OffHorse` 的独立骑乘帧 `SM_MOUNTRIDE(1118)`
+/// （[`gmcmd::GmSession::pending_mount_ride`]）落地——同地图 ±`ref_msg_range` 内广播
+/// （**含自己**，客户端据此渲染本地角色坐骑；与 `SendRefMsg` 的可见性同界）。
+///
+/// 同时把 `mount_id` 写进展示表，后续 AOI 出现帧（[`downlink::appear_frames`]）会带同一帧。
+/// 标记一次性：先取走再广播。返回是否真落了帧（诊断用）。
+fn apply_pending_gm_mountride(
+    sessions: &mut std::collections::HashMap<String, SessionGround>,
+    chr_name: &str,
+    world: &mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    displays: &mut downlink::DisplayTable,
+    ref_msg_range: i32,
+) -> bool {
+    let Some(sg) = sessions.get_mut(chr_name) else {
+        return false;
+    };
+    let Some(mount_id) = sg.gm.pending_mount_ride.take() else {
+        return false;
+    };
+    let actor_id = sg.actor_id;
+    if let Some(mut d) = displays.get(actor_id).cloned() {
+        d.mount_id = mount_id;
+        displays.set(actor_id, d);
+    }
+    let Some(src) = world.entities.get(actor_id) else {
+        glog!("WRN", "SM_MOUNTRIDE：actor_id={actor_id} 不在世界 ⇒ 不下发");
+        return false;
+    };
+    let (sx, sy, smap) = (src.x, src.y, src.map_id);
+    let body = game_svr::mount::sm_mountride_body(actor_id, mount_id);
+    for e in online {
+        let Some(t) = world.entities.get(e.actor_id) else {
+            continue;
+        };
+        if t.map_id != smap || (t.x - sx).abs() > ref_msg_range || (t.y - sy).abs() > ref_msg_range
+        {
+            continue;
+        }
+        if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "SM_MOUNTRIDE 广播") {
+            let _ = tx.send(SimToGate::SendFrame {
+                socket: e.socket,
+                body: body.clone(),
+            });
+        }
+    }
     true
 }
 
@@ -8389,6 +8448,9 @@ impl ScriptGmEnv<'_> {
                 speaker_dir,
                 m_host: self.host.m_host,
                 caller_guild: self.host.caller_guild.as_ref(),
+                // **T-277**：脚本桥没有会话背包快照（`NpcGm` 只借 `&mut GmSession`）⇒ 不注入；
+                // 脚本 GMEXECUTE 的 `@OnHorse` 与 oracle 一样落红字支（登记，主路径是 CM_SAY）。
+                horse_plate_mount: None,
             },
             pwd_busy: self.pwd_busy(chr_name),
         }
@@ -21152,6 +21214,16 @@ fn drain_script_gm_pendings(
         gates,
         enter_cfg.shop.send_ref_msg_range,
     );
+    // ⑤b **T-277**：独立骑乘帧 `SM_MOUNTRIDE(1118)`（41 之后发，顺序确定）。
+    apply_pending_gm_mountride(
+        ground_sessions,
+        chr_name,
+        world,
+        online,
+        gates,
+        displays,
+        enter_cfg.shop.send_ref_msg_range,
+    );
     // ⑥ `@Reconnection` 的 `RM_RECONNECTION`（唯一排水点 `drain_reconnects`）。
     if let Some(addr) = ground_sessions
         .get_mut(chr_name)
@@ -21340,6 +21412,9 @@ fn execute_admin_gm_command(
         guild_name: session.guild.guild_name.clone(),
         rank_no: session.guild.rank_no,
     };
+    // **T-277**：本机 admin 通道与 CM_SAY 同源注入马牌 mount_id。
+    let horse_plate_mount =
+        game_svr::mount::held_mount_id(&enter_cfg.catalog, session.state.item_list.iter());
     // 与 `handle_gm_command` 同源的只读快照（任务位/面前格/会话 Dir/行会态）。
     let quests = gm_quest_snapshot(saves);
     let pose_target = script_pose_target(world, actor_id);
@@ -21367,6 +21442,7 @@ fn execute_admin_gm_command(
             caller_guild: Some(&caller_guild),
             // 宿主持有刷怪/造物落地通道 ⇒ 有副作用的 M 命令装 `pending_*`（与 CM_SAY 同）。
             m_host: true,
+            horse_plate_mount,
         };
         let sg = ground_sessions.get_mut(chr).expect("上面已确认会话存在");
         let old = sg.gm.permission;
@@ -24159,7 +24235,7 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
     let d = i.record;
     let out = i.recalc;
     let a = i.ability;
-    SessionGround {
+    let mut sg = SessionGround {
         // `GetHumData` 写进 `PlayObject` 的
         // 夫妻/性别/师徒/行会合一/组队传送冷却
         // （批次 3 传送/召唤族的读点）。
@@ -24266,7 +24342,16 @@ fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
         off_line_flag: false,
         kick_off_line_tick: 0,
         guild: i.guild_session.clone(),
+    };
+
+    // **T-277**：登录/重连时按背包里的马牌**重算**骑乘态（与 T-279 的 `dress_eff_from_hum_items`
+    // 同法——马牌行由既有 `characters_bagitem` 存档路径落库，不新增角色列）。
+    // `held_mount_id` 取背包顺序里的第一块马牌；没马牌 ⇒ 保持 ctor 的未骑乘态。
+    if let Some(mount_id) = game_svr::mount::held_mount_id(a.catalog, sg.state.item_list.iter()) {
+        sg.gm.horse_type = mount_id;
+        sg.gm.on_horse = true;
     }
+    sg
 }
 
 /// admin 通道单行请求上限（逐行 JSON；防御性上限，正常请求几十字节）。
@@ -25475,6 +25560,7 @@ fn sim_loop(
                             mission: &gm_mission,
                             spirit_mutiny_tick: &gm_spirit_mutiny_tick,
                             displays: &displays,
+                            catalog: &enter_cfg.catalog,
                         };
                         // GM 的 `SysMsg(100)` 由 `handle_gm_command` **返回**、这里延后发送：
                         // oracle 的 `SendUpdateItem` 是 `SendDefMessage`（立即），`SysMsg` 入
@@ -25557,6 +25643,16 @@ fn sim_loop(
                             &world,
                             &online,
                             &gates,
+                            enter_cfg.shop.send_ref_msg_range,
+                        );
+                        // **T-277**：独立骑乘帧 `SM_MOUNTRIDE(1118)`（41 之后）。
+                        apply_pending_gm_mountride(
+                            &mut ground_sessions,
+                            &chr_name,
+                            &world,
+                            &online,
+                            &gates,
+                            &mut displays,
                             enter_cfg.shop.send_ref_msg_range,
                         );
                         // **族 X2（卡 `openmir2-gm-family-x2-target-control`，review F3）**：
@@ -27396,6 +27492,17 @@ fn sim_loop(
                                                             ))
                                                         },
                                                     );
+                                                    // **T-277**：展示表带骑乘 `mount_id`，后续 AOI
+                                                    // 出现帧会追加独立帧 `SM_MOUNTRIDE(1118)`。
+                                                    let login_mount_id = ground_sessions
+                                                        .get(&head.chr_name)
+                                                        .map_or(0, |sg| {
+                                                            if sg.gm.on_horse {
+                                                                sg.gm.horse_type
+                                                            } else {
+                                                                0
+                                                            }
+                                                        });
                                                     displays.set(
                                                         id,
                                                         downlink::ActorDisplay::new(
@@ -27406,7 +27513,8 @@ fn sim_loop(
                                                             wl.1,
                                                             enter::PLAY_NAME_COLOR,
                                                             show_bytes,
-                                                        ),
+                                                        )
+                                                        .with_mount_id(login_mount_id),
                                                     );
                                                     glog!(
                                                         "DBG",
@@ -27446,13 +27554,26 @@ fn sim_loop(
                                                     // 全在纯函数 `enter::level_rank_body`（A2）。
                                                     let rank_players =
                                                         level_rank_players(&online, &world);
-                                                    let bodies = enter::append_level_rank(
+                                                    let mut bodies = enter::append_level_rank(
                                                         bodies,
                                                         enter_cfg.level_rank_on_login,
                                                         0,
                                                         enter::LEVEL_RANK_KIND_HUMAN,
                                                         &rank_players,
                                                     );
+                                                    // **T-277**：重连仍骑乘 ⇒ 自己的登录批次里补一帧
+                                                    // `SM_MOUNTRIDE(1118)`（本地角色渲染坐骑；同屏其他玩家
+                                                    // 由 AOI 出现帧携带，见 `downlink::appear_frames`）。
+                                                    if let Some(sg) = ground_sessions.get(&head.chr_name) {
+                                                        if sg.gm.on_horse && sg.gm.horse_type != 0 {
+                                                            bodies.push(
+                                                                game_svr::mount::sm_mountride_body(
+                                                                    id,
+                                                                    sg.gm.horse_type,
+                                                                ),
+                                                            );
+                                                        }
+                                                    }
                                                     glog!(
                                                         "INF",
                                                         "进世界帧下发：socket={socket} 共 {} 条（输入齐备的），延迟段 {} 条",
@@ -27601,6 +27722,17 @@ fn sim_loop(
                                                                     .spirit_mutiny_time,
                                                                 ..gmcmd::GmConfig::default()
                                                             };
+                                                            // **T-277**：`@Login` 时背包里可能已有
+                                                            // 马牌（读档即见）⇒ 与 CM_SAY 同源注入。
+                                                            let horse_plate_mount_for_login =
+                                                                ground_sessions
+                                                                    .get(&head.chr_name)
+                                                                    .and_then(|sg| {
+                                                                        game_svr::mount::held_mount_id(
+                                                                            &enter_cfg.catalog,
+                                                                            sg.state.item_list.iter(),
+                                                                        )
+                                                                    });
                                                             let gm_world = gmcmd::GmWorld {
                                                                 guilds: &guilds,
                                                                 maps: registry.as_ref(),
@@ -27626,6 +27758,8 @@ fn sim_loop(
                                                                 speaker_dir: 0,
                                                                 m_host: false,
                                                                 caller_guild: None,
+                                                                horse_plate_mount:
+                                                                    horse_plate_mount_for_login,
                                                             };
                                                             if let Some(sg) = ground_sessions
                                                                 .get_mut(&head.chr_name)
@@ -42971,6 +43105,8 @@ break
         spirit_mutiny_tick: std::cell::Cell<i64>,
         /// **族 X2**：展示表（`@vv杀死` 面对面支的 pose 解析）。
         displays: downlink::DisplayTable,
+        /// **T-277**：物品目录（`@OnHorse` 把背包 `StdIndex` 解析成 `mount_id`）。
+        catalog: game_svr::ability::StdItemCatalog,
     }
 
     impl TestChatCtx {
@@ -42990,6 +43126,7 @@ break
                 mission: std::cell::RefCell::new(gmcmd::GmMissionState::default()),
                 spirit_mutiny_tick: std::cell::Cell::new(0),
                 displays: downlink::DisplayTable::new(),
+                catalog: game_svr::ability::StdItemCatalog::new(),
             }
         }
 
@@ -43016,6 +43153,7 @@ break
                 mission: &self.mission,
                 spirit_mutiny_tick: &self.spirit_mutiny_tick,
                 displays: &self.displays,
+                catalog: &self.catalog,
             }
         }
     }
@@ -43108,7 +43246,11 @@ break
                 blue_f: 251,
                 blue_b: 252,
             };
-            let ctx = TestChatCtx::new();
+            let ctx = TestChatCtx {
+                // **T-277**：把夹具目录交给 ChatHost（`@OnHorse` 用它解析马牌 Shape）。
+                catalog: self.catalog.clone(),
+                ..TestChatCtx::new()
+            };
             let host = ctx.host(&self.online, &self.world, &self.gates, &colors);
             let (deferred, gm_frames) = handle_say_with_saves(
                 &host,
@@ -43150,6 +43292,16 @@ break
                 &self.world,
                 &self.online,
                 &self.gates,
+                chat::send_ref_msg_range(),
+            );
+            // **T-277**：独立骑乘帧 `SM_MOUNTRIDE(1118)`（与生产 CM_SAY 支同一步）。
+            apply_pending_gm_mountride(
+                &mut self.sessions,
+                "aaa",
+                &self.world,
+                &self.online,
+                &self.gates,
+                &mut self.displays,
                 chat::send_ref_msg_range(),
             );
             // 族 X2（review F3）：@Reconnection 与 sim_loop 同一步——推入 ReconnectPending
@@ -44071,86 +44223,116 @@ break
         );
     }
 
-    /// **族 T（卡 `openmir2-gm-family-t-toggle-horse`）宿主落地牙**：`@OnHorse`/`@OffHorse`
-    /// 的 `FeatureChanged()` 经生产入口（`handle_say` ⇒ [`apply_pending_gm_feature_changed`]
-    /// ⇒ 视距广播）出**线上帧** `SM_FEATURECHANGED(41)`：`Recog`=说话者、
-    /// `Param=LoWord(feature)`、`Tag=HiWord(feature)`、`Series=GetFeatureEx()`
-    /// （按**翻转后**的 `on_horse/horse_type` 现算；`DressEffType` oracle 无赋值点 ⇒ 0）。
-    /// 变异红：删 CM_SAY 支 / `GmRig::say` 的 `apply_pending_gm_feature_changed` 调用，
-    /// 或命令体丢 `pending_feature_changed` 置位 ⇒ 本用例红。
+    /// **T-277 宿主落地牙**：`@OnHorse`/`@OffHorse` 经生产入口（`handle_say` ⇒
+    /// `apply_pending_gm_feature_changed` + `apply_pending_gm_mountride`）出两条线上帧：
+    /// `SM_FEATURECHANGED(41)`（**Series 恒为骑乘前的值**——A4 负例）与独立骑乘帧
+    /// `SM_MOUNTRIDE(1118)`（尾 `[mount_id][actor u16 LE]`，0 = 下马）。
+    ///
+    /// 变异红：马牌支漏置 `pending_mount_ride` / 删 `apply_pending_gm_mountride` 调用 /
+    /// 把 `mount_id` 漏进 `feature_ex`（§① 的 Series 断言）⇒ 本用例红。
     #[test]
-    fn gm_horse_toggle_broadcasts_sm_featurechanged_with_flipped_feature_ex() {
+    fn t277_horse_toggle_emits_mountride_and_keeps_feature_ex_byte_identical() {
         let mut rig = GmRig::new();
         {
             let sg = rig.sessions.get_mut("aaa").expect("GmRig 恒有 aaa");
             sg.equip.gender = 1;
             sg.equip.hair = 2;
-            sg.gm.horse_type = 5; // 上马支构造非 0（现网 HorseType 无赋值点恒 0 ⇒ 生产不可达）
+            // 背包里放一块马牌：StdMode=18 / Shape=3 ⇒ mount_id=3。
+            sg.state
+                .item_list
+                .push(game_svr::bag::BagItem::new(1, 1001));
         }
-        // ① 上马支：恰一条 41，feature_ex = MakeWord(5, 0) = 5（翻转后）。
+        rig.catalog.insert(
+            1001,
+            mir2_data::StdItem {
+                name: "马牌03".into(),
+                std_mode: game_svr::mount::HORSE_ITEM_STD_MODE,
+                shape: 3,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let feature = game_svr::feature::human_feature(None, None, 1, 2);
+        // ① 上马：41（Series=0，A4 不变）→ SM_MOUNTRIDE(3)。
         let bodies = rig.say_gm("@OnHorse");
-        assert_eq!(bodies.len(), 1, "上马支恰发一条帧（夹具单在线者）");
-        let b = &bodies[0];
+        assert_eq!(bodies.len(), 2, "上马 = 41 + SM_MOUNTRIDE");
+        let f41 = &bodies[0];
         assert_eq!(
-            u16::from_le_bytes([b[4], b[5]]),
+            u16::from_le_bytes([f41[4], f41[5]]),
             mir2_protocol::messages::SM_FEATURECHANGED,
-            "Ident = SM_FEATURECHANGED(41)"
+            "第一条 = SM_FEATURECHANGED(41)"
         );
         assert_eq!(
-            i32::from_le_bytes([b[0], b[1], b[2], b[3]]),
+            i32::from_le_bytes([f41[0], f41[1], f41[2], f41[3]]),
             rig.actor,
             "Recog = 说话者 ActorId"
         );
-        let feature = game_svr::feature::human_feature(None, None, 1, 2);
         assert_eq!(
-            u16::from_le_bytes([b[6], b[7]]),
+            u16::from_le_bytes([f41[6], f41[7]]),
             game_svr::feature::lo_word(feature),
-            "Param = LoWord(GetFeatureToLong)"
+            "A4：615/41 的 feature Param 与骑乘前相同"
         );
         assert_eq!(
-            u16::from_le_bytes([b[8], b[9]]),
+            u16::from_le_bytes([f41[8], f41[9]]),
             game_svr::feature::hi_word(feature),
-            "Tag = HiWord(GetFeatureToLong)"
+            "A4：feature Tag 与骑乘前相同"
         );
         assert_eq!(
-            u16::from_le_bytes([b[10], b[11]]),
-            5,
-            "Series = GetFeatureEx = MakeWord(HorseType=5, 0)（翻转后现算）"
+            u16::from_le_bytes([f41[10], f41[11]]),
+            0,
+            "A4 负例：41.Series（feature_ex）高低字节都不变（HorseType 不得漏进低字节）"
+        );
+        let m = &bodies[1];
+        assert_eq!(
+            u16::from_le_bytes([m[4], m[5]]),
+            game_svr::mount::SM_MOUNTRIDE
+        );
+        assert_eq!(i32::from_le_bytes([m[0], m[1], m[2], m[3]]), rig.actor);
+        assert_eq!(m[12], 3, "尾 [1] mount_id = 3");
+        assert_eq!(
+            u16::from_le_bytes([m[13], m[14]]),
+            (rig.actor & 0xFFFF) as u16,
+            "尾 [2] actor_id u16 LE"
         );
         assert!(rig.sessions["aaa"].gm.on_horse, "会话态已翻转");
-        assert!(
-            !rig.sessions["aaa"].gm.pending_feature_changed,
-            "标记一次性：落地即清"
-        );
-        // ② 下马：series 回 0（feature 不含骑马位 ⇒ Param/Tag 不变）。
-        let bodies = rig.say_gm("@OffHorse");
-        assert_eq!(bodies.len(), 1);
-        let b = &bodies[0];
         assert_eq!(
-            u16::from_le_bytes([b[4], b[5]]),
+            rig.sessions["aaa"].gm.horse_type, 3,
+            "HorseType := mount_id"
+        );
+        // ② 下马：41（Series 仍 0）→ SM_MOUNTRIDE(0)。
+        let bodies = rig.say_gm("@OffHorse");
+        assert_eq!(bodies.len(), 2, "下马 = 41 + SM_MOUNTRIDE(0)");
+        assert_eq!(
+            u16::from_le_bytes([bodies[0][4], bodies[0][5]]),
             mir2_protocol::messages::SM_FEATURECHANGED
         );
         assert_eq!(
-            u16::from_le_bytes([b[10], b[11]]),
+            u16::from_le_bytes([bodies[0][10], bodies[0][11]]),
             0,
-            "下马后 GetFeatureEx=0"
+            "A4：下马后 feature_ex 仍与骑乘前逐字节相同"
         );
+        assert_eq!(
+            u16::from_le_bytes([bodies[1][4], bodies[1][5]]),
+            game_svr::mount::SM_MOUNTRIDE
+        );
+        assert_eq!(bodies[1][12], 0, "下马帧 mount_id = 0");
         assert!(!rig.sessions["aaa"].gm.on_horse);
+        assert_eq!(rig.sessions["aaa"].gm.horse_type, 0);
         // ③ 未骑马再敲：静默零帧（`if (!OnHorse) return;`）。
         let bodies = rig.say_gm("@OffHorse");
         assert!(bodies.is_empty(), "未骑马静默");
-        // ④ HorseType=0（部署恒值）：`@OnHorse` 红字、零 41。
-        {
-            let sg = rig.sessions.get_mut("aaa").expect("aaa");
-            sg.gm.permission = 10;
-            sg.gm.horse_type = 0;
-        }
+        // ④ 背包无马牌：`@OnHorse` 红字、零 41/1118（oracle 原样）。
+        rig.sessions
+            .get_mut("aaa")
+            .expect("aaa")
+            .state
+            .item_list
+            .clear();
         let bodies = rig.say_gm("@OnHorse");
         assert_eq!(bodies.len(), 1, "只有红字 SysMsg");
         assert_eq!(
             u16::from_le_bytes([bodies[0][4], bodies[0][5]]),
             mir2_protocol::messages::SM_SYSMESSAGE,
-            "红字支零外观帧"
+            "红字支零外观/骑乘帧"
         );
     }
 
@@ -78646,6 +78828,88 @@ GMEXECUTE f
             canot_pick_up_item: "",
             now: 1_000,
         })
+    }
+
+    /// **T-277 / A5**：登录/重连按背包马牌**重算**骑乘态——马牌行由既有
+    /// `characters_bagitem` 存档路径落库（不新增角色列），读档后 `HorseType = Shape`、`OnHorse=true`。
+    ///
+    /// 红检：删 `session_ground_from_login` 的 `held_mount_id` 派生 ⇒ 本用例红；
+    /// 把 `mount_id_of_index` 的 StdMode 门删掉 ⇒ 负例（非马牌物品）红。
+    #[test]
+    fn t277_login_derives_mount_from_held_plate() {
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            1001,
+            mir2_data::StdItem {
+                name: "马牌05".into(),
+                std_mode: game_svr::mount::HORSE_ITEM_STD_MODE,
+                shape: 5,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let plate = record::ServerUserItem {
+            make_index: 7,
+            index: 1001,
+            dura: 0,
+            dura_max: 0,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        };
+        // ① 背包有马牌 ⇒ 重算为骑乘 mount_id=5。
+        let rec = stage6_record();
+        let mut data = rec.data.clone();
+        data.bag_items = Some(vec![Some(plate.clone())]);
+        let make = |data: &record::CharacterData, cat: &game_svr::ability::StdItemCatalog| {
+            let ability_inputs = enter::AbilityInputs {
+                catalog: cat,
+                abil: data.abil.as_ref().expect("stage6 必须有 Abil"),
+                bonus_abil: data.bonus_abil.as_ref().expect("stage6 必须有 BonusAbil"),
+                bonus_tick_hit: 20,
+                bonus_tick_speed: 35,
+                use_items: data.hum_items.as_deref(),
+                bag_items: data.bag_items.as_deref(),
+                magics: data.magic.as_deref(),
+                magic_table: None,
+                gold: data.gold,
+                client_ability_layout: false,
+            };
+            let recalc = enter::recalc_for_session(&ability_inputs, data.job);
+            let guild_session = guild_cmd::GuildSession::default();
+            session_ground_from_login(SessionGroundInputs {
+                login_account: "acct",
+                record: data,
+                recalc: &recalc,
+                ability: &ability_inputs,
+                use_items: use_items_from(data.hum_items.as_deref()),
+                guild_session: &guild_session,
+                soft_version_date: 0,
+                actor_id: 1,
+                server_index: data.server_index,
+                canot_pick_up_item: "",
+                now: 1_000,
+            })
+        };
+        let sg = make(&data, &catalog);
+        assert!(sg.gm.on_horse, "持有马牌 ⇒ 登录即骑乘（重连保持）");
+        assert_eq!(sg.gm.horse_type, 5, "HorseType := 马牌 Shape");
+        // ② 负例：没有马牌 ⇒ 未骑乘（ctor 缺省）。
+        data.bag_items = Some(vec![Some(record::ServerUserItem {
+            make_index: 8,
+            index: 42,
+            dura: 0,
+            dura_max: 0,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        })]);
+        let sg = make(&data, &catalog);
+        assert!(!sg.gm.on_horse);
+        assert_eq!(sg.gm.horse_type, 0);
     }
 
     /// 跑一次 `@GroupCreate`（组队漏斗 `run_party_goto_label`），返回 `SM_MENU_OK(767)` 条数。

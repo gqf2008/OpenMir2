@@ -817,10 +817,12 @@ pub enum Imp {
     /// `PlayObject.cs:1007`），绿字 `[允许行会聊天]`/`[禁止行会聊天]`（同上相反，照抄）。
     BanGuildChat,
     /// `TakeOffHorseCommand`（现网 `@OffHorse`）：未骑马静默零帧；骑马 ⇒ `OnHorse=false` +
-    /// `FeatureChanged()` 外观帧（`pending_feature_changed`，宿主广播 `SM_FEATURECHANGED(41)`）。
+    /// `FeatureChanged()` 外观帧（`pending_feature_changed`，宿主广播 `SM_FEATURECHANGED(41)`）；
+    /// **T-277** 追加：`HorseType=0` + `SM_MOUNTRIDE(0)`（独立帧承载骑乘态）。
     TakeOffHorse,
-    /// `TakeOnHorseCommand`（现网 `@OnHorse`）：已骑马静默；`HorseType=0`（现网恒值，无赋值点）
-    /// ⇒ 红字「骑马必须先戴上马牌!!!」；上马 ⇒ `OnHorse=true` + 外观帧 + `@OnHorse` NPC 脚本
+    /// `TakeOnHorseCommand`（现网 `@OnHorse`）：已骑马静默；`HorseType=0` 且背包有马牌
+    /// （**T-277**）⇒ `HorseType := 马牌 Shape` 并上马；无马牌 ⇒ 红字「骑马必须先戴上马牌!!!」
+    /// 逐字节保留（oracle 唯一可达支）；上马 ⇒ `OnHorse=true` + 外观帧 + `@OnHorse` NPC 脚本
     /// 跳线（宿主接缝，只登记不实现脚本面）。
     TakeOnHorse,
     /// `DisableFilterCommand`（现网 `@DisableFilter`）：翻转**全局** `SystemShare.FilterWord`
@@ -1411,8 +1413,9 @@ pub struct GmSession {
     pub ban_guild_chat: bool,
     /// `PlayObject.OnHorse`（ctor false，`PlayObject.cs:988`；`@OnHorse`/`@OffHorse` 翻转）。
     pub on_horse: bool,
-    /// `PlayObject.HorseType`（`CharacterObject.cs:52`；oracle **全仓无赋值点** ⇒ 恒 0 ⇒
-    /// `@OnHorse` 的红字「骑马必须先戴上马牌!!!」是唯一可达支；测试可构造非 0 进上马支）。
+    /// `PlayObject.HorseType`（`CharacterObject.cs:52`）。oracle **全仓无赋值点**（恒 0）；
+    /// **T-277** 起 = 背包马牌的 `mount_id`（0 = 未骑马）。它**不进入**帧 41/615 的 `feature_ex`
+    /// horse 位段（A4：冻结 Delphi 会把非 0 低字节画成武器特效），骑乘态只走 `SM_MOUNTRIDE`。
     pub horse_type: u8,
     /// **待落地的 `FeatureChanged()` 外观帧**（oracle `BaseObject.cs:1509-1512`：
     /// `SendRefMsg(RM_FEATURECHANGED, GetFeatureEx(), GetFeatureToLong(), …)` ⇒ 视距广播
@@ -1420,6 +1423,10 @@ pub struct GmSession {
     /// 同一事件内按「翻转后的会话态」现算 feature/feature_ex 并走
     /// [`crate::downlink`] 的视距广播（与换装路径同一收口，见 lib.rs `apply_pending_gm_feature_changed`）。
     pub pending_feature_changed: bool,
+    /// **T-277**：待下发的 `SM_MOUNTRIDE(1118)` 的 `mount_id`（0 = 下马）。
+    /// 命令体纯 ⇒ 只装标记；宿主在同一事件内按同屏可见性广播并清空
+    /// （`lib.rs` 的 `apply_pending_gm_mountride`）。一次只留一条：连续命令不会叠加。
+    pub pending_mount_ride: Option<u8>,
     /// **族 X1**：`@查看私聊` 的监听位镜像——oracle 写**目标** `WhisperHuman = PlayerActor`
     /// （谁在监听我；`ViewWhisperCommand.cs:33-39`）。本仓写面消费点（私聊回声路由）未接
     /// ⇒ 该位唯一可观测面 = 本命令的 toggle 回执，故以**说话者侧** `listening_to` 承载
@@ -1529,6 +1536,7 @@ impl Default for GmSession {
             on_horse: false,
             horse_type: 0,
             pending_feature_changed: false,
+            pending_mount_ride: None,
             listening_to: None,
             probe_tick: 0,
             master_name: String::new(),
@@ -1963,6 +1971,12 @@ pub struct GmWorld<'a> {
     /// 跨会话/跨事件同一份；`None` = 构造处未注入（测试/`ScriptGmEnv::bridge` 的脚本
     /// GMEXECUTE 路径）⇒ 命令体走 `log_note` 登记零帧（不静默伪造翻转）。
     pub filter_word: Option<&'a std::cell::Cell<bool>>,
+    /// **T-277**：说话者背包里第一块马牌的 `mount_id`（宿主用物品目录预解析后注入）。
+    /// `Some(m)` ⇒ `@OnHorse` 在 `HorseType == 0` 时可成功上马（见 [`Imp::TakeOnHorse`]）；
+    /// `None` ⇒ 走 oracle 的红字支（「骑马必须先戴上马牌!!!」，逐字节不变）。
+    /// `None` 同时是「未注入 / 没马牌」的合并形态——两条路径的命令体行为完全相同（红字），
+    /// 故不需要额外区分位。
+    pub horse_plate_mount: Option<u8>,
 }
 
 impl<'a> GmWorld<'a> {
@@ -1984,6 +1998,7 @@ impl<'a> GmWorld<'a> {
             m_host: false,
             caller_guild: None,
             filter_word: None,
+            horse_plate_mount: None,
         }
     }
 
@@ -2036,6 +2051,13 @@ impl<'a> GmWorld<'a> {
     #[must_use]
     pub fn with_filter_word(mut self, filter_word: &'a std::cell::Cell<bool>) -> Self {
         self.filter_word = Some(filter_word);
+        self
+    }
+
+    /// **T-277**：注入说话者背包里第一块马牌的 `mount_id`（`None` = 没马牌/未注入）。
+    #[must_use]
+    pub fn with_horse_plate_mount(mut self, mount_id: Option<u8>) -> Self {
+        self.horse_plate_mount = mount_id;
         self
     }
 
@@ -2415,7 +2437,11 @@ fn take_off_horse(sess: &mut GmSession) -> GmResult {
         return GmResult::empty();
     }
     sess.on_horse = false;
+    // **T-277**：`HorseType` 是马牌 `mount_id` 的服务端镜像；下马清 0（下次 @OnHorse 重新取牌）。
+    sess.horse_type = 0;
     sess.pending_feature_changed = true;
+    // **T-277**：`SM_MOUNTRIDE(0)`（下马）——独立帧承载骑乘态，`feature_ex` 不参与。
+    sess.pending_mount_ride = Some(0);
     GmResult::empty()
 }
 
@@ -2425,15 +2451,30 @@ fn take_off_horse(sess: &mut GmSession) -> GmResult {
 /// FeatureChanged(); if (OnHorse) SystemShare.FunctionNPC.GotoLable(PlayerActor, "@OnHorse", false)`。
 /// 跳线是**宿主接缝**（部署 `FunctionNPC` 在场 ⇒ oracle 无 NRE；脚本面归脚本卡，本卡 forbidden
 /// 只登记）。
-fn take_on_horse(sess: &mut GmSession) -> GmResult {
+fn take_on_horse(sess: &mut GmSession, world: &GmWorld<'_>) -> GmResult {
     if sess.on_horse {
         return GmResult::empty();
     }
     if sess.horse_type == 0 {
-        return red(ON_HORSE_NEED_TAG);
+        // **T-277**：oracle 的 `HorseType == 0` 红字支在「背包里没有马牌」时**逐字节保留**；
+        // 有马牌时按 `Shape` 取 `mount_id`（宿主预解析后经 `GmWorld::horse_plate_mount` 注入）。
+        let Some(mount_id) = world.horse_plate_mount else {
+            return red(ON_HORSE_NEED_TAG);
+        };
+        sess.horse_type = mount_id;
+        sess.on_horse = true;
+        // `FeatureChanged()` 仍按 oracle 调用（41 帧照发），但 `feature_ex` 的 horse 位段被
+        // 冻结为 0（A4）：`41.Series` 骑乘前后逐字节相同。
+        sess.pending_feature_changed = true;
+        sess.pending_mount_ride = Some(mount_id);
+        return no_frames(
+            "TakeOnHorse(T-277)：马牌 mount_id 已从背包 Shape 取得并置 HorseType/OnHorse；SM_MOUNTRIDE 与 SM_FEATURECHANGED 由宿主同一事件内广播；FunctionNPC.GotoLable(\"@OnHorse\", false) 脚本跳线未实现（脚本面归脚本卡）",
+        );
     }
     sess.on_horse = true;
     sess.pending_feature_changed = true;
+    // 构造级 `HorseType != 0` 支（现网 oracle 不可达）：同样下发独立骑乘帧。
+    sess.pending_mount_ride = Some(sess.horse_type);
     no_frames(
         "TakeOnHorse：FeatureChanged 外观帧已置 pending（宿主同一事件内广播 SM_FEATURECHANGED）；随后 FunctionNPC.GotoLable(PlayerActor,\"@OnHorse\",false) 脚本跳线未实现（卡 openmir2-gm-family-t-toggle-horse forbidden：脚本面归脚本卡；部署 FunctionNPC 在场 ⇒ oracle 该调用无 NRE）",
     )
@@ -5207,6 +5248,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
     sess.pending_use_item = None;
     sess.pending_clear_bag = None;
     sess.pending_feature_changed = false;
+    sess.pending_mount_ride = None;
     sess.pending_reconnect = None;
     sess.pending_gm_die = None;
     sess.pending_gm_revive = None;
@@ -5408,7 +5450,7 @@ pub fn execute(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>, line: 
         Imp::LetShout => let_shout(sess),
         Imp::BanGuildChat => ban_guild_chat(sess),
         Imp::TakeOffHorse => take_off_horse(sess),
-        Imp::TakeOnHorse => take_on_horse(sess),
+        Imp::TakeOnHorse => take_on_horse(sess, world),
         Imp::DisableFilter => disable_filter(world),
 
         // ---- 族 Q · 查询/展示（10，卡 `openmir2-gm-family-q-query-display`）----
@@ -7805,6 +7847,7 @@ mod tests {
             m_host: false,
             caller_guild: None,
             filter_word: None,
+            horse_plate_mount: None,
         };
         assert!(world.is_guild_master("boss"), "chief 必须是会长（rank 1）");
         let mut sess = GmSession {
@@ -10879,9 +10922,15 @@ mod tests {
         let r = exec(&mut sess, &GmConfig::default(), "@OffHorse");
         assert!(r.msgs.is_empty(), "下马支 oracle 无文本");
         assert!(!sess.on_horse, "OnHorse 应翻为 false");
+        assert_eq!(sess.horse_type, 0, "T-277：下马把 HorseType 清 0");
         assert!(
             sess.pending_feature_changed,
             "FeatureChanged 外观帧必须登记 pending（缺失 ⇒ 宿主不广播 41）"
+        );
+        assert_eq!(
+            sess.pending_mount_ride,
+            Some(0),
+            "T-277：下马必须登记 SM_MOUNTRIDE(0)"
         );
         assert!(r.found && r.parsed);
         // 已下马：再敲回静默、无重复标记。
@@ -10890,12 +10939,13 @@ mod tests {
         assert!(!sess.pending_feature_changed, "第二次已静默，不重置标记");
     }
 
-    /// **A2**：`@OnHorse` 三支——① 已骑马（构造）静默零帧；② `HorseType=0`（现网恒值，
-    /// oracle 全仓无赋值点）红字「骑马必须先戴上马牌!!!」逐字节；③ 构造 `HorseType≠0`
-    /// 上马：`OnHorse=true` + 外观帧标记 + `@OnHorse` 脚本跳线以 `log_note` 登记接缝
-    /// （卡面 forbidden：脚本面归脚本卡）。变异红：丢 pending 置位 / 删红字门 ⇒ 本用例红。
+    /// **A2（T-277 改写）**：`@OnHorse` 四支——① 已骑马（构造）静默零帧；② 背包无马牌
+    /// （`horse_plate_mount=None`）红字「骑马必须先戴上马牌!!!」**逐字节**（oracle 原样）；
+    /// ③ 背包有马牌 ⇒ `HorseType = mount_id` + `OnHorse=true` + `SM_MOUNTRIDE` 标记；
+    /// ④ 构造 `HorseType≠0`（oracle 支结构 1:1）仍可上马并登记骑乘帧。
+    /// 变异红：删红字门 / 马牌支漏置 `pending_mount_ride` / 把 `HorseType` 写成固定值 ⇒ 红。
     #[test]
-    fn t_family_on_horse_three_branches() {
+    fn t_family_on_horse_four_branches() {
         // ① 已骑马：静默（`if (OnHorse) return;`）。
         let mut sess = GmSession {
             permission: 10,
@@ -10905,14 +10955,33 @@ mod tests {
         let r = exec(&mut sess, &GmConfig::default(), "@OnHorse");
         assert!(r.msgs.is_empty() && r.log_note.is_none(), "已骑马应静默");
         assert!(!sess.pending_feature_changed, "已骑马不登记帧");
-        // ② HorseType=0（ctor）：红字唯一可达支。
+        assert_eq!(sess.pending_mount_ride, None, "已骑马不登记骑乘帧");
+        // ② HorseType=0 且背包无马牌：红字（oracle 原样），零副作用。
         let (r, sess) = run_gm("@OnHorse");
         assert_eq!(texts(&r), vec![(GmColor::Red, ON_HORSE_NEED_TAG)]);
         assert!(
-            !sess.on_horse && !sess.pending_feature_changed,
+            !sess.on_horse && !sess.pending_feature_changed && sess.pending_mount_ride.is_none(),
             "红字支零副作用"
         );
-        // ③ 上马支（构造 HorseType≠0；现网不可达，支结构 1:1）。
+        // ③ 背包有马牌（宿主预解析 mount_id=3）：上马 + 独立骑乘帧。
+        let guilds = mir2_world::GuildManager::new();
+        let world = GmWorld::new(&guilds).with_horse_plate_mount(Some(3));
+        let mut sess = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        let r = execute(&mut sess, &GmConfig::default(), &world, "@OnHorse");
+        assert!(r.msgs.is_empty(), "马牌支 oracle 无 SysMsg");
+        assert!(sess.on_horse, "应翻为 true");
+        assert_eq!(sess.horse_type, 3, "HorseType := 马牌 mount_id");
+        assert!(sess.pending_feature_changed, "41 仍按 oracle 登记");
+        assert_eq!(sess.pending_mount_ride, Some(3), "SM_MOUNTRIDE(3)");
+        let note = r.log_note.expect("马牌支必须登记来源");
+        assert!(
+            note.contains("T-277") && note.contains("GotoLable"),
+            "{note}"
+        );
+        // ④ 构造 HorseType≠0（现网 oracle 不可达，支结构 1:1）。
         let mut sess = GmSession {
             permission: 10,
             horse_type: 5,
@@ -10922,6 +10991,7 @@ mod tests {
         assert!(r.msgs.is_empty(), "上马支 oracle 无 SysMsg");
         assert!(sess.on_horse, "应翻为 true");
         assert!(sess.pending_feature_changed, "外观帧必须登记 pending");
+        assert_eq!(sess.pending_mount_ride, Some(5), "骑乘帧带 HorseType");
         let note = r.log_note.expect("上马支必须登记 @OnHorse 跳线接缝");
         assert!(
             note.contains("@OnHorse") && note.contains("GotoLable"),
@@ -10931,6 +11001,7 @@ mod tests {
         let r = exec(&mut sess, &GmConfig::default(), "@OnHorse");
         assert!(r.msgs.is_empty() && r.log_note.is_none());
         assert!(!sess.pending_feature_changed, "第二次已静默");
+        assert_eq!(sess.pending_mount_ride, None, "第二次不登记骑乘帧");
     }
 
     /// **A3（卡 `openmir2-gm-family-t-toggle-horse`）**：`DisableFilter` 翻的是**全局位**

@@ -1568,6 +1568,7 @@ fn castle_official_action_open_close_emits_door_frames() {
         status: 0,
         name_color: 255,
         show_name: Vec::new(),
+        mount_id: 0,
     };
     displays.set(door, d);
     let out = super::castle_official_action_exec(
@@ -1812,6 +1813,7 @@ fn castle_official_action_alive_status_uses_display_layer() {
             status: 0x77,
             name_color: 255,
             show_name: Vec::new(),
+            mount_id: 0,
         },
     );
     let out = super::castle_official_action_exec(
@@ -1913,6 +1915,7 @@ fn castle_official_action_digup_status_takes_entity_char_status() {
             status: 0, // 展示层故意 0 ≠ 实体 0x99 ⇒ 两源可分
             name_color: 255,
             show_name: Vec::new(),
+            mount_id: 0,
         },
     );
     let out = super::castle_official_action_exec(

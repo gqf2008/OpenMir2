@@ -894,11 +894,11 @@ pub fn apply(base: &mut EnterWorldInputs, wx: &WorldFrameInputs<'_>) -> Vec<Stri
                 l.feature.gender,
                 l.feature.hair,
             );
-            let feature_ex = feature_ex(
-                l.feature.on_horse,
-                l.feature.horse_type,
-                l.feature.dress_eff_type,
-            );
+            // **T-277 / A4**：horse 位段冻结为 0（骑乘态走独立帧 SM_MOUNTRIDE；冻结 Delphi
+            // 会把非 0 低字节当武器特效）。oracle 的 HorseType 本就没有赋值点 ⇒ 字节不变。
+            // 两字段仍保留在 `FeatureInputs`（构造面/诊断），此处显式消费以免 dead_code。
+            let _ = (l.feature.on_horse, l.feature.horse_type);
+            let feature_ex = feature_ex(false, 0, l.feature.dress_eff_type);
             // `if (AllowGroup) messageBodyWl.Tag1 = MakeLong(MakeWord(1, 0), GetFeatureEx()); else Tag1 = 0;`
             let tag1 = if l.allow_group {
                 make_long(make_word(1, 0), feature_ex)
@@ -1548,8 +1548,10 @@ mod tests {
                 weapon_shape: Some(5),
                 gender: 1,
                 hair: 2,
-                on_horse: true,
-                horse_type: 9,
+                // **T-277 / A4**：horse 位段冻结为 0（骑乘态走 SM_MOUNTRIDE；oracle 的
+                // HorseType 本就没有赋值点）。这里刻意构造 false/0 = 生产可达形态。
+                on_horse: false,
+                horse_type: 0,
                 dress_eff_type: 4,
             },
             char_status: 0x1122_3344,
@@ -1562,8 +1564,8 @@ mod tests {
         //   nHair   = (byte)(2*2 + 1) = 5
         //   feature = MakeHumanFeature(0, 7, 11, 5) = MakeLong(MakeWord(0,11), MakeWord(5,7))
         //           = 0x0B00 | (0x0705 << 16) = 0x0705_0B00
-        //   featureEx = MakeWord(9, 4) = 0x0409
-        //   Tag1   = MakeLong(MakeWord(1,0), featureEx) = 0x0001 | (0x0409 << 16) = 0x0409_0001
+        //   featureEx = MakeWord(0, 4) = 0x0400（T-277：horse 低字节冻结 0）
+        //   Tag1   = MakeLong(MakeWord(1,0), featureEx) = 0x0001 | (0x0400 << 16) = 0x0400_0001
         let mut base = EnterWorldInputs {
             actor_id: 7,
             cur_x: 10,
@@ -1598,9 +1600,9 @@ mod tests {
         );
         assert_eq!(
             base.logon_body_wl,
-            Some((0x0705_0B00, 0x1122_3344, 0x0409_0001, 0))
+            Some((0x0705_0B00, 0x1122_3344, 0x0400_0001, 0))
         );
-        assert_eq!(base.feature, Some((0x0705_0B00, 0x0409)));
+        assert_eq!(base.feature, Some((0x0705_0B00, 0x0400)));
         assert_eq!(base.attack_mode, Some(2));
 
         let frames = base.frames();
@@ -1622,14 +1624,14 @@ mod tests {
         assert_eq!(wl.len(), 16);
         assert_eq!(&wl[0..4], &0x0705_0B00i32.to_le_bytes());
         assert_eq!(&wl[4..8], &0x1122_3344i32.to_le_bytes());
-        assert_eq!(&wl[8..12], &0x0409_0001i32.to_le_bytes());
+        assert_eq!(&wl[8..12], &0x0400_0001i32.to_le_bytes());
         assert_eq!(&wl[12..16], &[0, 0, 0, 0]);
         // 帧 41 的 Param/Tag = Lo/HiWord(feature)、Series = featureEx。
         let cm41 = CommandMessage::from_bytes(&frames[2]).unwrap();
         assert_eq!((cm41.ident, cm41.recog), (41, 7));
         assert_eq!(
             (cm41.param, cm41.tag, cm41.series),
-            (0x0B00, 0x0705, 0x0409)
+            (0x0B00, 0x0705, 0x0400)
         );
         // 帧 213 的模式在 Recog（`SendDefMessage` 的第 2 参）。
         let cm213 = CommandMessage::from_bytes(&frames[3]).unwrap();

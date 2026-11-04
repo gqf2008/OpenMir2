@@ -389,11 +389,13 @@ impl TakeOnContext<'_> {
             .get(ability::SLOT_DRESS)
             .and_then(Option::as_ref)
             .map_or(0, |it| it.index);
-        feature::feature_ex(
-            self.on_horse,
-            self.horse_type,
-            dress_eff_of_index(self.catalog, dress_index),
-        )
+        // **T-277 / A4**：`feature_ex` 的 horse 位段（bits 0..7）**冻结为 0**。oracle 的
+        // `HorseType` 从未被赋值（恒 0），而 T-277 让它承载马牌 `mount_id`；若把该值送进
+        // `MakeWord(OnHorse ? HorseType : 0, DressEffType)`，冻结 Delphi 客户端会把它当
+        // 武器特效（`Horsefeature = Lobyte(LoWord(feature_ex))`）⇒ 违反 A7「不得出现新特效」。
+        // 骑乘态改由独立帧 `SM_MOUNTRIDE` 承载。`feature_ex` 公式本身未改（`feature.rs` 不动）。
+        let _ = (self.on_horse, self.horse_type);
+        feature::feature_ex(false, 0, dress_eff_of_index(self.catalog, dress_index))
     }
 }
 
@@ -2202,6 +2204,48 @@ mod tests {
     /// **T-279**（卡 `openmir2-t283-wings-server`）：`DressEffType` = 已装备 Dress 槽模板的
     /// `stditems.AniCount`；`SM_TAKEON_OK/TAKEOFF_OK` 的 `Param`（bits 8..15）随之变化。
     ///
+    /// **T-277 / A4 负例**：骑乘前后 `SM_TAKEON_OK(615)` 的 `Param`（`GetFeatureEx()`）
+    /// **逐字节不变**。`TakeOnContext::feature_ex` 必须把 horse 位段冻结为 0（否则马牌
+    /// `mount_id` 会漏进帧低字节，冻结 Delphi 会把它画成武器特效）。
+    ///
+    /// 红检：把 `feature_ex` 改回 `feature::feature_ex(self.on_horse, self.horse_type, ..)` ⇒ 本用例红。
+    #[test]
+    fn t277_feature_ex_ignores_mount_state_for_takeon_param() {
+        let cat = ability::StdItemCatalog::new();
+        let wabil = Ability::default();
+        let mk = |on_horse: bool, horse_type: u8| TakeOnContext {
+            catalog: &cat,
+            job: 0,
+            gender: 0,
+            hair: 0,
+            abil_level: 10,
+            re_level: 0,
+            credit_point: 0,
+            member_type: 0,
+            member_level: 0,
+            has_guild: false,
+            guild_rank_no: 0,
+            is_castle_member: false,
+            user_unlock_durg: false,
+            dealing: false,
+            disable_take_off_keys: &[],
+            on_horse,
+            horse_type,
+            wabil: &wabil,
+        };
+        let state = EquipState {
+            use_items: vec![None; 13],
+            item_list: Vec::new(),
+        };
+        let before = mk(false, 0).feature_ex(&state);
+        let mounted = mk(true, 7).feature_ex(&state);
+        assert_eq!(before, 0, "无 Dress 且未骑乘 ⇒ feature_ex = 0");
+        assert_eq!(
+            mounted, before,
+            "A4：骑乘（on_horse=true, horse_type=mount_id）不得改变 615.Param / 41.Series"
+        );
+    }
+
     /// 红检：把 `TakeOnContext::feature_ex` 里的 `dress_eff_of_index(...)` 换回常量 0 ⇒
     /// 雷霆战甲用例的 `param == 15 << 8` 红；把 `take_off` 的 state 传成迁移前快照 ⇒ 卸下用例红。
     #[test]

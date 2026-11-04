@@ -309,5 +309,6 @@
 | T-272 | openmir2-gm-family-w-guild | 2026-10-30T22:22:45Z | 在用 |
 | T-273 | openmir2-mcp-gm-execute | 2026-11-01T10:22:25Z | 在用 |
 | T-275 | openmir2-gm-levelrank-frame | 2026-11-03T17:51:08Z | 在用 |
+| T-277 | openmir2-t282-mount-server | 2026-11-04T13:08:35Z | 在用 |
 | T-278 | openmir2-t284-hero-rank-kinds | 2026-11-04T13:13:41Z | 在用 |
 | T-279 | openmir2-t283-wings-server | 2026-11-04T13:16:26Z | 在用 |
