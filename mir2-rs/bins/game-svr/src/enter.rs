@@ -426,6 +426,16 @@ pub const LEVEL_RANK_NAME_LEN: usize = 15;
 /// 体长 = 10 × 24 = 240 字节。
 pub const LEVEL_RANK_BODY_LEN: usize = LEVEL_RANK_ROWS * LEVEL_RANK_ROW_LEN;
 
+/// `CM_LEVELRANK(1060)` —— **T-275 扩展**：客户端打开排行窗口/点职业/翻页时向服务端
+/// 重新拉取（oracle 无 1060/1108；客户端 `DBotLevelRankClick` 打开窗口先清表，登录帧被清掉）。
+///
+/// 线缆映射：请求头 `Recog = page`（≥ 0）、`Param = kind`（≤ 3 人物排行）。
+/// 仅当 `[Setup] LevelRankOnLogin != 0` 时处理；只回**请求者自己**一帧 `SM_LEVELRANK(1108)`。
+pub const CM_LEVELRANK: u16 = 1060;
+
+/// `CM_LEVELRANK` 接受的 `kind` 上界（> 3 = 英雄排行/非法，本卡不实现 ⇒ 零帧 + WRN）。
+pub const LEVEL_RANK_KIND_MAX: u16 = 3;
+
 /// 名字字段的**字符安全**截断长度：`≤ LEVEL_RANK_NAME_LEN`，且不落在 GBK 双字节字符中间。
 ///
 /// GB2312/GBK 的双字节字符首字节是 `0x81..=0xFE`；ASCII 单字节 `< 0x80`（CP936 的 `0x80`

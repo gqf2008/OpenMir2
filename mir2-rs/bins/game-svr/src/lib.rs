@@ -3764,6 +3764,74 @@ fn handle_inbound_cmd(
     }
 }
 
+/// `SM_LEVELRANK(1108)` 的**唯一数据源** = 在线登记表 ∩ 世界实体（`!ghost`），顺序 = 在线登记序。
+///
+/// 排序/编码全在纯函数 `enter::level_rank_body`（level 降序、同级 GBK 名升序）；登录帧与
+/// `CM_LEVELRANK(1060)` 应答共用本采集点（不写第二份排序）。
+fn level_rank_players<'a>(
+    online: &'a OnlineRegistry,
+    world: &mir2_world::World,
+) -> Vec<(&'a str, i32, i32)> {
+    online
+        .iter()
+        .filter_map(|e| {
+            let ent = world.entities.get(e.actor_id)?;
+            (!ent.ghost).then_some((e.chr_name.as_str(), i32::from(ent.level), e.actor_id))
+        })
+        .collect()
+}
+
+/// `CM_LEVELRANK(1060)` 的派发（**T-275 扩展**，tier=L，缺省关）。
+///
+/// 语义：
+/// - `enabled = [Setup] LevelRankOnLogin != 0`；**关 ⇒ 完全忽略**（零帧、无日志，A1）。
+/// - 开 ⇒ 解析请求头 `page = recog`、`kind = param`，给**请求者自己**回恰好一帧
+///   `SM_LEVELRANK(1108)`（`recog = page`、`param = kind`，体复用 `enter::level_rank_frame`）。
+/// - `page < 0` 或 `kind > 3` ⇒ 零帧 + WRN（不 panic，A4）。
+/// - 只经请求者自己的 `(gate_idx, socket)` 路由，不广播（A3）。
+fn handle_level_rank_request_cmd(
+    cmd: &CommandMessage,
+    chr_name: &str,
+    socket: i32,
+    online: &OnlineRegistry,
+    world: &mir2_world::World,
+    enabled: bool,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+) {
+    // A1：缺省 `LevelRankOnLogin = 0` ⇒ 1060 完全忽略（零帧、无日志）。
+    if !enabled {
+        return;
+    }
+    let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
+        glog!(
+            "WRN",
+            "CM_LEVELRANK：ChrName={chr_name} socket={socket} 不在在线登记表 ⇒ 丢弃"
+        );
+        return;
+    };
+    let (page, kind) = (cmd.recog, cmd.param);
+    if page < 0 || kind > enter::LEVEL_RANK_KIND_MAX {
+        glog!(
+            "WRN",
+            "CM_LEVELRANK：ChrName={chr_name} page={page} kind={kind} 越界（要求 page≥0、kind≤{}）⇒ 零帧",
+            enter::LEVEL_RANK_KIND_MAX
+        );
+        return;
+    }
+    let players = level_rank_players(online, world);
+    let frame = enter::level_rank_frame(page, kind, &players);
+    if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "CM_LEVELRANK/SM_LEVELRANK") {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: frame,
+        });
+    }
+    glog!(
+        "INF",
+        "CM_LEVELRANK：ChrName={chr_name} page={page} kind={kind} ⇒ SM_LEVELRANK(1108) 回请求者 socket={socket}"
+    );
+}
+
 /// 把一批 [`game_svr::inbound::DefFrame`]（`SendDefMessage` 口径，无尾）编成 `GM_DATA` body 下发。
 fn emit_def_frames(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -26143,6 +26211,20 @@ fn sim_loop(
                     ) {
                         // `CM_LOGINNOTICEOK(1018)`：只写 `SessionGround.client_tick`，
                         // **零出帧**（设计件 §3.2 B1；oracle 的 SysMsg 被 RunNotice drain 吞掉）。
+                    } else if cmd.ident == enter::CM_LEVELRANK {
+                        // **T-275 扩展（卡 `openmir2-levelrank-1060-request`）**：客户端打开排行窗口
+                        // /点职业/翻页时发 `CM_LEVELRANK(1060)` 重新拉取（oracle 无此消息号）。
+                        // 仅当 `[Setup] LevelRankOnLogin != 0` 时给**请求者自己**回一帧
+                        // `SM_LEVELRANK(1108)`（`recog=page`、`param=kind`）；缺省 0 ⇒ 零帧。
+                        handle_level_rank_request_cmd(
+                            &cmd,
+                            &chr_name,
+                            socket,
+                            &online,
+                            &world,
+                            enter_cfg.level_rank_on_login,
+                            &gates,
+                        );
                     } else if game_svr::inbound::INBOUND_IDENTS.contains(&cmd.ident) {
                         // R1 入站派发余 10 条（Task C / 片 76）：`game_svr::inbound` 纯函数 + 接线臂。
                         handle_inbound_cmd(
@@ -27271,17 +27353,8 @@ fn sim_loop(
                                                     // `SM_LEVELRANK(1108)`；缺省关 ⇒ `bodies` 原样（A1）。
                                                     // 数据源 = 在线登记表 ∩ 世界实体（非 ghost），排序/编码
                                                     // 全在纯函数 `enter::level_rank_body`（A2）。
-                                                    let rank_players: Vec<(&str, i32, i32)> = online
-                                                        .iter()
-                                                        .filter_map(|e| {
-                                                            let ent = world.entities.get(e.actor_id)?;
-                                                            (!ent.ghost).then_some((
-                                                                e.chr_name.as_str(),
-                                                                i32::from(ent.level),
-                                                                e.actor_id,
-                                                            ))
-                                                        })
-                                                        .collect();
+                                                    let rank_players =
+                                                        level_rank_players(&online, &world);
                                                     let bodies = enter::append_level_rank(
                                                         bodies,
                                                         enter_cfg.level_rank_on_login,
@@ -86546,5 +86619,248 @@ mod admin_channel_tests {
         notify.notify_one();
         drop(ev_tx);
         drop(worker);
+    }
+}
+
+/// **卡 `openmir2-levelrank-1060-request`（tier=L）**：`CM_LEVELRANK(1060)` → 请求者
+/// 一帧 `SM_LEVELRANK(1108)`（`recog = page`、`param = kind`，体 240B，与登录帧同一构造）。
+///
+/// 生产接线：`sim_loop` 的 `GateEvent::Command` 链 → [`handle_level_rank_request_cmd`]。
+/// 缺省 `[Setup] LevelRankOnLogin = 0` ⇒ 1060 完全忽略（A1，零帧）。
+#[cfg(test)]
+mod level_rank_request_tests {
+    use super::*;
+    use mir2_protocol::frame::CommandMessage as WireCmd;
+
+    struct Rig {
+        world: mir2_world::World,
+        online: OnlineRegistry,
+        gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx0: mpsc::UnboundedReceiver<SimToGate>,
+        rx1: mpsc::UnboundedReceiver<SimToGate>,
+    }
+
+    fn online_entry(chr: &str, gate: i32, sock: i32, actor: i32) -> OnlineEntry {
+        OnlineEntry {
+            account: format!("acc-{chr}"),
+            chr_name: chr.to_string(),
+            session_id: actor,
+            gate_idx: gate,
+            socket: sock,
+            actor_id: actor,
+        }
+    }
+
+    fn take(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
+        let mut out = Vec::new();
+        while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+            out.push((socket, body));
+        }
+        out
+    }
+
+    /// hero（30 级，gate0/socket100）、other（20 级，gate1/socket200）、
+    /// ghost（99 级，gate0/socket300）—— ghost 必须被数据源排除，否则它会占行 0。
+    fn rig() -> Rig {
+        let mut world = mir2_world::World::new(32, 32);
+        let hero = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "hero", 10, 10);
+            e.level = 30;
+            e
+        });
+        let other = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "other", 11, 10);
+            e.level = 20;
+            e
+        });
+        let ghost = world.add_entity({
+            let mut e = mir2_world::Entity::new(0, "ghost", 12, 10);
+            e.level = 99;
+            e.ghost = true;
+            e
+        });
+        let online = vec![
+            online_entry("hero", 0, 100, hero),
+            online_entry("other", 1, 200, other),
+            online_entry("ghost", 0, 300, ghost),
+        ];
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let (tx1, rx1) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates = std::collections::HashMap::new();
+        gates.insert(0u8, tx0);
+        gates.insert(1u8, tx1);
+        Rig {
+            world,
+            online,
+            gates,
+            rx0,
+            rx1,
+        }
+    }
+
+    fn req(page: i32, kind: u16) -> CommandMessage {
+        CommandMessage {
+            recog: page,
+            ident: enter::CM_LEVELRANK,
+            param: kind,
+            tag: 0,
+            series: 0,
+        }
+    }
+
+    #[test]
+    fn cm_levelrank_const_is_1060() {
+        assert_eq!(enter::CM_LEVELRANK, 1060);
+    }
+
+    /// A2：开 ⇒ 请求者恰好一帧 1108，`recog=page`、`param=kind`、体 240B，
+    /// 且逐字节 = `level_rank_frame(page, kind, 同一数据源)`（行序与登录帧一致）。
+    #[test]
+    fn enabled_request_replies_one_1108_to_requester_with_page_and_kind() {
+        let mut rig = rig();
+        handle_level_rank_request_cmd(
+            &req(3, 1),
+            "hero",
+            100,
+            &rig.online,
+            &rig.world,
+            true,
+            &rig.gates,
+        );
+        let got = take(&mut rig.rx0);
+        assert_eq!(got.len(), 1, "恰好一帧回请求者（不是广播）");
+        assert_eq!(got[0].0, 100, "目标 socket = 请求者");
+
+        // 数据源 = 在线登记表 ∩ 世界非 ghost；ghost(99 级) 必须缺席。
+        let players: Vec<(&str, i32, i32)> = level_rank_players(&rig.online, &rig.world);
+        assert_eq!(
+            players,
+            vec![
+                ("hero", 30, rig.online[0].actor_id),
+                ("other", 20, rig.online[1].actor_id)
+            ],
+            "非 ghost 的两名在线玩家（顺序 = 在线登记序）"
+        );
+        let expect = enter::level_rank_frame(3, 1, &players);
+        assert_eq!(got[0].1, expect, "帧体必须与登录帧同一构造/同一行序");
+
+        let cmd = WireCmd::from_bytes(&got[0].1).expect("12B 命令头");
+        assert_eq!(cmd.ident, enter::SM_LEVELRANK);
+        assert_eq!(cmd.recog, 3, "Recog = 请求 page");
+        assert_eq!(cmd.param, 1, "Param = 请求 kind");
+        assert_eq!(
+            mir2_protocol::edcode::decode(&got[0].1[12..]).len(),
+            enter::LEVEL_RANK_BODY_LEN,
+            "体恰 240B"
+        );
+        assert!(take(&mut rig.rx1).is_empty(), "另一会话零帧");
+    }
+
+    /// A1：`LevelRankOnLogin = 0`（缺省）⇒ 1060 完全忽略，两条线都零帧。
+    #[test]
+    fn disabled_switch_ignores_1060_with_zero_frames() {
+        let mut rig = rig();
+        handle_level_rank_request_cmd(
+            &req(0, 0),
+            "hero",
+            100,
+            &rig.online,
+            &rig.world,
+            false,
+            &rig.gates,
+        );
+        assert!(take(&mut rig.rx0).is_empty(), "缺省关 ⇒ 零帧");
+        assert!(take(&mut rig.rx1).is_empty(), "缺省关 ⇒ 零帧");
+    }
+
+    /// A3：请求者是 `other`（gate1/socket200）⇒ 只有 gate1 收到；gate0 零帧（不广播）。
+    #[test]
+    fn reply_routes_only_to_requesting_session_not_broadcast() {
+        let mut rig = rig();
+        handle_level_rank_request_cmd(
+            &req(0, 0),
+            "other",
+            200,
+            &rig.online,
+            &rig.world,
+            true,
+            &rig.gates,
+        );
+        assert!(take(&mut rig.rx0).is_empty(), "非请求者的网关线零帧");
+        let got = take(&mut rig.rx1);
+        assert_eq!(got.len(), 1, "请求者恰好一帧");
+        assert_eq!(got[0].0, 200, "只回请求者自己的 socket");
+    }
+
+    /// A4：`kind > 3` / 负 page ⇒ 零帧（记 WRN，不 panic）；边界 `kind = 3` 合法。
+    #[test]
+    fn out_of_range_kind_or_negative_page_is_ignored_without_panic() {
+        let mut rig = rig();
+        handle_level_rank_request_cmd(
+            &req(0, 4),
+            "hero",
+            100,
+            &rig.online,
+            &rig.world,
+            true,
+            &rig.gates,
+        );
+        assert!(take(&mut rig.rx0).is_empty(), "kind=4 (>3) ⇒ 零帧");
+
+        handle_level_rank_request_cmd(
+            &req(-1, 0),
+            "hero",
+            100,
+            &rig.online,
+            &rig.world,
+            true,
+            &rig.gates,
+        );
+        assert!(take(&mut rig.rx0).is_empty(), "page=-1 ⇒ 零帧");
+        assert!(take(&mut rig.rx1).is_empty(), "越界请求不得外泄到其它线");
+
+        // 上界内合法：kind=3 照发，page=0 原样进 Recog。
+        handle_level_rank_request_cmd(
+            &req(0, 3),
+            "hero",
+            100,
+            &rig.online,
+            &rig.world,
+            true,
+            &rig.gates,
+        );
+        let got = take(&mut rig.rx0);
+        assert_eq!(got.len(), 1, "kind=3 是上界内合法值");
+        let cmd = WireCmd::from_bytes(&got[0].1).expect("12B 命令头");
+        assert_eq!((cmd.recog, cmd.param), (0, 3));
+    }
+
+    /// 接线保鲜门（A5 的「删掉 1060 处理」一面）：`sim_loop` 的 `GateEvent::Command` 链里
+    /// 必须恰有一处 `CM_LEVELRANK` 派发臂，且开关实参直取 `[Setup] LevelRankOnLogin`。
+    ///
+    /// 红检（实测）：删除该 `else if` 臂 ⇒ 锚点命中 0 ⇒ 本用例红。
+    #[test]
+    fn cm_levelrank_production_call_is_wired_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        // `concat!` 拆开字面量 ⇒ 本测试自身源码不会命中锚串。
+        let arm = concat!("} else if cmd.ident == enter::", "CM_LEVELRANK {");
+        assert_eq!(src.matches(arm).count(), 1, "1060 派发臂必须恰一处");
+        let at = src.find(arm).expect("1060 派发臂");
+        let end = src[at..]
+            .find("\n                    } else if")
+            .map_or(src.len(), |i| at + i);
+        let args = &src[at..end];
+        assert!(
+            args.contains(concat!("handle_level_", "rank_request_cmd(")),
+            "派发臂必须调用处理器（实参：{args}）"
+        );
+        assert!(
+            args.contains("enter_cfg.level_rank_on_login"),
+            "开关必须来自 `[Setup] LevelRankOnLogin`（实参：{args}）"
+        );
+        assert!(
+            args.contains("&gates"),
+            "必须经网关路由回请求者（实参：{args}）"
+        );
     }
 }
