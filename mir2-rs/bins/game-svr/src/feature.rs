@@ -40,8 +40,11 @@
 //!    = `MakeWord(OnHorse ? HorseType : 0, DressEffType)`
 //!    ⇒ int16 位布局（LSB→MSB）= **`[horse:8][dressEff:8]`**。
 //!    **实测**：oracle 里 `DressEffType`/`HorseType` 全仓只有声明与读取，没有任何赋值点
-//!    （`grep -rn "DressEffType|HorseType" src/` 只命中声明与 `CharacterObject.cs:148`）
-//!    ⇒ 现网 `GetFeatureEx()` 恒为 0；本函数仍按语义实现，M2 车道接线时不要硬编码 0。
+//!    （`grep -rn "DressEffType|HorseType" src/` 只命中声明与 `CharacterObject.cs:148`）。
+//!    **T-279 偏差（卡 `openmir2-t283-wings-server`）**：生产接线按冻结客户端的取值契约补
+//!    `DressEffType` 来源——已装备 Dress 槽模板的 `stditems.AniCount`
+//!    （见 `game_svr::bag::dress_eff_of_index`）；`HorseType`（bits 0..7）属 T-282。
+//!    本模块只做位打包，不硬编码 0。
 //!
 //! # 与 oracle 逐位相同怎么保证
 //!
@@ -150,8 +153,9 @@ pub const fn human_feature(
 /// `CharacterObject.GetFeatureEx()`（`CharacterObject.cs:146`）=
 /// `MakeWord(OnHorse ? HorseType : 0, DressEffType)`。
 ///
-/// 位布局（LSB→MSB）= `[horse:8][dressEff:8]`。现网 oracle 的 `DressEffType` / `HorseType`
-/// 无任何赋值点（见模块文档），故恒为 0；这里不硬编码，按语义保留输入。
+/// 位布局（LSB→MSB）= `[horse:8][dressEff:8]`。`dress_eff_type` 的生产来源见
+/// `game_svr::bag::dress_eff_of_index`（T-279：Dress 槽模板 `AniCount`）；`horse_type`
+/// 属 T-282。函数本身只做打包，不硬编码 0。
 #[must_use]
 pub const fn feature_ex(on_horse: bool, horse_type: u8, dress_eff_type: u8) -> u16 {
     let horse = if on_horse { horse_type } else { 0 };
@@ -307,8 +311,8 @@ mod tests {
         assert_ne!(human_feature(None, Some(1), 1, 2), base);
     }
 
-    /// 现网的 `GetFeatureEx()` 恒为 0（`DressEffType`/`HorseType` 在 oracle 里无赋值点）——
-    /// 这是"记录在案"的行为，不是巧合：接线时别把它当成必然。
+    /// 未赋值输入下 `GetFeatureEx()` = 0（`DressEffType`/`HorseType` 在 oracle 里无赋值点）——
+    /// 生产接线只在 Dress 槽有 `AniCount` 时把高字节（bits 8..15）写成非 0（T-279）。
     #[test]
     fn shipped_feature_ex_is_zero_for_unset_inputs() {
         assert_eq!(feature_ex(false, 0, 0), 0);
