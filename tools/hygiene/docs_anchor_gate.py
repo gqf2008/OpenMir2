@@ -68,6 +68,10 @@ reviewer-21 审 M-1 后记时发现：矩阵里的 oracle/harness 行号**在合
   按 `startswith("docs/")` 过滤时整份文档被**静默跳过** ⇒ `检查 0` 假绿。
   门内部调 git 时一律显式 `-c core.quotePath=false`（命令行 `-c` 优先级最高，
   不依赖调用方环境变量/仓库配置）；自测有合成夹具（`docs/中文名.md`）钉住。
+* **diff 头前缀**（卡 `openmir2-docs-anchor-mnemonic-prefix`）：注入
+  `diff.mnemonicPrefix=true` 会把 `+++ b/docs/…` 改成 `+++ w/docs/…`，同样整文件跳过。
+  `git diff` 因此显式传 `--src-prefix=a/ --dst-prefix=b/`；选项直接固定本解析器的
+  输出契约，不必丢弃调用方全部 `GIT_CONFIG_*`。
 
 ## 用法
 
@@ -667,7 +671,10 @@ def collect_added_lines(repo, base, pathspecs):
     mb = out.strip()
     if not re.fullmatch(r"[0-9a-f]{40}", mb):
         return None, "merge-base 不是 40 位小写 hex：%r" % mb
-    cmd = ["diff", "--unified=0", "--no-color", "--no-ext-diff", mb, "--"]
+    # 固定 diff 头路径前缀：命令行选项覆盖 diff.mnemonicPrefix（含 GIT_CONFIG_* 注入），
+    # 避免 `+++ w/docs/…` 绕过下面的 `b/` 解析；比清空全部 GIT_CONFIG_* 更窄、更确定。
+    cmd = ["diff", "--unified=0", "--no-color", "--no-ext-diff",
+           "--src-prefix=a/", "--dst-prefix=b/", mb, "--"]
     cmd += list(pathspecs)
     rc, out, err = _git_out(repo, cmd)
     if rc != 0:
@@ -948,7 +955,7 @@ def _prose_teeth():
             with open(os.path.join(tmp, "docs", "base.md"), "w", encoding="utf-8") as fh:
                 fh.write(line + "\n")
 
-        # ① 正例：文件在、行号在、紧邻符号在 ⇒ 绿，且输出「检查 1」而不是空输入话术
+        # 正例：文件在、行号在、紧邻符号在 ⇒ 绿，且输出「检查 1」而不是空输入话术
         write_doc("正例 `src/a.rs:4` `beta`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("散文锚正例 ⇒ 绿（检查 1 / 悬空 0 / 越界 0）",
@@ -956,31 +963,31 @@ def _prose_teeth():
               out[-300:])
         check("正例输出 ≠ 空输入话术（不得出现「没有任何」）", "没有任何" not in out, out[-300:])
 
-        # ② 文件不存在 ⇒ 红
+        # 牙①：文件不存在 ⇒ 红
         write_doc("坏 `src/no_such_file.rs:1`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙①路径不存在 ⇒ 红（悬空 1）",
               rc == 1 and "PROSE_ANCHOR_PATH_MISSING" in out and "悬空 1" in out, out[-300:])
 
-        # ③ 行号越界 ⇒ 红
+        # 牙②：行号越界 ⇒ 红
         write_doc("坏 `src/a.rs:99`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙②行号越界 ⇒ 红（越界 1）",
               rc == 1 and "PROSE_ANCHOR_LINE_OUT_OF_RANGE" in out and "越界 1" in out, out[-300:])
 
-        # ④ 锚定行不含声明符号 ⇒ 红
+        # 牙③：锚定行不含声明符号 ⇒ 红
         write_doc("坏 `src/a.rs:4` `alpha`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙③行内容不含声明符号 ⇒ 红（符号缺失 1）",
               rc == 1 and "PROSE_ANCHOR_SYMBOL_MISSING" in out and "符号缺失 1" in out, out[-300:])
 
-        # ⑤ 符号只在注释里（.rs 先剥注释）⇒ 红
+        # 牙④：符号只在注释里（.rs 先剥注释）⇒ 红
         write_doc("坏 `src/a.rs:2` `beta`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙④符号只在注释里（剥注释后不算命中）⇒ 红",
               rc == 1 and "PROSE_ANCHOR_SYMBOL_MISSING" in out, out[-300:])
 
-        # ⑤b 边界（reviewer-21 F1/F2）：真实行数上界必须被钉死，且带/不带末尾换行都测
+        # 边界（reviewer-21 F1/F2）：真实行数上界必须被钉死，且带/不带末尾换行都测
         #      a.rs 带末尾换行 ⇒ 真实 4 行：:4 绿、:5 红
         #      b.rs 不带末尾换行 ⇒ 真实 2 行：:2 绿、:3 红
         write_doc("边界 `src/a.rs:4` `beta`")
@@ -1000,26 +1007,26 @@ def _prose_teeth():
               rc == 1 and "PROSE_ANCHOR_LINE_OUT_OF_RANGE" in out and "越界 1" in out,
               out[-300:])
 
-        # ⑥ 空输入（新增行没有锚）⇒ 明确「检查 0」rc=0，且与「扫了 N 条全过」可区分
+        # 空输入（新增行没有锚）⇒ 明确「检查 0」rc=0，且与「扫了 N 条全过」可区分
         write_doc("这一行没有任何锚，只是普通散文")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("空输入 ⇒ rc=0 且显式「检查 0 …（新增行里没有任何 path:line 锚）」",
               rc == 0 and "检查 0 / 悬空 0 / 越界 0" in out and "没有任何" in out, out[-300:])
 
-        # ⑨ HIGH_CHURN 行号锚 ⇒ 红（与表模式同口径）
+        # 牙⑤：HIGH_CHURN 行号锚 ⇒ 红（与表模式同口径）
         write_doc("高 churn 行号锚 `mir2-rs/crates/world/src/hc.rs:2` `beta`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙⑤HIGH_CHURN 文件行号锚 ⇒ 红（高churn 1）",
               rc == 1 and "HIGH_CHURN_LINE_ANCHOR" in out and "高churn 1" in out,
               out[-300:])
-        # ⑩ 同一内容改成路径/符号锚 ⇒ 绿（没有行号锚，prose 域不判）
+        # 牙⑥：同一内容改成路径/符号锚 ⇒ 绿（没有行号锚，prose 域不判）
         write_doc("高 churn 路径/符号锚 `mir2-rs/crates/world/src/hc.rs` `beta`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙⑥HIGH_CHURN 改成路径/符号锚 ⇒ 绿",
               rc == 0 and "RESULT: GREEN" in out and "HIGH_CHURN_LINE_ANCHOR" not in out,
               out[-300:])
 
-        # ⑪ 非 ASCII 文件名（卡 `openmir2-docs-anchor-quotepath`）：git 默认
+        # 牙⑦：非 ASCII 文件名（卡 `openmir2-docs-anchor-quotepath`）：git 默认
         #    core.quotePath=true 会把 `docs/中文名.md` 输出成 `"b/docs/\344\270\255..."`；
         #    门若按原样 `startswith("docs/")` 过滤，整份文档被静默跳过 ⇒ `检查 0` 假绿。
         #    这里把 temp 仓库的 core.quotePath **显式钉成 true**（不受宿主机全局配置影响），
@@ -1035,7 +1042,7 @@ def _prose_teeth():
               rc == 1 and "PROSE_ANCHOR_PATH_MISSING" in out and "悬空 1" in out
               and "docs/中文名.md" in out, out[-300:])
 
-        # ⑫ 同一非 ASCII 文件改成**有效**锚 ⇒ 检查 1 且绿：证明是「真纳入了检查」，
+        # 牙⑧：同一非 ASCII 文件改成**有效**锚 ⇒ 检查 1 且绿：证明是「真纳入了检查」，
         #    不是把整份文件恒定判红。
         with open(cjk_doc, "w", encoding="utf-8") as fh:
             fh.write("正例 `src/a.rs:4` `beta`\n")
@@ -1044,7 +1051,28 @@ def _prose_teeth():
               rc == 0 and "检查 1 / 悬空 0 / 越界 0" in out and "RESULT: GREEN" in out,
               out[-300:])
 
-        # ⑦ base 解析不到 ⇒ rc=2（判不了，不静默跳过）；stderr 也收进断言，别让 PASS 行带噪声
+        # 牙⑨：配置注入 diff.mnemonicPrefix=true 后，原始 diff 头确实变成 w/；
+        # 门仍须扫描 ASCII 文档并抓住悬空锚，不能退化成「检查 0 GREEN」。
+        with open(cjk_doc, "w", encoding="utf-8") as fh:
+            fh.write("这一行没有任何锚，只是普通散文\n")
+        write_doc("坏 `src/no_such_file.rs:1`")
+        g("config", "diff.mnemonicPrefix", "true")
+        raw_diff = g("diff", "--unified=0", "--no-color", "--no-ext-diff",
+                     base, "--", "docs/")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙⑨注入 diff.mnemonicPrefix=true 后 ASCII 悬空锚仍 ⇒ 红",
+              "+++ w/docs/base.md" in raw_diff and rc == 1
+              and "PROSE_ANCHOR_PATH_MISSING" in out and "检查 1 / 悬空 1" in out,
+              ("w-prefix=" + str("+++ w/docs/base.md" in raw_diff), rc, out[-300:]))
+
+        # 牙⑩：同一注入下的无锚正例仍为「检查 0 GREEN」，防止修成恒定判红。
+        write_doc("这一行没有任何锚，只是普通散文")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙⑩同一 mnemonicPrefix 注入下无锚 ⇒ 检查 0 GREEN",
+              rc == 0 and "检查 0 / 悬空 0 / 越界 0" in out
+              and "没有任何" in out and "RESULT: GREEN" in out, out[-300:])
+
+        # base 解析不到 ⇒ rc=2（判不了，不静默跳过）；stderr 也收进断言，别让 PASS 行带噪声
         import io
         from contextlib import redirect_stderr
         errbuf = io.StringIO()
@@ -1053,7 +1081,7 @@ def _prose_teeth():
         check("base 解析不到 ⇒ rc=2（判不了）且点名 merge-base",
               rc == 2 and "merge-base" in errbuf.getvalue(), (rc, errbuf.getvalue()[-140:]))
 
-        # ⑧ git 无法执行 ⇒ rc=2（判不了），不得抛 traceback / rc=1（reviewer-21 F3）
+        # git 无法执行 ⇒ rc=2（判不了），不得抛 traceback / rc=1（reviewer-21 F3）
         old_git = globals()["GIT_BIN"]
         globals()["GIT_BIN"] = "definitely-no-such-git-binary-xyz"
         errbuf2 = io.StringIO()
