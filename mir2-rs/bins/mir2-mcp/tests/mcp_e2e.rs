@@ -419,10 +419,9 @@ fn gm_execute_roundtrips_through_admin_channel() {
 /// 失败面全是结构化错误码：缺 `chr` / 非 `@` 命令行 / 通道连不上（不 panic、不静默）。
 #[test]
 fn gm_execute_errors_are_structured() {
-    // 先占一个回环端口再立刻释放 ⇒ 大概率无人监听（不依赖固定端口）。
-    let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("bind");
-    let addr = listener.local_addr().expect("addr").to_string();
-    drop(listener);
+    // TCP 端口 0 只用于 bind 时请求内核分配临时端口，不能作为已分配端口被监听；
+    // 直接连接它可稳定走 Connect 失败，不做「先占用再释放」的 TOCTOU 端口猜测。
+    let addr = "127.0.0.1:0".to_string();
 
     let root = TempRoot::new("admin-err");
     let mut proc =
