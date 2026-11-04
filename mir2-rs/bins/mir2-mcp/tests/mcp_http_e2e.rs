@@ -602,9 +602,17 @@ fn probe_target_from_args(args: &[&str]) -> Option<SocketAddr> {
 /// 拒绝启动的**全部结论性判据**：rc=2、stderr 点名原因、无 token、无监听启动行。
 ///
 /// 这是「判启动行」的唯一显式接线：`assert_startup_rejected` 只调用本函数一次。
-/// 删掉本函数里的任何一条判据（尤其 `assert_no_listening_startup_line`）都会让
-/// `startup_rejection_path_rejects_real_listening_line` 与
-/// `startup_rejection_path_invokes_listening_line_criterion` 变红。
+/// 每条判据都有一条「删判据 ⇒ 用例红」的牙：
+/// * rc=2 → `startup_rejection_criterion_rejects_nonzero_rc`
+/// * stderr 点名 keyword → `startup_rejection_criterion_rejects_missing_keyword`
+/// * 无 token → `startup_rejection_criterion_rejects_token_leak`
+/// * 无监听启动行 → `listening_startup_line_is_rejected_by_the_criterion`（helper 自身）
+///   与 `startup_rejection_path_rejects_real_listening_line`（走本函数）
+///
+/// 接线面（「本函数真的被拒绝路径调用」）由
+/// `startup_rejection_path_invokes_listening_line_criterion` 钉住；端口探测支路的接线
+/// 由 `startup_rejection_path_invokes_port_probe` 钉住。删掉任何一条判据或接线，对应的
+/// 用例会因「该拒绝的观测没被拒绝 / 该调用的判据没被调用」而红。
 fn assert_startup_rejection(observation: &StartupObservation, keyword: &str) {
     let stderr = &observation.stderr;
     assert_eq!(
@@ -687,8 +695,32 @@ fn probe_addr_for(bind_addr: SocketAddr) -> SocketAddr {
     }
 }
 
+thread_local! {
+    /// 「端口探测」判据的调用计数（F1 接线牙）。
+    ///
+    /// 合成牙（`startup_rejection_probe_detects_live_listener` 等）只证明
+    /// `assert_port_not_listening` 自身能红，不证明 `assert_startup_rejected` 的拒绝路径
+    /// 真的调用了它。计数按线程隔离，避免并行用例互相污染。
+    static PORT_PROBE_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// 最近一次探测的 bind 地址（同一条接线牙的地址面：证明接线传的是解析出的地址）。
+    static PORT_PROBE_LAST_ADDR: std::cell::Cell<Option<SocketAddr>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// 当前线程上端口探测判据已被调用多少次（供接线牙读）。
+fn port_probe_check_count() -> usize {
+    PORT_PROBE_CHECKS.with(|count| count.get())
+}
+
+/// 当前线程上最近一次端口探测的 bind 地址（供接线牙读）。
+fn port_probe_last_addr() -> Option<SocketAddr> {
+    PORT_PROBE_LAST_ADDR.with(|addr| addr.get())
+}
+
 /// 机器判据：`bind_addr` 上没有监听面——`probe` 连不上，且回环/通配地址可重新 bind。
 fn assert_port_not_listening(bind_addr: SocketAddr, probe: SocketAddr) {
+    PORT_PROBE_CHECKS.with(|count| count.set(count.get() + 1));
+    PORT_PROBE_LAST_ADDR.with(|last| last.set(Some(bind_addr)));
     if TcpStream::connect_timeout(&probe, Duration::from_millis(750)).is_ok() {
         panic!("拒绝启动后 {probe} 仍可连接：说明进程确实监听了 {bind_addr}");
     }
@@ -900,6 +932,50 @@ fn startup_rejection_path_invokes_listening_line_criterion() {
     );
 }
 
+/// F1 接线牙（调用计数 + 地址面）：拒绝启动的**真实路径**必须对「可解析的本机 bind」
+/// 调用一次端口探测判据，且不得对解析失败的 bind 调用（不回落缺省端口）。
+///
+/// 合成牙只证明 `assert_port_not_listening` 自身能红；本用例跑一次真实拒绝启动，
+/// 证明 `assert_startup_rejected` 里的 `probe_target_from_args` 接线存在且传对了地址。
+/// 删掉整段端口探测接线（X3）⇒ 计数不增长 ⇒ 本用例红。
+#[test]
+fn startup_rejection_path_invokes_port_probe() {
+    let port = ephemeral_port();
+    let bind = format!("127.0.0.1:{port}");
+    let expected: SocketAddr = bind.parse().expect("bind 地址");
+    let before = port_probe_check_count();
+    assert_startup_rejected(
+        &["--transport", "http", "--bind", bind.as_str()],
+        &[],
+        "token",
+    );
+    assert_eq!(
+        port_probe_check_count(),
+        before + 1,
+        "拒绝启动路径必须对可解析的回环 bind 调用一次端口探测（删接线 ⇒ 本用例红）"
+    );
+    assert_eq!(
+        port_probe_last_addr(),
+        Some(expected),
+        "端口探测必须用 `--bind` 解析出的地址（接线传错地址 ⇒ 本用例红）"
+    );
+
+    // 负例（同一计数器的退化输入）：解析失败的 bind 不产生探测目标，计数不得增长。
+    // 旧实现回落 127.0.0.1:7950 会在这里多算一次（Info-3）。
+    let unparseable = format!("localhost:{port}");
+    let before_unparseable = port_probe_check_count();
+    assert_startup_rejected(
+        &["--transport", "http", "--bind", unparseable.as_str()],
+        &[("MIR2_MCP_HTTP_TOKEN", TOKEN)],
+        "IP 字面量",
+    );
+    assert_eq!(
+        port_probe_check_count(),
+        before_unparseable,
+        "解析失败的 bind 不得触发端口探测（回落缺省端口 ⇒ 本用例红）"
+    );
+}
+
 /// S2 接线牙（真生产启动行）：把真实生产格式的监听启动行喂进拒绝路径的**同一判据**，
 /// 断言它判红；去掉启动行后同一判据不假红（反向对照）。
 ///
@@ -927,6 +1003,75 @@ fn startup_rejection_path_rejects_real_listening_line() {
         stderr: "mir2-mcp: --bind 不是回环地址；拒绝启动".to_string(),
     };
     assert_startup_rejection(&without_listening_line, "回环");
+}
+
+/// F3 判据牙（rc）：rc 不是 2 的观测必须判红；rc=2 的同类观测不假红。
+///
+/// 删掉 `assert_startup_rejection` 里的 rc 断言 ⇒ 本用例红。
+#[test]
+fn startup_rejection_criterion_rejects_nonzero_rc() {
+    let rejected = StartupObservation {
+        code: Some(1),
+        stderr: "mir2-mcp: --bind 不是回环地址；拒绝启动".to_string(),
+    };
+    let outcome = std::panic::catch_unwind(|| assert_startup_rejection(&rejected, "回环"));
+    assert!(
+        outcome.is_err(),
+        "rc≠2 时判据必须判红（删 rc 断言 ⇒ 本用例红）"
+    );
+
+    // 反向对照：同一条 stderr、rc=2 ⇒ 不假红。
+    let accepted = StartupObservation {
+        code: Some(2),
+        stderr: "mir2-mcp: --bind 不是回环地址；拒绝启动".to_string(),
+    };
+    assert_startup_rejection(&accepted, "回环");
+}
+
+/// F3 判据牙（keyword）：stderr 未点名 keyword 必须判红；点名后不假红。
+///
+/// 删掉 `assert_startup_rejection` 里的 `stderr.contains(keyword)` 断言 ⇒ 本用例红。
+#[test]
+fn startup_rejection_criterion_rejects_missing_keyword() {
+    let wrong_reason = StartupObservation {
+        code: Some(2),
+        stderr: "mir2-mcp: 未知原因；拒绝启动".to_string(),
+    };
+    let outcome = std::panic::catch_unwind(|| assert_startup_rejection(&wrong_reason, "回环"));
+    assert!(
+        outcome.is_err(),
+        "stderr 未点名 keyword 时判据必须判红（删 keyword 断言 ⇒ 本用例红）"
+    );
+
+    // 反向对照：同一观测把 keyword 换成真实出现的原因 ⇒ 不假红。
+    let accepted = StartupObservation {
+        code: Some(2),
+        stderr: "mir2-mcp: 未知原因；拒绝启动".to_string(),
+    };
+    assert_startup_rejection(&accepted, "未知原因");
+}
+
+/// F3 判据牙（token）：stderr 泄漏 token 必须判红；不含 token 时不假红。
+///
+/// 删掉 `assert_startup_rejection` 里的 `!stderr.contains(TOKEN)` 断言 ⇒ 本用例红。
+#[test]
+fn startup_rejection_criterion_rejects_token_leak() {
+    let leaky = StartupObservation {
+        code: Some(2),
+        stderr: format!("mir2-mcp: --bind 不是回环地址；拒绝启动 token={TOKEN}"),
+    };
+    let outcome = std::panic::catch_unwind(|| assert_startup_rejection(&leaky, "回环"));
+    assert!(
+        outcome.is_err(),
+        "stderr 含 token 时判据必须判红（删 token 断言 ⇒ 本用例红）"
+    );
+
+    // 反向对照：去掉 token 后同一观测不假红。
+    let accepted = StartupObservation {
+        code: Some(2),
+        stderr: "mir2-mcp: --bind 不是回环地址；拒绝启动".to_string(),
+    };
+    assert_startup_rejection(&accepted, "回环");
 }
 
 /// `assert_port_not_listening` 的「回收 bind」分支负例：
