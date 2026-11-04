@@ -50,9 +50,12 @@
 //!    take-on 忽略其返回值、take-off 用返回值走 `n10=-3`（且**不清空槽位**，`:543` 的
 //!    `UseItems[btWhere]=null` 在成功分支里）。
 //! 5. **take-on 成功后会 `Desc[8]=0`**（仅当 `StdModeMap` 命中，`Operate.cs:444`）。
-//! 6. **`GetFeatureEx()` 恒等于 `MakeWord(OnHorse?HorseType:0, DressEffType)`**，而 `DressEffType`
-//!    在 oracle 里**没有任何赋值点**（`CharacterObject.cs:48` 声明，全仓无写入）⇒ 恒 0；
-//!    `SM_TAKEON_OK/TAKEOFF_OK` 的 `Param` 因此在本项目里恒 0（`feature::feature_ex`）。
+//! 6. **`GetFeatureEx()` = `MakeWord(OnHorse?HorseType:0, DressEffType)`**。oracle 里
+//!    `DressEffType` 只有声明与读取（`CharacterObject.cs:48` 声明、`:148` 读取，全仓无赋值点）
+//!    ⇒ oracle 恒 0。**T-279 偏差登记**（卡 `openmir2-t283-wings-server`）：本项目按冻结客户端
+//!    的取值契约补上来源——已装备 `ItemLocation::Dress` 模板的 `stditems.AniCount`
+//!    （槽空 / `Index == 0` / 模板缺失 / `AniCount == 0` ⇒ 0），见 [`dress_eff_of_index`]；
+//!    无翅膀角色仍为 0（A4 帧字节不变）。低位 `HorseType`（bits 0..7，骑乘）属 T-282，本模块不赋值。
 //!
 //! # 与 oracle 逐字节/逐字段相同怎么保证
 //!
@@ -355,17 +358,42 @@ pub struct TakeOnContext<'a> {
     pub disable_take_off_keys: &'a [u16],
     /// `OnHorse`。
     pub on_horse: bool,
-    /// `HorseType`。
+    /// `HorseType`（`GetFeatureEx` 的低位字节 bits 0..7；属 T-282，本模块原样透传）。
     pub horse_type: u8,
-    /// `DressEffType`（oracle 全仓无赋值 ⇒ 恒 0）。
-    pub dress_eff_type: u8,
     /// **调用前**的 `WAbil`（`CheckTakeOnItems` 读 `MaxHandWeight`/`MaxWearWeight`/`DC`/`MC`/`SC`）。
     pub wabil: &'a Ability,
 }
 
+/// **T-279**（卡 `openmir2-t283-wings-server`）：`CharacterObject.DressEffType` 的来源。
+///
+/// 已装备 `ItemLocation::Dress`（槽 0）模板的 `stditems.AniCount`；`dress_index == 0`、
+/// 模板缺失（oracle `GetStdItem == null`）或 `AniCount == 0` ⇒ 0。冻结客户端
+/// `Effectfeature(feature_ex) = Hibyte(LoWord(feature_ex))` 直接把这个字节当特效编号
+/// （`0`=无；`1..19`→`HumEffect.data`；`20..34`→`HumEffect2.data`；`>=35`→`HumEffect3.data`；
+/// `50`→`Effect.data` 特例）。
+#[must_use]
+pub fn dress_eff_of_index(catalog: &dyn ItemCatalog, dress_index: u16) -> u8 {
+    if dress_index == 0 {
+        return 0;
+    }
+    catalog.get(dress_index).map_or(0, |t| t.ani_count)
+}
+
 impl TakeOnContext<'_> {
-    fn feature_ex(&self) -> u16 {
-        feature::feature_ex(self.on_horse, self.horse_type, self.dress_eff_type)
+    /// `GetFeatureEx()`——oracle 在 `UseItems[btWhere] = userItem` + `RecalcAbilitys()` **之后**
+    /// 取值（`PlayObject.Operate.cs:458`/`:547`），故 `DressEffType` 必须按**迁移后的**
+    /// `state.use_items` 现算（T-279）；`on_horse/horse_type` 仍取调用方输入（T-282）。
+    fn feature_ex(&self, state: &EquipState) -> u16 {
+        let dress_index = state
+            .use_items
+            .get(ability::SLOT_DRESS)
+            .and_then(Option::as_ref)
+            .map_or(0, |it| it.index);
+        feature::feature_ex(
+            self.on_horse,
+            self.horse_type,
+            dress_eff_of_index(self.catalog, dress_index),
+        )
     }
 }
 
@@ -947,7 +975,7 @@ pub fn take_on(
                             frames: vec![Frame {
                                 ident: SM_TAKEON_OK,
                                 recog: f,
-                                param: ctx.feature_ex(),
+                                param: ctx.feature_ex(state),
                                 tag: 0,
                                 series: 0,
                             }],
@@ -1010,7 +1038,7 @@ pub fn take_off(
                         Frame {
                             ident: SM_TAKEOFF_OK,
                             recog: f,
-                            param: ctx.feature_ex(),
+                            param: ctx.feature_ex(state),
                             tag: 0,
                             series: 0,
                         },
@@ -1236,7 +1264,6 @@ mod tests {
             disable_take_off_keys: leaked,
             on_horse: c["on_horse"].as_bool().unwrap(),
             horse_type: u8v(&c["horse_type"]),
-            dress_eff_type: u8v(&c["dress_eff_type"]),
             wabil,
         }
     }
@@ -1449,7 +1476,6 @@ mod tests {
             disable_take_off_keys: &[],
             on_horse: false,
             horse_type: 0,
-            dress_eff_type: 0,
             wabil: &wabil,
         };
         let mut state = EquipState {
@@ -2171,5 +2197,100 @@ mod tests {
         // `NoWeightSink` 形态与不带 sink 的包装等价（返回值一致）。
         assert!(add_item_to_bag(&mut items, BagItem::new(4, 9), 3));
         assert!(!add_item_to_bag(&mut items, BagItem::new(5, 9), 3));
+    }
+
+    /// **T-279**（卡 `openmir2-t283-wings-server`）：`DressEffType` = 已装备 Dress 槽模板的
+    /// `stditems.AniCount`；`SM_TAKEON_OK/TAKEOFF_OK` 的 `Param`（bits 8..15）随之变化。
+    ///
+    /// 红检：把 `TakeOnContext::feature_ex` 里的 `dress_eff_of_index(...)` 换回常量 0 ⇒
+    /// 雷霆战甲用例的 `param == 15 << 8` 红；把 `take_off` 的 state 传成迁移前快照 ⇒ 卸下用例红。
+    #[test]
+    fn dress_eff_follows_equipped_dress_ani_count() {
+        let mut cat = ability::StdItemCatalog::new();
+        cat.insert(
+            127,
+            mir2_data::StdItem {
+                name: "雷霆战甲(男)".into(),
+                std_mode: 10,
+                shape: 9,
+                ani_count: 15,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        cat.insert(
+            97,
+            mir2_data::StdItem {
+                name: "布衣(男)".into(),
+                std_mode: 10,
+                shape: 1,
+                // `AniCount = 0`：无翅膀 ⇒ 既有 0 值契约（A4）。
+                ani_count: 0,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let wabil = Ability {
+            max_hand_weight: 100,
+            max_wear_weight: 100,
+            ..Ability::default()
+        };
+        let ctx = TakeOnContext {
+            catalog: &cat,
+            job: 0,
+            gender: 0,
+            hair: 0,
+            abil_level: 10,
+            re_level: 0,
+            credit_point: 0,
+            member_type: 0,
+            member_level: 0,
+            has_guild: false,
+            guild_rank_no: 0,
+            is_castle_member: false,
+            user_unlock_durg: false,
+            dealing: false,
+            disable_take_off_keys: &[],
+            on_horse: false,
+            horse_type: 0,
+            wabil: &wabil,
+        };
+
+        // ① 装备翅膀衣服：AniCount=15 ⇒ OK 帧 Param 高字节（bits 8..15）= 15。
+        let mut state = EquipState {
+            use_items: vec![None; USE_ITEMS_LEN],
+            item_list: vec![BagItem::new(1, 127)],
+        };
+        let on = take_on(&mut state, &ctx, 0, 1, "雷霆战甲(男)");
+        assert_eq!(on.code, 1, "雷霆战甲穿上成功");
+        // `GetFeatureEx = MakeWord(horse, DressEffType)` ⇒ DressEffType 落在 bits 8..15。
+        assert_eq!(
+            on.frames[0].param,
+            15 << 8,
+            "DressEffType = AniCount = 15（bits 8..15）"
+        );
+        assert_eq!(
+            on.frames[0].param & 0x00FF,
+            0,
+            "HorseType 低位保持 0（T-282）"
+        );
+
+        // ② 卸下：槽位已清 ⇒ DressEffType 回 0。
+        let off = take_off(&mut state, &ctx, 0, 1, "雷霆战甲(男)");
+        assert_eq!(off.code, 0);
+        assert_eq!(off.frames[0].param, 0, "卸下后 DressEffType 回 0");
+
+        // ③ 无翅膀衣服：AniCount=0 ⇒ 0（与既有帧逐字节相同）。
+        let mut plain = EquipState {
+            use_items: vec![None; USE_ITEMS_LEN],
+            item_list: vec![BagItem::new(2, 97)],
+        };
+        let b = take_on(&mut plain, &ctx, 0, 2, "布衣(男)");
+        assert_eq!(b.code, 1);
+        assert_eq!(b.frames[0].param, 0, "无翅膀仍发 0（A4）");
+
+        // ④ 直接口径：槽空 / Index==0 / 模板缺失 ⇒ 0。
+        assert_eq!(dress_eff_of_index(&cat, 0), 0);
+        assert_eq!(dress_eff_of_index(&cat, 97), 0);
+        assert_eq!(dress_eff_of_index(&cat, 127), 15);
+        assert_eq!(dress_eff_of_index(&cat, 65_000), 0, "模板缺失 ⇒ 0");
     }
 }

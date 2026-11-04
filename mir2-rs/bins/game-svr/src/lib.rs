@@ -2469,7 +2469,18 @@ fn apply_pending_gm_feature_changed(
         .collect();
     let feature =
         game_svr::ability::equipped_feature(catalog, &use_inst, sg.equip.gender, sg.equip.hair);
-    let feature_ex = game_svr::feature::feature_ex(sg.gm.on_horse, sg.gm.horse_type, 0);
+    // **T-279**：`DressEffType`（bits 8..15）按当前装备现算；`OnHorse/HorseType`
+    // （bits 0..7）原样（T-282）。
+    let dress_index = sg
+        .use_items
+        .get(game_svr::ability::SLOT_DRESS)
+        .and_then(Option::as_ref)
+        .map_or(0, |it| it.index);
+    let feature_ex = game_svr::feature::feature_ex(
+        sg.gm.on_horse,
+        sg.gm.horse_type,
+        game_svr::bag::dress_eff_of_index(catalog, dress_index),
+    );
     broadcast_feature_changed(
         world,
         online,
@@ -4537,7 +4548,6 @@ fn handle_bag_cmd_with_magic(
         disable_take_off_keys: &[],
         on_horse: false,
         horse_type: 0,
-        dress_eff_type: 0,
         wabil: &sg.state.wabil,
     };
     let out = if ident == game_svr::bag::CM_TAKEONITEM {
@@ -4701,6 +4711,20 @@ fn handle_bag_cmd_with_magic(
             .collect();
         let feature =
             game_svr::ability::equipped_feature(catalog, &use_inst, sg.equip.gender, sg.equip.hair);
+        // **T-279**：`DressEffType` = 已装备 Dress 槽模板的 `stditems.AniCount`
+        // （槽空 / `Index == 0` / 模板缺失 ⇒ 0）。它在 `GetFeatureEx = MakeWord(horse, eff)`
+        // 里占 **bits 8..15**；`OnHorse/HorseType`（bits 0..7）仍按本路径原口径 0
+        // （骑乘属 T-282，本卡不动；低位为 0 时帧与现状逐字节相同）。
+        let dress_index = sg
+            .use_items
+            .get(game_svr::ability::SLOT_DRESS)
+            .and_then(Option::as_ref)
+            .map_or(0, |it| it.index);
+        let feature_ex = game_svr::feature::feature_ex(
+            false,
+            0,
+            game_svr::bag::dress_eff_of_index(catalog, dress_index),
+        );
         let light_pairs: Vec<(u16, u16)> = sg
             .use_items
             .iter()
@@ -4715,6 +4739,9 @@ fn handle_bag_cmd_with_magic(
         if let Some(mut d) = displays.get(sg.actor_id).cloned() {
             d.feature = feature;
             d.light = light;
+            // `SM_TURN`/41 的 `ActorDisplay.FeatureEx` 也必须是新值，否则观察者下一次
+            // `SM_TURN` 会拿旧 `DressEffType` 覆盖客户端状态（T-279）。
+            d.feature_ex = feature_ex;
             displays.set(sg.actor_id, d);
         }
         match old_light {
@@ -4740,8 +4767,7 @@ fn handle_bag_cmd_with_magic(
             gates,
             sg.actor_id,
             feature,
-            // `GetFeatureEx()` = `MakeWord(OnHorse?HorseType:0, DressEffType)`；本宿主两者未建模 ⇒ 0。
-            game_svr::feature::feature_ex(false, 0, 0),
+            feature_ex,
             ref_msg_range,
         );
     }
@@ -7026,7 +7052,19 @@ fn handle_shop_cmd_inner(
                             sg.equip.gender,
                             sg.equip.hair,
                         );
-                        let feature_ex = game_svr::feature::feature_ex(false, 0, 0);
+                        // **T-279**：`FeatureChanged()` 携带的 `GetFeatureEx()` 的
+                        // bits 8..15 = 当前 Dress 槽 `AniCount`；bits 0..7 沿用本路径原口径 0
+                        // （T-282）。
+                        let dress_index = sg
+                            .use_items
+                            .get(game_svr::ability::SLOT_DRESS)
+                            .and_then(Option::as_ref)
+                            .map_or(0, |it| it.index);
+                        let feature_ex = game_svr::feature::feature_ex(
+                            false,
+                            0,
+                            game_svr::bag::dress_eff_of_index(catalog, dress_index),
+                        );
                         let wabil_tail = ability_tail(
                             &sg.state.wabil,
                             game_svr::smframe::client_layout_enabled(),
@@ -24099,6 +24137,24 @@ struct SessionGroundInputs<'a> {
     now: i64,
 }
 
+/// **T-279**（卡 `openmir2-t283-wings-server`）：登录/重连时 `DressEffType` 的来源。
+///
+/// `CharacterData.hum_items`（DB `characters_item` 的 13 个装备槽，保位）的
+/// `ItemLocation::Dress`（槽 0）模板 `stditems.AniCount`；槽空 / `Index == 0` / 模板缺失 ⇒ 0。
+/// 该值进 `FeatureInputs.dress_eff_type`，由 `enter` 打包成 `SM_LOGON.Tag1` 与
+/// `SM_FEATURECHANGED.Series` 的 bits 8..15。重连 = 重新读档后走同一函数，不新增角色列。
+#[must_use]
+fn dress_eff_from_hum_items(
+    hum_items: Option<&[Option<record::ServerUserItem>]>,
+    catalog: &dyn game_svr::ability::ItemCatalog,
+) -> u8 {
+    let dress_index = hum_items
+        .and_then(|items| items.get(game_svr::ability::SLOT_DRESS))
+        .and_then(Option::as_ref)
+        .map_or(0, |item| item.index);
+    game_svr::bag::dress_eff_of_index(catalog, dress_index)
+}
+
 fn session_ground_from_login(i: SessionGroundInputs<'_>) -> SessionGround {
     let d = i.record;
     let out = i.recalc;
@@ -27067,6 +27123,14 @@ fn sim_loop(
                                                 for w in shape_warns {
                                                     glog!("WRN", "入图帧输入：{w}");
                                                 }
+                                                // **T-279**：`DressEffType` = `hum_items` 的 Dress 槽模板
+                                                // `stditems.AniCount`（槽空/模板缺失 ⇒ 0）。重连重新读档
+                                                // 后按同一函数现算，不新增角色列（落库载体 = 既有
+                                                // `characters_item` 的 Dress 行）。
+                                                let login_dress_eff = dress_eff_from_hum_items(
+                                                    data.and_then(|d| d.hum_items.as_deref()),
+                                                    &enter_cfg.catalog,
+                                                );
                                                 // 帧 50/41/213 的输入（`PlayObject.SendLogon()`，
                                                 // `PlayObject.cs:1128-1147`）：同组连发三条，缺则三条一起跳过。
                                                 //
@@ -27087,11 +27151,12 @@ fn sim_loop(
                                                         weapon_shape,
                                                         gender: d.sex,
                                                         hair: d.hair,
-                                                        // `CharacterObject.DressEffType`/`HorseType` 在 oracle
-                                                        // 全仓无赋值点（`feature.rs` 模块文档已记）⇒ 0。
+                                                        // `DressEffType` 来源 = 已装备 Dress 槽模板
+                                                        // `AniCount`（T-279）；`OnHorse/HorseType` 登录态
+                                                        // 未建模（T-282）⇒ 0。
                                                         on_horse: false,
                                                         horse_type: 0,
-                                                        dress_eff_type: 0,
+                                                        dress_eff_type: login_dress_eff,
                                                     },
                                                     // `GetCharStatus()` = `ActorBuffSystem.GetBuffStatus()
                                                     // | (CharStatusEx & 0xFFFF)`；会话初生无 buff、`CharStatusEx=0`
@@ -86925,5 +86990,273 @@ mod level_rank_request_tests {
             args.contains("&gates"),
             "必须经网关路由回请求者（实参：{args}）"
         );
+    }
+}
+
+#[cfg(test)]
+mod t279_dress_eff_tests {
+    use super::*;
+    use crate::tests::test_session_ground;
+
+    /// **T-279 重连口径**：`dress_eff_from_hum_items` 从 DB 装备槽（`characters_item` 的
+    /// `hum_items`）现算；槽空/`Index==0`/无 AniCount ⇒ 0。重连不依赖新增列。
+    #[test]
+    fn t279_login_dress_eff_reads_hum_items_dress_slot() {
+        let mut cat = game_svr::ability::StdItemCatalog::new();
+        cat.insert(
+            127,
+            mir2_data::StdItem {
+                name: "雷霆战甲(男)".into(),
+                std_mode: 10,
+                shape: 9,
+                ani_count: 15,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        cat.insert(
+            97,
+            mir2_data::StdItem {
+                name: "布衣(男)".into(),
+                std_mode: 10,
+                shape: 1,
+                ani_count: 0,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let item = |index: u16| record::ServerUserItem {
+            make_index: 0,
+            index,
+            dura: 0,
+            dura_max: 0,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        };
+        let mut items: Vec<Option<record::ServerUserItem>> =
+            vec![None; game_svr::ability::USE_ITEMS_LEN];
+        items[game_svr::ability::SLOT_DRESS] = Some(item(127));
+        assert_eq!(
+            dress_eff_from_hum_items(Some(&items), &cat),
+            15,
+            "DB Dress 槽 AniCount=15 ⇒ 重连 DressEffType=15"
+        );
+        items[game_svr::ability::SLOT_DRESS] = Some(item(97));
+        assert_eq!(
+            dress_eff_from_hum_items(Some(&items), &cat),
+            0,
+            "无翅膀 ⇒ 0"
+        );
+        items[game_svr::ability::SLOT_DRESS] = None;
+        assert_eq!(dress_eff_from_hum_items(Some(&items), &cat), 0, "空槽 ⇒ 0");
+        assert_eq!(dress_eff_from_hum_items(None, &cat), 0, "无 hum_items ⇒ 0");
+    }
+
+    /// **T-279 接线保鲜**：登录路径必须把 `dress_eff_from_hum_items` 的结果写进
+    /// `FeatureInputs.dress_eff_type`（改回常量 0 ⇒ 本用例红）。
+    #[test]
+    fn t279_login_wiring_uses_hum_items_helper() {
+        let src = include_str!("lib.rs");
+        // 拆开字面量 ⇒ 本测试自身源码不会命中锚串（同仓既有 `concat!` 惯例）。
+        let field = concat!("dress_eff_type: login_", "dress_eff,");
+        assert_eq!(
+            src.matches(field).count(),
+            1,
+            "登录 FeatureInputs 必须接 `login_dress_eff`"
+        );
+        let call = concat!("let login_dress_eff = dress_eff_", "from_hum_items(");
+        assert!(
+            src.contains(call),
+            "login_dress_eff 必须来自 hum_items 现算"
+        );
+    }
+
+    /// **T-279 / 卡 `openmir2-t283-wings-server`**：`CM_TAKEONITEM`/`CM_TAKEOFFITEM` 的
+    /// `GetFeatureEx()` bits 8..15（`DressEffType`）= 已装备 Dress 槽模板的 `stditems.AniCount`。
+    ///
+    /// 覆盖 A3/A4：
+    /// - 装备翅膀衣服（`AniCount=15`）⇒ `SM_TAKEON_OK(615).Param == 0x0F00`、
+    ///   `SM_FEATURECHANGED(41).Series == 0x0F00`，展示表 `FeatureEx` 同步
+    ///   （观察者后续 `SM_TURN` 不拿旧值覆盖）；低位（HorseType，bits 0..7）仍 0。
+    /// - 卸下 ⇒ `SM_TAKEOFF_OK(619).Param == 0`、41 `Series == 0`。
+    /// - 无翅膀衣服（`AniCount=0`）⇒ 两条帧仍为 0（既有 0 值契约逐字节不变）。
+    ///
+    /// 红检（变异自证）：把 `dress_eff_of_index` 的两个生产调用点改回常量 0 ⇒ 翅膀用例的
+    /// `param/series/display.feature_ex == 0x0F00` 三处全红；把 41 广播换回
+    /// `feature_ex(false, 0, 0)` ⇒ `series` 断言红；删展示表 `d.feature_ex = feature_ex`
+    /// ⇒ 展示表断言红。
+    #[test]
+    fn t279_dress_eff_wired_through_bag_cmd_and_display() {
+        use std::collections::HashMap;
+
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            127,
+            mir2_data::StdItem {
+                name: "雷霆战甲(男)".into(),
+                std_mode: 10,
+                shape: 9,
+                ani_count: 15,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        catalog.insert(
+            97,
+            mir2_data::StdItem {
+                name: "布衣(男)".into(),
+                std_mode: 10,
+                shape: 1,
+                ani_count: 0,
+                ..mir2_data::StdItem::default()
+            },
+        );
+
+        let mut sg = test_session_ground(42);
+        sg.state.item_list = vec![
+            game_svr::bag::BagItem::new(60001, 127),
+            game_svr::bag::BagItem::new(60002, 97),
+        ];
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".into(), sg);
+
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 42,
+            },
+        );
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut world = mir2_world::World::new(8, 8);
+        world.add_entity(mir2_world::Entity::new(42, "hero", 10, 10));
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            42,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, enter::PLAY_NAME_COLOR, Vec::new()),
+        );
+
+        let drain =
+            |rx0: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<mir2_protocol::frame::CommandMessage> {
+                let mut out = Vec::new();
+                while let Ok(ev) = rx0.try_recv() {
+                    if let SimToGate::SendFrame { body, .. } = ev {
+                        out.push(
+                            mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                                .expect("frame >= 12B"),
+                        );
+                    }
+                }
+                out
+            };
+        let find = |frames: &[mir2_protocol::frame::CommandMessage], ident: u16| {
+            *frames
+                .iter()
+                .find(|cm| cm.ident == ident)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "缺 ident={ident}；实际 {:?}",
+                        frames.iter().map(|c| c.ident).collect::<Vec<_>>()
+                    )
+                })
+        };
+
+        // ① 装备翅膀：make_index=60001（Recog）、param=0（Dress 槽）。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEONITEM,
+            60001,
+            0,
+            0,
+            Some("雷霆战甲(男)"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &mut displays,
+            12,
+            false,
+            true,
+        );
+        let frames = drain(&mut rx0);
+        let ok = find(&frames, game_svr::bag::SM_TAKEON_OK);
+        // `GetFeatureEx = MakeWord(horse, DressEffType)` ⇒ DressEffType = bits 8..15。
+        assert_eq!(
+            ok.param,
+            15 << 8,
+            "DressEffType = AniCount = 15（bits 8..15）"
+        );
+        assert_eq!(ok.param & 0x00FF, 0, "HorseType 低位保持 0（T-282）");
+        let fc = find(&frames, 41);
+        assert_eq!(
+            fc.series,
+            15 << 8,
+            "SM_FEATURECHANGED.Series = GetFeatureEx()"
+        );
+        assert_eq!(
+            displays.get(42).map(|d| d.feature_ex),
+            Some(15 << 8),
+            "展示表 FeatureEx 必须同步（否则观察者 SM_TURN 拿旧值）"
+        );
+
+        // ② 卸下：DressEffType 回 0。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEOFFITEM,
+            60001,
+            0,
+            0,
+            Some("雷霆战甲(男)"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &mut displays,
+            12,
+            false,
+            true,
+        );
+        let frames = drain(&mut rx0);
+        let off = find(&frames, game_svr::bag::SM_TAKEOFF_OK);
+        assert_eq!(off.param, 0, "卸下 ⇒ DressEffType 回 0");
+        let fc = find(&frames, 41);
+        assert_eq!(fc.series, 0);
+        assert_eq!(displays.get(42).map(|d| d.feature_ex), Some(0));
+
+        // ③ 无翅膀衣服：AniCount=0 ⇒ 0（A4：与现状逐字节相同的 0 值）。
+        handle_bag_cmd(
+            game_svr::bag::CM_TAKEONITEM,
+            60002,
+            0,
+            0,
+            Some("布衣(男)"),
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &mut displays,
+            12,
+            false,
+            true,
+        );
+        let frames = drain(&mut rx0);
+        let ok = find(&frames, game_svr::bag::SM_TAKEON_OK);
+        assert_eq!(ok.param, 0, "无翅膀仍发 0（A4）");
+        let fc = find(&frames, 41);
+        assert_eq!(fc.series, 0, "无翅膀 41 Series 仍 0（A4）");
     }
 }
