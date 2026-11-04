@@ -237,6 +237,9 @@ pub struct ActorDisplay {
     pub name_color: u8,
     /// `GetShowName()` 的 GBK 字节（帧 42 `SM_USERNAME` 用的是同一份）。
     pub show_name: Vec<u8>,
+    /// **T-277**：骑乘 `mount_id`（0 = 未骑马）。只在 AOI 出现帧里追加独立帧
+    /// `SM_MOUNTRIDE(1118)`（见 [`appear_frames`]），**不进入** `feature_ex`（A4）。
+    pub mount_id: u8,
 }
 
 /// `PlayObject._dir` 字段尚未进 `crates/world`，这里由进世界时的记录值初始化；
@@ -262,7 +265,15 @@ impl ActorDisplay {
             status,
             name_color,
             show_name,
+            mount_id: 0,
         }
+    }
+
+    /// **T-277**：带骑乘 `mount_id` 的展示表项（0 = 未骑马）。
+    #[must_use]
+    pub fn with_mount_id(mut self, mount_id: u8) -> Self {
+        self.mount_id = mount_id;
+        self
     }
 }
 
@@ -551,10 +562,15 @@ pub fn disappear_frame(target: i32) -> Vec<u8> {
 #[must_use]
 pub fn appear_frames(target: i32, x: u16, y: u16, d: &ActorDisplay, dead: bool) -> Vec<Vec<u8>> {
     if dead {
-        vec![death_frame(target, x, y, d.dir, d)]
-    } else {
-        turn_pair(target, x, y, d)
+        return vec![death_frame(target, x, y, d.dir, d)];
     }
+    let mut frames = turn_pair(target, x, y, d);
+    // **T-277**：骑乘态走独立帧；只在「真的骑着」时追加（未骑 ⇒ 帧集与 oracle 逐字节相同）。
+    // 可见性 = 本函数的调用者（AOI 观察者），与 `SendRefMsg` 同界，不发给无关玩家。
+    if d.mount_id != 0 {
+        frames.push(crate::mount::sm_mountride_body(target, d.mount_id));
+    }
+    frames
 }
 
 #[cfg(test)]
@@ -650,6 +666,7 @@ mod tests {
             status: i32::from_le_bytes(char_desc[4..8].try_into().unwrap()),
             name_color: color,
             show_name,
+            mount_id: 0,
         };
         let built = turn_pair(recog, x, y, &display);
         assert_eq!(built.len(), 2);
@@ -714,6 +731,7 @@ mod tests {
             status: i32::from_le_bytes(desc[4..8].try_into().unwrap()),
             name_color: 255,
             show_name: Vec::new(),
+            mount_id: 0,
         };
         let built = move_frame(mir2_protocol::messages::SM_WALK, recog, x, y, &d)
             .expect("SM_WALK 必须有编码器");
@@ -1132,6 +1150,40 @@ mod tests {
             u16::from_le_bytes([alive_set[0][4], alive_set[0][5]]),
             mir2_protocol::messages::SM_TURN
         );
+    }
+
+    /// **T-277**：骑乘角色在 AOI 出现帧里**追加**独立帧 `SM_MOUNTRIDE(1118)`；
+    /// 未骑乘 / 已死 ⇒ 帧集与 oracle 逐字节相同（不新增帧）。
+    ///
+    /// 红检：删 `appear_frames` 的 mount 追加 ⇒ 本用例红；把 mount 帧塞进 `feature_ex` ⇒
+    /// 41 的 Series 断言（由 `t277_horse_toggle_...` 覆盖）红。
+    #[test]
+    fn t277_appear_frames_appends_mountride_only_when_mounted() {
+        let un = w2_display();
+        assert_eq!(appear_frames(9001, 18, 20, &un, false).len(), 2);
+        let d = w2_display().with_mount_id(4);
+        let frames = appear_frames(9001, 18, 20, &d, false);
+        assert_eq!(frames.len(), 3, "骑乘出现帧 = TURN + 41 + SM_MOUNTRIDE");
+        assert_eq!(
+            u16::from_le_bytes([frames[0][4], frames[0][5]]),
+            mir2_protocol::messages::SM_TURN
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[1][4], frames[1][5]]),
+            mir2_protocol::messages::SM_FEATURECHANGED
+        );
+        assert_eq!(
+            u16::from_le_bytes([frames[2][4], frames[2][5]]),
+            crate::mount::SM_MOUNTRIDE
+        );
+        assert_eq!(frames[2][12], 4, "尾 mount_id");
+        assert_eq!(
+            u16::from_le_bytes([frames[2][13], frames[2][14]]),
+            9001u16,
+            "尾 actor_id u16 LE"
+        );
+        // 已死：只发 SM_DEATH（不追加骑乘帧）。
+        assert_eq!(appear_frames(9001, 18, 20, &d, true).len(), 1);
     }
 
     /// **T-154 F1 判据（真机锚，`downlink` 层）**：固定 NPC 的**转身帧**必须与
