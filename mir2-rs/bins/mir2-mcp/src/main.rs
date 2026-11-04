@@ -23,6 +23,7 @@ mod server;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
+use std::time::Duration;
 
 use rmcp::transport::stdio;
 use rmcp::ServiceExt;
@@ -30,12 +31,22 @@ use rmcp::ServiceExt;
 use crate::conf::AppConfig;
 use crate::server::Mir2Mcp;
 
+/// 并发连接上限缺省值（可用 `--max-connections` 覆盖）。
+const DEFAULT_MAX_CONNECTIONS: usize = 64;
+/// 并发连接上限允许区间。
+const MAX_CONNECTIONS_RANGE: std::ops::RangeInclusive<usize> = 1..=4096;
+/// 请求头读超时缺省值（毫秒，可用 `--header-timeout-ms` 覆盖）。
+const DEFAULT_HEADER_TIMEOUT_MS: u64 = 10_000;
+/// 请求头读超时允许区间（毫秒）。
+const HEADER_TIMEOUT_MS_RANGE: std::ops::RangeInclusive<u64> = 1..=600_000;
+
 const USAGE: &str = "\
 mir2-mcp — OpenMir2 的本地 MCP 服务（stdio 为缺省传输；可选 opt-in Streamable HTTP）
 
 用法:
   mir2-mcp [--root <目录>] [--registry <gm_registry.json>]
            [--transport stdio|http] [--bind <ip:port>] [--token-file <文件>]
+           [--max-connections <n>] [--header-timeout-ms <ms>]
 
 选项:
   --root <目录>         MirServer 根目录（含 M2GameSvr/Server.conf）；
@@ -43,9 +54,14 @@ mir2-mcp — OpenMir2 的本地 MCP 服务（stdio 为缺省传输；可选 opt-
   --registry <文件>     gm_list 改为实读该 gm_registry.json（缺省用编译期嵌入副本）
   --transport <t>       stdio（缺省，不监听任何端口）或 http（opt-in Streamable HTTP）
   --bind <ip:port>      http 模式监听地址；缺省 127.0.0.1:7950；
-                        只接受回环 IP 字面量（127.0.0.0/8 或 ::1），非回环拒绝启动
+                        只接受回环 IP 字面量（127.0.0.0/8 或 ::1），非回环拒绝启动；
+                        端口写 0 表示由系统分配，实际端口打印在启动行里
   --token-file <文件>   http 模式 Bearer token 文件（内容去首尾空白）；
                         env MIR2_MCP_HTTP_TOKEN 亦可，--token-file 优先
+  --max-connections <n> http 模式并发连接上限（缺省 64，1..=4096）；超出直接关闭新连接
+  --header-timeout-ms <ms>
+                        http 模式请求头读取超时（缺省 10000，1..=600000）；
+                        窗口内未发完请求头的连接被关闭
   -h, --help            打印本帮助
   --version             打印版本
 
@@ -58,11 +74,16 @@ mir2-mcp — OpenMir2 的本地 MCP 服务（stdio 为缺省传输；可选 opt-
 传输: stdio（缺省，不监听端口）或 http（只监听回环，必须配 Bearer token）
 ";
 
-/// `Cli::RunHttp` 的运行配置：`app` 与 stdio 共用，另加回环监听地址与 Bearer token。
+/// `Cli::RunHttp` 的运行配置：`app` 与 stdio 共用，另加回环监听地址、Bearer token
+/// 与连接层资源护栏（并发上限、请求头读超时）。
 pub struct HttpConfig {
     pub app: AppConfig,
     pub bind: SocketAddr,
     pub token: String,
+    /// 并发连接上限（超出的新连接立即关闭）。
+    pub max_connections: usize,
+    /// 请求头读取超时（窗口内未发完请求头的连接被关闭）。
+    pub header_timeout: Duration,
 }
 
 /// 手写 Debug：token **永不以明文出现**（不打印、不进日志）。
@@ -72,6 +93,8 @@ impl std::fmt::Debug for HttpConfig {
             .field("app", &self.app)
             .field("bind", &self.bind)
             .field("token", &"<redacted>")
+            .field("max_connections", &self.max_connections)
+            .field("header_timeout", &self.header_timeout)
             .finish()
     }
 }
@@ -152,6 +175,8 @@ fn parse_args_with_env(
     let mut transport: Option<String> = None;
     let mut bind: Option<String> = None;
     let mut token_file: Option<PathBuf> = None;
+    let mut max_connections: Option<String> = None;
+    let mut header_timeout_ms: Option<String> = None;
     let mut args = args.peekable();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -172,6 +197,12 @@ fn parse_args_with_env(
             "--token-file" => {
                 token_file = Some(next_value(&mut args, "--token-file")?.into());
             }
+            "--max-connections" => {
+                max_connections = Some(next_value(&mut args, "--max-connections")?);
+            }
+            "--header-timeout-ms" => {
+                header_timeout_ms = Some(next_value(&mut args, "--header-timeout-ms")?);
+            }
             other if other.starts_with("--root=") => {
                 root = Some(value_after_eq(other, "--root")?.into());
             }
@@ -187,6 +218,12 @@ fn parse_args_with_env(
             other if other.starts_with("--token-file=") => {
                 token_file = Some(value_after_eq(other, "--token-file")?.into());
             }
+            other if other.starts_with("--max-connections=") => {
+                max_connections = Some(value_after_eq(other, "--max-connections")?);
+            }
+            other if other.starts_with("--header-timeout-ms=") => {
+                header_timeout_ms = Some(value_after_eq(other, "--header-timeout-ms")?);
+            }
             other => return Err(format!("未知参数 `{other}`")),
         }
     }
@@ -200,9 +237,13 @@ fn parse_args_with_env(
     let transport = transport.unwrap_or_else(|| "stdio".to_string());
     match transport.as_str() {
         "stdio" => {
-            if bind.is_some() || token_file.is_some() {
+            if bind.is_some()
+                || token_file.is_some()
+                || max_connections.is_some()
+                || header_timeout_ms.is_some()
+            {
                 return Err(
-                    "--bind / --token-file 只在 --transport http 下有效（缺省传输是 stdio）"
+                    "--bind / --token-file / --max-connections / --header-timeout-ms 只在 --transport http 下有效（缺省传输是 stdio）"
                         .to_string(),
                 );
             }
@@ -214,10 +255,20 @@ fn parse_args_with_env(
                 None => parse_bind("127.0.0.1:7950")?,
             };
             let token = resolve_token(token_file.as_deref(), env_token)?;
+            let max_connections = match max_connections {
+                Some(value) => parse_max_connections(&value)?,
+                None => DEFAULT_MAX_CONNECTIONS,
+            };
+            let header_timeout = match header_timeout_ms {
+                Some(value) => Duration::from_millis(parse_header_timeout_ms(&value)?),
+                None => Duration::from_millis(DEFAULT_HEADER_TIMEOUT_MS),
+            };
             Ok(Cli::RunHttp(HttpConfig {
                 app: config,
                 bind,
                 token,
+                max_connections,
+                header_timeout,
             }))
         }
         other => Err(format!("--transport 只接受 `stdio` 或 `http`：{other:?}")),
@@ -228,6 +279,7 @@ fn parse_args_with_env(
 ///
 /// 主机名（含 `localhost`）不接受——避免依赖 DNS/解析歧义；非回环（`0.0.0.0`、局域网/公网 IP）
 /// 在**启动前**直接拒绝：HTTP 传输能执行 GM 命令，绝不能暴露到本机之外。
+/// 端口 `0` 合法：由系统分配实际端口，启动行打印解析后的地址（e2e 据此取端口，避免先绑后放的 TOCTOU）。
 fn parse_bind(value: &str) -> Result<SocketAddr, String> {
     let addr: SocketAddr = value.trim().parse().map_err(|_| {
         format!("--bind 不是合法的 `ip:port`（只接受 IP 字面量，不接受主机名）：{value:?}")
@@ -238,6 +290,36 @@ fn parse_bind(value: &str) -> Result<SocketAddr, String> {
         ));
     }
     Ok(addr)
+}
+
+/// `--max-connections`：并发连接上限，`1..=4096`。
+fn parse_max_connections(value: &str) -> Result<usize, String> {
+    let parsed: usize = value.trim().parse().map_err(|_| {
+        format!("--max-connections 不是合法的十进制整数：{value:?}（允许 1..=4096）")
+    })?;
+    if !MAX_CONNECTIONS_RANGE.contains(&parsed) {
+        return Err(format!(
+            "--max-connections {parsed} 超出允许区间 {}..={}",
+            MAX_CONNECTIONS_RANGE.start(),
+            MAX_CONNECTIONS_RANGE.end()
+        ));
+    }
+    Ok(parsed)
+}
+
+/// `--header-timeout-ms`：请求头读超时（毫秒），`1..=600000`。
+fn parse_header_timeout_ms(value: &str) -> Result<u64, String> {
+    let parsed: u64 = value.trim().parse().map_err(|_| {
+        format!("--header-timeout-ms 不是合法的十进制整数：{value:?}（允许 1..=600000 毫秒）")
+    })?;
+    if !HEADER_TIMEOUT_MS_RANGE.contains(&parsed) {
+        return Err(format!(
+            "--header-timeout-ms {parsed} 超出允许区间 {}..={}",
+            HEADER_TIMEOUT_MS_RANGE.start(),
+            HEADER_TIMEOUT_MS_RANGE.end()
+        ));
+    }
+    Ok(parsed)
 }
 
 /// Bearer token：`--token-file`（内容去首尾空白）> env `MIR2_MCP_HTTP_TOKEN`；两者都缺/为空 ⇒ 拒绝。
@@ -418,5 +500,73 @@ mod tests {
     #[test]
     fn unknown_transport_rejected() {
         assert!(parse_with_env(&["--transport", "sse"], Some("t")).is_err());
+    }
+
+    /// 连接层护栏的缺省值：并发上限 64、请求头读超时 10000ms。
+    #[test]
+    fn http_resource_limit_defaults() {
+        let Ok(Cli::RunHttp(config)) = parse_with_env(&["--transport", "http"], Some("t")) else {
+            panic!("应解析为 RunHttp");
+        };
+        assert_eq!(config.max_connections, 64);
+        assert_eq!(config.header_timeout, Duration::from_millis(10_000));
+    }
+
+    /// 连接层护栏可由 CLI 覆盖（e2e 用 `--max-connections 2` / 小超时驱动）。
+    #[test]
+    fn http_resource_limits_are_overridable() {
+        let Ok(Cli::RunHttp(config)) = parse_with_env(
+            &[
+                "--transport",
+                "http",
+                "--max-connections",
+                "2",
+                "--header-timeout-ms=300",
+            ],
+            Some("t"),
+        ) else {
+            panic!("应解析为 RunHttp");
+        };
+        assert_eq!(config.max_connections, 2);
+        assert_eq!(config.header_timeout, Duration::from_millis(300));
+    }
+
+    /// 越界/非数字的护栏值 ⇒ 启动前拒绝，错误点名参数。
+    #[test]
+    fn http_rejects_invalid_resource_limits() {
+        for bad in ["0", "4097", "-1", "many", ""] {
+            let err = parse_with_env(
+                &["--transport", "http", "--max-connections", bad],
+                Some("t"),
+            )
+            .expect_err("非法并发上限必须拒绝");
+            assert!(err.contains("--max-connections"), "{err}");
+        }
+        for bad in ["0", "600001", "-5", "slow"] {
+            let err = parse_with_env(
+                &["--transport", "http", "--header-timeout-ms", bad],
+                Some("t"),
+            )
+            .expect_err("非法请求头超时必须拒绝");
+            assert!(err.contains("--header-timeout-ms"), "{err}");
+        }
+    }
+
+    /// 连接层护栏只属于 http 传输：stdio 下给出 ⇒ 拒绝（与 --bind/--token-file 同口径）。
+    #[test]
+    fn stdio_rejects_http_only_resource_flags() {
+        assert!(parse_with_env(&["--max-connections", "2"], None).is_err());
+        assert!(parse_with_env(&["--header-timeout-ms", "300"], None).is_err());
+    }
+
+    /// `--bind` 的端口可以为 0（系统分配），启动行再打印实际端口。
+    #[test]
+    fn http_accepts_zero_port_bind() {
+        let Ok(Cli::RunHttp(config)) =
+            parse_with_env(&["--transport", "http", "--bind", "127.0.0.1:0"], Some("t"))
+        else {
+            panic!("127.0.0.1:0 应放行");
+        };
+        assert_eq!(config.bind.port(), 0);
     }
 }
