@@ -84477,14 +84477,32 @@ fn ",
             rig.sessions["hero"].gm.pending_feature_changed,
             "命令体置 pending_feature_changed"
         );
+        assert_eq!(
+            rig.sessions["hero"].gm.pending_mount_ride,
+            Some(0),
+            "命令体置 pending_mount_ride"
+        );
         rig.drain();
         assert!(!rig.sessions["hero"].gm.pending_feature_changed, "落地即清");
+        let all_frames = rig.frames();
         assert!(
-            rig.frames()
+            all_frames
                 .iter()
                 .any(|b| hdr(b.as_slice()).0 == mir2_protocol::messages::SM_FEATURECHANGED),
             "必须广播 SM_FEATURECHANGED(41)"
         );
+        // **T-277**：drain 步骤⑤b（`apply_pending_gm_mountride`）的独立牙——下马帧
+        // `SM_MOUNTRIDE(1118)` 的尾 mount_id=0；删该调用 ⇒ 本断言红。
+        let mount_frames: Vec<_> = all_frames
+            .iter()
+            .filter(|b| hdr(b.as_slice()).0 == game_svr::mount::SM_MOUNTRIDE)
+            .collect();
+        assert_eq!(
+            mount_frames.len(),
+            2,
+            "drain 步骤⑤b 必须对同屏两人广播 SM_MOUNTRIDE"
+        );
+        assert!(mount_frames.iter().all(|b| b[12] == 0), "下马 mount_id = 0");
     }
 
     /// **m1 · drain 步骤⑥（`pending_reconnect` → `ReconnectPending`）脚本桥独立牙**：
