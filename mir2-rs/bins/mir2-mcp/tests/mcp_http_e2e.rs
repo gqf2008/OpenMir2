@@ -60,8 +60,40 @@ impl Drop for TempRoot {
     }
 }
 
-/// 占一个回环端口再释放（不依赖固定端口，CI 可并行）。
-fn free_port() -> u16 {
+/// 启动行前缀（与服务端 `http::serve` 的 eprintln! 逐字一致）。
+const LISTENING_PREFIX: &str = "mir2-mcp: HTTP 传输监听 ";
+
+/// 从启动行解析实际监听地址：`mir2-mcp: HTTP 传输监听 http://127.0.0.1:<port>/mcp（…）`。
+///
+/// 只认回环地址（服务端本就只 bind 回环；解析层再拒一次，避免测试把非回环当成自己人）。
+fn parse_listening_addr(line: &str) -> Option<SocketAddr> {
+    let rest = line.strip_prefix(LISTENING_PREFIX)?;
+    let url = rest.strip_prefix("http://")?;
+    let authority = url.split('/').next()?;
+    let addr: SocketAddr = authority.parse().ok()?;
+    addr.ip().is_loopback().then_some(addr)
+}
+
+/// 等启动行出现并解析出实际端口（子进程 `--bind ...:0`，端口由系统分配）。
+fn wait_for_listening_addr(rx: &Receiver<String>, within: Duration) -> SocketAddr {
+    let deadline = Instant::now() + within;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        assert!(!remaining.is_zero(), "等待启动行超时");
+        let line = rx.recv_timeout(remaining).expect("等待启动行超时");
+        if let Some(addr) = parse_listening_addr(&line) {
+            return addr;
+        }
+    }
+}
+
+/// 取一个「当前空闲」的回环端口——**只用于启动前就被拒绝的负例**（子进程在 bind 之前
+/// 以 rc=2 退出，因此不存在「取端口 → 子进程 bind」的竞争窗口；用例还会立刻把它重新绑回来
+/// 证明没有残留监听）。
+///
+/// 真正要监听的服务一律用 `--bind 127.0.0.1:0` 并由启动行解析实际端口（见
+/// [`HttpServer::start_with`]）：那是「先绑后放」TOCTOU 的正解。
+fn ephemeral_port() -> u16 {
     let listener = TcpListener::bind(("127.0.0.1", 0)).expect("bind ephemeral");
     listener.local_addr().expect("addr").port()
 }
@@ -171,6 +203,17 @@ fn http_request(
     session: Option<&str>,
     body: &str,
 ) -> HttpResponse {
+    http_request_with_host(addr, &addr.to_string(), authorization, session, body)
+}
+
+/// 同 [`http_request`]，但 `Host` 头可指定（用于 Host 白名单的负例/正例）。
+fn http_request_with_host(
+    addr: SocketAddr,
+    host: &str,
+    authorization: Option<&str>,
+    session: Option<&str>,
+    body: &str,
+) -> HttpResponse {
     let mut stream =
         TcpStream::connect_timeout(&addr, Duration::from_secs(5)).expect("连接 HTTP 服务");
     stream
@@ -180,7 +223,7 @@ fn http_request(
         .set_write_timeout(Some(Duration::from_secs(5)))
         .expect("写超时");
     let mut request = format!(
-        "POST /mcp HTTP/1.0\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+        "POST /mcp HTTP/1.0\r\nHost: {host}\r\nContent-Type: application/json\r\n\
          Accept: application/json, text/event-stream\r\nContent-Length: {}\r\n",
         body.len()
     );
@@ -225,7 +268,15 @@ struct HttpServer {
 }
 
 impl HttpServer {
-    fn start(root: &Path, port: u16, trace: bool) -> Self {
+    fn start(root: &Path, trace: bool) -> Self {
+        Self::start_with(root, "127.0.0.1", &[], trace)
+    }
+
+    /// 真起子进程：`--bind <ip>:0` 由系统分配端口，再解析 stderr 启动行取实际端口。
+    ///
+    /// 这样测试内不再需要「先 bind 取端口 → 释放 → 交给子进程 bind」的窗口，
+    /// 并发跑用例时不会互相抢端口（`os error 10048`）。
+    fn start_with(root: &Path, bind_ip: &str, extra_args: &[&str], trace: bool) -> Self {
         let mut command = Command::new(EXE);
         command
             .arg("--root")
@@ -233,7 +284,8 @@ impl HttpServer {
             .arg("--transport")
             .arg("http")
             .arg("--bind")
-            .arg(format!("127.0.0.1:{port}"))
+            .arg(format!("{bind_ip}:0"))
+            .args(extra_args)
             .env("MIR2_MCP_HTTP_TOKEN", TOKEN)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -251,15 +303,10 @@ impl HttpServer {
                 }
             }
         });
-        let addr: SocketAddr = format!("127.0.0.1:{port}").parse().expect("addr");
-        let deadline = Instant::now() + Duration::from_secs(10);
-        loop {
-            if TcpStream::connect_timeout(&addr, Duration::from_millis(200)).is_ok() {
-                break;
-            }
-            assert!(Instant::now() < deadline, "HTTP 服务 10s 内未监听 {addr}");
-            std::thread::sleep(Duration::from_millis(20));
-        }
+        let addr = wait_for_listening_addr(&stderr_rx, Duration::from_secs(10));
+        // 启动行在 `TcpListener::bind`（= bind + listen）之后才打印，因此能解析出地址
+        // 就说明端口已在监听——不要再额外连一次探活：那会占用一个并发连接名额，
+        // 让 `--max-connections 2` 这类用例多出一个瞬时「幽灵连接」。
         Self {
             child,
             addr,
@@ -320,7 +367,8 @@ impl HttpMcp {
         http_request(self.addr, authorization, self.session.as_deref(), &body)
     }
 
-    fn initialize(&mut self) {
+    /// `initialize` 握手，返回该响应的 `result` 对象（供跨 bind 地址的逐字节比较）。
+    fn initialize(&mut self) -> Value {
         let id = self.next_id();
         let auth = format!("Bearer {TOKEN}");
         let response = self.post(
@@ -340,10 +388,12 @@ impl HttpMcp {
         self.session = response.header("mcp-session-id").map(str::to_string);
         assert!(self.session.is_some(), "initialize 必须回 Mcp-Session-Id");
         let messages = response.sse_messages();
-        assert!(
-            message_with_id(&messages, id).get("result").is_some(),
-            "initialize 必须有 result：{messages:?}"
-        );
+        let message = message_with_id(&messages, id);
+        let result = message
+            .get("result")
+            .unwrap_or_else(|| panic!("initialize 必须有 result：{messages:?}"));
+        assert!(result.is_object(), "initialize 的 result 必须是对象");
+        result.clone()
     }
 
     fn notify_initialized(&self) {
@@ -543,7 +593,7 @@ fn assert_startup_rejected(args: &[&str], env: &[(&str, &str)], keyword: &str) {
 #[test]
 fn http_transport_rejects_missing_token() {
     // A2：无 env、无 --token-file ⇒ rc=2，stderr 点名 token，不监听。
-    let port = free_port();
+    let port = ephemeral_port();
     let bind = format!("127.0.0.1:{port}");
     assert_startup_rejected(
         &["--transport", "http", "--bind", bind.as_str()],
@@ -554,7 +604,7 @@ fn http_transport_rejects_missing_token() {
 
 #[test]
 fn http_transport_rejects_empty_token_file() {
-    let port = free_port();
+    let port = ephemeral_port();
     let bind = format!("127.0.0.1:{port}");
     let token_file = std::env::temp_dir().join(format!(
         "mir2-mcp-empty-token-{}-{port}.txt",
@@ -580,7 +630,7 @@ fn http_transport_rejects_empty_token_file() {
 #[test]
 fn http_transport_rejects_non_loopback_bind() {
     // A3：非回环 ⇒ rc=2，stderr 点名回环，不监听。
-    let port = free_port();
+    let port = ephemeral_port();
     let bind = format!("0.0.0.0:{port}");
     assert_startup_rejected(
         &["--transport", "http", "--bind", bind.as_str()],
@@ -593,6 +643,12 @@ fn http_transport_rejects_non_loopback_bind() {
         &[("MIR2_MCP_HTTP_TOKEN", TOKEN)],
         "IP 字面量",
     );
+    let lan = format!("192.168.1.10:{port}");
+    assert_startup_rejected(
+        &["--transport", "http", "--bind", lan.as_str()],
+        &[("MIR2_MCP_HTTP_TOKEN", TOKEN)],
+        "回环",
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -602,8 +658,7 @@ fn http_transport_rejects_non_loopback_bind() {
 #[test]
 fn http_auth_rejects_and_never_touches_tool_handlers() {
     let root = TempRoot::new("auth");
-    let port = free_port();
-    let server = HttpServer::start(&root.path, port, true);
+    let server = HttpServer::start(&root.path, true);
 
     let mut client = HttpMcp::new(server.addr);
     client.initialize();
@@ -686,8 +741,7 @@ fn http_auth_rejects_and_never_touches_tool_handlers() {
 #[test]
 fn http_and_stdio_structured_content_are_byte_identical() {
     let root = TempRoot::new("equiv");
-    let port = free_port();
-    let server = HttpServer::start(&root.path, port, false);
+    let server = HttpServer::start(&root.path, false);
 
     // HTTP：真实监听面必须可经 127.0.0.1 访问（A6 的机器可判部分）。
     let mut http = HttpMcp::new(server.addr);
@@ -750,6 +804,8 @@ fn help_documents_both_transports() {
         "--bind",
         "127.0.0.1:7950",
         "--token-file",
+        "--max-connections",
+        "--header-timeout-ms",
     ] {
         assert!(
             stdout.contains(expected),
@@ -760,4 +816,315 @@ fn help_documents_both_transports() {
         stdout.contains("缺省"),
         "--help 必须说明 stdio 是缺省传输：{stdout}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// F1：bind 的 IP 字面量必须进 allowed_hosts（127.0.0.2 不再每请求 403）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn loopback_bind_ip_is_accepted_by_host_validation() {
+    let root = TempRoot::new("hostbind");
+    // 127.0.0.2 与 127.0.0.1 同属 127.0.0.0/8：修好前 127.0.0.2 能监听但每个请求都 403。
+    let server_alt = HttpServer::start_with(&root.path, "127.0.0.2", &[], false);
+    let server_std = HttpServer::start_with(&root.path, "127.0.0.1", &[], false);
+    assert_eq!(
+        server_alt.addr.ip().to_string(),
+        "127.0.0.2",
+        "必须真的从 127.0.0.2 监听"
+    );
+    assert_eq!(server_std.addr.ip().to_string(), "127.0.0.1");
+
+    let mut alt = HttpMcp::new(server_alt.addr);
+    let alt_init = alt.initialize();
+    alt.notify_initialized();
+    let alt_list = alt.call_tool("gm_list", json!({}));
+
+    let mut std = HttpMcp::new(server_std.addr);
+    let std_init = std.initialize();
+    std.notify_initialized();
+    let std_list = std.call_tool("gm_list", json!({}));
+
+    assert_eq!(
+        serde_json::to_string(&alt_init).expect("canonical"),
+        serde_json::to_string(&std_init).expect("canonical"),
+        "两个回环 bind 的 initialize result 必须逐字节相等"
+    );
+    assert_eq!(
+        serde_json::to_string(structured(&alt_list)).expect("canonical"),
+        serde_json::to_string(structured(&std_list)).expect("canonical"),
+        "跨 bind 地址的 structuredContent 必须逐字节相等"
+    );
+
+    // 负例：不在白名单里的 Host 仍必须 403——不能靠「清空 allowed_hosts」蒙混过关。
+    let body = serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+    }))
+    .expect("serialize");
+    let auth = format!("Bearer {TOKEN}");
+    let evil = http_request_with_host(
+        server_alt.addr,
+        "evil.example",
+        Some(auth.as_str()),
+        alt.session.as_deref(),
+        &body,
+    );
+    assert_eq!(
+        evil.status, 403,
+        "非白名单 Host 必须被拒（Host 校验不能放宽）"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F2：请求头读超时（慢 header 连接被关闭，正常请求不受影响）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn slow_header_connection_is_closed_within_timeout() {
+    let root = TempRoot::new("slowheader");
+    let server = HttpServer::start_with(
+        &root.path,
+        "127.0.0.1",
+        &["--header-timeout-ms", "300"],
+        false,
+    );
+
+    let mut slow = TcpStream::connect_timeout(&server.addr, Duration::from_secs(5)).expect("连接");
+    slow.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("读超时");
+    slow.write_all(format!("POST /mcp HTTP/1.1\r\nHost: {}\r\n", server.addr).as_bytes())
+        .expect("写半截请求头");
+    slow.flush().expect("flush");
+    let started = Instant::now();
+    let mut buffer = [0u8; 64];
+    let outcome = match slow.read(&mut buffer) {
+        Ok(_) => Ok(()), // EOF 或服务端回包（408/400）都算「被处理」
+        Err(error)
+            if error.kind() == std::io::ErrorKind::ConnectionReset
+                || error.kind() == std::io::ErrorKind::ConnectionAborted =>
+        {
+            Ok(())
+        }
+        Err(error)
+            if error.kind() == std::io::ErrorKind::WouldBlock
+                || error.kind() == std::io::ErrorKind::TimedOut =>
+        {
+            Err(error)
+        }
+        Err(error) => panic!("读慢 header 连接失败：{error}"),
+    };
+    let elapsed = started.elapsed();
+    assert!(
+        outcome.is_ok(),
+        "300ms 的请求头读超时窗口内连接必须被关闭：{outcome:?}"
+    );
+    assert!(
+        elapsed >= Duration::from_millis(1),
+        "下界（宽松）：连接不是瞬间被关：{elapsed:?}"
+    );
+    assert!(
+        elapsed <= Duration::from_secs(10),
+        "上界给足余量：{elapsed:?}"
+    );
+
+    // 同一进程内紧邻跑一次完整握手：超时只针对慢 header，不影响正常请求。
+    let mut client = HttpMcp::new(server.addr);
+    client.initialize();
+    client.notify_initialized();
+    let listed = client.call_tool("gm_list", json!({}));
+    assert_eq!(
+        structured(&listed).get("ok").and_then(Value::as_bool),
+        Some(true)
+    );
+}
+
+// ---------------------------------------------------------------------------
+// F2：并发连接上限（--max-connections 2：第 3 条被立即关闭，前 2 条仍可用）
+// ---------------------------------------------------------------------------
+
+/// 在（HTTP/1.1，缺省 keep-alive）连接上发一条完整请求。
+fn send_http11_request(stream: &mut TcpStream, addr: SocketAddr, body: &str) {
+    let request = format!(
+        "POST /mcp HTTP/1.1\r\nHost: {addr}\r\nContent-Type: application/json\r\n\
+         Accept: application/json, text/event-stream\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).expect("写请求");
+    stream.flush().expect("flush");
+}
+
+/// 在 keep-alive 连接上读一条完整响应（按 Content-Length 定界；无长度则读到 EOF/超时）。
+fn read_one_response(stream: &mut TcpStream) -> HttpResponse {
+    let mut raw: Vec<u8> = Vec::new();
+    let mut buffer = [0u8; 8192];
+    loop {
+        if let Some(split) = raw.windows(4).position(|window| window == b"\r\n\r\n") {
+            let head = String::from_utf8_lossy(&raw[..split]).to_string();
+            let content_length = head.lines().find_map(|line| {
+                let (key, value) = line.split_once(':')?;
+                key.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().ok())
+                    .flatten()
+            });
+            let body_start = split + 4;
+            if let Some(length) = content_length {
+                if raw.len() >= body_start + length {
+                    break;
+                }
+            } else if head.lines().any(|line| {
+                line.to_ascii_lowercase()
+                    .contains("transfer-encoding: chunked")
+            }) && raw[body_start..]
+                .windows(5)
+                .any(|window| window == b"0\r\n\r\n")
+            {
+                break;
+            }
+        }
+        match stream.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => raw.extend_from_slice(&buffer[..read]),
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                break;
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::ConnectionReset
+                    || error.kind() == std::io::ErrorKind::ConnectionAborted =>
+            {
+                // 无长度响应用「关闭连接」定界时，读侧看到的是 RST/EOF。
+                break;
+            }
+            Err(error) => panic!("读响应失败：{error}"),
+        }
+    }
+    parse_response(&raw)
+}
+
+#[test]
+fn connection_limit_rejects_excess_and_keeps_existing_usable() {
+    let root = TempRoot::new("conncap");
+    let server =
+        HttpServer::start_with(&root.path, "127.0.0.1", &["--max-connections", "2"], false);
+    let body = r#"{"jsonrpc":"2.0","id":1,"method":"tools/list"}"#;
+
+    let mut first =
+        TcpStream::connect_timeout(&server.addr, Duration::from_secs(5)).expect("连接 first");
+    let mut second =
+        TcpStream::connect_timeout(&server.addr, Duration::from_secs(5)).expect("连接 second");
+    for stream in [&mut first, &mut second] {
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .expect("读超时");
+        stream
+            .set_write_timeout(Some(Duration::from_secs(5)))
+            .expect("写超时");
+        send_http11_request(stream, server.addr, body);
+    }
+    // 两条都拿到响应 ⇒ 服务端确实在处理它们；HTTP/1.1 缺省 keep-alive ⇒ 各占一个并发名额。
+    for stream in [&mut first, &mut second] {
+        let response = read_one_response(stream);
+        assert_eq!(response.status, 401, "无 token 必须 401");
+    }
+
+    // 第 3 条连接：必须被立即关闭（不是排队、不是回包）。
+    let mut probe =
+        TcpStream::connect_timeout(&server.addr, Duration::from_secs(2)).expect("连接 probe");
+    probe
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .expect("probe 读超时");
+    let mut buffer = [0u8; 16];
+    let probe_result = match probe.read(&mut buffer) {
+        Ok(0) => Ok(()),
+        Err(error)
+            if error.kind() == std::io::ErrorKind::ConnectionReset
+                || error.kind() == std::io::ErrorKind::ConnectionAborted =>
+        {
+            Ok(())
+        }
+        other => Err(other),
+    };
+    assert!(
+        probe_result.is_ok(),
+        "并发上限 2 已满时第 3 条连接必须被立即关闭：{probe_result:?}"
+    );
+
+    // 前 2 条仍可用：同一条连接上再走一次请求 ⇒ 仍 401（上限只拦新连接）。
+    send_http11_request(&mut first, server.addr, body);
+    let again = read_one_response(&mut first);
+    assert_eq!(again.status, 401, "上限只拦新连接，既有连接必须继续可用");
+}
+
+// ---------------------------------------------------------------------------
+// F3：启动行解析（端口 0 ⇒ 解析实际端口；退化形态必须拒绝）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn listening_line_parses_assigned_port() {
+    let addr = parse_listening_addr(
+        "mir2-mcp: HTTP 传输监听 http://127.0.0.1:53211/mcp（只回环，Bearer token 已配置；并发上限 64，请求头超时 10000ms）",
+    )
+    .expect("启动行必须能解析出端口");
+    assert_eq!(addr, "127.0.0.1:53211".parse().expect("addr"));
+
+    let ipv6 = parse_listening_addr(
+        "mir2-mcp: HTTP 传输监听 http://[::1]:7950/mcp（只回环，Bearer token 已配置）",
+    )
+    .expect("IPv6 回环启动行也必须能解析");
+    assert_eq!(ipv6.port(), 7950);
+    assert!(ipv6.ip().is_loopback());
+
+    // 退化形态：前缀不符 / 非回环 / 端口非法 ⇒ None（绝不把非回环当成自己人）。
+    assert!(parse_listening_addr("mir2-mcp: 其它行").is_none());
+    assert!(
+        parse_listening_addr("mir2-mcp: HTTP 传输监听 http://0.0.0.0:7950/mcp").is_none(),
+        "非回环地址必须拒绝"
+    );
+    assert!(
+        parse_listening_addr("mir2-mcp: HTTP 传输监听 http://127.0.0.1:notaport/mcp").is_none(),
+        "非法端口必须拒绝"
+    );
+    assert!(parse_listening_addr("mir2-mcp: HTTP 传输监听 https://127.0.0.1:1/mcp").is_none());
+}
+
+// ---------------------------------------------------------------------------
+// F4：没有会话的 tools/list 是 400（文档自检不再写错成 200）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn tools_list_without_session_is_rejected_until_initialize() {
+    let root = TempRoot::new("session");
+    let server = HttpServer::start(&root.path, false);
+    let auth = format!("Bearer {TOKEN}");
+    let body = serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+    }))
+    .expect("serialize");
+
+    // 带正确 token、但没有 Mcp-Session-Id（也没 initialize）⇒ 400 + 明确文案。
+    let no_session = http_request(server.addr, Some(auth.as_str()), None, &body);
+    assert_eq!(no_session.status, 400, "无会话的 tools/list 必须 400");
+    let text = String::from_utf8_lossy(&no_session.body);
+    assert!(
+        text.contains("Session ID is required"),
+        "响应体必须点名缺会话：{text:?}"
+    );
+
+    // 完整握手后同一调用 ⇒ 200（文档自检第 5 步）。
+    let mut client = HttpMcp::new(server.addr);
+    client.initialize();
+    client.notify_initialized();
+    let with_session = http_request(
+        server.addr,
+        Some(auth.as_str()),
+        client.session.as_deref(),
+        &body,
+    );
+    assert_eq!(with_session.status, 200, "带会话的 tools/list 必须 200");
 }

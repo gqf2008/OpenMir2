@@ -16,7 +16,7 @@ rmcp = { version = "3.8.0", features = [
     "transport-io",
     "transport-streamable-http-server",
 ] }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync"] }
 # Streamable HTTP 传输的 HTTP/1.1 服务端：hyper 1 + hyper-util（TowerToHyperService）
 # + http-body-util（BodyExt/Empty/Full）。不引入 axum（卡 openmir2-mcp-streamable-http）。
 hyper = { version = "1", features = ["server", "http1"] }
