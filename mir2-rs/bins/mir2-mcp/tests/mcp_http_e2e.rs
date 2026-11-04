@@ -565,22 +565,50 @@ impl Drop for StdioMcp {
 // A2 / A3：启动前拒绝（rc=2，不创建监听）
 // ---------------------------------------------------------------------------
 
-/// 跑一次注定失败启动的二进制，断言 rc=2、stderr 点名原因、且**没有常驻监听**。
-fn assert_startup_rejected(args: &[&str], env: &[(&str, &str)], keyword: &str) {
-    let mut command = Command::new(EXE);
-    command
-        .args(args)
-        .env_remove("MIR2_MCP_HTTP_TOKEN")
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    for (key, value) in env {
-        command.env(key, value);
-    }
-    let output = command.output().expect("运行 mir2-mcp");
-    let stderr = String::from_utf8_lossy(&output.stderr);
+/// 一次「本应被拒绝的启动」的观测（rc + stderr）。
+///
+/// 把观测与判据拆开，是为了让**拒绝路径本身**可测：用例可以把一条真实生产格式的
+/// 启动行喂进来，走完 `assert_startup_rejected` 所用的同一判据（见
+/// `startup_rejection_path_rejects_real_listening_line`）——牙打在接线之后，
+/// 而不是只证明 helper 函数自己会红。
+struct StartupObservation {
+    code: Option<i32>,
+    stderr: String,
+}
+
+/// 从 `--bind <value>` 取监听地址；只接受可解析成 `SocketAddr` 的字面量。
+///
+/// 解析失败返回 `None`（如 `localhost:7950`）。调用方据此**跳过**端口探测与回收：
+/// 解析失败的正确语义是「不知道要探哪个端口」，不是「探缺省端口」。
+fn bind_addr_from_args(args: &[&str]) -> Option<SocketAddr> {
+    args.windows(2)
+        .find(|pair| pair[0] == "--bind")
+        .and_then(|pair| pair[1].parse::<SocketAddr>().ok())
+}
+
+/// 需要做端口探测的目标：`--bind` 可解析，且是「本机可控地址」（回环 / 通配）。
+///
+/// 具名非回环地址不能当 oracle：本机路由/中间盒可能对任意非本地地址回 SYN
+/// （实测 192.0.2.1 / 198.51.100.1 / 203.0.113.1 的任意端口都 connect 成功），
+/// 而真实 LAN 主机同端口在听又会假红——两个方向都不可靠。
+///
+/// 历史坑（Info-3）：这里曾在解析失败时回落 `127.0.0.1:7950`（服务端缺省端口）。
+/// 7950 在 CI / 他人机器上可能被占用，回落值会把「拒绝启动」误判成「仍在监听」的假红。
+fn probe_target_from_args(args: &[&str]) -> Option<SocketAddr> {
+    let addr = bind_addr_from_args(args)?;
+    (addr.ip().is_loopback() || addr.ip().is_unspecified()).then_some(addr)
+}
+
+/// 拒绝启动的**全部结论性判据**：rc=2、stderr 点名原因、无 token、无监听启动行。
+///
+/// 这是「判启动行」的唯一显式接线：`assert_startup_rejected` 只调用本函数一次。
+/// 删掉本函数里的任何一条判据（尤其 `assert_no_listening_startup_line`）都会让
+/// `startup_rejection_path_rejects_real_listening_line` 与
+/// `startup_rejection_path_invokes_listening_line_criterion` 变红。
+fn assert_startup_rejection(observation: &StartupObservation, keyword: &str) {
+    let stderr = &observation.stderr;
     assert_eq!(
-        output.status.code(),
+        observation.code,
         Some(2),
         "必须以 rc=2 拒绝启动；stderr：{stderr}"
     );
@@ -594,24 +622,50 @@ fn assert_startup_rejected(args: &[&str], env: &[(&str, &str)], keyword: &str) {
     );
     // 「确实没在监听」的机器判据（不再只看 rc=2 + stderr）。
     // 启动行只在 `TcpListener::bind` 成功后打印，因此它缺席 = 从未进入监听。
-    assert_no_listening_startup_line(&stderr);
-    // 端口探测只对「本机可控地址」（回环 / 通配）有意义。
-    // 具名非回环地址不能当 oracle：本机路由/中间盒可能对任意非本地地址回 SYN
-    // （实测 192.0.2.1 / 198.51.100.1 / 203.0.113.1 的任意端口都 connect 成功），
-    // 而真实 LAN 主机同端口在听又会假红——两个方向都不可靠，只保留上面的结论性判据。
-    let addr: SocketAddr = args
-        .iter()
-        .position(|arg| *arg == "--bind")
-        .and_then(|index| args.get(index + 1))
-        .and_then(|value| value.parse::<SocketAddr>().ok())
-        .unwrap_or_else(|| "127.0.0.1:7950".parse().expect("default bind"));
-    if addr.ip().is_loopback() || addr.ip().is_unspecified() {
+    assert_no_listening_startup_line(stderr);
+}
+
+/// 跑一次注定失败启动的二进制，断言 rc=2、stderr 点名原因、且**没有常驻监听**。
+fn assert_startup_rejected(args: &[&str], env: &[(&str, &str)], keyword: &str) {
+    let mut command = Command::new(EXE);
+    command
+        .args(args)
+        .env_remove("MIR2_MCP_HTTP_TOKEN")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, value) in env {
+        command.env(key, value);
+    }
+    let output = command.output().expect("运行 mir2-mcp");
+    let observation = StartupObservation {
+        code: output.status.code(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    };
+    // 显式接线：拒绝路径的全部结论性判据（含「无监听启动行」）都在这里。
+    assert_startup_rejection(&observation, keyword);
+    // 端口探测只对可解析的「本机可控地址」做；解析失败不探、也不回落缺省 7950。
+    if let Some(addr) = probe_target_from_args(args) {
         assert_port_not_listening(addr, probe_addr_for(addr));
     }
 }
 
+thread_local! {
+    /// 「无监听启动行」判据的调用计数（S2 接线牙）。
+    ///
+    /// 合成牙 `listening_startup_line_is_rejected_by_the_criterion` 只证明 helper 自身能红，
+    /// 不证明拒绝路径真的调用了它。计数按线程隔离，避免并行用例互相污染。
+    static LISTENING_LINE_CHECKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// 当前线程上「无监听启动行」判据已被调用多少次（供接线牙读）。
+fn listening_line_check_count() -> usize {
+    LISTENING_LINE_CHECKS.with(|count| count.get())
+}
+
 /// 拒绝启动的进程不得打印监听启动行（该行只在 `TcpListener::bind` 成功后打印）。
 fn assert_no_listening_startup_line(stderr: &str) {
+    LISTENING_LINE_CHECKS.with(|count| count.set(count.get() + 1));
     assert!(
         !stderr.contains("HTTP 传输监听"),
         "拒绝启动的进程不得打印监听启动行（证明从未 bind 成功）：{stderr}"
@@ -785,17 +839,20 @@ fn listening_startup_line_is_rejected_by_the_criterion() {
     assert_no_listening_startup_line("mir2-mcp: --bind 不是回环地址；拒绝启动");
 }
 
-/// 合成夹具：`[::]:P` 确有监听 ⇒ 必须经同族回环 `[::1]:P` 判红。
+/// 合成夹具：`[::]:P` 的探针必须是 `[::1]:P`，且「探错地址族」必须由**判据本身**判红。
 ///
-/// Windows 默认 v6only 下 `127.0.0.1:P` 连不到 `[::]:P`；若探针选择退回 v4，
-/// 本用例会因「没探到」而失败——这就是 Minor-2 分支的牙。
+/// 夹具在 `[::1]:P` 上**显式**监听（不是 `[::]:P`）：这样无论平台 dual-stack 默认如何，
+/// 只有 `[::1]:P` 连得上、`127.0.0.1:P` 连不上。`bind_addr` 换成另一条**空闲**回环，
+/// 回收 bind 一定成功——判据外的回收不能再替 connect 判据兜底（原用例的漏洞正是这点：
+/// 探针退回 v4 + 删掉 `assert_eq` 后，回收 `[::]:P` 失败仍能让用例"绿"，注释里
+/// 「退回 v4 会因没探到而失败」不成立）。
 ///
-/// 需要 IPv6 栈（`[::]` / `[::1]`）：环境无 IPv6 时 `bind [::]:0` 会**显式失败**，
+/// 需要 IPv6 栈（`[::1]`）：环境无 IPv6 时 `bind [::1]:0` 会**显式失败**，
 /// 不静默跳过；在无 IPv6 的 CI 上运行请加 `#[ignore = "需要 IPv6 栈"]` 并注明理由
 /// （本机 E2E 已在有 IPv6 的 Windows 上实跑，见 patch body）。
 #[test]
 fn ipv6_wildcard_probe_uses_ipv6_loopback() {
-    let listener = TcpListener::bind("[::]:0").expect("环境需支持 IPv6：bind [::]:0");
+    let listener = TcpListener::bind("[::1]:0").expect("环境需支持 IPv6：bind [::1]:0");
     let port = listener.local_addr().expect("local_addr").port();
     let wildcard: SocketAddr = format!("[::]:{port}").parse().expect("wildcard addr");
     let probe = probe_addr_for(wildcard);
@@ -804,12 +861,155 @@ fn ipv6_wildcard_probe_uses_ipv6_loopback() {
         IpAddr::V6(Ipv6Addr::LOCALHOST),
         "[::]:P 的探针必须是 [::1]:P（Windows v6only 下 127.0.0.1:P 探不到）"
     );
-    let outcome = std::panic::catch_unwind(move || assert_port_not_listening(wildcard, probe));
+
+    // 判据外的回收必须成功，否则「探错地址族」会被回收分支兜住。
+    let free = TcpListener::bind("127.0.0.2:0").expect("bind 空闲回环");
+    let bind_addr = free.local_addr().expect("local_addr");
+    drop(free);
+
+    let outcome = std::panic::catch_unwind(move || assert_port_not_listening(bind_addr, probe));
     assert!(
         outcome.is_err(),
-        "[::]:{port} 确有监听时，[::1] 探针必须判红"
+        "[::1]:{port} 确有监听时，探针必须判红（探错地址族 ⇒ 本断言红）"
     );
+
+    // 反向对照：撤掉监听后同一判据不得假红（证明牙不是恒红）。
     drop(listener);
+    assert_port_not_listening(bind_addr, probe);
+}
+
+/// S2 接线牙（调用计数）：拒绝启动的**真实路径**必须调用「无监听启动行」判据。
+///
+/// 合成牙只证明 helper 自身能红；本用例跑一次真实拒绝启动（缺 token），
+/// 用调用计数证明 `assert_startup_rejected` 的拒绝路径确实调用了判据。
+/// 删掉接线（或把它挪到不执行的支路）⇒ 计数不增长 ⇒ 红。
+#[test]
+fn startup_rejection_path_invokes_listening_line_criterion() {
+    let port = ephemeral_port();
+    let bind = format!("127.0.0.1:{port}");
+    let before = listening_line_check_count();
+    assert_startup_rejected(
+        &["--transport", "http", "--bind", bind.as_str()],
+        &[],
+        "token",
+    );
+    assert_eq!(
+        listening_line_check_count(),
+        before + 1,
+        "拒绝启动路径必须调用一次「无监听启动行」判据（删接线 ⇒ 本用例红）"
+    );
+}
+
+/// S2 接线牙（真生产启动行）：把真实生产格式的监听启动行喂进拒绝路径的**同一判据**，
+/// 断言它判红；去掉启动行后同一判据不假红（反向对照）。
+///
+/// 与上一条用例合起来：上面钉「接线存在」，本用例钉「接线后的判据仍然生效」。
+#[test]
+fn startup_rejection_path_rejects_real_listening_line() {
+    // rc=2 + 关键字 + 无 token 全部成立，唯一不满足的是「无监听启动行」。
+    let with_listening_line = StartupObservation {
+        code: Some(2),
+        stderr: format!(
+            "{LISTENING_PREFIX}http://127.0.0.1:1234/mcp（只回环，Bearer token 已配置）\n\
+             mir2-mcp: --bind 不是回环地址；拒绝启动"
+        ),
+    };
+    let outcome =
+        std::panic::catch_unwind(|| assert_startup_rejection(&with_listening_line, "回环"));
+    assert!(
+        outcome.is_err(),
+        "带真实生产监听启动行的拒绝观测必须判红（判据未接线或已被放宽）"
+    );
+
+    // 反向对照：同一条观测去掉启动行 ⇒ 不假红。
+    let without_listening_line = StartupObservation {
+        code: Some(2),
+        stderr: "mir2-mcp: --bind 不是回环地址；拒绝启动".to_string(),
+    };
+    assert_startup_rejection(&without_listening_line, "回环");
+}
+
+/// `assert_port_not_listening` 的「回收 bind」分支负例：
+/// 探针连不上、但 `bind_addr` 被占用 ⇒ 判据必须判红（删掉回收断言 ⇒ 本用例红）。
+///
+/// 夹具把 probe 放在**另一条**空闲回环上：connect 判据不会先红，
+/// 唯一能判红的就是回收 bind 分支。
+#[test]
+fn port_probe_rejects_when_reclaimed_bind_fails() {
+    // bind_addr 被另一个监听者占用。
+    let occupied = TcpListener::bind("127.0.0.2:0").expect("占位监听");
+    let bind_addr = occupied.local_addr().expect("local_addr");
+    // probe 是一条确定空闲的回环端口（先 bind 取端口再释放）。
+    let free = TcpListener::bind("127.0.0.3:0").expect("取空闲端口");
+    let probe = free.local_addr().expect("local_addr");
+    drop(free);
+    assert!(
+        TcpStream::connect_timeout(&probe, Duration::from_millis(250)).is_err(),
+        "夹具前提：{probe} 必须没有监听"
+    );
+
+    let outcome = std::panic::catch_unwind(move || assert_port_not_listening(bind_addr, probe));
+    assert!(
+        outcome.is_err(),
+        "{bind_addr} 被占用时，回收 bind 判据必须判红（删掉该断言 ⇒ 本用例红）"
+    );
+
+    // 反向对照：释放占位后同一判据不假红。
+    drop(occupied);
+    assert_port_not_listening(bind_addr, probe);
+}
+
+/// helper 回落（Info-3）：`--bind` 解析失败时不得产生探测目标，更不得回落缺省 7950。
+#[test]
+fn unparseable_bind_has_no_probe_target() {
+    assert_eq!(
+        bind_addr_from_args(&["--transport", "http", "--bind", "localhost:7950"]),
+        None,
+        "`localhost:P` 不是 SocketAddr 字面量"
+    );
+    assert_eq!(
+        probe_target_from_args(&["--transport", "http", "--bind", "localhost:7950"]),
+        None,
+        "解析失败 ⇒ 不探测（绝不回落缺省 7950）"
+    );
+    assert_eq!(
+        probe_target_from_args(&["--transport", "http", "--bind", "192.0.2.1:7950"]),
+        None,
+        "具名非回环地址不做端口探测"
+    );
+    assert_eq!(
+        probe_target_from_args(&["--transport", "http", "--bind", "127.0.0.1:7950"]),
+        Some("127.0.0.1:7950".parse().expect("addr"))
+    );
+}
+
+/// helper 回落（Info-3）行为牙：7950 **确有监听** 时，`--bind localhost:P` 的拒绝启动
+/// 不得被误判成「仍在监听」。
+///
+/// 旧实现解析失败后回落 `127.0.0.1:7950` 并探测：7950 被占就会假红（rc=2 本已成立）。
+/// 新实现跳过端口探测，只保留与端口无关的判据。
+#[test]
+fn unparseable_bind_is_not_judged_against_occupied_7950() {
+    // 夹具：127.0.0.1:7950 必须处于监听状态。优先自己绑定；若已被别人占用（同样满足前提），
+    // 用 connect 自检确认。两种情况都能让「旧回落探测」判红。
+    let owned = TcpListener::bind(("127.0.0.1", 7950)).ok();
+    assert!(
+        TcpStream::connect_timeout(
+            &"127.0.0.1:7950".parse().expect("addr"),
+            Duration::from_millis(750)
+        )
+        .is_ok(),
+        "夹具前提：127.0.0.1:7950 必须处于监听状态"
+    );
+
+    let port = ephemeral_port();
+    let bind = format!("localhost:{port}");
+    assert_startup_rejected(
+        &["--transport", "http", "--bind", bind.as_str()],
+        &[("MIR2_MCP_HTTP_TOKEN", TOKEN)],
+        "IP 字面量",
+    );
+    drop(owned);
 }
 
 // ---------------------------------------------------------------------------
