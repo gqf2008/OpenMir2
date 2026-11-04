@@ -13,7 +13,7 @@
 //! * `--help` 反映两种传输与「stdio 为缺省」。
 
 use std::io::{BufRead, BufReader, Read, Write};
-use std::net::{SocketAddr, TcpListener, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -594,28 +594,43 @@ fn assert_startup_rejected(args: &[&str], env: &[(&str, &str)], keyword: &str) {
     );
     // 「确实没在监听」的机器判据（不再只看 rc=2 + stderr）。
     // 启动行只在 `TcpListener::bind` 成功后打印，因此它缺席 = 从未进入监听。
-    assert!(
-        !stderr.contains("HTTP 传输监听"),
-        "拒绝启动的进程不得打印监听启动行（证明从未 bind 成功）：{stderr}"
-    );
-    // 进程已退出；若端口仍可连上，只能来自残留监听。
+    assert_no_listening_startup_line(&stderr);
+    // 端口探测只对「本机可控地址」（回环 / 通配）有意义。
+    // 具名非回环地址不能当 oracle：本机路由/中间盒可能对任意非本地地址回 SYN
+    // （实测 192.0.2.1 / 198.51.100.1 / 203.0.113.1 的任意端口都 connect 成功），
+    // 而真实 LAN 主机同端口在听又会假红——两个方向都不可靠，只保留上面的结论性判据。
     let addr: SocketAddr = args
         .iter()
         .position(|arg| *arg == "--bind")
         .and_then(|index| args.get(index + 1))
         .and_then(|value| value.parse::<SocketAddr>().ok())
         .unwrap_or_else(|| "127.0.0.1:7950".parse().expect("default bind"));
-    let probe = if addr.ip().is_unspecified() {
-        // 0.0.0.0 / :: 这类通配地址：真监听会同时接受 127.0.0.1:P 的连接。
-        SocketAddr::new(
-            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
-            addr.port(),
-        )
-    } else {
-        // 回环地址与具名非回环 IP：真监听会接受发往该地址本体的连接。
-        addr
-    };
-    assert_port_not_listening(addr, probe);
+    if addr.ip().is_loopback() || addr.ip().is_unspecified() {
+        assert_port_not_listening(addr, probe_addr_for(addr));
+    }
+}
+
+/// 拒绝启动的进程不得打印监听启动行（该行只在 `TcpListener::bind` 成功后打印）。
+fn assert_no_listening_startup_line(stderr: &str) {
+    assert!(
+        !stderr.contains("HTTP 传输监听"),
+        "拒绝启动的进程不得打印监听启动行（证明从未 bind 成功）：{stderr}"
+    );
+}
+
+/// 按地址族选探针：通配地址用**同族**回环（Windows 默认 v6only 下 `[::]:P` 不响应
+/// `127.0.0.1:P` 的连接），其余地址（回环/具名 IP）用地址本体。
+fn probe_addr_for(bind_addr: SocketAddr) -> SocketAddr {
+    let port = bind_addr.port();
+    match bind_addr.ip() {
+        IpAddr::V4(ip) if ip.is_unspecified() => {
+            SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), port)
+        }
+        IpAddr::V6(ip) if ip.is_unspecified() => {
+            SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), port)
+        }
+        _ => bind_addr,
+    }
 }
 
 /// 机器判据：`bind_addr` 上没有监听面——`probe` 连不上，且回环/通配地址可重新 bind。
@@ -682,12 +697,119 @@ fn http_transport_rejects_non_loopback_bind() {
         &[("MIR2_MCP_HTTP_TOKEN", TOKEN)],
         "IP 字面量",
     );
-    let lan = format!("192.168.1.10:{port}");
+    // Minor-1：具名非回环改用 RFC 5737 TEST-NET-1（192.0.2.0/24 文档保留地址），
+    // 不再用可能真实存在的私网地址（192.168.1.10）。该地址只作为「非回环字面量」
+    // 的输入；是否真的监听由启动行判据判定，不对它做 connect 探测
+    // （见 `assert_startup_rejected`：本机中间盒会对 TEST-NET 任意端口回 SYN）。
+    let reserved = format!("192.0.2.1:{port}");
     assert_startup_rejected(
-        &["--transport", "http", "--bind", lan.as_str()],
+        &["--transport", "http", "--bind", reserved.as_str()],
         &[("MIR2_MCP_HTTP_TOKEN", TOKEN)],
         "回环",
     );
+}
+
+#[test]
+fn http_transport_rejects_ipv6_wildcard_bind() {
+    // Minor-2：`[::]:P` 也必须拒绝启动；探针按地址族走 `[::1]:P`
+    // （Windows 默认 v6only 下 `127.0.0.1:P` 探不到 `[::]:P`）。
+    let port = ephemeral_port();
+    let bind = format!("[::]:{port}");
+    assert_startup_rejected(
+        &["--transport", "http", "--bind", bind.as_str()],
+        &[("MIR2_MCP_HTTP_TOKEN", TOKEN)],
+        "回环",
+    );
+}
+
+// ---------------------------------------------------------------------------
+// 探针判据的正例牙（Minor-1 / Minor-2）
+// ---------------------------------------------------------------------------
+
+/// 纯函数判据：通配地址按族选回环探针，其余地址用本体。
+#[test]
+fn probe_addr_is_family_matched_for_wildcards() {
+    let port = 4242_u16;
+    let v4_wildcard: SocketAddr = format!("0.0.0.0:{port}").parse().expect("v4 wildcard");
+    let v6_wildcard: SocketAddr = format!("[::]:{port}").parse().expect("v6 wildcard");
+    assert_eq!(
+        probe_addr_for(v4_wildcard),
+        format!("127.0.0.1:{port}")
+            .parse::<SocketAddr>()
+            .expect("v4 lo")
+    );
+    assert_eq!(
+        probe_addr_for(v6_wildcard),
+        format!("[::1]:{port}")
+            .parse::<SocketAddr>()
+            .expect("v6 lo")
+    );
+    let loopback: SocketAddr = format!("127.0.0.2:{port}").parse().expect("loopback");
+    assert_eq!(probe_addr_for(loopback), loopback);
+    let named: SocketAddr = format!("192.0.2.1:{port}").parse().expect("named");
+    assert_eq!(probe_addr_for(named), named);
+}
+
+/// 合成夹具：探针地址上确有监听 ⇒ 判据判红；撤掉监听 ⇒ 同一判据不假红（反向对照）。
+///
+/// 证明「非回环改用 TEST-NET」不是把牙删掉换绿：只要探针地址真有监听，
+/// `assert_port_not_listening` 仍会 panic。
+///
+/// 监听用 `0.0.0.0:P`（`127.0.0.1:P` 能连上），而 `bind_addr` 故意用另一条空闲回环
+/// `127.0.0.2:Q`——这样「回收 bind 失败」不会替 connect 判据兜底，删掉 connect 断言时
+/// 本用例必然红（牙只钉 connect 判据）。
+#[test]
+fn startup_rejection_probe_detects_live_listener() {
+    let listener = TcpListener::bind("0.0.0.0:0").expect("bind 合成监听");
+    let live_port = listener.local_addr().expect("local_addr").port();
+    let probe: SocketAddr = format!("127.0.0.1:{live_port}").parse().expect("probe");
+    let free = TcpListener::bind("127.0.0.2:0").expect("bind 空闲回环");
+    let bind_addr = free.local_addr().expect("local_addr");
+    drop(free);
+    let outcome = std::panic::catch_unwind(move || assert_port_not_listening(bind_addr, probe));
+    assert!(outcome.is_err(), "探针 {probe} 确有监听时，判据必须判红");
+    drop(listener);
+    assert_port_not_listening(bind_addr, probe);
+}
+
+/// 合成夹具：stderr 里出现监听启动行 ⇒ 结论性判据判红；普通错误行 ⇒ 放行。
+///
+/// 具名非回环地址不再做 connect 探测后，「无监听启动行」就是该分支的唯一 oracle，
+/// 本用例证明它仍能判出「服务真的监听了」（不是放宽判据换绿）。
+#[test]
+fn listening_startup_line_is_rejected_by_the_criterion() {
+    let fake_listening = "mir2-mcp: HTTP 传输监听 http://127.0.0.1:1234/mcp（只回环）";
+    let outcome =
+        std::panic::catch_unwind(move || assert_no_listening_startup_line(fake_listening));
+    assert!(outcome.is_err(), "启动行存在时，结论性判据必须判红");
+    assert_no_listening_startup_line("mir2-mcp: --bind 不是回环地址；拒绝启动");
+}
+
+/// 合成夹具：`[::]:P` 确有监听 ⇒ 必须经同族回环 `[::1]:P` 判红。
+///
+/// Windows 默认 v6only 下 `127.0.0.1:P` 连不到 `[::]:P`；若探针选择退回 v4，
+/// 本用例会因「没探到」而失败——这就是 Minor-2 分支的牙。
+///
+/// 需要 IPv6 栈（`[::]` / `[::1]`）：环境无 IPv6 时 `bind [::]:0` 会**显式失败**，
+/// 不静默跳过；在无 IPv6 的 CI 上运行请加 `#[ignore = "需要 IPv6 栈"]` 并注明理由
+/// （本机 E2E 已在有 IPv6 的 Windows 上实跑，见 patch body）。
+#[test]
+fn ipv6_wildcard_probe_uses_ipv6_loopback() {
+    let listener = TcpListener::bind("[::]:0").expect("环境需支持 IPv6：bind [::]:0");
+    let port = listener.local_addr().expect("local_addr").port();
+    let wildcard: SocketAddr = format!("[::]:{port}").parse().expect("wildcard addr");
+    let probe = probe_addr_for(wildcard);
+    assert_eq!(
+        probe.ip(),
+        IpAddr::V6(Ipv6Addr::LOCALHOST),
+        "[::]:P 的探针必须是 [::1]:P（Windows v6only 下 127.0.0.1:P 探不到）"
+    );
+    let outcome = std::panic::catch_unwind(move || assert_port_not_listening(wildcard, probe));
+    assert!(
+        outcome.is_err(),
+        "[::]:{port} 确有监听时，[::1] 探针必须判红"
+    );
+    drop(listener);
 }
 
 // ---------------------------------------------------------------------------
