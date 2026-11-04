@@ -531,6 +531,46 @@ mod tests {
         assert_eq!(config.header_timeout, Duration::from_millis(300));
     }
 
+    /// Minor-3：两个区间的**上界正例**——恰在上界接受、上界+1 拒绝。
+    ///
+    /// 没有正例时把上界各减 1（4096→4095、600000→599999），全套用例仍绿。
+    #[test]
+    fn resource_limit_upper_bounds_are_exact() {
+        let Ok(Cli::RunHttp(config)) = parse_with_env(
+            &[
+                "--transport",
+                "http",
+                "--max-connections",
+                "4096",
+                "--header-timeout-ms",
+                "600000",
+            ],
+            Some("t"),
+        ) else {
+            panic!("上界值 4096 / 600000 必须被接受");
+        };
+        assert_eq!(config.max_connections, 4096, "上界 4096 必须原样生效");
+        assert_eq!(
+            config.header_timeout,
+            Duration::from_millis(600_000),
+            "上界 600000ms 必须原样生效"
+        );
+
+        // 上界 +1 必须拒绝（与上界一起构成闭区间的两颗牙）。
+        let err = parse_with_env(
+            &["--transport", "http", "--max-connections", "4097"],
+            Some("t"),
+        )
+        .expect_err("4097 必须拒绝");
+        assert!(err.contains("--max-connections"), "{err}");
+        let err = parse_with_env(
+            &["--transport", "http", "--header-timeout-ms", "600001"],
+            Some("t"),
+        )
+        .expect_err("600001 必须拒绝");
+        assert!(err.contains("--header-timeout-ms"), "{err}");
+    }
+
     /// 越界/非数字的护栏值 ⇒ 启动前拒绝，错误点名参数。
     #[test]
     fn http_rejects_invalid_resource_limits() {

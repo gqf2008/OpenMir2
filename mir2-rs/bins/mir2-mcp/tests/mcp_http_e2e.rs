@@ -214,6 +214,18 @@ fn http_request_with_host(
     session: Option<&str>,
     body: &str,
 ) -> HttpResponse {
+    http_request_with_origin(addr, host, None, authorization, session, body)
+}
+
+/// 同 [`http_request_with_host`]，并可注入 `Origin` 头（用于 Origin 403 的证据）。
+fn http_request_with_origin(
+    addr: SocketAddr,
+    host: &str,
+    origin: Option<&str>,
+    authorization: Option<&str>,
+    session: Option<&str>,
+    body: &str,
+) -> HttpResponse {
     let mut stream =
         TcpStream::connect_timeout(&addr, Duration::from_secs(5)).expect("连接 HTTP 服务");
     stream
@@ -229,6 +241,9 @@ fn http_request_with_host(
     );
     if let Some(authorization) = authorization {
         request.push_str(&format!("Authorization: {authorization}\r\n"));
+    }
+    if let Some(origin) = origin {
+        request.push_str(&format!("Origin: {origin}\r\n"));
     }
     if let Some(session) = session {
         request.push_str(&format!("Mcp-Session-Id: {session}\r\n"));
@@ -577,16 +592,40 @@ fn assert_startup_rejected(args: &[&str], env: &[(&str, &str)], keyword: &str) {
         !stderr.contains(TOKEN),
         "token 绝不能出现在 stderr：{stderr}"
     );
-    // 进程已退出；若能立刻重新占用端口，说明它没有留下监听（也无残留 LISTEN）。
+    // 「确实没在监听」的机器判据（不再只看 rc=2 + stderr）。
+    // 启动行只在 `TcpListener::bind` 成功后打印，因此它缺席 = 从未进入监听。
+    assert!(
+        !stderr.contains("HTTP 传输监听"),
+        "拒绝启动的进程不得打印监听启动行（证明从未 bind 成功）：{stderr}"
+    );
+    // 进程已退出；若端口仍可连上，只能来自残留监听。
     let addr: SocketAddr = args
         .iter()
         .position(|arg| *arg == "--bind")
         .and_then(|index| args.get(index + 1))
         .and_then(|value| value.parse::<SocketAddr>().ok())
         .unwrap_or_else(|| "127.0.0.1:7950".parse().expect("default bind"));
-    if addr.ip().is_loopback() {
-        let reclaimed = TcpListener::bind(addr);
-        assert!(reclaimed.is_ok(), "拒绝启动后端口 {addr} 必须可重新监听");
+    let probe = if addr.ip().is_unspecified() {
+        // 0.0.0.0 / :: 这类通配地址：真监听会同时接受 127.0.0.1:P 的连接。
+        SocketAddr::new(
+            std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+            addr.port(),
+        )
+    } else {
+        // 回环地址与具名非回环 IP：真监听会接受发往该地址本体的连接。
+        addr
+    };
+    assert_port_not_listening(addr, probe);
+}
+
+/// 机器判据：`bind_addr` 上没有监听面——`probe` 连不上，且回环/通配地址可重新 bind。
+fn assert_port_not_listening(bind_addr: SocketAddr, probe: SocketAddr) {
+    if TcpStream::connect_timeout(&probe, Duration::from_millis(750)).is_ok() {
+        panic!("拒绝启动后 {probe} 仍可连接：说明进程确实监听了 {bind_addr}");
+    }
+    if probe.ip().is_loopback() || bind_addr.ip().is_unspecified() {
+        let reclaimed = TcpListener::bind(bind_addr);
+        assert!(reclaimed.is_ok(), "拒绝启动后 {bind_addr} 必须可重新监听");
     }
 }
 
@@ -878,6 +917,46 @@ fn loopback_bind_ip_is_accepted_by_host_validation() {
 }
 
 // ---------------------------------------------------------------------------
+// Minor-1：带 Origin 的请求必须 403（把原先只靠人工实测的口径变成 e2e 断言）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn origin_header_is_rejected_with_403() {
+    let root = TempRoot::new("origin");
+    let server = HttpServer::start(&root.path, false);
+    let auth = format!("Bearer {TOKEN}");
+    let body = serde_json::to_string(&json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/list",
+    }))
+    .expect("serialize");
+
+    // 对照组：同一请求**不带 Origin** ⇒ token 已通过、落到会话校验（400），
+    // 证明后面的 403 是 Origin 造成的，而不是鉴权/会话。
+    let without_origin = http_request(server.addr, Some(auth.as_str()), None, &body);
+    assert_eq!(
+        without_origin.status, 400,
+        "无 Origin 时应进到会话校验（400），而不是 403"
+    );
+
+    let evil = http_request_with_origin(
+        server.addr,
+        &server.addr.to_string(),
+        Some("http://evil.example"),
+        Some(auth.as_str()),
+        None,
+        &body,
+    );
+    assert_eq!(evil.status, 403, "带 Origin 的请求必须 403");
+    let text = String::from_utf8_lossy(&evil.body);
+    assert!(
+        text.contains("Forbidden: Origin header is not allowed"),
+        "响应体必须点名 Origin：{text:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // F2：请求头读超时（慢 header 连接被关闭，正常请求不受影响）
 // ---------------------------------------------------------------------------
 
@@ -898,35 +977,36 @@ fn slow_header_connection_is_closed_within_timeout() {
         .expect("写半截请求头");
     slow.flush().expect("flush");
     let started = Instant::now();
+    // 必须读到 **EOF**（或等价的 RST）才算「连接已关闭」：只读到任意字节
+    // （408/400 响应体）不能证明服务端关掉了连接。
     let mut buffer = [0u8; 64];
-    let outcome = match slow.read(&mut buffer) {
-        Ok(_) => Ok(()), // EOF 或服务端回包（408/400）都算「被处理」
-        Err(error)
-            if error.kind() == std::io::ErrorKind::ConnectionReset
-                || error.kind() == std::io::ErrorKind::ConnectionAborted =>
-        {
-            Ok(())
-        }
-        Err(error)
-            if error.kind() == std::io::ErrorKind::WouldBlock
-                || error.kind() == std::io::ErrorKind::TimedOut =>
-        {
+    let mut received = 0usize;
+    loop {
+        match slow.read(&mut buffer) {
+            Ok(0) => break, // EOF：服务端已关闭连接
+            Ok(read) => received += read,
             Err(error)
+                if error.kind() == std::io::ErrorKind::ConnectionReset
+                    || error.kind() == std::io::ErrorKind::ConnectionAborted =>
+            {
+                break; // RST 是「关闭」的等价形态
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::WouldBlock
+                    || error.kind() == std::io::ErrorKind::TimedOut =>
+            {
+                panic!(
+                    "300ms 请求头读超时窗口内连接必须被关闭，但读到 {received} 字节后仍在等待：{error}"
+                );
+            }
+            Err(error) => panic!("读慢 header 连接失败：{error}"),
         }
-        Err(error) => panic!("读慢 header 连接失败：{error}"),
-    };
+    }
     let elapsed = started.elapsed();
-    assert!(
-        outcome.is_ok(),
-        "300ms 的请求头读超时窗口内连接必须被关闭：{outcome:?}"
-    );
+    // 只卡宽松下界（「不是瞬间被关」）；**不卡墙钟上界**（负载会让上界 flaky）。
     assert!(
         elapsed >= Duration::from_millis(1),
         "下界（宽松）：连接不是瞬间被关：{elapsed:?}"
-    );
-    assert!(
-        elapsed <= Duration::from_secs(10),
-        "上界给足余量：{elapsed:?}"
     );
 
     // 同一进程内紧邻跑一次完整握手：超时只针对慢 header，不影响正常请求。
