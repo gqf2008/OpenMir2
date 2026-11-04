@@ -57,12 +57,29 @@ claude mcp add mir2 -- E:/Users/gxh/Documents/GitHub/OpenMir2/mir2-rs/target/deb
   **不创建监听**）。
 - **`--bind <ip:port>`**：HTTP 模式缺省 `127.0.0.1:7950`。只接受 **IP 字面量**并要求 `IpAddr::is_loopback()`
   （对齐 game-svr `[Admin] AdminBind` 的口径）；`0.0.0.0`、局域网/公网 IP、主机名（含 `localhost`）一律拒绝。
+  整个 `127.0.0.0/8` 与 `::1` 都合法（见下「Host/Origin 策略」：bind 的 IP 会同步进 `allowed_hosts`）。
+- **`--bind <ip>:0`**：端口写 `0` 表示由系统分配（并发启动/测试用）。监听成功后 stderr 打印一行启动行，
+  e2e 从这行取实际端口（不再「先 bind 取端口 → 释放 → 交给子进程」，没有 TOCTOU 窗口）：
+  `mir2-mcp: HTTP 传输监听 http://127.0.0.1:<port>/mcp（只回环，Bearer token 已配置；并发上限 <n>，请求头超时 <ms>ms）`
+  该行**不含 token**。端口被占用等监听失败 ⇒ **rc=1**（`mir2-mcp: HTTP 传输启动失败：…`）。
 - **token 来源**：`--token-file <path>`（读文件并去首尾空白，**优先**）或 env `MIR2_MCP_HTTP_TOKEN`。
   token **不打印、不进日志、不进文档示例**；请求缺失/错误 token ⇒ `401` + 空响应体，且**不触达任何工具处理器**
   （常量时间比较）。
 - **端口**：缺省 `7950`，**opt-in 且缺省关闭**，不计入 `E:/MirServer` 十端口基线，也不改 `port-status.ps1`。
-- **Host/Origin**：保留 rmcp 缺省 `allowed_hosts`（`localhost`/`127.0.0.1`/`::1`），并启用
-  `enforce_origin_validation()`（空 Origin 白名单 ⇒ 带 `Origin` 头的请求被拒；CLI/MCP 客户端不发 Origin）。
+- **Host/Origin 策略**：
+  - `allowed_hosts` = rmcp 缺省（`localhost`/`127.0.0.1`/`::1`）**加上本次 `--bind` 的 IP 字面量**。
+    所以 `--bind 127.0.0.2:7950` 能正常服务（客户端 `Host: 127.0.0.2:7950`）；若只保留缺省三条，
+    就会「启动成功但每个请求 `403` `Forbidden: Host header is not allowed`」。
+  - 其它 `Host`（例如 `evil.example` 或 DNS rebinding 域名）⇒ **`403`**。
+  - 请求带 `Origin` 头 ⇒ **`403`** `Forbidden: Origin header is not allowed`（`enforce_origin_validation()`；
+    CLI/MCP 客户端不发 Origin）。
+- **连接层护栏**（缺省值即生产值，两个参数都只在 `--transport http` 下有效）：
+  - `--max-connections <n>`：并发连接上限，缺省 **64**，允许 `1..=4096`；名额已满时新连接**立即关闭**
+    （不排队、不回包；既有连接不受影响）。keep-alive 连接在关闭前一直占用一个名额。
+  - `--header-timeout-ms <ms>`：请求头读取超时，缺省 **10000**，允许 `1..=600000`；窗口内没发完请求头的
+    连接被关闭（只连不发 / 慢 header 的客户端不会长期占用名额）。
+  - `accept()` 出错（如 EMFILE/ENFILE）⇒ **退避重试**（10ms 起翻倍、**1s 封顶**，成功一次即重置），
+    不紧凑自旋。
 - **工具语义零改动**：同一 root/registry、同一参数下，两种传输返回的 `structuredContent` canonical JSON
   逐字节相等（端到端测试比较 sha256）。
 
@@ -81,14 +98,29 @@ curl.exe -s -o NUL -w "%{http_code}`n" -X POST http://127.0.0.1:7950/mcp `
     -H "Content-Type: application/json" -H "Accept: application/json, text/event-stream" `
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 
-# 4) 带 token ⇒ 期望 200（initialize 需完整参数；此处仅示意鉴权头）
+# 4) 带 token 但**没有会话** ⇒ 期望 400（不是 200）：
+#    tools/list 必须先 initialize；此处响应体是 `Bad Request: Session ID is required`。
+#    这一步只证明「token 已通过鉴权、请求进到了 MCP 层」。
 curl.exe -s -o NUL -w "%{http_code}`n" -X POST http://127.0.0.1:7950/mcp `
     -H "Authorization: Bearer <token>" -H "Content-Type: application/json" `
     -H "Accept: application/json, text/event-stream" `
     -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
+
+# 5) 完整握手才会看到 200：先 initialize 拿 Mcp-Session-Id，再带该头调 tools/list。
+curl.exe -s -D "$env:TEMP\mir2-mcp-init.headers" -o NUL -X POST http://127.0.0.1:7950/mcp `
+    -H "Authorization: Bearer <token>" -H "Content-Type: application/json" `
+    -H "Accept: application/json, text/event-stream" `
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"self-check","version":"0"}}}'
+$session = (Select-String -Path "$env:TEMP\mir2-mcp-init.headers" -Pattern '^mcp-session-id:\s*(\S+)' -CaseSensitive:$false).Matches[0].Groups[1].Value
+curl.exe -s -o NUL -w "%{http_code}`n" -X POST http://127.0.0.1:7950/mcp `
+    -H "Authorization: Bearer <token>" -H "Content-Type: application/json" `
+    -H "Mcp-Session-Id: $session" -H "Accept: application/json, text/event-stream" `
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}'
+# ⇒ 期望 200
 ```
 
-> 拒绝启动的负例：`--transport http` 不带 token、或 `--bind 0.0.0.0:7950`、或 `--bind localhost:7950`
+> 拒绝启动的负例：`--transport http` 不带 token、或 `--bind 0.0.0.0:7950`、或 `--bind localhost:7950`、
+> 或 `--bind 192.168.1.10:7950`、或 `--max-connections 0`、或 `--header-timeout-ms 0`
 > ⇒ rc=2 且 `Get-NetTCPConnection -State Listen -LocalPort 7950` 为空。
 
 ### root 解析
