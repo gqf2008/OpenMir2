@@ -63,6 +63,11 @@ reviewer-21 审 M-1 后记时发现：矩阵里的 oracle/harness 行号**在合
   末行+1 必红（两种文件形态都有牙与变异钉住）。
 * `git` 无法执行 / `git merge-base` 失败 / base 解析不到 ⇒ **rc=2（判不了）**，绝不静默跳过；
   绝不与「判出问题（rc=1）」混用同一码。
+* **非 ASCII 文件名**（卡 `openmir2-docs-anchor-quotepath`）：`git diff` 默认
+  `core.quotePath=true` 会把 `docs/中文名.md` 输出成 `"b/docs/\344\270\255..."`，
+  按 `startswith("docs/")` 过滤时整份文档被**静默跳过** ⇒ `检查 0` 假绿。
+  门内部调 git 时一律显式 `-c core.quotePath=false`（命令行 `-c` 优先级最高，
+  不依赖调用方环境变量/仓库配置）；自测有合成夹具（`docs/中文名.md`）钉住。
 
 ## 用法
 
@@ -630,10 +635,18 @@ def _git_out(repo, args):
 
     git **不存在**（未安装 / 不在 PATH）不是「发现问题」而是「判不了」⇒ 捕获 OSError
     并返回 rc=127，让调用方收敛到 rc=2（reviewer-21 F3：原实现抛 FileNotFoundError ⇒ rc=1）。
+
+    **`-c core.quotePath=false` 必须由门自己给**（卡 `openmir2-docs-anchor-quotepath`）：
+    默认（true）下 git 把非 ASCII 文件名加引号并做 C 风格八进制转义，
+    `+++ "b/docs/M2-S3\344\270\226..."` 拆出的路径以 `"` 开头 ⇒ `startswith("docs/")`
+    判假、整份文档被静默跳过（`检查 0` 假绿）。命令行 `-c` 的优先级高于环境变量
+    （`GIT_CONFIG_*`）与 local/system 配置，所以门的行为**不依赖调用方环境**。
+    选它而非自写 C 风格反转义：只有一处、无转义歧义，且所有 git 调用一致。
     """
     import subprocess
     try:
-        p = subprocess.run([GIT_BIN, "-C", repo] + list(args), stdout=subprocess.PIPE,
+        p = subprocess.run([GIT_BIN, "-C", repo, "-c", "core.quotePath=false"] + list(args),
+                           stdout=subprocess.PIPE,
                            stderr=subprocess.PIPE, env=_git_env())
     except (FileNotFoundError, OSError) as e:
         return 127, "", "git 无法执行（%s）：%s" % (GIT_BIN, e)
@@ -1004,6 +1017,31 @@ def _prose_teeth():
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙⑥HIGH_CHURN 改成路径/符号锚 ⇒ 绿",
               rc == 0 and "RESULT: GREEN" in out and "HIGH_CHURN_LINE_ANCHOR" not in out,
+              out[-300:])
+
+        # ⑪ 非 ASCII 文件名（卡 `openmir2-docs-anchor-quotepath`）：git 默认
+        #    core.quotePath=true 会把 `docs/中文名.md` 输出成 `"b/docs/\344\270\255..."`；
+        #    门若按原样 `startswith("docs/")` 过滤，整份文档被静默跳过 ⇒ `检查 0` 假绿。
+        #    这里把 temp 仓库的 core.quotePath **显式钉成 true**（不受宿主机全局配置影响），
+        #    要门自己用命令行 `-c core.quotePath=false`（优先级最高）覆盖它。
+        g("config", "core.quotePath", "true")
+        write_doc("这一行没有任何锚，只是普通散文")
+        cjk_doc = os.path.join(tmp, "docs", "中文名.md")
+        with open(cjk_doc, "w", encoding="utf-8") as fh:
+            fh.write("悬空锚 `src/no_such_file.rs:1`\n")
+        g("add", "-A")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙⑦非 ASCII 文件名不被 quotePath 跳过 ⇒ 悬空 1 且 rc=1",
+              rc == 1 and "PROSE_ANCHOR_PATH_MISSING" in out and "悬空 1" in out
+              and "docs/中文名.md" in out, out[-300:])
+
+        # ⑫ 同一非 ASCII 文件改成**有效**锚 ⇒ 检查 1 且绿：证明是「真纳入了检查」，
+        #    不是把整份文件恒定判红。
+        with open(cjk_doc, "w", encoding="utf-8") as fh:
+            fh.write("正例 `src/a.rs:4` `beta`\n")
+        rc, out = _cap(scan_prose, tmp, base, reg)
+        check("牙⑧非 ASCII 文件里的有效锚 ⇒ 检查 1 / 绿（证明真的被扫到）",
+              rc == 0 and "检查 1 / 悬空 0 / 越界 0" in out and "RESULT: GREEN" in out,
               out[-300:])
 
         # ⑦ base 解析不到 ⇒ rc=2（判不了，不静默跳过）；stderr 也收进断言，别让 PASS 行带噪声
