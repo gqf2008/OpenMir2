@@ -3781,13 +3781,31 @@ fn level_rank_players<'a>(
         .collect()
 }
 
+/// `SM_LEVELRANK(1108)` **英雄榜**（kind `4..=7`）的唯一采集点。
+///
+/// **本仓没有英雄实体建模**：C# oracle 的 `SM_HEROSTATE(899)` 无发射点、SQL 三库无
+/// hero 表/列、`mir2_world::Entity` 无 `is_hero` 字段（只有宝宝主人 `master`）⇒
+/// 没有「玩家英雄」可采集。故本函数目前恒返回空：英雄页输出 10 个零行
+/// （客户端 `present()` 按 `master_len != 0` 判空，不画行），这是契约内的**空榜**，
+/// 不是伪造数据。
+///
+/// 英雄系统落地后只需在本函数内按 `(master, hero, level, index)` 采集；排序/编码已由
+/// 纯函数 `enter::hero_rank_body` 固定（level desc、同级 GBK 名升序）。
+fn level_rank_heroes<'a>(
+    _online: &'a OnlineRegistry,
+    _world: &mir2_world::World,
+) -> Vec<(&'a str, &'a str, u16, u16)> {
+    Vec::new()
+}
+
 /// `CM_LEVELRANK(1060)` 的派发（**T-275 扩展**，tier=L，缺省关）。
 ///
 /// 语义：
 /// - `enabled = [Setup] LevelRankOnLogin != 0`；**关 ⇒ 完全忽略**（零帧、无日志，A1）。
 /// - 开 ⇒ 解析请求头 `page = recog`、`kind = param`，给**请求者自己**回恰好一帧
-///   `SM_LEVELRANK(1108)`（`recog = page`、`param = kind`，体复用 `enter::level_rank_frame`）。
-/// - `page < 0` 或 `kind > 3` ⇒ 零帧 + WRN（不 panic，A4）。
+///   `SM_LEVELRANK(1108)`（`recog = page`、`param = kind`）；体由
+///   `enter::level_rank_reply` 按 kind 分发（`0..=3` 人物 240B、`4..=7` 英雄 340B）。
+/// - `page < 0` 或 `kind > 7` ⇒ 零帧 + WRN（不 panic，A4）。
 /// - 只经请求者自己的 `(gate_idx, socket)` 路由，不广播（A3）。
 fn handle_level_rank_request_cmd(
     cmd: &CommandMessage,
@@ -3819,7 +3837,15 @@ fn handle_level_rank_request_cmd(
         return;
     }
     let players = level_rank_players(online, world);
-    let frame = enter::level_rank_frame(page, kind, &players);
+    let heroes = level_rank_heroes(online, world);
+    let Some(frame) = enter::level_rank_reply(page, kind, &players, &heroes) else {
+        // 防御：上面已挡住 `page < 0` / `kind > 7`；这里只在分发契约变化时触发。
+        glog!(
+            "WRN",
+            "CM_LEVELRANK：ChrName={chr_name} page={page} kind={kind} 无对应排行体 ⇒ 零帧"
+        );
+        return;
+    };
     if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "CM_LEVELRANK/SM_LEVELRANK") {
         let _ = tx.send(SimToGate::SendFrame {
             socket,
@@ -86623,7 +86649,8 @@ mod admin_channel_tests {
 }
 
 /// **卡 `openmir2-levelrank-1060-request`（tier=L）**：`CM_LEVELRANK(1060)` → 请求者
-/// 一帧 `SM_LEVELRANK(1108)`（`recog = page`、`param = kind`，体 240B，与登录帧同一构造）。
+/// 一帧 `SM_LEVELRANK(1108)`（`recog = page`、`param = kind`；kind `0..=3` 人物 240B、
+/// `4..=7` 英雄 340B）。
 ///
 /// 生产接线：`sim_loop` 的 `GateEvent::Command` 链 → [`handle_level_rank_request_cmd`]。
 /// 缺省 `[Setup] LevelRankOnLogin = 0` ⇒ 1060 完全忽略（A1，零帧）。
@@ -86792,12 +86819,12 @@ mod level_rank_request_tests {
         assert_eq!(got[0].0, 200, "只回请求者自己的 socket");
     }
 
-    /// A4：`kind > 3` / 负 page ⇒ 零帧（记 WRN，不 panic）；边界 `kind = 3` 合法。
+    /// A4：`kind > 7` / 负 page ⇒ 零帧（记 WRN，不 panic）；边界 `kind = 3` 合法（人物）。
     #[test]
     fn out_of_range_kind_or_negative_page_is_ignored_without_panic() {
         let mut rig = rig();
         handle_level_rank_request_cmd(
-            &req(0, 4),
+            &req(0, 8),
             "hero",
             100,
             &rig.online,
@@ -86805,7 +86832,7 @@ mod level_rank_request_tests {
             true,
             &rig.gates,
         );
-        assert!(take(&mut rig.rx0).is_empty(), "kind=4 (>3) ⇒ 零帧");
+        assert!(take(&mut rig.rx0).is_empty(), "kind=8 (>7) ⇒ 零帧");
 
         handle_level_rank_request_cmd(
             &req(-1, 0),
@@ -86833,6 +86860,42 @@ mod level_rank_request_tests {
         assert_eq!(got.len(), 1, "kind=3 是上界内合法值");
         let cmd = WireCmd::from_bytes(&got[0].1).expect("12B 命令头");
         assert_eq!((cmd.recog, cmd.param), (0, 3));
+    }
+
+    /// A2/A3：kind `4..=7` ⇒ 340B 英雄体（10 个零行：本仓无英雄实体），
+    /// `recog=page`、`param=kind`，只回请求者；且采集点恒空。
+    #[test]
+    fn hero_kinds_reply_340b_zero_rows_with_page_and_kind() {
+        let mut rig = rig();
+        assert!(
+            level_rank_heroes(&rig.online, &rig.world).is_empty(),
+            "本仓无英雄实体建模 ⇒ 采集点恒空"
+        );
+        for kind in 4u16..=7 {
+            handle_level_rank_request_cmd(
+                &req(2, kind),
+                "hero",
+                100,
+                &rig.online,
+                &rig.world,
+                true,
+                &rig.gates,
+            );
+            let got = take(&mut rig.rx0);
+            assert_eq!(got.len(), 1, "kind={kind} 恰好一帧回请求者");
+            assert_eq!(got[0].0, 100, "kind={kind} 只回请求者 socket");
+            let cmd = WireCmd::from_bytes(&got[0].1).expect("12B 命令头");
+            assert_eq!(cmd.ident, enter::SM_LEVELRANK);
+            assert_eq!((cmd.recog, cmd.param), (2, kind));
+            let body = mir2_protocol::edcode::decode(&got[0].1[12..]);
+            assert_eq!(
+                body.len(),
+                enter::HERO_RANK_BODY_LEN,
+                "kind={kind} 体恰 340B"
+            );
+            assert!(body.iter().all(|b| *b == 0), "空榜 = 10 个零行");
+            assert!(take(&mut rig.rx1).is_empty(), "kind={kind} 不广播");
+        }
     }
 
     /// 接线保鲜门（A5 的「删掉 1060 处理」一面）：`sim_loop` 的 `GateEvent::Command` 链里
