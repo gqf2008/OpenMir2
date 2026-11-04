@@ -1548,10 +1548,10 @@ mod tests {
                 weapon_shape: Some(5),
                 gender: 1,
                 hair: 2,
-                // **T-277 / A4**：horse 位段冻结为 0（骑乘态走 SM_MOUNTRIDE；oracle 的
-                // HorseType 本就没有赋值点）。这里刻意构造 false/0 = 生产可达形态。
-                on_horse: false,
-                horse_type: 0,
+                // **T-277 / A4 负例**：刻意构造**非零** horse 输入；独立帧契约下仍必须
+                // 得到 feature_ex=0x0400。若实现退回读取 on_horse/horse_type，本用例必红。
+                on_horse: true,
+                horse_type: 9,
                 dress_eff_type: 4,
             },
             char_status: 0x1122_3344,
@@ -1564,7 +1564,8 @@ mod tests {
         //   nHair   = (byte)(2*2 + 1) = 5
         //   feature = MakeHumanFeature(0, 7, 11, 5) = MakeLong(MakeWord(0,11), MakeWord(5,7))
         //           = 0x0B00 | (0x0705 << 16) = 0x0705_0B00
-        //   featureEx = MakeWord(0, 4) = 0x0400（T-277：horse 低字节冻结 0）
+        //   featureEx = MakeWord(0, 4) = 0x0400（T-277：即使 on_horse=true/horse_type=9，
+        //                horse 低字节仍冻结 0；非零输入是本用例的回归牙）
         //   Tag1   = MakeLong(MakeWord(1,0), featureEx) = 0x0001 | (0x0400 << 16) = 0x0400_0001
         let mut base = EnterWorldInputs {
             actor_id: 7,

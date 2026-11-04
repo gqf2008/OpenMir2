@@ -44298,6 +44298,14 @@ break
             rig.sessions["aaa"].gm.horse_type, 3,
             "HorseType := mount_id"
         );
+        assert!(
+            !rig.sessions["aaa"].gm.pending_feature_changed,
+            "41 落地即清（保留旧宿主用例的断言）"
+        );
+        assert_eq!(
+            rig.sessions["aaa"].gm.pending_mount_ride, None,
+            "SM_MOUNTRIDE 落地即清"
+        );
         // ② 下马：41（Series 仍 0）→ SM_MOUNTRIDE(0)。
         let bodies = rig.say_gm("@OffHorse");
         assert_eq!(bodies.len(), 2, "下马 = 41 + SM_MOUNTRIDE(0)");
@@ -44317,6 +44325,14 @@ break
         assert_eq!(bodies[1][12], 0, "下马帧 mount_id = 0");
         assert!(!rig.sessions["aaa"].gm.on_horse);
         assert_eq!(rig.sessions["aaa"].gm.horse_type, 0);
+        assert!(
+            !rig.sessions["aaa"].gm.pending_feature_changed,
+            "下马 41 落地即清"
+        );
+        assert_eq!(
+            rig.sessions["aaa"].gm.pending_mount_ride, None,
+            "下马 SM_MOUNTRIDE(0) 落地即清"
+        );
         // ③ 未骑马再敲：静默零帧（`if (!OnHorse) return;`）。
         let bodies = rig.say_gm("@OffHorse");
         assert!(bodies.is_empty(), "未骑马静默");
@@ -78830,6 +78846,42 @@ GMEXECUTE f
         })
     }
 
+    /// T-277 用例共用的生产构造入口：按**同一份** `CharacterData` 重建会话，
+    /// 不手工改 `on_horse/horse_type`，确保登录/重连派生走的是真路径。
+    fn mount_test_session_ground(
+        data: &record::CharacterData,
+        catalog: &game_svr::ability::StdItemCatalog,
+    ) -> SessionGround {
+        let ability_inputs = enter::AbilityInputs {
+            catalog,
+            abil: data.abil.as_ref().expect("stage6 必须有 Abil"),
+            bonus_abil: data.bonus_abil.as_ref().expect("stage6 必须有 BonusAbil"),
+            bonus_tick_hit: 20,
+            bonus_tick_speed: 35,
+            use_items: data.hum_items.as_deref(),
+            bag_items: data.bag_items.as_deref(),
+            magics: data.magic.as_deref(),
+            magic_table: None,
+            gold: data.gold,
+            client_ability_layout: false,
+        };
+        let recalc = enter::recalc_for_session(&ability_inputs, data.job);
+        let guild_session = guild_cmd::GuildSession::default();
+        session_ground_from_login(SessionGroundInputs {
+            login_account: "acct",
+            record: data,
+            recalc: &recalc,
+            ability: &ability_inputs,
+            use_items: use_items_from(data.hum_items.as_deref()),
+            guild_session: &guild_session,
+            soft_version_date: 0,
+            actor_id: 1,
+            server_index: data.server_index,
+            canot_pick_up_item: "",
+            now: 1_000,
+        })
+    }
+
     /// **T-277 / A5**：登录/重连按背包马牌**重算**骑乘态——马牌行由既有
     /// `characters_bagitem` 存档路径落库（不新增角色列），读档后 `HorseType = Shape`、`OnHorse=true`。
     ///
@@ -78862,38 +78914,11 @@ GMEXECUTE f
         let rec = stage6_record();
         let mut data = rec.data.clone();
         data.bag_items = Some(vec![Some(plate.clone())]);
-        let make = |data: &record::CharacterData, cat: &game_svr::ability::StdItemCatalog| {
-            let ability_inputs = enter::AbilityInputs {
-                catalog: cat,
-                abil: data.abil.as_ref().expect("stage6 必须有 Abil"),
-                bonus_abil: data.bonus_abil.as_ref().expect("stage6 必须有 BonusAbil"),
-                bonus_tick_hit: 20,
-                bonus_tick_speed: 35,
-                use_items: data.hum_items.as_deref(),
-                bag_items: data.bag_items.as_deref(),
-                magics: data.magic.as_deref(),
-                magic_table: None,
-                gold: data.gold,
-                client_ability_layout: false,
-            };
-            let recalc = enter::recalc_for_session(&ability_inputs, data.job);
-            let guild_session = guild_cmd::GuildSession::default();
-            session_ground_from_login(SessionGroundInputs {
-                login_account: "acct",
-                record: data,
-                recalc: &recalc,
-                ability: &ability_inputs,
-                use_items: use_items_from(data.hum_items.as_deref()),
-                guild_session: &guild_session,
-                soft_version_date: 0,
-                actor_id: 1,
-                server_index: data.server_index,
-                canot_pick_up_item: "",
-                now: 1_000,
-            })
-        };
-        let sg = make(&data, &catalog);
-        assert!(sg.gm.on_horse, "持有马牌 ⇒ 登录即骑乘（重连保持）");
+        let sg = mount_test_session_ground(&data, &catalog);
+        assert!(
+            sg.gm.on_horse,
+            "有意契约：从未执行 @OnHorse 的持牌角色首次登录也自动骑乘"
+        );
         assert_eq!(sg.gm.horse_type, 5, "HorseType := 马牌 Shape");
         // ② 负例：没有马牌 ⇒ 未骑乘（ctor 缺省）。
         data.bag_items = Some(vec![Some(record::ServerUserItem {
@@ -78907,9 +78932,82 @@ GMEXECUTE f
             color_b: 0,
             prefix: None,
         })]);
-        let sg = make(&data, &catalog);
+        let sg = mount_test_session_ground(&data, &catalog);
         assert!(!sg.gm.on_horse);
         assert_eq!(sg.gm.horse_type, 0);
+    }
+
+    /// **T-277 / F2 意向用例**：背包保留马牌 → 真 `@OnHorse` → 真 `@OffHorse` →
+    /// 按**同一份存档**经生产构造器重建 `SessionGround`。选定行为是「持有马牌 = 骑乘」：
+    /// 下马只结束当前会话骑乘，**不**形成独立持久的下马态；重连仍恢复骑乘。
+    /// 同时证明 `@OffHorse` 不移除会话背包或存档里的马牌。
+    ///
+    /// 红检：删登录 `held_mount_id` 派生 ⇒ 重建断言红；若以后引入独立下马持久位，
+    /// 必须同步修改本用例与 whitelist 的有意契约，而不是让它静默变绿。
+    #[test]
+    fn t277_offhorse_reconnect_remounts_from_same_saved_plate_by_design() {
+        let mut rig = GmRig::new();
+        rig.catalog.insert(
+            1001,
+            mir2_data::StdItem {
+                name: "马牌05".into(),
+                std_mode: game_svr::mount::HORSE_ITEM_STD_MODE,
+                shape: 5,
+                ..mir2_data::StdItem::default()
+            },
+        );
+        let plate = record::ServerUserItem {
+            make_index: 7,
+            index: 1001,
+            dura: 0,
+            dura_max: 0,
+            desc: None,
+            color_r: 0,
+            color_g: 0,
+            color_b: 0,
+            prefix: None,
+        };
+        rig.sessions
+            .get_mut("aaa")
+            .expect("GmRig 恒有 aaa")
+            .state
+            .item_list
+            .push(game_svr::bag::BagItem::new(7, 1001));
+        let mut saved = stage6_record();
+        saved.data.bag_items = Some(vec![Some(plate.clone())]);
+        rig.saves.get_mut("aaa").expect("GmRig 恒有存档").record = saved;
+
+        // 上马 / 下马都走生产 CM_SAY 入口，不是直接改会话字段。
+        let _ = rig.say_gm("@OnHorse");
+        assert!(rig.sessions["aaa"].gm.on_horse);
+        assert_eq!(rig.sessions["aaa"].gm.horse_type, 5);
+        let _ = rig.say_gm("@OffHorse");
+        assert!(!rig.sessions["aaa"].gm.on_horse, "当前会话已下马");
+        assert_eq!(rig.sessions["aaa"].gm.horse_type, 0);
+        assert!(
+            rig.sessions["aaa"]
+                .state
+                .item_list
+                .iter()
+                .any(|it| it.index == 1001),
+            "@OffHorse 不移除会话背包里的马牌"
+        );
+        let saved_after = rig.saves["aaa"].record.data.clone();
+        let saved_plate = saved_after
+            .bag_items
+            .as_deref()
+            .and_then(|items| items.first())
+            .and_then(Option::as_ref)
+            .expect("同一存档仍保留马牌");
+        assert_eq!((saved_plate.make_index, saved_plate.index), (7, 1001));
+
+        // 关键意向断言：按同一份存档重连，持有马牌 ⇒ 再次骑乘。
+        let rebuilt = mount_test_session_ground(&saved_after, &rig.catalog);
+        assert!(
+            rebuilt.gm.on_horse,
+            "有意契约：下马后重连仍由背包马牌恢复骑乘"
+        );
+        assert_eq!(rebuilt.gm.horse_type, 5);
     }
 
     /// 跑一次 `@GroupCreate`（组队漏斗 `run_party_goto_label`），返回 `SM_MENU_OK(767)` 条数。

@@ -17,8 +17,9 @@
 //!
 //! 卡面写「`Shape = mount_id (0..11)`」又写「帧 `mount_id = 0` 表示下马」——二者在 0 上冲突。
 //! 实现取 **`mount_id ∈ 1..=12`、`0 = 下马`**；12 个 Mount 库按 `mount_id - 1` 映射到
-//! `Crystal.Assets/ClientData/Mount/00.Lib .. 11.Lib`。这是同时满足「0=下马」与「12 个库全覆盖」
-//! 的唯一口径。
+//! `Crystal.Assets/ClientData/Mount/00.Lib .. 11.Lib`。客户端侧已回执接受此口径
+//! （卡线程 comment `3652251b`；T286 merge `165079c`）。跨端向量由本文件的
+//! [`MOUNT_LIBRARIES`] / [`mount_library_of`] 与对应用例钉死。
 //!
 //! # 帧格式
 //!
@@ -42,6 +43,20 @@ pub const HORSE_ITEM_STD_MODE: u8 = 18;
 pub const MOUNT_ID_MIN: u8 = 1;
 /// `mount_id` 上界（12 = `11.Lib`）。
 pub const MOUNT_ID_MAX: u8 = 12;
+
+/// **T-277 / T286 跨端契约**：`mount_id 1..=12` 对应的 Mount 库文件，库索引 = `mount_id - 1`。
+/// 服务端不发送文件名；本表只作为双方对齐的单一事实源，供契约用例与排障使用。
+pub const MOUNT_LIBRARIES: [&str; 12] = [
+    "00.Lib", "01.Lib", "02.Lib", "03.Lib", "04.Lib", "05.Lib", "06.Lib", "07.Lib", "08.Lib",
+    "09.Lib", "10.Lib", "11.Lib",
+];
+
+/// `mount_id` → 客户端 Mount 库文件名；`0 = 下马`、越界 ⇒ `None`。
+#[must_use]
+pub fn mount_library_of(mount_id: u8) -> Option<&'static str> {
+    let index = usize::from(mount_id.checked_sub(1)?);
+    MOUNT_LIBRARIES.get(index).copied()
+}
 
 /// 物品模板 `Index` → `mount_id`。判定 = `StdMode == 18` **且** `Shape ∈ 1..=12`。
 ///
@@ -138,6 +153,29 @@ mod tests {
         assert_eq!(held_mount_id(&cat, &bag), Some(3));
         assert_eq!(held_mount_id(&cat, &[]), None);
         assert_eq!(held_mount_id(&cat, &[BagItem::new(1, 42)]), None);
+    }
+
+    /// **F3 / T286 跨端契约向量**：`Shape 1 → mount_id 1 → 00.Lib`、
+    /// `Shape 12 → mount_id 12 → 11.Lib`；帧 `mount_id = 0` 只表示下马、不对应任何库。
+    ///
+    /// 红检：把库索引从 `id - 1` 改成 `id` ⇒ 两端向量断言红；把 0 映射到 `00.Lib` ⇒
+    /// `mount_library_of(0) == None` 与下马帧断言红。
+    #[test]
+    fn mount_contract_vectors_match_t286() {
+        let low = catalog_with(1001, HORSE_ITEM_STD_MODE, 1);
+        let low_id = mount_id_of_index(&low, 1001).expect("Shape 1 是合法马牌");
+        assert_eq!(low_id, 1);
+        assert_eq!(mount_library_of(low_id), Some("00.Lib"));
+
+        let high = catalog_with(1012, HORSE_ITEM_STD_MODE, 12);
+        let high_id = mount_id_of_index(&high, 1012).expect("Shape 12 是合法马牌");
+        assert_eq!(high_id, 12);
+        assert_eq!(mount_library_of(high_id), Some("11.Lib"));
+
+        assert_eq!(mount_library_of(0), None, "0 只表示下马，不对应 00.Lib");
+        assert_eq!(mount_library_of(13), None, "越界没有库");
+        let down = sm_mountride_body(1, 0);
+        assert_eq!(down[12], 0, "帧 0 = 下马");
     }
 
     /// 帧体逐字节：12B 头（Recog/Ident/0/0/0）++ `[mount_id][actor u16 LE]`。
