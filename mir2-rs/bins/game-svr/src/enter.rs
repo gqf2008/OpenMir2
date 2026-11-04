@@ -402,12 +402,15 @@ pub fn gbk(s: &str) -> Vec<u8> {
 
 /// `SM_LEVELRANK(1108)` —— **登记偏差 T-275**（oracle 无此帧；`git grep LEVELRANK` 零命中）。
 ///
-/// 客户端契约（跨会话提供：Zig 客户端 `gui/rank.zig` 的 `parseHumanRanksDecoded`）：
-/// 头 `Recog = page`（≥ 0）、`Param = kind`（≤ 3 人物排行，4..=7 英雄排行；本卡只做 `kind = 0`）；
-/// 尾 = `EDCode.Encode(240 字节)`，240B = **10 行 × 24B**：
+/// 客户端契约（冻结 Delphi `Grobal2.pas` 的 `THumanLevelRank` / `THeroLevelRank`；Zig 客户端
+/// `gui/rank.zig` 的 `parseHumanRanksDecoded` / `parseHeroRanksDecoded` 是逐字节解析真源）：
+/// 头 `Recog = page`（≥ 0）、`Param = kind`（`0..=3` 人物排行，`4..=7` 英雄排行）；
+/// 尾 = `EDCode.Encode(体)`：人物 **240B**、英雄 **340B**。
+///
+/// 人物每行 24B：
 ///
 /// ```text
-/// 每行：[1] name_len + [15] name（GBK，右补 0x00）+ [4] level（int32 LE）+ [4] index（int32 LE）
+/// [1] name_len + [15] name（GBK，右补 0x00）+ [4] level（int32 LE）+ [4] index（int32 LE）
 /// ```
 ///
 /// 行序 = 在线玩家按 `Abil.Level` **降序**、同等级按 `ChrName` 的 **GBK 字节升序**；
@@ -415,26 +418,34 @@ pub fn gbk(s: &str) -> Vec<u8> {
 ///
 /// **缺省关闭**：`[Setup] LevelRankOnLogin` 缺省 0 ⇒ 一帧都不发（parity 基线逐字节不变）。
 pub const SM_LEVELRANK: u16 = 1108;
-/// `SM_LEVELRANK` 的**人物排行** `kind`（英雄排行占 4..=7，本卡不实现）。
+/// `SM_LEVELRANK` 的**人物排行** `kind` 下界（`0..=3` 人物；`4..=7` 英雄）。
 pub const LEVEL_RANK_KIND_HUMAN: u16 = 0;
-/// 固定 10 行。
+/// `SM_LEVELRANK` 的**英雄排行** `kind` 下界（`4..=7`；职业/全部映射见 `hero_rank_body`）。
+pub const LEVEL_RANK_KIND_HERO: u16 = 4;
+/// 固定 10 行（人物/英雄共用）。
 pub const LEVEL_RANK_ROWS: usize = 10;
-/// 每行 24 字节。
+/// 人物每行 24 字节。
 pub const LEVEL_RANK_ROW_LEN: usize = 24;
-/// 名字字段 15 字节。
+/// 人物名字字段 15 字节。
 pub const LEVEL_RANK_NAME_LEN: usize = 15;
-/// 体长 = 10 × 24 = 240 字节。
+/// 人物体长 = 10 × 24 = 240 字节。
 pub const LEVEL_RANK_BODY_LEN: usize = LEVEL_RANK_ROWS * LEVEL_RANK_ROW_LEN;
+/// 英雄每行 34 字节：`[1] master_len + [14] master + [1] hero_len + [14] hero + [2] level(LE) + [2] index(LE)`。
+pub const HERO_RANK_ROW_LEN: usize = 34;
+/// 英雄名字字段 14 字节（Delphi `string[14]`，两个）。
+pub const HERO_RANK_NAME_LEN: usize = 14;
+/// 英雄体长 = 10 × 34 = 340 字节。
+pub const HERO_RANK_BODY_LEN: usize = LEVEL_RANK_ROWS * HERO_RANK_ROW_LEN;
 
 /// `CM_LEVELRANK(1060)` —— **T-275 扩展**：客户端打开排行窗口/点职业/翻页时向服务端
 /// 重新拉取（oracle 无 1060/1108；客户端 `DBotLevelRankClick` 打开窗口先清表，登录帧被清掉）。
 ///
-/// 线缆映射：请求头 `Recog = page`（≥ 0）、`Param = kind`（≤ 3 人物排行）。
+/// 线缆映射：请求头 `Recog = page`（≥ 0）、`Param = kind`（`0..=3` 人物、`4..=7` 英雄）。
 /// 仅当 `[Setup] LevelRankOnLogin != 0` 时处理；只回**请求者自己**一帧 `SM_LEVELRANK(1108)`。
 pub const CM_LEVELRANK: u16 = 1060;
 
-/// `CM_LEVELRANK` 接受的 `kind` 上界（> 3 = 英雄排行/非法，本卡不实现 ⇒ 零帧 + WRN）。
-pub const LEVEL_RANK_KIND_MAX: u16 = 3;
+/// `CM_LEVELRANK` 接受的 `kind` 上界（`4..=7` 英雄排行；`> 7` = 非法 ⇒ 零帧 + WRN）。
+pub const LEVEL_RANK_KIND_MAX: u16 = 7;
 
 /// 名字字段的**字符安全**截断长度：`≤ LEVEL_RANK_NAME_LEN`，且不落在 GBK 双字节字符中间。
 ///
@@ -442,6 +453,14 @@ pub const LEVEL_RANK_KIND_MAX: u16 = 3;
 /// 也是单字节）。从 0 开始按「首字节定宽」推进，若下一个字符会跨过第 15 字节就停在上一个
 /// 字符边界——16 字节中文名（8 个汉字）因此截到 **14**（7 个完整汉字），不会留下半个汉字。
 fn name_field_len(name: &[u8]) -> usize {
+    name_field_len_cap(name, LEVEL_RANK_NAME_LEN)
+}
+
+/// [`name_field_len`] 的通用形态：按 GBK 字符边界推进到不超过 `cap` 字节。
+///
+/// 人物榜 `cap = 15`（`LEVEL_RANK_NAME_LEN`），英雄榜 `cap = 14`（`HERO_RANK_NAME_LEN`）。
+/// 两者共用同一 lead 判定与同一 `min(name.len())` 兜底，避免第二份截断实现。
+fn name_field_len_cap(name: &[u8], cap: usize) -> usize {
     let mut end = 0;
     while end < name.len() {
         // lead 判定必须与上面的区间一致：`0x81..=0xFE`。用 `>= 0x81` 会把非法
@@ -452,13 +471,13 @@ fn name_field_len(name: &[u8]) -> usize {
         } else {
             1
         };
-        if end + width > LEVEL_RANK_NAME_LEN {
+        if end + width > cap {
             break;
         }
         end += width;
     }
     // 兜底：孤立 lead（如末尾的 `0x81`）会让 `end + width` 超过输入长度（但未超过
-    // 15 字节上限），此时返回长度必须夹回 `name.len()`，保证 `name[..n]` 安全。
+    // `cap` 上限），此时返回长度必须夹回 `name.len()`，保证 `name[..n]` 安全。
     end.min(name.len())
 }
 
@@ -494,6 +513,75 @@ pub fn level_rank_frame(page: i32, kind: u16, players: &[(&str, i32, i32)]) -> V
     let body = level_rank_body(players);
     let header = game_svr::smframe::command_header(page, SM_LEVELRANK, kind, 0, 0);
     game_svr::smframe::gm_data_body(header, &mir2_protocol::edcode::encode(&body))
+}
+
+/// **英雄排行体**的纯函数（`kind 4..=7`）：输入 `(master_name, hero_name, level, index)`，
+/// 输出 340 字节（10 行 × 34B）。
+///
+/// 布局（冻结 Delphi `THeroLevelRank`，Zig `parseHeroRanksDecoded` 逐字节读取）：
+///
+/// ```text
+/// 每行：[1] master_len + [14] master（GBK，右补 0x00）
+///      + [1] hero_len   + [14] hero（GBK，右补 0x00）
+///      + [2] level（u16 LE）+ [2] index（u16 LE）
+/// ```
+///
+/// 排序 = `(level desc, master GBK bytes asc, hero GBK bytes asc)`（与人物榜
+/// `level desc, GBK name asc` 同形）；名字按 14 字节字符边界截断；不足 10 行补零行。
+/// `master_len = 0` 是客户端判空行（`present()`）的唯一依据 ⇒ 空行必须全零。
+#[must_use]
+pub fn hero_rank_body(heroes: &[(&str, &str, u16, u16)]) -> Vec<u8> {
+    let mut rows: Vec<(Vec<u8>, Vec<u8>, u16, u16)> = heroes
+        .iter()
+        .map(|&(master, hero, level, index)| (gbk(master), gbk(hero), level, index))
+        .collect();
+    rows.sort_by(|a, b| {
+        b.2.cmp(&a.2)
+            .then_with(|| a.0.cmp(&b.0))
+            .then_with(|| a.1.cmp(&b.1))
+    });
+
+    let mut body = vec![0u8; HERO_RANK_BODY_LEN];
+    for (i, (master, hero, level, index)) in rows.iter().take(LEVEL_RANK_ROWS).enumerate() {
+        let row = &mut body[i * HERO_RANK_ROW_LEN..(i + 1) * HERO_RANK_ROW_LEN];
+        let mn = name_field_len_cap(master, HERO_RANK_NAME_LEN);
+        row[0] = u8::try_from(mn).expect("master_len ≤ 14 恒落 u8");
+        row[1..1 + mn].copy_from_slice(&master[..mn]);
+        let hn = name_field_len_cap(hero, HERO_RANK_NAME_LEN);
+        row[15] = u8::try_from(hn).expect("hero_len ≤ 14 恒落 u8");
+        row[16..16 + hn].copy_from_slice(&hero[..hn]);
+        row[30..32].copy_from_slice(&level.to_le_bytes());
+        row[32..34].copy_from_slice(&index.to_le_bytes());
+    }
+    body
+}
+
+/// 英雄排行帧 = 12B 头（`Recog=page` / `Ident=1108` / `Param=kind` / Tag=Series=0）
+/// ++ `EDCode.Encode(340B 体)`。
+#[must_use]
+pub fn hero_rank_frame(page: i32, kind: u16, heroes: &[(&str, &str, u16, u16)]) -> Vec<u8> {
+    let body = hero_rank_body(heroes);
+    let header = game_svr::smframe::command_header(page, SM_LEVELRANK, kind, 0, 0);
+    game_svr::smframe::gm_data_body(header, &mir2_protocol::edcode::encode(&body))
+}
+
+/// **kind 分发**：`0..=3` → 240B 人物榜；`4..=7` → 340B 英雄榜；其它（`>7`）或
+/// `page < 0` → `None`（零帧）。`lib.rs` 的 1060 处理器据此回帧/记 WRN。
+#[must_use]
+pub fn level_rank_reply(
+    page: i32,
+    kind: u16,
+    players: &[(&str, i32, i32)],
+    heroes: &[(&str, &str, u16, u16)],
+) -> Option<Vec<u8>> {
+    if page < 0 {
+        return None;
+    }
+    match kind {
+        0..=3 => Some(level_rank_frame(page, kind, players)),
+        LEVEL_RANK_KIND_HERO..=LEVEL_RANK_KIND_MAX => Some(hero_rank_frame(page, kind, heroes)),
+        _ => None,
+    }
 }
 
 /// 登录批次装配点：`enabled` 为真时给**本会话**追加一帧 1108，否则**原样返回**（A1 零变化）。
@@ -2934,6 +3022,186 @@ mod tests {
             !b.iter()
                 .any(|f| CommandMessage::from_bytes(f).map(|c| c.ident) == Some(SM_LEVELRANK)),
             "另一会话不得收到 1108"
+        );
+    }
+
+    // ---- T-278（英雄排行 kind 4..=7；tier=L）----
+
+    /// A1/A2：340B 布局（10 行 × 34B）+ 行序（level 降序、同级 master GBK 升序、
+    /// 再按 hero GBK 升序）+ 空行 `master_len=0` 的补零规则。
+    #[test]
+    fn hero_rank_body_layout_and_order_match_contract() {
+        let heroes = [
+            ("师傅", "英雄甲", 33, 512), // GBK 4 + 6 字节
+            ("Alpha", "B", 20, 2),
+            ("Alpha", "A", 20, 3), // 同 level/master ⇒ hero GBK 升序
+            ("", "无主", 1, 4),    // master 空 ⇒ 末行（level 最低）
+        ];
+        let body = hero_rank_body(&heroes);
+        assert_eq!(HERO_RANK_BODY_LEN, 340);
+        assert_eq!(body.len(), 340, "体恰 340 字节");
+
+        // 第 0 行 = 33 级
+        let row0 = &body[0..34];
+        assert_eq!(
+            row0[0],
+            u8::try_from(gbk("师傅").len()).unwrap(),
+            "master_len = GBK 字节数"
+        );
+        assert_eq!(&row0[1..5], gbk("师傅").as_slice());
+        assert_eq!(&row0[5..15], &[0u8; 10], "master 右补 0 到 14B");
+        assert_eq!(
+            row0[15],
+            u8::try_from(gbk("英雄甲").len()).unwrap(),
+            "hero_len = GBK 字节数"
+        );
+        assert_eq!(&row0[16..22], gbk("英雄甲").as_slice());
+        assert_eq!(&row0[22..30], &[0u8; 8], "hero 右补 0 到 14B");
+        assert_eq!(u16::from_le_bytes(row0[30..32].try_into().unwrap()), 33);
+        assert_eq!(u16::from_le_bytes(row0[32..34].try_into().unwrap()), 512);
+
+        // 第 1/2 行 = 同为 20 级且 master 相同 ⇒ hero GBK 升序（A 先于 B）
+        let row1 = &body[34..68];
+        let row2 = &body[68..102];
+        assert_eq!(row1[15], 1);
+        assert_eq!(&row1[16..17], b"A");
+        assert_eq!(u16::from_le_bytes(row1[32..34].try_into().unwrap()), 3);
+        assert_eq!(row2[15], 1);
+        assert_eq!(&row2[16..17], b"B");
+        assert_eq!(u16::from_le_bytes(row2[32..34].try_into().unwrap()), 2);
+
+        // 第 3 行 = 空 master（level 最低）：master_len=0，hero 仍可读
+        let row3 = &body[102..136];
+        assert_eq!(row3[0], 0, "空行以 master_len=0 判空");
+        assert_eq!(row3[15], u8::try_from(gbk("无主").len()).unwrap());
+        assert_eq!(u16::from_le_bytes(row3[30..32].try_into().unwrap()), 1);
+
+        // 其余 6 行全 0
+        assert!(body[136..].iter().all(|b| *b == 0), "不足 10 行补全 0 空行");
+    }
+
+    /// A5：空输入 = 10 个零行（340B，不是 0 字节）；12 条只取前 10 行。
+    #[test]
+    fn hero_rank_body_empty_input_is_zero_filled_and_takes_top_ten() {
+        assert_eq!(
+            hero_rank_body(&[]),
+            vec![0u8; HERO_RANK_BODY_LEN],
+            "空榜 = 340B 零行"
+        );
+        let names: Vec<String> = (0..12).map(|i| format!("M{i:02}")).collect();
+        let heroes: Vec<(&str, &str, u16, u16)> = names
+            .iter()
+            .enumerate()
+            .map(|(i, n)| {
+                (
+                    n.as_str(),
+                    "H",
+                    u16::try_from(100 - i).unwrap(),
+                    u16::try_from(i).unwrap(),
+                )
+            })
+            .collect();
+        let body = hero_rank_body(&heroes);
+        assert_eq!(body.len(), 340);
+        for i in 0..10usize {
+            let row = &body[i * HERO_RANK_ROW_LEN..(i + 1) * HERO_RANK_ROW_LEN];
+            assert_eq!(row[0], 3, "Mxx 名 3 字节");
+            assert_eq!(&row[1..4], format!("M{i:02}").as_bytes());
+            assert_eq!(
+                u16::from_le_bytes(row[30..32].try_into().unwrap()),
+                u16::try_from(100 - i).unwrap()
+            );
+            assert_eq!(
+                u16::from_le_bytes(row[32..34].try_into().unwrap()),
+                u16::try_from(i).unwrap()
+            );
+        }
+    }
+
+    /// A6：master / hero 名都按 14 字节字符边界截断，不留半个汉字；恰 14 字节整段保留。
+    #[test]
+    fn hero_rank_body_truncates_names_on_char_boundary_at_fourteen() {
+        let master = "一二三四五六七八"; // 16 GBK 字节
+        let hero = "一二三四五六七A"; // 15 GBK 字节
+        assert_eq!(gbk(master).len(), 16);
+        assert_eq!(gbk(hero).len(), 15);
+        let body = hero_rank_body(&[(master, hero, 1, 3)]);
+        assert_eq!(body[0], 14, "master 第 15 字节是 lead ⇒ 回退到 14");
+        assert_eq!(&body[1..15], &gbk(master)[..14], "只保留 7 个完整汉字");
+        assert_eq!(body[15], 14, "hero 15 字节 > 14 ⇒ 回退到 14");
+        assert_eq!(&body[16..30], &gbk(hero)[..14]);
+        assert_eq!(&body[30..32], &1u16.to_le_bytes());
+        assert_eq!(&body[32..34], &3u16.to_le_bytes());
+        assert!(body[34..].iter().all(|b| *b == 0));
+
+        // 关键分叉：ASCII + 7 汉字 = 15 字节，第 14 字节落在汉字中间。
+        // 字符边界实现 ⇒ 13 字节（A + 6 汉字）；按字节硬切 ⇒ 14（半个汉字）。
+        let mixed = "A一二三四五六七"; // 1 + 14 = 15 GBK 字节
+        assert_eq!(gbk(mixed).len(), 15);
+        let body = hero_rank_body(&[(mixed, mixed, 3, 5)]);
+        assert_eq!(body[0], 13, "第 14 字节是 lead ⇒ 回退到 13，不留半个汉字");
+        assert_eq!(&body[1..14], &gbk(mixed)[..13], "A + 6 个完整汉字");
+        assert_eq!(body[14], 0, "master 右侧补 0");
+        assert_eq!(body[15], 13, "hero 同口径");
+        assert_eq!(&body[16..29], &gbk(mixed)[..13]);
+        assert_eq!(body[29], 0, "hero 右侧补 0");
+
+        // 恰好 14 字节（7 汉字）整段保留，不触发回退。
+        let exact = "一二三四五六七";
+        assert_eq!(gbk(exact).len(), 14);
+        let body = hero_rank_body(&[(exact, exact, 2, 4)]);
+        assert_eq!(body[0], 14);
+        assert_eq!(&body[1..15], gbk(exact).as_slice());
+        assert_eq!(body[15], 14);
+        assert_eq!(&body[16..30], gbk(exact).as_slice());
+    }
+
+    /// A3：英雄帧头 = `page/1108/kind/0/0`；尾 = `EDCode(340B)`，解码回同一体。
+    #[test]
+    fn hero_rank_frame_header_and_edcode_tail() {
+        let heroes = [("师傅", "英雄", 60, 7)];
+        let frame = hero_rank_frame(5, 6, &heroes);
+        let cmd = CommandMessage::from_bytes(&frame).expect("12B 头");
+        assert_eq!(cmd.ident, SM_LEVELRANK);
+        assert_eq!((cmd.recog, cmd.param), (5, 6), "Recog=page / Param=kind");
+        assert_eq!((cmd.tag, cmd.series), (0, 0));
+        assert_eq!(frame.len(), 12 + edcode::encoded_len(HERO_RANK_BODY_LEN));
+        let decoded = edcode::decode(&frame[12..]);
+        assert_eq!(decoded.len(), HERO_RANK_BODY_LEN);
+        assert_eq!(decoded, hero_rank_body(&heroes));
+    }
+
+    /// A3/A4：kind 分发：`0..=3` 走 240B（逐字节等于旧 `level_rank_frame`），
+    /// `4..=7` 走 340B，`8`/负 page ⇒ `None`（零帧）。
+    #[test]
+    fn level_rank_reply_dispatches_kind_and_keeps_240b_byte_identical() {
+        let players = [("甲", 30, 0x11), ("Beta", 20, 0x22)];
+        let heroes = [("师傅", "英雄", 33, 512)];
+        for kind in 0u16..=3 {
+            let got = level_rank_reply(7, kind, &players, &heroes).expect("人物 kind 合法");
+            assert_eq!(
+                got,
+                level_rank_frame(7, kind, &players),
+                "kind={kind} 240B 路径逐字节不变"
+            );
+            assert_eq!(edcode::decode(&got[12..]).len(), LEVEL_RANK_BODY_LEN);
+        }
+        for kind in 4u16..=7 {
+            let got = level_rank_reply(7, kind, &players, &heroes).expect("英雄 kind 合法");
+            assert_eq!(
+                got,
+                hero_rank_frame(7, kind, &heroes),
+                "kind={kind} 走 340B"
+            );
+            assert_eq!(edcode::decode(&got[12..]).len(), HERO_RANK_BODY_LEN);
+        }
+        assert!(
+            level_rank_reply(0, 8, &players, &heroes).is_none(),
+            "kind=8 ⇒ 零帧"
+        );
+        assert!(
+            level_rank_reply(-1, 0, &players, &heroes).is_none(),
+            "page<0 ⇒ 零帧"
         );
     }
 }
