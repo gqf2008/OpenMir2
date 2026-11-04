@@ -186,7 +186,7 @@
 | 3 | 看板 | 9 张已合卡终态正确：**4 张 L 全 `closed`、5 张 R 全 `in-progress` + `window_required=true`** | 逐卡读线程末条 status（脚本汇总，非眼看） |
 | 4 | 进程 / 端口 | `E:/MirServer` **十个端口全部在监听**，进程 pid 与开工前一致（GameSrv 14040 / DBSrv 6808 / LoginSrv 7732 / gates 5832·22248·16280）；**无客户端进程** | `E:/MirServer/port-status.ps1` §3 |
 | 5 | 临时物 | 7 处保留项已登记（含**事故留证** `E:/tmp/rev20-fixture/MonGen.dirty.bak`） | 上文「临时物清单」表 |
-| 6 | 冻结基线 | `git status` **干净**；`git diff --stat 6b3aee870 HEAD -- src/ sql/` **为空** | 两条命令实跑 |
+| 6 | 冻结基线 | `git status` **干净**；`git diff --name-only 6b3aee870 HEAD -- src/` **为空**（C# oracle 冻结面未动）；`sql/` 侧有**登记例外**：T-277 坐骑迁移脚本 `sql/migrations/T-277-mount-plates.sql` 与 `T-277-mount-plates-rollback.sql`（卡 `openmir2-t282-mount-server`，登记偏差 T-277） | 两条命令实跑 |
 | 7 | 报告 | 本文 + `docs/needs-human-20261025.md`（owner 面），每项带证据四件套 | — |
 
 > **未推送提交 134**（`port-status.ps1` 报）是相对 **GitHub `origin`** 的——按项目规定日常只推 `walgit`，GitHub 仅人工镜像，**不是缺陷**。

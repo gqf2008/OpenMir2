@@ -157,12 +157,15 @@ reason = "客户端侧联合冒烟产物目录（在 MirClientZig 仓/运行机�
 id = "delivery-report-cond6-freeze-baseline"
 file = "docs/delivery-report-20261025-final.md"
 # anchor 取**稳定部分**（命令本身），不含期望值——否则数字一变就变成 rot 而不是 claim-stale。
-anchor = "git diff --stat 6b3aee870 HEAD -- src/ sql/"
-title = "条件⑥ 冻结基线：git diff --stat 6b3aee870 HEAD -- src/ sql/ 为空"
+# 2026-11-05：T-277 坐骑卡新增两份**登记**迁移脚本（sql/migrations/T-277-mount-plates.sql 与
+# rollback），原「src/ sql/ 均为空」不再成立。冻结面收缩为 `src/`（C# oracle 未动），
+# sql/ 侧的例外以 T-277 登记为准（卡 openmir2-t282-mount-server）。
+anchor = "git diff --name-only 6b3aee870 HEAD -- src/"
+title = "条件⑥ 冻结基线：src/ 为空；sql/ 仅登记例外（T-277 坐骑迁移脚本）"
 kind = "diff_empty"
 base = "6b3aee870"
 head = "HEAD"
-paths = ["src/", "sql/"]
+paths = ["src/"]
 
 [[claims]]
 id = "needs-human-run3-list-count"
