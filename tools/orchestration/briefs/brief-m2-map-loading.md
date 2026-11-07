@@ -11,7 +11,10 @@
 2. 读 `AGENTS.md`、`docs/Rust重写设计文档.md` §6（M2）、§12.4（写集/并行）、§14（协作）、§6.0（证据四件套与红检）。
 3. 建独立 worktree：`git worktree add .claude\worktrees\mapload -b worktree-m2-map-loading refs/heads/master`，
    再 `wg collab join --repo <worktree> --principal openmir2-worker-8 --key %USERPROFILE%\.walgit\keys\openmir2-worker-8.ed25519 --push walgit`，
-   然后在卡上发 `status: in-progress`（parent = 该线程最后一条 entry 的 oid）再动手。**若已有人认领 ⇒ 停手回报。**
+   **认领 = 根 `card_claim`（不带 `--parent`）**，不是 `status`：
+   `wg collab entry --repo <worktree> --kind card_claim --id <卡号> --body '{"ttl":7200,"worktree":"<wt>","branch":"<分支>","work":"<一句话>"}' --push walgit`
+   然后 `python -I -B tools/orchestration/collab_read.py board --repo <worktree>` 读回，确认该卡 `claim.live` 里有你；**不是 ⇒ stand down**。
+   然后再发 `status: in-progress`（parent = 该线程最后一条 entry 的 oid）并动手。**若已有人认领 ⇒ 停手回报。**
 
 ## 1. 规格（照做，别再自己猜）
 

@@ -19,7 +19,10 @@
    `git -C <repo> worktree add .claude\worktrees\b2 worktree-b-script-engine`
 4. 认领：在该 worktree 里
    `walgit --config $env:USERPROFILE\.walgit\walgit.toml collab join --repo <worktree> --principal openmir2-worker-3 --key $env:USERPROFILE\.walgit\keys\openmir2-worker-3.ed25519 --push walgit`
-   然后先发一条 `status: in-progress` + `comment`（写清本轮范围），再动手。
+   **认领 = 根 `card_claim`（不带 `--parent`）**，不是 `status`：
+   `wg collab entry --repo <worktree> --kind card_claim --id <卡号> --body '{"ttl":7200,"worktree":"<wt>","branch":"<分支>","work":"<一句话>"}' --push walgit`
+   然后 `python -I -B tools/orchestration/collab_read.py board --repo <worktree>` 读回，确认该卡 `claim.live` 里有你；**不是 ⇒ stand down**。
+   再发 `status: in-progress` + `comment`（写清本轮范围），然后动手。
    若卡上已有别人更新的认领/条目（别人正在做），**停手并回报**，不要抢。
 
 ## 2. 本轮范围（以卡内最新条目为准）
