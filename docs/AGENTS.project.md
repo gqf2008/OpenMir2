@@ -180,6 +180,8 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 3. **线程协议**：**先读后写**（以上一条 entry 的 oid 作 `--parent`，绝不凭记忆作答）；用 kind 而非散文表达状态
    （`status` / `review` / `merge_result` / `comment`）；`needs-human` 只留给真正需要人的事（授权、优先级、外部输入），
    可判的技术/产品问题必须自己判完并记 `comment`——**把可决问题挂起就是卡壳**。
+   **返工必须走状态**：收到 `request_changes` 后作者先签 `status: in-progress`，改完再签 `status: needs-review`；
+   只在 `comment` 里说「已修」不算——reviewer 靠看板状态触发，状态不动就会漏审。
 4. **审查**：审查者与作者不同 principal，且自己在**钉住的 commit** 上跑命令；`review` 要写**完整 findings**
    （位置 / 问题 / 建议 / 可复现验证），"无证据的 approve" 视为噪声。`request_changes` → 作者按点改并在线程逐条回复 → 重审 → `approve`。
 5. **合并与归档**：批准后本地合并（优先 fast-forward）、推回本 host，写**一条** `merge_result {"merged":true,"oid":…}`，

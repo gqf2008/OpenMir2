@@ -281,6 +281,12 @@ def project(repo, now=None, board=None):
                     effective = (ts, oid, body["status"])
             elif kind == "merge_result" and oid in leaves and _merged_flag(body.get("merged")):
                 effective = (ts, oid, "merged")
+        # owner/tier 跟随胜出的 leaf（wg 实测：非 leaf 高 ts 的 owner 不算数）。
+        if effective:
+            winner = by_oid[effective[1]].get("body") or {}
+            owner = winner.get("owner", owner)
+            tier = winner.get("tier", tier)
+            tier_why = winner.get("tier_why", tier_why)
         # 不做归一化：显式未知状态的线程匹配不到任何列 ⇒ 隐藏（wg 实测，不是回落 open）。
         status = effective[2] if effective else "open"
         column = None
@@ -532,6 +538,10 @@ def selftest():
         lo = _write_entry(r2, 40, _entry('m11', 'issue', 'a', 1, {}))
         l1 = _write_entry(r2, 41, _entry('m11', 'status', 'a', 50, {'status': 'in-progress'}, parent=lo))
         _write_entry(r2, 42, _entry('m11', 'status', 'a', 40, {'status': 'closed'}, parent=l1))
+        # owner 跟随 leaf（wgowner o1 实测）
+        oo = _write_entry(r2, 50, _entry('m12', 'issue', 'a', 1, {}))
+        o1 = _write_entry(r2, 51, _entry('m12', 'status', 'a', 60, {'status': 'in-progress', 'owner': 'A'}, parent=oo))
+        _write_entry(r2, 52, _entry('m12', 'status', 'a', 55, {'status': 'closed', 'owner': 'B'}, parent=o1))
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -544,6 +554,7 @@ def selftest():
         checks += 1; assert by['m9']['column'] == '已合并未收口', by.get('m9')
         checks += 1; assert by['m10']['column'] == '进行中', by.get('m10')
         checks += 1; assert by['m11']['column'] == '已完成', by.get('m11')
+        checks += 1; assert by['m12']['owner'] == 'B', by.get('m12')
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
         with open(onlyclosed, 'w', encoding='utf-8', newline='') as fh:
@@ -553,7 +564,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 34, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 35, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
