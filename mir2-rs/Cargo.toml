@@ -10,6 +10,8 @@ members = [
     "crates/shared",
     "crates/world",
     "crates/world-bevy",
+    # G11 跨服（Planes）线协议编解码：逐字节对齐 C# PlanesServer / PlanesClient
+    "crates/planes",
     "crates/data",
     "crates/formula",
     # M2 地图：Envir *.map 加载器 + Point 点位表 + 地图名→map_id（openmir2-m2-map-loading）
