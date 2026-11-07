@@ -13,3 +13,5 @@ all = "deny"
 pedantic = "warn"
 
 [dependencies]
+# ident 常量复用协议 crate 的生成表（`ISM_*`），不另抄一份。
+mir2-protocol = { path = "../protocol" }

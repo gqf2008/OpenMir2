@@ -22,6 +22,8 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod message;
+
 /// 字段分隔符。C# `HUtil32.Backslash` 的真实值就是 `/`（`src/OpenMir2/HUtil32.cs`）。
 pub const DIVIDER: u8 = b'/';
 

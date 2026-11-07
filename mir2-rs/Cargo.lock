@@ -1314,6 +1314,9 @@ dependencies = [
 [[package]]
 name = "mir2-planes"
 version = "0.1.0"
+dependencies = [
+ "mir2-protocol",
+]
 
 [[package]]
 name = "mir2-protocol"

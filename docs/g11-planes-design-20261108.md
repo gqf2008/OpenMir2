@@ -58,8 +58,9 @@
 
 ## 3. 消息表（41 个 case：40 有处理器 + 1 空处理）
 
-`body 字段`列来自各处理器内部的 `GetValidStr3(..., ref X, HUtil32.Backslash)` 顺序；
-`—` 表示该处理器不按 `/` 拆字段。
+`body 字段`列是该处理器源码里 `GetValidStr3` 的**出现顺序**——**其中绝大多数位于 `/* */` 注释块内，
+运行时不会执行**。真正执行的只有 205、209、214–221 四个 handler（见 §4.2）；
+其余行的字段名只用于说明"原作者打算解析什么"，不构成运行时契约。
 
 | ident | 名称 | 处理器 | body 字段（`/` 分隔） |
 |---:|---|---|---|
@@ -106,9 +107,10 @@
 | 242 | `ISM_GRUOPMESSAGE` | **无处理器**（case 体只有一行注释） | — |
 
 > 表由脚本从源码生成，ident / 常量名 / 处理器名 / 字段顺序均与源码一致（round1 审查机判 0 mismatch）。
-> **余量字段未列**：241 `ISM_GUILDWAR` 的第 4 段 `remaintime`、233 `ISM_LM_LOGOUT` 的 `lovername` 未进入本表
-> （本表只列 `GetValidStr3` 的实际输出变量）。A2 逐条核 handler 时一并确认。
+> **余量字段未列**：241 `ISM_GUILDWAR` 的第 4 段 `remaintime`、233 `ISM_LM_LOGOUT` 的 `lovername` 未进入本表。
 > `226 ISM_LM_DELETE` 有常量但**没有 case**，不在这张表里。
+> **⚠ 本列不代表运行时行为**——§4.2 已按"语句是否在注释里"逐条复核，只有 4 个 handler 真的调用了
+> `GetValidStr3`，且结果全部丢弃。
 
 ## 4. **oracle 侧跨服语义大面积未启用**（round1 审查的关键发现）
 
@@ -182,6 +184,26 @@
 > 这条对 G11 的整体判断影响很大：**oracle 的跨服协议框架是真的，但业务语义基本是停用的**。
 > A4/A5 能不能真正满足 `gm-batch-5b` 的依赖，取决于这些桩后面有没有可用语义 —— 需要在 A2 后重新评估。
 
+### 4.2 A2-3：body 解析的**执行面**（逐语句复核）
+
+把 32 个 handler 的语句逐条看过（区分 `/* */` 内外的）后，**真正执行 `GetValidStr3` 的只有 3 个方法**
+（覆盖 10 个 ident：205、209、214–221）：
+
+| ident | 处理器 | 执行的解析 | 结果去向 |
+|---|---|---|---|
+| 205 | `MsgGetAddGuild` | 1 次：`gname`，余量 `mname` | `M2Share.GuildMgr.AddGuild(gname, mname)` **被注释** ⇒ 丢弃 |
+| 209 | `MsgGetChatProhibition` | 2 次：`whostr`、`minstr` | `CmdShutup` 两行**都被注释** ⇒ 丢弃 |
+| 214–221 | `MsgGetUserMgr`（8 个 ident） | 1 次：`UserName`，余量 `msgbody` | `UserMgrEngine.OnExternInterMsg` **被注释** ⇒ 丢弃 |
+
+其余 29 个 handler 的 `GetValidStr3` 调用（203/208/228/230/231/232/233/234/235/237/238/241 等）
+**全在注释块里**；其中 7 个 handler 的"赋值"就是 `x = Body`（200/201/202/206/207/210/222）。
+分布：空实现 11 个、纯局部赋值 17 个（含上述 7 个 `= Body`）、解析后丢弃 3 个、抛异常 1 个
+= 32 个方法 / 41 个 case。以上由"剥掉 `/* */` 与 `//` 后是否含 `GetValidStr3` / `= Body`"机判，32 个方法全扫。
+⇒ **`ProcessData` 的唯一可观察行为是 211 的 `throw`**；其余一律无副作用。
+
+Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` / 三个解析函数），
+6 条测试覆盖 41 个 case 的分类、226 无 case、三条解析序列与非 ASCII 字节保真。
+
 ## 5. 连接表与配置
 
 | 项 | oracle 事实 |
@@ -229,7 +251,17 @@
 | A4 | guild / castle / market 状态同步（按 A2 核实的 oracle 语义，空就是空） | R（时序 + 落库） |
 | A5 | 重新评估并处理 `gm-batch-5b` 的 blocked | — |
 
-## 11. 待确认 / 风险
+## 11. 进度
+
+| 片 | 状态 | 落点 |
+|---|---|---|
+| A1 | 完成（round1 审查后重写） | 本文档 |
+| A2-1 | 完成（40 条逐 ident 执行状态表） | 本文档 §4.1 |
+| A2-2 | 完成（帧编解码，C# 探针对拍 + 3020 条差分 0 mismatch） | `mir2-rs/crates/planes/src/lib.rs` |
+| A2-3 | 完成（dispatch 分类 + 三条实际执行的解析） | `mir2-rs/crates/planes/src/message.rs`、本文档 §4.2 |
+| A3 | 待开始 | — |
+
+## 12. 待确认 / 风险
 
 1. 40 个处理器的逐条执行状态（A2 第一件事）。
 2. `body` 内文本是 GB2312 字节流（`HUtil32.GetBytes/GetString` 均为 `Encoding.GetEncoding("gb2312")`），
