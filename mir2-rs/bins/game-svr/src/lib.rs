@@ -86,6 +86,7 @@ pub mod npc;
 pub mod npcs;
 pub mod party;
 pub mod pickwire;
+pub mod planes;
 pub mod queryuser;
 pub mod recover;
 pub mod run_frames;
@@ -1321,6 +1322,15 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // **T-132**：闭包 move 整个 `cfg` 会与 spawn 之后的 `cfg.check_block` 冲突 ⇒ 先拷出
     // 四个名字色（`CastleNameColors` 是 Copy）。
     let castle_name_colors = cfg.castle_name_colors();
+    // **G11 / A3-2b**：跨服链路。设计文档 §5.2 的实测结论：oracle 主服只 `Setup` 不 `Start`
+    // ⇒ `ServerIndex == 0` 时 `start` 返回 `None`（不监听、无日志）；分服侧起客户端任务，
+    // 按 `src/GameSrv/TimedService.cs:63` 的 1s/10s 节拍重连。
+    let planes = planes::start(
+        cfg.server_index,
+        &cfg.master_srv_addr,
+        cfg.master_srv_port,
+        cfg.server_number,
+    );
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1522,6 +1532,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 sim_ids_online,
                 sim_ids_out,
                 cfg.payment_mode,
+                planes,
             )
         })
         .context("起 sim 线程失败")?;
@@ -24578,6 +24589,7 @@ fn sim_loop(
     ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
     ids_out: tokio::sync::mpsc::UnboundedSender<String>,
     payment_mode: u8,
+    planes: Option<planes::PlanesLink>,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
@@ -28671,6 +28683,13 @@ fn sim_loop(
         );
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
+        // **G11 / A3-2b**：oracle `SystemProcessor.cs:42-49` 在 `WorldEngine.Run()` **之后**
+        // 跑 `PlanesServer/Client.Run()`。本 oracle 的主服从不监听（设计文档 §5.2），
+        // 生产上这里只有分服角色的客户端解码；`ProcessData` 无副作用，位置对语义无影响，
+        // 但保持与 oracle 同一次序。
+        if let Some(planes) = planes.as_ref() {
+            planes.tick();
+        }
         // **F-1（review `2c5cb955`）**：`tick_tail` 的玩家 `SuperMan` 回满段只写实体；会话
         // `WAbil` 是投影且在 P21（tick 之前）同步过一次 ⇒ 这里立刻把投影补到回满值，
         // 让紧随其后的 P1 恢复段（`BaseObject.Base.cs:44` 的门）与 P7/P8 体力段看到同一份
