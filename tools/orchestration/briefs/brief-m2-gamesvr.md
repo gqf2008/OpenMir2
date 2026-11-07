@@ -26,7 +26,10 @@
 2. `git fetch walgit '+refs/collab/*:refs/collab/*'` → 读 `collab board` 与 `collab thread openmir2-m2-gamesvr-host`。
 3. 建独立 worktree：`git worktree add .claude\worktrees\m2-svr -b worktree-m2-gamesvr-host`（名字自定，别撞别人）。
 4. `wg collab join --repo <worktree> --principal <你的 principal> --key %USERPROFILE%\.walgit\keys\<你的 principal>.ed25519 --push walgit`，
-   然后在本卡发 `status: in-progress` + `comment` 写清本轮范围（parent 用该线程最后一条 entry 的 oid），再动手。
+   **认领 = 根 `card_claim`（不带 `--parent`）**，不是 `status`：
+   `wg collab entry --repo <worktree> --kind card_claim --id <卡号> --body '{"ttl":7200,"worktree":"<wt>","branch":"<分支>","work":"<一句话>"}' --push walgit`
+   然后 `python -I -B tools/orchestration/collab_read.py board --repo <worktree>` 读回，确认该卡 `claim.live` 里有你；**不是 ⇒ stand down**。
+   然后再发 `status: in-progress` + `comment` 写清本轮范围（parent 用该线程最后一条 entry 的 oid），再动手。
    若已有别人更早的认领 ⇒ 停手回报。
 
 ## 3. 本轮建议范围（= 卡内 S1，先做协议级自测，别一上来追「客户端可玩」）

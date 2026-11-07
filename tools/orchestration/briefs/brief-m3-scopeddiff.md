@@ -2,7 +2,7 @@
 
 工作区：本卡专用 worktree `.claude/worktrees/scopediff`（分支 `worktree-m3-scopeddiff`，基于 `refs/heads/master`）。
 身份：**openmir2-worker-3**（先 `wg collab join --repo . --principal openmir2-worker-3 --key C:\Users\gxh\.walgit\keys\openmir2-worker-3.ed25519 --push walgit`）。
-卡：`openmir2-m3-scopeddiff-multiset`（**待认领**）——先 `git fetch walgit '+refs/collab/*:refs/collab/*'` 读卡内 issue，再发 `status: in-progress`。
+卡：`openmir2-m3-scopeddiff-multiset`（**待认领**）——`git fetch walgit '+refs/collab/*:refs/collab/*'` 读卡内 issue → 发**根 `card_claim`**（不带 `--parent`，带 ttl）→ `collab_read board` 读回确认 `claim.live` 有你再动手 → 再发 `status: in-progress`。
 
 ## 0. 为什么现在做（不要当成低优先）
 
