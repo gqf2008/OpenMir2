@@ -203,13 +203,42 @@ def _chain_order(items):
     return order + rest
 
 
+def _leaf_states(items):
+    """返回**未被后续状态覆盖**的 leaf state oid 集合。
+
+    wg 实测（reviewer round3 的最小反例）：issue(ts1) → in-progress(ts50) → closed(ts40)
+    判 **closed**——看的是链尾的 state，不是全局最大 ts。所以先剔除「自身是别的 state 祖先」的条目。
+    """
+    by_oid = {oid: e for oid, e in items}
+
+    def _is_state(e):
+        body = e.get("body") or {}
+        if e.get("kind") == "status":
+            return isinstance(body.get("status"), str)
+        if e.get("kind") == "merge_result":
+            return _merged_flag(body.get("merged"))
+        return False
+
+    states = {oid for oid, e in items if _is_state(e)}
+    superseded = set()
+    for oid in states:
+        parent = by_oid[oid].get("parent") or ""
+        seen = set()
+        while isinstance(parent, str) and parent and parent in by_oid and parent not in seen:
+            seen.add(parent)
+            if parent in states:
+                superseded.add(parent)
+            parent = by_oid[parent].get("parent") or ""
+    return states - superseded
+
+
 def project(repo, now=None, board=None):
     """按 `wg collab board` 的折叠语义投影（2026-11-07 用 20+ 条夹具对照 wg 实测）：
 
       1. 只有 `ci_claim`/`ci_result` 条目的线程**不显示**；
       2. 有效状态 = `status` 条目（`body.status`）与 `merge_result{merged 真}` 条目
          中 `ts` 最大者，后者记作 `merged`——`issue.body.status` **完全忽略**；
-      3. 没有上述条目 ⇒ `open`；值不在 board.toml 的列状态集合里 ⇒ 回落 `open`；
+      3. 状态只看**未被后续状态覆盖的 leaf**（wg 实测），没有 state ⇒ `open`；
       4. 命中不了任何列的线程**不显示**（与 wg 一致，不是留在 column=None）。
     """
     now = int(now if now is not None else time.time())
@@ -235,6 +264,7 @@ def project(repo, now=None, board=None):
         # wg 实测：**ts 为主键**，同 ts 时用 parent 链序破平局（不是 oid 序，也不是深度优先）。
         rank = {oid: i for i, oid in enumerate(_chain_order(items))}
         ordered = sorted(items, key=lambda p: (p[1].get("ts") or 0, rank[p[0]]))
+        leaves = _leaf_states(items)
         effective = None
         owner = None
         tier = None
@@ -247,9 +277,9 @@ def project(repo, now=None, board=None):
                 owner = body.get("owner", owner)
                 tier = body.get("tier", tier)
                 tier_why = body.get("tier_why", tier_why)
-                if isinstance(body.get("status"), str):
+                if oid in leaves and isinstance(body.get("status"), str):
                     effective = (ts, oid, body["status"])
-            elif kind == "merge_result" and _merged_flag(body.get("merged")):
+            elif kind == "merge_result" and oid in leaves and _merged_flag(body.get("merged")):
                 effective = (ts, oid, "merged")
         # 不做归一化：显式未知状态的线程匹配不到任何列 ⇒ 隐藏（wg 实测，不是回落 open）。
         status = effective[2] if effective else "open"
@@ -498,6 +528,10 @@ def selftest():
         f2o = _write_entry(r2, 32, _entry('m10', 'status', 'a', 20, {'status': 'closed'}, parent=f1o))
         _write_entry(r2, 33, _entry('m10', 'status', 'a', 25, {'status': 'needs-review'}, parent=f2o))
         _write_entry(r2, 34, _entry('m10', 'status', 'a', 30, {'status': 'in-progress'}, parent=f1o))
+        # leaf state：非 leaf 的高 ts 不得压过链尾（wg 实测最小反例）
+        lo = _write_entry(r2, 40, _entry('m11', 'issue', 'a', 1, {}))
+        l1 = _write_entry(r2, 41, _entry('m11', 'status', 'a', 50, {'status': 'in-progress'}, parent=lo))
+        _write_entry(r2, 42, _entry('m11', 'status', 'a', 40, {'status': 'closed'}, parent=l1))
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -509,6 +543,7 @@ def selftest():
         checks += 1; assert by['m8']['column'] == '已完成', by.get('m8')
         checks += 1; assert by['m9']['column'] == '已合并未收口', by.get('m9')
         checks += 1; assert by['m10']['column'] == '进行中', by.get('m10')
+        checks += 1; assert by['m11']['column'] == '已完成', by.get('m11')
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
         with open(onlyclosed, 'w', encoding='utf-8', newline='') as fh:
@@ -518,7 +553,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 33, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 34, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
