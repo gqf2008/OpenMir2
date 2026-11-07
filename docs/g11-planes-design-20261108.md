@@ -213,8 +213,25 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | 连接表 | `TServerMsgInfo { Socket, SocData, SocketId }` —— **没有 nServerIdx** |
 | `nServerIdx` | 在另一个结构 `ServerGruopInfo { nServerIdx, sChrName }`，用于 `WorldServer.OtherUserNameList` 的角色→服务器映射 |
 | 帧里的 `serverNum` | 只作为 `ProcessData` 的入参，**不落连接表** |
-| 槽位 | `Received` 用 `srvArray[clientId-1]`；`Connecting` 取第一个 null 槽 ⇒ **槽位复用后可能对不上**，A3 必须复刻或明确登记 |
+| 槽位 | `Received` 用 `srvArray[clientId-1]`；`Connecting` 取第一个 null 槽 ⇒ **槽位复用后对不上**，见 §5.1（已用 C# 探针实测） |
 | 启动 | `GameShare.PlanesService.Start()`（`GameServer.cs`）；`Run()` 由 `SystemProcessor` 每 tick 调 |
+
+### 5.1 槽位语义（A3-1 的 C# 探针实测，`E:/tmp/planes-id-probe`）
+
+探针用 `TouchSocket 2.0.0-beta.273`（与 `src/OpenMir2/OpenMir2.csproj` 同版本）起一个
+本地 `TcpService`，逐次连接/断开并打印 `SocketClient.Id`，再把 oracle 的 `srvArray` 逻辑原样搬进去：
+
+- `SocketClient.Id` 是**进程内全局递增的十进制字符串**（`1`,`2`,`3`…），**断开后不复用**；
+- `Received` 用 `Id-1` 当槽下标，且**不核对槽里是谁**；
+- 首次断线后，新连接的 `Id-1` 指向**空槽**：oracle 在 `Received` 里抛
+  `NullReferenceException`，**TouchSocket 静默吞掉**（探针实测进程不崩、该连接的数据
+  再也不进任何缓冲）；超过 10 个连接时是 `IndexOutOfRangeException`，同样被吞；
+- 极端形态：`Id-1` 指向的槽被**另一个**连接占用时，数据会追加到**别人的缓冲**，
+  并被当作那个连接的数据一起解码（探针复现了 `id3 → slot2（属于 id4）`）。
+
+⇒ oracle 的 PlanesServer 在**首次断线之后对后续连接基本不可用**。A3-1
+（`crates/planes/src/server.rs`）**照抄**该映射，未"修好"：行为等价优先。
+**是否需要修，属 Owner 决策**（这是 oracle 缺陷，不是 Rust 移植引入的）。
 
 ## 6. 事件与解码路径
 
@@ -259,7 +276,8 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | A2-1 | 完成（40 条逐 ident 执行状态表） | 本文档 §4.1 |
 | A2-2 | 完成（帧编解码，C# 探针对拍 + 3020 条差分 0 mismatch） | `mir2-rs/crates/planes/src/lib.rs` |
 | A2-3 | 完成（dispatch 分类 + 三条实际执行的解析） | `mir2-rs/crates/planes/src/message.rs`、本文档 §4.2 |
-| A3 | 待开始 | — |
+| A3-1 | 完成（Server/Client 纯状态机 + 槽位语义，C# 探针实测） | `mir2-rs/crates/planes/src/{server,client,service}.rs` |
+| A3-2 | 待开始（game-svr 接线：配置键、tokio 监听/连接、tick 挂载、重连定时器） | — |
 
 ## 12. 待确认 / 风险
 

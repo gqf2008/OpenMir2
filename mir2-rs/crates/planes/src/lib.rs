@@ -22,7 +22,10 @@
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
+pub mod client;
 pub mod message;
+pub mod server;
+pub mod service;
 
 /// 字段分隔符。C# `HUtil32.Backslash` 的真实值就是 `/`（`src/OpenMir2/HUtil32.cs`）。
 pub const DIVIDER: u8 = b'/';
@@ -179,8 +182,21 @@ impl Decoder {
         &self.buf
     }
 
+    /// 丢弃缓冲（oracle 的 catch 分支等价物：异常后 `SocData` 停在 `""`）。
+    pub fn clear(&mut self) {
+        self.buf.clear();
+    }
+
     /// 跑一次解码：返回本次解出的帧，剩余字节留在缓冲里。
     pub fn decode(&mut self) -> Vec<Frame> {
+        self.decode_raw().into_iter().map(|(_, f)| f).collect()
+    }
+
+    /// 同 [`Self::decode`]，但同时返回每帧的**原始内层字节**（两个括号之间，不含括号）。
+    ///
+    /// 跨服主服的中继（C# `DecodeSocStr_SendOtherServer`）转发的就是这段内容——
+    /// 它把 `Str` 原样交给 `SendSocket`，后者再补回一对括号发出。
+    pub fn decode_raw(&mut self) -> Vec<(Vec<u8>, Frame)> {
         let mut frames = Vec::new();
         if self.buf.is_empty() {
             return frames;
@@ -207,7 +223,7 @@ impl Decoder {
             if arrest_str.is_empty() {
                 break;
             }
-            frames.push(parse_frame(&arrest_str));
+            frames.push((arrest_str.clone(), parse_frame(&arrest_str)));
         }
         self.buf = buf_str;
         frames
