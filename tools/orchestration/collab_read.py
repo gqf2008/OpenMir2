@@ -341,7 +341,7 @@ def render_board(board):
 def render_thread(thread):
     lines = []
     for e in thread["entries"]:
-        body = e["body"] or {}
+        body = _body(e)   # 非对象 body 也要能渲染，别让一条畸形 entry 崩掉 thread 文本输出
         first = body.get("work") or body.get("goal") or body.get("status") or ""
         first = " ".join(str(first).split())[:110]
         lines.append("%s  %-12s %-24s %s" % (e["ts"], e["kind"], e["actor"], first))
@@ -693,6 +693,18 @@ def selftest():
         checks += 1; assert _wb['wb1']['column'] == '待认领', _wb.get('wb1')
         checks += 1; assert _wb['wb2']['column'] == '待认领', _wb.get('wb2')
         checks += 1; assert _wb['wb3']['column'] == '进行中', _wb.get('wb3')  # 非对象 body 的 claim 仍按默认 ttl 生效（我们不验签）
+        # 反向自证（A3(b)）：本工具**不验签**，所以未签名 claim 会被当作有效。
+        # 若将来实现 ed25519 验签，这条会变红——那是提醒改这里，而不是回归。
+        _write_entry(r2, 630, _entry('wb4', 'issue', 'a', _now, {}))
+        _write_entry(r2, 631, {'version': 1, 'kind': 'card_claim', 'id': 'wb4', 'actor': 'a',
+                               'ts': _now, 'parent': '', 'body': {'ttl': 100}, 'sig': 'ed25519:UNSIGNED'})
+        _wb4 = {c['id']: c for c in project(r2, now=_now + 10, board=wgboard)['cards']}
+        checks += 1; assert _wb4['wb4']['column'] == '进行中', _wb4.get('wb4')
+        # A1：thread 文本渲染遇到非对象 body 不得抛异常
+        _write_entry(r2, 700, {'version': 1, 'kind': 'comment', 'id': 'rt1', 'actor': 'a',
+                               'ts': 1, 'parent': '', 'body': 'not-an-object', 'sig': 'ed25519:x'})
+        _rt = read_thread(r2, 'rt1')
+        checks += 1; assert 'comment' in render_thread(_rt), _rt
         checks += 1; assert by['tie3']['column'] == ('已完成' if oid_c > oid_n else '待审'), (by.get('tie3'), oid_c, oid_n)
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
@@ -703,7 +715,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 64, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 66, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -96,6 +96,8 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 > （fail-closed，把「子命令不存在」与「聚合 GitFailed」都判成 **rc=3**）。
 > 写（`entry` / `join` / `claim`）允许直调 `wg collab`——本仓多个工具就是这么做的；
 > **不得**直调读子命令，守牙齿会红。
+> `collab_read` 只做投影、**不验签**：`verified` 恒为 `null`，claim 也不校验签名。
+> 需要信任判定的一律 fail-closed（如 `goal_gate` 条件② 判「需人工」），**不得**据此判 PASS。
 > **不要**用 `2>/dev/null | grep` / `2>&1 | tail` 吞错误——管道取的是 `grep`/`tail` 的 rc，
 > 会把失败变成「看板是空的 / 没有待审」的**假绿**。
 > 背景：卡 `openmir2-collab-interface-wg-migration`（前身 `openmir2-walgit-local-commands-env`）。

@@ -121,6 +121,16 @@ python -I -B <repo>/tools/orchestration/collab_read.py board --repo .   # 期望
 （wg 要求 `is_verified` 会忽略，本工具不验签所以应用）。其余形状——DAG fuzz、同 ts、fork、owner、
 claim 边界、类型严格性、畸形 body——全部一致。
 
+**信任边界（2026-11-07 裁决）**：`collab_read` **不验签**，本仓也不打算为它实现 ed25519 验签。理由：
+① 纯 stdlib 实现 ed25519 不现实，为一个只读监控工具引入第三方密码库会扩大供应链面；② 真正需要
+信任判定的地方已经 fail-closed——`goal_gate` 条件② 遇到不带 `verified`/`unverified` 计数的投影时
+返回 **NEED（判不了）**，不会把未验签证据判成 PASS。
+
+**消费方约束**：`collab_read` 的输出是**投影**，不是信任根。任何要基于「已验证 / 未验证」做判定的
+消费者必须自带验签，或像 `goal_gate` 一样 fail-closed；卡上的 `verified` 恒为 `null` 就是这个标记。
+**反向自证**：selftest 的 wb3 / wb4 断言「未签名 claim 会被当作有效」——将来若实现验签，这两条会变红，
+那是提醒改这里，不是回归。
+
 这条正是 A2 要的「两条路径结论一致」。前几轮「两条都不可用所以无法比较」的表述是错的，
 而「用夹具反推规则」这条路也证明不可靠——最后靠的是**读上游源码**。
 
