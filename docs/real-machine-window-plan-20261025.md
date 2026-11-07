@@ -55,7 +55,7 @@ SabukW 部署件 9260B→实测 9290B，会变，别写死）见 runbook **§0.9
 侧证：`bag_rows=46 / bag_items=3`，与此前订正的「46 槽位、3 件真物品」一致。
 
 **开窗当天用它认树**（数字对不上就说明不在预期 master 上）：
-- `python -I -B tools/goal/goal_gate.py selftest` ⇒ **85 条断言 85 通过**（`cb947d123` 实测；来历：`80a820762` 加 4 条 → 79→83；whitelist 卡（`6f282de2e`）加 1 条 → 84；`goal-gate-wiring-teeth`（`cb947d123`）加 1 条 → 85）
+- `python -I -B tools/goal/goal_gate.py selftest` ⇒ **87 条断言 87 通过**（2026-11-07 加 2 条：投影不带 unverified 计数 ⇒ 需人工 + unverified=0 负对照 → 85→87；此前 `cb947d123` 实测；来历：`80a820762` 加 4 条 → 79→83；whitelist 卡（`6f282de2e`）加 1 条 → 84；`goal-gate-wiring-teeth`（`cb947d123`）加 1 条 → 85）
 - `python -I -B tools/hygiene/tool_selftest_gate.py` ⇒ **66 项全绿**；`--inventory` ⇒ 清点 **71 = 66 + 5 + 0**（2026-11-02 起含 stop_rust 与 rng_stream_shape；含 start_stack_wmi；2026-11-01 起，含 merge_without_review_audit 与 wl_status_audit；2026-10-28 起曾为 59/64，含 sign_entry 与 equip_struck_dura_triage；2026-10-27 起曾为 57/62，含 C7 / run_batch / entryrefs / rng_consumer_groups；此前 56/61、52/57、51/56、50/55、48/53、47/52）
 - `goal_gate --full` 产物里条件④ 应显示「**门禁 8 项**」（第 8 项 = 工具自测门，约 +120s）
 - `cargo test --workspace` ⇒ 三元组以测试车道证据条目为准：截至本行改写时最新条目 `f60dc2959`（`<git-common-dir>/tester/last-workspace-test.json`，2026-10-28 实测 `--no-fail-fast`）= **142 suites，running 3401 = passed 3338 + ignored 63**。滚动口径（卡 `openmir2-windowplan-docs61-qualifier`）：本行**不引用任何固定提交集合**；过期条件机械可判——证据条目键 != 当前 master tip 且其后存在 Rust 面提交 ⇒ 限定语过期，tester 重测登记新条目并刷新本行指针；机判对账走同一证据文件，证据缺失/该 tip 无条目 ⇒ 判不了 rc=2

@@ -755,6 +755,9 @@ def r_category(ev):
     """
     if not ev.get("in_board"):
         return "not_in_board"
+    if ev.get("unverified") is None:
+        # 投影不带 verified/unverified 计数 ⇒ 无法判证据是否可信（fail-closed，不静默放行）
+        return "unverifiable"
     if ev.get("board_closed"):
         return "closed"
     if not ev.get("judged", True):
@@ -794,6 +797,9 @@ def classify_r_evidence(ev):
             hints.append("索引内有 window_required=true")
         suffix = "；" + "、".join(hints) if hints else ""
         return NEED, "board 未列出该卡（本地协作视图未同步或线程状态异常），证据无法核对" + suffix
+    if category == "unverifiable":
+        return NEED, ("本地协作投影不提供 verified/unverified 计数（collab_read 不验签），"
+                      "无法判断该卡证据是否可信；要判需改用验签投影")
     if category == "unverified":
         return NEED, "board 报 %s 条未验签条目，证据不可信" % ev["unverified"]
     if category == "not_merged":
@@ -873,7 +879,7 @@ def judge_r_cards(evidence_list):
                   counts.get("comment_evidence", 0), counts.get("none", 0),
                   counts.get("merged_not_closed", 0), counts.get("not_merged", 0),
                   counts.get("not_in_board", 0) + counts.get("unverified", 0)
-                  + counts.get("weak_t", 0)))
+                  + counts.get("unverifiable", 0) + counts.get("weak_t", 0)))
     exempt_now = [t for t in MERGED_NOT_CLOSED_EXEMPT
                   if next((c for c in per_card if c["card"] == t), None) is not None
                   and next(c for c in per_card if c["card"] == t)["category"] == "merged_not_closed_exempt"]
@@ -1769,6 +1775,18 @@ def selftest(verbose=False):
             classify_r_evidence({"in_board": False, "unverified": None, "merged": True,
                                  "window_required": False, "strong_t": [],
                                  "weak_t": []})[0] == NEED, "not in board"))
+        check("条件2 投影不带 unverified 计数 -> 需人工（fail-closed，不静默放行）", lambda: (
+            classify_r_evidence({"in_board": True, "unverified": None, "merged": False,
+                                 "window_required": False, "strong_t": [],
+                                 "weak_t": []})[0] == NEED
+            and "不提供 verified/unverified 计数" in classify_r_evidence(
+                {"in_board": True, "unverified": None, "merged": False,
+                 "window_required": False, "strong_t": [], "weak_t": []})[1],
+            "unverifiable"))
+        check("条件2 unverified=0 不走 unverifiable（负对照）", lambda: (
+            r_category({"in_board": True, "unverified": 0, "merged": False, "judged": True,
+                        "window_required": False, "strong_t": [], "weak_t": []}) == "none",
+            "zero-count"))
 
         state2, detail2, per2, fail2, need2 = judge_r_cards(list(evs.values()))
         check("条件2 聚合状态 FAIL（已开工无登记）", lambda: (
