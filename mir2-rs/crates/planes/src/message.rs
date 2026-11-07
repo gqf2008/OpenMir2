@@ -248,12 +248,15 @@ mod tests {
 
     #[test]
     fn idents_without_case_are_unknown_and_noop() {
-        // 226 ISM_LM_DELETE 有常量但没有 case；其余为任意值（含越界与负值）。
+        // 有常量但没有 case 的三个：226 ISM_LM_DELETE、239 ISM_STANDARDTICKREQ、240 ISM_STANDARDTICK
+        // （oracle `ProcessData` 的 switch 里一个都没有）；其余为任意值（含越界与负值）。
         for ident in [
             0,
             1,
             99,
             226,
+            239,
+            240,
             243,
             255,
             1000,

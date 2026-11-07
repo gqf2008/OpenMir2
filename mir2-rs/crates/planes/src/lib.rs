@@ -4,10 +4,15 @@
 //! **帧提取 / 字段切分 / 数值字段**逐字节等价：帧是 `(ident/serverNum/body)`，
 //! 字段分隔符是 `'/'`（C# 的 `HUtil32.Backslash`，注意它的名字叫 Backslash、值却是 `/`）。
 //!
-//! **明确不在本 crate 范围**（归 A2-3 / A3）：`ProcessData` 的副作用、`ISM_CHANGECASTLEOWNER`
-//! 的 `throw` 导致整批丢弃、客户端 `catch` 里的 `LogService.Error`（服务器侧是静默吞）、
-//! 以及非 ASCII body 的 GB2312 解码。本 crate 只保证「同样的字节进 ⇒ 同样的
-//! `(ident, serverNum, body)` 出」。
+//! 范围分三层，别混着读：
+//!
+//! 1. **本文件（`lib.rs`）**：帧提取 / 字段切分 / 数值字段——「同样的字节进 ⇒ 同样的
+//!    `(ident, serverNum, body)` 出」；
+//! 2. **[`message`]**：`ProcessData` 的 **分类**（41 个 case → `Effect`）与
+//!    **唯一可观察失败**（211 返回 [`message::ProcessError`]），以及 3 条真实执行的
+//!    `GetValidStr3` 解析；
+//! 3. **仍不在本 crate**（归 A3 传输层）：211 导致**整批丢弃**的执行、客户端 `catch`
+//!    里的 `LogService.Error`（服务器侧静默吞）、非 ASCII body 的 GB2312 解码。
 //!
 //! **本层只处理字节**：线上文本是 GB2312 字节流，这里不做任何 UTF-8 转换。
 //!

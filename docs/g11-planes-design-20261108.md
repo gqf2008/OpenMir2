@@ -108,8 +108,9 @@
 
 > 表由脚本从源码生成，ident / 常量名 / 处理器名 / 字段顺序均与源码一致（round1 审查机判 0 mismatch）。
 > **余量字段未列**：241 `ISM_GUILDWAR` 的第 4 段 `remaintime`、233 `ISM_LM_LOGOUT` 的 `lovername` 未进入本表。
-> `226 ISM_LM_DELETE` 有常量但**没有 case**，不在这张表里。
-> **⚠ 本列不代表运行时行为**——§4.2 已按"语句是否在注释里"逐条复核，只有 4 个 handler 真的调用了
+> `226 ISM_LM_DELETE`、`239 ISM_STANDARDTICKREQ`、`240 ISM_STANDARDTICK` 有常量但**都没有 case**，
+> 不在这张表里（行为同为 `Unknown`/no-op）。
+> **⚠ 本列不代表运行时行为**——§4.2 已按"语句是否在注释里"逐条复核，只有 3 个 handler 方法真的调用了
 > `GetValidStr3`，且结果全部丢弃。
 
 ## 4. **oracle 侧跨服语义大面积未启用**（round1 审查的关键发现）
