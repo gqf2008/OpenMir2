@@ -225,24 +225,77 @@ def _tokens(segment):
     return [t.strip(_QUOTES) for t in segment.split() if t.strip(_QUOTES)]
 
 
-_SHELL_WRAPPERS = frozenset(("sudo", "env", "time", "command", "exec", "nohup"))
+_SHELL_WRAPPERS = frozenset(("sudo", "env", "time", "command", "exec", "nohup",
+                                "xargs", "nice", "stdbuf"))
+#: 各执行器「吃一个值」的选项（`sudo -u root`、`exec -a x`、`xargs -I {}` …）
+_VALUE_FLAGS = {
+    "sudo": frozenset(("u", "g", "p", "C", "r", "t", "U", "h", "D", "R", "T")),
+    "exec": frozenset(("a",)),
+    "env": frozenset(("u", "C", "S")),
+    "xargs": frozenset(("I", "n", "P", "d", "L", "s", "E", "a")),
+    "nice": frozenset(("n",)),
+    "stdbuf": frozenset(("i", "o", "e")),
+}
 _ASSIGN_PREFIX_RE = re.compile("^[A-Za-z_][A-Za-z0-9_]*=")
+#: 行首重定向（`2>&1`、`>out`、`&>`）与 shell 提示符（`$`、`PS>`）
+_REDIRECT_RE = re.compile("^[0-9]*(>>?|&>)")
+
+
+def _is_noise(tok):
+    return bool(_REDIRECT_RE.match(tok)) or tok in ("$", "PS>", "%")
 
 
 def _command_token(toks):
-    """段首的**命令 token** 及其下标：跳过 `VAR=…` 与 sudo/env/time/command 之类包装。
+    """段首的**命令 token** 及其下标。
 
-    reviewer 实测：把「行里出现 walgit」当成二进制，会漏检带路径前缀的 `C:/bin/walgit collab board`
-    与 `$(walgit collab board)`，又会误报 `git fetch walgit --tags collab`。
+    跳过：`VAR=…` 赋值、行首重定向与提示符、以及执行器（sudo/env/time/command/exec/
+    nohup/xargs/nice/stdbuf）**连同它自己的选项与取值**（`sudo -u root`、`exec -a x`）。
     """
     i = 0
     while i < len(toks):
         t = toks[i]
-        if _ASSIGN_PREFIX_RE.match(t) or t.lower() in _SHELL_WRAPPERS:
+        low = t.lower()
+        if _ASSIGN_PREFIX_RE.match(t) or _is_noise(t):
             i += 1
+            continue
+        if low in _SHELL_WRAPPERS:
+            i += 1
+            value_flags = _VALUE_FLAGS.get(low, frozenset())
+            while i < len(toks):
+                nxt = toks[i]
+                if nxt == "--":
+                    i += 1
+                    continue
+                if nxt.startswith("-"):
+                    name = nxt.lstrip("-").split("=")[0]
+                    i += 2 if (name in value_flags and "=" not in nxt) else 1
+                    continue
+                if _ASSIGN_PREFIX_RE.match(nxt) or _is_noise(nxt):
+                    i += 1
+                    continue
+                break
             continue
         return t, i
     return None, i
+
+
+def _any_position_hit(toks):
+    """**任意位置**出现 `walgit`/`wg` 且其后有 `collab` 即命中。
+
+    只用于 markdown：散文里命令不一定在行首（「先 … ，再 walgit collab board」），
+    shell 脚本则严格要求段首命令 token。
+    """
+    for i, t in enumerate(toks):
+        if _bin_name(t) not in ("walgit", "wg"):
+            continue
+        rest = toks[i + 1:]
+        if "collab" not in rest:
+            continue
+        j = rest.index("collab")
+        sub = rest[j + 1] if j + 1 < len(rest) else ""
+        if _bin_name(t) == "walgit" or sub in READ_SUBCOMMANDS:
+            return True
+    return False
 
 
 def _bin_name(token):
@@ -436,8 +489,10 @@ def md_collab_hits(text):
     """
     hits = []
     for lineno, line in enumerate((text or "").splitlines(), 1):
-        spans = re.findall("`([^`]+)`", line) or [line]
-        if any(collab_hit(span) for span in spans):
+        spans = re.findall("`([^`]+)`", line)
+        # 片段按命令行判 + 整行按「任意位置」判：散文里命令不一定在行首
+        # （「先 … ，再 walgit collab board」），双反引号套单反引号也靠整行兜住
+        if collab_hit(line) or any(collab_hit(span) for span in spans)                 or _any_position_hit(_tokens(line)):
             hits.append((lineno, line.strip()[:140]))
     return hits
 
@@ -710,6 +765,22 @@ def selftest():
     add("guard:cmd-subst-flagged", len(bare_collab_hits("$(walgit collab board)")) == 1)
     add("guard:subshell-flagged", len(bare_collab_hits("(walgit collab board)")) == 1)
     add("guard:exe-suffix-flagged", len(bare_collab_hits("walgit.exe collab board")) == 1)
+    # 执行器选项 / xargs / 重定向 / 提示符（reviewer round3 的边角表）
+    add("guard:sudo-u-flagged", len(bare_collab_hits("sudo -u root walgit collab board")) == 1)
+    add("guard:env-i-flagged", len(bare_collab_hits("env -i walgit collab board")) == 1)
+    add("guard:time-p-flagged", len(bare_collab_hits("time -p walgit collab board")) == 1)
+    add("guard:command-dd-flagged", len(bare_collab_hits("command -- walgit collab board")) == 1)
+    add("guard:exec-a-flagged", len(bare_collab_hits("exec -a x walgit collab board")) == 1)
+    add("guard:xargs-flagged", len(bare_collab_hits("xargs walgit collab board")) == 1)
+    add("guard:pipe-xargs-flagged", len(bare_collab_hits("echo board | xargs walgit collab board")) == 1)
+    add("guard:redirect-first-flagged", len(bare_collab_hits("2>&1 walgit collab board")) == 1)
+    add("guard:prompt-flagged", len(bare_collab_hits("$ walgit collab board")) == 1)
+    add("guard:sudo-apt-not-flagged", bare_collab_hits("sudo apt install wg") == [])
+    # markdown：双反引号套单反引号 / 片段外裸命令
+    add("guard-md:double-backtick",
+        len(md_collab_hits("``walgit `collab` board``")) == 1)
+    add("guard-md:bare-outside-span",
+        len(md_collab_hits("先 `git fetch`，再 walgit collab board")) == 1)
     add("guard:fetch-walgit-not-flagged",
         bare_collab_hits("git fetch walgit --tags collab") == [])
     add("guard:echo-string-not-flagged",
