@@ -227,29 +227,49 @@ def _tokens(segment):
 
 _SHELL_WRAPPERS = frozenset(("sudo", "env", "time", "command", "exec", "nohup",
                                 "xargs", "nice", "stdbuf"))
-#: 各执行器「吃一个值」的选项（`sudo -u root`、`exec -a x`、`xargs -I {}` …）
+#: 各执行器「吃一个值」的**短选项名**（`sudo -u root`、`exec -a x`、`xargs -I {}` …）
 _VALUE_FLAGS = {
-    "sudo": frozenset(("u", "g", "p", "C", "r", "t", "U", "h", "D", "R", "T")),
+    "sudo": frozenset(("u", "g", "p", "C", "r", "t", "U", "h", "D", "R", "T", "a", "c")),
     "exec": frozenset(("a",)),
     "env": frozenset(("u", "C", "S")),
     "xargs": frozenset(("I", "n", "P", "d", "L", "s", "E", "a")),
     "nice": frozenset(("n",)),
     "stdbuf": frozenset(("i", "o", "e")),
+    "time": frozenset(("f", "o")),
+}
+#: 长选项 → 等价的短名（只要长名在表里，就按「吃一个值」处理）
+_LONG_TO_SHORT = {
+    "user": "u", "group": "g", "prompt": "p", "unset": "u", "chdir": "C",
+    "max-args": "n", "adjustment": "n", "output": "o", "format": "f",
+    "delimiter": "d", "max-lines": "L", "max-chars": "s", "arg-file": "a",
+    "eof": "E", "replace": "I", "max-procs": "P", "input": "i",
 }
 _ASSIGN_PREFIX_RE = re.compile("^[A-Za-z_][A-Za-z0-9_]*=")
-#: 行首重定向（`2>&1`、`>out`、`&>`）与 shell 提示符（`$`、`PS>`）
-_REDIRECT_RE = re.compile("^[0-9]*(>>?|&>)")
+#: 行首重定向（`2>&1`、`>out`、`&>`、`<<EOF`）与 shell/CMD 提示符
+_REDIRECT_RE = re.compile("^[0-9]*(<<?|>>?|&>)")
+_PROMPT_RE = re.compile("^[A-Za-z]:[" + chr(92) + chr(92) + "/].*>$")
 
 
 def _is_noise(tok):
-    return bool(_REDIRECT_RE.match(tok)) or tok in ("$", "PS>", "%")
+    return bool(_REDIRECT_RE.match(tok) or _PROMPT_RE.match(tok)) or tok in ("$", "PS>", "%")
+
+
+def _takes_value(flag, value_flags):
+    """`-u` / `--user` / `--user=x` / 组合短选项 `-iu` 是否吃掉下一个 token。"""
+    if "=" in flag:
+        return False
+    name = flag.lstrip("-")
+    if flag.startswith("--"):
+        return _LONG_TO_SHORT.get(name) in value_flags
+    return any(ch in value_flags for ch in name)
 
 
 def _command_token(toks):
     """段首的**命令 token** 及其下标。
 
     跳过：`VAR=…` 赋值、行首重定向与提示符、以及执行器（sudo/env/time/command/exec/
-    nohup/xargs/nice/stdbuf）**连同它自己的选项与取值**（`sudo -u root`、`exec -a x`）。
+    nohup/xargs/nice/stdbuf）**连同它自己的选项与取值**（`sudo -u root`、`exec -a x`、
+    `time -f %E`、`xargs -I {}`）。
     """
     i = 0
     while i < len(toks):
@@ -267,8 +287,7 @@ def _command_token(toks):
                     i += 1
                     continue
                 if nxt.startswith("-"):
-                    name = nxt.lstrip("-").split("=")[0]
-                    i += 2 if (name in value_flags and "=" not in nxt) else 1
+                    i += 2 if _takes_value(nxt, value_flags) else 1
                     continue
                 if _ASSIGN_PREFIX_RE.match(nxt) or _is_noise(nxt):
                     i += 1
@@ -283,7 +302,7 @@ def _any_position_hit(toks):
     """**任意位置**出现 `walgit`/`wg` 且其后有 `collab` 即命中。
 
     只用于 markdown：散文里命令不一定在行首（「先 … ，再 walgit collab board」），
-    shell 脚本则严格要求段首命令 token。
+    双反引号套单反引号也靠整行兜住。
     """
     for i, t in enumerate(toks):
         if _bin_name(t) not in ("walgit", "wg"):
@@ -301,6 +320,8 @@ def _any_position_hit(toks):
 def _bin_name(token):
     """命令 token 归一化成二进制名：去前导 `$(`/`(`/反引号，取路径 basename，去 `.exe`。"""
     t = token.strip(_QUOTES).lstrip("$(").strip("()")
+    # 只按「句子级」标点切（不含 `.`，否则会把 `walgit.exe` 切碎）
+    t = re.split("[" + "，。、；：！？,;:!?" + "]", t)[-1]
     parts = [x for x in re.split("[" + chr(92) + chr(92) + "/]", t) if x]
     t = parts[-1] if parts else t
     if t.lower().endswith(".exe"):
@@ -775,6 +796,18 @@ def selftest():
     add("guard:pipe-xargs-flagged", len(bare_collab_hits("echo board | xargs walgit collab board")) == 1)
     add("guard:redirect-first-flagged", len(bare_collab_hits("2>&1 walgit collab board")) == 1)
     add("guard:prompt-flagged", len(bare_collab_hits("$ walgit collab board")) == 1)
+    # round1 的 F1/F2/F3：长选项、组合短选项、time、heredoc、CMD 提示符、标点
+    add("guard:time-f-flagged", len(bare_collab_hits("time -f %E walgit collab board")) == 1)
+    add("guard:sudo-long-user-flagged", len(bare_collab_hits("sudo --user root walgit collab board")) == 1)
+    add("guard:sudo-combined-short-flagged", len(bare_collab_hits("sudo -iu root walgit collab board")) == 1)
+    add("guard:nice-n-flagged", len(bare_collab_hits("nice -n 10 walgit collab board")) == 1)
+    add("guard:stdbuf-o-flagged", len(bare_collab_hits("stdbuf -o L walgit collab board")) == 1)
+    add("guard:xargs-I-flagged", len(bare_collab_hits("xargs -I {} walgit collab board")) == 1)
+    add("guard:heredoc-prefix-flagged", len(bare_collab_hits("<<EOF walgit collab board")) == 1)
+    add("guard:cmd-prompt-flagged",
+        len(bare_collab_hits("C:\\Users\\gxh> walgit collab board")) == 1)
+    add("guard-md:cjk-punct-flagged",
+        len(md_collab_hits("先读卡，walgit collab board")) == 1)
     add("guard:sudo-apt-not-flagged", bare_collab_hits("sudo apt install wg") == [])
     # markdown：双反引号套单反引号 / 片段外裸命令
     add("guard-md:double-backtick",
