@@ -85,25 +85,29 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 核心原则一句话：**协作只在 `refs/collab/*` 的签名线程里发生。** agent 之间不私聊、不拿共享临时文件当事实源；
 线程是唯一共享记忆，任何人重放 refs 都得到同一视图。
 
-> **本地协作命令必须显式开关（2026-11-02 12:52 起）。** `walgit collab …` 在**不带**
-> `WALGIT_LOCAL_COMMANDS=1` 时直接拒绝：`Error: … is not the collaboration interface …`（stderr、rc=1）。
-> **不要**用 `2>/dev/null | grep` / `2>&1 | tail` 吞它——管道取的是 `grep`/`tail` 的 rc，
-> 会把「接口被拒」变成「看板是空的 / 没有待审」的**假绿**。统一写法：
-> - 脚本里：`python -I -B tools/orchestration/walgit_collab.py <子命令> …`
->   （封装显式设 env，并把「接口被拒」判成 rc=3 的硬失败）；
-> - 手工命令：`WALGIT_LOCAL_COMMANDS=1 walgit collab <子命令> …`。
-> 详细背景与负例牙见卡 `openmir2-walgit-local-commands-env`。
+> **协作命令已换代（2026-11-07）。** walgit 0.14.0 起 `walgit collab` 子命令被移除，协作接口是
+> 独立二进制 `wg`（`wg collab ls|thread|board|entry|join|claim|watch|…`）；旧版的
+> `WALGIT_LOCAL_COMMANDS=1` 开关同时失效，**不要再加**。读写分两条路：
+> - **读**（看板 / 单线程）：优先 `python -I -B tools/orchestration/collab_read.py board|thread …`。
+>   **不要裸调 `wg collab board`**——本仓库 14,529 条 inbox ref 会让它的 `git cat-file --batch`
+>   与 git 的 stdout 互锁，约 2 分钟才超时（详见卡 `openmir2-collab-interface-wg-migration`）；
+> - **写**（entry / claim）：`wg collab entry …`（写路径可用；`--push walgit` 才上远端）。
+> 脚本里一律走 `tools/orchestration/walgit_collab.py`：它 fail-closed，把「子命令不存在」与
+> 「聚合 GitFailed」都判成 **rc=3**。
+> **不要**用 `2>/dev/null | grep` / `2>&1 | tail` 吞错误——管道取的是 `grep`/`tail` 的 rc，
+> 会把失败变成「看板是空的 / 没有待审」的**假绿**。
+> 背景：卡 `openmir2-collab-interface-wg-migration`（前身 `openmir2-walgit-local-commands-env`）。
 
 ---
 
 ## 0. 身份与首次接触（§0 / §0a）
 
-- **一个 worktree = 一个身份 = 一把 Ed25519 私钥。** 身份来自 `WALGIT_LOCAL_COMMANDS=1 walgit collab join`，落在
+- **一个 worktree = 一个身份 = 一把 Ed25519 私钥。** 身份来自 `wg collab join`，落在
   `<git-dir>/walgit/identity` 与该 git dir 下的 key（**不入库、`git clean -fdx` 删不掉**）。
 - 每个 worktree 开工前先跑一次（`--key` 指向**已有种子文件路径**，绝不把种子内容贴到命令行/历史里）：
 
   ```sh
-  WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo <worktree> --principal <proj>-<role>-N --key <既有种子> --push walgit
+  wg collab join --repo <worktree> --principal <proj>-<role>-N --key <既有种子> --push walgit
   ```
 
   注册完成后再执行命令即可**省略 `--actor` / `--key`**（自动从 identity 解析）。
@@ -117,9 +121,9 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 - **首次接触例行四步**（读板/抢卡/动文件之前先做完）：
   1. 读命名约定：`git for-each-ref refs/collab/meta/principals` 找 `<proj>` 前缀与角色模式；
   2. 沿用本 worktree 已有 identity，否则取该角色最高编号 +1 的下一个空闲名；
-  3. `WALGIT_LOCAL_COMMANDS=1 walgit collab join`（存在则采用、不存在则生成）；
+  3. `wg collab join`（存在则采用、不存在则生成）；
   4. 同步协作视图：`git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*' '+refs/collab/meta/*:refs/collab/meta/*'`，
-     再 `WALGIT_LOCAL_COMMANDS=1 walgit collab board`，然后才谈认领。
+     再用 `python -I -B tools/orchestration/collab_read.py board` 读板，然后才谈认领。
 
 ## 0b. 并行拓扑（§0b）
 
@@ -134,9 +138,9 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 
 ## 0c. 无人值守（§0c）
 
-唤醒原语是 `WALGIT_LOCAL_COMMANDS=1 walgit collab watch`：把 `refs/collab/*` 变化变成进程调用（trigger，不是 agent）。
+唤醒原语是 `wg collab watch`（wg 读路径故障期间该原语同样不可用，见卡 A1/A2）：把 `refs/collab/*` 变化变成进程调用（trigger，不是 agent）。
 
-- 事件只当**重新读取的触发器**，绝不是真相快照：收到后先 `WALGIT_LOCAL_COMMANDS=1 walgit collab thread <id>` 重读、以 head oid 确认
+- 事件只当**重新读取的触发器**，绝不是真相快照：收到后先 `python -I -B tools/orchestration/collab_read.py thread <id>` 重读、以 head oid 确认
   卡片仍无主或归你，再用签名 `status` 认领——**认领即互斥锁**，两个 agent 抢同一张卡靠"先重读"收敛。
 - `--exec` 契约（**必须遵守**）：每个新/变更 ref 调用一次，原始 entry JSON 在 stdin，五个变量
   `WALGIT_COLLAB_REF/KIND/THREAD/ACTOR/VERIFIED` 从解析后的 entry 来（body 里写 `kind=` 无法伪造）。
@@ -164,7 +168,7 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 
 1. **工作单元 = 一条线程**：`issue` 必须写清目标、角色、唯一 owner、**机器可判的验收判据**；大任务拆子线程
    （`--related` / `--depends-on`，越界引用会在 thread 视图报 `broken_refs`）。
-2. **改树**：绝不编辑共享检出。`git worktree add .worktrees/<role> -b <unit> <base>`（**worktree 一律由 Leader 建在仓库内 `.worktrees/<角色>/`，一个 worktree = 一个身份/角色**；清理 worktree 前必须先备份 `.git/worktrees/<name>/walgit/`——identity/key 在那里，`git worktree remove` 会连带删 admin 目录），本地提交后
+2. **改树**：绝不编辑共享检出。`git worktree add .worktrees/<role> -b <unit> <base>`（**worktree 一律由 Leader 建在仓库内 `.worktrees/<角色>/`，一个 worktree = 一个身份/角色**；**worktree 一律不删（D62）**——identity/key 在 `.git/worktrees/<name>/walgit/`，`git worktree remove` 会连带删掉团队名册；要退役 principal 用 `wg collab principal-revoke`），本地提交后
    `git push <remote> <branch>`，再补 `--kind patch --base … --head …` 把交付挂到线程上——**评审人读的是 diff/线程，不是聊天**。
 3. **线程协议**：**先读后写**（以上一条 entry 的 oid 作 `--parent`，绝不凭记忆作答）；用 kind 而非散文表达状态
    （`status` / `review` / `merge_result` / `comment`）；`needs-human` 只留给真正需要人的事（授权、优先级、外部输入），
@@ -191,7 +195,7 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 - 抢卡示例（worktree 内可省略 `--actor` / `--key`）：
 
   ```sh
-  WALGIT_LOCAL_COMMANDS=1 walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 principal> \
+  wg collab entry --repo . --kind status --id <thread-id> --actor <你的 principal> \
     --parent <该线程最后一条 entry 的 oid> \
     --body '{"status":"in-progress","owner":"<principal>","worktree":"<wt 名>","branch":"worktree-<wt 名>","work":"<一句话>"}' \
     --push walgit
@@ -199,11 +203,11 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 
 - 标准流转：`issue` → `status: in-progress` → worktree 干活 → `patch(--base/--head)` → `status: needs-review`
   → **另一 principal** `review` → coordinator 合并并推 `walgit` → `merge_result{oid}` → `status: closed`。
-- 无人值守：`WALGIT_LOCAL_COMMANDS=1 walgit collab watch --once`（§0c）；巡检跑 `E:\MirServer\port-status.ps1` + `WALGIT_LOCAL_COMMANDS=1 walgit collab board` + `WALGIT_LOCAL_COMMANDS=1 walgit collab report`。
+- 无人值守：`wg collab watch --once`（§0c；wg 读路径故障期间该原语同样不可用）；巡检跑 `E:\MirServer\port-status.ps1` + `python -I -B tools/orchestration/collab_read.py board`。
 
 ### 每批收尾清单（Cleanup DoD，缺一不算完）
 
-1. **worktree**：`git worktree remove <路径>`；`git worktree list` 只剩主检出 + 进行中的线；
+1. **worktree**：**保留不删**（D62；裁决见卡 `openmir2-collab-interface-wg-migration`）；`git worktree list` 里允许留已完成车道的工作树——它们是团队名册。只清理已合并的**分支**，退役身份用 `wg collab principal-revoke`；
 2. **分支**：已合并的本地/远端删除（`git push walgit --delete <分支>`；GitHub 镜像按需人工同步），未合并的写明原因与归宿；
 3. **看板**：该卡收口为 `status: closed` 且在【已完成】列——**只写代码不收卡片 = 没收尾**；
 4. **进程**：本线起的客户端/服务端/假人/代理进程全部结束，`E:\MirServer` 十端口状态与开工前一致；
@@ -214,8 +218,8 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 ### 编排运行时（拉起 agent 的约定）
 
 把「无头 agent 车道」跑起来的运行时与踩坑约定在 **`tools/orchestration/README.md`**（车道表 `lanes.conf`、`supervise.sh`/`start-lane.sh`/`status.sh`、各车道 `briefs/`）。
-**脚本里读协作状态一律走 `tools/orchestration/walgit_collab.py`**（显式设 `WALGIT_LOCAL_COMMANDS=1`，并把 CLI 的「接口被拒」判成 rc=3 硬失败），
-不得裸调 `walgit collab` 再靠 `2>/dev/null | grep` 收尾——那会把错误吞成「看板为空」的假绿（卡 `openmir2-walgit-local-commands-env`）。
+**脚本里读协作状态一律走 `tools/orchestration/walgit_collab.py` 或 `collab_read.py`**（前者把「子命令不存在」与「聚合 GitFailed」判成 rc=3 硬失败；后者是 wg 读路径故障期间的分块只读投影），
+不得裸调 `wg collab` 再靠 `2>/dev/null | grep` 收尾——那会把错误吞成「看板为空」的假绿（卡 `openmir2-collab-interface-wg-migration`）。
 要点：**控制台（交互会话）不在无人值守循环里**——循环必须由独立外部进程（watch/计划任务）拥有；无头 agent 是一次性的，交付只到 `needs-review`，不自行 merge、不自签 review。
 
 ### 本地门禁（合并前全绿；reviewer 自己重跑，不采信作者自述）
