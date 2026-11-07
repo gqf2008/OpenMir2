@@ -18,10 +18,10 @@
 ## 1. 开工前的固定动作
 
 1. 读 `E:\Users\gxh\Documents\GitHub\OpenMir2\AGENTS.md`，以及 `docs/Rust重写设计文档.md` 的 §14.5、§2（oracle 与端口表）、§6（里程碑验收）、§6.0（证据四件套）。
-2. `git -C E:\Users\gxh\Documents\GitHub\OpenMir2 fetch walgit '+refs/collab/*:refs/collab/*'`，读 `collab board` 与上面两张卡的 `collab thread`。
+用 `python -I -B tools/orchestration/collab_read.py board` 与 `... thread <id>` 读上面两张卡。
 3. 建独立 worktree：`git -C <repo> worktree add .claude\worktrees\a2m1 worktree-a2-m1-services`
 4. 认领：在该 worktree 里
-   `walgit --config $env:USERPROFILE\.walgit\walgit.toml collab join --repo <worktree> --principal openmir2-worker-1 --key $env:USERPROFILE\.walgit\keys\openmir2-worker-1.ed25519 --push walgit`
+   `wg collab join --repo <worktree> --principal openmir2-worker-1 --key $env:USERPROFILE\.walgit\keys\openmir2-worker-1.ed25519 --push walgit`
    **认领 = 根 `card_claim`（不带 `--parent`）**，不是 `status`：
    `wg collab entry --repo <worktree> --kind card_claim --id <卡号> --body '{"ttl":7200,"worktree":"<wt>","branch":"<分支>","work":"<一句话>"}' --push walgit`
    然后 `python -I -B tools/orchestration/collab_read.py board --repo <worktree>` 读回，确认该卡 `claim.live` 里有你；**不是 ⇒ stand down**。

@@ -13,12 +13,12 @@
 
 1. 读 `E:\Users\gxh\Documents\GitHub\OpenMir2\AGENTS.md`，以及 `docs/Rust重写设计文档.md` 的 §14.5（协作规范：身份/worktree/patch/审查换人）、§6（里程碑验收判据）、§6.0（证据四件套）。
 2. 同步并读卡：`git -C E:\Users\gxh\Documents\GitHub\OpenMir2 fetch walgit '+refs/collab/*:refs/collab/*'`，然后
-   `walgit --config $env:USERPROFILE\.walgit\walgit.toml collab board --repo E:\Users\gxh\Documents\GitHub\OpenMir2` 和
-   `walgit ... collab thread --repo <repo> openmir2-b2-script-dispatch`。**卡里的范围与判据优先于本简报的转述。**
+   `python -I -B tools/orchestration/collab_read.py board --repo E:\Users\gxh\Documents\GitHub\OpenMir2` 和
+   `python -I -B tools/orchestration/collab_read.py thread openmir2-b2-script-dispatch --repo <repo>`。**卡里的范围与判据优先于本简报的转述。**
 3. 建独立 worktree（不要在主检出上改）：
    `git -C <repo> worktree add .claude\worktrees\b2 worktree-b-script-engine`
 4. 认领：在该 worktree 里
-   `walgit --config $env:USERPROFILE\.walgit\walgit.toml collab join --repo <worktree> --principal openmir2-worker-3 --key $env:USERPROFILE\.walgit\keys\openmir2-worker-3.ed25519 --push walgit`
+   `wg collab join --repo <worktree> --principal openmir2-worker-3 --key $env:USERPROFILE\.walgit\keys\openmir2-worker-3.ed25519 --push walgit`
    **认领 = 根 `card_claim`（不带 `--parent`）**，不是 `status`：
    `wg collab entry --repo <worktree> --kind card_claim --id <卡号> --body '{"ttl":7200,"worktree":"<wt>","branch":"<分支>","work":"<一句话>"}' --push walgit`
    然后 `python -I -B tools/orchestration/collab_read.py board --repo <worktree>` 读回，确认该卡 `claim.live` 里有你；**不是 ⇒ stand down**。

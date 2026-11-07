@@ -204,18 +204,48 @@ def main(argv=None):
 #:   ① 裸调 `walgit collab`（该二进制已无此子命令）⇒ 红；
 #:   ② `wg collab <读子命令>` ⇒ 红，读必须走 collab_read；
 #:   ③ `wg collab <写子命令>` ⇒ 放行。
-BARE_COLLAB_RE = re.compile(r"(?<![\w.-])walgit\s+collab\b")
-WG_COLLAB_SUB_RE = re.compile(r"(?<![\w.-])wg\s+collab\s+([A-Za-z][A-Za-z-]*)")
 READ_SUBCOMMANDS = frozenset(("board", "thread", "thread-heads", "report", "ls", "pr"))
+#: 一行里可能有多条命令；按 shell 分隔符切段后再逐段分词（不用正则，避免转义歧义）。
+def _segments(code):
+    out, cur, i = [], [], 0
+    while i < len(code):
+        if code[i:i + 2] in ("&&", "||"):
+            out.append("".join(cur)); cur = []; i += 2; continue
+        ch = code[i]
+        if ch in (";", "|"):
+            out.append("".join(cur)); cur = []; i += 1; continue
+        cur.append(ch); i += 1
+    out.append("".join(cur))
+    return out
+
+_QUOTES = "'" + chr(34) + "`"
+
+
+def _tokens(segment):
+    return [t.strip(_QUOTES) for t in segment.split() if t.strip(_QUOTES)]
 
 
 def collab_hit(code):
-    """判定一段代码：命中返回原因串，放行返回 None。"""
-    if BARE_COLLAB_RE.search(code):
-        return "bare walgit collab（该子命令已随 0.14.0 移除）"
-    for m in WG_COLLAB_SUB_RE.finditer(code):
-        if m.group(1) in READ_SUBCOMMANDS:
-            return "wg collab %s 是读路径，必须走 collab_read.py" % m.group(1)
+    """判定一段代码：命中返回原因串，放行返回 None。
+
+    **用分词判断，不用正则**（reviewer 实测）：`walgit --config x collab board` 这类
+    「二进制与子命令之间夹选项」的写法正则漏检过；分词还天然排除 `refs/collab/*`
+    这种把 collab 当路径片段的写法。
+    """
+    for seg in _segments(code):
+        toks = _tokens(seg)
+        if "walgit" in toks:
+            i = toks.index("walgit")
+            if "collab" in toks[i + 1:]:
+                return "walgit collab（该子命令已随 0.14.0 移除）"
+        if "wg" in toks:
+            i = toks.index("wg")
+            rest = toks[i + 1:]
+            if "collab" in rest:
+                j = rest.index("collab")
+                sub = rest[j + 1] if j + 1 < len(rest) else ""
+                if sub in READ_SUBCOMMANDS:
+                    return "wg collab %s 是读路径，必须走 collab_read.py" % sub
     return None
 
 
@@ -271,7 +301,8 @@ def _is_collab_argv(node):
     if "collab" not in vals:
         return None
     i = vals.index("collab")
-    binary = vals[i - 1] if i > 0 else None
+    # 二进制与 collab 之间可能夹选项（["walgit", "--config", x, "collab", …]）
+    binary = next((v for v in vals[:i] if v in ("walgit", "wg")), None)
     sub = vals[i + 1] if i + 1 < len(vals) else None
     return binary, sub
 
@@ -631,6 +662,18 @@ def selftest():
     add("guard:wg-read-flagged", len(bare_collab_hits("wg collab board --repo .")) == 1)
     add("guard:wg-thread-flagged", len(bare_collab_hits("wg collab thread x")) == 1)
     add("guard:wg-write-allowed", bare_collab_hits("wg collab entry --kind issue") == [])
+    # reviewer 实测的漏检形态：二进制与子命令之间夹选项
+    # reviewer 实测的漏检形态：二进制与子命令之间夹选项
+    add("guard:walgit-with-flags-flagged",
+        len(bare_collab_hits("walgit --config x collab board")) == 1)
+    add("guard:walgit-join-with-flags-flagged",
+        len(bare_collab_hits("walgit --config x collab join --push walgit")) == 1)
+    # 负对照：refs/collab 路径片段不得被当成子命令
+    add("guard:refspec-not-flagged",
+        bare_collab_hits("git fetch walgit '+refs/collab/*:refs/collab/*'") == [])
+    add("guard:py-walgit-with-flags-flagged",
+        len(py_collab_hits("import subprocess" + chr(10)
+                           + 'subprocess.run(["walgit", "--config", "x", "collab", "board"])' + chr(10))) == 1)
     add("guard:read-after-write-same-line",
         len(bare_collab_hits("wg collab entry --kind issue && wg collab board")) == 1)
     add("guard:read-before-write-same-line",
