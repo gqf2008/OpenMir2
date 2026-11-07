@@ -19,6 +19,12 @@ use anyhow::{bail, Context, Result};
 /// 置 1，`SystemShare.cs:191` 用它建 `Config`，`ServerConf.cs:22` 的 `ReadWriteByte`
 /// defValue 即该值 ⇒ 缺键与空串都回落 1（`ConfigFile.cs:47-53` / `:126-140`）。
 pub const DEFAULT_PAYMENT_MODE: u8 = 1;
+/// `[Server] MsgSrvAddr` 缺省（`GameSvrConf.cs:1275` 构造器）。
+pub const DEFAULT_MASTER_SRV_ADDR: &str = "127.0.0.1";
+/// `[Server] MsgSrvPort` 缺省（`GameSvrConf.cs:1276`）。
+pub const DEFAULT_MASTER_SRV_PORT: i32 = 4900;
+/// `[Server] ServerNumber` 缺省（`GameSvrConf.cs:1250`）。
+pub const DEFAULT_SERVER_NUMBER: i32 = 0;
 
 /// 监听端点 + S1 需要的少量参数。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +40,19 @@ pub struct GateConfig {
     ///
     /// oracle 是 `byte`（`SystemShare.ServerIndex`，`SystemShare.cs:45`）⇒ 越界/非整数报错。
     pub server_index: u8,
+    /// `[Server] MsgSrvAddr`（oracle `ServerConf.cs:37` 的 `ReadWriteString`；缺省
+    /// `127.0.0.1`，`GameSvrConf.cs:1275`）：**跨服主服地址**——`ServerIndex == 0` 时
+    /// `PlanesServer` 拿它监听，否则 `PlanesClient` 拿它连接（`PlanesService.cs:13-21`）。
+    pub master_srv_addr: String,
+    /// `[Server] MsgSrvPort`（`ServerConf.cs:38` 的 `ReadWriteInteger`；缺省 4900，
+    /// `GameSvrConf.cs:1276`）。
+    ///
+    /// oracle 是 `int` 而不是端口类型：配置里写 70000 也能读进来，直到 `IPHost` 构造
+    /// 才抛异常 ⇒ 这里同样存 `i32`，越界留到绑定时报（不在这里提前拒绝）。
+    pub master_srv_port: i32,
+    /// `[Server] ServerNumber`（`ServerConf.cs:20` 的 `ReadWriteInteger`；缺省 0，
+    /// `GameSvrConf.cs:1250`）：跨服客户端**只在 `> 0` 时重连**（`PlanesClient.cs:83`）。
+    pub server_number: i32,
     /// `[Server] PayMentMode`——`SS_SERVERINFO` 上报的第 5 段（`AuthenticationService.cs:113-116`）。
     ///
     /// **缺省是 1，不是 0**：`ServerConf.cs:22` 的 `ReadWriteByte("Server","PayMentMode",
@@ -439,6 +458,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
     let mut gate_port: Option<u16> = None;
     let mut check_block: Option<usize> = None;
     let mut server_index: Option<u8> = None;
+    let mut master_srv_addr: Option<String> = None;
+    let mut master_srv_port: Option<i32> = None;
+    let mut server_number: Option<i32> = None;
     let mut payment_mode: Option<u8> = None;
     let mut lock_human_login: Option<bool> = None;
     let mut test_server: Option<bool> = None;
@@ -656,6 +678,23 @@ pub fn load(path: &Path) -> Result<GateConfig> {
                         v.parse()
                             .with_context(|| format!("ServerIndex 不是合法字节：{v:?}"))?
                     });
+                }
+                // `ServerConf.cs:37-38`：跨服主服的地址与端口。取值口径与上面的
+                // `ServerIndex` **不同**——`ReadWriteString` / `ReadWriteInteger` 走
+                // `ReadString` / `ReadInteger`（`ConfigFile.cs:105-113` / `:55-71`），
+                // **空串与非数字都回落缺省，不报错**。
+                "MSGSRVADDR" => {
+                    if !v.is_empty() {
+                        master_srv_addr = Some(v.to_string());
+                    }
+                }
+                "MSGSRVPORT" => {
+                    master_srv_port = Some(v.parse().unwrap_or(DEFAULT_MASTER_SRV_PORT));
+                }
+                // `ServerConf.cs:20`：`ReadWriteInteger("Server","ServerNumber", …)`；
+                // `PlanesClient.cs:83` 的 `nServerNumber > 0` 是重连开关。
+                "SERVERNUMBER" => {
+                    server_number = Some(v.parse().unwrap_or(DEFAULT_SERVER_NUMBER));
                 }
                 // `ServerConf.cs:23/27`：`TestServer` 用 `OrdinalIgnoreCase`（大小写不敏感）；
                 // `ServiceMode` 用 `String.CompareTo("TRUE") == 0`——culture-aware，**非
@@ -1248,6 +1287,9 @@ pub fn load(path: &Path) -> Result<GateConfig> {
         check_block,
         // oracle 缺省值（`SystemShare.cs:45` 的 `ServerIndex = 0`）：缺键不算错。
         server_index: server_index.unwrap_or(0),
+        master_srv_addr: master_srv_addr.unwrap_or_else(|| DEFAULT_MASTER_SRV_ADDR.to_string()),
+        master_srv_port: master_srv_port.unwrap_or(DEFAULT_MASTER_SRV_PORT),
+        server_number: server_number.unwrap_or(DEFAULT_SERVER_NUMBER),
         // oracle 缺省 1（`GameSvrConf.cs:1253` 构造器；`ServerConf.cs:22` 的 defValue
         // 正是它）：缺键不算错。
         payment_mode: payment_mode.unwrap_or(DEFAULT_PAYMENT_MODE),
@@ -1896,6 +1938,72 @@ GuildMsgBColor=11
             0,
             "F3：空串 => oracle Read<byte> 缺省 0（不得报错）"
         );
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// **G11 / A3-2a**：`[Server] MsgSrvAddr` / `MsgSrvPort` / `ServerNumber`
+    /// （oracle `ServerConf.cs:20/37/38`）——跨服主服地址、端口与客户端重连开关。
+    ///
+    /// 与 `ServerIndex` 的关键差异：这三项走 `ReadWriteString` / `ReadWriteInteger`，
+    /// **空串与非数字都回落缺省**（`ConfigFile.cs:105-113` / `:55-71`），不报错。
+    #[test]
+    fn planes_server_keys_use_oracle_defaults() {
+        let dir = std::env::temp_dir().join(format!("gs-planes-cfg-{}", std::process::id()));
+        let base = "[Server]
+GateAddr=127.0.0.1
+GatePort=5000
+CheckBlock=1
+IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+";
+        let c = load(&write(&dir, base)).unwrap();
+        assert_eq!(c.master_srv_addr, "127.0.0.1", "缺键 ⇒ GameSvrConf.cs:1275");
+        assert_eq!(c.master_srv_port, 4900, "缺键 ⇒ GameSvrConf.cs:1276");
+        assert_eq!(c.server_number, 0, "缺键 ⇒ GameSvrConf.cs:1250");
+
+        let c2 = load(&write(
+            &dir,
+            &format!(
+                "{base}MsgSrvAddr=10.0.0.7
+MsgSrvPort=4901
+ServerNumber=3
+"
+            ),
+        ))
+        .unwrap();
+        assert_eq!(c2.master_srv_addr, "10.0.0.7");
+        assert_eq!(c2.master_srv_port, 4901);
+        assert_eq!(c2.server_number, 3);
+
+        // 空串 ⇒ 缺省（ReadString / ReadInteger 的 IsNullOrEmpty 支路）
+        let c3 = load(&write(
+            &dir,
+            &format!(
+                "{base}MsgSrvAddr=
+MsgSrvPort=
+ServerNumber=
+"
+            ),
+        ))
+        .unwrap();
+        assert_eq!(c3.master_srv_addr, "127.0.0.1");
+        assert_eq!(c3.master_srv_port, 4900);
+        assert_eq!(c3.server_number, 0);
+
+        // 非数字 ⇒ 缺省，**不报错**（int.TryParse 失败回落 defValue）
+        let c4 = load(&write(
+            &dir,
+            &format!(
+                "{base}MsgSrvPort=abc
+ServerNumber=x
+"
+            ),
+        ))
+        .unwrap();
+        assert_eq!(c4.master_srv_port, 4900);
+        assert_eq!(c4.server_number, 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
