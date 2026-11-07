@@ -222,7 +222,6 @@ def _effective_state_oid(items):
     这种，wg 看的是 in-progress60 那条支的终端 needs-review30，而不是旁支的 closed40。
     """
     by_oid = {oid: e for oid, e in items}
-    rank = {oid: i for i, oid in enumerate(_chain_order(items))}
     states = {oid for oid, e in items if _is_state_entry(e)}
     if not states:
         return None
@@ -240,11 +239,21 @@ def _effective_state_oid(items):
             parent = by_oid[parent].get("parent") or ""
         return out
 
-    newest = max(states, key=lambda o: (ts(o), rank[o]))
-    subtree = [o for o in states if o == newest or newest in state_ancestors(o)]
-    terminals = [o for o in subtree
-                 if not any(o in state_ancestors(x) for x in subtree if x != o)]
-    return max(terminals, key=lambda o: (ts(o), rank[o]))
+    # reviewer 用 23 组夹具 / 117 张卡验证的完整规则：
+    # ① 取所有 ts == max 的 state；② 其中有带 state 后代的，取它们**子树终端的并集**
+    #    （无后代的 max-ts state 在有后代者存在时忽略；全无后代则取 max-ts state 自身）；
+    # ③ 并集里按 (ts, **oid**) 取最大——同 ts 用 oid，不是链序。
+    def has_state_descendant(oid, pool):
+        return any(oid in state_ancestors(x) for x in pool if x != oid)
+
+    terminals = [o for o in states if not has_state_descendant(o, states)]
+    max_ts = max(ts(o) for o in states)
+    candidates = [o for o in states if ts(o) == max_ts]
+    with_desc = [o for o in candidates if has_state_descendant(o, states)]
+    roots = with_desc or candidates
+    pool = [t for t in terminals
+            if any(t == r or r in state_ancestors(t) for r in roots)]
+    return max(pool, key=lambda o: (ts(o), o))
 
 
 def project(repo, now=None, board=None):
@@ -630,6 +639,24 @@ def selftest():
         v1 = _write_entry(r2, 231, _entry('k2', 'status', 'a', 70, {'status': 'in-progress'}, parent=v0))
         _write_entry(r2, 232, _entry('k2', 'merge_result', 'a', 30, {'merged': True}, parent=v1))
         _write_entry(r2, 233, _entry('k2', 'status', 'a', 50, {'status': 'needs-review'}, parent=v0))
+        # 9) 多个 state 共享全局最大 ts 的 tie-break（reviewer m1/m2 + 117/117）
+        def _oid_of(entry):
+            r = subprocess.run(["git", "-C", r2, "hash-object", "--stdin"],
+                               input=json.dumps(entry, ensure_ascii=False).encode(),
+                               stdout=subprocess.PIPE)
+            return r.stdout.decode().strip()
+        # ② 有后代的 max-ts state 决定走哪支；无后代者被忽略
+        z0 = _write_entry(r2, 310, _entry('tie2', 'issue', 'a', 1, {}))
+        _write_entry(r2, 311, _entry('tie2', 'status', 'a', 100, {'status': 'closed'}, parent=z0))
+        z2 = _write_entry(r2, 312, _entry('tie2', 'status', 'a', 100, {'status': 'in-progress'}, parent=z0))
+        _write_entry(r2, 313, _entry('tie2', 'status', 'a', 20, {'status': 'needs-review'}, parent=z2))
+        # ③ 终端同 ts 时取 **oid 最大**（不是链序）
+        y0 = _write_entry(r2, 320, _entry('tie3', 'issue', 'a', 1, {}))
+        cand_c = _entry('tie3', 'status', 'a', 50, {'status': 'closed'}, parent=y0)
+        cand_n = _entry('tie3', 'status', 'a', 50, {'status': 'needs-review'}, parent=y0)
+        oid_c, oid_n = _oid_of(cand_c), _oid_of(cand_n)
+        _write_entry(r2, 321, cand_c)
+        _write_entry(r2, 322, cand_n)
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -661,6 +688,8 @@ def selftest():
         checks += 1; assert by['n3']['column'] == '受阻', by.get('n3')
         checks += 1; assert by['k1']['column'] == '已完成', by.get('k1')
         checks += 1; assert by['k2']['column'] == '已合并未收口', by.get('k2')
+        checks += 1; assert by['tie2']['column'] == '待审', by.get('tie2')
+        checks += 1; assert by['tie3']['column'] == ('已完成' if oid_c > oid_n else '待审'), (by.get('tie3'), oid_c, oid_n)
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
         with open(onlyclosed, 'w', encoding='utf-8', newline='') as fh:
@@ -670,7 +699,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 53, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 55, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

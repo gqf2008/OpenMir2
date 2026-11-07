@@ -101,14 +101,17 @@ python -I -B <repo>/tools/orchestration/collab_read.py board --repo .   # 期望
 
 **正确规则**（reviewer 用 18 组夹具 / 63 张卡反推并 63/63 验证）：
 
-- 先取**全局最新 state**（`status`，或 `merge_result{merged 真}`）：ts 最大，同 ts 用 parent 链序；
-- 再**只在它的 state 后代子树里**取 ts 最大的**终端**（子树内没有 state 后代的那个）；其它分支一律忽略；
+- 先取**全局最新 state**（`status`，或 `merge_result{merged 真}`）：ts 最大；
+- **多个 state 共享全局最大 ts 时**：取这些 max-ts state 的**子树终端并集**
+  （没有 state 后代的 max-ts state 在有后代者存在时被忽略；全都无后代则取它们自己）；
+- 再在并集里取 **ts 最大**的终端；**同 ts 取 `oid` 最大**——不是链序（reviewer m1/m2 实测）。
+  在单链上这条退化成「链尾胜出」，所以早期的同 ts 用例仍然成立；
 - 显式未知状态 ⇒ 隐藏；没有任何 state ⇒ `open`；只有 `ci_*`/`card_claim` 的线程 ⇒ 隐藏。
 
 按此实现后：
 
-- reviewer 的 18 组夹具 / 63 张卡与 wg 逐 id、逐 status、逐 column **63/63 一致**，
-  含四个反例 y3 / n3 / k1 / k2；
+- reviewer 的 **23 组夹具 / 117 张卡**（含 y3/n3/k1/k2 与随机 tie 夹具 `wgfuzz*`）**117/117 一致**；
+  我在本仓复跑其中 **22 组 / 113 张卡，0 mismatch**；
 - 真实仓库（**截至 `1987bfff5` 的快照**）：985 卡 + 75 hidden，`已完成 981 / 进行中 3 / 受阻 1`；
   这四个反例形状当前在真仓里不出现，所以旧实现是**潜在**错列而非现网已错。看板是实时量，复跑以当次输出为准。
 
