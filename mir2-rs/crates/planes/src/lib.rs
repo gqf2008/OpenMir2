@@ -1,8 +1,13 @@
 //! mir2-planes — 跨服（Planes）线协议编解码（G11）。
 //!
-//! 与 C# `PlanesServer.DecodeSocStr` / `PlanesClient.DecodeSocStr` **逐字节等价**：
-//! 帧是 `(ident/serverNum/body)`，字段分隔符是 `'/'`（C# 的 `HUtil32.Backslash`，
-//! 注意它的名字叫 Backslash、值却是 `/`）。
+//! 与 C# `PlanesServer.DecodeSocStr` / `PlanesClient.DecodeSocStr` 的
+//! **帧提取 / 字段切分 / 数值字段**逐字节等价：帧是 `(ident/serverNum/body)`，
+//! 字段分隔符是 `'/'`（C# 的 `HUtil32.Backslash`，注意它的名字叫 Backslash、值却是 `/`）。
+//!
+//! **明确不在本 crate 范围**（归 A2-3 / A3）：`ProcessData` 的副作用、`ISM_CHANGECASTLEOWNER`
+//! 的 `throw` 导致整批丢弃、客户端 `catch` 里的 `LogService.Error`（服务器侧是静默吞）、
+//! 以及非 ASCII body 的 GB2312 解码。本 crate 只保证「同样的字节进 ⇒ 同样的
+//! `(ident, serverNum, body)` 出」。
 //!
 //! **本层只处理字节**：线上文本是 GB2312 字节流，这里不做任何 UTF-8 转换。
 //!
@@ -42,12 +47,17 @@ pub enum Flavor {
 
 /// `int.TryParse` 的等价物：失败（含非数字 / 溢出 / 非 UTF-8）返回 `def`。
 ///
-/// **只 trim ASCII 空白**（空格、`\t\n\v\f\r`）——.NET 的 `TryParse` 不接受 Unicode 空白
+/// **只 trim ASCII 空白**：空格与 `\t`..`\r`（**含 VT 0x0B**，对齐 .NET 的 `IsWhite`）——
+/// `str::trim_ascii()` 的集合不含 VT，所以这里用显式集合，不能图省事。
+/// .NET 的 `TryParse` 不接受 Unicode 空白
 /// （如 U+3000、U+00A0），实跑 `StrToInt("42\u{3000}", 7)` 得 `7`。
 #[must_use]
 pub fn str_to_int(bytes: &[u8], def: i32) -> i32 {
     match std::str::from_utf8(bytes) {
-        Ok(s) => s.trim_ascii().parse::<i32>().unwrap_or(def),
+        Ok(s) => s
+            .trim_matches(|c: char| c == ' ' || ('\t'..='\r').contains(&c))
+            .parse::<i32>()
+            .unwrap_or(def),
         Err(_) => def,
     }
 }
@@ -440,6 +450,9 @@ mod tests {
         assert_eq!(str_to_int(b"", 7), 7);
         assert_eq!(str_to_int(b"-5", 7), -5);
         assert_eq!(str_to_int(b" 42\t", 7), 42);
+        // VT(0x0B)：.NET 的 IsWhite 覆盖 \t..\r ⇒ 42；Rust 的 trim_ascii 不含 VT，必须显式覆盖
+        assert_eq!(str_to_int(b"42\x0b", 7), 42);
+        assert_eq!(str_to_int(b"\x0b42", 7), 42);
         // Unicode 空白：C# TryParse 不认 ⇒ 默认值；我们的字节层同样失败
         assert_eq!(str_to_int("\u{3000}42".as_bytes(), 7), 7);
     }
