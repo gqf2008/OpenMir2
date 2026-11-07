@@ -2,7 +2,7 @@
 
 仓库：`E:\Users\gxh\Documents\GitHub\OpenMir2`。你已在隔离检出 `E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\m2rev`（detached HEAD = `d1a7bfd5`）。
 身份：`openmir2-reviewer-4`（**不得与作者同 principal**；本卡作者是 `openmir2-worker-11`）。
-先 `WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo . --principal openmir2-reviewer-4 --key C:\Users\gxh\.walgit\keys\openmir2-reviewer-4.ed25519 --push walgit`。
+先 `wg collab join --repo . --principal openmir2-reviewer-4 --key C:\Users\gxh\.walgit\keys\openmir2-reviewer-4.ed25519 --push walgit`。
 
 ## 审什么（**别碰别的待审卡**——rev 车道正在按队列走，撞同一评审面只会产生重复 review）
 

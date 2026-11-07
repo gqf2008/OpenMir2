@@ -2,7 +2,7 @@
 
 工作区：`E:\Users\gxh\Documents\GitHub\OpenMir2\.claude\worktrees\rev4b`（detached at master `d22dd03d`）。
 每审一张卡用 `git checkout --detach <head>` 切到该 head 取判据，**切前 `git status` 必须干净**（要改正就改后还原）。
-身份：先 `WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo . --principal openmir2-reviewer-4 --key C:\Users\gxh\.walgit\keys\openmir2-reviewer-4.ed25519 --push walgit`。
+身份：先 `wg collab join --repo . --principal openmir2-reviewer-4 --key C:\Users\gxh\.walgit\keys\openmir2-reviewer-4.ed25519 --push walgit`。
 
 ## 审什么（做完这三张就收工）
 

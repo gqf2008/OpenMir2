@@ -15,9 +15,10 @@ echo "----"
 echo "alive 车道数：$n / $(grep -cE '^[a-z]' "$watch/lanes.conf")"
 echo "看板："
 cd "$repo" || { echo "status: **进不去仓库 $repo**" >&2; exit 2; }
-# 卡 openmir2-walgit-local-commands-env：**不许**再写 `walgit collab ... 2>/dev/null | grep`。
-# 2026-11-02 12:52 起，CLI 在缺 WALGIT_LOCAL_COMMANDS=1 时把「接口被拒」打到 stderr、rc=1；
-# 管道取的是 grep 的 rc，错误被吞 ⇒ 看板显示成「空的」的假绿。统一走封装，它 fail-closed。
+# 卡 openmir2-walgit-local-commands-env / openmir2-collab-interface-wg-migration：
+# **不许**裸调 `wg collab ... 2>/dev/null | grep`——管道取的是 grep 的 rc，失败被吞成
+# 「看板是空的」的假绿（`wg` 聚合失败时甚至可能 rc=0）。统一走封装：它 fail-closed，
+# rc=3 表示协作接口不可用。
 if ! board=$(python -I -B tools/orchestration/walgit_collab.py board); then
   echo "status: **看板读取失败**（walgit-collab fail-closed，原因见上方 stderr）；" \
        "不要把它当成「没有待审」。" >&2

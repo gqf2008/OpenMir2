@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# walgit collab watch --exec 的 hook：只落盘、返回 0（长活交给 dispatch）
+# wg collab watch --exec 的 hook：只落盘、返回 0（长活交给 dispatch）
 Q=/e/tmp/openmir2-watch/queue; mkdir -p "$Q"
 name="$(date +%s%3N)-$$"
 cat > "$Q/$name.json"

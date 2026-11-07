@@ -20,7 +20,7 @@
    cd E:\Users\gxh\Documents\GitHub\OpenMir2
    git worktree add E:\tmp\openmir2-watch\rev-gg3 f46f8b45   # detached 即可，别改作者分支
    cd E:\tmp\openmir2-watch\rev-gg3
-   WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo . --principal openmir2-reviewer-3 `
+   wg collab join --repo . --principal openmir2-reviewer-3 `
      --key $env:USERPROFILE\.walgit\keys\openmir2-reviewer-3.ed25519 --push walgit
    ```
 2. 取判据（**用隔离 target**，别用别人 worktree 的 target）：设 `CARGO_TARGET_DIR=E:\tmp\openmir2-watch\rev-gg3-target`，然后
@@ -41,8 +41,8 @@
 ## 2. 签条目（结论只能是你自己跑出来的）
 
 ```powershell
-WALGIT_LOCAL_COMMANDS=1 walgit collab entry --repo . --kind review --id openmir2-m2-gamegate `
-  --parent <该线程最后一条 entry 的 oid：先 `WALGIT_LOCAL_COMMANDS=1 walgit collab thread openmir2-m2-gamegate` 拿> `
+wg collab entry --repo . --kind review --id openmir2-m2-gamegate `
+  --parent <该线程最后一条 entry 的 oid：先 `wg collab thread openmir2-m2-gamegate` 拿> `
   --body '{"agent":"openmir2-reviewer-3","decision":"approve|request_changes","reviewed_commit":"f46f8b45",
            "verified_ok":[...你跑的命令+结果+证据文件路径...],"findings":[{"severity":"important|minor","where":"...","problem":"...","repro":"...","suggestion":"..."}]}' `
   --push walgit

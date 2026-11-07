@@ -36,7 +36,7 @@
 | `lane-run.sh <tag>` | 车道本体（由 `start-lane.sh` 用隐藏控制台拉起）；**按 role 选 prompt**：`merge` 角色的活就是合并，其余角色明令不得 merge。 |
 | `supervise.sh` | 一次 tick：状态快照 + worker / reviewer / merge 三类角色重拉。 |
 | `status.sh` | 手动看：各车道 alive / HEAD / ahead / 卡片。 |
-| `park.sh` | 若用 `walgit collab watch --exec`，把事件落盘的 hook（只 park、返回 0）。 |
+| `park.sh` | 若用 `wg collab watch --exec`，把事件落盘的 hook（只 park、返回 0）。 |
 | `briefs/` | 各车道任务简报（agent 读它干活）；合并车道的准入判据见 `briefs/brief-merge.md`。 |
 
 运行目录（不入库）：`E:\tmp\openmir2-watch\`（日志、快照、pid、queue 等临时物）。
