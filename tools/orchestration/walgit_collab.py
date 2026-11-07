@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""walgit_collab — 统一封装 `walgit collab`：显式请求本地命令接口 + fail-closed。
+"""walgit_collab — 统一封装协作 CLI（默认 `wg collab`）：接口不可用时 fail-closed。
 
 为什么存在（卡 `openmir2-walgit-local-commands-env`）
 ----------------------------------------------------
@@ -28,14 +28,13 @@
     python -I -B tools/orchestration/walgit_collab.py board --format json
     out=$(python -I -B tools/orchestration/walgit_collab.py board) || exit 1
 
-退出码：子进程 rc；**3** = CLI 报「不是本地协作接口」（fail-closed）；**2** = 本封装用法错；
-**127** = 找不到 walgit；**124** = `WALGIT_COLLAB_TIMEOUT` 秒内没跑完（仅在该变量存在时启用）。
+退出码：子进程 rc；**3** = 协作接口不可用（子命令已移除 / 聚合 GitFailed / 旧版拒绝本地命令，fail-closed）；
+**2** = 本封装用法错；**127** = 找不到可执行文件；**124** = `WALGIT_COLLAB_TIMEOUT` 秒内没跑完（仅在该变量存在时启用）。
 
-自测（`--selftest`）用**替身 walgit** 覆盖：正常成功/rc 透传/哨兵 rc=0/哨兵在 stdout/找不到可执行/
-空参数/下游提前关管道（`| head` 不许崩）。卫生牙覆盖**三个扫描域**，且每域都有合成负例：
+自测（`--selftest`）用**替身协作 CLI** 覆盖：正常成功/rc 透传/三种接口不可用哨兵（rc=0 与 stdout 两形态）/
+找不到可执行/空参数/下游提前关管道（`| head` 不许崩）。卫生牙覆盖**三个扫描域**，且每域都有合成负例：
 `tools/orchestration/*.sh`（引用感知剥注释）、`tools/**/*.py`（AST：裸调/变量形态红，env 或已证
-helper 绿，helper 被掏空后重新变红）、`tools/orchestration/briefs/**/*.md`（每个命令必须紧跟
-`WALGIT_LOCAL_COMMANDS=1`）。替身通过 `WALGIT_COLLAB_BIN` 注入（测试缝，生产不设）。
+helper 绿，helper 被掏空后重新变红）、`tools/orchestration/briefs/**/*.md`（读写分路规则）。替身通过 `WALGIT_COLLAB_BIN` 注入（测试缝，生产不设）。
 """
 import ast
 import errno

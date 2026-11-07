@@ -165,12 +165,42 @@ def load_entries(repo):
     return out
 
 
-#: 非卡片条目类型：只有这些条目的线程不进看板（与 board_coverage_gate 的 NON_CARD_KINDS 同口径）。
-CI_KINDS = frozenset(("ci_claim", "ci_result"))
+#: 非卡片条目类型：**只有**这些条目的线程不进看板（wg 实测：ci_* 与 card_claim-only 都隐藏）。
+NON_CARD_KINDS = frozenset(("ci_claim", "ci_result", "card_claim"))
 
 
 def _merged_flag(value):
     return value is True or value == 1 or (isinstance(value, str) and value.lower() == "true")
+
+
+def _chain_order(items):
+    """按 **parent 链序**给线程条目定序（wg 实测：同 ts 时链序胜出，不是 oid 序）。
+
+    断链/环的条目按 (ts, oid) 追加到末尾，保证不丢条也不死循环。
+    """
+    by_oid = {oid: e for oid, e in items}
+    children = {}
+    roots = []
+    for oid, e in items:
+        parent = e.get("parent") or ""
+        if isinstance(parent, str) and parent and parent in by_oid:
+            children.setdefault(parent, []).append(oid)
+        else:
+            roots.append(oid)
+    order, seen = [], set()
+    roots.sort(key=lambda o: (by_oid[o].get('ts') or 0, o))
+    stack = list(reversed(roots))
+    while stack:
+        oid = stack.pop()
+        if oid in seen:
+            continue
+        seen.add(oid)
+        order.append(oid)
+        for ch in sorted(children.get(oid, []), reverse=True):
+            stack.append(ch)
+    rest = [oid for oid, _e in items if oid not in seen]
+    rest.sort(key=lambda o: (by_oid[o].get("ts") or 0, o))
+    return order + rest
 
 
 def project(repo, now=None, board=None):
@@ -184,7 +214,6 @@ def project(repo, now=None, board=None):
     """
     now = int(now if now is not None else time.time())
     columns = load_board_def(repo, board)
-    known = {c["status"] for c in columns if c["status"]}
     entries = load_entries(repo)
 
     cards = {}
@@ -199,14 +228,18 @@ def project(repo, now=None, board=None):
     hidden = 0
     for tid, items in cards.items():
         items.sort(key=lambda p: (p[1].get("ts") or 0, p[0]))
-        if all((e.get("kind") in CI_KINDS) for _o, e in items):
+        if all((e.get("kind") in NON_CARD_KINDS) for _o, e in items):
             hidden += 1
             continue
+        by_oid = dict(items)
+        # wg 实测：**ts 为主键**，同 ts 时用 parent 链序破平局（不是 oid 序，也不是深度优先）。
+        rank = {oid: i for i, oid in enumerate(_chain_order(items))}
+        ordered = sorted(items, key=lambda p: (p[1].get("ts") or 0, rank[p[0]]))
         effective = None
         owner = None
         tier = None
         tier_why = None
-        for oid, e in items:
+        for oid, e in ordered:
             kind = e.get("kind")
             body = e.get("body") or {}
             ts = e.get("ts") or 0
@@ -218,9 +251,8 @@ def project(repo, now=None, board=None):
                     effective = (ts, oid, body["status"])
             elif kind == "merge_result" and _merged_flag(body.get("merged")):
                 effective = (ts, oid, "merged")
+        # 不做归一化：显式未知状态的线程匹配不到任何列 ⇒ 隐藏（wg 实测，不是回落 open）。
         status = effective[2] if effective else "open"
-        if status not in known:
-            status = "open"
         column = None
         for col in columns:
             if col["status"] is None or col["status"] == status:
@@ -313,6 +345,7 @@ def _write_entry(repo, idx, entry):
         raise RuntimeError("hash-object 失败")
     oid = r.stdout.decode().strip()
     _sh(repo, "update-ref", "refs/collab/inbox/selftest/%04d" % idx, oid)
+    return oid
 
 
 def _mk_repo(tmp, board=True):
@@ -328,9 +361,9 @@ def _mk_repo(tmp, board=True):
     return repo
 
 
-def _entry(tid, kind, actor, ts, body):
+def _entry(tid, kind, actor, ts, body, parent=""):
     return {"version": 1, "kind": kind, "id": tid, "actor": actor, "ts": ts,
-            "parent": "", "body": body, "sig": "ed25519:SELFTEST"}
+            "parent": parent, "body": body, "sig": "ed25519:SELFTEST"}
 
 
 def selftest():
@@ -439,6 +472,7 @@ def selftest():
         wgboard = os.path.join(tmp, 'wg-board.toml')
         with open(wgboard, 'w', encoding='utf-8', newline='') as fh:
             fh.write('[[column]]' + nl + 'name = "待认领"' + nl + 'status = "open"' + nl
+                     + '[[column]]' + nl + 'name = "进行中"' + nl + 'status = "in-progress"' + nl
                      + '[[column]]' + nl + 'name = "已完成"' + nl + 'status = "closed"' + nl
                      + '[[column]]' + nl + 'name = "已合并未收口"' + nl + 'status = "merged"' + nl)
         r2 = _mk_repo(tmp)
@@ -452,14 +486,30 @@ def selftest():
         _write_entry(r2, 8, _entry('m4', 'status', 'a', 1, {'status': 'weird'}))
         _write_entry(r2, 9, _entry('m5', 'ci_claim', 'a', 1, {}))
         _write_entry(r2, 10, _entry('m6', 'issue', 'a', 1, {'status': 'blocked'}))
+        _write_entry(r2, 11, _entry('m7', 'card_claim', 'a', 1, {}))
+        # 同 ts 定序：wg 用 parent 链序破平局（不是 oid 序）
+        mo = _write_entry(r2, 20, _entry('m8', 'merge_result', 'a', 5, {'merged': True}))
+        _write_entry(r2, 21, _entry('m8', 'status', 'a', 5, {'status': 'closed'}, parent=mo))
+        so = _write_entry(r2, 22, _entry('m9', 'status', 'a', 5, {'status': 'closed'}))
+        _write_entry(r2, 23, _entry('m9', 'merge_result', 'a', 5, {'merged': True}, parent=so))
+        # ts 为主键：分叉时更晚 ts 的浅支胜出（wg 实测）
+        fo = _write_entry(r2, 30, _entry('m10', 'issue', 'a', 1, {}))
+        f1o = _write_entry(r2, 31, _entry('m10', 'status', 'a', 10, {'status': 'in-progress'}, parent=fo))
+        f2o = _write_entry(r2, 32, _entry('m10', 'status', 'a', 20, {'status': 'closed'}, parent=f1o))
+        _write_entry(r2, 33, _entry('m10', 'status', 'a', 25, {'status': 'needs-review'}, parent=f2o))
+        _write_entry(r2, 34, _entry('m10', 'status', 'a', 30, {'status': 'in-progress'}, parent=f1o))
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
         checks += 1; assert by['m3']['column'] == '待认领', by.get('m3')
-        checks += 1; assert by['m4']['column'] == '待认领', by.get('m4')
+        checks += 1; assert 'm4' not in by, '显式未知状态必须隐藏（wg 实测），不得回落 open'
         checks += 1; assert 'm5' not in by, '只有 ci_* 条目的线程必须隐藏'
         checks += 1; assert by['m6']['column'] == '待认领', by.get('m6')
-        checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 1
+        checks += 1; assert 'm7' not in by, '只有 card_claim 的线程必须隐藏'
+        checks += 1; assert by['m8']['column'] == '已完成', by.get('m8')
+        checks += 1; assert by['m9']['column'] == '已合并未收口', by.get('m9')
+        checks += 1; assert by['m10']['column'] == '进行中', by.get('m10')
+        checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
         with open(onlyclosed, 'w', encoding='utf-8', newline='') as fh:
             fh.write('[[column]]' + nl + 'name = "已完成"' + nl + 'status = "closed"' + nl)
@@ -468,7 +518,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 29, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 33, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

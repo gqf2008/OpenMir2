@@ -147,7 +147,8 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 唤醒原语是 `wg collab watch`（wg 读路径故障期间该原语同样不可用，见卡 A1/A2）：把 `refs/collab/*` 变化变成进程调用（trigger，不是 agent）。
 
 - 事件只当**重新读取的触发器**，绝不是真相快照：收到后先 `python -I -B tools/orchestration/collab_read.py thread <id>` 重读、以 head oid 确认
-  卡片仍无主或归你，再用签名 `status` 认领——**认领即互斥锁**，两个 agent 抢同一张卡靠"先重读"收敛。
+  卡片仍无主或归你，再发布 `card_claim`（带 TTL）认领并读回核对胜出 oid——**认领即互斥锁**，
+  两个 agent 抢同一张卡靠「先重读 + 核 claim oid」收敛；`status` 只用于移卡，不当锁。
 - `--exec` 契约（**必须遵守**）：每个新/变更 ref 调用一次，原始 entry JSON 在 stdin，五个变量
   `WALGIT_COLLAB_REF/KIND/THREAD/ACTOR/VERIFIED` 从解析后的 entry 来（body 里写 `kind=` 无法伪造）。
   **handler 只做 park + return 0**（落到队列，比如 `sha256`/`hash-object` 命名），重活交给 worker；
