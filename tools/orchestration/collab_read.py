@@ -266,7 +266,7 @@ def project(repo, now=None, board=None):
         ordered = sorted(items, key=lambda p: (p[1].get("ts") or 0, rank[p[0]]))
         leaves = _leaf_states(items)
         effective = None
-        owner = None
+        owner = ""          # wg 对「无 owner」输出空串，不是 null
         tier = None
         tier_why = None
         for oid, e in ordered:
@@ -274,9 +274,13 @@ def project(repo, now=None, board=None):
             body = e.get("body") or {}
             ts = e.get("ts") or 0
             if kind == "status":
-                owner = body.get("owner", owner)
-                tier = body.get("tier", tier)
-                tier_why = body.get("tier_why", tier_why)
+                # 显式 null 视为「没有该字段」，不得覆盖；空串是有效值（wg 实测）
+                if body.get("owner") is not None:
+                    owner = body["owner"]
+                if body.get("tier") is not None:
+                    tier = body["tier"]
+                if body.get("tier_why") is not None:
+                    tier_why = body["tier_why"]
                 if oid in leaves and isinstance(body.get("status"), str):
                     effective = (ts, oid, body["status"])
             elif kind == "merge_result" and oid in leaves and _merged_flag(body.get("merged")):
@@ -284,9 +288,12 @@ def project(repo, now=None, board=None):
         # owner/tier 跟随胜出的 leaf（wg 实测：非 leaf 高 ts 的 owner 不算数）。
         if effective:
             winner = by_oid[effective[1]].get("body") or {}
-            owner = winner.get("owner", owner)
-            tier = winner.get("tier", tier)
-            tier_why = winner.get("tier_why", tier_why)
+            if winner.get("owner") is not None:
+                owner = winner["owner"]
+            if winner.get("tier") is not None:
+                tier = winner["tier"]
+            if winner.get("tier_why") is not None:
+                tier_why = winner["tier_why"]
         # 不做归一化：显式未知状态的线程匹配不到任何列 ⇒ 隐藏（wg 实测，不是回落 open）。
         status = effective[2] if effective else "open"
         column = None
@@ -538,10 +545,28 @@ def selftest():
         lo = _write_entry(r2, 40, _entry('m11', 'issue', 'a', 1, {}))
         l1 = _write_entry(r2, 41, _entry('m11', 'status', 'a', 50, {'status': 'in-progress'}, parent=lo))
         _write_entry(r2, 42, _entry('m11', 'status', 'a', 40, {'status': 'closed'}, parent=l1))
-        # owner 跟随 leaf（wgowner o1 实测）
+        # owner/tier 跟随 leaf（wgowner o1 / wgowner3 q1,q7 实测）
         oo = _write_entry(r2, 50, _entry('m12', 'issue', 'a', 1, {}))
-        o1 = _write_entry(r2, 51, _entry('m12', 'status', 'a', 60, {'status': 'in-progress', 'owner': 'A'}, parent=oo))
-        _write_entry(r2, 52, _entry('m12', 'status', 'a', 55, {'status': 'closed', 'owner': 'B'}, parent=o1))
+        o1 = _write_entry(r2, 51, _entry('m12', 'status', 'a', 60,
+                                        {'status': 'in-progress', 'owner': 'A', 'tier': 'T1'}, parent=oo))
+        _write_entry(r2, 52, _entry('m12', 'status', 'a', 55,
+                                    {'status': 'closed', 'owner': 'B', 'tier': 'T2'}, parent=o1))
+        # leaf 无 tier ⇒ 回退到非 leaf 的 tier
+        n1 = _write_entry(r2, 60, _entry('m13', 'issue', 'a', 1, {}))
+        n2 = _write_entry(r2, 61, _entry('m13', 'status', 'a', 60,
+                                        {'status': 'in-progress', 'tier': 'T1'}, parent=n1))
+        _write_entry(r2, 62, _entry('m13', 'status', 'a', 55, {'status': 'closed'}, parent=n2))
+        # 显式 owner:null 视为「无 owner」，回退到更早的非 null
+        u1 = _write_entry(r2, 70, _entry('m14', 'issue', 'a', 1, {}))
+        u2 = _write_entry(r2, 71, _entry('m14', 'status', 'a', 50,
+                                        {'status': 'in-progress', 'owner': 'A'}, parent=u1))
+        _write_entry(r2, 72, _entry('m14', 'status', 'a', 40,
+                                    {'status': 'closed', 'owner': None}, parent=u2))
+        # 循环级 null 守卫：胜出 leaf 本身 owner=null 时不得把它记成 owner
+        x0 = _write_entry(r2, 80, _entry('m15', 'issue', 'a', 1, {}))
+        x1 = _write_entry(r2, 81, _entry('m15', 'status', 'a', 10, {'status': 'in-progress', 'owner': 'A'}, parent=x0))
+        _write_entry(r2, 82, _entry('m15', 'status', 'a', 40, {'status': 'closed'}, parent=x1))
+        _write_entry(r2, 83, _entry('m15', 'status', 'a', 60, {'status': 'in-progress', 'owner': None}, parent=x1))
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -555,6 +580,10 @@ def selftest():
         checks += 1; assert by['m10']['column'] == '进行中', by.get('m10')
         checks += 1; assert by['m11']['column'] == '已完成', by.get('m11')
         checks += 1; assert by['m12']['owner'] == 'B', by.get('m12')
+        checks += 1; assert by['m12']['tier'] == 'T2', by.get('m12')
+        checks += 1; assert by['m13']['tier'] == 'T1', by.get('m13')
+        checks += 1; assert by['m14']['owner'] == 'A', by.get('m14')
+        checks += 1; assert by['m15']['owner'] == 'A', by.get('m15')
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
         with open(onlyclosed, 'w', encoding='utf-8', newline='') as fh:
@@ -564,7 +593,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 35, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 39, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
