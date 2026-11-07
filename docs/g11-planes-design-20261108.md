@@ -126,6 +126,59 @@
 **A2 的第一件事是逐个人工确认这 40 个有处理器的 ident（对应 **32 个不同 handler 方法**）的真实执行状态**，并按「oracle 是空实现 ⇒ Rust 也必须是空实现」
 移植；任何"它应该是想做 X 所以实现 X"的推断都算偏离。
 
+### 4.1 逐 ident 执行状态（A2 第 1 步的产出，逐个人工确认）
+
+32 个 handler 方法 → 11 EMPTY / 17 ASSIGN·NOOP / 3 PARSES-DISCARD / 1 THROWS，**0 个有真实下游副作用**。
+换算到 ident（`MsgGetUserMgr` 覆盖 8 个 ident）：EMPTY 12 / ASSIGN·NOOP 17 / PARSES-DISCARD 10 / THROWS 1。
+
+| ident | 名称 | 处理器 | 执行状态 |
+|---:|---|---|---|
+| 100 | `ISM_GROUPSERVERHEART` | `ServerHeartMessage` | EMPTY |
+| 200 | `ISM_USERSERVERCHANGE` | `MsgGetUserServerChange` | ASSIGN/NOOP |
+| 201 | `ISM_USERLOGON` | `MsgGetUserLogon` | ASSIGN/NOOP |
+| 202 | `ISM_USERLOGOUT` | `MsgGetUserLogout` | ASSIGN/NOOP |
+| 203 | `ISM_WHISPER` | `MsgGetWhisper` | ASSIGN/NOOP |
+| 204 | `ISM_SYSOPMSG` | `MsgGetSysopMsg` | EMPTY |
+| 205 | `ISM_ADDGUILD` | `MsgGetAddGuild` | PARSES-DISCARD |
+| 206 | `ISM_DELGUILD` | `MsgGetDelGuild` | ASSIGN/NOOP |
+| 207 | `ISM_RELOADGUILD` | `MsgGetReloadGuild` | ASSIGN/NOOP |
+| 208 | `ISM_GUILDMSG` | `MsgGetGuildMsg` | EMPTY |
+| 209 | `ISM_CHATPROHIBITION` | `MsgGetChatProhibition` | PARSES-DISCARD |
+| 210 | `ISM_CHATPROHIBITIONCANCEL` | `MsgGetChatProhibitionCancel` | ASSIGN/NOOP |
+| 211 | `ISM_CHANGECASTLEOWNER` | `MsgGetChangeCastleOwner` | THROWS |
+| 212 | `ISM_RELOADCASTLEINFO` | `MsgGetReloadCastleAttackers` | EMPTY |
+| 213 | `ISM_RELOADADMIN` | `MsgGetReloadAdmin` | EMPTY |
+| 214 | `ISM_FRIEND_INFO` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 215 | `ISM_FRIEND_DELETE` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 216 | `ISM_FRIEND_OPEN` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 217 | `ISM_FRIEND_CLOSE` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 218 | `ISM_FRIEND_RESULT` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 219 | `ISM_TAG_SEND` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 220 | `ISM_TAG_RESULT` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 221 | `ISM_USER_INFO` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 222 | `ISM_CHANGESERVERRECIEVEOK` | `MsgGetUserChangeServerRecieveOk` | ASSIGN/NOOP |
+| 223 | `ISM_RELOADCHATLOG` | `MsgGetReloadChatLog` | EMPTY |
+| 224 | `ISM_MARKETOPEN` | `MsgGetMarketOpen` | EMPTY |
+| 225 | `ISM_MARKETCLOSE` | `MsgGetMarketOpen` | EMPTY |
+| 227 | `ISM_RELOADMAKEITEMLIST` | `MsgGetReloadMakeItemList` | EMPTY |
+| 228 | `ISM_GUILDMEMBER_RECALL` | `MsgGetGuildMemberRecall` | ASSIGN/NOOP |
+| 229 | `ISM_RELOADGUILDAGIT` | `MsgGetReloadGuildAgit` | EMPTY |
+| 230 | `ISM_LM_WHISPER` | `MsgGetLoverWhisper` | ASSIGN/NOOP |
+| 231 | `ISM_GMWHISPER` | `MsgGetGMWhisper` | ASSIGN/NOOP |
+| 232 | `ISM_LM_LOGIN` | `MsgGetLoverLogin` | ASSIGN/NOOP |
+| 233 | `ISM_LM_LOGOUT` | `MsgGetLoverLogout` | ASSIGN/NOOP |
+| 234 | `ISM_REQUEST_RECALL` | `MsgGetRequestRecall` | ASSIGN/NOOP |
+| 235 | `ISM_RECALL` | `MsgGetRecall` | ASSIGN/NOOP |
+| 236 | `ISM_LM_LOGIN_REPLY` | `MsgGetLoverLoginReply` | EMPTY |
+| 237 | `ISM_LM_KILLED_MSG` | `MsgGetLoverKilledMsg` | ASSIGN/NOOP |
+| 238 | `ISM_REQUEST_LOVERRECALL` | `MsgGetRequestLoverRecall` | ASSIGN/NOOP |
+| 241 | `ISM_GUILDWAR` | `MsgGetGuildWarInfo` | EMPTY |
+| 242 | `ISM_GRUOPMESSAGE` | — | EMPTY（case 体只有注释） |
+
+> 状态定义：`EMPTY` 函数体为空；`ASSIGN/NOOP` 只有变量赋值或空守卫；
+> `PARSES-DISCARD` 调了 `GetValidStr3` 但结果无人消费；`THROWS` 直接抛异常。
+> 判定方法：去掉 `/*…*/` 与 `//` 后看剩余语句，并对 200/205/209/210/211/214 六个逐个肉眼复核。
+
 > 这条对 G11 的整体判断影响很大：**oracle 的跨服协议框架是真的，但业务语义基本是停用的**。
 > A4/A5 能不能真正满足 `gm-batch-5b` 的依赖，取决于这些桩后面有没有可用语义 —— 需要在 A2 后重新评估。
 
