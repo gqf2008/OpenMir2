@@ -30,3 +30,15 @@ dotnet run -c Release -- cross    # 跨槽：id-1 指向别人的槽时数据被
 - 再 `StartAsync()` ⇒ `ServerState=Running`，客户端连上并触发 `Connected`。
 
 ⇒ oracle `PlanesServer.StartPlanesServer()` 只 `Setup`、没有 `Start`，**主服从不监听**。
+
+## R 级真机窗口（Rust 单栈）
+
+`window-rust.sh` 不是探针而是**判据**：起真实 `mir2-server game-svr` 进程，按
+`docs/g11-planes-design-20261108.md` §15 的观测项 1-5 机判（主服无日志无监听、分服
+`ServerNumber=1` 约每 11s 一条失败日志、`=0` 只一条、非法端点启动失败、无文件副作用）。
+
+```sh
+cargo build -p mir2-server
+bash tools/planes-probe/window-rust.sh
+# => WINDOW-GREEN；退出码 0
+```

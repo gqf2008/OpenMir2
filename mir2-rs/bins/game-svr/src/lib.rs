@@ -579,6 +579,19 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .first()
         .map_or_else(config::default_path, std::path::PathBuf::from);
     let cfg = config::load(&conf)?;
+    // **G11 / A3-2b**：跨服链路。设计文档 §5.2 的实测结论：oracle 主服只 `Setup` 不 `Start`
+    // ⇒ `ServerIndex == 0` 时 `start` 返回 `None`（不监听、无日志）；分服侧起客户端任务，
+    // 按 `src/GameSrv/TimedService.cs:63` 的 1s/10s 节拍重连。
+    // **放在这里（配置加载之后、DB 探活之前）**：客户端任务的首次连接由运行时空闲档调度，
+    // 若晚于启动期的 DB 探活（1s+2.5s 窗口）再 spawn，首条失败日志会被推迟约 2s。
+    // 端点非法时与 oracle 同样**启动即失败**（`GameServer.cs:34` 的 `PlanesService.Start()`
+    // 没有 try/catch，`IPHost` 构造会抛）⇒ 这里 `?` 直接上抛。
+    let planes = planes::start(
+        cfg.server_index,
+        &cfg.master_srv_addr,
+        cfg.master_srv_port,
+        cfg.server_number,
+    )?;
     // **G2**：行会/城堡配置与 `Server.conf` 同源（简报 §8）。读不到 ⇒ fail-closed
     // （`config::load` 已成功读过同一文件，此处失败只可能是 IO/权限变化）。
     let guild_castle_cfg = mir2_data::guild_castle::GuildCastleConfig::load(&conf)
@@ -1322,17 +1335,6 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // **T-132**：闭包 move 整个 `cfg` 会与 spawn 之后的 `cfg.check_block` 冲突 ⇒ 先拷出
     // 四个名字色（`CastleNameColors` 是 Copy）。
     let castle_name_colors = cfg.castle_name_colors();
-    // **G11 / A3-2b**：跨服链路。设计文档 §5.2 的实测结论：oracle 主服只 `Setup` 不 `Start`
-    // ⇒ `ServerIndex == 0` 时 `start` 返回 `None`（不监听、无日志）；分服侧起客户端任务，
-    // 按 `src/GameSrv/TimedService.cs:63` 的 1s/10s 节拍重连。
-    // 端点非法时与 oracle 同样**启动即失败**（`GameServer.cs:34` 的 `PlanesService.Start()`
-    // 没有 try/catch，`IPHost` 构造会抛）⇒ 这里 `?` 直接上抛。
-    let planes = planes::start(
-        cfg.server_index,
-        &cfg.master_srv_addr,
-        cfg.master_srv_port,
-        cfg.server_number,
-    )?;
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
