@@ -6,7 +6,7 @@
 
     body.head 取不到 ⇒ 空串 ⇒ "anything".startswith("") 恒真 ⇒ 守卫恒通过、且看不出异常
 
-thread 视图（`walgit collab thread <id>`）里每条是::
+thread 视图（`wg collab thread <id>`）里每条是::
 
     {"entry": {"actor", "body", "id", "kind", "parent", "sig", "ts", "version",
                "refs": {"base": "<40-hex>", "head": "<40-hex>"}},   # patch 才有 refs
@@ -42,7 +42,7 @@ def entry_of(item):
 
     认的形状（其余一律 `EntryRefError`）：
 
-      ① `{"entry": {…}}`                  —— `walgit collab thread` 的视图包层
+      ① `{"entry": {…}}`                  —— `wg collab thread` 的视图包层
       ② `{… "id", "kind" …}`（扁平）       —— inbox blob / 已拆包的 entry 本身
       ③ `{"entry": <非 dict>, id, kind}`   —— **有意**回落到扁平本身：`entry` 键在但不是
          dict 时，只要顶层 `id`+`kind` 齐全就当成扁平条目（卡
@@ -242,7 +242,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description="collab 条目 refs.head/refs.base 取值（fail-closed）")
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--lint", default=None,
-                    help="对 `walgit collab thread` 的 JSON 输出做反模式扫描（body 里出现 base/head）")
+                    help="对 `wg collab thread` 的 JSON 输出做反模式扫描（body 里出现 base/head）")
     args = ap.parse_args(argv)
     if args.selftest:
         return selftest()

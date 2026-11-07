@@ -47,7 +47,8 @@ KINDS = ("issue", "status", "patch", "review", "merge_result",
 
 
 def _collab_env():
-    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口。
+    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）；walgit 0.14.0 起协作接口在 `wg`，
+    该开关已无作用，保留兼容旧主机（卡 `openmir2-collab-interface-wg-migration`）。
 
     所有调用点都走这个函数，保证「带开关」是可 grep 的单一事实源
     （卡 `openmir2-walgit-local-commands-env`）。
@@ -124,23 +125,23 @@ def guard_body_freshness(path, max_age, allow_stale, now=None):
 
 
 def thread_entry_count(repo, thread_id, run=subprocess.run):
-    """`walgit collab thread <id>` 判空。返回 (count|None, detail)；None = 判不了。"""
+    """`wg collab thread <id>` 判空。返回 (count|None, detail)；None = 判不了。"""
     try:
-        pr = run(["walgit", "collab", "thread", thread_id, "--repo", repo],
+        pr = run(["wg", "collab", "thread", thread_id, "--repo", repo],
                  capture_output=True, text=True, timeout=60, env=_collab_env())
     except Exception as ex:
-        return None, "调用 walgit collab thread 失败：%s" % ex
+        return None, "调用 wg collab thread 失败：%s" % ex
     if pr.returncode != 0:
         err = (pr.stderr or "").strip()
         if "no entries for thread" in err:
             return 0, "thread 尚无条目（walgit: %s）" % err
-        return None, "walgit collab thread rc=%d stderr=%r" % (pr.returncode, err)
+        return None, "wg collab thread rc=%d stderr=%r" % (pr.returncode, err)
     try:
         data = json.loads(pr.stdout or "")
     except Exception:
-        return None, "walgit collab thread 输出不是 JSON：%r" % (pr.stdout or "")[:200]
+        return None, "wg collab thread 输出不是 JSON：%r" % (pr.stdout or "")[:200]
     if not isinstance(data, list):
-        return None, "walgit collab thread 输出不是数组（%s）" % type(data).__name__
+        return None, "wg collab thread 输出不是数组（%s）" % type(data).__name__
     return len(data), "thread 已有 %d 条条目" % len(data)
 
 
@@ -252,7 +253,7 @@ def main():
         print(payload)
         return 0
 
-    cmd = ["walgit", "collab", "entry", "--repo", args.repo, "--kind", args.kind,
+    cmd = ["wg", "collab", "entry", "--repo", args.repo, "--kind", args.kind,
            "--id", args.id]
     if args.parent:
         cmd += ["--parent", args.parent]
@@ -267,7 +268,7 @@ def main():
     sys.stdout.write(pr.stdout or "")
     sys.stderr.write(pr.stderr or "")
     if pr.returncode != 0:
-        die("walgit collab entry 失败 rc=%d" % pr.returncode)
+        die("wg collab entry 失败 rc=%d" % pr.returncode)
     print("sign_entry: body_sha256=%s" % body_sha)
     return pr.returncode
 
@@ -448,7 +449,7 @@ def selftest(repo):
         walgit_calls = []
 
         def _spy_run(cmd, *a, **kw):
-            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] == "walgit":
+            if isinstance(cmd, (list, tuple)) and cmd and cmd[0] in ("walgit", "wg"):
                 walgit_calls.append(list(cmd))
                 return subprocess.CompletedProcess(cmd, 1, "", "spy: no walgit")
             return orig_run(cmd, *a, **kw)

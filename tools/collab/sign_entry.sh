@@ -1,5 +1,5 @@
 #!/usr/bin/env sh
-# sign_entry — 签名包装：**所有 oid 参数先过写侧校验**，再把解析后的全 oid 交给 `walgit collab entry`。
+# sign_entry — 签名包装：**所有 oid 参数先过写侧校验**，再把解析后的全 oid 交给 `wg collab entry`。
 #
 # 卡 `openmir2-collab-oid-resolvability-gate`（写侧 fail-closed）。背景：walgit 对 oid **零校验**，
 # 短号/手补长号都会**原样落库**；今晚五个入口各犯一次（review head / patch head / `--parent` ×2 /
@@ -11,13 +11,13 @@
 # 2026-11-01 增补（卡 `openmir2-collab-sign-entry-hardening`，两起写侧误签事故）：
 #   * `--parent` **缺席或为空 ⇒ 拒签**（不再静默按「根条目」照签）；建线请显式 `--root`；
 #   * `--root` 只允许在「该 thread 尚无任何条目」时使用——**任何 kind（含 `--kind issue`
-#     建线）都要先探测线程历史**，有历史条目却声明根条目 ⇒ 拒签（用 `walgit collab thread <id>` 判空）；
+#     建线）都要先探测线程历史**，有历史条目却声明根条目 ⇒ 拒签（用 `wg collab thread <id>` 判空）；
 #   * `--body-file` 的 mtime 超过 `--max-body-age`（默认 1800 秒）⇒ 拒签，
 #     错误里打印 body 的 `sha256` 与 `mtime`；确认不是上一张卡的残留后加 `--allow-stale-body` 显式放行；
 #   * 校验通过后打印 `body_sha256=<hex>`，供签后回读比对。
 #   * 以上三项由 `sign_entry.py --precheck` 实现，本脚本在解析 oid 之前调用它。
 #
-# 用法（字段与 `walgit collab entry` 对齐）：
+# 用法（字段与 `wg collab entry` 对齐）：
 #   # patch / status（有父条目）
 #   tools/collab/sign_entry.sh --repo . --kind patch --id <thread> \
 #       --parent <entry-id> --base <oid> --head <oid> --body-file body.json \
@@ -121,7 +121,7 @@ if [ -n "$FULL_BASE" ]; then set -- "$@" --base "$FULL_BASE"; fi
 if [ -n "$FULL_HEAD" ]; then set -- "$@" --head "$FULL_HEAD"; fi
 if [ -n "$PUSH" ]; then set -- "$@" --push "$PUSH"; fi
 
-# 卡 openmir2-walgit-local-commands-env：2026-11-02 起必须显式请求本地命令接口，
-# 否则 CLI 直接拒绝（stderr + rc=1）；不要把错误交给管道吞掉。
-WALGIT_LOCAL_COMMANDS=1 walgit collab entry "$@"
+# 卡 openmir2-collab-interface-wg-migration：walgit 0.14.0 起协作命令是 `wg collab`；
+# 旧版的 WALGIT_LOCAL_COMMANDS=1 开关已不存在，不要再加。
+wg collab entry "$@"
 echo "sign_entry: body_sha256=$BODY_SHA" >&2
