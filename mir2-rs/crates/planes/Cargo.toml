@@ -1,0 +1,17 @@
+[package]
+name = "mir2-planes"
+version = "0.1.0"
+edition = "2021"
+description = "OpenMir2 跨服（Planes）线协议编解码（G11，逐字节对齐 C# PlanesServer / PlanesClient）"
+license = "MIT"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+pedantic = "warn"
+
+[dependencies]
+# ident 常量复用协议 crate 的生成表（`ISM_*`），不另抄一份。
+mir2-protocol = { path = "../protocol" }

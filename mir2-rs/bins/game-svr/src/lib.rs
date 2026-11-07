@@ -86,6 +86,7 @@ pub mod npc;
 pub mod npcs;
 pub mod party;
 pub mod pickwire;
+pub mod planes;
 pub mod queryuser;
 pub mod recover;
 pub mod run_frames;
@@ -578,6 +579,19 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .first()
         .map_or_else(config::default_path, std::path::PathBuf::from);
     let cfg = config::load(&conf)?;
+    // **G11 / A3-2b**：跨服链路。设计文档 §5.2 的实测结论：oracle 主服只 `Setup` 不 `Start`
+    // ⇒ `ServerIndex == 0` 时 `start` 返回 `None`（不监听、无日志）；分服侧起客户端任务，
+    // 按 `src/GameSrv/TimedService.cs:63` 的 1s/10s 节拍重连。
+    // **放在这里（配置加载之后、DB 探活之前）**：客户端任务的首次连接由运行时空闲档调度，
+    // 若晚于启动期的 DB 探活（1s+2.5s 窗口）再 spawn，首条失败日志会被推迟约 2s。
+    // 端点非法时与 oracle 同样**启动即失败**（`GameServer.cs:34` 的 `PlanesService.Start()`
+    // 没有 try/catch，`IPHost` 构造会抛）⇒ 这里 `?` 直接上抛。
+    let planes = planes::start(
+        cfg.server_index,
+        &cfg.master_srv_addr,
+        cfg.master_srv_port,
+        cfg.server_number,
+    )?;
     // **G2**：行会/城堡配置与 `Server.conf` 同源（简报 §8）。读不到 ⇒ fail-closed
     // （`config::load` 已成功读过同一文件，此处失败只可能是 IO/权限变化）。
     let guild_castle_cfg = mir2_data::guild_castle::GuildCastleConfig::load(&conf)
@@ -1522,6 +1536,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 sim_ids_online,
                 sim_ids_out,
                 cfg.payment_mode,
+                planes,
             )
         })
         .context("起 sim 线程失败")?;
@@ -24578,6 +24593,7 @@ fn sim_loop(
     ids_online: std::sync::Arc<std::sync::atomic::AtomicI32>,
     ids_out: tokio::sync::mpsc::UnboundedSender<String>,
     payment_mode: u8,
+    planes: Option<planes::PlanesLink>,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
@@ -28671,6 +28687,14 @@ fn sim_loop(
         );
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
+        // **G11 / A3-2b**：oracle `SystemProcessor.cs:42-49` 在 `WorldEngine.Run()` **全部完成之后**
+        // 才跑 `PlanesServer/Client.Run()`。这里的插入点在本 tick 的中段（`tick_tail` 之后、
+        // P1/P2/P7/P8/AOI 排水之前），**不是** oracle 的那个位置；因 `ProcessData` 在本 oracle 里
+        // 没有副作用（设计文档 §4.2），当前不构成可观察差异。若将来真要启用跨服业务，必须先挪到
+        // 世界工作全部结束之后。
+        if let Some(planes) = planes.as_ref() {
+            planes.tick();
+        }
         // **F-1（review `2c5cb955`）**：`tick_tail` 的玩家 `SuperMan` 回满段只写实体；会话
         // `WAbil` 是投影且在 P21（tick 之前）同步过一次 ⇒ 这里立刻把投影补到回满值，
         // 让紧随其后的 P1 恢复段（`BaseObject.Base.cs:44` 的门）与 P7/P8 体力段看到同一份

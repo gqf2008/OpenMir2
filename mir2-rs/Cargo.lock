@@ -743,6 +743,7 @@ dependencies = [
  "mir2-data",
  "mir2-envir",
  "mir2-formula",
+ "mir2-planes",
  "mir2-protocol",
  "mir2-script",
  "mir2-shared",
@@ -1309,6 +1310,13 @@ dependencies = [
  "serde_json",
  "sqlx",
  "tokio",
+]
+
+[[package]]
+name = "mir2-planes"
+version = "0.1.0"
+dependencies = [
+ "mir2-protocol",
 ]
 
 [[package]]

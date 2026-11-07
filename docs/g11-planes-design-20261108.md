@@ -1,0 +1,474 @@
+# G11 跨服（Planes）设计盘点 — A1
+
+> 卡：`openmir2-g11-cross-server`（P1 / tier R）。本文件是 A1 的交付：把 oracle 的跨服实现逐条盘清，
+> 供 A2 起逐片移植。**本片只读 + 文档，零运行时代码改动。**
+>
+> 盘点对象：`src/Modules/PlanesSystem/`（`PlanesMessage.cs` 524 / `PlanesServer.cs` 227 /
+> `PlanesClient.cs` 171 / `PlanesService.cs` 21 / `IPlanesService.cs` 6，合计 **949 行**），
+> 以及 `src/OpenMir2/Messages.cs` 的 `ISM_*` 常量、`src/GameSrv/` 的调用点。
+>
+> **修订**：round1 审查（`openmir2-reviewer-26`）指出 6 处事实错误，本版已全部更正并重写；
+> 关键错误是**帧分隔符是 `/` 不是 `\`**（见 §1）。
+
+## 1. wire 协议
+
+帧是**文本**，一帧一个括号组，字段用 **`/`** 分隔：
+
+```
+( ident / serverNum / body )
+```
+
+**`/` 的依据**：`HUtil32.Backslash` 的真实值是 `'/'`（`src/OpenMir2/HUtil32.cs` 第 12 行
+`public const char Backslash = '/'`），发送端也是 `nCode + "/" + nServerIdx + "/" + sMsg`
+（`src/GameSrv/Word/WorldServer.cs`）。**不要按常量名想当然**（round1 我就是这么错的）。
+
+- **切帧**：`HUtil32.ArrestStringEx(buf, "(", ")", ref frameStr)` —— 取一对括号之间的内容；
+  一次 `Received` 回调拿到的字节块可能含**多帧**；但 Received **只做累积**（`SocData +=`），真正的切分发生在 `Run()`（见 §6）。
+- **切字段**：`HUtil32.GetValidStr3(seg, ref head, HUtil32.Backslash)` 逐段取：`ident` → `serverNum` → 余下是 `body`。
+  `GetValidStr3` 内部是 `Split(..., 2, RemoveEmptyEntries)` ⇒ **前导空字段会被折叠**（连续 `/` 不等于空字段）。
+- **数值**：`ident = StrToInt(head, 0)`、`serverNum = StrToInt(sNumStr, -1)`。
+- **`body` 内部**还可以再用 `/` 分字段，由各处理器自行 `GetValidStr3`（见 §3）。
+
+### 1.1 服务器端解码（`PlanesServer.DecodeSocStr`）
+
+- 入口条件 `IndexOf(')') <= 0` ⇒ 直接 return（**注意是 `<= 0`，位置 0 也算不处理**）；
+- 循环条件 `while (BufStr.IndexOf(')') > 0)`；
+- 解析完余量 `ps.SocData = BufStr + ps.SocData` 留到下次；
+- **整个循环包在 `try/catch` 里，catch 体只有注释** ⇒ 畸形帧会**静默丢弃当前批次**。
+  这是 oracle 的实际行为，不得"顺手修好"。
+
+### 1.2 客户端解码（`PlanesClient.DecodeSocStr`）— 与服务器**不同**
+
+- 入口条件同样是 `IndexOf(')') <= 0`；
+- **循环条件是 `> -1`**（服务器是 `> 0`）；
+- **catch 里有 `LogService.Error(sExceptionMsg)` + 堆栈**（不是静默吞）；
+- 客户端**没有**任何转发调用（见 §2）。
+
+⇒ A2 的编解码必须把这两条路径的**边界差异**也复刻出来，不能合并成一个函数了事。
+
+## 2. 拓扑：**星形**，不是网状
+
+- `PlanesService.Start()`：`SystemShare.ServerIndex == 0` ⇒ `PlanesServer.StartPlanesServer()`（主服）；
+  否则 ⇒ `PlanesClient.Initialize() + Start()`（分服）。
+- **只有主服跑 PlanesServer**；分服只跑 PlanesClient，**客户端代码里没有任何转发**。
+- 主服的 `DecodeSocStr_SendOtherServer` 把每帧先转发给**除来源外**所有已连接服务器，再本地 `ProcessData`
+  ⇒ 实际是**主服中继的星形**，**不存在多跳环路**。
+- 启动链：`GameServer.cs` → `GameShare.PlanesService.Start()`。
+- `SendServerSocket` 是对所有已连接连接广播（不排除自己）。
+
+## 3. 消息表（41 个 case：40 有处理器 + 1 空处理）
+
+`body 字段`列是该处理器源码里 `GetValidStr3` 的**出现顺序**——**其中绝大多数位于 `/* */` 注释块内，
+运行时不会执行**。真正执行的只有 205、209、214–221，即**三个 handler 方法**（覆盖 10 个 ident，见 §4.2）；
+其余行的字段名只用于说明"原作者打算解析什么"，不构成运行时契约。
+
+| ident | 名称 | 处理器 | body 字段（`/` 分隔） |
+|---:|---|---|---|
+| 100 | `ISM_GROUPSERVERHEART` | `ServerHeartMessage` | — |
+| 200 | `ISM_USERSERVERCHANGE` | `MsgGetUserServerChange` | — |
+| 201 | `ISM_USERLOGON` | `MsgGetUserLogon` | — |
+| 202 | `ISM_USERLOGOUT` | `MsgGetUserLogout` | — |
+| 203 | `ISM_WHISPER` | `MsgGetWhisper` | `uname` |
+| 204 | `ISM_SYSOPMSG` | `MsgGetSysopMsg` | — |
+| 205 | `ISM_ADDGUILD` | `MsgGetAddGuild` | `gname` |
+| 206 | `ISM_DELGUILD` | `MsgGetDelGuild` | — |
+| 207 | `ISM_RELOADGUILD` | `MsgGetReloadGuild` | — |
+| 208 | `ISM_GUILDMSG` | `MsgGetGuildMsg` | `gname` |
+| 209 | `ISM_CHATPROHIBITION` | `MsgGetChatProhibition` | `whostr` / `minstr` |
+| 210 | `ISM_CHATPROHIBITIONCANCEL` | `MsgGetChatProhibitionCancel` | — |
+| 211 | `ISM_CHANGECASTLEOWNER` | `MsgGetChangeCastleOwner` | — |
+| 212 | `ISM_RELOADCASTLEINFO` | `MsgGetReloadCastleAttackers` | — |
+| 213 | `ISM_RELOADADMIN` | `MsgGetReloadAdmin` | — |
+| 214 | `ISM_FRIEND_INFO` | `MsgGetUserMgr` | `UserName` |
+| 215 | `ISM_FRIEND_DELETE` | `MsgGetUserMgr` | `UserName` |
+| 216 | `ISM_FRIEND_OPEN` | `MsgGetUserMgr` | `UserName` |
+| 217 | `ISM_FRIEND_CLOSE` | `MsgGetUserMgr` | `UserName` |
+| 218 | `ISM_FRIEND_RESULT` | `MsgGetUserMgr` | `UserName` |
+| 219 | `ISM_TAG_SEND` | `MsgGetUserMgr` | `UserName` |
+| 220 | `ISM_TAG_RESULT` | `MsgGetUserMgr` | `UserName` |
+| 221 | `ISM_USER_INFO` | `MsgGetUserMgr` | `UserName` |
+| 222 | `ISM_CHANGESERVERRECIEVEOK` | `MsgGetUserChangeServerRecieveOk` | — |
+| 223 | `ISM_RELOADCHATLOG` | `MsgGetReloadChatLog` | — |
+| 224 | `ISM_MARKETOPEN` | `MsgGetMarketOpen(true)` | — |
+| 225 | `ISM_MARKETCLOSE` | `MsgGetMarketOpen(false)` | — |
+| 227 | `ISM_RELOADMAKEITEMLIST` | `MsgGetReloadMakeItemList` | — |
+| 228 | `ISM_GUILDMEMBER_RECALL` | `MsgGetGuildMemberRecall` | `uname` / `dxstr` / `dystr` |
+| 229 | `ISM_RELOADGUILDAGIT` | `MsgGetReloadGuildAgit` | — |
+| 230 | `ISM_LM_WHISPER` | `MsgGetLoverWhisper` | `uname` |
+| 231 | `ISM_GMWHISPER` | `MsgGetGMWhisper` | `uname` |
+| 232 | `ISM_LM_LOGIN` | `MsgGetLoverLogin` | `uname` / `lovername` |
+| 233 | `ISM_LM_LOGOUT` | `MsgGetLoverLogout` | `uname` |
+| 234 | `ISM_REQUEST_RECALL` | `MsgGetRequestRecall` | `uname` |
+| 235 | `ISM_RECALL` | `MsgGetRecall` | `uname` / `dxstr` / `dystr` |
+| 236 | `ISM_LM_LOGIN_REPLY` | `MsgGetLoverLoginReply` | — |
+| 237 | `ISM_LM_KILLED_MSG` | `MsgGetLoverKilledMsg` | `uname` |
+| 238 | `ISM_REQUEST_LOVERRECALL` | `MsgGetRequestLoverRecall` | `uname` |
+| 241 | `ISM_GUILDWAR` | `MsgGetGuildWarInfo` | `gname` / `warguildname` / `StartTime` |
+| 242 | `ISM_GRUOPMESSAGE` | **无处理器**（case 体只有一行注释） | — |
+
+> 表由脚本从源码生成，ident / 常量名 / 处理器名 / 字段顺序均与源码一致（round1 审查机判 0 mismatch）。
+> **余量字段未列**：241 `ISM_GUILDWAR` 的第 4 段 `remaintime`、233 `ISM_LM_LOGOUT` 的 `lovername` 未进入本表。
+> `226 ISM_LM_DELETE`、`239 ISM_STANDARDTICKREQ`、`240 ISM_STANDARDTICK` 有常量但**都没有 case**，
+> 不在这张表里（行为同为 `Unknown`/no-op）。
+> **⚠ 本列不代表运行时行为**——§4.2 已按"语句是否在注释里"逐条复核，只有 3 个 handler 方法真的调用了
+> `GetValidStr3`，且结果全部丢弃。
+
+## 4. **oracle 侧跨服语义大面积未启用**（round1 审查的关键发现）
+
+`PlanesMessage` 的 40 个有处理器的 ident（32 个不同方法）里，**绝大多数是空实现或整段注释掉的桩**。已逐条确认的例子：
+
+| 处理器 | 实际状态 |
+|---|---|
+| `ServerHeartMessage` | **函数体为空** |
+| `MsgGetUserServerChange`（200） | 只有变量赋值 + **整段注释**（`SendServerGroupMsg(ISM_CHANGESERVERRECIEVEOK, …)` 被注释） |
+| `MsgGetUserChangeServerRecieveOk` / `UserLogon` / `UserLogout` | 变量赋值 + **下游调用被注释** |
+| `MsgGetChangeCastleOwner`（211） | **`throw new Exception("TODO …")`** —— 异常被 `DecodeSocStr` 的 catch 吞掉，该批剩余帧一并丢弃 |
+| `MsgGetAddGuild`（205）/ `MsgGetChatProhibition`（209）/ `MsgGetUserMgr`（214–221） | 真正调了 `GetValidStr3` 解析，但**解析结果被丢弃**（下游全注释） |
+
+**其余处理器的逐条状态尚未核实** —— 我不拿启发式分类充数（第一版试过，自动分类把空实现误判成"有语句"）。
+**A2 的第一件事是逐个人工确认这 40 个有处理器的 ident（对应 **32 个不同 handler 方法**）的真实执行状态**，并按「oracle 是空实现 ⇒ Rust 也必须是空实现」
+移植；任何"它应该是想做 X 所以实现 X"的推断都算偏离。
+
+### 4.1 逐 ident 执行状态（A2 第 1 步的产出，逐个人工确认）
+
+32 个 handler 方法 → 11 EMPTY / 17 ASSIGN·NOOP / 3 PARSES-DISCARD / 1 THROWS，**0 个有真实下游副作用**。
+换算到 ident（`MsgGetUserMgr` 覆盖 8 个 ident）：EMPTY 12 / ASSIGN·NOOP 17 / PARSES-DISCARD 10 / THROWS 1。
+
+| ident | 名称 | 处理器 | 执行状态 |
+|---:|---|---|---|
+| 100 | `ISM_GROUPSERVERHEART` | `ServerHeartMessage` | EMPTY |
+| 200 | `ISM_USERSERVERCHANGE` | `MsgGetUserServerChange` | ASSIGN/NOOP |
+| 201 | `ISM_USERLOGON` | `MsgGetUserLogon` | ASSIGN/NOOP |
+| 202 | `ISM_USERLOGOUT` | `MsgGetUserLogout` | ASSIGN/NOOP |
+| 203 | `ISM_WHISPER` | `MsgGetWhisper` | ASSIGN/NOOP |
+| 204 | `ISM_SYSOPMSG` | `MsgGetSysopMsg` | EMPTY |
+| 205 | `ISM_ADDGUILD` | `MsgGetAddGuild` | PARSES-DISCARD |
+| 206 | `ISM_DELGUILD` | `MsgGetDelGuild` | ASSIGN/NOOP |
+| 207 | `ISM_RELOADGUILD` | `MsgGetReloadGuild` | ASSIGN/NOOP |
+| 208 | `ISM_GUILDMSG` | `MsgGetGuildMsg` | EMPTY |
+| 209 | `ISM_CHATPROHIBITION` | `MsgGetChatProhibition` | PARSES-DISCARD |
+| 210 | `ISM_CHATPROHIBITIONCANCEL` | `MsgGetChatProhibitionCancel` | ASSIGN/NOOP |
+| 211 | `ISM_CHANGECASTLEOWNER` | `MsgGetChangeCastleOwner` | THROWS |
+| 212 | `ISM_RELOADCASTLEINFO` | `MsgGetReloadCastleAttackers` | EMPTY |
+| 213 | `ISM_RELOADADMIN` | `MsgGetReloadAdmin` | EMPTY |
+| 214 | `ISM_FRIEND_INFO` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 215 | `ISM_FRIEND_DELETE` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 216 | `ISM_FRIEND_OPEN` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 217 | `ISM_FRIEND_CLOSE` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 218 | `ISM_FRIEND_RESULT` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 219 | `ISM_TAG_SEND` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 220 | `ISM_TAG_RESULT` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 221 | `ISM_USER_INFO` | `MsgGetUserMgr` | PARSES-DISCARD |
+| 222 | `ISM_CHANGESERVERRECIEVEOK` | `MsgGetUserChangeServerRecieveOk` | ASSIGN/NOOP |
+| 223 | `ISM_RELOADCHATLOG` | `MsgGetReloadChatLog` | EMPTY |
+| 224 | `ISM_MARKETOPEN` | `MsgGetMarketOpen` | EMPTY |
+| 225 | `ISM_MARKETCLOSE` | `MsgGetMarketOpen` | EMPTY |
+| 227 | `ISM_RELOADMAKEITEMLIST` | `MsgGetReloadMakeItemList` | EMPTY |
+| 228 | `ISM_GUILDMEMBER_RECALL` | `MsgGetGuildMemberRecall` | ASSIGN/NOOP |
+| 229 | `ISM_RELOADGUILDAGIT` | `MsgGetReloadGuildAgit` | EMPTY |
+| 230 | `ISM_LM_WHISPER` | `MsgGetLoverWhisper` | ASSIGN/NOOP |
+| 231 | `ISM_GMWHISPER` | `MsgGetGMWhisper` | ASSIGN/NOOP |
+| 232 | `ISM_LM_LOGIN` | `MsgGetLoverLogin` | ASSIGN/NOOP |
+| 233 | `ISM_LM_LOGOUT` | `MsgGetLoverLogout` | ASSIGN/NOOP |
+| 234 | `ISM_REQUEST_RECALL` | `MsgGetRequestRecall` | ASSIGN/NOOP |
+| 235 | `ISM_RECALL` | `MsgGetRecall` | ASSIGN/NOOP |
+| 236 | `ISM_LM_LOGIN_REPLY` | `MsgGetLoverLoginReply` | EMPTY |
+| 237 | `ISM_LM_KILLED_MSG` | `MsgGetLoverKilledMsg` | ASSIGN/NOOP |
+| 238 | `ISM_REQUEST_LOVERRECALL` | `MsgGetRequestLoverRecall` | ASSIGN/NOOP |
+| 241 | `ISM_GUILDWAR` | `MsgGetGuildWarInfo` | EMPTY |
+| 242 | `ISM_GRUOPMESSAGE` | — | EMPTY（case 体只有注释） |
+
+> 状态定义：`EMPTY` 函数体为空；`ASSIGN/NOOP` 只有变量赋值或空守卫；
+> `PARSES-DISCARD` 调了 `GetValidStr3` 但结果无人消费；`THROWS` 直接抛异常。
+> 判定方法：去掉 `/*…*/` 与 `//` 后看剩余语句，并对 200/205/209/210/211/214 六个逐个肉眼复核。
+
+> 这条对 G11 的整体判断影响很大：**oracle 的跨服协议框架是真的，但业务语义基本是停用的**。
+> A4/A5 能不能真正满足 `gm-batch-5b` 的依赖，取决于这些桩后面有没有可用语义 —— 需要在 A2 后重新评估。
+
+### 4.2 A2-3：body 解析的**执行面**（逐语句复核）
+
+把 32 个 handler 的语句逐条看过（区分 `/* */` 内外的）后，**真正执行 `GetValidStr3` 的只有 3 个方法**
+（覆盖 10 个 ident：205、209、214–221）：
+
+| ident | 处理器 | 执行的解析 | 结果去向 |
+|---|---|---|---|
+| 205 | `MsgGetAddGuild` | 1 次：`gname`，余量 `mname` | `M2Share.GuildMgr.AddGuild(gname, mname)` **被注释** ⇒ 丢弃 |
+| 209 | `MsgGetChatProhibition` | 2 次：`whostr`、`minstr` | `CmdShutup` 两行**都被注释** ⇒ 丢弃 |
+| 214–221 | `MsgGetUserMgr`（8 个 ident） | 1 次：`UserName`，余量 `msgbody` | `UserMgrEngine.OnExternInterMsg` **被注释** ⇒ 丢弃 |
+
+其余 29 个 handler 的 `GetValidStr3` 调用（203/208/228/230/231/232/233/234/235/237/238/241 等）
+**全在注释块里**；其中 7 个 handler 的"赋值"就是 `x = Body`（200/201/202/206/207/210/222）。
+分布：空实现 11 个、纯局部赋值 17 个（含上述 7 个 `= Body`）、解析后丢弃 3 个、抛异常 1 个
+= 32 个方法 / 41 个 case。以上由"剥掉 `/* */` 与 `//` 后是否含 `GetValidStr3` / `= Body`"机判，32 个方法全扫。
+⇒ **`ProcessData` 的唯一可观察行为是 211 的 `throw`**；其余一律无副作用。
+
+Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` / 三个解析函数），
+6 条测试覆盖 41 个 case 的分类、226 无 case、三条解析序列与非 ASCII 字节保真。
+
+## 5. 连接表与配置
+
+| 项 | oracle 事实 |
+|---|---|
+| 配置键 | `SystemShare.Config.MasterSrvAddr` / `MasterSrvPort` |
+| 监听 | `TcpService.SetListenIPHosts(IPHost(IPAddress.Parse(MasterSrvAddr), MasterSrvPort))` |
+| 连接表 | `TServerMsgInfo { Socket, SocData, SocketId }` —— **没有 nServerIdx** |
+| `nServerIdx` | 在另一个结构 `ServerGruopInfo { nServerIdx, sChrName }`，用于 `WorldServer.OtherUserNameList` 的角色→服务器映射 |
+| 帧里的 `serverNum` | 只作为 `ProcessData` 的入参，**不落连接表** |
+| 槽位 | `Received` 用 `srvArray[clientId-1]`；`Connecting` 取第一个 null 槽 ⇒ **槽位复用后对不上**，见 §5.1（已用 C# 探针实测） |
+| 启动 | `GameShare.PlanesService.Start()`（`GameServer.cs`）；`Run()` 由 `SystemProcessor` 每 tick 调 |
+
+### 5.1 槽位语义（A3-1 的 C# 探针实测）
+
+探针已入仓：`tools/planes-probe`（`dotnet run -c Release -- ids` / `-- slots` / `-- cross`）。
+用 `TouchSocket 2.0.0-beta.273`（与 `src/OpenMir2/OpenMir2.csproj` 同版本）起一个
+本地 `TcpService`，逐次连接/断开并打印 `SocketClient.Id`，再把 oracle 的 `srvArray` 逻辑原样搬进去：
+
+- `SocketClient.Id` 是**进程内全局递增的十进制字符串**（`1`,`2`,`3`…），**断开后不复用**；
+- `Received` 用 `Id-1` 当槽下标，且**不核对槽里是谁**；
+- 首次断线后，新连接的 `Id-1` 指向**空槽**：oracle 在 `Received` 里抛
+  `NullReferenceException`，**TouchSocket 静默吞掉**（探针实测进程不崩、该连接的数据
+  再也不进任何缓冲）；超过 10 个连接时是 `IndexOutOfRangeException`，同样被吞；
+- 极端形态：`Id-1` 指向的槽被**另一个**连接占用时，数据会追加到**别人的缓冲**，
+  并被当作那个连接的数据一起解码（探针 `cross` 模式复现：`RECV id=4 -> slot3 owner=5`）。
+
+> **可达性**：因 §5.2 的结论（主服从不监听），上述槽位语义在 oracle 的**生产路径不可达**——
+> 没有任何连接会进 `srvArray`。A3-1 照抄它，是为了将来真启用时不必重新考古。
+
+⇒ oracle 的 PlanesServer 在**首次断线之后对后续连接基本不可用**。A3-1
+（`crates/planes/src/server.rs`）**照抄**该映射，未"修好"：行为等价优先。
+**是否需要修，属 Owner 决策**（这是 oracle 缺陷，不是 Rust 移植引入的）。
+
+### 5.2 **oracle 的主服从未开始监听**（A3-2b 的 C# 探针实测）
+
+`PlanesServer.StartPlanesServer()` 只做了三件事：建 `TouchSocketConfig`、`SetListenIPHosts(...)`、
+`_serverSocket.Setup(touchSocketConfig)`——**没有 `Start()`**（`PlanesServer.cs` 全文 227 行无
+`_serverSocket.Start` 调用）。`Setup` 在 TouchSocket 里只是"记下配置"。
+
+探针（`tools/planes-probe` 的 `listen` 模式，同版本 2.0.0-beta.273）：
+
+| 步骤 | 观测 |
+|---|---|
+| 只 `Setup(cfg)` | `ServerState = None`；客户端 `ConnectAsync` **TimeoutException** |
+| 再 `StartAsync()` | `ServerState = Running`；客户端连上，`Connected` 事件触发 |
+
+⇒ **`ServerIndex == 0` 时跨服主服不监听，任何分服都连不上**；`ServerIndex != 0` 时
+`PlanesClient` 连 `127.0.0.1:4900`（缺省）必然失败，按 `src/GameSrv/TimedService.cs:70` 的节拍
+（1s 定时器 + 10s 阈值 ⇒ 约每 11s）重试并打印
+`链接主分区服务器[addr:port]失败.`。这与 §4 的"业务语义基本停用"是同一个事实的两面。
+
+**本项目的决定（Leader，可回溯）**：G11 按 oracle 如实移植——**不自行加监听**。
+理由：① 行为等价优先；② 加监听会让"连得上但业务全是空实现"变成对外可观察的新行为，
+属于对外语义变更，不在本卡授权内；③ 是否"修好跨服"是 Owner 的决策，不是移植的副产品。
+⇒ A3 的诚实交付是「角色选择 + 客户端连接/重连/失败日志」，**主服侧不监听**；
+`crates/planes` 的 Server 状态机保留（供将来真正启用时复用），但在生产路径上不可达。
+
+## 6. 事件与解码路径
+
+- `TcpService.Received` **只做 `SocData +=`**，不解析；
+- 解码发生在 `Run()` → `DecodeSocStr`，`Run()` 由 `SystemProcessor` 每 tick 调用；
+- 即：**接收是异步累积、解码是 tick 驱动**——这个分离必须在 Rust 侧保留（否则时序不等价）。
+
+## 7. 客户端重连
+
+- `TcpClient` 连 `MasterSrvAddr:MasterSrvPort`；`Connected`/`Disconnected` 事件；
+- `SendSocket` 在未连接时**直接丢弃**（不排队、不重试）；
+- `CheckConnected()` 由外部定时器驱动，且**仅在 `nServerNumber > 0` 时**才重连。
+
+## 8. 心跳
+
+- `ISM_GROUPSERVERHEART = 100`，处理器 `ServerHeartMessage` **是空函数**；
+- **全仓找不到发送点**（排除 bin/obj 后，`GROUPSERVERHEART` 只命中常量定义、case 标签、空处理器；
+  30+ 处 `SendServerGroupMsg` 无一用 code=100；`"100/"` / `100 + "/"` 字面量 0 命中）。
+- 结论：**只处理不发，且处理是空操作**。A3 不得自行实现心跳。
+
+## 9. 与 `openmir2-gm-batch-5b-cross-server` 的关系
+
+该卡 B 片 6 条 GM 命令依赖"可写行会态 / 跨服"。鉴于 §4 的发现（oracle 侧业务语义基本停用）
+与 §5.2 的加固发现（**主服从不监听 ⇒ 跨服链路在生产上根本不通**），
+**A2 完成后必须重新评估**：如果 oracle 对这些命令的跨服路径本身就是桩，那么"解除 blocked"的正确含义
+可能是"按 oracle 的空语义实现 + 登记"，而不是"造一套能用的跨服"。
+
+## 10. 分片计划
+
+| 片 | 内容 | 判级 |
+|---|---|---|
+| A1（本片） | 盘点 + 本文档 | L |
+| A2 | **先逐个人工确认 40 个处理器的执行状态**；再做 Rust 帧编解码（切帧/切字段/流式缓冲/边界差异）+ body 解码；逐字段对照表 | L |
+| A3 | PlanesServer/Client + 配置 + 事件/解码分离 + 槽位语义 + 重连 | R（时序） |
+| A4 | guild / castle / market 状态同步（按 A2 核实的 oracle 语义，空就是空） | R（时序 + 落库） |
+| A5 | 重新评估并处理 `gm-batch-5b` 的 blocked | — |
+## 11. 进度
+
+| 片 | 状态 | 落点 |
+|---|---|---|
+| A1 | 完成（round1 审查后重写） | 本文档 |
+| A2-1 | 完成（40 条逐 ident 执行状态表） | 本文档 §4.1 |
+| A2-2 | 完成（帧编解码，C# 探针对拍 + 3020 条差分 0 mismatch） | `mir2-rs/crates/planes/src/lib.rs` |
+| A2-3 | 完成（dispatch 分类 + 三条实际执行的解析） | `mir2-rs/crates/planes/src/message.rs`、本文档 §4.2 |
+| A3-1 | 完成（Server/Client 纯状态机 + 槽位语义，C# 探针实测） | `mir2-rs/crates/planes/src/{server,client,service}.rs` |
+| A3-2a | 完成（`[Server] MsgSrvAddr/MsgSrvPort/ServerNumber` 解析） | `mir2-rs/bins/game-svr/src/config.rs` |
+| A3-2b | 完成（按 §5.2：客户端连接/重连/失败日志；主服不监听） | `mir2-rs/bins/game-svr/src/planes.rs` |
+| A4 | 完成（判定为"无业务语义可移植"：33 个发送点全是 no-op，见 §12） | 本文档 §12 |
+| A5 | 完成（补发送口 `send_server_group_msg`，见 §13；5b 卡的跨服依赖可满足） | `mir2-rs/bins/game-svr/src/planes.rs` |
+## 12. A4：guild / castle / market 跨服同步的**发送面盘点与可观察性判定**
+
+结论先说：**没有可移植的业务语义**，Rust 侧不需要为此改一行代码。理由不是"我觉得"，是下面两条链条。
+
+### 12.1 发送面：33 个有效调用点、12 个 ident
+
+`SendServerGroupMsg(ident, serverIdx, body)` 在 `src/**` 里有 **33 个**未被注释的调用点
+（另有 7 行在注释里，不计）。机判口径：**同时剥掉 `//` 与 `/* */`**、排除声明行
+（`void SendServerGroupMsg(`）后逐行取首参。
+（首版只剥了 `//`，把 `src/Modules/PlanesSystem/PlanesMessage.cs:145` 那行 `/* … */` 里的 222 也算进来了，
+计成 34/12/6；审查者指出后已更正。）
+
+| ident | 含义 | 次数 | 主要调用点 |
+|---|---|---:|---|
+| 204 `SS_204` | 城堡/系统公告 | 5 | `src/M2Server/Castle/UserCastle.cs` ×4、`ForcedWallconquestWarCommand.cs` |
+| 205 `SS_205` | 加行会 | 2 | `GuildOfficial.cs`、`AddGuildCommand.cs` |
+| 206 `SS_206` | 删行会 | 2 | `PlayObject.Operate.cs`、`DelGuildCommand.cs` |
+| 207 `SS_207` | 重载行会 | 11 | `PlayObject.Base/Operate.cs` ×10、`EndGuildCommand.cs` |
+| 208 `SS_208` | 行会聊天 | 3 | `PlayObject.Chat.cs` ×2、`PlayObject.Message.cs` |
+| 211 `SS_211` | 换城堡主 | 2 | `PlayObject.Message.cs`、`ChangeSabukLordCommand.cs` |
+| 212 `SS_212` | 重载城堡 | 3 | `UserCastle.cs` ×2、`ForcedWallconquestWarCommand.cs` |
+| 213（字面量） | 重载管理员 | 1 | `ReLoadAdminCommand.cs` |
+| 200 `ISM_USERSERVERCHANGE` | 换服 | 1 | `WorldServer.Switch.cs` |
+| 201/202 `ISM_USERLOGON/LOGOUT` | 上下线 | 2 | `WorldServer.cs` |
+| 203 `ISM_WHISPER` | 私聊 | 1 | `PlayObject.Chat.cs` |
+
+**market（224/225）没有任何发送点**，只有接收侧的空处理器。
+`222 ISM_CHANGESERVERRECIEVEOK` 的唯一"发送点"（`src/Modules/PlanesSystem/PlanesMessage.cs:145`）在 `/* */` 注释块里，
+不算有效调用。
+
+### 12.2 可观察性：这些发送全是 no-op
+
+`WorldServer.SendServerGroupMsg`（`src/GameSrv/Word/WorldServer.cs:884-893`）只有两条支路：
+
+- `ServerIndex == 0` ⇒ `PlanesServer.SendServerSocket`：遍历 `srvArray`，**而主服从不监听（§5.2）
+  ⇒ 数组恒空** ⇒ 一个字节都不发；
+- `ServerIndex != 0` ⇒ `PlanesClient.SendSocket`：`if (!IsConnect()) return;`，**而没有任何进程在
+  监听该端口（§5.2）⇒ 永远连不上** ⇒ 同样一个字节都不发。
+
+⇒ 上面 33 个调用点在两种部署形态下**都不产生任何可观察效果**。这与 §4.2 的结论（接收侧 32 个
+handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
+
+### 12.3 判定
+
+- **A4 不产生代码**。G11 在本 oracle 上的等价实现 = 已经交付的东西（帧编解码 + 分类 +
+  客户端连接/重连/日志），跨服业务同步**没有可移植的语义**；
+- 若将来 Owner 决定"真修跨服"，最小可用集是：① `PlanesServer` 真正 `Start()` 监听；
+  ② 分服侧实现 32 个 handler 的业务（当前全是空桩/注释）；③ 把 33 个发送点接到通道上；
+- **一个地雷**：`SS_211 = 211 = ISM_CHANGECASTLEOWNER`，而 211 的处理器**直接 throw**
+  （`src/Modules/PlanesSystem/PlanesMessage.cs:354-357`）⇒ 一旦真跑起来，收到 211 的那一批帧会被整批丢弃。
+  这是 oracle 的既存缺陷，启用前必须先处理。
+## 13. A5：给 `gm-batch-5b` 补的那个接缝——发送口
+
+### 13.1 5b 六条命令的 G11 侧逐条勾对
+
+依据 `docs/gm-batch-5b-g11-dependencies-20261024.md` §3 的逐条表：
+
+| # | 命令 | 5b 标出的 G11 依赖点 | G11 状态 |
+|---|---|---|---|
+| ① | `AddGuild` | `SendServerGroupMsg(SS_205)`（**主服专属命令**）；主服判定；接收端 205 空实现 | **已满足**：角色无关入口 `planes::send_server_group_msg(link: Option<&PlanesLink>, …)`——主服 `None` ⇒ 返回 0，等价 oracle 遍历空 `srvArray`，**调用本身照常发生**；`server_index` 已在 `GateConfig`；205 在 `message.rs` 判为 PARSES-DISCARD |
+| ② | `DelGuild` | `SendServerGroupMsg(SS_206)`（**主服专属命令**）；接收端 206 | **已满足**：同上，206 = EMPTY |
+| ③ | `EndGuild` | `SendServerGroupMsg(SS_207)`；接收端 207 | **已满足**：同上，207 = ASSIGN/NOOP |
+| ④ | `ForcedWallconquestWar` | `SS_212` + `SS_204` 两条通道；接收端 212 | **已满足**：同上，212/204 = EMPTY |
+| ⑤ | `ChangeSabukLord` | **不依赖 SS_211**（`:39` 的 `GetCastle(IGuild)` 抛 T-38，`:42` 永不执行）；只要求「别把桩实现成改归属、单区不引入 211 调用者」 | **已满足**：oracle 侧 211 的来源只有 §12.1 的两处（`PlayObject.Message.cs`、`ChangeSabukLordCommand.cs`，后者在 T-38 下永不可达）；**Rust 侧当前没有任何 211 调用者**；T-38 桩 `crates/world/src/castle.rs` 的 `get_castle_n1` 保持 no-op，本卡未改 `crates/world` |
+| ⑥ | `ShowSbkGold` | **不发任何 SS**；5b 清单另提「G11 只需保证城堡不是只读快照」 | **无 SS 依赖**；「城堡可写」是 `crates/world` 的事，不在 G11 写集内（本卡未改 `crates/world`）⇒ 该子项仍归 5b 卡自行满足或另行登记，**不是 G11 提供的能力** |
+
+⇒ G11 侧 6 条的依赖点**全部可满足**；剩余工作量都在 5b 卡自己的写集（`gmcmd.rs` 命令体、
+行会/城堡可写态、T-38 桩口径、怪癖牙）。
+
+
+5b 卡的依赖清单（`docs/gm-batch-5b-g11-dependencies-20261024.md` §2.1）点名 G11 必须提供
+`WorldEngine.SendServerGroupMsg(code, serverIdx, body)`；此前 Rust 侧**没有任何发送路径**。
+A5 已补上：
+
+```rust
+// bins/game-svr/src/planes.rs —— 角色无关入口（5b 的命令体调这个）
+pub fn send_server_group_msg(
+    link: Option<&PlanesLink>, ident: i32, server_num: i32, body: &[u8],
+) -> usize
+// 实例方法 PlanesLink::send_server_group_msg(ident, server_num, body) 是同名的客户端实现
+```
+
+- **线格式**：`(code/serverIdx/body)`（明文三段，外层括号）——复用 A2-2 的 `encode_frame`，
+  与 oracle `nCode + "/" + nServerIdx + "/" + sMsg` 再被 `SendSocket` 补括号一致；
+- **返回值** = 实际投递的连接数：主服不监听（§5.2）⇒ 恒 0；分服未连接 ⇒ 0
+  （等价 `SendSocket` 的 `if (!IsConnect()) return;`）。这个返回值正是 5b 判据③
+  「server-group 发送次数」要观察的接缝；
+- **写侧**：连接建立后由独立写任务消费通道；EOF 时通道被清空，后续发送自然返回 0。
+
+⇒ 5b 的「跨服发送」依赖到此**可满足**：命令体可以调用它并按返回值断言"发了 0 条"。
+剩下的依赖不在 G11：**可写行会/城堡态**（该卡 §1 表格已列出现有 `GuildManager` 等基础）
+与 T-38 口径的城堡桩。
+## 14. 待确认 / 风险
+
+本清单的首版 5 条已全部有答案，下面按「结论 → 落点」列，不再作为开放项：
+
+| 首版待确认项 | 结论 | 落点 |
+|---|---|---|
+| 40 个处理器的逐条执行状态 | 已逐条机判+人工复核：11 EMPTY / 17 ASSIGN / 3 PARSES-DISCARD / 1 THROWS | §4.1、§4.2 |
+| body 是 GB2312 字节流 | 按字节处理，`message.rs` 有非 ASCII 保真用例 | §4.2、`crates/planes/src/message.rs` |
+| 槽位复用（§5） | C# 探针实测：`Id` 全局递增不复用，首断后数据丢弃/串槽 | §5.1、`tools/planes-probe --slots/--cross` |
+| `GetValidStr3` 的 `RemoveEmptyEntries` 折叠 | 已对拍（C# 探针 + 3020 条随机差分 0 mismatch） | §1、`crates/planes/src/lib.rs` |
+| 跨服停用对 G11 / 5b 的整体影响 | 两端皆死；5b 的跨服依赖已逐条勾对 | §4、§12、§13.1 |
+
+**R 证据档位**：Rust 单栈真机窗口已跑并全过（§15.1）；**双栈对拍未做**——C# 侧行为由源码逐行核对 + C# 探针支撑。审查者据此判定 R 达成（`16fe6106`），残余口径见 §15.2。
+
+## 15. R 级真机窗口（Rust 单栈已跑；双栈未做）
+
+整卡审查要求给出 R 证据。窗口要观察的项（审查者给的口径，逐条可机判）：
+
+1. 主服 `ServerIndex=0`：两栈均**无** `MsgSrvPort` 监听、无「已启动」日志、无跨服字节；
+2. 分服 `ServerNumber>0` 且主服端口无人监听：启动即一条失败日志（oracle 是立即；本仓实测
+   ≈2.0s，成因见 §15.2，脚本判据取 ≤3s），之后约每 11s 一条（至少 3 个间隔、±1.5s），始终连不上；
+3. 分服 `ServerNumber=0`：启动仅一条失败日志，之后 ≥30s 无重复；
+4. 非法 `MsgSrvAddr`/`MsgSrvPort`：两栈均**启动失败**（记录异常/退出码）；
+5. 无 DB/文件副作用；
+6. 211 端到端不可达（无帧）——只登记不可观察，不作为窗口项。
+
+### 15.1 已执行（Rust 单栈真机，2026-11-08）
+
+可复跑：`bash tools/planes-probe/window-rust.sh`（需先 `cargo build -p mir2-server`）。
+脚本自己会起 4 个真实进程、按上面的判据机判，退出码 0 = 全过。
+
+| 观测项 | 实测 |
+|---|---|
+| 1 主服 `ServerIndex=0` | 10s 运行：跨服日志 **0 条**；`MsgSrvPort` 在运行期间被脚本**主动探测**（TCP connect）⇒ 连接被拒 |
+| 2 分服 `ServerNumber=1` | 节点模式 1 条；失败日志 4 条，间隔 **10.03 / 11.00 / 10.01 s**（±1.5s 内） |
+| 3 分服 `ServerNumber=0` | 36s 内失败日志 **恰 1 条**，之后无重复 |
+| 4 非法 `MsgSrvAddr` | 进程 rc=1，`Error: MsgSrvAddr 不是合法 IP 地址："not-an-ip"…` |
+| 5 文件副作用 | 临时目录里只有 `Server.conf` 与 `out.log` |
+| 6 211 | 未观测（按约定只登记不可观察） |
+
+**负对照**：把脚本的 `ServerNumber=1` 用例改成 `=0`（只会出 1 条）⇒ `WINDOW-RED`
+（"38s 内失败日志应 ≥4 条…实得 1"）⇒ 判据确实在评估行为，不是恒绿。
+
+**一处如实记录的差异**：首条失败日志出现在「节点运行模式」后 **≈2.02s**，而 oracle 的
+`ConnectAsync` 在启动时立即失败。实测同一毫秒还出现 DB 链路的第一条连接错误 ⇒ 这是
+**启动期 tokio worker 被同步工作占住约 2s** 的宿主性质，与本模块无关（两条链路被同量延迟）；
+脚本因此把首条判定上界设为 3s，并在报告里保留实测值。
+
+**未覆盖**：C# 栈没有起（双栈窗口成本高）。oracle 侧行为由源码逐行核对 + C# 探针
+（`tools/planes-probe` 的 `listen`/`slots` 模式）支撑，但严格意义上这不等于双栈对拍。
+
+状态：**Rust 单栈真机判据 1-5 已跑并全过；双栈对拍未做**。
+
+### 15.2 残余口径（2s 首条延迟 / R 档判定）
+
+- **首条失败日志 ≈2.0s**：oracle 的 `ConnectAsync` 在启动时立即失败；本仓实测 ≈2.02s。
+  同一毫秒还出现 **DB 链路的第一条连接错误** ⇒ 启动期 tokio worker 被同步工作占住约 2s，
+  两条被 spawn 的链路被同量延迟。这是**宿主启动性质**，不是跨服模块的时序。
+  **决定**：不为此登记 `T-*`/`D-*`——它不构成跨服对外契约（跨服本身 inert）；
+  若将来把「启动即失败日志」当对外可观察行为，再按偏差登记。
+- **R 档判定**：审查者（`16fe6106`，tier R）独立复跑窗口与负对照后判 R 达成，
+  理由是本卡跨服路径在 oracle 生产形态下 inert，唯一可观察面就是失败日志节拍与主服无监听，
+  Rust 单栈真机已覆盖；C# 侧由源码 + 探针确定。**双栈对拍仍是未做的项**，若 Owner 要求，
+  需要按同一脚本的观测项补一次 C# 栈运行。
+
+---
+
+**证据**：本片结论来自对上述 5 个文件的逐段阅读与 `git grep`；未运行代码、未起栈、未改 `src/**`。
+round1 的 6 条 Important 已逐条核对源码后修正（帧分隔符、客户端解码差异、星形拓扑、启动/解码路径、
+连接表字段、处理器执行状态）。
