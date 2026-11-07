@@ -202,6 +202,13 @@ def _thread_order(items):
     return out
 
 
+def _body(entry):
+    """源码 `body_str` / `body_bool` / `optional_body_str` 对非对象 body 都当空对象处理；
+    这里同样兜底，否则一条畸形 entry 会让整个看板 AttributeError 崩掉。"""
+    body = entry.get("body")
+    return body if isinstance(body, dict) else {}
+
+
 def _claims(items, now):
     """wg §8.4：只有 parent 为空、ttl 在 [1, 86400]、且 live 的认领才算；按 (ts, actor, oid) 排序，
     **最早的一个 live 认领**是 winner（不是最新）。
@@ -212,7 +219,7 @@ def _claims(items, now):
     for oid, e in items:
         if e.get("kind") != "card_claim" or (e.get("parent") or ""):
             continue
-        body = e.get("body") or {}
+        body = _body(e)
         ttl = body.get("ttl")
         if ttl is None:
             ttl = 300
@@ -273,7 +280,7 @@ def project(repo, now=None, board=None):
         tier_why = None
         for oid, e in ordered:
             kind = e.get("kind")
-            body = e.get("body") or {}
+            body = _body(e)
             if kind == "status":
                 if isinstance(body.get("status"), str):
                     status = body["status"]
@@ -631,6 +638,16 @@ def selftest():
         _now = int(time.time())
         _write_entry(r2, 530, _entry('ty3', 'issue', 'a', _now, {}))
         _write_entry(r2, 531, _entry('ty3', 'card_claim', 'a', _now, {'ttl': 100, 'worktree': 123}))
+        # 15) 畸形 body（非对象）不得让看板崩掉：按空对象处理
+        _write_entry(r2, 600, _entry('wb1', 'issue', 'a', 1, {}))
+        _write_entry(r2, 601, {'version': 1, 'kind': 'status', 'id': 'wb1', 'actor': 'a',
+                               'ts': 5, 'parent': '', 'body': 'not-an-object', 'sig': 'ed25519:x'})
+        _write_entry(r2, 610, _entry('wb2', 'issue', 'a', 1, {}))
+        _write_entry(r2, 611, {'version': 1, 'kind': 'merge_result', 'id': 'wb2', 'actor': 'a',
+                               'ts': 5, 'parent': '', 'body': [1], 'sig': 'ed25519:x'})
+        _write_entry(r2, 620, _entry('wb3', 'issue', 'a', _now, {}))
+        _write_entry(r2, 621, {'version': 1, 'kind': 'card_claim', 'id': 'wb3', 'actor': 'a',
+                               'ts': _now, 'parent': '', 'body': 'claim-body', 'sig': 'ed25519:x'})
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -672,6 +689,10 @@ def selftest():
         checks += 1; assert by['ty2']['owner'] == '', by.get('ty2')
         _ty3 = {c['id']: c for c in project(r2, now=_now + 10, board=wgboard)['cards']}
         checks += 1; assert _ty3['ty3']['column'] == '待认领', _ty3.get('ty3')
+        _wb = {c['id']: c for c in project(r2, now=_now + 10, board=wgboard)['cards']}
+        checks += 1; assert _wb['wb1']['column'] == '待认领', _wb.get('wb1')
+        checks += 1; assert _wb['wb2']['column'] == '待认领', _wb.get('wb2')
+        checks += 1; assert _wb['wb3']['column'] == '进行中', _wb.get('wb3')  # 非对象 body 的 claim 仍按默认 ttl 生效（我们不验签）
         checks += 1; assert by['tie3']['column'] == ('已完成' if oid_c > oid_n else '待审'), (by.get('tie3'), oid_c, oid_n)
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
@@ -682,7 +703,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 61, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 64, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

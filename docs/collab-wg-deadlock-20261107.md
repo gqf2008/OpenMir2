@@ -114,9 +114,12 @@ python -I -B <repo>/tools/orchestration/collab_read.py board --repo .   # 期望
   owner 变 claim 的 actor。claim 只收 parent 为空、ttl ∈ [1, 86400] 的，按 `(ts, actor, oid)` 排序取
   **最早**的一个 live 认领（不是最新）。⚠ collab_read 不验签，wg 要求 `is_verified`，这是已知差异。
 - **显示过滤**：只有 `ci_claim`/`ci_result`/`card_claim` 条目的线程不显示；命中不了任何列的线程不显示。
+- **畸形 body**：不是 JSON 对象的 body 一律当空对象（源码 `body_str`/`body_bool`/`optional_body_str` 的行为），
+  否则一条畸形 entry 就会让整个看板崩掉。
 
-按源码实现后：reviewer 的 **29 组夹具 / 131 张卡**对 wg **0 mismatch**（含此前错 75 张的 DAG fuzz、
-同 ts、fork、owner、claim 各类形状）。
+按源码实现后：reviewer 的 **34 组夹具 / 140 张卡**对 wg 只有 **2 处 mismatch，且两处都是未签名 claim**
+（wg 要求 `is_verified` 会忽略，本工具不验签所以应用）。其余形状——DAG fuzz、同 ts、fork、owner、
+claim 边界、类型严格性、畸形 body——全部一致。
 
 这条正是 A2 要的「两条路径结论一致」。前几轮「两条都不可用所以无法比较」的表述是错的，
 而「用夹具反推规则」这条路也证明不可靠——最后靠的是**读上游源码**。
