@@ -578,6 +578,22 @@ def selftest():
         f1o = _write_entry(r2, 94, _entry('m17', 'status', 'a', 50, {'status': 'in-progress', 'tier': 'T1', 'tier_why': 'why1'}, parent=f0))
         _write_entry(r2, 95, _entry('m17', 'status', 'a', 40, {'status': 'closed', 'tier': None, 'tier_why': None}, parent=f1o))
         _write_entry(r2, 96, _entry('m18', 'status', 'a', 30, {'status': 'in-progress'}))
+        # 循环级 tier/tier_why 的 null 守卫：胜出状态无 tier 时，更晚的 tier:null 不得清掉更早的值
+        g0 = _write_entry(r2, 100, _entry('m19', 'issue', 'a', 1, {}))
+        g1 = _write_entry(r2, 101, _entry('m19', 'status', 'a', 10, {'status': 'in-progress', 'tier': 'T1', 'tier_why': 'why1'}, parent=g0))
+        _write_entry(r2, 102, _entry('m19', 'status', 'a', 40, {'status': 'closed'}, parent=g1))
+        _write_entry(r2, 103, _entry('m19', 'status', 'a', 60, {'status': 'in-progress', 'tier': None, 'tier_why': None}, parent=g1))
+        # 循环级 owner 的空串分支：晚到的 owner="" 必须覆盖更早的 A
+        h0 = _write_entry(r2, 110, _entry('m20', 'issue', 'a', 1, {}))
+        h1 = _write_entry(r2, 111, _entry('m20', 'status', 'a', 10, {'status': 'in-progress', 'owner': 'A'}, parent=h0))
+        _write_entry(r2, 112, _entry('m20', 'status', 'a', 40, {'status': 'closed'}, parent=h1))
+        _write_entry(r2, 113, _entry('m20', 'status', 'a', 60, {'status': 'in-progress', 'owner': ''}, parent=h1))
+        # 循环级 owner 守卫（不被 leaf 覆盖掩盖）：胜出状态不带 owner 键
+        j0 = _write_entry(r2, 120, _entry('m21', 'issue', 'a', 1, {}))
+        j1 = _write_entry(r2, 121, _entry('m21', 'status', 'a', 10, {'status': 'in-progress', 'owner': 'A'}, parent=j0))
+        _write_entry(r2, 122, _entry('m21', 'status', 'a', 40, {'status': 'closed'}, parent=j1))
+        j3 = _write_entry(r2, 123, _entry('m21', 'status', 'a', 60, {'status': 'in-progress', 'owner': ''}, parent=j1))
+        _write_entry(r2, 124, _entry('m21', 'status', 'a', 70, {'status': 'in-progress'}, parent=j3))
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -601,6 +617,10 @@ def selftest():
         checks += 1; assert by['m17']['tier'] == 'T1', by.get('m17')
         checks += 1; assert by['m17']['tier_why'] == 'why1', by.get('m17')
         checks += 1; assert by['m18']['owner'] == '', by.get('m18')
+        checks += 1; assert by['m19']['tier'] == 'T1', by.get('m19')
+        checks += 1; assert by['m19']['tier_why'] == 'why1', by.get('m19')
+        checks += 1; assert by['m20']['owner'] == '', by.get('m20')
+        checks += 1; assert by['m21']['owner'] == '', by.get('m21')
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
         with open(onlyclosed, 'w', encoding='utf-8', newline='') as fh:
@@ -610,7 +630,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 45, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 49, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
