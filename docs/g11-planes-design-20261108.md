@@ -363,6 +363,23 @@ handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
   这是 oracle 的既存缺陷，启用前必须先处理。
 ## 13. A5：给 `gm-batch-5b` 补的那个接缝——发送口
 
+### 13.1 5b 六条命令的 G11 侧逐条勾对
+
+依据 `docs/gm-batch-5b-g11-dependencies-20261024.md` §3 的逐条表：
+
+| # | 命令 | 5b 标出的 G11 依赖点 | G11 状态 |
+|---|---|---|---|
+| ① | `AddGuild` | `SendServerGroupMsg(SS_205)`；主服判定；接收端 205 空实现 | **已满足**：发送口 §13；`server_index` 已在 `GateConfig`；205 在 `message.rs` 判为 PARSES-DISCARD（解析后丢弃） |
+| ② | `DelGuild` | `SendServerGroupMsg(SS_206)`；接收端 206 | **已满足**：同上，206 = EMPTY |
+| ③ | `EndGuild` | `SendServerGroupMsg(SS_207)`；接收端 207 | **已满足**：同上，207 = ASSIGN/NOOP |
+| ④ | `ForcedWallconquestWar` | `SS_212` + `SS_204` 两条通道；接收端 212 | **已满足**：同上，212/204 = EMPTY |
+| ⑤ | `ChangeSabukLord` | **不依赖 SS_211**（`:39` 的 `GetCastle(IGuild)` 抛 T-38，`:42` 永不执行）；只要求「别把桩实现成改归属、单区不引入 211 调用者」 | **已满足**：Rust 侧无 211 发送点（§12 的 33 个发送点清单里没有 211 之外的意外来源）；`message::process(211)` 只返回 `Err`，不接业务 |
+| ⑥ | `ShowSbkGold` | **不发任何 SS**；只依赖城堡可写态 | **无 G11 依赖**（不属本卡） |
+
+⇒ G11 侧 6 条的依赖点**全部可满足**；剩余工作量都在 5b 卡自己的写集（`gmcmd.rs` 命令体、
+行会/城堡可写态、T-38 桩口径、怪癖牙）。
+
+
 5b 卡的依赖清单（`docs/gm-batch-5b-g11-dependencies-20261024.md` §2.1）点名 G11 必须提供
 `WorldEngine.SendServerGroupMsg(code, serverIdx, body)`；此前 Rust 侧**没有任何发送路径**。
 A5 已补上：
