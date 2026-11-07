@@ -130,6 +130,25 @@ impl PlanesLink {
     }
 }
 
+/// oracle `WorldEngine.SendServerGroupMsg(code, serverIdx, body)`
+/// （`src/GameSrv/Word/WorldServer.cs:885-896`）的**角色无关**入口。
+///
+/// 为什么需要自由函数：oracle 里这个入口对两种角色都存在——`ServerIndex == 0` 走
+/// `PlanesServer.SendServerSocket`（遍历空的 `srvArray`），否则走 `PlanesClient.SendSocket`
+/// （未连接直接丢弃）。而 GM 的 `AddGuild`/`DelGuild` 是**主服专属**命令，它们的发送调用
+/// 恰好落在没有 `PlanesLink` 的主服角色上 ⇒ 调用点必须能在 `None` 时照样"发生一次调用"。
+///
+/// 返回实际投递连接数：`None`（主服）⇒ 0，等价于 oracle 遍历空 `srvArray`。
+#[must_use]
+pub fn send_server_group_msg(
+    link: Option<&PlanesLink>,
+    ident: i32,
+    server_num: i32,
+    body: &[u8],
+) -> usize {
+    link.map_or(0, |l| l.send_server_group_msg(ident, server_num, body))
+}
+
 /// 按角色启动跨服链路。
 ///
 /// - `server_index == 0` ⇒ `None`（**不监听**，见模块文档与设计文档 §5.2）；
@@ -389,6 +408,25 @@ mod tests {
             0,
             "未连接必须丢弃并返回 0"
         );
+    }
+
+    /// 主服角色下**没有 `PlanesLink`**，但 oracle 的发送入口仍然存在（遍历空 `srvArray`）：
+    /// 自由函数在 `None` 时返回 0，命令体可以照常"发生一次调用"。
+    #[test]
+    fn send_server_group_msg_free_fn_is_role_agnostic() {
+        assert_eq!(send_server_group_msg(None, 205, 0, b"guild/chief"), 0);
+
+        // 与实例方法一致性：同一个 link 两条路径等价
+        // （用未连接的 link：两条路径都应返回 0）
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let link = rt.block_on(async { start(1, "127.0.0.1", 1, 0).expect("端点合法") });
+        if let Some(l) = link {
+            assert_eq!(
+                send_server_group_msg(Some(&l), 205, 0, b"x"),
+                l.send_server_group_msg(205, 0, b"x"),
+                "自由函数必须委托给实例方法"
+            );
+        }
     }
 
     /// 端点非法 ⇒ 启动即失败（oracle `IPHost` 构造抛异常、`GameServer.cs:34` 无 try/catch）。

@@ -369,12 +369,12 @@ handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
 
 | # | 命令 | 5b 标出的 G11 依赖点 | G11 状态 |
 |---|---|---|---|
-| ① | `AddGuild` | `SendServerGroupMsg(SS_205)`；主服判定；接收端 205 空实现 | **已满足**：发送口 §13；`server_index` 已在 `GateConfig`；205 在 `message.rs` 判为 PARSES-DISCARD（解析后丢弃） |
-| ② | `DelGuild` | `SendServerGroupMsg(SS_206)`；接收端 206 | **已满足**：同上，206 = EMPTY |
+| ① | `AddGuild` | `SendServerGroupMsg(SS_205)`（**主服专属命令**）；主服判定；接收端 205 空实现 | **已满足**：角色无关入口 `planes::send_server_group_msg(link: Option<&PlanesLink>, …)`——主服 `None` ⇒ 返回 0，等价 oracle 遍历空 `srvArray`，**调用本身照常发生**；`server_index` 已在 `GateConfig`；205 在 `message.rs` 判为 PARSES-DISCARD |
+| ② | `DelGuild` | `SendServerGroupMsg(SS_206)`（**主服专属命令**）；接收端 206 | **已满足**：同上，206 = EMPTY |
 | ③ | `EndGuild` | `SendServerGroupMsg(SS_207)`；接收端 207 | **已满足**：同上，207 = ASSIGN/NOOP |
 | ④ | `ForcedWallconquestWar` | `SS_212` + `SS_204` 两条通道；接收端 212 | **已满足**：同上，212/204 = EMPTY |
-| ⑤ | `ChangeSabukLord` | **不依赖 SS_211**（`:39` 的 `GetCastle(IGuild)` 抛 T-38，`:42` 永不执行）；只要求「别把桩实现成改归属、单区不引入 211 调用者」 | **已满足**：Rust 侧无 211 发送点（§12 的 33 个发送点清单里没有 211 之外的意外来源）；`message::process(211)` 只返回 `Err`，不接业务 |
-| ⑥ | `ShowSbkGold` | **不发任何 SS**；只依赖城堡可写态 | **无 G11 依赖**（不属本卡） |
+| ⑤ | `ChangeSabukLord` | **不依赖 SS_211**（`:39` 的 `GetCastle(IGuild)` 抛 T-38，`:42` 永不执行）；只要求「别把桩实现成改归属、单区不引入 211 调用者」 | **已满足**：oracle 侧 211 的来源只有 §12.1 的两处（`PlayObject.Message.cs`、`ChangeSabukLordCommand.cs`，后者在 T-38 下永不可达）；**Rust 侧当前没有任何 211 调用者**；T-38 桩 `crates/world/src/castle.rs` 的 `get_castle_n1` 保持 no-op，本卡未改 `crates/world` |
+| ⑥ | `ShowSbkGold` | **不发任何 SS**；5b 清单另提「G11 只需保证城堡不是只读快照」 | **无 SS 依赖**；「城堡可写」是 `crates/world` 的事，不在 G11 写集内（本卡未改 `crates/world`）⇒ 该子项仍归 5b 卡自行满足或另行登记，**不是 G11 提供的能力** |
 
 ⇒ G11 侧 6 条的依赖点**全部可满足**；剩余工作量都在 5b 卡自己的写集（`gmcmd.rs` 命令体、
 行会/城堡可写态、T-38 桩口径、怪癖牙）。
@@ -401,12 +401,31 @@ pub fn send_server_group_msg(&self, ident: i32, server_num: i32, body: &[u8]) ->
 与 T-38 口径的城堡桩。
 ## 14. 待确认 / 风险
 
-1. 40 个处理器的逐条执行状态（A2 第一件事）。
-2. `body` 内文本是 GB2312 字节流（`HUtil32.GetBytes/GetString` 均为 `Encoding.GetEncoding("gb2312")`），
-   A2 必须按字节处理，不得先转 UTF-8。
-3. 槽位复用（§5）。
-4. `GetValidStr3` 的 `RemoveEmptyEntries` 折叠语义（§1）。
-5. oracle 跨服语义大面积停用（§4）对 G11 与 `gm-batch-5b` 的整体结论的影响。
+本清单的首版 5 条已全部有答案，下面按「结论 → 落点」列，不再作为开放项：
+
+| 首版待确认项 | 结论 | 落点 |
+|---|---|---|
+| 40 个处理器的逐条执行状态 | 已逐条机判+人工复核：11 EMPTY / 17 ASSIGN / 3 PARSES-DISCARD / 1 THROWS | §4.1、§4.2 |
+| body 是 GB2312 字节流 | 按字节处理，`message.rs` 有非 ASCII 保真用例 | §4.2、`crates/planes/src/message.rs` |
+| 槽位复用（§5） | C# 探针实测：`Id` 全局递增不复用，首断后数据丢弃/串槽 | §5.1、`tools/planes-probe --slots/--cross` |
+| `GetValidStr3` 的 `RemoveEmptyEntries` 折叠 | 已对拍（C# 探针 + 3020 条随机差分 0 mismatch） | §1、`crates/planes/src/lib.rs` |
+| 跨服停用对 G11 / 5b 的整体影响 | 两端皆死；5b 的跨服依赖已逐条勾对 | §4、§12、§13.1 |
+
+**仍开放**：R 级真机窗口（A3/A4 标 R）——构造级证据充分，但未跑双栈窗口；见 §15。
+
+## 15. R 级真机窗口（未跑，观测项已定）
+
+整卡审查要求给出 R 证据。窗口要观察的项（审查者给的口径，逐条可机判）：
+
+1. 主服 `ServerIndex=0`：两栈均**无** `MsgSrvPort` 监听、无「已启动」日志、无跨服字节；
+2. 分服 `ServerNumber>0` 且主服端口无人监听：启动即一条失败日志（≤2s），之后约每 11s 一条
+   （至少 3 个间隔、±1s），始终连不上；
+3. 分服 `ServerNumber=0`：启动仅一条失败日志，之后 ≥30s 无重复；
+4. 非法 `MsgSrvAddr`/`MsgSrvPort`：两栈均**启动失败**（记录异常/退出码）；
+5. 无 DB/文件副作用；
+6. 211 端到端不可达（无帧）——只登记不可观察，不作为窗口项。
+
+状态：**未执行**。本卡不声称 R 达成。
 
 ---
 
