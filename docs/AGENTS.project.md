@@ -132,6 +132,8 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 默认等式：**N 个在跑的 agent = N 个 principal/密钥 = N 张卡（thread）= N 个 worktree/分支**。
 
 - **一张卡同一时刻只有一个 owner**。互斥靠 **`card_claim` 条目**（`{ttl, worktree, branch, work}`）：
+  **条目必须是根条目——不带 `--parent`**。wg 的 `parse_card_claim` 明确要求 `parent` 为空
+  （源码 `d1/collab.zig:355-356`），带 parent 的认领会被静默忽略、看板上根本不显示为 live。
   发布后**读回看板**，若该卡的胜出 claim 不是自己那条 oid ⇒ stand down；TTL 到期自动释放，
   崩溃的 agent 不会永久占卡。`status` 里的 `owner` 只作看板展示与交接记录，**不当锁**。
   两个 agent 不许做同一张卡——要并行就**新开线程**。
@@ -147,7 +149,7 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 唤醒原语是 `wg collab watch`（wg 读路径故障期间该原语同样不可用，见卡 A1/A2）：把 `refs/collab/*` 变化变成进程调用（trigger，不是 agent）。
 
 - 事件只当**重新读取的触发器**，绝不是真相快照：收到后先 `python -I -B tools/orchestration/collab_read.py thread <id>` 重读、以 head oid 确认
-  卡片仍无主或归你，再发布 `card_claim`（带 TTL）认领并读回核对胜出 oid——**认领即互斥锁**，
+  卡片仍无主或归你，再发布 `card_claim`（**根条目、不带 `--parent`**，带 TTL）认领并读回核对胜出 oid——**认领即互斥锁**，
   两个 agent 抢同一张卡靠「先重读 + 核 claim oid」收敛；`status` 只用于移卡，不当锁。
 - `--exec` 契约（**必须遵守**）：每个新/变更 ref 调用一次，原始 entry JSON 在 stdin，五个变量
   `WALGIT_COLLAB_REF/KIND/THREAD/ACTOR/VERIFIED` 从解析后的 entry 来（body 里写 `kind=` 无法伪造）。
