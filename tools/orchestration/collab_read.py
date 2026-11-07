@@ -97,6 +97,39 @@ def read_blobs(repo, oids):
     return out
 
 
+def _kill_tree(p):
+    """超时后按**进程树**终止。孙进程（git cat-file）会一直攥着 stdout，
+    只杀直接子进程会让 communicate() 等 EOF 永久挂住——那会把「回归」变成「门挂住」。"""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/T", "/F", "/PID", str(p.pid)],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        else:
+            import signal
+            os.killpg(os.getpgid(p.pid), signal.SIGKILL)
+    except Exception:  # noqa: BLE001
+        try:
+            p.kill()
+        except Exception:
+            pass
+
+
+def run_bounded(cmd, timeout):
+    """跑子进程并保证**有界**返回：超时 ⇒ (None, b"", b"timeout")。"""
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                         start_new_session=(os.name != "nt"))
+    try:
+        out, err = p.communicate(timeout=timeout)
+        return p.returncode, out, err
+    except subprocess.TimeoutExpired:
+        _kill_tree(p)
+        try:
+            p.communicate(timeout=10)
+        except Exception:  # noqa: BLE001
+            pass
+        return None, b"", b"timeout"
+
+
 def load_board_def(repo):
     path = os.path.join(repo, ".walgit", "board.toml")
     if not os.path.exists(path):
@@ -340,8 +373,12 @@ def selftest():
         checks += 1
         assert len(by["t3"]["claim"]["live"]) == 1, by["t3"]
 
-        # 6) 规模牙：2000 条 ref。朴素「先写完再读」会与 cat-file 互锁并挂住，
-        #    所以用子进程 + 硬超时；超时即判红（不靠墙钟比较做通过判据）。
+        # 6) 规模牙：2000 条 ref。
+        #    互锁的根在「一次写入多少字节」：CHUNK × ~41B 必须远小于管道缓冲（64KB）。
+        #    这条不变量直接钉住修复契约——把 CHUNK 调大会立刻咬住，而不是把门挂住。
+        checks += 1
+        assert CHUNK * 41 <= 8192, (
+            "批量写入 %d 条约 %d B，逼近管道缓冲 ⇒ 会与 git stdout 互锁" % (CHUNK, CHUNK * 41))
         big = _mk_repo(tmp)
         blobs = {}
         for k in range(50):
@@ -349,22 +386,21 @@ def selftest():
                                  ensure_ascii=False).encode()
             blobs[k] = subprocess.run(["git", "-C", big, "hash-object", "-w", "--stdin"],
                                       input=payload, stdout=subprocess.PIPE).stdout.decode().strip()
-        nl = chr(10)
-        lines = "".join(("create refs/collab/inbox/selftest/bulk%05d %s" + nl) % (i, blobs[i % 50])
-                        for i in range(2000))
+        lines = "".join(("create refs/collab/inbox/selftest/bulk%05d %s" + chr(10)) % (i2, blobs[i2 % 50])
+                        for i2 in range(2000))
         rr = subprocess.run(["git", "-C", big, "update-ref", "--stdin"], input=lines.encode(),
                             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert rr.returncode == 0, rr.stderr.decode("utf-8", "replace")
-        cmd = [sys.executable, "-I", "-B", os.path.abspath(__file__), "board", "--repo", big, "--json"]
-        try:
-            r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        except subprocess.TimeoutExpired:
-            raise AssertionError("2000 条 ref 时 board 超时 ⇒ 疑似 cat-file 管道互锁回归")
+        # 同一进程内直读 2000 条：分块写读 ⇒ 秒级返回。若退化回整批写，这里会被
+        # tool_selftest_gate 的进程树超时终止（红），不会假绿。
+        oids = [oid for _n, oid in list_refs(big, "refs/collab/inbox")]
         checks += 1
-        assert r.returncode == 0, r.stderr.decode("utf-8", "replace")[:300]
-        out = json.loads(r.stdout.decode("utf-8"))
+        assert len(oids) == 2000, len(oids)
+        got = read_blobs(big, oids)
         checks += 1
-        assert len(out["cards"]) == 50, len(out["cards"])
+        assert len(got) == 2000 and all(g is not None for g in got)
+        checks += 1
+        assert len(project(big)["cards"]) == 50
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("SELFTEST_PASS=%d" % checks)
