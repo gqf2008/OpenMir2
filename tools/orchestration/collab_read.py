@@ -548,13 +548,16 @@ def selftest():
         # owner/tier 跟随 leaf（wgowner o1 / wgowner3 q1,q7 实测）
         oo = _write_entry(r2, 50, _entry('m12', 'issue', 'a', 1, {}))
         o1 = _write_entry(r2, 51, _entry('m12', 'status', 'a', 60,
-                                        {'status': 'in-progress', 'owner': 'A', 'tier': 'T1'}, parent=oo))
+                                        {'status': 'in-progress', 'owner': 'A', 'tier': 'T1',
+                                         'tier_why': 'why1'}, parent=oo))
         _write_entry(r2, 52, _entry('m12', 'status', 'a', 55,
-                                    {'status': 'closed', 'owner': 'B', 'tier': 'T2'}, parent=o1))
+                                    {'status': 'closed', 'owner': 'B', 'tier': 'T2',
+                                     'tier_why': 'why2'}, parent=o1))
         # leaf 无 tier ⇒ 回退到非 leaf 的 tier
         n1 = _write_entry(r2, 60, _entry('m13', 'issue', 'a', 1, {}))
         n2 = _write_entry(r2, 61, _entry('m13', 'status', 'a', 60,
-                                        {'status': 'in-progress', 'tier': 'T1'}, parent=n1))
+                                        {'status': 'in-progress', 'tier': 'T1',
+                                         'tier_why': 'why1'}, parent=n1))
         _write_entry(r2, 62, _entry('m13', 'status', 'a', 55, {'status': 'closed'}, parent=n2))
         # 显式 owner:null 视为「无 owner」，回退到更早的非 null
         u1 = _write_entry(r2, 70, _entry('m14', 'issue', 'a', 1, {}))
@@ -567,6 +570,14 @@ def selftest():
         x1 = _write_entry(r2, 81, _entry('m15', 'status', 'a', 10, {'status': 'in-progress', 'owner': 'A'}, parent=x0))
         _write_entry(r2, 82, _entry('m15', 'status', 'a', 40, {'status': 'closed'}, parent=x1))
         _write_entry(r2, 83, _entry('m15', 'status', 'a', 60, {'status': 'in-progress', 'owner': None}, parent=x1))
+        # 空串是有效 owner；ownerless 输出空串；显式 tier:null 回退
+        e0 = _write_entry(r2, 90, _entry('m16', 'issue', 'a', 1, {}))
+        e1 = _write_entry(r2, 91, _entry('m16', 'status', 'a', 50, {'status': 'in-progress', 'owner': 'A'}, parent=e0))
+        _write_entry(r2, 92, _entry('m16', 'status', 'a', 40, {'status': 'closed', 'owner': ''}, parent=e1))
+        f0 = _write_entry(r2, 93, _entry('m17', 'issue', 'a', 1, {}))
+        f1o = _write_entry(r2, 94, _entry('m17', 'status', 'a', 50, {'status': 'in-progress', 'tier': 'T1', 'tier_why': 'why1'}, parent=f0))
+        _write_entry(r2, 95, _entry('m17', 'status', 'a', 40, {'status': 'closed', 'tier': None, 'tier_why': None}, parent=f1o))
+        _write_entry(r2, 96, _entry('m18', 'status', 'a', 30, {'status': 'in-progress'}))
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -584,6 +595,12 @@ def selftest():
         checks += 1; assert by['m13']['tier'] == 'T1', by.get('m13')
         checks += 1; assert by['m14']['owner'] == 'A', by.get('m14')
         checks += 1; assert by['m15']['owner'] == 'A', by.get('m15')
+        checks += 1; assert by['m12']['tier_why'] == 'why2', by.get('m12')
+        checks += 1; assert by['m13']['tier_why'] == 'why1', by.get('m13')
+        checks += 1; assert by['m16']['owner'] == '', by.get('m16')
+        checks += 1; assert by['m17']['tier'] == 'T1', by.get('m17')
+        checks += 1; assert by['m17']['tier_why'] == 'why1', by.get('m17')
+        checks += 1; assert by['m18']['owner'] == '', by.get('m18')
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
         with open(onlyclosed, 'w', encoding='utf-8', newline='') as fh:
@@ -593,7 +610,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 39, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 45, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
