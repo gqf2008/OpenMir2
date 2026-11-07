@@ -162,6 +162,12 @@ REGISTRY = [
     # 自测用替身 walgit 覆盖 ok / rc 透传 / 哨兵（rc=0 与打到 stdout 两种）/ 找不到可执行 /
     # 空参数，并扫 `tools/orchestration/*.sh` 不再出现裸调（注释行不误报）。
     ("walgit_collab", ["tools/orchestration/walgit_collab.py", "--selftest"], False),
+    # 卡 `openmir2-collab-interface-wg-migration`：wg 0.1.0 在本仓库（14,529 条 inbox ref）
+    # 聚合必失败（trace2：`git cat-file --batch` 只写不读，与 git 的 stdout 管道互锁，
+    # 子进程永不退出 ⇒ wg 超时报 GitFailed）。本工具是**只读替代读路径**：分块写读、
+    # 不验证签名（verified=null）、rc 0/1/2。自测 17 项，含 2000 条 ref 的规模牙
+    # （朴素整批写会互锁挂住）。离线、合成仓库、~5s。
+    ("collab_read", ["tools/orchestration/collab_read.py", "--selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。
