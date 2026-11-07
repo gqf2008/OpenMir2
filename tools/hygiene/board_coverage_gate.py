@@ -63,15 +63,6 @@ RUN_TIMEOUT = 120.0
 NON_CARD_KINDS = frozenset(("ci_claim", "ci_result"))
 
 
-def _collab_env():
-    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
-    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留是为了兼容
-    可能仍在旧版 CLI 上的主机（卡 `openmir2-collab-interface-wg-migration`）。"""
-    env = dict(os.environ)
-    env["WALGIT_LOCAL_COMMANDS"] = "1"
-    return env
-
-
 def _run(argv, timeout=RUN_TIMEOUT, env=None):
     """Never raises: returns (rc, stdout, stderr); rc 124/127 on timeout/OSError."""
     try:
@@ -222,10 +213,12 @@ def board_ids(repo, board=None):
     `.walgit/board.toml` **at HEAD**, so an uncommitted column change is only
     visible through this override.
     """
-    argv = ["wg", "collab", "board", "--repo", repo, "--format", "json"]
+    here = os.path.dirname(os.path.abspath(__file__))
+    tool = os.path.join(os.path.dirname(here), "orchestration", "collab_read.py")
+    argv = [sys.executable, "-I", "-B", tool, "board", "--json", "--repo", repo]
     if board:
         argv += ["--board", board]
-    rc, out, err = _run(argv, env=_collab_env())
+    rc, out, err = _run(argv)
     if rc != 0:
         return None, "cannot read board (rc=%d): %s" % (rc, (err or out).strip()[:200])
     try:
@@ -234,10 +227,16 @@ def board_ids(repo, board=None):
         return None, "board output is not JSON: %s" % exc
     ids = set()
     try:
-        for column in data.get("columns") or []:
-            for card in column.get("cards") or []:
-                if card.get("id"):
+        cards = data.get("cards")
+        if isinstance(cards, list):          # collab_read.py 的扁平形态
+            for card in cards:
+                if isinstance(card, dict) and card.get("id"):
                     ids.add(card["id"])
+        else:                                 # 旧 columns→cards 形态（兼容）
+            for column in data.get("columns") or []:
+                for card in column.get("cards") or []:
+                    if card.get("id"):
+                        ids.add(card["id"])
     except AttributeError:
         return None, "board output has an unexpected shape"
     return ids, None

@@ -856,24 +856,16 @@ def load_board_file(path):
         )
 
 
-def _collab_env():
-    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
-    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留是为了兼容
-    可能仍在旧版 CLI 上的主机（卡 `openmir2-collab-interface-wg-migration`）。"""
-    env = dict(os.environ)
-    env["WALGIT_LOCAL_COMMANDS"] = "1"
-    return env
-
-
 def _run_board(top):
     """One ``wg collab board --format json`` call (never per card)."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    tool = os.path.join(os.path.dirname(here), "orchestration", "collab_read.py")
     try:
         proc = subprocess.run(
-            ["wg", "collab", "board", "--format", "json", "--repo", top],
+            [sys.executable, "-I", "-B", tool, "board", "--json", "--repo", top],
             capture_output=True,
             check=False,
             timeout=120,
-            env=_collab_env(),
         )
     except subprocess.TimeoutExpired:
         raise GateError(
@@ -898,12 +890,20 @@ def _run_board(top):
             rc=2,
         )
     try:
-        return json.loads(proc.stdout.decode("utf-8"))
+        data = json.loads(proc.stdout.decode("utf-8"))
     except (UnicodeDecodeError, ValueError) as exc:
         raise GateError(
             "stale-pointer gate: board JSON is not valid JSON: %s (fail-closed)" % exc,
             rc=2,
         )
+    # collab_read 输出扁平 cards；下游按「列 → 卡片」读，这里补成同形，避免改一片下游。
+    if isinstance(data, dict) and isinstance(data.get("cards"), list) and "columns" not in data:
+        grouped = {}
+        for card in data["cards"]:
+            if isinstance(card, dict):
+                grouped.setdefault(card.get("column"), []).append(card)
+        data = {"columns": [{"name": k, "cards": v} for k, v in grouped.items()]}
+    return data
 
 
 def _fold_entries(entries):

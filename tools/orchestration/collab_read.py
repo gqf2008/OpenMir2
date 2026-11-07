@@ -130,8 +130,9 @@ def run_bounded(cmd, timeout):
         return None, b"", b"timeout"
 
 
-def load_board_def(repo):
-    path = os.path.join(repo, ".walgit", "board.toml")
+def load_board_def(repo, board=None):
+    """`board` 可覆盖列定义（对应旧 `wg collab board --board <path>`）。"""
+    path = board or os.path.join(repo, ".walgit", "board.toml")
     if not os.path.exists(path):
         raise EnvError("缺 %s（看板列定义随仓库版本化，不能猜）" % path)
     try:
@@ -164,9 +165,9 @@ def load_entries(repo):
     return out
 
 
-def project(repo, now=None):
+def project(repo, now=None, board=None):
     now = int(now if now is not None else time.time())
-    columns = load_board_def(repo)
+    columns = load_board_def(repo, board)
     entries = load_entries(repo)
 
     cards = {}
@@ -366,6 +367,16 @@ def selftest():
         except EnvError:
             checks += 1
 
+        # 4b) --board 覆盖列定义（等价旧 `wg collab board --board <path>`）
+        alt = os.path.join(repo, 'alt-board.toml')
+        with open(alt, 'w', encoding='utf-8', newline='') as fh:
+            fh.write('[[column]]' + chr(10) + 'name = "WIP"' + chr(10) + 'status = "in-progress"' + chr(10))
+        by_alt = {c['id']: c for c in project(repo, now=now, board=alt)['cards']}
+        checks += 1
+        assert by_alt['t1']['column'] == 'WIP', by_alt['t1']
+        checks += 1
+        assert by_alt['t2']['column'] is None, by_alt['t2']
+
         # 5) 未过期/无 ttl 的 claim 都算活
         _write_entry(repo, 6, _entry("t3", "issue", "w1", now, {"status": "open"}))
         _write_entry(repo, 7, _entry("t3", "card_claim", "w4", now - 10, {}))
@@ -412,6 +423,8 @@ def main(argv=None):
     ap.add_argument("--selftest", action="store_true")
     ap.add_argument("--repo", default=".")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument("--board", default=None,
+                    help="覆盖列定义路径（等价旧 `wg collab board --board <path>`）")
     ap.add_argument("cmd", nargs="?")
     ap.add_argument("arg", nargs="?")
     a = ap.parse_args(argv)
@@ -422,7 +435,7 @@ def main(argv=None):
         return 1
     try:
         if a.cmd == "board":
-            data = project(a.repo)
+            data = project(a.repo, board=a.board)
             text = render_board(data)
         else:
             if not a.arg:

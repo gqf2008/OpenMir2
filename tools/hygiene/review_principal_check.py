@@ -60,15 +60,6 @@ BUSY_PROCESS_PREFIXES = ("python", "cargo", "rustc")
 _RunResult = collections.namedtuple("_RunResult", "returncode stdout stderr")
 
 
-def _collab_env():
-    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
-    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留是为了兼容
-    可能仍在旧版 CLI 上的主机（卡 `openmir2-collab-interface-wg-migration`）。"""
-    env = dict(os.environ)
-    env["WALGIT_LOCAL_COMMANDS"] = "1"
-    return env
-
-
 def _run(argv, cwd=None, timeout=PROCESS_TIMEOUT, env=None):
     """Run ``argv``; **never raises** — every failure becomes a nonzero rc.
 
@@ -257,10 +248,11 @@ def decode_ledger_stdout(raw):
 
 def ledger_thread(repo, card):
     """Return (entries, error); ``error`` is a message when unreadable."""
+    here = os.path.dirname(os.path.abspath(__file__))
+    tool = os.path.join(os.path.dirname(here), "orchestration", "collab_read.py")
     probe = _run(
-        ["wg", "collab", "thread", "--repo", repo, card],
+        [sys.executable, "-I", "-B", tool, "thread", card, "--json", "--repo", repo],
         cwd=repo if repo else None,
-        env=_collab_env(),
     )
     if probe.returncode != 0:
         return None, "cannot read ledger thread %s (rc=%d): %s" % (
@@ -275,6 +267,8 @@ def ledger_thread(repo, card):
         data = json.loads(text)
     except ValueError as exc:
         return None, "ledger thread %s is not JSON: %s" % (card, exc)
+    if isinstance(data, dict) and isinstance(data.get("entries"), list):
+        return data["entries"], None   # collab_read.py 的 {id, entries} 形态
     if not isinstance(data, list):
         return None, "ledger thread %s has unexpected shape (%s)" % (
             card,
