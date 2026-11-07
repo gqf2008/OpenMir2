@@ -6,7 +6,7 @@
 
   条件1 脚本派发 100%      复算 `cargo run -p mir2-script-tool -- parse-stats ... --require-implemented`
                            stdout 的「语料派发目标覆盖」行（**绝不硬编码 106/106**）
-  条件2 R 卡证据           `walgit collab board --format json` 枚举 tier=R 卡，逐张判
+  条件2 R 卡证据           `wg collab board --format json` 枚举 tier=R 卡，逐张判
                            「已合并 / 有 window_required / 有 whitelist T-* 登记 / 三者皆无」
   条件3 B 类清零           `tests/parity/coverage/recon_gates.py dispatch` 的 tracked 清单，
                            逐条判「有 T-* 登记 / 有卡 / 皆无」
@@ -84,8 +84,9 @@ def _decode(raw: bytes) -> str:
 
 
 def _collab_env():
-    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
-    （卡 `openmir2-walgit-local-commands-env`）。"""
+    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
+    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留兼容旧主机
+    （卡 `openmir2-collab-interface-wg-migration`）。"""
     env = dict(os.environ)
     env["WALGIT_LOCAL_COMMANDS"] = "1"
     return env
@@ -225,8 +226,8 @@ def run_script_coverage(mir2_root: Path, envir: str, script_bin: str, timeout):
 # --------------------------------------------------------------------------
 
 def load_board(repo: Path, timeout=180):
-    """`walgit collab board --format json` -> ({card_id: card}, rec)。"""
-    rec = run_cmd(["walgit", "collab", "board", "--format", "json"], repo, timeout,
+    """`wg collab board --format json` -> ({card_id: card}, rec)。"""
+    rec = run_cmd(["wg", "collab", "board", "--format", "json"], repo, timeout,
                   env=_collab_env())
     if rec.get("rc") != 0:
         return None, rec
@@ -261,7 +262,7 @@ def _add_entry(index, seen, oid, entry):
 def load_entry_index(repo: Path, timeout=900):
     """读 snapshot（折叠区）+ inbox tail（refs/collab/inbox/*），聚合为 {thread_id: [(oid, entry)]}。
 
-    与 `walgit collab board` 同源（snapshot ∪ tail），但不做签名验证；
+    与 `wg collab board` 同源（snapshot ∪ tail），但不做签名验证；
     信任度由 board 每卡的 verified/unverified 计数承担（见条件2）。
     """
     index = {}
