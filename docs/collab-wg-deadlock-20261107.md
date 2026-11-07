@@ -90,7 +90,7 @@ python -I -B <repo>/tools/orchestration/collab_read.py board --repo .   # 期望
 修 F1 之前，`collab_read` 与 wg 在 13 张卡的差分夹具上有 3 张错列
 （`merge_result` 折叠、未知状态回落、CI-only 隐藏）。
 
-**这里改错过三次，都记录在案**：
+**这里改错过四次，都记录在案**：
 
 1. 第一版按 `(ts, oid)` 定序 ⇒ 真实仓库 22 张同 ts 的卡被判成 `已合并未收口`，我还当成了成功证据；
 2. 第二版改成 `ts` 主键 + 链序破平局，仍不对——它只看链尾。最小反例

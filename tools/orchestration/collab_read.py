@@ -170,7 +170,8 @@ NON_CARD_KINDS = frozenset(("ci_claim", "ci_result", "card_claim"))
 
 
 def _merged_flag(value):
-    return value is True or value == 1 or (isinstance(value, str) and value.lower() == "true")
+    # wg 的 body_bool 只接受 JSON bool：1 / "true" 都不算（源码 collab.zig:1197）
+    return value is True
 
 
 def _thread_order(items):
@@ -215,11 +216,22 @@ def _claims(items, now):
         ttl = body.get("ttl")
         if ttl is None:
             ttl = 300
-        if not isinstance(ttl, int) or ttl < 1 or ttl > 86400:
+        # bool 是 int 的子类，但 wg 的 .integer 不接受 true/false
+        if isinstance(ttl, bool) or not isinstance(ttl, int) or ttl < 1 or ttl > 86400:
+            continue
+        # wg 的 optional_body_str：缺省/null ⇒ ""，字符串 ⇒ 原值，其它类型 ⇒ 整条 claim 作废
+        bad_type = False
+        for key in ("worktree", "branch", "work", "session"):
+            v = body.get(key)
+            if v is not None and not isinstance(v, str):
+                bad_type = True
+                break
+        if bad_type:
             continue
         ts = e.get("ts") or 0
         out.append({"oid": oid, "actor": e.get("actor") or "", "ts": ts, "ttl": ttl,
-                    "live": (ts + ttl) > now,
+                    # 源码：now <= ts + ttl 即为 live（恰好到期那一秒仍算 live）
+                    "live": (ts + ttl) >= now,
                     "worktree": body.get("worktree"), "branch": body.get("branch")})
     out.sort(key=lambda c: (c["ts"], c["actor"], c["oid"]))
     return out
@@ -265,7 +277,7 @@ def project(repo, now=None, board=None):
             if kind == "status":
                 if isinstance(body.get("status"), str):
                     status = body["status"]
-                if body.get("owner") is not None:
+                if isinstance(body.get("owner"), str):
                     owner = body["owner"]
                 if body.get("tier") is not None:
                     tier = body["tier"]
@@ -607,6 +619,18 @@ def selftest():
         f0 = _write_entry(r2, 400, _entry('fork2', 'issue', 'a', 10, {}))
         _write_entry(r2, 401, _entry('fork2', 'status', 'a', 5, {'status': 'closed'}, parent=f0))
         _write_entry(r2, 402, _entry('fork2', 'status', 'a', 20, {'status': 'needs-review'}, parent=f0))
+        # 11) claim live 边界（源码：now <= ts+ttl）与类型严格性
+        _write_entry(r2, 500, _entry('cl1', 'issue', 'a', 1000, {}))
+        _write_entry(r2, 501, _entry('cl1', 'card_claim', 'a', 1000, {'ttl': 100}))
+        # 12) merged 只认 JSON true：merged:1 不算
+        _write_entry(r2, 510, _entry('ty1', 'issue', 'a', 1, {}))
+        _write_entry(r2, 511, _entry('ty1', 'merge_result', 'a', 5, {'merged': 1}))
+        # 13) owner 只接受字符串：owner:true 不算
+        _write_entry(r2, 520, _entry('ty2', 'status', 'a', 1, {'status': 'in-progress', 'owner': True}))
+        # 14) claim 的 worktree 非字符串 ⇒ 整条 claim 作废（源码 optional_body_str）
+        _now = int(time.time())
+        _write_entry(r2, 530, _entry('ty3', 'issue', 'a', _now, {}))
+        _write_entry(r2, 531, _entry('ty3', 'card_claim', 'a', _now, {'ttl': 100, 'worktree': 123}))
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -640,6 +664,14 @@ def selftest():
         checks += 1; assert by['k2']['column'] == '已合并未收口', by.get('k2')
         checks += 1; assert by['tie2']['column'] == '待审', by.get('tie2')
         checks += 1; assert by['fork2']['column'] == '已完成', by.get('fork2')
+        _at = {c['id']: c for c in project(r2, now=1100, board=wgboard)['cards']}
+        _after = {c['id']: c for c in project(r2, now=1101, board=wgboard)['cards']}
+        checks += 1; assert _at['cl1']['column'] == '进行中', _at.get('cl1')
+        checks += 1; assert _after['cl1']['column'] == '待认领', _after.get('cl1')
+        checks += 1; assert by['ty1']['column'] == '待认领', by.get('ty1')
+        checks += 1; assert by['ty2']['owner'] == '', by.get('ty2')
+        _ty3 = {c['id']: c for c in project(r2, now=_now + 10, board=wgboard)['cards']}
+        checks += 1; assert _ty3['ty3']['column'] == '待认领', _ty3.get('ty3')
         checks += 1; assert by['tie3']['column'] == ('已完成' if oid_c > oid_n else '待审'), (by.get('tie3'), oid_c, oid_n)
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
@@ -650,7 +682,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 56, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 61, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
