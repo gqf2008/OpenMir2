@@ -54,6 +54,15 @@ SENTINEL_LINE_RE = re.compile(
     r"^Error: .*is not the collaboration interface any more: it is MCP at /mcp",
     re.MULTILINE,
 )
+#: 2026-11-07（卡 `openmir2-collab-interface-wg-migration`）：walgit 0.14.0 起
+#: `collab` 子命令被移除，clap 的实况报错是 `error: unrecognized subcommand 'collab'`。
+GONE_RE = re.compile(
+    r"^(?:error: unrecognized subcommand 'collab'|wg: unknown (?:command|subcommand) 'collab')",
+    re.MULTILINE,
+)
+#: `wg` 的聚合失败。实测本仓库 14,529 条 inbox ref 会触发 `git cat-file --batch`
+#: 管道互锁：wg 超时后打这一行，**且可能以 rc=0 结束**（最坏形态：假绿）。行首锚定。
+GITFAILED_RE = re.compile(r"^wg: collab .*: GitFailed$", re.MULTILINE)
 #: 哨兵命中时的专用退出码（区别于子进程 rc，便于机判与排障）。
 RC_SENTINEL = 3
 RC_USAGE = 2
@@ -64,12 +73,13 @@ USAGE = "用法：python -I -B tools/orchestration/walgit_collab.py <collab 子�
 
 
 def _bin_prefix():
-    """可执行前缀。默认 `walgit`；`WALGIT_COLLAB_BIN` 仅供自测注入替身。
+    """可执行前缀。默认 `wg`（walgit 0.14.0 起协作接口在独立二进制 wg）；
+    `WALGIT_COLLAB_BIN` 仅供自测注入替身。
 
     以 `.py` 结尾时用当前解释器执行——Windows 的 CreateProcess 不能直接执行 `.bat/.cmd`，
     用 Python 替身才跨平台。
     """
-    target = os.environ.get("WALGIT_COLLAB_BIN") or "walgit"
+    target = os.environ.get("WALGIT_COLLAB_BIN") or "wg"
     if target.lower().endswith(".py"):
         return [sys.executable, target]
     return [target]
@@ -93,7 +103,7 @@ def run_collab(args):
             cmd, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kwargs
         )
     except FileNotFoundError:
-        msg = "walgit_collab: 找不到可执行文件 %r（PATH 里没有 walgit？）\n" % cmd[0]
+        msg = "walgit_collab: 找不到可执行文件 %r（PATH 里没有 wg？）\n" % cmd[0]
         return RC_NOT_FOUND, b"", msg.encode("utf-8")
     except subprocess.TimeoutExpired:
         msg = "walgit_collab: `walgit collab` 超过 %ss 未返回，fail-closed\n" % timeout
@@ -101,13 +111,28 @@ def run_collab(args):
     return proc.returncode, proc.stdout or b"", proc.stderr or b""
 
 
-def has_sentinel(out, err):
-    """stdout/stderr 任一处出现**行首锚定**的错误行才算「本地接口未生效」。
+def sentinel_reason(out, err):
+    """stdout/stderr 任一处出现**行首锚定**的错误行 ⇒ 返回原因串，否则 None。
 
-    只看行首：正常数据里引用这句话（JSON 字符串、条目正文）不算失败。
+    只看行首：正常数据里引用这些字样（JSON 字符串、条目正文）不算失败。
+    三种形态都判「协作接口不可用」：旧版拒绝本地命令、子命令已被移除、聚合 GitFailed。
     """
-    blob = ((out or b"") + b"\n" + (err or b"")).decode("utf-8", "replace")
-    return bool(SENTINEL_LINE_RE.search(blob))
+    sep = bytes([10])
+    blob = ((out or b"") + sep + (err or b"")).decode("utf-8", "replace")
+    # Windows 下子进程 stderr 是 CRLF；`$` 前残留的 CR 会让行首锚定匹配不到（自测实测）。
+    blob = blob.replace(chr(13), "")
+    if SENTINEL_LINE_RE.search(blob):
+        return "is not the collaboration interface"
+    if GONE_RE.search(blob):
+        return "unrecognized subcommand 'collab'"
+    if GITFAILED_RE.search(blob):
+        return "collab aggregation GitFailed"
+    return None
+
+
+def has_sentinel(out, err):
+    """兼容旧调用点：等价于 `sentinel_reason(...) is not None`。"""
+    return sentinel_reason(out, err) is not None
 
 
 def _silence(stream):
@@ -150,15 +175,15 @@ def main(argv=None):
         return RC_USAGE
 
     rc, out, err = run_collab(args)
-    if has_sentinel(out, err):
+    reason = sentinel_reason(out, err)
+    if reason:
         # 原始两路都放出来：排障需要原文；但**绝不**把它当成正常 stdout 交回调用方。
         _emit(sys.stdout, out)
         _emit(sys.stderr, err)
         print(
-            "walgit_collab: FAIL-CLOSED：walgit CLI 拒绝本地协作接口"
-            "（`is not the collaboration interface`）。"
-            "WALGIT_LOCAL_COMMANDS=1 未生效，或 CLI 行为再次变更。"
-            "不要重试，更不要把空输出当成「看板为空 / 没有待审」。",
+            ("walgit_collab: FAIL-CLOSED：协作接口不可用（%s）。"
+             "CLI 已换代（walgit 0.14.0 起协作命令是 `wg collab`），或聚合失败。"
+             "不要重试，更不要把空输出当成「看板为空 / 没有待审」。") % reason,
             file=sys.stderr,
         )
         return RC_SENTINEL
@@ -452,6 +477,12 @@ if mode == "sentinel_stdout":
 if mode == "phrase_in_data":
     print('{"note":"Error: `walgit collab` ' + SENTINEL + ' any more: it is MCP at /mcp"}')
     sys.exit(0)
+if mode == "no_collab":
+    sys.stderr.write("error: unrecognized subcommand 'collab'" + chr(10))
+    sys.exit(2)
+if mode == "gitfailed":
+    sys.stderr.write("wg: collab board: GitFailed" + chr(10))
+    sys.exit(0)
 if mode == "fail7":
     sys.stderr.write("boom\n")
     sys.exit(7)
@@ -531,6 +562,23 @@ def selftest():
         rc, out, err = _run_wrapper(script, fake, calls, "phrase_in_data", ["thread", "x"])
         add("phrase-in-data:rc0", rc == 0, "rc=%r stderr=%r" % (rc, err[:160]))
         add("phrase-in-data:passthrough", SENTINEL in out, "stdout=%r" % out[:160])
+
+        # --- 3c) 上游移除 `collab` 子命令（walgit 0.14.0 实况）⇒ 必须判 rc=3 ---
+        rc, out, err = _run_wrapper(script, fake, calls, "no_collab", ["board"])
+        add("no-collab-subcommand:rc3", rc == RC_SENTINEL, "rc=%r stderr=%r" % (rc, err[:160]))
+        add("no-collab-subcommand:reason", "接口不可用" in err and "unrecognized subcommand" in err,
+            "stderr=%r" % err[:200])
+
+        # --- 3d) wg 聚合失败但 rc=0（假绿最坏形态）⇒ 同样 rc=3 ---
+        rc, out, err = _run_wrapper(script, fake, calls, "gitfailed", ["board"])
+        add("wg-gitfailed:rc3", rc == RC_SENTINEL, "rc=%r stderr=%r" % (rc, err[:160]))
+        add("wg-gitfailed:reason", "GitFailed" in err, "stderr=%r" % err[:200])
+
+        # --- 3e) 负例：同一句话出现在数据行中间（不是行首）不许误判 ---
+        add("guard:gitfailed-not-in-data",
+            sentinel_reason(b'{"x":"wg: collab board: GitFailed"}', b"") is None)
+        add("guard:other-subcommand-not-gone",
+            sentinel_reason(b"", b"error: unrecognized subcommand 'board'") is None)
 
         # --- 4) 普通失败 rc=7 ⇒ 原样透传，绝不折叠成 0 ---
         rc, out, err = _run_wrapper(script, fake, calls, "fail7", ["board"])
