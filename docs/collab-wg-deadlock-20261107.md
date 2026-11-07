@@ -90,24 +90,27 @@ python -I -B <repo>/tools/orchestration/collab_read.py board --repo .   # 期望
 修 F1 之前，`collab_read` 与 wg 在 13 张卡的差分夹具上有 3 张错列
 （`merge_result` 折叠、未知状态回落、CI-only 隐藏）。
 
-**这里改错过两次，都记录在案**：
+**这里改错过三次，都记录在案**：
 
 1. 第一版按 `(ts, oid)` 定序 ⇒ 真实仓库 22 张同 ts 的卡被判成 `已合并未收口`，我还当成了成功证据；
-2. 第二版改成 `ts` 主键 + 链序破平局，仍不对——wg 只看**未被后续状态覆盖的 leaf state**。
-   最小反例：`issue(ts1) → in-progress(ts50) → closed(ts40)`，wg 判 **closed**（链尾），
-   而全局最大 ts 会给 `in-progress`。
+2. 第二版改成 `ts` 主键 + 链序破平局，仍不对——它只看链尾。最小反例
+   `issue(1) → in-progress(50) → closed(40)`：wg 判 **closed**，全局最大 ts 会给 `in-progress`；
+3. 第三版改成「所有 leaf state 取最大 ts」，还是不对——它漏了「**最新 state 决定走哪条支**」。
+   反例：`issue1 → in-progress10 → [closed40, in-progress60 → needs-review30]`，wg 判 **待审**
+   （走 in-progress60 这支的终端），「所有 leaf 取最大 ts」却给旁支的 closed40。
 
-正确规则（三组夹具加一个最小反例对 wg 实测）：
+**正确规则**（reviewer 用 18 组夹具 / 63 张卡反推并 63/63 验证）：
 
-- **状态取 leaf**：先剔除「自身是别的 status/merge 祖先」的条目，只在 leaf 之间比较；
-- leaf 之间按 **ts** 取最大，同 ts 用 **parent 链序**破平局（不是 oid 序，也不是深度优先）；
+- 先取**全局最新 state**（`status`，或 `merge_result{merged 真}`）：ts 最大，同 ts 用 parent 链序；
+- 再**只在它的 state 后代子树里**取 ts 最大的**终端**（子树内没有 state 后代的那个）；其它分支一律忽略；
 - 显式未知状态 ⇒ 隐藏；没有任何 state ⇒ `open`；只有 `ci_*`/`card_claim` 的线程 ⇒ 隐藏。
 
-改对之后：
+按此实现后：
 
-- 13 卡差分夹具、同 ts 夹具、分叉夹具**三组都与 wg 逐 id、逐列一致**；
-- 真实仓库（**截至 `0d6cc2604` 的快照**）：981 卡 + 75 hidden，`待审 2 / 进行中 2 / 已完成 976 / 受阻 1`，
-  `已合并未收口 0`。看板是实时量，复跑以当次输出为准。
+- reviewer 的 18 组夹具 / 63 张卡与 wg 逐 id、逐 status、逐 column **63/63 一致**，
+  含四个反例 y3 / n3 / k1 / k2；
+- 真实仓库（**截至 `1987bfff5` 的快照**）：985 卡 + 75 hidden，`已完成 981 / 进行中 3 / 受阻 1`；
+  这四个反例形状当前在真仓里不出现，所以旧实现是**潜在**错列而非现网已错。看板是实时量，复跑以当次输出为准。
 
 这条正是 A2 要的「两条路径结论一致」——它**可以判**，此前「两条都不可用所以无法比较」
 的表述是错的：wg 在小规模下可用，只是不能在本仓库规模上跑。
