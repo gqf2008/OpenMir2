@@ -13,9 +13,10 @@
 旧脚本是 `walgit collab board 2>/dev/null | grep …` / `… 2>&1 | tail`，管道取的是 `grep`/`tail` 的 rc，
 于是「接口被拒」被吞成「看板是空的」「没有待审」，即**假绿**。
 
-本封装是编排脚本的**唯一调用点**，做四件事：
+本封装是编排脚本里**协作调用的统一入口**（读路径除外——读走 `collab_read.py`），做四件事：
 
-1. 对子进程**显式**设置 `WALGIT_LOCAL_COMMANDS=1`（不依赖调用方 shell 碰巧 export 过）；
+1. 对子进程设置 `WALGIT_LOCAL_COMMANDS=1`（**旧版 CLI 的兼容开关**；walgit 0.14.0 起无作用，
+   对 `wg` 也不影响，保留只为兼容旧主机）；
 2. stdout 原样透出、stderr 原样透出，**不吞**、不折叠；
 3. 把 CLI 的「接口已切换」哨兵**行**识别为独立失败（rc=3）：即使将来 CLI 改成 rc=0、或把提示打到
    stdout，也不会被当成空看板。**边界**：只对**行首锚定的已知哨兵行** fail-closed；其它
@@ -88,8 +89,8 @@ def _bin_prefix():
 def run_collab(args):
     """跑一次 `walgit collab <args>`；返回 ``(rc, stdout_bytes, stderr_bytes)``。
 
-    子进程环境显式设 ``WALGIT_LOCAL_COMMANDS=1``：这是本封装的**唯一**职责边界，
-    调用方不需要也不应该自己再 export。
+    子进程环境显式设 ``WALGIT_LOCAL_COMMANDS=1``：旧版 CLI 需要的开关，对 `wg` 无作用，
+    保留只为兼容旧主机；调用方不需要自己再 export。
     """
     cmd = _bin_prefix() + ["collab"] + [str(a) for a in args]
     env = dict(os.environ)
@@ -213,9 +214,9 @@ def collab_hit(code):
     """判定一段代码：命中返回原因串，放行返回 None。"""
     if BARE_COLLAB_RE.search(code):
         return "bare walgit collab（该子命令已随 0.14.0 移除）"
-    m = WG_COLLAB_SUB_RE.search(code)
-    if m and m.group(1) in READ_SUBCOMMANDS:
-        return "wg collab %s 是读路径，必须走 collab_read.py" % m.group(1)
+    for m in WG_COLLAB_SUB_RE.finditer(code):
+        if m.group(1) in READ_SUBCOMMANDS:
+            return "wg collab %s 是读路径，必须走 collab_read.py" % m.group(1)
     return None
 
 
@@ -631,6 +632,10 @@ def selftest():
     add("guard:wg-read-flagged", len(bare_collab_hits("wg collab board --repo .")) == 1)
     add("guard:wg-thread-flagged", len(bare_collab_hits("wg collab thread x")) == 1)
     add("guard:wg-write-allowed", bare_collab_hits("wg collab entry --kind issue") == [])
+    add("guard:read-after-write-same-line",
+        len(bare_collab_hits("wg collab entry --kind issue && wg collab board")) == 1)
+    add("guard:read-before-write-same-line",
+        len(bare_collab_hits("wg collab thread x; wg collab entry --kind issue")) == 1)
     add("guard:wg-join-allowed", bare_collab_hits("wg collab join --principal w1") == [])
     add("guard:wrapper-name-not-flagged",
         bare_collab_hits("python walgit_collab.py board") == [])

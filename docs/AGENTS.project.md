@@ -92,8 +92,10 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 >   **不要裸调 `wg collab board`**——本仓库 14,529 条 inbox ref 会让它的 `git cat-file --batch`
 >   与 git 的 stdout 互锁，约 2 分钟才超时（详见卡 `openmir2-collab-interface-wg-migration`）；
 > - **写**（entry / claim）：`wg collab entry …`（写路径可用；`--push walgit` 才上远端）。
-> 脚本里一律走 `tools/orchestration/walgit_collab.py`：它 fail-closed，把「子命令不存在」与
-> 「聚合 GitFailed」都判成 **rc=3**。
+> 脚本里：**读**走 `collab_read.py`；其余协作调用走 `tools/orchestration/walgit_collab.py`
+> （fail-closed，把「子命令不存在」与「聚合 GitFailed」都判成 **rc=3**）。
+> 写（`entry` / `join` / `claim`）允许直调 `wg collab`——本仓多个工具就是这么做的；
+> **不得**直调读子命令，守牙齿会红。
 > **不要**用 `2>/dev/null | grep` / `2>&1 | tail` 吞错误——管道取的是 `grep`/`tail` 的 rc，
 > 会把失败变成「看板是空的 / 没有待审」的**假绿**。
 > 背景：卡 `openmir2-collab-interface-wg-migration`（前身 `openmir2-walgit-local-commands-env`）。
