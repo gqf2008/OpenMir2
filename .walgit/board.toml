@@ -2,7 +2,8 @@
 #
 # 看板不是状态：它是 `refs/collab/*` 里各线程按本文件声明的列定义折叠出的**确定性投影**。
 # 列定义随仓库版本化（改它走提交+评审）；**移动卡片 = 追加一条签名 status 条目**。
-# 预览：`walgit collab board`。
+# 预览：`python -I -B tools/orchestration/collab_read.py board`（wg 读路径故障期间的替代；
+# 卡 openmir2-collab-interface-wg-migration）。
 #
 # 列谓词规则：卡片进【第一个】满足的列；字段留空 = 匹配任意；未命中任何列的线程不显示。
 

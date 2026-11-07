@@ -583,11 +583,11 @@ D（数据与公式）───────────────────�
 
 ```bash
 git -C <checkout> remote add walgit http://127.0.0.1:8081/gqf2008/OpenMir2.git   # 没有才加
-walgit collab ls                                   # 看有哪些线程
-walgit collab board                               # 看看板（列定义 .walgit/board.toml）
-walgit collab thread <你要接的 thread-id>          # 读卡片全文（含判据与收尾要求）
+python -I -B tools/orchestration/collab_read.py board            # 看看板（列定义 .walgit/board.toml）
+python -I -B tools/orchestration/collab_read.py thread <thread-id>  # 读卡片全文（含判据与收尾要求）
+# 注：walgit 0.14.0 起 collab 子命令在独立的 `wg` 上；本仓 wg 读路径有故障，读一律走 collab_read。
 # 抢卡 = 追加一条签名 status（用你自己的 principal/key，不要共用）
-walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 principal> \
+wg collab entry --repo . --kind status --id <thread-id> --actor <你的 principal> \
   --parent <该线程最后一条 entry 的 oid> \
   --body '{"status":"in-progress","owner":"<你的 principal>","worktree":"<worktree 名>","branch":"worktree-<worktree 名>","work":"<一句话>"}' \
   --key ~/.walgit/keys/<你的 principal>.ed25519 --push walgit
@@ -604,9 +604,9 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 
 ### 14.3 每批收尾清单（Cleanup DoD，缺一不算完）
 
-1. **worktree**：`git worktree remove <路径>`（脏树先确认内容已提交/已登记），`git worktree list` 只剩主检出 + 仍在进行中的线；
+1. **worktree**：**保留不删**（D62；identity/key 在 worktree 的 git dir 里，删掉等于删名册），只清理已合并的**分支**，退役身份用 `wg collab principal-revoke`；
 2. **分支**：已合并的分支删除本地与远端（`git push origin --delete worktree-<名>`），未合并的必须写明原因与归宿；
-3. **看板**：线程收口为 `status: closed`，且 `walgit collab board` 里该卡片已在【已完成】列——**只写代码不收卡片 = 没收尾**；
+3. **看板**：线程收口为 `status: closed`，且看板（`python -I -B tools/orchestration/collab_read.py board`）里该卡片已在【已完成】列——**只写代码不收卡片 = 没收尾**；
 4. **进程**：本线起的客户端/服务端/假人/代理进程全部结束（`Get-Process | Where Path -like 'D:\MirClient-run\*'` 等要为空），`E:\MirServer` 十端口状态与开工前一致；
 5. **临时物**：本线产生的临时目录、临时库、抓包中间件、日志全部清掉或登记到报告（写清路径 + 为什么保留）；`E:\tmp` 下不留本线专属残留；
 6. **冻结基线**：`git status` 干净；`git diff --stat <基线> -- src/ sql/` 为空（例外只有登记过的 `T-*` 条目）；
@@ -614,7 +614,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 
 ### 14.4 协调者（coordinator）的检查项
 
-- 每次巡检跑 `E:\MirServer\port-status.ps1` + `walgit collab board` + `walgit collab report`；
+- 每次巡检跑 `E:\MirServer\port-status.ps1` + `python -I -B tools/orchestration/collab_read.py board` + `wg collab report`；
 - 复核 patch 时**不采信自述**，自己重跑门禁；
 - 批准口径修订（如 M4 验收①、Envir 文件数）与白名单（`T-*`/`D-*`/`B-*`）；
 - 负责 merge 与 push，并在 `merge_result` 里写清 oid 与门禁结果。
@@ -627,7 +627,7 @@ walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 prin
 **必守四条（照 §0/§0a/§0b/§0d）**：
 
 1. **一个 worktree 一个身份**：每个 worktree 跑一次
-   `walgit collab join --repo <worktree> --principal <proj>-<role>-N --key <既有种子> --push origin`，
+   `wg collab join --repo <worktree> --principal <proj>-<role>-N --key <既有种子> --push origin`，
    身份写在 `<git-dir>/walgit/identity`（不入库、`git clean` 删不掉）。之后该 worktree 里的命令**省略 `--actor`/`--key`**（从 identity 解析）。
    已就位：coordinator（主检出）、worker-1（a2-m1-services）、worker-3（b-script-engine）、worker-4（m2-world）、worker-5（c-tools）、svc-1（s1-oracle-fixes）。
 2. **交付要挂 `patch`**：卡片交付时必须补一条 `--kind patch --base refs/heads/main --head refs/heads/<分支>`，再 `status: needs-review`。
