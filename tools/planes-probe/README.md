@@ -9,6 +9,7 @@
 dotnet run -c Release -- ids      # SocketClient.Id 的分配语义
 dotnet run -c Release -- slots    # 复刻 oracle srvArray 逻辑，看断线重连后数据去哪
 dotnet run -c Release -- listen   # 只 Setup vs Setup+Start（oracle 属于前者）
+dotnet run -c Release -- cross    # 跨槽：id-1 指向别人的槽时数据被追加
 ```
 
 ## 期望输出（2026-11-08 实测）
@@ -20,6 +21,9 @@ dotnet run -c Release -- listen   # 只 Setup vs Setup+Start（oracle 属于前�
 - 断开后 `DISCONNECTED id=1 -> cleared slot0`；
 - 后续连接 `CONNECTED id=2 -> slot0`，但 `RECV id=2 THREW NullReferenceException`
   ——`Received` 用 `Id-1` 当槽下标，slot1 是空的。
+
+`cross`：连 A(id1→slot0)、B(id2→slot1)、C(id3→slot2) → 断 A → 连 D(id4→slot0)、E(id5→slot3)
+→ D 发送 ⇒ `RECV id=4 -> slot3 owner=5 SOC=(1/2/from4)`——**数据进了别人的缓冲**。
 
 `listen`：
 - 只 `Setup` ⇒ `ServerState=None`，客户端 `ConnectAsync` 抛 `TimeoutException`；

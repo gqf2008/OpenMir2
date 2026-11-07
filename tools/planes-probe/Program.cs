@@ -26,6 +26,7 @@ internal static class Probe
             case "ids": await Ids(); break;
             case "slots": await Slots(); break;
             case "listen": await Listen(); break;
+            case "cross": await Cross(); break;
             default:
                 Console.Error.WriteLine("用法: dotnet run -c Release -- [ids|slots|listen]");
                 Environment.ExitCode = 2;
@@ -117,6 +118,87 @@ internal static class Probe
             Console.WriteLine($"-- slots: {string.Join(",", srvArray.Select(x => x == null ? "-" : x.SocketId))}");
         }
         await svc.StopAsync();
+    }
+
+    /// 跨槽形态：id-1 指向的槽被**另一个**连接占用时，数据会追加到别人的缓冲。
+    /// 序列：连 A(id1→slot0) B(id2→slot1) C(id3→slot2) → 断 A → 连 D(id4→slot0) E(id5→slot3)
+    /// → D 发送 ⇒ `srvArray[4-1]` = slot3（属于 E）⇒ APPEND。
+    private static async Task Cross()
+    {
+        var svc = new TcpService();
+        svc.Connected += (c, e) =>
+        {
+            var sc = (SocketClient)c;
+            for (var i = 0; i < srvArray.Length; i++)
+            {
+                if (srvArray[i] == null)
+                {
+                    srvArray[i] = new Slot { Socket = sc.MainSocket, SocData = "", SocketId = sc.Id };
+                    Console.WriteLine($"CONNECTED id={sc.Id} -> slot{i}");
+                    break;
+                }
+            }
+            return Task.CompletedTask;
+        };
+        svc.Disconnected += (c, e) =>
+        {
+            var sc = (SocketClient)c;
+            for (var i = 0; i < srvArray.Length; i++)
+            {
+                if (srvArray[i] != null && srvArray[i].SocketId == sc.Id)
+                {
+                    srvArray[i] = null;
+                    Console.WriteLine($"DISCONNECTED id={sc.Id} -> cleared slot{i}");
+                    break;
+                }
+            }
+            return Task.CompletedTask;
+        };
+        svc.Received += (c, e) =>
+        {
+            var sc = (SocketClient)c;
+            var s = Encoding.ASCII.GetString(e.ByteBlock.Buffer, 0, e.ByteBlock.Len);
+            try
+            {
+                var idx = int.Parse(sc.Id) - 1;
+                var serverInfo = srvArray[idx];
+                serverInfo.SocData += s;
+                Console.WriteLine($"RECV id={sc.Id} -> slot{idx} owner={serverInfo.SocketId} SOC={serverInfo.SocData}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"RECV id={sc.Id} THREW {ex.GetType().Name}");
+            }
+            return Task.CompletedTask;
+        };
+        await Start(svc, Port);
+
+        var a = await ConnectClient();          // id1 -> slot0
+        var b = await ConnectClient();          // id2 -> slot1
+        var c3 = await ConnectClient();         // id3 -> slot2
+        a.Close();
+        await Task.Delay(300);
+        var d = await ConnectClient();          // id4 -> slot0（第一个空槽）
+        var e5 = await ConnectClient();         // id5 -> slot3
+        await Task.Delay(200);
+        d.Send("(1/2/from4)");
+        await Task.Delay(300);
+        Console.WriteLine($"-- slots: {string.Join(",", srvArray.Select(x => x == null ? "-" : x.SocketId))}");
+
+        b.Close(); c3.Close(); d.Close(); e5.Close();
+        await Task.Delay(200);
+        await svc.StopAsync();
+    }
+
+    private static async Task<TcpClient> ConnectClient()
+    {
+        var cli = new TcpClient();
+        var cfg = new TouchSocketConfig();
+        cfg.SetRemoteIPHost(new IPHost(IPAddress.Parse("127.0.0.1"), Port));
+        cli.Setup(cfg);
+        await cli.ConnectAsync();
+        await Task.Delay(150);
+        return cli;
     }
 
     /// 只 Setup vs Setup+Start：oracle 的 `StartPlanesServer()` 属于前者。

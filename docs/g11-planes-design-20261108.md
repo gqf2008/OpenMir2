@@ -219,7 +219,7 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 
 ### 5.1 槽位语义（A3-1 的 C# 探针实测）
 
-探针已入仓：`tools/planes-probe`（`dotnet run -c Release -- ids` / `-- slots`）。
+探针已入仓：`tools/planes-probe`（`dotnet run -c Release -- ids` / `-- slots` / `-- cross`）。
 用 `TouchSocket 2.0.0-beta.273`（与 `src/OpenMir2/OpenMir2.csproj` 同版本）起一个
 本地 `TcpService`，逐次连接/断开并打印 `SocketClient.Id`，再把 oracle 的 `srvArray` 逻辑原样搬进去：
 
@@ -229,7 +229,7 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
   `NullReferenceException`，**TouchSocket 静默吞掉**（探针实测进程不崩、该连接的数据
   再也不进任何缓冲）；超过 10 个连接时是 `IndexOutOfRangeException`，同样被吞；
 - 极端形态：`Id-1` 指向的槽被**另一个**连接占用时，数据会追加到**别人的缓冲**，
-  并被当作那个连接的数据一起解码（探针复现了 `id3 → slot2（属于 id4）`）。
+  并被当作那个连接的数据一起解码（探针 `cross` 模式复现：`RECV id=4 -> slot3 owner=5`）。
 
 > **可达性**：因 §5.2 的结论（主服从不监听），上述槽位语义在 oracle 的**生产路径不可达**——
 > 没有任何连接会进 `srvArray`。A3-1 照抄它，是为了将来真启用时不必重新考古。

@@ -14,7 +14,7 @@
 //! | `PlanesService.cs:18` 非 0 分支打「节点运行模式…」 | [`node_mode_line`] |
 //! | `PlanesClient.Start()` 的 `ConnectAsync` | [`connect_once`] 的 `TcpStream::connect` + 5s 超时 |
 //! | 失败/超时两条 catch | [`connect_failed_line`] / [`connect_timeout_line`] |
-//! | 连上打「连接主服务器(ip:port)成功...」 | [`connected_line`] |
+//! | 连上打「连接主服务器(tcp://ip:port/)成功...」 | [`connected_line`] |
 //! | 断开打「节点服务器(ip:port)断开连接...」 | [`disconnected_line`] |
 //! | `src/GameSrv/TimedService.cs:63-71`：1s 定时器、距上次检查 > 10s 才检查 | [`check_due`] |
 //! | `CheckConnected()`：`nServerNumber > 0` 且离线才重连 | [`mir2_planes::client::Client::should_reconnect`] |
@@ -59,13 +59,15 @@ pub fn connect_timeout_line(addr: &str, port: i32) -> String {
     format!("链接主分区服务器[{addr}:{port}]超时.")
 }
 
-/// 「连接主服务器(ip:port)成功...」（`PlanesClient.cs:139`）。
+/// 「连接主服务器(tcp://ip:port/)成功...」（`PlanesClient.cs:150`）。
+///
+/// oracle 拼的是 `client.RemoteIPHost`，实测 `IPHost.ToString()` 带 scheme 与尾斜杠。
 #[must_use]
-pub fn connected_line(peer: &str) -> String {
-    format!("连接主服务器({peer})成功...")
+pub fn connected_line(addr: &str, port: i32) -> String {
+    format!("连接主服务器(tcp://{addr}:{port}/)成功...")
 }
 
-/// 「节点服务器(ip:port)断开连接...」（`PlanesClient.cs:146`）。
+/// 「节点服务器(ip:port)断开连接...」（`PlanesClient.cs:157`；`GetIPPort()` 是 `addr:port`）。
 #[must_use]
 pub fn disconnected_line(peer: &str) -> String {
     format!("节点服务器({peer})断开连接...")
@@ -89,10 +91,13 @@ impl PlanesLink {
         };
         for e in events {
             if e == Event::Aborted {
-                // oracle `PlanesClient.cs:132-136`：catch 里 LogService.Error 两次。
+                // oracle `PlanesClient.cs:132-136`：catch 里**两条** `LogService.Error`——
+                // 第一条是常量 `[Exception] TFrmSrvMsg::DecodeSocStr`，第二条是 `ex.StackTrace`。
+                // Rust 侧没有 C# 堆栈，第二条改记异常语义（形状仍是两条）。
+                crate::glog!("ERR", "[Exception] TFrmSrvMsg::DecodeSocStr");
                 crate::glog!(
                     "ERR",
-                    "[Exception] TFrmSrvMsg::DecodeSocStr（211 抛异常，本批剩余帧与缓冲已丢弃）"
+                    "ProcessData 抛异常：ISM_CHANGECASTLEOWNER(211) ⇒ 本批剩余帧与缓冲已丢弃"
                 );
             }
         }
@@ -112,40 +117,50 @@ impl PlanesLink {
 ///
 /// `master_port` 在 oracle 里是 `int`；超出 `u16` 时 oracle 会在 `IPHost` 构造抛异常。
 /// 这里不 panic：记一条 `连接…失败.` 后不再尝试。
-#[must_use]
 pub fn start(
     server_index: u8,
     master_addr: &str,
     master_port: i32,
     server_number: i32,
-) -> Option<PlanesLink> {
+) -> anyhow::Result<Option<PlanesLink>> {
+    // oracle 在 `PlanesServer.StartPlanesServer` 与 `PlanesClient.Initialize` 里都会
+    // `new IPHost(IPAddress.Parse(addr), port)`：地址非法抛 `FormatException`、端口越界抛
+    // `UriFormatException`，而 `GameServer.cs:34` 调用 `PlanesService.Start()` 时**没有 try/catch**
+    // ⇒ **启动即失败**。这里同样 fail-fast，不静默降级。
+    anyhow::ensure!(
+        master_addr.parse::<std::net::IpAddr>().is_ok(),
+        "MsgSrvAddr 不是合法 IP 地址：{master_addr:?}（oracle `IPAddress.Parse` 会抛异常）"
+    );
+    let port_u16 = u16::try_from(master_port).map_err(|_| {
+        anyhow::anyhow!("MsgSrvPort 不是合法端口：{master_port}（oracle `IPHost` 构造会抛异常）")
+    })?;
     match role_of(server_index) {
-        Role::Server => None,
-        Role::Client => Some(spawn_client(
+        Role::Server => Ok(None),
+        Role::Client => Ok(Some(spawn_client(
             master_addr.to_owned(),
             master_port,
             server_number,
-        )),
+            port_u16,
+        ))),
     }
 }
 
-fn spawn_client(addr: String, port: i32, server_number: i32) -> PlanesLink {
+fn spawn_client(addr: String, port: i32, server_number: i32, port_u16: u16) -> PlanesLink {
     let link = PlanesLink {
         state: Arc::new(Mutex::new(Client::new())),
     };
     let state = Arc::clone(&link.state);
     crate::glog!("INF", "{}", node_mode_line(&addr, port));
     tokio::spawn(async move {
-        let Ok(port_u16) = u16::try_from(port) else {
-            // oracle：`new IPHost(addr, port)` 端口越界抛异常，进程起不来。这里记 ERR 后放弃。
-            crate::glog!("ERR", "{}", connect_failed_line(&addr, port));
-            return;
-        };
+        // **启动即无条件连一次**：oracle `PlanesService.cs:16-17` 的节点分支直接
+        // `Initialize(); Start();`，`PlanesClient.Start()`（`:53-71`）在离线时立刻
+        // `await ConnectAsync()`——与 `nServerNumber` **无关**，且失败会打「失败./超时.」。
+        // 10s 节拍只约束**之后**的 `CheckConnected()` 周期重连。
+        connect_once(&state, &addr, port, port_u16).await;
         let mut timer = tokio::time::interval(TIMER_PERIOD);
-        // oracle `src/GameSvr/TimedService.cs` 的 `StartAsync` 把 `CheckIntervalTime`
-        // 初始化成**启动时的 tick** ⇒ 首次检查要等 >10s（1s 定时器下约第 11 秒）。
-        // 若初始化成 0，会在启动第 1 秒就抢连一次，是**可观察的时序差异**。
-        let mut last_check: u64 = now_ms();
+        // `src/GameSvr/TimedService.cs` 的 `StartAsync` 把 `CheckIntervalTime` 初始化成
+        // 启动时的 tick ⇒ 周期检查要等 >10s（1s 定时器下约第 11 秒）。
+        let mut last_check = now_ms();
         loop {
             timer.tick().await;
             let now = now_ms();
@@ -186,7 +201,7 @@ async fn connect_once(state: &Arc<Mutex<Client>>, addr: &str, port: i32, port_u1
     if let Ok(mut st) = state.lock() {
         st.set_online(true);
     }
-    crate::glog!("INF", "{}", connected_line(&target));
+    crate::glog!("INF", "{}", connected_line(addr, port));
     let state = Arc::clone(state);
     tokio::spawn(async move {
         use tokio::io::AsyncReadExt as _;
@@ -243,8 +258,8 @@ mod tests {
             "链接主分区服务器[10.0.0.7:4900]超时."
         );
         assert_eq!(
-            connected_line("10.0.0.7:4900"),
-            "连接主服务器(10.0.0.7:4900)成功..."
+            connected_line("10.0.0.7", 4900),
+            "连接主服务器(tcp://10.0.0.7:4900/)成功..."
         );
         assert_eq!(
             disconnected_line("10.0.0.7:4900"),
@@ -252,11 +267,46 @@ mod tests {
         );
     }
 
+    /// **首连是启动即无条件发生的**（`PlanesService.cs:16-17` → `PlanesClient.Start()`），
+    /// 与 `nServerNumber` 无关。用真实监听器钉住：2s 内必须出现 accept。
+    ///
+    /// 这是**下界**断言（"必须发生过"），不卡上界，避免墙钟 flake。
+    #[tokio::test]
+    async fn client_connects_at_startup_even_when_server_number_is_zero() {
+        for server_number in [0, 1] {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+                .await
+                .unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let _link = start(1, "127.0.0.1", i32::from(port), server_number)
+                .expect("端点合法")
+                .expect("分服角色应有句柄");
+            let accepted = tokio::time::timeout(Duration::from_secs(2), listener.accept()).await;
+            assert!(
+                accepted.is_ok(),
+                "nServerNumber={server_number}：启动后 2s 内必须尝试连接一次"
+            );
+        }
+    }
+
+    /// 端点非法 ⇒ 启动即失败（oracle `IPHost` 构造抛异常、`GameServer.cs:34` 无 try/catch）。
+    #[test]
+    fn invalid_endpoint_fails_fast() {
+        assert!(
+            start(0, "not-an-ip", 4900, 0).is_err(),
+            "MsgSrvAddr 非法：主服也必须失败（oracle 同样构造 IPHost）"
+        );
+        assert!(start(1, "127.0.0.1", 70000, 0).is_err(), "端口越界");
+        assert!(start(1, "127.0.0.1", -1, 0).is_err(), "负端口");
+        // 合法端点的成功路径要起 tokio 任务，放在 #[tokio::test] 里（见下一条用例），
+        // 这里只钉失败路径。
+    }
+
     /// 主服角色**不起监听、也不返回句柄**（设计文档 §5.2 的实测结论）。
     #[test]
     fn server_role_does_not_listen() {
-        assert!(start(0, "127.0.0.1", 4900, 0).is_none());
-        assert!(start(0, "127.0.0.1", 4900, 3).is_none());
+        assert!(start(0, "127.0.0.1", 4900, 0).unwrap().is_none());
+        assert!(start(0, "127.0.0.1", 4900, 3).unwrap().is_none());
     }
 
     /// 真传输：连上本机监听器 ⇒ 在线；收到字节 ⇒ 进缓冲；对端关闭 ⇒ 离线。
@@ -316,7 +366,9 @@ mod tests {
     /// 分服角色返回句柄，初始离线（连接由后台任务异步进行，10s 后才首次尝试）。
     #[tokio::test]
     async fn client_role_returns_offline_handle() {
-        let link = start(1, "127.0.0.1", 4900, 0).expect("分服角色应有句柄");
+        let link = start(1, "127.0.0.1", 4900, 0)
+            .expect("端点合法")
+            .expect("分服角色应有句柄");
         assert!(!link.is_online(), "刚创建时离线");
         // 时钟未到 10s 检查点 ⇒ 不应有任何连接尝试；tick 在离线时不解码
         link.tick();

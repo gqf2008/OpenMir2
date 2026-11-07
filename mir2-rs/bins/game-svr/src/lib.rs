@@ -1325,12 +1325,14 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // **G11 / A3-2b**：跨服链路。设计文档 §5.2 的实测结论：oracle 主服只 `Setup` 不 `Start`
     // ⇒ `ServerIndex == 0` 时 `start` 返回 `None`（不监听、无日志）；分服侧起客户端任务，
     // 按 `src/GameSrv/TimedService.cs:63` 的 1s/10s 节拍重连。
+    // 端点非法时与 oracle 同样**启动即失败**（`GameServer.cs:34` 的 `PlanesService.Start()`
+    // 没有 try/catch，`IPHost` 构造会抛）⇒ 这里 `?` 直接上抛。
     let planes = planes::start(
         cfg.server_index,
         &cfg.master_srv_addr,
         cfg.master_srv_port,
         cfg.server_number,
-    );
+    )?;
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -28683,10 +28685,11 @@ fn sim_loop(
         );
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
-        // **G11 / A3-2b**：oracle `SystemProcessor.cs:42-49` 在 `WorldEngine.Run()` **之后**
-        // 跑 `PlanesServer/Client.Run()`。本 oracle 的主服从不监听（设计文档 §5.2），
-        // 生产上这里只有分服角色的客户端解码；`ProcessData` 无副作用，位置对语义无影响，
-        // 但保持与 oracle 同一次序。
+        // **G11 / A3-2b**：oracle `SystemProcessor.cs:42-49` 在 `WorldEngine.Run()` **全部完成之后**
+        // 才跑 `PlanesServer/Client.Run()`。这里的插入点在本 tick 的中段（`tick_tail` 之后、
+        // P1/P2/P7/P8/AOI 排水之前），**不是** oracle 的那个位置；因 `ProcessData` 在本 oracle 里
+        // 没有副作用（设计文档 §4.2），当前不构成可观察差异。若将来真要启用跨服业务，必须先挪到
+        // 世界工作全部结束之后。
         if let Some(planes) = planes.as_ref() {
             planes.tick();
         }
