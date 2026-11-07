@@ -23,7 +23,7 @@
 
 1. 读 `AGENTS.md` 与 `docs/Rust重写设计文档.md` §2（端口/oracle 对账）、§4.2（确定性四条硬约束）、
    §6（M2/M3 DoD）、§6.0（证据四件套与红检纪律）、§14。
-读 `python -I -B tools/orchestration/collab_read.py board` 与 `... thread openmir2-m2-gamesvr-host`。
+2. 读 `python -I -B tools/orchestration/collab_read.py board` 与 `... thread openmir2-m2-gamesvr-host`。
 3. 建独立 worktree：`git worktree add .claude\worktrees\m2-svr -b worktree-m2-gamesvr-host`（名字自定，别撞别人）。
 4. `wg collab join --repo <worktree> --principal <你的 principal> --key %USERPROFILE%\.walgit\keys\<你的 principal>.ed25519 --push walgit`，
    **认领 = 根 `card_claim`（不带 `--parent`）**，不是 `status`：

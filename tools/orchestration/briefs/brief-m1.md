@@ -18,7 +18,7 @@
 ## 1. 开工前的固定动作
 
 1. 读 `E:\Users\gxh\Documents\GitHub\OpenMir2\AGENTS.md`，以及 `docs/Rust重写设计文档.md` 的 §14.5、§2（oracle 与端口表）、§6（里程碑验收）、§6.0（证据四件套）。
-用 `python -I -B tools/orchestration/collab_read.py board` 与 `... thread <id>` 读上面两张卡。
+2. 用 `python -I -B tools/orchestration/collab_read.py board` 与 `... thread <id>` 读上面两张卡。
 3. 建独立 worktree：`git -C <repo> worktree add .claude\worktrees\a2m1 worktree-a2-m1-services`
 4. 认领：在该 worktree 里
    `wg collab join --repo <worktree> --principal openmir2-worker-1 --key $env:USERPROFILE\.walgit\keys\openmir2-worker-1.ed25519 --push walgit`

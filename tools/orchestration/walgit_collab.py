@@ -225,27 +225,56 @@ def _tokens(segment):
     return [t.strip(_QUOTES) for t in segment.split() if t.strip(_QUOTES)]
 
 
+_SHELL_WRAPPERS = frozenset(("sudo", "env", "time", "command", "exec", "nohup"))
+_ASSIGN_PREFIX_RE = re.compile("^[A-Za-z_][A-Za-z0-9_]*=")
+
+
+def _command_token(toks):
+    """段首的**命令 token** 及其下标：跳过 `VAR=…` 与 sudo/env/time/command 之类包装。
+
+    reviewer 实测：把「行里出现 walgit」当成二进制，会漏检带路径前缀的 `C:/bin/walgit collab board`
+    与 `$(walgit collab board)`，又会误报 `git fetch walgit --tags collab`。
+    """
+    i = 0
+    while i < len(toks):
+        t = toks[i]
+        if _ASSIGN_PREFIX_RE.match(t) or t.lower() in _SHELL_WRAPPERS:
+            i += 1
+            continue
+        return t, i
+    return None, i
+
+
+def _bin_name(token):
+    """命令 token 归一化成二进制名：去前导 `$(`/`(`/反引号，取路径 basename，去 `.exe`。"""
+    t = token.strip(_QUOTES).lstrip("$(").strip("()")
+    parts = [x for x in re.split("[" + chr(92) + chr(92) + "/]", t) if x]
+    t = parts[-1] if parts else t
+    if t.lower().endswith(".exe"):
+        t = t[:-4]
+    return t.lower()
+
+
 def collab_hit(code):
     """判定一段代码：命中返回原因串，放行返回 None。
 
-    **用分词判断，不用正则**（reviewer 实测）：`walgit --config x collab board` 这类
-    「二进制与子命令之间夹选项」的写法正则漏检过；分词还天然排除 `refs/collab/*`
-    这种把 collab 当路径片段的写法。
+    判定口径：**段首命令 token** 是 `walgit`/`walgit.exe`/`wg` 时才算（允许路径前缀、
+    `$(`/`(` 包装、`VAR=…` 与 sudo 之类执行器前缀）；不是拿「行里出现过 walgit」当二进制。
     """
     for seg in _segments(code):
         toks = _tokens(seg)
-        if "walgit" in toks:
-            i = toks.index("walgit")
-            if "collab" in toks[i + 1:]:
-                return "walgit collab（该子命令已随 0.14.0 移除）"
-        if "wg" in toks:
-            i = toks.index("wg")
-            rest = toks[i + 1:]
-            if "collab" in rest:
-                j = rest.index("collab")
-                sub = rest[j + 1] if j + 1 < len(rest) else ""
-                if sub in READ_SUBCOMMANDS:
-                    return "wg collab %s 是读路径，必须走 collab_read.py" % sub
+        cmd, idx = _command_token(toks)
+        if not cmd:
+            continue
+        name = _bin_name(cmd)
+        rest = toks[idx + 1:]
+        if name == "walgit" and "collab" in rest:
+            return "walgit collab（该子命令已随 0.14.0 移除）"
+        if name == "wg" and "collab" in rest:
+            j = rest.index("collab")
+            sub = rest[j + 1] if j + 1 < len(rest) else ""
+            if sub in READ_SUBCOMMANDS:
+                return "wg collab %s 是读路径，必须走 collab_read.py" % sub
     return None
 
 
@@ -301,8 +330,9 @@ def _is_collab_argv(node):
     if "collab" not in vals:
         return None
     i = vals.index("collab")
-    # 二进制与 collab 之间可能夹选项（["walgit", "--config", x, "collab", …]）
-    binary = next((v for v in vals[:i] if v in ("walgit", "wg")), None)
+    # 二进制取「collab 之前的段首命令 token」（同样跳过 VAR=… 与 sudo/env 包装）
+    cmd, _idx = _command_token(vals[:i])
+    binary = _bin_name(cmd) if cmd else None
     sub = vals[i + 1] if i + 1 < len(vals) else None
     return binary, sub
 
@@ -400,10 +430,14 @@ def py_collab_hits(source, filename="<source>"):
 
 
 def md_collab_hits(text):
-    """扫 Markdown：与 shell 同规则（裸 walgit collab 红；wg collab 读红；写放行）。"""
+    """扫 Markdown：命令写在反引号里，段首通常是散文 ⇒ **逐片段**判定。
+
+    没有反引号的行退回按整行判（例如裸写一条命令）。
+    """
     hits = []
     for lineno, line in enumerate((text or "").splitlines(), 1):
-        if collab_hit(line):
+        spans = re.findall("`([^`]+)`", line) or [line]
+        if any(collab_hit(span) for span in spans):
             hits.append((lineno, line.strip()[:140]))
     return hits
 
@@ -669,6 +703,20 @@ def selftest():
     add("guard:walgit-join-with-flags-flagged",
         len(bare_collab_hits("walgit --config x collab join --push walgit")) == 1)
     # 负对照：refs/collab 路径片段不得被当成子命令
+    # reviewer round2 的形态表：路径前缀 / 命令替换 / 子 shell / .exe / 误报负例
+    add("guard:path-prefixed-flagged",
+        len(bare_collab_hits("C:\\bin\\walgit collab board")) == 1)
+    add("guard:dot-slash-flagged", len(bare_collab_hits("./walgit collab board")) == 1)
+    add("guard:cmd-subst-flagged", len(bare_collab_hits("$(walgit collab board)")) == 1)
+    add("guard:subshell-flagged", len(bare_collab_hits("(walgit collab board)")) == 1)
+    add("guard:exe-suffix-flagged", len(bare_collab_hits("walgit.exe collab board")) == 1)
+    add("guard:fetch-walgit-not-flagged",
+        bare_collab_hits("git fetch walgit --tags collab") == [])
+    add("guard:echo-string-not-flagged",
+        bare_collab_hits('echo "walgit collab board"') == [])
+    add("guard-py:fetch-walgit-not-flagged",
+        py_collab_hits('import subprocess' + chr(10)
+                       + 'subprocess.run(["git", "fetch", "walgit", "--tags", "collab"])' + chr(10)) == [])
     add("guard:refspec-not-flagged",
         bare_collab_hits("git fetch walgit '+refs/collab/*:refs/collab/*'") == [])
     add("guard:py-walgit-with-flags-flagged",
