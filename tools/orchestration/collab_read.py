@@ -173,97 +173,68 @@ def _merged_flag(value):
     return value is True or value == 1 or (isinstance(value, str) and value.lower() == "true")
 
 
-def _chain_order(items):
-    """按 **parent 链序**给线程条目定序（wg 实测：同 ts 时链序胜出，不是 oid 序）。
+def _thread_order(items):
+    """wg `d1/collab.zig::thread`（§6.2）的逐行移植。
 
-    断链/环的条目按 (ts, oid) 追加到末尾，保证不丢条也不死循环。
+    先按 `(ts, actor, oid)` 升序；再分层：父为空 / 父不在线程内 / 父已发出 ⇒ 本轮发出，
+    否则留到下一轮；某一轮没有进展（畸形输入）则把剩下按已排好的顺序追加。
     """
-    by_oid = {oid: e for oid, e in items}
-    children = {}
-    roots = []
+    by_oid = {oid for oid, _e in items}
+    pending = sorted(items, key=lambda p: ((p[1].get("ts") or 0),
+                                           p[1].get("actor") or "",
+                                           p[0]))
+    out, emitted = [], set()
+    while pending:
+        nxt = []
+        for oid, e in pending:
+            parent = e.get("parent") or ""
+            ready = (not parent) or (parent not in by_oid) or (parent in emitted)
+            if ready:
+                emitted.add(oid)
+                out.append((oid, e))
+            else:
+                nxt.append((oid, e))
+        if len(nxt) == len(pending):
+            break
+        pending = nxt
+    out.extend(pending)
+    return out
+
+
+def _claims(items, now):
+    """wg §8.4：只有 parent 为空、ttl 在 [1, 86400]、且 live 的认领才算；按 (ts, actor, oid) 排序，
+    **最早的一个 live 认领**是 winner（不是最新）。
+
+    注意：collab_read 不验签，wg 要求 is_verified；未签名的认领在这里会被当成有效。
+    """
+    out = []
     for oid, e in items:
-        parent = e.get("parent") or ""
-        if isinstance(parent, str) and parent and parent in by_oid:
-            children.setdefault(parent, []).append(oid)
-        else:
-            roots.append(oid)
-    order, seen = [], set()
-    roots.sort(key=lambda o: (by_oid[o].get('ts') or 0, o))
-    stack = list(reversed(roots))
-    while stack:
-        oid = stack.pop()
-        if oid in seen:
+        if e.get("kind") != "card_claim" or (e.get("parent") or ""):
             continue
-        seen.add(oid)
-        order.append(oid)
-        for ch in sorted(children.get(oid, []), reverse=True):
-            stack.append(ch)
-    rest = [oid for oid, _e in items if oid not in seen]
-    rest.sort(key=lambda o: (by_oid[o].get("ts") or 0, o))
-    return order + rest
-
-
-def _is_state_entry(e):
-    body = e.get("body") or {}
-    if e.get("kind") == "status":
-        return isinstance(body.get("status"), str)
-    if e.get("kind") == "merge_result":
-        return _merged_flag(body.get("merged"))
-    return False
-
-
-def _effective_state_oid(items):
-    """wg 实测规则（reviewer 18 组夹具 / 63 张卡）：
-
-    先取**全局最新 state**（ts 最大，同 ts 用 parent 链序），再在它的 state 后代子树里
-    取 ts 最大的**终端**；其它分支一律忽略。
-
-    与「所有 leaf 取最大 ts」的差别在分支形状：`in-progress10 → [closed40, in-progress60 → needs-review30]`
-    这种，wg 看的是 in-progress60 那条支的终端 needs-review30，而不是旁支的 closed40。
-    """
-    by_oid = {oid: e for oid, e in items}
-    states = {oid for oid, e in items if _is_state_entry(e)}
-    if not states:
-        return None
-
-    def ts(oid):
-        return by_oid[oid].get("ts") or 0
-
-    def state_ancestors(oid):
-        out, seen = [], set()
-        parent = by_oid[oid].get("parent") or ""
-        while isinstance(parent, str) and parent and parent in by_oid and parent not in seen:
-            seen.add(parent)
-            if parent in states:
-                out.append(parent)
-            parent = by_oid[parent].get("parent") or ""
-        return out
-
-    # reviewer 用 23 组夹具 / 117 张卡验证的完整规则：
-    # ① 取所有 ts == max 的 state；② 其中有带 state 后代的，取它们**子树终端的并集**
-    #    （无后代的 max-ts state 在有后代者存在时忽略；全无后代则取 max-ts state 自身）；
-    # ③ 并集里按 (ts, **oid**) 取最大——同 ts 用 oid，不是链序。
-    def has_state_descendant(oid, pool):
-        return any(oid in state_ancestors(x) for x in pool if x != oid)
-
-    terminals = [o for o in states if not has_state_descendant(o, states)]
-    max_ts = max(ts(o) for o in states)
-    candidates = [o for o in states if ts(o) == max_ts]
-    with_desc = [o for o in candidates if has_state_descendant(o, states)]
-    roots = with_desc or candidates
-    pool = [t for t in terminals
-            if any(t == r or r in state_ancestors(t) for r in roots)]
-    return max(pool, key=lambda o: (ts(o), o))
+        body = e.get("body") or {}
+        ttl = body.get("ttl")
+        if ttl is None:
+            ttl = 300
+        if not isinstance(ttl, int) or ttl < 1 or ttl > 86400:
+            continue
+        ts = e.get("ts") or 0
+        out.append({"oid": oid, "actor": e.get("actor") or "", "ts": ts, "ttl": ttl,
+                    "live": (ts + ttl) > now,
+                    "worktree": body.get("worktree"), "branch": body.get("branch")})
+    out.sort(key=lambda c: (c["ts"], c["actor"], c["oid"]))
+    return out
 
 
 def project(repo, now=None, board=None):
-    """按 `wg collab board` 的折叠语义投影（2026-11-07 用 20+ 条夹具对照 wg 实测）：
+    """按 wg `d1/collab.zig` 的 `build_board` / `card_status` / `thread` 投影（源码逐条移植）：
 
-      1. 只有 `ci_claim`/`ci_result` 条目的线程**不显示**；
-      2. 有效状态 = `status` 条目（`body.status`）与 `merge_result{merged 真}` 条目
-         中 `ts` 最大者，后者记作 `merged`——`issue.body.status` **完全忽略**；
-      3. 状态只看**未被后续状态覆盖的 leaf**（wg 实测），没有 state ⇒ `open`；
-      4. 命中不了任何列的线程**不显示**（与 wg 一致，不是留在 column=None）。
+      1. 只有 `ci_claim` / `ci_result` / `card_claim` 条目的线程**不显示**（`non_card_kind`）；
+      2. 线程顺序 = `thread()`：(ts, actor, oid) 排序 + 父子分层；
+      3. 状态 = 按该顺序扫一遍，`status` 的最后一次值与 `merge_result{merged 真}` 的最后一次
+         命中者胜，默认 `open`——**不是**最大 ts，也不是叶节点；
+      4. owner 同样按该顺序回放：字符串值覆盖，`null`/缺失不动，空串是有效值；
+      5. open/in-progress 且存在 live claim ⇒ status 变 `in-progress`、owner 变 claim 的 actor；
+      6. 命中不了任何列的线程**不显示**。
     """
     now = int(now if now is not None else time.time())
     columns = load_board_def(repo, board)
@@ -280,46 +251,34 @@ def project(repo, now=None, board=None):
     result = []
     hidden = 0
     for tid, items in cards.items():
-        items.sort(key=lambda p: (p[1].get("ts") or 0, p[0]))
         if all((e.get("kind") in NON_CARD_KINDS) for _o, e in items):
             hidden += 1
             continue
-        by_oid = dict(items)
-        # wg 实测：**ts 为主键**，同 ts 时用 parent 链序破平局（不是 oid 序，也不是深度优先）。
-        rank = {oid: i for i, oid in enumerate(_chain_order(items))}
-        ordered = sorted(items, key=lambda p: (p[1].get("ts") or 0, rank[p[0]]))
-        winner_oid = _effective_state_oid(items)
-        effective = None
-        owner = ""          # wg 对「无 owner」输出空串，不是 null
+        ordered = _thread_order(items)
+        status = "open"
+        owner = ""
         tier = None
         tier_why = None
         for oid, e in ordered:
             kind = e.get("kind")
             body = e.get("body") or {}
-            ts = e.get("ts") or 0
             if kind == "status":
-                # 显式 null 视为「没有该字段」，不得覆盖；空串是有效值（wg 实测）
+                if isinstance(body.get("status"), str):
+                    status = body["status"]
                 if body.get("owner") is not None:
                     owner = body["owner"]
                 if body.get("tier") is not None:
                     tier = body["tier"]
                 if body.get("tier_why") is not None:
                     tier_why = body["tier_why"]
-                if oid == winner_oid and isinstance(body.get("status"), str):
-                    effective = (ts, oid, body["status"])
-            elif kind == "merge_result" and oid == winner_oid and _merged_flag(body.get("merged")):
-                effective = (ts, oid, "merged")
-        # owner/tier 跟随胜出的 leaf（wg 实测：非 leaf 高 ts 的 owner 不算数）。
-        if effective:
-            winner = by_oid[effective[1]].get("body") or {}
-            if winner.get("owner") is not None:
-                owner = winner["owner"]
-            if winner.get("tier") is not None:
-                tier = winner["tier"]
-            if winner.get("tier_why") is not None:
-                tier_why = winner["tier_why"]
-        # 不做归一化：显式未知状态的线程匹配不到任何列 ⇒ 隐藏（wg 实测，不是回落 open）。
-        status = effective[2] if effective else "open"
+            elif kind == "merge_result" and _merged_flag(body.get("merged")):
+                status = "merged"
+        claims = _claims(items, now)
+        live_claims = [c for c in claims if c["live"]]
+        candidate = live_claims[0] if live_claims else None
+        if candidate and status in ("open", "in-progress"):
+            status = "in-progress"
+            owner = candidate["actor"]
         column = None
         for col in columns:
             if col["status"] is None or col["status"] == status:
@@ -328,19 +287,6 @@ def project(repo, now=None, board=None):
         if column is None:
             hidden += 1
             continue
-        claims = []
-        for oid, e in items:
-            if e.get("kind") != "card_claim":
-                continue
-            body = e.get("body") or {}
-            ttl = body.get("ttl")
-            ts = e.get("ts") or 0
-            live = ttl is None or (ts + int(ttl)) > now
-            claims.append({"oid": oid, "actor": e.get("actor"), "ts": ts,
-                           "ttl": ttl, "live": live,
-                           "worktree": body.get("worktree"), "branch": body.get("branch")})
-        live_claims = [c for c in claims if c["live"]]
-        candidate = max(live_claims, key=lambda c: (c["ts"], c["oid"])) if live_claims else None
         last_ts = max((e.get("ts") or 0) for oid, e in items)
         result.append({
             "id": tid,
@@ -657,6 +603,10 @@ def selftest():
         oid_c, oid_n = _oid_of(cand_c), _oid_of(cand_n)
         _write_entry(r2, 321, cand_c)
         _write_entry(r2, 322, cand_n)
+        # 10) 父子分层：子节点 ts 更小也排在父之后（wg fork2 实测 = 已完成）
+        f0 = _write_entry(r2, 400, _entry('fork2', 'issue', 'a', 10, {}))
+        _write_entry(r2, 401, _entry('fork2', 'status', 'a', 5, {'status': 'closed'}, parent=f0))
+        _write_entry(r2, 402, _entry('fork2', 'status', 'a', 20, {'status': 'needs-review'}, parent=f0))
         by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
         checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
         checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
@@ -689,6 +639,7 @@ def selftest():
         checks += 1; assert by['k1']['column'] == '已完成', by.get('k1')
         checks += 1; assert by['k2']['column'] == '已合并未收口', by.get('k2')
         checks += 1; assert by['tie2']['column'] == '待审', by.get('tie2')
+        checks += 1; assert by['fork2']['column'] == '已完成', by.get('fork2')
         checks += 1; assert by['tie3']['column'] == ('已完成' if oid_c > oid_n else '待审'), (by.get('tie3'), oid_c, oid_n)
         checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 3
         onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
@@ -699,7 +650,7 @@ def selftest():
         b3 = project(r3, board=onlyclosed)
         checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
         # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
-        assert checks == 55, 'checks=%d（改动用例后同步这个锚）' % checks
+        assert checks == 56, 'checks=%d（改动用例后同步这个锚）' % checks
 
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

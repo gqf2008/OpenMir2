@@ -99,24 +99,27 @@ python -I -B <repo>/tools/orchestration/collab_read.py board --repo .   # 期望
    反例：`issue1 → in-progress10 → [closed40, in-progress60 → needs-review30]`，wg 判 **待审**
    （走 in-progress60 这支的终端），「所有 leaf 取最大 ts」却给旁支的 closed40。
 
-**正确规则**（reviewer 用 18 组夹具 / 63 张卡反推并 63/63 验证）：
+**第四版（最新 state → 子树终端 + tie-break）也不对**：它只是线性线程的近似。反例是 sibling fork
+（`issue → 三个同级 status`）与随机 DAG——reviewer 的 DAG fuzz 在 155 张卡上错 **75** 张。
 
-- 先取**全局最新 state**（`status`，或 `merge_result{merged 真}`）：ts 最大；
-- **多个 state 共享全局最大 ts 时**：取这些 max-ts state 的**子树终端并集**
-  （没有 state 后代的 max-ts state 在有后代者存在时被忽略；全都无后代则取它们自己）；
-- 再在并集里取 **ts 最大**的终端；**同 ts 取 `oid` 最大**——不是链序（reviewer m1/m2 实测）。
-  在单链上这条退化成「链尾胜出」，所以早期的同 ts 用例仍然成立；
-- 显式未知状态 ⇒ 隐藏；没有任何 state ⇒ `open`；只有 `ci_*`/`card_claim` 的线程 ⇒ 隐藏。
+**真正的规则来自 wg 源码，不是夹具反推**（`E:/UserTemp/walgit-d1/wg/src/d1/collab.zig`）：
 
-按此实现后：
+- **线程顺序 `thread()`（§6.2）**：先按 `(ts, actor, oid)` 升序；再**分层**发出——父为空 / 父不在
+  线程内 / 父已发出的条目本轮发出，否则留到下一轮；某一轮没有进展（畸形输入）则把剩余按已排序
+  顺序追加。父子分层**优先于 ts**：子节点 ts 更小也排在父之后。
+- **状态 `card_status()`**：按该顺序扫一遍，最后命中的 `status` 或 `merge_result{merged 真}` 胜，
+  默认 `open`。**不是最大 ts、不是叶节点、不需要任何 tie-break**——此前三版都是在猜这条简单规则。
+- **owner**：同一顺序回放 `status` 条目，字符串覆盖、`null`/缺失不动、空串是有效值。
+- **认领覆盖（§8.4）**：状态为 `open`/`in-progress` 且存在 live claim ⇒ 状态变 `in-progress`、
+  owner 变 claim 的 actor。claim 只收 parent 为空、ttl ∈ [1, 86400] 的，按 `(ts, actor, oid)` 排序取
+  **最早**的一个 live 认领（不是最新）。⚠ collab_read 不验签，wg 要求 `is_verified`，这是已知差异。
+- **显示过滤**：只有 `ci_claim`/`ci_result`/`card_claim` 条目的线程不显示；命中不了任何列的线程不显示。
 
-- reviewer 的 **23 组夹具 / 117 张卡**（含 y3/n3/k1/k2 与随机 tie 夹具 `wgfuzz*`）**117/117 一致**；
-  我在本仓复跑其中 **22 组 / 113 张卡，0 mismatch**；
-- 真实仓库（**截至 `1987bfff5` 的快照**）：985 卡 + 75 hidden，`已完成 981 / 进行中 3 / 受阻 1`；
-  这四个反例形状当前在真仓里不出现，所以旧实现是**潜在**错列而非现网已错。看板是实时量，复跑以当次输出为准。
+按源码实现后：reviewer 的 **29 组夹具 / 131 张卡**对 wg **0 mismatch**（含此前错 75 张的 DAG fuzz、
+同 ts、fork、owner、claim 各类形状）。
 
-这条正是 A2 要的「两条路径结论一致」——它**可以判**，此前「两条都不可用所以无法比较」
-的表述是错的：wg 在小规模下可用，只是不能在本仓库规模上跑。
+这条正是 A2 要的「两条路径结论一致」。前几轮「两条都不可用所以无法比较」的表述是错的，
+而「用夹具反推规则」这条路也证明不可靠——最后靠的是**读上游源码**。
 
 ## 6. 已知未验证
 
