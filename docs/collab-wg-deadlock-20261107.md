@@ -16,6 +16,11 @@
 | `wg mcp --repo . --remote walgit` → `collab_board` | `collaboration aggregation failed: GitFailed` |
 | 同上 + `--no-fetch` + `fresh:false` | 仍然同样报错 ⇒ **失败在聚合，不是 fetch** |
 | `wg collab entry …`（写） | 正常，能签名并推送 |
+| 同一台机器、8–20 条 ref 的小夹具 | `wg collab board` **rc=0，正常返回** |
+
+> 所以这不是「wg 完全不可用」，而是**规模阈值**：小夹具上 wg 可作 oracle，
+> 大仓库上才失效。A2 因此是可判的——判据是「两条读路径的**投影**是否一致」，
+> 不是「能不能跑」。
 
 ## 2. 证据链
 
@@ -79,6 +84,15 @@ python -I -B <repo>/tools/orchestration/collab_read.py board --repo .   # 期望
 3. `wg collab watch --once` 能在本仓库返回（当前同样不可用）。
 
 任一条不满足 ⇒ 保持现状。**不要在未满足时把读路径切回 wg**——那等于把「秒级」换成「两分钟失败」。
+
+## 5.1 投影一致性的实测（A2）
+
+修 F1 之前，`collab_read` 与 wg 在 13 张卡的差分夹具上有 3 张错列
+（`merge_result` 折叠、未知状态回落、CI-only 隐藏）。修完之后 **13 张卡逐 id、逐列完全一致**，
+真实仓库的 `已合并未收口` 也从 0 变成 22、卡片数从 1,055 收敛到 980（+75 个非卡片线程隐藏）。
+
+这条正是 A2 要的「两条路径结论一致」——它**可以判**，此前「两条都不可用所以无法比较」
+的表述是错的：wg 在小规模下可用，只是不能在本仓库规模上跑。
 
 ## 6. 已知未验证
 
