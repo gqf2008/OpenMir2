@@ -9,7 +9,7 @@
 ```powershell
 cd E:\Users\gxh\Documents\GitHub\OpenMir2
 git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*'
-wg collab thread openmir2-m2-gamesvr-host
+python -I -B tools/orchestration/collab_read.py thread openmir2-m2-gamesvr-host
 ```
 
 卡上有两个 patch（S1 + S2a）与作者的 `self_correction`：**S1 的槽位语义写错了**（oracle 是"复用最小空闲槽"，

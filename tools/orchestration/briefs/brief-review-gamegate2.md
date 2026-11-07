@@ -42,7 +42,7 @@
 
 ```powershell
 wg collab entry --repo . --kind review --id openmir2-m2-gamegate `
-  --parent <该线程最后一条 entry 的 oid：先 `wg collab thread openmir2-m2-gamegate` 拿> `
+  --parent <该线程最后一条 entry 的 oid：先 `python -I -B tools/orchestration/collab_read.py thread openmir2-m2-gamegate` 拿> `
   --body '{"agent":"openmir2-reviewer-3","decision":"approve|request_changes","reviewed_commit":"f46f8b45",
            "verified_ok":[...你跑的命令+结果+证据文件路径...],"findings":[{"severity":"important|minor","where":"...","problem":"...","repro":"...","suggestion":"..."}]}' `
   --push walgit

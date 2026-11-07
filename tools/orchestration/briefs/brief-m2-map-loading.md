@@ -5,7 +5,7 @@
 
 ## 0. 先读后写
 
-1. `git fetch walgit '+refs/collab/*:refs/collab/*'`；`wg collab thread openmir2-m2-map-loading`。
+1. `git fetch walgit '+refs/collab/*:refs/collab/*'`；`python -I -B tools/orchestration/collab_read.py thread openmir2-m2-map-loading`。
    **本卡的 comment `862396f8` 就是规格**：owner 侧用合成 .map 在**部署件**上做的定案实验（九条 + 证据路径 + sha256）；
    comment `1e282568` 里「部署件与源码不一致」的结论**已被 `862396f8` 推翻**（那是探针假象，别照它实现）。
 2. 读 `AGENTS.md`、`docs/Rust重写设计文档.md` §6（M2）、§12.4（写集/并行）、§14（协作）、§6.0（证据四件套与红检）。
