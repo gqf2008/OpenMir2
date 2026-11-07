@@ -234,6 +234,30 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 （`crates/planes/src/server.rs`）**照抄**该映射，未"修好"：行为等价优先。
 **是否需要修，属 Owner 决策**（这是 oracle 缺陷，不是 Rust 移植引入的）。
 
+### 5.2 **oracle 的主服从未开始监听**（A3-2b 的 C# 探针实测）
+
+`PlanesServer.StartPlanesServer()` 只做了三件事：建 `TouchSocketConfig`、`SetListenIPHosts(...)`、
+`_serverSocket.Setup(touchSocketConfig)`——**没有 `Start()`**（`PlanesServer.cs` 全文 227 行无
+`_serverSocket.Start` 调用）。`Setup` 在 TouchSocket 里只是"记下配置"。
+
+探针（`E:/tmp/planes-id-probe`，同版本 2.0.0-beta.273）：
+
+| 步骤 | 观测 |
+|---|---|
+| 只 `Setup(cfg)` | `ServerState = None`；客户端 `ConnectAsync` **TimeoutException** |
+| 再 `StartAsync()` | `ServerState = Running`；客户端连上，`Connected` 事件触发 |
+
+⇒ **`ServerIndex == 0` 时跨服主服不监听，任何分服都连不上**；`ServerIndex != 0` 时
+`PlanesClient` 连 `127.0.0.1:4900`（缺省）必然失败，按 `src/GameSrv/TimedService.cs:70` 的节拍
+（1s 定时器 + 10s 阈值 ⇒ 约每 11s）重试并打印
+`链接主分区服务器[addr:port]失败.`。这与 §4 的"业务语义基本停用"是同一个事实的两面。
+
+**本项目的决定（Leader，可回溯）**：G11 按 oracle 如实移植——**不自行加监听**。
+理由：① 行为等价优先；② 加监听会让"连得上但业务全是空实现"变成对外可观察的新行为，
+属于对外语义变更，不在本卡授权内；③ 是否"修好跨服"是 Owner 的决策，不是移植的副产品。
+⇒ A3 的诚实交付是「角色选择 + 客户端连接/重连/失败日志」，**主服侧不监听**；
+`crates/planes` 的 Server 状态机保留（供将来真正启用时复用），但在生产路径上不可达。
+
 ## 6. 事件与解码路径
 
 - `TcpService.Received` **只做 `SocData +=`**，不解析；
@@ -255,7 +279,8 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 
 ## 9. 与 `openmir2-gm-batch-5b-cross-server` 的关系
 
-该卡 B 片 6 条 GM 命令依赖"可写行会态 / 跨服"。鉴于 §4 的发现（oracle 侧业务语义基本停用），
+该卡 B 片 6 条 GM 命令依赖"可写行会态 / 跨服"。鉴于 §4 的发现（oracle 侧业务语义基本停用）
+与 §5.2 的加固发现（**主服从不监听 ⇒ 跨服链路在生产上根本不通**），
 **A2 完成后必须重新评估**：如果 oracle 对这些命令的跨服路径本身就是桩，那么"解除 blocked"的正确含义
 可能是"按 oracle 的空语义实现 + 登记"，而不是"造一套能用的跨服"。
 
@@ -278,7 +303,8 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | A2-2 | 完成（帧编解码，C# 探针对拍 + 3020 条差分 0 mismatch） | `mir2-rs/crates/planes/src/lib.rs` |
 | A2-3 | 完成（dispatch 分类 + 三条实际执行的解析） | `mir2-rs/crates/planes/src/message.rs`、本文档 §4.2 |
 | A3-1 | 完成（Server/Client 纯状态机 + 槽位语义，C# 探针实测） | `mir2-rs/crates/planes/src/{server,client,service}.rs` |
-| A3-2 | 待开始（game-svr 接线：配置键、tokio 监听/连接、tick 挂载、重连定时器） | — |
+| A3-2a | 完成（`[Server] MsgSrvAddr/MsgSrvPort/ServerNumber` 解析） | `mir2-rs/bins/game-svr/src/config.rs` |
+| A3-2b | 待开始（按 §5.2：客户端连接/重连/失败日志；主服不监听） | — |
 
 ## 12. 待确认 / 风险
 
