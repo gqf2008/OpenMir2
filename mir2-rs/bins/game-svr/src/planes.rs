@@ -135,8 +135,9 @@ impl PlanesLink {
 /// - `server_index == 0` ⇒ `None`（**不监听**，见模块文档与设计文档 §5.2）；
 /// - 否则起一个客户端任务，按 oracle 的 1s/10s 节拍重连。
 ///
-/// `master_port` 在 oracle 里是 `int`；超出 `u16` 时 oracle 会在 `IPHost` 构造抛异常。
-/// 这里不 panic：记一条 `连接…失败.` 后不再尝试。
+/// # Errors
+/// 地址不是合法 IP、或端口超出 `0..=65535` 时返回错误（**启动即失败**）：oracle 在
+/// `IPHost(IPAddress.Parse(addr), port)` 处抛异常，而 `GameServer.cs:34` 没有 try/catch。
 pub fn start(
     server_index: u8,
     master_addr: &str,
@@ -178,11 +179,13 @@ fn spawn_client(addr: String, port: i32, server_number: i32, port_u16: u16) -> P
         // `Initialize(); Start();`，`PlanesClient.Start()`（`:53-71`）在离线时立刻
         // `await ConnectAsync()`——与 `nServerNumber` **无关**，且失败会打「失败./超时.」。
         // 10s 节拍只约束**之后**的 `CheckConnected()` 周期重连。
+        //
+        // 锚点取**启动时刻**（与首连并发）：`src/GameSvr/TimedService.cs` 的 `StartAsync`
+        // 在服务启动时就把 `CheckIntervalTime` 置成当时的 tick。若放在首连之后再取，
+        // 黑洞端点（首连走满 5s 超时）会让首次周期检查整体后移 5s。
+        let mut last_check = now_ms();
         connect_once(&state, &outbox, &addr, port, port_u16).await;
         let mut timer = tokio::time::interval(TIMER_PERIOD);
-        // `src/GameSvr/TimedService.cs` 的 `StartAsync` 把 `CheckIntervalTime` 初始化成
-        // 启动时的 tick ⇒ 周期检查要等 >10s（1s 定时器下约第 11 秒）。
-        let mut last_check = now_ms();
         loop {
             timer.tick().await;
             let now = now_ms();
@@ -327,10 +330,11 @@ mod tests {
             let _link = start(1, "127.0.0.1", i32::from(port), server_number)
                 .expect("端点合法")
                 .expect("分服角色应有句柄");
-            let accepted = tokio::time::timeout(Duration::from_secs(2), listener.accept()).await;
+            // 宽松上界：这是「必须发生过」的下界断言，窗口给足以免慢机 flake。
+            let accepted = tokio::time::timeout(Duration::from_secs(10), listener.accept()).await;
             assert!(
                 accepted.is_ok(),
-                "nServerNumber={server_number}：启动后 2s 内必须尝试连接一次"
+                "nServerNumber={server_number}：启动后必须尝试连接一次（10s 窗口）"
             );
         }
     }
@@ -470,14 +474,14 @@ mod tests {
         server.await.unwrap();
     }
 
-    /// 分服角色返回句柄，初始离线（连接由后台任务异步进行，10s 后才首次尝试）。
+    /// 分服角色返回句柄，初始离线（后台任务**启动即无条件首连一次**，之后按 1s/10s 节拍重连）。
     #[tokio::test]
     async fn client_role_returns_offline_handle() {
         let link = start(1, "127.0.0.1", 4900, 0)
             .expect("端点合法")
             .expect("分服角色应有句柄");
         assert!(!link.is_online(), "刚创建时离线");
-        // 时钟未到 10s 检查点 ⇒ 不应有任何连接尝试；tick 在离线时不解码
+        // 句柄创建时尚未连上（首连在后台任务里异步进行）；tick 在离线时不解码
         link.tick();
     }
 }

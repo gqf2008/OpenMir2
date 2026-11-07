@@ -297,15 +297,30 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | A3 | PlanesServer/Client + 配置 + 事件/解码分离 + 槽位语义 + 重连 | R（时序） |
 | A4 | guild / castle / market 状态同步（按 A2 核实的 oracle 语义，空就是空） | R（时序 + 落库） |
 | A5 | 重新评估并处理 `gm-batch-5b` 的 blocked | — |
+## 11. 进度
 
+| 片 | 状态 | 落点 |
+|---|---|---|
+| A1 | 完成（round1 审查后重写） | 本文档 |
+| A2-1 | 完成（40 条逐 ident 执行状态表） | 本文档 §4.1 |
+| A2-2 | 完成（帧编解码，C# 探针对拍 + 3020 条差分 0 mismatch） | `mir2-rs/crates/planes/src/lib.rs` |
+| A2-3 | 完成（dispatch 分类 + 三条实际执行的解析） | `mir2-rs/crates/planes/src/message.rs`、本文档 §4.2 |
+| A3-1 | 完成（Server/Client 纯状态机 + 槽位语义，C# 探针实测） | `mir2-rs/crates/planes/src/{server,client,service}.rs` |
+| A3-2a | 完成（`[Server] MsgSrvAddr/MsgSrvPort/ServerNumber` 解析） | `mir2-rs/bins/game-svr/src/config.rs` |
+| A3-2b | 完成（按 §5.2：客户端连接/重连/失败日志；主服不监听） | `mir2-rs/bins/game-svr/src/planes.rs` |
+| A4 | 完成（判定为"无业务语义可移植"：33 个发送点全是 no-op，见 §12） | 本文档 §12 |
+| A5 | 完成（补发送口 `send_server_group_msg`，见 §13；5b 卡的跨服依赖可满足） | `mir2-rs/bins/game-svr/src/planes.rs` |
 ## 12. A4：guild / castle / market 跨服同步的**发送面盘点与可观察性判定**
 
 结论先说：**没有可移植的业务语义**，Rust 侧不需要为此改一行代码。理由不是"我觉得"，是下面两条链条。
 
-### 12.1 发送面：34 个有效调用点、12 个 ident
+### 12.1 发送面：33 个有效调用点、12 个 ident
 
-`SendServerGroupMsg(ident, serverIdx, body)` 在 `src/**` 里有 34 个**未被注释**的调用点
-（另有 6 行在注释里，不计）。机判口径：剥掉 `//` 开头与声明行（`void SendServerGroupMsg(`）后逐行取首参。
+`SendServerGroupMsg(ident, serverIdx, body)` 在 `src/**` 里有 **33 个**未被注释的调用点
+（另有 7 行在注释里，不计）。机判口径：**同时剥掉 `//` 与 `/* */`**、排除声明行
+（`void SendServerGroupMsg(`）后逐行取首参。
+（首版只剥了 `//`，把 `src/Modules/PlanesSystem/PlanesMessage.cs:145` 那行 `/* … */` 里的 222 也算进来了，
+计成 34/12/6；审查者指出后已更正。）
 
 | ident | 含义 | 次数 | 主要调用点 |
 |---|---|---:|---|
@@ -320,9 +335,10 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | 200 `ISM_USERSERVERCHANGE` | 换服 | 1 | `WorldServer.Switch.cs` |
 | 201/202 `ISM_USERLOGON/LOGOUT` | 上下线 | 2 | `WorldServer.cs` |
 | 203 `ISM_WHISPER` | 私聊 | 1 | `PlayObject.Chat.cs` |
-| 222 `ISM_CHANGESERVERRECIEVEOK` | 换服确认 | 1 | `PlanesMessage.cs`（本身也在注释块外的死分支里） |
 
 **market（224/225）没有任何发送点**，只有接收侧的空处理器。
+`222 ISM_CHANGESERVERRECIEVEOK` 的唯一"发送点"（`src/Modules/PlanesSystem/PlanesMessage.cs:145`）在 `/* */` 注释块里，
+不算有效调用。
 
 ### 12.2 可观察性：这些发送全是 no-op
 
@@ -333,7 +349,7 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 - `ServerIndex != 0` ⇒ `PlanesClient.SendSocket`：`if (!IsConnect()) return;`，**而没有任何进程在
   监听该端口（§5.2）⇒ 永远连不上** ⇒ 同样一个字节都不发。
 
-⇒ 上面 34 个调用点在两种部署形态下**都不产生任何可观察效果**。这与 §4.2 的结论（接收侧 32 个
+⇒ 上面 33 个调用点在两种部署形态下**都不产生任何可观察效果**。这与 §4.2 的结论（接收侧 32 个
 handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
 
 ### 12.3 判定
@@ -341,11 +357,10 @@ handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
 - **A4 不产生代码**。G11 在本 oracle 上的等价实现 = 已经交付的东西（帧编解码 + 分类 +
   客户端连接/重连/日志），跨服业务同步**没有可移植的语义**；
 - 若将来 Owner 决定"真修跨服"，最小可用集是：① `PlanesServer` 真正 `Start()` 监听；
-  ② 分服侧实现 32 个 handler 的业务（当前全是空桩/注释）；③ 把 34 个发送点接到通道上；
+  ② 分服侧实现 32 个 handler 的业务（当前全是空桩/注释）；③ 把 33 个发送点接到通道上；
 - **一个地雷**：`SS_211 = 211 = ISM_CHANGECASTLEOWNER`，而 211 的处理器**直接 throw**
   （`src/Modules/PlanesSystem/PlanesMessage.cs:354-357`）⇒ 一旦真跑起来，收到 211 的那一批帧会被整批丢弃。
   这是 oracle 的既存缺陷，启用前必须先处理。
-
 ## 13. A5：给 `gm-batch-5b` 补的那个接缝——发送口
 
 5b 卡的依赖清单（`docs/gm-batch-5b-g11-dependencies-20261024.md` §2.1）点名 G11 必须提供
@@ -367,22 +382,7 @@ pub fn send_server_group_msg(&self, ident: i32, server_num: i32, body: &[u8]) ->
 ⇒ 5b 的「跨服发送」依赖到此**可满足**：命令体可以调用它并按返回值断言"发了 0 条"。
 剩下的依赖不在 G11：**可写行会/城堡态**（该卡 §1 表格已列出现有 `GuildManager` 等基础）
 与 T-38 口径的城堡桩。
-
-## 11. 进度
-
-| 片 | 状态 | 落点 |
-|---|---|---|
-| A1 | 完成（round1 审查后重写） | 本文档 |
-| A2-1 | 完成（40 条逐 ident 执行状态表） | 本文档 §4.1 |
-| A2-2 | 完成（帧编解码，C# 探针对拍 + 3020 条差分 0 mismatch） | `mir2-rs/crates/planes/src/lib.rs` |
-| A2-3 | 完成（dispatch 分类 + 三条实际执行的解析） | `mir2-rs/crates/planes/src/message.rs`、本文档 §4.2 |
-| A3-1 | 完成（Server/Client 纯状态机 + 槽位语义，C# 探针实测） | `mir2-rs/crates/planes/src/{server,client,service}.rs` |
-| A3-2a | 完成（`[Server] MsgSrvAddr/MsgSrvPort/ServerNumber` 解析） | `mir2-rs/bins/game-svr/src/config.rs` |
-| A3-2b | 完成（按 §5.2：客户端连接/重连/失败日志；主服不监听） | `mir2-rs/bins/game-svr/src/planes.rs` |
-| A4 | 完成（判定为"无业务语义可移植"：34 个发送点全是 no-op，见 §12） | 本文档 §12 |
-| A5 | 完成（补发送口 `send_server_group_msg`，见 §13；5b 卡的跨服依赖可满足） | `mir2-rs/bins/game-svr/src/planes.rs` |
-
-## 12. 待确认 / 风险
+## 14. 待确认 / 风险
 
 1. 40 个处理器的逐条执行状态（A2 第一件事）。
 2. `body` 内文本是 GB2312 字节流（`HUtil32.GetBytes/GetString` 均为 `Encoding.GetEncoding("gb2312")`），
