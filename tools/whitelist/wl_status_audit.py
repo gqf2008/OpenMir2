@@ -25,7 +25,7 @@
   3. 以上都失败 ⇒ `行内无卡号且 git 溯源未闭合`，保持原样。
 
 **证据口径**：
-  * 线程：`refs/collab/inbox/*` 的 blob（`walgit collab thread` 的同一份数据）。
+  * 线程：`refs/collab/inbox/*` 的 blob（`wg collab thread` 的同一份数据）。
   * 写者：`kind=patch` 的 `actor` 集合（无 patch 时退回 `issue` 的 actor）。
   * 独立 approve：`kind=review` 且 `body.decision|body.verdict == "approve"` 且 actor **不在**写者集合。
   * 合并：`kind=merge_result` 且 `body.merged` 为真；`body.oid` 用 `git cat-file --batch-check`

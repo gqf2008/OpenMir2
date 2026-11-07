@@ -274,20 +274,19 @@ def commit_landed(repo, sha, master='master'):
     return p is not None and p.returncode == 0
 
 
-def _collab_env():
-    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
-    （卡 `openmir2-walgit-local-commands-env`）。"""
-    env = dict(os.environ)
-    env["WALGIT_LOCAL_COMMANDS"] = "1"
-    return env
-
-
 def load_ledger(repo):
-    """一次 `walgit collab board --format json` ⇒ {card_id: status}；不可用返回 None。"""
+    """一次只读投影 ⇒ {card_id: status}；不可用返回 None。
+
+    **不走 `wg collab board`**：本仓库 14,529 条 inbox ref 会让 wg 的
+    `git cat-file --batch` 与管道互锁，约 2 分钟才超时（卡
+    `openmir2-collab-interface-wg-migration`）。改走 `collab_read.py` 的分块读。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    tool = os.path.join(os.path.dirname(here), 'orchestration', 'collab_read.py')
     try:
-        p = subprocess.run(['walgit', 'collab', 'board', '--format', 'json', '--repo', repo],
+        p = subprocess.run([sys.executable, '-I', '-B', tool, 'board', '--json', '--repo', repo],
                            capture_output=True, text=True, stdin=subprocess.DEVNULL,
-                           timeout=120, env=_collab_env())
+                           timeout=120)
     except (OSError, subprocess.TimeoutExpired):
         return None
     if p.returncode != 0:
@@ -297,11 +296,18 @@ def load_ledger(repo):
     except ValueError:
         return None
     out = {}
-    for col in doc.get('columns', []):
-        for card in col.get('cards', []):
+    cards = doc.get('cards')
+    if isinstance(cards, list):          # collab_read.py 的扁平形态
+        for card in cards:
             cid = card.get('id')
             if isinstance(cid, str):
                 out[cid] = card.get('status')
+    else:                                 # wg collab board 的列形态（兼容）
+        for col in doc.get('columns', []):
+            for card in col.get('cards', []):
+                cid = card.get('id')
+                if isinstance(cid, str):
+                    out[cid] = card.get('status')
     return out
 
 
