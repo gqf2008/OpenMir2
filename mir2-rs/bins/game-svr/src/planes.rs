@@ -77,6 +77,8 @@ pub fn disconnected_line(peer: &str) -> String {
 #[derive(Debug, Clone)]
 pub struct PlanesLink {
     state: Arc<Mutex<Client>>,
+    /// 连接建立后由写入任务消费；未连接时为 `None`（对应 oracle `SendSocket` 的 `IsConnect()` 门）。
+    outbox: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>>,
 }
 
 impl PlanesLink {
@@ -101,6 +103,24 @@ impl PlanesLink {
                 );
             }
         }
+    }
+
+    /// oracle `WorldServer.SendServerGroupMsg(code, serverIdx, body)`
+    /// （`src/GameSrv/Word/WorldServer.cs:885-896`）。
+    ///
+    /// 线格式是**明文三段** `(code/serverIdx/body)`（`SendSocket` 负责补括号），不是 SM 二进制帧。
+    /// 返回值 = **实际投递的连接数**：主服不监听（§5.2）⇒ 恒 0；分服未连接 ⇒ 0（oracle
+    /// `SendSocket` 里 `if (!IsConnect()) return;` 的等价物）。该返回值就是 5b 卡判据③
+    /// 要观察的「server-group 发送次数」接缝。
+    pub fn send_server_group_msg(&self, ident: i32, server_num: i32, body: &[u8]) -> usize {
+        let bytes = mir2_planes::encode_frame(ident, server_num, body);
+        let Ok(outbox) = self.outbox.lock() else {
+            return 0;
+        };
+        let Some(tx) = outbox.as_ref() else {
+            return 0;
+        };
+        usize::from(tx.send(bytes).is_ok())
     }
 
     /// 当前是否在线（测试与排障用）。
@@ -148,15 +168,17 @@ pub fn start(
 fn spawn_client(addr: String, port: i32, server_number: i32, port_u16: u16) -> PlanesLink {
     let link = PlanesLink {
         state: Arc::new(Mutex::new(Client::new())),
+        outbox: Arc::new(Mutex::new(None)),
     };
     let state = Arc::clone(&link.state);
+    let outbox = Arc::clone(&link.outbox);
     crate::glog!("INF", "{}", node_mode_line(&addr, port));
     tokio::spawn(async move {
         // **启动即无条件连一次**：oracle `PlanesService.cs:16-17` 的节点分支直接
         // `Initialize(); Start();`，`PlanesClient.Start()`（`:53-71`）在离线时立刻
         // `await ConnectAsync()`——与 `nServerNumber` **无关**，且失败会打「失败./超时.」。
         // 10s 节拍只约束**之后**的 `CheckConnected()` 周期重连。
-        connect_once(&state, &addr, port, port_u16).await;
+        connect_once(&state, &outbox, &addr, port, port_u16).await;
         let mut timer = tokio::time::interval(TIMER_PERIOD);
         // `src/GameSvr/TimedService.cs` 的 `StartAsync` 把 `CheckIntervalTime` 初始化成
         // 启动时的 tick ⇒ 周期检查要等 >10s（1s 定时器下约第 11 秒）。
@@ -173,21 +195,27 @@ fn spawn_client(addr: String, port: i32, server_number: i32, port_u16: u16) -> P
                 .map(|s| s.should_reconnect(server_number))
                 .unwrap_or(false);
             if should {
-                connect_once(&state, &addr, port, port_u16).await;
+                connect_once(&state, &outbox, &addr, port, port_u16).await;
             }
         }
     });
     link
 }
 
-async fn connect_once(state: &Arc<Mutex<Client>>, addr: &str, port: i32, port_u16: u16) {
+async fn connect_once(
+    state: &Arc<Mutex<Client>>,
+    outbox: &Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>>,
+    addr: &str,
+    port: i32,
+    port_u16: u16,
+) {
     let target = format!("{addr}:{port}");
     let attempt = tokio::time::timeout(
         CONNECT_TIMEOUT,
         tokio::net::TcpStream::connect((addr, port_u16)),
     )
     .await;
-    let mut stream = match attempt {
+    let stream = match attempt {
         Err(_) => {
             crate::glog!("ERR", "{}", connect_timeout_line(addr, port));
             return;
@@ -202,7 +230,22 @@ async fn connect_once(state: &Arc<Mutex<Client>>, addr: &str, port: i32, port_u1
         st.set_online(true);
     }
     crate::glog!("INF", "{}", connected_line(addr, port));
+    let (mut stream, mut sink) = stream.into_split();
+    // 写任务：`send_server_group_msg` 只把字节丢进通道，真正的写在这里。
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Vec<u8>>();
+    if let Ok(mut slot) = outbox.lock() {
+        *slot = Some(tx);
+    }
+    tokio::spawn(async move {
+        use tokio::io::AsyncWriteExt as _;
+        while let Some(buf) = rx.recv().await {
+            if sink.write_all(&buf).await.is_err() {
+                break;
+            }
+        }
+    });
     let state = Arc::clone(state);
+    let outbox = Arc::clone(outbox);
     tokio::spawn(async move {
         use tokio::io::AsyncReadExt as _;
         let mut buf = [0_u8; 8192];
@@ -218,6 +261,9 @@ async fn connect_once(state: &Arc<Mutex<Client>>, addr: &str, port: i32, port_u1
         }
         if let Ok(mut st) = state.lock() {
             st.set_online(false);
+        }
+        if let Ok(mut slot) = outbox.lock() {
+            *slot = None;
         }
         crate::glog!("ERR", "{}", disconnected_line(&target));
     });
@@ -289,6 +335,58 @@ mod tests {
         }
     }
 
+    /// 发送口：连上后按 oracle 的明文三段 `(code/serverIdx/body)` 发出，并返回投递数 1。
+    #[tokio::test]
+    async fn send_server_group_msg_uses_oracle_wire_format() {
+        use tokio::io::AsyncReadExt as _;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let link = start(1, "127.0.0.1", i32::from(port), 0)
+            .expect("端点合法")
+            .expect("分服角色应有句柄");
+        let (mut sock, _) = tokio::time::timeout(Duration::from_secs(2), listener.accept())
+            .await
+            .expect("首连必须发生")
+            .unwrap();
+
+        // 有界等待 outbox 建立（连接建立后由 connect_once 登记）
+        let mut waited = 0;
+        while link.send_server_group_msg(205, 0, b"guild/chief") == 0 {
+            assert!(waited < 200, "2s 内必须可发送");
+            waited += 1;
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        let mut buf = [0_u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(2), sock.read(&mut buf))
+            .await
+            .expect("2s 内必须收到字节")
+            .unwrap();
+        assert_eq!(&buf[..n], b"(205/0/guild/chief)", "明文三段，外层带括号");
+    }
+
+    /// 未连接时发送口返回 0（oracle `SendSocket` 的 `if (!IsConnect()) return;`）。
+    #[tokio::test]
+    async fn send_returns_zero_when_not_connected() {
+        // 端口上没有人监听 ⇒ 首连与重连都失败，outbox 恒 None
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0))
+            .await
+            .unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let link = start(1, "127.0.0.1", i32::from(port), 0)
+            .expect("端点合法")
+            .expect("分服角色应有句柄");
+        assert_eq!(
+            link.send_server_group_msg(205, 0, b"x"),
+            0,
+            "未连接必须丢弃并返回 0"
+        );
+    }
+
     /// 端点非法 ⇒ 启动即失败（oracle `IPHost` 构造抛异常、`GameServer.cs:34` 无 try/catch）。
     #[test]
     fn invalid_endpoint_fails_fast() {
@@ -329,7 +427,16 @@ mod tests {
         });
 
         let state = Arc::new(Mutex::new(Client::new()));
-        connect_once(&state, "127.0.0.1", i32::from(addr.port()), addr.port()).await;
+        let outbox: Arc<Mutex<Option<tokio::sync::mpsc::UnboundedSender<Vec<u8>>>>> =
+            Arc::new(Mutex::new(None));
+        connect_once(
+            &state,
+            &outbox,
+            "127.0.0.1",
+            i32::from(addr.port()),
+            addr.port(),
+        )
+        .await;
         assert!(state.lock().unwrap().is_online(), "连上后必须在线");
 
         // 有界等待字节进入缓冲

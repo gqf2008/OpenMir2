@@ -346,6 +346,28 @@ handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
   （`src/Modules/PlanesSystem/PlanesMessage.cs:354-357`）⇒ 一旦真跑起来，收到 211 的那一批帧会被整批丢弃。
   这是 oracle 的既存缺陷，启用前必须先处理。
 
+## 13. A5：给 `gm-batch-5b` 补的那个接缝——发送口
+
+5b 卡的依赖清单（`docs/gm-batch-5b-g11-dependencies-20261024.md` §2.1）点名 G11 必须提供
+`WorldEngine.SendServerGroupMsg(code, serverIdx, body)`；此前 Rust 侧**没有任何发送路径**。
+A5 已补上：
+
+```rust
+// bins/game-svr/src/planes.rs
+pub fn send_server_group_msg(&self, ident: i32, server_num: i32, body: &[u8]) -> usize
+```
+
+- **线格式**：`(code/serverIdx/body)`（明文三段，外层括号）——复用 A2-2 的 `encode_frame`，
+  与 oracle `nCode + "/" + nServerIdx + "/" + sMsg` 再被 `SendSocket` 补括号一致；
+- **返回值** = 实际投递的连接数：主服不监听（§5.2）⇒ 恒 0；分服未连接 ⇒ 0
+  （等价 `SendSocket` 的 `if (!IsConnect()) return;`）。这个返回值正是 5b 判据③
+  「server-group 发送次数」要观察的接缝；
+- **写侧**：连接建立后由独立写任务消费通道；EOF 时通道被清空，后续发送自然返回 0。
+
+⇒ 5b 的「跨服发送」依赖到此**可满足**：命令体可以调用它并按返回值断言"发了 0 条"。
+剩下的依赖不在 G11：**可写行会/城堡态**（该卡 §1 表格已列出现有 `GuildManager` 等基础）
+与 T-38 口径的城堡桩。
+
 ## 11. 进度
 
 | 片 | 状态 | 落点 |
@@ -358,6 +380,7 @@ handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
 | A3-2a | 完成（`[Server] MsgSrvAddr/MsgSrvPort/ServerNumber` 解析） | `mir2-rs/bins/game-svr/src/config.rs` |
 | A3-2b | 完成（按 §5.2：客户端连接/重连/失败日志；主服不监听） | `mir2-rs/bins/game-svr/src/planes.rs` |
 | A4 | 完成（判定为"无业务语义可移植"：34 个发送点全是 no-op，见 §12） | 本文档 §12 |
+| A5 | 完成（补发送口 `send_server_group_msg`，见 §13；5b 卡的跨服依赖可满足） | `mir2-rs/bins/game-svr/src/planes.rs` |
 
 ## 12. 待确认 / 风险
 
