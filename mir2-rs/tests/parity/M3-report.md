@@ -3,7 +3,7 @@
 - **卡**：`openmir2-m3-final-acceptance`（issue `b0bb3003`）。本文件落地该卡 DoD ③（`tests/parity/M3-report.md`），
   并承载 DoD ① 的十项系统逐项盘点索引；DoD ②（300 假人 24h 长跑）本片**只写方案、不跑**（见 §2）。
 - **车道**：principal `openmir2-worker-5` ／ worktree `.claude/worktrees/m3cs` ／ branch `worktree-m3-final-acceptance`。
-- **base**：本报告骨架 = `origin/master da94fcb7`；**2026-10-13 08:30 补实片** = `origin/master 3c5082e5`（落实 owner comment `256cec70774f` 的 todo：十项表逐行补实 + `whitelist.md` 新登记）。本片**零 `.rs` / 零 `src/**` / 零表结构·脚本语法·数据格式改动**；
+- **base**：本报告骨架 = `origin/master da94fcb7`；**2026-11-08 对账快照 = `master d93d80f98`（本卡 head `60ed02556`；只做状态对账，不新增实跑）**；**2026-10-13 08:30 补实片** = `origin/master 3c5082e5`（落实 owner comment `256cec70774f` 的 todo：十项表逐行补实 + `whitelist.md` 新登记）。本片**零 `.rs` / 零 `src/**` / 零表结构·脚本语法·数据格式改动**；
   写集 = `mir2-rs/tests/parity/**`（本报告 + `whitelist.md`）。
 - **口径（照 §6.0-1/2/4 与 owner 03:20 指令）**：
   1. **只写本片亲手跑过的读数**；没有亲手跑过的，写 `not_verified`；
@@ -32,14 +32,14 @@
 | 1 | 背包 / 装备 | 穿戴/脱下/负重/持久/属性面板逐项相同；边界用例齐 | **covered（diff=0）** | 卡 `openmir2-m3-bag-equip-alignment`（closed，merge `bbf63fb0`） |
 | 2 | 战斗 | 固定种子下 100+ 次攻击伤害序列逐项相同；命中/躲闪统计一致 | **covered（逐 k=0）** | 卡 `openmir2-m3-combat-skills-align`（closed，merge `55a29144`） |
 | 3 | 技能 | 每个已实装技能 ≥1 条用例：前置/MP/效果/冷却 | **covered（29 技能各 1 case）** | 同上 |
-| 4 | 掉落 / 经验 | 固定种子 100 次击杀掉落逐项相同；经验曲线（含英雄）逐级相同、无 i32 截断 | **covered_by_card_unverified**（承接卡 closed，本报告未重跑 §6） | 盘点 merge `fa82187a`（[`m3/M3④掉落经验现状盘点与夹具骨架报告-20261013.md`](m3/M3④掉落经验现状盘点与夹具骨架报告-20261013.md)）；卡 `openmir2-m3-drop-exp-align`（closed，merge `d99f596e`） + 实现卡 `-monitems-attach`/`-mongen-load-spawn`/`-monster-ai-tick`/`-drop-exp-wiring`（④-A/B/C 已合、D 剩掉落落地面，见 §4） |
-| 5 | NPC / 商店 | 买/卖/修理/仓库价格与库存变化一致；失败分支一致 | **covered_by_card_unverified**（承接卡 closed，本报告未重跑 §6） | 盘点 merge `dbe287ac`（[`m3/M3⑤NPC商店现状盘点报告-20261013.md`](m3/M3⑤NPC商店现状盘点报告-20261013.md)）；脚本层 7/7 引 M4；服务端卡 `openmir2-m3-npc-shop-align`（closed，merge `dbe287ac`） + 6 张实现卡（⑤-3 商店价格/修理公式已 closed） |
-| 6 | 任务 | 接/交/条件判定一致，任务状态落库一致 | **covered_by_card_unverified**（承接卡 closed，本报告未重跑 §6） | 盘点 merge `a96ef0e6`（[`m3/M3⑥任务现状盘点报告-20261013.md`](m3/M3⑥任务现状盘点报告-20261013.md)）；卡 `openmir2-m3-quest-align`（closed，merge `a96ef0e6`） + 5 张实现卡（⑥-2 位读写/`CHECKOPEN`/`CHECKUNIT` 已交付待审） |
-| 7 | 组队 / 交易 | 归属/分配/取消/掉线中断结果一致 | **covered_by_card_unverified**（承接卡 closed，本报告未重跑 §6） | 盘点 merge `f2eb43d6`（[`m3/M3⑦组队交易现状盘点报告-20261013.md`](m3/M3⑦组队交易现状盘点报告-20261013.md)）；卡 `openmir2-m3-party-trade-align`（closed，merge `f2eb43d6`） + 5 张实现卡（⑦-1 配置项已 closed） |
-| 8 | 公会 / 攻城 | 建会/宣战费用时限/城门状态/自动结束逐项一致 | **covered_by_card_unverified**（承接卡 closed，本报告未重跑 §6） | 盘点 merge `518a9ad9`（[`m3/M3⑧公会攻城现状盘点报告-20261013.md`](m3/M3⑧公会攻城现状盘点报告-20261013.md)）；卡 `openmir2-m3-guild-castle-align`（closed，merge `518a9ad9`） + 10 张实现卡（⑧-2 配置项已 closed）；**N1/N2/N5 裁决登记 `whitelist.md` T-38/T-39/T-40**（见 §1.8） |
-| 9 | 英雄 / 宠物 | 召唤/升级/阵亡/经验分配/上限判定一致 | **covered_by_card_unverified**（承接卡 closed，本报告未重跑 §6） | 盘点 merge `670a009b`（[`m3/M3⑨英雄宠物现状盘点报告-20261013.md`](m3/M3⑨英雄宠物现状盘点报告-20261013.md)）；卡 `openmir2-m3-hero-pet-align`（closed，merge `670a009b`） + 4 张实现卡（⑨-1 配置项进行中）；英雄经验 = `ExpHitter.Master`（`whitelist.md` T-33） |
+| 4 | 掉落 / 经验 | 固定种子 100 次击杀掉落逐项相同；经验曲线（含英雄）逐级相同、无 i32 截断 | **covered_by_card_unverified**（承接卡 closed，但**仅为 DoD① 盘点/收口**，DoD②③ 未达成；本报告未重跑 §6） | 盘点 merge `fa82187a`（[`m3/M3④掉落经验现状盘点与夹具骨架报告-20261013.md`](m3/M3④掉落经验现状盘点与夹具骨架报告-20261013.md)）；卡 `openmir2-m3-drop-exp-align`（closed，merge `d99f596e`） + 实现卡 `-monitems-attach`/`-mongen-load-spawn`/`-monster-ai-tick`/`-drop-exp-wiring`（④-A/B/C 已合、D 剩掉落落地面，见 §4） |
+| 5 | NPC / 商店 | 买/卖/修理/仓库价格与库存变化一致；失败分支一致 | **covered_by_card_unverified**（承接卡 closed，但**仅为 DoD① 盘点/收口**，DoD②③ 未达成；本报告未重跑 §6） | 盘点 merge `dbe287ac`（[`m3/M3⑤NPC商店现状盘点报告-20261013.md`](m3/M3⑤NPC商店现状盘点报告-20261013.md)）；脚本层 7/7 引 M4；服务端卡 `openmir2-m3-npc-shop-align`（closed，merge `dbe287ac`） + 6 张实现卡（⑤-3 商店价格/修理公式已 closed） |
+| 6 | 任务 | 接/交/条件判定一致，任务状态落库一致 | **covered_by_card_unverified**（承接卡 closed，但**仅为 DoD① 盘点/收口**，DoD②③ 未达成；本报告未重跑 §6） | 盘点 merge `a96ef0e6`（[`m3/M3⑥任务现状盘点报告-20261013.md`](m3/M3⑥任务现状盘点报告-20261013.md)）；卡 `openmir2-m3-quest-align`（closed，merge `a96ef0e6`） + 5 张实现卡（⑥-2 位读写/`CHECKOPEN`/`CHECKUNIT` 的卡 `openmir2-m3-quest-state` 已 closed） |
+| 7 | 组队 / 交易 | 归属/分配/取消/掉线中断结果一致 | **covered_by_card_unverified**（承接卡 closed，但**仅为 DoD① 盘点/收口**，DoD②③ 未达成；本报告未重跑 §6） | 盘点 merge `f2eb43d6`（[`m3/M3⑦组队交易现状盘点报告-20261013.md`](m3/M3⑦组队交易现状盘点报告-20261013.md)）；卡 `openmir2-m3-party-trade-align`（closed，merge `f2eb43d6`） + 5 张实现卡（⑦-1 配置项已 closed） |
+| 8 | 公会 / 攻城 | 建会/宣战费用时限/城门状态/自动结束逐项一致 | **covered_by_card_unverified**（承接卡 closed，但**仅为 DoD① 盘点/收口**，DoD②③ 未达成；本报告未重跑 §6） | 盘点 merge `518a9ad9`（[`m3/M3⑧公会攻城现状盘点报告-20261013.md`](m3/M3⑧公会攻城现状盘点报告-20261013.md)）；卡 `openmir2-m3-guild-castle-align`（closed，merge `518a9ad9`） + 10 张实现卡（⑧-2 配置项已 closed）；**N1/N2/N5 裁决登记 `whitelist.md` T-38/T-39/T-40**（见 §1.8） |
+| 9 | 英雄 / 宠物 | 召唤/升级/阵亡/经验分配/上限判定一致 | **covered_by_card_unverified**（承接卡 closed，但**仅为 DoD① 盘点/收口**，DoD②③ 未达成；本报告未重跑 §6） | 盘点 merge `670a009b`（[`m3/M3⑨英雄宠物现状盘点报告-20261013.md`](m3/M3⑨英雄宠物现状盘点报告-20261013.md)）；卡 `openmir2-m3-hero-pet-align`（closed，merge `670a009b`） + 4 张实现卡（⑨-1 配置项卡 `openmir2-m3-pet-slave-config` 已 closed）；英雄经验 = `ExpHitter.Master`（`whitelist.md` T-33） |
 | 10a | 邮件 | 发送 / 到期 / 退回（§6 原文） | **`oracle_absent`（已登记 T-36）** | 盘点 merge `4d276812`（[`m3/M3⑩邮件拍卖现状盘点报告-20261013.md`](m3/M3⑩邮件拍卖现状盘点报告-20261013.md)）；oracle 全仓无邮件实现（仅客户端开关 `boShowMail`）⇒ **不开实现卡**；Rust 与 oracle 一致地不实现 |
-| 10b | 拍卖 | 成交 / 退回（按 oracle 实际语义重划为「元宝寄售 SellOff」） | **covered_by_card_unverified**（承接卡 closed，本报告未重跑 §6） | 盘点 merge `4d276812`；卡 `openmir2-m3-mail-auction-align`（closed，merge `98885fd4`） + 承接卡 `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv` |
+| 10b | 拍卖 | 成交 / 退回（按 oracle 实际语义重划为「元宝寄售 SellOff」） | **covered_by_card_unverified**（承接卡 closed，但**仅为 DoD① 盘点/收口**，DoD②③ 未达成；本报告未重跑 §6） | 盘点 merge `4d276812`；卡 `openmir2-m3-mail-auction-align`（closed，merge `98885fd4`） + 承接卡 `-selloff-consignment-world` / `-selloff-goldsales-load-wire` / `-selloff-fixture-botsrv`（三张均已 closed） |
 
 > 说明：§6 的 M3 判据表把「战斗」与「技能」列为两项；本表的 2/3 与卡 `openmir2-m3-combat-skills-align`
 > 的 ②③ 一一对应。§6「顺序」原文把两者并列写作「战斗/技能」，故十项计数以本表为准。
@@ -289,6 +289,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/m2-acceptance/start_ru
 ---
 
 ## 3. 残留物清单
+> **以下 §3 起为 2026-10-13 的历史原判**（3 covered / 2 partial / 1 oracle_absent / 5 not_covered）；2026-11-08 对账**未改动**这些历史段落，当前状态以 §1 表与头部说明为准。
+
 
 - **本片入库（新增）**：
   - `mir2-rs/tests/parity/M3-report.md`（本报告）；
