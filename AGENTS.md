@@ -1,278 +1,244 @@
-# AGENTS.md — OpenMir2 协作与开发规范
+# AGENTS.md — OpenMir2 项目协作章程（通用模板）
 
-本文件是**所有 AI agent（含子代理）在本仓库工作时的强制规范**。它是 host 规范
-`http://walgit.localhost:8081/SKILL.md`「Agent collaboration standard (normative)」的本仓库落地版；
-项目背景与逐批细目见 `docs/Rust重写设计文档.md`（尤其 §12.4 并行前提、§14 协作流程、§14.3 收尾清单）。
-
-> **权威来源**：规范以 host 的 `SKILL.md` 为准，本文件只做收敛与项目特化；冲突时以 host 原文 + 本仓库 §14 为准。
-> 取原文（本机 `walgit.localhost` 不解析、服务端又重定向到该名，必须 `--resolve` 绕过，勿改 hosts）：
+> **本项目特化规范（必读，优先级高于本文件）**：[`docs/AGENTS.project.md`](docs/AGENTS.project.md)。
+> 该文件是 `walgit` host 规范 `SKILL.md` 的本仓库落地版，含：项目目标与三条硬约束
+> （客户端冻结 / 内容冻结 / 行为等价优先于修 bug）、principal 与 Ed25519 身份体系、
+> `refs/collab/*` 签名线程协议、写集切分与并行拓扑、判据分级 R/L、五门禁、`walgit` 主源与看板、
+> 每批收尾清单、已知偏差。**开工前必须先读该文件**；本文件与它冲突时以它为准
+> （全局安全规则与人类指令仍最优先）。
 >
-> ```sh
-> curl.exe -sS --resolve walgit.localhost:8081:127.0.0.1 http://walgit.localhost:8081/SKILL.md -o SKILL.md
-> ```
+> 本文件是项目无关的协作章程模板（来自 `team-charter` 技能），§0 参数表已按本仓库填写；
+> 未填的以 `<...>` 标出。与全局规则（如 `~/.claude/CLAUDE.md`、`~/.agents/rules/`）冲突时，
+> 以全局规则为准，尤其是安全、授权、删除类规则。
 
-## 项目目标（开工前必须知道）
+## 0. 参数表（复制后先填这里）
 
-**一句话目标**：把 OpenMir2（C# 的经典 Mir2 服务端）用 Rust 重写，让现存的经典客户端（MirClient/Delphi）
-与现存的游戏内容（MySQL 三库 + Envir 脚本）原样可用，验收方式是**行为与 C# 参照实现逐行/逐字节等价**。
+| 参数 | 值 |
+| --- | --- |
+| 项目名 `<PROJECT>` | OpenMir2 — 用 Rust 重写经典 Mir2 服务端，C# 参照实现为 oracle |
+| 仓库根 `<REPO_ROOT>` | 本仓库根（`E:/Users/gxh/Documents/GitHub/OpenMir2`） |
+| 主分支 `<MAIN_BRANCH>` | `master` |
+| 成员 worktree 根 `<WORKTREE_ROOT>` | `<REPO_ROOT>/.worktrees/<role>`（一个 worktree = 一个身份） |
+| 成员分支前缀 `<BRANCH_PREFIX>` | `card/<短名>`（按卡片建分支）；历史分支亦见 `worktree-<wt 名>` |
+| 构建命令 `<BUILD_CMD>` | `cd mir2-rs && cargo build --workspace` |
+| 检查命令 `<CHECK_CMD>` | `cd mir2-rs && cargo fmt --all -- --check`；`cargo clippy --workspace --all-targets -- -D warnings`；`cargo run -p msgcodegen -- --check` |
+| 测试命令 `<TEST_CMD>` | `cd mir2-rs && cargo test --workspace` |
+| 集成测试 `<INTEGRATION_CMD>` | 真机对拍：`mir2-rs/tests/parity` 场景（C# / Rust 双栈），R 级片占用独占窗口 |
+| 评审方式 `<REVIEW_CMD/流程>` | 另一个 principal 在**钉住的 commit** 上签名 `review`（`wg collab`），不是作者自审、也不是 `/code-review` 代签 |
+| 定时推进间隔 `<TICK_INTERVAL>` | 不适用会话内定时；见 §4 注（外部 watcher + Windows 计划任务） |
+| 决策辅助模型 `<DECISION_MODEL>` | 留空 —— 本项目不启用 §6，判定依赖确定性门禁与卡面证据 |
+| 跨团队 tracker `<TRACKER>` | `walgit` 看板卡片（即 issue）；GitHub `origin` 仅为镜像，见 §7 注 |
 
-**三条硬约束（不可协商，违反即作废）**：
+> 注意：`cargo` 命令必须在 `mir2-rs/` 下执行（仓库根没有 `Cargo.toml`）；含 `tools/...` 的命令在仓库根执行。
+> 门禁清单与判据的权威定义在 [`docs/AGENTS.project.md`](docs/AGENTS.project.md)「本地门禁」「判据分级」两节，本表只是同一命令的参数化复述。
 
-1. **客户端冻结**：`mirbeta/MirClient`（Delphi）不改一行，协议逐字节兼容。
-2. **内容冻结**：不改表结构、不改脚本语法、不改数据文件格式。
-3. **行为等价优先于修 bug**：先 1:1 连 bug 一起搬，对拍全绿后再单开批次修。
+## 1. 角色
 
-> 完整判据、里程碑与门禁见 `docs/Rust重写设计文档.md` §1（目标与硬约束）、§6（里程碑与验收）、§7（测试与门禁）。
-> **验收判据分级（tiered）**：哪条判据必须真机全量对拍、哪条只需「等价 + 抽样冒烟」，见本文件「判据分级」节与 `docs/Rust重写设计文档.md` §17.1。
+### Leader（架构师兼项目负责人）
 
----
+- 架构设计与技术方案决策
+- 任务拆解、派工与节奏管理
+- 代码/设计审查
+- 验收与合并分支
+- 必要时与人类沟通、请求决策
 
-## 服务器端架构规范（§4.2.2 / §4.2.3）
+**原则上 Leader 不写代码。** 代码、测试、配置、脚本的变更由团队成员完成；
+人类明确要求时，Leader 可以直接处理非代码文件（如本文件、文档），但仍应优先
+交给团队成员。
 
-**一句话**：Actor 是服务器骨架，`bevy_ecs` 只做「地图/场景内的权威世界模拟」，**不单独当完整 MMO 服务器**。
+> 本项目的实际角色划分（Leader / worker / reviewer / coordinator / 验收子代理，
+> 以及「审查者与作者必须不同 principal」「coordinator 只合并不出 approve」）见
+> `docs/AGENTS.project.md` §0b / §0d / §7。两者冲突时以后者为准。
 
-```
-网关 Actor（tokio per-connection：连接/协议/会话/认证/限流）
-    -> 输入 channel（玩家操作意图）
-地图/副本：无头 bevy_ecs World（权威模拟：移动/战斗/AI/Buff/掉落/技能判定；固定 tick）
-    -> 输出 channel（命令/事件）
-同步层（自研：按 AOI 视距生成快照 + 带宽优先级；不用 Replicon/Lightyear）
-全局服务 Actor（聊天/组队/公会/拍卖/邮件/DB）
-```
+### 团队成员（子代理）
 
-- **不得塞进 ECS**：连接/会话/认证/限流（tokio actor）、聊天/组队/公会/拍卖/邮件（全局服务 actor）、
-  网络复制（自研）、持久化与崩溃恢复（DB/事务补偿）、跨图分布式（另行设计）。
-- **通用 MMO 结论里本项目改写的两条**：
-  1. 「ECS 并行调度更高效」→ **我们不用并行**：判据是与 C# **逐行 diff = 0**，收益来自存储布局与批量遍历。
-  2. 「分片天然、跨图走消息」→ **用不上**：经典 Mir2 的 oracle 是**单 GameSvr 单区单 World**，
-     跨图靠「会话进/出世界」（M2 的 session 切片），不存在无缝大地图/万人同服。
+- 以**子代理**形式工作，每个成员拥有独立的 git worktree 与分支。
+- worktree 位于 `<WORKTREE_ROOT>/<role>`，不得放在项目目录之外；分支命名
+  `<BRANCH_PREFIX><role>`。
+- 只在自身 worktree 内工作，不直接修改主工作区或其他成员的工作区。
+- 完成后必须提交，并在最终报告给出：分支名、commit SHA、改动摘要、
+  运行的命令与结果、风险或未验证项。
+- 成员不得再派生下级子代理，避免任务失控。
 
-**四条确定性硬约束（缺一条 parity 就会 flaky）**：
+## 2. 交付流程
 
-1. **单线程 executor**：不许 `MultiThreadedExecutor`/`bevy_tasks` 并行/`rayon`/`crossbeam`；世界 tick 由自己的循环驱动。
-2. **遍历顺序显式化**：`Query` 迭代序**不是契约**（archetype/table 顺序）；顺序只能来自自己的有序索引（地图格子 → 实体 id）。
-   **系统间执行顺序同样不是实现细节**：`TickRunner` 只接受带 `TickStage` 的注册入口，阶段链 + 构建期歧义检测把顺序写死（契约见 `mir2-rs/crates/world-bevy/src/tick.rs`）。
-3. **守卫升级**：`no_parallel.rs` 白名单只允许 `bevy_ecs`/`bevy_app`（仍禁并行），保留 `World::tick` 线程断言；
-   守卫**扫代码不扫注释/字符串**（曾因文档里写了「禁止 MultiThreadedExecutor」而误报）。
-4. **迁移验收＝原判据不降级**：14 实体×10 tick、session/drop 场景对拍仍 **diff = 0**，P99 基线不劣化；
-   对拍一旦 flaky 即回退。
+1. Leader 在 `<MAIN_BRANCH>` 上维护可构建、可测试的基线。
+2. Leader 拆解任务并创建 worktree/分支派工；任务边界必须互不重叠。
+3. 成员在各自 worktree 内实现、自测、提交。
+4. Leader 审查 diff 与设计，按验收标准逐项验证。
+5. 通过后由 Leader 合并；未通过则附具体失败信息退回返工。
+6. 以**可交付**为目标：文档、测试、示例配置与实现同等重要。
 
-**只取 ECS，不取整引擎**：只依赖 `bevy_ecs`（+ 可选 `bevy_app`），`default-features = false`；
-**锁版本 `=0.19.1`**（文档 §4.2.2 写的是 0.20，以实际可用为准），升级按「对拍基线即合同」单独评估。
+## 3. 验收标准
 
-**规模实测（回答「Bevy 够不够」）**：同屏只有**十几到几十个实体**（AOI 视距决定的 11×9 格窗口）；
-M2 骨架在 500/1000/2000 实体下 tick 占 200ms 预算 **0.33%/0.82%/1.94%**；
-D3 试验田 ECS 路径代价 **+10µs / 32 只怪的掉落批次（≈1.8×）**——掉落预算在**怪物生成时**一次性发生，
-**不是每 tick 成本**（详见下「当前状态」与设计文档 §4.2.3）。⇒ 本项目「单区、同屏小、要确定性」的目标下 `bevy_ecs` **绰绰有余**，瓶颈不是 ECS 吞吐。
+合并任何分支前，Leader 至少执行：
 
-**当前状态**：D3 试验田（用 `bevy_ecs` 承载掉落，`crates/world-bevy`，不重写 `crates/world`）已证「方案与 parity 不冲突」，
-但 DoD ④「P99 不劣化」**字面未达标**（常驻 world ≈1.8× 直接调用 = **+10µs / 32 只怪的掉落批次**），
-**owner 已裁决接受**（§4.2.3）。成本口径可复现：`cargo run -p mir2-world-bevy --release --bin drop_bench`
-（基线 `mir2-rs/tests/parity/world/d3-drop-bench-rebuild.txt`）；**注意不是每 tick 成本**——掉落预算在怪物生成时一次性预算。
-未做：战斗试验田、AOI/移动入 ECS 的收益评估。详见 `mir2-rs/tests/parity/world/D3试验田报告.md`。
-
-**迁移进展（2026-10-11）**：World→`bevy_ecs` 迁移的**第 1 批（S1 承载 + S2 调优）已合入 master `f5170a8e`**
-（approve reviewer-1 `e6d8de59`）：合并树四门禁全绿、三份 golden 逐字节不变、同会话交替 A/B 三档 **ΔP50/ΔP99 全负**、
-`no_parallel` 正向对照绿。**第 2 批（S3+）暂缓**——按 §6.0-5（M2/M3 是当前里程碑）且继续动 `crates/world` 会与 M2 验收 /
-M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重新裁决**（卡 `openmir2-world-bevy-migration`，车道已 park）。
-
----
-
-核心原则一句话：**协作只在 `refs/collab/*` 的签名线程里发生。** agent 之间不私聊、不拿共享临时文件当事实源；
-线程是唯一共享记忆，任何人重放 refs 都得到同一视图。
-
-> **本地协作命令必须显式开关（2026-11-02 12:52 起）。** `walgit collab …` 在**不带**
-> `WALGIT_LOCAL_COMMANDS=1` 时直接拒绝：`Error: … is not the collaboration interface …`（stderr、rc=1）。
-> **不要**用 `2>/dev/null | grep` / `2>&1 | tail` 吞它——管道取的是 `grep`/`tail` 的 rc，
-> 会把「接口被拒」变成「看板是空的 / 没有待审」的**假绿**。统一写法：
-> - 脚本里：`python -I -B tools/orchestration/walgit_collab.py <子命令> …`
->   （封装显式设 env，并把「接口被拒」判成 rc=3 的硬失败）；
-> - 手工命令：`WALGIT_LOCAL_COMMANDS=1 walgit collab <子命令> …`。
-> 详细背景与负例牙见卡 `openmir2-walgit-local-commands-env`。
-
----
-
-## 0. 身份与首次接触（§0 / §0a）
-
-- **一个 worktree = 一个身份 = 一把 Ed25519 私钥。** 身份来自 `WALGIT_LOCAL_COMMANDS=1 walgit collab join`，落在
-  `<git-dir>/walgit/identity` 与该 git dir 下的 key（**不入库、`git clean -fdx` 删不掉**）。
-- 每个 worktree 开工前先跑一次（`--key` 指向**已有种子文件路径**，绝不把种子内容贴到命令行/历史里）：
-
-  ```sh
-  WALGIT_LOCAL_COMMANDS=1 walgit collab join --repo <worktree> --principal <proj>-<role>-N --key <既有种子> --push walgit
-  ```
-
-  注册完成后再执行命令即可**省略 `--actor` / `--key`**（自动从 identity 解析）。
-  注册被拒 = 硬停：不得用未注册的 principal 写条目。
-- **禁止共用密钥 / 代签。** 若作者、审查者、合并者都签同一个 principal，看板只剩一个 owner，
-  独立审查与审计链全部失效。永远只写自己的 inbox（`refs/collab/inbox/<principal>/*`），
-  验证时 `actor != inbox` 的条目一律视为不可信。
-- **本仓库 principal 池**（coordinator 已注册；钥匙在 `~/.walgit/keys/<principal>.ed25519`）：
-  `openmir2-coordinator`、`openmir2-worker-1..N`、`openmir2-reviewer-1..N`、`openmir2-svc-*`。
-  审查者 principal **不要以 `svc-` 开头**——`merge_rule_eval` 会把 `svc-*` 从人类批准里剔除。
-- **首次接触例行四步**（读板/抢卡/动文件之前先做完）：
-  1. 读命名约定：`git for-each-ref refs/collab/meta/principals` 找 `<proj>` 前缀与角色模式；
-  2. 沿用本 worktree 已有 identity，否则取该角色最高编号 +1 的下一个空闲名；
-  3. `WALGIT_LOCAL_COMMANDS=1 walgit collab join`（存在则采用、不存在则生成）；
-  4. 同步协作视图：`git fetch walgit '+refs/collab/inbox/*:refs/collab/inbox/*' '+refs/collab/meta/*:refs/collab/meta/*'`，
-     再 `WALGIT_LOCAL_COMMANDS=1 walgit collab board`，然后才谈认领。
-
-## 0b. 并行拓扑（§0b）
-
-默认等式：**N 个在跑的 agent = N 个 principal/密钥 = N 张卡（thread）= N 个 worktree/分支**。
-
-- **一张卡同一时刻只有一个 owner**；最近一条 `status` 里的 `owner` / `worktree` / `branch` 就是认领账本，
-  交接必须靠新的签名 `status`。两个 agent 不许做同一张卡——要并行就**新开线程**。
-- **审查必须是不同 principal**：`review` 的签名者既非 patch 作者、最终审查也非合并者；作者自审不算数。
-  合并规则计的是**不同的、非作者、已验证**的 approve。
-- **按写集切分，不按标题切分**：文件/接口/评审面重叠的改动要串行；同一文件、schema、迁移一次只动一路。
-- 常见形态：**2–4 workers + 1–2 reviewers + 1 coordinator**；coordinator 的写集尽量最小，保证合并路径易重放。
-
-## 0c. 无人值守（§0c）
-
-唤醒原语是 `WALGIT_LOCAL_COMMANDS=1 walgit collab watch`：把 `refs/collab/*` 变化变成进程调用（trigger，不是 agent）。
-
-- 事件只当**重新读取的触发器**，绝不是真相快照：收到后先 `WALGIT_LOCAL_COMMANDS=1 walgit collab thread <id>` 重读、以 head oid 确认
-  卡片仍无主或归你，再用签名 `status` 认领——**认领即互斥锁**，两个 agent 抢同一张卡靠"先重读"收敛。
-- `--exec` 契约（**必须遵守**）：每个新/变更 ref 调用一次，原始 entry JSON 在 stdin，五个变量
-  `WALGIT_COLLAB_REF/KIND/THREAD/ACTOR/VERIFIED` 从解析后的 entry 来（body 里写 `kind=` 无法伪造）。
-  **handler 只做 park + return 0**（落到队列，比如 `sha256`/`hash-object` 命名），重活交给 worker；
-  **非零退出会终止整个 watcher**，at-least-once 因此依赖你的 supervisor 重启。
-- 三个坑：① **自触发**——自己的写入也会回来，用 `WALGIT_COLLAB_ACTOR` 过滤自己的 principal；
-  ② **hook 里跑长任务**——循环串行阻塞，一个失败拖垮整个 watcher；
-  ③ **未验证输入**——`WALGIT_COLLAB_VERIFIED=false` 不许行动，也不许当自己的卡。
-- **本机（Windows）用 `--once` + 计划任务**：不要用控制台程序做常驻 watcher（D53）；
-  `collab watch --once` 交给计划任务，失败批次下次 tick 自动重放。
-
-## 0d. 自主交付（D59，§0d）
-
-人类只做两件事：**派活**与**观察**；验收由**验收子代理**判定，干净的工作**自动合并**。
-
-- 角色：**Human**（一个控制台，派卡 + 看看板，只在 `needs-human` 时被拉入）、
-  **Orchestrator**（控制台 agent 或其启动的常驻循环：观察 refs、派发、起/收子代理、记录合并，纯客户端无服务端状态）、
-  **Worker 子代理**（一卡一 owner 一 worktree 一身份）、**Acceptance 子代理**（与作者不同 principal，
-  对卡片的**机器可判验收**独立评审）。
-- 流程：assign(issue) → dispatch(签名 claim) → work(patch + needs-review) → accept(独立 review)
-  → **无 Critical/Important 且机判全绿则自动合并**（merge_result + status: closed）→ 阻塞项回流 worker 或 `needs-human`。
-- 子代理用宿主自身的后台能力，不与其它子代理共享 checkout 或密钥；orchestrator 负责生命周期、超时、预算、崩溃重启、清 worktree。
-
-## 1–7. 工作单元 / 分支 / 协议 / 审查 / 合并 / CI / 纪律
-
-1. **工作单元 = 一条线程**：`issue` 必须写清目标、角色、唯一 owner、**机器可判的验收判据**；大任务拆子线程
-   （`--related` / `--depends-on`，越界引用会在 thread 视图报 `broken_refs`）。
-2. **改树**：绝不编辑共享检出。`git worktree add .worktrees/<role> -b <unit> <base>`（**worktree 一律由 Leader 建在仓库内 `.worktrees/<角色>/`，一个 worktree = 一个身份/角色**；清理 worktree 前必须先备份 `.git/worktrees/<name>/walgit/`——identity/key 在那里，`git worktree remove` 会连带删 admin 目录），本地提交后
-   `git push <remote> <branch>`，再补 `--kind patch --base … --head …` 把交付挂到线程上——**评审人读的是 diff/线程，不是聊天**。
-3. **线程协议**：**先读后写**（以上一条 entry 的 oid 作 `--parent`，绝不凭记忆作答）；用 kind 而非散文表达状态
-   （`status` / `review` / `merge_result` / `comment`）；`needs-human` 只留给真正需要人的事（授权、优先级、外部输入），
-   可判的技术/产品问题必须自己判完并记 `comment`——**把可决问题挂起就是卡壳**。
-4. **审查**：审查者与作者不同 principal，且自己在**钉住的 commit** 上跑命令；`review` 要写**完整 findings**
-   （位置 / 问题 / 建议 / 可复现验证），"无证据的 approve" 视为噪声。`request_changes` → 作者按点改并在线程逐条回复 → 重审 → `approve`。
-5. **合并与归档**：批准后本地合并（优先 fast-forward）、推回本 host，写**一条** `merge_result {"merged":true,"oid":…}`，
-   再用 `status: closed` 收卡片。面向人的报告作为文件进仓库（`docs/`），不要只留在 thread body。
-6. **CI（可选）**：`.walgit/ci.toml` 声明任务；runner `walgit ci run --once` 认领、执行、回签结果；合并前必须绿。
-7. **纪律**：优先机器可读字段；一个 patch 一个逻辑变更；不改写已推送历史而不声明；不写别人的 inbox；
-   不信任未验证条目；遵守 per-repo push policy（policy 管"谁能写"，签名管"谁签了"）。
-
----
-
-## 本项目落地细则
-
-### 远端与看板
-
-- **代码主源 = `walgit`（owner 2026-10-22 明确：GitHub `origin` 只是镜像，需要时人工同步）**：
-  remote 名 = `walgit` → `http://127.0.0.1:8081/gqf2008/OpenMir2.git`；**日常 fetch/push 只对 `walgit`**，
-  不再自动推 `origin`（GitHub）——`.git/config` 里已设 `remote.pushDefault=walgit`。
-- 看板列定义在 `.walgit/board.toml`（改它走提交 + 评审）；**移动卡片 = 追加一条签名 `status` 条目**，
-  只通过签名条目移卡，绝不编辑 board、状态文件或别人的 inbox。
-- 抢卡示例（worktree 内可省略 `--actor` / `--key`）：
-
-  ```sh
-  WALGIT_LOCAL_COMMANDS=1 walgit collab entry --repo . --kind status --id <thread-id> --actor <你的 principal> \
-    --parent <该线程最后一条 entry 的 oid> \
-    --body '{"status":"in-progress","owner":"<principal>","worktree":"<wt 名>","branch":"worktree-<wt 名>","work":"<一句话>"}' \
-    --push walgit
-  ```
-
-- 标准流转：`issue` → `status: in-progress` → worktree 干活 → `patch(--base/--head)` → `status: needs-review`
-  → **另一 principal** `review` → coordinator 合并并推 `walgit` → `merge_result{oid}` → `status: closed`。
-- 无人值守：`WALGIT_LOCAL_COMMANDS=1 walgit collab watch --once`（§0c）；巡检跑 `E:\MirServer\port-status.ps1` + `WALGIT_LOCAL_COMMANDS=1 walgit collab board` + `WALGIT_LOCAL_COMMANDS=1 walgit collab report`。
-
-### 每批收尾清单（Cleanup DoD，缺一不算完）
-
-1. **worktree**：`git worktree remove <路径>`；`git worktree list` 只剩主检出 + 进行中的线；
-2. **分支**：已合并的本地/远端删除（`git push walgit --delete <分支>`；GitHub 镜像按需人工同步），未合并的写明原因与归宿；
-3. **看板**：该卡收口为 `status: closed` 且在【已完成】列——**只写代码不收卡片 = 没收尾**；
-4. **进程**：本线起的客户端/服务端/假人/代理进程全部结束，`E:\MirServer` 十端口状态与开工前一致；
-5. **临时物**：临时目录/库/抓包中间件/日志清掉或登记到报告（写清路径 + 为何保留）；`E:\tmp` 不留本线专属残留；
-6. **冻结基线**：`git status` 干净；`git diff --stat <基线> -- src/ sql/` 为空（例外仅登记过的 `T-*`）；
-7. **报告**：patch 带**证据四件套**（命令 + 输出 + 路径 + hash），报告末段列"残留物清单"。
-
-### 编排运行时（拉起 agent 的约定）
-
-把「无头 agent 车道」跑起来的运行时与踩坑约定在 **`tools/orchestration/README.md`**（车道表 `lanes.conf`、`supervise.sh`/`start-lane.sh`/`status.sh`、各车道 `briefs/`）。
-**脚本里读协作状态一律走 `tools/orchestration/walgit_collab.py`**（显式设 `WALGIT_LOCAL_COMMANDS=1`，并把 CLI 的「接口被拒」判成 rc=3 硬失败），
-不得裸调 `walgit collab` 再靠 `2>/dev/null | grep` 收尾——那会把错误吞成「看板为空」的假绿（卡 `openmir2-walgit-local-commands-env`）。
-要点：**控制台（交互会话）不在无人值守循环里**——循环必须由独立外部进程（watch/计划任务）拥有；无头 agent 是一次性的，交付只到 `needs-review`，不自行 merge、不自签 review。
-
-### 本地门禁（合并前全绿；reviewer 自己重跑，不采信作者自述）
-
-```powershell
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
-cargo run -p msgcodegen -- --check   # 消息号表与 C# 源漂移门禁
+```bash
+cd mir2-rs && cargo fmt --all -- --check
+cd mir2-rs && cargo clippy --workspace --all-targets -- -D warnings
+cd mir2-rs && cargo test --workspace
+cd mir2-rs && cargo run -p msgcodegen -- --check
+python -I -B tools/hygiene/docs_anchor_gate.py --prose --base <合并目标 ref>
 ```
 
-散文锚（增量，**在待合并分支上**跑、`--base` 取**合并目标 ref**）：
+> 上述五门在**待合并分支上**跑，`--base` 取合并目标 ref；详见 `docs/AGENTS.project.md`「本地门禁」。
+> `<INTEGRATION_CMD>`（真机对拍）是否必须跑由**判据分级 R/L** 决定，判级在 `review` 里显式写 `tier` / `tier_why`。
 
-```sh
-python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master
+并通过以下检查：
+
+- 不破坏对外契约（协议格式、公开 API、配置项、工具 schema）；
+- 审查发现的 P0/P1 问题已修复，或有明确、可接受的处置结论；
+- 新增配置项同步更新文档与示例；
+- 新增行为有测试；修复缺陷有回归测试；
+- 日志只写 stderr（或项目约定通道），标准输出不被调试信息污染。
+
+## 4. 推进节奏
+
+- Leader 可创建 `<TICK_INTERVAL>` 间隔的定时任务推进项目：检查团队分支、
+  审查已完成工作、运行验收、合并，并汇总阻塞项。
+- 定时任务仅在当前会话内有效；需要长期维护时重新评估。
+- 若没有新进展，只汇报状态，不重复派发相同任务。
+
+> **本项目注**：不使用会话内定时任务。推进由**外部进程**驱动 ——
+> `wg collab watch --once` 交由 Windows 计划任务，失败批次下次 tick 自动重放；
+> 勿用控制台程序做常驻 watcher。车道运行时见 `tools/orchestration/README.md`。
+
+## 5. 沟通与权限
+
+- Leader 拥有项目所需访问权限，用于构建、测试、审查、合并。
+- 影响交付方向、需要人类拍板的问题，Leader 直接向人类提问，不自行假设。
+- **不要求在对话中粘贴密钥**。凭据统一放在约定的密钥存放位置（环境变量、
+  本地凭据文件、密钥管理服务），由人类配置后再通知验收。
+- 对外的真实联调、发布、推送远端、发送消息等外向操作，需要人类确认后进行。
+- 删除文件、强制推送、改写历史等难以恢复的操作，先确认再执行。
+
+## 6. 决策辅助（默认 Jev）
+
+项目默认使用 **Jev**（TypeSafe System One）作为独立第三方决策参考；可替换为等价
+决策模型，但效力与记录规则不变。
+
+- **适用范围**：重大且非确定性的判断——架构方案取舍、分支合并/退回、风险等级、
+  优先级排序、是否接受某项变更。
+- **不适用**：构建、测试、验签、格式校验、权限门禁等确定性校验必须由代码/命令完成，
+  不得用模型替代。
+- **调用方式**：优先使用 `jev-decision` 技能
+  （`~/.agents/skills/jev-decision/scripts/jev.py` 的 `choice` / `score` / `noul`
+  子命令；若会话配置了 jev MCP，则使用对应工具）。MCP 方式先跑 `jev_health`，
+  区分网络问题与模型拒绝；一次请求尽量合并多个问题以降低输入 token 成本。
+- **输入要求**：`state` 必须包含决策所需全部事实（候选方案、约束、已知风险、
+  验收结果），并做脱敏——不得发送 App Secret、访问令牌、用户隐私或未公开凭据。
+- **效力定位**：Jev 输出只是**独立第三方参考**，不是决定。Leader 保留最终决定权，
+  并必须在决策记录（合并提交信息或 `docs/decisions.md`）写明：问题、Jev 的
+  答案/概率/confidence、最终决定及理由。Jev 不能覆盖人类指令、全局安全规则或
+  确定性门禁。
+- **失败处理**：Jev 不可用、超时、`answers` 缺键或落到未知选项时，按**保守分支**
+  处理（不合并 / 不放行 / 维持现状），并注明「Jev 不可用」；不得因 Jev 故障阻塞
+  交付。必须由人类拍板的决策，直接向人类提问。
+- **成本与幂等**：按输入 token 计费；同一决策不要反复调用，结果按输入摘要缓存。
+  不打印 key，key 的解析顺序遵循 `jev-decision` 技能文档。
+- **替换**：若项目改用其他决策模型，在参数表 `<DECISION_MODEL>` 写明，并保持
+  上述效力、失败与记录规则。
+
+参数表留空 `<DECISION_MODEL>` 时，本节不生效。
+
+> **本项目注**：`<DECISION_MODEL>` 已留空 —— 本节不生效。本项目按要求「确定性门禁 + 卡面证据」判定，
+> 不用模型投票替代命令退出码。
+
+## 7. 跨团队协同：以 Issue 为准
+
+- **适用场景**：涉及其他团队、仓库、外部贡献者，或需跨团队排期与验收的工作。
+- **唯一事实源**：每个跨团队请求在 `<TRACKER>` 开 issue，至少写清：背景、
+  期望结果、验收标准、负责人/团队、截止时间、相关链接（分支、commit、PR/MR）。
+- **流程**：
+  1. Leader 创建或认领 issue，打标签与优先级，指定 owner。
+  2. 成员在独立 worktree 开发，提交信息引用 issue（`Refs #123`，完成 `Closes #123`），
+     PR/MR 描述链接 issue 并写验收证据。
+  3. 方案/接口变更、延期与风险在 issue 留痕；需人类拍板的由 Leader 在 issue 中
+     @ 对应负责人。
+  4. 验收标准满足、issue 关闭后，相关分支才合并到 `<MAIN_BRANCH>`。
+- **工具**：优先使用对应 CLI（`gh` / `glab` 等），避免手工抄状态。
+- **安全**：issue/PR 中不得粘贴密钥、令牌、用户隐私；日志与配置必须脱敏。
+
+若暂时没有 tracker：把跨团队事项记录在仓库内的 issue 草稿目录（如
+`docs/issues/`），并在 tracker 就绪后迁移为正式 issue，不得省略。
+
+> **本项目注**：tracker 就是 `walgit` 看板 —— 一条卡片（thread）= 一个 issue，状态流转靠**签名条目**
+> 而不是编辑看板文件；GitHub `origin` 只是镜像，不承接协作。完整流程（认领、patch、review、
+> merge_result、closed）见 `docs/AGENTS.project.md` §1–7 与「远端与看板」节。
+
+## 8. 软件工程纪律
+
+- **小步提交**：一个提交只做一件事；提交信息用
+  `feat|fix|test|docs|refactor|chore|merge:` 前缀，说明「为什么」而不只是「改了什么」；
+  每个提交都必须可构建。
+- **主分支保护**：代码变更一律走成员分支 + 独立 worktree；禁止直接向
+  `<MAIN_BRANCH>` 提交代码；合并使用 `--no-ff` 并记录验收结果与合并点；
+  合并后删除已合并分支。
+- **质量门禁**：合并前必须通过 §3 的命令；新增行为必须有测试，修复缺陷必须有
+  回归测试；禁止通过删除/跳过测试让流水线变绿。
+- **退出码是唯一权威**：门禁命令不要接管道（`cmd | tail` 会返回 `tail` 的状态），
+  脚本里先捕获 `$?` 再决定分支；构建工具可能对**成功**的运行也打印
+  "failed command" 之类的字样，判断失败要看是否另有 `error:`/失败计数。
+- **评审**：由作者之外的人评审；P0/P1 findings 必须修复或有明确处置结论；
+  评审意见具体到 `file:line` 与失败场景；评审记录随代码入库。
+- **缺陷处理**：先复现 → 写失败测试 → 修复 → 全量验证 → 记录根因；
+  不得用重试、忽略或放宽断言掩盖可复现缺陷。
+- **契约与兼容**：对外协议、公开 API、配置项、工具 schema 属于契约；变更必须
+  同步文档、示例与迁移说明；破坏性变更先征得人类同意。
+- **可观测性**：日志与错误信息不得静默吞掉；资源上限、丢弃与截断必须记录；
+  标准输出保持干净（按项目约定）。
+- **依赖与复用**：**不重复造轮子**——优先复用社区认可、活跃维护的成熟依赖。
+  选型判据：持续提交与发布、被广泛使用、issue/PR 响应及时、许可证清晰、跟踪本
+  项目所用的语言/运行时版本。**自研只允许**在「无合格依赖」或「依赖带来不可接受
+  的供应链/许可/体积风险」时进行，且必须在设计记录里写明理由与移除条件。新增依赖
+  必须固定版本（tag 或 commit），评估供应链风险与维护状态，并同步更新文档与
+  CHANGELOG。
+- **安全**：仓库中不得出现密钥、令牌或个人信息；外部输入（webhook、消息、路径、
+  URL、HTTP 请求）必须校验。
+- **发布**：版本遵循 SemVer，维护 CHANGELOG；发布产物来自干净提交；
+  发布前跑完整验收。
+- **技术债**：临时方案必须关联 issue 并写明移除条件；不允许无记录的「临时」代码
+  长期存在。
+
+## 9. 派工模板（Leader 复制使用）
+
+```markdown
+你是本项目团队成员。仓库：<REPO_ROOT>（Rust workspace 在 mir2-rs/，oracle 为 C# 参照实现）。
+工作区/分支（已建好）：<WORKTREE_ROOT>/<role>，分支 card/<短名>。
+只在该 worktree 内改动；不要 push、不要合并、不要派生下级代理。
+
+## 任务
+<背景、目标、边界、明确不做的事；关联的 walgit 卡号>
+
+## 约束
+- 优先复用成熟依赖；新增依赖必须固定版本、说明理由并评估供应链风险
+- 日志写 stderr，stdout 保持协议/输出约定
+- 不改其他成员的文件；任务边界不重叠；先核写集（改动文件清单）再动手
+- 行为等价优先于修 bug；偏离 oracle 必须走 T-*/D-*/B-* 白名单登记
+
+## 验收
+cd mir2-rs && cargo fmt --all -- --check
+cd mir2-rs && cargo clippy --workspace --all-targets -- -D warnings
+cd mir2-rs && cargo test --workspace
+cd mir2-rs && cargo run -p msgcodegen -- --check
+全绿；新增行为有测试。R 级片另需真机对拍证据。
+
+## 交付
+小步提交，每个提交可构建；不合并；交付到 needs-review 为止（不自行 approve、不自行 merge）。
+报告：分支、commit SHA、改动摘要、红→绿证据、命令与结果、剩余风险、残留物清单。
 ```
 
-只核 `git diff $(git merge-base <base> HEAD) <worktree>` 的**新增行**（域：`docs/` 下 `.md` 新增行里、反引号内的 `.rs`/`.cs`
-`path:line` 锚）；干净树与 `...HEAD` 等价，**工作树有未提交改动会一并纳入**。
-输出五档计数：检查 N（域内锚总数）/ 悬空 M（文件不存在）/ 越界 K（行号超文件长度）/ 符号缺失 S
-（锚紧邻声明的反引号符号不在锚定行/区间内）/ 高churn H（锚指向高 churn 文件：`mir2-rs/crates/world/**`、
-`mir2-rs/bins/game-svr/**`、`mir2-rs/tests/parity/csharp/**`，该档**独立判红**）；
-**M+K+S+H>0 ⇒ rc=1**，检查 0 ⇒ rc=0，`git`/`--base` 解析失败 ⇒ rc=2（判不了）。
-**为什么必须在待合并分支上、`--base` 取合并目标 ref**：合并之后再在 master 上以 `--base master` 跑，
-`merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，**什么都没扫**。
-该门是**增量**口径（只看新增行），对历史悬空锚无感；历史清理仍归 `stale_pointer_gate`，二者不可互相替代。
+## 10. Definition of Done
 
-### 判据分级（tiered acceptance，owner 2026-10-13 裁决，卡 `openmir2-tiered-acceptance-policy`）
+一个分支可以合并，当且仅当：
 
-「逐字节/逐字段等价」仍是**质量下限**，但**哪些片必须占用独占窗口**按级判定；**判级在审查时显式写进 `review`**，
-据此决定是否必须等窗口。**判不准 ⇒ 按 R（保守）**。
+- [ ] 目标行为已实现，边界外未扩散
+- [ ] §3 全部命令通过（含集成测试，或按 R/L 分级给出免跑理由）
+- [ ] 新增/修改行为有测试，缺陷有回归测试
+- [ ] 文档、示例、CHANGELOG 同步（如涉及对外契约）
+- [ ] 无硬编码密钥、无调试输出污染标准通道
+- [ ] 审查完成，P0/P1 已处置
+- [ ] 提交信息清晰、可构建、范围单一
 
-- **R 级 = 必须真机全量对拍（占窗口）**：任何触及 ① **RNG 抽数序列 / 随机播种**；② **时序**（tick 顺序、出队序、
-  `settle`/延迟、竞态）；③ **持久化落库**（DB 写入 / 存档 / 字段级 diff）；④ **战斗数值**（伤害、命中、躲闪、
-  经验曲线、属性重算、负重上限）的片。真机判据**未跑/未绿**时，`review` 写 `request_changes`，或 `approve` 但
-  必须显式写 `"window_required": true` + 缺什么证据；**绝不许**用「语义等价 / 代码看起来一样 / 与 oracle 同构」
-  盖掉这类差异。
-- **L 级 = 等价即放行，真机只做小比例抽样冒烟（不占窗口）**：纯逻辑分支、纯重构、文档、夹具与工具、
-  编译期常量与配置项等**不可能**只在真机暴露差异的片。审查者在**钉住的 commit** 上自证逐行/语义等价
-  （写清方法：逐行比 oracle 行号 / 等价替换证明 / selftest + 单测覆盖），再补**至少 1 条抽样冒烟**
-  （构造级或进程级，抽 1 个场景跑通即可）⇒ 可 `approve`。
-- **记录与收口**：`review` 必带 `tier` + `tier_why`；缺 `tier` 的旧 `approve` 按 **R** 处理。`merge_result` 之后
-  **R 级卡 `status ≠ closed`**（保持 `in-progress` 并在 `work` 写明待窗口项），**L 级可 `closed`**。
-- 反例（明确不许）：把 `characters_ablity.Hp` 这类数值列差、RNG 逐次流水的 `site`/`order` 差、落库字段差
-  说成「语义等价」。
-
-> 判据正文存档见 `TIER-POLICY.md`（owner 侧 `E:/tmp/openmir2-watch/`）；运行时落地在 `brief-review.md` /
-> `brief-review2.md` / `brief-merge.md`；里程碑判据表的分级标注见 `docs/Rust重写设计文档.md` §6 / §17.1 与
-> `mir2-rs/tests/parity/M3-report.md` §2。
-
-### 编码约定
-
-- **行为等价优先于修 bug**：Rust 侧默认复刻 C#（oracle）旧行为以便对拍；确需偏离的走白名单
-  （`T-*` / `D-*` / `B-*`）登记，并记录改前/改后行为。
-- 协议层一律按**原始字节**处理文本（线上是 GB2312/GBK 字节流），本层不做 UTF-8 转换；
-  展示时由上层显式解码（参照 `HUtil32.GetString` 的 gb2312 语义）。
-- 接口冻结线：`crates/protocol`、`crates/storage` 的改动必须通知受影响的线（见 §12.4）。
-- 一线一判据、一模块一 owner。
-
-### 已知偏差（记录在案，非忽略）
-
-- 种子实际集中在 `~/.walgit/keys/`，identity 指过去；本项目身份需跨 worktree 复用而 worktree 合并后会删。
-  明文规定的红线（一个目录堆多把私钥、agent 互相借用）**未违反**：每条线的 identity 只指向自己那把。
-- 合并由 coordinator 执行；**审查自本批起改为 reviewer-1/2 出 `approve`，coordinator 只做 merge**。
+> 本项目的收口还有额外五项（worktree / 分支 / 看板卡片收口 / 进程 / 临时物），
+> 见 `docs/AGENTS.project.md`「每批收尾清单（Cleanup DoD）」。两者同时满足才算完。
