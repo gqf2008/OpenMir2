@@ -45,18 +45,54 @@ EOF
   echo $?
 }
 
+# 主服用例：后台起进程 → 运行中探测 MsgSrvPort → 等它超时退出。
+# 输出 "<rc> <refused|listening>"。连得上即判 listening（主服不该有监听）。
+run_srv0_with_probe() { # gate_port msg_port seconds probe_delay
+  local gp="$1" mp="$2" secs="$3" delay="$4"
+  local d="$WORK/srv0"; mkdir -p "$d"
+  cat > "$d/Server.conf" <<EOF
+[Server]
+GateAddr=127.0.0.1
+GatePort=$gp
+CheckBlock=12288
+IDSAddr=127.0.0.1
+IDSPort=5600
+DBAddr=127.0.0.1
+DBPort=6000
+WorldMaps=1000x1000
+ServerIndex=0
+ServerNumber=0
+MsgSrvAddr=127.0.0.1
+MsgSrvPort=$mp
+EOF
+  timeout "$secs" "$BIN" game-svr "$d/Server.conf" > "$d/out.log" 2>&1 &
+  local pid=$!
+  sleep "$delay"
+  local state
+  if python -I -B -c "import socket,sys
+s=socket.socket(); s.settimeout(1)
+try:
+    s.connect(('127.0.0.1', $mp)); sys.exit(1)
+except OSError:
+    sys.exit(0)"; then state=refused; else state=listening; fi
+  wait "$pid"; local rc=$?
+  echo "$rc $state"
+}
+
 # 端口：选高位、互不冲突、无人监听
 P_SRV0=24995; P_SN1=24999; P_SN0=24998; P_BAD=24993
 G_SRV0=24996; G_SN1=24997; G_SN0=24994; G_BAD=24992
 
-rc_srv0=$(run_case srv0 "$G_SRV0" "$P_SRV0" 0 0 127.0.0.1 10)
+# 主服用例要在**运行期间**探测 MsgSrvPort：主服若静默监听而不打日志，光看日志发现不了。
+probe_srv0=$(run_srv0_with_probe "$G_SRV0" "$P_SRV0" 10 5)
+rc_srv0="${probe_srv0%% *}"; srv0_port_state="${probe_srv0##* }"
 rc_sn1=$(run_case sn1 "$G_SN1" "$P_SN1" 1 1 127.0.0.1 38)
 rc_sn0=$(run_case sn0 "$G_SN0" "$P_SN0" 1 0 127.0.0.1 36)
 rc_bad=$(run_case bad "$G_BAD" "$P_BAD" 1 0 not-an-ip 20)
 
-python -I -B - "$WORK" "$rc_srv0" "$rc_sn1" "$rc_sn0" "$rc_bad" "$P_SRV0" <<'PY'
+python -I -B - "$WORK" "$rc_srv0" "$rc_sn1" "$rc_sn0" "$rc_bad" "$srv0_port_state" <<'PY'
 import io, re, sys, os
-work, rc_srv0, rc_sn1, rc_sn0, rc_bad, p_srv0 = sys.argv[1:7]
+work, rc_srv0, rc_sn1, rc_sn0, rc_bad, srv0_port_state = sys.argv[1:7]
 fail = []
 
 def lines(name):
@@ -80,6 +116,8 @@ def planes_events(name):
 ev = planes_events("srv0")
 if ev: fail.append(f"1 主服 ServerIndex=0 出现了跨服日志：{ev[:3]}")
 if rc_srv0 not in ("124",): fail.append(f"1 主服进程应持续运行（timeout 124），实得 rc={rc_srv0}")
+if srv0_port_state != "refused":
+    fail.append(f"1 主服 MsgSrvPort 必须无监听，实测 {srv0_port_state}")
 
 # 2 分服 ServerNumber=1：首条 ≤3s 后，间隔 11±1.5s，≥3 个
 ev = planes_events("sn1")
@@ -118,5 +156,5 @@ print("WINDOW-GREEN：观测项 1-5 全部符合")
 PY
 rc=$?
 
-echo "（消息端口 $P_SRV0 / 24999 / 24998 全程无人监听：本脚本不启动任何监听者）"
+echo "（消息端口 $P_SRV0 / 24999 / 24998：主服端口在运行期间由本脚本主动探测，其余无人监听）"
 exit "$rc"

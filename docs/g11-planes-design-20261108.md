@@ -385,8 +385,11 @@ handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
 A5 已补上：
 
 ```rust
-// bins/game-svr/src/planes.rs
-pub fn send_server_group_msg(&self, ident: i32, server_num: i32, body: &[u8]) -> usize
+// bins/game-svr/src/planes.rs —— 角色无关入口（5b 的命令体调这个）
+pub fn send_server_group_msg(
+    link: Option<&PlanesLink>, ident: i32, server_num: i32, body: &[u8],
+) -> usize
+// 实例方法 PlanesLink::send_server_group_msg(ident, server_num, body) 是同名的客户端实现
 ```
 
 - **线格式**：`(code/serverIdx/body)`（明文三段，外层括号）——复用 A2-2 的 `encode_frame`，
@@ -411,15 +414,15 @@ pub fn send_server_group_msg(&self, ident: i32, server_num: i32, body: &[u8]) ->
 | `GetValidStr3` 的 `RemoveEmptyEntries` 折叠 | 已对拍（C# 探针 + 3020 条随机差分 0 mismatch） | §1、`crates/planes/src/lib.rs` |
 | 跨服停用对 G11 / 5b 的整体影响 | 两端皆死；5b 的跨服依赖已逐条勾对 | §4、§12、§13.1 |
 
-**仍开放**：R 级真机窗口（A3/A4 标 R）——构造级证据充分，但未跑双栈窗口；见 §15。
+**R 证据档位**：Rust 单栈真机窗口已跑并全过（§15.1）；**双栈对拍未做**——C# 侧行为由源码逐行核对 + C# 探针支撑。审查者据此判定 R 达成（`16fe6106`），残余口径见 §15.2。
 
-## 15. R 级真机窗口（未跑，观测项已定）
+## 15. R 级真机窗口（Rust 单栈已跑；双栈未做）
 
 整卡审查要求给出 R 证据。窗口要观察的项（审查者给的口径，逐条可机判）：
 
 1. 主服 `ServerIndex=0`：两栈均**无** `MsgSrvPort` 监听、无「已启动」日志、无跨服字节；
-2. 分服 `ServerNumber>0` 且主服端口无人监听：启动即一条失败日志（≤2s），之后约每 11s 一条
-   （至少 3 个间隔、±1s），始终连不上；
+2. 分服 `ServerNumber>0` 且主服端口无人监听：启动即一条失败日志（oracle 是立即；本仓实测
+   ≈2.0s，成因见 §15.2，脚本判据取 ≤3s），之后约每 11s 一条（至少 3 个间隔、±1.5s），始终连不上；
 3. 分服 `ServerNumber=0`：启动仅一条失败日志，之后 ≥30s 无重复；
 4. 非法 `MsgSrvAddr`/`MsgSrvPort`：两栈均**启动失败**（记录异常/退出码）；
 5. 无 DB/文件副作用；
@@ -432,7 +435,7 @@ pub fn send_server_group_msg(&self, ident: i32, server_num: i32, body: &[u8]) ->
 
 | 观测项 | 实测 |
 |---|---|
-| 1 主服 `ServerIndex=0` | 12s 运行：跨服日志 **0 条**，`MsgSrvPort` 无监听（netstat 计数 0） |
+| 1 主服 `ServerIndex=0` | 10s 运行：跨服日志 **0 条**；`MsgSrvPort` 在运行期间被脚本**主动探测**（TCP connect）⇒ 连接被拒 |
 | 2 分服 `ServerNumber=1` | 节点模式 1 条；失败日志 4 条，间隔 **10.03 / 11.00 / 10.01 s**（±1.5s 内） |
 | 3 分服 `ServerNumber=0` | 36s 内失败日志 **恰 1 条**，之后无重复 |
 | 4 非法 `MsgSrvAddr` | 进程 rc=1，`Error: MsgSrvAddr 不是合法 IP 地址："not-an-ip"…` |
@@ -450,8 +453,19 @@ pub fn send_server_group_msg(&self, ident: i32, server_num: i32, body: &[u8]) ->
 **未覆盖**：C# 栈没有起（双栈窗口成本高）。oracle 侧行为由源码逐行核对 + C# 探针
 （`tools/planes-probe` 的 `listen`/`slots` 模式）支撑，但严格意义上这不等于双栈对拍。
 
-状态：**Rust 单栈真机判据 1-5 已跑并全过；双栈对拍未做**。本卡据此**不声称 R 完全达成**，
-由审查者与 Owner 判定这一档证据是否足够。
+状态：**Rust 单栈真机判据 1-5 已跑并全过；双栈对拍未做**。
+
+### 15.2 残余口径（2s 首条延迟 / R 档判定）
+
+- **首条失败日志 ≈2.0s**：oracle 的 `ConnectAsync` 在启动时立即失败；本仓实测 ≈2.02s。
+  同一毫秒还出现 **DB 链路的第一条连接错误** ⇒ 启动期 tokio worker 被同步工作占住约 2s，
+  两条被 spawn 的链路被同量延迟。这是**宿主启动性质**，不是跨服模块的时序。
+  **决定**：不为此登记 `T-*`/`D-*`——它不构成跨服对外契约（跨服本身 inert）；
+  若将来把「启动即失败日志」当对外可观察行为，再按偏差登记。
+- **R 档判定**：审查者（`16fe6106`，tier R）独立复跑窗口与负对照后判 R 达成，
+  理由是本卡跨服路径在 oracle 生产形态下 inert，唯一可观察面就是失败日志节拍与主服无监听，
+  Rust 单栈真机已覆盖；C# 侧由源码 + 探针确定。**双栈对拍仍是未做的项**，若 Owner 要求，
+  需要按同一脚本的观测项补一次 C# 栈运行。
 
 ---
 
