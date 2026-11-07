@@ -298,6 +298,54 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | A4 | guild / castle / market 状态同步（按 A2 核实的 oracle 语义，空就是空） | R（时序 + 落库） |
 | A5 | 重新评估并处理 `gm-batch-5b` 的 blocked | — |
 
+## 12. A4：guild / castle / market 跨服同步的**发送面盘点与可观察性判定**
+
+结论先说：**没有可移植的业务语义**，Rust 侧不需要为此改一行代码。理由不是"我觉得"，是下面两条链条。
+
+### 12.1 发送面：34 个有效调用点、12 个 ident
+
+`SendServerGroupMsg(ident, serverIdx, body)` 在 `src/**` 里有 34 个**未被注释**的调用点
+（另有 6 行在注释里，不计）。机判口径：剥掉 `//` 开头与声明行（`void SendServerGroupMsg(`）后逐行取首参。
+
+| ident | 含义 | 次数 | 主要调用点 |
+|---|---|---:|---|
+| 204 `SS_204` | 城堡/系统公告 | 5 | `src/M2Server/Castle/UserCastle.cs` ×4、`ForcedWallconquestWarCommand.cs` |
+| 205 `SS_205` | 加行会 | 2 | `GuildOfficial.cs`、`AddGuildCommand.cs` |
+| 206 `SS_206` | 删行会 | 2 | `PlayObject.Operate.cs`、`DelGuildCommand.cs` |
+| 207 `SS_207` | 重载行会 | 11 | `PlayObject.Base/Operate.cs` ×10、`EndGuildCommand.cs` |
+| 208 `SS_208` | 行会聊天 | 3 | `PlayObject.Chat.cs` ×2、`PlayObject.Message.cs` |
+| 211 `SS_211` | 换城堡主 | 2 | `PlayObject.Message.cs`、`ChangeSabukLordCommand.cs` |
+| 212 `SS_212` | 重载城堡 | 3 | `UserCastle.cs` ×2、`ForcedWallconquestWarCommand.cs` |
+| 213（字面量） | 重载管理员 | 1 | `ReLoadAdminCommand.cs` |
+| 200 `ISM_USERSERVERCHANGE` | 换服 | 1 | `WorldServer.Switch.cs` |
+| 201/202 `ISM_USERLOGON/LOGOUT` | 上下线 | 2 | `WorldServer.cs` |
+| 203 `ISM_WHISPER` | 私聊 | 1 | `PlayObject.Chat.cs` |
+| 222 `ISM_CHANGESERVERRECIEVEOK` | 换服确认 | 1 | `PlanesMessage.cs`（本身也在注释块外的死分支里） |
+
+**market（224/225）没有任何发送点**，只有接收侧的空处理器。
+
+### 12.2 可观察性：这些发送全是 no-op
+
+`WorldServer.SendServerGroupMsg`（`src/GameSrv/Word/WorldServer.cs:884-893`）只有两条支路：
+
+- `ServerIndex == 0` ⇒ `PlanesServer.SendServerSocket`：遍历 `srvArray`，**而主服从不监听（§5.2）
+  ⇒ 数组恒空** ⇒ 一个字节都不发；
+- `ServerIndex != 0` ⇒ `PlanesClient.SendSocket`：`if (!IsConnect()) return;`，**而没有任何进程在
+  监听该端口（§5.2）⇒ 永远连不上** ⇒ 同样一个字节都不发。
+
+⇒ 上面 34 个调用点在两种部署形态下**都不产生任何可观察效果**。这与 §4.2 的结论（接收侧 32 个
+handler 里 0 个有真实副作用）互为表里：**两端都是死的**。
+
+### 12.3 判定
+
+- **A4 不产生代码**。G11 在本 oracle 上的等价实现 = 已经交付的东西（帧编解码 + 分类 +
+  客户端连接/重连/日志），跨服业务同步**没有可移植的语义**；
+- 若将来 Owner 决定"真修跨服"，最小可用集是：① `PlanesServer` 真正 `Start()` 监听；
+  ② 分服侧实现 32 个 handler 的业务（当前全是空桩/注释）；③ 把 34 个发送点接到通道上；
+- **一个地雷**：`SS_211 = 211 = ISM_CHANGECASTLEOWNER`，而 211 的处理器**直接 throw**
+  （`src/Modules/PlanesSystem/PlanesMessage.cs:354-357`）⇒ 一旦真跑起来，收到 211 的那一批帧会被整批丢弃。
+  这是 oracle 的既存缺陷，启用前必须先处理。
+
 ## 11. 进度
 
 | 片 | 状态 | 落点 |
@@ -309,6 +357,7 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | A3-1 | 完成（Server/Client 纯状态机 + 槽位语义，C# 探针实测） | `mir2-rs/crates/planes/src/{server,client,service}.rs` |
 | A3-2a | 完成（`[Server] MsgSrvAddr/MsgSrvPort/ServerNumber` 解析） | `mir2-rs/bins/game-svr/src/config.rs` |
 | A3-2b | 完成（按 §5.2：客户端连接/重连/失败日志；主服不监听） | `mir2-rs/bins/game-svr/src/planes.rs` |
+| A4 | 完成（判定为"无业务语义可移植"：34 个发送点全是 no-op，见 §12） | 本文档 §12 |
 
 ## 12. 待确认 / 风险
 
