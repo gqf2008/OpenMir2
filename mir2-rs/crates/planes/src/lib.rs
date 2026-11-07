@@ -2,14 +2,18 @@
 //!
 //! 与 C# `PlanesServer.DecodeSocStr` / `PlanesClient.DecodeSocStr` **逐字节等价**：
 //! 帧是 `(ident/serverNum/body)`，字段分隔符是 `'/'`（C# 的 `HUtil32.Backslash`，
-//! 注意它的名字叫 Backslash、值却是 `/`）。`body` 内部还可以再用 `/` 分字段，
-//! 由上层用 [`get_valid_str3`] 逐段取。
+//! 注意它的名字叫 Backslash、值却是 `/`）。
 //!
-//! **本层只处理字节**：线上文本是 GB2312 字节流，这里不做任何 UTF-8 转换或补全。
+//! **本层只处理字节**：线上文本是 GB2312 字节流，这里不做任何 UTF-8 转换。
 //!
-//! 与 C# 的两处**刻意保留**的畸形行为：
-//! - 服务器端循环条件 `IndexOf(')') > 0`，客户端是 `> -1`（见 [`Decoder::next_frame`]）；
-//! - 找不到 `(` 时 C# 会在兜底循环里越界抛异常、被 catch 吞成空串（本实现同样返回空）。
+//! 所有"怪异"行为都是**对着 C# 源实跑出来的**（探针复制 `HUtil32` 原函数 + 模拟两路
+//! `DecodeSocStr`），不是读代码推断的：
+//! - `GetValidStr3` 会**跳过空段**（`a//b` ⇒ dest `a`、返回 `b`），不是简单的 split-once；
+//! - `ArrestStringEx` 在「找到 `(` 但找不到 `)`」时返回 `( + 剩余`，且**不改写**上一个
+//!   `arrest_str` ⇒ `Str` 跨迭代复用会造成**上一帧被重复处理**；
+//! - 空帧 `()` 会消耗掉一帧并把缓冲推进到其后；
+//! - 完全找不到 `(` 时 C# 越界抛异常被 catch 吞掉 ⇒ 缓冲被**清空**；
+//! - 服务器循环条件是 `IndexOf(')') > 0`，客户端是 `> -1`，两者**可观察地不同**。
 #![forbid(unsafe_code)]
 #![warn(missing_docs)]
 
@@ -36,57 +40,59 @@ pub enum Flavor {
     Client,
 }
 
-/// `int.TryParse` 的等价物：失败（含非 UTF-8 / 非数字 / 溢出）返回 `def`。
+/// `int.TryParse` 的等价物：失败（含非数字 / 溢出 / 非 UTF-8）返回 `def`。
+///
+/// **只 trim ASCII 空白**（空格、`\t\n\v\f\r`）——.NET 的 `TryParse` 不接受 Unicode 空白
+/// （如 U+3000、U+00A0），实跑 `StrToInt("42\u{3000}", 7)` 得 `7`。
 #[must_use]
 pub fn str_to_int(bytes: &[u8], def: i32) -> i32 {
     match std::str::from_utf8(bytes) {
-        Ok(s) => s.trim().parse::<i32>().unwrap_or(def),
+        Ok(s) => s.trim_ascii().parse::<i32>().unwrap_or(def),
         Err(_) => def,
     }
 }
 
-/// C# `HUtil32.GetValidStr3(source, ref dest, divider)` 的逐行移植。
+/// C# `HUtil32.GetValidStr3(source, ref dest, divider)` 的逐行移植（实跑对拍）。
 ///
-/// 语义：按分隔符**最多切成 2 段**并 `RemoveEmptyEntries`，`dest` 取第一段（可能为空），
-/// 返回第二段（可能为空）。前导空字段会被折叠——这与「连续分隔符 = 空字段」的直觉不同。
+/// 语义是 `Split(divider, 2, RemoveEmptyEntries)`：**跳过空段**，`dest` 取第一个非空段，
+/// 返回「该段之后、跳过紧随的分隔符」的剩余部分。
+///
+/// 实跑真值表（oracle）：`a//b` ⇒ (`a`, `b`)；`//body` ⇒ (`body`, ``)；
+/// `/a/b` ⇒ (`a`, `b`)；`a//b/c` ⇒ (`a`, `b/c`)；`a/` ⇒ (`a`, ``)。
 pub fn get_valid_str3(source: &[u8], dest: &mut Vec<u8>) -> Vec<u8> {
-    let mut it = source.splitn(2, |&b| b == DIVIDER);
-    let first = it.next().unwrap_or(&[]);
-    let second = it.next().unwrap_or(&[]);
-    let mut parts: [&[u8]; 2] = [first, second];
-    let mut n = 0;
-    for part in &mut parts {
-        if !part.is_empty() {
-            n += 1;
-        }
-    }
     dest.clear();
-    match n {
-        0 => Vec::new(),
-        1 => {
-            let only = if first.is_empty() { second } else { first };
-            dest.extend_from_slice(only);
-            Vec::new()
-        }
-        _ => {
-            dest.extend_from_slice(first);
-            second.to_vec()
-        }
+    let mut i = 0;
+    while i < source.len() && source[i] == DIVIDER {
+        i += 1;
     }
+    if i >= source.len() {
+        return Vec::new();
+    }
+    let start = i;
+    while i < source.len() && source[i] != DIVIDER {
+        i += 1;
+    }
+    dest.extend_from_slice(&source[start..i]);
+    while i < source.len() && source[i] == DIVIDER {
+        i += 1;
+    }
+    source[i..].to_vec()
 }
 
 /// C# `HUtil32.ArrestStringEx(source, searchAfter, arrestBefore, ref arrestStr)` 的移植。
 ///
-/// 返回「闭合符号之后的剩余部分」；`arrest_str` 被置为两个符号之间的内容。
-/// 找不到闭合符号时返回 `searchAfter + 剩余`（与 C# 一致）；**找不到开启符号时返回空**
-/// （C# 在兜底分支里越界抛异常后被 catch 吞成空串）。
+/// 返回「闭合符号之后的剩余部分」，`arrest_str` 被置为两符号之间的内容。三条边界都按
+/// oracle 实跑保留：
+/// - source 为空 ⇒ 返回空，**不动** `arrest_str`；
+/// - 找不到 `(` ⇒ C# 在兜底分支越界抛异常被 catch ⇒ **清空** `arrest_str` 并返回空；
+/// - 找到 `(` 但找不到 `)` ⇒ 返回 `search + 剩余`，**不动** `arrest_str`
+///   （跨迭代复用 `arrest_str` 时会因此重复处理上一帧）。
 pub fn arrest_string_ex(
     source: &[u8],
     search: u8,
     arrest: u8,
     arrest_str: &mut Vec<u8>,
 ) -> Vec<u8> {
-    arrest_str.clear();
     if source.is_empty() {
         return Vec::new();
     }
@@ -104,9 +110,11 @@ pub fn arrest_string_ex(
         }
     }
     if !find_data {
+        arrest_str.clear();
         return Vec::new();
     }
     if let Some(n) = span.iter().position(|&b| b == arrest) {
+        arrest_str.clear();
         arrest_str.extend_from_slice(&span[..n]);
         span[n + 1..].to_vec()
     } else {
@@ -117,7 +125,7 @@ pub fn arrest_string_ex(
     }
 }
 
-/// 组装一帧（发送侧）。C# 侧是 `nCode + "/" + nServerIdx + "/" + sMsg`，外层补括号。
+/// 组装一帧（发送侧）。C# 是 `nCode + "/" + nServerIdx + "/" + sMsg`，外层补括号。
 #[must_use]
 pub fn encode_frame(ident: i32, server_num: i32, body: &[u8]) -> Vec<u8> {
     let head = format!("({ident}{}{server_num}{}", DIVIDER as char, DIVIDER as char);
@@ -128,9 +136,10 @@ pub fn encode_frame(ident: i32, server_num: i32, body: &[u8]) -> Vec<u8> {
     out
 }
 
-/// 流式解码器：`push` 累积字节，`next_frame` 取出一帧。
+/// 流式解码器：`push` 累积字节，`decode` 跑**一次** C# 语义的解码过程。
 ///
-/// 复刻 C# 的「接收只累积、解码另外驱动」分离：`push` 不做任何解析。
+/// 与 C# 一致：预检（`IndexOf(')') <= 0` ⇒ 什么都不做）**每次 decode 只做一次**；
+/// 循环内用 [`Flavor`] 决定条件；`arrest_str` 在**同一次 decode 内跨迭代复用**。
 #[derive(Debug)]
 pub struct Decoder {
     buf: Vec<u8>,
@@ -158,43 +167,51 @@ impl Decoder {
         &self.buf
     }
 
-    /// 取下一帧；不足一帧时返回 `None` 并保留缓冲。
-    pub fn next_frame(&mut self) -> Option<Frame> {
-        // C# 预检：`IndexOf(')') <= 0` ⇒ 直接 return（位置 0 也不处理）。
-        let first_close = self.buf.iter().position(|&b| b == b')')?;
-        if first_close == 0 {
-            return None;
+    /// 跑一次解码：返回本次解出的帧，剩余字节留在缓冲里。
+    pub fn decode(&mut self) -> Vec<Frame> {
+        let mut frames = Vec::new();
+        if self.buf.is_empty() {
+            return frames;
         }
-        if !self.loop_condition() {
-            return None;
+        // C# 预检：`IndexOf(')') <= 0` ⇒ 直接 return（位置 0 也不处理），缓冲不动。
+        match self.buf.iter().position(|&b| b == b')') {
+            Some(i) if i > 0 => {}
+            _ => return frames,
         }
-        let mut inner = Vec::new();
-        let rest = arrest_string_ex(&self.buf, b'(', b')', &mut inner);
-        if inner.is_empty() {
-            return None;
+        let mut buf_str = std::mem::take(&mut self.buf);
+        let mut arrest_str: Vec<u8> = Vec::new();
+        loop {
+            let cond = match self.flavor {
+                Flavor::Server => buf_str
+                    .iter()
+                    .position(|&b| b == b')')
+                    .is_some_and(|i| i > 0),
+                Flavor::Client => buf_str.contains(&b')'),
+            };
+            if !cond {
+                break;
+            }
+            buf_str = arrest_string_ex(&buf_str, b'(', b')', &mut arrest_str);
+            if arrest_str.is_empty() {
+                break;
+            }
+            frames.push(parse_frame(&arrest_str));
         }
-        self.buf = rest;
-        let mut head = Vec::new();
-        let remainder = get_valid_str3(&inner, &mut head);
-        let mut s_num = Vec::new();
-        let body = get_valid_str3(&remainder, &mut s_num);
-        Some(Frame {
-            ident: str_to_int(&head, 0),
-            server_num: str_to_int(&s_num, -1),
-            body,
-        })
+        self.buf = buf_str;
+        frames
     }
+}
 
-    /// 服务器 `> 0`；客户端 `> -1`（即「存在 `)` 即可」）。
-    fn loop_condition(&self) -> bool {
-        match self.flavor {
-            Flavor::Server => self
-                .buf
-                .iter()
-                .position(|&b| b == b')')
-                .is_some_and(|i| i > 0),
-            Flavor::Client => self.buf.contains(&b')'),
-        }
+/// 把一帧的内层字节（`ident/serverNum/body`）解析成 [`Frame`]。
+fn parse_frame(inner: &[u8]) -> Frame {
+    let mut head = Vec::new();
+    let remainder = get_valid_str3(inner, &mut head);
+    let mut s_num = Vec::new();
+    let body = get_valid_str3(&remainder, &mut s_num);
+    Frame {
+        ident: str_to_int(&head, 0),
+        server_num: str_to_int(&s_num, -1),
+        body,
     }
 }
 
@@ -202,133 +219,228 @@ impl Decoder {
 mod tests {
     use super::*;
 
-    fn decode_all(flavor: Flavor, chunks: &[&[u8]]) -> Vec<Frame> {
+    fn run(flavor: Flavor, input: &[u8]) -> (Vec<Frame>, Vec<u8>) {
         let mut d = Decoder::new(flavor);
-        let mut out = Vec::new();
-        for c in chunks {
-            d.push(c);
-            while let Some(f) = d.next_frame() {
-                out.push(f);
-            }
-        }
-        out
+        d.push(input);
+        let frames = d.decode();
+        (frames, d.buffered().to_vec())
     }
+
+    fn fr(ident: i32, server_num: i32, body: &[u8]) -> Frame {
+        Frame {
+            ident,
+            server_num,
+            body: body.to_vec(),
+        }
+    }
+
+    // ---- 以下期望值全部来自 C# 探针实跑（复制 HUtil32 原函数 + 模拟两路 DecodeSocStr）----
 
     #[test]
     fn encode_uses_slash_divider() {
         assert_eq!(encode_frame(201, 3, b"alice"), b"(201/3/alice)");
     }
 
-    #[test]
-    fn roundtrip_single_frame() {
-        let f = decode_all(Flavor::Server, &[&encode_frame(205, 2, b"guild")]);
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].ident, 205);
-        assert_eq!(f[0].server_num, 2);
-        assert_eq!(f[0].body, b"guild");
-    }
+    /// oracle 帧表的行类型：(输入, server 帧, server 剩余, client 帧, client 剩余)
+    type Case = (
+        &'static [u8],
+        Vec<Frame>,
+        &'static [u8],
+        Vec<Frame>,
+        &'static [u8],
+    );
 
+    /// 数据表本身比 100 行长 —— 这是刻意的：每条都是 C# 探针实跑出来的期望值。
     #[test]
-    fn multiple_frames_in_one_chunk() {
-        let mut buf = encode_frame(100, 0, b"");
-        buf.extend_from_slice(&encode_frame(211, 1, b"x/y"));
-        let f = decode_all(Flavor::Server, &[&buf]);
-        assert_eq!(f.len(), 2);
-        assert_eq!((f[0].ident, f[0].server_num), (100, 0));
-        assert_eq!((f[1].ident, f[1].server_num), (211, 1));
-        assert_eq!(f[1].body, b"x/y", "body 内的分隔符原样保留");
+    #[allow(clippy::too_many_lines)]
+    fn oracle_frame_table() {
+        let cases: &[Case] = &[
+            (
+                b"(201/9/alice)",
+                vec![fr(201, 9, b"alice")],
+                b"",
+                vec![fr(201, 9, b"alice")],
+                b"",
+            ),
+            (
+                b"(201/9/a)(202/1/b)",
+                vec![fr(201, 9, b"a"), fr(202, 1, b"b")],
+                b"",
+                vec![fr(201, 9, b"a"), fr(202, 1, b"b")],
+                b"",
+            ),
+            (
+                b"(201//body)",
+                vec![fr(201, -1, b"")],
+                b"",
+                vec![fr(201, -1, b"")],
+                b"",
+            ),
+            (
+                b"(1//a/b)",
+                vec![fr(1, -1, b"b")],
+                b"",
+                vec![fr(1, -1, b"b")],
+                b"",
+            ),
+            (
+                b"(1/2//b)",
+                vec![fr(1, 2, b"b")],
+                b"",
+                vec![fr(1, 2, b"b")],
+                b"",
+            ),
+            (
+                b"(/2/body)",
+                vec![fr(2, -1, b"")],
+                b"",
+                vec![fr(2, -1, b"")],
+                b"",
+            ),
+            (b"()(1/2/x)", vec![], b"(1/2/x)", vec![], b"(1/2/x)"),
+            (b"201/1/ok)", vec![], b"", vec![], b""),
+            (
+                b"(1/2/a)b)c(d",
+                vec![fr(1, 2, b"a"), fr(1, 2, b"a")],
+                b"(d",
+                vec![fr(1, 2, b"a"), fr(1, 2, b"a")],
+                b"(d",
+            ),
+            (
+                b"(1/2/a))(3/4/y)",
+                vec![fr(1, 2, b"a")],
+                b")(3/4/y)",
+                vec![fr(1, 2, b"a"), fr(3, 4, b"y")],
+                b"",
+            ),
+            (
+                b"(1/2/a))",
+                vec![fr(1, 2, b"a")],
+                b")",
+                vec![fr(1, 2, b"a")],
+                b"",
+            ),
+            (
+                b"junk(201/1/ok)",
+                vec![fr(201, 1, b"ok")],
+                b"",
+                vec![fr(201, 1, b"ok")],
+                b"",
+            ),
+            (b"(201/9/x", vec![], b"(201/9/x", vec![], b"(201/9/x"),
+            (b")rest", vec![], b")rest", vec![], b")rest"),
+            (
+                b"(abc/1/x)",
+                vec![fr(0, 1, b"x")],
+                b"",
+                vec![fr(0, 1, b"x")],
+                b"",
+            ),
+            (
+                b"((1/2/x)",
+                vec![fr(0, 2, b"x")],
+                b"",
+                vec![fr(0, 2, b"x")],
+                b"",
+            ),
+            (
+                b"(1/2/a/b/c)",
+                vec![fr(1, 2, b"a/b/c")],
+                b"",
+                vec![fr(1, 2, b"a/b/c")],
+                b"",
+            ),
+            (
+                b"  (1/2/x)",
+                vec![fr(1, 2, b"x")],
+                b"",
+                vec![fr(1, 2, b"x")],
+                b"",
+            ),
+            (b"", vec![], b"", vec![], b""),
+        ];
+        for (input, sf, sr, cf, cr) in cases {
+            let (got_f, got_r) = run(Flavor::Server, input);
+            assert_eq!(
+                &got_f,
+                sf,
+                "server frames for {:?}",
+                String::from_utf8_lossy(input)
+            );
+            assert_eq!(
+                &got_r,
+                sr,
+                "server rest for {:?}",
+                String::from_utf8_lossy(input)
+            );
+            let (got_f, got_r) = run(Flavor::Client, input);
+            assert_eq!(
+                &got_f,
+                cf,
+                "client frames for {:?}",
+                String::from_utf8_lossy(input)
+            );
+            assert_eq!(
+                &got_r,
+                cr,
+                "client rest for {:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
     }
 
     #[test]
     fn partial_frame_is_buffered_until_close() {
         let mut d = Decoder::new(Flavor::Server);
         d.push(b"(20");
-        assert!(d.next_frame().is_none());
+        assert_eq!(d.decode(), Vec::new());
         assert_eq!(d.buffered(), b"(20");
         d.push(b"1/9/al");
-        assert!(d.next_frame().is_none());
+        assert_eq!(d.decode(), Vec::new());
         d.push(b"ice)");
-        let f = d.next_frame().expect("frame");
-        assert_eq!((f.ident, f.server_num), (201, 9));
-        assert_eq!(f.body, b"alice");
-        assert_eq!(d.buffered(), []);
+        let f = d.decode();
+        assert_eq!(f, vec![fr(201, 9, b"alice")]);
+        assert_eq!(d.buffered(), b"");
     }
 
     #[test]
-    fn no_close_paren_returns_none_and_keeps_buffer() {
-        let mut d = Decoder::new(Flavor::Server);
-        d.push(b"(201/9/x");
-        assert!(d.next_frame().is_none());
-        assert_eq!(d.buffered(), b"(201/9/x");
+    fn get_valid_str3_oracle_table() {
+        let cases: &[(&[u8], &[u8], &[u8])] = &[
+            (b"a//b", b"a", b"b"),
+            (b"//body", b"body", b""),
+            (b"/a/b", b"a", b"b"),
+            (b"a//b/c", b"a", b"b/c"),
+            (b"abc", b"abc", b""),
+            (b"", b"", b""),
+            (b"/", b"", b""),
+            (b"a/", b"a", b""),
+        ];
+        for (input, want_dest, want_ret) in cases {
+            let mut dest = Vec::new();
+            let ret = get_valid_str3(input, &mut dest);
+            assert_eq!(
+                &dest,
+                want_dest,
+                "dest for {:?}",
+                String::from_utf8_lossy(input)
+            );
+            assert_eq!(
+                &ret,
+                want_ret,
+                "ret for {:?}",
+                String::from_utf8_lossy(input)
+            );
+        }
     }
 
     #[test]
-    fn close_at_index_zero_is_ignored() {
-        let mut d = Decoder::new(Flavor::Server);
-        d.push(b")rest");
-        assert!(d.next_frame().is_none());
-        assert_eq!(d.buffered(), b")rest");
-    }
-
-    #[test]
-    fn leading_junk_before_open_paren_is_skipped() {
-        let f = decode_all(Flavor::Server, &[b"junk(201/1/ok)"]);
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].body, b"ok");
-    }
-
-    #[test]
-    fn missing_open_paren_yields_nothing() {
-        let f = decode_all(Flavor::Server, &[b"201/1/ok)"]);
-        assert!(f.is_empty(), "C# 在找不到 '(' 时抛异常被吞 → 空");
-    }
-
-    #[test]
-    fn empty_fields_fold_like_remove_empty_entries() {
-        // "(201//body)"：C# 的 Split(.., 2, RemoveEmptyEntries) 会把**空段折掉**，
-        // 于是 "body" 被当成分隔符后的第二段 → 它成了 serverNum，body 反而为空。
-        // 这是 oracle 的真实语义（不是我们想要的语义），必须原样保留。
-        let f = decode_all(Flavor::Server, &[b"(201//body)"]);
-        assert_eq!(f.len(), 1);
-        assert_eq!(f[0].ident, 201);
-        assert_eq!(
-            f[0].server_num, -1,
-            "serverNum 段是 \"body\" ⇒ 解析失败 ⇒ 默认 -1"
-        );
-        assert!(f[0].body.is_empty(), "body 段被折叠掉了");
-    }
-
-    #[test]
-    fn bad_ident_falls_back_to_zero() {
-        let f = decode_all(Flavor::Server, &[b"(abc/1/x)"]);
-        assert_eq!(f[0].ident, 0);
-    }
-
-    #[test]
-    fn str_to_int_matches_try_parse() {
-        assert_eq!(str_to_int(b" 42 ", 7), 42, "TryParse 允许首尾空白");
+    fn str_to_int_oracle_table() {
+        assert_eq!(str_to_int(b" 42 ", 7), 42);
         assert_eq!(str_to_int(b"4x", 7), 7);
         assert_eq!(str_to_int(b"", 7), 7);
         assert_eq!(str_to_int(b"-5", 7), -5);
-    }
-
-    #[test]
-    fn server_and_client_differ_on_loop_condition() {
-        // 预检只在 ')' 位于 0 时短路；这里构造「第一帧之后剩余以 ')' 开头」的形状，
-        // 服务器（> 0）停止，客户端（> -1）继续。
-        let mut d_s = Decoder::new(Flavor::Server);
-        d_s.push(b"(1/2/a))");
-        let first = d_s.next_frame().expect("first");
-        assert_eq!(first.body, b"a");
-        assert!(
-            d_s.next_frame().is_none(),
-            "服务器：剩余 \")\" 的 ')' 在位置 0 ⇒ 停"
-        );
-
-        let mut d_c = Decoder::new(Flavor::Client);
-        d_c.push(b"(1/2/a))");
-        assert!(d_c.next_frame().is_some());
-        // 客户端循环条件 > -1：剩余 ")" 仍满足，但 arrest 找不到 '(' ⇒ 返回空 ⇒ 停止
-        assert!(d_c.next_frame().is_none());
+        assert_eq!(str_to_int(b" 42\t", 7), 42);
+        // Unicode 空白：C# TryParse 不认 ⇒ 默认值；我们的字节层同样失败
+        assert_eq!(str_to_int("\u{3000}42".as_bytes(), 7), 7);
     }
 }
