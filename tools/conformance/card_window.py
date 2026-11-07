@@ -187,8 +187,9 @@ TOOL = "tools/conformance/card_window.py"
 
 
 def _collab_env():
-    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
-    （卡 `openmir2-walgit-local-commands-env`）。"""
+    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
+    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留兼容旧主机
+    （卡 `openmir2-collab-interface-wg-migration`）。"""
     env = dict(os.environ)
     env["WALGIT_LOCAL_COMMANDS"] = "1"
     return env
@@ -5951,7 +5952,7 @@ def git_head(repo):
 
 def post_comment(card, body, repo):
     """在该卡发一条签名 comment；只写 kind=comment，绝不改卡状态。返回 (ok, detail)。"""
-    thread_cmd = ["walgit", "collab", "thread", card, "--repo", repo]
+    thread_cmd = ["wg", "collab", "thread", card, "--repo", repo]
     parent = ""
     detail = ""
     for attempt in (1, 2):
@@ -5972,7 +5973,7 @@ def post_comment(card, body, repo):
     else:
         return False, detail
 
-    entry_cmd = ["walgit", "collab", "entry", "--repo", repo, "--kind", "comment",
+    entry_cmd = ["wg", "collab", "entry", "--repo", repo, "--kind", "comment",
                  "--id", card, "--parent", parent,
                  "--body", json.dumps(body, ensure_ascii=False, separators=(",", ":")),
                  "--push", "walgit"]

@@ -29,7 +29,7 @@ import sys
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_RULES = os.path.join(HERE, "rules.json")
 
-#: 本卡 issue oid（`walgit collab` 的 issue entry oid；裁定记录在卡线程里）。
+#: 本卡 issue oid（`wg collab` 的 issue entry oid；裁定记录在卡线程里）。
 DECISION_OID = "062972b6581e9fe4fd15370bdbbb4f8a4e3758ce"
 #: 保留 PENDING 的 `rules` ident（int）。
 KEEP_PENDING_IDENTS = frozenset({10, 50})
