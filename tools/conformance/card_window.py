@@ -5952,7 +5952,8 @@ def git_head(repo):
 
 def post_comment(card, body, repo):
     """在该卡发一条签名 comment；只写 kind=comment，绝不改卡状态。返回 (ok, detail)。"""
-    thread_cmd = ["wg", "collab", "thread", card, "--repo", repo]
+    read_tool = os.path.join(REPO_ROOT, "tools", "orchestration", "collab_read.py")
+    thread_cmd = [sys.executable, "-I", "-B", read_tool, "thread", card, "--json", "--repo", repo]
     parent = ""
     detail = ""
     for attempt in (1, 2):
@@ -5961,7 +5962,9 @@ def post_comment(card, body, repo):
                                encoding="utf-8", errors="replace", timeout=120,
                                env=_collab_env())
             if p.returncode == 0:
-                entries = json.loads(p.stdout or "[]")
+                doc = json.loads(p.stdout or "{}")
+                entries = doc.get("entries") if isinstance(doc, dict) else doc
+                entries = entries or []
                 if entries:
                     parent = entries[-1].get("oid") or ""
                 break

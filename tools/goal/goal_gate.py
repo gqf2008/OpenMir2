@@ -83,15 +83,6 @@ def _decode(raw: bytes) -> str:
     return raw.decode("utf-8", "replace")
 
 
-def _collab_env():
-    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
-    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留兼容旧主机
-    （卡 `openmir2-collab-interface-wg-migration`）。"""
-    env = dict(os.environ)
-    env["WALGIT_LOCAL_COMMANDS"] = "1"
-    return env
-
-
 def run_cmd(cmd, cwd, timeout, env=None):
     """运行一个只读命令，返回记录（不抛异常，超时/缺失都变成状态）。"""
     cmd = [str(c) for c in cmd]
@@ -226,9 +217,15 @@ def run_script_coverage(mir2_root: Path, envir: str, script_bin: str, timeout):
 # --------------------------------------------------------------------------
 
 def load_board(repo: Path, timeout=180):
-    """`wg collab board --format json` -> ({card_id: card}, rec)。"""
-    rec = run_cmd(["wg", "collab", "board", "--format", "json"], repo, timeout,
-                  env=_collab_env())
+    """collab_read 只读投影 -> ({card_id: card}, rec)。
+
+    不走 `wg collab board`：本仓库 14,529 条 inbox ref 会与 git 管道互锁、
+    约 2 分钟才超时（卡 `openmir2-collab-interface-wg-migration`）。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    tool = os.path.join(os.path.dirname(here), "orchestration", "collab_read.py")
+    rec = run_cmd([sys.executable, "-I", "-B", tool, "board", "--json", "--repo", str(repo)],
+                  repo, timeout)
     if rec.get("rc") != 0:
         return None, rec
     try:
@@ -237,11 +234,22 @@ def load_board(repo: Path, timeout=180):
         rec["error"] = "board json 解析失败：%s" % exc
         return None, rec
     cards = {}
-    for column in data.get("columns", []) or []:
-        for card in column.get("cards", []) or []:
-            card = dict(card)
-            card["_column"] = column.get("name")
-            cards[card["id"]] = card
+    flat = data.get("cards")
+    rows = []
+    if isinstance(flat, list):            # collab_read.py 的扁平形态
+        for card in flat:
+            if isinstance(card, dict):
+                row = dict(card)
+                row["_column"] = card.get("column")
+                rows.append((row.get("_column"), row))
+    else:                                 # 旧 columns→cards 形态（兼容）
+        for column in data.get("columns", []) or []:
+            for card in column.get("cards", []) or []:
+                row = dict(card)
+                row["_column"] = column.get("name")
+                rows.append((row.get("_column"), row))
+    for _col, card in rows:
+        cards[card["id"]] = card
     return cards, rec
 
 

@@ -125,23 +125,30 @@ def guard_body_freshness(path, max_age, allow_stale, now=None):
 
 
 def thread_entry_count(repo, thread_id, run=subprocess.run):
-    """`wg collab thread <id>` 判空。返回 (count|None, detail)；None = 判不了。"""
+    """`collab_read thread <id>` 判空。返回 (count|None, detail)；None = 判不了。
+
+    读路径走 collab_read（`wg collab thread` 在本仓库会互锁、约 2 分钟才超时）。
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    tool = os.path.join(os.path.dirname(here), "orchestration", "collab_read.py")
     try:
-        pr = run(["wg", "collab", "thread", thread_id, "--repo", repo],
-                 capture_output=True, text=True, timeout=60, env=_collab_env())
+        pr = run([sys.executable, "-I", "-B", tool, "thread", thread_id, "--json", "--repo", repo],
+                 capture_output=True, text=True, timeout=60)
     except Exception as ex:
-        return None, "调用 wg collab thread 失败：%s" % ex
+        return None, "调用 collab_read thread 失败：%s" % ex
     if pr.returncode != 0:
         err = (pr.stderr or "").strip()
-        if "no entries for thread" in err:
-            return 0, "thread 尚无条目（walgit: %s）" % err
-        return None, "wg collab thread rc=%d stderr=%r" % (pr.returncode, err)
+        if "no entries for thread" in err or "不存在" in err:
+            return 0, "thread 尚无条目（collab_read: %s）" % err
+        return None, "collab_read thread rc=%d stderr=%r" % (pr.returncode, err)
     try:
         data = json.loads(pr.stdout or "")
     except Exception:
-        return None, "wg collab thread 输出不是 JSON：%r" % (pr.stdout or "")[:200]
+        return None, "collab_read thread 输出不是 JSON：%r" % (pr.stdout or "")[:200]
+    if isinstance(data, dict) and isinstance(data.get("entries"), list):
+        data = data["entries"]
     if not isinstance(data, list):
-        return None, "wg collab thread 输出不是数组（%s）" % type(data).__name__
+        return None, "collab_read thread 输出不是数组（%s）" % type(data).__name__
     return len(data), "thread 已有 %d 条条目" % len(data)
 
 
