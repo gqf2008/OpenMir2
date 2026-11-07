@@ -94,7 +94,7 @@ label, not a card: it is printed as ``INFO 非账本卡号`` and is not red.  An
 unreadable ledger stays fail-closed rc=2 — "cannot look it up" is never "not a
 card".
 
-The ledger is read in **one aggregate pass**: ``walgit collab board --format
+The ledger is read in **one aggregate pass**: ``wg collab board --format
 json`` once (the projection gives every card's status) plus one bulk
 ``git cat-file --batch`` over ``refs/collab/inbox/*`` (entry bodies carry the
 ``merge_result`` flag that the board projection does not expose).  No
@@ -857,18 +857,19 @@ def load_board_file(path):
 
 
 def _collab_env():
-    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
-    （卡 `openmir2-walgit-local-commands-env`）。"""
+    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
+    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留是为了兼容
+    可能仍在旧版 CLI 上的主机（卡 `openmir2-collab-interface-wg-migration`）。"""
     env = dict(os.environ)
     env["WALGIT_LOCAL_COMMANDS"] = "1"
     return env
 
 
 def _run_board(top):
-    """One ``walgit collab board --format json`` call (never per card)."""
+    """One ``wg collab board --format json`` call (never per card)."""
     try:
         proc = subprocess.run(
-            ["walgit", "collab", "board", "--format", "json", "--repo", top],
+            ["wg", "collab", "board", "--format", "json", "--repo", top],
             capture_output=True,
             check=False,
             timeout=120,
@@ -876,7 +877,7 @@ def _run_board(top):
         )
     except subprocess.TimeoutExpired:
         raise GateError(
-            "stale-pointer gate: `walgit collab board --format json` 超时（>120s）"
+            "stale-pointer gate: `wg collab board --format json` 超时（>120s）"
             "（fail-closed; use --no-ledger to skip the card-status check）",
             rc=2,
         )
@@ -888,7 +889,7 @@ def _run_board(top):
         )
     if proc.returncode != 0:
         raise GateError(
-            "stale-pointer gate: `walgit collab board --format json` failed (rc=%d): %s "
+            "stale-pointer gate: `wg collab board --format json` failed (rc=%d): %s "
             "(fail-closed; use --no-ledger to skip the card-status check)"
             % (
                 proc.returncode,
@@ -941,7 +942,7 @@ def _fold_entries(entries):
 def _snapshot_entries(top):
     """Read the folded ``refs/collab/meta/snapshot`` blob, if any.
 
-    Format (``walgit collab gc``): ``{"version":1,"kind":"collab_snapshot",
+    Format (``wg collab gc``): ``{"version":1,"kind":"collab_snapshot",
     "ts":…,"entries":[{"oid","principal","json":"<entry JSON string>"}]}``.
     """
     rc, out, _err = _git_text(top, "rev-parse", "--verify", "refs/collab/meta/snapshot")
@@ -1045,7 +1046,7 @@ def _inbox_entries(top, skip_oids):
 def read_ledger(top, board_raw=None):
     """One board read + one snapshot read + one inbox tail read (never per card).
 
-    ``board_raw`` overrides the ``walgit collab board`` projection
+    ``board_raw`` overrides the ``wg collab board`` projection
     (``--ledger-json``); the git-side snapshot/inbox read still runs so merge
     flags are available whenever the refs are present.
     """
@@ -2541,7 +2542,7 @@ def main(argv):
         metavar="PATH",
         default=None,
         help="read a board-shaped ledger snapshot from PATH instead of running "
-        "`walgit collab board` (offline replay / selftest)",
+        "`wg collab board` (offline replay / selftest)",
     )
     parser.add_argument("--selftest", action="store_true", help="run the synthetic self-check")
     parser.add_argument(

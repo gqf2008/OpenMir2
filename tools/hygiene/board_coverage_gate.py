@@ -3,7 +3,7 @@
 
 Card: openmir2-board-merged-column (tier=L).
 
-``walgit collab board`` is a projection: a thread is shown only when it matches
+``wg collab board`` is a projection: a thread is shown only when it matches
 a column predicate, and ``.walgit/board.toml`` is "first match wins; a thread
 that matches no column is **not shown**".  A projection status without a
 column (today: ``merged`` — the newest entry is a ``merge_result``) therefore
@@ -39,7 +39,7 @@ missing (listed with kind/ts); 2 ledger or board unreadable (fail-closed —
 never green, including any unparsable inbox blob).
 
 Cost: one ``git rev-parse --show-toplevel`` + one ``git for-each-ref`` + **one**
-``git cat-file --batch`` over every inbox blob + one ``walgit collab board``
+``git cat-file --batch`` over every inbox blob + one ``wg collab board``
 call.  No per-thread subprocesses.
 """
 
@@ -64,8 +64,9 @@ NON_CARD_KINDS = frozenset(("ci_claim", "ci_result"))
 
 
 def _collab_env():
-    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
-    （卡 `openmir2-walgit-local-commands-env`）。"""
+    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
+    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留是为了兼容
+    可能仍在旧版 CLI 上的主机（卡 `openmir2-collab-interface-wg-migration`）。"""
     env = dict(os.environ)
     env["WALGIT_LOCAL_COMMANDS"] = "1"
     return env
@@ -215,13 +216,13 @@ def hidden_threads(newest, shown):
 
 
 def board_ids(repo, board=None):
-    """Return (ids, error) from one `walgit collab board --format json` call.
+    """Return (ids, error) from one `wg collab board --format json` call.
 
-    ``board`` mirrors ``walgit collab board --board <path>``: the board reads
+    ``board`` mirrors ``wg collab board --board <path>``: the board reads
     `.walgit/board.toml` **at HEAD**, so an uncommitted column change is only
     visible through this override.
     """
-    argv = ["walgit", "collab", "board", "--repo", repo, "--format", "json"]
+    argv = ["wg", "collab", "board", "--repo", repo, "--format", "json"]
     if board:
         argv += ["--board", board]
     rc, out, err = _run(argv, env=_collab_env())

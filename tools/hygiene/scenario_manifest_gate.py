@@ -309,7 +309,7 @@ def read_collab(repo, stats=None):
             stats["bad_json"] += 1
             continue
         # **接缝（review C1）**：collab blob 是**扁平**的（顶层 actor/body/id/kind/parent/…），
-        # 没有 `entry` 包层；只有 `walgit collab thread` 的**视图**才有。
+        # 没有 `entry` 包层；只有 `wg collab thread` 的**视图**才有。
         # 两态兼容统一走 `tools/collab/entryrefs.entry_of`（卡 `openmir2-entry-shape-dedupe`）。
         # 卡 `openmir2-entry-shape-consumer-followups` A3：两条人工形态的语义在此**显式**落地并计数
         # （口径不变，仍然是「跳过」）——

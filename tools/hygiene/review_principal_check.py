@@ -61,8 +61,9 @@ _RunResult = collections.namedtuple("_RunResult", "returncode stdout stderr")
 
 
 def _collab_env():
-    """`walgit collab` 子进程环境：2026-11-02 起必须显式请求本地命令接口
-    （卡 `openmir2-walgit-local-commands-env`）。"""
+    """旧版 CLI 的子进程环境（`WALGIT_LOCAL_COMMANDS=1`）。
+    walgit 0.14.0 起协作接口在 `wg`，该开关已无作用；保留是为了兼容
+    可能仍在旧版 CLI 上的主机（卡 `openmir2-collab-interface-wg-migration`）。"""
     env = dict(os.environ)
     env["WALGIT_LOCAL_COMMANDS"] = "1"
     return env
@@ -257,7 +258,7 @@ def decode_ledger_stdout(raw):
 def ledger_thread(repo, card):
     """Return (entries, error); ``error`` is a message when unreadable."""
     probe = _run(
-        ["walgit", "collab", "thread", "--repo", repo, card],
+        ["wg", "collab", "thread", "--repo", repo, card],
         cwd=repo if repo else None,
         env=_collab_env(),
     )
