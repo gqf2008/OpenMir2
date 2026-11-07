@@ -142,7 +142,10 @@ fn spawn_client(addr: String, port: i32, server_number: i32) -> PlanesLink {
             return;
         };
         let mut timer = tokio::time::interval(TIMER_PERIOD);
-        let mut last_check: u64 = 0;
+        // oracle `src/GameSvr/TimedService.cs` 的 `StartAsync` 把 `CheckIntervalTime`
+        // 初始化成**启动时的 tick** ⇒ 首次检查要等 >10s（1s 定时器下约第 11 秒）。
+        // 若初始化成 0，会在启动第 1 秒就抢连一次，是**可观察的时序差异**。
+        let mut last_check: u64 = now_ms();
         loop {
             timer.tick().await;
             let now = now_ms();
