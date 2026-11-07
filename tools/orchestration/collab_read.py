@@ -165,9 +165,26 @@ def load_entries(repo):
     return out
 
 
+#: 非卡片条目类型：只有这些条目的线程不进看板（与 board_coverage_gate 的 NON_CARD_KINDS 同口径）。
+CI_KINDS = frozenset(("ci_claim", "ci_result"))
+
+
+def _merged_flag(value):
+    return value is True or value == 1 or (isinstance(value, str) and value.lower() == "true")
+
+
 def project(repo, now=None, board=None):
+    """按 `wg collab board` 的折叠语义投影（2026-11-07 用 20+ 条夹具对照 wg 实测）：
+
+      1. 只有 `ci_claim`/`ci_result` 条目的线程**不显示**；
+      2. 有效状态 = `status` 条目（`body.status`）与 `merge_result{merged 真}` 条目
+         中 `ts` 最大者，后者记作 `merged`——`issue.body.status` **完全忽略**；
+      3. 没有上述条目 ⇒ `open`；值不在 board.toml 的列状态集合里 ⇒ 回落 `open`；
+      4. 命中不了任何列的线程**不显示**（与 wg 一致，不是留在 column=None）。
+    """
     now = int(now if now is not None else time.time())
     columns = load_board_def(repo, board)
+    known = {c["status"] for c in columns if c["status"]}
     entries = load_entries(repo)
 
     cards = {}
@@ -179,30 +196,39 @@ def project(repo, now=None, board=None):
         cards.setdefault(e["id"], []).append((oid, e))
 
     result = []
+    hidden = 0
     for tid, items in cards.items():
         items.sort(key=lambda p: (p[1].get("ts") or 0, p[0]))
-        status = None
+        if all((e.get("kind") in CI_KINDS) for _o, e in items):
+            hidden += 1
+            continue
+        effective = None
         owner = None
         tier = None
         tier_why = None
         for oid, e in items:
-            if e.get("kind") != "status":
-                continue
+            kind = e.get("kind")
             body = e.get("body") or {}
-            if body.get("status"):
-                status = body["status"]
+            ts = e.get("ts") or 0
+            if kind == "status":
                 owner = body.get("owner", owner)
                 tier = body.get("tier", tier)
                 tier_why = body.get("tier_why", tier_why)
-        if status is None:
-            for oid, e in items:
-                if e.get("kind") == "issue":
-                    body = e.get("body") or {}
-                    status = body.get("status") or "open"
-                    owner = body.get("owner", owner)
-                    tier = body.get("tier", tier)
-                    tier_why = body.get("tier_why", tier_why)
-                    break
+                if isinstance(body.get("status"), str):
+                    effective = (ts, oid, body["status"])
+            elif kind == "merge_result" and _merged_flag(body.get("merged")):
+                effective = (ts, oid, "merged")
+        status = effective[2] if effective else "open"
+        if status not in known:
+            status = "open"
+        column = None
+        for col in columns:
+            if col["status"] is None or col["status"] == status:
+                column = col["name"]
+                break
+        if column is None:
+            hidden += 1
+            continue
         claims = []
         for oid, e in items:
             if e.get("kind") != "card_claim":
@@ -216,11 +242,6 @@ def project(repo, now=None, board=None):
                            "worktree": body.get("worktree"), "branch": body.get("branch")})
         live_claims = [c for c in claims if c["live"]]
         candidate = max(live_claims, key=lambda c: (c["ts"], c["oid"])) if live_claims else None
-        column = None
-        for col in columns:
-            if col["status"] is None or col["status"] == status:
-                column = col["name"]
-                break
         last_ts = max((e.get("ts") or 0) for oid, e in items)
         result.append({
             "id": tid,
@@ -236,7 +257,8 @@ def project(repo, now=None, board=None):
         })
     result.sort(key=lambda c: (-c["last_ts"], c["id"]))
     return {"repo": os.path.abspath(repo), "columns": [c["name"] for c in columns],
-            "cards": result, "unparseable_refs": bad, "fetched_at": now,
+            "cards": result, "hidden_threads": hidden,
+            "unparseable_refs": bad, "fetched_at": now,
             "note": "只读投影；未验证签名（verified=null）。claim 只是候选，胜者须按 host 规范读回 claim oid 确认。"}
 
 
@@ -375,7 +397,7 @@ def selftest():
         checks += 1
         assert by_alt['t1']['column'] == 'WIP', by_alt['t1']
         checks += 1
-        assert by_alt['t2']['column'] is None, by_alt['t2']
+        assert 't2' not in by_alt and project(repo, now=now, board=alt)['hidden_threads'] >= 1, by_alt
 
         # 5) 未过期/无 ttl 的 claim 都算活
         _write_entry(repo, 6, _entry("t3", "issue", "w1", now, {"status": "open"}))
@@ -412,6 +434,42 @@ def selftest():
         assert len(got) == 2000 and all(g is not None for g in got)
         checks += 1
         assert len(project(big)["cards"]) == 50
+        # 7) wg 投影语义（差分夹具固化；wg 在同形 20+ 条夹具上的输出与这里逐 id 一致）
+        nl = chr(10)
+        wgboard = os.path.join(tmp, 'wg-board.toml')
+        with open(wgboard, 'w', encoding='utf-8', newline='') as fh:
+            fh.write('[[column]]' + nl + 'name = "待认领"' + nl + 'status = "open"' + nl
+                     + '[[column]]' + nl + 'name = "已完成"' + nl + 'status = "closed"' + nl
+                     + '[[column]]' + nl + 'name = "已合并未收口"' + nl + 'status = "merged"' + nl)
+        r2 = _mk_repo(tmp)
+        _write_entry(r2, 1, _entry('m1', 'issue', 'a', 1, {'status': 'needs-review'}))
+        _write_entry(r2, 2, _entry('m1', 'status', 'a', 10, {'status': 'needs-review'}))
+        _write_entry(r2, 3, _entry('m1', 'merge_result', 'a', 20, {'merged': True}))
+        _write_entry(r2, 4, _entry('m2', 'status', 'a', 10, {'status': 'closed'}))
+        _write_entry(r2, 5, _entry('m2', 'merge_result', 'a', 20, {'merged': True}))
+        _write_entry(r2, 6, _entry('m3', 'issue', 'a', 1, {'status': 'open'}))
+        _write_entry(r2, 7, _entry('m3', 'merge_result', 'a', 5, {'merged': False}))
+        _write_entry(r2, 8, _entry('m4', 'status', 'a', 1, {'status': 'weird'}))
+        _write_entry(r2, 9, _entry('m5', 'ci_claim', 'a', 1, {}))
+        _write_entry(r2, 10, _entry('m6', 'issue', 'a', 1, {'status': 'blocked'}))
+        by = {c['id']: c for c in project(r2, board=wgboard)['cards']}
+        checks += 1; assert by['m1']['column'] == '已合并未收口', by.get('m1')
+        checks += 1; assert by['m2']['column'] == '已合并未收口', by.get('m2')
+        checks += 1; assert by['m3']['column'] == '待认领', by.get('m3')
+        checks += 1; assert by['m4']['column'] == '待认领', by.get('m4')
+        checks += 1; assert 'm5' not in by, '只有 ci_* 条目的线程必须隐藏'
+        checks += 1; assert by['m6']['column'] == '待认领', by.get('m6')
+        checks += 1; assert project(r2, board=wgboard)['hidden_threads'] == 1
+        onlyclosed = os.path.join(tmp, 'onlyclosed.toml')
+        with open(onlyclosed, 'w', encoding='utf-8', newline='') as fh:
+            fh.write('[[column]]' + nl + 'name = "已完成"' + nl + 'status = "closed"' + nl)
+        r3 = _mk_repo(tmp)
+        _write_entry(r3, 1, _entry('x', 'issue', 'a', 1, {}))
+        b3 = project(r3, board=onlyclosed)
+        checks += 1; assert b3['cards'] == [] and b3['hidden_threads'] == 1, b3
+        # 期望条数锚：删掉任何一条 check 都会让这个数字变，避免『删了仍绿』
+        assert checks == 29, 'checks=%d（改动用例后同步这个锚）' % checks
+
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print("SELFTEST_PASS=%d" % checks)
