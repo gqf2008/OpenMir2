@@ -59,7 +59,7 @@
 ## 3. 消息表（41 个 case：40 有处理器 + 1 空处理）
 
 `body 字段`列是该处理器源码里 `GetValidStr3` 的**出现顺序**——**其中绝大多数位于 `/* */` 注释块内，
-运行时不会执行**。真正执行的只有 205、209、214–221 四个 handler（见 §4.2）；
+运行时不会执行**。真正执行的只有 205、209、214–221，即**三个 handler 方法**（覆盖 10 个 ident，见 §4.2）；
 其余行的字段名只用于说明"原作者打算解析什么"，不构成运行时契约。
 
 | ident | 名称 | 处理器 | body 字段（`/` 分隔） |
@@ -217,9 +217,10 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | 槽位 | `Received` 用 `srvArray[clientId-1]`；`Connecting` 取第一个 null 槽 ⇒ **槽位复用后对不上**，见 §5.1（已用 C# 探针实测） |
 | 启动 | `GameShare.PlanesService.Start()`（`GameServer.cs`）；`Run()` 由 `SystemProcessor` 每 tick 调 |
 
-### 5.1 槽位语义（A3-1 的 C# 探针实测，`E:/tmp/planes-id-probe`）
+### 5.1 槽位语义（A3-1 的 C# 探针实测）
 
-探针用 `TouchSocket 2.0.0-beta.273`（与 `src/OpenMir2/OpenMir2.csproj` 同版本）起一个
+探针已入仓：`tools/planes-probe`（`dotnet run -c Release -- ids` / `-- slots`）。
+用 `TouchSocket 2.0.0-beta.273`（与 `src/OpenMir2/OpenMir2.csproj` 同版本）起一个
 本地 `TcpService`，逐次连接/断开并打印 `SocketClient.Id`，再把 oracle 的 `srvArray` 逻辑原样搬进去：
 
 - `SocketClient.Id` 是**进程内全局递增的十进制字符串**（`1`,`2`,`3`…），**断开后不复用**；
@@ -229,6 +230,9 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
   再也不进任何缓冲）；超过 10 个连接时是 `IndexOutOfRangeException`，同样被吞；
 - 极端形态：`Id-1` 指向的槽被**另一个**连接占用时，数据会追加到**别人的缓冲**，
   并被当作那个连接的数据一起解码（探针复现了 `id3 → slot2（属于 id4）`）。
+
+> **可达性**：因 §5.2 的结论（主服从不监听），上述槽位语义在 oracle 的**生产路径不可达**——
+> 没有任何连接会进 `srvArray`。A3-1 照抄它，是为了将来真启用时不必重新考古。
 
 ⇒ oracle 的 PlanesServer 在**首次断线之后对后续连接基本不可用**。A3-1
 （`crates/planes/src/server.rs`）**照抄**该映射，未"修好"：行为等价优先。
@@ -240,7 +244,7 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 `_serverSocket.Setup(touchSocketConfig)`——**没有 `Start()`**（`PlanesServer.cs` 全文 227 行无
 `_serverSocket.Start` 调用）。`Setup` 在 TouchSocket 里只是"记下配置"。
 
-探针（`E:/tmp/planes-id-probe`，同版本 2.0.0-beta.273）：
+探针（`tools/planes-probe` 的 `listen` 模式，同版本 2.0.0-beta.273）：
 
 | 步骤 | 观测 |
 |---|---|
@@ -304,7 +308,7 @@ Rust 侧落点：`mir2-rs/crates/planes/src/message.rs`（`Effect` / `process` /
 | A2-3 | 完成（dispatch 分类 + 三条实际执行的解析） | `mir2-rs/crates/planes/src/message.rs`、本文档 §4.2 |
 | A3-1 | 完成（Server/Client 纯状态机 + 槽位语义，C# 探针实测） | `mir2-rs/crates/planes/src/{server,client,service}.rs` |
 | A3-2a | 完成（`[Server] MsgSrvAddr/MsgSrvPort/ServerNumber` 解析） | `mir2-rs/bins/game-svr/src/config.rs` |
-| A3-2b | 待开始（按 §5.2：客户端连接/重连/失败日志；主服不监听） | — |
+| A3-2b | 完成（按 §5.2：客户端连接/重连/失败日志；主服不监听） | `mir2-rs/bins/game-svr/src/planes.rs` |
 
 ## 12. 待确认 / 风险
 
