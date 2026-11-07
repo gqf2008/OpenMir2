@@ -23,7 +23,7 @@
 （`src/GameSrv/Word/WorldServer.cs`）。**不要按常量名想当然**（round1 我就是这么错的）。
 
 - **切帧**：`HUtil32.ArrestStringEx(buf, "(", ")", ref frameStr)` —— 取一对括号之间的内容；
-  一次 `Received` 里可能有**多帧**。
+  一次 `Received` 回调拿到的字节块可能含**多帧**；但 Received **只做累积**（`SocData +=`），真正的切分发生在 `Run()`（见 §6）。
 - **切字段**：`HUtil32.GetValidStr3(seg, ref head, HUtil32.Backslash)` 逐段取：`ident` → `serverNum` → 余下是 `body`。
   `GetValidStr3` 内部是 `Split(..., 2, RemoveEmptyEntries)` ⇒ **前导空字段会被折叠**（连续 `/` 不等于空字段）。
 - **数值**：`ident = StrToInt(head, 0)`、`serverNum = StrToInt(sNumStr, -1)`。
@@ -50,7 +50,7 @@
 
 - `PlanesService.Start()`：`SystemShare.ServerIndex == 0` ⇒ `PlanesServer.StartPlanesServer()`（主服）；
   否则 ⇒ `PlanesClient.Initialize() + Start()`（分服）。
-- **只有主服跑 PlanesServer**；分服只跑 PlaneClient，**客户端代码里没有任何转发**。
+- **只有主服跑 PlanesServer**；分服只跑 PlanesClient，**客户端代码里没有任何转发**。
 - 主服的 `DecodeSocStr_SendOtherServer` 把每帧先转发给**除来源外**所有已连接服务器，再本地 `ProcessData`
   ⇒ 实际是**主服中继的星形**，**不存在多跳环路**。
 - 启动链：`GameServer.cs` → `GameShare.PlanesService.Start()`。
@@ -106,11 +106,13 @@
 | 242 | `ISM_GRUOPMESSAGE` | **无处理器**（case 体只有一行注释） | — |
 
 > 表由脚本从源码生成，ident / 常量名 / 处理器名 / 字段顺序均与源码一致（round1 审查机判 0 mismatch）。
+> **余量字段未列**：241 `ISM_GUILDWAR` 的第 4 段 `remaintime`、233 `ISM_LM_LOGOUT` 的 `lovername` 未进入本表
+> （本表只列 `GetValidStr3` 的实际输出变量）。A2 逐条核 handler 时一并确认。
 > `226 ISM_LM_DELETE` 有常量但**没有 case**，不在这张表里。
 
 ## 4. **oracle 侧跨服语义大面积未启用**（round1 审查的关键发现）
 
-`PlanesMessage` 的 40 个处理器里，**绝大多数是空实现或整段注释掉的桩**。已逐条确认的例子：
+`PlanesMessage` 的 40 个有处理器的 ident（32 个不同方法）里，**绝大多数是空实现或整段注释掉的桩**。已逐条确认的例子：
 
 | 处理器 | 实际状态 |
 |---|---|
@@ -121,7 +123,7 @@
 | `MsgGetAddGuild`（205）/ `MsgGetChatProhibition`（209）/ `MsgGetUserMgr`（214–221） | 真正调了 `GetValidStr3` 解析，但**解析结果被丢弃**（下游全注释） |
 
 **其余处理器的逐条状态尚未核实** —— 我不拿启发式分类充数（第一版试过，自动分类把空实现误判成"有语句"）。
-**A2 的第一件事是逐个人工确认这 40 个处理器的真实执行状态**，并按「oracle 是空实现 ⇒ Rust 也必须是空实现」
+**A2 的第一件事是逐个人工确认这 40 个有处理器的 ident（对应 **32 个不同 handler 方法**）的真实执行状态**，并按「oracle 是空实现 ⇒ Rust 也必须是空实现」
 移植；任何"它应该是想做 X 所以实现 X"的推断都算偏离。
 
 > 这条对 G11 的整体判断影响很大：**oracle 的跨服协议框架是真的，但业务语义基本是停用的**。
@@ -132,7 +134,7 @@
 | 项 | oracle 事实 |
 |---|---|
 | 配置键 | `SystemShare.Config.MasterSrvAddr` / `MasterSrvPort` |
-| 监听 | `TcpService.SetListenIPHosts(IPHost(MasterSrvAddr, MasterSrvPort))` |
+| 监听 | `TcpService.SetListenIPHosts(IPHost(IPAddress.Parse(MasterSrvAddr), MasterSrvPort))` |
 | 连接表 | `TServerMsgInfo { Socket, SocData, SocketId }` —— **没有 nServerIdx** |
 | `nServerIdx` | 在另一个结构 `ServerGruopInfo { nServerIdx, sChrName }`，用于 `WorldServer.OtherUserNameList` 的角色→服务器映射 |
 | 帧里的 `serverNum` | 只作为 `ProcessData` 的入参，**不落连接表** |
