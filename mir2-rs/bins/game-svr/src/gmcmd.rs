@@ -76,6 +76,53 @@ use mir2_script::engine::quest_state::{QuestBitmap, QUEST_ARRAY_LEN};
 
 /// oracle `CommandHelp.GameCommandPermissionTooLow`（`CommandHelp.cs`）。
 pub const PERMISSION_TOO_LOW: &str = "权限不够!!!";
+
+/// **测试注入缝（卡 `openmir2-test-permission-seam`）**：`MIR2_TEST_PERMISSION`。
+///
+/// oracle 的 `Permission` 在生产恒 0（`GetHumPermission` 调用点被注释、`AdminList.txt` 唯一行
+/// 无 IP 段被丢弃）⇒ `PermissionMin = 10` 的命令（含 `@OnHorse`）在现网一律「权限不够!!!」。
+/// 真机验证需要一条**显式、可复现**的抬权路径；改 `Command.conf` 无效
+/// （C# `GameCmdConf` 对 `TakeOnHorse` 只读 `[Command]` 名字、不读 `[Permission]`；
+/// 本仓 `COMMANDS` 表是从部署 `Command.conf` **编译期**算好的常量）。
+///
+/// 口径（与 `MIR2_RNG_SEED` / `MIR2_CLOCK_MS` 同族）：
+/// - **默认关**：不设/空串 ⇒ 0，行为与 oracle 一字不差；
+/// - **启动即固定**：只在启动读一次写进 [`TEST_PERMISSION`]，运行中不可改；
+/// - **fail-closed**：非法值 ⇒ [`install_test_permission`] 返错，由 `run_inner` 上抛（启动失败）。
+pub const TEST_PERMISSION_ENV: &str = "MIR2_TEST_PERMISSION";
+
+/// 启动期权限（进程内一次性）。未安装 ⇒ 0。
+static TEST_PERMISSION: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+
+/// 解析 `MIR2_TEST_PERMISSION` 的取值口径：`None`/空串 ⇒ 0；其余必须是 `u8`。
+///
+/// **不 trim**：带空白的值（`" 10"`）判非法——避免「看起来像 10、实际没生效」的假注入。
+fn parse_test_permission(raw: Option<&str>) -> Result<u8, String> {
+    match raw {
+        None => Ok(0),
+        Some("") => Ok(0),
+        Some(s) => s.parse::<u8>().map_err(|_| {
+            format!("{TEST_PERMISSION_ENV} 不是合法字节：{s:?}（0..=255，空串=关闭）")
+        }),
+    }
+}
+
+/// 启动时安装测试权限。重复安装 ⇒ 错误（进程内只认第一次，杜绝运行中改）。
+///
+/// # Errors
+/// 值非法，或已被安装过。
+pub fn install_test_permission(raw: Option<&str>) -> Result<(), String> {
+    let v = parse_test_permission(raw)?;
+    TEST_PERMISSION
+        .set(v)
+        .map_err(|_| format!("{TEST_PERMISSION_ENV} 只能安装一次"))
+}
+
+/// 会话构造时用的权限。未安装 ⇒ 0（oracle 锁死）。
+#[must_use]
+pub fn startup_permission() -> u8 {
+    *TEST_PERMISSION.get().unwrap_or(&0)
+}
 /// oracle `CommandHelp.NowCurrDateTime`（`CommandHelp.cs`）。
 pub const NOW_CURR_DATETIME: &str = "当前日期时间: ";
 /// `HelpCommandGroup.Fallback`（`CommandSystem.cs:281-307`）。
@@ -1593,6 +1640,9 @@ impl GmSession {
             group_rcall_time,
             attack_mode,
             re_level,
+            // **卡 `openmir2-test-permission-seam`**：默认 0（oracle 锁死）；只有显式设置
+            // `MIR2_TEST_PERMISSION` 的测试进程才会拿到非 0。
+            permission: startup_permission(),
             ..Self::default()
         }
     }
@@ -14052,5 +14102,86 @@ mod tests {
         );
         assert!(!seeded.allow_group_re_call);
         assert!(!seeded.allow_guild_re_call);
+    }
+}
+
+/// **卡 `openmir2-test-permission-seam`**：`MIR2_TEST_PERMISSION` 注入缝的口径与行为。
+#[cfg(test)]
+mod test_permission_seam {
+    use super::*;
+
+    fn texts(r: &GmResult) -> Vec<(GmColor, &str)> {
+        r.msgs.iter().map(|m| (m.color, m.text.as_str())).collect()
+    }
+
+    fn world_with_horse<'a>(gm: &'a mir2_world::GuildManager) -> GmWorld<'a> {
+        GmWorld {
+            guilds: gm,
+            maps: None,
+            world: None,
+            speaker: "u",
+            speaker_id: 7,
+            now_ms: 0,
+            pose_target: None,
+            mission: None,
+            spirit_mutiny_tick: None,
+            quests: None,
+            speaker_dir: 0,
+            m_host: false,
+            caller_guild: None,
+            filter_word: None,
+            horse_plate_mount: Some(1),
+        }
+    }
+
+    /// 解析口径：未设/空 ⇒ 0；`u8` 合法值照收；非法（含带空白）⇒ 错误（fail-closed）。
+    #[test]
+    fn parse_contract() {
+        assert_eq!(parse_test_permission(None), Ok(0), "未设 ⇒ oracle 锁死");
+        assert_eq!(parse_test_permission(Some("")), Ok(0), "空串 ⇒ 关闭");
+        assert_eq!(parse_test_permission(Some("10")), Ok(10));
+        assert_eq!(parse_test_permission(Some("0")), Ok(0));
+        assert!(parse_test_permission(Some("abc")).is_err(), "非数字");
+        assert!(parse_test_permission(Some("256")).is_err(), "越界");
+        assert!(
+            parse_test_permission(Some(" 10")).is_err(),
+            "带空白不静默接受"
+        );
+        assert!(parse_test_permission(Some("-1")).is_err(), "负数");
+    }
+
+    /// **牙 A3 两条**：默认关时 `@OnHorse` 仍回「权限不够!!!」（oracle 行为不变）；
+    /// 抬权到 10 时上马、`HorseType` 取马牌 Shape、置 `pending_mount_ride`。
+    #[test]
+    fn on_horse_locked_by_default_and_unlocked_by_seam_value() {
+        // 未安装 ⇒ startup_permission = 0（本进程测试不安装全局）
+        assert_eq!(startup_permission(), 0, "默认必须 0");
+
+        let gm = mir2_world::GuildManager::new();
+        let world = world_with_horse(&gm);
+        let cfg = GmConfig::default();
+
+        // 默认会话（permission = 0）⇒ 权限门先挡，命令体不执行
+        let mut locked = GmSession::default();
+        assert_eq!(locked.permission, 0);
+        let r = execute(&mut locked, &cfg, &world, "@OnHorse");
+        assert_eq!(
+            texts(&r),
+            vec![(GmColor::Red, PERMISSION_TOO_LOW)],
+            "默认关必须逐字节停在 oracle 的红字支"
+        );
+        assert!(!locked.on_horse, "被权限门挡住不得上马");
+        assert!(locked.pending_mount_ride.is_none());
+
+        // 缝注入 10 ⇒ 上马 + 独立骑乘帧
+        let mut open = GmSession {
+            permission: 10,
+            ..GmSession::default()
+        };
+        let _ = execute(&mut open, &cfg, &world, "@OnHorse");
+        assert!(open.on_horse, "抬权后可上马");
+        assert_eq!(open.horse_type, 1, "HorseType = 马牌 Shape");
+        assert_eq!(open.pending_mount_ride, Some(1), "SM_MOUNTRIDE mount_id");
+        assert!(open.pending_feature_changed, "外观帧仍按 oracle 置位");
     }
 }
