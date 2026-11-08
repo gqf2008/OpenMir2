@@ -579,6 +579,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .first()
         .map_or_else(config::default_path, std::path::PathBuf::from);
     let cfg = config::load(&conf)?;
+    // **卡 `openmir2-test-permission-seam`**：测试注入缝，**默认关**（不设 ⇒ 权限仍恒 0，oracle 行为不变）。
+    // 非法值 ⇒ fail-closed（与 `MIR2_RNG_SEED` / `MIR2_CLOCK_MS` 同款纪律：不许「以为注入了、其实没有」）。
+    gmcmd::install_test_permission(std::env::var(gmcmd::TEST_PERMISSION_ENV).ok().as_deref())
+        .map_err(anyhow::Error::msg)?;
     // **G11 / A3-2b**：跨服链路。设计文档 §5.2 的实测结论：oracle 主服只 `Setup` 不 `Start`
     // ⇒ `ServerIndex == 0` 时 `start` 返回 `None`（不监听、无日志）；分服侧起客户端任务，
     // 按 `src/GameSrv/TimedService.cs:63` 的 1s/10s 节拍重连。
