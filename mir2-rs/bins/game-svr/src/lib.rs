@@ -98,6 +98,7 @@ pub mod slave;
 pub mod smframe;
 pub mod smframe_ext;
 pub mod stamina;
+pub mod test_seams;
 pub mod trade;
 pub mod unbindlist;
 pub mod useitem;
@@ -581,6 +582,14 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let cfg = config::load(&conf)?;
     // **卡 `openmir2-test-permission-seam`**：测试注入缝，**默认关**（不设 ⇒ 权限仍恒 0，oracle 行为不变）。
     // 非法值 ⇒ fail-closed（与 `MIR2_RNG_SEED` / `MIR2_CLOCK_MS` 同款纪律：不许「以为注入了、其实没有」）。
+    // **卡 `openmir2-test-attack-log`**：攻击受理日志缝，默认关（不设 ⇒ 一行不多）。
+    let log_attacks = test_seams::install_log_attacks_from_env().map_err(anyhow::Error::msg)?;
+    if log_attacks {
+        glog!(
+            "INF",
+            "RUST_TEST_ATTACK_LOG=1（测试缝：攻击受理日志；默认关时不出现本行）"
+        );
+    }
     let test_permission = gmcmd::install_test_permission_from_env().map_err(anyhow::Error::msg)?;
     if test_permission != 0 {
         // 与 `RUST_SEED_INJECTED` 同形：注入生效时打一行可判据的日志。
@@ -11461,6 +11470,17 @@ fn handle_hit_cmd(
     } else {
         front_target(world, actor_id, map_id, fx, fy)
     };
+    // **卡 `openmir2-test-attack-log`**：测试缝——默认关；开启时每命中一次攻击受理打一行。
+    // 判据用：「骑乘中仍有本行」= 服务端收到了并进入了攻击路径（不是只有客户端发帧）。
+    if game_svr::test_seams::attack_log_enabled() {
+        let (on_horse, horse_type) = sessions
+            .get(chr_name)
+            .map_or((false, 0), |sg| (sg.gm.on_horse, sg.gm.horse_type));
+        glog!(
+            "INF",
+            "MIR2_ATTACK_RECV ident={ident} actor={actor_id} on_horse={on_horse} horse_type={horse_type} target={target_id:?}"
+        );
+    }
     if let Some(tid) = target_id {
         // **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221-224`）的攻/守双方
         // 运行态灌进世界（吸收于下一次 world tick 的 [`mir2_world::World::attack_once`]）。
