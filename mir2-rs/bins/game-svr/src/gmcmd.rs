@@ -94,16 +94,21 @@ pub const TEST_PERMISSION_ENV: &str = "MIR2_TEST_PERMISSION";
 /// 启动期权限（进程内一次性）。未安装 ⇒ 0。
 static TEST_PERMISSION: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
 
-/// 解析 `MIR2_TEST_PERMISSION` 的取值口径：`None`/空串 ⇒ 0；其余必须是 `u8`。
+/// 解析 `MIR2_TEST_PERMISSION` 的取值口径：`None`/空串 ⇒ 0；其余只接受 **`0..=10`**。
 ///
 /// **不 trim**：带空白的值（`" 10"`）判非法——避免「看起来像 10、实际没生效」的假注入。
 fn parse_test_permission(raw: Option<&str>) -> Result<u8, String> {
     match raw {
         None => Ok(0),
         Some("") => Ok(0),
-        Some(s) => s.parse::<u8>().map_err(|_| {
-            format!("{TEST_PERMISSION_ENV} 不是合法字节：{s:?}（0..=255，空串=关闭）")
-        }),
+        // 上限是 10 而不是 `u8::MAX`：命令表 `perm_min` 最大就是 10（`PermissionMax`），
+        // 抬到 11..255 没有额外效果，只会让"注入了什么"变含糊 ⇒ 一律判非法（fail-closed）。
+        Some(s) => match s.parse::<u8>() {
+            Ok(v) if v <= 10 => Ok(v),
+            _ => Err(format!(
+                "{TEST_PERMISSION_ENV} 非法：{s:?}（只接受 0..=10，空串=关闭）"
+            )),
+        },
     }
 }
 
@@ -14148,6 +14153,10 @@ mod test_permission_seam {
             "带空白不静默接受"
         );
         assert!(parse_test_permission(Some("-1")).is_err(), "负数");
+        assert!(
+            parse_test_permission(Some("11")).is_err(),
+            "PermissionMax=10 ⇒ 11 无意义，必须判非法"
+        );
     }
 
     /// **牙 A3 两条**：默认关时 `@OnHorse` 仍回「权限不够!!!」（oracle 行为不变）；
