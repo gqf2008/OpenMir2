@@ -116,11 +116,32 @@ fn parse_test_permission(raw: Option<&str>) -> Result<u8, String> {
 ///
 /// # Errors
 /// 值非法，或已被安装过。
-pub fn install_test_permission(raw: Option<&str>) -> Result<(), String> {
+pub fn install_test_permission(raw: Option<&str>) -> Result<u8, String> {
     let v = parse_test_permission(raw)?;
     TEST_PERMISSION
         .set(v)
-        .map_err(|_| format!("{TEST_PERMISSION_ENV} 只能安装一次"))
+        .map_err(|_| format!("{TEST_PERMISSION_ENV} 只能安装一次"))?;
+    Ok(v)
+}
+
+/// 从进程环境读取并安装（`run_inner` 的唯一入口）。
+///
+/// 用 `var_os` 而不是 `var(...).ok()`：**非 UTF-8 的值必须判错**，不能与「未设」混同——
+/// 那正是 fail-closed 要消灭的「以为注入了、其实没有」。同族 `MIR2_RNG_SEED` /
+/// `MIR2_CLOCK_MS` 就是这个口径。
+///
+/// # Errors
+/// 值非法（见 [`parse_test_permission`]）、含非 UTF-8 字节，或已安装过。
+pub fn install_test_permission_from_env() -> Result<u8, String> {
+    match std::env::var_os(TEST_PERMISSION_ENV) {
+        None => install_test_permission(None),
+        Some(os) => match os.to_str() {
+            Some(s) => install_test_permission(Some(s)),
+            None => Err(format!(
+                "{TEST_PERMISSION_ENV} 含非 UTF-8 字节（拒绝静默当未设）"
+            )),
+        },
+    }
 }
 
 /// 会话构造时用的权限。未安装 ⇒ 0（oracle 锁死）。
