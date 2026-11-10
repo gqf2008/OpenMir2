@@ -190,6 +190,26 @@ pub fn serverinfo_frame(server_name: &str, online_count: i32, payment_mode: u8) 
     format!("({SS_SERVERINFO}/{server_name}/{ORACLE_SERVER_INDEX}/{online_count}/{payment_mode})")
 }
 
+/// 保活门用的「当前时刻」（毫秒）——**必须是墙钟**，不是世界钟。
+///
+/// oracle `SystemProcessor.ShowOnline`（`SystemProcessor.cs:63-67`）用的是
+/// `HUtil32.GetTickCount()`（= `Environment.TickCount`，**墙钟**），而 LoginSrv 判「游戏服务器
+/// 响应超时」用的也是墙钟（`TimedService.cs::CheckServerStatus` 的 `tickTime > 20000`）。
+///
+/// 2026-11-10 实测（Rust 栈空跑 59 分钟）：`world.clock_ms` 只走了 2950s，墙钟走了 3547s
+/// ⇒ 比值 **0.832×**（4.16 tick/墙秒，世界钟每 tick 固定 200ms）。也就是说 oracle 的 10s 门
+/// 在墙钟上约等于 12.2s（实测间隔 min 10.2 / 中位 11.5 / max 16.8s）。**当模拟线程更慢时**
+/// （旧实例实体内 ~29k）比值继续下降，一旦「10s 世界钟 > 20s 墙钟」，LoginSrv 就会关链 ——
+/// 这正是旧实例 2h45m 内 119 次「游戏服务器响应超时」的来源，也解释了「重起即恢复」。
+///
+/// 两个入参都保留：让「选哪个钟」在调用点一眼可见，并由
+/// [`keepalive_clock_uses_wall_not_world`] 这颗牙钉死（改回 `world_ms` 即红）。
+#[must_use]
+pub fn keepalive_clock_ms(world_ms: i64, wall_ms: i64) -> i64 {
+    let _ = world_ms; // 显式忽略：世界钟会随模拟负荷变慢，不能作为墙钟协议的计时源
+    wall_ms
+}
+
 /// `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime` 10s 门（`SystemProcessor.cs:63-67`）。
 ///
 /// oracle 在 `Startup`（`SystemProcessor.cs:22-27`）用 `GetTickCount()` 起算 ⇒ 基准是
@@ -689,6 +709,39 @@ mod serverinfo_tests {
             super::disconnect_line("127.0.0.1", 3, true),
             "登录服务器[127.0.0.1]断开连接...（已清空准入表；gen=3）",
             "开启时补当次代次"
+        );
+    }
+    /// **牙 1（选钟）**：保活时刻必须取墙钟；改回世界钟 ⇒ 本用例红。
+    #[test]
+    fn keepalive_clock_uses_wall_not_world() {
+        assert_eq!(
+            super::keepalive_clock_ms(10_000, 30_000),
+            30_000,
+            "必须取墙钟"
+        );
+        // 慢世界钟（12s）配 30s 墙钟：差值远大于 10s ⇒ 门必须已经触发多次，而不是被世界钟拖住
+        assert!(super::keepalive_clock_ms(12_000, 30_000) - 10_000 > 10_000);
+    }
+
+    /// **牙 2（两方向）**：慢世界钟下仍按墙钟触发；正常时钟下不误触发。
+    #[test]
+    fn keepalive_gate_fires_on_wall_bound_under_slow_world() {
+        // 起点墙钟 0 / 世界钟 0
+        let mut gate = OnlineHumGate::new(super::keepalive_clock_ms(0, 0));
+        // 墙钟走 9s、世界钟只走 3s（0.33×）⇒ 严格 `>` 门不发
+        assert!(
+            !gate.tick(super::keepalive_clock_ms(3_000, 9_000)),
+            "9s 不触发"
+        );
+        // 墙钟 10s、世界钟 3.3s ⇒ 正好 10000ms 不发（严格 >）
+        assert!(
+            !gate.tick(super::keepalive_clock_ms(3_300, 10_000)),
+            "恰好 10s 不发"
+        );
+        // 墙钟 10.001s ⇒ 触发（尽管世界钟只走了 3.3s）
+        assert!(
+            gate.tick(super::keepalive_clock_ms(3_301, 10_001)),
+            "墙钟超过 10s 必须触发，与世界钟无关"
         );
     }
 }

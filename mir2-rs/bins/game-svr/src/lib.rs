@@ -24232,9 +24232,10 @@ fn rewrite_enter_position(
 /// **T-6 判据点**：上报门的起算基准。
 ///
 /// oracle `SystemProcessor.Startup`（`SystemProcessor.cs:22-27`）用 `GetTickCount()` 起算
-/// `SendOnlineHumTime` ⇒ 基准 = 启动时刻 = **时钟注入之后**的 `world.clock_ms`。生产代码只经
-/// 本函数建门：把它改成 `OnlineHumGate::new(0)` ⇒
-/// `startup_online_hum_gate_uses_injected_world_clock` 必红（注入量级下会提前首发）。
+/// `SendOnlineHumTime`——那是**墙钟**（`Environment.TickCount`），不是世界钟。
+/// 生产代码只经本函数建门，且调用点传 `clock::now_ms()`（注入 `MIR2_CLOCK_MS` 时它同样生效）。
+/// 把它改成 `OnlineHumGate::new(0)` ⇒ `startup_online_hum_gate_uses_injected_world_clock` 必红
+/// （注入量级下会提前首发）。
 fn startup_online_hum_gate(world_clock_ms: i64) -> game_svr::ids::OnlineHumGate {
     game_svr::ids::OnlineHumGate::new(world_clock_ms)
 }
@@ -24764,7 +24765,8 @@ fn sim_loop(
     // `RunTimeTick`（10s）**各自独立**的另一个 10s 门。oracle 在 `Startup` 用 `GetTickCount()`
     // 起算（`SystemProcessor.cs:22-27`）⇒ 基准 = **启动时刻**。必须放在时钟注入**之后**取
     // `world.clock_ms`：注入后起点是 epoch 量级，基准若写死 0 会 `-0 > 10000` ⇒ 连上即多发一帧。
-    let mut online_hum_gate = startup_online_hum_gate(world.clock_ms);
+    // **卡 `openmir2-ids-keepalive-timeout`**：基准取**墙钟**（oracle `GetTickCount()`）。
+    let mut online_hum_gate = startup_online_hum_gate(clock::now_ms());
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
@@ -28276,7 +28278,9 @@ fn sim_loop(
         // （缺省 1，`GameSvrConf.cs:1253`）——都由 `serverinfo_frame` 决定。
         if let Some(frame) = game_svr::ids::periodic_serverinfo(
             &mut online_hum_gate,
-            world.clock_ms,
+            // **墙钟**（不是 `world.clock_ms`）：后者实测 0.832×，慢到一定程度会让
+            // LoginSrv 的 20s 墙钟超时先到（旧实例 119 次关链的根因）。见 `ids::keepalive_clock_ms`。
+            game_svr::ids::keepalive_clock_ms(world.clock_ms, clock::now_ms()),
             &enter_cfg.server_name,
             online_play_objects,
             payment_mode,
