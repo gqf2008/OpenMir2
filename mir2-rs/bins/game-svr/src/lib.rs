@@ -24765,9 +24765,10 @@ fn sim_loop(
     }
     // `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime`（`SystemProcessor.cs:63-67`）：与
     // `RunTimeTick`（10s）**各自独立**的另一个 10s 门。oracle 在 `Startup` 用 `GetTickCount()`
-    // 起算（`SystemProcessor.cs:22-27`）⇒ 基准 = **启动时刻**。必须放在时钟注入**之后**取
-    // `world.clock_ms`：注入后起点是 epoch 量级，基准若写死 0 会 `-0 > 10000` ⇒ 连上即多发一帧。
-    // **卡 `openmir2-ids-keepalive-timeout`**：基准取**墙钟**（oracle `GetTickCount()`）。
+    // 起算（`SystemProcessor.cs:22-27`）⇒ 基准 = **启动时刻的墙钟**（`GetTickCount()` 是墙钟）。
+    // 基准若写死 0 会在首个 tick 就 `-0 > 10000` ⇒ 连上即多发一帧。
+    // **卡 `openmir2-ids-keepalive-timeout`**：世界钟会随模拟负荷变慢（实测 0.832×），
+    // 不能喂给这个墙钟协议门；`keepalive_clock_ms()` 零参、内部取 `clock::now_ms()`。
     let mut online_hum_gate = startup_online_hum_gate(game_svr::ids::keepalive_clock_ms());
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：

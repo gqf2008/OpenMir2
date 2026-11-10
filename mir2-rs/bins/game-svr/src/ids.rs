@@ -224,7 +224,7 @@ pub struct OnlineHumGate {
 
 impl OnlineHumGate {
     /// 起算基准 = `SystemProcessor.Startup` 的 `SendOnlineHumTime = GetTickCount()`
-    /// ⇒ 传**注入之后的** `world.clock_ms`。
+    /// ⇒ 传**墙钟**（`ids::keepalive_clock_ms()`；注入 `MIR2_CLOCK_MS` 时为虚拟墙钟）。
     #[must_use]
     pub fn new(start_clock_ms: i64) -> Self {
         Self {
@@ -242,7 +242,7 @@ impl OnlineHumGate {
         }
     }
 
-    /// 当前基准（毫秒世界时钟）。给「基准必须是**注入之后**的 `world.clock_ms`」一条可断言的
+    /// 当前基准（毫秒**墙钟**）。给「基准必须是**启动时刻的墙钟**」一条可断言的
     /// 口子（T-6：`startup_online_hum_gate` 改成 `new(0)` ⇒ lib.rs 的用例必红）。
     #[must_use]
     pub fn baseline(&self) -> i64 {
