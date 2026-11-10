@@ -117,6 +117,17 @@ pub const fn direction_delta(dir: u8) -> (i32, i32) {
 /// 本别名只新增一条兼容路径，**不改变 3011/3013/3035/3010 的既有语义**。
 pub const CM_HORSERUN_LEGACY: u16 = 3009;
 
+/// 冻结客户端谱系的**线上** `SM_HORSERUN` ident（D-15：以冻结客户端为准）。
+///
+/// 冻结客户端 `Common_Grobal2.pas:328` 定义 `SM_HORSERUN = 5`，`ClMain.pas:9910` 把它与
+/// `SM_WALK`/`SM_RUN` 放同一支解码（尾 `TCharDesc`、`series = dir+light`），`Actor2.pas:475`
+/// 按 `SM_HORSERUN` 设 3 格。oracle `Messages.cs:436` 的 `SM_HORSERUN = 5010` **从未上线**
+/// （oracle 侧 `HorseType` 无赋值点 ⇒ 该帧永不发射），且 C# 低号段与冻结客户端本就不同源
+/// （C# `SM_THROW = 5` vs 客户端 `SM_THROW = 65069`）⇒ 线上必须发客户端认得的 5，
+/// 否则帧被当未知 ident 丢弃（旁观者看不到骑乘跑）。
+/// 登记见 `mir2-rs/tests/parity/whitelist.md` D-15；C# 常量表保持不变（msgcodegen 对拍）。
+pub const SM_HORSERUN_CLIENT: u16 = 5;
+
 /// 是否骑乘跑（oracle 3035 + Grobal2 兼容别名 3009）。
 #[must_use]
 pub const fn is_horse_run(ident: u16) -> bool {
@@ -137,7 +148,7 @@ pub const fn steps_for(ident: u16) -> i32 {
 pub const fn sm_ident_for(ident: u16) -> u16 {
     match ident {
         messages::CM_RUN => messages::SM_RUN,
-        messages::CM_HORSERUN | CM_HORSERUN_LEGACY => messages::SM_HORSERUN,
+        messages::CM_HORSERUN | CM_HORSERUN_LEGACY => SM_HORSERUN_CLIENT,
         _ => messages::SM_WALK,
     }
 }
@@ -218,7 +229,16 @@ mod tests {
         assert_eq!(steps_for(messages::CM_HORSERUN), 3);
         assert_eq!(sm_ident_for(messages::CM_WALK), messages::SM_WALK);
         assert_eq!(sm_ident_for(messages::CM_RUN), messages::SM_RUN);
-        assert_eq!(sm_ident_for(messages::CM_HORSERUN), messages::SM_HORSERUN);
+        assert_eq!(sm_ident_for(messages::CM_HORSERUN), SM_HORSERUN_CLIENT);
+        assert_eq!(
+            SM_HORSERUN_CLIENT, 5,
+            "冻结客户端 Common_Grobal2.pas:328 只认 5"
+        );
+        assert_ne!(
+            SM_HORSERUN_CLIENT,
+            messages::SM_HORSERUN,
+            "oracle 的 5010 客户端不认（D-15），不得上线"
+        );
     }
 
     #[test]
@@ -251,8 +271,8 @@ mod tests {
         assert!(!is_horse_run(messages::CM_RUN));
         assert_eq!(
             sm_ident_for(CM_HORSERUN_LEGACY),
-            messages::SM_HORSERUN,
-            "3009 成功移动的广播帧必须是 SM_HORSERUN(5010)，不能落到 SM_WALK"
+            SM_HORSERUN_CLIENT,
+            "3009 成功移动的广播帧必须是客户端认得的 SM_HORSERUN(5)，不能落到 SM_WALK、也不是 oracle 的 5010"
         );
         assert_eq!(steps_for(CM_HORSERUN_LEGACY), 3, "3009 每轴 ±3");
         assert_eq!(steps_for(messages::CM_HORSERUN), 3);
