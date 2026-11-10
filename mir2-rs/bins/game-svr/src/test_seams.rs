@@ -116,6 +116,57 @@ pub fn ids_log_enabled() -> bool {
     *LOG_IDS.get().unwrap_or(&false)
 }
 
+/// **临时观测缝（走位对齐用）**：`MIR2_LOG_MOVES`。默认关、只接受 `0`/`1`、启动一次性。
+///
+/// 用途：客户端报「骑马/跑动后攻击被拒（位置不一致）」时，需要把「服务端每收一条走位命令 →
+/// 接受/拒绝 → 落地坐标」与客户端序列对齐。口径与同族缝一致。
+pub const LOG_MOVES_ENV: &str = "MIR2_LOG_MOVES";
+
+static LOG_MOVES: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// 解析取值：`None`/空串/`0` ⇒ `false`；`1` ⇒ `true`；其余（含带空白）⇒ 错误。
+fn parse_log_moves(raw: Option<&str>) -> Result<bool, String> {
+    match raw {
+        None | Some("") | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(s) => Err(format!(
+            "{LOG_MOVES_ENV} 非法：{s:?}（只接受 0/1，空串=关闭）"
+        )),
+    }
+}
+
+/// 安装（进程内一次性）。
+///
+/// # Errors
+/// 取值非法，或已安装过。
+pub fn install_log_moves(raw: Option<&str>) -> Result<bool, String> {
+    let v = parse_log_moves(raw)?;
+    LOG_MOVES
+        .set(v)
+        .map_err(|_| format!("{LOG_MOVES_ENV} 只能安装一次"))?;
+    Ok(v)
+}
+
+/// 从进程环境读取并安装（`run_inner` 唯一入口）。
+///
+/// # Errors
+/// 取值非法、含非 UTF-8 字节，或已安装过。
+pub fn install_log_moves_from_env() -> Result<bool, String> {
+    match std::env::var_os(LOG_MOVES_ENV) {
+        None => install_log_moves(None),
+        Some(os) => match os.to_str() {
+            Some(s) => install_log_moves(Some(s)),
+            None => Err(format!("{LOG_MOVES_ENV} 含非 UTF-8 字节（拒绝静默当未设）")),
+        },
+    }
+}
+
+/// 是否记录走位日志（未安装 ⇒ `false`）。
+#[must_use]
+pub fn move_log_enabled() -> bool {
+    *LOG_MOVES.get().unwrap_or(&false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,5 +194,17 @@ mod tests {
         assert!(parse_log_ids(Some("2")).is_err());
         assert!(parse_log_ids(Some(" 1")).is_err(), "带空白不静默接受");
         assert!(!ids_log_enabled(), "本进程未安装 ⇒ 关");
+        assert!(!move_log_enabled(), "走位缝同样默认关");
+    }
+
+    #[test]
+    fn parse_log_moves_contract() {
+        assert_eq!(parse_log_moves(None), Ok(false));
+        assert_eq!(parse_log_moves(Some("")), Ok(false));
+        assert_eq!(parse_log_moves(Some("0")), Ok(false));
+        assert_eq!(parse_log_moves(Some("1")), Ok(true));
+        assert!(parse_log_moves(Some("true")).is_err());
+        assert!(parse_log_moves(Some("2")).is_err());
+        assert!(parse_log_moves(Some(" 1")).is_err(), "带空白不静默接受");
     }
 }

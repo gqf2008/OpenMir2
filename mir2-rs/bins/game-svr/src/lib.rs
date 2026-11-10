@@ -590,6 +590,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
         );
     }
     // **卡 `openmir2-test-attack-log`**：攻击受理日志缝，默认关（不设 ⇒ 一行不多）。
+    if test_seams::install_log_moves_from_env().map_err(anyhow::Error::msg)? {
+        glog!(
+            "INF",
+            "RUST_TEST_MOVE_LOG=1（测试缝：走位接受/落地坐标；默认关时不出现本行）"
+        );
+    }
     let log_attacks = test_seams::install_log_attacks_from_env().map_err(anyhow::Error::msg)?;
     if log_attacks {
         glog!(
@@ -11070,6 +11076,17 @@ fn handle_move_cmd(
                 e.ai.dir = dir;
             }
             let outcome = world.step_with_route(actor_id, ddx, ddy, steps);
+            // **临时观测缝（走位对齐，默认关）**：每收一条走位命令，记录接受/拒绝与落地坐标，
+            // 用于和客户端的 CM_HORSERUN/CM_RUN 序列逐条对照（Owner「骑马攻击不掉血」定位）。
+            if test_seams::move_log_enabled() {
+                let after = world.entities.get(actor_id).map(|e| (e.x, e.y));
+                glog!(
+                    "DBG",
+                    "MIR2_MOVE ident={ident} dir={dir} steps={steps} req=({nx},{ny}) from=({cur_x},{cur_y}) moved={} rolled_back={} after={after:?}",
+                    outcome.moved,
+                    outcome.rolled_back
+                );
+            }
             // **PL-2 / P31**：`EnterAnotherMap` 已进落地段但 `AddToMap` 失败的回滚支
             // （`PlayObject.cs:3787-3796`）在 oracle **仍**执行 `AutoGetExpTick = GetTickCount()`。
             // 该支 `moved == false`（上游 `WalkTo` 回滚、不发移动帧）⇒ 复位必须放在下面的早退之前。
