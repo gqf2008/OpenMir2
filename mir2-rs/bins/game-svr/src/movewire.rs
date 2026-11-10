@@ -134,6 +134,20 @@ pub const fn is_horse_run(ident: u16) -> bool {
     matches!(ident, messages::CM_HORSERUN | CM_HORSERUN_LEGACY)
 }
 
+/// **生产派发门**：这条 CI 命令是否交给 `handle_move_cmd`（含 3009 别名）。
+///
+/// 卡 `openmir2-horserun-3009-not-routed`：上一批把 `is_horse_run` 只写在 `handle_move_cmd`
+/// **内部**，而 `sim_loop` 的外层派发门仍是手写的 `matches!(ident, CM_TURN|CM_WALK|CM_RUN|
+/// CM_HORSERUN)` ⇒ 3009 在派发层被吞，谓词单测全绿、线上却不处理。本函数是**唯一**的派发
+/// 判据，`sim_loop` 必须调它（接线牙见 `move_dispatch_gate_uses_is_move_command_in_sim_loop`）。
+#[must_use]
+pub const fn is_move_command(ident: u16) -> bool {
+    matches!(
+        ident,
+        messages::CM_TURN | messages::CM_WALK | messages::CM_RUN
+    ) || is_horse_run(ident)
+}
+
 #[must_use]
 pub const fn steps_for(ident: u16) -> i32 {
     match ident {
@@ -261,6 +275,29 @@ mod tests {
     fn good_tick_payload_shape() {
         assert_eq!(good_tick_payload(1234), b"+GD/1234".to_vec());
     }
+    /// **派发门牙（卡 `openmir2-horserun-3009-not-routed`）**：3009 必须能从生产派发门
+    /// （`sim_loop` → `handle_move_cmd`）进入移动支；3010/3011/3013/3035 不变；非移动命令不误入。
+    ///
+    /// 红检：删掉 `is_move_command` 的 `is_horse_run` 半支 ⇒ 本用例红。
+    #[test]
+    fn move_command_gate_includes_legacy_horserun() {
+        for ident in [
+            messages::CM_TURN,
+            messages::CM_WALK,
+            messages::CM_RUN,
+            messages::CM_HORSERUN,
+            CM_HORSERUN_LEGACY,
+        ] {
+            assert!(
+                is_move_command(ident),
+                "ident={ident} 必须由 handle_move_cmd 处理"
+            );
+        }
+        for ident in [messages::CM_HIT, messages::CM_SITDOWN, 0u16] {
+            assert!(!is_move_command(ident), "ident={ident} 不得进移动支");
+        }
+    }
+
     /// **D-* 别名牙**：3009 必须按骑乘跑处理（步数 3），且与 3035 同判定；
     /// walk/run 不受影响。
     #[test]
