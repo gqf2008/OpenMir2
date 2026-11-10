@@ -401,7 +401,8 @@ pub fn move_frame(ident: u16, target: i32, x: u16, y: u16, d: &ActorDisplay) -> 
         | mir2_protocol::messages::SM_HORSERUN
         | mir2_protocol::messages::SM_BACKSTEP
         | mir2_protocol::messages::SM_RUSH
-        | mir2_protocol::messages::SM_RUSHKUNG => Some(smframe::sm_move(
+        | mir2_protocol::messages::SM_RUSHKUNG
+        | crate::movewire::SM_HORSERUN_CLIENT => Some(smframe::sm_move(
             ident,
             target,
             x,
@@ -742,6 +743,50 @@ mod tests {
         );
         // 不猜：非移动 ident 返回 None。
         assert!(move_frame(mir2_protocol::messages::SM_TURN, recog, x, y, &d).is_none());
+    }
+
+    /// **A1 牙（卡 `openmir2-horserun-sm-ident-5`，D-15）**：骑乘跑的**线上** ident 是 **5**，
+    /// 不是 oracle 的 5010 —— 冻结客户端 `Common_Grobal2.pas:328` 只认 5，5010 会被当未知
+    /// ident 丢弃（旁观者看不到骑乘跑）。帧体与 `SM_WALK` 同形：12B 头 +
+    /// `Encode(8B TCharDesc)`，`series = MakeWord(dir, light)`。
+    ///
+    /// 红检：把 `movewire::SM_HORSERUN_CLIENT` 改回 `messages::SM_HORSERUN`（5010），或删掉
+    /// `move_frame` 里的 5 分支 ⇒ 本用例必红（后者表现为「无编码器」）。
+    #[test]
+    fn move_frame_encodes_client_horserun_ident_five() {
+        let d = ActorDisplay {
+            dir: 5,
+            light: 1,
+            feature: 0x0001_0293,
+            feature_ex: 0,
+            status: 7,
+            name_color: 255,
+            show_name: Vec::new(),
+            mount_id: 1,
+        };
+        assert_eq!(
+            crate::movewire::SM_HORSERUN_CLIENT,
+            5,
+            "冻结客户端 Common_Grobal2.pas:328：SM_HORSERUN = 5"
+        );
+        let built = move_frame(crate::movewire::SM_HORSERUN_CLIENT, 1234, 300, 400, &d)
+            .expect("骑乘跑广播（ident=5）必须有编码器，否则广播侧静默不发");
+        let (head, tail) = split_wire(&smframe::client_frame(&built));
+        assert_eq!(
+            u16::from_le_bytes([head[4], head[5]]),
+            5,
+            "线上 ident 必须是 5（客户端按 SM_HORSERUN 派发），不得是 oracle 的 5010"
+        );
+        assert_eq!(
+            u16::from_le_bytes([head[10], head[11]]),
+            u16::from(5u8) | (u16::from(1u8) << 8),
+            "series = MakeWord(dir, light)，与 SM_WALK/SM_RUN 同形"
+        );
+        assert_eq!(
+            mir2_protocol::edcode::decode(&tail).len(),
+            8,
+            "尾必须是 Encode(8B TCharDesc)（ClMain.pas:9910 与 WALK/RUN 同支解码）"
+        );
     }
 
     /// `GetMyLight` 的三条分支（`PlayObject.cs:5404-5430`）：等级 ≥50 记 1；

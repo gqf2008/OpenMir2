@@ -767,6 +767,10 @@ pub fn sm_run(actor_id: i32, x: u16, y: u16, dir: u8, light: u8, char_desc: &[u8
 }
 
 /// `SM_HORSERUN`(5010)：见 [`sm_move`]。
+///
+/// **注意（D-15）**：5010 是 oracle 的编号，**从未上线**；冻结客户端只认 5，生产广播走
+/// `movewire::SM_HORSERUN_CLIENT` / [`crate::downlink::move_frame`]。本函数只作 oracle
+/// 布局的参照实现，不接入任何下行路径。
 #[must_use]
 pub fn sm_horserun(actor_id: i32, x: u16, y: u16, dir: u8, light: u8, char_desc: &[u8]) -> Vec<u8> {
     sm_move(messages::SM_HORSERUN, actor_id, x, y, dir, light, char_desc)
