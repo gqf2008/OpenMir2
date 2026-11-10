@@ -202,7 +202,6 @@ pub fn serverinfo_frame(server_name: &str, online_count: i32, payment_mode: u8) 
 /// （旧实例实体内 ~29k）比值继续下降，一旦「10s 世界钟 > 20s 墙钟」，LoginSrv 就会关链 ——
 /// 这正是旧实例 2h45m 内 119 次「游戏服务器响应超时」的来源，也解释了「重起即恢复」。
 ///
-/// 两个入参都保留：让「选哪个钟」在调用点一眼可见，并由
 /// **不收 `world_ms` 参数**是刻意的：世界钟会随模拟负荷变慢，不能作为墙钟协议的计时源；
 /// 接口上只要留了它，正确性就交给调用者自觉。这里内部直接取 `clock::now_ms()`
 /// （注入 `MIR2_CLOCK_MS` 时同样生效）⇒ 调用点想传世界钟都没有机会。
@@ -214,9 +213,11 @@ pub fn keepalive_clock_ms() -> i64 {
 /// `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime` 10s 门（`SystemProcessor.cs:63-67`）。
 ///
 /// oracle 在 `Startup`（`SystemProcessor.cs:22-27`）用 `GetTickCount()` 起算 ⇒ 基准是
-/// **启动时刻**、不是 0。本仓注入时钟（`MIR2_CLOCK_MS`）后 `world.clock_ms` 从 epoch 量级
-/// 起算；基准若写死 0，首个 tick 就 `clock_ms - 0 > 10000` ⇒ **连上后立刻多发一帧**
-/// （oracle 要等满 10s）。门本身是**严格 `>`**，间隔 10000ms。
+/// **启动时刻的墙钟**、不是 0。基准若写死 0，首个 tick 就 `now - 0 > 10000` ⇒
+/// **连上后立刻多发一帧**（oracle 要等满 10s）。门本身是**严格 `>`**，间隔 10000ms。
+///
+/// 传入的时刻**必须是墙钟**（`keepalive_clock_ms()`）；`world.clock_ms` 会随模拟负荷变慢
+/// （实测 0.832×），喂给这个墙钟协议门会越过 LoginSrv 的 20s 超时。
 #[derive(Debug, Clone, Copy)]
 pub struct OnlineHumGate {
     last: i64,
@@ -255,6 +256,21 @@ impl OnlineHumGate {
 /// 在构造级可判（reviewer-1 m-1(b)）。
 #[must_use]
 pub fn periodic_serverinfo(
+    gate: &mut OnlineHumGate,
+    server_name: &str,
+    online_count: i32,
+    payment_mode: u8,
+) -> Option<String> {
+    gate.tick(keepalive_clock_ms())
+        .then(|| serverinfo_frame(server_name, online_count, payment_mode))
+}
+
+/// 构造级用例专用：显式注入时刻。
+///
+/// **`#[cfg(test)]` ⇒ 生产代码根本调不到它**，也就没有「把 `world.clock_ms` 送进这个门」的路。
+/// 生产侧唯一入口是零时钟参数的 [`periodic_serverinfo`]（内部取墙钟）。
+#[cfg(test)]
+pub fn periodic_serverinfo_at(
     gate: &mut OnlineHumGate,
     clock_ms: i64,
     server_name: &str,
@@ -498,7 +514,7 @@ mod tests {
 
 #[cfg(test)]
 mod serverinfo_tests {
-    use super::{drain_stale, periodic_serverinfo, serverinfo_frame, OnlineHumGate};
+    use super::{drain_stale, periodic_serverinfo_at, serverinfo_frame, OnlineHumGate};
     use std::sync::atomic::AtomicI32;
     use std::sync::{Arc, Mutex};
     use tokio::io::AsyncReadExt;
@@ -608,23 +624,23 @@ mod serverinfo_tests {
     #[test]
     fn periodic_serverinfo_only_after_gate_advances() {
         let mut gate = OnlineHumGate::new(0);
-        assert_eq!(periodic_serverinfo(&mut gate, 0, "热血传奇", 3, 1), None);
+        assert_eq!(periodic_serverinfo_at(&mut gate, 0, "热血传奇", 3, 1), None);
         assert_eq!(
-            periodic_serverinfo(&mut gate, 10_000, "热血传奇", 3, 1),
+            periodic_serverinfo_at(&mut gate, 10_000, "热血传奇", 3, 1),
             None,
             "严格 >：正好 10000ms 不发"
         );
         assert_eq!(
-            periodic_serverinfo(&mut gate, 10_001, "热血传奇", 4, 1).as_deref(),
+            periodic_serverinfo_at(&mut gate, 10_001, "热血传奇", 4, 1).as_deref(),
             Some("(103/热血传奇/0/4/1)"),
             "到点发一帧，且带**当前**在线数"
         );
         assert_eq!(
-            periodic_serverinfo(&mut gate, 20_001, "热血传奇", 5, 1),
+            periodic_serverinfo_at(&mut gate, 20_001, "热血传奇", 5, 1),
             None
         );
         assert_eq!(
-            periodic_serverinfo(&mut gate, 20_002, "热血传奇", 5, 1).as_deref(),
+            periodic_serverinfo_at(&mut gate, 20_002, "热血传奇", 5, 1).as_deref(),
             Some("(103/热血传奇/0/5/1)")
         );
     }
@@ -739,5 +755,23 @@ mod serverinfo_tests {
         // 本用例只钉门的语义；「调用点喂的是墙钟」由 `keepalive_clock_ms()` 的零参签名
         // （类型上无处传世界钟）+ 上面的量级用例共同保证。
         assert!(gate.tick(10_001), "墙钟超过 10s 必须触发，与世界钟无关");
+    }
+    /// **生产入口用「活的墙钟」**：基准设为 `keepalive_clock_ms() - 10001`
+    /// （即 10.001 秒前）⇒ 必须立即到点。
+    ///
+    /// 若 `periodic_serverinfo` 内部改回 `world.clock_ms`（几百万），它减去 epoch 基准是负数
+    /// ⇒ 永远不会到点 ⇒ 本用例红。这是零参签名之外的第二道锁。
+    #[test]
+    fn production_periodic_serverinfo_uses_live_wall_clock() {
+        let mut due = OnlineHumGate::new(super::keepalive_clock_ms() - 10_001);
+        assert!(
+            super::periodic_serverinfo(&mut due, "热血传奇", 0, 1).is_some(),
+            "基准在 10.001s 前 ⇒ 必须到点（证明用的是当前墙钟）"
+        );
+        let mut fresh = OnlineHumGate::new(super::keepalive_clock_ms());
+        assert!(
+            super::periodic_serverinfo(&mut fresh, "热血传奇", 0, 1).is_none(),
+            "刚建门不得首发"
+        );
     }
 }

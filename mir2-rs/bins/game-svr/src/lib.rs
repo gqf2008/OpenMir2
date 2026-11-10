@@ -24233,13 +24233,11 @@ fn rewrite_enter_position(
 ///
 /// oracle `SystemProcessor.Startup`（`SystemProcessor.cs:22-27`）用 `GetTickCount()` 起算
 /// `SendOnlineHumTime`——那是**墙钟**（`Environment.TickCount`），不是世界钟。
-/// 生产代码只经本函数建门，且调用点传 `clock::now_ms()`（注入 `MIR2_CLOCK_MS` 时它同样生效）。
-/// 把它改成 `OnlineHumGate::new(0)` ⇒ `startup_online_hum_gate_uses_injected_clock_origin` 必红
-/// （注入量级下会提前首发）。
 ///
-/// **参数是墙钟**（调用点传 `ids::keepalive_clock_ms()`；注入 `MIR2_CLOCK_MS` 时它返回注入原点）。
-fn startup_online_hum_gate(now_ms: i64) -> game_svr::ids::OnlineHumGate {
-    game_svr::ids::OnlineHumGate::new(now_ms)
+/// **零参数**是刻意的：内部取 `ids::keepalive_clock_ms()`，调用点没有传世界钟的机会。
+/// 把它改成 `OnlineHumGate::new(0)` ⇒ `startup_online_hum_gate_uses_injected_clock_origin` 必红。
+fn startup_online_hum_gate() -> game_svr::ids::OnlineHumGate {
+    game_svr::ids::OnlineHumGate::new(game_svr::ids::keepalive_clock_ms())
 }
 
 /// **`openmir2-script-user-account`（review `57209946` critical）**：`SessionGround` 的
@@ -24769,7 +24767,7 @@ fn sim_loop(
     // 基准若写死 0 会在首个 tick 就 `-0 > 10000` ⇒ 连上即多发一帧。
     // **卡 `openmir2-ids-keepalive-timeout`**：世界钟会随模拟负荷变慢（实测 0.832×），
     // 不能喂给这个墙钟协议门；`keepalive_clock_ms()` 零参、内部取 `clock::now_ms()`。
-    let mut online_hum_gate = startup_online_hum_gate(game_svr::ids::keepalive_clock_ms());
+    let mut online_hum_gate = startup_online_hum_gate();
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
     // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
@@ -28279,11 +28277,10 @@ fn sim_loop(
         // 到点上报一次当前在线数（`SendOnlineHumCountMsg`，`AuthenticationService.cs:113-116`）。
         // 第 3 段恒 0（`M2Share.ServerIndex` 从不赋值），第 5 段取 `[Server] PayMentMode`
         // （缺省 1，`GameSvrConf.cs:1253`）——都由 `serverinfo_frame` 决定。
+        // **墙钟**：`periodic_serverinfo` 不收时钟参数，内部取 `keepalive_clock_ms()`
+        // ⇒ 生产代码没有「把 world.clock_ms 送进这个门」的路（显式时钟版本是 `#[cfg(test)]`）。
         if let Some(frame) = game_svr::ids::periodic_serverinfo(
             &mut online_hum_gate,
-            // **墙钟**：`keepalive_clock_ms()` 不收世界钟参数（类型上断掉误用），
-            // 内部取 `clock::now_ms()`。理由见 `ids::keepalive_clock_ms` 的文档（0.832× 实测）。
-            game_svr::ids::keepalive_clock_ms(),
             &enter_cfg.server_name,
             online_play_objects,
             payment_mode,
@@ -85483,7 +85480,12 @@ mod serverinfo_gate_tests {
     #[test]
     fn startup_online_hum_gate_uses_injected_clock_origin() {
         let origin = 1_700_000_000_000i64; // `MIR2_CLOCK_MS` 注入后的起点量级
-        let mut gate = startup_online_hum_gate(origin);
+        let mut gate = game_svr::ids::OnlineHumGate::new(origin);
+        // 生产 wrapper 是零参：基准必须是墙钟量级（世界钟只有几百万）
+        assert!(
+            startup_online_hum_gate().baseline() > 1_600_000_000_000,
+            "生产 wrapper 的基准必须是 epoch 墙钟量级"
+        );
         assert_eq!(gate.baseline(), origin, "基准 = 注入后的墙钟原点（不是 0）");
         assert!(!gate.tick(origin), "注入量级下不得提前首发");
         assert!(!gate.tick(origin + 10_000), "严格 >：正好 10000ms 不发");
