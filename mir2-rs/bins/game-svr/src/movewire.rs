@@ -264,7 +264,7 @@ mod tests {
     #[test]
     fn movefail_body_includes_char_desc_and_layout() {
         let desc = game_svr::downlink::char_desc(1234, 77);
-        let body = game_svr::smframe::movefail_body(42, 100, 200, 5, 3, 1234, 77);
+        let body = game_svr::smframe::movefail_body(42, 100, 200, 5, 1234, 77);
         let encoded_len = mir2_protocol::edcode::encode(&desc).len();
         assert_eq!(body.len(), 12 + encoded_len, "12B 头 + EDCode(CharDesc)");
         assert_eq!(i32::from_le_bytes(body[0..4].try_into().unwrap()), 42);
@@ -276,8 +276,8 @@ mod tests {
         assert_eq!(u16::from_le_bytes([body[8], body[9]]), 200, "tag=y");
         assert_eq!(
             u16::from_le_bytes([body[10], body[11]]),
-            game_svr::feature::make_word(5, 3),
-            "series = MakeWord(dir, light)"
+            5,
+            "series = dir（高字节恒 0；oracle 第 5 参是 byte Dir，不带 light）"
         );
         // 尾必须与 downlink::char_desc(feature,status) 经 EDCode 编码后的结果一致
         assert_eq!(

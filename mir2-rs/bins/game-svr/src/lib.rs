@@ -586,21 +586,21 @@ async fn run_inner(args: &[String]) -> Result<()> {
     if test_seams::install_log_ids_from_env().map_err(anyhow::Error::msg)? {
         glog!(
             "INF",
-            "RUST_TEST_IDS_LOG=1（测试缝：LoginSrv 链路日志；默认关时不出现本行）"
+            "RUST_TEST_IDS_LOG=1（MIR2_LOG_IDS=1；测试缝：LoginSrv 链路日志；默认关时不出现本行）"
         );
     }
     // **卡 `openmir2-test-attack-log`**：攻击受理日志缝，默认关（不设 ⇒ 一行不多）。
     if test_seams::install_log_moves_from_env().map_err(anyhow::Error::msg)? {
         glog!(
             "INF",
-            "RUST_TEST_MOVE_LOG=1（测试缝：走位接受/落地坐标；默认关时不出现本行）"
+            "RUST_TEST_MOVE_LOG=1（MIR2_LOG_MOVES=1；测试缝：走位接受/落地坐标；默认关时不出现本行）"
         );
     }
     let log_attacks = test_seams::install_log_attacks_from_env().map_err(anyhow::Error::msg)?;
     if log_attacks {
         glog!(
             "INF",
-            "RUST_TEST_ATTACK_LOG=1（测试缝：攻击受理日志；默认关时不出现本行）"
+            "RUST_TEST_ATTACK_LOG=1（MIR2_LOG_ATTACKS=1；测试缝：攻击受理日志；默认关时不出现本行）"
         );
     }
     let test_permission = gmcmd::install_test_permission_from_env().map_err(anyhow::Error::msg)?;
@@ -608,7 +608,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
         // 与 `RUST_SEED_INJECTED` 同形：注入生效时打一行可判据的日志。
         glog!(
             "INF",
-            "RUST_TEST_PERMISSION_INJECTED={test_permission}（测试缝：所有会话初始权限；默认关时本行不出现）"
+            "RUST_TEST_PERMISSION_INJECTED={test_permission}（MIR2_TEST_PERMISSION；测试缝：所有会话初始权限；默认关时本行不出现）"
         );
     }
     // **G11 / A3-2b**：跨服链路。设计文档 §5.2 的实测结论：oracle 主服只 `Setup` 不 `Start`
@@ -4013,9 +4013,8 @@ fn send_movefail(
             show_name: Vec::new(),
             mount_id: 0,
         });
-    let body = game_svr::smframe::movefail_body(
-        actor_id, ex as u16, ey as u16, dir, d.light, d.feature, d.status,
-    );
+    let body =
+        game_svr::smframe::movefail_body(actor_id, ex as u16, ey as u16, dir, d.feature, d.status);
     if let Some(tx) = route_to_gate(gates, gate_idx, socket, "SM_MOVEFAIL") {
         let _ = tx.send(SimToGate::SendFrame { socket, body });
     }
