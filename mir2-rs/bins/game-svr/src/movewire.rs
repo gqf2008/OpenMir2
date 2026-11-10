@@ -109,11 +109,25 @@ pub const fn direction_delta(dir: u8) -> (i32, i32) {
 }
 
 /// 各移动 ident 的**格数**（`WalkTo` 走 1、`RunTo` 跑 2、`HorseRunTo` 骑跑 3）。
+/// **Grobal2 / Delphi 谱系的骑乘跑 ident**（D-* 协议兼容别名）。
+///
+/// oracle `src/OpenMir2/Messages.cs:545` 只定义 `CM_HORSERUN = 3035`；**3009 在 oracle 里未分配**，
+/// 但 MirClientZig（按 Grobal2.pas）按 3009 发包 ⇒ 真机上服务端当未知消息丢弃，
+/// 坐标不再更新、攻击随后被 `at_self` 拒绝（Owner「骑马不掉血」根因）。
+/// 本别名只新增一条兼容路径，**不改变 3011/3013/3035/3010 的既有语义**。
+pub const CM_HORSERUN_LEGACY: u16 = 3009;
+
+/// 是否骑乘跑（oracle 3035 + Grobal2 兼容别名 3009）。
+#[must_use]
+pub const fn is_horse_run(ident: u16) -> bool {
+    matches!(ident, messages::CM_HORSERUN | CM_HORSERUN_LEGACY)
+}
+
 #[must_use]
 pub const fn steps_for(ident: u16) -> i32 {
     match ident {
         messages::CM_RUN => 2,
-        messages::CM_HORSERUN => 3,
+        messages::CM_HORSERUN | CM_HORSERUN_LEGACY => 3,
         _ => 1,
     }
 }
@@ -226,5 +240,29 @@ mod tests {
     #[test]
     fn good_tick_payload_shape() {
         assert_eq!(good_tick_payload(1234), b"+GD/1234".to_vec());
+    }
+    /// **D-* 别名牙**：3009 必须按骑乘跑处理（步数 3），且与 3035 同判定；
+    /// walk/run 不受影响。
+    #[test]
+    fn horserun_legacy_alias_steps_and_predicates() {
+        assert!(is_horse_run(CM_HORSERUN_LEGACY), "3009 必须被识别为骑乘跑");
+        assert!(is_horse_run(messages::CM_HORSERUN));
+        assert!(!is_horse_run(messages::CM_WALK));
+        assert!(!is_horse_run(messages::CM_RUN));
+        assert_eq!(steps_for(CM_HORSERUN_LEGACY), 3, "3009 每轴 ±3");
+        assert_eq!(steps_for(messages::CM_HORSERUN), 3);
+        assert_eq!(steps_for(messages::CM_RUN), 2);
+        assert_eq!(steps_for(messages::CM_WALK), 1);
+    }
+    /// **MOVEFAIL 帧字段牙**：Recog=actor id、param=x、tag=y、series=dir（oracle ClMain.pas:9939-9949）。
+    #[test]
+    fn movefail_frame_layout_matches_oracle() {
+        let f = game_svr::inbound::movefail_frame(42, 100, 200, 5);
+        assert_eq!(f.ident, mir2_protocol::messages::SM_MOVEFAIL);
+        assert_eq!(
+            (f.recog, f.param, f.tag, f.series),
+            (42, 100, 200, 5),
+            "Recog/Param/Tag/Series 必须逐字段对齐 oracle"
+        );
     }
 }

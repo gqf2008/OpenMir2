@@ -11062,9 +11062,10 @@ fn handle_move_cmd(
             }
             send_good_tick(online, gates, chr_name);
         }
-        mir2_protocol::messages::CM_WALK
-        | mir2_protocol::messages::CM_RUN
-        | mir2_protocol::messages::CM_HORSERUN => {
+        _ if ident == mir2_protocol::messages::CM_WALK
+            || ident == mir2_protocol::messages::CM_RUN
+            || game_svr::movewire::is_horse_run(ident) =>
+        {
             let dir = movewire::next_direction(cur_x, cur_y, nx, ny);
             let (ddx, ddy) = movewire::direction_delta(dir);
             let steps = movewire::steps_for(ident);
@@ -11100,9 +11101,19 @@ fn handle_move_cmd(
                 }
             }
             if !outcome.moved {
+                // **卡 `openmir2-horserun-3009-movefail`**：被拒/被挡必须回 `SM_MOVEFAIL(28)`
+                // （oracle `ClMain.pas:9939-9949`），此前只记日志、不回包 ⇒ 客户端不知道没动。
+                let e = world.entities.get(actor_id);
+                let f = game_svr::inbound::movefail_frame(
+                    actor_id,
+                    e.map_or(0, |e| e.x),
+                    e.map_or(0, |e| e.y),
+                    dir,
+                );
+                emit_def_frames(gates, entry.gate_idx, socket, &[f], "SM_MOVEFAIL");
                 glog!(
                     "DBG",
-                    "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name}"
+                    "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（已回 SM_MOVEFAIL(28)）ChrName={chr_name}"
                 );
                 return;
             }
@@ -41709,9 +41720,29 @@ break
                 "目标格是墙 ⇒ 不得移动（oracle CanWalk 挡住）"
             );
         }
+        // **语义变更（卡 `openmir2-horserun-3009-movefail`）**：被挡时 oracle 会回
+        // `SM_MOVEFAIL(28)`（旧实现只记日志、队列恒空）。这条旧牙原样断言「队列须空」，
+        // 现改为断言「恰好一条 SM_MOVEFAIL，且 Recog/Param/Tag 取原地坐标」，其余不得有帧。
+        let SimToGate::SendFrame { body, .. } = rx0
+            .try_recv()
+            .expect("被挡必须回 SM_MOVEFAIL(28)（旧实现只记日志）")
+        else {
+            panic!("被挡时收到了非 SendFrame 事件");
+        };
+        assert_eq!(
+            i32::from_le_bytes(body[0..4].try_into().unwrap()),
+            mover,
+            "Recog = 玩家 actor id"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_MOVEFAIL
+        );
+        assert_eq!(u16::from_le_bytes([body[6], body[7]]), 11, "Param = 原地 X");
+        assert_eq!(u16::from_le_bytes([body[8], body[9]]), 10, "Tag = 原地 Y");
         assert!(
             rx0.try_recv().is_err(),
-            "目标格是墙 ⇒ 不得发 SM_WALK / 不得回 +GD（整条 sim→gate 队列须空）"
+            "除 SM_MOVEFAIL 外不得再发 SM_WALK / +GD"
         );
         assert_eq!(
             world.map(0).cell(11, 10).count(),
