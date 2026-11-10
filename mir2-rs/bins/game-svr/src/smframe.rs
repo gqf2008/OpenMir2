@@ -680,6 +680,29 @@ pub fn sm_daychanging(bright: u16, day_bright: u16) -> Vec<u8> {
     gm_data_body(header, &[])
 }
 
+/// `SM_MOVEFAIL(28)` 的完整帧体：**12B 命令头 + EDCode(CharDesc)**。
+///
+/// oracle `ClMain.pas:9939-9949`：`RecvMsg` 的 `Recog = actor id`、`param = x`、`tag = y`、
+/// **`series = dir`（高字节恒 0，不带 light）**——C# `PlayObject.Message.cs:1469` 的
+/// `MakeMessage(SM_MOVEFAIL, ActorId, CurrX, CurrY, Dir)` 第 5 参就是 byte `Dir`，
+/// 与 SM_WALK/RUN/HORSERUN/TURN 的 `MakeWord(dir, Light)` **不同**；
+/// 冻结客户端 `ClMain.pas:9947` 的注释也写 `msg.series { dir }`（SM_TURN 才是 `{ dir + light }`）。
+/// 随后 `DecodeBuffer(body, @desc, SizeOf(TCharDesc))`；客户端 `onMoveFail` 会
+/// `setFeature(desc.feature)` ⇒ **body 必须带 CharDesc**，否则外观被重置成裸模。
+#[must_use]
+pub fn movefail_body(actor_id: i32, x: u16, y: u16, dir: u8, feature: i32, status: i32) -> Vec<u8> {
+    let header = command_header(
+        actor_id,
+        mir2_protocol::messages::SM_MOVEFAIL,
+        x,
+        y,
+        u16::from(dir),
+    );
+    let desc = crate::downlink::char_desc(feature, status);
+    let tail = edcode::encode(&desc);
+    gm_data_body(header, &tail)
+}
+
 /// `SM_TURN`（`PlayObject.Message.cs:1552` 的 `RM_TURN` 支）：
 /// `MakeMessage(SM_TURN, ActorId, nParam1, nParam2, MakeWord((ushort)wParam, baseObject.Light))`
 /// 尾 = `EncodePacket(CharDesc)`（`CharDesc` = `Feature(i32) + Status(i32)` = 8B）；

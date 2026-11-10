@@ -586,15 +586,21 @@ async fn run_inner(args: &[String]) -> Result<()> {
     if test_seams::install_log_ids_from_env().map_err(anyhow::Error::msg)? {
         glog!(
             "INF",
-            "RUST_TEST_IDS_LOG=1（测试缝：LoginSrv 链路日志；默认关时不出现本行）"
+            "RUST_TEST_IDS_LOG=1（MIR2_LOG_IDS=1；测试缝：LoginSrv 链路日志；默认关时不出现本行）"
         );
     }
     // **卡 `openmir2-test-attack-log`**：攻击受理日志缝，默认关（不设 ⇒ 一行不多）。
+    if test_seams::install_log_moves_from_env().map_err(anyhow::Error::msg)? {
+        glog!(
+            "INF",
+            "RUST_TEST_MOVE_LOG=1（MIR2_LOG_MOVES=1；测试缝：走位接受/落地坐标；默认关时不出现本行）"
+        );
+    }
     let log_attacks = test_seams::install_log_attacks_from_env().map_err(anyhow::Error::msg)?;
     if log_attacks {
         glog!(
             "INF",
-            "RUST_TEST_ATTACK_LOG=1（测试缝：攻击受理日志；默认关时不出现本行）"
+            "RUST_TEST_ATTACK_LOG=1（MIR2_LOG_ATTACKS=1；测试缝：攻击受理日志；默认关时不出现本行）"
         );
     }
     let test_permission = gmcmd::install_test_permission_from_env().map_err(anyhow::Error::msg)?;
@@ -602,7 +608,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
         // 与 `RUST_SEED_INJECTED` 同形：注入生效时打一行可判据的日志。
         glog!(
             "INF",
-            "RUST_TEST_PERMISSION_INJECTED={test_permission}（测试缝：所有会话初始权限；默认关时本行不出现）"
+            "RUST_TEST_PERMISSION_INJECTED={test_permission}（MIR2_TEST_PERMISSION；测试缝：所有会话初始权限；默认关时本行不出现）"
         );
     }
     // **G11 / A3-2b**：跨服链路。设计文档 §5.2 的实测结论：oracle 主服只 `Setup` 不 `Start`
@@ -3977,6 +3983,43 @@ fn handle_level_rank_request_cmd(
 }
 
 /// 把一批 [`game_svr::inbound::DefFrame`]（`SendDefMessage` 口径，无尾）编成 `GM_DATA` body 下发。
+/// 发 `SM_MOVEFAIL(28)` 给发起方（`Recog=actor id`、`param=x`、`tag=y`、
+/// `series=MakeWord(dir,light)`、尾 `EDCode(CharDesc)`）。
+///
+/// 两处触发：① 完全没动（`!outcome.moved`）；② 动了但没到请求格（`!move_result_ok`，
+/// 骑乘跑被碰撞截断的典型情形）——两者 oracle 都回 `RM_MOVEFAIL`。
+#[allow(clippy::too_many_arguments)]
+fn send_movefail(
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    displays: &downlink::DisplayTable,
+    world: &mir2_world::World,
+    actor_id: i32,
+    socket: i32,
+    gate_idx: i32,
+    dir: u8,
+) {
+    let (ex, ey) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+    // 生产上进世界即登记展示表；缺失时零值（仅测试夹具用）。
+    let d = displays
+        .get(actor_id)
+        .cloned()
+        .unwrap_or_else(|| game_svr::downlink::ActorDisplay {
+            dir: 0,
+            light: 0,
+            feature: 0,
+            feature_ex: 0,
+            status: 0,
+            name_color: 0,
+            show_name: Vec::new(),
+            mount_id: 0,
+        });
+    let body =
+        game_svr::smframe::movefail_body(actor_id, ex as u16, ey as u16, dir, d.feature, d.status);
+    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "SM_MOVEFAIL") {
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    }
+}
+
 fn emit_def_frames(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     gate_idx: i32,
@@ -11056,9 +11099,10 @@ fn handle_move_cmd(
             }
             send_good_tick(online, gates, chr_name);
         }
-        mir2_protocol::messages::CM_WALK
-        | mir2_protocol::messages::CM_RUN
-        | mir2_protocol::messages::CM_HORSERUN => {
+        _ if ident == mir2_protocol::messages::CM_WALK
+            || ident == mir2_protocol::messages::CM_RUN
+            || game_svr::movewire::is_horse_run(ident) =>
+        {
             let dir = movewire::next_direction(cur_x, cur_y, nx, ny);
             let (ddx, ddy) = movewire::direction_delta(dir);
             let steps = movewire::steps_for(ident);
@@ -11070,6 +11114,17 @@ fn handle_move_cmd(
                 e.ai.dir = dir;
             }
             let outcome = world.step_with_route(actor_id, ddx, ddy, steps);
+            // **临时观测缝（走位对齐，默认关）**：每收一条走位命令，记录接受/拒绝与落地坐标，
+            // 用于和客户端的 CM_HORSERUN/CM_RUN 序列逐条对照（Owner「骑马攻击不掉血」定位）。
+            if test_seams::move_log_enabled() {
+                let after = world.entities.get(actor_id).map(|e| (e.x, e.y));
+                glog!(
+                    "DBG",
+                    "MIR2_MOVE ident={ident} dir={dir} steps={steps} req=({nx},{ny}) from=({cur_x},{cur_y}) moved={} rolled_back={} after={after:?}",
+                    outcome.moved,
+                    outcome.rolled_back
+                );
+            }
             // **PL-2 / P31**：`EnterAnotherMap` 已进落地段但 `AddToMap` 失败的回滚支
             // （`PlayObject.cs:3787-3796`）在 oracle **仍**执行 `AutoGetExpTick = GetTickCount()`。
             // 该支 `moved == false`（上游 `WalkTo` 回滚、不发移动帧）⇒ 复位必须放在下面的早退之前。
@@ -11083,9 +11138,20 @@ fn handle_move_cmd(
                 }
             }
             if !outcome.moved {
+                // **卡 `openmir2-horserun-3009-movefail`**：被拒/被挡必须回 `SM_MOVEFAIL(28)`
+                // （oracle `ClMain.pas:9939-9949`），此前只记日志、不回包 ⇒ 客户端不知道没动。
+                send_movefail(
+                    gates,
+                    displays,
+                    world,
+                    actor_id,
+                    socket,
+                    entry.gate_idx,
+                    dir,
+                );
                 glog!(
                     "DBG",
-                    "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name}"
+                    "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（已回 SM_MOVEFAIL(28)）ChrName={chr_name}"
                 );
                 return;
             }
@@ -11145,9 +11211,20 @@ fn handle_move_cmd(
             if movewire::move_result_ok(px, py, nx, ny) {
                 send_good_tick(online, gates, chr_name);
             } else {
+                // 动了但没到请求格（骑乘跑被截断的典型）⇒ oracle 回 RM_MOVEFAIL，客户端据此
+                // 把自身格回滚到服务端认可的位置；不回会让分叉永久累积。
+                send_movefail(
+                    gates,
+                    displays,
+                    world,
+                    actor_id,
+                    socket,
+                    entry.gate_idx,
+                    dir,
+                );
                 glog!(
                     "DBG",
-                    "移动：actor_id={actor_id} 方向={dir} {steps} 格后 ({px},{py}) != 目标 ({nx},{ny}) ⇒ 不回 +GD（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name}"
+                    "移动：actor_id={actor_id} 方向={dir} {steps} 格后 ({px},{py}) != 目标 ({nx},{ny}) ⇒ 不回 +GD，改回 SM_MOVEFAIL(28) ChrName={chr_name}"
                 );
             }
         }
@@ -41491,17 +41568,44 @@ break
             let e = world.entities.get(mover).unwrap();
             assert_eq!((e.x, e.y), (12, 10), "目标非相邻时仍按方向走 1 格");
         }
-        let (mut walk2, mut ack3) = (None, None);
+        // **语义变更（卡 `openmir2-horserun-3009-movefail`）**：截断移动除了给观察者发
+        // SM_WALK，还要给发起方（socket 901）回 **SM_MOVEFAIL(28)**（oracle result 门为假时
+        // 回 RM_MOVEFAIL，客户端据此回滚）。旧用例只允许 902 一种帧，现按 socket 分流。
+        let (mut walk2, mut ack3, mut fail_frame) = (None, None, None);
         while let Ok(m) = rx0.try_recv() {
             match m {
                 SimToGate::SendFrame { socket, body } => {
-                    assert_eq!(socket, 902);
-                    walk2 = Some(body);
+                    if socket == 901 {
+                        fail_frame = Some(body);
+                    } else {
+                        assert_eq!(socket, 902, "除发起方的 MOVEFAIL 外只应有观察者的移动帧");
+                        walk2 = Some(body);
+                    }
                 }
                 SimToGate::SendRaw { payload, .. } => ack3 = Some(payload),
                 other => panic!("意外 sim→gate 命令：{other:?}"),
             }
         }
+        let fail = fail_frame.expect("截断移动必须回 SM_MOVEFAIL(28)");
+        assert_eq!(
+            i32::from_le_bytes(fail[0..4].try_into().unwrap()),
+            mover,
+            "MOVEFAIL Recog = actor id"
+        );
+        assert_eq!(
+            u16::from_le_bytes([fail[4], fail[5]]),
+            mir2_protocol::messages::SM_MOVEFAIL
+        );
+        assert_eq!(
+            u16::from_le_bytes([fail[6], fail[7]]),
+            12,
+            "MOVEFAIL param = 服务端落地 X"
+        );
+        assert_eq!(
+            u16::from_le_bytes([fail[8], fail[9]]),
+            10,
+            "MOVEFAIL tag = 服务端落地 Y"
+        );
         let walk2 = walk2.expect("移动已发生 ⇒ 观察者仍收 SM_WALK");
         assert_eq!(
             &walk2[..12],
@@ -41692,9 +41796,29 @@ break
                 "目标格是墙 ⇒ 不得移动（oracle CanWalk 挡住）"
             );
         }
+        // **语义变更（卡 `openmir2-horserun-3009-movefail`）**：被挡时 oracle 会回
+        // `SM_MOVEFAIL(28)`（旧实现只记日志、队列恒空）。这条旧牙原样断言「队列须空」，
+        // 现改为断言「恰好一条 SM_MOVEFAIL，且 Recog/Param/Tag 取原地坐标」，其余不得有帧。
+        let SimToGate::SendFrame { body, .. } = rx0
+            .try_recv()
+            .expect("被挡必须回 SM_MOVEFAIL(28)（旧实现只记日志）")
+        else {
+            panic!("被挡时收到了非 SendFrame 事件");
+        };
+        assert_eq!(
+            i32::from_le_bytes(body[0..4].try_into().unwrap()),
+            mover,
+            "Recog = 玩家 actor id"
+        );
+        assert_eq!(
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_MOVEFAIL
+        );
+        assert_eq!(u16::from_le_bytes([body[6], body[7]]), 11, "Param = 原地 X");
+        assert_eq!(u16::from_le_bytes([body[8], body[9]]), 10, "Tag = 原地 Y");
         assert!(
             rx0.try_recv().is_err(),
-            "目标格是墙 ⇒ 不得发 SM_WALK / 不得回 +GD（整条 sim→gate 队列须空）"
+            "除 SM_MOVEFAIL 外不得再发 SM_WALK / +GD"
         );
         assert_eq!(
             world.map(0).cell(11, 10).count(),
