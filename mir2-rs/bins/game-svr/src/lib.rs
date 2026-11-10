@@ -26400,14 +26400,9 @@ fn sim_loop(
                             &enter_cfg.shop,
                             &colors,
                         );
-                    } else if matches!(
-                        cmd.ident,
-                        mir2_protocol::messages::CM_TURN
-                            | mir2_protocol::messages::CM_WALK
-                            | mir2_protocol::messages::CM_RUN
-                            | mir2_protocol::messages::CM_HORSERUN
-                    ) {
-                        // `openmir2-m3-move-wiring`：`CM_TURN/WALK/RUN/HORSERUN` 派发
+                    } else if movewire::is_move_command(cmd.ident) {
+                        // `openmir2-m3-move-wiring`：`CM_TURN/WALK/RUN/HORSERUN`（含 Grobal2
+                        // 别名 3009，卡 `openmir2-horserun-3009-not-routed`）派发
                         // （oracle `PlayObject.Message.cs:1008-1210`）。
                         handle_move_cmd(
                             cmd.ident,
@@ -31421,6 +31416,38 @@ mod tests {
         assert!(
             call > sim_loop,
             "生产调用行（行号 {call}）必须在 `fn sim_loop(`（行号 {sim_loop}）之后"
+        );
+    }
+
+    /// **接线牙（卡 `openmir2-horserun-3009-not-routed`）**：`sim_loop` 的移动派发门必须走
+    /// `movewire::is_move_command`（含 3009 别名），不得退回手写的
+    /// `matches!(cmd.ident, … | CM_HORSERUN)` —— 后者曾把 3009 挡在派发门外，而当时所有
+    /// 单测（只覆盖谓词与编码）全绿。
+    ///
+    /// 红检：把该行改回旧写法 ⇒ 命中归零 ⇒ 本用例红。
+    #[test]
+    fn move_dispatch_gate_uses_is_move_command_in_sim_loop() {
+        let src = include_str!("lib.rs");
+        let lines: Vec<&str> = src.lines().collect();
+        let hits: Vec<usize> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, l)| l.trim() == "} else if movewire::is_move_command(cmd.ident) {")
+            .map(|(i, _)| i)
+            .collect();
+        assert_eq!(
+            hits.len(),
+            1,
+            "sim 循环的移动派发门必须恰有一处 `is_move_command(cmd.ident)`；命中 {hits:?}             （0 = 被删/被注释/退回手写集合；>1 = 重复派发门）"
+        );
+        let sim_loop = lines
+            .iter()
+            .position(|l| l.trim() == "fn sim_loop(")
+            .expect("`fn sim_loop(` 定义行");
+        assert!(
+            hits[0] > sim_loop,
+            "派发门（行号 {}）必须在 `fn sim_loop(`（行号 {sim_loop}）之后",
+            hits[0]
         );
     }
 
