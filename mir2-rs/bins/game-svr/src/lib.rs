@@ -582,6 +582,13 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let cfg = config::load(&conf)?;
     // **卡 `openmir2-test-permission-seam`**：测试注入缝，**默认关**（不设 ⇒ 权限仍恒 0，oracle 行为不变）。
     // 非法值 ⇒ fail-closed（与 `MIR2_RNG_SEED` / `MIR2_CLOCK_MS` 同款纪律：不许「以为注入了、其实没有」）。
+    // **卡 `openmir2-ids-keepalive-timeout`**：LoginSrv 链路观测缝，默认关（不设 ⇒ 一行不多）。
+    if test_seams::install_log_ids_from_env().map_err(anyhow::Error::msg)? {
+        glog!(
+            "INF",
+            "RUST_TEST_IDS_LOG=1（测试缝：LoginSrv 链路日志；默认关时不出现本行）"
+        );
+    }
     // **卡 `openmir2-test-attack-log`**：攻击受理日志缝，默认关（不设 ⇒ 一行不多）。
     let log_attacks = test_seams::install_log_attacks_from_env().map_err(anyhow::Error::msg)?;
     if log_attacks {

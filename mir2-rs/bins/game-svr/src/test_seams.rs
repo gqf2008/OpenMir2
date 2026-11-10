@@ -61,6 +61,61 @@ pub fn attack_log_enabled() -> bool {
     *LOG_ATTACKS.get().unwrap_or(&false)
 }
 
+/// **卡 `openmir2-ids-keepalive-timeout`**：`MIR2_LOG_IDS`——LoginSrv 链路的观测缝。
+///
+/// 背景：旧实例 2h45m 内 LoginSrv 判了 119 次「游戏服务器响应超时」，而同窗口 game-svr 又在持续
+/// 收到 `SS_KEEPALIVE(104)`（该消息只由 LoginSrv 在**处理完 SS_SERVERINFO 后**发出）——
+/// 「已刷新」与「被判超时」同时成立，必须拿到「每次发送/每次断链/链路代次」的可判事实。
+///
+/// 口径与同族缝一致：默认关（未设/空串/`0` ⇒ 不打）；只接受 `0`/`1`；启动一次性；非法值与非
+/// UTF-8 ⇒ 启动失败。
+pub const LOG_IDS_ENV: &str = "MIR2_LOG_IDS";
+
+static LOG_IDS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// 解析取值：`None`/空串/`0` ⇒ `false`；`1` ⇒ `true`；其余（含带空白）⇒ 错误。
+fn parse_log_ids(raw: Option<&str>) -> Result<bool, String> {
+    match raw {
+        None | Some("") | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(s) => Err(format!(
+            "{LOG_IDS_ENV} 非法：{s:?}（只接受 0/1，空串=关闭）"
+        )),
+    }
+}
+
+/// 安装（进程内一次性）。
+///
+/// # Errors
+/// 取值非法，或已安装过。
+pub fn install_log_ids(raw: Option<&str>) -> Result<bool, String> {
+    let v = parse_log_ids(raw)?;
+    LOG_IDS
+        .set(v)
+        .map_err(|_| format!("{LOG_IDS_ENV} 只能安装一次"))?;
+    Ok(v)
+}
+
+/// 从进程环境读取并安装（`run_inner` 唯一入口）。
+///
+/// # Errors
+/// 取值非法、含非 UTF-8 字节，或已安装过。
+pub fn install_log_ids_from_env() -> Result<bool, String> {
+    match std::env::var_os(LOG_IDS_ENV) {
+        None => install_log_ids(None),
+        Some(os) => match os.to_str() {
+            Some(s) => install_log_ids(Some(s)),
+            None => Err(format!("{LOG_IDS_ENV} 含非 UTF-8 字节（拒绝静默当未设）")),
+        },
+    }
+}
+
+/// 是否记录 LoginSrv 链路日志（未安装 ⇒ `false`）。
+#[must_use]
+pub fn ids_log_enabled() -> bool {
+    *LOG_IDS.get().unwrap_or(&false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,5 +131,17 @@ mod tests {
         assert!(parse_log_attacks(Some("-1")).is_err());
         assert!(parse_log_attacks(Some(" 1")).is_err(), "带空白不静默接受");
         assert!(!attack_log_enabled(), "本进程未安装 ⇒ 关");
+    }
+
+    #[test]
+    fn parse_log_ids_contract() {
+        assert_eq!(parse_log_ids(None), Ok(false), "未设 ⇒ 关");
+        assert_eq!(parse_log_ids(Some("")), Ok(false), "空串 ⇒ 关");
+        assert_eq!(parse_log_ids(Some("0")), Ok(false));
+        assert_eq!(parse_log_ids(Some("1")), Ok(true));
+        assert!(parse_log_ids(Some("true")).is_err());
+        assert!(parse_log_ids(Some("2")).is_err());
+        assert!(parse_log_ids(Some(" 1")).is_err(), "带空白不静默接受");
+        assert!(!ids_log_enabled(), "本进程未安装 ⇒ 关");
     }
 }
