@@ -203,11 +203,12 @@ pub fn serverinfo_frame(server_name: &str, online_count: i32, payment_mode: u8) 
 /// 这正是旧实例 2h45m 内 119 次「游戏服务器响应超时」的来源，也解释了「重起即恢复」。
 ///
 /// 两个入参都保留：让「选哪个钟」在调用点一眼可见，并由
-/// [`keepalive_clock_uses_wall_not_world`] 这颗牙钉死（改回 `world_ms` 即红）。
+/// **不收 `world_ms` 参数**是刻意的：世界钟会随模拟负荷变慢，不能作为墙钟协议的计时源；
+/// 接口上只要留了它，正确性就交给调用者自觉。这里内部直接取 `clock::now_ms()`
+/// （注入 `MIR2_CLOCK_MS` 时同样生效）⇒ 调用点想传世界钟都没有机会。
 #[must_use]
-pub fn keepalive_clock_ms(world_ms: i64, wall_ms: i64) -> i64 {
-    let _ = world_ms; // 显式忽略：世界钟会随模拟负荷变慢，不能作为墙钟协议的计时源
-    wall_ms
+pub fn keepalive_clock_ms() -> i64 {
+    crate::clock::now_ms()
 }
 
 /// `SystemProcessor.ShowOnline` 的 `SendOnlineHumTime` 10s 门（`SystemProcessor.cs:63-67`）。
@@ -711,37 +712,32 @@ mod serverinfo_tests {
             "开启时补当次代次"
         );
     }
-    /// **牙 1（选钟）**：保活时刻必须取墙钟；改回世界钟 ⇒ 本用例红。
+    /// **牙 1（选钟，环境级）**：`keepalive_clock_ms()` 必须是**纪元量级**（墙钟）。
+    ///
+    /// `world.clock_ms` 从 0 起算（长跑也只有几百万毫秒），墙钟是 epoch 毫秒（>1.6e12）。
+    /// 若实现换回 `world.clock_ms`，本断言必红；注入 `MIR2_CLOCK_MS` 的环境下两者同量级，
+    /// 仍成立（测试环境不注入）。
     #[test]
-    fn keepalive_clock_uses_wall_not_world() {
-        assert_eq!(
-            super::keepalive_clock_ms(10_000, 30_000),
-            30_000,
-            "必须取墙钟"
+    fn keepalive_clock_is_wall_magnitude_not_world() {
+        let t = super::keepalive_clock_ms();
+        assert!(
+            t > 1_600_000_000_000,
+            "必须是 epoch 墙钟量级（>2020 年），实得 {t}；世界钟只有几百万"
         );
-        // 慢世界钟（12s）配 30s 墙钟：差值远大于 10s ⇒ 门必须已经触发多次，而不是被世界钟拖住
-        assert!(super::keepalive_clock_ms(12_000, 30_000) - 10_000 > 10_000);
     }
 
     /// **牙 2（两方向）**：慢世界钟下仍按墙钟触发；正常时钟下不误触发。
     #[test]
     fn keepalive_gate_fires_on_wall_bound_under_slow_world() {
         // 起点墙钟 0 / 世界钟 0
-        let mut gate = OnlineHumGate::new(super::keepalive_clock_ms(0, 0));
+        let mut gate = OnlineHumGate::new(0);
         // 墙钟走 9s、世界钟只走 3s（0.33×）⇒ 严格 `>` 门不发
-        assert!(
-            !gate.tick(super::keepalive_clock_ms(3_000, 9_000)),
-            "9s 不触发"
-        );
+        assert!(!gate.tick(9_000), "9s 不触发");
         // 墙钟 10s、世界钟 3.3s ⇒ 正好 10000ms 不发（严格 >）
-        assert!(
-            !gate.tick(super::keepalive_clock_ms(3_300, 10_000)),
-            "恰好 10s 不发"
-        );
+        assert!(!gate.tick(10_000), "恰好 10s 不发");
         // 墙钟 10.001s ⇒ 触发（尽管世界钟只走了 3.3s）
-        assert!(
-            gate.tick(super::keepalive_clock_ms(3_301, 10_001)),
-            "墙钟超过 10s 必须触发，与世界钟无关"
-        );
+        // 本用例只钉门的语义；「调用点喂的是墙钟」由 `keepalive_clock_ms()` 的零参签名
+        // （类型上无处传世界钟）+ 上面的量级用例共同保证。
+        assert!(gate.tick(10_001), "墙钟超过 10s 必须触发，与世界钟无关");
     }
 }
