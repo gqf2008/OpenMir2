@@ -3983,6 +3983,44 @@ fn handle_level_rank_request_cmd(
 }
 
 /// 把一批 [`game_svr::inbound::DefFrame`]（`SendDefMessage` 口径，无尾）编成 `GM_DATA` body 下发。
+/// 发 `SM_MOVEFAIL(28)` 给发起方（`Recog=actor id`、`param=x`、`tag=y`、
+/// `series=MakeWord(dir,light)`、尾 `EDCode(CharDesc)`）。
+///
+/// 两处触发：① 完全没动（`!outcome.moved`）；② 动了但没到请求格（`!move_result_ok`，
+/// 骑乘跑被碰撞截断的典型情形）——两者 oracle 都回 `RM_MOVEFAIL`。
+#[allow(clippy::too_many_arguments)]
+fn send_movefail(
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    displays: &downlink::DisplayTable,
+    world: &mir2_world::World,
+    actor_id: i32,
+    socket: i32,
+    gate_idx: i32,
+    dir: u8,
+) {
+    let (ex, ey) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+    // 生产上进世界即登记展示表；缺失时零值（仅测试夹具用）。
+    let d = displays
+        .get(actor_id)
+        .cloned()
+        .unwrap_or_else(|| game_svr::downlink::ActorDisplay {
+            dir: 0,
+            light: 0,
+            feature: 0,
+            feature_ex: 0,
+            status: 0,
+            name_color: 0,
+            show_name: Vec::new(),
+            mount_id: 0,
+        });
+    let body = game_svr::smframe::movefail_body(
+        actor_id, ex as u16, ey as u16, dir, d.light, d.feature, d.status,
+    );
+    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "SM_MOVEFAIL") {
+        let _ = tx.send(SimToGate::SendFrame { socket, body });
+    }
+}
+
 fn emit_def_frames(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     gate_idx: i32,
@@ -11103,28 +11141,15 @@ fn handle_move_cmd(
             if !outcome.moved {
                 // **卡 `openmir2-horserun-3009-movefail`**：被拒/被挡必须回 `SM_MOVEFAIL(28)`
                 // （oracle `ClMain.pas:9939-9949`），此前只记日志、不回包 ⇒ 客户端不知道没动。
-                // body 必须带 `TCharDesc`（Feature/Status）：客户端 onMoveFail 会
-                // `setFeature(desc.feature)`，空 body 会把外观重置成裸模。
-                let (ex, ey) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
-                // 生产上进世界即登记展示表；缺失时给零值（仅测试夹具用，不影響生产外观）。
-                let d = displays.get(actor_id).cloned().unwrap_or_else(|| {
-                    game_svr::downlink::ActorDisplay {
-                        dir: 0,
-                        light: 0,
-                        feature: 0,
-                        feature_ex: 0,
-                        status: 0,
-                        name_color: 0,
-                        show_name: Vec::new(),
-                        mount_id: 0,
-                    }
-                });
-                let body = game_svr::smframe::movefail_body(
-                    actor_id, ex as u16, ey as u16, dir, d.light, d.feature, d.status,
+                send_movefail(
+                    gates,
+                    displays,
+                    world,
+                    actor_id,
+                    socket,
+                    entry.gate_idx,
+                    dir,
                 );
-                if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "SM_MOVEFAIL") {
-                    let _ = tx.send(SimToGate::SendFrame { socket, body });
-                }
                 glog!(
                     "DBG",
                     "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（已回 SM_MOVEFAIL(28)）ChrName={chr_name}"
@@ -11187,9 +11212,20 @@ fn handle_move_cmd(
             if movewire::move_result_ok(px, py, nx, ny) {
                 send_good_tick(online, gates, chr_name);
             } else {
+                // 动了但没到请求格（骑乘跑被截断的典型）⇒ oracle 回 RM_MOVEFAIL，客户端据此
+                // 把自身格回滚到服务端认可的位置；不回会让分叉永久累积。
+                send_movefail(
+                    gates,
+                    displays,
+                    world,
+                    actor_id,
+                    socket,
+                    entry.gate_idx,
+                    dir,
+                );
                 glog!(
                     "DBG",
-                    "移动：actor_id={actor_id} 方向={dir} {steps} 格后 ({px},{py}) != 目标 ({nx},{ny}) ⇒ 不回 +GD（oracle 回 RM_MOVEFAIL，登记未接）ChrName={chr_name}"
+                    "移动：actor_id={actor_id} 方向={dir} {steps} 格后 ({px},{py}) != 目标 ({nx},{ny}) ⇒ 不回 +GD，改回 SM_MOVEFAIL(28) ChrName={chr_name}"
                 );
             }
         }
@@ -41533,17 +41569,44 @@ break
             let e = world.entities.get(mover).unwrap();
             assert_eq!((e.x, e.y), (12, 10), "目标非相邻时仍按方向走 1 格");
         }
-        let (mut walk2, mut ack3) = (None, None);
+        // **语义变更（卡 `openmir2-horserun-3009-movefail`）**：截断移动除了给观察者发
+        // SM_WALK，还要给发起方（socket 901）回 **SM_MOVEFAIL(28)**（oracle result 门为假时
+        // 回 RM_MOVEFAIL，客户端据此回滚）。旧用例只允许 902 一种帧，现按 socket 分流。
+        let (mut walk2, mut ack3, mut fail_frame) = (None, None, None);
         while let Ok(m) = rx0.try_recv() {
             match m {
                 SimToGate::SendFrame { socket, body } => {
-                    assert_eq!(socket, 902);
-                    walk2 = Some(body);
+                    if socket == 901 {
+                        fail_frame = Some(body);
+                    } else {
+                        assert_eq!(socket, 902, "除发起方的 MOVEFAIL 外只应有观察者的移动帧");
+                        walk2 = Some(body);
+                    }
                 }
                 SimToGate::SendRaw { payload, .. } => ack3 = Some(payload),
                 other => panic!("意外 sim→gate 命令：{other:?}"),
             }
         }
+        let fail = fail_frame.expect("截断移动必须回 SM_MOVEFAIL(28)");
+        assert_eq!(
+            i32::from_le_bytes(fail[0..4].try_into().unwrap()),
+            mover,
+            "MOVEFAIL Recog = actor id"
+        );
+        assert_eq!(
+            u16::from_le_bytes([fail[4], fail[5]]),
+            mir2_protocol::messages::SM_MOVEFAIL
+        );
+        assert_eq!(
+            u16::from_le_bytes([fail[6], fail[7]]),
+            12,
+            "MOVEFAIL param = 服务端落地 X"
+        );
+        assert_eq!(
+            u16::from_le_bytes([fail[8], fail[9]]),
+            10,
+            "MOVEFAIL tag = 服务端落地 Y"
+        );
         let walk2 = walk2.expect("移动已发生 ⇒ 观察者仍收 SM_WALK");
         assert_eq!(
             &walk2[..12],

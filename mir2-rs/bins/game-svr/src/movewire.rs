@@ -137,7 +137,7 @@ pub const fn steps_for(ident: u16) -> i32 {
 pub const fn sm_ident_for(ident: u16) -> u16 {
     match ident {
         messages::CM_RUN => messages::SM_RUN,
-        messages::CM_HORSERUN => messages::SM_HORSERUN,
+        messages::CM_HORSERUN | CM_HORSERUN_LEGACY => messages::SM_HORSERUN,
         _ => messages::SM_WALK,
     }
 }
@@ -249,6 +249,11 @@ mod tests {
         assert!(is_horse_run(messages::CM_HORSERUN));
         assert!(!is_horse_run(messages::CM_WALK));
         assert!(!is_horse_run(messages::CM_RUN));
+        assert_eq!(
+            sm_ident_for(CM_HORSERUN_LEGACY),
+            messages::SM_HORSERUN,
+            "3009 成功移动的广播帧必须是 SM_HORSERUN(5010)，不能落到 SM_WALK"
+        );
         assert_eq!(steps_for(CM_HORSERUN_LEGACY), 3, "3009 每轴 ±3");
         assert_eq!(steps_for(messages::CM_HORSERUN), 3);
         assert_eq!(steps_for(messages::CM_RUN), 2);
