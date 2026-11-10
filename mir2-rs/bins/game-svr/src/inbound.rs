@@ -87,22 +87,6 @@ pub struct DefFrame {
     pub series: i32,
 }
 
-/// `SM_MOVEFAIL(28)` 的帧描述。
-///
-/// oracle（`ClMain.pas:9939-9949`）：`Recog = actor id`、`param = x`、`tag = y`、`series = dir`。
-/// 走位被拒/被挡时回给发起方，客户端据此把自身坐标回滚到服务端认可的位置
-/// （此前只记日志、从不回包 ⇒ 分叉永久累积，Owner「骑马不掉血」的根因之一）。
-#[must_use]
-pub fn movefail_frame(actor_id: i32, x: i32, y: i32, dir: u8) -> DefFrame {
-    DefFrame {
-        ident: mir2_protocol::messages::SM_MOVEFAIL,
-        recog: actor_id,
-        param: x,
-        tag: y,
-        series: i32::from(dir),
-    }
-}
-
 const fn def(ident: u16, recog: i32, param: i32, tag: i32, series: i32) -> DefFrame {
     DefFrame {
         ident,

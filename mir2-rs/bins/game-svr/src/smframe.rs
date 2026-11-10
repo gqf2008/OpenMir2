@@ -688,6 +688,33 @@ pub fn sm_daychanging(bright: u16, day_bright: u16) -> Vec<u8> {
 /// ⚠️ 两段各自编码后直接拼，前段 8B 使编码状态未复位（`8 % 3 != 0`）⇒ 客户端整段解码会错位，
 /// 这是 oracle 的既有形态（非本层引入）。金标准 #16：线缆 25B = `Encode(8B)`(11) + `Encode(10B)`(14)。
 #[must_use]
+/// `SM_MOVEFAIL(28)` 的完整帧体：**12B 命令头 + EDCode(CharDesc)**。
+///
+/// oracle `ClMain.pas:9939-9949`：`Recog = actor id`、`param = x`、`tag = y`、
+/// `series = MakeWord(dir, light)`，随后 `DecodeBuffer(body, @desc, SizeOf(TCharDesc))`。
+/// 客户端 `onMoveFail` 会 `setFeature(desc.feature)` ⇒ **body 必须带 CharDesc**，
+/// 否则外观被重置成裸模（位置回滚对了、人变样了）。
+pub fn movefail_body(
+    actor_id: i32,
+    x: u16,
+    y: u16,
+    dir: u8,
+    light: u8,
+    feature: i32,
+    status: i32,
+) -> Vec<u8> {
+    let header = command_header(
+        actor_id,
+        mir2_protocol::messages::SM_MOVEFAIL,
+        x,
+        y,
+        make_word(dir, light),
+    );
+    let desc = crate::downlink::char_desc(feature, status);
+    let tail = edcode::encode(&desc);
+    gm_data_body(header, &tail)
+}
+
 pub fn sm_turn(
     actor_id: i32,
     x: u16,

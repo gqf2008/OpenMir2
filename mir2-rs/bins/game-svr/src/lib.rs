@@ -11103,14 +11103,28 @@ fn handle_move_cmd(
             if !outcome.moved {
                 // **卡 `openmir2-horserun-3009-movefail`**：被拒/被挡必须回 `SM_MOVEFAIL(28)`
                 // （oracle `ClMain.pas:9939-9949`），此前只记日志、不回包 ⇒ 客户端不知道没动。
-                let e = world.entities.get(actor_id);
-                let f = game_svr::inbound::movefail_frame(
-                    actor_id,
-                    e.map_or(0, |e| e.x),
-                    e.map_or(0, |e| e.y),
-                    dir,
+                // body 必须带 `TCharDesc`（Feature/Status）：客户端 onMoveFail 会
+                // `setFeature(desc.feature)`，空 body 会把外观重置成裸模。
+                let (ex, ey) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+                // 生产上进世界即登记展示表；缺失时给零值（仅测试夹具用，不影響生产外观）。
+                let d = displays.get(actor_id).cloned().unwrap_or_else(|| {
+                    game_svr::downlink::ActorDisplay {
+                        dir: 0,
+                        light: 0,
+                        feature: 0,
+                        feature_ex: 0,
+                        status: 0,
+                        name_color: 0,
+                        show_name: Vec::new(),
+                        mount_id: 0,
+                    }
+                });
+                let body = game_svr::smframe::movefail_body(
+                    actor_id, ex as u16, ey as u16, dir, d.light, d.feature, d.status,
                 );
-                emit_def_frames(gates, entry.gate_idx, socket, &[f], "SM_MOVEFAIL");
+                if let Some(tx) = route_to_gate(gates, entry.gate_idx, socket, "SM_MOVEFAIL") {
+                    let _ = tx.send(SimToGate::SendFrame { socket, body });
+                }
                 glog!(
                     "DBG",
                     "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（已回 SM_MOVEFAIL(28)）ChrName={chr_name}"

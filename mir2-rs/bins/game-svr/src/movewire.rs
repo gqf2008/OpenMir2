@@ -254,15 +254,31 @@ mod tests {
         assert_eq!(steps_for(messages::CM_RUN), 2);
         assert_eq!(steps_for(messages::CM_WALK), 1);
     }
-    /// **MOVEFAIL 帧字段牙**：Recog=actor id、param=x、tag=y、series=dir（oracle ClMain.pas:9939-9949）。
+    /// **MOVEFAIL 完整帧体牙**：12B 头 + **EDCode(CharDesc)**。
+    /// 客户端 onMoveFail 会 setFeature(desc.feature)，body 缺 CharDesc ⇒ 外观被重置。
     #[test]
-    fn movefail_frame_layout_matches_oracle() {
-        let f = game_svr::inbound::movefail_frame(42, 100, 200, 5);
-        assert_eq!(f.ident, mir2_protocol::messages::SM_MOVEFAIL);
+    fn movefail_body_includes_char_desc_and_layout() {
+        let desc = game_svr::downlink::char_desc(1234, 77);
+        let body = game_svr::smframe::movefail_body(42, 100, 200, 5, 3, 1234, 77);
+        let encoded_len = mir2_protocol::edcode::encode(&desc).len();
+        assert_eq!(body.len(), 12 + encoded_len, "12B 头 + EDCode(CharDesc)");
+        assert_eq!(i32::from_le_bytes(body[0..4].try_into().unwrap()), 42);
         assert_eq!(
-            (f.recog, f.param, f.tag, f.series),
-            (42, 100, 200, 5),
-            "Recog/Param/Tag/Series 必须逐字段对齐 oracle"
+            u16::from_le_bytes([body[4], body[5]]),
+            mir2_protocol::messages::SM_MOVEFAIL
+        );
+        assert_eq!(u16::from_le_bytes([body[6], body[7]]), 100, "param=x");
+        assert_eq!(u16::from_le_bytes([body[8], body[9]]), 200, "tag=y");
+        assert_eq!(
+            u16::from_le_bytes([body[10], body[11]]),
+            game_svr::feature::make_word(5, 3),
+            "series = MakeWord(dir, light)"
+        );
+        // 尾必须与 downlink::char_desc(feature,status) 经 EDCode 编码后的结果一致
+        assert_eq!(
+            &body[12..],
+            mir2_protocol::edcode::encode(&desc).as_slice(),
+            "body 尾必须是 EDCode(CharDesc)，否则客户端外观被重置"
         );
     }
 }
