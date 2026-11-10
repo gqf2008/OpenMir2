@@ -583,8 +583,9 @@ mod serverinfo_tests {
 
     /// **I-2②** `SystemProcessor.ShowOnline` 的 10s 门（`SystemProcessor.cs:63-67`）：
     /// 严格 `>`，基准取**启动时刻**（oracle `Startup` 的 `GetTickCount()`）。
-    /// `MIR2_CLOCK_MS` 注入后 `world.clock_ms` 从 epoch 量级起算 ⇒ 基准必须同步到该起点，
-    /// 否则首个 tick 就 `clock_ms - 0 > 10000` ⇒ **提前首发**（首条断言即红）。
+    /// `MIR2_CLOCK_MS` 注入后 `clock::now_ms()` 从**注入原点**起算（墙钟）⇒ 基准必须同步到该起点，
+    /// 否则首个 tick 就 `now - 0 > 10000` ⇒ **提前首发**（首条断言即红）。
+    /// （`world.clock_ms` 会随模拟负荷变慢，本门不用它——见 `keepalive_clock_ms` 的文档。）
     ///
     /// 牙：基准改回 0、或把 `>` 改成 `>=` ⇒ 前三条断言必红。
     #[test]
