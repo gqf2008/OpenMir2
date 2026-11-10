@@ -244,6 +244,18 @@ pub fn periodic_serverinfo(
         .then(|| serverinfo_frame(server_name, online_count, payment_mode))
 }
 
+/// 断链日志正文。`ids_log` = 观测缝是否开启：关闭时与改动前**逐字节相同**，开启时补链路代次。
+///
+/// 抽成纯函数是为了给「默认关不改文本」一条可判的牙（日志宏本身不可断言）。
+#[must_use]
+fn disconnect_line(ids_addr: &str, gen: u64, ids_log: bool) -> String {
+    if ids_log {
+        format!("登录服务器[{ids_addr}]断开连接...（已清空准入表；gen={gen}）")
+    } else {
+        format!("登录服务器[{ids_addr}]断开连接...（已清空准入表）")
+    }
+}
+
 /// 丢掉断链期积压的上报帧：oracle `SendSocket` 在 `Offline` 时直接 return、**不排队**
 /// （`AuthenticationService.cs:70-79`）⇒ 重连只补发**当前值**一帧。
 fn drain_stale(outbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>) {
@@ -308,9 +320,11 @@ pub async fn run_ids_link(
                 }
                 // `DataSocketDisconnect`（`:427-436`）：**清空整张准入表** + 记错误
                 store.lock().expect("准入表锁被毒化").clear();
+                // 观测缝关闭时**保留原文本**（默认关日志逐字节不变）；开启时补 `gen`。
                 glog_ids!(
                     "ERR",
-                    "登录服务器[{ids_addr}]断开连接...（已清空准入表；gen={gen}）"
+                    "{}",
+                    disconnect_line(&ids_addr, gen, crate::test_seams::ids_log_enabled())
                 );
             }
             Err(e) => {
@@ -662,5 +676,19 @@ mod serverinfo_tests {
             "断链期积压的陈旧帧必须被丢弃（oracle Offline 不排队）"
         );
         link.abort();
+    }
+    /// **审查 finding（默认关日志文本）**：缝关闭时必须与改动前逐字节相同；开启时补 `gen`。
+    #[test]
+    fn disconnect_line_keeps_oracle_text_when_seam_off() {
+        assert_eq!(
+            super::disconnect_line("127.0.0.1", 3, false),
+            "登录服务器[127.0.0.1]断开连接...（已清空准入表）",
+            "默认关必须与改动前一字不差"
+        );
+        assert_eq!(
+            super::disconnect_line("127.0.0.1", 3, true),
+            "登录服务器[127.0.0.1]断开连接...（已清空准入表；gen=3）",
+            "开启时补当次代次"
+        );
     }
 }
