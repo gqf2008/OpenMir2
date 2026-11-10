@@ -276,9 +276,16 @@ pub async fn run_ids_link(
     online_count: Arc<std::sync::atomic::AtomicI32>,
     outbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
 ) {
+    // **卡 `openmir2-ids-keepalive-timeout`**：链路代次。每次重连 +1，观测缝用它把
+    // 「哪一条链路的发送/断链」对上（复盘 119 次超时时需要区分「同一条链路」与「重连后的新链路」）。
+    let mut gen: u64 = 0;
     loop {
         match tokio::net::TcpStream::connect((ids_addr.as_str(), ids_port)).await {
             Ok(sock) => {
+                gen += 1;
+                if crate::test_seams::ids_log_enabled() {
+                    glog_ids!("INF", "MIR2_IDS_CONNECT gen={gen} {ids_addr}:{ids_port}");
+                }
                 sock.set_nodelay(true).ok();
                 glog_ids!("INF", "登录服务器[{ids_addr}:{ids_port}]连接成功...");
                 let (mut read_half, mut write_half) = sock.into_split();
@@ -295,13 +302,16 @@ pub async fn run_ids_link(
                     glog_ids!("ERR", "登录服务器链路：上报 SS_SERVERINFO 失败（{e:#}）");
                 }
                 if let Err(e) =
-                    read_loop(&mut read_half, &mut write_half, &store, &ev_tx, outbox).await
+                    read_loop(&mut read_half, &mut write_half, &store, &ev_tx, outbox, gen).await
                 {
                     glog_ids!("ERR", "登录服务器链路结束：{e:#}");
                 }
                 // `DataSocketDisconnect`（`:427-436`）：**清空整张准入表** + 记错误
                 store.lock().expect("准入表锁被毒化").clear();
-                glog_ids!("ERR", "登录服务器[{ids_addr}]断开连接...（已清空准入表）");
+                glog_ids!(
+                    "ERR",
+                    "登录服务器[{ids_addr}]断开连接...（已清空准入表；gen={gen}）"
+                );
             }
             Err(e) => {
                 glog_ids!("ERR", "链接登录服务器[{ids_addr}:{ids_port}]失败...（{e}）");
@@ -318,6 +328,7 @@ async fn read_loop(
     store: &Arc<Mutex<AdmissionStore>>,
     ev_tx: &std::sync::mpsc::Sender<GateEvent>,
     outbox: &mut tokio::sync::mpsc::UnboundedReceiver<String>,
+    gen: u64,
 ) -> anyhow::Result<()> {
     use tokio::io::AsyncReadExt;
     let mut buf = Vec::with_capacity(4096);
@@ -329,7 +340,12 @@ async fn read_loop(
             r = read_half.read(&mut buf) => r?,
             frame = outbox.recv() => {
                 match frame {
-                    Some(frame) => write_text(write_half, &frame).await?,
+                    Some(frame) => {
+                        if crate::test_seams::ids_log_enabled() {
+                            glog_ids!("INF", "MIR2_IDS_SEND gen={gen} len={}", frame.len());
+                        }
+                        write_text(write_half, &frame).await?;
+                    }
                     // 投递端已关闭（sim 线程收尾）⇒ 正常结束链路；旧实现的 `continue`
                     // 会让 select 立刻再次就绪 ⇒ 忙等（N-1）。
                     None => return Ok(()),
