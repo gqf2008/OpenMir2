@@ -7018,18 +7018,29 @@ fn handle_shop_cmd_inner(
                     deferred,
                 );
             }
+            // `Merchant.UserSelect`（`Merchant.cs:920-923`）的 sEXIT 臂：**无任何门**
+            // （`Merchant` 没有 `IsExit` 一类旗；相邻的 `@getbackupgnow` 等臂都要 `Is*` 旗
+            // 短路）⇒ `SendMsg(playObject, RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0)`；消息泵
+            // （`PlayObject.Message.cs:1806-1808` 的 `RM_MERCHANTDLGCLOSE` case）⇒
+            // `SendDefMessage(SM_MERCHANTDLGCLOSE, nParam1, 0, 0, 0)` ⇒ 客户端收
+            // `SM_MERCHANTDLGCLOSE(644)` header-only 一帧、`Recog` = 消息自带的 NPC ActorId
+            // （不是玩家会话 id）。**商人/固定 NPC 共用**：oracle 里本臂在
+            // `if (!boCanJmp) return` 门之后的同一条 else-if 链上 ⇒ 提到 `is_fixed_npc`
+            // 分叉之前（审计 docs/npc-dialog-label-audit-20261111.md §4.4：此前只接在固定
+            // NPC 分支 ⇒ 商人 132 点 `@exit` 零帧）。口径复用 `guild_official.rs` 的
+            // `LABEL_EXIT` → `sm_merchantdlgclose`（oracle `GuildOfficial.cs` 的同款移植）；
+            // route 理由文本保留原样（卡面约束：固定 NPC 既有日志文本不得回退）。
+            if game_svr::shop::eq_label(label, guild_official::LABEL_EXIT) {
+                if let Some(tx) = route_to_gate(gates, gate_idx, socket, "固定 NPC @exit") {
+                    let _ = tx.send(SimToGate::SendFrame {
+                        socket,
+                        body: smframe::sm_merchantdlgclose(merchant_id),
+                    });
+                }
+            }
             if is_fixed_npc {
                 // `Merchant.UserSelect`（`Merchant.cs:805-940`）的其余分支：全部以 `Is* == false`
-                // （`Merchant` ctor）短路，`@exit` 是唯一无门的分支（`Merchant.cs:929-932`
-                // `SendMsg(playObject, RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0)`）。
-                if game_svr::shop::eq_label(label, "@exit") {
-                    if let Some(tx) = route_to_gate(gates, gate_idx, socket, "固定 NPC @exit") {
-                        let _ = tx.send(SimToGate::SendFrame {
-                            socket,
-                            body: smframe::sm_merchantdlgclose(merchant_id),
-                        });
-                    }
-                }
+                // （`Merchant` ctor）短路（`@exit` 臂已提为上方商人/固定 NPC 共用）。
                 glog!(
                     "INF",
                     "固定 NPC 标签 ChrName={chr_name} npc={merchant_id} label={label} → Npc_def 脚本已执行"
@@ -80663,6 +80674,99 @@ GMEXECUTE f
         assert!(
             back_says.iter().any(|s| s.contains("老人：你需要什么")),
             "`@back` 必须 GotoLable(ScriptGoBackLable=@main) 并产说词：{back_says:?}"
+        );
+    }
+
+    /// **卡 `openmir2-npc-merchant-exit-arm`（审计 `docs/npc-dialog-label-audit-20261111.md`
+    /// §4.4/§6 卡 D）**：商人 NPC 的 `@exit` 必须回**恰一条** `SM_MERCHANTDLGCLOSE(644)`——
+    /// header-only 12B、`Recog` = 消息自带的 NPC ActorId（不是玩家会话 id）、无其他帧。
+    ///
+    /// oracle：`Merchant.UserSelect` 的 sEXIT 臂（`Merchant.cs:920-923`）无任何门，点击即
+    /// `SendMsg(playObject, RM_MERCHANTDLGCLOSE, 0, ActorId, 0, 0)`。此前该臂只接在
+    /// `handle_shop_cmd_inner` 的 `is_fixed_npc` 分支 ⇒ 商人路径零帧（Owner 实测的
+    /// 「无响应」之一）。修复 = 臂提为商人/固定 NPC 共用（`LableIsCanJmp` 门之后、
+    /// `is_fixed_npc` 分叉之前）。
+    ///
+    /// 点击序列与审计 §4.4 同形：先点说词含 `<关闭/@exit>` 的页（`GetScriptLabel` 把
+    /// `@exit` 登记进 can-jmp 表——登记处不跳过 `@exit`），再点 `@exit`；脚本无
+    /// `[@exit]` 记录 ⇒ `GotoLable` 零说词 ⇒ 全帧面只有共用臂那一条 644。
+    ///
+    /// 牙（交付内容上实际重放 M1）：摘掉共用 `@exit` 臂 ⇒ 本用例红（0 条 644）。
+    #[test]
+    fn merchant_dlgselect_exit_emits_one_merchantdlgclose_with_npc_recog() {
+        // 纯说词 procedure（`action_list` 空、`s_say_msg` 带链接）——与 T137 夹具从
+        // `Npc_def` 文本解析出的「只有说词的页」同形（`t142_record` 只在有动作时带说词）。
+        let main_say = mir2_script::SayingRecord {
+            s_label: "@main".to_string(),
+            procedure_list: vec![mir2_script::SayingProcedure {
+                condition_list: Vec::new(),
+                action_list: Vec::new(),
+                else_action_list: Vec::new(),
+                s_say_msg: "领取元宝 <关闭/@exit>".to_string(),
+                s_else_say_msg: String::new(),
+            }],
+            bo_ext_jmp: false,
+        };
+        let mut rig = T142Rig::new(vec![main_say]);
+        let hero_actor = rig.sessions["hero"].actor_id;
+        rig.dlg_select("@main");
+        let _ = rig.drain();
+        rig.dlg_select("@exit");
+        let frames = rig.drain();
+        assert_eq!(frames.len(), 1, "商人 @exit ⇒ 恰一条帧：{frames:?}");
+        assert_eq!(frames[0].len(), 12, "SM_MERCHANTDLGCLOSE header-only 12B");
+        let (ident, param, tag, recog) = hdr(frames[0].as_slice());
+        assert_eq!(ident, mir2_protocol::messages::SM_MERCHANTDLGCLOSE);
+        assert_eq!(
+            (param, tag),
+            (0, 0),
+            "Param/Tag 全零（SendDefMessage 同参）"
+        );
+        assert_ne!(
+            hero_actor, rig.merchant_id,
+            "夹具自检：商人与玩家必须是不同 actor"
+        );
+        assert_eq!(
+            recog, rig.merchant_id,
+            "Recog = 消息自带的 NPC ActorId，不是玩家会话 id"
+        );
+    }
+
+    /// **门负例（卡 D 验收「`LableIsCanJmp` 门保持原样」）**：同构造、但说词不含
+    /// `@exit` ⇒ can-jmp 表空（`@exit` 也非 `@main`/`PlayDiceLabel`）⇒ 走
+    /// 「`LableIsCanJmp(@exit) == false ⇒ 不派发`」行：零 644、零帧。
+    ///
+    /// 牙（交付内容上实际重放 M2）：把共用 `@exit` 臂挪到门**之前** ⇒ 本用例红
+    /// （未登记 label 也回了 644）。
+    #[test]
+    fn merchant_dlgselect_exit_without_canjmp_registration_stays_undispatched() {
+        // 同构造：`@main` 页也说词（can-jmp 表非空），但只含 `<返回/@back>` ⇒ 表里
+        // 没有 `@exit` ⇒ `@exit` 过不了 `LableIsCanJmp` 门。
+        let main_say = mir2_script::SayingRecord {
+            s_label: "@main".to_string(),
+            procedure_list: vec![mir2_script::SayingProcedure {
+                condition_list: Vec::new(),
+                action_list: Vec::new(),
+                else_action_list: Vec::new(),
+                s_say_msg: "欢迎 <返回/@back>".to_string(),
+                s_else_say_msg: String::new(),
+            }],
+            bo_ext_jmp: false,
+        };
+        let mut rig = T142Rig::new(vec![main_say]);
+        rig.dlg_select("@main");
+        let _ = rig.drain();
+        rig.dlg_select("@exit");
+        let frames = rig.drain();
+        assert!(
+            frames
+                .iter()
+                .all(|b| hdr(b.as_slice()).0 != mir2_protocol::messages::SM_MERCHANTDLGCLOSE),
+            "未登记 label 不得回 644：{frames:?}"
+        );
+        assert!(
+            frames.is_empty(),
+            "门不过 ⇒ 不派发 ⇒ 零帧（脚本无 [@exit] 记录）：{frames:?}"
         );
     }
 
