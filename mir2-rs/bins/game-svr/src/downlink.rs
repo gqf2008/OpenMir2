@@ -382,8 +382,9 @@ pub fn turn_pair_nameless(target: i32, x: u16, y: u16, d: &ActorDisplay) -> Vec<
 /// + 尾 `Encode(8B CharDesc)`。
 ///
 /// **帧方向（`Series` 低字节）来自 `d.dir`**——这是本函数的契约：调用方必须把**该帧该用的方向**
-/// 放进 `d.dir`。五条 ident 的方向来源各不同（逐条照 oracle）：`SM_WALK/SM_RUN/SM_HORSERUN`
-/// 用**移动者当前 `Dir`**；`SM_BACKSTEP` 用 `nBackDir`、`SM_RUSH`/`SM_RUSHKUNG` 用 `nDir`——后三者的
+/// 放进 `d.dir`。五条 ident 的方向来源各不同（逐条照 oracle）：`SM_WALK/SM_RUN` 与骑乘跑的
+/// **线上** ident 5（[`crate::movewire::SM_HORSERUN_CLIENT`]）用**移动者当前 `Dir`**；
+/// `SM_BACKSTEP` 用 `nBackDir`、`SM_RUSH`/`SM_RUSHKUNG` 用 `nDir`——后三者的
 /// 方向**不是**角色 `Dir`，故宿主在调本函数前把事件方向写进一份 `d` 的克隆（见
 /// [`backstep_frame`]/[`rush_frame`]，避免误用角色朝向）。
 ///
@@ -392,13 +393,17 @@ pub fn turn_pair_nameless(target: i32, x: u16, y: u16, d: &ActorDisplay) -> Vec<
 /// `ActorId != ActorId || wIdent == RM_PUSH || == RM_RUSH || == RM_RUSHKUNG` **恒真** ⇒
 /// **移动者自己也收**（宿主用带自身的广播，见 `lib.rs::broadcast_ref_msg_with_self`）。
 ///
+/// **骑乘跑 ident 只编码线上值 5**：`mir2_protocol::messages::SM_HORSERUN`（5010）只是 C# oracle
+/// 的参照常量，冻结客户端 `Common_Grobal2.pas:328` 只认 `SM_HORSERUN = 5`（D-15）。故本函数
+/// **不接受 5010**；误传 5010 与其他不在列 ident 一样返回 `None`（**不猜**、不静默编码上线）。
+/// 线上广播一律走 [`crate::movewire::SM_HORSERUN_CLIENT`]。
+///
 /// 不在此列的 ident 返回 `None`（不猜）。
 #[must_use]
 pub fn move_frame(ident: u16, target: i32, x: u16, y: u16, d: &ActorDisplay) -> Option<Vec<u8>> {
     match ident {
         mir2_protocol::messages::SM_WALK
         | mir2_protocol::messages::SM_RUN
-        | mir2_protocol::messages::SM_HORSERUN
         | mir2_protocol::messages::SM_BACKSTEP
         | mir2_protocol::messages::SM_RUSH
         | mir2_protocol::messages::SM_RUSHKUNG
@@ -786,6 +791,39 @@ mod tests {
             mir2_protocol::edcode::decode(&tail).len(),
             8,
             "尾必须是 Encode(8B TCharDesc)（ClMain.pas:9910 与 WALK/RUN 同支解码）"
+        );
+    }
+
+    /// **fail-closed 牙（卡 `openmir2-horserun-moveframe-5010`）**：`move_frame` 只编码线上 ident
+    /// **5**（[`crate::movewire::SM_HORSERUN_CLIENT`]）；C# oracle 的 `SM_HORSERUN = 5010` 是参照
+    /// 常量，**不得**被接受 —— 否则未来误传 5010 会被静默编码上线，冻结客户端当未知 ident 丢弃。
+    /// 误传一律 `None`（不猜）。
+    ///
+    /// 红检：把 `mir2_protocol::messages::SM_HORSERUN` 分支加回 `move_frame` ⇒ 本用例必红。
+    #[test]
+    fn move_frame_rejects_oracle_horserun_ident_5010() {
+        let d = ActorDisplay {
+            dir: 5,
+            light: 1,
+            feature: 0x0001_0293,
+            feature_ex: 0,
+            status: 7,
+            name_color: 255,
+            show_name: Vec::new(),
+            mount_id: 1,
+        };
+        assert_eq!(
+            mir2_protocol::messages::SM_HORSERUN,
+            5010,
+            "oracle Messages.cs:436：SM_HORSERUN = 5010"
+        );
+        assert!(
+            move_frame(mir2_protocol::messages::SM_HORSERUN, 1234, 300, 400, &d).is_none(),
+            "oracle 的 5010 是参照常量，线上不得编码；误传必须 fail-closed 返回 None"
+        );
+        assert!(
+            move_frame(crate::movewire::SM_HORSERUN_CLIENT, 1234, 300, 400, &d).is_some(),
+            "线上 ident 5（SM_HORSERUN_CLIENT）必须有编码器"
         );
     }
 
