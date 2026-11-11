@@ -5819,6 +5819,16 @@ fn handle_click_npc_cmd(
         // **卡 `openmir2-clearmapmon-impl`**：脚本世界副作用按**动作序**在同一队列上应用
         // （oracle 是动作内同步；RNG 面差异见 `NpcPlayer::mon_gen_enabled` 登记）。
         apply_script_world_actions(world, &mut script_world, world_actions);
+        // **卡 `openmir2-npc-script-teleport-wiring`**：`@main` 的 `MAPMOVE`/`MAP` 按动作序落地
+        // （在脚本帧排水之前；oracle 是动作内同步）。帧序见 [`apply_pending_space_moves`]。
+        apply_pending_space_moves(
+            world,
+            online,
+            gates,
+            script_world.as_deref().map(|c| c.registry),
+            &mut *session,
+            chr_name,
+        );
         // 佩戴位写回后同步世界实体（`Entity.use_items` 是每 tick 的源，不同步会被覆盖）。
         for slot in use_slots {
             sync_use_item_slot_to_entity(world, sg, slot);
@@ -6906,6 +6916,16 @@ fn handle_shop_cmd_inner(
             );
             world.rng = rng;
             apply_script_world_actions(world, &mut script_world, world_actions);
+            // **卡 `openmir2-npc-script-teleport-wiring`**：`MAPMOVE`/`MAP` 按动作序落地
+            // （脚本帧排水之前；帧序见 [`apply_pending_space_moves`]）。
+            apply_pending_space_moves(
+                world,
+                online,
+                gates,
+                script_world.as_deref().map(|c| c.registry),
+                &mut *session,
+                chr_name,
+            );
             for slot in use_slots {
                 sync_use_item_slot_to_entity(world, sg, slot);
             }
@@ -6981,6 +7001,16 @@ fn handle_shop_cmd_inner(
                 );
                 world.rng = rng;
                 apply_script_world_actions(world, &mut script_world, world_actions2);
+                // **卡 `openmir2-npc-script-teleport-wiring`**：`@back` 第二轮脚本的
+                // `MAPMOVE`/`MAP` 与第一轮共用同一条队列、按动作序落地。
+                apply_pending_space_moves(
+                    world,
+                    online,
+                    gates,
+                    script_world.as_deref().map(|c| c.registry),
+                    &mut *session,
+                    chr_name,
+                );
                 for slot in use_slots2 {
                     sync_use_item_slot_to_entity(world, sg, slot);
                 }
@@ -7276,6 +7306,16 @@ fn handle_shop_cmd_inner(
                             );
                             world.rng = rng;
                             apply_script_world_actions(world, &mut script_world, world_actions);
+                            // **卡 `openmir2-npc-script-teleport-wiring`**：`@upgradenow_*`
+                            // 脚本里的 `MAPMOVE`/`MAP` 同样按动作序落地。
+                            apply_pending_space_moves(
+                                world,
+                                online,
+                                gates,
+                                script_world.as_deref().map(|c| c.registry),
+                                &mut *session,
+                                chr_name,
+                            );
                             for slot in use_slots {
                                 sync_use_item_slot_to_entity(world, sg, slot);
                             }
@@ -7371,6 +7411,16 @@ fn handle_shop_cmd_inner(
                             );
                             world.rng = rng;
                             apply_script_world_actions(world, &mut script_world, world_actions);
+                            // **卡 `openmir2-npc-script-teleport-wiring`**：`@getbackupgnow_*`
+                            // 脚本里的 `MAPMOVE`/`MAP` 同样按动作序落地。
+                            apply_pending_space_moves(
+                                world,
+                                online,
+                                gates,
+                                script_world.as_deref().map(|c| c.registry),
+                                &mut *session,
+                                chr_name,
+                            );
                             for slot in use_slots {
                                 sync_use_item_slot_to_entity(world, sg, slot);
                             }
@@ -7551,6 +7601,16 @@ fn handle_shop_cmd_inner(
                 );
                 world.rng = rng;
                 apply_script_world_actions(world, &mut script_world, world_actions);
+                // **卡 `openmir2-npc-script-teleport-wiring`**：修理后 `@REPAIROK` 脚本里的
+                // `MAPMOVE`/`MAP` 同样按动作序落地。
+                apply_pending_space_moves(
+                    world,
+                    online,
+                    gates,
+                    script_world.as_deref().map(|c| c.registry),
+                    &mut *session,
+                    chr_name,
+                );
                 for slot in use_slots {
                     sync_use_item_slot_to_entity(world, sg, slot);
                 }
@@ -8905,6 +8965,98 @@ fn apply_script_world_actions(
     }
 }
 
+/// 应用脚本 `MAPMOVE`/`MAP` 的会话级 pending（卡 `openmir2-npc-script-teleport-wiring`）。
+///
+/// oracle 在 `ActionOfMapMove`/`ActionOfMap`（`ExecutionProcessingSys.cs:2169-2180`）里**当场**
+/// 调 `SpaceMove`/`MapRandomMove`；本宿主的脚本快照拿不到 `&mut World` ⇒
+/// [`run_merchant_goto`] 先把它们收进 `ShopSession::pending_space_moves`，由本函数在脚本跑完后
+/// 按**动作序**应用（同一 handler 内，`@back` 的两轮脚本共用一条队列）。
+///
+/// **帧序**（照 oracle `BaseObject.SpaceMove` `BaseObject.cs:1103-1168` / `ActionOfMapMove`）：
+/// 1. `SendRefMsg(RM_SPACEMOVE_FIRE, …)` 在 `SpaceMove` **之前** ⇒ 旧位置 ±12（**含自己**）收
+///    `SM_SPACEMOVE_HIDE(800)`（`PlayObject.Message.cs:1955-1966`）。本宿主在落地前
+///    [`broadcast_ref_msg_with_self`] 一次；`FindMap == null` / 201 轮不可走时**照发**
+///    （oracle 的 FIRE 先于 `SpaceMove` 的成功判定）。
+/// 2. 落地复用 [`mir2_world::World::base_object_move_player`]（`Fixed` = `MAPMOVE` 指定坐标支、
+///    `Random` = `MAP` 随机支）⇒ `switch_map_space(..., show2=false)` 记一条
+///    [`mir2_world::session::MapChange`]。
+/// 3. 换图簇 `SM_CLEAROBJECTS(633)` → `SM_CHANGEMAP(634)` → `SM_SPACEMOVE_SHOW(801)` 仍由世界
+///    tick 的 [`drain_map_change`] 发（`space_move_show = Some(false)` = `nInt == 0`）；
+///    会话 `map_id` 与实体坐标由 `switch_map_space` 改写，存档 [`build_save_record`] 因此取到
+///    新图/新坐标。
+///
+/// **登记**：脚本执行期拿不到 `&mut World` ⇒ `MAP`（随机）的两抽从「动作点」移到「handler 尾」，
+/// 与其它脚本抽数的交错序与本仓 `CLEARMAPMON`/`MONGENEX` 的排队同口径（R 窗口项）。
+/// **登记**：QFunction（`@StdModeFunc*`）漏斗没有 `ShopSession` 载体 ⇒ 该路脚本里的
+/// `MAPMOVE`/`MAP` 仍不落地（与 `SETMPAMODE` 的登记一致）。
+fn apply_pending_space_moves(
+    world: &mut mir2_world::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    registry: Option<&mir2_envir::MapRegistry>,
+    session: &mut ShopSession,
+    chr_name: &str,
+) {
+    let moves = std::mem::take(&mut session.pending_space_moves);
+    for mv in moves {
+        let Some(actor_id) = world.session(chr_name).and_then(|s| s.actor_id) else {
+            glog!(
+                "WRN",
+                "脚本传送：ChrName={chr_name} 不在世界 ⇒ pending 丢弃（登记）"
+            );
+            break;
+        };
+        // `ActionOfMapMove`/`ActionOfMap` 的第一行：移动**之前**的 `RM_SPACEMOVE_FIRE`
+        // （收件人按旧位置算）。落地失败也照发（oracle 的 FIRE 先于 SpaceMove 判定）。
+        let hide = game_svr::smframe::sm_spacemove_hide(
+            mir2_protocol::messages::SM_SPACEMOVE_HIDE,
+            actor_id,
+        );
+        broadcast_ref_msg_with_self(world, online, gates, actor_id, &[hide]);
+        let map_name = match &mv {
+            game_svr::npc::PendingSpaceMove::Fixed { map, .. }
+            | game_svr::npc::PendingSpaceMove::Random { map } => map.clone(),
+        };
+        // `IEnvirnoment envir = MapMgr.FindMap(sMap); if (envir != null)`（`BaseObject.cs:1105`）。
+        // 解析失败 ⇒ 0 抽不动（FIRE 已照发）。
+        let Some(map_id) = registry.and_then(|r| r.id_of(&map_name)) else {
+            glog!(
+                "DBG",
+                "脚本传送：FindMap({map_name}) == null ⇒ 0 抽不移动 ChrName={chr_name}"
+            );
+            continue;
+        };
+        let target = match mv {
+            game_svr::npc::PendingSpaceMove::Fixed { x, y, .. } => {
+                mir2_world::HomeMoveTarget::Fixed {
+                    map_id,
+                    x: i32::from(x),
+                    y: i32::from(y),
+                }
+            }
+            game_svr::npc::PendingSpaceMove::Random { .. } => {
+                mir2_world::HomeMoveTarget::Random { map_id }
+            }
+        };
+        let out = world.base_object_move_player(chr_name, actor_id, Some(target));
+        if out.moved {
+            glog!(
+                "INF",
+                "脚本传送：ChrName={chr_name} MAP={} → map_id={} ({}, {})",
+                map_name,
+                out.map_id,
+                out.x,
+                out.y
+            );
+        } else {
+            glog!(
+                "DBG",
+                "脚本传送：{map_name} 落地失败（201 轮不可走/图缺失）⇒ 回滚旧图旧格 ChrName={chr_name}"
+            );
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_merchant_goto(
     book: &game_svr::npc::MerchantScriptBook,
@@ -9033,6 +9185,11 @@ fn run_merchant_goto(
         session
             .pending_map_modes
             .extend(std::mem::take(&mut player.map_mode_writes));
+        // **卡 `openmir2-npc-script-teleport-wiring`**：`MAPMOVE`/`MAP` 的待落地传送与
+        // `SETMPAMODE` 同一位置写回会话（动作序保留；应用在 handler 内、脚本帧排水之前）。
+        session
+            .pending_space_moves
+            .extend(std::mem::take(&mut player.space_moves));
         let use_slots = write_back_player_use_items(&player, sg, &use_before);
         // `WorldServer.SendBroadCastMsg`（`WorldServer.cs:1738-1765`）的扇出清单：脚本里出现的
         // 顺序即 oracle 的入队序（每个收件人各按自己的 `MsgQueue` 出队）。
@@ -19698,6 +19855,13 @@ struct ShopSession {
     /// 再在 `sim_loop` 的 [`flush_map_mode_writes`] 落库（位于 P25 消费点之前，等价性见
     /// `map_mode` 模块头）。跨调用**不保留**：落库后即清空。
     pending_map_modes: Vec<game_svr::map_mode::MapModeWrite>,
+    /// 脚本 `MAPMOVE`/`MAP` 的待落地传送（`NpcPlayer::space_moves` 的会话级队列；卡
+    /// `openmir2-npc-script-teleport-wiring`）。
+    ///
+    /// oracle 在动作里**当场**执行 `SpaceMove`/`MapRandomMove`；本宿主的脚本快照拿不到
+    /// `&mut World` ⇒ 先收进这里，由 [`apply_pending_space_moves`] 在脚本跑完后按**动作序**
+    /// 应用（同一 handler 内，`@back` 两轮脚本共用一条队列）。
+    pending_space_moves: Vec<game_svr::npc::PendingSpaceMove>,
 }
 
 /// 一个在线角色的**地面交互会话态**（`CM_PICKUP`/`CM_DROPITEM` 用）。
@@ -88095,5 +88259,839 @@ mod t279_dress_eff_tests {
         assert_eq!(ok.param, 0, "无翅膀仍发 0（A4）");
         let fc = find(&frames, 41);
         assert_eq!(fc.series, 0, "无翅膀 41 Series 仍 0（A4）");
+    }
+
+    // ============ 卡 `openmir2-npc-script-teleport-wiring`：商人脚本 MAPMOVE/MAP 落地 ============
+
+    use std::collections::HashMap;
+
+    /// 参照流步数（本地副本；`crate::tests` 的同名 helper 为兄弟模块私有）。
+    fn tp_draws_between(
+        before: &mir2_shared::rng::RandomNumber,
+        after: &mir2_shared::rng::RandomNumber,
+    ) -> usize {
+        let after_state = format!("{after:?}");
+        let mut probe = before.clone();
+        for k in 0..100_000 {
+            if format!("{probe:?}") == after_state {
+                return k;
+            }
+            let _ = probe.random();
+        }
+        panic!("参照流 100000 步内未匹配到目标状态");
+    }
+
+    /// 合成地图根（`Drop` 清理）。
+    struct TeleportMaps {
+        base: std::path::PathBuf,
+        registry: mir2_envir::MapRegistry,
+    }
+
+    impl Drop for TeleportMaps {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.base);
+        }
+    }
+
+    static TELEPORT_MAP_SEQ: std::sync::atomic::AtomicUsize =
+        std::sync::atomic::AtomicUsize::new(0);
+
+    /// 写一张全 0 格 `.map`（每格 `Walk` ⇒ `SpaceMoveGetRandXY` 直接落指定格、0 抽）。
+    fn write_teleport_map(dir: &std::path::Path, name: &str, w: i32, h: i32) {
+        let mut bytes = vec![0u8; mir2_envir::HEADER_BYTES];
+        bytes[0..2].copy_from_slice(&(w as i16).to_le_bytes());
+        bytes[2..4].copy_from_slice(&(h as i16).to_le_bytes());
+        bytes.resize(
+            mir2_envir::HEADER_BYTES + (w as usize) * (h as usize) * mir2_envir::CELL_BYTES,
+            0,
+        );
+        std::fs::write(dir.join("Map").join(format!("{name}.map")), &bytes).unwrap();
+    }
+
+    /// 部署脚本 `MAPMOVE`/`MAP` 指向的代表性图（目标格都要放得下）：
+    /// `0` 起点 64×64、`11` @bai 200×400、`GA0` @zhuangyuan 100×100、`2` @du 460×600、
+    /// `0150` @ss 随机落点 100×100。条目序 = `map_id`（与 `World::with_maps` 同序）。
+    fn teleport_maps() -> TeleportMaps {
+        let base = std::env::temp_dir().join(format!(
+            "gs-npc-teleport-{}-{}",
+            std::process::id(),
+            TELEPORT_MAP_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(base.join("Map")).unwrap();
+        for (name, w, h) in [
+            ("0", 64, 64),
+            ("11", 200, 400),
+            ("GA0", 100, 100),
+            ("2", 460, 600),
+            ("0150", 100, 100),
+        ] {
+            write_teleport_map(&base, name, w, h);
+        }
+        let loader = mir2_envir::MapLoader::new(base.clone(), "Map", "Envir");
+        let registry = mir2_envir::MapRegistry::from_entries(
+            loader,
+            ["0", "11", "GA0", "2", "0150"]
+                .into_iter()
+                .map(|n| mir2_envir::MapInfoEntry {
+                    map_name: n.to_string(),
+                    map_file_name: n.to_string(),
+                    desc: String::new(),
+                    server_index: 0,
+                    flag: mir2_envir::MapInfoFlag::default(),
+                })
+                .collect(),
+        );
+        assert_eq!(registry.id_of("0"), Some(0));
+        assert_eq!(registry.id_of("11"), Some(1));
+        assert_eq!(registry.id_of("GA0"), Some(2));
+        assert_eq!(registry.id_of("2"), Some(3));
+        assert_eq!(registry.id_of("0150"), Some(4));
+        TeleportMaps { base, registry }
+    }
+
+    fn tp_cond_level(level: i32) -> mir2_script::QuestConditionInfo {
+        mir2_script::QuestConditionInfo {
+            cmd_code: 7, // `CHECKLEVEL`（`codes.rs:27`）
+            n_param1: level,
+            ..Default::default()
+        }
+    }
+
+    fn tp_cond_gold(gold: i32) -> mir2_script::QuestConditionInfo {
+        mir2_script::QuestConditionInfo {
+            cmd_code: 12, // `CHECKGOLD`（`codes.rs:32`；`sParam1` 是数字串）
+            s_param1: gold.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn tp_act_mapmove(map: &str, x: i32, y: i32) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 17, // `MAPMOVE`
+            s_param1: map.to_string(),
+            n_param2: x,
+            n_param3: y,
+            ..Default::default()
+        }
+    }
+
+    fn tp_act_map(map: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 18, // `MAP`
+            s_param1: map.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn tp_act_take_gold(n: i32) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 2, // `TAKE`（switch 支：执行后**继续**下一条动作）
+            s_param1: "金币".to_string(),
+            n_param2: n,
+            ..Default::default()
+        }
+    }
+
+    fn tp_act_set(flag: i32, v: i32) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 1, // `Set`（**注册动作**：执行后 `run_actions` 立即 return）
+            s_param1: flag.to_string(),
+            s_param2: v.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn tp_act_messagebox(text: &str) -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 234, // `MESSAGEBOX`
+            s_param1: text.to_string(),
+            ..Default::default()
+        }
+    }
+
+    fn tp_act_break() -> mir2_script::QuestActionInfo {
+        mir2_script::QuestActionInfo {
+            n_cmd_code: 10, // `Break`
+            ..Default::default()
+        }
+    }
+
+    /// 一条 label = 一个 procedure（条件/动作/else 动作顺序照冻结脚本原文）。
+    fn tp_record(
+        label: &str,
+        conditions: Vec<mir2_script::QuestConditionInfo>,
+        actions: Vec<mir2_script::QuestActionInfo>,
+        else_actions: Vec<mir2_script::QuestActionInfo>,
+        say: &str,
+    ) -> mir2_script::SayingRecord {
+        mir2_script::SayingRecord {
+            s_label: label.to_string(),
+            procedure_list: vec![mir2_script::SayingProcedure {
+                condition_list: conditions,
+                action_list: actions,
+                else_action_list: else_actions,
+                s_say_msg: say.to_string(),
+                s_else_say_msg: String::new(),
+            }],
+            bo_ext_jmp: false,
+        }
+    }
+
+    /// 冻结 `比奇省传送员-0.txt` 的 `@main` 链接页（`get_script_label` 的 can-jmp 来源）。
+    const TP_MAIN_SAY: &str = "亲爱的玩家：<$USERNAME>\\<去[庄园]/@zhuangyuan>  \
+<去[毒蛇山谷]/@du>  <去[白日门]/@bai>  <去[真爱质询屋]/@zhenai>\\<随机传送/@ss>  \
+<条件传送/@zy>";
+
+    /// 生产入口夹具：`hero`(10,10,map 0) + 传送员(11,10,map 0)，世界/注册表同序五图。
+    ///
+    /// 与 `T142Rig` 的差异：这里必须用 `open_session`+`enter_map` 建**世界会话**——
+    /// `switch_map_space`/`base_object_move_player` 的落地前提（`T142Rig` 只 `add_entity`）。
+    struct TeleportRig {
+        world: mir2_world::World,
+        hero: i32,
+        merchant_id: i32,
+        sessions: HashMap<String, SessionGround>,
+        online: OnlineRegistry,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        shop_sessions: HashMap<String, ShopSession>,
+        sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState>,
+        sell_off_book: game_svr::selloff::SellOffBook,
+        book: game_svr::npc::MerchantScriptBook,
+        npc_vars: game_svr::npc::NpcVars,
+        catalog: game_svr::ability::StdItemCatalog,
+        shop_cfg: ShopCfg,
+        colors: MsgColors,
+        item_number: i32,
+    }
+
+    impl TeleportRig {
+        fn new(
+            maps: &TeleportMaps,
+            records: Vec<mir2_script::SayingRecord>,
+            gold: i32,
+            level: u8,
+        ) -> Self {
+            let sizes: Vec<(i32, i32)> = maps
+                .registry
+                .maps()
+                .iter()
+                .map(|m| (m.width, m.height))
+                .collect();
+            assert_eq!(sizes.len(), 5, "世界图数必须与注册表同序");
+            let mut world = mir2_world::World::with_maps(sizes);
+            world.open_session("hero");
+            let hero = world
+                .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
+                .expect("hero 进图");
+            let merchant_id = world
+                .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                    name: "传送员".to_string(),
+                    x: 11,
+                    y: 10,
+                    map_id: 0,
+                    state: mir2_world::merchant::MerchantState::new(
+                        "比奇省传送员".to_string(),
+                        "0".to_string(),
+                        0,
+                        0,
+                        100,
+                        false,
+                        false,
+                        0,
+                        mir2_world::merchant::MerchantFlags {
+                            is_buy: true,
+                            ..Default::default()
+                        },
+                        vec![0, 5],
+                        Vec::new(),
+                        0,
+                    ),
+                })
+                .expect("商人入世界");
+            let mut book = game_svr::npc::MerchantScriptBook::new(30);
+            book.insert(game_svr::npc::MerchantNpc {
+                def: game_svr::npc::NpcDef {
+                    chr_name: "传送员".to_string(),
+                    file_path: "Market_Def".to_string(),
+                    script_name: Some("比奇省传送员-0".to_string()),
+                    is_hide: false,
+                    is_quest: false,
+                    scripts: vec![mir2_script::ScriptInfo {
+                        is_quest: false,
+                        quest_info: Default::default(),
+                        record_list: records,
+                        quest_count: 0,
+                    }],
+                    loaded: true,
+                    actor_id: merchant_id,
+                },
+                price_rate: 100,
+                castle: None,
+                map_name: "0".to_string(),
+                curr_x: 11,
+                curr_y: 10,
+            });
+            let mut sg = test_session_ground(hero);
+            sg.state.gold = gold;
+            sg.equip.abil.level = level;
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".to_string(),
+                    chr_name: "hero".to_string(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: hero,
+                },
+            );
+            let (tx0, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx0);
+            Self {
+                world,
+                hero,
+                merchant_id,
+                sessions,
+                online,
+                gates,
+                rx,
+                shop_sessions: HashMap::new(),
+                sell_off_sessions: HashMap::new(),
+                sell_off_book: game_svr::selloff::SellOffBook::default(),
+                book,
+                npc_vars: game_svr::npc::NpcVars::default(),
+                catalog: game_svr::ability::StdItemCatalog::new(),
+                shop_cfg: ShopCfg {
+                    castle_member_price_rate: 100,
+                    super_repair_price_rate: 100,
+                    repair_item_dec_dura: 0,
+                    make_durg_price: 100,
+                    get_all_npc_tax: false,
+                    human_max_gold: 10_000_000,
+                    ..ShopCfg::default()
+                },
+                colors: MsgColors {
+                    red_f: 255,
+                    red_b: 56,
+                    hear_f: 0,
+                    hear_b: 255,
+                    whisper_f: 0,
+                    whisper_b: 0,
+                    green_f: 0xDB,
+                    green_b: 0xFF,
+                    blue_f: 0xFF,
+                    blue_b: 0xFC,
+                },
+                item_number: 0,
+            }
+        }
+
+        /// `CM_CLICKNPC(1010)` → `@main`（can-jmp 账本来源）。
+        fn click(&mut self) -> bool {
+            handle_click_npc_cmd(
+                self.merchant_id,
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.world,
+                &self.book,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &self.npc_vars,
+                &self.catalog,
+                &mut self.item_number,
+                &self.gates,
+                None,
+                None,
+            )
+        }
+
+        /// `CM_MERCHANTDLGSELECT(1011)` 生产入口（`script_world` 带注册表 ⇒ 地图名可解析）。
+        fn dlg_select(&mut self, label: &str, ctx: &mut ScriptWorldCtx<'_>) {
+            let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+            handle_shop_cmd(
+                game_svr::shop::CM_MERCHANTDLGSELECT,
+                self.merchant_id,
+                0,
+                0,
+                Some(label),
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &mut self.sell_off_book,
+                &trade,
+                &self.gates,
+                &mut self.world,
+                &self.catalog,
+                &self.shop_cfg,
+                &self.colors,
+                None,
+                &mut self.item_number,
+                &self.book,
+                &self.npc_vars,
+                None,
+                Some(ctx),
+            );
+        }
+
+        /// 取走本批下行 `(socket, ident)`（保序）。
+        fn drain(&mut self) -> Vec<(i32, u16)> {
+            let mut out = Vec::new();
+            while let Ok(m) = self.rx.try_recv() {
+                if let SimToGate::SendFrame { socket, body } = m {
+                    out.push((socket, u16::from_le_bytes([body[4], body[5]])));
+                }
+            }
+            out
+        }
+
+        fn entity(&self) -> &mir2_world::Entity {
+            self.world.entities.get(self.hero).expect("hero 实体在")
+        }
+    }
+
+    /// `@bai`（冻结脚本：无条件 `MAPMOVE 11 136 368`）：
+    /// 换图落地 + 会话/实体/存档面 + TransMap 簇帧序（800 → 633 → 634 → 801）。
+    ///
+    /// 牙（M1）：摘掉 `handle_shop_cmd_inner` 1011 分支的 `apply_pending_space_moves` 调用 ⇒
+    /// 位置/`map_changes`/帧序断言全红。
+    /// 牙（M2）：把 `NpcPlayer::space_move` 覆写退回缺省空操作 ⇒ `pending_space_moves` 为空 ⇒ 全红。
+    #[test]
+    fn npc_script_mapmove_bai_teleports_and_persists() {
+        use mir2_protocol::messages;
+        let maps = teleport_maps();
+        let records = vec![
+            tp_record("@main", Vec::new(), Vec::new(), Vec::new(), TP_MAIN_SAY),
+            tp_record(
+                "@bai",
+                Vec::new(),
+                vec![tp_act_mapmove("11", 136, 368), tp_act_break()],
+                Vec::new(),
+                "",
+            ),
+        ];
+        let mut rig = TeleportRig::new(&maps, records, 0, 10);
+        assert!(rig.click(), "@main 点击必须执行（同图 ±15）");
+        let _ = rig.drain();
+
+        // 前置：仍在起点图。
+        assert_eq!(rig.entity().map_id, 0);
+        assert_eq!((rig.entity().x, rig.entity().y), (10, 10));
+        let rng_before = rig.world.rng.clone();
+
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let mut host = game_svr::mongen::MonGenHost::start(
+            Vec::new(),
+            &table,
+            false,
+            mir2_world::mongen::MonGenConfig::default(),
+            &mut rig.world.rng,
+        );
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            rig.hero,
+            downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+        {
+            let mut ctx = ScriptWorldCtx {
+                host: &mut host,
+                registry: &maps.registry,
+                table: &table,
+                displays: &mut displays,
+            };
+            rig.dlg_select("@bai", &mut ctx);
+        }
+
+        // ① 世界面：实体与会话都落到 map 11 (136,368)。
+        assert_eq!(rig.entity().map_id, 1, "实体 map_id = id_of(\"11\")");
+        assert_eq!((rig.entity().x, rig.entity().y), (136, 368));
+        assert_eq!(
+            rig.world.session("hero").expect("世界会话在").map_id,
+            1,
+            "会话 map_id 已改写"
+        );
+        // 固定落点可走 ⇒ `SpaceMoveGetRandXY` 0 抽。
+        assert_eq!(
+            tp_draws_between(&rng_before, &rig.world.rng),
+            0,
+            "MAPMOVE 指定可走格 ⇒ 0 抽"
+        );
+
+        // ② 落地事件：恰一条 MapChange（`nInt == 0` ⇒ SHOW(801)）。
+        let changes = rig.world.sessions.map_changes();
+        assert_eq!(changes.len(), 1, "恰一条换图事件");
+        let ch = changes[0];
+        assert_eq!(ch.actor_id, rig.hero);
+        assert_eq!(ch.map_id, 1);
+        assert_eq!((ch.x, ch.y), (136, 368));
+        assert_eq!(ch.space_move_show, Some(false));
+
+        // ③ 帧序：RM_SPACEMOVE_FIRE(800) 在落地前直发；633/634/801 由同 tick 的 drain 出。
+        let head = rig.drain();
+        assert_eq!(
+            head,
+            vec![(901, messages::SM_SPACEMOVE_HIDE)],
+            "落地前恰一条 SM_SPACEMOVE_HIDE(800)（含自己）"
+        );
+        drain_map_change(
+            &mut rig.world,
+            &rig.online,
+            &rig.gates,
+            &displays,
+            Some(&maps.registry),
+        );
+        let cluster = rig.drain();
+        assert_eq!(
+            cluster,
+            vec![
+                (901, messages::SM_CLEAROBJECTS),
+                (901, messages::SM_CHANGEMAP),
+                (901, messages::SM_SPACEMOVE_SHOW),
+            ],
+            "oracle 序：CLEAROBJECTS(633) → CHANGEMAP(634) → SPACEMOVE_SHOW(801)"
+        );
+
+        // ④ 落库面：存档记录取新图/新坐标（`build_save_record` 以世界会话+实体为准）。
+        let saved = SavedHuman {
+            account: "ua".to_string(),
+            record: record::PlayerRecord::default(),
+            enter_map: "0".to_string(),
+            derived: None,
+        };
+        let rec = build_save_record(
+            &saved,
+            "hero",
+            &rig.world,
+            &rig.sessions["hero"],
+            Some(&maps.registry),
+        );
+        assert_eq!(rec.data.cur_map.as_deref(), Some("11"));
+        assert_eq!((rec.data.cur_x, rec.data.cur_y), (136, 368));
+    }
+
+    /// `@du`（冻结脚本：`checkgold 1000` + `take 金币 1000` + `mapmove 2 416 564`）：
+    /// 真支扣金 1000 且换图；假支零传送（金币不动）。
+    #[test]
+    fn npc_script_mapmove_du_gold_gate() {
+        use mir2_protocol::messages;
+        let records = || {
+            vec![
+                tp_record("@main", Vec::new(), Vec::new(), Vec::new(), TP_MAIN_SAY),
+                tp_record(
+                    "@du",
+                    vec![tp_cond_gold(1000)],
+                    vec![tp_act_take_gold(1000), tp_act_mapmove("2", 416, 564)],
+                    vec![tp_act_messagebox("金币不足"), tp_act_break()],
+                    "",
+                ),
+            ]
+        };
+
+        // 真支：1500 ≥ 1000。
+        let maps = teleport_maps();
+        let mut rig = TeleportRig::new(&maps, records(), 1500, 10);
+        assert!(rig.click());
+        let _ = rig.drain();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let mut host = game_svr::mongen::MonGenHost::start(
+            Vec::new(),
+            &table,
+            false,
+            mir2_world::mongen::MonGenConfig::default(),
+            &mut rig.world.rng,
+        );
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            rig.hero,
+            downlink::ActorDisplay::new(2, 6, 111, 0, 0, 255, b"hero".to_vec()),
+        );
+        {
+            let mut ctx = ScriptWorldCtx {
+                host: &mut host,
+                registry: &maps.registry,
+                table: &table,
+                displays: &mut displays,
+            };
+            rig.dlg_select("@du", &mut ctx);
+        }
+        assert_eq!(rig.entity().map_id, 3, "map 2 ⇒ map_id 3");
+        assert_eq!((rig.entity().x, rig.entity().y), (416, 564));
+        assert_eq!(rig.sessions["hero"].state.gold, 500, "take 金币 1000");
+        assert_eq!(rig.world.sessions.map_changes().len(), 1);
+        let frames = rig.drain();
+        assert_eq!(
+            frames.first(),
+            Some(&(901, messages::SM_SPACEMOVE_HIDE)),
+            "800 先于脚本帧"
+        );
+        assert!(
+            frames
+                .iter()
+                .any(|(sk, id)| *sk == 901 && *id == messages::SM_GOLDCHANGED),
+            "take 金币 ⇒ SM_GOLDCHANGED(653) 与本次传送同批出帧"
+        );
+        let pos_hide = frames
+            .iter()
+            .position(|(_, id)| *id == messages::SM_SPACEMOVE_HIDE)
+            .unwrap();
+        let pos_gold = frames
+            .iter()
+            .position(|(_, id)| *id == messages::SM_GOLDCHANGED)
+            .unwrap();
+        assert!(pos_hide < pos_gold, "800 先于 653（oracle 低字节序）");
+
+        // 假支：500 < 1000 ⇒ 不传送（价格门），金币不动。
+        let maps2 = teleport_maps();
+        let mut rig2 = TeleportRig::new(&maps2, records(), 500, 10);
+        assert!(rig2.click());
+        let _ = rig2.drain();
+        let mut host2 = game_svr::mongen::MonGenHost::start(
+            Vec::new(),
+            &table,
+            false,
+            mir2_world::mongen::MonGenConfig::default(),
+            &mut rig2.world.rng,
+        );
+        {
+            let mut ctx = ScriptWorldCtx {
+                host: &mut host2,
+                registry: &maps2.registry,
+                table: &table,
+                displays: &mut displays,
+            };
+            rig2.dlg_select("@du", &mut ctx);
+        }
+        assert_eq!(rig2.entity().map_id, 0, "金币不足 ⇒ 不换图");
+        assert_eq!((rig2.entity().x, rig2.entity().y), (10, 10));
+        assert_eq!(rig2.sessions["hero"].state.gold, 500, "金币不动");
+        assert!(
+            rig2.world.sessions.map_changes().is_empty(),
+            "假支零换图事件"
+        );
+        let frames2 = rig2.drain();
+        assert!(
+            !frames2
+                .iter()
+                .any(|(_, id)| *id == messages::SM_SPACEMOVE_HIDE),
+            "假支不得发 RM_SPACEMOVE_FIRE(800)"
+        );
+        assert!(
+            frames2.iter().any(|(_, id)| *id == messages::SM_MENU_OK),
+            "else 支 messagebox ⇒ SM_MENU_OK(767)"
+        );
+    }
+
+    /// `MAP <map>`（随机落点）：落点合法、在目标图、恰 2 抽（`MapRandomMove` 两次初始取数）。
+    #[test]
+    fn npc_script_map_random_landing_is_legal_and_two_draws() {
+        let maps = teleport_maps();
+        let records = vec![
+            tp_record("@main", Vec::new(), Vec::new(), Vec::new(), TP_MAIN_SAY),
+            tp_record("@ss", Vec::new(), vec![tp_act_map("0150")], Vec::new(), ""),
+        ];
+        let mut rig = TeleportRig::new(&maps, records, 0, 10);
+        assert!(rig.click());
+        let _ = rig.drain();
+        let rng_before = rig.world.rng.clone();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let mut host = game_svr::mongen::MonGenHost::start(
+            Vec::new(),
+            &table,
+            false,
+            mir2_world::mongen::MonGenConfig::default(),
+            &mut rig.world.rng,
+        );
+        let mut displays = downlink::DisplayTable::new();
+        {
+            let mut ctx = ScriptWorldCtx {
+                host: &mut host,
+                registry: &maps.registry,
+                table: &table,
+                displays: &mut displays,
+            };
+            rig.dlg_select("@ss", &mut ctx);
+        }
+        assert_eq!(rig.entity().map_id, 4, "map 0150 ⇒ map_id 4");
+        let (x, y) = (rig.entity().x, rig.entity().y);
+        // `MapRandomMove`：`Random(Width-20-1)+20` 两抽 ⇒ [20, 98]，全格可走 ⇒ 不再移位。
+        assert!(
+            (20..99).contains(&x) && (20..99).contains(&y),
+            "随机落点必须在 EdgeY=20 后的合法区间内，实得 ({x},{y})"
+        );
+        assert_eq!(
+            tp_draws_between(&rng_before, &rig.world.rng),
+            2,
+            "MAP 随机支恰两抽（merchant 组）"
+        );
+        let changes = rig.world.sessions.map_changes();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].map_id, 4);
+        assert_eq!((changes[0].x, changes[0].y), (x, y));
+        assert_eq!(changes[0].space_move_show, Some(false));
+        let frames = rig.drain();
+        assert_eq!(
+            frames,
+            vec![(901, mir2_protocol::messages::SM_SPACEMOVE_HIDE)]
+        );
+    }
+
+    /// 条件门（`CHECKLEVEL 11`）+ 单动作 `MAPMOVE GA0 69 71`：
+    /// Level ≥ 11 真支落地 GA0；Level < 11 假支零传送。
+    #[test]
+    fn npc_script_mapmove_level_gated_true_and_false_branches() {
+        let records = || {
+            vec![
+                tp_record("@main", Vec::new(), Vec::new(), Vec::new(), TP_MAIN_SAY),
+                tp_record(
+                    "@zy",
+                    vec![tp_cond_level(11)],
+                    vec![tp_act_mapmove("GA0", 69, 71)],
+                    Vec::new(),
+                    "",
+                ),
+            ]
+        };
+        for (level, want_map, want_xy) in [(50u8, 2usize, (69, 71)), (10u8, 0usize, (10, 10))] {
+            let maps = teleport_maps();
+            let mut rig = TeleportRig::new(&maps, records(), 0, level);
+            assert!(rig.click());
+            let _ = rig.drain();
+            let table = game_svr::mongen::MonsterTable::new(Vec::new());
+            let mut host = game_svr::mongen::MonGenHost::start(
+                Vec::new(),
+                &table,
+                false,
+                mir2_world::mongen::MonGenConfig::default(),
+                &mut rig.world.rng,
+            );
+            let mut displays = downlink::DisplayTable::new();
+            {
+                let mut ctx = ScriptWorldCtx {
+                    host: &mut host,
+                    registry: &maps.registry,
+                    table: &table,
+                    displays: &mut displays,
+                };
+                rig.dlg_select("@zy", &mut ctx);
+            }
+            assert_eq!(rig.entity().map_id, want_map, "level={level}");
+            assert_eq!((rig.entity().x, rig.entity().y), want_xy, "level={level}");
+            assert_eq!(
+                rig.world.sessions.map_changes().len(),
+                usize::from(level >= 11),
+                "level={level} 的换图事件数"
+            );
+        }
+    }
+
+    /// **登记（部署脚本事实，`docs/npc-dialog-label-audit-20261111.md` §4.1 的预期有误）**：
+    /// `@zhuangyuan` 的 `#ACT` 是 `set [168] 1` + `mapmove GA0 69 71`，而 `Set` 是**已注册执行动作**——
+    /// oracle `GotoLableQuestActionProcess`（`ScriptEngine.cs:884-896`）执行**第一个已注册动作**
+    /// 后立即 `return` ⇒ `mapmove` **在 oracle 下也不可达**（与 Rust 移植逐字同构）。
+    ///
+    /// 本用例钉住「接线后仍不传送」= 行为等价；若有人把 `SET` 也排队/继续执行，本用例会红，
+    /// 从而逼出「是否要偏离 oracle」的显式裁决（卡面：不硬造）。
+    #[test]
+    fn npc_script_zhuangyuan_set_short_circuits_mapmove_in_both_stacks() {
+        let maps = teleport_maps();
+        let records = vec![
+            tp_record("@main", Vec::new(), Vec::new(), Vec::new(), TP_MAIN_SAY),
+            tp_record(
+                "@zhuangyuan",
+                vec![tp_cond_level(11)],
+                vec![tp_act_set(168, 1), tp_act_mapmove("GA0", 69, 71)],
+                vec![
+                    tp_act_messagebox("等级达到11级才可以进入庄园"),
+                    tp_act_break(),
+                ],
+                "",
+            ),
+        ];
+        let mut rig = TeleportRig::new(&maps, records, 0, 50);
+        assert!(rig.click());
+        let _ = rig.drain();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let mut host = game_svr::mongen::MonGenHost::start(
+            Vec::new(),
+            &table,
+            false,
+            mir2_world::mongen::MonGenConfig::default(),
+            &mut rig.world.rng,
+        );
+        let mut displays = downlink::DisplayTable::new();
+        {
+            let mut ctx = ScriptWorldCtx {
+                host: &mut host,
+                registry: &maps.registry,
+                table: &table,
+                displays: &mut displays,
+            };
+            rig.dlg_select("@zhuangyuan", &mut ctx);
+        }
+        assert_eq!(rig.entity().map_id, 0, "Set 短路 ⇒ 不换图（oracle 同）");
+        assert_eq!((rig.entity().x, rig.entity().y), (10, 10));
+        assert!(rig.world.sessions.map_changes().is_empty());
+        assert!(
+            rig.drain()
+                .iter()
+                .all(|(_, id)| *id != mir2_protocol::messages::SM_SPACEMOVE_HIDE),
+            "未执行 MAPMOVE ⇒ 无 800"
+        );
+    }
+
+    /// 无 pending（未命中标签 / 纯说词页）⇒ 行为与改动前一致：零传送、零 800。
+    #[test]
+    fn npc_script_without_mapmove_stays_put() {
+        let maps = teleport_maps();
+        let records = vec![
+            tp_record("@main", Vec::new(), Vec::new(), Vec::new(), TP_MAIN_SAY),
+            tp_record(
+                "@huanjing",
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                "幻境说明页",
+            ),
+        ];
+        let mut rig = TeleportRig::new(&maps, records, 0, 50);
+        assert!(rig.click());
+        let _ = rig.drain();
+        let table = game_svr::mongen::MonsterTable::new(Vec::new());
+        let mut host = game_svr::mongen::MonGenHost::start(
+            Vec::new(),
+            &table,
+            false,
+            mir2_world::mongen::MonGenConfig::default(),
+            &mut rig.world.rng,
+        );
+        let mut displays = downlink::DisplayTable::new();
+        for label in ["@huanjing", "@no_such_label"] {
+            let mut ctx = ScriptWorldCtx {
+                host: &mut host,
+                registry: &maps.registry,
+                table: &table,
+                displays: &mut displays,
+            };
+            rig.dlg_select(label, &mut ctx);
+            assert_eq!(rig.entity().map_id, 0, "{label} 不得换图");
+            assert_eq!((rig.entity().x, rig.entity().y), (10, 10), "{label}");
+            assert!(rig.world.sessions.map_changes().is_empty(), "{label}");
+            let frames = rig.drain();
+            assert!(
+                frames
+                    .iter()
+                    .all(|(_, id)| *id != mir2_protocol::messages::SM_SPACEMOVE_HIDE),
+                "{label} 不得发 800"
+            );
+        }
     }
 }

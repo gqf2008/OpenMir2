@@ -823,6 +823,22 @@ pub struct NpcGm<'r> {
     pub pwd_busy: bool,
 }
 
+/// 脚本 `MAPMOVE`/`MAP` 产生的**待落地传送**（会话级 pending，卡
+/// `openmir2-npc-script-teleport-wiring`）。
+///
+/// oracle 的 `ActionOfMapMove`/`ActionOfMap`（`ExecutionProcessingSys.cs:2169-2180`）在动作里
+/// **当场**调 `playerActor.SpaceMove`/`MapRandomMove`；本宿主的脚本快照（[`NpcPlayer`]）拿不到
+/// `&mut World` ⇒ 先记录，脚本跑完由宿主按**动作序**应用（同 `SETMPAMODE` 的
+/// `MapModeWrite` 先例，但传送是**会话级**状态迁移，故队列挂在 `ShopSession`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingSpaceMove {
+    /// `MAPMOVE <map> <x> <y>` ⇒ `SpaceMove(map, x, y, 0)`（`BaseObject.cs:1103-1168` 同服支）。
+    /// 落点以 `(x, y)` 为起点跑 `SpaceMoveGetRandXY`（落点可走 ⇒ 0 抽）。
+    Fixed { map: String, x: i16, y: i16 },
+    /// `MAP <map>` ⇒ `MapRandomMove(map, 0)`（`BaseObject.cs:1214-1237`）：两次随机起点 + 移位环。
+    Random { map: String },
+}
+
 /// `IPlayerActor` 的宿主适配（第①片：字段由调用方填充；默认值与 C# flow 夹具一致）。
 ///
 /// 生产路径（第②片）在进世界时用 `SessionGround`/`World` 的快照填这些字段，运行后把
@@ -996,6 +1012,13 @@ pub struct NpcPlayer<'r, 'g> {
     /// `envir.Flag`；脚本执行期 `NpcPlayer` 拿不到 `&mut MapRegistry` ⇒ 先记录，宿主在命令
     /// 处理完之后、P25 消费点之前落库（等价性论证见 `map_mode` 模块头）。
     pub map_mode_writes: Vec<crate::map_mode::MapModeWrite>,
+    /// `MAPMOVE`/`MAP` 的待落地传送（[`PendingSpaceMove`]；卡
+    /// `openmir2-npc-script-teleport-wiring`）。
+    ///
+    /// 与 `map_mode_writes` 同一模式：脚本执行期只记录、宿主在脚本跑完后按**动作序**应用
+    /// （`ShopSession::pending_space_moves`）。未接线的漏斗（QFunction 等）保持宿主丢弃
+    ///（与 `SETMPAMODE` 的登记同口径，见 `run_std_mode_func_script` 文档）。
+    pub space_moves: Vec<PendingSpaceMove>,
     /// `PlayObject.Permission`（`PlayObject.cs:58`，`byte`；宿主缺省 0）。
     ///
     /// **只在无 [`Self::gm`] 桥时**是本快照的存储；有桥时读写都落到 `GmSession.permission`
@@ -1086,6 +1109,7 @@ impl NpcPlayer<'_, '_> {
             world_actions: Vec::new(),
             mon_gen_enabled: false,
             map_mode_writes: Vec::new(),
+            space_moves: Vec::new(),
             // `PlayObject.Permission` 的 ctor 缺省（`PlayObject.cs:58` 未初始化 ⇒ 0）；
             // 跳线未接 = 缺省 no-op（与 `ScriptPlayer` 缺省一致）。
             permission: 0,
@@ -2208,6 +2232,27 @@ impl ScriptPlayer for NpcPlayer<'_, '_> {
             Some(&text),
         );
         self.world_broadcasts.push(text);
+    }
+
+    /// `IPlayerActor.SpaceMove`（`ActionOfMapMove`，`ExecutionProcessingSys.cs:2175-2179`）。
+    ///
+    /// trait 缺省实现是空操作（flow 夹具口径）；生产适配层在这里把目标图/坐标排进
+    /// [`Self::space_moves`]，由宿主在脚本跑完后应用（见 [`PendingSpaceMove`]）。
+    fn space_move(&mut self, map: &str, x: i16, y: i16) {
+        self.space_moves.push(PendingSpaceMove::Fixed {
+            map: map.to_string(),
+            x,
+            y,
+        });
+    }
+
+    /// `IPlayerActor.MapRandomMove`（`ActionOfMap`，`ExecutionProcessingSys.cs:2169-2173`）。
+    ///
+    /// `range` 在 C# 调用点恒为 0（`MapRandomMove(questActionInfo.sParam1, 0)`）⇒ 本仓不入队。
+    fn map_random_move(&mut self, map: &str, _range: i32) {
+        self.space_moves.push(PendingSpaceMove::Random {
+            map: map.to_string(),
+        });
     }
 
     fn send_msg(
