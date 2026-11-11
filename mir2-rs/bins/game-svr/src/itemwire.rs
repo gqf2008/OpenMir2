@@ -180,6 +180,134 @@ pub fn encode_client_item_prepared(ci: &ClientItem<'_>) -> Vec<u8> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// 652 `SM_SENDDETAILGOODSLIST` 专用：冻结客户端 `TClientItem` 布局（D-16）
+// ---------------------------------------------------------------------------
+
+/// 冻结客户端 `ItemNameLen`（`Grobal2.pas:112`，本冻结树**无条件** 20；不是 oracle 的 14）。
+///
+/// `TClientStdItem.Name` 是 `string[20]` ⇒ 1B 长度 + **20B 定长**（字段占 21B）。
+pub const DETAIL_ITEM_NAME_LEN: usize = 20;
+
+/// 冻结客户端 `TClientStdItem` 的字节长度（`Grobal2.pas:1981-2010`，`packed record`）。
+pub const DETAIL_CLIENT_STD_LEN: usize = 116;
+
+/// 冻结客户端 `TClientItem` 的总长（`Grobal2.pas:3507-3512`）：116B std + i32 + u16 + u16。
+pub const DETAIL_CLIENT_ITEM_LEN: usize = 124;
+
+/// **仅 652 明细**用的编码器：冻结客户端 `TClientItem` 布局（D-16）。
+///
+/// 与 [`encode_client_item`] 的 oracle/C# 124B 内部布局**总长相同、排布不同**；645/200/201 等
+/// 其它 `ClientItem` 帧仍走 [`encode_client_item`]，**不得切换**（D-16 影响面仅 652）。
+///
+/// # 冻结源（逐字段，不靠猜偏移）
+///
+/// `E:/Users/gxh/Documents/GitHub/MirClient/Source/Common/Grobal2.pas`：
+///
+/// | 偏移 | 字段 | 宽度 | 本接缝写入 |
+/// | --- | --- | --- | --- |
+/// | 0 | `Name` | `string[20]` = 21B | `ci.name` |
+/// | 21 | `StdMode` | Byte | `t.std_mode` |
+/// | 22 | `Shape` | Byte | `t.shape` |
+/// | 23 | `Weight` | Byte | `t.weight` |
+/// | 24 | `AniCount` | **Word** | `t.ani_count`（零扩展） |
+/// | 26 | `Source` | shortint | `t.special_pwr` |
+/// | 27 | `Reserved` | Byte | `t.item_desc` |
+/// | 28 | `NeedIdentify` | Byte | `t.need_identify` |
+/// | 29 | `looks` | Word | `t.looks` |
+/// | 31 | `DuraMax` | Word | `t.dura_max`（模板） |
+/// | 33 | `AC` | **Integer** | `i32::from(t.ac)`（零扩展） |
+/// | 37 | `MAC` | Integer | `i32::from(t.mac)` |
+/// | 41 | `DC` | Integer | `i32::from(t.dc)` |
+/// | 45 | `MC` | Integer | `i32::from(t.mc)` |
+/// | 49 | `SC` | Integer | `i32::from(t.sc)` |
+/// | 53 | `Need` | Integer | `i32::from(t.need)` |
+/// | 57 | `NeedLevel` | Integer | `i32::from(t.need_level)` |
+/// | 61 | `Price` | Integer | `t.price` |
+/// | 65 | `UniqueItem` | Byte | `t.unique_item` |
+/// | 66 | `Overlap` | Byte | `t.overlap_item` |
+/// | 67 | `ItemType` | Byte | `t.item_type` |
+/// | 68 | `ItemSet` | Word | `t.item_set` |
+/// | 70 | `Binded` | Byte | 0（C# 模型无对应字段） |
+/// | 71 | `reserve[0..8]` | 9B | 0 |
+/// | 80 | `AddOn[0..9]` | 10B | 0 |
+/// | 90 | `Eva: TEvaluation` | 26B | 0（`Grobal2.pas:1950-1979`：4×Byte + 6×Byte + 8×2B + 4×Byte） |
+/// | 116 | `MakeIndex` | Integer | `ci.make_index` |
+/// | 120 | `Dura` | Word | `ci.dura` |
+/// | 122 | `DuraMax` | Word | `ci.dura_max`（652 传的是 `GetUserPrice` 结果） |
+///
+/// 交叉验证：MirClientZig 真机读者 `src/proto/gui_msgs.zig` 的 `parseClientItemBytes`
+/// 正是 `std_mode@21 / shape@22 / need_identify@28 / looks@29 / price@61 / overlap@66 /
+/// make_index@116 / dura@120 / dura_max@122`，与本表逐项一致。
+///
+/// # 字段映射依据
+///
+/// - `Source`/`Reserved` 分别取 C# 的 `SpecialPwr`/`ItemDesc`：C# 这两字段的装载来源就是
+///   DB 的 `SOURCE`/`RESERVED` 列（`src/GameSrv/DB/MySqlDB.cs:36-37`），与冻结端字段名同义。
+/// - 冻结结构里 `AC/MAC/DC/MC/SC/Need/NeedLevel` 是 **Integer**，C# 是 `ushort`/`byte`
+///   ⇒ 按零扩展写 4B；`AniCount` 是 Word，C# 是 `byte` ⇒ 零扩展写 2B。
+/// - C# `ClientItem` 独有的 `Stock/AtkSpd/Agility/Accurate/MgAvoid/Strong/Undead/HpAdd/MpAdd/
+///   ExpAdd/Eff*/Slowdown/Tox/ToxAvoid/Light/Reference` 在冻结 `TClientStdItem` 里**没有对应
+///   字段**（该区是 `Binded/reserve/AddOn/Eva`）⇒ 写 0。652 客户端只消费
+///   `Name/MakeIndex/Dura/DuraMax`（`ClMain.pas:13617-13625`：`pcg.Name / Stock=MakeIndex /
+///   price=DuraMax / Grade=Dura/1000`），不受影响。
+///
+/// `GetUpgradeStdItem` 差量口径与 [`encode_client_item`] 相同（先升级、再编码）。
+#[must_use]
+pub fn encode_client_detail_item(ci: &ClientItem<'_>) -> Vec<u8> {
+    let (upgraded, _count) = crate::bag::upgrade_std_item(ci.tpl, &ci.desc);
+    let prepared = ClientItem {
+        tpl: &upgraded,
+        name: ci.name.clone(),
+        make_index: ci.make_index,
+        dura: ci.dura,
+        dura_max: ci.dura_max,
+        desc: ci.desc,
+    };
+    encode_client_detail_item_prepared(&prepared)
+}
+
+/// [`encode_client_detail_item`] 的模板已就绪版本（不重复叠加差量）。
+#[must_use]
+pub fn encode_client_detail_item_prepared(ci: &ClientItem<'_>) -> Vec<u8> {
+    let t = ci.tpl;
+    let mut out = Vec::with_capacity(DETAIL_CLIENT_ITEM_LEN);
+    // `TClientStdItem`（`Grobal2.pas:1981-2010`，packed，无对齐填充）—— 116B。
+    write_ascii_string(&mut out, &ci.name, DETAIL_ITEM_NAME_LEN); // @0..20
+    out.push(t.std_mode); // @21
+    out.push(t.shape); // @22
+    out.push(t.weight); // @23
+    out.extend_from_slice(&u16::from(t.ani_count).to_le_bytes()); // AniCount: Word @24
+    out.push(t.special_pwr as u8); // Source: shortint @26
+    out.push(t.item_desc); // Reserved @27
+    out.push(t.need_identify); // @28
+    out.extend_from_slice(&t.looks.to_le_bytes()); // @29
+    out.extend_from_slice(&t.dura_max.to_le_bytes()); // @31
+    out.extend_from_slice(&i32::from(t.ac).to_le_bytes()); // AC: Integer @33
+    out.extend_from_slice(&i32::from(t.mac).to_le_bytes()); // @37
+    out.extend_from_slice(&i32::from(t.dc).to_le_bytes()); // @41
+    out.extend_from_slice(&i32::from(t.mc).to_le_bytes()); // @45
+    out.extend_from_slice(&i32::from(t.sc).to_le_bytes()); // @49
+    out.extend_from_slice(&i32::from(t.need).to_le_bytes()); // Need: Integer @53
+    out.extend_from_slice(&i32::from(t.need_level).to_le_bytes()); // @57
+    out.extend_from_slice(&t.price.to_le_bytes()); // @61
+    out.push(t.unique_item); // @65
+    out.push(t.overlap_item); // Overlap @66
+    out.push(t.item_type); // @67
+    out.extend_from_slice(&t.item_set.to_le_bytes()); // ItemSet: Word @68
+    out.push(0); // Binded @70
+    out.extend_from_slice(&[0u8; 9]); // reserve[0..8] @71..79
+    out.extend_from_slice(&[0u8; 10]); // AddOn[0..9] @80..89
+    out.extend_from_slice(&[0u8; 26]); // Eva: TEvaluation @90..115
+    debug_assert_eq!(out.len(), DETAIL_CLIENT_STD_LEN);
+    // `TClientItem` 的实例尾（`Grobal2.pas:3507-3512`）—— 8B。
+    out.extend_from_slice(&ci.make_index.to_le_bytes()); // @116
+    out.extend_from_slice(&ci.dura.to_le_bytes()); // @120
+    out.extend_from_slice(&ci.dura_max.to_le_bytes()); // @122
+    debug_assert_eq!(out.len(), DETAIL_CLIENT_ITEM_LEN);
+    out
+}
+
 /// `ClientMagic.WritePacket`（`src/OpenMir2/Packets/ClientPackets/ClientMagic.cs:29-40`）：
 /// `Key(byte) + Level + 0 + 0 + CurTrain(i32) + MagicInfo.GetBuffer()`。
 ///
@@ -526,6 +654,129 @@ mod tests {
         assert_eq!(b[104..106], 20u16.to_le_bytes(), "Dura");
         assert_eq!(b[106..108], 20u16.to_le_bytes(), "DuraMax");
         assert!(b[108..].iter().all(|&x| x == 0), "Desc+2 pad 全 0");
+    }
+
+    /// 652 专用编码器 = 冻结客户端 `TClientItem`（D-16）：`TClientStdItem` 116B
+    /// （`Grobal2.pas:1981-2010`，Name `string[20]`）+ `MakeIndex@116 / Dura@120 / DuraMax@122`。
+    ///
+    /// 牙：把 Name 长度改回 14 ⇒ Name 字段/后续偏移与总长断言红；把 MakeIndex 偏移改回 100
+    /// ⇒ `@116` 断言红。旧 oracle 编码器（200/201）同一入参仍 124B 且 `MakeIndex@100`，不受影响。
+    #[test]
+    fn encode_client_detail_item_uses_frozen_116b_std_layout() {
+        let t = StdItem {
+            name: "木剑".into(),
+            std_mode: 5,
+            shape: 1,
+            weight: 3,
+            ani_count: 7,
+            special_pwr: 2,
+            item_desc: 9,
+            looks: 100,
+            dura_max: 20,
+            ac: 0x0201,
+            mac: 0x0403,
+            dc: 0x0605,
+            mc: 0x0807,
+            sc: 0x0A09,
+            need: 11,
+            need_level: 12,
+            need_identify: 1,
+            price: 1200,
+            unique_item: 1,
+            overlap_item: 2,
+            item_type: 3,
+            item_set: 4,
+            ..StdItem::default()
+        };
+        let ci = ClientItem {
+            tpl: &t,
+            name: "木剑".into(),
+            make_index: 55_432,
+            dura: 20,
+            dura_max: 99,
+            desc: [0; 14],
+        };
+        let b = encode_client_detail_item(&ci);
+        assert_eq!(b.len(), 124, "TClientItem = 116B std + 8B 实例尾");
+        // Name: `string[20]` ⇒ 1B 长度 + 20B 定长（占 21B）。
+        assert_eq!(b[0], 4, "GBK 木剑 = 4 字节长度前缀");
+        assert_eq!(&b[1..5], &GBK.encode("木剑").0[..], "名字字节");
+        assert!(b[5..21].iter().all(|&x| x == 0), "Name 定长 20 补零");
+        // `TClientStdItem` 逐字段偏移。
+        assert_eq!(b[21], 5, "StdMode@21");
+        assert_eq!(b[22], 1, "Shape@22");
+        assert_eq!(b[23], 3, "Weight@23");
+        assert_eq!(&b[24..26], &7u16.to_le_bytes(), "AniCount Word@24");
+        assert_eq!(b[26], 2, "Source@26 = SpecialPwr");
+        assert_eq!(b[27], 9, "Reserved@27 = ItemDesc");
+        assert_eq!(b[28], 1, "NeedIdentify@28");
+        assert_eq!(&b[29..31], &100u16.to_le_bytes(), "looks Word@29");
+        assert_eq!(&b[31..33], &20u16.to_le_bytes(), "DuraMax Word@31");
+        assert_eq!(&b[33..37], &0x0201i32.to_le_bytes(), "AC Integer@33");
+        assert_eq!(&b[37..41], &0x0403i32.to_le_bytes(), "MAC Integer@37");
+        assert_eq!(&b[41..45], &0x0605i32.to_le_bytes(), "DC Integer@41");
+        assert_eq!(&b[45..49], &0x0807i32.to_le_bytes(), "MC Integer@45");
+        assert_eq!(&b[49..53], &0x0A09i32.to_le_bytes(), "SC Integer@49");
+        assert_eq!(&b[53..57], &11i32.to_le_bytes(), "Need Integer@53");
+        assert_eq!(&b[57..61], &12i32.to_le_bytes(), "NeedLevel Integer@57");
+        assert_eq!(&b[61..65], &1200i32.to_le_bytes(), "Price Integer@61");
+        assert_eq!(b[65], 1, "UniqueItem@65");
+        assert_eq!(b[66], 2, "Overlap@66");
+        assert_eq!(b[67], 3, "ItemType@67");
+        assert_eq!(&b[68..70], &4u16.to_le_bytes(), "ItemSet Word@68");
+        assert!(
+            b[70..116].iter().all(|&x| x == 0),
+            "Binded/reserve/AddOn/Eva @70..116 全零"
+        );
+        // 冻结 `TClientItem` 实例尾。
+        assert_eq!(&b[116..120], &55_432i32.to_le_bytes(), "MakeIndex@116");
+        assert_eq!(&b[120..122], &20u16.to_le_bytes(), "Dura@120");
+        assert_eq!(&b[122..124], &99u16.to_le_bytes(), "DuraMax@122");
+        // 旧 oracle 布局不回归（200/201 继续走它）：同入参 124B、`MakeIndex@100`。
+        let old = encode_client_item(&ci);
+        assert_eq!(old.len(), 124, "oracle ClientItem 仍 124B");
+        assert_eq!(
+            &old[100..104],
+            &55_432i32.to_le_bytes(),
+            "oracle MakeIndex@100（不得回归）"
+        );
+        assert_eq!(&old[104..106], &20u16.to_le_bytes(), "oracle Dura@104");
+        assert_eq!(&old[106..108], &99u16.to_le_bytes(), "oracle DuraMax@106");
+        assert_ne!(
+            &old[116..120],
+            &b[116..120],
+            "两种布局的尾部偏移不同 ⇒ 不是同一编码器"
+        );
+    }
+
+    /// 652 编码器同样先做 `GetUpgradeStdItem` 差量（与 [`encode_client_item`] 同口径），
+    /// 再按冻结偏移落字节。
+    #[test]
+    fn encode_client_detail_item_applies_upgrade_delta() {
+        let t = StdItem {
+            std_mode: 5,
+            special_pwr: 1,
+            ac: w(1, 2),
+            slowdown: 1,
+            ..StdItem::default()
+        };
+        let desc = [1, 2, 3, 4, 5, 6, 7, 8, 0, 0, 0, 1, 1, 0];
+        let ci = ClientItem {
+            tpl: &t,
+            name: "x".into(),
+            make_index: 1,
+            dura: 1,
+            dura_max: 2,
+            desc,
+        };
+        let b = encode_client_detail_item(&ci);
+        assert_eq!(b[26], 8, "Source@26 = 升级后的 SpecialPwr（Desc[7]=8）");
+        assert_eq!(
+            &b[33..37],
+            &i32::from(w(5, 8)).to_le_bytes(),
+            "AC@33 已叠加差量（基值 w(1,2)）"
+        );
+        assert_eq!(b[74], 0, "Binded/reserve 区恒 0（C# Slowdown 无冻结字段）");
     }
 
     /// 尾：每件 `Encode(ClientItem) + '/'`，件数与长度随 `ItemList.Count`。

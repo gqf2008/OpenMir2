@@ -20,7 +20,8 @@
 //!   `1f5132b2c` 处为 `:1304`）+ `SM_SENDDETAILGOODSLIST(652)` ⇒ [`detail_goods_list`]
 //!   （尾 = `EncodeString(每件 EncodeBuffer(ClientItem) + '/')`：**内层每件一次 `EncodeBuffer`、外层整串一次
 //!   `EncodeString`**，两层各一次——A1 逐层钉定见下文「652 编码层」节；冻结客户端按同口径**两遍**解，
-//!   **不得改成单层**）。
+//!   **不得改成单层**。内层物品体按冻结客户端 `TClientItem` 布局（D-16，`MakeIndex@116`），
+//!   由 [`crate::itemwire::encode_client_detail_item`] 编码）。
 //! - `CM_USERSTORAGEITEM(1031)` / `CM_USERTAKEBACKSTORAGEITEM(1032)`（`PlayObject.Operate.cs:1607-1713`）
 //!   ⇒ [`storage_item`] / [`take_back_storage_item`]；`@storage`/`@getback` 面板 ⇒ [`back_item_list`] 的
 //!   `SM_SENDUSERSTORAGEITEM(700)` / `SM_SAVEITEMLIST(704)` 分页（每页 50，`PlayObject.Base.cs:1590`）。
@@ -56,18 +57,21 @@
 //! 另 reviewer-5 的 **O-1**：`ScriptLable` 与 `@s_repair` 的比较是 `string.Compare(..., OrdinalIgnoreCase)`，
 //! 本模块用 [`eq_label`]（ASCII 大小写不敏感）同口径。
 
-//! # 买流程实例层真机定性（卡 `openmir2-gm-buy-stock-instances`，2026-10-30，分支 c）
+//! # 买流程实例层：651 → D-16 修复（卡 `openmir2-gm-buy-stock-instances` → `openmir2-item652-frozen-layout`）
 //!
 //! MirClientZig 真机（卫家店-0103，`shop-20261030-215402-895`）：645 名单 7 项、652 明细
 //! **有**实例字节（`param=10`），买却回 `651 recog=1`——客户端出站 1014 `param/tag=0`
-//! （MakeIndex=0）。定性 = **oracle 同语义，Rust 不改行为**：武器门 `MakeIndex == nInt`
-//! （`Merchant.cs:1249`）照抄；根因是 ClientItem 布局**读偏移**错位——服务器族（C#
-//! `ClientItem.cs:25-88` WritePacket，`ItemNameLen=14` ⇒ 124B、MakeIndex@100；本仓
-//! `itemwire::encode_client_item` 测试钉死同布局）vs 冻结客户端 `Grobal2.pas:1981-2010`
-//! `TClientStdItem`（`string[20]` ⇒ 116B，`ClMain.pas:13614` 整块 cast 读 @116 = 服务端
-//! 108..122 全零 Desc 区）⇒ 客户端 Stock=0。同一份 652 字节发给 C# 参照栈结果相同。
-//! 登记路由（whitelist 行 / MirClientZig 证据）走卡线程；构造级双向牙
-//! `buy_weapon_gates_on_instance_make_index_and_real_one_succeeds`（变异红）。
+//! （MakeIndex=0）。根因是 ClientItem 布局**读偏移**错位：服务器族（C#
+//! `ClientItem.cs:25-88` WritePacket，`ItemNameLen=14` ⇒ 124B、MakeIndex@100）vs 冻结客户端
+//! `TClientStdItem`（`Grobal2.pas:1981-2010`，`string[20]` ⇒ 116B，`ClMain.pas:13614` 整块
+//! cast 读 @116）⇒ 客户端把服务端 108..122 的全零 Desc 区当实例字段 ⇒ Stock=0。
+//!
+//! **D-16 裁决（本卡）**：客户端冻结优先（同 D-9/D-15）⇒ 652 明细**改发冻结客户端
+//! `TClientItem` 布局**（116B `TClientStdItem` + `MakeIndex@116 / Dura@120 / DuraMax@122`，
+//! 总长仍 124B），由 [`crate::itemwire::encode_client_detail_item`] 编码。**影响面仅 652**：
+//! 645 名单与 200/201 等其它 `ClientItem` 帧继续走 oracle 124B 内部布局
+//! （[`encode_client_item`]），不做全局翻。回退 = 把 [`detail_goods_list`] 的编码调用改回
+//! `encode_client_item`（无开关）。登记见 `tests/parity/whitelist.md` D-16。
 //!
 //! # 652 编码层 A1 钉定（卡 `openmir2-gm-detail-652-single-layer`，2026-10-30）
 //!
@@ -90,8 +94,9 @@
 //! 7. `PlayObject.Socket.cs:101-129`：编码后串按 GBK 取字节、原样拼进帧体尾。
 //!
 //! ⇒ **oracle 线上尾 = GBK(EncodeString(EncodeBuffer(item1)+"/"+…+EncodeBuffer(itemN)+"/")) = 双层。**
-//! Rust 的 [`detail_goods_list`] 内层 `edcode::encode(encode_client_item(…))` + `frame(…)` 的
-//! `tail_encoded=false` 由宿主 `lib.rs::shop_frame_body` 施加 `edcode::encode` = **同两层**。
+//! Rust 的 [`detail_goods_list`] 内层 `edcode::encode(encode_client_detail_item(…))` + `frame(…)` 的
+//! `tail_encoded=false` 由宿主 `lib.rs::shop_frame_body` 施加 `edcode::encode` = **同两层**；
+//! D-16 只换**内层物品体布局**（冻结 116B），双层结构不变。
 //!
 //! 冻结客户端**也是两遍**（`E:/Users/gxh/Documents/GitHub/MirClient/Source/MirClient/ClMain.pas:13594-13639`）：
 //! `:13606` `bodystr := DecodeString(bodystr)`（撤外层）→ `:13611` `GetValidStr3(…, ['/'])` 切件 →
@@ -102,19 +107,17 @@
 //! 的 `nInt`；② 「旧栈/新栈 645 同构」——645 的尾是**纯文本** `名/sub/价/存/`（`Merchant.cs:987`）再走同一个
 //! `SendDefMessage` ⇒ 线上单层且两侧同构，只证明外层 `EncodeString` 两侧一致，不涉及 652 的内层。
 //!
-//! 651/param=0 的真因（与上张卡分支 c 一致，**不是**编码层）：服务器族 `ClientItem` 是 **124B**
-//! （`ItemNameLen=14` ⇒ `MakeIndex@100`、`Desc@108..121`；本仓 `itemwire::encode_client_item` 同布局），
-//! 而冻结客户端 `TClientStdItem` 是 `string[ItemNameLen]`、`Grobal2.pas:112` **`ItemNameLen = 20`** ⇒
-//! 结构 116B；`TClientItem`（`Grobal2.pas:3507`）总长同为 124B 但 **`MakeIndex@116`** ⇒ 客户端解出的 124B
-//! 按自家结构读，`MakeIndex` 落在服务器 `Desc` 全零区 ⇒ 0 ⇒ `CM_USERBUYITEM` `param=0` ⇒ 武器
-//! `MakeIndex == nInt` 门不过 ⇒ 651。同一份 652 字节发给 C# 参照栈结果相同 ⇒ **该现象在 oracle 侧同样发生**，
-//! Rust 保持逐字节等价即正确。（要「让冻结客户端买得动」须偏离 oracle 线缆布局，属 D 类裁决，另卡另裁；
-//! 本卡 forbidden 已明确不动 `itemwire` 的 124B 布局。）
+//! 651/param=0 的历史定性（与上张卡分支 c 一致，**不是**编码层问题）：服务器族 `ClientItem` 是 **124B**
+//! （`ItemNameLen=14` ⇒ `MakeIndex@100`、`Desc@108..121`），而冻结客户端 `TClientStdItem` 是
+//! `string[ItemNameLen]`、`Grobal2.pas:112` **`ItemNameLen = 20`** ⇒ 结构 116B；`TClientItem`
+//! （`Grobal2.pas:3507`）总长同为 124B 但 **`MakeIndex@116`** ⇒ 客户端解出的 124B 按自家结构读，
+//! `MakeIndex` 落在服务器 `Desc` 全零区 ⇒ 0。D-16 已按客户端口径重排 652 的 124B；645 名单与
+//! 200/201 仍是 oracle 布局（C# 参照栈对 652 旧字节的行为不变，属历史记录）。
 //!
 //! A3 牙：`detail_goods_list_652_wire_is_double_edcode_and_two_pass_recovers_instance`——从**真发射面**
-//! `crate::shop_frame_body` 取线上尾：撤外层一遍 == `frame.tail`；按 '/' 段撤内层一遍 == 124B 且
-//! `MakeIndex@100 == 55432`（非零）；两个单层方向（去内层 / 去外层）任一 ⇒ 红。**卡片原拟的
-//! 「单层一遍后 @100 可读」在本口径下不可满足**——它要求的正是被证否的线缆形态。
+//! `crate::shop_frame_body` 取线上尾：撤外层一遍 == `frame.tail`；按 '/' 段撤内层一遍 == 124B 且按
+//! **冻结布局**解出非零 `MakeIndex@116 == 55432`、`Dura@120 == 20`；两个单层方向（去内层 / 去外层）
+//! 任一 ⇒ 红。
 
 use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
@@ -133,7 +136,7 @@ use crate::bag::{
 };
 use crate::downlink;
 use crate::ground::GroundState;
-use crate::itemwire::{encode_client_item, ClientItem};
+use crate::itemwire::{encode_client_detail_item, encode_client_item, ClientItem};
 use crate::smframe;
 
 /// `PlayObject.LableIsCanJmp`（`PlayObject.Base.cs:2814-2829`）——**单一实现**：
@@ -880,7 +883,11 @@ pub fn detail_goods_list(
                 dura_max: n_price as u16,
                 desc: item.desc,
             };
-            s_send_msg.extend_from_slice(&mir2_protocol::edcode::encode(&encode_client_item(&ci)));
+            // D-16：652 明细按**冻结客户端** `TClientItem` 布局（116B std + MakeIndex@116/
+            // Dura@120/DuraMax@122）；200/201 等其它帧仍走 oracle 布局的 `encode_client_item`。
+            s_send_msg.extend_from_slice(&mir2_protocol::edcode::encode(
+                &encode_client_detail_item(&ci),
+            ));
             s_send_msg.push(b'/');
             n_item_count = n_item_count.saturating_add(1);
             if n_item_count >= 10 {
@@ -2375,10 +2382,9 @@ mod tests {
     /// （C# `ClientItem.cs:25-88` WritePacket，`ItemNameLen=14` ⇒ 124B、MakeIndex@100；本仓
     /// `itemwire::encode_client_item` 有测试同步钉死）与冻结客户端 `Grobal2.pas:1981-2010`
     /// `TClientStdItem`（`string[20]` ⇒ 116B，`ClMain.pas:13614` 整块 cast 读 @116）——客户端
-    /// 落在服务端 108..122 的全零 Desc 区 ⇒ Stock=0。同一份 652 字节发给 C# 参照栈同样如此
-    /// ⇒ **不是 Rust 装载/查询缺陷**（补货实例生成有世界侧牙
-    /// `merchant_refill_creates_goods_items_from_script_entries`；652 实例字节有
-    /// `detail_goods_list_encodes_last_ten_items_and_page_offset` 的 `@100` 断言）。
+    /// 落在服务端 108..122 的全零 Desc 区 ⇒ Stock=0。**D-16（卡 `openmir2-item652-frozen-layout`）
+    /// 已把 652 改发冻结布局**（MakeIndex@116）；本用例仍钉买入门本身的语义（n_int=0 必须失败、
+    /// n_int=实例号成功），不依赖帧内偏移。
     ///
     /// 牙（双向，变异红）：
     /// - 删 `|| candidate.make_index == n_int`（`:1249` 的门）⇒ 负例（n_int=0）变成买成功
@@ -2419,8 +2425,8 @@ mod tests {
         assert_eq!(state.gold, 10_000, "金币未扣");
         assert!(state.item_list.is_empty(), "背包未入");
 
-        // 正例：n_int = 652 明细字节 `@100..104` 里的真 MakeIndex ⇒ 成功，且 200 尾
-        // **带实例字节**（不是 name-only）。
+        // 正例：n_int = 652 明细按冻结布局解出的真 MakeIndex（@116）⇒ 成功，且 200 尾
+        // **带实例字节**（不是 name-only；200 仍走 oracle 布局）。
         let r1 = buy_item(&m, &mut state, &mut goods, "木剑", 1, &c);
         assert!(r1.ok);
         let idents: Vec<u16> = r1.frames.iter().map(|f| f.ident).collect();
@@ -2442,7 +2448,7 @@ mod tests {
         assert_eq!(
             &ci[100..104],
             &1i32.to_le_bytes(),
-            "MakeIndex@100 = 库存实例的 1（服务器族布局 = C# oracle；客户端 @116 读零是布局错位）"
+            "200(SM_ADDITEM) 尾 = oracle 布局 MakeIndex@100（卡面明确 200/201 不随 652 翻）"
         );
         assert_eq!(&ci[104..106], &20u16.to_le_bytes(), "Dura@104 = 20");
         assert_eq!(&ci[106..108], &20u16.to_le_bytes(), "DuraMax@106 = 20");
@@ -2659,12 +2665,12 @@ mod tests {
         assert_eq!(chunks.len(), 11, "10 件 + 尾部空段");
         for (k, ch) in chunks[..10].iter().enumerate() {
             let buf = mir2_protocol::edcode::decode(ch);
-            assert_eq!(buf.len(), 124, "ClientItem 定长 124B");
+            assert_eq!(buf.len(), 124, "TClientItem 定长 124B");
             let want = (911 - k as i32).to_le_bytes();
             assert_eq!(
-                &buf[100..104],
+                &buf[116..120],
                 &want,
-                "第 {k} 件应取组尾往前（make_index 911..902）"
+                "第 {k} 件应取组尾往前（make_index 911..902），冻结布局 MakeIndex@116"
             );
         }
         // `nInt` 超界 ⇒ 夹到 `max(0, Count-10) = 2`（只改回帧 Tag，不改取的件）。
@@ -2675,14 +2681,17 @@ mod tests {
         assert_eq!((f3.param, f3.tail.len()), (0, 0));
     }
 
-    /// 卡 `openmir2-gm-detail-652-single-layer` A3（构造级）：从**真发射面** `crate::shop_frame_body`
-    /// （与宿主 `emit_shop_frames` 同一函数）取 652 线上尾，钉死「双层 EDCode + 客户端两遍解」：
-    /// 撤外层一遍 == `frame.tail`；按 '/' 切件、逐件撤内层一遍 == 124B ClientItem 且 `MakeIndex@100 == 55432`
-    /// （MirClientZig 字节表实证值）。oracle 链与冻结客户端口径见模块头「652 编码层」节。
+    /// 卡 `openmir2-gm-detail-652-single-layer` A3 + 卡 `openmir2-item652-frozen-layout`（D-16，构造级）：
+    /// 从**真发射面** `crate::shop_frame_body`（与宿主 `emit_shop_frames` 同一函数）取 652 线上尾，
+    /// 钉死「双层 EDCode + 客户端两遍解 + 冻结 `TClientItem` 布局」：撤外层一遍 == `frame.tail`；
+    /// 按 '/' 切件、逐件撤内层一遍 == 124B，且按冻结布局 `MakeIndex@116 / Dura@120 / DuraMax@122`
+    /// 解出非零实例字段（`MakeIndex = 55432` 为 MirClientZig 字节表实证值）。
     ///
-    /// 牙（两个单层方向，任一必红）：
+    /// 牙（任一必红）：
     /// - 去掉**内层** `EncodeBuffer`（尾变裸 124B + '/'）⇒ 按 '/' 段的第二遍解不出 124B ⇒ `len == 124` 红；
-    /// - 去掉**外层** `EncodeString`（改 `tail_encoded=true` 或 emit 不编码）⇒ `decode(wire) != tail` 红。
+    /// - 去掉**外层** `EncodeString`（改 `tail_encoded=true` 或 emit 不编码）⇒ `decode(wire) != tail` 红；
+    /// - 把明细编码器换回 oracle `encode_client_item`（或把新编码器的 MakeIndex 偏移改回 100 / Name
+    ///   长度改回 14）⇒ `@116` / `@120` 断言红。
     ///
     /// 反证：**单遍** `decode(wire)` 拿到的仍是带 '/' 的编码段串（≠ 124B 实例）⇒「单层口径」必出坏帧。
     #[test]
@@ -2690,7 +2699,7 @@ mod tests {
         let cat = catalog();
         let c = ctx(&cat);
         let m = merchant(mflags(true, false));
-        // 卫家店-0103 木剑组（StdMode=5 ⇒ 武器门），MakeIndex = 55432（字节表 @100 实证）。
+        // 卫家店-0103 木剑组（StdMode=5 ⇒ 武器门），MakeIndex = 55432（字节表实证值）。
         let mut goods = vec![vec![MerchantItem {
             make_index: 55_432,
             index: 2,
@@ -2718,16 +2727,30 @@ mod tests {
             pass1.contains(&b'/'),
             "单遍结果仍带 '/' ⇒ 需再切再解才出实例"
         );
-        // 第二遍（按 '/' 切件、逐件撤内层 EncodeBuffer）= 124B ClientItem。
+        // 第二遍（按 '/' 切件、逐件撤内层 EncodeBuffer）= 124B 冻结 `TClientItem`。
         let segs: Vec<&[u8]> = pass1.split(|b| *b == b'/').collect();
         assert_eq!(segs.len(), 2, "1 件 + 尾部空段");
         assert!(!segs[0].is_empty());
         let item = mir2_protocol::edcode::decode(segs[0]);
-        assert_eq!(item.len(), 124, "C# ClientItem 定长 124B（itemwire 布局）");
+        assert_eq!(item.len(), 124, "TClientItem 定长 124B（D-16 冻结布局）");
         assert_eq!(
-            u32::from_le_bytes([item[100], item[101], item[102], item[103]]),
+            item[0], 4,
+            "冻结 Name 字段长度前缀（GBK 木剑），字段为 string[20]"
+        );
+        assert_eq!(
+            u32::from_le_bytes([item[116], item[117], item[118], item[119]]),
             55_432,
-            "MakeIndex@100 可读且非零"
+            "MakeIndex@116 可读且非零（冻结布局；oracle 布局此处 @100）"
+        );
+        assert_eq!(
+            u16::from_le_bytes([item[120], item[121]]),
+            20,
+            "Dura@120 可读且非零（客户端 Grade = Dura/1000）"
+        );
+        assert_ne!(
+            u16::from_le_bytes([item[122], item[123]]),
+            0,
+            "DuraMax@122 可读且非零（客户端菜单价格）"
         );
     }
 
@@ -3286,7 +3309,9 @@ mod tests {
     }
 
     /// 详情列表（`Merchant.cs:1304-1345`）：oracle **只**做 `GetUpgradeStdItem`，**不**取自定义名
-    /// （模板名）。牙：把 `encode_client_item` 的升级去掉 ⇒ DC/MC/SC/Tox 断言红；把名字改自定义名 ⇒ 名字断言红。
+    /// （模板名）。D-16 后按冻结 `TClientStdItem` 偏移取数值（`AC@33 / DC@41 / MC@45 / SC@49`，
+    /// 均为 Integer）。牙：把 `encode_client_detail_item` 的升级去掉 ⇒ DC/MC/SC 断言红；把名字改
+    /// 自定义名 ⇒ 名字断言红。
     #[test]
     fn detail_goods_list_upgrades_fields_but_keeps_template_name() {
         let cat = upgrade_catalog();
@@ -3306,21 +3331,23 @@ mod tests {
         assert_eq!(raw[0] as usize, name.len(), "模板名长度（不是自定义名）");
         assert_eq!(&raw[1..1 + name.len()], &name[..], "详情列表用模板名");
         assert_eq!(
-            u16::from_le_bytes([raw[30], raw[31]]),
-            w(5, 7),
-            "DC += Desc[0]"
+            i32::from_le_bytes(raw[41..45].try_into().unwrap()),
+            i32::from(w(5, 7)),
+            "DC Integer@41 += Desc[0]"
         );
         assert_eq!(
-            u16::from_le_bytes([raw[32], raw[33]]),
-            w(7, 10),
-            "MC += Desc[1]"
+            i32::from_le_bytes(raw[45..49].try_into().unwrap()),
+            i32::from(w(7, 10)),
+            "MC Integer@45 += Desc[1]"
         );
         assert_eq!(
-            u16::from_le_bytes([raw[34], raw[35]]),
-            w(9, 13),
-            "SC += Desc[2]"
+            i32::from_le_bytes(raw[49..53].try_into().unwrap()),
+            i32::from(w(9, 13)),
+            "SC Integer@49 += Desc[2]"
         );
-        assert_eq!(raw[75], 1, "Tox += Desc[13]");
+        // 冻结 `TClientStdItem` 没有 Tox 字段（C# 的 Tox@75 在冻结结构里是 `Binded/reserve` 区）
+        // ⇒ 升级出的 Tox 不落 652，这里钉住「不越界写进冻结字段」。
+        assert_eq!(raw[74], 0, "冻结 Binded/reserve 区恒 0（无 Tox 槽位）");
     }
 
     /// 仓库列表（`PlayObject.Base.cs:1590-1620`）：`GetUpgradeStdItem` + `GetItemName`（**取**自定义名）。
