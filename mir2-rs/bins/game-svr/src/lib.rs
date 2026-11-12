@@ -58311,9 +58311,10 @@ SendRefMsgRange=15
     ///
     /// ① `CM_MERCHANTDLGSELECT("@makedrug")` + 制药商人 ⇒ 网关收一条 `SM_SENDUSERMAKEDRUGITEMLIST(712)`，
     ///    `Recog=ActorId`、尾 = `名/0/MakeDurgPrice/1/` 拼接。
-    /// ② `CM_USERMAKEDRUGITEM("金创药")` ⇒ 三条帧
-    ///    `SM_ADDITEM(200)` → `SM_DELITEMS(709)` → `SM_MAKEDRUG_SUCCESS(713, Recog=900)`；
-    ///    金币 1000→900、材料消耗、成品入包。
+    /// ② `CM_USERMAKEDRUGITEM("金创药")` ⇒ 四条帧
+    ///    `SM_ADDITEM(200)` → `SM_WEIGHTCHANGED(622, 队列 131)` → `SM_DELITEMS(709)` →
+    ///    `SM_MAKEDRUG_SUCCESS(713, Recog=900)`；金币 1000→900、材料消耗、成品入包
+    ///    （622 由卡 `openmir2-weightchanged-residual-sites` 补齐：单点 sink 成功入包后发恰一条）。
     /// ③ 非制药商人 ⇒ 零帧。
     ///
     /// 变异必红：删掉 `CM_USERMAKEDRUGITEM` 臂（或 `handle_shop_cmd` 里的 `is_make_drug` 门）⇒ ①②/③ 必红。
@@ -58541,18 +58542,31 @@ SendRefMsgRange=15
             idents,
             vec![
                 mir2_protocol::messages::SM_ADDITEM,
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
                 mir2_protocol::messages::SM_DELITEMS,
                 mir2_protocol::messages::SM_MAKEDRUG_SUCCESS,
             ],
-            "② 发送序 SM_ADDITEM → SM_DELITEMS → SM_MAKEDRUG_SUCCESS"
+            "② 发送序 SM_ADDITEM → SM_WEIGHTCHANGED(131) → SM_DELITEMS(164) → SM_MAKEDRUG_SUCCESS(166)"
         );
         assert_eq!(
-            hdr(&frames[2]).3,
+            hdr(&frames[3]).3,
             900,
             "SM_MAKEDRUG_SUCCESS 的 Recog = 扣后金币 900"
         );
+        // 622：`WeightChanged()`（`BaseObject.cs:1771`）在成功入包后恰一条；
+        // Recog = 重算后背包重（只剩成品金创药 weight 1）。
         assert_eq!(
             hdr(&frames[1]).0,
+            mir2_protocol::messages::SM_WEIGHTCHANGED,
+            "622 夹在 200 与 709 之间（131 < 164）"
+        );
+        assert_eq!(
+            hdr(&frames[1]).3,
+            1,
+            "622.Recog = RecalcBagWeight()（成品 weight 1）"
+        );
+        assert_eq!(
+            hdr(&frames[2]).0,
             mir2_protocol::messages::SM_DELITEMS,
             "SM_DELITEMS 居中"
         );
