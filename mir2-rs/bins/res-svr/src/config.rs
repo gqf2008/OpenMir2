@@ -29,6 +29,21 @@ pub const DEFAULT_RATE_LIMIT_RPS: f64 = 20.0;
 pub const DEFAULT_RATE_LIMIT_BURST: f64 = 40.0;
 /// 默认请求头读取超时（毫秒）。
 pub const DEFAULT_HEADER_TIMEOUT_MS: u64 = 15_000;
+/// 默认清单哈希缓存 TTL（毫秒）。
+///
+/// 配置键 `[res-svr] index_cache_ttl_ms`。缓存条目**自上次计算起**超过该时长即重算，
+/// 即使 `(size, mtime)` 指纹未变——这是兜住「同尺寸 + 同 mtime 原地重写」的兜底
+/// （Windows 时间戳粒度不足时，指纹看不出内容变化；reviewer-26 F1）。
+/// 重复清单请求在 TTL 内直接命中缓存，不会每次全量哈希 3G+ 资产；
+/// 取 `0` 表示**每次清单请求都重算**（正确性优先，代价是全量哈希）。
+pub const DEFAULT_INDEX_CACHE_TTL_MS: u64 = 5_000;
+/// 默认连接空闲/读/写超时（毫秒）。
+///
+/// 配置键 `[res-svr] idle_timeout_ms`。已建连接在**某一方向**（读/写/刷出）连续无进展
+/// 超过该时长即报 `TimedOut` 关闭，并发名额随连接任务结束释放（reviewer-26 F5：
+/// 慢读/不读响应的客户端不得无限期占住 `max_connections` 个名额）。
+/// 有进展就重置计时器，因此正常 GET/HEAD/Range 不受影响（大文件慢速但持续传输不会误杀）。
+pub const DEFAULT_IDLE_TIMEOUT_MS: u64 = 30_000;
 /// 默认扩展白名单（卡 A3：`.wil/.wick` 等一并列入）。
 pub const DEFAULT_EXTENSIONS: &[&str] = &[
     ".wzl", ".wzx", ".wav", ".mp3", ".map", ".mex", ".wil", ".wick",
@@ -76,6 +91,10 @@ pub struct ResConfig {
     pub rate_limit_burst: f64,
     /// 请求头读取超时。
     pub header_timeout: Duration,
+    /// 清单哈希缓存 TTL（超过即重算；`0` ⇒ 每次清单请求都重算）。
+    pub index_cache_ttl: Duration,
+    /// 连接空闲（读/写/刷出连续无进展）超时。
+    pub idle_timeout: Duration,
 }
 
 impl fmt::Debug for ResConfig {
@@ -94,6 +113,8 @@ impl fmt::Debug for ResConfig {
             .field("rate_limit_rps", &self.rate_limit_rps)
             .field("rate_limit_burst", &self.rate_limit_burst)
             .field("header_timeout", &self.header_timeout)
+            .field("index_cache_ttl", &self.index_cache_ttl)
+            .field("idle_timeout", &self.idle_timeout)
             .finish()
     }
 }
@@ -167,19 +188,10 @@ impl Sources {
         };
         let token_env = env_opt("RES_SVR_TOKEN")?;
         let bind_env = env_opt("RES_SVR_BIND")?;
-        let mut map_env = Vec::new();
-        for (name, value) in std::env::vars() {
-            if name.len() <= MAP_ENV_PREFIX.len() {
-                continue;
-            }
-            let prefix = name.get(..MAP_ENV_PREFIX.len()).unwrap_or("");
-            if !prefix.eq_ignore_ascii_case(MAP_ENV_PREFIX) {
-                continue;
-            }
-            if let Some(suffix) = name.get(MAP_ENV_PREFIX.len()..) {
-                map_env.push((suffix.to_string(), value));
-            }
-        }
+        // `std::env::vars()` 遇到非 Unicode 名/值会 **panic**（reviewer-26 F6）；
+        // 这里走 `vars_os()`，非 Unicode 条目逐条记 stderr 后跳过（fail-closed 的反面：
+        // 不因环境里存在无关的非 Unicode 变量而拒绝起服务，也不让它们静默生效）。
+        let map_env = collect_map_env(std::env::vars_os());
         Ok(Self {
             text,
             token_env,
@@ -188,6 +200,37 @@ impl Sources {
             cli_bind: cli.bind.clone(),
         })
     }
+}
+
+/// 从（可能含非 Unicode 的）环境变量迭代器中收集 `RES_SVR_MAP_<名称>` 覆盖项。
+///
+/// 非 Unicode 的变量名/值**跳过并留痕**，绝不 panic；`RES_SVR_TOKEN`/`RES_SVR_BIND`/
+/// `RES_SVR_CONF` 三个具名变量仍由 [`env_opt`] 严格 fail-closed（非 Unicode ⇒ 配置失败）。
+fn collect_map_env<I>(vars: I) -> Vec<(String, String)>
+where
+    I: IntoIterator<Item = (std::ffi::OsString, std::ffi::OsString)>,
+{
+    let mut map_env = Vec::new();
+    for (name, value) in vars {
+        let Ok(name) = name.into_string() else {
+            eprintln!("res-svr: 跳过非 Unicode 的环境变量名（无法解析为 RES_SVR_MAP_*）");
+            continue;
+        };
+        if name.len() <= MAP_ENV_PREFIX.len() {
+            continue;
+        }
+        let prefix = name.get(..MAP_ENV_PREFIX.len()).unwrap_or("");
+        if !prefix.eq_ignore_ascii_case(MAP_ENV_PREFIX) {
+            continue;
+        }
+        let suffix = name.get(MAP_ENV_PREFIX.len()..).unwrap_or("");
+        let Ok(value) = value.into_string() else {
+            eprintln!("res-svr: 跳过非 Unicode 环境变量值：{name}（该映射不生效）");
+            continue;
+        };
+        map_env.push((suffix.to_string(), value));
+    }
+    map_env
 }
 
 fn env_opt(name: &str) -> Result<Option<String>, String> {
@@ -257,6 +300,16 @@ pub fn build(sources: &Sources) -> Result<ResConfig, String> {
     if header_timeout_ms == 0 {
         return Err("配置项 header_timeout_ms 必须大于 0".to_string());
     }
+    // TTL 允许为 0（每次清单都重算）；连接空闲超时为 0 只会把每个连接立刻打死，必须拒绝。
+    let index_cache_ttl_ms = parse_u64(
+        &res_section,
+        "index_cache_ttl_ms",
+        DEFAULT_INDEX_CACHE_TTL_MS,
+    )?;
+    let idle_timeout_ms = parse_u64(&res_section, "idle_timeout_ms", DEFAULT_IDLE_TIMEOUT_MS)?;
+    if idle_timeout_ms == 0 {
+        return Err("配置项 idle_timeout_ms 必须大于 0".to_string());
+    }
 
     Ok(ResConfig {
         bind,
@@ -268,6 +321,8 @@ pub fn build(sources: &Sources) -> Result<ResConfig, String> {
         rate_limit_rps,
         rate_limit_burst,
         header_timeout: Duration::from_millis(header_timeout_ms),
+        index_cache_ttl: Duration::from_millis(index_cache_ttl_ms),
+        idle_timeout: Duration::from_millis(idle_timeout_ms),
     })
 }
 
@@ -603,6 +658,8 @@ mod tests {
         assert_eq!(cfg.max_connections, DEFAULT_MAX_CONNECTIONS);
         assert_eq!(cfg.allowed_exts, DEFAULT_EXTENSIONS);
         assert_eq!(cfg.roots.len(), 3);
+        assert_eq!(cfg.index_cache_ttl, Duration::from_millis(5_000));
+        assert_eq!(cfg.idle_timeout, Duration::from_millis(30_000));
     }
 
     #[test]
@@ -650,7 +707,8 @@ mod tests {
         let dir = crate::testutil::TempDir::new("cfg-limits");
         let sources = fixture_sources(
             &dir,
-            "max_file_size=1024\nmax_connections=2\nrate_limit_rps=3.5\nrate_limit_burst=7\nheader_timeout_ms=500",
+            "max_file_size=1024\nmax_connections=2\nrate_limit_rps=3.5\nrate_limit_burst=7\nheader_timeout_ms=500\n\
+             index_cache_ttl_ms=1234\nidle_timeout_ms=5678",
         );
         let cfg = build(&sources).expect("配置应通过");
         assert_eq!(cfg.max_file_size, 1024);
@@ -658,11 +716,66 @@ mod tests {
         assert!((cfg.rate_limit_rps - 3.5).abs() < f64::EPSILON);
         assert!((cfg.rate_limit_burst - 7.0).abs() < f64::EPSILON);
         assert_eq!(cfg.header_timeout, Duration::from_millis(500));
+        assert_eq!(cfg.index_cache_ttl, Duration::from_millis(1234));
+        assert_eq!(cfg.idle_timeout, Duration::from_millis(5678));
+
+        // TTL=0 合法（每次清单都重算）；连接空闲超时=0 必须拒绝。
+        let sources = fixture_sources(&dir, "index_cache_ttl_ms=0");
+        assert_eq!(
+            build(&sources).expect("TTL=0 应接受").index_cache_ttl,
+            Duration::ZERO
+        );
+        let sources = fixture_sources(&dir, "idle_timeout_ms=0");
+        assert!(
+            build(&sources)
+                .expect_err("0 空闲超时必须拒绝")
+                .contains("idle_timeout_ms"),
+            "错误信息必须点名配置项"
+        );
 
         let sources = fixture_sources(&dir, "rate_limit_rps=0");
         assert!(build(&sources).is_err(), "0 速率必须拒绝");
         let sources = fixture_sources(&dir, "max_connections=0");
         assert!(build(&sources).is_err(), "0 并发必须拒绝");
+    }
+
+    /// F6：环境里存在非 Unicode 变量名/值时不得 panic；合法项仍要收集。
+    #[test]
+    fn map_env_skips_non_unicode_without_panicking() {
+        use std::ffi::OsString;
+
+        #[cfg(windows)]
+        fn non_unicode(value: u16) -> OsString {
+            use std::os::windows::ffi::OsStringExt;
+            OsString::from_wide(&[value])
+        }
+        #[cfg(unix)]
+        fn non_unicode(value: u16) -> OsString {
+            use std::os::unix::ffi::OsStringExt;
+            OsString::from_vec(vec![u8::try_from(value % 0x100).unwrap_or(0xff), 0xff])
+        }
+        #[cfg(not(any(windows, unix)))]
+        fn non_unicode(_value: u16) -> OsString {
+            OsString::from("?")
+        }
+
+        let vars = vec![
+            (non_unicode(0xD800), OsString::from("ignored")),
+            (OsString::from("RES_SVR_MAP_Data"), non_unicode(0xDC00)),
+            (OsString::from("UNRELATED"), OsString::from("x")),
+            (
+                OsString::from("RES_SVR_MAP_Map"),
+                OsString::from("C:/mir-map"),
+            ),
+        ];
+        assert_eq!(
+            collect_map_env(vars),
+            vec![("Map".to_string(), "C:/mir-map".to_string())],
+            "非 Unicode 名/值必须跳过，合法映射仍收集"
+        );
+
+        // 退化形态：空输入 ⇒ 空结果（不 panic）。
+        assert!(collect_map_env(std::iter::empty()).is_empty());
     }
 
     #[test]

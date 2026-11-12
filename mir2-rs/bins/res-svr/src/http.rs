@@ -11,6 +11,10 @@
 //! 审计日志红线：**只写 stderr**、一行一请求，字段是 method/path/status/bytes/dur_ms；
 //! 绝不写任何请求头（含 `Authorization` 与 UA），path 里若意外出现 token 子串会被
 //! [`redact_path`] 替换成 `<redacted>`。
+//!
+//! 连接级护栏：请求头读取有 `header_read_timeout`；**已建连接**另有 [`IdleTimeoutIo`]
+//! 读写空闲超时——某方向连续 `idle_timeout` 无进展即关闭连接、释放并发名额
+//! （慢读/不读响应的客户端不得无限期占坑；有进展会重置计时器，正常下载不受影响）。
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -18,6 +22,7 @@ use std::io;
 use std::path::Path;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
 use futures_util::stream;
@@ -31,9 +36,10 @@ use hyper::header::{
 use hyper::service::Service;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
-use tokio::io::{AsyncReadExt, AsyncSeekExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
+use tokio::time::Sleep;
 
 use crate::auth;
 use crate::config::ResConfig;
@@ -62,13 +68,14 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// 由配置构造状态。
+    /// 由配置构造状态（清单缓存 TTL 与连接空闲超时都来自配置）。
     #[must_use]
     pub fn new(cfg: ResConfig) -> Self {
         let limiter = RateLimiter::new(cfg.rate_limit_burst, cfg.rate_limit_rps);
+        let cache = HashCache::new(cfg.index_cache_ttl);
         Self {
             cfg: Arc::new(cfg),
-            cache: HashCache::default(),
+            cache,
             limiter,
         }
     }
@@ -402,6 +409,112 @@ fn redact_path(raw_path: &str, token: &str) -> String {
     path
 }
 
+/// 带读写空闲超时的连接 IO 包装。
+///
+/// 语义：**某方向连续 `idle` 无进展** ⇒ 该方向返回 [`io::ErrorKind::TimedOut`]，
+/// hyper 结束连接、随连接任务释放并发许可。任一方向的读/写/刷出**有进展就重置**该方向的
+/// 计时器 ⇒ 慢但持续在传输的大文件不会被误杀；只有彻底停住（慢读 DoS / 半开连接）才会超时。
+struct IdleTimeoutIo<T> {
+    inner: T,
+    idle: Duration,
+    read_deadline: Option<Pin<Box<Sleep>>>,
+    write_deadline: Option<Pin<Box<Sleep>>>,
+}
+
+impl<T> IdleTimeoutIo<T> {
+    fn new(inner: T, idle: Duration) -> Self {
+        Self {
+            inner,
+            idle,
+            read_deadline: None,
+            write_deadline: None,
+        }
+    }
+
+    /// 已武装则检查是否到期；未武装则此刻武装。到期 ⇒ `Ready(超时错误)`。
+    fn poll_idle(
+        deadline: &mut Option<Pin<Box<Sleep>>>,
+        idle: Duration,
+        cx: &mut Context<'_>,
+    ) -> Poll<io::Error> {
+        let sleep = deadline.get_or_insert_with(|| Box::pin(tokio::time::sleep(idle)));
+        if sleep.as_mut().poll(cx).is_ready() {
+            *deadline = None;
+            eprintln!("res-svr: 连接读/写空闲超时（{idle:?} 无进展），关闭连接");
+            return Poll::Ready(io::Error::new(io::ErrorKind::TimedOut, "连接读写空闲超时"));
+        }
+        Poll::Pending
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for IdleTimeoutIo<T> {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_read(cx, buf) {
+            Poll::Ready(result) => {
+                this.read_deadline = None;
+                Poll::Ready(result)
+            }
+            Poll::Pending => match Self::poll_idle(&mut this.read_deadline, this.idle, cx) {
+                Poll::Ready(error) => Poll::Ready(Err(error)),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for IdleTimeoutIo<T> {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_write(cx, buf) {
+            Poll::Ready(result) => {
+                this.write_deadline = None;
+                Poll::Ready(result)
+            }
+            Poll::Pending => match Self::poll_idle(&mut this.write_deadline, this.idle, cx) {
+                Poll::Ready(error) => Poll::Ready(Err(error)),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_flush(cx) {
+            Poll::Ready(result) => {
+                this.write_deadline = None;
+                Poll::Ready(result)
+            }
+            Poll::Pending => match Self::poll_idle(&mut this.write_deadline, this.idle, cx) {
+                Poll::Ready(error) => Poll::Ready(Err(error)),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let this = self.get_mut();
+        match Pin::new(&mut this.inner).poll_shutdown(cx) {
+            Poll::Ready(result) => {
+                this.write_deadline = None;
+                Poll::Ready(result)
+            }
+            Poll::Pending => match Self::poll_idle(&mut this.write_deadline, this.idle, cx) {
+                Poll::Ready(error) => Poll::Ready(Err(error)),
+                Poll::Pending => Poll::Pending,
+            },
+        }
+    }
+}
+
 /// 起 HTTP 服务，直到进程结束（不返回除非监听失败）。
 ///
 /// # Errors
@@ -415,11 +528,13 @@ pub async fn serve(state: Arc<AppState>) -> Result<(), String> {
         .map_err(|error| format!("读取监听地址失败：{error}"))?;
     // 启动行只暴露地址与护栏参数；token 不打印、不进日志。
     eprintln!(
-        "res-svr: 监听 http://{local}/res（Bearer token 已配置；并发上限 {}，限流 {}/s 突发 {}，单文件上限 {} B）",
+        "res-svr: 监听 http://{local}/res（Bearer token 已配置；并发上限 {}，限流 {}/s 突发 {}，单文件上限 {} B，空闲超时 {} ms，清单缓存 TTL {} ms）",
         state.cfg.max_connections,
         state.cfg.rate_limit_rps,
         state.cfg.rate_limit_burst,
-        state.cfg.max_file_size
+        state.cfg.max_file_size,
+        state.cfg.idle_timeout.as_millis(),
+        state.cfg.index_cache_ttl.as_millis()
     );
     let permits = Arc::new(Semaphore::new(state.cfg.max_connections));
     loop {
@@ -439,16 +554,17 @@ pub async fn serve(state: Arc<AppState>) -> Result<(), String> {
         };
         let service = AppService::new(Arc::clone(&state));
         let header_timeout = state.cfg.header_timeout;
+        let idle_timeout = state.cfg.idle_timeout;
         tokio::spawn(async move {
-            // 许可随连接生命周期持有（keep-alive 连接关闭前一直占名额）。
+            // 许可随连接生命周期持有（keep-alive 连接关闭前一直占名额；空闲超时会结束连接）。
             let _permit = permit;
-            let io = TokioIo::new(stream);
+            let io = TokioIo::new(IdleTimeoutIo::new(stream, idle_timeout));
             let mut builder = hyper::server::conn::http1::Builder::new();
             builder
                 .timer(TokioTimer::new())
                 .header_read_timeout(header_timeout);
             if let Err(error) = builder.serve_connection(io, service).await {
-                // 客户端提前断开 / 请求头超时都是常态，不视为服务端故障。
+                // 客户端提前断开 / 请求头超时 / 读空闲超时都是常态，不视为服务端故障。
                 eprintln!("res-svr: 连接结束：{error}");
             }
         });

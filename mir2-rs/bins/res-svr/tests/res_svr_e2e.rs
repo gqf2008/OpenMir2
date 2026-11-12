@@ -270,6 +270,29 @@ fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// 取清单里指定条目的 `sha256`（顺带断言清单本身可解析且条目存在）。
+fn index_sha(server: &Server, path: &str) -> String {
+    let response = request(
+        server.addr,
+        "GET",
+        "/res/index.json",
+        Some(&server.bearer()),
+        &[],
+    );
+    assert_eq!(response.status, 200, "清单请求必须 200");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&response.body).expect("清单是合法 JSON");
+    parsed["files"]
+        .as_array()
+        .expect("files 是数组")
+        .iter()
+        .find(|file| file["path"] == path)
+        .unwrap_or_else(|| panic!("清单里必须有 {path}"))["sha256"]
+        .as_str()
+        .expect("sha256 是字符串")
+        .to_string()
+}
+
 // ---------------------------------------------------------------------------
 // A2：鉴权
 // ---------------------------------------------------------------------------
@@ -331,6 +354,25 @@ fn no_or_wrong_token_is_403() {
         request(server.addr, "HEAD", "/res/index.json", None, &[]).status,
         403
     );
+
+    // 重复 Authorization 头：**首值优先**（hyper `HeaderMap::get` 取第一个值）。
+    // 这条用例钉住「取最后一个值」的变异（reviewer-26 M5）。
+    let correct_first = request(
+        server.addr,
+        "GET",
+        "/res/index.json",
+        Some(&bearer),
+        &[("Authorization", wrong_bearer.as_str())],
+    );
+    assert_eq!(correct_first.status, 200, "正确头在前 ⇒ 200");
+    let wrong_first = request(
+        server.addr,
+        "GET",
+        "/res/index.json",
+        Some(&wrong_bearer),
+        &[("Authorization", bearer.as_str())],
+    );
+    assert_eq!(wrong_first.status, 403, "错误头在前 ⇒ 403（首值优先）");
 }
 
 // ---------------------------------------------------------------------------
@@ -377,6 +419,9 @@ fn traversal_and_absolute_paths_are_403() {
         // 尾点 / 尾空格
         "/res/file/Data/a.wzl.",
         "/res/file/Data/a.wzl%20",
+        // 中间组件尾点 / 尾空格：逐段检查，不是只查末段（reviewer-26 M4）
+        "/res/file/Data/sub%20/b.wzx",
+        "/res/file/Data/sub./b.wzx",
         // NUL / 控制字符
         "/res/file/Data/a.wzl%00.txt",
         "/res/file/Data/a.wzl%0a.txt",
@@ -623,6 +668,57 @@ fn index_lists_files_and_cache_invalidates_on_change() {
 }
 
 // ---------------------------------------------------------------------------
+// 加固 F1：清单缓存 TTL（同尺寸同 mtime 重写）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn index_cache_ttl_refreshes_same_size_same_mtime_rewrite() {
+    // TTL 取 3s：首次请求到第二次请求之间的耗时远小于它，「TTL 内给旧值」是确定性的；
+    // 睡 3.3s 后必超 TTL，必须重算出新 sha。
+    let server = Server::start(
+        "cachettl",
+        "index_cache_ttl_ms=3000\r\nrate_limit_rps=1000\r\nrate_limit_burst=1000\r\n",
+    );
+    let path = server.root.data().join("a.wzl");
+    let original_mtime = std::fs::metadata(&path)
+        .expect("取 a.wzl 元数据")
+        .modified()
+        .expect("本平台必须给出 mtime");
+    assert_eq!(index_sha(&server, "Data/a.wzl"), sha256_hex(b"abc"));
+
+    // 同尺寸原地重写并把 mtime 还原成旧值 ⇒ (size, mtime) 指纹完全不变。
+    std::fs::write(&path, b"xyz").expect("同尺寸改写");
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("打开待改 mtime 的文件")
+        .set_modified(original_mtime)
+        .expect("还原 mtime");
+    let after = std::fs::metadata(&path).expect("取改写后元数据");
+    assert_eq!(after.len(), 3, "夹具必须同尺寸");
+    assert_eq!(
+        after.modified().ok(),
+        Some(original_mtime),
+        "夹具必须同 mtime"
+    );
+
+    // TTL 内：允许（这里断言必然）返回旧 sha —— 正是 F1 的现象，TTL 给它上界。
+    assert_eq!(
+        index_sha(&server, "Data/a.wzl"),
+        sha256_hex(b"abc"),
+        "TTL 内允许旧值（缓存命中）"
+    );
+
+    // 超过 TTL：必须重算，返回新 sha。
+    thread::sleep(Duration::from_millis(3_300));
+    assert_eq!(
+        index_sha(&server, "Data/a.wzl"),
+        sha256_hex(b"xyz"),
+        "超过 TTL 必须重算"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // A5：限额
 // ---------------------------------------------------------------------------
 
@@ -700,6 +796,58 @@ fn connection_limit_returns_429_and_recovers() {
         thread::sleep(Duration::from_millis(50));
     }
     assert_eq!(status, 200, "空闲连接关闭后并发名额必须释放");
+}
+
+// ---------------------------------------------------------------------------
+// 加固 F5：已建连接的空闲超时（慢读/不读响应不得永久占坑）
+// ---------------------------------------------------------------------------
+
+#[test]
+fn idle_connection_times_out_and_releases_slot() {
+    let server = Server::start(
+        "idletimeout",
+        "max_connections=1\r\nidle_timeout_ms=2500\r\nrate_limit_rps=1000\r\nrate_limit_burst=1000\r\n",
+    );
+    let bearer = server.bearer();
+
+    // 第一条连接：发出完整请求但**不读响应**（keep-alive，不写 Connection: close）。
+    let idle =
+        TcpStream::connect_timeout(&server.addr, Duration::from_secs(5)).expect("连接空闲连接");
+    idle.set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("设置读超时");
+    let raw = format!(
+        "GET /res/index.json HTTP/1.1\r\nHost: res-svr-test\r\nAuthorization: {bearer}\r\n\r\n"
+    );
+    (&idle).write_all(raw.as_bytes()).expect("写请求");
+
+    // 名额被占期间：第二条连接必须 429（探针与超时都还没到）。
+    thread::sleep(Duration::from_millis(150));
+    let rejected = request(server.addr, "GET", "/res/index.json", Some(&bearer), &[]);
+    assert_eq!(rejected.status, 429, "空闲连接仍占名额时必须 429");
+
+    // 有界等待：空闲超时（2.5s）后旧连接被关闭、名额释放，随后请求恢复 200。
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let mut status = 0;
+    while Instant::now() < deadline {
+        status = request(server.addr, "GET", "/res/index.json", Some(&bearer), &[]).status;
+        if status == 200 {
+            break;
+        }
+        thread::sleep(Duration::from_millis(100));
+    }
+    assert_eq!(status, 200, "空闲超时必须关闭旧连接并释放并发名额");
+
+    // 同一实例上正常的 GET/Range 不受空闲超时配置影响。
+    let ranged = request(
+        server.addr,
+        "GET",
+        "/res/file/Data/range.wzl",
+        Some(&bearer),
+        &[("Range", "bytes=0-9")],
+    );
+    assert_eq!(ranged.status, 206, "正常 Range 请求不受空闲超时影响");
+    assert_eq!(ranged.content_length(), 10);
+    drop(idle);
 }
 
 // ---------------------------------------------------------------------------
