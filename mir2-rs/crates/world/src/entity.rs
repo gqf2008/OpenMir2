@@ -1350,12 +1350,19 @@ impl EntityStore {
     /// **S3a 组件集合完整性**：每个实体插入时都带 `DupState` 组件（ctor 缺省
     /// `false/0/0`，与迁出前 `Entity::new` 逐字段同值）。这样「只 insert 不落图」的路径
     /// （克隆体/测试夹具）也不会出现半实体（设计件风险 R2/R7）。
+    ///
+    /// `insert_component` 对「刚由同一 store 插入的 id」不可能失败，因此这里用**硬断言**
+    /// （不是 `debug_assert!`）：release 构建里若真的出现失败，宁可立即 panic，也不允许
+    /// 实体缺 `DupState` 后被 `check_dup_obj` 静默跳过（S3a 评审 P3-3）。
     pub fn insert(&mut self, entity: Entity) -> i32 {
         let id = self.inner.insert(entity.id, entity);
         let inserted = self
             .inner
             .insert_component(id, mir2_world_bevy::DupState::default());
-        debug_assert!(inserted, "刚插入的实体必须能挂 DupState 组件");
+        assert!(
+            inserted,
+            "刚插入的实体必须能挂 DupState 组件（id={id}）；缺组件会让 check_dup_obj 静默跳过"
+        );
         id
     }
 

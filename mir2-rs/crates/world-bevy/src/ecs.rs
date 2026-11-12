@@ -507,6 +507,23 @@ mod tests {
             vec![4, 2, 3],
             "archetype 迁移后主组件 iter 不得漏实体/换序"
         );
+        // `pairs_state`（iter_mut）与 `write_state`（get_mut）也要各自钉一刀。
+        //
+        // 说明（S3a 评审 P3-1）：bevy 0.19 的 `iter_mut`/`get_mut` 内部走 `query_mut`，会
+        // 自动刷新 archetype，因此这两条断言钉的是**行为**（迁移后不得漏实体/换序），而不是
+        // `refresh_archetypes()` 里 `pairs_state`/`write_state` 那两次刷新本身；后者属于
+        // 「删掉也不会红」的冗余保险（真正承重的是 `read_state`：`get`/`iter` 走
+        // `get_manual`，不自动刷新）。保留刷新是为了与 `read_state` 同构、不依赖 bevy 内部实现。
+        assert_eq!(
+            s.iter_mut().map(|i| i.0).collect::<Vec<_>>(),
+            vec![4, 2, 3],
+            "archetype 迁移后主组件 iter_mut 不得漏实体/换序"
+        );
+        assert_eq!(
+            s.get_mut(2).map(|i| i.0),
+            Some(2),
+            "archetype 迁移后 write_state.get_mut 必须能按显式句柄取到组件"
+        );
 
         assert_eq!(s.remove_component::<Extra>(4), Some(Extra(40)));
         assert_eq!(s.order_index(), before, "移除可选组件不得改槽位顺序");
@@ -514,6 +531,11 @@ mod tests {
             s.iter().map(|i| i.0).collect::<Vec<_>>(),
             vec![4, 2, 3],
             "移除组件后主组件 iter 仍按槽位序"
+        );
+        assert_eq!(
+            s.iter_mut().map(|i| i.0).collect::<Vec<_>>(),
+            vec![4, 2, 3],
+            "移除组件后主组件 iter_mut 仍按槽位序（pairs_state）"
         );
         // 主组件读写不受可选组件影响
         assert_eq!(s.get(2), Some(&Item(2)));

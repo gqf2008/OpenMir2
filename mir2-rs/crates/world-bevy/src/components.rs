@@ -100,6 +100,22 @@ pub struct MapBinding<V = (), E = ()> {
     pub verify_tick: i64,
 }
 
+// 手写 `Default`（derive 会给 `V`/`E` 加 `Default` bound，而 `VisibleBaseObject`/
+// `VisibleEvent` 不实现 `Default`）。6 字段缺省与 `Entity::new` 的 ctor 缺省逐项一致
+// （`false` / 空 / 空 / `false` / `0` / `0`），供 `EntityStore::insert` 统一挂载。
+impl<V, E> Default for MapBinding<V, E> {
+    fn default() -> Self {
+        MapBinding {
+            add_to_mapped: false,
+            visible_actors: Vec::new(),
+            visible_events: Vec::new(),
+            is_visible_active: false,
+            processed_tick: 0,
+            verify_tick: 0,
+        }
+    }
+}
+
 // ============================ 2. 属性与成长 ============================
 
 /// 战斗数值（`WAbil` 的可变子集 + `HitSpeed`）。
@@ -800,7 +816,7 @@ mod adapters {
 
 #[cfg(test)]
 mod tests {
-    use super::adapters::EntityComponents;
+    use super::adapters::{ApplyToEntity, EntityComponents, FromEntity};
     use super::*;
     use mir2_world::castle::DefenseRole;
     use mir2_world::combat::DropItem;
@@ -1119,5 +1135,120 @@ mod tests {
             format!("{d:?}"),
             "非缺省状态必须可区分"
         );
+    }
+
+    /// S3b 前置：`Transform` 适配器搬 **全部 4 个字段**（x/y/map_id/view_range）且回写同值。
+    ///
+    /// 牙：适配器漏 `map_id`/`view_range` ⇒ apply 后目标实体仍是 `Entity::new` 的缺省
+    /// （0/5）⇒ 断言红；把 `view_range` 写错字段 ⇒ 同样红。
+    ///
+    /// 同时钉住设计件 §3.4 的非零 ctor 缺省陷阱：`Transform::default().view_range == 0`，
+    /// 而 `Entity::new` 给 5 ⇒ **不得**用 `Transform::default()` 直接造实体。
+    #[test]
+    fn transform_component_round_trip_pins_ctor_view_range() {
+        let mut src = Entity::new(7, "transform", 10, 20);
+        src.x = 111;
+        src.y = 222;
+        src.map_id = 3;
+        src.view_range = 12;
+
+        let transform: Transform = FromEntity::from_entity(&src);
+        assert_eq!(
+            transform,
+            Transform {
+                x: 111,
+                y: 222,
+                map_id: 3,
+                view_range: 12
+            }
+        );
+
+        let mut restored = Entity::new(0, "", 0, 0);
+        transform.apply_to(&mut restored);
+        assert_eq!(
+            (restored.x, restored.y, restored.map_id, restored.view_range),
+            (111, 222, 3, 12),
+            "Transform 适配器必须搬全 4 个字段"
+        );
+
+        // ctor 缺省 vs 派生 `Default` 的差异（§3.4）：迁移必须走统一 bundle 构造器。
+        let ctor = Entity::new(0, "", 0, 0);
+        assert_eq!(ctor.view_range, 5, "BaseObject ctor ViewRange = 5");
+        assert_eq!(ctor.map_id, 0);
+        assert_eq!(Transform::default().view_range, 0, "派生 Default 是 0");
+        assert_ne!(
+            ctor.view_range,
+            Transform::default().view_range,
+            "view_range 的 ctor 缺省(5) != Default(0)：不得用默认组件造实体"
+        );
+    }
+
+    /// S3b 前置：`MapBinding` 适配器搬 **全部 6 个字段**，且 `Vec` 载荷按值克隆（不丢条目/顺序）。
+    ///
+    /// 牙：漏搬 `visible_events` 或把 `processed_tick` 写成 `verify_tick` ⇒ 回写后
+    /// `visible_snapshot`/VerifyMapTime 的输入漂移 ⇒ 断言红。
+    #[test]
+    fn map_binding_component_round_trip_all_six_fields() {
+        let mut src = Entity::new(8, "binding", 1, 2);
+        src.add_to_mapped = true;
+        src.visible_actors = vec![
+            VisibleBaseObject {
+                target: 64,
+                flag: VisibleFlag::Show,
+            },
+            VisibleBaseObject {
+                target: 65,
+                flag: VisibleFlag::Invisible,
+            },
+        ];
+        src.visible_events = vec![VisibleEvent {
+            event: 3,
+            x: 66,
+            y: 67,
+            flag: VisibleFlag::Invisible,
+        }];
+        src.is_visible_active = true;
+        src.processed_tick = 68;
+        src.verify_tick = 69;
+
+        let binding: MapBinding<VisibleBaseObject, VisibleEvent> = FromEntity::from_entity(&src);
+        assert!(binding.add_to_mapped);
+        assert_eq!(binding.visible_actors.len(), 2, "条目数与顺序必须保留");
+        assert_eq!(binding.visible_actors[1].target, 65);
+        assert_eq!(binding.visible_events, src.visible_events);
+        assert!(binding.is_visible_active);
+        assert_eq!(binding.processed_tick, 68);
+        assert_eq!(binding.verify_tick, 69);
+
+        let mut restored = Entity::new(0, "", 0, 0);
+        binding.apply_to(&mut restored);
+        assert_eq!(
+            (
+                restored.add_to_mapped,
+                restored.visible_actors.clone(),
+                restored.visible_events.clone(),
+                restored.is_visible_active,
+                restored.processed_tick,
+                restored.verify_tick,
+            ),
+            (
+                true,
+                src.visible_actors.clone(),
+                src.visible_events.clone(),
+                true,
+                68,
+                69,
+            ),
+            "MapBinding 适配器必须搬全 6 个字段（含 Vec 载荷）"
+        );
+
+        // 6 字段的派生缺省逐项为 false/空/false/0/0（与 ctor 缺省一致）。
+        let d = MapBinding::<VisibleBaseObject, VisibleEvent>::default();
+        assert!(!d.add_to_mapped);
+        assert!(d.visible_actors.is_empty());
+        assert!(d.visible_events.is_empty());
+        assert!(!d.is_visible_active);
+        assert_eq!(d.processed_tick, 0);
+        assert_eq!(d.verify_tick, 0);
     }
 }

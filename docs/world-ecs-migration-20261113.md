@@ -528,8 +528,9 @@ OutputAoi            // tick_tail 第 3 段（AOI）
   （阶段链/ambiguity/`TickRunner` 方法白名单）必须同一提交更新；评审里单独说明。
 - 仍然**不用** `.before()`/`.after()`/`.chain()` 做业务排序——顺序只由阶段枚举决定。
 - 同阶段仍只放一个系统（或**确认无访问冲突**的只读系统）；不要把「反正 chain 了」当排序。
-- `collect_tick_order_system`（`bevy_bridge.rs`）当前未注册：S3a 把它接到 `Command` 之前
-  （或由 facade 直接填 `TickOrder`），作为「按槽位顺序处理」的显式入口。
+- `collect_tick_order_system`（`bevy_bridge.rs`）**S3a 未注册**（S3a 只交付了 20 阶段契约，
+  业务段仍为空）：把它接到 `Command` 之前（或由 facade 直接填 `TickOrder`）留到**首次搬迁
+  业务段的切片**，届时它作为「按槽位顺序处理」的显式入口。
 - `tick_tail` 的玩家死亡/VerifyMapTime/AOI 三段在宿主段之后，因此排在 `OutputDrain` 之后；
   宿主段本身不进入 schedule（facade 调用）。
 
