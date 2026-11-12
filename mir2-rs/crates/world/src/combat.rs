@@ -356,13 +356,14 @@ impl AttackPowerMode {
     /// [`AttackPowerMode::Base`]。两版**取数次数不同**（`Luck <= 0` 时 override 多一次
     /// `Random(10)`）⇒ 必须按对象分派，不能一律走 `Base`。
     #[must_use]
-    pub fn for_attacker(attacker: &Entity) -> AttackPowerMode {
-        if attacker.race == ACTOR_RACE_PLAY {
+    pub fn for_attacker(attacker: &impl PvpView) -> AttackPowerMode {
+        if attacker.race() == ACTOR_RACE_PLAY {
+            let base = attacker.base();
             AttackPowerMode::Player {
-                luck: attacker.luck,
-                power_rate: attacker.power_rate,
-                bo_power_item: attacker.bo_power_item,
-                power_item: attacker.power_item,
+                luck: base.luck,
+                power_rate: base.power_rate,
+                bo_power_item: base.bo_power_item,
+                power_item: base.power_item,
             }
         } else {
             AttackPowerMode::Base
@@ -420,8 +421,8 @@ pub const ATTACK_MODE_HAM_PKATTACK: u8 = 6;
 /// `BaseObject.IsProtectTarget`（`BaseObject.Base.cs:360`）：`true` = **允许**（双方都不在安全区）。
 ///
 /// 名字带 `Protect` 但语义是「不被安全区保护」：oracle `if (InSafeZone() || target.InSafeZone()) return false; return true;`。
-pub fn is_protect_target(attacker: &Entity, target: &Entity) -> bool {
-    !(attacker.in_safe_zone || target.in_safe_zone)
+pub fn is_protect_target(attacker: &impl PvpView, target: &impl PvpView) -> bool {
+    !(attacker.flags().in_safe_zone || target.flags().in_safe_zone)
 }
 
 /// `BaseObject.IsAttackTarget`（`BaseObject.Base.cs:377`）——**基版**（非玩家攻方，或玩家版回落）。
@@ -429,30 +430,30 @@ pub fn is_protect_target(attacker: &Entity, target: &Entity) -> bool {
 /// 未建模分支（报告登记）：`Race >= Animal` 且 `Master != null` 的主从目标集（需要取主人的
 /// `LastHiter/ExpHitter/TargetCret` 实体，本函数只拿得到 `&Entity`）、`CrazyMode`（本骨架无狂暴）、
 /// `HolySeize`/`SlaveRelax`。本骨架驱怪攻人的路径 `Master == null`，该分支逐行覆盖。
-pub fn is_attack_target_base(attacker: &Entity, target: &Entity) -> bool {
-    if attacker.id == target.id {
+pub fn is_attack_target_base(attacker: &impl PvpView, target: &impl PvpView) -> bool {
+    if attacker.base().id == target.base().id {
         return false;
     }
-    if target.admin_mode || target.stone_mode {
+    if target.flags().admin_mode || target.flags().stone_mode {
         return false;
     }
-    if attacker.race >= ACTOR_RACE_ANIMAL {
+    if attacker.race() >= ACTOR_RACE_ANIMAL {
         let mut result = false;
-        if attacker.master.is_none() {
+        if attacker.base().master.is_none() {
             // `else` 支（`BaseObject.Base.cs:438-452`）：
-            if target.race == ACTOR_RACE_PLAY {
+            if target.race() == ACTOR_RACE_PLAY {
                 result = true; // 怪打人
             }
-            if attacker.race > ACTOR_RACE_PEACE_NPC && attacker.race < ACTOR_RACE_ANIMAL {
+            if attacker.race() > ACTOR_RACE_PEACE_NPC && attacker.race() < ACTOR_RACE_ANIMAL {
                 result = true;
             }
-            if target.master.is_some() {
+            if target.base().master.is_some() {
                 result = true; // 可打对方召唤物
             }
         }
         // `CrazyMode` 未建模（本骨架无狂暴态）；`NastyMode` 已建模。
-        if attacker.nasty_mode
-            && (target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC)
+        if attacker.flags().nasty_mode
+            && (target.race() < ACTOR_RACE_NPC || target.race() > ACTOR_RACE_PEACE_NPC)
         {
             result = true;
         }
@@ -484,30 +485,29 @@ pub fn is_attack_target_player_grouped(
     attacker_group_members: &[i32],
 ) -> bool {
     // S4a：PK 字段在 `PvpState` 组件；判定期间不写 pvp ⇒ 按值取快照。
+    // S4b-1：`race`/`attack_mode`/`group_owner` 在组件 ⇒ 经 `PvpView` 读取。
     let apvp = attacker.pvp_state();
     let tpvp = target.pvp_state();
-    let attacker = attacker.base();
-    let target = target.base();
     let mut result = false;
-    match attacker.attack_mode {
+    match attacker.attack_mode() {
         ATTACK_MODE_HAM_ALL => {
-            if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
+            if target.race() < ACTOR_RACE_NPC || target.race() > ACTOR_RACE_PEACE_NPC {
                 result = true;
             }
             // `if (PveServer) return true;` 登记未建模（默认 false）。
         }
         ATTACK_MODE_HAM_PEACE => {
-            if target.race >= ACTOR_RACE_ANIMAL {
+            if target.race() >= ACTOR_RACE_ANIMAL {
                 return true;
             }
         }
         ATTACK_MODE_HAM_DEAR => {
-            if Some(target.id) != apvp.dear_human {
+            if Some(target.base().id) != apvp.dear_human {
                 return true;
             }
         }
         ATTACK_MODE_HAM_MASTER => {
-            if target.race == ACTOR_RACE_PLAY {
+            if target.race() == ACTOR_RACE_PLAY {
                 result = true;
                 // `MasterList`（师徒）为空 ⇒ 两处剔除都不发生。
             } else {
@@ -515,29 +515,29 @@ pub fn is_attack_target_player_grouped(
             }
         }
         ATTACK_MODE_HAM_GROUP => {
-            if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
+            if target.race() < ACTOR_RACE_NPC || target.race() > ACTOR_RACE_PEACE_NPC {
                 result = true;
             }
             // `if (targetObject.Race == ActorRace.Play) { if (IsGroupMember(targetObject)) result = false; }`
             // （`PlayObject.Attack.cs:671-677`）——`IsGroupMember` 的第一步是 `GroupOwner == 0 ⇒ false`。
-            if target.race == ACTOR_RACE_PLAY
-                && attacker.group_owner != 0
-                && attacker_group_members.contains(&target.id)
+            if target.race() == ACTOR_RACE_PLAY
+                && attacker.base().group_owner != 0
+                && attacker_group_members.contains(&target.base().id)
             {
                 result = false;
             }
         }
         ATTACK_MODE_HAM_GUILD => {
-            if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
+            if target.race() < ACTOR_RACE_NPC || target.race() > ACTOR_RACE_PEACE_NPC {
                 result = true;
             }
             // `MyGuild` 未建模（无行会）⇒ 不剔除。
         }
         ATTACK_MODE_HAM_PKATTACK => {
-            if target.race < ACTOR_RACE_NPC || target.race > ACTOR_RACE_PEACE_NPC {
+            if target.race() < ACTOR_RACE_NPC || target.race() > ACTOR_RACE_PEACE_NPC {
                 result = true;
             }
-            if target.race == ACTOR_RACE_PLAY {
+            if target.race() == ACTOR_RACE_PLAY {
                 let atk_pvp = (apvp.pk_point / 100) as u8;
                 let tgt_pvp = (tpvp.pk_point / 100) as u8;
                 if atk_pvp >= 2 {
@@ -616,19 +616,19 @@ pub fn is_proper_is_friend(
 ) -> bool {
     let cpvp = caster.pvp_state();
     let tpvp = cret.pvp_state();
-    let caster = caster.base();
-    let cret = cret.base();
-    if cret.race != ACTOR_RACE_PLAY {
+    if cret.race() != ACTOR_RACE_PLAY {
         return false;
     }
-    match caster.attack_mode {
+    match caster.attack_mode() {
         ATTACK_MODE_HAM_ALL | ATTACK_MODE_HAM_PEACE => true,
-        ATTACK_MODE_HAM_DEAR => caster.id == cret.id || cpvp.dear_human == Some(cret.id),
-        ATTACK_MODE_HAM_MASTER => caster.id == cret.id,
-        ATTACK_MODE_HAM_GROUP => caster.id == cret.id || is_group_member,
-        ATTACK_MODE_HAM_GUILD => caster.id == cret.id,
+        ATTACK_MODE_HAM_DEAR => {
+            caster.base().id == cret.base().id || cpvp.dear_human == Some(cret.base().id)
+        }
+        ATTACK_MODE_HAM_MASTER => caster.base().id == cret.base().id,
+        ATTACK_MODE_HAM_GROUP => caster.base().id == cret.base().id || is_group_member,
+        ATTACK_MODE_HAM_GUILD => caster.base().id == cret.base().id,
         ATTACK_MODE_HAM_PKATTACK => {
-            if caster.id == cret.id {
+            if caster.base().id == cret.base().id {
                 true
             } else {
                 let caster_pvp = (cpvp.pk_point / 100) as u8;
@@ -646,10 +646,10 @@ pub fn is_proper_is_friend(
 
 /// `BaseObject.IsProperFriend`（`BaseObject.Base.cs:588-606`）——**基版**（非玩家攻方，或玩家版回落）。
 #[must_use]
-pub fn base_is_proper_friend(caster: &Entity, target: &Entity) -> bool {
-    if caster.race >= ACTOR_RACE_ANIMAL {
-        let mut result = target.race >= ACTOR_RACE_ANIMAL;
-        if target.master.is_some() {
+pub fn base_is_proper_friend(caster: &impl PvpView, target: &impl PvpView) -> bool {
+    if caster.race() >= ACTOR_RACE_ANIMAL {
+        let mut result = target.race() >= ACTOR_RACE_ANIMAL;
+        if target.base().master.is_some() {
             result = false;
         }
         return result;
@@ -667,10 +667,10 @@ pub fn is_proper_friend(
     target: &impl PvpView,
     is_group_member: bool,
 ) -> bool {
-    if caster.base().race == ACTOR_RACE_PLAY && target.base().race == ACTOR_RACE_PLAY {
+    if caster.race() == ACTOR_RACE_PLAY && target.race() == ACTOR_RACE_PLAY {
         return is_proper_is_friend(caster, target, is_group_member);
     }
-    base_is_proper_friend(caster.base(), target.base())
+    base_is_proper_friend(caster, target)
 }
 
 /// `PlayObject.IsProperTarget`（`PlayObject.cs:1929`）——**玩家攻方**的判定链。
@@ -681,17 +681,15 @@ fn is_proper_target_play_grouped(
     attacker_group_members: &[i32],
 ) -> bool {
     let mut result = is_attack_target_player_grouped(attacker, target, attacker_group_members);
-    let attacker = attacker.base();
-    let target = target.base();
     if result {
-        if target.race == ACTOR_RACE_PLAY {
+        if target.race() == ACTOR_RACE_PLAY {
             // `if (baseObject.Race == ActorRace.Play) return IsProtectTarget(baseObject);`
             return is_protect_target(attacker, target);
         }
-        if let Some(master) = target.master {
-            if master == attacker.id {
+        if let Some(master) = target.base().master {
+            if master == attacker.base().id {
                 // 自己的宝宝：非 `HAM_ALL` 直接拒绝；`HAM_ALL` 落到下面的 `if (result) return result`。
-                if attacker.attack_mode != ATTACK_MODE_HAM_ALL {
+                if attacker.attack_mode() != ATTACK_MODE_HAM_ALL {
                     return false;
                 }
             } else {
@@ -728,13 +726,13 @@ pub fn is_proper_target_grouped(
     if attacker.base().id == target.base().id {
         return false;
     }
-    if target.base().death || target.base().ghost || target.base().invisible {
+    if target.death() || target.ghost() || target.invisible() {
         return false;
     }
-    if attacker.base().race == ACTOR_RACE_PLAY {
+    if attacker.race() == ACTOR_RACE_PLAY {
         return is_proper_target_play_grouped(attacker, target, attacker_group_members);
     }
-    is_attack_target_base(attacker.base(), target.base())
+    is_attack_target_base(attacker, target)
 }
 
 /// **P3-B5**：oracle `PlayObject.IsProperTarget`（`PlayObject.cs:1924-1965`）**不读 `Invisible`**
@@ -757,10 +755,10 @@ pub fn is_proper_target_grouped_direct(
     // 只做 `ActorId` 相等门 + `IsAttackTarget`/`IsProtectTarget`；Death/Ghost 由枚举面
     // （`GetMovingObject(...,true)` 的 `!Ghost && !Death`、`GetBaseObjects(...,true)` 的 `!Death`）负责。
     // 折进来会让「枚举面漏掉 Death 过滤」的改坏不可见（B5-9-2 牙）。
-    if attacker.base().race == ACTOR_RACE_PLAY {
+    if attacker.race() == ACTOR_RACE_PLAY {
         return is_proper_target_play_grouped(attacker, target, attacker_group_members);
     }
-    is_attack_target_base(attacker.base(), target.base())
+    is_attack_target_base(attacker, target)
 }
 
 /// 兼容别名：`crates/world` 旧调用点与既有用例用的名字（现与 [`is_proper_target`] 同义）。
@@ -840,8 +838,8 @@ pub fn get_mag_struck_damage(
 /// `Random(8)`（`:3000`）——衣服位在特判里破零清 `Index` 会**少抽一次**（见 [`wear_durability`]）。
 ///
 /// 怪物目标走 `BaseObject.StruckDamage`（`BaseObject.Base.cs:827`，无随机数）⇒ 直接返回。
-pub fn struck_damage_durability(rng: &mut impl RandomSource, target: &mut Entity) {
-    if target.race != ACTOR_RACE_PLAY {
+pub fn struck_damage_durability(rng: &mut impl RandomSource, target: &mut Entity, race: u8) {
+    if race != ACTOR_RACE_PLAY {
         return;
     }
     // `usort nDam = (ushort)(Random(10) + 5)`（`PlayObject.cs:2957`）。
@@ -911,7 +909,7 @@ pub struct LastHitter {
 /// **取谁的 job**：oracle 用 `LastHiter`（`:833-846` 的 `LastHiter.Race == Play` + `((IPlayerActor)LastHiter).Job`），
 /// 不是本次攻击者；默认配置下两者都归到倍率 1.0，只有非默认倍率或同 tick 混职业时才有数值差异。
 pub fn struck_damage_multiplier(
-    target: &Entity,
+    target: &impl PvpView,
     last_hitter: Option<LastHitter>,
     warr_mon: i32,
     wizard_mon: i32,
@@ -920,7 +918,7 @@ pub fn struck_damage_multiplier(
 ) -> i32 {
     // 返回"十分之几"的倍率（C# 里是 `伤害 * per10 / 10`）
     if let Some(hitter) =
-        last_hitter.filter(|h| target.race >= ACTOR_RACE_ANIMAL && h.race == ACTOR_RACE_PLAY)
+        last_hitter.filter(|h| target.race() >= ACTOR_RACE_ANIMAL && h.race == ACTOR_RACE_PLAY)
     {
         // `(Race >= ActorRace.Animal) && (LastHiter != null) && (LastHiter.Race == ActorRace.Play)`
         match hitter.job {
@@ -928,7 +926,7 @@ pub fn struck_damage_multiplier(
             1 => wizard_mon, // Wizard
             _ => taos_mon,   // Taoist
         }
-    } else if last_hitter.is_some_and(|h| target.race == ACTOR_RACE_PLAY && h.has_master) {
+    } else if last_hitter.is_some_and(|h| target.race() == ACTOR_RACE_PLAY && h.has_master) {
         // `(Race == ActorRace.Play) && (LastHiter != null) && (LastHiter.Master != null)`
         mon_hum
     } else {
@@ -1137,7 +1135,8 @@ pub fn struck_damage_apply(
     //   3. `:2998-3039` 逐格循环：`Index > 0`（已装备）的每格**各抽一次 `Random(8)`**。
     // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
     // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
-    struck_damage_durability(rng, &mut target.entity);
+    let target_race = target.race;
+    struck_damage_durability(rng, &mut target.entity, target_race);
     (final_damage, killed)
 }
 

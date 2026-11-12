@@ -106,7 +106,7 @@ fn group_exp_replicates_oracle_curry_missing_bug() {
 #[test]
 fn group_exp_excludes_dead_member() {
     let (mut w, l, a, b) = setup_group();
-    w.entities.get_mut(b).unwrap().death = true;
+    w.entities.get_mut(b).unwrap().life_cycle.death = true;
     let gained = kill_monster(&mut w, l, 600);
     assert_eq!(gained, 390);
     assert_eq!(w.entities.get(l).unwrap().exp, 390);
@@ -347,8 +347,8 @@ fn poison_delivery_group_gate_reads_poisoned_targets_leader_table() {
     // 同组：B（中毒目标）与 A（报文里的 caster）同属团长 L。
     let (mut w, _l, a, b) = setup_group();
     {
-        let mut t = w.entities.get_mut(b).unwrap();
-        t.attack_mode = ATTACK_MODE_HAM_GROUP;
+        let t = w.entities.get_mut(b).unwrap();
+        t.flags.attack_mode = ATTACK_MODE_HAM_GROUP;
     }
     assert!(
         w.entities.get(b).unwrap().group_members.is_empty(),
@@ -376,7 +376,7 @@ fn poison_delivery_group_gate_reads_poisoned_targets_leader_table() {
     let (mut w, _l, a, b) = setup_group();
     {
         let mut t = w.entities.get_mut(b).unwrap();
-        t.attack_mode = ATTACK_MODE_HAM_GROUP;
+        t.flags.attack_mode = ATTACK_MODE_HAM_GROUP;
         t.group_owner = 0;
     }
     w.self_delay_msgs.push(poison_delay(b, a));
@@ -406,8 +406,8 @@ fn poison_delivery_group_gate_reads_poisoned_targets_leader_table() {
 fn friend_sites_read_leader_group_table() {
     let (mut w, l, a, b) = setup_group();
     {
-        let mut c = w.entities.get_mut(a).unwrap();
-        c.attack_mode = ATTACK_MODE_HAM_GROUP;
+        let c = w.entities.get_mut(a).unwrap();
+        c.flags.attack_mode = ATTACK_MODE_HAM_GROUP;
         assert_eq!(c.group_owner, l, "A 是团长 L 的成员");
         assert!(c.group_members.is_empty(), "非团长自身表为空");
     }

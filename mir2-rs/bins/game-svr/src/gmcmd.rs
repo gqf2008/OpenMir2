@@ -1344,19 +1344,19 @@ impl GmEntityState {
             return;
         };
         if let Some(v) = self.admin_mode {
-            e.admin_mode = v;
+            e.flags.admin_mode = v;
         }
         if let Some(v) = self.ob_mode {
-            e.ob_mode = v;
+            e.flags.ob_mode = v;
         }
         if let Some(v) = self.super_man {
-            e.super_man = v;
+            e.flags.super_man = v;
         }
         if let Some(v) = self.slave_relax {
             e.slave_relax = v;
         }
         if let Some(v) = self.attack_mode {
-            e.attack_mode = v;
+            e.flags.attack_mode = v;
         }
         if let Some(v) = self.level {
             e.progression.level = v;
@@ -9025,8 +9025,8 @@ mod tests {
                 allow_group_re_call: true,
                 ..crate::record::CharacterData::default()
             };
-            let me = w.entities.entity_mut(gm_id).unwrap();
-            crate::apply_login_record_scalars(me, Some(&flags));
+            let mut me = w.entities.get_mut(gm_id).unwrap();
+            crate::apply_login_record_scalars(&mut me, Some(&flags));
             me.group_members = vec![gm_id, bob_id];
         }
         {
@@ -9034,8 +9034,8 @@ mod tests {
                 allow_group_re_call: true,
                 ..crate::record::CharacterData::default()
             };
-            let bob = w.entities.entity_mut(bob_id).unwrap();
-            crate::apply_login_record_scalars(bob, Some(&flags));
+            let mut bob = w.entities.get_mut(bob_id).unwrap();
+            crate::apply_login_record_scalars(&mut bob, Some(&flags));
         }
         {
             let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
@@ -11278,12 +11278,12 @@ mod tests {
         );
         // 死亡/Ghost 排除：bob 死亡 + gm Ghost ⇒ 玩家数 0；怪甲存活 ⇒ 怪物数仍 1；
         // 怪乙 Ghost ⇒ 不计。
-        w.entities.get_mut(bob_id).unwrap().death = true;
-        w.entities.get_mut(gm_id).unwrap().ghost = true;
+        w.entities.get_mut(bob_id).unwrap().life_cycle.death = true;
+        w.entities.get_mut(gm_id).unwrap().life_cycle.ghost = true;
         let mut mon2 = mir2_world::Entity::new(0, "怪乙", 8, 8);
         mon2.race = mir2_world::ACTOR_RACE_MONSTER;
         let mon2_id = w.add_entity(mon2);
-        w.entities.get_mut(mon2_id).unwrap().ghost = true;
+        w.entities.get_mut(mon2_id).unwrap().life_cycle.ghost = true;
         assert_eq!(
             texts(&exec_at(&w, &fx, &guilds, &mut sess, "@HumanCountwa map")),
             vec![(GmColor::Green, "怪物数量：0")]
@@ -13321,7 +13321,7 @@ mod tests {
             .find(|e| e.name == "gm")
             .expect("gm 在场")
             .id;
-        world.entities.get_mut(gm_id).unwrap().in_safe_zone = true;
+        world.entities.get_mut(gm_id).unwrap().flags.in_safe_zone = true;
         let view_safe = m_view(&guilds, &world);
         let r = make_item("木剑 5", &view_safe, &mut low, &cfg_allow);
         assert!(r.msgs.is_empty());

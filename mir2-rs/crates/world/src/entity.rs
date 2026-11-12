@@ -511,6 +511,8 @@ pub use mir2_world_bevy::Transform;
 pub use mir2_world_bevy::{
     AbilitySnapshot, CombatAttribution, Progression, PvpState, Recovery, Vitals,
 };
+/// **S4b-1**：状态位/生命周期/外观/类专用状态的 world 侧实例化（`Entity` 已删字段）。
+pub use mir2_world_bevy::{Appearance, Flags, LifeCycle, MonsterClassState};
 /// **S4a**：`Vitals`/`AbilitySnapshot`/`Progression` 三组件的组合类型（`EntitySpawn`/`EntityRef`/`EntityMut` 用）。
 pub type Ability = AbilitySnapshot<BaseAbil>;
 /// **S4a**：掉落预算组件的 world 侧实例化（`items` 对应迁移前的 `drop_items`）。
@@ -580,6 +582,53 @@ pub struct EntitySpawn {
     pub pvp_flag: bool,
     pub pvp_name_color_tick: i64,
     pub die_in_fight3_zone: bool,
+    // ---- S4b-1：状态位/生命周期/外观/类专用状态（`insert` 时落成对应组件）----
+    // 生成期写入（如 `e.race = …`）保持平铺写法；插入后真值只在组件里。
+    pub invisible: bool,
+    pub hide_mode: bool,
+    pub fixed_hide_mode: bool,
+    pub ob_mode: bool,
+    pub nasty_mode: bool,
+    pub attack_mode: u8,
+    pub in_safe_zone: bool,
+    pub admin_mode: bool,
+    pub stone_mode: bool,
+    pub super_man: bool,
+    pub rush_mode: bool,
+    pub want_ref_msg: bool,
+    pub stick_mode: bool,
+    pub death: bool,
+    pub ghost: bool,
+    pub death_tick: i64,
+    pub ghost_tick: i64,
+    pub can_re_alive: bool,
+    pub re_alive_tick: i64,
+    pub death_settled: bool,
+    pub die_called: bool,
+    pub race: u8,
+    pub race_img: u8,
+    pub appr: u16,
+    pub light: u8,
+    pub name_color: u8,
+    pub come_out_value: i32,
+    pub attack_range: i32,
+    pub use_magic: bool,
+    pub danger_level: i32,
+    pub n550: i32,
+    pub class_attack_tick: i64,
+    pub bo_is_first: bool,
+    pub dig_down_tick: i64,
+    pub appear_start_tick: i64,
+    pub guard_direction: i8,
+    pub siege_lock_count: i32,
+    pub jump_time: i64,
+    pub crazy_ready_mode: bool,
+    pub crazy_king_mode: bool,
+    pub crazy_count: i32,
+    pub crazy_ready: i64,
+    pub crazy_time: i64,
+    pub old_hit_time: i64,
+    pub old_walk_time: i64,
 }
 
 impl EntitySpawn {
@@ -647,6 +696,51 @@ impl EntitySpawn {
             pvp_flag: false,
             pvp_name_color_tick: 0,
             die_in_fight3_zone: false,
+            invisible: false,
+            hide_mode: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            nasty_mode: false,
+            attack_mode: 0,
+            in_safe_zone: false,
+            admin_mode: false,
+            stone_mode: false,
+            super_man: false,
+            rush_mode: false,
+            want_ref_msg: false,
+            stick_mode: false,
+            death: false,
+            ghost: false,
+            death_tick: 0,
+            ghost_tick: 0,
+            can_re_alive: false,
+            re_alive_tick: 0,
+            death_settled: false,
+            die_called: false,
+            race: ACTOR_RACE_PLAY,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            come_out_value: 0,
+            attack_range: 0,
+            use_magic: false,
+            danger_level: 0,
+            n550: 0,
+            class_attack_tick: 0,
+            bo_is_first: false,
+            dig_down_tick: 0,
+            appear_start_tick: 0,
+            guard_direction: 0,
+            siege_lock_count: 0,
+            jump_time: 0,
+            crazy_ready_mode: false,
+            crazy_king_mode: false,
+            crazy_count: 0,
+            crazy_ready: 0,
+            crazy_time: 0,
+            old_hit_time: 0,
+            old_walk_time: 0,
         }
     }
 
@@ -706,6 +800,79 @@ impl EntitySpawn {
         }
     }
 
+    /// S4b-1：状态位组件值。
+    #[must_use]
+    pub fn flags_component(&self) -> Flags {
+        Flags {
+            invisible: self.invisible,
+            hide_mode: self.hide_mode,
+            fixed_hide_mode: self.fixed_hide_mode,
+            ob_mode: self.ob_mode,
+            nasty_mode: self.nasty_mode,
+            attack_mode: self.attack_mode,
+            in_safe_zone: self.in_safe_zone,
+            admin_mode: self.admin_mode,
+            stone_mode: self.stone_mode,
+            super_man: self.super_man,
+            rush_mode: self.rush_mode,
+            want_ref_msg: self.want_ref_msg,
+            stick_mode: self.stick_mode,
+        }
+    }
+
+    /// S4b-1：生命周期组件值。
+    #[must_use]
+    pub fn life_cycle_component(&self) -> LifeCycle {
+        LifeCycle {
+            death: self.death,
+            ghost: self.ghost,
+            death_tick: self.death_tick,
+            ghost_tick: self.ghost_tick,
+            can_re_alive: self.can_re_alive,
+            re_alive_tick: self.re_alive_tick,
+            death_settled: self.death_settled,
+            die_called: self.die_called,
+        }
+    }
+
+    /// S4b-1：外观/行为轴组件值。
+    #[must_use]
+    pub fn appearance_component(&self) -> Appearance {
+        Appearance {
+            race: self.race,
+            race_img: self.race_img,
+            appr: self.appr,
+            light: self.light,
+            name_color: self.name_color,
+        }
+    }
+
+    /// S4b-1：类专用状态组件值。
+    #[must_use]
+    pub fn monster_class_component(&self) -> MonsterClassState {
+        MonsterClassState {
+            come_out_value: self.come_out_value,
+            attack_range: self.attack_range,
+            use_magic: self.use_magic,
+            danger_level: self.danger_level,
+            n550: self.n550,
+            class_attack_tick: self.class_attack_tick,
+            bo_is_first: self.bo_is_first,
+            dig_down_tick: self.dig_down_tick,
+            appear_start_tick: self.appear_start_tick,
+            guard_direction: self.guard_direction,
+            siege_lock_count: self.siege_lock_count,
+            jump_time: self.jump_time,
+            crazy_ready_mode: self.crazy_ready_mode,
+            crazy_king_mode: self.crazy_king_mode,
+            crazy_count: self.crazy_count,
+            crazy_ready: self.crazy_ready,
+            crazy_time: self.crazy_time,
+            old_hit_time: self.old_hit_time,
+            old_walk_time: self.old_walk_time,
+        }
+    }
+
     /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）的生成期载体版本。
     ///
     /// 与 [`EntityMut::set_last_hiter`] 逐支同义：`LastHiter` 每次刷新；`ExpHitter` **只在为空时**
@@ -728,6 +895,10 @@ impl EntitySpawn {
         let vitals = self.vitals_component();
         let spawn = self.spawn_component();
         let drop = self.drop_component();
+        let flags = self.flags_component();
+        let life_cycle = self.life_cycle_component();
+        let appearance = self.appearance_component();
+        let monster_class = self.monster_class_component();
         SpawnParts {
             entity: self.entity,
             transform: Transform {
@@ -760,6 +931,10 @@ impl EntitySpawn {
                 pvp_name_color_tick: self.pvp_name_color_tick,
                 die_in_fight3_zone: self.die_in_fight3_zone,
             },
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
         }
     }
 }
@@ -778,6 +953,10 @@ pub struct SpawnParts {
     pub attribution: CombatAttribution,
     pub recovery: Recovery,
     pub pvp: PvpState,
+    pub flags: Flags,
+    pub life_cycle: LifeCycle,
+    pub appearance: Appearance,
+    pub monster_class: MonsterClassState,
 }
 
 impl std::ops::Deref for EntitySpawn {
@@ -858,6 +1037,52 @@ pub struct EntityRef<'a> {
     pub pvp_flag: bool,
     pub pvp_name_color_tick: i64,
     pub die_in_fight3_zone: bool,
+    // ---- S4b-1：状态位/生命周期/外观/类状态的只读投影 ----
+    pub invisible: bool,
+    pub hide_mode: bool,
+    pub fixed_hide_mode: bool,
+    pub ob_mode: bool,
+    pub nasty_mode: bool,
+    pub attack_mode: u8,
+    pub in_safe_zone: bool,
+    pub admin_mode: bool,
+    pub stone_mode: bool,
+    pub super_man: bool,
+    pub rush_mode: bool,
+    pub want_ref_msg: bool,
+    pub stick_mode: bool,
+    pub death: bool,
+    pub ghost: bool,
+    pub death_tick: i64,
+    pub ghost_tick: i64,
+    pub can_re_alive: bool,
+    pub re_alive_tick: i64,
+    pub death_settled: bool,
+    pub die_called: bool,
+    pub race: u8,
+    pub race_img: u8,
+    pub appr: u16,
+    pub light: u8,
+    pub name_color: u8,
+    pub come_out_value: i32,
+    pub attack_range: i32,
+    pub use_magic: bool,
+    pub danger_level: i32,
+    pub n550: i32,
+    pub class_attack_tick: i64,
+    pub bo_is_first: bool,
+    pub dig_down_tick: i64,
+    pub appear_start_tick: i64,
+    pub guard_direction: i8,
+    pub siege_lock_count: i32,
+    pub jump_time: i64,
+    pub crazy_ready_mode: bool,
+    pub crazy_king_mode: bool,
+    pub crazy_count: i32,
+    pub crazy_ready: i64,
+    pub crazy_time: i64,
+    pub old_hit_time: i64,
+    pub old_walk_time: i64,
 }
 
 impl<'a> EntityRef<'a> {
@@ -879,6 +1104,10 @@ impl<'a> EntityRef<'a> {
         attribution: &'a CombatAttribution,
         recovery: &'a Recovery,
         pvp: &'a PvpState,
+        flags: &'a Flags,
+        life_cycle: &'a LifeCycle,
+        appearance: &'a Appearance,
+        monster_class: &'a MonsterClassState,
     ) -> Self {
         EntityRef {
             entity,
@@ -933,6 +1162,51 @@ impl<'a> EntityRef<'a> {
             pvp_flag: pvp.pvp_flag,
             pvp_name_color_tick: pvp.pvp_name_color_tick,
             die_in_fight3_zone: pvp.die_in_fight3_zone,
+            invisible: flags.invisible,
+            hide_mode: flags.hide_mode,
+            fixed_hide_mode: flags.fixed_hide_mode,
+            ob_mode: flags.ob_mode,
+            nasty_mode: flags.nasty_mode,
+            attack_mode: flags.attack_mode,
+            in_safe_zone: flags.in_safe_zone,
+            admin_mode: flags.admin_mode,
+            stone_mode: flags.stone_mode,
+            super_man: flags.super_man,
+            rush_mode: flags.rush_mode,
+            want_ref_msg: flags.want_ref_msg,
+            stick_mode: flags.stick_mode,
+            death: life_cycle.death,
+            ghost: life_cycle.ghost,
+            death_tick: life_cycle.death_tick,
+            ghost_tick: life_cycle.ghost_tick,
+            can_re_alive: life_cycle.can_re_alive,
+            re_alive_tick: life_cycle.re_alive_tick,
+            death_settled: life_cycle.death_settled,
+            die_called: life_cycle.die_called,
+            race: appearance.race,
+            race_img: appearance.race_img,
+            appr: appearance.appr,
+            light: appearance.light,
+            name_color: appearance.name_color,
+            come_out_value: monster_class.come_out_value,
+            attack_range: monster_class.attack_range,
+            use_magic: monster_class.use_magic,
+            danger_level: monster_class.danger_level,
+            n550: monster_class.n550,
+            class_attack_tick: monster_class.class_attack_tick,
+            bo_is_first: monster_class.bo_is_first,
+            dig_down_tick: monster_class.dig_down_tick,
+            appear_start_tick: monster_class.appear_start_tick,
+            guard_direction: monster_class.guard_direction,
+            siege_lock_count: monster_class.siege_lock_count,
+            jump_time: monster_class.jump_time,
+            crazy_ready_mode: monster_class.crazy_ready_mode,
+            crazy_king_mode: monster_class.crazy_king_mode,
+            crazy_count: monster_class.crazy_count,
+            crazy_ready: monster_class.crazy_ready,
+            crazy_time: monster_class.crazy_time,
+            old_hit_time: monster_class.old_hit_time,
+            old_walk_time: monster_class.old_walk_time,
         }
     }
 }
@@ -962,6 +1236,11 @@ pub struct EntityMut<'a> {
     pub attribution: &'a mut CombatAttribution,
     pub recovery: &'a mut Recovery,
     pub pvp: &'a mut PvpState,
+    // ---- S4b-1 ----
+    pub flags: &'a mut Flags,
+    pub life_cycle: &'a mut LifeCycle,
+    pub appearance: &'a mut Appearance,
+    pub monster_class: &'a mut MonsterClassState,
 }
 
 impl EntityMut<'_> {
@@ -994,7 +1273,7 @@ impl EntityMut<'_> {
     /// 判定（`:70-73`）之前就被回满 ⇒ oracle 的 `Die()` 对它们**不可达**；`Die` 的早退
     /// 语义（`:318-322`）由 `settle_deaths` 在「直接调用 `Die()`」路径等价。
     pub fn run_super_man_refill(&mut self) {
-        if self.entity.super_man {
+        if self.flags.super_man {
             self.vitals.hp = self.vitals.max_hp;
             self.vitals.mp = self.vitals.max_mp;
         }
@@ -1033,6 +1312,20 @@ impl std::ops::Deref for EntityMut<'_> {
 pub trait PvpView {
     fn base(&self) -> &Entity;
     fn pvp_state(&self) -> PvpState;
+    /// S4b-1：行为轴 `race`（外观组件）。
+    fn race(&self) -> u8;
+    /// S4b-1：死亡位（生命周期组件）。
+    fn death(&self) -> bool;
+    /// S4b-1：幽灵位（生命周期组件）。
+    fn ghost(&self) -> bool;
+    /// S4b-1：隐身位（状态位组件）。
+    fn invisible(&self) -> bool;
+    /// S4b-1：攻击模式（状态位组件）。
+    fn attack_mode(&self) -> u8;
+    /// S4b-1：完整状态位快照（安全区/admin/石化/nasty 等）。
+    fn flags(&self) -> Flags;
+    /// S4b-1：名称颜色（外观组件）。
+    fn name_color(&self) -> u8;
 }
 
 impl PvpView for EntitySpawn {
@@ -1047,6 +1340,27 @@ impl PvpView for EntitySpawn {
             pvp_name_color_tick: self.pvp_name_color_tick,
             die_in_fight3_zone: self.die_in_fight3_zone,
         }
+    }
+    fn race(&self) -> u8 {
+        self.race
+    }
+    fn death(&self) -> bool {
+        self.death
+    }
+    fn ghost(&self) -> bool {
+        self.ghost
+    }
+    fn invisible(&self) -> bool {
+        self.invisible
+    }
+    fn attack_mode(&self) -> u8 {
+        self.attack_mode
+    }
+    fn flags(&self) -> Flags {
+        self.flags_component()
+    }
+    fn name_color(&self) -> u8 {
+        self.name_color
     }
 }
 
@@ -1063,6 +1377,41 @@ impl PvpView for EntityRef<'_> {
             die_in_fight3_zone: self.die_in_fight3_zone,
         }
     }
+    fn race(&self) -> u8 {
+        self.race
+    }
+    fn death(&self) -> bool {
+        self.death
+    }
+    fn ghost(&self) -> bool {
+        self.ghost
+    }
+    fn invisible(&self) -> bool {
+        self.invisible
+    }
+    fn attack_mode(&self) -> u8 {
+        self.attack_mode
+    }
+    fn flags(&self) -> Flags {
+        Flags {
+            invisible: self.invisible,
+            hide_mode: self.hide_mode,
+            fixed_hide_mode: self.fixed_hide_mode,
+            ob_mode: self.ob_mode,
+            nasty_mode: self.nasty_mode,
+            attack_mode: self.attack_mode,
+            in_safe_zone: self.in_safe_zone,
+            admin_mode: self.admin_mode,
+            stone_mode: self.stone_mode,
+            super_man: self.super_man,
+            rush_mode: self.rush_mode,
+            want_ref_msg: self.want_ref_msg,
+            stick_mode: self.stick_mode,
+        }
+    }
+    fn name_color(&self) -> u8 {
+        self.name_color
+    }
 }
 
 impl PvpView for EntityMut<'_> {
@@ -1072,6 +1421,27 @@ impl PvpView for EntityMut<'_> {
     fn pvp_state(&self) -> PvpState {
         *self.pvp
     }
+    fn race(&self) -> u8 {
+        self.appearance.race
+    }
+    fn death(&self) -> bool {
+        self.life_cycle.death
+    }
+    fn ghost(&self) -> bool {
+        self.life_cycle.ghost
+    }
+    fn invisible(&self) -> bool {
+        self.flags.invisible
+    }
+    fn attack_mode(&self) -> u8 {
+        self.flags.attack_mode
+    }
+    fn flags(&self) -> Flags {
+        *self.flags
+    }
+    fn name_color(&self) -> u8 {
+        self.appearance.name_color
+    }
 }
 
 impl<T: PvpView + ?Sized> PvpView for &T {
@@ -1080,6 +1450,27 @@ impl<T: PvpView + ?Sized> PvpView for &T {
     }
     fn pvp_state(&self) -> PvpState {
         (*self).pvp_state()
+    }
+    fn race(&self) -> u8 {
+        (*self).race()
+    }
+    fn death(&self) -> bool {
+        (*self).death()
+    }
+    fn ghost(&self) -> bool {
+        (*self).ghost()
+    }
+    fn invisible(&self) -> bool {
+        (*self).invisible()
+    }
+    fn attack_mode(&self) -> u8 {
+        (*self).attack_mode()
+    }
+    fn flags(&self) -> Flags {
+        (*self).flags()
+    }
+    fn name_color(&self) -> u8 {
+        (*self).name_color()
     }
 }
 
@@ -1105,20 +1496,17 @@ pub struct Entity {
     /// 与 [`Entity::race_img`]（外观轴）**不是同一字段**：oracle 商人 `Race = ActorRace.NPC(10)`
     /// （`NormNpc.cs:42` 继承）而 `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`）；两者
     /// 数值在 `Merchant`/`Animal` 上偶合（都是 50），不得混用。
-    pub race: u8,
     /// C# `BaseObject.RaceImg`（`BaseObject.cs:101`；ctor `:380` 置 0）——**外观轴**：
     /// 客户端可见帧的形像编号，`GetFeature()` = `MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`
     /// （`BaseObject.Base.cs:911`）。
     ///
     /// 商人置 `ActorRace.Merchant(50)`（`Merchant.cs:84`），但其行为轴 [`Entity::race`] 仍是
     /// `ActorRace.NPC(10)`（`NormNpc.cs:42`）⇒ **不得**把本字段当 `race` 用（反之亦然）。
-    pub race_img: u8,
     /// C# `BaseObject.Appr`（形像代码）。`ApplyMonsterAbility` 从
     /// `MonsterInfo.Appr` 写入（`WorldServer.MonGen.cs:889`）。
     ///
     /// 唯一的**行为**消费点 = `ElfWarriorMonster.AttackTarget` 的
     /// `Appr == 704/706/708` 形态门（`ElfWarriorMonster.cs:78`）；其余只影响展示层。
-    pub appr: u16,
     /// C# `Master`（宝宝的主人）
     pub master: Option<i32>,
     /// C# `BaseObject.SlaveRelax`（`BaseObject.cs:145`）——主人对宝宝的「放松」标志。
@@ -1137,7 +1525,6 @@ pub struct Entity {
     /// `BeeQueen`/`SpiderHouseMonster` ctor 显式置 `true`（`BeeQueen.cs:19`、
     /// `SpiderHouseMonster.cs:19`），由 [`crate::special_monster::apply_ctor_fields`] 落字段。
     /// 消费点：44 火焰球的推挤门 `!target.StickMode`（`MagicManager.cs:1048`）。
-    pub stick_mode: bool,
     /// C# `BeeQueen.BeeList` / `SpiderHouseMonster._bbList`（`BeeQueen.cs:11` /
     /// `SpiderHouseMonster.cs:11`）——产出的宝宝 actor id 列表（**插入序**）。
     ///
@@ -1162,23 +1549,16 @@ pub struct Entity {
     pub master_royalty_tick: i64,
     /// C# `MonsterObject.MasterTick`（`MonsterObject.cs:41`）——诱惑到期的起算时刻。
     pub master_tick: i64,
-    pub death: bool,
-    pub invisible: bool,
-    pub ghost: bool,
     /// C# `BaseObject.DeathTick`（`BaseObject.cs:204`，`Die()` 在 `:323` 写 `GetTickCount()`）——
     /// 死亡时刻（毫秒）。`BaseObject.Run` 死亡支的 `now - DeathTick` 门读它
     /// （`BaseObject.Base.cs:90/99`）。
-    pub death_tick: i64,
     /// C# `BaseObject.GhostTick`（`BaseObject.cs:207`）——`MakeGhost()` 写（`BaseObject.Base.cs:494`）；
     /// 幽灵怪 5 分钟清理门 `(now - GhostTick) > 5*60*1000`（`WorldServer.MonGen.cs:302`）。
-    pub ghost_tick: i64,
     /// C# `BaseObject.CanReAlive`（`BaseObject.cs:220`）——`RegenMonsters` 刷出的怪置 `true`
     /// （`WorldServer.MonGen.cs:832/854`）；换图/魔法清位（`BaseObject.cs:2749-2756`、
     /// `MagicManager.cs:743-745`）。决定 `MakeGhost` 走「留尸体可复活」还是「真 Ghost」。
-    pub can_re_alive: bool,
     /// C# `BaseObject.ReAliveTick`（`BaseObject.cs:224`）——复活冷却起点
     /// （`WorldServer.MonGen.cs:833/855` 置创建时刻、`:290` 在复活成功后刷新）。
-    pub re_alive_tick: i64,
     // **Lane B（城堡实体挂图）**：本实体对应的城堡防御单元（`BaseObject.Castle != null` 的等价物）。
     //
     // 只有 `UserCastle.Initialize` 成功挂图的**门 / 墙 / 弓手**被绑定（守卫不绑，见
@@ -1200,25 +1580,17 @@ pub struct Entity {
     /// 只有 `Envirnoment.GetXYObjCount` / `BaseObject.Run` 才读 `FixedHideMode`。
     /// 当前本仓无写入点（隐身术/隐身戒指未接线）⇒ 两侧行为今天相同；接线后在 `search_target`
     /// 的隐藏门上与 oracle 1:1。
-    pub hide_mode: bool,
-    pub fixed_hide_mode: bool,
-    pub ob_mode: bool,
     /// C# `NastyMode`（PK 模式等）
-    pub nasty_mode: bool,
     /// C# `PlayObject.AttatckMode`（`AttackMode` 枚举，`src/OpenMir2/Enums/AttackMode.cs`）：
     /// `HAM_ALL=0 / HAM_PEACE=1 / HAM_DEAR=2 / HAM_MASTER=3 / HAM_GROUP=4 / HAM_GUILD=5 / HAM_PKATTACK=6`。
     /// 新角色 `PlayObject.cs:908` 置 `0`（`HAM_ALL`）；`ChangeAttackModeCommand.cs:26` 按 Ctrl-H 循环。
-    pub attack_mode: u8,
     /// C# `BaseObject.InSafeZone()`（`BaseObject.cs:1777`）的结果折叠。
     ///
     /// oracle 的 `IsProtectTarget`（`BaseObject.Base.cs:360`）用它做 PvP 门槛；本骨架未建模
     /// 地图 Flag/StartPoint 安全区。**生产代码当前无写入点（该字段恒 `false`），仅测试夹具赋值**；
     /// 若将来接线层在入图/换图时按 `Envir` 写入，须同步 whitelist T-75。
-    pub in_safe_zone: bool,
     /// C# `BaseObject.AdminMode`（`BaseObject.IsAttackTarget` 首判：管理员不可被攻击）。
-    pub admin_mode: bool,
     /// C# `BaseObject.StoneMode`（同上，石化不可被攻击）。
-    pub stone_mode: bool,
     // C# `PlayObject.DearHuman`（`PlayObject.IsAttackTarget` 的 `HAM_DEAR` 支：只保护配偶）。
     // S4a-2 迁出：`dear_human` 真值在 components 组件（见迁移文档 S4a）。
     // C# `PlayObject.PkPoint`——`PlayObject.PvpLevel()`（`PlayObject.cs:4352`）= `PkPoint / 100`。
@@ -1250,7 +1622,6 @@ pub struct Entity {
     /// `GetNameColor()`（`BaseObject.Base.cs:904-907`）返回它；`GetChrColor`
     /// （`BaseObject.Base.cs:869-883`）的兜底分支与 `MonsterObject`/`PlayObject` 的 override 都读它。
     /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
-    pub name_color: u8,
     /// C# `PlayObject.PowerRate`（`PlayObject.cs:724`；新角色 `PlayObject.cs:943` 置 `100`）。
     pub power_rate: i32,
     /// C# `PlayObject.PowerRateTime`（`PlayObject.cs:726`；**无 ctor 赋值** ⇒ 0）——
@@ -1311,7 +1682,6 @@ pub struct Entity {
     // 本骨架无写者 ⇒ 恒 `false`。
     // S4a-2 迁出：`no_item` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `WantRefMsg`
-    pub want_ref_msg: bool,
     // S3b：`add_to_mapped` / `visible_actors` / `visible_events` / `is_visible_active` /
     // `processed_tick` / `verify_tick` 已迁到 [`MapBinding`] 组件（字段真值，经
     // `EntityStore::map_binding` / `map_binding_mut` 受控访问）。`processed_tick` 与
@@ -1364,7 +1734,6 @@ pub struct Entity {
     /// C# `BaseObject.ShowHpInterval`（`MagicManager.cs:437`：`GetPower13(...) * 1000`）。
     pub show_hp_interval: i32,
     /// C# `BaseObject.SuperMan`（32 圣言术的首门 `target.SuperMan`）。
-    pub super_man: bool,
     // C# `CharacterObject.HitSpeed`（`PlayObject.Message.cs:1846` 的 `SM_CHARSTATUSCHANGED` 末参
     // 取**收件人自己**的 `this.HitSpeed`）。
     //
@@ -1402,7 +1771,6 @@ pub struct Entity {
     /// 消费点全在帧面：`SM_WALK/SM_RUN/SM_TURN/SM_DIGUP/...` 的 `Series = MakeWord(Dir, Light)`
     /// （`PlayObject.Message.cs:1406-1975`）。本骨架只落字段，帧面由宿主 `bins/game-svr` 发。
     /// `NormNpc` ctor 置 **2**（`NormNpc.cs:43`，商人继承）；玩家/普通怪物保持 ctor 缺省 0。
-    pub light: u8,
     // C# `BaseObject.AntiPoison`（`BaseObject.cs:109`；ctor `:389` 置 **0**）——毒/麻痹抗性。
     //
     // 消费点：`Random(target.AntiPoison + N)` 的毒/麻痹命中门（`MagicManager.cs:235/914`、
@@ -1422,7 +1790,6 @@ pub struct Entity {
     ///
     /// **P3-B5 新增**（`crates/world` 接口变更，须按 §12.4 通知并行车道）：
     /// ctor 缺省 `false`（oracle 构造缺省）；本骨架无写入点（冲锋态未建模）⇒ 生产恒 false。
-    pub rush_mode: bool,
     /// C# `PlayObject.ExtraAbil[7]`（`PlayObject.cs:201`）——`AttPowerUp` 写槽 0
     /// （`EABIL_DCUP`，`ActorConst.cs:26`）。**P3-B5 新增**。
     pub extra_abil: [u16; 7],
@@ -1489,14 +1856,12 @@ pub struct Entity {
     // 掉落预算里的物品（`mon.ItemList`，生成时算好、死亡时落地）
     // S4a-2 迁出：`drop_items` 真值在 components 组件（见迁移文档 S4a）。
     /// 死亡结算是否已做（避免重复发经验/重复掉落）
-    pub death_settled: bool,
     /// 本 tick 是否收到过**直接 `Die()` 调用**（脚本 `KILLMONSTER` / GM Kill 的
     /// [`crate::world::World::kill`] 入口；oracle 无此字段，是本骨架区分调用来源的一次性标记）。
     ///
     /// 伤害只把 `HP` 打到 0；SuperMan 在 `BaseObject.Run:32-36` 先回满，故伤害路径不会
     /// 执行 `:70-73` 的 `Die()`。只有本标记为 true 时，`settle_deaths` 才执行 SuperMan
     /// 子类覆写体；结算时立即消费，保证两次直接 `Die()` 各执行一次。
-    pub die_called: bool,
     // 构造函数链抽出的随机数结果（见 [`MonsterCtorDraws`]）；玩家/非 MonGen 路径实体为缺省全零。
     // S4a-2 迁出：`ctor_draws` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `StickMonster.ComeOutValue`（`StickMonster.cs:10`；ctor `:19` 置 4）。
@@ -1508,33 +1873,27 @@ pub struct Entity {
     ///
     /// 消费方：MB-1（`StickMonster.Run` R38）、MB-3（`CentipedeKingMonster.Run` R07）、
     /// MB-8（`SandMobObject.Run` R33）。
-    pub come_out_value: i32,
     /// C# `StickMonster.AttackRange`（`StickMonster.cs:11`；ctor `:20` 置 4；
     /// `CentipedeKingMonster.cs:15` 置 6）。缺省 0（非 `StickMonster` 家族无此字段）。
     ///
     /// 消费方：MB-1（R38）、MB-3（R07）、MB-8（R33）。
-    pub attack_range: i32,
     /// C# `MagicMonObject.UseMagic`（`MagicMonObject.cs:10`，ctor `:15` = `false`）/
     /// `ElectronicScolpionMon.UseMagic`（`ElectronicScolpionMon.cs:7`，ctor `:12` = `false`）。
     /// 运行期由各自 `Run` 按血量改写（`MagicMonObject.cs:29/33`、`ElectronicScolpionMon.cs:39/43`）。
     ///
     /// 消费方：MB-6（R25 / R14）。
-    pub use_magic: bool,
     /// C# `BoneKingMonster.DangerLevel`（`short`，`BoneKingMonster.cs:9`；ctor `:17` = 5）/
     /// `ScultureKingMonster._mNDangerLevel`（`int`，`ScultureKingMonster.cs:11`；ctor `:21` = 5）。
     /// 装载后按类置 5；运行期递减/回满（`BoneKingMonster.cs:56-63`、`ScultureKingMonster.cs:94-101`）。
     ///
     /// 消费方：MB-7（BoneKing R05）、MB-3（ScultureKing R34）。
-    pub danger_level: i32,
     /// C# `SoccerBall.N550`（`SoccerBall.cs:9`；ctor `:15` = 0）。
     ///
     /// 消费方：MB-8（SoccerBall R36；`Struck` `:83` 写、`Run` `:24/:70` 读写）。
-    pub n550: i32,
     /// **MB-3（R07）**：`CentipedeKingMonster._attackTick`（`CentipedeKingMonster.cs:9`）——
     /// 类私有攻击节拍，**不是** `WAbil.AttackTick`（后者是 `ai.attack_tick`）。
     /// ctor `:17` 置 `GetTickCount()`，由装载钩子按 `World::clock_ms` 落定；运行期在
     /// `Run`/`AttackTarget` 里刷新（10s/3s 两道门都读它）。
-    pub class_attack_tick: i64,
     /// **MB-3（R34）**：`ScultureKingMonster._mSlaveObjectList`（`ScultureKingMonster.cs:12`）——
     /// `CallSlave` 生成成功即入表；`Run` 尾倒序移除 `Death || Ghost` 的子怪。
     /// 与 BeeQueen 的 `special_children`（`BeeList`）是不同 C# 字段，不合并。
@@ -1543,22 +1902,18 @@ pub struct Entity {
     /// `ElfWarriorMonster.BoIsFirst`（`ElfWarriorMonster.cs:12`）——ctor 置 `true`，
     /// 首次 `Run` 出土后置 `false`（`ElfMonster.cs:46-52`、`ElfWarriorMonster.cs:114-120`）。
     /// 非神兽类保持 C# 字段缺省 `false`。
-    pub bo_is_first: bool,
     /// **MB-7（R16）**：`ElfWarriorMonster.DigDownTick`（`ElfWarriorMonster.cs:13`）——
     /// 入土/换形计时；ctor 无显式初值（`int` 缺省 0），`AppearNow()` 与
     /// `Run` 的 `boChangeFace == false` 支刷新（`ElfWarriorMonster.cs:22/162`）。
-    pub dig_down_tick: i64,
     /// **MB-8（R33）**：`SandMobObject._mDwAppearStart`（`SandMobObject.cs:9`，`int` 缺省 0）——
     /// 「血量回满后开始下潜」的起算时刻。`FixedHideMode` 支 `HP > MaxHP/20 && CheckComeOut()`
     /// 时写 `GetTickCount()`；`!FixedHideMode` 支的 `(now - _mDwAppearStart) > 3000` 门读它。
     /// 非 race 132 保持 C# 字段缺省 0。
-    pub appear_start_tick: i64,
     /// C# `GuardUnit.GuardDirection`（`sbyte`，`GuardUnit.cs:16`，无显式初值 ⇒ 0）；
     /// `ArcherGuard` ctor `ArcherGuard.cs:17` 置 **-1**（`ArcherPolice` 继承）。
     /// 运行期城堡守卫由 `UserCastle.cs:187` 改 3（未建模，登记）。
     ///
     /// 消费方：MB-3（ArcherGuard R02）。
-    pub guard_direction: i8,
     /// **oracle 无持久字段**：`CowKingMonster.SiegeLockCount()` 是 `Run` 内每次现算的
     /// 「3×3 邻域不可走格数」（`CowKingMonster.cs:96-118`，`>=5` 门在 `:47`）。
     ///
@@ -1567,7 +1922,6 @@ pub struct Entity {
     /// 本字段保持 0 即可。
     ///
     /// 消费方：MB-4（CowKing R10）。
-    pub siege_lock_count: i32,
     /// C# `CowKingMonster` 的 8 个私有字段（`CowKingMonster.cs:8-15`）——`Run`（`:40-94`）
     /// 的跳跃/狂暴状态。缺省 = C# 字段缺省（`int`/`bool` 全 0/false），
     /// ctor（`:17-25`）与 `Initialize()`（`:33-38`）的赋值由装载钩子落定。
@@ -1578,21 +1932,13 @@ pub struct Entity {
     /// 消费方：MB-4（R10）。
     ///
     /// `JumpTime`（`:8`；ctor `:20` = `GetTickCount()`）。
-    pub jump_time: i64,
     /// `CrazyReadyMode`（`CowKingMonster.cs:9`；ctor `:23` = false）。
-    pub crazy_ready_mode: bool,
     /// `CrazyKingMode`（`CowKingMonster.cs:10`；ctor `:24` = false）。
-    pub crazy_king_mode: bool,
     /// `CrazyCount`（`CowKingMonster.cs:11`；ctor `:22` = 0）。
-    pub crazy_count: i32,
     /// `CrazyReady`（`CowKingMonster.cs:12`，tick；字段缺省 0，进入 ready 时写）。
-    pub crazy_ready: i64,
     /// `CrazyTime`（`CowKingMonster.cs:13`，tick；字段缺省 0，进入 king 时写）。
-    pub crazy_time: i64,
     /// `oldHitTime`（`CowKingMonster.cs:14`，tick；字段缺省 0，`Initialize()` `:35` = `NextHitTime`）。
-    pub old_hit_time: i64,
     /// `oldWalkTime`（`CowKingMonster.cs:15`，tick；字段缺省 0，`Initialize()` `:36` = `WalkSpeed`）。
-    pub old_walk_time: i64,
     /// 怪物/动物 AI 状态（`AnimalObject`/`MonsterObject` 字段子集；玩家不用，保持默认）。
     pub ai: AnimalState,
     /// 商人状态（`Merchant` 字段子集，M3⑤-实现 2 第①片）。`Some(_)` ⇒ 本实体是交易商人：
@@ -1632,14 +1978,10 @@ impl Entity {
         let entity = Entity {
             id,
             name: name.into(),
-            race: ACTOR_RACE_PLAY,
-            race_img: 0, // `BaseObject.cs:380` ctor `RaceImg = 0`；商人 ctor 另置 50。
-            appr: 0,     // BaseObject ctor 未显式赋值 ⇒ 0（由 ApplyMonsterAbility 覆盖）
             master: None,
             slave_relax: false,
             slave_list: Vec::new(),
             // `BaseObject.cs:403`：ctor `StickMode = false`；两类虫后由 ctor 等价点置 true。
-            stick_mode: false,
             special_children: Vec::new(),
             is_slave: false,
             is_clone: false,
@@ -1647,25 +1989,9 @@ impl Entity {
             slave_make_level: 0,
             master_royalty_tick: 0,
             master_tick: 0,
-            death: false,
-            invisible: false,
-            hide_mode: false,
-            ghost: false,
-            death_tick: 0,
-            ghost_tick: 0,
-            can_re_alive: false,
-            re_alive_tick: 0,
-            fixed_hide_mode: false,
-            ob_mode: false,
-            nasty_mode: false,
             // `PlayObject.cs:908` 新角色 `AttatckMode = 0 = HAM_ALL`；未接 `CM_ATTACKMODE` 前恒为 0。
-            attack_mode: 0,
-            in_safe_zone: false,
-            admin_mode: false,
-            stone_mode: false,
             // `PlayObject.cs:891`：`Initialize()` 置 `DieInFight3Zone = false`。
             // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
-            name_color: 255,
             // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），
             // `PowerRate = 100`；`BoPowerItem=false` / `PowerItem=0`。
             luck: 0,
@@ -1693,7 +2019,6 @@ impl Entity {
             // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
             use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
             // `PlayObject.cs:2018`：ctor 缺省 `AngryRing = false`；`NoDropUseItem` 亦无 ctor 赋值。
-            want_ref_msg: false,
             // 玩家默认满血（WAbil.HP 的默认值不能是 0：0 在语义上等于「已死」，
             // 会让死亡结算把刚进图的玩家当成死者——实测踩过）
             // `BaseObject.cs:391`/`:393`：`GreenPoisoningPoint = 0`、`CharStatusEx = 0`；
@@ -1710,7 +2035,6 @@ impl Entity {
             show_hp: false,
             show_hp_tick: 0,
             show_hp_interval: 0,
-            super_man: false,
             // `CharacterObject.HitSpeed`（`RecalcAbilitys` 才赋值）⇒ ctor 缺省 0。
             // `PlayObject.cs:490/494`：`MagicShield`/`UnMagicShield` 构造缺省 `false`。
             magic_shield: false,
@@ -1719,10 +2043,8 @@ impl Entity {
             // `BaseObject.cs:390`：ctor 置 `AntiMagic = 0`（普通生成路径不调 `RecalcAbilitys`）。
             // `BaseObject.cs:384/:389`：ctor 置 `Light = 0`、`AntiPoison = 0`。
             // `NormNpc`/`Merchant` 的 ctor 在各自创建点覆盖为 2/99（`NormNpc.cs:43-44`）。
-            light: 0,
             // `BaseObject.WAbil.MAC` 构造缺省 0（`RecalcAbilitys` 才写 `Abil.MAC + AddAbil.MAC`）。
             // `BaseObject.RushMode` 构造缺省 false（`BaseObject.cs` ctor）。
-            rush_mode: false,
             // `PlayObject.cs:201-203`：三个 7 槽数组构造缺省全 0。
             extra_abil: [0; 7],
             extra_abil_times: [0; 7],
@@ -1731,35 +2053,14 @@ impl Entity {
             revival_tick: 0,
             un_revival: false,
             flame_ring: false,
-            death_settled: false,
-            die_called: false,
-            class_attack_tick: 0,
             class_slave_list: Vec::new(),
             // MB-7：神兽两形态 ctor 置 `BoIsFirst = true`（`apply_monster_class_constants`）；
             // 字段缺省照 C# `bool` = false。`DigDownTick` 是 `int` 缺省 0。
-            bo_is_first: false,
-            dig_down_tick: 0,
-            appear_start_tick: 0,
             // 专用怪 ctor 类常量（PR-2）：`Entity` 是 C# 各怪物类的公共载体，这里落
             // **C# 字段缺省**（`int`/`sbyte` 0、`bool` false）；派生类 ctor 的实际常量
             // （StickMonster 4/4、CentipedeKing 4/6、SandMob 8/4、BoneKing/ScultureKing 5、
             // ArcherGuard -1 等）由装载钩子 `crate::mongen::apply_monster_class_constants`
             // 按 race 覆盖（oracle `new Xxx()` 的位置）。无抽数。
-            come_out_value: 0,
-            attack_range: 0,
-            use_magic: false,
-            danger_level: 0,
-            n550: 0,
-            guard_direction: 0,
-            siege_lock_count: 0,
-            jump_time: 0,
-            crazy_ready_mode: false,
-            crazy_king_mode: false,
-            crazy_count: 0,
-            crazy_ready: 0,
-            crazy_time: 0,
-            old_hit_time: 0,
-            old_walk_time: 0,
             // `PlayObject` ctor（`PlayObject.cs:899-901`）在 `BaseObject` ctor 之后立即覆盖
             // `SearchTime = 1000` 与 `SearchTick = GetTickCount()`；本函数是玩家的 ctor
             // 等价物（`race` 缺省 = `ActorRace.Play`），故这里落 1000（常量、不抽数）。
@@ -1830,6 +2131,53 @@ impl Entity {
             pvp_flag: false,
             pvp_name_color_tick: 0,
             die_in_fight3_zone: false,
+            // S4b-1 ctor 缺省（与迁移前 `Entity::new` 逐字段一致；`name_color=255`、
+            // `race=ACTOR_RACE_PLAY` 是 ctor 覆盖值，见迁移文档 §3.4）。
+            invisible: false,
+            hide_mode: false,
+            fixed_hide_mode: false,
+            ob_mode: false,
+            nasty_mode: false,
+            attack_mode: 0,
+            in_safe_zone: false,
+            admin_mode: false,
+            stone_mode: false,
+            super_man: false,
+            rush_mode: false,
+            want_ref_msg: false,
+            stick_mode: false,
+            death: false,
+            ghost: false,
+            death_tick: 0,
+            ghost_tick: 0,
+            can_re_alive: false,
+            re_alive_tick: 0,
+            death_settled: false,
+            die_called: false,
+            race: ACTOR_RACE_PLAY,
+            race_img: 0,
+            appr: 0,
+            light: 0,
+            name_color: 255,
+            come_out_value: 0,
+            attack_range: 0,
+            use_magic: false,
+            danger_level: 0,
+            n550: 0,
+            class_attack_tick: 0,
+            bo_is_first: false,
+            dig_down_tick: 0,
+            appear_start_tick: 0,
+            guard_direction: 0,
+            siege_lock_count: 0,
+            jump_time: 0,
+            crazy_ready_mode: false,
+            crazy_king_mode: false,
+            crazy_count: 0,
+            crazy_ready: 0,
+            crazy_time: 0,
+            old_hit_time: 0,
+            old_walk_time: 0,
         }
     }
 
@@ -1861,9 +2209,13 @@ type ReadViewQuery = bevy_ecs::query::QueryState<(
     &'static CombatAttribution,
     &'static Recovery,
     &'static PvpState,
+    &'static Flags,
+    &'static LifeCycle,
+    &'static Appearance,
+    &'static MonsterClassState,
 )>;
 
-/// 写路径缓存查询：`Entity` 主组件 + S4a 属性/成长组件（[`EntityMut`] 用）。
+/// 写路径缓存查询：`Entity` 主组件 + S4a 属性/成长组件 + S4b-1 状态组件（[`EntityMut`] 用）。
 type MutViewQuery = bevy_ecs::query::QueryState<(
     &'static mut Entity,
     &'static mut Vitals,
@@ -1874,6 +2226,10 @@ type MutViewQuery = bevy_ecs::query::QueryState<(
     &'static mut CombatAttribution,
     &'static mut Recovery,
     &'static mut PvpState,
+    &'static mut Flags,
+    &'static mut LifeCycle,
+    &'static mut Appearance,
+    &'static mut MonsterClassState,
 )>;
 
 pub struct EntityStore {
@@ -1921,6 +2277,10 @@ impl EntityStore {
             &CombatAttribution,
             &Recovery,
             &PvpState,
+            &Flags,
+            &LifeCycle,
+            &Appearance,
+            &MonsterClassState,
         )>();
         let mut_view_state = inner.world_mut().query::<(
             &mut Entity,
@@ -1932,6 +2292,10 @@ impl EntityStore {
             &mut CombatAttribution,
             &mut Recovery,
             &mut PvpState,
+            &mut Flags,
+            &mut LifeCycle,
+            &mut Appearance,
+            &mut MonsterClassState,
         )>();
         EntityStore {
             inner,
@@ -2014,6 +2378,22 @@ impl EntityStore {
         assert!(
             self.inner.insert_component(id, parts.pvp),
             "刚插入的实体必须能挂 PvpState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.flags),
+            "刚插入的实体必须能挂 Flags 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.life_cycle),
+            "刚插入的实体必须能挂 LifeCycle 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.appearance),
+            "刚插入的实体必须能挂 Appearance 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.monster_class),
+            "刚插入的实体必须能挂 MonsterClassState 组件（id={id}）"
         );
         self.refresh_view();
         id
@@ -2172,6 +2552,10 @@ impl EntityStore {
             attribution,
             recovery,
             pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
         ) = self
             .view_state
             .get_manual(self.inner.world(), bevy_entity)
@@ -2188,6 +2572,10 @@ impl EntityStore {
             attribution,
             recovery,
             pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
         ))
     }
 
@@ -2258,6 +2646,10 @@ impl EntityStore {
             pvp_name_color_tick: spawn.pvp_name_color_tick,
             die_in_fight3_zone: spawn.die_in_fight3_zone,
         };
+        let flags = spawn.flags_component();
+        let life_cycle = spawn.life_cycle_component();
+        let appearance = spawn.appearance_component();
+        let monster_class = spawn.monster_class_component();
         let Some(view) = self.mut_view_of_entity_by_id(id) else {
             return false;
         };
@@ -2270,6 +2662,10 @@ impl EntityStore {
         *view.attribution = attribution;
         *view.recovery = recovery;
         *view.pvp = pvp;
+        *view.flags = flags;
+        *view.life_cycle = life_cycle;
+        *view.appearance = appearance;
+        *view.monster_class = monster_class;
         true
     }
 
@@ -2295,7 +2691,21 @@ impl EntityStore {
         &mut self,
         bevy_entity: bevy_ecs::entity::Entity,
     ) -> Option<EntityMut<'_>> {
-        let (entity, vitals, ability, progression, spawn, drop, attribution, recovery, pvp) = self
+        let (
+            entity,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
+        ) = self
             .mut_view_state
             .get_mut(self.inner.world_mut(), bevy_entity)
             .ok()?;
@@ -2309,6 +2719,10 @@ impl EntityStore {
             attribution: bevy_ecs::change_detection::Mut::into_inner(attribution),
             recovery: bevy_ecs::change_detection::Mut::into_inner(recovery),
             pvp: bevy_ecs::change_detection::Mut::into_inner(pvp),
+            flags: bevy_ecs::change_detection::Mut::into_inner(flags),
+            life_cycle: bevy_ecs::change_detection::Mut::into_inner(life_cycle),
+            appearance: bevy_ecs::change_detection::Mut::into_inner(appearance),
+            monster_class: bevy_ecs::change_detection::Mut::into_inner(monster_class),
         })
     }
 
@@ -2318,6 +2732,42 @@ impl EntityStore {
     }
 
     pub fn ability_mut(&mut self, id: i32) -> Option<&mut AbilitySnapshot<BaseAbil>> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取状态位组件（S4b-1 起真值在组件，不在 `Entity`）。
+    pub fn flags(&self, id: i32) -> Option<&Flags> {
+        self.inner.get_component(id)
+    }
+
+    pub fn flags_mut(&mut self, id: i32) -> Option<&mut Flags> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取生命周期组件（S4b-1）。
+    pub fn life_cycle(&self, id: i32) -> Option<&LifeCycle> {
+        self.inner.get_component(id)
+    }
+
+    pub fn life_cycle_mut(&mut self, id: i32) -> Option<&mut LifeCycle> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取外观/行为轴组件（S4b-1）。
+    pub fn appearance(&self, id: i32) -> Option<&Appearance> {
+        self.inner.get_component(id)
+    }
+
+    pub fn appearance_mut(&mut self, id: i32) -> Option<&mut Appearance> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取类专用状态组件（S4b-1）。
+    pub fn monster_class(&self, id: i32) -> Option<&MonsterClassState> {
+        self.inner.get_component(id)
+    }
+
+    pub fn monster_class_mut(&mut self, id: i32) -> Option<&mut MonsterClassState> {
         self.inner.get_component_mut(id)
     }
 
@@ -2358,6 +2808,10 @@ impl EntityStore {
             attribution,
             recovery,
             pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
         ) = self
             .view_state
             .get_manual(self.inner.world(), bevy_entity)
@@ -2410,6 +2864,51 @@ impl EntityStore {
             pvp_flag: pvp.pvp_flag,
             pvp_name_color_tick: pvp.pvp_name_color_tick,
             die_in_fight3_zone: pvp.die_in_fight3_zone,
+            invisible: flags.invisible,
+            hide_mode: flags.hide_mode,
+            fixed_hide_mode: flags.fixed_hide_mode,
+            ob_mode: flags.ob_mode,
+            nasty_mode: flags.nasty_mode,
+            attack_mode: flags.attack_mode,
+            in_safe_zone: flags.in_safe_zone,
+            admin_mode: flags.admin_mode,
+            stone_mode: flags.stone_mode,
+            super_man: flags.super_man,
+            rush_mode: flags.rush_mode,
+            want_ref_msg: flags.want_ref_msg,
+            stick_mode: flags.stick_mode,
+            death: life_cycle.death,
+            ghost: life_cycle.ghost,
+            death_tick: life_cycle.death_tick,
+            ghost_tick: life_cycle.ghost_tick,
+            can_re_alive: life_cycle.can_re_alive,
+            re_alive_tick: life_cycle.re_alive_tick,
+            death_settled: life_cycle.death_settled,
+            die_called: life_cycle.die_called,
+            race: appearance.race,
+            race_img: appearance.race_img,
+            appr: appearance.appr,
+            light: appearance.light,
+            name_color: appearance.name_color,
+            come_out_value: monster_class.come_out_value,
+            attack_range: monster_class.attack_range,
+            use_magic: monster_class.use_magic,
+            danger_level: monster_class.danger_level,
+            n550: monster_class.n550,
+            class_attack_tick: monster_class.class_attack_tick,
+            bo_is_first: monster_class.bo_is_first,
+            dig_down_tick: monster_class.dig_down_tick,
+            appear_start_tick: monster_class.appear_start_tick,
+            guard_direction: monster_class.guard_direction,
+            siege_lock_count: monster_class.siege_lock_count,
+            jump_time: monster_class.jump_time,
+            crazy_ready_mode: monster_class.crazy_ready_mode,
+            crazy_king_mode: monster_class.crazy_king_mode,
+            crazy_count: monster_class.crazy_count,
+            crazy_ready: monster_class.crazy_ready,
+            crazy_time: monster_class.crazy_time,
+            old_hit_time: monster_class.old_hit_time,
+            old_walk_time: monster_class.old_walk_time,
         })
     }
 
@@ -2435,6 +2934,10 @@ impl EntityStore {
                     attribution,
                     recovery,
                     pvp,
+                    flags,
+                    life_cycle,
+                    appearance,
+                    monster_class,
                 ) = self
                     .view_state
                     .get_manual(self.inner.world(), bevy_entity)
@@ -2451,6 +2954,10 @@ impl EntityStore {
                     attribution,
                     recovery,
                     pvp,
+                    flags,
+                    life_cycle,
+                    appearance,
+                    monster_class,
                 ))
             })
     }

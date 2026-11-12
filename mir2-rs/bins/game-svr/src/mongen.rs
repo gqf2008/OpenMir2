@@ -645,15 +645,15 @@ pub fn bind_new_certificates(
     for (idx, entry) in state.entries.iter().enumerate() {
         let start = before.get(idx).copied().unwrap_or(0);
         for &id in entry.cert_list.iter().skip(start) {
-            let Some(mut e) = world.entities.get_mut(id) else {
+            let Some(e) = world.entities.get_mut(id) else {
                 continue;
             };
             // 已有归属（复活后的怪仍在同一 cert_list）⇒ 不覆盖。
             if e.spawn.mon_gen.is_some() {
                 continue;
             }
-            e.can_re_alive = true;
-            e.re_alive_tick = i64::from(now_i32);
+            e.life_cycle.can_re_alive = true;
+            e.life_cycle.re_alive_tick = i64::from(now_i32);
             e.spawn.mon_gen = Some(idx);
             e.spawn.mon_gen_zen_time = entry.zen_time;
             bound.push(id);
@@ -825,12 +825,12 @@ impl MonsterSink for WorldMonsterSink<'_> {
             // `ApplyMonsterAbility`（`WorldServer.MonGen.cs:896-897`）：`Abil.MP = 0`、
             // `Abil.MaxMP = monster.MP`。HP 已在生成路径写入，这里补齐 MP 上限
             // （缺表时 oracle 不动能力⇒保持 0）。
-            if let Some(mut e) = self.world.entities.get_mut(id) {
+            if let Some(e) = self.world.entities.get_mut(id) {
                 e.vitals.mp = 0;
                 e.vitals.max_mp = mon.mp;
                 // `ApplyMonsterAbility`（`WorldServer.MonGen.cs:889`）：`Appr = monster.Appr`。
                 // 唯一行为消费点 = `ElfWarriorMonster.AttackTarget` 的 704/706/708 形态门。
-                e.appr = mon.appr;
+                e.appearance.appr = mon.appr;
             }
             self.displays
                 .set(id, downlink::monster_display(req.dir, mon));

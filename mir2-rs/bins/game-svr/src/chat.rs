@@ -445,7 +445,7 @@ mod tests {
         assert!(!got.contains(&c) && !got.contains(&m) && !got.contains(&g));
 
         // ObMode ⇒ 只发自己（`Message.cs:390-394`）
-        world.entities.get_mut(a).unwrap().ob_mode = true;
+        world.entities.get_mut(a).unwrap().flags.ob_mode = true;
         assert_eq!(hear_targets(&world, a, SEND_REF_MSG_RANGE), vec![a]);
     }
 

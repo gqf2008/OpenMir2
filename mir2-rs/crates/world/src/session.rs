@@ -582,8 +582,8 @@ impl World {
             // DisappearA()` —— **不销毁对象**（它仍留在 `PlayObjectList`，由 `WorldServer.cs:707-716`
             // 的移除门收走）。本仓对应：实体留在 `entities` 里且 `ghost=true`，`actor_id` 保留；
             // 移除由 `disconnect`（上面的 Left 分支）承担。
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
-                e.ghost = true;
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.life_cycle.ghost = true;
             }
             if let Some(b) = self.entities.map_binding_mut(actor_id) {
                 // `DeleteFromMap`（`Envirnoment.cs:660-661`）把 `AddToMaped` 置 false；
@@ -738,10 +738,10 @@ mod tests {
         let live = enter(&mut w, "live", 0, 10, 10);
         let ghost = enter(&mut w, "ghost", 0, 12, 10);
         // 接收者 Ghost：`!targetObject.Ghost` 跳过。
-        w.entities.get_mut(ghost).unwrap().ghost = true;
+        w.entities.get_mut(ghost).unwrap().life_cycle.ghost = true;
         let leaver = enter(&mut w, "leaver", 0, 14, 10);
         // 发送者 Ghost（`MakeGhost` 在 `DisappearA` 之前置位）：广播照发。
-        w.entities.get_mut(leaver).unwrap().ghost = true;
+        w.entities.get_mut(leaver).unwrap().life_cycle.ghost = true;
         w.disconnect("leaver").expect("离开世界");
         assert_eq!(
             departs_sorted(&mut w),

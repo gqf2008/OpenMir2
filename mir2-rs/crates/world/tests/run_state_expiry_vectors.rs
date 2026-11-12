@@ -124,7 +124,7 @@ fn crazy_mode_expiry_runs_on_non_movable_path() {
     let id = monster(&mut w);
     {
         let mut e = w.entities.get_mut(id).unwrap();
-        e.stone_mode = true; // `!StoneMode` 门失败 ⇒ 不可移动路径
+        e.flags.stone_mode = true; // `!StoneMode` 门失败 ⇒ 不可移动路径
         e.ai.crazy_mode = true;
         e.ai.crazy_mode_tick = 1_000;
         e.ai.crazy_mode_interval = 1_000;

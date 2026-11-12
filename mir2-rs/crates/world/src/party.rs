@@ -282,7 +282,7 @@ impl World {
     #[must_use]
     pub fn party_play_object_by_name(&self, name: &str) -> Option<i32> {
         self.entities
-            .iter()
+            .iter_ref()
             // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B13）：ghost 的世界对象仍可能存在（M-3 后），
             // 但组队/邀请按名找人**不该命中 ghost**（oracle 的 ghost 名字不再是对外可用的在线对象）。
             // **依据等级**：没有直接的 oracle 行号（矩阵 §8 已如实登记）⇒ 按卡面「举证不了就按需补过滤」处理。
@@ -920,7 +920,7 @@ mod tests {
             "活玩家照常命中（门只挡 ghost）"
         );
         // 负例的负例：清掉 ghost 位 ⇒ 立刻能命中（证明上面 None 确由 ghost 门给出）。
-        w.entities.get_mut(gid).unwrap().ghost = false;
+        w.entities.get_mut(gid).unwrap().life_cycle.ghost = false;
         assert_eq!(w.party_play_object_by_name("ghost"), Some(gid));
     }
 }

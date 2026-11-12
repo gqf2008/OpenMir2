@@ -345,7 +345,10 @@ pub fn spawn_merchants_with_scripts(
                     // `Entity::new` 的 `ai.dir` 缺省 0 ⇒ 宿主补齐后再投影进展示表。
                     e.ai.dir = crate::downlink::NPC_INITIAL_DIR;
                     let appr = e.merchant.as_ref().map_or(0, |m| m.appr);
-                    displays.set(id, npc_display(e.ai.dir, e.race_img, appr, &name));
+                    displays.set(
+                        id,
+                        npc_display(e.ai.dir, e.appearance.race_img, appr, &name),
+                    );
                 }
                 // **卡 `openmir2-castle-potion-buy-response`**：等价 oracle `Merchant.LoadNpcData`
                 // 末尾的一次性 `RefillGoods()`（`Merchant.cs:1070`）——挂图成功即把脚本 `[goods]`

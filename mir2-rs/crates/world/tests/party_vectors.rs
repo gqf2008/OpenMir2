@@ -114,7 +114,7 @@ fn create_group_fail_codes_are_oracle_exact() {
     );
     // -2：目标 Death
     let (mut w, l, t, _u) = three_players();
-    w.entities.get_mut(t).unwrap().death = true;
+    w.entities.get_mut(t).unwrap().life_cycle.death = true;
     assert_eq!(
         w.party_create_group(l, "T", &cfg()),
         vec![PartyEvent::CreateGroupFail {
@@ -372,7 +372,7 @@ fn run_tick_clears_owner_when_leader_dead_and_removes_dead_member() {
     w.party_add_group_member(l, "U", &cfg());
 
     // 团长死亡 ⇒ 非团长成员的 GroupOwner 清 0（oracle Message.cs:704-713）
-    w.entities.get_mut(l).unwrap().death = true;
+    w.entities.get_mut(l).unwrap().life_cycle.death = true;
     w.party_run_tick();
     for id in [l, t, u] {
         assert_eq!(w.entities.get(id).unwrap().group_owner, 0);
@@ -382,7 +382,7 @@ fn run_tick_clears_owner_when_leader_dead_and_removes_dead_member() {
     let (mut w, l, t, u) = three_players();
     w.party_create_group(l, "T", &cfg());
     w.party_add_group_member(l, "U", &cfg());
-    w.entities.get_mut(t).unwrap().death = true;
+    w.entities.get_mut(t).unwrap().life_cycle.death = true;
     w.party_run_tick();
     assert_eq!(w.entities.get(l).unwrap().group_members, vec![l, u]);
     // 成员 T 的 GroupOwner 仍指向 L（团长没死，本侧不清）
@@ -532,7 +532,7 @@ fn die_member_triggers_oracle_del_member_and_group_survives() {
     assert_eq!(per_target(&rec.party_events, t), w_t, "T 的线上序");
 
     // 复活后重新入组：`group_owner == 0` 是入组前置（`-3`），证明无残留死组员。
-    w.entities.get_mut(t).unwrap().death = false;
+    w.entities.get_mut(t).unwrap().life_cycle.death = false;
     w.entities.get_mut(t).unwrap().allow_group = true;
     assert_eq!(
         w.party_add_group_member(l, "T", &cfg()),

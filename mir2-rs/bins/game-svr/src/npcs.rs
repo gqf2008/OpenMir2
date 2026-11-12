@@ -319,7 +319,12 @@ pub fn place_fixed_npcs_with_scripts(
             e.ai.dir = crate::downlink::NPC_INITIAL_DIR;
             displays.set(
                 npc.actor_id,
-                npc_display(e.ai.dir, e.race_img, e.appr, &npc.chr_name),
+                npc_display(
+                    e.ai.dir,
+                    e.appearance.race_img,
+                    e.appearance.appr,
+                    &npc.chr_name,
+                ),
             );
         }
     }

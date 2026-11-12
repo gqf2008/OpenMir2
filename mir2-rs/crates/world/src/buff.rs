@@ -369,8 +369,8 @@ impl BuffSystem {
                                         ));
                                     }
                                     BuffType::Transparent => {
-                                        if let Some(mut e) = world.entities.get_mut(actor_id) {
-                                            e.hide_mode = false;
+                                        if let Some(e) = world.entities.get_mut(actor_id) {
+                                            e.flags.hide_mode = false;
                                         }
                                     }
                                     _ => {}
@@ -974,7 +974,7 @@ mod tests {
         let mut w = world_with_players(&[1, 2]);
         w.poison_dec_health_time = 2500;
         let base = w.clock_ms + BUFF_EPOCH_MS;
-        w.entities.get_mut(1).unwrap().ghost = true;
+        w.entities.get_mut(1).unwrap().life_cycle.ghost = true;
         for id in [1, 2] {
             let mut e = w.entities.get_mut(id).unwrap();
             e.ai.animal = true;

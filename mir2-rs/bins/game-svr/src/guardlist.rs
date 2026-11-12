@@ -278,7 +278,7 @@ mod tests {
 
     /// 世界内 race 11 守卫数（闭包捕获会与 sink 的 `&mut world` 冲突 ⇒ 独立函数）。
     fn guard_count(world: &mir2_world::World) -> usize {
-        world.entities.iter().filter(|e| e.race == 11).count()
+        world.entities.iter_ref().filter(|e| e.race == 11).count()
     }
 
     /// 判据 1（端到端逐字段）：两条合法行 ⇒ 世界内两只守卫，`name/map_id/(x,y)/dir` 逐字段
@@ -457,7 +457,7 @@ mod tests {
         );
         assert!(host.state.entries.is_empty(), "失败行不产生合成条目");
         assert_eq!(
-            world.entities.iter().filter(|e| e.race == 11).count(),
+            world.entities.iter_ref().filter(|e| e.race == 11).count(),
             0,
             "世界内 0 只守卫"
         );
