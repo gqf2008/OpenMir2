@@ -250,8 +250,9 @@ pub const DETAIL_CLIENT_ITEM_LEN: usize = 124;
 ///   ExpAdd/Eff*/Slowdown/Tox/ToxAvoid/Light/Reference` 在冻结 `TClientStdItem` 里**没有对应
 ///   字段**（该区是 `Binded/reserve/AddOn/Eva`）⇒ 写 0。652 客户端只消费
 ///   `Name/MakeIndex/Dura/DuraMax`（消费赋值行 `ClMain.pas:13628-13632`：`pcg.Name /
-///   Stock=MakeIndex / price=DuraMax / Grade=Dura/1000`；13617-13625 是其前的两层解码循环，
-///   handler 区间 13594-13640），不受影响。
+///   Stock=MakeIndex / price=DuraMax / Grade=Dura/1000`；其前的 13606-13620 为两层解码
+///   （外层 DecodeString + 内层逐件 DecodeBuffer），旧引文 13617-13625 落在其尾部；
+///   handler 区间 13594-13639），不受影响。
 ///
 /// `GetUpgradeStdItem` 差量口径与 [`encode_client_item`] 相同（先升级、再编码）。
 #[must_use]
