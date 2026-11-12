@@ -460,22 +460,6 @@ mod adapters {
         fn apply_to(&self, e: &mut Entity);
     }
 
-    /// 全 `Copy` 字段组：直接搬值（避免在 `Copy` 上写 `.clone()`）。
-    macro_rules! copy_adapter {
-        ($ty:ty, $($field:ident),+ $(,)?) => {
-            impl FromEntity for $ty {
-                fn from_entity(e: &Entity) -> Self {
-                    Self { $($field: e.$field),+ }
-                }
-            }
-            impl ApplyToEntity for $ty {
-                fn apply_to(&self, e: &mut Entity) {
-                    $(e.$field = self.$field;)+
-                }
-            }
-        };
-    }
-
     /// 含 `String`/`Vec` 的字段组：按值 clone。
     macro_rules! clone_adapter {
         ($ty:ty, $($field:ident),+ $(,)?) => {
@@ -493,40 +477,6 @@ mod adapters {
     }
 
     clone_adapter!(CoreIdentity, id, name);
-    copy_adapter!(
-        BuffState,
-        poisoning_tick,
-        green_poisoning_point,
-        char_status,
-        char_status_ex,
-        status_time,
-        transparent,
-        show_hp,
-        show_hp_tick,
-        show_hp_interval,
-        magic_shield,
-        un_magic_shield,
-        extra_abil,
-        extra_abil_times,
-        extra_abil_flag
-    );
-    copy_adapter!(
-        PlayerRunState,
-        luck,
-        power_rate,
-        power_rate_time,
-        kill_mon_exp_rate,
-        kill_mon_exp_rate_time,
-        exp_rate_tick,
-        random_no,
-        bo_power_item,
-        power_item,
-        fire_hit_skill,
-        latest_fire_hit_tick,
-        twin_hit_skill,
-        latest_twin_hit_tick
-    );
-    copy_adapter!(Revival, revival, revival_tick, un_revival, flame_ring);
     clone_adapter!(
         SlaveState,
         master,
@@ -540,13 +490,6 @@ mod adapters {
         master_royalty_tick,
         master_tick,
         class_slave_list
-    );
-    clone_adapter!(
-        GroupState,
-        allow_group,
-        allow_group_re_call,
-        group_owner,
-        group_members
     );
 
     impl FromEntity for Inventory<UseItemSlot> {
@@ -601,46 +544,35 @@ mod adapters {
     #[derive(Clone, Debug)]
     pub struct EntityComponents {
         pub identity: CoreIdentity,
-        // S4b-1：`Appearance`/`Flags`/`LifeCycle`/`MonsterClassState` 已从 `Entity` 迁出，
+        // S4b-1/S4b-2：`Appearance`/`Flags`/`LifeCycle`/`MonsterClassState`/
+        // `BuffState`/`PlayerRunState`/`Revival`/`GroupState` 已从 `Entity` 迁出，
         // 不再参与 Entity ↔ 组件的 round-trip（真值在各自组件，契约由 ctor 用例钉住）。
-        pub buff: BuffState,
-        pub run_state: PlayerRunState,
         pub inventory: Inventory<UseItemSlot>,
-        pub revival: Revival,
         pub slave: SlaveState,
         pub ai: AiState<AnimalState>,
         pub merchant: MerchantState<WorldMerchantState>,
         pub npc: NpcState<WorldNpcState>,
-        pub group: GroupState,
     }
 
     impl EntityComponents {
         pub fn split(e: &Entity) -> Self {
             EntityComponents {
                 identity: FromEntity::from_entity(e),
-                buff: FromEntity::from_entity(e),
-                run_state: FromEntity::from_entity(e),
                 inventory: FromEntity::from_entity(e),
-                revival: FromEntity::from_entity(e),
                 slave: FromEntity::from_entity(e),
                 ai: FromEntity::from_entity(e),
                 merchant: FromEntity::from_entity(e),
                 npc: FromEntity::from_entity(e),
-                group: FromEntity::from_entity(e),
             }
         }
 
         pub fn apply_to(&self, e: &mut Entity) {
             self.identity.apply_to(e);
-            self.buff.apply_to(e);
-            self.run_state.apply_to(e);
             self.inventory.apply_to(e);
-            self.revival.apply_to(e);
             self.slave.apply_to(e);
             self.ai.apply_to(e);
             self.merchant.apply_to(e);
             self.npc.apply_to(e);
-            self.group.apply_to(e);
         }
     }
 }
@@ -664,8 +596,9 @@ mod tests {
     ///
     /// S3a/S3b/S4a 起已迁出的字段不再参与本函数：`DupState` 3 + `Transform` 4 +
     /// `MapBinding` 6 + S4a 20（Vitals 13 / AbilitySnapshot 1 / Progression 6）+
-    /// S4b-1 45（Appearance 5 / Flags 13 / LifeCycle 8 / MonsterClassState 19）⇒
-    /// `Entity` 剩 **52 字段**（P0 的 151 减 99）。迁出字段的 value 语义由各自的
+    /// S4b-1 45（Appearance 5 / Flags 13 / LifeCycle 8 / MonsterClassState 19）+
+    /// S4b-2 35（PlayerRunState 13 / GroupState 4 / Revival 4 / BuffState 14）⇒
+    /// `Entity` 剩 **17 字段**（P0 的 151 减 134，即 S4c 的 CoreIdentity/Ai/Slave/Merchant/Npc/Inventory）。迁出字段的 value 语义由各自的
     /// 组件契约用例（如 `s4a_component_ctor_defaults_match_entity_new`）钉住。
     fn distinctive_entity() -> EntitySpawn {
         let mut e = Entity::new(91, "ecs-p0", 13, 27);
@@ -1011,6 +944,30 @@ mod tests {
         // 派生 Default 与 ctor 缺省的差异（防用 `Default` 直接造实体）。
         assert_eq!(Appearance::default().name_color, 0);
         assert_eq!(Appearance::default().race, 0);
+    }
+
+    /// S4b-2：`PlayerRunState`/`GroupState`/`Revival`/`BuffState` 已脱离 `Entity`。
+    ///
+    /// 判据：ctor 缺省与迁移前逐字段一致——倍率 100、`poisoning_tick = BUFF_EPOCH_MS`、
+    /// 状态数组全 0、组队/复活位 false；派生 `Default` 的倍率是 0、`poisoning_tick` 是 0
+    /// ⇒ 两者**不同**（不得用 `Default` 造实体）。
+    ///
+    /// 牙：把 `EntitySpawn` 的 `power_rate`/`poisoning_tick` 缺省改 0 ⇒ 本用例红。
+    #[test]
+    fn s4b2_component_ctor_defaults_match_entity_new() {
+        let e = Entity::new(1, "x", 0, 0);
+        assert_eq!((e.power_rate, e.kill_mon_exp_rate), (100, 100));
+        assert_eq!((e.power_rate_time, e.kill_mon_exp_rate_time), (0, 0));
+        assert_eq!(e.luck, 0);
+        assert_eq!(e.random_no, 0);
+        assert_eq!(e.poisoning_tick, mir2_world::buff::BUFF_EPOCH_MS);
+        assert!(e.status_time.iter().all(|&v| v == 0));
+        assert!(e.extra_abil.iter().all(|&v| v == 0));
+        assert_eq!(e.group_owner, 0);
+        assert!(e.group_members.is_empty());
+        assert!(!e.allow_group && !e.revival && !e.flame_ring);
+        assert_eq!(PlayerRunState::default().power_rate, 0);
+        assert_eq!(BuffState::default().poisoning_tick, 0);
     }
 
     #[test]

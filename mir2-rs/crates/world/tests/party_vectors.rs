@@ -25,7 +25,7 @@ fn three_players() -> (World, i32, i32, i32) {
     let t = player(&mut w, 2, "T");
     let u = player(&mut w, 3, "U");
     for id in [t, u] {
-        w.entities.get_mut(id).unwrap().allow_group = true;
+        w.entities.get_mut(id).unwrap().group.allow_group = true;
     }
     (w, l, t, u)
 }
@@ -87,7 +87,7 @@ fn create_group_matches_oracle_call_order_and_dequeue_order() {
 
     // 状态：团长 L 的成员表含自己 + T，两方 GroupOwner 都是 L，L 的 AllowGroup 置 true
     let le = w.entities.get(l).unwrap();
-    assert_eq!(le.group_members, vec![l, t]);
+    assert_eq!(*le.group_members, vec![l, t]);
     assert!(le.allow_group);
     assert_eq!(w.entities.get(t).unwrap().group_owner, l);
     assert_eq!(le.group_owner, l);
@@ -135,7 +135,7 @@ fn create_group_fail_codes_are_oracle_exact() {
     );
     // -3：目标已在别人组里
     let (mut w, l, t, _u) = three_players();
-    w.entities.get_mut(t).unwrap().group_owner = 99;
+    w.entities.get_mut(t).unwrap().group.group_owner = 99;
     assert_eq!(
         w.party_create_group(l, "T", &cfg()),
         vec![PartyEvent::CreateGroupFail {
@@ -167,7 +167,7 @@ fn add_member_uses_strict_greater_than_max() {
     // Count == 2，`2 > 2` 假 ⇒ 允许加入（oracle `Operate.cs:855` 的严格大于）
     let evs = w.party_add_group_member(l, "U", &c);
     assert!(matches!(evs.first(), Some(PartyEvent::AddMemberOk { target }) if *target == l));
-    assert_eq!(w.entities.get(l).unwrap().group_members, vec![l, t, u]);
+    assert_eq!(*w.entities.get(l).unwrap().group_members, vec![l, t, u]);
     // Count == 3 ⇒ `3 > 2` 真 ⇒ -5
     assert_eq!(
         w.party_add_group_member(l, "U", &c),
@@ -220,7 +220,7 @@ fn del_member_leader_dissolves_whole_group() {
     let (mut w, l, t, u) = three_players();
     w.party_create_group(l, "T", &cfg());
     w.party_add_group_member(l, "U", &cfg());
-    assert_eq!(w.entities.get(l).unwrap().group_members, vec![l, t, u]);
+    assert_eq!(*w.entities.get(l).unwrap().group_members, vec![l, t, u]);
 
     // 团长自己退组（oracle `OnDie`/`Disappear` 走 `owner.DelMember(this)`，this==owner）
     let evs = w.party_del_member(l, l, &cfg());
@@ -330,7 +330,7 @@ fn group_mode_close_replies_659_in_all_owner_cases() {
     let (mut w, l, t, u) = three_players();
     // ③ 团长本人：先置 `AllowGroup=true`（真实序：团长开组前必发过 1019 开），关闭后
     //    `ClientGroupClose` 的 owner==me 分支**不改** `AllowGroup` ⇒ 659 带 Param=1。
-    w.entities.get_mut(l).unwrap().allow_group = true;
+    w.entities.get_mut(l).unwrap().group.allow_group = true;
     // L 建组收 T ⇒ L 是 owner、T 是成员（用既有建组口径，覆盖成员关闭路径）。
     let _ = w.party_create_group(l, "T", &cfg());
 
@@ -384,7 +384,7 @@ fn run_tick_clears_owner_when_leader_dead_and_removes_dead_member() {
     w.party_add_group_member(l, "U", &cfg());
     w.entities.get_mut(t).unwrap().life_cycle.death = true;
     w.party_run_tick();
-    assert_eq!(w.entities.get(l).unwrap().group_members, vec![l, u]);
+    assert_eq!(*w.entities.get(l).unwrap().group_members, vec![l, u]);
     // 成员 T 的 GroupOwner 仍指向 L（团长没死，本侧不清）
     assert_eq!(w.entities.get(t).unwrap().group_owner, l);
 }
@@ -429,7 +429,7 @@ fn add_member_fail_codes_are_oracle_exact() {
         }]
     );
     // -3：目标已有组
-    w.entities.get_mut(u).unwrap().group_owner = 77;
+    w.entities.get_mut(u).unwrap().group.group_owner = 77;
     assert_eq!(
         w.party_add_group_member(l, "U", &cfg()),
         vec![PartyEvent::AddMemberFail {
@@ -484,7 +484,7 @@ fn die_member_triggers_oracle_del_member_and_group_survives() {
     let (mut w, l, t, u) = three_players();
     w.party_create_group(l, "T", &cfg());
     w.party_add_group_member(l, "U", &cfg());
-    assert_eq!(w.entities.get(l).unwrap().group_members, vec![l, t, u]);
+    assert_eq!(*w.entities.get(l).unwrap().group_members, vec![l, t, u]);
 
     // 走真实死亡写入点：`hp == 0`（oracle `Struck` → `Die()`；Rust `settle_deaths`）。
     w.entities.get_mut(t).unwrap().vitals.hp = 0;
@@ -497,7 +497,7 @@ fn die_member_triggers_oracle_del_member_and_group_survives() {
         "Die→DelMember→LeaveGroup 必须清死亡者 GroupOwner（reviewer 探针的根因）"
     );
     assert_eq!(
-        w.entities.get(l).unwrap().group_members,
+        *w.entities.get(l).unwrap().group_members,
         vec![l, u],
         "团长成员表摘除死者，其余成员保留"
     );
@@ -533,7 +533,7 @@ fn die_member_triggers_oracle_del_member_and_group_survives() {
 
     // 复活后重新入组：`group_owner == 0` 是入组前置（`-3`），证明无残留死组员。
     w.entities.get_mut(t).unwrap().life_cycle.death = false;
-    w.entities.get_mut(t).unwrap().allow_group = true;
+    w.entities.get_mut(t).unwrap().group.allow_group = true;
     assert_eq!(
         w.party_add_group_member(l, "T", &cfg()),
         vec![

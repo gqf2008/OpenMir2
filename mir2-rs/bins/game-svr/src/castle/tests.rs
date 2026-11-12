@@ -1903,7 +1903,7 @@ fn castle_official_action_alive_status_uses_display_layer() {
 #[test]
 fn castle_official_action_digup_status_takes_entity_char_status() {
     let (mut world, door, a_id) = action_world();
-    world.entities.get_mut(door).unwrap().char_status = 0x99;
+    world.entities.get_mut(door).unwrap().buff.char_status = 0x99;
     let mut displays = downlink::DisplayTable::new();
     displays.set(
         door,

@@ -435,7 +435,7 @@ pub fn goto_target_xy(world: &mut World, actor_id: i32) {
 /// `StatusTimeArr[STONE]` 仍为 0 ⇒ `CanMove()` 为真（`ScultureMonster.cs:43` 的 `Run` 门）。
 #[must_use]
 pub fn can_move(e: &impl PvpView) -> bool {
-    !e.ghost() && !e.death() && e.base().status_time[crate::entity::POISON_STONE] == 0
+    !e.ghost() && !e.death() && e.buff().status_time[crate::entity::POISON_STONE] == 0
 }
 
 /// `MonsterObject.Think`（`MonsterObject.cs:187-215`）：3s 一次的 `DupMode`/目标有效性刷新，
@@ -1135,8 +1135,8 @@ fn frost_tiger_run(world: &mut World, actor_id: i32) {
                 send_ref_msg(world, actor_id, RM_CHARSTATUSCHANGED, 0, d.status, 0, 0);
             }
         }
-    } else if let Some(mut e) = world.entities.get_mut(actor_id) {
-        e.status_time[crate::entity::POISON_STATETRANSPARENT] = 0;
+    } else if let Some(e) = world.entities.get_mut(actor_id) {
+        e.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = 0;
     }
     class_seek_gate(world, actor_id);
 }
@@ -2745,12 +2745,12 @@ fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
 /// `ScultureMonster.MeltStone`（`ScultureMonster.cs:18-24`）：
 /// `CharStatusEx = 0` → `CharStatus = GetCharStatus()` → `RM_DIGUP` → `StoneMode = false`。
 fn sculture_melt_stone(world: &mut World, actor_id: i32) {
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
-        e.char_status_ex = 0;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.buff.char_status_ex = 0;
     }
     let status = world.get_char_status(actor_id);
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
-        e.char_status = status;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.buff.char_status = status;
     }
     let (dir, x, y) = match world.entities.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y),
@@ -3119,7 +3119,7 @@ fn apply_make_clone(world: &mut World, owner_id: i32, clone_id: i32) {
         clone.ability.abil = Some(abil);
     }
     // 5. 其余字段复制。
-    clone.status_time = status_time;
+    clone.buff.status_time = status_time;
     clone.ai.target_creature = target;
     clone.ai.target_focus_tick = focus;
     clone.attribution.last_hiter = last_hiter;
@@ -3484,8 +3484,8 @@ fn gas_attack(
             if world.rng.random_below(3) == 0 {
                 let hidden = world.entities.get(target_id).is_some_and(|t| t.hide_mode);
                 if hidden {
-                    if let Some(mut t) = world.entities.get_mut(target_id) {
-                        t.status_time[crate::entity::POISON_STATETRANSPARENT] = 1;
+                    if let Some(t) = world.entities.get_mut(target_id) {
+                        t.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = 1;
                     }
                 }
             }
@@ -5093,11 +5093,13 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         health_spell_calls = health_spell_calls.saturating_add(1);
     }
     if let Some(e) = world.entities.get_mut(actor_id) {
-        e.recovery.health_tick = health_tick;
-        e.recovery.spell_tick = spell_tick;
         e.vitals.hp = hp;
         e.vitals.mp = mp;
-        e.recovery.auto_recovery_tick = now;
+    }
+    if let Some(r) = world.entities.recovery_mut(actor_id) {
+        r.health_tick = health_tick;
+        r.spell_tick = spell_tick;
+        r.auto_recovery_tick = now;
     }
     // `ShowHp` 第二支（`BaseObject.cs:706-708`）：每次 `HealthSpellChanged()` 一次
     // `SendRefMsg`（不去重）⇒ 逐次记录，宿主逐条广播。
@@ -6838,9 +6840,8 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                                         (a.spell_tick, a.ai.next_hit_time)
                                     });
                                 if now - i64::from(spell_tick_now) > next_hit {
-                                    if let Some(a) = world.entities.get_mut(actor_id) {
-                                        a.recovery.spell_tick =
-                                            i32::try_from(now).unwrap_or(i32::MAX);
+                                    if let Some(r) = world.entities.recovery_mut(actor_id) {
+                                        r.spell_tick = i32::try_from(now).unwrap_or(i32::MAX);
                                     }
                                     let (tx, ty) = world
                                         .entities
@@ -9836,7 +9837,7 @@ mod tests {
             .unwrap()
             .flags
             .stone_mode = true;
-        world.entities.get_mut(id).unwrap().char_status = 0x1234;
+        world.entities.get_mut(id).unwrap().buff.char_status = 0x1234;
         mb1_see(&mut world, id, p);
         world.clock_ms = 100_000;
 
@@ -10486,7 +10487,7 @@ mod tests {
                 let mut e = world.entities.get_mut(id).unwrap();
                 e.life_cycle.death = true;
                 e.life_cycle.ghost = ghost;
-                e.status_time[crate::entity::POISON_STONE] = if stone { 1 } else { 0 };
+                e.buff.status_time[crate::entity::POISON_STONE] = if stone { 1 } else { 0 };
                 e.vitals.max_hp = 200;
                 e.vitals.hp = 0;
                 e.progression.mon_exp = 100;
@@ -10967,7 +10968,7 @@ mod tests {
             e.flags.stone_mode = true; // ctor 值
             e.ai.walk_speed = 0;
             e.ai.walk_tick = 99_999;
-            e.char_status_ex = 0x1;
+            e.buff.char_status_ex = 0x1;
         }
         sculture_king_run(&mut world, id);
         let e = world.entities.get(id).unwrap();
@@ -12931,7 +12932,7 @@ mod tests {
         assert!(w.enter_world(mid));
         let tid = player(&mut w, 11, 11);
         assert!(w.enter_world(tid));
-        w.entities.get_mut(tid).unwrap().status_time[crate::entity::POISON_DECHEALTH] = 9;
+        w.entities.get_mut(tid).unwrap().buff.status_time[crate::entity::POISON_DECHEALTH] = 9;
         w.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
         quiet_seek(&mut w, mid);
         w.rng = RandomNumber::with_seed(seed);
@@ -13245,7 +13246,8 @@ mod tests {
         w.clock_ms = 100_000;
         let tiger = monster(&mut w, 10, 10);
         set_race(&mut w, tiger, 210);
-        w.entities.get_mut(tiger).unwrap().status_time[crate::entity::POISON_STATETRANSPARENT] = 50;
+        w.entities.get_mut(tiger).unwrap().buff.status_time
+            [crate::entity::POISON_STATETRANSPARENT] = 50;
         assert!(w.enter_world(tiger));
         quiet_seek(&mut w, tiger);
         w.rng = RandomNumber::with_seed(3);
@@ -13271,10 +13273,10 @@ mod tests {
         let tiger = monster(&mut w, 10, 10);
         set_race(&mut w, tiger, 210);
         {
-            let mut e = w.entities.get_mut(tiger).unwrap();
-            e.status_time[crate::entity::POISON_STATETRANSPARENT] = 180;
+            let e = w.entities.get_mut(tiger).unwrap();
+            e.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = 180;
             e.flags.hide_mode = true;
-            e.transparent = true;
+            e.buff.transparent = true;
         }
         assert!(w.enter_world(tiger));
         let tid = player(&mut w, 12, 10);
@@ -14404,7 +14406,7 @@ mod tests {
                 e.slave_make_level = 2;
                 e.slave_exp_level = 1;
                 e.ai.dir = 3;
-                e.status_time[0] = 7;
+                e.buff.status_time[0] = 7;
                 e.ai.target_creature = Some(target);
                 e.ai.target_focus_tick = 555;
                 e.attribution.last_hiter = Some(target);
@@ -14822,7 +14824,7 @@ mod guard_target_castle_tests {
             "Castle == null ⇒ 不看 MasterGuild（旧路径）"
         );
         let red = add_player(&mut w, 9, 5, Some(G_OTHER));
-        w.entities.get_mut(red).unwrap().pvp.pk_point = 250;
+        w.entities.pvp_state_mut(red).unwrap().pk_point = 250;
         assert!(
             guard_unit_is_proper_target(&mut w, archer, red),
             "旧尾段：PvpLevel >= 2 的玩家可打"
@@ -15408,7 +15410,6 @@ mod mb89_tests {
             let mut e = world.entities.get_mut(m).unwrap();
             e.vitals.dc = 10 | (10 << 8);
             e.vitals.anti_magic = anti_magic;
-            e.recovery.spell_tick = 0;
             e.ai.next_hit_time = 2000;
             e.ai.target_creature = Some(target);
             // `SetTargetCreat` 等价：`TargetFocusTick = GetTickCount()`（`BaseObject.Base.cs:113`
@@ -15419,6 +15420,7 @@ mod mb89_tests {
             e.ai.target_y = 10;
             e.ai.dir = DIR_RIGHT;
         }
+        world.entities.recovery_mut(m).unwrap().spell_tick = 0;
         world.entities.get_mut(pose).unwrap().vitals.mac = 5 | (5 << 8);
         FireballSetup {
             world,

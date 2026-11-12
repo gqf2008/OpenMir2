@@ -144,9 +144,9 @@ fn fire_hit_expiry_strictly_after_20s_and_event_order() {
     let mut w = World::new(32, 32);
     let id = player(&mut w);
     {
-        let mut e = w.entities.get_mut(id).unwrap();
-        e.fire_hit_skill = true;
-        e.latest_fire_hit_tick = 1_000;
+        let e = w.entities.get_mut(id).unwrap();
+        e.player_run.fire_hit_skill = true;
+        e.player_run.latest_fire_hit_tick = 1_000;
     }
     // 边界：20_000 == 20*1000 ⇒ 不清。
     w.clock_ms = 21_000;
@@ -171,9 +171,9 @@ fn fire_hit_expiry_falls_back_attack_power() {
     let mut w = World::new(32, 32);
     let id = player(&mut w);
     {
-        let mut e = w.entities.get_mut(id).unwrap();
-        e.fire_hit_skill = true;
-        e.latest_fire_hit_tick = 1_000;
+        let e = w.entities.get_mut(id).unwrap();
+        e.player_run.fire_hit_skill = true;
+        e.player_run.latest_fire_hit_tick = 1_000;
     }
     // 到期前：mode 7 走 `nPower + Round(nPower/100*HitDouble*10)`（250 + 200 = 450）。
     let before = w.entities.get(id).unwrap();
@@ -210,9 +210,9 @@ fn twin_hit_expiry_strictly_after_60s() {
     let mut w = World::new(32, 32);
     let id = player(&mut w);
     {
-        let mut e = w.entities.get_mut(id).unwrap();
-        e.twin_hit_skill = true;
-        e.latest_twin_hit_tick = 1_000;
+        let e = w.entities.get_mut(id).unwrap();
+        e.player_run.twin_hit_skill = true;
+        e.player_run.latest_twin_hit_tick = 1_000;
     }
     // 边界：60_000 == 60*1000 ⇒ 不清。
     w.clock_ms = 61_000;
@@ -232,11 +232,11 @@ fn both_expiries_keep_oracle_event_order() {
     let mut w = World::new(32, 32);
     let id = player(&mut w);
     {
-        let mut e = w.entities.get_mut(id).unwrap();
-        e.fire_hit_skill = true;
-        e.latest_fire_hit_tick = 1_000;
-        e.twin_hit_skill = true;
-        e.latest_twin_hit_tick = 1_000;
+        let e = w.entities.get_mut(id).unwrap();
+        e.player_run.fire_hit_skill = true;
+        e.player_run.latest_fire_hit_tick = 1_000;
+        e.player_run.twin_hit_skill = true;
+        e.player_run.latest_twin_hit_tick = 1_000;
     }
     w.clock_ms = 61_001;
     assert_eq!(
@@ -255,17 +255,17 @@ fn expiry_is_player_only_and_world_tick_records_it() {
     let pid = player(&mut w);
     let mid = monster(&mut w);
     {
-        let mut e = w.entities.get_mut(pid).unwrap();
-        e.fire_hit_skill = true;
-        e.latest_fire_hit_tick = 0;
-        e.twin_hit_skill = true;
-        e.latest_twin_hit_tick = 0;
+        let e = w.entities.get_mut(pid).unwrap();
+        e.player_run.fire_hit_skill = true;
+        e.player_run.latest_fire_hit_tick = 0;
+        e.player_run.twin_hit_skill = true;
+        e.player_run.latest_twin_hit_tick = 0;
     }
     // 非玩家即使字段被置位也不清（oracle 的到期段在 `PlayObject.Run`）。
     {
-        let mut e = w.entities.get_mut(mid).unwrap();
-        e.fire_hit_skill = true;
-        e.twin_hit_skill = true;
+        let e = w.entities.get_mut(mid).unwrap();
+        e.player_run.fire_hit_skill = true;
+        e.player_run.twin_hit_skill = true;
     }
     w.clock_ms = 60_000; // tick 内部 +200 ⇒ 60_200（> 20s 且 > 60s）
     let rec = w.tick();

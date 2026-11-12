@@ -25,7 +25,9 @@ use crate::combat::{
     attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
-use crate::entity::{Entity, EntitySpawn, EntityStore, PvpView};
+#[cfg(test)]
+use crate::entity::Entity;
+use crate::entity::{EntitySpawn, EntityStore, PvpView};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
 
@@ -1668,9 +1670,9 @@ impl World {
         self.buffs
             .add_buff(actor_id, buff_type, n_time, n_point, now);
         let status = self.get_char_status(actor_id);
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.char_status = status;
-            e.green_poisoning_point = n_point as u8;
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = status;
+            e.buff.green_poisoning_point = n_point as u8;
         }
         true
     }
@@ -1687,8 +1689,8 @@ impl World {
                 .add_buff(actor_id, BuffType::DefensePower, n_sec, n_sec, now);
         }
         let status = self.get_char_status(actor_id);
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.char_status = status;
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = status;
         }
     }
 
@@ -1698,8 +1700,8 @@ impl World {
         self.buffs
             .add_buff(actor_id, BuffType::MagicDefensePower, n_sec, n_sec, now);
         let status = self.get_char_status(actor_id);
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.char_status = status;
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = status;
         }
     }
 
@@ -1709,8 +1711,8 @@ impl World {
         let now = self.buff_now();
         self.buffs
             .add_buff(actor_id, BuffType::MagicShield, n_sec, n_sec, now);
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.magic_shield = true;
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.magic_shield = true;
         }
     }
 
@@ -1993,11 +1995,13 @@ impl World {
             if !e.pvp_flag || now - e.pvp_name_color_tick <= self.pk_flag_time_ms {
                 continue;
             }
-            let Some(t) = self.entities.get_mut(id) else {
+            let Some(t) = self.entities.get(id) else {
                 continue;
             };
-            t.pvp.pvp_flag = false;
             let color = crate::slave::get_chr_color(&t, &[], 0);
+            if let Some(p) = self.entities.pvp_state_mut(id) {
+                p.pvp_flag = false;
+            }
             out.push(crate::slave::NameColorDelivery {
                 target_id: id,
                 color,
@@ -2401,14 +2405,14 @@ impl World {
         // `:4333` 计时**无条件刷新**（在 `if (!targetObject.PvpFlag)` 之前）：目标已带 flag 时
         // 再来一次 `SetPkFlag` 不产帧，但会把过期时刻推后（oracle 原样，不许「顺手」改成早退）。
         let now = self.clock_ms;
-        if let Some(t) = self.entities.get_mut(target_id) {
-            t.pvp.pvp_name_color_tick = now;
+        if let Some(p) = self.entities.pvp_state_mut(target_id) {
+            p.pvp_name_color_tick = now;
         }
         if target_flagged {
             return None;
         }
-        if let Some(t) = self.entities.get_mut(target_id) {
-            t.pvp.pvp_flag = true;
+        if let Some(p) = self.entities.pvp_state_mut(target_id) {
+            p.pvp_flag = true;
         }
         Some(crate::slave::NameColorDelivery {
             target_id,
@@ -3354,11 +3358,11 @@ impl World {
             }
         }
         let status = crate::buff::get_char_status(self, target_id);
-        if let Some(mut e) = self.entities.get_mut(target_id) {
-            e.status_time[crate::entity::POISON_STATETRANSPARENT] = n_h_time;
-            e.char_status = status;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = n_h_time;
+            e.buff.char_status = status;
             e.flags.hide_mode = true;
-            e.transparent = true;
+            e.buff.transparent = true;
         }
         d.status_changed = true;
         d.status = status;
@@ -3471,9 +3475,9 @@ impl World {
         out.roll_passed = true;
         out.bo_train = true;
         let interval = crate::magic::power_show_hp_interval(&mut self.rng, magic, level, sc);
-        if let Some(mut e) = self.entities.get_mut(tid) {
-            e.show_hp_tick = self.clock_ms;
-            e.show_hp_interval = interval;
+        if let Some(e) = self.entities.get_mut(tid) {
+            e.buff.show_hp_tick = self.clock_ms;
+            e.buff.show_hp_interval = interval;
         }
         // 立即把 1500ms 自投递排到**目标自己**的队列。
         self.send_self_delay_msg_full(tid, crate::slave::RM_DOOPENHEALTH, 0, 0, 0, 0, 1500);
@@ -3493,10 +3497,10 @@ impl World {
         };
         let status =
             crate::buff::get_char_status(self, target_id) | crate::entity::POISON_OPENHEATH;
-        if let Some(mut e) = self.entities.get_mut(target_id) {
-            e.show_hp = true;
-            e.char_status_ex = status_ex;
-            e.char_status = status;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.buff.show_hp = true;
+            e.buff.char_status_ex = status_ex;
+            e.buff.char_status = status;
         }
         d.hp = self.entities.get(target_id).map_or(d.hp, |e| e.hp);
         d.max_hp = self.entities.get(target_id).map_or(d.max_hp, |e| e.max_hp);
@@ -3662,17 +3666,17 @@ impl World {
             return out;
         }
         out.roll_passed = true;
-        if let Some(mut e) = self.entities.get_mut(tid) {
-            if e.status_time[crate::entity::POISON_DECHEALTH] != 0 {
-                e.status_time[crate::entity::POISON_DECHEALTH] = 1;
+        if let Some(e) = self.entities.get_mut(tid) {
+            if e.buff.status_time[crate::entity::POISON_DECHEALTH] != 0 {
+                e.buff.status_time[crate::entity::POISON_DECHEALTH] = 1;
                 out.bo_train = true;
             }
-            if e.status_time[crate::entity::POISON_DAMAGEARMOR] != 0 {
-                e.status_time[crate::entity::POISON_DAMAGEARMOR] = 1;
+            if e.buff.status_time[crate::entity::POISON_DAMAGEARMOR] != 0 {
+                e.buff.status_time[crate::entity::POISON_DAMAGEARMOR] = 1;
                 out.bo_train = true;
             }
-            if e.status_time[crate::entity::POISON_STONE] != 0 {
-                e.status_time[crate::entity::POISON_STONE] = 1;
+            if e.buff.status_time[crate::entity::POISON_STONE] != 0 {
+                e.buff.status_time[crate::entity::POISON_STONE] = 1;
                 out.bo_train = true;
             }
         }
@@ -4502,9 +4506,9 @@ impl World {
     /// 由宿主完成（`RecalcAbilitys` 需要 `record.data` 与目录）。
     pub fn att_power_up(&mut self, target_id: i32, n_power: u16, n_time: i32) {
         let now = self.clock_ms;
-        if let Some(mut e) = self.entities.get_mut(target_id) {
-            e.extra_abil[0] = n_power;
-            e.extra_abil_times[0] = now + i64::from(n_time) * 1000;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.buff.extra_abil[0] = n_power;
+            e.buff.extra_abil_times[0] = now + i64::from(n_time) * 1000;
         }
     }
 
@@ -4517,7 +4521,7 @@ impl World {
         let now = self.clock_ms;
         let mut out = Vec::new();
         for id in self.entities.order_index() {
-            let Some(mut e) = self.entities.get_mut(id) else {
+            let Some(e) = self.entities.get_mut(id) else {
                 continue;
             };
             let mut expiry = ExtraAbilExpiry {
@@ -4525,18 +4529,20 @@ impl World {
                 ..ExtraAbilExpiry::default()
             };
             for i in 0..7usize {
-                if e.extra_abil[i] == 0 {
+                if e.buff.extra_abil[i] == 0 {
                     continue;
                 }
-                if now > e.extra_abil_times[i] {
-                    e.extra_abil[i] = 0;
-                    e.extra_abil_flag[i] = 0;
+                if now > e.buff.extra_abil_times[i] {
+                    e.buff.extra_abil[i] = 0;
+                    e.buff.extra_abil_flag[i] = 0;
                     expiry.health_changed = true;
                     expiry
                         .events
                         .push(ExtraAbilEventKind::Restored(u8::try_from(i).unwrap_or(0)));
-                } else if e.extra_abil_flag[i] == 0 && now > e.extra_abil_times[i] - 10_000 {
-                    e.extra_abil_flag[i] = 1;
+                } else if e.buff.extra_abil_flag[i] == 0
+                    && now > e.buff.extra_abil_times[i] - 10_000
+                {
+                    e.buff.extra_abil_flag[i] = 1;
                     expiry.events.push(ExtraAbilEventKind::TenSecondsBefore(
                         u8::try_from(i).unwrap_or(0),
                     ));
@@ -5616,7 +5622,7 @@ impl World {
             mp_clamped = true;
         }
         let is_play = e.appearance.race == crate::entity::ACTOR_RACE_PLAY;
-        let show_hp = e.show_hp;
+        let show_hp = e.buff.show_hp;
         let (id, hp, mp) = (e.id, e.vitals.hp, e.vitals.mp);
         if (hp_clamped || mp_clamped) && is_play {
             self.pending_verify_health_changes
@@ -5656,18 +5662,20 @@ impl World {
             .collect();
         let mut events = Vec::new();
         for id in ids {
-            let Some(mut e) = self.entities.get_mut(id) else {
+            let Some(e) = self.entities.get_mut(id) else {
                 continue;
             };
             // `PlayObject.Message.cs:54-58`：先 `SysMsg` 再 `SendSocket("+UFIR")`。
-            if e.fire_hit_skill && (now - e.latest_fire_hit_tick) > 20 * 1000 {
-                e.fire_hit_skill = false;
+            if e.player_run.fire_hit_skill && (now - e.player_run.latest_fire_hit_tick) > 20 * 1000
+            {
+                e.player_run.fire_hit_skill = false;
                 events.push((id, RunStateExpiry::SpiritsGone));
                 events.push((id, RunStateExpiry::FireHitSocket));
             }
             // `:60-64`：仅 `SendSocket("+UTWN")`。
-            if e.twin_hit_skill && (now - e.latest_twin_hit_tick) > 60 * 1000 {
-                e.twin_hit_skill = false;
+            if e.player_run.twin_hit_skill && (now - e.player_run.latest_twin_hit_tick) > 60 * 1000
+            {
+                e.player_run.twin_hit_skill = false;
                 events.push((id, RunStateExpiry::TwinHitSocket));
             }
         }
@@ -6259,7 +6267,7 @@ impl World {
             e.vitals.hp = e.vitals.max_hp;
             e.vitals.mp = e.vitals.max_mp;
             e.drop.gold = 0;
-            e.show_hp = false;
+            e.buff.show_hp = false;
             // `ReAliveEx` 的 `Skeleton = false`（`BaseObject.cs:2472`）——`BaseObject.Skeleton`
             // 的**唯一清点**（setter 只有屠宰效果体）。
             e.ai.skeleton = false;
@@ -7052,12 +7060,13 @@ impl World {
     /// `IsGroupMember`），不能读施法者自己的——否则同组玩家会被误判为合法目标
     /// （多抽、白扣护身符、638/642 而非恰 1 条 639）。
     #[must_use]
-    pub fn attacker_group_members(&self, attacker: &Entity) -> Vec<i32> {
-        if attacker.group_owner == 0 {
+    pub fn attacker_group_members(&self, attacker: &impl PvpView) -> Vec<i32> {
+        let group = attacker.group_state();
+        if group.group_owner == 0 {
             return Vec::new();
         }
         self.entities
-            .get(attacker.group_owner)
+            .get(group.group_owner)
             .map(|e| e.group_members.clone())
             .unwrap_or_default()
     }
@@ -12372,7 +12381,7 @@ mod p31_auto_get_exp_tests {
         let (mut w, id) = player_world(0, 10_000_000);
         w.combat_config.kill_mon_exp_multiple = 3;
         w.combat_config.mn_kill_mon_exp_multiple = 5;
-        w.entities.get_mut(id).unwrap().kill_mon_exp_rate = 250;
+        w.entities.get_mut(id).unwrap().player_run.kill_mon_exp_rate = 250;
         let mut st = AutoGetExpState {
             tick: 0,
             time_ms: 0,

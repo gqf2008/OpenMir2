@@ -358,12 +358,12 @@ impl AttackPowerMode {
     #[must_use]
     pub fn for_attacker(attacker: &impl PvpView) -> AttackPowerMode {
         if attacker.race() == ACTOR_RACE_PLAY {
-            let base = attacker.base();
+            let run = attacker.player_run();
             AttackPowerMode::Player {
-                luck: base.luck,
-                power_rate: base.power_rate,
-                bo_power_item: base.bo_power_item,
-                power_item: base.power_item,
+                luck: run.luck,
+                power_rate: run.power_rate,
+                bo_power_item: run.bo_power_item,
+                power_item: run.power_item,
             }
         } else {
             AttackPowerMode::Base
@@ -521,7 +521,7 @@ pub fn is_attack_target_player_grouped(
             // `if (targetObject.Race == ActorRace.Play) { if (IsGroupMember(targetObject)) result = false; }`
             // （`PlayObject.Attack.cs:671-677`）——`IsGroupMember` 的第一步是 `GroupOwner == 0 ⇒ false`。
             if target.race() == ACTOR_RACE_PLAY
-                && attacker.base().group_owner != 0
+                && attacker.group_state().group_owner != 0
                 && attacker_group_members.contains(&target.base().id)
             {
                 result = false;

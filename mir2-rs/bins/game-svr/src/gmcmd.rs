@@ -1362,7 +1362,7 @@ impl GmEntityState {
             e.progression.level = v;
         }
         if let Some(v) = self.allow_group_re_call {
-            e.allow_group_re_call = v;
+            e.group.allow_group_re_call = v;
         }
     }
 }
@@ -4986,7 +4986,7 @@ fn group_recall(sess: &mut GmSession, cfg: &GmConfig, world: &GmWorld<'_>) -> Gm
     let mut msgs = Vec::new();
     let mut recalled = false;
     if me.group_owner == me.id {
-        for &member_id in &me.group_members {
+        for &member_id in me.group_members {
             let Some(member) = world.entity(member_id) else {
                 continue;
             };
@@ -8995,8 +8995,8 @@ mod tests {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
         let gm_id = w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
         let bob_id = w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
-        w.entities.get_mut(gm_id).unwrap().group_owner = gm_id;
-        w.entities.get_mut(gm_id).unwrap().group_members = vec![gm_id];
+        w.entities.get_mut(gm_id).unwrap().group.group_owner = gm_id;
+        w.entities.get_mut(gm_id).unwrap().group.group_members = vec![gm_id];
         let guilds = mir2_world::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
@@ -9027,7 +9027,7 @@ mod tests {
             };
             let mut me = w.entities.get_mut(gm_id).unwrap();
             crate::apply_login_record_scalars(&mut me, Some(&flags));
-            me.group_members = vec![gm_id, bob_id];
+            me.group.group_members = vec![gm_id, bob_id];
         }
         {
             let flags = crate::record::CharacterData {
@@ -9044,7 +9044,7 @@ mod tests {
         }
         // 非团长：静默（不置 tick/time）。
         sess.group_rcall_time = 0;
-        w.entities.get_mut(gm_id).unwrap().group_owner = bob_id;
+        w.entities.get_mut(gm_id).unwrap().group.group_owner = bob_id;
         let before = sess.group_rcall_tick;
         {
             let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
@@ -12135,7 +12135,12 @@ mod tests {
         };
 
         // ---- ① flame_ring_in=true（实体粘滞位）必须真被传进审计：火球术不被删 ----
-        world.entities.get_mut(victim_id).unwrap().flame_ring = true;
+        world
+            .entities
+            .get_mut(victim_id)
+            .unwrap()
+            .revival
+            .flame_ring = true;
         sessions.get_mut("hero").unwrap().gm.pending_del_skill =
             Some(("victim".into(), "不存在的技能".into()));
         apply_pending_gm_target_ops(
@@ -12171,7 +12176,7 @@ mod tests {
         );
 
         // ---- ② revival=true（复活戒指本次命中）必须写回实体 ----
-        world.entities.get_mut(victim_id).unwrap().revival = false;
+        world.entities.get_mut(victim_id).unwrap().revival.revival = false;
         sessions.get_mut("victim").unwrap().use_items[game_svr::ability::SLOT_RING_L] =
             Some(ring(10));
         sessions.get_mut("hero").unwrap().gm.pending_del_skill =
@@ -12197,7 +12202,12 @@ mod tests {
         assert!(collect(&mut rx0).is_empty(), "复活戒指不产生 210/212");
 
         // ---- ③ 本次命中 FlameRing（实体粘滞位 false）必须 |= 落到实体 ----
-        world.entities.get_mut(victim_id).unwrap().flame_ring = false;
+        world
+            .entities
+            .get_mut(victim_id)
+            .unwrap()
+            .revival
+            .flame_ring = false;
         {
             let victim = sessions.get_mut("victim").unwrap();
             victim.use_items[game_svr::ability::SLOT_RING_L] = None;
@@ -12630,7 +12640,7 @@ mod tests {
             vec![(GmColor::Red, MSG_HUSBAND_NOT_ONLINE)]
         );
         // 在线配偶（entity.dear_human 链）⇒ 双绿字/红头（性别分支）+ 对方接缝 note。
-        w.entities.get_mut(gm_id).unwrap().pvp.dear_human = Some(bob_id);
+        w.entities.pvp_state_mut(gm_id).unwrap().dear_human = Some(bob_id);
         let view = q_view(&fx, &w, &guilds);
         let r = execute(&mut sess, &cfg, &view, "@sdasdert");
         assert_eq!(

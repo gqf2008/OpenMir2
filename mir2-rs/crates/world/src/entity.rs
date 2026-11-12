@@ -513,6 +513,9 @@ pub use mir2_world_bevy::{
 };
 /// **S4b-1**：状态位/生命周期/外观/类专用状态的 world 侧实例化（`Entity` 已删字段）。
 pub use mir2_world_bevy::{Appearance, Flags, LifeCycle, MonsterClassState};
+/// **S4b-2**：玩家运行态/组队/复活/Buff 组件的 world 侧实例化（`Entity` 已删字段）。
+pub use mir2_world_bevy::{BuffState, GroupState, PlayerRunState, Revival};
+use mir2_world_bevy::{EXTRA_ABIL_SLOTS, STATUS_TIME_SLOTS};
 /// **S4a**：`Vitals`/`AbilitySnapshot`/`Progression` 三组件的组合类型（`EntitySpawn`/`EntityRef`/`EntityMut` 用）。
 pub type Ability = AbilitySnapshot<BaseAbil>;
 /// **S4a**：掉落预算组件的 world 侧实例化（`items` 对应迁移前的 `drop_items`）。
@@ -629,6 +632,42 @@ pub struct EntitySpawn {
     pub crazy_time: i64,
     pub old_hit_time: i64,
     pub old_walk_time: i64,
+    // ---- S4b-2：玩家运行态/组队/复活/Buff（`insert` 时落成对应组件）----
+    pub luck: i32,
+    pub power_rate: i32,
+    pub power_rate_time: i32,
+    pub kill_mon_exp_rate: i32,
+    pub kill_mon_exp_rate_time: i32,
+    pub exp_rate_tick: i64,
+    pub random_no: i32,
+    pub bo_power_item: bool,
+    pub power_item: u8,
+    pub fire_hit_skill: bool,
+    pub latest_fire_hit_tick: i64,
+    pub twin_hit_skill: bool,
+    pub latest_twin_hit_tick: i64,
+    pub allow_group: bool,
+    pub allow_group_re_call: bool,
+    pub group_owner: i32,
+    pub group_members: Vec<i32>,
+    pub revival: bool,
+    pub revival_tick: i64,
+    pub un_revival: bool,
+    pub flame_ring: bool,
+    pub poisoning_tick: i64,
+    pub green_poisoning_point: u8,
+    pub char_status: i32,
+    pub char_status_ex: i32,
+    pub status_time: [u16; STATUS_TIME_SLOTS],
+    pub transparent: bool,
+    pub show_hp: bool,
+    pub show_hp_tick: i64,
+    pub show_hp_interval: i32,
+    pub magic_shield: bool,
+    pub un_magic_shield: bool,
+    pub extra_abil: [u16; EXTRA_ABIL_SLOTS],
+    pub extra_abil_times: [i64; EXTRA_ABIL_SLOTS],
+    pub extra_abil_flag: [u8; EXTRA_ABIL_SLOTS],
 }
 
 impl EntitySpawn {
@@ -741,6 +780,41 @@ impl EntitySpawn {
             crazy_time: 0,
             old_hit_time: 0,
             old_walk_time: 0,
+            luck: 0,
+            power_rate: 100,
+            power_rate_time: 0,
+            kill_mon_exp_rate: 100,
+            kill_mon_exp_rate_time: 0,
+            exp_rate_tick: 0,
+            random_no: 0,
+            bo_power_item: false,
+            power_item: 0,
+            fire_hit_skill: false,
+            latest_fire_hit_tick: 0,
+            twin_hit_skill: false,
+            latest_twin_hit_tick: 0,
+            allow_group: false,
+            allow_group_re_call: false,
+            group_owner: 0,
+            group_members: Vec::new(),
+            revival: false,
+            revival_tick: 0,
+            un_revival: false,
+            flame_ring: false,
+            poisoning_tick: crate::buff::BUFF_EPOCH_MS,
+            green_poisoning_point: 0,
+            char_status: 0,
+            char_status_ex: 0,
+            status_time: [0; STATUS_TIME_SLOTS],
+            transparent: false,
+            show_hp: false,
+            show_hp_tick: 0,
+            show_hp_interval: 0,
+            magic_shield: false,
+            un_magic_shield: false,
+            extra_abil: [0; EXTRA_ABIL_SLOTS],
+            extra_abil_times: [0; EXTRA_ABIL_SLOTS],
+            extra_abil_flag: [0; EXTRA_ABIL_SLOTS],
         }
     }
 
@@ -873,6 +947,69 @@ impl EntitySpawn {
         }
     }
 
+    /// S4b-2：玩家运行态组件值。
+    #[must_use]
+    pub fn player_run_component(&self) -> PlayerRunState {
+        PlayerRunState {
+            luck: self.luck,
+            power_rate: self.power_rate,
+            power_rate_time: self.power_rate_time,
+            kill_mon_exp_rate: self.kill_mon_exp_rate,
+            kill_mon_exp_rate_time: self.kill_mon_exp_rate_time,
+            exp_rate_tick: self.exp_rate_tick,
+            random_no: self.random_no,
+            bo_power_item: self.bo_power_item,
+            power_item: self.power_item,
+            fire_hit_skill: self.fire_hit_skill,
+            latest_fire_hit_tick: self.latest_fire_hit_tick,
+            twin_hit_skill: self.twin_hit_skill,
+            latest_twin_hit_tick: self.latest_twin_hit_tick,
+        }
+    }
+
+    /// S4b-2：组队实体侧组件值。
+    #[must_use]
+    pub fn group_component(&self) -> GroupState {
+        GroupState {
+            allow_group: self.allow_group,
+            allow_group_re_call: self.allow_group_re_call,
+            group_owner: self.group_owner,
+            group_members: self.group_members.clone(),
+        }
+    }
+
+    /// S4b-2：复活戒指/火球戒指粘滞位组件值。
+    #[must_use]
+    pub fn revival_component(&self) -> Revival {
+        Revival {
+            revival: self.revival,
+            revival_tick: self.revival_tick,
+            un_revival: self.un_revival,
+            flame_ring: self.flame_ring,
+        }
+    }
+
+    /// S4b-2：Buff/毒/心灵启示/魔法盾/ExtraAbil 组件值。
+    #[must_use]
+    pub fn buff_component(&self) -> BuffState {
+        BuffState {
+            poisoning_tick: self.poisoning_tick,
+            green_poisoning_point: self.green_poisoning_point,
+            char_status: self.char_status,
+            char_status_ex: self.char_status_ex,
+            status_time: self.status_time,
+            transparent: self.transparent,
+            show_hp: self.show_hp,
+            show_hp_tick: self.show_hp_tick,
+            show_hp_interval: self.show_hp_interval,
+            magic_shield: self.magic_shield,
+            un_magic_shield: self.un_magic_shield,
+            extra_abil: self.extra_abil,
+            extra_abil_times: self.extra_abil_times,
+            extra_abil_flag: self.extra_abil_flag,
+        }
+    }
+
     /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）的生成期载体版本。
     ///
     /// 与 [`EntityMut::set_last_hiter`] 逐支同义：`LastHiter` 每次刷新；`ExpHitter` **只在为空时**
@@ -899,6 +1036,10 @@ impl EntitySpawn {
         let life_cycle = self.life_cycle_component();
         let appearance = self.appearance_component();
         let monster_class = self.monster_class_component();
+        let player_run = self.player_run_component();
+        let group = self.group_component();
+        let revival = self.revival_component();
+        let buff = self.buff_component();
         SpawnParts {
             entity: self.entity,
             transform: Transform {
@@ -935,6 +1076,10 @@ impl EntitySpawn {
             life_cycle,
             appearance,
             monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
         }
     }
 }
@@ -957,6 +1102,10 @@ pub struct SpawnParts {
     pub life_cycle: LifeCycle,
     pub appearance: Appearance,
     pub monster_class: MonsterClassState,
+    pub player_run: PlayerRunState,
+    pub group: GroupState,
+    pub revival: Revival,
+    pub buff: BuffState,
 }
 
 impl std::ops::Deref for EntitySpawn {
@@ -1083,6 +1232,42 @@ pub struct EntityRef<'a> {
     pub crazy_time: i64,
     pub old_hit_time: i64,
     pub old_walk_time: i64,
+    // ---- S4b-2：玩家运行态/组队/复活/Buff 的只读投影 ----
+    pub luck: i32,
+    pub power_rate: i32,
+    pub power_rate_time: i32,
+    pub kill_mon_exp_rate: i32,
+    pub kill_mon_exp_rate_time: i32,
+    pub exp_rate_tick: i64,
+    pub random_no: i32,
+    pub bo_power_item: bool,
+    pub power_item: u8,
+    pub fire_hit_skill: bool,
+    pub latest_fire_hit_tick: i64,
+    pub twin_hit_skill: bool,
+    pub latest_twin_hit_tick: i64,
+    pub allow_group: bool,
+    pub allow_group_re_call: bool,
+    pub group_owner: i32,
+    pub group_members: &'a Vec<i32>,
+    pub revival: bool,
+    pub revival_tick: i64,
+    pub un_revival: bool,
+    pub flame_ring: bool,
+    pub poisoning_tick: i64,
+    pub green_poisoning_point: u8,
+    pub char_status: i32,
+    pub char_status_ex: i32,
+    pub status_time: [u16; STATUS_TIME_SLOTS],
+    pub transparent: bool,
+    pub show_hp: bool,
+    pub show_hp_tick: i64,
+    pub show_hp_interval: i32,
+    pub magic_shield: bool,
+    pub un_magic_shield: bool,
+    pub extra_abil: [u16; EXTRA_ABIL_SLOTS],
+    pub extra_abil_times: [i64; EXTRA_ABIL_SLOTS],
+    pub extra_abil_flag: [u8; EXTRA_ABIL_SLOTS],
 }
 
 impl<'a> EntityRef<'a> {
@@ -1108,6 +1293,10 @@ impl<'a> EntityRef<'a> {
         life_cycle: &'a LifeCycle,
         appearance: &'a Appearance,
         monster_class: &'a MonsterClassState,
+        player_run: &'a PlayerRunState,
+        group: &'a GroupState,
+        revival: &'a Revival,
+        buff: &'a BuffState,
     ) -> Self {
         EntityRef {
             entity,
@@ -1207,6 +1396,41 @@ impl<'a> EntityRef<'a> {
             crazy_time: monster_class.crazy_time,
             old_hit_time: monster_class.old_hit_time,
             old_walk_time: monster_class.old_walk_time,
+            luck: player_run.luck,
+            power_rate: player_run.power_rate,
+            power_rate_time: player_run.power_rate_time,
+            kill_mon_exp_rate: player_run.kill_mon_exp_rate,
+            kill_mon_exp_rate_time: player_run.kill_mon_exp_rate_time,
+            exp_rate_tick: player_run.exp_rate_tick,
+            random_no: player_run.random_no,
+            bo_power_item: player_run.bo_power_item,
+            power_item: player_run.power_item,
+            fire_hit_skill: player_run.fire_hit_skill,
+            latest_fire_hit_tick: player_run.latest_fire_hit_tick,
+            twin_hit_skill: player_run.twin_hit_skill,
+            latest_twin_hit_tick: player_run.latest_twin_hit_tick,
+            allow_group: group.allow_group,
+            allow_group_re_call: group.allow_group_re_call,
+            group_owner: group.group_owner,
+            group_members: &group.group_members,
+            revival: revival.revival,
+            revival_tick: revival.revival_tick,
+            un_revival: revival.un_revival,
+            flame_ring: revival.flame_ring,
+            poisoning_tick: buff.poisoning_tick,
+            green_poisoning_point: buff.green_poisoning_point,
+            char_status: buff.char_status,
+            char_status_ex: buff.char_status_ex,
+            status_time: buff.status_time,
+            transparent: buff.transparent,
+            show_hp: buff.show_hp,
+            show_hp_tick: buff.show_hp_tick,
+            show_hp_interval: buff.show_hp_interval,
+            magic_shield: buff.magic_shield,
+            un_magic_shield: buff.un_magic_shield,
+            extra_abil: buff.extra_abil,
+            extra_abil_times: buff.extra_abil_times,
+            extra_abil_flag: buff.extra_abil_flag,
         }
     }
 }
@@ -1234,13 +1458,16 @@ pub struct EntityMut<'a> {
     pub spawn: &'a mut SpawnBinding,
     pub drop: &'a mut DropState,
     pub attribution: &'a mut CombatAttribution,
-    pub recovery: &'a mut Recovery,
-    pub pvp: &'a mut PvpState,
     // ---- S4b-1 ----
     pub flags: &'a mut Flags,
     pub life_cycle: &'a mut LifeCycle,
     pub appearance: &'a mut Appearance,
     pub monster_class: &'a mut MonsterClassState,
+    // ---- S4b-2 ----
+    pub player_run: &'a mut PlayerRunState,
+    pub group: &'a mut GroupState,
+    pub revival: &'a mut Revival,
+    pub buff: &'a mut BuffState,
 }
 
 impl EntityMut<'_> {
@@ -1326,6 +1553,12 @@ pub trait PvpView {
     fn flags(&self) -> Flags;
     /// S4b-1：名称颜色（外观组件）。
     fn name_color(&self) -> u8;
+    /// S4b-2：玩家运行态快照。
+    fn player_run(&self) -> PlayerRunState;
+    /// S4b-2：组队实体侧快照。
+    fn group_state(&self) -> GroupState;
+    /// S4b-2：Buff/毒/盾快照。
+    fn buff(&self) -> BuffState;
 }
 
 impl PvpView for EntitySpawn {
@@ -1361,6 +1594,15 @@ impl PvpView for EntitySpawn {
     }
     fn name_color(&self) -> u8 {
         self.name_color
+    }
+    fn player_run(&self) -> PlayerRunState {
+        self.player_run_component()
+    }
+    fn group_state(&self) -> GroupState {
+        self.group_component()
+    }
+    fn buff(&self) -> BuffState {
+        self.buff_component()
     }
 }
 
@@ -1412,35 +1654,48 @@ impl PvpView for EntityRef<'_> {
     fn name_color(&self) -> u8 {
         self.name_color
     }
-}
-
-impl PvpView for EntityMut<'_> {
-    fn base(&self) -> &Entity {
-        self.entity
+    fn player_run(&self) -> PlayerRunState {
+        PlayerRunState {
+            luck: self.luck,
+            power_rate: self.power_rate,
+            power_rate_time: self.power_rate_time,
+            kill_mon_exp_rate: self.kill_mon_exp_rate,
+            kill_mon_exp_rate_time: self.kill_mon_exp_rate_time,
+            exp_rate_tick: self.exp_rate_tick,
+            random_no: self.random_no,
+            bo_power_item: self.bo_power_item,
+            power_item: self.power_item,
+            fire_hit_skill: self.fire_hit_skill,
+            latest_fire_hit_tick: self.latest_fire_hit_tick,
+            twin_hit_skill: self.twin_hit_skill,
+            latest_twin_hit_tick: self.latest_twin_hit_tick,
+        }
     }
-    fn pvp_state(&self) -> PvpState {
-        *self.pvp
+    fn group_state(&self) -> GroupState {
+        GroupState {
+            allow_group: self.allow_group,
+            allow_group_re_call: self.allow_group_re_call,
+            group_owner: self.group_owner,
+            group_members: self.group_members.clone(),
+        }
     }
-    fn race(&self) -> u8 {
-        self.appearance.race
-    }
-    fn death(&self) -> bool {
-        self.life_cycle.death
-    }
-    fn ghost(&self) -> bool {
-        self.life_cycle.ghost
-    }
-    fn invisible(&self) -> bool {
-        self.flags.invisible
-    }
-    fn attack_mode(&self) -> u8 {
-        self.flags.attack_mode
-    }
-    fn flags(&self) -> Flags {
-        *self.flags
-    }
-    fn name_color(&self) -> u8 {
-        self.appearance.name_color
+    fn buff(&self) -> BuffState {
+        BuffState {
+            poisoning_tick: self.poisoning_tick,
+            green_poisoning_point: self.green_poisoning_point,
+            char_status: self.char_status,
+            char_status_ex: self.char_status_ex,
+            status_time: self.status_time,
+            transparent: self.transparent,
+            show_hp: self.show_hp,
+            show_hp_tick: self.show_hp_tick,
+            show_hp_interval: self.show_hp_interval,
+            magic_shield: self.magic_shield,
+            un_magic_shield: self.un_magic_shield,
+            extra_abil: self.extra_abil,
+            extra_abil_times: self.extra_abil_times,
+            extra_abil_flag: self.extra_abil_flag,
+        }
     }
 }
 
@@ -1471,6 +1726,15 @@ impl<T: PvpView + ?Sized> PvpView for &T {
     }
     fn name_color(&self) -> u8 {
         (*self).name_color()
+    }
+    fn player_run(&self) -> PlayerRunState {
+        (*self).player_run()
+    }
+    fn group_state(&self) -> GroupState {
+        (*self).group_state()
+    }
+    fn buff(&self) -> BuffState {
+        (*self).buff()
     }
 }
 
@@ -1616,27 +1880,21 @@ pub struct Entity {
     // S4a-2 迁出：`die_in_fight3_zone` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
     /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
-    pub luck: i32,
     /// C# `BaseObject.NameColor`（`BaseObject.cs:28/385`，ctor 初值 `255`）。
     ///
     /// `GetNameColor()`（`BaseObject.Base.cs:904-907`）返回它；`GetChrColor`
     /// （`BaseObject.Base.cs:869-883`）的兜底分支与 `MonsterObject`/`PlayObject` 的 override 都读它。
     /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
     /// C# `PlayObject.PowerRate`（`PlayObject.cs:724`；新角色 `PlayObject.cs:943` 置 `100`）。
-    pub power_rate: i32,
     /// C# `PlayObject.PowerRateTime`（`PlayObject.cs:726`；**无 ctor 赋值** ⇒ 0）——
     /// P27 的 1s 递减计时（`PlayObject.Message.cs:646-656`）。`0` = 永久倍率。
-    pub power_rate_time: i32,
     /// C# `PlayObject.KillMonExpRate`（`PlayObject.cs:720`；ctor `:941` 置 `100`）——
     /// **per-player** 经验倍率；唯一读点 = `WinExp`（`PlayObject.Base.cs:140`）。
     /// PL-3/P27：1s 递减到 0 时回 100；脚本 `KILLMONEXPRATE` 写入。
-    pub kill_mon_exp_rate: i32,
     /// C# `PlayObject.KillMonExpRateTime`（`PlayObject.cs:725`；无 ctor ⇒ 0）——P27 的秒数。
-    pub kill_mon_exp_rate_time: i32,
     /// C# `PlayObject.ExpRateTick`（`PlayObject.cs:727`；ctor `:942` = `GetTickCount()`）——
     /// P27 的 1s 门基准。oracle 在对象构造时取钟；本骨架 `Entity::new` 拿不到宿主时钟
     /// ⇒ 缺省 0，生产路径由 `new_player_entity` 用 `now_ms()` 重盖（与 `VerifyTick` 同法）。
-    pub exp_rate_tick: i64,
     /// C# `PlayObject.RandomNo`（`PlayObject.cs:815`；ctor `:1047`
     /// `RandomNo = Random(999999).ToString()`）——登录批 `new PlayObject()` 的**第 5 抽**。
     ///
@@ -1644,11 +1902,8 @@ pub struct Entity {
     /// （`ExecutionProcessingSys.cs:2112-2119`）、`CHECKRANDOMNO`（`ScriptEngine.cs:350-353`）。
     /// 本仓脚本层尚未接线（`crates/script` 的 `CHECKRANDOMNO` 仍是 TODO）⇒ 字段先按 oracle
     /// 落值，接线后可直接消费；oracle 存的是十进制字符串，本字段存数值（`to_string()` 同形）。
-    pub random_no: i32,
     /// C# `PlayObject.BoPowerItem`（`PlayObject.cs:223`）。
-    pub bo_power_item: bool,
     /// C# `PlayObject.PowerItem`（`PlayObject.cs:199`）。
-    pub power_item: u8,
     /// C# `PlayObject.FireHitSkill` / `LatestFireHitTick`（`PlayObject.cs:181/194`）——
     /// 烈火剑法待发标志与最近一次置位时刻。`PlayObject.Run` 的到期段
     /// （`PlayObject.Message.cs:54-58`）严格 `(now - LatestFireHitTick) > 20*1000` ⇒ 清标志 +
@@ -1657,13 +1912,9 @@ pub struct Entity {
     /// **写入点登记**：oracle 的 `AllowFireHitSkill`（`PlayObject.Base.cs:653-663`，施放 26 时置位）
     /// 与攻击命中清标志（`PlayObject.Attack.cs:591-593/614-616`）依赖尚未移植的技能层；
     /// 本骨架的生产路径暂无写入者（恒 `false`）⇒ 到期段零动作。字段/到期先落地，接线时无需再改。
-    pub fire_hit_skill: bool,
-    pub latest_fire_hit_tick: i64,
     /// C# `PlayObject.TwinHitSkill` / `LatestTwinHitTick`（`PlayObject.cs:185/195`）——双龙斩。
     /// 到期段 `PlayObject.Message.cs:60-64`：严格 `> 60*1000` ⇒ 清标志 + `SendSocket("+UTWN")`
     /// （**无** `SysMsg`）。写入点同 [`Entity::fire_hit_skill`] 登记（技能层未移植）。
-    pub twin_hit_skill: bool,
-    pub latest_twin_hit_tick: i64,
     /// C# `CharacterObject.UseItems`（`CharacterObject.cs:40`，13 格，`CharacterObject.cs:89` 初始化）。
     /// `PlayObject.StruckDamage` 的耐久循环按它取数。
     pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
@@ -1709,30 +1960,21 @@ pub struct Entity {
     /// 缺省 = [`crate::buff::BUFF_EPOCH_MS`]（模拟开机毫秒基）；ctor 拿不到 `World` 时钟 ⇒ 落图时由
     /// [`crate::world::World::add_entity`] 按 `clock_ms + BUFF_EPOCH_MS` 精确重盖，与 oracle ctor
     /// 「对象建立那一刻」取 `GetTickCount()` 对齐。
-    pub poisoning_tick: i64,
     /// C# `BaseObject.GreenPoisoningPoint`（`BaseObject.cs:117`，`MakePosion` `:1963` 置 `(byte)nPoint`）。
     /// DoT 扣血量 = `GreenPoisoningPoint + 1`（`ActorBuffSystem.cs:252`）。
-    pub green_poisoning_point: u8,
     /// C# `BaseObject.CharStatus`（`BaseObject.cs:56`）——`GetCharStatus()` 的结果缓存
     /// （`ActorBuffSystem.Operate` 的 `boChg` 支 / `MakePosion` 写它）。
-    pub char_status: i32,
     /// C# `BaseObject.CharStatusEx`（`BaseObject.cs:57`，ctor `:393` 置 0）——低 16 位并入 `GetCharStatus`。
-    pub char_status_ex: i32,
     /// C# `BaseObject.StatusTimeArr`（`BaseObject.cs:81`，ctor `:394` 置 15 个 0）。
     ///
     /// **P3-B3 新增（`crates/world` 接口变更，须按 §12.4 通知并行车道）**：
     /// 18/19 的隐身门、40 的三个计时器读写、以及 16/18/19 之外的写点（移动破隐 / 透明戒指 /
     /// `Disappear` / `GasMoth` / `FrostTiger` / `Abil`）都落在这一份存储上。
     /// 递减循环被注释（`BaseObject.Base.cs:249-315`）⇒ 只有写入点，没有周期衰减。
-    pub status_time: [u16; 15],
     /// C# `BaseObject.Transparent`（`BaseObject.cs:259`；18/19 的 `MagMakePrivateTransparent` 收尾置 true）。
-    pub transparent: bool,
     /// C# `BaseObject.ShowHp`（28 心灵启示的 `MakeOpenHealth` 置 true）。
-    pub show_hp: bool,
     /// C# `BaseObject.ShowHpTick`（`MagicManager.cs:436` 置当前 tick）。
-    pub show_hp_tick: i64,
     /// C# `BaseObject.ShowHpInterval`（`MagicManager.cs:437`：`GetPower13(...) * 1000`）。
-    pub show_hp_interval: i32,
     /// C# `BaseObject.SuperMan`（32 圣言术的首门 `target.SuperMan`）。
     // C# `CharacterObject.HitSpeed`（`PlayObject.Message.cs:1846` 的 `SM_CHARSTATUSCHANGED` 末参
     // 取**收件人自己**的 `this.HitSpeed`）。
@@ -1741,9 +1983,7 @@ pub struct Entity {
     // 657 帧改为逐收件人读本字段构造（不再用一条 `hit_speed=0` 的 body 广播）。
     // S4a 迁出：`hit_speed` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `PlayObject.MagicShield`（`PlayObject.cs:490`）——`DamageHealth` 的 MP 抵扣门（`BaseObject.cs:779`）。
-    pub magic_shield: bool,
     /// C# `PlayObject.UnMagicShield`（`PlayObject.cs:494`）——`DamageHealth` 首行守卫（`BaseObject.cs:777`）。
-    pub un_magic_shield: bool,
     // `WAbil.DC`（低字节=下限、高字节=上限，与 C# 一致）
     // S4a 迁出：`dc` 真值在 components 组件（见迁移文档 S4a）。
     // `WAbil.AC`
@@ -1792,11 +2032,8 @@ pub struct Entity {
     /// ctor 缺省 `false`（oracle 构造缺省）；本骨架无写入点（冲锋态未建模）⇒ 生产恒 false。
     /// C# `PlayObject.ExtraAbil[7]`（`PlayObject.cs:201`）——`AttPowerUp` 写槽 0
     /// （`EABIL_DCUP`，`ActorConst.cs:26`）。**P3-B5 新增**。
-    pub extra_abil: [u16; 7],
     /// C# `PlayObject.ExtraAbilTimes[7]`（`PlayObject.cs:202`）——到期时刻（sim 毫秒）。
-    pub extra_abil_times: [i64; 7],
     /// C# `PlayObject.ExtraAbilFlag[7]`（`PlayObject.cs:203`）——「到期前 10s 提示已发」标记。
-    pub extra_abil_flag: [u8; 7],
     // `Job`（0 战 / 1 法 / 2 道）
     // S4a 迁出：`job` 真值在 components 组件（见迁移文档 S4a）。
     // `LifeAttrib`（1 = `LA_UNDEAD` 不死系）
@@ -1827,23 +2064,19 @@ pub struct Entity {
     /// （`ItemShapeConst.RING_REVIVAL_ITEM`，`PlayObject.cs:2241-2243`）时置 `true`，
     /// **全仓没有任何置 `false` 的写入点**（spike 实测的 oracle bug）⇒ 摘下戒指后仍为 true。
     /// 本字段同口径：调用方按 `entity.revival |= recalc.revival` 落账，绝不重置。
-    pub revival: bool,
     /// C# `PlayObject.RevivalTick`（`PlayObject.cs:283`）——上次复活时刻（sim 毫秒）。
     ///
     /// P32 的 60s 门：`(now - RevivalTick) > Config.RevivalTime`（`PlayObject.Message.cs:753`）。
-    pub revival_tick: i64,
     /// C# `PlayObject.UnRevival`（`PlayObject.cs:506`，`bool` 属性缺省 `false`）——
     /// **全仓无写入点**（`grep -rn UnRevival src` 只有声明与 P32 的读点）。
     /// P32 门：`LastHiter` 是玩家且其 `UnRevival == true` ⇒ 不复活
     /// （`PlayObject.Message.cs:751`）。本骨架同缺省 false，只在显式赋值时生效。
-    pub un_revival: bool,
     /// C# `PlayObject.FlameRing`（`PlayObject.cs:283` 附近）——火球戒指生效标志。
     ///
     /// **粘滞锁存（oracle bug，照抄）**：`RecalcAbilitys()` 顶部只重置 `RecoveryRing`
     /// （`PlayObject.cs:2017`），全仓唯一写入点是 Ringl/Ringr 的 `Shape == 115` 分支
     /// （`ItemShapeConst.RING_FIREBALL_ITEM`，`:2244-2246`）的 `FlameRing = true`；
     /// **没有任何置 `false` 的写入点**。调用方按 `entity.flame_ring |= recalc.flame_ring` 落账。
-    pub flame_ring: bool,
     // `BaseObject.HealthTick` / `SpellTick` / `AutoRecoveryTick`（`BaseObject.cs:287-306`）。
     //
     // 恢复段（`BaseObject.Base.cs:39-66`）按 `(now - AutoRecoveryTick) / 20` 把时间折成
@@ -1898,47 +2131,6 @@ pub struct Entity {
     /// `CallSlave` 生成成功即入表；`Run` 尾倒序移除 `Death || Ghost` 的子怪。
     /// 与 BeeQueen 的 `special_children`（`BeeList`）是不同 C# 字段，不合并。
     pub class_slave_list: Vec<i32>,
-    /// **MB-7（R15/R16）**：`ElfMonster.BoIsFirst`（`ElfMonster.cs:13`）/
-    /// `ElfWarriorMonster.BoIsFirst`（`ElfWarriorMonster.cs:12`）——ctor 置 `true`，
-    /// 首次 `Run` 出土后置 `false`（`ElfMonster.cs:46-52`、`ElfWarriorMonster.cs:114-120`）。
-    /// 非神兽类保持 C# 字段缺省 `false`。
-    /// **MB-7（R16）**：`ElfWarriorMonster.DigDownTick`（`ElfWarriorMonster.cs:13`）——
-    /// 入土/换形计时；ctor 无显式初值（`int` 缺省 0），`AppearNow()` 与
-    /// `Run` 的 `boChangeFace == false` 支刷新（`ElfWarriorMonster.cs:22/162`）。
-    /// **MB-8（R33）**：`SandMobObject._mDwAppearStart`（`SandMobObject.cs:9`，`int` 缺省 0）——
-    /// 「血量回满后开始下潜」的起算时刻。`FixedHideMode` 支 `HP > MaxHP/20 && CheckComeOut()`
-    /// 时写 `GetTickCount()`；`!FixedHideMode` 支的 `(now - _mDwAppearStart) > 3000` 门读它。
-    /// 非 race 132 保持 C# 字段缺省 0。
-    /// C# `GuardUnit.GuardDirection`（`sbyte`，`GuardUnit.cs:16`，无显式初值 ⇒ 0）；
-    /// `ArcherGuard` ctor `ArcherGuard.cs:17` 置 **-1**（`ArcherPolice` 继承）。
-    /// 运行期城堡守卫由 `UserCastle.cs:187` 改 3（未建模，登记）。
-    ///
-    /// 消费方：MB-3（ArcherGuard R02）。
-    /// **oracle 无持久字段**：`CowKingMonster.SiegeLockCount()` 是 `Run` 内每次现算的
-    /// 「3×3 邻域不可走格数」（`CowKingMonster.cs:96-118`，`>=5` 门在 `:47`）。
-    ///
-    /// 本字段是 PR-2 按规划落地的**缓存/暂存槽**（无写入点、无读取点 ⇒ 零行为改动）；
-    /// 缺省 0 与 C# `int` 字段缺省一致。MB-4 若选择缓存现算结果再用，可写这里；若逐次现算，
-    /// 本字段保持 0 即可。
-    ///
-    /// 消费方：MB-4（CowKing R10）。
-    /// C# `CowKingMonster` 的 8 个私有字段（`CowKingMonster.cs:8-15`）——`Run`（`:40-94`）
-    /// 的跳跃/狂暴状态。缺省 = C# 字段缺省（`int`/`bool` 全 0/false），
-    /// ctor（`:17-25`）与 `Initialize()`（`:33-38`）的赋值由装载钩子落定。
-    ///
-    /// **勿与 [`AnimalState::crazy_mode`] 混淆**：后者是 `MonsterObject.CrazyMode`
-    /// （`OpenCrazyMode` 的通用狂暴），本组是 CowKing 专用状态机。
-    ///
-    /// 消费方：MB-4（R10）。
-    ///
-    /// `JumpTime`（`:8`；ctor `:20` = `GetTickCount()`）。
-    /// `CrazyReadyMode`（`CowKingMonster.cs:9`；ctor `:23` = false）。
-    /// `CrazyKingMode`（`CowKingMonster.cs:10`；ctor `:24` = false）。
-    /// `CrazyCount`（`CowKingMonster.cs:11`；ctor `:22` = 0）。
-    /// `CrazyReady`（`CowKingMonster.cs:12`，tick；字段缺省 0，进入 ready 时写）。
-    /// `CrazyTime`（`CowKingMonster.cs:13`，tick；字段缺省 0，进入 king 时写）。
-    /// `oldHitTime`（`CowKingMonster.cs:14`，tick；字段缺省 0，`Initialize()` `:35` = `NextHitTime`）。
-    /// `oldWalkTime`（`CowKingMonster.cs:15`，tick；字段缺省 0，`Initialize()` `:36` = `WalkSpeed`）。
     /// 怪物/动物 AI 状态（`AnimalObject`/`MonsterObject` 字段子集；玩家不用，保持默认）。
     pub ai: AnimalState,
     /// 商人状态（`Merchant` 字段子集，M3⑤-实现 2 第①片）。`Some(_)` ⇒ 本实体是交易商人：
@@ -1952,17 +2144,6 @@ pub struct Entity {
     /// 驱动，即 oracle `ProcessNpcs` 的建模；`monster_ai_tick` 与 `npc_tick` 不得双驱）；
     /// [`crate::World::merchant_tick`] 只认 `merchant.is_some()` ⇒ 也跳过。
     pub npc: Option<crate::npc::NpcState>,
-    /// C# `PlayObject.AllowGroup`（`PlayObject.cs:106` 声明、`:902` 构造初值 `false`）——
-    /// 是否允许被拉进小组（`ClientCreateGroup`/`ClientAddGroupMember` 的门）。
-    pub allow_group: bool,
-    /// C# `PlayObject.AllowGroupReCall`（`PlayObject.cs:224`）——是否允许被组队传送（`@GroupRecall`）。
-    /// 构造未显式赋值 ⇒ `bool` 缺省 `false`。[`crate::party`] 不消费它；扩展面（⑦-可选）接线用。
-    pub allow_group_re_call: bool,
-    /// C# `PlayObject.GroupOwner`（`PlayObject.cs:583`，构造默认 `0` = 无组）——**团长** `ActorId`。
-    pub group_owner: i32,
-    /// C# `PlayObject.GroupMembers`（`PlayObject.cs:587`，构造 `:1042` `new List`）——
-    /// 组内成员 `ActorId` 列表（**含团长自己**，与 oracle 一致）。顺序 = 加入序（oracle 的 `IList`）。
-    pub group_members: Vec<i32>,
 }
 
 impl Entity {
@@ -1994,24 +2175,11 @@ impl Entity {
             // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
             // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），
             // `PowerRate = 100`；`BoPowerItem=false` / `PowerItem=0`。
-            luck: 0,
-            power_rate: 100,
             // `PlayObject.cs:725-727`：`PowerRateTime`/`KillMonExpRateTime` 无 ctor 赋值 ⇒ 0；
             // `KillMonExpRate = 100`（`:941`）；`ExpRateTick` 的 ctor 取钟由落图点重盖。
-            power_rate_time: 0,
-            kill_mon_exp_rate: 100,
-            kill_mon_exp_rate_time: 0,
-            exp_rate_tick: 0,
             // `PlayObject.cs:1047` 的 `RandomNo` 由登录构造点抽数后写入；`Entity::new` 缺省 0。
-            random_no: 0,
-            bo_power_item: false,
-            power_item: 0,
             // `PlayObject.cs:181/185/194/195`：ctor 缺省 `FireHitSkill/TwinHitSkill = false`、
             // 两个 tick 为 0（C# `int` 缺省）；真实置位来自技能层（未移植，见字段文档）。
-            fire_hit_skill: false,
-            latest_fire_hit_tick: 0,
-            twin_hit_skill: false,
-            latest_twin_hit_tick: 0,
             // 重叠推挤状态（`BoDuplication` / `DupStartTick` / `CheckDupObjTick`）已于 S3a
             // 迁入 `DupState` 组件：`Entity::new` 的同值缺省 = `DupState::default`（false/0/0），
             // 由 `EntityStore::insert` 统一插入；`CheckDupObjTick` 的 ctor/落图时刻由
@@ -2024,21 +2192,10 @@ impl Entity {
             // `BaseObject.cs:391`/`:393`：`GreenPoisoningPoint = 0`、`CharStatusEx = 0`；
             // `CharStatus` 未显式赋值 ⇒ int 缺省 0；`PoisoningTick` ctor 置 `GetTickCount()`
             // （本骨架用模拟开机基 `BUFF_EPOCH_MS`；精确落图时刻由 `World::add_entity` 重盖）。
-            poisoning_tick: crate::buff::BUFF_EPOCH_MS,
-            green_poisoning_point: 0,
-            char_status: 0,
-            char_status_ex: 0,
             // `BaseObject.cs:81/394`：`StatusTimeArr = new ushort[15]`（全 0）；
             // `Transparent`/`ShowHp`/`ShowHpTick`/`ShowHpInterval`/`SuperMan` 构造缺省。
-            status_time: [0; 15],
-            transparent: false,
-            show_hp: false,
-            show_hp_tick: 0,
-            show_hp_interval: 0,
             // `CharacterObject.HitSpeed`（`RecalcAbilitys` 才赋值）⇒ ctor 缺省 0。
             // `PlayObject.cs:490/494`：`MagicShield`/`UnMagicShield` 构造缺省 `false`。
-            magic_shield: false,
-            un_magic_shield: false,
             // 生成路径不调 `RecalcAbilitys` ⇒ 快照未取（首次需要时懒取，见 `abil_snapshot`）。
             // `BaseObject.cs:390`：ctor 置 `AntiMagic = 0`（普通生成路径不调 `RecalcAbilitys`）。
             // `BaseObject.cs:384/:389`：ctor 置 `Light = 0`、`AntiPoison = 0`。
@@ -2046,13 +2203,6 @@ impl Entity {
             // `BaseObject.WAbil.MAC` 构造缺省 0（`RecalcAbilitys` 才写 `Abil.MAC + AddAbil.MAC`）。
             // `BaseObject.RushMode` 构造缺省 false（`BaseObject.cs` ctor）。
             // `PlayObject.cs:201-203`：三个 7 槽数组构造缺省全 0。
-            extra_abil: [0; 7],
-            extra_abil_times: [0; 7],
-            extra_abil_flag: [0; 7],
-            revival: false,
-            revival_tick: 0,
-            un_revival: false,
-            flame_ring: false,
             class_slave_list: Vec::new(),
             // MB-7：神兽两形态 ctor 置 `BoIsFirst = true`（`apply_monster_class_constants`）；
             // 字段缺省照 C# `bool` = false。`DigDownTick` 是 `int` 缺省 0。
@@ -2074,10 +2224,6 @@ impl Entity {
             npc: None,
             // 组队态构造初值：`PlayObject.cs:902` `AllowGroup=false`、`:583` `GroupOwner=0`、
             // `:1042` `GroupMembers=new List()`、`AllowGroupReCall`（`:224`）bool 缺省 `false`。
-            allow_group: false,
-            allow_group_re_call: false,
-            group_owner: 0,
-            group_members: Vec::new(),
         };
         EntitySpawn {
             entity,
@@ -2178,6 +2324,41 @@ impl Entity {
             crazy_time: 0,
             old_hit_time: 0,
             old_walk_time: 0,
+            luck: 0,
+            power_rate: 100,
+            power_rate_time: 0,
+            kill_mon_exp_rate: 100,
+            kill_mon_exp_rate_time: 0,
+            exp_rate_tick: 0,
+            random_no: 0,
+            bo_power_item: false,
+            power_item: 0,
+            fire_hit_skill: false,
+            latest_fire_hit_tick: 0,
+            twin_hit_skill: false,
+            latest_twin_hit_tick: 0,
+            allow_group: false,
+            allow_group_re_call: false,
+            group_owner: 0,
+            group_members: Vec::new(),
+            revival: false,
+            revival_tick: 0,
+            un_revival: false,
+            flame_ring: false,
+            poisoning_tick: crate::buff::BUFF_EPOCH_MS,
+            green_poisoning_point: 0,
+            char_status: 0,
+            char_status_ex: 0,
+            status_time: [0; STATUS_TIME_SLOTS],
+            transparent: false,
+            show_hp: false,
+            show_hp_tick: 0,
+            show_hp_interval: 0,
+            magic_shield: false,
+            un_magic_shield: false,
+            extra_abil: [0; EXTRA_ABIL_SLOTS],
+            extra_abil_times: [0; EXTRA_ABIL_SLOTS],
+            extra_abil_flag: [0; EXTRA_ABIL_SLOTS],
         }
     }
 
@@ -2215,6 +2396,15 @@ type ReadViewQuery = bevy_ecs::query::QueryState<(
     &'static MonsterClassState,
 )>;
 
+/// 读路径的第二缓存查询（S4b-2）：bevy `QueryData` 元组上限 15，S4b-2 追加 4 个组件后
+/// 与 [`ReadViewQuery`] 分两次 `get_manual(&World, …)` 取（两次都是共享借用，不改变读写顺序）。
+type ReadView2Query = bevy_ecs::query::QueryState<(
+    &'static PlayerRunState,
+    &'static GroupState,
+    &'static Revival,
+    &'static BuffState,
+)>;
+
 /// 写路径缓存查询：`Entity` 主组件 + S4a 属性/成长组件 + S4b-1 状态组件（[`EntityMut`] 用）。
 type MutViewQuery = bevy_ecs::query::QueryState<(
     &'static mut Entity,
@@ -2224,12 +2414,14 @@ type MutViewQuery = bevy_ecs::query::QueryState<(
     &'static mut SpawnBinding,
     &'static mut DropState,
     &'static mut CombatAttribution,
-    &'static mut Recovery,
-    &'static mut PvpState,
     &'static mut Flags,
     &'static mut LifeCycle,
     &'static mut Appearance,
     &'static mut MonsterClassState,
+    &'static mut PlayerRunState,
+    &'static mut GroupState,
+    &'static mut Revival,
+    &'static mut BuffState,
 )>;
 
 pub struct EntityStore {
@@ -2237,7 +2429,9 @@ pub struct EntityStore {
     /// 读路径的缓存查询（S3b/S4a）：一次按句柄取齐 `Entity` + 位置/绑定 + 属性/成长组件，
     /// 避免每个读取点逐次 `TypeId` 查表。只按显式句柄 `get_manual`，不迭代求顺序。
     view_state: ReadViewQuery,
-    /// 写路径的缓存查询（S4a）：一次按句柄取齐可变主组件与属性/成长组件（[`EntityMut`] 用）。
+    /// 读路径第二缓存查询（S4b-2）。
+    view2_state: ReadView2Query,
+    /// 写路径的缓存查询（S4a/S4b）：一次按句柄取齐可变主组件与属性/成长/状态组件（[`EntityMut`] 用）。
     mut_view_state: MutViewQuery,
 }
 
@@ -2282,6 +2476,9 @@ impl EntityStore {
             &Appearance,
             &MonsterClassState,
         )>();
+        let view2_state = inner
+            .world_mut()
+            .query::<(&PlayerRunState, &GroupState, &Revival, &BuffState)>();
         let mut_view_state = inner.world_mut().query::<(
             &mut Entity,
             &mut Vitals,
@@ -2290,16 +2487,19 @@ impl EntityStore {
             &mut SpawnBinding,
             &mut DropState,
             &mut CombatAttribution,
-            &mut Recovery,
-            &mut PvpState,
             &mut Flags,
             &mut LifeCycle,
             &mut Appearance,
             &mut MonsterClassState,
+            &mut PlayerRunState,
+            &mut GroupState,
+            &mut Revival,
+            &mut BuffState,
         )>();
         EntityStore {
             inner,
             view_state,
+            view2_state,
             mut_view_state,
         }
     }
@@ -2307,6 +2507,7 @@ impl EntityStore {
     /// 结构变更后刷新视图查询的 archetype 匹配集。
     fn refresh_view(&mut self) {
         self.view_state.update_archetypes(self.inner.world());
+        self.view2_state.update_archetypes(self.inner.world());
         self.mut_view_state.update_archetypes(self.inner.world());
     }
 
@@ -2394,6 +2595,22 @@ impl EntityStore {
         assert!(
             self.inner.insert_component(id, parts.monster_class),
             "刚插入的实体必须能挂 MonsterClassState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.player_run),
+            "刚插入的实体必须能挂 PlayerRunState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.group),
+            "刚插入的实体必须能挂 GroupState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.revival),
+            "刚插入的实体必须能挂 Revival 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.buff),
+            "刚插入的实体必须能挂 BuffState 组件（id={id}）"
         );
         self.refresh_view();
         id
@@ -2560,6 +2777,10 @@ impl EntityStore {
             .view_state
             .get_manual(self.inner.world(), bevy_entity)
             .ok()?;
+        let (player_run, group, revival, buff) = self
+            .view2_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
         Some(EntityRef::from_components(
             entity,
             transform,
@@ -2576,6 +2797,10 @@ impl EntityStore {
             life_cycle,
             appearance,
             monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
         ))
     }
 
@@ -2650,6 +2875,18 @@ impl EntityStore {
         let life_cycle = spawn.life_cycle_component();
         let appearance = spawn.appearance_component();
         let monster_class = spawn.monster_class_component();
+        let player_run = spawn.player_run_component();
+        let group = spawn.group_component();
+        let revival = spawn.revival_component();
+        let buff = spawn.buff_component();
+        // `Recovery`/`PvpState` 不在 [`EntityMut`] 视图内（bevy 15 元组上限，见 `MutViewQuery`），
+        // 仍由**同一个**组件实体承载，这里经受控入口整包写回（单真值，无影子副本）。
+        if let Some(r) = self.inner.get_component_mut::<Recovery>(id) {
+            *r = recovery;
+        }
+        if let Some(p) = self.inner.get_component_mut::<PvpState>(id) {
+            *p = pvp;
+        }
         let Some(view) = self.mut_view_of_entity_by_id(id) else {
             return false;
         };
@@ -2660,12 +2897,14 @@ impl EntityStore {
         *view.spawn = spawn_binding;
         *view.drop = drop;
         *view.attribution = attribution;
-        *view.recovery = recovery;
-        *view.pvp = pvp;
         *view.flags = flags;
         *view.life_cycle = life_cycle;
         *view.appearance = appearance;
         *view.monster_class = monster_class;
+        *view.player_run = player_run;
+        *view.group = group;
+        *view.revival = revival;
+        *view.buff = buff;
         true
     }
 
@@ -2699,12 +2938,14 @@ impl EntityStore {
             spawn,
             drop,
             attribution,
-            recovery,
-            pvp,
             flags,
             life_cycle,
             appearance,
             monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
         ) = self
             .mut_view_state
             .get_mut(self.inner.world_mut(), bevy_entity)
@@ -2717,12 +2958,14 @@ impl EntityStore {
             spawn: bevy_ecs::change_detection::Mut::into_inner(spawn),
             drop: bevy_ecs::change_detection::Mut::into_inner(drop),
             attribution: bevy_ecs::change_detection::Mut::into_inner(attribution),
-            recovery: bevy_ecs::change_detection::Mut::into_inner(recovery),
-            pvp: bevy_ecs::change_detection::Mut::into_inner(pvp),
             flags: bevy_ecs::change_detection::Mut::into_inner(flags),
             life_cycle: bevy_ecs::change_detection::Mut::into_inner(life_cycle),
             appearance: bevy_ecs::change_detection::Mut::into_inner(appearance),
             monster_class: bevy_ecs::change_detection::Mut::into_inner(monster_class),
+            player_run: bevy_ecs::change_detection::Mut::into_inner(player_run),
+            group: bevy_ecs::change_detection::Mut::into_inner(group),
+            revival: bevy_ecs::change_detection::Mut::into_inner(revival),
+            buff: bevy_ecs::change_detection::Mut::into_inner(buff),
         })
     }
 
@@ -2771,6 +3014,60 @@ impl EntityStore {
         self.inner.get_component_mut(id)
     }
 
+    /// 受控读取玩家运行态组件（S4b-2）。
+    pub fn player_run(&self, id: i32) -> Option<&PlayerRunState> {
+        self.inner.get_component(id)
+    }
+
+    pub fn player_run_mut(&mut self, id: i32) -> Option<&mut PlayerRunState> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取组队实体侧组件（S4b-2；组队服务仍是 actor）。
+    pub fn group(&self, id: i32) -> Option<&GroupState> {
+        self.inner.get_component(id)
+    }
+
+    pub fn group_mut(&mut self, id: i32) -> Option<&mut GroupState> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取复活粘滞位组件（S4b-2）。
+    pub fn revival(&self, id: i32) -> Option<&Revival> {
+        self.inner.get_component(id)
+    }
+
+    pub fn revival_mut(&mut self, id: i32) -> Option<&mut Revival> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取 Buff/毒/盾组件（S4b-2）。
+    pub fn buff(&self, id: i32) -> Option<&BuffState> {
+        self.inner.get_component(id)
+    }
+
+    pub fn buff_mut(&mut self, id: i32) -> Option<&mut BuffState> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取 HP/MP 恢复计时组件（S4a；不在 [`EntityMut`] 视图内，单独入口）。
+    pub fn recovery(&self, id: i32) -> Option<&Recovery> {
+        self.inner.get_component(id)
+    }
+
+    pub fn recovery_mut(&mut self, id: i32) -> Option<&mut Recovery> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取 PK 状态组件（S4a；不在 [`EntityMut`] 视图内，单独入口）。
+    pub fn pvp_state(&self, id: i32) -> Option<&PvpState> {
+        self.inner.get_component(id)
+    }
+
+    pub fn pvp_state_mut(&mut self, id: i32) -> Option<&mut PvpState> {
+        self.inner.get_component_mut(id)
+    }
+
     /// 只取 `Entity` 主组件（剩余字段）的引用；需要「克隆一份再改」的路径用它
     ///（`get` 返回的 [`EntityRef`] 是只读视图，不携带可写 `Entity`）。
     pub fn entity(&self, id: i32) -> Option<&Entity> {
@@ -2814,6 +3111,10 @@ impl EntityStore {
             monster_class,
         ) = self
             .view_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
+        let (player_run, group, revival, buff) = self
+            .view2_state
             .get_manual(self.inner.world(), bevy_entity)
             .ok()?;
         Some(EntitySpawn {
@@ -2909,6 +3210,41 @@ impl EntityStore {
             crazy_time: monster_class.crazy_time,
             old_hit_time: monster_class.old_hit_time,
             old_walk_time: monster_class.old_walk_time,
+            luck: player_run.luck,
+            power_rate: player_run.power_rate,
+            power_rate_time: player_run.power_rate_time,
+            kill_mon_exp_rate: player_run.kill_mon_exp_rate,
+            kill_mon_exp_rate_time: player_run.kill_mon_exp_rate_time,
+            exp_rate_tick: player_run.exp_rate_tick,
+            random_no: player_run.random_no,
+            bo_power_item: player_run.bo_power_item,
+            power_item: player_run.power_item,
+            fire_hit_skill: player_run.fire_hit_skill,
+            latest_fire_hit_tick: player_run.latest_fire_hit_tick,
+            twin_hit_skill: player_run.twin_hit_skill,
+            latest_twin_hit_tick: player_run.latest_twin_hit_tick,
+            allow_group: group.allow_group,
+            allow_group_re_call: group.allow_group_re_call,
+            group_owner: group.group_owner,
+            group_members: group.group_members.clone(),
+            revival: revival.revival,
+            revival_tick: revival.revival_tick,
+            un_revival: revival.un_revival,
+            flame_ring: revival.flame_ring,
+            poisoning_tick: buff.poisoning_tick,
+            green_poisoning_point: buff.green_poisoning_point,
+            char_status: buff.char_status,
+            char_status_ex: buff.char_status_ex,
+            status_time: buff.status_time,
+            transparent: buff.transparent,
+            show_hp: buff.show_hp,
+            show_hp_tick: buff.show_hp_tick,
+            show_hp_interval: buff.show_hp_interval,
+            magic_shield: buff.magic_shield,
+            un_magic_shield: buff.un_magic_shield,
+            extra_abil: buff.extra_abil,
+            extra_abil_times: buff.extra_abil_times,
+            extra_abil_flag: buff.extra_abil_flag,
         })
     }
 
@@ -2942,6 +3278,10 @@ impl EntityStore {
                     .view_state
                     .get_manual(self.inner.world(), bevy_entity)
                     .ok()?;
+                let (player_run, group, revival, buff) = self
+                    .view2_state
+                    .get_manual(self.inner.world(), bevy_entity)
+                    .ok()?;
                 Some(EntityRef::from_components(
                     entity,
                     transform,
@@ -2958,6 +3298,10 @@ impl EntityStore {
                     life_cycle,
                     appearance,
                     monster_class,
+                    player_run,
+                    group,
+                    revival,
+                    buff,
                 ))
             })
     }

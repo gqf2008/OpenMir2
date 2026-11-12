@@ -23,7 +23,7 @@ fn setup_group() -> (World, i32, i32, i32) {
     let a = w.add_entity(Entity::new(2, "A", 11, 10));
     let b = w.add_entity(Entity::new(3, "B", 12, 10));
     for id in [a, b] {
-        w.entities.get_mut(id).unwrap().allow_group = true;
+        w.entities.get_mut(id).unwrap().group.allow_group = true;
     }
     let cfg = PartyConfig::default();
     let _ = w.party_create_group(l, "A", &cfg);
@@ -137,9 +137,9 @@ fn single_member_group_gets_plain_exp() {
     let l = w.add_entity(Entity::new(1, "L", 10, 10));
     // 手造「只有自己」的组态（等价于 oracle `GroupMembers.Count == 1`）。
     {
-        let mut e = w.entities.get_mut(l).unwrap();
-        e.group_owner = l;
-        e.group_members = vec![l];
+        let e = w.entities.get_mut(l).unwrap();
+        e.group.group_owner = l;
+        e.group.group_members = vec![l];
     }
     let gained = kill_monster(&mut w, l, 600);
     assert_eq!(gained, 600, "n<=1 ⇒ 无 bonus");
@@ -207,11 +207,11 @@ fn world_attack_excludes_group_mate() {
     });
     let b = w.add_entity(Entity::new(2, "B", 11, 10));
     {
-        let mut ea = w.entities.get_mut(a).unwrap();
-        ea.group_owner = a;
-        ea.group_members = vec![a, b];
+        let ea = w.entities.get_mut(a).unwrap();
+        ea.group.group_owner = a;
+        ea.group.group_members = vec![a, b];
     }
-    w.entities.get_mut(b).unwrap().group_owner = a;
+    w.entities.get_mut(b).unwrap().group.group_owner = a;
     let hp_before = w.entities.get(b).unwrap().hp;
     w.attack_cmd(a, b);
     let rec = w.tick();
@@ -375,9 +375,9 @@ fn poison_delivery_group_gate_reads_poisoned_targets_leader_table() {
     // 控制：B 离组（GroupOwner=0）⇒ IsGroupMember false ⇒ A 是合法目标。
     let (mut w, _l, a, b) = setup_group();
     {
-        let mut t = w.entities.get_mut(b).unwrap();
+        let t = w.entities.get_mut(b).unwrap();
         t.flags.attack_mode = ATTACK_MODE_HAM_GROUP;
-        t.group_owner = 0;
+        t.group.group_owner = 0;
     }
     w.self_delay_msgs.push(poison_delay(b, a));
     let outs = w.deliver_self_delay_msgs();
@@ -408,8 +408,8 @@ fn friend_sites_read_leader_group_table() {
     {
         let c = w.entities.get_mut(a).unwrap();
         c.flags.attack_mode = ATTACK_MODE_HAM_GROUP;
-        assert_eq!(c.group_owner, l, "A 是团长 L 的成员");
-        assert!(c.group_members.is_empty(), "非团长自身表为空");
+        assert_eq!(c.group.group_owner, l, "A 是团长 L 的成员");
+        assert!(c.group.group_members.is_empty(), "非团长自身表为空");
     }
     {
         let t = w.entities.get_mut(b).unwrap();
@@ -463,7 +463,7 @@ fn friend_sites_read_leader_group_table() {
     );
 
     // 40 解毒术：门通过才抽 R(7)。
-    w.entities.get_mut(b).unwrap().status_time[mir2_world::entity::POISON_DECHEALTH] = 5;
+    w.entities.get_mut(b).unwrap().buff.status_time[mir2_world::entity::POISON_DECHEALTH] = 5;
     let ua = w.cast_unamyounsul_spell(a, 1, Some(b));
     assert!(ua.allowed, "40 的 IsProperFriend 必须承认同组成员");
 }
