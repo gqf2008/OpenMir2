@@ -678,14 +678,22 @@ impl AoiStore for BevyAoiStore<'_> {
 /// [`MapsRes<MapGrid>`] + [`AoiScratch`]；输出：[`AoiOut`]。扫描顺序 = `AoiIds` 的槽位顺序
 ///（facade 从 `EcsStore` 显式槽位索引生成），**从不迭代 `Query` 求顺序**。
 pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
+    // S3b 评审 P3：三个输入资源由 facade 在 tick 边界**无条件**移入（见 `World::tick` 的
+    // `OutputAoi` 段）⇒ 缺失是接线错误，用 `expect` 立即失败，而不是静默按空表跑
+    //（`unwrap_or_default` 会让 AOI 静默不出/漏出，golden 仍可能绿）。
     let ids: Vec<(i32, bevy_ecs::entity::Entity)> = world
         .get_resource::<AoiIds>()
-        .map(|r| r.0.clone())
-        .unwrap_or_default();
-    let mut params = world.remove_resource::<AoiParams>().unwrap_or_default();
+        .expect("OutputAoi 前必须插入 AoiIds（facade tick 边界）")
+        .0
+        .clone();
+    let mut params = world
+        .remove_resource::<AoiParams>()
+        .expect("OutputAoi 前必须插入 AoiParams（facade tick 边界）");
     let mut maps = world
         .remove_resource::<MapsRes<MapGrid>>()
-        .unwrap_or(MapsRes(Vec::new()));
+        .expect("OutputAoi 前必须插入 MapsRes（facade tick 边界）");
+    // `AoiScratch` 是**每 tick 新建的复用缓冲**（facade 不持有、不跨 tick 存），缺省构造是
+    // 合法初始态 ⇒ 保持 `unwrap_or_default`。
     let mut scratch = world.remove_resource::<AoiScratch>().unwrap_or_default();
     let mut out = AoiOut::default();
     let index: HashMap<i32, bevy_ecs::entity::Entity> = ids.iter().copied().collect();

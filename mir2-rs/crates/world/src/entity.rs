@@ -2558,6 +2558,31 @@ mod tests {
         );
     }
 
+    /// **S3b 评审 P3（`insert_parts` 误用防护）**：`insert_parts` 的唯一入口是
+    /// `EntitySpawn::into_parts`（本 crate 内无其他调用方）。若实现改用 `Transform::default()` /
+    /// `Vitals::default()` / `Progression::default()` 造组件，`view_range` 会变 0、`hp` 变 0、
+    /// `level` 变 0 ⇒ 本用例红。
+    ///
+    /// 牙：把 `insert` 里的 `spawn.into_parts()` 换成 `Component::default()` 语义 ⇒
+    /// `(5,100,100,1)` 断言红。
+    #[test]
+    fn insert_uses_spawn_ctor_bundle_not_component_defaults() {
+        let mut s = EntityStore::new();
+        let id = s.insert(Entity::new(1, "x", 0, 0));
+        let r = s.get(id).expect("实体在场");
+        assert_eq!(
+            r.view_range, 5,
+            "ctor ViewRange=5（`Transform::default()` 是 0）"
+        );
+        assert_eq!(
+            (r.hp, r.max_hp),
+            (100, 100),
+            "ctor HP/MaxHP=100（Default 是 0）"
+        );
+        assert_eq!(r.level, 1, "ctor Level=1（Default 是 0）");
+        assert_eq!(r.abil, None, "ctor 不取 Abil 快照");
+    }
+
     #[test]
     fn ids_are_stable_and_order_is_slot_order() {
         let mut s = EntityStore::new();
