@@ -77,6 +77,12 @@
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 `
     -RustBinDir E:\tmp\openmir2-m2svr-target\debug
+  可选面（卡 `openmir2-res-download-svc`，默认**不**起）：
+    `-ResSvr` 额外起 `res-svr.exe`（资产补齐下载服务；默认 conf 为 `<MirServer>\ResSvr\config.conf`，
+    端口 `-ResSvrPort` 仅用于占用检查/就绪等待，服务真实 bind 以 conf 的 `[res-svr] bind` 为准）。
+    未给 `-ResSvr` ⇒ 端口检查、前置检查、EmitPlan 计划与启动序列**逐字节不变**。
+    token 由 conf 的 `[res-svr] token` 或继承的 `RES_SVR_TOKEN` 提供；本脚本不打印 token。
+
 .EXAMPLE
   powershell -ExecutionPolicy Bypass -File tools/m2-acceptance/start_rust_stack.ps1 -Stop
 .EXAMPLE
@@ -135,7 +141,16 @@ param(
   [switch]$EmitPlan,
   [switch]$Stop,
   [switch]$Status,
-  [switch]$Force
+  [switch]$Force,
+  # ---- res-svr（卡 openmir2-res-download-svc）：**显式开关才起**，默认不起（既有起栈路径零变化）----
+  # 独立进程（自带鉴权/限额/路径归一化），不并入 game-svr 崩溃域。token 走 conf 的
+  # `[res-svr] token` 或继承环境变量 `RES_SVR_TOKEN`；本脚本不打印 token。
+  [switch]$ResSvr,
+  # 显式覆盖 exe / conf 路径（默认为 <RustBinDir>\res-svr.exe 与 <MirServer>\ResSvr\config.conf）。
+  [string]$ResSvrExe = '',
+  [string]$ResSvrConf = '',
+  # res-svr 对外端口：只用于起栈前的端口占用检查与就绪等待（服务真实 bind 以 conf 为准）。
+  [int]$ResSvrPort = 7300
 )
 
 $ErrorActionPreference = 'Stop'
@@ -243,6 +258,7 @@ try {
 
 # ---- 0) 前置：exe / 配置 / 端口必须就位 ----
 $wanted = @(6000, 5100, 5700, 5500, 5600, 5000, 7000, 7100, 7200)
+if ($ResSvr) { $wanted += $ResSvrPort }
 if (-not $Force -and -not $EmitPlan) {
   $busy = @($wanted | Where-Object { Test-Port $_ })
   if ($busy.Count -gt 0) {
@@ -266,10 +282,14 @@ $gsvrConf  = if ([string]::IsNullOrEmpty($GameSvrConf)) { Join-Path $MirServer '
 $lgConf    = Join-Path $MirServer 'LoginGate\config.conf'
 $sgConf    = Join-Path $MirServer 'SelGate\config.conf'
 $ggConf    = Join-Path $MirServer 'RunGate\config.conf'
+$rsExe     = if ([string]::IsNullOrEmpty($ResSvrExe))  { Join-Path $RustBinDir 'res-svr.exe' } else { $ResSvrExe }
+$rsConf    = if ([string]::IsNullOrEmpty($ResSvrConf)) { Join-Path $MirServer 'ResSvr\config.conf' } else { $ResSvrConf }
 
 if (-not $EmitPlan) {
   $missing = @()
-  foreach ($p in @($mysqlExe, $dbsrvExe, $lsrvExe, $gsvrExe, $lgExe, $sgExe, $ggExe, $gsvrConf, $lgConf, $sgConf, $ggConf)) {
+  $prereq = @($mysqlExe, $dbsrvExe, $lsrvExe, $gsvrExe, $lgExe, $sgExe, $ggExe, $gsvrConf, $lgConf, $sgConf, $ggConf)
+  if ($ResSvr) { $prereq += @($rsExe, $rsConf) }
+  foreach ($p in $prereq) {
     if (-not (Test-Path $p)) { $missing += $p }
   }
   if ($missing.Count -gt 0) {
@@ -350,6 +370,10 @@ if ($EmitPlan) {
       [ordered]@{ name='sel-gate';   exe=$sgExe;   args=@($sgConf); workdir=(Split-Path $sgConf -Parent); ports=@(7100); stop_order=2 }
       [ordered]@{ name='game-gate';  exe=$ggExe;   args=@($ggConf); workdir=(Split-Path $ggConf -Parent); ports=@(7200,7201,7202); stop_order=3 }
     )
+  }
+  # 只有显式 -ResSvr 才追加（默认 EmitPlan 输出逐字节不变）。
+  if ($ResSvr) {
+    $plan.procs += [ordered]@{ name='res-svr'; exe=$rsExe; args=@('--conf', $rsConf); workdir=(Split-Path $rsConf -Parent); ports=@($ResSvrPort); stop_order=4 }
   }
   $plan | ConvertTo-Json -Depth 8
   exit 0
@@ -499,6 +523,10 @@ Start-One -Name 'game-svr'   -Exe $gsvrExe -ExeArgs @($gsvrConf) -WorkDir (Split
 Start-One -Name 'login-gate' -Exe $lgExe   -ExeArgs @($lgConf)   -WorkDir (Split-Path $lgConf  -Parent) -Ports @(7000)           -StopOrder 1
 Start-One -Name 'sel-gate'   -Exe $sgExe   -ExeArgs @($sgConf)   -WorkDir (Split-Path $sgConf  -Parent) -Ports @(7100)           -StopOrder 2
 Start-One -Name 'game-gate'  -Exe $ggExe   -ExeArgs @($ggConf)   -WorkDir (Split-Path $ggConf  -Parent) -Ports @(7200, 7201, 7202) -StopOrder 3
+# ---- 4b) res-svr（可选；独立进程，不进 game-svr 崩溃域）----
+if ($ResSvr) {
+  Start-One -Name 'res-svr' -Exe $rsExe -ExeArgs @('--conf', $rsConf) -WorkDir (Split-Path $rsConf -Parent) -Ports @($ResSvrPort) -StopOrder 4
+}
 
 $started | ConvertTo-Json -Depth 5 | Set-Content -Path $PidFile -Encoding utf8
 Write-Output ("PIDFILE " + $PidFile)
@@ -514,6 +542,7 @@ $expect = @(
   @{ name = 'sel-gate'; ports = @(7100) }
   @{ name = 'game-gate'; ports = @(7200) }
 )
+if ($ResSvr) { $expect += @{ name = 'res-svr'; ports = @($ResSvrPort) } }
 $fail = @()
 foreach ($e in $expect) {
   if (-not (Wait-Ports $e.name $e.ports)) {
