@@ -1390,6 +1390,7 @@ dependencies = [
  "mir2-data",
  "mir2-formula",
  "mir2-shared",
+ "mir2-world",
 ]
 
 [[package]]
