@@ -528,7 +528,7 @@ pub type MapBinding = mir2_world_bevy::MapBinding<VisibleBaseObject, VisibleEven
 
 /// **生成期载体**（`Entity` + 落图前的 `Transform` / `MapBinding` / S4a 属性组件）。
 ///
-/// 只为保持 697 处 `Entity::new(id, name, x, y)` + `e.x = …` 的生成期写法不变；
+/// 只为保持 约 700 处 `Entity::new(id, name, x, y)` + `e.x = …` 的生成期写法不变；
 /// [`EntityStore::insert`] 消费它并把坐标/绑定/属性落成组件。**插入后不再存在第二份真值**：
 /// 载体被 move 进 insert，后续读写一律走组件。
 #[derive(Debug, Clone)]
@@ -542,7 +542,7 @@ pub struct EntitySpawn {
     /// 落图前 AOI 绑定（`insert` 时落成 `MapBinding` 组件）。
     pub map_binding: MapBinding,
     // ---- S4a：生成期属性/成长（`insert` 时落成 Vitals/AbilitySnapshot/Progression 组件）----
-    // 字段平铺在载体上，保持 697 处生成期写法（`e.hp = …`）不变；插入后不再有第二份真值。
+    // 字段平铺在载体上，保持 约 700 处生成期写法（`e.hp = …`）不变；插入后不再有第二份真值。
     pub hp: u16,
     pub max_hp: u16,
     pub mp: u16,
@@ -1027,7 +1027,7 @@ impl EntitySpawn {
 
     /// 落成组件包（`insert` 用）。
     #[must_use]
-    pub fn into_parts(self) -> SpawnParts {
+    fn into_parts(self) -> SpawnParts {
         let progression = self.progression_component();
         let vitals = self.vitals_component();
         let spawn = self.spawn_component();
@@ -1086,7 +1086,7 @@ impl EntitySpawn {
 
 /// `EntitySpawn::into_parts` 的组件包（`EntityStore::insert` 消费）。
 #[derive(Debug)]
-pub struct SpawnParts {
+pub(crate) struct SpawnParts {
     pub entity: Entity,
     pub transform: Transform,
     pub map_binding: MapBinding,
@@ -2150,9 +2150,9 @@ impl Entity {
     /// ctor 等价物：返回**生成期载体** [`EntitySpawn`]（`Entity` + 落图前的
     /// [`Transform`] / [`MapBinding`]）。坐标在 `insert` 时落成组件；插入后真值只在组件里。
     ///
-    /// 保留 `(x, y)` 参数是为了让 697 处生成期赋值保持原形（`e.x = …` 写的是
+    /// 保留 `(x, y)` 参数是为了让 约 700 处生成期赋值保持原形（`e.x = …` 写的是
     /// `EntitySpawn.transform`），不改变任何构造点的可读性。
-    // `new` 返回生成期载体（`EntitySpawn` 而不是 `Self`），以保持 697 处生成期写法；
+    // `new` 返回生成期载体（`EntitySpawn` 而不是 `Self`），以保持 约 700 处生成期写法；
     // 名字沿用 `Entity::new`（oracle ctor 等价物）。
     #[allow(clippy::new_ret_no_self)]
     pub fn new(id: i32, name: impl Into<String>, x: i32, y: i32) -> EntitySpawn {
@@ -2533,7 +2533,7 @@ impl EntityStore {
     /// 组件已拆好的插入入口（克隆/迁移路径用，避免再拼一个 `EntitySpawn`）。
     ///
     /// **整 bundle 插入**：任一可选组件缺失都立即 panic（半实体不得进入 AOI/重叠检查）。
-    pub fn insert_parts(&mut self, parts: SpawnParts) -> i32 {
+    fn insert_parts(&mut self, parts: SpawnParts) -> i32 {
         let id = self.inner.insert(parts.entity.id, parts.entity);
         assert!(
             self.inner.insert_component(id, parts.transform),
@@ -3432,6 +3432,319 @@ mod tests {
         );
         assert_eq!(r.level, 1, "ctor Level=1（Default 是 0）");
         assert_eq!(r.abil, None, "ctor 不取 Abil 快照");
+    }
+
+    /// **S4a/S4b 评审 P3**：`write_back` 必须整包写回**所有**已迁移组件，不得只覆盖
+    /// HP/MP/exp。此用例把 16 个迁移组件逐字段置非缺省，再 `spawn_cloned → 改副本 →
+    /// write_back`，最后经 `get` 只读投影逐组断言。
+    ///
+    /// 牙：`write_back` 漏写任一组件（尤其 attribution/pvp/recovery/drop/spawn/ability）⇒
+    /// 该组断言读到 ctor 缺省 ⇒ 红。
+    #[test]
+    fn write_back_covers_all_migrated_components() {
+        let mut s = EntityStore::new();
+        let id = s.insert(Entity::new(7, "wb-all", 0, 0));
+        let mut c = s.spawn_cloned(id).expect("副本");
+        // Vitals + Ability + Progression
+        c.hp = 11;
+        c.max_hp = 12;
+        c.mp = 13;
+        c.max_mp = 14;
+        c.hit_speed = 15;
+        c.dc = 16;
+        c.ac = 17;
+        c.mac = 18;
+        c.hit_point = 19;
+        c.speed_point = 20;
+        c.anti_magic = 21;
+        c.anti_poison = 22;
+        c.undead_power = 23;
+        c.abil = Some(BaseAbil { dc: 24, max_hp: 25 });
+        c.job = 2;
+        c.life_attrib = 3;
+        c.level = 4;
+        c.mon_exp = 26;
+        c.exp = 27;
+        c.max_exp = 28;
+        // SpawnBinding + DropState
+        c.mon_gen = Some(5);
+        c.mon_gen_zen_time = 29;
+        c.ctor_draws = MonsterCtorDraws {
+            run_tick_delta: 30,
+            base_search_time: 31,
+            attack_tick_delta: 32,
+            walk_tick_delta: 33,
+            search_time: 34,
+            meat_quality: 35,
+            bo_fear_fire: true,
+            zil_kill_count: 36,
+        };
+        c.gold = 37;
+        c.angry_ring = true;
+        c.no_drop_use_item = true;
+        c.no_item = true;
+        // CombatAttribution + Recovery + PvpState
+        c.last_hiter = Some(38);
+        c.exp_hitter = Some(39);
+        c.last_hiter_tick = 40;
+        c.exp_hitter_tick = 41;
+        c.health_tick = 42;
+        c.spell_tick = 43;
+        c.auto_recovery_tick = 44;
+        c.dear_human = Some(45);
+        c.pk_point = 46;
+        c.pvp_flag = true;
+        c.pvp_name_color_tick = 47;
+        c.die_in_fight3_zone = true;
+        // Flags + LifeCycle + Appearance + MonsterClassState
+        c.invisible = true;
+        c.hide_mode = true;
+        c.fixed_hide_mode = true;
+        c.ob_mode = true;
+        c.nasty_mode = true;
+        c.attack_mode = 6;
+        c.in_safe_zone = true;
+        c.admin_mode = true;
+        c.stone_mode = true;
+        c.super_man = true;
+        c.rush_mode = true;
+        c.want_ref_msg = true;
+        c.stick_mode = true;
+        c.death = true;
+        c.ghost = true;
+        c.death_tick = 48;
+        c.ghost_tick = 49;
+        c.can_re_alive = true;
+        c.re_alive_tick = 50;
+        c.death_settled = true;
+        c.die_called = true;
+        c.race = 80;
+        c.race_img = 51;
+        c.appr = 52;
+        c.light = 53;
+        c.name_color = 54;
+        c.come_out_value = 55;
+        c.attack_range = 56;
+        c.use_magic = true;
+        c.danger_level = 57;
+        c.n550 = 58;
+        c.class_attack_tick = 59;
+        c.bo_is_first = true;
+        c.dig_down_tick = 60;
+        c.appear_start_tick = 61;
+        c.guard_direction = -1;
+        c.siege_lock_count = 62;
+        c.jump_time = 63;
+        c.crazy_ready_mode = true;
+        c.crazy_king_mode = true;
+        c.crazy_count = 64;
+        c.crazy_ready = 65;
+        c.crazy_time = 66;
+        c.old_hit_time = 67;
+        c.old_walk_time = 68;
+        // PlayerRunState + GroupState + Revival + BuffState
+        c.luck = 69;
+        c.power_rate = 70;
+        c.power_rate_time = 71;
+        c.kill_mon_exp_rate = 72;
+        c.kill_mon_exp_rate_time = 73;
+        c.exp_rate_tick = 74;
+        c.random_no = 75;
+        c.bo_power_item = true;
+        c.power_item = 76;
+        c.fire_hit_skill = true;
+        c.latest_fire_hit_tick = 77;
+        c.twin_hit_skill = true;
+        c.latest_twin_hit_tick = 78;
+        c.allow_group = true;
+        c.allow_group_re_call = true;
+        c.group_owner = 79;
+        c.group_members = vec![80, 81];
+        c.revival = true;
+        c.revival_tick = 82;
+        c.un_revival = true;
+        c.flame_ring = true;
+        c.poisoning_tick = 83;
+        c.green_poisoning_point = 4;
+        c.char_status = 84;
+        c.char_status_ex = 85;
+        c.status_time = [1; STATUS_TIME_SLOTS];
+        c.transparent = true;
+        c.show_hp = true;
+        c.show_hp_tick = 86;
+        c.show_hp_interval = 87;
+        c.magic_shield = true;
+        c.un_magic_shield = true;
+        c.extra_abil = [2; EXTRA_ABIL_SLOTS];
+        c.extra_abil_times = [88; EXTRA_ABIL_SLOTS];
+        c.extra_abil_flag = [3; EXTRA_ABIL_SLOTS];
+        assert!(s.write_back(id, c), "write_back 必须命中实体");
+
+        let r = s.get(id).expect("实体在场");
+        assert_eq!(
+            (
+                r.hp,
+                r.max_hp,
+                r.mp,
+                r.max_mp,
+                r.hit_speed,
+                r.dc,
+                r.ac,
+                r.mac,
+                r.hit_point
+            ),
+            (11, 12, 13, 14, 15, 16, 17, 18, 19),
+            "Vitals 全字段（HP/MP/DC/AC/MAC/HitSpeed/命中）"
+        );
+        assert_eq!(
+            (r.speed_point, r.anti_magic, r.anti_poison, r.undead_power),
+            (20, 21, 22, 23),
+            "Vitals 全字段（敏捷/抗性/不死）"
+        );
+        assert_eq!(
+            r.abil,
+            Some(BaseAbil { dc: 24, max_hp: 25 }),
+            "AbilitySnapshot"
+        );
+        assert_eq!(
+            (r.job, r.life_attrib, r.level, r.mon_exp, r.exp, r.max_exp),
+            (2, 3, 4, 26, 27, 28),
+            "Progression"
+        );
+        assert_eq!(
+            (r.mon_gen, r.mon_gen_zen_time, r.ctor_draws.zil_kill_count),
+            (Some(5), 29, 36),
+            "SpawnBinding"
+        );
+        assert_eq!(
+            (r.gold, r.angry_ring, r.no_drop_use_item, r.no_item),
+            (37, true, true, true),
+            "DropState"
+        );
+        assert_eq!(
+            (
+                r.last_hiter,
+                r.exp_hitter,
+                r.last_hiter_tick,
+                r.exp_hitter_tick
+            ),
+            (Some(38), Some(39), 40, 41),
+            "CombatAttribution"
+        );
+        assert_eq!(
+            (r.health_tick, r.spell_tick, r.auto_recovery_tick),
+            (42, 43, 44),
+            "Recovery"
+        );
+        assert_eq!(
+            (
+                r.dear_human,
+                r.pk_point,
+                r.pvp_flag,
+                r.pvp_name_color_tick,
+                r.die_in_fight3_zone
+            ),
+            (Some(45), 46, true, 47, true),
+            "PvpState"
+        );
+        assert!(
+            r.invisible
+                && r.hide_mode
+                && r.fixed_hide_mode
+                && r.ob_mode
+                && r.nasty_mode
+                && r.in_safe_zone
+                && r.admin_mode
+                && r.stone_mode
+                && r.super_man
+                && r.rush_mode
+                && r.want_ref_msg
+                && r.stick_mode
+                && r.attack_mode == 6,
+            "Flags 全字段"
+        );
+        assert!(
+            r.death
+                && r.ghost
+                && r.can_re_alive
+                && r.death_settled
+                && r.die_called
+                && r.death_tick == 48
+                && r.ghost_tick == 49
+                && r.re_alive_tick == 50,
+            "LifeCycle 全字段"
+        );
+        assert_eq!(
+            (r.race, r.race_img, r.appr, r.light, r.name_color),
+            (80, 51, 52, 53, 54),
+            "Appearance"
+        );
+        assert!(
+            r.come_out_value == 55
+                && r.attack_range == 56
+                && r.use_magic
+                && r.danger_level == 57
+                && r.n550 == 58
+                && r.class_attack_tick == 59
+                && r.bo_is_first
+                && r.dig_down_tick == 60
+                && r.appear_start_tick == 61
+                && r.guard_direction == -1
+                && r.siege_lock_count == 62
+                && r.jump_time == 63
+                && r.crazy_ready_mode
+                && r.crazy_king_mode
+                && r.crazy_count == 64
+                && r.crazy_ready == 65
+                && r.crazy_time == 66
+                && r.old_hit_time == 67
+                && r.old_walk_time == 68,
+            "MonsterClassState 全字段"
+        );
+        assert!(
+            r.luck == 69
+                && r.power_rate == 70
+                && r.power_rate_time == 71
+                && r.kill_mon_exp_rate == 72
+                && r.kill_mon_exp_rate_time == 73
+                && r.exp_rate_tick == 74
+                && r.random_no == 75
+                && r.bo_power_item
+                && r.power_item == 76
+                && r.fire_hit_skill
+                && r.latest_fire_hit_tick == 77
+                && r.twin_hit_skill
+                && r.latest_twin_hit_tick == 78,
+            "PlayerRunState 全字段"
+        );
+        assert!(
+            r.allow_group
+                && r.allow_group_re_call
+                && r.group_owner == 79
+                && *r.group_members == vec![80, 81],
+            "GroupState 全字段"
+        );
+        assert!(
+            r.revival && r.un_revival && r.flame_ring && r.revival_tick == 82,
+            "Revival 全字段"
+        );
+        assert!(
+            r.poisoning_tick == 83
+                && r.green_poisoning_point == 4
+                && r.char_status == 84
+                && r.char_status_ex == 85
+                && r.status_time == [1; STATUS_TIME_SLOTS]
+                && r.transparent
+                && r.show_hp
+                && r.show_hp_tick == 86
+                && r.show_hp_interval == 87
+                && r.magic_shield
+                && r.un_magic_shield
+                && r.extra_abil == [2; EXTRA_ABIL_SLOTS]
+                && r.extra_abil_times == [88; EXTRA_ABIL_SLOTS]
+                && r.extra_abil_flag == [3; EXTRA_ABIL_SLOTS],
+            "BuffState 全字段"
+        );
     }
 
     #[test]

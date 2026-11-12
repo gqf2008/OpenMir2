@@ -831,7 +831,7 @@ mod tests {
     }
 
     /// S4a 起 Vitals/AbilitySnapshot/Progression 已迁出 `Entity`：round-trip 只比较
-    /// `Entity` 主组件（剩余 118 字段）；迁出字段由各自组件契约用例钉住。
+    /// `Entity` 主组件（剩余 17 字段，均为 S4c 待迁）；迁出字段由各自组件契约用例钉住。
     fn debug_snapshot(e: &Entity) -> String {
         format!("{e:?}")
     }
