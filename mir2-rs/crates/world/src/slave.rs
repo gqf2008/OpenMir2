@@ -686,7 +686,7 @@ impl World {
         let (nx, ny) = found?;
         let (from_x, from_y, cert_cell_type) = {
             let e = self.entities.get(target)?;
-            (e.x, e.y, crate::world::entity_cell_type(e))
+            (e.x, e.y, crate::world::entity_cell_type(&e))
         };
         // `Envir.DeleteFromMap` + `Envir.AddMapObject`（`BaseObject.cs:1114/1132`）。
         let moved = {
@@ -708,7 +708,7 @@ impl World {
         if !moved {
             return None;
         }
-        if let Some(e) = self.entities.get_mut(target) {
+        if let Some(e) = self.entities.transform_mut(target) {
             e.x = nx;
             e.y = ny;
             e.map_id = map_id;
@@ -2102,7 +2102,7 @@ impl World {
             msd: 0,
             struck: false,
         };
-        let Some(t) = self.entities.get(target_id).cloned() else {
+        let Some(t) = self.entities.spawn_cloned(target_id) else {
             return out;
         };
         // `this` 在 oracle 里恒存在；缺失时按 0 处理（不改变取数次数）。
@@ -2164,8 +2164,8 @@ impl World {
             point,
             ..PoisonDelivery::default()
         };
-        let target = self.entities.get(target_id).cloned();
-        let caster = self.entities.get(caster_id).cloned();
+        let target = self.entities.entity_cloned(target_id);
+        let caster = self.entities.entity_cloned(caster_id);
         if let (Some(t), Some(c)) = (target.as_ref(), caster.as_ref()) {
             // `IsProperTarget` 的 `this` 是**中毒目标** t ⇒ `IsGroupMember` 读 **t 的团长**
             // （`PlayObject.cs:5158-5175`）的成员表，不是 t 自己的 `group_members`（非团长恒空）。
@@ -2284,7 +2284,7 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
     e.is_clone = true;
     e.map_id = map_id;
     // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`（克隆体走 PlayObject ctor）。
-    e.verify_tick = world.clock_ms;
+    e.map_binding.verify_tick = world.clock_ms;
     // `BaseObject.cs:442` ctor `SearchTick = GetTickCount()`（克隆体走 PlayObject ctor）；
     // 克隆体绕开 `World::add_entity` 直接 `entities.insert`，这里补同点，否则首扫会在下一个 tick 立刻发生
     // （复验 F-1：oracle 首扫在创建后约一个 `SearchTime`）。
@@ -2294,7 +2294,7 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
     e.want_ref_msg = true;
     // oracle `AddMapObject`（`Envirnoment.cs:279-284`）：成功才 `AddObject` + 置 `AddToMaped`；
     // 失败时对象仍在 `ActorMgr`（= 本骨架 `EntityStore`）但不在图上 ⇒ `add_to_mapped` 跟 `created`。
-    e.add_to_mapped = out.created;
+    e.map_binding.add_to_mapped = out.created;
     // `PlayCloneObject.cs:12` `Dir = GetBackDir(playObject.Dir)` 写的是**实体** `BaseObject.Dir`
     // ⇒ `Entity.ai.dir`（AOI 出现帧/后续 `Turn`/存档都读它）；展示表只是投影。
     e.ai.dir = out.dir;
@@ -2850,8 +2850,8 @@ mod tests {
             panic!("首次神兽召唤应成功");
         };
         // 把目标挪远，再用失败的 spawner 触发回召。
-        w.entities.get_mut(slave).unwrap().x = 20;
-        w.entities.get_mut(slave).unwrap().y = 20;
+        w.entities.transform_mut(slave).unwrap().x = 20;
+        w.entities.transform_mut(slave).unwrap().y = 20;
         let mut fail = MockSpawner {
             fail: true,
             ..Default::default()

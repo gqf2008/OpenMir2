@@ -228,7 +228,7 @@ impl World {
         e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
         e.map_id = spawn.map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
-        e.verify_tick = self.clock_ms;
+        e.map_binding.verify_tick = self.clock_ms;
         // 外观轴与 oracle 对齐（2026-10-21 复核；**订正**）：
         // `Npcs.txt` 的三种 `type` 都实例化 `Merchant` 家族——`Merchant()` ctor 置
         // `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`），`GuildOfficial()`
@@ -287,8 +287,8 @@ impl World {
             self.entities.remove(id);
             return false;
         }
-        if let Some(ent) = self.entities.get_mut(id) {
-            ent.add_to_mapped = !add_to_map_success;
+        if let Some(b) = self.entities.map_binding_mut(id) {
+            b.add_to_mapped = !add_to_map_success;
         }
         true
     }
@@ -413,7 +413,7 @@ impl World {
 pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
     let npc_type = world
         .entities
-        .get(actor_id)
+        .entity(actor_id)
         .and_then(|e| e.npc.as_ref())
         .map(|n| n.npc_type);
     let mut outcome = NpcRunOutcome::default();
@@ -480,7 +480,7 @@ fn merchant_body_run(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutco
     // `Merchant.cs:159-164`：`BoCanMove && (now - MoveTick) > MoveTime*1000` ⇒ `MapRandomMove`。
     let Some((can_move, move_time, move_tick)) = world
         .entities
-        .get(actor_id)
+        .entity(actor_id)
         .and_then(|e| e.npc.as_ref())
         .map(|n| (n.can_move, n.move_time, n.move_tick))
     else {
@@ -616,26 +616,26 @@ mod tests {
 
         assert_eq!(merchant_lookup(None), MerchantLookup::Absent);
         assert_eq!(
-            merchant_lookup(world.entities.get(999_999)),
+            merchant_lookup(world.entities.entity(999_999)),
             MerchantLookup::Absent,
             "id 不在世界 ⇒ C3（`TryGetValue` 假 ⇒ null）"
         );
         assert_eq!(
-            merchant_lookup(world.entities.get(guild)),
+            merchant_lookup(world.entities.entity(guild)),
             MerchantLookup::NotMerchant,
             "Npcs.txt type=1（GuildOfficial）只实现 INormNpc ⇒ (IMerchant)actor 抛"
         );
         assert_eq!(
-            merchant_lookup(world.entities.get(monster)),
+            merchant_lookup(world.entities.entity(monster)),
             MerchantLookup::NotMerchant,
             "怪物不实现 IMerchant ⇒ 同样抛（不是「找不到」）"
         );
         assert_eq!(
-            merchant_lookup(world.entities.get(merchant)),
+            merchant_lookup(world.entities.entity(merchant)),
             MerchantLookup::Merchant
         );
         assert_eq!(
-            merchant_lookup(world.entities.get(castle)),
+            merchant_lookup(world.entities.entity(castle)),
             MerchantLookup::Merchant,
             "CastleOfficial : Merchant ⇒ 实现 IMerchant"
         );
@@ -784,7 +784,7 @@ mod tests {
             let sq = exp.random_below(2000) + 2000;
             let at = exp.random_below(3000);
             let wk = exp.random_below(3000);
-            let n = world.entities.get(id).unwrap().npc.as_ref().unwrap();
+            let n = world.entities.entity(id).unwrap().npc.as_ref().unwrap();
             assert_eq!(
                 n.run_tick_delta, d,
                 "seed={seed} RunTick 分量 = Random(1500)"
@@ -1163,7 +1163,7 @@ mod tests {
             assert!(e.stick_mode, "NormNpc.cs:45 StickMode = true");
             assert_eq!(e.ai.dir, 4, "BaseObject.cs:378 Dir = 4");
             assert_eq!(
-                crate::world::entity_cell_type(e),
+                crate::world::entity_cell_type(&e),
                 CellType::Merchant,
                 "NormNpc.cs:50 CellType = Merchant"
             );

@@ -302,7 +302,7 @@ pub fn search_target(world: &mut World, actor_id: i32) {
         // 上面的 `baseObject.Death` 已 `continue` ⇒ 该层不可达（照搬时省略，行为等价）。
         // 隐藏门读的是 `HideMode`（**不是** `FixedHideMode`，后者只用于 `GetXYObjCount`/`Run`）。
         if let (Some(a), Some(t)) = (world.entities.get(actor_id), world.entities.get(target_id)) {
-            if is_proper_target_grouped_direct(a, t, &[]) && (!t.hide_mode || cool_eye) {
+            if is_proper_target_grouped_direct(&a, &t, &[]) && (!t.hide_mode || cool_eye) {
                 let dist = (cx - t.x).abs() + (cy - t.y).abs();
                 if dist < n10 {
                     n10 = dist;
@@ -321,8 +321,8 @@ pub fn search_target(world: &mut World, actor_id: i32) {
             e.ai.target_y = -1;
         }
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
-        e.visible_actors = visible;
+    if let Some(b) = world.entities.map_binding_mut(actor_id) {
+        b.visible_actors = visible;
     }
     if let Some(target_id) = best {
         set_target_creature(world, actor_id, target_id);
@@ -354,10 +354,12 @@ pub fn del_target_creature(world: &mut World, actor_id: i32) {
 /// 与 [`del_target_creature`] 分开：oracle 里 `ClearTargetCreat` 用于 `Run()` 的目标清理段
 /// （`BaseObject.Base.cs:111-118`）、`DelTargetCreat` 用于其它路径，两者不同源。
 pub fn clear_target_creature(world: &mut World, actor_id: i32, target_id: i32) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
-        if let Some(i) = e.visible_actors.iter().position(|v| v.target == target_id) {
-            e.visible_actors.remove(i);
+    if let Some(b) = world.entities.map_binding_mut(actor_id) {
+        if let Some(i) = b.visible_actors.iter().position(|v| v.target == target_id) {
+            b.visible_actors.remove(i);
         }
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
         e.ai.target_creature = None;
         e.ai.target_x = -1;
         e.ai.target_y = -1;
@@ -480,7 +482,7 @@ fn think_refresh(world: &mut World, actor_id: i32) {
                 .entities
                 .get(actor_id)
                 .zip(world.entities.get(t))
-                .is_some_and(|(a, b)| is_proper_target_grouped_direct(a, b, &[]));
+                .is_some_and(|(a, b)| is_proper_target_grouped_direct(&a, &b, &[]));
             if !proper {
                 if let Some(e) = world.entities.get_mut(actor_id) {
                     e.ai.target_creature = None;
@@ -650,7 +652,7 @@ pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
             .entities
             .get(victim_id)
             .zip(world.entities.get(hiter_id))
-            .is_some_and(|(a, b)| is_proper_target_grouped_direct(a, b, &[]));
+            .is_some_and(|(a, b)| is_proper_target_grouped_direct(&a, &b, &[]));
         if proper {
             set_target_creature(world, victim_id, hiter_id);
         }
@@ -992,7 +994,7 @@ fn green_red_monster_run(world: &mut World, actor_id: i32, poison_type: u8) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return;
     }
     let (cx, cy, target_id) = (e.x, e.y, e.ai.target_creature);
@@ -1038,7 +1040,7 @@ fn khazard_run(world: &mut World, actor_id: i32) -> bool {
     let Some(e) = world.entities.get(actor_id) else {
         return false;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return false;
     }
     let (cx, cy, target_id, map_id, dir) = (e.x, e.y, e.ai.target_creature, e.map_id, e.ai.dir);
@@ -1114,7 +1116,7 @@ fn frost_tiger_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return;
     }
     let has_target = e.ai.target_creature.is_some();
@@ -1148,7 +1150,7 @@ fn tele_monster_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return;
     }
     let (cx, cy, target_id, target_x, target_y) =
@@ -1236,7 +1238,7 @@ fn electronic_scolpion_run(world: &mut World, actor_id: i32) -> bool {
     let Some(e) = world.entities.get(actor_id) else {
         return false;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return false;
     }
     // `WAbil.HP < WAbil.MaxHP / 2`（`:37`）——两侧都是 `ushort`，`/2` 为整数除法。
@@ -1365,7 +1367,7 @@ fn magic_mon_object_run(world: &mut World, actor_id: i32) -> bool {
     let Some(e) = world.entities.get(actor_id) else {
         return false;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return false;
     }
     let use_magic = e.hp < e.max_hp / 2;
@@ -1411,7 +1413,7 @@ fn ron_object_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return;
     }
     class_seek_gate(world, actor_id);
@@ -1486,10 +1488,10 @@ fn ron_object_around_attack(world: &mut World, actor_id: i32) {
 ///    （本骨架折叠为 `SetLastHiter` + `pending_struck` 入队，与 [`World::attack_once`] 同口径；
 ///    `CloneMonster` 的 `Operate` 覆写除外）。
 fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
-    let Some(attacker) = world.entities.get(actor_id).cloned() else {
+    let Some(attacker) = world.entities.spawn_cloned(actor_id) else {
         return;
     };
-    let Some(mut target) = world.entities.get(target_id).cloned() else {
+    let Some(mut target) = world.entities.spawn_cloned(target_id) else {
         return;
     };
     let power = n_power;
@@ -1804,7 +1806,7 @@ fn stick_check_come_out(world: &World, actor_id: i32) -> bool {
         let proper = world
             .entities
             .get(actor_id)
-            .is_some_and(|a| is_proper_target(a, t));
+            .is_some_and(|a| is_proper_target(&a, &t));
         if proper
             && (!t.hide_mode || cool_eye)
             && (cx - t.x).abs() < come_out
@@ -1837,9 +1839,11 @@ fn stick_come_down(world: &mut World, actor_id: i32) {
         None => return,
     };
     send_ref_msg(world, actor_id, RM_DIGDOWN, dir as i32, x, y, 0);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(b) = world.entities.map_binding_mut(actor_id) {
         // oracle `Dispose(VisibleActors[i])` 是 `obj = null` 的无副作用空操作。
-        e.visible_actors.clear();
+        b.visible_actors.clear();
+    }
+    if let Some(e) = world.entities.get_mut(actor_id) {
         e.fixed_hide_mode = true;
     }
 }
@@ -1906,7 +1910,7 @@ fn stick_monster_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !(can_move(e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
+    if !(can_move(&e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
         return;
     }
     if let Some(e) = world.entities.get_mut(actor_id) {
@@ -1989,7 +1993,7 @@ pub fn big_heart_attack_target(world: &mut World, actor_id: i32) -> bool {
         let proper = world
             .entities
             .get(actor_id)
-            .is_some_and(|a| is_proper_target(a, t));
+            .is_some_and(|a| is_proper_target(&a, &t));
         if !(proper && (x - t.x).abs() <= view_range && (y - t.y).abs() <= view_range) {
             continue;
         }
@@ -2015,7 +2019,7 @@ fn big_heart_monster_run(world: &mut World, actor_id: i32) {
     let ok = world
         .entities
         .get(actor_id)
-        .is_some_and(|e| can_move(e) && !e.visible_actors.is_empty());
+        .is_some_and(|e| can_move(&e) && !e.visible_actors.is_empty());
     if ok {
         let _ = big_heart_attack_target(world, actor_id);
     }
@@ -2218,10 +2222,10 @@ fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
     let hi = i32::from(crate::combat::hi_byte(dc));
     let n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
     if n_damage > 0 {
-        let Some(attacker) = world.entities.get(actor_id).cloned() else {
+        let Some(attacker) = world.entities.spawn_cloned(actor_id) else {
             return;
         };
-        let Some(target) = world.entities.get(target_id).cloned() else {
+        let Some(target) = world.entities.spawn_cloned(target_id) else {
             return;
         };
         let reduced =
@@ -2301,7 +2305,7 @@ fn dual_axe_monster_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return;
     }
     let (cx, cy, cool_eye, walk_tick, walk_speed, enemy_tick) = (
@@ -2333,7 +2337,7 @@ fn dual_axe_monster_run(world: &mut World, actor_id: i32) {
             let proper = world
                 .entities
                 .get(actor_id)
-                .is_some_and(|a| is_proper_target(a, t));
+                .is_some_and(|a| is_proper_target(&a, &t));
             if proper && (!t.hide_mode || cool_eye) {
                 let dist = (cx - t.x).abs() + (cy - t.y).abs();
                 if dist < n_rage {
@@ -2435,7 +2439,7 @@ fn lighting_zombi_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !(can_move(e) && now - e.ai.search_enemy_tick > 8000) {
+    if !(can_move(&e) && now - e.ai.search_enemy_tick > 8000) {
         return;
     }
     let enemy_tick = e.ai.search_enemy_tick;
@@ -2506,7 +2510,7 @@ fn chicken_deer_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return;
     }
     let (cx, cy, cool_eye, walk_tick, walk_speed) =
@@ -2534,7 +2538,7 @@ fn chicken_deer_run(world: &mut World, actor_id: i32) {
         let proper = world
             .entities
             .get(actor_id)
-            .is_some_and(|a| is_proper_target(a, t));
+            .is_some_and(|a| is_proper_target(&a, &t));
         if proper && (!t.hide_mode || cool_eye) {
             let dist = (cx - t.x).abs() + (cy - t.y).abs();
             if dist < n10 {
@@ -2690,7 +2694,7 @@ fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !(can_move(e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
+    if !(can_move(&e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
         return;
     }
     if e.fixed_hide_mode {
@@ -2706,7 +2710,7 @@ fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
             let proper = world
                 .entities
                 .get(actor_id)
-                .is_some_and(|a| is_proper_target(a, t));
+                .is_some_and(|a| is_proper_target(&a, &t));
             if proper
                 && (!t.hide_mode || cool_eye)
                 && (cx - t.x).abs() <= 3
@@ -2802,7 +2806,7 @@ fn sculture_monster_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !(can_move(e) && (now - e.ai.walk_tick) >= e.ai.walk_speed) {
+    if !(can_move(&e) && (now - e.ai.walk_tick) >= e.ai.walk_speed) {
         return;
     }
     if e.stone_mode {
@@ -2818,7 +2822,7 @@ fn sculture_monster_run(world: &mut World, actor_id: i32) {
             let proper = world
                 .entities
                 .get(actor_id)
-                .is_some_and(|a| is_proper_target(a, t));
+                .is_some_and(|a| is_proper_target(&a, &t));
             if proper
                 && (!t.hide_mode || cool_eye)
                 && (cx - t.x).abs() <= 2
@@ -3184,7 +3188,7 @@ fn centipede_king_check_attack_target(world: &World, actor_id: i32) -> bool {
         let proper = world
             .entities
             .get(actor_id)
-            .is_some_and(|a| is_proper_target(a, t));
+            .is_some_and(|a| is_proper_target(&a, &t));
         if proper && (cx - t.x).abs() <= view_range && (cy - t.y).abs() <= view_range {
             return true;
         }
@@ -3244,7 +3248,7 @@ fn centipede_king_attack_target(world: &mut World, actor_id: i32) -> bool {
         let proper = world
             .entities
             .get(actor_id)
-            .is_some_and(|a| is_proper_target(a, t));
+            .is_some_and(|a| is_proper_target(&a, &t));
         if !(proper && (x - t.x).abs() < view_range && (y - t.y).abs() < view_range) {
             continue;
         }
@@ -3285,7 +3289,7 @@ fn centipede_king_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !(can_move(e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
+    if !(can_move(&e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
         return;
     }
     let (cx, cy, cool_eye, fixed_hide) = (e.x, e.y, e.ai.cool_eye, e.fixed_hide_mode);
@@ -3311,7 +3315,7 @@ fn centipede_king_run(world: &mut World, actor_id: i32) {
                 let proper = world
                     .entities
                     .get(actor_id)
-                    .is_some_and(|a| is_proper_target(a, t));
+                    .is_some_and(|a| is_proper_target(&a, &t));
                 if proper
                     && (!t.hide_mode || cool_eye)
                     && (cx - t.x).abs() < come_out
@@ -3360,7 +3364,7 @@ fn gas_moth_attack(world: &mut World, actor_id: i32) {
         let proper = world
             .entities
             .get(actor_id)
-            .is_some_and(|a| is_proper_target(a, t));
+            .is_some_and(|a| is_proper_target(&a, &t));
         if !proper {
             continue;
         }
@@ -3383,7 +3387,7 @@ fn gas_moth_monster_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !(can_move(e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
+    if !(can_move(&e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
         return;
     }
     let enemy_tick = e.ai.search_enemy_tick;
@@ -3430,7 +3434,7 @@ fn gas_attack(
                 .entities
                 .get(actor_id)
                 .zip(world.entities.get(target_id))
-                .is_some_and(|(a, t)| is_proper_target(a, t));
+                .is_some_and(|(a, t)| is_proper_target(&a, &t));
             if proper {
                 let speed_point = world
                     .entities
@@ -3557,7 +3561,7 @@ fn class_struck_apply(
     reduced: i32,
     power: i32,
 ) -> Option<crate::combat::AttackOutcome> {
-    let target = world.entities.get(target_id)?.clone();
+    let target = world.entities.spawn_cloned(target_id)?;
     let last_hitter = current_last_hitter(world, target_id);
     let cfg = world.combat_config;
     let per10 = crate::combat::struck_damage_multiplier(
@@ -3685,7 +3689,7 @@ fn bone_king_run(world: &mut World, actor_id: i32) {
         return;
     };
     let now = world.clock_ms;
-    if !(can_move(e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
+    if !(can_move(&e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
         return;
     }
     let (enemy_tick, has_target) = (e.ai.search_enemy_tick, e.ai.target_creature.is_some());
@@ -3914,7 +3918,7 @@ fn sculture_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
             .entities
             .get(actor_id)
             .zip(world.entities.get(tid))
-            .is_some_and(|(a, t)| is_proper_target(a, t));
+            .is_some_and(|(a, t)| is_proper_target(&a, &t));
         if !proper {
             continue;
         }
@@ -3924,7 +3928,7 @@ fn sculture_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
         let hit = {
             let target = world.entities.get(tid).expect("target exists");
             let attacker = world.entities.get(actor_id).expect("attacker exists");
-            crate::combat::get_hit_struck_damage(&mut world.rng, target, attacker, 0)
+            crate::combat::get_hit_struck_damage(&mut world.rng, &target, &attacker, 0)
         };
         let mag = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power, Some(undead));
         let n_damage = i32::from(hit) + mag;
@@ -3954,7 +3958,7 @@ fn sculture_king_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !(can_move(e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
+    if !(can_move(&e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
         return;
     }
     if e.stone_mode {
@@ -3970,7 +3974,7 @@ fn sculture_king_run(world: &mut World, actor_id: i32) {
             let proper = world
                 .entities
                 .get(actor_id)
-                .is_some_and(|a| is_proper_target(a, t));
+                .is_some_and(|a| is_proper_target(&a, &t));
             if proper
                 && (!t.hide_mode || cool_eye)
                 && (cx - t.x).abs() <= 2
@@ -4088,8 +4092,8 @@ fn archer_guard_attack_targer(world: &mut World, actor_id: i32, target_id: i32) 
     let mut n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
     if n_damage > 0 {
         let (Some(target), Some(attacker)) = (
-            world.entities.get(target_id).cloned(),
-            world.entities.get(actor_id).cloned(),
+            world.entities.spawn_cloned(target_id),
+            world.entities.spawn_cloned(actor_id),
         ) else {
             return;
         };
@@ -4138,7 +4142,7 @@ fn archer_guard_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if can_move(e) && now - e.ai.walk_tick >= e.ai.walk_speed {
+    if can_move(&e) && now - e.ai.walk_tick >= e.ai.walk_speed {
         let (cx, cy) = (e.x, e.y);
         if let Some(e) = world.entities.get_mut(actor_id) {
             e.ai.walk_tick = now;
@@ -4174,7 +4178,7 @@ fn archer_guard_run(world: &mut World, actor_id: i32) {
         }
     }
     // `ArcherGuard.Run` 的攻击/转向段仍在 `if (CanMove())` 内（只是不在 `WalkTick` 门内）。
-    let can_move_now = world.entities.get(actor_id).is_some_and(can_move);
+    let can_move_now = world.entities.get(actor_id).is_some_and(|e| can_move(&e));
     let target = world
         .entities
         .get(actor_id)
@@ -4580,7 +4584,7 @@ fn cow_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
             .entities
             .get(actor_id)
             .zip(world.entities.get(tid))
-            .is_some_and(|(a, t)| is_proper_target(a, t));
+            .is_some_and(|(a, t)| is_proper_target(&a, &t));
         if !proper {
             continue;
         }
@@ -4589,7 +4593,7 @@ fn cow_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
         let hit = {
             let target = world.entities.get(tid).expect("target exists");
             let attacker = world.entities.get(actor_id).expect("attacker exists");
-            crate::combat::get_hit_struck_damage(&mut world.rng, target, attacker, n_power / 2)
+            crate::combat::get_hit_struck_damage(&mut world.rng, &target, &attacker, n_power / 2)
         };
         // `GetMagStruckDamage(this, nPower / 2)`：MAC 骰照抽。
         let mag =
@@ -4646,7 +4650,7 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
         || e.race == 92
         || e.race == 114
         || e.race == 100)
-        && can_move(e)
+        && can_move(&e)
     {
         let now = world.clock_ms;
         let enemy_tick = e.ai.search_enemy_tick;
@@ -4663,7 +4667,7 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !(can_move(e) && !e.fixed_hide_mode && !e.stone_mode) {
+    if !(can_move(&e) && !e.fixed_hide_mode && !e.stone_mode) {
         // oracle：外层 `if (CanMove() && ...)` 为假 ⇒ 落到函数尾的 `CheckRoyalty()`
         // （`MonsterObject.cs:352`）与 `CrazyMode` 到期（`:353-356`）。
         crate::slave::check_royalty(world, actor_id);
@@ -5646,7 +5650,7 @@ fn proper_for_override(world: &World, actor_id: i32, target_id: i32) -> bool {
         .entities
         .get(actor_id)
         .zip(world.entities.get(target_id))
-        .is_some_and(|(a, t)| is_proper_target_grouped_direct(a, t, &[]))
+        .is_some_and(|(a, t)| is_proper_target_grouped_direct(&a, &t, &[]))
 }
 
 /// `MonsterObject.AttackTarget` 风格的共享骨架：射程判定 → 到点 ⇒ 攻击 → `true`；
@@ -5754,10 +5758,10 @@ fn double_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
             if world.rng.random_below(speed_point) >= i32::from(hit_point) {
                 continue;
             }
-            let Some(target) = world.entities.get(target_id).cloned() else {
+            let Some(target) = world.entities.spawn_cloned(target_id) else {
                 continue;
             };
-            let Some(attacker) = world.entities.get(actor_id).cloned() else {
+            let Some(attacker) = world.entities.spawn_cloned(actor_id) else {
                 continue;
             };
             n_damage = i32::from(crate::combat::get_hit_struck_damage(
@@ -5942,10 +5946,10 @@ fn do_self_explosion(world: &mut World, actor_id: i32) {
             continue;
         }
         let half = n_power / 2;
-        let Some(target) = world.entities.get(target_id).cloned() else {
+        let Some(target) = world.entities.spawn_cloned(target_id) else {
             continue;
         };
-        let Some(attacker) = world.entities.get(actor_id).cloned() else {
+        let Some(attacker) = world.entities.spawn_cloned(actor_id) else {
             continue;
         };
         let mut damage = i32::from(crate::combat::get_hit_struck_damage(
@@ -6633,7 +6637,7 @@ pub fn fire_monster_run(world: &mut World, actor_id: i32) {
     let Some(e) = world.entities.get(actor_id) else {
         return;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         return;
     }
     let (x, y, map_id) = (e.x, e.y, e.map_id);
@@ -6768,7 +6772,7 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                 .entities
                 .get(actor_id)
                 .zip(world.entities.get(target_id))
-                .is_some_and(|(a, t)| is_proper_target(a, t));
+                .is_some_and(|(a, t)| is_proper_target(&a, &t));
             if proper && (target_x - cx).abs() <= 8 && (target_y - cy).abs() <= 8 {
                 // `nPower = LoByte(DC) + Random(|HiByte(DC) - LoByte(DC)| + 1)`（`:26`）。
                 let lo = i32::from(crate::combat::lo_byte(dc));
@@ -6781,7 +6785,7 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                             .entities
                             .get(actor_id)
                             .zip(world.entities.get(pose_id))
-                            .is_some_and(|(a, t)| is_proper_target(a, t));
+                            .is_some_and(|(a, t)| is_proper_target(&a, &t));
                         if pose_proper && anti_magic > 0 {
                             // `baseObject.GetMagStruckDamage(this, nPower)`（`:32`）在**受击者
                             // （pose）**上调用 ⇒ MAC / `LifeAttrib` / `AddAbil.UndeadPower` 都取
@@ -6879,7 +6883,7 @@ fn magic_monster_run(world: &mut World, actor_id: i32) {
         return;
     };
     // `if (CanMove() && !FixedHideMode && !StoneMode)`（`:86`）。
-    if !(can_move(e) && !e.fixed_hide_mode && !e.stone_mode) {
+    if !(can_move(&e) && !e.fixed_hide_mode && !e.stone_mode) {
         return;
     }
     // `if (Think()) { base.Run(); return; }`（`:88-92`）。
@@ -7104,7 +7108,7 @@ mod tests {
         let ghost = player(&mut world, 12, 10);
         world.entities.get_mut(ghost).unwrap().ghost = true;
         let set_vis = |world: &mut World| {
-            world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
                 target: ghost,
                 flag: VisibleFlag::Show,
             }];
@@ -7144,8 +7148,8 @@ mod tests {
         let dead = player(&mut world, 11, 10);
         world.entities.get_mut(dead).unwrap().death = true;
         {
-            let e = world.entities.get_mut(mid).unwrap();
-            e.visible_actors = vec![
+            let b = world.entities.map_binding_mut(mid).unwrap();
+            b.visible_actors = vec![
                 VisibleBaseObject {
                     target: far,
                     flag: VisibleFlag::Show,
@@ -7199,7 +7203,7 @@ mod tests {
                 t.hide_mode = hide_mode;
                 t.fixed_hide_mode = fixed;
             }
-            world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
                 target,
                 flag: VisibleFlag::Show,
             }];
@@ -7242,7 +7246,7 @@ mod tests {
             } else {
                 [legal, dead]
             };
-            world.entities.get_mut(mid).unwrap().visible_actors = order
+            world.entities.map_binding_mut(mid).unwrap().visible_actors = order
                 .iter()
                 .map(|&target| VisibleBaseObject {
                     target,
@@ -7307,7 +7311,7 @@ mod tests {
         for id in [dead_a, dead_b] {
             world.entities.get_mut(id).unwrap().death = true;
         }
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![
             VisibleBaseObject {
                 target: dead_a,
                 flag: VisibleFlag::Show,
@@ -7341,7 +7345,7 @@ mod tests {
         let dead = player(&mut world, 11, 10);
         world.entities.get_mut(dead).unwrap().death = true;
         let legal = player(&mut world, 12, 10);
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![
             VisibleBaseObject {
                 target: dead,
                 flag: VisibleFlag::Show,
@@ -7374,7 +7378,7 @@ mod tests {
         world.entities.get_mut(dead).unwrap().death = true;
         let near = player(&mut world, 12, 10);
         let far = player(&mut world, 20, 10);
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![
             VisibleBaseObject {
                 target: dead,
                 flag: VisibleFlag::Show,
@@ -7405,14 +7409,14 @@ mod tests {
         let mid = monster(&mut world, 10, 10);
         let target = player(&mut world, 12, 10);
         world.entities.get_mut(target).unwrap().invisible = true;
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
             target,
             flag: VisibleFlag::Show,
         }];
         assert!(
             !crate::combat::is_proper_target_grouped(
-                world.entities.get(mid).unwrap(),
-                world.entities.get(target).unwrap(),
+                &world.entities.get(mid).unwrap(),
+                &world.entities.get(target).unwrap(),
                 &[]
             ),
             "折入版（显示路径）仍拒隐身目标"
@@ -7520,7 +7524,14 @@ mod tests {
             let mut out: Vec<(i32, i32, i32, u8)> = world
                 .entities
                 .iter()
-                .map(|e| (e.id, e.x, e.y, e.ai.dir))
+                .map(|e| {
+                    (
+                        e.id,
+                        world.entities.x(e.id).unwrap_or(0),
+                        world.entities.y(e.id).unwrap_or(0),
+                        e.ai.dir,
+                    )
+                })
                 .collect();
             out.sort_unstable();
             out
@@ -7546,7 +7557,13 @@ mod tests {
             let state = world
                 .entities
                 .iter()
-                .map(|e| (e.x, e.y, e.ai.dir))
+                .map(|e| {
+                    (
+                        world.entities.x(e.id).unwrap_or(0),
+                        world.entities.y(e.id).unwrap_or(0),
+                        e.ai.dir,
+                    )
+                })
                 .collect();
             (state, world.rng.random())
         }
@@ -7775,7 +7792,7 @@ mod tests {
             let id = monster(&mut world, 10, 10);
             let tid = player(&mut world, tx, ty);
             if tmap != 0 {
-                world.entities.get_mut(tid).unwrap().map_id = tmap;
+                world.entities.transform_mut(tid).unwrap().map_id = tmap;
             }
             if kill {
                 world.entities.get_mut(tid).unwrap().death = true;
@@ -7805,7 +7822,7 @@ mod tests {
         world.clock_ms = 0;
         let id = monster(&mut world, 10, 10);
         let tid = player(&mut world, 11, 10);
-        world.entities.get_mut(id).unwrap().visible_actors = vec![
+        world.entities.map_binding_mut(id).unwrap().visible_actors = vec![
             VisibleBaseObject {
                 target: tid,
                 flag: VisibleFlag::Show,
@@ -7954,11 +7971,15 @@ mod tests {
         let mid = monster(&mut world, 10, 10);
         {
             let m = world.entities.get_mut(mid).unwrap();
-            m.is_visible_active = true;
             m.ai.holy_seize = true;
             m.ai.holy_seize_tick = 1_000;
             m.ai.holy_seize_interval = 50;
         }
+        world
+            .entities
+            .map_binding_mut(mid)
+            .unwrap()
+            .is_visible_active = true;
 
         // 差 == interval（严格 > 不成立）⇒ 不得清、不得产 656。
         world.clock_ms = 1_050;
@@ -8518,11 +8539,15 @@ mod tests {
         let mut world = World::new(60, 60);
         let mid = race_monster(&mut world, 81, 10, 10);
         let pid = player(&mut world, 12, 10);
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
             target: pid,
             flag: VisibleFlag::Show,
         }];
-        world.entities.get_mut(mid).unwrap().is_visible_active = visible_active;
+        world
+            .entities
+            .map_binding_mut(mid)
+            .unwrap()
+            .is_visible_active = visible_active;
         world.set_process_monster_interval(interval);
         world.enable_monster_ai();
         (world, mid, pid)
@@ -8610,7 +8635,7 @@ mod tests {
         let mut world = World::new(60, 60);
         let mid = race_monster(&mut world, 83, 10, 10); // SlowAtMonster：继承 ATMonster.Run
         let pid = player(&mut world, 12, 10);
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
             target: pid,
             flag: VisibleFlag::Show,
         }];
@@ -8647,7 +8672,7 @@ mod tests {
         let far = player(&mut world, 40, 10);
         world
             .entities
-            .get_mut(mid)
+            .map_binding_mut(mid)
             .unwrap()
             .visible_actors
             .push(VisibleBaseObject {
@@ -8673,7 +8698,7 @@ mod tests {
         let mut world = World::new(60, 60);
         let mid = race_monster(&mut world, 81, 10, 10);
         let pid = player(&mut world, 12, 10);
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
             target: pid,
             flag: VisibleFlag::Show,
         }];
@@ -8697,7 +8722,7 @@ mod tests {
         let mut world = World::new(60, 60);
         let mid = race_monster(&mut world, 80, 10, 10);
         let pid = player(&mut world, 12, 10);
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
             target: pid,
             flag: VisibleFlag::Show,
         }];
@@ -8739,7 +8764,7 @@ mod tests {
             let mut world = World::new(60, 60);
             let mid = race_monster(&mut world, r, 10, 10);
             let pid = player(&mut world, 15, 10);
-            world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+            world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
                 target: pid,
                 flag: VisibleFlag::Show,
             }];
@@ -8890,7 +8915,7 @@ mod tests {
         m.max_hp = 6000;
         let mid = world.add_entity(m);
         let pid = player(&mut world, 22, 20);
-        world.entities.get_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
+        world.entities.map_binding_mut(mid).unwrap().visible_actors = vec![VisibleBaseObject {
             target: pid,
             flag: VisibleFlag::Show,
         }];
@@ -9275,9 +9300,9 @@ mod tests {
         let master = player(&mut world, 10, 10);
         {
             let m = world.entities.get_mut(master).unwrap();
-            m.map_id = 1;
             m.ai.dir = DIR_UP; // 身后 = (10,11)
         }
+        world.entities.set_map_id(master, 1);
         assert!(world.enter_world(master));
         let id = monster(&mut world, 10, 10);
         assert!(world.enter_world(id));
@@ -9350,7 +9375,7 @@ mod tests {
         }
         // 左上角夹取：两轴各自的门与对角 `&&` 门。
         {
-            let e = world.entities.get_mut(id).unwrap();
+            let e = world.entities.transform_mut(id).unwrap();
             e.x = 0;
             e.y = 0;
         }
@@ -9374,7 +9399,7 @@ mod tests {
         }
         // 右下角夹取。
         {
-            let e = world.entities.get_mut(id).unwrap();
+            let e = world.entities.transform_mut(id).unwrap();
             e.x = 9;
             e.y = 9;
         }
@@ -9588,7 +9613,11 @@ mod tests {
     }
 
     fn mb1_see(world: &mut World, viewer: i32, target: i32) {
-        world.entities.get_mut(viewer).unwrap().visible_actors = vec![VisibleBaseObject {
+        world
+            .entities
+            .map_binding_mut(viewer)
+            .unwrap()
+            .visible_actors = vec![VisibleBaseObject {
             target,
             flag: VisibleFlag::Show,
         }];
@@ -9916,8 +9945,8 @@ mod tests {
             assert!(world.enter_world(e));
         }
         {
-            let e = world.entities.get_mut(id).unwrap();
-            e.visible_actors = vec![
+            let b = world.entities.map_binding_mut(id).unwrap();
+            b.visible_actors = vec![
                 VisibleBaseObject {
                     target: p,
                     flag: VisibleFlag::Show,
@@ -10327,7 +10356,7 @@ mod tests {
             for (x, y) in visible {
                 ids.push(mb1_players(&mut world, x, y));
             }
-            world.entities.get_mut(id).unwrap().visible_actors = ids
+            world.entities.map_binding_mut(id).unwrap().visible_actors = ids
                 .iter()
                 .map(|target| VisibleBaseObject {
                     target: *target,
@@ -10441,11 +10470,11 @@ mod tests {
                 e.re_alive_tick = 10_000;
                 e.ai.zilkin_die_tick = 5_000;
                 e.ai.zil_kill_count = 0;
-                e.visible_actors = vec![VisibleBaseObject {
-                    target: p,
-                    flag: VisibleFlag::Show,
-                }];
             }
+            world.entities.map_binding_mut(id).unwrap().visible_actors = vec![VisibleBaseObject {
+                target: p,
+                flag: VisibleFlag::Show,
+            }];
             (world, id)
         };
         let (mut world, id) = setup(false, false);
@@ -10515,7 +10544,7 @@ mod tests {
         };
         world
             .entities
-            .get_mut(viewer)
+            .map_binding_mut(viewer)
             .expect("viewer")
             .visible_actors
             .push(vb);
@@ -11239,8 +11268,8 @@ mod tests {
             vec![live],
             "既有 true 口径不含死对象"
         );
-        let attacker = world.entities.get(live).cloned().unwrap();
-        let dead_e = world.entities.get(dead).cloned().unwrap();
+        let attacker = world.entities.spawn_cloned(live).unwrap();
+        let dead_e = world.entities.spawn_cloned(dead).unwrap();
         assert!(
             !crate::combat::is_proper_target(&attacker, &dead_e),
             "G09 登记：死目标仍被折入版 is_proper_target 拒绝"
@@ -11451,7 +11480,11 @@ mod tests {
     }
 
     fn atk_see(world: &mut World, viewer: i32, target: i32) {
-        world.entities.get_mut(viewer).unwrap().visible_actors = vec![VisibleBaseObject {
+        world
+            .entities
+            .map_binding_mut(viewer)
+            .unwrap()
+            .visible_actors = vec![VisibleBaseObject {
             target,
             flag: VisibleFlag::Show,
         }];
@@ -11508,7 +11541,7 @@ mod tests {
                     continue;
                 }
                 {
-                    let t = world.entities.get_mut(p).unwrap();
+                    let t = world.entities.transform_mut(p).unwrap();
                     t.x = 10 + dx;
                     t.y = 10 + dy;
                 }
@@ -11961,7 +11994,7 @@ mod tests {
             (12, 10)
         );
 
-        world.entities.get_mut(p).unwrap().map_id = 999;
+        world.entities.transform_mut(p).unwrap().map_id = 999;
         assert!(!magic_monster_attack_target(&mut world, m));
         let e = world.entities.get(m).unwrap();
         assert_eq!(e.ai.target_creature, None);
@@ -12588,7 +12621,7 @@ mod tests {
         let mut world = World::new(60, 60);
         let cow = mb4_cow(&mut world, 10, 10, 700, 700);
         let pid = player(&mut world, 12, 10);
-        world.entities.get_mut(cow).unwrap().visible_actors = vec![VisibleBaseObject {
+        world.entities.map_binding_mut(cow).unwrap().visible_actors = vec![VisibleBaseObject {
             target: pid,
             flag: VisibleFlag::Show,
         }];
@@ -12605,7 +12638,7 @@ mod tests {
         let mut world = World::new(60, 60);
         let cow = mb4_cow(&mut world, 10, 10, 700, 700);
         let pid = player(&mut world, 12, 10);
-        world.entities.get_mut(cow).unwrap().visible_actors = vec![VisibleBaseObject {
+        world.entities.map_binding_mut(cow).unwrap().visible_actors = vec![VisibleBaseObject {
             target: pid,
             flag: VisibleFlag::Show,
         }];
@@ -12651,7 +12684,7 @@ mod tests {
                 monster_class_run(&mut world, id),
                 Some(ClassRunBase::Monster)
             );
-            world.entities.get(id).unwrap().clone()
+            world.entities.spawn_cloned(id).unwrap()
         };
         // Ready 7999ms：仍 Ready，NextHitTime=10000。
         let e = setup(100_000, 7_999, None);
@@ -13321,11 +13354,14 @@ mod tests {
         {
             let e = w.entities.get_mut(mid).unwrap();
             e.ai.search_enemy_tick = 100_000 - 1001;
-            e.visible_actors = vec![crate::entity::VisibleBaseObject {
+        }
+        w.entities.set_visible_actors(
+            mid,
+            vec![crate::entity::VisibleBaseObject {
                 target: tid,
                 flag: crate::entity::VisibleFlag::Show,
-            }];
-        }
+            }],
+        );
 
         assert_eq!(monster_class_run(&mut w, mid), Some(ClassRunBase::Monster));
         let e = w.entities.get(mid).unwrap();
@@ -14878,7 +14914,7 @@ mod guard_target_castle_tests {
         assert_eq!(w.guard_crime_for_castle_tick(guard_id), None);
         let player_id = add_player(&mut w, 12, 5, None);
         // 守卫更近（距离 3），玩家更远（距离 7）。
-        w.entities.get_mut(archer).unwrap().visible_actors = vec![
+        w.entities.map_binding_mut(archer).unwrap().visible_actors = vec![
             VisibleBaseObject {
                 target: guard_id,
                 flag: VisibleFlag::Show,
@@ -15178,11 +15214,14 @@ mod mb89_tests {
             let e = world.entities.get_mut(id).unwrap();
             e.fixed_hide_mode = true;
             e.ai.walk_tick = 0;
-            e.visible_actors = vec![VisibleBaseObject {
+        }
+        world.entities.set_visible_actors(
+            id,
+            vec![VisibleBaseObject {
                 target: near,
                 flag: VisibleFlag::Show,
-            }];
-        }
+            }],
+        );
         assert_eq!(sand_mob_object_run(&mut world, id), ClassRunBase::Animal);
         assert_eq!(
             world.entities.get(id).unwrap().appear_start_tick,
@@ -15398,7 +15437,7 @@ mod mb89_tests {
         let mut expect = s.world.rng.clone();
         expect.random_below(1); // DC
         expect.random_below(1); // pose MAC 5..5
-        let mut pose_clone = s.world.entities.get(s.pose).unwrap().clone();
+        let mut pose_clone = s.world.entities.spawn_cloned(s.pose).unwrap();
         crate::combat::struck_damage_durability(&mut expect, &mut pose_clone);
         fireball_monster_run(&mut s.world, s.m);
         stream_eq(&s.world, &expect, "DC → MAC → StruckDamage 耐久");

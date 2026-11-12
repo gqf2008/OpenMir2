@@ -71,7 +71,6 @@
 
 use mir2_shared::rng::RandomNumber;
 
-use crate::entity::Entity;
 use crate::monai::{can_move, search_target, set_target_creature};
 use crate::world::World;
 
@@ -213,7 +212,7 @@ pub struct SpecialRefMsg {
 ///   （`SpiderHouseMonster.cs:15-19`）。
 /// - `CloneMonster`：ctor 只覆盖 `SearchTime = Random(1500) + 1500`（已在构造抽里），
 ///   `SearchTick` 保持 `BaseObject` ctor 的 `GetTickCount()`。
-pub fn apply_ctor_fields(e: &mut Entity, now: i64) {
+pub fn apply_ctor_fields(e: &mut crate::entity::EntitySpawn, now: i64) {
     match SpecialKind::from_race(e.race) {
         Some(SpecialKind::BeeQueen) => {
             e.view_range = CHILD_QUEEN_VIEW_RANGE;
@@ -311,7 +310,7 @@ pub fn special_monster_run(world: &mut World, actor_id: i32) -> bool {
     let Some(e) = world.entities.get(actor_id) else {
         return true;
     };
-    if !can_move(e) {
+    if !can_move(&e) {
         // oracle：`if (CanMove())` 为假 ⇒ 直接 `base.Run()`（本函数返回后由调用方跑）。
         return true;
     }

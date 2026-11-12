@@ -95,7 +95,7 @@ impl StateLog {
         };
         let mut line = String::from("[");
         let mut first = true;
-        for e in world.entities.iter() {
+        for e in world.entities.iter_ref() {
             // 只看玩家族（C# `Race==0` == `ActorRace.Play`），与 `DumpActors` 一致。
             if e.race != mir2_world::ACTOR_RACE_PLAY {
                 continue;

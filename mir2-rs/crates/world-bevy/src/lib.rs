@@ -62,6 +62,11 @@ pub struct MonsterId(pub i32);
 #[derive(Component, Clone, Debug)]
 pub struct DropTable(pub Vec<MonsterDropItem>);
 
+/// **地图表资源（S3b）**：`World::maps` 在 tick 边界一次性移入本资源，供 `OutputAoi`
+/// 系统扫描；跑完再移回 facade。同一时刻只有一个所有者（设计件 §4.2 的合法同步形态）。
+#[derive(Resource, Clone, Debug, Default, PartialEq, Eq)]
+pub struct MapsRes<M>(pub Vec<M>);
+
 /// 怪物在地图上的位置（组件）。
 #[derive(Component, Clone, Copy, Debug)]
 pub struct Atlas {

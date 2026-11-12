@@ -509,7 +509,7 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
             "spawn_merchants 包装必须把登记透传到调用方的展示表"
         );
         for id in world.merchant_ids_sorted() {
-            let e = world.entities.get(id).expect("实体在");
+            let e = world.entities.entity(id).expect("实体在");
             assert_eq!(
                 displays.get(id).map(|d| d.dir),
                 Some(crate::downlink::NPC_INITIAL_DIR),
@@ -881,7 +881,7 @@ C
         );
         let st = world
             .entities
-            .get(id)
+            .entity(id)
             .and_then(|e| e.merchant.as_ref())
             .expect("实体有商人态");
         assert_eq!(st.run_tick, 1234, "run_tick = 调用方给的账本值");

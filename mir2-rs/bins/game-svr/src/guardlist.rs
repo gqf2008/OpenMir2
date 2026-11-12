@@ -323,18 +323,18 @@ mod tests {
             .flat_map(|e| e.cert_list.iter().copied())
             .collect();
         assert_eq!(ids.len(), 2, "两只守卫各登记一条 CertList");
-        let fields: Vec<(i32, &str, usize, i32, i32, u8, u8)> = ids
+        let fields: Vec<(i32, String, usize, i32, i32, u8, u8)> = ids
             .iter()
             .map(|&id| {
                 let e = world.entities.get(id).expect("守卫在仓库");
-                (e.id, e.name.as_str(), e.map_id, e.x, e.y, e.race, e.ai.dir)
+                (e.id, e.name.clone(), e.map_id, e.x, e.y, e.race, e.ai.dir)
             })
             .collect();
         assert_eq!(
             fields,
             vec![
-                (ids[0], "卫士", 0, 2, 2, 11, 5),
-                (ids[1], "卫士", 0, 3, 1, 11, 7),
+                (ids[0], "卫士".to_string(), 0, 2, 2, 11, 5),
+                (ids[1], "卫士".to_string(), 0, 3, 1, 11, 7),
             ],
             "name/map_id/(x,y)/race/dir 逐字段"
         );

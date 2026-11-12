@@ -47,7 +47,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::entity::Entity;
+use crate::entity::EntitySpawn;
 use mir2_shared::hutil::{max_i32, round};
 use mir2_shared::rng::RandomNumber;
 
@@ -106,7 +106,7 @@ pub type MonsterCreator<'a> =
 /// **MB-4 起落 `CowKingMonster.ctor` 的 `RushMode = true`**（`CowKingMonster.cs:21`）：
 /// PR-2 因 `Entity.rush_mode` 已被 `RM_MAGSTRUCK` 消费（`BaseObject.Base.cs:620`）而暂缓；
 /// 本批按 oracle ctor 置位，消费点即该门（`!RushMode` 时才 `WalkTick += 800 + Random(1000)`）。
-pub fn apply_monster_class_constants(entity: &mut Entity, race: i16, now: i64) {
+pub fn apply_monster_class_constants(entity: &mut EntitySpawn, race: i16, now: i64) {
     match race {
         // `StickMonster` 基类 ctor（`StickMonster.cs:14-23`）：`ViewRange = 7`、
         // `FixedHideMode = true`、`StickMode = true`、`Animal = true`；`:19-20` 的
@@ -1112,6 +1112,26 @@ pub fn process_cert_lists(
         }
     }
     record
+}
+
+/// 对**已插入**实体应用类常量（测试/迁移工具）：克隆成生成期载体 → 应用 → 写回
+/// `Entity` 与 `Transform.view_range`。生产路径在插入前直接对 `EntitySpawn` 调用。
+pub fn apply_monster_class_constants_at(
+    entities: &mut crate::entity::EntityStore,
+    id: i32,
+    race: i16,
+    now: i64,
+) {
+    let Some(mut spawn) = entities.spawn_cloned(id) else {
+        return;
+    };
+    apply_monster_class_constants(&mut spawn, race, now);
+    if let Some(e) = entities.get_mut(id) {
+        *e = spawn.entity;
+    }
+    if let Some(t) = entities.transform_mut(id) {
+        t.view_range = spawn.view_range;
+    }
 }
 
 #[cfg(test)]

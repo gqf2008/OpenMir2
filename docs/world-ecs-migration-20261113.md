@@ -29,6 +29,11 @@
 4. **S3a 试点切片 = `DupState`（3 字段）**：两个消费点（`World::check_dup_obj` + 宿主
    `apply_get_start_point_after_tick`）、无存档面、已有专项用例
    `crates/world/tests/check_dup_obj_vectors.rs`，是最小可独立验证的落点（见 §5.2）。
+   **S3b 已落地**：`Transform`（4）+ `MapBinding`（6）从 `Entity` 删除（剩 **138** 字段），
+   真值在 `world-bevy` 组件；读取经 `EntityStore::get` 的三组件只读视图 `EntityRef`，
+   写入经 `transform_mut`/`map_binding_mut`；`World::maps` 在 tick 边界移入
+   `mir2_world_bevy::MapsRes`，AOI 刷新是注册在 `TickStage::OutputAoi` 的系统
+   （`aoi::output_aoi_system`，按 `AoiIds` 槽位顺序扫描，不迭代 `Query`）。
 5. **P0 未改任何生产路径**：`crates/world` 的 `Entity` / `EntityStore` / `World` 一行未动；
    新增组件骨架与 `#[cfg(test)]` 适配器；五门全绿、golden/parity 不变。
 
@@ -335,8 +340,10 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
 - **覆盖**：25 组件合计 2+4+5+13+1+6+13+5+8+6+14+13+3+1+5+4+3+4+11+4+19+1+1+1+4 = **151**。
   P0 的 round-trip 用例（`components::tests::split_and_apply_round_trip_all_151_fields`）
   对每个字段赋非缺省值后做 `Entity -> 25 组件 -> Entity`，用全字段 `Debug` 相等作判据。
-  **S3a 起**：`DupState` 的 3 个字段已从 `Entity` 删除（真值在组件），`Entity` 剩 **148** 字段；
-  用例更名为 `split_and_apply_round_trip_all_remaining_fields`，断言范围相应缩小。
+  **S3a/S3b 起**：`DupState` 的 3 个字段（S3a）、`Transform` 的 4 个与 `MapBinding` 的 6 个
+  字段（S3b）已从 `Entity` 删除（真值在组件），`Entity` 剩 **138** 字段；
+  用例更名为 `split_and_apply_round_trip_all_remaining_fields`，`Transform`/`MapBinding`
+  的适配器随字段删除（改用 `EntityRef` 只读视图与 `EntitySpawn` 生成期载体）。
 - **使用量**（Leader 统计，作为拆分顺序输入）：`ai` 173、`x` 101、`race` 96、`y` 95、
   `map_id` 88、`hp` 62、`death` 58、`ghost` 39。
   ⇒ **热点字段最后拆**；叶子组先拆。这和 §5 的波次一致。
@@ -528,8 +535,9 @@ OutputAoi            // tick_tail 第 3 段（AOI）
   （阶段链/ambiguity/`TickRunner` 方法白名单）必须同一提交更新；评审里单独说明。
 - 仍然**不用** `.before()`/`.after()`/`.chain()` 做业务排序——顺序只由阶段枚举决定。
 - 同阶段仍只放一个系统（或**确认无访问冲突**的只读系统）；不要把「反正 chain 了」当排序。
-- `collect_tick_order_system`（`bevy_bridge.rs`）当前未注册：S3a 把它接到 `Command` 之前
-  （或由 facade 直接填 `TickOrder`），作为「按槽位顺序处理」的显式入口。
+- `collect_tick_order_system`（`bevy_bridge.rs`）**S3a 未注册**（S3a 只交付了 20 阶段契约，
+  业务段仍为空）：把它接到 `Command` 之前（或由 facade 直接填 `TickOrder`）留到**首次搬迁
+  业务段的切片**，届时它作为「按槽位顺序处理」的显式入口。
 - `tick_tail` 的玩家死亡/VerifyMapTime/AOI 三段在宿主段之后，因此排在 `OutputDrain` 之后；
   宿主段本身不进入 schedule（facade 调用）。
 
@@ -590,6 +598,13 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 | **S4c AI/商人/NPC/物品** | `AiState`+`SlaveState`+`MerchantState`+`NpcState`+`Inventory`+`CoreIdentity`（含 `process_run_counts` 旁挂表 → 组件） | `crates/world/src/{entity.rs,monai.rs,slave.rs,special_monster.rs,merchant.rs,npc.rs,world.rs}` + `bins/game-svr` 物品/存档同步 | `monster-ai-*`/`merchant-tick`/`npc` 场景；`world_combat_parity`；RNG 账本；存档/DB 对拍 | 按子片回退 |
 | **S4d 城堡/行会/税收** | `castle`（攻城状态机）、`castle_tax`（税率/金库）、`guild`（会话态/成员/联盟）整模块迁入 `world-bevy`（公会**服务**仍是 actor，只搬状态机 API） | `crates/world/src/{castle.rs,castle_tax.rs,guild.rs}` + 对应 `bins/game-svr` 城堡/行会段 | 城堡/行会既有用例向量；golden 三份；`rg` 无 `mir2_world` 残留前先跑模块级 | 按子片回退 |
 | **S5 切换并删除** | `tests/parity` + `tick_bench` + `bins/game-svr` + 守卫全部改指 `world-bevy`；删除 `crates/world` 与 workspace 成员 | `mir2-rs/crates/world-bevy/{Cargo.toml,src/bin,tests}`、`mir2-rs/tests/parity/{Cargo.toml,tests,src}`、`mir2-rs/bins/game-svr/{Cargo.toml,src}`、`mir2-rs/Cargo.toml`、`mir2-rs/Cargo.lock`、删除 `mir2-rs/crates/world/**` | 全 workspace 五门 + golden 三份 + parity 全套 + RNG trace + DB 窗口；`crates/world/tests/no_parallel.rs` 守卫**先移植**到 `world-bevy/tests` 并绿；`rg -n "mir2_world|mir2-world" mir2-rs/crates/world-bevy mir2-rs/bins mir2-rs/tests/parity` 无残留（除历史文档）；`cargo metadata` 无 world 成员 | 合并前整提交回退；合并后按 follow-up 卡处理 |
+
+> **S3b 落地登记**：`Entity` 删除 `x/y/map_id/view_range` + `add_to_mapped/visible_actors/`
+> `visible_events/is_visible_active/processed_tick/verify_tick`（151→138 字段）。`EntitySpawn`
+> 作为生成期载体（`insert` 时落成 `Transform`/`MapBinding` 组件），`EntityRef` 为三组件只读视图；
+> `MapsRes` 在 tick 边界一次性移入/移出，`TickStage::OutputAoi` 的 `aoi::output_aoi_system`
+> 按 `AoiIds` 槽位顺序完成全部 AOI 刷新（算法仍是 `aoi.rs` 的同一实现，经 `AoiStore`
+> trait 由 `EntityStore` 与 bevy `World` 两个实现复用）。
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——
 > `entity/tick/存储`=S1/S2；`DupState`+tick 段链=S3a；`map/aoi/space_move/session`=S3b；

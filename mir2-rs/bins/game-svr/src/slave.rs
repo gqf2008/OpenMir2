@@ -372,9 +372,9 @@ fn tamming_input(world: &World, input: &TammingCastInput<'_>) -> Option<magic::T
     // `IsGroupMember` 读的是**团长**（`caster.GroupOwner`）的成员表（`PlayObject.cs:5158-5175`）；
     // 非团长施法者自身的 `group_members` 恒空（`party.rs` 的 `JoinGroup` 只写 `group_owner`）。
     if !mir2_world::combat::is_proper_target_grouped(
-        caster,
-        target,
-        &world.attacker_group_members(caster),
+        &caster,
+        &target,
+        &world.attacker_group_members(&caster),
     ) {
         return None;
     }

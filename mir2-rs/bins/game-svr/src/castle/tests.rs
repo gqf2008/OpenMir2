@@ -733,7 +733,7 @@ fn query_user_name_color_reads_world_castle_name_colors() {
 // ② `refresh_show_name_in_area` 去掉 `map_id != palace_map_id` 门 ⇒ 宫外玩家多收 2 帧 ⇒ 计数红；
 // ③ `queue_structure_ref_msg` 把 `RM_DIGDOWN`/`RM_DIGUP` 对调 ⇒ `SM_DIGDOWN` 逐字节断言红。
 
-fn play_entity(name: &str, x: i32, y: i32) -> mir2_world::Entity {
+fn play_entity(name: &str, x: i32, y: i32) -> mir2_world::EntitySpawn {
     let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
     e.race = mir2_world::ACTOR_RACE_PLAY;
     e

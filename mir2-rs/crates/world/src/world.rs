@@ -16,7 +16,7 @@ use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner, TickStage};
 
-use crate::aoi::{search_view_range_death, search_view_range_with_updates, CELL_OBJECT_EXPIRE_MS};
+use crate::aoi::CELL_OBJECT_EXPIRE_MS;
 use crate::buff::{
     BuffSysMsg, BuffSystem, BuffTickOutcome, BuffType, BUFF_EPOCH_MS, BUFF_PASSES_PER_TICK,
     BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
@@ -25,7 +25,7 @@ use crate::combat::{
     attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
-use crate::entity::{Entity, EntityStore};
+use crate::entity::{Entity, EntitySpawn, EntityStore};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
 
@@ -1218,12 +1218,12 @@ pub struct World {
     owner_thread: Option<ThreadId>,
     /// S1 tick 骨架：时钟推进 + 线程断言（单线程 `Schedule`）。
     clock_runner: TickRunner,
+    /// S3b：`OutputAoi` 系统运行器（只注册 `OutputAoi`；不推进时钟）。
+    tail_runner: TickRunner,
     /// 掉落物品的 `MakeIndex` 计数器（`M2Share.GetItemNumber`）
     pub(crate) item_number: ItemNumberCounter,
     /// 最近一次 tick 的记录
     pub last_tick: TickRecord,
-    /// AOI 分组的复用缓冲（避免每 tick 分配；P99 回归即由那次分配量出）
-    by_map_scratch: Vec<Vec<i32>>,
     /// **W4 怪物 AI 攻击支**：本 tick 由 [`crate::monai::attack_target`]（怪物 AI）
     /// 发起的攻击结算。`World::tick` 在 AI 段之后转抄进 [`TickRecord::attacks`]，
     /// 使既有的 `drain_combat_downlink` ①（`SM_STRUCK` 受击广播）**无需宿主改动**
@@ -1334,6 +1334,9 @@ impl World {
             .insert_resource(TickOwnerThread::default());
         let mut clock_runner = TickRunner::new();
         clock_runner.add_systems(TickStage::Clock, advance_clock_system);
+        // S3b：AOI 刷新是 `TickStage::OutputAoi` 的系统（宿主段之后运行）。
+        let mut tail_runner = TickRunner::new();
+        tail_runner.add_systems(TickStage::OutputAoi, crate::aoi::output_aoi_system);
         let mut world = World {
             maps,
             entities,
@@ -1426,9 +1429,9 @@ impl World {
             pending_show_hp_health_changes: Vec::new(),
             owner_thread: None,
             clock_runner,
+            tail_runner,
             item_number: ItemNumberCounter::default(),
             last_tick: TickRecord::default(),
-            by_map_scratch: Vec::new(),
             pending_ai_attacks: Vec::new(),
             attack_poison: HashMap::new(),
             attack_weapon_strong: HashMap::new(),
@@ -2032,7 +2035,7 @@ impl World {
         n_sec: i32,
         bt_state: u8,
     ) -> i32 {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return 0;
         };
         let map_id = caster.map_id;
@@ -2041,20 +2044,21 @@ impl World {
         for _c_x in (n_x - n_range)..=(n_x + n_range) {
             for _c_y in (n_y - n_range)..=(n_y + n_range) {
                 // oracle bug：读的是中心格 `(nX,nY)`（见方法文档）。
+                let ents = &self.entities;
                 let ids: Vec<i32> = self
                     .entities
                     .iter()
                     .filter(|e| {
-                        e.map_id == map_id
-                            && e.x == n_x
-                            && e.y == n_y
+                        ents.map_id(e.id) == Some(map_id)
+                            && ents.x(e.id) == Some(n_x)
+                            && ents.y(e.id) == Some(n_y)
                             && (e.race == crate::entity::ACTOR_RACE_PLAY
                                 || e.race >= crate::entity::ACTOR_RACE_ANIMAL)
                     })
                     .map(|e| e.id)
                     .collect();
                 for id in ids {
-                    let Some(obj) = self.entities.get(id).cloned() else {
+                    let Some(obj) = self.entities.spawn_cloned(id) else {
                         continue;
                     };
                     if obj.ghost {
@@ -2379,9 +2383,9 @@ impl World {
             let this = self.entities.get(this_id)?;
             let target = self.entities.get(target_id)?;
             (
-                Self::pvp_level(this),
+                Self::pvp_level(&this),
                 this.pvp_flag,
-                Self::pvp_level(target),
+                Self::pvp_level(&target),
                 target.race,
                 target.pvp_flag,
             )
@@ -2455,10 +2459,10 @@ impl World {
         shape: u8,
         cfg: &crate::magic_effect::MabMabeConfig,
     ) -> PoisonStrikeOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return PoisonStrikeOutcome::default();
         };
-        let Some(target) = self.entities.get(target_id).cloned() else {
+        let Some(target) = self.entities.spawn_cloned(target_id) else {
             return PoisonStrikeOutcome::default();
         };
         let _ = caster;
@@ -2523,7 +2527,7 @@ impl World {
     where
         F: FnMut(i32) -> Option<u8>,
     {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return GroupPoisonOutcome::default();
         };
         let range = i32::from(level).max(1);
@@ -2532,7 +2536,7 @@ impl World {
             if tid == caster_id {
                 continue;
             }
-            let Some(t) = self.entities.get(tid).cloned() else {
+            let Some(t) = self.entities.spawn_cloned(tid) else {
                 continue;
             };
             if t.death || t.ghost {
@@ -2584,7 +2588,7 @@ impl World {
         mc: i32,
         cfg: &crate::magic_effect::MabMabeConfig,
     ) -> MabMabeSpellOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return MabMabeSpellOutcome::default();
         };
         let atk = AttackPowerMode::for_attacker(&caster);
@@ -2598,7 +2602,7 @@ impl World {
         let Some(tid) = target else {
             return out;
         };
-        let Some(t) = self.entities.get(tid).cloned() else {
+        let Some(t) = self.entities.spawn_cloned(tid) else {
             return out;
         };
         // `:1233 MagCanHitTarget` / `:1235 IsProperTarget`（纯门、零抽）。
@@ -2713,7 +2717,7 @@ impl World {
         target_y: i32,
         mc: i32,
     ) -> GroupLighteningOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return GroupLighteningOutcome::default();
         };
         let atk = AttackPowerMode::for_attacker(&caster);
@@ -2726,7 +2730,7 @@ impl World {
             if tid == caster_id {
                 continue;
             }
-            let Some(t) = self.entities.get(tid).cloned() else {
+            let Some(t) = self.entities.spawn_cloned(tid) else {
                 continue;
             };
             if t.death || t.ghost {
@@ -2781,15 +2785,15 @@ impl World {
         &self,
         caster_id: i32,
         target: Option<i32>,
-    ) -> Option<(Entity, Entity, i32)> {
-        let caster = self.entities.get(caster_id)?.clone();
+    ) -> Option<(EntitySpawn, EntitySpawn, i32)> {
+        let caster = self.entities.spawn_cloned(caster_id)?;
         let tid = target?;
-        let t = self.entities.get(tid)?.clone();
+        let t = self.entities.spawn_cloned(tid)?;
         Some((caster, t, tid))
     }
 
     /// `BaseObject.MagCanHitTarget` 的世界层调用（图 = 施法者当前图；目标坐标 = 实体坐标）。
-    fn spell_can_hit(&self, caster: &Entity, target: &Entity) -> bool {
+    fn spell_can_hit(&self, caster: &EntitySpawn, target: &EntitySpawn) -> bool {
         crate::magic::mag_can_hit_target(
             self.map(caster.map_id),
             caster.x,
@@ -2866,7 +2870,7 @@ impl World {
         target_y: i32,
         sc: i32,
     ) -> HealingSpellOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return HealingSpellOutcome::default();
         };
         // `:160-163` 死亡归一在宿主已完成；这里再兜一次（直调用例）。
@@ -2876,7 +2880,7 @@ impl World {
             // `:205-210` 目标为空 => 治疗自己并**改写尾帧坐标**。
             None => (caster.id, caster.x, caster.y),
         };
-        let Some(t) = self.entities.get(tid).cloned() else {
+        let Some(t) = self.entities.spawn_cloned(tid) else {
             return HealingSpellOutcome::default();
         };
         let mut out = HealingSpellOutcome {
@@ -2920,7 +2924,7 @@ impl World {
         n_y: i32,
         sc: i32,
     ) -> HealingSpellOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return HealingSpellOutcome::default();
         };
         let atk = AttackPowerMode::for_attacker(&caster);
@@ -2934,7 +2938,7 @@ impl World {
         };
         let group_members = self.attacker_group_members(&caster);
         for tid in self.mag_objects_in_range(caster.map_id, n_x, n_y, 1) {
-            let Some(t) = self.entities.get(tid).cloned() else {
+            let Some(t) = self.entities.spawn_cloned(tid) else {
                 continue;
             };
             let in_group = group_members.contains(&tid);
@@ -2976,7 +2980,7 @@ impl World {
         range: i32,
         mc: i32,
     ) -> AreaSpellOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return AreaSpellOutcome::default();
         };
         let atk = AttackPowerMode::for_attacker(&caster);
@@ -2989,7 +2993,7 @@ impl World {
         let group_members = self.attacker_group_members(&caster);
         let mut last_target = None;
         for tid in self.mag_objects_in_range(caster.map_id, n_x, n_y, range) {
-            let Some(t) = self.entities.get(tid).cloned() else {
+            let Some(t) = self.entities.spawn_cloned(tid) else {
                 continue;
             };
             if !crate::combat::is_proper_target_grouped(&caster, &t, &group_members) {
@@ -3039,7 +3043,7 @@ impl World {
         range: i32,
         mc: i32,
     ) -> AreaSpellOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return AreaSpellOutcome::default();
         };
         let atk = AttackPowerMode::for_attacker(&caster);
@@ -3051,7 +3055,7 @@ impl World {
         };
         let group_members = self.attacker_group_members(&caster);
         for tid in self.mag_objects_in_range(caster.map_id, caster.x, caster.y, range) {
-            let Some(t) = self.entities.get(tid).cloned() else {
+            let Some(t) = self.entities.spawn_cloned(tid) else {
                 continue;
             };
             let power_point = if t.life_attrib != crate::magic_effect::LA_UNDEAD {
@@ -3100,7 +3104,7 @@ impl World {
         msgs.sort_by_key(|m| m.order);
         let mut out = Vec::new();
         for msg in msgs {
-            let Some(mut t) = self.entities.get(msg.target_id).cloned() else {
+            let Some(mut t) = self.entities.spawn_cloned(msg.target_id) else {
                 continue;
             };
             // `CloneMonster.Operate`（`Clone.cs:14-30`）吞掉 `RM_MAGSTRUCK`（以及
@@ -3178,7 +3182,7 @@ impl World {
                     }
                     if set_target {
                         if let Some(c) = self.entities.get(msg.caster_id) {
-                            if crate::combat::is_proper_target(&t, c) {
+                            if crate::combat::is_proper_target(&t, &c) {
                                 t.ai.target_creature = Some(msg.caster_id);
                                 t.ai.target_focus_tick = self.clock_ms;
                             }
@@ -3204,7 +3208,7 @@ impl World {
             let show_hp = t.show_hp;
             let is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
             if let Some(e) = self.entities.get_mut(msg.target_id) {
-                *e = t;
+                *e = t.entity;
             }
             out.push(MagStruckOutcome {
                 target_id: msg.target_id,
@@ -3249,7 +3253,7 @@ impl World {
         tx: i32,
         ty: i32,
     ) -> HolyCurtainOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return HolyCurtainOutcome::default();
         };
         // C# 实参求值先于调用：`GetPower13(userMagic, 40) + GetRPow(WAbil.SC) * 3`。
@@ -3278,7 +3282,7 @@ impl World {
         let caster_level = i32::from(caster.level);
         let mut result = 0i32;
         for id in objects {
-            let Some(obj) = self.entities.get(id).cloned() else {
+            let Some(obj) = self.entities.spawn_cloned(id) else {
                 continue;
             };
             if obj.race >= crate::entity::ACTOR_RACE_ANIMAL {
@@ -3321,7 +3325,7 @@ impl World {
             n_h_time,
             ..crate::slave::TransparentDelivery::default()
         };
-        let Some(base) = self.entities.get(target_id).cloned() else {
+        let Some(base) = self.entities.spawn_cloned(target_id) else {
             return d;
         };
         if base.status_time[crate::entity::POISON_STATETRANSPARENT] > 0 {
@@ -3329,7 +3333,7 @@ impl World {
         }
         let objects = self.mag_objects_in_range(base.map_id, base.x, base.y, 9);
         for id in objects {
-            let Some(obj) = self.entities.get(id).cloned() else {
+            let Some(obj) = self.entities.spawn_cloned(id) else {
                 continue;
             };
             if obj.race >= crate::entity::ACTOR_RACE_ANIMAL
@@ -3399,7 +3403,7 @@ impl World {
         tx: i32,
         ty: i32,
     ) -> GroupTransparentOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return GroupTransparentOutcome::default();
         };
         let n_h_time = crate::magic_effect::get_power13(&mut self.rng, magic, level, 30)
@@ -3409,7 +3413,7 @@ impl World {
             ..GroupTransparentOutcome::default()
         };
         for id in self.mag_objects_in_range(caster.map_id, tx, ty, 1) {
-            let Some(obj) = self.entities.get(id).cloned() else {
+            let Some(obj) = self.entities.spawn_cloned(id) else {
                 continue;
             };
             let in_group = self.attacker_group_members(&caster).contains(&id);
@@ -3449,7 +3453,7 @@ impl World {
         let Some(tid) = target else {
             return ShowHpOutcome::default();
         };
-        let Some(t) = self.entities.get(tid).cloned() else {
+        let Some(t) = self.entities.spawn_cloned(tid) else {
             return ShowHpOutcome::default();
         };
         let _ = caster_id;
@@ -3478,7 +3482,7 @@ impl World {
 
     /// **P3-B3**：`MakeOpenHealth`（`BaseObject.cs:944-950`）——`RM_DOOPENHEALTH` 的到点投递。
     pub fn make_open_health(&mut self, target_id: i32) -> crate::slave::OpenHealthDelivery {
-        let Some(e) = self.entities.get(target_id).cloned() else {
+        let Some(e) = self.entities.spawn_cloned(target_id) else {
             return crate::slave::OpenHealthDelivery::default();
         };
         let status_ex = e.char_status_ex | crate::entity::POISON_OPENHEATH;
@@ -3517,7 +3521,7 @@ impl World {
         let Some(color) = self
             .entities
             .get(target_id)
-            .map(|e| crate::slave::get_chr_color(e, &[], 0))
+            .map(|e| crate::slave::get_chr_color(&e, &[], 0))
         else {
             return crate::slave::NameColorDelivery::default();
         };
@@ -3548,8 +3552,8 @@ impl World {
             return TurnUndeadSpellOutcome::default();
         };
         let (Some(caster), Some(t)) = (
-            self.entities.get(caster_id).cloned(),
-            self.entities.get(tid).cloned(),
+            self.entities.spawn_cloned(caster_id),
+            self.entities.spawn_cloned(tid),
         ) else {
             return TurnUndeadSpellOutcome::default();
         };
@@ -3640,11 +3644,11 @@ impl World {
         level: u8,
         target: Option<i32>,
     ) -> UnamyounsulOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return UnamyounsulOutcome::default();
         };
         let tid = target.unwrap_or(caster_id);
-        let Some(t) = self.entities.get(tid).cloned() else {
+        let Some(t) = self.entities.spawn_cloned(tid) else {
             return UnamyounsulOutcome::default();
         };
         let in_group = self.attacker_group_members(&caster).contains(&tid);
@@ -3690,7 +3694,7 @@ impl World {
         let atk = self
             .entities
             .get(caster_id)
-            .map_or(AttackPowerMode::Base, AttackPowerMode::for_attacker);
+            .map_or(AttackPowerMode::Base, |e| AttackPowerMode::for_attacker(&e));
         let n_power = crate::magic::power_defence_area(&mut self.rng, magic, level, sc, atk);
         self.mag_make_defence_area(caster_id, n_target_x, n_target_y, 3, n_power, bt_state)
     }
@@ -4156,7 +4160,7 @@ impl World {
         steps: i32,
         undead_attack: bool,
     ) -> PassThroughOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return PassThroughOutcome {
                 end_x: click_x,
                 end_y: click_y,
@@ -4192,7 +4196,7 @@ impl World {
         for _ in 0..12 {
             if let Some(obj_id) = self.moving_object_at(map_id, sx, sy, true) {
                 let proper = self.entities.get(obj_id).is_some_and(|t| {
-                    crate::combat::is_proper_target_grouped_direct(&caster, t, &group)
+                    crate::combat::is_proper_target_grouped_direct(&caster, &t, &group)
                 });
                 if proper {
                     let anti = self
@@ -4270,7 +4274,7 @@ impl World {
         mag_pwr: i32,
         undead_attack: bool,
     ) -> i32 {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return 0;
         };
         let map_id = caster.map_id;
@@ -4282,7 +4286,7 @@ impl World {
                 let proper = self
                     .entities
                     .get(obj_id)
-                    .is_some_and(|t| crate::combat::is_proper_target(&caster, t));
+                    .is_some_and(|t| crate::combat::is_proper_target(&caster, &t));
                 if proper {
                     let anti = self
                         .entities
@@ -4333,7 +4337,7 @@ impl World {
         mc: i32,
         disable_in_safe_zone: bool,
     ) -> FireWallOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return FireWallOutcome::default();
         };
         let atk = AttackPowerMode::for_attacker(&caster);
@@ -4387,13 +4391,13 @@ impl World {
             if now - self.fire_burn_events[i].fire_run_tick_ms > 3000 {
                 self.fire_burn_events[i].fire_run_tick_ms = now;
                 let owner = owner_id
-                    .and_then(|id| self.entities.get(id).cloned())
+                    .and_then(|id| self.entities.spawn_cloned(id))
                     .filter(|e| !e.ghost && !e.death);
                 if let Some(o) = owner {
                     let group = self.attacker_group_members(&o);
                     for tid in self.base_objects_at(map_id, x, y) {
                         let proper = self.entities.get(tid).is_some_and(|t| {
-                            crate::combat::is_proper_target_grouped_direct(&o, t, &group)
+                            crate::combat::is_proper_target_grouped_direct(&o, &t, &group)
                         });
                         if proper {
                             let order = self.msg_order;
@@ -4461,11 +4465,11 @@ impl World {
         target: Option<i32>,
         sc: i32,
     ) -> UEnhancerOutcome {
-        let Some(caster) = self.entities.get(caster_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
             return UEnhancerOutcome::default();
         };
         let tid = target.unwrap_or(caster_id);
-        let Some(t) = self.entities.get(tid).cloned() else {
+        let Some(t) = self.entities.spawn_cloned(tid) else {
             return UEnhancerOutcome {
                 target: tid,
                 ..UEnhancerOutcome::default()
@@ -4576,16 +4580,21 @@ impl World {
         actor_id: i32,
         push_level: i32,
     ) -> (i32, Vec<crate::action::PushEvent>) {
-        let Some(caster) = self.entities.get(actor_id).cloned() else {
+        let Some(caster) = self.entities.spawn_cloned(actor_id) else {
             return (0, Vec::new());
         };
         // oracle `VisibleActors` 的迭代序即列表序（本骨架 `Entity::visible_actors` 同源）。
-        let visible: Vec<i32> = caster.visible_actors.iter().map(|v| v.target).collect();
+        let visible: Vec<i32> = caster
+            .map_binding
+            .visible_actors
+            .iter()
+            .map(|v| v.target)
+            .collect();
         let group_members = self.attacker_group_members(&caster);
         let mut result = 0;
         let mut events = Vec::new();
         for target_id in visible {
-            let Some(target) = self.entities.get(target_id).cloned() else {
+            let Some(target) = self.entities.spawn_cloned(target_id) else {
                 continue;
             };
             if (caster.x - target.x).abs() > 1 || (caster.y - target.y).abs() > 1 {
@@ -4960,21 +4969,21 @@ impl World {
     }
 
     /// 会话进入世界并落图。
-    pub fn add_entity(&mut self, mut entity: Entity) -> i32 {
-        if entity.id <= 0 {
-            entity.id = self.entities.alloc_id();
+    pub fn add_entity(&mut self, mut spawn: EntitySpawn) -> i32 {
+        if spawn.id <= 0 {
+            spawn.id = self.entities.alloc_id();
         }
         // `BaseObject` ctor `PoisoningTick = GetTickCount()`（`BaseObject.cs:443`）：毒伤 DoT 的周期门
         // 从**实体落图那一刻**起算（buff 轴 = `clock_ms + BUFF_EPOCH_MS`，与 `buff_tick`/`make_posion` 同基）。
         // `Entity::new`（ctor 等价物）拿不到 `World` 时钟 ⇒ 在此按落图时刻精确重盖（同 `auto_recovery_tick`）。
-        entity.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
-        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：按落图时刻重盖。
-        entity.verify_tick = self.clock_ms;
+        spawn.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：按落图时刻重盖（S3b：MapBinding 组件）。
+        spawn.map_binding.verify_tick = self.clock_ms;
         // `BaseObject.cs:442` ctor `SearchTick = GetTickCount()`（玩家 ctor 又在
         // `PlayObject.cs:901` 置一次）：ctor 等价物拿不到世界时钟 ⇒ 按落图时刻重盖。
         // 之后 `World::tick` 的玩家 scanner 按 `now - SearchTick > SearchTime(=1000)` 节流。
-        entity.ai.search_tick = self.clock_ms;
-        let id = self.entities.insert(entity);
+        spawn.ai.search_tick = self.clock_ms;
+        let id = self.entities.insert(spawn);
         // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`（重叠推挤的 3s 门从落图时刻起算）。
         // S3a：该字段已迁入 `DupState` 组件，经受控 API 重盖（`EntityStore::insert` 先给默认 0）。
         self.entities
@@ -5015,7 +5024,7 @@ impl World {
     pub fn attack_swing(&mut self, actor_id: i32) -> Option<i32> {
         let (dc, mode) = {
             let attacker = self.entities.get(actor_id)?;
-            (attacker.dc, AttackPowerMode::for_attacker(attacker))
+            (attacker.dc, AttackPowerMode::for_attacker(&attacker))
         };
         let power = swing_power(self.attack_rng(), dc, mode);
         Some(power)
@@ -5456,138 +5465,46 @@ impl World {
             .verify_health_changes
             .append(&mut self.pending_verify_health_changes);
 
-        // AOI 刷新：按地图、地图内按槽位顺序（顺序来自 ECS 内核的**显式槽位索引**，
-        // `EcsStore::iter` 不迭代 `Query` 求顺序）；AOI 的扫描/过滤语义仍归 S2。
-        let ids: Vec<(i32, usize)> = self.entities.iter().map(|e| (e.id, e.map_id)).collect();
-        // 复用缓冲（每 tick 不重新分配 —— 之前每次 vec![Vec::new(); maps] 让 P99 涨了约 15~35%）
-        self.by_map_scratch.clear();
-        self.by_map_scratch.resize_with(self.maps.len(), Vec::new);
-        for v in self.by_map_scratch.iter_mut() {
-            v.clear();
-        }
-        for (id, map_id) in ids {
-            if let Some(v) = self.by_map_scratch.get_mut(map_id) {
-                v.push(id);
+        // AOI 刷新：`TickStage::OutputAoi` 系统（S3b）。地图表在 tick 边界一次性移入
+        // `MapsRes`，跑完移回 facade —— 同一时刻只有一个所有者（设计件 §4.2）。
+        {
+            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self
+                .entities
+                .order_index()
+                .into_iter()
+                .zip(self.entities.order_entities())
+                .collect();
+            let maps = std::mem::take(&mut self.maps);
+            let events = std::mem::take(&mut self.fire_burn_events);
+            {
+                let world = self.entities.world_mut();
+                world.insert_resource(mir2_world_bevy::MapsRes(maps));
+                world.insert_resource(crate::aoi::AoiIds(ids));
+                world.insert_resource(crate::aoi::AoiParams {
+                    clock_ms: self.clock_ms,
+                    clear_drop_on_floor_item_time: self.clear_drop_on_floor_item_time,
+                    event_sight: self.event_sight,
+                    events,
+                });
             }
-        }
-        let by_map = std::mem::take(&mut self.by_map_scratch);
-        for (map_id, ids) in by_map.iter().enumerate() {
-            for id in ids {
-                let death = match self.entities.get(*id) {
-                    Some(e) => e.death,
-                    None => continue,
-                };
-                if death {
-                    let (map, entities) = (&mut self.maps, &mut self.entities);
-                    search_view_range_death(
-                        &mut map[map_id],
-                        entities,
-                        *id,
-                        self.clock_ms,
-                        self.clear_drop_on_floor_item_time,
-                    );
-                } else {
-                    // **本 tick 是否自扫（oracle 的调用点决定）**：
-                    //
-                    // 1. 玩家（`WorldServer.cs:663-667`）：
-                    //    `if ((GetTickCount() - SearchTick) > SearchTime) { SearchTick = now;
-                    //    SearchViewRange(); GameTimeChanged(); }` —— 严格大于，`SearchTime = 1000`
-                    //    常量（`PlayObject.cs:900`）。200ms tick 下 1200ms 才命中。
-                    //    Ghost 玩家已从 `PlayObjectList` 移除（`WorldServer.cs:708-711`）⇒ 不扫。
-                    // 2. 非玩家只有 `IsSlave || Race in {Guard(11), ArcherGuard(112),
-                    //    SlaveMonster(254)}`（`WorldServer.MonGen.cs:300-313`）在
-                    //    `(currentTick - SearchTick) > SearchTime` 门后自扫；**其余怪物不主动全扫**
-                    //    —— 被动视野由玩家扫描末尾的 `RM_UPDATEVIEWRANGE` 投递
-                    //    （`PlayObject.cs:3130-3139` → `MonsterObject.cs:136-185`）。
-                    //    Ghost 怪在 `ProcessMonsters` 里整只跳过（`WorldServer.MonGen.cs:320-333`）。
-                    // 3. 固定 NPC / 商人：oracle 无 `SearchViewRange` 调用点 ⇒ 不自扫。
-                    //
-                    // 两个调用点都是「命中门 ⇒ 先 `SearchTick = now` 再扫」。
-                    //
-                    // `aoi_order` 仍记录每个实体的处理顺序（它是槽位顺序诊断，不是「实际扫了
-                    // 几次」的计数）；被节流跳过/不自扫的实体也入列，保持既有诊断契约不变。
-                    // 观察者类别与「是否自扫」同一个 `match` 判定：`race == PLAY` ⇒ 玩家；
-                    // `monster_self_scans` ⇒ 非玩家自扫怪。二者互斥（race 不可能同时是 PLAY 与
-                    // 11/112/254；`is_slave` 的怪 race 也不是 PLAY——下属的 race 沿用原怪）。
-                    let (scan, observer_kind) = match self.entities.get(*id) {
-                        Some(e) if e.race == crate::entity::ACTOR_RACE_PLAY => (
-                            !e.ghost && self.clock_ms - e.ai.search_tick > e.ai.search_time,
-                            if e.is_clone {
-                                HideObserverKind::Clone
-                            } else {
-                                HideObserverKind::Player
-                            },
-                        ),
-                        Some(e) if !e.ghost && crate::monai::monster_self_scans(e) => (
-                            self.clock_ms - e.ai.search_tick > e.ai.search_time,
-                            HideObserverKind::NonPlayer,
-                        ),
-                        Some(_) => (false, HideObserverKind::Player),
-                        None => continue,
-                    };
-                    if !scan {
-                        record.aoi_order.push(*id);
-                        continue;
-                    }
-                    if let Some(e) = self.entities.get_mut(*id) {
-                        e.ai.search_tick = self.clock_ms;
-                    }
-                    let (map, entities, clock) =
-                        (&mut self.maps, &mut self.entities, self.clock_ms);
-                    let outcome =
-                        search_view_range_with_updates(&mut map[map_id], entities, *id, clock);
-                    for target in outcome.removed {
-                        // 观察者 `*id` 收「`target` 离开视野」⇒ `SM_DISAPPEAR(target)`（保序）。
-                        record.hides.push((*id, target));
-                        // **卡 `openmir2-aoi-disappear-observer-scope`**：同一事件旁挂观察者类别
-                        // （`hides` 本体不变）。宿主据此把非玩家自扫怪的「无在线网关坐标」与
-                        // 玩家缺失分流（前者预期噪声，后者真丢帧）。
-                        record
-                            .hide_observer_kinds
-                            .push((*id, target, observer_kind));
-                    }
-                    // 玩家扫描期间的 `RM_UPDATEVIEWRANGE` 投递（`PlayObject.cs:3136`）：
-                    // 只有 oracle 有该 `Operate` 支的实体才入队（`MonsterObject`，排除
-                    // `GuardUnit`/`CloneMonster`）；目标已消失 ⇒ 丢弃。
-                    for (monster_id, player_id) in outcome.view_updates {
-                        if entities
-                            .get(monster_id)
-                            .is_some_and(crate::monai::consumes_view_range_update)
-                        {
-                            if let Some(monster) = entities.get_mut(monster_id) {
-                                monster.ai.pending_view_updates.push(player_id);
-                            }
-                        }
-                    }
-                    // **卡 `openmir2-map-event-frames`**：`PlayObject.SearchViewRange` 的
-                    // `CellType.Event` 支（`PlayObject.cs:3186-3194` 扫描 + `:3271-3287` 差集）。
-                    // oracle **只有** `PlayObject` 的覆写处理事件（`BaseObject.ViewRange.cs` 无
-                    // Event 分支）⇒ 只对玩家观察者执行；`Id == 0` 折叠（第一条 registered 事件）
-                    // 在 [`crate::aoi::search_view_range_events`] 内 1:1 照抄；帧面（804/805）
-                    // 由宿主出（`TickRecord::event_hides` + 观察者 `visible_events` 的 Show 支）。
-                    if entities
-                        .get(*id)
-                        .is_some_and(|e| e.race == crate::entity::ACTOR_RACE_PLAY)
-                    {
-                        let events = &self.fire_burn_events;
-                        // review `39262b65` F3：`nX/nY` 是折叠共享对象字段—— sight 镜像随扫描
-                        // 首见支覆写，805 读发送时刻共享值。
-                        let sight = &mut self.event_sight;
-                        for (idx, x, y) in crate::aoi::search_view_range_events(
-                            &map[map_id],
-                            entities,
-                            *id,
-                            events,
-                            sight,
-                        ) {
-                            record.event_hides.push((*id, idx, x, y));
-                        }
-                    }
-                }
-                record.aoi_order.push(*id);
+            self.tail_runner.run(self.entities.world_mut());
+            let world = self.entities.world_mut();
+            self.maps = world
+                .remove_resource::<mir2_world_bevy::MapsRes<MapGrid>>()
+                .map(|r| r.0)
+                .unwrap_or_default();
+            if let Some(params) = world.remove_resource::<crate::aoi::AoiParams>() {
+                self.fire_burn_events = params.events;
+                self.event_sight = params.event_sight;
             }
+            let out = world
+                .remove_resource::<crate::aoi::AoiOut>()
+                .unwrap_or_default();
+            record.aoi_order.extend(out.aoi_order);
+            record.hides.extend(out.hides);
+            record.hide_observer_kinds.extend(out.hide_observer_kinds);
+            record.event_hides.extend(out.event_hides);
         }
-        self.by_map_scratch = by_map;
 
         self.last_tick = record.clone();
     }
@@ -5619,9 +5536,9 @@ impl World {
         }
         let (x, y, map_id) = (e.x, e.y, e.map_id);
         // `baseObject.CellType`：`PlayObject` = Play、`AnimalObject` = Monster、`NormNpc` = Merchant。
-        let cell_type = entity_cell_type(e);
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.verify_tick = now;
+        let cell_type = entity_cell_type(&e);
+        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+            b.verify_tick = now;
         }
         if let Some(map) = self.maps.get_mut(map_id) {
             let mut bo_verify = false;
@@ -5656,8 +5573,8 @@ impl World {
             if !bo_verify {
                 // `AddMapObject`（`Envirnoment.cs:252-296`）：成功时置 `AddToMaped`/`AddObject`。
                 if map.add_map_object(x, y, cell_type, actor_id, now) {
-                    if let Some(e) = self.entities.get_mut(actor_id) {
-                        e.add_to_mapped = true;
+                    if let Some(b) = self.entities.map_binding_mut(actor_id) {
+                        b.add_to_mapped = true;
                     }
                 }
             }
@@ -5977,9 +5894,11 @@ impl World {
             }
             x = nx;
             y = ny;
+            if let Some(t) = self.entities.transform_mut(actor_id) {
+                t.x = x;
+                t.y = y;
+            }
             if let Some(e) = self.entities.get_mut(actor_id) {
-                e.x = x;
-                e.y = y;
                 // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
                 if race >= crate::entity::ACTOR_RACE_ANIMAL {
                     e.ai.walk_tick += 800;
@@ -6034,7 +5953,7 @@ impl World {
         // oracle `CreateMonster` 也显式用 `CellType.Monster` 登记（`WorldServer.MonGen.cs:788`）。
         // 之前这里恒用 `Play` ⇒ 玩家 AOI 的 `baseObject.CellType == CellType.Monster`
         // 距离门（`PlayObject.cs:3131`）对刚落图的怪永不命中。
-        let cell_type = entity_cell_type(e);
+        let cell_type = entity_cell_type(&e);
         let Some(map) = self.maps.get_mut(map_id) else {
             return false;
         };
@@ -6042,8 +5961,8 @@ impl World {
         if !map.add_map_object(x, y, cell_type, actor_id, now) {
             return false;
         }
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.add_to_mapped = true;
+        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+            b.add_to_mapped = true;
         }
         true
     }
@@ -6184,8 +6103,8 @@ impl World {
             }
             removed = cell.count() != before;
         }
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.add_to_mapped = false;
+        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+            b.add_to_mapped = false;
         }
         removed
     }
@@ -6202,22 +6121,24 @@ impl World {
     /// 在指定图/格落位（先摘旧格）。`CellType` 取 [`entity_cell_type`]（怪 = `Monster`）。
     fn place_actor_at(&mut self, actor_id: i32, x: i32, y: i32, now: i64) -> bool {
         self.disappear_a(actor_id);
-        let Some(e) = self.entities.get_mut(actor_id) else {
+        let Some(e) = self.entities.get(actor_id) else {
             return false;
         };
         let map_id = e.map_id;
-        let cell_type = entity_cell_type(e);
+        let cell_type = entity_cell_type(&e);
         // oracle `CurrX/CurrY` 在 `AddMapObject` 之前就已写入（`BaseObject.cs:2674-2676`）。
-        e.x = x;
-        e.y = y;
+        if let Some(t) = self.entities.transform_mut(actor_id) {
+            t.x = x;
+            t.y = y;
+        }
         let Some(map) = self.maps.get_mut(map_id) else {
             return false;
         };
         if !map.add_map_object(x, y, cell_type, actor_id, now) {
             return false;
         }
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.add_to_mapped = true;
+        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+            b.add_to_mapped = true;
         }
         true
     }
@@ -6503,7 +6424,7 @@ impl World {
         // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：按落图时刻重盖（buff 轴）。
         e.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
-        e.verify_tick = self.clock_ms;
+        e.map_binding.verify_tick = self.clock_ms;
         let id = self.entities.insert(e);
         self.enter_world(id)
     }
@@ -6611,7 +6532,7 @@ impl World {
         // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：同上，按落图时刻重盖（buff 轴）。
         e.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：同上。
-        e.verify_tick = self.clock_ms;
+        e.map_binding.verify_tick = self.clock_ms;
         let id = self.entities.insert(e);
         if !self.enter_world(id) {
             self.entities.remove(id);
@@ -7135,8 +7056,8 @@ impl World {
             return None;
         }
         // 取出双方属性做结算（避免同时可变借用），再写回
-        let mut attacker = self.entities.get(actor_id)?.clone();
-        let mut target = self.entities.get(target_id)?.clone();
+        let mut attacker = self.entities.spawn_cloned(actor_id)?;
+        let mut target = self.entities.spawn_cloned(target_id)?;
         // **卡 `openmir2-weapon-durability-frames`（tier=R）**：`AttackDir` 在算攻击力**之前**
         // 先跑 `CheckWeaponUpgrade()`（`PlayObject.Attack.cs:25-31`，门：武器 `Index>0 &&
         // Desc[10]>0` 且 `attackTarget != null`——本函数按构造恒有目标；空挥走
@@ -7577,10 +7498,10 @@ impl World {
         let cur_map = e.map_id;
         // 从当前格摘除（可能是目标图，也可能是同图的目标格）。
         self.remove_from_map(actor_id, cur_map);
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.map_id = map_id;
-            e.x = fx;
-            e.y = fy;
+        if let Some(t) = self.entities.transform_mut(actor_id) {
+            t.map_id = map_id;
+            t.x = fx;
+            t.y = fy;
         }
         let now = self.clock_ms;
         self.maps[map_id].add_map_object(fx, fy, CellType::Play, actor_id, now);
@@ -7665,7 +7586,7 @@ impl World {
             return false;
         };
         let (fx, fy, map_id) = (e.x, e.y, e.map_id);
-        let cert_cell_type = entity_cell_type(e);
+        let cert_cell_type = entity_cell_type(&e);
         let (tx, ty) = (fx + dx, fy + dy);
         let Some(map) = self.maps.get_mut(map_id) else {
             return false;
@@ -7704,9 +7625,9 @@ impl World {
             |cid| blocking.contains(&cid),
         );
         if moved {
-            if let Some(e) = self.entities.get_mut(actor_id) {
-                e.x = tx;
-                e.y = ty;
+            if let Some(t) = self.entities.transform_mut(actor_id) {
+                t.x = tx;
+                t.y = ty;
             }
         }
         moved
@@ -7856,6 +7777,7 @@ impl World {
         let now = self.clock_ms;
 
         let mut skeleton = None;
+        let (target_x_now, target_y_now) = self.entities.xy(target_id)?;
         let e = self.entities.get_mut(target_id)?;
         // `:724-729`：`byte` / `ushort` 的 unchecked 回绕（**不夹取**；`<=0` 只命中 `==0`）。
         e.ai.body_leathery = e.ai.body_leathery.wrapping_sub(n10);
@@ -7874,8 +7796,8 @@ impl World {
                 skeleton = Some(crate::action::SkeletonEvent {
                     actor_id: target_id,
                     dir: e.ai.dir,
-                    x: e.x,
-                    y: e.y,
+                    x: target_x_now,
+                    y: target_y_now,
                 });
             }
             // `:738-742` `TakeBagItems`（未建模，登记）/ `BodyLeathery = 50`
@@ -8042,7 +7964,9 @@ pub struct FloorItemView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+    use crate::entity::{
+        Entity, EntitySpawn, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    };
 
     /// **世界 tick 扩容首批（T3）· ② 世界时钟（C-L2）**：`refresh_game_time` 只在桶值**变化**时
     /// 返回 `true`（oracle `PlayObject.Base.cs:826` 的 `Bright != M2Share.GameTime` 门）；
@@ -9027,7 +8951,7 @@ mod tests {
         assert_eq!(w.map(0).cell(5, 5).count(), 0);
     }
 
-    fn player(id: i32, name: &str, x: i32, y: i32, level: u8) -> Entity {
+    fn player(id: i32, name: &str, x: i32, y: i32, level: u8) -> EntitySpawn {
         let mut e = Entity::new(id, name, x, y);
         e.race = ACTOR_RACE_PLAY;
         e.level = level;
@@ -10395,8 +10319,8 @@ mod tests {
         sticky.stick_mode = true;
         let sticky = w.add_entity(sticky);
         {
-            let e = w.entities.get_mut(caster).unwrap();
-            e.visible_actors.push(crate::entity::VisibleBaseObject {
+            let b = w.entities.map_binding_mut(caster).unwrap();
+            b.visible_actors.push(crate::entity::VisibleBaseObject {
                 target: sticky,
                 flag: crate::entity::VisibleFlag::Show,
             });
@@ -10833,7 +10757,7 @@ mod tests {
                 w.entities.get_mut(t).unwrap().race = 83;
             }),
             ("超出 2 格（|Δx|=3）", |w: &mut World, t| {
-                w.entities.get_mut(t).unwrap().x = 13;
+                w.entities.transform_mut(t).unwrap().x = 13;
             }),
         ];
         for (why, mutate) in cases {
@@ -11323,7 +11247,7 @@ mod tests {
 
     // ================= 片 A-5（buff 生产者接线）: 攻击中毒门 =================
 
-    fn ent(id: i32, name: &str, x: i32, y: i32, race: u8) -> Entity {
+    fn ent(id: i32, name: &str, x: i32, y: i32, race: u8) -> EntitySpawn {
         let mut e = Entity::new(id, name, x, y);
         e.race = race;
         e
@@ -11822,7 +11746,7 @@ mod tests {
             let (cell, _) = w.maps[0].get_cell_info_mut(10, 10);
             cell.obj_list.clear();
         }
-        w.entities.get_mut(id).unwrap().add_to_mapped = false;
+        w.entities.map_binding_mut(id).unwrap().add_to_mapped = false;
         w.clock_ms = 30_200;
         assert!(w.verify_map_time(id));
         let cell = w.maps[0].cell(10, 10);
@@ -13091,7 +13015,7 @@ mod castle_wire_tests {
         let (mut w, id) = castle_world(110, 0, 10_000, 2);
         // 开 AI：oracle 的回满发生在实体自己的 `Run`（`BaseObject.Run:32-36`），
         // 必须先让 `CastleDoor.Run` 读到 HP=0，再在 base 段回满。
-        crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 110, 0);
+        crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 110, 0);
         {
             let e = w.entities.get_mut(id).unwrap();
             e.max_mp = 40;
@@ -13134,7 +13058,7 @@ mod castle_wire_tests {
     fn superman_castle_door_direct_kill_emits_flag2_mask_without_death() {
         let (mut w, id) = castle_world(110, 10_000, 10_000, 0);
         w.ai_enabled = false;
-        crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 110, 0);
+        crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 110, 0);
         w.kill(id);
         let rec = w.tick_head();
         assert!(rec.deaths.is_empty(), "SuperMan 不进通用死亡: {rec:?}");
@@ -13163,7 +13087,7 @@ mod castle_wire_tests {
     fn superman_castle_door_direct_kill_twice_emits_flag2_mask_twice() {
         let (mut w, id) = castle_world(110, 10_000, 10_000, 0);
         w.ai_enabled = false;
-        crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 110, 0);
+        crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 110, 0);
         for round in 1..=2 {
             w.kill(id);
             let rec = w.tick_head();
@@ -13191,7 +13115,7 @@ mod castle_wire_tests {
         let (mut w, id) = castle_world(111, 5_000, 5_000, 0);
         // 只跑死亡结算段：关掉怪物 AI（`WallStructure.Run` 会另发格子事件，混入判据）。
         w.ai_enabled = false;
-        crate::mongen::apply_monster_class_constants(w.entities.get_mut(id).unwrap(), 111, 0);
+        crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 111, 0);
         assert!(w.entities.get(id).unwrap().super_man);
         w.kill(id);
         let rec = w.tick_head();

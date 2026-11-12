@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use mir2_shared::rng::RandomNumber;
 use mir2_world::combat::swing_power;
 use mir2_world::{
-    attack_dir, attack_with, AttackPowerMode, CombatConfig, Entity, ACTOR_RACE_MONSTER,
-    ACTOR_RACE_PLAY,
+    attack_dir, attack_with, AttackPowerMode, CombatConfig, Entity, EntitySpawn,
+    ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 
 fn vectors_path() -> PathBuf {
@@ -91,7 +91,7 @@ fn load() -> Vec<Case> {
     cases
 }
 
-fn mk_attacker(dc: i32, hit_point: u8) -> Entity {
+fn mk_attacker(dc: i32, hit_point: u8) -> EntitySpawn {
     let mut a = Entity::new(101, "attacker", 0, 0);
     a.race = ACTOR_RACE_PLAY;
     a.dc = dc;
@@ -101,7 +101,7 @@ fn mk_attacker(dc: i32, hit_point: u8) -> Entity {
     a
 }
 
-fn mk_target(ac: i32, speed_point: u8) -> Entity {
+fn mk_target(ac: i32, speed_point: u8) -> EntitySpawn {
     let mut t = Entity::new(900001, "monster", 0, 0);
     t.race = ACTOR_RACE_MONSTER;
     t.ac = ac;
