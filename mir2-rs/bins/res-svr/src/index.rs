@@ -1,9 +1,11 @@
-//! 资产清单（`/res/index.json`）与 `sha256` 缓存（卡 A3）。
+//! 资产清单（`/res/index.json`）与 `sha256` 缓存（卡 A3；TTL 见卡 `openmir2-res-svr-hardening-followups`）。
 //!
 //! * 遍历每个映射根，按扩展白名单收集文件；输出 `{prefix}/{相对路径}`（`/` 分隔），
 //!   按路径排序（同输入同输出，便于对拍与缓存诊断）。
-//! * 哈希缓存键是**文件自身路径**，值是 `(size, mtime) → sha256`：任一变化即重算
-//!   （内容改大小、内容同大小但 mtime 变，都会失效）。
+//! * 哈希缓存键是**文件自身路径**，值是 `(size, mtime) → sha256`，并有**计算时刻**：
+//!   指纹未变且计算于 TTL 窗口内才命中；任一变化或超过 TTL 即重算（reviewer-26 F1：
+//!   Windows 时间戳粒度不足时，同尺寸同 mtime 的原地重写用指纹看不出来，TTL 兜底）。
+//!   TTL 内重复清单请求不重算，避免每次请求全量哈希 3G+ 资产；`TTL=0` ⇒ 每次重算。
 //! * 遍历是元数据级操作（不读内容），哈希只在缓存失效时发生 ⇒ 首次全量、其后按需。
 //! * 符号链接：只有**解析后仍在映射根内且是普通文件**的才纳入（与下载面的包含检查同口径）；
 //!   目录符号链接不跟随（避免环路），目录深度上限 [`MAX_DEPTH`]，超限/不可读条目逐条记 stderr。
@@ -14,11 +16,11 @@ use std::fs::File;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::SystemTime;
+use std::time::{Duration, Instant, SystemTime};
 
 use sha2::{Digest, Sha256};
 
-use crate::config::RootMap;
+use crate::config::{RootMap, DEFAULT_INDEX_CACHE_TTL_MS};
 
 /// 目录递归深度上限（防 junction/挂载点成环；超限记 stderr 并截断）。
 pub const MAX_DEPTH: usize = 32;
@@ -49,28 +51,55 @@ pub struct Stamp {
 struct CacheEntry {
     stamp: Stamp,
     sha256: String,
+    /// 该 `sha256` 的计算时刻（TTL 从此刻起算，不是从 mtime 起算）。
+    computed_at: Instant,
 }
 
-/// 线程安全的哈希缓存。
-#[derive(Debug, Clone, Default)]
+/// 线程安全的哈希缓存（TTL 见 [`HashCache::new`]）。
+#[derive(Debug, Clone)]
 pub struct HashCache {
     entries: Arc<Mutex<HashMap<PathBuf, CacheEntry>>>,
+    ttl: Duration,
+}
+
+impl Default for HashCache {
+    fn default() -> Self {
+        Self::new(Duration::from_millis(DEFAULT_INDEX_CACHE_TTL_MS))
+    }
 }
 
 impl HashCache {
-    /// 取文件的 `sha256`：`(size, mtime)` 未变则命中缓存，否则重算并写回。
+    /// 以固定 TTL 建缓存：条目自计算起 `ttl` 内且指纹未变才命中；`ttl=0` ⇒ 每次都重算。
+    #[must_use]
+    pub fn new(ttl: Duration) -> Self {
+        Self {
+            entries: Arc::new(Mutex::new(HashMap::new())),
+            ttl,
+        }
+    }
+
+    /// 取文件的 `sha256`：`(size, mtime)` 未变且计算时刻在 TTL 内则命中缓存，否则重算并写回。
     ///
     /// # Errors
     /// 文件不可读/哈希扫描 IO 失败。
     pub fn sha256_of(&self, path: &Path, stamp: Stamp) -> io::Result<String> {
+        self.sha256_of_at(path, stamp, Instant::now())
+    }
+
+    /// 同 [`Self::sha256_of`]，但由调用方给定当前时刻（单测注入时间，不依赖墙钟）。
+    ///
+    /// # Errors
+    /// 文件不可读/哈希扫描 IO 失败。
+    pub fn sha256_of_at(&self, path: &Path, stamp: Stamp, now: Instant) -> io::Result<String> {
         let cached = {
             let entries = self
                 .entries
                 .lock()
                 .expect("缓存锁不会 poison：临界区内无 panic 路径");
-            entries
-                .get(path)
-                .and_then(|entry| (entry.stamp == stamp).then(|| entry.sha256.clone()))
+            entries.get(path).and_then(|entry| {
+                let within_ttl = now.saturating_duration_since(entry.computed_at) < self.ttl;
+                (entry.stamp == stamp && within_ttl).then(|| entry.sha256.clone())
+            })
         };
         if let Some(sha256) = cached {
             return Ok(sha256);
@@ -84,6 +113,7 @@ impl HashCache {
                 CacheEntry {
                     stamp,
                     sha256: sha256.clone(),
+                    computed_at: now,
                 },
             );
         Ok(sha256)
@@ -313,6 +343,90 @@ mod tests {
         let mut hasher = Sha256::new();
         hasher.update(bytes);
         hex::encode(hasher.finalize())
+    }
+
+    /// F1：同尺寸 + 同 mtime 的原地重写，指纹看不出来；TTL 内允许旧值，超 TTL 必须重算。
+    ///
+    /// 时间由调用方注入（不依赖墙钟），因此该用例是确定性的。
+    #[test]
+    fn same_size_same_mtime_rewrite_is_rehashed_after_ttl() {
+        let dir = crate::testutil::TempDir::new("index-ttl");
+        let path = dir.file("Data/a.wzl", b"AAA");
+        let original_mtime = std::fs::metadata(&path)
+            .expect("取元数据")
+            .modified()
+            .expect("本平台必须给出 mtime");
+        let cache = HashCache::new(Duration::from_millis(1_000));
+        let t0 = Instant::now();
+        let stamp = Stamp {
+            size: 3,
+            mtime: Some(original_mtime),
+        };
+        assert_eq!(
+            cache.sha256_of_at(&path, stamp, t0).expect("首次哈希"),
+            expected_sha256(b"AAA")
+        );
+
+        // 同尺寸改写 + 把 mtime 还原成旧值（模拟 NTFS 时间戳粒度不足 / os.utime 复原）。
+        std::fs::write(&path, b"BBB").expect("同尺寸改写");
+        let set_mtime = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("打开待改 mtime 的文件")
+            .set_modified(original_mtime);
+        if let Err(error) = set_mtime {
+            eprintln!("跳过同尺寸同 mtime 用例：本平台无法还原 mtime（{error}）");
+            return;
+        }
+        let after = std::fs::metadata(&path).expect("取改写后元数据");
+        let stamp_after = Stamp {
+            size: after.len(),
+            mtime: after.modified().ok(),
+        };
+        assert_eq!(stamp_after, stamp, "夹具必须先造出同 size 同 mtime 形态");
+
+        // TTL 内：命中旧值（这正是 F1 描述的现象，用 TTL 给它一个上界）。
+        assert_eq!(
+            cache
+                .sha256_of_at(&path, stamp_after, t0 + Duration::from_millis(500))
+                .expect("TTL 内哈希"),
+            expected_sha256(b"AAA"),
+            "TTL 内允许旧值（缓存命中）"
+        );
+        // 超 TTL：必须重算并给出新 sha。
+        assert_eq!(
+            cache
+                .sha256_of_at(&path, stamp_after, t0 + Duration::from_millis(1_500))
+                .expect("超 TTL 哈希"),
+            expected_sha256(b"BBB"),
+            "超过 TTL 必须重算"
+        );
+    }
+
+    /// TTL=0：每次调用都重算（即使指纹未变）。
+    #[test]
+    fn zero_ttl_always_rehashes() {
+        let dir = crate::testutil::TempDir::new("index-ttl-zero");
+        let path = dir.file("Data/z.wzl", b"AAA");
+        let metadata = std::fs::metadata(&path).expect("取元数据");
+        let stamp = Stamp {
+            size: metadata.len(),
+            mtime: metadata.modified().ok(),
+        };
+        let cache = HashCache::new(Duration::ZERO);
+        let t0 = Instant::now();
+        assert_eq!(
+            cache.sha256_of_at(&path, stamp, t0).expect("首次"),
+            expected_sha256(b"AAA")
+        );
+        std::fs::write(&path, b"BBB").expect("同尺寸改写");
+        assert_eq!(
+            cache
+                .sha256_of_at(&path, stamp, t0)
+                .expect("TTL=0 必须重算"),
+            expected_sha256(b"BBB"),
+            "TTL=0 时指纹未变也不得命中"
+        );
     }
 
     #[test]
