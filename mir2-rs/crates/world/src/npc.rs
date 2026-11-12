@@ -365,7 +365,7 @@ impl World {
             if !is_ghost {
                 if (now - run_tick) > NPC_RUN_TIME {
                     // oracle 先写 `RunTick = now` 再 `Run()`（`WorldServer.Merchant.cs:133-134`）。
-                    if let Some(n) = self.entities.get_mut(id).and_then(|e| e.npc.as_mut()) {
+                    if let Some(n) = self.entities.entity_mut(id).and_then(|e| e.npc.as_mut()) {
                         n.run_tick = now;
                     }
                     let r = npc_run(self, id);
@@ -431,7 +431,7 @@ pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
     // `NormNpc.Run`（`NormNpc.cs:1604-1611`）末尾 `base.Run()`：先 SuperMan 回满
     // （`BaseObject.Base.cs:32-36`），再 VerifyMapTime 段（`:223-228`）——固定 NPC 静止不动，
     // 必须靠后者刷新格子时间。
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(mut e) = world.entities.get_mut(actor_id) {
         e.run_super_man_refill();
     }
     world.verify_map_time(actor_id);
@@ -443,7 +443,7 @@ pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
 fn guild_official_run_body(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutcome) {
     if world.rng.random_below(GUILD_TURN_RANDOM_MOD) == 0 {
         let dir = world.rng.random_byte(NPC_TURN_DIR_MAX);
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(mut e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir;
         }
         outcome.turned = Some(dir);
@@ -470,7 +470,7 @@ fn merchant_body_run(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutco
     // `Merchant.cs:132-141`：`Random(50)==0` ⇒ `TurnTo(RandomByte(8))`；否则 `Random(50)==0` ⇒ `RM_HIT`。
     if world.rng.random_below(MERCHANT_BODY_TURN_RANDOM_MOD) == 0 {
         let dir = world.rng.random_byte(NPC_TURN_DIR_MAX);
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(mut e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir;
         }
         outcome.turned = Some(dir);
@@ -489,7 +489,7 @@ fn merchant_body_run(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutco
     if can_move && (now - move_tick) > i64::from(move_time) * 1000 {
         if let Some(n) = world
             .entities
-            .get_mut(actor_id)
+            .entity_mut(actor_id)
             .and_then(|e| e.npc.as_mut())
         {
             n.move_tick = now;
@@ -817,7 +817,7 @@ mod tests {
             .spawn_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 2, 2))
             .expect("挂图成功");
         let set_rt = |w: &mut World, v: i64| {
-            if let Some(n) = w.entities.get_mut(a).and_then(|e| e.npc.as_mut()) {
+            if let Some(n) = w.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
                 n.run_tick = v;
             }
         };
@@ -862,7 +862,7 @@ mod tests {
         player.dc = 0x0A_14;
         let pid = world.add_entity(player);
         assert!(world.enter_world(pid), "玩家必须落图，656 才有观察者");
-        if let Some(n) = world.entities.get_mut(nid).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world.entities.entity_mut(nid).and_then(|e| e.npc.as_mut()) {
             n.run_tick = 0;
         }
 
@@ -915,7 +915,7 @@ mod tests {
         let a = world
             .spawn_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 3, 3))
             .expect("挂图成功");
-        if let Some(n) = world.entities.get_mut(a).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
             n.run_tick = 0;
         }
         world.clock_ms = 10_000;
@@ -926,7 +926,7 @@ mod tests {
         );
 
         world.enable_npc_tick();
-        if let Some(n) = world.entities.get_mut(a).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
             n.run_tick = 0;
         }
         let rec = world.tick();
@@ -950,7 +950,7 @@ mod tests {
             .spawn_npc(spawn_typed("丙", NPC_TYPE_CASTLE_OFFICIAL, 0, 3, 3))
             .expect("挂图成功");
         for id in [a, b, c] {
-            if let Some(n) = world.entities.get_mut(id).and_then(|e| e.npc.as_mut()) {
+            if let Some(n) = world.entities.entity_mut(id).and_then(|e| e.npc.as_mut()) {
                 n.run_tick = 0;
             }
         }
@@ -968,10 +968,10 @@ mod tests {
         let a = world
             .spawn_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 4, 4))
             .expect("挂图成功");
-        if let Some(e) = world.entities.get_mut(a) {
+        if let Some(mut e) = world.entities.get_mut(a) {
             e.ghost = true;
         }
-        if let Some(n) = world.entities.get_mut(a).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
             n.ghost_tick = 0;
         }
         world.clock_ms = 60_000; // 字面量：`(now-GhostTick) > 60*1000`

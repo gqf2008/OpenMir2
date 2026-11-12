@@ -340,10 +340,13 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
 - **覆盖**：25 组件合计 2+4+5+13+1+6+13+5+8+6+14+13+3+1+5+4+3+4+11+4+19+1+1+1+4 = **151**。
   P0 的 round-trip 用例（`components::tests::split_and_apply_round_trip_all_151_fields`）
   对每个字段赋非缺省值后做 `Entity -> 25 组件 -> Entity`，用全字段 `Debug` 相等作判据。
-  **S3a/S3b 起**：`DupState` 的 3 个字段（S3a）、`Transform` 的 4 个与 `MapBinding` 的 6 个
-  字段（S3b）已从 `Entity` 删除（真值在组件），`Entity` 剩 **138** 字段；
-  用例更名为 `split_and_apply_round_trip_all_remaining_fields`，`Transform`/`MapBinding`
-  的适配器随字段删除（改用 `EntityRef` 只读视图与 `EntitySpawn` 生成期载体）。
+  **S3a/S3b/S4a 起**：`DupState` 的 3 个字段（S3a）、`Transform` 的 4 个与 `MapBinding` 的 6 个
+  字段（S3b）、S4a 的 41 个字段（Vitals 13 + AbilitySnapshot 1 + Progression 6 +
+  SpawnBinding 4 + DropState 5 + CombatAttribution 4 + Recovery 3 + PvpState 5）已从 `Entity`
+  删除（真值在组件），`Entity` 剩 **97** 字段；用例更名为
+  `split_and_apply_round_trip_all_remaining_fields`（只比较 `Entity` 主组件），
+  对应适配器随字段删除（改用 `EntityRef` 只读视图 / `EntityMut` 可写视图 / `EntitySpawn`
+  生成期载体）。
 - **使用量**（Leader 统计，作为拆分顺序输入）：`ai` 173、`x` 101、`race` 96、`y` 95、
   `map_id` 88、`hp` 62、`death` 58、`ghost` 39。
   ⇒ **热点字段最后拆**；叶子组先拆。这和 §5 的波次一致。
@@ -375,6 +378,12 @@ P0 组件大多 `derive(Default)`，但 `Entity::new`（各 `BaseObject` ctor �
 
 其余组件（含 S3a 的 `DupState`：`false/0/0`）的派生 `Default` 与 ctor 缺省逐字段相同。
 `DupState` 的缺省由 `EntityStore::insert` 统一插入；落图时刻的重盖由 `add_entity`/`enter_map_at` 负责。
+
+> **S4a 落实（2026-11-13）**：非零 ctor 缺省由 `EntitySpawn` 载体给出（`CTOR_HP`/`CTOR_MAX_HP`/
+> `CTOR_LEVEL`），`EntityStore::insert` 消费 `SpawnParts` 整 bundle 挂 8 个 S4a 组件（缺任一即
+> panic）。组件 `Default` 仍是 0/0/0；契约由 `s4a_component_ctor_defaults_match_entity_new`
+> 与 `insert_uses_spawn_ctor_bundle_not_component_defaults` 两条用例钉住（`Transform::default()`
+> 误用会触发后者）。
 
 ---
 
@@ -605,6 +614,30 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > `MapsRes` 在 tick 边界一次性移入/移出，`TickStage::OutputAoi` 的 `aoi::output_aoi_system`
 > 按 `AoiIds` 槽位顺序完成全部 AOI 刷新（算法仍是 `aoi.rs` 的同一实现，经 `AoiStore`
 > trait 由 `EntityStore` 与 bevy `World` 两个实现复用）。
+
+> **S4a 落地登记**：`Entity` 删除 S4a 的 41 个字段（151→97）。`EntitySpawn` 平铺生成期字段
+> （`drop_items` 保留原名），`EntityRef` 平铺只读投影（`drop_items: &Vec<DropItem>`），
+> `EntityMut` 暴露 `vitals`/`ability`/`progression`/`spawn`/`drop`/`attribution`/`recovery`/`pvp`
+> 组件字段；`EntityStore::insert` 用 `SpawnParts` 整 bundle 挂组件，读路径 `get`/`iter_ref`、
+> 写路径 `get_mut`/`for_each_mut`，另有 `vitals(_mut)`/`progression(_mut)`/`ability(_mut)`/
+> `set_progression`/`write_back` 受控入口。`combat` 的攻击/经验结算改在生成期载体上跑，
+> `slave` 的 Recalc 与宿主 `apply_ability_to_entity` 改收 `EntityMut`；战斗目标判定链改收
+> `PvpView`（`base()` + `pvp_state()`），对 `EntitySpawn`/`EntityRef`/`EntityMut` 统一实现。
+> **回写纪律**：`spawn_cloned → 改副本 → 回写` 必须用 `EntityStore::write_back`（整包写
+> 主组件 + 8 个组件），不得只写 `*e = spawn.entity`（会丢 HP/MP/exp；回归牙
+> `write_back_preserves_spawn_cloned_vitals`）。
+>
+> **RNG 站点（ctor_fold/run_gap）**：S4a 未改抽数次序。`ctor_fold` 的生成期 4 抽/
+> 登录期第 5 抽与 `run_gap::dup_push_dir` 仍在原消费者位置；字段访问只是读取/写回组件值，
+> 不新增/不移动任何 `random_*` 调用。证据：`rng_parity`/`rng_replay_parity`/golden 零 diff，
+> 以及 M3 的「RNG 站点换序 ⇒ rng_parity 红」变异重放。
+>
+> **S3b 评审 P3 处置**：① `output_aoi_system` 的 `AoiIds`/`AoiParams`/`MapsRes` 由
+> `unwrap_or_default` 改为 `expect`（缺资源是接线错误；`AoiScratch` 仍是每 tick 新建的合法
+> 缺省）；② `insert_parts` 收窄为 `SpawnParts` 单一入参、唯一调用方是 `EntitySpawn::into_parts`，
+> 并加 `insert_uses_spawn_ctor_bundle_not_component_defaults` 防 `Transform::default()` 误用；
+> ③ `BevyAoiStore` 仍按 `World::get::<T>` 逐组件取（S4a 新增 5 次 TypeId 查表），属性能项，
+> S4a 不压测、只登记（后续可改缓存 `QueryState`）。
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——
 > `entity/tick/存储`=S1/S2；`DupState`+tick 段链=S3a；`map/aoi/space_move/session`=S3b；

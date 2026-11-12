@@ -57,7 +57,7 @@ pub(crate) fn drop_use_items_on_death(
         return Vec::new();
     }
     // `:2183 nRate = PvpLevel() > 2 ? DieRedDropUseItemRate : DieDropUseItemRate`。
-    let pvp = World::pvp_level(&e);
+    let pvp = World::pvp_level(e.pk_point);
     let n_rate = if pvp > 2 {
         world.die_red_drop_use_item_rate
     } else {
@@ -90,7 +90,7 @@ pub(crate) fn drop_use_items_on_death(
         if std_item.item_desc & 8 != 0 {
             // `dropItemList.Add(new DeleteItem { MakeIndex = … })`（ItemName 缺省 null）。
             deleted.push((slot, String::new(), cell.make_index));
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(mut e) = world.entities.get_mut(actor_id) {
                 // `UseItems[i].Index = 0`（MakeIndex/Dura/DuraMax/Desc 均保留）。
                 e.use_items[slot].index = 0;
             }
@@ -127,7 +127,7 @@ pub(crate) fn drop_use_items_on_death(
         // 对 `ushort` 只在恰 0 时成立、赋值 0 是无操作 ⇒ 等价 `wrapping_sub(2000)`。
         // **不得**用 `saturating_sub`（会把 1..1999 错误地压成 0）。
         if std_item.std_mode == 40 {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(mut e) = world.entities.get_mut(actor_id) {
                 let dura = e.use_items[slot].dura.wrapping_sub(2000);
                 // `if (idura <= 0) idura = 0;` 对 `ushort` 只在恰 0 时成立，且赋值 0 无操作
                 // ⇒ 回绕值原样写回（`Dura == 2000` 得 0，与 oracle 相同）。
@@ -205,7 +205,7 @@ mod tests {
             std_item(3, 40, 0, 0, 0),
         ];
         {
-            let e = w.entities.get_mut(p).unwrap();
+            let mut e = w.entities.get_mut(p).unwrap();
             e.use_items[0] = slot(11, 1, 500, [1; 14]);
             e.use_items[1] = slot(22, 2, 500, [2; 14]);
             e.use_items[2] = slot(33, 3, 2500, [3; 14]);
@@ -262,9 +262,9 @@ mod tests {
             let p = w.add_entity(player(0, 10, 10));
             w.item_catalog = vec![std_item(1, 0, 0, 0, 8)];
             {
-                let e = w.entities.get_mut(p).unwrap();
-                e.angry_ring = angry;
-                e.no_drop_use_item = no_drop;
+                let mut e = w.entities.get_mut(p).unwrap();
+                e.drop.angry_ring = angry;
+                e.drop.no_drop_use_item = no_drop;
                 e.use_items[0] = slot(11, 1, 500, [0; 14]);
             }
             w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -289,7 +289,7 @@ mod tests {
         let p = w.add_entity(player(0, 10, 10));
         w.item_catalog = vec![std_item(1, 45, 9, 100, 0)];
         {
-            let e = w.entities.get_mut(p).unwrap();
+            let mut e = w.entities.get_mut(p).unwrap();
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         // Index=1 ⇒ 键 0 命中；nRate=1 ⇒ 每槽必进 Random==0 分支。
@@ -309,7 +309,7 @@ mod tests {
     fn drop_use_items_red_rate_for_pvp_level_three() {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(0, 10, 10));
-        w.entities.get_mut(p).unwrap().pk_point = 300; // PvpLevel = 3
+        w.entities.get_mut(p).unwrap().pvp.pk_point = 300; // PvpLevel = 3
         w.item_catalog = vec![std_item(1, 0, 0, 0, 0)];
         w.set_death_drop_config(999, 1, 3, Vec::new());
         let seed = 31;
@@ -332,9 +332,9 @@ mod tests {
         let killer = w.add_entity(player(1, 11, 10));
         w.item_catalog = vec![std_item(1, 45, 4, 100, 8)];
         {
-            let e = w.entities.get_mut(p).unwrap();
-            e.hp = 0;
-            e.exp_hitter = Some(killer);
+            let mut e = w.entities.get_mut(p).unwrap();
+            e.vitals.hp = 0;
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -362,9 +362,9 @@ mod tests {
         let killer = w.add_entity(player(1, 11, 10));
         w.item_catalog = vec![std_item(1, 45, 4, 100, 8)];
         {
-            let e = w.entities.get_mut(p).unwrap();
-            e.hp = 0;
-            e.exp_hitter = Some(killer);
+            let mut e = w.entities.get_mut(p).unwrap();
+            e.vitals.hp = 0;
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -387,8 +387,8 @@ mod tests {
         let p = w.add_entity(player(0, 10, 10));
         w.item_catalog = vec![std_item(1, 0, 0, 0, 8)];
         {
-            let e = w.entities.get_mut(p).unwrap();
-            e.hp = 0;
+            let mut e = w.entities.get_mut(p).unwrap();
+            e.vitals.hp = 0;
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -406,9 +406,9 @@ mod tests {
         });
         w.item_catalog = vec![std_item(1, 0, 0, 0, 8)];
         {
-            let e = w.entities.get_mut(p).unwrap();
-            e.hp = 0;
-            e.exp_hitter = Some(killer);
+            let mut e = w.entities.get_mut(p).unwrap();
+            e.vitals.hp = 0;
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -424,9 +424,9 @@ mod tests {
         let killer = w.add_entity(player(0, 11, 10));
         w.item_catalog = vec![std_item(1, 0, 0, 0, 8)];
         {
-            let e = w.entities.get_mut(p).unwrap();
-            e.hp = 0;
-            e.exp_hitter = Some(killer);
+            let mut e = w.entities.get_mut(p).unwrap();
+            e.vitals.hp = 0;
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -444,9 +444,9 @@ mod tests {
         let killer = w.add_entity(player(0, 11, 10));
         w.item_catalog = vec![std_item(1, 0, 0, 0, 8)];
         {
-            let e = w.entities.get_mut(p).unwrap();
-            e.hp = 0;
-            e.exp_hitter = Some(killer);
+            let mut e = w.entities.get_mut(p).unwrap();
+            e.vitals.hp = 0;
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_map_fight_zone(0, false, true);
@@ -466,7 +466,7 @@ mod tests {
         let p = w.add_entity(player(0, 10, 10));
         w.set_item_catalog(vec![std_item(1, 40, 0, 0, 0)]);
         {
-            let e = w.entities.get_mut(p).unwrap();
+            let mut e = w.entities.get_mut(p).unwrap();
             e.use_items[0] = slot(11, 1, 1, [0; 14]);
         }
         // nRate=1 ⇒ 每槽必进 `DropItemDown` 支（StdMode40 的耐久扣减照做）。
@@ -488,7 +488,7 @@ mod tests {
         let p = w.add_entity(player(0, 10, 10));
         w.set_item_catalog(vec![std_item(1, 40, 0, 0, 0)]);
         {
-            let e = w.entities.get_mut(p).unwrap();
+            let mut e = w.entities.get_mut(p).unwrap();
             e.use_items[0] = slot(11, 1, 2000, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -514,11 +514,11 @@ mod tests {
             assert_ne!(p, killer, "死者与击杀者必须是两个实体");
             {
                 let e = w.entities.get_mut(p).unwrap();
-                e.hp = 0;
-                e.exp_hitter = Some(killer);
-                e.no_item = dead_no_item;
+                e.vitals.hp = 0;
+                e.attribution.exp_hitter = Some(killer);
+                e.drop.no_item = dead_no_item;
             }
-            w.entities.get_mut(killer).unwrap().no_item = killer_no_item;
+            w.entities.get_mut(killer).unwrap().drop.no_item = killer_no_item;
             w.set_map_no_drop_item(0, true);
             w.set_death_drop_config(1, 1, 3, Vec::new());
             w.set_death_drop_kill_config(true, true);

@@ -29,7 +29,7 @@ use mir2_formula::exp::{calc_get_exp, get_level_exp};
 use mir2_shared::hutil;
 use mir2_shared::rng::RandomSource;
 
-use crate::entity::{Entity, EntitySpawn, UseItemSlot, ACTOR_RACE_PLAY};
+use crate::entity::{Entity, EntitySpawn, PvpView, UseItemSlot, ACTOR_RACE_PLAY};
 
 /// `HUtil32.LoByte(short)`：低 8 位。
 pub fn lo_byte(w: i32) -> u8 {
@@ -467,7 +467,7 @@ pub fn is_attack_target_base(attacker: &Entity, target: &Entity) -> bool {
 /// 未建模分支（报告登记）：`PveServer`（现网 `Server.conf NonPKServer=FALSE` ⇒ 默认不触发）、
 /// `MyGuild`/`MasterList`（行会/师徒）。无组队注册表 ⇒ 等价于传空成员表（见
 /// [`is_attack_target_player_grouped`]）。
-pub fn is_attack_target_player(attacker: &Entity, target: &Entity) -> bool {
+pub fn is_attack_target_player(attacker: &impl PvpView, target: &impl PvpView) -> bool {
     is_attack_target_player_grouped(attacker, target, &[])
 }
 
@@ -479,10 +479,15 @@ pub fn is_attack_target_player(attacker: &Entity, target: &Entity) -> bool {
 /// 先按 `Race` 置 `result`，再 `if (target.Race == ActorRace.Play) if (IsGroupMember(target)) result = false;`
 /// ⇒ **同组玩家被剔除**（不同组/无组照旧可打）。
 pub fn is_attack_target_player_grouped(
-    attacker: &Entity,
-    target: &Entity,
+    attacker: &impl PvpView,
+    target: &impl PvpView,
     attacker_group_members: &[i32],
 ) -> bool {
+    // S4a：PK 字段在 `PvpState` 组件；判定期间不写 pvp ⇒ 按值取快照。
+    let apvp = attacker.pvp_state();
+    let tpvp = target.pvp_state();
+    let attacker = attacker.base();
+    let target = target.base();
     let mut result = false;
     match attacker.attack_mode {
         ATTACK_MODE_HAM_ALL => {
@@ -497,7 +502,7 @@ pub fn is_attack_target_player_grouped(
             }
         }
         ATTACK_MODE_HAM_DEAR => {
-            if Some(target.id) != attacker.dear_human {
+            if Some(target.id) != apvp.dear_human {
                 return true;
             }
         }
@@ -533,8 +538,8 @@ pub fn is_attack_target_player_grouped(
                 result = true;
             }
             if target.race == ACTOR_RACE_PLAY {
-                let atk_pvp = (attacker.pk_point / 100) as u8;
-                let tgt_pvp = (target.pk_point / 100) as u8;
+                let atk_pvp = (apvp.pk_point / 100) as u8;
+                let tgt_pvp = (tpvp.pk_point / 100) as u8;
                 if atk_pvp >= 2 {
                     result = tgt_pvp < 2;
                 } else {
@@ -604,13 +609,21 @@ pub fn paralysis_from_ring_shapes(shapes: impl IntoIterator<Item = Option<u8>>) 
 ///    （`bins/game-svr/src/lib.rs` `attack_mode: d.attatck_mode`）⇒ 模式 3/5 由客户端上报即可进入。
 ///    ⇒ 该缺口是**真实可触发的收窄**，登记为**未实现**（保守方向登记 = 收窄 = 漏加点）。
 #[must_use]
-pub fn is_proper_is_friend(caster: &Entity, cret: &Entity, is_group_member: bool) -> bool {
+pub fn is_proper_is_friend(
+    caster: &impl PvpView,
+    cret: &impl PvpView,
+    is_group_member: bool,
+) -> bool {
+    let cpvp = caster.pvp_state();
+    let tpvp = cret.pvp_state();
+    let caster = caster.base();
+    let cret = cret.base();
     if cret.race != ACTOR_RACE_PLAY {
         return false;
     }
     match caster.attack_mode {
         ATTACK_MODE_HAM_ALL | ATTACK_MODE_HAM_PEACE => true,
-        ATTACK_MODE_HAM_DEAR => caster.id == cret.id || caster.dear_human == Some(cret.id),
+        ATTACK_MODE_HAM_DEAR => caster.id == cret.id || cpvp.dear_human == Some(cret.id),
         ATTACK_MODE_HAM_MASTER => caster.id == cret.id,
         ATTACK_MODE_HAM_GROUP => caster.id == cret.id || is_group_member,
         ATTACK_MODE_HAM_GUILD => caster.id == cret.id,
@@ -618,8 +631,8 @@ pub fn is_proper_is_friend(caster: &Entity, cret: &Entity, is_group_member: bool
             if caster.id == cret.id {
                 true
             } else {
-                let caster_pvp = (caster.pk_point / 100) as u8;
-                let target_pvp = (cret.pk_point / 100) as u8;
+                let caster_pvp = (cpvp.pk_point / 100) as u8;
+                let target_pvp = (tpvp.pk_point / 100) as u8;
                 if caster_pvp >= 2 {
                     target_pvp < 2
                 } else {
@@ -649,21 +662,27 @@ pub fn base_is_proper_friend(caster: &Entity, target: &Entity) -> bool {
 /// 玩家施法者：目标是玩家 ⇒ [`is_proper_is_friend`]；否则回落基版（玩家施法者的基版恒 `false`
 /// —— `Race(0) < Animal` ⇒ 只保护玩家友军）。`is_group_member` 仅在目标是玩家且 `HAM_GROUP` 时被消费。
 #[must_use]
-pub fn is_proper_friend(caster: &Entity, target: &Entity, is_group_member: bool) -> bool {
-    if caster.race == ACTOR_RACE_PLAY && target.race == ACTOR_RACE_PLAY {
+pub fn is_proper_friend(
+    caster: &impl PvpView,
+    target: &impl PvpView,
+    is_group_member: bool,
+) -> bool {
+    if caster.base().race == ACTOR_RACE_PLAY && target.base().race == ACTOR_RACE_PLAY {
         return is_proper_is_friend(caster, target, is_group_member);
     }
-    base_is_proper_friend(caster, target)
+    base_is_proper_friend(caster.base(), target.base())
 }
 
 /// `PlayObject.IsProperTarget`（`PlayObject.cs:1929`）——**玩家攻方**的判定链。
 /// 带组队注册表的 [`is_proper_target_play`]（M3⑦-实现 4）。
 fn is_proper_target_play_grouped(
-    attacker: &Entity,
-    target: &Entity,
+    attacker: &impl PvpView,
+    target: &impl PvpView,
     attacker_group_members: &[i32],
 ) -> bool {
     let mut result = is_attack_target_player_grouped(attacker, target, attacker_group_members);
+    let attacker = attacker.base();
+    let target = target.base();
     if result {
         if target.race == ACTOR_RACE_PLAY {
             // `if (baseObject.Race == ActorRace.Play) return IsProtectTarget(baseObject);`
@@ -695,27 +714,27 @@ fn is_proper_target_play_grouped(
 /// 攻击合法性（`BaseObject.Attack.cs:37` 的 `IsProperTarget`，虚函数分派）。
 ///
 /// 顶部折入「已死/幽灵/隐身不可被选为目标」（见本节注释）；其余逐行照 oracle。
-pub fn is_proper_target(attacker: &Entity, target: &Entity) -> bool {
+pub fn is_proper_target(attacker: &impl PvpView, target: &impl PvpView) -> bool {
     is_proper_target_grouped(attacker, target, &[])
 }
 
 /// 带组队注册表的 [`is_proper_target`]（M3⑦-实现 4）：`attacker_group_members` 供
 /// `HAM_GROUP` 的 `IsGroupMember` 剔除用（其它攻击模式忽略它）。
 pub fn is_proper_target_grouped(
-    attacker: &Entity,
-    target: &Entity,
+    attacker: &impl PvpView,
+    target: &impl PvpView,
     attacker_group_members: &[i32],
 ) -> bool {
-    if attacker.id == target.id {
+    if attacker.base().id == target.base().id {
         return false;
     }
-    if target.death || target.ghost || target.invisible {
+    if target.base().death || target.base().ghost || target.base().invisible {
         return false;
     }
-    if attacker.race == ACTOR_RACE_PLAY {
+    if attacker.base().race == ACTOR_RACE_PLAY {
         return is_proper_target_play_grouped(attacker, target, attacker_group_members);
     }
-    is_attack_target_base(attacker, target)
+    is_attack_target_base(attacker.base(), target.base())
 }
 
 /// **P3-B5**：oracle `PlayObject.IsProperTarget`（`PlayObject.cs:1924-1965`）**不读 `Invisible`**
@@ -727,25 +746,25 @@ pub fn is_proper_target_grouped(
 /// **登记 T-B5-1**：与折入版的唯一差异就是「隐身目标是否可被范围魔法命中」；oracle 可命中。
 #[must_use]
 pub fn is_proper_target_grouped_direct(
-    attacker: &Entity,
-    target: &Entity,
+    attacker: &impl PvpView,
+    target: &impl PvpView,
     attacker_group_members: &[i32],
 ) -> bool {
-    if attacker.id == target.id {
+    if attacker.base().id == target.base().id {
         return false;
     }
     // **不折入 `death/ghost/invisible`**：oracle `PlayObject.IsProperTarget`（`PlayObject.cs:1924`）
     // 只做 `ActorId` 相等门 + `IsAttackTarget`/`IsProtectTarget`；Death/Ghost 由枚举面
     // （`GetMovingObject(...,true)` 的 `!Ghost && !Death`、`GetBaseObjects(...,true)` 的 `!Death`）负责。
     // 折进来会让「枚举面漏掉 Death 过滤」的改坏不可见（B5-9-2 牙）。
-    if attacker.race == ACTOR_RACE_PLAY {
+    if attacker.base().race == ACTOR_RACE_PLAY {
         return is_proper_target_play_grouped(attacker, target, attacker_group_members);
     }
-    is_attack_target_base(attacker, target)
+    is_attack_target_base(attacker.base(), target.base())
 }
 
 /// 兼容别名：`crates/world` 旧调用点与既有用例用的名字（现与 [`is_proper_target`] 同义）。
-pub fn is_attack_target(attacker: &Entity, target: &Entity) -> bool {
+pub fn is_attack_target(attacker: &impl PvpView, target: &impl PvpView) -> bool {
     is_proper_target(attacker, target)
 }
 
@@ -847,8 +866,8 @@ pub fn struck_damage_durability(rng: &mut impl RandomSource, target: &mut Entity
 /// `damage = max(0, damage - nArmor)`；不死系再加攻击方的 `UndeadPower`。
 pub fn get_hit_struck_damage(
     rng: &mut impl RandomSource,
-    target: &Entity,
-    attacker: &Entity,
+    target: &EntitySpawn,
+    attacker: &EntitySpawn,
     n_damage: i32,
 ) -> u16 {
     let ac_lo = i32::from(lo_byte(target.ac));
@@ -947,8 +966,8 @@ pub struct AttackOutcome {
 /// 3. 护甲：`Random(|ΔAC|+1)`，若 `nRnd>0` 再 `Random(nRnd)`（1~2 次）
 pub fn attack(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> AttackOutcome {
@@ -967,8 +986,8 @@ pub fn attack(
 /// 无组队注册表 ⇒ 等价于 [`attack_with_grouped`] 传空成员表。
 pub fn attack_with(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     power_mode: AttackPowerMode,
@@ -980,8 +999,8 @@ pub fn attack_with(
 /// 供 `HAM_GROUP` 的 `IsGroupMember` 剔除用（见 [`is_proper_target_grouped`]）。
 pub fn attack_with_grouped(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     power_mode: AttackPowerMode,
@@ -1047,8 +1066,8 @@ pub fn attack_with_grouped(
 /// 返回 `(damage, killed)`；`damage == 0` ⇒ 调用方不得 `SendStruckDelayMsg`。
 pub fn apply_struck_damage(
     rng: &mut impl RandomSource,
-    attacker: &Entity,
-    target: &mut Entity,
+    attacker: &EntitySpawn,
+    target: &mut EntitySpawn,
     n_power: i32,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
@@ -1063,8 +1082,8 @@ pub fn apply_struck_damage(
 /// [`AttackOutcome::struck_power`]）。取数次序与两段版逐字相同。
 pub fn apply_struck_damage_detail(
     rng: &mut impl RandomSource,
-    attacker: &Entity,
-    target: &mut Entity,
+    attacker: &EntitySpawn,
+    target: &mut EntitySpawn,
     n_power: i32,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
@@ -1087,7 +1106,7 @@ pub fn apply_struck_damage_detail(
 /// `GetMagStruckDamage` 的返回值之和）；`reduced <= 0` ⇒ 调用方不得调用（oracle 有 `> 0` 门）。
 pub fn struck_damage_apply(
     rng: &mut impl RandomSource,
-    target: &mut Entity,
+    target: &mut EntitySpawn,
     reduced: i32,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
@@ -1118,7 +1137,7 @@ pub fn struck_damage_apply(
     //   3. `:2998-3039` 逐格循环：`Index > 0`（已装备）的每格**各抽一次 `Random(8)`**。
     // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
     // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
-    struck_damage_durability(rng, target);
+    struck_damage_durability(rng, &mut target.entity);
     (final_damage, killed)
 }
 
@@ -1168,8 +1187,8 @@ pub fn attack_success_weapon_damage(rng: &mut impl RandomSource) -> u16 {
 /// 怪物/召唤物的 `BaseObject` 攻击路径不调它。
 pub fn attack_dir(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> AttackOutcome {
@@ -1180,8 +1199,8 @@ pub fn attack_dir(
 /// `IsGroupMember` 剔除用（`PlayObject.Attack.cs:667-673`）；其余口径与 [`attack_dir`] 相同。
 pub fn attack_dir_grouped(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     attacker_group_members: &[i32],
@@ -1231,8 +1250,8 @@ pub struct AttackPoisonState {
 #[allow(clippy::too_many_arguments)] // 8 个实参 = oracle `AttackSuccess` 的同名/同序概念 + `weapon_strong`
 pub fn attack_dir_grouped_poison_ws(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     attacker_group_members: &[i32],
@@ -1279,8 +1298,8 @@ pub fn attack_dir_grouped_poison_ws(
 #[must_use]
 pub fn attack_dir_grouped_poison(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     attacker_group_members: &[i32],
@@ -1392,7 +1411,7 @@ pub fn generate_drops<C: ItemCatalog>(
 /// 块内 `HasLevelUp`/`AddBodyLuck(100)`/`IncHealthSpell(2000,2000)` **无条件**执行 ⇒ 宿主用
 /// 这一位决定是否出 `SM_LEVELUP(45)`/`SM_ABILITY(52)`/`SM_SUBABILITY(752)`/`SM_HEALTHSPELLCHANGED(53)`。
 pub fn award_kill_exp(
-    killer: &mut Entity,
+    killer: &mut EntitySpawn,
     mon_exp: i32,
     need_exps: &[i32],
     config: &CombatConfig,
@@ -1415,7 +1434,7 @@ pub fn award_kill_exp(
 /// `HUtil32.Round(dwExp/n)` 就是原值；`KillTargetTrigger` 传给 `GainExp` 的是
 /// `CalcGetExp` 的结果）。返回 `(乘完倍率后的实际加值, 是否进升级块, 升级后等级)`。
 pub fn win_exp(
-    killer: &mut Entity,
+    killer: &mut EntitySpawn,
     dw_exp: i32,
     need_exps: &[i32],
     config: &CombatConfig,
@@ -1461,7 +1480,7 @@ pub fn win_exp(
 ///
 /// 返回 `(本次加值, 是否进入升级块, 升级后等级)`——`leveled` 是**进块**而非「等级真的 +1」
 /// （255 级时 `Level++` 被门挡住，但块内 `HasLevelUp`/`IncHealthSpell` 仍无条件执行）。
-pub fn get_exp_raw(entity: &mut Entity, dw_exp: i32, need_exps: &[i32]) -> (i32, bool, u8) {
+pub fn get_exp_raw(entity: &mut EntitySpawn, dw_exp: i32, need_exps: &[i32]) -> (i32, bool, u8) {
     entity.exp += dw_exp;
     let leveled = entity.exp >= entity.max_exp;
     if leveled {
@@ -1589,8 +1608,8 @@ pub fn power_uenhancer(
 /// 遍历可见集 / `StruckDamage` 倍率 / `RM_DELAYMAGIC` 回帧由调用方承接（需地图与目标态）。
 pub fn group_melee_damage(
     rng: &mut impl RandomSource,
-    attacker: &Entity,
-    target: &Entity,
+    attacker: &EntitySpawn,
+    target: &EntitySpawn,
     atk: AttackPowerMode,
 ) -> (i32, u16) {
     let dc_lo = i32::from(lo_byte(attacker.dc));

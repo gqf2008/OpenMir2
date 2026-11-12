@@ -157,10 +157,10 @@ pub(crate) fn monster_space_move(
 
     // 6. `OnEnvirnomentChanged()`（实体侧可见效果；ActiveCount 登记未建模）。
     if space_moved && old_map_id != dest_map_id {
-        if let Some(e) = world.entities.get_mut(actor_id) {
-            if e.can_re_alive && e.mon_gen.is_some() {
+        if let Some(mut e) = world.entities.get_mut(actor_id) {
+            if e.can_re_alive && e.spawn.mon_gen.is_some() {
                 e.can_re_alive = false;
-                e.mon_gen = None;
+                e.spawn.mon_gen = None;
             }
         }
     }

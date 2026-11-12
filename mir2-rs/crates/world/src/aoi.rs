@@ -20,8 +20,9 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    Entity, EntityRef, EntityStore, MapBinding, Transform, VisibleBaseObject, VisibleEvent,
-    VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    AbilitySnapshot, BaseAbil, CombatAttribution, DropState, Entity, EntityRef, EntityStore,
+    MapBinding, Progression, PvpState, Recovery, SpawnBinding, Transform, VisibleBaseObject,
+    VisibleEvent, VisibleFlag, Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 use bevy_ecs::prelude::Resource;
@@ -47,7 +48,7 @@ impl AoiStore for EntityStore {
         EntityStore::get(self, id)
     }
     fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
-        EntityStore::get_mut(self, id)
+        EntityStore::entity_mut(self, id)
     }
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
         EntityStore::map_binding_mut(self, id)
@@ -607,7 +608,53 @@ impl AoiStore for BevyAoiStore<'_> {
         let entity = self.world.get::<Entity>(e)?;
         let transform = self.world.get::<Transform>(e)?;
         let binding = self.world.get::<MapBinding>(e)?;
-        Some(EntityRef::from_components(entity, transform, binding))
+        // S4a：`EntityStore::insert` 保证每个实体都挂三组件（缺组件是插入期硬断言），
+        // 这里用 `expect` 而不是 `unwrap_or_default`：静默用默认值会让 AOI 读到假属性。
+        let vitals = self
+            .world
+            .get::<Vitals>(e)
+            .expect("实体必须挂 Vitals 组件（插入期已断言）");
+        let ability = self
+            .world
+            .get::<AbilitySnapshot<BaseAbil>>(e)
+            .expect("实体必须挂 AbilitySnapshot 组件（插入期已断言）");
+        let progression = self
+            .world
+            .get::<Progression>(e)
+            .expect("实体必须挂 Progression 组件（插入期已断言）");
+        let spawn = self
+            .world
+            .get::<SpawnBinding>(e)
+            .expect("实体必须挂 SpawnBinding 组件（插入期已断言）");
+        let drop = self
+            .world
+            .get::<DropState>(e)
+            .expect("实体必须挂 DropState 组件（插入期已断言）");
+        let attribution = self
+            .world
+            .get::<CombatAttribution>(e)
+            .expect("实体必须挂 CombatAttribution 组件（插入期已断言）");
+        let recovery = self
+            .world
+            .get::<Recovery>(e)
+            .expect("实体必须挂 Recovery 组件（插入期已断言）");
+        let pvp = self
+            .world
+            .get::<PvpState>(e)
+            .expect("实体必须挂 PvpState 组件（插入期已断言）");
+        Some(EntityRef::from_components(
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+        ))
     }
 
     fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
@@ -631,14 +678,22 @@ impl AoiStore for BevyAoiStore<'_> {
 /// [`MapsRes<MapGrid>`] + [`AoiScratch`]；输出：[`AoiOut`]。扫描顺序 = `AoiIds` 的槽位顺序
 ///（facade 从 `EcsStore` 显式槽位索引生成），**从不迭代 `Query` 求顺序**。
 pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
+    // S3b 评审 P3：三个输入资源由 facade 在 tick 边界**无条件**移入（见 `World::tick` 的
+    // `OutputAoi` 段）⇒ 缺失是接线错误，用 `expect` 立即失败，而不是静默按空表跑
+    //（`unwrap_or_default` 会让 AOI 静默不出/漏出，golden 仍可能绿）。
     let ids: Vec<(i32, bevy_ecs::entity::Entity)> = world
         .get_resource::<AoiIds>()
-        .map(|r| r.0.clone())
-        .unwrap_or_default();
-    let mut params = world.remove_resource::<AoiParams>().unwrap_or_default();
+        .expect("OutputAoi 前必须插入 AoiIds（facade tick 边界）")
+        .0
+        .clone();
+    let mut params = world
+        .remove_resource::<AoiParams>()
+        .expect("OutputAoi 前必须插入 AoiParams（facade tick 边界）");
     let mut maps = world
         .remove_resource::<MapsRes<MapGrid>>()
-        .unwrap_or(MapsRes(Vec::new()));
+        .expect("OutputAoi 前必须插入 MapsRes（facade tick 边界）");
+    // `AoiScratch` 是**每 tick 新建的复用缓冲**（facade 不持有、不跨 tick 存），缺省构造是
+    // 合法初始态 ⇒ 保持 `unwrap_or_default`。
     let mut scratch = world.remove_resource::<AoiScratch>().unwrap_or_default();
     let mut out = AoiOut::default();
     let index: HashMap<i32, bevy_ecs::entity::Entity> = ids.iter().copied().collect();

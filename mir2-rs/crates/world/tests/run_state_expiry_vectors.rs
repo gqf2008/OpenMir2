@@ -39,7 +39,7 @@ fn holy_seize_expiry_strictly_after_interval() {
     let mut w = World::new(32, 32);
     let id = monster(&mut w);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.ai.holy_seize = true;
         e.ai.holy_seize_tick = 1_000;
         e.ai.holy_seize_interval = 1_000;
@@ -64,7 +64,7 @@ fn holy_seize_expiry_runs_through_monster_ai_tick() {
     w.set_process_monster_interval(0);
     let id = monster(&mut w);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.ai.holy_seize = true;
         e.ai.holy_seize_tick = 1_000;
         e.ai.holy_seize_interval = 1_000;
@@ -92,7 +92,7 @@ fn crazy_mode_expiry_strictly_after_interval() {
     w.clock_ms = 1_000;
     open_crazy_mode(&mut w, id, 1); // interval = 1000ms
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         assert!(e.ai.crazy_mode, "OpenCrazyMode 置态");
         assert_eq!(e.ai.crazy_mode_tick, 1_000, "CrazyModeTick = now");
         assert_eq!(e.ai.crazy_mode_interval, 1_000, "nTime * 1000");
@@ -108,7 +108,7 @@ fn crazy_mode_expiry_strictly_after_interval() {
     );
     // 过 1ms ⇒ 清（普通出口的 `CheckRoyalty()` 之后）。
     w.clock_ms = 2_001;
-    if let Some(e) = w.entities.get_mut(id) {
+    if let Some(mut e) = w.entities.get_mut(id) {
         e.ai.think_tick = 2_001;
     }
     monster_ai_tick(&mut w);
@@ -123,7 +123,7 @@ fn crazy_mode_expiry_runs_on_non_movable_path() {
     w.set_process_monster_interval(0);
     let id = monster(&mut w);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.stone_mode = true; // `!StoneMode` 门失败 ⇒ 不可移动路径
         e.ai.crazy_mode = true;
         e.ai.crazy_mode_tick = 1_000;
@@ -144,7 +144,7 @@ fn fire_hit_expiry_strictly_after_20s_and_event_order() {
     let mut w = World::new(32, 32);
     let id = player(&mut w);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.fire_hit_skill = true;
         e.latest_fire_hit_tick = 1_000;
     }
@@ -171,7 +171,7 @@ fn fire_hit_expiry_falls_back_attack_power() {
     let mut w = World::new(32, 32);
     let id = player(&mut w);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.fire_hit_skill = true;
         e.latest_fire_hit_tick = 1_000;
     }
@@ -210,7 +210,7 @@ fn twin_hit_expiry_strictly_after_60s() {
     let mut w = World::new(32, 32);
     let id = player(&mut w);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.twin_hit_skill = true;
         e.latest_twin_hit_tick = 1_000;
     }
@@ -232,7 +232,7 @@ fn both_expiries_keep_oracle_event_order() {
     let mut w = World::new(32, 32);
     let id = player(&mut w);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.fire_hit_skill = true;
         e.latest_fire_hit_tick = 1_000;
         e.twin_hit_skill = true;
@@ -255,7 +255,7 @@ fn expiry_is_player_only_and_world_tick_records_it() {
     let pid = player(&mut w);
     let mid = monster(&mut w);
     {
-        let e = w.entities.get_mut(pid).unwrap();
+        let mut e = w.entities.get_mut(pid).unwrap();
         e.fire_hit_skill = true;
         e.latest_fire_hit_tick = 0;
         e.twin_hit_skill = true;
@@ -263,7 +263,7 @@ fn expiry_is_player_only_and_world_tick_records_it() {
     }
     // 非玩家即使字段被置位也不清（oracle 的到期段在 `PlayObject.Run`）。
     {
-        let e = w.entities.get_mut(mid).unwrap();
+        let mut e = w.entities.get_mut(mid).unwrap();
         e.fire_hit_skill = true;
         e.twin_hit_skill = true;
     }

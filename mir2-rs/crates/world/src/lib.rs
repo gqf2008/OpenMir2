@@ -84,7 +84,7 @@ pub use ctor_fold::{
     CTOR_FOLD_DRAW_KIND, PLAYER_CTOR_RANDOM_NO_MOD,
 };
 pub use entity::{
-    BaseAnimalCtorDraws, Entity, EntityRef, EntitySpawn, EntityStore, MonsterCtorDraws,
+    BaseAnimalCtorDraws, Entity, EntityMut, EntityRef, EntitySpawn, EntityStore, MonsterCtorDraws,
     VisibleEvent, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, BASE_ANIMAL_CTOR_DRAW_MODS,
 };
 // S3a：重叠推挤状态的真值已迁到 `world-bevy` 的组件；本 crate 透传，供宿主/测试按类型名使用。

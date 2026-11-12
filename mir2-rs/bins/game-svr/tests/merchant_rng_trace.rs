@@ -62,7 +62,7 @@ fn merchant_draws_record_world_merchant_module_sites() {
         }]),
     };
     let id = w.spawn_merchant(spawn).expect("挂图成功");
-    if let Some(st) = w.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+    if let Some(st) = w.entities.entity_mut(id).and_then(|e| e.merchant.as_mut()) {
         st.run_tick = -1000;
     }
     w.clock_ms = 100_000;
