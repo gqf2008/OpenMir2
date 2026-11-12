@@ -8,6 +8,47 @@
 - 性质：**只读**。本卡不改任何 Rust/C#/Envir 脚本/客户端/sql，只落本文档；所有「未验证」处
   显式标注，不作断言。
 
+## 0. 勘误（2026-11-12，按 review 改判；后文与冲突处以本节为准）
+
+> 本节更正 §4.1/§4.3/§6 中关于 `@zhuangyuan/@zhenai` 的传送预期。依据：review blob
+> `63659930fc68251de871bbcd551194376d7b25e0`（openmir2-reviewer-26，卡
+> `openmir2-npc-script-teleport-wiring`）的 `oracle_equivalence_zhuangyuan_zhenai` 与
+> finding F1，及原卡 comment `d5a53a48…`。文档为历史叙事文档，正文保留初版叙事不改写。
+
+1. **机制（oracle 语义）**：`GotoLableQuestActionProcess`（`src/Modules/ScriptEngine/ScriptEngine.cs`
+   884–896）对动作列表逐项扫描，**首个已注册动作**（`ExecutionProcessing.IsRegister`）执行后
+   **立即 return**；只有未注册动作才落 switch（Take/Break/Takew/Param1-4/Goto 等）并继续。
+   **`MapMove`/`Map` 本身就是注册动作**（C# `ExecutionProcessingSys.cs` 138–139；Rust 生成表
+   `(17, ActionOfMapMove)`/`(18, ActionOfMap)` 且在 `IMPLEMENTED_EXECUTIONS` 内）⇒ 传送标签
+   若无更早的注册动作，`mapmove/map` 执行后即返回、传送可达。`SET` 亦是注册动作 ⇒ 脚本先
+   `set` 的标签，`set` 执行完本 procedure 即返回，其后的 `mapmove/map` **不可达**。Rust 引擎
+   同构（首个 execution-implemented 动作执行后 return）⇒ 两栈等价。
+2. **§4.1 `@zhuangyuan` 改判**：动作序 `checklevel 11 → set [168] 1 → mapmove GA0 69 71`；
+   Level≥11 时首个注册动作是 `set [168] 1`，执行即 return ⇒ **两栈都不传送**。正文写的
+   「oracle 应执行 set + mapmove、传送庄园 GA0 (69,71)」是**错误预期**（§4.1 首条与 §2 表格
+   「客户端预期」列同此误）。
+   `set [168] 1` 的持久化缺口仍属 §6 卡 B 面，与本勘误无关。
+3. **§4.3 同族（`@zhenai`）**：动作序 `CHECKLEVELEX>34 + checkgold 1000 → take 金币 1000 →
+   set [168] 1 → map g002`——`TAKE` 未注册、走 switch 扣金后继续，随后 `set` 注册即 return
+   ⇒ 条件满足时**扣 1000 金币但不传送**（`map g002` 不可达）；条件不满足 ⇒ `SM_MENU_OK(767)`。
+4. **§4.1 其余传送标签预期不变**：`@bai`（mapmove 11 136,368）与 `@feng`（mapmove 4 241,202）
+   的 `mapmove` **本身就是首个（唯一）注册动作**——执行即 return、传送可达；`@du`（take →
+   mapmove 2 416,564）与 `@gohj2`（take → mapmove h001 74,69）的 `take` 未注册、走 switch
+   处理后继续，随后的 `mapmove` 执行并返回。四条传送**可达**；§4.2/§4.3 对这四条的传送缺口
+   结论维持。
+5. **`@ss` 更正（含对本勘误沿自 review `63659930…` F4/A4 note 误判的更正声明）**：
+   `比奇省传送员-0.txt` **没有** `@ss`——不存在 `<随机传送/@ss>` 链接（前次 review 把该文件
+   `@main` 的 `<去[真爱质询屋]/@zhenai>` 误标成了 `<随机传送/@ss>`，此处一并更正留痕）。
+   `@ss` 实际在 `盟重省传送员-3.txt` 的 `[@shangdian]` 段内（`<首饰店/@ss>`，75 行），且
+   `[@ss]`（90–93 行）存在、内容为 `map 0158` ⇒ **非悬空链接，本身就是活的 MAP 样本**
+   （不经 `@main` 触达）。MAP 随机落点窗口样本：`盟重省传送员-3 @yf`（85–88 行，map 0149）、
+   `会战-3 @dian9`（map ZM6，需 HAVEGUILD+Level>34），或径用 `盟重省传送员-3 [@ss]`
+   （map 0158）做跨 NPC 验证。
+6. **§6 卡 A 边界同步（已收口）**：卡 A（`openmir2-npc-script-teleport-wiring`）已按上述
+   改判口径实现并 closed；A4 真机窗口已过——`@bai` 真机 DB=map 11 (136,368)。
+   §6 卡 A 验收文字里「Level≥11 会话点 `@zhuangyuan` ⇒ 落 GA0 (69,71)」（§6 卡 A「验收」段）
+   按本节第 2 条作废，真机判据改为：不传送、核 800/换图簇均不发。
+
 ## 1. 证据源
 
 | 证据 | 位置 | 说明 |
