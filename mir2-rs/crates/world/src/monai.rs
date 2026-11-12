@@ -3115,8 +3115,8 @@ fn apply_make_clone(world: &mut World, owner_id: i32, clone_id: i32) {
     clone.status_time = status_time;
     clone.ai.target_creature = target;
     clone.ai.target_focus_tick = focus;
-    clone.last_hiter = last_hiter;
-    clone.last_hiter_tick = last_hiter_tick;
+    clone.attribution.last_hiter = last_hiter;
+    clone.attribution.last_hiter_tick = last_hiter_tick;
     clone.ai.dir = dir;
     clone.is_slave = true;
     // 6. `Master.SlaveList.Add(clone)`。
@@ -4118,7 +4118,7 @@ fn archer_guard_attack_targer(world: &mut World, actor_id: i32, target_id: i32) 
         let now = world.clock_ms;
         if let Some(mut t) = world.entities.get_mut(target_id) {
             t.set_last_hiter(actor_id, now);
-            t.exp_hitter = None;
+            t.attribution.exp_hitter = None;
         }
         let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
         // `targetObject.SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …,
@@ -5084,12 +5084,12 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         // `BaseObject.Base.cs:109` 的 `HealthSpellChanged()`。
         health_spell_calls = health_spell_calls.saturating_add(1);
     }
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
-        e.health_tick = health_tick;
-        e.spell_tick = spell_tick;
+    if let Some(e) = world.entities.get_mut(actor_id) {
+        e.recovery.health_tick = health_tick;
+        e.recovery.spell_tick = spell_tick;
         e.vitals.hp = hp;
         e.vitals.mp = mp;
-        e.auto_recovery_tick = now;
+        e.recovery.auto_recovery_tick = now;
     }
     // `ShowHp` 第二支（`BaseObject.cs:706-708`）：每次 `HealthSpellChanged()` 一次
     // `SendRefMsg`（不去重）⇒ 逐次记录，宿主逐条广播。
@@ -6830,8 +6830,9 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                                         (a.spell_tick, a.ai.next_hit_time)
                                     });
                                 if now - i64::from(spell_tick_now) > next_hit {
-                                    if let Some(mut a) = world.entities.get_mut(actor_id) {
-                                        a.spell_tick = i32::try_from(now).unwrap_or(i32::MAX);
+                                    if let Some(a) = world.entities.get_mut(actor_id) {
+                                        a.recovery.spell_tick =
+                                            i32::try_from(now).unwrap_or(i32::MAX);
                                     }
                                     let (tx, ty) = world
                                         .entities
@@ -9319,7 +9320,7 @@ mod tests {
             let mut e = world.entities.get_mut(id).unwrap();
             e.master = Some(master);
             e.can_re_alive = true;
-            e.mon_gen = Some(0);
+            e.spawn.mon_gen = Some(0);
         }
         world.clock_ms = 5_000;
         ready(&mut world, id, 5_000);
@@ -14393,8 +14394,8 @@ mod tests {
                 e.status_time[0] = 7;
                 e.ai.target_creature = Some(target);
                 e.ai.target_focus_tick = 555;
-                e.last_hiter = Some(target);
-                e.last_hiter_tick = 666;
+                e.attribution.last_hiter = Some(target);
+                e.attribution.last_hiter_tick = 666;
             }
             assert_eq!(monster_class_run(&mut w, id), Some(ClassRunBase::Monster));
             let req = w.pending_sculture_spawns[0].clone();
@@ -14657,7 +14658,7 @@ mod guard_target_castle_tests {
         castle.under_war = under_war;
         castle.master_guild = master_guild;
         w.castles.push(castle);
-        w.entities.get_mut(archer).unwrap().castle_binding = Some(CastleBinding {
+        w.entities.get_mut(archer).unwrap().spawn.castle_binding = Some(CastleBinding {
             castle_index: 0,
             role: DefenseRole::Archer(0),
         });
@@ -14682,7 +14683,7 @@ mod guard_target_castle_tests {
         e.max_hp = 100;
         let id = w.add_entity(e);
         if let Some(castle_index) = castle_index {
-            w.entities.get_mut(id).unwrap().castle_binding = Some(CastleBinding {
+            w.entities.get_mut(id).unwrap().spawn.castle_binding = Some(CastleBinding {
                 castle_index,
                 role: DefenseRole::Archer(1),
             });
@@ -14736,7 +14737,7 @@ mod guard_target_castle_tests {
             guard_unit_is_proper_target(&mut w, archer, outsider),
             "非盟友/非 MasterGuild 的玩家可打"
         );
-        w.entities.get_mut(archer).unwrap().last_hiter = Some(member);
+        w.entities.get_mut(archer).unwrap().attribution.last_hiter = Some(member);
         assert!(
             guard_unit_is_proper_target(&mut w, archer, member),
             "LastHiter == target 先手优先于 MasterGuild 豁免（oracle `LastHiter != baseObject`）"
@@ -14808,7 +14809,7 @@ mod guard_target_castle_tests {
             "Castle == null ⇒ 不看 MasterGuild（旧路径）"
         );
         let red = add_player(&mut w, 9, 5, Some(G_OTHER));
-        w.entities.get_mut(red).unwrap().pk_point = 250;
+        w.entities.get_mut(red).unwrap().pvp.pk_point = 250;
         assert!(
             guard_unit_is_proper_target(&mut w, archer, red),
             "旧尾段：PvpLevel >= 2 的玩家可打"
@@ -14846,12 +14847,12 @@ mod guard_target_castle_tests {
             !guard_unit_is_proper_target(&mut w, archer, pet_id),
             "主人的 MyGuild == MasterGuild ⇒ 宝宝豁免"
         );
-        w.entities.get_mut(archer).unwrap().last_hiter = Some(owner);
+        w.entities.get_mut(archer).unwrap().attribution.last_hiter = Some(owner);
         assert!(
             guard_unit_is_proper_target(&mut w, archer, pet_id),
             "LastHiter == 主人 ⇒ 豁免让位（打）"
         );
-        w.entities.get_mut(archer).unwrap().last_hiter = Some(pet_id);
+        w.entities.get_mut(archer).unwrap().attribution.last_hiter = Some(pet_id);
         assert!(
             guard_unit_is_proper_target(&mut w, archer, pet_id),
             "LastHiter == 宝宝 ⇒ 豁免让位（打）"
@@ -14874,7 +14875,7 @@ mod guard_target_castle_tests {
         guard.hp = 100;
         guard.max_hp = 100;
         let guard_id = w.add_entity(guard);
-        w.entities.get_mut(guard_id).unwrap().castle_binding = Some(CastleBinding {
+        w.entities.get_mut(guard_id).unwrap().spawn.castle_binding = Some(CastleBinding {
             castle_index: 0,
             role: DefenseRole::Guard(0),
         });
@@ -15394,7 +15395,7 @@ mod mb89_tests {
             let mut e = world.entities.get_mut(m).unwrap();
             e.vitals.dc = 10 | (10 << 8);
             e.vitals.anti_magic = anti_magic;
-            e.spell_tick = 0;
+            e.recovery.spell_tick = 0;
             e.ai.next_hit_time = 2000;
             e.ai.target_creature = Some(target);
             // `SetTargetCreat` 等价：`TargetFocusTick = GetTickCount()`（`BaseObject.Base.cs:113`

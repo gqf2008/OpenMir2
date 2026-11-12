@@ -445,9 +445,9 @@ impl BuffSystem {
                 }
                 let last_hiter = world.entities.get(actor_id).and_then(|e| e.last_hiter);
                 damage_health(world, actor_id, i32::from(point) + 1, last_hiter);
-                if let Some(mut e) = world.entities.get_mut(actor_id) {
-                    e.health_tick = 0;
-                    e.spell_tick = 0;
+                if let Some(e) = world.entities.get_mut(actor_id) {
+                    e.recovery.health_tick = 0;
+                    e.recovery.spell_tick = 0;
                 }
                 let (hp, mp) = match world.entities.get(actor_id) {
                     Some(e) => (e.hp, e.mp),

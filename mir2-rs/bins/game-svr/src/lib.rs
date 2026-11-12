@@ -69061,6 +69061,7 @@ SendRefMsgRange=15
             .entities
             .get_mut(caster_id)
             .unwrap()
+            .pvp
             .pvp_name_color_tick = T0 - 61_000;
 
         // 首调 + 500ms 内：零 656、flag 仍在。
@@ -74240,7 +74241,7 @@ SendRefMsgRange=15
             e.race = mir2_world::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
-        world.entities.get_mut(dead).unwrap().exp_hitter = Some(killer);
+        world.entities.get_mut(dead).unwrap().attribution.exp_hitter = Some(killer);
         world.set_item_catalog(vec![mir2_data::StdItem {
             name: "绑定件".into(),
             item_desc: 8,
@@ -74338,7 +74339,7 @@ SendRefMsgRange=15
             e.race = mir2_world::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
-        world.entities.get_mut(dead).unwrap().exp_hitter = Some(killer);
+        world.entities.get_mut(dead).unwrap().attribution.exp_hitter = Some(killer);
         world.set_death_drop_config(1, 1, 3, Vec::new());
         let rec = world.tick();
         assert_eq!(
@@ -76170,7 +76171,12 @@ SendRefMsgRange=15
             let hid = world.entities.alloc_id();
             hiter.id = hid;
             world.entities.insert(hiter);
-            world.entities.get_mut(actor).unwrap().last_hiter = Some(hid);
+            world
+                .entities
+                .get_mut(actor)
+                .unwrap()
+                .attribution
+                .last_hiter = Some(hid);
             drain_player_revival(
                 &mut world,
                 &mut sessions,

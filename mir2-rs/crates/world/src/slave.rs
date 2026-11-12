@@ -2167,8 +2167,9 @@ impl World {
             point,
             ..PoisonDelivery::default()
         };
-        let target = self.entities.entity_cloned(target_id);
-        let caster = self.entities.entity_cloned(caster_id);
+        // S4a：目标判定链需要 `PvpState` ⇒ 用生成期载体（`EntitySpawn`）的只读快照。
+        let target = self.entities.spawn_cloned(target_id);
+        let caster = self.entities.spawn_cloned(caster_id);
         if let (Some(t), Some(c)) = (target.as_ref(), caster.as_ref()) {
             // `IsProperTarget` 的 `this` 是**中毒目标** t ⇒ `IsGroupMember` 读 **t 的团长**
             // （`PlayObject.cs:5158-5175`）的成员表，不是 t 自己的 `group_members`（非团长恒空）。
@@ -3210,7 +3211,7 @@ mod tests {
             s.ai.walk_speed = 400;
         }
         w.entities.get_mut(master).unwrap().death = true;
-        w.entities.get_mut(master).unwrap().last_hiter = Some(slave);
+        w.entities.get_mut(master).unwrap().attribution.last_hiter = Some(slave);
         let cfg = pet_cfg(|c| {
             c.master_die_mutiny = true;
             c.master_die_mutiny_rate = 1; // Random(1) 恒 0 ⇒ 必叛变
@@ -3306,7 +3307,7 @@ mod tests {
         }
         w.entities.get_mut(master).unwrap().slave_list = vec![s1, s2];
         // oracle `SlaveList[i].Master.LastHiter != null` 门：置个活着的命中者。
-        w.entities.get_mut(master).unwrap().last_hiter = Some(s1);
+        w.entities.get_mut(master).unwrap().attribution.last_hiter = Some(s1);
         w.enable_slave_self_delay(pet_cfg(|c| {
             c.master_die_mutiny = true;
             c.master_die_mutiny_rate = 1; // Random(1) 恒 0 ⇒ 必叛变
@@ -3370,7 +3371,7 @@ mod tests {
     #[test]
     fn master_die_self_delay_else_branch_zeros_hp() {
         let (mut w, master, slave) = slave_world(100);
-        w.entities.get_mut(master).unwrap().last_hiter = None;
+        w.entities.get_mut(master).unwrap().attribution.last_hiter = None;
         w.enable_slave_self_delay(pet_cfg(|c| {
             c.master_die_mutiny = true;
             c.master_die_mutiny_rate = 1;

@@ -12630,7 +12630,7 @@ mod tests {
             vec![(GmColor::Red, MSG_HUSBAND_NOT_ONLINE)]
         );
         // 在线配偶（entity.dear_human 链）⇒ 双绿字/红头（性别分支）+ 对方接缝 note。
-        w.entities.get_mut(gm_id).unwrap().dear_human = Some(bob_id);
+        w.entities.get_mut(gm_id).unwrap().pvp.dear_human = Some(bob_id);
         let view = q_view(&fx, &w, &guilds);
         let r = execute(&mut sess, &cfg, &view, "@sdasdert");
         assert_eq!(

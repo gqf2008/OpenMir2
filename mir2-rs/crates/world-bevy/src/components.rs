@@ -297,6 +297,19 @@ pub struct DropState<D = ()> {
     pub no_item: bool,
 }
 
+// 手写 `Default`（derive 会给 `D` 加 `Default` bound）。缺省与 `Entity::new` 逐字段一致。
+impl<D> Default for DropState<D> {
+    fn default() -> Self {
+        DropState {
+            gold: 0,
+            items: Vec::new(),
+            angry_ring: false,
+            no_drop_use_item: false,
+            no_item: false,
+        }
+    }
+}
+
 /// 命中归属：`LastHiter` / `ExpHitter` 与两个过期时刻。
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct CombatAttribution {
@@ -350,6 +363,19 @@ pub struct SpawnBinding<C = (), D = ()> {
     pub mon_gen: Option<usize>,
     pub mon_gen_zen_time: i32,
     pub ctor_draws: D,
+}
+
+// 手写 `Default`（derive 会给 `C`/`D` 加 `Default` bound，而 `CastleBinding` 不需要）。
+// 缺省与 `Entity::new` 逐字段一致：`None`/`None`/`0`/`D::default()`。
+impl<C, D: Default> Default for SpawnBinding<C, D> {
+    fn default() -> Self {
+        SpawnBinding {
+            castle_binding: None,
+            mon_gen: None,
+            mon_gen_zen_time: 0,
+            ctor_draws: D::default(),
+        }
+    }
 }
 
 // ============================ 5. 类专用状态与 AI ============================
@@ -420,8 +446,7 @@ pub struct GroupState {
 #[cfg(test)]
 mod adapters {
     use super::*;
-    use mir2_world::combat::DropItem;
-    use mir2_world::entity::{AnimalState, CastleBinding, Entity, MonsterCtorDraws, UseItemSlot};
+    use mir2_world::entity::{AnimalState, Entity, UseItemSlot};
     use mir2_world::merchant::MerchantState as WorldMerchantState;
     use mir2_world::npc::NpcState as WorldNpcState;
 
@@ -486,14 +511,6 @@ mod adapters {
         stick_mode
     );
     copy_adapter!(
-        PvpState,
-        dear_human,
-        pk_point,
-        pvp_flag,
-        pvp_name_color_tick,
-        die_in_fight3_zone
-    );
-    copy_adapter!(
         LifeCycle,
         death,
         ghost,
@@ -537,14 +554,6 @@ mod adapters {
         twin_hit_skill,
         latest_twin_hit_tick
     );
-    copy_adapter!(
-        CombatAttribution,
-        last_hiter,
-        exp_hitter,
-        last_hiter_tick,
-        exp_hitter_tick
-    );
-    copy_adapter!(Recovery, health_tick, spell_tick, auto_recovery_tick);
     copy_adapter!(Revival, revival, revival_tick, un_revival, flame_ring);
     clone_adapter!(
         SlaveState,
@@ -603,46 +612,6 @@ mod adapters {
         }
     }
 
-    impl FromEntity for DropState<DropItem> {
-        fn from_entity(e: &Entity) -> Self {
-            DropState {
-                gold: e.gold,
-                items: e.drop_items.clone(),
-                angry_ring: e.angry_ring,
-                no_drop_use_item: e.no_drop_use_item,
-                no_item: e.no_item,
-            }
-        }
-    }
-    impl ApplyToEntity for DropState<DropItem> {
-        fn apply_to(&self, e: &mut Entity) {
-            e.gold = self.gold;
-            e.drop_items = self.items.clone();
-            e.angry_ring = self.angry_ring;
-            e.no_drop_use_item = self.no_drop_use_item;
-            e.no_item = self.no_item;
-        }
-    }
-
-    impl FromEntity for SpawnBinding<CastleBinding, MonsterCtorDraws> {
-        fn from_entity(e: &Entity) -> Self {
-            SpawnBinding {
-                castle_binding: e.castle_binding,
-                mon_gen: e.mon_gen,
-                mon_gen_zen_time: e.mon_gen_zen_time,
-                ctor_draws: e.ctor_draws,
-            }
-        }
-    }
-    impl ApplyToEntity for SpawnBinding<CastleBinding, MonsterCtorDraws> {
-        fn apply_to(&self, e: &mut Entity) {
-            e.castle_binding = self.castle_binding;
-            e.mon_gen = self.mon_gen;
-            e.mon_gen_zen_time = self.mon_gen_zen_time;
-            e.ctor_draws = self.ctor_draws;
-        }
-    }
-
     impl FromEntity for AiState<AnimalState> {
         fn from_entity(e: &Entity) -> Self {
             AiState { ai: e.ai.clone() }
@@ -684,17 +653,12 @@ mod adapters {
         pub identity: CoreIdentity,
         pub appearance: Appearance,
         pub flags: Flags,
-        pub pvp: PvpState,
         pub life: LifeCycle,
         pub buff: BuffState,
         pub run_state: PlayerRunState,
         pub inventory: Inventory<UseItemSlot>,
-        pub drop: DropState<DropItem>,
-        pub attribution: CombatAttribution,
-        pub recovery: Recovery,
         pub revival: Revival,
         pub slave: SlaveState,
-        pub spawn: SpawnBinding<CastleBinding, MonsterCtorDraws>,
         pub class_state: MonsterClassState,
         pub ai: AiState<AnimalState>,
         pub merchant: MerchantState<WorldMerchantState>,
@@ -708,17 +672,12 @@ mod adapters {
                 identity: FromEntity::from_entity(e),
                 appearance: FromEntity::from_entity(e),
                 flags: FromEntity::from_entity(e),
-                pvp: FromEntity::from_entity(e),
                 life: FromEntity::from_entity(e),
                 buff: FromEntity::from_entity(e),
                 run_state: FromEntity::from_entity(e),
                 inventory: FromEntity::from_entity(e),
-                drop: FromEntity::from_entity(e),
-                attribution: FromEntity::from_entity(e),
-                recovery: FromEntity::from_entity(e),
                 revival: FromEntity::from_entity(e),
                 slave: FromEntity::from_entity(e),
-                spawn: FromEntity::from_entity(e),
                 class_state: FromEntity::from_entity(e),
                 ai: FromEntity::from_entity(e),
                 merchant: FromEntity::from_entity(e),
@@ -731,17 +690,12 @@ mod adapters {
             self.identity.apply_to(e);
             self.appearance.apply_to(e);
             self.flags.apply_to(e);
-            self.pvp.apply_to(e);
             self.life.apply_to(e);
             self.buff.apply_to(e);
             self.run_state.apply_to(e);
             self.inventory.apply_to(e);
-            self.drop.apply_to(e);
-            self.attribution.apply_to(e);
-            self.recovery.apply_to(e);
             self.revival.apply_to(e);
             self.slave.apply_to(e);
-            self.spawn.apply_to(e);
             self.class_state.apply_to(e);
             self.ai.apply_to(e);
             self.merchant.apply_to(e);

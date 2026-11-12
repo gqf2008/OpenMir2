@@ -20,8 +20,9 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    AbilitySnapshot, BaseAbil, Entity, EntityRef, EntityStore, MapBinding, Progression, Transform,
-    VisibleBaseObject, VisibleEvent, VisibleFlag, Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    AbilitySnapshot, BaseAbil, CombatAttribution, DropState, Entity, EntityRef, EntityStore,
+    MapBinding, Progression, PvpState, Recovery, SpawnBinding, Transform, VisibleBaseObject,
+    VisibleEvent, VisibleFlag, Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 use bevy_ecs::prelude::Resource;
@@ -621,6 +622,26 @@ impl AoiStore for BevyAoiStore<'_> {
             .world
             .get::<Progression>(e)
             .expect("实体必须挂 Progression 组件（插入期已断言）");
+        let spawn = self
+            .world
+            .get::<SpawnBinding>(e)
+            .expect("实体必须挂 SpawnBinding 组件（插入期已断言）");
+        let drop = self
+            .world
+            .get::<DropState>(e)
+            .expect("实体必须挂 DropState 组件（插入期已断言）");
+        let attribution = self
+            .world
+            .get::<CombatAttribution>(e)
+            .expect("实体必须挂 CombatAttribution 组件（插入期已断言）");
+        let recovery = self
+            .world
+            .get::<Recovery>(e)
+            .expect("实体必须挂 Recovery 组件（插入期已断言）");
+        let pvp = self
+            .world
+            .get::<PvpState>(e)
+            .expect("实体必须挂 PvpState 组件（插入期已断言）");
         Some(EntityRef::from_components(
             entity,
             transform,
@@ -628,6 +649,11 @@ impl AoiStore for BevyAoiStore<'_> {
             vitals,
             ability,
             progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
         ))
     }
 

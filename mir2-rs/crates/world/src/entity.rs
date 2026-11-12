@@ -508,9 +508,15 @@ pub struct BaseAbil {
 pub use mir2_world_bevy::Transform;
 
 /// **S4a**：属性/成长组件的 world 侧实例化（真值在 `mir2_world_bevy` 组件，`Entity` 已删字段）。
-pub use mir2_world_bevy::{AbilitySnapshot, Progression, Vitals};
+pub use mir2_world_bevy::{
+    AbilitySnapshot, CombatAttribution, Progression, PvpState, Recovery, Vitals,
+};
 /// **S4a**：`Vitals`/`AbilitySnapshot`/`Progression` 三组件的组合类型（`EntitySpawn`/`EntityRef`/`EntityMut` 用）。
 pub type Ability = AbilitySnapshot<BaseAbil>;
+/// **S4a**：掉落预算组件的 world 侧实例化（`items` 对应迁移前的 `drop_items`）。
+pub type DropState = mir2_world_bevy::DropState<crate::combat::DropItem>;
+/// **S4a**：生成/归属绑定组件的 world 侧实例化。
+pub type SpawnBinding = mir2_world_bevy::SpawnBinding<CastleBinding, MonsterCtorDraws>;
 
 /// **S3b**：AOI/落图绑定组件的 world 侧实例化（6 字段真值）。
 pub type MapBinding = mir2_world_bevy::MapBinding<VisibleBaseObject, VisibleEvent>;
@@ -552,6 +558,28 @@ pub struct EntitySpawn {
     pub mon_exp: i32,
     pub exp: i32,
     pub max_exp: i32,
+    // ---- S4a-2：生成/归属/掉落/恢复/PK（`insert` 时落成对应组件）----
+    pub castle_binding: Option<CastleBinding>,
+    pub mon_gen: Option<usize>,
+    pub mon_gen_zen_time: i32,
+    pub ctor_draws: MonsterCtorDraws,
+    pub gold: i32,
+    pub drop_items: Vec<crate::combat::DropItem>,
+    pub angry_ring: bool,
+    pub no_drop_use_item: bool,
+    pub no_item: bool,
+    pub last_hiter: Option<i32>,
+    pub exp_hitter: Option<i32>,
+    pub last_hiter_tick: i64,
+    pub exp_hitter_tick: i64,
+    pub health_tick: i32,
+    pub spell_tick: i32,
+    pub auto_recovery_tick: i64,
+    pub dear_human: Option<i32>,
+    pub pk_point: i32,
+    pub pvp_flag: bool,
+    pub pvp_name_color_tick: i64,
+    pub die_in_fight3_zone: bool,
 }
 
 impl EntitySpawn {
@@ -598,6 +626,27 @@ impl EntitySpawn {
             mon_exp: 0,
             exp: 0,
             max_exp: 0,
+            castle_binding: None,
+            mon_gen: None,
+            mon_gen_zen_time: 0,
+            ctor_draws: MonsterCtorDraws::default(),
+            gold: 0,
+            drop_items: Vec::new(),
+            angry_ring: false,
+            no_drop_use_item: false,
+            no_item: false,
+            last_hiter: None,
+            exp_hitter: None,
+            last_hiter_tick: 0,
+            exp_hitter_tick: 0,
+            health_tick: 0,
+            spell_tick: 0,
+            auto_recovery_tick: 0,
+            dear_human: None,
+            pk_point: 0,
+            pvp_flag: false,
+            pvp_name_color_tick: 0,
+            die_in_fight3_zone: false,
         }
     }
 
@@ -634,34 +683,101 @@ impl EntitySpawn {
         }
     }
 
-    /// 落成组件（`insert` 用）：主组件 + 位置 + 绑定 + S4a 属性组件。
-    #[allow(clippy::type_complexity)]
-    pub fn into_parts(
-        self,
-    ) -> (
-        Entity,
-        Transform,
-        MapBinding,
-        Vitals,
-        AbilitySnapshot<BaseAbil>,
-        Progression,
-    ) {
+    /// 生成/归属绑定组件值。
+    #[must_use]
+    pub fn spawn_component(&self) -> SpawnBinding {
+        SpawnBinding {
+            castle_binding: self.castle_binding,
+            mon_gen: self.mon_gen,
+            mon_gen_zen_time: self.mon_gen_zen_time,
+            ctor_draws: self.ctor_draws,
+        }
+    }
+
+    /// 掉落预算组件值（`drop_items` → 组件字段 `items`，151 字段里唯一的改名）。
+    #[must_use]
+    pub fn drop_component(&self) -> DropState {
+        DropState {
+            gold: self.gold,
+            items: self.drop_items.clone(),
+            angry_ring: self.angry_ring,
+            no_drop_use_item: self.no_drop_use_item,
+            no_item: self.no_item,
+        }
+    }
+
+    /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）的生成期载体版本。
+    ///
+    /// 与 [`EntityMut::set_last_hiter`] 逐支同义：`LastHiter` 每次刷新；`ExpHitter` **只在为空时**
+    /// 认领（第一个命中者粘住），同命中者再次命中才续 `ExpHitterTick`。
+    pub fn set_last_hiter(&mut self, hitter: i32, now: i64) {
+        self.last_hiter = Some(hitter);
+        self.last_hiter_tick = now;
+        if self.exp_hitter.is_none() {
+            self.exp_hitter = Some(hitter);
+            self.exp_hitter_tick = now;
+        } else if self.exp_hitter == Some(hitter) {
+            self.exp_hitter_tick = now;
+        }
+    }
+
+    /// 落成组件包（`insert` 用）。
+    #[must_use]
+    pub fn into_parts(self) -> SpawnParts {
         let progression = self.progression_component();
         let vitals = self.vitals_component();
-        (
-            self.entity,
-            Transform {
+        let spawn = self.spawn_component();
+        let drop = self.drop_component();
+        SpawnParts {
+            entity: self.entity,
+            transform: Transform {
                 x: self.x,
                 y: self.y,
                 map_id: self.map_id,
                 view_range: self.view_range,
             },
-            self.map_binding,
+            map_binding: self.map_binding,
             vitals,
-            AbilitySnapshot { abil: self.abil },
+            ability: AbilitySnapshot { abil: self.abil },
             progression,
-        )
+            spawn,
+            drop,
+            attribution: CombatAttribution {
+                last_hiter: self.last_hiter,
+                exp_hitter: self.exp_hitter,
+                last_hiter_tick: self.last_hiter_tick,
+                exp_hitter_tick: self.exp_hitter_tick,
+            },
+            recovery: Recovery {
+                health_tick: self.health_tick,
+                spell_tick: self.spell_tick,
+                auto_recovery_tick: self.auto_recovery_tick,
+            },
+            pvp: PvpState {
+                dear_human: self.dear_human,
+                pk_point: self.pk_point,
+                pvp_flag: self.pvp_flag,
+                pvp_name_color_tick: self.pvp_name_color_tick,
+                die_in_fight3_zone: self.die_in_fight3_zone,
+            },
+        }
     }
+}
+
+/// `EntitySpawn::into_parts` 的组件包（`EntityStore::insert` 消费）。
+#[derive(Debug)]
+pub struct SpawnParts {
+    pub entity: Entity,
+    pub transform: Transform,
+    pub map_binding: MapBinding,
+    pub vitals: Vitals,
+    pub ability: AbilitySnapshot<BaseAbil>,
+    pub progression: Progression,
+    pub spawn: SpawnBinding,
+    pub drop: DropState,
+    pub attribution: CombatAttribution,
+    pub recovery: Recovery,
+    pub pvp: PvpState,
 }
 
 impl std::ops::Deref for EntitySpawn {
@@ -720,6 +836,28 @@ pub struct EntityRef<'a> {
     pub mon_exp: i32,
     pub exp: i32,
     pub max_exp: i32,
+    // ---- S4a-2：生成/掉落/归属/恢复/PK 的只读投影 ----
+    pub castle_binding: Option<CastleBinding>,
+    pub mon_gen: Option<usize>,
+    pub mon_gen_zen_time: i32,
+    pub ctor_draws: MonsterCtorDraws,
+    pub gold: i32,
+    pub drop_items: &'a Vec<crate::combat::DropItem>,
+    pub angry_ring: bool,
+    pub no_drop_use_item: bool,
+    pub no_item: bool,
+    pub last_hiter: Option<i32>,
+    pub exp_hitter: Option<i32>,
+    pub last_hiter_tick: i64,
+    pub exp_hitter_tick: i64,
+    pub health_tick: i32,
+    pub spell_tick: i32,
+    pub auto_recovery_tick: i64,
+    pub dear_human: Option<i32>,
+    pub pk_point: i32,
+    pub pvp_flag: bool,
+    pub pvp_name_color_tick: i64,
+    pub die_in_fight3_zone: bool,
 }
 
 impl<'a> EntityRef<'a> {
@@ -736,6 +874,11 @@ impl<'a> EntityRef<'a> {
         vitals: &'a Vitals,
         ability: &'a AbilitySnapshot<BaseAbil>,
         progression: &'a Progression,
+        spawn: &'a SpawnBinding,
+        drop: &'a DropState,
+        attribution: &'a CombatAttribution,
+        recovery: &'a Recovery,
+        pvp: &'a PvpState,
     ) -> Self {
         EntityRef {
             entity,
@@ -769,6 +912,27 @@ impl<'a> EntityRef<'a> {
             mon_exp: progression.mon_exp,
             exp: progression.exp,
             max_exp: progression.max_exp,
+            castle_binding: spawn.castle_binding,
+            mon_gen: spawn.mon_gen,
+            mon_gen_zen_time: spawn.mon_gen_zen_time,
+            ctor_draws: spawn.ctor_draws,
+            gold: drop.gold,
+            drop_items: &drop.items,
+            angry_ring: drop.angry_ring,
+            no_drop_use_item: drop.no_drop_use_item,
+            no_item: drop.no_item,
+            last_hiter: attribution.last_hiter,
+            exp_hitter: attribution.exp_hitter,
+            last_hiter_tick: attribution.last_hiter_tick,
+            exp_hitter_tick: attribution.exp_hitter_tick,
+            health_tick: recovery.health_tick,
+            spell_tick: recovery.spell_tick,
+            auto_recovery_tick: recovery.auto_recovery_tick,
+            dear_human: pvp.dear_human,
+            pk_point: pvp.pk_point,
+            pvp_flag: pvp.pvp_flag,
+            pvp_name_color_tick: pvp.pvp_name_color_tick,
+            die_in_fight3_zone: pvp.die_in_fight3_zone,
         }
     }
 }
@@ -793,12 +957,33 @@ pub struct EntityMut<'a> {
     pub vitals: &'a mut Vitals,
     pub ability: &'a mut AbilitySnapshot<BaseAbil>,
     pub progression: &'a mut Progression,
+    pub spawn: &'a mut SpawnBinding,
+    pub drop: &'a mut DropState,
+    pub attribution: &'a mut CombatAttribution,
+    pub recovery: &'a mut Recovery,
+    pub pvp: &'a mut PvpState,
 }
 
 impl EntityMut<'_> {
     /// 只取主组件（剩余字段）的可变引用（不碰 S4a 属性组件）。
     pub fn entity_mut(&mut self) -> &mut Entity {
         self.entity
+    }
+
+    /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）。
+    ///
+    /// `LastHiter` 每次都刷新并续 `LastHiterTick`；`ExpHitter` **只在为空时**才认领
+    /// （第一个命中者粘住），之后只有同一个命中者再次命中才会续 `ExpHitterTick`
+    /// （`BaseObject.cs:1753-1770` 逐支照抄；30s/6s 过期在 `World::expire_hitters`）。
+    pub fn set_last_hiter(&mut self, hitter: i32, now: i64) {
+        self.attribution.last_hiter = Some(hitter);
+        self.attribution.last_hiter_tick = now;
+        if self.attribution.exp_hitter.is_none() {
+            self.attribution.exp_hitter = Some(hitter);
+            self.attribution.exp_hitter_tick = now;
+        } else if self.attribution.exp_hitter == Some(hitter) {
+            self.attribution.exp_hitter_tick = now;
+        }
     }
 
     /// `BaseObject.Run` 的 `SuperMan` 回满段（`BaseObject.Base.cs:32-36`）：
@@ -836,6 +1021,65 @@ impl std::ops::Deref for EntityMut<'_> {
     type Target = Entity;
     fn deref(&self) -> &Entity {
         self.entity
+    }
+}
+
+/// **只读「基础实体 + PK 状态」视图**：战斗目标判定链（`combat::is_proper_target*` /
+/// `is_attack_target_player*` / `is_proper_friend*`）用。
+///
+/// S4a 把 `PvpState` 搬出 `Entity` 后，这些判定函数既需要 `Entity` 的 `race`/`attack_mode`/
+/// `group_owner` 等字段，也需要 PK 字段。`Entity` 自身没有 pvp 了，因此用一个两方法视图：
+/// `base()` 给基础字段、`pvp_state()` 给 PK 快照（按值拷贝；调用点在判定期间不写 pvp）。
+pub trait PvpView {
+    fn base(&self) -> &Entity;
+    fn pvp_state(&self) -> PvpState;
+}
+
+impl PvpView for EntitySpawn {
+    fn base(&self) -> &Entity {
+        &self.entity
+    }
+    fn pvp_state(&self) -> PvpState {
+        PvpState {
+            dear_human: self.dear_human,
+            pk_point: self.pk_point,
+            pvp_flag: self.pvp_flag,
+            pvp_name_color_tick: self.pvp_name_color_tick,
+            die_in_fight3_zone: self.die_in_fight3_zone,
+        }
+    }
+}
+
+impl PvpView for EntityRef<'_> {
+    fn base(&self) -> &Entity {
+        self.entity
+    }
+    fn pvp_state(&self) -> PvpState {
+        PvpState {
+            dear_human: self.dear_human,
+            pk_point: self.pk_point,
+            pvp_flag: self.pvp_flag,
+            pvp_name_color_tick: self.pvp_name_color_tick,
+            die_in_fight3_zone: self.die_in_fight3_zone,
+        }
+    }
+}
+
+impl PvpView for EntityMut<'_> {
+    fn base(&self) -> &Entity {
+        self.entity
+    }
+    fn pvp_state(&self) -> PvpState {
+        *self.pvp
+    }
+}
+
+impl<T: PvpView + ?Sized> PvpView for &T {
+    fn base(&self) -> &Entity {
+        (*self).base()
+    }
+    fn pvp_state(&self) -> PvpState {
+        (*self).pvp_state()
     }
 }
 
@@ -935,19 +1179,19 @@ pub struct Entity {
     /// C# `BaseObject.ReAliveTick`（`BaseObject.cs:224`）——复活冷却起点
     /// （`WorldServer.MonGen.cs:833/855` 置创建时刻、`:290` 在复活成功后刷新）。
     pub re_alive_tick: i64,
-    /// **Lane B（城堡实体挂图）**：本实体对应的城堡防御单元（`BaseObject.Castle != null` 的等价物）。
-    ///
-    /// 只有 `UserCastle.Initialize` 成功挂图的**门 / 墙 / 弓手**被绑定（守卫不绑，见
-    /// [`CastleBinding`]）。race 110/111 的 `Run` 与死亡路由靠它反查
-    /// `World.castles[castle_index]` 的状态机。
-    pub castle_binding: Option<CastleBinding>,
-    /// C# `BaseObject.MonGen`（`BaseObject.cs` 属性）——本实体所属 `MonGenInfo` 在
-    /// [`crate::mongen::MonGenState::entries`] 里的下标；`None` = oracle `MonGen == null`。
-    pub mon_gen: Option<usize>,
-    /// C# `MonGen.ZenTime` 的缓存（死亡支 `GetMonstersZenTime(MonGen.ZenTime)`，
-    /// `BaseObject.Base.cs:87`）。仅 [`Entity::mon_gen`] 为 `Some` 时有效。
-    /// 缓存不改变语义：`MonGenInfo.ZenTime` 是配置列，运行期不变。
-    pub mon_gen_zen_time: i32,
+    // **Lane B（城堡实体挂图）**：本实体对应的城堡防御单元（`BaseObject.Castle != null` 的等价物）。
+    //
+    // 只有 `UserCastle.Initialize` 成功挂图的**门 / 墙 / 弓手**被绑定（守卫不绑，见
+    // [`CastleBinding`]）。race 110/111 的 `Run` 与死亡路由靠它反查
+    // `World.castles[castle_index]` 的状态机。
+    // S4a-2 迁出：`castle_binding` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `BaseObject.MonGen`（`BaseObject.cs` 属性）——本实体所属 `MonGenInfo` 在
+    // [`crate::mongen::MonGenState::entries`] 里的下标；`None` = oracle `MonGen == null`。
+    // S4a-2 迁出：`mon_gen` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `MonGen.ZenTime` 的缓存（死亡支 `GetMonstersZenTime(MonGen.ZenTime)`，
+    // `BaseObject.Base.cs:87`）。仅 [`Entity::mon_gen`] 为 `Some` 时有效。
+    // 缓存不改变语义：`MonGenInfo.ZenTime` 是配置列，运行期不变。
+    // S4a-2 迁出：`mon_gen_zen_time` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `BaseObject.HideMode`（隐身术/隐身戒指的"完全隐身"）。
     ///
     /// 与 [`Entity::invisible`]（oracle `Invisible`，`is_proper_target` 用）和
@@ -975,29 +1219,29 @@ pub struct Entity {
     pub admin_mode: bool,
     /// C# `BaseObject.StoneMode`（同上，石化不可被攻击）。
     pub stone_mode: bool,
-    /// C# `PlayObject.DearHuman`（`PlayObject.IsAttackTarget` 的 `HAM_DEAR` 支：只保护配偶）。
-    pub dear_human: Option<i32>,
-    /// C# `PlayObject.PkPoint`——`PlayObject.PvpLevel()`（`PlayObject.cs:4352`）= `PkPoint / 100`。
-    /// `HAM_PKATTACK` 支用它做红名/白名判定。
-    pub pk_point: i32,
-    /// C# `PlayObject.PvpFlag`（`PlayObject.cs:4336`）——PK 标记；`SetPkFlag` 置位并触发
-    /// `RefNameColor`（⇒ `SM_CHANGENAMECOLOR(656)`）。ctor 缺省 `false`。
-    ///
-    /// 消费方（P3-B4）：50 的 `playObject.SetPkFlag(targetObject)`（`MagicManager.cs:1249`）与
-    /// `RM_POISON` 投递的 `((IPlayerActor)this).SetPkFlag(caster)`（`BaseObject.Base.cs:749`）。
-    pub pvp_flag: bool,
-    /// C# `PlayObject.PvpNameColorTick`（`PlayObject.cs:243`；接口声明 `IPlayerActor.cs:257`）——`SetPkFlag` 置位时刻
-    /// （`PlayObject.cs:4333` 的 `targetObject.PvpNameColorTick = GetTickCount()`）。
-    /// `CheckPkStatus`（`:4359`）用 `now - PvpNameColorTick > Config.dwPKFlagTime` 判过期。
-    ///
-    /// **重复置位也刷新**（oracle 赋值在 `if (!targetObject.PvpFlag)` **之前**）。
-    pub pvp_name_color_tick: i64,
-    /// C# `PlayObject.DieInFight3Zone`（`PlayObject.cs:522`）：`WorldServer.cs:290` 在
-    /// Fight3Zone 死亡恢复支置 `true`，`Initialize()`（`PlayObject.cs:891`）清 `false`。
-    ///
-    /// 唯一消费点是登录后的 `if (DieInFight3Zone) MapRandomMove(...)`（`PlayObject.cs:1184`）；
-    /// 该调用点未移植 ⇒ 本骨架只忠实保存该位（登录时由 `rewrite_enter_position` 写回）。
-    pub die_in_fight3_zone: bool,
+    // C# `PlayObject.DearHuman`（`PlayObject.IsAttackTarget` 的 `HAM_DEAR` 支：只保护配偶）。
+    // S4a-2 迁出：`dear_human` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `PlayObject.PkPoint`——`PlayObject.PvpLevel()`（`PlayObject.cs:4352`）= `PkPoint / 100`。
+    // `HAM_PKATTACK` 支用它做红名/白名判定。
+    // S4a-2 迁出：`pk_point` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `PlayObject.PvpFlag`（`PlayObject.cs:4336`）——PK 标记；`SetPkFlag` 置位并触发
+    // `RefNameColor`（⇒ `SM_CHANGENAMECOLOR(656)`）。ctor 缺省 `false`。
+    //
+    // 消费方（P3-B4）：50 的 `playObject.SetPkFlag(targetObject)`（`MagicManager.cs:1249`）与
+    // `RM_POISON` 投递的 `((IPlayerActor)this).SetPkFlag(caster)`（`BaseObject.Base.cs:749`）。
+    // S4a-2 迁出：`pvp_flag` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `PlayObject.PvpNameColorTick`（`PlayObject.cs:243`；接口声明 `IPlayerActor.cs:257`）——`SetPkFlag` 置位时刻
+    // （`PlayObject.cs:4333` 的 `targetObject.PvpNameColorTick = GetTickCount()`）。
+    // `CheckPkStatus`（`:4359`）用 `now - PvpNameColorTick > Config.dwPKFlagTime` 判过期。
+    //
+    // **重复置位也刷新**（oracle 赋值在 `if (!targetObject.PvpFlag)` **之前**）。
+    // S4a-2 迁出：`pvp_name_color_tick` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `PlayObject.DieInFight3Zone`（`PlayObject.cs:522`）：`WorldServer.cs:290` 在
+    // Fight3Zone 死亡恢复支置 `true`，`Initialize()`（`PlayObject.cs:891`）清 `false`。
+    //
+    // 唯一消费点是登录后的 `if (DieInFight3Zone) MapRandomMove(...)`（`PlayObject.cs:1184`）；
+    // 该调用点未移植 ⇒ 本骨架只忠实保存该位（登录时由 `rewrite_enter_position` 写回）。
+    // S4a-2 迁出：`die_in_fight3_zone` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
     /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
     pub luck: i32,
@@ -1052,20 +1296,20 @@ pub struct Entity {
     /// C# `CharacterObject.UseItems`（`CharacterObject.cs:40`，13 格，`CharacterObject.cs:89` 初始化）。
     /// `PlayObject.StruckDamage` 的耐久循环按它取数。
     pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
-    /// C# `PlayObject.AngryRing`（`PlayObject.cs:2018` 初值 `false`；`RecalcAbilitys` 的
-    /// `RING_ANGERENERGY_ITEM(117)` 支置真）——`DropUseItems` 的**首门**
-    /// （`PlayObject.Message.cs:2156`：`if (AngryRing || NoDropUseItem) return;`）。
-    ///
-    /// **写入点登记**：本骨架的 `RecalcAbilitys` 等价物（`bins/game-svr/src/ability.rs`）尚未
-    /// 建模戒指 Shape 117 ⇒ 生产路径恒 `false`（部署件语料下与 oracle 的差异见 whitelist T-81）。
-    pub angry_ring: bool,
-    /// C# `PlayObject.NoDropUseItem`（脚本/`RobotPlayer.Conf` 可置；真人玩家默认 `false`）。
-    /// 同 `DropUseItems` 首门。本骨架无写者 ⇒ 恒 `false`。
-    pub no_drop_use_item: bool,
-    /// C# `BaseObject.NoItem`（`IPlayerActor.NoDropItem` 的旧名；脚本可置，真人玩家默认
-    /// `false`）——`KillTargetTrigger` 第二段 `!NoItem || !Envir.Flag.NoDropItem` 的实体侧门。
-    /// 本骨架无写者 ⇒ 恒 `false`。
-    pub no_item: bool,
+    // C# `PlayObject.AngryRing`（`PlayObject.cs:2018` 初值 `false`；`RecalcAbilitys` 的
+    // `RING_ANGERENERGY_ITEM(117)` 支置真）——`DropUseItems` 的**首门**
+    // （`PlayObject.Message.cs:2156`：`if (AngryRing || NoDropUseItem) return;`）。
+    //
+    // **写入点登记**：本骨架的 `RecalcAbilitys` 等价物（`bins/game-svr/src/ability.rs`）尚未
+    // 建模戒指 Shape 117 ⇒ 生产路径恒 `false`（部署件语料下与 oracle 的差异见 whitelist T-81）。
+    // S4a-2 迁出：`angry_ring` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `PlayObject.NoDropUseItem`（脚本/`RobotPlayer.Conf` 可置；真人玩家默认 `false`）。
+    // 同 `DropUseItems` 首门。本骨架无写者 ⇒ 恒 `false`。
+    // S4a-2 迁出：`no_drop_use_item` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `BaseObject.NoItem`（`IPlayerActor.NoDropItem` 的旧名；脚本可置，真人玩家默认
+    // `false`）——`KillTargetTrigger` 第二段 `!NoItem || !Envir.Flag.NoDropItem` 的实体侧门。
+    // 本骨架无写者 ⇒ 恒 `false`。
+    // S4a-2 迁出：`no_item` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `WantRefMsg`
     pub want_ref_msg: bool,
     // S3b：`add_to_mapped` / `visible_actors` / `visible_events` / `is_visible_active` /
@@ -1199,17 +1443,17 @@ pub struct Entity {
     // S4a 迁出：`max_exp` 真值在 components 组件（见迁移文档 S4a）。
     // `AddAbil.UndeadPower`（攻击方对不死系的加成）
     // S4a 迁出：`undead_power` 真值在 components 组件（见迁移文档 S4a）。
-    /// `LastHiter`（最后一击者 `ActorId`）
-    pub last_hiter: Option<i32>,
-    /// C# `ExpHitter`（经验归属者 `ActorId`）——由 `SetLastHiter` 设置：
-    /// **第一个**命中者粘住不放（`BaseObject.cs:1753` 的 `if (ExpHitter == null)`），
-    /// 死亡时 `KillFunc()`（`BaseObject.cs:2429`）把经验发给它，而不是 `LastHiter`。
-    pub exp_hitter: Option<i32>,
-    /// `BaseObject.LastHiterTick` / `ExpHitterTick`（`BaseObject.cs:295-297`）。
-    /// 由 [`Entity::set_last_hiter`]（`BaseObject.cs:1753-1770`）刷新；`BaseObject.Run`
-    /// 的过期段（`BaseObject.Base.cs:119-132`）用它们判 30s / 6s 墙钟过期。
-    pub last_hiter_tick: i64,
-    pub exp_hitter_tick: i64,
+    // `LastHiter`（最后一击者 `ActorId`）
+    // S4a-2 迁出：`last_hiter` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `ExpHitter`（经验归属者 `ActorId`）——由 `SetLastHiter` 设置：
+    // **第一个**命中者粘住不放（`BaseObject.cs:1753` 的 `if (ExpHitter == null)`），
+    // 死亡时 `KillFunc()`（`BaseObject.cs:2429`）把经验发给它，而不是 `LastHiter`。
+    // S4a-2 迁出：`exp_hitter` 真值在 components 组件（见迁移文档 S4a）。
+    // `BaseObject.LastHiterTick` / `ExpHitterTick`（`BaseObject.cs:295-297`）。
+    // 由 [`Entity::set_last_hiter`]（`BaseObject.cs:1753-1770`）刷新；`BaseObject.Run`
+    // 的过期段（`BaseObject.Base.cs:119-132`）用它们判 30s / 6s 墙钟过期。
+    // S4a-2 迁出：`last_hiter_tick` 真值在 components 组件（见迁移文档 S4a）。
+    // S4a-2 迁出：`exp_hitter_tick` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `PlayObject.Revival`（`PlayObject.cs:284`）——复活戒指生效标志。
     ///
     /// **粘滞锁存**：`RecalcAbilitys()` 只在 Ringr/Ringl 槽的 `Shape == 114`
@@ -1233,17 +1477,17 @@ pub struct Entity {
     /// （`ItemShapeConst.RING_FIREBALL_ITEM`，`:2244-2246`）的 `FlameRing = true`；
     /// **没有任何置 `false` 的写入点**。调用方按 `entity.flame_ring |= recalc.flame_ring` 落账。
     pub flame_ring: bool,
-    /// `BaseObject.HealthTick` / `SpellTick` / `AutoRecoveryTick`（`BaseObject.cs:287-306`）。
-    ///
-    /// 恢复段（`BaseObject.Base.cs:39-66`）按 `(now - AutoRecoveryTick) / 20` 把时间折成
-    /// `HealthTick/SpellTick`，到 `HealthFillTime`/`SpellFillTime` 才回 HP/MP。
-    pub health_tick: i32,
-    pub spell_tick: i32,
-    pub auto_recovery_tick: i64,
-    /// 掉落预算里的金币（`mon.Gold`）
-    pub gold: i32,
-    /// 掉落预算里的物品（`mon.ItemList`，生成时算好、死亡时落地）
-    pub drop_items: Vec<crate::combat::DropItem>,
+    // `BaseObject.HealthTick` / `SpellTick` / `AutoRecoveryTick`（`BaseObject.cs:287-306`）。
+    //
+    // 恢复段（`BaseObject.Base.cs:39-66`）按 `(now - AutoRecoveryTick) / 20` 把时间折成
+    // `HealthTick/SpellTick`，到 `HealthFillTime`/`SpellFillTime` 才回 HP/MP。
+    // S4a-2 迁出：`health_tick` 真值在 components 组件（见迁移文档 S4a）。
+    // S4a-2 迁出：`spell_tick` 真值在 components 组件（见迁移文档 S4a）。
+    // S4a-2 迁出：`auto_recovery_tick` 真值在 components 组件（见迁移文档 S4a）。
+    // 掉落预算里的金币（`mon.Gold`）
+    // S4a-2 迁出：`gold` 真值在 components 组件（见迁移文档 S4a）。
+    // 掉落预算里的物品（`mon.ItemList`，生成时算好、死亡时落地）
+    // S4a-2 迁出：`drop_items` 真值在 components 组件（见迁移文档 S4a）。
     /// 死亡结算是否已做（避免重复发经验/重复掉落）
     pub death_settled: bool,
     /// 本 tick 是否收到过**直接 `Die()` 调用**（脚本 `KILLMONSTER` / GM Kill 的
@@ -1253,8 +1497,8 @@ pub struct Entity {
     /// 执行 `:70-73` 的 `Die()`。只有本标记为 true 时，`settle_deaths` 才执行 SuperMan
     /// 子类覆写体；结算时立即消费，保证两次直接 `Die()` 各执行一次。
     pub die_called: bool,
-    /// 构造函数链抽出的随机数结果（见 [`MonsterCtorDraws`]）；玩家/非 MonGen 路径实体为缺省全零。
-    pub ctor_draws: MonsterCtorDraws,
+    // 构造函数链抽出的随机数结果（见 [`MonsterCtorDraws`]）；玩家/非 MonGen 路径实体为缺省全零。
+    // S4a-2 迁出：`ctor_draws` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `StickMonster.ComeOutValue`（`StickMonster.cs:10`；ctor `:19` 置 4）。
     ///
     /// **类常量**：只有 `StickMonster` 家族有该字段（`CentipedeKingMonster.cs:14` = 4、
@@ -1411,9 +1655,6 @@ impl Entity {
             ghost_tick: 0,
             can_re_alive: false,
             re_alive_tick: 0,
-            mon_gen: None,
-            castle_binding: None,
-            mon_gen_zen_time: 0,
             fixed_hide_mode: false,
             ob_mode: false,
             nasty_mode: false,
@@ -1422,12 +1663,7 @@ impl Entity {
             in_safe_zone: false,
             admin_mode: false,
             stone_mode: false,
-            dear_human: None,
-            pk_point: 0,
-            pvp_flag: false,
-            pvp_name_color_tick: 0,
             // `PlayObject.cs:891`：`Initialize()` 置 `DieInFight3Zone = false`。
-            die_in_fight3_zone: false,
             // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
             name_color: 255,
             // `PlayObject.cs:62/943`：新角色 `Luck` 由 `RecalcAbilitys` 置 0（无 `AddAbil`），
@@ -1457,9 +1693,6 @@ impl Entity {
             // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
             use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
             // `PlayObject.cs:2018`：ctor 缺省 `AngryRing = false`；`NoDropUseItem` 亦无 ctor 赋值。
-            angry_ring: false,
-            no_drop_use_item: false,
-            no_item: false,
             want_ref_msg: false,
             // 玩家默认满血（WAbil.HP 的默认值不能是 0：0 在语义上等于「已死」，
             // 会让死亡结算把刚进图的玩家当成死者——实测踩过）
@@ -1494,22 +1727,12 @@ impl Entity {
             extra_abil: [0; 7],
             extra_abil_times: [0; 7],
             extra_abil_flag: [0; 7],
-            last_hiter: None,
-            exp_hitter: None,
-            last_hiter_tick: 0,
-            exp_hitter_tick: 0,
             revival: false,
             revival_tick: 0,
             un_revival: false,
             flame_ring: false,
-            health_tick: 0,
-            spell_tick: 0,
-            auto_recovery_tick: 0,
-            gold: 0,
-            drop_items: Vec::new(),
             death_settled: false,
             die_called: false,
-            ctor_draws: MonsterCtorDraws::default(),
             class_attack_tick: 0,
             class_slave_list: Vec::new(),
             // MB-7：神兽两形态 ctor 置 `BoIsFirst = true`（`apply_monster_class_constants`）；
@@ -1585,6 +1808,28 @@ impl Entity {
             mon_exp: 0,
             exp: 0,
             max_exp: 0,
+            // S4a-2 ctor 缺省（与迁移前 `Entity::new` 逐字段一致）。
+            castle_binding: None,
+            mon_gen: None,
+            mon_gen_zen_time: 0,
+            ctor_draws: MonsterCtorDraws::default(),
+            gold: 0,
+            drop_items: Vec::new(),
+            angry_ring: false,
+            no_drop_use_item: false,
+            no_item: false,
+            last_hiter: None,
+            exp_hitter: None,
+            last_hiter_tick: 0,
+            exp_hitter_tick: 0,
+            health_tick: 0,
+            spell_tick: 0,
+            auto_recovery_tick: 0,
+            dear_human: None,
+            pk_point: 0,
+            pvp_flag: false,
+            pvp_name_color_tick: 0,
+            die_in_fight3_zone: false,
         }
     }
 
@@ -1592,22 +1837,6 @@ impl Entity {
     #[must_use]
     pub fn dir(&self) -> u8 {
         self.ai.dir
-    }
-
-    /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）。
-    ///
-    /// `LastHiter` 每次都刷新并续 `LastHiterTick`；`ExpHitter` **只在为空时**才认领
-    /// （第一个命中者粘住），之后只有同一个命中者再次命中才会续 `ExpHitterTick`
-    /// （`BaseObject.cs:1753-1770` 逐支照抄；30s/6s 过期在 `World::expire_hitters`）。
-    pub fn set_last_hiter(&mut self, hitter: i32, now: i64) {
-        self.last_hiter = Some(hitter);
-        self.last_hiter_tick = now;
-        if self.exp_hitter.is_none() {
-            self.exp_hitter = Some(hitter);
-            self.exp_hitter_tick = now;
-        } else if self.exp_hitter == Some(hitter) {
-            self.exp_hitter_tick = now;
-        }
     }
 }
 
@@ -1627,6 +1856,11 @@ type ReadViewQuery = bevy_ecs::query::QueryState<(
     &'static Vitals,
     &'static AbilitySnapshot<BaseAbil>,
     &'static Progression,
+    &'static SpawnBinding,
+    &'static DropState,
+    &'static CombatAttribution,
+    &'static Recovery,
+    &'static PvpState,
 )>;
 
 /// 写路径缓存查询：`Entity` 主组件 + S4a 属性/成长组件（[`EntityMut`] 用）。
@@ -1635,6 +1869,11 @@ type MutViewQuery = bevy_ecs::query::QueryState<(
     &'static mut Vitals,
     &'static mut AbilitySnapshot<BaseAbil>,
     &'static mut Progression,
+    &'static mut SpawnBinding,
+    &'static mut DropState,
+    &'static mut CombatAttribution,
+    &'static mut Recovery,
+    &'static mut PvpState,
 )>;
 
 pub struct EntityStore {
@@ -1677,12 +1916,22 @@ impl EntityStore {
             &Vitals,
             &AbilitySnapshot<BaseAbil>,
             &Progression,
+            &SpawnBinding,
+            &DropState,
+            &CombatAttribution,
+            &Recovery,
+            &PvpState,
         )>();
         let mut_view_state = inner.world_mut().query::<(
             &mut Entity,
             &mut Vitals,
             &mut AbilitySnapshot<BaseAbil>,
             &mut Progression,
+            &mut SpawnBinding,
+            &mut DropState,
+            &mut CombatAttribution,
+            &mut Recovery,
+            &mut PvpState,
         )>();
         EntityStore {
             inner,
@@ -1713,44 +1962,58 @@ impl EntityStore {
     /// （release 也保持行为）：宁可立即 panic，也不允许半实体被 AOI/重叠检查静默跳过
     ///（S3a 评审 P3-3）。
     pub fn insert(&mut self, spawn: EntitySpawn) -> i32 {
-        let (entity, transform, map_binding, vitals, ability, progression) = spawn.into_parts();
-        self.insert_parts(entity, transform, map_binding, vitals, ability, progression)
+        self.insert_parts(spawn.into_parts())
     }
 
     /// 组件已拆好的插入入口（克隆/迁移路径用，避免再拼一个 `EntitySpawn`）。
-    #[allow(clippy::too_many_arguments)]
-    pub fn insert_parts(
-        &mut self,
-        entity: Entity,
-        transform: Transform,
-        map_binding: MapBinding,
-        vitals: Vitals,
-        ability: AbilitySnapshot<BaseAbil>,
-        progression: Progression,
-    ) -> i32 {
-        let id = self.inner.insert(entity.id, entity);
-        let t = self.inner.insert_component(id, transform);
-        assert!(t, "刚插入的实体必须能挂 Transform 组件（id={id}）");
-        let m = self.inner.insert_component(id, map_binding);
-        assert!(m, "刚插入的实体必须能挂 MapBinding 组件（id={id}）");
-        let d = self
-            .inner
-            .insert_component(id, mir2_world_bevy::DupState::default());
+    ///
+    /// **整 bundle 插入**：任一可选组件缺失都立即 panic（半实体不得进入 AOI/重叠检查）。
+    pub fn insert_parts(&mut self, parts: SpawnParts) -> i32 {
+        let id = self.inner.insert(parts.entity.id, parts.entity);
         assert!(
-            d,
+            self.inner.insert_component(id, parts.transform),
+            "刚插入的实体必须能挂 Transform 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.map_binding),
+            "刚插入的实体必须能挂 MapBinding 组件（id={id}）"
+        );
+        assert!(
+            self.inner
+                .insert_component(id, mir2_world_bevy::DupState::default()),
             "刚插入的实体必须能挂 DupState 组件（id={id}）；缺组件会让 check_dup_obj 静默跳过"
         );
         assert!(
-            self.inner.insert_component(id, vitals),
+            self.inner.insert_component(id, parts.vitals),
             "刚插入的实体必须能挂 Vitals 组件（id={id}）"
         );
         assert!(
-            self.inner.insert_component(id, ability),
+            self.inner.insert_component(id, parts.ability),
             "刚插入的实体必须能挂 AbilitySnapshot 组件（id={id}）"
         );
         assert!(
-            self.inner.insert_component(id, progression),
+            self.inner.insert_component(id, parts.progression),
             "刚插入的实体必须能挂 Progression 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.spawn),
+            "刚插入的实体必须能挂 SpawnBinding 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.drop),
+            "刚插入的实体必须能挂 DropState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.attribution),
+            "刚插入的实体必须能挂 CombatAttribution 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.recovery),
+            "刚插入的实体必须能挂 Recovery 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.pvp),
+            "刚插入的实体必须能挂 PvpState 组件（id={id}）"
         );
         self.refresh_view();
         id
@@ -1897,7 +2160,19 @@ impl EntityStore {
     /// O(1) 查表（C# `ActorMgr.Get`），返回组件只读视图 [`EntityRef`]。
     pub fn get(&self, id: i32) -> Option<EntityRef<'_>> {
         let bevy_entity = self.inner.entity_of(id)?;
-        let (entity, transform, binding, vitals, ability, progression) = self
+        let (
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+        ) = self
             .view_state
             .get_manual(self.inner.world(), bevy_entity)
             .ok()?;
@@ -1908,6 +2183,11 @@ impl EntityStore {
             vitals,
             ability,
             progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
         ))
     }
 
@@ -1916,16 +2196,7 @@ impl EntityStore {
     /// 坐标/绑定请用 `transform_mut` / `map_binding_mut`。
     pub fn get_mut(&mut self, id: i32) -> Option<EntityMut<'_>> {
         let bevy_entity = self.inner.entity_of(id)?;
-        let (entity, vitals, ability, progression) = self
-            .mut_view_state
-            .get_mut(self.inner.world_mut(), bevy_entity)
-            .ok()?;
-        Some(EntityMut {
-            entity: bevy_ecs::change_detection::Mut::into_inner(entity),
-            vitals: bevy_ecs::change_detection::Mut::into_inner(vitals),
-            ability: bevy_ecs::change_detection::Mut::into_inner(ability),
-            progression: bevy_ecs::change_detection::Mut::into_inner(progression),
-        })
+        self.mut_view_of_entity(bevy_entity)
     }
 
     /// 受控读取属性组件（S4a 起真值在组件，不在 `Entity`）。
@@ -1967,6 +2238,26 @@ impl EntityStore {
         let vitals = spawn.vitals_component();
         let progression = spawn.progression_component();
         let ability = AbilitySnapshot { abil: spawn.abil };
+        let spawn_binding = spawn.spawn_component();
+        let drop = spawn.drop_component();
+        let attribution = CombatAttribution {
+            last_hiter: spawn.last_hiter,
+            exp_hitter: spawn.exp_hitter,
+            last_hiter_tick: spawn.last_hiter_tick,
+            exp_hitter_tick: spawn.exp_hitter_tick,
+        };
+        let recovery = Recovery {
+            health_tick: spawn.health_tick,
+            spell_tick: spawn.spell_tick,
+            auto_recovery_tick: spawn.auto_recovery_tick,
+        };
+        let pvp = PvpState {
+            dear_human: spawn.dear_human,
+            pk_point: spawn.pk_point,
+            pvp_flag: spawn.pvp_flag,
+            pvp_name_color_tick: spawn.pvp_name_color_tick,
+            die_in_fight3_zone: spawn.die_in_fight3_zone,
+        };
         let Some(view) = self.mut_view_of_entity_by_id(id) else {
             return false;
         };
@@ -1974,6 +2265,11 @@ impl EntityStore {
         *view.vitals = vitals;
         *view.ability = ability;
         *view.progression = progression;
+        *view.spawn = spawn_binding;
+        *view.drop = drop;
+        *view.attribution = attribution;
+        *view.recovery = recovery;
+        *view.pvp = pvp;
         true
     }
 
@@ -1999,7 +2295,7 @@ impl EntityStore {
         &mut self,
         bevy_entity: bevy_ecs::entity::Entity,
     ) -> Option<EntityMut<'_>> {
-        let (entity, vitals, ability, progression) = self
+        let (entity, vitals, ability, progression, spawn, drop, attribution, recovery, pvp) = self
             .mut_view_state
             .get_mut(self.inner.world_mut(), bevy_entity)
             .ok()?;
@@ -2008,6 +2304,11 @@ impl EntityStore {
             vitals: bevy_ecs::change_detection::Mut::into_inner(vitals),
             ability: bevy_ecs::change_detection::Mut::into_inner(ability),
             progression: bevy_ecs::change_detection::Mut::into_inner(progression),
+            spawn: bevy_ecs::change_detection::Mut::into_inner(spawn),
+            drop: bevy_ecs::change_detection::Mut::into_inner(drop),
+            attribution: bevy_ecs::change_detection::Mut::into_inner(attribution),
+            recovery: bevy_ecs::change_detection::Mut::into_inner(recovery),
+            pvp: bevy_ecs::change_detection::Mut::into_inner(pvp),
         })
     }
 
@@ -2045,7 +2346,19 @@ impl EntityStore {
     /// 调用方必须显式走 `transform_mut` / `vitals_mut` 等。
     pub fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
         let bevy_entity = self.inner.entity_of(id)?;
-        let (entity, transform, binding, vitals, ability, progression) = self
+        let (
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+        ) = self
             .view_state
             .get_manual(self.inner.world(), bevy_entity)
             .ok()?;
@@ -2076,6 +2389,27 @@ impl EntityStore {
             mon_exp: progression.mon_exp,
             exp: progression.exp,
             max_exp: progression.max_exp,
+            castle_binding: spawn.castle_binding,
+            mon_gen: spawn.mon_gen,
+            mon_gen_zen_time: spawn.mon_gen_zen_time,
+            ctor_draws: spawn.ctor_draws,
+            gold: drop.gold,
+            drop_items: drop.items.clone(),
+            angry_ring: drop.angry_ring,
+            no_drop_use_item: drop.no_drop_use_item,
+            no_item: drop.no_item,
+            last_hiter: attribution.last_hiter,
+            exp_hitter: attribution.exp_hitter,
+            last_hiter_tick: attribution.last_hiter_tick,
+            exp_hitter_tick: attribution.exp_hitter_tick,
+            health_tick: recovery.health_tick,
+            spell_tick: recovery.spell_tick,
+            auto_recovery_tick: recovery.auto_recovery_tick,
+            dear_human: pvp.dear_human,
+            pk_point: pvp.pk_point,
+            pvp_flag: pvp.pvp_flag,
+            pvp_name_color_tick: pvp.pvp_name_color_tick,
+            die_in_fight3_zone: pvp.die_in_fight3_zone,
         })
     }
 
@@ -2089,7 +2423,19 @@ impl EntityStore {
             .order_entities()
             .into_iter()
             .filter_map(|bevy_entity| {
-                let (entity, transform, binding, vitals, ability, progression) = self
+                let (
+                    entity,
+                    transform,
+                    binding,
+                    vitals,
+                    ability,
+                    progression,
+                    spawn,
+                    drop,
+                    attribution,
+                    recovery,
+                    pvp,
+                ) = self
                     .view_state
                     .get_manual(self.inner.world(), bevy_entity)
                     .ok()?;
@@ -2100,6 +2446,11 @@ impl EntityStore {
                     vitals,
                     ability,
                     progression,
+                    spawn,
+                    drop,
+                    attribution,
+                    recovery,
+                    pvp,
                 ))
             })
     }
@@ -2173,6 +2524,38 @@ mod tests {
         assert_eq!(e.crazy_time, 0, "CrazyTime int 缺省");
         assert_eq!(e.old_hit_time, 0, "oldHitTime int 缺省");
         assert_eq!(e.old_walk_time, 0, "oldWalkTime int 缺省");
+    }
+
+    /// **S4a 回归牙（总监要求）**：`spawn_cloned` 的副本里属性真值来自**组件**，回写必须整包
+    /// （`EntityStore::write_back`），只写 `*e = spawn.entity` 会丢 HP/MP/exp。
+    ///
+    /// 牙：把 `write_back` 缩回「只写主组件」⇒ 第二条断言取到 37/11 而非 5/3 ⇒ 红。
+    #[test]
+    fn write_back_preserves_spawn_cloned_vitals() {
+        let mut s = EntityStore::new();
+        let mut e = Entity::new(1, "hero", 0, 0);
+        e.hp = 37;
+        e.mp = 11;
+        e.exp = 5;
+        s.insert(e);
+
+        let mut t = s.spawn_cloned(1).expect("实体在场");
+        assert_eq!(
+            (t.hp, t.mp, t.exp),
+            (37, 11, 5),
+            "`spawn_cloned` 必须把组件里的 HP/MP/exp 带进生成期载体"
+        );
+        t.hp = 5;
+        t.mp = 3;
+        t.exp = 9;
+        assert!(s.write_back(1, t), "写回必须命中已存在实体");
+
+        let r = s.get(1).expect("实体在场");
+        assert_eq!(
+            (r.hp, r.mp, r.exp),
+            (5, 3, 9),
+            "`write_back` 必须把属性/成长组件整包写回（只写主组件会丢 HP/MP/exp）"
+        );
     }
 
     #[test]

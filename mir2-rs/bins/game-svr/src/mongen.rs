@@ -649,13 +649,13 @@ pub fn bind_new_certificates(
                 continue;
             };
             // 已有归属（复活后的怪仍在同一 cert_list）⇒ 不覆盖。
-            if e.mon_gen.is_some() {
+            if e.spawn.mon_gen.is_some() {
                 continue;
             }
             e.can_re_alive = true;
             e.re_alive_tick = i64::from(now_i32);
-            e.mon_gen = Some(idx);
-            e.mon_gen_zen_time = entry.zen_time;
+            e.spawn.mon_gen = Some(idx);
+            e.spawn.mon_gen_zen_time = entry.zen_time;
             bound.push(id);
         }
     }

@@ -1993,10 +1993,10 @@ impl World {
             if !e.pvp_flag || now - e.pvp_name_color_tick <= self.pk_flag_time_ms {
                 continue;
             }
-            let Some(mut t) = self.entities.get_mut(id) else {
+            let Some(t) = self.entities.get_mut(id) else {
                 continue;
             };
-            t.pvp_flag = false;
+            t.pvp.pvp_flag = false;
             let color = crate::slave::get_chr_color(&t, &[], 0);
             out.push(crate::slave::NameColorDelivery {
                 target_id: id,
@@ -2353,8 +2353,8 @@ impl World {
 
     /// `PlayObject.PvpLevel()`（`PlayObject.cs:4352`）：`(byte)(PkPoint / 100)`。
     #[must_use]
-    pub fn pvp_level(e: &Entity) -> u8 {
-        u8::try_from(e.pk_point / 100).unwrap_or(0)
+    pub fn pvp_level(pk_point: i32) -> u8 {
+        u8::try_from(pk_point / 100).unwrap_or(0)
     }
 
     /// `GameSvrConf.PKFlagNameColor`（`GameSvrConf.cs:1731` 缺省 `0x2F`）。
@@ -2383,9 +2383,9 @@ impl World {
             let this = self.entities.get(this_id)?;
             let target = self.entities.get(target_id)?;
             (
-                Self::pvp_level(&this),
+                Self::pvp_level(this.pk_point),
                 this.pvp_flag,
-                Self::pvp_level(&target),
+                Self::pvp_level(target.pk_point),
                 target.race,
                 target.pvp_flag,
             )
@@ -2401,14 +2401,14 @@ impl World {
         // `:4333` 计时**无条件刷新**（在 `if (!targetObject.PvpFlag)` 之前）：目标已带 flag 时
         // 再来一次 `SetPkFlag` 不产帧，但会把过期时刻推后（oracle 原样，不许「顺手」改成早退）。
         let now = self.clock_ms;
-        if let Some(mut t) = self.entities.get_mut(target_id) {
-            t.pvp_name_color_tick = now;
+        if let Some(t) = self.entities.get_mut(target_id) {
+            t.pvp.pvp_name_color_tick = now;
         }
         if target_flagged {
             return None;
         }
-        if let Some(mut t) = self.entities.get_mut(target_id) {
-            t.pvp_flag = true;
+        if let Some(t) = self.entities.get_mut(target_id) {
+            t.pvp.pvp_flag = true;
         }
         Some(crate::slave::NameColorDelivery {
             target_id,
@@ -4083,7 +4083,7 @@ impl World {
         if !spawn.castle_owner {
             return;
         }
-        e.castle_binding = Some(crate::entity::CastleBinding {
+        e.spawn.castle_binding = Some(crate::entity::CastleBinding {
             castle_index,
             role: spawn.role,
         });
@@ -5282,7 +5282,7 @@ impl World {
         self.pending_show_hp_health_changes.clear();
         self.tail_phase_log.clear();
         self.player_hiter_snapshot.clear();
-        for e in self.entities.iter() {
+        for e in self.entities.iter_ref() {
             // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B2）：快照只服务 P32，而 P32 在会话侧受
             // stage 门；ghost 不进快照可以让「快照 = 本轮真正会跑的玩家」这条语义成立（低风险项，矩阵 §6#7）。
             if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
@@ -6061,8 +6061,8 @@ impl World {
             for observer in observers {
                 self.sessions.push_depart(observer, id);
             }
-            if let Some(mut e) = self.entities.get_mut(id) {
-                e.no_item = true;
+            if let Some(e) = self.entities.get_mut(id) {
+                e.drop.no_item = true;
             }
             crate::monai::make_ghost(self, id);
             out.push(crate::mongen::ClearMapMonRecord {
@@ -6257,7 +6257,7 @@ impl World {
             e.ghost = false;
             e.vitals.hp = e.vitals.max_hp;
             e.vitals.mp = e.vitals.max_mp;
-            e.gold = 0;
+            e.drop.gold = 0;
             e.show_hp = false;
             // `ReAliveEx` 的 `Skeleton = false`（`BaseObject.cs:2472`）——`BaseObject.Skeleton`
             // 的**唯一清点**（setter 只有屠宰效果体）。
@@ -6558,18 +6558,18 @@ impl World {
             .filter(|e| e.death || e.ghost)
             .map(|e| e.id)
             .collect();
-        for e in self.entities.iter_mut() {
-            if let Some(h) = e.last_hiter {
-                if (now - e.last_hiter_tick) > 30_000 || gone.contains(&h) {
-                    e.last_hiter = None;
+        self.entities.for_each_mut(|e| {
+            if let Some(h) = e.attribution.last_hiter {
+                if (now - e.attribution.last_hiter_tick) > 30_000 || gone.contains(&h) {
+                    e.attribution.last_hiter = None;
                 }
             }
-            if let Some(h) = e.exp_hitter {
-                if (now - e.exp_hitter_tick) > 6_000 || gone.contains(&h) {
-                    e.exp_hitter = None;
+            if let Some(h) = e.attribution.exp_hitter {
+                if (now - e.attribution.exp_hitter_tick) > 6_000 || gone.contains(&h) {
+                    e.attribution.exp_hitter = None;
                 }
             }
-        }
+        });
     }
 
     /// **P31 / `SETAUTOGETEXP`**（`PlayObject.Message.cs:738-745`）的 per-Run 结算。
@@ -10175,7 +10175,11 @@ mod tests {
         b.tick();
         let e = b.entities.get(2).expect("spawned");
         assert_eq!(e.gold, gold, "预算金币必须与既有生成路径一致");
-        assert_eq!(e.drop_items, items, "预算物品必须一致");
+        assert_eq!(
+            e.drop_items.as_slice(),
+            items.as_slice(),
+            "预算物品必须一致"
+        );
     }
 
     /// `BaseObject.Run` 的过期段（`BaseObject.Base.cs:119-132`）：`LastHiter` 30s、`ExpHitter` 6s。
@@ -11981,9 +11985,9 @@ mod tests {
         let _ = w.tick();
         let stale_tick = w.clock_ms - 30_001; // 严格大于 30s ⇒ expire_hitters 会清
         {
-            let mut e = w.entities.get_mut(p).unwrap();
-            e.last_hiter = Some(mid);
-            e.last_hiter_tick = stale_tick;
+            let e = w.entities.get_mut(p).unwrap();
+            e.attribution.last_hiter = Some(mid);
+            e.attribution.last_hiter_tick = stale_tick;
         }
         let _ = w.tick_head();
         assert_eq!(
@@ -12687,7 +12691,7 @@ mod castle_wire_tests {
         } else {
             DefenseRole::LeftWall
         };
-        w.entities.get_mut(id).unwrap().castle_binding = Some(CastleBinding {
+        w.entities.get_mut(id).unwrap().spawn.castle_binding = Some(CastleBinding {
             castle_index: 0,
             role,
         });
@@ -12951,7 +12955,7 @@ mod castle_wire_tests {
                 ..CastleUnit::default()
             };
             w.castles[0].left_wall = Some(unit);
-            w.entities.get_mut(id).unwrap().castle_binding = Some(CastleBinding {
+            w.entities.get_mut(id).unwrap().spawn.castle_binding = Some(CastleBinding {
                 castle_index: 0,
                 role: DefenseRole::LeftWall,
             });

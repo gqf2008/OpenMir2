@@ -57,7 +57,7 @@ pub(crate) fn drop_use_items_on_death(
         return Vec::new();
     }
     // `:2183 nRate = PvpLevel() > 2 ? DieRedDropUseItemRate : DieDropUseItemRate`。
-    let pvp = World::pvp_level(&e);
+    let pvp = World::pvp_level(e.pk_point);
     let n_rate = if pvp > 2 {
         world.die_red_drop_use_item_rate
     } else {
@@ -263,8 +263,8 @@ mod tests {
             w.item_catalog = vec![std_item(1, 0, 0, 0, 8)];
             {
                 let mut e = w.entities.get_mut(p).unwrap();
-                e.angry_ring = angry;
-                e.no_drop_use_item = no_drop;
+                e.drop.angry_ring = angry;
+                e.drop.no_drop_use_item = no_drop;
                 e.use_items[0] = slot(11, 1, 500, [0; 14]);
             }
             w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -309,7 +309,7 @@ mod tests {
     fn drop_use_items_red_rate_for_pvp_level_three() {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(0, 10, 10));
-        w.entities.get_mut(p).unwrap().pk_point = 300; // PvpLevel = 3
+        w.entities.get_mut(p).unwrap().pvp.pk_point = 300; // PvpLevel = 3
         w.item_catalog = vec![std_item(1, 0, 0, 0, 0)];
         w.set_death_drop_config(999, 1, 3, Vec::new());
         let seed = 31;
@@ -334,7 +334,7 @@ mod tests {
         {
             let mut e = w.entities.get_mut(p).unwrap();
             e.vitals.hp = 0;
-            e.exp_hitter = Some(killer);
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -364,7 +364,7 @@ mod tests {
         {
             let mut e = w.entities.get_mut(p).unwrap();
             e.vitals.hp = 0;
-            e.exp_hitter = Some(killer);
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -408,7 +408,7 @@ mod tests {
         {
             let mut e = w.entities.get_mut(p).unwrap();
             e.vitals.hp = 0;
-            e.exp_hitter = Some(killer);
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -426,7 +426,7 @@ mod tests {
         {
             let mut e = w.entities.get_mut(p).unwrap();
             e.vitals.hp = 0;
-            e.exp_hitter = Some(killer);
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_death_drop_config(1, 1, 3, Vec::new());
@@ -446,7 +446,7 @@ mod tests {
         {
             let mut e = w.entities.get_mut(p).unwrap();
             e.vitals.hp = 0;
-            e.exp_hitter = Some(killer);
+            e.attribution.exp_hitter = Some(killer);
             e.use_items[0] = slot(11, 1, 500, [0; 14]);
         }
         w.set_map_fight_zone(0, false, true);
@@ -513,12 +513,12 @@ mod tests {
             let killer = w.add_entity(player(0, 11, 10));
             assert_ne!(p, killer, "死者与击杀者必须是两个实体");
             {
-                let mut e = w.entities.get_mut(p).unwrap();
+                let e = w.entities.get_mut(p).unwrap();
                 e.vitals.hp = 0;
-                e.exp_hitter = Some(killer);
-                e.no_item = dead_no_item;
+                e.attribution.exp_hitter = Some(killer);
+                e.drop.no_item = dead_no_item;
             }
-            w.entities.get_mut(killer).unwrap().no_item = killer_no_item;
+            w.entities.get_mut(killer).unwrap().drop.no_item = killer_no_item;
             w.set_map_no_drop_item(0, true);
             w.set_death_drop_config(1, 1, 3, Vec::new());
             w.set_death_drop_kill_config(true, true);
