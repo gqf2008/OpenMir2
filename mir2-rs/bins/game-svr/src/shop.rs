@@ -30,9 +30,10 @@
 //! - `PayMent == 1 && !Config.TryModeUseStorage` 门（`Operate.cs:1615/1664`）：部署 `TestServer=TRUE`
 //!   （`E:\\MirServer\\M2GameSvr\\Server.conf:11`）⇒ oracle `PlayObject.cs:1168-1171` 把 `PayMent` 置 **3**
 //!   ⇒ 该门在本部署**恒假**；本宿主未把 `PayMent` 落到会话（登记，行为暂等价）。
-//! - `SM_WEIGHTCHANGED`（`BaseObject.cs:1771`）：**买入路径已发**（[`weight_changed_frame`]，
-//!   卡 `openmir2-merchant-price-list-and-weight-frame` B 阶段）；`make_drug_item` /
-//!   `take_back_storage_item` 仍缺（T-47 ⑤ 残留）。`SM_ADDITEM` 尾（T-24）。
+//! - `SM_WEIGHTCHANGED`（`BaseObject.cs:1771`）：**已补齐**——买入（卡
+//!   `openmir2-merchant-price-list-and-weight-frame` B 阶段）/ `make_drug_item` /
+//!   `take_back_storage_item` 三条成功入包路径都经单点 sink 发恰一条（卡
+//!   `openmir2-weightchanged-residual-sites`）。`SM_ADDITEM` 尾（T-24）。
 //! - `CustomItemSystem.GetItemName`/`GetUpgradeStdItem` 的物品展示层（T-47 ⑥/T-24）：
 //!   **已实现**——名称走 [`crate::bag::item_display_name`]（`Desc[13]==1` ⇒ 自定义名），
 //!   升级差量由 [`crate::itemwire::encode_client_item`] 统一叠加。详情列表照 oracle
@@ -131,9 +132,7 @@ use mir2_world::merchant::{
 };
 
 use crate::ability::{Ability, ItemCatalog};
-use crate::bag::{
-    add_item_to_bag, add_item_to_bag_with_sink, BagItem, WeightChanged, WeightSink, MAX_BAG_ITEM,
-};
+use crate::bag::{add_item_to_bag_with_sink, BagItem, WeightChanged, WeightSink, MAX_BAG_ITEM};
 use crate::downlink;
 use crate::ground::GroundState;
 use crate::itemwire::{encode_client_detail_item, encode_client_item, ClientItem};
@@ -270,10 +269,11 @@ impl ShopFrame {
 /// 真机证据（`E:/tmp/window/e23-reshot`，卡 `openmir2-merchant-price-list-and-weight-frame`）：
 /// C# 是 `200 → 622 → 650`，Rust 此前缺 622。
 ///
-/// 只在**卡内实测的买入路径**发射；`make_drug_item` / `take_back_storage_item` 同样缺 622，
-/// 补它们要先补各自的重量重算 / 换队列感知发射器 ⇒ 登记为 T-47 ⑤ 残留，不在本卡夹带。
+/// 卡 `openmir2-weightchanged-residual-sites`：三条成功入包路径（买入 / [`make_drug_item`] /
+/// [`take_back_storage_item`]）都在**成功入包后**经单点 sink 取快照、在此编成恰一条 622；
+/// 失败/满包/负重不足不回调 sink ⇒ 不发。
 ///
-/// 卡 `openmir2-bag-weight-sink`：**「发不发」已收进单点**（[`BuyWeightSink`] 只会在
+/// 卡 `openmir2-bag-weight-sink`：**「发不发」已收进单点**（[`RecalcWeightSink`] 只会在
 /// `add_item_to_bag_with_sink` 成功入包后收到一次快照）；本函数只负责把快照编成帧。
 #[must_use]
 fn weight_changed_frame(snapshot: WeightChanged) -> ShopFrame {
@@ -288,16 +288,17 @@ fn weight_changed_frame(snapshot: WeightChanged) -> ShopFrame {
     .queued(mir2_protocol::messages::RM_WEIGHTCHANGED)
 }
 
-/// 买入路径的 [`WeightSink`]：`WeightChanged()`（`BaseObject.cs:1771-1774`）的「重算
-/// `WAbil.Weight` + 取快照」在单点的成功回调里做；帧仍由调用方在**既有位置**（200 之后、
-/// 650 之前）生成 ⇒ 向量序与线上序都不变。
-struct BuyWeightSink<'a> {
+/// 商店三条入包路径（买入 / 制药 / 取回仓库）共用的 [`WeightSink`]：
+/// `WeightChanged()`（`BaseObject.cs:1771-1774`）的「重算 `WAbil.Weight` + 取快照」
+/// 在单点的成功回调里做；帧仍由调用方在**既有位置**（200 之后、后续排队帧之前）生成
+/// ⇒ 向量序与线上序都不变。
+struct RecalcWeightSink<'a> {
     catalog: &'a dyn ItemCatalog,
     wabil: &'a mut Ability,
     snapshot: &'a mut Option<WeightChanged>,
 }
 
-impl WeightSink for BuyWeightSink<'_> {
+impl WeightSink for RecalcWeightSink<'_> {
     fn on_item_added(&mut self, items: &[BagItem]) {
         self.wabil.weight = recalc_weight(self.catalog, items);
         *self.snapshot = Some(WeightChanged {
@@ -742,9 +743,20 @@ pub fn make_drug_item(
                 let add_tail =
                     crate::trade::add_item_tail(&user_item, ctx.catalog).unwrap_or_default();
                 // `AddItemToBag`（`BaseObject.cs:1241`）：`ItemList.Count >= MaxBagItem(46)` ⇒ false。
-                if add_item_to_bag(&mut state.item_list, user_item, MAX_BAG_ITEM) {
-                    // `WeightChanged()` 未发（T-47 ⑤ 残留）：本路径没有重量重算、宿主发射器
-                    // 虽同队列但缺 622 的实测证据 ⇒ 留到后继卡（`buy_item` 已发）。
+                // 卡 `openmir2-weightchanged-residual-sites`：`WeightChanged()`（`BaseObject.cs:1771`）
+                // 经单点 sink 在成功入包后回调（快照 + `WAbil.Weight` 重算）；满包不回调 ⇒ 不发 622。
+                let mut weight_after: Option<WeightChanged> = None;
+                let mut sink = RecalcWeightSink {
+                    catalog: ctx.catalog,
+                    wabil: &mut state.wabil,
+                    snapshot: &mut weight_after,
+                };
+                if add_item_to_bag_with_sink(
+                    &mut state.item_list,
+                    user_item,
+                    MAX_BAG_ITEM,
+                    &mut sink,
+                ) {
                     state.gold -= ctx.make_durg_price;
                     // 尾已是 `EDCode.EncodeBuffer(ClientItem)` ⇒ 不能再 `EncodeString`。
                     frames.push(frame_encoded(
@@ -755,6 +767,11 @@ pub fn make_drug_item(
                         1,
                         add_tail,
                     ));
+                    // `WeightChanged()`：622 走队列（131），线上在直连 200 之后、
+                    // `SM_DELITEMS(164)` / `SM_MAKEDRUG_SUCCESS(166)` 之前。与买入路径同口径：
+                    // 成功入包必回调一次 ⇒ 用 `expect` 把「sink 没触发 ⇒ 静默少一帧」变成大声失败。
+                    let snapshot = weight_after.expect("单点成功入包 ⇒ WeightSink 必已回调一次");
+                    frames.push(weight_changed_frame(snapshot));
                     if !deleted.is_empty() {
                         frames.push(del_items_frame(&deleted));
                     }
@@ -1046,6 +1063,10 @@ pub struct TakeBackResult {
 /// 调用方须先完成 oracle 的前置：`FindMerchant(actorId) != null` 且 `IsCanGetBackItem`（否则**无任何帧**）。
 /// `merchant_allows` = `merchant.IsGetback && (同图+视距 || FunctionNPC)`；`raw_name` 是收包 `Msg`
 /// 原文（本路径**不**做空格截断，`Operate.cs:1656-1659`）。
+///
+/// 成功支出帧：`SM_ADDITEM`（直发）→ `SM_WEIGHTCHANGED`（队列 131，`WeightChanged()` 在
+/// `AddItemToBag` 内触发，卡 `openmir2-weightchanged-residual-sites`）→ `SM_TAKEBACKSTORAGEITEM_OK`；
+/// 失败/满包/负重不足**不发 622**。
 #[must_use]
 pub fn take_back_storage_item(
     state: &mut GroundState,
@@ -1080,8 +1101,25 @@ pub fn take_back_storage_item(
                             add_tail,
                         ));
                         // 上面已过容量门 ⇒ 单点必返回 true（返回值与 oracle 一样被忽略）。
-                        let _ = add_item_to_bag(&mut state.item_list, moved, MAX_BAG_ITEM);
-                        state.wabil.weight = recalc_weight(ctx.catalog, &state.item_list);
+                        // 卡 `openmir2-weightchanged-residual-sites`：`WeightChanged()`
+                        // （`BaseObject.cs:1771`，在 `AddItemToBag` 内）经单点 sink 重算
+                        // `WAbil.Weight` 并取快照 ⇒ 成功入包后发恰一条 622；满包/负重不足
+                        // 走不到这里 ⇒ 不发。
+                        let mut weight_after: Option<WeightChanged> = None;
+                        let mut sink = RecalcWeightSink {
+                            catalog: ctx.catalog,
+                            wabil: &mut state.wabil,
+                            snapshot: &mut weight_after,
+                        };
+                        let _ = add_item_to_bag_with_sink(
+                            &mut state.item_list,
+                            moved,
+                            MAX_BAG_ITEM,
+                            &mut sink,
+                        );
+                        let snapshot =
+                            weight_after.expect("单点成功入包 ⇒ WeightSink 必已回调一次");
+                        frames.push(weight_changed_frame(snapshot));
                         // `SM_TAKEBACKSTORAGEITEM_OK(Recog=nItemIdx)`。
                         frames.push(frame(
                             mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_OK,
@@ -1344,7 +1382,7 @@ pub fn buy_item(
                             // 卡 `openmir2-bag-weight-sink`：`WeightChanged()` 由单点在成功入包后
                             // 回调一次（满包不回调）；这里只接快照，帧仍在既有位置生成。
                             let mut weight_after: Option<WeightChanged> = None;
-                            let mut sink = BuyWeightSink {
+                            let mut sink = RecalcWeightSink {
                                 catalog: ctx.catalog,
                                 wabil: &mut state.wabil,
                                 snapshot: &mut weight_after,
@@ -2852,22 +2890,53 @@ mod tests {
         let mut storage = vec![bag(7, 1)];
         let r = take_back_storage_item(&mut state, &mut storage, true, 7, "金创药(小量)", &c);
         assert!(r.ok);
-        assert_eq!(r.frames.len(), 2);
+        assert_eq!(r.frames.len(), 3);
         assert_eq!(r.frames[0].ident, mir2_protocol::messages::SM_ADDITEM);
         assert_eq!(
             r.frames[0].recog, 4242,
             "SendAddItem 的 Recog = 玩家 ActorId"
         );
+        // 622：`WeightChanged()`（`BaseObject.cs:1771`，在 `AddItemToBag` 内）经单点 sink
+        // 发恰一条（卡 `openmir2-weightchanged-residual-sites`）；走 131 队列。
         assert_eq!(
-            r.frames[1].ident,
+            r.frames
+                .iter()
+                .filter(|f| f.ident == mir2_protocol::messages::SM_WEIGHTCHANGED)
+                .count(),
+            1,
+            "成功取回 ⇒ 恰一条 622"
+        );
+        let changed = &r.frames[1];
+        assert_eq!(
+            changed.queue_priority,
+            Some((mir2_protocol::messages::RM_WEIGHTCHANGED & 0xFF) as u8),
+            "622 走 RM_WEIGHTCHANGED 队列（131）"
+        );
+        assert_eq!(
+            changed.recog, 3,
+            "622.Recog = 重算后 WAbil.Weight（金创药(小量) weight 3）"
+        );
+        assert_eq!(
+            (changed.param, changed.tag),
+            (0, 0),
+            "WearWeight/HandWeight 不变"
+        );
+        let wsum = 3i32;
+        assert_eq!(
+            changed.series,
+            (((wsum ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21) as u16,
+            "622.Series = ((W+A+H)^0x3A5F)^0x1F35^0xaa21"
+        );
+        assert_eq!(
+            r.frames[2].ident,
             mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_OK
         );
-        assert_eq!(r.frames[1].recog, 7, "OK 帧 Recog = nItemIdx");
+        assert_eq!(r.frames[2].recog, 7, "OK 帧 Recog = nItemIdx");
         assert_eq!(state.item_list.len(), 1);
         assert!(storage.is_empty());
         assert_eq!(state.wabil.weight, 3, "取回后重算负重");
 
-        // 负重不足 ⇒ SysMsg + FAIL（件不动）。
+        // 负重不足 ⇒ SysMsg + FAIL（件不动），不回调 sink ⇒ 无 622。
         let mut state2 = GroundState {
             item_list: Vec::new(),
             gold: 0,
@@ -2887,8 +2956,14 @@ mod tests {
         );
         assert_eq!(state2.item_list.len(), 0);
         assert_eq!(storage2.len(), 1);
+        assert!(
+            r2.frames
+                .iter()
+                .all(|f| f.ident != mir2_protocol::messages::SM_WEIGHTCHANGED),
+            "负重不足不得发 622"
+        );
 
-        // 背包满 ⇒ `_FULLBAG`。
+        // 背包满 ⇒ `_FULLBAG`（`AddItemToBag` 容量门 return false ⇒ sink 不回调 ⇒ 无 622）。
         let mut state3 = GroundState {
             item_list: (0..MAX_BAG_ITEM as i32).map(|k| bag(k, 1)).collect(),
             gold: 0,
@@ -2901,6 +2976,12 @@ mod tests {
             mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_FULLBAG
         );
         assert_eq!(storage3.len(), 1, "满 ⇒ 件仍在仓库");
+        assert!(
+            r3.frames
+                .iter()
+                .all(|f| f.ident != mir2_protocol::messages::SM_WEIGHTCHANGED),
+            "满包不得发 622"
+        );
 
         // 商人无 IsGetback ⇒ 仅 FAIL（无 SysMsg/ADDITEM）。
         let mut state4 = GroundState {
@@ -2914,6 +2995,12 @@ mod tests {
         assert_eq!(
             r4.frames[0].ident,
             mir2_protocol::messages::SM_TAKEBACKSTORAGEITEM_FAIL
+        );
+        assert!(
+            r4.frames
+                .iter()
+                .all(|f| f.ident != mir2_protocol::messages::SM_WEIGHTCHANGED),
+            "商人门不过 ⇒ 无入包 ⇒ 无 622"
         );
     }
 
@@ -3131,11 +3218,12 @@ mod tests {
         assert!(!ok3);
     }
 
-    /// `CM_USERMAKEDRUGITEM` 成功支：`SM_ADDITEM`（直发）→ `SM_DELITEMS`（优先级 164）→
-    /// `SM_MAKEDRUG_SUCCESS(Recog=扣后 Gold)`（优先级 166）。
+    /// `CM_USERMAKEDRUGITEM` 成功支：`SM_ADDITEM`（直发）→ `SM_WEIGHTCHANGED`（队列 131）→
+    /// `SM_DELITEMS`（优先级 164）→ `SM_MAKEDRUG_SUCCESS(Recog=扣后 Gold)`（优先级 166）。
+    /// 622 经单点 sink 在成功入包后发恰一条（卡 `openmir2-weightchanged-residual-sites`）。
     ///
     /// 变异必红：① 漏 `SM_DELITEMS` ② 成功帧 `Recog` 用 `n14` 而非金币 ③ 不扣金/不入包
-    /// ④ 帧序换位（`SM_MAKEDRUG_SUCCESS` 提前）。
+    /// ④ 帧序换位（`SM_MAKEDRUG_SUCCESS` 提前）⑤ 删 622 发射点（单点 sink）⇒ 帧序/恰一条断言红。
     #[test]
     fn make_drug_success_emits_additem_delitems_success_in_order() {
         let cat = drug_catalog();
@@ -3152,10 +3240,11 @@ mod tests {
             idents,
             vec![
                 mir2_protocol::messages::SM_ADDITEM,
+                mir2_protocol::messages::SM_WEIGHTCHANGED,
                 mir2_protocol::messages::SM_DELITEMS,
                 mir2_protocol::messages::SM_MAKEDRUG_SUCCESS,
             ],
-            "发送序：SM_ADDITEM → SM_DELITEMS → SM_MAKEDRUG_SUCCESS"
+            "发送序：SM_ADDITEM → SM_WEIGHTCHANGED(131) → SM_DELITEMS(164) → SM_MAKEDRUG_SUCCESS(166)"
         );
         assert_eq!(st.gold, 900, "Gold -= MakeDurgPrice(100)");
         assert_eq!(st.item_list.len(), 1, "三件材料被消耗、成品入包");
@@ -3168,34 +3257,76 @@ mod tests {
         assert_eq!(r.frames[0].ident, mir2_protocol::messages::SM_ADDITEM);
         assert_eq!(r.frames[0].recog, 4242);
         assert_eq!(r.frames[0].series, 1);
-        // SM_DELITEMS：Series=删除数 3、尾已编码（`EncodeString("草药/72/草药/71/布衣/73/")`）。
-        assert_eq!(r.frames[1].ident, mir2_protocol::messages::SM_DELITEMS);
+        // SM_WEIGHTCHANGED：恰一条（`WeightChanged()`，`BaseObject.cs:1771`）；Recog=重算后
+        // 背包重（只剩成品金创药 weight 3）、Param/Tag=WearWeight/HandWeight、走 131 队列。
         assert_eq!(
-            (r.frames[1].recog, r.frames[1].param, r.frames[1].tag),
+            r.frames
+                .iter()
+                .filter(|f| f.ident == mir2_protocol::messages::SM_WEIGHTCHANGED)
+                .count(),
+            1,
+            "成功入包 ⇒ 恰一条 622"
+        );
+        let changed = &r.frames[1];
+        assert_eq!(
+            changed.queue_priority,
+            Some((mir2_protocol::messages::RM_WEIGHTCHANGED & 0xFF) as u8),
+            "622 走 RM_WEIGHTCHANGED 队列（131）"
+        );
+        assert_eq!(
+            changed.recog,
+            i32::from(st.wabil.weight),
+            "622.Recog = 重算后 WAbil.Weight"
+        );
+        assert_eq!(
+            st.wabil.weight, 3,
+            "WAbil.Weight = RecalcBagWeight()（只剩成品 weight 3）"
+        );
+        assert_eq!(
+            (changed.param, changed.tag),
+            (
+                u16::from(st.wabil.wear_weight),
+                u16::from(st.wabil.hand_weight)
+            ),
+            "622.Param/Tag = WearWeight/HandWeight"
+        );
+        let wsum = i32::from(st.wabil.weight)
+            + i32::from(st.wabil.wear_weight)
+            + i32::from(st.wabil.hand_weight);
+        assert_eq!(
+            changed.series,
+            (((wsum ^ 0x3A5F) ^ 0x1F35) ^ 0xaa21) as u16,
+            "622.Series = ((W+A+H)^0x3A5F)^0x1F35^0xaa21"
+        );
+        // SM_DELITEMS：Series=删除数 3、尾已编码（`EncodeString("草药/72/草药/71/布衣/73/")`）。
+        assert_eq!(r.frames[2].ident, mir2_protocol::messages::SM_DELITEMS);
+        assert_eq!(
+            (r.frames[2].recog, r.frames[2].param, r.frames[2].tag),
             (0, 0, 0)
         );
-        assert_eq!(r.frames[1].series, 3);
-        assert!(r.frames[1].tail_encoded);
+        assert_eq!(r.frames[2].series, 3);
+        assert!(r.frames[2].tail_encoded);
         assert_eq!(
-            r.frames[1].tail,
+            r.frames[2].tail,
             mir2_protocol::edcode::encode(&downlink::gbk("草药/72/草药/71/布衣/73/"))
         );
         // SM_MAKEDRUG_SUCCESS：Recog=扣后金币；逐字节钉到编码器。
         assert_eq!(
-            r.frames[2].ident,
+            r.frames[3].ident,
             mir2_protocol::messages::SM_MAKEDRUG_SUCCESS
         );
-        assert_eq!(r.frames[2].recog, 900);
+        assert_eq!(r.frames[3].recog, 900);
         assert_eq!(
-            body_of(&r.frames[2]),
+            body_of(&r.frames[3]),
             crate::smframe_ext::sm_makedrug_success(900)
         );
     }
 
     /// `CM_USERMAKEDRUGITEM` 的四个失败码（`Merchant.cs:1502-1550` 的 `n14`）：
     /// `1`=名不在在售库存、`2`=背包满（`AddItemToBag` 失败）、`3`=金币不足、`4`=材料不足。
+    /// 失败支不回调单点 sink ⇒ **不发 622**（卡 `openmir2-weightchanged-residual-sites`）。
     ///
-    /// 变异必红：把任一 `n14` 写成别的值 ⇒ `Recog` 断言必红。
+    /// 变异必红：把任一 `n14` 写成别的值 ⇒ `Recog` 断言必红；把失败支改成发 622 ⇒ 无 622 断言红。
     #[test]
     fn make_drug_failure_codes() {
         let cat = drug_catalog();
@@ -3233,6 +3364,26 @@ mod tests {
         assert_eq!(r.frames[0].recog, 2);
         assert_eq!(st.item_list.len(), 46);
         assert_eq!(st.gold, 1000, "失败不得扣金");
+
+        // 失败支不发 622（卡 `openmir2-weightchanged-residual-sites`）：
+        // - 入包失败（背包满）：`AddItemToBag` 的容量门在 `ItemList.Add` 之前 return
+        //   ⇒ 单点 sink 不回调（`BaseObject.cs:1241-1248`）；
+        // - 材料不足：走不到入包支。
+        assert!(
+            r.frames
+                .iter()
+                .all(|f| f.ident != mir2_protocol::messages::SM_WEIGHTCHANGED),
+            "入包失败不得发 622"
+        );
+        let mut short = ground(1000, vec![mbag(4, 71)]);
+        let r4 = make_drug_item(&mut short, &goods, "金创药", &cat, &reg, &mut 0, &c);
+        assert_eq!(r4.frames[0].recog, 4);
+        assert!(
+            r4.frames
+                .iter()
+                .all(|f| f.ident != mir2_protocol::messages::SM_WEIGHTCHANGED),
+            "材料不足不得发 622"
+        );
     }
 
     /// **C5 `merchant_base_userselect_back_state`**：`NormNpc.UserSelect`（`:1632-1658`）的
