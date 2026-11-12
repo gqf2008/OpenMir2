@@ -442,7 +442,11 @@ impl World {
     ///
     /// 返回 `false` = 该 id 不是商人（无 `merchant` 状态）。
     pub fn set_merchant_castle_index(&mut self, id: i32, castle_index: Option<usize>) -> bool {
-        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+        let Some(st) = self
+            .entities
+            .entity_mut(id)
+            .and_then(|e| e.merchant.as_mut())
+        else {
             return false;
         };
         st.castle_index = castle_index;
@@ -499,7 +503,7 @@ impl World {
     /// [`World::merchant_goods_groups`] 的可变版（⑤-4 买/卖直接改在售库存）。
     #[must_use]
     pub fn merchant_goods_groups_mut(&mut self, id: i32) -> Option<&mut Vec<Vec<MerchantItem>>> {
-        Some(&mut self.entities.get_mut(id)?.merchant.as_mut()?.goods_list)
+        Some(&mut self.entities.entity_mut(id)?.merchant.as_mut()?.goods_list)
     }
 
     /// **初始装货**：等价 oracle `Merchant.LoadNpcData` 末尾的 `RefillGoods()`（`Merchant.cs:1070`）。
@@ -514,7 +518,11 @@ impl World {
     /// （把 `refill_tick` 调到刚好过门），否则初始装货会被计时门挡掉。
     pub fn merchant_refill_goods_now(&mut self, id: i32) -> bool {
         let now = self.clock_ms;
-        if let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = self
+            .entities
+            .entity_mut(id)
+            .and_then(|e| e.merchant.as_mut())
+        {
             for g in st.refill_goods.iter_mut() {
                 if g.refill_tick == 0 {
                     g.refill_tick = now.saturating_sub(i64::from(g.refill_time) * 60 * 1000 + 1);
@@ -531,7 +539,11 @@ impl World {
         if item.dura == 0 {
             return;
         }
-        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+        let Some(st) = self
+            .entities
+            .entity_mut(id)
+            .and_then(|e| e.merchant.as_mut())
+        else {
             return;
         };
         match st
@@ -552,7 +564,11 @@ impl World {
     /// （包 13/14/15/16、超级金创药 17、超级魔法药 18、太阳水 23、强效太阳水 24），
     /// 走带过滤的那条会静默丢掉 ⇒ `645` 会 `param=6` 而不是 C# 的 14。
     pub fn merchant_refill_goods_items(&mut self, id: i32, item: MerchantItem) {
-        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+        let Some(st) = self
+            .entities
+            .entity_mut(id)
+            .and_then(|e| e.merchant.as_mut())
+        else {
             return;
         };
         match st
@@ -573,7 +589,7 @@ impl World {
         group: usize,
         item: usize,
     ) -> Option<MerchantItem> {
-        let st = self.entities.get_mut(id)?.merchant.as_mut()?;
+        let st = self.entities.entity_mut(id)?.merchant.as_mut()?;
         let g = st.goods_list.get_mut(group)?;
         if item >= g.len() {
             return None;
@@ -616,7 +632,11 @@ impl World {
 
     /// `Merchant.RefillDelReFillItem`（`Merchant.cs:317`）：同 `Index` 组从**尾部**删 `n` 件。
     pub fn merchant_del_items_from_end(&mut self, id: i32, index: u16, n: usize) {
-        let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) else {
+        let Some(st) = self
+            .entities
+            .entity_mut(id)
+            .and_then(|e| e.merchant.as_mut())
+        else {
             return;
         };
         let Some(gi) = st
@@ -729,7 +749,11 @@ impl World {
             if !is_ghost {
                 if (now - run_tick) > MERCHANT_RUN_TIME {
                     // oracle 先写 `RunTick = now` 再 `Run()`。
-                    if let Some(st) = self.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+                    if let Some(st) = self
+                        .entities
+                        .entity_mut(id)
+                        .and_then(|e| e.merchant.as_mut())
+                    {
                         st.run_tick = now;
                     }
                     let r = merchant_run(self, id);
@@ -1421,7 +1445,7 @@ impl World {
         let catalog = std::mem::take(&mut self.item_catalog);
         let result = match self
             .entities
-            .get_mut(merchant_id)
+            .entity_mut(merchant_id)
             .and_then(|e| e.merchant.as_mut())
         {
             Some(st) => upgrade_wapon_begin_impl(
@@ -1455,7 +1479,7 @@ impl World {
         let deleted = upgrade_wapon_add_value(&catalog, bag, &cfg.black_stone, &mut info);
         if let Some(st) = self
             .entities
-            .get_mut(merchant_id)
+            .entity_mut(merchant_id)
             .and_then(|e| e.merchant.as_mut())
         {
             st.upgrade_weapon_list.push(info.clone());
@@ -1503,7 +1527,7 @@ impl World {
         let now = self.clock_ms;
         let World { entities, rng, .. } = self;
         match entities
-            .get_mut(merchant_id)
+            .entity_mut(merchant_id)
             .and_then(|e| e.merchant.as_mut())
         {
             Some(st) => get_backupg_weapon_impl(
@@ -1557,7 +1581,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     if (now - refill_goods_tick) > MERCHANT_REFILL_GOODS_INTERVAL_MS {
         if let Some(st) = world
             .entities
-            .get_mut(actor_id)
+            .entity_mut(actor_id)
             .and_then(|e| e.merchant.as_mut())
         {
             st.refill_goods_tick = now;
@@ -1576,7 +1600,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
             .map_or(0, |st| st.clear_expire_upgrade_days);
         if let Some(st) = world
             .entities
-            .get_mut(actor_id)
+            .entity_mut(actor_id)
             .and_then(|e| e.merchant.as_mut())
         {
             st.clear_expre_upgrade_tick = now;
@@ -1598,7 +1622,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         .is_some_and(|e| e.ob_mode || e.fixed_hide_mode);
     if world.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
         let dir = world.rng.random_byte(MERCHANT_TURN_DIR_MAX);
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(mut e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir; // `TurnTo` 先写 `Dir`（写方向与可见性无关）
         }
         if hidden {
@@ -1657,7 +1681,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
                 );
             }
             // `Merchant.cs:148`
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(mut e) = world.entities.get_mut(actor_id) {
                 e.fixed_hide_mode = true;
             }
         }
@@ -1666,7 +1690,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         .get(actor_id)
         .is_some_and(|e| e.fixed_hide_mode)
     {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(mut e) = world.entities.get_mut(actor_id) {
             e.fixed_hide_mode = false;
         }
         outcome.unhide_hit = true;
@@ -1675,7 +1699,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     if can_move && (now - move_tick) > i64::from(move_time) * 1000 {
         if let Some(st) = world
             .entities
-            .get_mut(actor_id)
+            .entity_mut(actor_id)
             .and_then(|e| e.merchant.as_mut())
         {
             st.move_tick = now;
@@ -1685,7 +1709,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     }
     // `Merchant.cs:170` 末尾 `base.Run()`：先 SuperMan 回满（`BaseObject.Base.cs:32-36`），
     // 再 VerifyMapTime 段（`:223-228`）——刷新本格 `CellObject.AddTime`，防 60s 过期。
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(mut e) = world.entities.get_mut(actor_id) {
         e.run_super_man_refill();
     }
     world.verify_map_time(actor_id);
@@ -1726,7 +1750,7 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
         if (now - refill_tick) > i64::from(refill_time) * 60 * 1000 {
             if let Some(st) = world
                 .entities
-                .get_mut(actor_id)
+                .entity_mut(actor_id)
                 .and_then(|e| e.merchant.as_mut())
             {
                 st.refill_goods[i].refill_tick = now;
@@ -1755,7 +1779,7 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
                         let n_price = mir2_shared::hutil32::round(f64::from(price) * 1.1);
                         if let Some(st) = world
                             .entities
-                            .get_mut(actor_id)
+                            .entity_mut(actor_id)
                             .and_then(|e| e.merchant.as_mut())
                         {
                             st.item_price_list.push((index, n_price));
@@ -2229,7 +2253,7 @@ mod tests {
     }
 
     fn set_run_tick_stale(w: &mut World, id: i32) {
-        if let Some(st) = w.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = w.entities.entity_mut(id).and_then(|e| e.merchant.as_mut()) {
             st.run_tick = -1000;
         }
     }
@@ -2292,7 +2316,7 @@ mod tests {
         w.rng = RandomNumber::with_seed(9);
         w.clock_ms = 0;
         let a = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
-        if let Some(st) = w.entities.get_mut(a).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = w.entities.entity_mut(a).and_then(|e| e.merchant.as_mut()) {
             st.run_tick = 0;
         }
         w.clock_ms = MERCHANT_RUN_TIME; // 250: 250-0 不 > 250
@@ -2308,10 +2332,10 @@ mod tests {
         w.rng = RandomNumber::with_seed(11);
         w.clock_ms = 0;
         let a = w.spawn_merchant(spawn_at(4, 4)).expect("挂图成功");
-        if let Some(e) = w.entities.get_mut(a) {
+        if let Some(mut e) = w.entities.get_mut(a) {
             e.ghost = true;
         }
-        if let Some(st) = w.entities.get_mut(a).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = w.entities.entity_mut(a).and_then(|e| e.merchant.as_mut()) {
             st.ghost_tick = 0;
         }
         w.clock_ms = MERCHANT_GHOST_EXPIRE_MS; // 60000: 不 > 60000
@@ -2367,7 +2391,7 @@ mod tests {
     }
 
     fn set_castle_under_war(w: &mut World, id: i32, under_war: bool) {
-        if let Some(st) = w.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = w.entities.entity_mut(id).and_then(|e| e.merchant.as_mut()) {
             st.castle_under_war = under_war; // `Castle.UnderWar` 快照（⑧ 接线后由城堡写）
         }
     }
@@ -2556,7 +2580,7 @@ mod tests {
 
         // ② 发帧时刻 `ObMode` 已置位 ⇒ 头门只自送（商人无客户端 ⇒ 零收件人）。
         {
-            let e = w.entities.get_mut(id).unwrap();
+            let mut e = w.entities.get_mut(id).unwrap();
             e.fixed_hide_mode = false;
             e.ob_mode = true;
         }
@@ -2597,7 +2621,7 @@ mod tests {
         assert!(!out.unhide_hit, "未隐藏 ⇒ else 支也不补发");
 
         // ② 已处于 `FixedHideMode`（例如城堡刚解绑）⇒ else 支补一条 `RM_HIT`。
-        if let Some(e) = w.entities.get_mut(id) {
+        if let Some(mut e) = w.entities.get_mut(id) {
             e.fixed_hide_mode = true;
         }
         let out = merchant_run(&mut w, id);
@@ -2605,7 +2629,7 @@ mod tests {
         assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
 
         // ③ 非城堡商人（`CastleMerchant = 0`）+ 战中快照 + 已绑定城堡 ⇒ 仍不进消失支。
-        if let Some(st) = w.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = w.entities.entity_mut(id).and_then(|e| e.merchant.as_mut()) {
             st.castle_merchant = false;
         }
         assert!(w.set_merchant_castle_index(id, Some(0)));
@@ -2655,7 +2679,7 @@ mod tests {
         w2.clock_ms = 100_000;
         let id2 = w2.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w2.set_merchant_castle_index(id2, Some(0)));
-        if let Some(e) = w2.entities.get_mut(id2) {
+        if let Some(mut e) = w2.entities.get_mut(id2) {
             e.fixed_hide_mode = true; // 战中稳态（解除支的入口状态）
         }
         let out = merchant_run(&mut w2, id2);
@@ -2684,7 +2708,7 @@ mod tests {
         let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w.set_merchant_castle_index(id, Some(0)));
         set_castle_under_war(&mut w, id, true);
-        if let Some(e) = w.entities.get_mut(id) {
+        if let Some(mut e) = w.entities.get_mut(id) {
             e.fixed_hide_mode = true; // 战中稳态
         }
         set_run_tick_stale(&mut w, id);
@@ -2715,7 +2739,7 @@ mod tests {
         let id2 = w2.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w2.set_merchant_castle_index(id2, Some(0)));
         set_castle_under_war(&mut w2, id2, true);
-        if let Some(e) = w2.entities.get_mut(id2) {
+        if let Some(mut e) = w2.entities.get_mut(id2) {
             e.fixed_hide_mode = true;
         }
         set_run_tick_stale(&mut w2, id2);
@@ -2735,7 +2759,7 @@ mod tests {
         let id3 = w3.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w3.set_merchant_castle_index(id3, Some(0)));
         set_castle_under_war(&mut w3, id3, true);
-        if let Some(e) = w3.entities.get_mut(id3) {
+        if let Some(mut e) = w3.entities.get_mut(id3) {
             e.fixed_hide_mode = true;
         }
         set_run_tick_stale(&mut w3, id3);
@@ -2817,7 +2841,7 @@ mod tests {
         spawn.state.move_time = 0; // 到点条件：now - move_tick > 0（move_tick 置 now 后下次不满足）
         let a = w.spawn_merchant(spawn).expect("挂图成功");
         set_run_tick_stale(&mut w, a);
-        if let Some(st) = w.entities.get_mut(a).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = w.entities.entity_mut(a).and_then(|e| e.merchant.as_mut()) {
             st.move_tick = -1000; // 到点（`now - MoveTick > MoveTime*1000`）
         }
         let mut exp = RandomNumber::with_seed(99);
@@ -2853,7 +2877,7 @@ mod tests {
         }
         let make_due = |w: &mut World| {
             for id in &ids {
-                if let Some(st) = w.entities.get_mut(*id).and_then(|e| e.merchant.as_mut()) {
+                if let Some(st) = w.entities.entity_mut(*id).and_then(|e| e.merchant.as_mut()) {
                     st.run_tick = -1000;
                 }
             }
@@ -2888,7 +2912,7 @@ mod tests {
         let a = w.spawn_merchant(spawn_at(7, 7)).expect("挂图成功");
         // 让「若被当怪跑」必然产生可观测副作用：walk 到点 + 无目标 ⇒ `monster_run` 置 `target_x=-1`
         // 并在无目标分支调 `wondering`（消耗 RNG）。
-        if let Some(e) = w.entities.get_mut(a) {
+        if let Some(mut e) = w.entities.get_mut(a) {
             e.ai.walk_speed = -1;
             e.ai.walk_tick = 0;
             e.ai.target_creature = None;
@@ -3044,7 +3068,7 @@ mod tests {
         {
             let st = w
                 .entities
-                .get_mut(mid)
+                .entity_mut(mid)
                 .and_then(|e| e.merchant.as_mut())
                 .expect("商人状态");
             st.run_tick = 0;
@@ -3138,7 +3162,7 @@ mod tests {
         w.clock_ms = 10_000;
         let id = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
         // 令 `RunTick` 早已到点（`ProcessMerchants` 的 `now - RunTick > RunTime` 门）。
-        if let Some(st) = w.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = w.entities.entity_mut(id).and_then(|e| e.merchant.as_mut()) {
             st.run_tick = 0;
         }
         w.clock_ms += MERCHANT_RUN_TIME + 1;
@@ -3867,7 +3891,7 @@ mod tests {
 
     fn push_info(w: &mut World, mid: i32, info: WeaponUpgradeInfo) {
         w.entities
-            .get_mut(mid)
+            .entity_mut(mid)
             .and_then(|e| e.merchant.as_mut())
             .expect("商人在")
             .upgrade_weapon_list
@@ -4214,7 +4238,7 @@ mod tests {
         // ① 记录 "HERO"（大写）已在表 ⇒ 用 "hero" 提交**不是** `_ing`（A1）。
         push_info(&mut w, mid, info_with(1, 0, 0, 16, 0));
         w.entities
-            .get_mut(mid)
+            .entity_mut(mid)
             .and_then(|e| e.merchant.as_mut())
             .unwrap()
             .upgrade_weapon_list[0]
@@ -4300,7 +4324,7 @@ mod tests {
         {
             let list = w2
                 .entities
-                .get_mut(mid)
+                .entity_mut(mid)
                 .and_then(|e| e.merchant.as_mut())
                 .unwrap();
             list.upgrade_weapon_list.clear();
@@ -4318,7 +4342,7 @@ mod tests {
         // A1：第一条 "HERO" 未到期 ⇒ **不 break**，第二条 "hero" 到期 ⇒ 取走后一条。
         let list = w2
             .entities
-            .get_mut(mid)
+            .entity_mut(mid)
             .and_then(|e| e.merchant.as_mut())
             .unwrap();
         list.upgrade_weapon_list.clear();
@@ -4586,7 +4610,7 @@ mod tests {
         {
             let st = w
                 .entities
-                .get_mut(mid)
+                .entity_mut(mid)
                 .and_then(|e| e.merchant.as_mut())
                 .unwrap();
             st.clear_expre_upgrade_tick = 0;

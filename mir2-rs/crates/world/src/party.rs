@@ -374,7 +374,7 @@ impl World {
         cfg: &PartyConfig,
         em: &mut Emitter,
     ) {
-        if let Some(e) = self.entities.get_mut(member) {
+        if let Some(mut e) = self.entities.get_mut(member) {
             e.group_owner = leader;
         }
         let name = self.party_name_of(member);
@@ -390,7 +390,7 @@ impl World {
         for (prio, ev) in self.party_send_group_text(member, cfg, &PartyConfig::exit_msg(&name)) {
             em.later(prio, ev);
         }
-        if let Some(e) = self.entities.get_mut(member) {
+        if let Some(mut e) = self.entities.get_mut(member) {
             e.group_owner = 0;
         }
         em.later(
@@ -409,7 +409,7 @@ impl World {
             for (prio, ev) in self.party_send_group_text(owner, cfg, PARTY_CANCEL_GROUP_MSG) {
                 em.later(prio, ev);
             }
-            if let Some(e) = self.entities.get_mut(owner) {
+            if let Some(mut e) = self.entities.get_mut(owner) {
                 e.group_members.clear();
                 e.group_owner = 0;
             }
@@ -439,7 +439,7 @@ impl World {
         if owner != target {
             if let Some(pos) = members.iter().position(|&m| m == target) {
                 self.party_leave_group_em(target, cfg, em);
-                if let Some(e) = self.entities.get_mut(owner) {
+                if let Some(mut e) = self.entities.get_mut(owner) {
                     if pos < e.group_members.len() {
                         e.group_members.remove(pos);
                     }
@@ -448,7 +448,7 @@ impl World {
         } else {
             for &m in members.iter().rev() {
                 self.party_leave_group_em(m, cfg, em);
-                if let Some(e) = self.entities.get_mut(owner) {
+                if let Some(mut e) = self.entities.get_mut(owner) {
                     if let Some(p) = e.group_members.iter().rposition(|&x| x == m) {
                         e.group_members.remove(p);
                     }
@@ -480,7 +480,7 @@ impl World {
     fn party_group_close_em(&mut self, actor: i32, cfg: &PartyConfig, em: &mut Emitter) {
         let owner = self.party_group_owner_of(actor);
         if owner == 0 {
-            if let Some(e) = self.entities.get_mut(actor) {
+            if let Some(mut e) = self.entities.get_mut(actor) {
                 e.allow_group = false;
             }
             return;
@@ -488,7 +488,7 @@ impl World {
         if owner != actor {
             // 非团长：团长 `DelMember(this)`，随后本侧 `AllowGroup = false`。
             self.party_del_member_em(owner, actor, cfg, em);
-            if let Some(e) = self.entities.get_mut(actor) {
+            if let Some(mut e) = self.entities.get_mut(actor) {
                 e.allow_group = false;
             }
         } else {
@@ -531,7 +531,7 @@ impl World {
         let mut em = Emitter::new();
         if param2 == 0 {
             self.party_group_close_em(actor, cfg, &mut em);
-        } else if let Some(e) = self.entities.get_mut(actor) {
+        } else if let Some(mut e) = self.entities.get_mut(actor) {
             e.allow_group = true;
         }
         let allow = self
@@ -594,14 +594,14 @@ impl World {
             });
             return em.finish();
         }
-        if let Some(e) = self.entities.get_mut(actor) {
+        if let Some(mut e) = self.entities.get_mut(actor) {
             e.group_members.clear();
             e.group_members.push(actor);
             e.group_members.push(target);
         }
         self.party_join_group_em(actor, actor, cfg, &mut em);
         self.party_join_group_em(target, actor, cfg, &mut em);
-        if let Some(e) = self.entities.get_mut(actor) {
+        if let Some(mut e) = self.entities.get_mut(actor) {
             e.allow_group = true;
         }
         em.now(PartyEvent::CreateGroupOk { target: actor });
@@ -676,7 +676,7 @@ impl World {
             });
             return em.finish();
         }
-        if let Some(e) = self.entities.get_mut(actor) {
+        if let Some(mut e) = self.entities.get_mut(actor) {
             e.group_members.push(target);
         }
         self.party_join_group_em(target, actor, cfg, &mut em);
@@ -784,7 +784,7 @@ impl World {
                 None => continue,
             };
             if owner != 0 && self.party_is_dead_or_ghost(owner) {
-                if let Some(e) = self.entities.get_mut(id) {
+                if let Some(mut e) = self.entities.get_mut(id) {
                     e.group_owner = 0;
                 }
             }
@@ -796,7 +796,7 @@ impl World {
                 let members = self.party_members_of(id);
                 for m in members.into_iter().rev() {
                     if self.party_is_dead_or_ghost(m) {
-                        if let Some(e) = self.entities.get_mut(id) {
+                        if let Some(mut e) = self.entities.get_mut(id) {
                             if let Some(p) = e.group_members.iter().rposition(|&x| x == m) {
                                 e.group_members.remove(p);
                             }

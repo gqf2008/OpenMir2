@@ -41,7 +41,7 @@ fn kill_monster(w: &mut World, hitter: i32, mon_exp: i32) -> i32 {
         e.exp_hitter = Some(hitter);
         w.add_entity(e)
     };
-    w.entities.get_mut(mon).unwrap().hp = 0;
+    w.entities.get_mut(mon).unwrap().vitals.hp = 0;
     let rec = w.tick();
     assert_eq!(rec.deaths.len(), 1, "应有 1 次死亡结算: {rec:?}");
     rec.deaths[0].4
@@ -71,7 +71,7 @@ fn group_exp_by_level_ratio() {
     let (mut w, l, a, b) = setup_group();
     w.combat_config.high_level_kill_mon_fix_exp = false;
     for (id, lvl) in [(l, 4u8), (a, 3), (b, 2)] {
-        w.entities.get_mut(id).unwrap().level = lvl;
+        w.entities.get_mut(id).unwrap().progression.level = lvl;
     }
     let gained = kill_monster(&mut w, l, 600);
     assert_eq!(gained, 373, "L: Round(840/9*4)");
@@ -137,7 +137,7 @@ fn single_member_group_gets_plain_exp() {
     let l = w.add_entity(Entity::new(1, "L", 10, 10));
     // 手造「只有自己」的组态（等价于 oracle `GroupMembers.Count == 1`）。
     {
-        let e = w.entities.get_mut(l).unwrap();
+        let mut e = w.entities.get_mut(l).unwrap();
         e.group_owner = l;
         e.group_members = vec![l];
     }
@@ -157,7 +157,7 @@ fn group_exp_awards_list_members_in_order() {
         e.exp_hitter = Some(l);
         w.add_entity(e)
     };
-    w.entities.get_mut(mon).unwrap().hp = 0;
+    w.entities.get_mut(mon).unwrap().vitals.hp = 0;
     let rec = w.tick();
     assert_eq!(awards(&w, &rec), vec![l, a, b], "成员表序 L/A/B");
     assert!(rec.exp_awards.iter().all(|(_, amt, ..)| *amt == 280));
@@ -207,7 +207,7 @@ fn world_attack_excludes_group_mate() {
     });
     let b = w.add_entity(Entity::new(2, "B", 11, 10));
     {
-        let ea = w.entities.get_mut(a).unwrap();
+        let mut ea = w.entities.get_mut(a).unwrap();
         ea.group_owner = a;
         ea.group_members = vec![a, b];
     }
@@ -245,7 +245,7 @@ fn group_owner_missing_matches_oracle_npe() {
         e.exp_hitter = Some(l);
         w.add_entity(e)
     };
-    w.entities.get_mut(mon).unwrap().hp = 0;
+    w.entities.get_mut(mon).unwrap().vitals.hp = 0;
     let rec = w.tick();
     assert_eq!(awards(&w, &rec), vec![l, a, b], "控制：团长在场 ⇒ L/A/B");
     assert_eq!(rec.deaths[0].4, 280, "控制：获得者本人 840/3");
@@ -265,7 +265,7 @@ fn group_owner_missing_matches_oracle_npe() {
         e.exp_hitter = Some(a);
         w.add_entity(e)
     };
-    w.entities.get_mut(mon).unwrap().hp = 0;
+    w.entities.get_mut(mon).unwrap().vitals.hp = 0;
     let rec = w.tick();
     assert_eq!(rec.deaths.len(), 1, "应有 1 次死亡结算: {rec:?}");
     assert_eq!(
@@ -347,7 +347,7 @@ fn poison_delivery_group_gate_reads_poisoned_targets_leader_table() {
     // 同组：B（中毒目标）与 A（报文里的 caster）同属团长 L。
     let (mut w, _l, a, b) = setup_group();
     {
-        let t = w.entities.get_mut(b).unwrap();
+        let mut t = w.entities.get_mut(b).unwrap();
         t.attack_mode = ATTACK_MODE_HAM_GROUP;
     }
     assert!(
@@ -375,7 +375,7 @@ fn poison_delivery_group_gate_reads_poisoned_targets_leader_table() {
     // 控制：B 离组（GroupOwner=0）⇒ IsGroupMember false ⇒ A 是合法目标。
     let (mut w, _l, a, b) = setup_group();
     {
-        let t = w.entities.get_mut(b).unwrap();
+        let mut t = w.entities.get_mut(b).unwrap();
         t.attack_mode = ATTACK_MODE_HAM_GROUP;
         t.group_owner = 0;
     }
@@ -406,15 +406,15 @@ fn poison_delivery_group_gate_reads_poisoned_targets_leader_table() {
 fn friend_sites_read_leader_group_table() {
     let (mut w, l, a, b) = setup_group();
     {
-        let c = w.entities.get_mut(a).unwrap();
+        let mut c = w.entities.get_mut(a).unwrap();
         c.attack_mode = ATTACK_MODE_HAM_GROUP;
         assert_eq!(c.group_owner, l, "A 是团长 L 的成员");
         assert!(c.group_members.is_empty(), "非团长自身表为空");
     }
     {
         let t = w.entities.get_mut(b).unwrap();
-        t.hp = 10;
-        t.max_hp = 100;
+        t.vitals.hp = 10;
+        t.vitals.max_hp = 100;
     }
     let magic = |id: u16| mir2_data::MagicInfo {
         magic_id: id,

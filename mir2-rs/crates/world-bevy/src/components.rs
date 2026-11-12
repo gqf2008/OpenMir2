@@ -144,6 +144,14 @@ pub struct AbilitySnapshot<B = ()> {
     pub abil: Option<B>,
 }
 
+// 手写 `Default`（derive 会给 `B` 加 `Default` bound，而 world 侧 `BaseAbil` 不实现）。
+// 缺省 `None` = 尚未取快照，与 `Entity::new` 的 ctor 缺省一致。
+impl<B> Default for AbilitySnapshot<B> {
+    fn default() -> Self {
+        AbilitySnapshot { abil: None }
+    }
+}
+
 /// 成长/等级：职业、不死系、等级、经验与杀怪经验基数。
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Progression {
@@ -413,9 +421,7 @@ pub struct GroupState {
 mod adapters {
     use super::*;
     use mir2_world::combat::DropItem;
-    use mir2_world::entity::{
-        AnimalState, BaseAbil, CastleBinding, Entity, MonsterCtorDraws, UseItemSlot,
-    };
+    use mir2_world::entity::{AnimalState, CastleBinding, Entity, MonsterCtorDraws, UseItemSlot};
     use mir2_world::merchant::MerchantState as WorldMerchantState;
     use mir2_world::npc::NpcState as WorldNpcState;
 
@@ -463,23 +469,6 @@ mod adapters {
 
     clone_adapter!(CoreIdentity, id, name);
     copy_adapter!(Appearance, race, race_img, appr, light, name_color);
-    copy_adapter!(
-        Vitals,
-        hp,
-        max_hp,
-        mp,
-        max_mp,
-        hit_speed,
-        dc,
-        ac,
-        mac,
-        hit_point,
-        speed_point,
-        anti_magic,
-        anti_poison,
-        undead_power
-    );
-    copy_adapter!(Progression, job, life_attrib, level, mon_exp, exp, max_exp);
     copy_adapter!(
         Flags,
         invisible,
@@ -601,18 +590,6 @@ mod adapters {
         group_members
     );
 
-    // 具名整块载荷：适配器直接搬 world 侧的完整结构（不复制字段）。
-    impl FromEntity for AbilitySnapshot<BaseAbil> {
-        fn from_entity(e: &Entity) -> Self {
-            AbilitySnapshot { abil: e.abil }
-        }
-    }
-    impl ApplyToEntity for AbilitySnapshot<BaseAbil> {
-        fn apply_to(&self, e: &mut Entity) {
-            e.abil = self.abil;
-        }
-    }
-
     impl FromEntity for Inventory<UseItemSlot> {
         fn from_entity(e: &Entity) -> Self {
             Inventory {
@@ -706,9 +683,6 @@ mod adapters {
     pub struct EntityComponents {
         pub identity: CoreIdentity,
         pub appearance: Appearance,
-        pub vitals: Vitals,
-        pub ability: AbilitySnapshot<BaseAbil>,
-        pub progression: Progression,
         pub flags: Flags,
         pub pvp: PvpState,
         pub life: LifeCycle,
@@ -733,9 +707,6 @@ mod adapters {
             EntityComponents {
                 identity: FromEntity::from_entity(e),
                 appearance: FromEntity::from_entity(e),
-                vitals: FromEntity::from_entity(e),
-                ability: FromEntity::from_entity(e),
-                progression: FromEntity::from_entity(e),
                 flags: FromEntity::from_entity(e),
                 pvp: FromEntity::from_entity(e),
                 life: FromEntity::from_entity(e),
@@ -759,9 +730,6 @@ mod adapters {
         pub fn apply_to(&self, e: &mut Entity) {
             self.identity.apply_to(e);
             self.appearance.apply_to(e);
-            self.vitals.apply_to(e);
-            self.ability.apply_to(e);
-            self.progression.apply_to(e);
             self.flags.apply_to(e);
             self.pvp.apply_to(e);
             self.life.apply_to(e);
@@ -799,8 +767,10 @@ mod tests {
     /// 给 **`Entity` 当前全部字段逐个** 赋非缺省值：任何一组适配器漏字段/写错字段，
     /// 全量 round-trip 的 `Debug` 比对都会红。
     ///
-    /// S3a 起 `DupState` 的 3 个字段已迁出 `Entity`（计数组件真值），因此这里是
-    /// **138 字段**（P0 的 151 减去 DupState 3 + Transform 4 + MapBinding 6）。
+    /// S3a/S3b/S4a 起已迁出的字段不再参与本函数：`DupState` 3 + `Transform` 4 +
+    /// `MapBinding` 6 + S4a 20（Vitals 13 / AbilitySnapshot 1 / Progression 6）⇒
+    /// `Entity` 剩 **118 字段**（P0 的 151 减 33）。迁出字段的 value 语义由各自的
+    /// 组件契约用例（如 `s4a_component_ctor_defaults_match_entity_new`）钉住。
     fn distinctive_entity() -> EntitySpawn {
         let mut e = Entity::new(91, "ecs-p0", 13, 27);
 
@@ -1031,6 +1001,8 @@ mod tests {
         e
     }
 
+    /// S4a 起 Vitals/AbilitySnapshot/Progression 已迁出 `Entity`：round-trip 只比较
+    /// `Entity` 主组件（剩余 118 字段）；迁出字段由各自组件契约用例钉住。
     fn debug_snapshot(e: &Entity) -> String {
         format!("{e:?}")
     }
@@ -1045,12 +1017,15 @@ mod tests {
     #[test]
     fn split_and_apply_round_trip_all_remaining_fields() {
         let src = distinctive_entity();
-        let split = EntityComponents::split(&src);
+        let split = EntityComponents::split(&src.entity);
 
         let mut restored = Entity::new(0, "", 0, 0);
         split.apply_to(&mut restored);
 
-        assert_eq!(debug_snapshot(&src), debug_snapshot(&restored));
+        assert_eq!(
+            debug_snapshot(&src.entity),
+            debug_snapshot(&restored.entity)
+        );
     }
 
     /// 负对照：只改一个字段，`Debug` 快照必须不同（证明上面的比较不是恒等/空过）。
@@ -1058,8 +1033,8 @@ mod tests {
     fn debug_snapshot_detects_single_field_change() {
         let src = distinctive_entity();
         let mut altered = src.clone();
-        altered.hp = altered.hp.wrapping_add(1);
-        assert_ne!(debug_snapshot(&src), debug_snapshot(&altered));
+        altered.appr = altered.appr.wrapping_add(1);
+        assert_ne!(debug_snapshot(&src.entity), debug_snapshot(&altered.entity));
     }
 
     /// S3a：`DupState` 已脱离 `Entity`，改由组件独立 API（`new`/`Default`）构造。
@@ -1087,6 +1062,32 @@ mod tests {
             format!("{d:?}"),
             "非缺省状态必须可区分"
         );
+    }
+
+    /// S4a：`Vitals`/`AbilitySnapshot`/`Progression` 已脱离 `Entity`。
+    ///
+    /// 判据：生成期载体（`Entity::new`）的 ctor 缺省必须与迁移前逐字段一致
+    /// （`hp/max_hp=100`、`level=1`、`abil=None`），且**不得**用 `Component::default()`
+    /// 直接造实体（派生 `Default` 是 0/0/0）。
+    ///
+    /// 牙：把 `EntitySpawn::CTOR_LEVEL` 改成 0 ⇒ 升级/属性用例红（本用例 + `levelabil`）；
+    /// 把 `CTOR_HP` 改成 0 ⇒ 进图即被死亡结算当死者（本用例红）。
+    #[test]
+    fn s4a_component_ctor_defaults_match_entity_new() {
+        let e = Entity::new(1, "x", 0, 0);
+        assert_eq!((e.hp, e.max_hp), (100, 100), "ctor 缺省 HP/MaxHP=100/100");
+        assert_eq!(e.level, 1, "ctor 缺省 Abil.Level=1");
+        assert_eq!(e.abil, None, "生成路径不取 Abil 快照");
+        assert_eq!(e.job, 0);
+        assert_eq!(e.life_attrib, 0);
+        assert_eq!(e.mon_exp, 0);
+        assert_eq!(e.exp, 0);
+        assert_eq!(e.max_exp, 0);
+        // 派生 Default 与 ctor 缺省**不同**：这是「不得用 Default 造实体」的负对照。
+        assert_eq!(Vitals::default().hp, 0);
+        assert_eq!(Vitals::default().max_hp, 0);
+        assert_eq!(Progression::default().level, 0);
+        assert_eq!(AbilitySnapshot::<BaseAbil>::default().abil, None);
     }
 
     #[test]

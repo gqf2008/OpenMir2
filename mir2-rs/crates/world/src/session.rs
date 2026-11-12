@@ -582,7 +582,7 @@ impl World {
             // DisappearA()` —— **不销毁对象**（它仍留在 `PlayObjectList`，由 `WorldServer.cs:707-716`
             // 的移除门收走）。本仓对应：实体留在 `entities` 里且 `ghost=true`，`actor_id` 保留；
             // 移除由 `disconnect`（上面的 Left 分支）承担。
-            if let Some(e) = self.entities.get_mut(actor_id) {
+            if let Some(mut e) = self.entities.get_mut(actor_id) {
                 e.ghost = true;
             }
             if let Some(b) = self.entities.map_binding_mut(actor_id) {

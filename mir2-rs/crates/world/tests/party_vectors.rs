@@ -487,7 +487,7 @@ fn die_member_triggers_oracle_del_member_and_group_survives() {
     assert_eq!(w.entities.get(l).unwrap().group_members, vec![l, t, u]);
 
     // 走真实死亡写入点：`hp == 0`（oracle `Struck` → `Die()`；Rust `settle_deaths`）。
-    w.entities.get_mut(t).unwrap().hp = 0;
+    w.entities.get_mut(t).unwrap().vitals.hp = 0;
     let rec = w.tick();
 
     assert!(w.entities.get(t).unwrap().death, "Die() 置 Death = true");
@@ -569,7 +569,7 @@ fn die_leader_disbands_group() {
     w.party_create_group(l, "T", &cfg());
     w.party_add_group_member(l, "U", &cfg());
 
-    w.entities.get_mut(l).unwrap().hp = 0;
+    w.entities.get_mut(l).unwrap().vitals.hp = 0;
     let rec = w.tick();
 
     for id in [l, t, u] {
@@ -631,9 +631,9 @@ fn play_object_by_name_ignores_non_player_entities() {
 fn script_group_snapshot_reads_owner_and_member_jobs() {
     let (mut w, l, t, u) = three_players();
     // 三种职业各一名：L=战士(0)、T=法师(1)、U=道士(2)。
-    w.entities.get_mut(l).unwrap().job = 0;
-    w.entities.get_mut(t).unwrap().job = 1;
-    w.entities.get_mut(u).unwrap().job = 2;
+    w.entities.get_mut(l).unwrap().progression.job = 0;
+    w.entities.get_mut(t).unwrap().progression.job = 1;
+    w.entities.get_mut(u).unwrap().progression.job = 2;
 
     // 无组：owner=0、空表。
     assert_eq!(w.party_script_group_snapshot(l), (0, vec![]));

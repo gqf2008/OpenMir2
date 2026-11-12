@@ -191,7 +191,11 @@ pub fn insert_hidden_qfunction(
 /// 门里按该配置删过期在途升级（部署 3 天；`GameSvrConf.cs:1423` 缺省 8）。
 pub fn set_upgrade_clear_days(world: &mut mir2_world::World, days: u8) {
     for id in world.merchant_ids_sorted() {
-        if let Some(st) = world.entities.get_mut(id).and_then(|e| e.merchant.as_mut()) {
+        if let Some(st) = world
+            .entities
+            .entity_mut(id)
+            .and_then(|e| e.merchant.as_mut())
+        {
             st.clear_expire_upgrade_days = days;
         }
     }
@@ -335,7 +339,7 @@ pub fn spawn_merchants_with_scripts(
                 // 字段口径同固定 NPC（`Merchant : NormNpc`：Light=2、RaceImg=50）——
                 // `Appr` 在商人侧存于 `MerchantState.appr`（`BaseObject.Appr` 的镜像），
                 // 不在 `Entity.appr`。
-                if let Some(e) = world.entities.get_mut(id) {
+                if let Some(mut e) = world.entities.get_mut(id) {
                     // **T-154 Minor-2**：oracle `BaseObject()` ctor `Dir = 4`（`BaseObject.cs:378`），
                     // `Merchant()` ctor 不覆写 ⇒ 首个 `TurnTo` 之前 `Dir` 恒 4。
                     // `Entity::new` 的 `ai.dir` 缺省 0 ⇒ 宿主补齐后再投影进展示表。

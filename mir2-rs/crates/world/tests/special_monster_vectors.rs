@@ -223,7 +223,7 @@ fn run_attack_tick_boundary_is_ge_not_gt() {
     let mut w = World::new(32, 32);
     let id = special_owner(&mut w, RACE_BEE_QUEEN, 5, 5);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.ai.walk_tick = 0;
         e.ai.walk_speed = 1400;
         e.ai.attack_tick = 3000;
@@ -258,7 +258,7 @@ fn make_child_stops_at_15() {
         .map(|i| plain_child(&mut w, 10 + i as i32, 10))
         .collect();
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.ai.target_creature = Some(target);
         e.ai.walk_tick = 0;
         e.ai.attack_tick = 0;
@@ -296,7 +296,7 @@ fn make_child_below_limit_sends_hit_and_delay() {
         .map(|i| plain_child(&mut w, 10 + i as i32, 20))
         .collect();
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.ai.target_creature = Some(target);
         e.ai.walk_tick = 0;
         e.ai.attack_tick = 0;
@@ -334,7 +334,7 @@ fn child_list_cleanup_removes_dead_ghost_and_missing_in_reverse() {
     w.entities.get_mut(ghost).unwrap().ghost = true;
     w.entities.remove(missing);
     {
-        let e = w.entities.get_mut(id).unwrap();
+        let mut e = w.entities.get_mut(id).unwrap();
         e.special_children = vec![alive1, dead, ghost, missing, alive2];
         e.ai.walk_tick = 0;
         e.ai.attack_tick = 0;
@@ -658,7 +658,7 @@ fn zen_bee_delay_queues_then_flush_spawns_and_adopts() {
     let bee = special_owner(&mut w, RACE_BEE_QUEEN, 10, 10);
     let target = plain_child(&mut w, 12, 10);
     {
-        let e = w.entities.get_mut(bee).unwrap();
+        let mut e = w.entities.get_mut(bee).unwrap();
         e.ai.target_creature = Some(target);
         e.ai.walk_tick = 0;
         e.ai.attack_tick = 0;
@@ -703,7 +703,7 @@ fn zen_bee_delivery_with_spawner_is_synchronous() {
     let mut w = World::new(32, 32);
     let spider = special_owner(&mut w, RACE_SPIDER_HOUSE, 10, 10);
     {
-        let e = w.entities.get_mut(spider).unwrap();
+        let mut e = w.entities.get_mut(spider).unwrap();
         e.ai.walk_tick = 0;
         e.ai.attack_tick = 0;
         e.ai.walk_speed = 1400;
@@ -757,7 +757,7 @@ fn zen_bee_500ms_tail_delivered_on_next_pump() {
     let bee = special_owner(&mut w, RACE_BEE_QUEEN, 5, 5);
     let target = plain_child(&mut w, 7, 5);
     {
-        let e = w.entities.get_mut(bee).unwrap();
+        let mut e = w.entities.get_mut(bee).unwrap();
         e.ai.target_creature = Some(target);
         e.ai.walk_tick = 0;
         e.ai.attack_tick = 0;

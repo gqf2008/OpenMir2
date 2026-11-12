@@ -2472,8 +2472,8 @@ fn apply_pending_level_up(
     // 实体侧：`level` 已由 `GmEntityState::apply` 写入；`max_exp` 这里补（oracle 是同一个
     // `PlayObject`，战斗经验读 `Abil.MaxExp`）。
     if let Some(e) = world.entities.get_mut(sg.actor_id) {
-        e.level = level;
-        e.max_exp = max_exp;
+        e.progression.level = level;
+        e.progression.max_exp = max_exp;
     }
     if let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) {
         let client_layout = game_svr::smframe::client_layout_enabled();
@@ -2660,7 +2660,7 @@ fn apply_gm_use_item_write(
     // 世界侧（`Entity.use_items` 是每 tick 回写会话的源）。
     let actor = sg.actor_id;
     let extra_abil = world.entities.get(actor).map(|e| e.extra_abil);
-    if let Some(e) = world.entities.get_mut(actor) {
+    if let Some(mut e) = world.entities.get_mut(actor) {
         if let Some(slot) = e.use_items.get_mut(w.slot) {
             slot.make_index = w.make_index;
             slot.index = w.index;
@@ -3210,7 +3210,7 @@ fn run_party_goto_label(
             player.power_rate,
             player.power_rate_time,
         );
-        if let Some(e) = world.entities.get_mut(actor) {
+        if let Some(mut e) = world.entities.get_mut(actor) {
             e.kill_mon_exp_rate = r_kill;
             e.kill_mon_exp_rate_time = r_kill_t;
             e.power_rate = r_power;
@@ -3603,8 +3603,8 @@ fn handle_inbound_cmd(
             let effect = recalc_session_ability(sg, frames_ctx.catalog, extra_abil.as_ref(), None);
             // `PlayObject.cs:2873`：`CharStatus = GetCharStatus();`（RecalcAbilitys 尾段）。
             let status = world.get_char_status(actor_id);
-            if let Some(e) = world.entities.get_mut(actor_id) {
-                apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+            if let Some(mut e) = world.entities.get_mut(actor_id) {
+                apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
                 e.char_status = status;
                 if effect.revival {
                     e.revival = true;
@@ -3815,7 +3815,7 @@ fn handle_inbound_cmd(
             // 旧朝向（展示表只是投影，下一次转向/走跑会重新投影）。
             if out.send_butch && actor_id != 0 {
                 if out.dir_updated {
-                    if let Some(e) = world.entities.get_mut(actor_id) {
+                    if let Some(mut e) = world.entities.get_mut(actor_id) {
                         e.ai.dir = bt_dir;
                     }
                 }
@@ -4727,8 +4727,8 @@ fn handle_bag_cmd_with_magic(
         recalc_char_status = Some(char_status);
         // **PL-1 / A2**：换装重算后整份 `WAbil`（含 HP/MaxHP/MP/MaxMP）与 `SubAbility` 落世界实体
         // （此前只同步 `HitSpeed`——登记缺口；P32 的 `Revival` 也在这里按粘滞锁存落账）。
-        if let Some(e) = world.entities.get_mut(sg.actor_id) {
-            apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+        if let Some(mut e) = world.entities.get_mut(sg.actor_id) {
+            apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
             e.char_status = char_status;
             if effect.revival {
                 e.revival = true;
@@ -7196,9 +7196,9 @@ fn handle_shop_cmd_inner(
                                     recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
                                 // **复验 F1**：`RecalcAbilitys` 的产物（`WAbil`/`SubAbility`/`HitSpeed`）
                                 // 同帧落实体（与换装路径 `sync_use_items_to_entity` 同口径）。
-                                if let Some(e) = world.entities.get_mut(sg.actor_id) {
+                                if let Some(mut e) = world.entities.get_mut(sg.actor_id) {
                                     apply_ability_to_entity(
-                                        e,
+                                        &mut e,
                                         &sg.state.wabil,
                                         &sg.sub,
                                         sg.hit_speed,
@@ -10140,8 +10140,8 @@ fn handle_eat_cmd(
     // oracle 单份 `WAbil` 的 `!Death` 拒绝路不产生任何写点 ⇒ 镜像同样不该执行。
     if out.eaten {
         if let Some(e) = world.entities.get_mut(actor_id) {
-            e.hp = sg.state.wabil.hp;
-            e.mp = sg.state.wabil.mp;
+            e.vitals.hp = sg.state.wabil.hp;
+            e.vitals.mp = sg.state.wabil.mp;
         }
     }
 
@@ -10585,7 +10585,7 @@ fn apply_use_items_to_entity(
 
 /// 会话 → 实体：整表同步（进世界装载 / 穿脱后）。
 fn sync_use_items_to_entity(world: &mut mir2_world::World, sg: &SessionGround) {
-    if let Some(entity) = world.entities.get_mut(sg.actor_id) {
+    if let Some(entity) = world.entities.entity_mut(sg.actor_id) {
         apply_use_items_to_entity(entity, &sg.use_items);
     }
 }
@@ -10599,7 +10599,7 @@ pub(crate) fn sync_use_item_slot_to_entity(
     if slot >= mir2_world::entity::USE_ITEM_SLOTS {
         return;
     }
-    if let Some(entity) = world.entities.get_mut(sg.actor_id) {
+    if let Some(mut entity) = world.entities.get_mut(sg.actor_id) {
         entity.use_items[slot] = sg.use_items.get(slot).and_then(Option::as_ref).map_or_else(
             mir2_world::entity::UseItemSlot::default,
             |it| mir2_world::entity::UseItemSlot {
@@ -11222,7 +11222,7 @@ fn handle_move_cmd(
             }
             // **单一真源**：先写实体 `Dir`（`MakeSaveRcd` 读 `playObject.Dir`；G-09），
             // 展示表只是投影。
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(mut e) = world.entities.get_mut(actor_id) {
                 e.ai.dir = n_dir;
             }
             sync_display_dir(world, displays, actor_id);
@@ -11279,7 +11279,7 @@ fn handle_move_cmd(
             // `PlayObject.Base.cs:400` 的 `Dir = btDir;` 在 `CanWalk*` 之前），被挡/越界
             // **不回滚** ⇒ 实体朝向记**尝试**方向。`MakeSaveRcd` 读 `playObject.Dir`（G-09）
             // ⇒ 必须在 `step_with_route` 之前同步；失败支（下面 `!outcome.moved` 早退）也保留。
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(mut e) = world.entities.get_mut(actor_id) {
                 e.ai.dir = dir;
             }
             let outcome = world.step_with_route(actor_id, ddx, ddy, steps);
@@ -11418,7 +11418,44 @@ fn handle_move_cmd(
 /// （`dc/ac/hit_point/speed_point=0`、`hp/max_hp=100`）⇒ 攻方攻击力恒 0，且
 /// **守方** `hit_point==0` 让命中门短路 ⇒ 真机 120 击全记躲闪（`attack_diff.py` 的 k=2 分岔根因）。
 fn apply_ability_to_entity(
-    e: &mut mir2_world::Entity,
+    e: &mut mir2_world::EntityMut,
+    wabil: &game_svr::ability::Ability,
+    sub: &game_svr::ability::SubAbility,
+    hit_speed: u16,
+) {
+    e.vitals.dc = i32::from(wabil.dc);
+    e.vitals.ac = i32::from(wabil.ac);
+    e.vitals.hit_point = sub.hit_point;
+    e.vitals.speed_point = sub.speed_point;
+    e.vitals.hp = wabil.hp;
+    e.vitals.max_hp = wabil.max_hp;
+    // **PL-1 / A2**：`WAbil.MP/MaxMP` 同样落到实体。此前未同步 ⇒ 实体 `mp/max_mp` 恒 0，
+    // `buff::magic_shield`（护身术扣蓝）与 `monai` 的恢复段读到的是假值；oracle 的
+    // `StruckDamage`/恢复都直接读同一个 `WAbil`。golden 的玩家路径此前没有非零 MP 观测点，
+    // 故该补全不改变既有 trace（B1..B5 逐字节）。
+    e.vitals.mp = wabil.mp;
+    e.vitals.max_mp = wabil.max_mp;
+    e.progression.level = wabil.level;
+    // oracle `PlayObject.cs:1310-1312`：`Abil.Exp/MaxExp` 与 `WAbil` 同源，实体是战斗侧
+    // （`crates/world/src/combat.rs::win_exp`）的唯一读点。旧实现不写 ⇒ 实体缺省 `0/0`
+    // （`crates/world/src/entity.rs:1006`），登录后首杀必 `exp >= 0` 伪升级（等级 +1）。
+    e.progression.exp = wabil.exp;
+    e.progression.max_exp = wabil.max_exp;
+    // `RecalcAbilitys` 的 `AntiMagic = 1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30/67`）。
+    e.vitals.anti_magic = sub.anti_magic;
+    // `WAbil.MAC = MakeWord(MIN(255, Lo(AddAbil.MAC)+Lo(Abil.MAC)), …Hi…)`
+    // （`PlayObject.cs:2903`）——P3-B2 的 `GetMagStruckDamage` 唯一读点。
+    e.vitals.mac = wabil.mac;
+    // `PlayObject.RecalcAbilitys` 尾部 `HitSpeed = AddAbil.HitSpeed`（`PlayObject.cs:2899`）。
+    // 657 的末参读**收件人自己**的 `Entity.hit_speed`（`PlayObject.Message.cs:1846`）。
+    e.vitals.hit_speed = hit_speed;
+}
+
+/// `EntitySpawn`（生成期载体）版的 [`apply_ability_to_entity`]，仅供构造级用例：
+/// 载体字段与组件同值，插入后由 `EntityStore::insert` 落成组件。
+#[cfg(test)]
+fn apply_ability_to_spawn(
+    e: &mut mir2_world::EntitySpawn,
     wabil: &game_svr::ability::Ability,
     sub: &game_svr::ability::SubAbility,
     hit_speed: u16,
@@ -11429,25 +11466,13 @@ fn apply_ability_to_entity(
     e.speed_point = sub.speed_point;
     e.hp = wabil.hp;
     e.max_hp = wabil.max_hp;
-    // **PL-1 / A2**：`WAbil.MP/MaxMP` 同样落到实体。此前未同步 ⇒ 实体 `mp/max_mp` 恒 0，
-    // `buff::magic_shield`（护身术扣蓝）与 `monai` 的恢复段读到的是假值；oracle 的
-    // `StruckDamage`/恢复都直接读同一个 `WAbil`。golden 的玩家路径此前没有非零 MP 观测点，
-    // 故该补全不改变既有 trace（B1..B5 逐字节）。
     e.mp = wabil.mp;
     e.max_mp = wabil.max_mp;
     e.level = wabil.level;
-    // oracle `PlayObject.cs:1310-1312`：`Abil.Exp/MaxExp` 与 `WAbil` 同源，实体是战斗侧
-    // （`crates/world/src/combat.rs::win_exp`）的唯一读点。旧实现不写 ⇒ 实体缺省 `0/0`
-    // （`crates/world/src/entity.rs:1006`），登录后首杀必 `exp >= 0` 伪升级（等级 +1）。
     e.exp = wabil.exp;
     e.max_exp = wabil.max_exp;
-    // `RecalcAbilitys` 的 `AntiMagic = 1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30/67`）。
     e.anti_magic = sub.anti_magic;
-    // `WAbil.MAC = MakeWord(MIN(255, Lo(AddAbil.MAC)+Lo(Abil.MAC)), …Hi…)`
-    // （`PlayObject.cs:2903`）——P3-B2 的 `GetMagStruckDamage` 唯一读点。
     e.mac = wabil.mac;
-    // `PlayObject.RecalcAbilitys` 尾部 `HitSpeed = AddAbil.HitSpeed`（`PlayObject.cs:2899`）。
-    // 657 的末参读**收件人自己**的 `Entity.hit_speed`（`PlayObject.Message.cs:1846`）。
     e.hit_speed = hit_speed;
 }
 
@@ -11714,7 +11739,7 @@ fn handle_hit_cmd(
     // 同一句在 oracle 里**无条件**执行：物理命中与**挥空**（`attackTarget == null`，
     // `_Attack` 返回 false）都改 `Dir` ⇒ 实体朝向也必须无条件同步（`MakeSaveRcd` 读
     // `playObject.Dir`；G-09 的失败支）。展示表从实体重投影。
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(mut e) = world.entities.get_mut(actor_id) {
         e.ai.dir = dir;
     }
     sync_display_dir(world, displays, actor_id);
@@ -12607,7 +12632,7 @@ fn handle_spell_cmd_with_magic(
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         // oracle `PlayObject.Attack.cs:1270` 的 `Dir = GetNextDirection(...)` 改的是
         // `playObject.Dir`（不只是展示态）⇒ 先写实体，再投影展示表。
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(mut e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir;
         }
         sync_display_dir(world, displays, actor_id);
@@ -12706,7 +12731,7 @@ fn handle_spell_cmd_with_magic(
                     // oracle 17→15→13、存档 13）。见上方「MP 权威存储」段——oracle 只有一份
                     // `WAbil`，两份存储必须在每个写点同步（入口 :10292 已保证实体存在）。
                     if let Some(e) = world.entities.get_mut(actor_id) {
-                        e.mp = sg.state.wabil.mp;
+                        e.vitals.mp = sg.state.wabil.mp;
                     }
                     // `HealthSpellChanged()`（`BaseObject.cs:700-709`）：
                     // ① `SendUpdateMsg` ⇒ 只给自己；② `ShowHp` ⇒ 再 `SendRefMsg`（含自己 + 观察者）。
@@ -14605,7 +14630,7 @@ fn handle_spell_cmd_with_magic(
                                     chat::send_ref_msg_range(),
                                 );
                                 // `:253 SetTargetCreat`（在 `if (stdItem != null)` 内）。
-                                if let Some(c) = world.entities.get_mut(actor_id) {
+                                if let Some(mut c) = world.entities.get_mut(actor_id) {
                                     c.ai.target_creature = Some(target_id);
                                 }
                                 // `:235-252` 骰门 + 投毒（`boSpellFail` 在 `:254` 清 false）。
@@ -15153,10 +15178,10 @@ fn handle_spell_cmd_with_magic(
                                             ..
                                         } = effect;
                                         // `HitSpeed = AddAbil.HitSpeed` 落到世界实体（657 末参）。
-                                        if let Some(e) = world.entities.get_mut(out.target) {
+                                        if let Some(mut e) = world.entities.get_mut(out.target) {
                                             e.revival |= revival;
                                             e.flame_ring |= flame_ring;
-                                            e.hit_speed = sg.hit_speed;
+                                            e.vitals.hit_speed = sg.hit_speed;
                                         }
                                         for event in &magic_events {
                                             buf.push_actor(
@@ -17700,7 +17725,7 @@ fn drain_levelup_healthspell_with_magic(
             magic_events,
             ..
         } = effect;
-        if let Some(e) = world.entities.get_mut(*winner) {
+        if let Some(mut e) = world.entities.get_mut(*winner) {
             e.flame_ring |= flame_ring;
         }
         // oracle 的直接帧（`SendAddMagic/SendDelMagic`）。
@@ -17726,8 +17751,8 @@ fn drain_levelup_healthspell_with_magic(
             mp as u16
         };
         // ③ 世界实体（战斗权威值）同步
-        if let Some(e) = world.entities.get_mut(*winner) {
-            apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+        if let Some(mut e) = world.entities.get_mut(*winner) {
+            apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
             if revival {
                 e.revival = true;
             }
@@ -18013,8 +18038,8 @@ fn drain_recovery(
         // `openmir2-mp-session-projection-clobber` 的「**每个写点同步**」教义：hp/mp 双侧
         // 一起镜像，不允许出现只写一侧的 HP/MP 写点（oracle 单份 WAbil ⇒ 无单侧意图）。
         if let Some(e) = world.entities.get_mut(sg.actor_id) {
-            e.hp = sg.state.wabil.hp;
-            e.mp = sg.state.wabil.mp;
+            e.vitals.hp = sg.state.wabil.hp;
+            e.vitals.mp = sg.state.wabil.mp;
         }
         slots.health_spell_changed(sg.actor_id, sg.show_hp);
     }
@@ -18214,8 +18239,8 @@ fn drain_stamina(
             // hp/mp 双侧一起回写（「每个写点同步」，卡 `openmir2-spell-fill-projection-mirror`；
             // mp_over 支生产当前不可达——MaxMP 只在装备重算时收缩，登记不静默）。
             if let Some(e) = world.entities.get_mut(actor_id) {
-                e.hp = sg.state.wabil.hp;
-                e.mp = sg.state.wabil.mp;
+                e.vitals.hp = sg.state.wabil.hp;
+                e.vitals.mp = sg.state.wabil.mp;
             }
         }
         // 本 tick 没有 P7/P8 待发槽时不必发 53，但 `:219` 的 `ShowHp` 到期检查仍要跑
@@ -18234,8 +18259,8 @@ fn drain_stamina(
             // 沿 `openmir2-mp-session-projection-clobber` 的「每个写点同步」教义补 `e.mp`
             //（hp 侧本就回写）；两份存储在每个写点同步，不允许只写一侧。
             if let Some(e) = world.entities.get_mut(actor_id) {
-                e.hp = sg.state.wabil.hp;
-                e.mp = sg.state.wabil.mp;
+                e.vitals.hp = sg.state.wabil.hp;
+                e.vitals.mp = sg.state.wabil.mp;
             }
             if let Some(entry) = online.iter().find(|e| e.chr_name == name) {
                 // `SendRefMsg` 的观察者集合：源自己那份已由槽模型计入 `self_frames`，这里只发其它人。
@@ -18993,14 +19018,14 @@ fn drain_close_health_for(
     }
     // `BreakOpenHealth()`（`BaseObject.cs:936-940`）。`CharStatusEx ^ OPENHEATH` 是 **XOR**
     // （oracle 原样），不是清位——与 `MakeOpenHealth` 的 OR 互为逆操作。
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(mut e) = world.entities.get_mut(actor_id) {
         e.show_hp = false;
         e.char_status_ex ^= mir2_world::entity::POISON_OPENHEATH;
     }
     // `CharStatus = GetCharStatus()` = `GetBuffStatus | (CharStatusEx & 0xFFFF)`：
     // 必须在 XOR **之后**读，故分两次借（`get_char_status` 取 `&World`）。
     let status = mir2_world::buff::get_char_status(world, actor_id);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(mut e) = world.entities.get_mut(actor_id) {
         e.char_status = status;
     }
     // `PlayObject.ShowHp` 的宿主镜像（`SM_HEALTHSPELLCHANGED(53)` 的 ShowHp 广播支读会话态）。
@@ -20229,13 +20254,13 @@ fn apply_pending_gm_target_ops(
                 None => return,
             };
             let (px, py, hp, max_hp) = {
-                let Some(e) = world.entities.get_mut(id) else {
+                let Some(mut e) = world.entities.get_mut(id) else {
                     return;
                 };
                 e.death_settled = false;
                 e.death = false;
-                e.hp = e.max_hp;
-                (ex, ey, e.hp, e.max_hp)
+                e.vitals.hp = e.vitals.max_hp;
+                (ex, ey, e.vitals.hp, e.vitals.max_hp)
             };
             if let Some(canon) = canonical(world, &name) {
                 // 帧载荷先用会话 wabil 同步 HP（F2b：ability_tail 编码含 hp）。
@@ -20536,8 +20561,8 @@ fn apply_pending_gm_target_ops(
             };
             if let Some(effect) = &effect {
                 if let (Some(tid), Some(tsg)) = (tid, sessions.get(&canon)) {
-                    if let Some(e) = world.entities.get_mut(tid) {
-                        apply_ability_to_entity(e, &tsg.state.wabil, &tsg.sub, tsg.hit_speed);
+                    if let Some(mut e) = world.entities.get_mut(tid) {
+                        apply_ability_to_entity(&mut e, &tsg.state.wabil, &tsg.sub, tsg.hit_speed);
                         if effect.revival {
                             e.revival = true;
                         }
@@ -20691,13 +20716,13 @@ fn gm_regen_monster(
 /// `ApplySlaveLevelAbilitys`，三族 DC/MaxHP 与 oracle 不一致）。`AntiMagic` 置 1 同
 /// `BaseObject.Abil.cs:30`。
 fn gm_mob_recalc(world: &mut mir2_world::World, id: i32, level: u8, now: i64) {
-    let Some(e) = world.entities.get_mut(id) else {
+    let Some(mut e) = world.entities.get_mut(id) else {
         return;
     };
     e.slave_exp_level = level;
-    mir2_world::slave::apply_slave_level_abilitys(e);
-    mir2_world::slave::apply_derived_slave_recalc(e, now);
-    e.anti_magic = 1;
+    mir2_world::slave::apply_slave_level_abilitys(&mut e);
+    mir2_world::slave::apply_derived_slave_recalc(&mut e, now);
+    e.vitals.anti_magic = 1;
 }
 
 /// `@ReCallMobEx` 的落尾（`ReCallMobExCommand.cs:37-49`）：
@@ -20710,12 +20735,12 @@ fn gm_mob_recalc(world: &mut mir2_world::World, id: i32, level: u8, now: i64) {
 fn gm_recall_ex_adopt(world: &mut mir2_world::World, caster_id: i32, mon_id: i32, name_color: u8) {
     let hp_before = world.entities.get(mon_id).map_or(0, |e| e.hp);
     let adopted = world.make_slave_adopt(caster_id, mon_id, 0, 1, 0);
-    if let Some(e) = world.entities.get_mut(mon_id) {
+    if let Some(mut e) = world.entities.get_mut(mon_id) {
         e.name_color = name_color;
         if adopted {
             e.is_slave = false;
             e.master_royalty_tick = 0;
-            e.hp = hp_before;
+            e.vitals.hp = hp_before;
         } else {
             // `make_slave_adopt` 只在「主人不是玩家/实体缺失」时返回 false（生产不可达）；
             // 兜底仍按 oracle 的两个必写字段落账。
@@ -23176,8 +23201,8 @@ fn drain_player_need_recheck_with_magic(
                     magic_events,
                     ..
                 } = effect;
-                if let Some(e) = world.entities.get_mut(actor_id) {
-                    apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+                if let Some(mut e) = world.entities.get_mut(actor_id) {
+                    apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
                     if revival {
                         e.revival = true;
                     }
@@ -23307,9 +23332,10 @@ fn drain_player_map_hp(
             dec_hp_tick: sg.dec_hp_tick,
             inc_hp_tick: sg.inc_hp_tick,
         };
-        let mut hp = e.hp;
-        let calls = game_svr::run_segments::map_hp_tick(flag, &mut hp, e.max_hp, now, &mut ticks);
-        e.hp = hp;
+        let mut hp = e.vitals.hp;
+        let calls =
+            game_svr::run_segments::map_hp_tick(flag, &mut hp, e.vitals.max_hp, now, &mut ticks);
+        e.vitals.hp = hp;
         sg.dec_hp_tick = ticks.dec_hp_tick;
         sg.inc_hp_tick = ticks.inc_hp_tick;
         if calls == 0 {
@@ -23405,8 +23431,8 @@ fn drain_player_hunger(
                 sg.state.wabil.mp = mp_now;
                 let extra_abil = world.entities.get(actor_id).map(|e| e.extra_abil);
                 let effect = recalc_session_ability(sg, catalog, extra_abil.as_ref(), None);
-                if let Some(e) = world.entities.get_mut(actor_id) {
-                    apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+                if let Some(mut e) = world.entities.get_mut(actor_id) {
+                    apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
                     if effect.revival {
                         e.revival = true;
                     }
@@ -23416,7 +23442,7 @@ fn drain_player_hunger(
             }
             game_svr::run_segments::HungerOutcome::DecHealth => {
                 if let Some(e) = world.entities.get_mut(actor_id) {
-                    e.hp = hp;
+                    e.vitals.hp = hp;
                 }
                 sg.state.wabil.hp = hp;
                 frames.health_spell_changed(actor_id, sg.show_hp);
@@ -23451,7 +23477,7 @@ fn drain_player_run_rates(
             continue;
         }
         let actor_id = sg.actor_id;
-        let Some(e) = world.entities.get_mut(actor_id) else {
+        let Some(mut e) = world.entities.get_mut(actor_id) else {
             continue;
         };
         let mut timers = game_svr::run_segments::RateTimers {
@@ -23992,8 +24018,8 @@ fn drain_player_revival_with_magic(
                     magic_events,
                     ..
                 } = effect;
-                if let Some(e) = world.entities.get_mut(actor_id) {
-                    apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+                if let Some(mut e) = world.entities.get_mut(actor_id) {
+                    apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
                     if revival {
                         e.revival = true;
                     }
@@ -24018,12 +24044,12 @@ fn drain_player_revival_with_magic(
 
         // ── 复活本体 ──
         {
-            let e = world.entities.get_mut(actor_id).expect("刚查过存在");
+            let mut e = world.entities.get_mut(actor_id).expect("刚查过存在");
             e.revival_tick = now;
-            e.hp = e.max_hp;
+            e.vitals.hp = e.vitals.max_hp;
             // 会话是 53/存档的投影，同步同一真源。
-            sg.state.wabil.hp = e.hp;
-            sg.state.wabil.max_hp = e.max_hp;
+            sg.state.wabil.hp = e.vitals.hp;
+            sg.state.wabil.max_hp = e.vitals.max_hp;
         }
         sync_use_items_to_entity(world, sg);
 
@@ -27712,8 +27738,8 @@ fn sim_loop(
                                                         Some((login_char_status, out.hit_speed));
                                                     // M3②③ k=2 收口：同一份 `RecalcAbilitys` 输出**同时**写进世界实体
                                                     // （此前只喂 52/752 帧，实体属性仍是 `Entity::new` 的空值）。
-                                                    if let Some(e) = world.entities.get_mut(id) {
-                                                        apply_ability_to_entity(e, &out.wabil, &out.sub, out.hit_speed);
+                                                    if let Some(mut e) = world.entities.get_mut(id) {
+                                                        apply_ability_to_entity(&mut e, &out.wabil, &out.sub, out.hit_speed);
                                                         // oracle `CharStatus = GetCharStatus()` 的落账
                                                         // （`BaseObject.cs:56` 的 `CharStatus` 缓存；657 的
                                                         // `Param/Tag` 与 `SM_DIGUP` 尾的 `Status` 都读它）。
@@ -27737,7 +27763,7 @@ fn sim_loop(
                                                     // 对象同一性）——耐久循环读的是实体槽，不装载就恒全零。
                                                     let session_use_items =
                                                         use_items_from(d.hum_items.as_deref());
-                                                    if let Some(e) = world.entities.get_mut(id) {
+                                                    if let Some(e) = world.entities.entity_mut(id) {
                                                         apply_use_items_to_entity(
                                                             e,
                                                             &session_use_items,
@@ -28329,7 +28355,7 @@ fn sim_loop(
                                                                 sg.off_line_flag = wb.off_line_flag;
                                                                 sg.kick_off_line_tick = wb.kick_off_line_tick;
                                                             }
-                                                            if let Some(e) = world.entities.get_mut(id) {
+                                                            if let Some(mut e) = world.entities.get_mut(id) {
                                                                 e.kill_mon_exp_rate = wb.kill_mon_exp_rate;
                                                                 e.kill_mon_exp_rate_time = wb.kill_mon_exp_rate_time;
                                                                 e.power_rate = wb.power_rate;
@@ -30199,7 +30225,7 @@ mod tests {
             speed_point: 15,
             ..game_svr::ability::SubAbility::default()
         };
-        apply_ability_to_entity(&mut e, &wabil, &sub, 7);
+        apply_ability_to_spawn(&mut e, &wabil, &sub, 7);
         assert_eq!(
             e.dc, 0x0101,
             "攻方 DC ← WAbil.DC（GetBaseAttackPoewr 取 LoByte=1，不是 0）"
@@ -30814,14 +30840,14 @@ mod tests {
             .enter_map("hero", mir2_world::Entity::new(0, "hero", 10, 10), 0)
             .expect("hero 进世界");
         {
-            let e = world.entities.get_mut(hid).unwrap();
+            let mut e = world.entities.get_mut(hid).unwrap();
             // oracle `ChangeSuperManModeCommand`（permission 10）置位后的玩家实体：
             // 世界 tick 的 `run_super_man_refill` 已回满（HP=MP=Max）。
             e.super_man = true;
-            e.hp = 100;
-            e.max_hp = 100;
-            e.mp = 100;
-            e.max_mp = 100;
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
+            e.vitals.mp = 100;
+            e.vitals.max_mp = 100;
             e.show_hp = true; // 心灵启示窗口内（恢复段的 ShowHp 广播面）
             e.show_hp_tick = world.clock_ms; // `:219` 到期门不在本用例命中 ⇒ 无 1101 噪声
         }
@@ -32308,7 +32334,7 @@ mod tests {
         );
 
         // 死亡写入点（`hp == 0`）→ `tick()` 的 `settle_deaths` 触发 `Die()` 的 `DelMember`。
-        world.entities.get_mut(t).unwrap().hp = 0;
+        world.entities.get_mut(t).unwrap().vitals.hp = 0;
         let rec = world.tick();
         assert_eq!(
             world.entities.get(t).unwrap().group_owner,
@@ -33238,7 +33264,7 @@ mod tests {
         let set_war = |world: &mut mir2_world::World, war: bool| {
             let st = world
                 .entities
-                .get_mut(mer_id)
+                .entity_mut(mer_id)
                 .and_then(|e| e.merchant.as_mut())
                 .expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
@@ -33443,7 +33469,7 @@ mod tests {
         let set_war = |world: &mut mir2_world::World, war: bool| {
             let st = world
                 .entities
-                .get_mut(mer_id)
+                .entity_mut(mer_id)
                 .and_then(|e| e.merchant.as_mut())
                 .expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
@@ -33664,7 +33690,7 @@ mod tests {
         let set_war = |world: &mut mir2_world::World, id: i32, war: bool| {
             let st = world
                 .entities
-                .get_mut(id)
+                .entity_mut(id)
                 .and_then(|e| e.merchant.as_mut())
                 .expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
@@ -33817,7 +33843,7 @@ mod tests {
         let set_war = |world: &mut mir2_world::World, id: i32, war: bool| {
             let st = world
                 .entities
-                .get_mut(id)
+                .entity_mut(id)
                 .and_then(|e| e.merchant.as_mut())
                 .expect("商人状态在");
             st.castle_under_war = war;
@@ -34008,7 +34034,7 @@ mod tests {
         // 开战：下一轮扫描把商人标 Hidden 并移除；`hides` 必须**不含**它。
         if let Some(st) = world
             .entities
-            .get_mut(mer_id)
+            .entity_mut(mer_id)
             .and_then(|e| e.merchant.as_mut())
         {
             st.castle_under_war = true;
@@ -34018,7 +34044,7 @@ mod tests {
         for _ in 0..40 {
             if let Some(st) = world
                 .entities
-                .get_mut(mer_id)
+                .entity_mut(mer_id)
                 .and_then(|e| e.merchant.as_mut())
             {
                 st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
@@ -34165,12 +34191,16 @@ mod tests {
             .actor_id;
         // `Run` 门（`(now - run_tick) > RunTime(250)`）的确定性起点：只让第一只 Run，
         // 第二只的 `run_tick` 钉在本次 `clock_ms` 上 ⇒ 不参与本次取数（RNG 流不受扰动）。
-        if let Some(n) = world.entities.get_mut(npc_id).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world
+            .entities
+            .entity_mut(npc_id)
+            .and_then(|e| e.npc.as_mut())
+        {
             n.run_tick = 0;
         }
         if let Some(n) = world
             .entities
-            .get_mut(other_npc)
+            .entity_mut(other_npc)
             .and_then(|e| e.npc.as_mut())
         {
             n.run_tick = 1_000;
@@ -38047,8 +38077,8 @@ break
         let hero = rig.sessions["hero"].actor_id;
         {
             let e = rig.world.entities.get_mut(hero).unwrap();
-            e.hp = 100;
-            e.max_hp = 100;
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
             let sg = rig.sessions.get_mut("hero").unwrap();
             sg.state.wabil.hp = 100;
             sg.state.wabil.max_hp = 100;
@@ -38609,7 +38639,7 @@ break
         // `T142Rig` 的商人只开 `is_buy`；修理支还要求 `IsRepair`（`Merchant.ClientRepairItem`）。
         rig.world
             .entities
-            .get_mut(rig.merchant_id)
+            .entity_mut(rig.merchant_id)
             .and_then(|e| e.merchant.as_mut())
             .expect("商人实体")
             .flags
@@ -38784,7 +38814,7 @@ break
         );
         rig.world
             .entities
-            .get_mut(merchant_id)
+            .entity_mut(merchant_id)
             .and_then(|e| e.merchant.as_mut())
             .expect("商人实体")
             .flags
@@ -38893,7 +38923,7 @@ break
         );
         rig.world
             .entities
-            .get_mut(merchant_id)
+            .entity_mut(merchant_id)
             .and_then(|e| e.merchant.as_mut())
             .expect("商人实体")
             .flags
@@ -38967,7 +38997,7 @@ break
         );
         rig.world
             .entities
-            .get_mut(merchant_id)
+            .entity_mut(merchant_id)
             .and_then(|e| e.merchant.as_mut())
             .expect("商人实体")
             .flags
@@ -40239,7 +40269,7 @@ break
             .and_then(|s| s.actor_id)
             .expect("会话有 actor_id");
         {
-            let e = world.entities.get_mut(id).expect("实体在场");
+            let e = world.entities.entity_mut(id).expect("实体在场");
             apply_use_items_to_entity(e, &sg.use_items);
             e.use_items[SLOT_WEAPON].dura = 1234; // 世界侧磨损
             e.use_items[SLOT_HELMET].index = 0; // 世界侧破零
@@ -40311,7 +40341,7 @@ break
                 desc: [0; 14],
             });
             {
-                let e = world.entities.get_mut(actor).expect("实体在场");
+                let e = world.entities.entity_mut(actor).expect("实体在场");
                 apply_use_items_to_entity(e, &sg.use_items);
             }
             let mut sessions = HashMap::new();
@@ -44849,7 +44879,12 @@ break
         mob.race = mir2_world::ACTOR_RACE_MONSTER;
         mob.dc = hp_dc;
         let mob = rig.world.add_entity(mob);
-        rig.world.entities.get_mut(rig.actor).unwrap().hit_point = 0;
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .unwrap()
+            .vitals
+            .hit_point = 0;
         mob
     }
 
@@ -44877,7 +44912,7 @@ break
             "@1 必须写权威 Entity.admin_mode（不是只写 GmSession 镜像）"
         );
 
-        rig.world.entities.get_mut(rig.actor).unwrap().hp = 100;
+        rig.world.entities.get_mut(rig.actor).unwrap().vitals.hp = 100;
         rig.world.attack_cmd(mob, rig.actor);
         rig.world.tick();
         assert_eq!(
@@ -44998,7 +45033,7 @@ break
         // 让「CrazyMode 到期」可观测：未早退时它会被清掉。
         rig.world.clock_ms = 5_000;
         let arm = |rig: &mut GmRig| {
-            let e = rig.world.entities.get_mut(slave).unwrap();
+            let mut e = rig.world.entities.get_mut(slave).unwrap();
             e.ai.crazy_mode = true;
             e.ai.crazy_mode_tick = 0;
             e.ai.crazy_mode_interval = 10;
@@ -45221,7 +45256,7 @@ break
             },
         );
         {
-            let e = rig.world.entities.get_mut(rig.actor).expect("aaa 实体");
+            let mut e = rig.world.entities.get_mut(rig.actor).expect("aaa 实体");
             e.use_items[3] = mir2_world::entity::UseItemSlot {
                 make_index: 42,
                 index: 5,
@@ -45318,7 +45353,7 @@ break
             desc: [0; 14],
         });
         {
-            let e = f.world.entities.get_mut(1).expect("hero 实体");
+            let mut e = f.world.entities.get_mut(1).expect("hero 实体");
             e.use_items[3] = mir2_world::entity::UseItemSlot {
                 make_index: 42,
                 index: 5,
@@ -50963,11 +50998,11 @@ SendRefMsgRange=15
         world.tick();
         {
             let e = world.entities.get_mut(killer).unwrap();
-            e.exp = 500;
-            e.level = 11;
-            e.max_exp = 1000;
-            e.hp = 10;
-            e.max_hp = 20;
+            e.progression.exp = 500;
+            e.progression.level = 11;
+            e.progression.max_exp = 1000;
+            e.vitals.hp = 10;
+            e.vitals.max_hp = 20;
         }
         let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
@@ -51842,7 +51877,7 @@ SendRefMsgRange=15
         };
         let out = enter::recalc_for_session(&a, 0);
         let mut e = new_player_entity("hero".to_string(), 10, 10);
-        apply_ability_to_entity(&mut e, &out.wabil, &out.sub, out.hit_speed);
+        apply_ability_to_spawn(&mut e, &out.wabil, &out.sub, out.hit_speed);
         assert_eq!(e.exp, 0, "实体 Exp = WAbil.Exp（记录值）");
         assert_eq!(e.max_exp, 10, "实体 MaxExp = Exps[1]");
         // 首杀：1 点经验 < 10 ⇒ 不得升级。
@@ -55177,8 +55212,8 @@ SendRefMsgRange=15
         // 故实体必须先有本击后的权威 HP。致命击 ⇒ HP=0。
         {
             let e = world.entities.get_mut(victim).unwrap();
-            e.hp = 0;
-            e.max_hp = 100;
+            e.vitals.hp = 0;
+            e.vitals.max_hp = 100;
         }
         drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
         let mut bodies = Vec::new();
@@ -55342,8 +55377,8 @@ SendRefMsgRange=15
         // 复验 F1：帧取**实时 HP**（非载荷快照）。
         {
             let e = world.entities.get_mut(victim).unwrap();
-            e.hp = 12;
-            e.max_hp = 100;
+            e.vitals.hp = 12;
+            e.vitals.max_hp = 100;
         }
         drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
         let mut per_socket: HashMap<i32, Vec<u8>> = HashMap::new();
@@ -55406,8 +55441,8 @@ SendRefMsgRange=15
         // 实时 HP = 80，但载荷快照 = 100（模拟「两击落在同一 200ms 窗口」）。
         {
             let e = world.entities.get_mut(victim).unwrap();
-            e.hp = 80;
-            e.max_hp = 100;
+            e.vitals.hp = 80;
+            e.vitals.max_hp = 100;
         }
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -55544,8 +55579,8 @@ SendRefMsgRange=15
         // 复验 F1：帧取**实时 HP**（非载荷快照）。
         {
             let e = world.entities.get_mut(monster).unwrap();
-            e.hp = 180;
-            e.max_hp = 200;
+            e.vitals.hp = 180;
+            e.vitals.max_hp = 200;
         }
         drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
         let mut bodies = Vec::new();
@@ -55776,8 +55811,8 @@ SendRefMsgRange=15
             world.add_entity(e)
         };
         world.tick();
-        world.entities.get_mut(killer).unwrap().exp = 1234;
-        world.entities.get_mut(killer).unwrap().level = 9;
+        world.entities.get_mut(killer).unwrap().progression.exp = 1234;
+        world.entities.get_mut(killer).unwrap().progression.level = 9;
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             killer,
@@ -55883,11 +55918,11 @@ SendRefMsgRange=15
         world.tick();
         {
             let e = world.entities.get_mut(killer).unwrap();
-            e.exp = 500;
-            e.level = 11;
-            e.max_exp = 1000;
-            e.hp = 10;
-            e.max_hp = 20;
+            e.progression.exp = 500;
+            e.progression.level = 11;
+            e.progression.max_exp = 1000;
+            e.vitals.hp = 10;
+            e.vitals.max_hp = 20;
         }
         let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
@@ -56007,11 +56042,11 @@ SendRefMsgRange=15
         world.tick();
         {
             let e = world.entities.get_mut(hid).unwrap();
-            e.exp = 500;
-            e.level = 11;
-            e.max_exp = 1000;
-            e.hp = 15;
-            e.max_hp = 100;
+            e.progression.exp = 500;
+            e.progression.level = 11;
+            e.progression.max_exp = 1000;
+            e.vitals.hp = 15;
+            e.vitals.max_hp = 100;
         }
         let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
@@ -56138,9 +56173,9 @@ SendRefMsgRange=15
         world.tick();
         {
             let e = world.entities.get_mut(killer).unwrap();
-            e.exp = 100;
-            e.level = 11;
-            e.max_exp = 1000;
+            e.progression.exp = 100;
+            e.progression.level = 11;
+            e.progression.max_exp = 1000;
         }
         let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
@@ -58596,7 +58631,7 @@ SendRefMsgRange=15
 
         // —— ③ 非制药商人（同一实体去掉 IsMakeDrug）⇒ 零帧、零副作用。
         {
-            let st = world.entities.get_mut(merchant_id).unwrap();
+            let mut st = world.entities.get_mut(merchant_id).unwrap();
             st.merchant.as_mut().unwrap().flags.is_make_drug = false;
         }
         handle_shop_cmd(
@@ -60705,8 +60740,8 @@ SendRefMsgRange=15
                 desc: [0u8; 14],
             }];
             let _ = recalc_session_ability(&mut sg, &catalog, None, None);
-            if let Some(e) = world.entities.get_mut(actor) {
-                apply_ability_to_entity(e, &sg.state.wabil, &sg.sub, sg.hit_speed);
+            if let Some(mut e) = world.entities.get_mut(actor) {
+                apply_ability_to_entity(&mut e, &sg.state.wabil, &sg.sub, sg.hit_speed);
             }
             let mut sessions = HashMap::new();
             sessions.insert("hero".to_string(), sg);
@@ -62636,10 +62671,10 @@ SendRefMsgRange=15
         // 窗口基线：登录 `apply_ability_to_entity` 已把 WAbil 同步进实体 ⇒
         // 两份存储同起点 17（entity.mp 恒 17 正是修复前 P21 刷回的覆盖源）。
         let ce = world.entities.get_mut(caster).expect("施法者实体");
-        ce.hp = 16;
-        ce.max_hp = 16;
-        ce.mp = 17;
-        ce.max_mp = 18;
+        ce.vitals.hp = 16;
+        ce.vitals.max_hp = 16;
+        ce.vitals.mp = 17;
+        ce.vitals.max_mp = 18;
         world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -63125,7 +63160,7 @@ SendRefMsgRange=15
         };
 
         // hp 侧对称面起点：挨打后的低血（投影/实体同值 10，MaxHP=16）。
-        world.entities.get_mut(caster).expect("实体在图").hp = 10;
+        world.entities.get_mut(caster).expect("实体在图").vitals.hp = 10;
         {
             let sg = ground_sessions.get_mut("caster").expect("会话在");
             sg.state.wabil.hp = 10;
@@ -63297,10 +63332,10 @@ SendRefMsgRange=15
         world.tick();
         {
             let e = world.entities.get_mut(actor).expect("实体在图");
-            e.hp = 10;
-            e.mp = 20;
-            e.max_hp = 100;
-            e.max_mp = 200;
+            e.vitals.hp = 10;
+            e.vitals.mp = 20;
+            e.vitals.max_hp = 100;
+            e.vitals.max_mp = 200;
         }
         let mut sg = test_session_ground(actor);
         sg.state.wabil.hp = 10;
@@ -63532,11 +63567,11 @@ SendRefMsgRange=15
         world.tick();
         {
             // 死亡结算后的实体：HP/MP 归零、death=true（`tick_tail` 的 Die 段）。
-            let e = world.entities.get_mut(actor).expect("实体在图");
-            e.hp = 0;
-            e.mp = 0;
-            e.max_hp = 100;
-            e.max_mp = 200;
+            let mut e = world.entities.get_mut(actor).expect("实体在图");
+            e.vitals.hp = 0;
+            e.vitals.mp = 0;
+            e.vitals.max_hp = 100;
+            e.vitals.max_mp = 200;
             e.death = true;
         }
         let mut sg = test_session_ground(actor);
@@ -64880,7 +64915,7 @@ SendRefMsgRange=15
             target,
         ) = push_scene(mir2_world::magic::SKILL_ENERGYREPULSOR, "er-level");
         // `push_scene` 的施法者 20 级 / 目标 15 级；降到与目标同级 ⇒ 等级门不过。
-        world.entities.get_mut(caster).unwrap().level = 15;
+        world.entities.get_mut(caster).unwrap().progression.level = 15;
         let seed = 1;
         world.rng = RandomNumber::with_seed(seed);
         let before = world.rng.clone();
@@ -65813,7 +65848,12 @@ SendRefMsgRange=15
             let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
             let mut rig = b1_rig(44, 9);
             rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
-            rig.world.entities.get_mut(rig.caster).unwrap().level = 5;
+            rig.world
+                .entities
+                .get_mut(rig.caster)
+                .unwrap()
+                .progression
+                .level = 5;
             let target = b1_monster(&mut rig, 11, 10, 1, 0);
             let before = rig.world.rng.clone();
             rig.cast(44, (11, 10), target);
@@ -66543,12 +66583,12 @@ SendRefMsgRange=15
         let mut rig = SpellFrameRig::new(id, &[(id, effect)], observers);
         rig.magic_table = magics::MagicTable::new(vec![b2_magic_info(id, effect)]);
         {
-            let e = rig.world.entities.get_mut(rig.caster).unwrap();
-            e.level = 50;
+            let mut e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 50;
             e.luck = 0;
             e.power_rate = 100;
-            e.hp = 500;
-            e.max_hp = 500;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
         }
         {
             let sg = rig.ground_sessions.get_mut("caster").unwrap();
@@ -66774,7 +66814,7 @@ SendRefMsgRange=15
             let mut rig = b2_rig(2, 2, &[]);
             let target = b2_add_player(&mut rig, "t", 12, 12, 50, 1000, 921);
             rig.world.entities.get_mut(target).unwrap().death = true;
-            rig.world.entities.get_mut(rig.caster).unwrap().hp = 100;
+            rig.world.entities.get_mut(rig.caster).unwrap().vitals.hp = 100;
             rig.cast(2, (12, 12), target);
             let (frames, _raws) = rig.drain();
             let fire = sf_first(&frames, 911, SM_638);
@@ -66872,7 +66912,7 @@ SendRefMsgRange=15
             let m1 = b2_add_monster(&mut rig, "m1", 11, 11, 0x0A00);
             let m2 = b2_add_monster(&mut rig, "m2", 12, 12, 0x0500);
             let p1 = b2_add_player(&mut rig, "p1", 13, 11, 50, 1000, 921);
-            rig.world.entities.get_mut(p1).unwrap().mac = 0x0C00;
+            rig.world.entities.get_mut(p1).unwrap().vitals.mac = 0x0C00;
             let m3 = b2_add_monster(&mut rig, "m3", 13, 13, m3_mac);
             let m4 = b2_add_monster(&mut rig, "m4", 12, 11, 0);
             rig.world.entities.get_mut(m4).unwrap().death = true;
@@ -67004,8 +67044,18 @@ SendRefMsgRange=15
         let m3 = b2_add_monster(&mut rig, "m3", 12, 8, 0);
         let p1 = b2_add_player(&mut rig, "p1", 12, 12, 50, 1000, 921);
         let _p2 = b2_add_player(&mut rig, "p2", 13, 10, 50, 1000, 922);
-        rig.world.entities.get_mut(m1).unwrap().life_attrib = 1;
-        rig.world.entities.get_mut(m3).unwrap().life_attrib = 1;
+        rig.world
+            .entities
+            .get_mut(m1)
+            .unwrap()
+            .progression
+            .life_attrib = 1;
+        rig.world
+            .entities
+            .get_mut(m3)
+            .unwrap()
+            .progression
+            .life_attrib = 1;
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(42);
         let before = rig.world.rng.clone();
         rig.cast(24, (12, 12), p1);
@@ -67129,7 +67179,12 @@ SendRefMsgRange=15
                 let mut rig = b2_rig(id, effect, &[]);
                 let t = b2_add_monster(&mut rig, "m", 12, 12, 0);
                 if undead {
-                    rig.world.entities.get_mut(t).unwrap().life_attrib = 1;
+                    rig.world
+                        .entities
+                        .get_mut(t)
+                        .unwrap()
+                        .progression
+                        .life_attrib = 1;
                 }
                 rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
                 let mut c = mir2_shared::rng::RandomNumber::with_seed(seed);
@@ -67231,11 +67286,11 @@ SendRefMsgRange=15
             let observer = world.add_entity(new_player_entity("obs".to_string(), 11, 10));
             let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
             {
-                let e = world.entities.get_mut(caster).unwrap();
-                e.level = 60;
+                let mut e = world.entities.get_mut(caster).unwrap();
+                e.progression.level = 60;
                 e.attack_mode = 0; // HAM_ALL
-                e.hp = 100;
-                e.max_hp = 100;
+                e.vitals.hp = 100;
+                e.vitals.max_hp = 100;
             }
             world.tick();
             let mut displays = downlink::DisplayTable::new();
@@ -67647,8 +67702,18 @@ SendRefMsgRange=15
 
         // F18-A。
         let mut rig = B3Rig::new(18, 2, true);
-        rig.world.entities.get_mut(rig.caster).unwrap().hit_speed = 7;
-        rig.world.entities.get_mut(rig.observer).unwrap().hit_speed = 9;
+        rig.world
+            .entities
+            .get_mut(rig.caster)
+            .unwrap()
+            .vitals
+            .hit_speed = 7;
+        rig.world
+            .entities
+            .get_mut(rig.observer)
+            .unwrap()
+            .vitals
+            .hit_speed = 9;
         let caster_id = rig.caster;
         let observer_id = rig.observer;
         let _m1 = rig.add_monster("m1", 11, 10, 50, true, 30, 0, 0, Some(caster_id), None);
@@ -67826,8 +67891,8 @@ SendRefMsgRange=15
         // F28-A：目标怪 ShowHp=false。
         let mut rig = B3Rig::new(28, 2, true);
         let target = rig.add_monster("t", 12, 10, 80, false, 30, 0, 0, None, None);
-        rig.world.entities.get_mut(target).unwrap().hp = 80;
-        rig.world.entities.get_mut(target).unwrap().max_hp = 100;
+        rig.world.entities.get_mut(target).unwrap().vitals.hp = 80;
+        rig.world.entities.get_mut(target).unwrap().vitals.max_hp = 100;
         let before = rig.world.rng.clone();
         rig.cast(28, (12, 10), target);
         let frames = rig.drain();
@@ -68087,7 +68152,12 @@ SendRefMsgRange=15
         let mut rig = B3Rig::new(32, 2, true);
         let ptarget = rig.world.add_entity(new_player_entity("pt".into(), 11, 10));
         rig.world.tick();
-        rig.world.entities.get_mut(ptarget).unwrap().life_attrib = 1;
+        rig.world
+            .entities
+            .get_mut(ptarget)
+            .unwrap()
+            .progression
+            .life_attrib = 1;
         let before = rig.world.rng.clone();
         rig.cast(32, (11, 10), ptarget);
         let frames = rig.drain();
@@ -68199,7 +68269,7 @@ SendRefMsgRange=15
             "StdMode 5 + Hi(MAC)=13 ⇒ RealAttackSpeed=3"
         );
         apply_ability_to_entity(
-            rig.world.entities.get_mut(rig.caster).unwrap(),
+            &mut rig.world.entities.get_mut(rig.caster).unwrap(),
             &cg.state.wabil,
             &cg.sub,
             cg.hit_speed,
@@ -68216,7 +68286,7 @@ SendRefMsgRange=15
             "StdMode 5 + Hi(MAC)=15 ⇒ RealAttackSpeed=5"
         );
         apply_ability_to_entity(
-            rig.world.entities.get_mut(rig.observer).unwrap(),
+            &mut rig.world.entities.get_mut(rig.observer).unwrap(),
             &og.state.wabil,
             &og.sub,
             og.hit_speed,
@@ -68397,7 +68467,12 @@ SendRefMsgRange=15
                 dura_max: 1000,
                 desc: [0; 14],
             });
-        rig.world.entities.get_mut(rig.observer).unwrap().hit_speed = 99;
+        rig.world
+            .entities
+            .get_mut(rig.observer)
+            .unwrap()
+            .vitals
+            .hit_speed = 99;
         rig.cast(36, (11, 9), rig.observer);
         let frames = rig.drain();
         assert_eq!(
@@ -68508,7 +68583,7 @@ SendRefMsgRange=15
         let target = rig.caster;
         rig.world.clock_ms = 10_000;
         {
-            let e = rig.world.entities.get_mut(target).unwrap();
+            let mut e = rig.world.entities.get_mut(target).unwrap();
             e.show_hp = true;
             e.show_hp_tick = 5_000;
             e.show_hp_interval = 4_000; // 10_000 - 5_000 = 5_000 > 4_000 ⇒ 到期
@@ -68587,7 +68662,7 @@ SendRefMsgRange=15
         // 严格大于：`now - tick == interval` 不触发；`+1ms` 才触发。
         rig.world.clock_ms = 20_000;
         {
-            let e = rig.world.entities.get_mut(target).unwrap();
+            let mut e = rig.world.entities.get_mut(target).unwrap();
             e.show_hp = true;
             e.show_hp_tick = 16_000;
             e.show_hp_interval = 4_000; // 恰好等于
@@ -68640,7 +68715,7 @@ SendRefMsgRange=15
         let target = rig.caster;
         rig.world.clock_ms = 10_000;
         {
-            let e = rig.world.entities.get_mut(target).unwrap();
+            let mut e = rig.world.entities.get_mut(target).unwrap();
             e.ghost = true;
             e.show_hp = true;
             e.show_hp_tick = 5_000;
@@ -68829,7 +68904,7 @@ SendRefMsgRange=15
         let (mut world, mut sessions, online, gates, mut rx, actor) = clamp_fixture(50, 0, 100, 0);
         world.clock_ms = 100_000;
         {
-            let e = world.entities.get_mut(actor).unwrap();
+            let mut e = world.entities.get_mut(actor).unwrap();
             e.show_hp = true;
             e.show_hp_tick = 95_000;
             e.show_hp_interval = 4_000; // 100_000 - 95_000 = 5_000 > 4_000 ⇒ 到期
@@ -68893,7 +68968,7 @@ SendRefMsgRange=15
         mon.max_hp = 40;
         let mon_id = world.add_entity(mon);
         {
-            let e = world.entities.get_mut(mon_id).unwrap();
+            let mut e = world.entities.get_mut(mon_id).unwrap();
             e.show_hp = true;
             e.show_hp_tick = 95_000;
             e.show_hp_interval = 4_000; // 100_000 - 95_000 = 5_000 > 4_000 ⇒ 到期
@@ -69043,7 +69118,7 @@ SendRefMsgRange=15
         // F40-B：pre_draw=1 + 计时器 [0]=5,[1]=7 ⇒ 门过、置 1、TRAIN。
         let mut rig = B3Rig::new(40, 2, true);
         {
-            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            let mut e = rig.world.entities.get_mut(rig.caster).unwrap();
             e.status_time[0] = 5;
             e.status_time[1] = 7;
         }
@@ -69351,14 +69426,14 @@ SendRefMsgRange=15
             let observer = world.add_entity(new_player_entity("obs".to_string(), 18, 10));
             let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
             {
-                let e = world.entities.get_mut(caster).unwrap();
-                e.level = 60;
+                let mut e = world.entities.get_mut(caster).unwrap();
+                e.progression.level = 60;
                 e.attack_mode = 0; // HAM_ALL
                 e.luck = 0;
                 e.power_rate = 100;
                 e.bo_power_item = false;
-                e.hp = 100;
-                e.max_hp = 100;
+                e.vitals.hp = 100;
+                e.vitals.max_hp = 100;
             }
             world.tick();
             let mut displays = downlink::DisplayTable::new();
@@ -69869,14 +69944,14 @@ SendRefMsgRange=15
         let leader = rig.add_player("leader", 12, 10, 915);
         let caster_id = rig.caster;
         {
-            let c = rig.world.entities.get_mut(caster_id).unwrap();
+            let mut c = rig.world.entities.get_mut(caster_id).unwrap();
             c.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
             c.group_owner = leader;
             c.group_members.clear();
             assert!(c.group_members.is_empty(), "非团长自身表必须为空");
         }
         {
-            let l = rig.world.entities.get_mut(leader).unwrap();
+            let mut l = rig.world.entities.get_mut(leader).unwrap();
             l.group_members = vec![leader, caster_id, ally];
         }
         rig.seed(0);
@@ -70580,7 +70655,7 @@ SendRefMsgRange=15
     fn install_ham_group(rig: &mut SpellFrameRig, leader: i32, members: &[i32]) {
         let caster = rig.caster;
         {
-            let c = rig.world.entities.get_mut(caster).unwrap();
+            let mut c = rig.world.entities.get_mut(caster).unwrap();
             c.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
             c.group_owner = leader;
             c.group_members.clear();
@@ -70589,7 +70664,7 @@ SendRefMsgRange=15
                 "非团长自身表必须为空（真实布局）"
             );
         }
-        let l = rig.world.entities.get_mut(leader).unwrap();
+        let mut l = rig.world.entities.get_mut(leader).unwrap();
         l.group_owner = leader;
         l.group_members = members.to_vec();
     }
@@ -70713,7 +70788,12 @@ SendRefMsgRange=15
             &[(mir2_world::magic::SKILL_FIREWIND, 3)],
             &[("obs", 12, 11, false, 912)],
         );
-        rig.world.entities.get_mut(rig.caster).unwrap().level = 20;
+        rig.world
+            .entities
+            .get_mut(rig.caster)
+            .unwrap()
+            .progression
+            .level = 20;
         let ally = b1_player(&mut rig, 11, 10, 15, 0);
         let leader = b1_player(&mut rig, 20, 20, 60, 0);
         let caster = rig.caster;
@@ -70799,7 +70879,7 @@ SendRefMsgRange=15
         let mut rig = b1_rig(1, 9);
         let ally = b1_player(&mut rig, 11, 10, 1, 0);
         {
-            let c = rig.world.entities.get_mut(rig.caster).unwrap();
+            let mut c = rig.world.entities.get_mut(rig.caster).unwrap();
             c.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
             c.group_owner = rig.caster;
             c.group_members = vec![rig.caster, ally];
@@ -70928,20 +71008,20 @@ SendRefMsgRange=15
             let observer = world.add_entity(new_player_entity("obs".to_string(), 11, 9));
             let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
             {
-                let e = world.entities.get_mut(caster).unwrap();
-                e.level = 60;
+                let mut e = world.entities.get_mut(caster).unwrap();
+                e.progression.level = 60;
                 e.attack_mode = 0; // HAM_ALL
                 e.luck = 0;
                 e.power_rate = 100;
                 e.bo_power_item = false;
-                e.hp = 100;
-                e.max_hp = 100;
+                e.vitals.hp = 100;
+                e.vitals.max_hp = 100;
                 e.ob_mode = false;
                 e.fixed_hide_mode = false;
             }
             for id in [observer, far] {
-                if let Some(e) = world.entities.get_mut(id) {
-                    e.level = 45;
+                if let Some(mut e) = world.entities.get_mut(id) {
+                    e.progression.level = 45;
                     e.ob_mode = false;
                     e.fixed_hide_mode = false;
                 }
@@ -71867,13 +71947,13 @@ SendRefMsgRange=15
         let ally = rig.add_player("ally", 11, 10, 913);
         let leader = rig.add_player("leader", 20, 20, 915);
         {
-            let c = rig.world.entities.get_mut(rig.caster).unwrap();
+            let mut c = rig.world.entities.get_mut(rig.caster).unwrap();
             c.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
             c.group_owner = leader;
             c.group_members = Vec::new(); // 真实成员布局：成员不自持表
             let a = rig.world.entities.get_mut(ally).unwrap();
-            a.life_attrib = mir2_world::magic_effect::LA_UNDEAD;
-            let l = rig.world.entities.get_mut(leader).unwrap();
+            a.progression.life_attrib = mir2_world::magic_effect::LA_UNDEAD;
+            let mut l = rig.world.entities.get_mut(leader).unwrap();
             l.group_members = vec![leader, rig.caster, ally];
         }
         rig.seed(0);
@@ -71897,7 +71977,7 @@ SendRefMsgRange=15
         let solo = rig.add_player("solo", 11, 10, 913);
         {
             let a = rig.world.entities.get_mut(solo).unwrap();
-            a.life_attrib = mir2_world::magic_effect::LA_UNDEAD;
+            a.progression.life_attrib = mir2_world::magic_effect::LA_UNDEAD;
         }
         rig.seed(0);
         rig.cast(32, (11, 10), solo);
@@ -72251,20 +72331,20 @@ SendRefMsgRange=15
         world.entities.get_mut(mon).unwrap().death = true;
         assert_eq!(near(&world), -1, "death 不得计入 nearest");
 
-        let e = world.entities.get_mut(mon).unwrap();
+        let mut e = world.entities.get_mut(mon).unwrap();
         e.death = false;
         e.ghost = true;
         assert_eq!(near(&world), -1, "ghost 不得计入 nearest");
 
         for set in [0u8, 1, 2] {
-            let e = world.entities.get_mut(mon).unwrap();
+            let mut e = world.entities.get_mut(mon).unwrap();
             e.ghost = false;
             e.invisible = set == 0;
             e.fixed_hide_mode = set == 1;
             e.ob_mode = set == 2;
             assert_eq!(near(&world), -1, "set={set} 不得计入 nearest");
         }
-        let e = world.entities.get_mut(mon).unwrap();
+        let mut e = world.entities.get_mut(mon).unwrap();
         e.invisible = false;
         e.fixed_hide_mode = false;
         e.ob_mode = false;
@@ -75057,8 +75137,8 @@ SendRefMsgRange=15
             p21_fixture(&[(game_svr::ability::SLOT_WEAPON, 1, 1000)], 0, &catalog);
         {
             let e = world.entities.get_mut(actor).unwrap();
-            e.hp = 10;
-            e.max_hp = 50;
+            e.vitals.hp = 10;
+            e.vitals.max_hp = 50;
         }
         sessions.get_mut("p21a").unwrap().state.wabil.hp = 19;
         drain_player_need_recheck(&mut world, &mut sessions, &online, &gates, &catalog, 3);
@@ -75291,9 +75371,9 @@ SendRefMsgRange=15
         let (mut world, mut sessions, online, gates, mut rx, actor, registry, dir) =
             p25_fixture("DECHP(1/100) INCHP(1/7)", 0, 100, false);
         {
-            let e = world.entities.get_mut(actor).unwrap();
+            let mut e = world.entities.get_mut(actor).unwrap();
             e.death = true;
-            e.hp = 0;
+            e.vitals.hp = 0;
         }
         sessions.get_mut("p25a").unwrap().state.wabil.hp = 0;
         let mut frames = game_svr::run_frames::RunFrames::new();
@@ -75507,7 +75587,7 @@ SendRefMsgRange=15
     fn p26_dec_hp_branch_wraps_and_ignores_death() {
         let (mut world, mut sessions, online, gates, mut rx, actor) = p26_fixture(0, 100, 0);
         {
-            let e = world.entities.get_mut(actor).unwrap();
+            let mut e = world.entities.get_mut(actor).unwrap();
             e.death = true; // 无 `!Death` 门：死玩家照跑
         }
         {
@@ -76360,7 +76440,7 @@ SendRefMsgRange=15
         let actor = world
             .enter_map("p31a", new_player_entity("p31a".to_string(), 2, 2), 0)
             .unwrap();
-        world.entities.get_mut(actor).unwrap().max_exp = 1_000_000;
+        world.entities.get_mut(actor).unwrap().progression.max_exp = 1_000_000;
         let mut sg = test_session_ground(actor);
         sg.auto_get_exp_tick = 0;
         sg.auto_get_exp_time = 1_000;
@@ -76425,9 +76505,9 @@ SendRefMsgRange=15
         world.tick();
         {
             let e = world.entities.get_mut(hero).unwrap();
-            e.exp = 100;
-            e.level = 1;
-            e.max_exp = 10_000;
+            e.progression.exp = 100;
+            e.progression.level = 1;
+            e.progression.max_exp = 10_000;
         }
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -76491,11 +76571,11 @@ SendRefMsgRange=15
         world.need_exps[11] = 5_000;
         {
             let e = world.entities.get_mut(hero).unwrap();
-            e.exp = 900;
-            e.level = 10;
-            e.max_exp = 1_000;
-            e.hp = 10;
-            e.max_hp = 20;
+            e.progression.exp = 900;
+            e.progression.level = 10;
+            e.progression.max_exp = 1_000;
+            e.vitals.hp = 10;
+            e.vitals.max_hp = 20;
         }
         let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
@@ -76687,7 +76767,7 @@ SendRefMsgRange=15
             let actor = world
                 .enter_map("p31safe", new_player_entity("p31safe".to_string(), 2, 2), 0)
                 .unwrap();
-            world.entities.get_mut(actor).unwrap().max_exp = 1_000_000;
+            world.entities.get_mut(actor).unwrap().progression.max_exp = 1_000_000;
             let mut sg = test_session_ground(actor);
             sg.auto_get_exp_tick = 0;
             sg.auto_get_exp_time = 0;
@@ -78177,7 +78257,7 @@ mod tests {",
 
         // **复验 F1**：按生产进世界路径预装实体装备（实体全零会掩盖"实体旧武器整表回写"的 bug）。
         apply_use_items_to_entity(
-            world.entities.get_mut(hero).expect("hero 实体在"),
+            world.entities.entity_mut(hero).expect("hero 实体在"),
             &sessions["hero"].use_items,
         );
         // **复验 F2**：`AttPowerUp` 写 `ExtraAbil[0]`（`world.rs:3752` 可达）；+5 后 WAbil.dc 应 0x0601。
@@ -81884,7 +81964,7 @@ GMEXECUTE f
             .enter_map("r", new_player_entity("r".to_string(), 30, 30), 0)
             .expect("远邻进图");
         world.entities.get_mut(id).unwrap().ai.search_tick = world.clock_ms;
-        world.entities.get_mut(q).unwrap().hit_speed = 9;
+        world.entities.get_mut(q).unwrap().vitals.hit_speed = 9;
         for (i, (name, aid, sock)) in [("q", q, 902), ("r", r, 903)].into_iter().enumerate() {
             online_set(
                 &mut online,
@@ -81933,7 +82013,7 @@ GMEXECUTE f
     #[test]
     fn login_charstatus_bytes_match_oracle_field_layout() {
         let (mut world, id, online, gates, mut rx0, mut pending) = login_657_fixture();
-        world.entities.get_mut(id).unwrap().hit_speed = 5;
+        world.entities.get_mut(id).unwrap().vitals.hit_speed = 5;
         pending.get_mut("p").unwrap().char_status = Some((0x0001_0002, 5));
         drain_login_tail(&world, &online, &gates, &mut pending, 12);
         let got = collect_login_657_frames(&mut rx0);
@@ -82108,7 +82188,7 @@ GMEXECUTE f
         // 方向也设成走位方向，确保**只有**「在线玩家跳过」这一条门能挡住它
         // （否则方向门也会挡住，用例失去牙）。
         {
-            let p = world.entities.get_mut(near).unwrap();
+            let mut p = world.entities.get_mut(near).unwrap();
             p.ai.dir = 2; // 右
         }
         world.entities.transform_mut(near).unwrap().x += 1;
@@ -84156,7 +84236,7 @@ fn ",
         let (mut world, hero, corpse, mut sessions, online, gates, _rx, cfg, displays, mut pwd) =
             dropgold_butch_rig(SEED, true);
         {
-            let e = world.entities.get_mut(corpse).unwrap();
+            let mut e = world.entities.get_mut(corpse).unwrap();
             e.ai.body_leathery = 255;
             e.ai.meat_quality = 2_000;
         }
@@ -84441,7 +84521,7 @@ fn ",
                 mut pwd,
             ) = dropgold_butch_rig(seed, true);
             {
-                let e = world.entities.get_mut(corpse).unwrap();
+                let mut e = world.entities.get_mut(corpse).unwrap();
                 e.ai.body_leathery = 255;
                 e.ai.meat_quality = 2_000;
             }
@@ -86568,7 +86648,7 @@ mod sm_skeleton_downlink_tests {
         // 已骨架（`Skeleton = true`）⇒ 门关（走命令路径：世界 tick 里重查同一门）。
         let (mut world, p, _q, _r, t, n10) = rig(SEED, 53, true);
         {
-            let e = world.entities.get_mut(t).unwrap();
+            let mut e = world.entities.get_mut(t).unwrap();
             e.ai.skeleton = true;
             e.ai.body_leathery = n10;
         }

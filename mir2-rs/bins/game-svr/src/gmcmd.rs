@@ -1340,7 +1340,7 @@ impl GmEntityState {
     ///
     /// 实体不在场（`self_entity()` 为 `None` 时根本不会生成差量）⇒ 本函数兜底为 no-op。
     pub fn apply(&self, world: &mut mir2_world::World) {
-        let Some(e) = world.entities.get_mut(self.actor_id) else {
+        let Some(mut e) = world.entities.get_mut(self.actor_id) else {
             return;
         };
         if let Some(v) = self.admin_mode {
@@ -1359,7 +1359,7 @@ impl GmEntityState {
             e.attack_mode = v;
         }
         if let Some(v) = self.level {
-            e.level = v;
+            e.progression.level = v;
         }
         if let Some(v) = self.allow_group_re_call {
             e.allow_group_re_call = v;
@@ -9025,7 +9025,7 @@ mod tests {
                 allow_group_re_call: true,
                 ..crate::record::CharacterData::default()
             };
-            let me = w.entities.get_mut(gm_id).unwrap();
+            let me = w.entities.entity_mut(gm_id).unwrap();
             crate::apply_login_record_scalars(me, Some(&flags));
             me.group_members = vec![gm_id, bob_id];
         }
@@ -9034,7 +9034,7 @@ mod tests {
                 allow_group_re_call: true,
                 ..crate::record::CharacterData::default()
             };
-            let bob = w.entities.get_mut(bob_id).unwrap();
+            let bob = w.entities.entity_mut(bob_id).unwrap();
             crate::apply_login_record_scalars(bob, Some(&flags));
         }
         {
@@ -9517,7 +9517,7 @@ mod tests {
         }
         // ③ 已穿戴（UseItems[3].Index = 15）⇒ switch 触 null 表 ⇒ 零帧 + NOTE。
         {
-            let bob = w.entities.get_mut(bob_id).unwrap();
+            let mut bob = w.entities.get_mut(bob_id).unwrap();
             bob.use_items[3].index = 15;
         }
         let view = q_view(&fx, &w, &guilds);
@@ -11473,7 +11473,7 @@ mod tests {
     fn q_family_show_use_item_info_quirks() {
         let (fx, mut w, _gm_id, bob_id) = q_fixture();
         {
-            let bob = w.entities.get_mut(bob_id).unwrap();
+            let mut bob = w.entities.get_mut(bob_id).unwrap();
             bob.use_items[3].index = 15;
             bob.use_items[3].make_index = 12345;
             bob.use_items[3].dura = 100;

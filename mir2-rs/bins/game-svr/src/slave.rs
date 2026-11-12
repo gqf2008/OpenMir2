@@ -446,7 +446,7 @@ pub fn cast_tamming_spell(
         world.rng = rng;
         // `targetObject.TargetCret = null;`（`:708`，进入外层支即无条件清）。
         if out.target_creature_cleared {
-            if let Some(t) = world.entities.get_mut(target_id) {
+            if let Some(mut t) = world.entities.get_mut(target_id) {
                 t.ai.target_creature = None;
             }
         }
@@ -468,7 +468,7 @@ pub fn cast_tamming_spell(
             // 非受奴支的 `targetObject.WAbil.HP = 0`（`:783/790`）。
             let hp = u16::try_from(out.target_hp.max(0)).unwrap_or(0);
             if let Some(t) = world.entities.get_mut(target_id) {
-                t.hp = hp;
+                t.vitals.hp = hp;
             }
             target_hp = Some(hp);
         }
@@ -841,7 +841,7 @@ mod tests {
             let (mut w, caster, target) =
                 tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
             {
-                let t = w.entities.get_mut(target).unwrap();
+                let mut t = w.entities.get_mut(target).unwrap();
                 t.master = Some(caster);
                 t.is_slave = true;
                 t.ai.target_creature = Some(999);
@@ -910,7 +910,7 @@ mod tests {
             let (mut w, caster, target) =
                 tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
             {
-                let t = w.entities.get_mut(target).unwrap();
+                let mut t = w.entities.get_mut(target).unwrap();
                 t.ai.crazy_mode = true;
                 t.ai.crazy_mode_tick = 1_000;
                 t.ai.crazy_mode_interval = 10_000;

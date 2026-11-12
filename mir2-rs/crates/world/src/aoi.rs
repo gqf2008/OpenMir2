@@ -20,8 +20,8 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    Entity, EntityRef, EntityStore, MapBinding, Transform, VisibleBaseObject, VisibleEvent,
-    VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    AbilitySnapshot, BaseAbil, Entity, EntityRef, EntityStore, MapBinding, Progression, Transform,
+    VisibleBaseObject, VisibleEvent, VisibleFlag, Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 use bevy_ecs::prelude::Resource;
@@ -47,7 +47,7 @@ impl AoiStore for EntityStore {
         EntityStore::get(self, id)
     }
     fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
-        EntityStore::get_mut(self, id)
+        EntityStore::entity_mut(self, id)
     }
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
         EntityStore::map_binding_mut(self, id)
@@ -607,7 +607,28 @@ impl AoiStore for BevyAoiStore<'_> {
         let entity = self.world.get::<Entity>(e)?;
         let transform = self.world.get::<Transform>(e)?;
         let binding = self.world.get::<MapBinding>(e)?;
-        Some(EntityRef::from_components(entity, transform, binding))
+        // S4a：`EntityStore::insert` 保证每个实体都挂三组件（缺组件是插入期硬断言），
+        // 这里用 `expect` 而不是 `unwrap_or_default`：静默用默认值会让 AOI 读到假属性。
+        let vitals = self
+            .world
+            .get::<Vitals>(e)
+            .expect("实体必须挂 Vitals 组件（插入期已断言）");
+        let ability = self
+            .world
+            .get::<AbilitySnapshot<BaseAbil>>(e)
+            .expect("实体必须挂 AbilitySnapshot 组件（插入期已断言）");
+        let progression = self
+            .world
+            .get::<Progression>(e)
+            .expect("实体必须挂 Progression 组件（插入期已断言）");
+        Some(EntityRef::from_components(
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+        ))
     }
 
     fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {

@@ -1126,11 +1126,10 @@ pub fn apply_monster_class_constants_at(
         return;
     };
     apply_monster_class_constants(&mut spawn, race, now);
-    if let Some(e) = entities.get_mut(id) {
-        *e = spawn.entity;
-    }
+    let view_range = spawn.view_range;
+    entities.write_back(id, spawn);
     if let Some(t) = entities.transform_mut(id) {
-        t.view_range = spawn.view_range;
+        t.view_range = view_range;
     }
 }
 
@@ -2043,7 +2042,7 @@ mod tests {
 
         // 第二次死亡：HP 归零后 tick 必须重新结算。
         let before = world.clock_ms;
-        world.entities.get_mut(id).unwrap().hp = 0;
+        world.entities.get_mut(id).unwrap().vitals.hp = 0;
         world.tick();
         let e = world.entities.get(id).unwrap();
         assert!(e.death, "第二次死亡必须重新进入 Death");

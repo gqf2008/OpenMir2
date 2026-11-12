@@ -847,8 +847,8 @@ pub fn struck_damage_durability(rng: &mut impl RandomSource, target: &mut Entity
 /// `damage = max(0, damage - nArmor)`；不死系再加攻击方的 `UndeadPower`。
 pub fn get_hit_struck_damage(
     rng: &mut impl RandomSource,
-    target: &Entity,
-    attacker: &Entity,
+    target: &EntitySpawn,
+    attacker: &EntitySpawn,
     n_damage: i32,
 ) -> u16 {
     let ac_lo = i32::from(lo_byte(target.ac));
@@ -947,8 +947,8 @@ pub struct AttackOutcome {
 /// 3. 护甲：`Random(|ΔAC|+1)`，若 `nRnd>0` 再 `Random(nRnd)`（1~2 次）
 pub fn attack(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> AttackOutcome {
@@ -967,8 +967,8 @@ pub fn attack(
 /// 无组队注册表 ⇒ 等价于 [`attack_with_grouped`] 传空成员表。
 pub fn attack_with(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     power_mode: AttackPowerMode,
@@ -980,8 +980,8 @@ pub fn attack_with(
 /// 供 `HAM_GROUP` 的 `IsGroupMember` 剔除用（见 [`is_proper_target_grouped`]）。
 pub fn attack_with_grouped(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     power_mode: AttackPowerMode,
@@ -1047,8 +1047,8 @@ pub fn attack_with_grouped(
 /// 返回 `(damage, killed)`；`damage == 0` ⇒ 调用方不得 `SendStruckDelayMsg`。
 pub fn apply_struck_damage(
     rng: &mut impl RandomSource,
-    attacker: &Entity,
-    target: &mut Entity,
+    attacker: &EntitySpawn,
+    target: &mut EntitySpawn,
     n_power: i32,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
@@ -1063,8 +1063,8 @@ pub fn apply_struck_damage(
 /// [`AttackOutcome::struck_power`]）。取数次序与两段版逐字相同。
 pub fn apply_struck_damage_detail(
     rng: &mut impl RandomSource,
-    attacker: &Entity,
-    target: &mut Entity,
+    attacker: &EntitySpawn,
+    target: &mut EntitySpawn,
     n_power: i32,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
@@ -1087,7 +1087,7 @@ pub fn apply_struck_damage_detail(
 /// `GetMagStruckDamage` 的返回值之和）；`reduced <= 0` ⇒ 调用方不得调用（oracle 有 `> 0` 门）。
 pub fn struck_damage_apply(
     rng: &mut impl RandomSource,
-    target: &mut Entity,
+    target: &mut EntitySpawn,
     reduced: i32,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
@@ -1118,7 +1118,7 @@ pub fn struck_damage_apply(
     //   3. `:2998-3039` 逐格循环：`Index > 0`（已装备）的每格**各抽一次 `Random(8)`**。
     // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
     // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
-    struck_damage_durability(rng, target);
+    struck_damage_durability(rng, &mut target.entity);
     (final_damage, killed)
 }
 
@@ -1168,8 +1168,8 @@ pub fn attack_success_weapon_damage(rng: &mut impl RandomSource) -> u16 {
 /// 怪物/召唤物的 `BaseObject` 攻击路径不调它。
 pub fn attack_dir(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
 ) -> AttackOutcome {
@@ -1180,8 +1180,8 @@ pub fn attack_dir(
 /// `IsGroupMember` 剔除用（`PlayObject.Attack.cs:667-673`）；其余口径与 [`attack_dir`] 相同。
 pub fn attack_dir_grouped(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     attacker_group_members: &[i32],
@@ -1231,8 +1231,8 @@ pub struct AttackPoisonState {
 #[allow(clippy::too_many_arguments)] // 8 个实参 = oracle `AttackSuccess` 的同名/同序概念 + `weapon_strong`
 pub fn attack_dir_grouped_poison_ws(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     attacker_group_members: &[i32],
@@ -1279,8 +1279,8 @@ pub fn attack_dir_grouped_poison_ws(
 #[must_use]
 pub fn attack_dir_grouped_poison(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
-    target: &mut Entity,
+    attacker: &mut EntitySpawn,
+    target: &mut EntitySpawn,
     last_hitter: Option<LastHitter>,
     config: &CombatConfig,
     attacker_group_members: &[i32],
@@ -1392,7 +1392,7 @@ pub fn generate_drops<C: ItemCatalog>(
 /// 块内 `HasLevelUp`/`AddBodyLuck(100)`/`IncHealthSpell(2000,2000)` **无条件**执行 ⇒ 宿主用
 /// 这一位决定是否出 `SM_LEVELUP(45)`/`SM_ABILITY(52)`/`SM_SUBABILITY(752)`/`SM_HEALTHSPELLCHANGED(53)`。
 pub fn award_kill_exp(
-    killer: &mut Entity,
+    killer: &mut EntitySpawn,
     mon_exp: i32,
     need_exps: &[i32],
     config: &CombatConfig,
@@ -1415,7 +1415,7 @@ pub fn award_kill_exp(
 /// `HUtil32.Round(dwExp/n)` 就是原值；`KillTargetTrigger` 传给 `GainExp` 的是
 /// `CalcGetExp` 的结果）。返回 `(乘完倍率后的实际加值, 是否进升级块, 升级后等级)`。
 pub fn win_exp(
-    killer: &mut Entity,
+    killer: &mut EntitySpawn,
     dw_exp: i32,
     need_exps: &[i32],
     config: &CombatConfig,
@@ -1461,7 +1461,7 @@ pub fn win_exp(
 ///
 /// 返回 `(本次加值, 是否进入升级块, 升级后等级)`——`leveled` 是**进块**而非「等级真的 +1」
 /// （255 级时 `Level++` 被门挡住，但块内 `HasLevelUp`/`IncHealthSpell` 仍无条件执行）。
-pub fn get_exp_raw(entity: &mut Entity, dw_exp: i32, need_exps: &[i32]) -> (i32, bool, u8) {
+pub fn get_exp_raw(entity: &mut EntitySpawn, dw_exp: i32, need_exps: &[i32]) -> (i32, bool, u8) {
     entity.exp += dw_exp;
     let leveled = entity.exp >= entity.max_exp;
     if leveled {
@@ -1589,8 +1589,8 @@ pub fn power_uenhancer(
 /// 遍历可见集 / `StruckDamage` 倍率 / `RM_DELAYMAGIC` 回帧由调用方承接（需地图与目标态）。
 pub fn group_melee_damage(
     rng: &mut impl RandomSource,
-    attacker: &Entity,
-    target: &Entity,
+    attacker: &EntitySpawn,
+    target: &EntitySpawn,
     atk: AttackPowerMode,
 ) -> (i32, u16) {
     let dc_lo = i32::from(lo_byte(attacker.dc));

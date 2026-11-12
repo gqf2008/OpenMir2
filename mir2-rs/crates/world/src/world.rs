@@ -1668,7 +1668,7 @@ impl World {
         self.buffs
             .add_buff(actor_id, buff_type, n_time, n_point, now);
         let status = self.get_char_status(actor_id);
-        if let Some(e) = self.entities.get_mut(actor_id) {
+        if let Some(mut e) = self.entities.get_mut(actor_id) {
             e.char_status = status;
             e.green_poisoning_point = n_point as u8;
         }
@@ -1687,7 +1687,7 @@ impl World {
                 .add_buff(actor_id, BuffType::DefensePower, n_sec, n_sec, now);
         }
         let status = self.get_char_status(actor_id);
-        if let Some(e) = self.entities.get_mut(actor_id) {
+        if let Some(mut e) = self.entities.get_mut(actor_id) {
             e.char_status = status;
         }
     }
@@ -1698,7 +1698,7 @@ impl World {
         self.buffs
             .add_buff(actor_id, BuffType::MagicDefensePower, n_sec, n_sec, now);
         let status = self.get_char_status(actor_id);
-        if let Some(e) = self.entities.get_mut(actor_id) {
+        if let Some(mut e) = self.entities.get_mut(actor_id) {
             e.char_status = status;
         }
     }
@@ -1709,7 +1709,7 @@ impl World {
         let now = self.buff_now();
         self.buffs
             .add_buff(actor_id, BuffType::MagicShield, n_sec, n_sec, now);
-        if let Some(e) = self.entities.get_mut(actor_id) {
+        if let Some(mut e) = self.entities.get_mut(actor_id) {
             e.magic_shield = true;
         }
     }
@@ -1877,7 +1877,7 @@ impl World {
         if n_dura == 0 {
             // 燃尽支（`:2260-2272`）。`SendDelItems` 只对 `Race == Play`；本函数的调用面
             // 恒为玩家（`use_lamps` 的 `Race` 门），`709` 未接（登记）。
-            if let Some(e) = self.entities.get_mut(actor_id) {
+            if let Some(mut e) = self.entities.get_mut(actor_id) {
                 e.use_items[ITEM_LOCATION_RIGHTHAND].dura = 0;
                 // oracle 先 `SendDelItems(UseItems[RighThand])` 再 `Index = 0`；
                 // `SendDelItems` 读的是清位**前**的槽（709 未接 ⇒ 只落状态）。
@@ -1885,12 +1885,12 @@ impl World {
             }
             // `Light = GetMyLight()`（`:2263`，在 `Index = 0` 之后算）。
             if let Some(light) = self.my_light_of(actor_id) {
-                if let Some(e) = self.entities.get_mut(actor_id) {
+                if let Some(mut e) = self.entities.get_mut(actor_id) {
                     e.light = light;
                 }
             }
             out.push(LampDuraChange { actor_id, recog: 0 });
-        } else if let Some(e) = self.entities.get_mut(actor_id) {
+        } else if let Some(mut e) = self.entities.get_mut(actor_id) {
             e.use_items[ITEM_LOCATION_RIGHTHAND].dura = n_dura;
         }
         // 千位变化支（`:2274`）：比较的是局部 `nDura`，发的是落槽后的 `Dura`。
@@ -1993,11 +1993,11 @@ impl World {
             if !e.pvp_flag || now - e.pvp_name_color_tick <= self.pk_flag_time_ms {
                 continue;
             }
-            let Some(t) = self.entities.get_mut(id) else {
+            let Some(mut t) = self.entities.get_mut(id) else {
                 continue;
             };
             t.pvp_flag = false;
-            let color = crate::slave::get_chr_color(t, &[], 0);
+            let color = crate::slave::get_chr_color(&t, &[], 0);
             out.push(crate::slave::NameColorDelivery {
                 target_id: id,
                 color,
@@ -2401,13 +2401,13 @@ impl World {
         // `:4333` 计时**无条件刷新**（在 `if (!targetObject.PvpFlag)` 之前）：目标已带 flag 时
         // 再来一次 `SetPkFlag` 不产帧，但会把过期时刻推后（oracle 原样，不许「顺手」改成早退）。
         let now = self.clock_ms;
-        if let Some(t) = self.entities.get_mut(target_id) {
+        if let Some(mut t) = self.entities.get_mut(target_id) {
             t.pvp_name_color_tick = now;
         }
         if target_flagged {
             return None;
         }
-        if let Some(t) = self.entities.get_mut(target_id) {
+        if let Some(mut t) = self.entities.get_mut(target_id) {
             t.pvp_flag = true;
         }
         Some(crate::slave::NameColorDelivery {
@@ -2553,7 +2553,7 @@ impl World {
                 continue;
             };
             // `:934 playObject.SetTargetCreat(baseObject);`（在 `if (CheckAmulet)` 内）。
-            if let Some(c) = self.entities.get_mut(caster_id) {
+            if let Some(mut c) = self.entities.get_mut(caster_id) {
                 c.ai.target_creature = Some(tid);
             }
             let one = self.cast_poison_on_target(caster_id, magic, level, tid, sc, shape, cfg);
@@ -2645,13 +2645,13 @@ impl World {
         // `:1247-1251`：玩家目标 ⇒ `SetPkFlag`（⇒ 656，由 target 发）+ `SetTargetCreat`。
         if t.race == crate::entity::ACTOR_RACE_PLAY {
             out.name_color = self.set_pk_flag(caster_id, tid);
-            if let Some(c) = self.entities.get_mut(caster_id) {
+            if let Some(mut c) = self.entities.get_mut(caster_id) {
                 c.ai.target_creature = Some(tid);
             }
         }
         // `:1252 targetObject.SetLastHiter(playObject)`
         let now = self.clock_ms;
-        if let Some(tm) = self.entities.get_mut(tid) {
+        if let Some(mut tm) = self.entities.get_mut(tid) {
             tm.set_last_hiter(caster_id, now);
         }
         // `:1253 nPower = targetObject.GetMagStruckDamage(playObject, nPower)`（第 9 抽）。
@@ -3013,7 +3013,7 @@ impl World {
             });
         }
         // `SetTargetCreat` 逐目标覆盖；末值 = 最后一个 proper target（oracle 同）。
-        if let (Some(tid), Some(e)) = (last_target, self.entities.get_mut(caster_id)) {
+        if let (Some(tid), Some(mut e)) = (last_target, self.entities.get_mut(caster_id)) {
             e.ai.target_creature = Some(tid);
             e.ai.target_focus_tick = self.clock_ms;
         }
@@ -3207,9 +3207,8 @@ impl World {
             let mp_after = t.mp;
             let show_hp = t.show_hp;
             let is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
-            if let Some(e) = self.entities.get_mut(msg.target_id) {
-                *e = t.entity;
-            }
+            // S4a：属性真值在组件里，必须整包写回（只写 `t.entity` 会丢 HP/MP）。
+            self.entities.write_back(msg.target_id, t);
             out.push(MagStruckOutcome {
                 target_id: msg.target_id,
                 caster_id: msg.caster_id,
@@ -3347,14 +3346,14 @@ impl World {
                     crate::magic_effect::private_transparent_draw(&mut self.rng) == 0
                 };
                 if clear {
-                    if let Some(e) = self.entities.get_mut(id) {
+                    if let Some(mut e) = self.entities.get_mut(id) {
                         e.ai.target_creature = None;
                     }
                 }
             }
         }
         let status = crate::buff::get_char_status(self, target_id);
-        if let Some(e) = self.entities.get_mut(target_id) {
+        if let Some(mut e) = self.entities.get_mut(target_id) {
             e.status_time[crate::entity::POISON_STATETRANSPARENT] = n_h_time;
             e.char_status = status;
             e.hide_mode = true;
@@ -3471,7 +3470,7 @@ impl World {
         out.roll_passed = true;
         out.bo_train = true;
         let interval = crate::magic::power_show_hp_interval(&mut self.rng, magic, level, sc);
-        if let Some(e) = self.entities.get_mut(tid) {
+        if let Some(mut e) = self.entities.get_mut(tid) {
             e.show_hp_tick = self.clock_ms;
             e.show_hp_interval = interval;
         }
@@ -3493,7 +3492,7 @@ impl World {
         };
         let status =
             crate::buff::get_char_status(self, target_id) | crate::entity::POISON_OPENHEATH;
-        if let Some(e) = self.entities.get_mut(target_id) {
+        if let Some(mut e) = self.entities.get_mut(target_id) {
             e.show_hp = true;
             e.char_status_ex = status_ex;
             e.char_status = status;
@@ -3525,7 +3524,7 @@ impl World {
         else {
             return crate::slave::NameColorDelivery::default();
         };
-        if let Some(e) = self.entities.get_mut(target_id) {
+        if let Some(mut e) = self.entities.get_mut(target_id) {
             e.ai.holy_seize = true;
             e.ai.holy_seize_tick = now;
             e.ai.holy_seize_interval = i64::from(interval);
@@ -3588,7 +3587,7 @@ impl World {
         };
         let out = crate::magic_effect::mag_turn_undead(&mut self.rng, &inp);
         let now = self.clock_ms;
-        if let Some(e) = self.entities.get_mut(tid) {
+        if let Some(mut e) = self.entities.get_mut(tid) {
             e.ai.struck_tick = now;
             if out.target_targeted_by_caster {
                 e.ai.target_creature = Some(caster_id);
@@ -3604,7 +3603,7 @@ impl World {
             e.ai.attack_tick += i64::from(out.attack_tick_delta);
         }
         if out.target_run_away {
-            if let Some(e) = self.entities.get_mut(tid) {
+            if let Some(mut e) = self.entities.get_mut(tid) {
                 e.ai.run_away_mode = true;
                 e.ai.run_away_start = now;
                 e.ai.run_away_time = 10 * 1000;
@@ -3612,16 +3611,16 @@ impl World {
         }
         if out.result {
             // `targetObject.SetLastHiter(playObject); targetObject.WAbil.HP = 0;`
-            if let Some(e) = self.entities.get_mut(tid) {
+            if let Some(mut e) = self.entities.get_mut(tid) {
                 e.set_last_hiter(caster_id, now);
-                e.hp = 0;
+                e.vitals.hp = 0;
             }
         }
         // `MagicManager.cs:841` `playObject.SetTargetCreat(targetObject)`（**无条件**，Struck 之后）：
         // 写**施法者**的 `TargetCret + TargetFocusTick`（`BaseObject.Base.cs:557-561`）。
         // 与 [`World::cast_big_explosion_spell`] 的「逐目标覆盖、末值胜」同口径（本处仅一个目标）。
         if out.caster_target_is_target {
-            if let Some(e) = self.entities.get_mut(caster_id) {
+            if let Some(mut e) = self.entities.get_mut(caster_id) {
                 e.ai.target_creature = Some(tid);
                 e.ai.target_focus_tick = now;
             }
@@ -3662,7 +3661,7 @@ impl World {
             return out;
         }
         out.roll_passed = true;
-        if let Some(e) = self.entities.get_mut(tid) {
+        if let Some(mut e) = self.entities.get_mut(tid) {
             if e.status_time[crate::entity::POISON_DECHEALTH] != 0 {
                 e.status_time[crate::entity::POISON_DECHEALTH] = 1;
                 out.bo_train = true;
@@ -4075,12 +4074,12 @@ impl World {
         } else {
             None
         };
-        let Some(e) = self.entities.get_mut(spawn.actor_id) else {
+        let Some(mut e) = self.entities.get_mut(spawn.actor_id) else {
             return;
         };
         // `UserCastle.cs:133/147/157/167/185/205`：`BaseObject.WAbil.HP = nHP`（**不改 MaxHP**）。
         // 守卫也写（`UserCastle.cs:205`），只是不绑 `Castle`。
-        e.hp = spawn.hp;
+        e.vitals.hp = spawn.hp;
         if !spawn.castle_owner {
             return;
         }
@@ -4502,7 +4501,7 @@ impl World {
     /// 由宿主完成（`RecalcAbilitys` 需要 `record.data` 与目录）。
     pub fn att_power_up(&mut self, target_id: i32, n_power: u16, n_time: i32) {
         let now = self.clock_ms;
-        if let Some(e) = self.entities.get_mut(target_id) {
+        if let Some(mut e) = self.entities.get_mut(target_id) {
             e.extra_abil[0] = n_power;
             e.extra_abil_times[0] = now + i64::from(n_time) * 1000;
         }
@@ -4517,7 +4516,7 @@ impl World {
         let now = self.clock_ms;
         let mut out = Vec::new();
         for id in self.entities.order_index() {
-            let Some(e) = self.entities.get_mut(id) else {
+            let Some(mut e) = self.entities.get_mut(id) else {
                 continue;
             };
             let mut expiry = ExtraAbilExpiry {
@@ -4623,7 +4622,7 @@ impl World {
             // oracle `CharPushed`：循环内 `Dir = nDir`，收尾 `Dir = nBackDir`（`result > 0`）或旧值
             // （`result == 0`）。本骨架 `push_now` 不改 `Dir` => 在此按 oracle 收尾语义补写。
             if !pushed.is_empty() {
-                if let Some(e) = self.entities.get_mut(target_id) {
+                if let Some(mut e) = self.entities.get_mut(target_id) {
                     e.ai.dir = crate::magic::back_dir(n_dir);
                 }
             }
@@ -5170,7 +5169,7 @@ impl World {
                 }
                 Command::Kill { target_id } => {
                     let ok = match self.entities.get_mut(target_id) {
-                        Some(e) => {
+                        Some(mut e) => {
                             // 直接 `Die()` 入口（GM `KillCommand.cs:40` `baseObject.Die()`；
                             // 脚本 `KILL` 的 `playerActor.Die()`）。oracle 的 `Die()` **不改
                             // HP**；SuperMan 的目标在 `Die` 首行早退后由下一次 `Run` 回满，
@@ -5178,7 +5177,7 @@ impl World {
                             // 非 SuperMan 仍写 `hp = 0`：本骨架的死亡结算以 `hp == 0` 为触发，
                             // 与既有行为保持一致。
                             if !e.super_man {
-                                e.hp = 0;
+                                e.vitals.hp = 0;
                             }
                             e.die_called = true;
                             true
@@ -5444,11 +5443,11 @@ impl World {
         //    （[`Entity::run_super_man_refill`] 于 `base_object_run_monster` / NPC / 商人）调用；
         //    玩家此前**没有**调用点 ⇒ `Entity.super_man = true`（`@3`）只挡死、不回血。
         //    本段无写入者时是纯 no-op（`super_man` 默认 false）⇒ 既有 golden 逐字节不变。
-        for e in self.entities.iter_mut() {
+        self.entities.for_each_mut(|mut e| {
             if e.race == crate::entity::ACTOR_RACE_PLAY && e.super_man {
                 e.run_super_man_refill();
             }
-        }
+        });
 
         // 1. 玩家死亡结算（oracle `base.Run:70-73`）：在 P32 复活门之后。
         self.tail_phase_log.push(TailPhase::Die);
@@ -5607,17 +5606,17 @@ impl World {
         };
         let mut hp_clamped = false;
         let mut mp_clamped = false;
-        if e.hp > e.max_hp {
-            e.hp = e.max_hp.wrapping_sub(1);
+        if e.vitals.hp > e.vitals.max_hp {
+            e.vitals.hp = e.vitals.max_hp.wrapping_sub(1);
             hp_clamped = true;
         }
-        if e.mp > e.max_mp {
-            e.mp = e.max_mp.wrapping_sub(1);
+        if e.vitals.mp > e.vitals.max_mp {
+            e.vitals.mp = e.vitals.max_mp.wrapping_sub(1);
             mp_clamped = true;
         }
         let is_play = e.race == crate::entity::ACTOR_RACE_PLAY;
         let show_hp = e.show_hp;
-        let (id, hp, mp) = (e.id, e.hp, e.mp);
+        let (id, hp, mp) = (e.id, e.vitals.hp, e.vitals.mp);
         if (hp_clamped || mp_clamped) && is_play {
             self.pending_verify_health_changes
                 .push((id, hp, mp, hp_clamped, mp_clamped));
@@ -5656,7 +5655,7 @@ impl World {
             .collect();
         let mut events = Vec::new();
         for id in ids {
-            let Some(e) = self.entities.get_mut(id) else {
+            let Some(mut e) = self.entities.get_mut(id) else {
                 continue;
             };
             // `PlayObject.Message.cs:54-58`：先 `SysMsg` 再 `SendSocket("+UFIR")`。
@@ -5853,7 +5852,7 @@ impl World {
             return Vec::new();
         };
         // `:857 Dir = nDir;`（先落，末尾按 result 决定是否复原）。
-        if let Some(e) = self.entities.get_mut(actor_id) {
+        if let Some(mut e) = self.entities.get_mut(actor_id) {
             e.ai.dir = n_dir;
         }
         let back = crate::magic::back_dir(n_dir);
@@ -5898,7 +5897,7 @@ impl World {
                 t.x = x;
                 t.y = y;
             }
-            if let Some(e) = self.entities.get_mut(actor_id) {
+            if let Some(mut e) = self.entities.get_mut(actor_id) {
                 // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
                 if race >= crate::entity::ACTOR_RACE_ANIMAL {
                     e.ai.walk_tick += 800;
@@ -5914,7 +5913,7 @@ impl World {
         }
         // `:890-895 Dir = nBackDir; if (result == 0) Dir = olddir;`
         let final_dir = if out.is_empty() { old_dir } else { back };
-        if let Some(e) = self.entities.get_mut(actor_id) {
+        if let Some(mut e) = self.entities.get_mut(actor_id) {
             e.ai.dir = final_dir;
         }
         out
@@ -6062,7 +6061,7 @@ impl World {
             for observer in observers {
                 self.sessions.push_depart(observer, id);
             }
-            if let Some(e) = self.entities.get_mut(id) {
+            if let Some(mut e) = self.entities.get_mut(id) {
                 e.no_item = true;
             }
             crate::monai::make_ghost(self, id);
@@ -6247,7 +6246,7 @@ impl World {
         }
 
         // 3) 字段复位（`BaseObject.cs:2468-2479` + `:2678-2687`）。
-        if let Some(e) = self.entities.get_mut(actor_id) {
+        if let Some(mut e) = self.entities.get_mut(actor_id) {
             e.death = false;
             // `BaseObject.Die`（`BaseObject.Base.cs:318-345`）**每次**死亡都无条件置 `Death`/`DeathTick`，
             // 复活后 `CanReAlive` 仍为 true ⇒ oracle 允许「死→复活→再死」无限循环。本仓的死亡结算是
@@ -6256,8 +6255,8 @@ impl World {
             e.death_settled = false;
             e.invisible = false;
             e.ghost = false;
-            e.hp = e.max_hp;
-            e.mp = e.max_mp;
+            e.vitals.hp = e.vitals.max_hp;
+            e.vitals.mp = e.vitals.max_mp;
             e.gold = 0;
             e.show_hp = false;
             // `ReAliveEx` 的 `Skeleton = false`（`BaseObject.cs:2472`）——`BaseObject.Skeleton`
@@ -6627,13 +6626,13 @@ impl World {
             return None;
         }
         let need_exps = std::mem::take(&mut self.need_exps);
-        let out = match self.entities.get_mut(actor_id) {
-            Some(e) => get_exp_raw(e, state.point, &need_exps),
-            None => {
-                self.need_exps = need_exps;
-                return None;
-            }
+        let Some(mut e) = self.entities.spawn_cloned(actor_id) else {
+            self.need_exps = need_exps;
+            return None;
         };
+        let out = get_exp_raw(&mut e, state.point, &need_exps);
+        self.entities
+            .set_progression(actor_id, e.progression_component());
         self.need_exps = need_exps;
         Some((actor_id, out.0, out.1, out.2))
     }
@@ -6727,18 +6726,24 @@ impl World {
                             f64::from(dw_exp) / f64::from(sumlv) * f64::from(level),
                         )
                     };
-                    let Some(k) = self.entities.get_mut(m) else {
+                    let Some(mut k) = self.entities.spawn_cloned(m) else {
                         continue;
                     };
-                    let (g, l, lvl) = win_exp(k, amount, &need_exps, &cfg, map_rate);
+                    let (g, l, lvl) = win_exp(&mut k, amount, &need_exps, &cfg, map_rate);
+                    self.entities.set_progression(m, k.progression_component());
                     if m == recipient {
                         my_gain = g;
                     }
                     record.exp_awards.push((m, g, l, lvl));
                 }
             } else {
-                let (g, l, lvl) = match self.entities.get_mut(recipient) {
-                    Some(k) => win_exp(k, monster_exp, &need_exps, &cfg, map_rate),
+                let (g, l, lvl) = match self.entities.spawn_cloned(recipient) {
+                    Some(mut k) => {
+                        let out = win_exp(&mut k, monster_exp, &need_exps, &cfg, map_rate);
+                        self.entities
+                            .set_progression(recipient, k.progression_component());
+                        out
+                    }
                     None => {
                         self.need_exps = need_exps;
                         return 0;
@@ -6748,8 +6753,13 @@ impl World {
                 record.exp_awards.push((recipient, g, l, lvl));
             }
         } else {
-            let (g, l, lvl) = match self.entities.get_mut(recipient) {
-                Some(k) => win_exp(k, monster_exp, &need_exps, &cfg, map_rate),
+            let (g, l, lvl) = match self.entities.spawn_cloned(recipient) {
+                Some(mut k) => {
+                    let out = win_exp(&mut k, monster_exp, &need_exps, &cfg, map_rate);
+                    self.entities
+                        .set_progression(recipient, k.progression_component());
+                    out
+                }
                 None => {
                     self.need_exps = need_exps;
                     return 0;
@@ -6768,7 +6778,7 @@ impl World {
         // `tick_head` 结算非玩家、`tick_tail` 结算玩家。既有 golden 的死亡行全是怪物 ⇒ 不变。
         let dead: Vec<i32> = self
             .entities
-            .iter()
+            .iter_ref()
             .filter(|e| {
                 // `die_called` 是脚本/GM 直接 `Die()` 的入口（`KillCommand.cs:40`
                 // `baseObject.Die()`**不改 HP**）⇒ SuperMan 目标可能仍带满血，
@@ -6808,7 +6818,7 @@ impl World {
                 let race = e.race;
                 let map_id = e.map_id;
                 let direct_die = e.die_called;
-                if let Some(e) = self.entities.get_mut(id) {
+                if let Some(mut e) = self.entities.get_mut(id) {
                     e.die_called = false;
                 }
                 if !direct_die {
@@ -6851,7 +6861,7 @@ impl World {
                 e.race == crate::entity::ACTOR_RACE_PLAY,
             );
             // 死亡标记（C# `Die()` 的 `Death = true`）
-            if let Some(e) = self.entities.get_mut(id) {
+            if let Some(mut e) = self.entities.get_mut(id) {
                 e.death = true;
                 // `BaseObject.cs:323`：`Death = true; DeathTick = HUtil32.GetTickCount();`
                 e.death_tick = self.clock_ms;
@@ -7135,8 +7145,8 @@ impl World {
             weapon_strong,
         );
         let now = self.clock_ms;
-        if let Some(e) = self.entities.get_mut(target_id) {
-            e.hp = target.hp;
+        if let Some(mut e) = self.entities.get_mut(target_id) {
+            e.vitals.hp = target.hp;
             // **G-06 耐久面回写（`openmir2-persist-useitems-wiring`）**：`attack_dir_grouped_poison`
             // 在 `target` 的副本上跑 `PlayObject.StruckDamage` 的耐久段（`PlayObject.cs:2954-3036`），
             // 只回写 `hp` 会把磨损/破零整段丢掉（实体槽永远停在受击前）。oracle 改的是会话
@@ -7198,7 +7208,7 @@ impl World {
         // 武器升级结算的回写（`UseItems[Weapon]` 是 oracle 的同一个对象；本仓攻方是副本）。
         // 只回写 `use_items`：其余攻方字段在 oracle 里也不由 `AttackDir` 改。
         if let Some(outcome) = weapon_outcome {
-            if let Some(e) = self.entities.get_mut(actor_id) {
+            if let Some(mut e) = self.entities.get_mut(actor_id) {
                 e.use_items = attacker.use_items;
             }
             self.pending_weapon_breaks
@@ -7209,7 +7219,7 @@ impl World {
         // `UseItems[Weapon]` 对象；本仓攻方是副本 ⇒ 这里**必须**无条件写回（与上面
         // `weapon_outcome` 的条件式写回不同：没有升级 `Desc[10]` 的普通武器也照样磨损）。
         if let Some(wear) = weapon_wear {
-            if let Some(e) = self.entities.get_mut(actor_id) {
+            if let Some(mut e) = self.entities.get_mut(actor_id) {
                 e.use_items = attacker.use_items;
             }
             self.pending_weapon_wears.push(WeaponWearEvent {
@@ -7778,7 +7788,7 @@ impl World {
 
         let mut skeleton = None;
         let (target_x_now, target_y_now) = self.entities.xy(target_id)?;
-        let e = self.entities.get_mut(target_id)?;
+        let mut e = self.entities.get_mut(target_id)?;
         // `:724-729`：`byte` / `ushort` 的 unchecked 回绕（**不夹取**；`<=0` 只命中 `==0`）。
         e.ai.body_leathery = e.ai.body_leathery.wrapping_sub(n10);
         e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(meat_draw);
@@ -7804,7 +7814,7 @@ impl World {
             e.ai.body_leathery = 50;
         }
         // `:744` `DeathTick = HUtil32.GetTickCount();` —— 方法内 `this` = **屠宰者**。
-        if let Some(actor) = self.entities.get_mut(actor_id) {
+        if let Some(mut actor) = self.entities.get_mut(actor_id) {
             actor.death_tick = now;
         }
         skeleton
@@ -8067,10 +8077,10 @@ mod tests {
             // 重播种共享流（无需复算 ctor 抽数：重播种抹掉 ctor 已消费的那几抽）。
             w.rng = RandomNumber::with_seed(seed);
             let mut exp = RandomNumber::with_seed(seed);
-            if let Some(n) = w.entities.get_mut(npc).and_then(|e| e.npc.as_mut()) {
+            if let Some(n) = w.entities.entity_mut(npc).and_then(|e| e.npc.as_mut()) {
                 n.run_tick = 0;
             }
-            if let Some(s) = w.entities.get_mut(mer).and_then(|e| e.merchant.as_mut()) {
+            if let Some(s) = w.entities.entity_mut(mer).and_then(|e| e.merchant.as_mut()) {
                 s.run_tick = 0;
             }
             w.npc_pass_tick = i64::MIN;
@@ -9121,7 +9131,7 @@ mod tests {
             e.exp_hitter = Some(pet);
             w.add_entity(e)
         };
-        w.entities.get_mut(mon).unwrap().hp = 0;
+        w.entities.get_mut(mon).unwrap().vitals.hp = 0;
         let exp_before = w.entities.get(master).unwrap().exp;
         let pet_exp_before = w.entities.get(pet).unwrap().exp;
         let rec = w.tick();
@@ -9155,7 +9165,7 @@ mod tests {
                 e.exp_hitter = Some(p);
                 w.add_entity(e)
             };
-            w.entities.get_mut(mon).unwrap().hp = 0;
+            w.entities.get_mut(mon).unwrap().vitals.hp = 0;
             let rec = w.tick();
             (rec.exp_awards[0].1, w.entities.get(p).unwrap().exp)
         };
@@ -9192,7 +9202,7 @@ mod tests {
                 e.exp_hitter = Some(p);
                 w.add_entity(e)
             };
-            w.entities.get_mut(mon).unwrap().hp = 0;
+            w.entities.get_mut(mon).unwrap().vitals.hp = 0;
             let rec = w.tick();
             (rec.exp_awards[0].2, w.entities.get(p).unwrap().level)
         };
@@ -10567,7 +10577,7 @@ mod tests {
         const SEED: i32 = 8_675_309;
         let (mut w, p, t, n10) = butch_rig(SEED, 105, true);
         {
-            let e = w.entities.get_mut(t).unwrap();
+            let mut e = w.entities.get_mut(t).unwrap();
             e.ai.body_leathery = n10; // 本次抽恰好归零
             e.ai.meat_quality = 1000;
         }
@@ -10640,7 +10650,7 @@ mod tests {
             let cx = 10 + dx;
             let (mut w, p, t, n10) = butch_rig_at(SEED, 53, true, cx, 10);
             {
-                let e = w.entities.get_mut(t).unwrap();
+                let mut e = w.entities.get_mut(t).unwrap();
                 e.ai.body_leathery = n10; // 过门则归零 + 骨架
                 e.ai.meat_quality = 1000;
             }
@@ -10687,7 +10697,7 @@ mod tests {
         // A：生产路径（一次有效屠宰；起值保证不归零、不回绕）。
         let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
         {
-            let e = w.entities.get_mut(t).unwrap();
+            let mut e = w.entities.get_mut(t).unwrap();
             e.ai.body_leathery = BODY0;
             e.ai.meat_quality = MEAT0;
         }
@@ -11782,7 +11792,7 @@ mod tests {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(1, "hero", 10, 10, 10));
         let _ = w.tick(); // Enter 落图（clock=200）
-        w.entities.get_mut(p).unwrap().hp = 0;
+        w.entities.get_mut(p).unwrap().vitals.hp = 0;
         let mut rec = w.tick_head();
         assert!(
             rec.deaths.is_empty(),
@@ -11946,7 +11956,7 @@ mod tests {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(1, "hero", 10, 10, 10));
         let _ = w.tick();
-        w.entities.get_mut(p).unwrap().hp = 0;
+        w.entities.get_mut(p).unwrap().vitals.hp = 0;
         let mut rec = w.tick_head();
         assert!(w.tail_phase_log.is_empty(), "head 不产生 tail 段序");
         w.tick_tail(&mut rec);
@@ -11971,7 +11981,7 @@ mod tests {
         let _ = w.tick();
         let stale_tick = w.clock_ms - 30_001; // 严格大于 30s ⇒ expire_hitters 会清
         {
-            let e = w.entities.get_mut(p).unwrap();
+            let mut e = w.entities.get_mut(p).unwrap();
             e.last_hiter = Some(mid);
             e.last_hiter_tick = stale_tick;
         }
@@ -12006,10 +12016,10 @@ mod tests {
         let _ = w.tick();
         {
             let e = w.entities.get_mut(p).unwrap();
-            e.hp = 250;
-            e.max_hp = 200;
-            e.mp = 300;
-            e.max_mp = 200;
+            e.vitals.hp = 250;
+            e.vitals.max_hp = 200;
+            e.vitals.mp = 300;
+            e.vitals.max_mp = 200;
         }
         // 未过 30s 门 ⇒ 钳制不执行（oracle 钳制在 VerifyTick 门内）。
         w.clock_ms += 100;
@@ -12718,8 +12728,23 @@ mod castle_wire_tests {
         let mut rng = std::mem::replace(&mut w.rng, RandomNumber::with_seed(0));
         let cfg = w.combat_config;
         let (_, killed) = {
-            let target = w.entities.get_mut(id).unwrap();
-            crate::combat::apply_struck_damage(&mut rng, &attacker, target, 5000, None, &cfg)
+            // S4a：`apply_struck_damage` 在生成期载体上跑（属性真值在组件）⇒ 结算后回写。
+            let mut target = w.entities.spawn_cloned(id).unwrap();
+            let out = crate::combat::apply_struck_damage(
+                &mut rng,
+                &attacker,
+                &mut target,
+                5000,
+                None,
+                &cfg,
+            );
+            if let Some(v) = w.entities.vitals_mut(id) {
+                v.hp = target.hp;
+            }
+            if let Some(e) = w.entities.entity_mut(id) {
+                e.use_items = target.use_items;
+            }
+            out
         };
         w.rng = rng;
         assert!(!killed);
@@ -12827,7 +12852,7 @@ mod castle_wire_tests {
             "HP 4999/5000 ⇒ n08=0，Dir 已是 0 ⇒ 无 RM_DIGUP"
         );
 
-        w.entities.get_mut(id).unwrap().hp = 2000;
+        w.entities.get_mut(id).unwrap().vitals.hp = 2000;
         let rec = w.tick();
         assert!(
             rec.castle_structures
@@ -12836,7 +12861,7 @@ mod castle_wire_tests {
             "HP 2000/5000 ⇒ n08=2 ⇒ RM_DIGUP(2)"
         );
 
-        w.entities.get_mut(id).unwrap().hp = 0;
+        w.entities.get_mut(id).unwrap().vitals.hp = 0;
         let rec = w.tick();
         let events: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
         assert_eq!(
@@ -12894,7 +12919,7 @@ mod castle_wire_tests {
         );
 
         // 死亡：`DeathTick` 每 tick 刷新。
-        w.entities.get_mut(id).unwrap().hp = 0;
+        w.entities.get_mut(id).unwrap().vitals.hp = 0;
         let r1 = w.tick();
         let t1 = unit_of(&w).death_tick;
         assert_eq!(t1, r1.clock_ms);
@@ -13018,8 +13043,8 @@ mod castle_wire_tests {
         crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 110, 0);
         {
             let e = w.entities.get_mut(id).unwrap();
-            e.max_mp = 40;
-            e.mp = 0;
+            e.vitals.max_mp = 40;
+            e.vitals.mp = 0;
         }
         assert!(w.entities.get(id).unwrap().super_man);
         let rec = w.tick_head();

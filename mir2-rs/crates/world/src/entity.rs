@@ -507,13 +507,18 @@ pub struct BaseAbil {
 /// `set_xy` / `set_map_id` 等受控入口）。格子登记与组件更新必须同一段代码内完成。
 pub use mir2_world_bevy::Transform;
 
+/// **S4a**：属性/成长组件的 world 侧实例化（真值在 `mir2_world_bevy` 组件，`Entity` 已删字段）。
+pub use mir2_world_bevy::{AbilitySnapshot, Progression, Vitals};
+/// **S4a**：`Vitals`/`AbilitySnapshot`/`Progression` 三组件的组合类型（`EntitySpawn`/`EntityRef`/`EntityMut` 用）。
+pub type Ability = AbilitySnapshot<BaseAbil>;
+
 /// **S3b**：AOI/落图绑定组件的 world 侧实例化（6 字段真值）。
 pub type MapBinding = mir2_world_bevy::MapBinding<VisibleBaseObject, VisibleEvent>;
 
-/// **生成期载体**（`Entity` + 落图前的 `Transform` / `MapBinding`）。
+/// **生成期载体**（`Entity` + 落图前的 `Transform` / `MapBinding` / S4a 属性组件）。
 ///
 /// 只为保持 697 处 `Entity::new(id, name, x, y)` + `e.x = …` 的生成期写法不变；
-/// [`EntityStore::insert`] 消费它并把坐标/绑定落成组件。**插入后不再存在第二份真值**：
+/// [`EntityStore::insert`] 消费它并把坐标/绑定/属性落成组件。**插入后不再存在第二份真值**：
 /// 载体被 move 进 insert，后续读写一律走组件。
 #[derive(Debug, Clone)]
 pub struct EntitySpawn {
@@ -525,9 +530,39 @@ pub struct EntitySpawn {
     pub view_range: i32,
     /// 落图前 AOI 绑定（`insert` 时落成 `MapBinding` 组件）。
     pub map_binding: MapBinding,
+    // ---- S4a：生成期属性/成长（`insert` 时落成 Vitals/AbilitySnapshot/Progression 组件）----
+    // 字段平铺在载体上，保持 697 处生成期写法（`e.hp = …`）不变；插入后不再有第二份真值。
+    pub hp: u16,
+    pub max_hp: u16,
+    pub mp: u16,
+    pub max_mp: u16,
+    pub hit_speed: u16,
+    pub dc: i32,
+    pub ac: i32,
+    pub mac: u16,
+    pub hit_point: u8,
+    pub speed_point: u8,
+    pub anti_magic: u16,
+    pub anti_poison: u8,
+    pub undead_power: i32,
+    pub abil: Option<BaseAbil>,
+    pub job: u8,
+    pub life_attrib: u8,
+    pub level: u8,
+    pub mon_exp: i32,
+    pub exp: i32,
+    pub max_exp: i32,
 }
 
 impl EntitySpawn {
+    /// ctor 缺省值（`Entity::new`：`Vitals.hp/max_hp = 100/100`、`Progression.level = 1`；
+    /// 其余 0/`None`，见迁移文档 §3.4）。
+    ///
+    /// **不得**用 `Component::default()` 直接造实体：`hp=0` 在语义上等于「已死」。
+    const CTOR_HP: u16 = 100;
+    const CTOR_MAX_HP: u16 = 100;
+    const CTOR_LEVEL: u8 = 1;
+
     pub fn new(
         entity: Entity,
         x: i32,
@@ -543,11 +578,76 @@ impl EntitySpawn {
             map_id,
             view_range,
             map_binding,
+            hp: Self::CTOR_HP,
+            max_hp: Self::CTOR_MAX_HP,
+            mp: 0,
+            max_mp: 0,
+            hit_speed: 0,
+            dc: 0,
+            ac: 0,
+            mac: 0,
+            hit_point: 0,
+            speed_point: 0,
+            anti_magic: 0,
+            anti_poison: 0,
+            undead_power: 0,
+            abil: None,
+            job: 0,
+            life_attrib: 0,
+            level: Self::CTOR_LEVEL,
+            mon_exp: 0,
+            exp: 0,
+            max_exp: 0,
         }
     }
 
-    /// 落成组件三元组（`insert` 用）。
-    pub fn into_parts(self) -> (Entity, Transform, MapBinding) {
+    /// 把载体上的属性字段落成组件值。
+    #[must_use]
+    pub fn vitals_component(&self) -> Vitals {
+        Vitals {
+            hp: self.hp,
+            max_hp: self.max_hp,
+            mp: self.mp,
+            max_mp: self.max_mp,
+            hit_speed: self.hit_speed,
+            dc: self.dc,
+            ac: self.ac,
+            mac: self.mac,
+            hit_point: self.hit_point,
+            speed_point: self.speed_point,
+            anti_magic: self.anti_magic,
+            anti_poison: self.anti_poison,
+            undead_power: self.undead_power,
+        }
+    }
+
+    /// 把载体上的成长字段落成组件值（供「取副本算完再回写」路径：`win_exp` / `get_exp_raw`）。
+    #[must_use]
+    pub fn progression_component(&self) -> Progression {
+        Progression {
+            job: self.job,
+            life_attrib: self.life_attrib,
+            level: self.level,
+            mon_exp: self.mon_exp,
+            exp: self.exp,
+            max_exp: self.max_exp,
+        }
+    }
+
+    /// 落成组件（`insert` 用）：主组件 + 位置 + 绑定 + S4a 属性组件。
+    #[allow(clippy::type_complexity)]
+    pub fn into_parts(
+        self,
+    ) -> (
+        Entity,
+        Transform,
+        MapBinding,
+        Vitals,
+        AbilitySnapshot<BaseAbil>,
+        Progression,
+    ) {
+        let progression = self.progression_component();
+        let vitals = self.vitals_component();
         (
             self.entity,
             Transform {
@@ -557,6 +657,9 @@ impl EntitySpawn {
                 view_range: self.view_range,
             },
             self.map_binding,
+            vitals,
+            AbilitySnapshot { abil: self.abil },
+            progression,
         )
     }
 }
@@ -596,6 +699,27 @@ pub struct EntityRef<'a> {
     pub is_visible_active: bool,
     pub processed_tick: u64,
     pub verify_tick: i64,
+    // ---- S4a：属性/成长组件的只读投影（`Copy` 组件按值拷贝）----
+    pub hp: u16,
+    pub max_hp: u16,
+    pub mp: u16,
+    pub max_mp: u16,
+    pub hit_speed: u16,
+    pub dc: i32,
+    pub ac: i32,
+    pub mac: u16,
+    pub hit_point: u8,
+    pub speed_point: u8,
+    pub anti_magic: u16,
+    pub anti_poison: u8,
+    pub undead_power: i32,
+    pub abil: Option<BaseAbil>,
+    pub job: u8,
+    pub life_attrib: u8,
+    pub level: u8,
+    pub mon_exp: i32,
+    pub exp: i32,
+    pub max_exp: i32,
 }
 
 impl<'a> EntityRef<'a> {
@@ -603,11 +727,15 @@ impl<'a> EntityRef<'a> {
         self.entity
     }
 
-    /// 由三个组件引用构造只读视图（bevy `OutputAoi` 系统用）。
+    /// 由组件引用构造只读视图（`get` / `iter_ref` / bevy `OutputAoi` 系统用）。
+    #[allow(clippy::too_many_arguments)]
     pub fn from_components(
         entity: &'a Entity,
         transform: &'a Transform,
         binding: &'a MapBinding,
+        vitals: &'a Vitals,
+        ability: &'a AbilitySnapshot<BaseAbil>,
+        progression: &'a Progression,
     ) -> Self {
         EntityRef {
             entity,
@@ -621,6 +749,26 @@ impl<'a> EntityRef<'a> {
             is_visible_active: binding.is_visible_active,
             processed_tick: binding.processed_tick,
             verify_tick: binding.verify_tick,
+            hp: vitals.hp,
+            max_hp: vitals.max_hp,
+            mp: vitals.mp,
+            max_mp: vitals.max_mp,
+            hit_speed: vitals.hit_speed,
+            dc: vitals.dc,
+            ac: vitals.ac,
+            mac: vitals.mac,
+            hit_point: vitals.hit_point,
+            speed_point: vitals.speed_point,
+            anti_magic: vitals.anti_magic,
+            anti_poison: vitals.anti_poison,
+            undead_power: vitals.undead_power,
+            abil: ability.abil,
+            job: progression.job,
+            life_attrib: progression.life_attrib,
+            level: progression.level,
+            mon_exp: progression.mon_exp,
+            exp: progression.exp,
+            max_exp: progression.max_exp,
         }
     }
 }
@@ -628,6 +776,71 @@ impl<'a> EntityRef<'a> {
 impl std::ops::Deref for EntityRef<'_> {
     type Target = Entity;
     fn deref(&self) -> &Entity {
+        self.entity
+    }
+}
+
+/// **可变视图**：一次按 id 取 `Entity` 主组件 + S4a 属性/成长组件。
+///
+/// S4a 把 20 个字段搬出 `Entity` 后，原来 `world.entities.get_mut(id)` 的块仍要
+/// 同时读写「剩余字段」（经 `Deref`）与「迁出的属性」（`e.vitals.hp` 等）。视图在
+/// **一次 `&mut` 借用**里取齐这些组件，因此不会出现「同一实体的两份可变真值」。
+///
+/// 它不是组件、不参与存储，**不是双真值**：`vitals`/`ability`/`progression` 都是组件
+/// 的可变引用，写回即写给组件。Deref 目标仍是 `Entity`（其余字段照旧）。
+pub struct EntityMut<'a> {
+    entity: &'a mut Entity,
+    pub vitals: &'a mut Vitals,
+    pub ability: &'a mut AbilitySnapshot<BaseAbil>,
+    pub progression: &'a mut Progression,
+}
+
+impl EntityMut<'_> {
+    /// 只取主组件（剩余字段）的可变引用（不碰 S4a 属性组件）。
+    pub fn entity_mut(&mut self) -> &mut Entity {
+        self.entity
+    }
+
+    /// `BaseObject.Run` 的 `SuperMan` 回满段（`BaseObject.Base.cs:32-36`）：
+    /// `if (SuperMan) { WAbil.HP = MaxHP; WAbil.MP = MaxMP; }`。
+    ///
+    /// 位置契约：在消息泵之后、`if (!Death)` 之前 ⇒ 调用方必须放在自己的 `Run` 消息段
+    /// （含 `RM_STRUCK` 出队）之后、死亡/恢复支之前。`SuperMan` 实体因此在 `HP == 0`
+    /// 判定（`:70-73`）之前就被回满 ⇒ oracle 的 `Die()` 对它们**不可达**；`Die` 的早退
+    /// 语义（`:318-322`）由 `settle_deaths` 在「直接调用 `Die()`」路径等价。
+    pub fn run_super_man_refill(&mut self) {
+        if self.entity.super_man {
+            self.vitals.hp = self.vitals.max_hp;
+            self.vitals.mp = self.vitals.max_mp;
+        }
+    }
+
+    /// 取 `Abil` 快照；未取过时用当前 `dc`/`max_hp` 建立（生成路径 `WAbil == Abil`）。
+    ///
+    /// 生产路径**唯一**的 `Abil` 写入点是 `monster_from_row` 的库值（`dc`/`max_hp`）；
+    /// `MakeClone` 的 `ElfMon.Abil = OldMon.Abil` 由 [`crate::monai`] 直接复制。
+    pub fn abil_snapshot(&mut self) -> BaseAbil {
+        if let Some(abil) = self.ability.abil {
+            return abil;
+        }
+        let abil = BaseAbil {
+            dc: self.vitals.dc,
+            max_hp: self.vitals.max_hp,
+        };
+        self.ability.abil = Some(abil);
+        abil
+    }
+}
+
+impl std::ops::Deref for EntityMut<'_> {
+    type Target = Entity;
+    fn deref(&self) -> &Entity {
+        self.entity
+    }
+}
+
+impl std::ops::DerefMut for EntityMut<'_> {
+    fn deref_mut(&mut self) -> &mut Entity {
         self.entity
     }
 }
@@ -859,24 +1072,24 @@ pub struct Entity {
     // `processed_tick` / `verify_tick` 已迁到 [`MapBinding`] 组件（字段真值，经
     // `EntityStore::map_binding` / `map_binding_mut` 受控访问）。`processed_tick` 与
     // `map_id` 的旧字段位置保留在此注释里，源码顺序无契约。
-    /// `WAbil.HP` / `WAbil.MaxHP`
-    pub hp: u16,
-    pub max_hp: u16,
-    /// C# `BaseObject.Abil` 的本骨架子集快照（见 [`BaseAbil`]）。
-    ///
-    /// `None` = 尚未取快照：生成路径（`monster_from_row`）直接把库值写进 `dc`/`max_hp`
-    /// （此时 `WAbil == Abil`，此后未被 `RecalcAbilitys`/伤害改过）⇒ 首次需要时由
-    /// [`Entity::abil_snapshot`] 以当前 `dc`/`max_hp` 懒取。`MakeClone` 在第一次
-    /// `RecalcAbilitys()` 之后复制源怪的快照（oracle `MonsterObject.cs:115`），
-    /// 使随后的 `AppearNow` 从 `OldMon.Abil` 重算（`f(Abil)` 而不是 `f(f(初值))`）。
-    pub abil: Option<BaseAbil>,
-    /// `WAbil.MP` / `WAbil.MaxMP`。
-    ///
-    /// 怪物生成时照 `WorldServer.MonGen.cs:896-897` 的 `ApplyMonsterAbility`：`MP = 0`、
-    /// `MaxMP = MonsterInfo.MP`（注意 `MP` 在怪物表里被复用作 `MonsterWeapon` 的形参，见
-    /// `:903`；`BaseObject.Run` 的恢复段仍按 `WAbil.MaxMP` 回蓝）。
-    pub mp: u16,
-    pub max_mp: u16,
+    // `WAbil.HP` / `WAbil.MaxHP`
+    // S4a 迁出：`hp` 真值在 components 组件（见迁移文档 S4a）。
+    // S4a 迁出：`max_hp` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `BaseObject.Abil` 的本骨架子集快照（见 [`BaseAbil`]）。
+    //
+    // `None` = 尚未取快照：生成路径（`monster_from_row`）直接把库值写进 `dc`/`max_hp`
+    // （此时 `WAbil == Abil`，此后未被 `RecalcAbilitys`/伤害改过）⇒ 首次需要时由
+    // [`Entity::abil_snapshot`] 以当前 `dc`/`max_hp` 懒取。`MakeClone` 在第一次
+    // `RecalcAbilitys()` 之后复制源怪的快照（oracle `MonsterObject.cs:115`），
+    // 使随后的 `AppearNow` 从 `OldMon.Abil` 重算（`f(Abil)` 而不是 `f(f(初值))`）。
+    // S4a 迁出：`abil` 真值在 components 组件（见迁移文档 S4a）。
+    // `WAbil.MP` / `WAbil.MaxMP`。
+    //
+    // 怪物生成时照 `WorldServer.MonGen.cs:896-897` 的 `ApplyMonsterAbility`：`MP = 0`、
+    // `MaxMP = MonsterInfo.MP`（注意 `MP` 在怪物表里被复用作 `MonsterWeapon` 的形参，见
+    // `:903`；`BaseObject.Run` 的恢复段仍按 `WAbil.MaxMP` 回蓝）。
+    // S4a 迁出：`mp` 真值在 components 组件（见迁移文档 S4a）。
+    // S4a 迁出：`max_mp` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `BaseObject.PoisoningTick`（`BaseObject.cs:301`，ctor `:443` 置 `GetTickCount()`）——
     /// 毒伤 DoT 的周期门时刻（`ActorBuffSystem.cs:235`，缺省 `Config.PosionDecHealthTime` = 2500ms）。
     /// 缺省 = [`crate::buff::BUFF_EPOCH_MS`]（模拟开机毫秒基）；ctor 拿不到 `World` 时钟 ⇒ 落图时由
@@ -908,58 +1121,58 @@ pub struct Entity {
     pub show_hp_interval: i32,
     /// C# `BaseObject.SuperMan`（32 圣言术的首门 `target.SuperMan`）。
     pub super_man: bool,
-    /// C# `CharacterObject.HitSpeed`（`PlayObject.Message.cs:1846` 的 `SM_CHARSTATUSCHANGED` 末参
-    /// 取**收件人自己**的 `this.HitSpeed`）。
-    ///
-    /// **P3-B3 新增**：`RecalcAbilitys` 的写入点尚未接到实体（登记），普通路径恒 0；
-    /// 657 帧改为逐收件人读本字段构造（不再用一条 `hit_speed=0` 的 body 广播）。
-    pub hit_speed: u16,
+    // C# `CharacterObject.HitSpeed`（`PlayObject.Message.cs:1846` 的 `SM_CHARSTATUSCHANGED` 末参
+    // 取**收件人自己**的 `this.HitSpeed`）。
+    //
+    // **P3-B3 新增**：`RecalcAbilitys` 的写入点尚未接到实体（登记），普通路径恒 0；
+    // 657 帧改为逐收件人读本字段构造（不再用一条 `hit_speed=0` 的 body 广播）。
+    // S4a 迁出：`hit_speed` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `PlayObject.MagicShield`（`PlayObject.cs:490`）——`DamageHealth` 的 MP 抵扣门（`BaseObject.cs:779`）。
     pub magic_shield: bool,
     /// C# `PlayObject.UnMagicShield`（`PlayObject.cs:494`）——`DamageHealth` 首行守卫（`BaseObject.cs:777`）。
     pub un_magic_shield: bool,
-    /// `WAbil.DC`（低字节=下限、高字节=上限，与 C# 一致）
-    pub dc: i32,
-    /// `WAbil.AC`
-    pub ac: i32,
-    /// `HitPoint` / `SpeedPoint`（命中/敏捷，命中判定用）
-    pub hit_point: u8,
-    pub speed_point: u8,
-    /// C# `BaseObject.AntiMagic`（`BaseObject.cs:113`；ctor `:390` 置 **0**）——
-    /// 魔法骰门 `Random(10) >= AntiMagic` 的右操作数（`MagicManager.cs:180/292/334/566/1033`）。
-    ///
-    /// **普通 `MonGen` 生成路径保持 0**：oracle 只有 `RecalcAbilitys` 会把它置成
-    /// `1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30` 置 1、`:67` 累加），而普通生成的怪
-    /// **不调用** `RecalcAbilitys`；`ElfMonster`/`WhiteSkeleton` 等覆写也不改 `AntiMagic`。
-    /// ⇒ 普通怪目标下 `Random(10) >= 0` 恒真，骰门永不失败。
-    ///
-    /// 本仓的等价 `RecalcAbilitys` 写入点：玩家登录/升级
-    /// （`bins/game-svr` 的 `apply_ability_to_entity`）与宝宝召唤
-    /// （[`crate::World::make_slave_adopt`]，`BaseObject.cs:1198`），均置 `1 + AddAbil.AntiMagic`
-    /// （怪物/玩家的 `AddAbil` 在本骨架内为 0 ⇒ 1）。复活（`BaseObject.cs:2739`）与其余
-    /// slave 面（`MakeClone`/`GainSlaveExp`）尚未建模 ⇒ 这些路径保持 0（登记）。
-    /// 设计锚：`mir2-rs/tests/parity/m3/design-monster-run-overrides-20261017.md` §4.1.2-5 / §5-2。
-    pub anti_magic: u16,
+    // `WAbil.DC`（低字节=下限、高字节=上限，与 C# 一致）
+    // S4a 迁出：`dc` 真值在 components 组件（见迁移文档 S4a）。
+    // `WAbil.AC`
+    // S4a 迁出：`ac` 真值在 components 组件（见迁移文档 S4a）。
+    // `HitPoint` / `SpeedPoint`（命中/敏捷，命中判定用）
+    // S4a 迁出：`hit_point` 真值在 components 组件（见迁移文档 S4a）。
+    // S4a 迁出：`speed_point` 真值在 components 组件（见迁移文档 S4a）。
+    // C# `BaseObject.AntiMagic`（`BaseObject.cs:113`；ctor `:390` 置 **0**）——
+    // 魔法骰门 `Random(10) >= AntiMagic` 的右操作数（`MagicManager.cs:180/292/334/566/1033`）。
+    //
+    // **普通 `MonGen` 生成路径保持 0**：oracle 只有 `RecalcAbilitys` 会把它置成
+    // `1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30` 置 1、`:67` 累加），而普通生成的怪
+    // **不调用** `RecalcAbilitys`；`ElfMonster`/`WhiteSkeleton` 等覆写也不改 `AntiMagic`。
+    // ⇒ 普通怪目标下 `Random(10) >= 0` 恒真，骰门永不失败。
+    //
+    // 本仓的等价 `RecalcAbilitys` 写入点：玩家登录/升级
+    // （`bins/game-svr` 的 `apply_ability_to_entity`）与宝宝召唤
+    // （[`crate::World::make_slave_adopt`]，`BaseObject.cs:1198`），均置 `1 + AddAbil.AntiMagic`
+    // （怪物/玩家的 `AddAbil` 在本骨架内为 0 ⇒ 1）。复活（`BaseObject.cs:2739`）与其余
+    // slave 面（`MakeClone`/`GainSlaveExp`）尚未建模 ⇒ 这些路径保持 0（登记）。
+    // 设计锚：`mir2-rs/tests/parity/m3/design-monster-run-overrides-20261017.md` §4.1.2-5 / §5-2。
+    // S4a 迁出：`anti_magic` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `BaseObject.Light`（`BaseObject.cs:149`；ctor `:384` 置 **0**）——光源强度。
     ///
     /// 消费点全在帧面：`SM_WALK/SM_RUN/SM_TURN/SM_DIGUP/...` 的 `Series = MakeWord(Dir, Light)`
     /// （`PlayObject.Message.cs:1406-1975`）。本骨架只落字段，帧面由宿主 `bins/game-svr` 发。
     /// `NormNpc` ctor 置 **2**（`NormNpc.cs:43`，商人继承）；玩家/普通怪物保持 ctor 缺省 0。
     pub light: u8,
-    /// C# `BaseObject.AntiPoison`（`BaseObject.cs:109`；ctor `:389` 置 **0**）——毒/麻痹抗性。
-    ///
-    /// 消费点：`Random(target.AntiPoison + N)` 的毒/麻痹命中门（`MagicManager.cs:235/914`、
-    /// `Player.Attack.cs:221`、`GreenMonster.cs:23` 等）。`NormNpc` ctor 置 **99**
-    /// （`NormNpc.cs:44`，商人继承）；玩家/普通怪物保持 ctor 缺省 0（本骨架尚未接毒/麻痹结算）。
-    pub anti_poison: u8,
-    /// `WAbil.MAC`（`BaseObject` 构造 ctor 缺省 **0**；`RecalcAbilitys` 后 = `Abil.MAC + AddAbil.MAC`
-    /// 的逐字节 `MakeWord` 合成，见 `bins/game-svr` 的 `apply_ability_to_entity`）。
-    ///
-    /// **P3-B2 新增（`crates/world` 接口变更，须按 §12.4 通知并行车道）**：`RM_MAGSTRUCK` 交付段的
-    /// `GetMagStruckDamage`（`BaseObject.Base.cs:812-821`）唯一读点：
-    /// `Lo(MAC) + Random(|Hi(MAC)-Lo(MAC)|+1)`，再从 `nDamage` 里扣。
-    /// 普通 `MonGen` 怪走 ctor 缺省 0（与 `anti_magic` 同口径，生成路径不调 `RecalcAbilitys`）。
-    pub mac: u16,
+    // C# `BaseObject.AntiPoison`（`BaseObject.cs:109`；ctor `:389` 置 **0**）——毒/麻痹抗性。
+    //
+    // 消费点：`Random(target.AntiPoison + N)` 的毒/麻痹命中门（`MagicManager.cs:235/914`、
+    // `Player.Attack.cs:221`、`GreenMonster.cs:23` 等）。`NormNpc` ctor 置 **99**
+    // （`NormNpc.cs:44`，商人继承）；玩家/普通怪物保持 ctor 缺省 0（本骨架尚未接毒/麻痹结算）。
+    // S4a 迁出：`anti_poison` 真值在 components 组件（见迁移文档 S4a）。
+    // `WAbil.MAC`（`BaseObject` 构造 ctor 缺省 **0**；`RecalcAbilitys` 后 = `Abil.MAC + AddAbil.MAC`
+    // 的逐字节 `MakeWord` 合成，见 `bins/game-svr` 的 `apply_ability_to_entity`）。
+    //
+    // **P3-B2 新增（`crates/world` 接口变更，须按 §12.4 通知并行车道）**：`RM_MAGSTRUCK` 交付段的
+    // `GetMagStruckDamage`（`BaseObject.Base.cs:812-821`）唯一读点：
+    // `Lo(MAC) + Random(|Hi(MAC)-Lo(MAC)|+1)`，再从 `nDamage` 里扣。
+    // 普通 `MonGen` 怪走 ctor 缺省 0（与 `anti_magic` 同口径，生成路径不调 `RecalcAbilitys`）。
+    // S4a 迁出：`mac` 真值在 components 组件（见迁移文档 S4a）。
     /// C# `BaseObject.RushMode`——`RM_MAGSTRUCK` 的 `Random(1000)` 门
     /// （`BaseObject.Base.cs:620`：`!RushMode` 才 `WalkTick += 800 + Random(1000)`）。
     ///
@@ -973,19 +1186,19 @@ pub struct Entity {
     pub extra_abil_times: [i64; 7],
     /// C# `PlayObject.ExtraAbilFlag[7]`（`PlayObject.cs:203`）——「到期前 10s 提示已发」标记。
     pub extra_abil_flag: [u8; 7],
-    /// `Job`（0 战 / 1 法 / 2 道）
-    pub job: u8,
-    /// `LifeAttrib`（1 = `LA_UNDEAD` 不死系）
-    pub life_attrib: u8,
-    /// `Abil.Level`
-    pub level: u8,
-    /// `MonsterInfo.Exp`（怪物经验，死亡时按 `CalcGetExp` 结算）
-    pub mon_exp: i32,
-    /// `Abil.Exp` / `Abil.MaxExp`
-    pub exp: i32,
-    pub max_exp: i32,
-    /// `AddAbil.UndeadPower`（攻击方对不死系的加成）
-    pub undead_power: i32,
+    // `Job`（0 战 / 1 法 / 2 道）
+    // S4a 迁出：`job` 真值在 components 组件（见迁移文档 S4a）。
+    // `LifeAttrib`（1 = `LA_UNDEAD` 不死系）
+    // S4a 迁出：`life_attrib` 真值在 components 组件（见迁移文档 S4a）。
+    // `Abil.Level`
+    // S4a 迁出：`level` 真值在 components 组件（见迁移文档 S4a）。
+    // `MonsterInfo.Exp`（怪物经验，死亡时按 `CalcGetExp` 结算）
+    // S4a 迁出：`mon_exp` 真值在 components 组件（见迁移文档 S4a）。
+    // `Abil.Exp` / `Abil.MaxExp`
+    // S4a 迁出：`exp` 真值在 components 组件（见迁移文档 S4a）。
+    // S4a 迁出：`max_exp` 真值在 components 组件（见迁移文档 S4a）。
+    // `AddAbil.UndeadPower`（攻击方对不死系的加成）
+    // S4a 迁出：`undead_power` 真值在 components 组件（见迁移文档 S4a）。
     /// `LastHiter`（最后一击者 `ActorId`）
     pub last_hiter: Option<i32>,
     /// C# `ExpHitter`（经验归属者 `ActorId`）——由 `SetLastHiter` 设置：
@@ -1163,20 +1376,6 @@ pub struct Entity {
 }
 
 impl Entity {
-    /// `BaseObject.Run` 的 `SuperMan` 回满段（`BaseObject.Base.cs:32-36`）：
-    /// `if (SuperMan) { WAbil.HP = MaxHP; WAbil.MP = MaxMP; }`。
-    ///
-    /// 位置契约：在消息泵之后、`if (!Death)` 之前 ⇒ 调用方必须放在自己的 `Run` 消息段
-    /// （含 `RM_STRUCK` 出队）之后、死亡/恢复支之前。`SuperMan` 实体因此在 `HP == 0` 判定
-    /// （`:70-73`）之前就被回满 ⇒ oracle 的 `Die()` 对它们**不可达**；`Die` 的早退语义
-    /// （`:318-322`）由 `settle_deaths` 在「直接调用 `Die()`」路径（脚本/GM 击杀）上等价。
-    pub fn run_super_man_refill(&mut self) {
-        if self.super_man {
-            self.hp = self.max_hp;
-            self.mp = self.max_mp;
-        }
-    }
-
     /// ctor 等价物：返回**生成期载体** [`EntitySpawn`]（`Entity` + 落图前的
     /// [`Transform`] / [`MapBinding`]）。坐标在 `insert` 时落成组件；插入后真值只在组件里。
     ///
@@ -1264,10 +1463,6 @@ impl Entity {
             want_ref_msg: false,
             // 玩家默认满血（WAbil.HP 的默认值不能是 0：0 在语义上等于「已死」，
             // 会让死亡结算把刚进图的玩家当成死者——实测踩过）
-            hp: 100,
-            max_hp: 100,
-            mp: 0,
-            max_mp: 0,
             // `BaseObject.cs:391`/`:393`：`GreenPoisoningPoint = 0`、`CharStatusEx = 0`；
             // `CharStatus` 未显式赋值 ⇒ int 缺省 0；`PoisoningTick` ctor 置 `GetTickCount()`
             // （本骨架用模拟开机基 `BUFF_EPOCH_MS`；精确落图时刻由 `World::add_entity` 重盖）。
@@ -1284,37 +1479,21 @@ impl Entity {
             show_hp_interval: 0,
             super_man: false,
             // `CharacterObject.HitSpeed`（`RecalcAbilitys` 才赋值）⇒ ctor 缺省 0。
-            hit_speed: 0,
             // `PlayObject.cs:490/494`：`MagicShield`/`UnMagicShield` 构造缺省 `false`。
             magic_shield: false,
             un_magic_shield: false,
-            dc: 0,
             // 生成路径不调 `RecalcAbilitys` ⇒ 快照未取（首次需要时懒取，见 `abil_snapshot`）。
-            abil: None,
-            ac: 0,
-            hit_point: 0,
-            speed_point: 0,
             // `BaseObject.cs:390`：ctor 置 `AntiMagic = 0`（普通生成路径不调 `RecalcAbilitys`）。
-            anti_magic: 0,
             // `BaseObject.cs:384/:389`：ctor 置 `Light = 0`、`AntiPoison = 0`。
             // `NormNpc`/`Merchant` 的 ctor 在各自创建点覆盖为 2/99（`NormNpc.cs:43-44`）。
             light: 0,
-            anti_poison: 0,
             // `BaseObject.WAbil.MAC` 构造缺省 0（`RecalcAbilitys` 才写 `Abil.MAC + AddAbil.MAC`）。
-            mac: 0,
             // `BaseObject.RushMode` 构造缺省 false（`BaseObject.cs` ctor）。
             rush_mode: false,
             // `PlayObject.cs:201-203`：三个 7 槽数组构造缺省全 0。
             extra_abil: [0; 7],
             extra_abil_times: [0; 7],
             extra_abil_flag: [0; 7],
-            job: 0,
-            life_attrib: 0,
-            level: 1,
-            mon_exp: 0,
-            exp: 0,
-            max_exp: 0,
-            undead_power: 0,
             last_hiter: None,
             exp_hitter: None,
             last_hiter_tick: 0,
@@ -1384,23 +1563,29 @@ impl Entity {
             map_id: 0,
             view_range: 5,
             map_binding: MapBinding::default(),
+            // S4a ctor 缺省（迁移文档 §3.4）：玩家默认满血（`hp=0` 语义上等于「已死」），
+            // 等级 1；`abil: None` = 生成路径不调 `RecalcAbilitys`，首次需要时懒取快照。
+            hp: EntitySpawn::CTOR_HP,
+            max_hp: EntitySpawn::CTOR_MAX_HP,
+            mp: 0,
+            max_mp: 0,
+            hit_speed: 0,
+            dc: 0,
+            ac: 0,
+            mac: 0,
+            hit_point: 0,
+            speed_point: 0,
+            anti_magic: 0,
+            anti_poison: 0,
+            undead_power: 0,
+            abil: None,
+            job: 0,
+            life_attrib: 0,
+            level: EntitySpawn::CTOR_LEVEL,
+            mon_exp: 0,
+            exp: 0,
+            max_exp: 0,
         }
-    }
-
-    /// 取 `Abil` 快照；未取过时用当前 `dc`/`max_hp` 建立（生成路径 `WAbil == Abil`）。
-    ///
-    /// 生产路径**唯一**的 `Abil` 写入点是 `monster_from_row` 的库值（`dc`/`max_hp`）；
-    /// `MakeClone` 的 `ElfMon.Abil = OldMon.Abil` 由 [`crate::monai`] 直接复制本字段。
-    pub fn abil_snapshot(&mut self) -> BaseAbil {
-        if let Some(abil) = self.abil {
-            return abil;
-        }
-        let abil = BaseAbil {
-            dc: self.dc,
-            max_hp: self.max_hp,
-        };
-        self.abil = Some(abil);
-        abil
     }
 
     /// 当前朝向（C# `BaseObject.Dir`），供接线层发 `SM_TURN`/`RM_TURN` 等帧面用。
@@ -1434,12 +1619,31 @@ impl Entity {
 ///
 /// **顺序契约**：本类型**不迭代 Query 求顺序**——`iter`/`iter_mut` 走内核的显式槽位索引，
 /// `Query`（内核里的 `world.query`）只用于「按句柄安全拿到互斥引用」，之后仍按槽位排序。
+/// 读路径缓存查询：`Entity` + 位置/绑定 + S4a 属性/成长组件。
+type ReadViewQuery = bevy_ecs::query::QueryState<(
+    &'static Entity,
+    &'static Transform,
+    &'static MapBinding,
+    &'static Vitals,
+    &'static AbilitySnapshot<BaseAbil>,
+    &'static Progression,
+)>;
+
+/// 写路径缓存查询：`Entity` 主组件 + S4a 属性/成长组件（[`EntityMut`] 用）。
+type MutViewQuery = bevy_ecs::query::QueryState<(
+    &'static mut Entity,
+    &'static mut Vitals,
+    &'static mut AbilitySnapshot<BaseAbil>,
+    &'static mut Progression,
+)>;
+
 pub struct EntityStore {
     inner: mir2_world_bevy::EcsStore<Entity>,
-    /// `(Entity, Transform, MapBinding)` 三组件的缓存查询（S3b）：读路径一次取齐，
-    /// 避免每个读取点三次 `TypeId` 查表。只按显式句柄 `get_manual`，不迭代求顺序。
-    view_state:
-        bevy_ecs::query::QueryState<(&'static Entity, &'static Transform, &'static MapBinding)>,
+    /// 读路径的缓存查询（S3b/S4a）：一次按句柄取齐 `Entity` + 位置/绑定 + 属性/成长组件，
+    /// 避免每个读取点逐次 `TypeId` 查表。只按显式句柄 `get_manual`，不迭代求顺序。
+    view_state: ReadViewQuery,
+    /// 写路径的缓存查询（S4a）：一次按句柄取齐可变主组件与属性/成长组件（[`EntityMut`] 用）。
+    mut_view_state: MutViewQuery,
 }
 
 impl std::fmt::Debug for EntityStore {
@@ -1466,15 +1670,31 @@ impl EntityStore {
         inner
             .world_mut()
             .insert_resource(mir2_world_bevy::TickOrder::default());
-        let view_state = inner
-            .world_mut()
-            .query::<(&Entity, &Transform, &MapBinding)>();
-        EntityStore { inner, view_state }
+        let view_state = inner.world_mut().query::<(
+            &Entity,
+            &Transform,
+            &MapBinding,
+            &Vitals,
+            &AbilitySnapshot<BaseAbil>,
+            &Progression,
+        )>();
+        let mut_view_state = inner.world_mut().query::<(
+            &mut Entity,
+            &mut Vitals,
+            &mut AbilitySnapshot<BaseAbil>,
+            &mut Progression,
+        )>();
+        EntityStore {
+            inner,
+            view_state,
+            mut_view_state,
+        }
     }
 
-    /// 结构变更后刷新三组件视图的 archetype 匹配集。
+    /// 结构变更后刷新视图查询的 archetype 匹配集。
     fn refresh_view(&mut self) {
         self.view_state.update_archetypes(self.inner.world());
+        self.mut_view_state.update_archetypes(self.inner.world());
     }
 
     /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。
@@ -1484,24 +1704,29 @@ impl EntityStore {
 
     /// 插入实体（生成期载体），返回其 id（复用本实体的 `id`）。
     ///
-    /// **S3a/S3b 组件集合完整性**：每个实体插入时都带 `DupState`（S3a）、`Transform` 与
-    /// `MapBinding`（S3b）组件。坐标/绑定在 `insert` 这一刻从生成期载体落成组件，其后
-    /// **不再有第二份真值**（`Entity` 没有这些字段）。
+    /// **S3a/S3b/S4a 组件集合完整性**：每个实体插入时都带 `DupState`（S3a）、`Transform` 与
+    /// `MapBinding`（S3b）、`Vitals` / `AbilitySnapshot` / `Progression`（S4a）组件。
+    /// 坐标/绑定/属性在 `insert` 这一刻从生成期载体落成组件，其后**不再有第二份真值**
+    ///（`Entity` 没有这些字段）。
     ///
     /// `insert_component` 对「刚由同一 store 插入的 id」不可能失败，因此用**硬断言**
     /// （release 也保持行为）：宁可立即 panic，也不允许半实体被 AOI/重叠检查静默跳过
     ///（S3a 评审 P3-3）。
     pub fn insert(&mut self, spawn: EntitySpawn) -> i32 {
-        let (entity, transform, map_binding) = spawn.into_parts();
-        self.insert_parts(entity, transform, map_binding)
+        let (entity, transform, map_binding, vitals, ability, progression) = spawn.into_parts();
+        self.insert_parts(entity, transform, map_binding, vitals, ability, progression)
     }
 
     /// 组件已拆好的插入入口（克隆/迁移路径用，避免再拼一个 `EntitySpawn`）。
+    #[allow(clippy::too_many_arguments)]
     pub fn insert_parts(
         &mut self,
         entity: Entity,
         transform: Transform,
         map_binding: MapBinding,
+        vitals: Vitals,
+        ability: AbilitySnapshot<BaseAbil>,
+        progression: Progression,
     ) -> i32 {
         let id = self.inner.insert(entity.id, entity);
         let t = self.inner.insert_component(id, transform);
@@ -1514,6 +1739,18 @@ impl EntityStore {
         assert!(
             d,
             "刚插入的实体必须能挂 DupState 组件（id={id}）；缺组件会让 check_dup_obj 静默跳过"
+        );
+        assert!(
+            self.inner.insert_component(id, vitals),
+            "刚插入的实体必须能挂 Vitals 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, ability),
+            "刚插入的实体必须能挂 AbilitySnapshot 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, progression),
+            "刚插入的实体必须能挂 Progression 组件（id={id}）"
         );
         self.refresh_view();
         id
@@ -1657,31 +1894,130 @@ impl EntityStore {
         taken
     }
 
-    /// O(1) 查表（C# `ActorMgr.Get`），返回三组件只读视图 [`EntityRef`]。
+    /// O(1) 查表（C# `ActorMgr.Get`），返回组件只读视图 [`EntityRef`]。
     pub fn get(&self, id: i32) -> Option<EntityRef<'_>> {
         let bevy_entity = self.inner.entity_of(id)?;
-        let (entity, transform, binding) = self
+        let (entity, transform, binding, vitals, ability, progression) = self
             .view_state
             .get_manual(self.inner.world(), bevy_entity)
             .ok()?;
-        Some(EntityRef {
+        Some(EntityRef::from_components(
             entity,
-            x: transform.x,
-            y: transform.y,
-            map_id: transform.map_id,
-            view_range: transform.view_range,
-            add_to_mapped: binding.add_to_mapped,
-            visible_actors: &binding.visible_actors,
-            visible_events: &binding.visible_events,
-            is_visible_active: binding.is_visible_active,
-            processed_tick: binding.processed_tick,
-            verify_tick: binding.verify_tick,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+        ))
+    }
+
+    /// 可变访问：`Entity` 剩余字段 + S4a 属性/成长组件（[`EntityMut`]）。
+    ///
+    /// 坐标/绑定请用 `transform_mut` / `map_binding_mut`。
+    pub fn get_mut(&mut self, id: i32) -> Option<EntityMut<'_>> {
+        let bevy_entity = self.inner.entity_of(id)?;
+        let (entity, vitals, ability, progression) = self
+            .mut_view_state
+            .get_mut(self.inner.world_mut(), bevy_entity)
+            .ok()?;
+        Some(EntityMut {
+            entity: bevy_ecs::change_detection::Mut::into_inner(entity),
+            vitals: bevy_ecs::change_detection::Mut::into_inner(vitals),
+            ability: bevy_ecs::change_detection::Mut::into_inner(ability),
+            progression: bevy_ecs::change_detection::Mut::into_inner(progression),
         })
     }
 
-    /// 可变访问剩余字段（`Entity`）；坐标/绑定请用 `transform_mut` / `map_binding_mut`。
-    pub fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
-        self.inner.get_mut(id)
+    /// 受控读取属性组件（S4a 起真值在组件，不在 `Entity`）。
+    pub fn vitals(&self, id: i32) -> Option<&Vitals> {
+        self.inner.get_component(id)
+    }
+
+    /// 受控可变访问属性组件。
+    pub fn vitals_mut(&mut self, id: i32) -> Option<&mut Vitals> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取成长/等级组件（S4a）。
+    pub fn progression(&self, id: i32) -> Option<&Progression> {
+        self.inner.get_component(id)
+    }
+
+    pub fn progression_mut(&mut self, id: i32) -> Option<&mut Progression> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 覆盖式写回成长组件（「取副本算完再回写」路径用）。
+    pub fn set_progression(&mut self, id: i32, progression: Progression) -> bool {
+        match self.inner.get_component_mut::<Progression>(id) {
+            Some(p) => {
+                *p = progression;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 把生成期载体的**全部真值**写回实体：主组件 + `Vitals` + `AbilitySnapshot` +
+    /// `Progression`（不含 `Transform`/`MapBinding`，位置请走 `set_xy`/`map_binding_mut`）。
+    ///
+    /// 「`spawn_cloned` → 改副本 → 回写」路径必须用它，**不能**只写 `*e = spawn.entity`：
+    /// S4a 起迁移字段不在 `Entity` 里，只写主组件会丢 HP/MP/经验等组件值（S4a 回归教训）。
+    pub fn write_back(&mut self, id: i32, spawn: EntitySpawn) -> bool {
+        let vitals = spawn.vitals_component();
+        let progression = spawn.progression_component();
+        let ability = AbilitySnapshot { abil: spawn.abil };
+        let Some(view) = self.mut_view_of_entity_by_id(id) else {
+            return false;
+        };
+        *view.entity = spawn.entity;
+        *view.vitals = vitals;
+        *view.ability = ability;
+        *view.progression = progression;
+        true
+    }
+
+    fn mut_view_of_entity_by_id(&mut self, id: i32) -> Option<EntityMut<'_>> {
+        let bevy_entity = self.inner.entity_of(id)?;
+        self.mut_view_of_entity(bevy_entity)
+    }
+
+    /// 按槽位顺序对每个实体执行 `f`（`&mut` 视图，含 S4a 组件）。
+    ///
+    /// 顺序仍来自槽位索引（`iter_mut` 的语义）；`f` 每次只拿一个 [`EntityMut`]，
+    /// 因此不会同时可变借用同一实体。
+    pub fn for_each_mut(&mut self, mut f: impl FnMut(EntityMut<'_>)) {
+        for e in self.inner.order_entities() {
+            if let Some(view) = self.mut_view_of_entity(e) {
+                f(view);
+            }
+        }
+    }
+
+    /// 按 bevy 句柄构造 [`EntityMut`]（`for_each_mut` 用）。
+    fn mut_view_of_entity(
+        &mut self,
+        bevy_entity: bevy_ecs::entity::Entity,
+    ) -> Option<EntityMut<'_>> {
+        let (entity, vitals, ability, progression) = self
+            .mut_view_state
+            .get_mut(self.inner.world_mut(), bevy_entity)
+            .ok()?;
+        Some(EntityMut {
+            entity: bevy_ecs::change_detection::Mut::into_inner(entity),
+            vitals: bevy_ecs::change_detection::Mut::into_inner(vitals),
+            ability: bevy_ecs::change_detection::Mut::into_inner(ability),
+            progression: bevy_ecs::change_detection::Mut::into_inner(progression),
+        })
+    }
+
+    /// 受控读取 `Abil` 快照组件（S4a）。
+    pub fn ability(&self, id: i32) -> Option<&AbilitySnapshot<BaseAbil>> {
+        self.inner.get_component(id)
+    }
+
+    pub fn ability_mut(&mut self, id: i32) -> Option<&mut AbilitySnapshot<BaseAbil>> {
+        self.inner.get_component_mut(id)
     }
 
     /// 只取 `Entity` 主组件（剩余字段）的引用；需要「克隆一份再改」的路径用它
@@ -1690,18 +2026,26 @@ impl EntityStore {
         self.inner.get(id)
     }
 
+    /// 只取 `Entity` 主组件（剩余字段）的可变引用。
+    ///
+    /// 只适用于**不碰 S4a 迁移字段**的路径（如商人物品列表、AI 计时器）；需要 `vitals`/
+    /// `progression` 的路径用 [`Self::get_mut`]（[`EntityMut`]）。
+    pub fn entity_mut(&mut self, id: i32) -> Option<&mut Entity> {
+        self.inner.get_mut(id)
+    }
+
     /// 克隆 `Entity` 主组件（剩余字段；不含 Transform/MapBinding）。
     pub fn entity_cloned(&self, id: i32) -> Option<Entity> {
         self.inner.get(id).cloned()
     }
 
-    /// 克隆「实体 + 位置 + 绑定」到生成期载体（供“取一份本地副本再算/回写”的路径）。
+    /// 克隆「实体 + 位置 + 绑定 + S4a 属性组件」到生成期载体（供“取一份本地副本再算/回写”的路径）。
     ///
-    /// 本地副本的 `x/y/map_id/view_range` 写的是载体字段，**不**自动回写组件；需要回写的
-    /// 调用方必须显式走 `transform_mut`。
+    /// 本地副本的 `x/y/map_id/view_range`/属性写的是载体字段，**不**自动回写组件；需要回写的
+    /// 调用方必须显式走 `transform_mut` / `vitals_mut` 等。
     pub fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
         let bevy_entity = self.inner.entity_of(id)?;
-        let (entity, transform, binding) = self
+        let (entity, transform, binding, vitals, ability, progression) = self
             .view_state
             .get_manual(self.inner.world(), bevy_entity)
             .ok()?;
@@ -1712,6 +2056,26 @@ impl EntityStore {
             map_id: transform.map_id,
             view_range: transform.view_range,
             map_binding: binding.clone(),
+            hp: vitals.hp,
+            max_hp: vitals.max_hp,
+            mp: vitals.mp,
+            max_mp: vitals.max_mp,
+            hit_speed: vitals.hit_speed,
+            dc: vitals.dc,
+            ac: vitals.ac,
+            mac: vitals.mac,
+            hit_point: vitals.hit_point,
+            speed_point: vitals.speed_point,
+            anti_magic: vitals.anti_magic,
+            anti_poison: vitals.anti_poison,
+            undead_power: vitals.undead_power,
+            abil: ability.abil,
+            job: progression.job,
+            life_attrib: progression.life_attrib,
+            level: progression.level,
+            mon_exp: progression.mon_exp,
+            exp: progression.exp,
+            max_exp: progression.max_exp,
         })
     }
 
@@ -1719,29 +2083,24 @@ impl EntityStore {
     pub fn iter(&self) -> impl Iterator<Item = &Entity> + '_ {
         self.inner.iter()
     }
-    /// 按槽位顺序遍历**只读视图**（含 Transform/MapBinding 字段；宿主帧面/日志用）。
+    /// 按槽位顺序遍历**只读视图**（含 Transform/MapBinding/S4a 属性字段；宿主帧面/日志用）。
     pub fn iter_ref(&self) -> impl Iterator<Item = EntityRef<'_>> + '_ {
         self.inner
             .order_entities()
             .into_iter()
             .filter_map(|bevy_entity| {
-                let (entity, transform, binding) = self
+                let (entity, transform, binding, vitals, ability, progression) = self
                     .view_state
                     .get_manual(self.inner.world(), bevy_entity)
                     .ok()?;
-                Some(EntityRef {
+                Some(EntityRef::from_components(
                     entity,
-                    x: transform.x,
-                    y: transform.y,
-                    map_id: transform.map_id,
-                    view_range: transform.view_range,
-                    add_to_mapped: binding.add_to_mapped,
-                    visible_actors: &binding.visible_actors,
-                    visible_events: &binding.visible_events,
-                    is_visible_active: binding.is_visible_active,
-                    processed_tick: binding.processed_tick,
-                    verify_tick: binding.verify_tick,
-                })
+                    transform,
+                    binding,
+                    vitals,
+                    ability,
+                    progression,
+                ))
             })
     }
 
