@@ -84,7 +84,7 @@ fn tick_order_skeleton_collects_slot_order() {
     let mut runner = mir2_world_bevy::TickRunner::new();
     // 顺序收集属于输出阶段（AOI 按它处理）；阶段契约见 world-bevy 的 tick.rs。
     runner.add_systems(
-        mir2_world_bevy::TickStage::Output,
+        mir2_world_bevy::TickStage::OutputDrain,
         mir2_world::collect_tick_order_system,
     );
     runner.run(w.entities.world_mut());

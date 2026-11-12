@@ -284,7 +284,7 @@ impl World {
     /// 不重置；全仓写点另只有 `BaseObject.Base.cs:225` / `PlayObject.Message.cs:265` 的「命中后再置 now」。
     /// ⇒ 三者的首个门都从 **ctor 时刻**起算，本函数统一写 `ctor_tick`。
     ///
-    /// 红检：把 `entity.verify_tick` / `entity.check_dup_obj_tick` 改回 `self.clock_ms` ⇒
+    /// 红检：把 `entity.verify_tick` / `dup_state_mut().check_dup_obj_tick` 改回 `self.clock_ms` ⇒
     /// `verify_and_dup_ticks_base_is_playobject_ctor_not_map_entry` 必红；把
     /// `entity.ai.search_tick = ctor_tick` 改回 `self.clock_ms` ⇒
     /// `first_scan_base_is_playobject_ctor_not_map_entry` 必红。
@@ -330,8 +330,12 @@ impl World {
         // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`：重叠推挤的 3s 门也从
         // **对象构造时刻**起算（`ctor_tick`）——全仓写点只有该 ctor 与 `PlayObject.Message.cs:265`
         // 的「命中后再置 now」，`UserLogon`/`AddToMap` 都不重置。**不要**改成 `self.clock_ms`。
-        entity.check_dup_obj_tick = ctor_tick;
+        // S3a：字段已迁入 `DupState` 组件，插入后经受控 API 重盖（`EntityStore::insert` 先给 0）。
         let id = self.entities.insert(entity);
+        self.entities
+            .dup_state_mut(id)
+            .expect("EntityStore::insert 必须给每个实体插 DupState")
+            .check_dup_obj_tick = ctor_tick;
         let (x, y) = {
             let e = self.entities.get(id).expect("刚插入");
             (e.x, e.y)

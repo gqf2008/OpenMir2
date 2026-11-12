@@ -219,9 +219,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         }
         // 结构性变更后刷新缓存查询状态的 archetype 匹配集（`&T` 的 archetype 在首次
         // 插入时创建；之后同组件集的 spawn 复用同一 archetype）。`remove` 同理兜底。
-        self.read_state.update_archetypes(&self.world);
-        self.write_state.update_archetypes(&self.world);
-        self.pairs_state.update_archetypes(&self.world);
+        self.refresh_archetypes();
         self.order_dirty = true;
         id
     }
@@ -236,9 +234,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         if taken.is_some() {
             self.free.push(slot_idx);
         }
-        self.read_state.update_archetypes(&self.world);
-        self.write_state.update_archetypes(&self.world);
-        self.pairs_state.update_archetypes(&self.world);
+        self.refresh_archetypes();
         self.order_dirty = true;
         taken
     }
@@ -262,6 +258,69 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
             .get_mut(&mut self.world, bevy_entity)
             .ok()
             .map(Mut::into_inner)
+    }
+
+    /// **可选组件原语（S3a）**：在既有实体上追加/覆盖一个组件。
+    ///
+    /// 与主组件 `T` 正交：**不触碰槽位表**，因此不改变 `order_index`/`iter` 的顺序契约。
+    /// 组件插入是 archetype 迁移，之后必须刷新三个缓存查询状态的匹配集（否则 `T` 的
+    /// `get`/`iter` 会跳过刚迁移的实体）。返回 `false` 表示该业务 id 不存在。
+    ///
+    /// 热路径提醒：本方法每次做一次 archetype 迁移 + 查询状态刷新，只用于「实体的组件
+    /// 集合在生成/切片迁移时变化」，**不得**放进逐 tick 的内层循环（设计件风险 R10）。
+    pub fn insert_component<C: Component<Mutability = Mutable>>(
+        &mut self,
+        id: i32,
+        component: C,
+    ) -> bool {
+        let Some(slot_idx) = self.index.get(id) else {
+            return false;
+        };
+        let Some(bevy_entity) = self.slots[slot_idx].entity else {
+            return false;
+        };
+        self.world.entity_mut(bevy_entity).insert(component);
+        self.refresh_archetypes();
+        true
+    }
+
+    /// 读取某个实体上的可选组件（不存在/该实体没有该组件 ⇒ `None`）。
+    ///
+    /// 只按显式 id 取，不迭代 `Query`；顺序契约与是否有该组件无关。
+    pub fn get_component<C: Component>(&self, id: i32) -> Option<&C> {
+        let slot_idx = self.index.get(id)?;
+        let bevy_entity = self.slots[slot_idx].entity?;
+        self.world.get::<C>(bevy_entity)
+    }
+
+    /// 可变读取某个实体上的可选组件。
+    pub fn get_component_mut<C: Component<Mutability = Mutable>>(
+        &mut self,
+        id: i32,
+    ) -> Option<&mut C> {
+        let slot_idx = self.index.get(id)?;
+        let bevy_entity = self.slots[slot_idx].entity?;
+        self.world.get_mut::<C>(bevy_entity).map(Mut::into_inner)
+    }
+
+    /// 移除并返回某个实体上的可选组件（不存在 ⇒ `None`）。
+    ///
+    /// 同样不改槽位表；移除成功时刷新缓存查询状态（archetype 迁移）。
+    pub fn remove_component<C: Component<Mutability = Mutable>>(&mut self, id: i32) -> Option<C> {
+        let slot_idx = self.index.get(id)?;
+        let bevy_entity = self.slots[slot_idx].entity?;
+        let taken = self.world.entity_mut(bevy_entity).take::<C>();
+        if taken.is_some() {
+            self.refresh_archetypes();
+        }
+        taken
+    }
+
+    /// 结构变更（spawn/despawn/组件集合变化）后刷新三个缓存查询状态的 archetype 匹配集。
+    fn refresh_archetypes(&mut self) {
+        self.read_state.update_archetypes(&self.world);
+        self.write_state.update_archetypes(&self.world);
+        self.pairs_state.update_archetypes(&self.world);
     }
 
     /// 按槽位顺序遍历（处理顺序的唯一来源）。
@@ -348,6 +407,10 @@ mod tests {
     #[derive(Component, Debug, PartialEq, Eq)]
     struct Item(i32);
 
+    /// 可选组件（S3a）：与主组件 `T` 正交。
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct Extra(i32);
+
     fn store_with(ids: &[i32]) -> EcsStore<Item> {
         let mut s = EcsStore::new();
         for id in ids {
@@ -394,6 +457,68 @@ mod tests {
         // iter_mut 也按槽位顺序
         let vals: Vec<i32> = s.iter_mut().map(|i| i.0).collect();
         assert_eq!(vals, vec![70]);
+    }
+
+    /// S3a：可选组件的 `insert/get/get_mut/remove` 闭环。
+    ///
+    /// 牙：把 `insert_component` 改成不插/插错实体 ⇒ 读回值断言红；把 `remove_component`
+    /// 改成只置默认不摘除 ⇒ 第二次 `get_component` 仍 `Some` ⇒ 红。
+    #[test]
+    fn optional_component_round_trip() {
+        let mut s = store_with(&[1, 2]);
+        // 只给 1 号插可选组件（2 号没有 ⇒ None，证「可选」而非「默认全有」）
+        assert!(s.insert_component(1, Extra(11)));
+        assert_eq!(s.get_component::<Extra>(1), Some(&Extra(11)));
+        assert_eq!(s.get_component::<Extra>(2), None);
+        // 不存在的 id ⇒ false
+        assert!(!s.insert_component(99, Extra(0)));
+        assert_eq!(s.get_component::<Extra>(99), None);
+        // 可变写入
+        if let Some(extra) = s.get_component_mut::<Extra>(1) {
+            extra.0 += 1;
+        }
+        assert_eq!(s.get_component::<Extra>(1), Some(&Extra(12)));
+        // 覆盖插入 = archetype 不变（同组件集），值被替换
+        assert!(s.insert_component(1, Extra(20)));
+        assert_eq!(s.get_component::<Extra>(1), Some(&Extra(20)));
+        // 移除并返回值
+        assert_eq!(s.remove_component::<Extra>(1), Some(Extra(20)));
+        assert_eq!(s.get_component::<Extra>(1), None);
+        assert_eq!(s.remove_component::<Extra>(1), None, "二次移除返回 None");
+    }
+
+    /// S3a 顺序契约：插/取/移除可选组件**不得**改变槽位顺序（主组件 `T` 的遍历来源）。
+    ///
+    /// 牙：若组件操作误动了 `slots`/`free`（例如把实体重排或补进空闲槽）⇒ 顺序断言红；
+    /// 若 archetype 迁移后没刷新 `QueryState` ⇒ `iter` 会静默漏掉迁移过的实体。
+    #[test]
+    fn optional_components_do_not_change_slot_order() {
+        let mut s = store_with(&[1, 2, 3]);
+        s.remove(1);
+        s.insert(4, Item(4)); // 复用 1 的槽：槽位序 [4, 2, 3]
+        let before = s.order_index();
+        assert_eq!(before, vec![4, 2, 3]);
+
+        assert!(s.insert_component(4, Extra(40)));
+        assert!(s.insert_component(2, Extra(20)));
+        assert_eq!(s.order_index(), before, "插入可选组件不得改槽位顺序");
+        assert_eq!(
+            s.iter().map(|i| i.0).collect::<Vec<_>>(),
+            vec![4, 2, 3],
+            "archetype 迁移后主组件 iter 不得漏实体/换序"
+        );
+
+        assert_eq!(s.remove_component::<Extra>(4), Some(Extra(40)));
+        assert_eq!(s.order_index(), before, "移除可选组件不得改槽位顺序");
+        assert_eq!(
+            s.iter().map(|i| i.0).collect::<Vec<_>>(),
+            vec![4, 2, 3],
+            "移除组件后主组件 iter 仍按槽位序"
+        );
+        // 主组件读写不受可选组件影响
+        assert_eq!(s.get(2), Some(&Item(2)));
+        s.get_mut(2).unwrap().0 = 22;
+        assert_eq!(s.get(2), Some(&Item(22)));
     }
 
     #[test]

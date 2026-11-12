@@ -4974,9 +4974,13 @@ impl World {
         // `PlayObject.cs:901` 置一次）：ctor 等价物拿不到世界时钟 ⇒ 按落图时刻重盖。
         // 之后 `World::tick` 的玩家 scanner 按 `now - SearchTick > SearchTime(=1000)` 节流。
         entity.ai.search_tick = self.clock_ms;
-        // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`（重叠推挤的 3s 门从落图时刻起算）。
-        entity.check_dup_obj_tick = self.clock_ms;
         let id = self.entities.insert(entity);
+        // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`（重叠推挤的 3s 门从落图时刻起算）。
+        // S3a：该字段已迁入 `DupState` 组件，经受控 API 重盖（`EntityStore::insert` 先给默认 0）。
+        self.entities
+            .dup_state_mut(id)
+            .expect("EntityStore::insert 必须给每个实体插 DupState")
+            .check_dup_obj_tick = self.clock_ms;
         self.enqueue(Command::Enter { actor_id: id });
         id
     }
@@ -5800,11 +5804,12 @@ impl World {
             .collect();
         let mut pushes = Vec::new();
         for id in ids {
-            let Some((map_id, x, y, last)) = self
-                .entities
-                .get(id)
-                .map(|e| (e.map_id, e.x, e.y, e.check_dup_obj_tick))
-            else {
+            // S3a：`map_id/x/y` 仍在 `Entity`，重叠推挤三字段已在 `DupState` 组件
+            // （`EntityStore::dup_state*` 受控访问；业务模块不持有裸 `Query`）。
+            let Some((map_id, x, y)) = self.entities.get(id).map(|e| (e.map_id, e.x, e.y)) else {
+                continue;
+            };
+            let Some(last) = self.entities.dup_state(id).map(|d| d.check_dup_obj_tick) else {
                 continue;
             };
             // `:263` 严格 `>`：恰 3000ms 不检查。
@@ -5812,26 +5817,26 @@ impl World {
                 continue;
             }
             // `:265` `CheckDupObjTick = GetTickCount()`（本 tick 内同一 `now`）。
-            if let Some(e) = self.entities.get_mut(id) {
-                e.check_dup_obj_tick = now;
+            if let Some(d) = self.entities.dup_state_mut(id) {
+                d.check_dup_obj_tick = now;
             }
             // `:266` `GetStartPoint()`：见本函数文档「处置（登记）」。
             // `:267` `tObjCount = Envir.GetXYObjCount(CurrX, CurrY)`（含自己）。
             let t_obj_count = self.xy_obj_count(map_id, x, y);
             // `:268-279`：`>=2` 首次置位；`<2` 清 `BoDuplication`（`DupStartTick` 不复位）。
             let elapsed = {
-                let Some(e) = self.entities.get_mut(id) else {
+                let Some(d) = self.entities.dup_state_mut(id) else {
                     continue;
                 };
                 if t_obj_count >= 2 {
-                    if !e.bo_duplication {
-                        e.bo_duplication = true;
-                        e.dup_start_tick = now;
+                    if !d.bo_duplication {
+                        d.bo_duplication = true;
+                        d.dup_start_tick = now;
                     }
                 } else {
-                    e.bo_duplication = false;
+                    d.bo_duplication = false;
                 }
-                now - e.dup_start_tick
+                now - d.dup_start_tick
             };
             // `:280-281`：C# 原式 `(A && B || C && D) && E`（`&&` 优先于 `||`）。
             let should_push = ((t_obj_count >= 3 && elapsed > 3000)
@@ -10047,8 +10052,8 @@ mod tests {
     /// 构造：ctor = 0、进图 = 800ms（模拟登录等待环 T-73 把进图推后）⇒ 首个 `VerifyMapTime`
     /// 必须落在 30200（不是进图 + 30000 = 30800），首个重叠检查落在 3200（不是 3800）。
     ///
-    /// 红检：把 [`World::enter_map_at`] 的 `entity.verify_tick` / `entity.check_dup_obj_tick`
-    /// 改回 `self.clock_ms` ⇒ 本用例两条门断言必红。
+    /// 红检：把 [`World::enter_map_at`] 的 `entity.verify_tick` /
+    /// `dup_state_mut().check_dup_obj_tick` 改回 `self.clock_ms` ⇒ 本用例两条门断言必红。
     #[test]
     fn verify_and_dup_ticks_base_is_playobject_ctor_not_map_entry() {
         let mut w = World::new(32, 32);
@@ -10066,7 +10071,8 @@ mod tests {
                 "VerifyTick 必须取 ctor 基准（BaseObject.cs:444），不得被进图时刻重盖"
             );
             assert_eq!(
-                e.check_dup_obj_tick, 0,
+                w.entities.dup_state(p).unwrap().check_dup_obj_tick,
+                0,
                 "CheckDupObjTick 必须取 ctor 基准（PlayObject.cs:913），不得被进图时刻重盖"
             );
         }
@@ -10093,7 +10099,7 @@ mod tests {
         w.clock_ms = 3_000;
         w.check_dup_obj();
         assert_eq!(
-            w.entities.get(p).unwrap().check_dup_obj_tick,
+            w.entities.dup_state(p).unwrap().check_dup_obj_tick,
             0,
             "恰 3000ms 不得检查（PlayObject.Message.cs:263 严格 >）"
         );
@@ -10101,7 +10107,7 @@ mod tests {
         w.clock_ms = 3_200;
         w.check_dup_obj();
         assert_eq!(
-            w.entities.get(p).unwrap().check_dup_obj_tick,
+            w.entities.dup_state(p).unwrap().check_dup_obj_tick,
             3_200,
             "首个重叠检查必须落在 ctor+3200（不是进图+3000=3800）"
         );

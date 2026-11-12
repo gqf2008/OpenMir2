@@ -706,18 +706,6 @@ pub struct Entity {
     /// （**无** `SysMsg`）。写入点同 [`Entity::fire_hit_skill`] 登记（技能层未移植）。
     pub twin_hit_skill: bool,
     pub latest_twin_hit_tick: i64,
-    /// C# `PlayObject.BoDuplication` / `DupStartTick` / `CheckDupObjTick`
-    /// （`PlayObject.cs:94/98/258`）——`PlayObject.Run` 的**重叠推挤**状态
-    /// （`PlayObject.Message.cs:263-285`，[`crate::World::check_dup_obj`]）：
-    ///
-    /// - `check_dup_obj_tick`：上一次重叠检查的时刻；ctor `CheckDupObjTick = GetTickCount()`
-    ///   （`PlayObject.cs:913`）。本骨架 ctor 等价物（[`Entity::new`]）拿不到世界时钟 ⇒ 由落图点
-    ///   （`World::add_entity` / `SessionRegistry::enter_map`）按 `clock_ms` 重盖（同 `verify_tick`）。
-    /// - `bo_duplication` / `dup_start_tick`：本格对象数 `>= 2` 的**首次**观测标记与时刻；对象数
-    ///   掉回 `< 2` 只清 `bo_duplication`，**不**复位 `dup_start_tick`（照 oracle）。
-    pub bo_duplication: bool,
-    pub dup_start_tick: i64,
-    pub check_dup_obj_tick: i64,
     /// C# `CharacterObject.UseItems`（`CharacterObject.cs:40`，13 格，`CharacterObject.cs:89` 初始化）。
     /// `PlayObject.StruckDamage` 的耐久循环按它取数。
     pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
@@ -1146,12 +1134,10 @@ impl Entity {
             latest_fire_hit_tick: 0,
             twin_hit_skill: false,
             latest_twin_hit_tick: 0,
-            // `PlayObject.cs:94/98`：ctor 缺省 `BoDuplication=false` / `DupStartTick=0`；
-            // `CheckDupObjTick` 由 `World::add_entity` / `SessionRegistry::enter_map` 按落图时钟重盖
-            // （`PlayObject.cs:913` 的 `GetTickCount()`）。
-            bo_duplication: false,
-            dup_start_tick: 0,
-            check_dup_obj_tick: 0,
+            // 重叠推挤状态（`BoDuplication` / `DupStartTick` / `CheckDupObjTick`）已于 S3a
+            // 迁入 `DupState` 组件：`Entity::new` 的同值缺省 = `DupState::default`（false/0/0），
+            // 由 `EntityStore::insert` 统一插入；`CheckDupObjTick` 的 ctor/落图时刻由
+            // `World::add_entity` / `SessionRegistry::enter_map_at` 经 `EntityStore::dup_state_mut` 重盖。
             // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
             use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
             // `PlayObject.cs:2018`：ctor 缺省 `AngryRing = false`；`NoDropUseItem` 亦无 ctor 赋值。
@@ -1360,8 +1346,32 @@ impl EntityStore {
     }
 
     /// 插入实体，返回其 id（复用本实体的 `id`）。
+    ///
+    /// **S3a 组件集合完整性**：每个实体插入时都带 `DupState` 组件（ctor 缺省
+    /// `false/0/0`，与迁出前 `Entity::new` 逐字段同值）。这样「只 insert 不落图」的路径
+    /// （克隆体/测试夹具）也不会出现半实体（设计件风险 R2/R7）。
     pub fn insert(&mut self, entity: Entity) -> i32 {
-        self.inner.insert(entity.id, entity)
+        let id = self.inner.insert(entity.id, entity);
+        let inserted = self
+            .inner
+            .insert_component(id, mir2_world_bevy::DupState::default());
+        debug_assert!(inserted, "刚插入的实体必须能挂 DupState 组件");
+        id
+    }
+
+    /// 受控读取实体的重叠推挤状态（S3a 起真值在 `DupState` 组件，不在 `Entity`）。
+    pub fn dup_state(&self, id: i32) -> Option<&mir2_world_bevy::DupState> {
+        self.inner.get_component(id)
+    }
+
+    /// 受控可变访问：tick 段/落图点从这里读写，不暴露裸 `Query`。
+    pub fn dup_state_mut(&mut self, id: i32) -> Option<&mut mir2_world_bevy::DupState> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 覆盖式插入 `DupState`（切片初始化/迁移工具用；常规路径由 [`Self::insert`] 给默认值）。
+    pub fn insert_dup_state(&mut self, id: i32, state: mir2_world_bevy::DupState) -> bool {
+        self.inner.insert_component(id, state)
     }
 
     pub fn remove(&mut self, id: i32) -> Option<Entity> {

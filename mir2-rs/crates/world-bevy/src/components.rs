@@ -224,12 +224,33 @@ pub struct PlayerRunState {
 
 /// 重叠推挤状态（`PlayObject.Run` 的 `CheckDupObj` 段）。
 ///
-/// **P1 首片**：3 个字段、单一消费点、无存档面，且已有 `check_dup_obj_vectors` 专项用例。
+/// **S3a 首个落地组件**：3 个字段、无存档面、专项用例
+/// `crates/world/tests/check_dup_obj_vectors.rs`。字段的 oracle 语义：
+///
+/// - `check_dup_obj_tick`：上一次重叠检查的时刻；ctor `CheckDupObjTick = GetTickCount()`
+///   （`PlayObject.cs:913`）⇒ `EntityStore::insert` 默认 `0`，落图点（`World::add_entity` /
+///   `SessionRegistry::enter_map_at`）按 ctor 时刻/落图时钟重盖。
+/// - `bo_duplication` / `dup_start_tick`：本格对象数 `>= 2` 的**首次**观测标记与时刻；
+///   对象数掉回 `< 2` 只清 `bo_duplication`，**不**复位 `dup_start_tick`（照 oracle）。
+///
+/// 真值归属：S3a 起**只在组件里**（`Entity` 已删除这三个字段）；读写经
+/// `EntityStore::dup_state` / `dup_state_mut`，业务模块不直接持有裸 `Query`。
 #[derive(Component, Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DupState {
     pub bo_duplication: bool,
     pub dup_start_tick: i64,
     pub check_dup_obj_tick: i64,
+}
+
+impl DupState {
+    /// ctor 缺省（`Entity::new` 迁出前的同值：`false/0/0`）。
+    pub const fn new() -> Self {
+        DupState {
+            bo_duplication: false,
+            dup_start_tick: 0,
+            check_dup_obj_tick: 0,
+        }
+    }
 }
 
 /// 装备槽（oracle `CharacterObject.UseItems`，13 格）。
@@ -513,7 +534,6 @@ mod adapters {
         twin_hit_skill,
         latest_twin_hit_tick
     );
-    copy_adapter!(DupState, bo_duplication, dup_start_tick, check_dup_obj_tick);
     copy_adapter!(
         CombatAttribution,
         last_hiter,
@@ -705,7 +725,6 @@ mod adapters {
         pub map_binding: MapBinding<VisibleBaseObject, VisibleEvent>,
         pub buff: BuffState,
         pub run_state: PlayerRunState,
-        pub dup: DupState,
         pub inventory: Inventory<UseItemSlot>,
         pub drop: DropState<DropItem>,
         pub attribution: CombatAttribution,
@@ -735,7 +754,6 @@ mod adapters {
                 map_binding: FromEntity::from_entity(e),
                 buff: FromEntity::from_entity(e),
                 run_state: FromEntity::from_entity(e),
-                dup: FromEntity::from_entity(e),
                 inventory: FromEntity::from_entity(e),
                 drop: FromEntity::from_entity(e),
                 attribution: FromEntity::from_entity(e),
@@ -764,7 +782,6 @@ mod adapters {
             self.map_binding.apply_to(e);
             self.buff.apply_to(e);
             self.run_state.apply_to(e);
-            self.dup.apply_to(e);
             self.inventory.apply_to(e);
             self.drop.apply_to(e);
             self.attribution.apply_to(e);
@@ -783,7 +800,7 @@ mod adapters {
 
 #[cfg(test)]
 mod tests {
-    use super::adapters::{ApplyToEntity, EntityComponents, FromEntity};
+    use super::adapters::EntityComponents;
     use super::*;
     use mir2_world::castle::DefenseRole;
     use mir2_world::combat::DropItem;
@@ -792,8 +809,11 @@ mod tests {
     use mir2_world::merchant::{MerchantFlags, MerchantState as WorldMerchantState};
     use mir2_world::npc::NpcState as WorldNpcState;
 
-    /// 给 **151 个字段逐个** 赋非缺省值：任何一组适配器漏字段/写错字段，
+    /// 给 **`Entity` 当前全部字段逐个** 赋非缺省值：任何一组适配器漏字段/写错字段，
     /// 全量 round-trip 的 `Debug` 比对都会红。
+    ///
+    /// S3a 起 `DupState` 的 3 个字段已迁出 `Entity`（计数组件真值），因此这里是
+    /// **148 字段**（P0 的 151 减去 3）。
     fn distinctive_entity() -> Entity {
         let mut e = Entity::new(91, "ecs-p0", 13, 27);
 
@@ -906,10 +926,8 @@ mod tests {
         e.latest_fire_hit_tick = 84;
         e.twin_hit_skill = true;
         e.latest_twin_hit_tick = 85;
-        // DupState
-        e.bo_duplication = true;
-        e.dup_start_tick = 86;
-        e.check_dup_obj_tick = 87;
+        // DupState：S3a 已从 `Entity` 迁出（真值在组件里，见 `EntityStore::insert`），
+        // 不再参与 Entity ↔ 组件的 round-trip。
         // Inventory（首尾两槽都写，证明整数组被搬运）
         let mut slots = [UseItemSlot::default(); USE_ITEM_SLOTS];
         slots[0] = UseItemSlot {
@@ -1049,14 +1067,15 @@ mod tests {
         format!("{e:?}")
     }
 
-    /// 全量 round-trip：Entity → 25 组件 → Entity，**151 字段零变化**。
+    /// 全量 round-trip：Entity → 24 组件（`DupState` 已于 S3a 迁出）→ Entity，
+    /// **剩余字段零变化**。
     ///
     /// 这条用例的判据是全字段 `Debug` 相等——任何一组适配器漏掉字段，落回的新实体就保留
     /// `Entity::new` 的缺省值，与源实体不同 ⇒ 红。若 `Entity` 以后新增字段而没进任何组件，
     /// 本用例**不会**自动发现（新字段在两侧都是缺省值）；因此同目录维护
     /// `distinctive_entity` 时必须同步加赋值（设计件「字段覆盖」节登记了这个边界）。
     #[test]
-    fn split_and_apply_round_trip_all_151_fields() {
+    fn split_and_apply_round_trip_all_remaining_fields() {
         let src = distinctive_entity();
         let split = EntityComponents::split(&src);
 
@@ -1075,29 +1094,30 @@ mod tests {
         assert_ne!(debug_snapshot(&src), debug_snapshot(&altered));
     }
 
-    /// 值搬运而非缺省：两个不同的实体走同一组适配器，落回后各自保持自己的值。
-    /// （P1 首片 `DupState` 的等价判据就长这个样子。）
+    /// S3a：`DupState` 已脱离 `Entity`，改由组件独立 API（`new`/`Default`）构造。
+    ///
+    /// 判据：组件缺省必须与迁出前 `Entity::new` 的 ctor 缺省逐字段一致（`false/0/0`），
+    /// 否则 `EntityStore::insert` 给每个实体插的默认状态会让首次重叠检查的门基漂移。
+    /// 牙：把 `DupState::new()` 的 `check_dup_obj_tick` 改成非 0 ⇒ 第二条断言红。
     #[test]
-    fn dup_state_adapter_carries_values_not_defaults() {
-        let a = Entity::new(1, "a", 0, 0);
-        let mut b = Entity::new(2, "b", 0, 0);
-        b.bo_duplication = true;
-        b.dup_start_tick = 1_234;
-        b.check_dup_obj_tick = 5_678;
-
-        let ca = DupState::from_entity(&a);
-        let cb = DupState::from_entity(&b);
-
-        let mut out_a = Entity::new(0, "", 0, 0);
-        let mut out_b = Entity::new(0, "", 0, 0);
-        ca.apply_to(&mut out_a);
-        cb.apply_to(&mut out_b);
-
-        assert!(!out_a.bo_duplication);
-        assert_eq!(out_a.dup_start_tick, 0);
-        assert!(out_b.bo_duplication);
-        assert_eq!(out_b.dup_start_tick, 1_234);
-        assert_eq!(out_b.check_dup_obj_tick, 5_678);
-        assert_ne!(format!("{ca:?}"), format!("{cb:?}"));
+    fn dup_state_component_default_matches_entity_ctor_defaults() {
+        let d = DupState::new();
+        assert_eq!(d, DupState::default(), "`new` 与派生 `Default` 必须同值");
+        assert!(!d.bo_duplication, "ctor 缺省 BoDuplication=false");
+        assert_eq!(d.dup_start_tick, 0, "ctor 缺省 DupStartTick=0");
+        assert_eq!(d.check_dup_obj_tick, 0, "ctor 缺省 CheckDupObjTick=0");
+        // 组件可独立读写（不再需要 Entity 适配器）
+        let mut state = DupState {
+            bo_duplication: true,
+            dup_start_tick: 1_234,
+            check_dup_obj_tick: 5_678,
+        };
+        state.check_dup_obj_tick += 1;
+        assert_eq!(state.check_dup_obj_tick, 5_679);
+        assert_ne!(
+            format!("{state:?}"),
+            format!("{d:?}"),
+            "非缺省状态必须可区分"
+        );
     }
 }

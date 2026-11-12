@@ -34,7 +34,10 @@ fn rig(n: i32) -> World {
 }
 
 fn check_tick(w: &World, id: i32) -> i64 {
-    w.entities.get(id).expect("实体存在").check_dup_obj_tick
+    w.entities
+        .dup_state(id)
+        .expect("实体存在")
+        .check_dup_obj_tick
 }
 
 /// 判据 a（严格 `>`）+ `World::tick` 接线：15 个 tick 到 3000ms 不检查，第 16 个 tick（3200ms）才检查。
@@ -77,7 +80,7 @@ fn two_objects_push_only_after_ten_seconds() {
         let ev = w.check_dup_obj();
         assert!(ev.is_empty(), "{t}ms：elapsed <= 10s 不推");
     }
-    let e = w.entities.get(1).unwrap();
+    let e = w.entities.dup_state(1).unwrap();
     assert!(e.bo_duplication, "≥2 对象 ⇒ BoDuplication=true");
     assert_eq!(e.dup_start_tick, 3001, "首次 ≥2 的时刻");
 
@@ -104,18 +107,18 @@ fn three_objects_push_after_three_seconds() {
     // 首个检查（3001ms）：记 DupStartTick，elapsed=0 ⇒ 不推。
     w.clock_ms = 3001;
     assert!(w.check_dup_obj().is_empty(), "首次 ≥2 ⇒ 只记起点");
-    assert_eq!(w.entities.get(1).unwrap().dup_start_tick, 3001);
+    assert_eq!(w.entities.dup_state(1).unwrap().dup_start_tick, 3001);
 
     // 3 对象分支的边界：手工给「上次检查」一个使 3s 检查门通过的旧值
     // （now-2999 ⇒ diff=3001 > 3000），`DupStartTick` 恰为 now-3000 ⇒ `> 3000` 不成立。
-    w.entities.get_mut(1).unwrap().check_dup_obj_tick = 3000 - 1;
-    w.entities.get_mut(1).unwrap().dup_start_tick = 3000;
+    w.entities.dup_state_mut(1).unwrap().check_dup_obj_tick = 3000 - 1;
+    w.entities.dup_state_mut(1).unwrap().dup_start_tick = 3000;
     w.clock_ms = 6000;
     assert!(w.check_dup_obj().is_empty(), "elapsed 恰 3000ms 不推");
 
     // 3001ms ⇒ 推。
-    w.entities.get_mut(1).unwrap().check_dup_obj_tick = 3000 - 1;
-    w.entities.get_mut(1).unwrap().dup_start_tick = 2999;
+    w.entities.dup_state_mut(1).unwrap().check_dup_obj_tick = 3000 - 1;
+    w.entities.dup_state_mut(1).unwrap().dup_start_tick = 2999;
     w.clock_ms = 6000;
     let ev = w.check_dup_obj();
     assert_eq!(ev.len(), 1, "3 对象 >3s ⇒ 推 1 次");
@@ -145,7 +148,7 @@ fn push_three_overlapping_replicates_move_to_moving_object_quirk() {
     w.clock_ms = 3001;
     assert!(w.check_dup_obj().is_empty(), "首次 ≥2 ⇒ 只记起点");
     {
-        let e = w.entities.get_mut(1).unwrap();
+        let e = w.entities.dup_state_mut(1).unwrap();
         e.check_dup_obj_tick = 3000 - 1;
         e.dup_start_tick = 2999;
     }
@@ -212,7 +215,7 @@ fn twenty_second_cap_is_strict_less_than() {
     for (now, want_push) in [(19_999_i64, true), (20_000, false), (20_001, false)] {
         let mut w = rig(2);
         {
-            let e = w.entities.get_mut(1).unwrap();
+            let e = w.entities.dup_state_mut(1).unwrap();
             e.bo_duplication = true;
             e.dup_start_tick = 0;
             e.check_dup_obj_tick = 0; // now - 0 > 3000，检查门通过
@@ -269,7 +272,7 @@ fn single_object_never_pushes_and_never_draws() {
         w.clock_ms = t;
         assert!(w.check_dup_obj().is_empty(), "{t}ms 单对象格不推");
     }
-    assert!(!w.entities.get(1).unwrap().bo_duplication);
+    assert!(!w.entities.dup_state(1).unwrap().bo_duplication);
     assert_eq!(
         w.rng.random(),
         expect.random(),
@@ -284,7 +287,7 @@ fn below_two_clears_flag_without_resetting_dup_start() {
     let mut w = rig(2);
     w.clock_ms = 3001;
     let _ = w.check_dup_obj();
-    assert_eq!(w.entities.get(1).unwrap().dup_start_tick, 3001);
+    assert_eq!(w.entities.dup_state(1).unwrap().dup_start_tick, 3001);
 
     // 把 2 号挪走（换格），本格只剩 1 人。
     {
@@ -309,7 +312,7 @@ fn below_two_clears_flag_without_resetting_dup_start() {
     }
     w.clock_ms = 6002;
     let _ = w.check_dup_obj();
-    let e = w.entities.get(1).unwrap();
+    let e = w.entities.dup_state(1).unwrap();
     assert!(!e.bo_duplication, "<2 ⇒ BoDuplication=false");
     assert_eq!(e.dup_start_tick, 3001, "DupStartTick 不复位");
 }
