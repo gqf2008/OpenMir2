@@ -35,6 +35,8 @@ members = [
     "bins/mir2-server",
     # MCP（rmcp stdio）：GM 命令目录 + 开区配置白名单读写（卡 openmir2-mcp-gm-conf）
     "bins/mir2-mcp",
+    # 资产补齐下载面（卡 openmir2-res-download-svc）：独立进程，默认只绑回环 7300
+    "bins/res-svr",
 ]
 
 # 多线共用 workspace：members 只按行追加自己的 crate，不改动别人的行（见设计文档 §12.4）。

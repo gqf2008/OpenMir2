@@ -1,0 +1,28 @@
+[package]
+name = "res-svr"
+version = "0.1.0"
+edition = "2021"
+description = "资产补齐下载服务（res-svr）：Bearer token 鉴权 + 路径归一化受限的 /res/index.json 与 /res/file 下载面（卡 openmir2-res-download-svc）"
+license = "MIT"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+all = "deny"
+
+[dependencies]
+# 与 bins/mir2-mcp 同口径：hyper 1 + hyper-util 手接 http1，**不引入 axum**。
+# 版本全部沿用 workspace 既有 Cargo.lock 已锁定值；唯一「新直接依赖」是
+# percent-encoding（此前经 url 2.5.8 作传递依赖已在锁内，本卡只提升为直接依赖）。
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "fs", "sync", "macros", "time"] }
+hyper = { version = "1", features = ["server", "http1"] }
+hyper-util = { version = "0.1", features = ["tokio"] }
+http-body-util = "0.1"
+futures-util = "0.3"
+sha2 = "0.10"
+hex = "0.4"
+serde_json = "1"
+percent-encoding = "2.3"
+# 配置文本解码统一入口（.NET `StreamReader` 口径：BOM 探测 + GB2312 回退）。
+mir2-encoding = { path = "../../crates/encoding" }

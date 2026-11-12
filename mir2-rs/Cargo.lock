@@ -1736,6 +1736,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "res-svr"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "hex",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "mir2-encoding",
+ "percent-encoding",
+ "serde_json",
+ "sha2",
+ "tokio",
+]
+
+[[package]]
 name = "rmcp"
 version = "3.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
