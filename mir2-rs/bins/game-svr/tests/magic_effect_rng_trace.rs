@@ -63,7 +63,7 @@ fn magic_effect_draws_record_non_attack_sites() {
         w.add_entity(e)
     };
     w.tick();
-    w.entities.get_mut(caster).unwrap().visible_actors = vec![VisibleBaseObject {
+    w.entities.map_binding_mut(caster).unwrap().visible_actors = vec![VisibleBaseObject {
         target,
         flag: VisibleFlag::Show,
     }];

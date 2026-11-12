@@ -17,7 +17,7 @@
 use mir2_data::models::MagicInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::Entity;
+use mir2_world::{Entity, EntitySpawn};
 
 const SEED: i32 = 20261017;
 
@@ -46,7 +46,7 @@ fn magic(
     }
 }
 
-fn player(id: i32, name: &str, x: i32, y: i32) -> Entity {
+fn player(id: i32, name: &str, x: i32, y: i32) -> EntitySpawn {
     let mut e = Entity::new(id, name.to_string(), x, y);
     e.race = 0;
     e.level = 60;
@@ -55,7 +55,7 @@ fn player(id: i32, name: &str, x: i32, y: i32) -> Entity {
     e
 }
 
-fn monster(id: i32, name: &str, x: i32, y: i32, level: u8) -> Entity {
+fn monster(id: i32, name: &str, x: i32, y: i32, level: u8) -> EntitySpawn {
     let mut e = Entity::new(id, name.to_string(), x, y);
     e.race = 80;
     e.level = level;

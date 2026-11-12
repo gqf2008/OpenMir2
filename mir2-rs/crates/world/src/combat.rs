@@ -29,7 +29,7 @@ use mir2_formula::exp::{calc_get_exp, get_level_exp};
 use mir2_shared::hutil;
 use mir2_shared::rng::RandomSource;
 
-use crate::entity::{Entity, UseItemSlot, ACTOR_RACE_PLAY};
+use crate::entity::{Entity, EntitySpawn, UseItemSlot, ACTOR_RACE_PLAY};
 
 /// `HUtil32.LoByte(short)`：低 8 位。
 pub fn lo_byte(w: i32) -> u8 {
@@ -1494,7 +1494,7 @@ pub struct MonsterRow<'a> {
 }
 
 /// 由行数据构造怪物实体（数值语义与 `GameSvr/DB/MySqlDB.cs::LoadMonsterDB` 的产物一致）。
-pub fn monster_from_row(row: MonsterRow<'_>) -> Entity {
+pub fn monster_from_row(row: MonsterRow<'_>) -> EntitySpawn {
     let mut e = Entity::new(row.id, row.name, row.x, row.y);
     e.race = 80; // ActorRace.Monster
                  // `Entity::new` 是**玩家** ctor 等价物（`PlayObject.cs:899-901` 覆盖 `SearchTime=1000`）；

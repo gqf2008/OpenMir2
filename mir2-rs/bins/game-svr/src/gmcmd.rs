@@ -2170,14 +2170,14 @@ impl<'a> GmWorld<'a> {
 
     /// `WorldEngine.GetPlayObject`（`WorldServer.cs:937-954`）：`PlayObjectList` 顺序扫，
     /// `ChrName` **OrdinalIgnoreCase** 命中首个、且 `!Ghost`。本仓实体表含怪物 ⇒ 加 `Race == Play` 门。
-    fn play_by_name(&self, name: &str) -> Option<&'a mir2_world::Entity> {
+    fn play_by_name(&self, name: &str) -> Option<mir2_world::EntityRef<'a>> {
         let world = self.world?;
-        world.entities.iter().find(|e| {
+        world.entities.iter_ref().find(|e| {
             e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost && e.name.eq_ignore_ascii_case(name)
         })
     }
 
-    fn entity(&self, id: i32) -> Option<&'a mir2_world::Entity> {
+    fn entity(&self, id: i32) -> Option<mir2_world::EntityRef<'a>> {
         self.world?.entities.get(id)
     }
 
@@ -2248,10 +2248,11 @@ impl<'a> GmWorld<'a> {
 
     /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
     fn self_use_item(&self, slot: usize) -> Option<&'a mir2_world::entity::UseItemSlot> {
-        self.self_entity()?.use_items.get(slot)
+        let id = self.self_entity()?.id;
+        self.world?.entities.entity(id)?.use_items.get(slot)
     }
 
-    fn self_entity(&self) -> Option<&'a mir2_world::Entity> {
+    fn self_entity(&self) -> Option<mir2_world::EntityRef<'a>> {
         if self.speaker.is_empty() {
             return None;
         }
@@ -2650,7 +2651,7 @@ fn map_human_count(world: &GmWorld<'_>, map_id: usize) -> Option<i32> {
     let w = world.world?;
     Some(
         w.entities
-            .iter()
+            .iter_ref()
             .filter(|e| {
                 e.race == mir2_world::ACTOR_RACE_PLAY && !e.death && !e.ghost && e.map_id == map_id
             })
@@ -2666,7 +2667,7 @@ fn map_monster_count(world: &GmWorld<'_>, map_id: usize) -> Option<i32> {
     let w = world.world?;
     Some(
         w.entities
-            .iter()
+            .iter_ref()
             .filter(|e| {
                 e.race >= mir2_world::ACTOR_RACE_ANIMAL
                     && !e.death
@@ -2920,7 +2921,7 @@ fn show_flag(parameters: &str, world: &GmWorld<'_>) -> GmResult {
     };
     let n_flag = str_to_int(s_flag, 0);
     // 族 F 起读源是真位阵快照（此前是恒零接缝）；未注入时仍按全零模型走 OFF 支。
-    let status = target_quest_flag_status(world, target, n_flag);
+    let status = target_quest_flag_status(world, &target, n_flag);
     if status == 1 {
         green(dotnet_format(
             Q_FLAG_ON_FMT,
@@ -9470,7 +9471,6 @@ mod tests {
     /// 变异红：M-F1a（表漏 项链 ⇒ 该名回帮助）⇒ 13 名牙红；M-F1b（已穿戴支补文本）⇒ 零帧牙红。
     #[test]
     fn bind_use_item_legal_slot_three_branches() {
-        use mir2_world::Entity;
         let names = [
             ("衣服", 0),
             ("武器", 1),
@@ -9546,7 +9546,7 @@ mod tests {
         let r = execute(&mut sess, &cfg, &view, "@Binduseitem bob 衣服 帐号");
         assert_eq!(texts(&r), vec![(GmColor::Red, "bob的衣服没有戴物品!!!")]);
         // 目标 Entity 字段未受污染（只读命令）。
-        let e: &Entity = w.entities.get(bob_id).unwrap();
+        let e = w.entities.get(bob_id).unwrap();
         assert_eq!(e.use_items[3].index, 15);
     }
 

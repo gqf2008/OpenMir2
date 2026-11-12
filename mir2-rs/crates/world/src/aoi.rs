@@ -20,20 +20,47 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    EntityStore, VisibleBaseObject, VisibleEvent, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    Entity, EntityRef, EntityStore, MapBinding, Transform, VisibleBaseObject, VisibleEvent,
+    VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
+use bevy_ecs::prelude::Resource;
+use mir2_world_bevy::MapsRes;
+use std::collections::HashMap;
 
 /// 格子内对象过期阈值（`BaseObject.ViewRange.cs:95`：`60 * 1000` 毫秒）。
 pub const CELL_OBJECT_EXPIRE_MS: i64 = 60 * 1000;
 
+/// AOI 扫描所需的实体访问面（S3b）。
+///
+/// 两个实现：`crates/world` 的 [`EntityStore`]（facade/测试路径）与 bevy `World` 适配器
+/// [`BevyAoiStore`]（`TickStage::OutputAoi` 系统路径）。扫描算法只依赖这三个方法，
+/// 因此系统化不复制算法、也不引入第二份真值。
+pub trait AoiStore {
+    fn get(&self, id: i32) -> Option<EntityRef<'_>>;
+    fn get_mut(&mut self, id: i32) -> Option<&mut Entity>;
+    fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding>;
+}
+
+impl AoiStore for EntityStore {
+    fn get(&self, id: i32) -> Option<EntityRef<'_>> {
+        EntityStore::get(self, id)
+    }
+    fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
+        EntityStore::get_mut(self, id)
+    }
+    fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
+        EntityStore::map_binding_mut(self, id)
+    }
+}
+
 /// 对应 `UpdateVisibleGay`（`BaseObject.ViewRange.cs:12`）。
-pub fn update_visible_gay(store: &mut EntityStore, viewer_id: i32, target_id: i32) {
+pub fn update_visible_gay<S: AoiStore>(store: &mut S, viewer_id: i32, target_id: i32) {
     let Some(target) = store.get(target_id) else {
         return;
     };
     let target_is_active = target.race == ACTOR_RACE_PLAY || target.master.is_some();
-    let Some(viewer) = store.get_mut(viewer_id) else {
+    let Some(viewer) = store.map_binding_mut(viewer_id) else {
         return;
     };
     if target_is_active {
@@ -73,8 +100,8 @@ pub fn update_visible_gay(store: &mut EntityStore, viewer_id: i32, target_id: i3
 ///
 /// 返回 `true` = 过了 `SearchTime` 门并执行了更新（含已存在 ⇒ 打 `Invisible`）。
 #[must_use]
-pub fn update_monster_visible(
-    store: &mut EntityStore,
+pub fn update_monster_visible<S: AoiStore>(
+    store: &mut S,
     monster_id: i32,
     viewer_id: i32,
     now_ms: i64,
@@ -94,7 +121,7 @@ pub fn update_monster_visible(
         return false;
     };
     let target_is_active = target.race == ACTOR_RACE_PLAY || target.master.is_some();
-    let Some(monster) = store.get_mut(monster_id) else {
+    let Some(monster) = store.map_binding_mut(monster_id) else {
         return false;
     };
     if target_is_active {
@@ -130,9 +157,9 @@ pub struct SearchViewRangeOutcome {
 /// 非玩家自我扫描（卫士/宝宝，`BaseObject.SearchViewRange`/`GuardUnit.SearchViewRange`）
 /// 不使用 `view_updates` 面。
 #[must_use]
-pub fn search_view_range(
+pub fn search_view_range<S: AoiStore>(
     map: &mut MapGrid,
-    store: &mut EntityStore,
+    store: &mut S,
     viewer_id: i32,
     now_ms: i64,
 ) -> Vec<i32> {
@@ -150,9 +177,9 @@ pub fn search_view_range(
 ///
 /// **守卫**（oracle `:3214`）：只返回 `!FixedHideMode && !Ghost` 的目标（这两类不发消失帧，
 /// 防重复占带宽）；`RemoveAt` 本身对全部 Hidden 项照做（与 oracle 同）。
-pub fn search_view_range_with_updates(
+pub fn search_view_range_with_updates<S: AoiStore>(
     map: &mut MapGrid,
-    store: &mut EntityStore,
+    store: &mut S,
     viewer_id: i32,
     now_ms: i64,
 ) -> SearchViewRangeOutcome {
@@ -170,7 +197,7 @@ pub fn search_view_range_with_updates(
 
     // 置位与打标（C#：IsVisibleActive=false；所有 VisibleActors 标 Hidden）
     {
-        let Some(viewer) = store.get_mut(viewer_id) else {
+        let Some(viewer) = store.map_binding_mut(viewer_id) else {
             return SearchViewRangeOutcome::default();
         };
         viewer.is_visible_active = false;
@@ -282,7 +309,7 @@ pub fn search_view_range_with_updates(
     //   }
     // ⇒ 移除顺序 = 列表下标升序；发帧守卫单独判 `FixedHideMode`/`Ghost`（移除**不**受守卫影响）。
     let mut removed: Vec<i32> = Vec::new();
-    if let Some(viewer) = store.get_mut(viewer_id) {
+    if let Some(viewer) = store.map_binding_mut(viewer_id) {
         let mut i = 0;
         while i < viewer.visible_actors.len() {
             if viewer.visible_actors[i].flag == VisibleFlag::Hidden {
@@ -323,15 +350,15 @@ pub fn search_view_range_with_updates(
 /// 条目。快照只服务 **804**（同一趟扫描内写读无间隔 ⇒ 与共享值恒相等）；**805** 读的是发送
 /// 时刻的共享值（`:3278`）——它可能已被**后见者**覆写 ⇒ 由 [`search_view_range_events`]
 /// 的收尾支读 `sight`，不读条目快照。
-pub fn update_visible_event(
-    store: &mut EntityStore,
+pub fn update_visible_event<S: AoiStore>(
+    store: &mut S,
     viewer_id: i32,
     event: usize,
     x: i32,
     y: i32,
     sight: &mut (i32, i32),
 ) {
-    let Some(viewer) = store.get_mut(viewer_id) else {
+    let Some(viewer) = store.map_binding_mut(viewer_id) else {
         return;
     };
     for v in viewer.visible_events.iter_mut() {
@@ -381,9 +408,9 @@ pub fn update_visible_event(
 ///
 /// 返回本趟「离开视野」的 `(事件下标, nX, nY)`（`Hidden` ⇒ `RemoveAt`，下标升序保序）——
 /// 对应 oracle `RM_HIDEEVENT` 的发送对象。
-pub fn search_view_range_events(
+pub fn search_view_range_events<S: AoiStore>(
     map: &MapGrid,
-    store: &mut EntityStore,
+    store: &mut S,
     viewer_id: i32,
     events: &[crate::world::FireBurnEvent],
     sight: &mut (i32, i32),
@@ -397,7 +424,7 @@ pub fn search_view_range_events(
     let (cx, cy, view_range) = (viewer.x, viewer.y, viewer.view_range);
     // 置 Hidden（oracle `:3078-3082`：`for (i = Count - 1; i >= 0; i--) … = Hidden;`——
     // 逆序置位与顺序无关，逐条目结果相同）。
-    if let Some(viewer) = store.get_mut(viewer_id) {
+    if let Some(viewer) = store.map_binding_mut(viewer_id) {
         for v in viewer.visible_events.iter_mut() {
             v.flag = VisibleFlag::Hidden;
         }
@@ -430,7 +457,7 @@ pub fn search_view_range_events(
     // review `39262b65` F3：805 坐标 = **发送时刻共享值**（oracle `:3278` 读 `mapEvent.nX/nY`）
     // —— 本趟无首见支（Hidden 才会移除）⇒ sight 未被本趟覆写，即「最后一次首见」的格子。
     let mut removed: Vec<(usize, i32, i32)> = Vec::new();
-    if let Some(viewer) = store.get_mut(viewer_id) {
+    if let Some(viewer) = store.map_binding_mut(viewer_id) {
         let mut i = 0;
         while i < viewer.visible_events.len() {
             if viewer.visible_events[i].flag == VisibleFlag::Hidden {
@@ -447,9 +474,9 @@ pub fn search_view_range_events(
 /// 对应 `BaseObject.SearchViewRangeDeath`（`BaseObject.ViewRange.cs:159`）。
 ///
 /// 差异：只做格子过期清理（含物品清理分支），最后**整体清空** `VisibleActors`。
-pub fn search_view_range_death(
+pub fn search_view_range_death<S: AoiStore>(
     map: &mut MapGrid,
-    store: &mut EntityStore,
+    store: &mut S,
     viewer_id: i32,
     now_ms: i64,
     clear_drop_on_floor_item_time: i64,
@@ -467,7 +494,7 @@ pub fn search_view_range_death(
         viewer.death,
         viewer.race,
     );
-    if let Some(viewer) = store.get_mut(viewer_id) {
+    if let Some(viewer) = store.map_binding_mut(viewer_id) {
         viewer.is_visible_active = false;
         for v in viewer.visible_actors.iter_mut() {
             v.flag = VisibleFlag::Hidden;
@@ -520,13 +547,13 @@ pub fn search_view_range_death(
             }
         }
     }
-    if let Some(viewer) = store.get_mut(viewer_id) {
+    if let Some(viewer) = store.map_binding_mut(viewer_id) {
         viewer.visible_actors.clear();
     }
 }
 
 /// 便于对拍/断言：把视野列表规范化成 `(target_id, flag)` 序列（保持列表顺序）。
-pub fn visible_snapshot(store: &EntityStore, id: i32) -> Vec<(i32, u8)> {
+pub fn visible_snapshot<S: AoiStore>(store: &S, id: i32) -> Vec<(i32, u8)> {
     store
         .get(id)
         .map(|e| {
@@ -538,10 +565,188 @@ pub fn visible_snapshot(store: &EntityStore, id: i32) -> Vec<(i32, u8)> {
         .unwrap_or_default()
 }
 
+// ============================ S3b：OutputAoi 系统 ============================
+
+/// 本 tick 的「业务 id → bevy 实体句柄」索引（槽位顺序；facade 在 tick 边界灌入）。
+#[derive(Resource, Default)]
+pub struct AoiIds(pub Vec<(i32, bevy_ecs::entity::Entity)>);
+
+/// `OutputAoi` 系统的输入快照（时钟 / 掉落清理门 / 事件与 sight 镜像）。
+#[derive(Resource, Default)]
+pub struct AoiParams {
+    pub clock_ms: i64,
+    pub clear_drop_on_floor_item_time: i64,
+    pub event_sight: (i32, i32),
+    pub events: Vec<crate::world::FireBurnEvent>,
+}
+
+/// AOI 分组复用缓冲（替代 `World::by_map_scratch`；跨 tick 复用，避免每 tick 分配）。
+#[derive(Resource, Default)]
+pub struct AoiScratch {
+    pub by_map: Vec<Vec<i32>>,
+}
+
+/// `OutputAoi` 系统的输出（facade 跑完 schedule 后转抄进 `TickRecord`）。
+#[derive(Resource, Default)]
+pub struct AoiOut {
+    pub aoi_order: Vec<i32>,
+    pub hides: Vec<(i32, i32)>,
+    pub hide_observer_kinds: Vec<(i32, i32, crate::world::HideObserverKind)>,
+    pub event_hides: Vec<(i32, usize, i32, i32)>,
+}
+
+/// bevy `World` 侧的 [`AoiStore`] 实现：按显式句柄取三组件，**不迭代 Query 求顺序**。
+struct BevyAoiStore<'a> {
+    world: &'a mut bevy_ecs::world::World,
+    index: &'a HashMap<i32, bevy_ecs::entity::Entity>,
+}
+
+impl AoiStore for BevyAoiStore<'_> {
+    fn get(&self, id: i32) -> Option<EntityRef<'_>> {
+        let e = *self.index.get(&id)?;
+        let entity = self.world.get::<Entity>(e)?;
+        let transform = self.world.get::<Transform>(e)?;
+        let binding = self.world.get::<MapBinding>(e)?;
+        Some(EntityRef::from_components(entity, transform, binding))
+    }
+
+    fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
+        let e = *self.index.get(&id)?;
+        self.world
+            .get_mut::<Entity>(e)
+            .map(bevy_ecs::change_detection::Mut::into_inner)
+    }
+
+    fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
+        let e = *self.index.get(&id)?;
+        self.world
+            .get_mut::<MapBinding>(e)
+            .map(bevy_ecs::change_detection::Mut::into_inner)
+    }
+}
+
+/// `TickStage::OutputAoi` 的系统：AOI 刷新的唯一生产实现。
+///
+/// 输入（资源，facade 在 tick 边界一次性移入）：[`AoiIds`] + [`AoiParams`] +
+/// [`MapsRes<MapGrid>`] + [`AoiScratch`]；输出：[`AoiOut`]。扫描顺序 = `AoiIds` 的槽位顺序
+///（facade 从 `EcsStore` 显式槽位索引生成），**从不迭代 `Query` 求顺序**。
+pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
+    let ids: Vec<(i32, bevy_ecs::entity::Entity)> = world
+        .get_resource::<AoiIds>()
+        .map(|r| r.0.clone())
+        .unwrap_or_default();
+    let mut params = world.remove_resource::<AoiParams>().unwrap_or_default();
+    let mut maps = world
+        .remove_resource::<MapsRes<MapGrid>>()
+        .unwrap_or(MapsRes(Vec::new()));
+    let mut scratch = world.remove_resource::<AoiScratch>().unwrap_or_default();
+    let mut out = AoiOut::default();
+    let index: HashMap<i32, bevy_ecs::entity::Entity> = ids.iter().copied().collect();
+    {
+        let mut store = BevyAoiStore {
+            world: &mut *world,
+            index: &index,
+        };
+        scratch.by_map.clear();
+        scratch.by_map.resize_with(maps.0.len(), Vec::new);
+        for v in scratch.by_map.iter_mut() {
+            v.clear();
+        }
+        for (id, _) in &ids {
+            if let Some(e) = store.get(*id) {
+                if let Some(v) = scratch.by_map.get_mut(e.map_id) {
+                    v.push(*id);
+                }
+            }
+        }
+        let by_map = std::mem::take(&mut scratch.by_map);
+        for (map_id, map_ids) in by_map.iter().enumerate() {
+            let Some(map) = maps.0.get_mut(map_id) else {
+                continue;
+            };
+            for id in map_ids {
+                let death = match store.get(*id) {
+                    Some(e) => e.death,
+                    None => continue,
+                };
+                if death {
+                    search_view_range_death(
+                        map,
+                        &mut store,
+                        *id,
+                        params.clock_ms,
+                        params.clear_drop_on_floor_item_time,
+                    );
+                } else {
+                    let (scan, observer_kind) = match store.get(*id) {
+                        Some(e) if e.race == crate::entity::ACTOR_RACE_PLAY => (
+                            !e.ghost && params.clock_ms - e.ai.search_tick > e.ai.search_time,
+                            if e.is_clone {
+                                crate::world::HideObserverKind::Clone
+                            } else {
+                                crate::world::HideObserverKind::Player
+                            },
+                        ),
+                        Some(e) if !e.ghost && crate::monai::monster_self_scans(&e) => (
+                            params.clock_ms - e.ai.search_tick > e.ai.search_time,
+                            crate::world::HideObserverKind::NonPlayer,
+                        ),
+                        Some(_) => (false, crate::world::HideObserverKind::Player),
+                        None => continue,
+                    };
+                    if !scan {
+                        out.aoi_order.push(*id);
+                        continue;
+                    }
+                    if let Some(e) = store.get_mut(*id) {
+                        e.ai.search_tick = params.clock_ms;
+                    }
+                    let outcome =
+                        search_view_range_with_updates(map, &mut store, *id, params.clock_ms);
+                    for target in outcome.removed {
+                        out.hides.push((*id, target));
+                        out.hide_observer_kinds.push((*id, target, observer_kind));
+                    }
+                    for (monster_id, player_id) in outcome.view_updates {
+                        if store
+                            .get(monster_id)
+                            .is_some_and(|e| crate::monai::consumes_view_range_update(&e))
+                        {
+                            if let Some(monster) = store.get_mut(monster_id) {
+                                monster.ai.pending_view_updates.push(player_id);
+                            }
+                        }
+                    }
+                    if store
+                        .get(*id)
+                        .is_some_and(|e| e.race == crate::entity::ACTOR_RACE_PLAY)
+                    {
+                        for (idx, x, y) in search_view_range_events(
+                            map,
+                            &mut store,
+                            *id,
+                            &params.events,
+                            &mut params.event_sight,
+                        ) {
+                            out.event_hides.push((*id, idx, x, y));
+                        }
+                    }
+                }
+                out.aoi_order.push(*id);
+            }
+        }
+        scratch.by_map = by_map;
+    }
+    world.insert_resource(maps);
+    world.insert_resource(params);
+    world.insert_resource(scratch);
+    world.insert_resource(out);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, EntityStore};
+    use crate::entity::{Entity, EntitySpawn, EntityStore};
 
     fn put(map: &mut MapGrid, id: i32, x: i32, y: i32, add_time: i64) {
         assert!(map.add_map_object(x, y, CellType::Play, id, add_time));
@@ -612,7 +817,7 @@ mod tests {
         assert!(map.add_map_object(x, y, t, id, add_time));
     }
 
-    fn play_viewer(id: i32, x: i32, y: i32, view_range: i32) -> Entity {
+    fn play_viewer(id: i32, x: i32, y: i32, view_range: i32) -> EntitySpawn {
         let mut e = Entity::new(id, "p", x, y);
         e.race = ACTOR_RACE_PLAY;
         // `PlayObject` ctor `WantRefMsg = true`（`PlayObject.cs:889`）。
@@ -621,7 +826,7 @@ mod tests {
         e
     }
 
-    fn monster_entity(id: i32, x: i32, y: i32, view_range: i32) -> Entity {
+    fn monster_entity(id: i32, x: i32, y: i32, view_range: i32) -> EntitySpawn {
         let mut e = Entity::new(id, "m", x, y);
         e.race = ACTOR_RACE_MONSTER;
         e.view_range = view_range;

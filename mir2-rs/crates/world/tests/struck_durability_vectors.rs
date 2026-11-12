@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use mir2_shared::replay::ReplayRandom;
 use mir2_world::combat::struck_damage_durability;
-use mir2_world::{Entity, ACTOR_RACE_PLAY};
+use mir2_world::{Entity, EntitySpawn, ACTOR_RACE_PLAY};
 
 fn vectors_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -97,7 +97,7 @@ fn replay(draws: &str) -> ReplayRandom {
     ReplayRandom::from_tsv(&tsv).unwrap_or_else(|e| panic!("取数账本非法: {e} ({draws})"))
 }
 
-fn mk_target(items: &[(usize, u16, u16)]) -> Entity {
+fn mk_target(items: &[(usize, u16, u16)]) -> EntitySpawn {
     let mut target = Entity::new(202, "victim", 0, 0);
     target.race = ACTOR_RACE_PLAY;
     target.hp = 30000;

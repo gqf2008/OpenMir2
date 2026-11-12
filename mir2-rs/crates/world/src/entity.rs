@@ -500,6 +500,138 @@ pub struct BaseAbil {
     pub max_hp: u16,
 }
 
+/// **S3b**：位置/视野组件（`x` / `y` / `map_id` / `view_range`）——字段真值在
+/// `mir2_world_bevy::Transform`，`Entity` 已删除这四个字段。
+///
+/// 读：`EntityStore::transform(id)`；写：`EntityStore::transform_mut(id)`（或
+/// `set_xy` / `set_map_id` 等受控入口）。格子登记与组件更新必须同一段代码内完成。
+pub use mir2_world_bevy::Transform;
+
+/// **S3b**：AOI/落图绑定组件的 world 侧实例化（6 字段真值）。
+pub type MapBinding = mir2_world_bevy::MapBinding<VisibleBaseObject, VisibleEvent>;
+
+/// **生成期载体**（`Entity` + 落图前的 `Transform` / `MapBinding`）。
+///
+/// 只为保持 697 处 `Entity::new(id, name, x, y)` + `e.x = …` 的生成期写法不变；
+/// [`EntityStore::insert`] 消费它并把坐标/绑定落成组件。**插入后不再存在第二份真值**：
+/// 载体被 move 进 insert，后续读写一律走组件。
+#[derive(Debug, Clone)]
+pub struct EntitySpawn {
+    pub entity: Entity,
+    /// 落图前坐标/视野（`insert` 时落成 `Transform` 组件）。
+    pub x: i32,
+    pub y: i32,
+    pub map_id: usize,
+    pub view_range: i32,
+    /// 落图前 AOI 绑定（`insert` 时落成 `MapBinding` 组件）。
+    pub map_binding: MapBinding,
+}
+
+impl EntitySpawn {
+    pub fn new(
+        entity: Entity,
+        x: i32,
+        y: i32,
+        map_id: usize,
+        view_range: i32,
+        map_binding: MapBinding,
+    ) -> Self {
+        EntitySpawn {
+            entity,
+            x,
+            y,
+            map_id,
+            view_range,
+            map_binding,
+        }
+    }
+
+    /// 落成组件三元组（`insert` 用）。
+    pub fn into_parts(self) -> (Entity, Transform, MapBinding) {
+        (
+            self.entity,
+            Transform {
+                x: self.x,
+                y: self.y,
+                map_id: self.map_id,
+                view_range: self.view_range,
+            },
+            self.map_binding,
+        )
+    }
+}
+
+impl std::ops::Deref for EntitySpawn {
+    type Target = Entity;
+    fn deref(&self) -> &Entity {
+        &self.entity
+    }
+}
+
+impl std::ops::DerefMut for EntitySpawn {
+    fn deref_mut(&mut self) -> &mut Entity {
+        &mut self.entity
+    }
+}
+
+/// **只读视图**：一次按 id 取 `Entity` + `Transform` + `MapBinding` 三个组件。
+///
+/// 为什么要有它：S3b 把 10 个字段搬出 `Entity` 后，绝大多数读取点仍是
+/// `store.get(id).map(|e| (e.x, e.y, e.map_id))` 这种**只读快照**。视图把组件值按 id
+/// 一次取齐（拷贝 4 个标量 + 借用 6 个绑定字段），因此读取点保持原形，且不会出现
+/// 「`get` 之后组件被改」的中间态——视图存活期间 `&EntityStore` 冻结整个 store。
+///
+/// 它不是组件、不参与存储，**不是双真值**：标量是借用期快照，`Vec` 是只读借用；
+/// 写入一律走 `EntityStore::transform_mut` / `map_binding_mut`（或 `get_mut` + 受控写方法）。
+#[derive(Clone, Copy, Debug)]
+pub struct EntityRef<'a> {
+    entity: &'a Entity,
+    pub x: i32,
+    pub y: i32,
+    pub map_id: usize,
+    pub view_range: i32,
+    pub add_to_mapped: bool,
+    pub visible_actors: &'a Vec<VisibleBaseObject>,
+    pub visible_events: &'a Vec<VisibleEvent>,
+    pub is_visible_active: bool,
+    pub processed_tick: u64,
+    pub verify_tick: i64,
+}
+
+impl<'a> EntityRef<'a> {
+    pub fn entity(&self) -> &'a Entity {
+        self.entity
+    }
+
+    /// 由三个组件引用构造只读视图（bevy `OutputAoi` 系统用）。
+    pub fn from_components(
+        entity: &'a Entity,
+        transform: &'a Transform,
+        binding: &'a MapBinding,
+    ) -> Self {
+        EntityRef {
+            entity,
+            x: transform.x,
+            y: transform.y,
+            map_id: transform.map_id,
+            view_range: transform.view_range,
+            add_to_mapped: binding.add_to_mapped,
+            visible_actors: &binding.visible_actors,
+            visible_events: &binding.visible_events,
+            is_visible_active: binding.is_visible_active,
+            processed_tick: binding.processed_tick,
+            verify_tick: binding.verify_tick,
+        }
+    }
+}
+
+impl std::ops::Deref for EntityRef<'_> {
+    type Target = Entity;
+    fn deref(&self) -> &Entity {
+        self.entity
+    }
+}
+
 /// `BaseObject` 中参与本骨架（tick / AOI / 移动）的字段子集。
 ///
 /// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
@@ -509,10 +641,8 @@ pub struct Entity {
     /// C# `ActorId`
     pub id: i32,
     pub name: String,
-    pub x: i32,
-    pub y: i32,
-    /// C# `ViewRange`（`BaseObject` 默认 5）
-    pub view_range: i32,
+    // S3b：`x` / `y` / `view_range` / `map_id` 已迁到 `mir2_world_bevy::Transform` 组件
+    //（字段真值，经 `EntityStore::transform` / `transform_mut` 受控访问）。
     /// C# `Race` —— **行为轴**：所有 `IsAttackTarget`/`Struck`/掉落等判定读它。
     ///
     /// 与 [`Entity::race_img`]（外观轴）**不是同一字段**：oracle 商人 `Race = ActorRace.NPC(10)`
@@ -725,19 +855,10 @@ pub struct Entity {
     pub no_item: bool,
     /// C# `WantRefMsg`
     pub want_ref_msg: bool,
-    /// C# `AddToMaped`（首次入图标记）
-    pub add_to_mapped: bool,
-    /// C# `VisibleActors`
-    pub visible_actors: Vec<VisibleBaseObject>,
-    /// C# `PlayObject.VisibleEvents`（`PlayObject.cs:211`；仅玩家观察者维护，见
-    /// `aoi::search_view_range_events`）。缺省空表 ⇒ 既有 golden 逐字节不变。
-    pub visible_events: Vec<VisibleEvent>,
-    /// C# `IsVisibleActive`
-    pub is_visible_active: bool,
-    /// 本 tick 是否已被处理（tick 顺序判据用）
-    pub processed_tick: u64,
-    /// 所在地图（多地图世界用；`World::new` 单图时为 0）
-    pub map_id: usize,
+    // S3b：`add_to_mapped` / `visible_actors` / `visible_events` / `is_visible_active` /
+    // `processed_tick` / `verify_tick` 已迁到 [`MapBinding`] 组件（字段真值，经
+    // `EntityStore::map_binding` / `map_binding_mut` 受控访问）。`processed_tick` 与
+    // `map_id` 的旧字段位置保留在此注释里，源码顺序无契约。
     /// `WAbil.HP` / `WAbil.MaxHP`
     pub hp: u16,
     pub max_hp: u16,
@@ -762,15 +883,6 @@ pub struct Entity {
     /// [`crate::world::World::add_entity`] 按 `clock_ms + BUFF_EPOCH_MS` 精确重盖，与 oracle ctor
     /// 「对象建立那一刻」取 `GetTickCount()` 对齐。
     pub poisoning_tick: i64,
-    /// C# `BaseObject.VerifyTick`（`BaseObject.cs:302`；ctor `:444` 置 `GetTickCount()`）——
-    /// `BaseObject.Run` 的 30s 门 `(now - VerifyTick) > 30*1000` 命中时刷新，并调用
-    /// `Envir.VerifyMapTime(CurrX, CurrY, this)`（`BaseObject.Base.cs:223-228`）刷新本格
-    /// `CellObject.AddTime`，避免静止 actor 的格子项被 60s 过期逐出（`Envirnoment.cs:858-897`）。
-    ///
-    /// 与 `poisoning_tick` 同口径：ctor 等价物 [`Entity::new`] 拿不到 `World` 时钟 ⇒ 先置 0，
-    /// 由落图/生成时刻（`World::add_entity` / `enter_map` / `spawn_monster_*` / `insert_merchant` /
-    /// `insert_npc` / 克隆体）按 `clock_ms` 精确重盖。
-    pub verify_tick: i64,
     /// C# `BaseObject.GreenPoisoningPoint`（`BaseObject.cs:117`，`MakePosion` `:1963` 置 `(byte)nPoint`）。
     /// DoT 扣血量 = `GreenPoisoningPoint + 1`（`ActorBuffSystem.cs:252`）。
     pub green_poisoning_point: u8,
@@ -1065,13 +1177,18 @@ impl Entity {
         }
     }
 
-    pub fn new(id: i32, name: impl Into<String>, x: i32, y: i32) -> Self {
-        Entity {
+    /// ctor 等价物：返回**生成期载体** [`EntitySpawn`]（`Entity` + 落图前的
+    /// [`Transform`] / [`MapBinding`]）。坐标在 `insert` 时落成组件；插入后真值只在组件里。
+    ///
+    /// 保留 `(x, y)` 参数是为了让 697 处生成期赋值保持原形（`e.x = …` 写的是
+    /// `EntitySpawn.transform`），不改变任何构造点的可读性。
+    // `new` 返回生成期载体（`EntitySpawn` 而不是 `Self`），以保持 697 处生成期写法；
+    // 名字沿用 `Entity::new`（oracle ctor 等价物）。
+    #[allow(clippy::new_ret_no_self)]
+    pub fn new(id: i32, name: impl Into<String>, x: i32, y: i32) -> EntitySpawn {
+        let entity = Entity {
             id,
             name: name.into(),
-            x,
-            y,
-            view_range: 5, // BaseObject.cs:383
             race: ACTOR_RACE_PLAY,
             race_img: 0, // `BaseObject.cs:380` ctor `RaceImg = 0`；商人 ctor 另置 50。
             appr: 0,     // BaseObject ctor 未显式赋值 ⇒ 0（由 ApplyMonsterAbility 覆盖）
@@ -1145,12 +1262,6 @@ impl Entity {
             no_drop_use_item: false,
             no_item: false,
             want_ref_msg: false,
-            add_to_mapped: false,
-            visible_actors: Vec::new(),
-            visible_events: Vec::new(),
-            is_visible_active: false,
-            processed_tick: 0,
-            map_id: 0,
             // 玩家默认满血（WAbil.HP 的默认值不能是 0：0 在语义上等于「已死」，
             // 会让死亡结算把刚进图的玩家当成死者——实测踩过）
             hp: 100,
@@ -1161,8 +1272,6 @@ impl Entity {
             // `CharStatus` 未显式赋值 ⇒ int 缺省 0；`PoisoningTick` ctor 置 `GetTickCount()`
             // （本骨架用模拟开机基 `BUFF_EPOCH_MS`；精确落图时刻由 `World::add_entity` 重盖）。
             poisoning_tick: crate::buff::BUFF_EPOCH_MS,
-            // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：落图时刻由 `World` 重盖。
-            verify_tick: 0,
             green_poisoning_point: 0,
             char_status: 0,
             char_status_ex: 0,
@@ -1266,6 +1375,15 @@ impl Entity {
             allow_group_re_call: false,
             group_owner: 0,
             group_members: Vec::new(),
+        };
+        EntitySpawn {
+            entity,
+            x,
+            y,
+            // `BaseObject.cs:383` ctor `ViewRange = 5`；`map_id` ctor 缺省 0（落图点重盖/登记）。
+            map_id: 0,
+            view_range: 5,
+            map_binding: MapBinding::default(),
         }
     }
 
@@ -1316,9 +1434,20 @@ impl Entity {
 ///
 /// **顺序契约**：本类型**不迭代 Query 求顺序**——`iter`/`iter_mut` 走内核的显式槽位索引，
 /// `Query`（内核里的 `world.query`）只用于「按句柄安全拿到互斥引用」，之后仍按槽位排序。
-#[derive(Debug)]
 pub struct EntityStore {
     inner: mir2_world_bevy::EcsStore<Entity>,
+    /// `(Entity, Transform, MapBinding)` 三组件的缓存查询（S3b）：读路径一次取齐，
+    /// 避免每个读取点三次 `TypeId` 查表。只按显式句柄 `get_manual`，不迭代求顺序。
+    view_state:
+        bevy_ecs::query::QueryState<(&'static Entity, &'static Transform, &'static MapBinding)>,
+}
+
+impl std::fmt::Debug for EntityStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EntityStore")
+            .field("len", &self.len())
+            .finish()
+    }
 }
 
 impl Default for EntityStore {
@@ -1337,7 +1466,15 @@ impl EntityStore {
         inner
             .world_mut()
             .insert_resource(mir2_world_bevy::TickOrder::default());
-        EntityStore { inner }
+        let view_state = inner
+            .world_mut()
+            .query::<(&Entity, &Transform, &MapBinding)>();
+        EntityStore { inner, view_state }
+    }
+
+    /// 结构变更后刷新三组件视图的 archetype 匹配集。
+    fn refresh_view(&mut self) {
+        self.view_state.update_archetypes(self.inner.world());
     }
 
     /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。
@@ -1345,25 +1482,156 @@ impl EntityStore {
         self.inner.alloc_id()
     }
 
-    /// 插入实体，返回其 id（复用本实体的 `id`）。
+    /// 插入实体（生成期载体），返回其 id（复用本实体的 `id`）。
     ///
-    /// **S3a 组件集合完整性**：每个实体插入时都带 `DupState` 组件（ctor 缺省
-    /// `false/0/0`，与迁出前 `Entity::new` 逐字段同值）。这样「只 insert 不落图」的路径
-    /// （克隆体/测试夹具）也不会出现半实体（设计件风险 R2/R7）。
+    /// **S3a/S3b 组件集合完整性**：每个实体插入时都带 `DupState`（S3a）、`Transform` 与
+    /// `MapBinding`（S3b）组件。坐标/绑定在 `insert` 这一刻从生成期载体落成组件，其后
+    /// **不再有第二份真值**（`Entity` 没有这些字段）。
     ///
-    /// `insert_component` 对「刚由同一 store 插入的 id」不可能失败，因此这里用**硬断言**
-    /// （不是 `debug_assert!`）：release 构建里若真的出现失败，宁可立即 panic，也不允许
-    /// 实体缺 `DupState` 后被 `check_dup_obj` 静默跳过（S3a 评审 P3-3）。
-    pub fn insert(&mut self, entity: Entity) -> i32 {
+    /// `insert_component` 对「刚由同一 store 插入的 id」不可能失败，因此用**硬断言**
+    /// （release 也保持行为）：宁可立即 panic，也不允许半实体被 AOI/重叠检查静默跳过
+    ///（S3a 评审 P3-3）。
+    pub fn insert(&mut self, spawn: EntitySpawn) -> i32 {
+        let (entity, transform, map_binding) = spawn.into_parts();
+        self.insert_parts(entity, transform, map_binding)
+    }
+
+    /// 组件已拆好的插入入口（克隆/迁移路径用，避免再拼一个 `EntitySpawn`）。
+    pub fn insert_parts(
+        &mut self,
+        entity: Entity,
+        transform: Transform,
+        map_binding: MapBinding,
+    ) -> i32 {
         let id = self.inner.insert(entity.id, entity);
-        let inserted = self
+        let t = self.inner.insert_component(id, transform);
+        assert!(t, "刚插入的实体必须能挂 Transform 组件（id={id}）");
+        let m = self.inner.insert_component(id, map_binding);
+        assert!(m, "刚插入的实体必须能挂 MapBinding 组件（id={id}）");
+        let d = self
             .inner
             .insert_component(id, mir2_world_bevy::DupState::default());
         assert!(
-            inserted,
+            d,
             "刚插入的实体必须能挂 DupState 组件（id={id}）；缺组件会让 check_dup_obj 静默跳过"
         );
+        self.refresh_view();
         id
+    }
+
+    /// 受控读取位置/视野组件（S3b 起真值在组件，不在 `Entity`）。
+    pub fn transform(&self, id: i32) -> Option<&Transform> {
+        self.inner.get_component(id)
+    }
+
+    /// 受控可变访问位置/视野组件。**调用方负责**与 `MapGrid` 格子登记保持原子
+    ///（本方法不动地图格子）。
+    pub fn transform_mut(&mut self, id: i32) -> Option<&mut Transform> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取 AOI/落图绑定组件（S3b 起真值在组件，不在 `Entity`）。
+    pub fn map_binding(&self, id: i32) -> Option<&MapBinding> {
+        self.inner.get_component(id)
+    }
+
+    pub fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 覆盖观察者可见集（测试/AOI 重置路径；等价于 `map_binding_mut(id).visible_actors = v`）。
+    pub fn set_visible_actors(&mut self, id: i32, actors: Vec<VisibleBaseObject>) -> bool {
+        match self.map_binding_mut(id) {
+            Some(b) => {
+                b.visible_actors = actors;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_visible_events(&mut self, id: i32, events: Vec<VisibleEvent>) -> bool {
+        match self.map_binding_mut(id) {
+            Some(b) => {
+                b.visible_events = events;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 常用只读投影（AOI/日志/宿主帧面用；避免各处重复 `transform(...).map(...)`）。
+    #[inline]
+    pub fn x(&self, id: i32) -> Option<i32> {
+        self.transform(id).map(|t| t.x)
+    }
+
+    #[inline]
+    pub fn y(&self, id: i32) -> Option<i32> {
+        self.transform(id).map(|t| t.y)
+    }
+
+    #[inline]
+    pub fn map_id(&self, id: i32) -> Option<usize> {
+        self.transform(id).map(|t| t.map_id)
+    }
+
+    #[inline]
+    pub fn view_range(&self, id: i32) -> Option<i32> {
+        self.transform(id).map(|t| t.view_range)
+    }
+
+    #[inline]
+    pub fn xy(&self, id: i32) -> Option<(i32, i32)> {
+        self.transform(id).map(|t| (t.x, t.y))
+    }
+
+    #[inline]
+    pub fn pos(&self, id: i32) -> Option<(i32, i32, usize)> {
+        self.transform(id).map(|t| (t.x, t.y, t.map_id))
+    }
+
+    /// 受控写入位置（**不**动地图格子；调用方按 `MapGrid` 契约另行登记/摘除）。
+    pub fn set_xy(&mut self, id: i32, x: i32, y: i32) -> bool {
+        match self.transform_mut(id) {
+            Some(t) => {
+                t.x = x;
+                t.y = y;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_map_id(&mut self, id: i32, map_id: usize) -> bool {
+        match self.transform_mut(id) {
+            Some(t) => {
+                t.map_id = map_id;
+                true
+            }
+            None => false,
+        }
+    }
+
+    pub fn set_view_range(&mut self, id: i32, view_range: i32) -> bool {
+        match self.transform_mut(id) {
+            Some(t) => {
+                t.view_range = view_range;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// 观察者当前可见目标 id（保序；`visible_actors` 的常用投影）。
+    pub fn visible_targets(&self, id: i32) -> Option<Vec<i32>> {
+        self.map_binding(id)
+            .map(|m| m.visible_actors.iter().map(|v| v.target).collect())
+    }
+
+    #[inline]
+    pub fn is_visible_active(&self, id: i32) -> Option<bool> {
+        self.map_binding(id).map(|m| m.is_visible_active)
     }
 
     /// 受控读取实体的重叠推挤状态（S3a 起真值在 `DupState` 组件，不在 `Entity`）。
@@ -1382,21 +1650,99 @@ impl EntityStore {
     }
 
     pub fn remove(&mut self, id: i32) -> Option<Entity> {
-        self.inner.remove(id)
+        let taken = self.inner.remove(id);
+        if taken.is_some() {
+            self.refresh_view();
+        }
+        taken
     }
 
-    /// O(1) 查表（C# `ActorMgr.Get`）。
-    pub fn get(&self, id: i32) -> Option<&Entity> {
+    /// O(1) 查表（C# `ActorMgr.Get`），返回三组件只读视图 [`EntityRef`]。
+    pub fn get(&self, id: i32) -> Option<EntityRef<'_>> {
+        let bevy_entity = self.inner.entity_of(id)?;
+        let (entity, transform, binding) = self
+            .view_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
+        Some(EntityRef {
+            entity,
+            x: transform.x,
+            y: transform.y,
+            map_id: transform.map_id,
+            view_range: transform.view_range,
+            add_to_mapped: binding.add_to_mapped,
+            visible_actors: &binding.visible_actors,
+            visible_events: &binding.visible_events,
+            is_visible_active: binding.is_visible_active,
+            processed_tick: binding.processed_tick,
+            verify_tick: binding.verify_tick,
+        })
+    }
+
+    /// 可变访问剩余字段（`Entity`）；坐标/绑定请用 `transform_mut` / `map_binding_mut`。
+    pub fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
+        self.inner.get_mut(id)
+    }
+
+    /// 只取 `Entity` 主组件（剩余字段）的引用；需要「克隆一份再改」的路径用它
+    ///（`get` 返回的 [`EntityRef`] 是只读视图，不携带可写 `Entity`）。
+    pub fn entity(&self, id: i32) -> Option<&Entity> {
         self.inner.get(id)
     }
 
-    pub fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
-        self.inner.get_mut(id)
+    /// 克隆 `Entity` 主组件（剩余字段；不含 Transform/MapBinding）。
+    pub fn entity_cloned(&self, id: i32) -> Option<Entity> {
+        self.inner.get(id).cloned()
+    }
+
+    /// 克隆「实体 + 位置 + 绑定」到生成期载体（供“取一份本地副本再算/回写”的路径）。
+    ///
+    /// 本地副本的 `x/y/map_id/view_range` 写的是载体字段，**不**自动回写组件；需要回写的
+    /// 调用方必须显式走 `transform_mut`。
+    pub fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
+        let bevy_entity = self.inner.entity_of(id)?;
+        let (entity, transform, binding) = self
+            .view_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
+        Some(EntitySpawn {
+            entity: entity.clone(),
+            x: transform.x,
+            y: transform.y,
+            map_id: transform.map_id,
+            view_range: transform.view_range,
+            map_binding: binding.clone(),
+        })
     }
 
     /// 按槽位顺序遍历（tick 的确定性顺序）。
     pub fn iter(&self) -> impl Iterator<Item = &Entity> + '_ {
         self.inner.iter()
+    }
+    /// 按槽位顺序遍历**只读视图**（含 Transform/MapBinding 字段；宿主帧面/日志用）。
+    pub fn iter_ref(&self) -> impl Iterator<Item = EntityRef<'_>> + '_ {
+        self.inner
+            .order_entities()
+            .into_iter()
+            .filter_map(|bevy_entity| {
+                let (entity, transform, binding) = self
+                    .view_state
+                    .get_manual(self.inner.world(), bevy_entity)
+                    .ok()?;
+                Some(EntityRef {
+                    entity,
+                    x: transform.x,
+                    y: transform.y,
+                    map_id: transform.map_id,
+                    view_range: transform.view_range,
+                    add_to_mapped: binding.add_to_mapped,
+                    visible_actors: &binding.visible_actors,
+                    visible_events: &binding.visible_events,
+                    is_visible_active: binding.is_visible_active,
+                    processed_tick: binding.processed_tick,
+                    verify_tick: binding.verify_tick,
+                })
+            })
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Entity> + '_ {
@@ -1419,6 +1765,11 @@ impl EntityStore {
     /// **显式处理顺序索引**：槽位顺序的业务 id（`crates/world` 的处理顺序契约）。
     pub fn order_index(&self) -> Vec<i32> {
         self.inner.order_index()
+    }
+
+    /// 槽位顺序的 bevy 实体句柄（与 [`Self::order_index`] 逐项对齐）。
+    pub fn order_entities(&self) -> Vec<bevy_ecs::entity::Entity> {
+        self.inner.order_entities()
     }
 
     /// 把当前槽位顺序写入 ECS 资源 [`mir2_world_bevy::SlotOrder`]（tick 骨架处理前调用）。

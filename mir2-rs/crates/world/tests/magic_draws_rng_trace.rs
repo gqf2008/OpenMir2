@@ -184,7 +184,7 @@ fn magic_draws_land_outside_magic_rs() {
         w.add_entity(e)
     };
     w.tick();
-    w.entities.get_mut(caster).unwrap().visible_actors = vec![VisibleBaseObject {
+    w.entities.map_binding_mut(caster).unwrap().visible_actors = vec![VisibleBaseObject {
         target: visible_target,
         flag: VisibleFlag::Show,
     }];

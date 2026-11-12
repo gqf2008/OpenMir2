@@ -13,7 +13,7 @@
 //! 与 C# 的差异（登记在报告里）：C# 的小退会**存档后再回选人界面**，本骨架只做世界侧
 //! 的"离开 + 可再进"，存档/回选人的状态由 M1 持有。
 
-use crate::entity::{Entity, ACTOR_RACE_PLAY};
+use crate::entity::{EntitySpawn, ACTOR_RACE_PLAY};
 use crate::map::{CellType, MapGrid};
 use crate::world::World;
 
@@ -255,7 +255,7 @@ impl World {
     pub fn enter_map(
         &mut self,
         chr_name: &str,
-        entity: Entity,
+        entity: EntitySpawn,
         map_id: usize,
     ) -> Result<i32, SessionError> {
         let ctor_tick = self.clock_ms;
@@ -291,7 +291,7 @@ impl World {
     pub fn enter_map_at(
         &mut self,
         chr_name: &str,
-        mut entity: Entity,
+        mut entity: EntitySpawn,
         map_id: usize,
         ctor_tick: i64,
     ) -> Result<i32, SessionError> {
@@ -322,7 +322,7 @@ impl World {
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：30s 的 `VerifyMapTime` 门同样从
         // **对象构造时刻**起算（`ctor_tick`）——全仓写点只有该 ctor 与 `BaseObject.Base.cs:225`
         // 的「命中后再置 now」，`UserLogon`/`AddToMap` 都不重置。**不要**改成 `self.clock_ms`。
-        entity.verify_tick = ctor_tick;
+        entity.map_binding.verify_tick = ctor_tick;
         // `PlayObject.cs:901` ctor `SearchTick = GetTickCount()`：玩家 `SearchViewRange` 的
         // 1000ms 节拍从**对象构造时刻**起算（`ctor_tick`，由调用方给出；oracle 的 ctor 早于
         // `UserLogon`/`AddToMap`，且 `AddToMap` 不重置它）。**不要**改成 `self.clock_ms`。
@@ -359,8 +359,8 @@ impl World {
         // 路径**不可达**（oracle 同因，`ProcessHumansMakeNewHuman` 先移位再落图）。本函数的 oracle
         // 同形语义仍保留给直接调用方（测试/非宿主路径），不是死代码。
         if self.maps[map_id].add_map_object(x, y, CellType::Play, id, now) {
-            if let Some(e) = self.entities.get_mut(id) {
-                e.add_to_mapped = true;
+            if let Some(b) = self.entities.map_binding_mut(id) {
+                b.add_to_mapped = true;
             }
         }
         let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
@@ -434,13 +434,15 @@ impl World {
         // `DeleteFromMap` 同时把 `AddToMaped` 置 false，`Envirnoment.cs:660-661`）。
         self.remove_from_map(actor_id, old_map);
         // 新图登记（先改坐标再登记，否则格子登记到旧坐标）
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.map_id = map_id;
-            e.x = x;
-            e.y = y;
-            e.visible_actors.clear(); // 视野列表整体失效
-            e.is_visible_active = false;
-            e.add_to_mapped = false;
+        if let Some(t) = self.entities.transform_mut(actor_id) {
+            t.map_id = map_id;
+            t.x = x;
+            t.y = y;
+        }
+        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+            b.visible_actors.clear(); // 视野列表整体失效
+            b.is_visible_active = false;
+            b.add_to_mapped = false;
         }
         let now = self.clock_ms;
         if !self.maps[map_id].add_map_object(x, y, CellType::Play, actor_id, now) {
@@ -452,23 +454,25 @@ impl World {
             // `DeleteFromMap` 于旧图摘除时清零）。不回滚的话角色既不在旧图也不在新图
             // （两张图的格表都没有它），对应 oracle 绝不出现的中间态。
             // 视野列表保持清空——oracle 同样只清不回填（`PlayObject.cs:3760-3771`）。
-            if let Some(e) = self.entities.get_mut(actor_id) {
-                e.map_id = old_map;
-                e.x = old_x;
-                e.y = old_y;
-                e.add_to_mapped = false;
+            if let Some(t) = self.entities.transform_mut(actor_id) {
+                t.map_id = old_map;
+                t.x = old_x;
+                t.y = old_y;
+            }
+            if let Some(b) = self.entities.map_binding_mut(actor_id) {
+                b.add_to_mapped = false;
             }
             let relanded = self
                 .maps
                 .get_mut(old_map)
                 .is_some_and(|m| m.add_map_object(old_x, old_y, CellType::Play, actor_id, now));
-            if let Some(e) = self.entities.get_mut(actor_id) {
-                e.add_to_mapped = relanded;
+            if let Some(b) = self.entities.map_binding_mut(actor_id) {
+                b.add_to_mapped = relanded;
             }
             return Err(SessionError::CellRejected);
         }
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.add_to_mapped = true;
+        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+            b.add_to_mapped = true;
         }
         let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
         sess.map_id = map_id;
@@ -580,11 +584,13 @@ impl World {
             // 移除由 `disconnect`（上面的 Left 分支）承担。
             if let Some(e) = self.entities.get_mut(actor_id) {
                 e.ghost = true;
+            }
+            if let Some(b) = self.entities.map_binding_mut(actor_id) {
                 // `DeleteFromMap`（`Envirnoment.cs:660-661`）把 `AddToMaped` 置 false；
                 // 视野列表整体失效（ghost 不再 `SearchViewRange`）。
-                e.add_to_mapped = false;
-                e.visible_actors.clear();
-                e.is_visible_active = false;
+                b.add_to_mapped = false;
+                b.visible_actors.clear();
+                b.is_visible_active = false;
             }
             let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
             sess.stage = WorldStage::Left;
@@ -647,9 +653,9 @@ pub enum SessionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::Entity;
+    use crate::entity::{Entity, EntitySpawn};
 
-    fn player(name: &str, x: i32, y: i32) -> Entity {
+    fn player(name: &str, x: i32, y: i32) -> EntitySpawn {
         let mut e = Entity::new(0, name.to_string(), x, y);
         e.race = ACTOR_RACE_PLAY;
         e.view_range = 12;

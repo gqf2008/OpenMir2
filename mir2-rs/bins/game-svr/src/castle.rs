@@ -275,7 +275,7 @@ pub fn query_user_name_color(
     world: &mir2_world::World,
     viewer_guild: Option<&str>,
     target_guild: Option<&str>,
-    target: &mir2_world::Entity,
+    target: mir2_world::EntityRef<'_>,
     target_name_color: u8,
     viewer_in_guild_war_area: bool,
     target_in_guild_war_area: bool,
@@ -290,7 +290,7 @@ pub fn query_user_name_color(
     let input = mir2_world::castle::ChrColorInput {
         castle,
         target_name_color,
-        target_pvp_level: mir2_world::World::pvp_level(target),
+        target_pvp_level: mir2_world::World::pvp_level(&target),
         target_pvp_flag: target.pvp_flag,
         target_fight3_zone: false,
         my_guild_name: viewer_guild,

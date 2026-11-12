@@ -11,11 +11,11 @@
 
 use mir2_shared::rng::RandomNumber;
 use mir2_world::action::PushEvent;
-use mir2_world::entity::{Entity, ACTOR_RACE_PLAY};
+use mir2_world::entity::{Entity, EntitySpawn, ACTOR_RACE_PLAY};
 use mir2_world::magic::{back_dir, front_position};
 use mir2_world::World;
 
-fn player(id: i32, x: i32, y: i32) -> Entity {
+fn player(id: i32, x: i32, y: i32) -> EntitySpawn {
     let mut e = Entity::new(id, format!("p{id}"), x, y);
     e.race = ACTOR_RACE_PLAY;
     e.hp = 100;
@@ -292,10 +292,12 @@ fn below_two_clears_flag_without_resetting_dup_start() {
     // 把 2 号挪走（换格），本格只剩 1 人。
     {
         let (maps, entities) = (&mut w.maps, &mut w.entities);
-        let e = entities.get_mut(2).unwrap();
-        let (fx, fy) = (e.x, e.y);
-        e.x = 9;
-        e.y = 9;
+        let (fx, fy) = entities.xy(2).unwrap();
+        {
+            let t = entities.transform_mut(2).unwrap();
+            t.x = 9;
+            t.y = 9;
+        }
         maps[0].move_object(
             mir2_world::map::MoveRequest {
                 from_x: fx,

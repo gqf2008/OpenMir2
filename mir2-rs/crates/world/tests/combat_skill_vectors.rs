@@ -36,8 +36,8 @@ use mir2_world::magic::{
     power_show_hp_interval, power_transparent, power_uenhancer, resolve_magic,
 };
 use mir2_world::{
-    attack_dir, attack_with, is_proper_target, AttackPowerMode, CombatConfig, Entity, World,
-    ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, ATTACK_MODE_HAM_PEACE,
+    attack_dir, attack_with, is_proper_target, AttackPowerMode, CombatConfig, Entity, EntitySpawn,
+    World, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, ATTACK_MODE_HAM_PEACE,
 };
 
 fn repo_parity_dir() -> PathBuf {
@@ -1315,7 +1315,7 @@ impl RandomSource for TargetedRng {
 }
 
 /// 构造一个“必定命中、必定造成伤害”的玩家/玩家对，并把若干装备位设成给定 `(slot, index, dura)`。
-fn equipped_target(slots: &[(usize, u16, u16)]) -> (Entity, Entity) {
+fn equipped_target(slots: &[(usize, u16, u16)]) -> (EntitySpawn, EntitySpawn) {
     let mut attacker = Entity::new(1, "hero", 0, 0);
     attacker.race = ACTOR_RACE_PLAY;
     attacker.dc = 0x1E14;

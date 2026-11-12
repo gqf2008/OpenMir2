@@ -57,7 +57,7 @@ pub(crate) fn drop_use_items_on_death(
         return Vec::new();
     }
     // `:2183 nRate = PvpLevel() > 2 ? DieRedDropUseItemRate : DieDropUseItemRate`。
-    let pvp = World::pvp_level(e);
+    let pvp = World::pvp_level(&e);
     let n_rate = if pvp > 2 {
         world.die_red_drop_use_item_rate
     } else {
@@ -151,11 +151,11 @@ pub(crate) fn drop_use_items_on_death(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, UseItemSlot, ACTOR_RACE_ANIMAL, ACTOR_RACE_PLAY};
+    use crate::entity::{Entity, EntitySpawn, UseItemSlot, ACTOR_RACE_ANIMAL, ACTOR_RACE_PLAY};
     use mir2_data::models::StdItem;
     use mir2_shared::rng::RandomNumber;
 
-    fn player(id: i32, x: i32, y: i32) -> Entity {
+    fn player(id: i32, x: i32, y: i32) -> EntitySpawn {
         let mut e = Entity::new(id, format!("p{id}"), x, y);
         e.race = ACTOR_RACE_PLAY;
         e.hp = 100;

@@ -353,7 +353,7 @@ impl World {
         e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
         e.map_id = map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
-        e.verify_tick = now;
+        e.map_binding.verify_tick = now;
         e.merchant = Some(state);
         Some(self.entities.insert(e))
     }
@@ -397,8 +397,8 @@ impl World {
             self.entities.remove(id);
             return false;
         }
-        if let Some(ent) = self.entities.get_mut(id) {
-            ent.add_to_mapped = !add_to_map_success;
+        if let Some(b) = self.entities.map_binding_mut(id) {
+            b.add_to_mapped = !add_to_map_success;
         }
         true
     }
@@ -424,13 +424,13 @@ impl World {
     /// 需要区分这两种 `None` 时用 [`World::merchant_castle_binding`]。
     #[must_use]
     pub fn merchant_castle_index(&self, id: i32) -> Option<usize> {
-        self.entities.get(id)?.merchant.as_ref()?.castle_index
+        self.entities.entity(id)?.merchant.as_ref()?.castle_index
     }
 
     /// [`MerchantCastleBinding`] 视图（`castle_merchant` + `castle_index`；`None` = 非商人）。
     #[must_use]
     pub fn merchant_castle_binding(&self, id: i32) -> Option<MerchantCastleBinding> {
-        let st = self.entities.get(id)?.merchant.as_ref()?;
+        let st = self.entities.entity(id)?.merchant.as_ref()?;
         Some(MerchantCastleBinding::new(
             st.castle_merchant,
             st.castle_index,
@@ -472,7 +472,7 @@ impl World {
     /// 的库存组，返回其在 `GoodsList` 里的下标（无 ⇒ `None`）。
     #[must_use]
     pub fn merchant_goods_group(&self, id: i32, index: u16) -> Option<usize> {
-        let st = self.entities.get(id)?.merchant.as_ref()?;
+        let st = self.entities.entity(id)?.merchant.as_ref()?;
         st.goods_list
             .iter()
             .position(|g| g.first().is_some_and(|it| it.index == index))
@@ -483,7 +483,7 @@ impl World {
     /// 组序 = 首次出现序；组内序 = `Insert(0)` 后的新件在前（与 oracle 同，**顺序敏感**）。
     #[must_use]
     pub fn merchant_goods_groups(&self, id: i32) -> Option<&[Vec<MerchantItem>]> {
-        Some(&self.entities.get(id)?.merchant.as_ref()?.goods_list)
+        Some(&self.entities.entity(id)?.merchant.as_ref()?.goods_list)
     }
 
     /// `Merchant.ItemPriceList`（`Merchant.cs:46/184-204`）：补货时 `CheckItemPrice` 填入的
@@ -491,7 +491,7 @@ impl World {
     #[must_use]
     pub fn merchant_item_price_list(&self, id: i32) -> &[(u16, i32)] {
         self.entities
-            .get(id)
+            .entity(id)
             .and_then(|e| e.merchant.as_ref())
             .map_or(&[], |st| st.item_price_list.as_slice())
     }
@@ -719,7 +719,7 @@ impl World {
                 }
             };
             let (run_tick, ghost_tick) =
-                match self.entities.get(id).and_then(|e| e.merchant.as_ref()) {
+                match self.entities.entity(id).and_then(|e| e.merchant.as_ref()) {
                     Some(st) => (st.run_tick, st.ghost_tick),
                     None => {
                         i += 1;
@@ -1535,7 +1535,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     let mut outcome = MerchantRunOutcome::default();
     let Some(st) = world
         .entities
-        .get(actor_id)
+        .entity(actor_id)
         .and_then(|e| e.merchant.as_ref())
     else {
         return outcome;
@@ -1571,7 +1571,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     if (now - clear_expre_upgrade_tick) > MERCHANT_CLEAR_EXPRE_UPGRADE_INTERVAL_MS {
         let days = world
             .entities
-            .get(actor_id)
+            .entity(actor_id)
             .and_then(|e| e.merchant.as_ref())
             .map_or(0, |st| st.clear_expire_upgrade_days);
         if let Some(st) = world
@@ -1707,14 +1707,14 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
     let now = world.clock_ms;
     let len = world
         .entities
-        .get(actor_id)
+        .entity(actor_id)
         .and_then(|e| e.merchant.as_ref())
         .map_or(0, |st| st.refill_goods.len());
     let mut changed = false;
     for i in 0..len {
         let Some((item_name, count, refill_time, refill_tick)) = world
             .entities
-            .get(actor_id)
+            .entity(actor_id)
             .and_then(|e| e.merchant.as_ref())
             .map(|st| {
                 let g = &st.refill_goods[i];
@@ -1745,7 +1745,7 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
                     // 已有条目分支在 oracle 里只算不回写（死代码），此处保持「已有即不动」。
                     let has_price = world
                         .entities
-                        .get(actor_id)
+                        .entity(actor_id)
                         .and_then(|e| e.merchant.as_ref())
                         .is_some_and(|st| st.item_price_list.iter().any(|(i, _)| *i == index));
                     if !has_price {
@@ -1791,7 +1791,7 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
         if g_len > 1000 {
             let in_refill = world
                 .entities
-                .get(actor_id)
+                .entity(actor_id)
                 .and_then(|e| e.merchant.as_ref())
                 .is_some_and(|st| {
                     st.refill_goods.iter().any(|g| {
@@ -1873,7 +1873,7 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
         return;
     };
     let (map_id, from_x, from_y) = (e.map_id, e.x, e.y);
-    let cert_cell_type = crate::world::entity_cell_type(e);
+    let cert_cell_type = crate::world::entity_cell_type(&e);
     let Some(map) = world.maps.get(map_id) else {
         return;
     };
@@ -1907,9 +1907,9 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
         |_| false,
     );
     if moved {
-        if let Some(e) = world.entities.get_mut(actor_id) {
-            e.x = nx;
-            e.y = ny;
+        if let Some(t) = world.entities.transform_mut(actor_id) {
+            t.x = nx;
+            t.y = ny;
         }
     }
 }
@@ -1926,6 +1926,7 @@ fn equals_ordinal_ignore_case(a: &str, b: &str) -> bool {
 mod tests {
     use super::*;
     use crate::castle::{CastleSiegeConfig, UserCastle};
+    use crate::entity::EntitySpawn;
     use crate::map::CellAttribute;
     use mir2_data::models::StdItem;
 
@@ -2259,7 +2260,7 @@ mod tests {
         let id = w.spawn_merchant(spawn_at(3, 4)).expect("挂图成功");
         let mut exp = RandomNumber::with_seed(1234);
         let delay = ctor_chain_first_draw(&mut exp);
-        let st = w.entities.get(id).unwrap().merchant.as_ref().unwrap();
+        let st = w.entities.entity(id).unwrap().merchant.as_ref().unwrap();
         assert_eq!(st.run_tick, 5_000 + i64::from(delay));
         // 取数与独立流对齐（同一个 `world.rng`，无私有流）。
         assert_eq!(w.rng.random(), exp.random());
@@ -2796,7 +2797,7 @@ mod tests {
             2,
             "两条 [goods] 必须一次补完 ⇒ 两组"
         );
-        let st = w.entities.get(a).unwrap().merchant.as_ref().unwrap();
+        let st = w.entities.entity(a).unwrap().merchant.as_ref().unwrap();
         assert_eq!(st.refill_goods[0].refill_tick, w.clock_ms, "补货门推进");
         assert_eq!(st.refill_goods[1].refill_tick, w.clock_ms, "第二条也推进");
         // 同一时刻再来一次：补货门不满足 ⇒ 不补（oracle 口径）。
@@ -2905,7 +2906,7 @@ mod tests {
         assert_eq!(w.rng.random(), expect.random(), "跳过商人 ⇒ 不消耗 AI 取数");
     }
 
-    fn player_entity(id: i32, name: &str, x: i32, y: i32) -> Entity {
+    fn player_entity(id: i32, name: &str, x: i32, y: i32) -> EntitySpawn {
         let mut e = Entity::new(id, name, x, y);
         e.race = crate::entity::ACTOR_RACE_PLAY;
         e.hp = 100;
@@ -2916,7 +2917,7 @@ mod tests {
         e
     }
 
-    fn race_entity(id: i32, name: &str, x: i32, y: i32, race: u8) -> Entity {
+    fn race_entity(id: i32, name: &str, x: i32, y: i32, race: u8) -> EntitySpawn {
         let mut e = Entity::new(id, name, x, y);
         e.race = race;
         e
@@ -2948,7 +2949,7 @@ mod tests {
         // 身份仍按 `merchant` 标记，不依赖 race；CellType 同源（`NormNpc.cs:50`）。
         assert!(e.merchant.is_some());
         assert_eq!(w.merchant_ids_sorted(), vec![id]);
-        assert_eq!(crate::world::entity_cell_type(e), CellType::Merchant);
+        assert_eq!(crate::world::entity_cell_type(&e), CellType::Merchant);
     }
 
     /// 判据 1（玩家攻击路径）：**race 窗模式**（HAM_ALL/PEACE/GROUP/GUILD/PKATTACK）下
@@ -2974,8 +2975,8 @@ mod tests {
         w.clock_ms = 1_000;
         let mid = w.spawn_merchant(spawn_at(5, 5)).expect("挂图成功");
         let pid = w.add_entity(player_entity(0, "hero", 6, 5));
-        let player = w.entities.get(pid).cloned().expect("玩家在");
-        let merchant = w.entities.get(mid).cloned().expect("商人在");
+        let player = w.entities.spawn_cloned(pid).expect("玩家在");
+        let merchant = w.entities.spawn_cloned(mid).expect("商人在");
 
         // 玩家攻方：所有按 race 窗口分派的攻击模式都把 race 10 判成**不可攻击**
         // （`HAM_DEAR` / `HAM_MASTER` 对「非 dear / 非师徒」恒真，不属 race 窗口，故不列）。
@@ -3101,8 +3102,8 @@ mod tests {
         w.clock_ms = 1_000;
         let pid = w.add_entity(player_entity(0, "hero", 6, 5));
         let aid = w.add_entity(race_entity(0, "animal", 5, 5, ACTOR_RACE_ANIMAL));
-        let player = w.entities.get(pid).cloned().expect("玩家在");
-        let animal = w.entities.get(aid).cloned().expect("动物在");
+        let player = w.entities.spawn_cloned(pid).expect("玩家在");
+        let animal = w.entities.spawn_cloned(aid).expect("动物在");
         let mut p = player.clone();
         p.attack_mode = ATTACK_MODE_HAM_ALL;
         assert!(
@@ -3145,9 +3146,9 @@ mod tests {
         assert_eq!(w.merchant_ids_sorted(), vec![id], "身份列表不依赖 race");
         assert!(out.ran.contains(&id), "商人仍由 ProcessMerchants 驱动");
         let e = w.entities.get(id).unwrap();
-        assert_eq!(crate::world::entity_cell_type(e), CellType::Merchant);
+        assert_eq!(crate::world::entity_cell_type(&e), CellType::Merchant);
         assert!(
-            !crate::monai::consumes_view_range_update(e),
+            !crate::monai::consumes_view_range_update(&e),
             "商人仍不消费 RM_UPDATEVIEWRANGE"
         );
         assert!(e.merchant.is_some(), "点击/对话的宿主身份位仍为真");
@@ -3875,7 +3876,7 @@ mod tests {
 
     fn list_len(w: &World, mid: i32) -> usize {
         w.entities
-            .get(mid)
+            .entity(mid)
             .and_then(|e| e.merchant.as_ref())
             .expect("商人在")
             .upgrade_weapon_list
@@ -3932,7 +3933,7 @@ mod tests {
         assert_eq!(list_len(&w, mid), 1, "UpgradeWeaponList +1");
         assert_eq!(
             &w.entities
-                .get(mid)
+                .entity(mid)
                 .and_then(|e| e.merchant.as_ref())
                 .unwrap()
                 .upgrade_weapon_list[0],
@@ -4635,7 +4636,7 @@ mod tests {
 
         // oracle：Initialize 后移动不重算（`Merchant.Run → MapRandomMove` 不刷 Castle）。
         // 移到 dx = 100（严格 `<` 不成立）——若重算必须变 None。
-        w.entities.get_mut(id).unwrap().x = 0;
+        w.entities.transform_mut(id).unwrap().x = 0;
         assert_eq!(
             w.merchant_castle_index(id),
             Some(0),
@@ -4729,7 +4730,7 @@ mod tests {
         assert!(e.stick_mode, "NormNpc.cs:45 StickMode = true");
         assert_eq!(e.ai.dir, 4, "BaseObject.cs:378 Dir = 4");
         assert_eq!(
-            crate::world::entity_cell_type(e),
+            crate::world::entity_cell_type(&e),
             CellType::Merchant,
             "Merchant.cs:109 CellType = Merchant"
         );

@@ -811,8 +811,13 @@ impl MonsterSink for WorldMonsterSink<'_> {
                 e.ai.walk_step = i32::from(m.walk_step); // MySqlDB.cs:214 → ApplyMonsterAbility :907
                 e.ai.walk_wait = i64::from(m.walk_wait); // MySqlDB.cs:215 → ApplyMonsterAbility :908
             }
-            mir2_world::mongen::apply_monster_class_constants(e, req.race, now);
         }
+        mir2_world::mongen::apply_monster_class_constants_at(
+            &mut self.world.entities,
+            id,
+            req.race,
+            now,
+        );
         // **C 第 ③ 片**：生成成功即登记怪物展示层。`MonsterList` 未命中时 oracle 的
         // `ApplyMonsterAbility` 不做任何事（`WorldServer.MonGen.cs:880-882`），`cert` 仍被构造；
         // 本仓缺表 ⇒ 无 feature 输入，保持不登记（与玩家的“无展示表 ⇒ 跳过”同口径）。

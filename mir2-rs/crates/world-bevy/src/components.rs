@@ -415,7 +415,6 @@ mod adapters {
     use mir2_world::combat::DropItem;
     use mir2_world::entity::{
         AnimalState, BaseAbil, CastleBinding, Entity, MonsterCtorDraws, UseItemSlot,
-        VisibleBaseObject, VisibleEvent,
     };
     use mir2_world::merchant::MerchantState as WorldMerchantState;
     use mir2_world::npc::NpcState as WorldNpcState;
@@ -463,7 +462,6 @@ mod adapters {
     }
 
     clone_adapter!(CoreIdentity, id, name);
-    copy_adapter!(Transform, x, y, map_id, view_range);
     copy_adapter!(Appearance, race, race_img, appr, light, name_color);
     copy_adapter!(
         Vitals,
@@ -615,29 +613,6 @@ mod adapters {
         }
     }
 
-    impl FromEntity for MapBinding<VisibleBaseObject, VisibleEvent> {
-        fn from_entity(e: &Entity) -> Self {
-            MapBinding {
-                add_to_mapped: e.add_to_mapped,
-                visible_actors: e.visible_actors.clone(),
-                visible_events: e.visible_events.clone(),
-                is_visible_active: e.is_visible_active,
-                processed_tick: e.processed_tick,
-                verify_tick: e.verify_tick,
-            }
-        }
-    }
-    impl ApplyToEntity for MapBinding<VisibleBaseObject, VisibleEvent> {
-        fn apply_to(&self, e: &mut Entity) {
-            e.add_to_mapped = self.add_to_mapped;
-            e.visible_actors = self.visible_actors.clone();
-            e.visible_events = self.visible_events.clone();
-            e.is_visible_active = self.is_visible_active;
-            e.processed_tick = self.processed_tick;
-            e.verify_tick = self.verify_tick;
-        }
-    }
-
     impl FromEntity for Inventory<UseItemSlot> {
         fn from_entity(e: &Entity) -> Self {
             Inventory {
@@ -730,7 +705,6 @@ mod adapters {
     #[derive(Clone, Debug)]
     pub struct EntityComponents {
         pub identity: CoreIdentity,
-        pub transform: Transform,
         pub appearance: Appearance,
         pub vitals: Vitals,
         pub ability: AbilitySnapshot<BaseAbil>,
@@ -738,7 +712,6 @@ mod adapters {
         pub flags: Flags,
         pub pvp: PvpState,
         pub life: LifeCycle,
-        pub map_binding: MapBinding<VisibleBaseObject, VisibleEvent>,
         pub buff: BuffState,
         pub run_state: PlayerRunState,
         pub inventory: Inventory<UseItemSlot>,
@@ -759,7 +732,6 @@ mod adapters {
         pub fn split(e: &Entity) -> Self {
             EntityComponents {
                 identity: FromEntity::from_entity(e),
-                transform: FromEntity::from_entity(e),
                 appearance: FromEntity::from_entity(e),
                 vitals: FromEntity::from_entity(e),
                 ability: FromEntity::from_entity(e),
@@ -767,7 +739,6 @@ mod adapters {
                 flags: FromEntity::from_entity(e),
                 pvp: FromEntity::from_entity(e),
                 life: FromEntity::from_entity(e),
-                map_binding: FromEntity::from_entity(e),
                 buff: FromEntity::from_entity(e),
                 run_state: FromEntity::from_entity(e),
                 inventory: FromEntity::from_entity(e),
@@ -787,7 +758,6 @@ mod adapters {
 
         pub fn apply_to(&self, e: &mut Entity) {
             self.identity.apply_to(e);
-            self.transform.apply_to(e);
             self.appearance.apply_to(e);
             self.vitals.apply_to(e);
             self.ability.apply_to(e);
@@ -795,7 +765,6 @@ mod adapters {
             self.flags.apply_to(e);
             self.pvp.apply_to(e);
             self.life.apply_to(e);
-            self.map_binding.apply_to(e);
             self.buff.apply_to(e);
             self.run_state.apply_to(e);
             self.inventory.apply_to(e);
@@ -816,12 +785,14 @@ mod adapters {
 
 #[cfg(test)]
 mod tests {
-    use super::adapters::{ApplyToEntity, EntityComponents, FromEntity};
+    use super::adapters::EntityComponents;
     use super::*;
     use mir2_world::castle::DefenseRole;
     use mir2_world::combat::DropItem;
-    use mir2_world::entity::{BaseAbil, CastleBinding, Entity, MonsterCtorDraws, UseItemSlot};
-    use mir2_world::entity::{VisibleBaseObject, VisibleEvent, VisibleFlag};
+    use mir2_world::entity::{
+        BaseAbil, CastleBinding, Entity, EntitySpawn, MonsterCtorDraws, UseItemSlot,
+    };
+    use mir2_world::entity::{VisibleBaseObject, VisibleEvent};
     use mir2_world::merchant::{MerchantFlags, MerchantState as WorldMerchantState};
     use mir2_world::npc::NpcState as WorldNpcState;
 
@@ -829,15 +800,11 @@ mod tests {
     /// 全量 round-trip 的 `Debug` 比对都会红。
     ///
     /// S3a 起 `DupState` 的 3 个字段已迁出 `Entity`（计数组件真值），因此这里是
-    /// **148 字段**（P0 的 151 减去 3）。
-    fn distinctive_entity() -> Entity {
+    /// **138 字段**（P0 的 151 减去 DupState 3 + Transform 4 + MapBinding 6）。
+    fn distinctive_entity() -> EntitySpawn {
         let mut e = Entity::new(91, "ecs-p0", 13, 27);
 
-        // CoreIdentity / Transform
-        e.x = 14;
-        e.y = 28;
-        e.view_range = 12;
-        e.map_id = 3;
+        // CoreIdentity
         // Appearance
         e.race = 50;
         e.race_img = 51;
@@ -896,21 +863,6 @@ mod tests {
         e.re_alive_tick = 63;
         e.death_settled = true;
         e.die_called = true;
-        // MapBinding
-        e.add_to_mapped = true;
-        e.visible_actors = vec![VisibleBaseObject {
-            target: 64,
-            flag: VisibleFlag::Show,
-        }];
-        e.visible_events = vec![VisibleEvent {
-            event: 65,
-            x: 66,
-            y: 67,
-            flag: VisibleFlag::Invisible,
-        }];
-        e.is_visible_active = true;
-        e.processed_tick = 68;
-        e.verify_tick = 69;
         // BuffState
         e.poisoning_tick = 70;
         e.green_poisoning_point = 3;
@@ -1083,7 +1035,7 @@ mod tests {
         format!("{e:?}")
     }
 
-    /// 全量 round-trip：Entity → 24 组件（`DupState` 已于 S3a 迁出）→ Entity，
+    /// 全量 round-trip：Entity → 23 组件（`DupState`/`Transform`/`MapBinding` 已迁出）→ Entity，
     /// **剩余字段零变化**。
     ///
     /// 这条用例的判据是全字段 `Debug` 相等——任何一组适配器漏掉字段，落回的新实体就保留
@@ -1137,112 +1089,12 @@ mod tests {
         );
     }
 
-    /// S3b 前置：`Transform` 适配器搬 **全部 4 个字段**（x/y/map_id/view_range）且回写同值。
-    ///
-    /// 牙：适配器漏 `map_id`/`view_range` ⇒ apply 后目标实体仍是 `Entity::new` 的缺省
-    /// （0/5）⇒ 断言红；把 `view_range` 写错字段 ⇒ 同样红。
-    ///
-    /// 同时钉住设计件 §3.4 的非零 ctor 缺省陷阱：`Transform::default().view_range == 0`，
-    /// 而 `Entity::new` 给 5 ⇒ **不得**用 `Transform::default()` 直接造实体。
     #[test]
-    fn transform_component_round_trip_pins_ctor_view_range() {
-        let mut src = Entity::new(7, "transform", 10, 20);
-        src.x = 111;
-        src.y = 222;
-        src.map_id = 3;
-        src.view_range = 12;
+    fn transform_and_map_binding_defaults_match_ctor_contract() {
+        let t = Transform::default();
+        assert_eq!((t.x, t.y, t.map_id, t.view_range), (0, 0, 0, 0));
+        assert_ne!(t.view_range, 5, "ctor ViewRange=5 不是组件 Default");
 
-        let transform: Transform = FromEntity::from_entity(&src);
-        assert_eq!(
-            transform,
-            Transform {
-                x: 111,
-                y: 222,
-                map_id: 3,
-                view_range: 12
-            }
-        );
-
-        let mut restored = Entity::new(0, "", 0, 0);
-        transform.apply_to(&mut restored);
-        assert_eq!(
-            (restored.x, restored.y, restored.map_id, restored.view_range),
-            (111, 222, 3, 12),
-            "Transform 适配器必须搬全 4 个字段"
-        );
-
-        // ctor 缺省 vs 派生 `Default` 的差异（§3.4）：迁移必须走统一 bundle 构造器。
-        let ctor = Entity::new(0, "", 0, 0);
-        assert_eq!(ctor.view_range, 5, "BaseObject ctor ViewRange = 5");
-        assert_eq!(ctor.map_id, 0);
-        assert_eq!(Transform::default().view_range, 0, "派生 Default 是 0");
-        assert_ne!(
-            ctor.view_range,
-            Transform::default().view_range,
-            "view_range 的 ctor 缺省(5) != Default(0)：不得用默认组件造实体"
-        );
-    }
-
-    /// S3b 前置：`MapBinding` 适配器搬 **全部 6 个字段**，且 `Vec` 载荷按值克隆（不丢条目/顺序）。
-    ///
-    /// 牙：漏搬 `visible_events` 或把 `processed_tick` 写成 `verify_tick` ⇒ 回写后
-    /// `visible_snapshot`/VerifyMapTime 的输入漂移 ⇒ 断言红。
-    #[test]
-    fn map_binding_component_round_trip_all_six_fields() {
-        let mut src = Entity::new(8, "binding", 1, 2);
-        src.add_to_mapped = true;
-        src.visible_actors = vec![
-            VisibleBaseObject {
-                target: 64,
-                flag: VisibleFlag::Show,
-            },
-            VisibleBaseObject {
-                target: 65,
-                flag: VisibleFlag::Invisible,
-            },
-        ];
-        src.visible_events = vec![VisibleEvent {
-            event: 3,
-            x: 66,
-            y: 67,
-            flag: VisibleFlag::Invisible,
-        }];
-        src.is_visible_active = true;
-        src.processed_tick = 68;
-        src.verify_tick = 69;
-
-        let binding: MapBinding<VisibleBaseObject, VisibleEvent> = FromEntity::from_entity(&src);
-        assert!(binding.add_to_mapped);
-        assert_eq!(binding.visible_actors.len(), 2, "条目数与顺序必须保留");
-        assert_eq!(binding.visible_actors[1].target, 65);
-        assert_eq!(binding.visible_events, src.visible_events);
-        assert!(binding.is_visible_active);
-        assert_eq!(binding.processed_tick, 68);
-        assert_eq!(binding.verify_tick, 69);
-
-        let mut restored = Entity::new(0, "", 0, 0);
-        binding.apply_to(&mut restored);
-        assert_eq!(
-            (
-                restored.add_to_mapped,
-                restored.visible_actors.clone(),
-                restored.visible_events.clone(),
-                restored.is_visible_active,
-                restored.processed_tick,
-                restored.verify_tick,
-            ),
-            (
-                true,
-                src.visible_actors.clone(),
-                src.visible_events.clone(),
-                true,
-                68,
-                69,
-            ),
-            "MapBinding 适配器必须搬全 6 个字段（含 Vec 载荷）"
-        );
-
-        // 6 字段的派生缺省逐项为 false/空/false/0/0（与 ctor 缺省一致）。
         let d = MapBinding::<VisibleBaseObject, VisibleEvent>::default();
         assert!(!d.add_to_mapped);
         assert!(d.visible_actors.is_empty());

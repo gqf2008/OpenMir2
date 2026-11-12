@@ -207,7 +207,7 @@ pub fn hear_targets_at(
     }
     let mut out: Vec<i32> = world
         .entities
-        .iter()
+        .iter_ref()
         .filter(|e| {
             e.map_id == map_id
                 && e.race == ACTOR_RACE_PLAY
@@ -295,7 +295,7 @@ pub fn cry_targets(world: &World, speaker_id: i32, range: i32) -> Vec<i32> {
     };
     let mut out: Vec<i32> = world
         .entities
-        .iter()
+        .iter_ref()
         .filter(|e| {
             e.map_id == speaker.map_id
                 && e.race == ACTOR_RACE_PLAY

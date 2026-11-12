@@ -89,7 +89,7 @@ fn group_exp_by_level_ratio() {
 #[test]
 fn group_exp_replicates_oracle_curry_missing_bug() {
     let (mut w, l, a, b) = setup_group();
-    w.entities.get_mut(b).unwrap().y = 100; // 同 X（10 距离 0）、Y 远（90）
+    w.entities.transform_mut(b).unwrap().y = 100; // 同 X（10 距离 0）、Y 远（90）
     let gained = kill_monster(&mut w, l, 600);
     assert_eq!(gained, 280, "B 仍计入 n=3");
     assert_eq!(w.entities.get(l).unwrap().exp, 280);
@@ -118,7 +118,7 @@ fn group_exp_excludes_dead_member() {
 #[test]
 fn group_exp_excludes_other_map_member() {
     let (mut w, l, a, b) = setup_group();
-    w.entities.get_mut(b).unwrap().map_id = 1;
+    w.entities.transform_mut(b).unwrap().map_id = 1;
     let gained = kill_monster(&mut w, l, 600);
     assert_eq!(gained, 390);
     assert_eq!(w.entities.get(l).unwrap().exp, 390);
@@ -320,20 +320,20 @@ fn attacker_group_members_reads_leader_table_and_empty_when_solo() {
         "非团长自身表必须为空"
     );
     assert_eq!(
-        w.attacker_group_members(w.entities.get(a).unwrap()),
+        w.attacker_group_members(&w.entities.get(a).unwrap()),
         vec![l, a, b],
         "必须读团长的 GroupMembers"
     );
     // 团长 GroupOwner = 自己（oracle `JoinGroup(this)`）⇒ 读到的仍是自己的表。
     assert_eq!(w.entities.get(l).unwrap().group_owner, l);
     assert_eq!(
-        w.attacker_group_members(w.entities.get(l).unwrap()),
+        w.attacker_group_members(&w.entities.get(l).unwrap()),
         vec![l, a, b]
     );
     // 未组队：GroupOwner == 0 ⇒ 空表（`IsGroupMember` 第一步即 false）。
     let solo = w.add_entity(Entity::new(0, "solo", 5, 5));
     assert!(w
-        .attacker_group_members(w.entities.get(solo).unwrap())
+        .attacker_group_members(&w.entities.get(solo).unwrap())
         .is_empty());
 }
 
@@ -428,7 +428,7 @@ fn friend_sites_read_leader_group_table() {
 
     // 14/15 `MagMakeDefenceArea`：中心格友军（同组成员）必须被 buff（range=0 ⇒ 只中心格）。
     {
-        let t = w.entities.get_mut(b).unwrap();
+        let t = w.entities.transform_mut(b).unwrap();
         t.x = 11;
         t.y = 11;
     }
@@ -445,7 +445,7 @@ fn friend_sites_read_leader_group_table() {
 
     // 29/19 走 `GetMapBaseObjects`（格表）⇒ 先把 B 放回 (12,10) 并 tick 落格。
     {
-        let t = w.entities.get_mut(b).unwrap();
+        let t = w.entities.transform_mut(b).unwrap();
         t.x = 12;
         t.y = 10;
     }

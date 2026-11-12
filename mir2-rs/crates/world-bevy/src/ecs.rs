@@ -250,6 +250,13 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         self.read_state.get_manual(&self.world, bevy_entity).ok()
     }
 
+    /// 业务 id → bevy 实体句柄（显式句柄，不迭代 `Query`；供上层缓存多组件查询）。
+    #[inline]
+    pub fn entity_of(&self, id: i32) -> Option<Entity> {
+        let slot_idx = self.index.get(id)?;
+        self.slots[slot_idx].entity
+    }
+
     #[inline]
     pub fn get_mut(&mut self, id: i32) -> Option<&mut T> {
         let slot_idx = self.index.get(id)?;

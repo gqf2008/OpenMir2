@@ -115,7 +115,7 @@ pub(crate) fn monster_space_move(
     // 2. 摘旧格（oracle `DeleteFromMap`）。
     world.disappear_a(actor_id);
     // 3. 先写目标图/目标格（oracle 在 `SpaceMoveGetRandXY` 之前写 `CurrX/CurrY`）。
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = world.entities.transform_mut(actor_id) {
         e.map_id = dest_map_id;
         e.x = n_x;
         e.y = n_y;
@@ -133,7 +133,7 @@ pub(crate) fn monster_space_move(
     let space_moved = found.is_some();
     let added = match found {
         Some((x, y)) => {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = world.entities.transform_mut(actor_id) {
                 e.x = x;
                 e.y = y;
             }
@@ -142,7 +142,7 @@ pub(crate) fn monster_space_move(
         }
         None => {
             // 5-fail. 回滚 `Envir/CurrX/CurrY` 并把对象重新登记到旧格（`BaseObject.cs:1147-1153`）。
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = world.entities.transform_mut(actor_id) {
                 e.map_id = old_map_id;
                 e.x = old_x;
                 e.y = old_y;
@@ -151,8 +151,8 @@ pub(crate) fn monster_space_move(
         }
     };
     // 本仓内部状态位（oracle `AddToMaped` 不在此处语义内）；保持「已落格」不变量。
-    if let Some(e) = world.entities.get_mut(actor_id) {
-        e.add_to_mapped = added;
+    if let Some(b) = world.entities.map_binding_mut(actor_id) {
+        b.add_to_mapped = added;
     }
 
     // 6. `OnEnvirnomentChanged()`（实体侧可见效果；ActiveCount 登记未建模）。
