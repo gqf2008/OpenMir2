@@ -231,7 +231,7 @@ pub const DETAIL_CLIENT_ITEM_LEN: usize = 124;
 /// | 70 | `Binded` | Byte | 0（C# 模型无对应字段） |
 /// | 71 | `reserve[0..8]` | 9B | 0 |
 /// | 80 | `AddOn[0..9]` | 10B | 0 |
-/// | 90 | `Eva: TEvaluation` | 26B | 0（`Grobal2.pas:1950-1979`：4×Byte + 6×Byte + 8×2B + 4×Byte） |
+/// | 90 | `Eva: TEvaluation` | 26B | 0（`Grobal2.pas:1962-1978`：6×Byte + 8×`TEvaAbil`(2B)=16 + 4×Byte） |
 /// | 116 | `MakeIndex` | Integer | `ci.make_index` |
 /// | 120 | `Dura` | Word | `ci.dura` |
 /// | 122 | `DuraMax` | Word | `ci.dura_max`（652 传的是 `GetUserPrice` 结果） |
@@ -249,8 +249,9 @@ pub const DETAIL_CLIENT_ITEM_LEN: usize = 124;
 /// - C# `ClientItem` 独有的 `Stock/AtkSpd/Agility/Accurate/MgAvoid/Strong/Undead/HpAdd/MpAdd/
 ///   ExpAdd/Eff*/Slowdown/Tox/ToxAvoid/Light/Reference` 在冻结 `TClientStdItem` 里**没有对应
 ///   字段**（该区是 `Binded/reserve/AddOn/Eva`）⇒ 写 0。652 客户端只消费
-///   `Name/MakeIndex/Dura/DuraMax`（`ClMain.pas:13617-13625`：`pcg.Name / Stock=MakeIndex /
-///   price=DuraMax / Grade=Dura/1000`），不受影响。
+///   `Name/MakeIndex/Dura/DuraMax`（消费赋值行 `ClMain.pas:13628-13632`：`pcg.Name /
+///   Stock=MakeIndex / price=DuraMax / Grade=Dura/1000`；13617-13625 是其前的两层解码循环，
+///   handler 区间 13594-13640），不受影响。
 ///
 /// `GetUpgradeStdItem` 差量口径与 [`encode_client_item`] 相同（先升级、再编码）。
 #[must_use]
