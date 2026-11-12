@@ -7,16 +7,20 @@
 //! ## 系统执行顺序：显式契约（本文件是唯一权威）
 //!
 //! `Query` 的迭代序、bevy 的注册序、系统之间的参数依赖**都不是**本项目的顺序契约
-//! （AGENTS.md §4.2.2 第 2 条）。`TickRunner` 的执行顺序**只**由下面这条阶段链决定：
+//! （AGENTS.md §4.2.2 第 2 条）。`TickRunner` 的执行顺序**只**由下面这条阶段链决定
+//! （S3a 起：与 `crates/world` 的 `tick_head` / 宿主段 / `tick_tail` oracle 段序一一对应，
+//! 每段一个阶段，**仍然只有单线程 executor**）：
 //!
 //! ```text
-//! Clock -> Command -> Simulate -> Output
+//! Clock -> Command -> SimHiterSnapshot -> SimExpireHitters -> SimSettleDeaths
+//!   -> SimSelfDeliver -> SimExtraAbil -> SimMapEvents -> SimSlaveCleanup -> SimBuff
+//!   -> SimMonsterAi -> SimNpc -> SimMerchant -> SimPlayerRunExpiry -> SimDup
+//!   -> OutputDrain -> TailSuperManRefill -> TailPlayerDeaths -> TailVerifyMapTime
+//!   -> OutputAoi
 //! ```
 //!
-//! * [`TickStage::Clock`]：线程断言 + 虚拟时钟推进（`clock_ms` / `tick_seq`）；
-//! * [`TickStage::Command`]：处理玩家输入/命令（第 2 批）；
-//! * [`TickStage::Simulate`]：结算/战斗/AI 等世界模拟（第 2 批）；
-//! * [`TickStage::Output`]：AOI 快照与输出命令（第 2 批）。
+//! 阶段表见 [`TickStage`] 各变体的文档与 [`STAGE_ORDER`]（唯一事实源）；段序的 oracle 依据
+//! 见 `docs/world-ecs-migration-20261113.md` §5.1/§5.3。
 //!
 //! 契约怎么强制（三处缺一不可）：
 //!
@@ -34,7 +38,7 @@
 //!
 //! ## 以后加系统怎么加
 //!
-//! * 新系统放进**已有阶段**里语义最合适的一个：`runner.add_systems(TickStage::Simulate, sys)`；
+//! * 新系统放进**已有阶段**里语义最合适的一个：`runner.add_systems(TickStage::SimBuff, sys)`；
 //!   多个系统重复调用即可。
 //! * **同阶段内的系统不得依赖彼此的相对顺序**（包括副作用 / I-O）：同阶段且无访问冲突的系统
 //!   相对次序由 bevy 拓扑序决定，**不是**项目契约；需要顺序就把它们拆到不同阶段。
@@ -96,24 +100,80 @@ pub struct TickOrder(pub Vec<i32>);
 ///
 /// 阶段之间的先后是**契约**（见 [`STAGE_ORDER`] 与 [`TickRunner::new`] 的 `.chain()`），
 /// 不随注册序/参数依赖变化。
+///
+/// **S3a 契约变更**：原 4 阶段 `Clock/Command/Simulate/Output` 把 `Simulate` 展开成
+/// 「oracle 每段一个阶段」的线性链（编号即 `docs/world-ecs-migration-20261113.md` §5.1
+/// 现状段序表的段号）。语义没有变化——拆开只为让每段独占一个阶段，从而在
+/// 「歧义检测 = Error」下仍能显式定序；业务逻辑迁入这些阶段是后续切片的事。
 #[derive(SystemSet, Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TickStage {
-    /// 线程断言 + 虚拟时钟推进。
+    /// #0 线程断言 + 虚拟时钟推进（`clock_ms` / `tick_seq`）。
     Clock,
-    /// 玩家输入/命令处理。
+    /// #1 命令 FIFO（`World::tick_head` 的 `match cmd`；逐条、一个系统、不得拆散）。
     Command,
-    /// 结算/战斗/AI 等世界模拟。
-    Simulate,
-    /// AOI 快照 + 输出命令。
-    Output,
+    /// #2 PL-1 玩家命中者快照（读清理前的 `LastHiter`）。
+    SimHiterSnapshot,
+    /// #3 命中者过期（`World::expire_hitters`）。
+    SimExpireHitters,
+    /// #4 非玩家死亡结算（`World::settle_deaths(false)`）。
+    SimSettleDeaths,
+    /// #5 宝宝自投递（`World::deliver_self_delay_msgs`）。
+    SimSelfDeliver,
+    /// #6 `ExtraAbil` 过期（`World::expire_extra_abil`）。
+    SimExtraAbil,
+    /// #7 地图事件（`World::run_map_events`）。
+    SimMapEvents,
+    /// #8 宝宝清表（`slave::slave_list_cleanup_all`）。
+    SimSlaveCleanup,
+    /// #9 buff（`World::buff_tick`；不抽 RNG）。
+    SimBuff,
+    /// #10 怪物 AI（`monai::monster_ai_tick`；`ai_enabled` 门）。
+    SimMonsterAi,
+    /// #11 NPC（`World::npc_tick`；必须在商人之前）。
+    SimNpc,
+    /// #12 商人（`World::merchant_tick`；在 NPC 之后）。
+    SimMerchant,
+    /// #13 玩家 Run 到期（`World::expire_player_run_state`）。
+    SimPlayerRunExpiry,
+    /// #14 重叠推挤（`World::check_dup_obj`；在 Run 到期之后）。
+    SimDup,
+    /// #15 输出转抄（`record.*` → `pending_*`）。
+    OutputDrain,
+    /// #16 玩家 SuperMan 回满（`Entity::run_super_man_refill`，`tick_tail` 第 0 段）。
+    TailSuperManRefill,
+    /// #17 玩家死亡结算（`World::settle_deaths(true)`，`tick_tail` 第 1 段）。
+    TailPlayerDeaths,
+    /// #18 `VerifyMapTime` + 钳制（`World::verify_players_map_time`，`tick_tail` 第 2 段）。
+    TailVerifyMapTime,
+    /// #19 AOI 快照（`search_view_range_*`，`tick_tail` 第 3 段）。
+    OutputAoi,
 }
 
 /// 阶段顺序（唯一事实源；[`TickRunner::new`] 的 `.chain()` 必须与它一致）。
-pub const STAGE_ORDER: [TickStage; 4] = [
+///
+/// 顺序 = oracle 段序（`tick_head` → 宿主段（不在 schedule 内）→ `tick_tail`）。
+/// `Tail*` 三段排在 `OutputDrain` 之后，因为它们在宿主段 P21..P32 之后执行。
+pub const STAGE_ORDER: [TickStage; 20] = [
     TickStage::Clock,
     TickStage::Command,
-    TickStage::Simulate,
-    TickStage::Output,
+    TickStage::SimHiterSnapshot,
+    TickStage::SimExpireHitters,
+    TickStage::SimSettleDeaths,
+    TickStage::SimSelfDeliver,
+    TickStage::SimExtraAbil,
+    TickStage::SimMapEvents,
+    TickStage::SimSlaveCleanup,
+    TickStage::SimBuff,
+    TickStage::SimMonsterAi,
+    TickStage::SimNpc,
+    TickStage::SimMerchant,
+    TickStage::SimPlayerRunExpiry,
+    TickStage::SimDup,
+    TickStage::OutputDrain,
+    TickStage::TailSuperManRefill,
+    TickStage::TailPlayerDeaths,
+    TickStage::TailVerifyMapTime,
+    TickStage::OutputAoi,
 ];
 
 /// tick schedule 的构建设置：**歧义即构建失败**（`LogLevel::Error`）。
@@ -158,12 +218,29 @@ impl TickRunner {
         schedule.set_executor(SingleThreadedExecutor::default());
         schedule.set_build_settings(tick_schedule_build_settings());
         // 顺序契约：阶段之间固定链式先后（与 STAGE_ORDER 逐项一致）。
+        // bevy 的元组 `.chain()` 支持最多 20 项；本契约恰好 20 段（见 STAGE_ORDER）。
         schedule.configure_sets(
             (
                 STAGE_ORDER[0],
                 STAGE_ORDER[1],
                 STAGE_ORDER[2],
                 STAGE_ORDER[3],
+                STAGE_ORDER[4],
+                STAGE_ORDER[5],
+                STAGE_ORDER[6],
+                STAGE_ORDER[7],
+                STAGE_ORDER[8],
+                STAGE_ORDER[9],
+                STAGE_ORDER[10],
+                STAGE_ORDER[11],
+                STAGE_ORDER[12],
+                STAGE_ORDER[13],
+                STAGE_ORDER[14],
+                STAGE_ORDER[15],
+                STAGE_ORDER[16],
+                STAGE_ORDER[17],
+                STAGE_ORDER[18],
+                STAGE_ORDER[19],
             )
                 .chain(),
         );
