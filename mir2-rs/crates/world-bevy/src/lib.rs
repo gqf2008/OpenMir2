@@ -35,9 +35,17 @@ use mir2_shared::rng::RandomNumber;
 //
 // 卡片 `openmir2-world-bevy-migration` 的 S1：`crates/world` 的**实体存储**与**tick 骨架**
 // 迁到 `bevy_ecs`。内核与 D3 的掉落系统同 crate、同约束：单线程 executor + 自有序索引。
+pub mod components;
 pub mod ecs;
 pub mod tick;
 
+pub use components::{
+    AbilitySnapshot, AiState, Appearance, BuffState, CombatAttribution, CoreIdentity, DropState,
+    DupState, Flags, GroupState, Inventory, LifeCycle, MapBinding, MerchantState,
+    MonsterClassState, NpcState, PlayerRunState, Progression, PvpState, Recovery, Revival,
+    SlaveState, SpawnBinding, Transform, Vitals, EXTRA_ABIL_SLOTS, STATUS_TIME_SLOTS,
+    USE_ITEM_SLOTS,
+};
 pub use ecs::{EcsStore, SlotOrder};
 pub use tick::{
     advance_clock_system, tick_schedule_build_settings, TickClock, TickOrder, TickOwnerThread,

@@ -14,5 +14,11 @@ bevy_ecs = { version = "=0.19.1", default-features = false }
 #（由本 crate 的 tests/bevy_drop_parity.rs::no_parallel_guard 源码扫描 +
 #  crates/world/tests/no_parallel.rs 的直接依赖白名单双重钉住）。
 
+# P0 组件骨架的迁移适配器是 **测试/迁移工具专用**：`From<&Entity>` 需要 `mir2-world`，
+# 而正常依赖方向固定为 `world -> world-bevy`（防环），且 `tests/bevy_drop_parity.rs::
+# no_parallel_guard` 对 `[dependencies]` 做精确白名单。放 dev-dependency 不进入该扫描域。
+[dev-dependencies]
+mir2-world = { path = "../world" }
+
 [lints]
 workspace = true
