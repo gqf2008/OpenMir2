@@ -85,8 +85,7 @@
 
 * 遍历每个映射根，按扩展白名单收集；对外路径为 `<前缀>/<相对路径>`（`/` 分隔），
   最终按 path 排序（同输入同输出）。
-* **哈希缓存键 = 文件路径，值 = `(size, mtime) → sha256`**：任一变化即重算并写回；
-  相同指纹直接复用。首次清单会全量哈希（3G+ 资产一次性成本），其后只对变化文件重算。
+* **哈希缓存键 = 文件路径，值 = `(size, mtime) → sha256` + `computed_at`**：指纹变化或 `computed_at` 超出 `index_cache_ttl_ms`（默认 5000，0=每次重算）即重算并写回；相同指纹且 TTL 内直接复用。首次清单会全量哈希（3G+ 资产一次性成本），其后只对变化文件/TTL 过期条目重算。
   缓存只锁 map 存取，哈希计算在锁外（并发清单请求不会把整个服务串行化）。
 * 遍历是**元数据级**操作（不读内容）；哈希只在缓存失效时发生。
 * 符号链接：只有解析后仍在映射根内、且是普通文件的才纳入清单（与下载面包含检查同口径）；
@@ -117,6 +116,8 @@
 | `max_connections` | 8 | 超过 ⇒ 新连接直接回最小 429 并关闭（不排队） |
 | `rate_limit_rps` / `rate_limit_burst` | 20 / 40 | 每 token 令牌桶；超限 ⇒ 429 + `Retry-After: 1` |
 | `header_timeout_ms` | 15000 | 请求头读取超时（hyper `header_read_timeout`） |
+| `idle_timeout_ms` | 30000 | 已建连接读/写/flush 连续无进展超时；超时释放并发名额（0 非法） |
+| `index_cache_ttl_ms` | 5000 | index sha 缓存 TTL；0 = 每次清单都重算；超 TTL 必重算 |
 | 流式块 | 64 KiB（代码常量） | ≤1 MiB/块要求 |
 
 并发限额按**连接**（keep-alive 连接在关闭前一直占一个名额）；这是防慢速占坑的取舍。
@@ -146,6 +147,8 @@ max_connections=8
 rate_limit_rps=20
 rate_limit_burst=40
 header_timeout_ms=15000
+idle_timeout_ms=30000
+index_cache_ttl_ms=5000
 
 [map]
 Data=D:/MirClient-run/Data
@@ -198,16 +201,16 @@ whitelist=.wzl,.wzx,.wav,.mp3,.map,.mex,.wil,.wick
 
 ## 11. 测试与牙
 
-单测（27 条，`cargo test -p res-svr --lib`）：`auth`（等长逐字节不同/长度不同/scheme）、
+单测（30 条，`cargo test -p res-svr --lib`）：`auth`（等长逐字节不同/长度不同/scheme）、
 `range`（解析矩阵/饱和/416/空文件）、`pathmap`（穿越/绝对/UNC/盘符/尾点尾空格/NUL/保留名/ADS/
 `%2e%2e`/`%2f` 分隔符/符号链逃逸）、`index`（排序/sha/缓存失效/越根符号链不入清单）、
 `ratelimit`（突发/回填/容量封顶，注入时刻不依赖墙钟）、`config`（优先级/默认值/非法值 fail-closed/
-Debug 不含 token/Sources 解析）、`http`（审计脱敏/错误响应头）。
+Debug 不含 token/Sources 解析/非 Unicode env）、`http`（审计脱敏/错误响应头/空闲超时包装）。
 
-e2e（11 条，`cargo test -p res-svr --test res_svr_e2e`，真起子进程 + std TcpStream 手写 HTTP）：
-鉴权矩阵、方法闸门、穿越矩阵（含 `Data/../Data/a.wzl`「逃出去又回来」）、下载逐字节一致、
-HEAD、Range 六形态、清单 + 内容变更后缓存失效、413、限流 429、并发 429 与名额恢复、
-审计日志不含 token。
+e2e（13 条，`cargo test -p res-svr --test res_svr_e2e`，真起子进程 + std TcpStream 手写 HTTP）：
+鉴权矩阵、方法闸门、穿越矩阵（含 `Data/../Data/a.wzl`「逃出去又回来」与中间组件尾点/尾空格）、
+重复 Authorization 首值优先、下载逐字节一致、HEAD、Range 六形态、清单 + 内容变更后缓存失效、
+TTL 端到端、413、限流 429、并发 429 与名额恢复、空闲超时释放名额、审计日志不含 token。
 
 变异牙（在交付 head 重放并恢复，证据见 patch body）：
 
@@ -215,6 +218,8 @@ HEAD、Range 六形态、清单 + 内容变更后缓存失效、413、限流 429
 * **M2 放行 `..`**（删 pathmap 第 4 步的 `..` 组件拒绝）⇒ `Data/../Data/a.wzl` 用例必须红
   （该路径 canonical 后仍在根内，只有组件层判据能拦住它——这就是该用例存在的理由）；
 * **M3 删限流中间件**（请求路径上的 `limiter.allow()` 判断）⇒ 429 用例必须红。
+* **M4 只校验末段/跳过中间组件尾点** ⇒ `Data/sub%20/b.wzx` 用例必须红；**M5 TTL 失效** ⇒
+  同尺寸同 mtime 重写用例必须红（对应 `ressvr-hardening` 卡）。
 
 ## 12. 已知取舍与风险
 
@@ -227,7 +232,9 @@ HEAD、Range 六形态、清单 + 内容变更后缓存失效、413、限流 429
   方向只会更严（fail-closed），不会更松。
 * **符号链接用例**在无 `SeCreateSymbolicLinkPrivilege` 的机器上会跳过并打印原因；containment
   判据本身由单测（根外链接）与代码路径保证。
-* **清单首次全量哈希**是 3G+ 的一次性成本（其后按 `(size, mtime)` 缓存）；若资产规模继续增长，
-  可加持久化缓存文件（当前不做，避免引入新的写入面）。
-* A7 真机窗口（起服务后 curl 四态 + Range 抽样 + index sha256 抽验 3 件）在合并后按 Owner
-  授权执行；本卡提交的本地冒烟用临时端口 + 临时夹具根，证据见 patch body。
+* **清单首次全量哈希**是 3G+ 的一次性成本（其后按 `(size, mtime)` + TTL 缓存）；若资产规模继续增长，
+  可加持久化缓存文件（当前不做，避免引入新的写入面）。TTL 过期时全量重算的成本在 3G+ 真资产上
+  未量化，可通过调大 `index_cache_ttl_ms` 换陈旧上界。
+* **A7 + T3 真机窗口已通过（2026-11-12 22:55:34–22:59:04 +0800）**：403/200/404/穿越 403、
+  Range 206、HEAD 同头零 body；客户端缺库 prguse 下载 + sha256 校验 + 原子落盘通过；审计
+  token 出现 0。证据见卡 `openmir2-res-download-svc` comment。
