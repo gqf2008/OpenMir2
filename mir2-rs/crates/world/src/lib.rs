@@ -87,6 +87,7 @@ pub use entity::{
     BaseAnimalCtorDraws, Entity, EntityStore, MonsterCtorDraws, VisibleEvent, VisibleFlag,
     ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, BASE_ANIMAL_CTOR_DRAW_MODS,
 };
+// S3a：重叠推挤状态的真值已迁到 `world-bevy` 的组件；本 crate 透传，供宿主/测试按类型名使用。
 pub use guild::{
     check_guild_name, AddWarGuildOutcome, GuildConfig, GuildManager, GuildRank, GuildRunEvent,
     GuildSaveReason, GuildState, GuildWarEnded, GuildWarEvent, GuildWarOutcome, GuildWarRequest,
@@ -102,6 +103,7 @@ pub use merchant::{
     MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState, ACTOR_RACE_MERCHANT,
     MERCHANT_RUN_TIME,
 };
+pub use mir2_world_bevy::DupState;
 pub use monai::{
     animal_struck, attack_target, big_heart_attack_target, can_move, del_target_creature,
     dir_delta, get_attack_dir, goto_target_xy, is_active_seek_race, is_animal_race, is_guard_race,

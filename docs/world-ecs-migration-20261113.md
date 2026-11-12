@@ -19,12 +19,15 @@
    而是 `world-bevy` 承接 entity/tick/map+aoi/combat/session 全部 API（含其余模拟模块）后
    **删除 `crates/world` 与 workspace 成员**；`tests/parity` 与 `tick_bench` 改指向 `world-bevy`。
    S3–S4 = map+aoi / combat+session 及其余模块，S5 = 切换并删除（§6.3/§6.7）。
-3. **tick 系统图有一条硬结论**：现有 4 阶段 `Clock/Command/Simulate/Output` **承载不了** oracle 的
-   Run 段序。原因是 `TickRunner` 的歧义检测是 `LogLevel::Error`，而所有模拟段都要
-   `&mut Entity`/组件 + `ResMut<Rng>` ⇒ 同阶段必冲突。S3a 必须做**一次 TickStage 契约变更**：
-   把 Simulate 展开成「每段一个阶段」的线性链（见 §4）。这是唯一同时保住「显式顺序」与
-   「构建期歧义即失败」的形态。
-4. **S3a 试点切片 = `DupState`（3 字段）**：单一消费点、无存档面、已有专项用例
+3. **tick 系统图有一条硬结论**：现有 4 阶段 `Clock/Command/Simulate/Output` 在
+   「每段一个系统、构建期歧义即失败」的目标下**需要扩展**。原因是 `TickRunner` 的歧义检测是
+   `LogLevel::Error`，而所有模拟段都要 `&mut Entity`/组件 + `ResMut<Rng>` ⇒ 同阶段必冲突。
+   替代方案是**一个单体 exclusive `Simulate` 系统**（一个 `fn(&mut World)` 串行跑完所有段，零歧义）。
+   评审 P2-4 指出「4 阶段不可能」是**过度表述**；Leader scope_ruling 选了前者：
+   S3a 做**一次 TickStage 契约变更**，把 Simulate 展开成「每段一个阶段」的线性链（见 §4）。
+   两条路都能保住「显式顺序 + 构建期歧义即失败」，选择「每段一阶段」是为了后续每段独立成系统。
+4. **S3a 试点切片 = `DupState`（3 字段）**：两个消费点（`World::check_dup_obj` + 宿主
+   `apply_get_start_point_after_tick`）、无存档面、已有专项用例
    `crates/world/tests/check_dup_obj_vectors.rs`，是最小可独立验证的落点（见 §5.2）。
 5. **P0 未改任何生产路径**：`crates/world` 的 `Entity` / `EntityStore` / `World` 一行未动；
    新增组件骨架与 `#[cfg(test)]` 适配器；五门全绿、golden/parity 不变。
@@ -226,10 +229,18 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
 
 #### C13 `DupState`：`bo_duplication`, `dup_start_tick`, `check_dup_obj_tick`
 
-- 读点/写点：`world.rs::check_dup_obj`（唯一消费点）、`world.rs::add_entity`、
-  `session.rs::enter_map_at`（ctor 时刻重盖）、`entity.rs::Entity::new`。
+- **消费点有两个**（P0 评审 P2-1 修正，不是「唯一消费点」）：
+  1. `world.rs::check_dup_obj`（重叠推挤段：3s 门、≥2 首次观测、推挤门）；
+  2. **宿主** `bins/game-svr/src/lib.rs::apply_get_start_point_after_tick` 每 tick 读取在线玩家的
+     `check_dup_obj_tick`，用 `dup_tick_fired(tick == now)` 决定是否覆盖 `GetStartPoint` 的
+     `HomeMap/HomeX/HomeY`。
+- 写点：`world.rs::check_dup_obj`（门内落 `now`）、`EntityStore::insert`（ctor 缺省 `false/0/0`）、
+  `world.rs::add_entity` / `session.rs::enter_map_at`（按 ctor 时刻重盖 `check_dup_obj_tick`）。
 - 存档面：无（纯内存）。
-- 迁移序：**S3a**。3 字段、单一消费点、专项用例 `crates/world/tests/check_dup_obj_vectors.rs`。
+- **S3a 已落地**：三字段从 `Entity` 删除，真值在 `world-bevy` 的 `DupState` 组件；
+  读写经 `EntityStore::dup_state` / `dup_state_mut`（业务模块不持有裸 `Query`），宿主读点同步改为
+  `world.entities.dup_state(actor_id)`。专项用例 `crates/world/tests/check_dup_obj_vectors.rs`。
+
 
 #### C14 `Inventory<S>`：`use_items`
 
@@ -247,6 +258,8 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
 - 写点：`mongen.rs` / `combat.rs`（掉落预算）、GM `GIVE`。
 - 迁移注意：掉落预算在**生成时**一次性消费 RNG（S1/D3 结论），不是每 tick 成本；
   迁移不得把它挪进每 tick 系统。
+- **命名登记**：组件字段是 `items`，对应 `Entity.drop_items`（`Vec<DropItem>` 类型不变）；
+  P0 适配器显式映射 `drop_items -> items`，这是 151 字段里**唯一**的改名。
 - 迁移序：S4a。
 
 #### C16 `CombatAttribution`：`last_hiter`, `exp_hitter`, `last_hiter_tick`, `exp_hitter_tick`
@@ -322,6 +335,8 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
 - **覆盖**：25 组件合计 2+4+5+13+1+6+13+5+8+6+14+13+3+1+5+4+3+4+11+4+19+1+1+1+4 = **151**。
   P0 的 round-trip 用例（`components::tests::split_and_apply_round_trip_all_151_fields`）
   对每个字段赋非缺省值后做 `Entity -> 25 组件 -> Entity`，用全字段 `Debug` 相等作判据。
+  **S3a 起**：`DupState` 的 3 个字段已从 `Entity` 删除（真值在组件），`Entity` 剩 **148** 字段；
+  用例更名为 `split_and_apply_round_trip_all_remaining_fields`，断言范围相应缩小。
 - **使用量**（Leader 统计，作为拆分顺序输入）：`ai` 173、`x` 101、`race` 96、`y` 95、
   `map_id` 88、`hp` 62、`death` 58、`ghost` 39。
   ⇒ **热点字段最后拆**；叶子组先拆。这和 §5 的波次一致。
@@ -336,6 +351,24 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
      → 组件）、`MerchantState`、`NpcState`、`Inventory`、`CoreIdentity`。
   6. **S5 切换并删除**：parity/tick_bench/bins 改指 `world-bevy`；删 `crates/world`。
 
+### 3.4 组件 `Default` 与 `Entity::new` 的非零缺省差异（迁移防漂移）
+
+P0 组件大多 `derive(Default)`，但 `Entity::new`（各 `BaseObject` ctor 等价物）有**非零 ctor 缺省**。
+**任何 S3+ 路径都不得用 `Component::default()` 直接造实体**，必须走统一 bundle 构造器（复刻
+`Entity::new` 的值），否则行为会静默漂移。逐项差异（评审 P2-5）：
+
+| 组件 | 字段 | `Entity::new` 缺省 | 派生 `Default` |
+| --- | --- | --- | --- |
+| `Transform` | `view_range` | 5 | 0 |
+| `Appearance` | `name_color` | 255 | 0 |
+| `Vitals` | `hp` / `max_hp` | 100 / 100 | 0 / 0 |
+| `Progression` | `level` | 1 | 0 |
+| `PlayerRunState` | `power_rate` / `kill_mon_exp_rate` | 100 / 100 | 0 / 0 |
+| `BuffState` | `poisoning_tick` | `BUFF_EPOCH_MS` | 0 |
+
+其余组件（含 S3a 的 `DupState`：`false/0/0`）的派生 `Default` 与 ctor 缺省逐字段相同。
+`DupState` 的缺省由 `EntityStore::insert` 统一插入；落图时刻的重盖由 `add_entity`/`enter_map_at` 负责。
+
 ---
 
 ## 4. 资源图（`World` 字段 → Resource / facade）
@@ -344,21 +377,26 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
 
 | 类别 | `World` 字段（代表） | S3+ 归宿 | 理由 |
 | --- | --- | --- | --- |
-| 时钟 | `clock_ms`, `tick_seq` | 已是 `TickClock` 资源；**唯一真值迁到资源**，facade 字段保留为一 tick 边界同步 | 现在两处各一份（facade 写进资源、跑完读回），必须收敛 |
+| 时钟 | `clock_ms`, `tick_seq`, **`game_time`** | `clock_ms`/`tick_seq` 已是 `TickClock` 资源；`game_time`（昼夜桶，`World::refresh_game_time` 刷新）随 tick 边界同步，S3+ 可并入 `WorldClockRes` | 现在两处各一份（facade 写进资源、跑完读回），必须收敛；`game_time` 是可变的模拟时钟派生值，**不是**只读配置 |
 | 随机源 | `rng`, `rng_attack` | `RngRes` / `RngAttackRes`（已存在 `RngRes`） | RNG 消费者次序是契约；资源只能有**一个**所有者 |
 | 世界数据 | `maps` | `MapsRes`（S3b） | 格子表与 AOI 同切片；`SessionRegistry` 仍 facade |
 | 会话存在性 | `sessions` | **facade**（模块代码 S4 迁 `world-bevy`） | 连接/认证属 actor；`SessionRegistry` 只承载进/出图与 depart 事件 |
 | buff 系统 | `buffs` | `BuffRes`（S4b） | `BuffSystem` 是实体外的旁挂状态 |
 | 城堡/行会 | `castles`, `actor_guilds`, `guild_allies`, `guard_castle_crime`, `castle_name_colors` | `CastleRes` 等（城堡切片） | 与实体切片解耦；公会**服务**仍 actor |
-| 只读配置 | `item_catalog`, `mon_random_add_value`, `need_exps`, `combat_config`, `party_cfg`, `b4_cfg`, `b5_cfg`, `pet_slave_cfg`, 各 `*_time`/`*_rate`/`*_level` | 不可变 `WorldConfig` 资源包 | 宿主 tick 前灌入；系统只读 |
+| 只读配置 | `item_catalog`, `mon_random_add_value`, `need_exps`, `combat_config`, `party_cfg`, `b4_cfg`, `b5_cfg`, `pet_slave_cfg`, 各 `*_time`/`*_rate`/`*_level`；名字表 `bee_name`/`spider_name`/`zuma_names` | 不可变 `WorldConfig` 资源包 | 宿主 tick 前灌入；系统只读（名字表是启动期装载后只读） |
 | 命令输入 | `pending: VecDeque<Command>` | `CommandQueue` 资源（S3a） | Command 阶段的唯一输入面 |
 | 输出/事件累积 | `pending_*`（AI 攻击、武器磨损、城堡结构、RefMsg、特殊生成…）、`fire_burn_events`, `dig_out_events` | 分阶段输出资源 + `TickRecord`（S3a+） | 每段产出、Output 阶段统一转抄 |
 | 段内旁挂表 | `process_run_counts`, `attack_poison`, `attack_weapon_strong` | S4c/S4a 改成**实体组件**（按 id 查的 HashMap 是组件化的直接候选） | 旁挂表可消除哈希随机性/生命周期同步问题 |
 | 段内游标 | `merchant_position`, `merchant_pass_tick`, `npc_position`, `npc_pass_tick`, `lamp_tick`, `pk_check_tick`, `spirit_mutiny_tick`, `event_sight`, `event_registered` | 随段迁入对应资源/组件 | 现在都是 facade 字段 |
+| 段内初始化位 | `buff_pass_tick`, `lamp_tick_initialized`, `pk_check_tick_initialized` | 随所属段迁入对应游标资源 | 只是「首次运行」标记，不是模拟状态；与对应 tick 字段同所有者 |
 | 诊断 | `last_tick`, `tail_phase_log`, `player_hiter_snapshot`, `by_map_scratch` | facade / scratch 资源 | `by_map_scratch` 是 AOI 复用缓冲，不能跨阶段共享 |
 | 开关 | `ai_enabled`, `merchant_enabled`, `npc_enabled`, `buff_enabled`, `isolate_attack`, `slave_self_delay_enabled`, `refmessage_delay_enabled` | **facade** | 宿主起世界时设一次；不是模拟状态 |
 | 驱动器 | `owner_thread`, `clock_runner` | `TickOwnerThread` 资源 + runner | 已部分在资源里 |
 | 存储本体 | `entities: EntityStore` | facade（内含 bevy `World`） | 对外 API 不变；S3a 扩展多组件访问 |
+
+> 本表是**类别级**分类（`World` 共 84 字段），不是逐字段枚举；归类规则是：可变模拟状态 →
+> 资源/组件，只读启动配置 → `WorldConfig`，诊断/开关 → facade，存储/驱动器 → 现有资源或 facade。
+> 评审 P2-3 指出的 `game_time`、`*_initialized`、名字表已显式列入上表。
 
 ### 4.2 所有权规则（避免双真值）
 
@@ -439,11 +477,19 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
 构建失败（`tick_schedule_build_settings` 的 `ambiguity_detection = Error`）。
 
 问题：上表 #2–#14 全部读写**同一批实体组件**（至少 `LifeCycle`/`Vitals`/`AiState`），
-且多数需要 `ResMut<Rng>`。把它们放进同一个 `Simulate` 阶段 ⇒ 必然冲突 ⇒ schedule 构建 panic。
-`TickRunner` 又只接受「一个阶段 + 一个系统」，不提供 `.chain()` 入口。
+且多数需要 `ResMut<Rng>`。把它们作为**独立系统**放进同一个 `Simulate` 阶段 ⇒ 必然冲突 ⇒
+schedule 构建 panic；`TickRunner` 又只接受「一个阶段 + 一个系统」，不提供 `.chain()` 入口。
 
-结论：**S3a 必须把 `TickStage` 展开为线性段链**（一次显式契约变更），每个系统独占一个阶段。
-建议新增枚举项（顺序即 `STAGE_ORDER`）：
+**两条可行路线**（不是「只有一条」——评审 P2-4）：
+
+1. **单体 exclusive `Simulate` 系统**：一个 `fn(&mut World)` 在内部按 oracle 段序串行调用各段，
+   零歧义、4 阶段不变；代价是段与段之间没有系统级边界，后续逐段迁移时仍要再拆一次；
+2. **每段一个阶段**（Leader scope_ruling 选择）：把 `TickStage` 展开为线性段链，每段一个阶段、
+   每段一个系统；代价是**一次显式契约变更**（`STAGE_ORDER`、`TickRunner::new` 的 chain、
+   `tick_skeleton` 守卫必须同一提交更新），收益是后续每段可独立成系统、顺序仍只由枚举决定。
+
+S3a 采用路线 2（见 `crates/world-bevy/src/tick.rs` 的 `TickStage`/`STAGE_ORDER`）。建议新增枚举项
+（顺序即 `STAGE_ORDER`；`Clock` + 19 个 oracle 业务段 = 20 项）：
 
 ```
 Clock
@@ -537,12 +583,21 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 | --- | --- | --- | --- | --- |
 | **S0 = P0**（本卡） | 组件骨架 + 设计文档 | `crates/world-bevy/src/components.rs`、`lib.rs`、`Cargo.toml`、本文件 | 五门 + 151 字段 round-trip（P0 即本卡） | 丢弃分支 |
 | **S1/S2（已完成，`f5170a8e`）** | entity 存储 + tick 骨架 + 存储调优 | `crates/world-bevy/src/{ecs.rs,tick.rs,lib.rs}`、`crates/world/src/{entity.rs,world.rs,bevy_bridge.rs}` | 三份 golden 逐字节不变；P50 ≤ 10% / P99 中位数 ≤ 30% | 已合并，不回退 |
-| **S3a 试点** | `DupState`（3 字段）+ `EcsStore` 多组件访问 + TickStage 段链（§5.3） | `crates/world-bevy/src/{ecs.rs,components.rs,tick.rs,lib.rs}`、`crates/world/src/{entity.rs,world.rs,session.rs,bevy_bridge.rs}`、`check_dup_obj_vectors`/`tick_skeleton` | `check_dup_obj_vectors`；golden 三份；parity 三件；RNG trace 不变；`tick_skeleton` 阶段链/歧义守卫绿 | 按子片回退（无存档面） |
+| **S3a 试点** | `DupState`（3 字段）+ `EcsStore` 多组件访问 + TickStage 段链（§5.3） | `crates/world-bevy/src/{ecs.rs,components.rs,tick.rs,lib.rs}`、`crates/world-bevy/tests/tick_skeleton.rs`、`crates/world/src/{entity.rs,world.rs,session.rs}`、`bins/game-svr/src/lib.rs`（宿主 `check_dup_obj_tick` 读点）、`crates/world/tests/{check_dup_obj_vectors.rs,ecs_migration.rs}` | `check_dup_obj_vectors`；ctor 基准用例；golden 三份；parity 三件；RNG trace 不变；`tick_skeleton` 20 段链/歧义守卫绿 | 按子片回退（无存档面） |
 | **S3b map+aoi** | `Transform`+`MapBinding`+`MapsRes` + AOI 系统 + 世界侧 session 存在性（`SessionRegistry` 的进/出图 API） | `crates/world/src/{entity.rs,world.rs,aoi.rs,map.rs,session.rs,space_move.rs}` + `crates/world-bevy/{src/ecs.rs,src/components.rs}` | `world_aoi_parity` + `aoi_viewrange12` + `world_session_parity`；golden 三份；P99 参数记录 | 按子片回退；格子登记与组件更新必须同提交 |
-| **S4a 属性/归属/叶子** | `SpawnBinding`、`DropState`、`CombatAttribution`、`Recovery`、`PvpState`、`Vitals`+`AbilitySnapshot`+`Progression` | `crates/world/src/{entity.rs,world.rs,combat.rs,mongen.rs,slave.rs,death_drop.rs,stamina.rs,buff.rs}` + `bins/game-svr` 的 `apply_ability_to_entity` | golden 三份；`world_combat_parity`；`rng_parity`/`rng_replay_parity`；`drop_parity`/`exp_parity`/`levelabil_parity`；DB 存档对拍（HP/MP/exp/level/gold） | 按子片回退 |
-| **S4b 玩家/Buff/生命周期** | `PlayerRunState`、`GroupState`、`Revival`、`BuffState`、`Flags`、`LifeCycle`、`Appearance`、`MonsterClassState` | `crates/world/src/{entity.rs,world.rs,party.rs,buff.rs,magic.rs,magic_effect.rs,aoi.rs,monai.rs,combat.rs,mongen.rs}` + `bins/game-svr` P27/P32 | golden 三份 + `aoi_viewrange12`；`party_vectors`/`party_attribution`；`special_monster_vectors`；帧面逐字节 | 按子片回退 |
+| **S4a 属性/归属/叶子** | `SpawnBinding`、`DropState`、`CombatAttribution`、`Recovery`、`PvpState`、`Vitals`+`AbilitySnapshot`+`Progression`；RNG 抽数站点 `ctor_fold`/`run_gap` | `crates/world/src/{entity.rs,world.rs,combat.rs,mongen.rs,slave.rs,death_drop.rs,buff.rs,ctor_fold.rs,run_gap.rs}` + `bins/game-svr/src/{stamina.rs,lib.rs}`（`apply_ability_to_entity`） | golden 三份；`world_combat_parity`；`rng_parity`/`rng_replay_parity`；`drop_parity`/`exp_parity`/`levelabil_parity`；DB 存档对拍（HP/MP/exp/level/gold） | 按子片回退 |
+| **S4b 玩家/Buff/生命周期** | `PlayerRunState`、`GroupState`、`Revival`、`BuffState`、`Flags`、`LifeCycle`、`Appearance`、`MonsterClassState`；出站事件词汇 `action`/优先级队列 `msgqueue` | `crates/world/src/{entity.rs,world.rs,party.rs,buff.rs,magic.rs,magic_effect.rs,aoi.rs,monai.rs,combat.rs,mongen.rs,action.rs,msgqueue.rs}` + `bins/game-svr` P27/P32 | golden 三份 + `aoi_viewrange12`；`party_vectors`/`party_attribution`；`special_monster_vectors`；帧面逐字节 | 按子片回退 |
 | **S4c AI/商人/NPC/物品** | `AiState`+`SlaveState`+`MerchantState`+`NpcState`+`Inventory`+`CoreIdentity`（含 `process_run_counts` 旁挂表 → 组件） | `crates/world/src/{entity.rs,monai.rs,slave.rs,special_monster.rs,merchant.rs,npc.rs,world.rs}` + `bins/game-svr` 物品/存档同步 | `monster-ai-*`/`merchant-tick`/`npc` 场景；`world_combat_parity`；RNG 账本；存档/DB 对拍 | 按子片回退 |
+| **S4d 城堡/行会/税收** | `castle`（攻城状态机）、`castle_tax`（税率/金库）、`guild`（会话态/成员/联盟）整模块迁入 `world-bevy`（公会**服务**仍是 actor，只搬状态机 API） | `crates/world/src/{castle.rs,castle_tax.rs,guild.rs}` + 对应 `bins/game-svr` 城堡/行会段 | 城堡/行会既有用例向量；golden 三份；`rg` 无 `mir2_world` 残留前先跑模块级 | 按子片回退 |
 | **S5 切换并删除** | `tests/parity` + `tick_bench` + `bins/game-svr` + 守卫全部改指 `world-bevy`；删除 `crates/world` 与 workspace 成员 | `mir2-rs/crates/world-bevy/{Cargo.toml,src/bin,tests}`、`mir2-rs/tests/parity/{Cargo.toml,tests,src}`、`mir2-rs/bins/game-svr/{Cargo.toml,src}`、`mir2-rs/Cargo.toml`、`mir2-rs/Cargo.lock`、删除 `mir2-rs/crates/world/**` | 全 workspace 五门 + golden 三份 + parity 全套 + RNG trace + DB 窗口；`crates/world/tests/no_parallel.rs` 守卫**先移植**到 `world-bevy/tests` 并绿；`rg -n "mir2_world|mir2-world" mir2-rs/crates/world-bevy mir2-rs/bins mir2-rs/tests/parity` 无残留（除历史文档）；`cargo metadata` 无 world 成员 | 合并前整提交回退；合并后按 follow-up 卡处理 |
+
+> **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——
+> `entity/tick/存储`=S1/S2；`DupState`+tick 段链=S3a；`map/aoi/space_move/session`=S3b；
+> `combat/mongen/slave/death_drop/stamina(宿主)/buff/ctor_fold/run_gap`=S4a；
+> `party/magic/magic_effect/action/msgqueue/special_monster`=S4b；`monai/merchant/npc`=S4c；
+> `castle/castle_tax/guild`=S4d；`lib.rs`（crate 根再导出）、`bevy_bridge.rs`、`bin/tick_bench.rs`
+> 由 S5 随 crate 删除/迁往 `world-bevy`（不是功能缺口）。S4a 的 `stamina.rs` 路径是
+> `bins/game-svr/src/stamina.rs`（`crates/world/src` 无此文件）。
 
 > **S5 的写集越界提醒**：本卡 issue 声明的 write_set 是
 > `crates/world/**`、`crates/world-bevy/**`、`bins/game-svr/src/lib.rs`、`tests/parity/**`；
@@ -561,8 +616,10 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 
 选择理由：
 
-1. **最小**：3 个字段，唯一的逻辑消费点是 `World::check_dup_obj`；写点只有
-   `Entity::new` / `World::add_entity` / `SessionRegistry::enter_map_at`。
+1. **最小**：3 个字段；逻辑消费点有**两个**——`World::check_dup_obj` 与宿主
+   `bins/game-svr/src/lib.rs::apply_get_start_point_after_tick`（每 tick 读 `check_dup_obj_tick`
+   决定 `GetStartPoint` 覆盖，见 C13/P2-1）。写点：`EntityStore::insert`（ctor 缺省）/
+   `World::add_entity` / `SessionRegistry::enter_map_at`。
 2. **可独立验证**：已有 `crates/world/tests/check_dup_obj_vectors.rs` 专测「3s/10s/20s 门
    与首次观测标记」。
 3. **无存档面**：纯内存字段，不触碰 DB/存档，回滚零数据风险。
@@ -575,9 +632,11 @@ S3a 步骤（建议提交 2–3 笔）：
 
 1. `EcsStore` 增加多组件读写 API + 单测（不改 `EntityStore` 对外 API）。
 2. `DupState` 成为真值：`Entity` 移除 3 字段；`check_dup_obj` 改为经组件读写；
-   `Entity::new`/`add_entity`/`enter_map_at` 的初始化改为插组件。
-3. 片边界等价：用 P0 适配器把「旧 `Entity` 形状」与「新组件形状」各取一次值比较，
-   跑 `check_dup_obj_vectors` + 三份 golden + RNG trace；记录 P99 参数（不压测）。
+   `EntityStore::insert` 插 `DupState::default`，`add_entity`/`enter_map_at` 经
+   `dup_state_mut` 按 ctor 时刻重盖；宿主读点改为 `entities.dup_state`。
+3. 片边界等价：`check_dup_obj_vectors`（3s/10s/20s 门、首次观测、RNG 抽数）+
+   `verify_and_dup_ticks_base_is_playobject_ctor_not_map_entry` + 三份 golden + RNG trace；
+   记录 P99 参数（不压测）。旧适配器已无字段可比，删除并用上述行为判据取代。
 
 回滚点：每个提交独立可回退；S3a 不涉及持久化，回退即恢复字段。
 
@@ -669,3 +728,9 @@ S2 的相对门禁参数（沿用）：三档 500/1000/2000 实体，**P50 ≤ 1
 | 退役判据（S5） | `crates/world` 与其 workspace 成员删除；`tests/parity`/`tick_bench`/`bins/game-svr` 全部指向 `world-bevy`；`no_parallel` 守卫已移植且绿；`rg -n "mir2_world|mir2-world" mir2-rs/crates/world-bevy mir2-rs/bins mir2-rs/tests/parity` 无残留；golden/parity/RNG/DB 面全绿 |
 
 **P0 的「完成」不等于迁移开始**：S3a 的前置是 `EcsStore` 多组件访问（§6.2）与 TickStage 段链契约变更（§5.3）。两者都应在 S3a 卡里显式列出，而不是在 P0 里偷跑。
+
+> **S3a 状态注记**：上面这张表是 **P0 当时的交付快照**。S3a 已把 `DupState` 三字段搬出
+> `Entity` 并把 TickStage 展开为 20 段：round-trip 用例更名为
+> `split_and_apply_round_trip_all_remaining_fields`，`dup_state_adapter_carries_values_not_defaults`
+> 由 `dup_state_component_default_matches_entity_ctor_defaults` + `EcsStore` 可选组件用例替代。
+> 门禁计数以 S3a 卡面报告为准。

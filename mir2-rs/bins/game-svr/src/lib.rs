@@ -24109,9 +24109,13 @@ fn apply_get_start_point_after_tick(
         let Some(map_name) = registry.and_then(|r| r.name_of(e.map_id)) else {
             continue;
         };
+        // S3a：`check_dup_obj_tick` 已迁入 `DupState` 组件（`Entity` 不再持有）。
+        let Some(dup) = world.entities.dup_state(entry.actor_id) else {
+            continue;
+        };
         players.push((
             entry.chr_name.clone(),
-            e.check_dup_obj_tick,
+            dup.check_dup_obj_tick,
             map_name.to_string(),
         ));
     }

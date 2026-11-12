@@ -9,7 +9,7 @@ use bevy_ecs::prelude::{ResMut, Resource, World};
 use bevy_ecs::schedule::{Schedule, SingleThreadedExecutor};
 use mir2_world_bevy::{
     advance_clock_system, tick_schedule_build_settings, TickClock, TickOwnerThread, TickRunner,
-    TickStage,
+    TickStage, STAGE_ORDER,
 };
 
 fn pinned_runner() -> TickRunner {
@@ -68,7 +68,7 @@ fn stage_order_overrides_registration_order() {
     world.insert_resource(Trace::default());
 
     let mut runner = TickRunner::new();
-    runner.add_systems(TickStage::Output, probe_output);
+    runner.add_systems(TickStage::OutputAoi, probe_output);
     runner.add_systems(TickStage::Clock, probe_clock);
 
     runner.run(&mut world);
@@ -76,6 +76,61 @@ fn stage_order_overrides_registration_order() {
         world.resource::<Trace>().0,
         vec!["clock", "output"],
         "执行顺序必须由 TickStage 阶段链决定，而不是注册序"
+    );
+}
+
+/// S3a：`Clock` + 19 个业务段 = 20 个阶段必须严格按 oracle 段序执行。
+///
+/// 期望序列**硬编码在测试里**（不取自 `STAGE_ORDER`，否则把 `STAGE_ORDER` 两项换序会被
+/// 「注册也按 STAGE_ORDER」自洽地漏掉）。牙：
+/// * `STAGE_ORDER` 与 oracle 段序不一致（换序/漏段/多项）⇒ 第一条断言红；
+/// * `TickRunner::new` 的 `.chain()` 与 `STAGE_ORDER` 不一致（链换序/断链）⇒ 执行序断言红。
+///
+/// 反着注册每个阶段的探针：执行序只可能来自阶段链。
+#[derive(Resource, Default)]
+struct StageTrace(Vec<usize>);
+
+#[test]
+fn stage_chain_runs_all_oracle_segments_in_order() {
+    const EXPECTED: [TickStage; 20] = [
+        TickStage::Clock,
+        TickStage::Command,
+        TickStage::SimHiterSnapshot,
+        TickStage::SimExpireHitters,
+        TickStage::SimSettleDeaths,
+        TickStage::SimSelfDeliver,
+        TickStage::SimExtraAbil,
+        TickStage::SimMapEvents,
+        TickStage::SimSlaveCleanup,
+        TickStage::SimBuff,
+        TickStage::SimMonsterAi,
+        TickStage::SimNpc,
+        TickStage::SimMerchant,
+        TickStage::SimPlayerRunExpiry,
+        TickStage::SimDup,
+        TickStage::OutputDrain,
+        TickStage::TailSuperManRefill,
+        TickStage::TailPlayerDeaths,
+        TickStage::TailVerifyMapTime,
+        TickStage::OutputAoi,
+    ];
+    assert_eq!(
+        STAGE_ORDER, EXPECTED,
+        "STAGE_ORDER 就是 oracle 段序契约（换序/漏段必须显式改测试并评审）"
+    );
+
+    let mut world = World::new();
+    world.insert_resource(StageTrace::default());
+    let mut runner = TickRunner::new();
+    // 反向注册：若顺序退回注册序，得到的是 19..0。
+    for (idx, stage) in EXPECTED.iter().enumerate().rev() {
+        runner.add_systems(*stage, move |mut t: ResMut<StageTrace>| t.0.push(idx));
+    }
+    runner.run(&mut world);
+    assert_eq!(
+        world.resource::<StageTrace>().0,
+        (0..EXPECTED.len()).collect::<Vec<_>>(),
+        "20 段必须严格按 oracle 段序执行（Clock → Command → Sim* → OutputDrain → Tail* → OutputAoi）"
     );
 }
 
@@ -126,8 +181,8 @@ fn tick_runner_asserts_zero_ambiguity() {
     let mut runner = TickRunner::new();
     // 同阶段 + 冲突访问 + 未显式排序：契约要求 run 在跑任何系统前 panic。
     // （注册入口一次只收一个系统；两系统要分开调用。）
-    runner.add_systems(TickStage::Simulate, write_a);
-    runner.add_systems(TickStage::Simulate, write_b);
+    runner.add_systems(TickStage::SimBuff, write_a);
+    runner.add_systems(TickStage::SimBuff, write_b);
 
     let hit = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| runner.run(&mut world)));
     let payload = hit.expect_err("TickRunner 必须对歧义 schedule panic");
