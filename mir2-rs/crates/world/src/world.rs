@@ -1437,12 +1437,14 @@ pub fn output_drain_system(
         .append(&mut sim.pending_show_hp_health_changes);
 }
 
-/// **S4d-3/P1**：head 侧的段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
+/// **S4d-3/P1 起、P2/P2b 扩到 7 段**：head 侧的段运行器组（`Clock` / `SimHiterSnapshot` /
+/// `SimExpireHitters` / `SimExtraAbil` / `SimMapEvents` / `SimPlayerRunExpiry` / `OutputDrain`）。
 ///
-/// 为什么是三个 `TickRunner` 而不是一个：这三段之间仍夹着尚未系统化的内联段
-/// （命令 FIFO、命中者过期、…、重叠推挤；P2–P7 逐批消灭）。合成一次 `run` 会把三段挤到
-/// 一起，改变段序与 RNG 消费者次序（`SimHiterSnapshot` 必须在命令 FIFO 之后、
-/// `OutputDrain` 必须在 `check_dup_obj` 之后）。P7 收口后 head 侧应合成**一个** `TickRunner`。
+/// 为什么是七个 `TickRunner` 而不是一个：这些段之间仍夹着尚未系统化的内联段
+/// （命令 FIFO、死亡结算、…、重叠推挤；P3–P7 逐批消灭）。合成一次 `run` 会把已系统化的段
+/// 挤到一起，改变段序与 RNG 消费者次序（`SimHiterSnapshot` 必须在命令 FIFO 之后、
+/// `SimMapEvents` 必须在 `SimExtraAbil` 之后且 `SimSlaveCleanup` 之前、`OutputDrain` 必须在
+/// `check_dup_obj` 之后）。P7 收口后 head 侧应合成**一个** `TickRunner`。
 pub struct HeadRunner {
     /// 段 -> 该段的 `TickRunner`（每段一个 schedule，段之间仍由 facade 的内联段分隔）。
     runners: Vec<(TickStage, TickRunner)>,

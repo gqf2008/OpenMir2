@@ -888,8 +888,10 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **回退单位（P3-COMMIT-REVERT）**：P2 批的回退单位是 **`9c8764649` + `218760540` 两笔**——
 > 单独 revert `9c8764649` **不编译**（它删除了 `tests/run_state_expiry_vectors.rs` 仍在用的
 > pub API），`218760540`（恢复 `expire_player_run_state` 兼容入口）是其前置。P2 其余提交
-> 可逐笔 revert；P2b 的三笔（`d9de6052f` / `17287ced3` / `efa2b0d65`）各自可独立回退，
-> 但 `efa2b0d65`（SimMapEvents）依赖前两笔的白名单/视图实现。
+> 可逐笔 revert。P2b 的三笔**不可各自独立回退，必须按逆序**：`efa2b0d65`（SimMapEvents）
+> 依赖 `17287ced3`（`view_*` 的 `ViewAccess`）与 `d9de6052f`（`TypeId` 白名单）；`17287ced3`
+> 也依赖 `d9de6052f`。回退顺序 = `efa2b0d65` → `17287ced3` → `d9de6052f`。
+> 合并前补丁（两颗组合视图负例牙 + 四条 P3 文字修正）另成一笔，可单独回退、不影响前三笔。
 >
 > **S4d-3/P2b 落地登记（2026-11-13，第三批）**：review `c309baf1` 点名的两处适配器缺陷已修：
 > `P2-GENERIC-NAMES`（段白名单改**类型身份** `TypeId`：`StageSpec::reads/writes(TypeId)` 由

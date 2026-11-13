@@ -1083,8 +1083,7 @@ mod stage_adapter_tests {
     /// T-neg-6：组合视图里**任一**组件越界即拒（不是只看第一项）。
     ///
     /// 牙：把 `assert_view_access` 改成只检查第一项 ⇒ 本用例不再 panic ⇒ 红。
-    /// （`Probe` 允许 A/B；`Unregistered` 只注册了就放行读——这里用 `Unreg2` 只放行 A，
-    /// 视图 `(&A, &B)` 的第二项 B 必须被拒。）
+    /// （`OnlyA` 只放行 A 的读、却实现了 `Reads<B>` 标记——视图 `(&A, &B)` 的第二项 B 必须被拒。）
     struct OnlyA;
     impl StageSpec for OnlyA {
         const STAGE: TickStage = TickStage::SimBuff;
@@ -1102,5 +1101,39 @@ mod stage_adapter_tests {
         assert!(store.insert_component(1, B(5)));
         let mut ad = StageEntities::<OnlyA>::new(store.world_mut());
         let _ = ad.view_ref::<(&'static A, &'static B)>(1);
+    }
+
+    // ---------------- P2b 补牙：组合视图两半判据各一颗（review 0a51f6c1 P3-VIEW-TOOTH） ----------------
+
+    // 只读白名单段（`read: [A]`、`write: []`）：`&mut A` 的视图必须被拒。
+    stage_spec!(ReadOnlyProbe, TickStage::SimBuff, read: [A], write: []);
+
+    /// T-neg-7：**写判据**——组件在**读**白名单里、但不在**写**白名单里，`view_mut` 必须 panic。
+    ///
+    /// 牙（reviewer M8）：把 `assert_view_access` 的 `AccessKind::Write` 分支接成 `S::reads(id)`
+    /// ⇒ 本用例的 `&mut A` 被误放行、不再 panic ⇒ 红。空名单段的 `t_neg_4` 咬不住这条
+    /// （空名单时 `reads`/`writes` 都是 false），所以必须有「读放行、写不放行」的段。
+    #[test]
+    #[should_panic(expected = "越白名单写组件")]
+    fn t_neg_7_view_mut_write_branch_uses_writes_whitelist() {
+        let mut store = store_with(&[1]);
+        let mut ad = StageEntities::<ReadOnlyProbe>::new(store.world_mut());
+        let _ = ad.view_mut::<(&'static mut A,)>(1);
+    }
+
+    // 白名单内（读）但**未在 ComponentRegistry 注册**的组件：视图必须 panic。
+    stage_spec!(ViewUnreg, TickStage::SimBuff, read: [Unregistered], write: []);
+
+    /// T-neg-8：**注册表判据**——组件在段读白名单里，但未登记 ⇒ `view_ref` 必须 panic。
+    ///
+    /// 牙（reviewer M9）：删掉 `assert_view_access` 里的 `registry.assert_registered_id(id)`
+    /// ⇒ 登记检查消失（bevy 会按需建 `QueryState`，缺组件只是 `None`）⇒ 本用例不再 panic ⇒ 红。
+    /// 注意：`Unregistered` 只在 `store_with` 里没有登记（该 helper 只登记 A/B）。
+    #[test]
+    #[should_panic(expected = "未在 ComponentRegistry 注册")]
+    fn t_neg_8_view_rejects_unregistered_component() {
+        let mut store = store_with(&[1]);
+        let mut ad = StageEntities::<ViewUnreg>::new(store.world_mut());
+        let _ = ad.view_ref::<(&'static Unregistered,)>(1);
     }
 }

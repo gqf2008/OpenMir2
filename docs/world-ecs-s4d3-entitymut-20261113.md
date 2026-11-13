@@ -313,7 +313,7 @@ facade 侧：取回 sim / record / ids，删掉落的一次性资源
 | # | 设计写法 | 实现（交付 head） | 理由 / 不变量 |
 | --- | --- | --- | --- |
 | Dv1 | 运行期镜像用 `debug_assert!`（§2.4 第 2 条） | **always-on `assert!`**（`assert_stage_component` / `assert_view_access`） | 段适配器误用是**接线错误**（不是业务输入）：release 也必须 fail-closed，否则「标记 trait 与运行期白名单漂移」「组合视图越界」在发布构建里静默通过。成本 = 每次取组件一次 `TypeId` 比较（无分配）。P2b 起它还承担泛型实例判别与组合视图逐项核对 |
-| Dv2 | 顺序载体一律 `TickEntityIds`（§2.6，由 `SlotTable` 派生） | 段内直接用 **`SlotTable::order()`**（常驻资源，每段入口取一次）；`TickEntityIds` 只在 `SimHiterSnapshot` / `OutputAoi` 这类「需要一次性 id 表资源」的段使用 | 语义同一（槽位序 = 插入序 + 空闲槽 LIFO 复用；`SlotTable::order` 就是该契约的唯一真值）。D1 已把槽位表定为常驻资源，再复制一份 `TickEntityIds` 只会引入第二真值（D3 登记：`TickOrder`/`SlotOrder` 清理进 S5） |
+| Dv2 | 顺序载体一律 `TickEntityIds`（§2.6，由 `SlotTable` 派生） | 段内直接用 **`SlotTable::order()`**（常驻资源，每段入口取一次）；`TickEntityIds` 只在 `SimHiterSnapshot` 使用（`OutputAoi` 用的是 `AoiIds`，不是 `TickEntityIds`） | 语义同一（槽位序 = 插入序 + 空闲槽 LIFO 复用；`SlotTable::order` 就是该契约的唯一真值）。D1 已把槽位表定为常驻资源，再复制一份 `TickEntityIds` 只会引入第二真值（D3 登记：`TickOrder`/`SlotOrder` 清理进 S5） |
 | Dv3 | 「组装的组合视图任一字段取不到 ⇒ `None`；遍历时跳过」（§2.3） | **按组件**语义：`get::<C>` / `get_mut::<C>` 只在**该组件**缺失时 `None`（并 `StageSkip::component_missing += 1`）；组合视图（`view_*`）与 `snapshot_spawn`/`entity_ref` 才是「任一字段缺失 ⇒ `None`」 | 旧 facade 的两类读点本来就分这两类：`EntityStore::get`/`spawn_cloned` 是整条记录（24 组件全有才 `Some`），而适配器的 `get::<C>` 对应旧 `entities.get(id).field` 的按字段读。**不变量**：生产路径的 21+4 bundle 对每个实体齐全 ⇒ 半实体只可能出现在测试夹具；任何段在半实体上取到部分组件时 `StageSkip::component_missing` 非 0（诊断计数，不改变 `None`/跳过语义） |
 | Dv4 | `StageSkip` 描述为「本 tick 里」的计数（§2.4） | **世界生命期累计**（`AtomicU64` 只增不减，不按 tick 重置） | 免掉每 tick 一次清零写；计数只作诊断（非 0 = 接线 bug/半实体），绝对值不参与任何判据 |
 

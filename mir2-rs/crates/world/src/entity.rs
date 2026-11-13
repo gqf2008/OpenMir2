@@ -3548,6 +3548,10 @@ mod tests {
     ///
     /// 牙：把 `SnapshotViewQuery` 的任一组件换掉、或让 `snapshot_spawn` 接另一份装配路径 ⇒
     /// `Debug` 输出不再逐字相同 ⇒ 红；把 `entity_ref` 的某个字段接错 ⇒ 元组断言红。
+    /// **覆盖边界（review 0a51f6c1 口径）**：只改**共享装配器** `EntityStore::from_components`
+    /// 时本用例不会红（两条路径一起变）——装配器的字段等价由「`from_components` 字面量与
+    /// 旧 `spawn_cloned` 的 144 行规范化逐行恒等」单独证明（脚本复核），本用例只证
+    /// 「两条读取路径（`StageQueries` vs `view_state/view2/view3`）读出同一份值」。
     #[test]
     fn stage_snapshot_spawn_matches_spawn_cloned() {
         use mir2_world_bevy::tick::StageEntities;
