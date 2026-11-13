@@ -820,7 +820,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > P0+P1 = **4**（Clock / SimHiterSnapshot / OutputDrain / OutputAoi）、
 > P2 = **8**（head 6 = Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
 > SimPlayerRunExpiry / OutputDrain；tail 2 = TailSuperManRefill / OutputAoi）、
-> **P2b = 9**、**P3a = 10**（+`SimDup`）、**P3b = 12**（+`SimSettleDeaths`（head 9）+ `TailPlayerDeaths`（tail 3））。
+> **P2b = 9**、**P3a = 10**、**P3b = 12**、**P4 = 14**（+`SimSlaveCleanup`（head 10）+ `TailVerifyMapTime`（tail 4））。
 > Clock 也走 `run_head_stage`，因此**不是**设计初稿写的「3 → 2」。设计 §2.5 的目标仍是
 > **P7 收口时 2 个**（head 一个、tail 一个，其余段全部系统化后 head 只跑一次）。
 > 本节与设计 §2.5 均按真实数字表述；`world.rs` 里指向 `snapshot_runner` 的陈旧注释、
@@ -945,10 +945,24 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > 两轮 × 13 槽 `Random(nRate)` = 26 抽，`format!("{:?}", rng)` 与 `draws_after(seed, [1;26])`
 > 逐值相同；单轮/红名/白名/StdMode45 各例同理）。迁移后同一组用例逐项通过 ⇒ 抽数点/次数/次序不变。
 > **段数口径（单位 = 段号）**：P3b 后已迁 **8 段 / 余 10**（#3/#4/#6/#7/#13/#14/#16/#17）。
+>
+> **S4d-3/P4 落地登记（2026-11-13，第六批）**：`SimSlaveCleanup`（#8，tick_head）与
+> `TailVerifyMapTime`（#18，tick_tail）已迁成段系统（各自一个可独立回退提交）：
+> - `SimSlaveCleanup`：段位 = 原 `slave::slave_list_cleanup_all(self)` 行；槽位序 + 表内倒序
+>   删除 + `slave_list` 写回 + ghost 主人不清理（B14），不抽 RNG；
+> - `TailVerifyMapTime`：段位 = 原 `self.verify_players_map_time()` 行；槽位序 + 30s 严格 `>` 门
+>   + `VerifyMapTime` 刷格 + HP/MP 钳制（`:230-245`），`pending_verify_health_changes` 由
+>   facade 在段后 append（顺序不变），不抽 RNG。
+> 两段沿用 Dv5 借用形状；`EntityAccess` 增 `map_binding_mut`（`EntityMut` 不含 `MapBinding`）。
+> **RNG 逐点 trace（P2-1 口径）**：`MIR2_RNG_LOG` 在 base（168f18843）与 head 上跑同一夹具
+> （`settle_deaths_pvp_calls_drop_use_items_twice`，site 全部落在未改动的 death_drop.rs），
+> `seq/kind/max/result/site` 五列逐行 diff 0 行；两段窗口内 trace 0 条（代码里无 `rng` 调用）。
+> **段数口径**：P4 后已迁 **10 段 / 余 8**（#3/#4/#6/#7/#8/#13/#14/#16/#17/#18）。
+
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
 
-> **尚未做（以 P3b 交付 head 为准；单位 = 段号）**：P4–P7（余 **10** 段——
-> 18 段中已迁 **8 段**：#3/#4/#6/#7/#13/#14/#16/#17）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **尚未做（以 P4 交付 head 为准；单位 = 段号）**：P5–P7（余 **8** 段——
+> 18 段中已迁 **10 段**：#3/#4/#6/#7/#8/#13/#14/#16/#17/#18）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 > 段号清单与写集见设计 §2.1/§4。
 

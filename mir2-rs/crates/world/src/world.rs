@@ -1518,6 +1518,10 @@ impl TailRunner {
             tail_super_man_refill_stage_system,
         );
         me.add(TickStage::TailPlayerDeaths, tail_player_deaths_stage_system);
+        me.add(
+            TickStage::TailVerifyMapTime,
+            tail_verify_map_time_stage_system,
+        );
         me.add(TickStage::OutputAoi, output_aoi_stage_system);
         me
     }
@@ -2354,6 +2358,81 @@ pub fn sim_slave_cleanup_stage_system(world: &mut bevy_ecs::world::World) {
     let mut ad = StageEntities::<SimSlaveCleanup>::new(world);
     let mut access = crate::entity::StageAccess { ad: &mut ad };
     crate::slave::slave_list_cleanup_all_impl(&mut access);
+}
+
+mir2_world_bevy::stage_spec!(
+    TailVerifyMapTime,
+    TickStage::TailVerifyMapTime,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+/// **S4d-3/P4 段 #18 `TailVerifyMapTime`**：`base.Run` 的 `VerifyMapTime` + HP/MP 钳制
+/// （`BaseObject.Base.cs:223-245`）。
+///
+/// 段位 = `tick_tail` 原 `self.verify_players_map_time()` 那一行（玩家死亡结算之后、AOI 之前）；
+/// 处理顺序 = 槽位序（`order_ids`）；`pending_verify_health_changes` 由 facade 在段后 append
+/// 进 `record.verify_health_changes`（与原顺序相同）。不抽 RNG。
+///
+/// 借用形状沿用裁决：`remove_resource::<SimState>()` 取 owned → `StageEntities` 并行 → 归还。
+pub fn tail_verify_map_time_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::TailVerifyMapTime);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("SimState 必须在段窗口内（段边界契约）");
+    {
+        let mut ad = StageEntities::<TailVerifyMapTime>::new(world);
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        World::verify_players_map_time_impl(&mut access, &mut sim);
+    }
+    world.insert_resource(sim);
 }
 
 pub struct World {
@@ -6551,7 +6630,8 @@ impl World {
         // 静止玩家的格子时间（`BaseObject.Base.cs:223-228`）。30s 门与 `:230-245` 钳制在
         // `verify_map_time` 内。
         self.tail_phase_log.push(TailPhase::VerifyMapTime);
-        self.verify_players_map_time();
+        // S4d-3/P4 #18：段系统（`TailVerifyMapTime`），段位与旧内联调用完全相同。
+        self.run_tail_stage(|world, tail| tail.run(TickStage::TailVerifyMapTime, world));
         // 钳制段触发的玩家 `HealthSpellChanged()`（`BaseObject.cs:700-703` 只对 Play 发帧）。
         record
             .verify_health_changes
@@ -6619,9 +6699,14 @@ impl World {
     /// **不消费随机数**（纯状态演进），因此五批 RNG trace / golden 逐字节不变。
     ///
     /// 返回 `true` = 本次过了 30s 门并执行了刷新；`false` = 未到门 / actor 不存在。
-    pub fn verify_map_time(&mut self, actor_id: i32) -> bool {
-        let now = self.clock_ms;
-        let Some(e) = self.entities.get(actor_id) else {
+    /// **P4**：`verify_map_time` 的 facade/段共用实现（30s 门 + `VerifyMapTime` + 钳制，逐句与旧方法相同）。
+    pub(crate) fn verify_map_time_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) -> bool {
+        let now = sim.clock_ms;
+        let Some(e) = access.get(actor_id) else {
             return false;
         };
         // `BaseObject.Base.cs:223`：`(HUtil32.GetTickCount() - VerifyTick) > 30 * 1000`。
@@ -6631,10 +6716,10 @@ impl World {
         let (x, y, map_id) = (e.x, e.y, e.map_id);
         // `baseObject.CellType`：`PlayObject` = Play、`AnimalObject` = Monster、`NormNpc` = Merchant。
         let cell_type = entity_cell_type(&e);
-        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+        if let Some(b) = access.map_binding_mut(actor_id) {
             b.verify_tick = now;
         }
-        if let Some(map) = self.maps.get_mut(map_id) {
+        if let Some(map) = sim.maps.get_mut(map_id) {
             let mut bo_verify = false;
             {
                 let (cell, cell_success) = map.get_cell_info_mut(x, y);
@@ -6667,7 +6752,7 @@ impl World {
             if !bo_verify {
                 // `AddMapObject`（`Envirnoment.cs:252-296`）：成功时置 `AddToMaped`/`AddObject`。
                 if map.add_map_object(x, y, cell_type, actor_id, now) {
-                    if let Some(b) = self.entities.map_binding_mut(actor_id) {
+                    if let Some(b) = access.map_binding_mut(actor_id) {
                         b.add_to_mapped = true;
                     }
                 }
@@ -6675,8 +6760,13 @@ impl World {
         }
         // **PL-1**：`base.Run` 的 `:230-245` 钳制段——在**同一个 30s `VerifyTick` 门内**、
         // `VerifyMapTime` 之后（oracle 行序）。此前 Rust 只建模 `:223-228`（缺口登记于 spike §1.1）。
-        self.clamp_overflow_abilitys(actor_id);
+        Self::clamp_overflow_abilitys_impl(access, sim, actor_id);
         true
+    }
+
+    /// 旧 facade 入口（测试直接驱动用）：委托 [`Self::verify_map_time_impl`]。
+    pub fn verify_map_time(&mut self, actor_id: i32) -> bool {
+        Self::verify_map_time_impl(&mut self.entities, &mut self.sim, actor_id)
     }
 
     /// `BaseObject.Run` 的 HP/MP 超上限钳制（`src/M2Server/Actor/BaseObject.Base.cs:230-245`）：
@@ -6695,8 +6785,13 @@ impl World {
     ///    （进 [`World::pending_show_hp_health_changes`]）。
     ///
     /// 调用点：仅 [`World::verify_map_time`]（30s 门内、`VerifyMapTime` 之后）。不消费 RNG。
-    fn clamp_overflow_abilitys(&mut self, actor_id: i32) {
-        let Some(e) = self.entities.get_mut(actor_id) else {
+    /// **P4**：HP/MP 超上限钳制（`:230-245`）的 facade/段共用实现。
+    fn clamp_overflow_abilitys_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) {
+        let Some(e) = access.get_mut(actor_id) else {
             return;
         };
         let mut hp_clamped = false;
@@ -6713,12 +6808,17 @@ impl World {
         let show_hp = e.buff.show_hp;
         let (id, hp, mp) = (e.id, e.vitals.hp, e.vitals.mp);
         if (hp_clamped || mp_clamped) && is_play {
-            self.pending_verify_health_changes
+            sim.pending_verify_health_changes
                 .push((id, hp, mp, hp_clamped, mp_clamped));
         } else if (hp_clamped || mp_clamped) && show_hp {
             // `BaseObject.cs:706-708` 第二支：`ShowHp` 无 race 门 ⇒ ±12 广播 53。
-            self.record_show_hp_health_change(id, hp, mp);
+            sim.pending_show_hp_health_changes.push((id, hp, mp));
         }
+    }
+
+    #[allow(dead_code)] // 段路径走 `Self::clamp_overflow_abilitys_impl`
+    fn clamp_overflow_abilitys(&mut self, actor_id: i32) {
+        Self::clamp_overflow_abilitys_impl(&mut self.entities, &mut self.sim, actor_id)
     }
 
     /// 记一次**非 Play** 实体的 `HealthSpellChanged()` 第二支（`BaseObject.cs:706-708`）。
@@ -7032,16 +7132,29 @@ impl World {
     /// `Run` 方法 ⇒ 在 [`World::tick`] 的 AOI 段之前补这一趟（`race == Play && !Ghost`，
     /// `Ghost` 玩家已从 `PlayObjectList` 移除、不再 Run，见 `WorldServer.cs:708-711`）。
     /// 30s 门在 [`World::verify_map_time`] 内 ⇒ 常态每 tick 只是一次整数比较。
-    fn verify_players_map_time(&mut self) {
-        let ids: Vec<i32> = self
-            .entities
-            .iter_ref()
-            .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
-            .map(|e| e.id)
-            .collect();
-        for id in ids {
-            self.verify_map_time(id);
+    /// **P4**：`verify_players_map_time` 的 facade/段共用实现（槽位序 + 30s 门在 `verify_map_time_impl`）。
+    pub(crate) fn verify_players_map_time_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+    ) {
+        // 槽位序收集（与旧 `iter_ref().filter(Play && !Ghost)` 同序）。
+        let mut ids: Vec<i32> = Vec::new();
+        for id in access.order_ids() {
+            if let Some(e) = access.get(id) {
+                if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
+                    ids.push(id);
+                }
+            }
         }
+        for id in ids {
+            Self::verify_map_time_impl(access, sim, id);
+        }
+    }
+
+    /// 旧 facade 入口（`tick_tail` 已走段系统；测试/宿主仍可调）。
+    #[allow(dead_code)]
+    fn verify_players_map_time(&mut self) {
+        Self::verify_players_map_time_impl(&mut self.entities, &mut self.sim)
     }
 
     /// 进图：实体落进 `map_id` 的格子（对应 `Envirnoment.AddMapObject`）。
@@ -9202,9 +9315,68 @@ mod tests {
                 TickStage::OutputDrain,
                 TickStage::TailSuperManRefill,
                 TickStage::TailPlayerDeaths,
+                TickStage::TailVerifyMapTime,
                 TickStage::OutputAoi
             ],
             "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
+        );
+    }
+
+    /// **P4**：`TailVerifyMapTime` 段与旧 `verify_players_map_time` 同语义（槽位序 + 30s 门 +
+    /// `VerifyMapTime` 刷格 + HP/MP 钳制）。
+    ///
+    /// 牙：① 删段注册 ⇒ 格 add_time/verify_tick 不刷新（本条 + trace 牙红）；② 删
+    /// `b.verify_tick = now` ⇒ verify_tick 断言红；③ 删 `cell.obj_list[i].add_time = now` ⇒
+    /// add_time 断言红；④ 删钳制写回 ⇒ HP 断言红；⑤ 删 pending 写回 ⇒ `record.verify_health_changes` 红。
+    #[test]
+    fn tail_verify_map_time_stage_refreshes_and_clamps_in_slot_order() {
+        let mut w = World::new(16, 16);
+        let mk_play = |w: &mut World, name: &str, x: i32| {
+            w.add_entity({
+                let mut e = crate::EntitySpawn::new(0, name, x, 5);
+                e.race = crate::entity::ACTOR_RACE_PLAY;
+                e.hp = 100;
+                e.max_hp = 50;
+                e.mp = 10;
+                e.max_mp = 10;
+                e
+            })
+        };
+        let p1 = mk_play(&mut w, "p1", 5);
+        let p2 = mk_play(&mut w, "p2", 6);
+        w.tick(); // clock=200：Enter 落格（add_time=200）；30s 门未过。
+        let cell_add = |w: &World, id: i32| {
+            let (x, y) = w.entities.get(id).map(|e| (e.x, e.y)).unwrap();
+            w.maps[0]
+                .cell(x, y)
+                .obj_list
+                .iter()
+                .find(|o| o.actor_object && o.cell_obj_id == id)
+                .expect("格子项存在")
+                .add_time
+        };
+        assert_eq!(cell_add(&w, p1), 200);
+        // 30s 门严格大于：tick_head 每 tick +200。
+        // 29_800 → tick 后 30_000：`30_000 - 0 == 30_000` 不刷新。
+        w.clock_ms = 29_800;
+        w.tick();
+        assert_eq!(cell_add(&w, p1), 200, "等于 30s 不刷新");
+        // 30_000 → tick 后 30_200：`30_200 - 0 > 30_000` ⇒ 刷新。
+        w.clock_ms = 30_000;
+        let rec = w.tick();
+        let now = w.clock_ms;
+        assert_eq!(now, 30_200);
+        assert_eq!(cell_add(&w, p1), now, "VerifyMapTime 必须刷格 add_time");
+        assert_eq!(w.entities.get(p1).unwrap().verify_tick, now);
+        assert_eq!(w.entities.get(p1).unwrap().hp, 49, "HP > MaxHP ⇒ MaxHP-1");
+        assert_eq!(w.entities.get(p2).unwrap().hp, 49);
+        assert_eq!(
+            rec.verify_health_changes
+                .iter()
+                .map(|c| c.0)
+                .collect::<Vec<_>>(),
+            vec![p1, p2],
+            "钳制事件按槽位序进 record"
         );
     }
 
