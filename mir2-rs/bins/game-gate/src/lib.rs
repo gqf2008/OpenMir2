@@ -844,8 +844,32 @@ async fn client_loop(
     }
 
     // 读循环：**客户端 face 无定长头**，一次 read 就是**一帧**（`#…!`）——照 oracle
-    // （`ServerService.Initialize()` 的 TcpService 不挂 DataHandlingAdapter ⇒ `ProcessSessionPacket`
-    // 直接吃一次 read 的字节）。帧被 TCP 拆开/合并时的后果与 oracle 一致（都会被剔除）。
+    // （`ServerService.Initialize()` 的 TcpService 不挂 `DataHandlingAdapter` ⇒
+    // `ClientSession.ProcessSessionPacket` 直接吃一次 read 的字节），这里也没有跨 read 的
+    // 重组缓冲。因此帧被 TCP 拆开/合并时**既不拼回、也不一律剔除**，后果按片段长度分叉：
+    //
+    // 拆帧（一个 `#…!` 跨两次 read，两段各自按「一次 read 一帧」独立处理；`deCodeLen` 只由
+    // 本次片段长度决定——`EncryptUtil.DecodeSpan` / `edcode::decode` 对截断流不报错，只产出垃圾字节）：
+    // - 登录后、片段 < `CommandFixedLength`（16 字节）：长度 1 当心跳丢弃；其余 `Socket.Close()` 关会话。
+    // - 登录后、16–18 字节：剥壳（`destinationSpan[2..^1]`）后 `tempBuff` 剩 13–15 字节，
+    //   `deCodeLen` = 9/10/11 < 12 ⇒ 关会话。
+    // - 登录后、≥19 字节（且 ≤ `NomClientPacketSize`，现网默认 400）：长度门全过，截断编码流解成
+    //   垃圾字节；垃圾 `Ident` 不命中任何 `CM_*` case 时，oracle 那个没有 `default` 的
+    //   `switch (clientMessage.Ident)` **顺序贯穿**到转发代码（这里的 `_ => Forward` 等价），
+    //   把这段垃圾以 `GM_DATA` 转发给 GameSvr（极小概率命中某个 `CM_*` 时按该分支规则处置）；
+    //   超过 `NomClientPacketSize` 则只记日志、丢帧。
+    // - 登录前（`ProcessSessionPacket` 的 `else` 分支）：≥4 字节走 `EDCode.DeCodeString` →
+    //   `ClientLogin`，失败即 `Kick(1)` 剔除；≤2 字节时 `destinationSpan[2..(packetLen-1)]` 越界
+    //   抛异常、被 `ServerManager` 的 catch 吞掉 ⇒ 丢帧、会话存活（对应 `classify_frame` 的
+    //   `frame.len() < 3` ⇒ `Ignore`）。**3 字节与 oracle 不同**：oracle 是 `[2..2]` 空 payload、
+    //   `DeCodeString` 抛 `ArgumentNullException` 被吞（会话存活），这里会进 `handle_login`、
+    //   被 `ClientLogin` 的 `packetLen <= 15` 门判失败而关会话。
+    //
+    // 合帧（多帧落进同一次 read）：只按**一帧**处理，剥壳只去掉首 2 字节与最后一个字节，
+    // 后续帧的 `#…` 帧头与正文留在解码流里，成为首帧的正文/尾部（例如 say+walk 的第二帧头被
+    // 并进 SAY 正文），**不重组、也不逐帧分类** ⇒ 后续帧绕过 `CM_WALK`/攻击族/`CM_SPELL` 的
+    // 分类与限速；长度门以整次 read 的总长为判据，合帧一旦越过 `NomClientPacketSize`，
+    // 整段被丢（而不是只丢后续帧）。
     let mut buf = vec![0u8; MAX_READ];
     let mut logged_in = false;
     let mut closed = Ok(());
