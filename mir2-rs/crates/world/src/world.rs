@@ -1461,6 +1461,7 @@ impl HeadRunner {
         me.add(TickStage::SimSettleDeaths, sim_settle_deaths_stage_system);
         me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
         me.add(TickStage::SimMapEvents, sim_map_events_stage_system);
+        me.add(TickStage::SimSlaveCleanup, sim_slave_cleanup_stage_system);
         me.add(
             TickStage::SimPlayerRunExpiry,
             expire_player_run_state_stage_system,
@@ -2193,7 +2194,7 @@ mir2_world_bevy::stage_spec!(
 ///
 /// 组合视图（`EntityRef`/`EntityMut`）要取齐整条记录，所以 spec 必须声明全集；写集 20 个
 /// 是 `EntityMut` 的可变字段（`Transform`/`MapBinding`/`Recovery`/`PvpState` 不在其中）。
-trait SettleSpec:
+trait FullAccessSpec:
     StageSpec
     + mir2_world_bevy::tick::Reads<crate::entity::Entity>
     + mir2_world_bevy::tick::Reads<Transform>
@@ -2221,7 +2222,7 @@ trait SettleSpec:
     + mir2_world_bevy::tick::Reads<crate::entity::AiState>
 {
 }
-impl<T> SettleSpec for T where
+impl<T> FullAccessSpec for T where
     T: StageSpec
         + mir2_world_bevy::tick::Reads<crate::entity::Entity>
         + mir2_world_bevy::tick::Reads<Transform>
@@ -2254,7 +2255,10 @@ impl<T> SettleSpec for T where
 ///
 /// 借用形状按 2026-11-13 裁决：`remove_resource::<SimState>()` 取 owned SimState →
 /// `StageEntities` 借 bevy World → 段尾归还；`TickRecordRes` 由段边界插入/段内取用后再放回。
-fn settle_deaths_stage_core<S: SettleSpec>(world: &mut bevy_ecs::world::World, only_players: bool) {
+fn settle_deaths_stage_core<S: FullAccessSpec>(
+    world: &mut bevy_ecs::world::World,
+    only_players: bool,
+) {
     StageTrace::record(
         world,
         if only_players {
@@ -2286,6 +2290,70 @@ pub fn sim_settle_deaths_stage_system(world: &mut bevy_ecs::world::World) {
 /// **S4d-3/P3b 段 #17 `TailPlayerDeaths`**：玩家死亡结算（`tick_tail` 原位；P32 复活门之后）。
 pub fn tail_player_deaths_stage_system(world: &mut bevy_ecs::world::World) {
     settle_deaths_stage_core::<TailPlayerDeaths>(world, true);
+}
+
+mir2_world_bevy::stage_spec!(
+    SimSlaveCleanup,
+    TickStage::SimSlaveCleanup,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+/// **S4d-3/P4 段 #8 `SimSlaveCleanup`**：宝宝清表（`BaseObject.Base.cs:208-217`）。
+///
+/// 段位 = `tick_head` 原 `slave::slave_list_cleanup_all(self)` 那一行（地图事件之后、buff 之前）；
+/// 处理顺序 = 槽位序（`order_ids`）+ 表内**倒序**删除（`slave_list_cleanup_impl`）。不抽 RNG。
+pub fn sim_slave_cleanup_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimSlaveCleanup);
+    let mut ad = StageEntities::<SimSlaveCleanup>::new(world);
+    let mut access = crate::entity::StageAccess { ad: &mut ad };
+    crate::slave::slave_list_cleanup_all_impl(&mut access);
 }
 
 pub struct World {
@@ -6338,7 +6406,8 @@ impl World {
         // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
         // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后
         // 按槽位顺序对每个**持有宝宝**的实体跑一次。空表 ⇒ 零动作（golden 逐字节不变）。
-        crate::slave::slave_list_cleanup_all(self);
+        // S4d-3/P4 #8：段系统（`SimSlaveCleanup`），段位与旧内联调用完全相同。
+        self.run_head_stage(|world, head| head.run(TickStage::SimSlaveCleanup, world));
 
         // **车道 B1（buff 系统）**：buff pass（oracle `ActorBuffProcessor` 的 50ms `DoWork`
         // 单线程等价物，见 [`crate::buff`]）。**缺省关闭**（`buff_enabled=false`）⇒ 既有 golden
@@ -9127,6 +9196,7 @@ mod tests {
                 TickStage::SimSettleDeaths,
                 TickStage::SimExtraAbil,
                 TickStage::SimMapEvents,
+                TickStage::SimSlaveCleanup,
                 TickStage::SimPlayerRunExpiry,
                 TickStage::SimDup,
                 TickStage::OutputDrain,
@@ -9135,6 +9205,62 @@ mod tests {
                 TickStage::OutputAoi
             ],
             "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
+        );
+    }
+
+    /// **P4**：`SimSlaveCleanup` 段与旧 `slave_list_cleanup_all` 同语义（槽位序 + 表内倒序删除）。
+    ///
+    /// 主人持 4 个宝宝：alive 保留；dead/ghost/已换主三项移除。ghost 主人不替它清表。
+    ///
+    /// 牙：① 删段注册 ⇒ 列表不清理（本条/trace 牙红）；② 删 `list.remove(i)` ⇒ 红；
+    /// ③ 删写回 `m.slave.slave_list = list` ⇒ 红；④ 删 `!e.ghost` 过滤 ⇒ ghost 主人那侧红。
+    #[test]
+    fn sim_slave_cleanup_stage_removes_dead_ghost_and_reassigned() {
+        let mut w = World::new(16, 16);
+        let mk_mon = |w: &mut World, name: &str, x: i32| {
+            w.add_entity({
+                let mut e = crate::EntitySpawn::new(0, name, x, 5);
+                e.race = crate::entity::ACTOR_RACE_MONSTER;
+                e.hp = 100;
+                e.max_hp = 100;
+                e
+            })
+        };
+        let master = mk_mon(&mut w, "master", 5);
+        let other_master = mk_mon(&mut w, "other", 9);
+        let alive = mk_mon(&mut w, "alive", 6);
+        let dead = mk_mon(&mut w, "dead", 7);
+        let ghost = mk_mon(&mut w, "ghost", 8);
+        let reassigned = mk_mon(&mut w, "reassigned", 10);
+        let ghost_master = mk_mon(&mut w, "ghost-master", 11);
+        w.entities.get_mut(alive).unwrap().slave.master = Some(master);
+        {
+            let e = w.entities.get_mut(dead).unwrap();
+            e.slave.master = Some(master);
+            e.life_cycle.death = true;
+            e.life_cycle.death_settled = true;
+        }
+        {
+            let e = w.entities.get_mut(ghost).unwrap();
+            e.slave.master = Some(master);
+            e.life_cycle.ghost = true;
+        }
+        w.entities.get_mut(reassigned).unwrap().slave.master = Some(other_master);
+        w.entities.get_mut(ghost_master).unwrap().life_cycle.ghost = true;
+        w.entities.get_mut(master).unwrap().slave.slave_list = vec![alive, dead, ghost, reassigned];
+        w.entities.get_mut(ghost_master).unwrap().slave.slave_list = vec![dead];
+
+        w.tick();
+
+        assert_eq!(
+            w.entities.get(master).unwrap().slave_list.clone(),
+            vec![alive],
+            "死亡/幽灵/换主的宝宝必须从表里移除，存活项保持原序"
+        );
+        assert_eq!(
+            w.entities.get(ghost_master).unwrap().slave_list.clone(),
+            vec![dead],
+            "ghost 主人不 Run ⇒ 集中扫描不替它清表（B14）"
         );
     }
 
