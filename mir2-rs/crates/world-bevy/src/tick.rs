@@ -220,8 +220,11 @@ pub fn advance_clock_system(
 //     [`StageEntities`] 的方法带 `where S: Reads<C>` / `S: Writes<C>` 约束 ⇒ **越白名单是编译错误**；
 //   * 结构操作（`insert` / `remove`）另需 [`Structural`] 标记 ⇒ 非结构段调用也是编译错误；
 //   * **运行期镜像**（P2 前置，review P2-1）：每次取组件都核对 [`ComponentRegistry`] 里该组件的
-//     短名是否在本段 `READ`/`WRITE` 清单内，越界即 panic（fail-closed）——给「标记 trait 与
-//     名单表漂移」「泛型/dyn 转发」兜底；组件未注册同样 panic；
+//     **类型身份**（`TypeId`）是否在本段 `reads()` / `writes()` 白名单内，越界即 panic
+//     （fail-closed）——给「标记 trait 与名单表漂移」「泛型/dyn 转发」兜底；组件未注册同样 panic；
+//   * **泛型组件按实例区分**（P2b P2-GENERIC-NAMES）：白名单与注册表**都是 `TypeId` 口径**，
+//     `AbilitySnapshot<BaseAbil>` 与别的实例是两个独立条目；没有字符串比对，因此不需要
+//     「调用处写别名」，也没有「泛型永不匹配」的失效模式；
 //   * 拒绝语义**逐项照抄旧 facade 的 Option**：id 不在槽位表 / 实体已移除 / 组件缺失 ⇒ `None`
 //     并静默跳过；组件缺失另计 [`StageSkip::component_missing`]（诊断计数，不改变行为）。
 
@@ -237,16 +240,29 @@ use crate::ecs::SlotTable;
 ///
 /// 结构变更的编译期门是 [`Structural`] 标记 trait（只有 Command / NPC / 商人 /
 /// 宝宝清表会实现），不用常量：常量无消费者时是死配置（review P3-4）。
+///
+/// 白名单是**类型身份**（`TypeId`）而不是字符串：泛型组件的每个实例（`Gen<u8>` /
+/// `Gen<u16>`）是独立条目，`type_name` 的拼写差异（空格、模块路径、别名）都不参与判定。
 pub trait StageSpec: 'static {
     /// 本段在 [`STAGE_ORDER`] 里的阶段。
     const STAGE: TickStage;
-    /// 本段允许**读**的组件短名（与 [`Reads`] 实现必须一致；由 `stage_spec!` 生成）。
-    const READ: &'static [&'static str] = &[];
-    /// 本段允许**写**的组件短名（与 [`Writes`] 实现必须一致；由 `stage_spec!` 生成）。
-    const WRITE: &'static [&'static str] = &[];
+    /// 本段是否**允许读**该组件（由 [`stage_spec!`] 生成；默认不放行任何组件）。
+    ///
+    /// 与 [`Reads`] 标记 trait 是**两套独立声明**（编译期约束 / 运行期镜像）：正常路径两者由
+    /// `stage_spec!` 同步生成，手写 impl 若让它们漂移，运行期断言会 fail-closed（T-neg-1）。
+    fn reads(_id: TypeId) -> bool {
+        false
+    }
+    /// 本段是否**允许写**该组件（由 [`stage_spec!`] 生成；默认不放行任何组件）。
+    fn writes(_id: TypeId) -> bool {
+        false
+    }
 }
 
 /// 本段**允许读**的组件（标记 trait；由 `stage_spec!` 或手写 impl 生成）。
+///
+/// 这是**编译期**约束面：`StageEntities::get` 带 `S: Reads<C>` 绑定，越白名单编译失败。
+/// 运行期镜像见 [`StageSpec::reads`]（同一份 `stage_spec!` 同步生成两者）。
 pub trait Reads<C: Component> {}
 
 /// 本段**允许写**的组件（标记 trait；由 `stage_spec!` 或手写 impl 生成）。
@@ -255,17 +271,14 @@ pub trait Writes<C: Component<Mutability = bevy_ecs::component::Mutable>> {}
 /// 本段允许结构变更（增删实体）。
 pub trait Structural {}
 
-/// `type_name` 的短名（去模块路径与泛型参数）：`mir2_world_bevy::components::Vitals` ⇒ `Vitals`。
-pub fn short_type_name<C: 'static>() -> &'static str {
-    let full = core::any::type_name::<C>();
-    let base = full.split('<').next().unwrap_or(full);
-    base.rsplit("::").next().unwrap_or(base)
-}
-
-/// **组件注册表（资源）**：`TypeId` ⇒ 组件短名（P2 前置，设计 §2.4）。
+/// **组件注册表（资源）**：`TypeId` ⇒ 组件全名（P2 前置，设计 §2.4）。
 ///
-/// 用途有二：① 运行期镜像白名单的「名字来源」；② 「新组件忘了登记」的 fail-closed——
-/// 段里取一个未注册的组件直接 panic，而不是被静默当成 `None`。
+/// 用途有二：① 运行期镜像白名单的「类型身份」来源（**只比 `TypeId`**，字符串仅作诊断显示）；
+/// ② 「新组件忘了登记」的 fail-closed——段里取一个未注册的组件直接 panic，而不是被静默
+/// 当成 `None`。
+///
+/// 显示名用 `core::any::type_name`（含泛型参数与模块路径），因此 `Gen<u8>` / `Gen<u16>`
+/// 在诊断里也能区分（P2b P2-GENERIC-NAMES）。
 ///
 /// `EcsStore::new` 会插入空表；`EntityStore::new`（`crates/world`）把 25 个组件逐个登记。
 #[derive(Resource, Default)]
@@ -274,15 +287,21 @@ pub struct ComponentRegistry {
 }
 
 impl ComponentRegistry {
-    /// 登记一个组件类型（幂等）。
+    /// 登记一个组件类型（幂等；`TypeId` 是唯一键，泛型实例各占一项）。
     pub fn register<C: Component>(&mut self) -> &mut Self {
-        self.names.insert(TypeId::of::<C>(), short_type_name::<C>());
+        self.names
+            .insert(TypeId::of::<C>(), core::any::type_name::<C>());
         self
     }
 
-    /// 组件短名；未登记 ⇒ `None`。
+    /// 组件的显示名（含泛型参数）；未登记 ⇒ `None`。
     pub fn name_of<C: Component>(&self) -> Option<&'static str> {
-        self.names.get(&TypeId::of::<C>()).copied()
+        self.name_of_id(TypeId::of::<C>())
+    }
+
+    /// `TypeId` 口径的显示名；未登记 ⇒ `None`。
+    pub fn name_of_id(&self, id: TypeId) -> Option<&'static str> {
+        self.names.get(&id).copied()
     }
 
     /// 组件必须已登记，否则 panic（fail-closed）。
@@ -290,7 +309,16 @@ impl ComponentRegistry {
         assert!(
             self.name_of::<C>().is_some(),
             "组件 {} 未在 ComponentRegistry 注册：段适配器拒绝在未登记组件上工作（P2 前置）",
-            short_type_name::<C>()
+            core::any::type_name::<C>()
+        );
+    }
+
+    /// `TypeId` 口径的注册断言（组合视图用：那里只知道 `TypeId`）。
+    pub fn assert_registered_id(&self, id: TypeId) {
+        assert!(
+            self.names.contains_key(&id),
+            "组件 {id:?}（{}）未在 ComponentRegistry 注册：段适配器拒绝在未登记组件上工作（P2 前置）",
+            self.name_of_id(id).unwrap_or("<未登记>")
         );
     }
 
@@ -304,8 +332,9 @@ impl ComponentRegistry {
     }
 }
 
-/// **诊断计数（资源）**：本 tick 里「实体存在但组件缺失」的取组件次数（P2 前置，设计 §2.4）。
+/// **诊断计数（资源）**：世界生命期内「实体存在但组件缺失」的取组件次数（P2 前置，设计 §2.4）。
 ///
+/// **不按 tick 重置**（累加器只增不减；`StageSkip::default()` 的生命期 = 整个世界）。
 /// 21 个 bundle 组件对每个实体齐全，因此正常路径恒 0；非 0 即接线 bug 或半实体。
 #[derive(Resource, Default)]
 pub struct StageSkip {
@@ -391,21 +420,22 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         self.world.resource::<SlotTable>().entity_of(id)
     }
 
-    /// **运行期镜像白名单**：组件必须已注册，且短名在本段对应清单里；否则 panic（fail-closed）。
+    /// **运行期镜像白名单**：组件必须已注册，且 `TypeId` 在本段对应访问集里；否则 panic
+    /// （fail-closed）。比较是**类型身份**，不是字符串（泛型实例各自独立）。
     fn assert_stage_component<C: Component>(&self, write: bool) {
         let registry = self
             .world
             .get_resource::<ComponentRegistry>()
             .expect("ComponentRegistry 必须已由 EcsStore::new 插入（段适配器前置）");
         registry.assert_registered::<C>();
-        let name = short_type_name::<C>();
-        let allowed = if write { S::WRITE } else { S::READ };
+        let id = TypeId::of::<C>();
+        let allowed = if write { S::writes(id) } else { S::reads(id) };
         assert!(
-            allowed.contains(&name),
+            allowed,
             "段 {:?} 越白名单{}组件 {}：运行期镜像与编译期标记 trait 必须一致（P2 前置）",
             S::STAGE,
             if write { "写" } else { "读" },
-            name
+            registry.name_of_id(id).unwrap_or("<未登记>")
         );
     }
 
@@ -502,23 +532,29 @@ impl<S: StageSpec> Drop for StageEntities<'_, S> {
     }
 }
 
-/// **段规格声明宏**：一次生成 `StageSpec`（含 READ/WRITE 名单）+ `Reads`/`Writes` 标记 impl。
+/// **段规格声明宏**：一次生成 `StageSpec`（含运行期 `reads`/`writes` 白名单）+ `Reads`/`Writes`
+/// 标记 impl。
 ///
 /// ```text
 /// stage_spec!(SimExpireHitters, TickStage::SimExpireHitters,
 ///     read: [CoreIdentity, LifeCycle], write: [CombatAttribution]);
 /// ```
 ///
-/// 名单用 `stringify!` 生成短名（调用处写 `Vitals` 则名单就是 `"Vitals"`），与
-/// [`ComponentRegistry`] 的 `short_type_name` 同口径。泛型组件请在调用处写别名。
+/// 白名单用**类型身份**（`TypeId::of::<$r>()`）生成，与 [`ComponentRegistry`] 的键同口径：
+/// 泛型组件（`AbilitySnapshot<BaseAbil>`、`Gen<u8>`）按实例精确匹配，每个实例各占一项；
+/// 不需要写别名，也不存在字符串拼写差异（P2b P2-GENERIC-NAMES）。
 #[macro_export]
 macro_rules! stage_spec {
     ($spec:ident, $stage:expr, read: [$($r:ty),* $(,)?], write: [$($w:ty),* $(,)?]) => {
         pub struct $spec;
         impl $crate::tick::StageSpec for $spec {
             const STAGE: $crate::tick::TickStage = $stage;
-            const READ: &'static [&'static str] = &[$(stringify!($r)),*];
-            const WRITE: &'static [&'static str] = &[$(stringify!($w)),*];
+            fn reads(_id: ::core::any::TypeId) -> bool {
+                false $(|| _id == ::core::any::TypeId::of::<$r>())*
+            }
+            fn writes(_id: ::core::any::TypeId) -> bool {
+                false $(|| _id == ::core::any::TypeId::of::<$w>())*
+            }
         }
         $(impl $crate::tick::Reads<$r> for $spec {})*
         $(impl $crate::tick::Writes<$w> for $spec {})*
@@ -711,22 +747,26 @@ mod stage_adapter_tests {
 
     // ---------------- P2 前置：运行期镜像 / 未注册 / StageSkip / view_mut ----------------
 
-    /// T-neg-1：**标记 trait 与运行期名单漂移**（`Writes<B>` 有、`WRITE` 名单漏 B）⇒ 取组件
+    /// T-neg-1：**标记 trait 与运行期白名单漂移**（`Writes<B>` 有、`writes()` 漏 B）⇒ 取组件
     /// 必须 panic（fail-closed）。
     ///
     /// 牙：删掉 `get_mut` 里的 `assert_stage_component::<C>(true)` ⇒ 不再 panic ⇒ 红。
     struct Drift;
     impl StageSpec for Drift {
         const STAGE: TickStage = TickStage::SimBuff;
-        const READ: &'static [&'static str] = &["A"];
-        const WRITE: &'static [&'static str] = &["A"];
+        fn reads(id: TypeId) -> bool {
+            id == TypeId::of::<A>()
+        }
+        fn writes(id: TypeId) -> bool {
+            id == TypeId::of::<A>()
+        }
     }
     impl Writes<A> for Drift {}
     impl Writes<B> for Drift {}
     impl Reads<B> for Drift {}
 
     #[test]
-    #[should_panic(expected = "越白名单写组件 B")]
+    #[should_panic(expected = "越白名单写组件")]
     fn t_neg_1_mirror_catches_whitelist_drift() {
         let mut store = store_with(&[1]);
         assert!(store.insert_component(1, B(1)));
@@ -742,7 +782,9 @@ mod stage_adapter_tests {
     struct Unreg;
     impl StageSpec for Unreg {
         const STAGE: TickStage = TickStage::SimBuff;
-        const READ: &'static [&'static str] = &["Unregistered"];
+        fn reads(id: TypeId) -> bool {
+            id == TypeId::of::<Unregistered>()
+        }
     }
     impl Reads<Unregistered> for Unreg {}
 
@@ -753,6 +795,65 @@ mod stage_adapter_tests {
         assert!(store.insert_component(1, Unregistered(1)));
         let ad = StageEntities::<Unreg>::new(store.world_mut());
         let _ = ad.get::<Unregistered>(1);
+    }
+
+    // ---------------- P2b：泛型组件的类型身份（P2-GENERIC-NAMES） ----------------
+
+    /// 泛型组件：`Gen<u8>` / `Gen<u16>` 是**两个**组件类型（`TypeId` 不同）。
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct Gen<T>(T);
+
+    // T-generic-ok：`stage_spec!` 的白名单里写泛型实例 ⇒ 该实例的读**必须放行**。
+    //
+    // 牙（旧实现的失效模式）：`READ` 用 `stringify!` 时名单是 `"Gen < u8 >"`，而运行期
+    // `short_type_name` 是 `"Gen"` ⇒ 永不相等 ⇒ 正确声明的组件被误判越界。把白名单改回
+    // 字符串名单，本用例立刻 panic（`越白名单读组件`）。
+    stage_spec!(GenericProbe, TickStage::SimBuff, read: [Gen<u8>], write: []);
+
+    #[test]
+    fn t_generic_1_declared_instantiation_is_allowed() {
+        let mut store = EcsStore::<A>::new();
+        store
+            .register_component::<A>()
+            .register_component::<Gen<u8>>()
+            .register_component::<Gen<u16>>();
+        store.insert(1, A(1));
+        assert!(store.insert_component(1, Gen(7u8)));
+        let ad = StageEntities::<GenericProbe>::new(store.world_mut());
+        assert_eq!(
+            ad.get::<Gen<u8>>(1),
+            Some(&Gen(7u8)),
+            "声明了 Gen<u8> 就必须放行（泛型组件按实例匹配，不是按去掉参数的名字）"
+        );
+    }
+
+    /// T-generic-reject：**同一泛型类型的另一个实例**（`Gen<u16>`）不在白名单 ⇒ 必须 panic。
+    ///
+    /// 牙（旧实现的第二个失效模式）：字符串短名把 `Gen<u8>` / `Gen<u16>` 都归一成 `"Gen"`
+    /// ⇒ 另一个实例会被**误放行**。这里用「`reads()` 只放行 `Gen<u8>`、但标记 trait 声明了
+    /// `Reads<Gen<u16>>`」的手写段构造漂移，钉住运行期镜像按**实例**判别。
+    struct GenericDrift;
+    impl StageSpec for GenericDrift {
+        const STAGE: TickStage = TickStage::SimBuff;
+        fn reads(id: TypeId) -> bool {
+            id == TypeId::of::<Gen<u8>>()
+        }
+    }
+    impl Reads<Gen<u8>> for GenericDrift {}
+    impl Reads<Gen<u16>> for GenericDrift {}
+
+    #[test]
+    #[should_panic(expected = "越白名单读组件")]
+    fn t_generic_2_other_instantiation_is_rejected() {
+        let mut store = EcsStore::<A>::new();
+        store
+            .register_component::<A>()
+            .register_component::<Gen<u8>>()
+            .register_component::<Gen<u16>>();
+        store.insert(1, A(1));
+        assert!(store.insert_component(1, Gen(7u16)));
+        let ad = StageEntities::<GenericDrift>::new(store.world_mut());
+        let _ = ad.get::<Gen<u16>>(1);
     }
 
     /// `StageSkip::ComponentMissing`：实体存在但组件缺失 ⇒ 计数 +1；行为仍是 `None`/跳过。
