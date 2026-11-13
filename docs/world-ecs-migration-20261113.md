@@ -724,37 +724,46 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > （`World::tick` 只驱动 `TickRunner`、删除 `tick_head`/`tick_tail` 业务段）以该适配器为前置。
 > 本卡只交付 S4d-1 + S4d-2 首片，其余段仍由 facade 串行驱动（顺序与 RNG 消费者次序不变）。
 
-> **S4d-3/P0+P1 落地登记（2026-11-13，本卡第一批，commit `4460ad392`）**：
+> **S4d-3/P0+P1 落地登记（2026-11-13，本卡第一批；返工后 commit 见卡片 patch）**：
 > `SlotTable` 资源化（D1 四项条件全部落实）+ 段白名单/适配器骨架 + `StageTrace` +
 > 段边界哨兵（C5）+ 四个既有段收口到 `HeadRunner`/`tail_runner`（P1）。设计依据
 > `docs/world-ecs-s4d3-entitymut-20261113.md`；本批**不改段语义、不改 RNG 消费者次序**。
 >
-> **C1 普查（先于适配器代码，实况 rg + 逐点分类，双向等价）**
+> **C1 普查（实况 + 逐点分类；返工后按 reviewer-25 P3-1 重做，给出可复算口径）**
 >
-> 范围：`mir2-rs/crates/world/src/**` 的**生产代码**（首个 `#[cfg(test)]` 之前）；
-> 对 `.entities.<method>(` / `.entities.<受控访问器>(` 共 **727** 个调用点逐点分类。命令：
+> 范围：`mir2-rs/crates/world/src/**` 的**生产代码**（每个文件截到**首个** `#[cfg(test)]`）。
+> 计数单位有三种，**结论用第三种**：
+>
+> | 口径 | 计数 | 说明 |
+> | --- | --- | --- |
+> | 逐行（跳过注释行，**每行只算一次**） | 727 | 本批初版登记的数（**已作废**：一行两个调用只算一次，漏掉行内第二次命中） |
+> | 同一批行内按**出现次数** | 730 | 727 的行里，有 3 行各含 2 次调用 ⇒ 730 |
+> | reviewer-25 逐行口径（含 1 条 doc 注释行，方法表略宽） | 733 / 734 raw | 独立复算值；与 727 差在「注释行 + 逐行实现细节」，与 730 同量级 |
+> | **多行感知出现次数** | **937 code / 938 raw** | **权威口径**：730 行内 + **207 跨行调用链** + 1 条 doc 注释 |
+>
+> 跨行链 = `world` / `.entities` / `.get(x)` 这类拆行写法；逐行口径（含 `rg`）**看不见**这 207 处，
+> 这是 727/733 与 937 的全部差异来源。复算规则（脚本 `E:/UserTemp/c1_scan.py`，算法即下述三条）：
 >
 > ```text
-> rg -n "\.entities\.(get|get_mut|iter_ref|for_each_mut|spawn_cloned|write_back|insert|remove|order_index|order_entities|get_component|get_component_mut)\(" mir2-rs/crates/world/src
-> rg -n "\.entities\.(vitals|flags|life_cycle|appearance|buff|ai|slave|player_run|attribution|recovery|pvp|drop|spawn|inventory|merchant|npc_state|monster_class|ability|progression|group|revival|transform|map_binding|dup_state)(_mut)?\(" mir2-rs/crates/world/src
+> 1) 每个文件截到首个 "#[cfg(test)]"；把剩余文本当整体；
+> 2) 命中 = 正则 \.entities\s*\.\s*(<12 个方法>|<24 个受控访问器>)\s*\(（\s 匹配换行）；
+>    raw 计全部命中，code 再减去「命中起点所在行 strip 后以 // 开头」的命中；
+> 3) 分类沿**调用链**看（不是整条语句）：链上出现 .expect(/.unwrap( ⇒ C，出现 unwrap_or*/map_or* ⇒ B，
+>    方法是 insert/remove/write_back/order_*/for_each_mut/set_progression ⇒ D，其余 ⇒ A。
 > ```
 >
-> | 类别 | 计数 | 语义（旧 facade 的唯一真值） | 适配器等价 |
-> | --- | --- | --- | --- |
-> | A 静默跳过 | 653 | `None` → `continue` / `filter_map` / `is_some_and` / `if let` / `let ... else` / `match (Some, Some)` / `?` | `get/get_mut` 返回 `None`，调用点照旧跳过；**不 panic** |
-> | B 默认值 | 50 | `unwrap_or*` / `map_or*` → 缺省继续跑 | `None` → 同一个 `unwrap_or*`/`map_or*`，一行不改 |
-> | C panic | **4** | `.expect(...)`（业务不变量，不是 id 解析） | 迁移时 `.expect` **逐字保留**（今天 panic 的仍 panic） |
-> | D 结构/非 Option | 20 | `insert`/`remove`/`write_back`/`order_*`/`for_each_mut`/`set_progression`（返回 bool 或忽略） | 结构段用 `Structural` 标记 + `SlotTable` 原子更新 |
->
-> C 类穷举（双向等价的关键面）：
+> 分类结果（937 code）：**A 静默跳过 805 / B 默认值 100 / C panic 9 / D 结构 23**。
+> C 类**逐点穷举 9 处**（初版只列了行内的 4 处，返工补上跨行链的 5 处）：
 >
 > - `crates/world/src/buff.rs`：`world.entities.get_mut(actor_id).expect("actor exists")` ×2；
-> - `crates/world/src/monai.rs`：`world.entities.spawn_cloned(tid).expect("target exists")` ×2。
+> - `crates/world/src/monai.rs`：`world.entities.spawn_cloned(tid).expect("target exists")` ×2
+>   （3942/4610）与跨行链 `world.entities.spawn_cloned(actor_id).expect("attacker exists")` ×2（3944/4612）；
+> - `crates/world/src/slave.rs`：跨行链 `self.entities.get_mut(caster_id).expect("caster 已确认存在")` ×2（645/867）；
+> - `crates/world/src/world.rs`：跨行链 `self.entities.dup_state_mut(id).expect("EntityStore::insert 必须给每个实体插 DupState")` ×1（5242）。
 >
-> 这 4 处的不变量是「同一段内刚校验过 actor/target 存在」，与 id 解析无关；对应段在 P6
-> 迁移时 `.expect` 原文照搬（`StageEntities::get_mut` 返回 `None` → `.expect("actor exists")`），
-> 因此**不存在「今天 panic、新结构静默跳过」的方向**；反向（今天跳过的变成 panic）也由
-> 适配器「三态一律 `None`」杜绝（四条负例牙逐条钉住）。
+> 这 9 处的 `.expect` 都是「同段内刚校验过存在」的业务不变量，与 id 解析无关；迁移时
+> **原文照搬 `.expect`**（今天 panic 的仍 panic）。反向（今天跳过的变成 panic）由适配器
+> 「三态一律 `None`」杜绝，四条负例牙逐条钉住。
 >
 > **P0 实现**
 > - `crates/world-bevy/src/ecs.rs`：`SlotTable` 资源（`slots`/`free`/`IdIndex`/`next_id` 唯一真值）
@@ -762,17 +771,37 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   收窄为 `pub(crate)` 供段适配器结构操作。
 > - `crates/world-bevy/src/tick.rs`：`StageSpec` / `Reads<C>` / `Writes<C>` / `Structural` /
 >   `StageEntities`（`order`/`resolve`/`get`/`get_mut`/`for_each_mut`/`remove`）/ `StageTrace`。
-> - **与设计的偏差（登记）**：P0/P1 只落地 `StageEntities`；设计 §3.4 的 `StageWorld`
->   包装留到 P2 起「第一个需要复用 `impl World` 段实现的批次」再按需引入（本批无模块函数迁移）。
 > - `crates/world/src/world.rs`：`sim_in_flight` 哨兵 + `enter_stage_world` / `leave_stage_world` /
 >   `run_head_stage` / `run_tail_stage` 四个边界助手。
 > - 确定性对照：`crates/world-bevy/src/ecs.rs::tests::id_alloc_sequence_matches_master_vector`
 >   （期望向量在改动前于 master `95fdbb68a` 上实跑记录，逐项 12 条）；既有 5 条顺序/组件
 >   用例断言**未改**。
 >
+> **P0 未交付项（reviewer-25 P2-1 / P3-4；均为 P2/P6 前置，P0 偏差登记）**
+>
+> | 项（设计件位置） | 状态 | 何时必须落地 |
+> | --- | --- | --- |
+> | `ComponentRegistry`（§2.4 运行期镜像白名单 + 组件注册完整性 fail-closed） | **未交付** | **P2 首批必须落地** |
+> | `T-neg-1`（越白名单编译失败守卫）/ `T-neg-2`（未注册组件构建期 panic） | **未交付** | **P2 首批必须落地** |
+> | `StageSkip::ComponentMissing` 计数器（§2.4 缺失组件可观测） | **未交付** | **P2 首批必须落地**（写实体段马上要用） |
+> | `StageEntities::view_mut`（§3.3 组合视图） | **未交付** | **P2 首批必须落地**（写实体段马上要用） |
+> | `StageEntities::insert` + `refresh_archetypes` 接线（§3.3 只有 remove；结构段需要 insert） | **未交付** | **P5（Command）/ P6（NPC/商人/宝宝）前必须落地**，并配「丢写回必红」牙 |
+> | `WritesRecord<Field>`（§2.1 记录栏白名单） | **弃用** | 理由：`TickRecord` 字段写集本批以「每段只写自己那几栏」的评审约定 + golden 兜底，标记 trait 收益不抵 12 个字段 × 18 段的 impl 噪声；如 P2 起出现跨段误写再重新引入 |
+>
+> 与设计的另一处偏差：设计 §3.4 的 `StageWorld` 包装未落地（P0/P1 无模块函数迁移，
+> 留到 P2 起「第一个需要复用 `impl World` 段实现的批次」按需引入）。
+> 设计件 §2.4 的「S4d-3 必交付」表述与本表冲突时，**以本表为准**（Leader 已裁决按批次交付）。
+>
 > **P1 实现**：`HeadRunner`（`Clock` / `SimHiterSnapshot` / `OutputDrain` 三个 `TickRunner`）
 > + `tail_runner`（`OutputAoi`，经 `output_aoi_stage_system` 薄壳记段序）。`tick_head`/`tick_tail`
 > 只剩边界助手调用与本批尚未迁移的内联段（P2–P7 消灭）。
+>
+> **段边界窗口数（reviewer-25 P3-3）**：本批中间态是 **4 个 `SimState` 搬移窗口/ tick**
+> （Clock / SimHiterSnapshot / OutputDrain / OutputAoi）——Clock 也走 `run_head_stage`，
+> 因此**不是**设计 §2.5 写的「3 → 2」。设计 §2.5 的目标仍是 **P7 收口时 2 个**（head 一个、
+> tail 一个，其余段全部系统化后 head 只跑一次）。本批已同步：设计 §2.5 与本节均按真实数字表述；
+> `world.rs` 里指向 `snapshot_runner` 的陈旧注释、`ecs.rs` 模块文档里「slots/free/index 在本结构」
+> 的旧布局描述均已更新。
 >
 > **段边界哨兵语义（C5）**：`enter_stage_world` 置位 `sim_in_flight` 并把 `SimState` 移入
 > bevy `World`；`leave_stage_world` 取回并清位。任何段内 panic 使哨兵停在 `true` ⇒ 下一次
@@ -808,15 +837,18 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >
 > “写段丢写回”不适用本批：P0/P1 未迁移任何写实体段（P2–P7 逐段交付时补）。
 >
-> **门禁**：fmt rc=0；clippy `-D warnings` rc=0；`cargo test --workspace` rc=0；157 suites / passed=3813 failed=0 ignored=69（基线 3806 + 本批 7 条新用例）；
-> msgcodegen `--check` rc=0（604 条常量）；docs prose 锚门 GREEN；golden 六份 blob 与 base 相同
-> （basic `ed629da2` / session `014f7c11` / combat `13a0c079` / aoi_viewrange12 `e214caf6` /
-> combat_exp_hitter_ghost `098f0e5f` / combat_exp_nofix `0ef04922`）。
+> **门禁（返工后，全部在 `git rev-parse HEAD` 指名的提交树上跑；工作树 clean）**：
+> fmt `cargo fmt --all -- --check` **rc=0**（P1-1：初版登记写的 rc=0 是假陈述——那次 `cargo fmt`
+> 跑在主检出而非本车道 worktree；返工已在本 worktree 重新格式化并提交，且门禁一律对提交树跑）；
+> clippy `-D warnings` rc=0；`cargo test --workspace` rc=0；157 suites / passed=3813 failed=0 ignored=69
+> （基线 3806 + 本批 7 条新用例）；msgcodegen `--check` rc=0（604 条常量）；docs prose 锚门 GREEN。
+> golden 六份 blob 与 base 相同（basic `ed629da2` / session `014f7c11` / combat `13a0c079` /
+> aoi_viewrange12 `e214caf6` / combat_exp_hitter_ghost `098f0e5f` / combat_exp_nofix `0ef04922`）。
 > parity 实跑：world_aoi 6/0、world_combat 7/0、world_session 2/0、rng 5/0、rng_replay 4/0、
 > drop 4/0、exp 4/0、levelabil 2/0、player_ctor_rng_trace 1/0、csharp_parity 3/0；
 > RNG trace（ctor_fold/magic_effect/merchant/p3b1–p3b5/spell_tail）各 1/0；`table_counts` 需 DB（未跑）。
 >
-> **本批未做**：P2–P7（余 14 段迁移）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **本批未做**：P2–P7（余 14 段迁移）、上表「P0 未交付项」、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 
 

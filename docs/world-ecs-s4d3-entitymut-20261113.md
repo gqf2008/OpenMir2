@@ -286,12 +286,14 @@ facade 侧：取回 sim / record / ids，删掉落的一次性资源
    在 `TickRunner` 构建期用 `&mut World` 建一次；每次 `get_mut` 用 `debug_assert!` 核对
    「该组件在本段白名单里」。它的作用是给**泛型转发**（`fn helper<C: Component>(...)`）
    与将来的 `dyn` 路径兜底；**不能**替代编译期约束，也不作为主判据。
+   **交付批次**：P0+P1 只落地了第 1 条（编译期）；本条的 `ComponentRegistry` 与下面第 3 条
+   登记为 **P2 首批前置**（`docs/world-ecs-migration-20261113.md` 的 S4d-3 登记表）。
 
 3. **组件注册完整性**：`ComponentRegistry` 还负责「新组件忘了登记」的 fail-closed——
    构建期把 25 个组件全部注册，任何段声明了注册表里没有的类型名则**构建期 panic**
    （不是被静默忽略）。
 
-**负例牙**（S4d-3 必交付）：
+**负例牙**（**P2 首批必交付**；P0+P1 未交付，见迁移文档 S4d-3 登记表）：
 
 - **T-neg-1 越白名单**：给 `SimExpireHitters` 的适配器加一句 `get_mut::<Vitals>`，
   断言**编译失败**。落地方式：新增一条源码守卫（`crates/world-bevy/tests/tick_skeleton.rs`
@@ -311,9 +313,12 @@ F5 的事实：段系统 panic 时 `facade.sim` 已被 `mem::take` 成 `Default`
    任何段 panic 意味着世界状态已不可信；项目既有口径是 fail-fast（`expect` 而非
    `unwrap_or_default`，S3b 评审 P3-1 同口径）。热恢复会制造「看起来活着、其实状态已丢」
    的服务器，风险高于停机。
-2. **缩小窗口**：把边界从 3 个（快照 / drain / AOI）收敛到 **2 个**（head 一个、
-   tail 一个）。head 边界一次移入 `SimState`、`TickRecordRes`、`TickEntityIds`
-   （`SlotTable` 若按 D1 采纳则为常驻资源，不参与搬移），tail 边界同形。
+2. **窗口数（返工 P3-3 订正）**：P0+P1 的**中间态是 4 个 `SimState` 搬移窗口 / tick**
+   （`Clock` / `SimHiterSnapshot` / `OutputDrain` / `OutputAoi`；`Clock` 也走
+   `run_head_stage`，因为本批仍与内联段交错）。**P7 收口目标才是 2 个**（head 一个、
+   tail 一个：其余段全部系统化后 head 只跑一次）。本批**不**宣称已收敛到 2——那是 P7 的
+   验收项，P0+P1 只保证哨兵覆盖全部 4 个窗口。head 边界一次移入 `SimState`、`TickRecordRes`、
+   `TickEntityIds`（`SlotTable` 按 D1 为常驻资源，不参与搬移），tail 边界同形。
 3. **fail-fast 哨兵**：facade 侧加 `sim_in_flight: bool`（不进 `SimState`，是 facade 的
    暂态位）：`mem::take` 前置 `true`，`remove_resource` 归还后置 `false`；`tick_head`
    入口断言 `!self.sim_in_flight`，失败信息写明「上一次 tick 在段内 panic 且未恢复」。
@@ -528,6 +533,8 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
     pub fn for_each_mut<C>(&mut self, f: impl FnMut(i32, &mut C))
         where C: bevy_ecs::component::Component<Mutability = Mutable>, S: Writes<C>;
     pub fn remove(&mut self, id: i32) -> bool where S: Structural;
+    // insert（结构段需要）与 refresh_archetypes 接线：P5（Command）/ P6（NPC/商人/宝宝）
+    // 前必须落地，见迁移文档 S4d-3 登记表的「P0 未交付项」。
 }
 ```
 
