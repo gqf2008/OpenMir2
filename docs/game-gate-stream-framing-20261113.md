@@ -49,17 +49,33 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
   （`GateShare.CommandFixedLength` = 16）、心跳（长度 1）等门都以**这一次 read 的总长度**为准。
 - `rebuild_command_frame` 按 `decoded.len() > COMMAND_MESSAGE_SIZE`（= 12）决定是否带尾部，
   与 oracle 的转发口径一致。
+- 注意：该文件读循环上方的注释「帧被 TCP 拆开/合并时的后果与 oracle 一致（都会被剔除）」
+  里的「都会被剔除」**不准确**（合并见 A1.1；拆分见 A1.3 的三分支，其中 ≥19 字节会转发
+  垃圾帧）。本卡写集只有文档，代码注释修正留 follow-up。
 
 ### A1.3 帧被拆分/合并时的 oracle 等价后果
 
-1. **拆帧**（一个 `#…!` 跨两次 read）：两次 read 各自成一帧；前半段长度/解码不满足门限，
-   走 oracle 的关会话或丢帧分支（`packetLen < CommandFixedLength`、`deCodeLen < 12`、
-   登录前极短帧）。**不会自动拼回**。
+1. **拆帧**（一个 `#…!` 跨两次 read）：**不会自动拼回**，两段各自按「一次 read 一帧」独立处理。
+   半个帧的后果**由该片段自身长度决定**（`deCodeLen` 只由输入长度决定，解码对截断/非法流
+   不报错、只产出垃圾字节），按长度分三支：
+   - **片段 < 16 字节**（`packetLen < CommandFixedLength`，且长度 ≠ 1）：关会话
+     （只有 `packetLen == 1` 才当心跳丢弃）。
+   - **16–18 字节**：`tempBuff = destinationSpan[2..^1]` 长为 13–15，`deCodeLen` = 9/10/11
+     `< 12` ⇒ 关会话。
+   - **≥ 19 字节**：`deCodeLen ≥ 12`，两道门全过；截断的编码流被解成垃圾字节，
+     `MemoryMarshal.Read<ClientMessage>` 取到垃圾 `Ident`，落到 `switch` 的 default
+     （不命中任何速度/聊天规则），随后按 `deCodeLen` 重新编码并以 `GM_DATA` 垃圾帧
+     **转发给 GameSvr**（`deCodeLen == 12` 转发 12 字节固定头；`> 12` 走 oracle 的 `Encode(decodeBuff, deCodeLen - 12)` + `tempBuff[16..]` 重编码分支）。
+   后段（同一帧的剩余字节）会被下一次 read 当成新帧，`[2..^1]` 剥掉它自己的首 2 字节后
+   再独立处理。**登录前**：片段 ≥ 3 字节走 `EDCode.DeCodeString` → `ClientLogin`，
+   失败即 `Kick(1)` 剔除；只有 < 3 字节的片段因 `[2..(packetLen-1)]` 越界抛异常、
+   被 `ServerManager` 的 catch 吞掉 ⇒ 丢帧、会话存活。
 2. **合帧**（两帧落进同一次 read，例如同拍连写 say+walk）：整段被当成**一帧**；剥壳只去
    首 `#1` 与尾 `!`，中间的第二帧头留在解码流里。后果见 A1.1 最后一条（SAY 吞帧头、
    后续帧绕过分类/限速）。
-3. **长度门整体偏移**：`NomClientPacketSize` 等以这次 read 的总长度为判据，合帧会把长度
-   推过阈值，导致整段被丢（而不是只丢第二帧）。
+3. **长度门整体偏移**：`NomClientPacketSize`（默认 400）等以这次 read 的总长度为判据；
+   合帧**可能**使总长越过阈值（典型 say+walk 只有数十字节，取决于合入帧的数量/大小），
+   一旦越过，整段被丢（而不是只丢第二帧）。
 
 ## A2 客户端正确用法与未来偏离边界
 
@@ -87,7 +103,8 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
 - **长度/CC 门**：`IsDefenceCCPacket`、`NomClientPacketSize` 的判据都基于一次 read 的总长；
   切帧后要重新定义「以帧长还是以 read 长判定」。
 - **拆帧重组**：必须加重组缓冲与字节上限（否则是内存 DoS 面）、定义超时与丢弃策略，
-  并证明不会改变现有帧语义。
+  并证明不会改变现有帧语义。**现状不只是「不重组」：半包在 ≥19 字节时会被当完整帧转发给
+  GameSvr（见 A1.3 第 1 条），所以重组同时是消除这条垃圾转发路径的前提。**
 - **回归清单（建议）**：C2S 帧序列对拍；速度规则对拍；say+walk 同拍连写；跨 read 拆帧；
   心跳；登录失败/短帧路径。
 
