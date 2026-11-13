@@ -19,7 +19,7 @@ pub const PLAYER_SEARCH_TIME: i64 = 1000;
 /// 非玩家实体（怪/商人/NPC）`AnimalState` 的 ctor 缺省 `SearchTime` 占位值。
 ///
 /// 真实值由各自构造链落定（`MonsterObject.cs:65` 的 `3000+Random(2000)`、生成路径的
-/// [`MonsterCtorDraws::search_time`]）；本常量只用于让 `Entity::new`（玩家 ctor 等价物）
+/// [`MonsterCtorDraws::search_time`]）；本常量只用于让 `EntitySpawn::new`（玩家 ctor 等价物）
 /// **不**把玩家的 1000 常量带到非玩家实体上，保持本片之前非玩家字段逐一不变。
 pub const BASE_ANIMAL_SEARCH_TIME: i64 = 3000;
 pub const ACTOR_RACE_NPC: u8 = 10;
@@ -526,9 +526,19 @@ pub type SpawnBinding = mir2_world_bevy::SpawnBinding<CastleBinding, MonsterCtor
 /// **S3b**：AOI/落图绑定组件的 world 侧实例化（6 字段真值）。
 pub type MapBinding = mir2_world_bevy::MapBinding<VisibleBaseObject, VisibleEvent>;
 
+/// **S4c-1**：身份/背包/仆从/商人/NPC 组件的 world 侧实例化（真值在 `mir2_world_bevy`，
+/// `Entity` 已删这些字段）。`id` 同时是 `EcsStore` 的索引键，生成后不可变。
+pub use mir2_world_bevy::SlaveState;
+pub type Inventory = mir2_world_bevy::Inventory<UseItemSlot>;
+pub type MerchantState = mir2_world_bevy::MerchantState<crate::merchant::MerchantState>;
+pub type NpcState = mir2_world_bevy::NpcState<crate::npc::NpcState>;
+
+/// **S4c-2**：`AnimalState` 整块 AI 状态组件（`Entity` 已删 `ai` 字段）。
+pub type AiState = mir2_world_bevy::AiState<AnimalState>;
+
 /// **生成期载体**（`Entity` + 落图前的 `Transform` / `MapBinding` / S4a 属性组件）。
 ///
-/// 只为保持 约 700 处 `Entity::new(id, name, x, y)` + `e.x = …` 的生成期写法不变；
+/// 只为保持 约 700 处 `crate::EntitySpawn::new(id, name, x, y)` + `e.x = …` 的生成期写法不变；
 /// [`EntityStore::insert`] 消费它并把坐标/绑定/属性落成组件。**插入后不再存在第二份真值**：
 /// 载体被 move 进 insert，后续读写一律走组件。
 #[derive(Debug, Clone)]
@@ -668,155 +678,33 @@ pub struct EntitySpawn {
     pub extra_abil: [u16; EXTRA_ABIL_SLOTS],
     pub extra_abil_times: [i64; EXTRA_ABIL_SLOTS],
     pub extra_abil_flag: [u8; EXTRA_ABIL_SLOTS],
+    // ---- S4c-1：仆从/背包/商人/NPC（`insert` 时落成 SlaveState/Inventory/MerchantState/NpcState）----
+    pub master: Option<i32>,
+    pub slave_relax: bool,
+    pub slave_list: Vec<i32>,
+    pub special_children: Vec<i32>,
+    pub is_slave: bool,
+    pub is_clone: bool,
+    pub slave_exp_level: u8,
+    pub slave_make_level: u8,
+    pub master_royalty_tick: i64,
+    pub master_tick: i64,
+    pub class_slave_list: Vec<i32>,
+    pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
+    pub merchant: Option<crate::merchant::MerchantState>,
+    pub npc: Option<crate::npc::NpcState>,
+    // ---- S4c-2：AI 整块（`insert` 时落成 AiState 组件）----
+    pub ai: AnimalState,
 }
 
 impl EntitySpawn {
-    /// ctor 缺省值（`Entity::new`：`Vitals.hp/max_hp = 100/100`、`Progression.level = 1`；
+    /// ctor 缺省值（`EntitySpawn::new`：`Vitals.hp/max_hp = 100/100`、`Progression.level = 1`；
     /// 其余 0/`None`，见迁移文档 §3.4）。
     ///
     /// **不得**用 `Component::default()` 直接造实体：`hp=0` 在语义上等于「已死」。
     const CTOR_HP: u16 = 100;
     const CTOR_MAX_HP: u16 = 100;
     const CTOR_LEVEL: u8 = 1;
-
-    pub fn new(
-        entity: Entity,
-        x: i32,
-        y: i32,
-        map_id: usize,
-        view_range: i32,
-        map_binding: MapBinding,
-    ) -> Self {
-        EntitySpawn {
-            entity,
-            x,
-            y,
-            map_id,
-            view_range,
-            map_binding,
-            hp: Self::CTOR_HP,
-            max_hp: Self::CTOR_MAX_HP,
-            mp: 0,
-            max_mp: 0,
-            hit_speed: 0,
-            dc: 0,
-            ac: 0,
-            mac: 0,
-            hit_point: 0,
-            speed_point: 0,
-            anti_magic: 0,
-            anti_poison: 0,
-            undead_power: 0,
-            abil: None,
-            job: 0,
-            life_attrib: 0,
-            level: Self::CTOR_LEVEL,
-            mon_exp: 0,
-            exp: 0,
-            max_exp: 0,
-            castle_binding: None,
-            mon_gen: None,
-            mon_gen_zen_time: 0,
-            ctor_draws: MonsterCtorDraws::default(),
-            gold: 0,
-            drop_items: Vec::new(),
-            angry_ring: false,
-            no_drop_use_item: false,
-            no_item: false,
-            last_hiter: None,
-            exp_hitter: None,
-            last_hiter_tick: 0,
-            exp_hitter_tick: 0,
-            health_tick: 0,
-            spell_tick: 0,
-            auto_recovery_tick: 0,
-            dear_human: None,
-            pk_point: 0,
-            pvp_flag: false,
-            pvp_name_color_tick: 0,
-            die_in_fight3_zone: false,
-            invisible: false,
-            hide_mode: false,
-            fixed_hide_mode: false,
-            ob_mode: false,
-            nasty_mode: false,
-            attack_mode: 0,
-            in_safe_zone: false,
-            admin_mode: false,
-            stone_mode: false,
-            super_man: false,
-            rush_mode: false,
-            want_ref_msg: false,
-            stick_mode: false,
-            death: false,
-            ghost: false,
-            death_tick: 0,
-            ghost_tick: 0,
-            can_re_alive: false,
-            re_alive_tick: 0,
-            death_settled: false,
-            die_called: false,
-            race: ACTOR_RACE_PLAY,
-            race_img: 0,
-            appr: 0,
-            light: 0,
-            name_color: 255,
-            come_out_value: 0,
-            attack_range: 0,
-            use_magic: false,
-            danger_level: 0,
-            n550: 0,
-            class_attack_tick: 0,
-            bo_is_first: false,
-            dig_down_tick: 0,
-            appear_start_tick: 0,
-            guard_direction: 0,
-            siege_lock_count: 0,
-            jump_time: 0,
-            crazy_ready_mode: false,
-            crazy_king_mode: false,
-            crazy_count: 0,
-            crazy_ready: 0,
-            crazy_time: 0,
-            old_hit_time: 0,
-            old_walk_time: 0,
-            luck: 0,
-            power_rate: 100,
-            power_rate_time: 0,
-            kill_mon_exp_rate: 100,
-            kill_mon_exp_rate_time: 0,
-            exp_rate_tick: 0,
-            random_no: 0,
-            bo_power_item: false,
-            power_item: 0,
-            fire_hit_skill: false,
-            latest_fire_hit_tick: 0,
-            twin_hit_skill: false,
-            latest_twin_hit_tick: 0,
-            allow_group: false,
-            allow_group_re_call: false,
-            group_owner: 0,
-            group_members: Vec::new(),
-            revival: false,
-            revival_tick: 0,
-            un_revival: false,
-            flame_ring: false,
-            poisoning_tick: crate::buff::BUFF_EPOCH_MS,
-            green_poisoning_point: 0,
-            char_status: 0,
-            char_status_ex: 0,
-            status_time: [0; STATUS_TIME_SLOTS],
-            transparent: false,
-            show_hp: false,
-            show_hp_tick: 0,
-            show_hp_interval: 0,
-            magic_shield: false,
-            un_magic_shield: false,
-            extra_abil: [0; EXTRA_ABIL_SLOTS],
-            extra_abil_times: [0; EXTRA_ABIL_SLOTS],
-            extra_abil_flag: [0; EXTRA_ABIL_SLOTS],
-        }
-    }
 
     /// 把载体上的属性字段落成组件值。
     #[must_use]
@@ -1010,6 +898,60 @@ impl EntitySpawn {
         }
     }
 
+    /// S4c-1：仆从/克隆体组件值。
+    #[must_use]
+    pub fn slave_component(&self) -> SlaveState {
+        SlaveState {
+            master: self.master,
+            slave_relax: self.slave_relax,
+            slave_list: self.slave_list.clone(),
+            special_children: self.special_children.clone(),
+            is_slave: self.is_slave,
+            is_clone: self.is_clone,
+            slave_exp_level: self.slave_exp_level,
+            slave_make_level: self.slave_make_level,
+            master_royalty_tick: self.master_royalty_tick,
+            master_tick: self.master_tick,
+            class_slave_list: self.class_slave_list.clone(),
+        }
+    }
+
+    /// S4c-1：13 槽装备/背包组件值（`UseItemSlot` 是 `Copy`，整数组搬运）。
+    #[must_use]
+    pub fn inventory_component(&self) -> Inventory {
+        Inventory {
+            use_items: self.use_items,
+        }
+    }
+
+    /// S4c-1：商人身份组件值（`Some` = 商人；载荷 clone）。
+    #[must_use]
+    pub fn merchant_component(&self) -> MerchantState {
+        MerchantState {
+            merchant: self.merchant.clone(),
+        }
+    }
+
+    /// S4c-1：固定 NPC 身份组件值（`Some` = 固定 NPC；载荷 `Copy`）。
+    #[must_use]
+    pub fn npc_component(&self) -> NpcState {
+        NpcState { npc: self.npc }
+    }
+
+    /// S4c-2：AI 组件值（`AnimalState` 整块 clone）。
+    #[must_use]
+    pub fn ai_component(&self) -> AiState {
+        AiState {
+            ai: self.ai.clone(),
+        }
+    }
+
+    /// 当前朝向（C# `BaseObject.Dir`），供接线层发 `SM_TURN`/`RM_TURN` 等帧面用。
+    #[must_use]
+    pub fn dir(&self) -> u8 {
+        self.ai.dir
+    }
+
     /// C# `BaseObject.SetLastHiter`（`BaseObject.cs:1753`）的生成期载体版本。
     ///
     /// 与 [`EntityMut::set_last_hiter`] 逐支同义：`LastHiter` 每次刷新；`ExpHitter` **只在为空时**
@@ -1040,6 +982,11 @@ impl EntitySpawn {
         let group = self.group_component();
         let revival = self.revival_component();
         let buff = self.buff_component();
+        let slave = self.slave_component();
+        let inventory = self.inventory_component();
+        let merchant = self.merchant_component();
+        let npc = self.npc_component();
+        let ai = self.ai_component();
         SpawnParts {
             entity: self.entity,
             transform: Transform {
@@ -1080,6 +1027,11 @@ impl EntitySpawn {
             group,
             revival,
             buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
+            ai,
         }
     }
 }
@@ -1106,6 +1058,11 @@ pub(crate) struct SpawnParts {
     pub group: GroupState,
     pub revival: Revival,
     pub buff: BuffState,
+    pub slave: SlaveState,
+    pub inventory: Inventory,
+    pub merchant: MerchantState,
+    pub npc: NpcState,
+    pub ai: AiState,
 }
 
 impl std::ops::Deref for EntitySpawn {
@@ -1268,11 +1225,34 @@ pub struct EntityRef<'a> {
     pub extra_abil: [u16; EXTRA_ABIL_SLOTS],
     pub extra_abil_times: [i64; EXTRA_ABIL_SLOTS],
     pub extra_abil_flag: [u8; EXTRA_ABIL_SLOTS],
+    // ---- S4c-1：仆从/背包/商人/NPC 的只读投影 ----
+    pub master: Option<i32>,
+    pub slave_relax: bool,
+    pub slave_list: &'a Vec<i32>,
+    pub special_children: &'a Vec<i32>,
+    pub is_slave: bool,
+    pub is_clone: bool,
+    pub slave_exp_level: u8,
+    pub slave_make_level: u8,
+    pub master_royalty_tick: i64,
+    pub master_tick: i64,
+    pub class_slave_list: &'a Vec<i32>,
+    pub use_items: &'a [UseItemSlot; USE_ITEM_SLOTS],
+    pub merchant: Option<&'a crate::merchant::MerchantState>,
+    pub npc: Option<&'a crate::npc::NpcState>,
+    /// S4c-2：AI 整块只读投影（`AiState.ai`）。
+    pub ai: &'a AnimalState,
 }
 
 impl<'a> EntityRef<'a> {
     pub fn entity(&self) -> &'a Entity {
         self.entity
+    }
+
+    /// 当前朝向（C# `BaseObject.Dir`；S4c-2 起真值在 `AiState.ai`）。
+    #[must_use]
+    pub fn dir(&self) -> u8 {
+        self.ai.dir
     }
 
     /// 由组件引用构造只读视图（`get` / `iter_ref` / bevy `OutputAoi` 系统用）。
@@ -1297,6 +1277,11 @@ impl<'a> EntityRef<'a> {
         group: &'a GroupState,
         revival: &'a Revival,
         buff: &'a BuffState,
+        slave: &'a SlaveState,
+        inventory: &'a Inventory,
+        merchant: &'a MerchantState,
+        npc: &'a NpcState,
+        ai: &'a AiState,
     ) -> Self {
         EntityRef {
             entity,
@@ -1431,6 +1416,21 @@ impl<'a> EntityRef<'a> {
             extra_abil: buff.extra_abil,
             extra_abil_times: buff.extra_abil_times,
             extra_abil_flag: buff.extra_abil_flag,
+            master: slave.master,
+            slave_relax: slave.slave_relax,
+            slave_list: &slave.slave_list,
+            special_children: &slave.special_children,
+            is_slave: slave.is_slave,
+            is_clone: slave.is_clone,
+            slave_exp_level: slave.slave_exp_level,
+            slave_make_level: slave.slave_make_level,
+            master_royalty_tick: slave.master_royalty_tick,
+            master_tick: slave.master_tick,
+            class_slave_list: &slave.class_slave_list,
+            use_items: &inventory.use_items,
+            merchant: merchant.merchant.as_ref(),
+            npc: npc.npc.as_ref(),
+            ai: &ai.ai,
         }
     }
 }
@@ -1468,6 +1468,14 @@ pub struct EntityMut<'a> {
     pub group: &'a mut GroupState,
     pub revival: &'a mut Revival,
     pub buff: &'a mut BuffState,
+    // ---- S4c-1 ----
+    pub slave: &'a mut SlaveState,
+    pub inventory: &'a mut Inventory,
+    pub merchant_state: &'a mut MerchantState,
+    pub npc_state: &'a mut NpcState,
+    // ---- S4c-2 ----
+    /// AI 整块可变投影（`AiState.ai`；`e.ai.dir = …` 等原形写法不变）。
+    pub ai: &'a mut AnimalState,
 }
 
 impl EntityMut<'_> {
@@ -1559,6 +1567,16 @@ pub trait PvpView {
     fn group_state(&self) -> GroupState;
     /// S4b-2：Buff/毒/盾快照。
     fn buff(&self) -> BuffState;
+    /// S4c-1：主人（`SlaveState.master`）。
+    fn master(&self) -> Option<i32>;
+    /// S4c-1：`AnimalObject.IsSlave`。
+    fn is_slave(&self) -> bool;
+    /// S4c-1：宝宝等级（`AnimalObject.SlaveExpLevel`）。
+    fn slave_exp_level(&self) -> u8;
+    /// S4c-1：商人身份门（`MerchantState.merchant.is_some()`）。
+    fn merchant_exists(&self) -> bool;
+    /// S4c-1：固定 NPC 身份门（`NpcState.npc.is_some()`）。
+    fn npc_exists(&self) -> bool;
 }
 
 impl PvpView for EntitySpawn {
@@ -1603,6 +1621,21 @@ impl PvpView for EntitySpawn {
     }
     fn buff(&self) -> BuffState {
         self.buff_component()
+    }
+    fn master(&self) -> Option<i32> {
+        self.master
+    }
+    fn is_slave(&self) -> bool {
+        self.is_slave
+    }
+    fn slave_exp_level(&self) -> u8 {
+        self.slave_exp_level
+    }
+    fn merchant_exists(&self) -> bool {
+        self.merchant.is_some()
+    }
+    fn npc_exists(&self) -> bool {
+        self.npc.is_some()
     }
 }
 
@@ -1697,6 +1730,21 @@ impl PvpView for EntityRef<'_> {
             extra_abil_flag: self.extra_abil_flag,
         }
     }
+    fn master(&self) -> Option<i32> {
+        self.master
+    }
+    fn is_slave(&self) -> bool {
+        self.is_slave
+    }
+    fn slave_exp_level(&self) -> u8 {
+        self.slave_exp_level
+    }
+    fn merchant_exists(&self) -> bool {
+        self.merchant.is_some()
+    }
+    fn npc_exists(&self) -> bool {
+        self.npc.is_some()
+    }
 }
 
 impl<T: PvpView + ?Sized> PvpView for &T {
@@ -1736,6 +1784,21 @@ impl<T: PvpView + ?Sized> PvpView for &T {
     fn buff(&self) -> BuffState {
         (*self).buff()
     }
+    fn master(&self) -> Option<i32> {
+        (*self).master()
+    }
+    fn is_slave(&self) -> bool {
+        (*self).is_slave()
+    }
+    fn slave_exp_level(&self) -> u8 {
+        (*self).slave_exp_level()
+    }
+    fn merchant_exists(&self) -> bool {
+        (*self).merchant_exists()
+    }
+    fn npc_exists(&self) -> bool {
+        (*self).npc_exists()
+    }
 }
 
 impl std::ops::DerefMut for EntityMut<'_> {
@@ -1748,428 +1811,28 @@ impl std::ops::DerefMut for EntityMut<'_> {
 ///
 /// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
 /// `mir2_world_bevy::EcsStore`（bevy `World` + 显式槽位索引）承载。
-#[derive(Clone, Debug, bevy_ecs::prelude::Component)]
-pub struct Entity {
-    /// C# `ActorId`
-    pub id: i32,
-    pub name: String,
-    // S3b：`x` / `y` / `view_range` / `map_id` 已迁到 `mir2_world_bevy::Transform` 组件
-    //（字段真值，经 `EntityStore::transform` / `transform_mut` 受控访问）。
-    /// C# `Race` —— **行为轴**：所有 `IsAttackTarget`/`Struck`/掉落等判定读它。
-    ///
-    /// 与 [`Entity::race_img`]（外观轴）**不是同一字段**：oracle 商人 `Race = ActorRace.NPC(10)`
-    /// （`NormNpc.cs:42` 继承）而 `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`）；两者
-    /// 数值在 `Merchant`/`Animal` 上偶合（都是 50），不得混用。
-    /// C# `BaseObject.RaceImg`（`BaseObject.cs:101`；ctor `:380` 置 0）——**外观轴**：
-    /// 客户端可见帧的形像编号，`GetFeature()` = `MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`
-    /// （`BaseObject.Base.cs:911`）。
-    ///
-    /// 商人置 `ActorRace.Merchant(50)`（`Merchant.cs:84`），但其行为轴 [`Entity::race`] 仍是
-    /// `ActorRace.NPC(10)`（`NormNpc.cs:42`）⇒ **不得**把本字段当 `race` 用（反之亦然）。
-    /// C# `BaseObject.Appr`（形像代码）。`ApplyMonsterAbility` 从
-    /// `MonsterInfo.Appr` 写入（`WorldServer.MonGen.cs:889`）。
-    ///
-    /// 唯一的**行为**消费点 = `ElfWarriorMonster.AttackTarget` 的
-    /// `Appr == 704/706/708` 形态门（`ElfWarriorMonster.cs:78`）；其余只影响展示层。
-    /// C# `Master`（宝宝的主人）
-    pub master: Option<i32>,
-    /// C# `BaseObject.SlaveRelax`（`BaseObject.cs:145`）——主人对宝宝的「放松」标志。
-    ///
-    /// `MonsterObject.Run` 的两处消费（`MonsterObject.cs:320/334`）：
-    /// ① 为真时**不**因异图/超距而 `SpaceMove` 追随；② 为真时在 `GotoTargetXY` 之前
-    /// `base.Run(); return;` ⇒ 宝宝**停在原地**（不游走/不攻击）。oracle 源码无写入点
-    /// （属性缺省 `false`，由外部命令/插件置位）；本骨架同样缺省 `false`，只在显式赋值时生效。
-    pub slave_relax: bool,
-    /// C# `BaseObject.SlaveList`（`BaseObject.cs:141`，懒建于 `:1183`）——主人的宝宝列表（actor id，保序）。
-    ///
-    /// 归 `openmir2-m3-pet-slave-summon`（⑨-2）建立、`openmir2-m3-pet-slave-lifecycle`（⑨-3）清理。
-    pub slave_list: Vec<i32>,
-    /// C# `BaseObject.StickMode`（`BaseObject.cs:173`；ctor `:403` 置 `false`）。
-    ///
-    /// `BeeQueen`/`SpiderHouseMonster` ctor 显式置 `true`（`BeeQueen.cs:19`、
-    /// `SpiderHouseMonster.cs:19`），由 [`crate::special_monster::apply_ctor_fields`] 落字段。
-    /// 消费点：44 火焰球的推挤门 `!target.StickMode`（`MagicManager.cs:1048`）。
-    /// C# `BeeQueen.BeeList` / `SpiderHouseMonster._bbList`（`BeeQueen.cs:11` /
-    /// `SpiderHouseMonster.cs:11`）——产出的宝宝 actor id 列表（**插入序**）。
-    ///
-    /// oracle 是 `IList<IActor>` 强引用；本骨架存 id，实体已不在仓库时按「已不可达」
-    /// 处理（清理段等价于 `Death || Ghost`）。
-    pub special_children: Vec<i32>,
-    /// C# `AnimalObject.IsSlave`（`AnimalObject.cs:54`）。
-    pub is_slave: bool,
-    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：是否 `PlayCloneObject`
-    /// （`MagMakeClone` 造出的玩家型克隆体，`PlayCloneObject.cs:5-23`）。
-    ///
-    /// 克隆体 `race == PLAY`、`!ghost`，但**没有真实客户端会话**（不进 `OnlineRegistry`）
-    /// ⇒ AOI 消失帧的观察者分类必须把它与真玩家区分（否则 `missing_online` 假阳性）。
-    /// 纯内存字段：不落库、不进 `EntitySnapshot`、不改协议；随实体移除一起消失。
-    pub is_clone: bool,
-    /// C# `AnimalObject.SlaveExpLevel`（`AnimalObject.cs:27`）——宝宝等级（召唤时/跨服时设定；
-    /// `MonsterObject.GainSlaveExp` 是死代码，击杀不涨，见盘点报告 §1.C）。
-    pub slave_exp_level: u8,
-    /// C# `MonsterObject.SlaveMakeLevel`（`MonsterObject.cs:21`）——召唤时的技能等级。
-    pub slave_make_level: u8,
-    /// C# `MonsterObject.MasterRoyaltyTick`（`MonsterObject.cs:37`）——叛变时刻。
-    pub master_royalty_tick: i64,
-    /// C# `MonsterObject.MasterTick`（`MonsterObject.cs:41`）——诱惑到期的起算时刻。
-    pub master_tick: i64,
-    /// C# `BaseObject.DeathTick`（`BaseObject.cs:204`，`Die()` 在 `:323` 写 `GetTickCount()`）——
-    /// 死亡时刻（毫秒）。`BaseObject.Run` 死亡支的 `now - DeathTick` 门读它
-    /// （`BaseObject.Base.cs:90/99`）。
-    /// C# `BaseObject.GhostTick`（`BaseObject.cs:207`）——`MakeGhost()` 写（`BaseObject.Base.cs:494`）；
-    /// 幽灵怪 5 分钟清理门 `(now - GhostTick) > 5*60*1000`（`WorldServer.MonGen.cs:302`）。
-    /// C# `BaseObject.CanReAlive`（`BaseObject.cs:220`）——`RegenMonsters` 刷出的怪置 `true`
-    /// （`WorldServer.MonGen.cs:832/854`）；换图/魔法清位（`BaseObject.cs:2749-2756`、
-    /// `MagicManager.cs:743-745`）。决定 `MakeGhost` 走「留尸体可复活」还是「真 Ghost」。
-    /// C# `BaseObject.ReAliveTick`（`BaseObject.cs:224`）——复活冷却起点
-    /// （`WorldServer.MonGen.cs:833/855` 置创建时刻、`:290` 在复活成功后刷新）。
-    // **Lane B（城堡实体挂图）**：本实体对应的城堡防御单元（`BaseObject.Castle != null` 的等价物）。
-    //
-    // 只有 `UserCastle.Initialize` 成功挂图的**门 / 墙 / 弓手**被绑定（守卫不绑，见
-    // [`CastleBinding`]）。race 110/111 的 `Run` 与死亡路由靠它反查
-    // `World.castles[castle_index]` 的状态机。
-    // S4a-2 迁出：`castle_binding` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `BaseObject.MonGen`（`BaseObject.cs` 属性）——本实体所属 `MonGenInfo` 在
-    // [`crate::mongen::MonGenState::entries`] 里的下标；`None` = oracle `MonGen == null`。
-    // S4a-2 迁出：`mon_gen` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `MonGen.ZenTime` 的缓存（死亡支 `GetMonstersZenTime(MonGen.ZenTime)`，
-    // `BaseObject.Base.cs:87`）。仅 [`Entity::mon_gen`] 为 `Some` 时有效。
-    // 缓存不改变语义：`MonGenInfo.ZenTime` 是配置列，运行期不变。
-    // S4a-2 迁出：`mon_gen_zen_time` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `BaseObject.HideMode`（隐身术/隐身戒指的"完全隐身"）。
-    ///
-    /// 与 [`Entity::invisible`]（oracle `Invisible`，`is_proper_target` 用）和
-    /// [`Entity::fixed_hide_mode`]（oracle `FixedHideMode`）是**三个不同字段**：
-    /// oracle `AnimalObject.SearchTarget` 的隐藏门读的是 `HideMode`（`AnimalObject.cs:402`），
-    /// 只有 `Envirnoment.GetXYObjCount` / `BaseObject.Run` 才读 `FixedHideMode`。
-    /// 当前本仓无写入点（隐身术/隐身戒指未接线）⇒ 两侧行为今天相同；接线后在 `search_target`
-    /// 的隐藏门上与 oracle 1:1。
-    /// C# `NastyMode`（PK 模式等）
-    /// C# `PlayObject.AttatckMode`（`AttackMode` 枚举，`src/OpenMir2/Enums/AttackMode.cs`）：
-    /// `HAM_ALL=0 / HAM_PEACE=1 / HAM_DEAR=2 / HAM_MASTER=3 / HAM_GROUP=4 / HAM_GUILD=5 / HAM_PKATTACK=6`。
-    /// 新角色 `PlayObject.cs:908` 置 `0`（`HAM_ALL`）；`ChangeAttackModeCommand.cs:26` 按 Ctrl-H 循环。
-    /// C# `BaseObject.InSafeZone()`（`BaseObject.cs:1777`）的结果折叠。
-    ///
-    /// oracle 的 `IsProtectTarget`（`BaseObject.Base.cs:360`）用它做 PvP 门槛；本骨架未建模
-    /// 地图 Flag/StartPoint 安全区。**生产代码当前无写入点（该字段恒 `false`），仅测试夹具赋值**；
-    /// 若将来接线层在入图/换图时按 `Envir` 写入，须同步 whitelist T-75。
-    /// C# `BaseObject.AdminMode`（`BaseObject.IsAttackTarget` 首判：管理员不可被攻击）。
-    /// C# `BaseObject.StoneMode`（同上，石化不可被攻击）。
-    // C# `PlayObject.DearHuman`（`PlayObject.IsAttackTarget` 的 `HAM_DEAR` 支：只保护配偶）。
-    // S4a-2 迁出：`dear_human` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `PlayObject.PkPoint`——`PlayObject.PvpLevel()`（`PlayObject.cs:4352`）= `PkPoint / 100`。
-    // `HAM_PKATTACK` 支用它做红名/白名判定。
-    // S4a-2 迁出：`pk_point` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `PlayObject.PvpFlag`（`PlayObject.cs:4336`）——PK 标记；`SetPkFlag` 置位并触发
-    // `RefNameColor`（⇒ `SM_CHANGENAMECOLOR(656)`）。ctor 缺省 `false`。
-    //
-    // 消费方（P3-B4）：50 的 `playObject.SetPkFlag(targetObject)`（`MagicManager.cs:1249`）与
-    // `RM_POISON` 投递的 `((IPlayerActor)this).SetPkFlag(caster)`（`BaseObject.Base.cs:749`）。
-    // S4a-2 迁出：`pvp_flag` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `PlayObject.PvpNameColorTick`（`PlayObject.cs:243`；接口声明 `IPlayerActor.cs:257`）——`SetPkFlag` 置位时刻
-    // （`PlayObject.cs:4333` 的 `targetObject.PvpNameColorTick = GetTickCount()`）。
-    // `CheckPkStatus`（`:4359`）用 `now - PvpNameColorTick > Config.dwPKFlagTime` 判过期。
-    //
-    // **重复置位也刷新**（oracle 赋值在 `if (!targetObject.PvpFlag)` **之前**）。
-    // S4a-2 迁出：`pvp_name_color_tick` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `PlayObject.DieInFight3Zone`（`PlayObject.cs:522`）：`WorldServer.cs:290` 在
-    // Fight3Zone 死亡恢复支置 `true`，`Initialize()`（`PlayObject.cs:891`）清 `false`。
-    //
-    // 唯一消费点是登录后的 `if (DieInFight3Zone) MapRandomMove(...)`（`PlayObject.cs:1184`）；
-    // 该调用点未移植 ⇒ 本骨架只忠实保存该位（登录时由 `rewrite_enter_position` 写回）。
-    // S4a-2 迁出：`die_in_fight3_zone` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `PlayObject.Luck`（`PlayObject.cs:62`，`RecalcAbilitys` 里 `Luck = 0 + AddAbil.Luck - AddAbil.UnLuck`）。
-    /// 玩家攻方的 [`crate::combat::get_attack_power_player`] override 用它决定取数次数。
-    /// C# `BaseObject.NameColor`（`BaseObject.cs:28/385`，ctor 初值 `255`）。
-    ///
-    /// `GetNameColor()`（`BaseObject.Base.cs:904-907`）返回它；`GetChrColor`
-    /// （`BaseObject.Base.cs:869-883`）的兜底分支与 `MonsterObject`/`PlayObject` 的 override 都读它。
-    /// 归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
-    /// C# `PlayObject.PowerRate`（`PlayObject.cs:724`；新角色 `PlayObject.cs:943` 置 `100`）。
-    /// C# `PlayObject.PowerRateTime`（`PlayObject.cs:726`；**无 ctor 赋值** ⇒ 0）——
-    /// P27 的 1s 递减计时（`PlayObject.Message.cs:646-656`）。`0` = 永久倍率。
-    /// C# `PlayObject.KillMonExpRate`（`PlayObject.cs:720`；ctor `:941` 置 `100`）——
-    /// **per-player** 经验倍率；唯一读点 = `WinExp`（`PlayObject.Base.cs:140`）。
-    /// PL-3/P27：1s 递减到 0 时回 100；脚本 `KILLMONEXPRATE` 写入。
-    /// C# `PlayObject.KillMonExpRateTime`（`PlayObject.cs:725`；无 ctor ⇒ 0）——P27 的秒数。
-    /// C# `PlayObject.ExpRateTick`（`PlayObject.cs:727`；ctor `:942` = `GetTickCount()`）——
-    /// P27 的 1s 门基准。oracle 在对象构造时取钟；本骨架 `Entity::new` 拿不到宿主时钟
-    /// ⇒ 缺省 0，生产路径由 `new_player_entity` 用 `now_ms()` 重盖（与 `VerifyTick` 同法）。
-    /// C# `PlayObject.RandomNo`（`PlayObject.cs:815`；ctor `:1047`
-    /// `RandomNo = Random(999999).ToString()`）——登录批 `new PlayObject()` 的**第 5 抽**。
-    ///
-    /// 消费面（oracle）：脚本变量 `<$RANDOMNO>`（`NormNpc.cs:439`）、`SETRANDOMNO`
-    /// （`ExecutionProcessingSys.cs:2112-2119`）、`CHECKRANDOMNO`（`ScriptEngine.cs:350-353`）。
-    /// 本仓脚本层尚未接线（`crates/script` 的 `CHECKRANDOMNO` 仍是 TODO）⇒ 字段先按 oracle
-    /// 落值，接线后可直接消费；oracle 存的是十进制字符串，本字段存数值（`to_string()` 同形）。
-    /// C# `PlayObject.BoPowerItem`（`PlayObject.cs:223`）。
-    /// C# `PlayObject.PowerItem`（`PlayObject.cs:199`）。
-    /// C# `PlayObject.FireHitSkill` / `LatestFireHitTick`（`PlayObject.cs:181/194`）——
-    /// 烈火剑法待发标志与最近一次置位时刻。`PlayObject.Run` 的到期段
-    /// （`PlayObject.Message.cs:54-58`）严格 `(now - LatestFireHitTick) > 20*1000` ⇒ 清标志 +
-    /// `SpiritsGone` + `SendSocket("+UFIR")`（[`crate::World::expire_player_run_state`]）。
-    ///
-    /// **写入点登记**：oracle 的 `AllowFireHitSkill`（`PlayObject.Base.cs:653-663`，施放 26 时置位）
-    /// 与攻击命中清标志（`PlayObject.Attack.cs:591-593/614-616`）依赖尚未移植的技能层；
-    /// 本骨架的生产路径暂无写入者（恒 `false`）⇒ 到期段零动作。字段/到期先落地，接线时无需再改。
-    /// C# `PlayObject.TwinHitSkill` / `LatestTwinHitTick`（`PlayObject.cs:185/195`）——双龙斩。
-    /// 到期段 `PlayObject.Message.cs:60-64`：严格 `> 60*1000` ⇒ 清标志 + `SendSocket("+UTWN")`
-    /// （**无** `SysMsg`）。写入点同 [`Entity::fire_hit_skill`] 登记（技能层未移植）。
-    /// C# `CharacterObject.UseItems`（`CharacterObject.cs:40`，13 格，`CharacterObject.cs:89` 初始化）。
-    /// `PlayObject.StruckDamage` 的耐久循环按它取数。
-    pub use_items: [UseItemSlot; USE_ITEM_SLOTS],
-    // C# `PlayObject.AngryRing`（`PlayObject.cs:2018` 初值 `false`；`RecalcAbilitys` 的
-    // `RING_ANGERENERGY_ITEM(117)` 支置真）——`DropUseItems` 的**首门**
-    // （`PlayObject.Message.cs:2156`：`if (AngryRing || NoDropUseItem) return;`）。
-    //
-    // **写入点登记**：本骨架的 `RecalcAbilitys` 等价物（`bins/game-svr/src/ability.rs`）尚未
-    // 建模戒指 Shape 117 ⇒ 生产路径恒 `false`（部署件语料下与 oracle 的差异见 whitelist T-81）。
-    // S4a-2 迁出：`angry_ring` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `PlayObject.NoDropUseItem`（脚本/`RobotPlayer.Conf` 可置；真人玩家默认 `false`）。
-    // 同 `DropUseItems` 首门。本骨架无写者 ⇒ 恒 `false`。
-    // S4a-2 迁出：`no_drop_use_item` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `BaseObject.NoItem`（`IPlayerActor.NoDropItem` 的旧名；脚本可置，真人玩家默认
-    // `false`）——`KillTargetTrigger` 第二段 `!NoItem || !Envir.Flag.NoDropItem` 的实体侧门。
-    // 本骨架无写者 ⇒ 恒 `false`。
-    // S4a-2 迁出：`no_item` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `WantRefMsg`
-    // S3b：`add_to_mapped` / `visible_actors` / `visible_events` / `is_visible_active` /
-    // `processed_tick` / `verify_tick` 已迁到 [`MapBinding`] 组件（字段真值，经
-    // `EntityStore::map_binding` / `map_binding_mut` 受控访问）。`processed_tick` 与
-    // `map_id` 的旧字段位置保留在此注释里，源码顺序无契约。
-    // `WAbil.HP` / `WAbil.MaxHP`
-    // S4a 迁出：`hp` 真值在 components 组件（见迁移文档 S4a）。
-    // S4a 迁出：`max_hp` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `BaseObject.Abil` 的本骨架子集快照（见 [`BaseAbil`]）。
-    //
-    // `None` = 尚未取快照：生成路径（`monster_from_row`）直接把库值写进 `dc`/`max_hp`
-    // （此时 `WAbil == Abil`，此后未被 `RecalcAbilitys`/伤害改过）⇒ 首次需要时由
-    // [`Entity::abil_snapshot`] 以当前 `dc`/`max_hp` 懒取。`MakeClone` 在第一次
-    // `RecalcAbilitys()` 之后复制源怪的快照（oracle `MonsterObject.cs:115`），
-    // 使随后的 `AppearNow` 从 `OldMon.Abil` 重算（`f(Abil)` 而不是 `f(f(初值))`）。
-    // S4a 迁出：`abil` 真值在 components 组件（见迁移文档 S4a）。
-    // `WAbil.MP` / `WAbil.MaxMP`。
-    //
-    // 怪物生成时照 `WorldServer.MonGen.cs:896-897` 的 `ApplyMonsterAbility`：`MP = 0`、
-    // `MaxMP = MonsterInfo.MP`（注意 `MP` 在怪物表里被复用作 `MonsterWeapon` 的形参，见
-    // `:903`；`BaseObject.Run` 的恢复段仍按 `WAbil.MaxMP` 回蓝）。
-    // S4a 迁出：`mp` 真值在 components 组件（见迁移文档 S4a）。
-    // S4a 迁出：`max_mp` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `BaseObject.PoisoningTick`（`BaseObject.cs:301`，ctor `:443` 置 `GetTickCount()`）——
-    /// 毒伤 DoT 的周期门时刻（`ActorBuffSystem.cs:235`，缺省 `Config.PosionDecHealthTime` = 2500ms）。
-    /// 缺省 = [`crate::buff::BUFF_EPOCH_MS`]（模拟开机毫秒基）；ctor 拿不到 `World` 时钟 ⇒ 落图时由
-    /// [`crate::world::World::add_entity`] 按 `clock_ms + BUFF_EPOCH_MS` 精确重盖，与 oracle ctor
-    /// 「对象建立那一刻」取 `GetTickCount()` 对齐。
-    /// C# `BaseObject.GreenPoisoningPoint`（`BaseObject.cs:117`，`MakePosion` `:1963` 置 `(byte)nPoint`）。
-    /// DoT 扣血量 = `GreenPoisoningPoint + 1`（`ActorBuffSystem.cs:252`）。
-    /// C# `BaseObject.CharStatus`（`BaseObject.cs:56`）——`GetCharStatus()` 的结果缓存
-    /// （`ActorBuffSystem.Operate` 的 `boChg` 支 / `MakePosion` 写它）。
-    /// C# `BaseObject.CharStatusEx`（`BaseObject.cs:57`，ctor `:393` 置 0）——低 16 位并入 `GetCharStatus`。
-    /// C# `BaseObject.StatusTimeArr`（`BaseObject.cs:81`，ctor `:394` 置 15 个 0）。
-    ///
-    /// **P3-B3 新增（`crates/world` 接口变更，须按 §12.4 通知并行车道）**：
-    /// 18/19 的隐身门、40 的三个计时器读写、以及 16/18/19 之外的写点（移动破隐 / 透明戒指 /
-    /// `Disappear` / `GasMoth` / `FrostTiger` / `Abil`）都落在这一份存储上。
-    /// 递减循环被注释（`BaseObject.Base.cs:249-315`）⇒ 只有写入点，没有周期衰减。
-    /// C# `BaseObject.Transparent`（`BaseObject.cs:259`；18/19 的 `MagMakePrivateTransparent` 收尾置 true）。
-    /// C# `BaseObject.ShowHp`（28 心灵启示的 `MakeOpenHealth` 置 true）。
-    /// C# `BaseObject.ShowHpTick`（`MagicManager.cs:436` 置当前 tick）。
-    /// C# `BaseObject.ShowHpInterval`（`MagicManager.cs:437`：`GetPower13(...) * 1000`）。
-    /// C# `BaseObject.SuperMan`（32 圣言术的首门 `target.SuperMan`）。
-    // C# `CharacterObject.HitSpeed`（`PlayObject.Message.cs:1846` 的 `SM_CHARSTATUSCHANGED` 末参
-    // 取**收件人自己**的 `this.HitSpeed`）。
-    //
-    // **P3-B3 新增**：`RecalcAbilitys` 的写入点尚未接到实体（登记），普通路径恒 0；
-    // 657 帧改为逐收件人读本字段构造（不再用一条 `hit_speed=0` 的 body 广播）。
-    // S4a 迁出：`hit_speed` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `PlayObject.MagicShield`（`PlayObject.cs:490`）——`DamageHealth` 的 MP 抵扣门（`BaseObject.cs:779`）。
-    /// C# `PlayObject.UnMagicShield`（`PlayObject.cs:494`）——`DamageHealth` 首行守卫（`BaseObject.cs:777`）。
-    // `WAbil.DC`（低字节=下限、高字节=上限，与 C# 一致）
-    // S4a 迁出：`dc` 真值在 components 组件（见迁移文档 S4a）。
-    // `WAbil.AC`
-    // S4a 迁出：`ac` 真值在 components 组件（见迁移文档 S4a）。
-    // `HitPoint` / `SpeedPoint`（命中/敏捷，命中判定用）
-    // S4a 迁出：`hit_point` 真值在 components 组件（见迁移文档 S4a）。
-    // S4a 迁出：`speed_point` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `BaseObject.AntiMagic`（`BaseObject.cs:113`；ctor `:390` 置 **0**）——
-    // 魔法骰门 `Random(10) >= AntiMagic` 的右操作数（`MagicManager.cs:180/292/334/566/1033`）。
-    //
-    // **普通 `MonGen` 生成路径保持 0**：oracle 只有 `RecalcAbilitys` 会把它置成
-    // `1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30` 置 1、`:67` 累加），而普通生成的怪
-    // **不调用** `RecalcAbilitys`；`ElfMonster`/`WhiteSkeleton` 等覆写也不改 `AntiMagic`。
-    // ⇒ 普通怪目标下 `Random(10) >= 0` 恒真，骰门永不失败。
-    //
-    // 本仓的等价 `RecalcAbilitys` 写入点：玩家登录/升级
-    // （`bins/game-svr` 的 `apply_ability_to_entity`）与宝宝召唤
-    // （[`crate::World::make_slave_adopt`]，`BaseObject.cs:1198`），均置 `1 + AddAbil.AntiMagic`
-    // （怪物/玩家的 `AddAbil` 在本骨架内为 0 ⇒ 1）。复活（`BaseObject.cs:2739`）与其余
-    // slave 面（`MakeClone`/`GainSlaveExp`）尚未建模 ⇒ 这些路径保持 0（登记）。
-    // 设计锚：`mir2-rs/tests/parity/m3/design-monster-run-overrides-20261017.md` §4.1.2-5 / §5-2。
-    // S4a 迁出：`anti_magic` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `BaseObject.Light`（`BaseObject.cs:149`；ctor `:384` 置 **0**）——光源强度。
-    ///
-    /// 消费点全在帧面：`SM_WALK/SM_RUN/SM_TURN/SM_DIGUP/...` 的 `Series = MakeWord(Dir, Light)`
-    /// （`PlayObject.Message.cs:1406-1975`）。本骨架只落字段，帧面由宿主 `bins/game-svr` 发。
-    /// `NormNpc` ctor 置 **2**（`NormNpc.cs:43`，商人继承）；玩家/普通怪物保持 ctor 缺省 0。
-    // C# `BaseObject.AntiPoison`（`BaseObject.cs:109`；ctor `:389` 置 **0**）——毒/麻痹抗性。
-    //
-    // 消费点：`Random(target.AntiPoison + N)` 的毒/麻痹命中门（`MagicManager.cs:235/914`、
-    // `Player.Attack.cs:221`、`GreenMonster.cs:23` 等）。`NormNpc` ctor 置 **99**
-    // （`NormNpc.cs:44`，商人继承）；玩家/普通怪物保持 ctor 缺省 0（本骨架尚未接毒/麻痹结算）。
-    // S4a 迁出：`anti_poison` 真值在 components 组件（见迁移文档 S4a）。
-    // `WAbil.MAC`（`BaseObject` 构造 ctor 缺省 **0**；`RecalcAbilitys` 后 = `Abil.MAC + AddAbil.MAC`
-    // 的逐字节 `MakeWord` 合成，见 `bins/game-svr` 的 `apply_ability_to_entity`）。
-    //
-    // **P3-B2 新增（`crates/world` 接口变更，须按 §12.4 通知并行车道）**：`RM_MAGSTRUCK` 交付段的
-    // `GetMagStruckDamage`（`BaseObject.Base.cs:812-821`）唯一读点：
-    // `Lo(MAC) + Random(|Hi(MAC)-Lo(MAC)|+1)`，再从 `nDamage` 里扣。
-    // 普通 `MonGen` 怪走 ctor 缺省 0（与 `anti_magic` 同口径，生成路径不调 `RecalcAbilitys`）。
-    // S4a 迁出：`mac` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `BaseObject.RushMode`——`RM_MAGSTRUCK` 的 `Random(1000)` 门
-    /// （`BaseObject.Base.cs:620`：`!RushMode` 才 `WalkTick += 800 + Random(1000)`）。
-    ///
-    /// **P3-B5 新增**（`crates/world` 接口变更，须按 §12.4 通知并行车道）：
-    /// ctor 缺省 `false`（oracle 构造缺省）；本骨架无写入点（冲锋态未建模）⇒ 生产恒 false。
-    /// C# `PlayObject.ExtraAbil[7]`（`PlayObject.cs:201`）——`AttPowerUp` 写槽 0
-    /// （`EABIL_DCUP`，`ActorConst.cs:26`）。**P3-B5 新增**。
-    /// C# `PlayObject.ExtraAbilTimes[7]`（`PlayObject.cs:202`）——到期时刻（sim 毫秒）。
-    /// C# `PlayObject.ExtraAbilFlag[7]`（`PlayObject.cs:203`）——「到期前 10s 提示已发」标记。
-    // `Job`（0 战 / 1 法 / 2 道）
-    // S4a 迁出：`job` 真值在 components 组件（见迁移文档 S4a）。
-    // `LifeAttrib`（1 = `LA_UNDEAD` 不死系）
-    // S4a 迁出：`life_attrib` 真值在 components 组件（见迁移文档 S4a）。
-    // `Abil.Level`
-    // S4a 迁出：`level` 真值在 components 组件（见迁移文档 S4a）。
-    // `MonsterInfo.Exp`（怪物经验，死亡时按 `CalcGetExp` 结算）
-    // S4a 迁出：`mon_exp` 真值在 components 组件（见迁移文档 S4a）。
-    // `Abil.Exp` / `Abil.MaxExp`
-    // S4a 迁出：`exp` 真值在 components 组件（见迁移文档 S4a）。
-    // S4a 迁出：`max_exp` 真值在 components 组件（见迁移文档 S4a）。
-    // `AddAbil.UndeadPower`（攻击方对不死系的加成）
-    // S4a 迁出：`undead_power` 真值在 components 组件（见迁移文档 S4a）。
-    // `LastHiter`（最后一击者 `ActorId`）
-    // S4a-2 迁出：`last_hiter` 真值在 components 组件（见迁移文档 S4a）。
-    // C# `ExpHitter`（经验归属者 `ActorId`）——由 `SetLastHiter` 设置：
-    // **第一个**命中者粘住不放（`BaseObject.cs:1753` 的 `if (ExpHitter == null)`），
-    // 死亡时 `KillFunc()`（`BaseObject.cs:2429`）把经验发给它，而不是 `LastHiter`。
-    // S4a-2 迁出：`exp_hitter` 真值在 components 组件（见迁移文档 S4a）。
-    // `BaseObject.LastHiterTick` / `ExpHitterTick`（`BaseObject.cs:295-297`）。
-    // 由 [`Entity::set_last_hiter`]（`BaseObject.cs:1753-1770`）刷新；`BaseObject.Run`
-    // 的过期段（`BaseObject.Base.cs:119-132`）用它们判 30s / 6s 墙钟过期。
-    // S4a-2 迁出：`last_hiter_tick` 真值在 components 组件（见迁移文档 S4a）。
-    // S4a-2 迁出：`exp_hitter_tick` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `PlayObject.Revival`（`PlayObject.cs:284`）——复活戒指生效标志。
-    ///
-    /// **粘滞锁存**：`RecalcAbilitys()` 只在 Ringr/Ringl 槽的 `Shape == 114`
-    /// （`ItemShapeConst.RING_REVIVAL_ITEM`，`PlayObject.cs:2241-2243`）时置 `true`，
-    /// **全仓没有任何置 `false` 的写入点**（spike 实测的 oracle bug）⇒ 摘下戒指后仍为 true。
-    /// 本字段同口径：调用方按 `entity.revival |= recalc.revival` 落账，绝不重置。
-    /// C# `PlayObject.RevivalTick`（`PlayObject.cs:283`）——上次复活时刻（sim 毫秒）。
-    ///
-    /// P32 的 60s 门：`(now - RevivalTick) > Config.RevivalTime`（`PlayObject.Message.cs:753`）。
-    /// C# `PlayObject.UnRevival`（`PlayObject.cs:506`，`bool` 属性缺省 `false`）——
-    /// **全仓无写入点**（`grep -rn UnRevival src` 只有声明与 P32 的读点）。
-    /// P32 门：`LastHiter` 是玩家且其 `UnRevival == true` ⇒ 不复活
-    /// （`PlayObject.Message.cs:751`）。本骨架同缺省 false，只在显式赋值时生效。
-    /// C# `PlayObject.FlameRing`（`PlayObject.cs:283` 附近）——火球戒指生效标志。
-    ///
-    /// **粘滞锁存（oracle bug，照抄）**：`RecalcAbilitys()` 顶部只重置 `RecoveryRing`
-    /// （`PlayObject.cs:2017`），全仓唯一写入点是 Ringl/Ringr 的 `Shape == 115` 分支
-    /// （`ItemShapeConst.RING_FIREBALL_ITEM`，`:2244-2246`）的 `FlameRing = true`；
-    /// **没有任何置 `false` 的写入点**。调用方按 `entity.flame_ring |= recalc.flame_ring` 落账。
-    // `BaseObject.HealthTick` / `SpellTick` / `AutoRecoveryTick`（`BaseObject.cs:287-306`）。
-    //
-    // 恢复段（`BaseObject.Base.cs:39-66`）按 `(now - AutoRecoveryTick) / 20` 把时间折成
-    // `HealthTick/SpellTick`，到 `HealthFillTime`/`SpellFillTime` 才回 HP/MP。
-    // S4a-2 迁出：`health_tick` 真值在 components 组件（见迁移文档 S4a）。
-    // S4a-2 迁出：`spell_tick` 真值在 components 组件（见迁移文档 S4a）。
-    // S4a-2 迁出：`auto_recovery_tick` 真值在 components 组件（见迁移文档 S4a）。
-    // 掉落预算里的金币（`mon.Gold`）
-    // S4a-2 迁出：`gold` 真值在 components 组件（见迁移文档 S4a）。
-    // 掉落预算里的物品（`mon.ItemList`，生成时算好、死亡时落地）
-    // S4a-2 迁出：`drop_items` 真值在 components 组件（见迁移文档 S4a）。
-    /// 死亡结算是否已做（避免重复发经验/重复掉落）
-    /// 本 tick 是否收到过**直接 `Die()` 调用**（脚本 `KILLMONSTER` / GM Kill 的
-    /// [`crate::world::World::kill`] 入口；oracle 无此字段，是本骨架区分调用来源的一次性标记）。
-    ///
-    /// 伤害只把 `HP` 打到 0；SuperMan 在 `BaseObject.Run:32-36` 先回满，故伤害路径不会
-    /// 执行 `:70-73` 的 `Die()`。只有本标记为 true 时，`settle_deaths` 才执行 SuperMan
-    /// 子类覆写体；结算时立即消费，保证两次直接 `Die()` 各执行一次。
-    // 构造函数链抽出的随机数结果（见 [`MonsterCtorDraws`]）；玩家/非 MonGen 路径实体为缺省全零。
-    // S4a-2 迁出：`ctor_draws` 真值在 components 组件（见迁移文档 S4a）。
-    /// C# `StickMonster.ComeOutValue`（`StickMonster.cs:10`；ctor `:19` 置 4）。
-    ///
-    /// **类常量**：只有 `StickMonster` 家族有该字段（`CentipedeKingMonster.cs:14` = 4、
-    /// `SandMobObject.cs:11` = 8）。类由 `MonsterInfo.Race` 决定（`WorldServer.MonGen.cs:504-729`
-    /// 的 `new Xxx()`），装载钩子见 [`crate::mongen::apply_monster_class_constants`]。
-    /// `Entity` 是各 C# 类的公共载体，非该家族的怪保持 C# 字段缺省 0。
-    ///
-    /// 消费方：MB-1（`StickMonster.Run` R38）、MB-3（`CentipedeKingMonster.Run` R07）、
-    /// MB-8（`SandMobObject.Run` R33）。
-    /// C# `StickMonster.AttackRange`（`StickMonster.cs:11`；ctor `:20` 置 4；
-    /// `CentipedeKingMonster.cs:15` 置 6）。缺省 0（非 `StickMonster` 家族无此字段）。
-    ///
-    /// 消费方：MB-1（R38）、MB-3（R07）、MB-8（R33）。
-    /// C# `MagicMonObject.UseMagic`（`MagicMonObject.cs:10`，ctor `:15` = `false`）/
-    /// `ElectronicScolpionMon.UseMagic`（`ElectronicScolpionMon.cs:7`，ctor `:12` = `false`）。
-    /// 运行期由各自 `Run` 按血量改写（`MagicMonObject.cs:29/33`、`ElectronicScolpionMon.cs:39/43`）。
-    ///
-    /// 消费方：MB-6（R25 / R14）。
-    /// C# `BoneKingMonster.DangerLevel`（`short`，`BoneKingMonster.cs:9`；ctor `:17` = 5）/
-    /// `ScultureKingMonster._mNDangerLevel`（`int`，`ScultureKingMonster.cs:11`；ctor `:21` = 5）。
-    /// 装载后按类置 5；运行期递减/回满（`BoneKingMonster.cs:56-63`、`ScultureKingMonster.cs:94-101`）。
-    ///
-    /// 消费方：MB-7（BoneKing R05）、MB-3（ScultureKing R34）。
-    /// C# `SoccerBall.N550`（`SoccerBall.cs:9`；ctor `:15` = 0）。
-    ///
-    /// 消费方：MB-8（SoccerBall R36；`Struck` `:83` 写、`Run` `:24/:70` 读写）。
-    /// **MB-3（R07）**：`CentipedeKingMonster._attackTick`（`CentipedeKingMonster.cs:9`）——
-    /// 类私有攻击节拍，**不是** `WAbil.AttackTick`（后者是 `ai.attack_tick`）。
-    /// ctor `:17` 置 `GetTickCount()`，由装载钩子按 `World::clock_ms` 落定；运行期在
-    /// `Run`/`AttackTarget` 里刷新（10s/3s 两道门都读它）。
-    /// **MB-3（R34）**：`ScultureKingMonster._mSlaveObjectList`（`ScultureKingMonster.cs:12`）——
-    /// `CallSlave` 生成成功即入表；`Run` 尾倒序移除 `Death || Ghost` 的子怪。
-    /// 与 BeeQueen 的 `special_children`（`BeeList`）是不同 C# 字段，不合并。
-    pub class_slave_list: Vec<i32>,
-    /// 怪物/动物 AI 状态（`AnimalObject`/`MonsterObject` 字段子集；玩家不用，保持默认）。
-    pub ai: AnimalState,
-    /// 商人状态（`Merchant` 字段子集，M3⑤-实现 2 第①片）。`Some(_)` ⇒ 本实体是交易商人：
-    /// 这是商人的**身份门**——[`crate::monai::monster_ai_tick`]、`entity_cell_type`、
-    /// `consumes_view_range_update`、`merchant_ids_sorted` 都按它判定，**不**按 race
-    /// （商人行为轴 `race = 10` 与固定 NPC 同值，外观轴 `race_img = 50` 又与动物同值）。
-    pub merchant: Option<crate::merchant::MerchantState>,
-    /// 固定管理 NPC 状态（`NormNpc` 字段子集 + ctor 抽数，卡 `openmir2-npcs-fixed-loading`）。
-    /// `Some(_)` ⇒ 本实体是 `Envir/Npcs.txt` 的固定 NPC（Merchant/GuildOfficial/CastleOfficial）：
-    /// [`crate::monai::monster_ai_tick`] 显式跳过它（固定 NPC 由 [`crate::World::npc_tick`]
-    /// 驱动，即 oracle `ProcessNpcs` 的建模；`monster_ai_tick` 与 `npc_tick` 不得双驱）；
-    /// [`crate::World::merchant_tick`] 只认 `merchant.is_some()` ⇒ 也跳过。
-    pub npc: Option<crate::npc::NpcState>,
-}
+/// **S4c-3**：实体主组件 = `mir2_world_bevy::CoreIdentity`（`id`/`name`）。
+///
+/// 保留 `Entity` 名称作**类型别名**，让既有 `&Entity` 标注与 `e.id` / `e.name` 读法不变；
+/// 本 crate 不再定义 `Entity` 类型，`EcsStore` 的泛型参数是 `CoreIdentity`。
+/// `id` 同时是 `EcsStore` 索引键（store 索引与组件各持一份、以索引为准，生成后不可变）。
+pub use mir2_world_bevy::CoreIdentity;
+pub type Entity = CoreIdentity;
 
-impl Entity {
+impl EntitySpawn {
     /// ctor 等价物：返回**生成期载体** [`EntitySpawn`]（`Entity` + 落图前的
     /// [`Transform`] / [`MapBinding`]）。坐标在 `insert` 时落成组件；插入后真值只在组件里。
     ///
     /// 保留 `(x, y)` 参数是为了让 约 700 处生成期赋值保持原形（`e.x = …` 写的是
     /// `EntitySpawn.transform`），不改变任何构造点的可读性。
     // `new` 返回生成期载体（`EntitySpawn` 而不是 `Self`），以保持 约 700 处生成期写法；
-    // 名字沿用 `Entity::new`（oracle ctor 等价物）。
+    // 名字沿用 `EntitySpawn::new`（oracle ctor 等价物）。
     #[allow(clippy::new_ret_no_self)]
     pub fn new(id: i32, name: impl Into<String>, x: i32, y: i32) -> EntitySpawn {
         let entity = Entity {
             id,
             name: name.into(),
-            master: None,
-            slave_relax: false,
-            slave_list: Vec::new(),
             // `BaseObject.cs:403`：ctor `StickMode = false`；两类虫后由 ctor 等价点置 true。
-            special_children: Vec::new(),
-            is_slave: false,
-            is_clone: false,
-            slave_exp_level: 0,
-            slave_make_level: 0,
-            master_royalty_tick: 0,
-            master_tick: 0,
             // `PlayObject.cs:908` 新角色 `AttatckMode = 0 = HAM_ALL`；未接 `CM_ATTACKMODE` 前恒为 0。
             // `PlayObject.cs:891`：`Initialize()` 置 `DieInFight3Zone = false`。
             // `BaseObject.cs:385`：ctor 初值 `NameColor = 255`。
@@ -2177,15 +1840,14 @@ impl Entity {
             // `PowerRate = 100`；`BoPowerItem=false` / `PowerItem=0`。
             // `PlayObject.cs:725-727`：`PowerRateTime`/`KillMonExpRateTime` 无 ctor 赋值 ⇒ 0；
             // `KillMonExpRate = 100`（`:941`）；`ExpRateTick` 的 ctor 取钟由落图点重盖。
-            // `PlayObject.cs:1047` 的 `RandomNo` 由登录构造点抽数后写入；`Entity::new` 缺省 0。
+            // `PlayObject.cs:1047` 的 `RandomNo` 由登录构造点抽数后写入；`EntitySpawn::new` 缺省 0。
             // `PlayObject.cs:181/185/194/195`：ctor 缺省 `FireHitSkill/TwinHitSkill = false`、
             // 两个 tick 为 0（C# `int` 缺省）；真实置位来自技能层（未移植，见字段文档）。
             // 重叠推挤状态（`BoDuplication` / `DupStartTick` / `CheckDupObjTick`）已于 S3a
-            // 迁入 `DupState` 组件：`Entity::new` 的同值缺省 = `DupState::default`（false/0/0），
+            // 迁入 `DupState` 组件：`EntitySpawn::new` 的同值缺省 = `DupState::default`（false/0/0），
             // 由 `EntityStore::insert` 统一插入；`CheckDupObjTick` 的 ctor/落图时刻由
             // `World::add_entity` / `SessionRegistry::enter_map_at` 经 `EntityStore::dup_state_mut` 重盖。
             // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
-            use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
             // `PlayObject.cs:2018`：ctor 缺省 `AngryRing = false`；`NoDropUseItem` 亦无 ctor 赋值。
             // 玩家默认满血（WAbil.HP 的默认值不能是 0：0 在语义上等于「已死」，
             // 会让死亡结算把刚进图的玩家当成死者——实测踩过）
@@ -2203,7 +1865,6 @@ impl Entity {
             // `BaseObject.WAbil.MAC` 构造缺省 0（`RecalcAbilitys` 才写 `Abil.MAC + AddAbil.MAC`）。
             // `BaseObject.RushMode` 构造缺省 false（`BaseObject.cs` ctor）。
             // `PlayObject.cs:201-203`：三个 7 槽数组构造缺省全 0。
-            class_slave_list: Vec::new(),
             // MB-7：神兽两形态 ctor 置 `BoIsFirst = true`（`apply_monster_class_constants`）；
             // 字段缺省照 C# `bool` = false。`DigDownTick` 是 `int` 缺省 0。
             // 专用怪 ctor 类常量（PR-2）：`Entity` 是 C# 各怪物类的公共载体，这里落
@@ -2216,12 +1877,6 @@ impl Entity {
             // 等价物（`race` 缺省 = `ActorRace.Play`），故这里落 1000（常量、不抽数）。
             // `SearchTick` 拿不到世界时钟 ⇒ 由落图点（`World::add_entity`/`enter_map`）按
             // `clock_ms` 重盖（同 `verify_tick` 口径）。
-            ai: AnimalState {
-                search_time: PLAYER_SEARCH_TIME,
-                ..AnimalState::default()
-            },
-            merchant: None,
-            npc: None,
             // 组队态构造初值：`PlayObject.cs:902` `AllowGroup=false`、`:583` `GroupOwner=0`、
             // `:1042` `GroupMembers=new List()`、`AllowGroupReCall`（`:224`）bool 缺省 `false`。
         };
@@ -2255,7 +1910,7 @@ impl Entity {
             mon_exp: 0,
             exp: 0,
             max_exp: 0,
-            // S4a-2 ctor 缺省（与迁移前 `Entity::new` 逐字段一致）。
+            // S4a-2 ctor 缺省（与迁移前 `EntitySpawn::new` 逐字段一致）。
             castle_binding: None,
             mon_gen: None,
             mon_gen_zen_time: 0,
@@ -2277,7 +1932,7 @@ impl Entity {
             pvp_flag: false,
             pvp_name_color_tick: 0,
             die_in_fight3_zone: false,
-            // S4b-1 ctor 缺省（与迁移前 `Entity::new` 逐字段一致；`name_color=255`、
+            // S4b-1 ctor 缺省（与迁移前 `EntitySpawn::new` 逐字段一致；`name_color=255`、
             // `race=ACTOR_RACE_PLAY` 是 ctor 覆盖值，见迁移文档 §3.4）。
             invisible: false,
             hide_mode: false,
@@ -2359,13 +2014,27 @@ impl Entity {
             extra_abil: [0; EXTRA_ABIL_SLOTS],
             extra_abil_times: [0; EXTRA_ABIL_SLOTS],
             extra_abil_flag: [0; EXTRA_ABIL_SLOTS],
+            // S4c-1 ctor 缺省（与迁移前 `EntitySpawn::new` 逐字段一致：全 0/false/空）。
+            master: None,
+            slave_relax: false,
+            slave_list: Vec::new(),
+            special_children: Vec::new(),
+            is_slave: false,
+            is_clone: false,
+            slave_exp_level: 0,
+            slave_make_level: 0,
+            master_royalty_tick: 0,
+            master_tick: 0,
+            class_slave_list: Vec::new(),
+            use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
+            merchant: None,
+            npc: None,
+            // S4c-2：玩家 ctor 等价物的 AI 缺省（`PlayObject.cs:899-901` SearchTime=1000）。
+            ai: AnimalState {
+                search_time: PLAYER_SEARCH_TIME,
+                ..AnimalState::default()
+            },
         }
-    }
-
-    /// 当前朝向（C# `BaseObject.Dir`），供接线层发 `SM_TURN`/`RM_TURN` 等帧面用。
-    #[must_use]
-    pub fn dir(&self) -> u8 {
-        self.ai.dir
     }
 }
 
@@ -2405,32 +2074,56 @@ type ReadView2Query = bevy_ecs::query::QueryState<(
     &'static BuffState,
 )>;
 
-/// 写路径缓存查询：`Entity` 主组件 + S4a 属性/成长组件 + S4b-1 状态组件（[`EntityMut`] 用）。
+/// 读路径的第三缓存查询（S4c-1）：仆从/背包/商人/NPC 四个组件。
+/// 与 [`ReadViewQuery`] / [`ReadView2Query`] 一样只按显式句柄 `get_manual`（共享借用）。
+type ReadView3Query = bevy_ecs::query::QueryState<(
+    &'static SlaveState,
+    &'static Inventory,
+    &'static MerchantState,
+    &'static NpcState,
+    &'static AiState,
+)>;
+
+/// 写路径缓存查询：`Entity` 主组件 + S4a/S4b 组件 + S4c-1 四组件（[`EntityMut`] 用）。
+///
+/// bevy 扁平元组上限 15；S4c-1 追加 4 个组件后改用**嵌套元组**（内层 15 + 内层 4，
+/// 外层 2 元组仍是合法 `QueryData`），一次 `get_mut` 取齐、仍然是单次可变借用。
 type MutViewQuery = bevy_ecs::query::QueryState<(
-    &'static mut Entity,
-    &'static mut Vitals,
-    &'static mut AbilitySnapshot<BaseAbil>,
-    &'static mut Progression,
-    &'static mut SpawnBinding,
-    &'static mut DropState,
-    &'static mut CombatAttribution,
-    &'static mut Flags,
-    &'static mut LifeCycle,
-    &'static mut Appearance,
-    &'static mut MonsterClassState,
-    &'static mut PlayerRunState,
-    &'static mut GroupState,
-    &'static mut Revival,
-    &'static mut BuffState,
+    (
+        &'static mut Entity,
+        &'static mut Vitals,
+        &'static mut AbilitySnapshot<BaseAbil>,
+        &'static mut Progression,
+        &'static mut SpawnBinding,
+        &'static mut DropState,
+        &'static mut CombatAttribution,
+        &'static mut Flags,
+        &'static mut LifeCycle,
+        &'static mut Appearance,
+        &'static mut MonsterClassState,
+        &'static mut PlayerRunState,
+        &'static mut GroupState,
+        &'static mut Revival,
+        &'static mut BuffState,
+    ),
+    (
+        &'static mut SlaveState,
+        &'static mut Inventory,
+        &'static mut MerchantState,
+        &'static mut NpcState,
+        &'static mut AiState,
+    ),
 )>;
 
 pub struct EntityStore {
-    inner: mir2_world_bevy::EcsStore<Entity>,
+    inner: mir2_world_bevy::EcsStore<CoreIdentity>,
     /// 读路径的缓存查询（S3b/S4a）：一次按句柄取齐 `Entity` + 位置/绑定 + 属性/成长组件，
     /// 避免每个读取点逐次 `TypeId` 查表。只按显式句柄 `get_manual`，不迭代求顺序。
     view_state: ReadViewQuery,
     /// 读路径第二缓存查询（S4b-2）。
     view2_state: ReadView2Query,
+    /// 读路径第三缓存查询（S4c-1）。
+    view3_state: ReadView3Query,
     /// 写路径的缓存查询（S4a/S4b）：一次按句柄取齐可变主组件与属性/成长/状态组件（[`EntityMut`] 用）。
     mut_view_state: MutViewQuery,
 }
@@ -2479,27 +2172,41 @@ impl EntityStore {
         let view2_state = inner
             .world_mut()
             .query::<(&PlayerRunState, &GroupState, &Revival, &BuffState)>();
+        let view3_state =
+            inner
+                .world_mut()
+                .query::<(&SlaveState, &Inventory, &MerchantState, &NpcState, &AiState)>();
         let mut_view_state = inner.world_mut().query::<(
-            &mut Entity,
-            &mut Vitals,
-            &mut AbilitySnapshot<BaseAbil>,
-            &mut Progression,
-            &mut SpawnBinding,
-            &mut DropState,
-            &mut CombatAttribution,
-            &mut Flags,
-            &mut LifeCycle,
-            &mut Appearance,
-            &mut MonsterClassState,
-            &mut PlayerRunState,
-            &mut GroupState,
-            &mut Revival,
-            &mut BuffState,
+            (
+                &mut Entity,
+                &mut Vitals,
+                &mut AbilitySnapshot<BaseAbil>,
+                &mut Progression,
+                &mut SpawnBinding,
+                &mut DropState,
+                &mut CombatAttribution,
+                &mut Flags,
+                &mut LifeCycle,
+                &mut Appearance,
+                &mut MonsterClassState,
+                &mut PlayerRunState,
+                &mut GroupState,
+                &mut Revival,
+                &mut BuffState,
+            ),
+            (
+                &mut SlaveState,
+                &mut Inventory,
+                &mut MerchantState,
+                &mut NpcState,
+                &mut AiState,
+            ),
         )>();
         EntityStore {
             inner,
             view_state,
             view2_state,
+            view3_state,
             mut_view_state,
         }
     }
@@ -2508,6 +2215,7 @@ impl EntityStore {
     fn refresh_view(&mut self) {
         self.view_state.update_archetypes(self.inner.world());
         self.view2_state.update_archetypes(self.inner.world());
+        self.view3_state.update_archetypes(self.inner.world());
         self.mut_view_state.update_archetypes(self.inner.world());
     }
 
@@ -2611,6 +2319,26 @@ impl EntityStore {
         assert!(
             self.inner.insert_component(id, parts.buff),
             "刚插入的实体必须能挂 BuffState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.slave),
+            "刚插入的实体必须能挂 SlaveState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.inventory),
+            "刚插入的实体必须能挂 Inventory 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.merchant),
+            "刚插入的实体必须能挂 MerchantState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.npc),
+            "刚插入的实体必须能挂 NpcState 组件（id={id}）"
+        );
+        assert!(
+            self.inner.insert_component(id, parts.ai),
+            "刚插入的实体必须能挂 AiState 组件（id={id}）"
         );
         self.refresh_view();
         id
@@ -2781,6 +2509,10 @@ impl EntityStore {
             .view2_state
             .get_manual(self.inner.world(), bevy_entity)
             .ok()?;
+        let (slave, inventory, merchant, npc, ai) = self
+            .view3_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
         Some(EntityRef::from_components(
             entity,
             transform,
@@ -2801,6 +2533,11 @@ impl EntityStore {
             group,
             revival,
             buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
+            ai,
         ))
     }
 
@@ -2879,6 +2616,11 @@ impl EntityStore {
         let group = spawn.group_component();
         let revival = spawn.revival_component();
         let buff = spawn.buff_component();
+        let slave = spawn.slave_component();
+        let inventory = spawn.inventory_component();
+        let merchant = spawn.merchant_component();
+        let npc = spawn.npc_component();
+        let ai = spawn.ai_component();
         // `Recovery`/`PvpState` 不在 [`EntityMut`] 视图内（bevy 15 元组上限，见 `MutViewQuery`），
         // 仍由**同一个**组件实体承载，这里经受控入口整包写回（单真值，无影子副本）。
         if let Some(r) = self.inner.get_component_mut::<Recovery>(id) {
@@ -2905,6 +2647,11 @@ impl EntityStore {
         *view.group = group;
         *view.revival = revival;
         *view.buff = buff;
+        *view.slave = slave;
+        *view.inventory = inventory;
+        *view.merchant_state = merchant;
+        *view.npc_state = npc;
+        *view.ai = ai.ai;
         true
     }
 
@@ -2931,25 +2678,29 @@ impl EntityStore {
         bevy_entity: bevy_ecs::entity::Entity,
     ) -> Option<EntityMut<'_>> {
         let (
-            entity,
-            vitals,
-            ability,
-            progression,
-            spawn,
-            drop,
-            attribution,
-            flags,
-            life_cycle,
-            appearance,
-            monster_class,
-            player_run,
-            group,
-            revival,
-            buff,
+            (
+                entity,
+                vitals,
+                ability,
+                progression,
+                spawn,
+                drop,
+                attribution,
+                flags,
+                life_cycle,
+                appearance,
+                monster_class,
+                player_run,
+                group,
+                revival,
+                buff,
+            ),
+            (slave, inventory, merchant, npc, ai),
         ) = self
             .mut_view_state
             .get_mut(self.inner.world_mut(), bevy_entity)
             .ok()?;
+        let ai = bevy_ecs::change_detection::Mut::into_inner(ai);
         Some(EntityMut {
             entity: bevy_ecs::change_detection::Mut::into_inner(entity),
             vitals: bevy_ecs::change_detection::Mut::into_inner(vitals),
@@ -2966,6 +2717,11 @@ impl EntityStore {
             group: bevy_ecs::change_detection::Mut::into_inner(group),
             revival: bevy_ecs::change_detection::Mut::into_inner(revival),
             buff: bevy_ecs::change_detection::Mut::into_inner(buff),
+            slave: bevy_ecs::change_detection::Mut::into_inner(slave),
+            inventory: bevy_ecs::change_detection::Mut::into_inner(inventory),
+            merchant_state: bevy_ecs::change_detection::Mut::into_inner(merchant),
+            npc_state: bevy_ecs::change_detection::Mut::into_inner(npc),
+            ai: &mut ai.ai,
         })
     }
 
@@ -3050,6 +2806,59 @@ impl EntityStore {
         self.inner.get_component_mut(id)
     }
 
+    /// 受控读取 AI 组件载荷（S4c-2）。
+    pub fn ai(&self, id: i32) -> Option<&AnimalState> {
+        self.inner.get_component::<AiState>(id).map(|s| &s.ai)
+    }
+
+    pub fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
+        self.inner
+            .get_component_mut::<AiState>(id)
+            .map(|s| &mut s.ai)
+    }
+
+    /// 受控读取仆从/克隆体组件（S4c-1）。
+    pub fn slave(&self, id: i32) -> Option<&SlaveState> {
+        self.inner.get_component(id)
+    }
+
+    pub fn slave_mut(&mut self, id: i32) -> Option<&mut SlaveState> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取 13 槽装备/背包组件（S4c-1）。
+    pub fn inventory(&self, id: i32) -> Option<&Inventory> {
+        self.inner.get_component(id)
+    }
+
+    pub fn inventory_mut(&mut self, id: i32) -> Option<&mut Inventory> {
+        self.inner.get_component_mut(id)
+    }
+
+    /// 受控读取商人组件（S4c-1；`Some` = 商人）。
+    pub fn merchant(&self, id: i32) -> Option<&crate::merchant::MerchantState> {
+        self.inner
+            .get_component::<MerchantState>(id)?
+            .merchant
+            .as_ref()
+    }
+
+    pub fn merchant_mut(&mut self, id: i32) -> Option<&mut crate::merchant::MerchantState> {
+        self.inner
+            .get_component_mut::<MerchantState>(id)?
+            .merchant
+            .as_mut()
+    }
+
+    /// 受控读取固定 NPC 组件（S4c-1；`Some` = 固定 NPC）。
+    pub fn npc_state(&self, id: i32) -> Option<&crate::npc::NpcState> {
+        self.inner.get_component::<NpcState>(id)?.npc.as_ref()
+    }
+
+    pub fn npc_state_mut(&mut self, id: i32) -> Option<&mut crate::npc::NpcState> {
+        self.inner.get_component_mut::<NpcState>(id)?.npc.as_mut()
+    }
+
     /// 受控读取 HP/MP 恢复计时组件（S4a；不在 [`EntityMut`] 视图内，单独入口）。
     pub fn recovery(&self, id: i32) -> Option<&Recovery> {
         self.inner.get_component(id)
@@ -3115,6 +2924,10 @@ impl EntityStore {
             .ok()?;
         let (player_run, group, revival, buff) = self
             .view2_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
+        let (slave, inventory, merchant, npc, ai) = self
+            .view3_state
             .get_manual(self.inner.world(), bevy_entity)
             .ok()?;
         Some(EntitySpawn {
@@ -3245,6 +3058,21 @@ impl EntityStore {
             extra_abil: buff.extra_abil,
             extra_abil_times: buff.extra_abil_times,
             extra_abil_flag: buff.extra_abil_flag,
+            master: slave.master,
+            slave_relax: slave.slave_relax,
+            slave_list: slave.slave_list.clone(),
+            special_children: slave.special_children.clone(),
+            is_slave: slave.is_slave,
+            is_clone: slave.is_clone,
+            slave_exp_level: slave.slave_exp_level,
+            slave_make_level: slave.slave_make_level,
+            master_royalty_tick: slave.master_royalty_tick,
+            master_tick: slave.master_tick,
+            class_slave_list: slave.class_slave_list.clone(),
+            use_items: inventory.use_items,
+            merchant: merchant.merchant.clone(),
+            npc: npc.npc,
+            ai: ai.ai.clone(),
         })
     }
 
@@ -3282,6 +3110,10 @@ impl EntityStore {
                     .view2_state
                     .get_manual(self.inner.world(), bevy_entity)
                     .ok()?;
+                let (slave, inventory, merchant, npc, ai) = self
+                    .view3_state
+                    .get_manual(self.inner.world(), bevy_entity)
+                    .ok()?;
                 Some(EntityRef::from_components(
                     entity,
                     transform,
@@ -3302,6 +3134,11 @@ impl EntityStore {
                     group,
                     revival,
                     buff,
+                    slave,
+                    inventory,
+                    merchant,
+                    npc,
+                    ai,
                 ))
             })
     }
@@ -3352,14 +3189,14 @@ impl EntityStore {
 mod tests {
     use super::*;
 
-    /// PR-2：`Entity::new` 是 C# 各怪物类的公共载体——新落的专用怪类常量必须是
+    /// PR-2：`EntitySpawn::new` 是 C# 各怪物类的公共载体——新落的专用怪类常量必须是
     /// **C# 字段缺省**（`int`/`sbyte` 0、`bool` false）；派生类 ctor 的实际常量由装载钩子
     /// （[`crate::mongen::apply_monster_class_constants`]）按 race 覆盖。
     ///
     /// 牙①：把 `attack_range: 0` 改成 `4`（把 `StickMonster` ctor 常量误当公共缺省）⇒ 本用例红。
     #[test]
     fn new_entity_class_constants_default_to_csharp_field_defaults() {
-        let e = Entity::new(1, "x", 0, 0);
+        let e = crate::EntitySpawn::new(1, "x", 0, 0);
         assert_eq!(e.come_out_value, 0, "ComeOutValue int 缺省");
         assert_eq!(e.attack_range, 0, "AttackRange int 缺省");
         assert!(!e.use_magic, "UseMagic bool 缺省");
@@ -3384,7 +3221,7 @@ mod tests {
     #[test]
     fn write_back_preserves_spawn_cloned_vitals() {
         let mut s = EntityStore::new();
-        let mut e = Entity::new(1, "hero", 0, 0);
+        let mut e = crate::EntitySpawn::new(1, "hero", 0, 0);
         e.hp = 37;
         e.mp = 11;
         e.exp = 5;
@@ -3419,7 +3256,7 @@ mod tests {
     #[test]
     fn insert_uses_spawn_ctor_bundle_not_component_defaults() {
         let mut s = EntityStore::new();
-        let id = s.insert(Entity::new(1, "x", 0, 0));
+        let id = s.insert(crate::EntitySpawn::new(1, "x", 0, 0));
         let r = s.get(id).expect("实体在场");
         assert_eq!(
             r.view_range, 5,
@@ -3443,7 +3280,7 @@ mod tests {
     #[test]
     fn write_back_covers_all_migrated_components() {
         let mut s = EntityStore::new();
-        let id = s.insert(Entity::new(7, "wb-all", 0, 0));
+        let id = s.insert(crate::EntitySpawn::new(7, "wb-all", 0, 0));
         let mut c = s.spawn_cloned(id).expect("副本");
         // Vitals + Ability + Progression
         c.hp = 11;
@@ -3578,6 +3415,79 @@ mod tests {
         c.extra_abil = [2; EXTRA_ABIL_SLOTS];
         c.extra_abil_times = [88; EXTRA_ABIL_SLOTS];
         c.extra_abil_flag = [3; EXTRA_ABIL_SLOTS];
+        // S4b 评审 P3-F1：城堡绑定 / 掉落物 / ctor 抽数必须**全字段**覆盖（此前只断言子集，
+        // write_back 漏写它们仍会全绿）。
+        c.castle_binding = Some(CastleBinding {
+            castle_index: 3,
+            role: crate::castle::DefenseRole::Archer(2),
+        });
+        c.drop_items = vec![crate::combat::DropItem {
+            make_index: 900,
+            index: 7,
+            dura: 8,
+            dura_max: 9,
+            desc: [4u8; 14],
+        }];
+        c.ctor_draws = MonsterCtorDraws {
+            run_tick_delta: 9001,
+            base_search_time: 9002,
+            attack_tick_delta: 9003,
+            walk_tick_delta: 9004,
+            search_time: 9005,
+            meat_quality: 9006,
+            bo_fear_fire: true,
+            zil_kill_count: 9007,
+        };
+        // S4c-1/S4c-2：仆从/背包/商人/NPC/AI 也必须整包写回。
+        c.master = Some(90);
+        c.slave_relax = true;
+        c.slave_list = vec![91, 92];
+        c.special_children = vec![93];
+        c.is_slave = true;
+        c.is_clone = true;
+        c.slave_exp_level = 5;
+        c.slave_make_level = 6;
+        c.master_royalty_tick = 94;
+        c.master_tick = 95;
+        c.class_slave_list = vec![96, 97];
+        c.use_items[0] = UseItemSlot {
+            make_index: 98,
+            index: 99,
+            dura: 100,
+            dura_max: 101,
+            desc: [5u8; 14],
+        };
+        c.use_items[USE_ITEM_SLOTS - 1] = UseItemSlot {
+            make_index: 102,
+            index: 103,
+            dura: 104,
+            dura_max: 105,
+            desc: [6u8; 14],
+        };
+        let mut merchant = crate::merchant::MerchantState::new(
+            "merchant-wb".to_string(),
+            "map-wb".to_string(),
+            1,
+            2,
+            105,
+            true,
+            true,
+            106,
+            crate::merchant::MerchantFlags::default(),
+            vec![1, 2],
+            vec![],
+            107,
+        );
+        merchant.run_tick = 108;
+        c.merchant = Some(merchant);
+        c.npc = Some(crate::npc::NpcState {
+            npc_type: 2,
+            run_tick: 109,
+            ..crate::npc::NpcState::default()
+        });
+        c.ai.dir = 6;
+        c.ai.search_tick = 102;
+        c.ai.target_creature = Some(103);
         assert!(s.write_back(id, c), "write_back 必须命中实体");
 
         let r = s.get(id).expect("实体在场");
@@ -3613,7 +3523,7 @@ mod tests {
         );
         assert_eq!(
             (r.mon_gen, r.mon_gen_zen_time, r.ctor_draws.zil_kill_count),
-            (Some(5), 29, 36),
+            (Some(5), 29, 9007),
             "SpawnBinding"
         );
         assert_eq!(
@@ -3646,6 +3556,92 @@ mod tests {
             ),
             (Some(45), 46, true, 47, true),
             "PvpState"
+        );
+        assert_eq!(
+            r.castle_binding,
+            Some(CastleBinding {
+                castle_index: 3,
+                role: crate::castle::DefenseRole::Archer(2),
+            }),
+            "SpawnBinding.castle_binding 全字段"
+        );
+        assert_eq!(
+            r.drop_items.len(),
+            1,
+            "DropState.items 必须整包写回（S4b P3-F1）"
+        );
+        assert_eq!(
+            (
+                r.drop_items[0].make_index,
+                r.drop_items[0].index,
+                r.drop_items[0].dura,
+                r.drop_items[0].dura_max,
+                r.drop_items[0].desc,
+            ),
+            (900, 7, 8, 9, [4u8; 14]),
+            "DropState.items 全字段"
+        );
+        assert_eq!(
+            (
+                r.ctor_draws.run_tick_delta,
+                r.ctor_draws.base_search_time,
+                r.ctor_draws.attack_tick_delta,
+                r.ctor_draws.walk_tick_delta,
+                r.ctor_draws.search_time,
+                r.ctor_draws.meat_quality,
+                r.ctor_draws.bo_fear_fire,
+                r.ctor_draws.zil_kill_count,
+            ),
+            (9001, 9002, 9003, 9004, 9005, 9006, true, 9007),
+            "MonsterCtorDraws 全字段"
+        );
+        assert!(
+            r.master == Some(90)
+                && r.slave_relax
+                && r.slave_list.as_slice() == [91, 92]
+                && r.special_children.as_slice() == [93]
+                && r.is_slave
+                && r.is_clone
+                && r.slave_exp_level == 5
+                && r.slave_make_level == 6
+                && r.master_royalty_tick == 94
+                && r.master_tick == 95
+                && r.class_slave_list.as_slice() == [96, 97],
+            "SlaveState 全字段"
+        );
+        assert_eq!(
+            (r.use_items[0], r.use_items[USE_ITEM_SLOTS - 1]),
+            (
+                UseItemSlot {
+                    make_index: 98,
+                    index: 99,
+                    dura: 100,
+                    dura_max: 101,
+                    desc: [5u8; 14],
+                },
+                UseItemSlot {
+                    make_index: 102,
+                    index: 103,
+                    dura: 104,
+                    dura_max: 105,
+                    desc: [6u8; 14],
+                },
+            ),
+            "Inventory 首尾槽（整数组）"
+        );
+        assert_eq!(
+            r.merchant.map(|m| (m.script_name.as_str(), m.run_tick)),
+            Some(("merchant-wb", 108)),
+            "MerchantState 载荷"
+        );
+        assert_eq!(
+            r.npc.map(|n| (n.npc_type, n.run_tick)),
+            Some((2, 109)),
+            "NpcState 载荷"
+        );
+        assert!(
+            r.ai.dir == 6 && r.ai.search_tick == 102 && r.ai.target_creature == Some(103),
+            "AiState 载荷"
         );
         assert!(
             r.invisible
@@ -3752,15 +3748,15 @@ mod tests {
         let mut s = EntityStore::new();
         let a = s.alloc_id();
         let b = s.alloc_id();
-        s.insert(Entity::new(a, "a", 1, 1));
-        s.insert(Entity::new(b, "b", 2, 2));
+        s.insert(crate::EntitySpawn::new(a, "a", 1, 1));
+        s.insert(crate::EntitySpawn::new(b, "b", 2, 2));
         assert_eq!(
             s.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
             vec!["a", "b"]
         );
         s.remove(a);
         let c = s.alloc_id();
-        s.insert(Entity::new(c, "c", 3, 3));
+        s.insert(crate::EntitySpawn::new(c, "c", 3, 3));
         // 回收槽复用：c 落在 a 的槽位（顺序 = 槽位顺序，判据①钉住这一点）
         assert_eq!(
             s.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),

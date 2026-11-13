@@ -115,7 +115,6 @@ pub fn build_user_state_buffer(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mir2_world::Entity;
 
     /// `null_item_buffer` 的长度锚（`ClientItem.WritePacket` 的定长形态）：改坏任一字段宽度/序必红。
     #[test]
@@ -194,7 +193,7 @@ mod tests {
         // 目标在 (11,10)：落在以 (10,10) 为心的 3×3 内。
         world.open_session("t");
         world
-            .enter_map("t", Entity::new(0, "t", 11, 10), 0)
+            .enter_map("t", mir2_world::EntitySpawn::new(0, "t", 11, 10), 0)
             .expect("进图");
         let target = world.session("t").unwrap().actor_id.unwrap();
         // 目标已在 (11,10) ⇒ 心 (10,10) 命中。

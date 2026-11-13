@@ -816,7 +816,7 @@ mod tests {
             "全 Walk 格仍可落对象"
         );
         // `cetin_near_xy` 仍可命中（同一格上的实体）。
-        let target = world.add_entity(mir2_world::Entity::new(0, "t", 2, 1));
+        let target = world.add_entity(mir2_world::EntitySpawn::new(0, "t", 2, 1));
         world.tick();
         assert!(
             crate::queryuser::cetin_near_xy(&world, 0, 2, 1, target),
@@ -847,7 +847,7 @@ mod tests {
         let reg = registry_dir(&env.dir);
         let mut world = World::with_maps(sizes(&reg));
         // 先在**未灌属性**（全 Walk）的世界上落实体（见用例头的次序说明）。
-        let target = world.add_entity(mir2_world::Entity::new(0, "t", 2, 2));
+        let target = world.add_entity(mir2_world::EntitySpawn::new(0, "t", 2, 2));
         world.tick();
         assert!(
             crate::queryuser::cetin_near_xy(&world, 0, 1, 2, target),

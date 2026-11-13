@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use mir2_data::models::MonsterDropItem;
-use mir2_world::{Entity, EntitySpawn, World};
+use mir2_world::{EntitySpawn, World};
 
 pub fn world_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("world")
@@ -94,7 +94,7 @@ struct SessionSpec {
 
 impl SessionSpec {
     fn entity(&self, id: i32, x: i32, y: i32) -> EntitySpawn {
-        let mut e = Entity::new(id, self.chr.clone(), x, y);
+        let mut e = mir2_world::EntitySpawn::new(id, self.chr.clone(), x, y);
         e.map_id = self.map;
         e.level = self.level;
         e.hp = self.hp;

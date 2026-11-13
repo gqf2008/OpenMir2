@@ -25,8 +25,6 @@ use crate::combat::{
     attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
-#[cfg(test)]
-use crate::entity::Entity;
 use crate::entity::{EntitySpawn, EntityStore, PvpView};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
@@ -1307,7 +1305,7 @@ pub const VERIFY_MAP_TIME_MS: i64 = 30 * 1000;
 /// `BaseObject.CellType` 的等价物（`PlayObject.cs:1034` = Play、`AnimalObject.cs:86` = Monster、
 /// `NormNpc.cs:50` = Merchant）；`verify_map_time` 重新登记时用它保持落格类型。
 pub(crate) fn entity_cell_type(e: &impl PvpView) -> CellType {
-    if e.base().merchant.is_some() || e.base().npc.is_some() {
+    if e.merchant_exists() || e.npc_exists() {
         CellType::Merchant
     } else if e.race() == crate::entity::ACTOR_RACE_PLAY {
         CellType::Play
@@ -1783,7 +1781,7 @@ impl World {
     pub fn my_light_of(&self, actor_id: i32) -> Option<u8> {
         let e = self.entities.get(actor_id)?;
         let mut light = if e.level >= EFFECTIVE_HIGHLEVEL { 1 } else { 0 };
-        for slot in &e.use_items {
+        for slot in e.use_items {
             if slot.index > 0 && slot.dura > 0 {
                 if let Some(std) = self.std_item_by_idx(usize::from(slot.index)) {
                     if light < std.light {
@@ -1879,11 +1877,11 @@ impl World {
         if n_dura == 0 {
             // 燃尽支（`:2260-2272`）。`SendDelItems` 只对 `Race == Play`；本函数的调用面
             // 恒为玩家（`use_lamps` 的 `Race` 门），`709` 未接（登记）。
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
-                e.use_items[ITEM_LOCATION_RIGHTHAND].dura = 0;
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].dura = 0;
                 // oracle 先 `SendDelItems(UseItems[RighThand])` 再 `Index = 0`；
                 // `SendDelItems` 读的是清位**前**的槽（709 未接 ⇒ 只落状态）。
-                e.use_items[ITEM_LOCATION_RIGHTHAND].index = 0;
+                e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].index = 0;
             }
             // `Light = GetMyLight()`（`:2263`，在 `Index = 0` 之后算）。
             if let Some(light) = self.my_light_of(actor_id) {
@@ -1892,8 +1890,8 @@ impl World {
                 }
             }
             out.push(LampDuraChange { actor_id, recog: 0 });
-        } else if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.use_items[ITEM_LOCATION_RIGHTHAND].dura = n_dura;
+        } else if let Some(e) = self.entities.get_mut(actor_id) {
+            e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].dura = n_dura;
         }
         // 千位变化支（`:2274`）：比较的是局部 `nDura`，发的是落槽后的 `Dura`。
         if old_dura != hutil_round(f64::from(n_dura) / 1000.0) {
@@ -2557,7 +2555,7 @@ impl World {
                 continue;
             };
             // `:934 playObject.SetTargetCreat(baseObject);`（在 `if (CheckAmulet)` 内）。
-            if let Some(mut c) = self.entities.get_mut(caster_id) {
+            if let Some(c) = self.entities.get_mut(caster_id) {
                 c.ai.target_creature = Some(tid);
             }
             let one = self.cast_poison_on_target(caster_id, magic, level, tid, sc, shape, cfg);
@@ -2649,7 +2647,7 @@ impl World {
         // `:1247-1251`：玩家目标 ⇒ `SetPkFlag`（⇒ 656，由 target 发）+ `SetTargetCreat`。
         if t.race == crate::entity::ACTOR_RACE_PLAY {
             out.name_color = self.set_pk_flag(caster_id, tid);
-            if let Some(mut c) = self.entities.get_mut(caster_id) {
+            if let Some(c) = self.entities.get_mut(caster_id) {
                 c.ai.target_creature = Some(tid);
             }
         }
@@ -3017,7 +3015,7 @@ impl World {
             });
         }
         // `SetTargetCreat` 逐目标覆盖；末值 = 最后一个 proper target（oracle 同）。
-        if let (Some(tid), Some(mut e)) = (last_target, self.entities.get_mut(caster_id)) {
+        if let (Some(tid), Some(e)) = (last_target, self.entities.get_mut(caster_id)) {
             e.ai.target_creature = Some(tid);
             e.ai.target_focus_tick = self.clock_ms;
         }
@@ -3205,7 +3203,11 @@ impl World {
                 } else {
                     // `PlayObject.StruckDamage` 的 RNG 段（`PlayObject.cs:2957/3000`）。
                     let target_race = t.race;
-                    crate::combat::struck_damage_durability(&mut self.rng, &mut t, target_race);
+                    crate::combat::struck_damage_durability(
+                        &mut self.rng,
+                        &mut t.use_items,
+                        target_race,
+                    );
                 }
             }
             let (hp_after, max_hp) = (t.hp, t.max_hp);
@@ -3351,7 +3353,7 @@ impl World {
                     crate::magic_effect::private_transparent_draw(&mut self.rng) == 0
                 };
                 if clear {
-                    if let Some(mut e) = self.entities.get_mut(id) {
+                    if let Some(e) = self.entities.get_mut(id) {
                         e.ai.target_creature = None;
                     }
                 }
@@ -3529,7 +3531,7 @@ impl World {
         else {
             return crate::slave::NameColorDelivery::default();
         };
-        if let Some(mut e) = self.entities.get_mut(target_id) {
+        if let Some(e) = self.entities.get_mut(target_id) {
             e.ai.holy_seize = true;
             e.ai.holy_seize_tick = now;
             e.ai.holy_seize_interval = i64::from(interval);
@@ -3592,7 +3594,7 @@ impl World {
         };
         let out = crate::magic_effect::mag_turn_undead(&mut self.rng, &inp);
         let now = self.clock_ms;
-        if let Some(mut e) = self.entities.get_mut(tid) {
+        if let Some(e) = self.entities.get_mut(tid) {
             e.ai.struck_tick = now;
             if out.target_targeted_by_caster {
                 e.ai.target_creature = Some(caster_id);
@@ -3608,7 +3610,7 @@ impl World {
             e.ai.attack_tick += i64::from(out.attack_tick_delta);
         }
         if out.target_run_away {
-            if let Some(mut e) = self.entities.get_mut(tid) {
+            if let Some(e) = self.entities.get_mut(tid) {
                 e.ai.run_away_mode = true;
                 e.ai.run_away_start = now;
                 e.ai.run_away_time = 10 * 1000;
@@ -3625,7 +3627,7 @@ impl World {
         // 写**施法者**的 `TargetCret + TargetFocusTick`（`BaseObject.Base.cs:557-561`）。
         // 与 [`World::cast_big_explosion_spell`] 的「逐目标覆盖、末值胜」同口径（本处仅一个目标）。
         if out.caster_target_is_target {
-            if let Some(mut e) = self.entities.get_mut(caster_id) {
+            if let Some(e) = self.entities.get_mut(caster_id) {
                 e.ai.target_creature = Some(tid);
                 e.ai.target_focus_tick = now;
             }
@@ -4079,7 +4081,7 @@ impl World {
         } else {
             None
         };
-        let Some(mut e) = self.entities.get_mut(spawn.actor_id) else {
+        let Some(e) = self.entities.get_mut(spawn.actor_id) else {
             return;
         };
         // `UserCastle.cs:133/147/157/167/185/205`：`BaseObject.WAbil.HP = nHP`（**不改 MaxHP**）。
@@ -4629,7 +4631,7 @@ impl World {
             // oracle `CharPushed`：循环内 `Dir = nDir`，收尾 `Dir = nBackDir`（`result > 0`）或旧值
             // （`result == 0`）。本骨架 `push_now` 不改 `Dir` => 在此按 oracle 收尾语义补写。
             if !pushed.is_empty() {
-                if let Some(mut e) = self.entities.get_mut(target_id) {
+                if let Some(e) = self.entities.get_mut(target_id) {
                     e.ai.dir = crate::magic::back_dir(n_dir);
                 }
             }
@@ -4981,7 +4983,7 @@ impl World {
         }
         // `BaseObject` ctor `PoisoningTick = GetTickCount()`（`BaseObject.cs:443`）：毒伤 DoT 的周期门
         // 从**实体落图那一刻**起算（buff 轴 = `clock_ms + BUFF_EPOCH_MS`，与 `buff_tick`/`make_posion` 同基）。
-        // `Entity::new`（ctor 等价物）拿不到 `World` 时钟 ⇒ 在此按落图时刻精确重盖（同 `auto_recovery_tick`）。
+        // `EntitySpawn::new`（ctor 等价物）拿不到 `World` 时钟 ⇒ 在此按落图时刻精确重盖（同 `auto_recovery_tick`）。
         spawn.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：按落图时刻重盖（S3b：MapBinding 组件）。
         spawn.map_binding.verify_tick = self.clock_ms;
@@ -5861,7 +5863,7 @@ impl World {
             return Vec::new();
         };
         // `:857 Dir = nDir;`（先落，末尾按 result 决定是否复原）。
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
+        if let Some(e) = self.entities.get_mut(actor_id) {
             e.ai.dir = n_dir;
         }
         let back = crate::magic::back_dir(n_dir);
@@ -5906,7 +5908,7 @@ impl World {
                 t.x = x;
                 t.y = y;
             }
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
+            if let Some(e) = self.entities.get_mut(actor_id) {
                 // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
                 if race >= crate::entity::ACTOR_RACE_ANIMAL {
                     e.ai.walk_tick += 800;
@@ -5922,7 +5924,7 @@ impl World {
         }
         // `:890-895 Dir = nBackDir; if (result == 0) Dir = olddir;`
         let final_dir = if out.is_empty() { old_dir } else { back };
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
+        if let Some(e) = self.entities.get_mut(actor_id) {
             e.ai.dir = final_dir;
         }
         out
@@ -6255,7 +6257,7 @@ impl World {
         }
 
         // 3) 字段复位（`BaseObject.cs:2468-2479` + `:2678-2687`）。
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
+        if let Some(e) = self.entities.get_mut(actor_id) {
             e.life_cycle.death = false;
             // `BaseObject.Die`（`BaseObject.Base.cs:318-345`）**每次**死亡都无条件置 `Death`/`DeathTick`，
             // 复活后 `CanReAlive` 仍为 true ⇒ oracle 允许「死→复活→再死」无限循环。本仓的死亡结算是
@@ -7161,7 +7163,7 @@ impl World {
             // 在 `target` 的副本上跑 `PlayObject.StruckDamage` 的耐久段（`PlayObject.cs:2954-3036`），
             // 只回写 `hp` 会把磨损/破零整段丢掉（实体槽永远停在受击前）。oracle 改的是会话
             // `UseItems` 对象本身 ⇒ 这里必须把 `use_items` 一并写回实体。
-            e.use_items = target.use_items;
+            e.inventory.use_items = target.use_items;
             // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标
             // `SendMsg(RM_STRUCK)`（`BaseObject.Attack.cs:61-64`），由目标在自己的 `Run()` 里
             // `SetLastHiter(攻击方)`（`AnimalObject.cs:118-124`）。这里在结算之后立刻登记：
@@ -7218,8 +7220,8 @@ impl World {
         // 武器升级结算的回写（`UseItems[Weapon]` 是 oracle 的同一个对象；本仓攻方是副本）。
         // 只回写 `use_items`：其余攻方字段在 oracle 里也不由 `AttackDir` 改。
         if let Some(outcome) = weapon_outcome {
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
-                e.use_items = attacker.use_items;
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.inventory.use_items = attacker.use_items;
             }
             self.pending_weapon_breaks
                 .push(WeaponUpgradeEvent { actor_id, outcome });
@@ -7229,8 +7231,8 @@ impl World {
         // `UseItems[Weapon]` 对象；本仓攻方是副本 ⇒ 这里**必须**无条件写回（与上面
         // `weapon_outcome` 的条件式写回不同：没有升级 `Desc[10]` 的普通武器也照样磨损）。
         if let Some(wear) = weapon_wear {
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
-                e.use_items = attacker.use_items;
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.inventory.use_items = attacker.use_items;
             }
             self.pending_weapon_wears.push(WeaponWearEvent {
                 actor_id,
@@ -7798,7 +7800,7 @@ impl World {
 
         let mut skeleton = None;
         let (target_x_now, target_y_now) = self.entities.xy(target_id)?;
-        let mut e = self.entities.get_mut(target_id)?;
+        let e = self.entities.get_mut(target_id)?;
         // `:724-729`：`byte` / `ushort` 的 unchecked 回绕（**不夹取**；`<=0` 只命中 `==0`）。
         e.ai.body_leathery = e.ai.body_leathery.wrapping_sub(n10);
         e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(meat_draw);
@@ -7984,9 +7986,7 @@ pub struct FloorItemView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{
-        Entity, EntitySpawn, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
-    };
+    use crate::entity::{EntitySpawn, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 
     /// **世界 tick 扩容首批（T3）· ② 世界时钟（C-L2）**：`refresh_game_time` 只在桶值**变化**时
     /// 返回 `true`（oracle `PlayObject.Base.cs:826` 的 `Bright != M2Share.GameTime` 门）；
@@ -8087,10 +8087,10 @@ mod tests {
             // 重播种共享流（无需复算 ctor 抽数：重播种抹掉 ctor 已消费的那几抽）。
             w.rng = RandomNumber::with_seed(seed);
             let mut exp = RandomNumber::with_seed(seed);
-            if let Some(n) = w.entities.entity_mut(npc).and_then(|e| e.npc.as_mut()) {
+            if let Some(n) = w.entities.npc_state_mut(npc) {
                 n.run_tick = 0;
             }
-            if let Some(s) = w.entities.entity_mut(mer).and_then(|e| e.merchant.as_mut()) {
+            if let Some(s) = w.entities.merchant_mut(mer) {
                 s.run_tick = 0;
             }
             w.npc_pass_tick = i64::MIN;
@@ -8139,7 +8139,7 @@ mod tests {
     fn world_with(entities: &[(i32, i32, i32)]) -> World {
         let mut w = World::new(64, 64);
         for (id, x, y) in entities {
-            let mut e = Entity::new(*id, format!("e{id}"), *x, *y);
+            let mut e = crate::EntitySpawn::new(*id, format!("e{id}"), *x, *y);
             e.id = *id;
             w.add_entity(e);
         }
@@ -8156,7 +8156,7 @@ mod tests {
     #[test]
     fn map_event_visible_observer_gets_one_show_entry() {
         let mut w = World::new(64, 64);
-        let mut e = Entity::new(0, "p", 11, 10);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
         e.view_range = 12;
         let p = w.add_entity(e);
         w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
@@ -8176,7 +8176,7 @@ mod tests {
     #[test]
     fn map_event_leave_records_one_hide() {
         let mut w = World::new(64, 64);
-        let mut e = Entity::new(0, "p", 11, 10);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
         e.view_range = 12;
         let p = w.add_entity(e);
         w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
@@ -8207,7 +8207,7 @@ mod tests {
     #[test]
     fn map_event_not_visible_no_entries() {
         let mut w = World::new(64, 64);
-        let mut e = Entity::new(0, "p", 11, 10);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
         e.view_range = 12;
         let p = w.add_entity(e);
         w.add_fire_burn_event(p, 0, 10, 10, 5, 100); // 100ms 即 Close
@@ -8234,7 +8234,7 @@ mod tests {
     #[test]
     fn map_event_id_zero_fold_single_entry() {
         let mut w = World::new(64, 64);
-        let mut e = Entity::new(0, "p", 11, 10);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
         e.view_range = 12;
         let p = w.add_entity(e);
         w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
@@ -8260,7 +8260,7 @@ mod tests {
     #[test]
     fn map_event_closed_slot_never_replaced() {
         let mut w = World::new(64, 64);
-        let mut e = Entity::new(0, "p", 11, 10);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
         e.view_range = 12;
         let p = w.add_entity(e);
         w.add_fire_burn_event(p, 0, 10, 10, 5, 100); // 首个事件：100ms 即 Close
@@ -8326,8 +8326,8 @@ mod tests {
     #[test]
     fn player_search_view_range_throttled_and_strictly_greater() {
         let mut w = World::new(32, 32);
-        let p = w.add_entity(Entity::new(0, "p", 10, 10));
-        let q = w.add_entity(Entity::new(0, "q", 11, 10));
+        let p = w.add_entity(crate::EntitySpawn::new(0, "p", 10, 10));
+        let q = w.add_entity(crate::EntitySpawn::new(0, "q", 11, 10));
 
         // 玩家 ctor 覆盖值：必须是常量 1000（tooth ③ 会打掉这条并在失败信息里打印实际值）。
         let st = w.entities.get(p).unwrap().ai.search_time;
@@ -8419,8 +8419,8 @@ mod tests {
     #[test]
     fn player_search_view_range_does_not_rescan_within_window() {
         let mut w = World::new(32, 32);
-        let p = w.add_entity(Entity::new(0, "p", 10, 10));
-        w.add_entity(Entity::new(0, "q", 11, 10));
+        let p = w.add_entity(crate::EntitySpawn::new(0, "p", 10, 10));
+        w.add_entity(crate::EntitySpawn::new(0, "q", 11, 10));
 
         for _ in 0..6 {
             w.tick(); // 1200ms 首次命中
@@ -8448,8 +8448,8 @@ mod tests {
     #[test]
     fn dead_and_ghost_players_do_not_scan() {
         let mut w = World::new(32, 32);
-        let p = w.add_entity(Entity::new(0, "p", 10, 10));
-        let q = w.add_entity(Entity::new(0, "q", 11, 10));
+        let p = w.add_entity(crate::EntitySpawn::new(0, "p", 10, 10));
+        let q = w.add_entity(crate::EntitySpawn::new(0, "q", 11, 10));
         for _ in 0..6 {
             w.tick(); // 1200ms 首次命中
         }
@@ -8482,8 +8482,8 @@ mod tests {
         );
 
         // ghost：从进图起推进 6 tick（>1000ms）也不得扫。
-        let g = w.add_entity(Entity::new(0, "g", 20, 20));
-        let q2 = w.add_entity(Entity::new(0, "q2", 21, 20));
+        let g = w.add_entity(crate::EntitySpawn::new(0, "g", 20, 20));
+        let q2 = w.add_entity(crate::EntitySpawn::new(0, "q2", 21, 20));
         w.entities.get_mut(g).unwrap().life_cycle.ghost = true;
         let g_tick = w.entities.get(g).unwrap().ai.search_tick;
         for _ in 0..6 {
@@ -8512,9 +8512,9 @@ mod tests {
     // ---------------------------------------------------------------------------------------
 
     /// **生产口径玩家**：`PlayObject` ctor `WantRefMsg = true`（`PlayObject.cs:889`）。
-    /// `Entity::new` 的缺省 `false` 是构造等价物的空缺，宿主 `new_player_entity` 会置 true。
+    /// `EntitySpawn::new` 的缺省 `false` 是构造等价物的空缺，宿主 `new_player_entity` 会置 true。
     fn mview_player(w: &mut World, x: i32, y: i32, view_range: i32) -> i32 {
-        let mut e = Entity::new(0, "p", x, y);
+        let mut e = crate::EntitySpawn::new(0, "p", x, y);
         e.race = ACTOR_RACE_PLAY;
         e.want_ref_msg = true;
         e.view_range = view_range;
@@ -8523,7 +8523,7 @@ mod tests {
 
     /// **普通野怪（被动视野）**：`walk_speed = MAX` 钉住位置，避免 `Wondering` 移动干扰断言。
     fn mview_monster(w: &mut World, x: i32, y: i32, view_range: i32, search_time: i64) -> i32 {
-        let mut e = Entity::new(0, "m", x, y);
+        let mut e = crate::EntitySpawn::new(0, "m", x, y);
         e.race = ACTOR_RACE_MONSTER;
         e.view_range = view_range;
         e.ai.search_time = search_time;
@@ -8741,7 +8741,7 @@ mod tests {
     fn player_update_does_not_cross_maps() {
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
         let _p = mview_player(&mut w, 10, 10, 12);
-        let mut e = Entity::new(0, "m", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "m", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.view_range = 5;
         e.ai.search_time = 0;
@@ -8838,7 +8838,7 @@ mod tests {
     #[test]
     fn guard_and_slave_self_scan_on_their_own_cadence() {
         let mut w = World::new(32, 32);
-        let mut e = Entity::new(0, "guard", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "guard", 10, 10);
         e.race = 11;
         e.view_range = 5;
         e.ai.search_time = 1000;
@@ -8868,7 +8868,7 @@ mod tests {
 
         // 宝宝（race 80 + is_slave）：200ms 即自扫（SearchTime = 0）。
         let mut w2 = World::new(32, 32);
-        let mut e = Entity::new(0, "slave", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "slave", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.is_slave = true;
         e.view_range = 5;
@@ -8961,7 +8961,7 @@ mod tests {
     #[test]
     fn session_enter_leave_world() {
         let mut w = World::new(16, 16);
-        let id = w.add_entity(Entity::new(0, "p", 5, 5));
+        let id = w.add_entity(crate::EntitySpawn::new(0, "p", 5, 5));
         w.tick();
         assert!(w.entities.get(id).unwrap().add_to_mapped);
         assert_eq!(w.map(0).cell(5, 5).count(), 1);
@@ -8972,7 +8972,7 @@ mod tests {
     }
 
     fn player(id: i32, name: &str, x: i32, y: i32, level: u8) -> EntitySpawn {
-        let mut e = Entity::new(id, name, x, y);
+        let mut e = crate::EntitySpawn::new(id, name, x, y);
         e.race = ACTOR_RACE_PLAY;
         e.level = level;
         e.hp = 200;
@@ -9128,14 +9128,14 @@ mod tests {
         w.need_exps[1] = 1000;
         let master = w.add_entity(player(1, "hero", 10, 10, 5));
         let pet = {
-            let mut e = Entity::new(0, "pet", 11, 10);
+            let mut e = crate::EntitySpawn::new(0, "pet", 11, 10);
             e.race = ACTOR_RACE_MONSTER; // 非 Play ⇒ `KillFunc` 只走 master 支
             e.master = Some(master);
             w.add_entity(e)
         };
         // 直接造一只 `hp=0`、`ExpHitter = 宠物` 的怪（本用例只测经验归属，不走攻击路径）。
         let mon = {
-            let mut e = Entity::new(0, "鸡", 12, 10);
+            let mut e = crate::EntitySpawn::new(0, "鸡", 12, 10);
             e.race = ACTOR_RACE_MONSTER;
             e.mon_exp = 400;
             e.exp_hitter = Some(pet);
@@ -9169,7 +9169,7 @@ mod tests {
             w.set_map_exp_rate(0, rate);
             let p = w.add_entity(player(1, "hero", 10, 10, 5));
             let mon = {
-                let mut e = Entity::new(0, "鸡", 11, 10);
+                let mut e = crate::EntitySpawn::new(0, "鸡", 11, 10);
                 e.race = ACTOR_RACE_MONSTER;
                 e.mon_exp = 400;
                 e.exp_hitter = Some(p);
@@ -9206,7 +9206,7 @@ mod tests {
             p.max_exp = if level == 255 { need255 } else { 1000 };
             let p = w.add_entity(p);
             let mon = {
-                let mut e = Entity::new(0, "鸡", 11, 10);
+                let mut e = crate::EntitySpawn::new(0, "鸡", 11, 10);
                 e.race = ACTOR_RACE_MONSTER;
                 e.mon_exp = 100;
                 e.exp_hitter = Some(p);
@@ -9443,7 +9443,7 @@ mod tests {
     fn session_disconnect_leaves_world_without_softclose_count() {
         let mut w = World::with_maps(vec![(16, 16)]);
         w.open_session("hero");
-        let mut e = Entity::new(0, "hero", 3, 3);
+        let mut e = crate::EntitySpawn::new(0, "hero", 3, 3);
         e.race = ACTOR_RACE_PLAY;
         let id = w.enter_map("hero", e, 0).unwrap();
         assert_eq!(w.map(0).cell(3, 3).count(), 1);
@@ -9468,7 +9468,7 @@ mod tests {
     fn session_state_machine_enter_switch_softclose_reenter() {
         let mut w = World::with_maps(vec![(32, 32), (32, 32)]);
         w.open_session("hero");
-        let mut e = Entity::new(0, "hero", 5, 5);
+        let mut e = crate::EntitySpawn::new(0, "hero", 5, 5);
         e.race = ACTOR_RACE_PLAY;
         let first = w.enter_map("hero", e, 0).unwrap();
         assert_eq!(w.session("hero").unwrap().actor_id, Some(first));
@@ -9504,7 +9504,7 @@ mod tests {
         // 会复用刚摘掉的槽位，id 相同并不违反语义（C# 的 ActorId 也复用）。本用例只走
         // 「disconnect 之后重进」这条正常路径；**不 disconnect 直接重进**那条（F1 泄漏路径）由
         // `m3_reenter_after_soft_close_reaps_leftover_ghost` 覆盖。
-        let mut e2 = Entity::new(0, "hero", 7, 9);
+        let mut e2 = crate::EntitySpawn::new(0, "hero", 7, 9);
         e2.race = ACTOR_RACE_PLAY;
         let second = w.enter_map("hero", e2, 1).unwrap();
         assert_eq!(w.session("hero").unwrap().actor_id, Some(second));
@@ -9707,7 +9707,7 @@ mod tests {
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         assert_eq!(w.map(0).cell(5, 4).count(), 1, "进图先落旧格");
 
@@ -9761,7 +9761,7 @@ mod tests {
         assert!(w.maps[1].set_map_xy_flag(7, 9, false));
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         assert_eq!(w.map(0).cell(5, 4).count(), 1);
 
@@ -9814,7 +9814,7 @@ mod tests {
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
 
         let err = w.switch_map("hero", 1, 99, 99).unwrap_err();
@@ -9847,7 +9847,7 @@ mod tests {
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
 
         let err = w.switch_map("hero", 2, 3, 3).unwrap_err();
@@ -9887,7 +9887,7 @@ mod tests {
         );
 
         w.open_session("hero");
-        let mut e = Entity::new(0, "hero", 3, 3);
+        let mut e = crate::EntitySpawn::new(0, "hero", 3, 3);
         e.race = ACTOR_RACE_PLAY;
         let id = w
             .enter_map("hero", e, 0)
@@ -9913,7 +9913,7 @@ mod tests {
     fn enter_map_out_of_bounds_keeps_actor_unmapped() {
         let mut w = World::with_maps(vec![(16, 16)]);
         w.open_session("hero");
-        let mut e = Entity::new(0, "hero", 99, 99);
+        let mut e = crate::EntitySpawn::new(0, "hero", 99, 99);
         e.race = ACTOR_RACE_PLAY;
         let id = w
             .enter_map("hero", e, 0)
@@ -9942,8 +9942,8 @@ mod tests {
     fn first_scan_base_is_playobject_ctor_not_map_entry() {
         let mut w = World::new(32, 32);
         w.open_session("p");
-        let q = w.add_entity(Entity::new(0, "q", 11, 10));
-        let mut p_ent = Entity::new(0, "p", 10, 10);
+        let q = w.add_entity(crate::EntitySpawn::new(0, "q", 11, 10));
+        let mut p_ent = crate::EntitySpawn::new(0, "p", 10, 10);
         p_ent.race = ACTOR_RACE_PLAY;
         // `new PlayObject()` 等价点 = ctor 0ms；登录等待环把进图推到 800ms。
         w.clock_ms = 800;
@@ -10002,7 +10002,7 @@ mod tests {
     fn verify_and_dup_ticks_base_is_playobject_ctor_not_map_entry() {
         let mut w = World::new(32, 32);
         w.open_session("p");
-        let mut p_ent = Entity::new(0, "p", 10, 10);
+        let mut p_ent = crate::EntitySpawn::new(0, "p", 10, 10);
         p_ent.race = ACTOR_RACE_PLAY;
         // `new PlayObject()` 等价点 = ctor 0ms；登录等待环把进图推到 800ms。
         w.clock_ms = 800;
@@ -10202,7 +10202,7 @@ mod tests {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(1, "hero", 9, 9, 1));
         let mon = {
-            let mut e = Entity::new(0, "鸡", 10, 10);
+            let mut e = crate::EntitySpawn::new(0, "鸡", 10, 10);
             e.race = ACTOR_RACE_MONSTER;
             e.hp = 100;
             e.max_hp = 100;
@@ -10497,7 +10497,7 @@ mod tests {
     ) -> (World, i32, i32, u8) {
         let mut w = World::new(64, 64);
         let p = w.add_entity(player(1, "butcher", 10, 10, 10));
-        let mut e = Entity::new(2, "corpse", cx, cy);
+        let mut e = crate::EntitySpawn::new(2, "corpse", cx, cy);
         e.race = race;
         e.death = target_death;
         e.ai.dir = 5;
@@ -10591,7 +10591,7 @@ mod tests {
         const SEED: i32 = 8_675_309;
         let (mut w, p, t, n10) = butch_rig(SEED, 105, true);
         {
-            let mut e = w.entities.get_mut(t).unwrap();
+            let e = w.entities.get_mut(t).unwrap();
             e.ai.body_leathery = n10; // 本次抽恰好归零
             e.ai.meat_quality = 1000;
         }
@@ -10664,7 +10664,7 @@ mod tests {
             let cx = 10 + dx;
             let (mut w, p, t, n10) = butch_rig_at(SEED, 53, true, cx, 10);
             {
-                let mut e = w.entities.get_mut(t).unwrap();
+                let e = w.entities.get_mut(t).unwrap();
                 e.ai.body_leathery = n10; // 过门则归零 + 骨架
                 e.ai.meat_quality = 1000;
             }
@@ -10711,7 +10711,7 @@ mod tests {
         // A：生产路径（一次有效屠宰；起值保证不归零、不回绕）。
         let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
         {
-            let mut e = w.entities.get_mut(t).unwrap();
+            let e = w.entities.get_mut(t).unwrap();
             e.ai.body_leathery = BODY0;
             e.ai.meat_quality = MEAT0;
         }
@@ -10832,7 +10832,7 @@ mod tests {
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         let n = w.add_map_routes(vec![MapRouteSpec {
             map_id: 0,
@@ -10890,7 +10890,7 @@ mod tests {
             .enter_map(
                 "mon",
                 {
-                    let mut e = Entity::new(0, "mon", 5, 4);
+                    let mut e = crate::EntitySpawn::new(0, "mon", 5, 4);
                     e.race = ACTOR_RACE_MONSTER;
                     e
                 },
@@ -10932,7 +10932,7 @@ mod tests {
             .enter_map(
                 "mon",
                 {
-                    let mut e = Entity::new(0, "mon", 5, 4);
+                    let mut e = crate::EntitySpawn::new(0, "mon", 5, 4);
                     e.race = ACTOR_RACE_MONSTER;
                     e
                 },
@@ -10977,7 +10977,7 @@ mod tests {
         w.maps[1].set_map_xy_flag(7, 9, false); // 目标格 → LowWall
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         w.add_map_routes(vec![MapRouteSpec {
             map_id: 0,
@@ -11020,7 +11020,7 @@ mod tests {
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         w.add_map_routes(vec![MapRouteSpec {
             map_id: 0,
@@ -11067,7 +11067,7 @@ mod tests {
         w.set_map_need_hole(1, true); // 目标图带 NEEDHOLE（Q004/R001/H007/H106 同型）
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         w.add_map_routes(vec![MapRouteSpec {
             map_id: 0,
@@ -11117,7 +11117,7 @@ mod tests {
         );
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         w.add_map_routes(vec![MapRouteSpec {
             map_id: 0,
@@ -11159,7 +11159,7 @@ mod tests {
         );
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         w.add_map_routes(vec![MapRouteSpec {
             map_id: 0,
@@ -11193,7 +11193,7 @@ mod tests {
         let mut w = World::with_maps(vec![(64, 64), (64, 64), (64, 64)]);
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 4), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
             .unwrap();
         // 同一源格 (5,5) 落两条 route：第一条 → map1(8,39)，第二条 → map2(8,10)。
         w.add_map_routes(vec![
@@ -11241,7 +11241,7 @@ mod tests {
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
         w.open_session("hero");
         let hero = w
-            .enter_map("hero", Entity::new(0, "hero", 5, 5), 0)
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 5), 0)
             .unwrap();
         w.add_map_routes(vec![MapRouteSpec {
             map_id: 0,
@@ -11272,7 +11272,7 @@ mod tests {
     // ================= 片 A-5（buff 生产者接线）: 攻击中毒门 =================
 
     fn ent(id: i32, name: &str, x: i32, y: i32, race: u8) -> EntitySpawn {
-        let mut e = Entity::new(id, name, x, y);
+        let mut e = crate::EntitySpawn::new(id, name, x, y);
         e.race = race;
         e
     }
@@ -11494,7 +11494,7 @@ mod tests {
     fn p3b2_mag_objects_in_range_order_is_x_then_y_then_objlist() {
         let mut w = World::new(32, 32);
         let mut mk = |name: &str, x: i32, y: i32, race: u8, ghost: bool, death: bool| {
-            let mut e = Entity::new(0, name.to_string(), x, y);
+            let mut e = crate::EntitySpawn::new(0, name.to_string(), x, y);
             e.race = race;
             e.ghost = ghost;
             e.death = death;
@@ -11559,11 +11559,11 @@ mod tests {
     #[test]
     fn p3b1_lightening_undead_multiplier() {
         let mut w = World::new(32, 32);
-        let mut c = Entity::new(0, "c".to_string(), 10, 10);
+        let mut c = crate::EntitySpawn::new(0, "c".to_string(), 10, 10);
         c.race = ACTOR_RACE_PLAY;
         c.level = 5;
         let caster = w.add_entity(c);
-        let mut t = Entity::new(0, "t".to_string(), 11, 10);
+        let mut t = crate::EntitySpawn::new(0, "t".to_string(), 11, 10);
         t.race = ACTOR_RACE_MONSTER;
         t.level = 1;
         t.life_attrib = crate::magic_effect::LA_UNDEAD;
@@ -11616,7 +11616,7 @@ mod tests {
     fn pk_world(clock_ms: i64, expired_by_ms: i64) -> (World, i32) {
         let mut w = World::new(16, 16);
         w.clock_ms = clock_ms;
-        let mut e = Entity::new(7, "p7", 10, 10);
+        let mut e = crate::EntitySpawn::new(7, "p7", 10, 10);
         e.pvp_flag = true;
         e.pvp_name_color_tick = clock_ms - expired_by_ms;
         assert_eq!(w.add_entity(e), 7);
@@ -11725,7 +11725,7 @@ mod tests {
     #[test]
     fn verify_map_time_gate_refreshes_cell_add_time() {
         let mut w = World::new(64, 64);
-        let mut e = Entity::new(0, "mon", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "mon", 10, 10);
         e.race = crate::entity::ACTOR_RACE_MONSTER;
         let id = w.add_entity(e);
         w.tick(); // clock=200，Enter 落格（add_time=200）；verify_tick 在 add_entity 时=0
@@ -11762,7 +11762,7 @@ mod tests {
     #[test]
     fn verify_map_time_reinserts_missing_cell_entry() {
         let mut w = World::new(64, 64);
-        let mut e = Entity::new(0, "mon", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "mon", 10, 10);
         e.race = crate::entity::ACTOR_RACE_MONSTER;
         let id = w.add_entity(e);
         w.tick();
@@ -11790,7 +11790,7 @@ mod tests {
     fn entity_verify_tick_stamped_at_enter_time() {
         let mut w = World::new(32, 32);
         w.clock_ms = 5_000;
-        let e = Entity::new(0, "p", 10, 10);
+        let e = crate::EntitySpawn::new(0, "p", 10, 10);
         let id = w.add_entity(e);
         assert_eq!(w.entities.get(id).unwrap().verify_tick, 5_000);
     }
@@ -11833,7 +11833,7 @@ mod tests {
     #[test]
     fn pl1_monster_death_still_settles_in_tick_head() {
         let mut w = World::new(32, 32);
-        let mut m = Entity::new(0, "mon", 10, 10);
+        let mut m = crate::EntitySpawn::new(0, "mon", 10, 10);
         m.race = ACTOR_RACE_MONSTER;
         m.hp = 0;
         let id = w.add_entity(m);
@@ -11860,7 +11860,7 @@ mod tests {
     #[test]
     fn superman_guard_lethal_damage_refills_without_die() {
         let mut w = World::new(32, 32);
-        let mut guard = Entity::new(0, "守卫", 10, 10);
+        let mut guard = crate::EntitySpawn::new(0, "守卫", 10, 10);
         guard.race = 11;
         guard.max_hp = 300;
         guard.hp = 0; // 致死伤害后的状态，未经过直接 Die 入口
@@ -11904,7 +11904,7 @@ mod tests {
     #[test]
     fn superman_direct_die_does_not_run_zil_kin_zombi_override() {
         let mut w = World::new(32, 32);
-        let mut guard = Entity::new(0, "守卫", 10, 10);
+        let mut guard = crate::EntitySpawn::new(0, "守卫", 10, 10);
         guard.race = 11;
         guard.max_hp = 300;
         guard.hp = 300;
@@ -11935,7 +11935,7 @@ mod tests {
     fn non_superman_death_behaviour_unchanged() {
         // 普通怪：照常死亡 + 进结算。
         let mut w = World::new(32, 32);
-        let mut m = Entity::new(0, "鸡", 10, 10);
+        let mut m = crate::EntitySpawn::new(0, "鸡", 10, 10);
         m.race = ACTOR_RACE_MONSTER;
         m.max_hp = 60;
         m.hp = 0;
@@ -11948,7 +11948,7 @@ mod tests {
 
         // 对照：race 11 但**未经 ctor 置位**（super_man=false）⇒ 与普通怪同死。
         let mut w2 = World::new(32, 32);
-        let mut g = Entity::new(0, "守卫", 10, 10);
+        let mut g = crate::EntitySpawn::new(0, "守卫", 10, 10);
         g.race = 11;
         g.max_hp = 60;
         g.hp = 0;
@@ -11989,7 +11989,7 @@ mod tests {
     fn pl1_player_hiter_snapshot_precedes_expire_hitters() {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(1, "hero", 10, 10, 10));
-        let mut m = Entity::new(0, "mon", 11, 10);
+        let mut m = crate::EntitySpawn::new(0, "mon", 11, 10);
         m.race = ACTOR_RACE_MONSTER;
         let mid = w.add_entity(m);
         let _ = w.tick();
@@ -12077,7 +12077,7 @@ mod tests {
             .enter_map(
                 "caster",
                 {
-                    let mut e = Entity::new(0, "caster", 10, 10);
+                    let mut e = crate::EntitySpawn::new(0, "caster", 10, 10);
                     e.view_range = 12;
                     e.want_ref_msg = true;
                     e
@@ -12087,7 +12087,7 @@ mod tests {
             .expect("caster 进图");
         w.open_session("target");
         let target = w
-            .enter_map("target", Entity::new(0, "target", 12, 10), 0)
+            .enter_map("target", crate::EntitySpawn::new(0, "target", 12, 10), 0)
             .expect("target 进图");
         let clone = crate::slave::spawn_clone(&mut w, caster, 2)
             .expect("主人在世界 ⇒ 应造出克隆体")
@@ -12162,7 +12162,7 @@ mod tests {
             .enter_map(
                 "p",
                 {
-                    let mut e = Entity::new(0, "p", 20, 20);
+                    let mut e = crate::EntitySpawn::new(0, "p", 20, 20);
                     e.view_range = 12;
                     e.want_ref_msg = true;
                     e
@@ -12172,7 +12172,7 @@ mod tests {
             .expect("p 进图");
         // Guard(11) ∈ `monster_self_scans`：会主动 `SearchViewRange`。
         let g = {
-            let mut e = Entity::new(9_001, "g", 20, 24);
+            let mut e = crate::EntitySpawn::new(9_001, "g", 20, 24);
             e.race = 11;
             e.view_range = 12;
             e.ai.search_time = 1_000;
@@ -12182,7 +12182,7 @@ mod tests {
         };
         w.open_session("t");
         let t = w
-            .enter_map("t", Entity::new(0, "t", 20, 22), 0)
+            .enter_map("t", crate::EntitySpawn::new(0, "t", 20, 22), 0)
             .expect("t 进图");
 
         // 首轮扫描（玩家/Guard 的 SearchTime=1000，200ms tick ⇒ 1200ms 命中）：两者都把
@@ -12262,7 +12262,7 @@ mod p31_auto_get_exp_tests {
         // `Exps.conf` 的升级表（下标 = 新等级）。
         w.need_exps[1] = 1000;
         w.need_exps[2] = 2000;
-        let mut e = Entity::new(0, "p31", 2, 2);
+        let mut e = crate::EntitySpawn::new(0, "p31", 2, 2);
         e.level = 1;
         e.exp = exp;
         e.max_exp = max_exp;
@@ -12316,7 +12316,7 @@ mod p31_auto_get_exp_tests {
         // 两张图：玩家在 0 号图，`AutoGetExpEnvir` 试 0 / 1 两态。
         let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
         w.need_exps[1] = 1000;
-        let mut e = Entity::new(0, "p31", 2, 2);
+        let mut e = crate::EntitySpawn::new(0, "p31", 2, 2);
         e.level = 1;
         e.exp = 0;
         e.max_exp = 10_000_000;
@@ -12458,7 +12458,7 @@ mod pl4_base_object_move_tests {
     fn world_with_player() -> (World, i32) {
         let mut w = World::with_maps(vec![(16, 16), (32, 32)]);
         w.open_session("hero");
-        let mut e = Entity::new(0, "hero", 5, 5);
+        let mut e = crate::EntitySpawn::new(0, "hero", 5, 5);
         e.race = ACTOR_RACE_PLAY;
         let id = w.enter_map("hero", e, 0).expect("进图");
         (w, id)
@@ -12503,7 +12503,7 @@ mod pl4_base_object_move_tests {
         // 目标图用 (32, 64)（与当前图 (16,16) 尺寸不同），两抽的参数不同 ⇒ 次序可辨。
         let mut w = World::with_maps(vec![(16, 16), (32, 64)]);
         w.open_session("hero");
-        let mut e = Entity::new(0, "hero", 5, 5);
+        let mut e = crate::EntitySpawn::new(0, "hero", 5, 5);
         e.race = ACTOR_RACE_PLAY;
         let id = w.enter_map("hero", e, 0).expect("进图");
         let _ = w.sessions.drain_map_changes();
@@ -12619,7 +12619,7 @@ mod pl4_base_object_move_tests {
     fn p22_move_home_non_square_ring_uses_width_and_height() {
         let mut w = World::with_maps(vec![(16, 16), (100, 40)]);
         w.open_session("hero");
-        let mut e = Entity::new(0, "hero", 5, 5);
+        let mut e = crate::EntitySpawn::new(0, "hero", 5, 5);
         e.race = ACTOR_RACE_PLAY;
         let id = w.enter_map("hero", e, 0).expect("进图");
         // 只挡起点 (99,39)（列主序 x*Height+y），其余可走。
@@ -12674,7 +12674,7 @@ mod castle_wire_tests {
 
     fn castle_world(race: u8, hp: u16, max_hp: u16, dir: u8) -> (World, i32) {
         let mut w = World::new(20, 20);
-        let mut e = Entity::new(1, "castle-unit", 5, 5);
+        let mut e = crate::EntitySpawn::new(1, "castle-unit", 5, 5);
         e.race = race;
         e.hp = hp;
         e.max_hp = max_hp;
@@ -12738,7 +12738,7 @@ mod castle_wire_tests {
     #[test]
     fn castle_unit_hp_tracks_entity_after_struck() {
         let (mut w, id) = castle_world(110, 9999, 10000, 5);
-        let attacker = Entity::new(99, "hero", 6, 5);
+        let attacker = crate::EntitySpawn::new(99, "hero", 6, 5);
         let mut rng = std::mem::replace(&mut w.rng, RandomNumber::with_seed(0));
         let cfg = w.combat_config;
         let (_, killed) = {
@@ -12755,8 +12755,8 @@ mod castle_wire_tests {
             if let Some(v) = w.entities.vitals_mut(id) {
                 v.hp = target.hp;
             }
-            if let Some(e) = w.entities.entity_mut(id) {
-                e.use_items = target.use_items;
+            if let Some(inv) = w.entities.inventory_mut(id) {
+                inv.use_items = target.use_items;
             }
             out
         };
@@ -12951,7 +12951,7 @@ mod castle_wire_tests {
     fn castle_structures_do_not_wander() {
         let (mut w, door_id) = castle_world(110, 9999, 10000, 0);
         let wall_id = {
-            let mut e = Entity::new(2, "wall", 8, 8);
+            let mut e = crate::EntitySpawn::new(2, "wall", 8, 8);
             e.race = 111;
             e.hp = 4999;
             e.max_hp = 5000;
@@ -12997,7 +12997,7 @@ mod castle_wire_tests {
         use crate::castle::DefenseSpawn;
         let make = |opened: bool| {
             let mut w = World::new(10, 10);
-            let mut e = Entity::new(1, "门", 5, 5);
+            let mut e = crate::EntitySpawn::new(1, "门", 5, 5);
             e.race = 110;
             e.ai.dir = 5; // ctor 的 RandomByte(8)
             let id = w.add_entity(e);
@@ -13204,7 +13204,7 @@ mod weapon_durability_tests {
     }
 
     fn player(w: &mut World, name: &str, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, name, x, y);
+        let mut e = crate::EntitySpawn::new(0, name, x, y);
         e.race = crate::entity::ACTOR_RACE_PLAY;
         w.add_entity(e)
     }
@@ -13222,7 +13222,8 @@ mod weapon_durability_tests {
         }
         w.set_weapon_durability_config(true, 7);
         let p = player(&mut w, "hero", 10, 10);
-        w.entities.get_mut(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND] = slot(1, dura, [0; 14]);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_RIGHTHAND] =
+            slot(1, dura, [0; 14]);
         (w, p)
     }
 
@@ -13417,8 +13418,9 @@ mod weapon_durability_tests {
         // 部署件 `Server.conf:293 UpgradeWeaponMaxPoint=7`。
         w.set_weapon_durability_config(true, 7);
         let p = player(&mut w, "hero", 10, 10);
-        w.entities.get_mut(p).unwrap().use_items[ITEM_LOCATION_WEAPON] = slot(10, 5000, desc);
-        let mut m = Entity::new(0, "foe", 11, 10);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            slot(10, 5000, desc);
+        let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
         m.race = 80;
         let mid = w.add_entity(m);
         (w, p, mid)
@@ -13507,7 +13509,7 @@ mod weapon_durability_tests {
         let mut desc = [0u8; 14];
         desc[ITEM_ATTR_WEAPON_UPGRADE] = 13;
         let (mut w2, p2, mid2) = weapon_world(desc);
-        w2.entities.get_mut(p2).unwrap().use_items[ITEM_LOCATION_WEAPON].index = 0;
+        w2.entities.get_mut(p2).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON].index = 0;
         let rec2 = attack_once(&mut w2, p2, mid2);
         assert!(rec2.weapon_breaks.is_empty(), "Index==0 ⇒ 无武器，不结算");
     }

@@ -141,7 +141,7 @@ pub const NPC_LIGHT: u8 = 2;
 ///
 /// `NormNpc()`（`src/M2Server/Npc/NormNpc.cs:38-52`）与 `Merchant()` 的 ctor 都**不覆写** `Dir`
 /// ⇒ `Dir` 直到 `GuildOfficial.Run`/`Merchant.Run` 的 `TurnTo(...)`（`BaseObject.cs:1582-1586`）
-/// 才变。宿主侧 `Entity::new` 的 `ai.dir` 缺省 `0`（`crates/world` 不在本卡写集）⇒ 由
+/// 才变。宿主侧 `EntitySpawn::new` 的 `ai.dir` 缺省 `0`（`crates/world` 不在本卡写集）⇒ 由
 /// `npcs::place_fixed_npcs_with_scripts` / `merchant::spawn_merchants_with_scripts` 在挂图成功后
 /// 用本常量补齐（T-154 Minor-2）。
 pub const NPC_INITIAL_DIR: u8 = 4;

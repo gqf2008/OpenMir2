@@ -39,7 +39,7 @@
 
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use mir2_world::{Entity, World};
+use mir2_world::World;
 
 /// M5 的 tick P99 目标（设计文档 §6 M5-3）：不给 `--baseline` 时超过即判红。
 const P99_BUDGET_US: u64 = 100_000;
@@ -226,7 +226,7 @@ fn run_tier(entities: usize, ticks: usize) -> Vec<u64> {
         // 奇数坐标、相邻 2 格：x = 1,3,..,199（100 列）；y = 1 + 2*(i/100)
         let x = 1 + 2 * (i as i32 % 100);
         let y = 1 + 2 * (i as i32 / 100);
-        let mut e = Entity::new((i + 1) as i32, format!("b{i}"), x, y);
+        let mut e = mir2_world::EntitySpawn::new((i + 1) as i32, format!("b{i}"), x, y);
         e.race = 0;
         ids.push(world.add_entity(e));
     }

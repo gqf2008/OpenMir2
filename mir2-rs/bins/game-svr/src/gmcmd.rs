@@ -1340,7 +1340,7 @@ impl GmEntityState {
     ///
     /// 实体不在场（`self_entity()` 为 `None` 时根本不会生成差量）⇒ 本函数兜底为 no-op。
     pub fn apply(&self, world: &mut mir2_world::World) {
-        let Some(mut e) = world.entities.get_mut(self.actor_id) else {
+        let Some(e) = world.entities.get_mut(self.actor_id) else {
             return;
         };
         if let Some(v) = self.admin_mode {
@@ -1353,7 +1353,7 @@ impl GmEntityState {
             e.flags.super_man = v;
         }
         if let Some(v) = self.slave_relax {
-            e.slave_relax = v;
+            e.slave.slave_relax = v;
         }
         if let Some(v) = self.attack_mode {
             e.flags.attack_mode = v;
@@ -2249,7 +2249,7 @@ impl<'a> GmWorld<'a> {
     /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
     fn self_use_item(&self, slot: usize) -> Option<&'a mir2_world::entity::UseItemSlot> {
         let id = self.self_entity()?.id;
-        self.world?.entities.entity(id)?.use_items.get(slot)
+        self.world?.entities.get(id)?.use_items.get(slot)
     }
 
     fn self_entity(&self) -> Option<mir2_world::EntityRef<'a>> {
@@ -3645,7 +3645,7 @@ fn show_use_item_info(parameters: &str, world: &GmWorld<'_>) -> GmResult {
         return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[s_human.to_string()]));
     };
     let mut r = GmResult::empty();
-    for slot in &target.use_items {
+    for slot in target.use_items {
         if slot.index == 0 {
             continue;
         }
@@ -8643,8 +8643,8 @@ mod tests {
     /// 20×20 单图世界 + `gm`(5,5) / `bob`(6,6) 两个玩家。
     fn gm_world() -> mir2_world::World {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
-        w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
+        w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
         w
     }
 
@@ -8993,8 +8993,8 @@ mod tests {
     #[test]
     fn group_recall_member_gate_and_cooldown() {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let gm_id = w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
-        let bob_id = w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        let gm_id = w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
+        let bob_id = w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
         w.entities.get_mut(gm_id).unwrap().group.group_owner = gm_id;
         w.entities.get_mut(gm_id).unwrap().group.group_members = vec![gm_id];
         let guilds = mir2_world::GuildManager::new();
@@ -9517,8 +9517,8 @@ mod tests {
         }
         // ③ 已穿戴（UseItems[3].Index = 15）⇒ switch 触 null 表 ⇒ 零帧 + NOTE。
         {
-            let mut bob = w.entities.get_mut(bob_id).unwrap();
-            bob.use_items[3].index = 15;
+            let bob = w.entities.get_mut(bob_id).unwrap();
+            bob.inventory.use_items[3].index = 15;
         }
         let view = q_view(&fx, &w, &guilds);
         let r = execute(&mut sess, &cfg, &view, "@Binduseitem bob 项链 帐号");
@@ -9856,7 +9856,7 @@ mod tests {
     #[test]
     fn clear_bag_item_offline_target_reports_not_online() {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(e);
         let guilds = mir2_world::GuildManager::new();
@@ -9941,7 +9941,7 @@ mod tests {
         item: mir2_world::entity::UseItemSlot,
     ) -> (mir2_world::World, mir2_world::GuildManager) {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut e = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         if slot < e.use_items.len() {
             e.use_items[slot] = item;
@@ -10363,7 +10363,7 @@ mod tests {
     #[test]
     fn kick_human_offline_target_reports_not_online() {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(e);
         let guilds = mir2_world::GuildManager::new();
@@ -10413,7 +10413,7 @@ mod tests {
     fn kick_human_online_target_sets_pending_kick_without_frames() {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
         for (name, ghost) in [("alive", false), ("gone", true)] {
-            let mut e = mir2_world::Entity::new(0, name, 5, 5);
+            let mut e = mir2_world::EntitySpawn::new(0, name, 5, 5);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e.ghost = ghost;
             w.add_entity(e);
@@ -10450,7 +10450,7 @@ mod tests {
     fn kick_human_script_gmexecute_path_sets_pending_kick() {
         use mir2_script::engine::ScriptPlayer;
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(e);
         let guilds = mir2_world::GuildManager::new();
@@ -11157,8 +11157,8 @@ mod tests {
     fn q_fixture() -> (MapFixture, mir2_world::World, i32, i32) {
         let fx = map_fixture(mir2_envir::MapInfoFlag::default());
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let gm_id = w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
-        let bob_id = w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        let gm_id = w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
+        let bob_id = w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
         (fx, w, gm_id, bob_id)
     }
 
@@ -11265,7 +11265,7 @@ mod tests {
             vec![(GmColor::Green, "怪物数量：0")]
         );
         // 怪物实体：race >= ACTOR_RACE_ANIMAL ⇒ MobCount +1；HumanCount 不变。
-        let mut mon = mir2_world::Entity::new(0, "怪甲", 7, 7);
+        let mut mon = mir2_world::EntitySpawn::new(0, "怪甲", 7, 7);
         mon.race = mir2_world::ACTOR_RACE_MONSTER;
         w.add_entity(mon);
         assert_eq!(
@@ -11280,7 +11280,7 @@ mod tests {
         // 怪乙 Ghost ⇒ 不计。
         w.entities.get_mut(bob_id).unwrap().life_cycle.death = true;
         w.entities.get_mut(gm_id).unwrap().life_cycle.ghost = true;
-        let mut mon2 = mir2_world::Entity::new(0, "怪乙", 8, 8);
+        let mut mon2 = mir2_world::EntitySpawn::new(0, "怪乙", 8, 8);
         mon2.race = mir2_world::ACTOR_RACE_MONSTER;
         let mon2_id = w.add_entity(mon2);
         w.entities.get_mut(mon2_id).unwrap().life_cycle.ghost = true;
@@ -11473,13 +11473,13 @@ mod tests {
     fn q_family_show_use_item_info_quirks() {
         let (fx, mut w, _gm_id, bob_id) = q_fixture();
         {
-            let mut bob = w.entities.get_mut(bob_id).unwrap();
-            bob.use_items[3].index = 15;
-            bob.use_items[3].make_index = 12345;
-            bob.use_items[3].dura = 100;
-            bob.use_items[3].dura_max = 200;
-            bob.use_items[7].index = 42; // 第二件
-            bob.use_items[9].index = 0; // Index==0 ⇒ 跳过
+            let bob = w.entities.get_mut(bob_id).unwrap();
+            bob.inventory.use_items[3].index = 15;
+            bob.inventory.use_items[3].make_index = 12345;
+            bob.inventory.use_items[3].dura = 100;
+            bob.inventory.use_items[3].dura_max = 200;
+            bob.inventory.use_items[7].index = 42; // 第二件
+            bob.inventory.use_items[9].index = 0; // Index==0 ⇒ 跳过
         }
         let guilds = mir2_world::GuildManager::new();
         let view = q_view(&fx, &w, &guilds);
@@ -12016,8 +12016,8 @@ mod tests {
             desc: [0; 14],
         };
         let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
-        let victim_id = world.add_entity(mir2_world::Entity::new(0, "victim", 11, 11));
+        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 11, 11));
         // 10 = 复活戒指（Shape 114），11 = 火焰戒指（Shape 115）。
         let mut catalog = game_svr::ability::StdItemCatalog::new();
         catalog.insert(
@@ -12254,8 +12254,8 @@ mod tests {
         use std::collections::HashMap;
 
         let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
-        let victim_id = world.add_entity(mir2_world::Entity::new(0, "victim", 11, 11));
+        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 11, 11));
         // 5 = 命中项（Desc=「目标技能」、MagicName 与火球/治愈均不同）；
         // 6 = 非命中项（Desc/MagicName 都不匹配命令与审计）。
         let magic_table = crate::magics::MagicTable::new(vec![
@@ -12797,10 +12797,10 @@ mod tests {
     /// 世界：`gm`（调用者）+ `bob`（目标），均 `Race = Play`（`GetPlayObject` 的命中面）。
     fn f_world_entities() -> mir2_world::World {
         let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         gm.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut bob = mir2_world::Entity::new(0, "bob", 6, 6);
+        let mut bob = mir2_world::EntitySpawn::new(0, "bob", 6, 6);
         bob.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(bob);
         w
@@ -13037,10 +13037,10 @@ mod tests {
     /// 刷怪世界：`gm`（5,5，Race=Play）+ `bob`；各自带一张 20×20 地图。
     fn m_world() -> mir2_world::World {
         let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         gm.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut bob = mir2_world::Entity::new(0, "bob", 6, 6);
+        let mut bob = mir2_world::EntitySpawn::new(0, "bob", 6, 6);
         bob.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(bob);
         w
@@ -13481,7 +13481,7 @@ mod tests {
     /// 世界：`gm`（Race=Play，5,5，map 0 上）。城堡/地图由各用例添加。
     fn c_world() -> mir2_world::World {
         let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         gm.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(gm);
         w
@@ -13813,10 +13813,10 @@ mod tests {
     /// 世界：`gm`（调用者，Race=Play）+ `chief`（Race=Play）。
     fn w_world() -> mir2_world::World {
         let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         gm.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut chief = mir2_world::Entity::new(0, "chief", 6, 6);
+        let mut chief = mir2_world::EntitySpawn::new(0, "chief", 6, 6);
         chief.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(chief);
         w

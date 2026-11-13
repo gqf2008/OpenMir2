@@ -29,7 +29,7 @@ use mir2_world::magic::{
     group_melee_damage, mag_tamming, mag_turn_undead, power_uenhancer, TammingInput,
     TurnUndeadInput, LA_UNDEAD,
 };
-use mir2_world::{AttackPowerMode, CellAttribute, Entity, MapGrid, World, ACTOR_RACE_PLAY};
+use mir2_world::{AttackPowerMode, CellAttribute, MapGrid, World, ACTOR_RACE_PLAY};
 
 const SEED: i32 = 42;
 
@@ -82,11 +82,11 @@ fn magic_draws_land_outside_magic_rs() {
     assert!(buff_power >= 4, "Level+1 起步（{buff_power}）");
 
     // 群体（39 MagGroupDeDing）：GetAttackPower + 无条件 `Random(SpeedPoint)`（combat.rs）。
-    let mut attacker = Entity::new(1, "caster".to_string(), 0, 0);
+    let mut attacker = mir2_world::EntitySpawn::new(1, "caster".to_string(), 0, 0);
     attacker.race = ACTOR_RACE_PLAY;
     attacker.dc = 0x0503;
     attacker.hit_point = 5;
-    let mut target = Entity::new(2, "target".to_string(), 1, 0);
+    let mut target = mir2_world::EntitySpawn::new(2, "target".to_string(), 1, 0);
     target.speed_point = 10;
     let _ = group_melee_damage(&mut rng, &attacker, &target, AttackPowerMode::Base);
 
@@ -174,12 +174,12 @@ fn magic_draws_land_outside_magic_rs() {
     w.maps.push(home);
     w.open_session("caster");
     let caster = {
-        let mut e = Entity::new(0, "caster".to_string(), 10, 10);
+        let mut e = mir2_world::EntitySpawn::new(0, "caster".to_string(), 10, 10);
         e.level = 20;
         w.enter_map("caster", e, 0).expect("进图")
     };
     let visible_target = {
-        let mut e = Entity::new(0, "target".to_string(), 11, 10);
+        let mut e = mir2_world::EntitySpawn::new(0, "target".to_string(), 11, 10);
         e.level = 15;
         w.add_entity(e)
     };

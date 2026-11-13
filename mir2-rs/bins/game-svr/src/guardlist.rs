@@ -160,7 +160,7 @@ pub fn place_guards(
             ) {
                 Some(id) => {
                     // `:133` `guard.Dir = (byte)StrToInt(direction, 0)` —— 覆盖 `RandomByte(8)`。
-                    if let Some(mut e) = sink.world.entities.get_mut(id) {
+                    if let Some(e) = sink.world.entities.get_mut(id) {
                         e.ai.dir = g.dir;
                     }
                     if let Some(mut d) = sink.displays.get(id).cloned() {

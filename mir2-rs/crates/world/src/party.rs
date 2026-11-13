@@ -906,11 +906,11 @@ mod tests {
     #[test]
     fn m2_party_play_object_by_name_skips_ghost() {
         let mut w = World::new(16, 16);
-        let mut g = Entity::new(1, "ghost", 1, 1);
+        let mut g = crate::EntitySpawn::new(1, "ghost", 1, 1);
         g.race = ACTOR_RACE_PLAY;
         g.ghost = true;
         let gid = w.add_entity(g);
-        let mut l = Entity::new(2, "ally", 2, 2);
+        let mut l = crate::EntitySpawn::new(2, "ally", 2, 2);
         l.race = ACTOR_RACE_PLAY;
         let lid = w.add_entity(l);
         assert_eq!(w.party_play_object_by_name("ghost"), None, "不得命中 ghost");

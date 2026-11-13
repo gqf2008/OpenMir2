@@ -287,8 +287,8 @@ fn cleanup_children(world: &mut World, owner_id: i32) {
             list.remove(i);
         }
     }
-    if let Some(mut e) = world.entities.get_mut(owner_id) {
-        e.special_children = list;
+    if let Some(e) = world.entities.get_mut(owner_id) {
+        e.slave.special_children = list;
     }
 }
 
@@ -319,11 +319,11 @@ pub fn special_monster_run(world: &mut World, actor_id: i32) -> bool {
         return true;
     }
     let attack_due = now - e.ai.attack_tick >= e.ai.next_hit_time;
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
         e.ai.walk_tick = now;
     }
     if attack_due {
-        if let Some(mut e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
             e.ai.attack_tick = now;
         }
         search_target(world, actor_id);
@@ -384,8 +384,8 @@ pub fn adopt_special_child(world: &mut World, owner_id: i32, child_id: i32) -> b
         .and_then(|e| e.ai.target_creature)
     else {
         // 仍要入表（oracle `BeeList.Add(bb)` 无条件）。
-        if let Some(mut e) = world.entities.get_mut(owner_id) {
-            e.special_children.push(child_id);
+        if let Some(e) = world.entities.get_mut(owner_id) {
+            e.slave.special_children.push(child_id);
             return true;
         }
         return false;
@@ -394,8 +394,8 @@ pub fn adopt_special_child(world: &mut World, owner_id: i32, child_id: i32) -> b
         return false;
     }
     set_target_creature(world, child_id, target);
-    if let Some(mut e) = world.entities.get_mut(owner_id) {
-        e.special_children.push(child_id);
+    if let Some(e) = world.entities.get_mut(owner_id) {
+        e.slave.special_children.push(child_id);
         return true;
     }
     false

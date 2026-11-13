@@ -101,7 +101,7 @@ pub struct MapBinding<V = (), E = ()> {
 }
 
 // 手写 `Default`（derive 会给 `V`/`E` 加 `Default` bound，而 `VisibleBaseObject`/
-// `VisibleEvent` 不实现 `Default`）。6 字段缺省与 `Entity::new` 的 ctor 缺省逐项一致
+// `VisibleEvent` 不实现 `Default`）。6 字段缺省与 `EntitySpawn::new` 的 ctor 缺省逐项一致
 // （`false` / 空 / 空 / `false` / `0` / `0`），供 `EntityStore::insert` 统一挂载。
 impl<V, E> Default for MapBinding<V, E> {
     fn default() -> Self {
@@ -145,7 +145,7 @@ pub struct AbilitySnapshot<B = ()> {
 }
 
 // 手写 `Default`（derive 会给 `B` 加 `Default` bound，而 world 侧 `BaseAbil` 不实现）。
-// 缺省 `None` = 尚未取快照，与 `Entity::new` 的 ctor 缺省一致。
+// 缺省 `None` = 尚未取快照，与 `EntitySpawn::new` 的 ctor 缺省一致。
 impl<B> Default for AbilitySnapshot<B> {
     fn default() -> Self {
         AbilitySnapshot { abil: None }
@@ -267,7 +267,7 @@ pub struct DupState {
 }
 
 impl DupState {
-    /// ctor 缺省（`Entity::new` 迁出前的同值：`false/0/0`）。
+    /// ctor 缺省（`EntitySpawn::new` 迁出前的同值：`false/0/0`）。
     pub const fn new() -> Self {
         DupState {
             bo_duplication: false,
@@ -297,7 +297,7 @@ pub struct DropState<D = ()> {
     pub no_item: bool,
 }
 
-// 手写 `Default`（derive 会给 `D` 加 `Default` bound）。缺省与 `Entity::new` 逐字段一致。
+// 手写 `Default`（derive 会给 `D` 加 `Default` bound）。缺省与 `EntitySpawn::new` 逐字段一致。
 impl<D> Default for DropState<D> {
     fn default() -> Self {
         DropState {
@@ -366,7 +366,7 @@ pub struct SpawnBinding<C = (), D = ()> {
 }
 
 // 手写 `Default`（derive 会给 `C`/`D` 加 `Default` bound，而 `CastleBinding` 不需要）。
-// 缺省与 `Entity::new` 逐字段一致：`None`/`None`/`0`/`D::default()`。
+// 缺省与 `EntitySpawn::new` 逐字段一致：`None`/`None`/`0`/`D::default()`。
 impl<C, D: Default> Default for SpawnBinding<C, D> {
     fn default() -> Self {
         SpawnBinding {
@@ -446,30 +446,30 @@ pub struct GroupState {
 #[cfg(test)]
 mod adapters {
     use super::*;
-    use mir2_world::entity::{AnimalState, Entity, UseItemSlot};
+    use mir2_world::entity::{AnimalState, EntitySpawn, UseItemSlot};
     use mir2_world::merchant::MerchantState as WorldMerchantState;
     use mir2_world::npc::NpcState as WorldNpcState;
 
-    /// 迁移工具用：把一组字段从 `Entity` 读成组件。
-    pub trait FromEntity {
-        fn from_entity(e: &Entity) -> Self;
+    /// 迁移工具用：把生成期载体（`EntitySpawn`，S4c 起承载全部字段）读成组件。
+    pub trait FromSpawn {
+        fn from_spawn(e: &EntitySpawn) -> Self;
     }
 
-    /// 迁移工具用：把组件写回 `Entity`（只动本组件拥有的字段）。
-    pub trait ApplyToEntity {
-        fn apply_to(&self, e: &mut Entity);
+    /// 迁移工具用：把组件写回生成期载体（只动本组件拥有的字段）。
+    pub trait ApplyToSpawn {
+        fn apply_to(&self, e: &mut EntitySpawn);
     }
 
     /// 含 `String`/`Vec` 的字段组：按值 clone。
     macro_rules! clone_adapter {
         ($ty:ty, $($field:ident),+ $(,)?) => {
-            impl FromEntity for $ty {
-                fn from_entity(e: &Entity) -> Self {
+            impl FromSpawn for $ty {
+                fn from_spawn(e: &EntitySpawn) -> Self {
                     Self { $($field: e.$field.clone()),+ }
                 }
             }
-            impl ApplyToEntity for $ty {
-                fn apply_to(&self, e: &mut Entity) {
+            impl ApplyToSpawn for $ty {
+                fn apply_to(&self, e: &mut EntitySpawn) {
                     $(e.$field = self.$field.clone();)+
                 }
             }
@@ -492,50 +492,50 @@ mod adapters {
         class_slave_list
     );
 
-    impl FromEntity for Inventory<UseItemSlot> {
-        fn from_entity(e: &Entity) -> Self {
+    impl FromSpawn for Inventory<UseItemSlot> {
+        fn from_spawn(e: &EntitySpawn) -> Self {
             Inventory {
                 use_items: e.use_items,
             }
         }
     }
-    impl ApplyToEntity for Inventory<UseItemSlot> {
-        fn apply_to(&self, e: &mut Entity) {
+    impl ApplyToSpawn for Inventory<UseItemSlot> {
+        fn apply_to(&self, e: &mut EntitySpawn) {
             e.use_items = self.use_items;
         }
     }
 
-    impl FromEntity for AiState<AnimalState> {
-        fn from_entity(e: &Entity) -> Self {
+    impl FromSpawn for AiState<AnimalState> {
+        fn from_spawn(e: &EntitySpawn) -> Self {
             AiState { ai: e.ai.clone() }
         }
     }
-    impl ApplyToEntity for AiState<AnimalState> {
-        fn apply_to(&self, e: &mut Entity) {
+    impl ApplyToSpawn for AiState<AnimalState> {
+        fn apply_to(&self, e: &mut EntitySpawn) {
             e.ai = self.ai.clone();
         }
     }
 
-    impl FromEntity for MerchantState<WorldMerchantState> {
-        fn from_entity(e: &Entity) -> Self {
+    impl FromSpawn for MerchantState<WorldMerchantState> {
+        fn from_spawn(e: &EntitySpawn) -> Self {
             MerchantState {
                 merchant: e.merchant.clone(),
             }
         }
     }
-    impl ApplyToEntity for MerchantState<WorldMerchantState> {
-        fn apply_to(&self, e: &mut Entity) {
+    impl ApplyToSpawn for MerchantState<WorldMerchantState> {
+        fn apply_to(&self, e: &mut EntitySpawn) {
             e.merchant = self.merchant.clone();
         }
     }
 
-    impl FromEntity for NpcState<WorldNpcState> {
-        fn from_entity(e: &Entity) -> Self {
+    impl FromSpawn for NpcState<WorldNpcState> {
+        fn from_spawn(e: &EntitySpawn) -> Self {
             NpcState { npc: e.npc }
         }
     }
-    impl ApplyToEntity for NpcState<WorldNpcState> {
-        fn apply_to(&self, e: &mut Entity) {
+    impl ApplyToSpawn for NpcState<WorldNpcState> {
+        fn apply_to(&self, e: &mut EntitySpawn) {
             e.npc = self.npc;
         }
     }
@@ -555,18 +555,18 @@ mod adapters {
     }
 
     impl EntityComponents {
-        pub fn split(e: &Entity) -> Self {
+        pub fn split(e: &EntitySpawn) -> Self {
             EntityComponents {
-                identity: FromEntity::from_entity(e),
-                inventory: FromEntity::from_entity(e),
-                slave: FromEntity::from_entity(e),
-                ai: FromEntity::from_entity(e),
-                merchant: FromEntity::from_entity(e),
-                npc: FromEntity::from_entity(e),
+                identity: FromSpawn::from_spawn(e),
+                inventory: FromSpawn::from_spawn(e),
+                slave: FromSpawn::from_spawn(e),
+                ai: FromSpawn::from_spawn(e),
+                merchant: FromSpawn::from_spawn(e),
+                npc: FromSpawn::from_spawn(e),
             }
         }
 
-        pub fn apply_to(&self, e: &mut Entity) {
+        pub fn apply_to(&self, e: &mut EntitySpawn) {
             self.identity.apply_to(e);
             self.inventory.apply_to(e);
             self.slave.apply_to(e);
@@ -584,8 +584,7 @@ mod tests {
     use mir2_world::castle::DefenseRole;
     use mir2_world::combat::DropItem;
     use mir2_world::entity::{
-        BaseAbil, CastleBinding, Entity, EntitySpawn, MonsterCtorDraws, UseItemSlot,
-        ACTOR_RACE_PLAY,
+        BaseAbil, CastleBinding, EntitySpawn, MonsterCtorDraws, UseItemSlot, ACTOR_RACE_PLAY,
     };
     use mir2_world::entity::{VisibleBaseObject, VisibleEvent};
     use mir2_world::merchant::{MerchantFlags, MerchantState as WorldMerchantState};
@@ -601,7 +600,7 @@ mod tests {
     /// `Entity` 剩 **17 字段**（P0 的 151 减 134，即 S4c 的 CoreIdentity/Ai/Slave/Merchant/Npc/Inventory）。迁出字段的 value 语义由各自的
     /// 组件契约用例（如 `s4a_component_ctor_defaults_match_entity_new`）钉住。
     fn distinctive_entity() -> EntitySpawn {
-        let mut e = Entity::new(91, "ecs-p0", 13, 27);
+        let mut e = mir2_world::EntitySpawn::new(91, "ecs-p0", 13, 27);
 
         // CoreIdentity
         // Appearance
@@ -830,31 +829,36 @@ mod tests {
         e
     }
 
-    /// S4a 起 Vitals/AbilitySnapshot/Progression 已迁出 `Entity`：round-trip 只比较
-    /// `Entity` 主组件（剩余 17 字段，均为 S4c 待迁）；迁出字段由各自组件契约用例钉住。
-    fn debug_snapshot(e: &Entity) -> String {
-        format!("{e:?}")
+    /// S4c：`Entity` 只剩 `id`/`name`/`ai`；round-trip 比较生成期载体的 S4c 字段组
+    /// （身份 + AI + 仆从 + 背包 + 商人 + NPC），迁出字段由各自组件契约用例钉住。
+    fn debug_snapshot(e: &EntitySpawn) -> String {
+        format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            e.entity,
+            e.ai,
+            e.slave_component(),
+            e.inventory_component(),
+            e.merchant_component(),
+            e.npc_component()
+        )
     }
 
     /// 全量 round-trip：Entity → 23 组件（`DupState`/`Transform`/`MapBinding` 已迁出）→ Entity，
     /// **剩余字段零变化**。
     ///
     /// 这条用例的判据是全字段 `Debug` 相等——任何一组适配器漏掉字段，落回的新实体就保留
-    /// `Entity::new` 的缺省值，与源实体不同 ⇒ 红。若 `Entity` 以后新增字段而没进任何组件，
+    /// `EntitySpawn::new` 的缺省值，与源实体不同 ⇒ 红。若 `Entity` 以后新增字段而没进任何组件，
     /// 本用例**不会**自动发现（新字段在两侧都是缺省值）；因此同目录维护
     /// `distinctive_entity` 时必须同步加赋值（设计件「字段覆盖」节登记了这个边界）。
     #[test]
     fn split_and_apply_round_trip_all_remaining_fields() {
         let src = distinctive_entity();
-        let split = EntityComponents::split(&src.entity);
+        let split = EntityComponents::split(&src);
 
-        let mut restored = Entity::new(0, "", 0, 0);
+        let mut restored = mir2_world::EntitySpawn::new(0, "", 0, 0);
         split.apply_to(&mut restored);
 
-        assert_eq!(
-            debug_snapshot(&src.entity),
-            debug_snapshot(&restored.entity)
-        );
+        assert_eq!(debug_snapshot(&src), debug_snapshot(&restored));
     }
 
     /// 负对照：只改一个字段，`Debug` 快照必须不同（证明上面的比较不是恒等/空过）。
@@ -863,12 +867,12 @@ mod tests {
         let src = distinctive_entity();
         let mut altered = src.clone();
         altered.id = altered.id.wrapping_add(1);
-        assert_ne!(debug_snapshot(&src.entity), debug_snapshot(&altered.entity));
+        assert_ne!(debug_snapshot(&src), debug_snapshot(&altered));
     }
 
     /// S3a：`DupState` 已脱离 `Entity`，改由组件独立 API（`new`/`Default`）构造。
     ///
-    /// 判据：组件缺省必须与迁出前 `Entity::new` 的 ctor 缺省逐字段一致（`false/0/0`），
+    /// 判据：组件缺省必须与迁出前 `EntitySpawn::new` 的 ctor 缺省逐字段一致（`false/0/0`），
     /// 否则 `EntityStore::insert` 给每个实体插的默认状态会让首次重叠检查的门基漂移。
     /// 牙：把 `DupState::new()` 的 `check_dup_obj_tick` 改成非 0 ⇒ 第二条断言红。
     #[test]
@@ -895,7 +899,7 @@ mod tests {
 
     /// S4a：`Vitals`/`AbilitySnapshot`/`Progression` 已脱离 `Entity`。
     ///
-    /// 判据：生成期载体（`Entity::new`）的 ctor 缺省必须与迁移前逐字段一致
+    /// 判据：生成期载体（`EntitySpawn::new`）的 ctor 缺省必须与迁移前逐字段一致
     /// （`hp/max_hp=100`、`level=1`、`abil=None`），且**不得**用 `Component::default()`
     /// 直接造实体（派生 `Default` 是 0/0/0）。
     ///
@@ -903,7 +907,7 @@ mod tests {
     /// 把 `CTOR_HP` 改成 0 ⇒ 进图即被死亡结算当死者（本用例红）。
     #[test]
     fn s4a_component_ctor_defaults_match_entity_new() {
-        let e = Entity::new(1, "x", 0, 0);
+        let e = mir2_world::EntitySpawn::new(1, "x", 0, 0);
         assert_eq!((e.hp, e.max_hp), (100, 100), "ctor 缺省 HP/MaxHP=100/100");
         assert_eq!(e.level, 1, "ctor 缺省 Abil.Level=1");
         assert_eq!(e.abil, None, "生成路径不取 Abil 快照");
@@ -925,10 +929,10 @@ mod tests {
     /// `name_color = 255`（ctor 覆盖值），其余布尔/数值 0/false；派生 `Default` 的
     /// `name_color` 是 0 ⇒ 两者**不同**，这是「不得用 `Component::default()` 造实体」的负对照。
     ///
-    /// 牙：把 `EntitySpawn::new`/`Entity::new` 的 `name_color` 改成 0 ⇒ 本用例红。
+    /// 牙：把 `EntitySpawn::new`/`EntitySpawn::new` 的 `name_color` 改成 0 ⇒ 本用例红。
     #[test]
     fn s4b1_component_ctor_defaults_match_entity_new() {
-        let e = Entity::new(1, "x", 0, 0);
+        let e = mir2_world::EntitySpawn::new(1, "x", 0, 0);
         assert_eq!(e.race, ACTOR_RACE_PLAY, "ctor 缺省 Race=Play(0)");
         assert_eq!(e.race_img, 0, "ctor 缺省 RaceImg=0");
         assert_eq!(e.appr, 0);
@@ -955,7 +959,7 @@ mod tests {
     /// 牙：把 `EntitySpawn` 的 `power_rate`/`poisoning_tick` 缺省改 0 ⇒ 本用例红。
     #[test]
     fn s4b2_component_ctor_defaults_match_entity_new() {
-        let e = Entity::new(1, "x", 0, 0);
+        let e = mir2_world::EntitySpawn::new(1, "x", 0, 0);
         assert_eq!((e.power_rate, e.kill_mon_exp_rate), (100, 100));
         assert_eq!((e.power_rate_time, e.kill_mon_exp_rate_time), (0, 0));
         assert_eq!(e.luck, 0);

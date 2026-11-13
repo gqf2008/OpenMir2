@@ -20,10 +20,11 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    AbilitySnapshot, Appearance, BaseAbil, BuffState, CombatAttribution, DropState, Entity,
-    EntityRef, EntityStore, Flags, GroupState, LifeCycle, MapBinding, MonsterClassState,
-    PlayerRunState, Progression, PvpState, Recovery, Revival, SpawnBinding, Transform,
-    VisibleBaseObject, VisibleEvent, VisibleFlag, Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    AbilitySnapshot, AiState, AnimalState, Appearance, BaseAbil, BuffState, CombatAttribution,
+    DropState, Entity, EntityRef, EntityStore, Flags, GroupState, Inventory, LifeCycle, MapBinding,
+    MerchantState, MonsterClassState, NpcState, PlayerRunState, Progression, PvpState, Recovery,
+    Revival, SlaveState, SpawnBinding, Transform, VisibleBaseObject, VisibleEvent, VisibleFlag,
+    Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 use bevy_ecs::prelude::Resource;
@@ -40,7 +41,7 @@ pub const CELL_OBJECT_EXPIRE_MS: i64 = 60 * 1000;
 /// 因此系统化不复制算法、也不引入第二份真值。
 pub trait AoiStore {
     fn get(&self, id: i32) -> Option<EntityRef<'_>>;
-    fn get_mut(&mut self, id: i32) -> Option<&mut Entity>;
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState>;
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding>;
 }
 
@@ -48,8 +49,8 @@ impl AoiStore for EntityStore {
     fn get(&self, id: i32) -> Option<EntityRef<'_>> {
         EntityStore::get(self, id)
     }
-    fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
-        EntityStore::entity_mut(self, id)
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
+        EntityStore::ai_mut(self, id)
     }
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
         EntityStore::map_binding_mut(self, id)
@@ -110,13 +111,13 @@ pub fn update_monster_visible<S: AoiStore>(
 ) -> bool {
     // `if ((HUtil32.GetTickCount() - SearchTick) <= SearchTime) return;`
     {
-        let Some(monster) = store.get_mut(monster_id) else {
+        let Some(ai) = store.ai_mut(monster_id) else {
             return false;
         };
-        if now_ms - monster.ai.search_tick <= monster.ai.search_time {
+        if now_ms - ai.search_tick <= ai.search_time {
             return false;
         }
-        monster.ai.search_tick = now_ms;
+        ai.search_tick = now_ms;
     }
     // `IActor baseObject = SystemShare.ActorMgr.Get(acrotId);`
     let Some(target) = store.get(viewer_id) else {
@@ -675,6 +676,26 @@ impl AoiStore for BevyAoiStore<'_> {
             .world
             .get::<BuffState>(e)
             .expect("实体必须挂 BuffState 组件（插入期已断言）");
+        let slave = self
+            .world
+            .get::<SlaveState>(e)
+            .expect("实体必须挂 SlaveState 组件（插入期已断言）");
+        let inventory = self
+            .world
+            .get::<Inventory>(e)
+            .expect("实体必须挂 Inventory 组件（插入期已断言）");
+        let merchant = self
+            .world
+            .get::<MerchantState>(e)
+            .expect("实体必须挂 MerchantState 组件（插入期已断言）");
+        let npc = self
+            .world
+            .get::<NpcState>(e)
+            .expect("实体必须挂 NpcState 组件（插入期已断言）");
+        let ai = self
+            .world
+            .get::<AiState>(e)
+            .expect("实体必须挂 AiState 组件（插入期已断言）");
         Some(EntityRef::from_components(
             entity,
             transform,
@@ -695,14 +716,19 @@ impl AoiStore for BevyAoiStore<'_> {
             group,
             revival,
             buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
+            ai,
         ))
     }
 
-    fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
         let e = *self.index.get(&id)?;
         self.world
-            .get_mut::<Entity>(e)
-            .map(bevy_ecs::change_detection::Mut::into_inner)
+            .get_mut::<AiState>(e)
+            .map(|m| &mut bevy_ecs::change_detection::Mut::into_inner(m).ai)
     }
 
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
@@ -794,8 +820,8 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                         out.aoi_order.push(*id);
                         continue;
                     }
-                    if let Some(e) = store.get_mut(*id) {
-                        e.ai.search_tick = params.clock_ms;
+                    if let Some(ai) = store.ai_mut(*id) {
+                        ai.search_tick = params.clock_ms;
                     }
                     let outcome =
                         search_view_range_with_updates(map, &mut store, *id, params.clock_ms);
@@ -808,8 +834,8 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                             .get(monster_id)
                             .is_some_and(|e| crate::monai::consumes_view_range_update(&e))
                         {
-                            if let Some(monster) = store.get_mut(monster_id) {
-                                monster.ai.pending_view_updates.push(player_id);
+                            if let Some(ai) = store.ai_mut(monster_id) {
+                                ai.pending_view_updates.push(player_id);
                             }
                         }
                     }
@@ -842,7 +868,7 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, EntitySpawn, EntityStore};
+    use crate::entity::{EntitySpawn, EntityStore};
 
     fn put(map: &mut MapGrid, id: i32, x: i32, y: i32, add_time: i64) {
         assert!(map.add_map_object(x, y, CellType::Play, id, add_time));
@@ -856,13 +882,13 @@ mod tests {
     fn player_viewer_skips_cell_expiry() {
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
-        let mut viewer = Entity::new(1, "p", 10, 10);
+        let mut viewer = crate::EntitySpawn::new(1, "p", 10, 10);
         viewer.race = ACTOR_RACE_PLAY;
         viewer.want_ref_msg = true;
         viewer.view_range = 5;
         store.insert(viewer);
         put(&mut map, 1, 10, 10, 60_000);
-        let mut target = Entity::new(2, "guard", 11, 10);
+        let mut target = crate::EntitySpawn::new(2, "guard", 11, 10);
         target.race = ACTOR_RACE_MONSTER;
         store.insert(target);
         put(&mut map, 2, 11, 10, 0); // 过期（now - 0 >= 60s）
@@ -888,12 +914,12 @@ mod tests {
     fn non_player_viewer_still_expires_cell_objects() {
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
-        let mut viewer = Entity::new(1, "guard", 10, 10);
+        let mut viewer = crate::EntitySpawn::new(1, "guard", 10, 10);
         viewer.race = ACTOR_RACE_MONSTER;
         viewer.view_range = 5;
         store.insert(viewer);
         put(&mut map, 1, 10, 10, 60_000);
-        let mut target = Entity::new(2, "stale", 11, 10);
+        let mut target = crate::EntitySpawn::new(2, "stale", 11, 10);
         target.race = ACTOR_RACE_MONSTER;
         store.insert(target);
         put(&mut map, 2, 11, 10, 0);
@@ -914,7 +940,7 @@ mod tests {
     }
 
     fn play_viewer(id: i32, x: i32, y: i32, view_range: i32) -> EntitySpawn {
-        let mut e = Entity::new(id, "p", x, y);
+        let mut e = crate::EntitySpawn::new(id, "p", x, y);
         e.race = ACTOR_RACE_PLAY;
         // `PlayObject` ctor `WantRefMsg = true`（`PlayObject.cs:889`）。
         e.want_ref_msg = true;
@@ -923,7 +949,7 @@ mod tests {
     }
 
     fn monster_entity(id: i32, x: i32, y: i32, view_range: i32) -> EntitySpawn {
-        let mut e = Entity::new(id, "m", x, y);
+        let mut e = crate::EntitySpawn::new(id, "m", x, y);
         e.race = ACTOR_RACE_MONSTER;
         e.view_range = view_range;
         e
@@ -1009,11 +1035,11 @@ mod tests {
     fn monster_view_update_sets_visible_active_for_player_and_baby() {
         let mut store = EntityStore::new();
         store.insert(play_viewer(1, 10, 10, 12));
-        let mut baby = Entity::new(3, "baby", 10, 11);
+        let mut baby = crate::EntitySpawn::new(3, "baby", 10, 11);
         baby.race = ACTOR_RACE_MONSTER;
         baby.master = Some(1);
         store.insert(baby);
-        let mut plain = Entity::new(4, "plain", 10, 12);
+        let mut plain = crate::EntitySpawn::new(4, "plain", 10, 12);
         plain.race = ACTOR_RACE_MONSTER;
         store.insert(plain);
 
@@ -1072,7 +1098,7 @@ mod tests {
     fn view_range_update_only_emitted_by_player_viewer() {
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
-        let mut guard = Entity::new(1, "g", 10, 10);
+        let mut guard = crate::EntitySpawn::new(1, "g", 10, 10);
         guard.race = 11;
         guard.view_range = 5;
         guard.want_ref_msg = true;
@@ -1115,13 +1141,13 @@ mod tests {
     fn m3_ghost_player_is_not_in_others_view_set() {
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
-        let mut viewer = Entity::new(1, "p", 10, 10);
+        let mut viewer = crate::EntitySpawn::new(1, "p", 10, 10);
         viewer.race = ACTOR_RACE_PLAY;
         viewer.want_ref_msg = true;
         viewer.view_range = 5;
         store.insert(viewer);
         put(&mut map, 1, 10, 10, 0);
-        let mut ghost = Entity::new(2, "g", 11, 10);
+        let mut ghost = crate::EntitySpawn::new(2, "g", 11, 10);
         ghost.race = ACTOR_RACE_PLAY;
         ghost.ghost = true;
         store.insert(ghost);

@@ -29,7 +29,7 @@ use mir2_formula::exp::{calc_get_exp, get_level_exp};
 use mir2_shared::hutil;
 use mir2_shared::rng::RandomSource;
 
-use crate::entity::{Entity, EntitySpawn, PvpView, UseItemSlot, ACTOR_RACE_PLAY};
+use crate::entity::{EntitySpawn, PvpView, UseItemSlot, ACTOR_RACE_PLAY, USE_ITEM_SLOTS};
 
 /// `HUtil32.LoByte(short)`：低 8 位。
 pub fn lo_byte(w: i32) -> u8 {
@@ -439,7 +439,7 @@ pub fn is_attack_target_base(attacker: &impl PvpView, target: &impl PvpView) -> 
     }
     if attacker.race() >= ACTOR_RACE_ANIMAL {
         let mut result = false;
-        if attacker.base().master.is_none() {
+        if attacker.master().is_none() {
             // `else` 支（`BaseObject.Base.cs:438-452`）：
             if target.race() == ACTOR_RACE_PLAY {
                 result = true; // 怪打人
@@ -447,7 +447,7 @@ pub fn is_attack_target_base(attacker: &impl PvpView, target: &impl PvpView) -> 
             if attacker.race() > ACTOR_RACE_PEACE_NPC && attacker.race() < ACTOR_RACE_ANIMAL {
                 result = true;
             }
-            if target.base().master.is_some() {
+            if target.master().is_some() {
                 result = true; // 可打对方召唤物
             }
         }
@@ -649,7 +649,7 @@ pub fn is_proper_is_friend(
 pub fn base_is_proper_friend(caster: &impl PvpView, target: &impl PvpView) -> bool {
     if caster.race() >= ACTOR_RACE_ANIMAL {
         let mut result = target.race() >= ACTOR_RACE_ANIMAL;
-        if target.base().master.is_some() {
+        if target.master().is_some() {
             result = false;
         }
         return result;
@@ -686,7 +686,7 @@ fn is_proper_target_play_grouped(
             // `if (baseObject.Race == ActorRace.Play) return IsProtectTarget(baseObject);`
             return is_protect_target(attacker, target);
         }
-        if let Some(master) = target.base().master {
+        if let Some(master) = target.master() {
             if master == attacker.base().id {
                 // 自己的宝宝：非 `HAM_ALL` 直接拒绝；`HAM_ALL` 落到下面的 `if (result) return result`。
                 if attacker.attack_mode() != ATTACK_MODE_HAM_ALL {
@@ -838,19 +838,23 @@ pub fn get_mag_struck_damage(
 /// `Random(8)`（`:3000`）——衣服位在特判里破零清 `Index` 会**少抽一次**（见 [`wear_durability`]）。
 ///
 /// 怪物目标走 `BaseObject.StruckDamage`（`BaseObject.Base.cs:827`，无随机数）⇒ 直接返回。
-pub fn struck_damage_durability(rng: &mut impl RandomSource, target: &mut Entity, race: u8) {
+pub fn struck_damage_durability(
+    rng: &mut impl RandomSource,
+    items: &mut [UseItemSlot; USE_ITEM_SLOTS],
+    race: u8,
+) {
     if race != ACTOR_RACE_PLAY {
         return;
     }
     // `usort nDam = (ushort)(Random(10) + 5)`（`PlayObject.cs:2957`）。
     let n_dam = (rng.random_below(10) + 5) as u16;
     // 衣服位特判（`PlayObject.cs:2965-2996`）：**不抽数**，只扣耐久；破零先清 `Index`。
-    let dress = &mut target.use_items[ITEM_LOCATION_DRESS];
+    let dress = &mut items[ITEM_LOCATION_DRESS];
     if dress.index > 0 {
         wear_durability(dress, n_dam);
     }
     // 逐格循环（`PlayObject.cs:2998-3039`）：每格 `Index > 0` **先抽一次 `Random(8)`**。
-    for slot in target.use_items.iter_mut() {
+    for slot in items.iter_mut() {
         if slot.index > 0 && rng.random_below(8) == 0 {
             wear_durability(slot, n_dam);
         }
@@ -1136,7 +1140,7 @@ pub fn struck_damage_apply(
     // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
     // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
     let target_race = target.race;
-    struck_damage_durability(rng, &mut target.entity, target_race);
+    struck_damage_durability(rng, &mut target.use_items, target_race);
     (final_damage, killed)
 }
 
@@ -1281,7 +1285,8 @@ pub fn attack_dir_grouped_poison_ws(
             }
         }
         // `AttackSuccess(..., targetObject)`：目标非空 ⇒ 抽 `Random(5)`（`PlayObject.Attack.cs:225`）。
-        weapon_wear = attack_success_weapon_wear_with_strong(rng, attacker, weapon_strong);
+        weapon_wear =
+            attack_success_weapon_wear_with_strong(rng, &mut attacker.use_items, weapon_strong);
     }
     (outcome, poisoned, weapon_wear)
 }
@@ -1513,9 +1518,9 @@ pub struct MonsterRow<'a> {
 
 /// 由行数据构造怪物实体（数值语义与 `GameSvr/DB/MySqlDB.cs::LoadMonsterDB` 的产物一致）。
 pub fn monster_from_row(row: MonsterRow<'_>) -> EntitySpawn {
-    let mut e = Entity::new(row.id, row.name, row.x, row.y);
+    let mut e = crate::EntitySpawn::new(row.id, row.name, row.x, row.y);
     e.race = 80; // ActorRace.Monster
-                 // `Entity::new` 是**玩家** ctor 等价物（`PlayObject.cs:899-901` 覆盖 `SearchTime=1000`）；
+                 // `EntitySpawn::new` 是**玩家** ctor 等价物（`PlayObject.cs:899-901` 覆盖 `SearchTime=1000`）；
                  // 怪物这里还原非玩家缺省占位值，真实值由生成路径的 ctor 抽/`seed_from_spawn` 落定。
     e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
     e.level = row.level;
@@ -1772,9 +1777,9 @@ pub fn do_damage_weapon(weapon: &mut UseItemSlot, n_weapon_damage: u16) -> Weapo
 #[must_use]
 pub fn attack_success_weapon_wear(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
+    items: &mut [UseItemSlot; USE_ITEM_SLOTS],
 ) -> Option<WeaponWearOutcome> {
-    attack_success_weapon_wear_with_strong(rng, attacker, 0)
+    attack_success_weapon_wear_with_strong(rng, items, 0)
 }
 
 /// [`attack_success_weapon_wear`] 的**带 `WeaponStrong`** 版本（`(ushort)(Random(5) + 2 - WeaponStrong)`）。
@@ -1785,14 +1790,14 @@ pub fn attack_success_weapon_wear(
 #[must_use]
 pub fn attack_success_weapon_wear_with_strong(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
+    items: &mut [UseItemSlot; USE_ITEM_SLOTS],
     weapon_strong: u16,
 ) -> Option<WeaponWearOutcome> {
     let n_weapon_damage =
         weapon_damage_with_strong(attack_success_weapon_damage(rng), weapon_strong);
-    if n_weapon_damage > 0 && attacker.use_items[crate::world::ITEM_LOCATION_WEAPON].index > 0 {
+    if n_weapon_damage > 0 && items[crate::world::ITEM_LOCATION_WEAPON].index > 0 {
         return Some(do_damage_weapon(
-            &mut attacker.use_items[crate::world::ITEM_LOCATION_WEAPON],
+            &mut items[crate::world::ITEM_LOCATION_WEAPON],
             n_weapon_damage,
         ));
     }
@@ -1802,7 +1807,7 @@ pub fn attack_success_weapon_wear_with_strong(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+    use crate::entity::{ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
     use mir2_shared::rng::{RandomNumber, RandomSource};
 
     /// `Animal` 构造期置真的 race 集合（`MonsterInfo`/各 ctor 的 oracle 事实）。
@@ -1870,15 +1875,15 @@ mod tests {
     /// 同种子下与旧入口的 `random_below` 入参序列逐项相同；数值只影响磨损结果。
     #[test]
     fn weapon_strong_does_not_change_rng_draws() {
-        use crate::entity::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+        use crate::entity::{ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
         let cfg = CombatConfig::default();
         let mk = || {
-            let mut a = Entity::new(1, "a", 0, 0);
+            let mut a = crate::EntitySpawn::new(1, "a", 0, 0);
             a.race = ACTOR_RACE_PLAY;
             a.dc = 20;
             a.luck = 0;
             a.power_rate = 100;
-            let mut t = Entity::new(2, "t", 0, 0);
+            let mut t = crate::EntitySpawn::new(2, "t", 0, 0);
             t.race = ACTOR_RACE_MONSTER;
             t.hit_point = 0;
             t.speed_point = 10;
@@ -1909,7 +1914,7 @@ mod tests {
             ..CombatConfig::default()
         };
         let mk_attacker = || {
-            let mut e = Entity::new(1, "a", 0, 0);
+            let mut e = crate::EntitySpawn::new(1, "a", 0, 0);
             e.race = ACTOR_RACE_PLAY;
             e.dc = 20;
             e.luck = 0;
@@ -1917,7 +1922,7 @@ mod tests {
             e
         };
         let mk_target = || {
-            let mut e = Entity::new(2, "t", 0, 0);
+            let mut e = crate::EntitySpawn::new(2, "t", 0, 0);
             e.race = ACTOR_RACE_MONSTER;
             e.hit_point = 0; // 命中门不抽
             e.speed_point = 10;
@@ -2017,20 +2022,20 @@ mod tests {
     #[test]
     fn is_proper_friend_base_and_player() {
         // 基版：怪施法者只认怪目标（且目标无 master）。
-        let mut mon = Entity::new(1, "m", 0, 0);
+        let mut mon = crate::EntitySpawn::new(1, "m", 0, 0);
         mon.race = ACTOR_RACE_MONSTER;
-        let mut mon2 = Entity::new(2, "m2", 0, 0);
+        let mut mon2 = crate::EntitySpawn::new(2, "m2", 0, 0);
         mon2.race = ACTOR_RACE_MONSTER;
         assert!(is_proper_friend(&mon, &mon2, false));
         // 目标有 master ⇒ 剔除。
         mon2.master = Some(9);
         assert!(!is_proper_friend(&mon, &mon2, false));
         // 玩家施法者：基版回落 ⇒ 怪目标 false。
-        let mut ply = Entity::new(3, "p", 0, 0);
+        let mut ply = crate::EntitySpawn::new(3, "p", 0, 0);
         ply.race = ACTOR_RACE_PLAY;
         assert!(!is_proper_friend(&ply, &mon, false));
         // 玩家→玩家：HAM_ALL/HAM_PEACE ⇒ true；HAM_DEAR ⇒ 仅配偶/自己。
-        let mut p2 = Entity::new(4, "p2", 0, 0);
+        let mut p2 = crate::EntitySpawn::new(4, "p2", 0, 0);
         p2.race = ACTOR_RACE_PLAY;
         assert!(is_proper_friend(&ply, &p2, false), "HAM_ALL 默认 ⇒ 友军");
         ply.attack_mode = ATTACK_MODE_HAM_DEAR;
@@ -2053,11 +2058,11 @@ mod tests {
     fn attack_path_uses_direct_proper_target_and_restores_draws() {
         let cfg = CombatConfig::default();
         for flag in ["death", "ghost", "invisible"] {
-            let mut attacker = Entity::new(1, "a", 0, 0);
+            let mut attacker = crate::EntitySpawn::new(1, "a", 0, 0);
             attacker.race = ACTOR_RACE_MONSTER; // 怪物攻方走基版 IsAttackTarget
             attacker.dc = 0x0A0A; // Lo=Hi=10 ⇒ 攻击力抽 1 次（不记录在 below）
             attacker.hit_point = 100;
-            let mut target = Entity::new(2, "t", 0, 0);
+            let mut target = crate::EntitySpawn::new(2, "t", 0, 0);
             target.race = ACTOR_RACE_PLAY;
             target.hp = 100;
             target.max_hp = 100;
@@ -2110,11 +2115,11 @@ mod tests {
     fn attack_draw_ledger_is_identical_for_normal_and_folded_flags() {
         fn run(flag: Option<&str>) -> (Vec<i32>, i32, bool) {
             let cfg = CombatConfig::default();
-            let mut attacker = Entity::new(1, "a", 0, 0);
+            let mut attacker = crate::EntitySpawn::new(1, "a", 0, 0);
             attacker.race = ACTOR_RACE_MONSTER;
             attacker.dc = 0x0A0A;
             attacker.hit_point = 100;
-            let mut target = Entity::new(2, "t", 0, 0);
+            let mut target = crate::EntitySpawn::new(2, "t", 0, 0);
             target.race = ACTOR_RACE_PLAY;
             target.hp = 100;
             target.max_hp = 100;
@@ -2153,21 +2158,21 @@ mod tests {
         let cfg = CombatConfig::default();
         let need = [0i32; 256];
         for dw in [0, 1, 3, 25, 99, 100, 101, 999, 12_345] {
-            let mut e = Entity::new(1, "a", 0, 0);
+            let mut e = crate::EntitySpawn::new(1, "a", 0, 0);
             e.kill_mon_exp_rate = 100;
             let (got, _, _) = win_exp(&mut e, dw, &need, &cfg, None);
             assert_eq!(got, dw, "rate=100 ⇒ 旧公式 round(1.0*dw) = dw");
         }
-        let mut e = Entity::new(1, "a", 0, 0);
+        let mut e = crate::EntitySpawn::new(1, "a", 0, 0);
         e.kill_mon_exp_rate = 200;
         assert_eq!(win_exp(&mut e, 123, &need, &cfg, None).0, 246);
-        let mut e = Entity::new(1, "a", 0, 0);
+        let mut e = crate::EntitySpawn::new(1, "a", 0, 0);
         e.kill_mon_exp_rate = 0;
         assert_eq!(win_exp(&mut e, 123, &need, &cfg, None).0, 0);
         // 队伍 per-member：A=100 / B=200 ⇒ B 拿双倍（oracle 对每成员调各自的 WinExp）。
-        let mut a = Entity::new(1, "a", 0, 0);
+        let mut a = crate::EntitySpawn::new(1, "a", 0, 0);
         a.kill_mon_exp_rate = 100;
-        let mut b = Entity::new(2, "b", 0, 0);
+        let mut b = crate::EntitySpawn::new(2, "b", 0, 0);
         b.kill_mon_exp_rate = 200;
         let ea = win_exp(&mut a, 280, &need, &cfg, None).0;
         let eb = win_exp(&mut b, 280, &need, &cfg, None).0;
@@ -2284,10 +2289,10 @@ mod tests {
         assert!(n > 60_000, "回绕成大正数（实得 {n}）");
         assert_ne!(n, 0, "不得为 0 ⇒ 不落 `nWeaponDamage == 0` 的门");
 
-        let mut hero = Entity::new(1, "a", 0, 0);
+        let mut hero = crate::EntitySpawn::new(1, "a", 0, 0);
         hero.use_items[crate::world::ITEM_LOCATION_WEAPON] = wear_slot(500);
         let mut rng = RandomNumber::with_seed(seed);
-        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero, 9)
+        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero.use_items, 9)
             .expect("n > 0 且武器已装备 ⇒ 必结算");
         // oracle：`ushort nDura = 500; nDura -= n;` ⇒ 回绕。
         let expected = 500u16.wrapping_sub(n);
@@ -2311,9 +2316,9 @@ mod tests {
         let mut rng = CountingRng::new(11);
         let mut probe = RandomNumber::with_seed(11);
         let raw = attack_success_weapon_damage(&mut probe);
-        let mut hero = Entity::new(1, "a", 0, 0);
+        let mut hero = crate::EntitySpawn::new(1, "a", 0, 0);
         hero.use_items[crate::world::ITEM_LOCATION_WEAPON] = wear_slot(500);
-        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero, raw);
+        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero.use_items, raw);
         assert!(out.is_none(), "`nWeaponDamage == 0` ⇒ 不结算");
         assert_eq!(rng.below, vec![5], "仍恰抽一次 `Random(5)`（取数账本不变）");
         assert_eq!(
@@ -2327,7 +2332,7 @@ mod tests {
     /// 有目标的一次攻击则恰多一次 `Random(5)`（`AttackSuccess`，`PlayObject.Attack.cs:225`）。
     #[test]
     fn swing_draws_no_weapon_dice_but_targeted_attack_draws_exactly_one() {
-        let mut hero = Entity::new(1, "a", 0, 0);
+        let mut hero = crate::EntitySpawn::new(1, "a", 0, 0);
         hero.race = ACTOR_RACE_PLAY;
         hero.dc = 20;
         hero.luck = 0;
@@ -2345,7 +2350,7 @@ mod tests {
             swing_rng.below
         );
 
-        let mut target = Entity::new(2, "t", 0, 0);
+        let mut target = crate::EntitySpawn::new(2, "t", 0, 0);
         target.race = ACTOR_RACE_MONSTER;
         target.hit_point = 0; // 命中门不抽
         target.speed_point = 10;

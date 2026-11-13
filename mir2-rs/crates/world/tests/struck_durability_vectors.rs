@@ -24,7 +24,7 @@ use std::path::PathBuf;
 
 use mir2_shared::replay::ReplayRandom;
 use mir2_world::combat::struck_damage_durability;
-use mir2_world::{Entity, EntitySpawn, ACTOR_RACE_PLAY};
+use mir2_world::{EntitySpawn, ACTOR_RACE_PLAY};
 
 fn vectors_path() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -98,7 +98,7 @@ fn replay(draws: &str) -> ReplayRandom {
 }
 
 fn mk_target(items: &[(usize, u16, u16)]) -> EntitySpawn {
-    let mut target = Entity::new(202, "victim", 0, 0);
+    let mut target = mir2_world::EntitySpawn::new(202, "victim", 0, 0);
     target.race = ACTOR_RACE_PLAY;
     target.hp = 30000;
     target.max_hp = 30000;
@@ -109,7 +109,7 @@ fn mk_target(items: &[(usize, u16, u16)]) -> EntitySpawn {
     target
 }
 
-fn equipped(target: &Entity) -> Vec<(usize, u16, u16)> {
+fn equipped(target: &EntitySpawn) -> Vec<(usize, u16, u16)> {
     target
         .use_items
         .iter()
@@ -128,7 +128,7 @@ fn struck_durability_matches_oracle_vectors() {
         let mut target = mk_target(&case.items_in);
         let mut rng = replay(&case.draws);
         let target_race = target.race;
-        struck_damage_durability(&mut rng, &mut target, target_race);
+        struck_damage_durability(&mut rng, &mut target.use_items, target_race);
 
         assert!(
             rng.divergences().is_empty(),

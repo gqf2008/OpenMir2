@@ -681,7 +681,7 @@ fn initialize_leaves_master_guild_none_phase_contract() {
 #[test]
 fn query_user_name_color_reads_world_castle_name_colors() {
     let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
-    let mut target = mir2_world::Entity::new(1, "p", 10, 10);
+    let mut target = mir2_world::EntitySpawn::new(1, "p", 10, 10);
     target.pvp_flag = true;
     target.pk_point = 0; // `PvpLevel() = 0 < 2`
     world.add_entity(target);
@@ -734,7 +734,7 @@ fn query_user_name_color_reads_world_castle_name_colors() {
 // ③ `queue_structure_ref_msg` 把 `RM_DIGDOWN`/`RM_DIGUP` 对调 ⇒ `SM_DIGDOWN` 逐字节断言红。
 
 fn play_entity(name: &str, x: i32, y: i32) -> mir2_world::EntitySpawn {
-    let mut e = mir2_world::Entity::new(0, name.to_string(), x, y);
+    let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
     e.race = mir2_world::ACTOR_RACE_PLAY;
     e
 }
@@ -1057,7 +1057,7 @@ fn t127_ref_show_name_n1_drops_frame_for_guilded_viewer_in_war_area() {
 #[test]
 fn t127_door_close_structure_event_drains_to_sm_digdown() {
     let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
-    let mut door = mir2_world::Entity::new(0, "沙巴克城门".to_string(), 5, 5);
+    let mut door = mir2_world::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
     door.race = 110;
     let door_id = world.add_entity(door);
     world.open_session("甲");
@@ -1172,7 +1172,7 @@ fn t127_frame_priorities_are_low_byte_of_rm_ident() {
 #[test]
 fn t127_cross_source_frames_follow_priority_order() {
     let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
-    let mut door = mir2_world::Entity::new(0, "沙巴克城门".to_string(), 5, 5);
+    let mut door = mir2_world::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
     door.race = 110;
     let door_id = world.add_entity(door);
     world.open_session("甲");
@@ -1524,7 +1524,7 @@ fn change_date_text_pads_date_and_time() {
 
 fn action_world() -> (mir2_world::World, i32, i32) {
     let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
-    let mut door = mir2_world::Entity::new(0, "沙巴克城门".to_string(), 5, 5);
+    let mut door = mir2_world::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
     door.race = 110;
     let door_id = world.add_entity(door);
     world.open_session("甲");
@@ -1730,7 +1730,7 @@ fn castle_official_action_repair_wall_emits_wall_frames_after_60s() {
         .as_ref()
         .and_then(|d| d.entity_id)
         .expect("门实体");
-    let mut wall = mir2_world::Entity::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    let mut wall = mir2_world::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
     wall.race = 111;
     let wall_actor = world.add_entity(wall);
     assert_ne!(wall_actor, door_actor, "Minor①：门与墙必须是不同实体");
@@ -1789,7 +1789,7 @@ fn castle_official_action_repair_wall_emits_wall_frames_after_60s() {
 fn castle_official_action_alive_status_uses_display_layer() {
     // —— 格①：展示层登记了 status（与实体源可分）——
     let (mut world, _door, a_id) = action_world();
-    let mut wall = mir2_world::Entity::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    let mut wall = mir2_world::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
     wall.race = 111;
     wall.char_status = 0x1234; // 实体源故意非零 ⇒ 改回实体源的变异必被识破
     let wall_actor = world.add_entity(wall);
@@ -1851,7 +1851,7 @@ fn castle_official_action_alive_status_uses_display_layer() {
 
     // —— 格②：展示层未登记 ⇒ Status=0（不得回落实体 char_status）——
     let (mut world2, _door2, a_id2) = action_world();
-    let mut wall2 = mir2_world::Entity::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    let mut wall2 = mir2_world::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
     wall2.race = 111;
     wall2.char_status = 0x1234;
     let wall_actor2 = world2.add_entity(wall2);

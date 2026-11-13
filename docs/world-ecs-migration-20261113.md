@@ -364,13 +364,13 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
      → 组件）、`MerchantState`、`NpcState`、`Inventory`、`CoreIdentity`。
   6. **S5 切换并删除**：parity/tick_bench/bins 改指 `world-bevy`；删 `crates/world`。
 
-### 3.4 组件 `Default` 与 `Entity::new` 的非零缺省差异（迁移防漂移）
+### 3.4 组件 `Default` 与 `EntitySpawn::new` 的非零缺省差异（迁移防漂移）
 
-P0 组件大多 `derive(Default)`，但 `Entity::new`（各 `BaseObject` ctor 等价物）有**非零 ctor 缺省**。
+P0 组件大多 `derive(Default)`，但 `EntitySpawn::new`（各 `BaseObject` ctor 等价物）有**非零 ctor 缺省**。
 **任何 S3+ 路径都不得用 `Component::default()` 直接造实体**，必须走统一 bundle 构造器（复刻
-`Entity::new` 的值），否则行为会静默漂移。逐项差异（评审 P2-5）：
+`EntitySpawn::new` 的值），否则行为会静默漂移。逐项差异（评审 P2-5）：
 
-| 组件 | 字段 | `Entity::new` 缺省 | 派生 `Default` |
+| 组件 | 字段 | `EntitySpawn::new` 缺省 | 派生 `Default` |
 | --- | --- | --- | --- |
 | `Transform` | `view_range` | 5 | 0 |
 | `Appearance` | `name_color` | 255 | 0 |
@@ -662,12 +662,12 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > `openmir2-frame-drain-order-audit` 起就在 `crates/world`，**不持有任何 `Entity` 字段**
 > （纯确定性事件/算法），S4b 只需登记为稳定词汇、无需字段迁移；帧编码仍在宿主 `bins/game-svr`。
 >
-> **S4a 评审 P3 处置**：① 注释计数过期——`Entity` 剩余字段数与 `Entity::new` 调用计数改为
+> **S4a 评审 P3 处置**：① 注释计数过期——`Entity` 剩余字段数与 `EntitySpawn::new` 调用计数改为
 > 「剩余 17 字段」与「约 700 处」（不再写死会腐烂的精确数）；② `write_back` 只断言 HP/MP/exp 的
 > 盲区——新增 `write_back_covers_all_migrated_components`，把 16 组件逐字段置非缺省后
 > `spawn_cloned → write_back → get` 逐组断言，漏写 attribution/pvp/recovery/drop/spawn/ability
 > 任一即红；③ `insert_parts`/`into_parts` 收窄为私有、`SpawnParts` 降为 `pub(crate)`
-> （唯一调用方是 `Entity::new → EntityStore::insert`）。
+> （唯一调用方是 `EntitySpawn::new → EntityStore::insert`）。
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——
 > `entity/tick/存储`=S1/S2；`DupState`+tick 段链=S3a；`map/aoi/space_move/session`=S3b；

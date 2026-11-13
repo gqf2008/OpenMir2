@@ -438,7 +438,7 @@ impl BuffSystem {
                     None => break,
                 };
                 if animal {
-                    if let Some(mut e) = world.entities.get_mut(actor_id) {
+                    if let Some(e) = world.entities.get_mut(actor_id) {
                         // C# `ushort -= 1000` 是 unchecked 回绕。
                         e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(1000);
                     }
@@ -563,14 +563,14 @@ pub fn get_char_status(world: &World, actor_id: i32) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::Entity;
+
     use crate::world::{World, TICK_INTERVAL_MS};
 
     fn world_with_players(ids: &[i32]) -> World {
         let mut w = World::new(32, 32);
         w.clock_ms = 100_000;
         for &id in ids {
-            let e = Entity::new(id, format!("p{id}"), 10, 10);
+            let e = crate::EntitySpawn::new(id, format!("p{id}"), 10, 10);
             w.add_entity(e);
         }
         w
@@ -660,7 +660,7 @@ mod tests {
         w.poison_dec_health_time = 2500;
         let base = w.clock_ms + BUFF_EPOCH_MS;
         {
-            let mut e = w.entities.get_mut(1).unwrap();
+            let e = w.entities.get_mut(1).unwrap();
             e.ai.animal = true;
             e.ai.meat_quality = 5000;
             e.vitals.hp = 100;
@@ -774,7 +774,7 @@ mod tests {
     fn monsters_buffs_never_tick_down() {
         let mut w = World::new(32, 32);
         w.clock_ms = 100_000;
-        let mut mon = Entity::new(7, "mon", 10, 10);
+        let mut mon = crate::EntitySpawn::new(7, "mon", 10, 10);
         mon.race = crate::entity::ACTOR_RACE_MONSTER;
         w.add_entity(mon);
         let now = w.clock_ms + BUFF_EPOCH_MS;
@@ -921,7 +921,7 @@ mod tests {
         let mut w = World::new(32, 32);
         w.clock_ms = 100_000;
         w.poison_dec_health_time = 2500;
-        w.add_entity(Entity::new(1, "p", 10, 10));
+        w.add_entity(crate::EntitySpawn::new(1, "p", 10, 10));
         w.make_posion(1, BuffType::GreenPoison as u8, 30, 3);
         let now = w.clock_ms + BUFF_EPOCH_MS;
         assert_eq!(
@@ -976,7 +976,7 @@ mod tests {
         let base = w.clock_ms + BUFF_EPOCH_MS;
         w.entities.get_mut(1).unwrap().life_cycle.ghost = true;
         for id in [1, 2] {
-            let mut e = w.entities.get_mut(id).unwrap();
+            let e = w.entities.get_mut(id).unwrap();
             e.ai.animal = true;
             e.vitals.hp = 100;
             e.vitals.mp = 0;

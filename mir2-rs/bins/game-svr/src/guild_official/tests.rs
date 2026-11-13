@@ -140,7 +140,7 @@ impl Fixture {
     }
 
     fn add_player(&mut self, name: &str, actor_id: i32, x: i32, y: i32, socket: i32) {
-        let mut e = mir2_world::Entity::new(actor_id, name, x, y);
+        let mut e = mir2_world::EntitySpawn::new(actor_id, name, x, y);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         self.world.add_entity(e);
         let sg = crate::tests::test_session_ground(actor_id);

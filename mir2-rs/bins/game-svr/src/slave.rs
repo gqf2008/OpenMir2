@@ -446,7 +446,7 @@ pub fn cast_tamming_spell(
         world.rng = rng;
         // `targetObject.TargetCret = null;`（`:708`，进入外层支即无条件清）。
         if out.target_creature_cleared {
-            if let Some(mut t) = world.entities.get_mut(target_id) {
+            if let Some(t) = world.entities.get_mut(target_id) {
                 t.ai.target_creature = None;
             }
         }
@@ -610,7 +610,7 @@ mod tests {
     fn cast_world() -> (World, i32) {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::Entity::new(0, "主人".to_string(), 10, 10);
+            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 10, 10);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)
@@ -716,13 +716,13 @@ mod tests {
     ) -> (World, i32, i32) {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::Entity::new(0, "主人".to_string(), 10, 10);
+            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 10, 10);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)
         };
         let target = {
-            let mut e = mir2_world::Entity::new(0, "怪".to_string(), 11, 10);
+            let mut e = mir2_world::EntitySpawn::new(0, "怪".to_string(), 11, 10);
             e.race = target_race;
             e.level = target_level;
             e.hp = target_hp;
@@ -841,12 +841,17 @@ mod tests {
             let (mut w, caster, target) =
                 tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
             {
-                let mut t = w.entities.get_mut(target).unwrap();
-                t.master = Some(caster);
-                t.is_slave = true;
+                let t = w.entities.get_mut(target).unwrap();
+                t.slave.master = Some(caster);
+                t.slave.is_slave = true;
                 t.ai.target_creature = Some(999);
             }
-            w.entities.get_mut(caster).unwrap().slave_list.push(target);
+            w.entities
+                .get_mut(caster)
+                .unwrap()
+                .slave
+                .slave_list
+                .push(target);
             let mut train = tamming_train();
             let input = tamming_cast(caster, Some(target), &cfg, &magic);
             let out = cast_tamming_spell(&mut w, &input, &mut train);
@@ -858,7 +863,7 @@ mod tests {
                 assert_eq!(t.hp, 30, "早退支不改 HP（不 /10）");
                 assert_eq!(
                     w.entities.get(caster).unwrap().slave_list,
-                    vec![target],
+                    &vec![target],
                     "不重复入表"
                 );
                 break;
@@ -910,7 +915,7 @@ mod tests {
             let (mut w, caster, target) =
                 tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
             {
-                let mut t = w.entities.get_mut(target).unwrap();
+                let t = w.entities.get_mut(target).unwrap();
                 t.ai.crazy_mode = true;
                 t.ai.crazy_mode_tick = 1_000;
                 t.ai.crazy_mode_interval = 10_000;
@@ -935,7 +940,7 @@ mod tests {
     fn cast_clone_spawns_and_runs_train_tail() {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::Entity::new(0, "主人".to_string(), 5, 5);
+            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 5, 5);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)

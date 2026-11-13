@@ -9,8 +9,8 @@
 //! - `src/OpenMir2/Grobal2.cs:35`（`GroupMax = 11`）、`PlayObject.Base.cs:766`（`bonus[12]`）。
 
 use mir2_world::{
-    is_attack_target_player_grouped, Entity, PartyConfig, World, ACTOR_RACE_MONSTER,
-    ACTOR_RACE_PLAY, ATTACK_MODE_HAM_GROUP,
+    is_attack_target_player_grouped, PartyConfig, World, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    ATTACK_MODE_HAM_GROUP,
 };
 
 /// 3 名玩家 L/A/B 结成一组（L 团长）；`need_exps` 抬高避免升级，只看单次经验分配。
@@ -19,9 +19,9 @@ fn setup_group() -> (World, i32, i32, i32) {
     for v in w.need_exps.iter_mut() {
         *v = 1_000_000;
     }
-    let l = w.add_entity(Entity::new(1, "L", 10, 10));
-    let a = w.add_entity(Entity::new(2, "A", 11, 10));
-    let b = w.add_entity(Entity::new(3, "B", 12, 10));
+    let l = w.add_entity(mir2_world::EntitySpawn::new(1, "L", 10, 10));
+    let a = w.add_entity(mir2_world::EntitySpawn::new(2, "A", 11, 10));
+    let b = w.add_entity(mir2_world::EntitySpawn::new(3, "B", 12, 10));
     for id in [a, b] {
         w.entities.get_mut(id).unwrap().group.allow_group = true;
     }
@@ -35,7 +35,7 @@ fn setup_group() -> (World, i32, i32, i32) {
 /// （= `GainExp` 里**获得者本人**本次获得的经验）。
 fn kill_monster(w: &mut World, hitter: i32, mon_exp: i32) -> i32 {
     let mon = {
-        let mut e = Entity::new(0, "chicken", 10, 9);
+        let mut e = mir2_world::EntitySpawn::new(0, "chicken", 10, 9);
         e.race = ACTOR_RACE_MONSTER;
         e.mon_exp = mon_exp;
         e.exp_hitter = Some(hitter);
@@ -134,7 +134,7 @@ fn single_member_group_gets_plain_exp() {
     for v in w.need_exps.iter_mut() {
         *v = 1_000_000;
     }
-    let l = w.add_entity(Entity::new(1, "L", 10, 10));
+    let l = w.add_entity(mir2_world::EntitySpawn::new(1, "L", 10, 10));
     // 手造「只有自己」的组态（等价于 oracle `GroupMembers.Count == 1`）。
     {
         let e = w.entities.get_mut(l).unwrap();
@@ -151,7 +151,7 @@ fn single_member_group_gets_plain_exp() {
 fn group_exp_awards_list_members_in_order() {
     let (mut w, l, a, b) = setup_group();
     let mon = {
-        let mut e = Entity::new(0, "chicken", 10, 9);
+        let mut e = mir2_world::EntitySpawn::new(0, "chicken", 10, 9);
         e.race = ACTOR_RACE_MONSTER;
         e.mon_exp = 600;
         e.exp_hitter = Some(l);
@@ -167,10 +167,10 @@ fn group_exp_awards_list_members_in_order() {
 /// 非成员 / 无组 / 非 Play 目标不受影响。
 #[test]
 fn ham_group_filter_matches_oracle() {
-    let mut a = Entity::new(1, "A", 10, 10);
+    let mut a = mir2_world::EntitySpawn::new(1, "A", 10, 10);
     a.attack_mode = ATTACK_MODE_HAM_GROUP;
     a.group_owner = 1; // A 自己是团长
-    let t = Entity::new(2, "B", 11, 10);
+    let t = mir2_world::EntitySpawn::new(2, "B", 11, 10);
     assert!(
         !is_attack_target_player_grouped(&a, &t, &[1, 2]),
         "同组玩家 ⇒ IsGroupMember 剔除"
@@ -181,12 +181,12 @@ fn ham_group_filter_matches_oracle() {
     );
 
     // `GroupOwner == 0` ⇒ `IsGroupMember` 第一步即 false ⇒ 成员表不生效。
-    let mut solo = Entity::new(3, "C", 10, 10);
+    let mut solo = mir2_world::EntitySpawn::new(3, "C", 10, 10);
     solo.attack_mode = ATTACK_MODE_HAM_GROUP;
     assert!(is_attack_target_player_grouped(&solo, &t, &[1, 2]));
 
     // 非 Play 目标：Race 门先置 true，`target.Race == ActorRace.Play` 为假 ⇒ 不剔除。
-    let mut mon = Entity::new(4, "m", 11, 10);
+    let mut mon = mir2_world::EntitySpawn::new(4, "m", 11, 10);
     mon.race = ACTOR_RACE_MONSTER;
     assert!(is_attack_target_player_grouped(&a, &mon, &[1, 2]));
     assert_eq!(t.race, ACTOR_RACE_PLAY);
@@ -200,12 +200,12 @@ fn ham_group_filter_matches_oracle() {
 fn world_attack_excludes_group_mate() {
     let mut w = World::new(32, 32);
     let a = w.add_entity({
-        let mut e = Entity::new(1, "A", 10, 10);
+        let mut e = mir2_world::EntitySpawn::new(1, "A", 10, 10);
         e.attack_mode = ATTACK_MODE_HAM_GROUP;
         e.dc = 0x0A14; // LoByte=20：若剔除失效，护甲 0 的 B 必掉血
         e
     });
-    let b = w.add_entity(Entity::new(2, "B", 11, 10));
+    let b = w.add_entity(mir2_world::EntitySpawn::new(2, "B", 11, 10));
     {
         let ea = w.entities.get_mut(a).unwrap();
         ea.group.group_owner = a;
@@ -239,7 +239,7 @@ fn group_owner_missing_matches_oracle_npe() {
 
     // 正面控制：团长在场 ⇒ 正常组队分配，顺序 = 成员表序。
     let mon = {
-        let mut e = Entity::new(0, "chicken", 10, 9);
+        let mut e = mir2_world::EntitySpawn::new(0, "chicken", 10, 9);
         e.race = ACTOR_RACE_MONSTER;
         e.mon_exp = 600;
         e.exp_hitter = Some(l);
@@ -259,7 +259,7 @@ fn group_owner_missing_matches_oracle_npe() {
     // 团长离场：从注册表移除，**不清** a 的 group_owner（悬空态）。
     w.entities.remove(l).expect("团长实体应存在");
     let mon = {
-        let mut e = Entity::new(0, "chicken", 10, 9);
+        let mut e = mir2_world::EntitySpawn::new(0, "chicken", 10, 9);
         e.race = ACTOR_RACE_MONSTER;
         e.mon_exp = 600;
         e.exp_hitter = Some(a);
@@ -331,7 +331,7 @@ fn attacker_group_members_reads_leader_table_and_empty_when_solo() {
         vec![l, a, b]
     );
     // 未组队：GroupOwner == 0 ⇒ 空表（`IsGroupMember` 第一步即 false）。
-    let solo = w.add_entity(Entity::new(0, "solo", 5, 5));
+    let solo = w.add_entity(mir2_world::EntitySpawn::new(0, "solo", 5, 5));
     assert!(w
         .attacker_group_members(&w.entities.get(solo).unwrap())
         .is_empty());

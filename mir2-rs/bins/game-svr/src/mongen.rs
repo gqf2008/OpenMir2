@@ -792,7 +792,7 @@ impl MonsterSink for WorldMonsterSink<'_> {
         // 类由 `MonsterInfo.Race` 决定，与怪名无关）。本写入不消费随机数，也不改 AI 行为；
         // 逐 race 的 oracle 出处见 `apply_monster_class_constants` 的文档。
         let now = self.world.clock_ms;
-        if let Some(mut e) = self.world.entities.get_mut(id) {
+        if let Some(e) = self.world.entities.get_mut(id) {
             // oracle `ApplyMonsterAbility`（`WorldServer.MonGen.cs:906/909`）：
             // `WalkSpeed = monster.WalkSpeed`、`NextHitTime = monster.AttackSpeed`。
             // 时机也必须一致：`ApplyMonsterAbility`（`:735`）**先行**，`cert.Initialize()`
@@ -1923,10 +1923,10 @@ mod tests {
     /// 已在 cert_list 里的旧成员（如 GuardList 放置，oracle `RegenMonsterByName` 不置位）保持不动。
     #[test]
     fn bind_new_certificates_only_marks_appended_ids() {
-        use mir2_world::{Entity, MonGenEntry, MonGenState, MonGenThread};
+        use mir2_world::{MonGenEntry, MonGenState, MonGenThread};
         let mut world = mir2_world::World::new(64, 64);
-        let old = world.add_entity(Entity::new(0, "旧", 5, 5));
-        let new_id = world.add_entity(Entity::new(0, "新", 6, 6));
+        let old = world.add_entity(mir2_world::EntitySpawn::new(0, "旧", 5, 5));
+        let new_id = world.add_entity(mir2_world::EntitySpawn::new(0, "新", 6, 6));
 
         let mut state = MonGenState::default();
         let mut entry = MonGenEntry::new("0", 5, 5, "鸡", 0, 1, 60_000, 0);
@@ -2077,7 +2077,7 @@ mod tests {
         .spawn_monster(&lane_a_req("鸡"))
         .expect("生成成功");
         {
-            let mut e = world.entities.get_mut(id).expect("怪物在仓库");
+            let e = world.entities.get_mut(id).expect("怪物在仓库");
             e.ai.walk_step = 1;
             e.ai.walk_wait = 600;
             e.ai.walk_speed = 200;

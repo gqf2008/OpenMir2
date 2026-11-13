@@ -191,11 +191,7 @@ pub fn insert_hidden_qfunction(
 /// 门里按该配置删过期在途升级（部署 3 天；`GameSvrConf.cs:1423` 缺省 8）。
 pub fn set_upgrade_clear_days(world: &mut mir2_world::World, days: u8) {
     for id in world.merchant_ids_sorted() {
-        if let Some(st) = world
-            .entities
-            .entity_mut(id)
-            .and_then(|e| e.merchant.as_mut())
-        {
+        if let Some(st) = world.entities.merchant_mut(id) {
             st.clear_expire_upgrade_days = days;
         }
     }
@@ -339,12 +335,12 @@ pub fn spawn_merchants_with_scripts(
                 // 字段口径同固定 NPC（`Merchant : NormNpc`：Light=2、RaceImg=50）——
                 // `Appr` 在商人侧存于 `MerchantState.appr`（`BaseObject.Appr` 的镜像），
                 // 不在 `Entity.appr`。
-                if let Some(mut e) = world.entities.get_mut(id) {
+                if let Some(e) = world.entities.get_mut(id) {
                     // **T-154 Minor-2**：oracle `BaseObject()` ctor `Dir = 4`（`BaseObject.cs:378`），
                     // `Merchant()` ctor 不覆写 ⇒ 首个 `TurnTo` 之前 `Dir` 恒 4。
-                    // `Entity::new` 的 `ai.dir` 缺省 0 ⇒ 宿主补齐后再投影进展示表。
+                    // `EntitySpawn::new` 的 `ai.dir` 缺省 0 ⇒ 宿主补齐后再投影进展示表。
                     e.ai.dir = crate::downlink::NPC_INITIAL_DIR;
-                    let appr = e.merchant.as_ref().map_or(0, |m| m.appr);
+                    let appr = e.merchant_state.merchant.as_ref().map_or(0, |m| m.appr);
                     displays.set(
                         id,
                         npc_display(e.ai.dir, e.appearance.race_img, appr, &name),
@@ -516,7 +512,7 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
             "spawn_merchants 包装必须把登记透传到调用方的展示表"
         );
         for id in world.merchant_ids_sorted() {
-            let e = world.entities.entity(id).expect("实体在");
+            let e = world.entities.get(id).expect("实体在");
             assert_eq!(
                 displays.get(id).map(|d| d.dir),
                 Some(crate::downlink::NPC_INITIAL_DIR),
@@ -886,11 +882,7 @@ C
             expected.random_below(10_000),
             "建实体不得重抽构造链的 4 个数（否则共享 RNG 流错位 4）"
         );
-        let st = world
-            .entities
-            .entity(id)
-            .and_then(|e| e.merchant.as_ref())
-            .expect("实体有商人态");
+        let st = world.entities.merchant(id).expect("实体有商人态");
         assert_eq!(st.run_tick, 1234, "run_tick = 调用方给的账本值");
     }
 

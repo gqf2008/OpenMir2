@@ -3,7 +3,7 @@
 //! 放在 `tests/`（不在 `src/`）是有意的：`src/tests/no_parallel.rs` 的源码扫描会禁
 //! `std::thread::spawn`，而「把 world 挪到别的线程上跑必须 panic」这条反证**需要**开线程。
 
-use mir2_world::{Entity, World};
+use mir2_world::World;
 
 /// 判据③：tick 必须在同一线程上串行——把 world 挪到别的线程上跑必须 panic。
 #[test]
@@ -29,10 +29,10 @@ fn tick_refuses_to_run_on_another_thread() {
 fn entity_order_follows_slots_not_query_order() {
     let mut store = mir2_world::EntityStore::new();
     for id in [1, 2, 3] {
-        store.insert(Entity::new(id, format!("e{id}"), 0, 0));
+        store.insert(mir2_world::EntitySpawn::new(id, format!("e{id}"), 0, 0));
     }
     store.remove(1);
-    store.insert(Entity::new(4, "e4", 0, 0));
+    store.insert(mir2_world::EntitySpawn::new(4, "e4", 0, 0));
 
     assert_eq!(
         store.order_index(),
@@ -50,13 +50,13 @@ fn entity_order_follows_slots_not_query_order() {
 #[test]
 fn tick_aoi_order_follows_slot_index_after_slot_reuse() {
     let mut w = World::new(16, 16);
-    let a = w.add_entity(Entity::new(1, "a", 1, 1));
-    w.add_entity(Entity::new(2, "b", 2, 1));
-    w.add_entity(Entity::new(3, "c", 3, 1));
+    let a = w.add_entity(mir2_world::EntitySpawn::new(1, "a", 1, 1));
+    w.add_entity(mir2_world::EntitySpawn::new(2, "b", 2, 1));
+    w.add_entity(mir2_world::EntitySpawn::new(3, "c", 3, 1));
     w.tick(); // a/b/c 入图
     w.leave(a);
     w.tick(); // a 离开世界 ⇒ 槽位 0 释放
-    let d = w.add_entity(Entity::new(4, "d", 4, 1)); // 复用槽位 0
+    let d = w.add_entity(mir2_world::EntitySpawn::new(4, "d", 4, 1)); // 复用槽位 0
     assert_eq!(d, 4);
     let rec = w.tick();
     assert_eq!(
@@ -71,13 +71,13 @@ fn tick_aoi_order_follows_slot_index_after_slot_reuse() {
 #[test]
 fn tick_order_skeleton_collects_slot_order() {
     let mut w = World::new(16, 16);
-    let a = w.add_entity(Entity::new(1, "a", 1, 1));
-    w.add_entity(Entity::new(2, "b", 2, 1));
-    w.add_entity(Entity::new(3, "c", 3, 1));
+    let a = w.add_entity(mir2_world::EntitySpawn::new(1, "a", 1, 1));
+    w.add_entity(mir2_world::EntitySpawn::new(2, "b", 2, 1));
+    w.add_entity(mir2_world::EntitySpawn::new(3, "c", 3, 1));
     w.tick(); // 1/2/3 入图
     w.leave(a);
     w.tick(); // 1 离开世界 ⇒ 槽位 0 释放
-    w.add_entity(Entity::new(4, "d", 4, 1)); // 复用槽位 0
+    w.add_entity(mir2_world::EntitySpawn::new(4, "d", 4, 1)); // 复用槽位 0
     w.tick(); // 4 入图
 
     w.entities.sync_slot_order();
