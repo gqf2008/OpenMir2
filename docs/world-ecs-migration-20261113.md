@@ -820,7 +820,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > P0+P1 = **4**（Clock / SimHiterSnapshot / OutputDrain / OutputAoi）、
 > P2 = **8**（head 6 = Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
 > SimPlayerRunExpiry / OutputDrain；tail 2 = TailSuperManRefill / OutputAoi）、
-> **P2b 交付 head = 9**（+`SimMapEvents` ⇒ head 7 + tail 2）。
+> **P2b = 9**（+`SimMapEvents` ⇒ head 7 + tail 2）、**P3a = 10**（+`SimDup` ⇒ head 8 + tail 2）。
 > Clock 也走 `run_head_stage`，因此**不是**设计初稿写的「3 → 2」。设计 §2.5 的目标仍是
 > **P7 收口时 2 个**（head 一个、tail 一个，其余段全部系统化后 head 只跑一次）。
 > 本节与设计 §2.5 均按真实数字表述；`world.rs` 里指向 `snapshot_runner` 的陈旧注释、
@@ -914,6 +914,23 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **段数口径（P2+P2b）**：余 18 段已迁 **5 段**（SimExpireHitters #3、SimExtraAbil #6、
 > SimMapEvents #7、SimPlayerRunExpiry #13、TailSuperManRefill #16）；tick 段序牙
 > `tick_stage_registrations_are_wired_in_order` 已含 `SimMapEvents`。
+
+> **S4d-3/P3a 落地登记（2026-11-13，第四批；裁决 B：SimDup 先做）**：`SimDup`（#14）已迁成
+> 段系统（`sim_dup_stage_system`），段位 = `tick_head` 原 `record.pushes.extend(self.check_dup_obj())`
+> 那一行；`World::check_dup_obj` 保留为兼容入口（驱动该段并取 `StageOut::pushes`）。
+> **实现形状**：按 2026-11-13 裁决，段内 `remove_resource::<SimState>()` 取走 owned `SimState`，
+> 与 `StageEntities` 并行使用，段尾归还（设计 §3.4 的 `StageWorld` 不再实现，偏差 Dv5）。
+> **共用函数不动**：`char_pushed_now` 与 `Command::Push` / slave 自投递共用，**签名保持不变**
+> （coordinator 裁决：P5 Command 迁移时统一）；逐格推进/RNG 邻接判定抽成
+> `char_pushed_core` / `check_dup_obj_core` / `can_walk_cell_core`，facade 与段访问器
+> （`StageDupAccess`，实现 `crate::entity::DupAccess`）走**同一份**实现，不复制。
+> `monai::count_at_cell` 拆出 `count_at_cell_with(maps, …, is_blocking)`（只读辅助，语义逐行相同）。
+> **RNG 对拍（改动前后同一夹具）**：3 名玩家同格 (5,5)，clock=10_000 第一趟置位（零推挤），
+> clock=13_001 第二趟 ⇒ 仅槽位首名过门、抽 `RandomByte(8)` 恰一次：推挤序列
+> `[(1, dir=1, 4, 6)]`、RNG 后继 5 值 `[1,1,4,1,2]`、`dup_states=[(13001,true,10000);3]`；
+> 改动前（base `f823bf8ca` 内联实现）与改动后逐项相同（用例
+> `world::tests::sim_dup_stage_matches_recorded_vectors`）。
+> **段数口径（P2+P2b+P3a）**：余 18 段已迁 **6 段**（#3/#6/#7/#13/#16 + #14）。
 
 > **尚未做（以 P2b 交付 head 为准，取代旧的「余 14 段迁移」表述）**：P3–P7（余 **13** 段——
 > 18 段中 P2+P2b 已迁 5 段）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
