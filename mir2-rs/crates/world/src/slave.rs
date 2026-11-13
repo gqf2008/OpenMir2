@@ -627,6 +627,92 @@ pub(crate) fn send_master_die_mutiny_impl<A: crate::entity::EntityAccess>(
     );
 }
 
+/// **P5-A1**：7 参 `SendStruckDelayMsg` 的 facade/段共用实现（`!Ghost` 门 + 四叉堆入队）。
+///
+/// 与旧 `World::send_struck_delay_msg_7` 逐句相同：`Ghost` 门取实体快照；`deliver_at` =
+/// `clock_ms + delay`；`enqueue_seq` = 当前 `msg_order` 并后自增；优先级 `Lowest`。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn send_struck_delay_msg_7_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &mut crate::world::SimState,
+    receiver_id: i32,
+    ident: u16,
+    w_param: i32,
+    n_param1: i32,
+    n_param2: i32,
+    n_param3: i32,
+    delay_ms: i64,
+) {
+    // `BaseObject.Message.cs:213` `if (!Ghost)`。
+    let blocked = match access.get(receiver_id) {
+        None => true,
+        Some(e) => e.ghost,
+    };
+    if blocked {
+        return;
+    }
+    let deliver_at_ms = sim.clock_ms + delay_ms;
+    let enqueue_seq = next_msg_order_impl(sim);
+    sim.self_delay_msgs.push(SelfDelayMsg {
+        actor_id: receiver_id,
+        ident,
+        w_param,
+        n_param1,
+        n_param2,
+        n_param3,
+        msg: String::new(),
+        // `:225` `sendMessage.ActorId = Messages.RM_STRUCK`。
+        actor_ref: i32::from(RM_STRUCK),
+        deliver_at_ms,
+        enqueue_seq,
+        // `:228` `MessagePriority.Lowest`。
+        priority: MESSAGE_PRIORITY_LOWEST,
+    });
+}
+
+/// **P5-A1**：7 参 `RM_REFMESSAGE` 特化的 facade/段共用实现（逐句与旧实现相同）。
+pub(crate) fn send_struck_delay_msg_refmessage_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &mut crate::world::SimState,
+    receiver_id: i32,
+    hitter_id: i32,
+    damage: i32,
+    delay_ms: i64,
+) {
+    // 卡开关：合成 golden 的 `_Attack` 桩不含该延时消息（见
+    // [`crate::world::World::refmessage_delay_enabled`]），缺省关闭以保持既有 golden
+    // 逐字节不变；生产宿主显式开启。
+    if !sim.refmessage_delay_enabled {
+        return;
+    }
+    let Some(t) = access.get(receiver_id) else {
+        return;
+    };
+    if t.ghost {
+        return;
+    }
+    let hp = i32::from(t.hp);
+    let max_hp = i32::from(t.max_hp);
+    send_struck_delay_msg_7_impl(
+        access,
+        sim,
+        receiver_id,
+        RM_REFMESSAGE,
+        damage,
+        hp,
+        max_hp,
+        hitter_id,
+        delay_ms,
+    );
+}
+
+/// **P5-A1**：消息创建序分配（[`SelfDelayMsg::enqueue_seq`]）的 facade/段共用实现。
+pub(crate) fn next_msg_order_impl(sim: &mut crate::world::SimState) -> u64 {
+    let order = sim.msg_order;
+    sim.msg_order += 1;
+    order
+}
+
 impl World {
     /// `BaseObject.SlaveList.Count`（`BaseObject.cs:141`）——懒建列表的空表 = 0。
     #[must_use]
@@ -1589,31 +1675,17 @@ impl World {
         n_param3: i32,
         delay_ms: i64,
     ) {
-        // `BaseObject.Message.cs:213` `if (!Ghost)`。
-        let blocked = match self.entities.get(receiver_id) {
-            None => true,
-            Some(e) => e.ghost,
-        };
-        if blocked {
-            return;
-        }
-        let deliver_at_ms = self.clock_ms + delay_ms;
-        let enqueue_seq = self.next_msg_order();
-        self.self_delay_msgs.push(SelfDelayMsg {
-            actor_id: receiver_id,
+        send_struck_delay_msg_7_impl(
+            &self.entities,
+            &mut self.sim,
+            receiver_id,
             ident,
             w_param,
             n_param1,
             n_param2,
             n_param3,
-            msg: String::new(),
-            // `:225` `sendMessage.ActorId = Messages.RM_STRUCK`。
-            actor_ref: i32::from(RM_STRUCK),
-            deliver_at_ms,
-            enqueue_seq,
-            // `:228` `MessagePriority.Lowest`。
-            priority: MESSAGE_PRIORITY_LOWEST,
-        });
+            delay_ms,
+        );
     }
 
     /// 7 参 `SendStruckDelayMsg(RM_REFMESSAGE, nPower, target.WAbil.HP,
@@ -1642,27 +1714,12 @@ impl World {
         damage: i32,
         delay_ms: i64,
     ) {
-        // 卡开关：合成 golden 的 `_Attack` 桩不含该延时消息（见
-        // [`crate::world::World::refmessage_delay_enabled`]），缺省关闭以保持既有 golden
-        // 逐字节不变；生产宿主显式开启。
-        if !self.refmessage_delay_enabled() {
-            return;
-        }
-        let Some(t) = self.entities.get(receiver_id) else {
-            return;
-        };
-        if t.ghost {
-            return;
-        }
-        let hp = i32::from(t.hp);
-        let max_hp = i32::from(t.max_hp);
-        self.send_struck_delay_msg_7(
+        send_struck_delay_msg_refmessage_impl(
+            &self.entities,
+            &mut self.sim,
             receiver_id,
-            RM_REFMESSAGE,
-            damage,
-            hp,
-            max_hp,
             hitter_id,
+            damage,
             delay_ms,
         );
     }
@@ -1758,9 +1815,7 @@ impl World {
 
     /// 分配一个消息创建序（[`SelfDelayMsg::enqueue_seq`] / [`crate::world::PendingMagStruck::order`]）。
     fn next_msg_order(&mut self) -> u64 {
-        let order = self.msg_order;
-        self.msg_order += 1;
-        order
+        next_msg_order_impl(&mut self.sim)
     }
 
     /// [`World::deliver_self_delay_msgs_with`] 的无 `spawner` 版本（`RM_ZEN_BEE` 只入

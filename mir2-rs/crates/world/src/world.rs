@@ -1084,7 +1084,11 @@ pub struct SimState {
     /// 不含 `SendStruckDelayMsg`）⇒ 默认开启会把 200ms 后的 `Struck` 抽数插进既有
     /// golden 的 RNG 序列，破坏 `diff = 0`。生产宿主 `bins/game-svr` 在起世界时
     /// [`World::enable_refmessage_delay`] 打开（与 `enable_monster_ai` 同口径）。
-    refmessage_delay_enabled: bool,
+    ///
+    /// **P5-A1**：`pub(crate)` —— `crate::slave` 的段共用实现
+    /// （`send_struck_delay_msg_refmessage_impl`）在 `&SimState` 上读该开关（getter 挂在
+    /// `impl World` 上，段路径拿不到 `World`）。
+    pub(crate) refmessage_delay_enabled: bool,
     /// **P3-B2**：待处理的 `RM_MAGSTRUCK`（目标自有队列的插入序等价物）。
     ///
     /// 由效果体（23/24/33/47）入队，宿主调 `World::deliver_mag_struck` 逐目标处理
@@ -2798,7 +2802,22 @@ impl World {
     /// `GetBuffStatus(this) | (CharStatusEx & 0x0000FFFF)`。见 [`crate::buff::get_char_status`]。
     #[must_use]
     pub fn get_char_status(&self, actor_id: i32) -> i32 {
-        crate::buff::get_char_status(self, actor_id)
+        Self::get_char_status_impl(&self.entities, &self.sim, actor_id)
+    }
+
+    /// **P5-A1**：`get_char_status` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+    ///
+    /// 与 [`crate::buff::get_char_status`] 逐句相同（实体侧只读 `CharStatusEx`，buff 位来自
+    /// `BuffSystem`）；后者保留为 `&World` 形态的公开入口（`buff.rs` 自有调用点），本函数是
+    /// 段路径与 `make_posion_impl` 的唯一实现点。
+    #[must_use]
+    pub(crate) fn get_char_status_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        actor_id: i32,
+    ) -> i32 {
+        let ex = access.get(actor_id).map_or(0, |e| e.char_status_ex);
+        sim.buffs.char_status_with(actor_id, ex)
     }
 
     /// `BaseObject.MakePosion`（`BaseObject.cs:1941-1968`）：加毒 buff + 写 `CharStatus`/
@@ -2833,17 +2852,40 @@ impl World {
     /// 前置：`actor_id` 须是已落图的实体（oracle 里 `this` 恒有效）；`nType` 的 `from_index` 在
     /// `n_type < MAX_STATUS_ATTRIBUTE` 后恒 `Some`（12 值全覆盖）。
     pub fn make_posion(&mut self, actor_id: i32, n_type: u8, n_time: i32, n_point: i32) -> bool {
+        Self::make_posion_impl(
+            &mut self.entities,
+            &mut self.sim,
+            actor_id,
+            n_type,
+            n_time,
+            n_point,
+        )
+    }
+
+    /// **P5-A1**：`make_posion` 的 facade/段共用实现（逐句与旧实现相同）。
+    ///
+    /// 读：`buff_now()`（= `clock_ms + BUFF_EPOCH_MS`）、`buffs.char_status_with` + 实体的
+    /// `char_status_ex`（经 [`World::get_char_status_impl`]）。写：buff 表 + 实体的
+    /// `buff.char_status` / `buff.green_poisoning_point` 两处回写。
+    pub(crate) fn make_posion_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        n_type: u8,
+        n_time: i32,
+        n_point: i32,
+    ) -> bool {
         if n_type >= MAX_STATUS_ATTRIBUTE {
             return false;
         }
         let Some(buff_type) = BuffType::from_index(n_type) else {
             return false;
         };
-        let now = self.buff_now();
-        self.buffs
+        let now = sim.clock_ms + BUFF_EPOCH_MS;
+        sim.buffs
             .add_buff(actor_id, buff_type, n_time, n_point, now);
-        let status = self.get_char_status(actor_id);
-        if let Some(e) = self.entities.get_mut(actor_id) {
+        let status = Self::get_char_status_impl(access, sim, actor_id);
+        if let Some(e) = access.get_mut(actor_id) {
             e.buff.char_status = status;
             e.buff.green_poisoning_point = n_point as u8;
         }
@@ -3099,13 +3141,25 @@ impl World {
         &self,
         weapon: &mut crate::entity::UseItemSlot,
     ) -> Option<WeaponUpgradeOutcome> {
+        Self::check_weapon_upgrade_status_impl(self.upgrade_weapon_max_point, weapon)
+    }
+
+    /// **P5-A1**：`CheckWeaponUpgradeStatus` 的 facade/段共用实现。
+    ///
+    /// 只读配置值 `UpgradeWeaponMaxPoint`（`Config`，不读任何实体）⇒ 把配置值作为入参，
+    /// 段路径（`EntityAccess` + `SimState`）与 facade 传同一个值，取数/写回逐句相同。
+    #[must_use]
+    pub(crate) fn check_weapon_upgrade_status_impl(
+        upgrade_weapon_max_point: i32,
+        weapon: &mut crate::entity::UseItemSlot,
+    ) -> Option<WeaponUpgradeOutcome> {
         if weapon.index == 0 || weapon.desc[ITEM_ATTR_WEAPON_UPGRADE] == 0 {
             return None;
         }
         let upgrade = weapon.desc[ITEM_ATTR_WEAPON_UPGRADE];
         let status =
             i32::from(weapon.desc[0]) + i32::from(weapon.desc[1]) + i32::from(weapon.desc[2]);
-        if status < self.upgrade_weapon_max_point {
+        if status < upgrade_weapon_max_point {
             if upgrade == 1 {
                 weapon.index = 0;
             }
@@ -6047,10 +6101,15 @@ impl World {
     /// 全部下取：`atk_power_a/b`、`hit_gate`、`hit_struck_damage`、`struck_durability`、
     /// `attack_success`）路由到专用流；其余消费者仍走全局 `rng`。
     fn attack_rng(&mut self) -> &mut RandomNumber {
-        if self.isolate_attack {
-            &mut self.rng_attack
+        Self::attack_rng_of(&mut self.sim)
+    }
+
+    /// **P5-A1**：`attack_rng` 的 facade/段共用实现（同一份实现，无第二套分流逻辑）。
+    pub(crate) fn attack_rng_of(sim: &mut SimState) -> &mut RandomNumber {
+        if sim.isolate_attack {
+            &mut sim.rng_attack
         } else {
-            &mut self.rng
+            &mut sim.rng
         }
     }
 
@@ -8237,11 +8296,19 @@ impl World {
     /// （多抽、白扣护身符、638/642 而非恰 1 条 639）。
     #[must_use]
     pub fn attacker_group_members(&self, attacker: &impl PvpView) -> Vec<i32> {
+        Self::attacker_group_members_impl(&self.entities, attacker)
+    }
+
+    /// **P5-A1**：`attacker_group_members` 的 facade/段共用实现（单一实现，无第二套接口）。
+    pub(crate) fn attacker_group_members_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        attacker: &impl PvpView,
+    ) -> Vec<i32> {
         let group = attacker.group_state();
         if group.group_owner == 0 {
             return Vec::new();
         }
-        self.entities
+        access
             .get(group.group_owner)
             .map(|e| e.group_members.clone())
             .unwrap_or_default()
