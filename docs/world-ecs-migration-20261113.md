@@ -732,27 +732,46 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **C1 普查（实况 + 逐点分类；返工后按 reviewer-25 P3-1 重做，给出可复算口径）**
 >
 > 范围：`mir2-rs/crates/world/src/**` 的**生产代码**（每个文件截到**首个** `#[cfg(test)]`）。
-> 计数单位有三种，**结论用第三种**：
+> **口径写死在这里**（reviewer-25 P3-1R 要求可复算；本表即权威清单）：
+>
+> ```text
+> 12 个方法：
+>   get get_mut iter_ref for_each_mut spawn_cloned write_back insert remove
+>   order_index order_entities get_component get_component_mut
+> 20 对受控访问器（每项都含 _mut 变体）+ 1 个写入口：
+>   dup_state vitals ability progression flags life_cycle appearance monster_class
+>   player_run group revival buff ai slave inventory merchant npc_state transform
+>   map_binding recovery   以及 set_progression
+> ```
+>
+> 命中正则（`\s` 匹配换行，因此跨行链算**一次**）：
+> `\.entities\s*\.\s*(<上面 41 个名字，按 | 展开>)\s*\(`。
+> 复算三步：① 每文件截到首个 `#[cfg(test)]` 当整体；② raw = 全部命中，code = raw 减去
+> 「命中起点所在行 strip 后以 `//` 开头」的命中；③ 分类**沿调用链**（不是整条语句）：
+> 链上遇到 `.expect(`/`.unwrap(` ⇒ C，遇到 `unwrap_or*`/`map_or*` ⇒ B，
+> 方法是 `insert`/`remove`/`write_back`/`order_*`/`for_each_mut`/`set_progression` ⇒ D，
+> 其余（`?` / `if let` / `match` / `map` / `filter` / `is_some_and` / 忽略返回值）⇒ A。
+> 独立复算脚本：`E:/UserTemp/c1_scan.py`（算法与该三步逐行对应；未入仓，避免新增工具门登记）。
+>
+> **口径声明（reviewer-25 P3-1R 的 pvp_state 差异）**：`pvp_state` / `pvp_state_mut`
+> （生产 3 处：`world.rs` 2241/2647/2653，均 A 类跳过）**不在上表清单内**；若纳入则为
+> 943 code / 944 raw（A 811），其余分类不变。本表沿用 P0 §3.2 的受控访问器清单（S4a 之前
+> 的 20 对 + recovery），并在文档里显式披露这 3 处差值——结论（C 类 9 处、无需改行为的结论）
+> 不受影响。
+>
+> 计数单位与差异（同一份清单，三种数法）：
 >
 > | 口径 | 计数 | 说明 |
 > | --- | --- | --- |
-> | 逐行（跳过注释行，**每行只算一次**） | 727 | 本批初版登记的数（**已作废**：一行两个调用只算一次，漏掉行内第二次命中） |
-> | 同一批行内按**出现次数** | 730 | 727 的行里，有 3 行各含 2 次调用 ⇒ 730 |
-> | reviewer-25 逐行口径（含 1 条 doc 注释行，方法表略宽） | 733 / 734 raw | 独立复算值；与 727 差在「注释行 + 逐行实现细节」，与 730 同量级 |
-> | **多行感知出现次数** | **937 code / 938 raw** | **权威口径**：730 行内 + **207 跨行调用链** + 1 条 doc 注释 |
+> | 逐行、每行只算一次、跳过注释行 | 727 | 初版登记的数（**作废**：一行两个调用只算一次，且未含 recovery） |
+> | 同一批行内按出现次数（含 recovery） | 733 | 727 的行里 3 行各含 2 次（+3），再加 recovery 3 处（+3） |
+> | reviewer-25 逐行口径 | 733 / 734 raw | 与上一行同一量级（含 1 条 doc 注释行） |
+> | **多行感知出现次数** | **940 code / 941 raw** | **权威口径**：733 行内 + **207 跨行调用链** + 1 条 doc 注释 |
 >
 > 跨行链 = `world` / `.entities` / `.get(x)` 这类拆行写法；逐行口径（含 `rg`）**看不见**这 207 处，
-> 这是 727/733 与 937 的全部差异来源。复算规则（脚本 `E:/UserTemp/c1_scan.py`，算法即下述三条）：
+> 这是 733 与 941 的全部差异来源（733 + 207 + 1 = 941）。
 >
-> ```text
-> 1) 每个文件截到首个 "#[cfg(test)]"；把剩余文本当整体；
-> 2) 命中 = 正则 \.entities\s*\.\s*(<12 个方法>|<24 个受控访问器>)\s*\(（\s 匹配换行）；
->    raw 计全部命中，code 再减去「命中起点所在行 strip 后以 // 开头」的命中；
-> 3) 分类沿**调用链**看（不是整条语句）：链上出现 .expect(/.unwrap( ⇒ C，出现 unwrap_or*/map_or* ⇒ B，
->    方法是 insert/remove/write_back/order_*/for_each_mut/set_progression ⇒ D，其余 ⇒ A。
-> ```
->
-> 分类结果（937 code）：**A 静默跳过 805 / B 默认值 100 / C panic 9 / D 结构 23**。
+> 分类结果（940 code）：**A 静默跳过 808 / B 默认值 100 / C panic 9 / D 结构 23**。
 > C 类**逐点穷举 9 处**（初版只列了行内的 4 处，返工补上跨行链的 5 处）：
 >
 > - `crates/world/src/buff.rs`：`world.entities.get_mut(actor_id).expect("actor exists")` ×2；
@@ -847,6 +866,21 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > parity 实跑：world_aoi 6/0、world_combat 7/0、world_session 2/0、rng 5/0、rng_replay 4/0、
 > drop 4/0、exp 4/0、levelabil 2/0、player_ctor_rng_trace 1/0、csharp_parity 3/0；
 > RNG trace（ctor_fold/magic_effect/merchant/p3b1–p3b5/spell_tail）各 1/0；`table_counts` 需 DB（未跑）。
+>
+> **S4d-3/P2 落地登记（2026-11-13，第二批）**：P2 前置三项全部落地（ComponentRegistry +
+> 运行期镜像、StageSkip::ComponentMissing、StageEntities::view_mut，各配删分支必红牙），
+> 并迁移 4/5 段：SimExpireHitters（#3）/ SimExtraAbil（#6）/ SimPlayerRunExpiry（#13）/
+> TailSuperManRefill（#16），每段一个可独立回退提交；段运行器改为「段 -> TickRunner」映射
+> （HeadRunner/TailRunner），段输出经 StageOut 旁路（tick_head 的 record 仍是栈上局部）。
+> **SimMapEvents（#7）未迁移（登记缺口）**：该段对实体**只读**但需要 `spawn_cloned` 的
+> 完整 21 组件快照来构造 `PvpView`（`is_proper_target_grouped_direct` 的 attacker/target）；
+> `StageEntities` 目前无 `snapshot_spawn`（设计 §3.3 只到 `remove`）。建议作为 P2b 首批前置：
+> 先落 `StageEntities::snapshot_spawn`（world 侧组装 `EntitySpawn` 或写一个 owned
+> `PvpView` 视图），再迁该段；不要为了赶批次手写一版不等价的 PvpView。
+> **牙的缺口（review 时请核）**：4 段「删注册必红」由 trace 序列牙覆盖（M1–M4 全 RED）；
+> 写回变异 M5（expire_hitters）/M7（run_state_expiry）RED；M6/M8 的见证用例已补齐
+> （`extra_abil_expiry_clears_slot_value` / `super_man_refill_restores_hp_mp_in_tail`，
+> 各自删对应写回即 RED）。**注意：P2 本批是 4/5 段已迁——`SimMapEvents` 未迁，P2 不是全绿。**
 >
 > **本批未做**：P2–P7（余 14 段迁移）、上表「P0 未交付项」、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。

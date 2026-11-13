@@ -27,8 +27,10 @@
 4. **白名单是编译期的**：`StageSpec` + `Reads<C>` / `Writes<C>` 标记 trait，
    越白名单立即编译失败。运行期另有一层 fail-closed 断言（镜像白名单 + 组件注册表），
    只用于堵住「泛型/dyn 绕过」路径，并配负例牙。
-5. **panic 恢复（review F5）显式登记为「不做热恢复」**，但把边界从 3 个收敛到 2 个
-   （head 一个、tail 一个），并加 `sim_in_flight` 哨兵让下一次 tick 立即 fail-fast，
+5. **panic 恢复（review F5）显式登记为「不做热恢复」**；窗口数的口径是**分阶段**的：
+   **P0+P1 中间态 = 4 个 `SimState` 搬移窗口 / tick**（Clock / Snapshot / Drain / AOI），
+   **P7 收口目标才是 2 个**（head 一个、tail 一个：其余段全部系统化后 head 只跑一次）。
+   本批只保证哨兵覆盖全部窗口；不宣称已收敛到 2。哨兵让下一次 tick 立即 fail-fast，
    而不是在 `SimState::default()` 上空转。
 6. **顺序载体不是一律 `TickEntityIds`**：每段有**旧实现自己的语义载体**（命令 FIFO、
    `npc_ids_sorted` / `merchant_ids_sorted` 的 id 升序、`SelfDelayQueue::actor_ids` 入队序、
@@ -272,7 +274,8 @@ facade 侧：取回 sim / record / ids，删掉落的一次性资源
    ```rust
    pub trait StageSpec: 'static {
        const STAGE: TickStage;
-       const STRUCTURAL: bool = false;
+       // 结构变更门是 `Structural` **标记 trait**（只有 Command/NPC/商人/宝宝清表实现）；
+       // 早期草案的 `const STRUCTURAL` 已在 P0 返工删除（review P3-4）。
    }
    pub trait Reads<C: bevy_ecs::component::Component> {}
    pub trait Writes<C: bevy_ecs::component::Component<Mutability = Mutable>> {}
@@ -492,7 +495,7 @@ impl SlotTable {
 ```rust
 pub trait StageSpec: 'static {
     const STAGE: TickStage;
-    const STRUCTURAL: bool = false;
+    // 结构变更门是 `Structural` 标记 trait；`const STRUCTURAL` 已在 P0 返工删除（review P3-4）。
 }
 pub trait Reads<C: bevy_ecs::component::Component> {}
 pub trait Writes<C: bevy_ecs::component::Component<Mutability = Mutable>> {}

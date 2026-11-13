@@ -12,12 +12,13 @@ use std::collections::{HashMap, VecDeque};
 use std::thread::ThreadId;
 
 use bevy_ecs::prelude::ResMut;
+use bevy_ecs::system::IntoSystem;
 use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{
-    advance_clock_system, tick::StageTrace, Appearance, CombatAttribution, LifeCycle, TickClock,
-    TickOwnerThread, TickRunner, TickStage,
+    advance_clock_system, tick::StageTrace, Appearance, BuffState, CombatAttribution, Flags,
+    LifeCycle, PlayerRunState, TickClock, TickOwnerThread, TickRunner, TickStage, Vitals,
 };
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
@@ -1441,36 +1442,47 @@ pub fn output_drain_system(
 /// 一起，改变段序与 RNG 消费者次序（`SimHiterSnapshot` 必须在命令 FIFO 之后、
 /// `OutputDrain` 必须在 `check_dup_obj` 之后）。P7 收口后 head 侧应合成**一个** `TickRunner`。
 pub struct HeadRunner {
-    clock: TickRunner,
-    snapshot: TickRunner,
-    drain: TickRunner,
+    /// 段 -> 该段的 `TickRunner`（每段一个 schedule，段之间仍由 facade 的内联段分隔）。
+    runners: Vec<(TickStage, TickRunner)>,
 }
 
 impl HeadRunner {
     pub fn new() -> Self {
-        let mut clock = TickRunner::new();
-        clock.add_systems(TickStage::Clock, advance_clock_system);
-        let mut snapshot = TickRunner::new();
-        snapshot.add_systems(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
-        let mut drain = TickRunner::new();
-        drain.add_systems(TickStage::OutputDrain, output_drain_system);
-        HeadRunner {
-            clock,
-            snapshot,
-            drain,
-        }
+        let mut me = HeadRunner {
+            runners: Vec::new(),
+        };
+        me.add(TickStage::Clock, advance_clock_system);
+        me.add(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
+        me.add(TickStage::SimExpireHitters, expire_hitters_stage_system);
+        me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
+        me.add(
+            TickStage::SimPlayerRunExpiry,
+            expire_player_run_state_stage_system,
+        );
+        me.add(TickStage::OutputDrain, output_drain_system);
+        me
     }
 
-    fn run_clock(&mut self, world: &mut bevy_ecs::world::World) {
-        self.clock.run(world);
+    /// 注册一段（一个系统）。重复注册同一段是接线错误（运行期 panic）。
+    fn add<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) {
+        assert!(
+            !self.runners.iter().any(|(s, _)| *s == stage),
+            "段 {:?} 重复注册（HeadRunner）",
+            stage
+        );
+        let mut runner = TickRunner::new();
+        runner.add_systems(stage, system);
+        self.runners.push((stage, runner));
     }
 
-    fn run_snapshot(&mut self, world: &mut bevy_ecs::world::World) {
-        self.snapshot.run(world);
-    }
-
-    fn run_drain(&mut self, world: &mut bevy_ecs::world::World) {
-        self.drain.run(world);
+    /// 跑一段；未注册 ⇒ panic（接线错误，与既有 `expect` 口径一致）。
+    fn run(&mut self, stage: TickStage, world: &mut bevy_ecs::world::World) {
+        let (_, runner) = self
+            .runners
+            .iter_mut()
+            .find(|(s, _)| *s == stage)
+            .unwrap_or_else(|| panic!("段 {:?} 未在 HeadRunner 注册", stage));
+        runner.run(world);
     }
 }
 
@@ -1480,6 +1492,65 @@ impl Default for HeadRunner {
     }
 }
 
+/// **S4d-3/P2**：tail 侧段运行器组（当前 `TailSuperManRefill` + `OutputAoi`）。
+///
+/// 与 [`HeadRunner`] 同形：每段一个 `TickRunner`，段之间由 facade 的内联段分隔；
+/// P7 收口后 tail 侧应合成一个 runner。
+pub struct TailRunner {
+    runners: Vec<(TickStage, TickRunner)>,
+}
+
+impl TailRunner {
+    pub fn new() -> Self {
+        let mut me = TailRunner {
+            runners: Vec::new(),
+        };
+        me.add(
+            TickStage::TailSuperManRefill,
+            tail_super_man_refill_stage_system,
+        );
+        me.add(TickStage::OutputAoi, output_aoi_stage_system);
+        me
+    }
+
+    fn add<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) {
+        assert!(
+            !self.runners.iter().any(|(s, _)| *s == stage),
+            "段 {:?} 重复注册（TailRunner）",
+            stage
+        );
+        let mut runner = TickRunner::new();
+        runner.add_systems(stage, system);
+        self.runners.push((stage, runner));
+    }
+
+    fn run(&mut self, stage: TickStage, world: &mut bevy_ecs::world::World) {
+        let (_, runner) = self
+            .runners
+            .iter_mut()
+            .find(|(s, _)| *s == stage)
+            .unwrap_or_else(|| panic!("段 {:?} 未在 TailRunner 注册", stage));
+        runner.run(world);
+    }
+}
+
+impl Default for TailRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// **S4d-3/P2**：段输出旁路（资源）。
+///
+/// `tick_head` 里的 `TickRecord` 仍是栈上局部变量（其余内联段还在写它），因此需要把
+/// 「段系统产出的 `TickRecord` 字段」先落到本资源，facade 在该段跑完后取走——与
+/// `OutputDrain` 的边界搬移同口径（段内不长期持有 record）。
+#[derive(bevy_ecs::prelude::Resource, Default)]
+pub struct StageOut {
+    pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
+    pub run_state_expiries: Vec<(i32, RunStateExpiry)>,
+}
+
 /// **S4d-3/P1**：`OutputAoi` 段的注册壳——记 [`StageTrace`] 后委派给既有
 /// [`crate::aoi::output_aoi_system`]（`aoi.rs` 不在本卡写集，故用薄壳统一记段序）。
 pub fn output_aoi_stage_system(world: &mut bevy_ecs::world::World) {
@@ -1487,12 +1558,179 @@ pub fn output_aoi_stage_system(world: &mut bevy_ecs::world::World) {
     crate::aoi::output_aoi_system(world);
 }
 
+mir2_world_bevy::stage_spec!(
+    SimExpireHitters,
+    TickStage::SimExpireHitters,
+    read: [LifeCycle],
+    write: [CombatAttribution]
+);
+
+/// **P2 段 #3 `SimExpireHitters`**：命中者过期（`BaseObject.Base.cs` 的 `LastHiter` 清理）。
+///
+/// 逐项对应旧 `World::expire_hitters`：先按槽位序收集 `gone`（`death || ghost`），再按
+/// **同一槽位序**逐个实体清理 `last_hiter`（30s）/`exp_hitter`（6s），目标已 `gone` 也清。
+pub fn expire_hitters_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimExpireHitters);
+    let now = world.resource::<SimState>().clock_ms;
+    let mut ad = mir2_world_bevy::tick::StageEntities::<SimExpireHitters>::new(world);
+    let gone: Vec<i32> = ad
+        .order()
+        .into_iter()
+        .filter(|(id, _)| ad.get::<LifeCycle>(*id).is_some_and(|l| l.death || l.ghost))
+        .map(|(id, _)| id)
+        .collect();
+    for (id, _) in ad.order() {
+        let Some(attr) = ad.get_mut::<CombatAttribution>(id) else {
+            continue;
+        };
+        if let Some(h) = attr.last_hiter {
+            if (now - attr.last_hiter_tick) > 30_000 || gone.contains(&h) {
+                attr.last_hiter = None;
+            }
+        }
+        if let Some(h) = attr.exp_hitter {
+            if (now - attr.exp_hitter_tick) > 6_000 || gone.contains(&h) {
+                attr.exp_hitter = None;
+            }
+        }
+    }
+}
+
+mir2_world_bevy::stage_spec!(
+    SimExtraAbil,
+    TickStage::SimExtraAbil,
+    read: [],
+    write: [BuffState]
+);
+
+/// **P2 段 #6 `SimExtraAbil`**：`ExtraAbil` 过期（oracle `PlayObject.Run` 的消息泵，
+/// 本骨架每 world tick 一次，相位差登记 T-B5-2）。
+///
+/// 逐项对应旧 `World::expire_extra_abil`：按槽位序对每个实体扫 7 个槽；到期（严格 `>`）
+/// 清 `extra_abil`/`extra_abil_flag` 并记 `Restored`，到期前 10s 且 flag==0 记
+/// `TenSecondsBefore`；只有 `events` 非空的实体进输出。不抽 RNG。
+pub fn expire_extra_abil_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimExtraAbil);
+    let now = world.resource::<SimState>().clock_ms;
+    let mut out = Vec::new();
+    {
+        let mut ad = mir2_world_bevy::tick::StageEntities::<SimExtraAbil>::new(world);
+        for (id, _) in ad.order() {
+            let Some(buff) = ad.get_mut::<BuffState>(id) else {
+                continue;
+            };
+            let mut expiry = ExtraAbilExpiry {
+                actor_id: id,
+                ..ExtraAbilExpiry::default()
+            };
+            for i in 0..7usize {
+                if buff.extra_abil[i] == 0 {
+                    continue;
+                }
+                if now > buff.extra_abil_times[i] {
+                    buff.extra_abil[i] = 0;
+                    buff.extra_abil_flag[i] = 0;
+                    expiry.health_changed = true;
+                    expiry
+                        .events
+                        .push(ExtraAbilEventKind::Restored(u8::try_from(i).unwrap_or(0)));
+                } else if buff.extra_abil_flag[i] == 0 && now > buff.extra_abil_times[i] - 10_000 {
+                    buff.extra_abil_flag[i] = 1;
+                    expiry.events.push(ExtraAbilEventKind::TenSecondsBefore(
+                        u8::try_from(i).unwrap_or(0),
+                    ));
+                }
+            }
+            if !expiry.events.is_empty() {
+                out.push(expiry);
+            }
+        }
+    }
+    world.resource_mut::<StageOut>().extra_abil_expiries = out;
+}
+
+mir2_world_bevy::stage_spec!(
+    SimPlayerRunExpiry,
+    TickStage::SimPlayerRunExpiry,
+    read: [Appearance, LifeCycle],
+    write: [PlayerRunState]
+);
+
+/// **P2 段 #13 `SimPlayerRunExpiry`**：`PlayObject.Run` 的烈火 20s / 双龙 60s 到期段。
+///
+/// 逐项对应旧 `World::expire_player_run_state`：槽位序筛 `Race==Play && !Ghost`，
+/// 严格 `>` 到期（20s / 60s）；烈火先 `SpiritsGone` 再 `FireHitSocket`（oracle 行序），
+/// 双龙只有 `TwinHitSocket`。不抽 RNG，段位不变。
+pub fn expire_player_run_state_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimPlayerRunExpiry);
+    let now = world.resource::<SimState>().clock_ms;
+    let mut events = Vec::new();
+    {
+        let mut ad = mir2_world_bevy::tick::StageEntities::<SimPlayerRunExpiry>::new(world);
+        let ids: Vec<i32> = ad
+            .order()
+            .into_iter()
+            .filter(|(id, _)| {
+                ad.get::<Appearance>(*id)
+                    .is_some_and(|a| a.race == crate::entity::ACTOR_RACE_PLAY)
+                    && ad.get::<LifeCycle>(*id).is_some_and(|l| !l.ghost)
+            })
+            .map(|(id, _)| id)
+            .collect();
+        for id in ids {
+            let Some(pr) = ad.get_mut::<PlayerRunState>(id) else {
+                continue;
+            };
+            if pr.fire_hit_skill && (now - pr.latest_fire_hit_tick) > 20 * 1000 {
+                pr.fire_hit_skill = false;
+                events.push((id, RunStateExpiry::SpiritsGone));
+                events.push((id, RunStateExpiry::FireHitSocket));
+            }
+            if pr.twin_hit_skill && (now - pr.latest_twin_hit_tick) > 60 * 1000 {
+                pr.twin_hit_skill = false;
+                events.push((id, RunStateExpiry::TwinHitSocket));
+            }
+        }
+    }
+    world.resource_mut::<StageOut>().run_state_expiries = events;
+}
+
+mir2_world_bevy::stage_spec!(
+    TailSuperManRefill,
+    TickStage::TailSuperManRefill,
+    read: [Appearance, Flags],
+    write: [Vitals]
+);
+
+/// **P2 段 #16 `TailSuperManRefill`**：玩家 `BaseObject.Run` 的 SuperMan 回满段
+/// （`BaseObject.Base.cs:32-36`，在 `HP == 0 ⇒ Die()` 之前）。
+///
+/// 逐项对应旧 `tick_tail` 的 `for_each_mut`：槽位序、`Race==Play && Flags.super_man`、
+/// 回满 `HP=MaxHP` / `MP=MaxMP`；非玩家侧的同段仍在各自 `Run` 里（不在本段）。
+pub fn tail_super_man_refill_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::TailSuperManRefill);
+    let mut ad = mir2_world_bevy::tick::StageEntities::<TailSuperManRefill>::new(world);
+    for (id, _) in ad.order() {
+        let is_play = ad
+            .get::<Appearance>(id)
+            .is_some_and(|a| a.race == crate::entity::ACTOR_RACE_PLAY);
+        let super_man = ad.get::<Flags>(id).is_some_and(|f| f.super_man);
+        if !(is_play && super_man) {
+            continue;
+        }
+        if let Some(v) = ad.get_mut::<Vitals>(id) {
+            v.hp = v.max_hp;
+            v.mp = v.max_mp;
+        }
+    }
+}
+
 pub struct World {
     pub entities: EntityStore,
     /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
     head_runner: HeadRunner,
-    /// S3b：`OutputAoi` 系统运行器（只注册 `OutputAoi`；不推进时钟）。
-    tail_runner: TickRunner,
+    /// S4d-3/P2：tail 侧段运行器组（`TailSuperManRefill` / `OutputAoi`）。
+    tail_runner: TailRunner,
     /// **S4d-1 资源层**：全部非实体世界状态（maps/sessions/rng/时钟/配置/命令队列/输出累积…）。
     ///
     /// tick 边界把它移入 bevy `World` 的 `SimState` 资源供系统访问，跑完移回（同一时刻
@@ -1564,10 +1802,41 @@ impl World {
         out
     }
 
+    /// **兼容入口**（P2 起段逻辑在 `SimPlayerRunExpiry` 系统里）：跑一次该段并返回输出。
+    ///
+    /// 供既有 `tests/run_state_expiry_vectors.rs` 等「直接驱动一段」的用例使用；tick 内
+    /// 走 `tick_head` 的注册调用，行为同一份实现。
+    pub fn expire_player_run_state(&mut self) -> Vec<(i32, RunStateExpiry)> {
+        self.run_head_stage(|world, head| head.run(TickStage::SimPlayerRunExpiry, world));
+        self.take_run_state_expiries()
+    }
+
+    /// 取走 `SimPlayerRunExpiry` 段落到 [`StageOut`] 的输出。
+    fn take_run_state_expiries(&mut self) -> Vec<(i32, RunStateExpiry)> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .run_state_expiries,
+        )
+    }
+
+    /// 取走 `SimExtraAbil` 段落到 [`StageOut`] 的输出（段边界之后调用）。
+    fn take_extra_abil_expiries(&mut self) -> Vec<ExtraAbilExpiry> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .extra_abil_expiries,
+        )
+    }
+
     /// 跑一个 tail 侧段（当前只有 `OutputAoi`）。
     fn run_tail_stage<R>(
         &mut self,
-        f: impl FnOnce(&mut bevy_ecs::world::World, &mut TickRunner) -> R,
+        f: impl FnOnce(&mut bevy_ecs::world::World, &mut TailRunner) -> R,
     ) -> R {
         self.enter_stage_world();
         let World {
@@ -1664,11 +1933,12 @@ impl World {
         entities
             .world_mut()
             .insert_resource(TickOwnerThread::default());
+        // S4d-3/P2：段输出旁路（`SimExtraAbil` / `SimPlayerRunExpiry` 的 TickRecord 字段）。
+        entities.world_mut().insert_resource(StageOut::default());
         // S4d-3/P1：head 侧三段（Clock / SimHiterSnapshot / OutputDrain）收进 `HeadRunner`。
         let head_runner = HeadRunner::new();
-        // S3b：AOI 刷新是 `TickStage::OutputAoi` 的系统（宿主段之后运行）。
-        let mut tail_runner = TickRunner::new();
-        tail_runner.add_systems(TickStage::OutputAoi, output_aoi_stage_system);
+        // S3b/P2：tail 侧段（`TailSuperManRefill` / `OutputAoi`）收进 `TailRunner`。
+        let tail_runner = TailRunner::new();
         let sim = SimState::with_maps(maps);
         let mut world = World {
             entities,
@@ -4757,49 +5027,6 @@ impl World {
         }
     }
 
-    /// **P3-B5**：`ExtraAbil` 过期/到期前 10s 检查（`PlayObject.Message.cs:163-227`）。
-    ///
-    /// 节拍：宿主在每个 world tick 调一次（oracle 在每个 `PlayObject.Run` 的消息泵里；
-    /// 相位差登记 T-B5-2）。**过期不 recalc、不发 52**——只 `HealthSpellChanged()`（53）。
-    #[must_use]
-    pub fn expire_extra_abil(&mut self) -> Vec<ExtraAbilExpiry> {
-        let now = self.clock_ms;
-        let mut out = Vec::new();
-        for id in self.entities.order_index() {
-            let Some(e) = self.entities.get_mut(id) else {
-                continue;
-            };
-            let mut expiry = ExtraAbilExpiry {
-                actor_id: id,
-                ..ExtraAbilExpiry::default()
-            };
-            for i in 0..7usize {
-                if e.buff.extra_abil[i] == 0 {
-                    continue;
-                }
-                if now > e.buff.extra_abil_times[i] {
-                    e.buff.extra_abil[i] = 0;
-                    e.buff.extra_abil_flag[i] = 0;
-                    expiry.health_changed = true;
-                    expiry
-                        .events
-                        .push(ExtraAbilEventKind::Restored(u8::try_from(i).unwrap_or(0)));
-                } else if e.buff.extra_abil_flag[i] == 0
-                    && now > e.buff.extra_abil_times[i] - 10_000
-                {
-                    e.buff.extra_abil_flag[i] = 1;
-                    expiry.events.push(ExtraAbilEventKind::TenSecondsBefore(
-                        u8::try_from(i).unwrap_or(0),
-                    ));
-                }
-            }
-            if !expiry.events.is_empty() {
-                out.push(expiry);
-            }
-        }
-        out
-    }
-
     /// **魔号 8（`SKILL_FIREWIND` 抗拒火环）/ 37（`SKILL_ENERGYREPULSOR` 气功波）效果体**：
     /// `MagicManager.MagPushArround`（`src/M2Server/Magic/MagicManager.cs:24-52`）的生产入口。
     /// oracle 两处 `case` 的函数体逐字相同：`:259-264`（8）与 `:601-606`（37），
@@ -5361,7 +5588,7 @@ impl World {
             clock.clock_ms = clock_ms;
             clock.tick_seq = tick_seq;
         }
-        self.run_head_stage(|world, head| head.run_clock(world));
+        self.run_head_stage(|world, head| head.run(TickStage::Clock, world));
         {
             let (clock_ms, tick_seq) = {
                 let clock = self.entities.world().resource::<TickClock>();
@@ -5546,13 +5773,14 @@ impl World {
             let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self.entities.slot_order();
             self.run_head_stage(move |world, head| {
                 world.insert_resource(TickEntityIds(ids));
-                head.run_snapshot(world);
+                head.run(TickStage::SimHiterSnapshot, world);
                 let _ = world.remove_resource::<TickEntityIds>();
             });
         }
 
         // 命中者过期清理（照 `BaseObject.Base.cs:119-132` 的结构；墙钟那两项不在本骨架）
-        self.expire_hitters();
+        // S4d-3/P2 #3：段系统（`SimExpireHitters`），段位与旧内联调用完全相同。
+        self.run_head_stage(|world, head| head.run(TickStage::SimExpireHitters, world));
         // 死亡结算：`tick_head` 只结算**非玩家**（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才
         // `Die()`）。玩家的 `base.Run` 的 Die 在 P32 之后 ⇒ 留到 [`World::tick_tail`]
         // （oracle 序：PlayObject.Run 的 P21→…→P32 → base.Run:70-73）。既有 golden 的 death
@@ -5570,7 +5798,9 @@ impl World {
         // **P3-B5**：`ExtraAbil` 过期检查（oracle 在 `PlayObject.Run` 的消息泵；
         // 本骨架每 world tick 一次，相位差登记 T-B5-2）与地图事件处理器
         // （`EventProcessor.ExecuteInternal` 的 20ms 周期 / 每事件 500ms `RunTick` 门）。
-        record.extra_abil_expiries = self.expire_extra_abil();
+        // S4d-3/P2 #6：段系统（`SimExtraAbil`），段位与旧内联调用完全相同。
+        self.run_head_stage(|world, head| head.run(TickStage::SimExtraAbil, world));
+        record.extra_abil_expiries = self.take_extra_abil_expiries();
         self.run_map_events();
 
         // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
@@ -5637,7 +5867,9 @@ impl World {
         // **`PlayObject.Run` 的状态到期段**（`PlayObject.Message.cs:54-64`）：烈火 20s / 双龙 60s。
         // 在玩家 `base.Run`（VerifyMapTime 段）之前；两者都不抽随机数。oracle 的玩家 `Run`
         // 名义 300ms 一次、本骨架每个 world tick（200ms）一次——相位差与既有玩家散段同口径登记。
-        record.run_state_expiries = self.expire_player_run_state();
+        // S4d-3/P2 #13：段系统（`SimPlayerRunExpiry`），段位与旧内联调用完全相同。
+        self.run_head_stage(|world, head| head.run(TickStage::SimPlayerRunExpiry, world));
+        record.run_state_expiries = self.take_run_state_expiries();
 
         // **`PlayObject.Run` 的重叠推挤段**（`PlayObject.Message.cs:263-285`）：
         // 3s 周期门内 `GetXYObjCount`；`>=2` 记 `BoDuplication/DupStartTick`；
@@ -5653,7 +5885,7 @@ impl World {
             let record_res = TickRecordRes(std::mem::take(&mut record));
             record = self.run_head_stage(move |world, head| {
                 world.insert_resource(record_res);
-                head.run_drain(world);
+                head.run(TickStage::OutputDrain, world);
                 world
                     .remove_resource::<TickRecordRes>()
                     .expect("OutputDrain 后必须归还 TickRecordRes（tick 边界契约）")
@@ -5695,11 +5927,8 @@ impl World {
         //    （[`Entity::run_super_man_refill`] 于 `base_object_run_monster` / NPC / 商人）调用；
         //    玩家此前**没有**调用点 ⇒ `Entity.super_man = true`（`@3`）只挡死、不回血。
         //    本段无写入者时是纯 no-op（`super_man` 默认 false）⇒ 既有 golden 逐字节不变。
-        self.entities.for_each_mut(|mut e| {
-            if e.appearance.race == crate::entity::ACTOR_RACE_PLAY && e.flags.super_man {
-                e.run_super_man_refill();
-            }
-        });
+        // S4d-3/P2 #16：段系统（`TailSuperManRefill`），段位与旧内联调用完全相同。
+        self.run_tail_stage(|world, tail| tail.run(TickStage::TailSuperManRefill, world));
 
         // 1. 玩家死亡结算（oracle `base.Run:70-73`）：在 P32 复活门之后。
         self.tail_phase_log.push(TailPhase::Die);
@@ -5736,7 +5965,7 @@ impl World {
                     event_sight,
                     events,
                 });
-                tail.run(world);
+                tail.run(TickStage::OutputAoi, world);
                 (
                     world
                         .remove_resource::<mir2_world_bevy::MapsRes<MapGrid>>()
@@ -5886,47 +6115,6 @@ impl World {
     /// `SendRefMsg(RM_HEALTHSPELLCHANGED)`，由宿主转成观察者的 `SM_HEALTHSPELLCHANGED(53)`。
     pub(crate) fn record_show_hp_health_change(&mut self, actor_id: i32, hp: u16, mp: u16) {
         self.pending_show_hp_health_changes.push((actor_id, hp, mp));
-    }
-
-    /// `PlayObject.Run` 的烈火/双龙到期段（`PlayObject.Message.cs:54-64`），按玩家槽位顺序。
-    ///
-    /// 逐行口径（**严格大于**）：
-    /// - `FireHitSkill && (now - LatestFireHitTick) > 20*1000` ⇒ `FireHitSkill = false`；
-    ///   `SysMsg(SpiritsGone, Red, Hint)`；`SendSocket("+UFIR")`；
-    /// - `TwinHitSkill && (now - LatestTwinHitTick) > 60*1000` ⇒ `TwinHitSkill = false`；`SendSocket("+UTWN")`
-    ///   （**无** `SysMsg`）。
-    ///
-    /// 不消费随机数。玩家选取 = `Race == ActorRace::Play && !Ghost`（与
-    /// [`World::verify_players_map_time`] 同口径；oracle 的 `PlayObjectList` 不含幽灵）。
-    /// 状态写入点（技能层）尚未移植 ⇒ 生产路径恒 `false`，本段零动作（登记见 `Entity::fire_hit_skill`）。
-    pub fn expire_player_run_state(&mut self) -> Vec<(i32, RunStateExpiry)> {
-        let now = self.clock_ms;
-        let ids: Vec<i32> = self
-            .entities
-            .iter_ref()
-            .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
-            .map(|e| e.id)
-            .collect();
-        let mut events = Vec::new();
-        for id in ids {
-            let Some(e) = self.entities.get_mut(id) else {
-                continue;
-            };
-            // `PlayObject.Message.cs:54-58`：先 `SysMsg` 再 `SendSocket("+UFIR")`。
-            if e.player_run.fire_hit_skill && (now - e.player_run.latest_fire_hit_tick) > 20 * 1000
-            {
-                e.player_run.fire_hit_skill = false;
-                events.push((id, RunStateExpiry::SpiritsGone));
-                events.push((id, RunStateExpiry::FireHitSocket));
-            }
-            // `:60-64`：仅 `SendSocket("+UTWN")`。
-            if e.player_run.twin_hit_skill && (now - e.player_run.latest_twin_hit_tick) > 60 * 1000
-            {
-                e.player_run.twin_hit_skill = false;
-                events.push((id, RunStateExpiry::TwinHitSocket));
-            }
-        }
-        events
     }
 
     /// `Envirnoment.GetXYObjCount`（`src/M2Server/Maps/Envirnoment.cs:1062-1093`）的世界侧入口：
@@ -6796,38 +6984,6 @@ impl World {
             return None;
         }
         Some(id)
-    }
-
-    /// 死亡结算：把预算好的掉落散到地上 + 给击杀者发经验。
-    ///
-    /// 命中者过期（`BaseObject.Base.cs:119-132`）：`LastHiter` 30s 或命中者死亡/隐身，
-    /// `ExpHitter` 6s 或命中者死亡/隐身 —— 两条件**逐字照搬**（`||` 短路，先判时间再判存殓）。
-    ///
-    /// ⚠ oracle 是在**命中者自己的** `Run()` 里清，本骨架在每 tick 的命令之后统一清（结构等价，
-    /// 见 `settle_deaths` 的说明）。本函数使用 **sim 时钟**（`clock_ms`），不消费 RNG。
-    ///
-    /// 先前版本只做「命中者已死/已隐身」的结构清理（30s/6s 墙钟两项标为未建模，whitelist T-32）；
-    /// 本片补上两只墙钟门并收窄 T-32。
-    fn expire_hitters(&mut self) {
-        let now = self.clock_ms;
-        let gone: Vec<i32> = self
-            .entities
-            .iter_ref()
-            .filter(|e| e.death || e.ghost)
-            .map(|e| e.id)
-            .collect();
-        self.entities.for_each_mut(|e| {
-            if let Some(h) = e.attribution.last_hiter {
-                if (now - e.attribution.last_hiter_tick) > 30_000 || gone.contains(&h) {
-                    e.attribution.last_hiter = None;
-                }
-            }
-            if let Some(h) = e.attribution.exp_hitter {
-                if (now - e.attribution.exp_hitter_tick) > 6_000 || gone.contains(&h) {
-                    e.attribution.exp_hitter = None;
-                }
-            }
-        });
     }
 
     /// **P31 / `SETAUTOGETEXP`**（`PlayObject.Message.cs:738-745`）的 per-Run 结算。
@@ -8278,6 +8434,59 @@ mod tests {
         assert!(!w.refresh_game_time(2));
     }
 
+    /// **P2 段 #6 写回牙**：`ExtraAbil` 到期后**槽位值**被清位（不是只清计时）。
+    ///
+    /// 变异：删掉 `buff.extra_abil[i] = 0` ⇒ 槽位仍为 1 ⇒ 本用例红（M6）。
+    #[test]
+    fn extra_abil_expiry_clears_slot_value() {
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(player(1, "hero", 5, 5, 1));
+        {
+            let b = w.entities.buff_mut(id).expect("buff");
+            b.extra_abil[2] = 1;
+            b.extra_abil_flag[2] = 1;
+            b.extra_abil_times[2] = -1; // tick 后 now=200 > -1 ⇒ 到期
+        }
+        let mut rec = w.tick_head();
+        w.tick_tail(&mut rec);
+        let b = w.entities.buff(id).expect("buff");
+        assert_eq!(b.extra_abil[2], 0, "到期必须清槽位值（M6 写回）");
+        assert_eq!(b.extra_abil_flag[2], 0, "到期必须复位 flag");
+        assert!(
+            !rec.extra_abil_expiries.is_empty(),
+            "到期事件必须进 TickRecord"
+        );
+    }
+
+    /// **P2 段 #16 写回牙**：Play + super_man ⇒ `tick_tail` 的 TailSuperManRefill 把
+    /// **HP/MP 实际补到 max**（不只是翻标志）。
+    ///
+    /// 变异：删掉 `v.hp = v.max_hp` ⇒ HP 停在 0（随后被玩家死亡结算处理）⇒ 本用例红（M8）。
+    #[test]
+    fn super_man_refill_restores_hp_mp_in_tail() {
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(player(1, "hero", 5, 5, 1));
+        {
+            let f = w.entities.flags_mut(id).expect("flags");
+            f.super_man = true;
+        }
+        {
+            let v = w.entities.vitals_mut(id).expect("vitals");
+            v.max_hp = 50;
+            v.max_mp = 30;
+            v.hp = 0;
+            v.mp = 0;
+        }
+        let mut rec = w.tick_head();
+        w.tick_tail(&mut rec);
+        let v = w.entities.vitals(id).expect("vitals");
+        assert_eq!(
+            v.hp, 50,
+            "TailSuperManRefill 必须把 HP 补到 MaxHP（M8 写回）"
+        );
+        assert_eq!(v.mp, 30, "TailSuperManRefill 必须把 MP 补到 MaxMP");
+    }
+
     /// **S4d-3/P1 段注册牙**：tick 驱动的真实 runner 必须按 `STAGE_ORDER` 的对应切片记录段序。
     ///
     /// 牙：删掉 `HeadRunner::new` 里任一 `add_systems`（或 `World::with_maps` 里
@@ -8301,7 +8510,11 @@ mod tests {
             vec![
                 TickStage::Clock,
                 TickStage::SimHiterSnapshot,
+                TickStage::SimExpireHitters,
+                TickStage::SimExtraAbil,
+                TickStage::SimPlayerRunExpiry,
                 TickStage::OutputDrain,
+                TickStage::TailSuperManRefill,
                 TickStage::OutputAoi
             ],
             "tick 必须按 STAGE_ORDER 推进 head 三段 + tail 一段"
