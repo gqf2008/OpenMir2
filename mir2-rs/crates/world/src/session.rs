@@ -58,7 +58,24 @@ pub fn send_ref_msg_targets_at(
     y: i32,
     range: i32,
 ) -> Vec<i32> {
-    let Some(map) = world.maps.get(map_id) else {
+    send_ref_msg_targets_at_impl(&world.entities, &world.maps, sender_id, map_id, x, y, range)
+}
+
+/// **P6a2**：[`send_ref_msg_targets_at`] 的 facade/段共用实现（`EntityAccess` + 地图表形态）。
+///
+/// 段系统（`SimSelfDeliver` 的 `RM_STRUCK → BreakHolySeizeMode → SendRefMsg` 支）无法构造
+/// `&World` ⇒ 收件人格扫改为「访问器 + 地图表」参数；算法与 facade 入口**同一份**。
+#[must_use]
+pub fn send_ref_msg_targets_at_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    maps: &[MapGrid],
+    sender_id: i32,
+    map_id: usize,
+    x: i32,
+    y: i32,
+    range: i32,
+) -> Vec<i32> {
+    let Some(map) = maps.get(map_id) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -81,7 +98,7 @@ pub fn send_ref_msg_targets_at(
                 if id == sender_id {
                     continue;
                 }
-                let Some(e) = world.entities.get(id) else {
+                let Some(e) = access.get(id) else {
                     continue;
                 };
                 if e.race == ACTOR_RACE_PLAY && !e.ghost {

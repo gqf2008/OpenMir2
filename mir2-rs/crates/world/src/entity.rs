@@ -3556,6 +3556,59 @@ where
     }
 }
 
+/// **P6a2**：`PvpState` 的可变视图（`EntityMut` 组合视图不含该组件）。
+///
+/// 为什么单独一个 trait：`set_pk_flag`（`RM_POISON` 的玩家对玩家支）要写
+/// `pvp_flag` / `pvp_name_color_tick`，而 `EntityMutData` 的 20 组件集合刻意不含
+/// `PvpState`（既有段 spec 的读写面因此不变）。只有声明写 `PvpState` 的段能拿到这个视图——
+/// 与 [`StructuralAccess`] 同口径：编译期 `Writes<PvpState>` + 运行期白名单双约束。
+pub trait PvpStateAccess: EntityAccess {
+    /// `PvpState` 可变视图；`None` = id 不在槽位表 / 组件缺失。
+    fn pvp_state_mut(&mut self, id: i32) -> Option<&mut crate::entity::PvpState>;
+}
+
+impl PvpStateAccess for EntityStore {
+    fn pvp_state_mut(&mut self, id: i32) -> Option<&mut PvpState> {
+        EntityStore::pvp_state_mut(self, id)
+    }
+}
+
+impl<S> PvpStateAccess for StageAccess<'_, '_, S>
+where
+    S: mir2_world_bevy::tick::StageSpec
+        + mir2_world_bevy::tick::Reads<Entity>
+        + mir2_world_bevy::tick::Reads<Transform>
+        + mir2_world_bevy::tick::Reads<MapBinding>
+        + mir2_world_bevy::tick::Reads<Vitals>
+        + mir2_world_bevy::tick::Reads<AbilitySnapshot<BaseAbil>>
+        + mir2_world_bevy::tick::Reads<Progression>
+        + mir2_world_bevy::tick::Reads<SpawnBinding>
+        + mir2_world_bevy::tick::Reads<DropState>
+        + mir2_world_bevy::tick::Reads<CombatAttribution>
+        + mir2_world_bevy::tick::Reads<Recovery>
+        + mir2_world_bevy::tick::Reads<PvpState>
+        + mir2_world_bevy::tick::Reads<Flags>
+        + mir2_world_bevy::tick::Reads<LifeCycle>
+        + mir2_world_bevy::tick::Reads<Appearance>
+        + mir2_world_bevy::tick::Reads<MonsterClassState>
+        + mir2_world_bevy::tick::Reads<PlayerRunState>
+        + mir2_world_bevy::tick::Reads<GroupState>
+        + mir2_world_bevy::tick::Reads<Revival>
+        + mir2_world_bevy::tick::Reads<BuffState>
+        + mir2_world_bevy::tick::Reads<SlaveState>
+        + mir2_world_bevy::tick::Reads<Inventory>
+        + mir2_world_bevy::tick::Reads<MerchantState>
+        + mir2_world_bevy::tick::Reads<NpcState>
+        + mir2_world_bevy::tick::Reads<AiState>
+        + mir2_world_bevy::tick::Writes<PvpState>,
+{
+    fn pvp_state_mut(&mut self, id: i32) -> Option<&mut PvpState> {
+        // 单组件组合视图：运行期白名单核对照常生效（spec 需声明写 `PvpState`）。
+        let view = self.ad.view_mut::<(&'static mut PvpState,)>(id)?;
+        Some(view.0.into_inner())
+    }
+}
+
 /// **P5-pre**：结构操作（insert/remove）的访问面。只有 [`mir2_world_bevy::tick::Structural`]
 /// 段可调用——与 [`EntityAccess`] 分开，避免给非结构段（settle/verify/dup 等）平白打开
 /// spawn/despawn 面（编译期 `S: Structural` 约束在段实现里）。

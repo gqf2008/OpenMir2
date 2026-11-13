@@ -1053,14 +1053,38 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   `base_object_run_monster` 还串 `aoi`/`combat`/`mongen`/`special_monster`。要落段系统必须先扩
 >   写集到 `monai.rs` + `merchant.rs`。
 >
-> **段数口径（P6a 交付 head；单位 = 20 阶段）**：已系统化 **15 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
-> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9），**余 5 段：`#1 Command` / `#5 SimSelfDeliver` /
-> `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**（其中 #5/#11 已按 P6a 依赖面登记 blocked）。
+> **S4d-3/P6a2 落地登记（2026-11-14，#5 `SimSelfDeliver`）**：P6a 的两段 blocked 按 Leader 裁决扩写集
+> 后重做；本批交付 **#5**，#11 仍 blocked（依赖面仍超写集，见下）。
+> - **#5 `SimSelfDeliver`（已系统化）**：段系统 `sim_self_deliver_stage_system`
+>   （`TickStage::SimSelfDeliver`，#5）；段位 = `tick_head` 原
+>   `record.slave_self_deliveries = self.deliver_self_delay_msgs()` 那一行（`SimSettleDeaths` 之后、
+>   `SimExtraAbil` 之前）。实现体 = `slave::deliver_self_delay_msgs_impl`（`EntityAccess` +
+>   `&mut SimState`）；facade `World::deliver_self_delay_msgs[_with]` 与段共用同一份，无第二份拷贝。
+>   效果体链一并 port：`clone_operate` / `special_spawn_request`（`special_monster.rs`）、
+>   `process_slave_mutiny` / `process_slave_ghost` / `deliver_delay_magic` / `deliver_poison`
+>   （`slave.rs`）、`mag_make_private_transparent` / `make_open_health` / `open_holy_seize_mode` /
+>   `set_pk_flag`（`world.rs`）、`animal_struck` / `break_holy_seize_mode` / `soccer_ball_struck` /
+>   `set_target_creature` / `send_ref_msg`（`monai.rs`）；`session::send_ref_msg_targets_at` 抽出
+>   `_impl`（格扫算法仍单份）。`EntityAccess` 新增 `PvpStateAccess`（`PvpState` 不在 `EntityMut`
+>   组合视图内）；段 spec = 24 读 / 22 写（`EntityMutData` 20 + `Transform` + `PvpState`）。
+> - **`RM_ZEN_BEE` 的宿主同步产仔**：`SpecialSpawner::regen_monster_by_name` 取 `&mut World`，
+>   段访问器无法提供 ⇒ 段恒走「入队 + 宿主 `flush_special_spawns`」形态；facade 的
+>   `_with(Some(spawner))` 兼容入口在泵返回后同步处理本次新入队请求（仓库内无调用方，登记）。
+> - **RNG**：本段抽数（`RM_TRANSPARENT` 的 `R(2)`、`RM_DELAYMAGIC` 的 MSD、`RM_STRUCK` 的
+>   `Random(6)`/`Random(300)`、叛变的 `Random(rate)`）；段位未动 ⇒ 消费者序不变。
+> - **#11 `SimNpc`（仍 blocked）**：`npc_tick` / `npc_run` 与 `guild_official_run_body` /
+>   `merchant_body_run` 位于 **`npc.rs`（不在 P6a2 写集）**；其余依赖链
+>   （`monai::animal_run` / `base_object_run_monster` / `merchant::map_random_move`）在写集内。
+>   需先把 `npc.rs` 加入写集再落地。
+>
+> **段数口径（P6a2 交付 head；单位 = 20 阶段）**：已系统化 **16 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
+> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5），**余 4 段：`#1 Command` /
+> `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**（其中 #11 待扩写集到 `npc.rs`）。
 
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
 
-> **尚未做（以 P6a 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **5** 段——
-> #1/#5/#10/#11/#12；#5/#11 受依赖面所限待扩写集）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **尚未做（以 P6a2 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **4** 段——
+> #1/#10/#11/#12；#11 受 `npc.rs` 写集所限待扩写集）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 > 段号清单与写集见设计 §2.1/§4。
 
