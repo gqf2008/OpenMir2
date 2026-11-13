@@ -969,7 +969,7 @@ impl EntitySpawn {
 
     /// 落成组件包（`insert` 用）。
     #[must_use]
-    fn into_parts(self) -> SpawnParts {
+    pub(crate) fn into_parts(self) -> SpawnParts {
         let progression = self.progression_component();
         let vitals = self.vitals_component();
         let spawn = self.spawn_component();
@@ -2245,6 +2245,14 @@ impl EntityStore {
     }
 
     /// 结构变更后刷新视图查询的 archetype 匹配集。
+    /// **P5-pre**：段内结构变更（经 `StageEntities::insert`/`remove` 的 bevy 裸句柄）后由 facade
+    /// 调用，刷新**内核**三个缓存查询（`read`/`write`/`pairs`）与**本层**四个读/写视图缓存
+    /// （`view*`/`mut_view`）。不调用 ⇒ 新实体对 `get`/`iter` 不可见、已删实体仍可见。
+    pub fn refresh_views(&mut self) {
+        self.inner.refresh_archetypes();
+        self.refresh_view();
+    }
+
     fn refresh_view(&mut self) {
         self.view_state.update_archetypes(self.inner.world());
         self.view2_state.update_archetypes(self.inner.world());
@@ -3526,6 +3534,101 @@ where
     fn transform_mut(&mut self, id: i32) -> Option<&mut Transform> {
         let view = self.ad.view_mut::<(&'static mut Transform,)>(id)?;
         Some(view.0.into_inner())
+    }
+}
+
+/// **P5-pre**：结构操作（insert/remove）的访问面。只有 [`mir2_world_bevy::tick::Structural`]
+/// 段可调用——与 [`EntityAccess`] 分开，避免给非结构段（settle/verify/dup 等）平白打开
+/// spawn/despawn 面（编译期 `S: Structural` 约束在段实现里）。
+pub trait StructuralAccess: EntityAccess {
+    /// 插入完整实体（`spawn` 的组件集 → bevy World），返回业务 id。
+    ///
+    /// 语义与 [`EntityStore::insert`] 相同（槽位 LIFO 复用、代际号 +1、`next_id` 单调）；
+    /// **facade 缓存必须由调用方在段后 `refresh_views()`**。
+    fn insert(&mut self, spawn: EntitySpawn) -> i32;
+    /// 移除实体；返回 `false` = id 不存在 / 已移除（与 `StageEntities::remove` 同义）。
+    fn remove(&mut self, id: i32) -> bool;
+}
+
+impl StructuralAccess for EntityStore {
+    fn insert(&mut self, spawn: EntitySpawn) -> i32 {
+        EntityStore::insert(self, spawn)
+    }
+    fn remove(&mut self, id: i32) -> bool {
+        EntityStore::remove(self, id).is_some()
+    }
+}
+
+/// **P5-pre**：`StructuralAccess` 的段访问器实现（`S: Structural`）。
+impl<S> StructuralAccess for StageAccess<'_, '_, S>
+where
+    S: mir2_world_bevy::tick::StageSpec
+        + mir2_world_bevy::tick::Structural
+        + mir2_world_bevy::tick::Reads<Entity>
+        + mir2_world_bevy::tick::Reads<Transform>
+        + mir2_world_bevy::tick::Reads<MapBinding>
+        + mir2_world_bevy::tick::Reads<Vitals>
+        + mir2_world_bevy::tick::Reads<AbilitySnapshot<BaseAbil>>
+        + mir2_world_bevy::tick::Reads<Progression>
+        + mir2_world_bevy::tick::Reads<SpawnBinding>
+        + mir2_world_bevy::tick::Reads<DropState>
+        + mir2_world_bevy::tick::Reads<CombatAttribution>
+        + mir2_world_bevy::tick::Reads<Recovery>
+        + mir2_world_bevy::tick::Reads<PvpState>
+        + mir2_world_bevy::tick::Reads<Flags>
+        + mir2_world_bevy::tick::Reads<LifeCycle>
+        + mir2_world_bevy::tick::Reads<Appearance>
+        + mir2_world_bevy::tick::Reads<MonsterClassState>
+        + mir2_world_bevy::tick::Reads<PlayerRunState>
+        + mir2_world_bevy::tick::Reads<GroupState>
+        + mir2_world_bevy::tick::Reads<Revival>
+        + mir2_world_bevy::tick::Reads<BuffState>
+        + mir2_world_bevy::tick::Reads<SlaveState>
+        + mir2_world_bevy::tick::Reads<Inventory>
+        + mir2_world_bevy::tick::Reads<MerchantState>
+        + mir2_world_bevy::tick::Reads<NpcState>
+        + mir2_world_bevy::tick::Reads<AiState>,
+{
+    fn insert(&mut self, spawn: EntitySpawn) -> i32 {
+        let parts = spawn.into_parts();
+        // 25 组件 = 3 段嵌套元组（bevy 扁平 Bundle 上限 15）；组件集与
+        // `EntityStore::insert_parts` 逐项相同，DupState 取 ctor 缺省（与 facade 插入一致）。
+        let id = parts.entity.id;
+        self.ad.insert(
+            id,
+            (
+                (
+                    parts.entity,
+                    parts.transform,
+                    parts.map_binding,
+                    parts.vitals,
+                    parts.ability,
+                    parts.progression,
+                    parts.spawn,
+                    parts.drop,
+                    parts.attribution,
+                    parts.recovery,
+                    parts.pvp,
+                    parts.flags,
+                    parts.life_cycle,
+                    parts.appearance,
+                    parts.monster_class,
+                ),
+                (parts.player_run, parts.group, parts.revival, parts.buff),
+                (
+                    parts.slave,
+                    parts.inventory,
+                    parts.merchant,
+                    parts.npc,
+                    parts.ai,
+                    mir2_world_bevy::DupState::default(),
+                ),
+            ),
+        );
+        id
+    }
+    fn remove(&mut self, id: i32) -> bool {
+        self.ad.remove(id)
     }
 }
 

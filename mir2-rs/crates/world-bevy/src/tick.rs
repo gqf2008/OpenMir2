@@ -627,6 +627,23 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         }
     }
 
+    /// **P5-pre**：插入整个实体（只有 [`Structural`] 段可调用）。
+    ///
+    /// `bundle` = 该实体的完整组件集（world 侧由 `EntitySpawn` 组装；本 crate 不认识业务组件）。
+    /// 与 facade 的 `EntityStore::insert` 同序：取空闲槽（LIFO，代际号 +1）→ spawn → 绑
+    /// `(id, entity)` 并推进 `next_id`。**facade 的缓存 QueryState 不会自动刷新**——调用方
+    /// （world 侧段边界）必须在段后调 `EntityStore::refresh_views()`，否则 `get`/`iter` 漏实体。
+    pub fn insert<B: bevy_ecs::bundle::Bundle>(&mut self, id: i32, bundle: B) -> i32
+    where
+        S: Structural,
+    {
+        let bevy_entity = self.world.spawn(bundle).id();
+        self.world
+            .resource_mut::<SlotTable>()
+            .bind_new(id, bevy_entity);
+        id
+    }
+
     /// 移除整个实体（只有 [`Structural`] 段可调用）。返回 `false` = id 不存在 / 已移除。
     ///
     /// **接线责任**：`EcsStore` 的缓存 `QueryState` 在 facade 里，本适配器够不到；
@@ -1135,5 +1152,66 @@ mod stage_adapter_tests {
         let mut store = store_with(&[1]);
         let mut ad = StageEntities::<ViewUnreg>::new(store.world_mut());
         let _ = ad.view_ref::<(&'static Unregistered,)>(1);
+    }
+
+    // ---------------- P5-pre：段内结构 insert（含结构门 / 半实体 / registry 牙） ----------------
+
+    // 结构探针段：读 A/B、允许结构变更。
+    stage_spec!(StructProbe, TickStage::SimBuff, read: [A, B], write: []);
+    impl Structural for StructProbe {}
+
+    /// P5-pre：`StageEntities::insert` 的槽位/组件语义与 facade 插入一致；半实体按组件可见。
+    ///
+    /// 牙：把 `insert` 改成「spawn 但不 bind 槽位」⇒ `get` 返回 None（resolve 失败）⇒ 红。
+    #[test]
+    fn structural_insert_binds_slot_and_components() {
+        let mut store = EcsStore::<A>::new();
+        store.register_component::<A>().register_component::<B>();
+        let id = store.alloc_id();
+        {
+            let mut ad = StageEntities::<StructProbe>::new(store.world_mut());
+            assert_eq!(ad.insert(id, A(5)), id);
+            assert_eq!(ad.get::<A>(id).map(|a| a.0), Some(5));
+            // 半实体：没有 B ⇒ 按组件缺失 None，并记 StageSkip。
+            assert_eq!(ad.get::<B>(id), None);
+            assert!(ad.remove(id));
+            assert!(ad.get::<A>(id).is_none());
+        }
+        assert_eq!(
+            store.world().resource::<StageSkip>().get(),
+            1,
+            "半实体取缺失组件必须计数"
+        );
+        assert_eq!(
+            store.order_index(),
+            Vec::<i32>::new(),
+            "remove 后槽位已释放"
+        );
+    }
+
+    /// P5-pre：**registry 白名单在段内插入路径上仍 fail-closed**——插入的实体若带未登记组件，
+    /// 段里读它仍 panic（删 `assert_registered` ⇒ 不再 panic ⇒ 红）。
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct Unregistered2(i32);
+
+    struct StructUnreg;
+    impl StageSpec for StructUnreg {
+        const STAGE: TickStage = TickStage::SimBuff;
+        fn reads(id: TypeId) -> bool {
+            id == TypeId::of::<Unregistered2>()
+        }
+    }
+    impl Reads<Unregistered2> for StructUnreg {}
+    impl Structural for StructUnreg {}
+
+    #[test]
+    #[should_panic(expected = "未在 ComponentRegistry 注册")]
+    fn structural_insert_keeps_registry_fail_closed() {
+        let mut store = EcsStore::<A>::new();
+        store.register_component::<A>();
+        let id = store.alloc_id();
+        let mut ad = StageEntities::<StructUnreg>::new(store.world_mut());
+        ad.insert(id, (A(1), Unregistered2(9)));
+        let _ = ad.get::<Unregistered2>(id);
     }
 }

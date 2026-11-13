@@ -9355,6 +9355,128 @@ mod tests {
         );
     }
 
+    mir2_world_bevy::stage_spec!(
+        StructuralProbe,
+        TickStage::SimDup,
+        read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ],
+        write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ]
+    );
+    impl mir2_world_bevy::tick::Structural for StructuralProbe {}
+
+    /// **P5-pre**：段内 `insert` 后，facade 在 `refresh_views()` 之后**立即可见**（get/iter/get_mut）。
+    ///
+    /// 牙：删 `EntityStore::refresh_views()` 的调用（或删其 `refresh_archetypes`/`refresh_view`）
+    /// ⇒ 段后 facade 断言红。注意：未 refresh 前 `get` 必须仍看不到（缓存未更新）——这一半也在钉
+    /// 「refresh 真的承重」。
+    #[test]
+    fn structural_stage_insert_is_visible_to_facade_after_refresh() {
+        use crate::entity::EntityAccess;
+        use mir2_world_bevy::tick::StageEntities;
+        let mut w = World::new(16, 16);
+        let id = 7;
+        let spawn = {
+            let mut e = crate::EntitySpawn::new(id, "born-in-stage", 3, 4);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 37;
+            e.max_hp = 100;
+            e
+        };
+        {
+            let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert_eq!(
+                crate::entity::StructuralAccess::insert(&mut access, spawn),
+                id
+            );
+            // 段内立即可见（与 facade 插入同组件集）。
+            assert_eq!(access.get(id).map(|e| (e.x, e.y, e.hp)), Some((3, 4, 37)));
+        }
+        assert!(
+            w.entities.get(id).is_none(),
+            "未 refresh_views 前 facade 缓存不得看到新实体（否则牙失效）"
+        );
+        w.entities.refresh_views();
+        let e = w.entities.get(id).expect("refresh_views 后必须立即可见");
+        assert_eq!((e.x, e.y, e.hp), (3, 4, 37));
+        assert!(
+            w.entities.iter().any(|x| x.id == id),
+            "内核 read_state 也必须刷新（iter 才看得到）"
+        );
+        assert!(w.entities.get_mut(id).is_some(), "写视图缓存同样要刷新");
+        assert_eq!(w.entities.order_index(), vec![id], "槽位按插入序");
+    }
+
+    /// **P5-pre**：段内 `remove` 后 facade **立即查不到**（槽位表是唯一真值），且槽位释放。
+    #[test]
+    fn structural_stage_remove_is_invisible_to_facade() {
+        use crate::entity::EntityAccess;
+        use mir2_world_bevy::tick::StageEntities;
+        let mut w = World::new(16, 16);
+        let id = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "gone", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 10;
+            e.max_hp = 10;
+            e
+        });
+        assert!(w.entities.get(id).is_some());
+        {
+            let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert!(crate::entity::StructuralAccess::remove(&mut access, id));
+            assert!(access.get(id).is_none());
+        }
+        assert!(w.entities.get(id).is_none(), "remove 后 facade 立即查不到");
+        assert!(!w.entities.iter().any(|e| e.id == id));
+        assert!(w.entities.order_index().is_empty());
+    }
+
     /// **P4**：`SimSlaveCleanup` 段与旧 `slave_list_cleanup_all` 同语义（槽位序 + 表内倒序删除）。
     ///
     /// 主人持 4 个宝宝：alive 保留；dead/ghost/已换主三项移除。ghost 主人不替它清表。

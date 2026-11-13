@@ -958,6 +958,20 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **RNG 逐点 trace（P2-1 口径）**：`MIR2_RNG_LOG` 在 base（168f18843）与 head 上跑同一夹具
 > （`settle_deaths_pvp_calls_drop_use_items_twice`，site 全部落在未改动的 death_drop.rs），
 > `seq/kind/max/result/site` 五列逐行 diff 0 行；两段窗口内 trace 0 条（代码里无 `rng` 调用）。
+> **S4d-3/P5-pre 落地登记（2026-11-13，结构前置）**：Command 迁移的结构前置已落地（设计件
+> P0 未交付项「`StageEntities::insert` + `refresh_archetypes` 接线 …… P5 前必须落地」）：
+> - `world-bevy/src/tick.rs`：`StageEntities::insert<B: Bundle>(id, bundle)`（`S: Structural`；
+>   取空闲槽 LIFO + 代际号 +1 + `next_id` 单调，`bind_new` 与 `EcsStore::insert` 同序）；
+> - `world-bevy/src/ecs.rs`（**可见性微调，2 处**）：`SlotTable::bind_new` 新增 `pub(crate)`、
+>   `EcsStore::refresh_archetypes` 改 `pub`（供 facade 段后刷新内核缓存）；
+> - `world/src/entity.rs`：`EntityStore::refresh_views()`（段后钩子：刷新内核 read/write/pairs +
+>   view*/mut_view 四个视图）、`StructuralAccess::{insert, remove}`（facade `EntityStore` 与
+>   `StageAccess<S: Structural>` 两份实现；与 `EntityAccess` 分开，非结构段编译期无权）；
+> - 牙：段内 insert 后 facade 未 refresh 不可见 / refresh 后 get+iter+get_mut 立即可见（P5P1 删
+>   内核刷新、P5P2 删视图刷新均 RED）；段内 remove 后 facade 立即查不到（槽位真值）；半实体按
+>   组件缺失 `None` + `StageSkip` 计数；段内插入的未登记组件读取仍 panic（registry fail-closed）。
+> - **RNG**：本批 0 抽（`MIR2_RNG_LOG` 运行记录只有 2 行头 `INJECT_OK`/`SEED_PROBE`）。
+> 段数口径不变（P5-main 尚未交付：余 6 段）。
 > **段数口径（P4 交付 head；单位 = 20 阶段）**：已系统化 **14 段**（P1 的 #0/#2/#15/#19 + P2–P4 的 #3/#4/#6/#7/#8/#13/#14/#16/#17/#18），**余 6 段：`#1 Command` / `#5 SimSelfDeliver` / `#9 SimBuff` / `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**。
 
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
