@@ -8434,6 +8434,59 @@ mod tests {
         assert!(!w.refresh_game_time(2));
     }
 
+    /// **P2 段 #6 写回牙**：`ExtraAbil` 到期后**槽位值**被清位（不是只清计时）。
+    ///
+    /// 变异：删掉 `buff.extra_abil[i] = 0` ⇒ 槽位仍为 1 ⇒ 本用例红（M6）。
+    #[test]
+    fn extra_abil_expiry_clears_slot_value() {
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(player(1, "hero", 5, 5, 1));
+        {
+            let b = w.entities.buff_mut(id).expect("buff");
+            b.extra_abil[2] = 1;
+            b.extra_abil_flag[2] = 1;
+            b.extra_abil_times[2] = -1; // tick 后 now=200 > -1 ⇒ 到期
+        }
+        let mut rec = w.tick_head();
+        w.tick_tail(&mut rec);
+        let b = w.entities.buff(id).expect("buff");
+        assert_eq!(b.extra_abil[2], 0, "到期必须清槽位值（M6 写回）");
+        assert_eq!(b.extra_abil_flag[2], 0, "到期必须复位 flag");
+        assert!(
+            !rec.extra_abil_expiries.is_empty(),
+            "到期事件必须进 TickRecord"
+        );
+    }
+
+    /// **P2 段 #16 写回牙**：Play + super_man ⇒ `tick_tail` 的 TailSuperManRefill 把
+    /// **HP/MP 实际补到 max**（不只是翻标志）。
+    ///
+    /// 变异：删掉 `v.hp = v.max_hp` ⇒ HP 停在 0（随后被玩家死亡结算处理）⇒ 本用例红（M8）。
+    #[test]
+    fn super_man_refill_restores_hp_mp_in_tail() {
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(player(1, "hero", 5, 5, 1));
+        {
+            let f = w.entities.flags_mut(id).expect("flags");
+            f.super_man = true;
+        }
+        {
+            let v = w.entities.vitals_mut(id).expect("vitals");
+            v.max_hp = 50;
+            v.max_mp = 30;
+            v.hp = 0;
+            v.mp = 0;
+        }
+        let mut rec = w.tick_head();
+        w.tick_tail(&mut rec);
+        let v = w.entities.vitals(id).expect("vitals");
+        assert_eq!(
+            v.hp, 50,
+            "TailSuperManRefill 必须把 HP 补到 MaxHP（M8 写回）"
+        );
+        assert_eq!(v.mp, 30, "TailSuperManRefill 必须把 MP 补到 MaxMP");
+    }
+
     /// **S4d-3/P1 段注册牙**：tick 驱动的真实 runner 必须按 `STAGE_ORDER` 的对应切片记录段序。
     ///
     /// 牙：删掉 `HeadRunner::new` 里任一 `add_systems`（或 `World::with_maps` 里
