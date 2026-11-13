@@ -3406,6 +3406,8 @@ pub trait EntityAccess {
     fn get_mut(&mut self, id: i32) -> Option<EntityMut<'_>>;
     fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn>;
     fn set_progression(&mut self, id: i32, progression: Progression) -> bool;
+    /// `MapBinding` 的可变视图（`EntityMut` 不含该组件；`verify_map_time` 写 `VerifyTick`/`AddToMaped`）。
+    fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding>;
 }
 
 impl EntityAccess for EntityStore {
@@ -3423,6 +3425,9 @@ impl EntityAccess for EntityStore {
     }
     fn set_progression(&mut self, id: i32, progression: Progression) -> bool {
         EntityStore::set_progression(self, id, progression)
+    }
+    fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
+        EntityStore::map_binding_mut(self, id)
     }
 }
 
@@ -3582,6 +3587,11 @@ where
             None => false,
         }
     }
+    fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
+        // 单组件组合视图：`view_mut` 的运行期白名单核对照常生效（spec 需声明写 `MapBinding`）。
+        let view = self.ad.view_mut::<(&'static mut MapBinding,)>(id)?;
+        Some(view.0.into_inner())
+    }
 }
 
 /// **P2b**：段内「完整实体快照」的查询形状——24 个组件的**嵌套只读元组**（15 + 4 + 5），
@@ -3636,9 +3646,6 @@ pub trait StageSnapshotExt<S: mir2_world_bevy::tick::StageSpec> {
     fn snapshot_spawn(&mut self, id: i32) -> Option<EntitySpawn>;
     /// 等价于 `EntityStore::get(id)`：只读视图（借用期 = 本次 `&mut self`）。
     fn entity_ref(&mut self, id: i32) -> Option<EntityRef<'_>>;
-    /// 等价于 `EntityStore::get_mut(id)`：可写视图（`EntityMut` 的 20 个组件；
-    /// 借用期 = 本次 `&mut self`；P3b）。
-    fn entity_mut(&mut self, id: i32) -> Option<EntityMut<'_>>;
 }
 
 impl<S: mir2_world_bevy::tick::StageSpec> StageSnapshotExt<S>
@@ -3692,53 +3699,6 @@ impl<S: mir2_world_bevy::tick::StageSpec> StageSnapshotExt<S>
             npc,
             ai,
         ))
-    }
-
-    fn entity_mut(&mut self, id: i32) -> Option<EntityMut<'_>> {
-        let (
-            (
-                entity,
-                vitals,
-                ability,
-                progression,
-                spawn,
-                drop,
-                attribution,
-                flags,
-                life_cycle,
-                appearance,
-                monster_class,
-                player_run,
-                group,
-                revival,
-                buff,
-            ),
-            (slave, inventory, merchant, npc, ai),
-        ) = self.view_mut::<EntityMutData>(id)?;
-        // `QueryData::Item` 的 `&mut C` 是 `Mut<C>`（带 change detection）；这里剥成裸 `&mut`，
-        // 与 `EntityStore::get_mut` 的 [`EntityMut`] 同形。
-        Some(EntityMut {
-            entity: entity.into_inner(),
-            vitals: vitals.into_inner(),
-            ability: ability.into_inner(),
-            progression: progression.into_inner(),
-            spawn: spawn.into_inner(),
-            drop: drop.into_inner(),
-            attribution: attribution.into_inner(),
-            flags: flags.into_inner(),
-            life_cycle: life_cycle.into_inner(),
-            appearance: appearance.into_inner(),
-            monster_class: monster_class.into_inner(),
-            player_run: player_run.into_inner(),
-            group: group.into_inner(),
-            revival: revival.into_inner(),
-            buff: buff.into_inner(),
-            slave: slave.into_inner(),
-            inventory: inventory.into_inner(),
-            merchant_state: merchant.into_inner(),
-            npc_state: npc.into_inner(),
-            ai: &mut ai.into_inner().ai,
-        })
     }
 
     fn entity_ref(&mut self, id: i32) -> Option<EntityRef<'_>> {

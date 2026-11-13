@@ -844,9 +844,12 @@ pub const MASTER_MUTINY_DEATH_MS: i64 = 12 * 60 * 60 * 1000;
 /// 等价于 oracle 的「对象已不是本主人的宝宝」⇒ 一并移除（登记：C# 持有强引用，实体离图仍在表里；
 /// 本骨架 `EntityStore::remove` 后 id 可能被代际复用于**另一实体**，故缺失即视为换主）。
 impl World {
-    /// 对单个主人跑一次清表（空表立即返回）。
-    pub fn slave_list_cleanup(&mut self, master_id: i32) {
-        let Some(master) = self.entities.get(master_id) else {
+    /// **P4**：`slave_list_cleanup` 的 facade/段共用实现（逐句与旧方法相同）。
+    pub(crate) fn slave_list_cleanup_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        master_id: i32,
+    ) {
+        let Some(master) = access.get(master_id) else {
             return;
         };
         if master.slave_list.is_empty() {
@@ -855,7 +858,7 @@ impl World {
         let mut list = master.slave_list.clone();
         for i in (0..list.len()).rev() {
             let sid = list[i];
-            let remove = match self.entities.get(sid) {
+            let remove = match access.get(sid) {
                 Some(s) => s.death || s.ghost || s.master != Some(master_id),
                 None => true,
             };
@@ -863,9 +866,15 @@ impl World {
                 list.remove(i);
             }
         }
-        if let Some(m) = self.entities.get_mut(master_id) {
+        if let Some(m) = access.get_mut(master_id) {
             m.slave.slave_list = list;
         }
+    }
+
+    /// 对单个主人跑一次清表（空表立即返回）。
+    #[allow(dead_code)] // 段路径走 `slave_list_cleanup_impl`；测试/宿主仍可用本入口
+    pub fn slave_list_cleanup(&mut self, master_id: i32) {
+        Self::slave_list_cleanup_impl(&mut self.entities, master_id);
     }
 
     /// `MagTamming` 受奴落尾（`MagicManager.cs:753-770`）。
@@ -935,18 +944,24 @@ impl World {
 ///
 /// oracle 里清表在各自主人的 `Run()` 里跑；本骨架玩家无 `Run` ⇒ 在 [`World`] 的 tick 里集中跑。
 /// 空表零动作（既有 golden 逐字节不变；无随机数）。
-pub fn slave_list_cleanup_all(world: &mut World) {
-    let ids: Vec<i32> = world
-        .entities
-        .iter_ref()
-        // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B14）：oracle 的宝宝清表在**主人自己的 `Run()`** 里
-        // （`BaseObject.Base.cs:208-217`），ghost 不 `Run` ⇒ 集中扫描也不该替 ghost 主人清表。
-        .filter(|e| !e.slave_list.is_empty() && !e.ghost)
-        .map(|e| e.id)
-        .collect();
-    for id in ids {
-        world.slave_list_cleanup(id);
+pub(crate) fn slave_list_cleanup_all_impl<A: crate::entity::EntityAccess>(access: &mut A) {
+    // 槽位顺序收集（与旧 `iter_ref` 同序）；ghost 主人不替它清表（makeghost-lifecycle M-2/B14）。
+    let mut ids: Vec<i32> = Vec::new();
+    for id in access.order_ids() {
+        if let Some(e) = access.get(id) {
+            if !e.slave_list.is_empty() && !e.ghost {
+                ids.push(id);
+            }
+        }
     }
+    for id in ids {
+        World::slave_list_cleanup_impl(access, id);
+    }
+}
+
+/// 旧入口（facade）：委托 [`slave_list_cleanup_all_impl`]。
+pub fn slave_list_cleanup_all(world: &mut World) {
+    slave_list_cleanup_all_impl(&mut world.entities);
 }
 
 /// `MonsterObject.CheckRoyalty`（`MonsterObject.cs:363-397`）。
