@@ -798,6 +798,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   用例断言**未改**。
 >
 > **P0 未交付项（reviewer-25 P2-1 / P3-4；均为 P2/P6 前置，P0 偏差登记）**
+> （**本表是 P0 当时的快照**；各行状态以对应批次的落地登记为准——P5P-7）
 >
 > | 项（设计件位置） | 状态 | 何时必须落地 |
 > | --- | --- | --- |
@@ -805,7 +806,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > | `T-neg-1`（越白名单编译失败守卫）/ `T-neg-2`（未注册组件构建期 panic） | **未交付** | **P2 首批必须落地** |
 > | `StageSkip::ComponentMissing` 计数器（§2.4 缺失组件可观测） | **未交付** | **P2 首批必须落地**（写实体段马上要用） |
 > | `StageEntities::view_mut`（§3.3 组合视图） | **未交付** | **P2 首批必须落地**（写实体段马上要用） |
-> | `StageEntities::insert` + `refresh_archetypes` 接线（§3.3 只有 remove；结构段需要 insert） | **未交付** | **P5（Command）/ P6（NPC/商人/宝宝）前必须落地**，并配「丢写回必红」牙 |
+> | `StageEntities::insert` + `refresh_archetypes` 接线（§3.3 只有 remove；结构段需要 insert） | **已交付（P5-pre ad36cab57）**；段侧 `StageQueries` 刷新由 P5P-1（P5-main 首笔）补 | 原「P5 前必须落地」已满足 |
 > | `WritesRecord<Field>`（§2.1 记录栏白名单） | **弃用** | 理由：`TickRecord` 字段写集本批以「每段只写自己那几栏」的评审约定 + golden 兜底，标记 trait 收益不抵 12 个字段 × 18 段的 impl 噪声；如 P2 起出现跨段误写再重新引入 |
 >
 > 与设计的另一处偏差：设计 §3.4 的 `StageWorld` 包装未落地（P0/P1 无模块函数迁移，
@@ -923,7 +924,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **共用函数不动**：`char_pushed_now` 与 `Command::Push` / slave 自投递共用，**签名保持不变**
 > （coordinator 裁决：P5 Command 迁移时统一）；逐格推进/RNG 邻接判定抽成
 > `char_pushed_core` / `check_dup_obj_core` / `can_walk_cell_core`，facade 与段访问器
-> （`StageDupAccess`，实现 `crate::entity::DupAccess`）走**同一份**实现，不复制。
+> （`StageAccess`，实现 `crate::entity::EntityAccess`）走**同一份**实现，不复制。
 > `monai::count_at_cell` 拆出 `count_at_cell_with(maps, …, is_blocking)`（只读辅助，语义逐行相同）。
 > **RNG 对拍（改动前后同一夹具）**：3 名玩家同格 (5,5)，clock=10_000 第一趟置位（零推挤），
 > clock=13_001 第二趟 ⇒ 仅槽位首名过门、抽 `RandomByte(8)` 恰一次：推挤序列
@@ -972,6 +973,15 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   组件缺失 `None` + `StageSkip` 计数；段内插入的未登记组件读取仍 panic（registry fail-closed）。
 > - **RNG**：本批 0 抽（`MIR2_RNG_LOG` 运行记录只有 2 行头 `INJECT_OK`/`SEED_PROBE`）。
 > 段数口径不变（P5-main 尚未交付：余 6 段）。
+>
+> **白名单精度损失登记（review 69bd8351 P5P-4/P5P-9；设计件 Dv6）**：为了让 `SimDup` 复用
+> `EntityAccess`，其 spec 从 read 6 / write 3 扩到 **read 25 / write 22**（含 `Entity`、`DupState`、
+> `Transform` 与 `EntityMut` 的 20 个写组件）——运行期白名单对该段实际失效（误写 `Inventory`
+> 不会被拒），由 golden/parity + 评审兜底；这是「统一到 `EntityAccess`」的固有代价。另：
+> `EntityAccess::map_binding_mut` 的段实现走 `view_mut::<(&mut MapBinding,)>`，`SimDup` 未声明
+> `Writes<MapBinding>`（现不调用）——latent，若将来调用会 panic。
+> **follow-up（monai.rs 不在本片写集）**：`monai.rs` 的 `count_at_cell` doc 仍写
+> 「`crate::world::StageDupAccess`」，应改为 `StageAccess`/`EntityAccess` 口径，登记待 P6 或扩写集时清理。
 > **段数口径（P4 交付 head；单位 = 20 阶段）**：已系统化 **14 段**（P1 的 #0/#2/#15/#19 + P2–P4 的 #3/#4/#6/#7/#8/#13/#14/#16/#17/#18），**余 6 段：`#1 Command` / `#5 SimSelfDeliver` / `#9 SimBuff` / `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**。
 
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。

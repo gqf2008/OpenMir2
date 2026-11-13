@@ -355,19 +355,52 @@ impl StageSkip {
 /// 段适配器在段开始时把本资源**移出** bevy `World` 自持，`Drop` 时放回——`QueryState::get_mut`
 /// 需要同时可变借用 state 与 World，二者必须不同所有者。结构变更段要在收尾时刷新
 /// archetype（P5/P6 接线，见 docs 登记表）。
+/// **P5P-1**：`StageQueries` 的段侧刷新面（类型擦除后仍能调 `update_archetypes`）。
+///
+/// `view_ref`/`view_mut` 走 `QueryState::get_manual`/`get_mut`：后者（bevy 0.19.1）经 `query_mut`
+/// 自带刷新，前者的 `get_manual` **不会**自动刷新——所以段内 `insert`/`remove` 造出新/改变
+/// archetype 后，缓存的读状态必须显式 update，否则对新实体**永久** `None`。
+trait DynQueryState: Send + Sync {
+    fn update_archetypes(&mut self, world: &World);
+    fn as_any_mut(&mut self) -> &mut dyn Any;
+}
+
+impl<Q: QueryData + 'static> DynQueryState for QueryState<Q> {
+    fn update_archetypes(&mut self, world: &World) {
+        QueryState::<Q>::update_archetypes(self, world);
+    }
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
+}
+
 #[derive(Resource, Default)]
 pub struct StageQueries {
-    states: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+    states: HashMap<TypeId, Box<dyn DynQueryState>>,
 }
 
 impl StageQueries {
     /// 取（首次自动创建）某 `QueryData` 的缓存状态。
+    ///
+    /// 首次创建时 `world.query::<Q>()` 已匹配当时全部 archetype；**之后**的段内结构变更由
+    /// `StageEntities::insert/remove` 调 `StageQueries::refresh_archetypes` 负责
+    /// （`view_ref` 的 `get_manual` 不自刷，`view_mut` 的 `query_mut` 自刷）。
     fn state<Q: QueryData + 'static>(&mut self, world: &mut World) -> &mut QueryState<Q> {
-        self.states
+        let entry = self
+            .states
             .entry(TypeId::of::<Q>())
-            .or_insert_with(|| Box::new(world.query::<Q>()))
+            .or_insert_with(|| Box::new(world.query::<Q>()));
+        entry
+            .as_any_mut()
             .downcast_mut::<QueryState<Q>>()
             .expect("StageQueries 的 TypeId 键与 QueryData 类型必须一一对应")
+    }
+
+    /// **P5P-1**：段内结构变更后刷新**全部**已缓存的段侧 QueryState（只刷新已建条目）。
+    fn refresh_archetypes(&mut self, world: &World) {
+        for state in self.states.values_mut() {
+            state.update_archetypes(world);
+        }
     }
 }
 
@@ -641,6 +674,8 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         self.world
             .resource_mut::<SlotTable>()
             .bind_new(id, bevy_entity);
+        // **P5P-1**：新 archetype 必须让 `view_ref` 的缓存读状态跟上（get_manual 不自刷）。
+        self.refresh_stage_queries();
         id
     }
 
@@ -659,7 +694,17 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         self.world
             .resource_mut::<SlotTable>()
             .release_slot(slot_idx);
+        self.refresh_stage_queries();
         true
+    }
+}
+
+impl<'w, S: StageSpec> StageEntities<'w, S> {
+    /// **P5P-1**：段内结构变更后刷新段侧缓存查询（`self.queries` 在 `Drop` 前自持）。
+    fn refresh_stage_queries(&mut self) {
+        if let Some(queries) = self.queries.as_mut() {
+            queries.refresh_archetypes(&*self.world);
+        }
     }
 }
 
@@ -1213,5 +1258,47 @@ mod stage_adapter_tests {
         let mut ad = StageEntities::<StructUnreg>::new(store.world_mut());
         ad.insert(id, (A(1), Unregistered2(9)));
         let _ = ad.get::<Unregistered2>(id);
+    }
+
+    // ---------------- P5P-1：段侧 StageQueries 的 archetype 刷新 ----------------
+
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct C(i32);
+
+    stage_spec!(DynProbe, TickStage::SimBuff, read: [A, B, C], write: [A]);
+    impl Structural for DynProbe {}
+
+    /// **P5P-1 牙**：段内 `insert` 造出新 archetype 后，**已预热**过的 `view_ref`/`view_mut`
+    /// 缓存必须能查见新实体（旧实现里 `get_manual` 不自刷 ⇒ 永久 `None`）。
+    ///
+    /// 牙：删 `StageEntities::insert` 的 `refresh_stage_queries()` 与 `StageQueries::state` 的
+    /// `update_archetypes` 两处之一/全部 ⇒ 第二次 `view_ref(2)` 恒 `None` ⇒ 红。
+    #[test]
+    fn stage_queries_see_new_archetype_after_insert() {
+        let mut store = EcsStore::<A>::new();
+        store
+            .register_component::<A>()
+            .register_component::<B>()
+            .register_component::<C>();
+        store.insert(1, A(1));
+        assert!(store.insert_component(1, B(1)));
+        {
+            let mut ad = StageEntities::<DynProbe>::new(store.world_mut());
+            // 预热：`{A,B}` archetype 的读状态被建出来。
+            assert!(
+                ad.view_ref::<(&'static A, &'static B)>(1).is_some(),
+                "预热视图"
+            );
+            // 新 archetype `{A,B,C}`：旧缓存若不刷新，对 id2 永远 None。
+            ad.insert(2, (A(2), B(2), C(2)));
+            assert!(
+                ad.view_ref::<(&'static A, &'static B)>(2).is_some(),
+                "段内插入新 archetype 后 view_ref 必须查见"
+            );
+            assert!(
+                ad.view_mut::<(&'static mut A, &'static B)>(2).is_some(),
+                "view_mut 同样"
+            );
+        }
     }
 }
