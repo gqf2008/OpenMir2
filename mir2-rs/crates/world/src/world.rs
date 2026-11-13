@@ -1802,6 +1802,15 @@ impl World {
         out
     }
 
+    /// **兼容入口**（P2 起段逻辑在 `SimPlayerRunExpiry` 系统里）：跑一次该段并返回输出。
+    ///
+    /// 供既有 `tests/run_state_expiry_vectors.rs` 等「直接驱动一段」的用例使用；tick 内
+    /// 走 `tick_head` 的注册调用，行为同一份实现。
+    pub fn expire_player_run_state(&mut self) -> Vec<(i32, RunStateExpiry)> {
+        self.run_head_stage(|world, head| head.run(TickStage::SimPlayerRunExpiry, world));
+        self.take_run_state_expiries()
+    }
+
     /// 取走 `SimPlayerRunExpiry` 段落到 [`StageOut`] 的输出。
     fn take_run_state_expiries(&mut self) -> Vec<(i32, RunStateExpiry)> {
         std::mem::take(
