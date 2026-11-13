@@ -9506,9 +9506,11 @@ impl World {
 
     /// 单步移动的**分类版**：格子校验 → 更新坐标。`Ok(())` = 已移动；`Err(_)` = 未移动及原因。
     ///
-    /// 判序与原 `try_step` 逐条对应（bounds → terrain → actor → `move_object`）：每个 `Err` 分支在
-    /// 原实现里都同样返回 `false` 且**不改任何状态**（`move_object` 的失败门都在源格摘除之前），
-    /// 故成功/失败集合不变。
+    /// **判序与原 `try_step` 完全一致**：`cell_match` 假在调 `move_object` 之前就返回（base 同样
+    /// 不调，无侧效应）；其余一律交给 `move_object`，分类发生在它返回 false **之后**。这个顺序
+    /// 是必需的——oracle `MoveToMovingObject` 对「界内但 `CellValid` 假」的目标格会**先把 actor
+    /// 从源格摘除、再因 `cellSuccess` 假返回 false**（本仓 `move_object` 的「先删后判」同构）。
+    /// 若提前短路分类，源格登记会与 base 不同（撞墙后 base 源格 = 0、提前短路 = 1，R26-1 实测）。
     fn try_step_blocked(&mut self, actor_id: i32, dx: i32, dy: i32) -> Result<(), StepBlock> {
         let Some(e) = self.entities.get(actor_id) else {
             return Err(StepBlock::Other);
@@ -9516,15 +9518,15 @@ impl World {
         let (fx, fy, map_id) = (e.x, e.y, e.map_id);
         let cert_cell_type = entity_cell_type(&e);
         let (tx, ty) = (fx + dx, fy + dy);
-        // 目标格分类**只在这里判一次**（与 `try_step_now_blocked` 同源）：越界/地形/活体占位
-        // 三种原因都由 [`World::cell_free_blocked`] 产出，避免两处口径漂移。
-        self.cell_free_blocked(map_id, tx, ty, actor_id)?;
-        // `move_object` 的 `is_blocking` 闭包需要「不可变借用 `maps` 期间」算好的 id 名单；
-        // 分类已由上一行完成，这里只复刻原实现的输入（含自占格，`(0,0)` 时与原行为一致）。
+        // `move_object` 的 `is_blocking` 闭包需要「不可变借用 `maps` 期间」算好的 id 名单。
+        // 前置 `cell_match` 与 base 同：越界在调 `move_object` 之前返回（base 也无侧效应）。
         let blockers: Vec<i32> = {
             let Some(map) = self.maps.get(map_id) else {
                 return Err(StepBlock::Other);
             };
+            if !map.cell_match(tx, ty) {
+                return Err(StepBlock::Bounds);
+            }
             let (cell, _) = map.get_cell_info(tx, ty);
             cell.obj_list
                 .iter()
@@ -9558,15 +9560,25 @@ impl World {
             |cid| blocking.contains(&cid),
         );
         if !moved {
-            // bounds/terrain/actor 已由 `cell_free_blocked` 排除；残余失败（如 `(0,0)` 自占格被
-            // `is_blocking` 命中）原实现也返回 false ⇒ 归入 Other。
-            return Err(StepBlock::Other);
+            // **分类必须在 `move_object` 之后**：保留它「先删源格、后判 cellSuccess」的 oracle
+            // 侧效应（见函数头注释）。界内 invalid ⇒ Terrain、活体占位 ⇒ Actor；`cell_free_blocked`
+            // 回 `Ok` 的残余失败（如 `(0,0)` 自占格被 `is_blocking` 命中）⇒ Other。
+            return Err(self.classify_block(map_id, tx, ty, actor_id));
         }
         if let Some(t) = self.entities.transform_mut(actor_id) {
             t.x = tx;
             t.y = ty;
         }
         Ok(())
+    }
+
+    /// `move_object` 判假之后的**原因分类**（只允许在调用之后用：见
+    /// [`World::try_step_blocked`] 的「先删后判」说明）。与 [`World::cell_free_blocked`] 同口径；
+    /// 该函数回 `Ok` 的残余失败（如 `(0,0)` 自占格被 `is_blocking` 命中）归 `Other`。
+    fn classify_block(&self, map_id: usize, tx: i32, ty: i32, self_id: i32) -> StepBlock {
+        self.cell_free_blocked(map_id, tx, ty, self_id)
+            .err()
+            .unwrap_or(StepBlock::Other)
     }
 
     /// **出站接线片 W2**：`Command::Push` → `BaseObject.CharPushed`
