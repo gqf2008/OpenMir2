@@ -878,9 +878,9 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > 先落 `StageEntities::snapshot_spawn`（world 侧组装 `EntitySpawn` 或写一个 owned
 > `PvpView` 视图），再迁该段；不要为了赶批次手写一版不等价的 PvpView。
 > **牙的缺口（review 时请核）**：4 段「删注册必红」由 trace 序列牙覆盖（M1–M4 全 RED）；
-> 写回变异 M5（expire_hitters）/M7（run_state_expiry）RED，但 **M6（ExtraAbil 清位）与
-> M8（SuperMan 回满）在现有 736 条 world 单测下全绿**——这两段缺「丢写回必红」的见证用例，
-> 需在下一批补两条 tick 级用例（构造到期 extra_abil / 玩家 super_man+hp0，跑 tick 后断言）。
+> 写回变异 M5（expire_hitters）/M7（run_state_expiry）RED；M6/M8 的见证用例已补齐
+> （`extra_abil_expiry_clears_slot_value` / `super_man_refill_restores_hp_mp_in_tail`，
+> 各自删对应写回即 RED）。**注意：P2 本批是 4/5 段已迁——`SimMapEvents` 未迁，P2 不是全绿。**
 >
 > **本批未做**：P2–P7（余 14 段迁移）、上表「P0 未交付项」、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
