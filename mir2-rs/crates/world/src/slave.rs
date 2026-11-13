@@ -1128,7 +1128,18 @@ pub fn tame_royalty_tick(caster_level: i32, magic_level: u8, draw: i32, now: i64
 /// 缩放值）**截掉** ⇒ `DC` 实际只等于 `(ushort)(short)(LoByte(DC) * Power)`，高字节归零。本实现逐位保留这
 /// 个截断（含红检钉住）。
 pub fn process_slave_mutiny(world: &mut World, master_id: i32, cfg: &PetSlaveConfig) -> Vec<i32> {
-    let Some(master) = world.entities.get(master_id) else {
+    let World { entities, sim, .. } = world;
+    process_slave_mutiny_impl(entities, sim, master_id, cfg)
+}
+
+/// **P6a2**：`process_slave_mutiny` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+pub(crate) fn process_slave_mutiny_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    master_id: i32,
+    cfg: &PetSlaveConfig,
+) -> Vec<i32> {
+    let Some(master) = access.get(master_id) else {
         return Vec::new();
     };
     if !master.death || !cfg.master_die_mutiny {
@@ -1143,12 +1154,12 @@ pub fn process_slave_mutiny(world: &mut World, master_id: i32, cfg: &PetSlaveCon
     let mut mutinied = Vec::new();
     for sid in slave_ids.iter().rev() {
         let roll = if last_hiter.is_some() {
-            world.rng.random_below(rate)
+            sim.rng.random_below(rate)
         } else {
             1 // `&&` 短路：不抽数、必不走叛变支
         };
         if last_hiter.is_some() && roll == 0 {
-            if let Some(s) = world.entities.get_mut(*sid) {
+            if let Some(s) = access.get_mut(*sid) {
                 s.slave.master = None;
                 s.slave.slave_exp_level = color_len;
                 // `RecalcAbilitys()` 对基类怪 = `WAbil = Abil.Clone()`（本骨架无额外字段）⇒ no-op。
@@ -1163,7 +1174,7 @@ pub fn process_slave_mutiny(world: &mut World, master_id: i32, cfg: &PetSlaveCon
                 }
             }
             mutinied.push(*sid);
-        } else if let Some(s) = world.entities.get_mut(*sid) {
+        } else if let Some(s) = access.get_mut(*sid) {
             s.vitals.hp = 0;
         }
     }
@@ -1174,7 +1185,17 @@ pub fn process_slave_mutiny(world: &mut World, master_id: i32, cfg: &PetSlaveCon
 ///
 /// `!Ghost` ⇒ 直接返回。返回被处理的宝宝 id（末尾往前序）。`MakeGhost` 的 `CanReAlive` 变体未建模（登记）。
 pub fn process_slave_ghost(world: &mut World, master_id: i32) -> Vec<i32> {
-    let Some(master) = world.entities.get(master_id) else {
+    let World { entities, sim, .. } = world;
+    process_slave_ghost_impl(entities, sim, master_id)
+}
+
+/// **P6a2**：`process_slave_ghost` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+pub(crate) fn process_slave_ghost_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    _sim: &mut crate::world::SimState,
+    master_id: i32,
+) -> Vec<i32> {
+    let Some(master) = access.get(master_id) else {
         return Vec::new();
     };
     if !master.ghost {
@@ -1183,7 +1204,7 @@ pub fn process_slave_ghost(world: &mut World, master_id: i32) -> Vec<i32> {
     let slave_ids: Vec<i32> = master.slave_list.clone();
     let mut out = Vec::new();
     for sid in slave_ids.iter().rev() {
-        if let Some(s) = world.entities.get_mut(*sid) {
+        if let Some(s) = access.get_mut(*sid) {
             // `MakeGhost`（`BaseObject.Base.cs:484-497`）：`CanReAlive => Invisible=true` 否则 `Ghost=true`。
             // 本骨架未建模 `CanReAlive`/`DisappearA` ⇒ 按召唤物常态置 `ghost`（登记）。
             s.life_cycle.ghost = true;
@@ -1848,486 +1869,552 @@ impl World {
     /// [`process_slave_mutiny`]，`RM_MASTERDIEGHOST` ⇒ [`process_slave_ghost`]。
     pub fn deliver_self_delay_msgs_with(
         &mut self,
-        mut spawner: Option<&mut dyn crate::special_monster::SpecialSpawner>,
+        spawner: Option<&mut dyn crate::special_monster::SpecialSpawner>,
     ) -> Vec<SelfDelayOutcome> {
-        let now = self.clock_ms;
-        let mut out = Vec::new();
-        // 每 actor 独立队列；按 actor 首次入队序泵（oracle 每个 actor 的 `Run()` 各泵自己的）。
-        // `actors` 只是**本轮起点的快照**：本轮投递中新入队的消息留到下一次调用
-        // （oracle 同一 actor 的 `Run()` 一轮只泵一次）。
-        let actors = self.self_delay_msgs.actor_ids();
-        for actor_id in actors {
-            while let Some(head) = self.self_delay_msgs.peek(actor_id) {
-                let ident = head.ident;
-                // Rust 侧登记门（oracle 没有对应的泵调用/开关）：
-                // - Ghost actor 的 `RM_ZEN_BEE`：oracle `ProcessMonsters` 整只跳过 Ghost ⇒
-                //   其消息泵根本不跑 ⇒ 消息保留。
-                // - `slave_self_delay_enabled == false` 的主人死族：Rust 侧开关（oracle 无此门），
-                //   消息保留。
-                if ident == crate::special_monster::RM_ZEN_BEE
-                    && !self.entities.get(actor_id).is_some_and(|e| !e.ghost)
-                {
-                    break;
-                }
-                if matches!(ident, RM_MASTERDIEMUTINY | RM_MASTERDIEGHOST)
-                    && !self.slave_self_delay_enabled()
-                {
-                    break;
-                }
-                if head.deliver_at_ms > now {
-                    // oracle `GetMessage`：`TryDequeue` 后发现未到点 ⇒ **以 `Lowest` 重新入队**
-                    // 并 `return false`。必须真做「出队 + 入队」：.NET 堆布局因此改变（末元素
-                    // 移到根、sift-down），下一次泵才能先投递其它已到点项。
-                    let mut msg = self
-                        .self_delay_msgs
-                        .dequeue(actor_id)
-                        .expect("peek 成功 ⇒ 队非空");
-                    msg.priority = MESSAGE_PRIORITY_LOWEST;
-                    self.self_delay_msgs.enqueue(msg);
-                    break;
-                }
-                let msg = self
+        // **P6a2**：泵的实体/状态访问面统一到 [`deliver_self_delay_msgs_impl`]（段系统与
+        // facade 共用同一份实现）。
+        let base = self.pending_special_spawns.len();
+        let mut out = {
+            let World { entities, sim, .. } = self;
+            deliver_self_delay_msgs_impl(entities, sim)
+        };
+        let Some(sp) = spawner else {
+            return out;
+        };
+        // **facade 独占支**（仓库内无调用方；保留 API）：`SpecialSpawner` 的
+        // `RegenMonsterByName` 取 `&mut World`，段访问器无法提供 ⇒ 本入口把本次泵**新入队**的
+        // `RM_ZEN_BEE` 请求按入队序同步造怪（outcome 仍按旧形状置 `zen_bee: None`）。与旧内联
+        // 形态的唯一差异 = 同一次泵内「造怪抽数」相对其它消息的 RNG 交错位置（旧 = 投递点，
+        // 新 = 泵尾）；`None` 路径（tick 生产路径）逐字节不变。
+        let reqs = self.pending_special_spawns.split_off(base);
+        let mut rng = std::mem::replace(&mut self.rng, RandomNumber::with_seed(0));
+        for req in reqs {
+            let child = sp.regen_monster_by_name(
+                self,
+                &mut rng,
+                req.map_id,
+                &req.name,
+                req.x as i16,
+                req.y as i16,
+            );
+            if let Some(child) = child {
+                crate::special_monster::adopt_special_child(self, req.owner_id, child);
+            }
+        }
+        self.rng = rng;
+        // 旧 Some 路径的 outcome 不带队列载荷（`operate_special` 同步消费、不登记请求）⇒
+        // 保持 `zen_bee: None` 的对外形状（`special_monster_vectors` 钉住这一条）。
+        for o in out.iter_mut() {
+            if o.ident == crate::special_monster::RM_ZEN_BEE {
+                o.zen_bee = None;
+            }
+        }
+        out
+    }
+}
+
+/// **P3-B4**：`RM_DELAYMAGIC` 到点投递（`BaseObject.Base.cs:711-729`）。
+///
+/// 逐行：
+/// ```text
+/// :712 nPower = (ushort)wParam; tx = LoWord(nParam1); ty = HiWord(nParam1); rage = nParam2
+/// :716 target = ActorMgr.Get(nParam3)
+/// :717 if (target != null && target.GetMagStruckDamage(this, nPower) > 0)   ← 1 抽
+/// :719   SetTargetCreat(target)
+/// :720   if (target.Race >= Animal) nPower = Round(nPower / 1.2)
+/// :724   if (|tx-target.CurrX| <= rage && |ty-target.CurrY| <= rage)
+/// :726     target.SendMsg(this, RM_MAGSTRUCK, 0, nPower, 0, 0)
+/// ```
+///
+/// **`GetMagStruckDamage(this, …)`** 的 `baseObject` 是 `this`（施法者）⇒ 不死系加成生效
+/// （`BaseObject.Base.cs:816`）。与目标处理 `RM_MAGSTRUCK` 时传 `null` 的那一抽不同。
+pub(crate) fn deliver_delay_magic_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    msg: &SelfDelayMsg,
+) -> DelayMagicDelivery {
+    let n_power = i32::from(msg.w_param as u16);
+    let tx = i32::from((msg.n_param1 & 0xFFFF) as u16 as i16);
+    let ty = i32::from(((msg.n_param1 >> 16) & 0xFFFF) as u16 as i16);
+    let rage = msg.n_param2;
+    let target_id = msg.n_param3;
+    let mut out = DelayMagicDelivery {
+        caster_id: msg.actor_id,
+        target_id,
+        power: n_power,
+        msd: 0,
+        struck: false,
+    };
+    let Some(t) = access.spawn_cloned(target_id) else {
+        return out;
+    };
+    // `this` 在 oracle 里恒存在；缺失时按 0 处理（不改变取数次数）。
+    let undead = access.get(msg.actor_id).map_or(0, |c| c.undead_power);
+    let msd = crate::combat::get_mag_struck_damage(&mut sim.rng, t.mac, n_power, Some(undead));
+    out.msd = msd;
+    if msd > 0 {
+        if let Some(c) = access.get_mut(msg.actor_id) {
+            c.ai.target_creature = Some(target_id);
+        }
+        let mut power = n_power;
+        if t.race >= crate::entity::ACTOR_RACE_ANIMAL {
+            power = hutil::round(f64::from(power) / 1.2);
+        }
+        // 目标侧 `SendMsg(IActor, …)`（`BaseObject.Message.cs:105-113`）同样有 `!Ghost` 门。
+        if !t.ghost && (tx - t.x).abs() <= rage && (ty - t.y).abs() <= rage {
+            sim.pending_mag_struck.push(crate::world::PendingMagStruck {
+                target_id,
+                caster_id: msg.actor_id,
+                power,
+                mine: false,
+                order: msg.enqueue_seq,
+            });
+            out.struck = true;
+        }
+    }
+    out
+}
+
+/// **P3-B4**：`RM_POISON` 到点投递（`BaseObject.Base.cs:740-759` + `MakePosion`
+/// `BaseObject.cs:1941-1973`）。
+///
+/// ```text
+/// :741 caster = ActorMgr.Get(nParam2)
+/// :742 if (caster != null) {
+/// :744   if (IsProperTarget(caster)) { SetTargetCreat(caster);
+/// :747     if (this.Race==Play && caster.Race==Play) SetPkFlag(caster);  // ⇒ 656（由 caster 发）
+/// :751     SetLastHiter(caster); }
+/// :753   MakePosion(wParam, (ushort)nParam1, nParam3);
+/// :757 } else MakePosion(...)
+/// ```
+///
+/// **零 RNG**。`nOldCharStatus != CharStatus` ⇒ `StatusChanged()`（⇒ 657）；
+/// `Race == Play` ⇒ `SysMsg(YouPoisoned)`（⇒ 100）。两者都由宿主据本记录出帧。
+pub(crate) fn deliver_poison_impl<
+    A: crate::entity::EntityAccess + crate::entity::PvpStateAccess,
+>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    msg: &SelfDelayMsg,
+) -> PoisonDelivery {
+    let target_id = msg.actor_id;
+    let caster_id = msg.n_param2;
+    let poison_type = msg.w_param as u8;
+    let time = i32::from((msg.n_param1 & 0xFFFF) as u16);
+    let point = msg.n_param3;
+    let mut out = PoisonDelivery {
+        target_id,
+        poison_type,
+        time,
+        point,
+        ..PoisonDelivery::default()
+    };
+    // S4a：目标判定链需要 `PvpState` ⇒ 用生成期载体（`EntitySpawn`）的只读快照。
+    let target = access.spawn_cloned(target_id);
+    let caster = access.spawn_cloned(caster_id);
+    if let (Some(t), Some(c)) = (target.as_ref(), caster.as_ref()) {
+        // `IsProperTarget` 的 `this` 是**中毒目标** t ⇒ `IsGroupMember` 读 **t 的团长**
+        // （`PlayObject.cs:5158-5175`）的成员表，不是 t 自己的 `group_members`（非团长恒空）。
+        if crate::combat::is_proper_target_grouped(
+            t,
+            c,
+            &crate::world::World::attacker_group_members_impl(access, t),
+        ) {
+            if let Some(tm) = access.get_mut(target_id) {
+                tm.ai.target_creature = Some(caster_id);
+            }
+            if t.race == crate::entity::ACTOR_RACE_PLAY && c.race == crate::entity::ACTOR_RACE_PLAY
+            {
+                out.name_color =
+                    crate::world::World::set_pk_flag_impl(access, sim, target_id, caster_id);
+            }
+            let now = sim.clock_ms;
+            if let Some(mut tm) = access.get_mut(target_id) {
+                tm.set_last_hiter(caster_id, now);
+            }
+        }
+    }
+    let Some(t) = target else {
+        return out;
+    };
+    let old = crate::world::World::get_char_status_impl(access, sim, target_id);
+    let ok =
+        crate::world::World::make_posion_impl(access, sim, target_id, poison_type, time, point);
+    let new = crate::world::World::get_char_status_impl(access, sim, target_id);
+    out.status = new;
+    out.status_changed = ok && old != new;
+    out.is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
+    out
+}
+
+/// **P6a2 段 #5 `SimSelfDeliver`** 的 facade/段共用实现：到点投递自身延时消息
+/// （`PlayObject.Message.cs:360-364` 的消息段）。
+///
+/// 与 [`World::deliver_self_delay_msgs_with`] 共用**同一份**实现（段系统
+/// [`crate::world::sim_self_deliver_stage_system`] 走本函数，facade 无 spawner 入口也走本函数）。
+/// 段内借用形状按 Dv5：owned `SimState` + `StageEntities`。
+///
+/// **`spawner` 支（`RM_ZEN_BEE` 的宿主同步产仔）不在本函数**：`SpecialSpawner::regen_monster_by_name`
+/// 取 `&mut World`（`bins/game-svr` 的 `WorldMonsterSink`），段访问器无法提供 ⇒ 本函数恒按
+/// **入队**形态（`pending_special_spawns`）投递，宿主用 [`World::flush_special_spawns`] 排水。
+/// facade 的 `_with(Some(spawner))` 兼容入口在泵返回后同步处理本次新入队的请求。
+pub(crate) fn deliver_self_delay_msgs_impl<
+    A: crate::entity::EntityAccess + crate::entity::PvpStateAccess,
+>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+) -> Vec<SelfDelayOutcome> {
+    let now = sim.clock_ms;
+    let mut out = Vec::new();
+    // 每 actor 独立队列；按 actor 首次入队序泵（oracle 每个 actor 的 `Run()` 各泵自己的）。
+    // `actors` 只是**本轮起点的快照**：本轮投递中新入队的消息留到下一次调用
+    // （oracle 同一 actor 的 `Run()` 一轮只泵一次）。
+    let actors = sim.self_delay_msgs.actor_ids();
+    for actor_id in actors {
+        while let Some(head) = sim.self_delay_msgs.peek(actor_id) {
+            let ident = head.ident;
+            // Rust 侧登记门（oracle 没有对应的泵调用/开关）：
+            // - Ghost actor 的 `RM_ZEN_BEE`：oracle `ProcessMonsters` 整只跳过 Ghost ⇒
+            //   其消息泵根本不跑 ⇒ 消息保留。
+            // - `slave_self_delay_enabled == false` 的主人死族：Rust 侧开关（oracle 无此门），
+            //   消息保留。
+            if ident == crate::special_monster::RM_ZEN_BEE
+                && !access.get(actor_id).is_some_and(|e| !e.ghost)
+            {
+                break;
+            }
+            if matches!(ident, RM_MASTERDIEMUTINY | RM_MASTERDIEGHOST)
+                && !sim.slave_self_delay_enabled
+            {
+                break;
+            }
+            if head.deliver_at_ms > now {
+                // oracle `GetMessage`：`TryDequeue` 后发现未到点 ⇒ **以 `Lowest` 重新入队**
+                // 并 `return false`。必须真做「出队 + 入队」：.NET 堆布局因此改变（末元素
+                // 移到根、sift-down），下一次泵才能先投递其它已到点项。
+                let mut msg = sim
                     .self_delay_msgs
                     .dequeue(actor_id)
                     .expect("peek 成功 ⇒ 队非空");
-                // `CloneMonster.Operate`（`Clone.cs:14-30`）：**任意** `wIdent` 都 `return false`
-                // ⇒ `base.Operate` 的**全部**投递效果对 Clone 不生效（`RM_POISON` 的中毒、
-                // `RM_MAKEHOLYSEIZEMODE` 的神圣、`RM_DOOPENHEALTH` 的开血、`RM_MAGHEALING`、
-                // `RM_TRANSPARENT`、`RM_MAGIC_LVEXP`、`RM_DELAYMAGIC`、`RM_MAGSTRUCK`、
-                // `RM_REFMESSAGE`（→ `RM_STRUCK`）、`RM_RANDOMSPACEMOVE`、`RM_DELAYPUSHED` …）。
-                // 只有 `RM_STRUCK`/`RM_MAGSTRUCK`/`RM_SPELL` 的 `Master.WAbil.MP` 支生效——
-                // 统一走 [`crate::special_monster::clone_operate`]（非这三条 ident 是纯 no-op）。
-                if self
-                    .entities
-                    .get(msg.actor_id)
-                    .is_some_and(|e| e.race == crate::special_monster::RACE_CLONE_MONSTER)
-                {
-                    crate::special_monster::clone_operate(
-                        self,
+                msg.priority = MESSAGE_PRIORITY_LOWEST;
+                sim.self_delay_msgs.enqueue(msg);
+                break;
+            }
+            let msg = sim
+                .self_delay_msgs
+                .dequeue(actor_id)
+                .expect("peek 成功 ⇒ 队非空");
+            // `CloneMonster.Operate`（`Clone.cs:14-30`）：**任意** `wIdent` 都 `return false`
+            // ⇒ `base.Operate` 的**全部**投递效果对 Clone 不生效（`RM_POISON` 的中毒、
+            // `RM_MAKEHOLYSEIZEMODE` 的神圣、`RM_DOOPENHEALTH` 的开血、`RM_MAGHEALING`、
+            // `RM_TRANSPARENT`、`RM_MAGIC_LVEXP`、`RM_DELAYMAGIC`、`RM_MAGSTRUCK`、
+            // `RM_REFMESSAGE`（→ `RM_STRUCK`）、`RM_RANDOMSPACEMOVE`、`RM_DELAYPUSHED` …）。
+            // 只有 `RM_STRUCK`/`RM_MAGSTRUCK`/`RM_SPELL` 的 `Master.WAbil.MP` 支生效——
+            // 统一走 [`crate::special_monster::clone_operate`]（非这三条 ident 是纯 no-op）。
+            if access
+                .get(msg.actor_id)
+                .is_some_and(|e| e.race == crate::special_monster::RACE_CLONE_MONSTER)
+            {
+                crate::special_monster::clone_operate_impl(
+                    access,
+                    msg.actor_id,
+                    msg.ident,
+                    msg.w_param,
+                    msg.n_param3,
+                );
+                out.push(SelfDelayOutcome {
+                    actor_id: msg.actor_id,
+                    ident: msg.ident,
+                    ..SelfDelayOutcome::default()
+                });
+                continue;
+            }
+            // `RM_ZEN_BEE`（`BeeQueen.cs:30` / `SpiderHouseMonster.cs:28`）：投递点 =
+            // `Operate`。Ghost actor 的分支已在出队前处理（整泵不跑 ⇒ 保留）。
+            if msg.ident == crate::special_monster::RM_ZEN_BEE {
+                // **P6a2**：段与 facade 共用「入队」形态（`spawner` 的宿主同步造怪需要
+                // `&mut World`，段访问器无法提供）；`_with(Some(spawner))` 在泵返回后
+                // 同步处理**本次新入队**的请求，见该入口的 doc。
+                let zen_bee =
+                    crate::special_monster::special_spawn_request_impl(access, sim, msg.actor_id);
+                if let Some(req) = zen_bee.clone() {
+                    sim.pending_special_spawns.push(req);
+                }
+                out.push(SelfDelayOutcome {
+                    actor_id: msg.actor_id,
+                    ident: msg.ident,
+                    zen_bee,
+                    ..SelfDelayOutcome::default()
+                });
+                continue;
+            }
+
+            match msg.ident {
+                RM_MAGHEALING => {
+                    // `PlayObject.Message.cs:1619-1629`：交付段 0 抽，只把 `nPower` 交宿主累加
+                    // `IncHealing`（`SessionGround.recovery`）。
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        mutinied: Vec::new(),
+                        ghosted: Vec::new(),
+                        mag_healing: Some(msg.n_param1),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                RM_MASTERDIEMUTINY => {
+                    // 只在真正有到点的叛变消息时才克隆配置（避免每 tick 无谓 clone）。
+                    let cfg = sim.pet_slave_cfg.clone();
+                    let mutinied = process_slave_mutiny_impl(access, sim, msg.actor_id, &cfg);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        mutinied,
+                        ghosted: Vec::new(),
+                        mag_healing: None,
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                RM_MASTERDIEGHOST => {
+                    let ghosted = process_slave_ghost_impl(access, sim, msg.actor_id);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        mutinied: Vec::new(),
+                        ghosted,
+                        mag_healing: None,
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B3**：19 的 800ms 投递——投递时才重读 `StatusTimeArr[8]` 并逐怪抽 `R(2)`。
+                RM_TRANSPARENT => {
+                    let d = crate::world::World::mag_make_private_transparent_impl(
+                        access,
+                        sim,
                         msg.actor_id,
-                        msg.ident,
-                        msg.w_param,
-                        msg.n_param3,
+                        msg.n_param1 as u16,
                     );
                     out.push(SelfDelayOutcome {
                         actor_id: msg.actor_id,
                         ident: msg.ident,
+                        transparent: Some(d),
                         ..SelfDelayOutcome::default()
                     });
-                    continue;
                 }
-                // `RM_ZEN_BEE`（`BeeQueen.cs:30` / `SpiderHouseMonster.cs:28`）：投递点 =
-                // `Operate`。Ghost actor 的分支已在出队前处理（整泵不跑 ⇒ 保留）。
-                if msg.ident == crate::special_monster::RM_ZEN_BEE {
-                    let zen_bee = match spawner.as_mut() {
-                        Some(sp) => {
-                            // oracle `Operate(RM_ZEN_BEE)` 同步 `RegenMonsterByName`。
-                            crate::special_monster::operate_special(
-                                self,
-                                &mut **sp,
-                                msg.actor_id,
-                                msg.ident,
-                                0,
-                                0,
-                            );
-                            None
-                        }
-                        None => {
-                            let req =
-                                crate::special_monster::special_spawn_request(self, msg.actor_id);
-                            if let Some(req) = req.clone() {
-                                self.pending_special_spawns.push(req);
-                            }
-                            req
-                        }
+                // **P3-B3**：28 的 1500ms 投递——`MakeOpenHealth()`。
+                RM_DOOPENHEALTH => {
+                    let h = crate::world::World::make_open_health_impl(access, sim, msg.actor_id);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        open_health: Some(h),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B3**：共享尾的 1000ms 训练帧
+                // （`nParam1=MagicId, nParam2=Level, nParam3=TranPoint`）。
+                RM_MAGIC_LVEXP => {
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        magic_lvexp: Some(MagicLvExpDelivery {
+                            magic_id: u16::try_from(msg.n_param1).unwrap_or(0),
+                            level: u8::try_from(msg.n_param2).unwrap_or(0),
+                            tran_point: msg.n_param3,
+                        }),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B3**：16 的 `RM_MAKEHOLYSEIZEMODE`（`wParam = nPower*1000`）。
+                RM_MAKEHOLYSEIZEMODE => {
+                    let n = crate::world::World::open_holy_seize_mode_impl(
+                        access,
+                        sim,
+                        msg.actor_id,
+                        msg.w_param,
+                    );
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        name_color: Some(n),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B4**：`RM_DELAYMAGIC`（`BaseObject.Base.cs:711-729`）——施法者侧
+                // 1 抽 MSD，命中则把 `RM_MAGSTRUCK` 入**目标**队列（由宿主随后
+                // `World::deliver_mag_struck` 完整处理）。
+                RM_DELAYMAGIC => {
+                    let d = deliver_delay_magic_impl(access, sim, &msg);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        delay_magic: Some(d),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **`openmir2-rm-delaypushed`**：`RM_DELAYPUSHED`
+                // （`BaseObject.Base.cs:733-739`）。
+                //
+                // ```text
+                // :735 targetBaseObject = ActorMgr.Get(processMsg.nParam3);
+                // :736 if (targetBaseObject != null)
+                // :738   targetBaseObject.CharPushed((byte)processMsg.wParam, (byte)processMsg.nParam2);
+                // ```
+                // `nParam1`（`MakeLong(tx,ty)`）在本支**不读**。`CharPushed` 零 RNG。
+                RM_DELAYPUSHED => {
+                    let target_id = msg.n_param3;
+                    let pushes = if access.get(target_id).is_some() {
+                        crate::world::World::char_pushed_core(
+                            access,
+                            sim,
+                            target_id,
+                            msg.w_param as u8,
+                            msg.n_param2 as u8,
+                        )
+                    } else {
+                        Vec::new()
                     };
                     out.push(SelfDelayOutcome {
                         actor_id: msg.actor_id,
                         ident: msg.ident,
-                        zen_bee,
+                        pushes,
                         ..SelfDelayOutcome::default()
                     });
-                    continue;
                 }
-
-                match msg.ident {
-                    RM_MAGHEALING => {
-                        // `PlayObject.Message.cs:1619-1629`：交付段 0 抽，只把 `nPower` 交宿主累加
-                        // `IncHealing`（`SessionGround.recovery`）。
+                // **P3-B4**：`RM_POISON`（`BaseObject.Base.cs:740-759` → `MakePosion`）。
+                // 投毒本身**零 RNG**；只落 buff / CharStatus / 帧事件。
+                RM_POISON => {
+                    let d = deliver_poison_impl(access, sim, &msg);
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        poison: Some(d),
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **P3-B5**：`RM_MAGSTRUCK` 到点 ⇒ 进入本对象的 `RM_MAGSTRUCK` 处理器
+                // （`BaseObject.Base.cs:618-686`）。本层只负责「入队 → 到点」；处理器主体
+                // （`R(1000)` + MSD + `StruckDamage`）由宿主随后调 `World::deliver_mag_struck`。
+                RM_MAGSTRUCK => {
+                    sim.pending_mag_struck.push(crate::world::PendingMagStruck {
+                        target_id: msg.actor_id,
+                        caster_id: msg.actor_ref,
+                        power: msg.n_param1,
+                        mine: false,
+                        order: msg.enqueue_seq,
+                    });
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        ..SelfDelayOutcome::default()
+                    });
+                }
+                // **卡 `openmir2-rm-refmessage-delay-layer`**：
+                // `Operate(RM_REFMESSAGE)`（`BaseObject.Base.cs:699-710`）。
+                //
+                // ```text
+                // :701 SendRefMsg(processMsg.ActorId, wParam, nParam1, nParam2, nParam3, Msg);
+                // :702 if ((processMsg.ActorId == Messages.RM_STRUCK) && (Race != ActorRace.Play))
+                // :704   SendMsg(processMsg.ActorId, wParam, nParam1, nParam2, nParam3, Msg);
+                // ```
+                //
+                // ① `SendRefMsg` 的广播帧事件按**到点时刻**入
+                //    [`crate::world::World::pending_refmessage_frames`]（宿主出 `SM_STRUCK`）。
+                // ② `Race != Play` 时自投 `RM_STRUCK`：`SendMsg(int wIdent, …)`
+                //    （`BaseObject.Message.cs:34-96`）入**自己**的队列，`DeliveryTime = 0`、
+                //    优先级 `(byte)wIdent`（`(byte)8018 = 82`）、`ActorId = this.ActorId`。
+                //    随后由本泵在同一轮里按堆序处理（见下方 `RM_STRUCK` 支）。
+                RM_REFMESSAGE => {
+                    // 只有 7 参 `SendStruckDelayMsg` 载体（`ActorId == Messages.RM_STRUCK`）
+                    // 是 oracle 的真实生产路径；其它 `actor_ref` 的合成自投保持既有
+                    // `_ => {}` 语义（不产出 outcome，零帧面）。
+                    if msg.actor_ref == i32::from(RM_STRUCK) {
+                        let mut self_struck = false;
+                        if let Some((race, ghost)) =
+                            access.get(msg.actor_id).map(|e| (e.race, e.ghost))
+                        {
+                            // **复验 F2**：oracle 的 `ProcessMonsters`/`ProcessHumans` 对 `Ghost` actor
+                            // **整只跳过**（`WorldServer.MonGen.cs:278`、`WorldServer.cs:648`）⇒ 其队列里的
+                            // `RM_REFMESSAGE` 永不被处理：既不自投、也不广播。这里同口径不产帧。
+                            if !ghost {
+                                // `:701` `SendRefMsg(RM_STRUCK, wParam, nParam1, nParam2, nParam3, Msg)`。
+                                sim.pending_refmessage_frames.push(RefMessageFrame {
+                                    actor_id: msg.actor_id,
+                                    ident: msg.actor_ref as u16,
+                                    w_param: msg.w_param,
+                                    n_param1: msg.n_param1,
+                                    n_param2: msg.n_param2,
+                                    n_param3: msg.n_param3,
+                                    order: msg.enqueue_seq,
+                                });
+                            }
+                            // `:702` `ActorId == RM_STRUCK && Race != ActorRace.Play`。
+                            if race != crate::entity::ACTOR_RACE_PLAY && !ghost {
+                                let enqueue_seq = next_msg_order_impl(sim);
+                                sim.self_delay_msgs.push(SelfDelayMsg {
+                                    actor_id: msg.actor_id,
+                                    ident: RM_STRUCK,
+                                    w_param: msg.w_param,
+                                    n_param1: msg.n_param1,
+                                    n_param2: msg.n_param2,
+                                    n_param3: msg.n_param3,
+                                    msg: String::new(),
+                                    // `SendMsg(int)` 的 `ActorId = this.ActorId`。
+                                    actor_ref: msg.actor_id,
+                                    deliver_at_ms: now,
+                                    enqueue_seq,
+                                    // `(byte)wIdent`（`BaseObject.Message.cs:80`）。
+                                    priority: RM_STRUCK as u8,
+                                });
+                                self_struck = true;
+                            }
+                        }
                         out.push(SelfDelayOutcome {
                             actor_id: msg.actor_id,
                             ident: msg.ident,
-                            mutinied: Vec::new(),
-                            ghosted: Vec::new(),
-                            mag_healing: Some(msg.n_param1),
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    RM_MASTERDIEMUTINY => {
-                        // 只在真正有到点的叛变消息时才克隆配置（避免每 tick 无谓 clone）。
-                        let cfg = self.pet_slave_cfg.clone();
-                        let mutinied = process_slave_mutiny(self, msg.actor_id, &cfg);
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            mutinied,
-                            ghosted: Vec::new(),
-                            mag_healing: None,
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    RM_MASTERDIEGHOST => {
-                        let ghosted = process_slave_ghost(self, msg.actor_id);
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            mutinied: Vec::new(),
-                            ghosted,
-                            mag_healing: None,
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // **P3-B3**：19 的 800ms 投递——投递时才重读 `StatusTimeArr[8]` 并逐怪抽 `R(2)`。
-                    RM_TRANSPARENT => {
-                        let d =
-                            self.mag_make_private_transparent(msg.actor_id, msg.n_param1 as u16);
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            transparent: Some(d),
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // **P3-B3**：28 的 1500ms 投递——`MakeOpenHealth()`。
-                    RM_DOOPENHEALTH => {
-                        let h = self.make_open_health(msg.actor_id);
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            open_health: Some(h),
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // **P3-B3**：共享尾的 1000ms 训练帧
-                    // （`nParam1=MagicId, nParam2=Level, nParam3=TranPoint`）。
-                    RM_MAGIC_LVEXP => {
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            magic_lvexp: Some(MagicLvExpDelivery {
-                                magic_id: u16::try_from(msg.n_param1).unwrap_or(0),
-                                level: u8::try_from(msg.n_param2).unwrap_or(0),
-                                tran_point: msg.n_param3,
+                            ref_message: Some(RefMessageDelivery {
+                                actor_id: msg.actor_id,
+                                actor_ref: msg.actor_ref,
+                                damage: msg.w_param,
+                                hp: msg.n_param1,
+                                max_hp: msg.n_param2,
+                                hitter_id: msg.n_param3,
+                                self_struck,
                             }),
                             ..SelfDelayOutcome::default()
                         });
                     }
-                    // **P3-B3**：16 的 `RM_MAKEHOLYSEIZEMODE`（`wParam = nPower*1000`）。
-                    RM_MAKEHOLYSEIZEMODE => {
-                        let n = self.open_holy_seize_mode(msg.actor_id, msg.w_param);
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            name_color: Some(n),
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // **P3-B4**：`RM_DELAYMAGIC`（`BaseObject.Base.cs:711-729`）——施法者侧
-                    // 1 抽 MSD，命中则把 `RM_MAGSTRUCK` 入**目标**队列（由宿主随后
-                    // `World::deliver_mag_struck` 完整处理）。
-                    RM_DELAYMAGIC => {
-                        let d = self.deliver_delay_magic(&msg);
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            delay_magic: Some(d),
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // **`openmir2-rm-delaypushed`**：`RM_DELAYPUSHED`
-                    // （`BaseObject.Base.cs:733-739`）。
-                    //
-                    // ```text
-                    // :735 targetBaseObject = ActorMgr.Get(processMsg.nParam3);
-                    // :736 if (targetBaseObject != null)
-                    // :738   targetBaseObject.CharPushed((byte)processMsg.wParam, (byte)processMsg.nParam2);
-                    // ```
-                    // `nParam1`（`MakeLong(tx,ty)`）在本支**不读**。`CharPushed` 零 RNG。
-                    RM_DELAYPUSHED => {
-                        let target_id = msg.n_param3;
-                        let pushes = if self.entities.get(target_id).is_some() {
-                            self.char_pushed_now(target_id, msg.w_param as u8, msg.n_param2 as u8)
-                        } else {
-                            Vec::new()
-                        };
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            pushes,
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // **P3-B4**：`RM_POISON`（`BaseObject.Base.cs:740-759` → `MakePosion`）。
-                    // 投毒本身**零 RNG**；只落 buff / CharStatus / 帧事件。
-                    RM_POISON => {
-                        let d = self.deliver_poison(&msg);
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            poison: Some(d),
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // **P3-B5**：`RM_MAGSTRUCK` 到点 ⇒ 进入本对象的 `RM_MAGSTRUCK` 处理器
-                    // （`BaseObject.Base.cs:618-686`）。本层只负责「入队 → 到点」；处理器主体
-                    // （`R(1000)` + MSD + `StruckDamage`）由宿主随后调 `World::deliver_mag_struck`。
-                    RM_MAGSTRUCK => {
-                        self.pending_mag_struck
-                            .push(crate::world::PendingMagStruck {
-                                target_id: msg.actor_id,
-                                caster_id: msg.actor_ref,
-                                power: msg.n_param1,
-                                mine: false,
-                                order: msg.enqueue_seq,
-                            });
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // **卡 `openmir2-rm-refmessage-delay-layer`**：
-                    // `Operate(RM_REFMESSAGE)`（`BaseObject.Base.cs:699-710`）。
-                    //
-                    // ```text
-                    // :701 SendRefMsg(processMsg.ActorId, wParam, nParam1, nParam2, nParam3, Msg);
-                    // :702 if ((processMsg.ActorId == Messages.RM_STRUCK) && (Race != ActorRace.Play))
-                    // :704   SendMsg(processMsg.ActorId, wParam, nParam1, nParam2, nParam3, Msg);
-                    // ```
-                    //
-                    // ① `SendRefMsg` 的广播帧事件按**到点时刻**入
-                    //    [`crate::world::World::pending_refmessage_frames`]（宿主出 `SM_STRUCK`）。
-                    // ② `Race != Play` 时自投 `RM_STRUCK`：`SendMsg(int wIdent, …)`
-                    //    （`BaseObject.Message.cs:34-96`）入**自己**的队列，`DeliveryTime = 0`、
-                    //    优先级 `(byte)wIdent`（`(byte)8018 = 82`）、`ActorId = this.ActorId`。
-                    //    随后由本泵在同一轮里按堆序处理（见下方 `RM_STRUCK` 支）。
-                    RM_REFMESSAGE => {
-                        // 只有 7 参 `SendStruckDelayMsg` 载体（`ActorId == Messages.RM_STRUCK`）
-                        // 是 oracle 的真实生产路径；其它 `actor_ref` 的合成自投保持既有
-                        // `_ => {}` 语义（不产出 outcome，零帧面）。
-                        if msg.actor_ref == i32::from(RM_STRUCK) {
-                            let mut self_struck = false;
-                            if let Some((race, ghost)) =
-                                self.entities.get(msg.actor_id).map(|e| (e.race, e.ghost))
-                            {
-                                // **复验 F2**：oracle 的 `ProcessMonsters`/`ProcessHumans` 对 `Ghost` actor
-                                // **整只跳过**（`WorldServer.MonGen.cs:278`、`WorldServer.cs:648`）⇒ 其队列里的
-                                // `RM_REFMESSAGE` 永不被处理：既不自投、也不广播。这里同口径不产帧。
-                                if !ghost {
-                                    // `:701` `SendRefMsg(RM_STRUCK, wParam, nParam1, nParam2, nParam3, Msg)`。
-                                    self.pending_refmessage_frames.push(RefMessageFrame {
-                                        actor_id: msg.actor_id,
-                                        ident: msg.actor_ref as u16,
-                                        w_param: msg.w_param,
-                                        n_param1: msg.n_param1,
-                                        n_param2: msg.n_param2,
-                                        n_param3: msg.n_param3,
-                                        order: msg.enqueue_seq,
-                                    });
-                                }
-                                // `:702` `ActorId == RM_STRUCK && Race != ActorRace.Play`。
-                                if race != crate::entity::ACTOR_RACE_PLAY && !ghost {
-                                    let enqueue_seq = self.next_msg_order();
-                                    self.self_delay_msgs.push(SelfDelayMsg {
-                                        actor_id: msg.actor_id,
-                                        ident: RM_STRUCK,
-                                        w_param: msg.w_param,
-                                        n_param1: msg.n_param1,
-                                        n_param2: msg.n_param2,
-                                        n_param3: msg.n_param3,
-                                        msg: String::new(),
-                                        // `SendMsg(int)` 的 `ActorId = this.ActorId`。
-                                        actor_ref: msg.actor_id,
-                                        deliver_at_ms: now,
-                                        enqueue_seq,
-                                        // `(byte)wIdent`（`BaseObject.Message.cs:80`）。
-                                        priority: RM_STRUCK as u8,
-                                    });
-                                    self_struck = true;
-                                }
-                            }
-                            out.push(SelfDelayOutcome {
-                                actor_id: msg.actor_id,
-                                ident: msg.ident,
-                                ref_message: Some(RefMessageDelivery {
-                                    actor_id: msg.actor_id,
-                                    actor_ref: msg.actor_ref,
-                                    damage: msg.w_param,
-                                    hp: msg.n_param1,
-                                    max_hp: msg.n_param2,
-                                    hitter_id: msg.n_param3,
-                                    self_struck,
-                                }),
-                                ..SelfDelayOutcome::default()
-                            });
-                        }
-                    }
-                    // **卡 `openmir2-rm-refmessage-delay-layer`**：
-                    // `AnimalObject.Operate(RM_STRUCK)`（`AnimalObject.cs:114-127`）的
-                    // **延时载体**路径（由 `Operate(RM_REFMESSAGE)` 自投；`ActorId == ActorId`
-                    // 校验见 `:118`）。`CloneMonster.Operate` 覆写已在循环头的 Clone 门处理。
-                    //
-                    // `SetLastHiter(struckObject); Struck(struckObject);`（`:121-122`）——
-                    // `Struck` 的 `Random(6)`/`Random(300)` 与既有时序面同点数、同次序。
-                    RM_STRUCK => {
-                        // `if (processMsg.ActorId == ActorId && struckObject != null)`
-                        if msg.actor_ref == msg.actor_id {
-                            let hitter_id = msg.n_param3;
-                            if self.entities.get(msg.actor_id).is_some()
-                                && self.entities.get(hitter_id).is_some()
-                            {
-                                if let Some(mut v) = self.entities.get_mut(msg.actor_id) {
-                                    v.set_last_hiter(hitter_id, now);
-                                }
-                                crate::monai::animal_struck(self, msg.actor_id, hitter_id);
-                            }
-                        }
-                        out.push(SelfDelayOutcome {
-                            actor_id: msg.actor_id,
-                            ident: msg.ident,
-                            ..SelfDelayOutcome::default()
-                        });
-                    }
-                    // 本层只承载这些自投递（登记：其他 `RM_*` 自投递未建模）。
-                    _ => {}
                 }
-            }
-        }
-        out
-    }
-
-    /// **P3-B4**：`RM_DELAYMAGIC` 到点投递（`BaseObject.Base.cs:711-729`）。
-    ///
-    /// 逐行：
-    /// ```text
-    /// :712 nPower = (ushort)wParam; tx = LoWord(nParam1); ty = HiWord(nParam1); rage = nParam2
-    /// :716 target = ActorMgr.Get(nParam3)
-    /// :717 if (target != null && target.GetMagStruckDamage(this, nPower) > 0)   ← 1 抽
-    /// :719   SetTargetCreat(target)
-    /// :720   if (target.Race >= Animal) nPower = Round(nPower / 1.2)
-    /// :724   if (|tx-target.CurrX| <= rage && |ty-target.CurrY| <= rage)
-    /// :726     target.SendMsg(this, RM_MAGSTRUCK, 0, nPower, 0, 0)
-    /// ```
-    ///
-    /// **`GetMagStruckDamage(this, …)`** 的 `baseObject` 是 `this`（施法者）⇒ 不死系加成生效
-    /// （`BaseObject.Base.cs:816`）。与目标处理 `RM_MAGSTRUCK` 时传 `null` 的那一抽不同。
-    fn deliver_delay_magic(&mut self, msg: &SelfDelayMsg) -> DelayMagicDelivery {
-        let n_power = i32::from(msg.w_param as u16);
-        let tx = i32::from((msg.n_param1 & 0xFFFF) as u16 as i16);
-        let ty = i32::from(((msg.n_param1 >> 16) & 0xFFFF) as u16 as i16);
-        let rage = msg.n_param2;
-        let target_id = msg.n_param3;
-        let mut out = DelayMagicDelivery {
-            caster_id: msg.actor_id,
-            target_id,
-            power: n_power,
-            msd: 0,
-            struck: false,
-        };
-        let Some(t) = self.entities.spawn_cloned(target_id) else {
-            return out;
-        };
-        // `this` 在 oracle 里恒存在；缺失时按 0 处理（不改变取数次数）。
-        let undead = self
-            .entities
-            .get(msg.actor_id)
-            .map_or(0, |c| c.undead_power);
-        let msd = crate::combat::get_mag_struck_damage(&mut self.rng, t.mac, n_power, Some(undead));
-        out.msd = msd;
-        if msd > 0 {
-            if let Some(c) = self.entities.get_mut(msg.actor_id) {
-                c.ai.target_creature = Some(target_id);
-            }
-            let mut power = n_power;
-            if t.race >= crate::entity::ACTOR_RACE_ANIMAL {
-                power = hutil::round(f64::from(power) / 1.2);
-            }
-            // 目标侧 `SendMsg(IActor, …)`（`BaseObject.Message.cs:105-113`）同样有 `!Ghost` 门。
-            if !t.ghost && (tx - t.x).abs() <= rage && (ty - t.y).abs() <= rage {
-                self.pending_mag_struck
-                    .push(crate::world::PendingMagStruck {
-                        target_id,
-                        caster_id: msg.actor_id,
-                        power,
-                        mine: false,
-                        order: msg.enqueue_seq,
+                // **卡 `openmir2-rm-refmessage-delay-layer`**：
+                // `AnimalObject.Operate(RM_STRUCK)`（`AnimalObject.cs:114-127`）的
+                // **延时载体**路径（由 `Operate(RM_REFMESSAGE)` 自投；`ActorId == ActorId`
+                // 校验见 `:118`）。`CloneMonster.Operate` 覆写已在循环头的 Clone 门处理。
+                //
+                // `SetLastHiter(struckObject); Struck(struckObject);`（`:121-122`）——
+                // `Struck` 的 `Random(6)`/`Random(300)` 与既有时序面同点数、同次序。
+                RM_STRUCK => {
+                    // `if (processMsg.ActorId == ActorId && struckObject != null)`
+                    if msg.actor_ref == msg.actor_id {
+                        let hitter_id = msg.n_param3;
+                        if access.get(msg.actor_id).is_some() && access.get(hitter_id).is_some() {
+                            if let Some(mut v) = access.get_mut(msg.actor_id) {
+                                v.set_last_hiter(hitter_id, now);
+                            }
+                            crate::monai::animal_struck_impl(access, sim, msg.actor_id, hitter_id);
+                        }
+                    }
+                    out.push(SelfDelayOutcome {
+                        actor_id: msg.actor_id,
+                        ident: msg.ident,
+                        ..SelfDelayOutcome::default()
                     });
-                out.struck = true;
+                }
+                // 本层只承载这些自投递（登记：其他 `RM_*` 自投递未建模）。
+                _ => {}
             }
         }
-        out
     }
-
-    /// **P3-B4**：`RM_POISON` 到点投递（`BaseObject.Base.cs:740-759` + `MakePosion`
-    /// `BaseObject.cs:1941-1973`）。
-    ///
-    /// ```text
-    /// :741 caster = ActorMgr.Get(nParam2)
-    /// :742 if (caster != null) {
-    /// :744   if (IsProperTarget(caster)) { SetTargetCreat(caster);
-    /// :747     if (this.Race==Play && caster.Race==Play) SetPkFlag(caster);  // ⇒ 656（由 caster 发）
-    /// :751     SetLastHiter(caster); }
-    /// :753   MakePosion(wParam, (ushort)nParam1, nParam3);
-    /// :757 } else MakePosion(...)
-    /// ```
-    ///
-    /// **零 RNG**。`nOldCharStatus != CharStatus` ⇒ `StatusChanged()`（⇒ 657）；
-    /// `Race == Play` ⇒ `SysMsg(YouPoisoned)`（⇒ 100）。两者都由宿主据本记录出帧。
-    fn deliver_poison(&mut self, msg: &SelfDelayMsg) -> PoisonDelivery {
-        let target_id = msg.actor_id;
-        let caster_id = msg.n_param2;
-        let poison_type = msg.w_param as u8;
-        let time = i32::from((msg.n_param1 & 0xFFFF) as u16);
-        let point = msg.n_param3;
-        let mut out = PoisonDelivery {
-            target_id,
-            poison_type,
-            time,
-            point,
-            ..PoisonDelivery::default()
-        };
-        // S4a：目标判定链需要 `PvpState` ⇒ 用生成期载体（`EntitySpawn`）的只读快照。
-        let target = self.entities.spawn_cloned(target_id);
-        let caster = self.entities.spawn_cloned(caster_id);
-        if let (Some(t), Some(c)) = (target.as_ref(), caster.as_ref()) {
-            // `IsProperTarget` 的 `this` 是**中毒目标** t ⇒ `IsGroupMember` 读 **t 的团长**
-            // （`PlayObject.cs:5158-5175`）的成员表，不是 t 自己的 `group_members`（非团长恒空）。
-            if crate::combat::is_proper_target_grouped(t, c, &self.attacker_group_members(t)) {
-                if let Some(tm) = self.entities.get_mut(target_id) {
-                    tm.ai.target_creature = Some(caster_id);
-                }
-                if t.race == crate::entity::ACTOR_RACE_PLAY
-                    && c.race == crate::entity::ACTOR_RACE_PLAY
-                {
-                    out.name_color = self.set_pk_flag(target_id, caster_id);
-                }
-                let now = self.clock_ms;
-                if let Some(mut tm) = self.entities.get_mut(target_id) {
-                    tm.set_last_hiter(caster_id, now);
-                }
-            }
-        }
-        let Some(t) = target else {
-            return out;
-        };
-        let old = self.get_char_status(target_id);
-        let ok = self.make_posion(target_id, poison_type, time, point);
-        let new = self.get_char_status(target_id);
-        out.status = new;
-        out.status_changed = ok && old != new;
-        out.is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
-        out
-    }
+    out
 }
 
 /// `BaseObject.GetChrColor`（`BaseObject.Base.cs:869-883`）的**宝宝色支** + 兜底：

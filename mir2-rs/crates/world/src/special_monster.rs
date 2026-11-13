@@ -347,20 +347,31 @@ pub fn special_monster_run(world: &mut World, actor_id: i32) -> bool {
 ///   只要求界内且 `Valid`）。
 #[must_use]
 pub fn special_spawn_request(world: &World, actor_id: i32) -> Option<SpecialSpawnRequest> {
-    let e = world.entities.get(actor_id)?;
+    special_spawn_request_impl(&world.entities, &world.sim, actor_id)
+}
+
+/// **P6a2**：`special_spawn_request` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 与 facade 入口同理（见 [`special_spawn_request`]）；`RM_ZEN_BEE` 的到点投递段走本函数。
+pub(crate) fn special_spawn_request_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &crate::world::SimState,
+    actor_id: i32,
+) -> Option<SpecialSpawnRequest> {
+    let e = access.get(actor_id)?;
     let kind = SpecialKind::from_race(e.race)?;
     let (x, y, name) = match kind {
-        SpecialKind::BeeQueen => (e.x, e.y, world.bee_name.clone()),
+        SpecialKind::BeeQueen => (e.x, e.y, sim.bee_name.clone()),
         SpecialKind::SpiderHouse => {
             let y = e.y + 1;
-            let can_walk = world
+            let can_walk = sim
                 .maps
                 .get(e.map_id)
                 .is_some_and(|m| m.get_cell_info(e.x, y).1);
             if !can_walk {
                 return None;
             }
-            (e.x, y, world.spider_name.clone())
+            (e.x, y, sim.spider_name.clone())
         }
         SpecialKind::Clone => return None,
     };
@@ -420,10 +431,24 @@ pub fn clone_operate(
     w_param: i32,
     n_param3: i32,
 ) -> bool {
-    let Some(master_id) = world.entities.get(clone_id).and_then(|e| e.master) else {
+    clone_operate_impl(&mut world.entities, clone_id, ident, w_param, n_param3)
+}
+
+/// **P6a2**：`clone_operate` 的 facade/段共用实现（`EntityAccess` 形态）。
+///
+/// `CloneMonster.Operate` 只读写实体组件（主人 MP / 克隆体 HP），不触状态资源 ⇒ 段内只借
+/// 访问器。`RM_STRUCK` 的到点投递段走本函数。
+pub(crate) fn clone_operate_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    clone_id: i32,
+    ident: u16,
+    w_param: i32,
+    n_param3: i32,
+) -> bool {
+    let Some(master_id) = access.get(clone_id).and_then(|e| e.master) else {
         return false;
     };
-    let Some(master_mp) = world.entities.get(master_id).map(|m| m.mp) else {
+    let Some(master_mp) = access.get(master_id).map(|m| m.mp) else {
         return false;
     };
     if !matches!(ident, RM_STRUCK | RM_MAGSTRUCK | RM_SPELL) {
@@ -431,7 +456,7 @@ pub fn clone_operate(
     }
     // 先判 MP（oracle 的次序），再扣。
     if master_mp == 0 {
-        if let Some(e) = world.entities.get_mut(clone_id) {
+        if let Some(e) = access.get_mut(clone_id) {
             e.vitals.hp = 0;
         }
     }
@@ -441,7 +466,7 @@ pub fn clone_operate(
     } else {
         w_param as u16
     };
-    if let Some(m) = world.entities.get_mut(master_id) {
+    if let Some(m) = access.get_mut(master_id) {
         m.vitals.mp = m.vitals.mp.wrapping_sub(delta);
     }
     false

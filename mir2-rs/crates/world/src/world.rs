@@ -853,6 +853,24 @@ pub struct AutoGetExpState {
     pub in_safe_zone: bool,
 }
 
+impl SimState {
+    /// `GuardUnit.Struck` 的 `CrimeforCastle` 置位（`GuardUnit.cs:27-33`；同 id 刷新时刻）。
+    ///
+    /// **P6a2**：从 `World` 搬到 `SimState`——段系统（`SimSelfDeliver` 的 `RM_STRUCK` 支）
+    /// 只有 `&mut SimState`，单一实现由 facade 与本方法共用。
+    pub(crate) fn set_guard_crime_for_castle(&mut self, actor_id: i32, now: i64) {
+        if let Some(slot) = self
+            .guard_castle_crime
+            .iter_mut()
+            .find(|(id, _)| *id == actor_id)
+        {
+            slot.1 = now;
+        } else {
+            self.guard_castle_crime.push((actor_id, now));
+        }
+    }
+}
+
 /// **S4d-1 资源层**：`World` 的全部**非实体**状态。
 ///
 /// 实体组件仍在 `EntityStore` 的 bevy `World`；本类型在 tick 边界被移入同一个 bevy `World`
@@ -1076,7 +1094,7 @@ pub struct SimState {
     /// **缺省 `false`**：合成 golden 场景不含 oracle 的玩家 `Run()` 消息段；生产宿主
     /// （`bins/game-svr` 的 sim 循环）起世界时用 [`World::enable_slave_self_delay`] 打开。
     /// 关闭时 `settle_deaths` 不入队、`tick` 不投递 ⇒ 既有对拍逐字节不变。
-    slave_self_delay_enabled: bool,
+    pub(crate) slave_self_delay_enabled: bool,
     /// **卡 `openmir2-rm-refmessage-delay-layer`**：是否启用 7 参 `SendStruckDelayMsg`
     /// （`RM_REFMESSAGE` 延时层，`BaseObject.Message.cs:211-228`）。
     ///
@@ -1464,6 +1482,7 @@ impl HeadRunner {
         me.add(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
         me.add(TickStage::SimExpireHitters, expire_hitters_stage_system);
         me.add(TickStage::SimSettleDeaths, sim_settle_deaths_stage_system);
+        me.add(TickStage::SimSelfDeliver, sim_self_deliver_stage_system);
         me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
         me.add(TickStage::SimMapEvents, sim_map_events_stage_system);
         me.add(TickStage::SimSlaveCleanup, sim_slave_cleanup_stage_system);
@@ -1572,6 +1591,8 @@ pub struct StageOut {
     pub pushes: Vec<crate::action::PushEvent>,
     /// **P6a**：`SimBuff` 段的合并产出（`BUFF_PASSES_PER_TICK` 个 pass 拼接；facade 在段后取走）。
     pub buff: Option<BuffTickOutcome>,
+    /// **P6a2**：`SimSelfDeliver` 段的自投递产出（facade 在段后取走）。
+    pub self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
 }
 
 /// **S4d-3/P1**：`OutputAoi` 段的注册壳——记 [`StageTrace`] 后委派给既有
@@ -2407,6 +2428,89 @@ pub fn sim_buff_stage_system(world: &mut bevy_ecs::world::World) {
 }
 
 mir2_world_bevy::stage_spec!(
+    SimSelfDeliver,
+    TickStage::SimSelfDeliver,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::PvpState
+    ]
+);
+
+/// **P6a2 段 #5 `SimSelfDeliver`**：宝宝自投递（oracle `PlayObject.Run()` 的消息段，
+/// `PlayObject.Message.cs:360-364`）。
+///
+/// 段位 = `tick_head` 原 `record.slave_self_deliveries = self.deliver_self_delay_msgs()` 那一行
+/// （非玩家死亡结算之后、`ExtraAbil` 过期之前；设计 §5.2 的 RNG 消费者序不变）。借用形状按
+/// Dv5：owned `SimState` + `StageEntities`；实现体 =
+/// [`crate::slave::deliver_self_delay_msgs_impl`]（facade 与段共用同一份，无第二份拷贝）。
+///
+/// **RNG**：本段会抽数（`RM_TRANSPARENT` 的 `R(2)`、`RM_DELAYMAGIC` 的 MSD、`RM_STRUCK` 的
+/// `Random(6)`/`Random(300)`、主人死族叛变的 `Random(MasterDieMutinyRate)`）⇒ 段的先后位置
+/// 必须与迁移前逐点一致（本批不动段位）。
+///
+/// **写集**：`EntityMutData` 的 20 组件（`get_mut` 组合视图）+ `Transform`（`char_pushed_core`
+/// 逐格推进）+ `PvpState`（`RM_POISON` 的 `SetPkFlag`）；读集为 `StageAccess` 的 24 组件全集。
+pub fn sim_self_deliver_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimSelfDeliver);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimSelfDeliver）");
+    let out = {
+        let mut ad = StageEntities::<SimSelfDeliver>::new(world);
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        crate::slave::deliver_self_delay_msgs_impl(&mut access, &mut sim)
+    };
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().self_deliveries = out;
+}
+
+mir2_world_bevy::stage_spec!(
     TailVerifyMapTime,
     TickStage::TailVerifyMapTime,
     read: [
@@ -3012,6 +3116,17 @@ impl World {
             .buff
             .take()
             .expect("SimBuff 段必须产出 BuffTickOutcome（段边界契约）")
+    }
+
+    /// 取走 `SimSelfDeliver` 段落到 [`StageOut`] 的自投递产出（段边界之后调用；P6a2）。
+    fn take_self_deliveries(&mut self) -> Vec<crate::slave::SelfDelayOutcome> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .self_deliveries,
+        )
     }
 
     /// 单 pass 的 buff `DoWork`（供单测直接驱动；tick 路径经段系统 [`sim_buff_stage_system`]）。
@@ -3829,10 +3944,26 @@ impl World {
         this_id: i32,
         target_id: i32,
     ) -> Option<crate::slave::NameColorDelivery> {
+        let World { entities, sim, .. } = self;
+        Self::set_pk_flag_impl(entities, sim, this_id, target_id)
+    }
+
+    /// **P6a2**：`SetPkFlag` 的 facade/段共用实现（`RM_POISON` 的玩家对玩家支）。
+    ///
+    /// `PvpState` 不在 `EntityMut` 组合视图内 ⇒ 走 [`crate::entity::PvpStateAccess`]
+    /// （段 spec 须声明写 `PvpState`）。
+    pub(crate) fn set_pk_flag_impl<
+        A: crate::entity::EntityAccess + crate::entity::PvpStateAccess,
+    >(
+        access: &mut A,
+        sim: &SimState,
+        this_id: i32,
+        target_id: i32,
+    ) -> Option<crate::slave::NameColorDelivery> {
         // oracle 的判据全在 `this`/`target` 的只读字段上；先取值再释放借用（供下面写计时）。
         let (this_level, this_flagged, target_level, target_race, target_flagged) = {
-            let this = self.entities.get(this_id)?;
-            let target = self.entities.get(target_id)?;
+            let this = access.get(this_id)?;
+            let target = access.get(target_id)?;
             (
                 Self::pvp_level(this.pk_point),
                 this.pvp_flag,
@@ -3851,14 +3982,14 @@ impl World {
         }
         // `:4333` 计时**无条件刷新**（在 `if (!targetObject.PvpFlag)` 之前）：目标已带 flag 时
         // 再来一次 `SetPkFlag` 不产帧，但会把过期时刻推后（oracle 原样，不许「顺手」改成早退）。
-        let now = self.clock_ms;
-        if let Some(p) = self.entities.pvp_state_mut(target_id) {
+        let now = sim.clock_ms;
+        if let Some(p) = access.pvp_state_mut(target_id) {
             p.pvp_name_color_tick = now;
         }
         if target_flagged {
             return None;
         }
-        if let Some(p) = self.entities.pvp_state_mut(target_id) {
+        if let Some(p) = access.pvp_state_mut(target_id) {
             p.pvp_flag = true;
         }
         Some(crate::slave::NameColorDelivery {
@@ -4271,7 +4402,19 @@ impl World {
     /// **不得**用 `EntityStore::iter` 的槽位序（槽复用会换位）。
     #[must_use]
     pub fn mag_objects_in_range(&self, map_id: usize, n_x: i32, n_y: i32, range: i32) -> Vec<i32> {
-        let Some(map) = self.maps.get(map_id) else {
+        Self::mag_objects_in_range_impl(&self.entities, &self.sim, map_id, n_x, n_y, range)
+    }
+
+    /// **P6a2**：`mag_objects_in_range` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+    pub(crate) fn mag_objects_in_range_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        n_x: i32,
+        n_y: i32,
+        range: i32,
+    ) -> Vec<i32> {
+        let Some(map) = sim.maps.get(map_id) else {
             return Vec::new();
         };
         let mut out = Vec::new();
@@ -4285,7 +4428,7 @@ impl World {
                     if obj.cell_obj_id <= 0 || !obj.actor_object {
                         continue;
                     }
-                    if let Some(e) = self.entities.get(obj.cell_obj_id) {
+                    if let Some(e) = access.get(obj.cell_obj_id) {
                         if !e.death && !e.ghost {
                             out.push(e.id);
                         }
@@ -4776,20 +4919,33 @@ impl World {
         target_id: i32,
         n_h_time: u16,
     ) -> crate::slave::TransparentDelivery {
+        let World { entities, sim, .. } = self;
+        Self::mag_make_private_transparent_impl(entities, sim, target_id, n_h_time)
+    }
+
+    /// **P6a2**：`mag_make_private_transparent` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// `SimSelfDeliver` 的 `RM_TRANSPARENT` 到点投递支走本函数。
+    pub(crate) fn mag_make_private_transparent_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        target_id: i32,
+        n_h_time: u16,
+    ) -> crate::slave::TransparentDelivery {
         let mut d = crate::slave::TransparentDelivery {
             target_id,
             n_h_time,
             ..crate::slave::TransparentDelivery::default()
         };
-        let Some(base) = self.entities.spawn_cloned(target_id) else {
+        let Some(base) = access.spawn_cloned(target_id) else {
             return d;
         };
         if base.status_time[crate::entity::POISON_STATETRANSPARENT] > 0 {
             return d;
         }
-        let objects = self.mag_objects_in_range(base.map_id, base.x, base.y, 9);
+        let objects = Self::mag_objects_in_range_impl(access, sim, base.map_id, base.x, base.y, 9);
         for id in objects {
-            let Some(obj) = self.entities.spawn_cloned(id) else {
+            let Some(obj) = access.spawn_cloned(id) else {
                 continue;
             };
             if obj.race >= crate::entity::ACTOR_RACE_ANIMAL
@@ -4800,17 +4956,17 @@ impl World {
                 let clear = if dx > 1 || dy > 1 {
                     true
                 } else {
-                    crate::magic_effect::private_transparent_draw(&mut self.rng) == 0
+                    crate::magic_effect::private_transparent_draw(&mut sim.rng) == 0
                 };
                 if clear {
-                    if let Some(e) = self.entities.get_mut(id) {
+                    if let Some(e) = access.get_mut(id) {
                         e.ai.target_creature = None;
                     }
                 }
             }
         }
-        let status = crate::buff::get_char_status(self, target_id);
-        if let Some(e) = self.entities.get_mut(target_id) {
+        let status = Self::get_char_status_impl(access, sim, target_id);
+        if let Some(e) = access.get_mut(target_id) {
             e.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = n_h_time;
             e.buff.char_status = status;
             e.flags.hide_mode = true;
@@ -4939,7 +5095,17 @@ impl World {
 
     /// **P3-B3**：`MakeOpenHealth`（`BaseObject.cs:944-950`）——`RM_DOOPENHEALTH` 的到点投递。
     pub fn make_open_health(&mut self, target_id: i32) -> crate::slave::OpenHealthDelivery {
-        let Some(e) = self.entities.spawn_cloned(target_id) else {
+        let World { entities, sim, .. } = self;
+        Self::make_open_health_impl(entities, sim, target_id)
+    }
+
+    /// **P6a2**：`MakeOpenHealth` 的 facade/段共用实现（`RM_DOOPENHEALTH` 到点投递）。
+    pub(crate) fn make_open_health_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        target_id: i32,
+    ) -> crate::slave::OpenHealthDelivery {
+        let Some(e) = access.spawn_cloned(target_id) else {
             return crate::slave::OpenHealthDelivery::default();
         };
         let status_ex = e.char_status_ex | crate::entity::POISON_OPENHEATH;
@@ -4949,14 +5115,14 @@ impl World {
             max_hp: e.max_hp,
         };
         let status =
-            crate::buff::get_char_status(self, target_id) | crate::entity::POISON_OPENHEATH;
-        if let Some(e) = self.entities.get_mut(target_id) {
+            Self::get_char_status_impl(access, sim, target_id) | crate::entity::POISON_OPENHEATH;
+        if let Some(e) = access.get_mut(target_id) {
             e.buff.show_hp = true;
             e.buff.char_status_ex = status_ex;
             e.buff.char_status = status;
         }
-        d.hp = self.entities.get(target_id).map_or(d.hp, |e| e.hp);
-        d.max_hp = self.entities.get(target_id).map_or(d.max_hp, |e| e.max_hp);
+        d.hp = access.get(target_id).map_or(d.hp, |e| e.hp);
+        d.max_hp = access.get(target_id).map_or(d.max_hp, |e| e.max_hp);
         d
     }
 
@@ -4974,15 +5140,25 @@ impl World {
         target_id: i32,
         interval: i32,
     ) -> crate::slave::NameColorDelivery {
-        let now = self.clock_ms;
-        let Some(color) = self
-            .entities
+        let World { entities, sim, .. } = self;
+        Self::open_holy_seize_mode_impl(entities, sim, target_id, interval)
+    }
+
+    /// **P6a2**：`OpenHolySeizeMode` 的 facade/段共用实现（`RM_MAKEHOLYSEIZEMODE` 到点投递）。
+    pub(crate) fn open_holy_seize_mode_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        target_id: i32,
+        interval: i32,
+    ) -> crate::slave::NameColorDelivery {
+        let now = sim.clock_ms;
+        let Some(color) = access
             .get(target_id)
             .map(|e| crate::slave::get_chr_color(&e, &[], 0))
         else {
             return crate::slave::NameColorDelivery::default();
         };
-        if let Some(e) = self.entities.get_mut(target_id) {
+        if let Some(e) = access.get_mut(target_id) {
             e.ai.holy_seize = true;
             e.ai.holy_seize_tick = now;
             e.ai.holy_seize_interval = i64::from(interval);
@@ -5473,18 +5649,6 @@ impl World {
 
     /// `GuardUnit.CrimeforCastle = true; CrimeforCastleTime = GetTickCount();`
     /// （`GuardUnit.cs:27-33`，由 [`crate::monai::animal_struck`] 在 `Castle != null` 时调）。
-    pub(crate) fn set_guard_crime_for_castle(&mut self, actor_id: i32, now: i64) {
-        if let Some(slot) = self
-            .guard_castle_crime
-            .iter_mut()
-            .find(|(id, _)| *id == actor_id)
-        {
-            slot.1 = now;
-        } else {
-            self.guard_castle_crime.push((actor_id, now));
-        }
-    }
-
     /// `guardObject.CrimeforCastle` 的读侧：`Some(CrimeforCastleTime)` ⇔ 置位中。
     #[must_use]
     pub(crate) fn guard_crime_for_castle_tick(&self, actor_id: i32) -> Option<i64> {
@@ -6719,8 +6883,10 @@ impl World {
         // **先于** `BaseObject.Run` 的宝宝清表（`BaseObject.Base.cs:208-217`）。同序放置。
         // P3-B2：`RM_MAGHEALING`（治疗）不依赖该开关；主人死族在 `deliver_self_delay_msgs`
         // 内部仍按 `slave_self_delay_enabled` 过滤（关闭时保持入队）。
+        // S4d-3/P6a2 #5：段系统（`SimSelfDeliver`），段位与旧内联调用完全相同。
         let __prof_selfd = self.prof_begin();
-        record.slave_self_deliveries = self.deliver_self_delay_msgs();
+        self.run_head_stage(|world, head| head.run(TickStage::SimSelfDeliver, world));
+        record.slave_self_deliveries = self.take_self_deliveries();
         self.prof_end(TickStage::SimSelfDeliver, __prof_selfd);
         // **P3-B5**：`ExtraAbil` 过期检查（oracle 在 `PlayObject.Run` 的消息泵；
         // 本骨架每 world tick 一次，相位差登记 T-B5-2）与地图事件处理器
@@ -7322,7 +7488,7 @@ impl World {
     ///
     /// facade `World::char_pushed_now`（Command `Push` 与 slave 自投递共用，签名不变）与 `SimDup`
     /// 段都调本函数：单一实现，`EntityAccess` 同时覆盖 `EntityStore` 与 `StageAccess`。
-    fn char_pushed_core<A: crate::entity::EntityAccess>(
+    pub(crate) fn char_pushed_core<A: crate::entity::EntityAccess>(
         access: &mut A,
         sim: &mut SimState,
         actor_id: i32,
@@ -9691,6 +9857,7 @@ mod tests {
                 TickStage::SimHiterSnapshot,
                 TickStage::SimExpireHitters,
                 TickStage::SimSettleDeaths,
+                TickStage::SimSelfDeliver,
                 TickStage::SimExtraAbil,
                 TickStage::SimMapEvents,
                 TickStage::SimSlaveCleanup,
@@ -9705,6 +9872,43 @@ mod tests {
             ],
             "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
         );
+    }
+
+    /// **P6a2 `SimSelfDeliver` 段语义牙**：到点 `RM_TRANSPARENT` 经段系统落到实体三处
+    /// （`StatusTimeArr[STATETRANSPARENT]` / `flags.hide_mode` / `buff.transparent`）与
+    /// `record.slave_self_deliveries`。
+    ///
+    /// 牙：① 删 `HeadRunner::new` 的 `SimSelfDeliver` 注册 ⇒ tick panic（段序牙同红）；
+    /// ② 删段内 `mag_make_private_transparent_impl` 的 `hide_mode` 回写 ⇒ 本用例红；
+    /// ③ 删 `record.slave_self_deliveries = self.take_self_deliveries();` ⇒ record 断言红。
+    #[test]
+    fn sim_self_deliver_stage_applies_transparent_and_records_outcome() {
+        let mut w = World::new(8, 8);
+        w.clock_ms = 10_000;
+        let id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "cloaked", 3, 3);
+            e.race = ACTOR_RACE_MONSTER;
+            e.hp = 50;
+            e.max_hp = 50;
+            e
+        });
+        // 800ms 自投递（`nParam1` = `nHTime`）。
+        w.send_self_delay_msg_with(id, crate::slave::RM_TRANSPARENT, 0, 500, 800);
+        // 到点（10_800）之后跑一个 head tick：段系统投递并落写回。
+        w.clock_ms = 15_000;
+        let record = w.tick_head();
+        assert_eq!(record.slave_self_deliveries.len(), 1, "段必须投递一条");
+        let out = &record.slave_self_deliveries[0];
+        assert_eq!(out.ident, crate::slave::RM_TRANSPARENT);
+        assert!(out.transparent.is_some(), "RM_TRANSPARENT 必须产出透明载荷");
+        let e = w.entities.get(id).expect("实体仍在");
+        assert_eq!(
+            e.status_time[crate::entity::POISON_STATETRANSPARENT],
+            500,
+            "段系统必须写回透明时长"
+        );
+        assert!(e.hide_mode, "段系统必须置 hide_mode");
+        assert!(e.transparent, "段系统必须置透明位");
     }
 
     /// **P6a `SimBuff` 段语义牙**：毒伤 DoT 经段系统落到 HP/MeatQuality/record 三处。

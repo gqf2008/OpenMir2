@@ -208,8 +208,16 @@ pub(crate) fn count_at_cell_with(
 /// `None` = 不满足邻接（含同格）；`Some(dir)` = 命中（oracle 返回 true 且 `btDir` 有值）。
 #[must_use]
 pub fn get_attack_dir(world: &World, actor_id: i32, target_id: i32) -> Option<u8> {
-    let a = world.entities.get(actor_id)?;
-    let t = world.entities.get(target_id)?;
+    get_attack_dir_impl(&world.entities, actor_id, target_id)
+}
+
+fn get_attack_dir_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    actor_id: i32,
+    target_id: i32,
+) -> Option<u8> {
+    let a = access.get(actor_id)?;
+    let t = access.get(target_id)?;
     let (ax, ay) = (a.x, a.y);
     let (tx, ty) = (t.x, t.y);
     if !(ax - 1 <= tx && ax + 1 >= tx && ay - 1 <= ty && ay + 1 >= ty) || (ax == tx && ay == ty) {
@@ -345,8 +353,18 @@ pub fn search_target(world: &mut World, actor_id: i32) {
 
 /// `BaseObject.SetTargetCreat`：置 `TargetCret` 并刷新 `TargetFocusTick`。
 pub fn set_target_creature(world: &mut World, actor_id: i32, target_id: i32) {
-    let now = world.clock_ms;
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    let World { entities, sim, .. } = world;
+    set_target_creature_impl(entities, sim, actor_id, target_id)
+}
+
+pub(crate) fn set_target_creature_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) {
+    let now = sim.clock_ms;
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.target_creature = Some(target_id);
         e.ai.target_focus_tick = now;
     }
@@ -638,63 +656,74 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
 ///
 /// **前置**：调用方保证 `hiter_id` 在场（oracle `Operate` 的 `struckObject != null` 门在出队处）。
 pub fn animal_struck(world: &mut World, victim_id: i32, hiter_id: i32) {
+    let World { entities, sim, .. } = world;
+    animal_struck_impl(entities, sim, victim_id, hiter_id)
+}
+
+/// **P6a2**：`animal_struck` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// `SimSelfDeliver` 的 `RM_STRUCK` 到点投递支与 `base_object_run_monster` 的队列消费支
+/// 都走本函数（一次移植、两处复用）。
+pub(crate) fn animal_struck_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    victim_id: i32,
+    hiter_id: i32,
+) {
     // **MB-8（R36）**：`SoccerBall.Struck`（`SoccerBall.cs:76-86`）**完全覆写**了
     // `AnimalObject.Struck`（无 `base.Struck()`）⇒ 不写 `StruckTick`、不选目标、不扣肉质、
     // 不加 `AttackTick`，只写 `Dir/N550/TargetX/Y`。
-    if world.entities.get(victim_id).is_some_and(|e| e.race == 120) {
-        soccer_ball_struck(world, victim_id, hiter_id);
+    if access.get(victim_id).is_some_and(|e| e.race == 120) {
+        soccer_ball_struck_impl(access, sim, victim_id, hiter_id);
         // `Operate(RM_STRUCK)` 在覆写的 `Struck` 之后仍无条件 BreakHolySeizeMode。
-        break_holy_seize_mode(world, victim_id);
+        break_holy_seize_mode_impl(access, sim, victim_id);
         return;
     }
-    let now = world.clock_ms;
+    let now = sim.clock_ms;
     // `StruckTick = HUtil32.GetTickCount();`（`AnimalObject.cs:336`）
-    if let Some(e) = world.entities.get_mut(victim_id) {
+    if let Some(e) = access.get_mut(victim_id) {
         e.ai.struck_tick = now;
     }
-    let cur_target = world
-        .entities
-        .get(victim_id)
-        .and_then(|e| e.ai.target_creature);
+    let cur_target = access.get(victim_id).and_then(|e| e.ai.target_creature);
     // `if (TargetCret == null || GetAttackDir(TargetCret, ref btDir) || M2Share.RandomNumber.Random(6) == 0)`
     let take = match cur_target {
         None => true,
-        Some(t) => get_attack_dir(world, victim_id, t).is_some() || world.rng.random_below(6) == 0,
+        Some(t) => {
+            get_attack_dir_impl(access, victim_id, t).is_some() || sim.rng.random_below(6) == 0
+        }
     };
     if take {
-        let proper = world
-            .entities
+        let proper = access
             .get(victim_id)
-            .zip(world.entities.get(hiter_id))
+            .zip(access.get(hiter_id))
             .is_some_and(|(a, b)| is_proper_target_grouped_direct(&a, &b, &[]));
         if proper {
-            set_target_creature(world, victim_id, hiter_id);
+            set_target_creature_impl(access, sim, victim_id, hiter_id);
         }
     }
     // `if (Animal) { MeatQuality = (ushort)(MeatQuality - Random(300)); if (MeatQuality < 0) MeatQuality = 0; }`
     // `Animal` 由怪种分类决定（[`is_animal_race`]）；`e.ai.animal` 保留为显式覆盖位（恒 `false`）。
-    let is_animal = world
-        .entities
+    let is_animal = access
         .get(victim_id)
         .is_some_and(|e| e.ai.animal || is_animal_race(e.race));
     if is_animal {
-        let dec = world.rng.random_below(300);
-        if let Some(e) = world.entities.get_mut(victim_id) {
+        let dec = sim.rng.random_below(300);
+        if let Some(e) = access.get_mut(victim_id) {
             let v = i32::from(e.ai.meat_quality) - dec;
             e.ai.meat_quality = if v < 0 { 0 } else { v as u16 };
         }
     }
     // `AttackTick = AttackTick + (150 - HUtil32._MIN(130, Abil.Level * 4));`
-    let level = world.entities.get(victim_id).map_or(0, |e| e.level);
+    let level = access.get(victim_id).map_or(0, |e| e.level);
     let add = 150 - (i32::from(level) * 4).min(130);
-    if let Some(e) = world.entities.get_mut(victim_id) {
+    if let Some(e) = access.get_mut(victim_id) {
         e.ai.attack_tick += i64::from(add);
     }
     // `GuardUnit.Struck`（`GuardUnit.cs:27-33`）：`Castle != null` ⇒ 置 `CrimeforCastle`。
-    guard_unit_struck(world, victim_id, now);
+    guard_unit_struck_impl(access, sim, victim_id, now);
     // `AnimalObject.Operate(RM_STRUCK)`：`Struck` 后无条件 `BreakHolySeizeMode()`
     // ⇒ 清 HolySeize + `RefNameColor()`，不是只有 HolySeize=true 才发。
-    break_holy_seize_mode(world, victim_id);
+    break_holy_seize_mode_impl(access, sim, victim_id);
 }
 
 /// `CreateMonster`（`WorldServer.MonGen.cs:507-728`）按 `monsters.Race` 选怪类；本函数给出
@@ -882,8 +911,11 @@ pub struct MonsterRefMsg {
 }
 
 /// 只读快照 `(dir, x, y, map_id, char_status, hidden)`。
-fn ref_snapshot(world: &World, actor_id: i32) -> Option<(u8, i32, i32, usize, i32, bool)> {
-    world.entities.get(actor_id).map(|e| {
+fn ref_snapshot_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    actor_id: i32,
+) -> Option<(u8, i32, i32, usize, i32, bool)> {
+    access.get(actor_id).map(|e| {
         (
             e.ai.dir,
             e.x,
@@ -910,8 +942,9 @@ fn send_ref_msg(
     n_param2: i32,
     n_param3: i32,
 ) {
-    send_ref_msg_with_target(
-        world, actor_id, ident, w_param, n_param1, n_param2, n_param3, None,
+    let World { entities, sim, .. } = world;
+    send_ref_msg_impl(
+        entities, sim, actor_id, ident, w_param, n_param1, n_param2, n_param3, None,
     );
 }
 
@@ -927,11 +960,33 @@ fn send_ref_msg_with_target(
     n_param3: i32,
     target: Option<i32>,
 ) {
-    let Some((dir, x, y, map_id, status, self_only)) = ref_snapshot(world, actor_id) else {
+    let World { entities, sim, .. } = world;
+    send_ref_msg_impl(
+        entities, sim, actor_id, ident, w_param, n_param1, n_param2, n_param3, target,
+    );
+}
+
+/// **P6a2**：`SendRefMsg` 冷路径的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 收件人格扫走 [`crate::session::send_ref_msg_targets_at_impl`]（同一份算法）；帧事件落
+/// `sim.pending_monster_ref_msgs`。`SimSelfDeliver` 的 `BreakHolySeizeMode` 支走本函数。
+#[allow(clippy::too_many_arguments)]
+fn send_ref_msg_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    ident: u16,
+    w_param: i32,
+    n_param1: i32,
+    n_param2: i32,
+    n_param3: i32,
+    target: Option<i32>,
+) {
+    let Some((dir, x, y, map_id, status, self_only)) = ref_snapshot_impl(access, actor_id) else {
         return;
     };
     let (target_x, target_y) = target
-        .and_then(|id| world.entities.get(id))
+        .and_then(|id| access.get(id))
         .map_or((0, 0), |t| (t.x, t.y));
     // 收件人**在发帧时刻**快照（oracle `SendRefMsg` 同点）；`self_only` 恒无收件人。
     //
@@ -944,9 +999,17 @@ fn send_ref_msg_with_target(
     let recipients = if self_only {
         Vec::new()
     } else {
-        crate::session::send_ref_msg_targets_at(world, NO_SENDER_EXCLUSION, map_id, x, y, 12)
+        crate::session::send_ref_msg_targets_at_impl(
+            access,
+            &sim.maps,
+            NO_SENDER_EXCLUSION,
+            map_id,
+            x,
+            y,
+            12,
+        )
     };
-    world.pending_monster_ref_msgs.push(MonsterRefMsg {
+    sim.pending_monster_ref_msgs.push(MonsterRefMsg {
         actor_id,
         ident,
         w_param,
@@ -4287,11 +4350,23 @@ pub fn break_crazy_mode(world: &mut World, actor_id: i32) {
 /// `HolySeize = false; RefNameColor();`。状态与帧事件必须同位产生，否则受击/出手后
 /// 怪仍保持冻结，或命中 HolySeize 的怪不发 656。所有既有调用点共用本 helper。
 pub fn break_holy_seize_mode(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get_mut(actor_id) else {
+    let World { entities, sim, .. } = world;
+    break_holy_seize_mode_impl(entities, sim, actor_id)
+}
+
+/// **P6a2**：`break_holy_seize_mode` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// `AnimalObject.Operate(RM_STRUCK)` 尾的无条件 `BreakHolySeizeMode()` 走本函数。
+pub(crate) fn break_holy_seize_mode_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get_mut(actor_id) else {
         return;
     };
     e.ai.holy_seize = false;
-    send_ref_msg(world, actor_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0);
+    send_ref_msg_impl(access, sim, actor_id, RM_CHANGENAMECOLOR, 0, 0, 0, 0, None);
 }
 
 /// `MonsterObject.Run` 尾的 `CrazyMode` 到期段（`MonsterObject.cs:353-356`）。
@@ -6412,13 +6487,18 @@ fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i3
 ///
 /// 本骨架的 `Castle != null` = `Entity::castle_binding.is_some()`（弓手/门/墙由
 /// `UserCastle::Initialize` 绑定；守卫表不绑，与 oracle 同）。
-fn guard_unit_struck(world: &mut World, victim_id: i32, now: i64) {
-    if world
-        .entities
+/// **P6a2**：`GuardUnit.Struck` 的 `CrimeforCastle` 置位段的 facade/段共用实现。
+fn guard_unit_struck_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &mut crate::world::SimState,
+    victim_id: i32,
+    now: i64,
+) {
+    if access
         .get(victim_id)
         .is_some_and(|e| e.castle_binding.is_some())
     {
-        world.set_guard_crime_for_castle(victim_id, now);
+        sim.set_guard_crime_for_castle(victim_id, now);
     }
 }
 
@@ -6576,21 +6656,32 @@ fn soccer_ball_reflect_dir(dir: u8) -> u8 {
 /// 不写 `StruckTick`、不选目标、不扣肉质、不加 `AttackTick`（无 `base.Struck()`）。
 /// 由 [`animal_struck`] 在 race 120 处转派。
 pub fn soccer_ball_struck(world: &mut World, actor_id: i32, hiter_id: i32) {
-    let Some(hiter_dir) = world.entities.get(hiter_id).map(|h| h.ai.dir) else {
+    let World { entities, sim, .. } = world;
+    soccer_ball_struck_impl(entities, sim, actor_id, hiter_id)
+}
+
+/// **P6a2**：`soccer_ball_struck` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+pub(crate) fn soccer_ball_struck_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    hiter_id: i32,
+) {
+    let Some(hiter_dir) = access.get(hiter_id).map(|h| h.ai.dir) else {
         return;
     };
-    let (cx, cy, map_id, n550) = match world.entities.get(actor_id) {
+    let (cx, cy, map_id, n550) = match access.get(actor_id) {
         Some(e) => (e.x, e.y, e.map_id, e.n550),
         None => return,
     };
-    let n550 = world.rng.random_below(4) + n550 + 4;
+    let n550 = sim.rng.random_below(4) + n550 + 4;
     let n550 = n550.min(20);
-    let dest = world
+    let dest = sim
         .maps
         .get(map_id)
         .and_then(|m| m.get_next_position(cx, cy, hiter_dir, n550))
         .unwrap_or((cx, cy));
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = hiter_dir;
         e.monster_class.n550 = n550;
         e.ai.target_x = dest.0;
