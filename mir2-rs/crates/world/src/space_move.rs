@@ -102,20 +102,40 @@ pub(crate) fn monster_space_move(
     n_x: i32,
     n_y: i32,
 ) -> bool {
-    let Some(dest_map) = world.maps.get(dest_map_id) else {
+    monster_space_move_impl(
+        &mut world.entities,
+        &mut world.sim,
+        actor_id,
+        dest_map_id,
+        n_x,
+        n_y,
+    )
+}
+
+/// **P6b2**：`monster_space_move` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 与 facade 入口逐句相同；`SimMonsterAi` 段（`MonsterObject.Run` 的跟随/瞬移段）共用本函数。
+pub(crate) fn monster_space_move_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    dest_map_id: usize,
+    n_x: i32,
+    n_y: i32,
+) -> bool {
+    let Some(dest_map) = sim.maps.get(dest_map_id) else {
         return false;
     };
     let (width, height) = (dest_map.width, dest_map.height);
-    let Some((old_map_id, old_x, old_y)) =
-        world.entities.get(actor_id).map(|e| (e.map_id, e.x, e.y))
+    let Some((old_map_id, old_x, old_y)) = access.get(actor_id).map(|e| (e.map_id, e.x, e.y))
     else {
         return false;
     };
 
     // 2. 摘旧格（oracle `DeleteFromMap`）。
-    world.disappear_a(actor_id);
+    crate::world::World::disappear_a_impl(access, sim, actor_id);
     // 3. 先写目标图/目标格（oracle 在 `SpaceMoveGetRandXY` 之前写 `CurrX/CurrY`）。
-    if let Some(e) = world.entities.transform_mut(actor_id) {
+    if let Some(e) = access.transform_mut(actor_id) {
         e.map_id = dest_map_id;
         e.x = n_x;
         e.y = n_y;
@@ -123,42 +143,41 @@ pub(crate) fn monster_space_move(
 
     // 4. `SpaceMoveGetRandXY(Envir, ref tempX, ref tempY)`——取数点。
     let found = {
-        let World { sim, .. } = &mut *world;
         let map = &sim.maps[dest_map_id];
         space_move_get_rand_xy(&mut sim.rng, width, height, n_x, n_y, |x, y| {
             map.get_cell_info(x, y).1
         })
     };
 
-    let now = world.clock_ms;
+    let now = sim.clock_ms;
     let space_moved = found.is_some();
     let added = match found {
         Some((x, y)) => {
-            if let Some(e) = world.entities.transform_mut(actor_id) {
+            if let Some(e) = access.transform_mut(actor_id) {
                 e.x = x;
                 e.y = y;
             }
             // 5-success. `AddMapObject`（`CellType = Monster`，`AnimalObject.cs:86`）。
-            world.maps[dest_map_id].add_map_object(x, y, CellType::Monster, actor_id, now)
+            sim.maps[dest_map_id].add_map_object(x, y, CellType::Monster, actor_id, now)
         }
         None => {
             // 5-fail. 回滚 `Envir/CurrX/CurrY` 并把对象重新登记到旧格（`BaseObject.cs:1147-1153`）。
-            if let Some(e) = world.entities.transform_mut(actor_id) {
+            if let Some(e) = access.transform_mut(actor_id) {
                 e.map_id = old_map_id;
                 e.x = old_x;
                 e.y = old_y;
             }
-            world.maps[old_map_id].add_map_object(old_x, old_y, CellType::Monster, actor_id, now)
+            sim.maps[old_map_id].add_map_object(old_x, old_y, CellType::Monster, actor_id, now)
         }
     };
     // 本仓内部状态位（oracle `AddToMaped` 不在此处语义内）；保持「已落格」不变量。
-    if let Some(b) = world.entities.map_binding_mut(actor_id) {
+    if let Some(b) = access.map_binding_mut(actor_id) {
         b.add_to_mapped = added;
     }
 
     // 6. `OnEnvirnomentChanged()`（实体侧可见效果；ActiveCount 登记未建模）。
     if space_moved && old_map_id != dest_map_id {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             if e.life_cycle.can_re_alive && e.spawn.mon_gen.is_some() {
                 e.life_cycle.can_re_alive = false;
                 e.spawn.mon_gen = None;

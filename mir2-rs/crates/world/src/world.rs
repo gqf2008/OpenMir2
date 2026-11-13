@@ -1530,6 +1530,7 @@ impl HeadRunner {
         me.add(TickStage::SimMapEvents, sim_map_events_stage_system);
         me.add(TickStage::SimSlaveCleanup, sim_slave_cleanup_stage_system);
         me.add(TickStage::SimBuff, sim_buff_stage_system);
+        me.add(TickStage::SimMonsterAi, sim_monster_ai_stage_system);
         me.add(TickStage::SimNpc, sim_npc_stage_system);
         me.add(TickStage::SimMerchant, sim_merchant_stage_system);
         me.add(
@@ -2706,6 +2707,94 @@ mir2_world_bevy::stage_spec!(
     ]
 );
 
+mir2_world_bevy::stage_spec!(
+    SimMonsterAi,
+    TickStage::SimMonsterAi,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding,
+        crate::entity::Recovery
+    ]
+);
+
+/// **P6b2 段 #10 `SimMonsterAi`**：怪物 AI 的全量扫描（`ProcessMonsters` → 每只 `Run()`）。
+///
+/// 段位 = `tick_head` 原 `if self.ai_enabled { crate::monai::monster_ai_tick(self); }` 那一行
+/// （`SimBuff` 之后、`SimNpc` 之前；oracle 线程序 + 设计 §5.2 的 RNG 消费者序不变）。
+/// 借用形状按 Dv5：owned `SimState` + `StageEntities`；实现体 =
+/// [`crate::monai::monster_ai_tick_impl`]（facade `monster_ai_tick` 与段共用同一份）。
+///
+/// **槽位序 / 可见性门**：收集走 `EntityAccess::order_ids`（= `EntityStore::iter_ref` 同序），
+/// `ProcessRunCount`/`IsVisibleActive` 门与 `ProcessMonsterInterval` 语义逐句不变（T10 全量
+/// 11k 实体扫描路径）。
+///
+/// **RNG**：本段是全服最大的随机数消费者（Think/Wandering/AttackTarget/专用怪 `Run`）；
+/// 段位不变 ⇒ 消费者次序逐点不变。
+///
+/// **写集**：`EntityMutData` 的 20 组件 + `Transform`（`WalkTo`/`TryStepNow` 落点）+
+/// `MapBinding`（`SearchTarget` 的可见集 / `VerifyMapTime`）+ `Recovery`（`base.Run` 恢复段）；
+/// 读集为 `StageAccess` 的 24 组件全集。
+///
+/// **无结构变更**：产仔/召唤走既有 `pending_*` 队列（宿主排水），段内不 `insert`/`remove`。
+pub fn sim_monster_ai_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimMonsterAi);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimMonsterAi）");
+    {
+        let mut ad = StageEntities::<SimMonsterAi>::new(world);
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        crate::monai::monster_ai_tick_impl(&mut access, &mut sim);
+    }
+    world.insert_resource(sim);
+}
+
 /// **P6b**：`SimMerchant` 是**结构段**——Ghost 60s 过期支会 `MerchantList.RemoveAt(i)`
 /// （等价物 `StageEntities::remove`）。只有声明本标记的段能拿到 `StructuralAccess`。
 impl mir2_world_bevy::tick::Structural for SimMerchant {}
@@ -3246,15 +3335,26 @@ impl World {
     /// `AnimalObject.ProcessRunCount`（旁挂表，见 [`Self::process_run_counts`]）。
     #[must_use]
     pub fn process_run_count(&self, actor_id: i32) -> i32 {
-        self.process_run_counts.get(&actor_id).copied().unwrap_or(0)
+        Self::process_run_count_impl(&self.sim, actor_id)
+    }
+
+    /// **P6b2**：`process_run_count` 的 facade/段共用实现（`SimMonsterAi` 段共用）。
+    #[must_use]
+    pub(crate) fn process_run_count_impl(sim: &SimState, actor_id: i32) -> i32 {
+        sim.process_run_counts.get(&actor_id).copied().unwrap_or(0)
     }
 
     /// 写 `ProcessRunCount`；`0` 等价于 oracle 的「置 0」（表项删除，避免空项堆积）。
     pub fn set_process_run_count(&mut self, actor_id: i32, value: i32) {
+        Self::set_process_run_count_impl(&mut self.sim, actor_id, value);
+    }
+
+    /// **P6b2**：`set_process_run_count` 的 facade/段共用实现（`SimMonsterAi` 段共用）。
+    pub(crate) fn set_process_run_count_impl(sim: &mut SimState, actor_id: i32, value: i32) {
         if value == 0 {
-            self.process_run_counts.remove(&actor_id);
+            sim.process_run_counts.remove(&actor_id);
         } else {
-            self.process_run_counts.insert(actor_id, value);
+            sim.process_run_counts.insert(actor_id, value);
         }
     }
 
@@ -4264,7 +4364,13 @@ impl World {
     /// 未注入 ⇒ 0（普通 `MonGen` 怪与 oracle 普通生成路径同）。
     #[must_use]
     pub fn target_anti_poison(&self, target_id: i32) -> i32 {
-        self.attack_poison
+        Self::target_anti_poison_impl(&self.sim, target_id)
+    }
+
+    /// **P6b2**：`target_anti_poison` 的 facade/段共用实现（只碰 `SimState`）。
+    #[must_use]
+    pub(crate) fn target_anti_poison_impl(sim: &SimState, target_id: i32) -> i32 {
+        sim.attack_poison
             .get(&target_id)
             .map_or(0, |s| i32::from(s.anti_poison))
     }
@@ -5610,14 +5716,26 @@ impl World {
         y: i32,
         exclude_dead: bool,
     ) -> Option<i32> {
-        let map = self.maps.get(map_id)?;
+        Self::moving_object_at_impl(&self.entities, &self.sim, map_id, x, y, exclude_dead)
+    }
+
+    /// **P6b2**：`moving_object_at` 的 facade/段共用实现（怪物 AI 段共用）。
+    pub(crate) fn moving_object_at_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        exclude_dead: bool,
+    ) -> Option<i32> {
+        let map = sim.maps.get(map_id)?;
         let (cell, success) = map.get_cell_info(x, y);
         if !success || !cell.is_available() {
             return None;
         }
         for o in &cell.obj_list {
             if o.cell_obj_id > 0 && o.actor_object {
-                if let Some(e) = self.entities.get(o.cell_obj_id) {
+                if let Some(e) = access.get(o.cell_obj_id) {
                     if !e.ghost && (!exclude_dead || !e.death) {
                         return Some(o.cell_obj_id);
                     }
@@ -5632,12 +5750,38 @@ impl World {
     /// `boFlag=true` 时判据按 C# 的 `(!Ghost && !boFlag) || !Death` 化简为 **`!Death`**
     /// （存活但 `Ghost` 的对象仍会被收集——oracle 的运算符优先级怪行为，照搬）。
     ///
-    /// **P2b 起非生产路径**：`SimMapEvents` 段拆成「格子枚举（[`map_cell_object_ids`]）+
-    /// 段内 `LifeCycle.death` 过滤」（两者同真值源）；本函数保留为 facade 侧参照实现与
-    /// `monai` 测试（`base_objects_at(0, 11, 10)`）的对照面，P7 收口时随内联段一并清理。
+    /// **P6b2**：facade 一行委托——段侧（`SimMonsterAi` 的攻击覆写族）与 `monai`
+    /// 测试（`base_objects_at(0, 11, 10)`）共用 [`Self::base_objects_at_impl`]；
+    /// `SimMapEvents` 段的格子枚举仍走 [`map_cell_object_ids`] + 段内 `LifeCycle.death` 过滤。
     #[allow(dead_code)]
     pub(crate) fn base_objects_at(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
-        let Some(map) = self.maps.get(map_id) else {
+        Self::base_objects_at_impl(&self.entities, &self.sim, map_id, x, y, false)
+    }
+
+    /// **P6b2**：`base_objects_at_including_dead` 的 facade/段共用实现（`boFlag=false` 口径）。
+    pub(crate) fn base_objects_at_including_dead_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+    ) -> Vec<i32> {
+        Self::base_objects_at_impl(access, sim, map_id, x, y, true)
+    }
+
+    /// **P6b2**：`GetBaseObjects` 两口径的 facade/段共用实现（怪物 AI 段）。
+    ///
+    /// `including_dead == false` ⇒ `!Death` 口径（`boFlag=true`）；
+    /// `including_dead == true` ⇒ `!Ghost || !Death` 口径（`boFlag=false`）。
+    pub(crate) fn base_objects_at_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        including_dead: bool,
+    ) -> Vec<i32> {
+        let Some(map) = sim.maps.get(map_id) else {
             return Vec::new();
         };
         let (cell, success) = map.get_cell_info(x, y);
@@ -5647,8 +5791,13 @@ impl World {
         let mut out = Vec::new();
         for o in &cell.obj_list {
             if o.cell_obj_id > 0 && o.actor_object {
-                if let Some(e) = self.entities.get(o.cell_obj_id) {
-                    if !e.death {
+                if let Some(e) = access.get(o.cell_obj_id) {
+                    let keep = if including_dead {
+                        !e.ghost || !e.death
+                    } else {
+                        !e.death
+                    };
+                    if keep {
                         out.push(o.cell_obj_id);
                     }
                 }
@@ -5668,26 +5817,9 @@ impl World {
     /// `tests/parity/m3/audit-attack-search-coverage-20261018.md`）⇒ 死对象此处仍会被拒绝，
     /// 与 oracle `IsAttackTarget`（`BaseObject.Base.cs:377-466`，不判 `Death/Ghost`）的**剩余**
     /// 差异归属 G09，不在本卡扩大修复范围。
+    #[allow(dead_code)] // facade；段侧走 `base_objects_at_including_dead_impl`
     pub(crate) fn base_objects_at_including_dead(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
-        let Some(map) = self.maps.get(map_id) else {
-            return Vec::new();
-        };
-        let (cell, success) = map.get_cell_info(x, y);
-        if !success || !cell.is_available() {
-            return Vec::new();
-        }
-        let mut out = Vec::new();
-        for o in &cell.obj_list {
-            if o.cell_obj_id > 0 && o.actor_object {
-                if let Some(e) = self.entities.get(o.cell_obj_id) {
-                    // `!Ghost || !Death`（oracle 的 `(!Ghost && !boFlag) || !Death`，boFlag=false）。
-                    if !e.ghost || !e.death {
-                        out.push(o.cell_obj_id);
-                    }
-                }
-            }
-        }
-        out
+        Self::base_objects_at_impl(&self.entities, &self.sim, map_id, x, y, true)
     }
 
     /// `Envirnoment.GetEvent(nX, nY)`（`:1344-1360`）的格子 + 管理器双层门。
@@ -5702,11 +5834,21 @@ impl World {
     /// 故另加 `map_id` 过滤。
     #[must_use]
     pub fn event_at(&self, map_id: usize, x: i32, y: i32) -> Option<&FireBurnEvent> {
-        let map = self.maps.get(map_id)?;
+        Self::event_at_impl(&self.sim, map_id, x, y)
+    }
+
+    /// **P6b2**：`event_at` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn event_at_impl(
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+    ) -> Option<&FireBurnEvent> {
+        let map = sim.maps.get(map_id)?;
         if !map.has_event_cell(x, y) {
             return None;
         }
-        self.fire_burn_events
+        sim.fire_burn_events
             .iter()
             .find(|e| e.registered && e.map_id == map_id)
     }
@@ -5723,14 +5865,27 @@ impl World {
         damage: i32,
         continue_ms: i32,
     ) {
-        let now = self.clock_ms;
+        Self::add_fire_burn_event_impl(&mut self.sim, owner_id, map_id, x, y, damage, continue_ms);
+    }
+
+    /// **P6b2**：`add_fire_burn_event` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn add_fire_burn_event_impl(
+        sim: &mut SimState,
+        owner_id: i32,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        damage: i32,
+        continue_ms: i32,
+    ) {
+        let now = sim.clock_ms;
         // review `39262b65` F2：oracle `ET_FIRE = 5`（`src/OpenMir2/Grobal2.cs:48`；
         // `MagicManager.cs:1074-1089` 四处全传 `ET_FIRE`）。基线误写 1（= `ET_DIGOUTZOMBI` 的号，
         // `Grobal2.cs:41`）——本卡把它送上 804 线（`wParam`/`Param` 字节）⇒ 一并订正。
         // （NEEDHOLE 联锁核实：`route_enter`/`step_with_route` 的门读 `dig_out_event_at`
         // = `dig_out_events` 表 + `event_type == 1`（world.rs `dig_out_event_at`），火墙在
         // `fire_burn_events` 另表 ⇒ 基线的 1 并不构成 NEEDHOLE 误触发，但仍是 oracle 偏离。）
-        self.fire_burn_events.push(FireBurnEvent {
+        sim.fire_burn_events.push(FireBurnEvent {
             owner_id: Some(owner_id),
             map_id,
             x,
@@ -5749,27 +5904,21 @@ impl World {
         });
         // **BUG-REPLICA 3**：越界/不可走的格子 `AddMapEvent` no-op，但事件仍进全局表；
         // 只有格子真正追加成功时 `CellObjectMgr.Add(0, event)` 才执行（第一条胜）。
-        let added = self
+        let added = sim
             .maps
             .get_mut(map_id)
             .is_some_and(|m| m.add_event_cell(x, y, now));
         if added {
-            if let Some(evt) = self.fire_burn_events.last_mut() {
+            if let Some(evt) = sim.fire_burn_events.last_mut() {
                 evt.registered = true;
             }
             // 折叠对象 = 第一条 registered 事件（`CellObjectMgr.TryAdd(0, …)` 第一条胜）；
             // 其 ctor 的 `nX/nY` = 注册格（`MapEvent.cs:69-70`）。之后只由
             // `UpdateVisibleEvent` 的首见支覆写。
-            if self
-                .fire_burn_events
-                .iter()
-                .filter(|e| e.registered)
-                .count()
-                == 1
-            {
-                self.event_sight = (x, y);
+            if sim.fire_burn_events.iter().filter(|e| e.registered).count() == 1 {
+                sim.event_sight = (x, y);
             }
-            self.event_registered = true;
+            sim.event_registered = true;
         }
     }
 
@@ -5781,7 +5930,12 @@ impl World {
     /// `CellObjectMgr` 是简化模型，混入 dig-out 格会让火墙判据串味 ⇒ 这里只维护
     /// `EventMgr.Events` 注册表（NEEDHOLE 门的唯一消费面），不落格子对象。
     pub fn add_dig_out_event(&mut self, map_id: usize, x: i32, y: i32) {
-        self.add_map_event_at(map_id, x, y, 1, 5 * 60 * 1000); // ET_DIGOUTZOMBI
+        Self::add_dig_out_event_impl(&mut self.sim, map_id, x, y);
+    }
+
+    /// **P6b2**：`add_dig_out_event` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn add_dig_out_event_impl(sim: &mut SimState, map_id: usize, x: i32, y: i32) {
+        Self::add_map_event_at_impl(sim, map_id, x, y, 1, 5 * 60 * 1000); // ET_DIGOUTZOMBI
     }
 
     /// **MB-3**：`new MapEvent(Envir, X, Y, nType, dwETime, true) + EventMgr.AddEvent`
@@ -5799,8 +5953,20 @@ impl World {
         event_type: i32,
         continue_ms: i64,
     ) {
-        let now = self.clock_ms;
-        self.dig_out_events.push(DigOutEvent {
+        Self::add_map_event_at_impl(&mut self.sim, map_id, x, y, event_type, continue_ms);
+    }
+
+    /// **P6b2**：`add_map_event_at` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn add_map_event_at_impl(
+        sim: &mut SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        event_type: i32,
+        continue_ms: i64,
+    ) {
+        let now = sim.clock_ms;
+        sim.dig_out_events.push(DigOutEvent {
             map_id,
             x,
             y,
@@ -5837,10 +6003,41 @@ impl World {
     /// [`Self::set_actor_guild`] 的读侧：`None` ⇔ oracle `MyGuild == null`。
     #[must_use]
     pub fn actor_guild(&self, actor_id: i32) -> Option<crate::castle::GuildId> {
-        self.actor_guilds
+        Self::actor_guild_impl(&self.sim, actor_id)
+    }
+
+    /// **P6b2**：`actor_guild` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn actor_guild_impl(
+        sim: &SimState,
+        actor_id: i32,
+    ) -> Option<crate::castle::GuildId> {
+        sim.actor_guilds
             .iter()
             .find(|(id, _)| *id == actor_id)
             .map(|(_, guild)| *guild)
+    }
+
+    /// **P6b2**：`is_ally_guild` 的 facade/段共用实现（只碰 `SimState`）。
+    #[must_use]
+    pub(crate) fn is_ally_guild_impl(
+        sim: &SimState,
+        guild: crate::castle::GuildId,
+        other: crate::castle::GuildId,
+    ) -> bool {
+        sim.guild_allies
+            .iter()
+            .find(|(g, _)| *g == guild)
+            .is_some_and(|(_, allies)| allies.contains(&other))
+    }
+
+    /// **P6b2**：`castle_exempts_guild` 的 facade/段共用实现（守卫 AI 的 `IsProperTarget`）。
+    #[must_use]
+    pub(crate) fn castle_exempts_guild_impl(
+        sim: &SimState,
+        master_guild: crate::castle::GuildId,
+        guild: Option<crate::castle::GuildId>,
+    ) -> bool {
+        guild.is_some_and(|g| g == master_guild || Self::is_ally_guild_impl(sim, master_guild, g))
     }
 
     /// **卡 `guard-target`**：写 `GuildInfo.GuildAllList` 的等价物（行会 → 盟友表）。
@@ -5866,10 +6063,7 @@ impl World {
         guild: crate::castle::GuildId,
         other: crate::castle::GuildId,
     ) -> bool {
-        self.guild_allies
-            .iter()
-            .find(|(g, _)| *g == guild)
-            .is_some_and(|(_, allies)| allies.contains(&other))
+        Self::is_ally_guild_impl(&self.sim, guild, other)
     }
 
     /// `CastleManager.InCastleWarArea(IActor/IEnvir)`（`CastleManager.cs:38-59`）：
@@ -5906,23 +6100,35 @@ impl World {
         master_guild: crate::castle::GuildId,
         guild: Option<crate::castle::GuildId>,
     ) -> bool {
-        guild.is_some_and(|g| g == master_guild || self.is_ally_guild(master_guild, g))
+        Self::castle_exempts_guild_impl(&self.sim, master_guild, guild)
     }
 
     /// `GuardUnit.CrimeforCastle = true; CrimeforCastleTime = GetTickCount();`
     /// （`GuardUnit.cs:27-33`，由 [`crate::monai::animal_struck`] 在 `Castle != null` 时调）。
     /// `guardObject.CrimeforCastle` 的读侧：`Some(CrimeforCastleTime)` ⇔ 置位中。
     #[must_use]
+    #[allow(dead_code)] // facade；段侧走 `guard_crime_for_castle_tick_impl`
     pub(crate) fn guard_crime_for_castle_tick(&self, actor_id: i32) -> Option<i64> {
-        self.guard_castle_crime
+        Self::guard_crime_for_castle_tick_impl(&self.sim, actor_id)
+    }
+
+    /// **P6b2**：`guard_crime_for_castle_tick` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn guard_crime_for_castle_tick_impl(sim: &SimState, actor_id: i32) -> Option<i64> {
+        sim.guard_castle_crime
             .iter()
             .find(|(id, _)| *id == actor_id)
             .map(|(_, tick)| *tick)
     }
 
     /// `guardObject.CrimeforCastle = false;`（`GuardUnit.cs:58/62`）。
+    #[allow(dead_code)] // facade；段侧走 `clear_guard_crime_for_castle_impl`
     pub(crate) fn clear_guard_crime_for_castle(&mut self, actor_id: i32) {
-        self.guard_castle_crime.retain(|(id, _)| *id != actor_id);
+        Self::clear_guard_crime_for_castle_impl(&mut self.sim, actor_id);
+    }
+
+    /// **P6b2**：`clear_guard_crime_for_castle` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn clear_guard_crime_for_castle_impl(sim: &mut SimState, actor_id: i32) {
+        sim.guard_castle_crime.retain(|(id, _)| *id != actor_id);
     }
 
     /// **Lane B**：把一个成功挂图的防御单元绑到实体（oracle `BaseObject.Castle = this`）。
@@ -6002,6 +6208,7 @@ impl World {
         }
     }
 
+    #[allow(dead_code)] // facade；段侧走 `apply_castle_map_event_impl`
     pub(crate) fn apply_castle_map_event(
         &mut self,
         map_id: usize,
@@ -6011,14 +6218,25 @@ impl World {
     }
 
     /// **Lane B**：记录一条门/墙结构事件（`SetMapXyFlag` 同步落到地图，其余保留原始序）。
+    #[allow(dead_code)] // facade；段侧走 `record_castle_structure_impl`
     pub(crate) fn record_castle_structure(
         &mut self,
         castle_index: usize,
         map_id: usize,
         event: crate::castle::StructureEvent,
     ) {
-        self.apply_castle_map_event(map_id, &event);
-        self.pending_castle_structures.push(CastleStructureAt {
+        Self::record_castle_structure_impl(&mut self.sim, castle_index, map_id, event);
+    }
+
+    /// **P6b2**：`record_castle_structure` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn record_castle_structure_impl(
+        sim: &mut SimState,
+        castle_index: usize,
+        map_id: usize,
+        event: crate::castle::StructureEvent,
+    ) {
+        Self::apply_castle_map_event_impl(sim, map_id, &event);
+        sim.pending_castle_structures.push(CastleStructureAt {
             castle_index,
             map_id,
             event,
@@ -6167,11 +6385,39 @@ impl World {
         sy: i32,
         tx: i32,
         ty: i32,
+        n_dir: u8,
+        mag_pwr: i32,
+        undead_attack: bool,
+    ) -> i32 {
+        Self::mag_pass_through_magic_impl(
+            &mut self.entities,
+            &mut self.sim,
+            caster_id,
+            sx,
+            sy,
+            tx,
+            ty,
+            n_dir,
+            mag_pwr,
+            undead_attack,
+        )
+    }
+
+    /// **P6b2**：`mag_pass_through_magic` 的 facade/段共用实现（怪物 AI 段共用）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mag_pass_through_magic_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        caster_id: i32,
+        sx: i32,
+        sy: i32,
+        tx: i32,
+        ty: i32,
         _n_dir: u8,
         mag_pwr: i32,
         undead_attack: bool,
     ) -> i32 {
-        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+        let Some(caster) = access.spawn_cloned(caster_id) else {
             return 0;
         };
         let map_id = caster.map_id;
@@ -6179,21 +6425,19 @@ impl World {
         let (mut sx, mut sy, mut mag_pwr) = (sx, sy, mag_pwr);
         let mut tcount = 0;
         for _ in 0..12 {
-            if let Some(obj_id) = self.moving_object_at(map_id, sx, sy, true) {
-                let proper = self
-                    .entities
+            if let Some(obj_id) = Self::moving_object_at_impl(access, sim, map_id, sx, sy, true) {
+                let proper = access
                     .get(obj_id)
                     .is_some_and(|t| crate::combat::is_proper_target(&caster, &t));
                 if proper {
-                    let anti = self
-                        .entities
-                        .get(obj_id)
-                        .map_or(0, |t| i32::from(t.anti_magic));
-                    if crate::magic_effect::anti_magic_roll(&mut self.rng, anti) {
+                    let anti = access.get(obj_id).map_or(0, |t| i32::from(t.anti_magic));
+                    if crate::magic_effect::anti_magic_roll(&mut sim.rng, anti) {
                         if undead_attack {
                             mag_pwr = crate::magic_effect::scale_undead_attack(mag_pwr);
                         }
-                        self.send_struck_delay_msg(obj_id, caster_id, mag_pwr, 600);
+                        crate::slave::send_struck_delay_msg_impl(
+                            access, sim, obj_id, caster_id, mag_pwr, 600,
+                        );
                         tcount += 1;
                     }
                 }
@@ -6202,7 +6446,7 @@ impl World {
                 break;
             }
             let n_dir = crate::magic::next_direction(sx, sy, tx, ty);
-            let Some((nx, ny)) = self
+            let Some((nx, ny)) = sim
                 .maps
                 .get(map_id)
                 .and_then(|m| m.get_next_position(sx, sy, n_dir, 1))
@@ -7192,9 +7436,10 @@ impl World {
         // **缺省关闭**：合成 golden 场景不含 oracle 的怪物线程，开 AI 会把 RNG 序列整体移位；
         // 由 `bins/game-svr` 的 sim 循环显式 `enable_monster_ai()`（见字段说明）。
         // 单线程串行：按实体槽位顺序（`EntityStore` 显式索引），在死亡结算之后、AOI 之前。
+        // **S4d-3/P6b2 #10**：段系统（`SimMonsterAi`），段位与旧内联调用完全相同。
         let __prof_ai = self.prof_begin();
         if self.ai_enabled {
-            crate::monai::monster_ai_tick(self);
+            self.run_head_stage(|world, head| head.run(TickStage::SimMonsterAi, world));
         }
         self.prof_end(TickStage::SimMonsterAi, __prof_ai);
         // **S4d-1**：AI/命令段的输出累积（结构事件、AI 攻击、武器升级/磨损）不再内联转抄，
@@ -7613,12 +7858,25 @@ impl World {
     ///   首轮通过则后续 9 轮同样通过。判据只看 `CanWalk(flyX, flyY, true)`（忽略角色）。
     #[must_use]
     pub fn can_fly(&self, map_id: usize, ns_x: i32, ns_y: i32, nd_x: i32, nd_y: i32) -> bool {
+        Self::can_fly_impl(&self.entities, &self.sim, map_id, ns_x, ns_y, nd_x, nd_y)
+    }
+
+    /// **P6b2**：`can_fly` 的 facade/段共用实现（怪物 AI 段共用）。
+    pub(crate) fn can_fly_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        ns_x: i32,
+        ns_y: i32,
+        nd_x: i32,
+        nd_y: i32,
+    ) -> bool {
         let r28 = f64::from(nd_x - ns_x) / 1.0e1;
         let r30 = f64::from(nd_y - nd_x) / 1.0e1;
         let fly_x = mir2_shared::hutil::round(f64::from(ns_x) + r28);
         let fly_y = mir2_shared::hutil::round(f64::from(ns_y) + r30);
         // `CanWalk(..., boFlag=true)`：`cellSuccess && cellInfo.Valid` ⇒ 忽略角色阻挡。
-        self.can_walk_at(map_id, fly_x, fly_y, true)
+        Self::can_walk_at_impl(access, sim, map_id, fly_x, fly_y, true)
     }
 
     /// `BaseObject.CharPushed(nDir, nPushCount)`（`src/M2Server/Actor/BaseObject.cs:854-897`）的
@@ -8106,7 +8364,19 @@ impl World {
     /// `ignore_actors = true`（oracle `boFlag` 支）：只判 `cellSuccess && Valid`；
     /// `false`：再排除格上的活体（`!Ghost && !Death && !FixedHideMode && !ObMode`）。
     pub(crate) fn can_walk_at(&self, map_id: usize, x: i32, y: i32, ignore_actors: bool) -> bool {
-        let Some(map) = self.maps.get(map_id) else {
+        Self::can_walk_at_impl(&self.entities, &self.sim, map_id, x, y, ignore_actors)
+    }
+
+    /// **P6b2**：`can_walk_at` 的 facade/段共用实现（怪物 AI 段共用）。
+    pub(crate) fn can_walk_at_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        ignore_actors: bool,
+    ) -> bool {
+        let Some(map) = sim.maps.get(map_id) else {
             return false;
         };
         let (cell, success) = map.get_cell_info(x, y);
@@ -8120,7 +8390,7 @@ impl World {
             if !obj.actor_object {
                 continue;
             }
-            if let Some(e) = self.entities.get(obj.cell_obj_id) {
+            if let Some(e) = access.get(obj.cell_obj_id) {
                 if !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode {
                     return false;
                 }
@@ -9533,7 +9803,21 @@ impl World {
     /// 本函数保留 bool 口径，返回真值与改动前逐例相同。
     #[must_use]
     pub fn try_step_now(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> bool {
-        self.try_step_now_blocked(actor_id, dx, dy, steps).is_ok()
+        Self::try_step_now_impl(&mut self.entities, &mut self.sim, actor_id, dx, dy, steps)
+    }
+
+    /// **P6b2**：`try_step_now` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+    ///
+    /// 怪物 AI（`SimMonsterAi` 段）的 `WalkTo` 落点走本函数；facade 与段只有这一份实现。
+    pub(crate) fn try_step_now_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+        steps: i32,
+    ) -> bool {
+        Self::try_step_now_blocked_impl(access, sim, actor_id, dx, dy, steps).is_ok()
     }
 
     /// [`World::try_step_now`] 的**分类版**：判定顺序与原实现逐条相同，额外把被拒原因带出来
@@ -9548,21 +9832,32 @@ impl World {
         dy: i32,
         steps: i32,
     ) -> Result<(), StepBlock> {
+        Self::try_step_now_blocked_impl(&mut self.entities, &mut self.sim, actor_id, dx, dy, steps)
+    }
+
+    fn try_step_now_blocked_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+        steps: i32,
+    ) -> Result<(), StepBlock> {
         if steps <= 0 || (dx == 0 && dy == 0) {
             return Err(StepBlock::Other);
         }
-        let Some(e) = self.entities.get(actor_id) else {
+        let Some(e) = access.get(actor_id) else {
             return Err(StepBlock::Other);
         };
         let (fx, fy, map_id) = (e.x, e.y, e.map_id);
         let race = e.race;
         for k in 1..=steps {
-            self.cell_free_blocked(map_id, fx + dx * k, fy + dy * k, actor_id)?;
+            Self::cell_free_blocked_impl(access, sim, map_id, fx + dx * k, fy + dy * k, actor_id)?;
         }
         // 落点格（走完的 `CurrX/CurrY`）含 MapRoute 且非玩家 ⇒ 挡（oracle `BaseObject.cs:1548`
         // `result = false` + `WalkTo` 回滚 `:683-688`）。玩家由 `step_with_route` 的换图负责。
         if race != crate::entity::ACTOR_RACE_PLAY
-            && self
+            && sim
                 .maps
                 .get(map_id)
                 .is_some_and(|m| m.has_map_route(fx + dx * steps, fy + dy * steps))
@@ -9570,20 +9865,21 @@ impl World {
             // 不是活体占位、也不是越界（格存在且是 route 格）⇒ 按「地形不可走」归类。
             return Err(StepBlock::Terrain);
         }
-        self.try_step_blocked(actor_id, dx * steps, dy * steps)
+        Self::try_step_blocked_impl(access, sim, actor_id, dx * steps, dy * steps)
     }
 
     /// 目标格是否可站的**分类版**（与 `try_step_blocked` 的阻挡口径同源：`cell_match` +
     /// `valid()/is_available()` + 阻挡 actor 的 `!Ghost && !Death && !FixedHideMode && !ObMode`；
     /// `self_id` 自己不算阻挡）。`Ok(())` = 可站。
-    fn cell_free_blocked(
-        &self,
+    fn cell_free_blocked_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
         map_id: usize,
         tx: i32,
         ty: i32,
         self_id: i32,
     ) -> Result<(), StepBlock> {
-        let Some(map) = self.maps.get(map_id) else {
+        let Some(map) = sim.maps.get(map_id) else {
             return Err(StepBlock::Other);
         };
         if !map.cell_match(tx, ty) {
@@ -9599,8 +9895,7 @@ impl World {
         if cell.obj_list.iter().any(|o| {
             o.actor_object
                 && o.cell_obj_id != self_id
-                && self
-                    .entities
+                && access
                     .get(o.cell_obj_id)
                     .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
         }) {
@@ -9622,7 +9917,18 @@ impl World {
     /// 从源格摘除、再因 `cellSuccess` 假返回 false**（本仓 `move_object` 的「先删后判」同构）。
     /// 若提前短路分类，源格登记会与 base 不同（撞墙后 base 源格 = 0、提前短路 = 1，R26-1 实测）。
     fn try_step_blocked(&mut self, actor_id: i32, dx: i32, dy: i32) -> Result<(), StepBlock> {
-        let Some(e) = self.entities.get(actor_id) else {
+        Self::try_step_blocked_impl(&mut self.entities, &mut self.sim, actor_id, dx, dy)
+    }
+
+    /// **P6b2**：`try_step_blocked` 的 facade/段共用实现（怪物 AI 段的 `WalkTo` 单步移动）。
+    fn try_step_blocked_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+    ) -> Result<(), StepBlock> {
+        let Some(e) = access.get(actor_id) else {
             return Err(StepBlock::Other);
         };
         let (fx, fy, map_id) = (e.x, e.y, e.map_id);
@@ -9631,7 +9937,7 @@ impl World {
         // `move_object` 的 `is_blocking` 闭包需要「不可变借用 `maps` 期间」算好的 id 名单。
         // 前置 `cell_match` 与 base 同：越界在调 `move_object` 之前返回（base 也无侧效应）。
         let blockers: Vec<i32> = {
-            let Some(map) = self.maps.get(map_id) else {
+            let Some(map) = sim.maps.get(map_id) else {
                 return Err(StepBlock::Other);
             };
             if !map.cell_match(tx, ty) {
@@ -9647,13 +9953,13 @@ impl World {
         let blocking: Vec<i32> = blockers
             .into_iter()
             .filter(|id| {
-                self.entities
+                access
                     .get(*id)
                     .is_some_and(|o| !o.ghost && !o.death && !o.fixed_hide_mode && !o.ob_mode)
             })
             .collect();
-        let now = self.clock_ms;
-        let Some(map) = self.maps.get_mut(map_id) else {
+        let now = sim.clock_ms;
+        let Some(map) = sim.maps.get_mut(map_id) else {
             return Err(StepBlock::Other);
         };
         let moved = map.move_object(
@@ -9673,9 +9979,11 @@ impl World {
             // **分类必须在 `move_object` 之后**：保留它「先删源格、后判 cellSuccess」的 oracle
             // 侧效应（见函数头注释）。界内 invalid ⇒ Terrain、活体占位 ⇒ Actor；`cell_free_blocked`
             // 回 `Ok` 的残余失败（如 `(0,0)` 自占格被 `is_blocking` 命中）⇒ Other。
-            return Err(self.classify_block(map_id, tx, ty, actor_id));
+            return Err(Self::classify_block_impl(
+                access, sim, map_id, tx, ty, actor_id,
+            ));
         }
-        if let Some(t) = self.entities.transform_mut(actor_id) {
+        if let Some(t) = access.transform_mut(actor_id) {
             t.x = tx;
             t.y = ty;
         }
@@ -9685,8 +9993,15 @@ impl World {
     /// `move_object` 判假之后的**原因分类**（只允许在调用之后用：见
     /// [`World::try_step_blocked`] 的「先删后判」说明）。与 [`World::cell_free_blocked`] 同口径；
     /// 该函数回 `Ok` 的残余失败（如 `(0,0)` 自占格被 `is_blocking` 命中）归 `Other`。
-    fn classify_block(&self, map_id: usize, tx: i32, ty: i32, self_id: i32) -> StepBlock {
-        self.cell_free_blocked(map_id, tx, ty, self_id)
+    fn classify_block_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        tx: i32,
+        ty: i32,
+        self_id: i32,
+    ) -> StepBlock {
+        Self::cell_free_blocked_impl(access, sim, map_id, tx, ty, self_id)
             .err()
             .unwrap_or(StepBlock::Other)
     }
@@ -10172,6 +10487,8 @@ mod tests {
         w.enable_buff_tick();
         // **P6a2b**：`SimNpc` 同理在 `npc_enabled` 门内运行。
         w.enable_npc_tick();
+        // **P6b2**：`SimMonsterAi` 同理在 `ai_enabled` 门内运行。
+        w.enable_monster_ai();
         // **P6b**：`SimMerchant` 同理在 `merchant_enabled` 门内运行。
         w.enable_merchant_tick();
         w.entities
@@ -10197,6 +10514,7 @@ mod tests {
                 TickStage::SimMapEvents,
                 TickStage::SimSlaveCleanup,
                 TickStage::SimBuff,
+                TickStage::SimMonsterAi,
                 TickStage::SimNpc,
                 TickStage::SimMerchant,
                 TickStage::SimPlayerRunExpiry,
@@ -10310,6 +10628,116 @@ mod tests {
         assert!(
             w.merchant_ids_sorted().is_empty(),
             "段后 refresh_views 后商人列表必须为空"
+        );
+    }
+
+    /// **P6b2 `SimMonsterAi` 段语义牙 ①**：`ProcessRunCount` / `ProcessMonsterInterval` 门
+    /// （`WorldServer.MonGen.cs:294-314`）在段内逐 tick 生效。
+    ///
+    /// 不可见怪（`IsVisibleActive == false`）且 `interval = 2`：
+    /// tick1/tick2 只把计数 0→1→2（**不 Run**），tick3 才清零并 Run。
+    ///
+    /// 牙：① 删/短路 `!visible_active && run_count < interval` 分支 ⇒ tick1 就 Run、
+    /// `process_run_count` 恒 0 ⇒ 前两条断言红；② 把 `<` 改成 `<=` ⇒ tick2 就 Run ⇒ 第二条红；
+    /// ③ 删除计数清零 ⇒ tick3 后计数仍为 2 ⇒ 第三条红。
+    #[test]
+    fn monster_ai_stage_process_run_count_gate_throttles_invisible_monster() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        w.set_process_monster_interval(2);
+        w.enable_monster_ai();
+        let id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "invis".to_string(), 5, 5);
+            e.race = ACTOR_RACE_MONSTER;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+            e
+        });
+        w.tick_head();
+        assert_eq!(w.process_run_count(id), 1, "tick1 只计数（0 < 2）");
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.think_tick,
+            0,
+            "tick1 不得 Run（think 未刷新）"
+        );
+        w.tick_head();
+        assert_eq!(w.process_run_count(id), 2, "tick2 只计数（1 < 2）");
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.walk_tick,
+            0,
+            "tick2 不得 Run（walk 未推进）"
+        );
+        w.tick_head();
+        assert_eq!(
+            w.process_run_count(id),
+            0,
+            "tick3 Run 前必须清零（2 < 2 为假）"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.think_tick,
+            w.clock_ms,
+            "tick3 必须真的 Run（think 刷新到 now）"
+        );
+    }
+
+    /// **P6b2 `SimMonsterAi` 段语义牙 ②**：`IsVisibleActive == true` 绕过 `ProcessRunCount` 门
+    /// （`if (!monster.IsVisibleActive && …) 计数 else { 清零 + Run }`）。
+    ///
+    /// 牙：删掉 `!visible_active &&`（只按计数节流）⇒ 首 tick 计数变 1、walk 不推进 ⇒ 两条断言红。
+    #[test]
+    fn monster_ai_stage_visible_active_bypasses_process_run_count_gate() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        w.set_process_monster_interval(2);
+        w.enable_monster_ai();
+        let id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "visible".to_string(), 5, 5);
+            e.race = ACTOR_RACE_MONSTER;
+            e.map_binding.is_visible_active = true;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+            e
+        });
+        w.tick_head();
+        assert_eq!(
+            w.process_run_count(id),
+            0,
+            "可见怪即使 interval=2 也必须走 else 支（计数清零、直接 Run）"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.walk_tick,
+            w.clock_ms,
+            "可见怪首 tick 必须 Run（walk 推进到 now）"
+        );
+    }
+
+    /// **P6b2 `SimMonsterAi` 段语义牙 ③**：段内经 `StageAccess` 写 `Transform`
+    /// （`GotoTargetXY → WalkTo → TryStepNow`）——`Transform` 缺失/只读 ⇒ `view_mut` 运行期 panic。
+    ///
+    /// 夹具：`no_attack_mode=true` 保 `TargetX/Y` 不被无目标支清掉；`interval=0` 使
+    /// `0 < 0` 为假 ⇒ 每 tick 都 Run；目标格 (8,5) 在东侧 ⇒ 单步右移到 (6,5)。
+    #[test]
+    fn monster_ai_stage_walk_writes_transform_through_stage_access() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        w.set_process_monster_interval(0);
+        w.enable_monster_ai();
+        let id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "walker".to_string(), 5, 5);
+            e.race = ACTOR_RACE_MONSTER;
+            e.ai.no_attack_mode = true;
+            e.ai.target_x = 8;
+            e.ai.target_y = 5;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+            e
+        });
+        w.tick_head();
+        let e = w.entities.get(id).expect("怪仍在世界");
+        assert_eq!(
+            (e.x, e.y),
+            (6, 5),
+            "段系统必须把 GotoTargetXY 的单步落点写回 Transform"
         );
     }
 

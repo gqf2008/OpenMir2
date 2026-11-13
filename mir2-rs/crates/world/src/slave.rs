@@ -706,6 +706,48 @@ pub(crate) fn send_struck_delay_msg_refmessage_impl<A: crate::entity::EntityAcce
     );
 }
 
+/// **P6b2**：8 参 `SendStruckDelayMsg` 的「目标队列 + `RM_MAGSTRUCK`」特化实现
+/// （`BaseObject.cs:912` 等调用点；怪物 AI 段的 `MagPassThroughMagic` 走这里）。
+pub(crate) fn send_struck_delay_msg_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &mut crate::world::SimState,
+    target_id: i32,
+    caster_id: i32,
+    power: i32,
+    delay_ms: i64,
+) {
+    let ghost = access.get(target_id).is_some_and(|e| e.ghost);
+    if ghost || access.get(target_id).is_none() {
+        return;
+    }
+    let deliver_at_ms = sim.clock_ms + delay_ms;
+    let enqueue_seq = next_msg_order_impl(sim);
+    sim.self_delay_msgs.push(SelfDelayMsg {
+        actor_id: target_id,
+        ident: RM_MAGSTRUCK,
+        w_param: 0,
+        n_param1: power,
+        n_param2: 0,
+        n_param3: 0,
+        msg: String::new(),
+        actor_ref: caster_id,
+        deliver_at_ms,
+        enqueue_seq,
+        priority: MESSAGE_PRIORITY_LOWEST,
+    });
+}
+
+/// **P6b2**：3 参 `SendSelfDelayMsg` 的 facade/段共用实现（`wParam/nParam*` 全 0）。
+pub(crate) fn send_self_delay_msg_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    ident: u16,
+    delay_ms: i64,
+) {
+    send_self_delay_msg_full_impl(access, sim, actor_id, ident, 0, 0, 0, 0, delay_ms);
+}
+
 /// **P5-A1**：消息创建序分配（[`SelfDelayMsg::enqueue_seq`]）的 facade/段共用实现。
 pub(crate) fn next_msg_order_impl(sim: &mut crate::world::SimState) -> u64 {
     let order = sim.msg_order;
@@ -1060,8 +1102,19 @@ pub fn slave_list_cleanup_all(world: &mut World) {
 /// **不消费随机数**。`RefShowName`（重发 `RM_USERNAME`）是帧面，不在此层。
 /// 调用点（`MonsterObject.cs:352`）由 [`crate::monai::monster_run`] 在 oracle 的两个提前返回口之外复刻。
 pub fn check_royalty(world: &mut World, mon_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(mon_id) else {
+    check_royalty_impl(&mut world.entities, &mut world.sim, mon_id);
+}
+
+/// **P6b2**：`check_royalty` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// `SimMonsterAi` 段的 `MonsterObject.Run` 尾段与 facade 共用本函数（一份实现）。
+pub(crate) fn check_royalty_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    mon_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(mon_id) else {
         return;
     };
     if (now - e.ai.check_royalty_tick) <= CHECK_ROYALTY_INTERVAL {
@@ -1071,35 +1124,32 @@ pub fn check_royalty(world: &mut World, mon_id: i32) {
     let master = e.master;
     let master_tick = e.master_tick;
     // oracle 先刷新 `CheckRoyaltyTick`，再判 `Master`。
-    if let Some(m) = world.entities.get_mut(mon_id) {
+    if let Some(m) = access.get_mut(mon_id) {
         m.ai.check_royalty_tick = now;
     }
     let Some(master_id) = master else {
         return;
     };
-    if world.spirit_mutiny_tick > now && exp_level < 5 {
-        if let Some(m) = world.entities.get_mut(mon_id) {
+    if sim.spirit_mutiny_tick > now && exp_level < 5 {
+        if let Some(m) = access.get_mut(mon_id) {
             m.slave.master_royalty_tick = 0;
         }
     }
-    let royalty_deadline = world
-        .entities
-        .get(mon_id)
-        .map_or(0, |m| m.master_royalty_tick);
+    let royalty_deadline = access.get(mon_id).map_or(0, |m| m.master_royalty_tick);
     if now > royalty_deadline {
-        if let Some(master) = world.entities.get_mut(master_id) {
+        if let Some(master) = access.get_mut(master_id) {
             if let Some(i) = master.slave.slave_list.iter().position(|id| *id == mon_id) {
                 master.slave.slave_list.remove(i);
             }
         }
-        if let Some(m) = world.entities.get_mut(mon_id) {
+        if let Some(m) = access.get_mut(mon_id) {
             m.slave.master = None;
             m.vitals.hp /= 10;
         }
     }
     // 注意：`Master` 已可能置 null，但 `MasterTick` 是自身字段 ⇒ 仍判。
     if master_tick > 0 && (now - master_tick) > MASTER_MUTINY_DEATH_MS {
-        if let Some(m) = world.entities.get_mut(mon_id) {
+        if let Some(m) = access.get_mut(mon_id) {
             m.vitals.hp = 0;
         }
     }
@@ -1648,25 +1698,14 @@ impl World {
         power: i32,
         delay_ms: i64,
     ) {
-        let ghost = self.entities.get(target_id).is_some_and(|e| e.ghost);
-        if ghost || self.entities.get(target_id).is_none() {
-            return;
-        }
-        let deliver_at_ms = self.clock_ms + delay_ms;
-        let enqueue_seq = self.next_msg_order();
-        self.self_delay_msgs.push(SelfDelayMsg {
-            actor_id: target_id,
-            ident: RM_MAGSTRUCK,
-            w_param: 0,
-            n_param1: power,
-            n_param2: 0,
-            n_param3: 0,
-            msg: String::new(),
-            actor_ref: caster_id,
-            deliver_at_ms,
-            enqueue_seq,
-            priority: MESSAGE_PRIORITY_LOWEST,
-        });
+        send_struck_delay_msg_impl(
+            &self.entities,
+            &mut self.sim,
+            target_id,
+            caster_id,
+            power,
+            delay_ms,
+        );
     }
 
     /// **卡 `openmir2-rm-refmessage-delay-layer`**：`BaseObject.SendStruckDelayMsg` 的

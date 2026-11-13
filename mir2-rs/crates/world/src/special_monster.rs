@@ -71,7 +71,7 @@
 
 use mir2_shared::rng::RandomNumber;
 
-use crate::monai::{can_move, search_target, set_target_creature};
+use crate::monai::{can_move, set_target_creature};
 use crate::world::World;
 
 /// `ActorRace.MonsterBeequeen`（`src/OpenMir2/Enums/Race.cs:85`）。
@@ -235,25 +235,25 @@ pub fn apply_ctor_fields(e: &mut crate::entity::EntitySpawn, now: i64) {
 
 /// `MakeChildBee` / `GenBb`：`Count >= 15` 早退；否则 `SendRefMsg(RM_HIT)` +
 /// `SendSelfDelayMsg(RM_ZEN_BEE, …, 500)`。
-fn make_child(world: &mut World, owner_id: i32) {
-    let Some((dir, x, y, map_id, hidden)) = world
-        .entities
+fn make_child<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    owner_id: i32,
+) {
+    let Some((dir, x, y, map_id, hidden)) = access
         .get(owner_id)
         .map(|e| (e.ai.dir, e.x, e.y, e.map_id, e.ob_mode || e.fixed_hide_mode))
     else {
         return;
     };
-    let count = world
-        .entities
-        .get(owner_id)
-        .map_or(0, |e| e.special_children.len());
+    let count = access.get(owner_id).map_or(0, |e| e.special_children.len());
     if count >= CHILD_LIMIT {
         return;
     }
     // `SendRefMsg`（`BaseObject.Message.cs:385-413`）：`ObMode || FixedHideMode` ⇒ 只自收
     // （本骨架不产可见帧）⇒ 不登记广播事件。
     if !hidden {
-        world.pending_special_ref_msgs.push(SpecialRefMsg {
+        sim.pending_special_ref_msgs.push(SpecialRefMsg {
             actor_id: owner_id,
             ident: RM_HIT,
             dir,
@@ -262,24 +262,20 @@ fn make_child(world: &mut World, owner_id: i32) {
             map_id,
         });
     }
-    world.send_self_delay_msg(owner_id, RM_ZEN_BEE, ZEN_BEE_DELAY_MS);
+    crate::slave::send_self_delay_msg_impl(access, sim, owner_id, RM_ZEN_BEE, ZEN_BEE_DELAY_MS);
 }
 
 /// 倒序遍历 `BeeList`/`_bbList`，移除 `Death || Ghost` 的项（实体已不存在同样视为移除，
 /// 等价于 oracle 的强引用已不可达）。
-fn cleanup_children(world: &mut World, owner_id: i32) {
-    let Some(mut list) = world
-        .entities
-        .get(owner_id)
-        .map(|e| e.special_children.clone())
-    else {
+fn cleanup_children<A: crate::entity::EntityAccess>(access: &mut A, owner_id: i32) {
+    let Some(mut list) = access.get(owner_id).map(|e| e.special_children.clone()) else {
         return;
     };
     if list.is_empty() {
         return;
     }
     for i in (0..list.len()).rev() {
-        let remove = match world.entities.get(list[i]) {
+        let remove = match access.get(list[i]) {
             Some(child) => child.death || child.ghost,
             None => true,
         };
@@ -287,7 +283,7 @@ fn cleanup_children(world: &mut World, owner_id: i32) {
             list.remove(i);
         }
     }
-    if let Some(e) = world.entities.get_mut(owner_id) {
+    if let Some(e) = access.get_mut(owner_id) {
         e.slave.special_children = list;
     }
 }
@@ -296,8 +292,19 @@ fn cleanup_children(world: &mut World, owner_id: i32) {
 ///
 /// 返回 `true` = 本实体是这两类之一（调用方**不得**再走通用 `monster_run`）。
 pub fn special_monster_run(world: &mut World, actor_id: i32) -> bool {
-    let Some(kind) = world
-        .entities
+    special_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
+/// **P6b2**：`special_monster_run` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// `BeeQueen`/`SpiderHouseMonster` 的 `Run` 覆写；`SimMonsterAi` 段在通用 `monster_run`
+/// 之前调用本函数（返回 `true` = 不进入通用路径）。
+pub(crate) fn special_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(kind) = access
         .get(actor_id)
         .and_then(|e| SpecialKind::from_race(e.race))
     else {
@@ -306,8 +313,8 @@ pub fn special_monster_run(world: &mut World, actor_id: i32) -> bool {
     if !kind.has_special_run() {
         return false;
     }
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return true;
     };
     if !can_move(&e) {
@@ -319,23 +326,22 @@ pub fn special_monster_run(world: &mut World, actor_id: i32) -> bool {
         return true;
     }
     let attack_due = now - e.ai.attack_tick >= e.ai.next_hit_time;
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.walk_tick = now;
     }
     if attack_due {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.attack_tick = now;
         }
-        search_target(world, actor_id);
-        let has_target = world
-            .entities
+        crate::monai::search_target_impl(access, sim, actor_id);
+        let has_target = access
             .get(actor_id)
             .is_some_and(|e| e.ai.target_creature.is_some());
         if has_target {
-            make_child(world, actor_id);
+            make_child(access, sim, actor_id);
         }
     }
-    cleanup_children(world, actor_id);
+    cleanup_children(access, actor_id);
     true
 }
 
