@@ -53,12 +53,12 @@ fn magic_effect_draws_record_non_attack_sites() {
     w.maps.push(home);
     w.open_session("caster");
     let caster = {
-        let mut e = mir2_world::Entity::new(0, "caster".to_string(), 10, 10);
+        let mut e = mir2_world::EntitySpawn::new(0, "caster".to_string(), 10, 10);
         e.level = 20;
         w.enter_map("caster", e, 0).expect("进图")
     };
     let target = {
-        let mut e = mir2_world::Entity::new(0, "target".to_string(), 11, 10);
+        let mut e = mir2_world::EntitySpawn::new(0, "target".to_string(), 11, 10);
         e.level = 15;
         w.add_entity(e)
     };

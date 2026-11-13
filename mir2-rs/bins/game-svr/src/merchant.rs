@@ -338,7 +338,7 @@ pub fn spawn_merchants_with_scripts(
                 if let Some(e) = world.entities.get_mut(id) {
                     // **T-154 Minor-2**：oracle `BaseObject()` ctor `Dir = 4`（`BaseObject.cs:378`），
                     // `Merchant()` ctor 不覆写 ⇒ 首个 `TurnTo` 之前 `Dir` 恒 4。
-                    // `Entity::new` 的 `ai.dir` 缺省 0 ⇒ 宿主补齐后再投影进展示表。
+                    // `EntitySpawn::new` 的 `ai.dir` 缺省 0 ⇒ 宿主补齐后再投影进展示表。
                     e.ai.dir = crate::downlink::NPC_INITIAL_DIR;
                     let appr = e.merchant_state.merchant.as_ref().map_or(0, |m| m.appr);
                     displays.set(

@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
 use mir2_world::combat::AttackPoisonState;
-use mir2_world::{Entity, World, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+use mir2_world::{World, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 
 const SEED: i32 = 42;
 
@@ -86,11 +86,11 @@ fn attack_path_draws_land_on_the_source_live_lines() {
     w.combat_config.attack_poison_rate = 1;
     w.combat_config.attack_poison_time = 5;
 
-    let mut attacker = Entity::new(1, "hero".to_string(), 10, 10);
+    let mut attacker = mir2_world::EntitySpawn::new(1, "hero".to_string(), 10, 10);
     attacker.race = ACTOR_RACE_PLAY;
     attacker.dc = 10; // `Random(power+1)` 与 `Random(10)` 两抽都走
     attacker.hit_point = 100; // 命中门恒过（`random_byte(10) < 100`）
-    let mut target = Entity::new(2, "foe".to_string(), 11, 10);
+    let mut target = mir2_world::EntitySpawn::new(2, "foe".to_string(), 11, 10);
     target.race = ACTOR_RACE_MONSTER;
     target.hp = 100;
     target.max_hp = 100;

@@ -21,7 +21,7 @@
 
 use mir2_shared::rng::{attack_seed, RandomNumber};
 use mir2_world::combat::{attack_dir, swing_power, AttackPowerMode, CombatConfig};
-use mir2_world::{Entity, EntitySpawn, World, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+use mir2_world::{EntitySpawn, World, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 
 const SEED: i32 = 20261012;
 const DC: i32 = 0x1E14;
@@ -44,7 +44,7 @@ fn reference_attack_stream(seed: i32, rounds: usize) -> RandomNumber {
 }
 
 fn player_attacker() -> EntitySpawn {
-    let mut a = Entity::new(1, "hero", 10, 10);
+    let mut a = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
     a.race = ACTOR_RACE_PLAY;
     a.dc = DC;
     a.hit_point = 20;
@@ -56,7 +56,7 @@ fn player_attacker() -> EntitySpawn {
 }
 
 fn monster_target() -> EntitySpawn {
-    let mut t = Entity::new(2, "mon", 11, 10);
+    let mut t = mir2_world::EntitySpawn::new(2, "mon", 11, 10);
     t.race = ACTOR_RACE_MONSTER;
     t.ac = 0;
     t.hp = 60000;

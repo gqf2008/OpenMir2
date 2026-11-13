@@ -36,8 +36,8 @@ use mir2_world::magic::{
     power_show_hp_interval, power_transparent, power_uenhancer, resolve_magic,
 };
 use mir2_world::{
-    attack_dir, attack_with, is_proper_target, AttackPowerMode, CombatConfig, Entity, EntitySpawn,
-    World, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, ATTACK_MODE_HAM_PEACE,
+    attack_dir, attack_with, is_proper_target, AttackPowerMode, CombatConfig, EntitySpawn, World,
+    ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY, ATTACK_MODE_HAM_PEACE,
 };
 
 fn repo_parity_dir() -> PathBuf {
@@ -151,12 +151,12 @@ fn load_combat() -> (i32, Vec<CombatCase>) {
 fn combat_mismatches(case: &CombatCase, seed: i32, config: &CombatConfig) -> Vec<String> {
     let mut problems = Vec::new();
     let mut rng = RandomNumber::with_seed(seed);
-    let mut attacker = Entity::new(1, "hero", 0, 0);
+    let mut attacker = mir2_world::EntitySpawn::new(1, "hero", 0, 0);
     attacker.race = ACTOR_RACE_PLAY;
     attacker.dc = case.dc;
     attacker.hit_point = case.ahp;
     attacker.undead_power = case.aup;
-    let mut target = Entity::new(2, "monster", 0, 0);
+    let mut target = mir2_world::EntitySpawn::new(2, "monster", 0, 0);
     target.race = ACTOR_RACE_MONSTER;
     target.ac = i32::from(case.tac);
     target.hp = case.thp;
@@ -529,11 +529,11 @@ fn skill_mismatches(
         }
         "group_melee" => {
             // 39（`MagGroupDeDing`）：攻方走 PlayObject override，目标带 SpeedPoint/AC/LifeAttrib。
-            let mut attacker = Entity::new(1, "caster", 0, 0);
+            let mut attacker = mir2_world::EntitySpawn::new(1, "caster", 0, 0);
             attacker.race = ACTOR_RACE_PLAY;
             attacker.dc = case.dc;
             attacker.hit_point = case.hit_point;
-            let mut target = Entity::new(2, "target", 0, 0);
+            let mut target = mir2_world::EntitySpawn::new(2, "target", 0, 0);
             target.race = ACTOR_RACE_MONSTER;
             target.ac = i32::from(case.target_ac);
             target.speed_point = case.target_speed_point;
@@ -863,10 +863,10 @@ fn redcheck_duplicate_resolution_is_order_sensitive_must_fail() {
 #[test]
 fn player_attack_power_is_a_registered_distinct_path() {
     let config = CombatConfig::default();
-    let mut attacker = Entity::new(1, "hero", 0, 0);
+    let mut attacker = mir2_world::EntitySpawn::new(1, "hero", 0, 0);
     attacker.dc = 0x1E14;
     attacker.hit_point = 20;
-    let mut base_target = Entity::new(2, "monster", 0, 0);
+    let mut base_target = mir2_world::EntitySpawn::new(2, "monster", 0, 0);
     base_target.race = ACTOR_RACE_MONSTER;
     base_target.ac = 5;
     base_target.hp = 60000;
@@ -965,7 +965,7 @@ fn world_host_player_attacker_uses_playobject_override() {
 
     let mut world = World::new(32, 32);
     world.open_session("hero");
-    let mut hero = Entity::new(1, "hero", 10, 10);
+    let mut hero = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
     hero.race = ACTOR_RACE_PLAY;
     hero.dc = DC;
     hero.hit_point = 20;
@@ -974,7 +974,7 @@ fn world_host_player_attacker_uses_playobject_override() {
     hero.hp = 200;
     hero.max_hp = 200;
     let hero_id = world.enter_map("hero", hero, 0).expect("进图");
-    let mut mon = Entity::new(2, "mon", 11, 10);
+    let mut mon = mir2_world::EntitySpawn::new(2, "mon", 11, 10);
     mon.race = ACTOR_RACE_MONSTER;
     mon.ac = 0;
     mon.hp = 60000;
@@ -993,11 +993,11 @@ fn world_host_player_attacker_uses_playobject_override() {
 
     let config = CombatConfig::default();
     let mk = || {
-        let mut a = Entity::new(1, "hero", 0, 0);
+        let mut a = mir2_world::EntitySpawn::new(1, "hero", 0, 0);
         a.race = ACTOR_RACE_PLAY;
         a.dc = DC;
         a.hit_point = 20;
-        let mut t = Entity::new(2, "mon", 0, 0);
+        let mut t = mir2_world::EntitySpawn::new(2, "mon", 0, 0);
         t.race = ACTOR_RACE_MONSTER;
         t.ac = 0;
         t.hp = 60000;
@@ -1078,13 +1078,13 @@ fn world_host_player_attacker_uses_playobject_override() {
 fn attack_dir_appends_attack_success_random5() {
     let config = CombatConfig::default();
     let mk = || {
-        let mut a = Entity::new(1, "hero", 0, 0);
+        let mut a = mir2_world::EntitySpawn::new(1, "hero", 0, 0);
         a.race = ACTOR_RACE_PLAY;
         a.dc = 0x1E14;
         a.hit_point = 20;
         a.luck = 0;
         a.power_rate = 100;
-        let mut t = Entity::new(2, "mon", 0, 0);
+        let mut t = mir2_world::EntitySpawn::new(2, "mon", 0, 0);
         t.race = ACTOR_RACE_MONSTER;
         t.ac = 0;
         t.hp = 60000;
@@ -1168,7 +1168,7 @@ fn world_attack_swing_draws_power_without_target() {
     // `World::attack_swing` 同口径、同取数次数。
     let mut world = World::new(32, 32);
     world.open_session("hero");
-    let mut hero = Entity::new(1, "hero", 10, 10);
+    let mut hero = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
     hero.race = ACTOR_RACE_PLAY;
     hero.dc = 0x1E14;
     hero.luck = 0;
@@ -1201,14 +1201,14 @@ fn world_attack_swing_draws_power_without_target() {
 fn player_target_equipped_items_draw_random8_per_slot() {
     let config = CombatConfig::default();
     let mk_attacker = || {
-        let mut a = Entity::new(1, "hero", 0, 0);
+        let mut a = mir2_world::EntitySpawn::new(1, "hero", 0, 0);
         a.race = ACTOR_RACE_PLAY;
         a.dc = 0x1E14;
         a.hit_point = 20;
         a
     };
     let mk_target = || {
-        let mut t = Entity::new(2, "victim", 0, 0);
+        let mut t = mir2_world::EntitySpawn::new(2, "victim", 0, 0);
         t.race = ACTOR_RACE_PLAY; // 玩家目标 ⇒ 走 PlayObject.StruckDamage override
         t.ac = 0;
         t.hp = 60000;
@@ -1316,11 +1316,11 @@ impl RandomSource for TargetedRng {
 
 /// 构造一个“必定命中、必定造成伤害”的玩家/玩家对，并把若干装备位设成给定 `(slot, index, dura)`。
 fn equipped_target(slots: &[(usize, u16, u16)]) -> (EntitySpawn, EntitySpawn) {
-    let mut attacker = Entity::new(1, "hero", 0, 0);
+    let mut attacker = mir2_world::EntitySpawn::new(1, "hero", 0, 0);
     attacker.race = ACTOR_RACE_PLAY;
     attacker.dc = 0x1E14;
     attacker.hit_point = 20;
-    let mut target = Entity::new(2, "victim", 0, 0);
+    let mut target = mir2_world::EntitySpawn::new(2, "victim", 0, 0);
     target.race = ACTOR_RACE_PLAY;
     target.ac = 0;
     target.hp = 60000;
@@ -1738,7 +1738,7 @@ pub fn load_proper_target(seed: &mut i32, cases: &mut Vec<ProperCase>, seqs: &mu
 /// 由向量行构造 Rust 侧两侧实体，跑一次 `is_proper_target`；返回与期望的差异清单。
 fn proper_mismatches(case: &ProperCase) -> Vec<String> {
     let mut problems = Vec::new();
-    let mut attacker = Entity::new(101, "attacker", 0, 0);
+    let mut attacker = mir2_world::EntitySpawn::new(101, "attacker", 0, 0);
     attacker.race = case.attacker_race;
     attacker.attack_mode = case.attack_mode;
     attacker.in_safe_zone = case.attacker_safe;
@@ -1751,7 +1751,7 @@ fn proper_mismatches(case: &ProperCase) -> Vec<String> {
         "{}: attacker_is_play 与 race 不一致",
         case.name
     );
-    let mut target = Entity::new(202, "target", 0, 0);
+    let mut target = mir2_world::EntitySpawn::new(202, "target", 0, 0);
     target.race = case.target_race;
     target.in_safe_zone = case.target_safe;
     target.admin_mode = case.target_admin;
@@ -1777,12 +1777,12 @@ fn proper_mismatches(case: &ProperCase) -> Vec<String> {
 fn pvp_mismatches(seq: &PvpSeq, seed: i32, config: &CombatConfig) -> Vec<String> {
     let mut problems = Vec::new();
     let mut rng = RandomNumber::with_seed(seed);
-    let mut attacker = Entity::new(101, "attacker", 0, 0);
+    let mut attacker = mir2_world::EntitySpawn::new(101, "attacker", 0, 0);
     attacker.race = ACTOR_RACE_PLAY;
     attacker.dc = 0x1E14;
     attacker.hit_point = 20;
     attacker.speed_point = 12;
-    let mut target = Entity::new(202, "victim", 0, 0);
+    let mut target = mir2_world::EntitySpawn::new(202, "victim", 0, 0);
     target.race = ACTOR_RACE_PLAY;
     target.ac = 0x0A05;
     target.hp = 30000;

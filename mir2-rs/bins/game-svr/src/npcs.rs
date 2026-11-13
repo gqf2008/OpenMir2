@@ -314,7 +314,7 @@ pub fn place_fixed_npcs_with_scripts(
         if let Some(e) = world.entities.get_mut(npc.actor_id) {
             // **T-154 Minor-2**：oracle `BaseObject()` ctor `Dir = 4`（`BaseObject.cs:378`），
             // `NormNpc`/`Merchant` ctor 不覆写 ⇒ 首个 `TurnTo` 之前的出现帧方向恒 4。
-            // `Entity::new` 的 `ai.dir` 缺省 0（`crates/world` 不在本卡写集）⇒ 宿主在此补齐，
+            // `EntitySpawn::new` 的 `ai.dir` 缺省 0（`crates/world` 不在本卡写集）⇒ 宿主在此补齐，
             // 再投影进展示表（`d.dir = e.ai.dir`）。
             e.ai.dir = crate::downlink::NPC_INITIAL_DIR;
             displays.set(

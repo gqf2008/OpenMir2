@@ -13,7 +13,7 @@
 //! | `SM_RUSH` | 6 | `PlayObject.DoMotaebo` 的 `SendRefMsg(RM_RUSH, nDir, CurrX, CurrY, 0, "")`（`src/M2Server/Player/PlayObject.Base.cs:1435,1453`） | [`RushEvent`]（`RushFrame::Rush`） |
 //! | `SM_RUSHKUNG` | 7 | `PlayObject.DoMotaebo` 的 `SendRefMsg(RM_RUSHKUNG, Dir, nX, nY, 0, "")`（`PlayObject.Base.cs:1488`） | [`RushEvent`]（`RushFrame::RushKung`） |
 //! | `SM_BUTCH` | 637 | `PlayObject.ClientGetButchItem` 末尾**无条件** `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`（`src/M2Server/Player/PlayObject.Operate.cs:749`） | [`ButchEvent`] |
-//! | `SM_DEATH` | 32 | `PlayObject.Run()` 的 `VisibleFlag.Show` 支（出现帧）里 `if (baseObject.Death) SendMsg(baseObject, RM_DEATH, Dir, CurrX, CurrY, 0)`（`src/M2Server/Player/PlayObject.cs:3235`） | 由 `bins/game-svr` 的 AOI 出现帧路径按 `Entity::death` 直接判（无独立事件类型） |
+//! | `SM_DEATH` | 32 | `PlayObject.Run()` 的 `VisibleFlag.Show` 支（出现帧）里 `if (baseObject.Death) SendMsg(baseObject, RM_DEATH, Dir, CurrX, CurrY, 0)`（`src/M2Server/Player/PlayObject.cs:3235`） | 由 `bins/game-svr` 的 AOI 出现帧路径按 `LifeCycle::death`（`EntityRef.death` 只读投影）直接判（无独立事件类型） |
 //!
 //! **注意与 `RM_DEATH(nParam3=1)` 的区别**：`BaseObject.Die()` 发的是
 //! `SendRefMsg(RM_DEATH, Dir, CurrX, CurrY, 1, "")`（`BaseObject.Base.cs:351`）⇒ 观察者收

@@ -16,7 +16,6 @@ use mir2_data::models::MagicInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
 use mir2_world::entity::{ACTOR_RACE_ANIMAL, ACTOR_RACE_PLAY};
-use mir2_world::Entity;
 
 const SEED: i32 = 20261017;
 
@@ -43,18 +42,18 @@ fn p3b2_draws_land_in_magic_effect_and_combat_only() {
     rng_trace::enable(&path, SEED).expect("打开 rng trace");
 
     let mut w = mir2_world::World::new(64, 64);
-    let mut c = Entity::new(0, "caster".to_string(), 10, 10);
+    let mut c = mir2_world::EntitySpawn::new(0, "caster".to_string(), 10, 10);
     c.race = ACTOR_RACE_PLAY;
     c.level = 50;
     let caster = w.add_entity(c);
     // 治疗目标（玩家友军）。
-    let mut p = Entity::new(0, "friend".to_string(), 12, 12);
+    let mut p = mir2_world::EntitySpawn::new(0, "friend".to_string(), 12, 12);
     p.race = ACTOR_RACE_PLAY;
     p.hp = 50;
     p.max_hp = 1000;
     let friend = w.add_entity(p);
     // AoE 目标（怪物，MAC 非 0 ⇒ MSD 有骰；Animal ⇒ R(300)）。
-    let mut m = Entity::new(0, "mob".to_string(), 12, 12);
+    let mut m = mir2_world::EntitySpawn::new(0, "mob".to_string(), 12, 12);
     m.race = ACTOR_RACE_ANIMAL;
     m.level = 30;
     m.hp = 1000;

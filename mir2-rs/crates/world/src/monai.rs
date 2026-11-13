@@ -67,8 +67,6 @@
 //!   （= oracle 的 `MonsterObject.Run` 尾 `base.Run()` → `AnimalObject.Run`）。`RefNameColor` 帧不在此层。
 
 use crate::combat::{is_proper_target, is_proper_target_grouped_direct};
-#[cfg(test)]
-use crate::entity::Entity;
 use crate::entity::{PvpView, ACTOR_RACE_PLAY};
 use crate::magic::{
     front_position, DIR_DOWN, DIR_DOWN_LEFT, DIR_DOWN_RIGHT, DIR_LEFT, DIR_RIGHT, DIR_UP,
@@ -7011,7 +7009,7 @@ mod tests {
     use mir2_shared::rng::RandomNumber;
 
     fn monster(world: &mut World, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, "稻草人", x, y);
+        let mut e = crate::EntitySpawn::new(0, "稻草人", x, y);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 60;
         e.max_hp = 60;
@@ -7019,7 +7017,7 @@ mod tests {
     }
 
     fn player(world: &mut World, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, "m2r", x, y);
+        let mut e = crate::EntitySpawn::new(0, "m2r", x, y);
         e.hp = 100;
         e.max_hp = 100;
         world.add_entity(e)
@@ -7535,7 +7533,7 @@ mod tests {
             let mut world = World::new(30, 30);
             let _p = player(&mut world, 5, 5);
             for (i, (x, y)) in [(10, 10), (12, 12), (20, 20)].into_iter().enumerate() {
-                let mut e = Entity::new(0, format!("m{i}"), x, y);
+                let mut e = crate::EntitySpawn::new(0, format!("m{i}"), x, y);
                 e.race = ACTOR_RACE_MONSTER;
                 e.hp = 60;
                 e.max_hp = 60;
@@ -7609,7 +7607,7 @@ mod tests {
     fn base_recovery_heals_hp_at_fill_time_and_resets_tick() {
         let mut world = World::new(32, 32);
         world.set_recovery_fill_times(300, 800);
-        let mut e = Entity::new(0, "稻草人", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "稻草人", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 10;
         e.max_hp = 75;
@@ -7635,7 +7633,7 @@ mod tests {
     fn base_recovery_caps_at_max_hp() {
         let mut world = World::new(32, 32);
         world.set_recovery_fill_times(300, 800);
-        let mut e = Entity::new(0, "稻草人", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "稻草人", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 74;
         e.max_hp = 75;
@@ -7654,7 +7652,7 @@ mod tests {
     fn base_recovery_high_max_hp_does_not_overflow_u16() {
         let mut world = World::new(32, 32);
         world.set_recovery_fill_times(300, 800);
-        let mut e = Entity::new(0, "魔龙教主", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "魔龙教主", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.max_hp = 65_535;
         // n = 65535/75 + 1 = 874 ⇒ hp + n = 66374 > u16::MAX（旧 u16 写法在此回绕/panic）。
@@ -7669,7 +7667,7 @@ mod tests {
             "溢出带内应截断到 MaxHP 而不是回绕为 0"
         );
         // MP 支同理：n = 65535/18 + 1 = 3641 ⇒ mp + n = 69141 > u16::MAX。
-        let mut e = Entity::new(1, "魔龙教主", 10, 10);
+        let mut e = crate::EntitySpawn::new(1, "魔龙教主", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.max_mp = 65_535;
         e.mp = 65_500;
@@ -7689,7 +7687,7 @@ mod tests {
     fn base_recovery_heals_mp_at_spell_fill_time() {
         let mut world = World::new(32, 32);
         world.set_recovery_fill_times(300, 800);
-        let mut e = Entity::new(0, "稻草人", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "稻草人", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 75;
         e.max_hp = 75;
@@ -7715,7 +7713,7 @@ mod tests {
     fn show_hp_monster_recovery_records_53_broadcast_events() {
         let mut world = World::new(32, 32);
         world.set_recovery_fill_times(300, 800);
-        let mut e = Entity::new(0, "半兽人", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "半兽人", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 10;
         e.max_hp = 75;
@@ -7737,7 +7735,7 @@ mod tests {
 
         // 同一 Run 内 HP/MP 两支都命中 ⇒ 两次 `HealthSpellChanged()` ⇒ 两条（`SendRefMsg` 不去重）。
         world.pending_show_hp_health_changes.clear();
-        let mut e = Entity::new(1, "半兽人2", 11, 11);
+        let mut e = crate::EntitySpawn::new(1, "半兽人2", 11, 11);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 10;
         e.max_hp = 75;
@@ -7764,7 +7762,7 @@ mod tests {
 
         // ShowHp=false ⇒ 第二支不发（第一条 `Race==Play` 也不命中怪物）。
         world.pending_show_hp_health_changes.clear();
-        let mut e = Entity::new(2, "半兽人3", 12, 12);
+        let mut e = crate::EntitySpawn::new(2, "半兽人3", 12, 12);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 10;
         e.max_hp = 75;
@@ -7785,7 +7783,7 @@ mod tests {
     fn health_tick_negative_costs_one_hp_and_is_gated() {
         let mut world = World::new(32, 32);
         world.set_recovery_fill_times(300, 800);
-        let mut e = Entity::new(0, "稻草人", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "稻草人", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 5;
         e.max_hp = 60;
@@ -7796,7 +7794,7 @@ mod tests {
         assert_eq!(e.hp, 4, "负体力点扣 1 点 HP");
         assert_eq!(e.health_tick, -1, "HealthTick 回填 HealthFillTime");
         // `HP == 1` ⇒ `HP > 1` 门挡住。
-        let mut e = Entity::new(0, "稻草人", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "稻草人", 10, 10);
         e.race = ACTOR_RACE_MONSTER;
         e.hp = 1;
         e.max_hp = 60;
@@ -8535,7 +8533,7 @@ mod tests {
     /// 造一只指定 race 的怪；`walk_speed` 顶高以把 `monster_run` 隔离在索敌段
     /// （`now - walk_tick > walk_speed` 恒假 ⇒ 不进游走/攻击段）。
     fn race_monster(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, "m", x, y);
+        let mut e = crate::EntitySpawn::new(0, "m", x, y);
         e.race = race;
         e.hp = 60;
         e.max_hp = 60;
@@ -8934,7 +8932,7 @@ mod tests {
     /// 造一只有可见玩家的怪，跑 `ticks` 个 `monster_ai_tick`，返回末位置 `(x, y)`。
     fn run_ai_ticks(race: u8, ticks: u32) -> (i32, i32) {
         let mut world = World::new(60, 60);
-        let mut m = Entity::new(0, "m", 20, 20);
+        let mut m = crate::EntitySpawn::new(0, "m", 20, 20);
         m.race = race;
         m.hp = 6000;
         m.max_hp = 6000;
@@ -9018,7 +9016,7 @@ mod tests {
         zen_time: i32,
         death_tick: i64,
     ) -> i32 {
-        let mut e = Entity::new(0, "尸体", 10, 10);
+        let mut e = crate::EntitySpawn::new(0, "尸体", 10, 10);
         e.race = 80;
         e.max_hp = 60;
         e.hp = 0;
@@ -9360,7 +9358,7 @@ mod tests {
         let mut world = World::new(10, 10);
         let master = player(&mut world, 5, 5);
         let slave = world.add_entity({
-            let mut e = Entity::new(0, "pet".to_string(), 5, 4);
+            let mut e = crate::EntitySpawn::new(0, "pet".to_string(), 5, 4);
             e.master = Some(master);
             e
         });
@@ -9625,7 +9623,7 @@ mod tests {
 
     /// 造一只本批专用怪（race 决定类；不抽数）。
     fn mb1_monster(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, "mb1", x, y);
+        let mut e = crate::EntitySpawn::new(0, "mb1", x, y);
         e.race = race;
         e.hp = 200;
         e.max_hp = 200;
@@ -9649,7 +9647,7 @@ mod tests {
     }
 
     fn mb1_players(world: &mut World, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, "P", x, y);
+        let mut e = crate::EntitySpawn::new(0, "P", x, y);
         e.hp = 500;
         e.max_hp = 500;
         world.add_entity(e)
@@ -9658,7 +9656,7 @@ mod tests {
     /// 真正**落图**的玩家（`race == Play` + `enter_world`）：`send_ref_msg_targets_at` 是格扫，
     /// 只认格表里的 `actor_object` 玩家（oracle `SendRefMsg` 同口径）。
     fn mb1_real_player(world: &mut World, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, "R", x, y);
+        let mut e = crate::EntitySpawn::new(0, "R", x, y);
         e.race = crate::entity::ACTOR_RACE_PLAY;
         e.hp = 500;
         e.max_hp = 500;
@@ -10558,7 +10556,7 @@ mod tests {
 
     /// MB-3 专用怪：按 race 落 ctor 常量（`apply_monster_class_constants`）。
     fn class_monster(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, "mb3", x, y);
+        let mut e = crate::EntitySpawn::new(0, "mb3", x, y);
         e.race = race;
         e.hp = 1000;
         e.max_hp = 1000;
@@ -11014,7 +11012,7 @@ mod tests {
                 self.names.push(name.to_string());
                 // 模拟 `CreateMonster` 的构造抽（记录与 Random(4) 的相对次序）。
                 self.draws.push(rng.random_below(1));
-                let e = Entity::new(0, name.to_string(), i32::from(x), i32::from(y));
+                let e = crate::EntitySpawn::new(0, name.to_string(), i32::from(x), i32::from(y));
                 Some(world.add_entity(e))
             }
         }
@@ -11149,7 +11147,7 @@ mod tests {
         world.clock_ms = 100_000;
         let id = class_monster(&mut world, 102, 10, 10);
         let master = player(&mut world, 20, 20);
-        let mut target = Entity::new(0, "slave", 11, 10);
+        let mut target = crate::EntitySpawn::new(0, "slave", 11, 10);
         target.race = ACTOR_RACE_MONSTER;
         target.hp = 1000;
         target.max_hp = 1000;
@@ -11183,7 +11181,7 @@ mod tests {
         world.clock_ms = 100_000;
         let id = class_monster(&mut world, 90, 10, 10);
         let master = player(&mut world, 20, 20);
-        let mut target = Entity::new(0, "slave", 11, 10);
+        let mut target = crate::EntitySpawn::new(0, "slave", 11, 10);
         target.race = ACTOR_RACE_MONSTER;
         target.hp = 1000;
         target.max_hp = 1000;
@@ -11220,7 +11218,7 @@ mod tests {
         let id = class_monster(&mut world, 112, 10, 10); // DC=5/5 ⇒ Random(1)
         let old_hitter = player(&mut world, 20, 20);
         world.entities.get_mut(old_hitter).unwrap().progression.job = 0; // Warrior
-        let mut target = Entity::new(0, "target", 11, 10);
+        let mut target = crate::EntitySpawn::new(0, "target", 11, 10);
         target.race = ACTOR_RACE_MONSTER;
         target.hp = 100;
         target.max_hp = 100;
@@ -11314,7 +11312,7 @@ mod tests {
     /// 受击怪（带主人 ⇒ `IsProperTarget` 成立）准备：`ac=0/mac=0/speed_point=0`。
     fn refmsg_target(world: &mut World, x: i32, y: i32) -> i32 {
         let master = player(world, 20, 20);
-        let mut target = Entity::new(0, "refmsg-target", x, y);
+        let mut target = crate::EntitySpawn::new(0, "refmsg-target", x, y);
         target.race = ACTOR_RACE_MONSTER;
         target.hp = 1000;
         target.max_hp = 1000;
@@ -11450,7 +11448,7 @@ mod tests {
             e.vitals.dc = 1 | (1 << 8); // Lo=Hi=1
         }
         let master = player(&mut world, 20, 20);
-        let mut target = Entity::new(0, "armored", 11, 10);
+        let mut target = crate::EntitySpawn::new(0, "armored", 11, 10);
         target.race = ACTOR_RACE_MONSTER;
         target.hp = 1000;
         target.max_hp = 1000;
@@ -11483,7 +11481,7 @@ mod tests {
     // ======================================================================================
 
     fn atk_monster(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, "atk", x, y);
+        let mut e = crate::EntitySpawn::new(0, "atk", x, y);
         e.race = race;
         e.hp = 1000;
         e.max_hp = 1000;
@@ -11497,7 +11495,7 @@ mod tests {
     }
 
     fn atk_player(world: &mut World, x: i32, y: i32, speed_point: u8) -> i32 {
-        let mut e = Entity::new(0, "atkP", x, y);
+        let mut e = crate::EntitySpawn::new(0, "atkP", x, y);
         e.race = crate::entity::ACTOR_RACE_PLAY;
         e.hp = 500;
         e.max_hp = 500;
@@ -12310,7 +12308,7 @@ mod tests {
     fn atk_class_constants_for_117_and_215() {
         // `add_entity` 会把 `search_tick` 重盖成落图时刻（ctor 等价物拿不到时钟），
         // 故这里直接对构造等价物断言 ctor 显式值。
-        let mut e = Entity::new(0, "x", 5, 5);
+        let mut e = crate::EntitySpawn::new(0, "x", 5, 5);
         e.ai.search_tick = 999;
         crate::mongen::apply_monster_class_constants(&mut e, 117, 12_345);
         assert_eq!(e.view_range, 5, "ExplosionSpider ctor ViewRange=5");
@@ -12318,7 +12316,7 @@ mod tests {
             e.ai.search_tick, 0,
             "ExplosionSpider ctor 显式 SearchTick=0"
         );
-        let mut e = Entity::new(0, "y", 8, 8);
+        let mut e = crate::EntitySpawn::new(0, "y", 8, 8);
         crate::mongen::apply_monster_class_constants(&mut e, 215, 12_345);
         assert_eq!(e.view_range, 8, "MagicMonster ctor ViewRange=8");
     }
@@ -14078,7 +14076,7 @@ mod tests {
                 .iter()
                 .find(|(n, _)| *n == name)
                 .map_or(80, |(_, r)| *r);
-            let mut e = Entity::new(0, name.to_string(), i32::from(x), i32::from(y));
+            let mut e = crate::EntitySpawn::new(0, name.to_string(), i32::from(x), i32::from(y));
             e.race = race;
             e.hp = 500;
             e.max_hp = 500;
@@ -14670,7 +14668,7 @@ mod guard_target_castle_tests {
     fn world_with_archer(under_war: bool, master_guild: Option<GuildId>) -> (World, i32) {
         let mut w = World::new(20, 20);
         w.clock_ms = 100_000;
-        let mut e = Entity::new(1, "弓手", 5, 5);
+        let mut e = crate::EntitySpawn::new(1, "弓手", 5, 5);
         e.race = 112;
         e.hp = 100;
         e.max_hp = 100;
@@ -14687,7 +14685,7 @@ mod guard_target_castle_tests {
     }
 
     fn add_player(w: &mut World, x: i32, y: i32, guild: Option<GuildId>) -> i32 {
-        let mut e = Entity::new(0, "玩家", x, y);
+        let mut e = crate::EntitySpawn::new(0, "玩家", x, y);
         e.hp = 100;
         e.max_hp = 100;
         let id = w.add_entity(e);
@@ -14698,7 +14696,7 @@ mod guard_target_castle_tests {
     }
 
     fn add_archer_at(w: &mut World, x: i32, y: i32, castle_index: Option<usize>) -> i32 {
-        let mut e = Entity::new(0, "弓手", x, y);
+        let mut e = crate::EntitySpawn::new(0, "弓手", x, y);
         e.race = 112;
         e.hp = 100;
         e.max_hp = 100;
@@ -14858,7 +14856,7 @@ mod guard_target_castle_tests {
     fn c6_player_master_guild_is_exempt() {
         let (mut w, archer) = world_with_archer(false, Some(G_CASTLE));
         let owner = add_player(&mut w, 9, 9, Some(G_CASTLE));
-        let mut pet = Entity::new(0, "神兽", 8, 5);
+        let mut pet = crate::EntitySpawn::new(0, "神兽", 8, 5);
         pet.race = 80;
         pet.hp = 100;
         pet.max_hp = 100;
@@ -14891,7 +14889,7 @@ mod guard_target_castle_tests {
         let (mut w, archer) = world_with_archer(false, None);
         // oracle 的守卫表（`UserCastle.Initialize` 的 `Guards[]`）不赋 `Castle`；
         // 这里显式绑定以钉住 `CrimeforCastle` 子分支的语义。
-        let mut guard = Entity::new(0, "守卫", 8, 5);
+        let mut guard = crate::EntitySpawn::new(0, "守卫", 8, 5);
         guard.race = 11;
         guard.hp = 100;
         guard.max_hp = 100;
@@ -14936,7 +14934,7 @@ mod guard_target_castle_tests {
     fn c8_npc_race_guard_is_not_a_target() {
         let (mut w, archer) = world_with_archer(false, None);
         // oracle 的 `UserCastle.Initialize` 守卫表不赋 `Castle` ⇒ 这里同样不绑。
-        let mut guard = Entity::new(0, "守卫", 8, 5);
+        let mut guard = crate::EntitySpawn::new(0, "守卫", 8, 5);
         guard.race = 11;
         guard.hp = 100;
         guard.max_hp = 100;
@@ -14977,7 +14975,7 @@ mod mb89_tests {
     use mir2_shared::rng::RandomNumber;
 
     fn spawn_monster(world: &mut World, race: i16, x: i32, y: i32, hp: u16) -> i32 {
-        let mut e = Entity::new(0, "mb89", x, y);
+        let mut e = crate::EntitySpawn::new(0, "mb89", x, y);
         e.race = race as u8;
         e.hp = hp;
         e.max_hp = hp;
@@ -14988,7 +14986,7 @@ mod mb89_tests {
     }
 
     fn spawn_player(world: &mut World, x: i32, y: i32, hp: u16) -> i32 {
-        let mut e = Entity::new(0, "mb89p", x, y);
+        let mut e = crate::EntitySpawn::new(0, "mb89p", x, y);
         e.hp = hp;
         e.max_hp = hp;
         let id = world.add_entity(e);

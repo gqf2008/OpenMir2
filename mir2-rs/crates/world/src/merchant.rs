@@ -39,9 +39,7 @@ use mir2_data::models::StdItem;
 use mir2_shared::rng::RandomNumber;
 
 use crate::castle_tax::MerchantCastleBinding;
-use crate::entity::{
-    BaseAnimalCtorDraws, Entity, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON, NORM_NPC_LIGHT,
-};
+use crate::entity::{BaseAnimalCtorDraws, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON, NORM_NPC_LIGHT};
 use crate::map::{CellType, MoveRequest};
 use crate::world::World;
 
@@ -321,8 +319,8 @@ impl World {
         state.move_tick = now;
         state.ghost_tick = 0;
 
-        let mut e = Entity::new(0, spawn.name, x, y);
-        // `Entity::new(0, …)` 的占位 id 必须换成**唯一** id（照 `World::add_entity` 的口径）：
+        let mut e = crate::EntitySpawn::new(0, spawn.name, x, y);
+        // `crate::EntitySpawn::new(0, …)` 的占位 id 必须换成**唯一** id（照 `World::add_entity` 的口径）：
         // 否则所有商人 `id == 0`、`EntityStore::insert` 的 `index.insert(0, …)` 互相覆盖，
         // `merchant_ids_sorted` 返回一串 0、`merchant_tick` 会反复 Run 同一个实体。
         e.id = self.entities.alloc_id();
@@ -349,7 +347,7 @@ impl World {
         // **不得按 race 置位**：`ActorRace.NPC(10)` 也是普通固定 NPC 的 race，`RaceImg` 50 又与
         // 鸡/鹿/狼等动物怪同值（`Race.cs:26/34/40`）⇒ 只能按创建点（类）置位。
         e.super_man = true;
-        // `Entity::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
+        // `EntitySpawn::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
         e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
         e.map_id = map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
@@ -2468,11 +2466,11 @@ mod tests {
         w.clock_ms = 100_000;
         w.open_session("p");
         let p = w
-            .enter_map("p", Entity::new(0, "p".to_string(), 5, 5), 0)
+            .enter_map("p", crate::EntitySpawn::new(0, "p".to_string(), 5, 5), 0)
             .expect("玩家 p 进图");
         w.open_session("q");
         let q = w
-            .enter_map("q", Entity::new(0, "q".to_string(), 40, 40), 0)
+            .enter_map("q", crate::EntitySpawn::new(0, "q".to_string(), 40, 40), 0)
             .expect("远处玩家 q 进图");
         let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w.set_merchant_castle_index(id, Some(0)), "Castle != null");
@@ -2860,7 +2858,7 @@ mod tests {
     }
 
     fn player_entity(id: i32, name: &str, x: i32, y: i32) -> EntitySpawn {
-        let mut e = Entity::new(id, name, x, y);
+        let mut e = crate::EntitySpawn::new(id, name, x, y);
         e.race = crate::entity::ACTOR_RACE_PLAY;
         e.hp = 100;
         e.max_hp = 100;
@@ -2871,7 +2869,7 @@ mod tests {
     }
 
     fn race_entity(id: i32, name: &str, x: i32, y: i32, race: u8) -> EntitySpawn {
-        let mut e = Entity::new(id, name, x, y);
+        let mut e = crate::EntitySpawn::new(id, name, x, y);
         e.race = race;
         e
     }

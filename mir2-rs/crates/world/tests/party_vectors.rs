@@ -8,14 +8,14 @@
 //! oracle 锚点：`PlayObject.Operate.cs:787-909`、`PlayObject.cs:5126-5197`、
 //! `PlayObject.Base.cs:1339-1369/2418-2422`、`PlayObject.Message.cs:704-719/914-935`。
 
-use mir2_world::{Entity, PartyConfig, PartyEvent, World};
+use mir2_world::{PartyConfig, PartyEvent, World};
 
 fn cfg() -> PartyConfig {
     PartyConfig::default()
 }
 
 fn player(w: &mut World, id: i32, name: &str) -> i32 {
-    w.add_entity(Entity::new(id, name, 10, 10))
+    w.add_entity(mir2_world::EntitySpawn::new(id, name, 10, 10))
 }
 
 /// 造 3 名玩家（L/T/U），并让 T/U 打开 `AllowGroup`（模拟先发 `CM_GROUPMODE` 且 `param2 != 0`）。
@@ -601,7 +601,7 @@ fn die_leader_disbands_group() {
 fn play_object_by_name_ignores_non_player_entities() {
     // 情形 1：玩家 T(2) 与怪物 T(50) 同名 ⇒ 命中玩家。
     let (mut w, _l, t, _u) = three_players();
-    let mut mon_same_name = Entity::new(50, "T", 10, 10);
+    let mut mon_same_name = mir2_world::EntitySpawn::new(50, "T", 10, 10);
     mon_same_name.race = 1; // 非 Play
     w.add_entity(mon_same_name);
     assert_eq!(w.party_play_object_by_name("T"), Some(t));
@@ -609,7 +609,7 @@ fn play_object_by_name_ignores_non_player_entities() {
     // 情形 2：同名者只有怪物 ⇒ oracle 判 null（`-2`），Rust 也必须 `-2`（不再误命中怪物）。
     let mut w = World::new(32, 32);
     let l = player(&mut w, 1, "L");
-    let mut mon = Entity::new(50, "BOSS", 10, 10);
+    let mut mon = mir2_world::EntitySpawn::new(50, "BOSS", 10, 10);
     mon.race = 1;
     w.add_entity(mon);
     assert_eq!(w.party_play_object_by_name("BOSS"), None);

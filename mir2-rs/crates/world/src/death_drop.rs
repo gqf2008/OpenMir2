@@ -151,12 +151,12 @@ pub(crate) fn drop_use_items_on_death(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, EntitySpawn, UseItemSlot, ACTOR_RACE_ANIMAL, ACTOR_RACE_PLAY};
+    use crate::entity::{EntitySpawn, UseItemSlot, ACTOR_RACE_ANIMAL, ACTOR_RACE_PLAY};
     use mir2_data::models::StdItem;
     use mir2_shared::rng::RandomNumber;
 
     fn player(id: i32, x: i32, y: i32) -> EntitySpawn {
-        let mut e = Entity::new(id, format!("p{id}"), x, y);
+        let mut e = crate::EntitySpawn::new(id, format!("p{id}"), x, y);
         e.race = ACTOR_RACE_PLAY;
         e.hp = 100;
         e.max_hp = 100;
@@ -400,7 +400,7 @@ mod tests {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(0, 10, 10));
         let killer = w.add_entity({
-            let mut m = Entity::new(0, "mob".to_string(), 11, 10);
+            let mut m = crate::EntitySpawn::new(0, "mob".to_string(), 11, 10);
             m.race = ACTOR_RACE_ANIMAL;
             m
         });

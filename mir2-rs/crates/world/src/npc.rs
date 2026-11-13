@@ -45,7 +45,7 @@
 //!   （与 [`crate::merchant`] 同款）；实体槽位序 = 文件正序 [`World::insert_npc`]。
 
 use crate::entity::{
-    BaseAnimalCtorDraws, Entity, EntityRef, ACTOR_RACE_NPC, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON,
+    BaseAnimalCtorDraws, EntityRef, ACTOR_RACE_NPC, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON,
     NORM_NPC_LIGHT,
 };
 use crate::map::CellType;
@@ -216,15 +216,15 @@ impl World {
         // `Merchant.cs:108` `MoveTick = HUtil32.GetTickCount()`（`Merchant`/`NormNpc` ctor 尾）。
         state.move_tick = self.clock_ms;
 
-        let mut e = Entity::new(0, spawn.name, spawn.x, spawn.y);
-        // 唯一 id（照 [`World::insert_merchant`] 的口径：`Entity::new(0,…)` 的占位必须换掉）。
+        let mut e = crate::EntitySpawn::new(0, spawn.name, spawn.x, spawn.y);
+        // 唯一 id（照 [`World::insert_merchant`] 的口径：`crate::EntitySpawn::new(0,…)` 的占位必须换掉）。
         e.id = self.entities.alloc_id();
         // `NormNpc.cs:42` `Race = ActorRace.NPC`（=10）；`Merchant` 继承它（只设 `RaceImg`）。
         e.race = ACTOR_RACE_NPC;
         // `NormNpc()` ctor `SuperMan = true`（`NormNpc.cs:41`）：固定 NPC 打不死
         // （`BaseObject.Die():318-322` 首行早退）且每次 `Run` 回满（`:32-36`）。
         e.super_man = true;
-        // `Entity::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
+        // `EntitySpawn::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
         e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
         e.map_id = spawn.map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
@@ -603,7 +603,7 @@ mod tests {
             .insert_npc(spawn_typed("城堡管理", NPC_TYPE_CASTLE_OFFICIAL, 0, 5, 3))
             .expect("城堡官入世界");
         // 怪物/玩家口径：既无 `merchant` 也无 `npc` 态。
-        let monster = world.add_entity(Entity::new(0, "鸡", 6, 3));
+        let monster = world.add_entity(crate::EntitySpawn::new(0, "鸡", 6, 3));
 
         assert_eq!(merchant_lookup(None), MerchantLookup::Absent);
         assert_eq!(
@@ -848,7 +848,7 @@ mod tests {
         let nid = world
             .spawn_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 3, 3))
             .expect("挂图成功");
-        let mut player = Entity::new(0, "hero", 4, 3);
+        let mut player = crate::EntitySpawn::new(0, "hero", 4, 3);
         player.race = crate::entity::ACTOR_RACE_PLAY;
         player.dc = 0x0A_14;
         let pid = world.add_entity(player);
@@ -1019,7 +1019,7 @@ mod tests {
     #[test]
     fn player_sees_adjacent_fixed_npc() {
         let mut world = World::with_maps(vec![(64, 64)]);
-        let mut player = Entity::new(0, "玩家", 29, 33);
+        let mut player = crate::EntitySpawn::new(0, "玩家", 29, 33);
         player.view_range = 12;
         let pid = world.add_entity(player);
         let nid = world
@@ -1065,7 +1065,7 @@ mod tests {
             .expect("NPC 挂图成功");
         // 守卫（`ActorRace.Guard = 11` ⇒ `monster_self_scans`）站在国王脚下 1 格：
         // 它的窗口 (25..=35, 26..=36) 覆盖国王格，且它走基类 60s 过期分支。
-        let mut guard = Entity::new(0, "守卫", 30, 31);
+        let mut guard = crate::EntitySpawn::new(0, "守卫", 30, 31);
         guard.race = 11;
         let gid = world.add_entity(guard);
         // 140s（700 × 200ms）≈ 真机「启动 → 玩家登录」的间隔；期间 `npc_tick` 每 200ms 跑。
@@ -1081,7 +1081,7 @@ mod tests {
             "守卫必须自扫过（否则本用例咬不到 60s 过期分支）"
         );
         // 玩家进图（真机 `new_player_entity` 同形：Race=Play、ViewRange=12）。
-        let mut player = Entity::new(0, "玩家", 29, 33);
+        let mut player = crate::EntitySpawn::new(0, "玩家", 29, 33);
         player.view_range = 12;
         let pid = world.add_entity(player);
         // 玩家首扫在落图 1000ms 后（严格大于）。
@@ -1135,7 +1135,7 @@ mod tests {
     /// `Dir=4`（`BaseObject.cs:378`，`NormNpc` 不覆写）、`CellType=Merchant`（`NormNpc.cs:50`，
     /// 由挂图落格 + [`crate::world::entity_cell_type`] 身份派生表达，不在 `Entity` 上另存字段）。
     ///
-    /// **对照组**：玩家（`Entity::new` = `PlayObject` ctor 等价物）与普通怪物保持 `BaseObject`
+    /// **对照组**：玩家（`EntitySpawn::new` = `PlayObject` ctor 等价物）与普通怪物保持 `BaseObject`
     /// ctor 缺省 `Light=0` / `AntiPoison=0` / `StickMode=false` / `Dir=0`（本骨架
     /// `AnimalState::default` 的 dir 缺省）⇒ 本卡不得把 NPC 常量泄漏到非 NPC 路径。
     ///
@@ -1160,8 +1160,8 @@ mod tests {
             );
         }
         // 对照组：玩家 + 普通怪物（`add_entity` 落图的非 NPC 路径）不变。
-        let pid = world.add_entity(Entity::new(0, "hero", 1, 1));
-        let mut mon = Entity::new(0, "鸡", 2, 2);
+        let pid = world.add_entity(crate::EntitySpawn::new(0, "hero", 1, 1));
+        let mut mon = crate::EntitySpawn::new(0, "鸡", 2, 2);
         mon.race = crate::entity::ACTOR_RACE_ANIMAL;
         let mid = world.add_entity(mon);
         for (label, cid) in [("玩家", pid), ("怪物", mid)] {

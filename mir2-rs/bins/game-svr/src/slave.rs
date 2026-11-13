@@ -610,7 +610,7 @@ mod tests {
     fn cast_world() -> (World, i32) {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::Entity::new(0, "主人".to_string(), 10, 10);
+            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 10, 10);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)
@@ -716,13 +716,13 @@ mod tests {
     ) -> (World, i32, i32) {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::Entity::new(0, "主人".to_string(), 10, 10);
+            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 10, 10);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)
         };
         let target = {
-            let mut e = mir2_world::Entity::new(0, "怪".to_string(), 11, 10);
+            let mut e = mir2_world::EntitySpawn::new(0, "怪".to_string(), 11, 10);
             e.race = target_race;
             e.level = target_level;
             e.hp = target_hp;
@@ -940,7 +940,7 @@ mod tests {
     fn cast_clone_spawns_and_runs_train_tail() {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::Entity::new(0, "主人".to_string(), 5, 5);
+            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 5, 5);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)

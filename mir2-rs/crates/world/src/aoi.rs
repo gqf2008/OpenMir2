@@ -868,7 +868,7 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, EntitySpawn, EntityStore};
+    use crate::entity::{EntitySpawn, EntityStore};
 
     fn put(map: &mut MapGrid, id: i32, x: i32, y: i32, add_time: i64) {
         assert!(map.add_map_object(x, y, CellType::Play, id, add_time));
@@ -882,13 +882,13 @@ mod tests {
     fn player_viewer_skips_cell_expiry() {
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
-        let mut viewer = Entity::new(1, "p", 10, 10);
+        let mut viewer = crate::EntitySpawn::new(1, "p", 10, 10);
         viewer.race = ACTOR_RACE_PLAY;
         viewer.want_ref_msg = true;
         viewer.view_range = 5;
         store.insert(viewer);
         put(&mut map, 1, 10, 10, 60_000);
-        let mut target = Entity::new(2, "guard", 11, 10);
+        let mut target = crate::EntitySpawn::new(2, "guard", 11, 10);
         target.race = ACTOR_RACE_MONSTER;
         store.insert(target);
         put(&mut map, 2, 11, 10, 0); // 过期（now - 0 >= 60s）
@@ -914,12 +914,12 @@ mod tests {
     fn non_player_viewer_still_expires_cell_objects() {
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
-        let mut viewer = Entity::new(1, "guard", 10, 10);
+        let mut viewer = crate::EntitySpawn::new(1, "guard", 10, 10);
         viewer.race = ACTOR_RACE_MONSTER;
         viewer.view_range = 5;
         store.insert(viewer);
         put(&mut map, 1, 10, 10, 60_000);
-        let mut target = Entity::new(2, "stale", 11, 10);
+        let mut target = crate::EntitySpawn::new(2, "stale", 11, 10);
         target.race = ACTOR_RACE_MONSTER;
         store.insert(target);
         put(&mut map, 2, 11, 10, 0);
@@ -940,7 +940,7 @@ mod tests {
     }
 
     fn play_viewer(id: i32, x: i32, y: i32, view_range: i32) -> EntitySpawn {
-        let mut e = Entity::new(id, "p", x, y);
+        let mut e = crate::EntitySpawn::new(id, "p", x, y);
         e.race = ACTOR_RACE_PLAY;
         // `PlayObject` ctor `WantRefMsg = true`（`PlayObject.cs:889`）。
         e.want_ref_msg = true;
@@ -949,7 +949,7 @@ mod tests {
     }
 
     fn monster_entity(id: i32, x: i32, y: i32, view_range: i32) -> EntitySpawn {
-        let mut e = Entity::new(id, "m", x, y);
+        let mut e = crate::EntitySpawn::new(id, "m", x, y);
         e.race = ACTOR_RACE_MONSTER;
         e.view_range = view_range;
         e
@@ -1035,11 +1035,11 @@ mod tests {
     fn monster_view_update_sets_visible_active_for_player_and_baby() {
         let mut store = EntityStore::new();
         store.insert(play_viewer(1, 10, 10, 12));
-        let mut baby = Entity::new(3, "baby", 10, 11);
+        let mut baby = crate::EntitySpawn::new(3, "baby", 10, 11);
         baby.race = ACTOR_RACE_MONSTER;
         baby.master = Some(1);
         store.insert(baby);
-        let mut plain = Entity::new(4, "plain", 10, 12);
+        let mut plain = crate::EntitySpawn::new(4, "plain", 10, 12);
         plain.race = ACTOR_RACE_MONSTER;
         store.insert(plain);
 
@@ -1098,7 +1098,7 @@ mod tests {
     fn view_range_update_only_emitted_by_player_viewer() {
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
-        let mut guard = Entity::new(1, "g", 10, 10);
+        let mut guard = crate::EntitySpawn::new(1, "g", 10, 10);
         guard.race = 11;
         guard.view_range = 5;
         guard.want_ref_msg = true;
@@ -1141,13 +1141,13 @@ mod tests {
     fn m3_ghost_player_is_not_in_others_view_set() {
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
-        let mut viewer = Entity::new(1, "p", 10, 10);
+        let mut viewer = crate::EntitySpawn::new(1, "p", 10, 10);
         viewer.race = ACTOR_RACE_PLAY;
         viewer.want_ref_msg = true;
         viewer.view_range = 5;
         store.insert(viewer);
         put(&mut map, 1, 10, 10, 0);
-        let mut ghost = Entity::new(2, "g", 11, 10);
+        let mut ghost = crate::EntitySpawn::new(2, "g", 11, 10);
         ghost.race = ACTOR_RACE_PLAY;
         ghost.ghost = true;
         store.insert(ghost);

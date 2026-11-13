@@ -369,10 +369,10 @@ pub fn format_int(template: &str, value: i32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mir2_world::{Entity, World};
+    use mir2_world::World;
 
     fn put(world: &mut World, name: &str, x: i32, y: i32) -> i32 {
-        let mut e = Entity::new(0, name.to_string(), x, y);
+        let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
         e.race = ACTOR_RACE_PLAY;
         world.add_entity(e)
     }
@@ -429,10 +429,10 @@ mod tests {
         let b = put(&mut world, "b", 22, 22); // dx=dy=12 ⇒ 边界内
         let c = put(&mut world, "c", 23, 10); // dx=13 ⇒ 界外
                                               // 怪物（Race != Play）即便在格内也不收（本切片不接 WantRefMsg）
-        let mut mon = Entity::new(0, "mon".to_string(), 11, 10);
+        let mut mon = mir2_world::EntitySpawn::new(0, "mon".to_string(), 11, 10);
         mon.race = mir2_world::ACTOR_RACE_MONSTER;
         let m = world.add_entity(mon);
-        let mut ghost = Entity::new(0, "g".to_string(), 12, 10);
+        let mut ghost = mir2_world::EntitySpawn::new(0, "g".to_string(), 12, 10);
         ghost.ghost = true;
         let g = world.add_entity(ghost);
 
@@ -536,15 +536,15 @@ mod tests {
         let a = put(&mut world, "a", 100, 100);
         let inside = put(&mut world, "in", 149, 100); // dx=49 ⇒ 收
         let edge = put(&mut world, "edge", 150, 100); // dx=50 ⇒ 不收（严格 <）
-        let mut other_map = Entity::new(0, "map".to_string(), 100, 100);
+        let mut other_map = mir2_world::EntitySpawn::new(0, "map".to_string(), 100, 100);
         other_map.race = ACTOR_RACE_PLAY;
         other_map.map_id = 1;
         let om = world.add_entity(other_map);
-        let mut ghost = Entity::new(0, "g".to_string(), 101, 100);
+        let mut ghost = mir2_world::EntitySpawn::new(0, "g".to_string(), 101, 100);
         ghost.race = ACTOR_RACE_PLAY;
         ghost.ghost = true;
         let g = world.add_entity(ghost);
-        let mut mon = Entity::new(0, "mon".to_string(), 102, 100);
+        let mut mon = mir2_world::EntitySpawn::new(0, "mon".to_string(), 102, 100);
         mon.race = mir2_world::ACTOR_RACE_MONSTER;
         let m = world.add_entity(mon);
 

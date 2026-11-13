@@ -100,7 +100,7 @@ pub type MonsterCreator<'a> =
 /// - 52/87/93/104：ctor `ViewRange=5` 与 `BaseObject` 缺省同值（ChickenDeer.cs:10、
 ///   DualAxeMonster.cs:76），无需落字段。
 ///
-/// 表外 race 保持 [`Entity::new`] 的 C# 字段缺省（0/false）。`now` = oracle
+/// 表外 race 保持 [`EntitySpawn::new`] 的 C# 字段缺省（0/false）。`now` = oracle
 /// `HUtil32.GetTickCount()`（本骨架用 `World::clock_ms` 的确定性注入）。
 ///
 /// **MB-4 起落 `CowKingMonster.ctor` 的 `RushMode = true`**（`CowKingMonster.cs:21`）：
@@ -1136,18 +1136,18 @@ pub fn apply_monster_class_constants_at(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::Entity;
+
     use crate::world::World;
 
     /// PR-2：装载钩子按 **race（= C# `new Xxx()` 的类）** 落非抽数类常量；
-    /// 表外 race 保持 `Entity::new` 的字段缺省。逐值出处见
+    /// 表外 race 保持 `EntitySpawn::new` 的字段缺省。逐值出处见
     /// [`apply_monster_class_constants`]。
     ///
     /// 牙②：把 race 107 的 `attack_range` 从 6 改成 4（照抄 `StickMonster` 基类）⇒ 本用例红。
     #[test]
     fn class_constants_match_oracle_ctors_per_race() {
         let mk = |race: i16, now: i64| {
-            let mut e = Entity::new(0, "x", 0, 0);
+            let mut e = crate::EntitySpawn::new(0, "x", 0, 0);
             apply_monster_class_constants(&mut e, race, now);
             e
         };
@@ -1231,7 +1231,7 @@ mod tests {
     #[test]
     fn super_guard_own_ctor_constants_match_oracle() {
         let mk = |race: i16| {
-            let mut e = Entity::new(0, "x", 0, 0);
+            let mut e = crate::EntitySpawn::new(0, "x", 0, 0);
             apply_monster_class_constants(&mut e, race, 0);
             e
         };
@@ -1261,7 +1261,7 @@ mod tests {
             assert!(!e.stick_mode, "race {race} 不继承 11/12 支的 StickMode");
         }
 
-        // 普通怪对照组：`Entity::new` = `BaseObject` 缺省（`ViewRange=5`、`Light=0`）。
+        // 普通怪对照组：`EntitySpawn::new` = `BaseObject` 缺省（`ViewRange=5`、`Light=0`）。
         let plain = mk(80);
         assert_eq!((plain.view_range, plain.light), (5, 0), "普通怪缺省不变");
     }
@@ -1932,7 +1932,7 @@ mod tests {
     }
 
     fn revive_corpse(world: &mut World, zen_time: i32, re_alive_tick: i64) -> i32 {
-        let mut e = Entity::new(0, "鸡", 50, 50);
+        let mut e = crate::EntitySpawn::new(0, "鸡", 50, 50);
         e.race = 80;
         e.max_hp = 60;
         e.hp = 0;
@@ -2056,7 +2056,7 @@ mod tests {
     #[test]
     fn ghost_is_removed_only_after_five_minutes() {
         let mut world = World::new(64, 64);
-        let mut e = Entity::new(0, "幽", 40, 40);
+        let mut e = crate::EntitySpawn::new(0, "幽", 40, 40);
         e.race = 80;
         e.ghost = true;
         e.ghost_tick = 10_000;
@@ -2090,7 +2090,7 @@ mod tests {
         y: i32,
         can_re_alive: bool,
     ) -> i32 {
-        let mut e = Entity::new(0, name, x, y);
+        let mut e = crate::EntitySpawn::new(0, name, x, y);
         e.race = 80;
         e.map_id = map_id;
         e.max_hp = 10;
@@ -2220,16 +2220,16 @@ mod tests {
     #[test]
     fn clear_map_monsters_departs_follow_disappear_a_broadcast() {
         let mut world = World::new(64, 64);
-        let mut viewer = Entity::new(0, "观察者", 10, 10);
+        let mut viewer = crate::EntitySpawn::new(0, "观察者", 10, 10);
         viewer.race = crate::entity::ACTOR_RACE_PLAY;
         let viewer = world.add_entity(viewer);
         assert!(world.enter_world(viewer));
-        let mut ghost_viewer = Entity::new(0, "幽观察者", 11, 10);
+        let mut ghost_viewer = crate::EntitySpawn::new(0, "幽观察者", 11, 10);
         ghost_viewer.race = crate::entity::ACTOR_RACE_PLAY;
         ghost_viewer.ghost = true;
         let ghost_viewer = world.add_entity(ghost_viewer);
         assert!(world.enter_world(ghost_viewer));
-        let mut far = Entity::new(0, "远处", 40, 40);
+        let mut far = crate::EntitySpawn::new(0, "远处", 40, 40);
         far.race = crate::entity::ACTOR_RACE_PLAY;
         let far = world.add_entity(far);
         assert!(world.enter_world(far));

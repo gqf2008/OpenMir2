@@ -8,7 +8,7 @@
 //! 每个用例的 `oracle` 行号在断言旁注明；牙（mutation）见本卡报告。
 
 use mir2_shared::rng::RandomNumber;
-use mir2_world::entity::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+use mir2_world::entity::{ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 use mir2_world::slave::{RM_DOOPENHEALTH, RM_MAKEHOLYSEIZEMODE, RM_POISON};
 use mir2_world::special_monster::{
     adopt_special_child, apply_ctor_fields, clone_operate, operate_special, special_monster_run,
@@ -39,7 +39,7 @@ impl SpecialSpawner for MockSpawner {
         if self.fail {
             return None;
         }
-        let mut e = Entity::new(0, name.to_string(), i32::from(x), i32::from(y));
+        let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), i32::from(x), i32::from(y));
         e.race = 125; // `ActorRace.MonsterBee`
         e.map_id = map_id;
         Some(world.add_entity(e))
@@ -47,7 +47,7 @@ impl SpecialSpawner for MockSpawner {
 }
 
 fn special_owner(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
-    let mut e = Entity::new(0, "special".to_string(), x, y);
+    let mut e = mir2_world::EntitySpawn::new(0, "special".to_string(), x, y);
     e.race = race;
     e.hp = 100;
     e.max_hp = 100;
@@ -55,7 +55,7 @@ fn special_owner(world: &mut World, race: u8, x: i32, y: i32) -> i32 {
 }
 
 fn plain_child(world: &mut World, x: i32, y: i32) -> i32 {
-    let mut e = Entity::new(0, "bee".to_string(), x, y);
+    let mut e = mir2_world::EntitySpawn::new(0, "bee".to_string(), x, y);
     e.race = 125;
     world.add_entity(e)
 }
@@ -67,7 +67,7 @@ fn plain_child(world: &mut World, x: i32, y: i32) -> i32 {
 /// `Clone.cs:9-12`：只改 `SearchTime`（`SearchTick` 保持 Base 值）。
 #[test]
 fn ctor_fields_match_oracle_per_race() {
-    let mut bee = Entity::new(0, "bee".to_string(), 1, 1);
+    let mut bee = mir2_world::EntitySpawn::new(0, "bee".to_string(), 1, 1);
     bee.race = RACE_BEE_QUEEN;
     bee.ai.search_tick = 77;
     apply_ctor_fields(&mut bee, 5000);
@@ -75,7 +75,7 @@ fn ctor_fields_match_oracle_per_race() {
     assert!(bee.stick_mode, "BeeQueen StickMode=true");
     assert_eq!(bee.ai.search_tick, 5000, "BeeQueen SearchTick=now");
 
-    let mut spider = Entity::new(0, "spider".to_string(), 1, 1);
+    let mut spider = mir2_world::EntitySpawn::new(0, "spider".to_string(), 1, 1);
     spider.race = RACE_SPIDER_HOUSE;
     spider.ai.search_tick = 77;
     apply_ctor_fields(&mut spider, 5000);
@@ -86,7 +86,7 @@ fn ctor_fields_match_oracle_per_race() {
         "SpiderHouse ctor 显式 SearchTick=0"
     );
 
-    let mut clone = Entity::new(0, "clone".to_string(), 1, 1);
+    let mut clone = mir2_world::EntitySpawn::new(0, "clone".to_string(), 1, 1);
     clone.race = RACE_CLONE_MONSTER;
     clone.ai.search_tick = 77;
     apply_ctor_fields(&mut clone, 5000);
@@ -399,7 +399,7 @@ fn spawned_child_inherits_target_and_joins_list() {
     let mut w = World::new(32, 32);
     let bee = special_owner(&mut w, RACE_BEE_QUEEN, 10, 10);
     let enemy = {
-        let mut e = Entity::new(0, "enemy".to_string(), 12, 10);
+        let mut e = mir2_world::EntitySpawn::new(0, "enemy".to_string(), 12, 10);
         e.race = ACTOR_RACE_PLAY;
         w.add_entity(e)
     };
@@ -443,7 +443,7 @@ fn operate_special_returns_none_for_base_cases() {
         "BeeQueen 的 RM_STRUCK 走 base.Operate"
     );
     let normal = {
-        let mut e = Entity::new(0, "normal".to_string(), 3, 3);
+        let mut e = mir2_world::EntitySpawn::new(0, "normal".to_string(), 3, 3);
         e.race = ACTOR_RACE_MONSTER;
         w.add_entity(e)
     };
@@ -515,7 +515,7 @@ fn clone_operate_always_returns_false() {
 fn clone_struck_shield_deducts_master_mp_not_hp() {
     use mir2_world::entity::StruckMsg;
     let (mut w, master, clone) = clone_world(100);
-    let mut h = Entity::new(0, "hitter".to_string(), 6, 4);
+    let mut h = mir2_world::EntitySpawn::new(0, "hitter".to_string(), 6, 4);
     h.race = ACTOR_RACE_PLAY;
     let hitter = w.add_entity(h);
     w.entities.get_mut(clone).unwrap().ai.pending_struck = vec![StruckMsg {
@@ -623,7 +623,7 @@ fn clone_operate_swallows_every_modeled_delivery_class() {
 #[test]
 fn clone_without_master_is_noop_but_false() {
     let mut w = World::new(16, 16);
-    let mut e = Entity::new(0, "clone".to_string(), 3, 3);
+    let mut e = mir2_world::EntitySpawn::new(0, "clone".to_string(), 3, 3);
     e.race = RACE_CLONE_MONSTER;
     e.hp = 80;
     let clone = w.add_entity(e);
@@ -832,12 +832,12 @@ fn adopt_without_target_still_joins_list() {
 
 fn clone_world(master_mp: u16) -> (World, i32, i32) {
     let mut w = World::new(16, 16);
-    let mut m = Entity::new(0, "master".to_string(), 4, 4);
+    let mut m = mir2_world::EntitySpawn::new(0, "master".to_string(), 4, 4);
     m.race = ACTOR_RACE_PLAY;
     m.mp = master_mp;
     m.max_mp = 100;
     let master = w.add_entity(m);
-    let mut c = Entity::new(0, "clone".to_string(), 5, 4);
+    let mut c = mir2_world::EntitySpawn::new(0, "clone".to_string(), 5, 4);
     c.race = RACE_CLONE_MONSTER;
     c.master = Some(master);
     c.hp = 100;

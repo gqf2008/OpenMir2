@@ -11,12 +11,12 @@
 
 use mir2_shared::rng::RandomNumber;
 use mir2_world::action::PushEvent;
-use mir2_world::entity::{Entity, EntitySpawn, ACTOR_RACE_PLAY};
+use mir2_world::entity::{EntitySpawn, ACTOR_RACE_PLAY};
 use mir2_world::magic::{back_dir, front_position};
 use mir2_world::World;
 
 fn player(id: i32, x: i32, y: i32) -> EntitySpawn {
-    let mut e = Entity::new(id, format!("p{id}"), x, y);
+    let mut e = mir2_world::EntitySpawn::new(id, format!("p{id}"), x, y);
     e.race = ACTOR_RACE_PLAY;
     e.hp = 100;
     e

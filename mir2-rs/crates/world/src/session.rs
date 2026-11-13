@@ -653,10 +653,10 @@ pub enum SessionError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::entity::{Entity, EntitySpawn};
+    use crate::entity::EntitySpawn;
 
     fn player(name: &str, x: i32, y: i32) -> EntitySpawn {
-        let mut e = Entity::new(0, name.to_string(), x, y);
+        let mut e = crate::EntitySpawn::new(0, name.to_string(), x, y);
         e.race = ACTOR_RACE_PLAY;
         e.view_range = 12;
         e.want_ref_msg = true;

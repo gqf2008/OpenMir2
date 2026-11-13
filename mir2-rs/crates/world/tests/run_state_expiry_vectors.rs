@@ -12,12 +12,12 @@
 //! 全部使用注入时钟（`world.clock_ms`）推进；不抽随机数、不需要真机。
 
 use mir2_world::combat::{get_attack_power_hit, AttackHitState};
-use mir2_world::entity::{Entity, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+use mir2_world::entity::{ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 use mir2_world::monai::{animal_run, monster_ai_tick, open_crazy_mode};
 use mir2_world::{RunStateExpiry, World};
 
 fn monster(world: &mut World) -> i32 {
-    let mut e = Entity::new(0, "稻草人", 10, 10);
+    let mut e = mir2_world::EntitySpawn::new(0, "稻草人", 10, 10);
     e.race = ACTOR_RACE_MONSTER;
     e.hp = 60;
     e.max_hp = 60;
@@ -25,7 +25,7 @@ fn monster(world: &mut World) -> i32 {
 }
 
 fn player(world: &mut World) -> i32 {
-    let mut e = Entity::new(0, "m2r", 12, 12);
+    let mut e = mir2_world::EntitySpawn::new(0, "m2r", 12, 12);
     e.race = ACTOR_RACE_PLAY;
     e.hp = 100;
     e.max_hp = 100;

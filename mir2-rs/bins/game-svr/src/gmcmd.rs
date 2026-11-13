@@ -8643,8 +8643,8 @@ mod tests {
     /// 20×20 单图世界 + `gm`(5,5) / `bob`(6,6) 两个玩家。
     fn gm_world() -> mir2_world::World {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
-        w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
+        w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
         w
     }
 
@@ -8993,8 +8993,8 @@ mod tests {
     #[test]
     fn group_recall_member_gate_and_cooldown() {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let gm_id = w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
-        let bob_id = w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        let gm_id = w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
+        let bob_id = w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
         w.entities.get_mut(gm_id).unwrap().group.group_owner = gm_id;
         w.entities.get_mut(gm_id).unwrap().group.group_members = vec![gm_id];
         let guilds = mir2_world::GuildManager::new();
@@ -9856,7 +9856,7 @@ mod tests {
     #[test]
     fn clear_bag_item_offline_target_reports_not_online() {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(e);
         let guilds = mir2_world::GuildManager::new();
@@ -9941,7 +9941,7 @@ mod tests {
         item: mir2_world::entity::UseItemSlot,
     ) -> (mir2_world::World, mir2_world::GuildManager) {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut e = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         if slot < e.use_items.len() {
             e.use_items[slot] = item;
@@ -10363,7 +10363,7 @@ mod tests {
     #[test]
     fn kick_human_offline_target_reports_not_online() {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(e);
         let guilds = mir2_world::GuildManager::new();
@@ -10413,7 +10413,7 @@ mod tests {
     fn kick_human_online_target_sets_pending_kick_without_frames() {
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
         for (name, ghost) in [("alive", false), ("gone", true)] {
-            let mut e = mir2_world::Entity::new(0, name, 5, 5);
+            let mut e = mir2_world::EntitySpawn::new(0, name, 5, 5);
             e.race = mir2_world::ACTOR_RACE_PLAY;
             e.ghost = ghost;
             w.add_entity(e);
@@ -10450,7 +10450,7 @@ mod tests {
     fn kick_human_script_gmexecute_path_sets_pending_kick() {
         use mir2_script::engine::ScriptPlayer;
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::Entity::new(0, "victim", 5, 5);
+        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
         e.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(e);
         let guilds = mir2_world::GuildManager::new();
@@ -11157,8 +11157,8 @@ mod tests {
     fn q_fixture() -> (MapFixture, mir2_world::World, i32, i32) {
         let fx = map_fixture(mir2_envir::MapInfoFlag::default());
         let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let gm_id = w.add_entity(mir2_world::Entity::new(0, "gm", 5, 5));
-        let bob_id = w.add_entity(mir2_world::Entity::new(0, "bob", 6, 6));
+        let gm_id = w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
+        let bob_id = w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
         (fx, w, gm_id, bob_id)
     }
 
@@ -11265,7 +11265,7 @@ mod tests {
             vec![(GmColor::Green, "怪物数量：0")]
         );
         // 怪物实体：race >= ACTOR_RACE_ANIMAL ⇒ MobCount +1；HumanCount 不变。
-        let mut mon = mir2_world::Entity::new(0, "怪甲", 7, 7);
+        let mut mon = mir2_world::EntitySpawn::new(0, "怪甲", 7, 7);
         mon.race = mir2_world::ACTOR_RACE_MONSTER;
         w.add_entity(mon);
         assert_eq!(
@@ -11280,7 +11280,7 @@ mod tests {
         // 怪乙 Ghost ⇒ 不计。
         w.entities.get_mut(bob_id).unwrap().life_cycle.death = true;
         w.entities.get_mut(gm_id).unwrap().life_cycle.ghost = true;
-        let mut mon2 = mir2_world::Entity::new(0, "怪乙", 8, 8);
+        let mut mon2 = mir2_world::EntitySpawn::new(0, "怪乙", 8, 8);
         mon2.race = mir2_world::ACTOR_RACE_MONSTER;
         let mon2_id = w.add_entity(mon2);
         w.entities.get_mut(mon2_id).unwrap().life_cycle.ghost = true;
@@ -12016,8 +12016,8 @@ mod tests {
             desc: [0; 14],
         };
         let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
-        let victim_id = world.add_entity(mir2_world::Entity::new(0, "victim", 11, 11));
+        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 11, 11));
         // 10 = 复活戒指（Shape 114），11 = 火焰戒指（Shape 115）。
         let mut catalog = game_svr::ability::StdItemCatalog::new();
         catalog.insert(
@@ -12254,8 +12254,8 @@ mod tests {
         use std::collections::HashMap;
 
         let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::Entity::new(0, "hero", 10, 10));
-        let victim_id = world.add_entity(mir2_world::Entity::new(0, "victim", 11, 11));
+        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 11, 11));
         // 5 = 命中项（Desc=「目标技能」、MagicName 与火球/治愈均不同）；
         // 6 = 非命中项（Desc/MagicName 都不匹配命令与审计）。
         let magic_table = crate::magics::MagicTable::new(vec![
@@ -12797,10 +12797,10 @@ mod tests {
     /// 世界：`gm`（调用者）+ `bob`（目标），均 `Race = Play`（`GetPlayObject` 的命中面）。
     fn f_world_entities() -> mir2_world::World {
         let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         gm.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut bob = mir2_world::Entity::new(0, "bob", 6, 6);
+        let mut bob = mir2_world::EntitySpawn::new(0, "bob", 6, 6);
         bob.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(bob);
         w
@@ -13037,10 +13037,10 @@ mod tests {
     /// 刷怪世界：`gm`（5,5，Race=Play）+ `bob`；各自带一张 20×20 地图。
     fn m_world() -> mir2_world::World {
         let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         gm.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut bob = mir2_world::Entity::new(0, "bob", 6, 6);
+        let mut bob = mir2_world::EntitySpawn::new(0, "bob", 6, 6);
         bob.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(bob);
         w
@@ -13481,7 +13481,7 @@ mod tests {
     /// 世界：`gm`（Race=Play，5,5，map 0 上）。城堡/地图由各用例添加。
     fn c_world() -> mir2_world::World {
         let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         gm.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(gm);
         w
@@ -13813,10 +13813,10 @@ mod tests {
     /// 世界：`gm`（调用者，Race=Play）+ `chief`（Race=Play）。
     fn w_world() -> mir2_world::World {
         let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::Entity::new(0, "gm", 5, 5);
+        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
         gm.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut chief = mir2_world::Entity::new(0, "chief", 6, 6);
+        let mut chief = mir2_world::EntitySpawn::new(0, "chief", 6, 6);
         chief.race = mir2_world::ACTOR_RACE_PLAY;
         w.add_entity(chief);
         w

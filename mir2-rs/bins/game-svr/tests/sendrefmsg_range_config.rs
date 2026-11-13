@@ -15,10 +15,10 @@
 //!  缺键 ⇒ 12 的缺省面同在那里。）
 
 use game_svr::chat;
-use mir2_world::{Entity, World, ACTOR_RACE_PLAY};
+use mir2_world::{World, ACTOR_RACE_PLAY};
 
 fn put(world: &mut World, name: &str, x: i32, y: i32) -> i32 {
-    let mut e = Entity::new(0, name.to_string(), x, y);
+    let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
     e.race = ACTOR_RACE_PLAY;
     world.add_entity(e)
 }

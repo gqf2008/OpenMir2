@@ -63,8 +63,8 @@ use mir2_shared::rng::RandomNumber;
 
 use crate::combat::{hi_byte, lo_byte};
 use crate::entity::{
-    Entity, EntityMut, PvpView, ACTOR_RACE_ANIMAL, ACTOR_RACE_ELF_MONSTER,
-    ACTOR_RACE_ELF_WARRIORMON, ACTOR_RACE_NPC, ACTOR_RACE_PLAY, ACTOR_RACE_WHITE_SKELETON,
+    EntityMut, PvpView, ACTOR_RACE_ANIMAL, ACTOR_RACE_ELF_MONSTER, ACTOR_RACE_ELF_WARRIORMON,
+    ACTOR_RACE_NPC, ACTOR_RACE_PLAY, ACTOR_RACE_WHITE_SKELETON,
 };
 use crate::magic::{front_position, mag_make_clone, MakeCloneInput};
 use crate::world::World;
@@ -2282,7 +2282,7 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
             clone_id,
         },
     );
-    let mut e = Entity::new(0, CLONE_NAME.to_string(), x, y);
+    let mut e = crate::EntitySpawn::new(0, CLONE_NAME.to_string(), x, y);
     e.id = clone_id;
     e.race = ACTOR_RACE_PLAY;
     // **卡 `openmir2-aoi-disappear-observer-scope`（N1）**：显式标记 PlayCloneObject
@@ -2483,9 +2483,9 @@ mod tests {
     #[test]
     fn make_slave_adopt_writes_oracle_tail() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mon = {
-            let mut e = Entity::new(0, "变异骷髅".to_string(), 11, 9);
+            let mut e = crate::EntitySpawn::new(0, "变异骷髅".to_string(), 11, 9);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.hp = 30;
             e.max_hp = 100;
@@ -2514,9 +2514,9 @@ mod tests {
     #[test]
     fn make_slave_adopt_keeps_full_hp() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mon = {
-            let mut e = Entity::new(0, "怪".to_string(), 11, 9);
+            let mut e = crate::EntitySpawn::new(0, "怪".to_string(), 11, 9);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.hp = 100;
             e.max_hp = 100;
@@ -2533,9 +2533,9 @@ mod tests {
     #[test]
     fn make_slave_adopt_applies_slave_level_abilitys_else_branch() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mon = {
-            let mut e = Entity::new(0, "怪".to_string(), 11, 9);
+            let mut e = crate::EntitySpawn::new(0, "怪".to_string(), 11, 9);
             e.race = crate::entity::ACTOR_RACE_MONSTER; // 80 ≥ Animal(50)
             e.hp = 100;
             e.max_hp = 100;
@@ -2556,9 +2556,9 @@ mod tests {
     #[test]
     fn make_slave_adopt_uses_bankers_rounding() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mon = {
-            let mut e = Entity::new(0, "怪".to_string(), 11, 9);
+            let mut e = crate::EntitySpawn::new(0, "怪".to_string(), 11, 9);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.hp = 110;
             e.max_hp = 110;
@@ -2572,9 +2572,9 @@ mod tests {
     #[test]
     fn make_slave_adopt_skips_slave_level_abilitys_below_animal() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mon = {
-            let mut e = Entity::new(0, "NPC".to_string(), 11, 9);
+            let mut e = crate::EntitySpawn::new(0, "NPC".to_string(), 11, 9);
             e.race = 49; // < Animal
             e.hp = 100;
             e.max_hp = 100;
@@ -2593,9 +2593,9 @@ mod tests {
     #[test]
     fn make_slave_adopt_white_skeleton_branch_and_speed() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mon = {
-            let mut e = Entity::new(0, "变异骷髅".to_string(), 11, 9);
+            let mut e = crate::EntitySpawn::new(0, "变异骷髅".to_string(), 11, 9);
             e.race = crate::entity::ACTOR_RACE_WHITE_SKELETON;
             e.hp = 100;
             e.max_hp = 100;
@@ -2620,9 +2620,9 @@ mod tests {
     #[test]
     fn make_slave_adopt_elf_monster_speed() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mon = {
-            let mut e = Entity::new(0, "神兽".to_string(), 11, 9);
+            let mut e = crate::EntitySpawn::new(0, "神兽".to_string(), 11, 9);
             e.race = crate::entity::ACTOR_RACE_ELF_MONSTER;
             e.hp = 100;
             e.max_hp = 100;
@@ -2645,9 +2645,9 @@ mod tests {
     #[test]
     fn make_slave_adopt_elf_warrior_speed() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mon = {
-            let mut e = Entity::new(0, "强化神兽".to_string(), 11, 9);
+            let mut e = crate::EntitySpawn::new(0, "强化神兽".to_string(), 11, 9);
             e.race = crate::entity::ACTOR_RACE_ELF_WARRIORMON;
             e.hp = 100;
             e.max_hp = 100;
@@ -2673,12 +2673,12 @@ mod tests {
     fn recall_slave_moves_tail_match_to_front() {
         let mut w = World::new(300, 300);
         let caster = {
-            let mut e = Entity::new(0, "主人".to_string(), 10, 10);
+            let mut e = crate::EntitySpawn::new(0, "主人".to_string(), 10, 10);
             e.ai.dir = crate::magic::DIR_RIGHT;
             w.add_entity(e)
         };
         let slave = {
-            let mut e = Entity::new(0, "骷髅".to_string(), 50, 50);
+            let mut e = crate::EntitySpawn::new(0, "骷髅".to_string(), 50, 50);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             w.add_entity(e)
         };
@@ -2695,9 +2695,9 @@ mod tests {
         fn world_with_slave() -> (World, i32) {
             let mut w = World::new(300, 300);
             w.rng = RandomNumber::with_seed(0);
-            let caster = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+            let caster = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
             let slave = {
-                let mut e = Entity::new(0, "骷髅".to_string(), 50, 50);
+                let mut e = crate::EntitySpawn::new(0, "骷髅".to_string(), 50, 50);
                 e.race = crate::entity::ACTOR_RACE_MONSTER;
                 w.add_entity(e)
             };
@@ -2738,7 +2738,7 @@ mod tests {
                 return None;
             }
             let map_id = 0; // `World::new(32,32)` 单图；测试主人与宝宝同图。
-            let mut e = Entity::new(0, name.to_string(), i32::from(x), i32::from(y));
+            let mut e = crate::EntitySpawn::new(0, name.to_string(), i32::from(x), i32::from(y));
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.map_id = map_id;
             e.hp = 40;
@@ -2750,7 +2750,7 @@ mod tests {
     fn summon_world() -> (World, i32) {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = Entity::new(0, "主人".to_string(), 10, 10);
+            let mut e = crate::EntitySpawn::new(0, "主人".to_string(), 10, 10);
             e.race = crate::entity::ACTOR_RACE_PLAY;
             e.level = 20;
             e.ai.dir = crate::magic::DIR_RIGHT;
@@ -2913,13 +2913,13 @@ mod tests {
     fn wall_recall_world(walls: &[(i32, i32)]) -> (World, i32, i32) {
         let mut w = World::new(10, 10);
         let caster = {
-            let mut e = Entity::new(0, "主人".to_string(), 1, 8);
+            let mut e = crate::EntitySpawn::new(0, "主人".to_string(), 1, 8);
             e.race = crate::entity::ACTOR_RACE_PLAY;
             e.level = 20;
             w.add_entity(e)
         };
         let slave = {
-            let mut e = Entity::new(0, "神兽".to_string(), 0, 0);
+            let mut e = crate::EntitySpawn::new(0, "神兽".to_string(), 0, 0);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             w.add_entity(e)
         };
@@ -3087,12 +3087,12 @@ mod tests {
     fn slave_world(hp: u16) -> (World, i32, i32) {
         let mut w = World::new(32, 32);
         let master = {
-            let mut e = Entity::new(0, "主人".to_string(), 10, 10);
+            let mut e = crate::EntitySpawn::new(0, "主人".to_string(), 10, 10);
             e.race = crate::entity::ACTOR_RACE_PLAY;
             w.add_entity(e)
         };
         let slave = {
-            let mut e = Entity::new(0, "变异骷髅".to_string(), 11, 10);
+            let mut e = crate::EntitySpawn::new(0, "变异骷髅".to_string(), 11, 10);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.master = Some(master);
             e.is_slave = true;
@@ -3181,10 +3181,10 @@ mod tests {
     #[test]
     fn slave_list_cleanup_removes_dead_ghost_and_mismaster() {
         let mut w = World::new(32, 32);
-        let master = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
-        let other = w.add_entity(Entity::new(0, "别人".to_string(), 12, 12));
+        let master = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
+        let other = w.add_entity(crate::EntitySpawn::new(0, "别人".to_string(), 12, 12));
         let mut add = |dead: bool, ghost: bool, owner: i32| {
-            let mut e = Entity::new(0, "宝宝".to_string(), 11, 10);
+            let mut e = crate::EntitySpawn::new(0, "宝宝".to_string(), 11, 10);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.death = dead;
             e.ghost = ghost;
@@ -3277,9 +3277,9 @@ mod tests {
     #[test]
     fn process_slave_ghost_marks_all() {
         let mut w = World::new(32, 32);
-        let master = w.add_entity(Entity::new(0, "主人".to_string(), 10, 10));
+        let master = w.add_entity(crate::EntitySpawn::new(0, "主人".to_string(), 10, 10));
         let mut mk = || {
-            let mut e = Entity::new(0, "宝宝".to_string(), 11, 10);
+            let mut e = crate::EntitySpawn::new(0, "宝宝".to_string(), 11, 10);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.master = Some(master);
             w.add_entity(e)
@@ -3302,7 +3302,7 @@ mod tests {
     fn master_die_self_delays_1000ms_then_mutinies_in_reverse() {
         let (mut w, master, s1) = slave_world(100);
         let s2 = {
-            let mut e = Entity::new(0, "变异骷髅2".to_string(), 12, 10);
+            let mut e = crate::EntitySpawn::new(0, "变异骷髅2".to_string(), 12, 10);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.master = Some(master);
             e.is_slave = true;
@@ -3458,7 +3458,7 @@ mod tests {
     // runtime 8.0.26）；每个用例头部的「实测」行即模拟器输出。
 
     fn delay_entity(w: &mut World, name: &str) -> i32 {
-        let mut e = Entity::new(0, name.to_string(), 10, 10);
+        let mut e = crate::EntitySpawn::new(0, name.to_string(), 10, 10);
         e.race = crate::entity::ACTOR_RACE_MONSTER;
         w.add_entity(e)
     }
@@ -3777,7 +3777,7 @@ mod tests {
     fn pr1_four_producers_schedule() {
         let mut w = World::new(16, 16);
         let bee = {
-            let mut e = Entity::new(0, "bee".to_string(), 3, 3);
+            let mut e = crate::EntitySpawn::new(0, "bee".to_string(), 3, 3);
             e.race = crate::special_monster::RACE_BEE_QUEEN;
             e.hp = 100;
             e.max_hp = 100;
@@ -3877,13 +3877,13 @@ mod tests {
     fn tame_adopt_writes_oracle_tail() {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = Entity::new(0, "道士".to_string(), 10, 10);
+            let mut e = crate::EntitySpawn::new(0, "道士".to_string(), 10, 10);
             e.race = crate::entity::ACTOR_RACE_PLAY;
             e.level = 10;
             w.add_entity(e)
         };
         let target = {
-            let mut e = Entity::new(0, "鸡".to_string(), 11, 10);
+            let mut e = crate::EntitySpawn::new(0, "鸡".to_string(), 11, 10);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.hp = 100;
             e.ai.walk_speed = 2000;
@@ -3910,10 +3910,10 @@ mod tests {
     #[test]
     fn tame_adopt_halves_hp_and_keeps_master_tick() {
         let mut w = World::new(32, 32);
-        let caster = w.add_entity(Entity::new(0, "道士".to_string(), 10, 10));
-        let other = w.add_entity(Entity::new(0, "旧主".to_string(), 12, 12));
+        let caster = w.add_entity(crate::EntitySpawn::new(0, "道士".to_string(), 10, 10));
+        let other = w.add_entity(crate::EntitySpawn::new(0, "旧主".to_string(), 12, 12));
         let target = {
-            let mut e = Entity::new(0, "半兽人".to_string(), 11, 10);
+            let mut e = crate::EntitySpawn::new(0, "半兽人".to_string(), 11, 10);
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             e.master = Some(other);
             e.hp = 100;
@@ -3937,7 +3937,7 @@ mod tests {
     #[test]
     fn get_chr_color_branches() {
         let slave_color = [0xFF, 0xFE, 0x93, 0x9A];
-        let mut s = Entity::new(0, "宝宝".to_string(), 0, 0);
+        let mut s = crate::EntitySpawn::new(0, "宝宝".to_string(), 0, 0);
         s.race = crate::entity::ACTOR_RACE_MONSTER;
         s.master = Some(1);
         s.slave_exp_level = 2;
@@ -3966,7 +3966,7 @@ mod tests {
     fn spawn_clone_creates_player_clone_and_occupies_cell() {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = Entity::new(0, "主人".to_string(), 7, 9);
+            let mut e = crate::EntitySpawn::new(0, "主人".to_string(), 7, 9);
             e.race = ACTOR_RACE_PLAY;
             w.add_entity(e)
         };
@@ -4028,15 +4028,15 @@ mod tests {
     fn refmsg_scene(race: u8) -> (World, i32, i32) {
         let mut w = World::new(16, 16);
         w.enable_refmessage_delay();
-        let mut victim = Entity::new(0, "victim".to_string(), 10, 10);
+        let mut victim = crate::EntitySpawn::new(0, "victim".to_string(), 10, 10);
         victim.race = race;
         victim.hp = 70;
         victim.max_hp = 100;
         let victim_id = w.add_entity(victim);
-        let mut hitter = Entity::new(0, "hitter".to_string(), 11, 10);
+        let mut hitter = crate::EntitySpawn::new(0, "hitter".to_string(), 11, 10);
         hitter.race = crate::entity::ACTOR_RACE_PLAY;
         let hitter_id = w.add_entity(hitter);
-        let mut far = Entity::new(0, "far".to_string(), 15, 15);
+        let mut far = crate::EntitySpawn::new(0, "far".to_string(), 15, 15);
         far.race = crate::entity::ACTOR_RACE_MONSTER;
         let far_id = w.add_entity(far);
         w.entities.get_mut(victim_id).unwrap().ai.target_creature = Some(far_id);
@@ -4212,10 +4212,10 @@ mod tests {
     #[test]
     fn m2_slave_list_cleanup_all_skips_ghost_master() {
         let mut w = World::new(16, 16);
-        let mut gm = Entity::new(1, "gm", 1, 1);
+        let mut gm = crate::EntitySpawn::new(1, "gm", 1, 1);
         gm.ghost = true;
         let gmid = w.add_entity(gm);
-        let mut gs = Entity::new(2, "gs", 2, 2);
+        let mut gs = crate::EntitySpawn::new(2, "gs", 2, 2);
         gs.ghost = true;
         let gsid = w.add_entity(gs);
         w.entities
@@ -4225,8 +4225,8 @@ mod tests {
             .slave_list
             .push(gsid);
         // 对照：活主人 + 幽灵宝宝（cleanup 该摘）
-        let lm = w.add_entity(Entity::new(3, "lm", 3, 3));
-        let mut ls = Entity::new(4, "ls", 4, 4);
+        let lm = w.add_entity(crate::EntitySpawn::new(3, "lm", 3, 3));
+        let mut ls = crate::EntitySpawn::new(4, "ls", 4, 4);
         ls.ghost = true;
         let lsid = w.add_entity(ls);
         w.entities.get_mut(lm).unwrap().slave.slave_list.push(lsid);

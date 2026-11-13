@@ -1923,10 +1923,10 @@ mod tests {
     /// 已在 cert_list 里的旧成员（如 GuardList 放置，oracle `RegenMonsterByName` 不置位）保持不动。
     #[test]
     fn bind_new_certificates_only_marks_appended_ids() {
-        use mir2_world::{Entity, MonGenEntry, MonGenState, MonGenThread};
+        use mir2_world::{MonGenEntry, MonGenState, MonGenThread};
         let mut world = mir2_world::World::new(64, 64);
-        let old = world.add_entity(Entity::new(0, "旧", 5, 5));
-        let new_id = world.add_entity(Entity::new(0, "新", 6, 6));
+        let old = world.add_entity(mir2_world::EntitySpawn::new(0, "旧", 5, 5));
+        let new_id = world.add_entity(mir2_world::EntitySpawn::new(0, "新", 6, 6));
 
         let mut state = MonGenState::default();
         let mut entry = MonGenEntry::new("0", 5, 5, "鸡", 0, 1, 60_000, 0);

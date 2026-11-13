@@ -19,7 +19,7 @@ pub const PLAYER_SEARCH_TIME: i64 = 1000;
 /// 非玩家实体（怪/商人/NPC）`AnimalState` 的 ctor 缺省 `SearchTime` 占位值。
 ///
 /// 真实值由各自构造链落定（`MonsterObject.cs:65` 的 `3000+Random(2000)`、生成路径的
-/// [`MonsterCtorDraws::search_time`]）；本常量只用于让 `Entity::new`（玩家 ctor 等价物）
+/// [`MonsterCtorDraws::search_time`]）；本常量只用于让 `EntitySpawn::new`（玩家 ctor 等价物）
 /// **不**把玩家的 1000 常量带到非玩家实体上，保持本片之前非玩家字段逐一不变。
 pub const BASE_ANIMAL_SEARCH_TIME: i64 = 3000;
 pub const ACTOR_RACE_NPC: u8 = 10;
@@ -538,7 +538,7 @@ pub type AiState = mir2_world_bevy::AiState<AnimalState>;
 
 /// **生成期载体**（`Entity` + 落图前的 `Transform` / `MapBinding` / S4a 属性组件）。
 ///
-/// 只为保持 约 700 处 `Entity::new(id, name, x, y)` + `e.x = …` 的生成期写法不变；
+/// 只为保持 约 700 处 `crate::EntitySpawn::new(id, name, x, y)` + `e.x = …` 的生成期写法不变；
 /// [`EntityStore::insert`] 消费它并把坐标/绑定/属性落成组件。**插入后不再存在第二份真值**：
 /// 载体被 move 进 insert，后续读写一律走组件。
 #[derive(Debug, Clone)]
@@ -698,172 +698,13 @@ pub struct EntitySpawn {
 }
 
 impl EntitySpawn {
-    /// ctor 缺省值（`Entity::new`：`Vitals.hp/max_hp = 100/100`、`Progression.level = 1`；
+    /// ctor 缺省值（`EntitySpawn::new`：`Vitals.hp/max_hp = 100/100`、`Progression.level = 1`；
     /// 其余 0/`None`，见迁移文档 §3.4）。
     ///
     /// **不得**用 `Component::default()` 直接造实体：`hp=0` 在语义上等于「已死」。
     const CTOR_HP: u16 = 100;
     const CTOR_MAX_HP: u16 = 100;
     const CTOR_LEVEL: u8 = 1;
-
-    pub fn new(
-        entity: Entity,
-        x: i32,
-        y: i32,
-        map_id: usize,
-        view_range: i32,
-        map_binding: MapBinding,
-    ) -> Self {
-        EntitySpawn {
-            entity,
-            x,
-            y,
-            map_id,
-            view_range,
-            map_binding,
-            hp: Self::CTOR_HP,
-            max_hp: Self::CTOR_MAX_HP,
-            mp: 0,
-            max_mp: 0,
-            hit_speed: 0,
-            dc: 0,
-            ac: 0,
-            mac: 0,
-            hit_point: 0,
-            speed_point: 0,
-            anti_magic: 0,
-            anti_poison: 0,
-            undead_power: 0,
-            abil: None,
-            job: 0,
-            life_attrib: 0,
-            level: Self::CTOR_LEVEL,
-            mon_exp: 0,
-            exp: 0,
-            max_exp: 0,
-            castle_binding: None,
-            mon_gen: None,
-            mon_gen_zen_time: 0,
-            ctor_draws: MonsterCtorDraws::default(),
-            gold: 0,
-            drop_items: Vec::new(),
-            angry_ring: false,
-            no_drop_use_item: false,
-            no_item: false,
-            last_hiter: None,
-            exp_hitter: None,
-            last_hiter_tick: 0,
-            exp_hitter_tick: 0,
-            health_tick: 0,
-            spell_tick: 0,
-            auto_recovery_tick: 0,
-            dear_human: None,
-            pk_point: 0,
-            pvp_flag: false,
-            pvp_name_color_tick: 0,
-            die_in_fight3_zone: false,
-            invisible: false,
-            hide_mode: false,
-            fixed_hide_mode: false,
-            ob_mode: false,
-            nasty_mode: false,
-            attack_mode: 0,
-            in_safe_zone: false,
-            admin_mode: false,
-            stone_mode: false,
-            super_man: false,
-            rush_mode: false,
-            want_ref_msg: false,
-            stick_mode: false,
-            death: false,
-            ghost: false,
-            death_tick: 0,
-            ghost_tick: 0,
-            can_re_alive: false,
-            re_alive_tick: 0,
-            death_settled: false,
-            die_called: false,
-            race: ACTOR_RACE_PLAY,
-            race_img: 0,
-            appr: 0,
-            light: 0,
-            name_color: 255,
-            come_out_value: 0,
-            attack_range: 0,
-            use_magic: false,
-            danger_level: 0,
-            n550: 0,
-            class_attack_tick: 0,
-            bo_is_first: false,
-            dig_down_tick: 0,
-            appear_start_tick: 0,
-            guard_direction: 0,
-            siege_lock_count: 0,
-            jump_time: 0,
-            crazy_ready_mode: false,
-            crazy_king_mode: false,
-            crazy_count: 0,
-            crazy_ready: 0,
-            crazy_time: 0,
-            old_hit_time: 0,
-            old_walk_time: 0,
-            luck: 0,
-            power_rate: 100,
-            power_rate_time: 0,
-            kill_mon_exp_rate: 100,
-            kill_mon_exp_rate_time: 0,
-            exp_rate_tick: 0,
-            random_no: 0,
-            bo_power_item: false,
-            power_item: 0,
-            fire_hit_skill: false,
-            latest_fire_hit_tick: 0,
-            twin_hit_skill: false,
-            latest_twin_hit_tick: 0,
-            allow_group: false,
-            allow_group_re_call: false,
-            group_owner: 0,
-            group_members: Vec::new(),
-            revival: false,
-            revival_tick: 0,
-            un_revival: false,
-            flame_ring: false,
-            poisoning_tick: crate::buff::BUFF_EPOCH_MS,
-            green_poisoning_point: 0,
-            char_status: 0,
-            char_status_ex: 0,
-            status_time: [0; STATUS_TIME_SLOTS],
-            transparent: false,
-            show_hp: false,
-            show_hp_tick: 0,
-            show_hp_interval: 0,
-            magic_shield: false,
-            un_magic_shield: false,
-            extra_abil: [0; EXTRA_ABIL_SLOTS],
-            extra_abil_times: [0; EXTRA_ABIL_SLOTS],
-            extra_abil_flag: [0; EXTRA_ABIL_SLOTS],
-            // S4c-1 ctor 缺省（与迁移前 `Entity::new` 逐字段一致：全 0/false/空）。
-            master: None,
-            slave_relax: false,
-            slave_list: Vec::new(),
-            special_children: Vec::new(),
-            is_slave: false,
-            is_clone: false,
-            slave_exp_level: 0,
-            slave_make_level: 0,
-            master_royalty_tick: 0,
-            master_tick: 0,
-            class_slave_list: Vec::new(),
-            use_items: [UseItemSlot::default(); USE_ITEM_SLOTS],
-            merchant: None,
-            npc: None,
-            // S4c-2：玩家 ctor 等价物的 AI 缺省（SearchTime=1000），与 `Entity::new` 同值。
-            ai: AnimalState {
-                search_time: PLAYER_SEARCH_TIME,
-                ..AnimalState::default()
-            },
-        }
-    }
 
     /// 把载体上的属性字段落成组件值。
     #[must_use]
@@ -1970,21 +1811,22 @@ impl std::ops::DerefMut for EntityMut<'_> {
 ///
 /// S1 起 `Entity` 直接就是 bevy 的**组件**（每个实体一个组件），由
 /// `mir2_world_bevy::EcsStore`（bevy `World` + 显式槽位索引）承载。
-#[derive(Clone, Debug, bevy_ecs::prelude::Component)]
-pub struct Entity {
-    /// C# `ActorId`
-    pub id: i32,
-    pub name: String,
-}
+/// **S4c-3**：实体主组件 = `mir2_world_bevy::CoreIdentity`（`id`/`name`）。
+///
+/// 保留 `Entity` 名称作**类型别名**，让既有 `&Entity` 标注与 `e.id` / `e.name` 读法不变；
+/// 本 crate 不再定义 `Entity` 类型，`EcsStore` 的泛型参数是 `CoreIdentity`。
+/// `id` 同时是 `EcsStore` 索引键（store 索引与组件各持一份、以索引为准，生成后不可变）。
+pub use mir2_world_bevy::CoreIdentity;
+pub type Entity = CoreIdentity;
 
-impl Entity {
+impl EntitySpawn {
     /// ctor 等价物：返回**生成期载体** [`EntitySpawn`]（`Entity` + 落图前的
     /// [`Transform`] / [`MapBinding`]）。坐标在 `insert` 时落成组件；插入后真值只在组件里。
     ///
     /// 保留 `(x, y)` 参数是为了让 约 700 处生成期赋值保持原形（`e.x = …` 写的是
     /// `EntitySpawn.transform`），不改变任何构造点的可读性。
     // `new` 返回生成期载体（`EntitySpawn` 而不是 `Self`），以保持 约 700 处生成期写法；
-    // 名字沿用 `Entity::new`（oracle ctor 等价物）。
+    // 名字沿用 `EntitySpawn::new`（oracle ctor 等价物）。
     #[allow(clippy::new_ret_no_self)]
     pub fn new(id: i32, name: impl Into<String>, x: i32, y: i32) -> EntitySpawn {
         let entity = Entity {
@@ -1998,11 +1840,11 @@ impl Entity {
             // `PowerRate = 100`；`BoPowerItem=false` / `PowerItem=0`。
             // `PlayObject.cs:725-727`：`PowerRateTime`/`KillMonExpRateTime` 无 ctor 赋值 ⇒ 0；
             // `KillMonExpRate = 100`（`:941`）；`ExpRateTick` 的 ctor 取钟由落图点重盖。
-            // `PlayObject.cs:1047` 的 `RandomNo` 由登录构造点抽数后写入；`Entity::new` 缺省 0。
+            // `PlayObject.cs:1047` 的 `RandomNo` 由登录构造点抽数后写入；`EntitySpawn::new` 缺省 0。
             // `PlayObject.cs:181/185/194/195`：ctor 缺省 `FireHitSkill/TwinHitSkill = false`、
             // 两个 tick 为 0（C# `int` 缺省）；真实置位来自技能层（未移植，见字段文档）。
             // 重叠推挤状态（`BoDuplication` / `DupStartTick` / `CheckDupObjTick`）已于 S3a
-            // 迁入 `DupState` 组件：`Entity::new` 的同值缺省 = `DupState::default`（false/0/0），
+            // 迁入 `DupState` 组件：`EntitySpawn::new` 的同值缺省 = `DupState::default`（false/0/0），
             // 由 `EntityStore::insert` 统一插入；`CheckDupObjTick` 的 ctor/落图时刻由
             // `World::add_entity` / `SessionRegistry::enter_map_at` 经 `EntityStore::dup_state_mut` 重盖。
             // `CharacterObject.cs:89`：13 个空位（`Index = 0`）。
@@ -2068,7 +1910,7 @@ impl Entity {
             mon_exp: 0,
             exp: 0,
             max_exp: 0,
-            // S4a-2 ctor 缺省（与迁移前 `Entity::new` 逐字段一致）。
+            // S4a-2 ctor 缺省（与迁移前 `EntitySpawn::new` 逐字段一致）。
             castle_binding: None,
             mon_gen: None,
             mon_gen_zen_time: 0,
@@ -2090,7 +1932,7 @@ impl Entity {
             pvp_flag: false,
             pvp_name_color_tick: 0,
             die_in_fight3_zone: false,
-            // S4b-1 ctor 缺省（与迁移前 `Entity::new` 逐字段一致；`name_color=255`、
+            // S4b-1 ctor 缺省（与迁移前 `EntitySpawn::new` 逐字段一致；`name_color=255`、
             // `race=ACTOR_RACE_PLAY` 是 ctor 覆盖值，见迁移文档 §3.4）。
             invisible: false,
             hide_mode: false,
@@ -2172,7 +2014,7 @@ impl Entity {
             extra_abil: [0; EXTRA_ABIL_SLOTS],
             extra_abil_times: [0; EXTRA_ABIL_SLOTS],
             extra_abil_flag: [0; EXTRA_ABIL_SLOTS],
-            // S4c-1 ctor 缺省（与迁移前 `Entity::new` 逐字段一致：全 0/false/空）。
+            // S4c-1 ctor 缺省（与迁移前 `EntitySpawn::new` 逐字段一致：全 0/false/空）。
             master: None,
             slave_relax: false,
             slave_list: Vec::new(),
@@ -2274,7 +2116,7 @@ type MutViewQuery = bevy_ecs::query::QueryState<(
 )>;
 
 pub struct EntityStore {
-    inner: mir2_world_bevy::EcsStore<Entity>,
+    inner: mir2_world_bevy::EcsStore<CoreIdentity>,
     /// 读路径的缓存查询（S3b/S4a）：一次按句柄取齐 `Entity` + 位置/绑定 + 属性/成长组件，
     /// 避免每个读取点逐次 `TypeId` 查表。只按显式句柄 `get_manual`，不迭代求顺序。
     view_state: ReadViewQuery,
@@ -3347,14 +3189,14 @@ impl EntityStore {
 mod tests {
     use super::*;
 
-    /// PR-2：`Entity::new` 是 C# 各怪物类的公共载体——新落的专用怪类常量必须是
+    /// PR-2：`EntitySpawn::new` 是 C# 各怪物类的公共载体——新落的专用怪类常量必须是
     /// **C# 字段缺省**（`int`/`sbyte` 0、`bool` false）；派生类 ctor 的实际常量由装载钩子
     /// （[`crate::mongen::apply_monster_class_constants`]）按 race 覆盖。
     ///
     /// 牙①：把 `attack_range: 0` 改成 `4`（把 `StickMonster` ctor 常量误当公共缺省）⇒ 本用例红。
     #[test]
     fn new_entity_class_constants_default_to_csharp_field_defaults() {
-        let e = Entity::new(1, "x", 0, 0);
+        let e = crate::EntitySpawn::new(1, "x", 0, 0);
         assert_eq!(e.come_out_value, 0, "ComeOutValue int 缺省");
         assert_eq!(e.attack_range, 0, "AttackRange int 缺省");
         assert!(!e.use_magic, "UseMagic bool 缺省");
@@ -3379,7 +3221,7 @@ mod tests {
     #[test]
     fn write_back_preserves_spawn_cloned_vitals() {
         let mut s = EntityStore::new();
-        let mut e = Entity::new(1, "hero", 0, 0);
+        let mut e = crate::EntitySpawn::new(1, "hero", 0, 0);
         e.hp = 37;
         e.mp = 11;
         e.exp = 5;
@@ -3414,7 +3256,7 @@ mod tests {
     #[test]
     fn insert_uses_spawn_ctor_bundle_not_component_defaults() {
         let mut s = EntityStore::new();
-        let id = s.insert(Entity::new(1, "x", 0, 0));
+        let id = s.insert(crate::EntitySpawn::new(1, "x", 0, 0));
         let r = s.get(id).expect("实体在场");
         assert_eq!(
             r.view_range, 5,
@@ -3438,7 +3280,7 @@ mod tests {
     #[test]
     fn write_back_covers_all_migrated_components() {
         let mut s = EntityStore::new();
-        let id = s.insert(Entity::new(7, "wb-all", 0, 0));
+        let id = s.insert(crate::EntitySpawn::new(7, "wb-all", 0, 0));
         let mut c = s.spawn_cloned(id).expect("副本");
         // Vitals + Ability + Progression
         c.hp = 11;
@@ -3573,6 +3415,79 @@ mod tests {
         c.extra_abil = [2; EXTRA_ABIL_SLOTS];
         c.extra_abil_times = [88; EXTRA_ABIL_SLOTS];
         c.extra_abil_flag = [3; EXTRA_ABIL_SLOTS];
+        // S4b 评审 P3-F1：城堡绑定 / 掉落物 / ctor 抽数必须**全字段**覆盖（此前只断言子集，
+        // write_back 漏写它们仍会全绿）。
+        c.castle_binding = Some(CastleBinding {
+            castle_index: 3,
+            role: crate::castle::DefenseRole::Archer(2),
+        });
+        c.drop_items = vec![crate::combat::DropItem {
+            make_index: 900,
+            index: 7,
+            dura: 8,
+            dura_max: 9,
+            desc: [4u8; 14],
+        }];
+        c.ctor_draws = MonsterCtorDraws {
+            run_tick_delta: 9001,
+            base_search_time: 9002,
+            attack_tick_delta: 9003,
+            walk_tick_delta: 9004,
+            search_time: 9005,
+            meat_quality: 9006,
+            bo_fear_fire: true,
+            zil_kill_count: 9007,
+        };
+        // S4c-1/S4c-2：仆从/背包/商人/NPC/AI 也必须整包写回。
+        c.master = Some(90);
+        c.slave_relax = true;
+        c.slave_list = vec![91, 92];
+        c.special_children = vec![93];
+        c.is_slave = true;
+        c.is_clone = true;
+        c.slave_exp_level = 5;
+        c.slave_make_level = 6;
+        c.master_royalty_tick = 94;
+        c.master_tick = 95;
+        c.class_slave_list = vec![96, 97];
+        c.use_items[0] = UseItemSlot {
+            make_index: 98,
+            index: 99,
+            dura: 100,
+            dura_max: 101,
+            desc: [5u8; 14],
+        };
+        c.use_items[USE_ITEM_SLOTS - 1] = UseItemSlot {
+            make_index: 102,
+            index: 103,
+            dura: 104,
+            dura_max: 105,
+            desc: [6u8; 14],
+        };
+        let mut merchant = crate::merchant::MerchantState::new(
+            "merchant-wb".to_string(),
+            "map-wb".to_string(),
+            1,
+            2,
+            105,
+            true,
+            true,
+            106,
+            crate::merchant::MerchantFlags::default(),
+            vec![1, 2],
+            vec![],
+            107,
+        );
+        merchant.run_tick = 108;
+        c.merchant = Some(merchant);
+        c.npc = Some(crate::npc::NpcState {
+            npc_type: 2,
+            run_tick: 109,
+            ..crate::npc::NpcState::default()
+        });
+        c.ai.dir = 6;
+        c.ai.search_tick = 102;
+        c.ai.target_creature = Some(103);
         assert!(s.write_back(id, c), "write_back 必须命中实体");
 
         let r = s.get(id).expect("实体在场");
@@ -3608,7 +3523,7 @@ mod tests {
         );
         assert_eq!(
             (r.mon_gen, r.mon_gen_zen_time, r.ctor_draws.zil_kill_count),
-            (Some(5), 29, 36),
+            (Some(5), 29, 9007),
             "SpawnBinding"
         );
         assert_eq!(
@@ -3641,6 +3556,92 @@ mod tests {
             ),
             (Some(45), 46, true, 47, true),
             "PvpState"
+        );
+        assert_eq!(
+            r.castle_binding,
+            Some(CastleBinding {
+                castle_index: 3,
+                role: crate::castle::DefenseRole::Archer(2),
+            }),
+            "SpawnBinding.castle_binding 全字段"
+        );
+        assert_eq!(
+            r.drop_items.len(),
+            1,
+            "DropState.items 必须整包写回（S4b P3-F1）"
+        );
+        assert_eq!(
+            (
+                r.drop_items[0].make_index,
+                r.drop_items[0].index,
+                r.drop_items[0].dura,
+                r.drop_items[0].dura_max,
+                r.drop_items[0].desc,
+            ),
+            (900, 7, 8, 9, [4u8; 14]),
+            "DropState.items 全字段"
+        );
+        assert_eq!(
+            (
+                r.ctor_draws.run_tick_delta,
+                r.ctor_draws.base_search_time,
+                r.ctor_draws.attack_tick_delta,
+                r.ctor_draws.walk_tick_delta,
+                r.ctor_draws.search_time,
+                r.ctor_draws.meat_quality,
+                r.ctor_draws.bo_fear_fire,
+                r.ctor_draws.zil_kill_count,
+            ),
+            (9001, 9002, 9003, 9004, 9005, 9006, true, 9007),
+            "MonsterCtorDraws 全字段"
+        );
+        assert!(
+            r.master == Some(90)
+                && r.slave_relax
+                && r.slave_list.as_slice() == [91, 92]
+                && r.special_children.as_slice() == [93]
+                && r.is_slave
+                && r.is_clone
+                && r.slave_exp_level == 5
+                && r.slave_make_level == 6
+                && r.master_royalty_tick == 94
+                && r.master_tick == 95
+                && r.class_slave_list.as_slice() == [96, 97],
+            "SlaveState 全字段"
+        );
+        assert_eq!(
+            (r.use_items[0], r.use_items[USE_ITEM_SLOTS - 1]),
+            (
+                UseItemSlot {
+                    make_index: 98,
+                    index: 99,
+                    dura: 100,
+                    dura_max: 101,
+                    desc: [5u8; 14],
+                },
+                UseItemSlot {
+                    make_index: 102,
+                    index: 103,
+                    dura: 104,
+                    dura_max: 105,
+                    desc: [6u8; 14],
+                },
+            ),
+            "Inventory 首尾槽（整数组）"
+        );
+        assert_eq!(
+            r.merchant.map(|m| (m.script_name.as_str(), m.run_tick)),
+            Some(("merchant-wb", 108)),
+            "MerchantState 载荷"
+        );
+        assert_eq!(
+            r.npc.map(|n| (n.npc_type, n.run_tick)),
+            Some((2, 109)),
+            "NpcState 载荷"
+        );
+        assert!(
+            r.ai.dir == 6 && r.ai.search_tick == 102 && r.ai.target_creature == Some(103),
+            "AiState 载荷"
         );
         assert!(
             r.invisible
@@ -3747,15 +3748,15 @@ mod tests {
         let mut s = EntityStore::new();
         let a = s.alloc_id();
         let b = s.alloc_id();
-        s.insert(Entity::new(a, "a", 1, 1));
-        s.insert(Entity::new(b, "b", 2, 2));
+        s.insert(crate::EntitySpawn::new(a, "a", 1, 1));
+        s.insert(crate::EntitySpawn::new(b, "b", 2, 2));
         assert_eq!(
             s.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
             vec!["a", "b"]
         );
         s.remove(a);
         let c = s.alloc_id();
-        s.insert(Entity::new(c, "c", 3, 3));
+        s.insert(crate::EntitySpawn::new(c, "c", 3, 3));
         // 回收槽复用：c 落在 a 的槽位（顺序 = 槽位顺序，判据①钉住这一点）
         assert_eq!(
             s.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
