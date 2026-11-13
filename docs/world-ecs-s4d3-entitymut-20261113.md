@@ -28,10 +28,12 @@
    越白名单立即编译失败。运行期另有一层 fail-closed 断言（镜像白名单 + 组件注册表），
    只用于堵住「泛型/dyn 绕过」路径，并配负例牙。
 5. **panic 恢复（review F5）显式登记为「不做热恢复」**；窗口数的口径是**分阶段**的：
-   **P0+P1 中间态 = 4 个 `SimState` 搬移窗口 / tick**（Clock / Snapshot / Drain / AOI），
-   **P7 收口目标才是 2 个**（head 一个、tail 一个：其余段全部系统化后 head 只跑一次）。
-   本批只保证哨兵覆盖全部窗口；不宣称已收敛到 2。哨兵让下一次 tick 立即 fail-fast，
-   而不是在 `SimState::default()` 上空转。
+   **P0+P1 中间态 = 4 个 `SimState` 搬移窗口 / tick**（Clock / Snapshot / Drain / AOI）、
+   **P2 = 8 个**（head 6：Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
+   SimPlayerRunExpiry / OutputDrain；tail 2：TailSuperManRefill / OutputAoi）、
+   **P2b = 9 个**（再 +`SimMapEvents`）。**P7 收口目标才是 2 个**（head 一个、tail 一个：
+   其余段全部系统化后 head 只跑一次）。每个迁移批次只保证哨兵覆盖**该批实际存在**的窗口，
+   不宣称已收敛到 2。哨兵让下一次 tick 立即 fail-fast，而不是在 `SimState::default()` 上空转。
 6. **顺序载体不是一律 `TickEntityIds`**：每段有**旧实现自己的语义载体**（命令 FIFO、
    `npc_ids_sorted` / `merchant_ids_sorted` 的 id 升序、`SelfDelayQueue::actor_ids` 入队序、
    事件数组序）。新实现**逐段照抄旧载体**，`TickEntityIds`（槽位序）只在旧实现本来就用
@@ -306,6 +308,15 @@ facade 侧：取回 sim / record / ids，删掉落的一次性资源
   「段声明了未注册组件导致构建期 panic」；删掉 `registry.assert_registered::<C>()`
   这一行，该测试必须红（证明断言真的接线了）。
 
+**设计与实现的偏差登记（P2/P2b 交付后核实；P3-DESIGN-DIVERGENCE）**
+
+| # | 设计写法 | 实现（交付 head） | 理由 / 不变量 |
+| --- | --- | --- | --- |
+| Dv1 | 运行期镜像用 `debug_assert!`（§2.4 第 2 条） | **always-on `assert!`**（`assert_stage_component` / `assert_view_access`） | 段适配器误用是**接线错误**（不是业务输入）：release 也必须 fail-closed，否则「标记 trait 与运行期白名单漂移」「组合视图越界」在发布构建里静默通过。成本 = 每次取组件一次 `TypeId` 比较（无分配）。P2b 起它还承担泛型实例判别与组合视图逐项核对 |
+| Dv2 | 顺序载体一律 `TickEntityIds`（§2.6，由 `SlotTable` 派生） | 段内直接用 **`SlotTable::order()`**（常驻资源，每段入口取一次）；`TickEntityIds` 只在 `SimHiterSnapshot` 使用（`OutputAoi` 用的是 `AoiIds`，不是 `TickEntityIds`） | 语义同一（槽位序 = 插入序 + 空闲槽 LIFO 复用；`SlotTable::order` 就是该契约的唯一真值）。D1 已把槽位表定为常驻资源，再复制一份 `TickEntityIds` 只会引入第二真值（D3 登记：`TickOrder`/`SlotOrder` 清理进 S5） |
+| Dv3 | 「组装的组合视图任一字段取不到 ⇒ `None`；遍历时跳过」（§2.3） | **按组件**语义：`get::<C>` / `get_mut::<C>` 只在**该组件**缺失时 `None`（并 `StageSkip::component_missing += 1`）；组合视图（`view_*`）与 `snapshot_spawn`/`entity_ref` 才是「任一字段缺失 ⇒ `None`」 | 旧 facade 的两类读点本来就分这两类：`EntityStore::get`/`spawn_cloned` 是整条记录（24 组件全有才 `Some`），而适配器的 `get::<C>` 对应旧 `entities.get(id).field` 的按字段读。**不变量**：生产路径的 21+4 bundle 对每个实体齐全 ⇒ 半实体只可能出现在测试夹具；任何段在半实体上取到部分组件时 `StageSkip::component_missing` 非 0（诊断计数，不改变 `None`/跳过语义） |
+| Dv4 | `StageSkip` 描述为「本 tick 里」的计数（§2.4） | **世界生命期累计**（`AtomicU64` 只增不减，不按 tick 重置） | 免掉每 tick 一次清零写；计数只作诊断（非 0 = 接线 bug/半实体），绝对值不参与任何判据 |
+
 ### 2.5 段内 panic / 恢复路径（must_cover #5，review F5）
 
 F5 的事实：段系统 panic 时 `facade.sim` 已被 `mem::take` 成 `Default`，移入的 `SimState`
@@ -316,12 +327,14 @@ F5 的事实：段系统 panic 时 `facade.sim` 已被 `mem::take` 成 `Default`
    任何段 panic 意味着世界状态已不可信；项目既有口径是 fail-fast（`expect` 而非
    `unwrap_or_default`，S3b 评审 P3-1 同口径）。热恢复会制造「看起来活着、其实状态已丢」
    的服务器，风险高于停机。
-2. **窗口数（返工 P3-3 订正）**：P0+P1 的**中间态是 4 个 `SimState` 搬移窗口 / tick**
-   （`Clock` / `SimHiterSnapshot` / `OutputDrain` / `OutputAoi`；`Clock` 也走
-   `run_head_stage`，因为本批仍与内联段交错）。**P7 收口目标才是 2 个**（head 一个、
-   tail 一个：其余段全部系统化后 head 只跑一次）。本批**不**宣称已收敛到 2——那是 P7 的
-   验收项，P0+P1 只保证哨兵覆盖全部 4 个窗口。head 边界一次移入 `SimState`、`TickRecordRes`、
-   `TickEntityIds`（`SlotTable` 按 D1 为常驻资源，不参与搬移），tail 边界同形。
+2. **窗口数（P3-3 订正中，P2b 再订正）**：窗口数随已系统化的段**单调增加**，按批纪事：
+   P0+P1 = **4**（`Clock` / `SimHiterSnapshot` / `OutputDrain` / `OutputAoi`）、
+   P2 = **8**（head 6 = Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
+   SimPlayerRunExpiry / OutputDrain；tail 2 = TailSuperManRefill / OutputAoi）、
+   **P2b 交付 head = 9**（+`SimMapEvents`，head 7 + tail 2）。
+   **P7 收口目标才是 2 个**（head 一个、tail 一个：其余段全部系统化后 head 只跑一次）。
+   任何一批都**不**宣称已收敛到 2——那是 P7 的验收项。head 边界一次移入 `SimState`、
+   `TickRecordRes`、`TickEntityIds`（`SlotTable` 按 D1 为常驻资源，不参与搬移），tail 边界同形。
 3. **fail-fast 哨兵**：facade 侧加 `sim_in_flight: bool`（不进 `SimState`，是 facade 的
    暂态位）：`mem::take` 前置 `true`，`remove_resource` 归还后置 `false`；`tick_head`
    入口断言 `!self.sim_in_flight`，失败信息写明「上一次 tick 在段内 panic 且未恢复」。
@@ -543,6 +556,17 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
 
 组合视图（每段一个，宏生成）：`StageViewMut<'a>` 的字段等于白名单并集，
 `StageEntities::view_mut(id) -> Option<StageViewMut<'_>>`。
+
+> **落地形态（P2 / P2b 偏差登记）**：没有生成「每段一个 `StageViewMut` 字段视图」（bevy 的
+> `QueryData` 无法在编译期枚举组件，宏也不可能知道白名单并集）。实际实现：
+> * 组合视图用**元组**表达（`(&A, &B)` / `(&mut A, &B)`），并要求实现 `ViewAccess`
+>   （`&C` = 读、`&mut C` = 写，元组 1..=15 逐项组合）；
+> * `view_mut<Q: QueryData + ViewAccess>` 与只读的 `view_ref<Q: QueryData<ReadOnly = Q> + ViewAccess>`
+>   在借出视图**之前**逐项核对 `ComponentRegistry` 与本段 `reads()`/`writes()`（P2b
+>   P2-VIEW-MUT-BYPASS；空名单段不可绕过）；
+> * `snapshot_spawn`（owned `EntitySpawn`）与 `entity_ref`（`EntityRef`）由 **world 侧**扩展
+>   trait `StageSnapshotExt` 提供——`EntitySpawn`/`EntityRef` 是本 crate 类型，world-bevy 不能
+>   反向依赖；装配体与 facade 共用 `EntityStore::from_components` / `EntityRef::from_components`。
 
 ### 3.4 段宿主：`StageWorld` 与 facade 的薄包装（D2）
 

@@ -17,8 +17,10 @@ use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{
-    advance_clock_system, tick::StageTrace, Appearance, BuffState, CombatAttribution, Flags,
-    LifeCycle, PlayerRunState, TickClock, TickOwnerThread, TickRunner, TickStage, Vitals,
+    advance_clock_system,
+    tick::{StageEntities, StageSpec, StageTrace},
+    Appearance, BuffState, CombatAttribution, Flags, LifeCycle, PlayerRunState, TickClock,
+    TickOwnerThread, TickRunner, TickStage, Vitals,
 };
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
@@ -30,7 +32,7 @@ use crate::combat::{
     attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
-use crate::entity::{EntitySpawn, EntityStore, PvpView};
+use crate::entity::{EntitySpawn, EntityStore, PvpView, StageSnapshotExt};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
 
@@ -1435,12 +1437,14 @@ pub fn output_drain_system(
         .append(&mut sim.pending_show_hp_health_changes);
 }
 
-/// **S4d-3/P1**：head 侧的段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
+/// **S4d-3/P1 起、P2/P2b 扩到 7 段**：head 侧的段运行器组（`Clock` / `SimHiterSnapshot` /
+/// `SimExpireHitters` / `SimExtraAbil` / `SimMapEvents` / `SimPlayerRunExpiry` / `OutputDrain`）。
 ///
-/// 为什么是三个 `TickRunner` 而不是一个：这三段之间仍夹着尚未系统化的内联段
-/// （命令 FIFO、命中者过期、…、重叠推挤；P2–P7 逐批消灭）。合成一次 `run` 会把三段挤到
-/// 一起，改变段序与 RNG 消费者次序（`SimHiterSnapshot` 必须在命令 FIFO 之后、
-/// `OutputDrain` 必须在 `check_dup_obj` 之后）。P7 收口后 head 侧应合成**一个** `TickRunner`。
+/// 为什么是七个 `TickRunner` 而不是一个：这些段之间仍夹着尚未系统化的内联段
+/// （命令 FIFO、死亡结算、…、重叠推挤；P3–P7 逐批消灭）。合成一次 `run` 会把已系统化的段
+/// 挤到一起，改变段序与 RNG 消费者次序（`SimHiterSnapshot` 必须在命令 FIFO 之后、
+/// `SimMapEvents` 必须在 `SimExtraAbil` 之后且 `SimSlaveCleanup` 之前、`OutputDrain` 必须在
+/// `check_dup_obj` 之后）。P7 收口后 head 侧应合成**一个** `TickRunner`。
 pub struct HeadRunner {
     /// 段 -> 该段的 `TickRunner`（每段一个 schedule，段之间仍由 facade 的内联段分隔）。
     runners: Vec<(TickStage, TickRunner)>,
@@ -1455,6 +1459,7 @@ impl HeadRunner {
         me.add(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
         me.add(TickStage::SimExpireHitters, expire_hitters_stage_system);
         me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
+        me.add(TickStage::SimMapEvents, sim_map_events_stage_system);
         me.add(
             TickStage::SimPlayerRunExpiry,
             expire_player_run_state_stage_system,
@@ -1722,6 +1727,221 @@ pub fn tail_super_man_refill_stage_system(world: &mut bevy_ecs::world::World) {
             v.hp = v.max_hp;
             v.mp = v.max_mp;
         }
+    }
+}
+
+mir2_world_bevy::stage_spec!(
+    SimMapEvents,
+    TickStage::SimMapEvents,
+    read: [
+        crate::entity::Entity,
+        crate::entity::Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        mir2_world_bevy::Recovery,
+        mir2_world_bevy::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        mir2_world_bevy::MonsterClassState,
+        PlayerRunState,
+        mir2_world_bevy::GroupState,
+        mir2_world_bevy::Revival,
+        BuffState,
+        mir2_world_bevy::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: []
+);
+
+/// 段内计划：一个已过 `fire_run_tick` 门的火墙事件要做的实体工作。
+struct MapEventWork {
+    owner_id: Option<i32>,
+    damage: i32,
+    /// 事件格的 `GetBaseObjects(..., boFlag=true)` **枚举面**（未做 Death 过滤）。
+    candidates: Vec<i32>,
+}
+
+/// `Envirnoment.GetBaseObjects(nX, nY, boFlag=true)` 的枚举面（`Envirnoment.cs:1311-1342`）：
+/// 格子有效 ⇒ 依 `ObjList` 顺序给出 `cell_obj_id > 0 && actor_object` 的 id。
+///
+/// 与 [`World::base_objects_at`] 的差别只在最后一步：那里用 `entities.get(id).death` 过滤；
+/// 段内没有 `EntityStore`，Death 位由 `StageEntities` 读**同一个 `LifeCycle` 组件** ⇒ 真值源与
+/// 过滤次序（格判定之后、逐项短路）都相同。
+fn map_cell_object_ids(maps: &[MapGrid], map_id: usize, x: i32, y: i32) -> Vec<i32> {
+    let Some(map) = maps.get(map_id) else {
+        return Vec::new();
+    };
+    let (cell, success) = map.get_cell_info(x, y);
+    if !success || !cell.is_available() {
+        return Vec::new();
+    }
+    cell.obj_list
+        .iter()
+        .filter(|o| o.cell_obj_id > 0 && o.actor_object)
+        .map(|o| o.cell_obj_id)
+        .collect()
+}
+
+/// 段内的 `IsGroupMember` 注册表源（旧 [`World::attacker_group_members`] 的同源实现）：
+/// 团长（`GroupOwner`）实体持有的 `GroupMembers`；`GroupOwner == 0` ⇒ 空表。
+fn stage_group_members<S>(ad: &mut StageEntities<'_, S>, attacker: &EntitySpawn) -> Vec<i32>
+where
+    S: StageSpec + mir2_world_bevy::tick::Reads<mir2_world_bevy::GroupState>,
+{
+    let group = attacker.group_state();
+    if group.group_owner == 0 {
+        return Vec::new();
+    }
+    ad.get::<mir2_world_bevy::GroupState>(group.group_owner)
+        .map(|g| g.group_members.clone())
+        .unwrap_or_default()
+}
+
+/// **S4d-3/P2b 段 #7 `SimMapEvents`**：地图事件处理器（`EventProcessor.ExecuteInternal` 的单线程
+/// 等价物），逐项对应旧 `World::run_map_events`：
+///
+/// 1. 火墙**逆插入序**、三重门（`closed` / `!active` / `now - run_start <= run_tick` 跳过）；
+///    过门先 `run_start = now`，再过 `now - fire_run_tick > 3000` 才结算（`fire_run_tick = now`）；
+/// 2. 施法者 = `snapshot_spawn(owner_id)` 且 `!ghost && !death`（与旧 `spawn_cloned` 同源）；
+/// 3. 目标枚举 = 事件格 `GetBaseObjects(..., boFlag=true)`（格内序）→ 段内按 `LifeCycle.death`
+///    过滤（与旧 `base_objects_at` 的 `!e.death` 同源）；
+/// 4. 组队成员表 = 团长实体的 `GroupMembers`（与旧 `attacker_group_members` 同源）；
+/// 5. `is_proper_target_grouped_direct(&o, &t, &group)` 的 target 是 `EntityRef`（与旧
+///    `entities.get(tid)` 同源）；命中目标按「事件逆序 × 格内序」入 `pending_mag_struck`，
+///    `order` 从段入口的 `msg_order` 起连续递增；
+/// 6. 关闭门（严格 `>`）与 `owner_id` 归一（`Ghost || Death` ⇒ `None`）；`DigOut` 事件同门；
+/// 7. **不抽 RNG**（与旧实现一致）。
+///
+/// 分段理由（设计 §2.2 A4）：`maps` 与实体组件不能同时借用 ⇒ Phase 1 只碰 `SimState`
+/// （时钟 / 事件表 / 格子表枚举），Phase 2 只碰实体（`StageEntities`），Phase 3 回写 `SimState`。
+/// 段内没有实体写入，因此三个阶段的拆分不改变任何可观测顺序。
+pub fn sim_map_events_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimMapEvents);
+
+    // ---- Phase 1：只碰 SimState；收集实体工作与「存活检查」清单 ----
+    let mut work: Vec<MapEventWork> = Vec::new();
+    let mut alive_checks: Vec<(usize, Option<i32>)> = Vec::new();
+    {
+        let mut sim_guard = world.resource_mut::<SimState>();
+        let now = sim_guard.clock_ms;
+        let SimState {
+            maps,
+            fire_burn_events,
+            dig_out_events,
+            ..
+        } = &mut *sim_guard;
+        let len = fire_burn_events.len();
+        for i in (0..len).rev() {
+            let ev = &fire_burn_events[i];
+            if ev.closed || !ev.active || now - ev.run_start_ms <= ev.run_tick_ms {
+                continue;
+            }
+            fire_burn_events[i].run_start_ms = now;
+            let (map_id, x, y, damage, owner_id) = {
+                let ev = &fire_burn_events[i];
+                (ev.map_id, ev.x, ev.y, ev.damage, ev.owner_id)
+            };
+            if now - fire_burn_events[i].fire_run_tick_ms > 3000 {
+                fire_burn_events[i].fire_run_tick_ms = now;
+                work.push(MapEventWork {
+                    owner_id,
+                    damage,
+                    candidates: map_cell_object_ids(maps, map_id, x, y),
+                });
+            }
+            let (open_start, continue_ms) = {
+                let ev = &fire_burn_events[i];
+                (ev.open_start_ms, i64::from(ev.continue_ms))
+            };
+            if now - open_start > continue_ms {
+                fire_burn_events[i].closed = true;
+                fire_burn_events[i].visible = false;
+            }
+            alive_checks.push((i, owner_id));
+        }
+        // `ET_DIGOUTZOMBI`：`RunTick=500ms` 门 + 关闭门（严格 `>`），`Closed` 即 retain 掉。
+        if !dig_out_events.is_empty() {
+            for ev in dig_out_events.iter_mut() {
+                if ev.closed || now - ev.run_start_ms <= ev.run_tick_ms {
+                    continue;
+                }
+                ev.run_start_ms = now;
+                if now - ev.open_start_ms > ev.continue_ms {
+                    ev.closed = true;
+                }
+            }
+            dig_out_events.retain(|e| !e.closed);
+        }
+    }
+
+    // ---- Phase 2：只碰实体（快照 / 判定链）；输出 owned 的待入队消息与存活位 ----
+    let mut pending: Vec<PendingMagStruck> = Vec::new();
+    let mut alive: Vec<(usize, bool)> = Vec::with_capacity(alive_checks.len());
+    {
+        let mut ad = mir2_world_bevy::tick::StageEntities::<SimMapEvents>::new(world);
+        for w in &work {
+            let owner = w
+                .owner_id
+                .and_then(|id| ad.snapshot_spawn(id))
+                .filter(|e| !e.ghost && !e.death);
+            let Some(o) = owner else {
+                continue;
+            };
+            let group = stage_group_members(&mut ad, &o);
+            for tid in &w.candidates {
+                // 旧 `base_objects_at` 的 `!e.death`（同一 `LifeCycle` 组件；id 不在槽位表 ⇒ 跳过）。
+                if !ad.get::<LifeCycle>(*tid).is_some_and(|l| !l.death) {
+                    continue;
+                }
+                let Some(t) = ad.entity_ref(*tid) else {
+                    continue;
+                };
+                if crate::combat::is_proper_target_grouped_direct(&o, &t, &group) {
+                    pending.push(PendingMagStruck {
+                        target_id: *tid,
+                        caster_id: o.id,
+                        power: w.damage,
+                        mine: true,
+                        order: 0,
+                    });
+                }
+            }
+        }
+        for (index, owner_id) in &alive_checks {
+            let still_alive = owner_id.is_some_and(|id| {
+                ad.get::<LifeCycle>(id)
+                    .is_some_and(|l| !l.ghost && !l.death)
+            });
+            alive.push((*index, still_alive));
+        }
+    }
+
+    // ---- Phase 3：回写 SimState（`owner_id` 归一 + 消息入队序） ----
+    {
+        let mut sim = world.resource_mut::<SimState>();
+        for (index, still_alive) in alive {
+            if !still_alive {
+                if let Some(ev) = sim.fire_burn_events.get_mut(index) {
+                    ev.owner_id = None;
+                }
+            }
+        }
+        let base = sim.msg_order;
+        let count = pending.len() as u64;
+        for (offset, mut msg) in pending.into_iter().enumerate() {
+            msg.order = base + offset as u64;
+            sim.pending_mag_struck.push(msg);
+        }
+        sim.msg_order = base + count;
     }
 }
 
@@ -4255,6 +4475,11 @@ impl World {
     ///
     /// `boFlag=true` 时判据按 C# 的 `(!Ghost && !boFlag) || !Death` 化简为 **`!Death`**
     /// （存活但 `Ghost` 的对象仍会被收集——oracle 的运算符优先级怪行为，照搬）。
+    ///
+    /// **P2b 起非生产路径**：`SimMapEvents` 段拆成「格子枚举（[`map_cell_object_ids`]）+
+    /// 段内 `LifeCycle.death` 过滤」（两者同真值源）；本函数保留为 facade 侧参照实现与
+    /// `monai` 测试（`base_objects_at(0, 11, 10)`）的对照面，P7 收口时随内联段一并清理。
+    #[allow(dead_code)]
     pub(crate) fn base_objects_at(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
         let Some(map) = self.maps.get(map_id) else {
             return Vec::new();
@@ -4895,73 +5120,10 @@ impl World {
     /// `FireBurnEvent.Run`（`FireBurnEvent.cs:23-43`）：`now - FireRunTick > 3000` 才结算；
     /// `MapEvent.Run` 尾：`now - OpenStartTick > ContinueTime`（严格大于）⇒ `Closed`。
     pub fn run_map_events(&mut self) {
-        let now = self.clock_ms;
-        let len = self.fire_burn_events.len();
-        for i in (0..len).rev() {
-            let ev = &self.fire_burn_events[i];
-            if ev.closed || !ev.active || now - ev.run_start_ms <= ev.run_tick_ms {
-                continue;
-            }
-            self.fire_burn_events[i].run_start_ms = now;
-            let (map_id, x, y, damage, owner_id) = {
-                let ev = &self.fire_burn_events[i];
-                (ev.map_id, ev.x, ev.y, ev.damage, ev.owner_id)
-            };
-            if now - self.fire_burn_events[i].fire_run_tick_ms > 3000 {
-                self.fire_burn_events[i].fire_run_tick_ms = now;
-                let owner = owner_id
-                    .and_then(|id| self.entities.spawn_cloned(id))
-                    .filter(|e| !e.ghost && !e.death);
-                if let Some(o) = owner {
-                    let group = self.attacker_group_members(&o);
-                    for tid in self.base_objects_at(map_id, x, y) {
-                        let proper = self.entities.get(tid).is_some_and(|t| {
-                            crate::combat::is_proper_target_grouped_direct(&o, &t, &group)
-                        });
-                        if proper {
-                            let order = self.msg_order;
-                            self.msg_order += 1;
-                            self.pending_mag_struck.push(PendingMagStruck {
-                                target_id: tid,
-                                caster_id: o.id,
-                                power: damage,
-                                mine: true,
-                                order,
-                            });
-                        }
-                    }
-                }
-            }
-            // `base.Run()` 的关闭门（严格大于）与 `OwnBaseObject` 的 Ghost/Death 归一。
-            let (open_start, continue_ms) = {
-                let ev = &self.fire_burn_events[i];
-                (ev.open_start_ms, i64::from(ev.continue_ms))
-            };
-            if now - open_start > continue_ms {
-                self.fire_burn_events[i].closed = true;
-                self.fire_burn_events[i].visible = false;
-            }
-            let still_alive = owner_id
-                .is_some_and(|id| self.entities.get(id).is_some_and(|e| !e.ghost && !e.death));
-            if !still_alive {
-                self.fire_burn_events[i].owner_id = None;
-            }
-        }
-        // **MB-1**：`EventProcessor` 对 `ET_DIGOUTZOMBI` 事件的 `RunTick=500ms` 门与
-        // `MapEvent.Run` 的关闭门（`now - OpenStartTick > ContinueTime`，严格大于）。
-        // `Closed` 后 `EventProcessor` 立即移出 `Events`（`EventProcessor.cs:40-44`）⇒ retain。
-        if !self.dig_out_events.is_empty() {
-            for ev in &mut self.dig_out_events {
-                if ev.closed || now - ev.run_start_ms <= ev.run_tick_ms {
-                    continue;
-                }
-                ev.run_start_ms = now;
-                if now - ev.open_start_ms > ev.continue_ms {
-                    ev.closed = true;
-                }
-            }
-            self.dig_out_events.retain(|e| !e.closed);
-        }
+        // S4d-3/P2b #7：段系统（`SimMapEvents`），段位与旧内联调用完全相同。
+        // 段内实现见 [`sim_map_events_stage_system`]；本入口保留给宿主（`bins/game-svr`）
+        // 与直接驱动一段的用例（与 [`World::expire_player_run_state`] 同形的兼容入口）。
+        self.run_head_stage(|world, head| head.run(TickStage::SimMapEvents, world));
     }
 
     /// **P3-B5**：36 无极真气效果体（`MagicManager.cs:610-630` 的 `:612-625`）。
@@ -8512,12 +8674,123 @@ mod tests {
                 TickStage::SimHiterSnapshot,
                 TickStage::SimExpireHitters,
                 TickStage::SimExtraAbil,
+                TickStage::SimMapEvents,
                 TickStage::SimPlayerRunExpiry,
                 TickStage::OutputDrain,
                 TickStage::TailSuperManRefill,
                 TickStage::OutputAoi
             ],
-            "tick 必须按 STAGE_ORDER 推进 head 三段 + tail 一段"
+            "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
+        );
+    }
+
+    /// **P2b**：`SimMapEvents` 段与旧 `run_map_events` 的判定链等价（火墙命中入队）。
+    ///
+    /// 造一个 `Race == Play` 的施法者 + 同格同族目标，火墙事件过两个门后应产生**恰一条**
+    /// `RM_MAGSTRUCK_MINE`（`mine=true`、`power` = 事件伤害、`caster_id` = 施法者）。
+    ///
+    /// 牙①：删掉段内 `is_proper_target_grouped_direct` 调用（改为无条件 push）⇒ 追加的
+    /// 「施法者自身」也会入队 ⇒ 条数断言红；
+    /// 牙②：删掉 `now - fire_run_tick > 3000` 门（或删 `fire_run_tick = now`）⇒ 第二次调用
+    /// 重复入队 ⇒ 条数断言红；
+    /// 牙③：删掉施法者 `!ghost && !death` 过滤 ⇒ 幽灵施法者用例红（见下一条用例）。
+    #[test]
+    fn sim_map_events_stage_enqueues_mag_struck_for_proper_targets() {
+        let mut w = World::new(8, 8);
+        let caster_id = w.entities.insert({
+            let mut e = crate::EntitySpawn::new(1, "caster", 2, 2);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        let target_id = w.entities.insert({
+            let mut e = crate::EntitySpawn::new(2, "target", 2, 2);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        assert!(w.enter_world(caster_id));
+        assert!(w.enter_world(target_id));
+
+        w.add_fire_burn_event(caster_id, 0, 2, 2, 17, 60_000);
+        w.clock_ms = 5_000;
+        w.fire_burn_events[0].run_start_ms = 1_000;
+        w.fire_burn_events[0].fire_run_tick_ms = 0;
+        // 前置（同源对照）：facade 的 `base_objects_at`（含 Death 过滤）与段内的
+        // 「格子枚举 + LifeCycle.death 过滤」在同一份格子表上给出同一条目表。
+        assert_eq!(
+            w.base_objects_at(0, 2, 2),
+            vec![caster_id, target_id],
+            "旧 facade 枚举面"
+        );
+        assert_eq!(
+            map_cell_object_ids(&w.maps, 0, 2, 2),
+            vec![caster_id, target_id],
+            "段内枚举面必须与旧 facade 同序同集（同格两实体都在场）"
+        );
+        let base_order = w.msg_order;
+        w.run_map_events();
+        assert_eq!(
+            w.pending_mag_struck.len(),
+            1,
+            "同格同族目标 ⇒ 恰一条；施法者自身必须被 id 相等门排除"
+        );
+        let msg = w.pending_mag_struck[0];
+        assert_eq!(
+            (msg.target_id, msg.caster_id, msg.power, msg.mine),
+            (target_id, caster_id, 17, true),
+            "RM_MAGSTRUCK_MINE 的载荷必须逐字段来自事件/施法者"
+        );
+        assert_eq!(msg.order, base_order, "order 从段入口 msg_order 起连续");
+        assert_eq!(w.msg_order, base_order + 1);
+        // 3s 门：同一时钟下再跑一次不得重复入队（fire_run_tick 已刷成 now）。
+        w.run_map_events();
+        assert_eq!(
+            w.pending_mag_struck.len(),
+            1,
+            "fire_run_tick 门必须阻止同一窗口内重复结算"
+        );
+        assert_eq!(w.msg_order, base_order + 1, "未入队则 msg_order 不得推进");
+    }
+
+    /// **P2b**：施法者 `Ghost || Death` ⇒ 火墙不结算（旧 `spawn_cloned(...).filter(!ghost && !death)`）。
+    ///
+    /// 牙：删掉段内 `.filter(|e| !e.ghost && !e.death)` ⇒ 本用例出现 1 条消息 ⇒ 红。
+    #[test]
+    fn sim_map_events_stage_skips_ghost_owner() {
+        let mut w = World::new(8, 8);
+        let caster_id = w.entities.insert({
+            let mut e = crate::EntitySpawn::new(1, "caster", 3, 3);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        let target_id = w.entities.insert({
+            let mut e = crate::EntitySpawn::new(2, "target", 3, 3);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        assert!(w.enter_world(caster_id));
+        assert!(w.enter_world(target_id));
+        w.entities.get_mut(caster_id).unwrap().life_cycle.ghost = true;
+
+        w.add_fire_burn_event(caster_id, 0, 3, 3, 9, 60_000);
+        w.clock_ms = 5_000;
+        w.fire_burn_events[0].run_start_ms = 1_000;
+        w.fire_burn_events[0].fire_run_tick_ms = 0;
+        w.run_map_events();
+        assert!(
+            w.pending_mag_struck.is_empty(),
+            "Ghost 施法者不得产生 RM_MAGSTRUCK_MINE"
+        );
+        assert!(
+            w.fire_burn_events[0].owner_id.is_none(),
+            "事件尾的 owner_id 归一必须落地（Ghost/Death ⇒ None），与旧 run_map_events 同项"
         );
     }
 

@@ -220,8 +220,14 @@ pub fn advance_clock_system(
 //     [`StageEntities`] 的方法带 `where S: Reads<C>` / `S: Writes<C>` 约束 ⇒ **越白名单是编译错误**；
 //   * 结构操作（`insert` / `remove`）另需 [`Structural`] 标记 ⇒ 非结构段调用也是编译错误；
 //   * **运行期镜像**（P2 前置，review P2-1）：每次取组件都核对 [`ComponentRegistry`] 里该组件的
-//     短名是否在本段 `READ`/`WRITE` 清单内，越界即 panic（fail-closed）——给「标记 trait 与
-//     名单表漂移」「泛型/dyn 转发」兜底；组件未注册同样 panic；
+//     **类型身份**（`TypeId`）是否在本段 `reads()` / `writes()` 白名单内，越界即 panic
+//     （fail-closed）——给「标记 trait 与名单表漂移」「泛型/dyn 转发」兜底；组件未注册同样 panic；
+//   * **泛型组件按实例区分**（P2b P2-GENERIC-NAMES）：白名单与注册表**都是 `TypeId` 口径**，
+//     `AbilitySnapshot<BaseAbil>` 与别的实例是两个独立条目；没有字符串比对，因此不需要
+//     「调用处写别名」，也没有「泛型永不匹配」的失效模式；
+//   * **组合视图同受约束**（P2b P2-VIEW-MUT-BYPASS）：`view_mut` / `view_ref` 要求
+//     `Q: ViewAccess`，取视图前对 `Q` 声明的**每个组件**逐项核对注册表与本段白名单
+//     （与 `get_mut` 同一套断言，越界即 panic）——空名单段不能经组合视图读写任意组件；
 //   * 拒绝语义**逐项照抄旧 facade 的 Option**：id 不在槽位表 / 实体已移除 / 组件缺失 ⇒ `None`
 //     并静默跳过；组件缺失另计 [`StageSkip::component_missing`]（诊断计数，不改变行为）。
 
@@ -237,16 +243,29 @@ use crate::ecs::SlotTable;
 ///
 /// 结构变更的编译期门是 [`Structural`] 标记 trait（只有 Command / NPC / 商人 /
 /// 宝宝清表会实现），不用常量：常量无消费者时是死配置（review P3-4）。
+///
+/// 白名单是**类型身份**（`TypeId`）而不是字符串：泛型组件的每个实例（`Gen<u8>` /
+/// `Gen<u16>`）是独立条目，`type_name` 的拼写差异（空格、模块路径、别名）都不参与判定。
 pub trait StageSpec: 'static {
     /// 本段在 [`STAGE_ORDER`] 里的阶段。
     const STAGE: TickStage;
-    /// 本段允许**读**的组件短名（与 [`Reads`] 实现必须一致；由 `stage_spec!` 生成）。
-    const READ: &'static [&'static str] = &[];
-    /// 本段允许**写**的组件短名（与 [`Writes`] 实现必须一致；由 `stage_spec!` 生成）。
-    const WRITE: &'static [&'static str] = &[];
+    /// 本段是否**允许读**该组件（由 [`stage_spec!`] 生成；默认不放行任何组件）。
+    ///
+    /// 与 [`Reads`] 标记 trait 是**两套独立声明**（编译期约束 / 运行期镜像）：正常路径两者由
+    /// `stage_spec!` 同步生成，手写 impl 若让它们漂移，运行期断言会 fail-closed（T-neg-1）。
+    fn reads(_id: TypeId) -> bool {
+        false
+    }
+    /// 本段是否**允许写**该组件（由 [`stage_spec!`] 生成；默认不放行任何组件）。
+    fn writes(_id: TypeId) -> bool {
+        false
+    }
 }
 
 /// 本段**允许读**的组件（标记 trait；由 `stage_spec!` 或手写 impl 生成）。
+///
+/// 这是**编译期**约束面：`StageEntities::get` 带 `S: Reads<C>` 绑定，越白名单编译失败。
+/// 运行期镜像见 [`StageSpec::reads`]（同一份 `stage_spec!` 同步生成两者）。
 pub trait Reads<C: Component> {}
 
 /// 本段**允许写**的组件（标记 trait；由 `stage_spec!` 或手写 impl 生成）。
@@ -255,17 +274,14 @@ pub trait Writes<C: Component<Mutability = bevy_ecs::component::Mutable>> {}
 /// 本段允许结构变更（增删实体）。
 pub trait Structural {}
 
-/// `type_name` 的短名（去模块路径与泛型参数）：`mir2_world_bevy::components::Vitals` ⇒ `Vitals`。
-pub fn short_type_name<C: 'static>() -> &'static str {
-    let full = core::any::type_name::<C>();
-    let base = full.split('<').next().unwrap_or(full);
-    base.rsplit("::").next().unwrap_or(base)
-}
-
-/// **组件注册表（资源）**：`TypeId` ⇒ 组件短名（P2 前置，设计 §2.4）。
+/// **组件注册表（资源）**：`TypeId` ⇒ 组件全名（P2 前置，设计 §2.4）。
 ///
-/// 用途有二：① 运行期镜像白名单的「名字来源」；② 「新组件忘了登记」的 fail-closed——
-/// 段里取一个未注册的组件直接 panic，而不是被静默当成 `None`。
+/// 用途有二：① 运行期镜像白名单的「类型身份」来源（**只比 `TypeId`**，字符串仅作诊断显示）；
+/// ② 「新组件忘了登记」的 fail-closed——段里取一个未注册的组件直接 panic，而不是被静默
+/// 当成 `None`。
+///
+/// 显示名用 `core::any::type_name`（含泛型参数与模块路径），因此 `Gen<u8>` / `Gen<u16>`
+/// 在诊断里也能区分（P2b P2-GENERIC-NAMES）。
 ///
 /// `EcsStore::new` 会插入空表；`EntityStore::new`（`crates/world`）把 25 个组件逐个登记。
 #[derive(Resource, Default)]
@@ -274,15 +290,21 @@ pub struct ComponentRegistry {
 }
 
 impl ComponentRegistry {
-    /// 登记一个组件类型（幂等）。
+    /// 登记一个组件类型（幂等；`TypeId` 是唯一键，泛型实例各占一项）。
     pub fn register<C: Component>(&mut self) -> &mut Self {
-        self.names.insert(TypeId::of::<C>(), short_type_name::<C>());
+        self.names
+            .insert(TypeId::of::<C>(), core::any::type_name::<C>());
         self
     }
 
-    /// 组件短名；未登记 ⇒ `None`。
+    /// 组件的显示名（含泛型参数）；未登记 ⇒ `None`。
     pub fn name_of<C: Component>(&self) -> Option<&'static str> {
-        self.names.get(&TypeId::of::<C>()).copied()
+        self.name_of_id(TypeId::of::<C>())
+    }
+
+    /// `TypeId` 口径的显示名；未登记 ⇒ `None`。
+    pub fn name_of_id(&self, id: TypeId) -> Option<&'static str> {
+        self.names.get(&id).copied()
     }
 
     /// 组件必须已登记，否则 panic（fail-closed）。
@@ -290,7 +312,16 @@ impl ComponentRegistry {
         assert!(
             self.name_of::<C>().is_some(),
             "组件 {} 未在 ComponentRegistry 注册：段适配器拒绝在未登记组件上工作（P2 前置）",
-            short_type_name::<C>()
+            core::any::type_name::<C>()
+        );
+    }
+
+    /// `TypeId` 口径的注册断言（组合视图用：那里只知道 `TypeId`）。
+    pub fn assert_registered_id(&self, id: TypeId) {
+        assert!(
+            self.names.contains_key(&id),
+            "组件 {id:?}（{}）未在 ComponentRegistry 注册：段适配器拒绝在未登记组件上工作（P2 前置）",
+            self.name_of_id(id).unwrap_or("<未登记>")
         );
     }
 
@@ -304,8 +335,9 @@ impl ComponentRegistry {
     }
 }
 
-/// **诊断计数（资源）**：本 tick 里「实体存在但组件缺失」的取组件次数（P2 前置，设计 §2.4）。
+/// **诊断计数（资源）**：世界生命期内「实体存在但组件缺失」的取组件次数（P2 前置，设计 §2.4）。
 ///
+/// **不按 tick 重置**（累加器只增不减；`StageSkip::default()` 的生命期 = 整个世界）。
 /// 21 个 bundle 组件对每个实体齐全，因此正常路径恒 0；非 0 即接线 bug 或半实体。
 #[derive(Resource, Default)]
 pub struct StageSkip {
@@ -338,6 +370,75 @@ impl StageQueries {
             .expect("StageQueries 的 TypeId 键与 QueryData 类型必须一一对应")
     }
 }
+
+/// **组合视图的访问声明**（P2b P2-VIEW-MUT-BYPASS，设计 §3.3 的实现形态）。
+///
+/// 为什么需要它：bevy 的 `QueryData` **不能在编译期枚举**自己由哪些组件构成，而
+/// `StageEntities::view_mut::<Q>` / `view_ref::<Q>` 必须像 `get_mut` 一样受「组件已注册 +
+/// 在本段白名单内」约束（否则空名单段可以经 `view_mut::<&mut Vitals>` 改任意组件）。
+/// 因此组合视图用一个**可枚举的声明**（本 trait）表达自己的访问集：
+///
+/// * `&C` ⇒ 读；`&mut C` ⇒ 写；
+/// * 元组逐项组合，最多 15 项（与 bevy `QueryData` 的元组上限一致）。
+///
+/// 约束的落点：`StageEntities` 在借出视图**之前**逐项核对 [`ComponentRegistry`] 与
+/// `S::reads` / `S::writes`，任一越界立即 panic（fail-closed）；删掉任一核对分支，
+/// 负例牙 `t_neg_4_*` / `t_neg_5_*` / `t_neg_6_*` 变红。
+///
+/// 限制：只有本 trait 有实现形的视图可用（`&C` / `&mut C` / 它们的元组）；需要
+/// `Option<&C>` / `Entity` / `With<T>` 等过滤器的视图**编不过**——那类视图的白名单
+/// 无法被适配器枚举，不支持比「静默绕过」安全。
+pub trait ViewAccess {
+    /// 把自己声明的每个组件交给 `f`（顺序 = 声明顺序；同一组件重复声明会出现多次）。
+    fn visit_components(f: &mut dyn FnMut(TypeId, AccessKind));
+}
+
+/// 组合视图里的单项访问方式（读 / 写）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AccessKind {
+    Read,
+    Write,
+}
+
+impl<C: Component> ViewAccess for &'static C {
+    fn visit_components(f: &mut dyn FnMut(TypeId, AccessKind)) {
+        f(TypeId::of::<C>(), AccessKind::Read);
+    }
+}
+
+impl<C: Component<Mutability = bevy_ecs::component::Mutable>> ViewAccess for &'static mut C {
+    fn visit_components(f: &mut dyn FnMut(TypeId, AccessKind)) {
+        f(TypeId::of::<C>(), AccessKind::Write);
+    }
+}
+
+macro_rules! tuple_view_access {
+    ($($idx:tt: $ty:ident),+ $(,)?) => {
+        impl<$($ty: ViewAccess),+> ViewAccess for ($($ty,)+) {
+            fn visit_components(f: &mut dyn FnMut(TypeId, AccessKind)) {
+                // 关联函数形式：元组的每项都是类型，不需要（也无法）构造实例。
+                $(<$ty as ViewAccess>::visit_components(f);)+
+            }
+        }
+    };
+}
+
+// bevy `QueryData` 的元组上限是 15，这里逐项对齐。
+tuple_view_access!(0: A);
+tuple_view_access!(0: A, 1: B);
+tuple_view_access!(0: A, 1: B, 2: C);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K, 11: L);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K, 11: L, 12: M);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K, 11: L, 12: M, 13: N);
+tuple_view_access!(0: A, 1: B, 2: C, 3: D, 4: E, 5: F, 6: G, 7: H, 8: I, 9: J, 10: K, 11: L, 12: M, 13: N, 14: O);
 
 /// **测试/诊断用**：本 tick 已执行的段序列（资源缺席 ⇒ 零开销、零行为）。
 ///
@@ -391,22 +492,51 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         self.world.resource::<SlotTable>().entity_of(id)
     }
 
-    /// **运行期镜像白名单**：组件必须已注册，且短名在本段对应清单里；否则 panic（fail-closed）。
+    /// **运行期镜像白名单**：组件必须已注册，且 `TypeId` 在本段对应访问集里；否则 panic
+    /// （fail-closed）。比较是**类型身份**，不是字符串（泛型实例各自独立）。
     fn assert_stage_component<C: Component>(&self, write: bool) {
         let registry = self
             .world
             .get_resource::<ComponentRegistry>()
             .expect("ComponentRegistry 必须已由 EcsStore::new 插入（段适配器前置）");
         registry.assert_registered::<C>();
-        let name = short_type_name::<C>();
-        let allowed = if write { S::WRITE } else { S::READ };
+        let id = TypeId::of::<C>();
+        let allowed = if write { S::writes(id) } else { S::reads(id) };
         assert!(
-            allowed.contains(&name),
+            allowed,
             "段 {:?} 越白名单{}组件 {}：运行期镜像与编译期标记 trait 必须一致（P2 前置）",
             S::STAGE,
             if write { "写" } else { "读" },
-            name
+            registry.name_of_id(id).unwrap_or("<未登记>")
         );
+    }
+
+    /// **组合视图的运行期核对**（P2b P2-VIEW-MUT-BYPASS）：`Q` 声明的每个组件都必须已注册、
+    /// 且在本段对应的 `reads()` / `writes()` 白名单内；任一不满足立即 panic。
+    ///
+    /// 与 [`Self::assert_stage_component`] 是同一套判据，只是组件来自 [`ViewAccess`] 的枚举。
+    fn assert_view_access<Q: ViewAccess>(&self) {
+        let registry = self
+            .world
+            .get_resource::<ComponentRegistry>()
+            .expect("ComponentRegistry 必须已由 EcsStore::new 插入（段适配器前置）");
+        let mut declared: Vec<(TypeId, AccessKind)> = Vec::new();
+        Q::visit_components(&mut |id, kind| declared.push((id, kind)));
+        // 空声明是**合法**的（空元组视图）；「声明了就必须逐项放行」是这里的判据。
+        for (id, kind) in declared {
+            registry.assert_registered_id(id);
+            let (allowed, verb) = match kind {
+                AccessKind::Read => (S::reads(id), "读"),
+                AccessKind::Write => (S::writes(id), "写"),
+            };
+            assert!(
+                allowed,
+                "段 {:?} 越白名单{}组件 {}：组合视图的每个组件都必须在本段白名单内（P2b P2-VIEW-MUT-BYPASS）",
+                S::STAGE,
+                verb,
+                registry.name_of_id(id).unwrap_or("<未登记>")
+            );
+        }
     }
 
     /// 记一次「实体存在但组件缺失」（诊断计数；不改变 `None` 的跳过语义）。
@@ -448,15 +578,37 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         self.world.get_mut::<C>(entity).map(|c| c.into_inner())
     }
 
+    /// **组合视图（只读）**：一次借用拿到同实体上 `Q` 声明的多组件引用
+    /// （`QueryData` 元组，如 `(&A, &B)`）。取视图前按 [`ViewAccess`] 逐项核对注册表与白名单。
+    ///
+    /// 与 [`Self::view_mut`] 的区别只有可变性：这里返回共享引用，因此可在同一作用域里连续
+    /// 取多个视图（例如把 24 组件快照分三段取齐再组装）。`Q: QueryData<ReadOnly = Q>` 在
+    /// 编译期钉住「只读」——带 `&mut` 的视图只能走 [`Self::view_mut`]。
+    pub fn view_ref<Q>(&mut self, id: i32) -> Option<Q::Item<'_, '_>>
+    where
+        Q: QueryData<ReadOnly = Q> + ViewAccess + 'static,
+    {
+        let entity = self.resolve(id)?;
+        self.assert_view_access::<Q>();
+        let queries = self.queries.as_mut()?;
+        let state = queries.state::<Q>(self.world);
+        state.get_manual(&*self.world, entity).ok()
+    }
+
     /// **组合视图**（P2 前置，设计 §3.3）：一次借用拿到同实体上 `Q` 声明的多组件
     /// （`QueryData` 元组，可含 `&mut`）。`Q` 由段自己声明，等价于「白名单里的多字段视图」。
+    ///
+    /// **与 `get_mut` 同受约束**（P2b P2-VIEW-MUT-BYPASS）：`Q: ViewAccess` 逐项核对注册表与
+    /// 本段白名单，空名单段 `view_mut::<(&mut Vitals,)>` 会 panic（负例牙
+    /// `t_neg_4_view_mut_rejects_components_outside_whitelist`）。
     ///
     /// 顺序/别名约束同 A1：视图借用期不超过本次调用；同一时刻只有一个实体视图。
     pub fn view_mut<Q>(&mut self, id: i32) -> Option<Q::Item<'_, '_>>
     where
-        Q: QueryData + 'static,
+        Q: QueryData + ViewAccess + 'static,
     {
         let entity = self.resolve(id)?;
+        self.assert_view_access::<Q>();
         let queries = self.queries.as_mut()?;
         let state = queries.state::<Q>(self.world);
         state.get_mut(self.world, entity).ok()
@@ -502,23 +654,29 @@ impl<S: StageSpec> Drop for StageEntities<'_, S> {
     }
 }
 
-/// **段规格声明宏**：一次生成 `StageSpec`（含 READ/WRITE 名单）+ `Reads`/`Writes` 标记 impl。
+/// **段规格声明宏**：一次生成 `StageSpec`（含运行期 `reads`/`writes` 白名单）+ `Reads`/`Writes`
+/// 标记 impl。
 ///
 /// ```text
 /// stage_spec!(SimExpireHitters, TickStage::SimExpireHitters,
 ///     read: [CoreIdentity, LifeCycle], write: [CombatAttribution]);
 /// ```
 ///
-/// 名单用 `stringify!` 生成短名（调用处写 `Vitals` 则名单就是 `"Vitals"`），与
-/// [`ComponentRegistry`] 的 `short_type_name` 同口径。泛型组件请在调用处写别名。
+/// 白名单用**类型身份**（`TypeId::of::<$r>()`）生成，与 [`ComponentRegistry`] 的键同口径：
+/// 泛型组件（`AbilitySnapshot<BaseAbil>`、`Gen<u8>`）按实例精确匹配，每个实例各占一项；
+/// 不需要写别名，也不存在字符串拼写差异（P2b P2-GENERIC-NAMES）。
 #[macro_export]
 macro_rules! stage_spec {
     ($spec:ident, $stage:expr, read: [$($r:ty),* $(,)?], write: [$($w:ty),* $(,)?]) => {
         pub struct $spec;
         impl $crate::tick::StageSpec for $spec {
             const STAGE: $crate::tick::TickStage = $stage;
-            const READ: &'static [&'static str] = &[$(stringify!($r)),*];
-            const WRITE: &'static [&'static str] = &[$(stringify!($w)),*];
+            fn reads(_id: ::core::any::TypeId) -> bool {
+                false $(|| _id == ::core::any::TypeId::of::<$r>())*
+            }
+            fn writes(_id: ::core::any::TypeId) -> bool {
+                false $(|| _id == ::core::any::TypeId::of::<$w>())*
+            }
         }
         $(impl $crate::tick::Reads<$r> for $spec {})*
         $(impl $crate::tick::Writes<$w> for $spec {})*
@@ -711,22 +869,26 @@ mod stage_adapter_tests {
 
     // ---------------- P2 前置：运行期镜像 / 未注册 / StageSkip / view_mut ----------------
 
-    /// T-neg-1：**标记 trait 与运行期名单漂移**（`Writes<B>` 有、`WRITE` 名单漏 B）⇒ 取组件
+    /// T-neg-1：**标记 trait 与运行期白名单漂移**（`Writes<B>` 有、`writes()` 漏 B）⇒ 取组件
     /// 必须 panic（fail-closed）。
     ///
     /// 牙：删掉 `get_mut` 里的 `assert_stage_component::<C>(true)` ⇒ 不再 panic ⇒ 红。
     struct Drift;
     impl StageSpec for Drift {
         const STAGE: TickStage = TickStage::SimBuff;
-        const READ: &'static [&'static str] = &["A"];
-        const WRITE: &'static [&'static str] = &["A"];
+        fn reads(id: TypeId) -> bool {
+            id == TypeId::of::<A>()
+        }
+        fn writes(id: TypeId) -> bool {
+            id == TypeId::of::<A>()
+        }
     }
     impl Writes<A> for Drift {}
     impl Writes<B> for Drift {}
     impl Reads<B> for Drift {}
 
     #[test]
-    #[should_panic(expected = "越白名单写组件 B")]
+    #[should_panic(expected = "越白名单写组件")]
     fn t_neg_1_mirror_catches_whitelist_drift() {
         let mut store = store_with(&[1]);
         assert!(store.insert_component(1, B(1)));
@@ -742,7 +904,9 @@ mod stage_adapter_tests {
     struct Unreg;
     impl StageSpec for Unreg {
         const STAGE: TickStage = TickStage::SimBuff;
-        const READ: &'static [&'static str] = &["Unregistered"];
+        fn reads(id: TypeId) -> bool {
+            id == TypeId::of::<Unregistered>()
+        }
     }
     impl Reads<Unregistered> for Unreg {}
 
@@ -753,6 +917,65 @@ mod stage_adapter_tests {
         assert!(store.insert_component(1, Unregistered(1)));
         let ad = StageEntities::<Unreg>::new(store.world_mut());
         let _ = ad.get::<Unregistered>(1);
+    }
+
+    // ---------------- P2b：泛型组件的类型身份（P2-GENERIC-NAMES） ----------------
+
+    /// 泛型组件：`Gen<u8>` / `Gen<u16>` 是**两个**组件类型（`TypeId` 不同）。
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct Gen<T>(T);
+
+    // T-generic-ok：`stage_spec!` 的白名单里写泛型实例 ⇒ 该实例的读**必须放行**。
+    //
+    // 牙（旧实现的失效模式）：`READ` 用 `stringify!` 时名单是 `"Gen < u8 >"`，而运行期
+    // `short_type_name` 是 `"Gen"` ⇒ 永不相等 ⇒ 正确声明的组件被误判越界。把白名单改回
+    // 字符串名单，本用例立刻 panic（`越白名单读组件`）。
+    stage_spec!(GenericProbe, TickStage::SimBuff, read: [Gen<u8>], write: []);
+
+    #[test]
+    fn t_generic_1_declared_instantiation_is_allowed() {
+        let mut store = EcsStore::<A>::new();
+        store
+            .register_component::<A>()
+            .register_component::<Gen<u8>>()
+            .register_component::<Gen<u16>>();
+        store.insert(1, A(1));
+        assert!(store.insert_component(1, Gen(7u8)));
+        let ad = StageEntities::<GenericProbe>::new(store.world_mut());
+        assert_eq!(
+            ad.get::<Gen<u8>>(1),
+            Some(&Gen(7u8)),
+            "声明了 Gen<u8> 就必须放行（泛型组件按实例匹配，不是按去掉参数的名字）"
+        );
+    }
+
+    /// T-generic-reject：**同一泛型类型的另一个实例**（`Gen<u16>`）不在白名单 ⇒ 必须 panic。
+    ///
+    /// 牙（旧实现的第二个失效模式）：字符串短名把 `Gen<u8>` / `Gen<u16>` 都归一成 `"Gen"`
+    /// ⇒ 另一个实例会被**误放行**。这里用「`reads()` 只放行 `Gen<u8>`、但标记 trait 声明了
+    /// `Reads<Gen<u16>>`」的手写段构造漂移，钉住运行期镜像按**实例**判别。
+    struct GenericDrift;
+    impl StageSpec for GenericDrift {
+        const STAGE: TickStage = TickStage::SimBuff;
+        fn reads(id: TypeId) -> bool {
+            id == TypeId::of::<Gen<u8>>()
+        }
+    }
+    impl Reads<Gen<u8>> for GenericDrift {}
+    impl Reads<Gen<u16>> for GenericDrift {}
+
+    #[test]
+    #[should_panic(expected = "越白名单读组件")]
+    fn t_generic_2_other_instantiation_is_rejected() {
+        let mut store = EcsStore::<A>::new();
+        store
+            .register_component::<A>()
+            .register_component::<Gen<u8>>()
+            .register_component::<Gen<u16>>();
+        store.insert(1, A(1));
+        assert!(store.insert_component(1, Gen(7u16)));
+        let ad = StageEntities::<GenericDrift>::new(store.world_mut());
+        let _ = ad.get::<Gen<u16>>(1);
     }
 
     /// `StageSkip::ComponentMissing`：实体存在但组件缺失 ⇒ 计数 +1；行为仍是 `None`/跳过。
@@ -778,14 +1001,10 @@ mod stage_adapter_tests {
 
     /// `view_mut`：一次借用拿到同实体上的组合视图（`&mut A` + `&B`），且 `QueryState` 缓存可复用。
     ///
+    /// 组合视图用**元组**声明（`&mut A` / `&B`）——它的组件集由 [`ViewAccess`] 自动枚举，
+    /// 因此适配器能在借出视图前逐项核对白名单。
+    ///
     /// 牙：把 `view_mut` 的 `state.get_mut(...)` 改成 `None`（或让 `StageQueries` 不落位）⇒ 红。
-    #[derive(bevy_ecs::query::QueryData)]
-    #[query_data(mutable)]
-    struct AbView {
-        a: &'static mut A,
-        b: &'static B,
-    }
-
     #[test]
     fn view_mut_reads_and_writes_combined_components() {
         let mut store = store_with(&[1]);
@@ -793,15 +1012,128 @@ mod stage_adapter_tests {
         {
             let mut ad = StageEntities::<Probe>::new(store.world_mut());
             {
-                let mut v = ad.view_mut::<AbView>(1).expect("组合视图");
-                v.a.0 += v.b.0;
+                let mut v = ad
+                    .view_mut::<(&'static mut A, &'static B)>(1)
+                    .expect("组合视图");
+                v.0 .0 += v.1 .0;
             }
             // 第二次仍可用（QueryState 已缓存、资源在 Drop 前自持）
-            let v2 = ad.view_mut::<AbView>(1).expect("组合视图（缓存）");
-            assert_eq!(v2.a.0, 6);
-            assert_eq!(v2.b.0, 5);
-            assert!(ad.view_mut::<AbView>(999).is_none(), "未知 id ⇒ None");
+            let v2 = ad
+                .view_mut::<(&'static mut A, &'static B)>(1)
+                .expect("组合视图（缓存）");
+            assert_eq!(v2.0 .0, 6);
+            assert_eq!(v2.1 .0, 5);
+            assert!(
+                ad.view_mut::<(&'static mut A, &'static B)>(999).is_none(),
+                "未知 id ⇒ None"
+            );
         }
         assert_eq!(store.get(1).map(|a| a.0), Some(6));
+    }
+
+    /// `view_ref`：只读组合视图走同一套白名单核对，且可连续取多次（共享借用）。
+    #[test]
+    fn view_ref_reads_combined_components() {
+        let mut store = store_with(&[1]);
+        assert!(store.insert_component(1, B(5)));
+        {
+            let mut ad = StageEntities::<Probe>::new(store.world_mut());
+            let v = ad
+                .view_ref::<(&'static A, &'static B)>(1)
+                .expect("只读视图");
+            assert_eq!((v.0 .0, v.1 .0), (1, 5));
+            // 共享借用结束后可再次取
+            assert!(ad.view_ref::<(&'static A, &'static B)>(999).is_none());
+        }
+    }
+
+    // ---------------- P2b：组合视图不得绕过白名单（P2-VIEW-MUT-BYPASS） ----------------
+
+    /// T-neg-4：**空白名单段** `view_mut` 任意组件必须被拒（reviewer 实测的绕过路径：
+    /// 空名单段 `view_mut::<&mut Vitals>` 把 hp 3→99）。
+    ///
+    /// 牙：删掉 `view_mut` 里的 `assert_view_access::<Q>()` ⇒ 不再 panic（且真的写进去）⇒ 红。
+    /// 这正是旧实现的行为，本用例是它的负例钉。
+    struct NoWrite;
+    impl StageSpec for NoWrite {
+        const STAGE: TickStage = TickStage::SimBuff;
+    }
+
+    #[test]
+    #[should_panic(expected = "越白名单写组件")]
+    fn t_neg_4_view_mut_rejects_components_outside_whitelist() {
+        let mut store = store_with(&[1]);
+        let mut ad = StageEntities::<NoWrite>::new(store.world_mut());
+        if let Some(mut a) = ad.view_mut::<(&'static mut A,)>(1) {
+            a.0 .0 = 99;
+        }
+    }
+
+    /// T-neg-5：只读组合视图同样受约束：空白名单段的 `view_ref::<&A>` 必须 panic。
+    ///
+    /// 牙：删掉 `view_ref` 里的 `assert_view_access::<Q>()` ⇒ 红。
+    #[test]
+    #[should_panic(expected = "越白名单读组件")]
+    fn t_neg_5_view_ref_rejects_components_outside_whitelist() {
+        let mut store = store_with(&[1]);
+        let mut ad = StageEntities::<NoWrite>::new(store.world_mut());
+        let _ = ad.view_ref::<(&'static A,)>(1);
+    }
+
+    /// T-neg-6：组合视图里**任一**组件越界即拒（不是只看第一项）。
+    ///
+    /// 牙：把 `assert_view_access` 改成只检查第一项 ⇒ 本用例不再 panic ⇒ 红。
+    /// （`OnlyA` 只放行 A 的读、却实现了 `Reads<B>` 标记——视图 `(&A, &B)` 的第二项 B 必须被拒。）
+    struct OnlyA;
+    impl StageSpec for OnlyA {
+        const STAGE: TickStage = TickStage::SimBuff;
+        fn reads(id: TypeId) -> bool {
+            id == TypeId::of::<A>()
+        }
+    }
+    impl Reads<A> for OnlyA {}
+    impl Reads<B> for OnlyA {}
+
+    #[test]
+    #[should_panic(expected = "越白名单读组件")]
+    fn t_neg_6_view_checks_every_component() {
+        let mut store = store_with(&[1]);
+        assert!(store.insert_component(1, B(5)));
+        let mut ad = StageEntities::<OnlyA>::new(store.world_mut());
+        let _ = ad.view_ref::<(&'static A, &'static B)>(1);
+    }
+
+    // ---------------- P2b 补牙：组合视图两半判据各一颗（review 0a51f6c1 P3-VIEW-TOOTH） ----------------
+
+    // 只读白名单段（`read: [A]`、`write: []`）：`&mut A` 的视图必须被拒。
+    stage_spec!(ReadOnlyProbe, TickStage::SimBuff, read: [A], write: []);
+
+    /// T-neg-7：**写判据**——组件在**读**白名单里、但不在**写**白名单里，`view_mut` 必须 panic。
+    ///
+    /// 牙（reviewer M8）：把 `assert_view_access` 的 `AccessKind::Write` 分支接成 `S::reads(id)`
+    /// ⇒ 本用例的 `&mut A` 被误放行、不再 panic ⇒ 红。空名单段的 `t_neg_4` 咬不住这条
+    /// （空名单时 `reads`/`writes` 都是 false），所以必须有「读放行、写不放行」的段。
+    #[test]
+    #[should_panic(expected = "越白名单写组件")]
+    fn t_neg_7_view_mut_write_branch_uses_writes_whitelist() {
+        let mut store = store_with(&[1]);
+        let mut ad = StageEntities::<ReadOnlyProbe>::new(store.world_mut());
+        let _ = ad.view_mut::<(&'static mut A,)>(1);
+    }
+
+    // 白名单内（读）但**未在 ComponentRegistry 注册**的组件：视图必须 panic。
+    stage_spec!(ViewUnreg, TickStage::SimBuff, read: [Unregistered], write: []);
+
+    /// T-neg-8：**注册表判据**——组件在段读白名单里，但未登记 ⇒ `view_ref` 必须 panic。
+    ///
+    /// 牙（reviewer M9）：删掉 `assert_view_access` 里的 `registry.assert_registered_id(id)`
+    /// ⇒ 登记检查消失（bevy 会按需建 `QueryState`，缺组件只是 `None`）⇒ 本用例不再 panic ⇒ 红。
+    /// 注意：`Unregistered` 只在 `store_with` 里没有登记（该 helper 只登记 A/B）。
+    #[test]
+    #[should_panic(expected = "未在 ComponentRegistry 注册")]
+    fn t_neg_8_view_rejects_unregistered_component() {
+        let mut store = store_with(&[1]);
+        let mut ad = StageEntities::<ViewUnreg>::new(store.world_mut());
+        let _ = ad.view_ref::<(&'static Unregistered,)>(1);
     }
 }
