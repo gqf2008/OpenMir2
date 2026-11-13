@@ -56,11 +56,10 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
   **这一次 read 的总长度**为准。
 - `rebuild_command_frame` 按 `decoded.len() > COMMAND_MESSAGE_SIZE`（= 12）决定是否带尾部，
   与 oracle 的转发口径一致。
-- 注意：该文件读循环上方的注释「帧被 TCP 拆开/合并时的后果与 oracle 一致（都会被剔除）」
-  里的「都会被剔除」**不准确**（合并见 A1.1；拆分见 A1.3 的三分支，其中 ≥19 字节会转发
-  垃圾帧）。前一张卡（`openmir2-game-gate-one-read-one-frame`）写集只有文档；代码注释与
-  3 字节偏差已由 `openmir2-game-gate-half-frame-comment` / `openmir2-game-gate-3byte-prelogin`
-  两卡完成。
+- 注意：修正前的注释「帧被 TCP 拆开/合并时的后果与 oracle 一致（都会被剔除）」里的
+  「都会被剔除」**不准确**（合并见 A1.1；拆分见 A1.3 的三分支，其中 ≥19 字节会转发垃圾帧）。
+  该注释已由 `openmir2-game-gate-half-frame-comment` 改写，现注释为「既不拼回、也不一律剔除」；
+  3 字节偏差已由 `openmir2-game-gate-3byte-prelogin` 修复。
 
 ### A1.3 帧被拆分/合并时的 oracle 等价后果
 
@@ -128,8 +127,8 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
 
 ## A4 已知偏差：Rust 未实现 oracle 的 `Config.IsDefenceCCPacket`（CC 包防御）
 
-> 本小节即本条偏差的登记处（编号待 Leader 在偏差清单落号，建议 `D-*`）。现网
-> `[Switch] DefenceCCPacket=0`，当前部署下两侧行为等价；开关一旦打开即分叉。
+> 本条偏差编号 **D-17**，已登记在 `mir2-rs/tests/parity/whitelist.md` 的「D 线登记」表。
+> 现网 `[Switch] DefenceCCPacket=0`，当前部署下两侧行为等价；开关一旦打开即分叉。
 
 ### oracle 侧（符号与行为）
 
@@ -164,8 +163,10 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
   前缀判定；入参只有 `frame` / `logged_in` / 规则 / 长度上限，没有该开关。
 - `mir2-rs/bins/game-gate/src/config.rs` 的 `GateConfig` **不解析** `[Switch] DefenceCCPacket`
   （只读 `ChatInterval`、`NomClientPacketSize`、`MaxItemSpeed` 与速度规则）。
-- 全仓 grep `DefenceCC` 只命中 `mir2-rs/bins/game-gate/tests/fixtures/rungate-config.conf` 里的
-  `DefenceCCPacket=0`——那是配置文本夹具（`config::load` 忽略该键），不是实现。
+- Rust 源码 grep：`grep -rn --include=*.rs DefenceCC mir2-rs` ⇒ 0 命中（无实现）；唯一的配置
+  文本出现点是夹具 `mir2-rs/bins/game-gate/tests/fixtures/rungate-config.conf` 的
+  `DefenceCCPacket=0`，`config::load` 不解析该键。另有文档提及（本文件 A2.2 的「长度/CC 门」、
+  `mir2-rs/docs/M1-边界服务移植计划.md` 的 LoginGate 配置键清单），均非实现。
 
 ### 现网配置值
 
