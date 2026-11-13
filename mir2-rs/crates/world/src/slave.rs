@@ -63,8 +63,8 @@ use mir2_shared::rng::RandomNumber;
 
 use crate::combat::{hi_byte, lo_byte};
 use crate::entity::{
-    Entity, EntityMut, ACTOR_RACE_ANIMAL, ACTOR_RACE_ELF_MONSTER, ACTOR_RACE_ELF_WARRIORMON,
-    ACTOR_RACE_NPC, ACTOR_RACE_PLAY, ACTOR_RACE_WHITE_SKELETON,
+    Entity, EntityMut, PvpView, ACTOR_RACE_ANIMAL, ACTOR_RACE_ELF_MONSTER,
+    ACTOR_RACE_ELF_WARRIORMON, ACTOR_RACE_NPC, ACTOR_RACE_PLAY, ACTOR_RACE_WHITE_SKELETON,
 };
 use crate::magic::{front_position, mag_make_clone, MakeCloneInput};
 use crate::world::World;
@@ -481,7 +481,7 @@ fn make_word_u16(low: u16, high: u16) -> u16 {
 /// `WAbil.DC/MaxHP`。参数/语义未改。
 pub fn apply_slave_level_abilitys(mon: &mut EntityMut) {
     // `if (Race >= ActorRace.Animal)`（`BaseObject.Abil.cs:85-88`，`Animal = 50`）。
-    if mon.race < ACTOR_RACE_ANIMAL {
+    if mon.appearance.race < ACTOR_RACE_ANIMAL {
         return;
     }
     let exp = i32::from(mon.slave_exp_level);
@@ -494,7 +494,7 @@ pub fn apply_slave_level_abilitys(mon: &mut EntityMut) {
     mon.vitals.dc = abil_dc;
     mon.vitals.max_hp = abil.max_hp;
     if matches!(
-        mon.race,
+        mon.appearance.race,
         ACTOR_RACE_WHITE_SKELETON | ACTOR_RACE_ELF_MONSTER | ACTOR_RACE_ELF_WARRIORMON
     ) {
         // `WAbil.DC = MakeWord(LoByte(WAbil.DC), HiByte(Abil.DC));` —— 此刻两者相等 ⇒ 恒等。
@@ -551,7 +551,7 @@ pub fn apply_slave_level_abilitys(mon: &mut EntityMut) {
 /// （与 [`apply_slave_level_abilitys`] 同序：先 base 重算，再本覆写）。参数/语义未改。
 pub fn apply_derived_slave_recalc(mon: &mut EntityMut, now: i64) {
     let lvl = i64::from(mon.slave_make_level);
-    match mon.race {
+    match mon.appearance.race {
         ACTOR_RACE_WHITE_SKELETON => {
             mon.ai.next_hit_time = 3000 - lvl * 600;
             mon.ai.walk_speed = 1200 - lvl * 250;
@@ -875,7 +875,7 @@ impl World {
 pub fn slave_list_cleanup_all(world: &mut World) {
     let ids: Vec<i32> = world
         .entities
-        .iter()
+        .iter_ref()
         // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B14）：oracle 的宝宝清表在**主人自己的 `Run()`** 里
         // （`BaseObject.Base.cs:208-217`），ghost 不 `Run` ⇒ 集中扫描也不该替 ghost 主人清表。
         .filter(|e| !e.slave_list.is_empty() && !e.ghost)
@@ -1019,10 +1019,10 @@ pub fn process_slave_ghost(world: &mut World, master_id: i32) -> Vec<i32> {
     let slave_ids: Vec<i32> = master.slave_list.clone();
     let mut out = Vec::new();
     for sid in slave_ids.iter().rev() {
-        if let Some(mut s) = world.entities.get_mut(*sid) {
+        if let Some(s) = world.entities.get_mut(*sid) {
             // `MakeGhost`（`BaseObject.Base.cs:484-497`）：`CanReAlive => Invisible=true` 否则 `Ghost=true`。
             // 本骨架未建模 `CanReAlive`/`DisappearA` ⇒ 按召唤物常态置 `ghost`（登记）。
-            s.ghost = true;
+            s.life_cycle.ghost = true;
         }
         out.push(*sid);
     }
@@ -2208,12 +2208,12 @@ impl World {
 /// `MonsterObject.GetChrColor`（`MonsterObject.cs:482-492`）的 `CrazyMode`/`HolySeize` 前置支
 /// 未建模（`CrazyMode` 字段不在骨架里，登记）；调用方可先判这两支再落本函数。
 #[must_use]
-pub fn get_chr_color(e: &Entity, slave_color: &[u8], npc_name_color: u8) -> u8 {
-    if e.race == ACTOR_RACE_NPC {
+pub fn get_chr_color(e: &impl PvpView, slave_color: &[u8], npc_name_color: u8) -> u8 {
+    if e.race() == ACTOR_RACE_NPC {
         return npc_name_color;
     }
-    if e.master.is_some() {
-        let lvl = e.slave_exp_level;
+    if e.base().master.is_some() {
+        let lvl = e.base().slave_exp_level;
         if lvl <= SLAVE_MAX_LEVEL {
             if let Some(c) = slave_color.get(usize::from(lvl)) {
                 return *c;
@@ -2221,7 +2221,7 @@ pub fn get_chr_color(e: &Entity, slave_color: &[u8], npc_name_color: u8) -> u8 {
             // BUG-REPLICA ①：oracle 15 项表 + 门 `<= 50` ⇒ 越界异常；Rust 落到兜底。
         }
     }
-    e.name_color
+    e.name_color()
 }
 
 /// [`spawn_clone`] 的结果（宿主据此登记展示表并发 `RM_TURN`）。
@@ -3210,7 +3210,7 @@ mod tests {
             s.vitals.dc = 10 | (20 << 8);
             s.ai.walk_speed = 400;
         }
-        w.entities.get_mut(master).unwrap().death = true;
+        w.entities.get_mut(master).unwrap().life_cycle.death = true;
         w.entities.get_mut(master).unwrap().attribution.last_hiter = Some(slave);
         let cfg = pet_cfg(|c| {
             c.master_die_mutiny = true;
@@ -3234,7 +3234,7 @@ mod tests {
     #[test]
     fn process_slave_mutiny_no_rng_without_last_hiter() {
         let (mut a, master_a, _) = slave_world(100);
-        a.entities.get_mut(master_a).unwrap().death = true;
+        a.entities.get_mut(master_a).unwrap().life_cycle.death = true;
         let cfg = pet_cfg(|c| {
             c.master_die_mutiny = true;
             c.master_die_mutiny_rate = 7;
@@ -3255,7 +3255,7 @@ mod tests {
             c.master_die_mutiny_rate = 1;
         });
         assert!(process_slave_mutiny(&mut w, master, &cfg).is_empty()); // Death = false
-        w.entities.get_mut(master).unwrap().death = true;
+        w.entities.get_mut(master).unwrap().life_cycle.death = true;
         let off = pet_cfg(|c| c.master_die_mutiny = false);
         assert!(process_slave_mutiny(&mut w, master, &off).is_empty());
         assert_eq!(w.entities.get(slave).unwrap().hp, 100);
@@ -3277,7 +3277,7 @@ mod tests {
         w.entities.get_mut(master).unwrap().slave_list = vec![s1, s2];
         // 主人未幽灵 ⇒ 无动作。
         assert!(process_slave_ghost(&mut w, master).is_empty());
-        w.entities.get_mut(master).unwrap().ghost = true;
+        w.entities.get_mut(master).unwrap().life_cycle.ghost = true;
         assert_eq!(process_slave_ghost(&mut w, master), vec![s2, s1]);
         assert!(w.entities.get(s1).unwrap().ghost);
         assert!(w.entities.get(s2).unwrap().ghost);
@@ -3394,7 +3394,7 @@ mod tests {
         let (mut w, master, slave) = slave_world(100);
         w.enable_slave_self_delay(pet_cfg(|_| {}));
         // `base.MakeGhost()` 的结果（玩家 `CanReAlive == false` ⇒ `Ghost = true`）。
-        w.entities.get_mut(master).unwrap().ghost = true;
+        w.entities.get_mut(master).unwrap().life_cycle.ghost = true;
         w.send_master_die_ghost(master);
         assert!(
             w.self_delay_msgs.is_empty(),
@@ -3425,11 +3425,11 @@ mod tests {
     #[test]
     fn send_msg_now_is_blocked_by_ghost_gate() {
         let (mut w, _master, slave) = slave_world(100);
-        w.entities.get_mut(slave).unwrap().ghost = true;
+        w.entities.get_mut(slave).unwrap().life_cycle.ghost = true;
         w.send_msg_now(slave, RM_MAKEHOLYSEIZEMODE, 1000, 0, 0, 0);
         assert!(w.self_delay_msgs.is_empty(), "Ghost 实体不入队（`:80`）");
         // 对照：非 Ghost 照常入队（投递时刻 = 当前时钟）。
-        w.entities.get_mut(slave).unwrap().ghost = false;
+        w.entities.get_mut(slave).unwrap().life_cycle.ghost = false;
         w.send_msg_now(slave, RM_MAKEHOLYSEIZEMODE, 1000, 0, 0, 0);
         assert_eq!(w.self_delay_msgs.len(), 1);
         assert_eq!(w.self_delay_msgs[0].deliver_at_ms, w.clock_ms);
@@ -4174,7 +4174,7 @@ mod tests {
         w.send_struck_delay_msg_refmessage(victim, hitter, 9, 200);
         assert_eq!(w.self_delay_msgs.len(), 1, "入队时未 Ghost ⇒ 正常入队");
         // 到点前变 Ghost。
-        w.entities.get_mut(victim).unwrap().ghost = true;
+        w.entities.get_mut(victim).unwrap().life_cycle.ghost = true;
         w.clock_ms += 200;
         let _ = w.deliver_self_delay_msgs();
         assert!(
@@ -4187,7 +4187,7 @@ mod tests {
     #[test]
     fn refmsg_ghost_receiver_not_enqueued() {
         let (mut w, victim, hitter) = refmsg_scene(crate::entity::ACTOR_RACE_MONSTER);
-        w.entities.get_mut(victim).unwrap().ghost = true;
+        w.entities.get_mut(victim).unwrap().life_cycle.ghost = true;
         w.send_struck_delay_msg_refmessage(victim, hitter, 9, 200);
         assert!(w.self_delay_msgs.is_empty(), "Ghost ⇒ 不入队");
     }

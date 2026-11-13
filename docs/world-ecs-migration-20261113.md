@@ -340,10 +340,13 @@ S1/S2 的四条硬约束（沿用，不重新解释）：
 - **覆盖**：25 组件合计 2+4+5+13+1+6+13+5+8+6+14+13+3+1+5+4+3+4+11+4+19+1+1+1+4 = **151**。
   P0 的 round-trip 用例（`components::tests::split_and_apply_round_trip_all_151_fields`）
   对每个字段赋非缺省值后做 `Entity -> 25 组件 -> Entity`，用全字段 `Debug` 相等作判据。
-  **S3a/S3b/S4a 起**：`DupState` 的 3 个字段（S3a）、`Transform` 的 4 个与 `MapBinding` 的 6 个
+  **S3a/S3b/S4a/S4b 起**：`DupState` 的 3 个字段（S3a）、`Transform` 的 4 个与 `MapBinding` 的 6 个
   字段（S3b）、S4a 的 41 个字段（Vitals 13 + AbilitySnapshot 1 + Progression 6 +
-  SpawnBinding 4 + DropState 5 + CombatAttribution 4 + Recovery 3 + PvpState 5）已从 `Entity`
-  删除（真值在组件），`Entity` 剩 **97** 字段；用例更名为
+  SpawnBinding 4 + DropState 5 + CombatAttribution 4 + Recovery 3 + PvpState 5）、
+  S4b 的 80 个字段（Flags 13 + LifeCycle 8 + Appearance 5 + MonsterClassState 19 +
+  PlayerRunState 13 + GroupState 4 + Revival 4 + BuffState 14）已从 `Entity`
+  删除（真值在组件），`Entity` 剩 **17** 字段（S4c 待迁的 CoreIdentity 2 + AiState 1 +
+  SlaveState 11 + MerchantState 1 + NpcState 1 + Inventory 1）；用例更名为
   `split_and_apply_round_trip_all_remaining_fields`（只比较 `Entity` 主组件），
   对应适配器随字段删除（改用 `EntityRef` 只读视图 / `EntityMut` 可写视图 / `EntitySpawn`
   生成期载体）。
@@ -638,6 +641,33 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > 并加 `insert_uses_spawn_ctor_bundle_not_component_defaults` 防 `Transform::default()` 误用；
 > ③ `BevyAoiStore` 仍按 `World::get::<T>` 逐组件取（S4a 新增 5 次 TypeId 查表），属性能项，
 > S4a 不压测、只登记（后续可改缓存 `QueryState`）。
+
+> **S4b 落地登记（2026-11-13）**：`Entity` 删除 S4b 的 80 个字段（97→17，仅剩 S4c 的
+> `CoreIdentity`/`AiState`/`SlaveState`/`MerchantState`/`NpcState`/`Inventory`）。分三笔子里程碑：
+> ① S4b-1 `Flags`(13)/`LifeCycle`(8)/`Appearance`(5)/`MonsterClassState`(19)；
+> ② S4b-2 `PlayerRunState`(13)/`GroupState`(4)/`Revival`(4)/`BuffState`(14)；
+> ③ S4b-3 出站事件词汇登记 + S4a 评审 P3 处置。`EntitySpawn` 平铺生成期字段（ctor 缺省：
+> `race=Play`、`name_color=255`、`power_rate`/`kill_mon_exp_rate=100`、
+> `poisoning_tick=BUFF_EPOCH_MS`），`EntityRef` 平铺只读投影，`EntityMut` 暴露组件可变引用；
+> `EntityStore::insert` 用 `SpawnParts` 整 bundle 挂组件，`write_back` 整包写回全部 16 个迁移
+> 组件（S4a 8 + S4b-1 4 + S4b-2 4）。bevy `QueryData` 元组上限 15 只是实现约束：读路径用第二个
+> `QueryState`（两次共享借用，不迭代求序），写路径把 `Recovery`/`PvpState` 移出 `EntityMut`
+> 改 `recovery_mut`/`pvp_state_mut`（组件仍是唯一真值，无影子副本、无读写换序），语义由
+> golden/parity 兜底。`PvpView` 现只对 `EntitySpawn`/`EntityRef` 实现（S4a 时曾含
+> `EntityMut`），并新增 `race`/`death`/`ghost`/`invisible`/`attack_mode`/`flags`/
+> `name_color`/`player_run`/`group_state`/`buff` 快照方法供 combat/monai 视图读取。
+>
+> **出站事件词汇（action/msgqueue）= 已迁/登记**：`action.rs`（`PushEvent`/`RushEvent`/
+> `RushFrame`/`ButchEvent`/`SkeletonEvent`）与 `msgqueue.rs`（.NET 8 四叉堆出队序）自
+> `openmir2-frame-drain-order-audit` 起就在 `crates/world`，**不持有任何 `Entity` 字段**
+> （纯确定性事件/算法），S4b 只需登记为稳定词汇、无需字段迁移；帧编码仍在宿主 `bins/game-svr`。
+>
+> **S4a 评审 P3 处置**：① 注释计数过期——`Entity` 剩余字段数与 `Entity::new` 调用计数改为
+> 「剩余 17 字段」与「约 700 处」（不再写死会腐烂的精确数）；② `write_back` 只断言 HP/MP/exp 的
+> 盲区——新增 `write_back_covers_all_migrated_components`，把 16 组件逐字段置非缺省后
+> `spawn_cloned → write_back → get` 逐组断言，漏写 attribution/pvp/recovery/drop/spawn/ability
+> 任一即红；③ `insert_parts`/`into_parts` 收窄为私有、`SpawnParts` 降为 `pub(crate)`
+> （唯一调用方是 `Entity::new → EntityStore::insert`）。
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——
 > `entity/tick/存储`=S1/S2；`DupState`+tick 段链=S3a；`map/aoi/space_move/session`=S3b；

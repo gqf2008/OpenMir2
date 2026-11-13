@@ -210,7 +210,7 @@ mod tests {
         // 不存在的目标 ⇒ 不命中。
         assert!(!cetin_near_xy(&world, 0, 10, 10, 9999), "目标不存在不命中");
         // 目标变 Ghost ⇒ 不命中。
-        world.entities.get_mut(target).unwrap().ghost = true;
+        world.entities.get_mut(target).unwrap().life_cycle.ghost = true;
         assert!(
             !cetin_near_xy(&world, 0, 10, 10, target),
             "Ghost 目标不命中"

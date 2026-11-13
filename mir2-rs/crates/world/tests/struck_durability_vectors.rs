@@ -127,7 +127,8 @@ fn struck_durability_matches_oracle_vectors() {
     for case in &cases {
         let mut target = mk_target(&case.items_in);
         let mut rng = replay(&case.draws);
-        struck_damage_durability(&mut rng, &mut target);
+        let target_race = target.race;
+        struck_damage_durability(&mut rng, &mut target, target_race);
 
         assert!(
             rng.divergences().is_empty(),

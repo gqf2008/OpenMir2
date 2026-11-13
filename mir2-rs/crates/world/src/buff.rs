@@ -369,8 +369,8 @@ impl BuffSystem {
                                         ));
                                     }
                                     BuffType::Transparent => {
-                                        if let Some(mut e) = world.entities.get_mut(actor_id) {
-                                            e.hide_mode = false;
+                                        if let Some(e) = world.entities.get_mut(actor_id) {
+                                            e.flags.hide_mode = false;
                                         }
                                     }
                                     _ => {}
@@ -398,8 +398,8 @@ impl BuffSystem {
                     // `World::buff_do_work` 已把 `buffs` `mem::take` 走 ⇒ 拿到空系统、丢掉所有仍生效的 buff 位）。
                     let ex = world.entities.get(actor_id).map_or(0, |e| e.char_status_ex);
                     let status = self.char_status_with(actor_id, ex);
-                    if let Some(mut e) = world.entities.get_mut(actor_id) {
-                        e.char_status = status;
+                    if let Some(e) = world.entities.get_mut(actor_id) {
+                        e.buff.char_status = status;
                     }
                     out.status_changes.push((actor_id, status));
                 }
@@ -418,8 +418,8 @@ impl BuffSystem {
             if now_ms - ent.poisoning_tick <= poison_dec_health_time {
                 continue;
             }
-            if let Some(mut e) = world.entities.get_mut(actor_id) {
-                e.poisoning_tick = now_ms;
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.buff.poisoning_tick = now_ms;
             }
             let Some(list) = self.map.get(&actor_id) else {
                 continue;
@@ -445,9 +445,9 @@ impl BuffSystem {
                 }
                 let last_hiter = world.entities.get(actor_id).and_then(|e| e.last_hiter);
                 damage_health(world, actor_id, i32::from(point) + 1, last_hiter);
-                if let Some(e) = world.entities.get_mut(actor_id) {
-                    e.recovery.health_tick = 0;
-                    e.recovery.spell_tick = 0;
+                if let Some(r) = world.entities.recovery_mut(actor_id) {
+                    r.health_tick = 0;
+                    r.spell_tick = 0;
                 }
                 let (hp, mp) = match world.entities.get(actor_id) {
                     Some(e) => (e.hp, e.mp),
@@ -665,11 +665,11 @@ mod tests {
             e.ai.meat_quality = 5000;
             e.vitals.hp = 100;
             e.vitals.mp = 0;
-            e.green_poisoning_point = 3;
+            e.buff.green_poisoning_point = 3;
             // 模拟「已存活 3000ms」的 actor（>PosionDecHealthTime=2500）⇒ 首 pass 跨门触发 DoT。
             // （新落图 actor 的 `poisoning_tick` = 落图时刻 ⇒ 首 DoT 在 2500ms 后；见
             //  `poisoning_tick_initialised_to_creation_tick`。）
-            e.poisoning_tick = base - 3000;
+            e.buff.poisoning_tick = base - 3000;
         }
         w.make_posion(1, BuffType::GreenPoison as u8, 30, 3);
         // 第一 pass：`now - poisoning_tick` = 3000 > 2500 ⇒ 触发一次 DoT。
@@ -793,7 +793,7 @@ mod tests {
     #[test]
     fn char_status_derivation() {
         let mut w = world_with_players(&[1]);
-        w.entities.get_mut(1).unwrap().char_status_ex = 0x2; // OPENHEATH
+        w.entities.get_mut(1).unwrap().buff.char_status_ex = 0x2; // OPENHEATH
         assert_eq!(
             w.get_char_status(1),
             0x2,
@@ -812,8 +812,8 @@ mod tests {
     fn damage_health_magic_shield_deducts_mp_first() {
         let mut w = world_with_players(&[1]);
         {
-            let mut e = w.entities.get_mut(1).unwrap();
-            e.magic_shield = true;
+            let e = w.entities.get_mut(1).unwrap();
+            e.buff.magic_shield = true;
             e.vitals.hp = 100;
             e.vitals.max_hp = 100;
             e.vitals.mp = 100;
@@ -837,19 +837,19 @@ mod tests {
     fn damage_health_last_hiter_guard_and_un_magic_shield() {
         let mut w = world_with_players(&[1, 2]);
         {
-            let mut e = w.entities.get_mut(1).unwrap();
-            e.magic_shield = true;
+            let e = w.entities.get_mut(1).unwrap();
+            e.buff.magic_shield = true;
             e.vitals.hp = 100;
             e.vitals.mp = 100;
         }
         // LastHiter 是玩家且已开 UnMagicShield ⇒ 跳过 MP 抵扣、直接扣 HP。
-        w.entities.get_mut(2).unwrap().un_magic_shield = true;
+        w.entities.get_mut(2).unwrap().buff.un_magic_shield = true;
         damage_health(&mut w, 1, 10, Some(2));
         assert_eq!(w.entities.get(1).unwrap().mp, 100, "守卫走 else ⇒ 不扣 MP");
         assert_eq!(w.entities.get(1).unwrap().hp, 90, "直接扣 HP");
 
         // LastHiter 是玩家但**未**开 UnMagicShield ⇒ 仍走 MP 抵扣。
-        w.entities.get_mut(2).unwrap().un_magic_shield = false;
+        w.entities.get_mut(2).unwrap().buff.un_magic_shield = false;
         damage_health(&mut w, 1, 10, Some(2));
         assert_eq!(
             w.entities.get(1).unwrap().mp,
@@ -974,15 +974,15 @@ mod tests {
         let mut w = world_with_players(&[1, 2]);
         w.poison_dec_health_time = 2500;
         let base = w.clock_ms + BUFF_EPOCH_MS;
-        w.entities.get_mut(1).unwrap().ghost = true;
+        w.entities.get_mut(1).unwrap().life_cycle.ghost = true;
         for id in [1, 2] {
             let mut e = w.entities.get_mut(id).unwrap();
             e.ai.animal = true;
             e.vitals.hp = 100;
             e.vitals.mp = 0;
-            e.green_poisoning_point = 3;
+            e.buff.green_poisoning_point = 3;
             // 已存活 3000ms（> PosionDecHealthTime=2500）⇒ 首 pass 跨门触发 DoT。
-            e.poisoning_tick = base - 3000;
+            e.buff.poisoning_tick = base - 3000;
         }
         w.make_posion(1, BuffType::GreenPoison as u8, 30, 3);
         w.make_posion(2, BuffType::GreenPoison as u8, 30, 3);

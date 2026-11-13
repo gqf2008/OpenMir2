@@ -232,8 +232,8 @@ pub fn run_scenario(name: &str) -> String {
                 // 把 actor 置为 Ghost（夹具级状态注入；对应 C# 夹具的 `ApplyGhost`，与 oracle 的
                 // `Ghost = true` 同义）。会话操作阶段立即生效，与 C# 侧同序。
                 "ghost" => {
-                    if let Some(e) = world.entities.entity_mut(c.id) {
-                        e.ghost = true;
+                    if let Some(lc) = world.entities.life_cycle_mut(c.id) {
+                        lc.ghost = true;
                     }
                 }
                 "spawn" => {

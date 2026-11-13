@@ -1681,8 +1681,8 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
                 );
             }
             // `Merchant.cs:148`
-            if let Some(mut e) = world.entities.get_mut(actor_id) {
-                e.fixed_hide_mode = true;
+            if let Some(e) = world.entities.get_mut(actor_id) {
+                e.flags.fixed_hide_mode = true;
             }
         }
     } else if world
@@ -1690,8 +1690,8 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         .get(actor_id)
         .is_some_and(|e| e.fixed_hide_mode)
     {
-        if let Some(mut e) = world.entities.get_mut(actor_id) {
-            e.fixed_hide_mode = false;
+        if let Some(e) = world.entities.get_mut(actor_id) {
+            e.flags.fixed_hide_mode = false;
         }
         outcome.unhide_hit = true;
     }
@@ -2332,8 +2332,8 @@ mod tests {
         w.rng = RandomNumber::with_seed(11);
         w.clock_ms = 0;
         let a = w.spawn_merchant(spawn_at(4, 4)).expect("挂图成功");
-        if let Some(mut e) = w.entities.get_mut(a) {
-            e.ghost = true;
+        if let Some(e) = w.entities.get_mut(a) {
+            e.life_cycle.ghost = true;
         }
         if let Some(st) = w.entities.entity_mut(a).and_then(|e| e.merchant.as_mut()) {
             st.ghost_tick = 0;
@@ -2580,9 +2580,9 @@ mod tests {
 
         // ② 发帧时刻 `ObMode` 已置位 ⇒ 头门只自送（商人无客户端 ⇒ 零收件人）。
         {
-            let mut e = w.entities.get_mut(id).unwrap();
-            e.fixed_hide_mode = false;
-            e.ob_mode = true;
+            let e = w.entities.get_mut(id).unwrap();
+            e.flags.fixed_hide_mode = false;
+            e.flags.ob_mode = true;
         }
         set_castle_under_war(&mut w, id, true);
         let out = merchant_run(&mut w, id);
@@ -2621,8 +2621,8 @@ mod tests {
         assert!(!out.unhide_hit, "未隐藏 ⇒ else 支也不补发");
 
         // ② 已处于 `FixedHideMode`（例如城堡刚解绑）⇒ else 支补一条 `RM_HIT`。
-        if let Some(mut e) = w.entities.get_mut(id) {
-            e.fixed_hide_mode = true;
+        if let Some(e) = w.entities.get_mut(id) {
+            e.flags.fixed_hide_mode = true;
         }
         let out = merchant_run(&mut w, id);
         assert!(out.unhide_hit, "else 支解除 ⇒ RM_HIT");
@@ -2679,8 +2679,8 @@ mod tests {
         w2.clock_ms = 100_000;
         let id2 = w2.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w2.set_merchant_castle_index(id2, Some(0)));
-        if let Some(mut e) = w2.entities.get_mut(id2) {
-            e.fixed_hide_mode = true; // 战中稳态（解除支的入口状态）
+        if let Some(e) = w2.entities.get_mut(id2) {
+            e.flags.fixed_hide_mode = true; // 战中稳态（解除支的入口状态）
         }
         let out = merchant_run(&mut w2, id2);
         assert!(out.hit_self_only, "战中的 :140 RNG 受击 ⇒ 只自送");
@@ -2708,8 +2708,8 @@ mod tests {
         let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w.set_merchant_castle_index(id, Some(0)));
         set_castle_under_war(&mut w, id, true);
-        if let Some(mut e) = w.entities.get_mut(id) {
-            e.fixed_hide_mode = true; // 战中稳态
+        if let Some(e) = w.entities.get_mut(id) {
+            e.flags.fixed_hide_mode = true; // 战中稳态
         }
         set_run_tick_stale(&mut w, id);
         let out = merchant_run(&mut w, id);
@@ -2739,8 +2739,8 @@ mod tests {
         let id2 = w2.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w2.set_merchant_castle_index(id2, Some(0)));
         set_castle_under_war(&mut w2, id2, true);
-        if let Some(mut e) = w2.entities.get_mut(id2) {
-            e.fixed_hide_mode = true;
+        if let Some(e) = w2.entities.get_mut(id2) {
+            e.flags.fixed_hide_mode = true;
         }
         set_run_tick_stale(&mut w2, id2);
         let out2 = merchant_run(&mut w2, id2);
@@ -2759,8 +2759,8 @@ mod tests {
         let id3 = w3.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
         assert!(w3.set_merchant_castle_index(id3, Some(0)));
         set_castle_under_war(&mut w3, id3, true);
-        if let Some(mut e) = w3.entities.get_mut(id3) {
-            e.fixed_hide_mode = true;
+        if let Some(e) = w3.entities.get_mut(id3) {
+            e.flags.fixed_hide_mode = true;
         }
         set_run_tick_stale(&mut w3, id3);
         let tick2 = w3.merchant_tick();

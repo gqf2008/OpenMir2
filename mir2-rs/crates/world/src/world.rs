@@ -25,7 +25,9 @@ use crate::combat::{
     attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
-use crate::entity::{Entity, EntitySpawn, EntityStore};
+#[cfg(test)]
+use crate::entity::Entity;
+use crate::entity::{EntitySpawn, EntityStore, PvpView};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
 
@@ -1304,10 +1306,10 @@ pub const VERIFY_MAP_TIME_MS: i64 = 30 * 1000;
 
 /// `BaseObject.CellType` 的等价物（`PlayObject.cs:1034` = Play、`AnimalObject.cs:86` = Monster、
 /// `NormNpc.cs:50` = Merchant）；`verify_map_time` 重新登记时用它保持落格类型。
-pub(crate) fn entity_cell_type(e: &Entity) -> CellType {
-    if e.merchant.is_some() || e.npc.is_some() {
+pub(crate) fn entity_cell_type(e: &impl PvpView) -> CellType {
+    if e.base().merchant.is_some() || e.base().npc.is_some() {
         CellType::Merchant
-    } else if e.race == crate::entity::ACTOR_RACE_PLAY {
+    } else if e.race() == crate::entity::ACTOR_RACE_PLAY {
         CellType::Play
     } else {
         CellType::Monster
@@ -1668,9 +1670,9 @@ impl World {
         self.buffs
             .add_buff(actor_id, buff_type, n_time, n_point, now);
         let status = self.get_char_status(actor_id);
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.char_status = status;
-            e.green_poisoning_point = n_point as u8;
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = status;
+            e.buff.green_poisoning_point = n_point as u8;
         }
         true
     }
@@ -1687,8 +1689,8 @@ impl World {
                 .add_buff(actor_id, BuffType::DefensePower, n_sec, n_sec, now);
         }
         let status = self.get_char_status(actor_id);
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.char_status = status;
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = status;
         }
     }
 
@@ -1698,8 +1700,8 @@ impl World {
         self.buffs
             .add_buff(actor_id, BuffType::MagicDefensePower, n_sec, n_sec, now);
         let status = self.get_char_status(actor_id);
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.char_status = status;
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = status;
         }
     }
 
@@ -1709,8 +1711,8 @@ impl World {
         let now = self.buff_now();
         self.buffs
             .add_buff(actor_id, BuffType::MagicShield, n_sec, n_sec, now);
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.magic_shield = true;
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.magic_shield = true;
         }
     }
 
@@ -1885,8 +1887,8 @@ impl World {
             }
             // `Light = GetMyLight()`（`:2263`，在 `Index = 0` 之后算）。
             if let Some(light) = self.my_light_of(actor_id) {
-                if let Some(mut e) = self.entities.get_mut(actor_id) {
-                    e.light = light;
+                if let Some(e) = self.entities.get_mut(actor_id) {
+                    e.appearance.light = light;
                 }
             }
             out.push(LampDuraChange { actor_id, recog: 0 });
@@ -1993,11 +1995,13 @@ impl World {
             if !e.pvp_flag || now - e.pvp_name_color_tick <= self.pk_flag_time_ms {
                 continue;
             }
-            let Some(t) = self.entities.get_mut(id) else {
+            let Some(t) = self.entities.get(id) else {
                 continue;
             };
-            t.pvp.pvp_flag = false;
             let color = crate::slave::get_chr_color(&t, &[], 0);
+            if let Some(p) = self.entities.pvp_state_mut(id) {
+                p.pvp_flag = false;
+            }
             out.push(crate::slave::NameColorDelivery {
                 target_id: id,
                 color,
@@ -2047,7 +2051,7 @@ impl World {
                 let ents = &self.entities;
                 let ids: Vec<i32> = self
                     .entities
-                    .iter()
+                    .iter_ref()
                     .filter(|e| {
                         ents.map_id(e.id) == Some(map_id)
                             && ents.x(e.id) == Some(n_x)
@@ -2401,14 +2405,14 @@ impl World {
         // `:4333` 计时**无条件刷新**（在 `if (!targetObject.PvpFlag)` 之前）：目标已带 flag 时
         // 再来一次 `SetPkFlag` 不产帧，但会把过期时刻推后（oracle 原样，不许「顺手」改成早退）。
         let now = self.clock_ms;
-        if let Some(t) = self.entities.get_mut(target_id) {
-            t.pvp.pvp_name_color_tick = now;
+        if let Some(p) = self.entities.pvp_state_mut(target_id) {
+            p.pvp_name_color_tick = now;
         }
         if target_flagged {
             return None;
         }
-        if let Some(t) = self.entities.get_mut(target_id) {
-            t.pvp.pvp_flag = true;
+        if let Some(p) = self.entities.pvp_state_mut(target_id) {
+            p.pvp_flag = true;
         }
         Some(crate::slave::NameColorDelivery {
             target_id,
@@ -3200,7 +3204,8 @@ impl World {
                     chr_color = crate::slave::get_chr_color(&t, &[], 0);
                 } else {
                     // `PlayObject.StruckDamage` 的 RNG 段（`PlayObject.cs:2957/3000`）。
-                    crate::combat::struck_damage_durability(&mut self.rng, &mut t);
+                    let target_race = t.race;
+                    crate::combat::struck_damage_durability(&mut self.rng, &mut t, target_race);
                 }
             }
             let (hp_after, max_hp) = (t.hp, t.max_hp);
@@ -3353,11 +3358,11 @@ impl World {
             }
         }
         let status = crate::buff::get_char_status(self, target_id);
-        if let Some(mut e) = self.entities.get_mut(target_id) {
-            e.status_time[crate::entity::POISON_STATETRANSPARENT] = n_h_time;
-            e.char_status = status;
-            e.hide_mode = true;
-            e.transparent = true;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = n_h_time;
+            e.buff.char_status = status;
+            e.flags.hide_mode = true;
+            e.buff.transparent = true;
         }
         d.status_changed = true;
         d.status = status;
@@ -3470,9 +3475,9 @@ impl World {
         out.roll_passed = true;
         out.bo_train = true;
         let interval = crate::magic::power_show_hp_interval(&mut self.rng, magic, level, sc);
-        if let Some(mut e) = self.entities.get_mut(tid) {
-            e.show_hp_tick = self.clock_ms;
-            e.show_hp_interval = interval;
+        if let Some(e) = self.entities.get_mut(tid) {
+            e.buff.show_hp_tick = self.clock_ms;
+            e.buff.show_hp_interval = interval;
         }
         // 立即把 1500ms 自投递排到**目标自己**的队列。
         self.send_self_delay_msg_full(tid, crate::slave::RM_DOOPENHEALTH, 0, 0, 0, 0, 1500);
@@ -3492,10 +3497,10 @@ impl World {
         };
         let status =
             crate::buff::get_char_status(self, target_id) | crate::entity::POISON_OPENHEATH;
-        if let Some(mut e) = self.entities.get_mut(target_id) {
-            e.show_hp = true;
-            e.char_status_ex = status_ex;
-            e.char_status = status;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.buff.show_hp = true;
+            e.buff.char_status_ex = status_ex;
+            e.buff.char_status = status;
         }
         d.hp = self.entities.get(target_id).map_or(d.hp, |e| e.hp);
         d.max_hp = self.entities.get(target_id).map_or(d.max_hp, |e| e.max_hp);
@@ -3661,17 +3666,17 @@ impl World {
             return out;
         }
         out.roll_passed = true;
-        if let Some(mut e) = self.entities.get_mut(tid) {
-            if e.status_time[crate::entity::POISON_DECHEALTH] != 0 {
-                e.status_time[crate::entity::POISON_DECHEALTH] = 1;
+        if let Some(e) = self.entities.get_mut(tid) {
+            if e.buff.status_time[crate::entity::POISON_DECHEALTH] != 0 {
+                e.buff.status_time[crate::entity::POISON_DECHEALTH] = 1;
                 out.bo_train = true;
             }
-            if e.status_time[crate::entity::POISON_DAMAGEARMOR] != 0 {
-                e.status_time[crate::entity::POISON_DAMAGEARMOR] = 1;
+            if e.buff.status_time[crate::entity::POISON_DAMAGEARMOR] != 0 {
+                e.buff.status_time[crate::entity::POISON_DAMAGEARMOR] = 1;
                 out.bo_train = true;
             }
-            if e.status_time[crate::entity::POISON_STONE] != 0 {
-                e.status_time[crate::entity::POISON_STONE] = 1;
+            if e.buff.status_time[crate::entity::POISON_STONE] != 0 {
+                e.buff.status_time[crate::entity::POISON_STONE] = 1;
                 out.bo_train = true;
             }
         }
@@ -4088,14 +4093,14 @@ impl World {
             role: spawn.role,
         });
         if is_door || is_wall {
-            e.stick_mode = true;
+            e.flags.stick_mode = true;
             e.ai.animal = false;
         }
         if let Some(dir) = unit_dir {
             e.ai.dir = dir;
         }
         if matches!(spawn.role, crate::castle::DefenseRole::Archer(_)) {
-            e.guard_direction = spawn.guard_direction.unwrap_or(3);
+            e.monster_class.guard_direction = spawn.guard_direction.unwrap_or(3);
         }
     }
 
@@ -4501,9 +4506,9 @@ impl World {
     /// 由宿主完成（`RecalcAbilitys` 需要 `record.data` 与目录）。
     pub fn att_power_up(&mut self, target_id: i32, n_power: u16, n_time: i32) {
         let now = self.clock_ms;
-        if let Some(mut e) = self.entities.get_mut(target_id) {
-            e.extra_abil[0] = n_power;
-            e.extra_abil_times[0] = now + i64::from(n_time) * 1000;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.buff.extra_abil[0] = n_power;
+            e.buff.extra_abil_times[0] = now + i64::from(n_time) * 1000;
         }
     }
 
@@ -4516,7 +4521,7 @@ impl World {
         let now = self.clock_ms;
         let mut out = Vec::new();
         for id in self.entities.order_index() {
-            let Some(mut e) = self.entities.get_mut(id) else {
+            let Some(e) = self.entities.get_mut(id) else {
                 continue;
             };
             let mut expiry = ExtraAbilExpiry {
@@ -4524,18 +4529,20 @@ impl World {
                 ..ExtraAbilExpiry::default()
             };
             for i in 0..7usize {
-                if e.extra_abil[i] == 0 {
+                if e.buff.extra_abil[i] == 0 {
                     continue;
                 }
-                if now > e.extra_abil_times[i] {
-                    e.extra_abil[i] = 0;
-                    e.extra_abil_flag[i] = 0;
+                if now > e.buff.extra_abil_times[i] {
+                    e.buff.extra_abil[i] = 0;
+                    e.buff.extra_abil_flag[i] = 0;
                     expiry.health_changed = true;
                     expiry
                         .events
                         .push(ExtraAbilEventKind::Restored(u8::try_from(i).unwrap_or(0)));
-                } else if e.extra_abil_flag[i] == 0 && now > e.extra_abil_times[i] - 10_000 {
-                    e.extra_abil_flag[i] = 1;
+                } else if e.buff.extra_abil_flag[i] == 0
+                    && now > e.buff.extra_abil_times[i] - 10_000
+                {
+                    e.buff.extra_abil_flag[i] = 1;
                     expiry.events.push(ExtraAbilEventKind::TenSecondsBefore(
                         u8::try_from(i).unwrap_or(0),
                     ));
@@ -5169,17 +5176,17 @@ impl World {
                 }
                 Command::Kill { target_id } => {
                     let ok = match self.entities.get_mut(target_id) {
-                        Some(mut e) => {
+                        Some(e) => {
                             // 直接 `Die()` 入口（GM `KillCommand.cs:40` `baseObject.Die()`；
                             // 脚本 `KILL` 的 `playerActor.Die()`）。oracle 的 `Die()` **不改
                             // HP**；SuperMan 的目标在 `Die` 首行早退后由下一次 `Run` 回满，
                             // 因此这里**不写 HP**（否则会污染 `CastleDoor.Run` 的 HP 判据）。
                             // 非 SuperMan 仍写 `hp = 0`：本骨架的死亡结算以 `hp == 0` 为触发，
                             // 与既有行为保持一致。
-                            if !e.super_man {
+                            if !e.flags.super_man {
                                 e.vitals.hp = 0;
                             }
-                            e.die_called = true;
+                            e.life_cycle.die_called = true;
                             true
                         }
                         None => false,
@@ -5444,7 +5451,7 @@ impl World {
         //    玩家此前**没有**调用点 ⇒ `Entity.super_man = true`（`@3`）只挡死、不回血。
         //    本段无写入者时是纯 no-op（`super_man` 默认 false）⇒ 既有 golden 逐字节不变。
         self.entities.for_each_mut(|mut e| {
-            if e.race == crate::entity::ACTOR_RACE_PLAY && e.super_man {
+            if e.appearance.race == crate::entity::ACTOR_RACE_PLAY && e.flags.super_man {
                 e.run_super_man_refill();
             }
         });
@@ -5614,8 +5621,8 @@ impl World {
             e.vitals.mp = e.vitals.max_mp.wrapping_sub(1);
             mp_clamped = true;
         }
-        let is_play = e.race == crate::entity::ACTOR_RACE_PLAY;
-        let show_hp = e.show_hp;
+        let is_play = e.appearance.race == crate::entity::ACTOR_RACE_PLAY;
+        let show_hp = e.buff.show_hp;
         let (id, hp, mp) = (e.id, e.vitals.hp, e.vitals.mp);
         if (hp_clamped || mp_clamped) && is_play {
             self.pending_verify_health_changes
@@ -5649,24 +5656,26 @@ impl World {
         let now = self.clock_ms;
         let ids: Vec<i32> = self
             .entities
-            .iter()
+            .iter_ref()
             .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
             .map(|e| e.id)
             .collect();
         let mut events = Vec::new();
         for id in ids {
-            let Some(mut e) = self.entities.get_mut(id) else {
+            let Some(e) = self.entities.get_mut(id) else {
                 continue;
             };
             // `PlayObject.Message.cs:54-58`：先 `SysMsg` 再 `SendSocket("+UFIR")`。
-            if e.fire_hit_skill && (now - e.latest_fire_hit_tick) > 20 * 1000 {
-                e.fire_hit_skill = false;
+            if e.player_run.fire_hit_skill && (now - e.player_run.latest_fire_hit_tick) > 20 * 1000
+            {
+                e.player_run.fire_hit_skill = false;
                 events.push((id, RunStateExpiry::SpiritsGone));
                 events.push((id, RunStateExpiry::FireHitSocket));
             }
             // `:60-64`：仅 `SendSocket("+UTWN")`。
-            if e.twin_hit_skill && (now - e.latest_twin_hit_tick) > 60 * 1000 {
-                e.twin_hit_skill = false;
+            if e.player_run.twin_hit_skill && (now - e.player_run.latest_twin_hit_tick) > 60 * 1000
+            {
+                e.player_run.twin_hit_skill = false;
                 events.push((id, RunStateExpiry::TwinHitSocket));
             }
         }
@@ -5714,7 +5723,7 @@ impl World {
         let now = self.clock_ms;
         let ids: Vec<i32> = self
             .entities
-            .iter()
+            .iter_ref()
             .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
             .map(|e| e.id)
             .collect();
@@ -5931,7 +5940,7 @@ impl World {
     fn verify_players_map_time(&mut self) {
         let ids: Vec<i32> = self
             .entities
-            .iter()
+            .iter_ref()
             .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
             .map(|e| e.id)
             .collect();
@@ -6247,24 +6256,24 @@ impl World {
 
         // 3) 字段复位（`BaseObject.cs:2468-2479` + `:2678-2687`）。
         if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.death = false;
+            e.life_cycle.death = false;
             // `BaseObject.Die`（`BaseObject.Base.cs:318-345`）**每次**死亡都无条件置 `Death`/`DeathTick`，
             // 复活后 `CanReAlive` 仍为 true ⇒ oracle 允许「死→复活→再死」无限循环。本仓的死亡结算是
             // 一次性闩锁（`settle_deaths` 的 `!death_settled` 过滤），复活必须把它清掉，否则第二次死亡
             // 永不结算（复验 F1：复活即免死）。
-            e.death_settled = false;
-            e.invisible = false;
-            e.ghost = false;
+            e.life_cycle.death_settled = false;
+            e.flags.invisible = false;
+            e.life_cycle.ghost = false;
             e.vitals.hp = e.vitals.max_hp;
             e.vitals.mp = e.vitals.max_mp;
             e.drop.gold = 0;
-            e.show_hp = false;
+            e.buff.show_hp = false;
             // `ReAliveEx` 的 `Skeleton = false`（`BaseObject.cs:2472`）——`BaseObject.Skeleton`
             // 的**唯一清点**（setter 只有屠宰效果体）。
             e.ai.skeleton = false;
-            e.stone_mode = false;
-            e.fixed_hide_mode = false;
-            e.re_alive_tick = now;
+            e.flags.stone_mode = false;
+            e.flags.fixed_hide_mode = false;
+            e.life_cycle.re_alive_tick = now;
             if let Some(bl) = body_leathery {
                 e.ai.body_leathery = bl;
             }
@@ -6554,7 +6563,7 @@ impl World {
         let now = self.clock_ms;
         let gone: Vec<i32> = self
             .entities
-            .iter()
+            .iter_ref()
             .filter(|e| e.death || e.ghost)
             .map(|e| e.id)
             .collect();
@@ -6818,8 +6827,8 @@ impl World {
                 let race = e.race;
                 let map_id = e.map_id;
                 let direct_die = e.die_called;
-                if let Some(mut e) = self.entities.get_mut(id) {
-                    e.die_called = false;
+                if let Some(e) = self.entities.get_mut(id) {
+                    e.life_cycle.die_called = false;
                 }
                 if !direct_die {
                     continue;
@@ -6861,12 +6870,12 @@ impl World {
                 e.race == crate::entity::ACTOR_RACE_PLAY,
             );
             // 死亡标记（C# `Die()` 的 `Death = true`）
-            if let Some(mut e) = self.entities.get_mut(id) {
-                e.death = true;
+            if let Some(e) = self.entities.get_mut(id) {
+                e.life_cycle.death = true;
                 // `BaseObject.cs:323`：`Death = true; DeathTick = HUtil32.GetTickCount();`
-                e.death_tick = self.clock_ms;
-                e.death_settled = true;
-                e.die_called = false;
+                e.life_cycle.death_tick = self.clock_ms;
+                e.life_cycle.death_settled = true;
+                e.life_cycle.die_called = false;
             }
             // **Lane B（城堡实体挂图）**：race 110/111 的 `Die()` 多态分派。
             //
@@ -7051,12 +7060,13 @@ impl World {
     /// `IsGroupMember`），不能读施法者自己的——否则同组玩家会被误判为合法目标
     /// （多抽、白扣护身符、638/642 而非恰 1 条 639）。
     #[must_use]
-    pub fn attacker_group_members(&self, attacker: &Entity) -> Vec<i32> {
-        if attacker.group_owner == 0 {
+    pub fn attacker_group_members(&self, attacker: &impl PvpView) -> Vec<i32> {
+        let group = attacker.group_state();
+        if group.group_owner == 0 {
             return Vec::new();
         }
         self.entities
-            .get(attacker.group_owner)
+            .get(group.group_owner)
             .map(|e| e.group_members.clone())
             .unwrap_or_default()
     }
@@ -7167,7 +7177,7 @@ impl World {
                 // 的**入队等价物**：`SendMsg` 只在 `!Ghost` 时入队（`BaseObject.Message.cs:152-183`）。
                 // `wParam = nPower`（护甲减免后的实际伤害）随队携带，供 `CloneMonster` 扣主人 MP。
                 // 出队处理在目标的 `base.Run`（[`crate::monai::base_object_run_monster`]）。
-                if !e.ghost {
+                if !e.life_cycle.ghost {
                     e.ai.pending_struck.push(crate::entity::StruckMsg {
                         hiter: actor_id,
                         // oracle `SendMsg(target, RM_STRUCK, nPower, …)`（`BaseObject.Attack.cs:61-64`）
@@ -7798,8 +7808,8 @@ impl World {
         // `:730` `if (baseObject.BodyLeathery <= 0)`
         if e.ai.body_leathery == 0 {
             // `:732` `Race >= ActorRace.Animal && Race < ActorRace.Monster`
-            if e.race >= crate::entity::ACTOR_RACE_ANIMAL
-                && e.race < crate::entity::ACTOR_RACE_MONSTER
+            if e.appearance.race >= crate::entity::ACTOR_RACE_ANIMAL
+                && e.appearance.race < crate::entity::ACTOR_RACE_MONSTER
             {
                 // `:734-736` `Skeleton = true; ApplyMeatQuality(); SendRefMsg(RM_SKELETON, …)`
                 e.ai.skeleton = true;
@@ -7814,8 +7824,8 @@ impl World {
             e.ai.body_leathery = 50;
         }
         // `:744` `DeathTick = HUtil32.GetTickCount();` —— 方法内 `this` = **屠宰者**。
-        if let Some(mut actor) = self.entities.get_mut(actor_id) {
-            actor.death_tick = now;
+        if let Some(actor) = self.entities.get_mut(actor_id) {
+            actor.life_cycle.death_tick = now;
         }
         skeleton
     }
@@ -8452,7 +8462,7 @@ mod tests {
             .any(|v| v.target == q));
 
         // 死亡：走既有 death 支（清空视野），不是 scan ⇒ SearchTick 保持 1200。
-        w.entities.get_mut(p).unwrap().death = true;
+        w.entities.get_mut(p).unwrap().life_cycle.death = true;
         w.tick(); // 1400ms
         assert!(
             w.entities.get(p).unwrap().visible_actors.is_empty(),
@@ -8474,7 +8484,7 @@ mod tests {
         // ghost：从进图起推进 6 tick（>1000ms）也不得扫。
         let g = w.add_entity(Entity::new(0, "g", 20, 20));
         let q2 = w.add_entity(Entity::new(0, "q2", 21, 20));
-        w.entities.get_mut(g).unwrap().ghost = true;
+        w.entities.get_mut(g).unwrap().life_cycle.ghost = true;
         let g_tick = w.entities.get(g).unwrap().ai.search_tick;
         for _ in 0..6 {
             w.tick();
@@ -8772,7 +8782,7 @@ mod tests {
         w.enable_monster_ai();
         let p = mview_player(&mut w, 11, 10, 12);
         let m = mview_monster(&mut w, 10, 10, 5, 0);
-        w.entities.get_mut(m).unwrap().death = true;
+        w.entities.get_mut(m).unwrap().life_cycle.death = true;
         // 本条测死亡/幽灵的消息段消费，不是跳步门 ⇒ interval=0 关掉门。
         w.set_process_monster_interval(0);
         for _ in 0..6 {
@@ -8804,7 +8814,7 @@ mod tests {
         let mut w2 = World::new(32, 32);
         mview_player(&mut w2, 11, 10, 12);
         let g = mview_monster(&mut w2, 10, 10, 5, 0);
-        w2.entities.get_mut(g).unwrap().ghost = true;
+        w2.entities.get_mut(g).unwrap().life_cycle.ghost = true;
         for _ in 0..6 {
             w2.tick();
         }
@@ -9588,7 +9598,7 @@ mod tests {
             .expect("Left 允许重进");
         let named: Vec<(i32, bool)> = w
             .entities
-            .iter()
+            .iter_ref()
             .filter(|e| e.name == "hero")
             .map(|e| (e.id, e.ghost))
             .collect();
@@ -9677,7 +9687,7 @@ mod tests {
         let b = w
             .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
             .expect("再进");
-        w.entities.get_mut(b).unwrap().ghost = true;
+        w.entities.get_mut(b).unwrap().life_cycle.ghost = true;
         let ids: Vec<i32> = w.snapshot_sorted().iter().map(|s| s.0).collect();
         assert_eq!(
             ids,
@@ -10230,7 +10240,7 @@ mod tests {
             "重新登记后 5s 内未过期"
         );
         // 命中者死亡 ⇒ 无论时间都清（oracle 的 `||` 右支）。
-        w.entities.get_mut(p).unwrap().death = true;
+        w.entities.get_mut(p).unwrap().life_cycle.death = true;
         w.entities.get_mut(mon).unwrap().set_last_hiter(p, 36_000);
         w.clock_ms = 36_100;
         w.tick();
@@ -10620,7 +10630,7 @@ mod tests {
         let (mut w, p, t, n10) = butch_rig(SEED, 53, true);
         w.entities.get_mut(t).unwrap().ai.body_leathery = n10;
         // `make_ghost` / `DisappearA` 的等价物：置 ghost + 摘格（坐标仍是 (11,10)）。
-        w.entities.get_mut(t).unwrap().ghost = true;
+        w.entities.get_mut(t).unwrap().life_cycle.ghost = true;
         assert!(w.disappear_a(t), "尸体原本在格内 ⇒ 摘格成功");
         let baseline = mir2_shared::rng::RandomNumber::with_seed(SEED).random();
         let ev = w.butch_effect_now(p, t, 11, 10);
@@ -10762,13 +10772,13 @@ mod tests {
         type Mutate = fn(&mut World, i32);
         let cases: Vec<(&str, Mutate)> = vec![
             ("目标未死（Death=false）", |w: &mut World, t| {
-                w.entities.get_mut(t).unwrap().death = false;
+                w.entities.get_mut(t).unwrap().life_cycle.death = false;
             }),
             ("已经是骨架（Skeleton=true）", |w: &mut World, t| {
                 w.entities.get_mut(t).unwrap().ai.skeleton = true;
             }),
             ("非动物 race 83（稻草人）", |w: &mut World, t| {
-                w.entities.get_mut(t).unwrap().race = 83;
+                w.entities.get_mut(t).unwrap().appearance.race = 83;
             }),
             ("超出 2 格（|Δx|=3）", |w: &mut World, t| {
                 w.entities.transform_mut(t).unwrap().x = 13;
@@ -12371,7 +12381,7 @@ mod p31_auto_get_exp_tests {
         let (mut w, id) = player_world(0, 10_000_000);
         w.combat_config.kill_mon_exp_multiple = 3;
         w.combat_config.mn_kill_mon_exp_multiple = 5;
-        w.entities.get_mut(id).unwrap().kill_mon_exp_rate = 250;
+        w.entities.get_mut(id).unwrap().player_run.kill_mon_exp_rate = 250;
         let mut st = AutoGetExpState {
             tick: 0,
             time_ms: 0,
@@ -12405,7 +12415,7 @@ mod p31_auto_get_exp_tests {
     #[test]
     fn p31_no_death_gate() {
         let (mut w, id) = player_world(0, 10_000_000);
-        w.entities.get_mut(id).unwrap().death = true;
+        w.entities.get_mut(id).unwrap().life_cycle.death = true;
         let mut st = AutoGetExpState {
             tick: 0,
             time_ms: 0,
@@ -13393,7 +13403,7 @@ mod weapon_durability_tests {
     #[test]
     fn lamp_never_runs_for_non_players() {
         let (mut w, id) = lamp_world(1500, 0, true);
-        w.entities.get_mut(id).unwrap().race = 80;
+        w.entities.get_mut(id).unwrap().appearance.race = 80;
         assert!(lamp_after_500ms(&mut w).is_empty());
         assert_eq!(
             w.entities.get(id).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,

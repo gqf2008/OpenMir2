@@ -20,9 +20,10 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    AbilitySnapshot, BaseAbil, CombatAttribution, DropState, Entity, EntityRef, EntityStore,
-    MapBinding, Progression, PvpState, Recovery, SpawnBinding, Transform, VisibleBaseObject,
-    VisibleEvent, VisibleFlag, Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    AbilitySnapshot, Appearance, BaseAbil, BuffState, CombatAttribution, DropState, Entity,
+    EntityRef, EntityStore, Flags, GroupState, LifeCycle, MapBinding, MonsterClassState,
+    PlayerRunState, Progression, PvpState, Recovery, Revival, SpawnBinding, Transform,
+    VisibleBaseObject, VisibleEvent, VisibleFlag, Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 use bevy_ecs::prelude::Resource;
@@ -642,6 +643,38 @@ impl AoiStore for BevyAoiStore<'_> {
             .world
             .get::<PvpState>(e)
             .expect("实体必须挂 PvpState 组件（插入期已断言）");
+        let flags = self
+            .world
+            .get::<Flags>(e)
+            .expect("实体必须挂 Flags 组件（插入期已断言）");
+        let life_cycle = self
+            .world
+            .get::<LifeCycle>(e)
+            .expect("实体必须挂 LifeCycle 组件（插入期已断言）");
+        let appearance = self
+            .world
+            .get::<Appearance>(e)
+            .expect("实体必须挂 Appearance 组件（插入期已断言）");
+        let monster_class = self
+            .world
+            .get::<MonsterClassState>(e)
+            .expect("实体必须挂 MonsterClassState 组件（插入期已断言）");
+        let player_run = self
+            .world
+            .get::<PlayerRunState>(e)
+            .expect("实体必须挂 PlayerRunState 组件（插入期已断言）");
+        let group = self
+            .world
+            .get::<GroupState>(e)
+            .expect("实体必须挂 GroupState 组件（插入期已断言）");
+        let revival = self
+            .world
+            .get::<Revival>(e)
+            .expect("实体必须挂 Revival 组件（插入期已断言）");
+        let buff = self
+            .world
+            .get::<BuffState>(e)
+            .expect("实体必须挂 BuffState 组件（插入期已断言）");
         Some(EntityRef::from_components(
             entity,
             transform,
@@ -654,6 +687,14 @@ impl AoiStore for BevyAoiStore<'_> {
             attribution,
             recovery,
             pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
         ))
     }
 
@@ -1094,7 +1135,7 @@ mod tests {
         );
 
         // 退化对照：清 ghost 位 ⇒ 同一夹具立刻可见。
-        store.get_mut(2).unwrap().ghost = false;
+        store.get_mut(2).unwrap().life_cycle.ghost = false;
         let _ = search_view_range(&mut map, &mut store, 1, 1_000);
         let snap = visible_snapshot(&store, 1);
         assert!(

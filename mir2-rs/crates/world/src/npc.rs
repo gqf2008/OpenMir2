@@ -968,8 +968,8 @@ mod tests {
         let a = world
             .spawn_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 4, 4))
             .expect("挂图成功");
-        if let Some(mut e) = world.entities.get_mut(a) {
-            e.ghost = true;
+        if let Some(e) = world.entities.get_mut(a) {
+            e.life_cycle.ghost = true;
         }
         if let Some(n) = world.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
             n.ghost_tick = 0;

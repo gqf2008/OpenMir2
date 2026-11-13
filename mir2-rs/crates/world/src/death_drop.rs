@@ -309,7 +309,7 @@ mod tests {
     fn drop_use_items_red_rate_for_pvp_level_three() {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(0, 10, 10));
-        w.entities.get_mut(p).unwrap().pvp.pk_point = 300; // PvpLevel = 3
+        w.entities.pvp_state_mut(p).unwrap().pk_point = 300; // PvpLevel = 3
         w.item_catalog = vec![std_item(1, 0, 0, 0, 0)];
         w.set_death_drop_config(999, 1, 3, Vec::new());
         let seed = 31;

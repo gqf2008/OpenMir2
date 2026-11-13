@@ -330,8 +330,8 @@ fn child_list_cleanup_removes_dead_ghost_and_missing_in_reverse() {
     let ghost = plain_child(&mut w, 3, 1);
     let missing = plain_child(&mut w, 4, 1);
     let alive2 = plain_child(&mut w, 5, 1);
-    w.entities.get_mut(dead).unwrap().death = true;
-    w.entities.get_mut(ghost).unwrap().ghost = true;
+    w.entities.get_mut(dead).unwrap().life_cycle.death = true;
+    w.entities.get_mut(ghost).unwrap().life_cycle.ghost = true;
     w.entities.remove(missing);
     {
         let mut e = w.entities.get_mut(id).unwrap();
@@ -740,7 +740,7 @@ fn ghost_owner_zen_bee_message_stays_queued() {
     w.entities.get_mut(bee).unwrap().ai.target_creature = Some(target);
     w.clock_ms = 0;
     w.send_self_delay_msg(bee, RM_ZEN_BEE, ZEN_BEE_DELAY_MS);
-    w.entities.get_mut(bee).unwrap().ghost = true;
+    w.entities.get_mut(bee).unwrap().life_cycle.ghost = true;
     w.clock_ms = 10_000;
     let outs = w.deliver_self_delay_msgs();
     assert!(outs.is_empty());

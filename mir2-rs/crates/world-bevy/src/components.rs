@@ -460,22 +460,6 @@ mod adapters {
         fn apply_to(&self, e: &mut Entity);
     }
 
-    /// 全 `Copy` 字段组：直接搬值（避免在 `Copy` 上写 `.clone()`）。
-    macro_rules! copy_adapter {
-        ($ty:ty, $($field:ident),+ $(,)?) => {
-            impl FromEntity for $ty {
-                fn from_entity(e: &Entity) -> Self {
-                    Self { $($field: e.$field),+ }
-                }
-            }
-            impl ApplyToEntity for $ty {
-                fn apply_to(&self, e: &mut Entity) {
-                    $(e.$field = self.$field;)+
-                }
-            }
-        };
-    }
-
     /// 含 `String`/`Vec` 的字段组：按值 clone。
     macro_rules! clone_adapter {
         ($ty:ty, $($field:ident),+ $(,)?) => {
@@ -493,68 +477,6 @@ mod adapters {
     }
 
     clone_adapter!(CoreIdentity, id, name);
-    copy_adapter!(Appearance, race, race_img, appr, light, name_color);
-    copy_adapter!(
-        Flags,
-        invisible,
-        hide_mode,
-        fixed_hide_mode,
-        ob_mode,
-        nasty_mode,
-        attack_mode,
-        in_safe_zone,
-        admin_mode,
-        stone_mode,
-        super_man,
-        rush_mode,
-        want_ref_msg,
-        stick_mode
-    );
-    copy_adapter!(
-        LifeCycle,
-        death,
-        ghost,
-        death_tick,
-        ghost_tick,
-        can_re_alive,
-        re_alive_tick,
-        death_settled,
-        die_called
-    );
-    copy_adapter!(
-        BuffState,
-        poisoning_tick,
-        green_poisoning_point,
-        char_status,
-        char_status_ex,
-        status_time,
-        transparent,
-        show_hp,
-        show_hp_tick,
-        show_hp_interval,
-        magic_shield,
-        un_magic_shield,
-        extra_abil,
-        extra_abil_times,
-        extra_abil_flag
-    );
-    copy_adapter!(
-        PlayerRunState,
-        luck,
-        power_rate,
-        power_rate_time,
-        kill_mon_exp_rate,
-        kill_mon_exp_rate_time,
-        exp_rate_tick,
-        random_no,
-        bo_power_item,
-        power_item,
-        fire_hit_skill,
-        latest_fire_hit_tick,
-        twin_hit_skill,
-        latest_twin_hit_tick
-    );
-    copy_adapter!(Revival, revival, revival_tick, un_revival, flame_ring);
     clone_adapter!(
         SlaveState,
         master,
@@ -568,35 +490,6 @@ mod adapters {
         master_royalty_tick,
         master_tick,
         class_slave_list
-    );
-    copy_adapter!(
-        MonsterClassState,
-        come_out_value,
-        attack_range,
-        use_magic,
-        danger_level,
-        n550,
-        class_attack_tick,
-        bo_is_first,
-        dig_down_tick,
-        appear_start_tick,
-        guard_direction,
-        siege_lock_count,
-        jump_time,
-        crazy_ready_mode,
-        crazy_king_mode,
-        crazy_count,
-        crazy_ready,
-        crazy_time,
-        old_hit_time,
-        old_walk_time
-    );
-    clone_adapter!(
-        GroupState,
-        allow_group,
-        allow_group_re_call,
-        group_owner,
-        group_members
     );
 
     impl FromEntity for Inventory<UseItemSlot> {
@@ -651,56 +544,35 @@ mod adapters {
     #[derive(Clone, Debug)]
     pub struct EntityComponents {
         pub identity: CoreIdentity,
-        pub appearance: Appearance,
-        pub flags: Flags,
-        pub life: LifeCycle,
-        pub buff: BuffState,
-        pub run_state: PlayerRunState,
+        // S4b-1/S4b-2：`Appearance`/`Flags`/`LifeCycle`/`MonsterClassState`/
+        // `BuffState`/`PlayerRunState`/`Revival`/`GroupState` 已从 `Entity` 迁出，
+        // 不再参与 Entity ↔ 组件的 round-trip（真值在各自组件，契约由 ctor 用例钉住）。
         pub inventory: Inventory<UseItemSlot>,
-        pub revival: Revival,
         pub slave: SlaveState,
-        pub class_state: MonsterClassState,
         pub ai: AiState<AnimalState>,
         pub merchant: MerchantState<WorldMerchantState>,
         pub npc: NpcState<WorldNpcState>,
-        pub group: GroupState,
     }
 
     impl EntityComponents {
         pub fn split(e: &Entity) -> Self {
             EntityComponents {
                 identity: FromEntity::from_entity(e),
-                appearance: FromEntity::from_entity(e),
-                flags: FromEntity::from_entity(e),
-                life: FromEntity::from_entity(e),
-                buff: FromEntity::from_entity(e),
-                run_state: FromEntity::from_entity(e),
                 inventory: FromEntity::from_entity(e),
-                revival: FromEntity::from_entity(e),
                 slave: FromEntity::from_entity(e),
-                class_state: FromEntity::from_entity(e),
                 ai: FromEntity::from_entity(e),
                 merchant: FromEntity::from_entity(e),
                 npc: FromEntity::from_entity(e),
-                group: FromEntity::from_entity(e),
             }
         }
 
         pub fn apply_to(&self, e: &mut Entity) {
             self.identity.apply_to(e);
-            self.appearance.apply_to(e);
-            self.flags.apply_to(e);
-            self.life.apply_to(e);
-            self.buff.apply_to(e);
-            self.run_state.apply_to(e);
             self.inventory.apply_to(e);
-            self.revival.apply_to(e);
             self.slave.apply_to(e);
-            self.class_state.apply_to(e);
             self.ai.apply_to(e);
             self.merchant.apply_to(e);
             self.npc.apply_to(e);
-            self.group.apply_to(e);
         }
     }
 }
@@ -713,6 +585,7 @@ mod tests {
     use mir2_world::combat::DropItem;
     use mir2_world::entity::{
         BaseAbil, CastleBinding, Entity, EntitySpawn, MonsterCtorDraws, UseItemSlot,
+        ACTOR_RACE_PLAY,
     };
     use mir2_world::entity::{VisibleBaseObject, VisibleEvent};
     use mir2_world::merchant::{MerchantFlags, MerchantState as WorldMerchantState};
@@ -722,8 +595,10 @@ mod tests {
     /// 全量 round-trip 的 `Debug` 比对都会红。
     ///
     /// S3a/S3b/S4a 起已迁出的字段不再参与本函数：`DupState` 3 + `Transform` 4 +
-    /// `MapBinding` 6 + S4a 20（Vitals 13 / AbilitySnapshot 1 / Progression 6）⇒
-    /// `Entity` 剩 **118 字段**（P0 的 151 减 33）。迁出字段的 value 语义由各自的
+    /// `MapBinding` 6 + S4a 20（Vitals 13 / AbilitySnapshot 1 / Progression 6）+
+    /// S4b-1 45（Appearance 5 / Flags 13 / LifeCycle 8 / MonsterClassState 19）+
+    /// S4b-2 35（PlayerRunState 13 / GroupState 4 / Revival 4 / BuffState 14）⇒
+    /// `Entity` 剩 **17 字段**（P0 的 151 减 134，即 S4c 的 CoreIdentity/Ai/Slave/Merchant/Npc/Inventory）。迁出字段的 value 语义由各自的
     /// 组件契约用例（如 `s4a_component_ctor_defaults_match_entity_new`）钉住。
     fn distinctive_entity() -> EntitySpawn {
         let mut e = Entity::new(91, "ecs-p0", 13, 27);
@@ -956,7 +831,7 @@ mod tests {
     }
 
     /// S4a 起 Vitals/AbilitySnapshot/Progression 已迁出 `Entity`：round-trip 只比较
-    /// `Entity` 主组件（剩余 118 字段）；迁出字段由各自组件契约用例钉住。
+    /// `Entity` 主组件（剩余 17 字段，均为 S4c 待迁）；迁出字段由各自组件契约用例钉住。
     fn debug_snapshot(e: &Entity) -> String {
         format!("{e:?}")
     }
@@ -987,7 +862,7 @@ mod tests {
     fn debug_snapshot_detects_single_field_change() {
         let src = distinctive_entity();
         let mut altered = src.clone();
-        altered.appr = altered.appr.wrapping_add(1);
+        altered.id = altered.id.wrapping_add(1);
         assert_ne!(debug_snapshot(&src.entity), debug_snapshot(&altered.entity));
     }
 
@@ -1042,6 +917,57 @@ mod tests {
         assert_eq!(Vitals::default().max_hp, 0);
         assert_eq!(Progression::default().level, 0);
         assert_eq!(AbilitySnapshot::<BaseAbil>::default().abil, None);
+    }
+
+    /// S4b-1：`Appearance`/`Flags`/`LifeCycle`/`MonsterClassState` 已脱离 `Entity`。
+    ///
+    /// 判据：生成期载体的 ctor 缺省必须与迁移前逐字段一致——`race = Play(0)`、
+    /// `name_color = 255`（ctor 覆盖值），其余布尔/数值 0/false；派生 `Default` 的
+    /// `name_color` 是 0 ⇒ 两者**不同**，这是「不得用 `Component::default()` 造实体」的负对照。
+    ///
+    /// 牙：把 `EntitySpawn::new`/`Entity::new` 的 `name_color` 改成 0 ⇒ 本用例红。
+    #[test]
+    fn s4b1_component_ctor_defaults_match_entity_new() {
+        let e = Entity::new(1, "x", 0, 0);
+        assert_eq!(e.race, ACTOR_RACE_PLAY, "ctor 缺省 Race=Play(0)");
+        assert_eq!(e.race_img, 0, "ctor 缺省 RaceImg=0");
+        assert_eq!(e.appr, 0);
+        assert_eq!(e.light, 0, "ctor 缺省 Light=0");
+        assert_eq!(e.name_color, 255, "ctor 缺省 NameColor=255");
+        assert!(!e.invisible && !e.hide_mode && !e.fixed_hide_mode);
+        assert_eq!(e.attack_mode, 0, "ctor 缺省 AttatckMode=HAM_ALL(0)");
+        assert!(!e.death && !e.ghost && !e.death_settled && !e.die_called);
+        assert_eq!((e.death_tick, e.ghost_tick), (0, 0));
+        assert_eq!(e.come_out_value, 0);
+        assert_eq!(e.danger_level, 0);
+        assert!(!e.bo_is_first);
+        // 派生 Default 与 ctor 缺省的差异（防用 `Default` 直接造实体）。
+        assert_eq!(Appearance::default().name_color, 0);
+        assert_eq!(Appearance::default().race, 0);
+    }
+
+    /// S4b-2：`PlayerRunState`/`GroupState`/`Revival`/`BuffState` 已脱离 `Entity`。
+    ///
+    /// 判据：ctor 缺省与迁移前逐字段一致——倍率 100、`poisoning_tick = BUFF_EPOCH_MS`、
+    /// 状态数组全 0、组队/复活位 false；派生 `Default` 的倍率是 0、`poisoning_tick` 是 0
+    /// ⇒ 两者**不同**（不得用 `Default` 造实体）。
+    ///
+    /// 牙：把 `EntitySpawn` 的 `power_rate`/`poisoning_tick` 缺省改 0 ⇒ 本用例红。
+    #[test]
+    fn s4b2_component_ctor_defaults_match_entity_new() {
+        let e = Entity::new(1, "x", 0, 0);
+        assert_eq!((e.power_rate, e.kill_mon_exp_rate), (100, 100));
+        assert_eq!((e.power_rate_time, e.kill_mon_exp_rate_time), (0, 0));
+        assert_eq!(e.luck, 0);
+        assert_eq!(e.random_no, 0);
+        assert_eq!(e.poisoning_tick, mir2_world::buff::BUFF_EPOCH_MS);
+        assert!(e.status_time.iter().all(|&v| v == 0));
+        assert!(e.extra_abil.iter().all(|&v| v == 0));
+        assert_eq!(e.group_owner, 0);
+        assert!(e.group_members.is_empty());
+        assert!(!e.allow_group && !e.revival && !e.flame_ring);
+        assert_eq!(PlayerRunState::default().power_rate, 0);
+        assert_eq!(BuffState::default().poisoning_tick, 0);
     }
 
     #[test]

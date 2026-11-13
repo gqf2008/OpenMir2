@@ -2029,7 +2029,7 @@ mod tests {
         let mut world = World::new(64, 64);
         let id = revive_corpse(&mut world, 60_000, 1_000);
         // 首次死亡已结算 ⇒ 闩锁为 true（与生产路径一致）。
-        world.entities.get_mut(id).unwrap().death_settled = true;
+        world.entities.get_mut(id).unwrap().life_cycle.death_settled = true;
         let mut state = one_entry_state(60_000, 50, 50, 0, vec![id]);
         let config = cfg();
 
@@ -2115,9 +2115,9 @@ mod tests {
         world.clock_ms = 7_000;
         let alive = place_monster(&mut world, "活", 0, 5, 5, true);
         let dead = place_monster(&mut world, "死", 0, 6, 5, true);
-        world.entities.get_mut(dead).unwrap().death = true;
+        world.entities.get_mut(dead).unwrap().life_cycle.death = true;
         let ghosted = place_monster(&mut world, "幽", 0, 7, 5, false);
-        world.entities.get_mut(ghosted).unwrap().ghost = true;
+        world.entities.get_mut(ghosted).unwrap().life_cycle.ghost = true;
         let pet = place_monster(&mut world, "宠", 0, 8, 5, false);
         world.entities.get_mut(pet).unwrap().master = Some(alive);
         // 异图（map_id 1 不存在于本世界；oracle 比对 `Envir == envir`）。
