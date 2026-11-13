@@ -17,8 +17,8 @@ use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{
-    advance_clock_system, tick::StageTrace, Appearance, BuffState, CombatAttribution, LifeCycle,
-    PlayerRunState, TickClock, TickOwnerThread, TickRunner, TickStage,
+    advance_clock_system, tick::StageTrace, Appearance, BuffState, CombatAttribution, Flags,
+    LifeCycle, PlayerRunState, TickClock, TickOwnerThread, TickRunner, TickStage, Vitals,
 };
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
@@ -1505,6 +1505,10 @@ impl TailRunner {
         let mut me = TailRunner {
             runners: Vec::new(),
         };
+        me.add(
+            TickStage::TailSuperManRefill,
+            tail_super_man_refill_stage_system,
+        );
         me.add(TickStage::OutputAoi, output_aoi_stage_system);
         me
     }
@@ -1689,6 +1693,36 @@ pub fn expire_player_run_state_stage_system(world: &mut bevy_ecs::world::World) 
         }
     }
     world.resource_mut::<StageOut>().run_state_expiries = events;
+}
+
+mir2_world_bevy::stage_spec!(
+    TailSuperManRefill,
+    TickStage::TailSuperManRefill,
+    read: [Appearance, Flags],
+    write: [Vitals]
+);
+
+/// **P2 段 #16 `TailSuperManRefill`**：玩家 `BaseObject.Run` 的 SuperMan 回满段
+/// （`BaseObject.Base.cs:32-36`，在 `HP == 0 ⇒ Die()` 之前）。
+///
+/// 逐项对应旧 `tick_tail` 的 `for_each_mut`：槽位序、`Race==Play && Flags.super_man`、
+/// 回满 `HP=MaxHP` / `MP=MaxMP`；非玩家侧的同段仍在各自 `Run` 里（不在本段）。
+pub fn tail_super_man_refill_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::TailSuperManRefill);
+    let mut ad = mir2_world_bevy::tick::StageEntities::<TailSuperManRefill>::new(world);
+    for (id, _) in ad.order() {
+        let is_play = ad
+            .get::<Appearance>(id)
+            .is_some_and(|a| a.race == crate::entity::ACTOR_RACE_PLAY);
+        let super_man = ad.get::<Flags>(id).is_some_and(|f| f.super_man);
+        if !(is_play && super_man) {
+            continue;
+        }
+        if let Some(v) = ad.get_mut::<Vitals>(id) {
+            v.hp = v.max_hp;
+            v.mp = v.max_mp;
+        }
+    }
 }
 
 pub struct World {
@@ -5884,11 +5918,8 @@ impl World {
         //    （[`Entity::run_super_man_refill`] 于 `base_object_run_monster` / NPC / 商人）调用；
         //    玩家此前**没有**调用点 ⇒ `Entity.super_man = true`（`@3`）只挡死、不回血。
         //    本段无写入者时是纯 no-op（`super_man` 默认 false）⇒ 既有 golden 逐字节不变。
-        self.entities.for_each_mut(|mut e| {
-            if e.appearance.race == crate::entity::ACTOR_RACE_PLAY && e.flags.super_man {
-                e.run_super_man_refill();
-            }
-        });
+        // S4d-3/P2 #16：段系统（`TailSuperManRefill`），段位与旧内联调用完全相同。
+        self.run_tail_stage(|world, tail| tail.run(TickStage::TailSuperManRefill, world));
 
         // 1. 玩家死亡结算（oracle `base.Run:70-73`）：在 P32 复活门之后。
         self.tail_phase_log.push(TailPhase::Die);
@@ -8421,6 +8452,7 @@ mod tests {
                 TickStage::SimExtraAbil,
                 TickStage::SimPlayerRunExpiry,
                 TickStage::OutputDrain,
+                TickStage::TailSuperManRefill,
                 TickStage::OutputAoi
             ],
             "tick 必须按 STAGE_ORDER 推进 head 三段 + tail 一段"
