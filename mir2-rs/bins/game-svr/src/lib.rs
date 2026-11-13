@@ -11143,6 +11143,16 @@ fn shutdown_save_all(
     }
 }
 
+/// **卡 `openmir2-movefail-log-reason`**：`StepOutcome` → 日志里的 `reason=` 字面量。
+///
+/// 真实拒绝由 [`mir2_world::StepBlock::reason`] 产出（`actor` / `terrain` / `bounds`）；
+/// 未分类（actor/地图缺失、退化输入）落 `other`。
+fn movefail_reason(outcome: &mir2_world::StepOutcome) -> &'static str {
+    outcome
+        .blocked
+        .map_or("other", mir2_world::StepBlock::reason)
+}
+
 /// `CM_TURN`(3010) / `CM_WALK`(3011) / `CM_RUN`(3013) / `CM_HORSERUN`(3035) 的派发
 /// （`openmir2-m3-move-wiring`）。
 ///
@@ -11319,7 +11329,8 @@ fn handle_move_cmd(
                 );
                 glog!(
                     "DBG",
-                    "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（已回 SM_MOVEFAIL(28)）ChrName={chr_name}"
+                    "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（已回 SM_MOVEFAIL(28)）reason={} ChrName={chr_name}",
+                    movefail_reason(&outcome),
                 );
                 return;
             }
@@ -11392,7 +11403,7 @@ fn handle_move_cmd(
                 );
                 glog!(
                     "DBG",
-                    "移动：actor_id={actor_id} 方向={dir} {steps} 格后 ({px},{py}) != 目标 ({nx},{ny}) ⇒ 不回 +GD，改回 SM_MOVEFAIL(28) ChrName={chr_name}"
+                    "移动：actor_id={actor_id} 方向={dir} {steps} 格后 ({px},{py}) != 目标 ({nx},{ny}) ⇒ 不回 +GD，改回 SM_MOVEFAIL(28) reason=other ChrName={chr_name}"
                 );
             }
         }
@@ -42141,6 +42152,111 @@ break
             1,
             "目标格是墙 ⇒ 源格登记不得被摘（牙①：只摘 cell_free 属性门会 orphan 掉这一条）"
         );
+    }
+
+    // ==============================================================================
+    // **卡 `openmir2-movefail-log-reason`**：移动被拒原因（`actor`/`terrain`/`bounds`）日志字面量。
+    // 三条路径各一条构造用例；`movefail_reason` 是日志行实际调用的映射函数，把分类改错
+    // （如 `actor` 判成 `terrain`）或改错字面量 ⇒ 对应用例必红。
+    // ==============================================================================
+
+    /// 场景夹具：`(chr, x, y)` 逐个进图（玩家 race），返回世界与首个 actor id。
+    fn world_with_actors(actors: &[(&str, i32, i32)]) -> (mir2_world::World, i32) {
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut first = 0;
+        for (i, (name, x, y)) in actors.iter().enumerate() {
+            world.open_session(name);
+            let mut e = new_player_entity((*name).to_string(), *x, *y);
+            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let id = world.enter_map(name, e, 0).expect("进图");
+            if i == 0 {
+                first = id;
+            }
+        }
+        (world, first)
+    }
+
+    /// 路径 ①：目标格有活着的 actor ⇒ `Actor` / 字面量 `actor`，坐标不动。
+    #[test]
+    fn movefail_reason_actor_when_target_cell_has_live_actor() {
+        let (mut world, a) = world_with_actors(&[("a", 5, 4), ("b", 5, 5)]);
+        let out = world.step_with_route(a, 0, 1, 1);
+        assert!(!out.moved, "目标格有活人 ⇒ 不走");
+        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Actor));
+        assert_eq!(movefail_reason(&out), "actor", "日志字面量必须是 actor");
+        let e = world.entities.get(a).expect("a 仍在");
+        assert_eq!((e.x, e.y), (5, 4), "坐标不动");
+    }
+
+    /// 路径 ②：地形不可走（目标格 `LowWall`）⇒ `Terrain` / 字面量 `terrain`，坐标不动。
+    #[test]
+    fn movefail_reason_terrain_when_target_cell_is_wall() {
+        let (mut world, a) = world_with_actors(&[("a", 5, 4)]);
+        assert!(
+            world.maps[0].set_map_xy_flag(5, 5, false),
+            "前置：(5,5) 置墙"
+        );
+        let out = world.step_with_route(a, 0, 1, 1);
+        assert!(!out.moved, "目标格是墙 ⇒ 不走");
+        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Terrain));
+        assert_eq!(movefail_reason(&out), "terrain", "日志字面量必须是 terrain");
+        let e = world.entities.get(a).expect("a 仍在");
+        assert_eq!((e.x, e.y), (5, 4), "坐标不动");
+    }
+
+    /// 路径 ③：目标格越界 ⇒ `Bounds` / 字面量 `bounds`，坐标不动。
+    #[test]
+    fn movefail_reason_bounds_when_target_cell_is_off_map() {
+        let (mut world, a) = world_with_actors(&[("a", 0, 4)]);
+        let out = world.step_with_route(a, -1, 0, 1);
+        assert!(!out.moved, "越界 ⇒ 不走");
+        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Bounds));
+        assert_eq!(movefail_reason(&out), "bounds", "日志字面量必须是 bounds");
+        let e = world.entities.get(a).expect("a 仍在");
+        assert_eq!((e.x, e.y), (0, 4), "坐标不动");
+    }
+
+    /// 跑/骑跑：报告**第一处**失败格的原因（`steps=2`、第 1 格有活人、第 2 格空）⇒ `actor`，整段不动。
+    #[test]
+    fn movefail_reason_uses_first_blocked_cell_for_multi_step() {
+        let (mut world, a) = world_with_actors(&[("a", 5, 4), ("b", 5, 5)]);
+        let out = world.step_with_route(a, 0, 1, 2);
+        assert!(!out.moved, "第 1 格被占 ⇒ 整段不动（RunTo 原子）");
+        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Actor));
+        assert_eq!(movefail_reason(&out), "actor");
+        let e = world.entities.get(a).expect("a 仍在");
+        assert_eq!((e.x, e.y), (5, 4), "坐标不动");
+    }
+
+    /// 负例（A1 的「**活着的** actor」）：目标格的 actor 已 `death` ⇒ 不算阻挡，正常走进去。
+    /// 删掉分类里的存活过滤（`!Ghost && !Death && !FixedHideMode && !ObMode`）⇒ 本用例必红。
+    #[test]
+    fn movefail_reason_ignores_dead_actor_on_target_cell() {
+        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        world.open_session("a");
+        let mut ea = new_player_entity("a".to_string(), 5, 4);
+        ea.race = mir2_world::ACTOR_RACE_PLAY;
+        let a = world.enter_map("a", ea, 0).expect("a 进图");
+        world.open_session("b");
+        let mut eb = new_player_entity("b".to_string(), 5, 5);
+        eb.race = mir2_world::ACTOR_RACE_PLAY;
+        let b = world.enter_map("b", eb, 0).expect("b 进图");
+        world.entities.get_mut(b).expect("b 实体").life_cycle.death = true;
+        let out = world.step_with_route(a, 0, 1, 1);
+        assert!(out.moved, "死人不挡路 ⇒ 走进去");
+        assert_eq!(out.blocked, None, "成功移动不得带被拒原因");
+        let e = world.entities.get(a).expect("a 仍在");
+        assert_eq!((e.x, e.y), (5, 5), "落在目标格");
+    }
+
+    /// 成功移动不得带被拒原因（防止 `blocked` 被恒置 `Some` 的回归）。
+    #[test]
+    fn step_reason_is_none_when_move_succeeds() {
+        let (mut world, a) = world_with_actors(&[("a", 5, 4)]);
+        let out = world.step_with_route(a, 1, 0, 1);
+        assert!(out.moved, "空格 ⇒ 走 1 格");
+        assert_eq!(out.blocked, None, "成功移动不得带被拒原因");
+        assert_eq!(movefail_reason(&out), "other", "`None` 的映射兜底是 other");
     }
 
     /// **owner §26（sim 循环对接）**：`CM_PICKUP` 派发到 `ground::pick_up` + `pickwire`，

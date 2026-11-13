@@ -401,6 +401,46 @@ pub struct TickRecord {
     pub run_state_expiries: Vec<(i32, RunStateExpiry)>,
 }
 
+/// **移动被拒原因**（卡 `openmir2-movefail-log-reason`，`L` 级：**纯日志分类，不参与判定**）。
+///
+/// 与 [`World::try_step_blocked`] / [`World::cell_free_blocked`] 的既有门一一对应；成功/失败集合
+/// 与改动前逐例相同（本枚举只把「为什么失败」带出来）：
+/// - [`StepBlock::Bounds`] —— 目标格越界（`MapGrid::cell_match` 为假；oracle
+///   `Envirnoment.MoveToMovingObject` 的首个 `CellMatch` 门）；
+/// - [`StepBlock::Terrain`] —— 目标格地形不可走（`cell.valid()` 为假 / `GetCellInfo` 的
+///   `cellSuccess` 为假），也含非玩家落点命中 `CellType::MapRoute` 的阻挡与 `EnterAnotherMap`
+///   目的地不可进的失败（日志词汇里最贴近的一类）；
+/// - [`StepBlock::Actor`] —— 目标格有活着的 actor（`!Ghost && !Death && !FixedHideMode && !ObMode`，
+///   与 `move_object` 的 `is_blocking` 同口径）；
+/// - [`StepBlock::Other`] —— 退化输入（`steps <= 0` / `(0,0)`）或 actor/地图缺失。
+///
+/// 日志字面量只由 [`StepBlock::reason`] 产出；客户端 lane（`ai-actor-avoid`）只解析
+/// `actor`/`terrain`/`bounds`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepBlock {
+    /// 目标格有活着的 actor 占位。
+    Actor,
+    /// 目标格地形不可走（或换图目的地不可进）。
+    Terrain,
+    /// 目标格越界。
+    Bounds,
+    /// 非上述三类（退化输入 / 内部缺失）；日志字面量 `other`。
+    Other,
+}
+
+impl StepBlock {
+    /// 日志字面量（**客户端只认 `actor`/`terrain`/`bounds`**；`other` 不属三类）。
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            StepBlock::Actor => "actor",
+            StepBlock::Terrain => "terrain",
+            StepBlock::Bounds => "bounds",
+            StepBlock::Other => "other",
+        }
+    }
+}
+
 /// **L1 TransMap 触发**：`World::step_with_route` 的结果（供宿主排帧序）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct StepOutcome {
@@ -415,6 +455,9 @@ pub struct StepOutcome {
     /// 不执行泡点计时复位；只有 `AddToMap` 失败的回滚支仍会走到
     /// `AutoGetExpTick = GetTickCount()`（`:3796`）。宿主据本字段决定「回滚支也要复位」。
     pub rolled_back: bool,
+    /// **卡 `openmir2-movefail-log-reason`**：本条移动被拒的原因（`moved == true` 时恒 `None`）。
+    /// **只用于日志分类**——不改变 `moved`/`changed_map`/`rolled_back` 的任何语义。
+    pub blocked: Option<StepBlock>,
 }
 
 /// [`World::route_enter`] 的结果：区分「无 route / 被门跳过」「成功换图」「`EnterAnotherMap` 失败」。
@@ -9096,19 +9139,22 @@ impl World {
     #[must_use]
     pub fn step_with_route(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> StepOutcome {
         let Some(e) = self.entities.get(actor_id) else {
+            // actor 不在世界：不是移动判定语义 ⇒ 不分类（日志落 `other`）。
             return StepOutcome {
                 moved: false,
                 changed_map: false,
                 rolled_back: false,
+                blocked: None,
             };
         };
         // 走前格（回滚落点；oracle `WalkTo` 的 `oldX/oldY`/`oldEnvir`）。
         let (old_x, old_y, old_map) = (e.x, e.y, e.map_id);
-        if !self.try_step_now(actor_id, dx, dy, steps) {
+        if let Err(block) = self.try_step_now_blocked(actor_id, dx, dy, steps) {
             return StepOutcome {
                 moved: false,
                 changed_map: false,
                 rolled_back: false,
+                blocked: Some(block),
             };
         }
         // 记下本轮起点，失败回滚时把误记的 `MapChange` 撤掉（否则宿主多发一组换图簇）。
@@ -9121,6 +9167,8 @@ impl World {
                     moved: false,
                     changed_map: false,
                     rolled_back: false,
+                    // `EnterAnotherMap` 前置门（`CellValid` 等）⇒ 目的地不可进，按地形归类。
+                    blocked: Some(StepBlock::Terrain),
                 }
             }
             RouteOutcome::RolledBack => {
@@ -9132,17 +9180,21 @@ impl World {
                     moved: false,
                     changed_map: false,
                     rolled_back: true,
+                    // `AddToMap` 落地失败（目标格不可登记）⇒ 同样按地形归类。
+                    blocked: Some(StepBlock::Terrain),
                 }
             }
             RouteOutcome::Switched => StepOutcome {
                 moved: true,
                 changed_map: true,
                 rolled_back: false,
+                blocked: None,
             },
             RouteOutcome::Skipped => StepOutcome {
                 moved: true,
                 changed_map: false,
                 rolled_back: false,
+                blocked: None,
             },
         }
     }
@@ -9366,20 +9418,36 @@ impl World {
     ///
     /// 红检（变异牙）：删掉本函数里的 `race != ACTOR_RACE_PLAY` 落点检查 ⇒
     /// `try_step_now` 会被怪物走上 route 格、`step_with_route_does_not_switch_for_monster` 必红。
+    ///
+    /// **卡 `openmir2-movefail-log-reason`**：判定体已移到 [`World::try_step_now_blocked`]（带回原因）；
+    /// 本函数保留 bool 口径，返回真值与改动前逐例相同。
     #[must_use]
     pub fn try_step_now(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> bool {
+        self.try_step_now_blocked(actor_id, dx, dy, steps).is_ok()
+    }
+
+    /// [`World::try_step_now`] 的**分类版**：判定顺序与原实现逐条相同，额外把被拒原因带出来
+    /// （只供日志分类，不参与判定）。
+    ///
+    /// 多格（跑/骑跑）时报告**第一处**失败格的原因（`k` 从 1 起，与 `cell_free_blocked` 的判序一致）；
+    /// 落点格（走完的 `CurrX/CurrY`）含 `MapRoute` 且非玩家 ⇒ 归 `Terrain`。
+    fn try_step_now_blocked(
+        &mut self,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+        steps: i32,
+    ) -> Result<(), StepBlock> {
         if steps <= 0 || (dx == 0 && dy == 0) {
-            return false;
+            return Err(StepBlock::Other);
         }
         let Some(e) = self.entities.get(actor_id) else {
-            return false;
+            return Err(StepBlock::Other);
         };
         let (fx, fy, map_id) = (e.x, e.y, e.map_id);
         let race = e.race;
         for k in 1..=steps {
-            if !self.cell_free(map_id, fx + dx * k, fy + dy * k, actor_id) {
-                return false;
-            }
+            self.cell_free_blocked(map_id, fx + dx * k, fy + dy * k, actor_id)?;
         }
         // 落点格（走完的 `CurrX/CurrY`）含 MapRoute 且非玩家 ⇒ 挡（oracle `BaseObject.cs:1548`
         // `result = false` + `WalkTo` 回滚 `:683-688`）。玩家由 `step_with_route` 的换图负责。
@@ -9389,52 +9457,74 @@ impl World {
                 .get(map_id)
                 .is_some_and(|m| m.has_map_route(fx + dx * steps, fy + dy * steps))
         {
-            return false;
+            // 不是活体占位、也不是越界（格存在且是 route 格）⇒ 按「地形不可走」归类。
+            return Err(StepBlock::Terrain);
         }
-        self.try_step(actor_id, dx * steps, dy * steps)
+        self.try_step_blocked(actor_id, dx * steps, dy * steps)
     }
 
-    /// 目标格是否可站（与 `try_step` 的阻挡口径同源：`cell_match` + `valid()/is_available()` +
-    /// 阻挡 actor 的 `!Ghost && !Death && !FixedHideMode && !ObMode`；`self_id` 自己不算阻挡）。
-    fn cell_free(&self, map_id: usize, tx: i32, ty: i32, self_id: i32) -> bool {
+    /// 目标格是否可站的**分类版**（与 `try_step_blocked` 的阻挡口径同源：`cell_match` +
+    /// `valid()/is_available()` + 阻挡 actor 的 `!Ghost && !Death && !FixedHideMode && !ObMode`；
+    /// `self_id` 自己不算阻挡）。`Ok(())` = 可站。
+    fn cell_free_blocked(
+        &self,
+        map_id: usize,
+        tx: i32,
+        ty: i32,
+        self_id: i32,
+    ) -> Result<(), StepBlock> {
         let Some(map) = self.maps.get(map_id) else {
-            return false;
+            return Err(StepBlock::Other);
         };
         if !map.cell_match(tx, ty) {
-            return false;
+            return Err(StepBlock::Bounds);
         }
         let (cell, ok) = map.get_cell_info(tx, ty);
         if !ok {
-            return false;
+            return Err(StepBlock::Terrain);
         }
         if !(cell.valid() && cell.is_available()) {
-            return true;
+            return Ok(());
         }
-        !cell.obj_list.iter().any(|o| {
+        if cell.obj_list.iter().any(|o| {
             o.actor_object
                 && o.cell_obj_id != self_id
                 && self
                     .entities
                     .get(o.cell_obj_id)
                     .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
-        })
+        }) {
+            return Err(StepBlock::Actor);
+        }
+        Ok(())
     }
 
-    /// 单步移动：格子校验 → 更新坐标。
+    /// 单步移动（bool 口径，行为与卡 `openmir2-movefail-log-reason` 之前逐例相同）。
     fn try_step(&mut self, actor_id: i32, dx: i32, dy: i32) -> bool {
+        self.try_step_blocked(actor_id, dx, dy).is_ok()
+    }
+
+    /// 单步移动的**分类版**：格子校验 → 更新坐标。`Ok(())` = 已移动；`Err(_)` = 未移动及原因。
+    ///
+    /// 判序与原 `try_step` 逐条对应（bounds → terrain → actor → `move_object`）：每个 `Err` 分支在
+    /// 原实现里都同样返回 `false` 且**不改任何状态**（`move_object` 的失败门都在源格摘除之前），
+    /// 故成功/失败集合不变。
+    fn try_step_blocked(&mut self, actor_id: i32, dx: i32, dy: i32) -> Result<(), StepBlock> {
         let Some(e) = self.entities.get(actor_id) else {
-            return false;
+            return Err(StepBlock::Other);
         };
         let (fx, fy, map_id) = (e.x, e.y, e.map_id);
         let cert_cell_type = entity_cell_type(&e);
         let (tx, ty) = (fx + dx, fy + dy);
+        // 目标格分类**只在这里判一次**（与 `try_step_now_blocked` 同源）：越界/地形/活体占位
+        // 三种原因都由 [`World::cell_free_blocked`] 产出，避免两处口径漂移。
+        self.cell_free_blocked(map_id, tx, ty, actor_id)?;
+        // `move_object` 的 `is_blocking` 闭包需要「不可变借用 `maps` 期间」算好的 id 名单；
+        // 分类已由上一行完成，这里只复刻原实现的输入（含自占格，`(0,0)` 时与原行为一致）。
         let blockers: Vec<i32> = {
             let Some(map) = self.maps.get(map_id) else {
-                return false;
+                return Err(StepBlock::Other);
             };
-            if !map.cell_match(tx, ty) {
-                return false;
-            }
             let (cell, _) = map.get_cell_info(tx, ty);
             cell.obj_list
                 .iter()
@@ -9452,7 +9542,7 @@ impl World {
             .collect();
         let now = self.clock_ms;
         let Some(map) = self.maps.get_mut(map_id) else {
-            return false;
+            return Err(StepBlock::Other);
         };
         let moved = map.move_object(
             crate::map::MoveRequest {
@@ -9467,13 +9557,16 @@ impl World {
             },
             |cid| blocking.contains(&cid),
         );
-        if moved {
-            if let Some(t) = self.entities.transform_mut(actor_id) {
-                t.x = tx;
-                t.y = ty;
-            }
+        if !moved {
+            // bounds/terrain/actor 已由 `cell_free_blocked` 排除；残余失败（如 `(0,0)` 自占格被
+            // `is_blocking` 命中）原实现也返回 false ⇒ 归入 Other。
+            return Err(StepBlock::Other);
         }
-        moved
+        if let Some(t) = self.entities.transform_mut(actor_id) {
+            t.x = tx;
+            t.y = ty;
+        }
+        Ok(())
     }
 
     /// **出站接线片 W2**：`Command::Push` → `BaseObject.CharPushed`
