@@ -224,12 +224,13 @@ pub fn advance_clock_system(
 
 use crate::ecs::SlotTable;
 
-/// **段规格**：每个段一个零大小类型，声明自己的 [`TickStage`] 与是否允许结构变更。
+/// **段规格**：每个段一个零大小类型，声明自己的 [`TickStage`]。
+///
+/// 结构变更的编译期门是 [`Structural`] 标记 trait（只有 Command / NPC / 商人 /
+/// 宝宝清表会实现），不用常量：常量无消费者时是死配置（review P3-4）。
 pub trait StageSpec: 'static {
     /// 本段在 [`STAGE_ORDER`] 里的阶段。
     const STAGE: TickStage;
-    /// 是否允许 `insert` / `remove`（只有 Command / NPC / 商人 / 宝宝清表为 `true`）。
-    const STRUCTURAL: bool = false;
 }
 
 /// 本段**允许读**的组件（标记 trait；由 `stage_spec!` 或手写 impl 生成）。

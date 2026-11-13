@@ -8278,13 +8278,6 @@ mod tests {
         assert!(!w.refresh_game_time(2));
     }
 
-    /// **T3·①（本批最重要的判据）：`world.tick` 内 `npc_tick` 必先于 `merchant_tick`
-    /// 消费共享 RNG**（oracle `MerchantProcessor.ExecuteInternal` 先 `ProcessNpcs()` 后
-    /// `ProcessMerchants()`，`MerchantProcessor.cs:28-32`）。
-    ///
-    /// 同一 tick 内让一个固定 NPC（`GuildOfficial`）与一个商人（`Merchant`）**都过 Run 门**，
-    /// 再以一个同种子独立流按**字面量 oracle 参数**复算合并后的抽数序列：先 NPC 体
-    /// （`Random(40)` → [`RandomByte(8)` | `Random(30)`]），后商人体
     /// **S4d-3/P1 段注册牙**：tick 驱动的真实 runner 必须按 `STAGE_ORDER` 的对应切片记录段序。
     ///
     /// 牙：删掉 `HeadRunner::new` 里任一 `add_systems`（或 `World::with_maps` 里
@@ -8342,6 +8335,13 @@ mod tests {
         );
     }
 
+    /// **T3·①（本批最重要的判据）：`world.tick` 内 `npc_tick` 必先于 `merchant_tick`
+    /// 消费共享 RNG**（oracle `MerchantProcessor.ExecuteInternal` 先 `ProcessNpcs()` 后
+    /// `ProcessMerchants()`，`MerchantProcessor.cs:28-32`）。
+    ///
+    /// 同一 tick 内让一个固定 NPC（`GuildOfficial`）与一个商人（`Merchant`）**都过 Run 门**，
+    /// 再以一个同种子独立流按**字面量 oracle 参数**复算合并后的抽数序列：先 NPC 体
+    /// （`Random(40)` → [`RandomByte(8)` | `Random(30)`]），后商人体
     /// （`Random(50)` → [`RandomByte(8)` | `Random(50)`]）。
     ///
     /// **牙**：把 `world.rs` 里 `if self.npc_enabled {…}` 与 `if self.merchant_enabled {…}`
@@ -10502,7 +10502,7 @@ mod tests {
 
     /// **S4d-2 牙**：PL-1 快照必须保留 `expire_hitters` **清理前**的 `LastHiter`。
     ///
-    /// 变异：删掉 `snapshot_runner` 的 `SimHiterSnapshot` 系统注册（或删 `sim_hiter_snapshot_system`
+    /// 变异：删掉 `HeadRunner` 的 `SimHiterSnapshot` 系统注册（或删 `sim_hiter_snapshot_system`
     /// 的 push）⇒ 快照为空 / `None`，本用例在 `expect("玩家必须进 PL-1 快照")` 或值断言处红。
     #[test]
     fn tick_snapshot_keeps_player_last_hiter_before_expiry() {

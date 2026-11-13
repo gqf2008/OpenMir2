@@ -8,15 +8,16 @@
 //!
 //! 两处均有隔离微基准与 A/B 证据（见 `tests/parity/world/S2调优报告.md`）。
 //!
-//! 形态：用 [`bevy_ecs::world::World`] 承载实体/组件，用本结构**自己的槽位索引**
-//! （`slots` / `free` / `index`）决定遍历与处理顺序。
+//! 形态：用 [`bevy_ecs::world::World`] 承载实体/组件；槽位索引
+//! （`slots` / `free` / `index`）自 S4d-3/P0 起住在 bevy `World` 的 [`crate::ecs::SlotTable`]
+//! 资源里（唯一真值），本结构只保留缓存查询与「实体 -> 槽位」序缓存。
 //!
 //! ## 四条硬约束怎么落实（设计文档 §4.2.2）
 //!
 //! 1. **单线程**：本内核不建线程、不用并行 API；tick 骨架见 [`crate::tick`]（显式
 //!    [`bevy_ecs::schedule::SingleThreadedExecutor`]）；
 //! 2. **遍历顺序显式化**：`EcsStore` **一次都不迭代 `Query` 求顺序**——`iter` / `iter_mut` /
-//!    `order_index` 全部走 `slots`（槽位顺序 = 插入顺序 + 空闲槽复用）。`Query`（或 `World::get`）
+//!    `order_index` 全部走 `SlotTable`（槽位顺序 = 插入顺序 + 空闲槽复用）。`Query`（或 `World::get`）
 //!    只用于「按显式句柄取组件」。这一点由内核单测 `src/ecs.rs::tests::
 //!    order_follows_slots_not_query_order` 与 `crates/world/tests/ecs_migration.rs::
 //!    entity_order_follows_slots_not_query_order` 双重钉住（把顺序改回迭代 `Query` 立刻红）。
@@ -745,6 +746,9 @@ mod tests {
             "alloc:100",
             "ids_sorted:[2, 7, 99]",
         ];
-        assert_eq!(trace, master, "id 分配/槽位复用序列必须与 master 记录向量逐项相等");
+        assert_eq!(
+            trace, master,
+            "id 分配/槽位复用序列必须与 master 记录向量逐项相等"
+        );
     }
 }
