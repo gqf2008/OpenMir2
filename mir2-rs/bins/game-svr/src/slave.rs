@@ -842,11 +842,16 @@ mod tests {
                 tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
             {
                 let mut t = w.entities.get_mut(target).unwrap();
-                t.master = Some(caster);
-                t.is_slave = true;
+                t.slave.master = Some(caster);
+                t.slave.is_slave = true;
                 t.ai.target_creature = Some(999);
             }
-            w.entities.get_mut(caster).unwrap().slave_list.push(target);
+            w.entities
+                .get_mut(caster)
+                .unwrap()
+                .slave
+                .slave_list
+                .push(target);
             let mut train = tamming_train();
             let input = tamming_cast(caster, Some(target), &cfg, &magic);
             let out = cast_tamming_spell(&mut w, &input, &mut train);
@@ -858,7 +863,7 @@ mod tests {
                 assert_eq!(t.hp, 30, "早退支不改 HP（不 /10）");
                 assert_eq!(
                     w.entities.get(caster).unwrap().slave_list,
-                    vec![target],
+                    &vec![target],
                     "不重复入表"
                 );
                 break;

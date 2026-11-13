@@ -45,7 +45,7 @@
 //!   （与 [`crate::merchant`] 同款）；实体槽位序 = 文件正序 [`World::insert_npc`]。
 
 use crate::entity::{
-    BaseAnimalCtorDraws, Entity, ACTOR_RACE_NPC, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON,
+    BaseAnimalCtorDraws, Entity, EntityRef, ACTOR_RACE_NPC, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON,
     NORM_NPC_LIGHT,
 };
 use crate::map::CellType;
@@ -119,7 +119,7 @@ pub enum MerchantLookup {
 
 /// 按 oracle `FindMerchant` 的**硬转语义**给一次查找定性（见 [`MerchantLookup`]）。
 #[must_use]
-pub fn merchant_lookup(entity: Option<&Entity>) -> MerchantLookup {
+pub fn merchant_lookup(entity: Option<EntityRef<'_>>) -> MerchantLookup {
     let Some(e) = entity else {
         return MerchantLookup::Absent;
     };
@@ -314,7 +314,7 @@ impl World {
     #[must_use]
     pub fn npc_ids_sorted(&self) -> Vec<i32> {
         self.entities
-            .iter()
+            .iter_ref()
             .filter(|e| e.npc.is_some())
             .map(|e| e.id)
             .collect()
@@ -365,7 +365,7 @@ impl World {
             if !is_ghost {
                 if (now - run_tick) > NPC_RUN_TIME {
                     // oracle 先写 `RunTick = now` 再 `Run()`（`WorldServer.Merchant.cs:133-134`）。
-                    if let Some(n) = self.entities.entity_mut(id).and_then(|e| e.npc.as_mut()) {
+                    if let Some(n) = self.entities.npc_state_mut(id) {
                         n.run_tick = now;
                     }
                     let r = npc_run(self, id);
@@ -411,11 +411,7 @@ impl World {
 /// `!Death` ⇒ 恢复/`Die`/靶标清理；**不抽数**（见 B-L4）。本片**只落抽数与朝向状态**
 /// （`RM_TURN`/`RM_HIT` 出帧属 B-4，帧面接线随 AOI 车道）。
 pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
-    let npc_type = world
-        .entities
-        .entity(actor_id)
-        .and_then(|e| e.npc.as_ref())
-        .map(|n| n.npc_type);
+    let npc_type = world.entities.npc_state(actor_id).map(|n| n.npc_type);
     let mut outcome = NpcRunOutcome::default();
     match npc_type {
         // 不可达（`NpcType::from_raw` 已过滤非 {0,1,2}；`entity.npc` 为 None 时上面 `None`）。
@@ -480,18 +476,13 @@ fn merchant_body_run(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutco
     // `Merchant.cs:159-164`：`BoCanMove && (now - MoveTick) > MoveTime*1000` ⇒ `MapRandomMove`。
     let Some((can_move, move_time, move_tick)) = world
         .entities
-        .entity(actor_id)
-        .and_then(|e| e.npc.as_ref())
+        .npc_state(actor_id)
         .map(|n| (n.can_move, n.move_time, n.move_tick))
     else {
         return;
     };
     if can_move && (now - move_tick) > i64::from(move_time) * 1000 {
-        if let Some(n) = world
-            .entities
-            .entity_mut(actor_id)
-            .and_then(|e| e.npc.as_mut())
-        {
+        if let Some(n) = world.entities.npc_state_mut(actor_id) {
             n.move_tick = now;
         }
         crate::merchant::map_random_move(world, actor_id);
@@ -616,26 +607,26 @@ mod tests {
 
         assert_eq!(merchant_lookup(None), MerchantLookup::Absent);
         assert_eq!(
-            merchant_lookup(world.entities.entity(999_999)),
+            merchant_lookup(world.entities.get(999_999)),
             MerchantLookup::Absent,
             "id 不在世界 ⇒ C3（`TryGetValue` 假 ⇒ null）"
         );
         assert_eq!(
-            merchant_lookup(world.entities.entity(guild)),
+            merchant_lookup(world.entities.get(guild)),
             MerchantLookup::NotMerchant,
             "Npcs.txt type=1（GuildOfficial）只实现 INormNpc ⇒ (IMerchant)actor 抛"
         );
         assert_eq!(
-            merchant_lookup(world.entities.entity(monster)),
+            merchant_lookup(world.entities.get(monster)),
             MerchantLookup::NotMerchant,
             "怪物不实现 IMerchant ⇒ 同样抛（不是「找不到」）"
         );
         assert_eq!(
-            merchant_lookup(world.entities.entity(merchant)),
+            merchant_lookup(world.entities.get(merchant)),
             MerchantLookup::Merchant
         );
         assert_eq!(
-            merchant_lookup(world.entities.entity(castle)),
+            merchant_lookup(world.entities.get(castle)),
             MerchantLookup::Merchant,
             "CastleOfficial : Merchant ⇒ 实现 IMerchant"
         );
@@ -784,7 +775,7 @@ mod tests {
             let sq = exp.random_below(2000) + 2000;
             let at = exp.random_below(3000);
             let wk = exp.random_below(3000);
-            let n = world.entities.entity(id).unwrap().npc.as_ref().unwrap();
+            let n = world.entities.npc_state(id).unwrap();
             assert_eq!(
                 n.run_tick_delta, d,
                 "seed={seed} RunTick 分量 = Random(1500)"
@@ -817,7 +808,7 @@ mod tests {
             .spawn_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 2, 2))
             .expect("挂图成功");
         let set_rt = |w: &mut World, v: i64| {
-            if let Some(n) = w.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
+            if let Some(n) = w.entities.npc_state_mut(a) {
                 n.run_tick = v;
             }
         };
@@ -862,7 +853,7 @@ mod tests {
         player.dc = 0x0A_14;
         let pid = world.add_entity(player);
         assert!(world.enter_world(pid), "玩家必须落图，656 才有观察者");
-        if let Some(n) = world.entities.entity_mut(nid).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world.entities.npc_state_mut(nid) {
             n.run_tick = 0;
         }
 
@@ -915,7 +906,7 @@ mod tests {
         let a = world
             .spawn_npc(spawn_typed("老人", NPC_TYPE_MERCHANT, 0, 3, 3))
             .expect("挂图成功");
-        if let Some(n) = world.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world.entities.npc_state_mut(a) {
             n.run_tick = 0;
         }
         world.clock_ms = 10_000;
@@ -926,7 +917,7 @@ mod tests {
         );
 
         world.enable_npc_tick();
-        if let Some(n) = world.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world.entities.npc_state_mut(a) {
             n.run_tick = 0;
         }
         let rec = world.tick();
@@ -950,7 +941,7 @@ mod tests {
             .spawn_npc(spawn_typed("丙", NPC_TYPE_CASTLE_OFFICIAL, 0, 3, 3))
             .expect("挂图成功");
         for id in [a, b, c] {
-            if let Some(n) = world.entities.entity_mut(id).and_then(|e| e.npc.as_mut()) {
+            if let Some(n) = world.entities.npc_state_mut(id) {
                 n.run_tick = 0;
             }
         }
@@ -971,7 +962,7 @@ mod tests {
         if let Some(e) = world.entities.get_mut(a) {
             e.life_cycle.ghost = true;
         }
-        if let Some(n) = world.entities.entity_mut(a).and_then(|e| e.npc.as_mut()) {
+        if let Some(n) = world.entities.npc_state_mut(a) {
             n.ghost_tick = 0;
         }
         world.clock_ms = 60_000; // 字面量：`(now-GhostTick) > 60*1000`

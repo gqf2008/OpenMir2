@@ -2660,8 +2660,8 @@ fn apply_gm_use_item_write(
     // 世界侧（`Entity.use_items` 是每 tick 回写会话的源）。
     let actor = sg.actor_id;
     let extra_abil = world.entities.get(actor).map(|e| e.extra_abil);
-    if let Some(mut e) = world.entities.get_mut(actor) {
-        if let Some(slot) = e.use_items.get_mut(w.slot) {
+    if let Some(e) = world.entities.get_mut(actor) {
+        if let Some(slot) = e.inventory.use_items.get_mut(w.slot) {
             slot.make_index = w.make_index;
             slot.index = w.index;
             slot.dura = w.dura;
@@ -5542,9 +5542,8 @@ fn dlgselect_route_for(ident: u16, entity: Option<mir2_world::EntityRef<'_>>) ->
     if ident != game_svr::shop::CM_MERCHANTDLGSELECT {
         return DlgSelectRoute::Shop;
     }
-    let ent: Option<&mir2_world::Entity> = entity.as_ref().map(|e| e.entity());
-    let lookup = mir2_world::npc::merchant_lookup(ent);
-    let npc_type = ent.and_then(|e| e.npc.as_ref()).map(|st| st.npc_type);
+    let lookup = mir2_world::npc::merchant_lookup(entity);
+    let npc_type = entity.and_then(|e| e.npc).map(|st| st.npc_type);
     merchant_dlgselect_route(lookup, npc_type)
 }
 
@@ -5691,7 +5690,7 @@ fn handle_click_npc_cmd(
     //     `MakeGhost`）⇒ **同样零帧（X）**；
     //   * `Merchant`：`MerChant` 商人 / `Npcs.txt` type 0、type 2 ⇒ 继续走 `normNpc.Click`。
     // 前两者**都零帧**但路径不同，判据必须分开钉（卡 `openmir2-click-npc-guildofficial-cast`）。
-    match mir2_world::npc::merchant_lookup(world.entities.entity(npc_actor_id)) {
+    match mir2_world::npc::merchant_lookup(world.entities.get(npc_actor_id)) {
         mir2_world::npc::MerchantLookup::Absent => {
             glog!(
                 "DBG",
@@ -9161,8 +9160,7 @@ fn run_merchant_goto(
             // （`CastleOfficial.cs:33-91`）。
             player.vars.castle_official = w
                 .entities
-                .entity(merchant_actor_id)
-                .and_then(|e| e.npc.as_ref())
+                .npc_state(merchant_actor_id)
                 .is_some_and(|st| st.npc_type == mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL);
         }
         // **卡 `openmir2-gm-script-exec-seams`**：装 GM 跳线（`sess` = 移出的会话 GM 态）。
@@ -10421,7 +10419,7 @@ fn entity_derived_snapshot(e: mir2_world::EntityRef<'_>) -> EntityDerived {
         attack_mode: e.attack_mode,
         allow_group_re_call: e.allow_group_re_call,
         allow_group: e.allow_group,
-        use_items: e.use_items,
+        use_items: *e.use_items,
     }
 }
 
@@ -10566,10 +10564,10 @@ fn bag_items_for_save(item_list: &[game_svr::bag::BagItem]) -> Vec<Option<record
 ///
 /// 逐字段搬运 `index/dura/dura_max/desc`（`None` = oracle 的 `null` 槽 ⇒ 默认全零槽）。
 fn apply_use_items_to_entity(
-    entity: &mut mir2_world::Entity,
+    use_items_slots: &mut [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
     use_items: &[Option<game_svr::bag::BagItem>],
 ) {
-    for (i, slot) in entity.use_items.iter_mut().enumerate() {
+    for (i, slot) in use_items_slots.iter_mut().enumerate() {
         *slot = use_items.get(i).and_then(Option::as_ref).map_or_else(
             mir2_world::entity::UseItemSlot::default,
             |it| mir2_world::entity::UseItemSlot {
@@ -10585,8 +10583,8 @@ fn apply_use_items_to_entity(
 
 /// 会话 → 实体：整表同步（进世界装载 / 穿脱后）。
 fn sync_use_items_to_entity(world: &mut mir2_world::World, sg: &SessionGround) {
-    if let Some(entity) = world.entities.entity_mut(sg.actor_id) {
-        apply_use_items_to_entity(entity, &sg.use_items);
+    if let Some(inv) = world.entities.inventory_mut(sg.actor_id) {
+        apply_use_items_to_entity(&mut inv.use_items, &sg.use_items);
     }
 }
 
@@ -10599,17 +10597,18 @@ pub(crate) fn sync_use_item_slot_to_entity(
     if slot >= mir2_world::entity::USE_ITEM_SLOTS {
         return;
     }
-    if let Some(mut entity) = world.entities.get_mut(sg.actor_id) {
-        entity.use_items[slot] = sg.use_items.get(slot).and_then(Option::as_ref).map_or_else(
-            mir2_world::entity::UseItemSlot::default,
-            |it| mir2_world::entity::UseItemSlot {
-                make_index: it.make_index,
-                index: it.index,
-                dura: it.dura,
-                dura_max: it.dura_max,
-                desc: it.desc,
-            },
-        );
+    if let Some(entity) = world.entities.get_mut(sg.actor_id) {
+        entity.inventory.use_items[slot] =
+            sg.use_items.get(slot).and_then(Option::as_ref).map_or_else(
+                mir2_world::entity::UseItemSlot::default,
+                |it| mir2_world::entity::UseItemSlot {
+                    make_index: it.make_index,
+                    index: it.index,
+                    dura: it.dura,
+                    dura_max: it.dura_max,
+                    desc: it.desc,
+                },
+            );
     }
 }
 
@@ -10924,22 +10923,21 @@ fn build_save_record(
     // 权威源优先级：实体（且确实装载过装备）→ 离世快照 → 会话克隆。
     // **§11.1 定级**：`use_items` 与上面四个标量不同级——它的兜底是**会话实时值**（每 tick
     // 回写，只丢 ≤1 tick），不是载入记录；快照只为覆盖「离世那一刻的精确值」（如最后一刀磨损）。
-    let entity_use_items = world
+    let entity_use_items: Option<
+        [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
+    > = world
         .session(chr_name)
         .and_then(|s| s.actor_id)
         .and_then(|id| world.entities.get(id))
-        .map(|e| e.use_items);
+        .map(|e| *e.use_items);
+    let saved_use_items = saved.derived.as_ref().map(|d| d.use_items);
     let authoritative_use_items = match entity_use_items {
         // 只有「实体确实装载过装备」时才以实体为权威：全零实体 = 本路径从未同步（单测/旧路径），
         // 此时会话是唯一真源。
         Some(items) if use_items_loaded(&items) => Some(items),
         Some(_) => None,
         // 实体已离世（soft-close / 顶号）⇒ 用离世那一刻的快照；同样要求「装载过」。
-        None => saved
-            .derived
-            .as_ref()
-            .map(|d| d.use_items)
-            .filter(use_items_loaded),
+        None => saved_use_items.filter(use_items_loaded),
     };
     if let Some(items) = authoritative_use_items {
         for (i, cell) in save_use_items
@@ -20754,7 +20752,7 @@ fn gm_mob_recalc(world: &mut mir2_world::World, id: i32, level: u8, now: i64) {
     let Some(mut e) = world.entities.get_mut(id) else {
         return;
     };
-    e.slave_exp_level = level;
+    e.slave.slave_exp_level = level;
     mir2_world::slave::apply_slave_level_abilitys(&mut e);
     mir2_world::slave::apply_derived_slave_recalc(&mut e, now);
     e.vitals.anti_magic = 1;
@@ -20770,17 +20768,17 @@ fn gm_mob_recalc(world: &mut mir2_world::World, id: i32, level: u8, now: i64) {
 fn gm_recall_ex_adopt(world: &mut mir2_world::World, caster_id: i32, mon_id: i32, name_color: u8) {
     let hp_before = world.entities.get(mon_id).map_or(0, |e| e.hp);
     let adopted = world.make_slave_adopt(caster_id, mon_id, 0, 1, 0);
-    if let Some(mut e) = world.entities.get_mut(mon_id) {
+    if let Some(e) = world.entities.get_mut(mon_id) {
         e.appearance.name_color = name_color;
         if adopted {
-            e.is_slave = false;
-            e.master_royalty_tick = 0;
+            e.slave.is_slave = false;
+            e.slave.master_royalty_tick = 0;
             e.vitals.hp = hp_before;
         } else {
             // `make_slave_adopt` 只在「主人不是玩家/实体缺失」时返回 false（生产不可达）；
             // 兜底仍按 oracle 的两个必写字段落账。
-            e.master = Some(caster_id);
-            e.slave_exp_level = 1;
+            e.slave.master = Some(caster_id);
+            e.slave.slave_exp_level = 1;
         }
     }
 }
@@ -27798,9 +27796,9 @@ fn sim_loop(
                                                     // 对象同一性）——耐久循环读的是实体槽，不装载就恒全零。
                                                     let session_use_items =
                                                         use_items_from(d.hum_items.as_deref());
-                                                    if let Some(e) = world.entities.entity_mut(id) {
+                                                    if let Some(inv) = world.entities.inventory_mut(id) {
                                                         apply_use_items_to_entity(
-                                                            e,
+                                                            &mut inv.use_items,
                                                             &session_use_items,
                                                         );
                                                     } else {
@@ -33302,11 +33300,7 @@ mod tests {
         let (online, gates, mut rx) = aoi_observer_fixture(p);
 
         let set_war = |world: &mut mir2_world::World, war: bool| {
-            let st = world
-                .entities
-                .entity_mut(mer_id)
-                .and_then(|e| e.merchant.as_mut())
-                .expect("商人状态在");
+            let st = world.entities.merchant_mut(mer_id).expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
             st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
         };
@@ -33507,11 +33501,7 @@ mod tests {
         let catalog = game_svr::ability::StdItemCatalog::new();
 
         let set_war = |world: &mut mir2_world::World, war: bool| {
-            let st = world
-                .entities
-                .entity_mut(mer_id)
-                .and_then(|e| e.merchant.as_mut())
-                .expect("商人状态在");
+            let st = world.entities.merchant_mut(mer_id).expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
             st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
         };
@@ -33728,11 +33718,7 @@ mod tests {
         let catalog = game_svr::ability::StdItemCatalog::new();
 
         let set_war = |world: &mut mir2_world::World, id: i32, war: bool| {
-            let st = world
-                .entities
-                .entity_mut(id)
-                .and_then(|e| e.merchant.as_mut())
-                .expect("商人状态在");
+            let st = world.entities.merchant_mut(id).expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
             st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
         };
@@ -33881,11 +33867,7 @@ mod tests {
         let catalog = game_svr::ability::StdItemCatalog::new();
 
         let set_war = |world: &mut mir2_world::World, id: i32, war: bool| {
-            let st = world
-                .entities
-                .entity_mut(id)
-                .and_then(|e| e.merchant.as_mut())
-                .expect("商人状态在");
+            let st = world.entities.merchant_mut(id).expect("商人状态在");
             st.castle_under_war = war;
             st.run_tick = -1000;
         };
@@ -34072,21 +34054,13 @@ mod tests {
         );
 
         // 开战：下一轮扫描把商人标 Hidden 并移除；`hides` 必须**不含**它。
-        if let Some(st) = world
-            .entities
-            .entity_mut(mer_id)
-            .and_then(|e| e.merchant.as_mut())
-        {
+        if let Some(st) = world.entities.merchant_mut(mer_id) {
             st.castle_under_war = true;
         }
         let mut disappears_total = 0usize;
         let mut removed_from_view = false;
         for _ in 0..40 {
-            if let Some(st) = world
-                .entities
-                .entity_mut(mer_id)
-                .and_then(|e| e.merchant.as_mut())
-            {
+            if let Some(st) = world.entities.merchant_mut(mer_id) {
                 st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
             }
             let rec = world.tick();
@@ -34231,18 +34205,10 @@ mod tests {
             .actor_id;
         // `Run` 门（`(now - run_tick) > RunTime(250)`）的确定性起点：只让第一只 Run，
         // 第二只的 `run_tick` 钉在本次 `clock_ms` 上 ⇒ 不参与本次取数（RNG 流不受扰动）。
-        if let Some(n) = world
-            .entities
-            .entity_mut(npc_id)
-            .and_then(|e| e.npc.as_mut())
-        {
+        if let Some(n) = world.entities.npc_state_mut(npc_id) {
             n.run_tick = 0;
         }
-        if let Some(n) = world
-            .entities
-            .entity_mut(other_npc)
-            .and_then(|e| e.npc.as_mut())
-        {
+        if let Some(n) = world.entities.npc_state_mut(other_npc) {
             n.run_tick = 1_000;
         }
 
@@ -38679,8 +38645,7 @@ break
         // `T142Rig` 的商人只开 `is_buy`；修理支还要求 `IsRepair`（`Merchant.ClientRepairItem`）。
         rig.world
             .entities
-            .entity_mut(rig.merchant_id)
-            .and_then(|e| e.merchant.as_mut())
+            .merchant_mut(rig.merchant_id)
             .expect("商人实体")
             .flags
             .is_repair = true;
@@ -38854,8 +38819,7 @@ break
         );
         rig.world
             .entities
-            .entity_mut(merchant_id)
-            .and_then(|e| e.merchant.as_mut())
+            .merchant_mut(merchant_id)
             .expect("商人实体")
             .flags
             .is_repair = true;
@@ -38963,8 +38927,7 @@ break
         );
         rig.world
             .entities
-            .entity_mut(merchant_id)
-            .and_then(|e| e.merchant.as_mut())
+            .merchant_mut(merchant_id)
             .expect("商人实体")
             .flags
             .is_upgradenow = true;
@@ -39037,8 +39000,7 @@ break
         );
         rig.world
             .entities
-            .entity_mut(merchant_id)
-            .and_then(|e| e.merchant.as_mut())
+            .merchant_mut(merchant_id)
             .expect("商人实体")
             .flags
             .is_get_backupgnow = true;
@@ -40101,7 +40063,7 @@ break
         );
 
         let mut entity = mir2_world::Entity::new(0, "hero", 10, 10);
-        apply_use_items_to_entity(&mut entity, &session_items);
+        apply_use_items_to_entity(&mut entity.use_items, &session_items);
         assert_eq!(
             entity.use_items[SLOT_DRESS],
             use_slot(7001, 11, 100, 200, [7; 14]),
@@ -40202,7 +40164,7 @@ break
         });
         // 生产路径里实体槽是从会话装载的（`apply_use_items_to_entity` 含 MakeIndex）；
         // 本用例直造实体，补齐同一身份字段后再验回写。
-        world.entities.get_mut(hero_id).unwrap().use_items[SLOT_DRESS].make_index = 7001;
+        world.entities.get_mut(hero_id).unwrap().inventory.use_items[SLOT_DRESS].make_index = 7001;
         sync_use_items_to_session(&world, &mut sg);
         let saved = sg.use_items[SLOT_DRESS].as_ref().expect("仍装备");
         assert_eq!(saved.dura, dura_after, "实体磨损回写会话（存档源）");
@@ -40222,7 +40184,7 @@ break
         hero.use_items[SLOT_DRESS].desc = [7; 14];
         let mut rng = LedgerRandom::new(vec![0, 1]);
         let hero_race = hero.race;
-        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero, hero_race);
+        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
 
         assert_eq!(
             rng.draws,
@@ -40259,7 +40221,7 @@ break
         // 脚本：Random(10)=0 ⇒ nDam=5；Random(8) 依次 1（槽0 不再磨损）、0（槽1 磨损）、2（槽7 不磨损）。
         let mut rng = LedgerRandom::new(vec![0, 1, 0, 2]);
         let hero_race = hero.race;
-        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero, hero_race);
+        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
 
         assert_eq!(
             rng.draws,
@@ -40311,11 +40273,11 @@ break
             .and_then(|s| s.actor_id)
             .expect("会话有 actor_id");
         {
-            let e = world.entities.entity_mut(id).expect("实体在场");
-            apply_use_items_to_entity(e, &sg.use_items);
-            e.use_items[SLOT_WEAPON].dura = 1234; // 世界侧磨损
-            e.use_items[SLOT_HELMET].index = 0; // 世界侧破零
-            e.use_items[SLOT_HELMET].dura = 0;
+            let e = world.entities.get_mut(id).expect("实体在场");
+            apply_use_items_to_entity(&mut e.inventory.use_items, &sg.use_items);
+            e.inventory.use_items[SLOT_WEAPON].dura = 1234; // 世界侧磨损
+            e.inventory.use_items[SLOT_HELMET].index = 0; // 世界侧破零
+            e.inventory.use_items[SLOT_HELMET].dura = 0;
         }
 
         let rec = build_save_record(&saved, "hero", &world, &sg, None);
@@ -40383,8 +40345,8 @@ break
                 desc: [0; 14],
             });
             {
-                let e = world.entities.entity_mut(actor).expect("实体在场");
-                apply_use_items_to_entity(e, &sg.use_items);
+                let e = world.entities.get_mut(actor).expect("实体在场");
+                apply_use_items_to_entity(&mut e.inventory.use_items, &sg.use_items);
             }
             let mut sessions = HashMap::new();
             sessions.insert("hero".to_string(), sg);
@@ -40668,6 +40630,7 @@ break
             .entities
             .get_mut(rig.actor)
             .expect("实体在场")
+            .inventory
             .use_items[SLOT_WEAPON]
             .dura = 1234; // 世界侧磨损（会话回写尚未发生）
         assert_eq!(
@@ -40724,6 +40687,7 @@ break
             .entities
             .get_mut(rig.actor)
             .expect("实体在场")
+            .inventory
             .use_items =
             [mir2_world::entity::UseItemSlot::default(); mir2_world::entity::USE_ITEM_SLOTS];
         assert_eq!(
@@ -40848,7 +40812,7 @@ break
         let mut hero = durability_player(&[]);
         let mut rng = LedgerRandom::new(vec![0]);
         let hero_race = hero.race;
-        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero, hero_race);
+        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
         assert_eq!(
             rng.draws,
             vec![10],
@@ -45063,6 +45027,7 @@ break
             .entities
             .get_mut(master)
             .unwrap()
+            .slave
             .slave_list
             .push(slave);
 
@@ -45299,8 +45264,8 @@ break
             },
         );
         {
-            let mut e = rig.world.entities.get_mut(rig.actor).expect("aaa 实体");
-            e.use_items[3] = mir2_world::entity::UseItemSlot {
+            let e = rig.world.entities.get_mut(rig.actor).expect("aaa 实体");
+            e.inventory.use_items[3] = mir2_world::entity::UseItemSlot {
                 make_index: 42,
                 index: 5,
                 dura: 100,
@@ -45396,8 +45361,8 @@ break
             desc: [0; 14],
         });
         {
-            let mut e = f.world.entities.get_mut(1).expect("hero 实体");
-            e.use_items[3] = mir2_world::entity::UseItemSlot {
+            let e = f.world.entities.get_mut(1).expect("hero 实体");
+            e.inventory.use_items[3] = mir2_world::entity::UseItemSlot {
                 make_index: 42,
                 index: 5,
                 dura: 100,
@@ -58369,6 +58334,7 @@ SendRefMsgRange=15
             .entities
             .get_mut(merchant_id)
             .unwrap()
+            .merchant_state
             .merchant
             .as_mut()
             .unwrap()
@@ -58679,8 +58645,13 @@ SendRefMsgRange=15
 
         // —— ③ 非制药商人（同一实体去掉 IsMakeDrug）⇒ 零帧、零副作用。
         {
-            let mut st = world.entities.get_mut(merchant_id).unwrap();
-            st.merchant.as_mut().unwrap().flags.is_make_drug = false;
+            let st = world.entities.get_mut(merchant_id).unwrap();
+            st.merchant_state
+                .merchant
+                .as_mut()
+                .unwrap()
+                .flags
+                .is_make_drug = false;
         }
         handle_shop_cmd(
             game_svr::shop::CM_USERMAKEDRUGITEM,
@@ -78330,7 +78301,11 @@ mod tests {",
 
         // **复验 F1**：按生产进世界路径预装实体装备（实体全零会掩盖"实体旧武器整表回写"的 bug）。
         apply_use_items_to_entity(
-            world.entities.entity_mut(hero).expect("hero 实体在"),
+            &mut world
+                .entities
+                .inventory_mut(hero)
+                .expect("hero 实体在")
+                .use_items,
             &sessions["hero"].use_items,
         );
         // **复验 F2**：`AttPowerUp` 写 `ExtraAbil[0]`（`world.rs:3752` 可达）；+5 后 WAbil.dc 应 0x0601。
@@ -78546,13 +78521,7 @@ mod tests {",
             0,
             "F1：再跑一次 drain 后会话仍为 0（武器不复活）"
         );
-        let st = world
-            .entities
-            .entity(mid)
-            .unwrap()
-            .merchant
-            .as_ref()
-            .unwrap();
+        let st = world.entities.merchant(mid).unwrap();
         assert_eq!(st.upgrade_weapon_list.len(), 1);
         assert_eq!(st.upgrade_weapon_list[0].dura, 4, "2×5000 ⇒ Dura=4");
         assert_eq!(
@@ -78618,13 +78587,7 @@ mod tests {",
             bag_len_before,
             "BUG-REPLICA：AddItemToBag 被注释 ⇒ 武器不进 ItemList"
         );
-        let st = world
-            .entities
-            .entity(mid)
-            .unwrap()
-            .merchant
-            .as_ref()
-            .unwrap();
+        let st = world.entities.merchant(mid).unwrap();
         assert!(st.upgrade_weapon_list.is_empty(), "取回后记录移除");
     }
 
@@ -78820,6 +78783,7 @@ mod tests {",
                 .entities
                 .get_mut(self.npc_id)
                 .expect("固定 NPC 存在")
+                .npc_state
                 .npc
                 .as_mut()
                 .expect("固定 NPC 有 NpcState")
@@ -80988,12 +80952,12 @@ GMEXECUTE f
         let mut rig = T137Rig::new();
         let king_id = rig.king_id;
         assert_eq!(
-            mir2_world::npc::merchant_lookup(rig.world.entities.entity(999_999)),
+            mir2_world::npc::merchant_lookup(rig.world.entities.get(999_999)),
             mir2_world::npc::MerchantLookup::Absent,
             "id 不在世界 ⇒ C3"
         );
         assert_eq!(
-            mir2_world::npc::merchant_lookup(rig.world.entities.entity(king_id)),
+            mir2_world::npc::merchant_lookup(rig.world.entities.get(king_id)),
             mir2_world::npc::MerchantLookup::NotMerchant,
             "type=1 ⇒ X（与 C3 不是同一条分支）"
         );
@@ -81751,6 +81715,7 @@ GMEXECUTE f
             .entities
             .get_mut(elder_id)
             .expect("老人存在")
+            .npc_state
             .npc
             .as_mut()
             .expect("固定 NPC 有 NpcState")
@@ -81793,6 +81758,7 @@ GMEXECUTE f
             .entities
             .get_mut(elder_id)
             .expect("老人存在")
+            .npc_state
             .npc
             .as_mut()
             .expect("固定 NPC 有 NpcState")
@@ -81903,6 +81869,7 @@ GMEXECUTE f
             .entities
             .get_mut(elder)
             .expect("老人存在")
+            .npc_state
             .npc
             .as_mut()
             .expect("NpcState")
@@ -85214,7 +85181,12 @@ fn ",
             dura_max: 200,
             desc: [0; 14],
         };
-        rig.world.entities.get_mut(rig.actor).unwrap().use_items[3] = slot;
+        rig.world
+            .entities
+            .get_mut(rig.actor)
+            .unwrap()
+            .inventory
+            .use_items[3] = slot;
         rig.sessions.get_mut("hero").unwrap().use_items[3] = Some(game_svr::bag::BagItem {
             make_index: 7,
             index: 1,
@@ -86231,13 +86203,14 @@ mod weapon_durability_downlink_tests {
         let q = world
             .enter_map("q", new_player_entity("q".to_string(), 11, 10), 0)
             .expect("玩家 q 进图");
-        world.entities.get_mut(p).unwrap().use_items[2] = mir2_world::entity::UseItemSlot {
-            make_index: 1,
-            index: 1,
-            dura: 1501,
-            dura_max: 10_000,
-            desc: [0u8; 14],
-        };
+        world.entities.get_mut(p).unwrap().inventory.use_items[2] =
+            mir2_world::entity::UseItemSlot {
+                make_index: 1,
+                index: 1,
+                dura: 1501,
+                dura_max: 10_000,
+                desc: [0u8; 14],
+            };
 
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
@@ -86295,13 +86268,14 @@ mod weapon_durability_downlink_tests {
         let foe = world.add_entity(foe);
         let mut desc = [0u8; 14];
         desc[10] = 1; // `ItemAttr.WeaponUpgrade`：1 ⇒ 必碎（`PlayObject.cs:4150-4152`）
-        world.entities.get_mut(p).unwrap().use_items[1] = mir2_world::entity::UseItemSlot {
-            make_index: 7,
-            index: 10,
-            dura: 5000,
-            dura_max: 10_000,
-            desc,
-        };
+        world.entities.get_mut(p).unwrap().inventory.use_items[1] =
+            mir2_world::entity::UseItemSlot {
+                make_index: 7,
+                index: 10,
+                dura: 5000,
+                dura_max: 10_000,
+                desc,
+            };
 
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
@@ -86365,13 +86339,14 @@ mod weapon_durability_downlink_tests {
         // ② 有武器但 `Desc[10] == 0`：不进 `CheckWeaponUpgrade`。
         let mut desc = [0u8; 14];
         desc[0] = 3;
-        world.entities.get_mut(p).unwrap().use_items[1] = mir2_world::entity::UseItemSlot {
-            make_index: 7,
-            index: 10,
-            dura: 5000,
-            dura_max: 10_000,
-            desc,
-        };
+        world.entities.get_mut(p).unwrap().inventory.use_items[1] =
+            mir2_world::entity::UseItemSlot {
+                make_index: 7,
+                index: 10,
+                dura: 5000,
+                dura_max: 10_000,
+                desc,
+            };
         world.attack_cmd(p, foe);
         let rec = world.tick();
         assert!(rec.weapon_breaks.is_empty(), "Desc[10]==0 ⇒ 不结算");
@@ -86381,7 +86356,7 @@ mod weapon_durability_downlink_tests {
         // ③ 有标记但**空挥**（attackTarget == null）：`attack_swing` 不跑结算。
         let mut desc = [0u8; 14];
         desc[10] = 1;
-        world.entities.get_mut(p).unwrap().use_items[1].desc = desc;
+        world.entities.get_mut(p).unwrap().inventory.use_items[1].desc = desc;
         assert!(world.attack_swing(p).is_some());
         let rec = world.tick();
         assert!(
@@ -86424,9 +86399,12 @@ mod weapon_strong_numeric_tests {
         // ws = 0：拿到 raw = Random(5)+2
         let mut e0 = weapon_entity(5_000);
         let mut rng0 = RandomNumber::with_seed(42);
-        let out0 =
-            mir2_world::combat::attack_success_weapon_wear_with_strong(&mut rng0, &mut e0, 0)
-                .expect("有武器 + damage>0 ⇒ 结算");
+        let out0 = mir2_world::combat::attack_success_weapon_wear_with_strong(
+            &mut rng0,
+            &mut e0.use_items,
+            0,
+        )
+        .expect("有武器 + damage>0 ⇒ 结算");
         let dura0 = match out0.frames.first() {
             Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
             other => panic!("首个帧应为 DuraChange: {other:?}"),
@@ -86440,9 +86418,12 @@ mod weapon_strong_numeric_tests {
         // ws = 3：磨损量 = raw - 3（raw>=2 ⇒ 可能为负 ⇒ ushort 回绕）
         let mut e3 = weapon_entity(5_000);
         let mut rng3 = RandomNumber::with_seed(42);
-        let out3 =
-            mir2_world::combat::attack_success_weapon_wear_with_strong(&mut rng3, &mut e3, 3)
-                .expect("damage != 0 ⇒ 结算");
+        let out3 = mir2_world::combat::attack_success_weapon_wear_with_strong(
+            &mut rng3,
+            &mut e3.use_items,
+            3,
+        )
+        .expect("damage != 0 ⇒ 结算");
         let expect3 = 5_000u16.wrapping_sub(raw.wrapping_sub(3));
         let got3 = match out3.frames.first() {
             Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
@@ -86453,9 +86434,12 @@ mod weapon_strong_numeric_tests {
         // ws = 9 > raw：C# `(ushort)` 回绕成 ~65527..65531 ⇒ 耐久反向回绕，不 panic
         let mut e9 = weapon_entity(5_000);
         let mut rng9 = RandomNumber::with_seed(42);
-        let out9 =
-            mir2_world::combat::attack_success_weapon_wear_with_strong(&mut rng9, &mut e9, 9)
-                .expect("回绕后 damage != 0 ⇒ 仍结算");
+        let out9 = mir2_world::combat::attack_success_weapon_wear_with_strong(
+            &mut rng9,
+            &mut e9.use_items,
+            9,
+        )
+        .expect("回绕后 damage != 0 ⇒ 仍结算");
         let expect9 = 5_000u16.wrapping_sub(raw.wrapping_sub(9));
         let got9 = match out9.frames.first() {
             Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
@@ -86470,8 +86454,12 @@ mod weapon_strong_numeric_tests {
         let mut e0b = weapon_entity(5_000);
         let mut rng0b = RandomNumber::with_seed(42);
         assert!(
-            mir2_world::combat::attack_success_weapon_wear_with_strong(&mut rng0b, &mut e0b, raw)
-                .is_none(),
+            mir2_world::combat::attack_success_weapon_wear_with_strong(
+                &mut rng0b,
+                &mut e0b.use_items,
+                raw
+            )
+            .is_none(),
             "`WS == Random(5)+2` ⇒ nWeaponDamage == 0 ⇒ 不扣、不发帧"
         );
         assert_eq!(
@@ -86922,7 +86910,7 @@ mod attack_weapon_wear_tests {
         foe.hp = 1000;
         foe.max_hp = 1000;
         let foe = world.add_entity(foe);
-        world.entities.get_mut(p).unwrap().use_items[1] = weapon_slot(5000, 9000);
+        world.entities.get_mut(p).unwrap().inventory.use_items[1] = weapon_slot(5000, 9000);
 
         world.attack_cmd(p, foe);
         let rec = world.tick();
@@ -87028,7 +87016,7 @@ mod attack_weapon_wear_tests {
         foe.hp = 1000;
         foe.max_hp = 1000;
         let foe = world.add_entity(foe);
-        world.entities.get_mut(p).unwrap().use_items[1] = weapon_slot(5000, 9000);
+        world.entities.get_mut(p).unwrap().inventory.use_items[1] = weapon_slot(5000, 9000);
         world.attack_cmd(p, foe);
         let rec = world.tick();
         assert_eq!(rec.weapon_wears.len(), 1, "攻击产生 642 事件");
@@ -87098,7 +87086,7 @@ mod attack_weapon_wear_tests {
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家 p 进图");
-        world.entities.get_mut(p).unwrap().use_items[1] = weapon_slot(5000, 9000);
+        world.entities.get_mut(p).unwrap().inventory.use_items[1] = weapon_slot(5000, 9000);
 
         let _ = world.attack_swing(p);
         let rec = world.tick();

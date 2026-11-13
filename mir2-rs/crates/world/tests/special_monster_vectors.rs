@@ -264,7 +264,7 @@ fn make_child_stops_at_15() {
         e.ai.attack_tick = 0;
         e.ai.walk_speed = 1400;
         e.ai.next_hit_time = 2000;
-        e.special_children = children;
+        e.slave.special_children = children;
     }
     w.clock_ms = 5000;
     let before_refs = w.pending_special_ref_msgs.len();
@@ -302,7 +302,7 @@ fn make_child_below_limit_sends_hit_and_delay() {
         e.ai.attack_tick = 0;
         e.ai.walk_speed = 1400;
         e.ai.next_hit_time = 2000;
-        e.special_children = children;
+        e.slave.special_children = children;
     }
     w.clock_ms = 5000;
     special_monster_run(&mut w, id);
@@ -335,7 +335,7 @@ fn child_list_cleanup_removes_dead_ghost_and_missing_in_reverse() {
     w.entities.remove(missing);
     {
         let mut e = w.entities.get_mut(id).unwrap();
-        e.special_children = vec![alive1, dead, ghost, missing, alive2];
+        e.slave.special_children = vec![alive1, dead, ghost, missing, alive2];
         e.ai.walk_tick = 0;
         e.ai.attack_tick = 0;
         e.ai.walk_speed = 1400;
@@ -345,7 +345,7 @@ fn child_list_cleanup_removes_dead_ghost_and_missing_in_reverse() {
     special_monster_run(&mut w, id);
     assert_eq!(
         w.entities.get(id).unwrap().special_children,
-        vec![alive1, alive2],
+        &vec![alive1, alive2],
         "倒序移除 Death/Ghost/缺失，剩余保序"
     );
 }
@@ -689,7 +689,7 @@ fn zen_bee_delay_queues_then_flush_spawns_and_adopts() {
     let flushed = w.flush_special_spawns(&mut sp);
     assert_eq!(flushed.len(), 1);
     let child = flushed[0].child_id.expect("造怪成功");
-    assert_eq!(w.entities.get(bee).unwrap().special_children, vec![child]);
+    assert_eq!(w.entities.get(bee).unwrap().special_children, &vec![child]);
     assert_eq!(
         w.entities.get(child).unwrap().ai.target_creature,
         Some(target)
@@ -826,7 +826,7 @@ fn adopt_without_target_still_joins_list() {
     let bee = special_owner(&mut w, RACE_BEE_QUEEN, 2, 2);
     let child = plain_child(&mut w, 2, 3);
     assert!(adopt_special_child(&mut w, bee, child));
-    assert_eq!(w.entities.get(bee).unwrap().special_children, vec![child]);
+    assert_eq!(w.entities.get(bee).unwrap().special_children, &vec![child]);
     assert_eq!(w.entities.get(child).unwrap().ai.target_creature, None);
 }
 

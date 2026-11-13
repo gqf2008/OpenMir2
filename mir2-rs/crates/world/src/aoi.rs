@@ -21,9 +21,10 @@
 
 use crate::entity::{
     AbilitySnapshot, Appearance, BaseAbil, BuffState, CombatAttribution, DropState, Entity,
-    EntityRef, EntityStore, Flags, GroupState, LifeCycle, MapBinding, MonsterClassState,
-    PlayerRunState, Progression, PvpState, Recovery, Revival, SpawnBinding, Transform,
-    VisibleBaseObject, VisibleEvent, VisibleFlag, Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    EntityRef, EntityStore, Flags, GroupState, Inventory, LifeCycle, MapBinding, MerchantState,
+    MonsterClassState, NpcState, PlayerRunState, Progression, PvpState, Recovery, Revival,
+    SlaveState, SpawnBinding, Transform, VisibleBaseObject, VisibleEvent, VisibleFlag, Vitals,
+    ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 use bevy_ecs::prelude::Resource;
@@ -675,6 +676,22 @@ impl AoiStore for BevyAoiStore<'_> {
             .world
             .get::<BuffState>(e)
             .expect("实体必须挂 BuffState 组件（插入期已断言）");
+        let slave = self
+            .world
+            .get::<SlaveState>(e)
+            .expect("实体必须挂 SlaveState 组件（插入期已断言）");
+        let inventory = self
+            .world
+            .get::<Inventory>(e)
+            .expect("实体必须挂 Inventory 组件（插入期已断言）");
+        let merchant = self
+            .world
+            .get::<MerchantState>(e)
+            .expect("实体必须挂 MerchantState 组件（插入期已断言）");
+        let npc = self
+            .world
+            .get::<NpcState>(e)
+            .expect("实体必须挂 NpcState 组件（插入期已断言）");
         Some(EntityRef::from_components(
             entity,
             transform,
@@ -695,6 +712,10 @@ impl AoiStore for BevyAoiStore<'_> {
             group,
             revival,
             buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
         ))
     }
 

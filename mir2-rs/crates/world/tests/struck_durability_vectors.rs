@@ -109,7 +109,7 @@ fn mk_target(items: &[(usize, u16, u16)]) -> EntitySpawn {
     target
 }
 
-fn equipped(target: &Entity) -> Vec<(usize, u16, u16)> {
+fn equipped(target: &EntitySpawn) -> Vec<(usize, u16, u16)> {
     target
         .use_items
         .iter()
@@ -128,7 +128,7 @@ fn struck_durability_matches_oracle_vectors() {
         let mut target = mk_target(&case.items_in);
         let mut rng = replay(&case.draws);
         let target_race = target.race;
-        struck_damage_durability(&mut rng, &mut target, target_race);
+        struck_damage_durability(&mut rng, &mut target.use_items, target_race);
 
         assert!(
             rng.divergences().is_empty(),

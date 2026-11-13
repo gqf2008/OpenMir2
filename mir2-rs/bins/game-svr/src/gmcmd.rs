@@ -1340,7 +1340,7 @@ impl GmEntityState {
     ///
     /// 实体不在场（`self_entity()` 为 `None` 时根本不会生成差量）⇒ 本函数兜底为 no-op。
     pub fn apply(&self, world: &mut mir2_world::World) {
-        let Some(mut e) = world.entities.get_mut(self.actor_id) else {
+        let Some(e) = world.entities.get_mut(self.actor_id) else {
             return;
         };
         if let Some(v) = self.admin_mode {
@@ -1353,7 +1353,7 @@ impl GmEntityState {
             e.flags.super_man = v;
         }
         if let Some(v) = self.slave_relax {
-            e.slave_relax = v;
+            e.slave.slave_relax = v;
         }
         if let Some(v) = self.attack_mode {
             e.flags.attack_mode = v;
@@ -2249,7 +2249,7 @@ impl<'a> GmWorld<'a> {
     /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
     fn self_use_item(&self, slot: usize) -> Option<&'a mir2_world::entity::UseItemSlot> {
         let id = self.self_entity()?.id;
-        self.world?.entities.entity(id)?.use_items.get(slot)
+        self.world?.entities.get(id)?.use_items.get(slot)
     }
 
     fn self_entity(&self) -> Option<mir2_world::EntityRef<'a>> {
@@ -3645,7 +3645,7 @@ fn show_use_item_info(parameters: &str, world: &GmWorld<'_>) -> GmResult {
         return red(dotnet_format(NOW_NOT_ON_LINE_FMT, &[s_human.to_string()]));
     };
     let mut r = GmResult::empty();
-    for slot in &target.use_items {
+    for slot in target.use_items {
         if slot.index == 0 {
             continue;
         }
@@ -9517,8 +9517,8 @@ mod tests {
         }
         // ③ 已穿戴（UseItems[3].Index = 15）⇒ switch 触 null 表 ⇒ 零帧 + NOTE。
         {
-            let mut bob = w.entities.get_mut(bob_id).unwrap();
-            bob.use_items[3].index = 15;
+            let bob = w.entities.get_mut(bob_id).unwrap();
+            bob.inventory.use_items[3].index = 15;
         }
         let view = q_view(&fx, &w, &guilds);
         let r = execute(&mut sess, &cfg, &view, "@Binduseitem bob 项链 帐号");
@@ -11473,13 +11473,13 @@ mod tests {
     fn q_family_show_use_item_info_quirks() {
         let (fx, mut w, _gm_id, bob_id) = q_fixture();
         {
-            let mut bob = w.entities.get_mut(bob_id).unwrap();
-            bob.use_items[3].index = 15;
-            bob.use_items[3].make_index = 12345;
-            bob.use_items[3].dura = 100;
-            bob.use_items[3].dura_max = 200;
-            bob.use_items[7].index = 42; // 第二件
-            bob.use_items[9].index = 0; // Index==0 ⇒ 跳过
+            let bob = w.entities.get_mut(bob_id).unwrap();
+            bob.inventory.use_items[3].index = 15;
+            bob.inventory.use_items[3].make_index = 12345;
+            bob.inventory.use_items[3].dura = 100;
+            bob.inventory.use_items[3].dura_max = 200;
+            bob.inventory.use_items[7].index = 42; // 第二件
+            bob.inventory.use_items[9].index = 0; // Index==0 ⇒ 跳过
         }
         let guilds = mir2_world::GuildManager::new();
         let view = q_view(&fx, &w, &guilds);

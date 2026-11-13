@@ -446,30 +446,30 @@ pub struct GroupState {
 #[cfg(test)]
 mod adapters {
     use super::*;
-    use mir2_world::entity::{AnimalState, Entity, UseItemSlot};
+    use mir2_world::entity::{AnimalState, EntitySpawn, UseItemSlot};
     use mir2_world::merchant::MerchantState as WorldMerchantState;
     use mir2_world::npc::NpcState as WorldNpcState;
 
-    /// 迁移工具用：把一组字段从 `Entity` 读成组件。
-    pub trait FromEntity {
-        fn from_entity(e: &Entity) -> Self;
+    /// 迁移工具用：把生成期载体（`EntitySpawn`，S4c 起承载全部字段）读成组件。
+    pub trait FromSpawn {
+        fn from_spawn(e: &EntitySpawn) -> Self;
     }
 
-    /// 迁移工具用：把组件写回 `Entity`（只动本组件拥有的字段）。
-    pub trait ApplyToEntity {
-        fn apply_to(&self, e: &mut Entity);
+    /// 迁移工具用：把组件写回生成期载体（只动本组件拥有的字段）。
+    pub trait ApplyToSpawn {
+        fn apply_to(&self, e: &mut EntitySpawn);
     }
 
     /// 含 `String`/`Vec` 的字段组：按值 clone。
     macro_rules! clone_adapter {
         ($ty:ty, $($field:ident),+ $(,)?) => {
-            impl FromEntity for $ty {
-                fn from_entity(e: &Entity) -> Self {
+            impl FromSpawn for $ty {
+                fn from_spawn(e: &EntitySpawn) -> Self {
                     Self { $($field: e.$field.clone()),+ }
                 }
             }
-            impl ApplyToEntity for $ty {
-                fn apply_to(&self, e: &mut Entity) {
+            impl ApplyToSpawn for $ty {
+                fn apply_to(&self, e: &mut EntitySpawn) {
                     $(e.$field = self.$field.clone();)+
                 }
             }
@@ -492,50 +492,50 @@ mod adapters {
         class_slave_list
     );
 
-    impl FromEntity for Inventory<UseItemSlot> {
-        fn from_entity(e: &Entity) -> Self {
+    impl FromSpawn for Inventory<UseItemSlot> {
+        fn from_spawn(e: &EntitySpawn) -> Self {
             Inventory {
                 use_items: e.use_items,
             }
         }
     }
-    impl ApplyToEntity for Inventory<UseItemSlot> {
-        fn apply_to(&self, e: &mut Entity) {
+    impl ApplyToSpawn for Inventory<UseItemSlot> {
+        fn apply_to(&self, e: &mut EntitySpawn) {
             e.use_items = self.use_items;
         }
     }
 
-    impl FromEntity for AiState<AnimalState> {
-        fn from_entity(e: &Entity) -> Self {
+    impl FromSpawn for AiState<AnimalState> {
+        fn from_spawn(e: &EntitySpawn) -> Self {
             AiState { ai: e.ai.clone() }
         }
     }
-    impl ApplyToEntity for AiState<AnimalState> {
-        fn apply_to(&self, e: &mut Entity) {
+    impl ApplyToSpawn for AiState<AnimalState> {
+        fn apply_to(&self, e: &mut EntitySpawn) {
             e.ai = self.ai.clone();
         }
     }
 
-    impl FromEntity for MerchantState<WorldMerchantState> {
-        fn from_entity(e: &Entity) -> Self {
+    impl FromSpawn for MerchantState<WorldMerchantState> {
+        fn from_spawn(e: &EntitySpawn) -> Self {
             MerchantState {
                 merchant: e.merchant.clone(),
             }
         }
     }
-    impl ApplyToEntity for MerchantState<WorldMerchantState> {
-        fn apply_to(&self, e: &mut Entity) {
+    impl ApplyToSpawn for MerchantState<WorldMerchantState> {
+        fn apply_to(&self, e: &mut EntitySpawn) {
             e.merchant = self.merchant.clone();
         }
     }
 
-    impl FromEntity for NpcState<WorldNpcState> {
-        fn from_entity(e: &Entity) -> Self {
+    impl FromSpawn for NpcState<WorldNpcState> {
+        fn from_spawn(e: &EntitySpawn) -> Self {
             NpcState { npc: e.npc }
         }
     }
-    impl ApplyToEntity for NpcState<WorldNpcState> {
-        fn apply_to(&self, e: &mut Entity) {
+    impl ApplyToSpawn for NpcState<WorldNpcState> {
+        fn apply_to(&self, e: &mut EntitySpawn) {
             e.npc = self.npc;
         }
     }
@@ -555,18 +555,18 @@ mod adapters {
     }
 
     impl EntityComponents {
-        pub fn split(e: &Entity) -> Self {
+        pub fn split(e: &EntitySpawn) -> Self {
             EntityComponents {
-                identity: FromEntity::from_entity(e),
-                inventory: FromEntity::from_entity(e),
-                slave: FromEntity::from_entity(e),
-                ai: FromEntity::from_entity(e),
-                merchant: FromEntity::from_entity(e),
-                npc: FromEntity::from_entity(e),
+                identity: FromSpawn::from_spawn(e),
+                inventory: FromSpawn::from_spawn(e),
+                slave: FromSpawn::from_spawn(e),
+                ai: FromSpawn::from_spawn(e),
+                merchant: FromSpawn::from_spawn(e),
+                npc: FromSpawn::from_spawn(e),
             }
         }
 
-        pub fn apply_to(&self, e: &mut Entity) {
+        pub fn apply_to(&self, e: &mut EntitySpawn) {
             self.identity.apply_to(e);
             self.inventory.apply_to(e);
             self.slave.apply_to(e);
@@ -830,10 +830,18 @@ mod tests {
         e
     }
 
-    /// S4a 起 Vitals/AbilitySnapshot/Progression 已迁出 `Entity`：round-trip 只比较
-    /// `Entity` 主组件（剩余 17 字段，均为 S4c 待迁）；迁出字段由各自组件契约用例钉住。
-    fn debug_snapshot(e: &Entity) -> String {
-        format!("{e:?}")
+    /// S4c：`Entity` 只剩 `id`/`name`/`ai`；round-trip 比较生成期载体的 S4c 字段组
+    /// （身份 + AI + 仆从 + 背包 + 商人 + NPC），迁出字段由各自组件契约用例钉住。
+    fn debug_snapshot(e: &EntitySpawn) -> String {
+        format!(
+            "{:?}|{:?}|{:?}|{:?}|{:?}|{:?}",
+            e.entity,
+            e.ai,
+            e.slave_component(),
+            e.inventory_component(),
+            e.merchant_component(),
+            e.npc_component()
+        )
     }
 
     /// 全量 round-trip：Entity → 23 组件（`DupState`/`Transform`/`MapBinding` 已迁出）→ Entity，
@@ -846,15 +854,12 @@ mod tests {
     #[test]
     fn split_and_apply_round_trip_all_remaining_fields() {
         let src = distinctive_entity();
-        let split = EntityComponents::split(&src.entity);
+        let split = EntityComponents::split(&src);
 
         let mut restored = Entity::new(0, "", 0, 0);
         split.apply_to(&mut restored);
 
-        assert_eq!(
-            debug_snapshot(&src.entity),
-            debug_snapshot(&restored.entity)
-        );
+        assert_eq!(debug_snapshot(&src), debug_snapshot(&restored));
     }
 
     /// 负对照：只改一个字段，`Debug` 快照必须不同（证明上面的比较不是恒等/空过）。
@@ -863,7 +868,7 @@ mod tests {
         let src = distinctive_entity();
         let mut altered = src.clone();
         altered.id = altered.id.wrapping_add(1);
-        assert_ne!(debug_snapshot(&src.entity), debug_snapshot(&altered.entity));
+        assert_ne!(debug_snapshot(&src), debug_snapshot(&altered));
     }
 
     /// S3a：`DupState` 已脱离 `Entity`，改由组件独立 API（`new`/`Default`）构造。

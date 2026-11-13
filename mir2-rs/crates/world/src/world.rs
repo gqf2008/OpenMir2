@@ -1307,7 +1307,7 @@ pub const VERIFY_MAP_TIME_MS: i64 = 30 * 1000;
 /// `BaseObject.CellType` 的等价物（`PlayObject.cs:1034` = Play、`AnimalObject.cs:86` = Monster、
 /// `NormNpc.cs:50` = Merchant）；`verify_map_time` 重新登记时用它保持落格类型。
 pub(crate) fn entity_cell_type(e: &impl PvpView) -> CellType {
-    if e.base().merchant.is_some() || e.base().npc.is_some() {
+    if e.merchant_exists() || e.npc_exists() {
         CellType::Merchant
     } else if e.race() == crate::entity::ACTOR_RACE_PLAY {
         CellType::Play
@@ -1783,7 +1783,7 @@ impl World {
     pub fn my_light_of(&self, actor_id: i32) -> Option<u8> {
         let e = self.entities.get(actor_id)?;
         let mut light = if e.level >= EFFECTIVE_HIGHLEVEL { 1 } else { 0 };
-        for slot in &e.use_items {
+        for slot in e.use_items {
             if slot.index > 0 && slot.dura > 0 {
                 if let Some(std) = self.std_item_by_idx(usize::from(slot.index)) {
                     if light < std.light {
@@ -1879,11 +1879,11 @@ impl World {
         if n_dura == 0 {
             // 燃尽支（`:2260-2272`）。`SendDelItems` 只对 `Race == Play`；本函数的调用面
             // 恒为玩家（`use_lamps` 的 `Race` 门），`709` 未接（登记）。
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
-                e.use_items[ITEM_LOCATION_RIGHTHAND].dura = 0;
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].dura = 0;
                 // oracle 先 `SendDelItems(UseItems[RighThand])` 再 `Index = 0`；
                 // `SendDelItems` 读的是清位**前**的槽（709 未接 ⇒ 只落状态）。
-                e.use_items[ITEM_LOCATION_RIGHTHAND].index = 0;
+                e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].index = 0;
             }
             // `Light = GetMyLight()`（`:2263`，在 `Index = 0` 之后算）。
             if let Some(light) = self.my_light_of(actor_id) {
@@ -1892,8 +1892,8 @@ impl World {
                 }
             }
             out.push(LampDuraChange { actor_id, recog: 0 });
-        } else if let Some(mut e) = self.entities.get_mut(actor_id) {
-            e.use_items[ITEM_LOCATION_RIGHTHAND].dura = n_dura;
+        } else if let Some(e) = self.entities.get_mut(actor_id) {
+            e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].dura = n_dura;
         }
         // 千位变化支（`:2274`）：比较的是局部 `nDura`，发的是落槽后的 `Dura`。
         if old_dura != hutil_round(f64::from(n_dura) / 1000.0) {
@@ -3205,7 +3205,11 @@ impl World {
                 } else {
                     // `PlayObject.StruckDamage` 的 RNG 段（`PlayObject.cs:2957/3000`）。
                     let target_race = t.race;
-                    crate::combat::struck_damage_durability(&mut self.rng, &mut t, target_race);
+                    crate::combat::struck_damage_durability(
+                        &mut self.rng,
+                        &mut t.use_items,
+                        target_race,
+                    );
                 }
             }
             let (hp_after, max_hp) = (t.hp, t.max_hp);
@@ -7161,7 +7165,7 @@ impl World {
             // 在 `target` 的副本上跑 `PlayObject.StruckDamage` 的耐久段（`PlayObject.cs:2954-3036`），
             // 只回写 `hp` 会把磨损/破零整段丢掉（实体槽永远停在受击前）。oracle 改的是会话
             // `UseItems` 对象本身 ⇒ 这里必须把 `use_items` 一并写回实体。
-            e.use_items = target.use_items;
+            e.inventory.use_items = target.use_items;
             // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标
             // `SendMsg(RM_STRUCK)`（`BaseObject.Attack.cs:61-64`），由目标在自己的 `Run()` 里
             // `SetLastHiter(攻击方)`（`AnimalObject.cs:118-124`）。这里在结算之后立刻登记：
@@ -7218,8 +7222,8 @@ impl World {
         // 武器升级结算的回写（`UseItems[Weapon]` 是 oracle 的同一个对象；本仓攻方是副本）。
         // 只回写 `use_items`：其余攻方字段在 oracle 里也不由 `AttackDir` 改。
         if let Some(outcome) = weapon_outcome {
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
-                e.use_items = attacker.use_items;
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.inventory.use_items = attacker.use_items;
             }
             self.pending_weapon_breaks
                 .push(WeaponUpgradeEvent { actor_id, outcome });
@@ -7229,8 +7233,8 @@ impl World {
         // `UseItems[Weapon]` 对象；本仓攻方是副本 ⇒ 这里**必须**无条件写回（与上面
         // `weapon_outcome` 的条件式写回不同：没有升级 `Desc[10]` 的普通武器也照样磨损）。
         if let Some(wear) = weapon_wear {
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
-                e.use_items = attacker.use_items;
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.inventory.use_items = attacker.use_items;
             }
             self.pending_weapon_wears.push(WeaponWearEvent {
                 actor_id,
@@ -8087,10 +8091,10 @@ mod tests {
             // 重播种共享流（无需复算 ctor 抽数：重播种抹掉 ctor 已消费的那几抽）。
             w.rng = RandomNumber::with_seed(seed);
             let mut exp = RandomNumber::with_seed(seed);
-            if let Some(n) = w.entities.entity_mut(npc).and_then(|e| e.npc.as_mut()) {
+            if let Some(n) = w.entities.npc_state_mut(npc) {
                 n.run_tick = 0;
             }
-            if let Some(s) = w.entities.entity_mut(mer).and_then(|e| e.merchant.as_mut()) {
+            if let Some(s) = w.entities.merchant_mut(mer) {
                 s.run_tick = 0;
             }
             w.npc_pass_tick = i64::MIN;
@@ -12755,8 +12759,8 @@ mod castle_wire_tests {
             if let Some(v) = w.entities.vitals_mut(id) {
                 v.hp = target.hp;
             }
-            if let Some(e) = w.entities.entity_mut(id) {
-                e.use_items = target.use_items;
+            if let Some(inv) = w.entities.inventory_mut(id) {
+                inv.use_items = target.use_items;
             }
             out
         };
@@ -13222,7 +13226,8 @@ mod weapon_durability_tests {
         }
         w.set_weapon_durability_config(true, 7);
         let p = player(&mut w, "hero", 10, 10);
-        w.entities.get_mut(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND] = slot(1, dura, [0; 14]);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_RIGHTHAND] =
+            slot(1, dura, [0; 14]);
         (w, p)
     }
 
@@ -13417,7 +13422,8 @@ mod weapon_durability_tests {
         // 部署件 `Server.conf:293 UpgradeWeaponMaxPoint=7`。
         w.set_weapon_durability_config(true, 7);
         let p = player(&mut w, "hero", 10, 10);
-        w.entities.get_mut(p).unwrap().use_items[ITEM_LOCATION_WEAPON] = slot(10, 5000, desc);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            slot(10, 5000, desc);
         let mut m = Entity::new(0, "foe", 11, 10);
         m.race = 80;
         let mid = w.add_entity(m);
@@ -13507,7 +13513,7 @@ mod weapon_durability_tests {
         let mut desc = [0u8; 14];
         desc[ITEM_ATTR_WEAPON_UPGRADE] = 13;
         let (mut w2, p2, mid2) = weapon_world(desc);
-        w2.entities.get_mut(p2).unwrap().use_items[ITEM_LOCATION_WEAPON].index = 0;
+        w2.entities.get_mut(p2).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON].index = 0;
         let rec2 = attack_once(&mut w2, p2, mid2);
         assert!(rec2.weapon_breaks.is_empty(), "Index==0 ⇒ 无武器，不结算");
     }

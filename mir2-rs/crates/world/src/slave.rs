@@ -484,7 +484,7 @@ pub fn apply_slave_level_abilitys(mon: &mut EntityMut) {
     if mon.appearance.race < ACTOR_RACE_ANIMAL {
         return;
     }
-    let exp = i32::from(mon.slave_exp_level);
+    let exp = i32::from(mon.slave.slave_exp_level);
     // `Abil.MaxHP` / `Abil.DC` = 独立快照（见上）。
     let abil = mon.abil_snapshot();
     let abil_max_hp = i32::from(abil.max_hp);
@@ -518,7 +518,7 @@ pub fn apply_slave_level_abilitys(mon: &mut EntityMut) {
         if exp > 0 {
             mon.vitals.max_hp = chp;
         }
-    } else if mon.master.is_some() {
+    } else if mon.slave.master.is_some() {
         // `if (Master != null) { ... }`：
         // `WAbil.DC = MakeWord(LoByte(WAbil.DC), (ushort)Math.Abs(HiByte(WAbil.DC)
         //   + (2 * slaveExpLevel)));`
@@ -550,7 +550,7 @@ pub fn apply_slave_level_abilitys(mon: &mut EntityMut) {
 /// **可见性（族 M，review I1）**：`pub` 供宿主 `@怪` 在三族 `RecalcAbilitys` 尾巴直调
 /// （与 [`apply_slave_level_abilitys`] 同序：先 base 重算，再本覆写）。参数/语义未改。
 pub fn apply_derived_slave_recalc(mon: &mut EntityMut, now: i64) {
-    let lvl = i64::from(mon.slave_make_level);
+    let lvl = i64::from(mon.slave.slave_make_level);
     match mon.appearance.race {
         ACTOR_RACE_WHITE_SKELETON => {
             mon.ai.next_hit_time = 3000 - lvl * 600;
@@ -617,13 +617,13 @@ impl World {
         let Some(mut mon) = self.entities.get_mut(mon_id) else {
             return false;
         };
-        mon.master = Some(caster_id);
-        mon.is_slave = true;
+        mon.slave.master = Some(caster_id);
+        mon.slave.is_slave = true;
         // `MasterRoyaltyTick = GetTickCount() + (dwRoyaltySec * 1000)`（`BaseObject.cs:1193`）。
-        mon.master_royalty_tick = now + i64::from(royalty_sec) * 1000;
-        mon.slave_make_level = make_level;
+        mon.slave.master_royalty_tick = now + i64::from(royalty_sec) * 1000;
+        mon.slave.slave_make_level = make_level;
         // C# `(byte)nExpLevel` 截断。
-        mon.slave_exp_level = exp_level as u8;
+        mon.slave.slave_exp_level = exp_level as u8;
         // 5. `monObj.RecalcAbilitys()`：base（`WAbil = Abil.Clone()` 的恒等部分 +
         //    `ApplySlaveLevelAbilitys`）→ 派生覆写速度。顺序与 oracle 一致。
         apply_slave_level_abilitys(&mut mon);
@@ -645,6 +645,7 @@ impl World {
         self.entities
             .get_mut(caster_id)
             .expect("caster 已确认存在")
+            .slave
             .slave_list
             .push(mon_id);
         true
@@ -722,8 +723,8 @@ impl World {
 
 /// 宝宝实体判据（供 ⑨-3 / 宿主出名字色用）：`AnimalObject.IsSlave`（`AnimalObject.cs:54`）。
 #[must_use]
-pub fn is_slave(e: &Entity) -> bool {
-    e.is_slave
+pub fn is_slave(e: &impl PvpView) -> bool {
+    e.is_slave()
 }
 
 /// `BaseObject.Base.cs:877` 的色表上限（`SlaveExpLevel <= Grobal2.SlaveMaxLevel`）。
@@ -801,8 +802,8 @@ impl World {
                 list.remove(i);
             }
         }
-        if let Some(mut m) = self.entities.get_mut(master_id) {
-            m.slave_list = list;
+        if let Some(m) = self.entities.get_mut(master_id) {
+            m.slave.slave_list = list;
         }
     }
 
@@ -849,12 +850,12 @@ impl World {
         };
         let royalty_tick = tame_royalty_tick(caster_level, magic_level, royalty_draw, now);
         if let Some(mut t) = self.entities.get_mut(target_id) {
-            t.master = Some(caster_id);
+            t.slave.master = Some(caster_id);
             t.vitals.hp = hp;
-            t.master_royalty_tick = royalty_tick;
+            t.slave.master_royalty_tick = royalty_tick;
             // oracle 只写 `SlaveMakeLevel`（**不写 `IsSlave`**，与 `MakeSlave` 不同）。
-            t.slave_make_level = magic_level;
-            t.master_tick = master_tick;
+            t.slave.slave_make_level = magic_level;
+            t.slave.master_tick = master_tick;
             t.ai.walk_speed = walk_speed;
             t.ai.next_hit_time = next_hit_time;
             t.ai.holy_seize = false; // `BreakHolySeizeMode()`
@@ -862,6 +863,7 @@ impl World {
         self.entities
             .get_mut(caster_id)
             .expect("caster 已确认存在")
+            .slave
             .slave_list
             .push(target_id);
         true
@@ -914,8 +916,8 @@ pub fn check_royalty(world: &mut World, mon_id: i32) {
         return;
     };
     if world.spirit_mutiny_tick > now && exp_level < 5 {
-        if let Some(mut m) = world.entities.get_mut(mon_id) {
-            m.master_royalty_tick = 0;
+        if let Some(m) = world.entities.get_mut(mon_id) {
+            m.slave.master_royalty_tick = 0;
         }
     }
     let royalty_deadline = world
@@ -923,13 +925,13 @@ pub fn check_royalty(world: &mut World, mon_id: i32) {
         .get(mon_id)
         .map_or(0, |m| m.master_royalty_tick);
     if now > royalty_deadline {
-        if let Some(mut master) = world.entities.get_mut(master_id) {
-            if let Some(i) = master.slave_list.iter().position(|id| *id == mon_id) {
-                master.slave_list.remove(i);
+        if let Some(master) = world.entities.get_mut(master_id) {
+            if let Some(i) = master.slave.slave_list.iter().position(|id| *id == mon_id) {
+                master.slave.slave_list.remove(i);
             }
         }
-        if let Some(mut m) = world.entities.get_mut(mon_id) {
-            m.master = None;
+        if let Some(m) = world.entities.get_mut(mon_id) {
+            m.slave.master = None;
             m.vitals.hp /= 10;
         }
     }
@@ -985,8 +987,8 @@ pub fn process_slave_mutiny(world: &mut World, master_id: i32, cfg: &PetSlaveCon
         };
         if last_hiter.is_some() && roll == 0 {
             if let Some(mut s) = world.entities.get_mut(*sid) {
-                s.master = None;
-                s.slave_exp_level = color_len;
+                s.slave.master = None;
+                s.slave.slave_exp_level = color_len;
                 // `RecalcAbilitys()` 对基类怪 = `WAbil = Abil.Clone()`（本骨架无额外字段）⇒ no-op。
                 let low = (crate::combat::lo_byte(s.vitals.dc) as i32 * power) as i16;
                 let high = (crate::combat::hi_byte(s.vitals.dc) as i32 * power) as i16;
@@ -2212,8 +2214,8 @@ pub fn get_chr_color(e: &impl PvpView, slave_color: &[u8], npc_name_color: u8) -
     if e.race() == ACTOR_RACE_NPC {
         return npc_name_color;
     }
-    if e.base().master.is_some() {
-        let lvl = e.base().slave_exp_level;
+    if e.master().is_some() {
+        let lvl = e.slave_exp_level();
         if lvl <= SLAVE_MAX_LEVEL {
             if let Some(c) = slave_color.get(usize::from(lvl)) {
                 return *c;
@@ -2504,7 +2506,7 @@ mod tests {
         // ⇒ HP 补半 `30 + (160-30)/2 = 95`（旧实现按 no-op 会给 65）。
         assert_eq!(m.max_hp, 160, "宝宝级 MaxHP（非三类支）");
         assert_eq!(m.hp, 95, "HP 补半用改过的 MaxHP");
-        assert_eq!(w.entities.get(caster).unwrap().slave_list, vec![mon]);
+        assert_eq!(w.entities.get(caster).unwrap().slave_list, &vec![mon]);
         assert_eq!(w.slave_count(caster), 1);
     }
 
@@ -2921,7 +2923,12 @@ mod tests {
             e.race = crate::entity::ACTOR_RACE_MONSTER;
             w.add_entity(e)
         };
-        w.entities.get_mut(caster).unwrap().slave_list.push(slave);
+        w.entities
+            .get_mut(caster)
+            .unwrap()
+            .slave
+            .slave_list
+            .push(slave);
         for &(x, y) in walls {
             assert!(
                 w.maps[0].set_map_xy_flag(x, y, false),
@@ -3093,7 +3100,12 @@ mod tests {
             e.max_hp = 100;
             w.add_entity(e)
         };
-        w.entities.get_mut(master).unwrap().slave_list.push(slave);
+        w.entities
+            .get_mut(master)
+            .unwrap()
+            .slave
+            .slave_list
+            .push(slave);
         (w, master, slave)
     }
 
@@ -3127,8 +3139,8 @@ mod tests {
         let (mut w, master, slave) = slave_world(50);
         w.clock_ms = 20_000;
         let mut s = w.entities.get_mut(slave).unwrap();
-        s.slave_exp_level = 3;
-        s.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
+        s.slave.slave_exp_level = 3;
+        s.slave.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
         s.ai.check_royalty_tick = 0;
         w.spirit_mutiny_tick = w.clock_ms + 60_000; // 窗口未过期
         check_royalty(&mut w, slave);
@@ -3142,8 +3154,8 @@ mod tests {
         let (mut w, master, slave) = slave_world(50);
         w.clock_ms = 20_000;
         let mut s = w.entities.get_mut(slave).unwrap();
-        s.slave_exp_level = 5;
-        s.master_royalty_tick = w.clock_ms + 1_000_000;
+        s.slave.slave_exp_level = 5;
+        s.slave.master_royalty_tick = w.clock_ms + 1_000_000;
         s.ai.check_royalty_tick = 0;
         w.spirit_mutiny_tick = w.clock_ms + 60_000;
         check_royalty(&mut w, slave);
@@ -3156,8 +3168,8 @@ mod tests {
         let (mut w, master, slave) = slave_world(80);
         w.clock_ms = 100_000_000;
         let mut s = w.entities.get_mut(slave).unwrap();
-        s.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
-        s.master_tick = w.clock_ms - (MASTER_MUTINY_DEATH_MS + 1);
+        s.slave.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
+        s.slave.master_tick = w.clock_ms - (MASTER_MUTINY_DEATH_MS + 1);
         s.ai.check_royalty_tick = 0;
         check_royalty(&mut w, slave);
         let s = w.entities.get(slave).unwrap();
@@ -3183,9 +3195,9 @@ mod tests {
         let ghost = add(false, true, master);
         let stray = add(false, false, other);
         let alive = add(false, false, master);
-        w.entities.get_mut(master).unwrap().slave_list = vec![dead, ghost, stray, alive];
+        w.entities.get_mut(master).unwrap().slave.slave_list = vec![dead, ghost, stray, alive];
         w.slave_list_cleanup(master);
-        assert_eq!(w.entities.get(master).unwrap().slave_list, vec![alive]);
+        assert_eq!(w.entities.get(master).unwrap().slave_list, &vec![alive]);
     }
 
     /// tick 集成：死亡结算后清表把死亡宝宝从主人表里移除。
@@ -3274,7 +3286,7 @@ mod tests {
         };
         let s1 = mk();
         let s2 = mk();
-        w.entities.get_mut(master).unwrap().slave_list = vec![s1, s2];
+        w.entities.get_mut(master).unwrap().slave.slave_list = vec![s1, s2];
         // 主人未幽灵 ⇒ 无动作。
         assert!(process_slave_ghost(&mut w, master).is_empty());
         w.entities.get_mut(master).unwrap().life_cycle.ghost = true;
@@ -3305,7 +3317,7 @@ mod tests {
             s.vitals.dc = 10 | (20 << 8);
             s.ai.walk_speed = 400;
         }
-        w.entities.get_mut(master).unwrap().slave_list = vec![s1, s2];
+        w.entities.get_mut(master).unwrap().slave.slave_list = vec![s1, s2];
         // oracle `SlaveList[i].Master.LastHiter != null` 门：置个活着的命中者。
         w.entities.get_mut(master).unwrap().attribution.last_hiter = Some(s1);
         w.enable_slave_self_delay(pet_cfg(|c| {
@@ -3891,7 +3903,7 @@ mod tests {
         assert_eq!(t.ai.walk_speed, 1100, "min(2000, 1500-400)");
         assert_eq!(t.ai.next_hit_time, 1600, "min(3000, 2000-400)");
         assert!(!t.ai.holy_seize, "BreakHolySeizeMode");
-        assert_eq!(w.entities.get(caster).unwrap().slave_list, vec![target]);
+        assert_eq!(w.entities.get(caster).unwrap().slave_list, &vec![target]);
     }
 
     /// 诱惑受奴：目标已有别的 `Master` ⇒ 先 `HP/10`；`MasterTick` 已非 0 ⇒ 不覆盖。
@@ -4206,17 +4218,22 @@ mod tests {
         let mut gs = Entity::new(2, "gs", 2, 2);
         gs.ghost = true;
         let gsid = w.add_entity(gs);
-        w.entities.get_mut(gmid).unwrap().slave_list.push(gsid);
+        w.entities
+            .get_mut(gmid)
+            .unwrap()
+            .slave
+            .slave_list
+            .push(gsid);
         // 对照：活主人 + 幽灵宝宝（cleanup 该摘）
         let lm = w.add_entity(Entity::new(3, "lm", 3, 3));
         let mut ls = Entity::new(4, "ls", 4, 4);
         ls.ghost = true;
         let lsid = w.add_entity(ls);
-        w.entities.get_mut(lm).unwrap().slave_list.push(lsid);
+        w.entities.get_mut(lm).unwrap().slave.slave_list.push(lsid);
         slave_list_cleanup_all(&mut w);
         assert_eq!(
             w.entities.get(gmid).unwrap().slave_list,
-            vec![gsid],
+            &vec![gsid],
             "ghost 主人的宝宝表不得被集中扫描清掉"
         );
         assert!(

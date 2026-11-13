@@ -29,7 +29,7 @@ use mir2_formula::exp::{calc_get_exp, get_level_exp};
 use mir2_shared::hutil;
 use mir2_shared::rng::RandomSource;
 
-use crate::entity::{Entity, EntitySpawn, PvpView, UseItemSlot, ACTOR_RACE_PLAY};
+use crate::entity::{Entity, EntitySpawn, PvpView, UseItemSlot, ACTOR_RACE_PLAY, USE_ITEM_SLOTS};
 
 /// `HUtil32.LoByte(short)`：低 8 位。
 pub fn lo_byte(w: i32) -> u8 {
@@ -439,7 +439,7 @@ pub fn is_attack_target_base(attacker: &impl PvpView, target: &impl PvpView) -> 
     }
     if attacker.race() >= ACTOR_RACE_ANIMAL {
         let mut result = false;
-        if attacker.base().master.is_none() {
+        if attacker.master().is_none() {
             // `else` 支（`BaseObject.Base.cs:438-452`）：
             if target.race() == ACTOR_RACE_PLAY {
                 result = true; // 怪打人
@@ -447,7 +447,7 @@ pub fn is_attack_target_base(attacker: &impl PvpView, target: &impl PvpView) -> 
             if attacker.race() > ACTOR_RACE_PEACE_NPC && attacker.race() < ACTOR_RACE_ANIMAL {
                 result = true;
             }
-            if target.base().master.is_some() {
+            if target.master().is_some() {
                 result = true; // 可打对方召唤物
             }
         }
@@ -649,7 +649,7 @@ pub fn is_proper_is_friend(
 pub fn base_is_proper_friend(caster: &impl PvpView, target: &impl PvpView) -> bool {
     if caster.race() >= ACTOR_RACE_ANIMAL {
         let mut result = target.race() >= ACTOR_RACE_ANIMAL;
-        if target.base().master.is_some() {
+        if target.master().is_some() {
             result = false;
         }
         return result;
@@ -686,7 +686,7 @@ fn is_proper_target_play_grouped(
             // `if (baseObject.Race == ActorRace.Play) return IsProtectTarget(baseObject);`
             return is_protect_target(attacker, target);
         }
-        if let Some(master) = target.base().master {
+        if let Some(master) = target.master() {
             if master == attacker.base().id {
                 // 自己的宝宝：非 `HAM_ALL` 直接拒绝；`HAM_ALL` 落到下面的 `if (result) return result`。
                 if attacker.attack_mode() != ATTACK_MODE_HAM_ALL {
@@ -838,19 +838,23 @@ pub fn get_mag_struck_damage(
 /// `Random(8)`（`:3000`）——衣服位在特判里破零清 `Index` 会**少抽一次**（见 [`wear_durability`]）。
 ///
 /// 怪物目标走 `BaseObject.StruckDamage`（`BaseObject.Base.cs:827`，无随机数）⇒ 直接返回。
-pub fn struck_damage_durability(rng: &mut impl RandomSource, target: &mut Entity, race: u8) {
+pub fn struck_damage_durability(
+    rng: &mut impl RandomSource,
+    items: &mut [UseItemSlot; USE_ITEM_SLOTS],
+    race: u8,
+) {
     if race != ACTOR_RACE_PLAY {
         return;
     }
     // `usort nDam = (ushort)(Random(10) + 5)`（`PlayObject.cs:2957`）。
     let n_dam = (rng.random_below(10) + 5) as u16;
     // 衣服位特判（`PlayObject.cs:2965-2996`）：**不抽数**，只扣耐久；破零先清 `Index`。
-    let dress = &mut target.use_items[ITEM_LOCATION_DRESS];
+    let dress = &mut items[ITEM_LOCATION_DRESS];
     if dress.index > 0 {
         wear_durability(dress, n_dam);
     }
     // 逐格循环（`PlayObject.cs:2998-3039`）：每格 `Index > 0` **先抽一次 `Random(8)`**。
-    for slot in target.use_items.iter_mut() {
+    for slot in items.iter_mut() {
         if slot.index > 0 && rng.random_below(8) == 0 {
             wear_durability(slot, n_dam);
         }
@@ -1136,7 +1140,7 @@ pub fn struck_damage_apply(
     // 玩家目标走这个 override，怪物走 `BaseObject.StruckDamage`（无随机数）。
     // 漏掉任一条都会让同种子跨侧取数账本从第一次命中起整体错位。
     let target_race = target.race;
-    struck_damage_durability(rng, &mut target.entity, target_race);
+    struck_damage_durability(rng, &mut target.use_items, target_race);
     (final_damage, killed)
 }
 
@@ -1281,7 +1285,8 @@ pub fn attack_dir_grouped_poison_ws(
             }
         }
         // `AttackSuccess(..., targetObject)`：目标非空 ⇒ 抽 `Random(5)`（`PlayObject.Attack.cs:225`）。
-        weapon_wear = attack_success_weapon_wear_with_strong(rng, attacker, weapon_strong);
+        weapon_wear =
+            attack_success_weapon_wear_with_strong(rng, &mut attacker.use_items, weapon_strong);
     }
     (outcome, poisoned, weapon_wear)
 }
@@ -1772,9 +1777,9 @@ pub fn do_damage_weapon(weapon: &mut UseItemSlot, n_weapon_damage: u16) -> Weapo
 #[must_use]
 pub fn attack_success_weapon_wear(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
+    items: &mut [UseItemSlot; USE_ITEM_SLOTS],
 ) -> Option<WeaponWearOutcome> {
-    attack_success_weapon_wear_with_strong(rng, attacker, 0)
+    attack_success_weapon_wear_with_strong(rng, items, 0)
 }
 
 /// [`attack_success_weapon_wear`] 的**带 `WeaponStrong`** 版本（`(ushort)(Random(5) + 2 - WeaponStrong)`）。
@@ -1785,14 +1790,14 @@ pub fn attack_success_weapon_wear(
 #[must_use]
 pub fn attack_success_weapon_wear_with_strong(
     rng: &mut impl RandomSource,
-    attacker: &mut Entity,
+    items: &mut [UseItemSlot; USE_ITEM_SLOTS],
     weapon_strong: u16,
 ) -> Option<WeaponWearOutcome> {
     let n_weapon_damage =
         weapon_damage_with_strong(attack_success_weapon_damage(rng), weapon_strong);
-    if n_weapon_damage > 0 && attacker.use_items[crate::world::ITEM_LOCATION_WEAPON].index > 0 {
+    if n_weapon_damage > 0 && items[crate::world::ITEM_LOCATION_WEAPON].index > 0 {
         return Some(do_damage_weapon(
-            &mut attacker.use_items[crate::world::ITEM_LOCATION_WEAPON],
+            &mut items[crate::world::ITEM_LOCATION_WEAPON],
             n_weapon_damage,
         ));
     }
@@ -2287,7 +2292,7 @@ mod tests {
         let mut hero = Entity::new(1, "a", 0, 0);
         hero.use_items[crate::world::ITEM_LOCATION_WEAPON] = wear_slot(500);
         let mut rng = RandomNumber::with_seed(seed);
-        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero, 9)
+        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero.use_items, 9)
             .expect("n > 0 且武器已装备 ⇒ 必结算");
         // oracle：`ushort nDura = 500; nDura -= n;` ⇒ 回绕。
         let expected = 500u16.wrapping_sub(n);
@@ -2313,7 +2318,7 @@ mod tests {
         let raw = attack_success_weapon_damage(&mut probe);
         let mut hero = Entity::new(1, "a", 0, 0);
         hero.use_items[crate::world::ITEM_LOCATION_WEAPON] = wear_slot(500);
-        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero, raw);
+        let out = attack_success_weapon_wear_with_strong(&mut rng, &mut hero.use_items, raw);
         assert!(out.is_none(), "`nWeaponDamage == 0` ⇒ 不结算");
         assert_eq!(rng.below, vec![5], "仍恰抽一次 `Random(5)`（取数账本不变）");
         assert_eq!(

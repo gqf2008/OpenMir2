@@ -2119,7 +2119,7 @@ mod tests {
         let ghosted = place_monster(&mut world, "幽", 0, 7, 5, false);
         world.entities.get_mut(ghosted).unwrap().life_cycle.ghost = true;
         let pet = place_monster(&mut world, "宠", 0, 8, 5, false);
-        world.entities.get_mut(pet).unwrap().master = Some(alive);
+        world.entities.get_mut(pet).unwrap().slave.master = Some(alive);
         // 异图（map_id 1 不存在于本世界；oracle 比对 `Envir == envir`）。
         let other_map = place_monster(&mut world, "异图", 1, 9, 5, false);
         // 不在任何 CertList 的怪（oracle 只遍历 `MonGenInfoThreadMap`）。
