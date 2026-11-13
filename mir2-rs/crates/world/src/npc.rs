@@ -45,11 +45,12 @@
 //!   （与 [`crate::merchant`] 同款）；实体槽位序 = 文件正序 [`World::insert_npc`]。
 
 use crate::entity::{
-    BaseAnimalCtorDraws, EntityRef, ACTOR_RACE_NPC, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON,
-    NORM_NPC_LIGHT,
+    BaseAnimalCtorDraws, EntityAccess, EntityRef, StructuralAccess, ACTOR_RACE_NPC,
+    BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON, NORM_NPC_LIGHT,
 };
 use crate::map::CellType;
 use crate::merchant::ACTOR_RACE_MERCHANT;
+use crate::world::SimState;
 use crate::World;
 
 /// `BaseObject.RunTick = GetTickCount() + Random(1500)`（`BaseObject.cs:439`）。
@@ -338,61 +339,87 @@ impl World {
     /// 同一 pass 内次序 = 槽位序。RNG 取数**逐次**发生在 [`npc_run`]（`#[track_caller]` 站点归
     /// `npc_ai` 组；oracle `GuildOfficial.Run`/`Merchant.Run`）。
     pub fn npc_tick(&mut self) -> NpcTickOutcome {
-        let now = self.clock_ms;
-        let mut out = NpcTickOutcome::default();
-        // 节奏门：同一 200ms 窗口内只跑一趟（`MerchantProcessor` 的 200ms 定时器，sim 时钟）。
-        if now.saturating_sub(self.npc_pass_tick) < NPC_PASS_INTERVAL_MS {
-            return out;
-        }
-        self.npc_pass_tick = now;
-        let ids = self.npc_ids_sorted();
-        let mut i = self.npc_position;
-        while i < ids.len() {
-            let id = ids[i];
-            let (is_ghost, run_tick, ghost_tick) = match self.entities.get(id) {
-                Some(e) => {
-                    let (rt, gt) = e
-                        .npc
-                        .as_ref()
-                        .map_or((0, 0), |n| (n.run_tick, n.ghost_tick));
-                    (e.ghost, rt, gt)
-                }
-                None => {
-                    i += 1;
-                    continue;
-                }
-            };
-            if !is_ghost {
-                if (now - run_tick) > NPC_RUN_TIME {
-                    // oracle 先写 `RunTick = now` 再 `Run()`（`WorldServer.Merchant.cs:133-134`）。
-                    if let Some(n) = self.entities.npc_state_mut(id) {
+        // **P6a2b**：实现已迁到段系统 [`crate::world::sim_npc_stage_system`]（`TickStage::SimNpc`）；
+        // 本函数只驱动该段并取走 [`crate::world::StageOut::npc`]。段内实现 =
+        // [`npc_tick_impl`]（facade 与段共用同一份，无第二份拷贝）。
+        self.run_npc_stage()
+    }
+}
+
+/// **P6a2b**：`ProcessNpcs` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// oracle 是 **200ms 定时线程**（`MerchantProcessor.cs:7`）+ 持久 `NpcPosition` 索引 +
+/// 逐 NPC `(now - RunTick) > RunTime` 门（`RunTime` = 250，`WorldServer.Merchant.cs:131`）
+/// 加墙钟预算 `(now - NpcLimit)` 断点续跑（`WorldServer.Merchant.cs:147-151`）与 Ghost 超 60s
+/// 移除（`:140-145`）。本实现与 facade 逐句相同（见 `World::npc_tick` 的口径 1–4）。
+///
+/// **结构变更**：Ghost 支的 `QuestNpcList.RemoveAt(i)` 等价物是 `access.remove(id)`
+/// （`StructuralAccess`）；段内删实体后 facade 在段边界 `refresh_views()`。
+pub(crate) fn npc_tick_impl<A>(access: &mut A, sim: &mut SimState) -> NpcTickOutcome
+where
+    A: EntityAccess + StructuralAccess,
+{
+    let now = sim.clock_ms;
+    let mut out = NpcTickOutcome::default();
+    // 节奏门：同一 200ms 窗口内只跑一趟（`MerchantProcessor` 的 200ms 定时器，sim 时钟）。
+    if now.saturating_sub(sim.npc_pass_tick) < NPC_PASS_INTERVAL_MS {
+        return out;
+    }
+    sim.npc_pass_tick = now;
+    // `npc_ids_sorted` 的访问器形态：槽位序（= 插入序）里 `npc` 身份门为真的实体。
+    let ids: Vec<i32> = access
+        .order_ids()
+        .into_iter()
+        .filter(|id| access.get(*id).is_some_and(|e| e.npc.is_some()))
+        .collect();
+    let mut i = sim.npc_position;
+    while i < ids.len() {
+        let id = ids[i];
+        let (is_ghost, run_tick, ghost_tick) = match access.get(id) {
+            Some(e) => {
+                let (rt, gt) = e
+                    .npc
+                    .as_ref()
+                    .map_or((0, 0), |n| (n.run_tick, n.ghost_tick));
+                (e.ghost, rt, gt)
+            }
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        if !is_ghost {
+            if (now - run_tick) > NPC_RUN_TIME {
+                // oracle 先写 `RunTick = now` 再 `Run()`（`WorldServer.Merchant.cs:133-134`）。
+                if let Some(e) = access.get_mut(id) {
+                    if let Some(n) = e.npc_state.npc.as_mut() {
                         n.run_tick = now;
                     }
-                    let r = npc_run(self, id);
-                    out.ran.push(id);
-                    if let Some(dir) = r.turned {
-                        out.turns.push((id, dir));
-                    }
-                    if r.hit {
-                        out.hits.push(id);
-                    }
-                    // `NormNpc.Run` 尾 `base.Run()`（`NormNpc.cs:1604-1611`）：
-                    // `AnimalObject.Run` → `BaseObject.Run`，必须消费 RM_STRUCK。
-                    crate::monai::animal_run(self, id);
-                    crate::monai::base_object_run_monster(self, id);
                 }
-            } else if (now - ghost_tick) > NPC_GHOST_EXPIRE_MS {
-                // oracle `QuestNpcList.RemoveAt(i); break;`（移除后本 pass 不再跑后面的）。
-                self.entities.remove(id);
-                out.removed.push(id);
-                break;
+                let r = npc_run_impl(access, sim, id);
+                out.ran.push(id);
+                if let Some(dir) = r.turned {
+                    out.turns.push((id, dir));
+                }
+                if r.hit {
+                    out.hits.push(id);
+                }
+                // `NormNpc.Run` 尾 `base.Run()`（`NormNpc.cs:1604-1611`）：
+                // `AnimalObject.Run` → `BaseObject.Run`，必须消费 RM_STRUCK。
+                crate::monai::animal_run_impl(access, sim, id);
+                crate::monai::base_object_run_monster_impl(access, sim, id);
             }
-            i += 1;
+        } else if (now - ghost_tick) > NPC_GHOST_EXPIRE_MS {
+            // oracle `QuestNpcList.RemoveAt(i); break;`（移除后本 pass 不再跑后面的）。
+            access.remove(id);
+            out.removed.push(id);
+            break;
         }
-        // oracle `if (!boProcessLimit) NpcPosition = 0;` —— 本片无预算分支 ⇒ 每 pass 归 0。
-        self.npc_position = 0;
-        out
+        i += 1;
     }
+    // oracle `if (!boProcessLimit) NpcPosition = 0;` —— 本片无预算分支 ⇒ 每 pass 归 0。
+    sim.npc_position = 0;
+    out
 }
 
 /// 一个固定 NPC 的一次 `Run()`（`WorldServer.Merchant.cs:134` 的 `normNpc.Run()`）。
@@ -411,15 +438,31 @@ impl World {
 /// `!Death` ⇒ 恢复/`Die`/靶标清理；**不抽数**（见 B-L4）。本片**只落抽数与朝向状态**
 /// （`RM_TURN`/`RM_HIT` 出帧属 B-4，帧面接线随 AOI 车道）。
 pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
-    let npc_type = world.entities.npc_state(actor_id).map(|n| n.npc_type);
+    let World { entities, sim, .. } = world;
+    npc_run_impl(entities, sim, actor_id)
+}
+
+/// **P6a2b**：`npc_run` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 实现体与旧 facade 逐句相同：分派依据仍是 [`NpcState::npc_type`]，尾部 `base.Run()` 的
+/// SuperMan 回满走 [`crate::entity::EntityMut::run_super_man_refill`]、VerifyMapTime 走
+/// [`crate::World::verify_map_time_impl`]。
+pub(crate) fn npc_run_impl<A: EntityAccess>(
+    access: &mut A,
+    sim: &mut SimState,
+    actor_id: i32,
+) -> NpcRunOutcome {
+    let npc_type = access.get(actor_id).and_then(|e| e.npc).map(|n| n.npc_type);
     let mut outcome = NpcRunOutcome::default();
     match npc_type {
         // 不可达（`NpcType::from_raw` 已过滤非 {0,1,2}；`entity.npc` 为 None 时上面 `None`）。
         None => return outcome,
-        Some(NPC_TYPE_GUILD_OFFICIAL) => guild_official_run_body(world, actor_id, &mut outcome),
+        Some(NPC_TYPE_GUILD_OFFICIAL) => {
+            guild_official_run_body_impl(access, sim, actor_id, &mut outcome);
+        }
         // `CastleOfficial : Merchant`（`CastleOfficial.cs:13`）⇒ 同一份 `Merchant.Run` 体。
         Some(NPC_TYPE_MERCHANT | NPC_TYPE_CASTLE_OFFICIAL) => {
-            merchant_body_run(world, actor_id, &mut outcome);
+            merchant_body_run_impl(access, sim, actor_id, &mut outcome);
         }
         // oracle `switch` 只产 0/1/2（其余 `npc = null` 整行跳过）⇒ 其余值不可达。
         Some(_) => {}
@@ -427,23 +470,28 @@ pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
     // `NormNpc.Run`（`NormNpc.cs:1604-1611`）末尾 `base.Run()`：先 SuperMan 回满
     // （`BaseObject.Base.cs:32-36`），再 VerifyMapTime 段（`:223-228`）——固定 NPC 静止不动，
     // 必须靠后者刷新格子时间。
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
+    if let Some(mut e) = access.get_mut(actor_id) {
         e.run_super_man_refill();
     }
-    world.verify_map_time(actor_id);
+    crate::world::World::verify_map_time_impl(access, sim, actor_id);
     outcome
 }
 
 /// `GuildOfficial.Run`（`GuildOfficial.cs:39-53`）：`Random(40)` 命中 ⇒ `TurnTo(RandomByte(8))`；
 /// 否则 `Random(30)` 命中 ⇒ `RM_HIT`。**两条路径都恒 2 抽**（`RandomByte(8)` 也是一抽）。
-fn guild_official_run_body(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutcome) {
-    if world.rng.random_below(GUILD_TURN_RANDOM_MOD) == 0 {
-        let dir = world.rng.random_byte(NPC_TURN_DIR_MAX);
-        if let Some(e) = world.entities.get_mut(actor_id) {
+fn guild_official_run_body_impl<A: EntityAccess>(
+    access: &mut A,
+    sim: &mut SimState,
+    actor_id: i32,
+    outcome: &mut NpcRunOutcome,
+) {
+    if sim.rng.random_below(GUILD_TURN_RANDOM_MOD) == 0 {
+        let dir = sim.rng.random_byte(NPC_TURN_DIR_MAX);
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.dir = dir;
         }
         outcome.turned = Some(dir);
-    } else if world.rng.random_below(GUILD_HIT_RANDOM_MOD) == 0 {
+    } else if sim.rng.random_below(GUILD_HIT_RANDOM_MOD) == 0 {
         outcome.hit = true;
     }
 }
@@ -461,31 +509,38 @@ fn guild_official_run_body(world: &mut World, actor_id: i32, outcome: &mut NpcRu
 /// * 沙巴克显隐段（`Merchant.cs:143-158`）——固定 NPC `CastleMerchant` 恒 `false`（ctor 缺省，
 ///   `Npcs.txt` 无此列）且 `FixedHideMode` 恒 `false` ⇒ oracle 走 else 支且 `FixedHideMode == false`
 ///   ⇒ **零动作**。
-fn merchant_body_run(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutcome) {
-    let now = world.clock_ms;
+fn merchant_body_run_impl<A: EntityAccess>(
+    access: &mut A,
+    sim: &mut SimState,
+    actor_id: i32,
+    outcome: &mut NpcRunOutcome,
+) {
+    let now = sim.clock_ms;
     // `Merchant.cs:132-141`：`Random(50)==0` ⇒ `TurnTo(RandomByte(8))`；否则 `Random(50)==0` ⇒ `RM_HIT`。
-    if world.rng.random_below(MERCHANT_BODY_TURN_RANDOM_MOD) == 0 {
-        let dir = world.rng.random_byte(NPC_TURN_DIR_MAX);
-        if let Some(e) = world.entities.get_mut(actor_id) {
+    if sim.rng.random_below(MERCHANT_BODY_TURN_RANDOM_MOD) == 0 {
+        let dir = sim.rng.random_byte(NPC_TURN_DIR_MAX);
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.dir = dir;
         }
         outcome.turned = Some(dir);
-    } else if world.rng.random_below(MERCHANT_BODY_TURN_RANDOM_MOD) == 0 {
+    } else if sim.rng.random_below(MERCHANT_BODY_TURN_RANDOM_MOD) == 0 {
         outcome.hit = true;
     }
     // `Merchant.cs:159-164`：`BoCanMove && (now - MoveTick) > MoveTime*1000` ⇒ `MapRandomMove`。
-    let Some((can_move, move_time, move_tick)) = world
-        .entities
-        .npc_state(actor_id)
+    let Some((can_move, move_time, move_tick)) = access
+        .get(actor_id)
+        .and_then(|e| e.npc)
         .map(|n| (n.can_move, n.move_time, n.move_tick))
     else {
         return;
     };
     if can_move && (now - move_tick) > i64::from(move_time) * 1000 {
-        if let Some(n) = world.entities.npc_state_mut(actor_id) {
-            n.move_tick = now;
+        if let Some(e) = access.get_mut(actor_id) {
+            if let Some(n) = e.npc_state.npc.as_mut() {
+                n.move_tick = now;
+            }
         }
-        crate::merchant::map_random_move(world, actor_id);
+        crate::merchant::map_random_move_impl(access, sim, actor_id);
         outcome.space_moved = true;
     }
 }
@@ -892,6 +947,59 @@ mod tests {
             .pending_struck
             .is_empty());
         assert!(!world.entities.get(nid).unwrap().ai.holy_seize);
+    }
+
+    /// **P6a2b 段语义牙（`BoCanMove` 随机移动支）**：`Merchant.Run` 的
+    /// `BoCanMove && (now - MoveTick) > MoveTime*1000` 支经 `SimNpc` 段 →
+    /// [`crate::merchant::map_random_move_impl`] 落写成实体坐标（`Transform` 组件）。
+    ///
+    /// 牙齿：① 删 `npc_tick_impl` 里的 `map_random_move_impl` 调用 ⇒ 坐标不动 ⇒ 红；
+    /// ② 删 `map_random_move_impl` 的 `transform_mut` 回写 ⇒ 坐标不动 ⇒ 红；
+    /// ③ 删 `HeadRunner` 的 `SimNpc` 注册 ⇒ 段序牙 panic（`tick_stage_registrations_are_wired_in_order`）。
+    ///
+    /// **生产不可达 ≠ 不可验**：固定 NPC 经 `Npcs.txt` 装载 `BoCanMove` 恒 `false`，本用例
+    /// 显式置真以覆盖该支的取数/写回（同 `map_random_move_*` 夹具口径）。
+    #[test]
+    fn npc_stage_can_move_branch_writes_transform() {
+        let mut world = World::with_maps(vec![(40, 40)]);
+        world.rng = RandomNumber::with_seed(3);
+        world.enable_npc_tick();
+        world.clock_ms = 10_000;
+        let id = world
+            .spawn_npc(spawn_typed("游走老人", NPC_TYPE_MERCHANT, 0, 5, 5))
+            .expect("挂图成功");
+        {
+            let n = world.entities.npc_state_mut(id).expect("npc 态");
+            n.can_move = true;
+            n.move_time = 0;
+            n.move_tick = 0;
+            n.run_tick = 0;
+        }
+        // 独立复算：构造 4 抽 → Run 体 2 抽 → `MapRandomMove` 首两抽。
+        // 40×40 ⇒ `nEdgeY = 20`；默认图全 `Walk` ⇒ 落点可走、不进移位环（恰 2 抽）。
+        let mut exp = RandomNumber::with_seed(3);
+        let _ = BaseAnimalCtorDraws::draw(&mut exp);
+        if exp.random_below(MERCHANT_BODY_TURN_RANDOM_MOD) == 0 {
+            let _ = exp.random_byte(NPC_TURN_DIR_MAX);
+        } else {
+            let _ = exp.random_below(MERCHANT_BODY_TURN_RANDOM_MOD);
+        }
+        let (want_x, want_y) = crate::merchant::map_random_move_xy(&mut exp, 40, 40);
+
+        let out = world.npc_tick();
+        assert_eq!(out.ran, vec![id], "本 pass 必须跑这只 NPC");
+        let e = world.entities.get(id).expect("NPC 仍在世界");
+        assert_eq!(
+            (e.x, e.y),
+            (want_x, want_y),
+            "BoCanMove 支必须把 MapRandomMove 落点写回坐标"
+        );
+        assert_ne!((e.x, e.y), (5, 5), "落点必须真的移动");
+        assert_eq!(
+            world.rng.random(),
+            exp.random(),
+            "段内取数次序/次数不变（构造 4 + Run 2 + MapRandomMove 2）"
+        );
     }
 
     /// **驱动开关牙（改坏必红）**：`World::tick` 在 `npc_enabled=false`（缺省）时**不**驱动

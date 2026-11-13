@@ -1487,6 +1487,7 @@ impl HeadRunner {
         me.add(TickStage::SimMapEvents, sim_map_events_stage_system);
         me.add(TickStage::SimSlaveCleanup, sim_slave_cleanup_stage_system);
         me.add(TickStage::SimBuff, sim_buff_stage_system);
+        me.add(TickStage::SimNpc, sim_npc_stage_system);
         me.add(
             TickStage::SimPlayerRunExpiry,
             expire_player_run_state_stage_system,
@@ -1593,6 +1594,8 @@ pub struct StageOut {
     pub buff: Option<BuffTickOutcome>,
     /// **P6a2**：`SimSelfDeliver` 段的自投递产出（facade 在段后取走）。
     pub self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
+    /// **P6a2b**：`SimNpc` 段的 `ProcessNpcs` 产出（facade 在段后取走）。
+    pub npc: Option<crate::npc::NpcTickOutcome>,
 }
 
 /// **S4d-3/P1**：`OutputAoi` 段的注册壳——记 [`StageTrace`] 后委派给既有
@@ -2511,6 +2514,97 @@ pub fn sim_self_deliver_stage_system(world: &mut bevy_ecs::world::World) {
 }
 
 mir2_world_bevy::stage_spec!(
+    SimNpc,
+    TickStage::SimNpc,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding,
+        crate::entity::Recovery
+    ]
+);
+
+/// **P6a2b**：`SimNpc` 是**结构段**——Ghost 60s 过期支会 `QuestNpcList.RemoveAt(i)`
+/// （等价物 `StageEntities::remove`）。只有声明本标记的段能拿到 `StructuralAccess`。
+impl mir2_world_bevy::tick::Structural for SimNpc {}
+
+/// **P6a2b 段 #11 `SimNpc`**：固定 NPC 的 `ProcessNpcs`（`WorldServer.Merchant.cs:118-160`）。
+///
+/// 段位 = `tick_head` 原 `let n = self.npc_tick();` 那一行（`SimMonsterAi` 之后、
+/// `SimMerchant` 之前；oracle `MerchantProcessor.ExecuteInternal` 先 `ProcessNpcs` 后
+/// `ProcessMerchants` ⇒ RNG 消费者序不变）。借用形状按 Dv5：owned `SimState` +
+/// `StageEntities`；实现体 = [`crate::npc::npc_tick_impl`]（facade 与段共用同一份）。
+///
+/// **RNG**：本段会抽数（`GuildOfficial.Run` 的 `Random(40)`/`RandomByte(8)`/`Random(30)`、
+/// `Merchant.Run` 的 `Random(50)`/`RandomByte(8)`/`Random(50)`、`BoCanMove` 支的
+/// `MapRandomMove` 两抽 + 移位环）——段位与迁移前逐点一致。
+///
+/// **写集**：`EntityMutData` 的 20 组件（`get_mut` 组合视图）+ `Transform`（`MapRandomMove` 落点）+
+/// `MapBinding`（`VerifyMapTime` / `ClearTargetCreat` / `DisappearA` / 可见刷新）+
+/// `Recovery`（`base.Run` 恢复段）。读集为 `StageAccess` 的 24 组件全集。
+///
+/// **结构变更**：Ghost 支 `remove` 实体 ⇒ facade 在段边界后 `refresh_views()`
+/// （见 `World::run_npc_stage`）。
+pub fn sim_npc_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimNpc);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimNpc）");
+    let out = {
+        let mut ad = StageEntities::<SimNpc>::new(world);
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        crate::npc::npc_tick_impl(&mut access, &mut sim)
+    };
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().npc = Some(out);
+}
+
+mir2_world_bevy::stage_spec!(
     TailVerifyMapTime,
     TickStage::TailVerifyMapTime,
     read: [
@@ -3127,6 +3221,21 @@ impl World {
                 .resource_mut::<StageOut>()
                 .self_deliveries,
         )
+    }
+
+    /// **P6a2b**：驱动 `SimNpc` 段并取该段输出（`tick_head` 与 facade `World::npc_tick` 共用）。
+    ///
+    /// 段内 Ghost 过期支会 `StageEntities::remove` 实体（结构变更）⇒ 段边界后必须
+    /// `refresh_views()`，否则 facade 的读缓存仍看得到已删实体。
+    pub(crate) fn run_npc_stage(&mut self) -> crate::npc::NpcTickOutcome {
+        self.run_head_stage(|world, head| head.run(TickStage::SimNpc, world));
+        self.entities.refresh_views();
+        self.entities
+            .world_mut()
+            .resource_mut::<StageOut>()
+            .npc
+            .take()
+            .expect("SimNpc 段必须产出 NpcTickOutcome（段边界契约）")
     }
 
     /// 单 pass 的 buff `DoWork`（供单测直接驱动；tick 路径经段系统 [`sim_buff_stage_system`]）。
@@ -6949,9 +7058,11 @@ impl World {
         //   命令 FIFO → 命中者过期 → 死亡结算 → 宝宝自投递 → 宝宝清表 → monster_ai_tick
         //   → **npc_tick** → merchant_tick → AOI。
         // 缺省 `npc_enabled=false`（合成 golden 不含 oracle 的 NPC 线程）⇒ 既有对拍逐字节不变。
+        // **S4d-3/P6a2b #11**：段系统（`SimNpc`），段位与旧内联调用完全相同；实现体 =
+        // `crate::npc::npc_tick_impl`（facade `World::npc_tick` 与段共用同一份）。
         let __prof_npc = self.prof_begin();
         if self.npc_enabled {
-            let n = self.npc_tick();
+            let n = self.run_npc_stage();
             record.npcs_run = n.ran;
             record.npc_turns = n.turns;
             record.npc_hits = n.hits;
@@ -7265,14 +7376,6 @@ impl World {
     #[allow(dead_code)] // 段路径走 `Self::clamp_overflow_abilitys_impl`
     fn clamp_overflow_abilitys(&mut self, actor_id: i32) {
         Self::clamp_overflow_abilitys_impl(&mut self.entities, &mut self.sim, actor_id)
-    }
-
-    /// 记一次**非 Play** 实体的 `HealthSpellChanged()` 第二支（`BaseObject.cs:706-708`）。
-    ///
-    /// 只应在 `show_hp == true` 时调用（调用方负责门）；每条对应一次
-    /// `SendRefMsg(RM_HEALTHSPELLCHANGED)`，由宿主转成观察者的 `SM_HEALTHSPELLCHANGED(53)`。
-    pub(crate) fn record_show_hp_health_change(&mut self, actor_id: i32, hp: u16, mp: u16) {
-        self.pending_show_hp_health_changes.push((actor_id, hp, mp));
     }
 
     /// `Envirnoment.GetXYObjCount`（`src/M2Server/Maps/Envirnoment.cs:1062-1093`）的世界侧入口：
@@ -7774,11 +7877,24 @@ impl World {
     /// oracle 的 `DisappearA` 不改 `AddToMaped`；本仓用 `add_to_mapped` 表示「已落格」，
     /// 摘格后同步清位以保持不变量（登记：非逐字段等价，仅本仓内部状态位）。
     pub fn disappear_a(&mut self, actor_id: i32) -> bool {
-        let Some(e) = self.entities.get(actor_id) else {
+        let World { entities, sim, .. } = self;
+        Self::disappear_a_impl(entities, sim, actor_id)
+    }
+
+    /// **P6a2b**：`DisappearA` 的格子面 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+    ///
+    /// [`crate::monai::make_ghost_impl`]（`SimNpc` 段的死亡实体 `MakeGhost` 支）走本函数；
+    /// 摘格算法与 facade 逐句相同（`maps` 从 `SimState` 取，`add_to_mapped` 走 `map_binding_mut`）。
+    pub(crate) fn disappear_a_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) -> bool {
+        let Some(e) = access.get(actor_id) else {
             return false;
         };
         let (x, y, map_id) = (e.x, e.y, e.map_id);
-        let Some(map) = self.maps.get_mut(map_id) else {
+        let Some(map) = sim.maps.get_mut(map_id) else {
             return false;
         };
         let (cell, success) = map.get_cell_info_mut(x, y);
@@ -7792,7 +7908,7 @@ impl World {
             }
             removed = cell.count() != before;
         }
-        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+        if let Some(b) = access.map_binding_mut(actor_id) {
             b.add_to_mapped = false;
         }
         removed
@@ -9839,6 +9955,8 @@ mod tests {
         let mut w = World::new(8, 8);
         // **P6a**：`SimBuff` 在 `buff_enabled` 门内运行 ⇒ 开门后才进 trace。
         w.enable_buff_tick();
+        // **P6a2b**：`SimNpc` 同理在 `npc_enabled` 门内运行。
+        w.enable_npc_tick();
         w.entities
             .world_mut()
             .insert_resource(mir2_world_bevy::tick::StageTrace::default());
@@ -9862,6 +9980,7 @@ mod tests {
                 TickStage::SimMapEvents,
                 TickStage::SimSlaveCleanup,
                 TickStage::SimBuff,
+                TickStage::SimNpc,
                 TickStage::SimPlayerRunExpiry,
                 TickStage::SimDup,
                 TickStage::OutputDrain,

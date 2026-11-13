@@ -3336,6 +3336,9 @@ pub trait EntityAccess {
     fn transform_mut(&mut self, id: i32) -> Option<&mut Transform>;
     /// `Recovery` 可变视图（`EntityMut` 不含该组件；`SimBuff` 毒伤段写 `health_tick`/`spell_tick`）。
     fn recovery_mut(&mut self, id: i32) -> Option<&mut Recovery>;
+    /// `AiState` 内层 `AnimalState` 的可变视图（`SimNpc` 段的 `update_monster_visible` 写
+    /// `search_tick`；经 [`AoiAccess`] 适配给 `crate::aoi::AoiStore::ai_mut`）。
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState>;
 }
 
 impl EntityAccess for EntityStore {
@@ -3368,6 +3371,9 @@ impl EntityAccess for EntityStore {
     }
     fn recovery_mut(&mut self, id: i32) -> Option<&mut Recovery> {
         EntityStore::recovery_mut(self, id)
+    }
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
+        EntityStore::ai_mut(self, id)
     }
 }
 
@@ -3553,6 +3559,32 @@ where
         // 单组件组合视图：`view_mut` 的运行期白名单核对照常生效（spec 需声明写 `Recovery`）。
         let view = self.ad.view_mut::<(&'static mut Recovery,)>(id)?;
         Some(view.0.into_inner())
+    }
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
+        // 单组件组合视图：运行期白名单核对照常生效（spec 需声明读写 `AiState`）。
+        let view = self.ad.view_mut::<(&'static mut AiState,)>(id)?;
+        Some(&mut view.0.into_inner().ai)
+    }
+}
+
+/// **P6a2b**：`EntityAccess` → [`crate::aoi::AoiStore`] 的适配器。
+///
+/// `base_object_run_monster` 的 `base.Run` 消息段对每个待刷新观察者调
+/// [`crate::aoi::update_monster_visible`]；该 AOI 函数只要求 `get` / `ai_mut` /
+/// `map_binding_mut` 三个访问口。这里用**临时适配器**把 `EntityAccess` 的三个等价方法
+/// 转给它（同一份格扫/可见集算法，不复制第二份），且不让 AOI trait 成为段实现的额外 bound
+/// （否则 `get` 在两个 trait 上同名，调用点要逐个消歧）。
+pub struct AoiAccess<'a, A: crate::entity::EntityAccess + ?Sized>(pub &'a mut A);
+
+impl<A: EntityAccess + ?Sized> crate::aoi::AoiStore for AoiAccess<'_, A> {
+    fn get(&self, id: i32) -> Option<EntityRef<'_>> {
+        EntityAccess::get(self.0, id)
+    }
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
+        EntityAccess::ai_mut(self.0, id)
+    }
+    fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
+        EntityAccess::map_binding_mut(self.0, id)
     }
 }
 
