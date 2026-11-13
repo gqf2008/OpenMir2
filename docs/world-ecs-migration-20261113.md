@@ -1263,3 +1263,26 @@ S2 的相对门禁参数（沿用）：三档 500/1000/2000 实体，**P50 ≤ 1
 > `split_and_apply_round_trip_all_remaining_fields`，`dup_state_adapter_carries_values_not_defaults`
 > 由 `dup_state_component_default_matches_entity_ctor_defaults` + `EcsStore` 可选组件用例替代。
 > 门禁计数以 S3a 卡面报告为准。
+
+---
+
+## 9. MOVEFAIL 日志的 `reason` 字段（卡 `openmir2-movefail-log-reason`，L 级）
+
+移动被拒的日志此前把「被挡 / 越界 / 地形不可走」混成一句，客户端 lane 无法判定主因。本节登记
+**纯日志分类**：移动判定结果不变，只把原因带出来。
+
+- 世界侧：`crates/world/src/world.rs` 新增 `StepBlock { Actor, Terrain, Bounds, Other }`；
+  `try_step_blocked` / `cell_free_blocked` 是**唯一**判定点（`try_step` / `try_step_now` 保留
+  bool 薄封装，返回真值与改动前逐例相同），`StepOutcome` 增 `blocked: Option<StepBlock>`。
+- 分类口径：`Bounds` = `cell_match` 假；`Terrain` = `cell.valid()` 假 / `GetCellInfo` 的
+  `cellSuccess` 假（含非玩家踩 `MapRoute` 落点阻挡与 `EnterAnotherMap` 目的地不可进）；
+  `Actor` = 目标格有 `!Ghost && !Death && !FixedHideMode && !ObMode` 的 actor；
+  `Other` = 退化输入（`steps <= 0` / `(0,0)`）或 actor/地图缺失。
+- 宿主：`bins/game-svr/src/lib.rs` 的 `movefail_reason` 把 `blocked` 映射为日志字面量
+  `actor` / `terrain` / `bounds`（`None` ⇒ `other`）。两条日志：
+  「`… 格被挡/越界 ⇒ 不动（已回 SM_MOVEFAIL(28)）reason={actor|terrain|bounds|other}`」；
+  「`… 格后 (x,y) != 目标 (x,y) ⇒ … SM_MOVEFAIL(28) reason=other`」（动了但没到请求格）。
+- 牙：`movefail_reason_*` 五条构造用例（actor / terrain / bounds / 多格第一处失败格 / 死人负例）
+  + 成功移动 `blocked = None`。变异复验（分类换位、字面量改错、删 actor 判定、去掉存活过滤）
+  逐项必红。
+- 行为等价：成功/失败集合与 base 逐例相同；golden / parity 零 diff。
