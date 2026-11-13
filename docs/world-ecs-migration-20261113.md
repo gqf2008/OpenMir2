@@ -724,6 +724,102 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > （`World::tick` 只驱动 `TickRunner`、删除 `tick_head`/`tick_tail` 业务段）以该适配器为前置。
 > 本卡只交付 S4d-1 + S4d-2 首片，其余段仍由 facade 串行驱动（顺序与 RNG 消费者次序不变）。
 
+> **S4d-3/P0+P1 落地登记（2026-11-13，本卡第一批，commit `4460ad392`）**：
+> `SlotTable` 资源化（D1 四项条件全部落实）+ 段白名单/适配器骨架 + `StageTrace` +
+> 段边界哨兵（C5）+ 四个既有段收口到 `HeadRunner`/`tail_runner`（P1）。设计依据
+> `docs/world-ecs-s4d3-entitymut-20261113.md`；本批**不改段语义、不改 RNG 消费者次序**。
+>
+> **C1 普查（先于适配器代码，实况 rg + 逐点分类，双向等价）**
+>
+> 范围：`mir2-rs/crates/world/src/**` 的**生产代码**（首个 `#[cfg(test)]` 之前）；
+> 对 `.entities.<method>(` / `.entities.<受控访问器>(` 共 **727** 个调用点逐点分类。命令：
+>
+> ```text
+> rg -n "\.entities\.(get|get_mut|iter_ref|for_each_mut|spawn_cloned|write_back|insert|remove|order_index|order_entities|get_component|get_component_mut)\(" mir2-rs/crates/world/src
+> rg -n "\.entities\.(vitals|flags|life_cycle|appearance|buff|ai|slave|player_run|attribution|recovery|pvp|drop|spawn|inventory|merchant|npc_state|monster_class|ability|progression|group|revival|transform|map_binding|dup_state)(_mut)?\(" mir2-rs/crates/world/src
+> ```
+>
+> | 类别 | 计数 | 语义（旧 facade 的唯一真值） | 适配器等价 |
+> | --- | --- | --- | --- |
+> | A 静默跳过 | 653 | `None` → `continue` / `filter_map` / `is_some_and` / `if let` / `let ... else` / `match (Some, Some)` / `?` | `get/get_mut` 返回 `None`，调用点照旧跳过；**不 panic** |
+> | B 默认值 | 50 | `unwrap_or*` / `map_or*` → 缺省继续跑 | `None` → 同一个 `unwrap_or*`/`map_or*`，一行不改 |
+> | C panic | **4** | `.expect(...)`（业务不变量，不是 id 解析） | 迁移时 `.expect` **逐字保留**（今天 panic 的仍 panic） |
+> | D 结构/非 Option | 20 | `insert`/`remove`/`write_back`/`order_*`/`for_each_mut`/`set_progression`（返回 bool 或忽略） | 结构段用 `Structural` 标记 + `SlotTable` 原子更新 |
+>
+> C 类穷举（双向等价的关键面）：
+>
+> - `crates/world/src/buff.rs`：`world.entities.get_mut(actor_id).expect("actor exists")` ×2；
+> - `crates/world/src/monai.rs`：`world.entities.spawn_cloned(tid).expect("target exists")` ×2。
+>
+> 这 4 处的不变量是「同一段内刚校验过 actor/target 存在」，与 id 解析无关；对应段在 P6
+> 迁移时 `.expect` 原文照搬（`StageEntities::get_mut` 返回 `None` → `.expect("actor exists")`），
+> 因此**不存在「今天 panic、新结构静默跳过」的方向**；反向（今天跳过的变成 panic）也由
+> 适配器「三态一律 `None`」杜绝（四条负例牙逐条钉住）。
+>
+> **P0 实现**
+> - `crates/world-bevy/src/ecs.rs`：`SlotTable` 资源（`slots`/`free`/`IdIndex`/`next_id` 唯一真值）
+>   进 bevy `World`；`EcsStore` 对外方法签名**不变**，内部改读资源；`unbind`/`release_slot`
+>   收窄为 `pub(crate)` 供段适配器结构操作。
+> - `crates/world-bevy/src/tick.rs`：`StageSpec` / `Reads<C>` / `Writes<C>` / `Structural` /
+>   `StageEntities`（`order`/`resolve`/`get`/`get_mut`/`for_each_mut`/`remove`）/ `StageTrace`。
+> - **与设计的偏差（登记）**：P0/P1 只落地 `StageEntities`；设计 §3.4 的 `StageWorld`
+>   包装留到 P2 起「第一个需要复用 `impl World` 段实现的批次」再按需引入（本批无模块函数迁移）。
+> - `crates/world/src/world.rs`：`sim_in_flight` 哨兵 + `enter_stage_world` / `leave_stage_world` /
+>   `run_head_stage` / `run_tail_stage` 四个边界助手。
+> - 确定性对照：`crates/world-bevy/src/ecs.rs::tests::id_alloc_sequence_matches_master_vector`
+>   （期望向量在改动前于 master `95fdbb68a` 上实跑记录，逐项 12 条）；既有 5 条顺序/组件
+>   用例断言**未改**。
+>
+> **P1 实现**：`HeadRunner`（`Clock` / `SimHiterSnapshot` / `OutputDrain` 三个 `TickRunner`）
+> + `tail_runner`（`OutputAoi`，经 `output_aoi_stage_system` 薄壳记段序）。`tick_head`/`tick_tail`
+> 只剩边界助手调用与本批尚未迁移的内联段（P2–P7 消灭）。
+>
+> **段边界哨兵语义（C5）**：`enter_stage_world` 置位 `sim_in_flight` 并把 `SimState` 移入
+> bevy `World`；`leave_stage_world` 取回并清位。任何段内 panic 使哨兵停在 `true` ⇒ 下一次
+> `tick_head`/`tick_tail` 入口以「上一次 tick 在段内 panic 且未恢复」断言停机；
+> **不做热恢复**（`catch_unwind` 后捞资源会在 unwind 边界读非 unwind-safe 的 bevy `World`）。
+> 牙：`world.rs::tests::stage_boundary_sentinel_fails_fast_after_panic`。
+>
+> **tick_bench 三档（P99 验收归 perf-window 卡，本卡只留基线）**
+>
+> | 档 | before（master，单跑）P50/P99 | after（3 跑中位数）P50/P99 | ΔP50 | ΔP99 |
+> | --- | --- | --- | --- | --- |
+> | 500×2000 | 421 / 4683 us | 441 / 4741 us | +4.8% | +1.2% |
+> | 1000×2000 | 850 / 9846 us | 910 / 10265 us | +7.1% | +4.3% |
+> | 2000×2000 | 1788 / 21033 us | 1878 / 21173 us | +5.0% | +0.7% |
+>
+> after 三次原始值（P50/P99）：(471/5358, 931/10877, 1878/21173)、(441/4741, 890/9744,
+> 1823/20052)、(441/4657, 910/10265, 1958/21692)；三档全部 GREEN（P99 < 100ms）。
+> 首次 release 跑偏高属冷缓存/并行负载噪声（同机多车道）。
+>
+> **变异矩阵（只在本车道 worktree；恢复后 `git hash-object` == `HEAD:<path>`、无 MUTATION 残留）**
+>
+> | 变异 | 目标 | 结果 |
+> | --- | --- | --- |
+> | M1 删 `Clock` 注册 | `tick_stage_registrations_are_wired_in_order` | RED（left 缺 Clock） |
+> | M2 删 `SimHiterSnapshot` 注册 | 同上 | RED |
+> | M3 删 `OutputDrain` 注册 | 同上 | RED |
+> | M4 删 `OutputAoi` 注册 | 同上 | RED |
+> | M5 未知 id 分支（`entity_of` 的 `?` → `unwrap`） | `adapter_unknown_id_is_none` | RED |
+> | M6 已移除 id 分支（index 不删 + entity 不 take） | `adapter_removed_id_is_none` | RED |
+> | M7 槽位复用护栏（id → slot 索引改 `unwrap_or(0)`） | `adapter_slot_reuse_does_not_alias_ids` | RED |
+> | M8 组件缺失分支（`None` → `unwrap`） | `adapter_missing_component_is_none_and_skipped` | RED |
+> | M9 哨兵断言（`assert!` 改恒真） | `stage_boundary_sentinel_fails_fast_after_panic` | RED |
+>
+> “写段丢写回”不适用本批：P0/P1 未迁移任何写实体段（P2–P7 逐段交付时补）。
+>
+> **门禁**：fmt rc=0；clippy `-D warnings` rc=0；`cargo test --workspace` rc=0；157 suites / passed=3813 failed=0 ignored=69（基线 3806 + 本批 7 条新用例）；
+> msgcodegen `--check` rc=0（604 条常量）；docs prose 锚门 GREEN；golden 六份 blob 与 base 相同
+> （basic `ed629da2` / session `014f7c11` / combat `13a0c079` / aoi_viewrange12 `e214caf6` /
+> combat_exp_hitter_ghost `098f0e5f` / combat_exp_nofix `0ef04922`）。
+> parity 实跑：world_aoi 6/0、world_combat 7/0、world_session 2/0、rng 5/0、rng_replay 4/0、
+> drop 4/0、exp 4/0、levelabil 2/0、player_ctor_rng_trace 1/0、csharp_parity 3/0；
+> RNG trace（ctor_fold/magic_effect/merchant/p3b1–p3b5/spell_tail）各 1/0；`table_counts` 需 DB（未跑）。
+>
+> **本批未做**：P2–P7（余 14 段迁移）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
+
+
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——
 > `entity/tick/存储`=S1/S2；`DupState`+tick 段链=S3a；`map/aoi/space_move/session`=S3b；
 > `combat/mongen/slave/death_drop/stamina(宿主)/buff/ctor_fold/run_gap`=S4a；
