@@ -3170,6 +3170,13 @@ impl EntityStore {
         self.inner.order_entities()
     }
 
+    /// 槽位顺序的 `(业务 id, bevy 实体)` 表（S4d-3：`TickEntityIds` 与段适配器入口）。
+    ///
+    /// 语义 = [`Self::order_index`] 与 [`Self::order_entities`] 逐项 zip（槽位表同一真值）。
+    pub fn slot_order(&self) -> Vec<(i32, bevy_ecs::entity::Entity)> {
+        self.inner.slot_order()
+    }
+
     /// 把当前槽位顺序写入 ECS 资源 [`mir2_world_bevy::SlotOrder`]（tick 骨架处理前调用）。
     pub fn sync_slot_order(&mut self) {
         self.inner.sync_slot_order();

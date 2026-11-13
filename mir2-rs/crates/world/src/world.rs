@@ -16,8 +16,8 @@ use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{
-    advance_clock_system, Appearance, CombatAttribution, LifeCycle, TickClock, TickOwnerThread,
-    TickRunner, TickStage,
+    advance_clock_system, tick::StageTrace, Appearance, CombatAttribution, LifeCycle, TickClock,
+    TickOwnerThread, TickRunner, TickStage,
 };
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
@@ -1381,6 +1381,7 @@ pub struct TickEntityIds(pub Vec<(i32, bevy_ecs::entity::Entity)>);
 /// 只读实体组件（`Appearance`/`LifeCycle`/`CombatAttribution`），按 `SlotOrder` 的槽位序
 /// （`TickEntityIds`）扫描，结果写入 `SimState::player_hiter_snapshot`。不抽 RNG、不改实体。
 pub fn sim_hiter_snapshot_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimHiterSnapshot);
     let ids = world.resource::<TickEntityIds>().0.clone();
     let mut snapshot = Vec::new();
     for (id, entity) in &ids {
@@ -1408,7 +1409,14 @@ pub fn sim_hiter_snapshot_system(world: &mut bevy_ecs::world::World) {
 ///
 /// 本段不抽 RNG、不访问实体；输入只来自 `SimState` 的累积向量，因此不改变 RNG 消费者次序。
 /// 转抄顺序与迁移前 `tick_head` 的 5 处 `record.*.append` 逐项一致（每个向量内部保持发生序）。
-pub fn output_drain_system(mut sim: ResMut<SimState>, mut record: ResMut<TickRecordRes>) {
+pub fn output_drain_system(
+    mut sim: ResMut<SimState>,
+    mut record: ResMut<TickRecordRes>,
+    mut trace: Option<ResMut<StageTrace>>,
+) {
+    if let Some(t) = trace.as_deref_mut() {
+        t.0.push(TickStage::OutputDrain);
+    }
     let record = &mut record.0;
     // **Lane B**：门/墙 `Run` 产生的结构事件（顺序 = AI 槽位序）。
     record
@@ -1426,16 +1434,65 @@ pub fn output_drain_system(mut sim: ResMut<SimState>, mut record: ResMut<TickRec
         .append(&mut sim.pending_show_hp_health_changes);
 }
 
+/// **S4d-3/P1**：head 侧的段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
+///
+/// 为什么是三个 `TickRunner` 而不是一个：这三段之间仍夹着尚未系统化的内联段
+/// （命令 FIFO、命中者过期、…、重叠推挤；P2–P7 逐批消灭）。合成一次 `run` 会把三段挤到
+/// 一起，改变段序与 RNG 消费者次序（`SimHiterSnapshot` 必须在命令 FIFO 之后、
+/// `OutputDrain` 必须在 `check_dup_obj` 之后）。P7 收口后 head 侧应合成**一个** `TickRunner`。
+pub struct HeadRunner {
+    clock: TickRunner,
+    snapshot: TickRunner,
+    drain: TickRunner,
+}
+
+impl HeadRunner {
+    pub fn new() -> Self {
+        let mut clock = TickRunner::new();
+        clock.add_systems(TickStage::Clock, advance_clock_system);
+        let mut snapshot = TickRunner::new();
+        snapshot.add_systems(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
+        let mut drain = TickRunner::new();
+        drain.add_systems(TickStage::OutputDrain, output_drain_system);
+        HeadRunner {
+            clock,
+            snapshot,
+            drain,
+        }
+    }
+
+    fn run_clock(&mut self, world: &mut bevy_ecs::world::World) {
+        self.clock.run(world);
+    }
+
+    fn run_snapshot(&mut self, world: &mut bevy_ecs::world::World) {
+        self.snapshot.run(world);
+    }
+
+    fn run_drain(&mut self, world: &mut bevy_ecs::world::World) {
+        self.drain.run(world);
+    }
+}
+
+impl Default for HeadRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// **S4d-3/P1**：`OutputAoi` 段的注册壳——记 [`StageTrace`] 后委派给既有
+/// [`crate::aoi::output_aoi_system`]（`aoi.rs` 不在本卡写集，故用薄壳统一记段序）。
+pub fn output_aoi_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::OutputAoi);
+    crate::aoi::output_aoi_system(world);
+}
+
 pub struct World {
     pub entities: EntityStore,
-    /// S1 tick 骨架：时钟推进 + 线程断言（单线程 `Schedule`）。
-    clock_runner: TickRunner,
+    /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
+    head_runner: HeadRunner,
     /// S3b：`OutputAoi` 系统运行器（只注册 `OutputAoi`；不推进时钟）。
     tail_runner: TickRunner,
-    /// S4d-1：`OutputDrain` 段系统运行器（只注册 `OutputDrain`；不推进时钟）。
-    drain_runner: TickRunner,
-    /// S4d-2：`SimHiterSnapshot` 段系统运行器（只注册 `SimHiterSnapshot`；不推进时钟）。
-    snapshot_runner: TickRunner,
     /// **S4d-1 资源层**：全部非实体世界状态（maps/sessions/rng/时钟/配置/命令队列/输出累积…）。
     ///
     /// tick 边界把它移入 bevy `World` 的 `SimState` 资源供系统访问，跑完移回（同一时刻
@@ -1443,6 +1500,12 @@ pub struct World {
     /// 既有的 `world.clock_ms` / `world.rng` 等字段访问形态不变；crate 内需要与 `entities`
     /// 同时分借用时直接解构本字段（`let World { entities, sim, .. } = self;`）。
     pub sim: SimState,
+    /// **S4d-3/P0 段边界哨兵**（设计件 §2.5，review F5）：`true` = `SimState` 已在 bevy
+    /// `World` 的资源里、facade 侧是 `Default` 占位（只在一次 runner 调用窗口内）。
+    ///
+    /// 段内 panic 时不会回到 `false` ⇒ 下一次 `tick_head`/`tick_tail` 入口立即以明确断言
+    /// 停机。本项目**不做段内热恢复**（那会在空 `SimState` 上继续跑），语义见设计件 §2.5。
+    sim_in_flight: bool,
 }
 
 impl std::ops::Deref for World {
@@ -1455,6 +1518,66 @@ impl std::ops::Deref for World {
 impl std::ops::DerefMut for World {
     fn deref_mut(&mut self) -> &mut SimState {
         &mut self.sim
+    }
+}
+
+impl World {
+    /// **段边界（进入）**：把 `SimState` 移入 bevy `World` 的 `SimState` 资源，并置哨兵。
+    ///
+    /// 同一时刻只有一个所有者（设计件 §4.2 规则 2）。哨兵语义见 [`World::sim_in_flight`]：
+    /// 上一次 tick 在段内 panic ⇒ 这次入口立即断言停机（**不做热恢复**，设计件 §2.5）。
+    fn enter_stage_world(&mut self) {
+        assert!(
+            !self.sim_in_flight,
+            "上一次 tick 在段内 panic 且未恢复：SimState 仍留在 bevy World，facade 侧是 Default 占位。\
+             按设计件 §2.5 不做热恢复，世界需重建（fail-fast）"
+        );
+        self.sim_in_flight = true;
+        let sim = std::mem::take(&mut self.sim);
+        self.entities.world_mut().insert_resource(sim);
+    }
+
+    /// **段边界（离开）**：把 `SimState` 从 bevy `World` 取回 facade，并清哨兵。
+    fn leave_stage_world(&mut self) {
+        let sim = self
+            .entities
+            .world_mut()
+            .remove_resource::<SimState>()
+            .expect("段边界：SimState 必须归还（tick 边界契约）");
+        self.sim = sim;
+        self.sim_in_flight = false;
+    }
+
+    /// 跑一个 head 侧段：`enter` -> `f` -> `leave`。`f` 里可插入段专用资源并驱动 runner。
+    fn run_head_stage<R>(
+        &mut self,
+        f: impl FnOnce(&mut bevy_ecs::world::World, &mut HeadRunner) -> R,
+    ) -> R {
+        self.enter_stage_world();
+        let World {
+            entities,
+            head_runner,
+            ..
+        } = self;
+        let out = f(entities.world_mut(), head_runner);
+        self.leave_stage_world();
+        out
+    }
+
+    /// 跑一个 tail 侧段（当前只有 `OutputAoi`）。
+    fn run_tail_stage<R>(
+        &mut self,
+        f: impl FnOnce(&mut bevy_ecs::world::World, &mut TickRunner) -> R,
+    ) -> R {
+        self.enter_stage_world();
+        let World {
+            entities,
+            tail_runner,
+            ..
+        } = self;
+        let out = f(entities.world_mut(), tail_runner);
+        self.leave_stage_world();
+        out
     }
 }
 
@@ -1541,25 +1664,18 @@ impl World {
         entities
             .world_mut()
             .insert_resource(TickOwnerThread::default());
-        let mut clock_runner = TickRunner::new();
-        clock_runner.add_systems(TickStage::Clock, advance_clock_system);
+        // S4d-3/P1：head 侧三段（Clock / SimHiterSnapshot / OutputDrain）收进 `HeadRunner`。
+        let head_runner = HeadRunner::new();
         // S3b：AOI 刷新是 `TickStage::OutputAoi` 的系统（宿主段之后运行）。
         let mut tail_runner = TickRunner::new();
-        tail_runner.add_systems(TickStage::OutputAoi, crate::aoi::output_aoi_system);
-        // S4d-1：`OutputDrain` 段（输出累积 → `TickRecord`）作为系统在 tick 边界运行。
-        let mut drain_runner = TickRunner::new();
-        drain_runner.add_systems(TickStage::OutputDrain, output_drain_system);
-        // S4d-2：PL-1 玩家 `LastHiter` 快照段（命令 FIFO 之后、`expire_hitters` 之前）。
-        let mut snapshot_runner = TickRunner::new();
-        snapshot_runner.add_systems(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
+        tail_runner.add_systems(TickStage::OutputAoi, output_aoi_stage_system);
         let sim = SimState::with_maps(maps);
         let mut world = World {
             entities,
-            clock_runner,
+            head_runner,
             tail_runner,
-            drain_runner,
-            snapshot_runner,
             sim,
+            sim_in_flight: false,
         };
         // **M3②③ 隔离口径**：`MIR2_RNG_ISOLATE_ATTACK` 开启时按 `MIR2_RNG_SEED` 派生专用流
         // （缺省未设 ⇒ `None`，`isolate_attack` 保持 `false`，一字不改）。读 env 的 fail-closed
@@ -5245,7 +5361,7 @@ impl World {
             clock.clock_ms = clock_ms;
             clock.tick_seq = tick_seq;
         }
-        self.clock_runner.run(self.entities.world_mut());
+        self.run_head_stage(|world, head| head.run_clock(world));
         {
             let (clock_ms, tick_seq) = {
                 let clock = self.entities.world().resource::<TickClock>();
@@ -5427,24 +5543,12 @@ impl World {
         // **S4d-2 `SimHiterSnapshot` 段（#2）**：快照作为系统运行（槽位顺序由 `TickEntityIds`
         // 显式给出，不迭代 `Query` 求序）。段序与迁移前一致：命令 FIFO 之后、`expire_hitters` 之前。
         {
-            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self
-                .entities
-                .order_index()
-                .into_iter()
-                .zip(self.entities.order_entities())
-                .collect();
-            let sim = std::mem::take(&mut self.sim);
-            {
-                let world = self.entities.world_mut();
-                world.insert_resource(sim);
+            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self.entities.slot_order();
+            self.run_head_stage(move |world, head| {
                 world.insert_resource(TickEntityIds(ids));
-            }
-            self.snapshot_runner.run(self.entities.world_mut());
-            let world = self.entities.world_mut();
-            self.sim = world
-                .remove_resource::<SimState>()
-                .expect("SimHiterSnapshot 后必须归还 SimState（tick 边界契约）");
-            let _ = world.remove_resource::<TickEntityIds>();
+                head.run_snapshot(world);
+                let _ = world.remove_resource::<TickEntityIds>();
+            });
         }
 
         // 命中者过期清理（照 `BaseObject.Base.cs:119-132` 的结构；墙钟那两项不在本骨架）
@@ -5546,22 +5650,15 @@ impl World {
         // `SimState` 资源，段系统转抄完再整体移回——同一时刻只有一个所有者（设计件 §4.2）。
         // 本段不抽 RNG、只读累积向量，因此 RNG 消费者次序与行为逐字节不变。
         {
-            let sim = std::mem::take(&mut self.sim);
             let record_res = TickRecordRes(std::mem::take(&mut record));
-            {
-                let world = self.entities.world_mut();
-                world.insert_resource(sim);
+            record = self.run_head_stage(move |world, head| {
                 world.insert_resource(record_res);
-            }
-            self.drain_runner.run(self.entities.world_mut());
-            let world = self.entities.world_mut();
-            self.sim = world
-                .remove_resource::<SimState>()
-                .expect("OutputDrain 后必须归还 SimState（tick 边界契约）");
-            record = world
-                .remove_resource::<TickRecordRes>()
-                .expect("OutputDrain 后必须归还 TickRecordRes（tick 边界契约）")
-                .0;
+                head.run_drain(world);
+                world
+                    .remove_resource::<TickRecordRes>()
+                    .expect("OutputDrain 后必须归还 TickRecordRes（tick 边界契约）")
+                    .0
+            });
         }
         // 宿主段（P21 → P22 → [P24] → P25 → P26 → P27 → P31 → P32；oracle 行号见
         // [`World::tick`] 文档）在 [`World::tick_head`] 与 [`World::tick_tail`] 之间由
@@ -5622,12 +5719,7 @@ impl World {
         // AOI 刷新：`TickStage::OutputAoi` 系统（S3b）。地图表在 tick 边界一次性移入
         // `MapsRes`，跑完移回 facade —— 同一时刻只有一个所有者（设计件 §4.2）。
         {
-            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self
-                .entities
-                .order_index()
-                .into_iter()
-                .zip(self.entities.order_entities())
-                .collect();
+            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self.entities.slot_order();
             let maps = std::mem::take(&mut self.maps);
             let events = std::mem::take(&mut self.fire_burn_events);
             let (clock_ms, clear_drop_on_floor_item_time, event_sight) = (
@@ -5635,8 +5727,7 @@ impl World {
                 self.clear_drop_on_floor_item_time,
                 self.event_sight,
             );
-            {
-                let world = self.entities.world_mut();
+            let (maps_back, params_back, out) = self.run_tail_stage(move |world, tail| {
                 world.insert_resource(mir2_world_bevy::MapsRes(maps));
                 world.insert_resource(crate::aoi::AoiIds(ids));
                 world.insert_resource(crate::aoi::AoiParams {
@@ -5645,10 +5736,7 @@ impl World {
                     event_sight,
                     events,
                 });
-            }
-            self.tail_runner.run(self.entities.world_mut());
-            let (maps_back, params_back, out) = {
-                let world = self.entities.world_mut();
+                tail.run(world);
                 (
                     world
                         .remove_resource::<mir2_world_bevy::MapsRes<MapGrid>>()
@@ -5659,7 +5747,7 @@ impl World {
                         .remove_resource::<crate::aoi::AoiOut>()
                         .unwrap_or_default(),
                 )
-            };
+            });
             self.maps = maps_back;
             if let Some(params) = params_back {
                 self.fire_burn_events = params.events;
@@ -8190,6 +8278,63 @@ mod tests {
         assert!(!w.refresh_game_time(2));
     }
 
+    /// **S4d-3/P1 段注册牙**：tick 驱动的真实 runner 必须按 `STAGE_ORDER` 的对应切片记录段序。
+    ///
+    /// 牙：删掉 `HeadRunner::new` 里任一 `add_systems`（或 `World::with_maps` 里
+    /// `output_aoi_stage_system` 的注册）⇒ trace 缺一项 ⇒ 红。
+    #[test]
+    fn tick_stage_registrations_are_wired_in_order() {
+        let mut w = World::new(8, 8);
+        w.entities
+            .world_mut()
+            .insert_resource(mir2_world_bevy::tick::StageTrace::default());
+        let mut record = w.tick_head();
+        w.tick_tail(&mut record);
+        let trace = w
+            .entities
+            .world()
+            .resource::<mir2_world_bevy::tick::StageTrace>()
+            .0
+            .clone();
+        assert_eq!(
+            trace,
+            vec![
+                TickStage::Clock,
+                TickStage::SimHiterSnapshot,
+                TickStage::OutputDrain,
+                TickStage::OutputAoi
+            ],
+            "tick 必须按 STAGE_ORDER 推进 head 三段 + tail 一段"
+        );
+    }
+
+    /// **S4d-3/P0 段边界哨兵**（设计件 §2.5 / review F5）：段内 panic 后不做热恢复，
+    /// 下一次 tick 入口必须 fail-fast，而不是在 `SimState::default()` 上空转。
+    ///
+    /// 牙：把 `enter_stage_world` 开头的 `assert!` 删掉 ⇒ 本用例第二次 `tick_head` 不再
+    /// panic（会在空世界上正常跑完）⇒ 红。
+    #[test]
+    fn stage_boundary_sentinel_fails_fast_after_panic() {
+        let mut w = World::new(8, 8);
+        // 模拟「某段 panic 后」的中间态：进入边界但未离开（SimState 留在 bevy World）。
+        w.enter_stage_world();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            w.tick_head();
+        }));
+        let payload = caught.expect_err("哨兵必须在 tick_head 入口 panic");
+        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            String::new()
+        };
+        assert!(
+            msg.contains("未恢复"),
+            "断言信息必须点名「未恢复」，实际: {msg}"
+        );
+    }
+
     /// **T3·①（本批最重要的判据）：`world.tick` 内 `npc_tick` 必先于 `merchant_tick`
     /// 消费共享 RNG**（oracle `MerchantProcessor.ExecuteInternal` 先 `ProcessNpcs()` 后
     /// `ProcessMerchants()`，`MerchantProcessor.cs:28-32`）。
@@ -10357,7 +10502,7 @@ mod tests {
 
     /// **S4d-2 牙**：PL-1 快照必须保留 `expire_hitters` **清理前**的 `LastHiter`。
     ///
-    /// 变异：删掉 `snapshot_runner` 的 `SimHiterSnapshot` 系统注册（或删 `sim_hiter_snapshot_system`
+    /// 变异：删掉 `HeadRunner` 的 `SimHiterSnapshot` 系统注册（或删 `sim_hiter_snapshot_system`
     /// 的 push）⇒ 快照为空 / `None`，本用例在 `expect("玩家必须进 PL-1 快照")` 或值断言处红。
     #[test]
     fn tick_snapshot_keeps_player_last_hiter_before_expiry() {
