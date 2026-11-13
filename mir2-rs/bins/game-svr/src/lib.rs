@@ -52,6 +52,7 @@ mod seed;
 mod state_log;
 mod storage;
 mod strings;
+mod tick_profile;
 mod users;
 
 // 编码层（无 I/O、无全局状态）：进程级集成测试直接引用 `game_svr::*`（见 `tests/relay.rs`）。
@@ -25871,6 +25872,20 @@ fn sim_loop(
         u64::try_from(mir2_world::TICK_INTERVAL_MS).unwrap_or(200),
     );
     let mut ticks: u64 = 0;
+    // **T10b · 宿主段计时**（默认关闭；`MIR2_TICK_PROFILE=1` 开启）。关闭态每段边界只多一次
+    // `Option` 判别：`begin` 不取 `Instant`、`end`/`end_tick` 直接返回 ⇒ 不取时钟、不分配、
+    // 不写状态（代码见 `tick_profile` 模块头与单测 `disabled_profile_does_no_work`）。
+    let mut host_prof = tick_profile::HostTickProfile::from_env();
+    let mut world_prof_last = tick_profile::WorldSnapshot::default();
+    if host_prof.enabled() {
+        // 与宿主段同口径的 World 探针（`TickStage` 20 段 + 命名探针），输出按 `World.*` 前缀展开。
+        world.enable_tick_profile();
+        glog!(
+            "INF",
+            "TICK_PROFILE 开启：宿主段 + World 探针（MIR2_TICK_PROFILE=1；每 {} tick 汇总一行）",
+            tick_profile::REPORT_TICKS
+        );
+    }
     // AOI 出现帧累计读数（按 `chr_name`）：root 2026-10-14 要求诊断行同时打印「可见集大小与下发帧数」。
     // 只读观测：不参与任何模拟/出帧语义。
     let mut aoi_frames_total: std::collections::HashMap<String, usize> =
@@ -25886,9 +25901,12 @@ fn sim_loop(
     let mut monster_walk_seen: std::collections::HashMap<i32, (usize, i32, i32)> =
         std::collections::HashMap::new();
     loop {
+        // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
+        let slot = host_prof.begin();
         // **关服分支**（oracle `AppService.OnShutdown` → `SavePlayer`）：只在收到进程级关服请求时进入。
         // 正常 tick 的额外成本 = 一次通道探测，**不**发起任何存档（判据 4e）。
         // 位置在 tick 边界：先不消费本 tick 的事件，直接以**当前实时态**合成存档体并退出。
+        let t = host_prof.begin();
         if shutdown_rx.try_recv().is_ok() {
             glog!(
                 "INF",
@@ -25917,7 +25935,9 @@ fn sim_loop(
             let _ = shutdown_done_tx.send(summary);
             return;
         }
+        host_prof.end("HostShutdown", t);
         let next = std::time::Instant::now() + tick;
+        let t = host_prof.begin();
         while let Ok(ev) = ev_rx.try_recv() {
             match ev {
                 GateEvent::Opened { index, ip } => {
@@ -27106,6 +27126,8 @@ fn sim_loop(
                 }
             }
         }
+        host_prof.end("HostInbound", t);
+        let t = host_prof.begin();
         // 一轮读档：`query` = oracle 的 `QueryCharacterData`（`CharacterDataProcessor.cs:165`）——
         // 已连上 DBSvr ⇒ 发 `DB_LOADHUMANRCD` 请求并返回 query_id；未连上 ⇒ None（照 `IsConnected`，
         // 走 `SendOutConnectMsg`（**oracle 里是"待实现"、不发帧**）+ `CloseUser` 的失败支）。
@@ -28575,6 +28597,8 @@ fn sim_loop(
             &enter_cfg.guild_msg_cfg,
             i32::from(enter_cfg.server_index),
         );
+        host_prof.end("HostDbPoll", t);
+        let t = host_prof.begin();
         // **A-22 P3 · `SystemProcessor.ShowOnline`**（`SystemProcessor.cs:54-62`）：
         // `GetTickCount()-ShowOnlineTick > ConsoleShowUserCountTime`（**严格 `>`**，10 分钟门）⇒
         // `CastleMgr.Save()`（`SaveCastleList` → 升序逐城 `SaveConfig` → `SaveAttackSabukWall`）。
@@ -28898,6 +28922,8 @@ fn sim_loop(
                 }
             }
         }
+        host_prof.end("HostPeriodic", t);
+        let t = host_prof.begin();
         let mut rec = tick_world_head_with_specials(
             &mut world,
             mon_gen_host.as_mut(),
@@ -28908,6 +28934,8 @@ fn sim_loop(
             &gates,
             &enter_cfg.pet_cfg,
         );
+        host_prof.end("HostWorldHead", t);
+        let t = host_prof.begin();
         // 同拍帧序：642（攻击者武器磨损）先于怪物 ref 656（目标 BreakHolySeizeMode）。
         let _attack_weapon_wear = drain_attack_wear_then_monster_refs(
             &rec,
@@ -28946,6 +28974,8 @@ fn sim_loop(
                 );
             }
         }
+        host_prof.end("HostPostHead", t);
+        let t = host_prof.begin();
         // **PL-1 宿主段（oracle `PlayObject.Run` 的 P21…P32）**：在 `tick_head` 之后、
         // `tick_tail`（`base.Run` 的 Die + VerifyMapTime）之前。
         drain_player_need_recheck_with_magic(
@@ -29044,8 +29074,12 @@ fn sim_loop(
             &gates,
             enter_cfg.ref_msg_range,
         );
+        host_prof.end("HostPlayerRun", t);
+        let t = host_prof.begin();
         // `base.Run()` 的 Die / VerifyMapTime 段（玩家死亡结算在此发生）。
         world.tick_tail(&mut rec);
+        host_prof.end("HostWorldTail", t);
+        let t = host_prof.begin();
         // **G11 / A3-2b**：oracle `SystemProcessor.cs:42-49` 在 `WorldEngine.Run()` **全部完成之后**
         // 才跑 `PlanesServer/Client.Run()`。这里的插入点在本 tick 的中段（`tick_tail` 之后、
         // P1/P2/P7/P8/AOI 排水之前），**不是** oracle 的那个位置；因 `ProcessData` 在本 oracle 里
@@ -29059,6 +29093,8 @@ fn sim_loop(
         // 让紧随其后的 P1 恢复段（`BaseObject.Base.cs:44` 的门）与 P7/P8 体力段看到同一份
         // 值（oracle 同一对象语义）。对非 `super_man` 角色是纯 no-op。
         sync_super_man_wabil(&world, &mut ground_sessions);
+        host_prof.end("HostPlanes", t);
+        let t = host_prof.begin();
         // **G-A（oracle P1 → P2）**：`PlayObject.Run` 的周期恢复（`:70-141`）与 `ExtraAbil`
         // 到期（`:163-227`）落在同一队列批次；两者的 `SendUpdateMsg(53)` 只保留一条 pending。
         // 次序：先恢复状态（P1）→ 再到期状态/SysMsg（P2）→ flush 53（优先级 68）→ SysMsg（252）。
@@ -29081,6 +29117,8 @@ fn sim_loop(
             enter_cfg.ref_msg_range,
         );
         extra_abil_frames.flush(&online, &gates);
+        host_prof.end("HostRecovery", t);
+        let t = host_prof.begin();
         // **run-gap 状态到期**：`PlayObject.Run` 的烈火 20s / 双龙 60s（`PlayObject.Message.cs:54-64`）
         // ⇒ `SpiritsGone` 的 `SM_SYSMESSAGE(100)` + `+UFIR`/`+UTWN` 短包。oracle 在玩家自己的
         // `Run()` 内即时发；本宿主在世界 tick 后按记录出帧。
@@ -29174,7 +29212,9 @@ fn sim_loop(
         // `openmir2-m3-party-group-state`：`PlayObject.Run()` 的组队段（`PlayObject.Message.cs:704-719`）
         // 在同一 tick 的恢复段之前（`base.Run()` 在 `:765`，晚于组队段）。
         world.party_run_tick();
+        host_prof.end("HostFrames", t);
         ticks += 1;
+        let t = host_prof.begin();
         // `PlayObject.Run()` 每 tick 的交易自动取消（`PlayObject.Message.cs:30-36`）——
         // `Dealing` 但 `GetPoseCreate() != DealCreat` / `DealCreat == this` / `DealCreat == null`。
         drain_deal_tick(
@@ -29187,6 +29227,8 @@ fn sim_loop(
             &enter_cfg.trade,
             &enter_cfg.catalog,
         );
+        host_prof.end("HostDealTick", t);
+        let t = host_prof.begin();
         // **P8 钳制并入 G-C**：`TickRecord::verify_health_changes` 由 [`drain_run_downlinks`]
         // 在体力/魔力填充段（P7）之后应用并出帧（钳制是同一 `base.Run` 的末尾，替换 P7 的 pending）。
         // **reviewer-5 O-1 收口**：oracle 一次 `PlayObject.Run()` = 消息段（击杀经验/升级链 +
@@ -29214,6 +29256,8 @@ fn sim_loop(
         for (chr, n) in aoi_frames_this_tick {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
+        host_prof.end("HostAoiDownlink", t);
+        let t = host_prof.begin();
         // **G-06 耐久回写（`openmir2-persist-useitems-wiring`）**：本 tick 的攻击/受击路径
         // （`PlayObject.StruckDamage` 的耐久段）只改世界实体 `Entity.use_items`；oracle 改的是
         // 会话 `PlayObject.UseItems` 对象本身。这里在全部战斗/术法排水之后、周期存档之前整表回写，
@@ -29234,6 +29278,8 @@ fn sim_loop(
             enter_cfg.save_human_rcd_time,
             now_ms(),
         );
+        host_prof.end("HostPersist", t);
+        let t = host_prof.begin();
         // oracle `WorldServer.cs:592-610` 的换服轮询（G11）。生产闭合：跨服搬家
         // （`ChangeSpaceMove`）、`.shr` 序列化与 `SendServerGroupMsg` 均未移植 ⇒
         // `send_switch_data` 返回 false（不假装 `.shr` 已写），由 oracle 的
@@ -29269,6 +29315,8 @@ fn sim_loop(
         // 位置 = 换服门轮询之后：oracle 里 `:609` 的 `SendChangeServer` 在该轮询内**同步**发帧，
         // 登录跨服分支（`:366`）放弃进图后该 socket 无其它帧 ⇒ 本轮内帧序等价（详见模块头）。
         drain_reconnects(&mut reconnect_pending, &mut ground_sessions, &gates);
+        host_prof.end("HostSwitch", t);
+        let t = host_prof.begin();
         if ticks.is_multiple_of(50) {
             let diag = world_aoi_diag(&world, &displays, &aoi_frames_total);
             glog!(
@@ -29281,8 +29329,18 @@ fn sim_loop(
                 diag.session_summary()
             );
         }
+        host_prof.end("HostDiag", t);
+        let t = host_prof.begin();
         if let Some(d) = next.checked_duration_since(std::time::Instant::now()) {
             std::thread::sleep(d);
+        }
+        host_prof.end("HostSleep", t);
+        host_prof.end_tick(slot);
+        if host_prof.due() {
+            let delta = tick_profile::world_delta(world.tick_profile(), &mut world_prof_last);
+            if let Some(window) = host_prof.take_window() {
+                tick_profile::log_window(&window, delta.as_ref(), world.entities.len());
+            }
         }
     }
 }
