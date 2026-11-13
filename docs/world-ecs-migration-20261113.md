@@ -754,7 +754,8 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > 独立复算脚本：`E:/UserTemp/c1_scan.py`（算法与该三步逐行对应；未入仓，避免新增工具门登记）。
 >
 > **口径声明（reviewer-25 P3-1R 的 pvp_state 差异）**：`pvp_state` / `pvp_state_mut`
-> （生产 3 处：`world.rs` 2241/2647/2653，均 A 类跳过）**不在上表清单内**；若纳入则为
+> （生产 3 处：`crates/world/src/world.rs` 的 `World::check_pk_status` 1 处与
+> `World::set_pk_flag` 2 处，均 A 类跳过）**不在上表清单内**；若纳入则为
 > 943 code / 944 raw（A 811），其余分类不变。本表沿用 P0 §3.2 的受控访问器清单（S4a 之前
 > 的 20 对 + recovery），并在文档里显式披露这 3 处差值——结论（C 类 9 处、无需改行为的结论）
 > 不受影响。
@@ -815,12 +816,15 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > + `tail_runner`（`OutputAoi`，经 `output_aoi_stage_system` 薄壳记段序）。`tick_head`/`tick_tail`
 > 只剩边界助手调用与本批尚未迁移的内联段（P2–P7 消灭）。
 >
-> **段边界窗口数（reviewer-25 P3-3）**：本批中间态是 **4 个 `SimState` 搬移窗口/ tick**
-> （Clock / SimHiterSnapshot / OutputDrain / OutputAoi）——Clock 也走 `run_head_stage`，
-> 因此**不是**设计 §2.5 写的「3 → 2」。设计 §2.5 的目标仍是 **P7 收口时 2 个**（head 一个、
-> tail 一个，其余段全部系统化后 head 只跑一次）。本批已同步：设计 §2.5 与本节均按真实数字表述；
-> `world.rs` 里指向 `snapshot_runner` 的陈旧注释、`ecs.rs` 模块文档里「slots/free/index 在本结构」
-> 的旧布局描述均已更新。
+> **段边界窗口数（reviewer-25 P3-3；P2/P2b 订正）**：窗口数随已系统化的段**单调增加**，按批纪事：
+> P0+P1 = **4**（Clock / SimHiterSnapshot / OutputDrain / OutputAoi）、
+> P2 = **8**（head 6 = Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
+> SimPlayerRunExpiry / OutputDrain；tail 2 = TailSuperManRefill / OutputAoi）、
+> **P2b 交付 head = 9**（+`SimMapEvents` ⇒ head 7 + tail 2）。
+> Clock 也走 `run_head_stage`，因此**不是**设计初稿写的「3 → 2」。设计 §2.5 的目标仍是
+> **P7 收口时 2 个**（head 一个、tail 一个，其余段全部系统化后 head 只跑一次）。
+> 本节与设计 §2.5 均按真实数字表述；`world.rs` 里指向 `snapshot_runner` 的陈旧注释、
+> `ecs.rs` 模块文档里「slots/free/index 在本结构」的旧布局描述均已更新。
 >
 > **段边界哨兵语义（C5）**：`enter_stage_world` 置位 `sim_in_flight` 并把 `SimState` 移入
 > bevy `World`；`leave_stage_world` 取回并清位。任何段内 panic 使哨兵停在 `true` ⇒ 下一次
@@ -881,6 +885,11 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > 写回变异 M5（expire_hitters）/M7（run_state_expiry）RED；M6/M8 的见证用例已补齐
 > （`extra_abil_expiry_clears_slot_value` / `super_man_refill_restores_hp_mp_in_tail`，
 > 各自删对应写回即 RED）。**注意：P2 本批是 4/5 段已迁——`SimMapEvents` 未迁，P2 不是全绿。**
+> **回退单位（P3-COMMIT-REVERT）**：P2 批的回退单位是 **`9c8764649` + `218760540` 两笔**——
+> 单独 revert `9c8764649` **不编译**（它删除了 `tests/run_state_expiry_vectors.rs` 仍在用的
+> pub API），`218760540`（恢复 `expire_player_run_state` 兼容入口）是其前置。P2 其余提交
+> 可逐笔 revert；P2b 的三笔（`d9de6052f` / `17287ced3` / `efa2b0d65`）各自可独立回退，
+> 但 `efa2b0d65`（SimMapEvents）依赖前两笔的白名单/视图实现。
 >
 > **S4d-3/P2b 落地登记（2026-11-13，第三批）**：review `c309baf1` 点名的两处适配器缺陷已修：
 > `P2-GENERIC-NAMES`（段白名单改**类型身份** `TypeId`：`StageSpec::reads/writes(TypeId)` 由
@@ -904,8 +913,10 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > SimMapEvents #7、SimPlayerRunExpiry #13、TailSuperManRefill #16）；tick 段序牙
 > `tick_stage_registrations_are_wired_in_order` 已含 `SimMapEvents`。
 
-> **本批未做**：P2–P7（余 14 段迁移）、上表「P0 未交付项」、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **尚未做（以 P2b 交付 head 为准，取代旧的「余 14 段迁移」表述）**：P3–P7（余 **13** 段——
+> 18 段中 P2+P2b 已迁 5 段）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
+> 段号清单与写集见设计 §2.1/§4。
 
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——

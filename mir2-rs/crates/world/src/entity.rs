@@ -2152,37 +2152,10 @@ impl EntityStore {
         inner
             .world_mut()
             .insert_resource(mir2_world_bevy::TickOrder::default());
-        // S4d-3/P2 前置：段适配器的运行期镜像需要全部组件登记（P0 组件图 25 项）。
-        // 泛型组件按短名（去泛型参数）登记，见 `mir2_world_bevy::tick::short_type_name`。
-        inner
-            .register_component::<mir2_world_bevy::CoreIdentity>()
-            .register_component::<mir2_world_bevy::Transform>()
-            .register_component::<MapBinding>()
-            .register_component::<Vitals>()
-            .register_component::<AbilitySnapshot<BaseAbil>>()
-            .register_component::<Progression>()
-            .register_component::<SpawnBinding>()
-            .register_component::<DropState>()
-            .register_component::<CombatAttribution>()
-            .register_component::<mir2_world_bevy::Recovery>()
-            .register_component::<mir2_world_bevy::PvpState>()
-            .register_component::<mir2_world_bevy::Flags>()
-            .register_component::<LifeCycle>()
-            .register_component::<mir2_world_bevy::Appearance>()
-            .register_component::<mir2_world_bevy::MonsterClassState>()
-            .register_component::<mir2_world_bevy::PlayerRunState>()
-            .register_component::<mir2_world_bevy::GroupState>()
-            .register_component::<mir2_world_bevy::Revival>()
-            .register_component::<mir2_world_bevy::BuffState>()
-            .register_component::<mir2_world_bevy::SlaveState>()
-            .register_component::<Inventory>()
-            .register_component::<MerchantState>()
-            .register_component::<NpcState>()
-            .register_component::<AiState>()
-            .register_component::<mir2_world_bevy::DupState>();
-
-        // S4d-3/P2 前置：段适配器的运行期镜像需要全部组件登记（P0 组件图 25 项）。
-        // 泛型组件按短名（去泛型参数）登记，见 `mir2_world_bevy::tick::short_type_name`。
+        // S4d-3/P2 前置：段适配器的运行期镜像需要全部组件登记（P0 组件图 25 项，C1–C25）。
+        // 键与判定都是 `TypeId`（泛型组件按实例如 `AbilitySnapshot<BaseAbil>` 精确登记，
+        // P2b P2-GENERIC-NAMES）；显示名见 `ComponentRegistry::name_of`。
+        // 护栏：`component_registry_registers_exactly_25_components`（删任一行即 len=24 红）。
         inner
             .register_component::<mir2_world_bevy::CoreIdentity>()
             .register_component::<mir2_world_bevy::Transform>()
@@ -2275,6 +2248,11 @@ impl EntityStore {
         self.view2_state.update_archetypes(self.inner.world());
         self.view3_state.update_archetypes(self.inner.world());
         self.mut_view_state.update_archetypes(self.inner.world());
+    }
+
+    /// 组件注册表（只读；段适配器的运行期镜像，测试断言用）。
+    pub fn component_registry(&self) -> &mir2_world_bevy::tick::ComponentRegistry {
+        self.inner.component_registry()
     }
 
     /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。
@@ -3627,6 +3605,21 @@ mod tests {
             assert!(ad.snapshot_spawn(999).is_none(), "未知 id ⇒ None");
             assert!(ad.entity_ref(999).is_none(), "未知 id ⇒ None");
         }
+    }
+
+    /// **P3-DUP-REGISTRATION**：登记表恰 25 项（P0 组件图 C1–C25），且两段逐字节相同的
+    /// 登记链已收敛成一段。
+    ///
+    /// 牙：删掉任一 `.register_component::<C>()` ⇒ len=24 ⇒ 红。重复登记不算数
+    /// （`HashMap<TypeId, _>` 幂等），所以这条牙同时钉「没有漏登记」与「多写的重复段已删」。
+    #[test]
+    fn component_registry_registers_exactly_25_components() {
+        let s = EntityStore::new();
+        assert_eq!(
+            s.component_registry().len(),
+            25,
+            "P0 组件图 C1–C25 必须逐一登记（删一行即 24）"
+        );
     }
 
     /// **S3b 评审 P3（`insert_parts` 误用防护）**：`insert_parts` 的唯一入口是
