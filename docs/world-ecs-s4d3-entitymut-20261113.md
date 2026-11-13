@@ -657,6 +657,14 @@ pub fn build_head_runner() -> TickRunner {
 （`monai.rs`/`npc.rs`/`merchant.rs`/`buff.rs`/`slave.rs`/`special_monster.rs`/`space_move.rs`），
 前提是 P0/P1 先合入，且注册行按段拆进模块文件。
 
+> **P6a 落地登记（2026-11-13）**：P6 批量化首片只落 **#9 `SimBuff`**（段系统
+> `sim_buff_stage_system`；`BuffSystem::do_work_impl`/`operate`/`damage_health_impl` 改为
+> `EntityAccess` 形态，facade 与段共用；`EntityAccess` 增 `recovery_mut`）。**#5 `SimSelfDeliver`
+> 与 #11 `SimNpc` 受阻**：主体与效果体分别在 `slave.rs`+`special_monster.rs`、
+> `monai.rs`+`merchant.rs`，超出该卡写集 ⇒ 按 Dv5 的
+> `(EntityAccess, &mut SimState)` 形态落地前须先扩写集（明细见
+> `docs/world-ecs-migration-20261113.md` 的「S4d-3/P6a 落地登记」）。
+
 ---
 
 ## 5. 风险与回退
