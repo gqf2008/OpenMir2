@@ -974,6 +974,29 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > - **RNG**：本批 0 抽（`MIR2_RNG_LOG` 运行记录只有 2 行头 `INJECT_OK`/`SEED_PROBE`）。
 > 段数口径不变（P5-main 尚未交付：余 6 段）。
 >
+> **T10 Top1 落地登记（2026-11-13，访问层预编译；卡 `openmir2-ecs-stage-whitelist-precompile`）**：
+> `world-bevy` 的段适配器把「运行期白名单」从**逐次**的两步核对（`ComponentRegistry` 资源查询 +
+> 注册表 `HashMap` 查询 + `reads()`/`writes()` 最多 25 条 `TypeId` 短链）改为**段实例预编译查表**：
+> - `stage_spec!` 另外生成 `StageSpec::compiled_whitelist()`（`LazyLock` 静态清单，与
+>   `reads`/`writes`、`Reads`/`Writes` 标记同源，`t_neg_9` 逐项比对）；
+> - `StageEntities::new` 把「白名单 ∩ 已登记」编译成 `StageAccessTable`（`TypeId ⇒ 访问位`），
+>   逐次访问只查一次表；**未命中一律交回旧判据**（注册表断言 + `reads`/`writes` 短链）⇒
+>   三条 fail-closed 路径（越白名单 / 未登记 / 组件缺失）的判定与 panic 消息逐字不变；
+> - 组合视图去掉每次调用的临时 `Vec` 分配，且**每个视图类型只核对一次**（`verified_views`；
+>   第一次违规照旧 panic）；手写 `StageSpec` 无可枚举清单 ⇒ 全量走旧判据。
+>   既有牙 `t_neg_1/4/5/6/7/8`、`t_generic_1/2` 全绿且未放宽。
+>
+> **实测收益与口径（11k 实体；同机交错 A/B——改前/改后二进制在同一次运行窗口内交替跑，本机处于
+> 高负载窗口，绝对值受并行车道污染，结论取同轮相对量）**：
+>
+> | 负载 | 口径 | 改前 | 改后 | Δ |
+> | --- | --- | --- | --- | --- |
+> | 纯移动 `tick_bench`（11000×10 档） | P50，5 轮交错 | 77.5 ms（76.4–81.9） | **42.7 ms**（42.5–42.8） | **−45%** |
+> | AI+buff 11k（合成怪 race=81/hp=100、`defence_up(5)`、400×400 图；预热 1 tick 后 8 tick） | min / 中位数，3 轮交错 | 62.4 / 65.4–72.9 ms | **38.0–39.2 / 39.4–46.8 ms** | **−38% / −31%** |
+>
+> 复现：`cd mir2-rs && cargo run -p mir2-world --release --bin tick_bench -- 11000 10`（纯移动档）；
+> AI+buff 档的合成世界参数见上表（harness 是一次性临时 test，不入库）。
+
 > **白名单精度损失登记（review 69bd8351 P5P-4/P5P-9；设计件 Dv6）**：为了让 `SimDup` 复用
 > `EntityAccess`，其 spec 从 read 6 / write 3 扩到 **read 25 / write 22**（含 `Entity`、`DupState`、
 > `Transform` 与 `EntityMut` 的 20 个写组件）——运行期白名单对该段实际失效（误写 `Inventory`
