@@ -403,7 +403,7 @@ pub struct TickRecord {
 
 /// **移动被拒原因**（卡 `openmir2-movefail-log-reason`，`L` 级：**纯日志分类，不参与判定**）。
 ///
-/// 与 [`World::try_step_blocked`] / [`World::cell_free_blocked`] 的既有门一一对应；成功/失败集合
+/// 与 [`World::try_step_blocked_impl`] / [`World::cell_free_blocked_impl`] 的既有门一一对应；成功/失败集合
 /// 与改动前逐例相同（本枚举只把「为什么失败」带出来）：
 /// - [`StepBlock::Bounds`] —— 目标格越界（`MapGrid::cell_match` 为假；oracle
 ///   `Envirnoment.MoveToMovingObject` 的首个 `CellMatch` 门）；
@@ -7811,43 +7811,12 @@ impl World {
     /// 世界侧没有 per-entity `HomeMap` 状态 ⇒ 本段**不建模**（不影响本函数判据）。
     ///
     /// **取数**：只有三处门全部通过才调用 [`crate::run_gap::dup_push_dir`]（= C# `RandomByte(8)`，
-    /// `random.Next(8)` **恰一次**、值域 `0..=7`）；随后 [`World::char_pushed_now`] 逐格发
+    /// `random.Next(8)` **恰一次**、值域 `0..=7`）；随后 [`World::char_pushed_core`] 逐格发
     /// `RM_PUSH`。玩家选取 = `Race == Play && !Ghost`（oracle `PlayObjectList` 不含幽灵）。
     pub fn check_dup_obj(&mut self) -> Vec<crate::action::PushEvent> {
         // S4d-3/P3a：段系统（`SimDup`），段位与旧内联调用完全相同（`tick_head` 的同一行）。
         self.run_head_stage(|world, head| head.run(TickStage::SimDup, world));
         self.take_stage_pushes()
-    }
-
-    /// 目标格是否可走（`Envirnoment.CanWalk(nX, nY, false)`）：**包含自身**——
-    /// 与 [`World::cell_free`]（排除 `self_id`）不同：oracle `CanWalk` 不看 `cert`，同格 clamp 时
-    /// 当前格上的自己也会挡住 `CharPushed`（`GetFrontPosition` 在边界原样返回当前格）。
-    ///
-    /// **P3a 后由 `can_walk_cell_core` 接管**（`char_pushed_core` 走核心）；本函数保留为
-    /// facade 侧对照实现，P5 统一时随 `char_pushed_now` 的共用签名一起清理。
-    #[allow(dead_code)]
-    fn can_walk_cell(&self, map_id: usize, x: i32, y: i32) -> bool {
-        let Some(map) = self.maps.get(map_id) else {
-            return false;
-        };
-        if !map.cell_match(x, y) {
-            return false;
-        }
-        let (cell, ok) = map.get_cell_info(x, y);
-        // C# `if (cellSuccess && cellInfo.Valid)`；`get_cell_info` 的 `ok` 已含 `valid()`。
-        if !ok {
-            return false;
-        }
-        if !cell.is_available() {
-            return true;
-        }
-        !cell.obj_list.iter().any(|o| {
-            o.actor_object
-                && self
-                    .entities
-                    .get(o.cell_obj_id)
-                    .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
-        })
     }
 
     /// `Envirnoment.CanFly(nsX, nsY, ndX, ndY)`（`Envirnoment.cs:1371-1393`）。
@@ -7877,45 +7846,6 @@ impl World {
         let fly_y = mir2_shared::hutil::round(f64::from(ns_y) + r30);
         // `CanWalk(..., boFlag=true)`：`cellSuccess && cellInfo.Valid` ⇒ 忽略角色阻挡。
         Self::can_walk_at_impl(access, sim, map_id, fly_x, fly_y, true)
-    }
-
-    /// `BaseObject.CharPushed(nDir, nPushCount)`（`src/M2Server/Actor/BaseObject.cs:854-897`）的
-    /// 世界侧**逐句**实现（`Command::Push` 与重叠推挤共用）。
-    ///
-    /// 逐句：
-    ///
-    /// ```text
-    /// :857 Dir = nDir;
-    /// :858 nBackDir = GetBackDir(nDir);
-    /// :859 for i in 0..nPushCount {
-    /// :861   GetFrontPosition(ref nx, ref ny)                  // 用当前 Dir(= nDir) 与 CurrX/Y
-    /// :862   if (Envir.CanWalk(nx, ny, false)) {
-    /// :864     if (Envir.MoveToMovingObject(CurrX,CurrY,this,nx,ny,false)) {
-    /// :866       CurrX = nx; CurrY = ny;
-    /// :871       SendRefMsg(RM_PUSH, nBackDir, CurrX, CurrY, 0, "");
-    /// :873       result++;
-    /// :874       if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;
-    /// :878     } else break; :882 } else break;
-    /// :890 Dir = nBackDir;
-    /// :891 if (result == 0) Dir = olddir;
-    /// ```
-    ///
-    /// `MoveToMovingObject` 的阻挡集合与 `CanWalk` 同源（`!Ghost && !Death && !FixedHideMode &&
-    /// !ObMode`），故 `CanWalk` 通过后格子簿记必成功；这里仍走 `MapGrid::move_object`（源格摘除 +
-    /// 目标格追加），**不**经 `try_step`（后者额外挡非玩家 `MapRoute`，而 oracle
-    /// `MoveToMovingObject` 不挡——照抄）。
-    ///
-    /// **建模差异（登记）**：`CastleDoor.HoldPlace` 阻挡支不建模（城门不在 `EntityStore`）。
-    pub(crate) fn char_pushed_now(
-        &mut self,
-        actor_id: i32,
-        n_dir: u8,
-        n_push_count: u8,
-    ) -> Vec<crate::action::PushEvent> {
-        // S4d-3/P3a：逐格推进核心抽到 `char_pushed_core`（facade 与 `SimDup` 段共用同一份）。
-        // **签名保持不变**（coordinator 裁决：Command/slave 的共用签名本批不动，P5 统一）。
-        let World { entities, sim, .. } = self;
-        Self::char_pushed_core(entities, sim, actor_id, n_dir, n_push_count)
     }
 
     /// **P3a/P5**：`check_dup_obj` 的共用核心（facade `EntityStore` 与 `SimDup` 段的 `StageAccess`
@@ -7998,10 +7928,37 @@ impl World {
             .is_some_and(|o| !o.ghost && !o.death && !o.fixed_hide_mode && !o.ob_mode)
     }
 
-    /// **P3a/P5**：`char_pushed_now` 的共用核心（逐格推进；RNG 只在调用方，本函数零抽数）。
+    /// `BaseObject.CharPushed(nDir, nPushCount)`（`src/M2Server/Actor/BaseObject.cs:854-897`）的
+    /// 世界侧**逐句**实现（`Command::Push` 与重叠推挤共用）。
     ///
-    /// facade `World::char_pushed_now`（Command `Push` 与 slave 自投递共用，签名不变）与 `SimDup`
-    /// 段都调本函数：单一实现，`EntityAccess` 同时覆盖 `EntityStore` 与 `StageAccess`。
+    /// 逐句：
+    ///
+    /// ```text
+    /// :857 Dir = nDir;
+    /// :858 nBackDir = GetBackDir(nDir);
+    /// :859 for i in 0..nPushCount {
+    /// :861   GetFrontPosition(ref nx, ref ny)                  // 用当前 Dir(= nDir) 与 CurrX/Y
+    /// :862   if (Envir.CanWalk(nx, ny, false)) {
+    /// :864     if (Envir.MoveToMovingObject(CurrX,CurrY,this,nx,ny,false)) {
+    /// :866       CurrX = nx; CurrY = ny;
+    /// :871       SendRefMsg(RM_PUSH, nBackDir, CurrX, CurrY, 0, "");
+    /// :873       result++;
+    /// :874       if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;
+    /// :878     } else break; :882 } else break;
+    /// :890 Dir = nBackDir;
+    /// :891 if (result == 0) Dir = olddir;
+    /// ```
+    ///
+    /// `MoveToMovingObject` 的阻挡集合与 `CanWalk` 同源（`!Ghost && !Death && !FixedHideMode &&
+    /// !ObMode`），故 `CanWalk` 通过后格子簿记必成功；这里仍走 `MapGrid::move_object`（源格摘除 +
+    /// 目标格追加），**不**经 `try_step`（后者额外挡非玩家 `MapRoute`，而 oracle
+    /// `MoveToMovingObject` 不挡——照抄）。
+    ///
+    /// **建模差异（登记）**：`CastleDoor.HoldPlace` 阻挡支不建模（城门不在 `EntityStore`）。
+    /// **P3a/P5-A2**：`CharPushed` 的共用核心（逐格推进；RNG 只在调用方，本函数零抽数）。
+    ///
+    /// 调用方：`Command::Push`（经 `push_now_impl`）、`SimDup` 段的 `check_dup_obj_core`、
+    /// slave 的 `RM_DELAYPUSHED`。单一实现，`EntityAccess` 同时覆盖 `EntityStore` 与 `StageAccess`。
     pub(crate) fn char_pushed_core<A: crate::entity::EntityAccess>(
         access: &mut A,
         sim: &mut SimState,
@@ -8082,7 +8039,7 @@ impl World {
         out
     }
 
-    /// **P3a/P5**：`World::can_walk_cell` 的共用核心（阻挡判定走 `Self::is_blocking`）。
+    /// **P3a/P5-A2**：`CharPushed` 的 `CanWalk` 核心（阻挡判定走 `Self::is_blocking`）。
     fn can_walk_cell_core<A: crate::entity::EntityAccess>(
         access: &A,
         sim: &SimState,
@@ -8146,7 +8103,19 @@ impl World {
 
     /// 进图：实体落进 `map_id` 的格子（对应 `Envirnoment.AddMapObject`）。
     pub fn enter_world(&mut self, actor_id: i32) -> bool {
-        let Some(e) = self.entities.get(actor_id) else {
+        Self::enter_world_impl(&mut self.entities, &mut self.sim, actor_id)
+    }
+
+    /// **P5-A2**：`enter_world` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 逐句与旧 `World::enter_world` 相同：取实体坐标/落格类型 → `map.add_map_object` →
+    /// 写回 `MapBinding.add_to_mapped`。唯一差异是接收者换成访问器（`self.entities` → `access`）。
+    pub(crate) fn enter_world_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) -> bool {
+        let Some(e) = access.get(actor_id) else {
             return false;
         };
         let (x, y, map_id) = (e.x, e.y, e.map_id);
@@ -8157,14 +8126,14 @@ impl World {
         // 之前这里恒用 `Play` ⇒ 玩家 AOI 的 `baseObject.CellType == CellType.Monster`
         // 距离门（`PlayObject.cs:3131`）对刚落图的怪永不命中。
         let cell_type = entity_cell_type(&e);
-        let now = self.clock_ms;
-        let Some(map) = self.maps.get_mut(map_id) else {
+        let now = sim.clock_ms;
+        let Some(map) = sim.maps.get_mut(map_id) else {
             return false;
         };
         if !map.add_map_object(x, y, cell_type, actor_id, now) {
             return false;
         }
-        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+        if let Some(b) = access.map_binding_mut(actor_id) {
             b.add_to_mapped = true;
         }
         true
@@ -8172,11 +8141,25 @@ impl World {
 
     /// 离开世界：从格子摘除 + 从仓库移除。
     pub fn leave_world(&mut self, actor_id: i32) -> bool {
-        let Some(e) = self.entities.get(actor_id) else {
+        Self::leave_world_impl(&mut self.entities, &mut self.sim, actor_id)
+    }
+
+    /// **P5-A2**：`leave_world` 的 facade/段共用实现（`EntityAccess` + `StructuralAccess` + `SimState`）。
+    ///
+    /// 逐句与旧 `World::leave_world` 相同：摘格（`retain` + 空格 `clear`）→ `entities.remove`。
+    /// `remove` 是结构变更 ⇒ 段实现要求 `StructuralAccess`（与 `merchant_tick_impl` 同口径）。
+    pub(crate) fn leave_world_impl<
+        A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
+    >(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) -> bool {
+        let Some(e) = access.get(actor_id) else {
             return false;
         };
         let (x, y, map_id) = (e.x, e.y, e.map_id);
-        let Some(map) = self.maps.get_mut(map_id) else {
+        let Some(map) = sim.maps.get_mut(map_id) else {
             return false;
         };
         let (cell, success) = map.get_cell_info_mut(x, y);
@@ -8191,7 +8174,7 @@ impl World {
                 return false;
             }
         }
-        self.entities.remove(actor_id);
+        access.remove(actor_id);
         true
     }
 
@@ -9868,7 +9851,7 @@ impl World {
         Self::try_step_blocked_impl(access, sim, actor_id, dx * steps, dy * steps)
     }
 
-    /// 目标格是否可站的**分类版**（与 `try_step_blocked` 的阻挡口径同源：`cell_match` +
+    /// 目标格是否可站的**分类版**（与 `try_step_blocked_impl` 的阻挡口径同源：`cell_match` +
     /// `valid()/is_available()` + 阻挡 actor 的 `!Ghost && !Death && !FixedHideMode && !ObMode`；
     /// `self_id` 自己不算阻挡）。`Ok(())` = 可站。
     fn cell_free_blocked_impl<A: crate::entity::EntityAccess>(
@@ -9906,7 +9889,21 @@ impl World {
 
     /// 单步移动（bool 口径，行为与卡 `openmir2-movefail-log-reason` 之前逐例相同）。
     fn try_step(&mut self, actor_id: i32, dx: i32, dy: i32) -> bool {
-        self.try_step_blocked(actor_id, dx, dy).is_ok()
+        Self::try_step_impl(&mut self.entities, &mut self.sim, actor_id, dx, dy)
+    }
+
+    /// **P5-A2**：`try_step` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 判据链与旧实现逐句相同：`try_step_blocked_impl`（`cell_match` → `move_object` →
+    /// 分类 → `Transform` 写回）。`Command::Walk` 的 facade 与段只有这一份实现。
+    fn try_step_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+    ) -> bool {
+        Self::try_step_blocked_impl(access, sim, actor_id, dx, dy).is_ok()
     }
 
     /// 单步移动的**分类版**：格子校验 → 更新坐标。`Ok(())` = 已移动；`Err(_)` = 未移动及原因。
@@ -9916,11 +9913,8 @@ impl World {
     /// 是必需的——oracle `MoveToMovingObject` 对「界内但 `CellValid` 假」的目标格会**先把 actor
     /// 从源格摘除、再因 `cellSuccess` 假返回 false**（本仓 `move_object` 的「先删后判」同构）。
     /// 若提前短路分类，源格登记会与 base 不同（撞墙后 base 源格 = 0、提前短路 = 1，R26-1 实测）。
-    fn try_step_blocked(&mut self, actor_id: i32, dx: i32, dy: i32) -> Result<(), StepBlock> {
-        Self::try_step_blocked_impl(&mut self.entities, &mut self.sim, actor_id, dx, dy)
-    }
-
-    /// **P6b2**：`try_step_blocked` 的 facade/段共用实现（怪物 AI 段的 `WalkTo` 单步移动）。
+    /// **P5-A2**：`try_step_blocked` 的 facade/段共用实现（`Command::Walk` 的 `try_step` 与
+    /// 怪物 AI 段的 `WalkTo` 单步移动同走这一份）。
     fn try_step_blocked_impl<A: crate::entity::EntityAccess>(
         access: &mut A,
         sim: &mut SimState,
@@ -9991,7 +9985,7 @@ impl World {
     }
 
     /// `move_object` 判假之后的**原因分类**（只允许在调用之后用：见
-    /// [`World::try_step_blocked`] 的「先删后判」说明）。与 [`World::cell_free_blocked`] 同口径；
+    /// [`World::try_step_blocked_impl`] 的「先删后判」说明）。与 [`World::cell_free_blocked_impl`] 同口径；
     /// 该函数回 `Ok` 的残余失败（如 `(0,0)` 自占格被 `is_blocking` 命中）归 `Other`。
     fn classify_block_impl<A: crate::entity::EntityAccess>(
         access: &A,
@@ -10008,16 +10002,30 @@ impl World {
 
     /// **出站接线片 W2**：`Command::Push` → `BaseObject.CharPushed`
     /// （`src/M2Server/Actor/BaseObject.cs:854-897`）——委托给逐句实现
-    /// [`World::char_pushed_now`]（含 `Dir` 复原与 `WalkTick += 800`；帧面在宿主）。
+    /// [`World::char_pushed_core`]（含 `Dir` 复原与 `WalkTick += 800`；帧面在宿主）。
     fn push_now(&mut self, actor_id: i32, n_dir: u8, count: u8) -> Vec<crate::action::PushEvent> {
-        self.char_pushed_now(actor_id, n_dir, count)
+        Self::push_now_impl(&mut self.entities, &mut self.sim, actor_id, n_dir, count)
+    }
+
+    /// **P5-A2**：`Command::Push` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 逐格推进的唯一实现在 [`World::char_pushed_core`]（P3a 已抽出，`SimDup` 与
+    /// `RM_DELAYPUSHED` 共用）；本函数只是命令面的命名入口，逐格推进体与 `char_pushed_core` 相同。
+    pub(crate) fn push_now_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        n_dir: u8,
+        count: u8,
+    ) -> Vec<crate::action::PushEvent> {
+        Self::char_pushed_core(access, sim, actor_id, n_dir, count)
     }
 
     /// `Envirnoment.CanWalk(nx, ny, true)` 的 `cellSuccess` 子集（`Envirnoment.cs:442-486` 的
     /// **boFlag=true** 支：只判 `cellSuccess && Valid`，不查格上对象）——`DoMotaebo` 的
     /// `if (Envir.CanWalk(nX, nY, true)) n28 = 0;`（`src/M2Server/Player/PlayObject.Base.cs:1461`）。
-    fn can_walk_ignore_objects(&self, map_id: usize, x: i32, y: i32) -> bool {
-        self.maps
+    fn can_walk_ignore_objects_impl(sim: &SimState, map_id: usize, x: i32, y: i32) -> bool {
+        sim.maps
             .get(map_id)
             .is_some_and(|m| m.get_cell_info(x, y).1)
     }
@@ -10035,21 +10043,36 @@ impl World {
     /// **不在本片**（登记）：有正前目标支（`:1404-1440`：`CharPushed` 目标 + 进占其旧格 + 伤害）、
     /// `bo35 == false` 时的 `RM_STRUCK` 伤害段（`:1469-1486`）。
     fn rush_now(&mut self, actor_id: i32, n_dir: u8, steps: i32) -> Vec<crate::action::RushEvent> {
+        Self::rush_now_impl(&mut self.entities, &mut self.sim, actor_id, n_dir, steps)
+    }
+
+    /// **P5-A2**：`rush_now` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 逐句与旧 `World::rush_now` 相同：每格 `front_position` → `try_step_impl`
+    /// （判据与 `Command::Walk` 同源）→ 被挡时 `can_walk_ignore_objects_impl` 决定
+    /// `RushKung`。取数点为零（本族不抽 RNG）。
+    pub(crate) fn rush_now_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        n_dir: u8,
+        steps: i32,
+    ) -> Vec<crate::action::RushEvent> {
         if steps <= 0 {
             return Vec::new();
         }
-        let Some(e) = self.entities.get(actor_id) else {
+        let Some(e) = access.get(actor_id) else {
             return Vec::new();
         };
         let (mut x, mut y, map_id) = (e.x, e.y, e.map_id);
-        let Some((w, h)) = self.maps.get(map_id).map(|m| (m.width, m.height)) else {
+        let Some((w, h)) = sim.maps.get(map_id).map(|m| (m.width, m.height)) else {
             return Vec::new();
         };
         let mut out = Vec::new();
         let mut blocked_front = false;
         for _ in 0..steps {
             let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
-            if self.try_step(actor_id, nx - x, ny - y) {
+            if Self::try_step_impl(access, sim, actor_id, nx - x, ny - y) {
                 x = nx;
                 y = ny;
                 out.push(crate::action::RushEvent {
@@ -10059,7 +10082,7 @@ impl World {
                     x,
                     y,
                 });
-            } else if !self.can_walk_ignore_objects(map_id, nx, ny) {
+            } else if !Self::can_walk_ignore_objects_impl(sim, map_id, nx, ny) {
                 // `CanWalk(nX, nY, true)` 为假 ⇒ `bo35 = true; break;`
                 blocked_front = true;
                 break;
@@ -11014,6 +11037,306 @@ mod tests {
         assert!(w.entities.get(id).is_none(), "remove 后 facade 立即查不到");
         assert!(!w.entities.iter().any(|e| e.id == id));
         assert!(w.entities.order_index().is_empty());
+    }
+
+    // **P5-A2**：walk / enter / leave / rush / push 五族的段 spec（测试专用）。
+    //
+    // 读集 = `StageAccess` 组合视图全集（24 读）；写集 = `EntityMut` 的 20 个组件 +
+    // `Transform`（`try_step` 写坐标）+ `MapBinding`（`enter_world` 写 `add_to_mapped`）。
+    // `Structural`：`leave_world` 走 `StructuralAccess::remove`。
+    // 挂 `TickStage::Command`：本族原本就在命令 FIFO 里处理（本卡只做 port，不切系统）。
+    mir2_world_bevy::stage_spec!(
+        MoveProbe,
+        TickStage::Command,
+        read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ],
+        write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding
+        ]
+    );
+    impl mir2_world_bevy::tick::Structural for MoveProbe {}
+
+    /// **P5-A2 牙（walk）**：`Command::Walk` 的 `try_step_impl` 在段访问器下与 facade 同语义。
+    ///
+    /// - 撞墙（`HighWall` ⇒ `get_cell_info` 的 `cellSuccess` 假）：返回 false、坐标不动；
+    ///   **源格登记被摘空**——`MapGrid::move_object` 的「先删后判」与 oracle 同构
+    ///   （`Envirnoment.MoveToMovingObject` 先 `DeleteFromMap`，再因 `cellSuccess` 假返回 false）；
+    ///   若把分类提前到 `move_object` 之前，源格会残留 1 个对象（与 base 不同，R26-1）；
+    /// - 可走格：坐标与格子登记一起迁移（`Transform` 写回 + `move_object` 摘源格/落目标格）。
+    ///
+    /// 红检：删 `try_step_blocked_impl` 末尾的 `transform_mut` 写回 ⇒ 成功支坐标断言红；
+    /// 把 `try_step_impl` 改成恒 true ⇒ 撞墙断言红。
+    #[test]
+    fn walk_stage_access_blocked_wall_keeps_coords_and_drops_source_cell() {
+        use crate::map::CellAttribute;
+        use mir2_world_bevy::tick::StageEntities;
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick(); // Enter 落格
+        assert_eq!(w.maps[0].cell(5, 5).count(), 1, "前置：源格已登记");
+        w.maps[0]
+            .get_cell_info_mut(6, 5)
+            .0
+            .set_attribute(CellAttribute::HighWall);
+        {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert!(
+                !World::try_step_impl(&mut access, sim, 1, 1, 0),
+                "撞墙必须返回 false"
+            );
+        }
+        let e = w.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (5, 5), "撞墙坐标不动");
+        assert_eq!(
+            w.maps[0].cell(5, 5).count(),
+            0,
+            "源格被摘空（move_object 先删后判，与 oracle MoveToMovingObject 同构）"
+        );
+        {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert!(World::try_step_impl(&mut access, sim, 1, 0, 1), "空格可走");
+        }
+        let e = w.entities.get(1).unwrap();
+        assert_eq!(
+            (e.x, e.y),
+            (5, 6),
+            "段访问器写回 Transform（dx=0, dy=1 ⇒ 南向一格）"
+        );
+        assert!(
+            w.maps[0]
+                .cell(5, 6)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == 1),
+            "目标格登记"
+        );
+        assert!(
+            !w.maps[0]
+                .cell(5, 5)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == 1),
+            "源格已摘除"
+        );
+    }
+
+    /// **P5-A2 牙（enter/leave）**：`enter_world_impl` 落格 + 写 `MapBinding.add_to_mapped`；
+    /// `leave_world_impl` 摘格 + `StructuralAccess::remove` 删实体。
+    ///
+    /// 红检：删 enter 的 `b.add_to_mapped = true` ⇒ 首段断言红；删 leave 的 `access.remove`
+    /// ⇒ 「实体必须被删」断言红；删摘格 `retain` ⇒ 格内仍能找到该 actor。
+    #[test]
+    fn enter_leave_stage_access_lands_and_removes_actor() {
+        use crate::entity::EntityAccess;
+        use mir2_world_bevy::tick::StageEntities;
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(crate::EntitySpawn::new(0, "hero", 5, 5));
+        // 未 tick：`Command::Enter` 仍在队列里，实体尚未落格。
+        assert_eq!(w.maps[0].cell(5, 5).count(), 0, "前置：尚未落格");
+        {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert!(World::enter_world_impl(&mut access, sim, id));
+            assert!(
+                access
+                    .map_binding_mut(id)
+                    .expect("MapBinding 必须存在")
+                    .add_to_mapped,
+                "段内写回 add_to_mapped"
+            );
+        }
+        assert!(
+            w.entities.get(id).expect("实体仍在").add_to_mapped,
+            "facade 读回 enter 的 MapBinding 写回"
+        );
+        assert!(
+            w.maps[0]
+                .cell(5, 5)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == id),
+            "enter 必须在格表登记"
+        );
+        {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert!(World::leave_world_impl(&mut access, sim, id));
+        }
+        w.entities.refresh_views();
+        assert!(w.entities.get(id).is_none(), "leave 必须删实体");
+        assert!(
+            !w.maps[0]
+                .cell(5, 5)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == id),
+            "leave 必须摘格"
+        );
+    }
+
+    /// **P5-A2 牙（rush/push）**：五族的段访问器路径与 facade 路径逐事件相同，并钉住语义面。
+    ///
+    /// - rush：3 格截断（`(5,5) → (8,5)`，恰 3 条 `Rush`）、被墙挡时 `RushKung` 落在**正前格**；
+    /// - push：方向 = `nBackDir`、逐格位置 = 走后格、最终坐标 = 3 步后。
+    ///
+    /// 红检：把 `push_now_impl` 换成 `char_pushed_core` 之外的第二份实现/改 `back_dir` ⇒ 事件
+    /// 断言红；把 `rush_now_impl` 的 `try_step_impl` 换成恒成功 ⇒ 撞墙 `RushKung` 断言红。
+    #[test]
+    fn rush_push_stage_access_path_matches_facade_path() {
+        use crate::action::{PushEvent, RushEvent, RushFrame};
+        use crate::map::CellAttribute;
+        use mir2_world_bevy::tick::StageEntities;
+
+        // ---- rush：facade vs 段访问器（同初值同参数 ⇒ 同事件、同终态）----
+        let mut a = world_with(&[(1, 5, 5)]);
+        a.tick();
+        let facade_rush = a.rush_now(1, crate::magic::DIR_RIGHT, 3);
+        let facade_pos = {
+            let e = a.entities.get(1).unwrap();
+            (e.x, e.y)
+        };
+        let mut b = world_with(&[(1, 5, 5)]);
+        b.tick();
+        let stage_rush = {
+            let World { entities, sim, .. } = &mut b;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            World::rush_now_impl(&mut access, sim, 1, crate::magic::DIR_RIGHT, 3)
+        };
+        let stage_pos = {
+            let e = b.entities.get(1).unwrap();
+            (e.x, e.y)
+        };
+        assert_eq!(stage_rush, facade_rush, "rush：两条路径事件逐条相同");
+        assert_eq!(stage_pos, facade_pos, "rush：两条路径终态坐标相同");
+        assert_eq!(stage_pos, (8, 5), "rush 3 格截断");
+        assert_eq!(stage_rush.len(), 3, "逐格一条");
+
+        // ---- rush 被墙挡：格数截断 + RushKung 落在正前格 ----
+        let mut c = world_with(&[(1, 5, 5)]);
+        c.tick();
+        c.maps[0]
+            .get_cell_info_mut(7, 5)
+            .0
+            .set_attribute(CellAttribute::HighWall);
+        let walled = {
+            let World { entities, sim, .. } = &mut c;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            World::rush_now_impl(&mut access, sim, 1, crate::magic::DIR_RIGHT, 4)
+        };
+        assert_eq!(
+            walled,
+            vec![
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 6,
+                    y: 5
+                },
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::RushKung,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 7,
+                    y: 5
+                },
+            ],
+            "撞墙截断：1 格 Rush + 正前格 RushKung"
+        );
+        let e = c.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (6, 5), "角色停在墙前");
+
+        // ---- push：facade vs 段访问器 ----
+        let mut d = world_with(&[(1, 5, 5)]);
+        d.tick();
+        let facade_push = d.push_now(1, crate::magic::DIR_UP, 3);
+        let mut f = world_with(&[(1, 5, 5)]);
+        f.tick();
+        let stage_push = {
+            let World { entities, sim, .. } = &mut f;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            World::push_now_impl(&mut access, sim, 1, crate::magic::DIR_UP, 3)
+        };
+        assert_eq!(stage_push, facade_push, "push：两条路径事件逐条相同");
+        assert_eq!(
+            stage_push,
+            vec![
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 4
+                },
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 3
+                },
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 2
+                },
+            ],
+            "推挤方向 = nBackDir、位置 = 走后格"
+        );
+        let e = f.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (5, 2), "push 终态坐标");
     }
 
     // **P5-A1**：attack 族的段 spec（测试专用）。
