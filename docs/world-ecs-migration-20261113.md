@@ -1005,6 +1005,29 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > `Writes<MapBinding>`（现不调用）——latent，若将来调用会 panic。
 > **follow-up（monai.rs 不在本片写集）**：`monai.rs` 的 `count_at_cell` doc 仍写
 > 「`crate::world::StageDupAccess`」，应改为 `StageAccess`/`EntityAccess` 口径，登记待 P6 或扩写集时清理。
+> **S4d-3/P5-A1 落地登记（2026-11-13，Command·attack 族 port）**：attack 族 handler 已改成
+> 「`EntityAccess` + `&mut SimState`」形态。**本批只做 port：Command 段仍未切系统，FIFO 入队序不变**。
+> - `World::attack_once` → `Self::attack_once_impl<A: EntityAccess>(access, sim, actor, target)`；
+>   facade 退化为一行委派，公开签名与全部调用点（命令 FIFO / monai 的 attack_target / npc 用例）零改动；
+> - helper 链同形：`attacker_group_members_impl`、`attack_rng_of(&mut SimState)`、
+>   `check_weapon_upgrade_status_impl`（配置值作入参、不读实体）、`make_posion_impl`、
+>   `get_char_status_impl`；slave 侧 `send_struck_delay_msg_7_impl` /
+>   `send_struck_delay_msg_refmessage_impl` / `next_msg_order_impl`（crate 内自由函数，与 P3b 同形）；
+> - `entity.rs` **零改动**：本族用现有 `EntityAccess` 方法即可，未新增方法 ⇒ 卡面
+>   「删新增方法分支必红」不适用；其余三份写集（`world.rs` / `slave.rs` / 本文件）按卡面。
+> - **依赖面**：monai 的 8 个 `send_struck_delay_msg_refmessage` 调用点全部走 facade、签名未变 ⇒
+>   零改动；攻击链只读 `crate::monai::ATTACK_STRUCK_DELAY_MS` 常量 ⇒ **不扩写集、不置 blocked**。
+> - **RNG 逐点 trace（`MIR2_RNG_LOG`，五列 seq/kind/max/result/site）**：base `7a7706323` 与 head
+>   各跑两副既有攻击夹具（`attack_poison_end_to_end_yields_char_status_change` 4 抽、
+>   `attack_outcome_is_deterministic` 10 抽；site 全部落在未改动的 `combat.rs`），`diff -u` 0 行。
+> - **牙（5 颗，均先红后绿）**：删目标 HP 回写 / 目标 `UseItems` 回写 / 武器磨损 `UseItems` 回写 /
+>   `make_posion_impl` 的 `CharStatus` 回写 / `set_last_hiter` 回写，各自对应用例 RED；
+>   另有 `attack_stage_access_path_matches_facade_path`：同一夹具跑 facade 与 `StageAccess` 两路，
+>   比对 `AttackOutcome` 六字段 + 双方实体/待抄事件/消息队列快照，并用绝对 HP 断言钉住写回。
+> - **判据**：六份 golden（`tests/parity/world/golden/*.txt`）blob 与 base 逐个相等（6/6）；
+>   `cargo test -p mir2-parity-tests` 35 passed / 0 failed / 1 ignored（`table_counts` 需 MySQL）。
+> 段数口径不变（Command 仍未切系统：余 6 段）。
+>
 > **段数口径（P4 交付 head；单位 = 20 阶段）**：已系统化 **14 段**（P1 的 #0/#2/#15/#19 + P2–P4 的 #3/#4/#6/#7/#8/#13/#14/#16/#17/#18），**余 6 段：`#1 Command` / `#5 SimSelfDeliver` / `#9 SimBuff` / `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**。
 
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
