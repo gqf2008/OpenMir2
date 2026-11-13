@@ -1029,6 +1029,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   比对 `AttackOutcome` 六字段 + 双方实体/待抄事件/消息队列快照，并用绝对 HP 断言钉住写回。
 > - **判据**：六份 golden（`tests/parity/world/golden/*.txt`）blob 与 base 逐个相等（6/6）；
 >   `cargo test -p mir2-parity-tests` 35 passed / 0 failed / 1 ignored（`table_counts` 需 MySQL）。
+>
 > **S4d-3/P6a 落地登记（2026-11-13，模块段批量化）**：本批只交付 **#9 `SimBuff`**；
 > #5 `SimSelfDeliver` 与 #11 `SimNpc` **受阻**（依赖面超出卡面写集，按 Leader 批量化口径登记，未扩写集）。
 > - **#9 `SimBuff`（已系统化）**：段系统 `sim_buff_stage_system`（`TickStage::SimBuff`，#9）；段位 =

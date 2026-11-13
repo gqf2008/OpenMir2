@@ -3014,8 +3014,8 @@ impl World {
             .expect("SimBuff 段必须产出 BuffTickOutcome（段边界契约）")
     }
 
-    /// 单 pass 的 buff `DoWork`（供单测与 [`World::buff_tick`]）。`now_ms` 必须与
-    /// `add_buff`/`make_posion` 的基一致（`clock_ms + BUFF_EPOCH_MS + …`）。
+    /// 单 pass 的 buff `DoWork`（供单测直接驱动；tick 路径经段系统 [`sim_buff_stage_system`]）。
+    /// `now_ms` 必须与 `add_buff`/`make_posion` 的基一致（`clock_ms + BUFF_EPOCH_MS + …`）。
     pub fn buff_do_work(&mut self, now_ms: i64) -> BuffTickOutcome {
         self.buff_pass_tick = now_ms;
         // 把 `BuffSystem` 从 `World` 里取出，避免 `do_work_impl` 同时借 `&mut self`（两条秩序都在
