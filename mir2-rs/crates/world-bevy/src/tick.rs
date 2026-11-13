@@ -222,6 +222,11 @@ pub fn advance_clock_system(
 //   * **运行期镜像**（P2 前置，review P2-1）：每次取组件都核对 [`ComponentRegistry`] 里该组件的
 //     **类型身份**（`TypeId`）是否在本段 `reads()` / `writes()` 白名单内，越界即 panic
 //     （fail-closed）——给「标记 trait 与名单表漂移」「泛型/dyn 转发」兜底；组件未注册同样 panic；
+//   * **运行期镜像的预编译形态**（T10 Top1）：`stage_spec!` 段在 [`StageEntities::new`] 把
+//     「白名单 ∩ 注册表」编译成 [`StageAccessTable`]（`TypeId ⇒ 访问位`），逐次访问只查一次表；
+//     未命中一律交回上面的旧判据（注册表断言 + `reads`/`writes` 短链）⇒ 三条 fail-closed
+//     路径（越白名单 / 未登记 / 组件缺失）的判定与 panic 消息逐条不变；手写段无预编译表，
+//     全量走旧判据；
 //   * **泛型组件按实例区分**（P2b P2-GENERIC-NAMES）：白名单与注册表**都是 `TypeId` 口径**，
 //     `AbilitySnapshot<BaseAbil>` 与别的实例是两个独立条目；没有字符串比对，因此不需要
 //     「调用处写别名」，也没有「泛型永不匹配」的失效模式；
@@ -259,6 +264,126 @@ pub trait StageSpec: 'static {
     /// 本段是否**允许写**该组件（由 [`stage_spec!`] 生成；默认不放行任何组件）。
     fn writes(_id: TypeId) -> bool {
         false
+    }
+    /// **可枚举的白名单**（T10 Top1）：本段 `read: [...]` / `write: [...]` 的 `TypeId` 清单。
+    ///
+    /// `stage_spec!` 生成 `Some(..)`（与 `reads`/`writes`、`Reads`/`Writes` 同一份名单，同源）；
+    /// 手写 `StageSpec` 不可枚举白名单 ⇒ 默认 `None`，运行期断言退回
+    /// [`Self::reads`] / [`Self::writes`] 短链路径——**语义逐条不变**（T-neg-9 钉住同源性）。
+    ///
+    /// 为什么要有它：`assert_stage_component` 原本每次访问都要「注册表资源查询 + 注册表
+    /// `HashMap` 查询 + 最多 25 条 `TypeId` 相等比较」，而每个全量段对每个实体都要取 24 个
+    /// 组件（11k 实体 × 6 段 ⇒ 每条链被走百万次）。有了可枚举名单，[`StageEntities::new`]
+    /// 能把它与注册表**一次**编译成 [`StageAccessTable`]（`TypeId ⇒ 访问位`），逐次访问只剩
+    /// 一次查表。注册表核对不删除：未登记组件不入表 ⇒ 命中不了 ⇒ 慢路径照旧 panic。
+    fn compiled_whitelist() -> Option<&'static CompiledWhitelist> {
+        None
+    }
+}
+
+/// **预编译的段白名单**（T10 Top1）：本段 `read: [...]` / `write: [...]` 的 `TypeId` 清单，
+/// 由 [`stage_spec!`] 从**同一份**名单生成，进程内每段只建一次（`LazyLock` 静态）。
+///
+/// 两种消费方式：
+/// * [`StageEntities::new`] 用它 + [`ComponentRegistry`] 建**段实例的访问表**
+///   （[`StageAccessTable`]：白名单 ∩ 已注册 ⇒ 访问位）；逐次访问落在**一次查表**上；
+/// * 拒绝路径 / 手写段退回 `S::reads` / `S::writes` 短链——判据仍是旧实现那一份。
+///
+/// **它只是「名单的可枚举形态」，不是第二事实源**：
+/// `t_neg_9_compiled_whitelist_matches_reads_writes` 逐项比对 `allows()` 与
+/// `reads()`/`writes()`；手写 `StageSpec` 不实现它 ⇒ `compiled_whitelist()` 返回 `None`
+/// ⇒ 访问表缺席 ⇒ 全部走短链（旧行为逐条不变）。
+#[derive(Debug, Default)]
+pub struct CompiledWhitelist {
+    entries: Vec<(TypeId, AccessKind)>,
+}
+
+impl CompiledWhitelist {
+    /// 空名单（由 `stage_spec!` 生成，随后逐项 `insert_*`）。
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// 放行一次读（`stage_spec!` 的 `read: [...]` 逐项调用）。
+    pub fn insert_read(&mut self, id: TypeId) -> &mut Self {
+        self.entries.push((id, AccessKind::Read));
+        self
+    }
+
+    /// 放行一次写（`stage_spec!` 的 `write: [...]` 逐项调用）。
+    pub fn insert_write(&mut self, id: TypeId) -> &mut Self {
+        self.entries.push((id, AccessKind::Write));
+        self
+    }
+
+    /// 名单里是否有这一项（线性扫；只用于建表与牙，不在逐次访问热路径上）。
+    pub fn allows(&self, id: TypeId, write: bool) -> bool {
+        let want = if write {
+            AccessKind::Write
+        } else {
+            AccessKind::Read
+        };
+        self.entries.iter().any(|(e, k)| *e == id && *k == want)
+    }
+
+    /// 名单条目（[`StageEntities::new`] 建访问表时逐项消费）。
+    pub fn iter(&self) -> impl Iterator<Item = (TypeId, AccessKind)> + '_ {
+        self.entries.iter().copied()
+    }
+
+    /// 名单条目数（诊断/牙用）。
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    /// 名单是否为空（空名单段合法：全部拒绝）。
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+}
+
+/// **段实例的预编译访问表**（T10 Top1 的逐次访问落点）：`TypeId` ⇒ 访问位。
+///
+/// 建表时机 = [`StageEntities::new`]（每段每 tick 一次）：只收**白名单里且在
+/// [`ComponentRegistry`] 已登记**的组件（未登记的不入表 ⇒ 访问时落到慢路径，由注册表
+/// 断言给出与旧实现相同的「未在 ComponentRegistry 注册」panic）。
+///
+/// **语义边界（为什么它不会放宽任何判据）**：
+/// * 命中 = 已登记 + 在白名单内 ⇒ 与旧判据的「放行」逐条一致；
+/// * 未命中 ⇒ **一律**回到旧判据（注册表断言 + `S::reads`/`S::writes` 短链），
+///   拒绝的 panic 消息与判定逐字来自同一份代码。本表**只可能放行或交回旧判据**，
+///   永远不会独自拒绝，也不会跳过注册表核对。
+/// * 注册表在段实例生命期内不再变化（段持有 `&mut World`，登记需要 `&mut EntityStore`）；
+///   白名单是类型级静态。因此建表结果在整个段实例内是常量。
+#[derive(Debug)]
+struct StageAccessTable {
+    bits: HashMap<TypeId, u8>,
+}
+
+const ACCESS_READ: u8 = 1;
+const ACCESS_WRITE: u8 = 2;
+
+impl StageAccessTable {
+    fn build(registry: &ComponentRegistry, whitelist: &CompiledWhitelist) -> Self {
+        let mut bits: HashMap<TypeId, u8> = HashMap::with_capacity(whitelist.len());
+        for (id, kind) in whitelist.iter() {
+            if !registry.is_registered_id(id) {
+                continue;
+            }
+            let bit = match kind {
+                AccessKind::Read => ACCESS_READ,
+                AccessKind::Write => ACCESS_WRITE,
+            };
+            *bits.entry(id).or_insert(0) |= bit;
+        }
+        Self { bits }
+    }
+
+    /// 这一次访问是否已被预编译表放行（**一次查表**）。
+    #[inline]
+    fn allows(&self, id: TypeId, write: bool) -> bool {
+        let need = if write { ACCESS_WRITE } else { ACCESS_READ };
+        matches!(self.bits.get(&id), Some(has) if *has & need != 0)
     }
 }
 
@@ -323,6 +448,11 @@ impl ComponentRegistry {
             "组件 {id:?}（{}）未在 ComponentRegistry 注册：段适配器拒绝在未登记组件上工作（P2 前置）",
             self.name_of_id(id).unwrap_or("<未登记>")
         );
+    }
+
+    /// 该 `TypeId` 是否已登记（T10 Top1：建访问表时逐项查询；不 panic）。
+    pub fn is_registered_id(&self, id: TypeId) -> bool {
+        self.names.contains_key(&id)
     }
 
     /// 已登记的组件数（诊断/测试用）。
@@ -498,6 +628,15 @@ pub struct StageEntities<'w, S: StageSpec> {
     world: &'w mut World,
     /// 段开始时从 bevy `World` 移出、`Drop` 时放回（`view_mut` 的 `QueryState` 缓存）。
     queries: Option<StageQueries>,
+    /// **预编译的访问表**（T10 Top1）：白名单 ∩ 已注册 ⇒ 访问位，`new` 时一次建好。
+    /// 手写 `StageSpec`（无 `compiled_whitelist`）⇒ `None` ⇒ 退回 `S::reads`/`S::writes` 短链。
+    access: Option<StageAccessTable>,
+    /// 本实例已**完整核对过**的组合视图类型（`TypeId::of::<Q>()`）。
+    ///
+    /// 组合视图的逐组件核对只在每个 `Q` 的**第一次**调用时做（此后本实例内结论是常量：
+    /// 白名单是类型级静态、注册表在段实例内不变）；被拒的视图在第一次就 panic，不会入表。
+    /// 条目数 = 本段用到的视图类型数（通常 1–3），线性扫比哈希表更快。
+    verified_views: Vec<TypeId>,
     _spec: core::marker::PhantomData<fn() -> S>,
 }
 
@@ -508,9 +647,20 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
                 .remove_resource::<StageQueries>()
                 .expect("StageQueries 必须已由 EcsStore::new 插入（段适配器前置）"),
         );
+        // T10 Top1：`stage_spec!` 段在这里把白名单编译成一次查表（每段每 tick 一次建表，
+        // 约等于「白名单条目数 × 注册表查询」；逐次组件访问则只查一次表）。
+        // 手写段没有可枚举名单 ⇒ `None` ⇒ 逐次访问走 `reads`/`writes` 短链（旧行为）。
+        // 注册表缺席不在这里 panic（旧实现在访问时才 panic，保持同一失效点）。
+        let access = S::compiled_whitelist().and_then(|whitelist| {
+            world
+                .get_resource::<ComponentRegistry>()
+                .map(|registry| StageAccessTable::build(registry, whitelist))
+        });
         StageEntities {
             world,
             queries,
+            access,
+            verified_views: Vec::new(),
             _spec: core::marker::PhantomData,
         }
     }
@@ -527,13 +677,21 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
 
     /// **运行期镜像白名单**：组件必须已注册，且 `TypeId` 在本段对应访问集里；否则 panic
     /// （fail-closed）。比较是**类型身份**，不是字符串（泛型实例各自独立）。
+    ///
+    /// T10 Top1：**放行**只查一次 [`StageAccessTable`]（白名单 ∩ 注册表，`new` 时建好）；
+    /// 未命中 ⇒ 回到旧判据（注册表断言 + `S::reads`/`S::writes` 短链）——拒绝路径的
+    /// panic 消息与判定逐字不变。
+    #[inline]
     fn assert_stage_component<C: Component>(&self, write: bool) {
+        let id = TypeId::of::<C>();
+        if self.access.as_ref().is_some_and(|a| a.allows(id, write)) {
+            return;
+        }
         let registry = self
             .world
             .get_resource::<ComponentRegistry>()
             .expect("ComponentRegistry 必须已由 EcsStore::new 插入（段适配器前置）");
         registry.assert_registered::<C>();
-        let id = TypeId::of::<C>();
         let allowed = if write { S::writes(id) } else { S::reads(id) };
         assert!(
             allowed,
@@ -548,28 +706,43 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
     /// 且在本段对应的 `reads()` / `writes()` 白名单内；任一不满足立即 panic。
     ///
     /// 与 [`Self::assert_stage_component`] 是同一套判据，只是组件来自 [`ViewAccess`] 的枚举。
-    fn assert_view_access<Q: ViewAccess>(&self) {
-        let registry = self
-            .world
-            .get_resource::<ComponentRegistry>()
-            .expect("ComponentRegistry 必须已由 EcsStore::new 插入（段适配器前置）");
-        let mut declared: Vec<(TypeId, AccessKind)> = Vec::new();
-        Q::visit_components(&mut |id, kind| declared.push((id, kind)));
-        // 空声明是**合法**的（空元组视图）；「声明了就必须逐项放行」是这里的判据。
-        for (id, kind) in declared {
-            registry.assert_registered_id(id);
-            let (allowed, verb) = match kind {
-                AccessKind::Read => (S::reads(id), "读"),
-                AccessKind::Write => (S::writes(id), "写"),
-            };
-            assert!(
-                allowed,
-                "段 {:?} 越白名单{}组件 {}：组合视图的每个组件都必须在本段白名单内（P2b P2-VIEW-MUT-BYPASS）",
-                S::STAGE,
-                verb,
-                registry.name_of_id(id).unwrap_or("<未登记>")
-            );
+    /// T10 Top1 的两处优化（判据、逐项顺序、panic 消息都不变）：
+    /// 1. **每个视图类型只核对一次**（`verified_views`）：同一 `Q` 在 11k 实体上被调用 11k 次，
+    ///    逐次重做 24 项注册表+白名单核对是纯重复；第一次核对通过即记入本实例，
+    ///    之后一次 `Vec::contains`（通常 1–3 项）即可。被拒的视图在第一次就 panic，不入表。
+    /// 2. 逐项断言直接写进 `visit_components` 的回调（旧实现先 push 进临时 `Vec` 再遍历）
+    ///    ⇒ 去掉每次视图调用的堆分配。
+    fn assert_view_access<Q: ViewAccess + 'static>(&mut self) {
+        let key = TypeId::of::<Q>();
+        if self.verified_views.contains(&key) {
+            return;
         }
+        {
+            let registry = self
+                .world
+                .get_resource::<ComponentRegistry>()
+                .expect("ComponentRegistry 必须已由 EcsStore::new 插入（段适配器前置）");
+            // 空声明是**合法**的（空元组视图）；「声明了就必须逐项放行」是这里的判据。
+            Q::visit_components(&mut |id: TypeId, kind: AccessKind| {
+                let write = matches!(kind, AccessKind::Write);
+                if self.access.as_ref().is_some_and(|a| a.allows(id, write)) {
+                    return;
+                }
+                registry.assert_registered_id(id);
+                let (allowed, verb) = match kind {
+                    AccessKind::Read => (S::reads(id), "读"),
+                    AccessKind::Write => (S::writes(id), "写"),
+                };
+                assert!(
+                    allowed,
+                    "段 {:?} 越白名单{}组件 {}：组合视图的每个组件都必须在本段白名单内（P2b P2-VIEW-MUT-BYPASS）",
+                    S::STAGE,
+                    verb,
+                    registry.name_of_id(id).unwrap_or("<未登记>")
+                );
+            });
+        }
+        self.verified_views.push(key);
     }
 
     /// 记一次「实体存在但组件缺失」（诊断计数；不改变 `None` 的跳过语义）。
@@ -727,6 +900,12 @@ impl<S: StageSpec> Drop for StageEntities<'_, S> {
 /// 白名单用**类型身份**（`TypeId::of::<$r>()`）生成，与 [`ComponentRegistry`] 的键同口径：
 /// 泛型组件（`AbilitySnapshot<BaseAbil>`、`Gen<u8>`）按实例精确匹配，每个实例各占一项；
 /// 不需要写别名，也不存在字符串拼写差异（P2b P2-GENERIC-NAMES）。
+///
+/// **T10 Top1**：同一份名单还生成 [`StageSpec::compiled_whitelist`] 的 `LazyLock` 静态清单
+/// （进程内每段只建一次）——[`StageEntities::new`] 用它建段实例的 [`StageAccessTable`]，
+/// 逐次组件访问从「注册表查询 + 线性 `TypeId` 链」降为一次查表。宏是**唯一**的事实源：
+/// `reads`/`writes`、`Reads`/`Writes` 标记 trait、预编译清单三处都由这一份
+/// `read: [...]` / `write: [...]` 生成。
 #[macro_export]
 macro_rules! stage_spec {
     ($spec:ident, $stage:expr, read: [$($r:ty),* $(,)?], write: [$($w:ty),* $(,)?]) => {
@@ -738,6 +917,18 @@ macro_rules! stage_spec {
             }
             fn writes(_id: ::core::any::TypeId) -> bool {
                 false $(|| _id == ::core::any::TypeId::of::<$w>())*
+            }
+            fn compiled_whitelist(
+            ) -> ::core::option::Option<&'static $crate::tick::CompiledWhitelist> {
+                // 函数体内 `static`：每次宏展开是独立条目 ⇒ 每段一张进程级表。
+                static COMPILED: ::std::sync::LazyLock<$crate::tick::CompiledWhitelist> =
+                    ::std::sync::LazyLock::new(|| {
+                        let mut whitelist = $crate::tick::CompiledWhitelist::new();
+                        $(whitelist.insert_read(::core::any::TypeId::of::<$r>());)*
+                        $(whitelist.insert_write(::core::any::TypeId::of::<$w>());)*
+                        whitelist
+                    });
+                ::core::option::Option::Some(&COMPILED)
             }
         }
         $(impl $crate::tick::Reads<$r> for $spec {})*
@@ -1258,6 +1449,82 @@ mod stage_adapter_tests {
         let mut ad = StageEntities::<StructUnreg>::new(store.world_mut());
         ad.insert(id, (A(1), Unregistered2(9)));
         let _ = ad.get::<Unregistered2>(id);
+    }
+
+    // ---------------- T10 Top1：预编译白名单（compiled_whitelist） ----------------
+
+    /// **同源牙**：`stage_spec!` 生成的预编译表与 `reads()` / `writes()` **逐项相同**。
+    ///
+    /// 牙：把宏里 `insert_write` 误写成 `insert_read`、或往任一名单多写/漏写一条 ⇒
+    /// 对应 `(类型, 读/写)` 组合上两侧不等 ⇒ 红。条目数另钉（防「两个清单都变成同一份」
+    /// 时逐项比对在两侧同样漏项的情形）。
+    #[test]
+    fn t_neg_9_compiled_whitelist_matches_reads_writes() {
+        let compiled =
+            <Probe as StageSpec>::compiled_whitelist().expect("stage_spec! 段必须有预编译表");
+        for id in [
+            TypeId::of::<A>(),
+            TypeId::of::<B>(),
+            TypeId::of::<C>(),
+            TypeId::of::<Gen<u8>>(),
+            TypeId::of::<Gen<u16>>(),
+            TypeId::of::<Unregistered>(),
+        ] {
+            assert_eq!(
+                compiled.allows(id, false),
+                Probe::reads(id),
+                "预编译读白名单与 reads() 不同源: {id:?}"
+            );
+            assert_eq!(
+                compiled.allows(id, true),
+                Probe::writes(id),
+                "预编译写白名单与 writes() 不同源: {id:?}"
+            );
+        }
+        let reads = compiled
+            .iter()
+            .filter(|(_, kind)| *kind == AccessKind::Read)
+            .count();
+        let writes = compiled
+            .iter()
+            .filter(|(_, kind)| *kind == AccessKind::Write)
+            .count();
+        assert_eq!(reads, 2, "Probe 的读名单 = [A, B]");
+        assert_eq!(writes, 2, "Probe 的写名单 = [A, B]");
+    }
+
+    /// **接线牙**：`StageEntities` 的访问判定必须**真的查预编译表**（而不是退回 `reads()` 短链）。
+    ///
+    /// 构造一个「短链拒绝 A、预编译清单放行 A」的段：若适配器仍走 `reads()`，`get::<A>` 会
+    /// panic ⇒ 红；只有「建表 + 查表」这条路径接上才返回 `Some`。删掉 `StageEntities` 的
+    /// `access` 字段、`new` 里的建表、或 `assert_stage_component` 的查表短路，本用例立刻红。
+    ///
+    /// 它同时钉住契约：手写段一旦实现 `compiled_whitelist()`，预编译表就是该段的**权威**
+    /// 放行表（`reads`/`writes` 短链只在没有预编译表时使用）；生产段全部由 `stage_spec!`
+    /// 生成、两处同源（`t_neg_9` 钉住）。
+    struct CompiledOnly;
+    impl StageSpec for CompiledOnly {
+        const STAGE: TickStage = TickStage::SimBuff;
+        fn compiled_whitelist() -> Option<&'static CompiledWhitelist> {
+            static W: std::sync::LazyLock<CompiledWhitelist> = std::sync::LazyLock::new(|| {
+                let mut w = CompiledWhitelist::new();
+                w.insert_read(TypeId::of::<A>());
+                w
+            });
+            Some(&W)
+        }
+    }
+    impl Reads<A> for CompiledOnly {}
+
+    #[test]
+    fn t_compiled_1_stage_access_uses_precompiled_table() {
+        let mut store = store_with(&[1]);
+        let ad = StageEntities::<CompiledOnly>::new(store.world_mut());
+        assert_eq!(
+            ad.get::<A>(1),
+            Some(&A(1)),
+            "预编译表放行 A ⇒ 访问必须成功（若仍在走 reads() 短链会 panic）"
+        );
     }
 
     // ---------------- P5P-1：段侧 StageQueries 的 archetype 刷新 ----------------
