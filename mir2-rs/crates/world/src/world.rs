@@ -3136,18 +3136,9 @@ impl World {
     ///   `30..=33 ⇒ Desc[2] += Desc[10]-29`（C# `(byte)(...)` ⇒ 模 256 回绕）；
     /// - 否则（和 ≥ 上限）⇒ `Index = 0`（碎）；
     /// - **无论哪支**末尾 `Desc[10] = 0`（一次性消耗）。
-    #[must_use]
-    fn check_weapon_upgrade_status(
-        &self,
-        weapon: &mut crate::entity::UseItemSlot,
-    ) -> Option<WeaponUpgradeOutcome> {
-        Self::check_weapon_upgrade_status_impl(self.upgrade_weapon_max_point, weapon)
-    }
-
-    /// **P5-A1**：`CheckWeaponUpgradeStatus` 的 facade/段共用实现。
     ///
-    /// 只读配置值 `UpgradeWeaponMaxPoint`（`Config`，不读任何实体）⇒ 把配置值作为入参，
-    /// 段路径（`EntityAccess` + `SimState`）与 facade 传同一个值，取数/写回逐句相同。
+    /// **P5-A1**：facade 与段路径（`EntityAccess` + `SimState`）共用本实现。只读配置值
+    /// `UpgradeWeaponMaxPoint`（`Config`，不读任何实体）⇒ 把配置值作为入参，两路传同一个值。
     #[must_use]
     pub(crate) fn check_weapon_upgrade_status_impl(
         upgrade_weapon_max_point: i32,
@@ -8315,12 +8306,28 @@ impl World {
     }
 
     pub(crate) fn attack_once(&mut self, actor_id: i32, target_id: i32) -> Option<AttackOutcome> {
-        if self.entities.get(actor_id).is_none() || self.entities.get(target_id).is_none() {
+        Self::attack_once_impl(&mut self.entities, &mut self.sim, actor_id, target_id)
+    }
+
+    /// **P5-A1**：attack 族 handler 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 逐句与旧 `World::attack_once` 相同：取数（攻守双方快照 + `LastHiter` + 组团表 +
+    /// 毒门运行态）→ `attack_dir_grouped_poison_ws` → 写回（目标 HP / `UseItems` 耐久 /
+    /// `LastHiter` + `RM_STRUCK` 入队；武器升级 `UseItems` + `pending_weapon_breaks`；
+    /// 武器磨损 `UseItems` + `pending_weapon_wears`）→ 中毒 `make_posion`。
+    /// 取数/写回点与次序一字未动 ⇒ RNG 账本不变。
+    pub(crate) fn attack_once_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        target_id: i32,
+    ) -> Option<AttackOutcome> {
+        if access.get(actor_id).is_none() || access.get(target_id).is_none() {
             return None;
         }
         // 取出双方属性做结算（避免同时可变借用），再写回
-        let mut attacker = self.entities.spawn_cloned(actor_id)?;
-        let mut target = self.entities.spawn_cloned(target_id)?;
+        let mut attacker = access.spawn_cloned(actor_id)?;
+        let mut target = access.spawn_cloned(target_id)?;
         // **卡 `openmir2-weapon-durability-frames`（tier=R）**：`AttackDir` 在算攻击力**之前**
         // 先跑 `CheckWeaponUpgrade()`（`PlayObject.Attack.cs:25-31`，门：武器 `Index>0 &&
         // Desc[10]>0` 且 `attackTarget != null`——本函数按构造恒有目标；空挥走
@@ -8328,22 +8335,26 @@ impl World {
         // `UseItems[Weapon]`（碎 / 强化）⇒ 攻击结算后必须写回实体（oracle 改的是同一对象）。
         let weapon_outcome: Option<WeaponUpgradeOutcome> =
             if attacker.race == crate::entity::ACTOR_RACE_PLAY {
-                self.check_weapon_upgrade_status(&mut attacker.use_items[ITEM_LOCATION_WEAPON])
+                Self::check_weapon_upgrade_status_impl(
+                    sim.upgrade_weapon_max_point,
+                    &mut attacker.use_items[ITEM_LOCATION_WEAPON],
+                )
             } else {
                 None
             };
         // `StruckDamage` 的倍率取目标**当下存着**的 `LastHiter`（= 上一次命中者：本次命中者要等
         // 目标下一轮 `Run()` 处理 `RM_STRUCK` 才登记）。默认倍率 10 时数值不可分辨，非默认配置下
         // 才有差异 ⇒ 必须照 oracle 取，别改成本次攻击者。
-        let last_hitter = target
-            .last_hiter
-            .and_then(|id| self.entities.get(id))
-            .map(|h| crate::combat::LastHitter {
-                race: h.race,
-                job: h.job,
-                has_master: h.master.is_some(),
-            });
-        let cfg = self.combat_config;
+        let last_hitter =
+            target
+                .last_hiter
+                .and_then(|id| access.get(id))
+                .map(|h| crate::combat::LastHitter {
+                    race: h.race,
+                    job: h.job,
+                    has_master: h.master.is_some(),
+                });
+        let cfg = sim.combat_config;
         // 攻方攻击力口径：oracle 的 `GetBaseAttackPoewr` 走**虚函数** `GetAttackPower`
         //（`BaseObject.Attack.cs:25` → `BaseObject.Base.cs:886` 基版；`PlayObject.cs:2909` 玩家 override）。
         // 玩家（`Race == ActorRace.Play`）走 override（`Luck`/`PowerRate`/`BoPowerItem`）；
@@ -8355,26 +8366,24 @@ impl World {
         // 怪物攻方无这条（`AttackSuccess` 是 `PlayObject` 私有方法）。
         // `HAM_GROUP` 的 `IsGroupMember(target)`（`PlayObject.Attack.cs:671-677`）需要攻方所在
         // 组团长的成员表；`GroupOwner == 0` ⇒ 空表（`IsGroupMember` 第一步即 `false`）。
-        let attacker_group_members = self.attacker_group_members(&attacker);
+        let attacker_group_members = Self::attacker_group_members_impl(access, &attacker);
         // **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221-224`）的运行态。
         // 每个 actor 的表项存**自身**的三个属性（`Paralysis` 作攻方 + `UnParalysis`/`AntiPoison`
         // 作守方）；门取**攻方**的 `Paralysis` 与**守方**的另两项。buff 关闭时传 `None` ⇒ 与
         // [`attack_dir_grouped`] 逐取数等价（既有 golden 不变）；开启且攻方有麻痹态时，在
         // `Random(5)` **之前**插一次 `Random(AntiPoison + AttackPosionRate)`（oracle 取数次序）。
-        let poison = if self.buff_enabled {
-            self.attack_poison
-                .get(&actor_id)
-                .map(|a| AttackPoisonState {
-                    paralysis: a.paralysis,
-                    un_paralysis: self
-                        .attack_poison
-                        .get(&target_id)
-                        .is_some_and(|t| t.un_paralysis),
-                    anti_poison: self
-                        .attack_poison
-                        .get(&target_id)
-                        .map_or(0, |t| t.anti_poison),
-                })
+        let poison = if sim.buff_enabled {
+            sim.attack_poison.get(&actor_id).map(|a| AttackPoisonState {
+                paralysis: a.paralysis,
+                un_paralysis: sim
+                    .attack_poison
+                    .get(&target_id)
+                    .is_some_and(|t| t.un_paralysis),
+                anti_poison: sim
+                    .attack_poison
+                    .get(&target_id)
+                    .map_or(0, |t| t.anti_poison),
+            })
         } else {
             None
         };
@@ -8382,13 +8391,13 @@ impl World {
         // 作为 [crate::combat::attack_dir_grouped_poison_ws] 的**末位实参**传入——`_ws` 只在原函数
         // 参数行加参、函数体不移动 ⇒ 毒门 `random_below` 仍在 `combat.rs:1260`（RNG 账本合同，
         // review `f3be880d1` 修法 (a)）。
-        let weapon_strong = self
+        let weapon_strong = sim
             .attack_weapon_strong
             .get(&actor_id)
             .copied()
             .unwrap_or(0);
         let (outcome, poisoned, weapon_wear) = attack_dir_grouped_poison_ws(
-            self.attack_rng(),
+            Self::attack_rng_of(sim),
             &mut attacker,
             &mut target,
             last_hitter,
@@ -8397,8 +8406,8 @@ impl World {
             poison,
             weapon_strong,
         );
-        let now = self.clock_ms;
-        if let Some(mut e) = self.entities.get_mut(target_id) {
+        let now = sim.clock_ms;
+        if let Some(mut e) = access.get_mut(target_id) {
             e.vitals.hp = target.hp;
             // **G-06 耐久面回写（`openmir2-persist-useitems-wiring`）**：`attack_dir_grouped_poison`
             // 在 `target` 的副本上跑 `PlayObject.StruckDamage` 的耐久段（`PlayObject.cs:2954-3036`），
@@ -8438,7 +8447,9 @@ impl World {
         // 入队零抽数；到点由 `deliver_self_delay_msgs` 的 `RM_REFMESSAGE` 支处理
         // （广播框架 + `Race != Play` 自投 `RM_STRUCK` → `Struck` 的 `Random(6)`/`Random(300)`）。
         if outcome.struck_power > 0 {
-            self.send_struck_delay_msg_refmessage(
+            crate::slave::send_struck_delay_msg_refmessage_impl(
+                access,
+                sim,
                 target_id,
                 actor_id,
                 i32::from(outcome.struck_power),
@@ -8451,7 +8462,9 @@ impl World {
         // `MakePosion` 不抽数 ⇒ 取数账本不受影响（那一次抽取已在
         // [`attack_dir_grouped_poison`] 里按 oracle 的位置、`&&` 短路口径发生）。
         if poisoned {
-            self.make_posion(
+            Self::make_posion_impl(
+                access,
+                sim,
                 target_id,
                 BuffType::Paralysis as u8,
                 cfg.attack_poison_time,
@@ -8461,10 +8474,10 @@ impl World {
         // 武器升级结算的回写（`UseItems[Weapon]` 是 oracle 的同一个对象；本仓攻方是副本）。
         // 只回写 `use_items`：其余攻方字段在 oracle 里也不由 `AttackDir` 改。
         if let Some(outcome) = weapon_outcome {
-            if let Some(e) = self.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.inventory.use_items = attacker.use_items;
             }
-            self.pending_weapon_breaks
+            sim.pending_weapon_breaks
                 .push(WeaponUpgradeEvent { actor_id, outcome });
         }
         // **卡 `openmir2-attack-weapon-wear-642`**：`AttackSuccess` 的武器耐久磨损
@@ -8472,10 +8485,10 @@ impl World {
         // `UseItems[Weapon]` 对象；本仓攻方是副本 ⇒ 这里**必须**无条件写回（与上面
         // `weapon_outcome` 的条件式写回不同：没有升级 `Desc[10]` 的普通武器也照样磨损）。
         if let Some(wear) = weapon_wear {
-            if let Some(e) = self.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.inventory.use_items = attacker.use_items;
             }
-            self.pending_weapon_wears.push(WeaponWearEvent {
+            sim.pending_weapon_wears.push(WeaponWearEvent {
                 actor_id,
                 frames: wear.frames,
             });
@@ -9542,6 +9555,364 @@ mod tests {
         assert!(w.entities.get(id).is_none(), "remove 后 facade 立即查不到");
         assert!(!w.entities.iter().any(|e| e.id == id));
         assert!(w.entities.order_index().is_empty());
+    }
+
+    // **P5-A1**：attack 族的段 spec（测试专用）。
+    //
+    // 读/写集 = `StageAccess` 的组合视图全集（24 读 / 20 写，与 `SimSettleDeaths` 同口径）；
+    // 段号挂 `Command`（本族原本就在命令 FIFO 里处理）。只为让 `attack_once_impl` 能在
+    // 「访问器 + `SimState`」形态下跑起来并被断言——本卡不把 Command 切成系统。
+    mir2_world_bevy::stage_spec!(
+        AttackProbe,
+        TickStage::Command,
+        read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ],
+        write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ]
+    );
+
+    /// attack 夹具：玩家攻方（持升级标记武器）+ 团长成员表 + 怪物守方 + 中毒运行态。
+    ///
+    /// 玩家攻方 ⇒ 完整 `AttackPowerMode::Player` 取数链（攻击力两抽 + 毒门 + `Random(5)`）；
+    /// 怪物守方 ⇒ 命中者登记（`LastHiter`）与 `RM_STRUCK` 入队分支可达；武器带升级标记
+    /// ⇒ `CheckWeaponUpgradeStatus` 写回分支可达；`enable_refmessage_delay` ⇒ 200ms
+    /// `RM_REFMESSAGE` 入队分支可达。
+    ///
+    /// `plain_weapon` = `true` 时武器无升级标记（只走 `AttackSuccess` 的磨损写回，
+    /// 用来把「耐久写回」与「升级写回」两支隔离开）。
+    fn attack_probe_world(plain_weapon: bool) -> (World, i32, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        w.rng = RandomNumber::with_seed(42);
+        w.set_weapon_durability_config(true, 7);
+        w.enable_buff_tick();
+        w.enable_refmessage_delay();
+        w.combat_config.attack_poison_rate = 1;
+        w.combat_config.attack_poison_time = 5;
+
+        let mut leader = crate::EntitySpawn::new(3, "leader", 9, 9);
+        leader.race = crate::entity::ACTOR_RACE_PLAY;
+        let leader = w.add_entity(leader);
+        w.entities.get_mut(leader).unwrap().group.group_members = vec![leader];
+
+        let mut hero = crate::EntitySpawn::new(1, "hero", 10, 10);
+        hero.race = crate::entity::ACTOR_RACE_PLAY;
+        hero.dc = 10;
+        hero.hit_point = 100;
+        hero.group_owner = leader;
+        let hero = w.add_entity(hero);
+        let mut desc = [0u8; 14];
+        if !plain_weapon {
+            desc[ITEM_ATTR_WEAPON_UPGRADE] = 13;
+        }
+        w.entities.get_mut(hero).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            crate::entity::UseItemSlot {
+                make_index: 1,
+                index: 10,
+                dura: 5000,
+                dura_max: 10_000,
+                desc,
+            };
+
+        let mut mon = crate::EntitySpawn::new(2, "foe", 11, 10);
+        mon.race = crate::entity::ACTOR_RACE_MONSTER;
+        mon.hp = 100;
+        mon.max_hp = 100;
+        mon.hit_point = 10;
+        mon.speed_point = 10;
+        mon.ac = 0;
+        let mon = w.add_entity(mon);
+
+        w.set_attack_poison(
+            hero,
+            crate::combat::AttackPoisonState {
+                paralysis: true,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        w.set_attack_poison(
+            mon,
+            crate::combat::AttackPoisonState {
+                paralysis: false,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        (w, hero, mon)
+    }
+
+    /// 攻击后双方实体 + 待抄事件的完整快照（段路径与 facade 路径逐项比对用）。
+    #[allow(clippy::type_complexity)]
+    fn attack_state_snapshot(
+        w: &World,
+        hero: i32,
+        mon: i32,
+    ) -> (
+        u16,
+        u16,
+        u8,
+        [u8; 14],
+        u16,
+        i32,
+        Vec<(i32, i32)>,
+        i32,
+        Vec<WeaponUpgradeEvent>,
+        Vec<WeaponWearEvent>,
+        usize,
+    ) {
+        let h = w.entities.get(hero).unwrap();
+        let m = w.entities.get(mon).unwrap();
+        let wslot = h.use_items[ITEM_LOCATION_WEAPON];
+        let struck: Vec<(i32, i32)> =
+            m.ai.pending_struck
+                .iter()
+                .map(|s| (s.hiter, s.w_param))
+                .collect();
+        (
+            wslot.index,
+            wslot.dura,
+            wslot.desc[ITEM_ATTR_WEAPON_UPGRADE],
+            wslot.desc,
+            m.hp,
+            m.last_hiter.unwrap_or(0),
+            struck,
+            m.char_status,
+            w.pending_weapon_breaks.clone(),
+            w.pending_weapon_wears.clone(),
+            w.self_delay_msgs.len(),
+        )
+    }
+
+    /// **P5-A1**：`attack_once_impl` 的段路径（`StageAccess`）与 facade 路径**逐项同结果**。
+    ///
+    /// 同一夹具跑两遍：`World::attack_once`（facade → `EntityStore`）与
+    /// `World::attack_once_impl(&mut StageAccess, &mut SimState, …)`。断言 `AttackOutcome`
+    /// 六字段、双方实体状态（HP / `UseItems` / `LastHiter` / `RM_STRUCK` 队列 / `CharStatus`）、
+    /// 待抄事件（武器升级/磨损）与 `RM_REFMESSAGE` 队列长度逐值相同，且 RNG 后继流相同。
+    ///
+    /// 牙：段路径任一处取数/写回被搬错（读错表、少写回、写错对象、`StageAccess::get_mut`
+    /// 不回写实体）⇒ 两侧快照分叉 ⇒ 红。HP 那一项还额外钉住「绝对写回」而不是「两侧一起错」。
+    #[test]
+    fn attack_stage_access_path_matches_facade_path() {
+        use crate::entity::EntityAccess;
+        use mir2_world_bevy::tick::StageEntities;
+
+        let (mut facade, hero, mon) = attack_probe_world(false);
+        let (mut staged, hero2, mon2) = attack_probe_world(false);
+        assert_eq!((hero, mon), (hero2, mon2));
+        let hp_before = facade.entities.get(mon).unwrap().hp;
+
+        let a = facade.attack_once(hero, mon).expect("facade 路径必须结算");
+        let b = {
+            let World { entities, sim, .. } = &mut staged;
+            let mut ad = StageEntities::<AttackProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert!(
+                access.get(hero2).is_some(),
+                "段访问器必须能按 id 解析到攻方"
+            );
+            World::attack_once_impl(&mut access, sim, hero2, mon2).expect("段路径必须结算")
+        };
+
+        let key = |o: &crate::combat::AttackOutcome| {
+            (
+                o.power,
+                o.hit,
+                o.damage,
+                o.struck_power,
+                o.killed,
+                o.target_hp_after,
+            )
+        };
+        assert_eq!(key(&a), key(&b), "AttackOutcome 必须逐字段相同");
+        assert!(a.hit, "夹具命中门必须过");
+        assert!(a.damage > 0, "夹具必须造成伤害");
+
+        let sa = attack_state_snapshot(&facade, hero, mon);
+        let sb = attack_state_snapshot(&staged, hero2, mon2);
+        assert_eq!(sa, sb, "段路径与 facade 路径的实体/事件快照必须逐项相同");
+        assert_eq!(
+            sa.4,
+            hp_before - a.damage,
+            "伤害必须绝对写回目标 HP（删 e.vitals.hp 回写即红）"
+        );
+
+        let tail_a: Vec<i32> = (0..5).map(|_| facade.rng.random_below(1000)).collect();
+        let tail_b: Vec<i32> = (0..5).map(|_| staged.rng.random_below(1000)).collect();
+        assert_eq!(tail_a, tail_b, "两条路径的 RNG 后继流必须逐值相同");
+    }
+
+    /// **P5-A1**：武器磨损必须写回实体 `UseItems[Weapon]`（不只是记事件）。
+    ///
+    /// 夹具用**无升级标记**武器 ⇒ `weapon_outcome` 为 `None`，唯一可能改武器槽的是
+    /// `AttackSuccess` 的磨损支。牙：删 `e.inventory.use_items = attacker.use_items`
+    /// （`weapon_wear` 那一处回写）⇒ 实体耐久不再下降 ⇒ 红。
+    #[test]
+    fn attack_writeback_weapon_wear_reaches_entity() {
+        let (mut w, hero, mon) = attack_probe_world(true);
+        let before = w.entities.get(hero).unwrap().use_items[ITEM_LOCATION_WEAPON].dura;
+        w.attack_cmd(hero, mon);
+        let rec = w.tick();
+        assert_eq!(rec.weapon_wears.len(), 1, "无升级标记 ⇒ 只剩磨损事件");
+        assert!(rec.weapon_breaks.is_empty());
+        let after = w.entities.get(hero).unwrap().use_items[ITEM_LOCATION_WEAPON].dura;
+        assert!(
+            after < before,
+            "磨损必须写回实体 UseItems（删 use_items 回写即红）：{before} -> {after}"
+        );
+        assert_eq!(rec.weapon_wears[0].actor_id, hero);
+    }
+
+    /// **P5-A1**：受击耐久（目标侧）必须写回目标实体 `UseItems`。
+    ///
+    /// 玩家守方 + 衣服槽 `Index>0` ⇒ `StruckDamage` 的耐久段必然扣 `Random(10)+5`
+    /// （衣服特判不抽数）；本仓攻方/守方都是副本 ⇒ 不回写就整段丢失。
+    /// 牙：删目标那一处 `e.inventory.use_items = target.use_items` ⇒ 实体衣服耐久不变 ⇒ 红。
+    #[test]
+    fn attack_writeback_target_durability_reaches_entity() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        w.rng = RandomNumber::with_seed(42);
+        w.set_weapon_durability_config(true, 7);
+        let hero = w.add_entity({
+            let mut e = crate::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.dc = 10;
+            e.hit_point = 100;
+            e
+        });
+        let foe = w.add_entity({
+            let mut e = crate::EntitySpawn::new(2, "foe", 11, 10);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 200;
+            e.max_hp = 200;
+            e.hit_point = 100;
+            e
+        });
+        w.entities.get_mut(foe).unwrap().inventory.use_items[crate::combat::ITEM_LOCATION_DRESS] =
+            crate::entity::UseItemSlot {
+                make_index: 1,
+                index: 5,
+                dura: 5000,
+                dura_max: 10_000,
+                desc: [0u8; 14],
+            };
+        let before =
+            w.entities.get(foe).unwrap().use_items[crate::combat::ITEM_LOCATION_DRESS].dura;
+        let out = w.attack_once(hero, foe).expect("结算");
+        assert!(out.hit, "夹具命中门必须过");
+        let after = w.entities.get(foe).unwrap().use_items[crate::combat::ITEM_LOCATION_DRESS].dura;
+        assert!(
+            after < before,
+            "受击耐久必须写回目标 UseItems（删目标 use_items 回写即红）：{before} -> {after}"
+        );
+    }
+
+    /// **P5-A1**：中毒门命中后 `MakePosion` 的 `CharStatus` 必须写回实体。
+    ///
+    /// 夹具：攻方 `Paralysis=true`、守方 `UnParalysis=false`、`AttackPosionRate=1`
+    /// ⇒ `Random(0+1)==0` 必过 ⇒ `poisoned=true`。牙：删 `make_posion_impl` 里的
+    /// `e.buff.char_status = status` 写回 ⇒ 实体 `CharStatus` 仍为 0 ⇒ 红；
+    /// 删 `poisoned` 支的调用 ⇒ 同样红（buff 表也不再有该项）。
+    #[test]
+    fn attack_writeback_poison_status_reaches_entity() {
+        let (mut w, hero, mon) = attack_probe_world(false);
+        assert_eq!(
+            w.entities.get(mon).unwrap().char_status,
+            0,
+            "攻击前守方 CharStatus 必须为 0（牙的前置）"
+        );
+        let _ = w.attack_once(hero, mon).expect("结算");
+        let m = w.entities.get(mon).unwrap();
+        assert_ne!(m.char_status, 0, "石化毒位必须置起（删写回即红）");
+        assert_eq!(
+            m.char_status,
+            w.get_char_status(mon),
+            "实体 CharStatus 必须与 BuffSystem 一致（删写回 / 删调用都会分叉）"
+        );
+        assert!(
+            w.buffs.has_buff(mon, crate::buff::BuffType::Paralysis),
+            "buff 表必须登记石化毒"
+        );
+    }
+
+    /// **P5-A1**：命中者登记与 `RM_STRUCK` 入队必须写回目标实体（状态标志面）。
+    ///
+    /// 牙：删 `e.set_last_hiter(actor_id, now)` ⇒ `last_hiter` 仍为 `None` ⇒ 红；
+    /// 删 `e.ai.pending_struck.push(…)` ⇒ 队列为空 ⇒ 红；
+    /// 删 `if target.race > ACTOR_RACE_PLAY` 门的外观（改成恒真/恒假）⇒ 另一侧红。
+    #[test]
+    fn attack_writeback_last_hiter_and_struck_queue() {
+        let (mut w, hero, mon) = attack_probe_world(false);
+        let before = w.entities.get(mon).unwrap().hp;
+        let out = w.attack_once(hero, mon).expect("结算");
+        let m = w.entities.get(mon).unwrap();
+        assert_eq!(
+            m.hp,
+            before - out.damage,
+            "伤害必须写回目标 HP（删 e.vitals.hp 回写即红）"
+        );
+        assert_eq!(
+            m.last_hiter,
+            Some(hero),
+            "命中者登记必须写回（删 set_last_hiter 即红）"
+        );
+        let struck: Vec<(i32, i32)> =
+            m.ai.pending_struck
+                .iter()
+                .map(|s| (s.hiter, s.w_param))
+                .collect();
+        assert_eq!(
+            struck,
+            vec![(hero, i32::from(out.struck_power))],
+            "RM_STRUCK 必须按 struck_power 入队（删 push 即红）"
+        );
+        assert_eq!(out.target_hp_after, m.hp);
     }
 
     /// **P4**：`SimSlaveCleanup` 段与旧 `slave_list_cleanup_all` 同语义（槽位序 + 表内倒序删除）。
