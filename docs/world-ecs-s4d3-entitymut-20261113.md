@@ -58,7 +58,8 @@
   `World::tick_head` / `World::tick_tail` 仍内联跑全部业务段；已系统化的只有
   `SimHiterSnapshot`（#2，`snapshot_runner`）与 `OutputDrain`（#15，`drain_runner`），
   `Clock`（#0，`clock_runner`）与 `OutputAoi`（#19，`tail_runner`）本来就是系统。
-- 余 **18 段**（20 减已系统化的 `SimHiterSnapshot`/`OutputDrain`）见 §2.1。
+- 设计期口径：余 **18 段**（20 减设计时已系统化的 `SimHiterSnapshot`/`OutputDrain`）见 §2.1。
+  **交付进度口径（P4 后）按 20 阶段计：已系统化 14 / 余 6**（#1/#5/#9/#10/#11/#12）。
 - `EcsStore<T>`（`crates/world-bevy/src/ecs.rs`）：bevy `World` 本体 + `slots`（槽位表）+
   `free`（LIFO 空闲槽）+ `index: IdIndex`（dense 数组 + HashMap 兜底）+ 四个缓存
   `QueryState`。槽位顺序是**唯一**的处理顺序来源。

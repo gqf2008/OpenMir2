@@ -3291,108 +3291,11 @@ impl EntityStore {
     }
 }
 
-/// **P3a**：`SimDup` 的实体访问面（facade `EntityStore` 与段访问器各实现一份）。
-///
-/// 只抽 `check_dup_obj` / `char_pushed_now` 实际用到的字段级操作（12 个方法）：`char_pushed_now`
-/// 与 `Command::Push` / slave 自投递共用，**签名不动**（coordinator 裁决）；逐格推进逻辑抽成
-/// 泛型核心后，facade 与段系统走同一份代码——不复制 RNG 邻接的移动/推挤判定。
-/// 段内实现见 `crate::world::StageDupAccess`（`crate::entity` 不依赖段 runner 类型）。
-pub trait DupAccess {
-    /// 槽位顺序的业务 id（与 `EntityStore::order_index` 同一契约）。
-    fn order_ids(&self) -> Vec<i32>;
-    /// `(race, ghost)`；实体不存在 ⇒ `None`。
-    fn actor_flags(&self, id: i32) -> Option<(u8, bool)>;
-    /// `(map_id, x, y)`；实体不存在 ⇒ `None`（与旧 `entities.get(id).map(|e| (e.map_id, e.x, e.y))` 同序）。
-    fn xy(&self, id: i32) -> Option<(usize, i32, i32)>;
-    /// `(check_dup_obj_tick, bo_duplication, dup_start_tick)`；组件缺失 ⇒ `None`。
-    fn dup_ticks(&self, id: i32) -> Option<(i64, bool, i64)>;
-    fn set_dup_check_tick(&mut self, id: i32, now: i64);
-    fn set_dup_bo(&mut self, id: i32, bo: bool);
-    fn set_dup_start(&mut self, id: i32, start: i64);
-    /// `!Ghost && !Death && !FixedHideMode && !ObMode`（`CanWalk`/`MoveToMovingObject` 的阻挡集合）。
-    fn is_blocking(&self, id: i32) -> bool;
-    /// `(Dir, x, y, map_id, race)` 一次取齐（`char_pushed_now` 的入口快照）。
-    fn push_actor(&self, id: i32) -> Option<DupActor>;
-    fn set_dir(&mut self, id: i32, dir: u8);
-    fn set_xy(&mut self, id: i32, x: i32, y: i32);
-    fn add_walk_tick(&mut self, id: i32, delta: i64);
-}
-
-/// `char_pushed_now` 的入口快照（一次取齐，避免逐字段 `get` 之间的中间态）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DupActor {
-    pub dir: u8,
-    pub x: i32,
-    pub y: i32,
-    pub map_id: usize,
-    pub race: u8,
-}
-
-impl DupAccess for EntityStore {
-    fn order_ids(&self) -> Vec<i32> {
-        self.order_index()
-    }
-    fn actor_flags(&self, id: i32) -> Option<(u8, bool)> {
-        self.get(id).map(|e| (e.race, e.ghost))
-    }
-    fn xy(&self, id: i32) -> Option<(usize, i32, i32)> {
-        self.get(id).map(|e| (e.map_id, e.x, e.y))
-    }
-    fn dup_ticks(&self, id: i32) -> Option<(i64, bool, i64)> {
-        self.dup_state(id)
-            .map(|d| (d.check_dup_obj_tick, d.bo_duplication, d.dup_start_tick))
-    }
-    fn set_dup_check_tick(&mut self, id: i32, now: i64) {
-        if let Some(d) = self.dup_state_mut(id) {
-            d.check_dup_obj_tick = now;
-        }
-    }
-    fn set_dup_bo(&mut self, id: i32, bo: bool) {
-        if let Some(d) = self.dup_state_mut(id) {
-            d.bo_duplication = bo;
-        }
-    }
-    fn set_dup_start(&mut self, id: i32, start: i64) {
-        if let Some(d) = self.dup_state_mut(id) {
-            d.dup_start_tick = start;
-        }
-    }
-    fn is_blocking(&self, id: i32) -> bool {
-        self.get(id)
-            .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
-    }
-    fn push_actor(&self, id: i32) -> Option<DupActor> {
-        self.get(id).map(|e| DupActor {
-            dir: e.ai.dir,
-            x: e.x,
-            y: e.y,
-            map_id: e.map_id,
-            race: e.race,
-        })
-    }
-    fn set_dir(&mut self, id: i32, dir: u8) {
-        if let Some(e) = self.get_mut(id) {
-            e.ai.dir = dir;
-        }
-    }
-    fn set_xy(&mut self, id: i32, x: i32, y: i32) {
-        if let Some(t) = self.transform_mut(id) {
-            t.x = x;
-            t.y = y;
-        }
-    }
-    fn add_walk_tick(&mut self, id: i32, delta: i64) {
-        if let Some(e) = self.get_mut(id) {
-            e.ai.walk_tick += delta;
-        }
-    }
-}
-
 /// **P3b**：死亡结算路径的实体访问面（facade `EntityStore` 与段访问器各实现一份）。
 ///
 /// 为什么需要它：`settle_deaths` 的实现点横跨 `world.rs` / `death_drop.rs` / `party.rs` /
 /// `slave.rs` / `monai.rs`，且每次抽数都发生在「取快照 → 改 → 回写」之间。把实体面收窄成
-/// 这 5 个方法后，整条调用链只写一份实现（facade 与 `SimSettleDeaths`/`TailPlayerDeaths`
+/// 这 6 个方法（含 P4 新增的 `map_binding_mut`）后，整条调用链只写一份实现（facade 与 `SimSettleDeaths`/`TailPlayerDeaths`
 /// 段共用），不产生第三份拷贝。
 ///
 /// 读（`get`/`spawn_cloned`/`order_ids`）取 `&self`，与旧 facade 的共享借用同形（同一时刻可
@@ -3408,6 +3311,12 @@ pub trait EntityAccess {
     fn set_progression(&mut self, id: i32, progression: Progression) -> bool;
     /// `MapBinding` 的可变视图（`EntityMut` 不含该组件；`verify_map_time` 写 `VerifyTick`/`AddToMaped`）。
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding>;
+    /// `DupState` 快照（`EntityMut`/`EntityRef` 不含该组件；`check_dup_obj` 用）。
+    fn dup_state(&mut self, id: i32) -> Option<mir2_world_bevy::DupState>;
+    /// `DupState` 可变视图（`check_dup_obj` 的 tick/置位写回）。
+    fn dup_state_mut(&mut self, id: i32) -> Option<&mut mir2_world_bevy::DupState>;
+    /// `Transform` 可变视图（`EntityMut` 不含该组件；`char_pushed_now` 逐格推进写坐标）。
+    fn transform_mut(&mut self, id: i32) -> Option<&mut Transform>;
 }
 
 impl EntityAccess for EntityStore {
@@ -3428,6 +3337,15 @@ impl EntityAccess for EntityStore {
     }
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
         EntityStore::map_binding_mut(self, id)
+    }
+    fn dup_state(&mut self, id: i32) -> Option<mir2_world_bevy::DupState> {
+        EntityStore::dup_state(self, id).copied()
+    }
+    fn dup_state_mut(&mut self, id: i32) -> Option<&mut mir2_world_bevy::DupState> {
+        EntityStore::dup_state_mut(self, id)
+    }
+    fn transform_mut(&mut self, id: i32) -> Option<&mut Transform> {
+        EntityStore::transform_mut(self, id)
     }
 }
 
@@ -3590,6 +3508,23 @@ where
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
         // 单组件组合视图：`view_mut` 的运行期白名单核对照常生效（spec 需声明写 `MapBinding`）。
         let view = self.ad.view_mut::<(&'static mut MapBinding,)>(id)?;
+        Some(view.0.into_inner())
+    }
+    fn dup_state(&mut self, id: i32) -> Option<mir2_world_bevy::DupState> {
+        // 单组件只读视图（运行期白名单核对；spec 需声明读 `DupState`）。
+        let view = self
+            .ad
+            .view_ref::<(&'static mir2_world_bevy::DupState,)>(id)?;
+        Some(*view.0)
+    }
+    fn dup_state_mut(&mut self, id: i32) -> Option<&mut mir2_world_bevy::DupState> {
+        let view = self
+            .ad
+            .view_mut::<(&'static mut mir2_world_bevy::DupState,)>(id)?;
+        Some(view.0.into_inner())
+    }
+    fn transform_mut(&mut self, id: i32) -> Option<&mut Transform> {
+        let view = self.ad.view_mut::<(&'static mut Transform,)>(id)?;
         Some(view.0.into_inner())
     }
 }

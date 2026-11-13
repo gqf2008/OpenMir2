@@ -911,7 +911,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > `owner_id` 归一 / `msg_order` 入队序逐项照抄，**不抽 RNG**。段内不写实体，因此
 > 「Phase 1 只碰 `SimState` → Phase 2 只碰实体 → Phase 3 回写 `SimState`」的拆分不改变
 > 任何可观测顺序（设计 §2.2 A4）。
-> **段数口径（P2+P2b）**：余 18 段已迁 **5 段**（SimExpireHitters #3、SimExtraAbil #6、
+> **段数口径（历史批次 P2+P2b；单位 = 20 阶段）**：已系统化 **9 段**（P1 #0/#2/#15/#19 + P2 #3/#6/#13/#16 + P2b #7），余 11。原始明细（SimExpireHitters #3、SimExtraAbil #6、
 > SimMapEvents #7、SimPlayerRunExpiry #13、TailSuperManRefill #16）；tick 段序牙
 > `tick_stage_registrations_are_wired_in_order` 已含 `SimMapEvents`。
 
@@ -930,7 +930,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > `[(1, dir=1, 4, 6)]`、RNG 后继 5 值 `[1,1,4,1,2]`、`dup_states=[(13001,true,10000);3]`；
 > 改动前（base `f823bf8ca` 内联实现）与改动后逐项相同（用例
 > `world::tests::sim_dup_stage_matches_recorded_vectors`）。
-> **段数口径（单位 = 段号，分母 18 = 20 阶段 − P1 已系统化的 #2/#15）**：P3a 后已迁 **6 段**（#3/#6/#7/#13/#14/#16）。
+> **段数口径（历史批次 P3a；单位 = 20 阶段）**：已系统化 **10 段**（+P3a #14），余 10。
 >
 > **S4d-3/P3b 落地登记（2026-11-13，第五批）**：`SimSettleDeaths`（#4，tick_head）与
 > `TailPlayerDeaths`（#17，tick_tail）作为**同一实现点**（`settle_deaths(only_players)`）迁成
@@ -941,10 +941,11 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **实现面**：新增 `crate::entity::EntityAccess`（5 方法）+ 两份实现（`EntityStore` / `StageAccess`），
 > 把 `settle_deaths` / `gain_exp` / `party_*` 链 / `drop_use_items_on_death` / `zil_kin_zombi_die`
 > / `send_self_delay_msg_full` 全部收敛为 facade/段共用实现（facade 方法退化为薄包装，**无第三份拷贝**）。
-> **RNG 逐点对拍**：结算路径的抽数由既有用例钉住（`settle_deaths_pvp_calls_drop_use_items_twice`：
-> 两轮 × 13 槽 `Random(nRate)` = 26 抽，`format!("{:?}", rng)` 与 `draws_after(seed, [1;26])`
-> 逐值相同；单轮/红名/白名/StdMode45 各例同理）。迁移后同一组用例逐项通过 ⇒ 抽数点/次数/次序不变。
-> **段数口径（单位 = 段号）**：P3b 后已迁 **8 段 / 余 10**（#3/#4/#6/#7/#13/#14/#16/#17）。
+> **RNG 对拍（已失效，不得复用；P4-2）**：原论证「`format!("{:?}", rng)` 与 `draws_after(seed, maxes)`
+> 逐值相同 ⇒ 抽数点/次数/次序不变」**只钉得住抽数次数**（`internal_sample()` 的状态推进与 `max`
+> 无关），钉不住 site/order/max 漂移。自 P4 起 RNG 证据一律用 `MIR2_RNG_LOG` **逐点 trace**
+> （`seq/kind/max/result/site` 五列，base/head 各跑一遍逐行对比；见 P4 登记）。
+> **段数口径（历史批次 P3b；单位 = 20 阶段）**：已系统化 **12 段**（+P3b #4/#17），余 8。
 >
 > **S4d-3/P4 落地登记（2026-11-13，第六批）**：`SimSlaveCleanup`（#8，tick_head）与
 > `TailVerifyMapTime`（#18，tick_tail）已迁成段系统（各自一个可独立回退提交）：
@@ -957,12 +958,12 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **RNG 逐点 trace（P2-1 口径）**：`MIR2_RNG_LOG` 在 base（168f18843）与 head 上跑同一夹具
 > （`settle_deaths_pvp_calls_drop_use_items_twice`，site 全部落在未改动的 death_drop.rs），
 > `seq/kind/max/result/site` 五列逐行 diff 0 行；两段窗口内 trace 0 条（代码里无 `rng` 调用）。
-> **段数口径**：P4 后已迁 **10 段 / 余 8**（#3/#4/#6/#7/#8/#13/#14/#16/#17/#18）。
+> **段数口径（P4 交付 head；单位 = 20 阶段）**：已系统化 **14 段**（P1 的 #0/#2/#15/#19 + P2–P4 的 #3/#4/#6/#7/#8/#13/#14/#16/#17/#18），**余 6 段：`#1 Command` / `#5 SimSelfDeliver` / `#9 SimBuff` / `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**。
 
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
 
-> **尚未做（以 P4 交付 head 为准；单位 = 段号）**：P5–P7（余 **8** 段——
-> 18 段中已迁 **10 段**：#3/#4/#6/#7/#8/#13/#14/#16/#17/#18）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **尚未做（以 P4 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **6** 段——
+> #1/#5/#9/#10/#11/#12）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 > 段号清单与写集见设计 §2.1/§4。
 
