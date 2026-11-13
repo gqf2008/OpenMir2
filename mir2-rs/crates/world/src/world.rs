@@ -18,7 +18,7 @@ use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{
     advance_clock_system, tick::StageTrace, Appearance, BuffState, CombatAttribution, LifeCycle,
-    TickClock, TickOwnerThread, TickRunner, TickStage,
+    PlayerRunState, TickClock, TickOwnerThread, TickRunner, TickStage,
 };
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
@@ -1455,6 +1455,10 @@ impl HeadRunner {
         me.add(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
         me.add(TickStage::SimExpireHitters, expire_hitters_stage_system);
         me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
+        me.add(
+            TickStage::SimPlayerRunExpiry,
+            expire_player_run_state_stage_system,
+        );
         me.add(TickStage::OutputDrain, output_drain_system);
         me
     }
@@ -1641,6 +1645,52 @@ pub fn expire_extra_abil_stage_system(world: &mut bevy_ecs::world::World) {
     world.resource_mut::<StageOut>().extra_abil_expiries = out;
 }
 
+mir2_world_bevy::stage_spec!(
+    SimPlayerRunExpiry,
+    TickStage::SimPlayerRunExpiry,
+    read: [Appearance, LifeCycle],
+    write: [PlayerRunState]
+);
+
+/// **P2 段 #13 `SimPlayerRunExpiry`**：`PlayObject.Run` 的烈火 20s / 双龙 60s 到期段。
+///
+/// 逐项对应旧 `World::expire_player_run_state`：槽位序筛 `Race==Play && !Ghost`，
+/// 严格 `>` 到期（20s / 60s）；烈火先 `SpiritsGone` 再 `FireHitSocket`（oracle 行序），
+/// 双龙只有 `TwinHitSocket`。不抽 RNG，段位不变。
+pub fn expire_player_run_state_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimPlayerRunExpiry);
+    let now = world.resource::<SimState>().clock_ms;
+    let mut events = Vec::new();
+    {
+        let mut ad = mir2_world_bevy::tick::StageEntities::<SimPlayerRunExpiry>::new(world);
+        let ids: Vec<i32> = ad
+            .order()
+            .into_iter()
+            .filter(|(id, _)| {
+                ad.get::<Appearance>(*id)
+                    .is_some_and(|a| a.race == crate::entity::ACTOR_RACE_PLAY)
+                    && ad.get::<LifeCycle>(*id).is_some_and(|l| !l.ghost)
+            })
+            .map(|(id, _)| id)
+            .collect();
+        for id in ids {
+            let Some(pr) = ad.get_mut::<PlayerRunState>(id) else {
+                continue;
+            };
+            if pr.fire_hit_skill && (now - pr.latest_fire_hit_tick) > 20 * 1000 {
+                pr.fire_hit_skill = false;
+                events.push((id, RunStateExpiry::SpiritsGone));
+                events.push((id, RunStateExpiry::FireHitSocket));
+            }
+            if pr.twin_hit_skill && (now - pr.latest_twin_hit_tick) > 60 * 1000 {
+                pr.twin_hit_skill = false;
+                events.push((id, RunStateExpiry::TwinHitSocket));
+            }
+        }
+    }
+    world.resource_mut::<StageOut>().run_state_expiries = events;
+}
+
 pub struct World {
     pub entities: EntityStore,
     /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
@@ -1716,6 +1766,17 @@ impl World {
         let out = f(entities.world_mut(), head_runner);
         self.leave_stage_world();
         out
+    }
+
+    /// 取走 `SimPlayerRunExpiry` 段落到 [`StageOut`] 的输出。
+    fn take_run_state_expiries(&mut self) -> Vec<(i32, RunStateExpiry)> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .run_state_expiries,
+        )
     }
 
     /// 取走 `SimExtraAbil` 段落到 [`StageOut`] 的输出（段边界之后调用）。
@@ -5763,7 +5824,9 @@ impl World {
         // **`PlayObject.Run` 的状态到期段**（`PlayObject.Message.cs:54-64`）：烈火 20s / 双龙 60s。
         // 在玩家 `base.Run`（VerifyMapTime 段）之前；两者都不抽随机数。oracle 的玩家 `Run`
         // 名义 300ms 一次、本骨架每个 world tick（200ms）一次——相位差与既有玩家散段同口径登记。
-        record.run_state_expiries = self.expire_player_run_state();
+        // S4d-3/P2 #13：段系统（`SimPlayerRunExpiry`），段位与旧内联调用完全相同。
+        self.run_head_stage(|world, head| head.run(TickStage::SimPlayerRunExpiry, world));
+        record.run_state_expiries = self.take_run_state_expiries();
 
         // **`PlayObject.Run` 的重叠推挤段**（`PlayObject.Message.cs:263-285`）：
         // 3s 周期门内 `GetXYObjCount`；`>=2` 记 `BoDuplication/DupStartTick`；
@@ -6012,47 +6075,6 @@ impl World {
     /// `SendRefMsg(RM_HEALTHSPELLCHANGED)`，由宿主转成观察者的 `SM_HEALTHSPELLCHANGED(53)`。
     pub(crate) fn record_show_hp_health_change(&mut self, actor_id: i32, hp: u16, mp: u16) {
         self.pending_show_hp_health_changes.push((actor_id, hp, mp));
-    }
-
-    /// `PlayObject.Run` 的烈火/双龙到期段（`PlayObject.Message.cs:54-64`），按玩家槽位顺序。
-    ///
-    /// 逐行口径（**严格大于**）：
-    /// - `FireHitSkill && (now - LatestFireHitTick) > 20*1000` ⇒ `FireHitSkill = false`；
-    ///   `SysMsg(SpiritsGone, Red, Hint)`；`SendSocket("+UFIR")`；
-    /// - `TwinHitSkill && (now - LatestTwinHitTick) > 60*1000` ⇒ `TwinHitSkill = false`；`SendSocket("+UTWN")`
-    ///   （**无** `SysMsg`）。
-    ///
-    /// 不消费随机数。玩家选取 = `Race == ActorRace::Play && !Ghost`（与
-    /// [`World::verify_players_map_time`] 同口径；oracle 的 `PlayObjectList` 不含幽灵）。
-    /// 状态写入点（技能层）尚未移植 ⇒ 生产路径恒 `false`，本段零动作（登记见 `Entity::fire_hit_skill`）。
-    pub fn expire_player_run_state(&mut self) -> Vec<(i32, RunStateExpiry)> {
-        let now = self.clock_ms;
-        let ids: Vec<i32> = self
-            .entities
-            .iter_ref()
-            .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
-            .map(|e| e.id)
-            .collect();
-        let mut events = Vec::new();
-        for id in ids {
-            let Some(e) = self.entities.get_mut(id) else {
-                continue;
-            };
-            // `PlayObject.Message.cs:54-58`：先 `SysMsg` 再 `SendSocket("+UFIR")`。
-            if e.player_run.fire_hit_skill && (now - e.player_run.latest_fire_hit_tick) > 20 * 1000
-            {
-                e.player_run.fire_hit_skill = false;
-                events.push((id, RunStateExpiry::SpiritsGone));
-                events.push((id, RunStateExpiry::FireHitSocket));
-            }
-            // `:60-64`：仅 `SendSocket("+UTWN")`。
-            if e.player_run.twin_hit_skill && (now - e.player_run.latest_twin_hit_tick) > 60 * 1000
-            {
-                e.player_run.twin_hit_skill = false;
-                events.push((id, RunStateExpiry::TwinHitSocket));
-            }
-        }
-        events
     }
 
     /// `Envirnoment.GetXYObjCount`（`src/M2Server/Maps/Envirnoment.cs:1062-1093`）的世界侧入口：
@@ -8397,6 +8419,7 @@ mod tests {
                 TickStage::SimHiterSnapshot,
                 TickStage::SimExpireHitters,
                 TickStage::SimExtraAbil,
+                TickStage::SimPlayerRunExpiry,
                 TickStage::OutputDrain,
                 TickStage::OutputAoi
             ],
