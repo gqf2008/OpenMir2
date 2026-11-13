@@ -211,26 +211,39 @@ pub fn advance_clock_system(
     clock.tick_seq += 1;
 }
 
-// ======================= S4d-3/P0：段白名单与按段裁剪适配器 =======================
+// ======================= S4d-3：段白名单与按段裁剪适配器 =======================
 //
-// 设计件：`docs/world-ecs-s4d3-entitymut-20261113.md` §2.2/§2.3/§3.2/§3.3。
+// 设计件：`docs/world-ecs-s4d3-entitymut-20261113.md` §2.2/§2.3/§2.4/§3.2/§3.3。
 //
-// 契约（编译期为主）：
+// 契约（编译期为主、运行期为副）：
 //   * 每个段一个零大小类型并实现 [`StageSpec`]；组件白名单用 [`Reads`] / [`Writes`] 标记 trait 表达，
 //     [`StageEntities`] 的方法带 `where S: Reads<C>` / `S: Writes<C>` 约束 ⇒ **越白名单是编译错误**；
 //   * 结构操作（`insert` / `remove`）另需 [`Structural`] 标记 ⇒ 非结构段调用也是编译错误；
+//   * **运行期镜像**（P2 前置，review P2-1）：每次取组件都核对 [`ComponentRegistry`] 里该组件的
+//     短名是否在本段 `READ`/`WRITE` 清单内，越界即 panic（fail-closed）——给「标记 trait 与
+//     名单表漂移」「泛型/dyn 转发」兜底；组件未注册同样 panic；
 //   * 拒绝语义**逐项照抄旧 facade 的 Option**：id 不在槽位表 / 实体已移除 / 组件缺失 ⇒ `None`
-//     并静默跳过；不引入 `Result`、不 panic（设计件 §2.3）。
+//     并静默跳过；组件缺失另计 [`StageSkip::component_missing`]（诊断计数，不改变行为）。
+
+use std::any::{Any, TypeId};
+use std::collections::HashMap;
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use bevy_ecs::query::{QueryData, QueryState};
 
 use crate::ecs::SlotTable;
 
-/// **段规格**：每个段一个零大小类型，声明自己的 [`TickStage`]。
+/// **段规格**：每个段一个零大小类型，声明自己的 [`TickStage`] 与组件白名单（运行期镜像）。
 ///
 /// 结构变更的编译期门是 [`Structural`] 标记 trait（只有 Command / NPC / 商人 /
 /// 宝宝清表会实现），不用常量：常量无消费者时是死配置（review P3-4）。
 pub trait StageSpec: 'static {
     /// 本段在 [`STAGE_ORDER`] 里的阶段。
     const STAGE: TickStage;
+    /// 本段允许**读**的组件短名（与 [`Reads`] 实现必须一致；由 `stage_spec!` 生成）。
+    const READ: &'static [&'static str] = &[];
+    /// 本段允许**写**的组件短名（与 [`Writes`] 实现必须一致；由 `stage_spec!` 生成）。
+    const WRITE: &'static [&'static str] = &[];
 }
 
 /// 本段**允许读**的组件（标记 trait；由 `stage_spec!` 或手写 impl 生成）。
@@ -241,6 +254,90 @@ pub trait Writes<C: Component<Mutability = bevy_ecs::component::Mutable>> {}
 
 /// 本段允许结构变更（增删实体）。
 pub trait Structural {}
+
+/// `type_name` 的短名（去模块路径与泛型参数）：`mir2_world_bevy::components::Vitals` ⇒ `Vitals`。
+pub fn short_type_name<C: 'static>() -> &'static str {
+    let full = core::any::type_name::<C>();
+    let base = full.split('<').next().unwrap_or(full);
+    base.rsplit("::").next().unwrap_or(base)
+}
+
+/// **组件注册表（资源）**：`TypeId` ⇒ 组件短名（P2 前置，设计 §2.4）。
+///
+/// 用途有二：① 运行期镜像白名单的「名字来源」；② 「新组件忘了登记」的 fail-closed——
+/// 段里取一个未注册的组件直接 panic，而不是被静默当成 `None`。
+///
+/// `EcsStore::new` 会插入空表；`EntityStore::new`（`crates/world`）把 25 个组件逐个登记。
+#[derive(Resource, Default)]
+pub struct ComponentRegistry {
+    names: HashMap<TypeId, &'static str>,
+}
+
+impl ComponentRegistry {
+    /// 登记一个组件类型（幂等）。
+    pub fn register<C: Component>(&mut self) -> &mut Self {
+        self.names.insert(TypeId::of::<C>(), short_type_name::<C>());
+        self
+    }
+
+    /// 组件短名；未登记 ⇒ `None`。
+    pub fn name_of<C: Component>(&self) -> Option<&'static str> {
+        self.names.get(&TypeId::of::<C>()).copied()
+    }
+
+    /// 组件必须已登记，否则 panic（fail-closed）。
+    pub fn assert_registered<C: Component>(&self) {
+        assert!(
+            self.name_of::<C>().is_some(),
+            "组件 {} 未在 ComponentRegistry 注册：段适配器拒绝在未登记组件上工作（P2 前置）",
+            short_type_name::<C>()
+        );
+    }
+
+    /// 已登记的组件数（诊断/测试用）。
+    pub fn len(&self) -> usize {
+        self.names.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.names.is_empty()
+    }
+}
+
+/// **诊断计数（资源）**：本 tick 里「实体存在但组件缺失」的取组件次数（P2 前置，设计 §2.4）。
+///
+/// 21 个 bundle 组件对每个实体齐全，因此正常路径恒 0；非 0 即接线 bug 或半实体。
+#[derive(Resource, Default)]
+pub struct StageSkip {
+    pub component_missing: AtomicU64,
+}
+
+impl StageSkip {
+    pub fn get(&self) -> u64 {
+        self.component_missing.load(Ordering::Relaxed)
+    }
+}
+
+/// **按段缓存的 `QueryState`（资源）**：`view_mut` 的组合视图用（P2 前置，设计 §3.3）。
+///
+/// 段适配器在段开始时把本资源**移出** bevy `World` 自持，`Drop` 时放回——`QueryState::get_mut`
+/// 需要同时可变借用 state 与 World，二者必须不同所有者。结构变更段要在收尾时刷新
+/// archetype（P5/P6 接线，见 docs 登记表）。
+#[derive(Resource, Default)]
+pub struct StageQueries {
+    states: HashMap<TypeId, Box<dyn Any + Send + Sync>>,
+}
+
+impl StageQueries {
+    /// 取（首次自动创建）某 `QueryData` 的缓存状态。
+    fn state<Q: QueryData + 'static>(&mut self, world: &mut World) -> &mut QueryState<Q> {
+        self.states
+            .entry(TypeId::of::<Q>())
+            .or_insert_with(|| Box::new(world.query::<Q>()))
+            .downcast_mut::<QueryState<Q>>()
+            .expect("StageQueries 的 TypeId 键与 QueryData 类型必须一一对应")
+    }
+}
 
 /// **测试/诊断用**：本 tick 已执行的段序列（资源缺席 ⇒ 零开销、零行为）。
 ///
@@ -265,13 +362,21 @@ impl StageTrace {
 /// `write_back` 纪律一致。
 pub struct StageEntities<'w, S: StageSpec> {
     world: &'w mut World,
+    /// 段开始时从 bevy `World` 移出、`Drop` 时放回（`view_mut` 的 `QueryState` 缓存）。
+    queries: Option<StageQueries>,
     _spec: core::marker::PhantomData<fn() -> S>,
 }
 
 impl<'w, S: StageSpec> StageEntities<'w, S> {
     pub fn new(world: &'w mut World) -> Self {
+        let queries = Some(
+            world
+                .remove_resource::<StageQueries>()
+                .expect("StageQueries 必须已由 EcsStore::new 插入（段适配器前置）"),
+        );
         StageEntities {
             world,
+            queries,
             _spec: core::marker::PhantomData,
         }
     }
@@ -286,6 +391,31 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         self.world.resource::<SlotTable>().entity_of(id)
     }
 
+    /// **运行期镜像白名单**：组件必须已注册，且短名在本段对应清单里；否则 panic（fail-closed）。
+    fn assert_stage_component<C: Component>(&self, write: bool) {
+        let registry = self
+            .world
+            .get_resource::<ComponentRegistry>()
+            .expect("ComponentRegistry 必须已由 EcsStore::new 插入（段适配器前置）");
+        registry.assert_registered::<C>();
+        let name = short_type_name::<C>();
+        let allowed = if write { S::WRITE } else { S::READ };
+        assert!(
+            allowed.contains(&name),
+            "段 {:?} 越白名单{}组件 {}：运行期镜像与编译期标记 trait 必须一致（P2 前置）",
+            S::STAGE,
+            if write { "写" } else { "读" },
+            name
+        );
+    }
+
+    /// 记一次「实体存在但组件缺失」（诊断计数；不改变 `None` 的跳过语义）。
+    fn note_component_missing(&self) {
+        if let Some(skip) = self.world.get_resource::<StageSkip>() {
+            skip.component_missing.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
     /// 只读取组件；`None` 覆盖「id 不存在 / 已移除 / 该实体没有该组件」三种情形。
     pub fn get<C>(&self, id: i32) -> Option<&C>
     where
@@ -293,7 +423,14 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         S: Reads<C>,
     {
         let entity = self.resolve(id)?;
-        self.world.get::<C>(entity)
+        self.assert_stage_component::<C>(false);
+        match self.world.get::<C>(entity) {
+            Some(c) => Some(c),
+            None => {
+                self.note_component_missing();
+                None
+            }
+        }
     }
 
     /// 可变读取组件；借用期不超过本次调用（同实体/跨实体都不可能并存两个 `&mut`）。
@@ -303,7 +440,26 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         S: Writes<C>,
     {
         let entity = self.resolve(id)?;
+        self.assert_stage_component::<C>(true);
+        if self.world.get::<C>(entity).is_none() {
+            self.note_component_missing();
+            return None;
+        }
         self.world.get_mut::<C>(entity).map(|c| c.into_inner())
+    }
+
+    /// **组合视图**（P2 前置，设计 §3.3）：一次借用拿到同实体上 `Q` 声明的多组件
+    /// （`QueryData` 元组，可含 `&mut`）。`Q` 由段自己声明，等价于「白名单里的多字段视图」。
+    ///
+    /// 顺序/别名约束同 A1：视图借用期不超过本次调用；同一时刻只有一个实体视图。
+    pub fn view_mut<Q>(&mut self, id: i32) -> Option<Q::Item<'_, '_>>
+    where
+        Q: QueryData + 'static,
+    {
+        let entity = self.resolve(id)?;
+        let queries = self.queries.as_mut()?;
+        let state = queries.state::<Q>(self.world);
+        state.get_mut(self.world, entity).ok()
     }
 
     /// 按槽位顺序对每个实体执行 `f`（跳过取不到组件的实体，与旧 `for_each_mut` 同语义）。
@@ -336,6 +492,37 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
             .release_slot(slot_idx);
         true
     }
+}
+
+impl<S: StageSpec> Drop for StageEntities<'_, S> {
+    fn drop(&mut self) {
+        if let Some(queries) = self.queries.take() {
+            self.world.insert_resource(queries);
+        }
+    }
+}
+
+/// **段规格声明宏**：一次生成 `StageSpec`（含 READ/WRITE 名单）+ `Reads`/`Writes` 标记 impl。
+///
+/// ```text
+/// stage_spec!(SimExpireHitters, TickStage::SimExpireHitters,
+///     read: [CoreIdentity, LifeCycle], write: [CombatAttribution]);
+/// ```
+///
+/// 名单用 `stringify!` 生成短名（调用处写 `Vitals` 则名单就是 `"Vitals"`），与
+/// [`ComponentRegistry`] 的 `short_type_name` 同口径。泛型组件请在调用处写别名。
+#[macro_export]
+macro_rules! stage_spec {
+    ($spec:ident, $stage:expr, read: [$($r:ty),* $(,)?], write: [$($w:ty),* $(,)?]) => {
+        pub struct $spec;
+        impl $crate::tick::StageSpec for $spec {
+            const STAGE: $crate::tick::TickStage = $stage;
+            const READ: &'static [&'static str] = &[$(stringify!($r)),*];
+            const WRITE: &'static [&'static str] = &[$(stringify!($w)),*];
+        }
+        $(impl $crate::tick::Reads<$r> for $spec {})*
+        $(impl $crate::tick::Writes<$w> for $spec {})*
+    };
 }
 
 /// 单线程 tick 骨架：`Schedule` + [`SingleThreadedExecutor`] + 显式阶段顺序契约。
@@ -440,18 +627,12 @@ mod stage_adapter_tests {
     #[derive(Component, Debug, PartialEq, Eq)]
     struct B(i32);
 
-    /// 探针段：允许读写 A、B（只有测试用）。
-    struct Probe;
-    impl StageSpec for Probe {
-        const STAGE: TickStage = TickStage::SimBuff;
-    }
-    impl Reads<A> for Probe {}
-    impl Writes<A> for Probe {}
-    impl Reads<B> for Probe {}
-    impl Writes<B> for Probe {}
+    // 探针段：允许读写 A、B（只有测试用）。
+    stage_spec!(Probe, TickStage::SimBuff, read: [A, B], write: [A, B]);
 
     fn store_with(ids: &[i32]) -> EcsStore<A> {
         let mut s = EcsStore::new();
+        s.register_component::<A>().register_component::<B>();
         for id in ids {
             s.insert(*id, A(*id));
         }
@@ -526,5 +707,101 @@ mod stage_adapter_tests {
         });
         assert_eq!(seen, vec![1], "只有挂了 B 的实体被访问");
         assert_eq!(ad.get::<B>(1), Some(&B(12)));
+    }
+
+    // ---------------- P2 前置：运行期镜像 / 未注册 / StageSkip / view_mut ----------------
+
+    /// T-neg-1：**标记 trait 与运行期名单漂移**（`Writes<B>` 有、`WRITE` 名单漏 B）⇒ 取组件
+    /// 必须 panic（fail-closed）。
+    ///
+    /// 牙：删掉 `get_mut` 里的 `assert_stage_component::<C>(true)` ⇒ 不再 panic ⇒ 红。
+    struct Drift;
+    impl StageSpec for Drift {
+        const STAGE: TickStage = TickStage::SimBuff;
+        const READ: &'static [&'static str] = &["A"];
+        const WRITE: &'static [&'static str] = &["A"];
+    }
+    impl Writes<A> for Drift {}
+    impl Writes<B> for Drift {}
+    impl Reads<B> for Drift {}
+
+    #[test]
+    #[should_panic(expected = "越白名单写组件 B")]
+    fn t_neg_1_mirror_catches_whitelist_drift() {
+        let mut store = store_with(&[1]);
+        assert!(store.insert_component(1, B(1)));
+        let mut ad = StageEntities::<Drift>::new(store.world_mut());
+        let _ = ad.get_mut::<B>(1);
+    }
+
+    /// T-neg-2：组件**未在 ComponentRegistry 注册** ⇒ 取组件必须 panic（fail-closed）。
+    ///
+    /// 牙：删掉 `ComponentRegistry::assert_registered` ⇒ 未注册不再 panic ⇒ 红。
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct Unregistered(i32);
+    struct Unreg;
+    impl StageSpec for Unreg {
+        const STAGE: TickStage = TickStage::SimBuff;
+        const READ: &'static [&'static str] = &["Unregistered"];
+    }
+    impl Reads<Unregistered> for Unreg {}
+
+    #[test]
+    #[should_panic(expected = "未在 ComponentRegistry 注册")]
+    fn t_neg_2_unregistered_component_panics() {
+        let mut store = store_with(&[1]);
+        assert!(store.insert_component(1, Unregistered(1)));
+        let ad = StageEntities::<Unreg>::new(store.world_mut());
+        let _ = ad.get::<Unregistered>(1);
+    }
+
+    /// `StageSkip::ComponentMissing`：实体存在但组件缺失 ⇒ 计数 +1；行为仍是 `None`/跳过。
+    ///
+    /// 牙：删掉 `note_component_missing()` 的两处调用 ⇒ 计数停在 0 ⇒ 红。
+    #[test]
+    fn stage_skip_counts_missing_component() {
+        let mut store = store_with(&[1, 2]);
+        assert!(store.insert_component(1, B(11)));
+        {
+            let mut ad = StageEntities::<Probe>::new(store.world_mut());
+            assert_eq!(ad.get::<B>(2), None);
+            let mut seen = Vec::new();
+            ad.for_each_mut::<B>(|id, _| seen.push(id));
+            assert_eq!(seen, vec![1]);
+        }
+        assert_eq!(
+            store.world().resource::<StageSkip>().get(),
+            2,
+            "get(2) 与 for_each_mut 里的 get_mut(2) 各记一次缺失"
+        );
+    }
+
+    /// `view_mut`：一次借用拿到同实体上的组合视图（`&mut A` + `&B`），且 `QueryState` 缓存可复用。
+    ///
+    /// 牙：把 `view_mut` 的 `state.get_mut(...)` 改成 `None`（或让 `StageQueries` 不落位）⇒ 红。
+    #[derive(bevy_ecs::query::QueryData)]
+    #[query_data(mutable)]
+    struct AbView {
+        a: &'static mut A,
+        b: &'static B,
+    }
+
+    #[test]
+    fn view_mut_reads_and_writes_combined_components() {
+        let mut store = store_with(&[1]);
+        assert!(store.insert_component(1, B(5)));
+        {
+            let mut ad = StageEntities::<Probe>::new(store.world_mut());
+            {
+                let mut v = ad.view_mut::<AbView>(1).expect("组合视图");
+                v.a.0 += v.b.0;
+            }
+            // 第二次仍可用（QueryState 已缓存、资源在 Drop 前自持）
+            let v2 = ad.view_mut::<AbView>(1).expect("组合视图（缓存）");
+            assert_eq!(v2.a.0, 6);
+            assert_eq!(v2.b.0, 5);
+            assert!(ad.view_mut::<AbView>(999).is_none(), "未知 id ⇒ None");
+        }
+        assert_eq!(store.get(1).map(|a| a.0), Some(6));
     }
 }

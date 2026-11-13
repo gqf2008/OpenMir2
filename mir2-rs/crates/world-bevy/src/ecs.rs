@@ -312,6 +312,10 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         let mut world = World::new();
         // S4d-3/P0（D1）：槽位表的唯一真值进 bevy World 资源。
         world.insert_resource(SlotTable::default());
+        // S4d-3/P2 前置：组件注册表 / 段跳过计数 / 段 QueryState 缓存。
+        world.insert_resource(crate::tick::ComponentRegistry::default());
+        world.insert_resource(crate::tick::StageSkip::default());
+        world.insert_resource(crate::tick::StageQueries::default());
         // 三个查询状态各自缓存 `T` 的 `ComponentId`/表列；它们只在本结构里串行使用，
         // 不同时跑，因此读写访问集不冲突（也绝不放进同一个 Schedule 并行）。
         let read_state = world.query::<&T>();
@@ -325,6 +329,21 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
             order_map: HashMap::new(),
             _marker: std::marker::PhantomData,
         }
+    }
+
+    /// **P2 前置**：把一个组件登记进 [`crate::tick::ComponentRegistry`]（段适配器的运行期镜像）。
+    ///
+    /// 幂等；`EntityStore::new` 会把 25 个组件一次性登记。
+    pub fn register_component<C: Component>(&mut self) -> &mut Self {
+        self.world
+            .resource_mut::<crate::tick::ComponentRegistry>()
+            .register::<C>();
+        self
+    }
+
+    /// 组件注册表（只读；测试断言用）。
+    pub fn component_registry(&self) -> &crate::tick::ComponentRegistry {
+        self.world.resource::<crate::tick::ComponentRegistry>()
     }
 
     /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。

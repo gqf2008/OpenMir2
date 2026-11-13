@@ -2152,6 +2152,64 @@ impl EntityStore {
         inner
             .world_mut()
             .insert_resource(mir2_world_bevy::TickOrder::default());
+        // S4d-3/P2 前置：段适配器的运行期镜像需要全部组件登记（P0 组件图 25 项）。
+        // 泛型组件按短名（去泛型参数）登记，见 `mir2_world_bevy::tick::short_type_name`。
+        inner
+            .register_component::<mir2_world_bevy::CoreIdentity>()
+            .register_component::<mir2_world_bevy::Transform>()
+            .register_component::<MapBinding>()
+            .register_component::<Vitals>()
+            .register_component::<AbilitySnapshot<BaseAbil>>()
+            .register_component::<Progression>()
+            .register_component::<SpawnBinding>()
+            .register_component::<DropState>()
+            .register_component::<CombatAttribution>()
+            .register_component::<mir2_world_bevy::Recovery>()
+            .register_component::<mir2_world_bevy::PvpState>()
+            .register_component::<mir2_world_bevy::Flags>()
+            .register_component::<LifeCycle>()
+            .register_component::<mir2_world_bevy::Appearance>()
+            .register_component::<mir2_world_bevy::MonsterClassState>()
+            .register_component::<mir2_world_bevy::PlayerRunState>()
+            .register_component::<mir2_world_bevy::GroupState>()
+            .register_component::<mir2_world_bevy::Revival>()
+            .register_component::<mir2_world_bevy::BuffState>()
+            .register_component::<mir2_world_bevy::SlaveState>()
+            .register_component::<Inventory>()
+            .register_component::<MerchantState>()
+            .register_component::<NpcState>()
+            .register_component::<AiState>()
+            .register_component::<mir2_world_bevy::DupState>();
+
+        // S4d-3/P2 前置：段适配器的运行期镜像需要全部组件登记（P0 组件图 25 项）。
+        // 泛型组件按短名（去泛型参数）登记，见 `mir2_world_bevy::tick::short_type_name`。
+        inner
+            .register_component::<mir2_world_bevy::CoreIdentity>()
+            .register_component::<mir2_world_bevy::Transform>()
+            .register_component::<MapBinding>()
+            .register_component::<Vitals>()
+            .register_component::<AbilitySnapshot<BaseAbil>>()
+            .register_component::<Progression>()
+            .register_component::<SpawnBinding>()
+            .register_component::<DropState>()
+            .register_component::<CombatAttribution>()
+            .register_component::<mir2_world_bevy::Recovery>()
+            .register_component::<mir2_world_bevy::PvpState>()
+            .register_component::<mir2_world_bevy::Flags>()
+            .register_component::<LifeCycle>()
+            .register_component::<mir2_world_bevy::Appearance>()
+            .register_component::<mir2_world_bevy::MonsterClassState>()
+            .register_component::<mir2_world_bevy::PlayerRunState>()
+            .register_component::<mir2_world_bevy::GroupState>()
+            .register_component::<mir2_world_bevy::Revival>()
+            .register_component::<mir2_world_bevy::BuffState>()
+            .register_component::<mir2_world_bevy::SlaveState>()
+            .register_component::<Inventory>()
+            .register_component::<MerchantState>()
+            .register_component::<NpcState>()
+            .register_component::<AiState>()
+            .register_component::<mir2_world_bevy::DupState>();
+
         let view_state = inner.world_mut().query::<(
             &Entity,
             &Transform,
