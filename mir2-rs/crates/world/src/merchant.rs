@@ -549,17 +549,7 @@ impl World {
     /// （包 13/14/15/16、超级金创药 17、超级魔法药 18、太阳水 23、强效太阳水 24），
     /// 走带过滤的那条会静默丢掉 ⇒ `645` 会 `param=6` 而不是 C# 的 14。
     pub fn merchant_refill_goods_items(&mut self, id: i32, item: MerchantItem) {
-        let Some(st) = self.entities.merchant_mut(id) else {
-            return;
-        };
-        match st
-            .goods_list
-            .iter_mut()
-            .find(|g| g.first().is_some_and(|it| it.index == item.index))
-        {
-            Some(group) => group.insert(0, item),
-            None => st.goods_list.push(vec![item]),
-        }
+        merchant_refill_goods_items_impl(&mut self.entities, id, item);
     }
 
     /// `ClientBuyItem` 的取件：`list20.RemoveAt(j)`，空组再 `GoodsList.RemoveAt(i)`
@@ -587,20 +577,8 @@ impl World {
     /// `Index = 下标+1`、`Dura = DuraMax = tpl.DuraMax`、`MakeIndex = M2Share.GetItemNumber()`。
     #[must_use]
     pub fn make_merchant_item_by_name(&mut self, name: &str) -> Option<MerchantItem> {
-        let idx = self.std_item_idx_by_name(name);
-        if idx == 0 {
-            return None;
-        }
-        let tpl = self.std_item_by_idx(idx)?;
-        let (dura, dura_max) = (tpl.dura_max, tpl.dura_max);
-        let make_index = self.item_number.next_value();
-        Some(MerchantItem {
-            make_index,
-            index: u16::try_from(idx).unwrap_or(u16::MAX),
-            dura,
-            dura_max,
-            desc: [0; 14],
-        })
+        let World { sim, .. } = self;
+        make_merchant_item_by_name_impl(sim, name)
     }
 
     /// `GetRefillList(nIndex)?.Count`（`Merchant.cs:286`）：同 `Index` 库存组的件数（无 ⇒ 0）。
@@ -613,25 +591,7 @@ impl World {
 
     /// `Merchant.RefillDelReFillItem`（`Merchant.cs:317`）：同 `Index` 组从**尾部**删 `n` 件。
     pub fn merchant_del_items_from_end(&mut self, id: i32, index: u16, n: usize) {
-        let Some(st) = self.entities.merchant_mut(id) else {
-            return;
-        };
-        let Some(gi) = st
-            .goods_list
-            .iter()
-            .position(|g| g.first().is_some_and(|it| it.index == index))
-        else {
-            return;
-        };
-        let g = &mut st.goods_list[gi];
-        let mut left = n;
-        while left > 0 && !g.is_empty() {
-            g.pop();
-            left -= 1;
-        }
-        if g.is_empty() {
-            st.goods_list.remove(gi);
-        }
+        merchant_del_items_from_end_impl(&mut self.entities, id, index, n);
     }
 
     /// 物品名 → 1-based 序号（oracle `GameItemSystem.GetStdItemIdx`，`GameItemSystem.cs:93-111`：
@@ -641,25 +601,13 @@ impl World {
     /// `VecItemCatalog` 同口径（下标 + 1；`drop.rs:78-89`）。
     #[must_use]
     pub fn std_item_idx_by_name(&self, name: &str) -> usize {
-        if name.is_empty() {
-            return 0;
-        }
-        for (i, item) in self.item_catalog.iter().enumerate() {
-            if equals_ordinal_ignore_case(&item.name, name) {
-                return i + 1;
-            }
-        }
-        0
+        std_item_idx_by_name_in(&self.item_catalog, name)
     }
 
     /// 1-based 序号取模板（oracle `GetStdItem(ushort)`，`GameItemSystem`：`Idx -= 1` 回绕后越界 ⇒ null）。
     #[must_use]
     pub fn std_item_by_idx(&self, idx: usize) -> Option<&StdItem> {
-        if idx == 0 {
-            return None;
-        }
-        let i = idx - 1;
-        self.item_catalog.get(i)
+        std_item_by_idx_in(&self.item_catalog, idx)
     }
 
     /// oracle `new Merchant()` 的 ctor 公共链构造抽，单独成步以便宿主按 oracle 次序落定：
@@ -697,87 +645,118 @@ impl World {
     /// 同 pass 内次序 = `MerchantList` 顺序 = 实体槽位插入序（[`World::insert_merchant`] 正序）；
     /// `MerchantInitialize` 的倒序只定 `obj_list` 追加序，**不**改变本次序（reviewer-5 `0f220cac` F-1）。
     pub fn merchant_tick(&mut self) -> MerchantTickOutcome {
-        let now = self.clock_ms;
-        let mut out = MerchantTickOutcome::default();
-        // 节奏门：同一 200ms 窗口内只跑一趟（`MerchantProcessor` 的 200ms 定时器，sim 时钟）。
-        if now.saturating_sub(self.merchant_pass_tick) < MERCHANT_PASS_INTERVAL_MS {
-            return out;
-        }
-        self.merchant_pass_tick = now;
-        let ids = self.merchant_ids_sorted();
-        let mut i = self.merchant_position;
-        while i < ids.len() {
-            let id = ids[i];
-            let is_ghost = match self.entities.get(id) {
-                Some(e) => e.ghost,
-                None => {
-                    i += 1;
-                    continue;
-                }
-            };
-            let (run_tick, ghost_tick) = match self.entities.merchant(id) {
-                Some(st) => (st.run_tick, st.ghost_tick),
-                None => {
-                    i += 1;
-                    continue;
-                }
-            };
-            if !is_ghost {
-                if (now - run_tick) > MERCHANT_RUN_TIME {
-                    // oracle 先写 `RunTick = now` 再 `Run()`。
-                    if let Some(st) = self.entities.merchant_mut(id) {
+        // **P6b**：实现已迁到段系统 [`crate::world::sim_merchant_stage_system`]
+        // （`TickStage::SimMerchant`）；本函数只驱动该段并取走
+        // [`crate::world::StageOut::merchant`]。段内实现 = [`merchant_tick_impl`]
+        // （facade 与段共用同一份，无第二份拷贝）；签名与全部调用点不变。
+        self.run_merchant_stage()
+    }
+}
+
+/// **P6b**：`ProcessMerchants` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 与旧 `World::merchant_tick` 逐句相同：节奏门（`MERCHANT_PASS_INTERVAL_MS`）、
+/// `merchant_position` 起点、`merchant_ids_sorted` 的槽位序（[`EntityAccess::order_ids`] 上按
+/// `merchant` 身份门过滤）、Ghost 60s 移除、每商人 [`merchant_run_impl`] 与尾段
+/// [`crate::monai::animal_run_impl`] → [`crate::monai::base_object_run_monster_impl`]。
+///
+/// **RNG**：本段抽数（`Merchant.Run` 的 `Random(50)` / `RandomByte(8)` / `Random(50)`、
+/// `BoCanMove` 支的 `MapRandomMove` 两抽 + 移位环）——段位与迁移前逐点一致，取数仍走共享
+/// `sim.rng`。
+///
+/// **结构变更**：Ghost 支的 `MerchantList.RemoveAt(i)` 等价物是 `access.remove(id)`
+/// （`StructuralAccess`）；段内删实体后 facade 在段边界 `refresh_views()`
+/// （见 `World::run_merchant_stage`）。
+pub(crate) fn merchant_tick_impl<A>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+) -> MerchantTickOutcome
+where
+    A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
+{
+    let now = sim.clock_ms;
+    let mut out = MerchantTickOutcome::default();
+    // 节奏门：同一 200ms 窗口内只跑一趟（`MerchantProcessor` 的 200ms 定时器，sim 时钟）。
+    if now.saturating_sub(sim.merchant_pass_tick) < MERCHANT_PASS_INTERVAL_MS {
+        return out;
+    }
+    sim.merchant_pass_tick = now;
+    // `merchant_ids_sorted` 的访问器形态：槽位序（= 插入序）里 `merchant` 身份门为真的实体。
+    let ids: Vec<i32> = access
+        .order_ids()
+        .into_iter()
+        .filter(|id| access.get(*id).is_some_and(|e| e.merchant.is_some()))
+        .collect();
+    let mut i = sim.merchant_position;
+    while i < ids.len() {
+        let id = ids[i];
+        let (is_ghost, run_tick, ghost_tick) = match access.get(id) {
+            Some(e) => {
+                let (rt, gt) = e.merchant.map_or((0, 0), |st| (st.run_tick, st.ghost_tick));
+                (e.ghost, rt, gt)
+            }
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        if !is_ghost {
+            if (now - run_tick) > MERCHANT_RUN_TIME {
+                // oracle 先写 `RunTick = now` 再 `Run()`。
+                if let Some(e) = access.get_mut(id) {
+                    if let Some(st) = e.merchant_state.merchant.as_mut() {
                         st.run_tick = now;
                     }
-                    let r = merchant_run(self, id);
-                    out.ran.push(id);
-                    if let Some(dir) = r.turned {
-                        out.turns.push((id, dir));
-                    }
-                    if r.turned_self_only {
-                        // 发帧时刻 `ObMode || FixedHideMode` ⇒ `SendRefMsg` 只自送（客户端零帧）。
-                        // 朝向已写进实体（`TurnTo` 先写 `Dir`），这里只留证据位。
-                        let dir = self.entities.get(id).map_or(0, |e| e.ai.dir);
-                        out.turns_self_only.push((id, dir));
-                    }
-                    if r.hit {
-                        out.hits.push(id);
-                    }
-                    if r.hit_self_only {
-                        out.hits_self_only.push(id);
-                    }
-                    if r.disappear {
-                        out.disappears.push((id, r.disappear_targets));
-                    }
-                    if r.disappear_self_only {
-                        out.disappears_self_only.push(id);
-                    }
-                    // `:156` 的解除受击（恒可见）。与 `r.hit` 不可同时为真：同一次 `Run` 里
-                    // `:140` 能命中就说明那一刻已在 `FixedHideMode` ⇒ 它落 `hit_self_only`
-                    // （客户端零帧，不进本表）。
-                    if r.unhide_hit {
-                        out.hits.push(id);
-                    }
-                    if r.space_moved {
-                        out.space_moves.push(id);
-                    }
-                    // `Merchant.Run` 尾 `base.Run()`（`Merchant.cs:170`）：`AnimalObject.Run`
-                    // 的 HolySeize 到期段 → `BaseObject.Run` 的 RM_STRUCK 出队/恢复段。
-                    // 漏掉它 ⇒ 玩家打商店 NPC 后 `pending_struck` 永不出队，656 也不产生。
-                    crate::monai::animal_run(self, id);
-                    crate::monai::base_object_run_monster(self, id);
                 }
-            } else if (now - ghost_tick) > MERCHANT_GHOST_EXPIRE_MS {
-                // oracle `MerchantList.RemoveAt(i); break;`（移除后本 pass 不再跑后面的）。
-                self.entities.remove(id);
-                out.removed.push(id);
-                break;
+                let r = merchant_run_impl(access, sim, id);
+                out.ran.push(id);
+                if let Some(dir) = r.turned {
+                    out.turns.push((id, dir));
+                }
+                if r.turned_self_only {
+                    // 发帧时刻 `ObMode || FixedHideMode` ⇒ `SendRefMsg` 只自送（客户端零帧）。
+                    // 朝向已写进实体（`TurnTo` 先写 `Dir`），这里只留证据位。
+                    let dir = access.get(id).map_or(0, |e| e.dir());
+                    out.turns_self_only.push((id, dir));
+                }
+                if r.hit {
+                    out.hits.push(id);
+                }
+                if r.hit_self_only {
+                    out.hits_self_only.push(id);
+                }
+                if r.disappear {
+                    out.disappears.push((id, r.disappear_targets));
+                }
+                if r.disappear_self_only {
+                    out.disappears_self_only.push(id);
+                }
+                // `:156` 的解除受击（恒可见）。与 `r.hit` 不可同时为真：同一次 `Run` 里
+                // `:140` 能命中就说明那一刻已在 `FixedHideMode` ⇒ 它落 `hit_self_only`
+                // （客户端零帧，不进本表）。
+                if r.unhide_hit {
+                    out.hits.push(id);
+                }
+                if r.space_moved {
+                    out.space_moves.push(id);
+                }
+                // `Merchant.Run` 尾 `base.Run()`（`Merchant.cs:170`）：`AnimalObject.Run`
+                // 的 HolySeize 到期段 → `BaseObject.Run` 的 RM_STRUCK 出队/恢复段。
+                // 漏掉它 ⇒ 玩家打商店 NPC 后 `pending_struck` 永不出队，656 也不产生。
+                crate::monai::animal_run_impl(access, sim, id);
+                crate::monai::base_object_run_monster_impl(access, sim, id);
             }
-            i += 1;
+        } else if (now - ghost_tick) > MERCHANT_GHOST_EXPIRE_MS {
+            // oracle `MerchantList.RemoveAt(i); break;`（移除后本 pass 不再跑后面的）。
+            access.remove(id);
+            out.removed.push(id);
+            break;
         }
-        // oracle `if (!boProcessLimit) MerchantPosition = 0;` —— 本片无预算分支 ⇒ 每 pass 归 0。
-        self.merchant_position = 0;
-        out
+        i += 1;
     }
+    // oracle `if (!boProcessLimit) MerchantPosition = 0;` —— 本片无预算分支 ⇒ 每 pass 归 0。
+    sim.merchant_position = 0;
+    out
 }
 
 /// `Merchant.Run` 的一次结果（供宿主出帧 / 证据；帧面接线属 ⑤-4）。
@@ -1517,43 +1496,77 @@ impl World {
 /// 补货门/清理门/沙巴克显隐与 oracle 同构；库存与落库（`GoodsList`/`SaveGoodRecord`）
 /// 是 ⑤-5 接缝（本片只推进计时态，见 [`refill_goods`]）。
 pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
-    let now = world.clock_ms;
+    let World { entities, sim, .. } = world;
+    merchant_run_impl(entities, sim, actor_id)
+}
+
+/// **P6b**：`merchant_run` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 与旧 facade 逐句相同：补货门 / 清理门 / `Random(50)`+`RandomByte(8)`|`Random(50)` /
+/// 沙巴克显隐 / `BoCanMove` 的 `MapRandomMove` / 尾 `base.Run()`（SuperMan 回满 +
+/// `VerifyMapTime`）。取数仍走共享 `sim.rng`，抽数点/次数/次序不变。
+pub(crate) fn merchant_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> MerchantRunOutcome {
+    let now = sim.clock_ms;
     let mut outcome = MerchantRunOutcome::default();
-    let Some(st) = world.entities.merchant(actor_id) else {
+    let Some((
+        process_refill_index,
+        refill_goods_tick,
+        clear_expre_upgrade_tick,
+        castle_merchant,
+        castle_bound,
+        castle_under_war,
+        can_move,
+        move_time,
+        move_tick,
+    )) = access.get(actor_id).and_then(|e| {
+        e.merchant.map(|st| {
+            (
+                st.process_refill_index,
+                st.refill_goods_tick,
+                st.clear_expre_upgrade_tick,
+                st.castle_merchant,
+                // `Some(i)` ⇔ oracle `Castle != null`（`Merchant.cs:143` 的第二个合取项）。
+                st.castle_index.is_some(),
+                st.castle_under_war,
+                st.can_move,
+                st.move_time,
+                st.move_tick,
+            )
+        })
+    })
+    else {
         return outcome;
     };
-    let process_refill_index = st.process_refill_index;
-    let refill_goods_tick = st.refill_goods_tick;
-    let clear_expre_upgrade_tick = st.clear_expre_upgrade_tick;
-    let castle_merchant = st.castle_merchant;
-    // `Some(i)` ⇔ oracle `Castle != null`（`Merchant.cs:143` 的第二个合取项）。
-    let castle_bound = st.castle_index.is_some();
-    let castle_under_war = st.castle_under_war;
-    let can_move = st.can_move;
-    let move_time = st.move_time;
-    let move_tick = st.move_tick;
 
     // oracle `fb2824b6b`：Run 门 = 30s，**没有** `ProcessRefillIndex * 500` 的错峰；
     // `ProcessRefillIndex` 仍保留在状态里（脚本字段），但不再参与计时。
     let _ = process_refill_index;
     if (now - refill_goods_tick) > MERCHANT_REFILL_GOODS_INTERVAL_MS {
-        if let Some(st) = world.entities.merchant_mut(actor_id) {
-            st.refill_goods_tick = now;
+        if let Some(e) = access.get_mut(actor_id) {
+            if let Some(st) = e.merchant_state.merchant.as_mut() {
+                st.refill_goods_tick = now;
+            }
         }
-        outcome.refilled = refill_goods(world, actor_id);
+        outcome.refilled = refill_goods_impl(access, sim, actor_id);
     }
     // `Merchant.cs:126-131`：清理门（`ClearExpreUpgradeListData`）。
     //
     // oracle 用墙钟 `DateTime.Now` 与 `WeaponUpgradeInfo.UpgradeTime` 比；本侧两者都取
-    // **sim 时钟** `world.clock_ms`（提交时写入、清理时比较）⇒ 进程内等价（登记）。
+    // **sim 时钟** `sim.clock_ms`（提交时写入、清理时比较）⇒ 进程内等价（登记）。
     if (now - clear_expre_upgrade_tick) > MERCHANT_CLEAR_EXPRE_UPGRADE_INTERVAL_MS {
-        let days = world
-            .entities
-            .merchant(actor_id)
+        let days = access
+            .get(actor_id)
+            .and_then(|e| e.merchant)
             .map_or(0, |st| st.clear_expire_upgrade_days);
-        if let Some(st) = world.entities.merchant_mut(actor_id) {
-            st.clear_expre_upgrade_tick = now;
-            clear_expired_upgrades(&mut st.upgrade_weapon_list, now, days);
+        if let Some(e) = access.get_mut(actor_id) {
+            if let Some(st) = e.merchant_state.merchant.as_mut() {
+                st.clear_expre_upgrade_tick = now;
+                clear_expired_upgrades(&mut st.upgrade_weapon_list, now, days);
+            }
         }
     }
     // `Merchant.cs:132-141`：`Random(50)==0` ⇒ `TurnTo(RandomByte(8))`；否则 `Random(50)==0` ⇒ `RM_HIT`。
@@ -1565,13 +1578,12 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     //
     // 判定必须在此处（发帧前）取，**不能**推迟到宿主排水时再按实体状态过滤：`:155` 会先清
     // `FixedHideMode` 再发 `:156`，排水时状态已翻回可见 ⇒ 那样会把唯一客户端可见的解除帧一起误杀。
-    let hidden = world
-        .entities
+    let hidden = access
         .get(actor_id)
         .is_some_and(|e| e.ob_mode || e.fixed_hide_mode);
-    if world.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
-        let dir = world.rng.random_byte(MERCHANT_TURN_DIR_MAX);
-        if let Some(e) = world.entities.get_mut(actor_id) {
+    if sim.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+        let dir = sim.rng.random_byte(MERCHANT_TURN_DIR_MAX);
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.dir = dir; // `TurnTo` 先写 `Dir`（写方向与可见性无关）
         }
         if hidden {
@@ -1579,7 +1591,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         } else {
             outcome.turned = Some(dir);
         }
-    } else if world.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+    } else if sim.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
         if hidden {
             outcome.hit_self_only = true; // `ObMode || FixedHideMode` ⇒ RM_HIT 只自送
         } else {
@@ -1598,30 +1610,26 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
     // `:156` 的解除受击先 `:155` 清零再发 ⇒ **唯一客户端可见**的那条。同一次 `Run` 客户端可见的
     // `SM_HIT(14)` 恒 **1** 条（两者都隐藏时为 0）。
     if castle_merchant && castle_bound && castle_under_war {
-        if world
-            .entities
-            .get(actor_id)
-            .is_some_and(|e| !e.fixed_hide_mode)
-        {
+        if access.get(actor_id).is_some_and(|e| !e.fixed_hide_mode) {
             // **oracle 次序**（`Merchant.cs:145-149`）：
             //   if (!FixedHideMode) { SendRefMsg(RM_DISAPPEAR, …); FixedHideMode = true; }
             // ⇒ 发帧时刻的 `SendRefMsg` 头门读的是**置位前**的状态（`FixedHideMode` 必假，
             //   只有 `ObMode` 能命中自送支），收件人快照也必须在这一刻取。
-            let ob_mode_at_send = world.entities.get(actor_id).is_some_and(|e| e.ob_mode);
+            let ob_mode_at_send = access.get(actor_id).is_some_and(|e| e.ob_mode);
             outcome.disappear = true;
             if ob_mode_at_send {
                 // 头门命中 ⇒ 只 `SendMsg` 给自己（NPC 无客户端 ⇒ 客户端零帧）。
                 outcome.disappear_self_only = true;
             } else {
-                let (map_id, x, y) = world
-                    .entities
+                let (map_id, x, y) = access
                     .get(actor_id)
                     .map_or((0, 0, 0), |e| (e.map_id, e.x, e.y));
                 // 格扫 = oracle `SendRefMsg` 冷路径（`BaseObject.Message.cs:412-444`）；
                 // 商人 `Race = NPC` ⇒ oracle 的 `Race == Play` 门本就把自己排除，
                 // 故这里直接传 `actor_id`（不是 `monai.rs` 的「sender 可以是 Play」哨兵）。
-                outcome.disappear_targets = crate::session::send_ref_msg_targets_at(
-                    world,
+                outcome.disappear_targets = crate::session::send_ref_msg_targets_at_impl(
+                    access,
+                    &sim.maps,
                     actor_id,
                     map_id,
                     x,
@@ -1630,34 +1638,32 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
                 );
             }
             // `Merchant.cs:148`
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.flags.fixed_hide_mode = true;
             }
         }
-    } else if world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.fixed_hide_mode)
-    {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+    } else if access.get(actor_id).is_some_and(|e| e.fixed_hide_mode) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.flags.fixed_hide_mode = false;
         }
         outcome.unhide_hit = true;
     }
     // `Merchant.cs:161-166`：`BoCanMove && (now - MoveTick) > MoveTime*1000` ⇒ `MapRandomMove`。
     if can_move && (now - move_tick) > i64::from(move_time) * 1000 {
-        if let Some(st) = world.entities.merchant_mut(actor_id) {
-            st.move_tick = now;
+        if let Some(e) = access.get_mut(actor_id) {
+            if let Some(st) = e.merchant_state.merchant.as_mut() {
+                st.move_tick = now;
+            }
         }
-        map_random_move(world, actor_id);
+        map_random_move_impl(access, sim, actor_id);
         outcome.space_moved = true;
     }
     // `Merchant.cs:170` 末尾 `base.Run()`：先 SuperMan 回满（`BaseObject.Base.cs:32-36`），
     // 再 VerifyMapTime 段（`:223-228`）——刷新本格 `CellObject.AddTime`，防 60s 过期。
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
+    if let Some(mut e) = access.get_mut(actor_id) {
         e.run_super_man_refill();
     }
-    world.verify_map_time(actor_id);
+    crate::world::World::verify_map_time_impl(access, sim, actor_id);
     outcome
 }
 
@@ -1673,15 +1679,29 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
 /// 返回本趟是否命中 `>` 分支（oracle 的 `return`）。
 #[must_use]
 fn refill_goods(world: &mut World, actor_id: i32) -> bool {
-    let now = world.clock_ms;
-    let len = world
-        .entities
-        .merchant(actor_id)
+    let World { entities, sim, .. } = world;
+    refill_goods_impl(entities, sim, actor_id)
+}
+
+/// **P6b**：`refill_goods` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 与旧 facade 逐句相同（补货门、`CheckItemPrice`、`>`/`<` 两支、`GoodsList` 上限收缩）；
+/// 物品目录/序号计数改从 `sim`（`item_catalog` / `item_number`）取，访问路径不变。
+#[must_use]
+fn refill_goods_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let now = sim.clock_ms;
+    let len = access
+        .get(actor_id)
+        .and_then(|e| e.merchant)
         .map_or(0, |st| st.refill_goods.len());
     let mut changed = false;
     for i in 0..len {
         let Some((item_name, count, refill_time, refill_tick)) =
-            world.entities.merchant(actor_id).map(|st| {
+            access.get(actor_id).and_then(|e| e.merchant).map(|st| {
                 let g = &st.refill_goods[i];
                 (g.item_name.clone(), g.count, g.refill_time, g.refill_tick)
             })
@@ -1689,13 +1709,15 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
             break;
         };
         if (now - refill_tick) > i64::from(refill_time) * 60 * 1000 {
-            if let Some(st) = world.entities.merchant_mut(actor_id) {
-                st.refill_goods[i].refill_tick = now;
+            if let Some(e) = access.get_mut(actor_id) {
+                if let Some(st) = e.merchant_state.merchant.as_mut() {
+                    st.refill_goods[i].refill_tick = now;
+                }
             }
-            let n_index = world.std_item_idx_by_name(&item_name);
+            let n_index = std_item_idx_by_name_in(&sim.item_catalog, &item_name);
             if n_index > 0 {
                 let index = u16::try_from(n_index).unwrap_or(u16::MAX);
-                let n_refill_count = world.merchant_goods_count(actor_id, index);
+                let n_refill_count = merchant_goods_count_impl(access, actor_id, index);
                 let target = usize::try_from(count).unwrap_or(0);
                 if target > n_refill_count {
                     // oracle `CheckItemPrice(nIndex)`（`Merchant.cs:184-204`，调用点 `:233`）：
@@ -1704,60 +1726,181 @@ fn refill_goods(world: &mut World, actor_id: i32) -> bool {
                     // **不判 StdMode**（`ItemTypeList` 缺 StdMode 31 的商品也必须拿到价，
                     // 否则 `GetItemPrice` 回落 `-1`、买入被 `n_price > 0` 挡掉）；
                     // 已有条目分支在 oracle 里只算不回写（死代码），此处保持「已有即不动」。
-                    let has_price = world
-                        .entities
-                        .merchant(actor_id)
+                    let has_price = access
+                        .get(actor_id)
+                        .and_then(|e| e.merchant)
                         .is_some_and(|st| st.item_price_list.iter().any(|(i, _)| *i == index));
                     if !has_price {
-                        let price = world
-                            .std_item_by_idx(usize::from(index))
+                        let price = std_item_by_idx_in(&sim.item_catalog, usize::from(index))
                             .map_or(0, |t| t.price);
                         let n_price = mir2_shared::hutil32::round(f64::from(price) * 1.1);
-                        if let Some(st) = world.entities.merchant_mut(actor_id) {
-                            st.item_price_list.push((index, n_price));
+                        if let Some(e) = access.get_mut(actor_id) {
+                            if let Some(st) = e.merchant_state.merchant.as_mut() {
+                                st.item_price_list.push((index, n_price));
+                            }
                         }
                     }
                     for _ in 0..(target - n_refill_count) {
-                        if let Some(item) = world.make_merchant_item_by_name(&item_name) {
+                        if let Some(item) = make_merchant_item_by_name_impl(sim, &item_name) {
                             // oracle `RefillGoodsItems`：**无条件 Insert(0)**（不过 Dura 过滤）。
-                            world.merchant_refill_goods_items(actor_id, item);
+                            merchant_refill_goods_items_impl(access, actor_id, item);
                         }
                     }
                     changed = true;
                 }
                 if target < n_refill_count {
-                    world.merchant_del_items_from_end(actor_id, index, n_refill_count - target);
+                    merchant_del_items_from_end_impl(
+                        access,
+                        actor_id,
+                        index,
+                        n_refill_count - target,
+                    );
                     changed = true;
                 }
             }
         }
     }
     // `GoodsList` 上限收缩（`Merchant.cs:248-274`）。
-    let group_count = world
-        .merchant_goods_groups(actor_id)
-        .map_or(0, <[Vec<MerchantItem>]>::len);
+    let group_count = access
+        .get(actor_id)
+        .and_then(|e| e.merchant)
+        .map_or(0, |st| st.goods_list.len());
     for i in 0..group_count {
-        let Some((index, g_len)) = world
-            .merchant_goods_groups(actor_id)
-            .and_then(|gs| gs.get(i))
-            .and_then(|g| g.first().map(|it| (it.index, g.len())))
+        let Some((index, g_len)) = access
+            .get(actor_id)
+            .and_then(|e| e.merchant)
+            .and_then(|st| st.goods_list.get(i))
+            .map(|g| (g.first().map(|it| it.index), g.len()))
+            .and_then(|(idx, len)| idx.map(|i| (i, len)))
         else {
             continue;
         };
         if g_len > 1000 {
-            let in_refill = world.entities.merchant(actor_id).is_some_and(|st| {
-                st.refill_goods.iter().any(|g| {
-                    let n = world.std_item_idx_by_name(&g.item_name);
-                    n > 0 && u16::try_from(n).ok() == Some(index)
-                })
-            });
+            let in_refill = access
+                .get(actor_id)
+                .and_then(|e| e.merchant)
+                .is_some_and(|st| {
+                    st.refill_goods.iter().any(|g| {
+                        let n = std_item_idx_by_name_in(&sim.item_catalog, &g.item_name);
+                        n > 0 && u16::try_from(n).ok() == Some(index)
+                    })
+                });
             let keep = if in_refill { 5000 } else { 1000 };
             if g_len > keep {
-                world.merchant_del_items_from_end(actor_id, index, g_len - keep);
+                merchant_del_items_from_end_impl(access, actor_id, index, g_len - keep);
             }
         }
     }
     changed
+}
+
+/// **P6b**：`std_item_idx_by_name` 的目录入参形态（`SimState.item_catalog` 或 facade 的同名字段）。
+fn std_item_idx_by_name_in(catalog: &[StdItem], name: &str) -> usize {
+    if name.is_empty() {
+        return 0;
+    }
+    for (i, item) in catalog.iter().enumerate() {
+        if equals_ordinal_ignore_case(&item.name, name) {
+            return i + 1;
+        }
+    }
+    0
+}
+
+/// **P6b**：`std_item_by_idx` 的目录入参形态（1-based；0/越界 ⇒ `None`）。
+fn std_item_by_idx_in(catalog: &[StdItem], idx: usize) -> Option<&StdItem> {
+    if idx == 0 {
+        return None;
+    }
+    catalog.get(idx - 1)
+}
+
+/// **P6b**：`merchant_goods_count` 的访问器形态（`GetRefillList(nIndex)?.Count`）。
+fn merchant_goods_count_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    id: i32,
+    index: u16,
+) -> usize {
+    access.get(id).and_then(|e| e.merchant).map_or(0, |st| {
+        st.goods_list
+            .iter()
+            .find(|g| g.first().is_some_and(|it| it.index == index))
+            .map_or(0, |g| g.len())
+    })
+}
+
+/// **P6b**：`Merchant.RefillGoodsItems` 的访问器形态（**无条件** `Insert(0)`）。
+fn merchant_refill_goods_items_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    id: i32,
+    item: MerchantItem,
+) {
+    let Some(e) = access.get_mut(id) else {
+        return;
+    };
+    let Some(st) = e.merchant_state.merchant.as_mut() else {
+        return;
+    };
+    match st
+        .goods_list
+        .iter_mut()
+        .find(|g| g.first().is_some_and(|it| it.index == item.index))
+    {
+        Some(group) => group.insert(0, item),
+        None => st.goods_list.push(vec![item]),
+    }
+}
+
+/// **P6b**：`Merchant.RefillDelReFillItem` 的访问器形态（同组从尾部删 `n` 件）。
+fn merchant_del_items_from_end_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    id: i32,
+    index: u16,
+    n: usize,
+) {
+    let Some(e) = access.get_mut(id) else {
+        return;
+    };
+    let Some(st) = e.merchant_state.merchant.as_mut() else {
+        return;
+    };
+    let Some(gi) = st
+        .goods_list
+        .iter()
+        .position(|g| g.first().is_some_and(|it| it.index == index))
+    else {
+        return;
+    };
+    let g = &mut st.goods_list[gi];
+    let mut left = n;
+    while left > 0 && !g.is_empty() {
+        g.pop();
+        left -= 1;
+    }
+    if g.is_empty() {
+        st.goods_list.remove(gi);
+    }
+}
+
+/// **P6b**：`make_merchant_item_by_name` 的 `SimState` 形态（目录 + `item_number` 计数）。
+fn make_merchant_item_by_name_impl(
+    sim: &mut crate::world::SimState,
+    name: &str,
+) -> Option<MerchantItem> {
+    let idx = std_item_idx_by_name_in(&sim.item_catalog, name);
+    if idx == 0 {
+        return None;
+    }
+    let tpl = std_item_by_idx_in(&sim.item_catalog, idx)?;
+    let (dura, dura_max) = (tpl.dura_max, tpl.dura_max);
+    let make_index = sim.item_number.next_value();
+    Some(MerchantItem {
+        make_index,
+        index: u16::try_from(idx).unwrap_or(u16::MAX),
+        dura,
+        dura_max,
+        desc: [0; 14],
+    })
 }
 
 /// `BaseObject.MapRandomMove`（`BaseObject.cs:1235-1236`）的**两次初始取数**：
