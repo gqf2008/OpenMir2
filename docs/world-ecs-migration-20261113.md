@@ -1108,14 +1108,57 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   `player_attack_npc_produces_name_color_through_base_run` 覆盖尾段
 >   `base_object_run_monster`（删尾段调用 ⇒ 656 缺失 ⇒ 红）。
 >
-> **段数口径（P6a2b 交付 head；单位 = 20 阶段）**：已系统化 **17 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
-> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5 + P6a2b 的 #11），**余 3 段：
-> `#1 Command` / `#10 SimMonsterAi` / `#12 SimMerchant`**。
+> **S4d-3/P6b 落地登记（2026-11-14，#12 `SimMerchant`）**：本轮最后一批模块段；#10 `SimMonsterAi`
+> 置 **blocked**（依赖面超出本卡写集，见下），本批交付 **#12**。
+> - **#12 `SimMerchant`（已系统化）**：段系统 `sim_merchant_stage_system`（`TickStage::SimMerchant`，
+>   #12）；段位 = `tick_head` 原 `if self.merchant_enabled { let m = self.merchant_tick(); }` 那一行
+>   （`SimNpc` 之后、`SimPlayerRunExpiry` 之前；oracle `MerchantProcessor.ExecuteInternal` 先
+>   `ProcessNpcs` 后 `ProcessMerchants` ⇒ RNG 消费者序不变）。实现体 =
+>   `merchant::merchant_tick_impl`（`EntityAccess` + `StructuralAccess` + `&mut SimState`）；
+>   facade `World::merchant_tick` 退化为「驱动该段 + 取 `StageOut::merchant`」，签名与全部调用点不变。
+> - **链 port（单份实现）**：`merchant_run` / `refill_goods` → `_impl`；`merchant_goods_count` /
+>   `merchant_refill_goods_items` / `merchant_del_items_from_end` / `make_merchant_item_by_name` /
+>   `std_item_idx_by_name` / `std_item_by_idx` 抽出访问器/目录参数形态，facade 入口退化为薄包装。
+>   尾段复用既有 `monai::animal_run_impl` / `base_object_run_monster_impl`、
+>   `merchant::map_random_move_impl`、`session::send_ref_msg_targets_at_impl`、
+>   `World::verify_map_time_impl`。
+> - **结构段**：Ghost 60s 过期支 `MerchantList.RemoveAt(i)` 的等价物是 `remove` 实体 ⇒
+>   `SimMerchant` 声明 `Structural`；facade 在段边界后 `refresh_views()`
+>   （`World::run_merchant_stage`）。
+> - **写集**：`EntityMutData` 的 20 组件 + `Transform`（`MapRandomMove` 落点）+ `MapBinding`
+>   （尾段 `VerifyMapTime`）+ `Recovery`（尾段 `base.Run` 恢复段）；读集为 `StageAccess` 的
+>   24 组件全集。
+> - **RNG**：本段抽数（`Merchant.Run` 的 `Random(50)` / `RandomByte(8)` / `Random(50)`、
+>   `BoCanMove` 支的 `MapRandomMove` 两抽 + 移位环）；段位未动 ⇒ 消费者序不变。六副既有夹具
+>   （`merchant_run_rng_stream_matches_oracle_order` / `merchant_can_move_uses_two_map_random_draws` /
+>   `merchant_pass_runs_each_of_many_merchants_once` /
+>   `castle_merchant_fixed_hide_toggles_on_war_transitions` /
+>   `hidden_merchant_turn_and_rng_hit_are_self_only` / `world_tick_consumes_rng_npc_before_merchant`）
+>   base/head 逐点 trace：合计 201,878 行；**seq/kind/max/result 四列 `diff` 0 行**。site 列 32 个
+>   位移对，逐条回读：生产抽点 5 处（`merchant_run` 的 3 抽只把 `world.rng` 改名为 `sim.rng`、
+>   `map_random_move_xy` 的 2 抽文本未变；都只是行号随 `merchant_tick` 段系统插入而下移），
+>   其余 27 处全部是**用例自身的期望流复算行**（`*_rng_*` / `world_tick_consumes_*` 测试就地
+>   重算 oracle 序列，随测试整体下移）。`entity.rs`（商人构造 4 抽）与 `npc.rs`（`GuildOfficial.Run`）
+>   的抽点两侧完全相同（同 site 同值，共 1,056 / 40,000 条，未进入 site diff）；
+>   `space_move.rs` 的移位环在这些夹具里零抽（落点可走）。
+> - **牙**：删 `HeadRunner` 的 `SimMerchant` 注册 ⇒ `tick_stage_registrations_are_wired_in_order`
+>   panic（段序牙已含四段）；新增 `merchant_stage_runs_then_ghost_expiry_removes`
+>   （`RunTick = now` 回写 + Ghost 支段内 `remove` + 段后 `merchant_ids_sorted` 为空）。
+> - **#10 `SimMonsterAi`（blocked）**：`monster_ai_tick` 的 Run 链在 3 个**写集外**文件里调用
+>   `&mut World` 形态函数——`slave.rs`（`check_royalty`）、`space_move.rs`（`monster_space_move`）、
+>   `special_monster.rs`（`special_monster_run` / `make_child` / `cleanup_children`）。要落段系统
+>   必须先把这三处 port 成 `_impl`（另加写集内的 `monai.rs` 全 Run 链与 `world.rs` 若干
+>   `&mut World` 方法的 `_impl` 化）。本批未改这三文件一行，段位/取数/可见性门保持不变。
 
-> 段序牙 `tick_stage_registrations_are_wired_in_order` 已含三段（`SimBuff` / `SimNpc` 开门后进 trace）。
+> **段数口径（P6b 交付 head；单位 = 20 阶段）**：已系统化 **18 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
+> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5 + P6a2b 的 #11 + P6b 的 #12），
+> **余 2 段：`#1 Command` / `#10 SimMonsterAi`（后者依赖面超出写集，已置 blocked）**。
 
-> **尚未做（以 P6a2b 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **3** 段——
-> #1/#10/#12）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> 段序牙 `tick_stage_registrations_are_wired_in_order` 已含四段（`SimBuff` / `SimNpc` / `SimMerchant`
+> 在各自 `*_enabled` 门内、开门后进 trace）。
+
+> **尚未做（以 P6b 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **2** 段——
+> #1 Command / #10 SimMonsterAi（blocked））、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 > 段号清单与写集见设计 §2.1/§4。
 

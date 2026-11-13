@@ -1531,6 +1531,7 @@ impl HeadRunner {
         me.add(TickStage::SimSlaveCleanup, sim_slave_cleanup_stage_system);
         me.add(TickStage::SimBuff, sim_buff_stage_system);
         me.add(TickStage::SimNpc, sim_npc_stage_system);
+        me.add(TickStage::SimMerchant, sim_merchant_stage_system);
         me.add(
             TickStage::SimPlayerRunExpiry,
             expire_player_run_state_stage_system,
@@ -1639,6 +1640,8 @@ pub struct StageOut {
     pub self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
     /// **P6a2b**：`SimNpc` 段的 `ProcessNpcs` 产出（facade 在段后取走）。
     pub npc: Option<crate::npc::NpcTickOutcome>,
+    /// **P6b**：`SimMerchant` 段的 `ProcessMerchants` 产出（facade 在段后取走）。
+    pub merchant: Option<crate::merchant::MerchantTickOutcome>,
 }
 
 /// **S4d-3/P1**：`OutputAoi` 段的注册壳——记 [`StageTrace`] 后委派给既有
@@ -2648,6 +2651,97 @@ pub fn sim_npc_stage_system(world: &mut bevy_ecs::world::World) {
 }
 
 mir2_world_bevy::stage_spec!(
+    SimMerchant,
+    TickStage::SimMerchant,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding,
+        crate::entity::Recovery
+    ]
+);
+
+/// **P6b**：`SimMerchant` 是**结构段**——Ghost 60s 过期支会 `MerchantList.RemoveAt(i)`
+/// （等价物 `StageEntities::remove`）。只有声明本标记的段能拿到 `StructuralAccess`。
+impl mir2_world_bevy::tick::Structural for SimMerchant {}
+
+/// **P6b 段 #12 `SimMerchant`**：商人的 `ProcessMerchants`（`WorldServer.Merchant.cs:65-110`）。
+///
+/// 段位 = `tick_head` 原 `if self.merchant_enabled { let m = self.merchant_tick(); }` 那一行
+/// （`SimNpc` 之后、`SimPlayerRunExpiry` 之前；oracle `MerchantProcessor.ExecuteInternal`
+/// 先 `ProcessNpcs` 后 `ProcessMerchants` ⇒ RNG 消费者序不变）。借用形状按 Dv5：owned
+/// `SimState` + `StageEntities`；实现体 = [`crate::merchant::merchant_tick_impl`]
+/// （facade 与段共用同一份，无第二份拷贝）。
+///
+/// **RNG**：本段抽数（`Merchant.Run` 的 `Random(50)`/`RandomByte(8)`/`Random(50)`、
+/// `BoCanMove` 支的 `MapRandomMove` 两抽 + 移位环）——段位与迁移前逐点一致。
+///
+/// **写集**：`EntityMutData` 的 20 组件（`get_mut` 组合视图）+ `Transform`（`MapRandomMove` 落点）+
+/// `MapBinding`（尾段 `VerifyMapTime`）+ `Recovery`（尾段 `base.Run` 恢复段）。读集为
+/// `StageAccess` 的 24 组件全集。
+///
+/// **结构变更**：Ghost 支 `remove` 实体 ⇒ facade 在段边界后 `refresh_views()`
+/// （见 `World::run_merchant_stage`）。
+pub fn sim_merchant_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimMerchant);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimMerchant）");
+    let out = {
+        let mut ad = StageEntities::<SimMerchant>::new(world);
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        crate::merchant::merchant_tick_impl(&mut access, &mut sim)
+    };
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().merchant = Some(out);
+}
+
+mir2_world_bevy::stage_spec!(
     TailVerifyMapTime,
     TickStage::TailVerifyMapTime,
     read: [
@@ -3279,6 +3373,22 @@ impl World {
             .npc
             .take()
             .expect("SimNpc 段必须产出 NpcTickOutcome（段边界契约）")
+    }
+
+    /// **P6b**：驱动 `SimMerchant` 段并取该段输出（`tick_head` 与 facade `World::merchant_tick`
+    /// 共用）。
+    ///
+    /// Ghost 60s 过期支会 `remove` 实体（结构变更）⇒ 段边界后 `refresh_views()`，
+    /// 否则 facade 的缓存视图与 `EcsStore` 元数据可能滞后于本次结构变更。
+    pub(crate) fn run_merchant_stage(&mut self) -> crate::merchant::MerchantTickOutcome {
+        self.run_head_stage(|world, head| head.run(TickStage::SimMerchant, world));
+        self.entities.refresh_views();
+        self.entities
+            .world_mut()
+            .resource_mut::<StageOut>()
+            .merchant
+            .take()
+            .expect("SimMerchant 段必须产出 MerchantTickOutcome（段边界契约）")
     }
 
     /// 单 pass 的 buff `DoWork`（供单测直接驱动；tick 路径经段系统 [`sim_buff_stage_system`]）。
@@ -7118,7 +7228,7 @@ impl World {
         // 独立 200ms 线程，跨系统交错不可复现 ⇒ 由 owner 裁决不在判据内）。
         let __prof_mch = self.prof_begin();
         if self.merchant_enabled {
-            let m = self.merchant_tick();
+            let m = self.run_merchant_stage();
             record.merchants_run = m.ran;
             record.merchant_turns = m.turns;
             record.merchant_hits = m.hits;
@@ -10062,6 +10172,8 @@ mod tests {
         w.enable_buff_tick();
         // **P6a2b**：`SimNpc` 同理在 `npc_enabled` 门内运行。
         w.enable_npc_tick();
+        // **P6b**：`SimMerchant` 同理在 `merchant_enabled` 门内运行。
+        w.enable_merchant_tick();
         w.entities
             .world_mut()
             .insert_resource(mir2_world_bevy::tick::StageTrace::default());
@@ -10086,6 +10198,7 @@ mod tests {
                 TickStage::SimSlaveCleanup,
                 TickStage::SimBuff,
                 TickStage::SimNpc,
+                TickStage::SimMerchant,
                 TickStage::SimPlayerRunExpiry,
                 TickStage::SimDup,
                 TickStage::OutputDrain,
@@ -10133,6 +10246,71 @@ mod tests {
         );
         assert!(e.hide_mode, "段系统必须置 hide_mode");
         assert!(e.transparent, "段系统必须置透明位");
+    }
+
+    /// **P6b `SimMerchant` 段语义牙**：`merchant_tick`（= 段系统）先写 `RunTick = now` 再跑
+    /// `Merchant.Run`；Ghost 60s 过期支在段内 `remove` 实体（结构变更）且在段边界
+    /// `refresh_views()` 后对 facade 可见。
+    ///
+    /// 牙：① 删 `HeadRunner::new` 的 `SimMerchant` 注册 ⇒ 段序牙 panic；
+    /// ② 删 `merchant_tick_impl` 的 `st.run_tick = now` 回写 ⇒ `run_tick` 断言红；
+    /// ③ 删 Ghost 支的 `access.remove(id)` ⇒ 实体仍在 ⇒ 红。
+    #[test]
+    fn merchant_stage_runs_then_ghost_expiry_removes() {
+        use crate::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+
+        let mut w = World::with_maps(vec![(20, 20)]);
+        let id = w
+            .spawn_merchant(MerchantSpawn {
+                name: "老人".to_string(),
+                x: 4,
+                y: 4,
+                map_id: 0,
+                state: MerchantState::new(
+                    String::new(),
+                    String::new(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商人挂图成功");
+
+        // ① Run 门：`RunTick = 0` + 时钟 10s ⇒ 到点；段必须先写 `RunTick = now` 再 `Run()`。
+        w.clock_ms = 10_000;
+        if let Some(s) = w.entities.merchant_mut(id) {
+            s.run_tick = 0;
+        }
+        w.merchant_pass_tick = i64::MIN;
+        let out = w.merchant_tick();
+        assert_eq!(out.ran, vec![id], "过 Run 门必须由段系统跑一次");
+        assert_eq!(
+            w.entities.merchant(id).map(|s| s.run_tick),
+            Some(10_000),
+            "段系统必须先写 RunTick = now 再 Run()"
+        );
+
+        // ② Ghost 60s 门：`Ghost = true` 且 `GhostTick` 早于 60s ⇒ 段内 `remove` + 结构刷新。
+        if let Some(e) = w.entities.get_mut(id) {
+            e.life_cycle.ghost = true;
+            e.life_cycle.ghost_tick = 10_000;
+        }
+        w.clock_ms = 10_000 + 61_000;
+        w.merchant_pass_tick = i64::MIN;
+        let out2 = w.merchant_tick();
+        assert_eq!(out2.removed, vec![id], "Ghost 超过 60s 必须移除");
+        assert!(w.entities.get(id).is_none(), "段内 remove 后实体必须查不到");
+        assert!(
+            w.merchant_ids_sorted().is_empty(),
+            "段后 refresh_views 后商人列表必须为空"
+        );
     }
 
     /// **P6a `SimBuff` 段语义牙**：毒伤 DoT 经段系统落到 HP/MeatQuality/record 三处。
