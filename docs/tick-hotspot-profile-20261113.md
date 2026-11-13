@@ -241,7 +241,7 @@ cargo build --release -p mir2-world --bin tick_bench
    「怪物每 tick 做 99 格视野扫描」这回事（本报告前一版的错误表述，已删）。
    ⇒ 该场景对 tick 无可测影响，且 bench 里**打不开** visible-active 路径到演示舰队的量级；
    要定量必须真栈，或补完整的会话/AOI 夹具（`WantRefMsg`/ViewRange 差异/移动 bot）。
-3. **宿主段（P21..P32 + 帧生成/会话输出 + DB/网络）完全没有覆盖**：它在
+3. **宿主段（P21..P32 + 帧生成/会话输出 + DB/网络）在本卡没有覆盖**（**T10b 已补测，见 §12**）：它在
    `bins/game-svr/src/lib.rs` 的 `sim_loop` 里、`tick_head` 与 `tick_tail` 之间，
    不属于 `crates/world`，也不在本卡写集内。演示栈 10 个 bot × 每 tick 的帧生成/序列化/发送、
    会话与 DB 持久化，都可能是那 32× 的主体。
@@ -285,3 +285,212 @@ cargo build --release -p mir2-world --bin tick_bench
 
 原始输出：`E:/tmp/t10-worker-85/clippy2.log`、`test.log`、`msgcodegen.log`。
 测量原始输出：`prof-1k.txt` / `prof-5k.txt` / `prof-11k.txt` / `prof-11k-bots10.txt`（同目录）。
+
+## 12. T10b：宿主段计时（`sim_loop`，真栈）
+
+> 卡 `openmir2-t10b-simloop-timing`（L 级，诊断计时、默认关闭）。本节是 §8「未解释部分」
+> 第 3 条的补测：把**宿主段**按与 §2 同一口径计时，与 World 探针拼成一张完整 tick 分解表。
+
+### 12.1 工具与门控
+
+- 代码：`bins/game-svr/src/tick_profile.rs`（计时器 + 汇总打印 + 单测），接线在
+  `bins/game-svr/src/lib.rs` 的 `sim_loop`（**17 个段边界**）。
+- 门控：环境变量 `MIR2_TICK_PROFILE`，**只有字面 `1`** 开启（`0`/`true`/空/缺省一律关，
+  与起栈器的 fail-closed 口径同形）。开启时同时调 `world.enable_tick_profile()`，
+  使 World 的 `TickStage` 20 段与宿主段同一个窗口对齐。
+- 汇总窗口：**50 tick 或 10s 墙钟，先到者**。200ms 节拍下两者等价；tick 被拖慢
+  （本卡实测 600ms/tick）时按墙钟臂切窗，60s 观测内仍有 6 行以上。
+- 输出：`glog!("DBG", "[TICKPROF] …")`，一行一个段（`ms/tick`、占整 tick %、每 tick 次数），
+  末几行是「工作段合计」与「对账：`HostWorldHead+HostWorldTail` vs `ΣWorld.*`」。
+  **只读观测**：不写实体、不抽 RNG、不发帧。
+
+### 12.2 段名表（与 `TickStage` 同一命名口径）
+
+宿主段用 `Host` 前缀、PascalCase，与 World 的 `TickStage` 变体名（`SimDup` / `OutputAoi` /
+`TailVerifyMapTime` …）**不重名**；World 段在输出里加 `World.` 前缀（名字取 `TickStage` 的
+`Debug`，与 `tick_bench --profile` 逐字一致）⇒ 两套探针可拼成一张表。
+
+| 宿主段 | 测量范围（`sim_loop` 内的代码块） |
+| --- | --- |
+| `HostShutdown` | 关服通道探测（`shutdown_rx.try_recv()`） |
+| `HostInbound` | `while ev_rx.try_recv()`：门事件与 `CM_*` 命令派发（会话/脚本/交易/包裹…） |
+| `HostDbPoll` | DBSrv 读档/存档应答轮询、踢人/小退落地、GM pending 收口 |
+| `HostPeriodic` | `SystemProcessor` 的 10s 块（serverinfo / castle / guild / gates）、离世广播、MonGen regen、GameTime 与滚动公告 |
+| `HostWorldHead` | `tick_world_head_with_specials`（`World::tick_head` + 专用怪产仔/ref 排水） |
+| `HostPostHead` | 642/monster ref 排水、`GetStartPoint`、城堡 252 扇出 |
+| `HostPlayerRun` | P21 / P22 / P25-P27 / P31 / P32 宿主段 + `flush_run_frames` |
+| `HostWorldTail` | `World::tick_tail`（`Tail*` 三段 + `OutputAoi`） |
+| `HostPlanes` | `planes.tick()`（G11）+ `SuperMan` WAbil 投影同步 |
+| `HostRecovery` | P1/P2 恢复、ExtraAbil 到期、healthspell flush |
+| `HostFrames` | 本 tick 帧面排水（动作/屠宰/骨骼/buff/53/TransMap/自投递 B2-B5/组队 `Run`） |
+| `HostDealTick` | 交易自动取消（`DealCancelA`） |
+| `HostAoiDownlink` | `drain_run_downlinks_with_magic`：AOI 出现帧 + 52/53/体力下行 |
+| `HostPersist` | `use_items` 回写 + 周期存档（`DB_SAVEHUMANRCD`） |
+| `HostSwitch` | 换服轮询 + `SM_RECONNECT` 排水 |
+| `HostDiag` | 每 50 tick 的 `sim: tick` 诊断行 |
+| `HostSleep` | 末尾节拍 `sleep`（凑 200ms；过载时为 0） |
+| `HostTickTotal` / `HostUnaccounted` | 整 tick 墙钟 / 整 tick 减各段之和的残差 |
+
+World 段（`World.Clock` … `World.OutputAoi`）就是 §4 那 20 个 `TickStage`，名字与编号不变。
+
+### 12.3 关闭时零开销（A1）
+
+缺省（环境变量未设或 ≠ `1`）时 `enabled == false`：
+
+- `begin()`：读一次 `bool` 后返回 `None` —— **不取 `Instant`**；
+- `end()` / `end_tick()`：一次 `Option` 判别即 `return` —— **不写状态、不分配、不查表**；
+- `due()`：`enabled` 为假时短路，恒 `false`。
+
+每 tick 判别次数 = 段数 × 2 + 2 = **17 × 2 + 2 = 36 次 `Option`/`bool` 判别**，与 World 探针
+同口径（§2：45–55 次 `Option::is_some`）。开启态每段另有 2 次 `Instant::now()`
+（≈20–30ns/次，34 次 ≈ 1µs/tick，相对 200ms 节拍是 5e-6）。
+
+牙（`tick_profile.rs` 单测，5 条全绿）：`disabled_profile_does_no_work`（关闭态跑 100 轮
+`end(None)`/`end_tick(None)` 后 `rows` 必须为空 —— 删掉 `None` 短路或把缺省改 `true` 即红）、
+`env_gate_accepts_only_literal_one`（`true`/`0`/空一律关）、
+`enabled_profile_accumulates_and_takes_window`、`due_has_a_wall_clock_arm`、
+`world_delta_is_incremental`（首窗全量、次窗增量、计数回退饱和为 0）。
+
+### 12.4 真栈测量（1 bot，≥60s）
+
+环境与 `E:/UserTemp/fourseam-logs/start.ps1` **逐项同形**（同 env：`MIR2_LOG_*`、
+`MIR2_TEST_PERMISSION=10`、`MIR2_RNG_SEED=42`；同配置路径），只改 bin 目录
+（本车道 `E:/UserTemp/w85b-target/debug`）与日志目录，并加 `MIR2_TICK_PROFILE=1`。
+`game-svr.exe` sha256 = `53a1909fb097f852043dbc31ae6988956623cc833f781601ff221f4867216aa8`
+（**dev profile，unoptimized** —— 与演示栈同形，不是 release）。
+
+- 1 bot：`t10bc0`（`-DisableAutoPlay`，空闲挂机），**在世界 21:26:48 → 21:28:48（120s ≥ 60s）**；
+  bot 在 21:28:48 按 `SoftCloseAfterWorldMs=120000` 小退，21:29:19 世界会话归零。
+- 注意：世界实体数**不受 bot 控制**——MonGen 持续刷怪：3 分钟 270 → ~3,000，36 分钟自然涨到
+  MonGen 上限 ~7,900 并趋稳（6 个窗口 1,779–1,871ms/tick）。所以下表按**实体数分档**给，
+  而不是按「bot 在不在」。
+
+窗口表（每行一个 10s 汇总窗口；`WorldΣ` = World 探针 20 段之和；`hostΣ` = 工作段合计 − `WorldΣ`）：
+
+| 实体内 | tick / 窗口 | ms/tick | 工作段 ms | `WorldΣ` ms | `hostΣ` ms | host 占比 | `HostAoiDownlink` | `HostPeriodic` | `HostFrames` | `HostSleep` |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 280 | 50 | 200.4 | 48.9 | 40.0 | 8.9 | 18.2% | 3.9 | 2.9 | 1.8 | 151.5 |
+| 744 | 50 | 200.5 | 84.0 | 66.0 | 18.0 | 21.4% | 9.4 | 5.3 | 2.9 | 116.5 |
+| 1,396 | 42 | 241.2 | 236.6 | 179.3 | 57.3 | 24.2% | 36.9 | 12.2 | 7.8 | 4.6 |
+| 1,715 | 32 | 322.4 | 322.4 | 238.3 | 84.0 | 26.1% | 57.4 | 15.5 | 10.6 | 0.0 |
+| 2,411 | 21 | 479.0 | 479.0 | 344.6 | 134.4 | 28.1% | 96.5 | 21.5 | 15.9 | 0.0 |
+| 2,927 | 17 | 595.0 | 595.0 | 419.3 | 175.8 | 29.5% | 131.2 | 25.0 | 18.7 | 0.0 |
+| 3,449 | 10 | 1090.0 | 1090.0 | 747.9 | 342.1 | 31.4% | 260.8 | 44.8 | 35.1 | 0.0 |
+| 3,993 | 13 | 821.4 | 821.4 | 568.1 | 253.3 | 30.8% | 194.4 | 33.6 | 25.0 | 0.0 |
+| 4,467 | 11 | 937.2 | 937.2 | 641.9 | 295.3 | 31.5% | 226.8 | 38.6 | 29.5 | 0.0 |
+| 4,969 | 10 | 1043.7 | 1043.7 | 706.2 | 337.4 | 32.3% | 264.2 | 41.2 | 31.6 | 0.0 |
+| 5,475 | 9 | 1155.6 | 1155.6 | 773.4 | 382.2 | 33.1% | 300.8 | 45.4 | 35.5 | 0.0 |
+| 5,990 | 8 | 1299.5 | 1299.5 | 873.3 | 426.2 | 32.8% | 337.0 | 51.0 | 37.7 | 0.0 |
+| 6,498 | 7 | 1479.2 | 1479.2 | 929.4 | 549.8 | 37.2% | 454.0 | 53.4 | 41.9 | 0.0 |
+| 6,936 | 7 | 1571.3 | 1571.3 | 1035.9 | 535.4 | 34.1% | 426.8 | 61.1 | 47.0 | 0.0 |
+| 7,496 | 6 | 1729.3 | 1729.3 | 1079.3 | 650.0 | 37.6% | 541.5 | 62.3 | 45.7 | 0.0 |
+| 7,914 | 6 | 1870.5 | 1870.5 | 1150.3 | 720.2 | 38.5% | 598.8 | 66.3 | 54.7 | 0.0 |
+
+三个完整窗口（原样摘录，`E:/tmp/t10b-w85/logs/game-svr.out.log`）：
+
+**A. 实体内 270（bot 刚进世界，未过载）**：整 tick 200.45ms（sleep 153.6 = 76.6%），
+工作段 46.9ms。宿主侧：`HostWorldHead` 23.7 + `HostWorldTail` 14.4（= `World::tick` 38.1）
++ `HostAoiDownlink` 3.8 + `HostPeriodic` 2.9 + `HostFrames` 1.8 + `HostPlayerRun` 0.10。
+`HostTickTotal` 200.447 / `HostUnaccounted` 0.012（0.006%）。
+
+**B. 实体内 2,839（bot 仍在世界）**：整 tick 590.70ms（sleep 0，已超 200ms 预算）。
+
+| 段 | ms/tick | 占 tick |
+| --- | --- | --- |
+| `HostWorldHead`（`World::tick_head` + 专用怪） | 264.98 | 44.86% |
+| `HostWorldTail`（`World::tick_tail`） | 154.11 | 26.09% |
+| `HostAoiDownlink`（AOI 出现帧 + 52/53/体力下行） | 127.48 | **21.58%** |
+| `HostPeriodic`（SystemProcessor 10s 块/MonGen/公告） | 25.20 | 4.27% |
+| `HostFrames`（本 tick 其余帧面排水） | 18.60 | 3.15% |
+| `HostPlayerRun`（P21..P32） | 0.14 | 0.02% |
+| 其余 11 段合计 | 0.19 | 0.03% |
+| **`WorldΣ`（20 段）** | **418.96** | **70.9%** |
+| **`hostΣ`（World 之外）** | **171.7** | **29.1%** |
+
+**C. 实体内 7,908（世界自然涨到 MonGen 上限，`在世界会话 0`，即演示栈「~2000ms」的真实规模）**：
+整 tick **1,831.29ms**（sleep 0），与演示栈记录的「~2000ms」同量级 —— **复现，不再是外推**。
+
+| 段 | ms/tick | 占 tick |
+| --- | --- | --- |
+| `HostWorldHead` | 721.63 | 39.41% |
+| `HostAoiDownlink` | 567.42 | **30.98%** |
+| `HostWorldTail` | 417.73 | 22.81% |
+| `HostPeriodic` | 66.53 | 3.63% |
+| `HostFrames` | 54.67 | 2.99% |
+| `HostDiag`（诊断行本身） | 3.04 | 0.17% |
+| 其余 12 段合计 | 0.18 | 0.01% |
+| **`WorldΣ`（20 段）** | **1,139.11** | **62.2%** |
+| **`hostΣ`（World 之外）** | **692.2** | **37.8%** |
+
+同窗口 World 内部：`SimMonsterAi` 244.7ms（21.5% of World），`SimSlaveCleanup` / `SimSettleDeaths` /
+`TailVerifyMapTime` / `SimDup` / `TailPlayerDeaths` / `OutputAoi` 六段各 134.5–136.4ms（每段 ~11.9%）。
+
+World 内部同窗口（C 之前的 2,839 实体档）：`SimMonsterAi` 88.8ms（21.2% of World）、`TailPlayerDeaths` 50.5、
+`SimSettleDeaths` 50.0、`TailVerifyMapTime` 50.0、`SimSlaveCleanup` 49.5、`OutputAoi` 49.3、
+`SimDup` 48.8（7 段各占 ~12%），`SimMerchant` 8.8、`SimNpc` 5.9、`SimExpireHitters` 5.2。
+⇒ §6 Top1 的「五个全量扫描段每实体固定成本」在**真栈同构出现**（七个 ~12% 段）。
+对账：`HostWorldHead+HostWorldTail` = 419.06 vs `ΣWorld.*` = 418.96 ⇒ 宿主附加 0.04ms
+（专用怪产仔/ref 排水），窗口对账误差 < 0.01%。
+
+### 12.5 32× 差额：能解释多少、还剩什么
+
+1. **构建口径差一个数量级（主因候选）**：演示栈与本节都是 **dev profile**（`target/debug`），
+   而 §3/§4 的 bench 是 `--release`。本栈 `World::tick` 每实体 144–148µs（2,839 实体 147.6µs / 7,908 实体 144.0µs），
+   bench release 是 **5.8µs/实体** ⇒ **25×**。这解释了 32× 的绝大部分来源方向：
+   拿 release bench 的 64ms 去对 debug 真栈的 2000ms，本身就不是同一口径。
+2. **实体数随运行时长增长（世界自己涨）**：MonGen 不停刷，3 分钟 270 → ~3,000，约 36 分钟到
+   ~7,900 并趋稳。实测 tick 与实体数近似线性（0.20–0.24ms/实体，debug）：
+   **7,914 实体 ⇒ 1,870.5ms/tick**，演示栈的「~2000ms」由此复现（§12.4 窗口 C）。
+3. **宿主段（`World::tick` 之外）随实体数增长，占比 18% → 38.5%**：6.4ms（205 实体）→
+   720ms（7,914 实体），**不是**固定小尾巴。最大单项是 `HostAoiDownlink`
+   （2.5 → 598.8ms；占整 tick 21.6% → **32%**）——它是「AOI 出现帧 + 52/53/体力下行」的
+   生成/入队，**不含 socket 写**（写在各 gate 线程，见 §12.6）。`HostPeriodic`（SystemProcessor
+   10s 块、含 MonGen）与 `HostFrames` 也随实体数增长（2.4→66ms / 1.3→55ms）。
+4. **P21..P32 宿主段本身可忽略**（0.10–0.14ms/tick）：这批段的昂贵部分不在宿主胶水里，
+   而在 `World::tick` 内部的 `Tail*`/扫描段与 AI。
+
+⇒ 结论修正 §8：32× = **构建口径差（release bench vs debug 真栈，~25×/实体）**
+× **真栈实体数持续增长（270 → 7.9k，~29×）** 的乘积方向；2000ms 在 7.9k 实体处直接复现。
+**宿主段占 18%→38.5%**（实体越多占比越高），其中 AOI 下行是最大的非 World 单项（31% tick @7.9k），
+但**不是** 32× 的主体；「World::tick 之外藏着全部差额」与「宿主段可忽略」两种说法都被数据否定。
+
+### 12.6 本节的边界（不覆盖什么）
+
+- **不入档**：gate 线程里的 socket 写（`apply_sim_cmd_async` → `send_gate_msg`）不在 `sim_loop`，
+  `SimToGate` 是 unbounded 通道 ⇒ 本节量到的只是「帧生成 + 入队」；真实网络写/背压要在 gate 侧量。
+- **DB 往返**：`drain_periodic_save` 在本机 < 0.03ms/tick（异步），DB 侧耗时不在本节。
+- **tick 内部细分**：`HostAoiDownlink` 的 127ms 没有进一步拆分（哪个子段贵）——需要下一张卡
+  在同一接缝加名字探针（`drain_run_downlinks` 的 AOI/52/53/体力四支）。
+- 计时器本身在开启态有 ~1µs/tick 的 `Instant` 成本；World 探针开启态在 T10 §7 实测 ≤2.23%
+  （同机噪声内），本节不重复做 A/B。
+- 日志时间戳是 **UTC**（`glog` 取 `SystemTime`），与本地 +0800 差 8h —— 引用时间线时注意。
+
+### 12.7 复现
+
+```sh
+# 1) 构建（独立 target dir；dev profile，与演示栈同形）
+cd mir2-rs && CARGO_TARGET_DIR=E:/UserTemp/w85b-target cargo build -p game-svr --bin game-svr
+# 2) 起栈（与 E:/UserTemp/fourseam-logs/start.ps1 同 env/同参数；本车道脚本见 §12.8 证据路径）
+powershell -NoProfile -ExecutionPolicy Bypass -File E:/tmp/t10b-w85/start.ps1
+# 3) 1 bot（空闲挂机 120s；-WriteConfigOnly 后直接起 BotSrv）
+powershell -File tools/botload/run_bots.ps1 -Count 1 -Prefix t10bc -NewAccount -DisableAutoPlay \
+  -SoftCloseAfterWorldMs 120000 -SkipBuild -WriteConfigOnly -LogFile E:/tmp/t10b-w85/bots/t10bc.log
+$env:MIR2_BOT_OUT='E:/tmp/t10b-w85/bots/t10bc'; src/BotSrv/bin/Release/BotSrv.exe
+# 4) 取数
+grep -a TICKPROF E:/tmp/t10b-w85/logs/game-svr.out.log
+# 5) 停栈（**先等「在世界会话 0」再杀**；本车道按 pids.txt 里的 pid 杀）
+```
+
+### 12.8 门禁与本卡证据路径
+
+| 门 | 命令（`mir2-rs/` 下） | 结果 |
+| --- | --- | --- |
+| fmt | `cargo fmt --all -- --check` | RC=0 |
+| clippy | `cargo clippy -p game-svr --all-targets -- -D warnings` | RC=0（全工作区另见交付报告） |
+| test | `cargo test -p game-svr --lib` | 1783 passed / 0 failed / 4 ignored（含本卡 5 条新单测） |
+| msgcodegen | `cargo run -p msgcodegen -- --check` | RC=0 |
+| 散文锚 | `python -I -B tools/hygiene/docs_anchor_gate.py --prose --base master` | 见交付报告 |
+
+原始证据（未入库）：`E:/tmp/t10b-w85/logs/game-svr.out.log`（`TICKPROF` 行）、
+`game-svr.err.log`、`bots/bot2.out.log`（bot 进世界/小退时间线）、`start.ps1`、
+`logs/pids.txt`（本车道起的 4 个 pid）。
