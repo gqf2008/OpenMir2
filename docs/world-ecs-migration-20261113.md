@@ -690,6 +690,40 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **BevyAoiStore 性能计数**：`BevyAoiStore::get` 现在每实体每次构造做 **24** 次
 > `World::get::<T>`（S3b 3 + S4a 8 + S4b 8 + S4c 5），仍属性能项、未压测。
 
+> **S4d 落地登记（tick 业务段系统化；本卡口径，2026-11-13）**：
+> 本节与 §6.3 表里同名的「S4d 城堡/行会/税收」切片**不是同一事项**——本卡指
+> `World::tick_head`/`tick_tail` 的业务段迁入 §5.3 的 20 段 `TickStage` 系统。分两笔子里程碑：
+>
+> ① **S4d-1 资源化（`SimState`）**：`World` 的全部**非实体**状态（`maps`/`sessions`/`rng`/
+> `clock_ms`/配置/命令队列/输出累积/旁挂表…，共 88 字段）移入 `pub struct SimState`
+> （`#[derive(Resource)]`，`crates/world/src/world.rs::SimState`）；`World` 只保留
+> `entities: EntityStore`、四个 `TickRunner`（`clock_runner`/`tail_runner`/`drain_runner`/
+> `snapshot_runner`）与 `pub sim: SimState`，并对 `SimState` 实现 `Deref`/`DerefMut`，
+> 因此全部既有 `world.clock_ms` / `world.rng` / `world.maps` 访问形态**不变**（跨 crate 亦然）。
+> **所有权规则**：`sim` 平时归 facade；进入段系统前 `std::mem::take` 成 bevy `World` 的
+> `SimState` 资源，跑完 `remove_resource` 归还原处 —— 同一时刻只有一个所有者（§4.2 规则 2，
+> 与 §6.3 S3b 的 `MapsRes` 同法）。`EntityStore` **未**复制进资源（实体仍在它的 bevy `World`）。
+> **首段验证 = `OutputDrain`（#15）**：`world.rs::output_drain_system` 以普通系统
+> （`ResMut<SimState>` + `ResMut<TickRecordRes>`）完成迁移前 `tick_head` 的 5 处
+> `record.*.append(&mut pending_*)`（castle_structures / attacks / weapon_breaks /
+> weapon_wears / show_hp_health_changes），转抄点从「AI 之后、showhp 之前」合并到 #15；
+> 向量内部发生序不变（命令攻击仍先进 `record.attacks`，AI 攻击后进），不抽 RNG。
+>
+> ② **S4d-2 首片（`SimHiterSnapshot` #2）**：`world.rs::sim_hiter_snapshot_system` 只读
+> `Appearance`/`LifeCycle`/`CombatAttribution` 三组件，按 `TickEntityIds`（tick 边界由
+> `EntityStore::order_index`/`order_entities` 填的槽位序 id 表，与 `AoiIds` 同口径）
+> 写 `SimState::player_hiter_snapshot`；段位仍在命令 FIFO 之后、`expire_hitters` 之前，
+> 过滤条件（`race == Play && !ghost`）逐项不变。
+>
+> **未做 / 结构结论（S4d-2 余段与 S4d-3）**：段系统运行在 `EntityStore` 内部那个 bevy
+> `World` 上，系统拿不到 `EntityStore` 的槽位索引与缓存 `QueryState`（它持有 bevy `World`，
+> 无法同时交给系统），所以**只读**段可循 `SimHiterSnapshot` 的
+> 「id 表资源 + 裸 `&mut World` 取组件」模式；**写实体**的段（`expire_hitters`、
+> `settle_deaths`、AI/NPC/商人/宝宝等）需要一个按段裁剪的 `EntityMut` 等价适配器（`get_mut`
+> 写路径、`for_each_mut` 的等价体），才能在不复制 `EntityStore` 的前提下系统化。S4d-3
+> （`World::tick` 只驱动 `TickRunner`、删除 `tick_head`/`tick_tail` 业务段）以该适配器为前置。
+> 本卡只交付 S4d-1 + S4d-2 首片，其余段仍由 facade 串行驱动（顺序与 RNG 消费者次序不变）。
+
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——
 > `entity/tick/存储`=S1/S2；`DupState`+tick 段链=S3a；`map/aoi/space_move/session`=S3b；
 > `combat/mongen/slave/death_drop/stamina(宿主)/buff/ctor_fold/run_gap`=S4a；
