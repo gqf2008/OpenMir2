@@ -5302,6 +5302,8 @@ fn has_castle_binding(world: &World, actor_id: i32) -> bool {
 }
 
 pub fn monster_ai_tick(world: &mut World) {
+    // T10 诊断探针：全量收集阶段（`iter_ref` = 槽位顺序句柄表 + 全组件查询）。
+    let __prof_collect = world.probe_begin();
     let ids: Vec<i32> = world
         .entities
         .iter_ref()
@@ -5323,6 +5325,7 @@ pub fn monster_ai_tick(world: &mut World) {
         })
         .map(|e| e.id)
         .collect();
+    world.probe_end("monai.collect", __prof_collect);
     for id in ids {
         // **不可见怪跳步门**（`WorldServer.MonGen.cs:294-296/314`）：
         //
