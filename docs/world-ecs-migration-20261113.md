@@ -649,8 +649,8 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > ③ S4b-3 出站事件词汇登记 + S4a 评审 P3 处置。`EntitySpawn` 平铺生成期字段（ctor 缺省：
 > `race=Play`、`name_color=255`、`power_rate`/`kill_mon_exp_rate=100`、
 > `poisoning_tick=BUFF_EPOCH_MS`），`EntityRef` 平铺只读投影，`EntityMut` 暴露组件可变引用；
-> `EntityStore::insert` 用 `SpawnParts` 整 bundle 挂组件，`write_back` 整包写回全部 16 个迁移
-> 组件（S4a 8 + S4b-1 4 + S4b-2 4）。bevy `QueryData` 元组上限 15 只是实现约束：读路径用第二个
+> `EntityStore::insert` 用 `SpawnParts` 整 bundle 挂组件，`write_back` 整包写回全部 21 个迁移
+> 组件（S4a 8 + S4b-1 4 + S4b-2 4 + S4c-1 4 + AiState 1）。bevy `QueryData` 元组上限 15 只是实现约束：读路径用第二个
 > `QueryState`（两次共享借用，不迭代求序），写路径把 `Recovery`/`PvpState` 移出 `EntityMut`
 > 改 `recovery_mut`/`pvp_state_mut`（组件仍是唯一真值，无影子副本、无读写换序），语义由
 > golden/parity 兜底。`PvpView` 现只对 `EntitySpawn`/`EntityRef` 实现（S4a 时曾含
@@ -663,11 +663,32 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > （纯确定性事件/算法），S4b 只需登记为稳定词汇、无需字段迁移；帧编码仍在宿主 `bins/game-svr`。
 >
 > **S4a 评审 P3 处置**：① 注释计数过期——`Entity` 剩余字段数与 `EntitySpawn::new` 调用计数改为
-> 「剩余 17 字段」与「约 700 处」（不再写死会腐烂的精确数）；② `write_back` 只断言 HP/MP/exp 的
+> 「剩余 17 字段」与「约 737 处 `EntitySpawn::new` 调用」（不再写死会腐烂的精确数）；② `write_back` 只断言 HP/MP/exp 的
 > 盲区——新增 `write_back_covers_all_migrated_components`，把 16 组件逐字段置非缺省后
 > `spawn_cloned → write_back → get` 逐组断言，漏写 attribution/pvp/recovery/drop/spawn/ability
 > 任一即红；③ `insert_parts`/`into_parts` 收窄为私有、`SpawnParts` 降为 `pub(crate)`
 > （唯一调用方是 `EntitySpawn::new → EntityStore::insert`）。
+
+> **S4c 落地登记（2026-11-13）**：`Entity` 的最后 17 个字段全部迁出（17→**0**）；分三笔子里程碑：
+> ① S4c-1 `SlaveState`(11)/`Inventory`(1)/`MerchantState`(1)/`NpcState`(1)；
+> ② S4c-2 `AiState`(1，`AnimalState` 整块)；③ S4c-3 `CoreIdentity`(2) 收口。
+> **最终形态**：`Entity` 不再是本 crate 定义的类型，而是
+> `pub type Entity = mir2_world_bevy::CoreIdentity;` 的类型别名；`EntityStore.inner` 是
+> `EcsStore<CoreIdentity>`（主组件 = 业务身份 `id`/`name`）。`id` 同时是 store 索引键：
+> 索引与组件各持一份、**以索引为准、生成后不可变**（无第三个可写真值）。生成期 ctor 由
+> `EntitySpawn::new(id,name,x,y)` 提供（base 738 次 `Entity::new` 调用点改为
+> `EntitySpawn::new`，源码残留 0），`EntitySpawn.entity` 即 `CoreIdentity` 载体，`insert` 把它
+> 作为主组件插入。
+> **视图**：`EntityRef` 平铺 17 个 S4c 只读投影（`ai: &AnimalState`、`use_items: &[UseItemSlot;13]`、
+> `merchant/npc: Option<&Payload>` 等），`EntityMut` 暴露 `slave`/`inventory`/`merchant_state`/
+> `npc_state` 组件可变引用 + `ai: &mut AnimalState`（monai 的 `e.ai.<field>` 原形不变）。
+> **查询**：读路径 `view3_state`（5 组件）+ 写路径嵌套元组内层 5；仍按显式句柄 `get_manual`，
+> 不迭代 `Query` 求顺序。`AoiStore::get_mut(&mut Entity)` 改为 `ai_mut(&mut AnimalState)`。
+> **write_back/spawn_cloned** 整包覆盖全部 21 个迁移组件；`write_back_covers_all_migrated_components`
+> 追加 `SpawnBinding.castle_binding` / `DropState.items` / `MonsterCtorDraws` 全字段牙，以及
+> S4c 的 SlaveState/Inventory/MerchantState/NpcState/AiState 全字段断言。
+> **BevyAoiStore 性能计数**：`BevyAoiStore::get` 现在每实体每次构造做 **24** 次
+> `World::get::<T>`（S3b 3 + S4a 8 + S4b 8 + S4c 5），仍属性能项、未压测。
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——
 > `entity/tick/存储`=S1/S2；`DupState`+tick 段链=S3a；`map/aoi/space_move/session`=S3b；
