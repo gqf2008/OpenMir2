@@ -9602,7 +9602,7 @@ mod tests {
     /// 牙：① 删 `SimDup` 注册 ⇒ `head.run(SimDup)` panic（trace 序列牙同时红）；
     /// ② 删 `set_dup_check_tick` 写回 ⇒ `dup_states` 首项断言红（13001 变 10000）；
     /// ③ 删 `!bo → 置 true/start=now` 分支 ⇒ 第二趟 elapsed=0 ⇒ 零推挤 ⇒ 向量红；
-    /// ④ `StageDupAccess::order_ids` 反序 ⇒ 推挤者从 id=1 变 id=3 ⇒ 向量红。
+    /// ④ `StageAccess::order_ids` 反序 ⇒ 推挤者从 id=1 变 id=3 ⇒ 向量红。
     #[test]
     fn sim_dup_stage_matches_recorded_vectors() {
         let mut w = World::new(8, 8);

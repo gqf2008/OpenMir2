@@ -1,8 +1,9 @@
 //! 实体存储 —— 对应 C# 的 `SystemShare.ActorMgr`（`ActorId` 稳定 id）+ `BaseObject` 的 AOI 相关字段。
 //!
-//! 存储形态：连续数组 + 空闲槽回收 + **代际号**（generation），防止"已删除 id 被复用"后
-//! 旧引用误命中（C# 侧靠 `ActorMgr.Get(id) == null` 判断，但 id 会复用；这里把复用风险显式化，
-//! 对外仍以 C# 风格的 `i32` id 暴露，代际只在内部校验）。
+//! 存储形态：连续数组 + 空闲槽回收（+ 仅供诊断的代际号 generation）。
+//! **串号保护的真值**是 `SlotTable::unbind`：从 `IdIndex` 删除该 id 的映射、并清槽位的
+//! `key/entity` ⇒ 已删 id 的 `get` 恒 `None`（代际号只在槽位复用时 +1、全仓无读取点，
+//! 不构成保护；见 review 69bd8351 P5P-6 的说明）。
 //!
 //! 遍历顺序 = 槽位顺序（= 插入顺序 + 回收槽复用），**全库唯一**：
 //! tick 的确定性（判据①）依赖"同一组操作产生同一槽位排布"。
@@ -969,7 +970,7 @@ impl EntitySpawn {
 
     /// 落成组件包（`insert` 用）。
     #[must_use]
-    pub(crate) fn into_parts(self) -> SpawnParts {
+    fn into_parts(self) -> SpawnParts {
         let progression = self.progression_component();
         let vitals = self.vitals_component();
         let spawn = self.spawn_component();
@@ -2247,7 +2248,14 @@ impl EntityStore {
     /// 结构变更后刷新视图查询的 archetype 匹配集。
     /// **P5-pre**：段内结构变更（经 `StageEntities::insert`/`remove` 的 bevy 裸句柄）后由 facade
     /// 调用，刷新**内核**三个缓存查询（`read`/`write`/`pairs`）与**本层**四个读/写视图缓存
-    /// （`view*`/`mut_view`）。不调用 ⇒ 新实体对 `get`/`iter` 不可见、已删实体仍可见。
+    /// （`view*`/`mut_view`）。
+    ///
+    /// **谁真正承重**（review 69bd8351 P5P-5）：只有 4 个走 `get_manual` 的**读**状态需要显式
+    /// 刷新——内核 `read`（`iter`）与 `view/view2/view3`（`EntityStore::get`）。写状态
+    /// （`write`/`pairs`/`mut_view`）走 bevy 的 `query_mut`，`get_mut`/`iter_mut` 自带
+    /// `update_archetypes`，这三行是版本防御（保留+注明，不宣称缺一不可）。
+    /// 新实体不刷新 ⇒ `get`/`iter` 漏实体；已删实体的不可见由 `SlotTable::unbind` + `despawn`
+    /// 决定，与本钩子无关（不要用它解释删除语义）。
     pub fn refresh_views(&mut self) {
         self.inner.refresh_archetypes();
         self.refresh_view();
@@ -3303,7 +3311,8 @@ impl EntityStore {
 ///
 /// 为什么需要它：`settle_deaths` 的实现点横跨 `world.rs` / `death_drop.rs` / `party.rs` /
 /// `slave.rs` / `monai.rs`，且每次抽数都发生在「取快照 → 改 → 回写」之间。把实体面收窄成
-/// 这 6 个方法（含 P4 新增的 `map_binding_mut`）后，整条调用链只写一份实现（facade 与 `SimSettleDeaths`/`TailPlayerDeaths`
+/// 这 9 个方法（P4 增 `map_binding_mut`；P5-pre 增 `dup_state`/`dup_state_mut`/`transform_mut`）
+/// 后，整条调用链只写一份实现（facade 与 `SimSettleDeaths`/`TailPlayerDeaths`
 /// 段共用），不产生第三份拷贝。
 ///
 /// 读（`get`/`spawn_cloned`/`order_ids`）取 `&self`，与旧 facade 的共享借用同形（同一时刻可

@@ -320,6 +320,7 @@ facade 侧：取回 sim / record / ids，删掉落的一次性资源
 | Dv4 | `StageSkip` 描述为「本 tick 里」的计数（§2.4） | **世界生命期累计**（`AtomicU64` 只增不减，不按 tick 重置） | 免掉每 tick 一次清零写；计数只作诊断（非 0 = 接线 bug/半实体），绝对值不参与任何判据 |
 | Dv5 | 段宿主 `StageWorld { entities: StageEntities, sim: &mut SimState }`（§3.4） | **不再实现**。段内需要 RNG 与实体写交错时：`remove_resource::<SimState>()` 取走 owned `SimState` → 与 `StageEntities` 并行使用 → 段尾 `insert_resource` 归还（P3a `SimDup` 首个落地；P3b settle 对沿用） | 裁决 2026-11-13：`StageWorld` 在 `TickRunner` 系统里不可构造（`SimState` 是 bevy World 的资源、`EntityStore` 拥有同一个 World）。搬移点在系统内部，与 P0/P1 边界搬移同构；借用冲突 = 实现方式选错，禁 unsafe。首个用例：`world.rs::sim_dup_stage_system` |
 
+| Dv6 | 每段白名单「宁宽毋缺」，假定段 spec 与段实际写集一致 | `SimDup` 为复用 `EntityAccess` 把 read 扩到 25 / write 22（`EntityMut` 全集 + DupState/Transform），运行期白名单对该段**实际失效**；`map_binding_mut` 的 `Writes<MapBinding>` 未声明（latent panic） | review 69bd8351 P5P-9：统一实体面的固有代价；兜底 = golden/parity + 评审逐段核 `rg`；若需精度，把 `EntityAccess::get/get_mut` 换成按段需要的窄视图（牺牲复用）。P6 起逐段评估 |
 ### 2.5 段内 panic / 恢复路径（must_cover #5，review F5）
 
 F5 的事实：段系统 panic 时 `facade.sim` 已被 `mem::take` 成 `Default`，移入的 `SimState`
