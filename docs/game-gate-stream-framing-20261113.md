@@ -4,6 +4,7 @@
 - 判级理由：只登记协议假设与未来偏离边界，不改生产行为
 - 来源：`opc-49` 2026-11-13 跨项目反馈；`mirclientzig-49` 现场（headless 客户端同拍 say+walk 连写被一次 read 合并）
 - 范围：本文只登记事实与边界；不改 game-gate 生产代码、不改冻结客户端、不改协议
+- 后续登记：卡 `openmir2-game-gate-defencecc-registration` 追加 A4「已知偏差」（`DefenceCCPacket` 缺口）
 
 ## 结论摘要
 
@@ -46,8 +47,10 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
   `handle_frame(&buf[..n], ...)`，没有跨 read 的重组缓冲。
 - `classify_frame` 与 oracle 同构 —— 限定为**修掉登录前 3 字节偏差之后**（卡
   `openmir2-game-gate-3byte-prelogin`：登录前 `frame.len() <= 3` 一律 `Ignore`，与下面 A1.3 第 1
-  条的三分支一致；修复前的门是 `< 3`，3 字节会被当登录帧、被 `packetLen <= 15` 判失败而
-  **关会话**，与 oracle 的「丢帧、会话存活」不等价）：`payload = &frame[2..frame.len() - 1]`
+  条**末尾的登录前段落**一致——1–2 字节切片越界、3 字节空 span 抛 `ArgumentNullException`，
+  两条异常都被吞 ⇒ 丢帧、会话存活；≥4 字节才进 `ClientLogin`。修复前的门是 `< 3`，3 字节会被
+  当登录帧、被 `packetLen <= 15` 判失败而**关会话**，与 oracle 的「丢帧、会话存活」不等价）：
+  `payload = &frame[2..frame.len() - 1]`
   剥壳后整体 `mir2_protocol::edcode::decode(payload)`；登录前的短帧、登录后的
   `< COMMAND_FIXED_LENGTH`（`GateShare.CommandFixedLength` = 16）、心跳（长度 1）等门都以
   **这一次 read 的总长度**为准。
@@ -55,7 +58,9 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
   与 oracle 的转发口径一致。
 - 注意：该文件读循环上方的注释「帧被 TCP 拆开/合并时的后果与 oracle 一致（都会被剔除）」
   里的「都会被剔除」**不准确**（合并见 A1.1；拆分见 A1.3 的三分支，其中 ≥19 字节会转发
-  垃圾帧）。本卡写集只有文档，代码注释修正留 follow-up。
+  垃圾帧）。前一张卡（`openmir2-game-gate-one-read-one-frame`）写集只有文档；代码注释与
+  3 字节偏差已由 `openmir2-game-gate-half-frame-comment` / `openmir2-game-gate-3byte-prelogin`
+  两卡完成。
 
 ### A1.3 帧被拆分/合并时的 oracle 等价后果
 
@@ -121,6 +126,82 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
 - 不把 headless 客户端的连写习惯当成服务端要迁就的需求：行为等价优先于修 bug；
   客户端侧的规避（逐帧 flush + 间隔）是当前唯一正确的用法。
 
+## A4 已知偏差：Rust 未实现 oracle 的 `Config.IsDefenceCCPacket`（CC 包防御）
+
+> 本小节即本条偏差的登记处（编号待 Leader 在偏差清单落号，建议 `D-*`）。现网
+> `[Switch] DefenceCCPacket=0`，当前部署下两侧行为等价；开关一旦打开即分叉。
+
+### oracle 侧（符号与行为）
+
+- 开关字段：`src/GameGate/Conf/GateConfig.cs` 的 `GateConfig.IsDefenceCCPacket`（`bool`，
+  构造函数缺省 `false`）；`src/GameGate/Conf/ConfigManager.cs` 用
+  `ReadWriteBool("Switch", "DefenceCCPacket", default)` 读取（缺键/空值 ⇒ 取默认，不报错）。
+- 消费点：`src/GameGate/Services/ClientSession.cs` 的 `ClientSession.ProcessSessionPacket`
+  ——取出 `packetLen` 之后、`Stat`/登录态分支**之前**：
+
+  ```csharp
+  if (Config.IsDefenceCCPacket && (packetLen >= 5))
+  {
+      if (destinationSpan[..7].SequenceEqual(_httpSpan)) { KickFlag = false; return; }   // 整帧丢弃
+      if (destinationSpan[..7].SequenceEqual(_httpsSpan)) { KickFlag = false; }         // 不 return
+  }
+  ```
+
+- `_httpSpan = HUtil32.GetBytes("http://")`（7 字节）、`_httpsSpan = HUtil32.GetBytes("https://")`
+  （8 字节）。两条判定都切 `destinationSpan[..7]`（7 字节），而 `Span.SequenceEqual` 长度不等
+  直接返回 `false` ⇒ **https 分支永不命中**（死代码）；oracle 实际只拦 `http://` 前缀。
+  登记按此事实，不要按注释/命名推测 https 也被拦。
+- `destinationSpan` 是 `messagePacket.Data.AsSpan()`，`Data` 由
+  `ServerService.ServerSocketClientRead` 按 `new byte[e.ByteBlock.Len]` 精确分配 ⇒
+  `Data.Length == packetLen`。于是 `packetLen == 5/6` 时 `[..7]` 切片抛
+  `ArgumentOutOfRangeException`，被 `ServerManager` 消息消费线程的 `catch (Exception)` 吞掉
+  ⇒ 该帧被丢、**会话存活**（既未置 `KickFlag`，也不 `Kick`）。
+- 命中 `http://` 的那条：置 `KickFlag = false` 后 `return` ⇒ 整帧丢弃、会话存活，**不**踢人。
+
+### Rust 侧（缺失点）
+
+- `mir2-rs/bins/game-gate/src/lib.rs` 的 `classify_frame` 在 `!logged_in` 分支之前没有任何 CC
+  前缀判定；入参只有 `frame` / `logged_in` / 规则 / 长度上限，没有该开关。
+- `mir2-rs/bins/game-gate/src/config.rs` 的 `GateConfig` **不解析** `[Switch] DefenceCCPacket`
+  （只读 `ChatInterval`、`NomClientPacketSize`、`MaxItemSpeed` 与速度规则）。
+- 全仓 grep `DefenceCC` 只命中 `mir2-rs/bins/game-gate/tests/fixtures/rungate-config.conf` 里的
+  `DefenceCCPacket=0`——那是配置文本夹具（`config::load` 忽略该键），不是实现。
+
+### 现网配置值
+
+- `E:/MirServer/RunGate/config.conf` 的 `[Switch]` 段：`DefenceCCPacket=0`（2026-11-13 实
+  `grep -n '^DefenceCCPacket='` 命中该行，值为 `0`）。与 `GateConfig()` 缺省 `false` 一致 ⇒ 当前部署下
+  两侧都不做 CC 前缀拦截，行为等价。
+- 核对命令（窗口期用它复核现网是否仍为 0）：
+  `grep -n '^DefenceCCPacket=' E:/MirServer/RunGate/config.conf`
+
+### 开关打开后的行为差异
+
+| 输入（一次 read） | oracle（开关=1） | Rust（现状） | 差异 |
+| --- | --- | --- | --- |
+| 5–6 字节 | `[..7]` 越界抛异常被吞 ⇒ 丢帧、会话存活 | 登录前 ≥4 ⇒ `Login` → `handle_login` 失败 `Step::Close`；登录后 `< COMMAND_FIXED_LENGTH` ⇒ `Close` | 会话存活 vs **关会话** |
+| ≥7 字节且以 `http://` 开头 | 整帧丢弃、会话存活 | 按普通帧：登录前进 `ClientLogin`（失败 `Kick(1)`）；登录后按长度门，≥19 字节的垃圾帧被以 `GM_DATA` 转发 | 丢弃 vs 处理/转发 |
+| 以 `https://` 开头 | **不拦**（7 字节切片 vs 8 字节字面量恒 false，死分支） | 同左（现状本就不拦） | 无（bug-for-bug 等价） |
+| 其余帧 | 原样进入登录/命令流程 | 同左 | 无 |
+
+> 结论：开关打开时的主要差异是「5–6 字节短帧会不会关会话」与「`http://` 前缀帧会不会被丢弃
+> 或转发」。现网 `=0` 时两条路径都不可达。
+
+### 补齐前置（未来要支持时）
+
+1. `config.rs`：`GateConfig` 增 `defence_cc_packet: bool`，用既有 `oracle_bool` 读
+   `[Switch] DefenceCCPacket`，缺省 `false`（照 `GateConfig()` 构造函数）。
+2. `lib.rs`：`classify_frame` 在 `!logged_in` 分支**之前**、与 oracle 同位置加判定：
+   `frame.len() >= 5` 且首 7 字节 == `b"http://"` ⇒ `Classified::Drop`；`5/6` 字节 ⇒
+   `Classified::Drop`（复刻「异常被吞 ⇒ 丢帧、会话存活」，**不得**退化成 `Close`）。
+3. 死代码取舍：为保持 bug-for-bug 等价，**不要**顺手实现 `https://` 拦截；若要修 oracle 的
+   死分支，单独走 `D-*` 偏差登记并写明 oracle 依据。
+4. 测试（`classify_frame` 是纯函数，可直接断言）：开关关（现网）⇒ 既有用例逐条不变；
+   开关开 + `http://` 前缀 ⇒ `Drop`；开关开 + 5/6 字节 ⇒ `Drop`（登录前/后各一例，且都不是
+   `Close`）；开关开 + 普通帧 ⇒ 与开关关一致；负例把 `https://` 前缀钉成「开关开也照常处理」，
+   防止顺手实现死分支。
+5. 若要在真机上打开该开关，按 R 级另开卡走真机对拍窗口；本卡只登记，不改实现、不改配置。
+
 ## 实读核验结论（issue 描述 vs 代码）
 
 - issue 描述与代码**一致**：`ServerService.Initialize()` 的 `TcpService` 未挂
@@ -140,3 +221,6 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
 - `src/GameGate/Services/ClientThread.cs`：`ClientThread.Initialize`（网关→GameSvr 带 adapter）
 - `mir2-rs/bins/game-gate/src/lib.rs`：`client_loop`、`handle_frame`、`classify_frame`、
   `rebuild_command_frame`、模块文档
+- `src/GameGate/Conf/GateConfig.cs`：`IsDefenceCCPacket`（构造函数缺省值）
+- `src/GameGate/Conf/ConfigManager.cs`：`ReadWriteBool("Switch", "DefenceCCPacket", ...)`
+- `mir2-rs/bins/game-gate/src/config.rs`：`GateConfig`、`oracle_bool`
