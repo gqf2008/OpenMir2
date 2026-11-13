@@ -1467,6 +1467,7 @@ impl HeadRunner {
         me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
         me.add(TickStage::SimMapEvents, sim_map_events_stage_system);
         me.add(TickStage::SimSlaveCleanup, sim_slave_cleanup_stage_system);
+        me.add(TickStage::SimBuff, sim_buff_stage_system);
         me.add(
             TickStage::SimPlayerRunExpiry,
             expire_player_run_state_stage_system,
@@ -1569,6 +1570,8 @@ pub struct StageOut {
     pub run_state_expiries: Vec<(i32, RunStateExpiry)>,
     /// **P3a**：`SimDup` 段的推挤事件（`record.pushes` 的一段；facade 在段后取走）。
     pub pushes: Vec<crate::action::PushEvent>,
+    /// **P6a**：`SimBuff` 段的合并产出（`BUFF_PASSES_PER_TICK` 个 pass 拼接；facade 在段后取走）。
+    pub buff: Option<BuffTickOutcome>,
 }
 
 /// **S4d-3/P1**：`OutputAoi` 段的注册壳——记 [`StageTrace`] 后委派给既有
@@ -2314,6 +2317,96 @@ pub fn sim_slave_cleanup_stage_system(world: &mut bevy_ecs::world::World) {
 }
 
 mir2_world_bevy::stage_spec!(
+    SimBuff,
+    TickStage::SimBuff,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+/// **S4d-3/P6a 段 #9 `SimBuff`**：buff pass（`crate::buff` 的 `BUFF_PASSES_PER_TICK` 个 50ms `DoWork`）。
+///
+/// 段位 = `tick_head` 原 `if self.buff_enabled { self.buff_tick() }` 那一行（宝宝清表之后、怪物 AI
+/// 之前；设计 §5.2 的 RNG 消费者序不变）。段内借用形状按 Dv5：先 `remove_resource::<SimState>()`
+/// 取 owned 状态，`StageEntities` 借 bevy `World`，段尾归还；`BuffSystem` 从 `SimState` 取出交给
+/// [`crate::buff::BuffSystem::do_work_impl`]，与 facade `World::buff_do_work` 共用同一份实现。
+///
+/// **RNG**：buff 段不抽随机数（`operate` / `reap_destroyed` / `damage_health_impl` 无 `rng` 调用）
+/// ⇒ 对世界 RNG 流零影响，消费者次序不变。
+pub fn sim_buff_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimBuff);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimBuff）");
+    let base = sim.clock_ms + BUFF_EPOCH_MS;
+    let poison_dec_health_time = sim.poison_dec_health_time;
+    let mut buffs = std::mem::take(&mut sim.buffs);
+    let mut out = BuffTickOutcome::default();
+    {
+        let mut ad = StageEntities::<SimBuff>::new(world);
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        for i in 0..BUFF_PASSES_PER_TICK {
+            let now = base + i * BUFF_PASS_INTERVAL_MS;
+            sim.buff_pass_tick = now;
+            let pass = buffs.do_work_impl(&mut access, now, poison_dec_health_time);
+            out.status_changes.extend(pass.status_changes);
+            out.sysmsgs.extend(pass.sysmsgs);
+            out.recalcs.extend(pass.recalcs);
+            out.health_spell_changes.extend(pass.health_spell_changes);
+        }
+    }
+    sim.buffs = buffs;
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().buff = Some(out);
+}
+
+mir2_world_bevy::stage_spec!(
     TailVerifyMapTime,
     TickStage::TailVerifyMapTime,
     read: [
@@ -2901,30 +2994,35 @@ impl World {
     /// pass 的 `now` = `clock_ms + BUFF_EPOCH_MS + i*50`（与 `add_buff`/`make_posion` 同一基）。
     /// 返回合并后的可观测产出（供 `TickRecord`）。oracle 的 `ActorBuffProcessor` 是独立 50ms
     /// 线程；本骨架在 200ms 的世界 tick 内串行跑 4 个 pass（U-A2 口径，见 [`crate::buff`] 模块头）。
+    ///
+    /// **P6a**：实现已迁到段系统 [`sim_buff_stage_system`]（`TickStage::SimBuff`）；本函数只驱动
+    /// 该段并取走 [`StageOut::buff`]。原按 pass 的命名探针 `buff.pass` 随之取消——聚合耗时仍由
+    /// `TickProfile` 的 `SimBuff` 段给出。
     pub fn buff_tick(&mut self) -> BuffTickOutcome {
-        let base = self.clock_ms + BUFF_EPOCH_MS;
-        let mut out = BuffTickOutcome::default();
-        for i in 0..BUFF_PASSES_PER_TICK {
-            let now = base + i * BUFF_PASS_INTERVAL_MS;
-            let __prof_pass = self.probe_begin();
-            let pass = self.buff_do_work(now);
-            self.probe_end("buff.pass", __prof_pass);
-            out.status_changes.extend(pass.status_changes);
-            out.sysmsgs.extend(pass.sysmsgs);
-            out.recalcs.extend(pass.recalcs);
-            out.health_spell_changes.extend(pass.health_spell_changes);
-        }
-        out
+        // **P6a**：兼容入口——驱动 `SimBuff` 段并取该段输出（段系统是唯一实现）。
+        self.run_head_stage(|world, head| head.run(TickStage::SimBuff, world));
+        self.take_buff_outcome()
     }
 
-    /// 单 pass 的 buff `DoWork`（供单测与 [`World::buff_tick`]）。`now_ms` 必须与
-    /// `add_buff`/`make_posion` 的基一致（`clock_ms + BUFF_EPOCH_MS + …`）。
+    /// 取走 `SimBuff` 段落到 [`StageOut`] 的合并产出（段边界之后调用）。
+    fn take_buff_outcome(&mut self) -> BuffTickOutcome {
+        self.entities
+            .world_mut()
+            .resource_mut::<StageOut>()
+            .buff
+            .take()
+            .expect("SimBuff 段必须产出 BuffTickOutcome（段边界契约）")
+    }
+
+    /// 单 pass 的 buff `DoWork`（供单测直接驱动；tick 路径经段系统 [`sim_buff_stage_system`]）。
+    /// `now_ms` 必须与 `add_buff`/`make_posion` 的基一致（`clock_ms + BUFF_EPOCH_MS + …`）。
     pub fn buff_do_work(&mut self, now_ms: i64) -> BuffTickOutcome {
         self.buff_pass_tick = now_ms;
-        // 把 `BuffSystem` 从 `World` 里取出，避免 `do_work` 同时借 `&mut self`（两条秩序都在
-        // `do_work` 里改，且它要 `&mut World` 调用伤害/实体写）。
+        // 把 `BuffSystem` 从 `World` 里取出，避免 `do_work_impl` 同时借 `&mut self`（两条秩序都在
+        // `do_work_impl` 里改，且它要 `&mut A: EntityAccess` 调用伤害/实体写）。
+        let poison_dec_health_time = self.poison_dec_health_time;
         let mut buffs = std::mem::take(&mut self.buffs);
-        let out = buffs.do_work(self, now_ms);
+        let out = buffs.do_work_impl(&mut self.entities, now_ms, poison_dec_health_time);
         self.buffs = buffs;
         out
     }
@@ -6650,9 +6748,11 @@ impl World {
         // 位置：死亡结算之后、怪物 AI 之前（设计件 §3.3）。每 world tick（200ms）串行跑
         // [`BUFF_PASSES_PER_TICK`] 个 50ms pass（U-A2 口径）。buff 段**不抽 RNG** ⇒ 对
         // RNG 账本零影响（消费者次序不变）。
+        // S4d-3/P6a #9：段系统（`SimBuff`），段位与旧内联调用完全相同。
         let __prof_buff = self.prof_begin();
         if self.buff_enabled {
-            let out = self.buff_tick();
+            self.run_head_stage(|world, head| head.run(TickStage::SimBuff, world));
+            let out = self.take_buff_outcome();
             record.buff_status_changes = out.status_changes;
             record.buff_sysmsgs = out.sysmsgs;
             record.buff_recalcs = out.recalcs;
@@ -9571,6 +9671,8 @@ mod tests {
     #[test]
     fn tick_stage_registrations_are_wired_in_order() {
         let mut w = World::new(8, 8);
+        // **P6a**：`SimBuff` 在 `buff_enabled` 门内运行 ⇒ 开门后才进 trace。
+        w.enable_buff_tick();
         w.entities
             .world_mut()
             .insert_resource(mir2_world_bevy::tick::StageTrace::default());
@@ -9592,6 +9694,7 @@ mod tests {
                 TickStage::SimExtraAbil,
                 TickStage::SimMapEvents,
                 TickStage::SimSlaveCleanup,
+                TickStage::SimBuff,
                 TickStage::SimPlayerRunExpiry,
                 TickStage::SimDup,
                 TickStage::OutputDrain,
@@ -9601,6 +9704,101 @@ mod tests {
                 TickStage::OutputAoi
             ],
             "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
+        );
+    }
+
+    /// **P6a `SimBuff` 段语义牙**：毒伤 DoT 经段系统落到 HP/MeatQuality/record 三处。
+    ///
+    /// 夹具照 `buff::tests::a_l4_poison_dot_rhythm_and_meat_quality`：玩家已存活 3000ms 且
+    /// `GreenPoisoningPoint=3`，首 pass 跨 `PosionDecHealthTime=2500` ⇒ `DamageHealth(point+1)`。
+    ///
+    /// 牙：① 删 `HeadRunner::new` 的 `SimBuff` 注册 ⇒ tick panic（段序牙也红）；
+    /// ② 段内漏写 `poisoning_tick` 回写 ⇒ 后续 pass 重复扣血（hp 断言红）；
+    /// ③ 漏走 `damage_health_impl` ⇒ hp 不变（红）；④ 漏 `health_spell_changes` 回传 ⇒ record 红。
+    #[test]
+    fn sim_buff_stage_applies_green_poison_dot_and_records_health() {
+        let mut w = World::new(8, 8);
+        w.enable_buff_tick();
+        w.clock_ms = 100_000;
+        let id = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "poisoned", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        let base = w.clock_ms + BUFF_EPOCH_MS;
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.ai.animal = true;
+            e.ai.meat_quality = 5000;
+            e.vitals.hp = 100;
+            // 「已存活 3000ms」⇒ 首 pass `now - poisoning_tick` = 3200 > 2500。
+            e.buff.poisoning_tick = base - 3000;
+        }
+        assert!(w.make_posion(id, BuffType::GreenPoison as u8, 30, 3));
+        let rec = w.tick();
+        assert_eq!(
+            w.entities.get(id).unwrap().hp,
+            96,
+            "HP -= (GreenPoisoningPoint + 1) = 4（经 SimBuff 段）"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.meat_quality,
+            4000,
+            "Animal ⇒ MeatQuality -= 1000"
+        );
+        assert_eq!(
+            rec.buff_health_changes.len(),
+            1,
+            "一个 world tick 内只有首个 pass 跨 2500ms 门"
+        );
+        assert_eq!(rec.buff_health_changes[0], (id, 96, 0), "record 记 hp/mp");
+        // 段内 4 个 pass 的时钟 = (clock 已 +200) + EPOCH + i*50；最后一 pass = base+350。
+        assert_eq!(
+            w.buff_pass_tick,
+            base + 200 + 3 * BUFF_PASS_INTERVAL_MS,
+            "段内 pass 时钟基与 facade `buff_tick` 相同（clock_ms + EPOCH + i*50）"
+        );
+    }
+
+    /// **P6a `SimBuff` 段语义牙（写回）**：透明 buff 到期 ⇒ 段内清 `flags.hide_mode` 并把
+    /// 新 `CharStatus` 写回 `buff.char_status` + 送进 `record.buff_status_changes`。
+    ///
+    /// 牙：删 `flags.hide_mode` 写回 ⇒ 第一条断言红；删 `buff.char_status` 写回 ⇒ 第二条红；
+    /// 删 `status_changes` 回传 ⇒ record 断言红。
+    #[test]
+    fn sim_buff_stage_clears_transparent_and_records_status_change() {
+        let mut w = World::new(8, 8);
+        w.enable_buff_tick();
+        w.clock_ms = 100_000;
+        let id = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "hide", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        w.entities.get_mut(id).unwrap().flags.hide_mode = true;
+        let now = w.clock_ms + BUFF_EPOCH_MS;
+        w.buffs.add_buff(id, BuffType::Transparent, 1, 0, now);
+        let rec = w.tick();
+        assert!(
+            !w.entities.get(id).unwrap().flags().hide_mode,
+            "透明 buff 递减到 0 必须清 hide_mode"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().buff().char_status & 0x8000_0000u32 as i32,
+            0,
+            "状态位随 state_tick=0 清空并写回 buff.char_status"
+        );
+        assert_eq!(
+            rec.buff_status_changes
+                .iter()
+                .map(|c| c.0)
+                .collect::<Vec<_>>(),
+            vec![id],
+            "boChg ⇒ record.buff_status_changes 记该 actor"
         );
     }
 

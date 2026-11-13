@@ -1015,8 +1015,11 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   `send_struck_delay_msg_refmessage_impl` / `next_msg_order_impl`（crate 内自由函数，与 P3b 同形）；
 > - `entity.rs` **零改动**：本族用现有 `EntityAccess` 方法即可，未新增方法 ⇒ 卡面
 >   「删新增方法分支必红」不适用；其余三份写集（`world.rs` / `slave.rs` / 本文件）按卡面。
-> - **依赖面**：monai 的 8 个 `send_struck_delay_msg_refmessage` 调用点全部走 facade、签名未变 ⇒
->   零改动；攻击链只读 `crate::monai::ATTACK_STRUCK_DELAY_MS` 常量 ⇒ **不扩写集、不置 blocked**。
+> - **依赖面**：monai 的 **9 个** `send_struck_delay_msg_refmessage` 调用点与 **2 个**
+>   `send_struck_delay_msg_7` 调用点全部走 facade、签名未变 ⇒ 零改动；攻击链只读
+>   `crate::monai::ATTACK_STRUCK_DELAY_MS` 常量 ⇒ **不扩写集、不置 blocked**。
+>   （P3 订正：原文写「8 个」；实数按 `rg 'send_struck_delay_msg_refmessage\(|send_struck_delay_msg_7\('
+>   mir2-rs/crates/world/src/monai.rs` 的非测试段清点为 9 + 2。）
 > - **RNG 逐点 trace（`MIR2_RNG_LOG`，五列 seq/kind/max/result/site）**：base `7a7706323` 与 head
 >   各跑两副既有攻击夹具（`attack_poison_end_to_end_yields_char_status_change` 4 抽、
 >   `attack_outcome_is_deterministic` 10 抽；site 全部落在未改动的 `combat.rs`），`diff -u` 0 行。
@@ -1026,14 +1029,38 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   比对 `AttackOutcome` 六字段 + 双方实体/待抄事件/消息队列快照，并用绝对 HP 断言钉住写回。
 > - **判据**：六份 golden（`tests/parity/world/golden/*.txt`）blob 与 base 逐个相等（6/6）；
 >   `cargo test -p mir2-parity-tests` 35 passed / 0 failed / 1 ignored（`table_counts` 需 MySQL）。
-> 段数口径不变（Command 仍未切系统：余 6 段）。
 >
-> **段数口径（P4 交付 head；单位 = 20 阶段）**：已系统化 **14 段**（P1 的 #0/#2/#15/#19 + P2–P4 的 #3/#4/#6/#7/#8/#13/#14/#16/#17/#18），**余 6 段：`#1 Command` / `#5 SimSelfDeliver` / `#9 SimBuff` / `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**。
+> **S4d-3/P6a 落地登记（2026-11-13，模块段批量化）**：本批只交付 **#9 `SimBuff`**；
+> #5 `SimSelfDeliver` 与 #11 `SimNpc` **受阻**（依赖面超出卡面写集，按 Leader 批量化口径登记，未扩写集）。
+> - **#9 `SimBuff`（已系统化）**：段系统 `sim_buff_stage_system`（`TickStage::SimBuff`，#9）；段位 =
+>   `tick_head` 原 `if self.buff_enabled { self.buff_tick() }` 那一行（`SimSlaveCleanup` 之后、
+>   `SimMonsterAi` 之前）。`BuffSystem::do_work_impl` / `operate` / `damage_health_impl` 改为
+>   `EntityAccess` 形态，facade `World::buff_do_work` 与段系统共用同一份实现；`World::buff_tick`
+>   退化为「驱动该段 + 取 `StageOut::buff`」的兼容入口。`EntityAccess` 新增 `recovery_mut`
+>   （毒伤段写 `Recovery::health_tick`/`spell_tick`）。**不抽 RNG**（`operate`/`reap_destroyed`/
+>   `damage_health_impl` 无 `rng` 调用）⇒ RNG 消费者次序不变。诊断：按 pass 的命名探针
+>   `buff.pass` 取消（聚合耗时仍在 `TickProfile` 的 `SimBuff` 段），见 `buff_tick` doc。
+> - **#5 `SimSelfDeliver`（blocked）**：段主体在 `slave.rs::World::deliver_self_delay_msgs_with`
+>   （`slave.rs` 不在本卡写集），且每个 ident 效果体都是 `&mut World` 形态的跨模块调用
+>   （`special_monster::clone_operate`/`operate_special`/`special_spawn_request`、
+>   `process_slave_mutiny`/`process_slave_ghost`、`mag_make_private_transparent`、
+>   `make_open_health`、`open_holy_seize_mode`、`deliver_delay_magic`、`deliver_poison`、
+>   `char_pushed_now`）。要落 `(EntityAccess, &mut SimState)` 形态必须先扩写集到
+>   `slave.rs` + `special_monster.rs`（+ 视情况 `action.rs`）。
+> - **#11 `SimNpc`（blocked）**：`npc_tick` 的每 NPC 尾段调 `monai::animal_run` /
+>   `monai::base_object_run_monster`（`monai.rs`），`BoCanMove` 支调
+>   `merchant::map_random_move`（`merchant.rs`）——三者都是 `&mut World` 形态且不在本卡写集；
+>   `base_object_run_monster` 还串 `aoi`/`combat`/`mongen`/`special_monster`。要落段系统必须先扩
+>   写集到 `monai.rs` + `merchant.rs`。
+>
+> **段数口径（P6a 交付 head；单位 = 20 阶段）**：已系统化 **15 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
+> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9），**余 5 段：`#1 Command` / `#5 SimSelfDeliver` /
+> `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**（其中 #5/#11 已按 P6a 依赖面登记 blocked）。
 
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
 
-> **尚未做（以 P4 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **6** 段——
-> #1/#5/#9/#10/#11/#12）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **尚未做（以 P6a 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **5** 段——
+> #1/#5/#10/#11/#12；#5/#11 受依赖面所限待扩写集）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 > 段号清单与写集见设计 §2.1/§4。
 
