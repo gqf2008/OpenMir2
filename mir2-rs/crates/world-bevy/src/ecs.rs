@@ -110,20 +110,164 @@ struct Slot {
     key: Option<i32>,
 }
 
+/// **S4d-3/P0：槽位表资源**（设计件 `docs/world-ecs-s4d3-entitymut-20261113.md` §3.1 / D1）。
+///
+/// 槽位表 / 空闲槽 / `id -> 槽位` 索引 / 下一个 id 的**唯一真值**住在 bevy `World` 里。
+/// 为什么不是留在 `EcsStore` 的普通字段（D1 的裁决依据）：段系统拿到的是 `EcsStore`
+/// 内部那个 bevy `World` 的裸 `&mut`，看不到 wrapper 的字段；而 Command / NPC / 商人 /
+/// 宝宝清表四段会在 tick 中增删实体，后续段必须看到**变更后**的集合（槽位序 + id 解析），
+/// 否则会漏实体或遍历已删实体，与旧 `iter_ref` 语义不等价。
+///
+/// 不变量与迁移前逐条相同：槽位顺序 = 插入序 + 空闲槽 LIFO 复用；代际号只在复用时 +1；
+/// `next_id` 单调；`id -> 槽位` 只用于查表、不参与遍历。`EcsStore` 的对外方法签名不变，
+/// 只是内部改读本资源。
+#[derive(Resource)]
+pub struct SlotTable {
+    slots: Vec<Slot>,
+    free: Vec<usize>,
+    index: IdIndex,
+    next_id: i32,
+    /// `EcsStore::iter_mut` 的「实体 -> 槽位」缓存是否需要重建。任何槽位变动都置位。
+    order_dirty: bool,
+}
+
+impl Default for SlotTable {
+    fn default() -> Self {
+        SlotTable {
+            slots: Vec::new(),
+            free: Vec::new(),
+            index: IdIndex::default(),
+            next_id: 1,
+            order_dirty: true,
+        }
+    }
+}
+
+impl std::fmt::Debug for SlotTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SlotTable")
+            .field("len", &self.len())
+            .field("slots", &self.slots.len())
+            .field("free", &self.free.len())
+            .field("next_id", &self.next_id)
+            .finish()
+    }
+}
+
+impl SlotTable {
+    /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。
+    pub fn alloc_id(&mut self) -> i32 {
+        let id = self.next_id;
+        self.next_id += 1;
+        id
+    }
+
+    /// 业务 id -> bevy 实体句柄（`None` = id 不在槽位表，或该槽已空）。
+    pub fn entity_of(&self, id: i32) -> Option<Entity> {
+        let slot_idx = self.index.get(id)?;
+        self.slots.get(slot_idx)?.entity
+    }
+
+    /// 槽位顺序的 `(业务 id, bevy 实体)` 表（处理顺序的唯一契约）。
+    pub fn order(&self) -> Vec<(i32, Entity)> {
+        self.slots
+            .iter()
+            .filter_map(|s| match (s.key, s.entity) {
+                (Some(k), Some(e)) => Some((k, e)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// 槽位顺序的 bevy 实体句柄。
+    pub fn order_entities(&self) -> Vec<Entity> {
+        self.slots.iter().filter_map(|s| s.entity).collect()
+    }
+
+    /// 槽位顺序的实体句柄（零分配迭代；`iter`/`iter_mut` 用）。
+    pub fn entity_iter(&self) -> impl Iterator<Item = Entity> + '_ {
+        self.slots.iter().filter_map(|s| s.entity)
+    }
+
+    /// 槽位顺序的业务 id。
+    pub fn order_index(&self) -> Vec<i32> {
+        self.slots.iter().filter_map(|s| s.key).collect()
+    }
+
+    /// 按 id 升序收集（用于输出/对拍的稳定顺序）。
+    pub fn ids_sorted(&self) -> Vec<i32> {
+        let mut v: Vec<i32> = self.slots.iter().filter_map(|s| s.key).collect();
+        v.sort_unstable();
+        v
+    }
+
+    pub fn len(&self) -> usize {
+        self.slots.iter().filter(|s| s.entity.is_some()).count()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// 「实体 -> 槽位」缓存是否需要重建。
+    pub fn order_dirty(&self) -> bool {
+        self.order_dirty
+    }
+
+    /// 重建完成后清位。
+    pub fn clear_order_dirty(&mut self) {
+        self.order_dirty = false;
+    }
+
+    /// 取一个槽位（优先 `free.pop()` 的槽并让代际号 +1，否则追加到末尾）。
+    fn take_free_slot(&mut self) -> usize {
+        if let Some(idx) = self.free.pop() {
+            self.slots[idx].generation = self.slots[idx].generation.wrapping_add(1);
+            self.slots[idx].entity = None;
+            self.slots[idx].key = None;
+            idx
+        } else {
+            self.slots.push(Slot {
+                generation: 0,
+                entity: None,
+                key: None,
+            });
+            self.slots.len() - 1
+        }
+    }
+
+    /// 把 (id, bevy 实体) 绑到刚取的槽位，并推进 `next_id`。
+    fn bind(&mut self, slot_idx: usize, id: i32, entity: Entity) {
+        self.slots[slot_idx].entity = Some(entity);
+        self.slots[slot_idx].key = Some(id);
+        self.index.insert(id, slot_idx);
+        if id >= self.next_id {
+            self.next_id = id + 1;
+        }
+        self.order_dirty = true;
+    }
+
+    /// 解绑并返回 `(槽位下标, bevy 实体)`；id 不存在或槽已空则 `None`。
+    pub(crate) fn unbind(&mut self, id: i32) -> Option<(usize, Entity)> {
+        let slot_idx = self.index.remove(id)?;
+        let entity = self.slots[slot_idx].entity.take()?;
+        self.slots[slot_idx].key = None;
+        self.order_dirty = true;
+        Some((slot_idx, entity))
+    }
+
+    /// 把槽位还回空闲表（LIFO）。
+    pub(crate) fn release_slot(&mut self, slot_idx: usize) {
+        self.free.push(slot_idx);
+    }
+}
+
 /// ECS 实体存储内核：`bevy_ecs` 存组件，本结构存「谁在哪个槽、按什么顺序遍历」。
 ///
 /// 泛型参数 `T` 是业务实体组件（`crates/world` 的 `Entity`）。内核**不认识** `T` 的业务字段，
 /// 只按调用方给的 `id` 建索引，因此可以原样承载任何 `Component`。
 pub struct EcsStore<T: Component<Mutability = Mutable>> {
     world: World,
-    /// 槽位表（顺序即处理顺序）。
-    slots: Vec<Slot>,
-    /// 空闲槽（LIFO：与既有 `EntityStore.free.pop()` 完全一致）。
-    free: Vec<usize>,
-    /// 业务 id → 槽位（只用于查表，**不参与遍历**）。O(1) 数组定位 + HashMap 兜底。
-    index: IdIndex,
-    /// 下一个分配的 id（C# `ActorMgr` 单调递增语义）。
-    next_id: i32,
     /// **缓存 `&T` 查询状态**（S2 调优）：`get`/`iter` 走 [`QueryState::get_manual`]。
     ///
     /// 为什么不是 `World::get::<T>`：后者每次调用都要用 `TypeId` 去 `Components` 里
@@ -138,10 +282,9 @@ pub struct EcsStore<T: Component<Mutability = Mutable>> {
     /// **缓存 `(Entity, &mut T)` 查询状态**（S2 调优）：`iter_mut` 不再每次调用 `world.query`。
     /// `Query` 只用于「安全拿到全部互斥引用」，不决定顺序（顺序仍按 [`Self::order_map`] 排）。
     pairs_state: QueryState<(Entity, &'static mut T)>,
-    /// `iter_mut` 的「实体 → 槽位」序：只在槽位表变动（`order_dirty`）时重建一次，
+    /// `iter_mut` 的「实体 -> 槽位」序：只在槽位表变动（`SlotTable::order_dirty`）时重建一次，
     /// 不再每次调用都建 `HashMap`（每次调用仍需一次按槽位序的原地排序）。
     order_map: HashMap<Entity, usize>,
-    order_dirty: bool,
     _marker: std::marker::PhantomData<fn() -> T>,
 }
 
@@ -153,11 +296,12 @@ impl<T: Component<Mutability = Mutable>> Default for EcsStore<T> {
 
 impl<T: Component<Mutability = Mutable>> std::fmt::Debug for EcsStore<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let table = self.world.resource::<SlotTable>();
         f.debug_struct("EcsStore")
-            .field("len", &self.len())
-            .field("slots", &self.slots.len())
-            .field("free", &self.free.len())
-            .field("next_id", &self.next_id)
+            .field("len", &table.len())
+            .field("slots", &table.slots.len())
+            .field("free", &table.free.len())
+            .field("next_id", &table.next_id)
             .finish()
     }
 }
@@ -165,6 +309,8 @@ impl<T: Component<Mutability = Mutable>> std::fmt::Debug for EcsStore<T> {
 impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     pub fn new() -> Self {
         let mut world = World::new();
+        // S4d-3/P0（D1）：槽位表的唯一真值进 bevy World 资源。
+        world.insert_resource(SlotTable::default());
         // 三个查询状态各自缓存 `T` 的 `ComponentId`/表列；它们只在本结构里串行使用，
         // 不同时跑，因此读写访问集不冲突（也绝不放进同一个 Schedule 并行）。
         let read_state = world.query::<&T>();
@@ -172,24 +318,17 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         let pairs_state = world.query::<(Entity, &mut T)>();
         EcsStore {
             world,
-            slots: Vec::new(),
-            free: Vec::new(),
-            index: IdIndex::default(),
-            next_id: 1,
             read_state,
             write_state,
             pairs_state,
             order_map: HashMap::new(),
-            order_dirty: true,
             _marker: std::marker::PhantomData,
         }
     }
 
     /// 分配一个 id（不插入实体；C# `ActorMgr` 先 `Add` 后填字段）。
     pub fn alloc_id(&mut self) -> i32 {
-        let id = self.next_id;
-        self.next_id += 1;
-        id
+        self.world.resource_mut::<SlotTable>().alloc_id()
     }
 
     /// 插入实体，返回其业务 id（复用调用方给的 `id`）。
@@ -197,45 +336,31 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     /// 槽位分配与既有 `EntityStore::insert` 逐条一致：优先复用 `free.pop()` 的槽
     /// （代际号 +1），否则追加到末尾。
     pub fn insert(&mut self, id: i32, value: T) -> i32 {
-        let slot_idx = if let Some(idx) = self.free.pop() {
-            self.slots[idx].generation = self.slots[idx].generation.wrapping_add(1);
-            self.slots[idx].entity = None;
-            self.slots[idx].key = None;
-            idx
-        } else {
-            self.slots.push(Slot {
-                generation: 0,
-                entity: None,
-                key: None,
-            });
-            self.slots.len() - 1
-        };
+        // 先取槽位（可能复用空闲槽），再 spawn（两次 `resource_mut` 之间不跨借用），
+        // 最后把 (id, 实体) 绑上去 —— 与迁移前「先定槽、再填 entity/key/index/next_id」
+        // 的顺序逐条一致。
+        let slot_idx = self.world.resource_mut::<SlotTable>().take_free_slot();
         let bevy_entity = self.world.spawn(value).id();
-        self.slots[slot_idx].entity = Some(bevy_entity);
-        self.slots[slot_idx].key = Some(id);
-        self.index.insert(id, slot_idx);
-        if id >= self.next_id {
-            self.next_id = id + 1;
-        }
+        self.world
+            .resource_mut::<SlotTable>()
+            .bind(slot_idx, id, bevy_entity);
         // 结构性变更后刷新缓存查询状态的 archetype 匹配集（`&T` 的 archetype 在首次
         // 插入时创建；之后同组件集的 spawn 复用同一 archetype）。`remove` 同理兜底。
         self.refresh_archetypes();
-        self.order_dirty = true;
         id
     }
 
     /// 移除实体，返回其组件（不存在返回 `None`）。空闲槽按 LIFO 回收。
     pub fn remove(&mut self, id: i32) -> Option<T> {
-        let slot_idx = self.index.remove(id)?;
-        let bevy_entity = self.slots[slot_idx].entity.take()?;
-        self.slots[slot_idx].key = None;
+        let (slot_idx, bevy_entity) = self.world.resource_mut::<SlotTable>().unbind(id)?;
         let taken = self.world.entity_mut(bevy_entity).take::<T>();
         self.world.despawn(bevy_entity);
         if taken.is_some() {
-            self.free.push(slot_idx);
+            self.world
+                .resource_mut::<SlotTable>()
+                .release_slot(slot_idx);
         }
         self.refresh_archetypes();
-        self.order_dirty = true;
         taken
     }
 
@@ -245,22 +370,19 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     /// 是本轮把 ΔP50 拉回门禁内的关键路径。
     #[inline]
     pub fn get(&self, id: i32) -> Option<&T> {
-        let slot_idx = self.index.get(id)?;
-        let bevy_entity = self.slots[slot_idx].entity?;
+        let bevy_entity = self.world.resource::<SlotTable>().entity_of(id)?;
         self.read_state.get_manual(&self.world, bevy_entity).ok()
     }
 
     /// 业务 id → bevy 实体句柄（显式句柄，不迭代 `Query`；供上层缓存多组件查询）。
     #[inline]
     pub fn entity_of(&self, id: i32) -> Option<Entity> {
-        let slot_idx = self.index.get(id)?;
-        self.slots[slot_idx].entity
+        self.world.resource::<SlotTable>().entity_of(id)
     }
 
     #[inline]
     pub fn get_mut(&mut self, id: i32) -> Option<&mut T> {
-        let slot_idx = self.index.get(id)?;
-        let bevy_entity = self.slots[slot_idx].entity?;
+        let bevy_entity = self.world.resource::<SlotTable>().entity_of(id)?;
         self.write_state
             .get_mut(&mut self.world, bevy_entity)
             .ok()
@@ -280,10 +402,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         id: i32,
         component: C,
     ) -> bool {
-        let Some(slot_idx) = self.index.get(id) else {
-            return false;
-        };
-        let Some(bevy_entity) = self.slots[slot_idx].entity else {
+        let Some(bevy_entity) = self.world.resource::<SlotTable>().entity_of(id) else {
             return false;
         };
         self.world.entity_mut(bevy_entity).insert(component);
@@ -295,8 +414,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     ///
     /// 只按显式 id 取，不迭代 `Query`；顺序契约与是否有该组件无关。
     pub fn get_component<C: Component>(&self, id: i32) -> Option<&C> {
-        let slot_idx = self.index.get(id)?;
-        let bevy_entity = self.slots[slot_idx].entity?;
+        let bevy_entity = self.world.resource::<SlotTable>().entity_of(id)?;
         self.world.get::<C>(bevy_entity)
     }
 
@@ -305,8 +423,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
         &mut self,
         id: i32,
     ) -> Option<&mut C> {
-        let slot_idx = self.index.get(id)?;
-        let bevy_entity = self.slots[slot_idx].entity?;
+        let bevy_entity = self.world.resource::<SlotTable>().entity_of(id)?;
         self.world.get_mut::<C>(bevy_entity).map(Mut::into_inner)
     }
 
@@ -314,8 +431,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     ///
     /// 同样不改槽位表；移除成功时刷新缓存查询状态（archetype 迁移）。
     pub fn remove_component<C: Component<Mutability = Mutable>>(&mut self, id: i32) -> Option<C> {
-        let slot_idx = self.index.get(id)?;
-        let bevy_entity = self.slots[slot_idx].entity?;
+        let bevy_entity = self.world.resource::<SlotTable>().entity_of(id)?;
         let taken = self.world.entity_mut(bevy_entity).take::<C>();
         if taken.is_some() {
             self.refresh_archetypes();
@@ -332,12 +448,12 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
 
     /// 按槽位顺序遍历（处理顺序的唯一来源）。
     ///
-    /// 顺序来自 `slots`；`read_state` 只用于「按句柄取引用」，不参与定序。
+    /// 顺序来自 `SlotTable`；`read_state` 只用于「按句柄取引用」，不参与定序。
     #[inline]
     pub fn iter(&self) -> impl Iterator<Item = &T> + '_ {
-        self.slots
-            .iter()
-            .filter_map(|s| s.entity)
+        let table = self.world.resource::<SlotTable>();
+        table
+            .entity_iter()
             .filter_map(move |e| self.read_state.get_manual(&self.world, e).ok())
     }
 
@@ -346,15 +462,14 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     /// S2 调优：不再「每次调用都 `world.query` 建查询 + 建 HashMap + 排序」，而是复用缓存的
     /// [`Self::pairs_state`] / [`Self::order_map`]；`order_map` 只在槽位表变动后重建一次。
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> + '_ {
-        if self.order_dirty {
-            self.order_map.clear();
-            self.order_map.extend(
-                self.slots
-                    .iter()
-                    .enumerate()
-                    .filter_map(|(i, s)| s.entity.map(|e| (e, i))),
-            );
-            self.order_dirty = false;
+        if self.world.resource::<SlotTable>().order_dirty() {
+            {
+                let table = self.world.resource::<SlotTable>();
+                self.order_map.clear();
+                self.order_map
+                    .extend(table.entity_iter().enumerate().map(|(i, e)| (e, i)));
+            }
+            self.world.resource_mut::<SlotTable>().clear_order_dirty();
         }
         // 取到所有 (Entity, &mut T)（Query 只负责「安全拿到互斥引用」），
         // 再按我们的槽位索引排序后产出 —— 顺序仍来自 slots，不来自 Query。
@@ -368,7 +483,7 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     }
 
     pub fn len(&self) -> usize {
-        self.slots.iter().filter(|s| s.entity.is_some()).count()
+        self.world.resource::<SlotTable>().len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -377,19 +492,22 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
 
     /// 按 id 升序收集（用于输出/对拍的稳定顺序）。
     pub fn ids_sorted(&self) -> Vec<i32> {
-        let mut v: Vec<i32> = self.slots.iter().filter_map(|s| s.key).collect();
-        v.sort_unstable();
-        v
+        self.world.resource::<SlotTable>().ids_sorted()
     }
 
     /// **显式处理顺序索引**：槽位顺序的业务 id（处理顺序的唯一契约）。
     pub fn order_index(&self) -> Vec<i32> {
-        self.slots.iter().filter_map(|s| s.key).collect()
+        self.world.resource::<SlotTable>().order_index()
     }
 
     /// 槽位顺序的 bevy 实体句柄（供系统按 [`SlotOrder`] 处理）。
     pub fn order_entities(&self) -> Vec<Entity> {
-        self.slots.iter().filter_map(|s| s.entity).collect()
+        self.world.resource::<SlotTable>().order_entities()
+    }
+
+    /// 槽位顺序的 `(业务 id, bevy 实体)` 表（S4d-3：段适配器与 `TickEntityIds` 的入口）。
+    pub fn slot_order(&self) -> Vec<(i32, Entity)> {
+        self.world.resource::<SlotTable>().order()
     }
 
     pub fn world(&self) -> &World {
@@ -583,5 +701,50 @@ mod tests {
         assert_eq!(s.remove(beyond).map(|i| i.0), Some(beyond));
         assert_eq!(s.remove(negative).map(|i| i.0), Some(negative));
         assert!(s.get(negative).is_none());
+    }
+
+    /// **P0/C1 确定性对照**：id 分配 / 槽位复用序列必须与 **master 上记录的向量**逐项相等。
+    ///
+    /// 记录方式：改动前在 master 代码（`95fdbb68a`）上跑同一序列并打印（本卡 P0 报告附原始输出）。
+    /// 牙：把 `take_free_slot` 改成「总是追加」⇒ `ins7` 预期复用槽位、实际变成 `[2, 7]` ⇒ 红；
+    /// 把 `next_id` 推进从 `id + 1` 改成 `id` ⇒ 末尾 `alloc:100` 变成 `alloc:99` ⇒ 红。
+    #[test]
+    fn id_alloc_sequence_matches_master_vector() {
+        let mut s = EcsStore::<Item>::new();
+        let mut trace: Vec<String> = Vec::new();
+        for _ in 0..3 {
+            trace.push(format!("alloc:{}", s.alloc_id()));
+        }
+        s.insert(10, Item(10));
+        trace.push(format!("after10:{:?}", s.order_index()));
+        s.insert(2, Item(2));
+        trace.push(format!("after2:{:?}", s.order_index()));
+        s.remove(10);
+        trace.push(format!("rm10:{:?}", s.order_index()));
+        s.insert(7, Item(7));
+        trace.push(format!("ins7:{:?}", s.order_index()));
+        trace.push(format!("alloc:{}", s.alloc_id()));
+        s.remove(3);
+        trace.push(format!("rm3:{:?}", s.order_index()));
+        s.insert(99, Item(99));
+        trace.push(format!("ins99:{:?}", s.order_index()));
+        trace.push(format!("alloc:{}", s.alloc_id()));
+        trace.push(format!("ids_sorted:{:?}", s.ids_sorted()));
+        // master `95fdbb68a` 记录向量（逐项相等，顺序也是判据）。
+        let master: Vec<&str> = vec![
+            "alloc:1",
+            "alloc:2",
+            "alloc:3",
+            "after10:[10]",
+            "after2:[10, 2]",
+            "rm10:[2]",
+            "ins7:[7, 2]",
+            "alloc:11",
+            "rm3:[7, 2]",
+            "ins99:[7, 2, 99]",
+            "alloc:100",
+            "ids_sorted:[2, 7, 99]",
+        ];
+        assert_eq!(trace, master, "id 分配/槽位复用序列必须与 master 记录向量逐项相等");
     }
 }

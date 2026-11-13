@@ -191,7 +191,14 @@ pub fn tick_schedule_build_settings() -> ScheduleBuildSettings {
 ///
 /// 断言放在系统里（而非 facade），是为了让「tick 骨架」本身带确定性守卫：
 /// 把 world 挪到别的线程上跑，`Schedule::run` 会在此 panic。
-pub fn advance_clock_system(mut clock: ResMut<TickClock>, mut owner: ResMut<TickOwnerThread>) {
+pub fn advance_clock_system(
+    mut clock: ResMut<TickClock>,
+    mut owner: ResMut<TickOwnerThread>,
+    mut trace: Option<ResMut<StageTrace>>,
+) {
+    if let Some(t) = trace.as_deref_mut() {
+        t.0.push(TickStage::Clock);
+    }
     let current = std::thread::current().id();
     match owner.0 {
         None => owner.0 = Some(current),
@@ -202,6 +209,132 @@ pub fn advance_clock_system(mut clock: ResMut<TickClock>, mut owner: ResMut<Tick
     }
     clock.clock_ms += clock.interval_ms;
     clock.tick_seq += 1;
+}
+
+// ======================= S4d-3/P0：段白名单与按段裁剪适配器 =======================
+//
+// 设计件：`docs/world-ecs-s4d3-entitymut-20261113.md` §2.2/§2.3/§3.2/§3.3。
+//
+// 契约（编译期为主）：
+//   * 每个段一个零大小类型并实现 [`StageSpec`]；组件白名单用 [`Reads`] / [`Writes`] 标记 trait 表达，
+//     [`StageEntities`] 的方法带 `where S: Reads<C>` / `S: Writes<C>` 约束 ⇒ **越白名单是编译错误**；
+//   * 结构操作（`insert` / `remove`）另需 [`Structural`] 标记 ⇒ 非结构段调用也是编译错误；
+//   * 拒绝语义**逐项照抄旧 facade 的 Option**：id 不在槽位表 / 实体已移除 / 组件缺失 ⇒ `None`
+//     并静默跳过；不引入 `Result`、不 panic（设计件 §2.3）。
+
+use crate::ecs::SlotTable;
+
+/// **段规格**：每个段一个零大小类型，声明自己的 [`TickStage`] 与是否允许结构变更。
+pub trait StageSpec: 'static {
+    /// 本段在 [`STAGE_ORDER`] 里的阶段。
+    const STAGE: TickStage;
+    /// 是否允许 `insert` / `remove`（只有 Command / NPC / 商人 / 宝宝清表为 `true`）。
+    const STRUCTURAL: bool = false;
+}
+
+/// 本段**允许读**的组件（标记 trait；由 `stage_spec!` 或手写 impl 生成）。
+pub trait Reads<C: Component> {}
+
+/// 本段**允许写**的组件（标记 trait；由 `stage_spec!` 或手写 impl 生成）。
+pub trait Writes<C: Component<Mutability = bevy_ecs::component::Mutable>> {}
+
+/// 本段允许结构变更（增删实体）。
+pub trait Structural {}
+
+/// **测试/诊断用**：本 tick 已执行的段序列（资源缺席 ⇒ 零开销、零行为）。
+///
+/// 用途只有一颗牙：`tick_head`/`tick_tail` 驱动真实 runner 后，断言序列等于 `STAGE_ORDER`
+/// 的对应切片 —— **删掉任一段的系统注册，序列就缺一项**（设计件 §2.7.1 的统一牙）。
+#[derive(Resource, Debug, Clone, Default, PartialEq, Eq)]
+pub struct StageTrace(pub Vec<TickStage>);
+
+impl StageTrace {
+    /// 若资源存在则记录一次（不存在时是 no-op）。
+    pub fn record(world: &mut World, stage: TickStage) {
+        if let Some(mut trace) = world.get_resource_mut::<StageTrace>() {
+            trace.0.push(stage);
+        }
+    }
+}
+
+/// 按段裁剪的实体适配器：以 [`SlotTable`] 资源为「id -> 实体 + 槽位序」的唯一真值。
+///
+/// 生命周期与借用规则（设计件 §2.2 A1/A2）：`get_mut` 借用 `&mut self`，因此同一时刻只能
+/// 存在一个可写视图；跨实体协作必须「快照 -> 改副本 -> 回写」，与既有 `spawn_cloned` /
+/// `write_back` 纪律一致。
+pub struct StageEntities<'w, S: StageSpec> {
+    world: &'w mut World,
+    _spec: core::marker::PhantomData<fn() -> S>,
+}
+
+impl<'w, S: StageSpec> StageEntities<'w, S> {
+    pub fn new(world: &'w mut World) -> Self {
+        StageEntities {
+            world,
+            _spec: core::marker::PhantomData,
+        }
+    }
+
+    /// 槽位顺序的 `(业务 id, bevy 实体)` 表（每段入口取一次；结构变更后要重新取）。
+    pub fn order(&self) -> Vec<(i32, Entity)> {
+        self.world.resource::<SlotTable>().order()
+    }
+
+    /// id -> bevy 实体（三态之一的 **id 不在槽位表 / 槽已空** 都落到 `None`）。
+    pub fn resolve(&self, id: i32) -> Option<Entity> {
+        self.world.resource::<SlotTable>().entity_of(id)
+    }
+
+    /// 只读取组件；`None` 覆盖「id 不存在 / 已移除 / 该实体没有该组件」三种情形。
+    pub fn get<C>(&self, id: i32) -> Option<&C>
+    where
+        C: Component,
+        S: Reads<C>,
+    {
+        let entity = self.resolve(id)?;
+        self.world.get::<C>(entity)
+    }
+
+    /// 可变读取组件；借用期不超过本次调用（同实体/跨实体都不可能并存两个 `&mut`）。
+    pub fn get_mut<C>(&mut self, id: i32) -> Option<&mut C>
+    where
+        C: Component<Mutability = bevy_ecs::component::Mutable>,
+        S: Writes<C>,
+    {
+        let entity = self.resolve(id)?;
+        self.world.get_mut::<C>(entity).map(|c| c.into_inner())
+    }
+
+    /// 按槽位顺序对每个实体执行 `f`（跳过取不到组件的实体，与旧 `for_each_mut` 同语义）。
+    pub fn for_each_mut<C>(&mut self, mut f: impl FnMut(i32, &mut C))
+    where
+        C: Component<Mutability = bevy_ecs::component::Mutable>,
+        S: Writes<C>,
+    {
+        for (id, _entity) in self.order() {
+            if let Some(c) = self.get_mut::<C>(id) {
+                f(id, c);
+            }
+        }
+    }
+
+    /// 移除整个实体（只有 [`Structural`] 段可调用）。返回 `false` = id 不存在 / 已移除。
+    ///
+    /// **接线责任**：`EcsStore` 的缓存 `QueryState` 在 facade 里，本适配器够不到；
+    /// 结构变更段收尾时由 facade 调 `EntityStore` 的刷新入口（P5 批次落地，届时补牙）。
+    pub fn remove(&mut self, id: i32) -> bool
+    where
+        S: Structural,
+    {
+        let Some((slot_idx, entity)) = self.world.resource_mut::<SlotTable>().unbind(id) else {
+            return false;
+        };
+        self.world.despawn(entity);
+        self.world
+            .resource_mut::<SlotTable>()
+            .release_slot(slot_idx);
+        true
+    }
 }
 
 /// 单线程 tick 骨架：`Schedule` + [`SingleThreadedExecutor`] + 显式阶段顺序契约。
@@ -294,3 +427,103 @@ impl Default for TickRunner {
 // 线程断言的反证（“把骨架挪到别的线程上必须 panic”）放在 `tests/tick_skeleton.rs`：
 // `src/` 下的源码要能被 `no_parallel.rs` 全量扫描（禁 `thread::spawn`），
 // 而“开线程验证断言”这条反证需要在测试里用 `std::thread::spawn`。
+
+#[cfg(test)]
+mod stage_adapter_tests {
+    use super::*;
+    use crate::ecs::EcsStore;
+
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct A(i32);
+
+    #[derive(Component, Debug, PartialEq, Eq)]
+    struct B(i32);
+
+    /// 探针段：允许读写 A、B（只有测试用）。
+    struct Probe;
+    impl StageSpec for Probe {
+        const STAGE: TickStage = TickStage::SimBuff;
+    }
+    impl Reads<A> for Probe {}
+    impl Writes<A> for Probe {}
+    impl Reads<B> for Probe {}
+    impl Writes<B> for Probe {}
+
+    fn store_with(ids: &[i32]) -> EcsStore<A> {
+        let mut s = EcsStore::new();
+        for id in ids {
+            s.insert(*id, A(*id));
+        }
+        s
+    }
+
+    /// 负例 1：id 不在槽位表 ⇒ `None`（旧 `EntityStore::get/get_mut` 的 `index.get` 语义）。
+    ///
+    /// 牙：把 `resolve` 改成「找不到就取第一个实体」⇒ 该断言红。
+    #[test]
+    fn adapter_unknown_id_is_none() {
+        let mut store = store_with(&[1, 2]);
+        {
+            let mut ad = StageEntities::<Probe>::new(store.world_mut());
+            assert_eq!(ad.resolve(999), None);
+            assert_eq!(ad.get::<A>(999), None);
+            assert_eq!(ad.get_mut::<A>(999), None);
+            // 不得改变槽位顺序
+            assert_eq!(
+                ad.order(),
+                vec![(1, ad.resolve(1).unwrap()), (2, ad.resolve(2).unwrap())]
+            );
+        }
+        assert_eq!(store.order_index(), vec![1, 2]);
+    }
+
+    /// 负例 2：实体已移除 ⇒ `None`（槽位 `entity = None` 的旧语义）。
+    ///
+    /// 牙：把 `resolve` 改成只查 `index` 不查槽位的 `entity` ⇒ 移除后仍返回旧句柄 ⇒ 红。
+    #[test]
+    fn adapter_removed_id_is_none() {
+        let mut store = store_with(&[7]);
+        assert!(store.remove(7).is_some());
+        let mut ad = StageEntities::<Probe>::new(store.world_mut());
+        assert_eq!(ad.resolve(7), None);
+        assert_eq!(ad.get_mut::<A>(7), None);
+        assert_eq!(ad.get::<A>(7), None);
+    }
+
+    /// 负例 3：槽位复用不得串号（新实体复用旧槽位后，**旧 id 仍是 `None`**）。
+    ///
+    /// 牙：把 `resolve` 改成「按槽位下标返回 `slots[slot].entity` 而不校验 id」⇒ 旧 id 会拿到
+    /// 新实体的组件 ⇒ 红。
+    #[test]
+    fn adapter_slot_reuse_does_not_alias_ids() {
+        let mut store = store_with(&[7]);
+        assert!(store.remove(7).is_some());
+        store.insert(8, A(80)); // LIFO 复用 7 的槽位
+        assert_eq!(store.order_index(), vec![8], "复用槽位后槽位序只有一个实体");
+        let mut ad = StageEntities::<Probe>::new(store.world_mut());
+        assert_eq!(ad.resolve(7), None, "旧 id 不得解析到复用槽位的新实体");
+        assert_eq!(ad.get_mut::<A>(7), None);
+        assert_eq!(ad.get_mut::<A>(8).map(|a| a.0), Some(80));
+    }
+
+    /// 负例 4：组件缺失 ⇒ `None`；`for_each_mut` 跳过该实体（旧 `filter_map` / `mut_view` 语义）。
+    ///
+    /// 牙：把 `get` 改成「缺组件就返回默认值」⇒ 第二次断言红；把 `for_each_mut` 的跳过改成
+    /// 直接 `unwrap` ⇒ 该用例 panic（红）。
+    #[test]
+    fn adapter_missing_component_is_none_and_skipped() {
+        let mut store = store_with(&[1, 2]);
+        assert!(store.insert_component(1, B(11)));
+        let mut ad = StageEntities::<Probe>::new(store.world_mut());
+        assert_eq!(ad.get::<B>(1), Some(&B(11)));
+        assert_eq!(ad.get::<B>(2), None, "2 号没有 B 组件");
+        assert_eq!(ad.get_mut::<B>(2), None);
+        let mut seen = Vec::new();
+        ad.for_each_mut::<B>(|id, b| {
+            seen.push(id);
+            b.0 += 1;
+        });
+        assert_eq!(seen, vec![1], "只有挂了 B 的实体被访问");
+        assert_eq!(ad.get::<B>(1), Some(&B(12)));
+    }
+}
