@@ -34,7 +34,7 @@
 
 use std::collections::HashMap;
 
-use crate::entity::ACTOR_RACE_PLAY;
+use crate::entity::{EntityAccess, ACTOR_RACE_PLAY};
 use crate::world::World;
 
 /// `Grobal2.MAX_STATUS_ATTRIBUTE`（`src/OpenMir2/Grobal2.cs:39`）。
@@ -314,26 +314,39 @@ impl BuffSystem {
 
     /// `DoWork`（`:58-91`）：`if (ActorBuffs.Any())` 才继续；**先** `Operate`，再销毁段
     /// （含 `for(j)` 的 `RemoveAt(j)` off-by-one 与 actor 级 off-by-one）。
-    pub fn do_work(&mut self, world: &mut World, now_ms: i64) -> BuffTickOutcome {
+    ///
+    /// **P6a**：实现改为 `EntityAccess` + `SimState` 标量形态——facade（`World::buff_do_work`）
+    /// 与段系统（`SimBuff`）共用这一份实现。`poison_dec_health_time` = `SimState::poison_dec_health_time`
+    /// （段内 `SimState` 已被 `remove_resource` 取走，故以入参传入）。
+    pub fn do_work_impl<A: EntityAccess>(
+        &mut self,
+        access: &mut A,
+        now_ms: i64,
+        poison_dec_health_time: i32,
+    ) -> BuffTickOutcome {
         if self.actors.is_empty() {
             return BuffTickOutcome::default();
         }
-        let out = self.operate(world, now_ms);
+        let out = self.operate(access, now_ms, poison_dec_health_time);
         self.reap_destroyed(now_ms);
         out
     }
 
     /// `Operate`（`:164-263`）。递减段的 `boChg`/`boNeedRecalc` 是**跨 actor 粘滞**的
     /// （oracle 在 `for i` 外声明、永不复位）——一并复刻。
-    fn operate(&mut self, world: &mut World, now_ms: i64) -> BuffTickOutcome {
+    fn operate<A: EntityAccess>(
+        &mut self,
+        world: &mut A,
+        now_ms: i64,
+        poison_dec_health_time: i32,
+    ) -> BuffTickOutcome {
         let mut out = BuffTickOutcome::default();
-        let poison_dec_health_time = i64::from(world.poison_dec_health_time);
+        let poison_dec_health_time = i64::from(poison_dec_health_time);
         let mut bo_chg = false;
         let mut bo_need_recalc = false;
         for i in 0..self.actors.len() {
             let actor_id = self.actors[i];
-            let Some((race, ghost)) = world.entities.get(actor_id).map(|e| (e.race, e.ghost))
-            else {
+            let Some((race, ghost)) = world.get(actor_id).map(|e| (e.race, e.ghost)) else {
                 continue;
             };
             // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B/buff）：ghost 不 `Run` ⇒ buff 的
@@ -369,7 +382,7 @@ impl BuffSystem {
                                         ));
                                     }
                                     BuffType::Transparent => {
-                                        if let Some(e) = world.entities.get_mut(actor_id) {
+                                        if let Some(e) = world.get_mut(actor_id) {
                                             e.flags.hide_mode = false;
                                         }
                                     }
@@ -396,9 +409,9 @@ impl BuffSystem {
                     // **此刻正在被操作的** `ActorBuffSystem`（本函数就是它）⇒ 必须用 `self`（`BuffSystem`）
                     // 的位算 CharStatus；**不能**经 `world.get_char_status`（那读 `world.buffs`，而
                     // `World::buff_do_work` 已把 `buffs` `mem::take` 走 ⇒ 拿到空系统、丢掉所有仍生效的 buff 位）。
-                    let ex = world.entities.get(actor_id).map_or(0, |e| e.char_status_ex);
+                    let ex = world.get(actor_id).map_or(0, |e| e.char_status_ex);
                     let status = self.char_status_with(actor_id, ex);
-                    if let Some(e) = world.entities.get_mut(actor_id) {
+                    if let Some(e) = world.get_mut(actor_id) {
                         e.buff.char_status = status;
                     }
                     out.status_changes.push((actor_id, status));
@@ -409,7 +422,7 @@ impl BuffSystem {
             }
 
             // ---- (b) 毒伤段：对所有 `!Death` 的 actor（不分 race）----
-            let Some(ent) = world.entities.get(actor_id) else {
+            let Some(ent) = world.get(actor_id) else {
                 continue;
             };
             if ent.death {
@@ -418,7 +431,7 @@ impl BuffSystem {
             if now_ms - ent.poisoning_tick <= poison_dec_health_time {
                 continue;
             }
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = world.get_mut(actor_id) {
                 e.buff.poisoning_tick = now_ms;
             }
             let Some(list) = self.map.get(&actor_id) else {
@@ -433,23 +446,23 @@ impl BuffSystem {
                 continue;
             }
             for _ in 0..green_hits {
-                let (animal, point) = match world.entities.get(actor_id) {
+                let (animal, point) = match world.get(actor_id) {
                     Some(e) => (e.ai.animal, e.green_poisoning_point),
                     None => break,
                 };
                 if animal {
-                    if let Some(e) = world.entities.get_mut(actor_id) {
+                    if let Some(e) = world.get_mut(actor_id) {
                         // C# `ushort -= 1000` 是 unchecked 回绕。
                         e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(1000);
                     }
                 }
-                let last_hiter = world.entities.get(actor_id).and_then(|e| e.last_hiter);
-                damage_health(world, actor_id, i32::from(point) + 1, last_hiter);
-                if let Some(r) = world.entities.recovery_mut(actor_id) {
+                let last_hiter = world.get(actor_id).and_then(|e| e.last_hiter);
+                damage_health_impl(world, actor_id, i32::from(point) + 1, last_hiter);
+                if let Some(r) = world.recovery_mut(actor_id) {
                     r.health_tick = 0;
                     r.spell_tick = 0;
                 }
-                let (hp, mp) = match world.entities.get(actor_id) {
+                let (hp, mp) = match world.get(actor_id) {
                     Some(e) => (e.hp, e.mp),
                     None => break,
                 };
@@ -502,20 +515,30 @@ impl BuffSystem {
 /// HP 扣减（`:796-817`）：`nDamage > 0` ⇒ `HP-nDamage > 0 ? HP-=nDamage : HP=0`；
 /// 否则（`nDamage <= 0`，含 0）⇒ `HP-nDamage < MaxHP ? HP-=nDamage : HP=MaxHP`（负值 ⇒ 回血，照搬）。
 pub fn damage_health(world: &mut World, actor_id: i32, n_damage: i32, last_hiter: Option<i32>) {
-    if world.entities.get(actor_id).is_none() {
+    damage_health_impl(&mut world.entities, actor_id, n_damage, last_hiter);
+}
+
+/// [`damage_health`] 的 facade/段共用实现（**P6a**）：`EntityAccess` 形态，逐句与旧实现相同。
+pub fn damage_health_impl<A: EntityAccess>(
+    world: &mut A,
+    actor_id: i32,
+    n_damage: i32,
+    last_hiter: Option<i32>,
+) {
+    if world.get(actor_id).is_none() {
         return;
     }
-    let guard = match last_hiter.and_then(|h| world.entities.get(h)) {
+    let guard = match last_hiter.and_then(|h| world.get(h)) {
         None => true,
         Some(h) => h.race == ACTOR_RACE_PLAY && !h.un_magic_shield,
     };
     let mut n_damage = n_damage;
     if guard {
-        let shield = world.entities.get(actor_id).is_some_and(|e| {
+        let shield = world.get(actor_id).is_some_and(|e| {
             e.race == ACTOR_RACE_PLAY && e.magic_shield && n_damage > 0 && e.mp > 0
         });
         if shield {
-            let e = world.entities.get_mut(actor_id).expect("actor exists");
+            let e = world.get_mut(actor_id).expect("actor exists");
             let mut n_spdam = mir2_shared::hutil::round(f64::from(n_damage) * 1.5);
             if i32::from(e.vitals.mp) >= n_spdam {
                 e.vitals.mp = (i32::from(e.vitals.mp) - n_spdam) as u16;
@@ -537,7 +560,7 @@ pub fn damage_health(world: &mut World, actor_id: i32, n_damage: i32, last_hiter
             // ⇒ 运行期不会同时出现盾支与毒伤段 ⇒ 与 oracle 无观测差异。**不硬接**（等消费方接线批）。
         }
     }
-    let e = world.entities.get_mut(actor_id).expect("actor exists");
+    let e = world.get_mut(actor_id).expect("actor exists");
     if n_damage > 0 {
         if i32::from(e.vitals.hp) - n_damage > 0 {
             e.vitals.hp = (i32::from(e.vitals.hp) - n_damage) as u16;

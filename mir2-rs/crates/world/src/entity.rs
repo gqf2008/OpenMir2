@@ -3334,6 +3334,8 @@ pub trait EntityAccess {
     fn dup_state_mut(&mut self, id: i32) -> Option<&mut mir2_world_bevy::DupState>;
     /// `Transform` 可变视图（`EntityMut` 不含该组件；`char_pushed_now` 逐格推进写坐标）。
     fn transform_mut(&mut self, id: i32) -> Option<&mut Transform>;
+    /// `Recovery` 可变视图（`EntityMut` 不含该组件；`SimBuff` 毒伤段写 `health_tick`/`spell_tick`）。
+    fn recovery_mut(&mut self, id: i32) -> Option<&mut Recovery>;
 }
 
 impl EntityAccess for EntityStore {
@@ -3363,6 +3365,9 @@ impl EntityAccess for EntityStore {
     }
     fn transform_mut(&mut self, id: i32) -> Option<&mut Transform> {
         EntityStore::transform_mut(self, id)
+    }
+    fn recovery_mut(&mut self, id: i32) -> Option<&mut Recovery> {
+        EntityStore::recovery_mut(self, id)
     }
 }
 
@@ -3542,6 +3547,11 @@ where
     }
     fn transform_mut(&mut self, id: i32) -> Option<&mut Transform> {
         let view = self.ad.view_mut::<(&'static mut Transform,)>(id)?;
+        Some(view.0.into_inner())
+    }
+    fn recovery_mut(&mut self, id: i32) -> Option<&mut Recovery> {
+        // 单组件组合视图：`view_mut` 的运行期白名单核对照常生效（spec 需声明写 `Recovery`）。
+        let view = self.ad.view_mut::<(&'static mut Recovery,)>(id)?;
         Some(view.0.into_inner())
     }
 }
