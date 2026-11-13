@@ -487,7 +487,7 @@ grep -a TICKPROF E:/tmp/t10b-w85/logs/game-svr.out.log
 | --- | --- | --- |
 | fmt | `cargo fmt --all -- --check` | RC=0 |
 | clippy | `cargo clippy -p game-svr --all-targets -- -D warnings` | RC=0（全工作区另见交付报告） |
-| test | `cargo test -p game-svr --lib` | 1787 passed / 0 failed / 4 ignored（含本卡 5 条新单测） |
+| test | `cargo test -p game-svr --lib` | 1783 passed / 0 failed / 4 ignored（含本卡 5 条新单测） |
 | msgcodegen | `cargo run -p msgcodegen -- --check` | RC=0 |
 | 散文锚 | `python -I -B tools/hygiene/docs_anchor_gate.py --prose --base master` | 见交付报告 |
 
