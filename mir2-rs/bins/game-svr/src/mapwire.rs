@@ -341,13 +341,16 @@ pub fn shift_enter_position(
     let mut x = target.x;
     let mut y = target.y;
     let mut attempts = 0u32;
+    // S4d-1：`SimState` 经 `Deref` 暴露；这里显式解构，让 `maps`（只读）与 `rng`（可变）
+    // 作为 `SimState` 的两个**不同字段**同时借用（迁移前是 `World` 的两个字段）。
+    let World { sim, .. } = world;
     // `map_id` 已由 `resolve_enter_map` 校验；越界时原样返回，交给 `enter_map` 的 `NoSuchMap`。
-    if let Some(map) = world.maps.get(target.map_id) {
+    if let Some(map) = sim.maps.get(target.map_id) {
         // oracle 循环首行判 `CanWalk` ⇒ 首格可走时**一次都不抽**。
         while !map.get_cell_info(x, y).1 {
-            let dx = world.rng.random_below(6);
+            let dx = sim.rng.random_below(6);
             x = i32::from((x - 3 + dx) as i16);
-            let dy = world.rng.random_below(6);
+            let dy = sim.rng.random_below(6);
             y = i32::from((y - 3 + dy) as i16);
             attempts += 1;
             if attempts >= 5 {
@@ -355,7 +358,7 @@ pub fn shift_enter_position(
             }
         }
         if !map.get_cell_info(x, y).1 {
-            if let Some(home_id) = home.map_id.filter(|id| *id < world.maps.len()) {
+            if let Some(home_id) = home.map_id.filter(|id| *id < sim.maps.len()) {
                 return EnterShift {
                     map_name: home.map_name.to_string(),
                     map_id: home_id,

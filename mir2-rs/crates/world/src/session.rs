@@ -295,13 +295,14 @@ impl World {
         map_id: usize,
         ctor_tick: i64,
     ) -> Result<i32, SessionError> {
-        let Some(sess) = self.sessions.get_mut(chr_name) else {
+        let World { entities, sim, .. } = self;
+        let Some(sess) = sim.sessions.get_mut(chr_name) else {
             return Err(SessionError::NoSession);
         };
         if sess.stage == WorldStage::InWorld {
             return Err(SessionError::AlreadyInWorld);
         }
-        if map_id >= self.maps.len() {
+        if map_id >= sim.maps.len() {
             return Err(SessionError::NoSuchMap);
         }
         // **F1（reviewer-21 `993d3e7a`，卡 `openmir2-makeghost-lifecycle-m3` 返工）**：
@@ -312,11 +313,11 @@ impl World {
         // ③ 任何按名/按 id 的读者会命中旧实体。
         // 位置在**全部入参校验之后**：`NoSuchMap` 之类的失败不得顺手摘掉 ghost。
         if let Some(old) = sess.actor_id {
-            self.entities.remove(old);
+            entities.remove(old);
             sess.actor_id = None;
         }
         if entity.id <= 0 {
-            entity.id = self.entities.alloc_id();
+            entity.id = entities.alloc_id();
         }
         entity.map_id = map_id;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：30s 的 `VerifyMapTime` 门同样从
@@ -331,16 +332,16 @@ impl World {
         // **对象构造时刻**起算（`ctor_tick`）——全仓写点只有该 ctor 与 `PlayObject.Message.cs:265`
         // 的「命中后再置 now」，`UserLogon`/`AddToMap` 都不重置。**不要**改成 `self.clock_ms`。
         // S3a：字段已迁入 `DupState` 组件，插入后经受控 API 重盖（`EntityStore::insert` 先给 0）。
-        let id = self.entities.insert(entity);
-        self.entities
+        let id = entities.insert(entity);
+        entities
             .dup_state_mut(id)
             .expect("EntityStore::insert 必须给每个实体插 DupState")
             .check_dup_obj_tick = ctor_tick;
         let (x, y) = {
-            let e = self.entities.get(id).expect("刚插入");
+            let e = entities.get(id).expect("刚插入");
             (e.x, e.y)
         };
-        let now = self.clock_ms;
+        let now = sim.clock_ms;
         // oracle `BaseObject.Base.cs:14-23` `Initialize()`：
         //   `AddtoMapSuccess = true; if (Envir.CanWalk(CurrX, CurrY, true) && AddToMap()) AddtoMapSuccess = false;`
         // 落格失败（目标格越界 / 非 `Valid`）时 **不摘除角色**：`AddtoMapSuccess` 保持 `true`
@@ -358,12 +359,12 @@ impl World {
         // 的 `shift_enter_position`）⇒ 经宿主登录**不存在「墙格出生」**，「进世界但不入格表」在该
         // 路径**不可达**（oracle 同因，`ProcessHumansMakeNewHuman` 先移位再落图）。本函数的 oracle
         // 同形语义仍保留给直接调用方（测试/非宿主路径），不是死代码。
-        if self.maps[map_id].add_map_object(x, y, CellType::Play, id, now) {
-            if let Some(b) = self.entities.map_binding_mut(id) {
+        if sim.maps[map_id].add_map_object(x, y, CellType::Play, id, now) {
+            if let Some(b) = entities.map_binding_mut(id) {
                 b.add_to_mapped = true;
             }
         }
-        let sess = self.sessions.get_mut(chr_name).expect("上面已确认存在");
+        let sess = sim.sessions.get_mut(chr_name).expect("上面已确认存在");
         sess.actor_id = Some(id);
         sess.map_id = map_id;
         sess.stage = WorldStage::InWorld;

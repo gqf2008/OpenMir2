@@ -291,7 +291,8 @@ fn below_two_clears_flag_without_resetting_dup_start() {
 
     // 把 2 号挪走（换格），本格只剩 1 人。
     {
-        let (maps, entities) = (&mut w.maps, &mut w.entities);
+        let World { entities, sim, .. } = &mut w;
+        let (maps, entities) = (&mut sim.maps, entities);
         let (fx, fy) = entities.xy(2).unwrap();
         {
             let t = entities.transform_mut(2).unwrap();

@@ -1025,12 +1025,11 @@ mod tests {
         let nid = world
             .spawn_npc(spawn_typed("比奇国王", NPC_TYPE_GUILD_OFFICIAL, 0, 29, 32))
             .expect("NPC 挂图成功");
-        let out = crate::aoi::search_view_range_with_updates(
-            &mut world.maps[0],
-            &mut world.entities,
-            pid,
-            world.clock_ms,
-        );
+        let now = world.clock_ms;
+        let out = {
+            let World { entities, sim, .. } = &mut world;
+            crate::aoi::search_view_range_with_updates(&mut sim.maps[0], entities, pid, now)
+        };
         let vis: Vec<i32> = world
             .entities
             .get(pid)
