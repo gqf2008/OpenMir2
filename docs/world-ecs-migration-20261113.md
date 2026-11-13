@@ -1150,17 +1150,74 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   必须先把这三处 port 成 `_impl`（另加写集内的 `monai.rs` 全 Run 链与 `world.rs` 若干
 >   `&mut World` 方法的 `_impl` 化）。本批未改这三文件一行，段位/取数/可见性门保持不变。
 
-> **段数口径（P6b 交付 head；单位 = 20 阶段）**：已系统化 **18 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
-> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5 + P6a2b 的 #11 + P6b 的 #12），
-> **余 2 段：`#1 Command` / `#10 SimMonsterAi`（后者依赖面超出写集，已置 blocked）**。
+> **S4d-3/P6b2 落地登记（2026-11-14，#10 `SimMonsterAi`）**：P6b 的 blocked 段按 Leader 扩写集
+> （`world.rs` / `monai.rs` / `slave.rs` / `space_move.rs` / `special_monster.rs` / `entity.rs` + 本文件）
+> 落地；本批交付 **#10**，20 阶段余 `#1 Command`。
+> - **#10 `SimMonsterAi`（已系统化）**：段系统 `sim_monster_ai_stage_system`（`TickStage::SimMonsterAi`，
+>   #10）；段位 = `tick_head` 原 `if self.ai_enabled { crate::monai::monster_ai_tick(self); }` 那一行
+>   （`SimBuff` 之后、`SimNpc` 之前；oracle `ProcessMonsters` 线程 + 设计 §5.2 的 RNG 消费者序不变）。
+>   实现体 = `monai::monster_ai_tick_impl`（`EntityAccess` + `&mut SimState`）；facade
+>   `monai::monster_ai_tick` 退化为薄包装（签名与全部调用点不变）。
+> - **全量扫描段的三条语义逐句保留**：① 收集序 = `EntityAccess::order_ids`（= `EntityStore::iter_ref`
+>   的槽位插入序，非 `Query` 迭代序）；② 身份门 `race > ActorRace.Play && merchant.is_none() &&
+>   npc.is_none() && !ghost`；③ 不可见怪跳步门 `!IsVisibleActive && ProcessRunCount <
+>   ProcessMonsterInterval`（严格 `<`，计数清零点在 Run 前，与 `WorldServer.MonGen.cs:294-314` 同序）。
+> - **链 port（单份实现，facade 薄包装）**：`monai.rs` 的 Run 链 113 个 `&mut World` 函数改
+>   `(EntityAccess, &mut SimState)` 形态并保留同名 `&mut World` 兼容入口（`wondering` / `search_target` /
+>   `goto_target_xy` / `monster_run` / `monster_class_run` / 专用怪 `Run` 覆写族等）；跨文件依赖
+>   port 成 `_impl`：`slave::check_royalty_impl`、`space_move::monster_space_move_impl`、
+>   `special_monster::special_monster_run_impl`（含 `make_child` / `cleanup_children`）；
+>   复用既有 `merchant::map_random_move_impl`、`buff::damage_health_impl`、
+>   `monai::animal_run_impl` / `base_object_run_monster_impl`、`session::send_ref_msg_targets_at_impl`。
+> - **`world.rs` 访问器化**：`try_step_now_impl`（含 `try_step_now_blocked_impl` /
+>   `try_step_blocked_impl` / `cell_free_blocked_impl` / `classify_block_impl`）、
+>   `moving_object_at_impl`、`base_objects_at_impl`（两口径）、`can_walk_at_impl`、`can_fly_impl`、
+>   `event_at_impl`、`add_fire_burn_event_impl` / `add_map_event_at_impl` / `add_dig_out_event_impl`、
+>   `actor_guild_impl` / `is_ally_guild_impl` / `castle_exempts_guild_impl`、
+>   `guard_crime_for_castle_tick_impl` / `clear_guard_crime_for_castle_impl`、
+>   `record_castle_structure_impl`、`mag_pass_through_magic_impl`、`target_anti_poison_impl`、
+>   `process_run_count_impl` / `set_process_run_count_impl`；facade 全部退化为一行委托。
+> - **写集**：`EntityMutData` 的 20 组件 + `Transform`（`WalkTo`/`TryStepNow` 落点）+
+>   `MapBinding`（`SearchTarget` 可见集 / `VerifyMapTime`）+ `Recovery`（`base.Run` 恢复段）；
+>   读集为 `StageAccess` 的 24 组件全集。**非结构段**：产仔/召唤走既有 `pending_special_*` /
+>   `pending_sculture_spawns` 队列（宿主排水），段内不 `insert`/`remove`，无需 `refresh_views()`。
+> - **RNG**：本段是最大消费者（`Think`/`Wondering`/`GotoTargetXY`/`SearchTarget`/专用怪 `Run`/
+>   召唤/攻击抽数）。十副既有夹具（`wondering_turn_branch_matches_oracle_draw_order` /
+>   `goto_target_xy_walks_and_consumes_one_random3` /
+>   `monster_ai_tick_is_slot_ordered_and_deterministic` /
+>   `mb4_siege_failure_falls_back_to_map_random_move_with_two_draws` /
+>   `mb7_r05_bone_king_integer_division_and_slave_draw_order` /
+>   `atk_spit_spider_hits_with_magic_damage_poison_and_exact_draws` /
+>   `mb6_r14_use_magic_threshold_and_lighting_attack_rng` /
+>   `fireball_only_draws_dc_when_anti_magic_zero` /
+>   `mb1_big_heart_attack_target_draws_once_and_delivers_after_200ms` /
+>   `green_monster_draws_before_dechealth_gate`）base/head 逐点 trace：合计 **283 行；
+>   seq/kind/max/result 四列 `diff` 0 行**。site 列 57 个位移对，逐条回读：生产抽点 **11 对**
+>   （`wondering` ×3、`spit_attack` ×3、`goto_target_xy`、`green_red_monster_run`、
+>   `big_heart_attack_target`、`bone_king_call_slave`、`flush_sculture_spawns` 各 1；都是同一函数
+>   改名为 `*_impl`/随插入的兼容包装下移，文本与值不变），其余 **46 对**全部是**用例自身的期望流
+>   复算行**（`seed_with_gate` / `assert_stream_eq` / `seed_with_last_zero` 等测试辅助与各用例
+>   就地重算 oracle 序列，随测试模块整体下移）。
+> - **诊断偏差（登记）**：按 pass 的命名探针 `monai.collect` 取消（与 P6a 的 `buff.pass` 同口径）；
+>   聚合耗时仍由 `TickProfile` 的 `SimMonsterAi` 段给出，收集逻辑（槽位序）不变。
+> - **牙**：删 `HeadRunner` 的 `SimMonsterAi` 注册 ⇒ `tick_stage_registrations_are_wired_in_order`
+>   panic（段序牙已含五段）；新增段语义牙三条——
+>   `monster_ai_stage_process_run_count_gate_throttles_invisible_monster`（0→1→2→清零/Run 的
+>   严格 `<` 门）、`monster_ai_stage_visible_active_bypasses_process_run_count_gate`
+>   （`IsVisibleActive` 直接走 else 支）、
+>   `monster_ai_stage_walk_writes_transform_through_stage_access`（`GotoTargetXY` 单步落点经
+>   `StageAccess` 写回 `Transform`；`Transform` 缺失/只读 ⇒ `view_mut` 运行期 panic）。
 
-> 段序牙 `tick_stage_registrations_are_wired_in_order` 已含四段（`SimBuff` / `SimNpc` / `SimMerchant`
-> 在各自 `*_enabled` 门内、开门后进 trace）。
+> **段数口径（P6b2 交付 head；单位 = 20 阶段）**：已系统化 **19 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
+> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5 + P6a2b 的 #11 + P6b 的 #12 +
+> 本批 #10），**余 1 段：`#1 Command`**。
 
-> **尚未做（以 P6b 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **2** 段——
-> #1 Command / #10 SimMonsterAi（blocked））、`SlotTable` 的 `QueryState` 缓存优化（按需）、
-> `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
-> 段号清单与写集见设计 §2.1/§4。
+> 段序牙 `tick_stage_registrations_are_wired_in_order` 已含五段（`SimBuff` / `SimMonsterAi` /
+> `SimNpc` / `SimMerchant` 在各自 `*_enabled` 门内、开门后进 trace）。
+
+> **尚未做（以 P6b2 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **1** 段——#1 Command）、
+> `SlotTable` 的 `QueryState` 缓存优化（按需）、`TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、
+> `crates/world` 删除（S5，等 Owner 授权）。段号清单与写集见设计 §2.1/§4。
 
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——

@@ -142,36 +142,63 @@ pub fn dir_delta(dir: u8) -> (i32, i32) {
 }
 
 /// `BaseObject.TurnTo`（`BaseObject.cs:1582`）：只改 `Dir`（帧面 `RM_TURN` 由接线层发）。
-pub fn turn_to(world: &mut World, actor_id: i32, dir: u8) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+pub fn turn_to_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    _sim: &mut crate::world::SimState,
+    actor_id: i32,
+    dir: u8,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = dir;
     }
+}
+
+pub fn turn_to(world: &mut World, actor_id: i32, dir: u8) {
+    turn_to_impl(&mut world.entities, &mut world.sim, actor_id, dir)
 }
 
 /// `BaseObject.WalkTo(btDir, boFlag)`（`BaseObject.cs:601`）：**先置 `Dir`**（即使走不动也保留），
 /// 再尝试单步移动。返回是否真的移动（oracle 的 `result`）。
 ///
 /// `fearFire`（`BoFearFire`）在本片未建模（普通怪 false；火墙 `CanSafeWalk` 语义不在本片）。
-pub fn walk_to(world: &mut World, actor_id: i32, dir: u8) -> bool {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+pub fn walk_to_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    dir: u8,
+) -> bool {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = dir;
     }
     let (dx, dy) = dir_delta(dir);
     if dx == 0 && dy == 0 {
         return false;
     }
-    world.try_step_now(actor_id, dx, dy, 1)
+    crate::world::World::try_step_now_impl(access, sim, actor_id, dx, dy, 1)
+}
+
+pub fn walk_to(world: &mut World, actor_id: i32, dir: u8) -> bool {
+    walk_to_impl(&mut world.entities, &mut world.sim, actor_id, dir)
 }
 
 /// `Envirnoment.GetXYObjCount`（`src/M2Server/Maps/Envirnoment.cs:1062-1093`）的 actor 计数子集：
 /// 统计 `(x, y)` 格上 `!Ghost && !Death && !FixedHideMode && !ObMode` 的 actor 对象数。
-pub(crate) fn count_at_cell(world: &World, map_id: usize, x: i32, y: i32) -> i32 {
-    count_at_cell_with(&world.maps, map_id, x, y, |id| {
-        world
-            .entities
+pub(crate) fn count_at_cell_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &crate::world::SimState,
+    map_id: usize,
+    x: i32,
+    y: i32,
+) -> i32 {
+    count_at_cell_with(&sim.maps, map_id, x, y, |id| {
+        access
             .get(id)
             .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
     })
+}
+
+pub(crate) fn count_at_cell(world: &World, map_id: usize, x: i32, y: i32) -> i32 {
+    count_at_cell_impl(&world.entities, &world.sim, map_id, x, y)
 }
 
 /// [`count_at_cell`] 的访问器版本（P3a）：阻挡判定由调用方给，供 `SimDup` 段
@@ -255,17 +282,25 @@ fn get_attack_dir_impl<A: crate::entity::EntityAccess>(
 ///
 /// 取数：`Random(20)`；非 0 返回。否则 `Random(4)`：==1 ⇒ `RandomByte(8)` + `TurnTo`；
 /// 否则 `WalkTo(Dir)`。
-pub fn wondering(world: &mut World, actor_id: i32) {
-    if world.rng.random_below(20) != 0 {
+pub fn wondering_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    if sim.rng.random_below(20) != 0 {
         return;
     }
-    if world.rng.random_below(4) == 1 {
-        let dir = world.rng.random_byte(8);
-        turn_to(world, actor_id, dir);
+    if sim.rng.random_below(4) == 1 {
+        let dir = sim.rng.random_byte(8);
+        turn_to_impl(access, sim, actor_id, dir);
     } else {
-        let dir = world.entities.get(actor_id).map_or(0, |e| e.ai.dir);
-        walk_to(world, actor_id, dir);
+        let dir = access.get(actor_id).map_or(0, |e| e.ai.dir);
+        walk_to_impl(access, sim, actor_id, dir);
     }
+}
+
+pub fn wondering(world: &mut World, actor_id: i32) {
+    wondering_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `AnimalObject.SearchTarget`（`AnimalObject.cs:388-416`）。
@@ -280,9 +315,12 @@ pub fn wondering(world: &mut World, actor_id: i32) {
 /// 目标有效性用**直通版** `IsProperTarget`（`BaseObject.Base.cs:470-473` = `IsAttackTarget`）：
 /// 死亡/幽灵已由上面的无效项分支排除，`Invisible` oracle 不查（审计 G09），
 /// 因此这里**不能**用折入 death/ghost/invisible 的 [`is_proper_target`]。
-pub fn search_target(world: &mut World, actor_id: i32) {
-    let Some((cx, cy, map_id, cool_eye, mut visible)) = world
-        .entities
+pub fn search_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some((cx, cy, map_id, cool_eye, mut visible)) = access
         .get(actor_id)
         .map(|e| (e.x, e.y, e.map_id, e.ai.cool_eye, e.visible_actors.clone()))
     else {
@@ -300,7 +338,7 @@ pub fn search_target(world: &mut World, actor_id: i32) {
         let target_id = visible[i].target;
         // `baseObject.Death || baseObject.Ghost || baseObject.Envir != Envir ||
         //  |Δx| > 15 || |Δy| > 15`
-        let invalid = match world.entities.get(target_id) {
+        let invalid = match access.get(target_id) {
             None => true,
             Some(t) => {
                 t.death
@@ -323,7 +361,7 @@ pub fn search_target(world: &mut World, actor_id: i32) {
         // oracle 在 `ClearTargetCreat` 之后还写了一遍 `if (!baseObject.Death)`（`AnimalObject.cs:400`）：
         // 上面的 `baseObject.Death` 已 `continue` ⇒ 该层不可达（照搬时省略，行为等价）。
         // 隐藏门读的是 `HideMode`（**不是** `FixedHideMode`，后者只用于 `GetXYObjCount`/`Run`）。
-        if let (Some(a), Some(t)) = (world.entities.get(actor_id), world.entities.get(target_id)) {
+        if let (Some(a), Some(t)) = (access.get(actor_id), access.get(target_id)) {
             if is_proper_target_grouped_direct(&a, &t, &[]) && (!t.hide_mode || cool_eye) {
                 let dist = (cx - t.x).abs() + (cy - t.y).abs();
                 if dist < n10 {
@@ -335,7 +373,7 @@ pub fn search_target(world: &mut World, actor_id: i32) {
         i += 1;
     }
     if cleared_target {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             // `ClearTargetCreat` 的尾部 `DelTargetCreat()`（`AnimalObject.DelTargetCreat`
             // 额外把 `TargetX/TargetY` 置 -1）。多次无效项只影响最终态，逐次调用等价。
             e.ai.target_creature = None;
@@ -343,12 +381,16 @@ pub fn search_target(world: &mut World, actor_id: i32) {
             e.ai.target_y = -1;
         }
     }
-    if let Some(b) = world.entities.map_binding_mut(actor_id) {
+    if let Some(b) = access.map_binding_mut(actor_id) {
         b.visible_actors = visible;
     }
     if let Some(target_id) = best {
-        set_target_creature(world, actor_id, target_id);
+        set_target_creature_impl(access, sim, actor_id, target_id);
     }
+}
+
+pub fn search_target(world: &mut World, actor_id: i32) {
+    search_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `BaseObject.SetTargetCreat`：置 `TargetCret` 并刷新 `TargetFocusTick`。
@@ -371,12 +413,20 @@ pub(crate) fn set_target_creature_impl<A: crate::entity::EntityAccess>(
 }
 
 /// `BaseObject.DelTargetCreat`（`AnimalObject.cs:151` override 追加 `TargetX/Y = -1`）。
-pub fn del_target_creature(world: &mut World, actor_id: i32) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+pub fn del_target_creature_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    _sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.target_creature = None;
         e.ai.target_x = -1;
         e.ai.target_y = -1;
     }
+}
+
+pub fn del_target_creature(world: &mut World, actor_id: i32) {
+    del_target_creature_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `BaseObject.ClearTargetCreat`（`BaseObject.Base.cs:568-585`）：先把目标从 `VisibleActors`
@@ -413,9 +463,12 @@ pub(crate) fn clear_target_creature_impl<A: crate::entity::EntityAccess>(
 ///
 /// 目标格 ≠ 当前格时：按 Δ 定主方向 → `WalkTo` → **无条件** `Random(3)` → 最多 8 次
 /// （`Dir.Up..=Dir.UpLeft`）在「仍未移动」时按 `n20` 顺时针/逆时针微调方向再 `WalkTo`。
-pub fn goto_target_xy(world: &mut World, actor_id: i32) {
-    let Some((cx, cy, tx, ty)) = world
-        .entities
+pub fn goto_target_xy_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some((cx, cy, tx, ty)) = access
         .get(actor_id)
         .map(|e| (e.x, e.y, e.ai.target_x, e.ai.target_y))
     else {
@@ -447,10 +500,10 @@ pub fn goto_target_xy(world: &mut World, actor_id: i32) {
         n_dir = DIR_UP;
     }
     let (old_x, old_y) = (cx, cy);
-    walk_to(world, actor_id, n_dir);
-    let n20 = world.rng.random_below(3);
+    walk_to_impl(access, sim, actor_id, n_dir);
+    let n20 = sim.rng.random_below(3);
     for _ in DIR_UP..=DIR_UP_LEFT {
-        let Some((nx, ny)) = world.entities.get(actor_id).map(|e| (e.x, e.y)) else {
+        let Some((nx, ny)) = access.get(actor_id).map(|e| (e.x, e.y)) else {
             return;
         };
         if old_x == nx && old_y == ny {
@@ -464,9 +517,13 @@ pub fn goto_target_xy(world: &mut World, actor_id: i32) {
             if n_dir > DIR_UP_LEFT {
                 n_dir = DIR_UP;
             }
-            walk_to(world, actor_id, n_dir);
+            walk_to_impl(access, sim, actor_id, n_dir);
         }
     }
+}
+
+pub fn goto_target_xy(world: &mut World, actor_id: i32) {
+    goto_target_xy_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `AnimalObject.CanMove`（`AnimalObject.cs:157-160`）：`!Ghost && !Death && Stone == 0`。
@@ -481,9 +538,17 @@ pub fn can_move(e: &impl PvpView) -> bool {
 
 /// `MonsterObject.Think`（`MonsterObject.cs:187-215`）：3s 一次的 `DupMode`/目标有效性刷新，
 /// `DupMode` 时 `WalkTo(RandomByte(8))`，移动成功即清 `DupMode` 并返回 true。
+pub fn think_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    think_refresh_impl(access, sim, actor_id);
+    think_dup_move_impl(access, sim, actor_id, true)
+}
+
 pub fn think(world: &mut World, actor_id: i32) -> bool {
-    think_refresh(world, actor_id);
-    think_dup_move(world, actor_id, true)
+    think_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `MagicMonster.Think`（`MagicMonster.cs:18-45`）——与 `MonsterObject.Think` 逐字相同，
@@ -496,38 +561,47 @@ pub fn think(world: &mut World, actor_id: i32) -> bool {
 ///
 /// 本仓由调用点显式选择：Pass 1 = [`magic_monster_run`] 直调本函数，Pass 2 =
 /// [`monster_run`] 直调 [`think`]；不再按 race 做「两个 pass 都走无门版」的错分派。
+fn magic_monster_think_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    think_refresh_impl(access, sim, actor_id);
+    think_dup_move_impl(access, sim, actor_id, false)
+}
+
+#[allow(dead_code)]
 fn magic_monster_think(world: &mut World, actor_id: i32) -> bool {
-    think_refresh(world, actor_id);
-    think_dup_move(world, actor_id, false)
+    magic_monster_think_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `Think` 的 3s 刷新段（`MonsterObject.cs:190-201` / `MagicMonster.cs:21-32` 逐字相同）。
-fn think_refresh(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some((x, y, map_id)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
+fn think_refresh_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some((x, y, map_id)) = access.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
         return;
     };
-    if now - world.entities.get(actor_id).map_or(0, |e| e.ai.think_tick) > 3 * 1000 {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+    if now - access.get(actor_id).map_or(0, |e| e.ai.think_tick) > 3 * 1000 {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.think_tick = now;
         }
-        if count_at_cell(world, map_id, x, y) >= 2 {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+        if count_at_cell_impl(access, sim, map_id, x, y) >= 2 {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.dup_mode = true;
             }
         }
-        let target = world
-            .entities
-            .get(actor_id)
-            .and_then(|e| e.ai.target_creature);
+        let target = access.get(actor_id).and_then(|e| e.ai.target_creature);
         if let Some(t) = target {
-            let proper = world
-                .entities
+            let proper = access
                 .get(actor_id)
-                .zip(world.entities.get(t))
+                .zip(access.get(t))
                 .is_some_and(|(a, b)| is_proper_target_grouped_direct(&a, &b, &[]));
             if !proper {
-                if let Some(e) = world.entities.get_mut(actor_id) {
+                if let Some(e) = access.get_mut(actor_id) {
                     e.ai.target_creature = None;
                 }
             }
@@ -535,36 +609,38 @@ fn think_refresh(world: &mut World, actor_id: i32) {
     }
 }
 
+#[allow(dead_code)]
+fn think_refresh(world: &mut World, actor_id: i32) {
+    think_refresh_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `Think` 的 `DupMode` 支（`MonsterObject.cs:203-215` / `MagicMonster.cs:34-43`）。
 ///
 /// `honor_holy_seize = true` ⇒ `MonsterObject.Think` 的 `if (HolySeize) return false;`
 /// （`MonsterObject.cs:205-208`）；`false` ⇒ `MagicMonster.Think`（无该门）。
-fn think_dup_move(world: &mut World, actor_id: i32, honor_holy_seize: bool) -> bool {
+fn think_dup_move_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    honor_holy_seize: bool,
+) -> bool {
     let mut result = false;
-    let dup = world.entities.get(actor_id).is_some_and(|e| e.ai.dup_mode);
+    let dup = access.get(actor_id).is_some_and(|e| e.ai.dup_mode);
     if dup {
-        if honor_holy_seize
-            && world
-                .entities
-                .get(actor_id)
-                .is_some_and(|e| e.ai.holy_seize)
-        {
+        if honor_holy_seize && access.get(actor_id).is_some_and(|e| e.ai.holy_seize) {
             return false;
         }
-        let (old_x, old_y) = match world.entities.get(actor_id) {
+        let (old_x, old_y) = match access.get(actor_id) {
             Some(e) => (e.x, e.y),
             None => return false,
         };
-        let dir = world.rng.random_byte(8);
-        let bo_fear_fire = world
-            .entities
-            .get(actor_id)
-            .is_some_and(|e| e.ai.bo_fear_fire);
+        let dir = sim.rng.random_byte(8);
+        let bo_fear_fire = access.get(actor_id).is_some_and(|e| e.ai.bo_fear_fire);
         let _ = bo_fear_fire; // `WalkTo(..., BoFearFire)` 的 fearFire 子集不在本片
-        walk_to(world, actor_id, dir);
-        if let Some(e) = world.entities.get(actor_id) {
+        walk_to_impl(access, sim, actor_id, dir);
+        if let Some(e) = access.get(actor_id) {
             if old_x != e.x || old_y != e.y {
-                if let Some(e) = world.entities.get_mut(actor_id) {
+                if let Some(e) = access.get_mut(actor_id) {
                     e.ai.dup_mode = false;
                 }
                 result = true;
@@ -574,30 +650,39 @@ fn think_dup_move(world: &mut World, actor_id: i32, honor_holy_seize: bool) -> b
     result
 }
 
+#[allow(dead_code)]
+fn think_dup_move(world: &mut World, actor_id: i32, honor_holy_seize: bool) -> bool {
+    think_dup_move_impl(
+        &mut world.entities,
+        &mut world.sim,
+        actor_id,
+        honor_holy_seize,
+    )
+}
+
 /// `MonsterObject.AttackTarget`（`MonsterObject.cs:220-245`）。
 ///
 /// 邻接 ⇒ 到点（`now - AttackTick > NextHitTime`）则刷新 `AttackTick`/`TargetFocusTick`、
 /// `TurnTo(btDir)`、`AttackDir`；不邻接 ⇒ 同图则 `SetTargetXy(目标格)`，异图则 `DelTargetCreat`。
-pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+pub fn attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let now = world.clock_ms;
-    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
-        let due = world
-            .entities
+    let now = sim.clock_ms;
+    if let Some(bt_dir) = get_attack_dir_impl(access, actor_id, target_id) {
+        let due = access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
         if due {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
             }
-            turn_to(world, actor_id, bt_dir);
+            turn_to_impl(access, sim, actor_id, bt_dir);
             // oracle `AnimalObject.Attack`：`GetBaseAttackPoewr()`（怪物 = `AttackPowerMode::Base`）
             // + `AttackDir(target, nPower, nDir)`。`World::attack_once` 的怪物路径逐取数同构
             // （`combat::attack_dir` 对非玩家攻方不加 `AttackSuccess`）。
@@ -608,10 +693,10 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
             // `SendRefMsg(RM_STRUCK)` → 视野内广播）。因此把结算记进 `pending_ai_attacks`
             // （宿主 `World::tick` 转抄进 `TickRecord::attacks`）⇒ 既有 `drain_combat_downlink`
             // 的 ① 段无需改动即出「怪打玩家」的 `SM_STRUCK` 帧。
-            if let Some(outcome) = world.attack_once(actor_id, target_id) {
-                world
-                    .pending_ai_attacks
-                    .push((actor_id, target_id, outcome));
+            if let Some(outcome) =
+                crate::world::World::attack_once_impl(access, sim, actor_id, target_id)
+            {
+                sim.pending_ai_attacks.push((actor_id, target_id, outcome));
             }
             // **Lane 1（`openmir2-monster-attack-smhit`）**：`AnimalObject.Attack`
             // （`AnimalObject.cs:167-171`）的第二句 `SendAttackMsg(RM_HIT, Dir, CurrX, CurrY)`
@@ -620,32 +705,36 @@ pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
             // `AttackDir` 已把 `Dir` 置为 `nDir`（上面的 `turn_to`），坐标取**发帧时刻**的
             // `CurrX/CurrY`；`SendRefMsg` 的收件人语义由 `send_ref_msg` 在发帧时刻快照
             // （±12 格、仅 `Race==Play`、排除自己；`ObMode/FixedHideMode` ⇒ `self_only`）。
-            if let Some((dir, x, y)) = world.entities.get(actor_id).map(|e| (e.ai.dir, e.x, e.y)) {
-                send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+            if let Some((dir, x, y)) = access.get(actor_id).map(|e| (e.ai.dir, e.x, e.y)) {
+                send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(dir), x, y, 0);
             }
             // `MonsterObject.AttackTarget`：`Attack(...)` 之后无条件 `BreakHolySeizeMode()`
             // ⇒ 清 HolySeize + `RefNameColor()`；顺序保持在 RM_HIT 之后。
-            break_holy_seize_mode(world, actor_id);
+            break_holy_seize_mode_impl(access, sim, actor_id);
         }
         true
     } else {
         let (same_map, tx, ty) = match (
-            world.entities.get(actor_id).map(|e| e.map_id),
-            world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+            access.get(actor_id).map(|e| e.map_id),
+            access.get(target_id).map(|t| (t.map_id, t.x, t.y)),
         ) {
             (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
             _ => (false, 0, 0),
         };
         if same_map {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = tx;
                 e.ai.target_y = ty;
             }
         } else {
-            del_target_creature(world, actor_id);
+            del_target_creature_impl(access, sim, actor_id);
         }
         false
     }
+}
+
+pub fn attack_target(world: &mut World, actor_id: i32) -> bool {
+    attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `AnimalObject.Struck(hiter)`（`AnimalObject.cs:334-360`）——怪物**被命中**时的索敌与受击后果。
@@ -961,6 +1050,7 @@ fn send_ref_msg(
 
 /// [`send_ref_msg`] 的带目标版本：额外快照 `target.CurrX/CurrY`（`RM_FLYAXE`/`RM_LIGHTING` 的尾）。
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)] // facade；段侧走 `send_ref_msg_with_target_impl`
 fn send_ref_msg_with_target(
     world: &mut World,
     actor_id: i32,
@@ -974,6 +1064,41 @@ fn send_ref_msg_with_target(
     let World { entities, sim, .. } = world;
     send_ref_msg_impl(
         entities, sim, actor_id, ident, w_param, n_param1, n_param2, n_param3, target,
+    );
+}
+
+/// **P6b2**：`send_ref_msg_with_target` 的段侧实现（与 facade 逐句相同，直接走冷路径）。
+#[allow(clippy::too_many_arguments)]
+fn send_ref_msg_with_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    ident: u16,
+    w_param: i32,
+    n_param1: i32,
+    n_param2: i32,
+    n_param3: i32,
+    target: Option<i32>,
+) {
+    send_ref_msg_impl(
+        access, sim, actor_id, ident, w_param, n_param1, n_param2, n_param3, target,
+    );
+}
+
+/// **P6b2**：`send_ref_msg`（无 target）的段侧实现——`target = None`。
+#[allow(clippy::too_many_arguments)]
+fn send_ref_msg_impl_default<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    ident: u16,
+    w_param: i32,
+    n_param1: i32,
+    n_param2: i32,
+    n_param3: i32,
+) {
+    send_ref_msg_impl(
+        access, sim, actor_id, ident, w_param, n_param1, n_param2, n_param3, None,
     );
 }
 
@@ -1053,20 +1178,29 @@ pub const RM_SPACEMOVE_FIRE: u16 = 8062;
 /// { SearchEnemyTick = GetTickCount(); SearchTarget(); }
 /// ```
 /// `SearchTarget` 本身不抽数（见 [`search_target`] 文档）⇒ 本门只改目标态。
-fn class_seek_gate(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn class_seek_gate_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     let enemy_tick = e.ai.search_enemy_tick;
     let has_target = e.ai.target_creature.is_some();
     // C# `&&` 优先级高于 `||` ⇒ 第二项是 `(> 1000) && (TargetCret == null)`。
     if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn class_seek_gate(world: &mut World, actor_id: i32) {
+    class_seek_gate_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `GreenMonster.Run`（`GreenMonster.cs:13-36`）/ `RedMonster.Run`（`RedMonster.cs:13-36`）。
@@ -1078,8 +1212,13 @@ fn class_seek_gate(world: &mut World, actor_id: i32) {
 /// **仍抽数**、只是不施毒。尾段 `class_seek_gate` + `base.Run()`。
 ///
 /// `AntiPoison` 取**目标**的（Rust 唯一注入面 = [`World::target_anti_poison`]）。
-fn green_red_monster_run(world: &mut World, actor_id: i32, poison_type: u8) {
-    let Some(e) = world.entities.get(actor_id) else {
+fn green_red_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    poison_type: u8,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !can_move(&e) {
@@ -1087,27 +1226,38 @@ fn green_red_monster_run(world: &mut World, actor_id: i32, poison_type: u8) {
     }
     let (cx, cy, target_id) = (e.x, e.y, e.ai.target_creature);
     if let Some(target_id) = target_id {
-        if let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) {
+        if let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) {
             // oracle 无条件覆盖 `TargetX/TargetY`（不走 `SetTargetCreat`）。
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = tx;
                 e.ai.target_y = ty;
             }
             if (tx - cx).abs() == 1 && (ty - cy).abs() == 1 {
-                let anti_poison = world.target_anti_poison(target_id);
+                let anti_poison = crate::world::World::target_anti_poison_impl(sim, target_id);
                 // **先抽**（即使 DECHEALTH 已存在，`&&` 的右支不求值但左支已抽）。
-                let roll_passed = world.rng.random_below(anti_poison + 7) <= 6;
-                let dec_health_free = world
-                    .entities
+                let roll_passed = sim.rng.random_below(anti_poison + 7) <= 6;
+                let dec_health_free = access
                     .get(target_id)
                     .is_some_and(|t| t.status_time[crate::entity::POISON_DECHEALTH] == 0);
                 if roll_passed && dec_health_free {
-                    world.make_posion(target_id, poison_type, 30, 1);
+                    crate::world::World::make_posion_impl(
+                        access,
+                        sim,
+                        target_id,
+                        poison_type,
+                        30,
+                        1,
+                    );
                 }
             }
         }
     }
-    class_seek_gate(world, actor_id);
+    class_seek_gate_impl(access, sim, actor_id);
+}
+
+#[allow(dead_code)]
+fn green_red_monster_run(world: &mut World, actor_id: i32, poison_type: u8) {
+    green_red_monster_run_impl(&mut world.entities, &mut world.sim, actor_id, poison_type)
 }
 
 /// `Khazard.Run`（`Khazard.cs:13-59`）。
@@ -1124,8 +1274,12 @@ fn green_red_monster_run(world: &mut World, actor_id: i32, poison_type: u8) {
 ///
 /// 发帧者是 **`TargetCret`**（不是 Khazard）：`send_ref_msg(world, target_id, …)`。
 /// 落点走 `space_move` 的移位环（起点可走 ⇒ 0 抽）。
-fn khazard_run(world: &mut World, actor_id: i32) -> bool {
-    let Some(e) = world.entities.get(actor_id) else {
+fn khazard_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(e) = access.get(actor_id) else {
         return false;
     };
     if !can_move(&e) {
@@ -1133,8 +1287,8 @@ fn khazard_run(world: &mut World, actor_id: i32) -> bool {
     }
     let (cx, cy, target_id, map_id, dir) = (e.x, e.y, e.ai.target_creature, e.map_id, e.ai.dir);
     if let Some(target_id) = target_id {
-        if let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = tx;
                 e.ai.target_y = ty;
             }
@@ -1142,49 +1296,87 @@ fn khazard_run(world: &mut World, actor_id: i32) -> bool {
                 // oracle `short nX = 0; short nY = 0;`（两支持续共用；!=0 支可能不重算）。
                 let mut n_x = 0;
                 let mut n_y = 0;
-                if world.rng.random_below(2) == 0 {
-                    if let Some((fx, fy)) = front_of(world, actor_id, dir, map_id) {
+                if sim.rng.random_below(2) == 0 {
+                    if let Some((fx, fy)) = front_of_impl(access, sim, actor_id, dir, map_id) {
                         n_x = fx;
                         n_y = fy;
                     }
                     // `TargetCret.SendRefMsg(...)`——发帧者 = 目标。
-                    send_ref_msg(world, target_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
-                    let _ =
-                        crate::space_move::monster_space_move(world, target_id, map_id, n_x, n_y);
-                    let anti_poison_limit = world.target_anti_poison(target_id) + 7;
-                    if world.rng.random_below(1) == 0
-                        && world.rng.random_below(anti_poison_limit) <= 6
+                    send_ref_msg_impl_default(
+                        access,
+                        sim,
+                        target_id,
+                        RM_SPACEMOVE_FIRE,
+                        0,
+                        0,
+                        0,
+                        0,
+                    );
+                    let _ = crate::space_move::monster_space_move_impl(
+                        access, sim, target_id, map_id, n_x, n_y,
+                    );
+                    let anti_poison_limit =
+                        crate::world::World::target_anti_poison_impl(sim, target_id) + 7;
+                    if sim.rng.random_below(1) == 0 && sim.rng.random_below(anti_poison_limit) <= 6
                     {
-                        world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 35, 2);
+                        crate::world::World::make_posion_impl(
+                            access,
+                            sim,
+                            target_id,
+                            crate::entity::POISON_DECHEALTH as u8,
+                            35,
+                            2,
+                        );
                         return true;
                     }
                 } else {
-                    let half_or_below = world
-                        .entities
+                    let half_or_below = access
                         .get(target_id)
                         .is_some_and(|t| i32::from(t.hp) <= i32::from(t.max_hp) / 2);
                     if half_or_below {
-                        if let Some((fx, fy)) = front_of(world, actor_id, dir, map_id) {
+                        if let Some((fx, fy)) = front_of_impl(access, sim, actor_id, dir, map_id) {
                             n_x = fx;
                             n_y = fy;
                         }
                     }
-                    send_ref_msg(world, target_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
-                    let _ =
-                        crate::space_move::monster_space_move(world, target_id, map_id, n_x, n_y);
-                    let anti_poison_limit = world.target_anti_poison(target_id) + 7;
-                    if world.rng.random_below(1) == 0
-                        && world.rng.random_below(anti_poison_limit) <= 6
+                    send_ref_msg_impl_default(
+                        access,
+                        sim,
+                        target_id,
+                        RM_SPACEMOVE_FIRE,
+                        0,
+                        0,
+                        0,
+                        0,
+                    );
+                    let _ = crate::space_move::monster_space_move_impl(
+                        access, sim, target_id, map_id, n_x, n_y,
+                    );
+                    let anti_poison_limit =
+                        crate::world::World::target_anti_poison_impl(sim, target_id) + 7;
+                    if sim.rng.random_below(1) == 0 && sim.rng.random_below(anti_poison_limit) <= 6
                     {
-                        world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 35, 2);
+                        crate::world::World::make_posion_impl(
+                            access,
+                            sim,
+                            target_id,
+                            crate::entity::POISON_DECHEALTH as u8,
+                            35,
+                            2,
+                        );
                         return true;
                     }
                 }
             }
         }
     }
-    class_seek_gate(world, actor_id);
+    class_seek_gate_impl(access, sim, actor_id);
     false
+}
+
+#[allow(dead_code)]
+fn khazard_run(world: &mut World, actor_id: i32) -> bool {
+    khazard_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `FrostTiger.Run`（`FrostTiger.cs:14-36`）。
@@ -1196,8 +1388,12 @@ fn khazard_run(world: &mut World, actor_id: i32) -> bool {
 /// [`crate::slave::TransparentDelivery::status_changed`] 入出帧队列，**不得丢弃**。
 /// 有目标 ⇒ 只把 `StatusTimeArr[STATETRANSPARENT]` 置 **0**（oracle **不**在此清
 /// `HideMode/Transparent`，那两个位由 `RecalcAbilitys` 收口）。尾段 `class_seek_gate` + `base.Run()`。
-fn frost_tiger_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+fn frost_tiger_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !can_move(&e) {
@@ -1207,20 +1403,35 @@ fn frost_tiger_run(world: &mut World, actor_id: i32) {
     let transparent_status = e.status_time[crate::entity::POISON_STATETRANSPARENT];
     if !has_target {
         if transparent_status == 0 {
-            let d = world.mag_make_private_transparent(actor_id, 180);
+            let d =
+                crate::world::World::mag_make_private_transparent_impl(access, sim, actor_id, 180);
             // oracle `MagicManager.MagMakePrivateTransparent` 收尾无条件 `baseObject.StatusChanged()`
             // ⇒ `SendRefMsg(RM_CHARSTATUSCHANGED, 0, CharStatus, 0, 0, "")`。helper 内早退
             // （计时器 > 0 / 实体消失）时 `status_changed == false` ⇒ 不产帧。
             // **投递结果不得丢弃**：为真 ⇒ 入 `pending_monster_ref_msgs`（与其它 `SendRefMsg`
             // 消费点同口径）。宿主 `drain_monster_ref_msgs` 尚未列该 ident ⇒ 出帧面登记 T-135。
             if d.status_changed {
-                send_ref_msg(world, actor_id, RM_CHARSTATUSCHANGED, 0, d.status, 0, 0);
+                send_ref_msg_impl_default(
+                    access,
+                    sim,
+                    actor_id,
+                    RM_CHARSTATUSCHANGED,
+                    0,
+                    d.status,
+                    0,
+                    0,
+                );
             }
         }
-    } else if let Some(e) = world.entities.get_mut(actor_id) {
+    } else if let Some(e) = access.get_mut(actor_id) {
         e.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = 0;
     }
-    class_seek_gate(world, actor_id);
+    class_seek_gate_impl(access, sim, actor_id);
+}
+
+#[allow(dead_code)]
+fn frost_tiger_run(world: &mut World, actor_id: i32) {
+    frost_tiger_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `TeleMonster.Run`（`TeleMonster.cs:12-31`）。
@@ -1230,8 +1441,12 @@ fn frost_tiger_run(world: &mut World, actor_id: i32) {
 /// `SetTargetCreat` 选中、`TargetX/Y` 还是 -1 时也会触发，oracle 原样）⇒
 /// `this.SendRefMsg(RM_SPACEMOVE_FIRE)` + `SpaceMove(TargetCret.MapName, TargetCret.CurrX,
 /// TargetCret.CurrY, 0)`。尾段 `class_seek_gate` + `base.Run()`。
-fn tele_monster_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+fn tele_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !can_move(&e) {
@@ -1241,14 +1456,21 @@ fn tele_monster_run(world: &mut World, actor_id: i32) {
         (e.x, e.y, e.ai.target_creature, e.ai.target_x, e.ai.target_y);
     if let Some(target_id) = target_id {
         if (cx - target_x).abs() > 5 || (cy - target_y).abs() > 5 {
-            send_ref_msg(world, actor_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
-            let dest = world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y));
+            send_ref_msg_impl_default(access, sim, actor_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
+            let dest = access.get(target_id).map(|t| (t.map_id, t.x, t.y));
             if let Some((dest_map, dx, dy)) = dest {
-                let _ = crate::space_move::monster_space_move(world, actor_id, dest_map, dx, dy);
+                let _ = crate::space_move::monster_space_move_impl(
+                    access, sim, actor_id, dest_map, dx, dy,
+                );
             }
         }
     }
-    class_seek_gate(world, actor_id);
+    class_seek_gate_impl(access, sim, actor_id);
+}
+
+#[allow(dead_code)]
+fn tele_monster_run(world: &mut World, actor_id: i32) {
+    tele_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -1283,8 +1505,14 @@ fn tele_monster_run(world: &mut World, actor_id: i32) {
 /// `ActorId` 相等门归零 —— 真机 `RonObject.AroundAttack` 因此会给自己投递一条
 /// `RM_STRUCK(wParam=0)`，照抄。
 #[must_use]
-fn map_base_objects_1(world: &World, map_id: usize, nx: i32, ny: i32) -> Vec<i32> {
-    let Some(map) = world.maps.get(map_id) else {
+fn map_base_objects_1_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &crate::world::SimState,
+    map_id: usize,
+    nx: i32,
+    ny: i32,
+) -> Vec<i32> {
+    let Some(map) = sim.maps.get(map_id) else {
         return Vec::new();
     };
     let mut out = Vec::new();
@@ -1296,7 +1524,7 @@ fn map_base_objects_1(world: &World, map_id: usize, nx: i32, ny: i32) -> Vec<i32
             }
             for o in &cell.obj_list {
                 if o.cell_obj_id > 0 && o.actor_object {
-                    if let Some(e) = world.entities.get(o.cell_obj_id) {
+                    if let Some(e) = access.get(o.cell_obj_id) {
                         if !e.death && !e.ghost {
                             out.push(o.cell_obj_id);
                         }
@@ -1308,6 +1536,11 @@ fn map_base_objects_1(world: &World, map_id: usize, nx: i32, ny: i32) -> Vec<i32
     out
 }
 
+#[allow(dead_code)]
+fn map_base_objects_1(world: &World, map_id: usize, nx: i32, ny: i32) -> Vec<i32> {
+    map_base_objects_1_impl(&world.entities, &world.sim, map_id, nx, ny)
+}
+
 /// `ElectronicScolpionMon.Run`（`ElectronicScolpionMon.cs:33-70`）。
 ///
 /// 返回 `true` = oracle 在 `CanMove()` 门内 `return`（`TargetCret == null`，`:50-53`）
@@ -1317,9 +1550,13 @@ fn map_base_objects_1(world: &World, map_id: usize, nx: i32, ny: i32) -> Vec<i32
 /// && TargetCret == null` ⇒ 刷新 tick + `SearchTarget()`；仍无目标 ⇒ `return`；目标两轴 `<= 2` 且
 /// (`UseMagic || nX == 2 || nY == 2`) 且 `(now - AttackTick) > NextHitTime` ⇒ 刷新 `AttackTick` →
 /// `GetNextDirection` → [`electronic_scolpion_lighting_attack`]。
-fn electronic_scolpion_run(world: &mut World, actor_id: i32) -> bool {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn electronic_scolpion_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return false;
     };
     if !can_move(&e) {
@@ -1330,38 +1567,39 @@ fn electronic_scolpion_run(world: &mut World, actor_id: i32) -> bool {
     let (cx, cy) = (e.x, e.y);
     let (has_target, enemy_tick) = (e.ai.target_creature.is_some(), e.ai.search_enemy_tick);
     let (attack_tick, next_hit_time) = (e.ai.attack_tick, e.ai.next_hit_time);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.monster_class.use_magic = use_magic;
     }
     // `if ((now - SearchEnemyTick) > 1000 && TargetCret == null)`（`:45`）。
     if now - enemy_tick > 1000 && !has_target {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
     }
     // `if (TargetCret == null) return;`（`:50-53`）——**跳过 `base.Run()`**。
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return true;
     };
-    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+    let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) else {
         return false;
     };
     let nx = (cx - tx).abs();
     let ny = (cy - ty).abs();
     if nx <= 2 && ny <= 2 && (use_magic || nx == 2 || ny == 2) && now - attack_tick > next_hit_time
     {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.attack_tick = now;
         }
         let dir = crate::magic::next_direction(cx, cy, tx, ty);
-        electronic_scolpion_lighting_attack(world, actor_id, dir);
+        electronic_scolpion_lighting_attack_impl(access, sim, actor_id, dir);
     }
     false
+}
+
+#[allow(dead_code)]
+fn electronic_scolpion_run(world: &mut World, actor_id: i32) -> bool {
+    electronic_scolpion_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ElectronicScolpionMon.LightingAttack(byte nDir)`（`ElectronicScolpionMon.cs:15-31`）。
@@ -1372,25 +1610,29 @@ fn electronic_scolpion_run(world: &mut World, actor_id: i32) -> bool {
 /// `WAbil.HP += (ushort)(nDamage / LoByte(WAbil.MP))`（`:22-26`，`ushort` 回绕）→
 /// `TargetCret.StruckDamage(nDamage)` → `SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …, 200)`。
 /// 尾帧 `SendRefMsg(RM_LIGHTING, 1, CurrX, CurrY, TargetCret.ActorId, "")`（`:30`）**无条件**。
-fn electronic_scolpion_lighting_attack(world: &mut World, actor_id: i32, n_dir: u8) {
-    let Some((cx, cy, target_id)) = world
-        .entities
+fn electronic_scolpion_lighting_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    n_dir: u8,
+) {
+    let Some((cx, cy, target_id)) = access
         .get(actor_id)
         .and_then(|e| e.ai.target_creature.map(|t| (e.x, e.y, t)))
     else {
         return;
     };
-    let dc = world.entities.get(actor_id).map_or(0, |e| e.dc);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    let dc = access.get(actor_id).map_or(0, |e| e.dc);
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = n_dir;
     }
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
     // `GetAttackPower(HUtil32.LoByte(WAbil.DC), Math.Abs(HUtil32.HiByte(WAbil.DC) - LoByte))`
     // （`:18`）：`power < 0` 归零后 `Random(power + 1)` ⇒ **恰 1 抽**。
-    let n_power = crate::combat::get_attack_power(&mut world.rng, lo, (hi - lo).abs());
+    let n_power = crate::combat::get_attack_power(&mut sim.rng, lo, (hi - lo).abs());
     // `GetMagStruckDamage` 的 undead 加项读**接收者的** `AddAbil.UndeadPower`，门 `LA_UNDEAD`。
-    let (mac, undead): (u16, Option<i32>) = world.entities.get(target_id).map_or((0, None), |t| {
+    let (mac, undead): (u16, Option<i32>) = access.get(target_id).map_or((0, None), |t| {
         (
             t.mac,
             if t.life_attrib == 1 {
@@ -1400,24 +1642,23 @@ fn electronic_scolpion_lighting_attack(world: &mut World, actor_id: i32, n_dir: 
             },
         )
     });
-    let n_damage = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power, undead);
+    let n_damage = crate::combat::get_mag_struck_damage(&mut sim.rng, mac, n_power, undead);
     if n_damage > 0 {
-        let (mp, hp) = world
-            .entities
-            .get(actor_id)
-            .map_or((0u16, 0u16), |e| (e.mp, e.hp));
+        let (mp, hp) = access.get(actor_id).map_or((0u16, 0u16), |e| (e.mp, e.hp));
         // `int btGetBackHp = HUtil32.LoByte(WAbil.MP); if (btGetBackHp != 0) WAbil.HP += (ushort)(...)`。
         let back = i32::from(crate::combat::lo_byte(i32::from(mp)));
         if back != 0 {
             let heal = (n_damage / back) as u16;
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.vitals.hp = hp.wrapping_add(heal);
             }
         }
         // `TargetCret.StruckDamage(nDamage)`：倍率 + `DamageHealth` + 玩家耐久（**不发 RM_STRUCK**）。
-        let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_power);
+        let _ = class_struck_apply_impl(access, sim, actor_id, target_id, n_damage, n_power);
         // `TargetCret.SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …, ActorId, "", 200)`（`:28`）。
-        world.send_struck_delay_msg_refmessage(
+        crate::slave::send_struck_delay_msg_refmessage_impl(
+            access,
+            sim,
             target_id,
             actor_id,
             n_damage,
@@ -1425,8 +1666,9 @@ fn electronic_scolpion_lighting_attack(world: &mut World, actor_id: i32, n_dir: 
         );
     }
     // `SendRefMsg(RM_LIGHTING, 1, CurrX, CurrY, TargetCret.ActorId, "")`（`:30`）——**无条件**。
-    send_ref_msg_with_target(
-        world,
+    send_ref_msg_with_target_impl(
+        access,
+        sim,
         actor_id,
         RM_LIGHTING,
         1,
@@ -1435,6 +1677,11 @@ fn electronic_scolpion_lighting_attack(world: &mut World, actor_id: i32, n_dir: 
         target_id,
         Some(target_id),
     );
+}
+
+#[allow(dead_code)]
+fn electronic_scolpion_lighting_attack(world: &mut World, actor_id: i32, n_dir: u8) {
+    electronic_scolpion_lighting_attack_impl(&mut world.entities, &mut world.sim, actor_id, n_dir)
 }
 
 /// `MagicMonObject.Run`（`MagicMonObject.cs:23-60`）。
@@ -1446,9 +1693,13 @@ fn electronic_scolpion_lighting_attack(world: &mut World, actor_id: i32, n_dir: 
 /// && TargetCret == null` 仍按 `TargetCret` 索敌（照抄）；距离窗 `<= 5`、或门 `nX == 5 || nY == 5`；
 /// 到点分支里的 `LightingAttack(nAttackDir)` 是**空函数**（`:18-21`）⇒ 只刷新 `AttackTick`，
 /// 不抽数、不产帧、不写其它字段。
-fn magic_mon_object_run(world: &mut World, actor_id: i32) -> bool {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn magic_mon_object_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return false;
     };
     if !can_move(&e) {
@@ -1458,27 +1709,27 @@ fn magic_mon_object_run(world: &mut World, actor_id: i32) -> bool {
     let (cx, cy) = (e.x, e.y);
     let (has_target, enemy_tick) = (e.ai.target_creature.is_some(), e.ai.search_enemy_tick);
     let (attack_tick, next_hit_time) = (e.ai.attack_tick, e.ai.next_hit_time);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.monster_class.use_magic = use_magic;
     }
     if now - enemy_tick > 1000 && !has_target {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
     }
     // `if (Master == null) return;`（`:40-43`）——**跳过 `base.Run()`**。
-    let Some(master_id) = world.entities.get(actor_id).and_then(|e| e.master) else {
+    let Some(master_id) = access.get(actor_id).and_then(|e| e.master) else {
         return true;
     };
-    let Some((mx, my)) = world.entities.get(master_id).map(|m| (m.x, m.y)) else {
+    let Some((mx, my)) = access.get(master_id).map(|m| (m.x, m.y)) else {
         return true;
     };
     let nx = (cx - mx).abs();
     let ny = (cy - my).abs();
     if nx <= 5 && ny <= 5 && (use_magic || nx == 5 || ny == 5) && now - attack_tick > next_hit_time
     {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.attack_tick = now;
         }
         // `int nAttackDir = GetNextDirection(...); LightingAttack(nAttackDir);`（`:53-54`）——
@@ -1487,22 +1738,31 @@ fn magic_mon_object_run(world: &mut World, actor_id: i32) -> bool {
     false
 }
 
+#[allow(dead_code)]
+fn magic_mon_object_run(world: &mut World, actor_id: i32) -> bool {
+    magic_mon_object_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `RonObject.Run`（`RonObject.cs:35-51`）。`base.Run()` = `MonsterObject.Run` ⇒ 恒
 /// [`ClassRunBase::Monster`]。
 ///
 /// 索敌门与 [`class_seek_gate`] 逐字相同（`> 8000 || (> 1000 && TargetCret == null)`）；
 /// 有目标且两轴 **`< 6`**（严格）且 `(now - AttackTick) > NextHitTime` ⇒ 刷新 `AttackTick` →
 /// [`ron_object_around_attack`]。
-fn ron_object_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+fn ron_object_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !can_move(&e) {
         return;
     }
-    class_seek_gate(world, actor_id);
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+    class_seek_gate_impl(access, sim, actor_id);
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     let Some(target_id) = e.ai.target_creature else {
@@ -1510,15 +1770,20 @@ fn ron_object_run(world: &mut World, actor_id: i32) {
     };
     let (cx, cy) = (e.x, e.y);
     let (attack_tick, next_hit_time) = (e.ai.attack_tick, e.ai.next_hit_time);
-    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+    let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) else {
         return;
     };
     if (cx - tx).abs() < 6 && (cy - ty).abs() < 6 && now - attack_tick > next_hit_time {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.attack_tick = now;
         }
-        ron_object_around_attack(world, actor_id);
+        ron_object_around_attack_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn ron_object_run(world: &mut World, actor_id: i32) {
+    ron_object_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `RonObject.AroundAttack()`（`RonObject.cs:13-33`）——群攻。
@@ -1527,37 +1792,41 @@ fn ron_object_run(world: &mut World, actor_id: i32) {
 /// → `GetMapBaseObjects(Envir, CurrX, CurrY, 1)`（3×3，含自身）→ **列表非空**才抽一次
 /// `GetBaseAttackPoewr()` → 从尾向头逐个 [`ron_attack`]（= oracle 的倒序 `for` + `RemoveAt`）→
 /// 尾帧 `SendRefMsg(RM_HIT, Dir, CurrX, CurrY, 0, "")`（**无条件**，列表空也发）。
-fn ron_object_around_attack(world: &mut World, actor_id: i32) {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn ron_object_around_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return;
     };
-    let att_dir = get_attack_dir(world, actor_id, target_id).unwrap_or(0);
-    let Some((cx, cy, map_id)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
+    let att_dir = get_attack_dir_impl(access, actor_id, target_id).unwrap_or(0);
+    let Some((cx, cy, map_id)) = access.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
         return;
     };
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = att_dir;
     }
-    let list = map_base_objects_1(world, map_id, cx, cy);
+    let list = map_base_objects_1_impl(access, sim, map_id, cx, cy);
     if !list.is_empty() {
-        let dc = world.entities.get(actor_id).map_or(0, |e| e.dc);
+        let dc = access.get(actor_id).map_or(0, |e| e.dc);
         // `int nPower = GetBaseAttackPoewr();`（`BaseObject.Attack.cs:25-28`）——**一次**，全目标共用。
-        let n_power = crate::combat::get_base_attack_power(&mut world.rng, dc);
+        let n_power = crate::combat::get_base_attack_power(&mut sim.rng, dc);
         // `for (int i = objectList.Count - 1; i >= 0; i--) { _Attack(nPower, objectList[i]); RemoveAt(i); }`
         // ⇒ 倒序访问，每项恰一次。
         for tid in list.into_iter().rev() {
-            ron_attack(world, actor_id, tid, n_power);
+            ron_attack_impl(access, sim, actor_id, tid, n_power);
         }
     }
-    let (dir, x, y) = world
-        .entities
+    let (dir, x, y) = access
         .get(actor_id)
         .map_or((0u8, 0, 0), |e| (e.ai.dir, e.x, e.y));
-    send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+}
+
+#[allow(dead_code)]
+fn ron_object_around_attack(world: &mut World, actor_id: i32) {
+    ron_object_around_attack_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `BaseObject._Attack(int nPower, IActor targetObject)`（`BaseObject.Attack.cs:30-66`），
@@ -1571,11 +1840,17 @@ fn ron_object_around_attack(world: &mut World, actor_id: i32) {
 /// 4. `target.Race > Play` ⇒ `target.SendMsg(target, RM_STRUCK, nPower, HP, MaxHP, ActorId)`
 ///    （本骨架折叠为 `SetLastHiter` + `pending_struck` 入队，与 [`World::attack_once`] 同口径；
 ///    `CloneMonster` 的 `Operate` 覆写除外）。
-fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
-    let Some(attacker) = world.entities.spawn_cloned(actor_id) else {
+fn ron_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+    n_power: i32,
+) {
+    let Some(attacker) = access.spawn_cloned(actor_id) else {
         return;
     };
-    let Some(mut target) = world.entities.spawn_cloned(target_id) else {
+    let Some(mut target) = access.spawn_cloned(target_id) else {
         return;
     };
     let power = n_power;
@@ -1583,7 +1858,7 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
     let mut hit = false;
     if is_proper_target_grouped_direct(&attacker, &target, &[]) {
         // `if (targetObject.HitPoint > 0) { if (HitPoint < RandomByte(targetObject.SpeedPoint)) nPower = 0; }`
-        if target.hit_point > 0 && attacker.hit_point < world.rng.random_byte(target.speed_point) {
+        if target.hit_point > 0 && attacker.hit_point < sim.rng.random_byte(target.speed_point) {
             n_power = 0;
         } else {
             hit = true;
@@ -1596,12 +1871,12 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
     let mut killed = false;
     if n_power > 0 {
         let reduced =
-            crate::combat::get_hit_struck_damage(&mut world.rng, &target, &attacker, n_power);
+            crate::combat::get_hit_struck_damage(&mut sim.rng, &target, &attacker, n_power);
         if reduced > 0 {
-            let last_hitter = current_last_hitter(world, target_id);
-            let cfg = world.combat_config;
+            let last_hitter = current_last_hitter_impl(access, sim, target_id);
+            let cfg = sim.combat_config;
             let (d, k) = crate::combat::struck_damage_apply(
-                &mut world.rng,
+                &mut sim.rng,
                 &mut target,
                 i32::from(reduced),
                 last_hitter,
@@ -1611,12 +1886,14 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
             killed = k;
             struck_power = reduced;
             // 目标 `StruckDamage` 在克隆上跑（玩家目标含耐久段）⇒ 回写 `hp`/`use_items`。
-            if let Some(e) = world.entities.get_mut(target_id) {
+            if let Some(e) = access.get_mut(target_id) {
                 e.vitals.hp = target.hp;
                 e.inventory.use_items = target.use_items;
             }
             // `targetObject.SendStruckDelayMsg(RM_REFMESSAGE, nPower, …, 200)`（`:57`）。
-            world.send_struck_delay_msg_refmessage(
+            crate::slave::send_struck_delay_msg_refmessage_impl(
+                access,
+                sim,
                 target_id,
                 actor_id,
                 i32::from(reduced),
@@ -1624,7 +1901,7 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
             );
         }
     }
-    world.pending_ai_attacks.push((
+    sim.pending_ai_attacks.push((
         actor_id,
         target_id,
         crate::combat::AttackOutcome {
@@ -1640,9 +1917,9 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
     // （`:61-64`）：目标自己的 `base.Run()` 出队（`AnimalObject.Operate`）。折叠口径同
     // [`World::attack_once`]：`CloneMonster` 不写 `LastHiter`（其 `Operate` 覆写恒 `return false`）。
     if target.race > ACTOR_RACE_PLAY {
-        let now = world.clock_ms;
+        let now = sim.clock_ms;
         let is_clone = target.race == crate::special_monster::RACE_CLONE_MONSTER;
-        if let Some(mut e) = world.entities.get_mut(target_id) {
+        if let Some(mut e) = access.get_mut(target_id) {
             if !is_clone {
                 e.set_last_hiter(actor_id, now);
             }
@@ -1654,6 +1931,17 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
             }
         }
     }
+}
+
+#[allow(dead_code)]
+fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
+    ron_attack_impl(
+        &mut world.entities,
+        &mut world.sim,
+        actor_id,
+        target_id,
+        n_power,
+    )
 }
 
 /// 专用怪 `Run` 覆写的分派（`CreateMonster` 的 race → 类映射）。
@@ -1671,74 +1959,78 @@ fn ron_attack(world: &mut World, actor_id: i32, target_id: i32, n_power: i32) {
 ///
 /// 返回 `None` = 非上述类，调用方继续走通用 [`monster_run`]；否则按 [`ClassRunBase`]
 /// 决定 oracle `base.Run()` 的落点。
-pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBase> {
-    let race = world.entities.get(actor_id)?.race;
+pub fn monster_class_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> Option<ClassRunBase> {
+    let race = access.get(actor_id)?.race;
     match race {
         // `StickMonster.Run`（`StickMonster.cs:101-149`）。
         85 => {
-            stick_monster_run(world, actor_id);
+            stick_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Animal)
         }
         // `DigOutZombi.Run`（`DigOutZombi.cs:18-55`）。
         95 => {
-            dig_out_zombi_run(world, actor_id);
+            dig_out_zombi_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // `ScultureMonster.Run`（`ScultureMonster.cs:43-79`）。
         101 => {
-            sculture_monster_run(world, actor_id);
+            sculture_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // `BigHeartMonster.Run`（`BigHeartMonster.cs:44-54`）。
         115 => {
-            big_heart_monster_run(world, actor_id);
+            big_heart_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Animal)
         }
         // **MB-2**：`ChickenDeer`（52）、`DualAxeMonster` 及 93/104 继承、
         // `LightingZombi`（94）、`ZilKinZombi`（96）。
         52 => {
-            chicken_deer_run(world, actor_id);
+            chicken_deer_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         87 | 93 | 104 => {
-            dual_axe_monster_run(world, actor_id);
+            dual_axe_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         94 => {
-            lighting_zombi_run(world, actor_id);
+            lighting_zombi_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         96 => {
-            zil_kin_zombi_run(world, actor_id);
+            zil_kin_zombi_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // **MB-3**：`CentipedeKingMonster`（`StickMonster` 派生；`base.Run` 的
         // `StickMonster.Run` 在 `WalkTick` 已刷新后必然早退 ⇒ 等价于 `Animal` 续跑）。
         107 => {
-            centipede_king_run(world, actor_id);
+            centipede_king_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Animal)
         }
         // `GasMothMonster`（`base.Run` = `ATMonster.Run` → `MonsterObject.Run`）。
         105 => {
-            gas_moth_monster_run(world, actor_id);
+            gas_moth_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // `ScultureKingMonster`（`base.Run` = `MonsterObject.Run`）。
         102 => {
-            sculture_king_run(world, actor_id);
+            sculture_king_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // **`openmir2-attacktarget-overrides`**：`ExplosionSpider.Run`（60s 自爆段 +
         // `base.Run()` = `MonsterObject.Run`）。
         117 => {
-            explosion_spider_run(world, actor_id);
+            explosion_spider_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // **MB-4**：`CowKingMonster.Run`（`:40-94`）；`base.Run()` =
         // `ATMonster.Run`（race 92 不在索敌集合）→ `MonsterObject.Run`。
         // Siege 两支在 oracle 里 `return`，**跳过 `base.Run()`** ⇒ `ClassRunBase::None`。
         92 => {
-            if cow_king_run(world, actor_id) {
+            if cow_king_run_impl(access, sim, actor_id) {
                 Some(ClassRunBase::None)
             } else {
                 Some(ClassRunBase::Monster)
@@ -1748,13 +2040,13 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         // `base.Run()` = `MonsterObject.Run`）。
         // `TeleMonster`（203）：`TargetX/Y` 错位瞬移。
         203 => {
-            tele_monster_run(world, actor_id);
+            tele_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // `Khazard`（206）：目标 `return`（毒门命中）时 oracle **跳过 `base.Run()`**
         // ⇒ `ClassRunBase::None`（与 CowKing 的 Siege 两支同口径）。
         206 => {
-            if khazard_run(world, actor_id) {
+            if khazard_run_impl(access, sim, actor_id) {
                 Some(ClassRunBase::None)
             } else {
                 Some(ClassRunBase::Monster)
@@ -1762,22 +2054,32 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         }
         // `GreenMonster`（208）/ `RedMonster`（209）：只差毒型。
         208 => {
-            green_red_monster_run(world, actor_id, crate::entity::POISON_DECHEALTH as u8);
+            green_red_monster_run_impl(
+                access,
+                sim,
+                actor_id,
+                crate::entity::POISON_DECHEALTH as u8,
+            );
             Some(ClassRunBase::Monster)
         }
         209 => {
-            green_red_monster_run(world, actor_id, crate::entity::POISON_DAMAGEARMOR as u8);
+            green_red_monster_run_impl(
+                access,
+                sim,
+                actor_id,
+                crate::entity::POISON_DAMAGEARMOR as u8,
+            );
             Some(ClassRunBase::Monster)
         }
         // `FrostTiger`（210）：透明 180s / 有目标清计时器。
         210 => {
-            frost_tiger_run(world, actor_id);
+            frost_tiger_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // **MB-6**：`ElectronicScolpionMon`（200）。`CanMove()` 门内 `TargetCret == null`
         // ⇒ oracle `return`（跳过 `base.Run()`）⇒ [`ClassRunBase::None`]。
         200 => {
-            if electronic_scolpion_run(world, actor_id) {
+            if electronic_scolpion_run_impl(access, sim, actor_id) {
                 Some(ClassRunBase::None)
             } else {
                 Some(ClassRunBase::Monster)
@@ -1785,7 +2087,7 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         }
         // `MagicMonObject`（133）：`CanMove()` 门内 `Master == null` ⇒ oracle `return`。
         133 => {
-            if magic_mon_object_run(world, actor_id) {
+            if magic_mon_object_run_impl(access, sim, actor_id) {
                 Some(ClassRunBase::None)
             } else {
                 Some(ClassRunBase::Monster)
@@ -1793,102 +2095,119 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
         }
         // `RonObject`（131）：`Run` 恒落到 `base.Run()`（`MonsterObject.Run`）。
         131 => {
-            ron_object_run(world, actor_id);
+            ron_object_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // **MB-7**：`BoneKingMonster.Run`（`BoneKingMonster.cs:48-76`）；`: MonsterObject`
         // ⇒ `base.Run()` = `MonsterObject.Run`。
         134 => {
-            bone_king_run(world, actor_id);
+            bone_king_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // `ElfMonster.Run`（`ElfMonster.cs:43-86`）；`: MonsterObject` ⇒ `MonsterObject.Run`。
         113 => {
-            elf_monster_run(world, actor_id);
+            elf_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // `ElfWarriorMonster.Run`（`ElfWarriorMonster.cs:112-166`）；`: SpitSpider : AtMonster`
         // ⇒ `base.Run()` = `ATMonster.Run` → `MonsterObject.Run`（索敌门见 [`monster_run`]）。
         114 => {
-            elf_warrior_run(world, actor_id);
+            elf_warrior_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // **MB-8（R18）**：`FireMonster.Run`（`FireMonster.cs:23-82`）；`: MonsterObject`
         // ⇒ `base.Run()` = `MonsterObject.Run`。
         214 => {
-            fire_monster_run(world, actor_id);
+            fire_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // **MB-8（R33）**：`SandMobObject.Run`（`SandMobObject.cs:14-57`）；`: StickMonster`。
         // 双 `base.Run()` 的 pass 数由本函数返回（`AnimalTwice`/`Animal`/`None`）。
-        132 => Some(sand_mob_object_run(world, actor_id)),
+        132 => Some(sand_mob_object_run_impl(access, sim, actor_id)),
         // **MB-8（R36）**：`SoccerBall.Run`（`SoccerBall.cs:19-74`）；`: AnimalObject`
         // ⇒ `base.Run()` = `AnimalObject.Run`。
         120 => {
-            soccer_ball_run(world, actor_id);
+            soccer_ball_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Animal)
         }
         // **MB-8（R42）**：`WhiteSkeleton.Run`（`WhiteSkeleton.cs:29-39`）；`: AtMonster`
         // ⇒ `base.Run()` = `ATMonster.Run` → `MonsterObject.Run`（8s/1s 门见 [`monster_run`]）。
         100 => {
-            white_skeleton_run(world, actor_id);
+            white_skeleton_run_impl(access, sim, actor_id);
             Some(ClassRunBase::Monster)
         }
         // **MB-9（R19）**：`FireballMonster.Run`（`FireballMonster.cs:14-62`）；`: MagicMonster`。
         215 => {
-            fireball_monster_run(world, actor_id);
+            fireball_monster_run_impl(access, sim, actor_id);
             Some(ClassRunBase::MagicMonster)
         }
         _ => None,
     }
 }
 
+pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBase> {
+    monster_class_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// [`monster_class_run`] 的返回值 → oracle `base.Run()` 链的落地（四个调用点共用）。
-fn run_class_base(world: &mut World, actor_id: i32, base: ClassRunBase) {
+fn run_class_base_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    base: ClassRunBase,
+) {
     match base {
         ClassRunBase::Animal => {
-            animal_run(world, actor_id);
-            base_object_run_monster(world, actor_id);
+            animal_run_impl(access, sim, actor_id);
+            base_object_run_monster_impl(access, sim, actor_id);
         }
         ClassRunBase::AnimalTwice => {
             // `SandMobObject.Run` 的两次 `base.Run()`（各早退成 `AnimalObject.Run`）。
-            animal_run(world, actor_id);
-            base_object_run_monster(world, actor_id);
-            animal_run(world, actor_id);
-            base_object_run_monster(world, actor_id);
+            animal_run_impl(access, sim, actor_id);
+            base_object_run_monster_impl(access, sim, actor_id);
+            animal_run_impl(access, sim, actor_id);
+            base_object_run_monster_impl(access, sim, actor_id);
         }
         ClassRunBase::Monster => {
-            monster_run(world, actor_id);
-            animal_run(world, actor_id);
-            base_object_run_monster(world, actor_id);
+            monster_run_impl(access, sim, actor_id);
+            animal_run_impl(access, sim, actor_id);
+            base_object_run_monster_impl(access, sim, actor_id);
         }
         ClassRunBase::MagicMonster => {
-            magic_monster_run(world, actor_id);
-            monster_run(world, actor_id);
-            animal_run(world, actor_id);
-            base_object_run_monster(world, actor_id);
+            magic_monster_run_impl(access, sim, actor_id);
+            monster_run_impl(access, sim, actor_id);
+            animal_run_impl(access, sim, actor_id);
+            base_object_run_monster_impl(access, sim, actor_id);
         }
         ClassRunBase::None => {}
     }
 }
 
+#[allow(dead_code)]
+fn run_class_base(world: &mut World, actor_id: i32, base: ClassRunBase) {
+    run_class_base_impl(&mut world.entities, &mut world.sim, actor_id, base)
+}
+
 /// `StickMonster.CheckComeOut`（`StickMonster.cs:84-104`）：严格 `<` 两轴、`Death` 跳过，
 /// `IsProperTarget && (!HideMode || CoolEye)`。
-fn stick_check_come_out(world: &World, actor_id: i32) -> bool {
-    let Some(e) = world.entities.get(actor_id) else {
+fn stick_check_come_out_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    _sim: &crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(e) = access.get(actor_id) else {
         return false;
     };
     let (cx, cy, come_out, cool_eye) = (e.x, e.y, e.come_out_value, e.ai.cool_eye);
     let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
     for target_id in visible {
-        let Some(t) = world.entities.get(target_id) else {
+        let Some(t) = access.get(target_id) else {
             continue;
         };
         if t.death {
             continue;
         }
-        let proper = world
-            .entities
+        let proper = access
             .get(actor_id)
             .is_some_and(|a| is_proper_target(&a, &t));
         if proper
@@ -1902,128 +2221,152 @@ fn stick_check_come_out(world: &World, actor_id: i32) -> bool {
     false
 }
 
+#[allow(dead_code)]
+fn stick_check_come_out(world: &World, actor_id: i32) -> bool {
+    stick_check_come_out_impl(&world.entities, &world.sim, actor_id)
+}
+
 /// `StickMonster.FindAttackTarget`（`StickMonster.cs:54-58`）：
 /// 先 `FixedHideMode = false`，再 `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0, "")`。
-fn stick_find_attack_target(world: &mut World, actor_id: i32) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn stick_find_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.flags.fixed_hide_mode = false;
     }
-    let (dir, x, y) = match world.entities.get(actor_id) {
+    let (dir, x, y) = match access.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
     // oracle `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0, "")`（wParam = Dir）。
-    send_ref_msg(world, actor_id, RM_DIGUP, dir as i32, x, y, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_DIGUP, dir as i32, x, y, 0);
+}
+
+#[allow(dead_code)]
+fn stick_find_attack_target(world: &mut World, actor_id: i32) {
+    stick_find_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `StickMonster.ComeDown`（`StickMonster.cs:60-68`）：`RM_DIGDOWN` → 清可见集 → `FixedHideMode=true`。
-fn stick_come_down(world: &mut World, actor_id: i32) {
-    let (dir, x, y) = match world.entities.get(actor_id) {
+fn stick_come_down_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let (dir, x, y) = match access.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
-    send_ref_msg(world, actor_id, RM_DIGDOWN, dir as i32, x, y, 0);
-    if let Some(b) = world.entities.map_binding_mut(actor_id) {
+    send_ref_msg_impl_default(access, sim, actor_id, RM_DIGDOWN, dir as i32, x, y, 0);
+    if let Some(b) = access.map_binding_mut(actor_id) {
         // oracle `Dispose(VisibleActors[i])` 是 `obj = null` 的无副作用空操作。
         b.visible_actors.clear();
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.flags.fixed_hide_mode = true;
     }
+}
+
+#[allow(dead_code)]
+fn stick_come_down(world: &mut World, actor_id: i32) {
+    stick_come_down_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `StickMonster.AttackTarget`（`StickMonster.cs:25-52`）。
 ///
 /// 与 `MonsterObject.AttackTarget` 的差异：**不**调 `BreakHolySeizeMode()`。
-fn stick_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn stick_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let now = world.clock_ms;
-    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
-        let due = world
-            .entities
+    let now = sim.clock_ms;
+    if let Some(bt_dir) = get_attack_dir_impl(access, actor_id, target_id) {
+        let due = access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
         if due {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
             }
-            turn_to(world, actor_id, bt_dir);
+            turn_to_impl(access, sim, actor_id, bt_dir);
             // `AnimalObject.Attack`：`GetBaseAttackPoewr()`（`World::attack_once` 等价）
             // → `AttackDir`（置 `Dir` + `_Attack`）→ `SendAttackMsg(RM_HIT, Dir, CurrX, CurrY)`。
-            if let Some(outcome) = world.attack_once(actor_id, target_id) {
-                world
-                    .pending_ai_attacks
-                    .push((actor_id, target_id, outcome));
+            if let Some(outcome) =
+                crate::world::World::attack_once_impl(access, sim, actor_id, target_id)
+            {
+                sim.pending_ai_attacks.push((actor_id, target_id, outcome));
             }
-            let (dir, x, y) = match world.entities.get(actor_id) {
+            let (dir, x, y) = match access.get(actor_id) {
                 Some(e) => (e.ai.dir, e.x, e.y),
                 None => return true,
             };
-            send_ref_msg(world, actor_id, RM_HIT, dir as i32, x, y, 0);
+            send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, dir as i32, x, y, 0);
         }
         true
     } else {
-        let same_map = world
-            .entities
+        let same_map = access
             .get(actor_id)
-            .zip(world.entities.get(target_id))
+            .zip(access.get(target_id))
             .is_some_and(|(a, t)| a.map_id == t.map_id);
         if same_map {
-            let (tx, ty) = world.entities.get(target_id).map_or((0, 0), |t| (t.x, t.y));
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            let (tx, ty) = access.get(target_id).map_or((0, 0), |t| (t.x, t.y));
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = tx;
                 e.ai.target_y = ty;
             }
         } else {
-            del_target_creature(world, actor_id);
+            del_target_creature_impl(access, sim, actor_id);
         }
         false
     }
 }
 
+#[allow(dead_code)]
+fn stick_attack_target(world: &mut World, actor_id: i32) -> bool {
+    stick_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `StickMonster.Run`（`StickMonster.cs:106-149`）。`base.Run()` 由调用方跑（= `AnimalObject.Run`）。
-fn stick_monster_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn stick_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !(can_move(&e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
         return;
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.walk_tick = now;
     }
-    if world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.fixed_hide_mode)
-    {
-        if stick_check_come_out(world, actor_id) {
-            stick_find_attack_target(world, actor_id);
+    if access.get(actor_id).is_some_and(|e| e.fixed_hide_mode) {
+        if stick_check_come_out_impl(access, sim, actor_id) {
+            stick_find_attack_target_impl(access, sim, actor_id);
         }
         return;
     }
-    let attack_due = world
-        .entities
+    let attack_due = access
         .get(actor_id)
         .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
     if attack_due {
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
     }
     let bo05 = match (
-        world.entities.get(actor_id),
-        world
-            .entities
+        access.get(actor_id),
+        access
             .get(actor_id)
             .and_then(|e| e.ai.target_creature)
-            .and_then(|t| world.entities.get(t)),
+            .and_then(|t| access.get(t)),
     ) {
         (Some(a), Some(t)) => {
             (t.x - a.x).abs() > a.attack_range || (t.y - a.y).abs() > a.attack_range
@@ -2031,51 +2374,57 @@ fn stick_monster_run(world: &mut World, actor_id: i32) {
         _ => true,
     };
     if bo05 {
-        stick_come_down(world, actor_id);
+        stick_come_down_impl(access, sim, actor_id);
     } else {
-        let _ = stick_attack_target(world, actor_id);
+        let _ = stick_attack_target_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn stick_monster_run(world: &mut World, actor_id: i32) {
+    stick_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `BigHeartMonster.AttackTarget`（`BigHeartMonster.cs:17-42`）。
 ///
 /// 唯一取数点：`Random(Math.Abs(Hi(DC)-Lo(DC)) + 1)`（`:22`）——**先于**可见目标循环，
 /// 即使没有收件人也抽一次。
-pub fn big_heart_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let now = world.clock_ms;
-    let due = world
-        .entities
+pub fn big_heart_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let now = sim.clock_ms;
+    let due = access
         .get(actor_id)
         .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
     if !due {
         return false;
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.attack_tick = now;
     }
-    let (dir, x, y, dc, view_range) = match world.entities.get(actor_id) {
+    let (dir, x, y, dc, view_range) = match access.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y, e.dc, e.view_range),
         None => return false,
     };
     // `SendRefMsg(RM_HIT, Dir, CurrX, CurrY, 0, "")`（`:20`）——在取数之前。
-    send_ref_msg(world, actor_id, RM_HIT, dir as i32, x, y, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, dir as i32, x, y, 0);
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let n_power = i32::max(0, lo + world.rng.random_below((hi - lo).abs() + 1));
-    let visible: Vec<i32> = world
-        .entities
+    let n_power = i32::max(0, lo + sim.rng.random_below((hi - lo).abs() + 1));
+    let visible: Vec<i32> = access
         .get(actor_id)
         .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
         .unwrap_or_default();
     for target_id in visible {
-        let Some(t) = world.entities.get(target_id) else {
+        let Some(t) = access.get(target_id) else {
             continue;
         };
         if t.death {
             continue;
         }
-        let proper = world
-            .entities
+        let proper = access
             .get(actor_id)
             .is_some_and(|a| is_proper_target(&a, &t));
         if !(proper && (x - t.x).abs() <= view_range && (y - t.y).abs() <= view_range) {
@@ -2083,7 +2432,9 @@ pub fn big_heart_attack_target(world: &mut World, actor_id: i32) -> bool {
         }
         let (tx, ty) = (t.x, t.y);
         // `SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(x, y), 1, ActorId, "", 200)`。
-        world.send_self_delay_msg_full(
+        crate::slave::send_self_delay_msg_full_impl(
+            access,
+            sim,
             actor_id,
             crate::slave::RM_DELAYMAGIC,
             n_power,
@@ -2093,20 +2444,32 @@ pub fn big_heart_attack_target(world: &mut World, actor_id: i32) -> bool {
             200,
         );
         // `SendRefMsg(RM_10205, 0, baseObject.CurrX, baseObject.CurrY, 1, "")`。
-        send_ref_msg(world, actor_id, RM_10205, 0, tx, ty, 1);
+        send_ref_msg_impl_default(access, sim, actor_id, RM_10205, 0, tx, ty, 1);
     }
     true
 }
 
+pub fn big_heart_attack_target(world: &mut World, actor_id: i32) -> bool {
+    big_heart_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `BigHeartMonster.Run`（`BigHeartMonster.cs:44-54`）。
-fn big_heart_monster_run(world: &mut World, actor_id: i32) {
-    let ok = world
-        .entities
+fn big_heart_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let ok = access
         .get(actor_id)
         .is_some_and(|e| can_move(&e) && !e.visible_actors.is_empty());
     if ok {
-        let _ = big_heart_attack_target(world, actor_id);
+        let _ = big_heart_attack_target_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn big_heart_monster_run(world: &mut World, actor_id: i32) {
+    big_heart_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -2117,86 +2480,99 @@ fn big_heart_monster_run(world: &mut World, actor_id: i32) {
 ///
 /// 本批接 `DualAxeMonster.AttackTarget`（`DualAxeMonster.cs:33-72`，93/104 继承同一实现）；
 /// 其余 race 仍走基版 [`attack_target`]。
-fn monster_attack_target(world: &mut World, actor_id: i32) -> bool {
-    match world.entities.get(actor_id).map(|e| e.race) {
-        Some(87 | 93 | 104) => dual_axe_attack_target(world, actor_id),
+fn monster_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    match access.get(actor_id).map(|e| e.race) {
+        Some(87 | 93 | 104) => dual_axe_attack_target_impl(access, sim, actor_id),
         // **MB-3**：`GasAttackMonster.AttackTarget`（90/105/106 继承）。
-        Some(90 | 105 | 106) => gas_attack_monster_attack_target(world, actor_id),
+        Some(90 | 105 | 106) => gas_attack_monster_attack_target_impl(access, sim, actor_id),
         // `CentipedeKingMonster.AttackTarget`（107）。
-        Some(107) => centipede_king_attack_target(world, actor_id),
+        Some(107) => centipede_king_attack_target_impl(access, sim, actor_id),
         // `ScultureKingMonster` 用的是基版 `MonsterObject.AttackTarget`，但虚调用 `Attack`
         // 被覆写为 `HitMagAttackTarget`（102）。
-        Some(102) => sculture_king_attack_target(world, actor_id),
+        Some(102) => sculture_king_attack_target_impl(access, sim, actor_id),
         // **MB-7**：`BoneKingMonster.Attack`（`BoneKingMonster.cs:42-46`）与
         // `ScultureKingMonster.Attack`（`:55-59`）**逐字相同** ⇒ 复用同一包装。
-        Some(134) => sculture_king_attack_target(world, actor_id),
+        Some(134) => sculture_king_attack_target_impl(access, sim, actor_id),
         // **MB-4**：`CowKingMonster.Attack`（`:27-31`：`GetAttackPower` + 半物理/半魔法
         // `HitMagAttackTarget`）。
-        Some(92) => cow_king_attack_target(world, actor_id),
+        Some(92) => cow_king_attack_target_impl(access, sim, actor_id),
         // **`openmir2-attacktarget-overrides`**：余下 7 类（见上方分区注释）。
-        Some(130) => double_critical_attack_target(world, actor_id),
+        Some(130) => double_critical_attack_target_impl(access, sim, actor_id),
         // `SpitSpider`（82）/`HighRiskSpider`（118）/`BigPoisionSpider`（119）继承同一实现，
         // 但 `UsePoison` 由各自 ctor 决定：82=true（`SpitSpider.cs:16`）、
         // 118=false（`HighRiskSpider.cs:8`）、119=true（`BigPoisionSpider.cs:8`）。
-        Some(82) => spit_spider_attack_target(world, actor_id, true),
-        Some(118) => spit_spider_attack_target(world, actor_id, false),
-        Some(119) => spit_spider_attack_target(world, actor_id, true),
-        Some(117) => explosion_spider_attack_target(world, actor_id),
-        Some(91) => mag_cow_attack_target(world, actor_id),
+        Some(82) => spit_spider_attack_target_impl(access, sim, actor_id, true),
+        Some(118) => spit_spider_attack_target_impl(access, sim, actor_id, false),
+        Some(119) => spit_spider_attack_target_impl(access, sim, actor_id, true),
+        Some(117) => explosion_spider_attack_target_impl(access, sim, actor_id),
+        Some(91) => mag_cow_attack_target_impl(access, sim, actor_id),
         // `ElfWarriorMonster`（114）：`Appr` 形态门内再分派 base / 强化 spit。
-        Some(114) => elf_warrior_attack_target(world, actor_id),
+        Some(114) => elf_warrior_attack_target_impl(access, sim, actor_id),
         // `FireballMonster`（215）继承 `MagicMonster.AttackTarget`。
-        Some(215) => magic_monster_attack_target(world, actor_id),
+        Some(215) => magic_monster_attack_target_impl(access, sim, actor_id),
         // `PercentMonster`（死类；ctor 自置 Race=80）：与基类逐行同构。
-        Some(80) => percent_monster_attack_target(world, actor_id),
-        _ => attack_target(world, actor_id),
+        Some(80) => percent_monster_attack_target_impl(access, sim, actor_id),
+        _ => attack_target_impl(access, sim, actor_id),
     }
+}
+
+#[allow(dead_code)]
+fn monster_attack_target(world: &mut World, actor_id: i32) -> bool {
+    monster_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `MonsterObject.AttackTarget` 的 race 102 版本：与 [`attack_target`] 同门/同状态写点，
 /// 仅把到点后的虚调用 `Attack(target, btDir)` 换成 [`sculture_king_attack`]。
-fn sculture_king_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn sculture_king_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let now = world.clock_ms;
-    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
-        let due = world
-            .entities
+    let now = sim.clock_ms;
+    if let Some(bt_dir) = get_attack_dir_impl(access, actor_id, target_id) {
+        let due = access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
         if due {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
             }
-            turn_to(world, actor_id, bt_dir);
-            sculture_king_attack(world, actor_id, target_id);
-            break_holy_seize_mode(world, actor_id);
+            turn_to_impl(access, sim, actor_id, bt_dir);
+            sculture_king_attack_impl(access, sim, actor_id, target_id);
+            break_holy_seize_mode_impl(access, sim, actor_id);
         }
         true
     } else {
         let (same_map, tx, ty) = match (
-            world.entities.get(actor_id).map(|e| e.map_id),
-            world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+            access.get(actor_id).map(|e| e.map_id),
+            access.get(target_id).map(|t| (t.map_id, t.x, t.y)),
         ) {
             (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
             _ => (false, 0, 0),
         };
         if same_map {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = tx;
                 e.ai.target_y = ty;
             }
         } else {
-            del_target_creature(world, actor_id);
+            del_target_creature_impl(access, sim, actor_id);
         }
         false
     }
+}
+
+#[allow(dead_code)]
+fn sculture_king_attack_target(world: &mut World, actor_id: i32) -> bool {
+    sculture_king_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `DualAxeMonster.AttackMax` 的 race → 常量映射（`DualAxeMonster.cs:80` =2；
@@ -2216,33 +2592,31 @@ fn dual_axe_attack_max(race: u8) -> i32 {
 /// 否则抽 `Random(5)`（`==0 ⇒ _mNAttackCount = 0`）。
 // oracle `:42`/`:61` 两处都写 `Math.Abs(CurrX - TargetCret.CurrX)`（副本），照抄 ⇒ 显式放行 eq_op。
 #[allow(clippy::eq_op)]
-fn dual_axe_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn dual_axe_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let now = world.clock_ms;
-    let due = world
-        .entities
+    let now = sim.clock_ms;
+    let due = access
         .get(actor_id)
         .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
     if !due {
         return false;
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.attack_tick = now;
     }
-    let (cx, race) = match world.entities.get(actor_id) {
+    let (cx, race) = match access.get(actor_id) {
         Some(e) => (e.x, e.race),
         None => return false,
     };
-    let Some((tx, ty, t_map, a_map)) = world
-        .entities
+    let Some((tx, ty, t_map, a_map)) = access
         .get(target_id)
-        .zip(world.entities.get(actor_id))
+        .zip(access.get(actor_id))
         .map(|(t, a)| (t.x, t.y, t.map_id, a.map_id))
     else {
         return false;
@@ -2251,18 +2625,15 @@ fn dual_axe_attack_target(world: &mut World, actor_id: i32) -> bool {
     let dx = (cx - tx).abs();
     if dx <= 7 && dx <= 7 {
         let attack_max = dual_axe_attack_max(race);
-        let count = world
-            .entities
-            .get(actor_id)
-            .map_or(0, |e| e.ai.m_n_attack_count);
+        let count = access.get(actor_id).map_or(0, |e| e.ai.m_n_attack_count);
         if attack_max - 1 > count {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.m_n_attack_count += 1;
                 e.ai.target_focus_tick = now;
             }
-            fly_axe_attack(world, actor_id, target_id);
-        } else if world.rng.random_below(5) == 0 {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            fly_axe_attack_impl(access, sim, actor_id, target_id);
+        } else if sim.rng.random_below(5) == 0 {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.m_n_attack_count = 0;
             }
         }
@@ -2271,15 +2642,20 @@ fn dual_axe_attack_target(world: &mut World, actor_id: i32) -> bool {
     if t_map == a_map {
         // `:61`：两处都是 `|CurrX - TargetCret.CurrX| <= 11`（照抄 bug）。
         if dx <= 11 && dx <= 11 {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = tx;
                 e.ai.target_y = ty;
             }
         }
     } else {
-        del_target_creature(world, actor_id);
+        del_target_creature_impl(access, sim, actor_id);
     }
     false
+}
+
+#[allow(dead_code)]
+fn dual_axe_attack_target(world: &mut World, actor_id: i32) -> bool {
+    dual_axe_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `DualAxeMonster.FlyAxeAttack(IActor target)`（`DualAxeMonster.cs:14-31`）。
@@ -2287,43 +2663,47 @@ fn dual_axe_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// 取数序：`CanFly` 门失败 ⇒ **零抽**；通过 ⇒ `Random(|Hi(DC)-Lo(DC)|+1)`（`:19`）→
 /// 目标 `GetHitStruckDamage`（AC 两抽）→ 目标 `StruckDamage`（玩家耐久抽）。
 /// 末尾 `SendRefMsg(RM_FLYAXE, Dir, CurrX, CurrY, target.ActorId, "")`（`:29`）。
-fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
-    let Some((cx, cy, map_id)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
+fn fly_axe_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) {
+    let Some((cx, cy, map_id)) = access.get(actor_id).map(|e| (e.x, e.y, e.map_id)) else {
         return;
     };
-    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+    let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) else {
         return;
     };
-    if !world.can_fly(map_id, cx, cy, tx, ty) {
+    if !crate::world::World::can_fly_impl(access, sim, map_id, cx, cy, tx, ty) {
         return;
     }
     let dir = crate::magic::next_direction(cx, cy, tx, ty);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = dir;
     }
-    let dc = world.entities.get(actor_id).map_or(0, |e| e.dc);
+    let dc = access.get(actor_id).map_or(0, |e| e.dc);
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
+    let n_damage = lo + sim.rng.random_below((hi - lo).abs() + 1);
     if n_damage > 0 {
-        let Some(attacker) = world.entities.spawn_cloned(actor_id) else {
+        let Some(attacker) = access.spawn_cloned(actor_id) else {
             return;
         };
-        let Some(target) = world.entities.spawn_cloned(target_id) else {
+        let Some(target) = access.spawn_cloned(target_id) else {
             return;
         };
         let reduced =
-            crate::combat::get_hit_struck_damage(&mut world.rng, &target, &attacker, n_damage);
+            crate::combat::get_hit_struck_damage(&mut sim.rng, &target, &attacker, n_damage);
         if reduced > 0 {
-            let last_hitter = target
-                .last_hiter
-                .and_then(|id| world.entities.get(id))
-                .map(|h| crate::combat::LastHitter {
+            let last_hitter = target.last_hiter.and_then(|id| access.get(id)).map(|h| {
+                crate::combat::LastHitter {
                     race: h.race,
                     job: h.job,
                     has_master: h.master.is_some(),
-                });
-            let cfg = world.combat_config;
+                }
+            });
+            let cfg = sim.combat_config;
             let per10 = crate::combat::struck_damage_multiplier(
                 &target,
                 last_hitter,
@@ -2335,11 +2715,15 @@ fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
             let final_damage = (i32::from(reduced) * per10 / 10).max(0) as u16;
             let last_hiter_id = target.last_hiter;
             // `BaseObject.StruckDamage` → `DamageHealth`（`BaseObject.Base.cs:827-857`）。
-            crate::buff::damage_health(world, target_id, i32::from(final_damage), last_hiter_id);
+            crate::buff::damage_health_impl(
+                access,
+                target_id,
+                i32::from(final_damage),
+                last_hiter_id,
+            );
             // `PlayObject.StruckDamage` 在 `base.StruckDamage` **之后**的耐久段
             // （`PlayObject.cs:2957/2998-3039`）；函数自身对非玩家目标零动作。
-            let World { entities, sim, .. } = &mut *world;
-            if let Some(t) = entities.get_mut(target_id) {
+            if let Some(t) = access.get_mut(target_id) {
                 let target_race = t.appearance.race;
                 crate::combat::struck_damage_durability(
                     &mut sim.rng,
@@ -2347,11 +2731,10 @@ fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
                     target_race,
                 );
             }
-            let (hp, killed) = world
-                .entities
+            let (hp, killed) = access
                 .get(target_id)
                 .map_or((0, false), |e| (e.hp, e.hp == 0));
-            world.pending_ai_attacks.push((
+            sim.pending_ai_attacks.push((
                 actor_id,
                 target_id,
                 crate::combat::AttackOutcome {
@@ -2367,11 +2750,19 @@ fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
             //   max(|Δx|,|Δy|)*50+600)`（`DualAxeMonster.cs:26-28`）——与 ArcherGuard 同形。
             let delay =
                 i64::from((cx - tx).abs().max((cy - ty).abs()) * 50) + GUARD_STRUCK_DELAY_BASE_MS;
-            world.send_struck_delay_msg_refmessage(target_id, actor_id, i32::from(reduced), delay);
+            crate::slave::send_struck_delay_msg_refmessage_impl(
+                access,
+                sim,
+                target_id,
+                actor_id,
+                i32::from(reduced),
+                delay,
+            );
         }
     }
-    send_ref_msg_with_target(
-        world,
+    send_ref_msg_with_target_impl(
+        access,
+        sim,
         actor_id,
         RM_FLYAXE,
         i32::from(dir),
@@ -2382,6 +2773,11 @@ fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
     );
 }
 
+#[allow(dead_code)]
+fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
+    fly_axe_attack_impl(&mut world.entities, &mut world.sim, actor_id, target_id)
+}
+
 /// `DualAxeMonster.Run()`（`DualAxeMonster.cs:84-137`）。
 ///
 /// 门：`CanMove()`；5s `SearchEnemyTick` 门扫最近 proper（`!HideMode || CoolEye`）⇒ `SetTargetCreat`；
@@ -2390,9 +2786,13 @@ fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
 /// 3-4 格直接回退。`WalkTick` 刷新在 `base.Run()`（= `MonsterObject.Run`）里。
 // oracle `:120/:122` 四处判定全部重复写 `Math.Abs(CurrX - TargetCret.CurrX)`，照抄 ⇒ 放行 eq_op。
 #[allow(clippy::eq_op)]
-fn dual_axe_monster_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn dual_axe_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !can_move(&e) {
@@ -2407,25 +2807,23 @@ fn dual_axe_monster_run(world: &mut World, actor_id: i32) {
         e.ai.search_enemy_tick,
     );
     if now - enemy_tick >= 5000 {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        let visible: Vec<i32> = world
-            .entities
+        let visible: Vec<i32> = access
             .get(actor_id)
             .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
             .unwrap_or_default();
         let mut n_rage = 9999;
         let mut best: Option<i32> = None;
         for target_id in visible {
-            let Some(t) = world.entities.get(target_id) else {
+            let Some(t) = access.get(target_id) else {
                 continue;
             };
             if t.death {
                 continue;
             }
-            let proper = world
-                .entities
+            let proper = access
                 .get(actor_id)
                 .is_some_and(|a| is_proper_target(&a, &t));
             if proper && (!t.hide_mode || cool_eye) {
@@ -2437,36 +2835,33 @@ fn dual_axe_monster_run(world: &mut World, actor_id: i32) {
             }
         }
         if let Some(target_id) = best {
-            set_target_creature(world, actor_id, target_id);
+            set_target_creature_impl(access, sim, actor_id, target_id);
         }
     }
-    let target = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature);
+    let target = access.get(actor_id).and_then(|e| e.ai.target_creature);
     let Some(target_id) = target else {
         return;
     };
     if now - walk_tick <= walk_speed {
         return;
     }
-    let Some(tx) = world.entities.get(target_id).map(|t| t.x) else {
+    let Some(tx) = access.get(target_id).map(|t| t.x) else {
         return;
     };
     // `:120`/`:122`：四处判定全部是 `Math.Abs(CurrX - TargetCret.CurrX)`——CurrY 从不参与。
     let dx = (cx - tx).abs();
     if dx <= 4 && dx <= 4 {
         if dx <= 2 && dx <= 2 {
-            if world.rng.random_below(5) == 0 {
-                if let Some((bx, by)) = get_back_position(world, actor_id) {
-                    if let Some(e) = world.entities.get_mut(actor_id) {
+            if sim.rng.random_below(5) == 0 {
+                if let Some((bx, by)) = get_back_position_impl(access, sim, actor_id) {
+                    if let Some(e) = access.get_mut(actor_id) {
                         e.ai.target_x = bx;
                         e.ai.target_y = by;
                     }
                 }
             }
-        } else if let Some((bx, by)) = get_back_position(world, actor_id) {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+        } else if let Some((bx, by)) = get_back_position_impl(access, sim, actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = bx;
                 e.ai.target_y = by;
             }
@@ -2474,24 +2869,34 @@ fn dual_axe_monster_run(world: &mut World, actor_id: i32) {
     }
 }
 
+#[allow(dead_code)]
+fn dual_axe_monster_run(world: &mut World, actor_id: i32) {
+    dual_axe_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `LightingZombi.LightingAttack(byte nDir)`（`LightingZombi.cs:15-30`）。
 ///
 /// `Dir = nDir` → `SendRefMsg(RM_LIGHTING, 1, CurrX, CurrY, TargetCret.ActorId, "")` →
 /// `GetNextPosition(...,1)` 成功才：`GetNextPosition(...,9)` →
 /// `Random(|Hi(DC)-Lo(DC)|+1)` → `MagPassThroughMagic(..., true)` → `BreakHolySeizeMode()`。
-fn lighting_attack(world: &mut World, actor_id: i32, n_dir: u8) {
-    let Some((cx, cy, map_id, target_id)) = world
-        .entities
+fn lighting_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    n_dir: u8,
+) {
+    let Some((cx, cy, map_id, target_id)) = access
         .get(actor_id)
         .and_then(|e| e.ai.target_creature.map(|t| (e.x, e.y, e.map_id, t)))
     else {
         return;
     };
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = n_dir;
     }
-    send_ref_msg_with_target(
-        world,
+    send_ref_msg_with_target_impl(
+        access,
+        sim,
         actor_id,
         RM_LIGHTING,
         1,
@@ -2500,33 +2905,44 @@ fn lighting_attack(world: &mut World, actor_id: i32, n_dir: u8) {
         target_id,
         Some(target_id),
     );
-    let Some((sx, sy)) = world
+    let Some((sx, sy)) = sim
         .maps
         .get(map_id)
         .and_then(|m| m.get_next_position(cx, cy, n_dir, 1))
     else {
         return;
     };
-    let (tx, ty) = world
+    let (tx, ty) = sim
         .maps
         .get(map_id)
         .and_then(|m| m.get_next_position(cx, cy, n_dir, 9))
         .unwrap_or((cx, cy));
-    let dc = world.entities.get(actor_id).map_or(0, |e| e.dc);
+    let dc = access.get(actor_id).map_or(0, |e| e.dc);
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let n_power = i32::max(0, lo + world.rng.random_below((hi - lo).abs() + 1));
-    world.mag_pass_through_magic(actor_id, sx, sy, tx, ty, n_dir, n_power, true);
-    break_holy_seize_mode(world, actor_id);
+    let n_power = i32::max(0, lo + sim.rng.random_below((hi - lo).abs() + 1));
+    crate::world::World::mag_pass_through_magic_impl(
+        access, sim, actor_id, sx, sy, tx, ty, n_dir, n_power, true,
+    );
+    break_holy_seize_mode_impl(access, sim, actor_id);
+}
+
+#[allow(dead_code)]
+fn lighting_attack(world: &mut World, actor_id: i32, n_dir: u8) {
+    lighting_attack_impl(&mut world.entities, &mut world.sim, actor_id, n_dir)
 }
 
 /// `LightingZombi.Run()`（`LightingZombi.cs:32-58`）。
 ///
 /// 8s/1s 索敌；`|Δ|<=4` 且 `|Δ|<=2` 时 `Random(3)!=0` ⇒ **`base.Run(); return;`**
 /// （跳过本类的 `LightingAttack` 段——调用方在本函数返回后照常跑 `base.Run()` 链）。
-fn lighting_zombi_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn lighting_zombi_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !(can_move(&e) && now - e.ai.search_enemy_tick > 8000) {
@@ -2535,12 +2951,12 @@ fn lighting_zombi_run(world: &mut World, actor_id: i32) {
     let enemy_tick = e.ai.search_enemy_tick;
     let has_target = e.ai.target_creature.is_some();
     if now - enemy_tick > 1000 && !has_target {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
     }
-    let Some((cx, cy, walk_tick, walk_speed, target_id)) = world.entities.get(actor_id).map(|e| {
+    let Some((cx, cy, walk_tick, walk_speed, target_id)) = access.get(actor_id).map(|e| {
         (
             e.x,
             e.y,
@@ -2554,34 +2970,38 @@ fn lighting_zombi_run(world: &mut World, actor_id: i32) {
     let Some(target_id) = target_id else {
         return;
     };
-    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+    let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) else {
         return;
     };
     let dx = (cx - tx).abs();
     let dy = (cy - ty).abs();
     if now - walk_tick > walk_speed && dx <= 4 && dy <= 4 {
-        if dx <= 2 && dy <= 2 && world.rng.random_below(3) != 0 {
+        if dx <= 2 && dy <= 2 && sim.rng.random_below(3) != 0 {
             // oracle `base.Run(); return;`——跳过下面的 LightningAttack 段。
             return;
         }
-        if let Some((bx, by)) = get_back_position(world, actor_id) {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some((bx, by)) = get_back_position_impl(access, sim, actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = bx;
                 e.ai.target_y = by;
             }
         }
     }
-    let due = world
-        .entities
+    let due = access
         .get(actor_id)
         .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
     if dx < 6 && dy < 6 && due {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.attack_tick = now;
         }
         let dir = crate::magic::next_direction(cx, cy, tx, ty);
-        lighting_attack(world, actor_id, dir);
+        lighting_attack_impl(access, sim, actor_id, dir);
     }
+}
+
+#[allow(dead_code)]
+fn lighting_zombi_run(world: &mut World, actor_id: i32) {
+    lighting_zombi_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ChickenDeer.Run()`（`ChickenDeer.cs:13-63`）。
@@ -2595,9 +3015,13 @@ fn lighting_zombi_run(world: &mut World, actor_id: i32) {
 /// 残留变量必为「可见表最后一项」（可见表为空时 `RunAwayMode` 刚被清、第二段不可达）。
 // oracle `:55` 两个条件都写 `Math.Abs(CurrX - baseObject.CurrX)`，照抄 ⇒ 放行 eq_op。
 #[allow(clippy::eq_op)]
-fn chicken_deer_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn chicken_deer_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !can_move(&e) {
@@ -2608,8 +3032,7 @@ fn chicken_deer_run(world: &mut World, actor_id: i32) {
     if now - walk_tick < walk_speed {
         return;
     }
-    let visible: Vec<i32> = world
-        .entities
+    let visible: Vec<i32> = access
         .get(actor_id)
         .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
         .unwrap_or_default();
@@ -2619,14 +3042,13 @@ fn chicken_deer_run(world: &mut World, actor_id: i32) {
     for target_id in visible {
         // `baseObject = VisibleActors[i].BaseObject;`——先赋值，再判 `Death`（残留变量语义）。
         residual = Some(target_id);
-        let Some(t) = world.entities.get(target_id) else {
+        let Some(t) = access.get(target_id) else {
             continue;
         };
         if t.death {
             continue;
         }
-        let proper = world
-            .entities
+        let proper = access
             .get(actor_id)
             .is_some_and(|a| is_proper_target(&a, &t));
         if proper && (!t.hide_mode || cool_eye) {
@@ -2640,15 +3062,15 @@ fn chicken_deer_run(world: &mut World, actor_id: i32) {
     if let Some(target_id) = best {
         // oracle 直接赋 `RunAwayMode = true; TargetCret = ...`（不走 `SetTargetCreat`，
         // 因此**不刷新** `TargetFocusTick`）。
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.run_away_mode = true;
             e.ai.target_creature = Some(target_id);
         }
-    } else if let Some(e) = world.entities.get_mut(actor_id) {
+    } else if let Some(e) = access.get_mut(actor_id) {
         e.ai.run_away_mode = false;
         e.ai.target_creature = None;
     }
-    let (run_away, target_id) = world.entities.get(actor_id).map_or((false, None), |e| {
+    let (run_away, target_id) = access.get(actor_id).map_or((false, None), |e| {
         (e.ai.run_away_mode, e.ai.target_creature)
     });
     let Some(target_id) = target_id else {
@@ -2657,10 +3079,10 @@ fn chicken_deer_run(world: &mut World, actor_id: i32) {
     if !run_away {
         return;
     }
-    let Some(residual_x) = residual.and_then(|id| world.entities.get(id)).map(|r| r.x) else {
+    let Some(residual_x) = residual.and_then(|id| access.get(id)).map(|r| r.x) else {
         return;
     };
-    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+    let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) else {
         return;
     };
     // `:55`：两个条件都是 `|CurrX - baseObject.CurrX| <= 6`（`Δy` 不参与，照抄 bug）。
@@ -2668,16 +3090,21 @@ fn chicken_deer_run(world: &mut World, actor_id: i32) {
     if dx <= 6 && dx <= 6 {
         let dir = crate::magic::next_direction(cx, cy, tx, ty);
         // `Envir.GetNextPosition(TargetCret.CurrX, TargetCret.CurrY, n14, 5, ...)`——**起点是目标格**。
-        let (nx, ny) = world
+        let (nx, ny) = sim
             .maps
-            .get(world.entities.get(actor_id).map_or(0, |e| e.map_id))
+            .get(access.get(actor_id).map_or(0, |e| e.map_id))
             .and_then(|m| m.get_next_position(tx, ty, dir, 5))
             .unwrap_or((tx, ty));
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.target_x = nx;
             e.ai.target_y = ny;
         }
     }
+}
+
+#[allow(dead_code)]
+fn chicken_deer_run(world: &mut World, actor_id: i32) {
+    chicken_deer_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ZilKinZombi.Die()`（`ZilKinZombi.cs:24-33`）的覆写段。
@@ -2718,16 +3145,25 @@ pub fn zil_kin_zombi_die(world: &mut World, actor_id: i32) {
 }
 
 /// `BaseObject.ReAlive()`（`BaseObject.Base.cs:354-358`）：`Death = false` + `RM_ALIVE`。
-fn monster_re_alive(world: &mut World, actor_id: i32) {
-    let Some((dir, x, y)) = world.entities.get(actor_id).map(|e| (e.ai.dir, e.x, e.y)) else {
+fn monster_re_alive_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some((dir, x, y)) = access.get(actor_id).map(|e| (e.ai.dir, e.x, e.y)) else {
         return;
     };
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.life_cycle.death = false;
         // 本骨架的死亡结算闩锁（oracle 无此字段，等价物）：不清 ⇒ 第二次死亡永不结算。
         e.life_cycle.death_settled = false;
     }
-    send_ref_msg(world, actor_id, RM_ALIVE, i32::from(dir), x, y, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_ALIVE, i32::from(dir), x, y, 0);
+}
+
+#[allow(dead_code)]
+fn monster_re_alive(world: &mut World, actor_id: i32) {
+    monster_re_alive_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ZilKinZombi.Run()`（`ZilKinZombi.cs:35-47`）。
@@ -2735,9 +3171,13 @@ fn monster_re_alive(world: &mut World, actor_id: i32) {
 /// 门：`Death && !Ghost && STONE==0 && ZilKillCount >= 0 && VisibleActors.Count > 0 &&
 /// (now - ReAliveTick) >= ZilkinDieTick`。
 /// 复生：`MaxHP >>= 1`、`FightExp /= 2`、`HP = MaxHP`、`ReAlive()`、`WalkTick = now + 1000`。
-fn zil_kin_zombi_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn zil_kin_zombi_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     let revive = e.death
@@ -2750,16 +3190,21 @@ fn zil_kin_zombi_run(world: &mut World, actor_id: i32) {
         return;
     }
     let max_hp = e.max_hp >> 1;
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.vitals.max_hp = max_hp;
         // `FightExp = FightExp / 2`（整数除法）。
         e.progression.mon_exp /= 2;
         e.vitals.hp = max_hp;
     }
-    monster_re_alive(world, actor_id);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    monster_re_alive_impl(access, sim, actor_id);
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.walk_tick = now + 1000;
     }
+}
+
+#[allow(dead_code)]
+fn zil_kin_zombi_run(world: &mut World, actor_id: i32) {
+    zil_kin_zombi_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `HUtil32.MakeLong(short low, short high)`（`src/OpenMir2/HUtil32.cs:51-54`）。
@@ -2770,24 +3215,37 @@ pub fn make_long(low: i32, high: i32) -> i32 {
 
 /// `DigOutZombi.Turned`（`DigOutZombi.cs:57-64`）：`MapEvent(ET_DIGOUTZOMBI, 5min)`
 /// → `FixedHideMode = false` → `SendRefMsg(RM_DIGUP, Dir, X, Y, event.Id, "")`。
-fn dig_out_zombi_turned(world: &mut World, actor_id: i32) {
-    let (map_id, x, y) = match world.entities.get(actor_id) {
+fn dig_out_zombi_turned_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let (map_id, x, y) = match access.get(actor_id) {
         Some(e) => (e.map_id, e.x, e.y),
         None => return,
     };
-    world.add_dig_out_event(map_id, x, y);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    crate::world::World::add_dig_out_event_impl(sim, map_id, x, y);
+    if let Some(e) = access.get_mut(actor_id) {
         e.flags.fixed_hide_mode = false;
     }
     // `MapEvent.Id` 恒 0（`readonly` 且赋值行被注释）⇒ `nParam3 = 0`；wParam = `Dir`。
-    let dir = world.entities.get(actor_id).map_or(0, |e| e.ai.dir);
-    send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+    let dir = access.get(actor_id).map_or(0, |e| e.ai.dir);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+}
+
+#[allow(dead_code)]
+fn dig_out_zombi_turned(world: &mut World, actor_id: i32) {
+    dig_out_zombi_turned_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `DigOutZombi.Run`（`DigOutZombi.cs:18-55`）。
-fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn dig_out_zombi_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !(can_move(&e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
@@ -2797,14 +3255,13 @@ fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
         let (cx, cy, cool_eye) = (e.x, e.y, e.ai.cool_eye);
         let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
         for target_id in visible {
-            let Some(t) = world.entities.get(target_id) else {
+            let Some(t) = access.get(target_id) else {
                 continue;
             };
             if t.death {
                 continue;
             }
-            let proper = world
-                .entities
+            let proper = access
                 .get(actor_id)
                 .is_some_and(|a| is_proper_target(&a, &t));
             if proper
@@ -2812,8 +3269,8 @@ fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
                 && (cx - t.x).abs() <= 3
                 && (cy - t.y).abs() <= 3
             {
-                dig_out_zombi_turned(world, actor_id);
-                if let Some(e) = world.entities.get_mut(actor_id) {
+                dig_out_zombi_turned_impl(access, sim, actor_id);
+                if let Some(e) = access.get_mut(actor_id) {
                     e.ai.walk_tick = now + 1000;
                 }
                 break;
@@ -2824,45 +3281,63 @@ fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
     let enemy_tick = e.ai.search_enemy_tick;
     let has_target = e.ai.target_creature.is_some();
     if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn dig_out_zombi_run(world: &mut World, actor_id: i32) {
+    dig_out_zombi_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ScultureMonster.MeltStone`（`ScultureMonster.cs:18-24`）：
 /// `CharStatusEx = 0` → `CharStatus = GetCharStatus()` → `RM_DIGUP` → `StoneMode = false`。
-fn sculture_melt_stone(world: &mut World, actor_id: i32) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn sculture_melt_stone_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.buff.char_status_ex = 0;
     }
-    let status = world.get_char_status(actor_id);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    let status = crate::world::World::get_char_status_impl(access, sim, actor_id);
+    if let Some(e) = access.get_mut(actor_id) {
         e.buff.char_status = status;
     }
-    let (dir, x, y) = match world.entities.get(actor_id) {
+    let (dir, x, y) = match access.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
     // oracle `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0, "")`（wParam = Dir）。
-    send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    send_ref_msg_impl_default(access, sim, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+    if let Some(e) = access.get_mut(actor_id) {
         e.flags.stone_mode = false;
     }
+}
+
+#[allow(dead_code)]
+fn sculture_melt_stone(world: &mut World, actor_id: i32) {
+    sculture_melt_stone_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ScultureMonster.MeltStoneAll`（`ScultureMonster.cs:26-42`）：
 /// 先融自己，再 `GetMapBaseObjects(Envir, X, Y, 7)`（x 外、y 内、格内 `ObjList` 序；
 /// 过滤 `Death`/`Ghost`）对每个 `StoneMode && is ScultureMonster` 融化。
-fn sculture_melt_stone_all(world: &mut World, actor_id: i32) {
-    sculture_melt_stone(world, actor_id);
-    let (map_id, x, y) = match world.entities.get(actor_id) {
+fn sculture_melt_stone_all_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    sculture_melt_stone_impl(access, sim, actor_id);
+    let (map_id, x, y) = match access.get(actor_id) {
         Some(e) => (e.map_id, e.x, e.y),
         None => return,
     };
     let mut object_list = Vec::new();
-    if let Some(map) = world.maps.get(map_id) {
+    if let Some(map) = sim.maps.get(map_id) {
         for sx in (x - 7)..=(x + 7) {
             for sy in (y - 7)..=(y + 7) {
                 let (cell, ok) = map.get_cell_info(sx, sy);
@@ -2873,8 +3348,7 @@ fn sculture_melt_stone_all(world: &mut World, actor_id: i32) {
                     if o.cell_obj_id <= 0 || !o.actor_object {
                         continue;
                     }
-                    if world
-                        .entities
+                    if access
                         .get(o.cell_obj_id)
                         .is_some_and(|e| !e.death && !e.ghost)
                     {
@@ -2885,21 +3359,29 @@ fn sculture_melt_stone_all(world: &mut World, actor_id: i32) {
         }
     }
     for id in object_list {
-        let hit = world
-            .entities
+        let hit = access
             .get(id)
             .is_some_and(|e| e.stone_mode && e.race == 101);
         if hit {
-            sculture_melt_stone(world, id);
+            sculture_melt_stone_impl(access, sim, id);
         }
     }
 }
 
+#[allow(dead_code)]
+fn sculture_melt_stone_all(world: &mut World, actor_id: i32) {
+    sculture_melt_stone_all_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `ScultureMonster.Run`（`ScultureMonster.cs:43-79`）。注意门是 `>=`（不是 `>`），
 /// 且 `StoneMode` 支**不刷新** `WalkTick`。
-fn sculture_monster_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn sculture_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !(can_move(&e) && (now - e.ai.walk_tick) >= e.ai.walk_speed) {
@@ -2909,14 +3391,13 @@ fn sculture_monster_run(world: &mut World, actor_id: i32) {
         let (cx, cy, cool_eye) = (e.x, e.y, e.ai.cool_eye);
         let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
         for target_id in visible {
-            let Some(t) = world.entities.get(target_id) else {
+            let Some(t) = access.get(target_id) else {
                 continue;
             };
             if t.death {
                 continue;
             }
-            let proper = world
-                .entities
+            let proper = access
                 .get(actor_id)
                 .is_some_and(|a| is_proper_target(&a, &t));
             if proper
@@ -2924,7 +3405,7 @@ fn sculture_monster_run(world: &mut World, actor_id: i32) {
                 && (cx - t.x).abs() <= 2
                 && (cy - t.y).abs() <= 2
             {
-                sculture_melt_stone_all(world, actor_id);
+                sculture_melt_stone_all_impl(access, sim, actor_id);
                 break;
             }
         }
@@ -2933,11 +3414,16 @@ fn sculture_monster_run(world: &mut World, actor_id: i32) {
     let enemy_tick = e.ai.search_enemy_tick;
     let has_target = e.ai.target_creature.is_some();
     if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn sculture_monster_run(world: &mut World, actor_id: i32) {
+    sculture_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -3271,21 +3757,24 @@ fn elf_warrior_appear_now(world: &mut World, actor_id: i32) {
 
 /// `CentipedeKingMonster.CheckAttackTarget`（`CentipedeKingMonster.cs:20-40`）：
 /// 死怪跳过；`IsProperTarget` 且**两轴 `<= ViewRange`**。
-fn centipede_king_check_attack_target(world: &World, actor_id: i32) -> bool {
-    let Some(e) = world.entities.get(actor_id) else {
+fn centipede_king_check_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    _sim: &crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(e) = access.get(actor_id) else {
         return false;
     };
     let (cx, cy, view_range) = (e.x, e.y, e.view_range);
     let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
     for target_id in visible {
-        let Some(t) = world.entities.get(target_id) else {
+        let Some(t) = access.get(target_id) else {
             continue;
         };
         if t.death {
             continue;
         }
-        let proper = world
-            .entities
+        let proper = access
             .get(actor_id)
             .is_some_and(|a| is_proper_target(&a, &t));
         if proper && (cx - t.x).abs() <= view_range && (cy - t.y).abs() <= view_range {
@@ -3295,12 +3784,26 @@ fn centipede_king_check_attack_target(world: &World, actor_id: i32) -> bool {
     false
 }
 
+#[allow(dead_code)]
+fn centipede_king_check_attack_target(world: &World, actor_id: i32) -> bool {
+    centipede_king_check_attack_target_impl(&world.entities, &world.sim, actor_id)
+}
+
 /// `CentipedeKingMonster.FindAttackTarget`（`:85-89`）：`StickMonster.FindAttackTarget` + HP 回满。
-fn centipede_king_find_attack_target(world: &mut World, actor_id: i32) {
-    stick_find_attack_target(world, actor_id);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn centipede_king_find_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    stick_find_attack_target_impl(access, sim, actor_id);
+    if let Some(e) = access.get_mut(actor_id) {
         e.vitals.hp = e.vitals.max_hp;
     }
+}
+
+#[allow(dead_code)]
+fn centipede_king_find_attack_target(world: &mut World, actor_id: i32) {
+    centipede_king_find_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `CentipedeKingMonster.AttackTarget`（`:42-83`）。
@@ -3308,55 +3811,58 @@ fn centipede_king_find_attack_target(world: &mut World, actor_id: i32) {
 /// 取数次序（勿改）：命中门 `(now - AttackTick) > NextHitTime` → `Random(|Hi(DC)-Lo(DC)|+1)`
 /// （**无条件**）→ 逐可见目标 `< ViewRange`：`Random(4)`；`==0` 时再抽 `Random(3)`
 /// （`!=0` ⇒ `DECHEALTH,60,3`；`==0` ⇒ `STONE,5,0`）并 `TargetCret = baseObject`。
-fn centipede_king_attack_target(world: &mut World, actor_id: i32) -> bool {
-    if !centipede_king_check_attack_target(world, actor_id) {
+fn centipede_king_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    if !centipede_king_check_attack_target_impl(access, sim, actor_id) {
         return false;
     }
-    let now = world.clock_ms;
-    let due = world
-        .entities
+    let now = sim.clock_ms;
+    let due = access
         .get(actor_id)
         .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
     if !due {
         return true;
     }
-    let (dir, x, y, dc, view_range) = match world.entities.get(actor_id) {
+    let (dir, x, y, dc, view_range) = match access.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y, e.dc, e.view_range),
         None => return false,
     };
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.attack_tick = now;
     }
     // `SendAttackMsg(RM_HIT, Dir, CurrX, CurrY)`（`BaseObject.Attack.cs:173` ⇒ `SendRefMsg`）。
-    send_ref_msg(world, actor_id, RM_HIT, dir as i32, x, y, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, dir as i32, x, y, 0);
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let n_power = i32::max(0, lo + world.rng.random_below((hi - lo).abs() + 1));
-    let visible: Vec<i32> = world
-        .entities
+    let n_power = i32::max(0, lo + sim.rng.random_below((hi - lo).abs() + 1));
+    let visible: Vec<i32> = access
         .get(actor_id)
         .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
         .unwrap_or_default();
     for target_id in visible {
-        let Some(t) = world.entities.get(target_id) else {
+        let Some(t) = access.get(target_id) else {
             continue;
         };
         if t.death {
             continue;
         }
-        let proper = world
-            .entities
+        let proper = access
             .get(actor_id)
             .is_some_and(|a| is_proper_target(&a, &t));
         if !(proper && (x - t.x).abs() < view_range && (y - t.y).abs() < view_range) {
             continue;
         }
         let (tx, ty) = (t.x, t.y);
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.target_focus_tick = now;
         }
         // `SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(x,y), 2, ActorId, "", 600)`。
-        world.send_self_delay_msg_full(
+        crate::slave::send_self_delay_msg_full_impl(
+            access,
+            sim,
             actor_id,
             crate::slave::RM_DELAYMAGIC,
             n_power,
@@ -3365,16 +3871,35 @@ fn centipede_king_attack_target(world: &mut World, actor_id: i32) -> bool {
             target_id,
             600,
         );
-        if world.rng.random_below(4) == 0 {
-            if world.rng.random_below(3) != 0 {
-                world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 60, 3);
+        if sim.rng.random_below(4) == 0 {
+            if sim.rng.random_below(3) != 0 {
+                crate::world::World::make_posion_impl(
+                    access,
+                    sim,
+                    target_id,
+                    crate::entity::POISON_DECHEALTH as u8,
+                    60,
+                    3,
+                );
             } else {
-                world.make_posion(target_id, crate::entity::POISON_STONE as u8, 5, 0);
+                crate::world::World::make_posion_impl(
+                    access,
+                    sim,
+                    target_id,
+                    crate::entity::POISON_STONE as u8,
+                    5,
+                    0,
+                );
             }
-            set_target_creature(world, actor_id, target_id);
+            set_target_creature_impl(access, sim, actor_id, target_id);
         }
     }
     true
+}
+
+#[allow(dead_code)]
+fn centipede_king_attack_target(world: &mut World, actor_id: i32) -> bool {
+    centipede_king_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `CentipedeKingMonster.Run`（`:91-143`）。
@@ -3383,9 +3908,13 @@ fn centipede_king_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// `(now - WalkTick) > WalkSpeed` 且 `WalkTick` 已被刷新 ⇒ 该次 `base.Run` 在
 /// `StickMonster.Run` 内必然早退，只落到 `AnimalObject.Run`+`BaseObject.Run`
 /// ⇒ 调用方按 [`ClassRunBase::Animal`] 续跑即可（与 oracle 等价）。
-fn centipede_king_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn centipede_king_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !(can_move(&e) && (now - e.ai.walk_tick) > e.ai.walk_speed) {
@@ -3393,26 +3922,24 @@ fn centipede_king_run(world: &mut World, actor_id: i32) {
     }
     let (cx, cy, cool_eye, fixed_hide) = (e.x, e.y, e.ai.cool_eye, e.fixed_hide_mode);
     let class_tick = e.class_attack_tick;
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.walk_tick = now;
     }
     if fixed_hide {
         if now - class_tick > 10_000 {
-            let come_out = world.entities.get(actor_id).map_or(0, |e| e.come_out_value);
-            let visible: Vec<i32> = world
-                .entities
+            let come_out = access.get(actor_id).map_or(0, |e| e.come_out_value);
+            let visible: Vec<i32> = access
                 .get(actor_id)
                 .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
                 .unwrap_or_default();
             for target_id in visible {
-                let Some(t) = world.entities.get(target_id) else {
+                let Some(t) = access.get(target_id) else {
                     continue;
                 };
                 if t.death {
                     continue;
                 }
-                let proper = world
-                    .entities
+                let proper = access
                     .get(actor_id)
                     .is_some_and(|a| is_proper_target(&a, &t));
                 if proper
@@ -3420,8 +3947,8 @@ fn centipede_king_run(world: &mut World, actor_id: i32) {
                     && (cx - t.x).abs() < come_out
                     && (cy - t.y).abs() < come_out
                 {
-                    centipede_king_find_attack_target(world, actor_id);
-                    if let Some(e) = world.entities.get_mut(actor_id) {
+                    centipede_king_find_attack_target_impl(access, sim, actor_id);
+                    if let Some(e) = access.get_mut(actor_id) {
                         e.monster_class.class_attack_tick = now;
                     }
                     break;
@@ -3431,22 +3958,31 @@ fn centipede_king_run(world: &mut World, actor_id: i32) {
         return;
     }
     if now - class_tick > 3_000 {
-        if centipede_king_attack_target(world, actor_id) {
+        if centipede_king_attack_target_impl(access, sim, actor_id) {
             return;
         }
         if now - class_tick > 10_000 {
-            stick_come_down(world, actor_id);
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            stick_come_down_impl(access, sim, actor_id);
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.class_attack_tick = now;
             }
         }
     }
 }
 
+#[allow(dead_code)]
+fn centipede_king_run(world: &mut World, actor_id: i32) {
+    centipede_king_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `GasMothMonster.GasMothAttack`（`GasMothMonster.cs:37-66`）：
 /// 曼哈顿最近 proper（**不**判隐藏/超距），有候选才 `SetTargetCreat`（否则不动原目标）。
-fn gas_moth_attack(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+fn gas_moth_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     let (cx, cy) = (e.x, e.y);
@@ -3454,14 +3990,13 @@ fn gas_moth_attack(world: &mut World, actor_id: i32) {
     let mut n10 = 999;
     let mut best = None;
     for target_id in visible {
-        let Some(t) = world.entities.get(target_id) else {
+        let Some(t) = access.get(target_id) else {
             continue;
         };
         if t.death {
             continue;
         }
-        let proper = world
-            .entities
+        let proper = access
             .get(actor_id)
             .is_some_and(|a| is_proper_target(&a, &t));
         if !proper {
@@ -3475,15 +4010,24 @@ fn gas_moth_attack(world: &mut World, actor_id: i32) {
         best = Some(target_id);
     }
     if let Some(target_id) = best {
-        set_target_creature(world, actor_id, target_id);
+        set_target_creature_impl(access, sim, actor_id, target_id);
     }
+}
+
+#[allow(dead_code)]
+fn gas_moth_attack(world: &mut World, actor_id: i32) {
+    gas_moth_attack_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `GasMothMonster.Run`（`GasMothMonster.cs:24-35`）。`Run` 本身**零抽数**；
 /// `base.Run()` = `ATMonster.Run`（同一索敌门已被刷新 ⇒ 早退）→ `MonsterObject.Run`。
-fn gas_moth_monster_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn gas_moth_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !(can_move(&e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
@@ -3492,11 +4036,16 @@ fn gas_moth_monster_run(world: &mut World, actor_id: i32) {
     let enemy_tick = e.ai.search_enemy_tick;
     let has_target = e.ai.target_creature.is_some();
     if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        gas_moth_attack(world, actor_id);
+        gas_moth_attack_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn gas_moth_monster_run(world: &mut World, actor_id: i32) {
+    gas_moth_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `GasAttackMonster.GasAttack(bt05)`（`GasAttackMonster.cs:15-40`）。
@@ -3508,59 +4057,71 @@ fn gas_moth_monster_run(world: &mut World, actor_id: i32) {
 /// `transparent_on_hit` = `GasMothMonster.GasAttack` override（`GasMothMonster.cs:14-22`）：
 /// `baseObject != null` 后**先抽** `Random(3)`，`==0` **再判** `HideMode` ⇒ 置
 /// `StatusTimeArr[STATETRANSPARENT] = 1`。
-fn gas_attack(
-    world: &mut World,
+fn gas_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
     actor_id: i32,
     bt_dir: u8,
     transparent_on_hit: bool,
 ) -> Option<i32> {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = bt_dir;
     }
-    let e = world.entities.get(actor_id)?;
+    let e = access.get(actor_id)?;
     let (x, y, dc, hit_point, map_id, undead) =
         (e.x, e.y, e.dc, e.hit_point, e.map_id, e.undead_power);
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let mut n_power = lo + world.rng.random_below((hi - lo).abs() + 1);
+    let mut n_power = lo + sim.rng.random_below((hi - lo).abs() + 1);
     let mut result = None;
     if n_power > 0 {
-        send_ref_msg(world, actor_id, RM_HIT, i32::from(bt_dir), x, y, 0);
-        let pose = front_of(world, actor_id, bt_dir, map_id)
-            .and_then(|(fx, fy)| world.moving_object_at(map_id, fx, fy, true));
+        send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(bt_dir), x, y, 0);
+        let pose = front_of_impl(access, sim, actor_id, bt_dir, map_id).and_then(|(fx, fy)| {
+            crate::world::World::moving_object_at_impl(access, sim, map_id, fx, fy, true)
+        });
         if let Some(target_id) = pose {
-            let proper = world
-                .entities
+            let proper = access
                 .get(actor_id)
-                .zip(world.entities.get(target_id))
+                .zip(access.get(target_id))
                 .is_some_and(|(a, t)| is_proper_target(&a, &t));
             if proper {
-                let speed_point = world
-                    .entities
+                let speed_point = access
                     .get(target_id)
                     .map_or(0, |t| i32::from(t.speed_point));
-                if world.rng.random_below(speed_point) < i32::from(hit_point) {
-                    let mac = world.entities.get(target_id).map_or(0, |t| t.mac);
+                if sim.rng.random_below(speed_point) < i32::from(hit_point) {
+                    let mac = access.get(target_id).map_or(0, |t| t.mac);
                     n_power = crate::combat::get_mag_struck_damage(
-                        &mut world.rng,
+                        &mut sim.rng,
                         mac,
                         n_power,
                         Some(undead),
                     );
                     if n_power > 0 {
-                        let _ = class_struck_apply(world, actor_id, target_id, n_power, n_power);
+                        let _ = class_struck_apply_impl(
+                            access, sim, actor_id, target_id, n_power, n_power,
+                        );
                         // `baseObject.SendStruckDelayMsg(RM_REFMESSAGE, nPower, …,
                         //   ActorId, "", 300)`（`GasAttackMonster.cs:30`）——在
                         // `StruckDamage` 之后、`Random(AntiPoison+20)` 之前（oracle 同序）。
-                        world.send_struck_delay_msg_refmessage(
+                        crate::slave::send_struck_delay_msg_refmessage_impl(
+                            access,
+                            sim,
                             target_id,
                             actor_id,
                             n_power,
                             GAS_STRUCK_DELAY_MS,
                         );
-                        let anti_poison = world.target_anti_poison(target_id);
-                        if world.rng.random_below(anti_poison + 20) == 0 {
-                            world.make_posion(target_id, crate::entity::POISON_STONE as u8, 5, 0);
+                        let anti_poison =
+                            crate::world::World::target_anti_poison_impl(sim, target_id);
+                        if sim.rng.random_below(anti_poison + 20) == 0 {
+                            crate::world::World::make_posion_impl(
+                                access,
+                                sim,
+                                target_id,
+                                crate::entity::POISON_STONE as u8,
+                                5,
+                                0,
+                            );
                         }
                         result = Some(target_id);
                     }
@@ -3570,10 +4131,10 @@ fn gas_attack(
     }
     if transparent_on_hit {
         if let Some(target_id) = result {
-            if world.rng.random_below(3) == 0 {
-                let hidden = world.entities.get(target_id).is_some_and(|t| t.hide_mode);
+            if sim.rng.random_below(3) == 0 {
+                let hidden = access.get(target_id).is_some_and(|t| t.hide_mode);
                 if hidden {
-                    if let Some(t) = world.entities.get_mut(target_id) {
+                    if let Some(t) = access.get_mut(target_id) {
                         t.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = 1;
                     }
                 }
@@ -3583,65 +4144,93 @@ fn gas_attack(
     result
 }
 
+#[allow(dead_code)]
+fn gas_attack(
+    world: &mut World,
+    actor_id: i32,
+    bt_dir: u8,
+    transparent_on_hit: bool,
+) -> Option<i32> {
+    gas_attack_impl(
+        &mut world.entities,
+        &mut world.sim,
+        actor_id,
+        bt_dir,
+        transparent_on_hit,
+    )
+}
+
 /// `GasAttackMonster.AttackTarget`（`GasAttackMonster.cs:42-73`）：
 /// 邻接 ⇒ 到点（**严格 `>`**）则 `GasAttack(btDir)` + `BreakHolySeizeMode`，恒 `true`；
 /// 不邻接 ⇒ 同图写 `TargetX/Y`，异图 `DelTargetCreat`，返回 `false`。
-fn gas_attack_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn gas_attack_monster_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let now = world.clock_ms;
-    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
-        let due = world
-            .entities
+    let now = sim.clock_ms;
+    if let Some(bt_dir) = get_attack_dir_impl(access, actor_id, target_id) {
+        let due = access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
         if due {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
             }
-            let transparent = world.entities.get(actor_id).is_some_and(|e| e.race == 105);
-            gas_attack(world, actor_id, bt_dir, transparent);
-            break_holy_seize_mode(world, actor_id);
+            let transparent = access.get(actor_id).is_some_and(|e| e.race == 105);
+            gas_attack_impl(access, sim, actor_id, bt_dir, transparent);
+            break_holy_seize_mode_impl(access, sim, actor_id);
         }
         true
     } else {
         let (same_map, tx, ty) = match (
-            world.entities.get(actor_id).map(|e| e.map_id),
-            world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+            access.get(actor_id).map(|e| e.map_id),
+            access.get(target_id).map(|t| (t.map_id, t.x, t.y)),
         ) {
             (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
             _ => (false, 0, 0),
         };
         if same_map {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = tx;
                 e.ai.target_y = ty;
             }
         } else {
-            del_target_creature(world, actor_id);
+            del_target_creature_impl(access, sim, actor_id);
         }
         false
     }
 }
 
+#[allow(dead_code)]
+fn gas_attack_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
+    gas_attack_monster_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// 取目标当下的 `LastHiter` 子集（`StruckDamage` 倍率用；与 `World::attack_once` 同口径）。
-fn current_last_hitter(world: &World, target_id: i32) -> Option<crate::combat::LastHitter> {
-    world
-        .entities
+fn current_last_hitter_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    _sim: &crate::world::SimState,
+    target_id: i32,
+) -> Option<crate::combat::LastHitter> {
+    access
         .get(target_id)
         .and_then(|t| t.last_hiter)
-        .and_then(|id| world.entities.get(id))
+        .and_then(|id| access.get(id))
         .map(|h| crate::combat::LastHitter {
             race: h.race,
             job: h.job,
             has_master: h.master.is_some(),
         })
+}
+
+#[allow(dead_code)]
+fn current_last_hitter(world: &World, target_id: i32) -> Option<crate::combat::LastHitter> {
+    current_last_hitter_impl(&world.entities, &world.sim, target_id)
 }
 
 /// MB-3 三类攻击（`GasAttack`/`ScultureKing.Attack`/`ArcherGuard.AttackTarger`）共用的
@@ -3653,16 +4242,17 @@ fn current_last_hitter(world: &World, target_id: i32) -> Option<crate::combat::L
 /// （`BaseObject.Attack.cs:61-64`）的 `SendMsg(target, RM_STRUCK, …)`。折叠进这里会在目标
 /// 自己的 `base.Run()` 多出 `Struck`（`Random(6)`/`Random(300)`）并改写 `TargetCret`/`ExpHitter`。
 /// `ArcherGuard` 的同步 `SetLastHiter`/`ExpHitter=null` 由调用方在**本函数之前**落（oracle 顺序）。
-fn class_struck_apply(
-    world: &mut World,
+fn class_struck_apply_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
     attacker_id: i32,
     target_id: i32,
     reduced: i32,
     power: i32,
 ) -> Option<crate::combat::AttackOutcome> {
-    let target = world.entities.spawn_cloned(target_id)?;
-    let last_hitter = current_last_hitter(world, target_id);
-    let cfg = world.combat_config;
+    let target = access.spawn_cloned(target_id)?;
+    let last_hitter = current_last_hitter_impl(access, sim, target_id);
+    let cfg = sim.combat_config;
     let per10 = crate::combat::struck_damage_multiplier(
         &target,
         last_hitter,
@@ -3673,9 +4263,8 @@ fn class_struck_apply(
     );
     let final_damage = (reduced * per10 / 10).max(0) as u16;
     let last_hiter_id = target.last_hiter;
-    crate::buff::damage_health(world, target_id, i32::from(final_damage), last_hiter_id);
-    let World { entities, sim, .. } = &mut *world;
-    if let Some(t) = entities.get_mut(target_id) {
+    crate::buff::damage_health_impl(access, target_id, i32::from(final_damage), last_hiter_id);
+    if let Some(t) = access.get_mut(target_id) {
         let target_race = t.appearance.race;
         crate::combat::struck_damage_durability(
             &mut sim.rng,
@@ -3683,8 +4272,7 @@ fn class_struck_apply(
             target_race,
         );
     }
-    let (hp, killed) = world
-        .entities
+    let (hp, killed) = access
         .get(target_id)
         .map_or((0, false), |e| (e.hp, e.hp == 0));
     let outcome = crate::combat::AttackOutcome {
@@ -3695,36 +4283,63 @@ fn class_struck_apply(
         killed,
         target_hp_after: hp,
     };
-    world
-        .pending_ai_attacks
+    sim.pending_ai_attacks
         .push((attacker_id, target_id, outcome));
     Some(outcome)
 }
 
+#[allow(dead_code)]
+fn class_struck_apply(
+    world: &mut World,
+    attacker_id: i32,
+    target_id: i32,
+    reduced: i32,
+    power: i32,
+) -> Option<crate::combat::AttackOutcome> {
+    class_struck_apply_impl(
+        &mut world.entities,
+        &mut world.sim,
+        attacker_id,
+        target_id,
+        reduced,
+        power,
+    )
+}
+
 /// `ScultureKingMonster.MeltStone`（`ScultureKingMonster.cs:25-33`）：
 /// `ScultureMonster.MeltStone` 四步 + `MapEvent(..., ET_SCULPEICE=6, 5min, true)` 注册。
-fn sculture_king_melt_stone(world: &mut World, actor_id: i32) {
-    sculture_melt_stone(world, actor_id);
-    let (map_id, x, y) = match world.entities.get(actor_id) {
+fn sculture_king_melt_stone_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    sculture_melt_stone_impl(access, sim, actor_id);
+    let (map_id, x, y) = match access.get(actor_id) {
         Some(e) => (e.map_id, e.x, e.y),
         None => return,
     };
-    world.add_map_event_at(map_id, x, y, 6, 5 * 60 * 1000);
+    crate::world::World::add_map_event_at_impl(sim, map_id, x, y, 6, 5 * 60 * 1000);
+}
+
+#[allow(dead_code)]
+fn sculture_king_melt_stone(world: &mut World, actor_id: i32) {
+    sculture_king_melt_stone_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ScultureKingMonster.CallSlave`（`:35-53`）的**抽点**：`Random(6) + 6` 与 `GetFrontPosition`。
 /// `Random(4)` 与造怪在宿主排水 [`World::flush_sculture_spawns`] 内按 oracle 序执行。
-fn sculture_king_call_slave(world: &mut World, actor_id: i32) {
-    let Some((map_id, x, y, dir)) = world
-        .entities
-        .get(actor_id)
-        .map(|e| (e.map_id, e.x, e.y, e.ai.dir))
+fn sculture_king_call_slave_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some((map_id, x, y, dir)) = access.get(actor_id).map(|e| (e.map_id, e.x, e.y, e.ai.dir))
     else {
         return;
     };
-    let count = world.rng.random_below(6) + 6;
-    let (nx, ny) = front_of(world, actor_id, dir, map_id).unwrap_or((x, y));
-    world.pending_sculture_spawns.push(ScultureSpawnRequest {
+    let count = sim.rng.random_below(6) + 6;
+    let (nx, ny) = front_of_impl(access, sim, actor_id, dir, map_id).unwrap_or((x, y));
+    sim.pending_sculture_spawns.push(ScultureSpawnRequest {
         owner_id: actor_id,
         map_id,
         x: nx,
@@ -3732,6 +4347,11 @@ fn sculture_king_call_slave(world: &mut World, actor_id: i32) {
         count,
         kind: ClassSlaveSpawnKind::Sculture,
     });
+}
+
+#[allow(dead_code)]
+fn sculture_king_call_slave(world: &mut World, actor_id: i32) {
+    sculture_king_call_slave_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -3752,17 +4372,18 @@ pub const DRAGON1_NAME: &str = "神兽";
 /// `BoneKingMonster.CallSlave`（`BoneKingMonster.cs:21-40`）的**抽点**：
 /// `Random(6) + 6` 与 `GetFrontPosition`；每个 minion 的 `Random(3)` 与造怪在
 /// [`World::flush_sculture_spawns`] 内按 oracle 序执行。
-fn bone_king_call_slave(world: &mut World, actor_id: i32) {
-    let Some((map_id, x, y, dir)) = world
-        .entities
-        .get(actor_id)
-        .map(|e| (e.map_id, e.x, e.y, e.ai.dir))
+fn bone_king_call_slave_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some((map_id, x, y, dir)) = access.get(actor_id).map(|e| (e.map_id, e.x, e.y, e.ai.dir))
     else {
         return;
     };
-    let count = world.rng.random_below(6) + 6;
-    let (nx, ny) = front_of(world, actor_id, dir, map_id).unwrap_or((x, y));
-    world.pending_sculture_spawns.push(ScultureSpawnRequest {
+    let count = sim.rng.random_below(6) + 6;
+    let (nx, ny) = front_of_impl(access, sim, actor_id, dir, map_id).unwrap_or((x, y));
+    sim.pending_sculture_spawns.push(ScultureSpawnRequest {
         owner_id: actor_id,
         map_id,
         x: nx,
@@ -3770,6 +4391,11 @@ fn bone_king_call_slave(world: &mut World, actor_id: i32) {
         count,
         kind: ClassSlaveSpawnKind::BoneKing,
     });
+}
+
+#[allow(dead_code)]
+fn bone_king_call_slave(world: &mut World, actor_id: i32) {
+    bone_king_call_slave_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `BoneKingMonster.Run`（`BoneKingMonster.cs:48-76`）。
@@ -3789,24 +4415,27 @@ fn bone_king_call_slave(world: &mut World, actor_id: i32) {
 /// **整数除法照抄**：`HP / MaxHP` 是 C# `int/int`（ushort 提升），`HP < MaxHP` ⇒ 商 0
 /// ⇒ `DangerLevel > 0` 即触发；仅满血时阈值是 5。改坏必红：
 /// `mb7_bone_king_danger_level_uses_integer_division`（HP=MaxHP-1 ⇒ 必须召唤）。
-fn bone_king_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+fn bone_king_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
-    let now = world.clock_ms;
+    let now = sim.clock_ms;
     if !(can_move(&e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
         return;
     }
     let (enemy_tick, has_target) = (e.ai.search_enemy_tick, e.ai.target_creature.is_some());
     // C# `&&` 优先于 `||`：`(>8000) || ((>1000) && TargetCret == null)`。
     if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
         // `DangerLevel > WAbil.HP / WAbil.MaxHP * 5 && DangerLevel > 0`。
-        let (hp, max_hp, danger) = world
-            .entities
+        let (hp, max_hp, danger) = access
             .get(actor_id)
             .map_or((0, 0, 0), |e| (e.hp, e.max_hp, e.danger_level));
         // `MaxHP == 0` 时 oracle 抛 DivideByZeroException；生产不变量 MaxHP>0（登记）。
@@ -3816,31 +4445,30 @@ fn bone_king_run(world: &mut World, actor_id: i32) {
             (i32::from(hp) / i32::from(max_hp)) * 5
         };
         if danger > threshold && danger > 0 {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.danger_level -= 1;
             }
-            bone_king_call_slave(world, actor_id);
+            bone_king_call_slave_impl(access, sim, actor_id);
         }
         if hp == max_hp {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.danger_level = 5;
             }
         }
     }
     // `for (i = Count-1; i >= 0; i--) if (Death || Ghost) RemoveAt(i);`
-    let dead_slaves: Vec<i32> = world
-        .entities
+    let dead_slaves: Vec<i32> = access
         .get(actor_id)
         .map(|e| {
             e.class_slave_list
                 .iter()
                 .copied()
-                .filter(|id| world.entities.get(*id).is_none_or(|s| s.death || s.ghost))
+                .filter(|id| access.get(*id).is_none_or(|s| s.death || s.ghost))
                 .collect()
         })
         .unwrap_or_default();
     if !dead_slaves.is_empty() {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.slave
                 .class_slave_list
                 .retain(|id| !dead_slaves.contains(id));
@@ -3848,14 +4476,28 @@ fn bone_king_run(world: &mut World, actor_id: i32) {
     }
 }
 
+#[allow(dead_code)]
+fn bone_king_run(world: &mut World, actor_id: i32) {
+    bone_king_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `ElfMonster.ResetElfMon`（`ElfMonster.cs:37-41`）：`WalkSpeed = 500 - SlaveMakeLevel*50`、
 /// `WalkTick = now + 2000`。
-fn elf_monster_reset(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn elf_monster_reset_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.walk_speed = 500 - i64::from(e.slave.slave_make_level) * 50;
         e.ai.walk_tick = now + 2000;
     }
+}
+
+#[allow(dead_code)]
+fn elf_monster_reset(world: &mut World, actor_id: i32) {
+    elf_monster_reset_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ElfMonster.Run`（`ElfMonster.cs:43-86`）。
@@ -3863,43 +4505,47 @@ fn elf_monster_reset(world: &mut World, actor_id: i32) {
 /// 首次出土 → 死亡 2s `MakeGhost` → 否则 `TargetCret`/主人目标 ⇒ `MakeClone(Dragon1)`。
 /// 克隆的字段复制/收尾（`AppearNow`/`Master=null`/`KickException`）在宿主排水
 /// [`World::flush_sculture_spawns`] 内落定（登记次序差，见该函数文档）。
-fn elf_monster_run(world: &mut World, actor_id: i32) {
-    let (bo_first, dir, x, y) = match world.entities.get(actor_id) {
+fn elf_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let (bo_first, dir, x, y) = match access.get(actor_id) {
         Some(e) => (e.bo_is_first, e.ai.dir, e.x, e.y),
         None => return,
     };
     if bo_first {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.monster_class.bo_is_first = false;
             e.flags.fixed_hide_mode = false;
         }
-        send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
-        elf_monster_reset(world, actor_id);
+        send_ref_msg_impl_default(access, sim, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+        elf_monster_reset_impl(access, sim, actor_id);
     }
-    let Some(e) = world.entities.get(actor_id) else {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
-    let now = world.clock_ms;
+    let now = sim.clock_ms;
     if e.death {
         if now - e.death_tick > 2 * 1000 {
-            make_ghost(world, actor_id);
+            make_ghost_impl(access, sim, actor_id);
         }
         return;
     }
     let mut bo_change_face = e.ai.target_creature.is_some();
     if let Some(master_id) = e.master {
-        if let Some(m) = world.entities.get(master_id) {
+        if let Some(m) = access.get(master_id) {
             if m.ai.target_creature.is_some() || m.last_hiter.is_some() {
                 bo_change_face = true;
             }
         }
     }
     if bo_change_face {
-        let (map_id, x, y) = match world.entities.get(actor_id) {
+        let (map_id, x, y) = match access.get(actor_id) {
             Some(e) => (e.map_id, e.x, e.y),
             None => return,
         };
-        world.pending_sculture_spawns.push(ScultureSpawnRequest {
+        sim.pending_sculture_spawns.push(ScultureSpawnRequest {
             owner_id: actor_id,
             map_id,
             x,
@@ -3913,17 +4559,31 @@ fn elf_monster_run(world: &mut World, actor_id: i32) {
     }
 }
 
+#[allow(dead_code)]
+fn elf_monster_run(world: &mut World, actor_id: i32) {
+    elf_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `ElfWarriorMonster.ResetElfMon`（`ElfWarriorMonster.cs:105-110`）：
 /// `NextHitTime = 1500 - SlaveMakeLevel*100`、`WalkSpeed = 500 - SlaveMakeLevel*50`、
 /// `WalkTick = now + 2000`。
-fn elf_warrior_reset(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn elf_warrior_reset_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    if let Some(e) = access.get_mut(actor_id) {
         let lvl = i64::from(e.slave.slave_make_level);
         e.ai.next_hit_time = 1500 - lvl * 100;
         e.ai.walk_speed = 500 - lvl * 50;
         e.ai.walk_tick = now + 2000;
     }
+}
+
+#[allow(dead_code)]
+fn elf_warrior_reset(world: &mut World, actor_id: i32) {
+    elf_warrior_reset_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ElfWarriorMonster.Run`（`ElfWarriorMonster.cs:112-166`）。
@@ -3932,40 +4592,44 @@ fn elf_warrior_reset(world: &mut World, actor_id: i32) {
 /// `boChangeFace=true` 但未到 60s / 名字尾位不是 `1` 时**不刷新** `DigDownTick`；
 /// 只有 `boChangeFace=false`（有目标 / 主人有目标或 `LastHiter`）才刷新。
 /// 改坏必红：`mb7_elf_warrior_dig_down_tick_not_refreshed_when_change_face_true`。
-fn elf_warrior_run(world: &mut World, actor_id: i32) {
-    let (bo_first, dir, x, y) = match world.entities.get(actor_id) {
+fn elf_warrior_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let (bo_first, dir, x, y) = match access.get(actor_id) {
         Some(e) => (e.bo_is_first, e.ai.dir, e.x, e.y),
         None => return,
     };
     if bo_first {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.monster_class.bo_is_first = false;
             e.flags.fixed_hide_mode = false;
         }
-        send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
-        elf_warrior_reset(world, actor_id);
+        send_ref_msg_impl_default(access, sim, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+        elf_warrior_reset_impl(access, sim, actor_id);
     }
-    let Some(e) = world.entities.get(actor_id) else {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
-    let now = world.clock_ms;
+    let now = sim.clock_ms;
     if e.death {
         if now - e.death_tick > 2 * 1000 {
-            make_ghost(world, actor_id);
+            make_ghost_impl(access, sim, actor_id);
         }
         return;
     }
     // `bool boChangeFace = TargetCret == null;`
     let mut bo_change_face = e.ai.target_creature.is_none();
     if let Some(master_id) = e.master {
-        if let Some(m) = world.entities.get(master_id) {
+        if let Some(m) = access.get(master_id) {
             if m.ai.target_creature.is_some() || m.last_hiter.is_some() {
                 bo_change_face = false;
             }
         }
     }
     if bo_change_face {
-        let (dig_down_tick, name) = match world.entities.get(actor_id) {
+        let (dig_down_tick, name) = match access.get(actor_id) {
             Some(e) => (e.dig_down_tick, e.name.clone()),
             None => return,
         };
@@ -3973,11 +4637,11 @@ fn elf_warrior_run(world: &mut World, actor_id: i32) {
             // `if (elfName[^1] == '1') { elfName = elfName[..^1]; elfMon = MakeClone(elfName, this); }`
             // C# `string` 的 `[^1]` 是 UTF-16 code unit；怪名均为 BMP ⇒ Rust `char` 等价。
             if let Some(trimmed) = name.strip_suffix('1') {
-                let (map_id, x, y) = match world.entities.get(actor_id) {
+                let (map_id, x, y) = match access.get(actor_id) {
                     Some(e) => (e.map_id, e.x, e.y),
                     None => return,
                 };
-                world.pending_sculture_spawns.push(ScultureSpawnRequest {
+                sim.pending_sculture_spawns.push(ScultureSpawnRequest {
                     owner_id: actor_id,
                     map_id,
                     x,
@@ -3990,10 +4654,15 @@ fn elf_warrior_run(world: &mut World, actor_id: i32) {
                 });
             }
         }
-    } else if let Some(e) = world.entities.get_mut(actor_id) {
+    } else if let Some(e) = access.get_mut(actor_id) {
         // `else { DigDownTick = GetTickCount(); }` —— **属于 `if (boChangeFace)` 的 else**。
         e.monster_class.dig_down_tick = now;
     }
+}
+
+#[allow(dead_code)]
+fn elf_warrior_run(world: &mut World, actor_id: i32) {
+    elf_warrior_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ScultureKingMonster.Attack`（`:55-59`）：
@@ -4001,53 +4670,57 @@ fn elf_warrior_run(world: &mut World, actor_id: i32) {
 /// nPower, true)`：对**目标格**每个 proper 对象抽 `GetHitStruckDamage(this, 0)`（1~2 抽）与
 /// `GetMagStruckDamage(this, nPower)`（1 抽），`sum > 0` ⇒ `StruckDamage(sum)` +
 /// `SendStruckDelayMsg(RM_REFMESSAGE, …, 200)`；最后 `SendRefMsg(RM_HIT, …)`。
-fn sculture_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
-    let Some((cx, cy, dc)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
+fn sculture_king_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) {
+    let Some((cx, cy, dc)) = access.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
         return;
     };
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let n_power = crate::combat::get_attack_power(&mut world.rng, lo, (hi - lo).abs());
-    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+    let n_power = crate::combat::get_attack_power(&mut sim.rng, lo, (hi - lo).abs());
+    let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) else {
         return;
     };
     // `Dir = GetNextDirection(CurrX, CurrY, target.CurrX, target.CurrY)`。
     let dir = crate::magic::next_direction(cx, cy, tx, ty);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = dir;
     }
-    let map_id = world.entities.get(actor_id).map_or(0, |e| e.map_id);
-    let undead = world.entities.get(actor_id).map_or(0, |e| e.undead_power);
+    let map_id = access.get(actor_id).map_or(0, |e| e.map_id);
+    let undead = access.get(actor_id).map_or(0, |e| e.undead_power);
     // `Envir.GetBaseObjects(target.CurrX, target.CurrY, false, ...)`：**boFlag=false** 口径
     // （含「死但未 Ghost」；`base_objects_at` 是 true 口径）。MB-3b F4；与 G09 的关系见方法文档。
-    for tid in world.base_objects_at_including_dead(map_id, tx, ty) {
-        let proper = world
-            .entities
+    for tid in crate::world::World::base_objects_at_including_dead_impl(access, sim, map_id, tx, ty)
+    {
+        let proper = access
             .get(actor_id)
-            .zip(world.entities.get(tid))
+            .zip(access.get(tid))
             .is_some_and(|(a, t)| is_proper_target(&a, &t));
         if !proper {
             continue;
         }
-        let mac = world.entities.get(tid).map_or(0, |t| t.mac);
+        let mac = access.get(tid).map_or(0, |t| t.mac);
         // `GetHitStruckDamage(this, 0)`：AC 骰照抽（`0 - nArmor` ⇒ 0），随后
         // `GetMagStruckDamage(this, nPower)`。
         let hit = {
-            let target = world.entities.spawn_cloned(tid).expect("target exists");
-            let attacker = world
-                .entities
-                .spawn_cloned(actor_id)
-                .expect("attacker exists");
-            crate::combat::get_hit_struck_damage(&mut world.rng, &target, &attacker, 0)
+            let target = access.spawn_cloned(tid).expect("target exists");
+            let attacker = access.spawn_cloned(actor_id).expect("attacker exists");
+            crate::combat::get_hit_struck_damage(&mut sim.rng, &target, &attacker, 0)
         };
-        let mag = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power, Some(undead));
+        let mag = crate::combat::get_mag_struck_damage(&mut sim.rng, mac, n_power, Some(undead));
         let n_damage = i32::from(hit) + mag;
         if n_damage > 0 {
-            let _ = class_struck_apply(world, actor_id, tid, n_damage, n_power);
+            let _ = class_struck_apply_impl(access, sim, actor_id, tid, n_damage, n_power);
             // `baseObject.SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …,
             //   ActorId, "", 200)`（`AnimalObject.cs:379`，ScultureKing 经
             //   `HitMagAttackTarget`）——每个 proper 格对象各一条。
-            world.send_struck_delay_msg_refmessage(
+            crate::slave::send_struck_delay_msg_refmessage_impl(
+                access,
+                sim,
                 tid,
                 actor_id,
                 n_damage,
@@ -4055,17 +4728,26 @@ fn sculture_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
             );
         }
     }
-    let (dir, x, y) = match world.entities.get(actor_id) {
+    let (dir, x, y) = match access.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
-    send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+}
+
+#[allow(dead_code)]
+fn sculture_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
+    sculture_king_attack_impl(&mut world.entities, &mut world.sim, actor_id, target_id)
 }
 
 /// `ScultureKingMonster.Run`（`:61-115`）。`base.Run()` = `MonsterObject.Run`。
-fn sculture_king_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn sculture_king_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !(can_move(&e) && now - e.ai.walk_tick >= e.ai.walk_speed) {
@@ -4075,14 +4757,13 @@ fn sculture_king_run(world: &mut World, actor_id: i32) {
         let (cx, cy, cool_eye) = (e.x, e.y, e.ai.cool_eye);
         let visible: Vec<i32> = e.visible_actors.iter().map(|v| v.target).collect();
         for target_id in visible {
-            let Some(t) = world.entities.get(target_id) else {
+            let Some(t) = access.get(target_id) else {
                 continue;
             };
             if t.death {
                 continue;
             }
-            let proper = world
-                .entities
+            let proper = access
                 .get(actor_id)
                 .is_some_and(|a| is_proper_target(&a, &t));
             if proper
@@ -4090,59 +4771,60 @@ fn sculture_king_run(world: &mut World, actor_id: i32) {
                 && (cx - t.x).abs() <= 2
                 && (cy - t.y).abs() <= 2
             {
-                sculture_king_melt_stone(world, actor_id);
+                sculture_king_melt_stone_impl(access, sim, actor_id);
                 break;
             }
         }
         // 融化之后 oracle 仍走 `_mSlaveObjectList` 清理（在 `if (StoneMode)` 之外）。
-        cleanup_sculture_slaves(world, actor_id);
+        cleanup_sculture_slaves_impl(access, sim, actor_id);
         return;
     }
     let (enemy_tick, has_target) = (e.ai.search_enemy_tick, e.ai.target_creature.is_some());
     if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.search_enemy_tick = now;
         }
-        search_target(world, actor_id);
+        search_target_impl(access, sim, actor_id);
         // **C# `int / int` 整数除法**：`HP < MaxHP ⇒ HP/MaxHP = 0 ⇒ 阈值 0`（仅满血得 5）。
-        let (danger, hp, max_hp) = world
-            .entities
+        let (danger, hp, max_hp) = access
             .get(actor_id)
             .map_or((0, 0, 0), |e| (e.danger_level, e.hp, e.max_hp));
         let ratio = i32::from(hp) / i32::from(max_hp).max(1);
         if danger > ratio * 5 && danger > 0 {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.danger_level -= 1;
             }
-            sculture_king_call_slave(world, actor_id);
+            sculture_king_call_slave_impl(access, sim, actor_id);
         }
-        let (hp_now, max_hp_now) = world
-            .entities
-            .get(actor_id)
-            .map_or((0, 0), |e| (e.hp, e.max_hp));
+        let (hp_now, max_hp_now) = access.get(actor_id).map_or((0, 0), |e| (e.hp, e.max_hp));
         if hp_now == max_hp_now {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.danger_level = 5;
             }
         }
     }
-    cleanup_sculture_slaves(world, actor_id);
+    cleanup_sculture_slaves_impl(access, sim, actor_id);
+}
+
+#[allow(dead_code)]
+fn sculture_king_run(world: &mut World, actor_id: i32) {
+    sculture_king_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ScultureKingMonster.Run` 尾的 `_mSlaveObjectList` 倒序清理（`:105-112`）。
-fn cleanup_sculture_slaves(world: &mut World, actor_id: i32) {
-    let Some(mut list) = world
-        .entities
-        .get(actor_id)
-        .map(|e| e.class_slave_list.clone())
-    else {
+fn cleanup_sculture_slaves_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    _sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(mut list) = access.get(actor_id).map(|e| e.class_slave_list.clone()) else {
         return;
     };
     if list.is_empty() {
         return;
     }
     for i in (0..list.len()).rev() {
-        let remove = match world.entities.get(list[i]) {
+        let remove = match access.get(list[i]) {
             Some(child) => child.death || child.ghost,
             None => true,
         };
@@ -4150,9 +4832,14 @@ fn cleanup_sculture_slaves(world: &mut World, actor_id: i32) {
             list.remove(i);
         }
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.slave.class_slave_list = list;
     }
+}
+
+#[allow(dead_code)]
+fn cleanup_sculture_slaves(world: &mut World, actor_id: i32) {
+    cleanup_sculture_slaves_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `GuardUnit.IsProperTarget`（`GuardUnit.cs:35-125`）—— ArcherGuard 的 proper 判定。
@@ -4180,35 +4867,50 @@ fn cleanup_sculture_slaves(world: &mut World, actor_id: i32) {
 /// - `world`：世界（需要可变：到期时清 `CrimeforCastle`）；
 /// - `actor_id`：发起判定的守卫（`ArcherGuard.Run` 的 `this`）；
 /// - `target_id`：被判定为目标的实体。
+fn guard_unit_is_proper_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) -> bool {
+    guard_target_is_proper_target_impl(access, sim, actor_id, target_id)
+}
+
+#[allow(dead_code)]
 fn guard_unit_is_proper_target(world: &mut World, actor_id: i32, target_id: i32) -> bool {
-    guard_target_is_proper_target(world, actor_id, target_id)
+    guard_unit_is_proper_target_impl(&mut world.entities, &mut world.sim, actor_id, target_id)
 }
 
 /// `ArcherGuard.AttackTarger`（`ArcherGuard.cs:21-37`）。
-fn archer_guard_attack_targer(world: &mut World, actor_id: i32, target_id: i32) {
-    let (cx, cy, dc) = match world.entities.get(actor_id) {
+fn archer_guard_attack_targer_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) {
+    let (cx, cy, dc) = match access.get(actor_id) {
         Some(e) => (e.x, e.y, e.dc),
         None => return,
     };
-    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+    let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) else {
         return;
     };
     let dir = crate::magic::next_direction(cx, cy, tx, ty);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = dir;
     }
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let mut n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
+    let mut n_damage = lo + sim.rng.random_below((hi - lo).abs() + 1);
     if n_damage > 0 {
         let (Some(target), Some(attacker)) = (
-            world.entities.spawn_cloned(target_id),
-            world.entities.spawn_cloned(actor_id),
+            access.spawn_cloned(target_id),
+            access.spawn_cloned(actor_id),
         ) else {
             return;
         };
         n_damage = i32::from(crate::combat::get_hit_struck_damage(
-            &mut world.rng,
+            &mut sim.rng,
             &target,
             &attacker,
             n_damage,
@@ -4219,21 +4921,24 @@ fn archer_guard_attack_targer(world: &mut World, actor_id: i32, target_id: i32) 
         // ——**在 `StruckDamage` 之前**（`:33`）：`StruckDamage` 的 `WarrMon`/`WizardMon`/`TaosMon`
         // 倍率读的是**当下**的 `LastHiter`，顺序反了会读到旧命中者（MB-3b F1b）。
         // 不发 `RM_STRUCK`（oracle 本路径没有 `_Attack` 的 `SendMsg`）。
-        let now = world.clock_ms;
-        if let Some(mut t) = world.entities.get_mut(target_id) {
+        let now = sim.clock_ms;
+        if let Some(mut t) = access.get_mut(target_id) {
             t.set_last_hiter(actor_id, now);
             t.attribution.exp_hitter = None;
         }
-        let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
+        let _ = class_struck_apply_impl(access, sim, actor_id, target_id, n_damage, n_damage);
         // `targetObject.SendStruckDelayMsg(RM_REFMESSAGE, nDamage, …,
         //   ActorId, "", max(|Δx|,|Δy|)*50 + 600)`（`ArcherGuard.cs:34`）。
         let delay =
             i64::from((cx - tx).abs().max((cy - ty).abs()) * 50) + GUARD_STRUCK_DELAY_BASE_MS;
-        world.send_struck_delay_msg_refmessage(target_id, actor_id, n_damage, delay);
+        crate::slave::send_struck_delay_msg_refmessage_impl(
+            access, sim, target_id, actor_id, n_damage, delay,
+        );
     }
     // `SendRefMsg(RM_FLYAXE, Dir, CurrX, CurrY, targetObject.ActorId, "")`。
-    send_ref_msg_with_target(
-        world,
+    send_ref_msg_with_target_impl(
+        access,
+        sim,
         actor_id,
         RM_FLYAXE,
         i32::from(dir),
@@ -4244,35 +4949,42 @@ fn archer_guard_attack_targer(world: &mut World, actor_id: i32, target_id: i32) 
     );
 }
 
+#[allow(dead_code)]
+fn archer_guard_attack_targer(world: &mut World, actor_id: i32, target_id: i32) {
+    archer_guard_attack_targer_impl(&mut world.entities, &mut world.sim, actor_id, target_id)
+}
+
 /// `ArcherGuard.Run`（`ArcherGuard.cs:39-91`）。`base.Run()` = `NormNpc.Run`
 /// （清 Master）→ `AnimalObject.Run` → `BaseObject.Run`；调用方按
 /// [`ClassRunBase::Animal`] 续跑，本函数在末尾清 Master。
-fn archer_guard_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn archer_guard_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if can_move(&e) && now - e.ai.walk_tick >= e.ai.walk_speed {
         let (cx, cy) = (e.x, e.y);
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.walk_tick = now;
         }
-        let visible: Vec<i32> = world
-            .entities
+        let visible: Vec<i32> = access
             .get(actor_id)
             .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
             .unwrap_or_default();
         let mut n_rage = 9999;
         let mut best = None;
         for target_id in visible {
-            let Some((tx, ty, death)) = world.entities.get(target_id).map(|t| (t.x, t.y, t.death))
-            else {
+            let Some((tx, ty, death)) = access.get(target_id).map(|t| (t.x, t.y, t.death)) else {
                 continue;
             };
             if death {
                 continue;
             }
-            if !guard_unit_is_proper_target(world, actor_id, target_id) {
+            if !guard_unit_is_proper_target_impl(access, sim, actor_id, target_id) {
                 continue;
             }
             let n_abs = (cx - tx).abs() + (cy - ty).abs();
@@ -4282,19 +4994,16 @@ fn archer_guard_run(world: &mut World, actor_id: i32) {
             }
         }
         if let Some(target_id) = best {
-            set_target_creature(world, actor_id, target_id);
+            set_target_creature_impl(access, sim, actor_id, target_id);
         } else {
-            del_target_creature(world, actor_id);
+            del_target_creature_impl(access, sim, actor_id);
         }
     }
     // `ArcherGuard.Run` 的攻击/转向段仍在 `if (CanMove())` 内（只是不在 `WalkTick` 门内）。
-    let can_move_now = world.entities.get(actor_id).is_some_and(|e| can_move(&e));
-    let target = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature);
+    let can_move_now = access.get(actor_id).is_some_and(|e| can_move(&e));
+    let target = access.get(actor_id).and_then(|e| e.ai.target_creature);
     if !can_move_now {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             if e.slave.master.is_some() {
                 e.slave.master = None;
             }
@@ -4303,35 +5012,36 @@ fn archer_guard_run(world: &mut World, actor_id: i32) {
     }
     match target {
         Some(target_id) => {
-            let due = world
-                .entities
+            let due = access
                 .get(actor_id)
                 .is_some_and(|e| now - e.ai.attack_tick >= e.ai.next_hit_time);
             if due {
-                if let Some(e) = world.entities.get_mut(actor_id) {
+                if let Some(e) = access.get_mut(actor_id) {
                     e.ai.attack_tick = now;
                 }
-                archer_guard_attack_targer(world, actor_id, target_id);
+                archer_guard_attack_targer_impl(access, sim, actor_id, target_id);
             }
         }
         None => {
-            let guard_dir = world
-                .entities
-                .get(actor_id)
-                .map_or(0, |e| e.guard_direction);
-            let dir = world.entities.get(actor_id).map_or(0, |e| e.ai.dir);
+            let guard_dir = access.get(actor_id).map_or(0, |e| e.guard_direction);
+            let dir = access.get(actor_id).map_or(0, |e| e.ai.dir);
             // `TurnTo` 的 `RM_TURN` 帧沿用本层 `turn_to` 口径（只落朝向，帧面登记未接）。
             if guard_dir > 0 && dir != guard_dir as u8 {
-                turn_to(world, actor_id, guard_dir as u8);
+                turn_to_impl(access, sim, actor_id, guard_dir as u8);
             }
         }
     }
     // `NormNpc.Run`：`if (Master != null) Master = null;`（不进怪物 AI 的宝宝表）。
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         if e.slave.master.is_some() {
             e.slave.master = None;
         }
     }
+}
+
+#[allow(dead_code)]
+fn archer_guard_run(world: &mut World, actor_id: i32) {
+    archer_guard_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `MonsterObject.OpenCrazyMode(int nTime)`（`MonsterObject.cs:465-471`）——
@@ -4349,12 +5059,20 @@ pub fn open_crazy_mode(world: &mut World, actor_id: i32, interval_seconds: i32) 
 
 /// `MonsterObject.BreakCrazyMode()`（`MonsterObject.cs:473-480`）：**只有** `CrazyMode` 为真才清
 /// （`RefNameColor` 同属帧面，world 层不产帧）。
-pub fn break_crazy_mode(world: &mut World, actor_id: i32) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+pub fn break_crazy_mode_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    _sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         if e.ai.crazy_mode {
             e.ai.crazy_mode = false;
         }
     }
+}
+
+pub fn break_crazy_mode(world: &mut World, actor_id: i32) {
+    break_crazy_mode_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `AnimalObject.BreakHolySeizeMode()`（`AnimalObject.cs:330-334`）：无条件
@@ -4385,14 +5103,23 @@ pub(crate) fn break_holy_seize_mode_impl<A: crate::entity::EntityAccess>(
 /// **严格大于**：`(now - CrazyModeTick) > CrazyModeInterval`（等于不清）。只在 oracle 落到
 /// `if (CanMove() && ...)` **之后**的路径上调用（`Think()`/`AttackTarget()` 的提前返回
 /// 会 `base.Run(); return;` ⇒ 跳过本段，见 [`monster_run`]）。
-fn crazy_mode_expiry(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let expired = world.entities.get(actor_id).is_some_and(|e| {
+fn crazy_mode_expiry_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let expired = access.get(actor_id).is_some_and(|e| {
         e.ai.crazy_mode && (now - e.ai.crazy_mode_tick) > e.ai.crazy_mode_interval
     });
     if expired {
-        break_crazy_mode(world, actor_id);
+        break_crazy_mode_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn crazy_mode_expiry(world: &mut World, actor_id: i32) {
+    crazy_mode_expiry_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `AnimalObject.Run()`（`AnimalObject.cs:142-149`）的到期段：
@@ -4431,9 +5158,20 @@ pub(crate) fn animal_run_impl<A: crate::entity::EntityAccess>(
 /// `Up=0` ⇒ `nY++`、`Down=4` ⇒ `nY--`、`Left=6` ⇒ `nX++`、`Right=2` ⇒ `nX--`；
 /// 对角方向**两轴同时**满足边界才一起动（oracle 的 `&&` 门，照抄）。
 /// **无随机数、无移动**。主人不在实体表（悬空 id）⇒ `None`（等价 oracle 的 `Master == null`）。
+fn master_get_back_position_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &crate::world::SimState,
+    master_id: i32,
+) -> Option<(i32, i32)> {
+    let m = access.get(master_id)?;
+    Some(back_position_from_impl(
+        access, sim, m.map_id, m.x, m.y, m.ai.dir,
+    ))
+}
+
+#[allow(dead_code)]
 fn master_get_back_position(world: &World, master_id: i32) -> Option<(i32, i32)> {
-    let m = world.entities.get(master_id)?;
-    Some(back_position_from(world, m.map_id, m.x, m.y, m.ai.dir))
+    master_get_back_position_impl(&world.entities, &world.sim, master_id)
 }
 
 /// `BaseObject.GetBackPosition(ref nX, ref nY)` 的**自身**版本（`BaseObject.cs:1878-1927`）：
@@ -4442,17 +5180,35 @@ fn master_get_back_position(world: &World, master_id: i32) -> Option<(i32, i32)>
 /// 与 [`master_get_back_position`] 共用同一份方向/边界语义（后者只是「按主人的状态取」）。
 /// MB-2 的 `DualAxeMonster`/`LightingZombi` 用它写 `TargetX/TargetY`（`DualAxeMonster.cs:126/131`、
 /// `LightingZombi.cs:48`）。
+fn get_back_position_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &crate::world::SimState,
+    actor_id: i32,
+) -> Option<(i32, i32)> {
+    let e = access.get(actor_id)?;
+    Some(back_position_from_impl(
+        access, sim, e.map_id, e.x, e.y, e.ai.dir,
+    ))
+}
+
+#[allow(dead_code)]
 fn get_back_position(world: &World, actor_id: i32) -> Option<(i32, i32)> {
-    let e = world.entities.get(actor_id)?;
-    Some(back_position_from(world, e.map_id, e.x, e.y, e.ai.dir))
+    get_back_position_impl(&world.entities, &world.sim, actor_id)
 }
 
 /// `GetBackPosition` 的纯函数核心：给定地图/坐标/朝向，返回身后一格（含边界夹取）。
 ///
 /// **无随机数、无移动**。对角方向两轴同时满足边界才一起动（oracle 的 `&&` 门，照抄）。
-fn back_position_from(world: &World, map_id: usize, x: i32, y: i32, dir: u8) -> (i32, i32) {
+fn back_position_from_impl<A: crate::entity::EntityAccess>(
+    _access: &A,
+    sim: &crate::world::SimState,
+    map_id: usize,
+    x: i32,
+    y: i32,
+    dir: u8,
+) -> (i32, i32) {
     let (mut n_x, mut n_y) = (x, y);
-    let (w, h) = world
+    let (w, h) = sim
         .maps
         .get(map_id)
         .map_or((0, 0), |map| (map.width, map.height));
@@ -4480,6 +5236,11 @@ fn back_position_from(world: &World, map_id: usize, x: i32, y: i32, dir: u8) -> 
         _ => {}
     }
     (n_x, n_y)
+}
+
+#[allow(dead_code)]
+fn back_position_from(world: &World, map_id: usize, x: i32, y: i32, dir: u8) -> (i32, i32) {
+    back_position_from_impl(&world.entities, &world.sim, map_id, x, y, dir)
 }
 
 // ---------------------------------------------------------------------------
@@ -4510,8 +5271,12 @@ const COW_KING_SIEGE_LOCK_THRESHOLD: i32 = 5;
 /// 的活体也算阻挡。
 ///
 /// 不抽随机数、不写状态。
-fn cow_king_siege_lock_count(world: &World, actor_id: i32) -> i32 {
-    let Some(e) = world.entities.get(actor_id) else {
+fn cow_king_siege_lock_count_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &crate::world::SimState,
+    actor_id: i32,
+) -> i32 {
+    let Some(e) = access.get(actor_id) else {
         return 0;
     };
     let (cx, cy, map_id) = (e.x, e.y, e.map_id);
@@ -4520,7 +5285,15 @@ fn cow_king_siege_lock_count(world: &World, actor_id: i32) -> i32 {
     while n_c != 2 {
         let mut n10 = -1;
         while n10 != 2 {
-            if !world.can_walk_at(map_id, cx + n_c, cy + n10, false) && (n_c != 0 || n10 != 0) {
+            if !crate::world::World::can_walk_at_impl(
+                access,
+                sim,
+                map_id,
+                cx + n_c,
+                cy + n10,
+                false,
+            ) && (n_c != 0 || n10 != 0)
+            {
                 result += 1;
             }
             n10 += 1;
@@ -4528,6 +5301,11 @@ fn cow_king_siege_lock_count(world: &World, actor_id: i32) -> i32 {
         n_c += 1;
     }
     result
+}
+
+#[allow(dead_code)]
+fn cow_king_siege_lock_count(world: &World, actor_id: i32) -> i32 {
+    cow_king_siege_lock_count_impl(&world.entities, &world.sim, actor_id)
 }
 
 /// `CowKingMonster.Run`（`CowKingMonster.cs:40-94`）。`base.Run()` 由调用方按
@@ -4550,87 +5328,85 @@ fn cow_king_siege_lock_count(world: &World, actor_id: i32) -> i32 {
 /// （`merchant::map_random_move_xy`），落点不可走时再进 `space_move` 移位环。
 ///
 /// 返回 `true` = oracle 在 `Run` 体内 `return`（Siege 两支）⇒ 调用方不得续跑 `base.Run()`。
-fn cow_king_run(world: &mut World, actor_id: i32) -> bool {
-    let now = world.clock_ms;
-    let Some(e) = world.entities.get(actor_id) else {
+fn cow_king_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let now = sim.clock_ms;
+    let Some(e) = access.get(actor_id) else {
         return false;
     };
     if e.death || e.ghost || now - e.jump_time <= COW_KING_JUMP_INTERVAL_MS {
         return false;
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.monster_class.jump_time = now;
     }
     // `TargetCret != null`：悬空 id 在本骨架等价于 `null`（oracle 的强引用不可能悬空）。
-    let target_id = world
-        .entities
+    let target_id = access
         .get(actor_id)
         .and_then(|e| e.ai.target_creature)
-        .filter(|tid| world.entities.get(*tid).is_some());
+        .filter(|tid| access.get(*tid).is_some());
     if let Some(tid) = target_id {
-        if cow_king_siege_lock_count(world, actor_id) >= COW_KING_SIEGE_LOCK_THRESHOLD {
+        if cow_king_siege_lock_count_impl(access, sim, actor_id) >= COW_KING_SIEGE_LOCK_THRESHOLD {
             // `TargetCret.GetBackPosition(ref nX, ref nY)`（边界按**目标**图夹取）。
-            let (n_x, n_y) = get_back_position(world, tid).unwrap_or((0, 0));
-            let map_id = world.entities.get(actor_id).map_or(0, |e| e.map_id);
+            let (n_x, n_y) = get_back_position_impl(access, sim, tid).unwrap_or((0, 0));
+            let map_id = access.get(actor_id).map_or(0, |e| e.map_id);
             // `Envir.CanWalk(nX, nY, false)` —— `Envir` 是**自己**的地图。
-            if world.can_walk_at(map_id, n_x, n_y, false) {
-                crate::space_move::monster_space_move(world, actor_id, map_id, n_x, n_y);
+            if crate::world::World::can_walk_at_impl(access, sim, map_id, n_x, n_y, false) {
+                crate::space_move::monster_space_move_impl(access, sim, actor_id, map_id, n_x, n_y);
                 return true;
             }
-            crate::merchant::map_random_move(world, actor_id);
+            crate::merchant::map_random_move_impl(access, sim, actor_id);
             return true;
         }
     }
-    let (hp, max_hp) = world
-        .entities
-        .get(actor_id)
-        .map_or((0, 0), |e| (e.hp, e.max_hp));
-    let old_crazy_count = world.entities.get(actor_id).map_or(0, |e| e.crazy_count);
+    let (hp, max_hp) = access.get(actor_id).map_or((0, 0), |e| (e.hp, e.max_hp));
+    let old_crazy_count = access.get(actor_id).map_or(0, |e| e.crazy_count);
     // **C# `int/int` 整除**：`MaxHP / 7` 先截断，再 `HP / (MaxHP / 7)`。
     // `MaxHP < 7` 时 oracle 会抛 `DivideByZeroException`（部署无此怪）；本实现用
     // `max(1)` 避免 panic（等价的 crash 不复刻，登记在报告）。
     let base = i32::from(max_hp) / 7;
     let crazy_count = 7 - i32::from(hp) / base.max(1);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.monster_class.crazy_count = crazy_count;
     }
     if crazy_count >= 2 && crazy_count != old_crazy_count {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.monster_class.crazy_ready_mode = true;
             e.monster_class.crazy_ready = now;
         }
     }
-    let (ready, ready_tick) = world
-        .entities
+    let (ready, ready_tick) = access
         .get(actor_id)
         .map_or((false, 0), |e| (e.crazy_ready_mode, e.crazy_ready));
     if ready {
         if now - ready_tick < COW_KING_READY_MS {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.next_hit_time = COW_KING_READY_HIT_TIME;
             }
         } else {
             // `CrazyReadyMode = false; CrazyKingMode = true; CrazyTime = GetTickCount();`
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.crazy_ready_mode = false;
                 e.monster_class.crazy_king_mode = true;
                 e.monster_class.crazy_time = now;
             }
         }
     }
-    let (king, king_tick) = world
-        .entities
+    let (king, king_tick) = access
         .get(actor_id)
         .map_or((false, 0), |e| (e.crazy_king_mode, e.crazy_time));
     if king {
         if now - king_tick < COW_KING_KING_MS {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.next_hit_time = COW_KING_KING_HIT_TIME;
                 e.ai.walk_speed = COW_KING_KING_WALK_SPEED;
             }
         } else {
             // `CrazyKingMode = false; NextHitTime = oldHitTime; WalkSpeed = oldWalkTime;`
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.crazy_king_mode = false;
                 e.ai.next_hit_time = e.monster_class.old_hit_time;
                 e.ai.walk_speed = e.monster_class.old_walk_time;
@@ -4640,51 +5416,60 @@ fn cow_king_run(world: &mut World, actor_id: i32) -> bool {
     false
 }
 
+#[allow(dead_code)]
+fn cow_king_run(world: &mut World, actor_id: i32) -> bool {
+    cow_king_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `MonsterObject.AttackTarget` 的 race 92 版本：门/状态写点与 [`attack_target`] 相同，
 /// 只把到点后的虚调用 `Attack(target, btDir)` 换成 [`cow_king_attack`]
 /// （`CowKingMonster.cs:27-31`）。
-fn cow_king_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn cow_king_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let now = world.clock_ms;
-    if let Some(bt_dir) = get_attack_dir(world, actor_id, target_id) {
-        let due = world
-            .entities
+    let now = sim.clock_ms;
+    if let Some(bt_dir) = get_attack_dir_impl(access, actor_id, target_id) {
+        let due = access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
         if due {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
             }
-            turn_to(world, actor_id, bt_dir);
-            cow_king_attack(world, actor_id, target_id);
-            break_holy_seize_mode(world, actor_id);
+            turn_to_impl(access, sim, actor_id, bt_dir);
+            cow_king_attack_impl(access, sim, actor_id, target_id);
+            break_holy_seize_mode_impl(access, sim, actor_id);
         }
         true
     } else {
         let (same_map, tx, ty) = match (
-            world.entities.get(actor_id).map(|e| e.map_id),
-            world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+            access.get(actor_id).map(|e| e.map_id),
+            access.get(target_id).map(|t| (t.map_id, t.x, t.y)),
         ) {
             (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
             _ => (false, 0, 0),
         };
         if same_map {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.target_x = tx;
                 e.ai.target_y = ty;
             }
         } else {
-            del_target_creature(world, actor_id);
+            del_target_creature_impl(access, sim, actor_id);
         }
         false
     }
+}
+
+#[allow(dead_code)]
+fn cow_king_attack_target(world: &mut World, actor_id: i32) -> bool {
+    cow_king_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `CowKingMonster.Attack`（`CowKingMonster.cs:27-31`）：
@@ -4693,53 +5478,57 @@ fn cow_king_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// （`AnimalObject.cs:361-383`：目标格 `GetBaseObjects(..., false)` 逐对象
 /// `GetHitStruckDamage(nPower/2) + GetMagStruckDamage(nPower/2)` → `StruckDamage` +
 /// 200ms `RM_REFMESSAGE`；尾帧 `RM_HIT`）。
-fn cow_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
-    let Some((cx, cy, dc)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
+fn cow_king_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) {
+    let Some((cx, cy, dc)) = access.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
         return;
     };
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
     // **1 抽**：`Random(|Hi-Lo| + 1)`。
-    let n_power = crate::combat::get_attack_power(&mut world.rng, lo, (hi - lo).abs());
-    let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) else {
+    let n_power = crate::combat::get_attack_power(&mut sim.rng, lo, (hi - lo).abs());
+    let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) else {
         return;
     };
     // `Dir = M2Share.GetNextDirection(CurrX, CurrY, target.CurrX, target.CurrY)`。
     let dir = crate::magic::next_direction(cx, cy, tx, ty);
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = dir;
     }
-    let map_id = world.entities.get(actor_id).map_or(0, |e| e.map_id);
-    let undead = world.entities.get(actor_id).map_or(0, |e| e.undead_power);
+    let map_id = access.get(actor_id).map_or(0, |e| e.map_id);
+    let undead = access.get(actor_id).map_or(0, |e| e.undead_power);
     // `Envir.GetBaseObjects(target.CurrX, target.CurrY, false, ...)`：boFlag=false 口径
     // （含「死但未 Ghost」）——复用与 ScultureKing 相同的格扫。
-    for tid in world.base_objects_at_including_dead(map_id, tx, ty) {
-        let proper = world
-            .entities
+    for tid in crate::world::World::base_objects_at_including_dead_impl(access, sim, map_id, tx, ty)
+    {
+        let proper = access
             .get(actor_id)
-            .zip(world.entities.get(tid))
+            .zip(access.get(tid))
             .is_some_and(|(a, t)| is_proper_target(&a, &t));
         if !proper {
             continue;
         }
-        let mac = world.entities.get(tid).map_or(0, |t| t.mac);
+        let mac = access.get(tid).map_or(0, |t| t.mac);
         // `GetHitStruckDamage(this, nPower / 2)`：AC 骰照抽（即使 nPower/2 == 0）。
         let hit = {
-            let target = world.entities.spawn_cloned(tid).expect("target exists");
-            let attacker = world
-                .entities
-                .spawn_cloned(actor_id)
-                .expect("attacker exists");
-            crate::combat::get_hit_struck_damage(&mut world.rng, &target, &attacker, n_power / 2)
+            let target = access.spawn_cloned(tid).expect("target exists");
+            let attacker = access.spawn_cloned(actor_id).expect("attacker exists");
+            crate::combat::get_hit_struck_damage(&mut sim.rng, &target, &attacker, n_power / 2)
         };
         // `GetMagStruckDamage(this, nPower / 2)`：MAC 骰照抽。
         let mag =
-            crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power / 2, Some(undead));
+            crate::combat::get_mag_struck_damage(&mut sim.rng, mac, n_power / 2, Some(undead));
         let n_damage = i32::from(hit) + mag;
         if n_damage > 0 {
-            let _ = class_struck_apply(world, actor_id, tid, n_damage, n_power);
+            let _ = class_struck_apply_impl(access, sim, actor_id, tid, n_damage, n_power);
             // `SendStruckDelayMsg(RM_REFMESSAGE, nDamage, HP, MaxHP, ActorId, "", 200)`。
-            world.send_struck_delay_msg_refmessage(
+            crate::slave::send_struck_delay_msg_refmessage_impl(
+                access,
+                sim,
                 tid,
                 actor_id,
                 n_damage,
@@ -4747,19 +5536,28 @@ fn cow_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
             );
         }
     }
-    let (dir, x, y) = match world.entities.get(actor_id) {
+    let (dir, x, y) = match access.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
-    send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+}
+
+#[allow(dead_code)]
+fn cow_king_attack(world: &mut World, actor_id: i32, target_id: i32) {
+    cow_king_attack_impl(&mut world.entities, &mut world.sim, actor_id, target_id)
 }
 
 /// `MonsterObject.Run`（`MonsterObject.cs:251-360`）的**普通怪路径**（任务/逃跑触发点未建模；
 /// `Master` 跟随 / `SlaveRelax` 已接）。
 ///
 /// 只做 AI；`BaseObject.Run` 的恢复/死亡/过期段由 `World` 统一处理（见模块头）。
-pub fn monster_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+pub fn monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     // `ATMonster.Run`（`ATMonster.cs:13-24`）：`is_active_seek_race` 的怪在 `base.Run()`
@@ -4789,61 +5587,56 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
         || e.race == 100)
         && can_move(&e)
     {
-        let now = world.clock_ms;
+        let now = sim.clock_ms;
         let enemy_tick = e.ai.search_enemy_tick;
         let has_target = e.ai.target_creature.is_some();
         // `(now - SearchEnemyTick) > 8000 || (now - SearchEnemyTick) > 1000 && TargetCret == null`
         // ——C# 的 `&&` 优先级高于 `||`，故第二项是 `(>1000) && (TargetCret == null)`。
         if now - enemy_tick > 8000 || (now - enemy_tick > 1000 && !has_target) {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.search_enemy_tick = now;
             }
-            search_target(world, actor_id);
+            search_target_impl(access, sim, actor_id);
         }
     }
-    let Some(e) = world.entities.get(actor_id) else {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !(can_move(&e) && !e.fixed_hide_mode && !e.stone_mode) {
         // oracle：外层 `if (CanMove() && ...)` 为假 ⇒ 落到函数尾的 `CheckRoyalty()`
         // （`MonsterObject.cs:352`）与 `CrazyMode` 到期（`:353-356`）。
-        crate::slave::check_royalty(world, actor_id);
-        crazy_mode_expiry(world, actor_id);
+        crate::slave::check_royalty_impl(access, sim, actor_id);
+        crazy_mode_expiry_impl(access, sim, actor_id);
         return;
     }
     // `MonsterObject.Run`（Pass 2）的 `Think()` 静态绑定 `MonsterObject.Think`（**有**门）：
     // 无门版只属于 `MagicMonster.Run`（Pass 1，见 [`magic_monster_run`]）。
-    if think(world, actor_id) {
+    if think_impl(access, sim, actor_id) {
         // oracle `:255-258`：`if (Think()) { base.Run(); return; }` ⇒ **跳过** `CheckRoyalty`。
         return;
     }
-    let now = world.clock_ms;
+    let now = sim.clock_ms;
     // `if (WalkWaitLocked) { if (now - WalkWaitTick) > WalkWait) WalkWaitLocked = false; }`
-    if world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.ai.walk_wait_locked)
-        && world
-            .entities
+    if access.get(actor_id).is_some_and(|e| e.ai.walk_wait_locked)
+        && access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.walk_wait_tick > e.ai.walk_wait)
     {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.walk_wait_locked = false;
         }
     }
-    let walk_due = world
-        .entities
+    let walk_due = access
         .get(actor_id)
         .is_some_and(|e| !e.ai.walk_wait_locked && (now - e.ai.walk_tick) > e.ai.walk_speed);
     if !walk_due {
         // oracle：`if (!WalkWaitLocked && (now - WalkTick) > WalkSpeed)` 为假 ⇒ 落到
         // `CheckRoyalty()` 与 `CrazyMode` 到期（`MonsterObject.cs:352-356`）。
-        crate::slave::check_royalty(world, actor_id);
-        crazy_mode_expiry(world, actor_id);
+        crate::slave::check_royalty_impl(access, sim, actor_id);
+        crazy_mode_expiry_impl(access, sim, actor_id);
         return;
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.walk_tick = now;
         e.ai.walk_count += 1;
         if e.ai.walk_count > e.ai.walk_step {
@@ -4852,74 +5645,61 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
             e.ai.walk_wait_tick = now;
         }
     }
-    if !world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.ai.run_away_mode)
-    {
-        if !world
-            .entities
-            .get(actor_id)
-            .is_some_and(|e| e.ai.no_attack_mode)
-        {
-            let target = world
-                .entities
-                .get(actor_id)
-                .and_then(|e| e.ai.target_creature);
+    if !access.get(actor_id).is_some_and(|e| e.ai.run_away_mode) {
+        if !access.get(actor_id).is_some_and(|e| e.ai.no_attack_mode) {
+            let target = access.get(actor_id).and_then(|e| e.ai.target_creature);
             match target {
                 Some(_) => {
                     // `AttackTarget()` 是**虚调用**：MB-2 起按 race 分派
                     // （`DualAxeMonster` 87/93/104 覆写）。
-                    if monster_attack_target(world, actor_id) {
+                    if monster_attack_target_impl(access, sim, actor_id) {
                         return;
                     }
                 }
                 None => {
-                    if let Some(e) = world.entities.get_mut(actor_id) {
+                    if let Some(e) = access.get_mut(actor_id) {
                         // `MonsterObject.cs:296-301`：无目标且 `Mission == false` ⇒ `TargetX = -1`。
                         e.ai.target_x = -1;
                     }
                 }
             }
         }
-        monster_follow_master(world, actor_id);
+        monster_follow_master_impl(access, sim, actor_id);
     } else {
-        monster_run_away_expiry(world, actor_id, now);
+        monster_run_away_expiry_impl(access, sim, actor_id, now);
     }
     // `MonsterObject.cs:333-338`：`Master != null && Master.SlaveRelax` ⇒ `base.Run(); return;`
     // —— **跳过** `GotoTargetXY`/`Wondering`、`CheckRoyalty()` 与 `CrazyMode` 到期。
     // 本骨架的 `base.Run()` 由 [`monster_ai_tick`] 在 [`monster_run`] 之后统一调用
     // （`animal_run` + `base_object_run_monster`），故这里只需提前返回。
-    let slave_relax = world
-        .entities
+    let slave_relax = access
         .get(actor_id)
         .and_then(|e| e.master)
-        .and_then(|m| world.entities.get(m))
+        .and_then(|m| access.get(m))
         .is_some_and(|m| m.slave_relax);
     if slave_relax {
         return;
     }
-    if world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.ai.target_x != -1)
-    {
-        goto_target_xy(world, actor_id);
+    if access.get(actor_id).is_some_and(|e| e.ai.target_x != -1) {
+        goto_target_xy_impl(access, sim, actor_id);
     } else {
-        let has_target = world
-            .entities
+        let has_target = access
             .get(actor_id)
             .is_some_and(|e| e.ai.target_creature.is_some());
         if !has_target {
-            wondering(world, actor_id);
+            wondering_impl(access, sim, actor_id);
         }
     }
     // `MonsterObject.Run` 尾的 `CheckRoyalty()`（`MonsterObject.cs:352`）。
     // 注：oracle 的 `AttackTarget()` 命中支（`:277-283`）与 `Master.SlaveRelax` 支（`:333-338`）
     // 会 `base.Run(); return;` 跳过本调用；两条支都已在上面提前返回（与 oracle 同）。
-    crate::slave::check_royalty(world, actor_id);
+    crate::slave::check_royalty_impl(access, sim, actor_id);
     // `MonsterObject.cs:353-356`：CrazyMode 到期（在 `CheckRoyalty()` 之后、`base.Run()` 之前）。
-    crazy_mode_expiry(world, actor_id);
+    crazy_mode_expiry_impl(access, sim, actor_id);
+}
+
+pub fn monster_run(world: &mut World, actor_id: i32) {
+    monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `MonsterObject.Run` / `MagicMonster.Run` 共用的 `Master != null` 跟随段
@@ -4934,7 +5714,11 @@ pub fn monster_run(world: &mut World, actor_id: i32) {
 ///      ⇒ `SpaceMove(Master.Envir.MapName, TargetX, TargetY, 1)`。
 ///
 /// `TargetCret` 可能在上一段 `AttackTarget()` 里被 `DelTargetCreat()` 清空 ⇒ **重新读**。
-fn monster_follow_master(world: &mut World, actor_id: i32) {
+fn monster_follow_master_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
     // `MonsterObject.cs:299-329`：`Master != null` 的跟随段（仍在 `!RunAwayMode` 内）。
     //
     // oracle 逐句：
@@ -4945,21 +5729,18 @@ fn monster_follow_master(world: &mut World, actor_id: i32) {
     //   2. `!Master.SlaveRelax && (Envir != Master.Envir || |Δx| > 20 || |Δy| > 20)`
     //      ⇒ `SpaceMove(Master.Envir.MapName, TargetX, TargetY, 1)`。
     // `TargetCret` 可能在上一段 `AttackTarget()` 里被 `DelTargetCreat()` 清空 ⇒ **重新读**。
-    let master_id = world.entities.get(actor_id).and_then(|e| e.master);
+    let master_id = access.get(actor_id).and_then(|e| e.master);
     if let Some(master_id) = master_id {
-        let has_target = world
-            .entities
+        let has_target = access
             .get(actor_id)
             .is_some_and(|e| e.ai.target_creature.is_some());
         if !has_target {
-            if let Some((n_x, n_y)) = master_get_back_position(world, master_id) {
-                let (tx, ty) = world
-                    .entities
+            if let Some((n_x, n_y)) = master_get_back_position_impl(access, sim, master_id) {
+                let (tx, ty) = access
                     .get(actor_id)
                     .map_or((-1, 0), |e| (e.ai.target_x, e.ai.target_y));
                 if (tx - n_x).abs() > 1 || (ty - n_y).abs() > 1 {
-                    let (cx, cy, map_id) = world
-                        .entities
+                    let (cx, cy, map_id) = access
                         .get(actor_id)
                         .map_or((0, 0, 0), |e| (e.x, e.y, e.map_id));
                     let mut new_x = n_x;
@@ -4968,12 +5749,16 @@ fn monster_follow_master(world: &mut World, actor_id: i32) {
                         // `Envir.GetMovingObject(nX, nY, true)`（`Envirnoment.cs:1203`）。
                         // 本仓 [`World::moving_object_at`] 是其逐行移植（含 `!Ghost`/`!Death`
                         // 门）；oracle 的 `CastleDoor.HoldPlace` 特例未建模（登记，见报告）。
-                        if world.moving_object_at(map_id, n_x, n_y, true).is_some() {
+                        if crate::world::World::moving_object_at_impl(
+                            access, sim, map_id, n_x, n_y, true,
+                        )
+                        .is_some()
+                        {
                             new_x = cx;
                             new_y = cy;
                         }
                     }
-                    if let Some(e) = world.entities.get_mut(actor_id) {
+                    if let Some(e) = access.get_mut(actor_id) {
                         e.ai.target_x = new_x;
                         e.ai.target_y = new_y;
                     }
@@ -4983,35 +5768,50 @@ fn monster_follow_master(world: &mut World, actor_id: i32) {
         // `SpaceMove` 的目标图 = `Master.Envir.MapName`（本仓以 `map_id` 表示图）。
         // oracle 的该门在 `if (TargetCret == null)` **之外** ⇒ 有目标时同样会追随。
         // `SlaveRelax` 为真时**不**追随（但上面的 TargetX/TargetY 仍照 oracle 更新）。
-        let master = world
-            .entities
+        let master = access
             .get(master_id)
             .map(|m| (m.map_id, m.x, m.y, m.slave_relax));
-        let own = world
-            .entities
+        let own = access
             .get(actor_id)
             .map(|e| (e.map_id, e.x, e.y, e.ai.target_x, e.ai.target_y));
         if let (Some((m_map, m_x, m_y, m_relax)), Some((s_map, s_x, s_y, tx, ty))) = (master, own) {
             if !m_relax && (s_map != m_map || (s_x - m_x).abs() > 20 || (s_y - m_y).abs() > 20) {
                 // `SpaceMove(..., nInt=1)` ⇒ `RM_SPACEMOVE_SHOW2`（怪物无会话；出帧面登记）。
-                let _ = crate::space_move::monster_space_move(world, actor_id, m_map, tx, ty);
+                let _ = crate::space_move::monster_space_move_impl(
+                    access, sim, actor_id, m_map, tx, ty,
+                );
             }
         }
     }
 }
 
+#[allow(dead_code)]
+fn monster_follow_master(world: &mut World, actor_id: i32) {
+    monster_follow_master_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `MonsterObject.Run` / `MagicMonster.Run` 共用的 `RunAwayMode` 到期段
 /// （`MonsterObject.cs:330-345` / `MagicMonster.cs:149-158` 逐字相同；**严格大于**）。
-fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
-    let expired = world.entities.get(actor_id).is_some_and(|e| {
+fn monster_run_away_expiry_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    _sim: &mut crate::world::SimState,
+    actor_id: i32,
+    now: i64,
+) {
+    let expired = access.get(actor_id).is_some_and(|e| {
         e.ai.run_away_time > 0 && (now - e.ai.run_away_start) > e.ai.run_away_time
     });
     if expired {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.run_away_mode = false;
             e.ai.run_away_time = 0;
         }
     }
+}
+
+#[allow(dead_code)]
+fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
+    monster_run_away_expiry_impl(&mut world.entities, &mut world.sim, actor_id, now)
 }
 
 /// `BaseObject.Run()`（`BaseObject.Base.cs:24-316`）的**怪侧公共段**：恢复 / 体力点 / `TargetCret` 清理。
@@ -5344,16 +6144,21 @@ pub(crate) fn make_ghost_impl<A: crate::entity::EntityAccess>(
 ///
 /// **HP 权威 = `Entity.hp`**：oracle 的 `WAbil.HP` 只有一份；本骨架 `StruckDamage` 写实体，
 /// 因此每 tick 入口把 `CastleUnit.hp` 同步成实体 HP，再跑门/墙状态机（C3b 的防漂移牙）。
-fn castle_structure_run(world: &mut World, actor_id: i32, race: u8) {
-    let now = world.clock_ms;
-    let Some((castle_index, role, map_id, hp)) = world.entities.get(actor_id).and_then(|e| {
+fn castle_structure_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    race: u8,
+) {
+    let now = sim.clock_ms;
+    let Some((castle_index, role, map_id, hp)) = access.get(actor_id).and_then(|e| {
         e.castle_binding
             .map(|b| (b.castle_index, b.role, e.map_id, e.hp))
     }) else {
         return;
     };
     let mut events = Vec::new();
-    if let Some(castle) = world.castles.get_mut(castle_index) {
+    if let Some(castle) = sim.castles.get_mut(castle_index) {
         if let Some(unit) = castle.defense_unit_mut(role) {
             unit.hp = i32::from(hp);
             events = if race == 110 {
@@ -5373,14 +6178,15 @@ fn castle_structure_run(world: &mut World, actor_id: i32, race: u8) {
         | crate::castle::StructureEvent::RefAlive { dir, .. } = event
         {
             // `SendRefMsg` 的帧方向 = `BaseObject.Dir`（状态机刚写完）。
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.dir = dir;
             }
         }
         match event {
             crate::castle::StructureEvent::RefDigUp { dir, x, y } => {
-                send_ref_msg(
-                    world,
+                send_ref_msg_impl_default(
+                    access,
+                    sim,
                     actor_id,
                     RM_DIGUP,
                     i32::from(dir),
@@ -5390,8 +6196,9 @@ fn castle_structure_run(world: &mut World, actor_id: i32, race: u8) {
                 );
             }
             crate::castle::StructureEvent::RefDigDown { dir, x, y } => {
-                send_ref_msg(
-                    world,
+                send_ref_msg_impl_default(
+                    access,
+                    sim,
                     actor_id,
                     RM_DIGDOWN,
                     i32::from(dir),
@@ -5401,8 +6208,9 @@ fn castle_structure_run(world: &mut World, actor_id: i32, race: u8) {
                 );
             }
             crate::castle::StructureEvent::RefTurn { dir, x, y } => {
-                send_ref_msg(
-                    world,
+                send_ref_msg_impl_default(
+                    access,
+                    sim,
                     actor_id,
                     RM_TURN,
                     i32::from(dir),
@@ -5412,8 +6220,9 @@ fn castle_structure_run(world: &mut World, actor_id: i32, race: u8) {
                 );
             }
             crate::castle::StructureEvent::RefAlive { dir, x, y } => {
-                send_ref_msg(
-                    world,
+                send_ref_msg_impl_default(
+                    access,
+                    sim,
                     actor_id,
                     RM_ALIVE,
                     i32::from(dir),
@@ -5424,24 +6233,41 @@ fn castle_structure_run(world: &mut World, actor_id: i32, race: u8) {
             }
             crate::castle::StructureEvent::SetMapXyFlag { .. } => {}
         }
-        world.record_castle_structure(castle_index, map_id, event);
+        crate::world::World::record_castle_structure_impl(sim, castle_index, map_id, event);
     }
 }
 
+#[allow(dead_code)]
+fn castle_structure_run(world: &mut World, actor_id: i32, race: u8) {
+    castle_structure_run_impl(&mut world.entities, &mut world.sim, actor_id, race)
+}
+
 /// race 110/111 是否绑定到一座城堡（未绑定 ⇒ 不跑门/墙状态机，落回通用路径）。
-fn has_castle_binding(world: &World, actor_id: i32) -> bool {
-    world
-        .entities
+fn has_castle_binding_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    _sim: &crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    access
         .get(actor_id)
         .is_some_and(|e| e.castle_binding.is_some())
 }
 
-pub fn monster_ai_tick(world: &mut World) {
-    // T10 诊断探针：全量收集阶段（`iter_ref` = 槽位顺序句柄表 + 全组件查询）。
-    let __prof_collect = world.probe_begin();
-    let ids: Vec<i32> = world
-        .entities
-        .iter_ref()
+#[allow(dead_code)]
+fn has_castle_binding(world: &World, actor_id: i32) -> bool {
+    has_castle_binding_impl(&world.entities, &world.sim, actor_id)
+}
+
+pub fn monster_ai_tick_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+) {
+    // 全量收集阶段：槽位顺序（`EntityAccess::order_ids` = `iter_ref` 同序）。
+    // **P6b2**：按 pass 的 T10 命名探针 `monai.collect` 取消（段级聚合耗时仍由
+    // `TickProfile` 的 `SimMonsterAi` 段给出），收集逻辑不变。
+    let ids: Vec<i32> = access
+        .order_ids()
+        .into_iter()
         // `race > Play` 会把交易商人也命中（商人 race = `ActorRace.NPC(10)`）⇒
         // 身份门显式排除 `merchant.is_some()` 的实体（M3⑤-实现 2：商人由自己的 tick 驱动；
         // **不得**把身份门换成 race 比较——`NPC(10)` 与固定 NPC 同值、`RaceImg(50)` 与动物同值）。
@@ -5449,18 +6275,18 @@ pub fn monster_ai_tick(world: &mut World) {
         // `ProcessNpcs`（`WorldServer.Merchant.cs:118`）驱动，本仓已由 `World::npc_tick`
         // 建模（同一次序）；此处必须不跑怪物 AI（否则会用与 oracle 不同的取数路径污染
         // RNG 流，且与 `npc_tick` 双驱固定 NPC）。
-        .filter(|e| {
-            e.race > ACTOR_RACE_PLAY
-                && e.merchant.is_none()
-                && e.npc.is_none()
-                // `Ghost` 怪在 oracle `ProcessMonsters` 里整只跳过（`:320-333` 只做 5min 清理，
-                // 由 [`crate::mongen::process_cert_lists`] 承担）⇒ 本 tick 不再驱动。
-                // **死亡但未 Ghost** 的怪仍要跑 `base.Run`（死亡支 `MakeGhost`，`:85-101`）⇒ 不过滤。
-                && !e.ghost
+        .filter(|id| {
+            access.get(*id).is_some_and(|e| {
+                e.race > ACTOR_RACE_PLAY
+                    && e.merchant.is_none()
+                    && e.npc.is_none()
+                    // `Ghost` 怪在 oracle `ProcessMonsters` 里整只跳过（`:320-333` 只做 5min 清理，
+                    // 由 [`crate::mongen::process_cert_lists`] 承担）⇒ 本 tick 不再驱动。
+                    // **死亡但未 Ghost** 的怪仍要跑 `base.Run`（死亡支 `MakeGhost`，`:85-101`）⇒ 不过滤。
+                    && !e.ghost
+            })
         })
-        .map(|e| e.id)
         .collect();
-    world.probe_end("monai.collect", __prof_collect);
     for id in ids {
         // **不可见怪跳步门**（`WorldServer.MonGen.cs:294-296/314`）：
         //
@@ -5477,24 +6303,27 @@ pub fn monster_ai_tick(world: &mut World) {
         //   ⇒ 每个世界 tick 就是 oracle 的一个「到点 pass」。
         // - 位置：**整个实体 AI 体之前**（含死亡/类覆写支）——oracle 的 `monster.Run()` 本身就含
         //   末尾 `base.Run()`，整段都受该门控。
-        let (visible_active, run_count) = match world.entities.get(id) {
-            Some(e) => (e.is_visible_active, world.process_run_count(id)),
+        let (visible_active, run_count) = match access.get(id) {
+            Some(e) => (
+                e.is_visible_active,
+                crate::world::World::process_run_count_impl(sim, id),
+            ),
             None => continue,
         };
-        if !visible_active && run_count < world.process_monster_interval {
-            world.set_process_run_count(id, run_count + 1);
+        if !visible_active && run_count < sim.process_monster_interval {
+            crate::world::World::set_process_run_count_impl(sim, id, run_count + 1);
             continue;
         }
-        world.set_process_run_count(id, 0);
+        crate::world::World::set_process_run_count_impl(sim, id, 0);
         // `CanMove()`（`AnimalObject.cs:162-165`）对 `Death` 恒 false ⇒ `MonsterObject.Run`
         // 的 AI 体（Think/Walk/Attack）整段跳过，只剩 `base.Run()` 的死亡支与 VerifyTick 段。
-        if world.entities.get(id).is_some_and(|e| e.death) {
+        if access.get(id).is_some_and(|e| e.death) {
             // **Lane B**：死亡但未 Ghost 的门/墙仍要跑自己的 `Run`（CastleDoor.Run 刷
             // `DeathTick`；WallStructure.Run 恢复格），随后 `base.Run()`。
-            let race = world.entities.get(id).map_or(0, |e| e.race);
-            if matches!(race, 110 | 111) && has_castle_binding(world, id) {
-                castle_structure_run(world, id, race);
-                base_object_run_monster(world, id);
+            let race = access.get(id).map_or(0, |e| e.race);
+            if matches!(race, 110 | 111) && has_castle_binding_impl(access, sim, id) {
+                castle_structure_run_impl(access, sim, id, race);
+                base_object_run_monster_impl(access, sim, id);
                 continue;
             }
             // oracle `ProcessMonsters` 对 `!Ghost` 的怪**照常调 `Run()`**（`WorldServer.MonGen.cs:288`）
@@ -5509,27 +6338,26 @@ pub fn monster_ai_tick(world: &mut World) {
             // 落到 `MonsterObject.Run` 的 `CheckRoyalty`/`CrazyMode`；`WhiteSkeleton` 的
             // `BoIsFirst` 只在首次 `Run`）。与 96/113/114 同口径：先跑类覆写，再按
             // [`run_class_base`] 跑 oracle 的 `base.Run()` 链。
-            if world
-                .entities
+            if access
                 .get(id)
                 .is_some_and(|e| matches!(e.race, 96 | 113 | 114 | 100 | 120 | 132 | 214 | 215))
             {
-                if let Some(base) = monster_class_run(world, id) {
-                    run_class_base(world, id, base);
+                if let Some(base) = monster_class_run_impl(access, sim, id) {
+                    run_class_base_impl(access, sim, id, base);
                     continue;
                 }
             }
-            base_object_run_monster(world, id);
+            base_object_run_monster_impl(access, sim, id);
             continue;
         }
         // **Lane B**：城堡门/墙（race 110/111）**不得**进入 `monster_run`（`GuardUnit:NormNpc`
         // 没有 `MonsterObject.Run` 的 Think/游走/索敌）。未绑定城堡时落回下面的静止守卫/通用支。
-        let race_now = world.entities.get(id).map_or(0, |e| e.race);
-        if matches!(race_now, 110 | 111) && has_castle_binding(world, id) {
-            castle_structure_run(world, id, race_now);
+        let race_now = access.get(id).map_or(0, |e| e.race);
+        if matches!(race_now, 110 | 111) && has_castle_binding_impl(access, sim, id) {
+            castle_structure_run_impl(access, sim, id, race_now);
             // `CastleDoor.Run`/`WallStructure.Run` 末尾的 `base.Run()`。
-            animal_run(world, id);
-            base_object_run_monster(world, id);
+            animal_run_impl(access, sim, id);
+            base_object_run_monster_impl(access, sim, id);
             continue;
         }
         // `GuardList` 放置的守卫（race 11/12/20/112）不继承 `MonsterObject.Run`
@@ -5538,27 +6366,27 @@ pub fn monster_ai_tick(world: &mut World) {
         // **MB-3（R02）**：`ArcherGuard`(112) / `ArcherPolice`(20) 覆写 `Run`
         // （`ArcherGuard.cs:39-91`），虽然仍在 `GuardUnit : NormNpc : AnimalObject` 链上，
         // 但它有自己的索敌/射击逻辑，**不能**走下面「静止守卫」的等价支。
-        if matches!(world.entities.get(id).map_or(0, |e| e.race), 20 | 112) {
-            archer_guard_run(world, id);
+        if matches!(access.get(id).map_or(0, |e| e.race), 20 | 112) {
+            archer_guard_run_impl(access, sim, id);
             // `NormNpc.Run` 的 `base.Run()` = `AnimalObject.Run` → `BaseObject.Run`。
-            animal_run(world, id);
-            base_object_run_monster(world, id);
+            animal_run_impl(access, sim, id);
+            base_object_run_monster_impl(access, sim, id);
             continue;
         }
-        if is_guard_race(world.entities.get(id).map_or(0, |e| e.race)) {
+        if is_guard_race(access.get(id).map_or(0, |e| e.race)) {
             // `NormNpc.Run`（`NormNpc.cs:1604-1611`）→ `base.Run()` = `AnimalObject.Run`
             // （HolySeize 到期）→ `BaseObject.Run`。
-            animal_run(world, id);
-            base_object_run_monster(world, id);
+            animal_run_impl(access, sim, id);
+            base_object_run_monster_impl(access, sim, id);
             continue;
         }
         // 专用怪 `BeeQueen`/`SpiderHouseMonster` 覆写 `Run`（`BeeQueen.cs:51-79` /
         // `SpiderHouseMonster.cs:45-73`）：只有 `CanMove`/`WalkTick`/`AttackTick` 三段 +
         // `base.Run()`，**不**走 `MonsterObject.Run` 的 Think/AttackTarget/GotoTargetXY/
         // Wondering/CheckRoyalty/CrazyMode 段。
-        if crate::special_monster::special_monster_run(world, id) {
-            animal_run(world, id);
-            base_object_run_monster(world, id);
+        if crate::special_monster::special_monster_run_impl(access, sim, id) {
+            animal_run_impl(access, sim, id);
+            base_object_run_monster_impl(access, sim, id);
             continue;
         }
         // **MB-1**：四个专用怪的 `Run` 覆写（`StickMonster`/`DigOutZombi`/
@@ -5566,24 +6394,42 @@ pub fn monster_ai_tick(world: &mut World) {
         // 跑 oracle 的 `base.Run()` 链。
         // `base.Run()` 链（`Animal`/`AnimalTwice`/`Monster`/`MagicMonster`/`None`）见
         // [`run_class_base`]。
-        if let Some(base) = monster_class_run(world, id) {
-            run_class_base(world, id, base);
+        if let Some(base) = monster_class_run_impl(access, sim, id) {
+            run_class_base_impl(access, sim, id, base);
             continue;
         }
-        monster_run(world, id);
+        monster_run_impl(access, sim, id);
         // `MonsterObject.Run` 的末尾 `base.Run()`（`MonsterObject.cs:255/359`）：
         // `AnimalObject.Run`（HolySeize 到期）→ `BaseObject.Run`。
-        animal_run(world, id);
-        base_object_run_monster(world, id);
+        animal_run_impl(access, sim, id);
+        base_object_run_monster_impl(access, sim, id);
     }
+}
+
+pub fn monster_ai_tick(world: &mut World) {
+    // **P6b2**：`merchant::map_random_move` 的兼容 facade 在段路径改走 `_impl` 后已无
+    // 调用方；在此（公开 root）保留一次无副作用的函数项引用，避免它在 `-D warnings`
+    // 下被判 `dead_code`（行为零变化）。
+    let _ = crate::merchant::map_random_move as fn(&mut World, i32);
+    monster_ai_tick_impl(&mut world.entities, &mut world.sim)
 }
 
 /// 便于测试/接线：当前朝向下的前一格（oracle `GetFrontPosition`，越界 clamp）。
 #[must_use]
-pub fn front_of(world: &World, actor_id: i32, dir: u8, map_id: usize) -> Option<(i32, i32)> {
-    let e = world.entities.get(actor_id)?;
-    let map = world.maps.get(map_id)?;
+pub fn front_of_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &crate::world::SimState,
+    actor_id: i32,
+    dir: u8,
+    map_id: usize,
+) -> Option<(i32, i32)> {
+    let e = access.get(actor_id)?;
+    let map = sim.maps.get(map_id)?;
     Some(front_position(e.x, e.y, dir, map.width, map.height))
+}
+
+pub fn front_of(world: &World, actor_id: i32, dir: u8, map_id: usize) -> Option<(i32, i32)> {
+    front_of_impl(&world.entities, &world.sim, actor_id, dir, map_id)
 }
 
 // ---------------------------------------------------------------------------
@@ -5607,6 +6453,39 @@ pub const RM_STRUCKEFFECT: u16 = 10102;
 /// `ElfWarriorMonster.SpitAttack@:65`）在**收件人**上调 `SendStruckDelayMsg`，但第 2/3 参写
 /// 的是未限定的 `WAbil.HP` / `WAbil.MaxHP` = **攻方自己的** HP/MaxHP（其余调用点显式写
 /// `baseObject.WAbil.*` 或 `targetObject.WAbil.*`）。此函数按该字面语义取攻方快照。
+fn send_struck_delay_msg_attacker_hp_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &mut crate::world::SimState,
+    receiver_id: i32,
+    hitter_id: i32,
+    ident: u16,
+    damage: i32,
+    delay_ms: i64,
+) {
+    if !sim.refmessage_delay_enabled {
+        return;
+    }
+    let Some((hp, max_hp)) = access
+        .get(hitter_id)
+        .map(|e| (i32::from(e.hp), i32::from(e.max_hp)))
+    else {
+        return;
+    };
+    crate::slave::send_struck_delay_msg_7_impl(
+        access,
+        sim,
+        receiver_id,
+        ident,
+        damage,
+        hp,
+        max_hp,
+        hitter_id,
+        delay_ms,
+    );
+}
+
+/// **P6b2**：facade 兼容入口（测试/宿主用；段内走 `_impl`）。
+#[allow(dead_code)]
 fn send_struck_delay_msg_attacker_hp(
     world: &mut World,
     receiver_id: i32,
@@ -5615,17 +6494,15 @@ fn send_struck_delay_msg_attacker_hp(
     damage: i32,
     delay_ms: i64,
 ) {
-    if !world.refmessage_delay_enabled() {
-        return;
-    }
-    let Some((hp, max_hp)) = world
-        .entities
-        .get(hitter_id)
-        .map(|e| (i32::from(e.hp), i32::from(e.max_hp)))
-    else {
-        return;
-    };
-    world.send_struck_delay_msg_7(receiver_id, ident, damage, hp, max_hp, hitter_id, delay_ms);
+    send_struck_delay_msg_attacker_hp_impl(
+        &world.entities,
+        &mut world.sim,
+        receiver_id,
+        hitter_id,
+        ident,
+        damage,
+        delay_ms,
+    );
 }
 
 /// `SystemShare.Config.SpitMap[dir, y, x]`（`GameSvrConf.cs:1332-1371`，8×5×5）。
@@ -5707,16 +6584,21 @@ const SPIT_MAP: [[[u8; 5]; 5]; 8] = [
 ///   （即使 `GetAttackDir` 失败、`btDir` 保持 0）——照抄；
 /// - 否则 `SpitMap[GetNextDirection(…), Δy+2, Δx+2] == 1`。
 #[must_use]
-pub fn target_in_spit_range(world: &World, actor_id: i32, target_id: i32) -> Option<u8> {
-    let (cx, cy) = world.entities.get(actor_id).map(|e| (e.x, e.y))?;
-    let (tx, ty) = world.entities.get(target_id).map(|t| (t.x, t.y))?;
+pub fn target_in_spit_range_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    _sim: &crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) -> Option<u8> {
+    let (cx, cy) = access.get(actor_id).map(|e| (e.x, e.y))?;
+    let (tx, ty) = access.get(target_id).map(|t| (t.x, t.y))?;
     if (tx - cx).abs() > 2 || (ty - cy).abs() > 2 {
         return None;
     }
     let nx = tx - cx;
     let ny = ty - cy;
     if nx.abs() <= 1 && ny.abs() <= 1 {
-        return Some(get_attack_dir(world, actor_id, target_id).unwrap_or(0));
+        return Some(get_attack_dir_impl(access, actor_id, target_id).unwrap_or(0));
     }
     let sx = nx + 2;
     let sy = ny + 2;
@@ -5729,15 +6611,25 @@ pub fn target_in_spit_range(world: &World, actor_id: i32, target_id: i32) -> Opt
     None
 }
 
+pub fn target_in_spit_range(world: &World, actor_id: i32, target_id: i32) -> Option<u8> {
+    target_in_spit_range_impl(&world.entities, &world.sim, actor_id, target_id)
+}
+
 /// `MonsterObject.GetLongAttackDirDis(baseObject, dis, ref dir)`（`MonsterObject.cs:399-463`）。
 ///
 /// **oracle bug 照搬**：八支里只有 `Left` 支**不 break**，且该支之后块尾的 `dir = 0`
 /// 会执行 ⇒ 目标恰在正左方时返回 `true` 但 `dir == 0`（左向永不返回 6）。
 /// 其余七支命中即 `break`，不会被块尾覆盖。
 #[must_use]
-fn get_long_attack_dir_dis(world: &World, actor_id: i32, target_id: i32, dis: i32) -> Option<u8> {
-    let (cx, cy) = world.entities.get(actor_id).map(|e| (e.x, e.y))?;
-    let (tx, ty) = world.entities.get(target_id).map(|t| (t.x, t.y))?;
+fn get_long_attack_dir_dis_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    _sim: &crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+    dis: i32,
+) -> Option<u8> {
+    let (cx, cy) = access.get(actor_id).map(|e| (e.x, e.y))?;
+    let (tx, ty) = access.get(target_id).map(|t| (t.x, t.y))?;
     let mut n_c = 0;
     let mut found = false;
     let mut dir = 0u8;
@@ -5802,95 +6694,122 @@ fn get_long_attack_dir_dis(world: &World, actor_id: i32, target_id: i32, dis: i3
     }
 }
 
+#[allow(dead_code)]
+fn get_long_attack_dir_dis(world: &World, actor_id: i32, target_id: i32, dis: i32) -> Option<u8> {
+    get_long_attack_dir_dis_impl(&world.entities, &world.sim, actor_id, target_id, dis)
+}
+
 /// 覆写族公共尾：不邻接时 `SetTargetXy(target.CurrX, target.CurrY)`，异图 `DelTargetCreat()`。
-fn sync_target_xy_or_clear(world: &mut World, actor_id: i32, target_id: i32) {
+fn sync_target_xy_or_clear_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) {
     let (same_map, tx, ty) = match (
-        world.entities.get(actor_id).map(|e| e.map_id),
-        world.entities.get(target_id).map(|t| (t.map_id, t.x, t.y)),
+        access.get(actor_id).map(|e| e.map_id),
+        access.get(target_id).map(|t| (t.map_id, t.x, t.y)),
     ) {
         (Some(am), Some((tm, tx, ty))) => (am == tm, tx, ty),
         _ => (false, 0, 0),
     };
     if same_map {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.target_x = tx;
             e.ai.target_y = ty;
         }
     } else {
-        del_target_creature(world, actor_id);
+        del_target_creature_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn sync_target_xy_or_clear(world: &mut World, actor_id: i32, target_id: i32) {
+    sync_target_xy_or_clear_impl(&mut world.entities, &mut world.sim, actor_id, target_id)
 }
 
 /// 覆写族的直通 proper 判定（oracle `IsProperTarget` = `IsAttackTarget`，
 /// `BaseObject.Base.cs:470-473`；**不**折入 death/ghost/invisible，与 `GetMovingObject(...,true)`
 /// 自身的 `!Ghost && !Death` 枚举门互补）。
-fn proper_for_override(world: &World, actor_id: i32, target_id: i32) -> bool {
-    world
-        .entities
+fn proper_for_override_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    _sim: &crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) -> bool {
+    access
         .get(actor_id)
-        .zip(world.entities.get(target_id))
+        .zip(access.get(target_id))
         .is_some_and(|(a, t)| is_proper_target_grouped_direct(&a, &t, &[]))
+}
+
+#[allow(dead_code)]
+fn proper_for_override(world: &World, actor_id: i32, target_id: i32) -> bool {
+    proper_for_override_impl(&world.entities, &world.sim, actor_id, target_id)
 }
 
 /// `MonsterObject.AttackTarget` 风格的共享骨架：射程判定 → 到点 ⇒ 攻击 → `true`；
 /// 不在射程 ⇒ 同图写 `TargetX/Y`、异图清目标。
-fn override_attack_target_with<F>(
-    world: &mut World,
+fn override_attack_target_with_impl<A, F>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
     actor_id: i32,
     in_range: bool,
     bt_dir: u8,
     on_due: F,
 ) -> bool
 where
-    F: FnOnce(&mut World, u8),
+    A: crate::entity::EntityAccess,
+    F: FnOnce(&mut A, &mut crate::world::SimState, u8),
 {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
     if in_range {
-        let now = world.clock_ms;
-        let due = world
-            .entities
+        let now = sim.clock_ms;
+        let due = access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
         if due {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
             }
-            on_due(world, bt_dir);
+            on_due(access, sim, bt_dir);
         }
         true
     } else {
-        sync_target_xy_or_clear(world, actor_id, target_id);
+        sync_target_xy_or_clear_impl(access, sim, actor_id, target_id);
         false
     }
 }
 
 /// `DoubleCriticalMonster.AttackTarget`（`DoubleCriticalMonster.cs:14-41`）。
-fn double_critical_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn double_critical_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let spit = target_in_spit_range(world, actor_id, target_id);
-    override_attack_target_with(
-        world,
+    let spit = target_in_spit_range_impl(access, sim, actor_id, target_id);
+    override_attack_target_with_impl(
+        access,
+        sim,
         actor_id,
         spit.is_some(),
         spit.unwrap_or(0),
-        |w, dir| {
-            double_attack(w, actor_id, dir);
-            break_holy_seize_mode(w, actor_id);
+        |access, sim, dir| {
+            double_attack_impl(access, sim, actor_id, dir);
+            break_holy_seize_mode_impl(access, sim, actor_id);
         },
     )
+}
+
+#[allow(dead_code)]
+fn double_critical_attack_target(world: &mut World, actor_id: i32) -> bool {
+    double_critical_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `DoubleCriticalMonster.DoubleAttack(btDir)`（`DoubleCriticalMonster.cs:43-73`）。
@@ -5898,12 +6817,16 @@ fn double_critical_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// 取数次序（勿改）：`Lo(DC)+Random(|Hi-Lo|+1)`（`:46`，`<=0` ⇒ 无帧/无后续）→
 /// `SendRefMsg(RM_HIT)` → 4×4 `SpitMap` 逐格：`Random(target.SpeedPoint)`（`:61`）→
 /// `GetHitStruckDamage`（物理，`nDamage` 跨格**累积改写**）→ `StruckDamage` → 300ms。
-fn double_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn double_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    bt_dir: u8,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = bt_dir;
     }
-    let Some((cx, cy, dc, hit_point, map_id)) = world
-        .entities
+    let Some((cx, cy, dc, hit_point, map_id)) = access
         .get(actor_id)
         .map(|e| (e.x, e.y, e.dc, e.hit_point, e.map_id))
     else {
@@ -5911,11 +6834,11 @@ fn double_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
     };
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let mut n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
+    let mut n_damage = lo + sim.rng.random_below((hi - lo).abs() + 1);
     if n_damage <= 0 {
         return;
     }
-    send_ref_msg(world, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
     // 4×4：只扫 `SpitMap[dir][0..4][0..4]`（`i`/`k` 上限 4），偏移 `-2..+1`。
     for (i, row) in SPIT_MAP[bt_dir as usize].iter().enumerate().take(4) {
         for (k, cell) in row.iter().enumerate().take(4) {
@@ -5924,35 +6847,39 @@ fn double_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
             }
             let nx = cx - 2 + k as i32;
             let ny = cy - 2 + i as i32;
-            let Some(target_id) = world.moving_object_at(map_id, nx, ny, true) else {
+            let Some(target_id) =
+                crate::world::World::moving_object_at_impl(access, sim, map_id, nx, ny, true)
+            else {
                 continue;
             };
-            if target_id == actor_id || !proper_for_override(world, actor_id, target_id) {
+            if target_id == actor_id || !proper_for_override_impl(access, sim, actor_id, target_id)
+            {
                 continue;
             }
-            let speed_point = world
-                .entities
+            let speed_point = access
                 .get(target_id)
                 .map_or(0, |t| i32::from(t.speed_point));
-            if world.rng.random_below(speed_point) >= i32::from(hit_point) {
+            if sim.rng.random_below(speed_point) >= i32::from(hit_point) {
                 continue;
             }
-            let Some(target) = world.entities.spawn_cloned(target_id) else {
+            let Some(target) = access.spawn_cloned(target_id) else {
                 continue;
             };
-            let Some(attacker) = world.entities.spawn_cloned(actor_id) else {
+            let Some(attacker) = access.spawn_cloned(actor_id) else {
                 continue;
             };
             n_damage = i32::from(crate::combat::get_hit_struck_damage(
-                &mut world.rng,
+                &mut sim.rng,
                 &target,
                 &attacker,
                 n_damage,
             ));
             if n_damage > 0 {
-                let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
-                send_struck_delay_msg_attacker_hp(
-                    world,
+                let _ =
+                    class_struck_apply_impl(access, sim, actor_id, target_id, n_damage, n_damage);
+                send_struck_delay_msg_attacker_hp_impl(
+                    access,
+                    sim,
                     target_id,
                     actor_id,
                     crate::slave::RM_REFMESSAGE,
@@ -5964,30 +6891,42 @@ fn double_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
     }
 }
 
+#[allow(dead_code)]
+fn double_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
+    double_attack_impl(&mut world.entities, &mut world.sim, actor_id, bt_dir)
+}
+
 /// `SpitSpider.AttackTarget`（`SpitSpider.cs:58-85`；118/119 继承同一实现）。
 ///
 /// `use_poison` = 该 race ctor 的 `UsePoison`（`SpitSpider.SpitAttack` 的 `:44` 门）：
 /// 82=true、118=false、119=true；`ElfWarriorMonster`（114）的**非强化形态**也走本函数
 /// （`base.AttackTarget()` ⇒ `SpitSpider` 版），其 ctor 置 `UsePoison=false`。
-fn spit_spider_attack_target(world: &mut World, actor_id: i32, use_poison: bool) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn spit_spider_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    use_poison: bool,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let spit = target_in_spit_range(world, actor_id, target_id);
-    override_attack_target_with(
-        world,
+    let spit = target_in_spit_range_impl(access, sim, actor_id, target_id);
+    override_attack_target_with_impl(
+        access,
+        sim,
         actor_id,
         spit.is_some(),
         spit.unwrap_or(0),
-        |w, dir| {
-            spit_attack(w, actor_id, dir, use_poison);
-            break_holy_seize_mode(w, actor_id);
+        |access, sim, dir| {
+            spit_attack_impl(access, sim, actor_id, dir, use_poison);
+            break_holy_seize_mode_impl(access, sim, actor_id);
         },
     )
+}
+
+#[allow(dead_code)]
+fn spit_spider_attack_target(world: &mut World, actor_id: i32, use_poison: bool) -> bool {
+    spit_spider_attack_target_impl(&mut world.entities, &mut world.sim, actor_id, use_poison)
 }
 
 /// `SpitSpider.SpitAttack(btDir)`（`SpitSpider.cs:19-56`）。
@@ -6000,12 +6939,17 @@ fn spit_spider_attack_target(world: &mut World, actor_id: i32, use_poison: bool)
 /// **注意**：`:46` 的 `AntiPoison` 是**攻方**自己的属性（不是 `baseObject.` 的；与
 /// `GasAttackMonster.cs:31` 的 `baseObject.AntiPoison` 相反）。怪物 ctor 置 0 且不调
 /// `RecalcAbilitys` ⇒ 恒 `Random(20)`。
-fn spit_attack(world: &mut World, actor_id: i32, bt_dir: u8, use_poison: bool) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn spit_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    bt_dir: u8,
+    use_poison: bool,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = bt_dir;
     }
-    let Some((cx, cy, dc, hit_point, map_id)) = world
-        .entities
+    let Some((cx, cy, dc, hit_point, map_id)) = access
         .get(actor_id)
         .map(|e| (e.x, e.y, e.dc, e.hit_point, e.map_id))
     else {
@@ -6013,11 +6957,11 @@ fn spit_attack(world: &mut World, actor_id: i32, bt_dir: u8, use_poison: bool) {
     };
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let mut n_damage = lo + world.rng.random_below((hi - lo).abs() + 1);
+    let mut n_damage = lo + sim.rng.random_below((hi - lo).abs() + 1);
     if n_damage <= 0 {
         return;
     }
-    send_ref_msg(world, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
     for (i, row) in SPIT_MAP[bt_dir as usize].iter().enumerate() {
         for (k, cell) in row.iter().enumerate() {
             if *cell != 1 {
@@ -6025,29 +6969,33 @@ fn spit_attack(world: &mut World, actor_id: i32, bt_dir: u8, use_poison: bool) {
             }
             let nx = cx - 2 + k as i32;
             let ny = cy - 2 + i as i32;
-            let Some(target_id) = world.moving_object_at(map_id, nx, ny, true) else {
+            let Some(target_id) =
+                crate::world::World::moving_object_at_impl(access, sim, map_id, nx, ny, true)
+            else {
                 continue;
             };
-            if target_id == actor_id || !proper_for_override(world, actor_id, target_id) {
+            if target_id == actor_id || !proper_for_override_impl(access, sim, actor_id, target_id)
+            {
                 continue;
             }
-            let speed_point = world
-                .entities
+            let speed_point = access
                 .get(target_id)
                 .map_or(0, |t| i32::from(t.speed_point));
-            if world.rng.random_below(speed_point) >= i32::from(hit_point) {
+            if sim.rng.random_below(speed_point) >= i32::from(hit_point) {
                 continue;
             }
-            let Some(mac) = world.entities.get(target_id).map(|t| t.mac) else {
+            let Some(mac) = access.get(target_id).map(|t| t.mac) else {
                 continue;
             };
-            let undead = world.entities.get(actor_id).map_or(0, |e| e.undead_power);
+            let undead = access.get(actor_id).map_or(0, |e| e.undead_power);
             n_damage =
-                crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_damage, Some(undead));
+                crate::combat::get_mag_struck_damage(&mut sim.rng, mac, n_damage, Some(undead));
             if n_damage > 0 {
-                let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
-                send_struck_delay_msg_attacker_hp(
-                    world,
+                let _ =
+                    class_struck_apply_impl(access, sim, actor_id, target_id, n_damage, n_damage);
+                send_struck_delay_msg_attacker_hp_impl(
+                    access,
+                    sim,
                     target_id,
                     actor_id,
                     crate::slave::RM_REFMESSAGE,
@@ -6057,8 +7005,15 @@ fn spit_attack(world: &mut World, actor_id: i32, bt_dir: u8, use_poison: bool) {
                 if use_poison {
                     // 攻方 `AntiPoison`：ctor 0、怪不调 `RecalcAbilitys` ⇒ 恒 0。
                     let anti_poison = 0;
-                    if world.rng.random_below(anti_poison + 20) == 0 {
-                        world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 30, 1);
+                    if sim.rng.random_below(anti_poison + 20) == 0 {
+                        crate::world::World::make_posion_impl(
+                            access,
+                            sim,
+                            target_id,
+                            crate::entity::POISON_DECHEALTH as u8,
+                            30,
+                            1,
+                        );
                     }
                 }
             }
@@ -6066,27 +7021,44 @@ fn spit_attack(world: &mut World, actor_id: i32, bt_dir: u8, use_poison: bool) {
     }
 }
 
+#[allow(dead_code)]
+fn spit_attack(world: &mut World, actor_id: i32, bt_dir: u8, use_poison: bool) {
+    spit_attack_impl(
+        &mut world.entities,
+        &mut world.sim,
+        actor_id,
+        bt_dir,
+        use_poison,
+    )
+}
+
 /// `ExplosionSpider.AttackTarget`（`ExplosionSpider.cs:47-77`）。
 ///
 /// 与基类差异：邻接且到点 ⇒ `DoSelfExplosion()`；**不调 `BreakHolySeizeMode`**。
-fn explosion_spider_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn explosion_spider_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let bt_dir = get_attack_dir(world, actor_id, target_id);
-    override_attack_target_with(
-        world,
+    let bt_dir = get_attack_dir_impl(access, actor_id, target_id);
+    override_attack_target_with_impl(
+        access,
+        sim,
         actor_id,
         bt_dir.is_some(),
         bt_dir.unwrap_or(0),
-        |w, _| {
-            do_self_explosion(w, actor_id);
+        |access, sim, _| {
+            do_self_explosion_impl(access, sim, actor_id);
         },
     )
+}
+
+#[allow(dead_code)]
+fn explosion_spider_attack_target(world: &mut World, actor_id: i32) -> bool {
+    explosion_spider_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ExplosionSpider.DoSelfExplosion()`（`ExplosionSpider.cs:19-45`）。
@@ -6095,97 +7067,121 @@ fn explosion_spider_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// 逐 `VisibleActors`（`Death` 跳过、`IsProperTarget`、两轴 `<=1`）：
 /// `GetHitStruckDamage(nPower/2)` → `GetMagStruckDamage(nPower/2)` → `StruckDamage(damage)` →
 /// `RM_REFMESSAGE` 700ms。
-fn do_self_explosion(world: &mut World, actor_id: i32) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn do_self_explosion_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.vitals.hp = 0;
     }
-    let Some((cx, cy, dc)) = world.entities.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
+    let Some((cx, cy, dc)) = access.get(actor_id).map(|e| (e.x, e.y, e.dc)) else {
         return;
     };
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let n_power = i32::max(0, lo + world.rng.random_below((hi - lo).abs() + 1));
-    let visible: Vec<i32> = world
-        .entities
+    let n_power = i32::max(0, lo + sim.rng.random_below((hi - lo).abs() + 1));
+    let visible: Vec<i32> = access
         .get(actor_id)
         .map(|e| e.visible_actors.iter().map(|v| v.target).collect())
         .unwrap_or_default();
     for target_id in visible {
-        let Some(t) = world.entities.get(target_id) else {
+        let Some(t) = access.get(target_id) else {
             continue;
         };
         if t.death {
             continue;
         }
         let (tx, ty) = (t.x, t.y);
-        if !proper_for_override(world, actor_id, target_id) {
+        if !proper_for_override_impl(access, sim, actor_id, target_id) {
             continue;
         }
         if (cx - tx).abs() > 1 || (cy - ty).abs() > 1 {
             continue;
         }
         let half = n_power / 2;
-        let Some(target) = world.entities.spawn_cloned(target_id) else {
+        let Some(target) = access.spawn_cloned(target_id) else {
             continue;
         };
-        let Some(attacker) = world.entities.spawn_cloned(actor_id) else {
+        let Some(attacker) = access.spawn_cloned(actor_id) else {
             continue;
         };
         let mut damage = i32::from(crate::combat::get_hit_struck_damage(
-            &mut world.rng,
+            &mut sim.rng,
             &target,
             &attacker,
             half,
         ));
         damage += crate::combat::get_mag_struck_damage(
-            &mut world.rng,
+            &mut sim.rng,
             target.mac,
             half,
             Some(attacker.undead_power),
         );
         if damage > 0 {
-            let _ = class_struck_apply(world, actor_id, target_id, damage, damage);
-            world.send_struck_delay_msg_refmessage(target_id, actor_id, damage, 700);
+            let _ = class_struck_apply_impl(access, sim, actor_id, target_id, damage, damage);
+            crate::slave::send_struck_delay_msg_refmessage_impl(
+                access, sim, target_id, actor_id, damage, 700,
+            );
         }
     }
+}
+
+#[allow(dead_code)]
+fn do_self_explosion(world: &mut World, actor_id: i32) {
+    do_self_explosion_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ExplosionSpider.Run()`（`ExplosionSpider.cs:79-90`）：`!Death && !Ghost` 且
 /// `now - explosionMakeTime > 60000` ⇒ 刷新时刻并自爆；随后 `base.Run()`。
-fn explosion_spider_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let fire = world
-        .entities
+fn explosion_spider_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let fire = access
         .get(actor_id)
         .is_some_and(|e| !e.death && !e.ghost && now - e.ai.explosion_make_time > 60 * 1000);
     if fire {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.explosion_make_time = now;
         }
-        do_self_explosion(world, actor_id);
+        do_self_explosion_impl(access, sim, actor_id);
     }
 }
 
+#[allow(dead_code)]
+fn explosion_spider_run(world: &mut World, actor_id: i32) {
+    explosion_spider_run_impl(&mut world.entities, &mut world.sim, actor_id)
+}
+
 /// `MagCowMonster.AttackTarget`（`MagCowMonster.cs:33-64`）。
-fn mag_cow_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn mag_cow_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let bt_dir = get_attack_dir(world, actor_id, target_id);
-    override_attack_target_with(
-        world,
+    let bt_dir = get_attack_dir_impl(access, actor_id, target_id);
+    override_attack_target_with_impl(
+        access,
+        sim,
         actor_id,
         bt_dir.is_some(),
         bt_dir.unwrap_or(0),
-        |w, dir| {
-            magic_attack(w, actor_id, dir);
-            break_holy_seize_mode(w, actor_id);
+        |access, sim, dir| {
+            magic_attack_impl(access, sim, actor_id, dir);
+            break_holy_seize_mode_impl(access, sim, actor_id);
         },
     )
+}
+
+#[allow(dead_code)]
+fn mag_cow_attack_target(world: &mut World, actor_id: i32) -> bool {
+    mag_cow_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `MagCowMonster.MagicAttack(btDir)`（`MagCowMonster.cs:13-31`）。
@@ -6194,12 +7190,16 @@ fn mag_cow_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// `SendRefMsg(RM_HIT)` → `GetPoseCreate()`（前格首个 `!Ghost && !Death`）→
 /// `IsProperTarget` → **`AntiMagic >= 0`**（`ushort` 属性 ⇒ 恒真；不是命中率）→
 /// `GetMagStruckDamage` → `StruckDamage` → 300ms。
-fn magic_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn magic_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    bt_dir: u8,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = bt_dir;
     }
-    let Some((cx, cy, dc, map_id, undead)) = world
-        .entities
+    let Some((cx, cy, dc, map_id, undead)) = access
         .get(actor_id)
         .map(|e| (e.x, e.y, e.dc, e.map_id, e.undead_power))
     else {
@@ -6207,37 +7207,42 @@ fn magic_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
     };
     let lo = i32::from(crate::combat::lo_byte(dc));
     let hi = i32::from(crate::combat::hi_byte(dc));
-    let mut n_power = lo + world.rng.random_below((hi - lo).abs() + 1);
+    let mut n_power = lo + sim.rng.random_below((hi - lo).abs() + 1);
     if n_power <= 0 {
         return;
     }
-    send_ref_msg(world, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
-    let pose = front_of(world, actor_id, bt_dir, map_id)
-        .and_then(|(fx, fy)| world.moving_object_at(map_id, fx, fy, true));
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(bt_dir), cx, cy, 0);
+    let pose = front_of_impl(access, sim, actor_id, bt_dir, map_id).and_then(|(fx, fy)| {
+        crate::world::World::moving_object_at_impl(access, sim, map_id, fx, fy, true)
+    });
     let Some(target_id) = pose else {
         return;
     };
-    if target_id == actor_id || !proper_for_override(world, actor_id, target_id) {
+    if target_id == actor_id || !proper_for_override_impl(access, sim, actor_id, target_id) {
         return;
     }
     // `AntiMagic >= 0`（`BaseObject.cs:113` 的 `ushort`）⇒ **恒真**（不是命中率门）。
     // 保留 oracle 的字面判据以钉住语义；`absurd_extreme_comparisons` 由局部 allow 放行。
     #[allow(unused_comparisons, clippy::absurd_extreme_comparisons)]
-    let anti_magic_ok = world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.anti_magic >= 0);
+    let anti_magic_ok = access.get(actor_id).is_some_and(|e| e.anti_magic >= 0);
     if !anti_magic_ok {
         return;
     }
-    let Some(mac) = world.entities.get(target_id).map(|t| t.mac) else {
+    let Some(mac) = access.get(target_id).map(|t| t.mac) else {
         return;
     };
-    n_power = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_power, Some(undead));
+    n_power = crate::combat::get_mag_struck_damage(&mut sim.rng, mac, n_power, Some(undead));
     if n_power > 0 {
-        let _ = class_struck_apply(world, actor_id, target_id, n_power, n_power);
-        world.send_struck_delay_msg_refmessage(target_id, actor_id, n_power, 300);
+        let _ = class_struck_apply_impl(access, sim, actor_id, target_id, n_power, n_power);
+        crate::slave::send_struck_delay_msg_refmessage_impl(
+            access, sim, target_id, actor_id, n_power, 300,
+        );
     }
+}
+
+#[allow(dead_code)]
+fn magic_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
+    magic_attack_impl(&mut world.entities, &mut world.sim, actor_id, bt_dir)
 }
 
 /// `ElfWarriorMonster.AttackTarget`（`ElfWarriorMonster.cs:72-103`）。
@@ -6249,25 +7254,37 @@ fn magic_attack(world: &mut World, actor_id: i32, bt_dir: u8) {
 /// 5×5 `SpitMap`、`RM_REFMESSAGE` 300ms），`UsePoison=false`（`ElfWarriorMonster.cs:32`）。
 /// 强化形态（`Appr` 704/706/708）：`TargetInSpitRange || GetLongAttackDirDis(target, 3)`，
 /// 到点 ⇒ `ElfWarriorMonster.SpitAttack(btDir)`（Word DC、`RM_STRUCKEFFECT`）。
-fn elf_warrior_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn elf_warrior_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    let appr = world.entities.get(actor_id).map_or(0, |e| e.appr);
+    let appr = access.get(actor_id).map_or(0, |e| e.appr);
     if appr != 704 && appr != 706 && appr != 708 {
         // **非强化形态（部署常态）**：`base.AttackTarget()` = `SpitSpider.AttackTarget`。
-        return spit_spider_attack_target(world, actor_id, false);
+        return spit_spider_attack_target_impl(access, sim, actor_id, false);
     }
-    let dir = target_in_spit_range(world, actor_id, target_id)
-        .or_else(|| get_long_attack_dir_dis(world, actor_id, target_id, 3));
-    override_attack_target_with(world, actor_id, dir.is_some(), dir.unwrap_or(0), |w, d| {
-        elf_warrior_spit_attack(w, actor_id, d);
-        break_holy_seize_mode(w, actor_id);
-    })
+    let dir = target_in_spit_range_impl(access, sim, actor_id, target_id)
+        .or_else(|| get_long_attack_dir_dis_impl(access, sim, actor_id, target_id, 3));
+    override_attack_target_with_impl(
+        access,
+        sim,
+        actor_id,
+        dir.is_some(),
+        dir.unwrap_or(0),
+        |access, sim, d| {
+            elf_warrior_spit_attack_impl(access, sim, actor_id, d);
+            break_holy_seize_mode_impl(access, sim, actor_id);
+        },
+    )
+}
+
+#[allow(dead_code)]
+fn elf_warrior_attack_target(world: &mut World, actor_id: i32) -> bool {
+    elf_warrior_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ElfWarriorMonster.SpitAttack(dir)`（`ElfWarriorMonster.cs:41-70`）。
@@ -6281,14 +7298,16 @@ fn elf_warrior_attack_target(world: &mut World, actor_id: i32) -> bool {
 /// 就**永不返回**（有目标时还会无限重复 `Random(SpeedPoint)`/`GetMagStruckDamage` 抽数）。
 /// 真机 oracle 的等价行为是「挂住线程」，任何可返回的实现都是登记偏离；本实现只执行
 /// **首轮**（`GetNextPosition(...,1)`）后返回。race 114 数据不可达（无 MonGen/库行）。
-fn elf_warrior_spit_attack(world: &mut World, actor_id: i32, dir: u8) {
-    if let Some(e) = world.entities.get_mut(actor_id) {
+fn elf_warrior_spit_attack_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    dir: u8,
+) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.dir = dir;
     }
-    let Some((dc, hit_point, map_id)) = world
-        .entities
-        .get(actor_id)
-        .map(|e| (e.dc, e.hit_point, e.map_id))
+    let Some((dc, hit_point, map_id)) = access.get(actor_id).map(|e| (e.dc, e.hit_point, e.map_id))
     else {
         return;
     };
@@ -6296,39 +7315,41 @@ fn elf_warrior_spit_attack(world: &mut World, actor_id: i32, dir: u8) {
     // `Entity.dc` 是 i32 载体，按 C# `ushort` 口径取低 16 位。
     let lo_word = dc & 0xFFFF;
     let hi_word = 0i32;
-    let mut n_damage = lo_word + world.rng.random_below((hi_word - lo_word).abs() + 1);
+    let mut n_damage = lo_word + sim.rng.random_below((hi_word - lo_word).abs() + 1);
     if n_damage <= 0 {
         return;
     }
-    let (x, y) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
-    send_ref_msg(world, actor_id, RM_HIT, i32::from(dir), x, y, 0);
+    let (x, y) = access.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+    send_ref_msg_impl_default(access, sim, actor_id, RM_HIT, i32::from(dir), x, y, 0);
     n_damage = 1;
     // G19：只跑首轮（oracle 此处 while(true) 永不返回）。
-    let Some((nx, ny)) = front_of(world, actor_id, dir, map_id) else {
+    let Some((nx, ny)) = front_of_impl(access, sim, actor_id, dir, map_id) else {
         return;
     };
-    let Some(target_id) = world.moving_object_at(map_id, nx, ny, true) else {
+    let Some(target_id) =
+        crate::world::World::moving_object_at_impl(access, sim, map_id, nx, ny, true)
+    else {
         return;
     };
-    if target_id == actor_id || !proper_for_override(world, actor_id, target_id) {
+    if target_id == actor_id || !proper_for_override_impl(access, sim, actor_id, target_id) {
         return;
     }
-    let speed_point = world
-        .entities
+    let speed_point = access
         .get(target_id)
         .map_or(0, |t| i32::from(t.speed_point));
-    if world.rng.random_below(speed_point) >= i32::from(hit_point) {
+    if sim.rng.random_below(speed_point) >= i32::from(hit_point) {
         return;
     }
-    let Some(mac) = world.entities.get(target_id).map(|t| t.mac) else {
+    let Some(mac) = access.get(target_id).map(|t| t.mac) else {
         return;
     };
-    let undead = world.entities.get(actor_id).map_or(0, |e| e.undead_power);
-    n_damage = crate::combat::get_mag_struck_damage(&mut world.rng, mac, n_damage, Some(undead));
+    let undead = access.get(actor_id).map_or(0, |e| e.undead_power);
+    n_damage = crate::combat::get_mag_struck_damage(&mut sim.rng, mac, n_damage, Some(undead));
     if n_damage > 0 {
-        let _ = class_struck_apply(world, actor_id, target_id, n_damage, n_damage);
-        send_struck_delay_msg_attacker_hp(
-            world,
+        let _ = class_struck_apply_impl(access, sim, actor_id, target_id, n_damage, n_damage);
+        send_struck_delay_msg_attacker_hp_impl(
+            access,
+            sim,
             target_id,
             actor_id,
             RM_STRUCKEFFECT,
@@ -6338,46 +7359,54 @@ fn elf_warrior_spit_attack(world: &mut World, actor_id: i32, dir: u8) {
     }
 }
 
+#[allow(dead_code)]
+fn elf_warrior_spit_attack(world: &mut World, actor_id: i32, dir: u8) {
+    elf_warrior_spit_attack_impl(&mut world.entities, &mut world.sim, actor_id, dir)
+}
+
 /// `MagicMonster.AttackTarget`（`MagicMonster.cs:47-82`；215 `FireballMonster` 继承）。
 ///
 /// 与基类差异：① `TargetCret == Master` ⇒ 直接置 `null`（不走 `DelTargetCreat`）并返回 false；
 /// ② 邻接到点**只刷新 `AttackTick`/`TargetFocusTick`**——无伤害、无 `RM_HIT`、
 /// **不调 `BreakHolySeizeMode`**。
-fn magic_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
-    let Some(target_id) = world
-        .entities
-        .get(actor_id)
-        .and_then(|e| e.ai.target_creature)
-    else {
+fn magic_monster_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let Some(target_id) = access.get(actor_id).and_then(|e| e.ai.target_creature) else {
         return false;
     };
-    if world
-        .entities
+    if access
         .get(actor_id)
         .is_some_and(|e| e.master == Some(target_id))
     {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.target_creature = None;
         }
         return false;
     }
-    let now = world.clock_ms;
-    if get_attack_dir(world, actor_id, target_id).is_some() {
-        let due = world
-            .entities
+    let now = sim.clock_ms;
+    if get_attack_dir_impl(access, actor_id, target_id).is_some() {
+        let due = access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.attack_tick > e.ai.next_hit_time);
         if due {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.ai.attack_tick = now;
                 e.ai.target_focus_tick = now;
             }
         }
         true
     } else {
-        sync_target_xy_or_clear(world, actor_id, target_id);
+        sync_target_xy_or_clear_impl(access, sim, actor_id, target_id);
         false
     }
+}
+
+#[allow(dead_code)]
+fn magic_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
+    magic_monster_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `PercentMonster.AttackTarget`（`PercentMonster.cs:47-77`）。
@@ -6390,8 +7419,17 @@ fn magic_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
 ///
 /// 该类是**死类**（全仓无 `new PercentMonster`，`CreateMonster` 亦无 race 80 分支；
 /// 其 ctor 自置 `Race = 80`）⇒ 生产不可达；dispatch 仍显式登记以防未来接类。
+fn percent_monster_attack_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    attack_target_impl(access, sim, actor_id)
+}
+
+#[allow(dead_code)]
 fn percent_monster_attack_target(world: &mut World, actor_id: i32) -> bool {
-    attack_target(world, actor_id)
+    percent_monster_attack_target_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `ActorRace.Guard = 11`（`Race.cs:16`）—— `GuardUnit.IsProperTarget` 的
@@ -6428,8 +7466,13 @@ struct GuardTargetSnapshot {
 ///
 /// 之后落回尾段（`LastHiter`、弓箭守卫目标、红名玩家、石化）。`Castle == null` 的旧路径
 /// 与改造前逐字节一致（判据 C5）。
-fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i32) -> bool {
-    let (Some(a), Some(t)) = (world.entities.get(actor_id), world.entities.get(target_id)) else {
+fn guard_target_is_proper_target_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    target_id: i32,
+) -> bool {
+    let (Some(a), Some(t)) = (access.get(actor_id), access.get(target_id)) else {
         return false;
     };
     if a.id == t.id {
@@ -6451,7 +7494,7 @@ fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i3
     };
     // ---- `Castle != null` 分支（`GuardUnit.cs:37-100`）----
     if let Some(binding) = actor_castle {
-        if let Some(castle) = world.castles.get(binding.castle_index) {
+        if let Some(castle) = sim.castles.get(binding.castle_index) {
             let under_war = castle.under_war;
             let master_guild = castle.master_guild;
             // `if (LastHiter == baseObject) return true;`
@@ -6464,12 +7507,14 @@ fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i3
             }
             // `if (baseObject.Race == ActorRace.Guard) { GuardUnit guardObject = ... }`
             if target.race == ACTOR_RACE_GUARD {
-                if let Some(crime_tick) = world.guard_crime_for_castle_tick(target.id) {
-                    if world.clock_ms - crime_tick < GUARD_CRIME_FOR_CASTLE_MS {
+                if let Some(crime_tick) =
+                    crate::world::World::guard_crime_for_castle_tick_impl(sim, target.id)
+                {
+                    if sim.clock_ms - crime_tick < GUARD_CRIME_FOR_CASTLE_MS {
                         return true;
                     }
                     // 过期：`guardObject.CrimeforCastle = false;`
-                    world.clear_guard_crime_for_castle(target.id);
+                    crate::world::World::clear_guard_crime_for_castle_impl(sim, target.id);
                     // `if (guardObject.Castle != null) { ...; return false; }`
                     if target.castle.is_some() {
                         return false;
@@ -6482,19 +7527,24 @@ fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i3
                     // `baseObject.Master == null`：只有玩家本人有 `MyGuild`。
                     None => (
                         target.race == ACTOR_RACE_PLAY
-                            && world
-                                .castle_exempts_guild(master_guild, world.actor_guild(target.id)),
+                            && crate::world::World::castle_exempts_guild_impl(
+                                sim,
+                                master_guild,
+                                crate::world::World::actor_guild_impl(sim, target.id),
+                            ),
                         last_hiter == Some(target.id),
                     ),
                     // `baseObject.Master != null`：主人是玩家时读主人的 `MyGuild`。
                     Some(master_id) => {
-                        let master_is_play = world
-                            .entities
+                        let master_is_play = access
                             .get(master_id)
                             .is_some_and(|m| m.race == ACTOR_RACE_PLAY);
                         let exempt = master_is_play
-                            && world
-                                .castle_exempts_guild(master_guild, world.actor_guild(master_id));
+                            && crate::world::World::castle_exempts_guild_impl(
+                                sim,
+                                master_guild,
+                                crate::world::World::actor_guild_impl(sim, master_id),
+                            );
                         (
                             exempt,
                             last_hiter == Some(master_id) || last_hiter == Some(target.id),
@@ -6524,7 +7574,7 @@ fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i3
         return true;
     }
     if let Some(tc) = target.target_creature {
-        if world.entities.get(tc).is_some_and(|x| x.race == 112) {
+        if access.get(tc).is_some_and(|x| x.race == 112) {
             return true;
         }
     }
@@ -6540,6 +7590,11 @@ fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i3
         return false;
     }
     true
+}
+
+#[allow(dead_code)]
+fn guard_target_is_proper_target(world: &mut World, actor_id: i32, target_id: i32) -> bool {
+    guard_target_is_proper_target_impl(&mut world.entities, &mut world.sim, actor_id, target_id)
 }
 
 /// `GuardUnit.Struck`（`GuardUnit.cs:27-33`）：`Castle != null` ⇒
@@ -6623,22 +7678,30 @@ const FIRE_MONSTER_CELLS: [(i32, i32); 9] = [
 /// `BoIsFirst = false; Dir = 5; FixedHideMode = false; SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0)`。
 /// **无 RNG、无 `CanMove`/`Death` 门**；`base.Run()` 由 [`monster_class_run`] 的
 /// [`ClassRunBase::Monster`] 承接（= `ATMonster.Run` → `MonsterObject.Run`）。
-pub fn white_skeleton_run(world: &mut World, actor_id: i32) {
-    let first = world.entities.get(actor_id).is_some_and(|e| e.bo_is_first);
+pub fn white_skeleton_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let first = access.get(actor_id).is_some_and(|e| e.bo_is_first);
     if !first {
         return;
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.monster_class.bo_is_first = false;
         e.ai.dir = 5;
         e.flags.fixed_hide_mode = false;
     }
-    let (dir, x, y) = match world.entities.get(actor_id) {
+    let (dir, x, y) = match access.get(actor_id) {
         Some(e) => (e.ai.dir, e.x, e.y),
         None => return,
     };
     // `SendRefMsg(RM_DIGUP, Dir, CurrX, CurrY, 0, "")`（`:36`）。
-    send_ref_msg(world, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+    send_ref_msg_impl_default(access, sim, actor_id, RM_DIGUP, i32::from(dir), x, y, 0);
+}
+
+pub fn white_skeleton_run(world: &mut World, actor_id: i32) {
+    white_skeleton_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `SoccerBall.Run`（`SoccerBall.cs:19-74`）。`base.Run()` = `AnimalObject.Run`。
@@ -6646,52 +7709,59 @@ pub fn white_skeleton_run(world: &mut World, actor_id: i32) {
 /// `N550 > 0`：前格（`GetNextPosition(...,1)`）可走（`CanWalk(...,false)`）⇒ 按反射表把 `Dir`
 /// 取反后再 `GetNextPosition(..., N550)` 写 `TargetX/Y`；不可走 ⇒ 不改任何字段。
 /// `N550 <= 0` ⇒ `TargetX = -1`。随后 `TargetX != -1` ⇒ `GotoTargetXY()`，到达则 `N550 = 0`。
-pub fn soccer_ball_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+pub fn soccer_ball_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     let (cx, cy, map_id, dir, n550) = (e.x, e.y, e.map_id, e.ai.dir, e.n550);
     if n550 > 0 {
-        let one = world
+        let one = sim
             .maps
             .get(map_id)
             .and_then(|m| m.get_next_position(cx, cy, dir, 1));
         if let Some((nx, ny)) = one {
-            if world.can_walk_at(map_id, nx, ny, false) {
+            if crate::world::World::can_walk_at_impl(access, sim, map_id, nx, ny, false) {
                 // `switch (Dir)` 的反射表：0↔4、1↔7、2↔6、3↔5（`SoccerBall.cs:31-56`）。
                 let new_dir = soccer_ball_reflect_dir(dir);
-                if let Some(e) = world.entities.get_mut(actor_id) {
+                if let Some(e) = access.get_mut(actor_id) {
                     e.ai.dir = new_dir;
                 }
                 // `Envir.GetNextPosition(CurrX, CurrY, Dir, N550, ref TargetX, ref TargetY)`
                 // ——`GetNextPosition` 先把 `snx/sny` 置为 `CurrX/CurrY`，故未移动时也要写回。
-                let dest = world
+                let dest = sim
                     .maps
                     .get(map_id)
                     .and_then(|m| m.get_next_position(cx, cy, new_dir, n550))
                     .unwrap_or((cx, cy));
-                if let Some(e) = world.entities.get_mut(actor_id) {
+                if let Some(e) = access.get_mut(actor_id) {
                     e.ai.target_x = dest.0;
                     e.ai.target_y = dest.1;
                 }
             }
         }
-    } else if let Some(e) = world.entities.get_mut(actor_id) {
+    } else if let Some(e) = access.get_mut(actor_id) {
         e.ai.target_x = -1;
     }
-    let (target_x, target_y) = world
-        .entities
+    let (target_x, target_y) = access
         .get(actor_id)
         .map_or((-1, 0), |e| (e.ai.target_x, e.ai.target_y));
     if target_x != -1 {
-        goto_target_xy(world, actor_id);
-        let (nx, ny) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+        goto_target_xy_impl(access, sim, actor_id);
+        let (nx, ny) = access.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
         if target_x == nx && target_y == ny {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.n550 = 0;
             }
         }
     }
+}
+
+pub fn soccer_ball_run(world: &mut World, actor_id: i32) {
+    soccer_ball_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `SoccerBall.Run` 的 `Dir` 反射表（`SoccerBall.cs:31-56`，8 向）。
@@ -6755,24 +7825,28 @@ pub(crate) fn soccer_ball_struck_impl<A: crate::entity::EntityAccess>(
 /// - `AttackTarget()` 命中 ⇒ 体内先跑一次 + 函数尾再一次 ⇒ [`ClassRunBase::AnimalTwice`]；
 /// - 目标两轴均 `> 15` 的 `ComeDown(); return;` ⇒ **0 次** ⇒ [`ClassRunBase::None`]；
 /// - 其余路径（含 `!Death && !Ghost` 门/`WalkTick` 门为假）⇒ 函数尾一次 ⇒ [`ClassRunBase::Animal`]。
-fn sand_mob_object_run(world: &mut World, actor_id: i32) -> ClassRunBase {
-    let Some(e) = world.entities.get(actor_id) else {
+fn sand_mob_object_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> ClassRunBase {
+    let Some(e) = access.get(actor_id) else {
         return ClassRunBase::Animal;
     };
     // `if (!Death && !Ghost)`（`:16`）：为假 ⇒ 只剩函数尾 `base.Run()`。
     if e.death || e.ghost {
         return ClassRunBase::Animal;
     }
-    let now = world.clock_ms;
+    let now = sim.clock_ms;
     // `if ((GetTickCount() - WalkTick) > WalkSpeed)`（`:18`）：**严格大于**。
     if now - e.ai.walk_tick <= e.ai.walk_speed {
         return ClassRunBase::Animal;
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.walk_tick = now;
     }
     let (hp, max_hp, fixed_hide, attack_tick, next_hit_time, appear_start, target_id) = {
-        let e = match world.entities.get(actor_id) {
+        let e = match access.get(actor_id) {
             Some(e) => e,
             None => return ClassRunBase::Animal,
         };
@@ -6788,39 +7862,41 @@ fn sand_mob_object_run(world: &mut World, actor_id: i32) -> ClassRunBase {
     };
     if fixed_hide {
         // `if (WAbil.HP > WAbil.MaxHP / 20 && CheckComeOut()) _mDwAppearStart = now;`
-        if hp > max_hp / 20 && stick_check_come_out(world, actor_id) {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+        if hp > max_hp / 20 && stick_check_come_out_impl(access, sim, actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 e.monster_class.appear_start_tick = now;
             }
         }
     } else {
         // `if (HP > 0 && HP < MaxHP / 20 && (now - _mDwAppearStart) > 3000) ComeDown();`
         if hp > 0 && hp < max_hp / 20 && (now - appear_start) > 3000 {
-            stick_come_down(world, actor_id);
+            stick_come_down_impl(access, sim, actor_id);
         } else if let Some(target_id) = target_id {
             // `else if (TargetCret != null) { if (|Δx| > 15 && |Δy| > 15) { ComeDown(); return; } }`
-            if let Some((tx, ty)) = world.entities.get(target_id).map(|t| (t.x, t.y)) {
-                let (cx, cy) = world.entities.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
+            if let Some((tx, ty)) = access.get(target_id).map(|t| (t.x, t.y)) {
+                let (cx, cy) = access.get(actor_id).map_or((0, 0), |e| (e.x, e.y));
                 if (cx - tx).abs() > 15 && (cy - ty).abs() > 15 {
-                    stick_come_down(world, actor_id);
+                    stick_come_down_impl(access, sim, actor_id);
                     return ClassRunBase::None;
                 }
             }
         }
         // `if ((now - AttackTick) > NextHitTime) SearchTarget();`（`:38-41`）
         if now - attack_tick > next_hit_time {
-            search_target(world, actor_id);
+            search_target_impl(access, sim, actor_id);
         }
         // `if (!FixedHideMode) { if (AttackTarget()) base.Run(); }`（`:42-48`）
-        let still_hidden = world
-            .entities
-            .get(actor_id)
-            .is_some_and(|e| e.fixed_hide_mode);
-        if !still_hidden && stick_attack_target(world, actor_id) {
+        let still_hidden = access.get(actor_id).is_some_and(|e| e.fixed_hide_mode);
+        if !still_hidden && stick_attack_target_impl(access, sim, actor_id) {
             return ClassRunBase::AnimalTwice;
         }
     }
     ClassRunBase::Animal
+}
+
+#[allow(dead_code)]
+fn sand_mob_object_run(world: &mut World, actor_id: i32) -> ClassRunBase {
+    sand_mob_object_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `FireMonster.Run`（`FireMonster.cs:23-82`）。
@@ -6828,8 +7904,12 @@ fn sand_mob_object_run(world: &mut World, actor_id: i32) -> ClassRunBase {
 /// `CanMove()` 门内按 `FIRE_MONSTER_CELLS` 的**固定顺序**检查 9 格：`Envir.GetEvent == null`
 /// 才新建 `FireBurnEvent(ET_FIRE, FireTime=20000, FireDamage=10)` 并 `AddEvent`；随后 8s/1s
 /// 索敌门。`base.Run()` = `MonsterObject.Run`（[`ClassRunBase::Monster`]）。
-pub fn fire_monster_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+pub fn fire_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     if !can_move(&e) {
@@ -6838,8 +7918,9 @@ pub fn fire_monster_run(world: &mut World, actor_id: i32) {
     let (x, y, map_id) = (e.x, e.y, e.map_id);
     for (dx, dy) in FIRE_MONSTER_CELLS {
         let (ex, ey) = (x + dx, y + dy);
-        if world.event_at(map_id, ex, ey).is_none() {
-            world.add_fire_burn_event(
+        if crate::world::World::event_at_impl(sim, map_id, ex, ey).is_none() {
+            crate::world::World::add_fire_burn_event_impl(
+                sim,
                 actor_id,
                 map_id,
                 ex,
@@ -6849,7 +7930,11 @@ pub fn fire_monster_run(world: &mut World, actor_id: i32) {
             );
         }
     }
-    class_seek_gate(world, actor_id);
+    class_seek_gate_impl(access, sim, actor_id);
+}
+
+pub fn fire_monster_run(world: &mut World, actor_id: i32) {
+    fire_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `RunAway.Run`（`RunAway.cs:12-64`）——**死类**：`CreateMonster`（`WorldServer.MonGen.cs:507-728`）
@@ -6912,11 +7997,20 @@ pub fn run_away_run(world: &mut World, actor_id: i32) {
 
 /// `BaseObject.GetPoseCreate()`（`BaseObject.cs:1253-1262`）：`GetFrontPosition` 后取该格
 /// 首个 `GetMovingObject(nX, nY, true)`（`!Ghost && !Death`）。
-fn get_pose_create(world: &World, actor_id: i32) -> Option<i32> {
-    let e = world.entities.get(actor_id)?;
-    let map = world.maps.get(e.map_id)?;
+fn get_pose_create_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &crate::world::SimState,
+    actor_id: i32,
+) -> Option<i32> {
+    let e = access.get(actor_id)?;
+    let map = sim.maps.get(e.map_id)?;
     let (nx, ny) = front_position(e.x, e.y, e.ai.dir, map.width, map.height);
-    world.moving_object_at(e.map_id, nx, ny, true)
+    crate::world::World::moving_object_at_impl(access, sim, e.map_id, nx, ny, true)
+}
+
+#[allow(dead_code)]
+fn get_pose_create(world: &World, actor_id: i32) -> Option<i32> {
+    get_pose_create_impl(&world.entities, &world.sim, actor_id)
 }
 
 /// `FireballMonster.Run`（`FireballMonster.cs:14-62`）——类体（魔法块 + 索敌门）。
@@ -6932,8 +8026,12 @@ fn get_pose_create(world: &World, actor_id: i32) -> Option<i32> {
 ///
 /// `base.Run()` 链（`MagicMonster.Run` → `MonsterObject.Run`）由
 /// [`monster_class_run`] 的 [`ClassRunBase::MagicMonster`] 承接。
-pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+pub fn fireball_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     // `if (!Death && !Ghost)`（`:16`）。
@@ -6954,8 +8052,8 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
     let target_id = e.ai.target_creature;
     if let Some(target_id) = target_id {
         // `if (MagCanHitTarget(TargetCret.CurrX, TargetCret.CurrY, TargetCret))`（`:20`）。
-        let mag_ok = match world.entities.get(target_id) {
-            Some(t) => world
+        let mag_ok = match access.get(target_id) {
+            Some(t) => sim
                 .maps
                 .get(map_id)
                 .is_some_and(|m| crate::magic::mag_can_hit_target(m, t.x, t.y, t.x, t.y)),
@@ -6963,23 +8061,21 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
         };
         if mag_ok {
             // `if (IsProperTarget(TargetCret))`（`:22`）。
-            let proper = world
-                .entities
+            let proper = access
                 .get(actor_id)
-                .zip(world.entities.get(target_id))
+                .zip(access.get(target_id))
                 .is_some_and(|(a, t)| is_proper_target(&a, &t));
             if proper && (target_x - cx).abs() <= 8 && (target_y - cy).abs() <= 8 {
                 // `nPower = LoByte(DC) + Random(|HiByte(DC) - LoByte(DC)| + 1)`（`:26`）。
                 let lo = i32::from(crate::combat::lo_byte(dc));
                 let hi = i32::from(crate::combat::hi_byte(dc));
-                let n_power = lo + world.rng.random_below((hi - lo).abs() + 1);
+                let n_power = lo + sim.rng.random_below((hi - lo).abs() + 1);
                 if n_power > 0 {
                     // `IActor baseObject = GetPoseCreate();`（`:29`）。
-                    if let Some(pose_id) = get_pose_create(world, actor_id) {
-                        let pose_proper = world
-                            .entities
+                    if let Some(pose_id) = get_pose_create_impl(access, sim, actor_id) {
+                        let pose_proper = access
                             .get(actor_id)
-                            .zip(world.entities.get(pose_id))
+                            .zip(access.get(pose_id))
                             .is_some_and(|(a, t)| is_proper_target(&a, &t));
                         if pose_proper && anti_magic > 0 {
                             // `baseObject.GetMagStruckDamage(this, nPower)`（`:32`）在**受击者
@@ -6987,7 +8083,7 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                             // pose（`:816` 的 `this` 是接收者；参数 `baseObject` 只是攻方，本函数
                             // 不读它的 `undead_power`）。生产怪 `undead_power` 恒 0，方向仍按 oracle。
                             let (mac, undead): (u16, Option<i32>) =
-                                world.entities.get(pose_id).map_or((0, None), |p| {
+                                access.get(pose_id).map_or((0, None), |p| {
                                     (
                                         p.mac,
                                         if p.life_attrib == 1 {
@@ -6998,7 +8094,7 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                                     )
                                 });
                             let reduced = crate::combat::get_mag_struck_damage(
-                                &mut world.rng,
+                                &mut sim.rng,
                                 mac,
                                 n_power,
                                 undead,
@@ -7006,29 +8102,30 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                             if reduced > 0 {
                                 // `baseObject.StruckDamage(nPower)`（`:35`）：倍率 + `DamageHealth`
                                 // + 玩家耐久抽（[`class_struck_apply`] 逐行同构）。
-                                let _ =
-                                    class_struck_apply(world, actor_id, pose_id, reduced, reduced);
-                                let now = world.clock_ms;
-                                let (spell_tick_now, next_hit) = world
-                                    .entities
+                                let _ = class_struck_apply_impl(
+                                    access, sim, actor_id, pose_id, reduced, reduced,
+                                );
+                                let now = sim.clock_ms;
+                                let (spell_tick_now, next_hit) = access
                                     .get(actor_id)
                                     .map_or((spell_tick, next_hit_time), |a| {
                                         (a.spell_tick, a.ai.next_hit_time)
                                     });
                                 if now - i64::from(spell_tick_now) > next_hit {
-                                    if let Some(r) = world.entities.recovery_mut(actor_id) {
+                                    if let Some(r) = access.recovery_mut(actor_id) {
                                         r.spell_tick = i32::try_from(now).unwrap_or(i32::MAX);
                                     }
-                                    let (tx, ty) = world
-                                        .entities
-                                        .get(target_id)
-                                        .map_or((0, 0), |t| (t.x, t.y));
+                                    let (tx, ty) =
+                                        access.get(target_id).map_or((0, 0), |t| (t.x, t.y));
                                     // `SendRefMsg(RM_SPELL, 48, tx, ty, 48, "")`（`:39`）。
-                                    send_ref_msg(world, actor_id, RM_SPELL, 48, tx, ty, 48);
+                                    send_ref_msg_impl_default(
+                                        access, sim, actor_id, RM_SPELL, 48, tx, ty, 48,
+                                    );
                                     // `SendRefMsg(RM_MAGICFIRE, 0, MakeWord(2, 48),
                                     //   MakeLong(tx, ty), targetId, "")`（`:40`）。
-                                    send_ref_msg(
-                                        world,
+                                    send_ref_msg_impl_default(
+                                        access,
+                                        sim,
                                         actor_id,
                                         RM_MAGICFIRE,
                                         0,
@@ -7038,7 +8135,9 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
                                     );
                                     // `SendStruckDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(tx, ty),
                                     //   2, targetId, "", 600)`（`:41`）——7 参重载，入**怪自己**的队列。
-                                    world.send_struck_delay_msg_7(
+                                    crate::slave::send_struck_delay_msg_7_impl(
+                                        access,
+                                        sim,
                                         actor_id,
                                         crate::slave::RM_DELAYMAGIC,
                                         reduced,
@@ -7055,11 +8154,15 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
             }
         }
         // `BreakHolySeizeMode()`（`:49`）：有目标即执行，**无条件**。
-        break_holy_seize_mode(world, actor_id);
+        break_holy_seize_mode_impl(access, sim, actor_id);
     }
     // `else { TargetCret = null; }`（`:52-55`）——字段本身已为 `None`，无写点（照抄空操作）。
     // 8s/1s 索敌门（`:56-60`）。
-    class_seek_gate(world, actor_id);
+    class_seek_gate_impl(access, sim, actor_id);
+}
+
+pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
+    fireball_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 /// `MagicMonster.Run`（`MagicMonster.cs:84-165`）——**Pass 1**（类体）。
@@ -7073,8 +8176,12 @@ pub fn fireball_monster_run(world: &mut World, actor_id: i32) {
 ///
 /// 所有出口都落 `base.Run()` = `MonsterObject.Run` ⇒ 调用方（[`run_class_base`]）在本函数之后
 /// 无条件跑 `monster_run` + `animal_run` + `base_object_run_monster`。
-fn magic_monster_run(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+fn magic_monster_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     // `if (CanMove() && !FixedHideMode && !StoneMode)`（`:86`）。
@@ -7082,33 +8189,28 @@ fn magic_monster_run(world: &mut World, actor_id: i32) {
         return;
     }
     // `if (Think()) { base.Run(); return; }`（`:88-92`）。
-    if magic_monster_think(world, actor_id) {
+    if magic_monster_think_impl(access, sim, actor_id) {
         return;
     }
-    let now = world.clock_ms;
+    let now = sim.clock_ms;
     // `if (WalkWaitLocked) { if ((now - WalkWaitTick) > WalkWait) WalkWaitLocked = false; }`
-    let walk_wait_locked = world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.ai.walk_wait_locked);
+    let walk_wait_locked = access.get(actor_id).is_some_and(|e| e.ai.walk_wait_locked);
     if walk_wait_locked
-        && world
-            .entities
+        && access
             .get(actor_id)
             .is_some_and(|e| now - e.ai.walk_wait_tick > e.ai.walk_wait)
     {
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = access.get_mut(actor_id) {
             e.ai.walk_wait_locked = false;
         }
     }
-    let walk_due = world
-        .entities
+    let walk_due = access
         .get(actor_id)
         .is_some_and(|e| !e.ai.walk_wait_locked && (now - e.ai.walk_tick) > e.ai.walk_speed);
     if !walk_due {
         return;
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.walk_tick = now;
         e.ai.walk_count += 1;
         if e.ai.walk_count > e.ai.walk_step {
@@ -7117,60 +8219,54 @@ fn magic_monster_run(world: &mut World, actor_id: i32) {
             e.ai.walk_wait_tick = now;
         }
     }
-    let run_away_mode = world
-        .entities
-        .get(actor_id)
-        .is_some_and(|e| e.ai.run_away_mode);
+    let run_away_mode = access.get(actor_id).is_some_and(|e| e.ai.run_away_mode);
     if !run_away_mode {
-        let no_attack_mode = world
-            .entities
-            .get(actor_id)
-            .is_some_and(|e| e.ai.no_attack_mode);
+        let no_attack_mode = access.get(actor_id).is_some_and(|e| e.ai.no_attack_mode);
         if !no_attack_mode {
-            let target = world
-                .entities
-                .get(actor_id)
-                .and_then(|e| e.ai.target_creature);
+            let target = access.get(actor_id).and_then(|e| e.ai.target_creature);
             match target {
                 Some(_) => {
                     // 虚调用 `AttackTarget()` ⇒ race 215 走 `MagicMonster.AttackTarget`
                     // （[`magic_monster_attack_target`]：只刷 tick、不伤害）。
-                    if monster_attack_target(world, actor_id) {
+                    if monster_attack_target_impl(access, sim, actor_id) {
                         return;
                     }
                 }
                 None => {
                     // `MonsterObject.cs:296-301` 的 Mission 段（`Mission == false` ⇒ `TargetX = -1`）。
-                    if let Some(e) = world.entities.get_mut(actor_id) {
+                    if let Some(e) = access.get_mut(actor_id) {
                         e.ai.target_x = -1;
                     }
                 }
             }
         }
-        monster_follow_master(world, actor_id);
+        monster_follow_master_impl(access, sim, actor_id);
     } else {
-        monster_run_away_expiry(world, actor_id, now);
+        monster_run_away_expiry_impl(access, sim, actor_id, now);
     }
     // `if (Master != null && Master.SlaveRelax) { base.Run(); return; }`
-    let slave_relax = world
-        .entities
+    let slave_relax = access
         .get(actor_id)
         .and_then(|e| e.master)
-        .and_then(|m| world.entities.get(m))
+        .and_then(|m| access.get(m))
         .is_some_and(|m| m.slave_relax);
     if slave_relax {
         return;
     }
-    let target_x = world.entities.get(actor_id).map_or(-1, |e| e.ai.target_x);
-    let has_target = world
-        .entities
+    let target_x = access.get(actor_id).map_or(-1, |e| e.ai.target_x);
+    let has_target = access
         .get(actor_id)
         .is_some_and(|e| e.ai.target_creature.is_some());
     if target_x != -1 {
-        goto_target_xy(world, actor_id);
+        goto_target_xy_impl(access, sim, actor_id);
     } else if !has_target {
-        wondering(world, actor_id);
+        wondering_impl(access, sim, actor_id);
     }
+}
+
+#[allow(dead_code)]
+fn magic_monster_run(world: &mut World, actor_id: i32) {
+    magic_monster_run_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 #[cfg(test)]
