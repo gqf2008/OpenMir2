@@ -8786,6 +8786,10 @@ mod tests {
             w.pending_mag_struck.is_empty(),
             "Ghost 施法者不得产生 RM_MAGSTRUCK_MINE"
         );
+        assert!(
+            w.fire_burn_events[0].owner_id.is_none(),
+            "事件尾的 owner_id 归一必须落地（Ghost/Death ⇒ None），与旧 run_map_events 同项"
+        );
     }
 
     /// **S4d-3/P0 段边界哨兵**（设计件 §2.5 / review F5）：段内 panic 后不做热恢复，
