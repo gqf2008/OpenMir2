@@ -867,6 +867,21 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > drop 4/0、exp 4/0、levelabil 2/0、player_ctor_rng_trace 1/0、csharp_parity 3/0；
 > RNG trace（ctor_fold/magic_effect/merchant/p3b1–p3b5/spell_tail）各 1/0；`table_counts` 需 DB（未跑）。
 >
+> **S4d-3/P2 落地登记（2026-11-13，第二批）**：P2 前置三项全部落地（ComponentRegistry +
+> 运行期镜像、StageSkip::ComponentMissing、StageEntities::view_mut，各配删分支必红牙），
+> 并迁移 4/5 段：SimExpireHitters（#3）/ SimExtraAbil（#6）/ SimPlayerRunExpiry（#13）/
+> TailSuperManRefill（#16），每段一个可独立回退提交；段运行器改为「段 -> TickRunner」映射
+> （HeadRunner/TailRunner），段输出经 StageOut 旁路（tick_head 的 record 仍是栈上局部）。
+> **SimMapEvents（#7）未迁移（登记缺口）**：该段对实体**只读**但需要 `spawn_cloned` 的
+> 完整 21 组件快照来构造 `PvpView`（`is_proper_target_grouped_direct` 的 attacker/target）；
+> `StageEntities` 目前无 `snapshot_spawn`（设计 §3.3 只到 `remove`）。建议作为 P2b 首批前置：
+> 先落 `StageEntities::snapshot_spawn`（world 侧组装 `EntitySpawn` 或写一个 owned
+> `PvpView` 视图），再迁该段；不要为了赶批次手写一版不等价的 PvpView。
+> **牙的缺口（review 时请核）**：4 段「删注册必红」由 trace 序列牙覆盖（M1–M4 全 RED）；
+> 写回变异 M5（expire_hitters）/M7（run_state_expiry）RED，但 **M6（ExtraAbil 清位）与
+> M8（SuperMan 回满）在现有 736 条 world 单测下全绿**——这两段缺「丢写回必红」的见证用例，
+> 需在下一批补两条 tick 级用例（构造到期 extra_abil / 玩家 super_man+hp0，跑 tick 后断言）。
+>
 > **本批未做**：P2–P7（余 14 段迁移）、上表「P0 未交付项」、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 
