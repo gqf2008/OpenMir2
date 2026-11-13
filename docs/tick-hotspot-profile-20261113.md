@@ -36,10 +36,12 @@ cargo build --release -p mir2-world --bin tick_bench
 - `--profile`：开启分段计时 + 生产接线（`enable_monster_ai` / `enable_buff_tick` /
   `enable_npc_tick` / `enable_merchant_tick`），无玩家移动命令（移动负载见 §8 对照）。
 - `--bots N`：追加 N 个假玩家（`race=0`，均布；无会话、无出站帧）。
-- 每档**跑两遍**：A 遍计时暂停、B 遍计时开启；两遍用同一构造/同种子/同 tick 数，
+- 每档**跑两遍**：A 遍计时未启用、B 遍计时启用；两遍用同一构造/同种子/同 tick 数，
   计时不写实体、不抽 RNG ⇒ 两遍做逐字节相同的工作，墙钟比值即计时开销（§7）。
 - 计时**缺省关闭**：不调 `enable_tick_profile` 时 `tick_profile` 为 `None`，
-  段边界只有一次 `Option` 判别（每 tick ≈20 处），不取 `Instant`、不分配、不进入热循环。
+  段边界只做一次 `Option` 判别（每 tick **约 45–55 次**：20 段 × `begin`+`end` = 40，
+  另加 4 类命名探针 6–14 次（`buff.pass` 4 个 pass；探针随 AI/buff 开关变化），
+  不是个位数），不取 `Instant`、不分配、不进入热循环。
 
 场景说明（与 `tick_bench` 默认门禁场景的差别）：
 
@@ -95,15 +97,16 @@ cargo build --release -p mir2-world --bin tick_bench
 
 | # | 候选 | 1k ms/tick | 5k ms/tick | 11k ms/tick | 11k 占比 | 缩放 | 每实体 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `entities.slot_order()` 全量 `Vec` 分配（tick 内 2 处） | 0.003 | 0.013 | 0.033 | 0.05% | 线性 | 1.5ns |
+| 1 | `entities.slot_order()` 全量 `Vec` 分配（tick 内 2 处） | 0.003 | 0.019 | 0.040 | 0.06% | 线性 | 3.6ns |
 | 2 | `monster_ai_tick` 全量扫描（含 collect） | 0.57 | 3.07 | 6.88 | 10.8% | 线性 | 0.63µs |
 | 3 | AOI 全量刷新（`OutputAoi`） | 0.36 | 1.92 | 4.67 | 7.3% | 线性 | 0.42µs |
-| 4 | buff 多 pass（4 × 50ms） | 0.0004 | 0.0006 | 0.0013 | 0.002% | **与实体数无关** | ~0 |
+| 4 | buff 多 pass（4 × 50ms） | 0.0004 | 0.0011 | 0.0013 | 0.002% | **与实体数无关** | ~0 |
 | 5 | `check_dup_obj` 邻居计数（`SimDup`） | 0.89 | 4.55 | 10.02 | 15.7% | 线性 | 0.91µs |
-| | **5 项合计** | 1.83 | 9.55 | 21.60 | **33.8%** | | 1.97µs |
+| | **5 项合计** | 1.83 | 9.56 | 21.61 | **33.8%** | | 1.97µs |
 
 关于第 1 项：`slot_order()` 探针（`slot_order.hiter_snapshot` + `slot_order.aoi`）合计
-**0.033ms/tick = 0.05%**，每实体 1.5ns。**它不构成热点**——11k 项 `(i32, Entity)` 表的分配/释放
+**0.040ms/tick = 0.06%**，每实体 3.6ns（两个探针：`slot_order.hiter_snapshot` 1.915ms +
+`slot_order.aoi` 2.126ms，除以 100 tick）。**它不构成热点**——11k 项 `(i32, Entity)` 表的分配/释放
 在这个量级下可忽略。真正贵的全量分配在 AOI 段内部（`AoiIds` 克隆 + 11k 项 `HashMap`），见 Top2。
 
 关于第 4 项：本场景没有 buff（`BuffSystem.actors` 为空，4 个 pass 空转 1.3µs/tick）。
@@ -173,19 +176,27 @@ cargo build --release -p mir2-world --bin tick_bench
 
 ### Top4：`slot_order()` 分配（点名项 1）—— **不建议现在做**
 
-- 实测 0.033ms/tick（0.05%）。即使优化到 0，对 200ms 预算的影响 <0.02%。
-- 若将来 tick 内 `slot_order()` 调用点增多（当前 2 处），再考虑复用同一份槽位快照。
-- 风险/收益比不划算；列入「观察项」。
+- **改动面**：`tick_head`（`SimHiterSnapshot`）与 `tick_tail`（`OutputAoi`）两处
+  `entities.slot_order()`；可改为复用同一份槽位快照，或直接借 `SlotTable` 的只读切片。
+- **预期收益**：≤0.040ms/tick（11k，0.06%）——这是实测上限，即使归零也只影响 200ms 预算的 0.02%。
+- **风险**：低（只换取值方式，顺序真值仍是 `SlotTable`）。
+- **是否需要 R 级窗口**：否（L）。
+- **是否影响 golden/parity**：否（处理顺序不变）。
+- 结论：收益/风险比不划算，列入「观察项」；若将来 tick 内调用点增多再评估。
 
 ### Top5：buff 多 pass（点名项 4）—— **本场景无成本，需真栈复核**
 
-- 实测 1.3µs/tick（0.002%）。`buff_do_work` 只遍历 `BuffSystem.actors`，与世界实体数无关；
-  若真栈上大量怪物带毒/带 buff，`actors` 会增长，届时再量。
-- 建议：在真栈（演示舰队）上用本卡同一套 `--profile` 口径加一次「带 buff 的 11k」测量。
+- **改动面**：`World::buff_tick` 的 4 个 50ms pass / `BuffSystem::do_work`（`crates/world/src/buff.rs`）。
+- **预期收益**：本场景 ≈0（1.3µs/tick，0.002%）；有 buff 时与 `BuffSystem.actors` 数量成正比，
+  **不随世界实体数增长**，所以它不是「每实体固定成本」项。
+- **风险**：低（若只优化遍历）；但任何改变 pass 时序/到点门的改动都会碰对拍面。
+- **是否需要 R 级窗口**：本轮不改 ⇒ 不适用；若实施且触及 pass 时序/到点门，按 **R**。
+- **是否影响 golden/parity**：**是**（buff 的到期/sysmsg/重算是 parity 面）；当前不建议动。
+- 建议：在真栈上用同一套 `--profile` 口径补一次「大量带 buff 的 11k」测量，先取数再决定。
 
 ## 7. 「关闭即无额外开销」的可证伪判据
 
-判据设计：同进程、同构造、同种子、同 tick 数，跑两遍（A 计时暂停 / B 计时开启）。
+判据设计：同进程、同构造、同种子、同 tick 数，跑两遍（A 计时未启用 / B 计时启用）。
 计时语句只取 `Instant` 与累计，不写实体、不抽 RNG ⇒ 两遍做**逐字节相同**的工作，
 墙钟差 = 计时开销。另加单测 `tick_profile_is_opt_in_and_behavior_neutral`：
 缺省必须 `None`；开/关两遍的 `TickRecord` 必须逐字段相等；开启后 `ticks`/`stages()` 非空；
@@ -193,7 +204,7 @@ cargo build --release -p mir2-world --bin tick_bench
 
 同进程两遍 A/B（n=100/100，ΔP50 正 = 计时态更慢）：
 
-| 档 | 暂停 P50 (µs) | 开启 P50 (µs) | ΔP50 | ΔP99 |
+| 档 | A 未启用 P50 (µs) | B 启用 P50 (µs) | ΔP50 | ΔP99 |
 | --- | --- | --- | --- | --- |
 | 1k | 5,157 | 5,131 | **−0.50%** | −4.58% |
 | 5k | 26,398 | 26,226 | **−0.65%** | −7.08% |
@@ -218,10 +229,18 @@ cargo build --release -p mir2-world --bin tick_bench
 
 1. **不是移动**：协调者给的纯移动基线 11k = P50 88.4ms / P99 178.8ms（默认门禁场景）；
    本文 `--profile` 全负载 64ms 是另一种负载，不可直接比较，但两者同量级。
-2. **10 假玩家几乎不改变 `World::tick`**：63.51 vs 63.97ms（−0.7%）。原因是 bench 里的假玩家
-   **没有会话**，AOI 的观察者过滤器要求 `WantRefMsg` 等会话侧状态，故假玩家的视野扫描不会
-   把怪标成 `visible_active`；**「visible-active 怪物每 tick 跑 AI + 99 格视野扫描」这条路径
-   本 harness 没有真正打开**。要定量，必须在 bench 里补 `want_ref_msg`/会话夹具，或直接在真栈上量。
+2. **10 假玩家几乎不改变 `World::tick`**：63.51 vs 63.97ms（−0.7%，噪声级）。机制（已核代码）：
+   ① 玩家观察者的视野扫描有到点门，`PLAYER_SEARCH_TIME = 1000` ⇒ 每 1000ms 才扫一次
+   （200ms tick 下约每 5 tick 一次），不是每 tick；
+   ② 即便扫到，`RM_UPDATEVIEWRANGE` 的投递有跨度门
+   `|Δx| <= viewer.view_range - other.view_range`（同 `|Δy|`，
+   `crates/world/src/aoi.rs` 的 `search_view_range` 内）；双方 `ViewRange` 缺省都是 5
+   ⇒ **span = 0，只有同格怪才可能被投递**；再叠加怪物自己走动，实际被标 `visible_active`
+   的是个位数；
+   ③ **race 80 不扫视野**——`monster_self_scans` 只认真宝宝与 race 11/112/254，所以不存在
+   「怪物每 tick 做 99 格视野扫描」这回事（本报告前一版的错误表述，已删）。
+   ⇒ 该场景对 tick 无可测影响，且 bench 里**打不开** visible-active 路径到演示舰队的量级；
+   要定量必须真栈，或补完整的会话/AOI 夹具（`WantRefMsg`/ViewRange 差异/移动 bot）。
 3. **宿主段（P21..P32 + 帧生成/会话输出 + DB/网络）完全没有覆盖**：它在
    `bins/game-svr/src/lib.rs` 的 `sim_loop` 里、`tick_head` 与 `tick_tail` 之间，
    不属于 `crates/world`，也不在本卡写集内。演示栈 10 个 bot × 每 tick 的帧生成/序列化/发送、

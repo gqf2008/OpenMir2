@@ -2710,7 +2710,9 @@ impl World {
         self.tick_profile = None;
     }
 
-    /// 只清累计值、保持开关状态（bench 预热后清零用）。
+    /// 只清累计值并保持开启状态（bench 预热后清零用）。
+    ///
+    /// **注意**：`TickProfile::default()` 会把 `paused` 一并复位为 `false`（清完即恢复累计）。
     pub fn reset_tick_profile(&mut self) {
         if let Some(p) = self.tick_profile.as_mut() {
             *p = TickProfile::default();
@@ -2761,7 +2763,7 @@ impl World {
         }
     }
 
-    /// 开启怪物 AI 驱动（缺省关闭；见 [`World`] 的 `ai_enabled` 字段说明）。 `World` 的 `ai_enabled` 字段说明）。
+    /// 开启怪物 AI 驱动（缺省关闭；见 [`World`] 的 `ai_enabled` 字段说明）。
     ///
     /// 幂等：重复调用无副作用。生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；
     /// 合成 golden 场景保持关闭 ⇒ 既有 `tests/parity/world` 逐字节不变。

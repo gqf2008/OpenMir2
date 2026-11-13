@@ -269,10 +269,10 @@ fn run_profile_mode(tiers: &[(usize, usize)], bots: usize) {
     println!(
         "# 场景同 tick_bench：200x200、奇数坐标、相邻 2 格、固定种子 42；race={PROFILE_RACE} 怪物（进入 monster_ai_tick）"
     );
-    println!("# 每档跑两遍：A 遍计时暂停、B 遍计时开启（同种子、同 tick 数、各自 1 tick 预热）⇒ 两遍工作量逐字节相同，总墙钟比值 = 计时开销");
+    println!("# 每档跑两遍：A 遍计时未启用、B 遍计时启用（同种子、同 tick 数、各自 1 tick 预热）⇒ 两遍工作量逐字节相同，总墙钟比值 = 计时开销");
     if bots > 0 {
         println!(
-            "# 追加 {bots} 个假玩家（race=0，均布在图内；无会话/无出站帧）⇒ 视野范围内的怪变 visible_active，AI 每 tick 跑且做 99 格视野扫描"
+            "# 追加 {bots} 个假玩家（race=0，均布在图内；无会话/无出站帧）；玩家视野扫描有 1000ms 到点门，\n# 且 RM_UPDATEVIEWRANGE 有跨度门 |Δ| <= viewer.view_range - other.view_range（双向缺省 ViewRange=5 ⇒ span=0，只有同格怪可能命中）"
         );
     }
     for (entities, ticks) in tiers {
@@ -313,14 +313,9 @@ fn build_profile_world(entities: usize, bots: usize) -> World {
     world
 }
 
-/// 一遍：`ticks` 个 tick，返回 `(每 tick µs 升序, 总 ns)`；`profiled` 决定计时开关。
-fn run_profile_pass(entities: usize, bots: usize, ticks: usize, profiled: bool) -> (Vec<u64>, u64) {
+/// A 遍（**计时未启用**）：`ticks` 个 tick，返回 `(每 tick µs 升序, 总 ns)`。
+fn run_profile_pass(entities: usize, bots: usize, ticks: usize) -> (Vec<u64>, u64) {
     let mut world = build_profile_world(entities, bots);
-    if profiled {
-        world.enable_tick_profile();
-        world.reset_tick_profile();
-    }
-    world.set_tick_profile_paused(!profiled);
     let mut us = Vec::with_capacity(ticks);
     let mut total_ns = 0u64;
     for _ in 0..ticks {
@@ -336,8 +331,8 @@ fn run_profile_pass(entities: usize, bots: usize, ticks: usize, profiled: bool) 
 
 fn run_profile_tier(entities: usize, ticks: usize, bots: usize) -> ProfileRun {
     let n = ticks.max(AB_TICKS);
-    let (off_us, off_ns) = run_profile_pass(entities, bots, n, false);
-    // B 遍：同构造、同种子、同 tick 数；计时开启后取分段累计。
+    let (off_us, off_ns) = run_profile_pass(entities, bots, n);
+    // B 遍（计时启用）：同构造、同种子、同 tick 数；计时开启后取分段累计。
     let mut world = build_profile_world(entities, bots);
     world.enable_tick_profile();
     world.reset_tick_profile();
@@ -424,7 +419,7 @@ fn print_profile(entities: usize, ticks: usize, r: &ProfileRun) {
     let p50_off = percentile(&r.off_us, 50.0);
     let p99_off = percentile(&r.off_us, 99.0);
     println!(
-        "-- A/B（同种子两遍：A 暂停 / B 开启）：开启 P50={p50_on}us P99={p99_on}us（n={}）；暂停 P50={p50_off}us P99={p99_off}us（n={}）；ΔP50 {:+.2}% ΔP99 {:+.2}%",
+        "-- A/B（同种子两遍：A 计时未启用 / B 计时启用）：启用 P50={p50_on}us P99={p99_on}us（n={}）；未启用 P50={p50_off}us P99={p99_off}us（n={}）；ΔP50 {:+.2}% ΔP99 {:+.2}%",
         r.on_us.len(),
         r.off_us.len(),
         degrade_pct(p50_on, p50_off),
