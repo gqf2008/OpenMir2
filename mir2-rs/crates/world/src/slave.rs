@@ -570,6 +570,63 @@ pub fn apply_derived_slave_recalc(mon: &mut EntityMut, now: i64) {
     }
 }
 
+/// **P3b**：`SendSelfDelayMsg` 的 facade/段共用实现（`!Ghost` 门 + 四叉堆入队）。
+///
+/// 与旧 `World::send_self_delay_msg_full` 逐句相同：`Ghost` 门取实体快照；`deliver_at` =
+/// `clock_ms + delay`；`enqueue_seq` = 当前 `msg_order` 并后自增；优先级 `Lowest`。
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn send_self_delay_msg_full_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    ident: u16,
+    w_param: i32,
+    n_param1: i32,
+    n_param2: i32,
+    n_param3: i32,
+    delay_ms: i64,
+) {
+    let ghost = access.get(actor_id).is_some_and(|e| e.ghost);
+    if ghost {
+        return;
+    }
+    let deliver_at_ms = sim.clock_ms + delay_ms;
+    let enqueue_seq = sim.msg_order;
+    sim.msg_order += 1;
+    sim.self_delay_msgs.push(SelfDelayMsg {
+        actor_id,
+        ident,
+        w_param,
+        n_param1,
+        n_param2,
+        n_param3,
+        msg: String::new(),
+        actor_ref: 0,
+        deliver_at_ms,
+        enqueue_seq,
+        priority: MESSAGE_PRIORITY_LOWEST,
+    });
+}
+
+/// **P3b**：`World::send_master_die_mutiny` 的 facade/段共用实现。
+pub(crate) fn send_master_die_mutiny_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sim: &mut crate::world::SimState,
+    master_id: i32,
+) {
+    send_self_delay_msg_full_impl(
+        access,
+        sim,
+        master_id,
+        RM_MASTERDIEMUTINY,
+        0,
+        0,
+        0,
+        0,
+        MASTER_DIE_SELF_DELAY_MS,
+    );
+}
+
 impl World {
     /// `BaseObject.SlaveList.Count`（`BaseObject.cs:141`）——懒建列表的空表 = 0。
     #[must_use]
@@ -1437,25 +1494,18 @@ impl World {
         n_param3: i32,
         delay_ms: i64,
     ) {
-        let ghost = self.entities.get(actor_id).is_some_and(|e| e.ghost);
-        if ghost {
-            return;
-        }
-        let deliver_at_ms = self.clock_ms + delay_ms;
-        let enqueue_seq = self.next_msg_order();
-        self.self_delay_msgs.push(SelfDelayMsg {
+        // P3b：结算路径（`send_master_die_mutiny`）与段共用 `_impl`；facade 只传实体面 + SimState。
+        send_self_delay_msg_full_impl(
+            &self.entities,
+            &mut self.sim,
             actor_id,
             ident,
             w_param,
             n_param1,
             n_param2,
             n_param3,
-            msg: String::new(),
-            actor_ref: 0,
-            deliver_at_ms,
-            enqueue_seq,
-            priority: MESSAGE_PRIORITY_LOWEST,
-        });
+            delay_ms,
+        );
     }
 
     /// **P3-B5**：`BaseObject.SendStruckDelayMsg` 的显式 actorId 重载
@@ -1674,8 +1724,10 @@ impl World {
 
     /// `PlayObject.Die()` / `KickException()` 尾（`PlayObject.cs:1996/2005`）：
     /// `SendSelfDelayMsg(RM_MASTERDIEMUTINY, 0,0,0,0,"",1000)`。
+    #[allow(dead_code)] // 段路径走 `send_master_die_mutiny_impl`
     pub fn send_master_die_mutiny(&mut self, master_id: i32) {
-        self.send_self_delay_msg(master_id, RM_MASTERDIEMUTINY, MASTER_DIE_SELF_DELAY_MS);
+        // P3b：与 `SimSettleDeaths`/`TailPlayerDeaths` 段共用 `_impl`。
+        send_master_die_mutiny_impl(&self.entities, &mut self.sim, master_id);
     }
 
     /// `PlayObject.MakeGhost()` 尾（`PlayObject.cs:3524-3527`）：`base.MakeGhost()` 后若 `Ghost`

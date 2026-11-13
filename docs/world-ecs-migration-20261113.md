@@ -820,7 +820,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > P0+P1 = **4**（Clock / SimHiterSnapshot / OutputDrain / OutputAoi）、
 > P2 = **8**（head 6 = Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
 > SimPlayerRunExpiry / OutputDrain；tail 2 = TailSuperManRefill / OutputAoi）、
-> **P2b = 9**（+`SimMapEvents` ⇒ head 7 + tail 2）、**P3a = 10**（+`SimDup` ⇒ head 8 + tail 2）。
+> **P2b = 9**、**P3a = 10**（+`SimDup`）、**P3b = 12**（+`SimSettleDeaths`（head 9）+ `TailPlayerDeaths`（tail 3））。
 > Clock 也走 `run_head_stage`，因此**不是**设计初稿写的「3 → 2」。设计 §2.5 的目标仍是
 > **P7 收口时 2 个**（head 一个、tail 一个，其余段全部系统化后 head 只跑一次）。
 > 本节与设计 §2.5 均按真实数字表述；`world.rs` 里指向 `snapshot_runner` 的陈旧注释、
@@ -931,9 +931,24 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > 改动前（base `f823bf8ca` 内联实现）与改动后逐项相同（用例
 > `world::tests::sim_dup_stage_matches_recorded_vectors`）。
 > **段数口径（P2+P2b+P3a）**：余 18 段已迁 **6 段**（#3/#6/#7/#13/#16 + #14）。
+>
+> **S4d-3/P3b 落地登记（2026-11-13，第五批）**：`SimSettleDeaths`（#4，tick_head）与
+> `TailPlayerDeaths`（#17，tick_tail）作为**同一实现点**（`settle_deaths(only_players)`）迁成
+> 两个段系统（`sim_settle_deaths_stage_system` / `tail_player_deaths_stage_system`），段位 =
+> 旧内联 `self.settle_deaths(&mut record, false)` / `(record, true)` 的同一行；`World::settle_deaths`
+> 保留为薄包装。借用形状沿用 2026-11-13 裁决（`remove_resource::<SimState>()` + `StageEntities`
+> 并行，Dv5）；`TickRecord` 由段边界以 `TickRecordRes` 搬入、段后取回（与 OutputDrain 同口径）。
+> **实现面**：新增 `crate::entity::EntityAccess`（5 方法）+ 两份实现（`EntityStore` / `StageAccess`），
+> 把 `settle_deaths` / `gain_exp` / `party_*` 链 / `drop_use_items_on_death` / `zil_kin_zombi_die`
+> / `send_self_delay_msg_full` 全部收敛为 facade/段共用实现（facade 方法退化为薄包装，**无第三份拷贝**）。
+> **RNG 逐点对拍**：结算路径的抽数由既有用例钉住（`settle_deaths_pvp_calls_drop_use_items_twice`：
+> 两轮 × 13 槽 `Random(nRate)` = 26 抽，`format!("{:?}", rng)` 与 `draws_after(seed, [1;26])`
+> 逐值相同；单轮/红名/白名/StdMode45 各例同理）。迁移后同一组用例逐项通过 ⇒ 抽数点/次数/次序不变。
+> **段数口径（P2+P2b+P3a+P3b）**：已迁 **7 段 / 余 11**（settle 对按同一实现点计 1 段）。
+> 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
 
-> **尚未做（以 P2b 交付 head 为准，取代旧的「余 14 段迁移」表述）**：P3–P7（余 **13** 段——
-> 18 段中 P2+P2b 已迁 5 段）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **尚未做（以 P3b 交付 head 为准）**：P4–P7（余 **11** 段——
+> 18 段中已迁 **7 段**：P2 的 #3/#6/#13/#16、P2b 的 #7、P3a 的 #14、P3b 的 #4+#17（同一实现点按 1 段计））、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 > 段号清单与写集见设计 §2.1/§4。
 
