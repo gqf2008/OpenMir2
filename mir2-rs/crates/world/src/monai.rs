@@ -2613,28 +2613,34 @@ fn chicken_deer_run(world: &mut World, actor_id: i32) {
 ///
 /// 调用点：死亡结算（[`crate::world::World`] 的 `settle_deaths`，等价 oracle `base.Run` 的
 /// `HP==0 ⇒ Die()`）。抽数站点落在本文件（`monster_ai` 组）。
-pub fn zil_kin_zombi_die(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let Some((race, count)) = world
-        .entities
-        .get(actor_id)
-        .map(|e| (e.race, e.ai.zil_kill_count))
-    else {
+/// **P3b**：`ZilKinZombi.Die()` 抽取段的 facade/段共用实现（逐句与旧实现相同）。
+pub(crate) fn zil_kin_zombi_die_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let Some((race, count)) = access.get(actor_id).map(|e| (e.race, e.ai.zil_kill_count)) else {
         return;
     };
     if race != 96 {
         return;
     }
     if count > 0 {
-        let die_tick = i64::from(world.rng.random_below(20) + 4) * 1000;
-        if let Some(e) = world.entities.get_mut(actor_id) {
+        let die_tick = i64::from(sim.rng.random_below(20) + 4) * 1000;
+        if let Some(e) = access.get_mut(actor_id) {
             e.life_cycle.re_alive_tick = now;
             e.ai.zilkin_die_tick = die_tick;
         }
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.zil_kill_count -= 1;
     }
+}
+
+/// 旧入口（facade）：委托 [`zil_kin_zombi_die_impl`]。
+pub fn zil_kin_zombi_die(world: &mut World, actor_id: i32) {
+    zil_kin_zombi_die_impl(&mut world.entities, &mut world.sim, actor_id);
 }
 
 /// `BaseObject.ReAlive()`（`BaseObject.Base.cs:354-358`）：`Death = false` + `RM_ALIVE`。

@@ -271,6 +271,157 @@ impl Emitter {
     }
 }
 
+/// **P3b**：组队链的 facade/段共用实现（`EntityAccess`；`World` 方法退化为薄包装）。
+///
+/// 结算路径（`settle_deaths` → `party_del_member`）与 `SimSettleDeaths`/`TailPlayerDeaths`
+/// 段共用这一份；读函数取 `&A`、写函数取 `&mut A`，与 `EntityAccess` 的借用面一致。
+fn party_group_owner_of_impl<A: crate::entity::EntityAccess>(access: &A, id: i32) -> i32 {
+    access.get(id).map(|e| e.group_owner).unwrap_or(0)
+}
+
+fn party_members_of_impl<A: crate::entity::EntityAccess>(access: &A, id: i32) -> Vec<i32> {
+    access
+        .get(id)
+        .map(|e| e.group_members.clone())
+        .unwrap_or_default()
+}
+
+fn party_name_of_impl<A: crate::entity::EntityAccess>(access: &A, id: i32) -> String {
+    access.get(id).map(|e| e.name.clone()).unwrap_or_default()
+}
+
+fn party_send_group_text_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    sender: i32,
+    cfg: &PartyConfig,
+    s_msg: &str,
+) -> Vec<(u8, PartyEvent)> {
+    let mut out = Vec::new();
+    let owner = party_group_owner_of_impl(access, sender);
+    if owner == 0 {
+        return out;
+    }
+    let text = format!("{}{}", cfg.group_msg_prefix, s_msg);
+    for m in party_members_of_impl(access, owner) {
+        out.push((
+            PRIO_RM_GROUPMESSAGE,
+            PartyEvent::SysMessage {
+                target: m,
+                recog: sender,
+                f_color: cfg.group_msg_f_color,
+                b_color: cfg.group_msg_b_color,
+                text: text.clone(),
+            },
+        ));
+    }
+    out
+}
+
+fn party_send_group_members_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    owner: i32,
+) -> Vec<PartyEvent> {
+    let members = party_members_of_impl(access, owner);
+    let mut text = String::new();
+    for &m in &members {
+        text.push_str(&party_name_of_impl(access, m));
+        text.push('/');
+    }
+    members
+        .into_iter()
+        .map(|m| PartyEvent::GroupMembers {
+            target: m,
+            members_text: text.clone(),
+        })
+        .collect()
+}
+
+fn party_leave_group_em_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    member: i32,
+    cfg: &PartyConfig,
+    em: &mut Emitter,
+) {
+    let name = party_name_of_impl(access, member);
+    for (prio, ev) in party_send_group_text_impl(access, member, cfg, &PartyConfig::exit_msg(&name))
+    {
+        em.later(prio, ev);
+    }
+    if let Some(e) = access.get_mut(member) {
+        e.group.group_owner = 0;
+    }
+    em.later(
+        PRIO_RM_GROUPCANCEL,
+        PartyEvent::GroupCancel { target: member },
+    );
+}
+
+fn party_cancel_group_em_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    owner: i32,
+    cfg: &PartyConfig,
+    em: &mut Emitter,
+) -> bool {
+    let count = party_members_of_impl(access, owner).len();
+    if count <= 1 {
+        for (prio, ev) in party_send_group_text_impl(access, owner, cfg, PARTY_CANCEL_GROUP_MSG) {
+            em.later(prio, ev);
+        }
+        if let Some(e) = access.get_mut(owner) {
+            e.group.group_members.clear();
+            e.group.group_owner = 0;
+        }
+        em.now(PartyEvent::GroupCancel { target: owner });
+        false
+    } else {
+        for ev in party_send_group_members_impl(access, owner) {
+            em.now(ev);
+        }
+        true
+    }
+}
+
+fn party_del_member_em_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    owner: i32,
+    target: i32,
+    cfg: &PartyConfig,
+    em: &mut Emitter,
+) {
+    let members = party_members_of_impl(access, owner);
+    if owner != target {
+        if let Some(pos) = members.iter().position(|&m| m == target) {
+            party_leave_group_em_impl(access, target, cfg, em);
+            if let Some(e) = access.get_mut(owner) {
+                if pos < e.group.group_members.len() {
+                    e.group.group_members.remove(pos);
+                }
+            }
+        }
+    } else {
+        for &m in members.iter().rev() {
+            party_leave_group_em_impl(access, m, cfg, em);
+            if let Some(e) = access.get_mut(owner) {
+                if let Some(p) = e.group.group_members.iter().rposition(|&x| x == m) {
+                    e.group.group_members.remove(p);
+                }
+            }
+        }
+    }
+    party_cancel_group_em_impl(access, owner, cfg, em);
+}
+
+pub(crate) fn party_del_member_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    owner: i32,
+    target: i32,
+    cfg: &PartyConfig,
+) -> Vec<PartyEvent> {
+    let mut em = Emitter::new();
+    party_del_member_em_impl(access, owner, target, cfg, &mut em);
+    em.finish()
+}
+
 impl World {
     /// C# `SystemShare.WorldEngine.GetPlayObject(name)`（按 `ChrName` 线性扫 `PlayObjectList`）。
     ///
@@ -291,21 +442,15 @@ impl World {
     }
 
     fn party_group_owner_of(&self, id: i32) -> i32 {
-        self.entities.get(id).map(|e| e.group_owner).unwrap_or(0)
+        party_group_owner_of_impl(&self.entities, id)
     }
 
     fn party_members_of(&self, id: i32) -> Vec<i32> {
-        self.entities
-            .get(id)
-            .map(|e| e.group_members.clone())
-            .unwrap_or_default()
+        party_members_of_impl(&self.entities, id)
     }
 
     fn party_name_of(&self, id: i32) -> String {
-        self.entities
-            .get(id)
-            .map(|e| e.name.clone())
-            .unwrap_or_default()
+        party_name_of_impl(&self.entities, id)
     }
 
     fn party_is_dead_or_ghost(&self, id: i32) -> bool {
@@ -327,42 +472,12 @@ impl World {
         cfg: &PartyConfig,
         s_msg: &str,
     ) -> Vec<(u8, PartyEvent)> {
-        let mut out = Vec::new();
-        let owner = self.party_group_owner_of(sender);
-        if owner == 0 {
-            return out;
-        }
-        let text = format!("{}{}", cfg.group_msg_prefix, s_msg);
-        for m in self.party_members_of(owner) {
-            out.push((
-                PRIO_RM_GROUPMESSAGE,
-                PartyEvent::SysMessage {
-                    target: m,
-                    recog: sender,
-                    f_color: cfg.group_msg_f_color,
-                    b_color: cfg.group_msg_b_color,
-                    text: text.clone(),
-                },
-            ));
-        }
-        out
+        party_send_group_text_impl(&self.entities, sender, cfg, s_msg)
     }
 
     /// `PlayObject.Base.cs:1353-1369` 的 `SendGroupMembers`：拼 `a/b/c/` 后逐成员 `SendDefMessage`（立即）。
     fn party_send_group_members(&self, owner: i32) -> Vec<PartyEvent> {
-        let members = self.party_members_of(owner);
-        let mut text = String::new();
-        for &m in &members {
-            text.push_str(&self.party_name_of(m));
-            text.push('/');
-        }
-        members
-            .into_iter()
-            .map(|m| PartyEvent::GroupMembers {
-                target: m,
-                members_text: text.clone(),
-            })
-            .collect()
+        party_send_group_members_impl(&self.entities, owner)
     }
 
     /// `PlayObject.Base.cs:2418-2422` 的 `JoinGroup(playObject)` —— 在**加入者**上调用：
@@ -385,42 +500,18 @@ impl World {
 
     /// `PlayObject.cs:5177-5183` 的 `LeaveGroup` —— 在**退出者**上调用：
     /// 先 `SendGroupText(exit)`（此时 `GroupOwner` 仍指向团长），再清 `GroupOwner`，再 `RM_GROUPCANCEL`。
+    #[allow(dead_code)] // P3b 后由 `party_leave_group_em_impl` 接管；P5 统一时清理
     fn party_leave_group_em(&mut self, member: i32, cfg: &PartyConfig, em: &mut Emitter) {
-        let name = self.party_name_of(member);
-        for (prio, ev) in self.party_send_group_text(member, cfg, &PartyConfig::exit_msg(&name)) {
-            em.later(prio, ev);
-        }
-        if let Some(e) = self.entities.get_mut(member) {
-            e.group.group_owner = 0;
-        }
-        em.later(
-            PRIO_RM_GROUPCANCEL,
-            PartyEvent::GroupCancel { target: member },
-        );
+        party_leave_group_em_impl(&mut self.entities, member, cfg, em)
     }
 
     /// `PlayObject.Base.cs:1339-1352` 的 `CancelGroup()` —— 在**团长**（`owner`）上调用。
     ///
     /// `GroupMembers.Count <= 1` ⇒ `SendGroupText("你的小组被解散了.")` + `Clear()` + `GroupOwner=0`，
     /// 返回 `false`（调用方据此发立即 `SM_GROUPCANCEL`）；否则返回 `true`（调用方发 `SendGroupMembers`）。
+    #[allow(dead_code)] // P3b 后由 `party_cancel_group_em_impl` 接管；P5 统一时清理
     fn party_cancel_group_em(&mut self, owner: i32, cfg: &PartyConfig, em: &mut Emitter) -> bool {
-        let count = self.party_members_of(owner).len();
-        if count <= 1 {
-            for (prio, ev) in self.party_send_group_text(owner, cfg, PARTY_CANCEL_GROUP_MSG) {
-                em.later(prio, ev);
-            }
-            if let Some(e) = self.entities.get_mut(owner) {
-                e.group.group_members.clear();
-                e.group.group_owner = 0;
-            }
-            em.now(PartyEvent::GroupCancel { target: owner });
-            false
-        } else {
-            for ev in self.party_send_group_members(owner) {
-                em.now(ev);
-            }
-            true
-        }
+        party_cancel_group_em_impl(&mut self.entities, owner, cfg, em)
     }
 
     /// `PlayObject.cs:5126-5156` 的 `DelMember(baseObject)` —— 在**团长**（`owner`）上调用。
@@ -435,27 +526,7 @@ impl World {
         cfg: &PartyConfig,
         em: &mut Emitter,
     ) {
-        let members = self.party_members_of(owner);
-        if owner != target {
-            if let Some(pos) = members.iter().position(|&m| m == target) {
-                self.party_leave_group_em(target, cfg, em);
-                if let Some(e) = self.entities.get_mut(owner) {
-                    if pos < e.group.group_members.len() {
-                        e.group.group_members.remove(pos);
-                    }
-                }
-            }
-        } else {
-            for &m in members.iter().rev() {
-                self.party_leave_group_em(m, cfg, em);
-                if let Some(e) = self.entities.get_mut(owner) {
-                    if let Some(p) = e.group.group_members.iter().rposition(|&x| x == m) {
-                        e.group.group_members.remove(p);
-                    }
-                }
-            }
-        }
-        self.party_cancel_group_em(owner, cfg, em);
+        party_del_member_em_impl(&mut self.entities, owner, target, cfg, em)
     }
 
     /// `PlayObject.cs:5126-5156` 的 `DelMember`（公开包装）。
@@ -465,9 +536,7 @@ impl World {
         target: i32,
         cfg: &PartyConfig,
     ) -> Vec<PartyEvent> {
-        let mut em = Emitter::new();
-        self.party_del_member_em(owner, target, cfg, &mut em);
-        em.finish()
+        party_del_member_impl(&mut self.entities, owner, target, cfg)
     }
 
     /// `PlayObject.Operate.cs:787-808` 的 `ClientGroupClose()`（公开包装）。

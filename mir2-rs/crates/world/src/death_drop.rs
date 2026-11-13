@@ -45,11 +45,13 @@ use crate::world::World;
 ///
 /// 返回删除列表 `[(槽位, ItemName, MakeIndex)]`——`ItemName` 第一段恒空串（oracle 的
 /// `DeleteItem.ItemName` 缺省 `null`，`SendDelItemList` 里等价空串）。
-pub(crate) fn drop_use_items_on_death(
-    world: &mut World,
+/// **P3b**：`drop_use_items_on_death` 的 facade/段共用实现（逐句与旧实现相同）。
+pub(crate) fn drop_use_items_on_death_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
     actor_id: i32,
 ) -> Vec<crate::world::UseItemDeletion> {
-    let Some(e) = world.entities.get(actor_id) else {
+    let Some(e) = access.get(actor_id) else {
         return Vec::new();
     };
     // `:2156 if (AngryRing || NoDropUseItem) return;`
@@ -59,18 +61,18 @@ pub(crate) fn drop_use_items_on_death(
     // `:2183 nRate = PvpLevel() > 2 ? DieRedDropUseItemRate : DieDropUseItemRate`。
     let pvp = World::pvp_level(e.pk_point);
     let n_rate = if pvp > 2 {
-        world.die_red_drop_use_item_rate
+        sim.die_red_drop_use_item_rate
     } else {
-        world.die_drop_use_item_rate
+        sim.die_drop_use_item_rate
     };
     // `:2194 int dropWide = HUtil32._MIN(Config.DropItemRage, 3)`——只作为
     // `DropItemDown → GetDropPosition` 的散布半径；`AddItemToMap` 恒失败（T-82）⇒ 无消费者。
     // 保留计算以记录口径（`_` 前缀避免 dead-code 噪声）。
-    let _drop_wide = hutil::min_i32(world.drop_item_rage, 3);
-    let disable = world.disable_take_off_keys.clone();
-    // 物品目录按 `Index`（1-based）查表；`mem::take` 避免与 `world.rng`/实体同时可变借用
+    let _drop_wide = hutil::min_i32(sim.drop_item_rage, 3);
+    let disable = sim.disable_take_off_keys.clone();
+    // 物品目录按 `Index`（1-based）查表；`mem::take` 避免与 `sim.rng`/实体同时可变借用
     // （与 `World::spawn_monster_now` 的既有写法同口径）。
-    let catalog_items = std::mem::take(&mut world.item_catalog);
+    let catalog_items = std::mem::take(&mut sim.item_catalog);
     let catalog = VecItemCatalog {
         items: &catalog_items,
     };
@@ -78,7 +80,7 @@ pub(crate) fn drop_use_items_on_death(
 
     // ---- 第 1 段（`:2159-2179`，零 RNG）----
     for slot in 0..USE_ITEM_SLOTS {
-        let Some(cell) = world.entities.get(actor_id).map(|e| e.use_items[slot]) else {
+        let Some(cell) = access.get(actor_id).map(|e| e.use_items[slot]) else {
             break;
         };
         if cell.index == 0 {
@@ -90,7 +92,7 @@ pub(crate) fn drop_use_items_on_death(
         if std_item.item_desc & 8 != 0 {
             // `dropItemList.Add(new DeleteItem { MakeIndex = … })`（ItemName 缺省 null）。
             deleted.push((slot, String::new(), cell.make_index));
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 // `UseItems[i].Index = 0`（MakeIndex/Dura/DuraMax/Desc 均保留）。
                 e.inventory.use_items[slot].index = 0;
             }
@@ -99,10 +101,10 @@ pub(crate) fn drop_use_items_on_death(
 
     // ---- 第 2 段（`:2183-2214`）：逐槽 `Random(nRate)`，空槽也抽 ----
     for slot in 0..USE_ITEM_SLOTS {
-        if world.rng.random_below(n_rate) != 0 {
+        if sim.rng.random_below(n_rate) != 0 {
             continue;
         }
-        let Some(cell) = world.entities.get(actor_id).map(|e| e.use_items[slot]) else {
+        let Some(cell) = access.get(actor_id).map(|e| e.use_items[slot]) else {
             break;
         };
         // `if (UseItems[i] != null && M2Share.InDisableTakeOffList(UseItems[i].Index)) continue;`
@@ -127,7 +129,7 @@ pub(crate) fn drop_use_items_on_death(
         // 对 `ushort` 只在恰 0 时成立、赋值 0 是无操作 ⇒ 等价 `wrapping_sub(2000)`。
         // **不得**用 `saturating_sub`（会把 1..1999 错误地压成 0）。
         if std_item.std_mode == 40 {
-            if let Some(e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = access.get_mut(actor_id) {
                 let dura = e.inventory.use_items[slot].dura.wrapping_sub(2000);
                 // `if (idura <= 0) idura = 0;` 对 `ushort` 只在恰 0 时成立，且赋值 0 无操作
                 // ⇒ 回绕值原样写回（`Dura == 2000` 得 0，与 oracle 相同）。
@@ -138,14 +140,22 @@ pub(crate) fn drop_use_items_on_death(
         // `M2Share.GetRandomLook`（`M2Share.cs:524-527`）= `nBaseLook + Random(nRage)`。
         if std_item.std_mode == 45 {
             let _looks = u32::from(std_item.looks)
-                + (world.rng.random_below(i32::from(std_item.shape)) as u32);
+                + (sim.rng.random_below(i32::from(std_item.shape)) as u32);
         }
         // `GetDropPosition(CurrX, CurrY, nScatterRange, …)`：纯格子扫描，零 RNG（`BaseObject.cs:459`）。
         // `Envir.AddItemToMap` 恒 false（`MapItem.ItemId == 0`）⇒ 本槽不清、不记 DeleteItem。
     }
 
-    world.item_catalog = catalog_items;
+    sim.item_catalog = catalog_items;
     deleted
+}
+
+/// 旧入口（facade）：委托 [`drop_use_items_on_death_impl`]。
+pub(crate) fn drop_use_items_on_death(
+    world: &mut World,
+    actor_id: i32,
+) -> Vec<crate::world::UseItemDeletion> {
+    drop_use_items_on_death_impl(&mut world.entities, &mut world.sim, actor_id)
 }
 
 #[cfg(test)]

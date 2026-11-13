@@ -2088,7 +2088,7 @@ type ReadView3Query = bevy_ecs::query::QueryState<(
 ///
 /// bevy 扁平元组上限 15；S4c-1 追加 4 个组件后改用**嵌套元组**（内层 15 + 内层 4，
 /// 外层 2 元组仍是合法 `QueryData`），一次 `get_mut` 取齐、仍然是单次可变借用。
-type MutViewQuery = bevy_ecs::query::QueryState<(
+type EntityMutData = (
     (
         &'static mut Entity,
         &'static mut Vitals,
@@ -2113,7 +2113,9 @@ type MutViewQuery = bevy_ecs::query::QueryState<(
         &'static mut NpcState,
         &'static mut AiState,
     ),
-)>;
+);
+
+type MutViewQuery = bevy_ecs::query::QueryState<EntityMutData>;
 
 pub struct EntityStore {
     inner: mir2_world_bevy::EcsStore<CoreIdentity>,
@@ -3386,6 +3388,202 @@ impl DupAccess for EntityStore {
     }
 }
 
+/// **P3b**：死亡结算路径的实体访问面（facade `EntityStore` 与段访问器各实现一份）。
+///
+/// 为什么需要它：`settle_deaths` 的实现点横跨 `world.rs` / `death_drop.rs` / `party.rs` /
+/// `slave.rs` / `monai.rs`，且每次抽数都发生在「取快照 → 改 → 回写」之间。把实体面收窄成
+/// 这 5 个方法后，整条调用链只写一份实现（facade 与 `SimSettleDeaths`/`TailPlayerDeaths`
+/// 段共用），不产生第三份拷贝。
+///
+/// 读（`get`/`spawn_cloned`/`order_ids`）取 `&self`，与旧 facade 的共享借用同形（同一时刻可
+/// 持多个只读视图）；写（`get_mut`/`set_progression`）取 `&mut self`。段访问器的读走
+/// `StageEntities::get::<C>`（编译期 `Reads<C>` + 运行期白名单双约束），写走
+/// `view_mut::<EntityMutData>`（运行期逐项核对）。
+pub trait EntityAccess {
+    /// 槽位顺序的业务 id（与 `iter_ref` 同序：插入序 + 空闲槽 LIFO 复用）。
+    fn order_ids(&self) -> Vec<i32>;
+    fn get(&self, id: i32) -> Option<EntityRef<'_>>;
+    fn get_mut(&mut self, id: i32) -> Option<EntityMut<'_>>;
+    fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn>;
+    fn set_progression(&mut self, id: i32, progression: Progression) -> bool;
+}
+
+impl EntityAccess for EntityStore {
+    fn order_ids(&self) -> Vec<i32> {
+        self.order_index()
+    }
+    fn get(&self, id: i32) -> Option<EntityRef<'_>> {
+        EntityStore::get(self, id)
+    }
+    fn get_mut(&mut self, id: i32) -> Option<EntityMut<'_>> {
+        EntityStore::get_mut(self, id)
+    }
+    fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
+        EntityStore::spawn_cloned(self, id)
+    }
+    fn set_progression(&mut self, id: i32, progression: Progression) -> bool {
+        EntityStore::set_progression(self, id, progression)
+    }
+}
+
+/// **P3b**：`EntityAccess` 的段访问器（`SimSettleDeaths` / `TailPlayerDeaths` 用）。
+///
+/// 包一层 [`mir2_world_bevy::tick::StageEntities`]：读按组件 `get::<C>` 取齐后走
+/// [`EntityRef::from_components`] / [`EntityStore::from_components`]（与 facade 同一装配函数），
+/// 写走 `view_mut::<EntityMutData>`（`ViewAccess` 逐项核对注册表与段白名单）。
+///
+/// 编译期 `Reads<C>`/`Writes<C>` 绑定保证与段 spec 的标记 trait 一致；运行期镜像由
+/// `StageEntities` 本身核对（越界 panic）。spec 必须声明 24 读 / 20 写（组合视图全集）。
+pub struct StageAccess<'a, 'w, S: mir2_world_bevy::tick::StageSpec> {
+    pub ad: &'a mut mir2_world_bevy::tick::StageEntities<'w, S>,
+}
+
+impl<S> EntityAccess for StageAccess<'_, '_, S>
+where
+    S: mir2_world_bevy::tick::StageSpec
+        + mir2_world_bevy::tick::Reads<Entity>
+        + mir2_world_bevy::tick::Reads<Transform>
+        + mir2_world_bevy::tick::Reads<MapBinding>
+        + mir2_world_bevy::tick::Reads<Vitals>
+        + mir2_world_bevy::tick::Reads<AbilitySnapshot<BaseAbil>>
+        + mir2_world_bevy::tick::Reads<Progression>
+        + mir2_world_bevy::tick::Reads<SpawnBinding>
+        + mir2_world_bevy::tick::Reads<DropState>
+        + mir2_world_bevy::tick::Reads<CombatAttribution>
+        + mir2_world_bevy::tick::Reads<Recovery>
+        + mir2_world_bevy::tick::Reads<PvpState>
+        + mir2_world_bevy::tick::Reads<Flags>
+        + mir2_world_bevy::tick::Reads<LifeCycle>
+        + mir2_world_bevy::tick::Reads<Appearance>
+        + mir2_world_bevy::tick::Reads<MonsterClassState>
+        + mir2_world_bevy::tick::Reads<PlayerRunState>
+        + mir2_world_bevy::tick::Reads<GroupState>
+        + mir2_world_bevy::tick::Reads<Revival>
+        + mir2_world_bevy::tick::Reads<BuffState>
+        + mir2_world_bevy::tick::Reads<SlaveState>
+        + mir2_world_bevy::tick::Reads<Inventory>
+        + mir2_world_bevy::tick::Reads<MerchantState>
+        + mir2_world_bevy::tick::Reads<NpcState>
+        + mir2_world_bevy::tick::Reads<AiState>,
+{
+    fn order_ids(&self) -> Vec<i32> {
+        self.ad.order().into_iter().map(|(id, _)| id).collect()
+    }
+    fn get(&self, id: i32) -> Option<EntityRef<'_>> {
+        self.ad.resolve(id)?;
+        Some(EntityRef::from_components(
+            self.ad.get::<Entity>(id)?,
+            self.ad.get::<Transform>(id)?,
+            self.ad.get::<MapBinding>(id)?,
+            self.ad.get::<Vitals>(id)?,
+            self.ad.get::<AbilitySnapshot<BaseAbil>>(id)?,
+            self.ad.get::<Progression>(id)?,
+            self.ad.get::<SpawnBinding>(id)?,
+            self.ad.get::<DropState>(id)?,
+            self.ad.get::<CombatAttribution>(id)?,
+            self.ad.get::<Recovery>(id)?,
+            self.ad.get::<PvpState>(id)?,
+            self.ad.get::<Flags>(id)?,
+            self.ad.get::<LifeCycle>(id)?,
+            self.ad.get::<Appearance>(id)?,
+            self.ad.get::<MonsterClassState>(id)?,
+            self.ad.get::<PlayerRunState>(id)?,
+            self.ad.get::<GroupState>(id)?,
+            self.ad.get::<Revival>(id)?,
+            self.ad.get::<BuffState>(id)?,
+            self.ad.get::<SlaveState>(id)?,
+            self.ad.get::<Inventory>(id)?,
+            self.ad.get::<MerchantState>(id)?,
+            self.ad.get::<NpcState>(id)?,
+            self.ad.get::<AiState>(id)?,
+        ))
+    }
+    fn get_mut(&mut self, id: i32) -> Option<EntityMut<'_>> {
+        let (
+            (
+                entity,
+                vitals,
+                ability,
+                progression,
+                spawn,
+                drop,
+                attribution,
+                flags,
+                life_cycle,
+                appearance,
+                monster_class,
+                player_run,
+                group,
+                revival,
+                buff,
+            ),
+            (slave, inventory, merchant, npc, ai),
+        ) = self.ad.view_mut::<EntityMutData>(id)?;
+        // `QueryData::Item` 的 `&mut C` 是 `Mut<C>`（带 change detection）；剥成裸 `&mut`，
+        // 与 `EntityStore::get_mut` 的 [`EntityMut`] 同形。
+        Some(EntityMut {
+            entity: entity.into_inner(),
+            vitals: vitals.into_inner(),
+            ability: ability.into_inner(),
+            progression: progression.into_inner(),
+            spawn: spawn.into_inner(),
+            drop: drop.into_inner(),
+            attribution: attribution.into_inner(),
+            flags: flags.into_inner(),
+            life_cycle: life_cycle.into_inner(),
+            appearance: appearance.into_inner(),
+            monster_class: monster_class.into_inner(),
+            player_run: player_run.into_inner(),
+            group: group.into_inner(),
+            revival: revival.into_inner(),
+            buff: buff.into_inner(),
+            slave: slave.into_inner(),
+            inventory: inventory.into_inner(),
+            merchant_state: merchant.into_inner(),
+            npc_state: npc.into_inner(),
+            ai: &mut ai.into_inner().ai,
+        })
+    }
+    fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
+        self.ad.resolve(id)?;
+        Some(EntityStore::from_components(
+            self.ad.get::<Entity>(id)?,
+            self.ad.get::<Transform>(id)?,
+            self.ad.get::<MapBinding>(id)?,
+            self.ad.get::<Vitals>(id)?,
+            self.ad.get::<AbilitySnapshot<BaseAbil>>(id)?,
+            self.ad.get::<Progression>(id)?,
+            self.ad.get::<SpawnBinding>(id)?,
+            self.ad.get::<DropState>(id)?,
+            self.ad.get::<CombatAttribution>(id)?,
+            self.ad.get::<Recovery>(id)?,
+            self.ad.get::<PvpState>(id)?,
+            self.ad.get::<Flags>(id)?,
+            self.ad.get::<LifeCycle>(id)?,
+            self.ad.get::<Appearance>(id)?,
+            self.ad.get::<MonsterClassState>(id)?,
+            self.ad.get::<PlayerRunState>(id)?,
+            self.ad.get::<GroupState>(id)?,
+            self.ad.get::<Revival>(id)?,
+            self.ad.get::<BuffState>(id)?,
+            self.ad.get::<SlaveState>(id)?,
+            self.ad.get::<Inventory>(id)?,
+            self.ad.get::<MerchantState>(id)?,
+            self.ad.get::<NpcState>(id)?,
+            self.ad.get::<AiState>(id)?,
+        ))
+    }
+    fn set_progression(&mut self, id: i32, progression: Progression) -> bool {
+        match self.get_mut(id) {
+            Some(view) => {
+                *view.progression = progression;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
 /// **P2b**：段内「完整实体快照」的查询形状——24 个组件的**嵌套只读元组**（15 + 4 + 5），
 /// 与 [`EntityStore::spawn_cloned`] 的三个读视图逐项同序。
 ///
@@ -3438,6 +3636,9 @@ pub trait StageSnapshotExt<S: mir2_world_bevy::tick::StageSpec> {
     fn snapshot_spawn(&mut self, id: i32) -> Option<EntitySpawn>;
     /// 等价于 `EntityStore::get(id)`：只读视图（借用期 = 本次 `&mut self`）。
     fn entity_ref(&mut self, id: i32) -> Option<EntityRef<'_>>;
+    /// 等价于 `EntityStore::get_mut(id)`：可写视图（`EntityMut` 的 20 个组件；
+    /// 借用期 = 本次 `&mut self`；P3b）。
+    fn entity_mut(&mut self, id: i32) -> Option<EntityMut<'_>>;
 }
 
 impl<S: mir2_world_bevy::tick::StageSpec> StageSnapshotExt<S>
@@ -3491,6 +3692,53 @@ impl<S: mir2_world_bevy::tick::StageSpec> StageSnapshotExt<S>
             npc,
             ai,
         ))
+    }
+
+    fn entity_mut(&mut self, id: i32) -> Option<EntityMut<'_>> {
+        let (
+            (
+                entity,
+                vitals,
+                ability,
+                progression,
+                spawn,
+                drop,
+                attribution,
+                flags,
+                life_cycle,
+                appearance,
+                monster_class,
+                player_run,
+                group,
+                revival,
+                buff,
+            ),
+            (slave, inventory, merchant, npc, ai),
+        ) = self.view_mut::<EntityMutData>(id)?;
+        // `QueryData::Item` 的 `&mut C` 是 `Mut<C>`（带 change detection）；这里剥成裸 `&mut`，
+        // 与 `EntityStore::get_mut` 的 [`EntityMut`] 同形。
+        Some(EntityMut {
+            entity: entity.into_inner(),
+            vitals: vitals.into_inner(),
+            ability: ability.into_inner(),
+            progression: progression.into_inner(),
+            spawn: spawn.into_inner(),
+            drop: drop.into_inner(),
+            attribution: attribution.into_inner(),
+            flags: flags.into_inner(),
+            life_cycle: life_cycle.into_inner(),
+            appearance: appearance.into_inner(),
+            monster_class: monster_class.into_inner(),
+            player_run: player_run.into_inner(),
+            group: group.into_inner(),
+            revival: revival.into_inner(),
+            buff: buff.into_inner(),
+            slave: slave.into_inner(),
+            inventory: inventory.into_inner(),
+            merchant_state: merchant.into_inner(),
+            npc_state: npc.into_inner(),
+            ai: &mut ai.into_inner().ai,
+        })
     }
 
     fn entity_ref(&mut self, id: i32) -> Option<EntityRef<'_>> {
