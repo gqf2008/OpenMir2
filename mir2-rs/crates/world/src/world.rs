@@ -1458,6 +1458,7 @@ impl HeadRunner {
         me.add(TickStage::Clock, advance_clock_system);
         me.add(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
         me.add(TickStage::SimExpireHitters, expire_hitters_stage_system);
+        me.add(TickStage::SimSettleDeaths, sim_settle_deaths_stage_system);
         me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
         me.add(TickStage::SimMapEvents, sim_map_events_stage_system);
         me.add(
@@ -1515,6 +1516,7 @@ impl TailRunner {
             TickStage::TailSuperManRefill,
             tail_super_man_refill_stage_system,
         );
+        me.add(TickStage::TailPlayerDeaths, tail_player_deaths_stage_system);
         me.add(TickStage::OutputAoi, output_aoi_stage_system);
         me
     }
@@ -2081,6 +2083,211 @@ pub fn sim_dup_stage_system(world: &mut bevy_ecs::world::World) {
     world.resource_mut::<StageOut>().pushes = pushes;
 }
 
+mir2_world_bevy::stage_spec!(
+    SimSettleDeaths,
+    TickStage::SimSettleDeaths,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+mir2_world_bevy::stage_spec!(
+    TailPlayerDeaths,
+    TickStage::TailPlayerDeaths,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+/// **P3b**：结算段 spec 的共同读集（[`crate::entity::StageAccess`] 的 24 个读组件）。
+///
+/// 组合视图（`EntityRef`/`EntityMut`）要取齐整条记录，所以 spec 必须声明全集；写集 20 个
+/// 是 `EntityMut` 的可变字段（`Transform`/`MapBinding`/`Recovery`/`PvpState` 不在其中）。
+trait SettleSpec:
+    StageSpec
+    + mir2_world_bevy::tick::Reads<crate::entity::Entity>
+    + mir2_world_bevy::tick::Reads<Transform>
+    + mir2_world_bevy::tick::Reads<crate::entity::MapBinding>
+    + mir2_world_bevy::tick::Reads<Vitals>
+    + mir2_world_bevy::tick::Reads<crate::entity::Ability>
+    + mir2_world_bevy::tick::Reads<crate::entity::Progression>
+    + mir2_world_bevy::tick::Reads<crate::entity::SpawnBinding>
+    + mir2_world_bevy::tick::Reads<crate::entity::DropState>
+    + mir2_world_bevy::tick::Reads<CombatAttribution>
+    + mir2_world_bevy::tick::Reads<crate::entity::Recovery>
+    + mir2_world_bevy::tick::Reads<crate::entity::PvpState>
+    + mir2_world_bevy::tick::Reads<Flags>
+    + mir2_world_bevy::tick::Reads<LifeCycle>
+    + mir2_world_bevy::tick::Reads<Appearance>
+    + mir2_world_bevy::tick::Reads<crate::entity::MonsterClassState>
+    + mir2_world_bevy::tick::Reads<PlayerRunState>
+    + mir2_world_bevy::tick::Reads<crate::entity::GroupState>
+    + mir2_world_bevy::tick::Reads<crate::entity::Revival>
+    + mir2_world_bevy::tick::Reads<BuffState>
+    + mir2_world_bevy::tick::Reads<crate::entity::SlaveState>
+    + mir2_world_bevy::tick::Reads<crate::entity::Inventory>
+    + mir2_world_bevy::tick::Reads<crate::entity::MerchantState>
+    + mir2_world_bevy::tick::Reads<crate::entity::NpcState>
+    + mir2_world_bevy::tick::Reads<crate::entity::AiState>
+{
+}
+impl<T> SettleSpec for T where
+    T: StageSpec
+        + mir2_world_bevy::tick::Reads<crate::entity::Entity>
+        + mir2_world_bevy::tick::Reads<Transform>
+        + mir2_world_bevy::tick::Reads<crate::entity::MapBinding>
+        + mir2_world_bevy::tick::Reads<Vitals>
+        + mir2_world_bevy::tick::Reads<crate::entity::Ability>
+        + mir2_world_bevy::tick::Reads<crate::entity::Progression>
+        + mir2_world_bevy::tick::Reads<crate::entity::SpawnBinding>
+        + mir2_world_bevy::tick::Reads<crate::entity::DropState>
+        + mir2_world_bevy::tick::Reads<CombatAttribution>
+        + mir2_world_bevy::tick::Reads<crate::entity::Recovery>
+        + mir2_world_bevy::tick::Reads<crate::entity::PvpState>
+        + mir2_world_bevy::tick::Reads<Flags>
+        + mir2_world_bevy::tick::Reads<LifeCycle>
+        + mir2_world_bevy::tick::Reads<Appearance>
+        + mir2_world_bevy::tick::Reads<crate::entity::MonsterClassState>
+        + mir2_world_bevy::tick::Reads<PlayerRunState>
+        + mir2_world_bevy::tick::Reads<crate::entity::GroupState>
+        + mir2_world_bevy::tick::Reads<crate::entity::Revival>
+        + mir2_world_bevy::tick::Reads<BuffState>
+        + mir2_world_bevy::tick::Reads<crate::entity::SlaveState>
+        + mir2_world_bevy::tick::Reads<crate::entity::Inventory>
+        + mir2_world_bevy::tick::Reads<crate::entity::MerchantState>
+        + mir2_world_bevy::tick::Reads<crate::entity::NpcState>
+        + mir2_world_bevy::tick::Reads<crate::entity::AiState>
+{
+}
+
+/// **P3b**：结算段的共用执行体（`SimSettleDeaths` 与 `TailPlayerDeaths` 同一实现点）。
+///
+/// 借用形状按 2026-11-13 裁决：`remove_resource::<SimState>()` 取 owned SimState →
+/// `StageEntities` 借 bevy World → 段尾归还；`TickRecordRes` 由段边界插入/段内取用后再放回。
+fn settle_deaths_stage_core<S: SettleSpec>(world: &mut bevy_ecs::world::World, only_players: bool) {
+    StageTrace::record(
+        world,
+        if only_players {
+            TickStage::TailPlayerDeaths
+        } else {
+            TickStage::SimSettleDeaths
+        },
+    );
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("SimState 必须在段窗口内（段边界契约）");
+    let mut record = world
+        .remove_resource::<TickRecordRes>()
+        .expect("TickRecordRes 必须由段边界插入（结算段契约）");
+    {
+        let mut ad = StageEntities::<S>::new(world);
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        World::settle_deaths_impl(&mut access, &mut sim, &mut record.0, only_players);
+    }
+    world.insert_resource(record);
+    world.insert_resource(sim);
+}
+
+/// **S4d-3/P3b 段 #4 `SimSettleDeaths`**：非玩家死亡结算（`tick_head` 原位）。
+pub fn sim_settle_deaths_stage_system(world: &mut bevy_ecs::world::World) {
+    settle_deaths_stage_core::<SimSettleDeaths>(world, false);
+}
+
+/// **S4d-3/P3b 段 #17 `TailPlayerDeaths`**：玩家死亡结算（`tick_tail` 原位；P32 复活门之后）。
+pub fn tail_player_deaths_stage_system(world: &mut bevy_ecs::world::World) {
+    settle_deaths_stage_core::<TailPlayerDeaths>(world, true);
+}
+
 pub struct World {
     pub entities: EntityStore,
     /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
@@ -2094,8 +2301,9 @@ pub struct World {
     /// 既有的 `world.clock_ms` / `world.rng` 等字段访问形态不变；crate 内需要与 `entities`
     /// 同时分借用时直接解构本字段（`let World { entities, sim, .. } = self;`）。
     pub sim: SimState,
-    /// **S4d-3/P0 段边界哨兵**（设计件 §2.5，review F5）：`true` = `SimState` 已在 bevy
-    /// `World` 的资源里、facade 侧是 `Default` 占位（只在一次 runner 调用窗口内）。
+    /// **S4d-3/P0 段边界哨兵**（设计件 §2.5，review F5）：`true` = 正处于段窗口内
+    /// （`SimState` 归 bevy `World` 资源所有，或已被段内 `remove_resource` 取成 owned 局部——
+    /// Dv5），facade 侧是 `Default` 占位；只在一次 runner 调用窗口内为真。
     ///
     /// 段内 panic 时不会回到 `false` ⇒ 下一次 `tick_head`/`tick_tail` 入口立即以明确断言
     /// 停机。本项目**不做段内热恢复**（那会在空 `SimState` 上继续跑），语义见设计件 §2.5。
@@ -2123,7 +2331,7 @@ impl World {
     fn enter_stage_world(&mut self) {
         assert!(
             !self.sim_in_flight,
-            "上一次 tick 在段内 panic 且未恢复：SimState 仍留在 bevy World，facade 侧是 Default 占位。\
+            "上一次 tick 在段内 panic 且未恢复：facade 侧是 Default 占位，SimState 可能仍在 bevy World，也可能已被段内 remove_resource 取走（owned 局部随 unwind 丢弃）——两种态都不可继续。\
              按设计件 §2.5 不做热恢复，世界需重建（fail-fast）"
         );
         self.sim_in_flight = true;
@@ -4986,16 +5194,25 @@ impl World {
     }
 
     /// **Lane B**：把一条 `SetMapXyFlag` 按序作用到 `MapGrid`（oracle `Envir.SetMapXyFlag`）。
+    /// **P3b**：`apply_castle_map_event` 的 facade/段共用实现（只碰 `sim.maps`）。
+    pub(crate) fn apply_castle_map_event_impl(
+        sim: &mut SimState,
+        map_id: usize,
+        event: &crate::castle::StructureEvent,
+    ) {
+        if let crate::castle::StructureEvent::SetMapXyFlag { x, y, walk } = *event {
+            if let Some(grid) = sim.maps.get_mut(map_id) {
+                grid.set_map_xy_flag(i32::from(x), i32::from(y), walk);
+            }
+        }
+    }
+
     pub(crate) fn apply_castle_map_event(
         &mut self,
         map_id: usize,
         event: &crate::castle::StructureEvent,
     ) {
-        if let crate::castle::StructureEvent::SetMapXyFlag { x, y, walk } = *event {
-            if let Some(grid) = self.maps.get_mut(map_id) {
-                grid.set_map_xy_flag(i32::from(x), i32::from(y), walk);
-            }
-        }
+        Self::apply_castle_map_event_impl(&mut self.sim, map_id, event);
     }
 
     /// **Lane B**：记录一条门/墙结构事件（`SetMapXyFlag` 同步落到地图，其余保留原始序）。
@@ -6088,7 +6305,19 @@ impl World {
         // `Die()`）。玩家的 `base.Run` 的 Die 在 P32 之后 ⇒ 留到 [`World::tick_tail`]
         // （oracle 序：PlayObject.Run 的 P21→…→P32 → base.Run:70-73）。既有 golden 的 death
         // 行全部是怪物 ⇒ 该拆分不改任何既有 golden（spike §4.3-4）。
-        self.settle_deaths(&mut record, false);
+        // S4d-3/P3b #4：段系统（`SimSettleDeaths`），段位与旧内联调用完全相同。
+        // `TickRecord` 由段边界以 `TickRecordRes` 搬入、段后取回（与 OutputDrain 同口径）。
+        {
+            let record_res = TickRecordRes(std::mem::take(&mut record));
+            record = self.run_head_stage(move |world, head| {
+                world.insert_resource(record_res);
+                head.run(TickStage::SimSettleDeaths, world);
+                world
+                    .remove_resource::<TickRecordRes>()
+                    .expect("SimSettleDeaths 后必须归还 TickRecordRes（段边界契约）")
+                    .0
+            });
+        }
 
         // **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：oracle
         // `PlayObject.Run()`（`PlayObject.Message.cs:360-364`）在 `base.Run()`（`:765`）之前
@@ -6235,7 +6464,18 @@ impl World {
 
         // 1. 玩家死亡结算（oracle `base.Run:70-73`）：在 P32 复活门之后。
         self.tail_phase_log.push(TailPhase::Die);
-        self.settle_deaths(record, true);
+        // S4d-3/P3b #17：段系统（`TailPlayerDeaths`），段位与旧内联调用完全相同。
+        {
+            let record_res = TickRecordRes(std::mem::take(record));
+            *record = self.run_tail_stage(move |world, tail| {
+                world.insert_resource(record_res);
+                tail.run(TickStage::TailPlayerDeaths, world);
+                world
+                    .remove_resource::<TickRecordRes>()
+                    .expect("TailPlayerDeaths 后必须归还 TickRecordRes（段边界契约）")
+                    .0
+            });
+        }
 
         // 2. **玩家 `BaseObject.Run` 的 VerifyMapTime 段**（oracle `WorldServer.cs:697` 每 ~200ms
         // 驱动一次 `playObject.Run()`，末尾无条件 `base.Run()`）——必须在 AOI 扫描之前刷新
@@ -6549,15 +6789,6 @@ impl World {
         Self::char_pushed_core(entities, sim, actor_id, n_dir, n_push_count)
     }
 
-    /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`
-    /// （`PlayObject.Message.cs:765`），其中的 `VerifyTick` 段
-    /// （`BaseObject.Base.cs:223-228`）对每个在场玩家每 30s 调一次
-    /// [`World::verify_map_time`]。
-    ///
-    /// oracle 的玩家 `Run` 由 `WorldServer.cs:697` 每 ~200ms 驱动；本骨架玩家没有独立的
-    /// `Run` 方法 ⇒ 在 [`World::tick`] 的 AOI 段之前补这一趟（`race == Play && !Ghost`，
-    /// `Ghost` 玩家已从 `PlayObjectList` 移除、不再 Run，见 `WorldServer.cs:708-711`）。
-    /// 30s 门在 [`World::verify_map_time`] 内 ⇒ 常态每 tick 只是一次整数比较。
     /// **P3a**：`check_dup_obj` 的共用核心（facade 与 `SimDup` 段走同一份）。
     ///
     /// 逐行对应旧 `World::check_dup_obj`：槽位序筛 `Race == Play && !Ghost`；3s 门严格 `>`；
@@ -6723,6 +6954,15 @@ impl World {
             .any(|o| o.actor_object && access.is_blocking(o.cell_obj_id))
     }
 
+    /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`
+    /// （`PlayObject.Message.cs:765`），其中的 `VerifyTick` 段
+    /// （`BaseObject.Base.cs:223-228`）对每个在场玩家每 30s 调一次
+    /// [`World::verify_map_time`]。
+    ///
+    /// oracle 的玩家 `Run` 由 `WorldServer.cs:697` 每 ~200ms 驱动；本骨架玩家没有独立的
+    /// `Run` 方法 ⇒ 在 [`World::tick`] 的 AOI 段之前补这一趟（`race == Play && !Ghost`，
+    /// `Ghost` 玩家已从 `PlayObjectList` 移除、不再 Run，见 `WorldServer.cs:708-711`）。
+    /// 30s 门在 [`World::verify_map_time`] 内 ⇒ 常态每 tick 只是一次整数比较。
     fn verify_players_map_time(&mut self) {
         let ids: Vec<i32> = self
             .entities
@@ -7418,11 +7658,18 @@ impl World {
     /// 返回**获得者本人**本次获得的经验（= [`TickRecord::deaths`] 5 元组的第 5 项），
     /// 并把每个进了 `WinExp` 的成员的 `(id, amount, leveled, level)` 按 oracle 的成员遍历序
     /// 追加进 `record.exp_awards`（宿主据此逐人出 `SM_WINEXP(44)`）。
-    fn gain_exp(&mut self, recipient: i32, mon_exp: i32, record: &mut TickRecord) -> i32 {
-        let cfg = self.combat_config;
-        let need_exps = std::mem::take(&mut self.need_exps);
+    /// **P3b**：`gain_exp` 的 facade/段共用实现（`win_exp` 的抽数点不变）。
+    pub(crate) fn gain_exp_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        recipient: i32,
+        mon_exp: i32,
+        record: &mut TickRecord,
+    ) -> i32 {
+        let cfg = sim.combat_config;
+        let need_exps = std::mem::take(&mut sim.need_exps);
         // `KillTargetTrigger`：`monsterExp = CalcGetExp(WAbil.Level, fightExp)`（入参即自己等级）。
-        let (monster_exp, group_owner, rx, rmap) = match self.entities.get(recipient) {
+        let (monster_exp, group_owner, rx, rmap) = match access.get(recipient) {
             Some(e) => (
                 mir2_formula::exp::calc_get_exp(
                     i32::from(e.level),
@@ -7435,11 +7682,11 @@ impl World {
                 e.map_id,
             ),
             None => {
-                self.need_exps = need_exps;
+                sim.need_exps = need_exps;
                 return 0;
             }
         };
-        let map_rate = self.map_exp_rate.get(rmap).copied().flatten();
+        let map_rate = sim.map_exp_rate.get(rmap).copied().flatten();
         let mut my_gain = 0;
         if group_owner != 0 {
             // oracle `PlayObject.Base.cs:771-776`：`GroupOwner != 0` 时先
@@ -7447,10 +7694,10 @@ impl World {
             // ⇒ `groupOwnerPlay.GroupMembers` 空引用抛异常，被 818-821 的 `catch` 吞掉
             // ⇒ 本次**零经验、零授奖**（不会退回单人满经验）。可达成因由：`leave_world`
             // 移除实体时不清同组成员的 `group_owner`（见 `leave_world`）。
-            let members = match self.entities.get(group_owner) {
+            let members = match access.get(group_owner) {
                 Some(owner) => owner.group_members.clone(),
                 None => {
-                    self.need_exps = need_exps;
+                    sim.need_exps = need_exps;
                     return 0;
                 }
             };
@@ -7459,7 +7706,7 @@ impl World {
                 .iter()
                 .copied()
                 .filter(|&m| {
-                    self.entities.get(m).is_some_and(|me| {
+                    access.get(m).is_some_and(|me| {
                         !me.death
                             && me.map_id == rmap
                             && (me.x - rx).abs() <= 12
@@ -7469,7 +7716,7 @@ impl World {
                 .collect();
             let sumlv: i32 = in_range
                 .iter()
-                .filter_map(|&m| self.entities.get(m))
+                .filter_map(|&m| access.get(m))
                 .map(|me| i32::from(me.level))
                 .sum();
             let n = in_range.len();
@@ -7482,7 +7729,7 @@ impl World {
                     );
                 }
                 for &m in &in_range {
-                    let level = self.entities.get(m).map_or(0, |me| i32::from(me.level));
+                    let level = access.get(m).map_or(0, |me| i32::from(me.level));
                     let amount = if cfg.high_level_kill_mon_fix_exp {
                         mir2_shared::hutil::round(f64::from(dw_exp) / n as f64)
                     } else {
@@ -7490,26 +7737,25 @@ impl World {
                             f64::from(dw_exp) / f64::from(sumlv) * f64::from(level),
                         )
                     };
-                    let Some(mut k) = self.entities.spawn_cloned(m) else {
+                    let Some(mut k) = access.spawn_cloned(m) else {
                         continue;
                     };
                     let (g, l, lvl) = win_exp(&mut k, amount, &need_exps, &cfg, map_rate);
-                    self.entities.set_progression(m, k.progression_component());
+                    access.set_progression(m, k.progression_component());
                     if m == recipient {
                         my_gain = g;
                     }
                     record.exp_awards.push((m, g, l, lvl));
                 }
             } else {
-                let (g, l, lvl) = match self.entities.spawn_cloned(recipient) {
+                let (g, l, lvl) = match access.spawn_cloned(recipient) {
                     Some(mut k) => {
                         let out = win_exp(&mut k, monster_exp, &need_exps, &cfg, map_rate);
-                        self.entities
-                            .set_progression(recipient, k.progression_component());
+                        access.set_progression(recipient, k.progression_component());
                         out
                     }
                     None => {
-                        self.need_exps = need_exps;
+                        sim.need_exps = need_exps;
                         return 0;
                     }
                 };
@@ -7517,48 +7763,64 @@ impl World {
                 record.exp_awards.push((recipient, g, l, lvl));
             }
         } else {
-            let (g, l, lvl) = match self.entities.spawn_cloned(recipient) {
+            let (g, l, lvl) = match access.spawn_cloned(recipient) {
                 Some(mut k) => {
                     let out = win_exp(&mut k, monster_exp, &need_exps, &cfg, map_rate);
-                    self.entities
-                        .set_progression(recipient, k.progression_component());
+                    access.set_progression(recipient, k.progression_component());
                     out
                 }
                 None => {
-                    self.need_exps = need_exps;
+                    sim.need_exps = need_exps;
                     return 0;
                 }
             };
             my_gain = g;
             record.exp_awards.push((recipient, g, l, lvl));
         }
-        self.need_exps = need_exps;
+        sim.need_exps = need_exps;
         my_gain
     }
 
-    fn settle_deaths(&mut self, record: &mut TickRecord, only_players: bool) {
+    #[allow(dead_code)] // 段路径走 `Self::gain_exp_impl`
+    fn gain_exp(&mut self, recipient: i32, mon_exp: i32, record: &mut TickRecord) -> i32 {
+        Self::gain_exp_impl(
+            &mut self.entities,
+            &mut self.sim,
+            recipient,
+            mon_exp,
+            record,
+        )
+    }
+
+    /// **P3b**：`settle_deaths` 的 facade/段共用实现（逐句与旧实现相同）。
+    ///
+    /// `SimSettleDeaths`（`only_players=false`，tick_head）与 `TailPlayerDeaths`
+    /// （`only_players=true`，tick_tail）是同一实现点，两段共用本函数。
+    pub(crate) fn settle_deaths_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        record: &mut TickRecord,
+        only_players: bool,
+    ) {
         // **PL-1 硬前置（spike §4.3）**：玩家死亡必须晚于 P32 复活门（oracle 的 Die 在
         // `base.Run:70-73`，P32 在 `PlayObject.Run:747-763`）⇒ 本函数按 `only_players` 分两段调用：
         // `tick_head` 结算非玩家、`tick_tail` 结算玩家。既有 golden 的死亡行全是怪物 ⇒ 不变。
-        let dead: Vec<i32> = self
-            .entities
-            .iter_ref()
-            .filter(|e| {
-                // `die_called` 是脚本/GM 直接 `Die()` 的入口（`KillCommand.cs:40`
-                // `baseObject.Die()`**不改 HP**）⇒ SuperMan 目标可能仍带满血，
-                // 不能只按 `hp == 0` 收集。
-                (e.hp == 0 || e.die_called)
-                    && !e.death_settled
-                    // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B8）：oracle 的 ghost 不 `Run`
-                    // （`PlayObject.Message.cs:360` 起的 `Run` 链路）⇒ 走不到 `base.Run` 的 `HP==0 ⇒ Die()`
-                    // （`BaseObject.Base.cs:70-73`）⇒ **ghost 不结算死亡**。
-                    && !e.ghost
-                    && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
-            })
-            .map(|e| e.id)
-            .collect();
+        let mut dead: Vec<i32> = Vec::new();
+        for id in access.order_ids() {
+            let Some(e) = access.get(id) else {
+                continue;
+            };
+            {}
+            if (e.hp == 0 || e.die_called)
+                && !e.death_settled
+                && !e.ghost
+                && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
+            {
+                dead.push(id);
+            }
+        }
         for id in dead {
-            let Some(e) = self.entities.get(id) else {
+            let Some(e) = access.get(id) else {
                 continue;
             };
             // **`BaseObject.Die()` 首行早退**（`src/M2Server/Actor/BaseObject.Base.cs:318-322`，
@@ -7582,7 +7844,7 @@ impl World {
                 let race = e.race;
                 let map_id = e.map_id;
                 let direct_die = e.die_called;
-                if let Some(e) = self.entities.get_mut(id) {
+                if let Some(e) = access.get_mut(id) {
                     e.life_cycle.die_called = false;
                 }
                 if !direct_die {
@@ -7597,15 +7859,15 @@ impl World {
                 // - `AnimalObject.Die()`（`AnimalObject.cs:96-110`）：`if (!SuperMan) return;`
                 //   ⇒ 说词段**仅** SuperMan 走；本骨架未建模 `MonsterSayMessage`（T-31 残余）。
                 if race == 110 {
-                    if let Some(b) = self.entities.get(id).and_then(|e| e.castle_binding) {
-                        let events = self
+                    if let Some(b) = access.get(id).and_then(|e| e.castle_binding) {
+                        let events = sim
                             .castles
                             .get(b.castle_index)
                             .and_then(|c| c.defense_unit(b.role))
                             .map(crate::castle::CastleUnit::door_die_flag2_events)
                             .unwrap_or_default();
                         for event in events {
-                            self.apply_castle_map_event(map_id, &event);
+                            Self::apply_castle_map_event_impl(sim, map_id, &event);
                             record.castle_structures.push(CastleStructureAt {
                                 castle_index: b.castle_index,
                                 map_id,
@@ -7625,8 +7887,8 @@ impl World {
                 e.race == crate::entity::ACTOR_RACE_PLAY,
             );
             // 死亡标记（C# `Die()` 的 `Death = true`）
-            let now = self.clock_ms;
-            if let Some(e) = self.entities.get_mut(id) {
+            let now = sim.clock_ms;
+            if let Some(e) = access.get_mut(id) {
                 e.life_cycle.death = true;
                 // `BaseObject.cs:323`：`Death = true; DeathTick = HUtil32.GetTickCount();`
                 e.life_cycle.death_tick = now;
@@ -7640,11 +7902,11 @@ impl World {
             //   `Death/DeathTick` 置位等价完成，这里只补门掩码（顺序 = oracle：先通用后掩码）。
             // - `WallStructure.Die()`（`WallStructure.cs:42-45`）：**只** `base.Die()`；格子恢复
             //   留到下一 tick 的 `WallStructure.Run`（§2.4），这里只同步 `unit.death`。
-            let race = self.entities.get(id).map_or(0, |e| e.race);
+            let race = access.get(id).map_or(0, |e| e.race);
             if matches!(race, 110 | 111) {
-                if let Some(b) = self.entities.get(id).and_then(|e| e.castle_binding) {
+                if let Some(b) = access.get(id).and_then(|e| e.castle_binding) {
                     let mut events: Vec<crate::castle::StructureEvent> = Vec::new();
-                    if let Some(castle) = self.castles.get_mut(b.castle_index) {
+                    if let Some(castle) = sim.castles.get_mut(b.castle_index) {
                         if let Some(unit) = castle.defense_unit_mut(b.role) {
                             unit.hp = 0;
                             if race == 110 {
@@ -7655,7 +7917,7 @@ impl World {
                         }
                     }
                     for event in events {
-                        self.apply_castle_map_event(map_id, &event);
+                        Self::apply_castle_map_event_impl(sim, map_id, &event);
                         record.castle_structures.push(CastleStructureAt {
                             castle_index: b.castle_index,
                             map_id,
@@ -7669,8 +7931,8 @@ impl World {
             // （`:1975-1977`）⇒ 死亡者立即退组；团长死亡 ⇒ 逐成员 `LeaveGroup` 后整组散。
             // 与断线路径（`Disappear()`）的差别：死亡者**仍在线**，它自己的回帧照发（由宿主决定）。
             if group_owner != 0 {
-                let cfg = self.party_cfg.clone();
-                let events = self.party_del_member(group_owner, id, &cfg);
+                let cfg = sim.party_cfg.clone();
+                let events = crate::party::party_del_member_impl(access, group_owner, id, &cfg);
                 record.party_events.extend(events);
             }
             // 掉落结算（oracle `DieDropItems`，`BaseObject.cs:2450-2464`）：
@@ -7695,9 +7957,8 @@ impl World {
             // 子集口径：`ExpHitter.Master != null`（宝宝击杀）不在本骨架；30s/6s 的**墙钟**过期也不做。
             let mut gained = 0;
             if let Some(hitter_id) = exp_hitter {
-                let hitter_master = self.entities.get(hitter_id).and_then(|k| k.master);
-                let hitter_is_player = self
-                    .entities
+                let hitter_master = access.get(hitter_id).and_then(|k| k.master);
+                let hitter_is_player = access
                     .get(hitter_id)
                     .is_some_and(|k| k.race == crate::entity::ACTOR_RACE_PLAY);
                 // oracle `KillFunc`（`BaseObject.cs:2434-2444`）：`ExpHitter.Master != null` ⇒
@@ -7714,7 +7975,7 @@ impl World {
                 for winner in winners {
                     // oracle `KillTargetTrigger` → `GainExp`：每名 `RM_PLAYERKILLMONSTER`
                     // 获得者独立跑一次 `CalcGetExp` + `GainExp`（组队分配见 [`World::gain_exp`]）。
-                    let amount = self.gain_exp(winner, mon_exp, record);
+                    let amount = Self::gain_exp_impl(access, sim, winner, mon_exp, record);
                     if winner == primary {
                         gained = amount;
                     }
@@ -7736,16 +7997,13 @@ impl World {
                 // 两条件同时成立时 oracle 会执行**两次** `DropUseItems`；本骨架的 Play 实体
                 // 不置 `Master`（`PlayCloneObject` ctor 也不置）⇒ 实际互斥，单次调用与
                 // oracle 等价（相位/触发点登记见 T-81）。
-                let hitter_is_actor =
-                    exp_hitter
-                        .and_then(|h| self.entities.get(h))
-                        .is_some_and(|h| {
-                            h.master.is_some() || h.race == crate::entity::ACTOR_RACE_PLAY
-                        });
-                let fight_zone = self.maps.get(map_id).is_some_and(|m| m.is_fight_zone());
-                let animal = self.entities.get(id).is_some_and(|x| x.ai.animal);
+                let hitter_is_actor = exp_hitter.and_then(|h| access.get(h)).is_some_and(|h| {
+                    h.master.is_some() || h.race == crate::entity::ACTOR_RACE_PLAY
+                });
+                let fight_zone = sim.maps.get(map_id).is_some_and(|m| m.is_fight_zone());
+                let animal = access.get(id).is_some_and(|x| x.ai.animal);
                 if hitter_is_actor && !fight_zone && !animal {
-                    let deleted = crate::death_drop::drop_use_items_on_death(self, id);
+                    let deleted = crate::death_drop::drop_use_items_on_death_impl(access, sim, id);
                     if !deleted.is_empty() {
                         record.death_use_item_drops.push((id, deleted));
                     }
@@ -7761,31 +8019,30 @@ impl World {
                 // `ExpHitter.Master` 存在时是主人（`KillFunc` 把消息发给 Master），
                 // 否则是 `ExpHitter` 本人。**不是**死者（`killObject`）。
                 let kill_trigger_id =
-                    exp_hitter.and_then(|h| self.entities.get(h).map(|h| h.master.unwrap_or(h.id)));
-                let kill_trigger = kill_trigger_id.and_then(|k| self.entities.get(k));
+                    exp_hitter.and_then(|h| access.get(h).map(|h| h.master.unwrap_or(h.id)));
+                let kill_trigger = kill_trigger_id.and_then(|k| access.get(k));
                 let no_item = kill_trigger.is_some_and(|k| k.no_item);
                 let killer_map_id = kill_trigger.map(|k| k.map_id);
-                let killer_map = killer_map_id.and_then(|m| self.maps.get(m));
+                let killer_map = killer_map_id.and_then(|m| sim.maps.get(m));
                 let map_no_drop = killer_map.is_some_and(|m| m.no_drop_item());
                 let killer_fight_zone = killer_map.is_some_and(|m| m.is_fight_zone());
                 // `:1788-1793 AttackBaseObject = killObject.Master ?? killObject`——human/monster
                 // 门由**死者侧**的 `AttackBaseObject.Race` 选（不是击杀者；死者是 Play 但
                 // `Master` 非 Play 时仍走 `KillByMonstDropUseItem`）。
-                let attack_base_race_play = match self.entities.get(id).and_then(|e| e.master) {
+                let attack_base_race_play = match access.get(id).and_then(|e| e.master) {
                     None => true,
-                    Some(m) => self
-                        .entities
+                    Some(m) => access
                         .get(m)
                         .is_none_or(|e| e.race == crate::entity::ACTOR_RACE_PLAY),
                 };
                 let kill_gate = if attack_base_race_play {
-                    self.kill_by_human_drop_use_item
+                    sim.kill_by_human_drop_use_item
                 } else {
-                    self.kill_by_monst_drop_use_item
+                    sim.kill_by_monst_drop_use_item
                 };
                 if hitter_is_actor && !killer_fight_zone && (!no_item || !map_no_drop) && kill_gate
                 {
-                    let _ = crate::death_drop::drop_use_items_on_death(self, id);
+                    let _ = crate::death_drop::drop_use_items_on_death_impl(access, sim, id);
                 }
             }
             record.deaths.push((id, placed, gold, exp_hitter, gained));
@@ -7793,17 +8050,23 @@ impl World {
             // 之后、`if (ZilKillCount > 0)` 时抽 `(Random(20)+4)*1000`，随后**无条件** `-= 1`。
             // 抽数落在 `crates/world/src/monai.rs`（`monster_ai` 组），本处只是调用点。
             if !is_play {
-                crate::monai::zil_kin_zombi_die(self, id);
+                crate::monai::zil_kin_zombi_die_impl(access, sim, id);
             }
             // **M3⑨ 主人死/幽灵自投递**：oracle `PlayObject.Die()` 尾
             // （`src/M2Server/Player/PlayObject.cs:1993-1996`）在 `base.Die()`（掉落）**之后**
             // `SendSelfDelayMsg(RM_MASTERDIEMUTINY, 0,0,0,0,"",1000)`（玩家 `Race == Play` 的
             // `Die()` override；怪物走 `BaseObject.Die()` 不发）。1s 后由本 tick 的自投递段
             // 触发 `ProcessSlaveMutiny`。
-            if is_play && self.slave_self_delay_enabled {
-                self.send_master_die_mutiny(id);
+            if is_play && sim.slave_self_delay_enabled {
+                crate::slave::send_master_die_mutiny_impl(access, sim, id);
             }
         }
+    }
+
+    /// 旧 facade 入口（测试/内部调用）：委托 [`Self::settle_deaths_impl`]。
+    #[allow(dead_code)] // tick 走两段系统；本入口保留给测试与 P5 清理前的旧调用面
+    fn settle_deaths(&mut self, record: &mut TickRecord, only_players: bool) {
+        Self::settle_deaths_impl(&mut self.entities, &mut self.sim, record, only_players)
     }
 
     /// 一次攻击结算（`_Attack`）。
@@ -8861,15 +9124,72 @@ mod tests {
                 TickStage::Clock,
                 TickStage::SimHiterSnapshot,
                 TickStage::SimExpireHitters,
+                TickStage::SimSettleDeaths,
                 TickStage::SimExtraAbil,
                 TickStage::SimMapEvents,
                 TickStage::SimPlayerRunExpiry,
                 TickStage::SimDup,
                 TickStage::OutputDrain,
                 TickStage::TailSuperManRefill,
+                TickStage::TailPlayerDeaths,
                 TickStage::OutputAoi
             ],
             "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
+        );
+    }
+
+    /// **P3b**：死亡结算的「退组 → 记录死亡」顺序语义（oracle `Die()`：`DelMember` 在置
+    /// `Death` 之后、掉落/经验之前；本仓同一实现点里先 `party_del_member` 再 push `deaths`）。
+    ///
+    /// 牙：① 删 `party_del_member_em_impl` 里的 `group_members.remove(pos)`（退组那一步）⇒
+    /// 团长成员表仍含死者、`party_events` 无 `GroupCancel` ⇒ 红；② 删 `death_settled = true`
+    /// 写回 ⇒ 第二次 tick 重复结算（`deaths` 非空）⇒ 红。
+    #[test]
+    fn settle_deaths_removes_member_from_group_and_latches_once() {
+        let mut w = World::new(16, 16);
+        let leader = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "leader", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        let member = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "member", 6, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 0;
+            e.max_hp = 100;
+            e.group_owner = leader;
+            e
+        });
+        // 本仓只有团长持成员表（`party.rs`）。
+        w.entities.get_mut(leader).unwrap().group.group_members = vec![leader, member];
+
+        let rec = w.tick();
+        assert!(
+            rec.deaths.iter().any(|d| d.0 == member),
+            "玩家死亡在 tick_tail 的 TailPlayerDeaths 结算"
+        );
+        assert!(
+            w.entities.get(member).unwrap().death,
+            "死亡位（LifeCycle.death）必须写回"
+        );
+        let g = w.entities.get(leader).unwrap();
+        assert!(
+            !g.group_members.contains(&member),
+            "死亡者必须先被移出团长成员表（DelMember 先于掉落/经验）"
+        );
+        assert!(
+            rec.party_events
+                .iter()
+                .any(|e| matches!(e, crate::party::PartyEvent::GroupCancel { target } if *target == leader)),
+            "散组事件必须进 record.party_events"
+        );
+        // 一次性闩锁：`death_settled` 写回后第二次 tick 不得重复结算。
+        let rec2 = w.tick();
+        assert!(
+            rec2.deaths.is_empty(),
+            "death_settled 写回后不得重复结算（删该写回即红）"
         );
     }
 

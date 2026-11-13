@@ -151,6 +151,7 @@ pub(crate) fn drop_use_items_on_death_impl<A: crate::entity::EntityAccess>(
 }
 
 /// 旧入口（facade）：委托 [`drop_use_items_on_death_impl`]。
+#[allow(dead_code)] // 段路径走 `_impl`；测试与 P5 清理前保留 facade 入口
 pub(crate) fn drop_use_items_on_death(
     world: &mut World,
     actor_id: i32,
@@ -339,7 +340,7 @@ mod tests {
     fn settle_deaths_pvp_calls_drop_use_items_twice() {
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(0, 10, 10));
-        let killer = w.add_entity(player(1, 11, 10));
+        let killer = w.add_entity(player(0, 11, 10));
         w.item_catalog = vec![std_item(1, 45, 4, 100, 8)];
         {
             let e = w.entities.get_mut(p).unwrap();
@@ -369,7 +370,7 @@ mod tests {
         // 对照：`KillByHumanDropUseItem=false` ⇒ 只一轮。
         let mut w = World::new(32, 32);
         let p = w.add_entity(player(0, 10, 10));
-        let killer = w.add_entity(player(1, 11, 10));
+        let killer = w.add_entity(player(0, 11, 10));
         w.item_catalog = vec![std_item(1, 45, 4, 100, 8)];
         {
             let e = w.entities.get_mut(p).unwrap();

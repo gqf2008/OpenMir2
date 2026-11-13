@@ -31,7 +31,7 @@
    **P0+P1 中间态 = 4 个 `SimState` 搬移窗口 / tick**（Clock / Snapshot / Drain / AOI）、
    **P2 = 8 个**（head 6：Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
    SimPlayerRunExpiry / OutputDrain；tail 2：TailSuperManRefill / OutputAoi）、
-   **P2b = 9 个**（再 +`SimMapEvents`）、**P3a = 10 个**（再 +`SimDup`）。
+   **P2b = 9 个**、**P3a = 10 个**（+`SimDup`）、**P3b = 12 个**（再 +`SimSettleDeaths`/`TailPlayerDeaths`）。
    **P7 收口目标才是 2 个**（head 一个、tail 一个：
    其余段全部系统化后 head 只跑一次）。每个迁移批次只保证哨兵覆盖**该批实际存在**的窗口，
    不宣称已收敛到 2。哨兵让下一次 tick 立即 fail-fast，而不是在 `SimState::default()` 上空转。
@@ -333,7 +333,7 @@ F5 的事实：段系统 panic 时 `facade.sim` 已被 `mem::take` 成 `Default`
    P0+P1 = **4**（`Clock` / `SimHiterSnapshot` / `OutputDrain` / `OutputAoi`）、
    P2 = **8**（head 6 = Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
    SimPlayerRunExpiry / OutputDrain；tail 2 = TailSuperManRefill / OutputAoi）、
-   **P2b = 9**（+`SimMapEvents`，head 7 + tail 2）、**P3a 交付 head = 10**（+`SimDup`，head 8 + tail 2）。
+   **P2b = 9**（+`SimMapEvents`，head 7 + tail 2）、**P3a = 10**（+`SimDup`，head 8 + tail 2）、**P3b 交付 head = 12**（+`SimSettleDeaths`/`TailPlayerDeaths`，head 9 + tail 3）。
    **P7 收口目标才是 2 个**（head 一个、tail 一个：其余段全部系统化后 head 只跑一次）。
    任何一批都**不**宣称已收敛到 2——那是 P7 的验收项。head 边界一次移入 `SimState`、
    `TickRecordRes`、`TickEntityIds`（`SlotTable` 按 D1 为常驻资源，不参与搬移），tail 边界同形。
