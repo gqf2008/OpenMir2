@@ -386,12 +386,23 @@ pub fn del_target_creature(world: &mut World, actor_id: i32) {
 /// 与 [`del_target_creature`] 分开：oracle 里 `ClearTargetCreat` 用于 `Run()` 的目标清理段
 /// （`BaseObject.Base.cs:111-118`）、`DelTargetCreat` 用于其它路径，两者不同源。
 pub fn clear_target_creature(world: &mut World, actor_id: i32, target_id: i32) {
-    if let Some(b) = world.entities.map_binding_mut(actor_id) {
+    clear_target_creature_impl(&mut world.entities, actor_id, target_id);
+}
+
+/// **P6a2b**：`clear_target_creature` 的 facade/段共用实现（`EntityAccess` 形态）。
+///
+/// `SimNpc` 段的 `base.Run` 目标清理段（[`target_cret_cleanup_impl`]）与怪物 AI 路径共用。
+pub(crate) fn clear_target_creature_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    actor_id: i32,
+    target_id: i32,
+) {
+    if let Some(b) = access.map_binding_mut(actor_id) {
         if let Some(i) = b.visible_actors.iter().position(|v| v.target == target_id) {
             b.visible_actors.remove(i);
         }
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.ai.target_creature = None;
         e.ai.target_x = -1;
         e.ai.target_y = -1;
@@ -4392,12 +4403,24 @@ fn crazy_mode_expiry(world: &mut World, actor_id: i32) {
 /// [`base_object_run_monster`] 之前调用本函数（顺序 = `CrazyMode` 到期 → HolySeize 到期 → `BaseObject.Run`）。
 /// `NormNpc.Run`（守卫等）同样 `base.Run()` 进 `AnimalObject.Run` ⇒ 守卫分支也调用本函数。
 pub fn animal_run(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    let expired = world.entities.get(actor_id).is_some_and(|e| {
+    let World { entities, sim, .. } = world;
+    animal_run_impl(entities, sim, actor_id);
+}
+
+/// **P6a2b**：`animal_run` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// `SimNpc` 段的每 NPC 尾段与 [`monster_ai_tick`] 的每怪尾段都走本函数（一次移植、两处复用）。
+pub(crate) fn animal_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    let expired = access.get(actor_id).is_some_and(|e| {
         e.ai.holy_seize && (now - e.ai.holy_seize_tick) > e.ai.holy_seize_interval
     });
     if expired {
-        break_holy_seize_mode(world, actor_id);
+        break_holy_seize_mode_impl(access, sim, actor_id);
     }
 }
 
@@ -5005,7 +5028,7 @@ fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
 ///   `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)` 没有 race 门**（`BaseObject.cs:706-708`）
 ///   ⇒ 带 `ShowHp`（心灵启示 28）的怪/NPC 会向 ±12 玩家广播 `SM_HEALTHSPELLCHANGED(53)`。
 ///   本函数把每次 `HealthSpellChanged()` 调用记进
-///   [`World::record_show_hp_health_change`]（仅 `show_hp == true` 时），宿主出帧。
+///   [`crate::world::SimState::pending_show_hp_health_changes`]（仅 `show_hp == true` 时），宿主出帧。
 /// - 体力点段 `:105-110`：`HealthTick < -HealthFillTime && HP > 1` ⇒ `HP -= 1; HealthTick += HealthFillTime`。
 ///   普通怪的 `HealthTick` 只增不减⇒该支对怪物不可达；照抄是为了同一份 `BaseObject.Run` 语义
 ///   （将来玩家/消费点接进来时不需要再改）。
@@ -5027,37 +5050,55 @@ fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
 /// 改坏必红：把 `HealthFillTime` 门（或 `HP > 1` 门）拆掉⇒`base_recovery_*`/
 /// `health_tick_negative_cost_is_clamped` 必红（见 `tests/parity/world/monster-ai-host-20261013`）。
 pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
+    let World { entities, sim, .. } = world;
+    base_object_run_monster_impl(entities, sim, actor_id);
+}
+
+/// **P6a2b**：`base_object_run_monster` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// `SimNpc` 段的每 NPC 尾段与 [`monster_ai_tick`] 的每怪尾段都走本函数（一次移植、两处复用）。
+/// AOI 的可见刷新经 [`crate::aoi::update_monster_visible`]（同一份格扫算法），由
+/// [`crate::entity::AoiAccess`] 把 `EntityAccess` 适配成 `AoiStore`。`SimState` 侧的读/写
+/// （`pending_show_hp_health_changes`、`make_ghost_time` 等）与 facade 形态逐项同源。
+pub(crate) fn base_object_run_monster_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
     // `BaseObject.Run` 的**消息段**（`BaseObject.Base.cs:26-30`）按 FIFO 出队。本骨架有两条队列：
     // `RM_UPDATEVIEWRANGE`（上一 tick 玩家扫描末尾投递）与 `RM_STRUCK`（本 tick 攻击入队）。
     // oracle 只有一条 `MsgQueue`；view update 的入队时刻严格早于本 tick 的战损消息 ⇒ 先消费
     // view update 与 oracle FIFO 同序。两者消费都不取随机数，也不读对方写的字段 ⇒ 即使交错也无状态差。
-    let now_ms = world.clock_ms;
-    let pending_views: Vec<i32> = match world.entities.get_mut(actor_id) {
+    let now_ms = sim.clock_ms;
+    let pending_views: Vec<i32> = match access.get_mut(actor_id) {
         Some(e) => std::mem::take(&mut e.ai.pending_view_updates),
         None => return,
     };
     for viewer_id in pending_views {
-        let _ =
-            crate::aoi::update_monster_visible(&mut world.entities, actor_id, viewer_id, now_ms);
+        let _ = crate::aoi::update_monster_visible(
+            &mut crate::entity::AoiAccess(&mut *access),
+            actor_id,
+            viewer_id,
+            now_ms,
+        );
     }
     // 再把入队的 `RM_STRUCK` 出队，
     // 逐个 `Operate(RM_STRUCK) → Struck`（`AnimalObject.cs:118-124`）。本骨架用
     // [`crate::entity::AnimalState::pending_struck`] 承载队列（入队处 = `World::attack_once`）。
-    let pending: Vec<crate::entity::StruckMsg> = match world.entities.get_mut(actor_id) {
+    let pending: Vec<crate::entity::StruckMsg> = match access.get_mut(actor_id) {
         Some(e) => std::mem::take(&mut e.ai.pending_struck),
         None => return,
     };
     // `CloneMonster.Operate` 覆写了 `Operate(RM_STRUCK)`（`Clone.cs:14-30`）：
     // 恒 `return false` ⇒ `AnimalObject.Operate` 的 `SetLastHiter`/`Struck` 都不执行；
     // 只做 `Master.WAbil.MP -= (ushort)wParam`。普通怪照旧。
-    let is_clone = world
-        .entities
+    let is_clone = access
         .get(actor_id)
         .is_some_and(|e| e.race == crate::special_monster::RACE_CLONE_MONSTER);
     for msg in pending {
         if is_clone {
-            crate::special_monster::clone_operate(
-                world,
+            crate::special_monster::clone_operate_impl(
+                access,
                 actor_id,
                 crate::special_monster::RM_STRUCK,
                 msg.w_param,
@@ -5066,21 +5107,21 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
             continue;
         }
         // oracle `if (processMsg.ActorId == ActorId && struckObject != null)`：命中者已不在场 ⇒ 跳过。
-        if world.entities.get(msg.hiter).is_some() {
-            animal_struck(world, actor_id, msg.hiter);
+        if access.get(msg.hiter).is_some() {
+            animal_struck_impl(access, sim, actor_id, msg.hiter);
         }
     }
     // `BaseObject.Base.cs:32-36`：`if (SuperMan) { HP = MaxHP; MP = MaxMP; }`（在 `!Death` 之前）。
     // **置位口径**：`mongen::apply_monster_class_constants` 给 NormNpc 派生 race 置位
     // （守卫 11/12/20/112、城门 110、城墙 111 = `NormNpc.cs:41` 的 ctor），race 120 由
     // `SoccerBall` ctor 置位；固定 NPC（`npc::insert_npc`）与商人（`merchant::insert_merchant`）
-    // 的 `NormNpc.Run → base.Run` 等价点各自调用 [`Entity::run_super_man_refill`]。
+    // 的 `NormNpc.Run → base.Run` 等价点各自调用 [`EntityMut::run_super_man_refill`]。
     // `Die()` 首行早退（`BaseObject.Base.cs:318-322`）的等价物在 `World::settle_deaths`。
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
+    if let Some(mut e) = access.get_mut(actor_id) {
         e.run_super_man_refill();
     }
-    let now = world.clock_ms;
-    let state = world.entities.get(actor_id).map(|e| {
+    let now = sim.clock_ms;
+    let state = access.get(actor_id).map(|e| {
         (
             e.death,
             e.can_re_alive,
@@ -5105,40 +5146,40 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         //
         // 两条门都是**严格 >**。`GetMonstersZenTime` 读全服 `PlayObjectCount`
         // （`WorldServer.MonGen.cs:168-190`）⇒ 这里数 `race == Play` 的实体（宿主同口径）。
-        let play_object_count = world
-            .entities
-            .iter_ref()
-            .filter(|x| x.race == ACTOR_RACE_PLAY)
+        let play_object_count = access
+            .order_ids()
+            .into_iter()
+            .filter(|id| access.get(*id).is_some_and(|x| x.race == ACTOR_RACE_PLAY))
             .count() as i32;
         // `get_monsters_zen_time` 只读这两项；其余字段用 oracle 构造缺省（不参与计算）。
         let cfg = crate::mongen::MonGenConfig {
-            user_full: world.mon_gen_user_full,
-            zen_fast_step: world.mon_gen_zen_fast_step,
+            user_full: sim.mon_gen_user_full,
+            zen_fast_step: sim.mon_gen_zen_fast_step,
             ..crate::mongen::MonGenConfig::default()
         };
         let gate = crate::mongen::monster_death_gate(
             can_re_alive,
             has_mon_gen,
             zen_time,
-            world.make_ghost_time,
+            sim.make_ghost_time,
             play_object_count,
             &cfg,
         );
         let now_i32 = i32::try_from(now).unwrap_or(i32::MAX);
         let death_i32 = i32::try_from(death_tick).unwrap_or(i32::MAX);
         if crate::mongen::monster_due_for_ghost(death_i32, gate, now_i32) {
-            make_ghost(world, actor_id);
+            make_ghost_impl(access, sim, actor_id);
         }
         // 死亡实体不再回血（oracle 同行）。oracle 的 VerifyTick 段在 `if (!Death)` **之外** ⇒
         // 死者同样刷新格子时间（`BaseObject.Base.cs:220-228`）。
-        world.verify_map_time(actor_id);
+        crate::world::World::verify_map_time_impl(access, sim, actor_id);
         return;
     }
-    let Some(e) = world.entities.get(actor_id) else {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
-    let health_fill_time = world.health_fill_time;
-    let spell_fill_time = world.spell_fill_time;
+    let health_fill_time = sim.health_fill_time;
+    let spell_fill_time = sim.spell_fill_time;
     let recovery_tick = ((now - e.auto_recovery_tick) / 20) as i32;
     let mut health_tick = e.health_tick + recovery_tick;
     let mut spell_tick = e.spell_tick + recovery_tick;
@@ -5189,11 +5230,11 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
         // `BaseObject.Base.cs:109` 的 `HealthSpellChanged()`。
         health_spell_calls = health_spell_calls.saturating_add(1);
     }
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = access.get_mut(actor_id) {
         e.vitals.hp = hp;
         e.vitals.mp = mp;
     }
-    if let Some(r) = world.entities.recovery_mut(actor_id) {
+    if let Some(r) = access.recovery_mut(actor_id) {
         r.health_tick = health_tick;
         r.spell_tick = spell_tick;
         r.auto_recovery_tick = now;
@@ -5202,25 +5243,32 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
     // `SendRefMsg`（不去重）⇒ 逐次记录，宿主逐条广播。
     if show_hp && health_spell_calls > 0 {
         for _ in 0..health_spell_calls {
-            world.record_show_hp_health_change(actor_id, hp, mp);
+            sim.pending_show_hp_health_changes.push((actor_id, hp, mp));
         }
     }
-    target_cret_cleanup(world, actor_id, now);
+    target_cret_cleanup_impl(access, actor_id, now);
     // `BaseObject.Base.cs:223-228`：`(now - VerifyTick) > 30s` ⇒ `Envir.VerifyMapTime(...)`
     // 刷新本格 `CellObject.AddTime`（静止怪/卫士/NPC 不被 60s 过期逐出）。不抽随机数。
-    world.verify_map_time(actor_id);
+    crate::world::World::verify_map_time_impl(access, sim, actor_id);
 }
 
-/// `BaseObject.Run()` 的 `TargetCret` 清理段（`BaseObject.Base.cs:111-118`）。
-fn target_cret_cleanup(world: &mut World, actor_id: i32, now: i64) {
-    let Some(e) = world.entities.get(actor_id) else {
+/// **P6a2b**：`target_cret_cleanup` 的段内实现（`EntityAccess` 形态）。
+///
+/// 旧 facade 版本（`fn target_cret_cleanup(&mut World, …)`）在 `base_object_run_monster`
+/// 全量 port 后已无调用方 ⇒ 删除（不留第二份不可达实现）。
+fn target_cret_cleanup_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    actor_id: i32,
+    now: i64,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     let Some(target_id) = e.ai.target_creature else {
         return;
     };
     let (map_id, x, y, focus) = (e.map_id, e.x, e.y, e.ai.target_focus_tick);
-    let invalid = match world.entities.get(target_id) {
+    let invalid = match access.get(target_id) {
         None => true,
         Some(t) => {
             (now - focus) > 30_000
@@ -5232,7 +5280,7 @@ fn target_cret_cleanup(world: &mut World, actor_id: i32, now: i64) {
         }
     };
     if invalid {
-        clear_target_creature(world, actor_id, target_id);
+        clear_target_creature_impl(access, actor_id, target_id);
     }
 }
 
@@ -5252,8 +5300,20 @@ fn target_cret_cleanup(world: &mut World, actor_id: i32, now: i64) {
 /// （`Invisible` 尸体仍满足 `now - DeathTick > makeGhostTime`）⇒ `GhostTick` 被反复刷新、
 /// `DisappearA` 反复执行。本函数同样重复执行（幂等：已摘格时 `disappear_a` 返回 false）。
 pub(crate) fn make_ghost(world: &mut World, actor_id: i32) {
-    let now = world.clock_ms;
-    if let Some(e) = world.entities.get_mut(actor_id) {
+    let World { entities, sim, .. } = world;
+    make_ghost_impl(entities, sim, actor_id);
+}
+
+/// **P6a2b**：`make_ghost` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 格子面的 `DisappearA` 走 [`crate::world::World::disappear_a_impl`]（同一份摘格算法）。
+pub(crate) fn make_ghost_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let now = sim.clock_ms;
+    if let Some(e) = access.get_mut(actor_id) {
         if e.life_cycle.can_re_alive {
             // `Invisible = true;`——尸体保留、仍可复活。
             e.flags.invisible = true;
@@ -5263,7 +5323,7 @@ pub(crate) fn make_ghost(world: &mut World, actor_id: i32) {
         }
         e.life_cycle.ghost_tick = now;
     }
-    world.disappear_a(actor_id);
+    crate::world::World::disappear_a_impl(access, sim, actor_id);
 }
 
 /// 按**实体槽位顺序**对场上所有怪物跑一次 [`monster_run`]（`ProcessMonsters` 的单线程等价物）。
@@ -7819,8 +7879,8 @@ mod tests {
     /// `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)`（`BaseObject.cs:706-708`）**没有 race 门**
     /// ⇒ 带 `ShowHp` 的怪/NPC 在恢复段每次调用都要记一条 53 广播事件。
     ///
-    /// 红检：删掉 `base_object_run_monster` 里的 `record_show_hp_health_change` 循环
-    /// ⇒ 第一条断言红；去掉 `show_hp` 门（无条件记）⇒ 第二条断言红。
+    /// 红检：删掉 `base_object_run_monster_impl` 里写 `SimState::pending_show_hp_health_changes`
+    /// 的循环 ⇒ 第一条断言红；去掉 `show_hp` 门（无条件记）⇒ 第二条断言红。
     #[test]
     fn show_hp_monster_recovery_records_53_broadcast_events() {
         let mut world = World::new(32, 32);

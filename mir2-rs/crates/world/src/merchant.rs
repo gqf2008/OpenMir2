@@ -1821,21 +1821,33 @@ pub(crate) fn map_random_move_xy(
 /// **`pub(crate)`**：`Merchant.Run`（`merchant.rs`）与固定 NPC 的 `Merchant` 类 Run
 /// （`npc.rs::merchant_body_run`，`CastleOfficial : Merchant`）**共用**本函数。
 pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
-    let Some(e) = world.entities.get(actor_id) else {
+    let World { entities, sim, .. } = world;
+    map_random_move_impl(entities, sim, actor_id);
+}
+
+/// **P6a2b**：`map_random_move` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// `Merchant.Run`（[`merchant_run`]）与固定 NPC 的 `Merchant.Run`（
+/// `crate::npc::merchant_body_run` → `SimNpc` 段）都走本函数——一处定义、两处消费，无第二份拷贝。
+pub(crate) fn map_random_move_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
         return;
     };
     let (map_id, from_x, from_y) = (e.map_id, e.x, e.y);
     let cert_cell_type = crate::world::entity_cell_type(&e);
-    let Some(map) = world.maps.get(map_id) else {
+    let Some(map) = sim.maps.get(map_id) else {
         return;
     };
     let (w, h) = (map.width, map.height);
     // 首两抽（oracle `BaseObject.cs:1235-1236`）——与魔号 21 共用同一抽数点。
-    let (nx, ny) = map_random_move_xy(&mut world.rng, w, h);
+    let (nx, ny) = map_random_move_xy(&mut sim.rng, w, h);
     // `SpaceMove`（`BaseObject.cs:1128`）：以 `(nX, nY)` 为起点找可走格；起点即墙时
     // `SpaceMoveGetRandXY` 进移位环继续抽数（201 轮上限）。
     let found = {
-        let World { sim, .. } = &mut *world;
         let map = &sim.maps[map_id];
         crate::slave::space_move_get_rand_xy(&mut sim.rng, w, h, nx, ny, |x, y| {
             map.get_cell_info(x, y).1
@@ -1845,8 +1857,8 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
         // oracle 回滚到旧坐标（`BaseObject.cs:1147-1153`）：坐标不动。
         return;
     };
-    let now = world.clock_ms;
-    let moved = world.maps[map_id].move_object(
+    let now = sim.clock_ms;
+    let moved = sim.maps[map_id].move_object(
         MoveRequest {
             from_x,
             from_y,
@@ -1860,7 +1872,7 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
         |_| false,
     );
     if moved {
-        if let Some(t) = world.entities.transform_mut(actor_id) {
+        if let Some(t) = access.transform_mut(actor_id) {
             t.x = nx;
             t.y = ny;
         }

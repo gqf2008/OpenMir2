@@ -1077,14 +1077,45 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   （`monai::animal_run` / `base_object_run_monster` / `merchant::map_random_move`）在写集内。
 >   需先把 `npc.rs` 加入写集再落地。
 >
-> **段数口径（P6a2 交付 head；单位 = 20 阶段）**：已系统化 **16 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
-> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5），**余 4 段：`#1 Command` /
-> `#10 SimMonsterAi` / `#11 SimNpc` / `#12 SimMerchant`**（其中 #11 待扩写集到 `npc.rs`）。
+> **S4d-3/P6a2b 落地登记（2026-11-14，#11 `SimNpc`）**：P6a/P6a2 的最后一个 blocked 段按 Leader
+> 裁决把 `npc.rs` 加入写集后落地；本批交付 **#11**。
+> - **#11 `SimNpc`（已系统化）**：段系统 `sim_npc_stage_system`（`TickStage::SimNpc`，#11）；段位 =
+>   `tick_head` 原 `let n = self.npc_tick();` 那一行（`SimBuff` 之后、`SimMerchant` 之前；oracle
+>   `MerchantProcessor.ExecuteInternal` 先 `ProcessNpcs` 后 `ProcessMerchants` ⇒ RNG 消费者序不变）。
+>   实现体 = `npc::npc_tick_impl`（`EntityAccess` + `StructuralAccess` + `&mut SimState`）；facade
+>   `World::npc_tick` 退化为「驱动该段 + 取 `StageOut::npc`」，签名与调用点不变。
+> - **尾段链一并 port**：`npc_run` / `guild_official_run_body` / `merchant_body_run` → `*_impl`
+>   （`npc.rs`）；`monai::animal_run` / `base_object_run_monster` / `make_ghost` /
+>   `target_cret_cleanup` / `clear_target_creature`（`monai.rs`）；`merchant::map_random_move`
+>   （`merchant.rs`）；`disappear_a_impl`（`world.rs`，`VerifyMapTime` 复用既有 P4 实现）。
+>   `base_object_run_monster_impl` 的 `RM_UPDATEVIEWRANGE` 段经 `entity::AoiAccess` 适配器复用
+>   `aoi::update_monster_visible`（同一份格扫算法，不复制第二份）。
+> - **结构段**：Ghost 60s 过期支 `QuestNpcList.RemoveAt(i)` 的等价物是 `remove` 实体 ⇒ `SimNpc`
+>   声明 `Structural`；facade 在段边界后 `refresh_views()`（`World::run_npc_stage`），否则读缓存
+>   仍看得到已删实体。
+> - **写集**：`EntityMutData` 的 20 组件 + `Transform`（`MapRandomMove` 落点）+ `MapBinding`
+>   （`VerifyMapTime` / `ClearTargetCreat` / `DisappearA` / 可见刷新）+ `Recovery`（`base.Run`
+>   恢复段）；读集为 `StageAccess` 的 24 组件全集。`EntityAccess` 新增 `ai_mut`（AOI 适配器用）。
+> - **RNG**：本段抽数（`GuildOfficial.Run` 的 `Random(40)`/`RandomByte(8)`/`Random(30)`、
+>   `Merchant.Run` 的 `Random(50)`/`RandomByte(8)`/`Random(50)`、`BoCanMove` 支的
+>   `MapRandomMove` 两抽 + 移位环）；段位未动 ⇒ 消费者序不变。六副既有 NPC 夹具 base/head
+>   逐点 trace：83 行、前四列（seq/kind/max/result）`diff` 0 行；site 列只有 `npc.rs` 行号位移
+>   （`*_impl` 的 run 体 +48/+53、两副单测自身的复算行 +55/+108；`entity.rs` 的构造 4 抽与
+>   `combat.rs` 的攻击抽点不变）。
+> - **牙**：删 `HeadRunner` 的 `SimNpc` 注册 ⇒ `tick_stage_registrations_are_wired_in_order`
+>   panic（段序牙已含三段）；新增 `npc_stage_can_move_branch_writes_transform`（`BoCanMove` 支的
+>   `Transform` 回写 + 取数对齐）；既有
+>   `player_attack_npc_produces_name_color_through_base_run` 覆盖尾段
+>   `base_object_run_monster`（删尾段调用 ⇒ 656 缺失 ⇒ 红）。
+>
+> **段数口径（P6a2b 交付 head；单位 = 20 阶段）**：已系统化 **17 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
+> #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5 + P6a2b 的 #11），**余 3 段：
+> `#1 Command` / `#10 SimMonsterAi` / `#12 SimMerchant`**。
 
-> 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
+> 段序牙 `tick_stage_registrations_are_wired_in_order` 已含三段（`SimBuff` / `SimNpc` 开门后进 trace）。
 
-> **尚未做（以 P6a2 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **4** 段——
-> #1/#10/#11/#12；#11 受 `npc.rs` 写集所限待扩写集）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **尚未做（以 P6a2b 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **3** 段——
+> #1/#10/#12）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 > 段号清单与写集见设计 §2.1/§4。
 
