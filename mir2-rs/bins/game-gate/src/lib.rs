@@ -859,11 +859,12 @@ async fn client_loop(
     //   把这段垃圾以 `GM_DATA` 转发给 GameSvr（极小概率命中某个 `CM_*` 时按该分支规则处置）；
     //   超过 `NomClientPacketSize` 则只记日志、丢帧。
     // - 登录前（`ProcessSessionPacket` 的 `else` 分支）：≥4 字节走 `EDCode.DeCodeString` →
-    //   `ClientLogin`，失败即 `Kick(1)` 剔除；≤2 字节时 `destinationSpan[2..(packetLen-1)]` 越界
-    //   抛异常、被 `ServerManager` 的 catch 吞掉 ⇒ 丢帧、会话存活（对应 `classify_frame` 的
-    //   `frame.len() < 3` ⇒ `Ignore`）。**3 字节与 oracle 不同**：oracle 是 `[2..2]` 空 payload、
-    //   `DeCodeString` 抛 `ArgumentNullException` 被吞（会话存活），这里会进 `handle_login`、
-    //   被 `ClientLogin` 的 `packetLen <= 15` 门判失败而关会话。
+    //   `ClientLogin`，失败即 `Kick(1)` 剔除；≤3 字节都到不了 `ClientLogin` —— 1–2 字节时
+    //   `destinationSpan[2..(packetLen-1)]` 越界（`[2..0]`/`[2..1]`）、3 字节时 `[2..2]` 是空
+    //   payload、被 `DeCodeString(ReadOnlySpan<byte>)` 的 `IsEmpty` 检查抛
+    //   `ArgumentNullException`，两条异常都被 `ServerManager` 的 catch 吞掉（只记日志）
+    //   ⇒ 丢帧、会话存活（对应 `classify_frame` 的 `frame.len() <= 3` ⇒ `Ignore`）。
+    //   3 字节这条的旧实现偏差与修复见卡 `openmir2-game-gate-3byte-prelogin`。
     //
     // 合帧（多帧落进同一次 read）：只按**一帧**处理，剥壳只去掉首 2 字节与最后一个字节，
     // 后续帧的 `#…` 帧头与正文留在解码流里，成为首帧的正文/尾部（例如 say+walk 的第二帧头被
@@ -944,9 +945,9 @@ struct SessionRules {
 /// 帧的**纯判定结果**：`handle_frame` 据此做 I/O，测试可直接断言（不经网络）。
 #[derive(Debug, PartialEq, Eq)]
 enum Classified {
-    /// 登录帧（长度 ≥ 3）：调用方走 `handle_login`。
+    /// 登录帧（长度 ≥ 4）：调用方走 `handle_login`。
     Login,
-    /// 不转发、会话继续：登录前的短帧（oracle 的越界异常被吞）与 1 字节心跳。
+    /// 不转发、会话继续：登录前 ≤3 字节的短帧（oracle 的越界/空 span 异常被吞）与 1 字节心跳。
     Ignore,
     /// 静默丢弃：超长帧 / 速度规则 Drop / 聊天间隔未到。
     Drop,
@@ -1007,10 +1008,12 @@ fn classify_frame(
     if !logged_in {
         // 登录前走 oracle 的 `:671-680` else 分支（直接 `EDCode.DeCodeString`），**没有**
         // 「1 字节 = 心跳」与「< 16 字节 = 异常封包」这两条（那两条在 `HandleLogin` 分支里 `:155-164`）。
-        // `packetLen <= 2`（含 0：`ushort` 下溢）会让 C# 的 `destinationSpan[2..(packetLen-1)]` 越界抛
-        // ArgumentOutOfRangeException，被 `ServerManager.cs:238` 的 catch 吞掉（只记日志）
-        // ⇒ 帧被丢、**会话存活**；这里照此丢弃（不是剔除）。
-        if frame.len() < 3 {
+        // oracle 的 `destinationSpan[2..(packetLen-1)]` 在 `packetLen <= 3` 时全部到不了 `ClientLogin`：
+        // 1–2 字节（含 0：`ushort` 下溢）越界抛 ArgumentOutOfRangeException；3 字节是 `[2..2]` 空 span，
+        // `DeCodeString(ReadOnlySpan<byte>)` 的 `IsEmpty` 检查抛 ArgumentNullException。两条异常都被
+        // `ServerManager.cs:238` 的 catch 吞掉（只记日志）⇒ 帧被丢、**会话存活**；这里照此丢弃
+        // （不是剔除）。≥4 字节才进 `ClientLogin`（失败 ⇒ `Kick(1)`，见 `handle_login`）。
+        if frame.len() <= 3 {
             return Classified::Ignore;
         }
         return Classified::Login;
@@ -1927,6 +1930,111 @@ mod tests {
             2,
             "转发的是第二帧（第一帧必须没写下游）"
         );
+    }
+
+    /// 登录前路径用的 `GateCtx`：`Ignore` 根本不碰下游；`Login` 在 `packetLen` 门上就返回、
+    /// 不发帧（`Downstream` 未 install）。
+    fn prelogin_ctx() -> GateCtx {
+        GateCtx {
+            gate_addr: "127.0.0.1".into(),
+            gate_port: 0,
+            service_id: 0,
+            sessions: Arc::new(Mutex::new(HashMap::new())),
+            indexes: Arc::new(Mutex::new(HashMap::new())),
+            idle: Arc::new(Mutex::new(HashMap::new())),
+            downstream: Downstream::new("127.0.0.1".into(), 0),
+            gate_rules: gate_rules(),
+            nom_client_packet_size: 400,
+        }
+    }
+
+    fn fresh_session() -> SessionRules {
+        SessionRules {
+            chat: rules::ChatThrottle::default(),
+            speed: rules::SpeedState::new(1_000),
+        }
+    }
+
+    /// 登录前 1 字节：oracle `destinationSpan[2..(packetLen-1)]` = `[2..0]` 越界抛
+    /// ArgumentOutOfRangeException，被 `ServerManager.cs:238` 的 catch 吞掉 ⇒ 丢帧、会话存活。
+    /// 登录前的 1 字节**不是**心跳（心跳门在 `HandleLogin` 分支里，登录前走 `else`）。
+    #[tokio::test]
+    async fn prelogin_one_byte_frame_dropped_session_survives() {
+        let ctx = prelogin_ctx();
+        let mut session = fresh_session();
+        let frame = [0x01_u8];
+        assert_eq!(
+            classify_frame(&frame, false, &mut session, &ctx.gate_rules, 400, 7, 1_000),
+            Classified::Ignore,
+            "登录前 1 字节 ⇒ 丢帧（不得进 Login）"
+        );
+        let step = handle_frame(&frame, false, &mut session, &ctx, 7, 0x1234, 1_000)
+            .await
+            .unwrap();
+        assert_eq!(step, Step::Next, "会话必须存活（不得 Close/剔除）");
+    }
+
+    /// 登录前 2 字节：oracle `destinationSpan[2..1]` 越界抛 ArgumentOutOfRangeException，
+    /// 被 catch 吞掉 ⇒ 丢帧、会话存活。
+    #[tokio::test]
+    async fn prelogin_two_byte_frame_dropped_session_survives() {
+        let ctx = prelogin_ctx();
+        let mut session = fresh_session();
+        let frame = b"#1";
+        assert_eq!(
+            classify_frame(frame, false, &mut session, &ctx.gate_rules, 400, 7, 1_000),
+            Classified::Ignore,
+            "登录前 2 字节 ⇒ 丢帧（不得进 Login）"
+        );
+        let step = handle_frame(frame, false, &mut session, &ctx, 7, 0x1234, 1_000)
+            .await
+            .unwrap();
+        assert_eq!(step, Step::Next, "会话必须存活（不得 Close/剔除）");
+    }
+
+    /// 登录前 3 字节（本卡修的偏差）：oracle `destinationSpan[2..2]` 是**空 span**，
+    /// `EDCode.DeCodeString(ReadOnlySpan<byte>)` 的 `IsEmpty` 检查抛 ArgumentNullException，
+    /// 被 `ServerManager.cs:238` 的 catch 吞掉 ⇒ 丢帧、会话存活。
+    /// 旧实现（门 `< 3`）会把它当登录帧送进 `handle_login`，被 `packetLen <= 15` 判失败后关会话。
+    #[tokio::test]
+    async fn prelogin_three_byte_frame_dropped_session_survives() {
+        let ctx = prelogin_ctx();
+        let mut session = fresh_session();
+        let frame = b"#1!";
+        assert_eq!(
+            classify_frame(frame, false, &mut session, &ctx.gate_rules, 400, 7, 1_000),
+            Classified::Ignore,
+            "登录前 3 字节 ⇒ 丢帧（不得进 Login）"
+        );
+        let step = handle_frame(frame, false, &mut session, &ctx, 7, 0x1234, 1_000)
+            .await
+            .unwrap();
+        assert_eq!(step, Step::Next, "会话必须存活（不得 Close/剔除）");
+    }
+
+    /// 反向：登录前 4 字节**仍**走 `ClientLogin`——剥壳后 payload 为 `[2..3]` 的 1 字节，
+    /// `packetLen=4` 落在 `(15,254)` 之外 ⇒ 校验失败 ⇒ `Kick(1)`（`Step::Close`）。
+    /// 这条证明 ≤3 字节的忽略门没有被一并放宽到 ≥4。
+    #[tokio::test]
+    async fn prelogin_four_byte_frame_still_enters_login_and_is_kicked() {
+        let ctx = prelogin_ctx();
+        let mut session = fresh_session();
+        let frame = b"#1!?"; // 4 字节
+        assert_eq!(
+            classify_frame(frame, false, &mut session, &ctx.gate_rules, 400, 7, 1_000),
+            Classified::Login,
+            "登录前 4 字节 ⇒ 仍进 Login（不得被一并忽略）"
+        );
+        match handle_frame(frame, false, &mut session, &ctx, 7, 0x1234, 1_000)
+            .await
+            .unwrap()
+        {
+            Step::Close(reason) => assert!(
+                reason.contains("客户端登陆消息处理失败") && reason.contains("packetLen=4"),
+                "必须是 ClientLogin 校验失败后 Kick(1)，实得: {reason}"
+            ),
+            other => panic!("登录前 4 字节必须 Close（Kick(1)），实得: {other:?}"),
+        }
     }
 
     /// 离开路径的控制帧必须**同步**落地（oracle `ClientThread.Send` 的同步 `Socket.Send`，
