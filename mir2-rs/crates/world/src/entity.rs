@@ -2954,41 +2954,40 @@ impl EntityStore {
         self.inner.get(id).cloned()
     }
 
-    /// 克隆「实体 + 位置 + 绑定 + S4a 属性组件」到生成期载体（供“取一份本地副本再算/回写”的路径）。
+    /// **P2b**：见下方 `from_components`（实体快照的唯一装配来源）。
+    /// **P2b**：由 24 个组件引用装配生成期载体——[`EntityStore::spawn_cloned`] 与段内快照
+    /// （crate 侧扩展 trait `StageSnapshotExt::snapshot_spawn`）的**唯一装配来源**。
     ///
-    /// 本地副本的 `x/y/map_id/view_range`/属性写的是载体字段，**不**自动回写组件；需要回写的
-    /// 调用方必须显式走 `transform_mut` / `vitals_mut` 等。
-    pub fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
-        let bevy_entity = self.inner.entity_of(id)?;
-        let (
-            entity,
-            transform,
-            binding,
-            vitals,
-            ability,
-            progression,
-            spawn,
-            drop,
-            attribution,
-            recovery,
-            pvp,
-            flags,
-            life_cycle,
-            appearance,
-            monster_class,
-        ) = self
-            .view_state
-            .get_manual(self.inner.world(), bevy_entity)
-            .ok()?;
-        let (player_run, group, revival, buff) = self
-            .view2_state
-            .get_manual(self.inner.world(), bevy_entity)
-            .ok()?;
-        let (slave, inventory, merchant, npc, ai) = self
-            .view3_state
-            .get_manual(self.inner.world(), bevy_entity)
-            .ok()?;
-        Some(EntitySpawn {
+    /// 为什么把装配体抽出来：`SimMapEvents` 的 `PvpView`（attacker/target 判定链）要求段内
+    /// 快照与旧 `spawn_cloned` **逐字段同源**；两份拷贝迟早漂移，所以两者都调本函数。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn from_components(
+        entity: &Entity,
+        transform: &Transform,
+        binding: &MapBinding,
+        vitals: &Vitals,
+        ability: &AbilitySnapshot<BaseAbil>,
+        progression: &Progression,
+        spawn: &SpawnBinding,
+        drop: &DropState,
+        attribution: &CombatAttribution,
+        recovery: &Recovery,
+        pvp: &PvpState,
+        flags: &Flags,
+        life_cycle: &LifeCycle,
+        appearance: &Appearance,
+        monster_class: &MonsterClassState,
+        player_run: &PlayerRunState,
+        group: &GroupState,
+        revival: &Revival,
+        buff: &BuffState,
+        slave: &SlaveState,
+        inventory: &Inventory,
+        merchant: &MerchantState,
+        npc: &NpcState,
+        ai: &AiState,
+    ) -> EntitySpawn {
+        EntitySpawn {
             entity: entity.clone(),
             x: transform.x,
             y: transform.y,
@@ -3131,7 +3130,69 @@ impl EntityStore {
             merchant: merchant.merchant.clone(),
             npc: npc.npc,
             ai: ai.ai.clone(),
-        })
+        }
+    }
+
+    /// 克隆「实体 + 位置 + 绑定 + S4a 属性组件」到生成期载体（供“取一份本地副本再算/回写”的路径）。
+    ///
+    /// 本地副本的 `x/y/map_id/view_range`/属性写的是载体字段，**不**自动回写组件；需要回写的
+    /// 调用方必须显式走 `transform_mut` / `vitals_mut` 等。
+    pub fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
+        let bevy_entity = self.inner.entity_of(id)?;
+        let (
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
+        ) = self
+            .view_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
+        let (player_run, group, revival, buff) = self
+            .view2_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
+        let (slave, inventory, merchant, npc, ai) = self
+            .view3_state
+            .get_manual(self.inner.world(), bevy_entity)
+            .ok()?;
+        Some(Self::from_components(
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
+            ai,
+        ))
     }
 
     /// 按槽位顺序遍历（tick 的确定性顺序）。
@@ -3250,6 +3311,164 @@ impl EntityStore {
     }
 }
 
+/// **P2b**：段内「完整实体快照」的查询形状——24 个组件的**嵌套只读元组**（15 + 4 + 5），
+/// 与 [`EntityStore::spawn_cloned`] 的三个读视图逐项同序。
+///
+/// 为什么嵌套：bevy 的扁平 `QueryData` 元组上限是 15；三个内层元组各是一个 `QueryData`，
+/// 外层 3 元组仍是合法 `QueryData`，因此一次 `view_ref` 就能取齐整条记录。
+/// `ViewAccess` 对元组逐项组合，所以这个视图的每个组件同样受段白名单/注册表核对。
+pub type SnapshotViewQuery = (
+    (
+        &'static Entity,
+        &'static Transform,
+        &'static MapBinding,
+        &'static Vitals,
+        &'static AbilitySnapshot<BaseAbil>,
+        &'static Progression,
+        &'static SpawnBinding,
+        &'static DropState,
+        &'static CombatAttribution,
+        &'static Recovery,
+        &'static PvpState,
+        &'static Flags,
+        &'static LifeCycle,
+        &'static Appearance,
+        &'static MonsterClassState,
+    ),
+    (
+        &'static PlayerRunState,
+        &'static GroupState,
+        &'static Revival,
+        &'static BuffState,
+    ),
+    (
+        &'static SlaveState,
+        &'static Inventory,
+        &'static MerchantState,
+        &'static NpcState,
+        &'static AiState,
+    ),
+);
+
+/// **P2b**：段适配器上的「完整实体快照」入口（world 侧扩展 trait）。
+///
+/// 与 [`EntityStore::spawn_cloned`] / [`EntityStore::get`] **同源**：同一个 24 组件集合、
+/// 同一个装配函数（[`EntityStore::from_components`] / [`EntityRef::from_components`]），
+/// 因此 `PvpView` 的 attacker/target 判定链与旧 facade 实现逐项等价。
+///
+/// 失败语义照抄旧 facade：id 不在槽位表 / 已移除 / **任一组件缺失** ⇒ `None`（与
+/// `spawn_cloned` 的三次 `ok()?` 同口径）。
+pub trait StageSnapshotExt<S: mir2_world_bevy::tick::StageSpec> {
+    /// 等价于 `EntityStore::spawn_cloned(id)`：owned 完整快照。
+    fn snapshot_spawn(&mut self, id: i32) -> Option<EntitySpawn>;
+    /// 等价于 `EntityStore::get(id)`：只读视图（借用期 = 本次 `&mut self`）。
+    fn entity_ref(&mut self, id: i32) -> Option<EntityRef<'_>>;
+}
+
+impl<S: mir2_world_bevy::tick::StageSpec> StageSnapshotExt<S>
+    for mir2_world_bevy::tick::StageEntities<'_, S>
+{
+    fn snapshot_spawn(&mut self, id: i32) -> Option<EntitySpawn> {
+        let (
+            (
+                entity,
+                transform,
+                binding,
+                vitals,
+                ability,
+                progression,
+                spawn,
+                drop,
+                attribution,
+                recovery,
+                pvp,
+                flags,
+                life_cycle,
+                appearance,
+                monster_class,
+            ),
+            (player_run, group, revival, buff),
+            (slave, inventory, merchant, npc, ai),
+        ) = self.view_ref::<SnapshotViewQuery>(id)?;
+        Some(EntityStore::from_components(
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
+            ai,
+        ))
+    }
+
+    fn entity_ref(&mut self, id: i32) -> Option<EntityRef<'_>> {
+        let (
+            (
+                entity,
+                transform,
+                binding,
+                vitals,
+                ability,
+                progression,
+                spawn,
+                drop,
+                attribution,
+                recovery,
+                pvp,
+                flags,
+                life_cycle,
+                appearance,
+                monster_class,
+            ),
+            (player_run, group, revival, buff),
+            (slave, inventory, merchant, npc, ai),
+        ) = self.view_ref::<SnapshotViewQuery>(id)?;
+        Some(EntityRef::from_components(
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
+            ai,
+        ))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3309,6 +3528,105 @@ mod tests {
             (5, 3, 9),
             "`write_back` 必须把属性/成长组件整包写回（只写主组件会丢 HP/MP/exp）"
         );
+    }
+
+    mir2_world_bevy::stage_spec!(
+        SnapshotProbe,
+        mir2_world_bevy::tick::TickStage::SimMapEvents,
+        read: [
+            Entity,
+            Transform,
+            MapBinding,
+            Vitals,
+            AbilitySnapshot<BaseAbil>,
+            Progression,
+            SpawnBinding,
+            DropState,
+            CombatAttribution,
+            Recovery,
+            PvpState,
+            Flags,
+            LifeCycle,
+            Appearance,
+            MonsterClassState,
+            PlayerRunState,
+            GroupState,
+            Revival,
+            BuffState,
+            SlaveState,
+            Inventory,
+            MerchantState,
+            NpcState,
+            AiState
+        ],
+        write: []
+    );
+
+    /// **P2b**：段内快照（`StageSnapshotExt`）与 facade 的 `spawn_cloned` / `get` **逐字段同源**。
+    ///
+    /// 两者共用同一个 24 组件集合与同一份装配函数（`EntityStore::from_components` /
+    /// `EntityRef::from_components`），本用例钉住「段适配器的读取路径（`StageQueries`）与
+    /// facade 的读取路径（`view_state`/`view2_state`/`view3_state`）读出同一份值」。
+    ///
+    /// 牙：把 `SnapshotViewQuery` 的任一组件换掉、或让 `snapshot_spawn` 接另一份装配路径 ⇒
+    /// `Debug` 输出不再逐字相同 ⇒ 红；把 `entity_ref` 的某个字段接错 ⇒ 元组断言红。
+    #[test]
+    fn stage_snapshot_spawn_matches_spawn_cloned() {
+        use mir2_world_bevy::tick::StageEntities;
+
+        let mut s = EntityStore::new();
+        let mut e = EntitySpawn::new(7, "hero", 3, 4);
+        e.hp = 37;
+        e.mp = 11;
+        e.exp = 5;
+        e.level = 9;
+        e.pk_point = 42;
+        e.group_owner = 7;
+        e.group_members = vec![7, 8];
+        e.gold = 100;
+        s.insert(e);
+
+        let expected_spawn = format!("{:?}", s.spawn_cloned(7).expect("实体在场"));
+        let expected_ref = {
+            let r = s.get(7).expect("实体在场");
+            (
+                r.x,
+                r.y,
+                r.map_id,
+                r.hp,
+                r.mp,
+                r.exp,
+                r.pk_point,
+                r.group_owner,
+                r.group_members.clone(),
+            )
+        };
+        {
+            let mut ad = StageEntities::<SnapshotProbe>::new(s.world_mut());
+            let got = format!("{:?}", ad.snapshot_spawn(7).expect("段内快照"));
+            assert_eq!(
+                got, expected_spawn,
+                "段内快照必须与 spawn_cloned 逐字段同源"
+            );
+            let r = ad.entity_ref(7).expect("段内只读视图");
+            assert_eq!(
+                (
+                    r.x,
+                    r.y,
+                    r.map_id,
+                    r.hp,
+                    r.mp,
+                    r.exp,
+                    r.pk_point,
+                    r.group_owner,
+                    r.group_members.clone(),
+                ),
+                expected_ref,
+                "段内只读视图必须与 EntityStore::get 同源"
+            );
+            assert!(ad.snapshot_spawn(999).is_none(), "未知 id ⇒ None");
+            assert!(ad.entity_ref(999).is_none(), "未知 id ⇒ None");
+        }
     }
 
     /// **S3b 评审 P3（`insert_parts` 误用防护）**：`insert_parts` 的唯一入口是

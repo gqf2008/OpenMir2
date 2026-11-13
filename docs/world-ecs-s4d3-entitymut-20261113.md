@@ -544,6 +544,17 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
 组合视图（每段一个，宏生成）：`StageViewMut<'a>` 的字段等于白名单并集，
 `StageEntities::view_mut(id) -> Option<StageViewMut<'_>>`。
 
+> **落地形态（P2 / P2b 偏差登记）**：没有生成「每段一个 `StageViewMut` 字段视图」（bevy 的
+> `QueryData` 无法在编译期枚举组件，宏也不可能知道白名单并集）。实际实现：
+> * 组合视图用**元组**表达（`(&A, &B)` / `(&mut A, &B)`），并要求实现 `ViewAccess`
+>   （`&C` = 读、`&mut C` = 写，元组 1..=15 逐项组合）；
+> * `view_mut<Q: QueryData + ViewAccess>` 与只读的 `view_ref<Q: QueryData<ReadOnly = Q> + ViewAccess>`
+>   在借出视图**之前**逐项核对 `ComponentRegistry` 与本段 `reads()`/`writes()`（P2b
+>   P2-VIEW-MUT-BYPASS；空名单段不可绕过）；
+> * `snapshot_spawn`（owned `EntitySpawn`）与 `entity_ref`（`EntityRef`）由 **world 侧**扩展
+>   trait `StageSnapshotExt` 提供——`EntitySpawn`/`EntityRef` 是本 crate 类型，world-bevy 不能
+>   反向依赖；装配体与 facade 共用 `EntityStore::from_components` / `EntityRef::from_components`。
+
 ### 3.4 段宿主：`StageWorld` 与 facade 的薄包装（D2）
 
 ```rust

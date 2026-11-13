@@ -882,6 +882,28 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > （`extra_abil_expiry_clears_slot_value` / `super_man_refill_restores_hp_mp_in_tail`，
 > 各自删对应写回即 RED）。**注意：P2 本批是 4/5 段已迁——`SimMapEvents` 未迁，P2 不是全绿。**
 >
+> **S4d-3/P2b 落地登记（2026-11-13，第三批）**：review `c309baf1` 点名的两处适配器缺陷已修：
+> `P2-GENERIC-NAMES`（段白名单改**类型身份** `TypeId`：`StageSpec::reads/writes(TypeId)` 由
+> `stage_spec!` 生成，泛型组件按实例匹配；字符串名单与 `short_type_name` 删除）与
+> `P2-VIEW-MUT-BYPASS`（组合视图新增 `ViewAccess` 声明，`view_mut` / 新增的只读 `view_ref`
+> 在借出视图前逐项核对注册表与段白名单，空名单段不可再经视图读写任意组件）。
+> 各配负例牙：`t_generic_1/2`（泛型实例被识别 / 另一实例被拒）、`t_neg_4/5/6`
+> （空白名单段的 `view_mut` / `view_ref` / 视图内第二项越界都必须 panic）。
+>
+> `SimMapEvents`（#7）已迁成段系统（`sim_map_events_stage_system`），前置
+> `StageEntities::snapshot_spawn` / `entity_ref`（world 侧扩展 trait `StageSnapshotExt`）：
+> 24 组件快照与旧 `EntityStore::spawn_cloned` / `get` **共用同一个装配函数**
+> （`EntityStore::from_components` / `EntityRef::from_components`），段内 `PvpView` 的
+> attacker/target 判定链（`is_proper_target_grouped_direct` + 团长成员表）与旧 facade 同源；
+> 格子枚举拆成「`map_cell_object_ids`（同 `maps` 格子表）+ 段内 `LifeCycle.death` 过滤」，
+> 与旧 `base_objects_at` 的 `!e.death` 同真值源；事件三重门 / 关闭门 /
+> `owner_id` 归一 / `msg_order` 入队序逐项照抄，**不抽 RNG**。段内不写实体，因此
+> 「Phase 1 只碰 `SimState` → Phase 2 只碰实体 → Phase 3 回写 `SimState`」的拆分不改变
+> 任何可观测顺序（设计 §2.2 A4）。
+> **段数口径（P2+P2b）**：余 18 段已迁 **5 段**（SimExpireHitters #3、SimExtraAbil #6、
+> SimMapEvents #7、SimPlayerRunExpiry #13、TailSuperManRefill #16）；tick 段序牙
+> `tick_stage_registrations_are_wired_in_order` 已含 `SimMapEvents`。
+
 > **本批未做**：P2–P7（余 14 段迁移）、上表「P0 未交付项」、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 
