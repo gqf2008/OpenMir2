@@ -1063,11 +1063,9 @@ fn khazard_run(world: &mut World, actor_id: i32) -> bool {
                     send_ref_msg(world, target_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
                     let _ =
                         crate::space_move::monster_space_move(world, target_id, map_id, n_x, n_y);
+                    let anti_poison_limit = world.target_anti_poison(target_id) + 7;
                     if world.rng.random_below(1) == 0
-                        && world
-                            .rng
-                            .random_below(world.target_anti_poison(target_id) + 7)
-                            <= 6
+                        && world.rng.random_below(anti_poison_limit) <= 6
                     {
                         world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 35, 2);
                         return true;
@@ -1086,11 +1084,9 @@ fn khazard_run(world: &mut World, actor_id: i32) -> bool {
                     send_ref_msg(world, target_id, RM_SPACEMOVE_FIRE, 0, 0, 0, 0);
                     let _ =
                         crate::space_move::monster_space_move(world, target_id, map_id, n_x, n_y);
+                    let anti_poison_limit = world.target_anti_poison(target_id) + 7;
                     if world.rng.random_below(1) == 0
-                        && world
-                            .rng
-                            .random_below(world.target_anti_poison(target_id) + 7)
-                            <= 6
+                        && world.rng.random_below(anti_poison_limit) <= 6
                     {
                         world.make_posion(target_id, crate::entity::POISON_DECHEALTH as u8, 35, 2);
                         return true;
@@ -2254,10 +2250,11 @@ fn fly_axe_attack(world: &mut World, actor_id: i32, target_id: i32) {
             crate::buff::damage_health(world, target_id, i32::from(final_damage), last_hiter_id);
             // `PlayObject.StruckDamage` 在 `base.StruckDamage` **之后**的耐久段
             // （`PlayObject.cs:2957/2998-3039`）；函数自身对非玩家目标零动作。
-            if let Some(t) = world.entities.get_mut(target_id) {
+            let World { entities, sim, .. } = &mut *world;
+            if let Some(t) = entities.get_mut(target_id) {
                 let target_race = t.appearance.race;
                 crate::combat::struck_damage_durability(
-                    &mut world.rng,
+                    &mut sim.rng,
                     &mut t.inventory.use_items,
                     target_race,
                 );
@@ -3583,10 +3580,11 @@ fn class_struck_apply(
     let final_damage = (reduced * per10 / 10).max(0) as u16;
     let last_hiter_id = target.last_hiter;
     crate::buff::damage_health(world, target_id, i32::from(final_damage), last_hiter_id);
-    if let Some(t) = world.entities.get_mut(target_id) {
+    let World { entities, sim, .. } = &mut *world;
+    if let Some(t) = entities.get_mut(target_id) {
         let target_race = t.appearance.race;
         crate::combat::struck_damage_durability(
-            &mut world.rng,
+            &mut sim.rng,
             &mut t.inventory.use_items,
             target_race,
         );

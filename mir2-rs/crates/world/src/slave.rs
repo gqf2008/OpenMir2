@@ -683,16 +683,20 @@ impl World {
         };
         let (fx, fy) = front_position(cx, cy, caster_dir, width, height);
         // `SpaceMoveGetRandXY(Envir, ref nX, ref nY)`（`BaseObject.cs:1128`）。
-        let map = self.maps.get(map_id)?;
-        let found = space_move_get_rand_xy(&mut self.rng, width, height, fx, fy, |x, y| {
-            map.get_cell_info(x, y).1
-        });
+        let found = {
+            let World { sim, .. } = self;
+            let map = sim.maps.get(map_id)?;
+            space_move_get_rand_xy(&mut sim.rng, width, height, fx, fy, |x, y| {
+                map.get_cell_info(x, y).1
+            })
+        };
         let (nx, ny) = found?;
         let (from_x, from_y, cert_cell_type) = {
             let e = self.entities.get(target)?;
             (e.x, e.y, crate::world::entity_cell_type(&e))
         };
         // `Envir.DeleteFromMap` + `Envir.AddMapObject`（`BaseObject.cs:1114/1132`）。
+        let now = self.clock_ms;
         let moved = {
             let map = self.maps.get_mut(map_id)?;
             map.move_object(
@@ -704,7 +708,7 @@ impl World {
                     to_x: nx,
                     to_y: ny,
                     ignore_block: true,
-                    add_time: self.clock_ms,
+                    add_time: now,
                 },
                 |_| false,
             )
@@ -1651,6 +1655,7 @@ impl World {
             return;
         }
         let enqueue_seq = self.next_msg_order();
+        let now = self.clock_ms;
         self.self_delay_msgs.push(SelfDelayMsg {
             actor_id,
             ident,
@@ -1660,7 +1665,7 @@ impl World {
             n_param3,
             msg: String::new(),
             actor_ref: 0,
-            deliver_at_ms: self.clock_ms,
+            deliver_at_ms: now,
             enqueue_seq,
             // `BaseObject.Message.cs:80`：`MsgQueue.Enqueue(sendMessage, (byte)wIdent)`。
             priority: ident as u8,
@@ -3138,11 +3143,12 @@ mod tests {
     fn check_royalty_spirit_window_forces_zero_deadline() {
         let (mut w, master, slave) = slave_world(50);
         w.clock_ms = 20_000;
+        let now = w.clock_ms;
         let s = w.entities.get_mut(slave).unwrap();
         s.slave.slave_exp_level = 3;
-        s.slave.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
+        s.slave.master_royalty_tick = now + 1_000_000; // 未到期
         s.ai.check_royalty_tick = 0;
-        w.spirit_mutiny_tick = w.clock_ms + 60_000; // 窗口未过期
+        w.spirit_mutiny_tick = now + 60_000; // 窗口未过期
         check_royalty(&mut w, slave);
         assert!(w.entities.get(master).unwrap().slave_list.is_empty());
         assert_eq!(w.entities.get(slave).unwrap().master, None);
@@ -3153,11 +3159,12 @@ mod tests {
     fn check_royalty_spirit_window_gated_by_level() {
         let (mut w, master, slave) = slave_world(50);
         w.clock_ms = 20_000;
+        let now = w.clock_ms;
         let s = w.entities.get_mut(slave).unwrap();
         s.slave.slave_exp_level = 5;
-        s.slave.master_royalty_tick = w.clock_ms + 1_000_000;
+        s.slave.master_royalty_tick = now + 1_000_000;
         s.ai.check_royalty_tick = 0;
-        w.spirit_mutiny_tick = w.clock_ms + 60_000;
+        w.spirit_mutiny_tick = now + 60_000;
         check_royalty(&mut w, slave);
         assert_eq!(w.entities.get(master).unwrap().slave_list.len(), 1);
     }
@@ -3167,9 +3174,10 @@ mod tests {
     fn check_royalty_master_tick_12h_kills() {
         let (mut w, master, slave) = slave_world(80);
         w.clock_ms = 100_000_000;
+        let now = w.clock_ms;
         let s = w.entities.get_mut(slave).unwrap();
-        s.slave.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
-        s.slave.master_tick = w.clock_ms - (MASTER_MUTINY_DEATH_MS + 1);
+        s.slave.master_royalty_tick = now + 1_000_000; // 未到期
+        s.slave.master_tick = now - (MASTER_MUTINY_DEATH_MS + 1);
         s.ai.check_royalty_tick = 0;
         check_royalty(&mut w, slave);
         let s = w.entities.get(slave).unwrap();
@@ -3413,6 +3421,7 @@ mod tests {
             "Ghost 实体不入队（oracle `if (!Ghost)` 门）"
         );
         // 反证：绕过入口门手工入队，到点后 `Operate` 支确实调 `ProcessSlaveGhost`。
+        let now = w.clock_ms;
         w.self_delay_msgs.push(SelfDelayMsg {
             actor_id: master,
             ident: RM_MASTERDIEGHOST,
@@ -3422,7 +3431,7 @@ mod tests {
             n_param3: 0,
             msg: String::new(),
             actor_ref: 0,
-            deliver_at_ms: w.clock_ms,
+            deliver_at_ms: now,
             enqueue_seq: 0,
             priority: MESSAGE_PRIORITY_LOWEST,
         });

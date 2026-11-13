@@ -1489,7 +1489,8 @@ impl World {
         cfg: &UpgradeWeaponConfig,
     ) -> GetBackupgWeaponOutcome {
         let now = self.clock_ms;
-        let World { entities, rng, .. } = self;
+        let World { entities, sim, .. } = self;
+        let rng = &mut sim.rng;
         match entities.merchant_mut(merchant_id) {
             Some(st) => get_backupg_weapon_impl(
                 rng,
@@ -1834,8 +1835,9 @@ pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
     // `SpaceMove`（`BaseObject.cs:1128`）：以 `(nX, nY)` 为起点找可走格；起点即墙时
     // `SpaceMoveGetRandXY` 进移位环继续抽数（201 轮上限）。
     let found = {
-        let map = &world.maps[map_id];
-        crate::slave::space_move_get_rand_xy(&mut world.rng, w, h, nx, ny, |x, y| {
+        let World { sim, .. } = &mut *world;
+        let map = &sim.maps[map_id];
+        crate::slave::space_move_get_rand_xy(&mut sim.rng, w, h, nx, ny, |x, y| {
             map.get_cell_info(x, y).1
         })
     };
@@ -4248,10 +4250,11 @@ mod tests {
             "OrdinalIgnoreCase 大小写不同也命中：{r:?}"
         );
         // A1：第一条 "HERO" 未到期 ⇒ **不 break**，第二条 "hero" 到期 ⇒ 取走后一条。
+        let now = w2.clock_ms;
         let list = w2.entities.merchant_mut(mid).unwrap();
         list.upgrade_weapon_list.clear();
         list.upgrade_weapon_list.push({
-            let mut i = info_with(1, 0, 0, 16, w2.clock_ms);
+            let mut i = info_with(1, 0, 0, 16, now);
             i.user_name = "HERO".to_string();
             i
         });

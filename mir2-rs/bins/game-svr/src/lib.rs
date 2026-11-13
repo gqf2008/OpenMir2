@@ -30877,6 +30877,7 @@ mod tests {
         let hid = world
             .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
             .expect("hero 进世界");
+        let now = world.clock_ms;
         {
             let e = world.entities.get_mut(hid).unwrap();
             // oracle `ChangeSuperManModeCommand`（permission 10）置位后的玩家实体：
@@ -30887,7 +30888,7 @@ mod tests {
             e.vitals.mp = 100;
             e.vitals.max_mp = 100;
             e.buff.show_hp = true; // 心灵启示窗口内（恢复段的 ShowHp 广播面）
-            e.buff.show_hp_tick = world.clock_ms; // `:219` 到期门不在本用例命中 ⇒ 无 1101 噪声
+            e.buff.show_hp_tick = now; // `:219` 到期门不在本用例命中 ⇒ 无 1101 噪声
         }
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut sg = test_session_ground(hid);

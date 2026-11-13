@@ -123,8 +123,9 @@ pub(crate) fn monster_space_move(
 
     // 4. `SpaceMoveGetRandXY(Envir, ref tempX, ref tempY)`——取数点。
     let found = {
-        let map = &world.maps[dest_map_id];
-        space_move_get_rand_xy(&mut world.rng, width, height, n_x, n_y, |x, y| {
+        let World { sim, .. } = &mut *world;
+        let map = &sim.maps[dest_map_id];
+        space_move_get_rand_xy(&mut sim.rng, width, height, n_x, n_y, |x, y| {
             map.get_cell_info(x, y).1
         })
     };
