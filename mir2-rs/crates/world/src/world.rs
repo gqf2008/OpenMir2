@@ -15,7 +15,10 @@ use bevy_ecs::prelude::ResMut;
 use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
-use mir2_world_bevy::{advance_clock_system, TickClock, TickOwnerThread, TickRunner, TickStage};
+use mir2_world_bevy::{
+    advance_clock_system, Appearance, CombatAttribution, LifeCycle, TickClock, TickOwnerThread,
+    TickRunner, TickStage,
+};
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
 use crate::buff::{
@@ -1366,6 +1369,41 @@ impl Default for SimState {
 #[derive(bevy_ecs::prelude::Resource)]
 pub struct TickRecordRes(pub TickRecord);
 
+/// **S4d-1/S4d-2**：本 tick 的实体句柄表（业务 id + bevy 实体，槽位顺序）。
+///
+/// tick 边界从 `EntityStore::order_index` / `order_entities` 一次性填入；系统按它取组件，
+/// 不迭代 `Query` 求顺序（与 `AoiIds` 同口径）。只在系统运行期间存在。
+#[derive(bevy_ecs::prelude::Resource)]
+pub struct TickEntityIds(pub Vec<(i32, bevy_ecs::entity::Entity)>);
+
+/// **S4d-2 `SimHiterSnapshot` 段（#2）**：PL-1 玩家 `LastHiter` 清理前快照。
+///
+/// 只读实体组件（`Appearance`/`LifeCycle`/`CombatAttribution`），按 `SlotOrder` 的槽位序
+/// （`TickEntityIds`）扫描，结果写入 `SimState::player_hiter_snapshot`。不抽 RNG、不改实体。
+pub fn sim_hiter_snapshot_system(world: &mut bevy_ecs::world::World) {
+    let ids = world.resource::<TickEntityIds>().0.clone();
+    let mut snapshot = Vec::new();
+    for (id, entity) in &ids {
+        let (Some(appearance), Some(life), Some(attribution)) = (
+            world.get::<Appearance>(*entity),
+            world.get::<LifeCycle>(*entity),
+            world.get::<CombatAttribution>(*entity),
+        ) else {
+            continue;
+        };
+        // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B2）：ghost 不进快照 ⇒「快照 = 本轮真正
+        // 会跑的玩家」。与迁移前 `tick_head` 的 `iter_ref` 过滤逐项一致。
+        if appearance.race == crate::entity::ACTOR_RACE_PLAY && !life.ghost {
+            snapshot.push(PlayerHiterSnapshot {
+                actor_id: *id,
+                last_hiter: attribution.last_hiter,
+                last_hiter_tick: attribution.last_hiter_tick,
+            });
+        }
+    }
+    world.resource_mut::<SimState>().player_hiter_snapshot = snapshot;
+}
+
 /// **S4d-1 `OutputDrain` 段（#15）**：把本 tick 各段累积的输出事件按发生序转抄进 [`TickRecord`]。
 ///
 /// 本段不抽 RNG、不访问实体；输入只来自 `SimState` 的累积向量，因此不改变 RNG 消费者次序。
@@ -1396,6 +1434,8 @@ pub struct World {
     tail_runner: TickRunner,
     /// S4d-1：`OutputDrain` 段系统运行器（只注册 `OutputDrain`；不推进时钟）。
     drain_runner: TickRunner,
+    /// S4d-2：`SimHiterSnapshot` 段系统运行器（只注册 `SimHiterSnapshot`；不推进时钟）。
+    snapshot_runner: TickRunner,
     /// **S4d-1 资源层**：全部非实体世界状态（maps/sessions/rng/时钟/配置/命令队列/输出累积…）。
     ///
     /// tick 边界把它移入 bevy `World` 的 `SimState` 资源供系统访问，跑完移回（同一时刻
@@ -1509,12 +1549,16 @@ impl World {
         // S4d-1：`OutputDrain` 段（输出累积 → `TickRecord`）作为系统在 tick 边界运行。
         let mut drain_runner = TickRunner::new();
         drain_runner.add_systems(TickStage::OutputDrain, output_drain_system);
+        // S4d-2：PL-1 玩家 `LastHiter` 快照段（命令 FIFO 之后、`expire_hitters` 之前）。
+        let mut snapshot_runner = TickRunner::new();
+        snapshot_runner.add_systems(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
         let sim = SimState::with_maps(maps);
         let mut world = World {
             entities,
             clock_runner,
             tail_runner,
             drain_runner,
+            snapshot_runner,
             sim,
         };
         // **M3②③ 隔离口径**：`MIR2_RNG_ISOLATE_ATTACK` 开启时按 `MIR2_RNG_SEED` 派生专用流
@@ -5380,20 +5424,27 @@ impl World {
         self.pending_verify_health_changes.clear();
         self.pending_show_hp_health_changes.clear();
         self.tail_phase_log.clear();
+        // **S4d-2 `SimHiterSnapshot` 段（#2）**：快照作为系统运行（槽位顺序由 `TickEntityIds`
+        // 显式给出，不迭代 `Query` 求序）。段序与迁移前一致：命令 FIFO 之后、`expire_hitters` 之前。
         {
-            let World { entities, sim, .. } = self;
-            sim.player_hiter_snapshot.clear();
-            for e in entities.iter_ref() {
-                // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B2）：快照只服务 P32，而 P32 在会话侧受
-                // stage 门；ghost 不进快照可以让「快照 = 本轮真正会跑的玩家」这条语义成立（低风险项，矩阵 §6#7）。
-                if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
-                    sim.player_hiter_snapshot.push(PlayerHiterSnapshot {
-                        actor_id: e.id,
-                        last_hiter: e.last_hiter,
-                        last_hiter_tick: e.last_hiter_tick,
-                    });
-                }
+            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self
+                .entities
+                .order_index()
+                .into_iter()
+                .zip(self.entities.order_entities())
+                .collect();
+            let sim = std::mem::take(&mut self.sim);
+            {
+                let world = self.entities.world_mut();
+                world.insert_resource(sim);
+                world.insert_resource(TickEntityIds(ids));
             }
+            self.snapshot_runner.run(self.entities.world_mut());
+            let world = self.entities.world_mut();
+            self.sim = world
+                .remove_resource::<SimState>()
+                .expect("SimHiterSnapshot 后必须归还 SimState（tick 边界契约）");
+            let _ = world.remove_resource::<TickEntityIds>();
         }
 
         // 命中者过期清理（照 `BaseObject.Base.cs:119-132` 的结构；墙钟那两项不在本骨架）
@@ -10302,6 +10353,39 @@ mod tests {
             items.as_slice(),
             "预算物品必须一致"
         );
+    }
+
+    /// **S4d-2 牙**：PL-1 快照必须保留 `expire_hitters` **清理前**的 `LastHiter`。
+    ///
+    /// 变异：删掉 `snapshot_runner` 的 `SimHiterSnapshot` 系统注册（或删 `sim_hiter_snapshot_system`
+    /// 的 push）⇒ 快照为空 / `None`，本用例在 `expect("玩家必须进 PL-1 快照")` 或值断言处红。
+    #[test]
+    fn tick_snapshot_keeps_player_last_hiter_before_expiry() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 9, 9, 1));
+        let mon = {
+            let mut e = crate::EntitySpawn::new(0, "鸡", 10, 10);
+            e.race = ACTOR_RACE_MONSTER;
+            e.hp = 100;
+            e.max_hp = 100;
+            w.add_entity(e)
+        };
+        // 命中者 = 怪物；`LastHiterTick = 0`。31s 后 `expire_hitters` 会清掉实体上的值。
+        w.entities.get_mut(p).unwrap().set_last_hiter(mon, 0);
+        w.clock_ms = 31_000;
+        let _ = w.tick();
+        assert_eq!(
+            w.entities.get(p).unwrap().last_hiter,
+            None,
+            "31s > 30s ⇒ 实体侧 LastHiter 已过期"
+        );
+        let snap = w
+            .player_hiter_snapshot
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家必须进 PL-1 快照");
+        assert_eq!(snap.last_hiter, Some(mon), "快照 = 清理前的 LastHiter");
+        assert_eq!(snap.last_hiter_tick, 0);
     }
 
     /// `BaseObject.Run` 的过期段（`BaseObject.Base.cs:119-132`）：`LastHiter` 30s、`ExpHitter` 6s。
