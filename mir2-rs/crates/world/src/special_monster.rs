@@ -319,11 +319,11 @@ pub fn special_monster_run(world: &mut World, actor_id: i32) -> bool {
         return true;
     }
     let attack_due = now - e.ai.attack_tick >= e.ai.next_hit_time;
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
         e.ai.walk_tick = now;
     }
     if attack_due {
-        if let Some(mut e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
             e.ai.attack_tick = now;
         }
         search_target(world, actor_id);

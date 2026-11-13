@@ -335,7 +335,7 @@ pub fn spawn_merchants_with_scripts(
                 // 字段口径同固定 NPC（`Merchant : NormNpc`：Light=2、RaceImg=50）——
                 // `Appr` 在商人侧存于 `MerchantState.appr`（`BaseObject.Appr` 的镜像），
                 // 不在 `Entity.appr`。
-                if let Some(mut e) = world.entities.get_mut(id) {
+                if let Some(e) = world.entities.get_mut(id) {
                     // **T-154 Minor-2**：oracle `BaseObject()` ctor `Dir = 4`（`BaseObject.cs:378`），
                     // `Merchant()` ctor 不覆写 ⇒ 首个 `TurnTo` 之前 `Dir` 恒 4。
                     // `Entity::new` 的 `ai.dir` 缺省 0 ⇒ 宿主补齐后再投影进展示表。
@@ -512,7 +512,7 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
             "spawn_merchants 包装必须把登记透传到调用方的展示表"
         );
         for id in world.merchant_ids_sorted() {
-            let e = world.entities.entity(id).expect("实体在");
+            let e = world.entities.get(id).expect("实体在");
             assert_eq!(
                 displays.get(id).map(|d| d.dir),
                 Some(crate::downlink::NPC_INITIAL_DIR),

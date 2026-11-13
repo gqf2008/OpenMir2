@@ -849,7 +849,7 @@ impl World {
             t.master_tick
         };
         let royalty_tick = tame_royalty_tick(caster_level, magic_level, royalty_draw, now);
-        if let Some(mut t) = self.entities.get_mut(target_id) {
+        if let Some(t) = self.entities.get_mut(target_id) {
             t.slave.master = Some(caster_id);
             t.vitals.hp = hp;
             t.slave.master_royalty_tick = royalty_tick;
@@ -909,7 +909,7 @@ pub fn check_royalty(world: &mut World, mon_id: i32) {
     let master = e.master;
     let master_tick = e.master_tick;
     // oracle 先刷新 `CheckRoyaltyTick`，再判 `Master`。
-    if let Some(mut m) = world.entities.get_mut(mon_id) {
+    if let Some(m) = world.entities.get_mut(mon_id) {
         m.ai.check_royalty_tick = now;
     }
     let Some(master_id) = master else {
@@ -986,7 +986,7 @@ pub fn process_slave_mutiny(world: &mut World, master_id: i32, cfg: &PetSlaveCon
             1 // `&&` 短路：不抽数、必不走叛变支
         };
         if last_hiter.is_some() && roll == 0 {
-            if let Some(mut s) = world.entities.get_mut(*sid) {
+            if let Some(s) = world.entities.get_mut(*sid) {
                 s.slave.master = None;
                 s.slave.slave_exp_level = color_len;
                 // `RecalcAbilitys()` 对基类怪 = `WAbil = Abil.Clone()`（本骨架无额外字段）⇒ no-op。
@@ -2118,7 +2118,7 @@ impl World {
         let msd = crate::combat::get_mag_struck_damage(&mut self.rng, t.mac, n_power, Some(undead));
         out.msd = msd;
         if msd > 0 {
-            if let Some(mut c) = self.entities.get_mut(msg.actor_id) {
+            if let Some(c) = self.entities.get_mut(msg.actor_id) {
                 c.ai.target_creature = Some(target_id);
             }
             let mut power = n_power;
@@ -2176,7 +2176,7 @@ impl World {
             // `IsProperTarget` 的 `this` 是**中毒目标** t ⇒ `IsGroupMember` 读 **t 的团长**
             // （`PlayObject.cs:5158-5175`）的成员表，不是 t 自己的 `group_members`（非团长恒空）。
             if crate::combat::is_proper_target_grouped(t, c, &self.attacker_group_members(t)) {
-                if let Some(mut tm) = self.entities.get_mut(target_id) {
+                if let Some(tm) = self.entities.get_mut(target_id) {
                     tm.ai.target_creature = Some(caster_id);
                 }
                 if t.race == crate::entity::ACTOR_RACE_PLAY
@@ -3138,7 +3138,7 @@ mod tests {
     fn check_royalty_spirit_window_forces_zero_deadline() {
         let (mut w, master, slave) = slave_world(50);
         w.clock_ms = 20_000;
-        let mut s = w.entities.get_mut(slave).unwrap();
+        let s = w.entities.get_mut(slave).unwrap();
         s.slave.slave_exp_level = 3;
         s.slave.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
         s.ai.check_royalty_tick = 0;
@@ -3153,7 +3153,7 @@ mod tests {
     fn check_royalty_spirit_window_gated_by_level() {
         let (mut w, master, slave) = slave_world(50);
         w.clock_ms = 20_000;
-        let mut s = w.entities.get_mut(slave).unwrap();
+        let s = w.entities.get_mut(slave).unwrap();
         s.slave.slave_exp_level = 5;
         s.slave.master_royalty_tick = w.clock_ms + 1_000_000;
         s.ai.check_royalty_tick = 0;
@@ -3167,7 +3167,7 @@ mod tests {
     fn check_royalty_master_tick_12h_kills() {
         let (mut w, master, slave) = slave_world(80);
         w.clock_ms = 100_000_000;
-        let mut s = w.entities.get_mut(slave).unwrap();
+        let s = w.entities.get_mut(slave).unwrap();
         s.slave.master_royalty_tick = w.clock_ms + 1_000_000; // 未到期
         s.slave.master_tick = w.clock_ms - (MASTER_MUTINY_DEATH_MS + 1);
         s.ai.check_royalty_tick = 0;
@@ -3217,7 +3217,7 @@ mod tests {
     fn process_slave_mutiny_mutinies_on_zero_roll() {
         let (mut w, master, slave) = slave_world(100);
         {
-            let mut s = w.entities.get_mut(slave).unwrap();
+            let s = w.entities.get_mut(slave).unwrap();
             // dc 低字节=10、高字节=20。
             s.vitals.dc = 10 | (20 << 8);
             s.ai.walk_speed = 400;
@@ -3313,7 +3313,7 @@ mod tests {
             w.add_entity(e)
         };
         for id in [s1, s2] {
-            let mut s = w.entities.get_mut(id).unwrap();
+            let s = w.entities.get_mut(id).unwrap();
             s.vitals.dc = 10 | (20 << 8);
             s.ai.walk_speed = 400;
         }

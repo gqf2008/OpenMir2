@@ -39,7 +39,7 @@ fn holy_seize_expiry_strictly_after_interval() {
     let mut w = World::new(32, 32);
     let id = monster(&mut w);
     {
-        let mut e = w.entities.get_mut(id).unwrap();
+        let e = w.entities.get_mut(id).unwrap();
         e.ai.holy_seize = true;
         e.ai.holy_seize_tick = 1_000;
         e.ai.holy_seize_interval = 1_000;
@@ -64,7 +64,7 @@ fn holy_seize_expiry_runs_through_monster_ai_tick() {
     w.set_process_monster_interval(0);
     let id = monster(&mut w);
     {
-        let mut e = w.entities.get_mut(id).unwrap();
+        let e = w.entities.get_mut(id).unwrap();
         e.ai.holy_seize = true;
         e.ai.holy_seize_tick = 1_000;
         e.ai.holy_seize_interval = 1_000;
@@ -92,7 +92,7 @@ fn crazy_mode_expiry_strictly_after_interval() {
     w.clock_ms = 1_000;
     open_crazy_mode(&mut w, id, 1); // interval = 1000ms
     {
-        let mut e = w.entities.get_mut(id).unwrap();
+        let e = w.entities.get_mut(id).unwrap();
         assert!(e.ai.crazy_mode, "OpenCrazyMode 置态");
         assert_eq!(e.ai.crazy_mode_tick, 1_000, "CrazyModeTick = now");
         assert_eq!(e.ai.crazy_mode_interval, 1_000, "nTime * 1000");
@@ -108,7 +108,7 @@ fn crazy_mode_expiry_strictly_after_interval() {
     );
     // 过 1ms ⇒ 清（普通出口的 `CheckRoyalty()` 之后）。
     w.clock_ms = 2_001;
-    if let Some(mut e) = w.entities.get_mut(id) {
+    if let Some(e) = w.entities.get_mut(id) {
         e.ai.think_tick = 2_001;
     }
     monster_ai_tick(&mut w);
@@ -123,7 +123,7 @@ fn crazy_mode_expiry_runs_on_non_movable_path() {
     w.set_process_monster_interval(0);
     let id = monster(&mut w);
     {
-        let mut e = w.entities.get_mut(id).unwrap();
+        let e = w.entities.get_mut(id).unwrap();
         e.flags.stone_mode = true; // `!StoneMode` 门失败 ⇒ 不可移动路径
         e.ai.crazy_mode = true;
         e.ai.crazy_mode_tick = 1_000;

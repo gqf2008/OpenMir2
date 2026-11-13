@@ -2557,7 +2557,7 @@ impl World {
                 continue;
             };
             // `:934 playObject.SetTargetCreat(baseObject);`（在 `if (CheckAmulet)` 内）。
-            if let Some(mut c) = self.entities.get_mut(caster_id) {
+            if let Some(c) = self.entities.get_mut(caster_id) {
                 c.ai.target_creature = Some(tid);
             }
             let one = self.cast_poison_on_target(caster_id, magic, level, tid, sc, shape, cfg);
@@ -2649,7 +2649,7 @@ impl World {
         // `:1247-1251`：玩家目标 ⇒ `SetPkFlag`（⇒ 656，由 target 发）+ `SetTargetCreat`。
         if t.race == crate::entity::ACTOR_RACE_PLAY {
             out.name_color = self.set_pk_flag(caster_id, tid);
-            if let Some(mut c) = self.entities.get_mut(caster_id) {
+            if let Some(c) = self.entities.get_mut(caster_id) {
                 c.ai.target_creature = Some(tid);
             }
         }
@@ -3017,7 +3017,7 @@ impl World {
             });
         }
         // `SetTargetCreat` 逐目标覆盖；末值 = 最后一个 proper target（oracle 同）。
-        if let (Some(tid), Some(mut e)) = (last_target, self.entities.get_mut(caster_id)) {
+        if let (Some(tid), Some(e)) = (last_target, self.entities.get_mut(caster_id)) {
             e.ai.target_creature = Some(tid);
             e.ai.target_focus_tick = self.clock_ms;
         }
@@ -3355,7 +3355,7 @@ impl World {
                     crate::magic_effect::private_transparent_draw(&mut self.rng) == 0
                 };
                 if clear {
-                    if let Some(mut e) = self.entities.get_mut(id) {
+                    if let Some(e) = self.entities.get_mut(id) {
                         e.ai.target_creature = None;
                     }
                 }
@@ -3533,7 +3533,7 @@ impl World {
         else {
             return crate::slave::NameColorDelivery::default();
         };
-        if let Some(mut e) = self.entities.get_mut(target_id) {
+        if let Some(e) = self.entities.get_mut(target_id) {
             e.ai.holy_seize = true;
             e.ai.holy_seize_tick = now;
             e.ai.holy_seize_interval = i64::from(interval);
@@ -3596,7 +3596,7 @@ impl World {
         };
         let out = crate::magic_effect::mag_turn_undead(&mut self.rng, &inp);
         let now = self.clock_ms;
-        if let Some(mut e) = self.entities.get_mut(tid) {
+        if let Some(e) = self.entities.get_mut(tid) {
             e.ai.struck_tick = now;
             if out.target_targeted_by_caster {
                 e.ai.target_creature = Some(caster_id);
@@ -3612,7 +3612,7 @@ impl World {
             e.ai.attack_tick += i64::from(out.attack_tick_delta);
         }
         if out.target_run_away {
-            if let Some(mut e) = self.entities.get_mut(tid) {
+            if let Some(e) = self.entities.get_mut(tid) {
                 e.ai.run_away_mode = true;
                 e.ai.run_away_start = now;
                 e.ai.run_away_time = 10 * 1000;
@@ -3629,7 +3629,7 @@ impl World {
         // 写**施法者**的 `TargetCret + TargetFocusTick`（`BaseObject.Base.cs:557-561`）。
         // 与 [`World::cast_big_explosion_spell`] 的「逐目标覆盖、末值胜」同口径（本处仅一个目标）。
         if out.caster_target_is_target {
-            if let Some(mut e) = self.entities.get_mut(caster_id) {
+            if let Some(e) = self.entities.get_mut(caster_id) {
                 e.ai.target_creature = Some(tid);
                 e.ai.target_focus_tick = now;
             }
@@ -4083,7 +4083,7 @@ impl World {
         } else {
             None
         };
-        let Some(mut e) = self.entities.get_mut(spawn.actor_id) else {
+        let Some(e) = self.entities.get_mut(spawn.actor_id) else {
             return;
         };
         // `UserCastle.cs:133/147/157/167/185/205`：`BaseObject.WAbil.HP = nHP`（**不改 MaxHP**）。
@@ -4633,7 +4633,7 @@ impl World {
             // oracle `CharPushed`：循环内 `Dir = nDir`，收尾 `Dir = nBackDir`（`result > 0`）或旧值
             // （`result == 0`）。本骨架 `push_now` 不改 `Dir` => 在此按 oracle 收尾语义补写。
             if !pushed.is_empty() {
-                if let Some(mut e) = self.entities.get_mut(target_id) {
+                if let Some(e) = self.entities.get_mut(target_id) {
                     e.ai.dir = crate::magic::back_dir(n_dir);
                 }
             }
@@ -5865,7 +5865,7 @@ impl World {
             return Vec::new();
         };
         // `:857 Dir = nDir;`（先落，末尾按 result 决定是否复原）。
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
+        if let Some(e) = self.entities.get_mut(actor_id) {
             e.ai.dir = n_dir;
         }
         let back = crate::magic::back_dir(n_dir);
@@ -5910,7 +5910,7 @@ impl World {
                 t.x = x;
                 t.y = y;
             }
-            if let Some(mut e) = self.entities.get_mut(actor_id) {
+            if let Some(e) = self.entities.get_mut(actor_id) {
                 // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
                 if race >= crate::entity::ACTOR_RACE_ANIMAL {
                     e.ai.walk_tick += 800;
@@ -5926,7 +5926,7 @@ impl World {
         }
         // `:890-895 Dir = nBackDir; if (result == 0) Dir = olddir;`
         let final_dir = if out.is_empty() { old_dir } else { back };
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
+        if let Some(e) = self.entities.get_mut(actor_id) {
             e.ai.dir = final_dir;
         }
         out
@@ -6259,7 +6259,7 @@ impl World {
         }
 
         // 3) 字段复位（`BaseObject.cs:2468-2479` + `:2678-2687`）。
-        if let Some(mut e) = self.entities.get_mut(actor_id) {
+        if let Some(e) = self.entities.get_mut(actor_id) {
             e.life_cycle.death = false;
             // `BaseObject.Die`（`BaseObject.Base.cs:318-345`）**每次**死亡都无条件置 `Death`/`DeathTick`，
             // 复活后 `CanReAlive` 仍为 true ⇒ oracle 允许「死→复活→再死」无限循环。本仓的死亡结算是
@@ -7802,7 +7802,7 @@ impl World {
 
         let mut skeleton = None;
         let (target_x_now, target_y_now) = self.entities.xy(target_id)?;
-        let mut e = self.entities.get_mut(target_id)?;
+        let e = self.entities.get_mut(target_id)?;
         // `:724-729`：`byte` / `ushort` 的 unchecked 回绕（**不夹取**；`<=0` 只命中 `==0`）。
         e.ai.body_leathery = e.ai.body_leathery.wrapping_sub(n10);
         e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(meat_draw);
@@ -10595,7 +10595,7 @@ mod tests {
         const SEED: i32 = 8_675_309;
         let (mut w, p, t, n10) = butch_rig(SEED, 105, true);
         {
-            let mut e = w.entities.get_mut(t).unwrap();
+            let e = w.entities.get_mut(t).unwrap();
             e.ai.body_leathery = n10; // 本次抽恰好归零
             e.ai.meat_quality = 1000;
         }
@@ -10668,7 +10668,7 @@ mod tests {
             let cx = 10 + dx;
             let (mut w, p, t, n10) = butch_rig_at(SEED, 53, true, cx, 10);
             {
-                let mut e = w.entities.get_mut(t).unwrap();
+                let e = w.entities.get_mut(t).unwrap();
                 e.ai.body_leathery = n10; // 过门则归零 + 骨架
                 e.ai.meat_quality = 1000;
             }
@@ -10715,7 +10715,7 @@ mod tests {
         // A：生产路径（一次有效屠宰；起值保证不归零、不回绕）。
         let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
         {
-            let mut e = w.entities.get_mut(t).unwrap();
+            let e = w.entities.get_mut(t).unwrap();
             e.ai.body_leathery = BODY0;
             e.ai.meat_quality = MEAT0;
         }

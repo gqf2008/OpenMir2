@@ -439,7 +439,7 @@ pub fn npc_run(world: &mut World, actor_id: i32) -> NpcRunOutcome {
 fn guild_official_run_body(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutcome) {
     if world.rng.random_below(GUILD_TURN_RANDOM_MOD) == 0 {
         let dir = world.rng.random_byte(NPC_TURN_DIR_MAX);
-        if let Some(mut e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir;
         }
         outcome.turned = Some(dir);
@@ -466,7 +466,7 @@ fn merchant_body_run(world: &mut World, actor_id: i32, outcome: &mut NpcRunOutco
     // `Merchant.cs:132-141`：`Random(50)==0` ⇒ `TurnTo(RandomByte(8))`；否则 `Random(50)==0` ⇒ `RM_HIT`。
     if world.rng.random_below(MERCHANT_BODY_TURN_RANDOM_MOD) == 0 {
         let dir = world.rng.random_byte(NPC_TURN_DIR_MAX);
-        if let Some(mut e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir;
         }
         outcome.turned = Some(dir);

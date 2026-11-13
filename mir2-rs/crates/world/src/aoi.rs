@@ -20,11 +20,11 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    AbilitySnapshot, Appearance, BaseAbil, BuffState, CombatAttribution, DropState, Entity,
-    EntityRef, EntityStore, Flags, GroupState, Inventory, LifeCycle, MapBinding, MerchantState,
-    MonsterClassState, NpcState, PlayerRunState, Progression, PvpState, Recovery, Revival,
-    SlaveState, SpawnBinding, Transform, VisibleBaseObject, VisibleEvent, VisibleFlag, Vitals,
-    ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    AbilitySnapshot, AiState, AnimalState, Appearance, BaseAbil, BuffState, CombatAttribution,
+    DropState, Entity, EntityRef, EntityStore, Flags, GroupState, Inventory, LifeCycle, MapBinding,
+    MerchantState, MonsterClassState, NpcState, PlayerRunState, Progression, PvpState, Recovery,
+    Revival, SlaveState, SpawnBinding, Transform, VisibleBaseObject, VisibleEvent, VisibleFlag,
+    Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 use bevy_ecs::prelude::Resource;
@@ -41,7 +41,7 @@ pub const CELL_OBJECT_EXPIRE_MS: i64 = 60 * 1000;
 /// 因此系统化不复制算法、也不引入第二份真值。
 pub trait AoiStore {
     fn get(&self, id: i32) -> Option<EntityRef<'_>>;
-    fn get_mut(&mut self, id: i32) -> Option<&mut Entity>;
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState>;
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding>;
 }
 
@@ -49,8 +49,8 @@ impl AoiStore for EntityStore {
     fn get(&self, id: i32) -> Option<EntityRef<'_>> {
         EntityStore::get(self, id)
     }
-    fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
-        EntityStore::entity_mut(self, id)
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
+        EntityStore::ai_mut(self, id)
     }
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
         EntityStore::map_binding_mut(self, id)
@@ -111,13 +111,13 @@ pub fn update_monster_visible<S: AoiStore>(
 ) -> bool {
     // `if ((HUtil32.GetTickCount() - SearchTick) <= SearchTime) return;`
     {
-        let Some(monster) = store.get_mut(monster_id) else {
+        let Some(ai) = store.ai_mut(monster_id) else {
             return false;
         };
-        if now_ms - monster.ai.search_tick <= monster.ai.search_time {
+        if now_ms - ai.search_tick <= ai.search_time {
             return false;
         }
-        monster.ai.search_tick = now_ms;
+        ai.search_tick = now_ms;
     }
     // `IActor baseObject = SystemShare.ActorMgr.Get(acrotId);`
     let Some(target) = store.get(viewer_id) else {
@@ -692,6 +692,10 @@ impl AoiStore for BevyAoiStore<'_> {
             .world
             .get::<NpcState>(e)
             .expect("实体必须挂 NpcState 组件（插入期已断言）");
+        let ai = self
+            .world
+            .get::<AiState>(e)
+            .expect("实体必须挂 AiState 组件（插入期已断言）");
         Some(EntityRef::from_components(
             entity,
             transform,
@@ -716,14 +720,15 @@ impl AoiStore for BevyAoiStore<'_> {
             inventory,
             merchant,
             npc,
+            ai,
         ))
     }
 
-    fn get_mut(&mut self, id: i32) -> Option<&mut Entity> {
+    fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
         let e = *self.index.get(&id)?;
         self.world
-            .get_mut::<Entity>(e)
-            .map(bevy_ecs::change_detection::Mut::into_inner)
+            .get_mut::<AiState>(e)
+            .map(|m| &mut bevy_ecs::change_detection::Mut::into_inner(m).ai)
     }
 
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
@@ -815,8 +820,8 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                         out.aoi_order.push(*id);
                         continue;
                     }
-                    if let Some(e) = store.get_mut(*id) {
-                        e.ai.search_tick = params.clock_ms;
+                    if let Some(ai) = store.ai_mut(*id) {
+                        ai.search_tick = params.clock_ms;
                     }
                     let outcome =
                         search_view_range_with_updates(map, &mut store, *id, params.clock_ms);
@@ -829,8 +834,8 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                             .get(monster_id)
                             .is_some_and(|e| crate::monai::consumes_view_range_update(&e))
                         {
-                            if let Some(monster) = store.get_mut(monster_id) {
-                                monster.ai.pending_view_updates.push(player_id);
+                            if let Some(ai) = store.ai_mut(monster_id) {
+                                ai.pending_view_updates.push(player_id);
                             }
                         }
                     }

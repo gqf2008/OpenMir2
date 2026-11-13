@@ -792,7 +792,7 @@ impl MonsterSink for WorldMonsterSink<'_> {
         // 类由 `MonsterInfo.Race` 决定，与怪名无关）。本写入不消费随机数，也不改 AI 行为；
         // 逐 race 的 oracle 出处见 `apply_monster_class_constants` 的文档。
         let now = self.world.clock_ms;
-        if let Some(mut e) = self.world.entities.get_mut(id) {
+        if let Some(e) = self.world.entities.get_mut(id) {
             // oracle `ApplyMonsterAbility`（`WorldServer.MonGen.cs:906/909`）：
             // `WalkSpeed = monster.WalkSpeed`、`NextHitTime = monster.AttackSpeed`。
             // 时机也必须一致：`ApplyMonsterAbility`（`:735`）**先行**，`cert.Initialize()`
@@ -2077,7 +2077,7 @@ mod tests {
         .spawn_monster(&lane_a_req("鸡"))
         .expect("生成成功");
         {
-            let mut e = world.entities.get_mut(id).expect("怪物在仓库");
+            let e = world.entities.get_mut(id).expect("怪物在仓库");
             e.ai.walk_step = 1;
             e.ai.walk_wait = 600;
             e.ai.walk_speed = 200;

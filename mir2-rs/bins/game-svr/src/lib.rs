@@ -3815,7 +3815,7 @@ fn handle_inbound_cmd(
             // 旧朝向（展示表只是投影，下一次转向/走跑会重新投影）。
             if out.send_butch && actor_id != 0 {
                 if out.dir_updated {
-                    if let Some(mut e) = world.entities.get_mut(actor_id) {
+                    if let Some(e) = world.entities.get_mut(actor_id) {
                         e.ai.dir = bt_dir;
                     }
                 }
@@ -11220,7 +11220,7 @@ fn handle_move_cmd(
             }
             // **单一真源**：先写实体 `Dir`（`MakeSaveRcd` 读 `playObject.Dir`；G-09），
             // 展示表只是投影。
-            if let Some(mut e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = world.entities.get_mut(actor_id) {
                 e.ai.dir = n_dir;
             }
             sync_display_dir(world, displays, actor_id);
@@ -11277,7 +11277,7 @@ fn handle_move_cmd(
             // `PlayObject.Base.cs:400` 的 `Dir = btDir;` 在 `CanWalk*` 之前），被挡/越界
             // **不回滚** ⇒ 实体朝向记**尝试**方向。`MakeSaveRcd` 读 `playObject.Dir`（G-09）
             // ⇒ 必须在 `step_with_route` 之前同步；失败支（下面 `!outcome.moved` 早退）也保留。
-            if let Some(mut e) = world.entities.get_mut(actor_id) {
+            if let Some(e) = world.entities.get_mut(actor_id) {
                 e.ai.dir = dir;
             }
             let outcome = world.step_with_route(actor_id, ddx, ddy, steps);
@@ -11737,7 +11737,7 @@ fn handle_hit_cmd(
     // 同一句在 oracle 里**无条件**执行：物理命中与**挥空**（`attackTarget == null`，
     // `_Attack` 返回 false）都改 `Dir` ⇒ 实体朝向也必须无条件同步（`MakeSaveRcd` 读
     // `playObject.Dir`；G-09 的失败支）。展示表从实体重投影。
-    if let Some(mut e) = world.entities.get_mut(actor_id) {
+    if let Some(e) = world.entities.get_mut(actor_id) {
         e.ai.dir = dir;
     }
     sync_display_dir(world, displays, actor_id);
@@ -12630,7 +12630,7 @@ fn handle_spell_cmd_with_magic(
         let dir = movewire::next_direction(cur_x, cur_y, req.target_x, req.target_y);
         // oracle `PlayObject.Attack.cs:1270` 的 `Dir = GetNextDirection(...)` 改的是
         // `playObject.Dir`（不只是展示态）⇒ 先写实体，再投影展示表。
-        if let Some(mut e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir;
         }
         sync_display_dir(world, displays, actor_id);
@@ -14628,7 +14628,7 @@ fn handle_spell_cmd_with_magic(
                                     chat::send_ref_msg_range(),
                                 );
                                 // `:253 SetTargetCreat`（在 `if (stdItem != null)` 内）。
-                                if let Some(mut c) = world.entities.get_mut(actor_id) {
+                                if let Some(c) = world.entities.get_mut(actor_id) {
                                     c.ai.target_creature = Some(target_id);
                                 }
                                 // `:235-252` 骰门 + 投毒（`boSpellFail` 在 `:254` 清 false）。
@@ -15738,14 +15738,15 @@ fn login_ctor_draws_for(
 ///   （`AllowGroupReCallCommand.cs:15`）。旧实现没有生产写点 ⇒ `@天地合一` 的成员允许门恒
 ///   false，测试手工置位掩盖了缺口（Important-2）。
 pub(crate) trait LoginScalarTarget {
-    fn login_base_entity(&mut self) -> &mut mir2_world::Entity;
+    /// `BaseObject.Dir`（S4c-2 起真值在 `AiState.ai`）。
+    fn set_login_dir(&mut self, dir: u8);
     fn set_login_attack_mode(&mut self, mode: u8);
     fn set_login_allow_group_re_call(&mut self, allow: bool);
 }
 
 impl LoginScalarTarget for mir2_world::EntitySpawn {
-    fn login_base_entity(&mut self) -> &mut mir2_world::Entity {
-        &mut self.entity
+    fn set_login_dir(&mut self, dir: u8) {
+        self.ai.dir = dir;
     }
     fn set_login_attack_mode(&mut self, mode: u8) {
         self.attack_mode = mode;
@@ -15756,8 +15757,8 @@ impl LoginScalarTarget for mir2_world::EntitySpawn {
 }
 
 impl LoginScalarTarget for mir2_world::EntityMut<'_> {
-    fn login_base_entity(&mut self) -> &mut mir2_world::Entity {
-        self.entity_mut()
+    fn set_login_dir(&mut self, dir: u8) {
+        self.ai.dir = dir;
     }
     fn set_login_attack_mode(&mut self, mode: u8) {
         self.flags.attack_mode = mode;
@@ -15771,8 +15772,7 @@ fn apply_login_record_scalars(
     ent: &mut impl LoginScalarTarget,
     data: Option<&record::CharacterData>,
 ) {
-    let base = ent.login_base_entity();
-    base.ai.dir = data.map_or(0, |d| d.dir);
+    ent.set_login_dir(data.map_or(0, |d| d.dir));
     ent.set_login_allow_group_re_call(data.is_some_and(|d| d.allow_group_re_call));
     // `WorldServer.cs:1148`：`playObject.AttatckMode = (AttackMode)humData.AttatckMode`——登录即
     // 装入 `PlayObject`。S4b-1 起 `attack_mode` 真值在 `Flags` 组件（`EntitySpawn` 载体平铺、
@@ -45041,7 +45041,7 @@ break
         // 让「CrazyMode 到期」可观测：未早退时它会被清掉。
         rig.world.clock_ms = 5_000;
         let arm = |rig: &mut GmRig| {
-            let mut e = rig.world.entities.get_mut(slave).unwrap();
+            let e = rig.world.entities.get_mut(slave).unwrap();
             e.ai.crazy_mode = true;
             e.ai.crazy_mode_tick = 0;
             e.ai.crazy_mode_interval = 10;
@@ -82229,7 +82229,7 @@ GMEXECUTE f
         // 方向也设成走位方向，确保**只有**「在线玩家跳过」这一条门能挡住它
         // （否则方向门也会挡住，用例失去牙）。
         {
-            let mut p = world.entities.get_mut(near).unwrap();
+            let p = world.entities.get_mut(near).unwrap();
             p.ai.dir = 2; // 右
         }
         world.entities.transform_mut(near).unwrap().x += 1;
@@ -84277,7 +84277,7 @@ fn ",
         let (mut world, hero, corpse, mut sessions, online, gates, _rx, cfg, displays, mut pwd) =
             dropgold_butch_rig(SEED, true);
         {
-            let mut e = world.entities.get_mut(corpse).unwrap();
+            let e = world.entities.get_mut(corpse).unwrap();
             e.ai.body_leathery = 255;
             e.ai.meat_quality = 2_000;
         }
@@ -84562,7 +84562,7 @@ fn ",
                 mut pwd,
             ) = dropgold_butch_rig(seed, true);
             {
-                let mut e = world.entities.get_mut(corpse).unwrap();
+                let e = world.entities.get_mut(corpse).unwrap();
                 e.ai.body_leathery = 255;
                 e.ai.meat_quality = 2_000;
             }
@@ -86710,7 +86710,7 @@ mod sm_skeleton_downlink_tests {
         // 已骨架（`Skeleton = true`）⇒ 门关（走命令路径：世界 tick 里重查同一门）。
         let (mut world, p, _q, _r, t, n10) = rig(SEED, 53, true);
         {
-            let mut e = world.entities.get_mut(t).unwrap();
+            let e = world.entities.get_mut(t).unwrap();
             e.ai.skeleton = true;
             e.ai.body_leathery = n10;
         }

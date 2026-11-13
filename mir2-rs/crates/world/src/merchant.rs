@@ -1572,7 +1572,7 @@ pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
         .is_some_and(|e| e.ob_mode || e.fixed_hide_mode);
     if world.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
         let dir = world.rng.random_byte(MERCHANT_TURN_DIR_MAX);
-        if let Some(mut e) = world.entities.get_mut(actor_id) {
+        if let Some(e) = world.entities.get_mut(actor_id) {
             e.ai.dir = dir; // `TurnTo` 先写 `Dir`（写方向与可见性无关）
         }
         if hidden {
@@ -2841,7 +2841,7 @@ mod tests {
         let a = w.spawn_merchant(spawn_at(7, 7)).expect("挂图成功");
         // 让「若被当怪跑」必然产生可观测副作用：walk 到点 + 无目标 ⇒ `monster_run` 置 `target_x=-1`
         // 并在无目标分支调 `wondering`（消耗 RNG）。
-        if let Some(mut e) = w.entities.get_mut(a) {
+        if let Some(e) = w.entities.get_mut(a) {
             e.ai.walk_speed = -1;
             e.ai.walk_tick = 0;
             e.ai.target_creature = None;

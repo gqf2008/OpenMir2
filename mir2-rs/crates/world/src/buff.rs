@@ -438,7 +438,7 @@ impl BuffSystem {
                     None => break,
                 };
                 if animal {
-                    if let Some(mut e) = world.entities.get_mut(actor_id) {
+                    if let Some(e) = world.entities.get_mut(actor_id) {
                         // C# `ushort -= 1000` 是 unchecked 回绕。
                         e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(1000);
                     }
@@ -660,7 +660,7 @@ mod tests {
         w.poison_dec_health_time = 2500;
         let base = w.clock_ms + BUFF_EPOCH_MS;
         {
-            let mut e = w.entities.get_mut(1).unwrap();
+            let e = w.entities.get_mut(1).unwrap();
             e.ai.animal = true;
             e.ai.meat_quality = 5000;
             e.vitals.hp = 100;
@@ -976,7 +976,7 @@ mod tests {
         let base = w.clock_ms + BUFF_EPOCH_MS;
         w.entities.get_mut(1).unwrap().life_cycle.ghost = true;
         for id in [1, 2] {
-            let mut e = w.entities.get_mut(id).unwrap();
+            let e = w.entities.get_mut(id).unwrap();
             e.ai.animal = true;
             e.vitals.hp = 100;
             e.vitals.mp = 0;
