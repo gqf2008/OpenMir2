@@ -930,7 +930,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > `[(1, dir=1, 4, 6)]`、RNG 后继 5 值 `[1,1,4,1,2]`、`dup_states=[(13001,true,10000);3]`；
 > 改动前（base `f823bf8ca` 内联实现）与改动后逐项相同（用例
 > `world::tests::sim_dup_stage_matches_recorded_vectors`）。
-> **段数口径（P2+P2b+P3a）**：余 18 段已迁 **6 段**（#3/#6/#7/#13/#16 + #14）。
+> **段数口径（单位 = 段号，分母 18 = 20 阶段 − P1 已系统化的 #2/#15）**：P3a 后已迁 **6 段**（#3/#6/#7/#13/#14/#16）。
 >
 > **S4d-3/P3b 落地登记（2026-11-13，第五批）**：`SimSettleDeaths`（#4，tick_head）与
 > `TailPlayerDeaths`（#17，tick_tail）作为**同一实现点**（`settle_deaths(only_players)`）迁成
@@ -944,11 +944,11 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **RNG 逐点对拍**：结算路径的抽数由既有用例钉住（`settle_deaths_pvp_calls_drop_use_items_twice`：
 > 两轮 × 13 槽 `Random(nRate)` = 26 抽，`format!("{:?}", rng)` 与 `draws_after(seed, [1;26])`
 > 逐值相同；单轮/红名/白名/StdMode45 各例同理）。迁移后同一组用例逐项通过 ⇒ 抽数点/次数/次序不变。
-> **段数口径（P2+P2b+P3a+P3b）**：已迁 **7 段 / 余 11**（settle 对按同一实现点计 1 段）。
+> **段数口径（单位 = 段号）**：P3b 后已迁 **8 段 / 余 10**（#3/#4/#6/#7/#13/#14/#16/#17）。
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含两段。
 
-> **尚未做（以 P3b 交付 head 为准）**：P4–P7（余 **11** 段——
-> 18 段中已迁 **7 段**：P2 的 #3/#6/#13/#16、P2b 的 #7、P3a 的 #14、P3b 的 #4+#17（同一实现点按 1 段计））、`SlotTable` 的 `QueryState` 缓存优化（按需）、
+> **尚未做（以 P3b 交付 head 为准；单位 = 段号）**：P4–P7（余 **10** 段——
+> 18 段中已迁 **8 段**：#3/#4/#6/#7/#13/#14/#16/#17）、`SlotTable` 的 `QueryState` 缓存优化（按需）、
 > `TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、`crates/world` 删除（S5，等 Owner 授权）。
 > 段号清单与写集见设计 §2.1/§4。
 
