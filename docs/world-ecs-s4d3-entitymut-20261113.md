@@ -31,7 +31,8 @@
    **P0+P1 中间态 = 4 个 `SimState` 搬移窗口 / tick**（Clock / Snapshot / Drain / AOI）、
    **P2 = 8 个**（head 6：Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
    SimPlayerRunExpiry / OutputDrain；tail 2：TailSuperManRefill / OutputAoi）、
-   **P2b = 9 个**（再 +`SimMapEvents`）。**P7 收口目标才是 2 个**（head 一个、tail 一个：
+   **P2b = 9 个**（再 +`SimMapEvents`）、**P3a = 10 个**（再 +`SimDup`）。
+   **P7 收口目标才是 2 个**（head 一个、tail 一个：
    其余段全部系统化后 head 只跑一次）。每个迁移批次只保证哨兵覆盖**该批实际存在**的窗口，
    不宣称已收敛到 2。哨兵让下一次 tick 立即 fail-fast，而不是在 `SimState::default()` 上空转。
 6. **顺序载体不是一律 `TickEntityIds`**：每段有**旧实现自己的语义载体**（命令 FIFO、
@@ -316,6 +317,7 @@ facade 侧：取回 sim / record / ids，删掉落的一次性资源
 | Dv2 | 顺序载体一律 `TickEntityIds`（§2.6，由 `SlotTable` 派生） | 段内直接用 **`SlotTable::order()`**（常驻资源，每段入口取一次）；`TickEntityIds` 只在 `SimHiterSnapshot` 使用（`OutputAoi` 用的是 `AoiIds`，不是 `TickEntityIds`） | 语义同一（槽位序 = 插入序 + 空闲槽 LIFO 复用；`SlotTable::order` 就是该契约的唯一真值）。D1 已把槽位表定为常驻资源，再复制一份 `TickEntityIds` 只会引入第二真值（D3 登记：`TickOrder`/`SlotOrder` 清理进 S5） |
 | Dv3 | 「组装的组合视图任一字段取不到 ⇒ `None`；遍历时跳过」（§2.3） | **按组件**语义：`get::<C>` / `get_mut::<C>` 只在**该组件**缺失时 `None`（并 `StageSkip::component_missing += 1`）；组合视图（`view_*`）与 `snapshot_spawn`/`entity_ref` 才是「任一字段缺失 ⇒ `None`」 | 旧 facade 的两类读点本来就分这两类：`EntityStore::get`/`spawn_cloned` 是整条记录（24 组件全有才 `Some`），而适配器的 `get::<C>` 对应旧 `entities.get(id).field` 的按字段读。**不变量**：生产路径的 21+4 bundle 对每个实体齐全 ⇒ 半实体只可能出现在测试夹具；任何段在半实体上取到部分组件时 `StageSkip::component_missing` 非 0（诊断计数，不改变 `None`/跳过语义） |
 | Dv4 | `StageSkip` 描述为「本 tick 里」的计数（§2.4） | **世界生命期累计**（`AtomicU64` 只增不减，不按 tick 重置） | 免掉每 tick 一次清零写；计数只作诊断（非 0 = 接线 bug/半实体），绝对值不参与任何判据 |
+| Dv5 | 段宿主 `StageWorld { entities: StageEntities, sim: &mut SimState }`（§3.4） | **不再实现**。段内需要 RNG 与实体写交错时：`remove_resource::<SimState>()` 取走 owned `SimState` → 与 `StageEntities` 并行使用 → 段尾 `insert_resource` 归还（P3a `SimDup` 首个落地；P3b settle 对沿用） | 裁决 2026-11-13：`StageWorld` 在 `TickRunner` 系统里不可构造（`SimState` 是 bevy World 的资源、`EntityStore` 拥有同一个 World）。搬移点在系统内部，与 P0/P1 边界搬移同构；借用冲突 = 实现方式选错，禁 unsafe。首个用例：`world.rs::sim_dup_stage_system` |
 
 ### 2.5 段内 panic / 恢复路径（must_cover #5，review F5）
 
@@ -331,7 +333,7 @@ F5 的事实：段系统 panic 时 `facade.sim` 已被 `mem::take` 成 `Default`
    P0+P1 = **4**（`Clock` / `SimHiterSnapshot` / `OutputDrain` / `OutputAoi`）、
    P2 = **8**（head 6 = Clock / SimHiterSnapshot / SimExpireHitters / SimExtraAbil /
    SimPlayerRunExpiry / OutputDrain；tail 2 = TailSuperManRefill / OutputAoi）、
-   **P2b 交付 head = 9**（+`SimMapEvents`，head 7 + tail 2）。
+   **P2b = 9**（+`SimMapEvents`，head 7 + tail 2）、**P3a 交付 head = 10**（+`SimDup`，head 8 + tail 2）。
    **P7 收口目标才是 2 个**（head 一个、tail 一个：其余段全部系统化后 head 只跑一次）。
    任何一批都**不**宣称已收敛到 2——那是 P7 的验收项。head 边界一次移入 `SimState`、
    `TickRecordRes`、`TickEntityIds`（`SlotTable` 按 D1 为常驻资源，不参与搬移），tail 边界同形。
@@ -569,6 +571,23 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
 >   反向依赖；装配体与 facade 共用 `EntityStore::from_components` / `EntityRef::from_components`。
 
 ### 3.4 段宿主：`StageWorld` 与 facade 的薄包装（D2）
+
+> **裁决（2026-11-13，P3a 开工时）**：**`StageWorld` 包装不再实现**（偏差 Dv5）。段系统内需要
+> 「RNG 与实体写交错」时的唯一形态是：
+>
+> ```text
+> 段入口：let mut sim = world.remove_resource::<SimState>().expect("段边界契约");
+>         let mut ad  = StageEntities::<Spec>::new(world);      // 实体在 bevy World
+>         … 用 (&mut ad, &mut sim) 交错读写（RNG 在 sim.rng，地图在 sim.maps）…
+>         drop(ad); world.insert_resource(sim);                 // 段尾归还
+> ```
+>
+> 这与 P0/P1 的边界搬移同构，只是搬移点在系统内部：同一时刻 `SimState` 只有一个所有者
+> （owned 局部变量），bevy `World` 只被 `StageEntities` 借一次。**若仍出现借用冲突，说明实现
+> 方式选错，不得用 unsafe 绕**。下方 §3.4 的 `StageWorld` 草图仅作历史记录（它假定
+> `&mut SimState` 能与 `&mut bevy::World` 并存，而在 `TickRunner` 系统里 `SimState` 本身就是
+> 该 World 的资源、`EntityStore` 又拥有该 World，草图不可构造）。
+
 
 ```rust
 pub struct StageWorld<'w> {

@@ -166,7 +166,25 @@ pub fn walk_to(world: &mut World, actor_id: i32, dir: u8) -> bool {
 /// `Envirnoment.GetXYObjCount`（`src/M2Server/Maps/Envirnoment.cs:1062-1093`）的 actor 计数子集：
 /// 统计 `(x, y)` 格上 `!Ghost && !Death && !FixedHideMode && !ObMode` 的 actor 对象数。
 pub(crate) fn count_at_cell(world: &World, map_id: usize, x: i32, y: i32) -> i32 {
-    let Some(map) = world.maps.get(map_id) else {
+    count_at_cell_with(&world.maps, map_id, x, y, |id| {
+        world
+            .entities
+            .get(id)
+            .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
+    })
+}
+
+/// [`count_at_cell`] 的访问器版本（P3a）：阻挡判定由调用方给，供 `SimDup` 段
+/// （`crate::world::StageDupAccess`）与 facade 共用同一份枚举/过滤次序。
+/// 语义与 `count_at_cell` 逐行相同：格枚举序、`actor_object` 门、阻挡集合一致。
+pub(crate) fn count_at_cell_with(
+    maps: &[crate::map::MapGrid],
+    map_id: usize,
+    x: i32,
+    y: i32,
+    is_blocking: impl Fn(i32) -> bool,
+) -> i32 {
+    let Some(map) = maps.get(map_id) else {
         return 0;
     };
     let (cell, ok) = map.get_cell_info(x, y);
@@ -178,11 +196,7 @@ pub(crate) fn count_at_cell(world: &World, map_id: usize, x: i32, y: i32) -> i32
         if !o.actor_object {
             continue;
         }
-        if world
-            .entities
-            .get(o.cell_obj_id)
-            .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
-        {
+        if is_blocking(o.cell_obj_id) {
             count += 1;
         }
     }

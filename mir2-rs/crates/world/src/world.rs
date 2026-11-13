@@ -19,8 +19,8 @@ use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{
     advance_clock_system,
     tick::{StageEntities, StageSpec, StageTrace},
-    Appearance, BuffState, CombatAttribution, Flags, LifeCycle, PlayerRunState, TickClock,
-    TickOwnerThread, TickRunner, TickStage, Vitals,
+    Appearance, BuffState, CombatAttribution, DupState, Flags, LifeCycle, PlayerRunState,
+    TickClock, TickOwnerThread, TickRunner, TickStage, Transform, Vitals,
 };
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
@@ -32,7 +32,7 @@ use crate::combat::{
     attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
-use crate::entity::{EntitySpawn, EntityStore, PvpView, StageSnapshotExt};
+use crate::entity::{DupAccess, DupActor, EntitySpawn, EntityStore, PvpView, StageSnapshotExt};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
 
@@ -1464,6 +1464,7 @@ impl HeadRunner {
             TickStage::SimPlayerRunExpiry,
             expire_player_run_state_stage_system,
         );
+        me.add(TickStage::SimDup, sim_dup_stage_system);
         me.add(TickStage::OutputDrain, output_drain_system);
         me
     }
@@ -1554,6 +1555,8 @@ impl Default for TailRunner {
 pub struct StageOut {
     pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
     pub run_state_expiries: Vec<(i32, RunStateExpiry)>,
+    /// **P3a**：`SimDup` 段的推挤事件（`record.pushes` 的一段；facade 在段后取走）。
+    pub pushes: Vec<crate::action::PushEvent>,
 }
 
 /// **S4d-3/P1**：`OutputAoi` 段的注册壳——记 [`StageTrace`] 后委派给既有
@@ -1945,6 +1948,139 @@ pub fn sim_map_events_stage_system(world: &mut bevy_ecs::world::World) {
     }
 }
 
+mir2_world_bevy::stage_spec!(
+    SimDup,
+    TickStage::SimDup,
+    read: [
+        Appearance,
+        LifeCycle,
+        Flags,
+        Transform,
+        DupState,
+        crate::entity::AiState
+    ],
+    write: [DupState, Transform, crate::entity::AiState]
+);
+
+/// **P3a**：`SimDup` 段的实体访问器（[`crate::entity::DupAccess`] 的段内实现）。
+///
+/// 与 facade 的 `EntityStore` 实现共用 `check_dup_obj_core` / `char_pushed_core` / `can_walk_cell_core`
+/// ——逐格推进与 RNG 邻接判定只有一份实现（`char_pushed_now` 的签名不动）。
+struct StageDupAccess<'a, 'w, S: StageSpec> {
+    ad: &'a mut StageEntities<'w, S>,
+}
+
+impl<S> DupAccess for StageDupAccess<'_, '_, S>
+where
+    S: StageSpec
+        + mir2_world_bevy::tick::Reads<Appearance>
+        + mir2_world_bevy::tick::Reads<LifeCycle>
+        + mir2_world_bevy::tick::Reads<Flags>
+        + mir2_world_bevy::tick::Reads<Transform>
+        + mir2_world_bevy::tick::Reads<DupState>
+        + mir2_world_bevy::tick::Reads<crate::entity::AiState>
+        + mir2_world_bevy::tick::Writes<DupState>
+        + mir2_world_bevy::tick::Writes<Transform>
+        + mir2_world_bevy::tick::Writes<crate::entity::AiState>,
+{
+    fn order_ids(&self) -> Vec<i32> {
+        self.ad.order().into_iter().map(|(id, _)| id).collect()
+    }
+    fn actor_flags(&self, id: i32) -> Option<(u8, bool)> {
+        let race = self.ad.get::<Appearance>(id)?.race;
+        let ghost = self.ad.get::<LifeCycle>(id)?.ghost;
+        Some((race, ghost))
+    }
+    fn xy(&self, id: i32) -> Option<(usize, i32, i32)> {
+        let t = self.ad.get::<Transform>(id)?;
+        Some((t.map_id, t.x, t.y))
+    }
+    fn dup_ticks(&self, id: i32) -> Option<(i64, bool, i64)> {
+        let d = self.ad.get::<DupState>(id)?;
+        Some((d.check_dup_obj_tick, d.bo_duplication, d.dup_start_tick))
+    }
+    fn set_dup_check_tick(&mut self, id: i32, now: i64) {
+        if let Some(d) = self.ad.get_mut::<DupState>(id) {
+            d.check_dup_obj_tick = now;
+        }
+    }
+    fn set_dup_bo(&mut self, id: i32, bo: bool) {
+        if let Some(d) = self.ad.get_mut::<DupState>(id) {
+            d.bo_duplication = bo;
+        }
+    }
+    fn set_dup_start(&mut self, id: i32, start: i64) {
+        if let Some(d) = self.ad.get_mut::<DupState>(id) {
+            d.dup_start_tick = start;
+        }
+    }
+    fn is_blocking(&self, id: i32) -> bool {
+        let Some(life) = self.ad.get::<LifeCycle>(id) else {
+            return false;
+        };
+        if life.ghost || life.death {
+            return false;
+        }
+        let Some(flags) = self.ad.get::<Flags>(id) else {
+            return false;
+        };
+        !flags.fixed_hide_mode && !flags.ob_mode
+    }
+    fn push_actor(&self, id: i32) -> Option<DupActor> {
+        let dir = self.ad.get::<crate::entity::AiState>(id)?.ai.dir;
+        let t = self.ad.get::<Transform>(id)?;
+        let race = self.ad.get::<Appearance>(id)?.race;
+        Some(DupActor {
+            dir,
+            x: t.x,
+            y: t.y,
+            map_id: t.map_id,
+            race,
+        })
+    }
+    fn set_dir(&mut self, id: i32, dir: u8) {
+        if let Some(a) = self.ad.get_mut::<crate::entity::AiState>(id) {
+            a.ai.dir = dir;
+        }
+    }
+    fn set_xy(&mut self, id: i32, x: i32, y: i32) {
+        if let Some(t) = self.ad.get_mut::<Transform>(id) {
+            t.x = x;
+            t.y = y;
+        }
+    }
+    fn add_walk_tick(&mut self, id: i32, delta: i64) {
+        if let Some(a) = self.ad.get_mut::<crate::entity::AiState>(id) {
+            a.ai.walk_tick += delta;
+        }
+    }
+}
+
+/// **S4d-3/P3a 段 #14 `SimDup`**：重叠推挤（`PlayObject.Run:263-285`）。
+///
+/// 段位与旧内联调用完全相同（`tick_head` 里 `record.pushes.extend(self.check_dup_obj())` 那一行；
+/// `check_dup_obj` 现在是本段的兼容入口）。RNG：每个过 `should_push` 门的实体恰抽一次
+/// `RandomByte(8)`（`run_gap::dup_push_dir`），抽数点/次数/次序由 `check_dup_obj_core` 与
+/// facade 共用同一份实现。
+///
+/// **段内借用形状（2026-11-13 裁决）**：`remove_resource::<SimState>()` 取走 owned `SimState`
+/// → 与 `StageEntities` 并行使用（实体在 bevy World、RNG/地图在 owned SimState）→ 段尾
+/// `insert_resource` 归还。这是 P0/P1 边界搬移的同构形态，搬移点在系统内部；不用
+/// 设计 §3.4 的 `StageWorld`（见设计件 DvX）。
+pub fn sim_dup_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimDup);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("SimState 必须在段窗口内（段边界契约）");
+    let pushes = {
+        let mut ad = StageEntities::<SimDup>::new(world);
+        let mut access = StageDupAccess { ad: &mut ad };
+        World::check_dup_obj_core(&mut access, &mut sim)
+    };
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().pushes = pushes;
+}
+
 pub struct World {
     pub entities: EntityStore,
     /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
@@ -2040,6 +2176,11 @@ impl World {
                 .resource_mut::<StageOut>()
                 .run_state_expiries,
         )
+    }
+
+    /// 取走 `SimDup` 段落到 [`StageOut`] 的推挤事件（段边界之后调用；P3a）。
+    fn take_stage_pushes(&mut self) -> Vec<crate::action::PushEvent> {
+        std::mem::take(&mut self.entities.world_mut().resource_mut::<StageOut>().pushes)
     }
 
     /// 取走 `SimExtraAbil` 段落到 [`StageOut`] 的输出（段边界之后调用）。
@@ -6317,65 +6458,18 @@ impl World {
     /// `random.Next(8)` **恰一次**、值域 `0..=7`）；随后 [`World::char_pushed_now`] 逐格发
     /// `RM_PUSH`。玩家选取 = `Race == Play && !Ghost`（oracle `PlayObjectList` 不含幽灵）。
     pub fn check_dup_obj(&mut self) -> Vec<crate::action::PushEvent> {
-        let now = self.clock_ms;
-        let ids: Vec<i32> = self
-            .entities
-            .iter_ref()
-            .filter(|e| e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost)
-            .map(|e| e.id)
-            .collect();
-        let mut pushes = Vec::new();
-        for id in ids {
-            // S3a：`map_id/x/y` 仍在 `Entity`，重叠推挤三字段已在 `DupState` 组件
-            // （`EntityStore::dup_state*` 受控访问；业务模块不持有裸 `Query`）。
-            let Some((map_id, x, y)) = self.entities.get(id).map(|e| (e.map_id, e.x, e.y)) else {
-                continue;
-            };
-            let Some(last) = self.entities.dup_state(id).map(|d| d.check_dup_obj_tick) else {
-                continue;
-            };
-            // `:263` 严格 `>`：恰 3000ms 不检查。
-            if now - last <= 3000 {
-                continue;
-            }
-            // `:265` `CheckDupObjTick = GetTickCount()`（本 tick 内同一 `now`）。
-            if let Some(d) = self.entities.dup_state_mut(id) {
-                d.check_dup_obj_tick = now;
-            }
-            // `:266` `GetStartPoint()`：见本函数文档「处置（登记）」。
-            // `:267` `tObjCount = Envir.GetXYObjCount(CurrX, CurrY)`（含自己）。
-            let t_obj_count = self.xy_obj_count(map_id, x, y);
-            // `:268-279`：`>=2` 首次置位；`<2` 清 `BoDuplication`（`DupStartTick` 不复位）。
-            let elapsed = {
-                let Some(d) = self.entities.dup_state_mut(id) else {
-                    continue;
-                };
-                if t_obj_count >= 2 {
-                    if !d.bo_duplication {
-                        d.bo_duplication = true;
-                        d.dup_start_tick = now;
-                    }
-                } else {
-                    d.bo_duplication = false;
-                }
-                now - d.dup_start_tick
-            };
-            // `:280-281`：C# 原式 `(A && B || C && D) && E`（`&&` 优先于 `||`）。
-            let should_push = ((t_obj_count >= 3 && elapsed > 3000)
-                || (t_obj_count == 2 && elapsed > 10000))
-                && elapsed < 20000;
-            if should_push {
-                // `:283` 实参求值顺序：先取数，再 `CharPushed`。
-                let dir = crate::run_gap::dup_push_dir(&mut self.rng);
-                pushes.extend(self.char_pushed_now(id, dir, 1));
-            }
-        }
-        pushes
+        // S4d-3/P3a：段系统（`SimDup`），段位与旧内联调用完全相同（`tick_head` 的同一行）。
+        self.run_head_stage(|world, head| head.run(TickStage::SimDup, world));
+        self.take_stage_pushes()
     }
 
     /// 目标格是否可走（`Envirnoment.CanWalk(nX, nY, false)`）：**包含自身**——
     /// 与 [`World::cell_free`]（排除 `self_id`）不同：oracle `CanWalk` 不看 `cert`，同格 clamp 时
     /// 当前格上的自己也会挡住 `CharPushed`（`GetFrontPosition` 在边界原样返回当前格）。
+    ///
+    /// **P3a 后由 `can_walk_cell_core` 接管**（`char_pushed_core` 走核心）；本函数保留为
+    /// facade 侧对照实现，P5 统一时随 `char_pushed_now` 的共用签名一起清理。
+    #[allow(dead_code)]
     fn can_walk_cell(&self, map_id: usize, x: i32, y: i32) -> bool {
         let Some(map) = self.maps.get(map_id) else {
             return false;
@@ -6449,30 +6543,116 @@ impl World {
         n_dir: u8,
         n_push_count: u8,
     ) -> Vec<crate::action::PushEvent> {
-        let Some(e) = self.entities.get(actor_id) else {
+        // S4d-3/P3a：逐格推进核心抽到 `char_pushed_core`（facade 与 `SimDup` 段共用同一份）。
+        // **签名保持不变**（coordinator 裁决：Command/slave 的共用签名本批不动，P5 统一）。
+        let World { entities, sim, .. } = self;
+        Self::char_pushed_core(entities, sim, actor_id, n_dir, n_push_count)
+    }
+
+    /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`
+    /// （`PlayObject.Message.cs:765`），其中的 `VerifyTick` 段
+    /// （`BaseObject.Base.cs:223-228`）对每个在场玩家每 30s 调一次
+    /// [`World::verify_map_time`]。
+    ///
+    /// oracle 的玩家 `Run` 由 `WorldServer.cs:697` 每 ~200ms 驱动；本骨架玩家没有独立的
+    /// `Run` 方法 ⇒ 在 [`World::tick`] 的 AOI 段之前补这一趟（`race == Play && !Ghost`，
+    /// `Ghost` 玩家已从 `PlayObjectList` 移除、不再 Run，见 `WorldServer.cs:708-711`）。
+    /// 30s 门在 [`World::verify_map_time`] 内 ⇒ 常态每 tick 只是一次整数比较。
+    /// **P3a**：`check_dup_obj` 的共用核心（facade 与 `SimDup` 段走同一份）。
+    ///
+    /// 逐行对应旧 `World::check_dup_obj`：槽位序筛 `Race == Play && !Ghost`；3s 门严格 `>`；
+    /// 过门先刷 `check_dup_obj_tick = now`；`GetXYObjCount`（`count_at_cell_with`）；`>=2` 首次
+    /// 置位 `BoDuplication/DupStartTick`、`<2` 只清 `BoDuplication`；推挤门
+    /// `((>=3 && elapsed>3000) || (==2 && elapsed>10000)) && elapsed<20000`；
+    /// 过门才抽 `RandomByte(8)` 并调 `char_pushed_core`。
+    fn check_dup_obj_core<A: DupAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+    ) -> Vec<crate::action::PushEvent> {
+        let now = sim.clock_ms;
+        let ids: Vec<i32> = access
+            .order_ids()
+            .into_iter()
+            .filter(|&id| {
+                access
+                    .actor_flags(id)
+                    .is_some_and(|(race, ghost)| race == crate::entity::ACTOR_RACE_PLAY && !ghost)
+            })
+            .collect();
+        let mut pushes = Vec::new();
+        for id in ids {
+            let Some((map_id, x, y)) = access.xy(id) else {
+                continue;
+            };
+            let Some((last, bo, start)) = access.dup_ticks(id) else {
+                continue;
+            };
+            // `:263` 严格 `>`：恰 3000ms 不检查。
+            if now - last <= 3000 {
+                continue;
+            }
+            // `:265` `CheckDupObjTick = GetTickCount()`（本 tick 内同一 `now`）。
+            access.set_dup_check_tick(id, now);
+            // `:267` `tObjCount = Envir.GetXYObjCount(CurrX, CurrY)`（含自己）。
+            let t_obj_count = crate::monai::count_at_cell_with(&sim.maps, map_id, x, y, |cid| {
+                access.is_blocking(cid)
+            });
+            // `:268-279`：`>=2` 首次置位；`<2` 清 `BoDuplication`（`DupStartTick` 不复位）。
+            let start_after = if t_obj_count >= 2 {
+                if bo {
+                    start
+                } else {
+                    access.set_dup_bo(id, true);
+                    access.set_dup_start(id, now);
+                    now
+                }
+            } else {
+                access.set_dup_bo(id, false);
+                start
+            };
+            let elapsed = now - start_after;
+            // `:280-281`：C# 原式 `(A && B || C && D) && E`（`&&` 优先于 `||`）。
+            let should_push = ((t_obj_count >= 3 && elapsed > 3000)
+                || (t_obj_count == 2 && elapsed > 10000))
+                && elapsed < 20000;
+            if should_push {
+                // `:283` 实参求值顺序：先取数，再 `CharPushed`。
+                let dir = crate::run_gap::dup_push_dir(&mut sim.rng);
+                pushes.extend(Self::char_pushed_core(access, sim, id, dir, 1));
+            }
+        }
+        pushes
+    }
+
+    /// **P3a**：`char_pushed_now` 的共用核心（逐格推进；RNG 只在调用方，本函数零抽数）。
+    fn char_pushed_core<A: DupAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        n_dir: u8,
+        n_push_count: u8,
+    ) -> Vec<crate::action::PushEvent> {
+        let Some(actor) = access.push_actor(actor_id) else {
             return Vec::new();
         };
-        let old_dir = e.ai.dir;
-        let (mut x, mut y, map_id, race) = (e.x, e.y, e.map_id, e.race);
-        let Some((w, h)) = self.maps.get(map_id).map(|m| (m.width, m.height)) else {
+        let old_dir = actor.dir;
+        let (mut x, mut y, map_id, race) = (actor.x, actor.y, actor.map_id, actor.race);
+        let Some((w, h)) = sim.maps.get(map_id).map(|m| (m.width, m.height)) else {
             return Vec::new();
         };
         // `:857 Dir = nDir;`（先落，末尾按 result 决定是否复原）。
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.ai.dir = n_dir;
-        }
+        access.set_dir(actor_id, n_dir);
         let back = crate::magic::back_dir(n_dir);
         let mut out = Vec::new();
         for _ in 0..n_push_count {
             let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
             // `:862 Envir.CanWalk(nx, ny, false)`（含自身；不可走即 break）。
-            if !self.can_walk_cell(map_id, nx, ny) {
+            if !Self::can_walk_cell_core(access, sim, map_id, nx, ny) {
                 break;
             }
             // `:864 Envir.MoveToMovingObject(CurrX, CurrY, this, nx, ny, false)`。
-            let now = self.clock_ms;
+            let now = sim.clock_ms;
             let moved = {
-                let World { entities, sim, .. } = self;
                 let Some(map) = sim.maps.get_mut(map_id) else {
                     break;
                 };
@@ -6488,11 +6668,7 @@ impl World {
                         // `CheckDupObj` 只对玩家生效 ⇒ cert 的 `CellType` 恒 `Play`。
                         cert_cell_type: crate::map::CellType::Play,
                     },
-                    |cid| {
-                        entities.get(cid).is_some_and(|o| {
-                            !o.ghost && !o.death && !o.fixed_hide_mode && !o.ob_mode
-                        })
-                    },
+                    |cid| access.is_blocking(cid),
                 )
             };
             if !moved {
@@ -6500,15 +6676,10 @@ impl World {
             }
             x = nx;
             y = ny;
-            if let Some(t) = self.entities.transform_mut(actor_id) {
-                t.x = x;
-                t.y = y;
-            }
-            if let Some(e) = self.entities.get_mut(actor_id) {
-                // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
-                if race >= crate::entity::ACTOR_RACE_ANIMAL {
-                    e.ai.walk_tick += 800;
-                }
+            access.set_xy(actor_id, x, y);
+            // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
+            if race >= crate::entity::ACTOR_RACE_ANIMAL {
+                access.add_walk_tick(actor_id, 800);
             }
             // `:871 SendRefMsg(RM_PUSH, nBackDir, CurrX, CurrY, 0, "")` —— 逐格一条。
             out.push(crate::action::PushEvent {
@@ -6520,21 +6691,38 @@ impl World {
         }
         // `:890-895 Dir = nBackDir; if (result == 0) Dir = olddir;`
         let final_dir = if out.is_empty() { old_dir } else { back };
-        if let Some(e) = self.entities.get_mut(actor_id) {
-            e.ai.dir = final_dir;
-        }
+        access.set_dir(actor_id, final_dir);
         out
     }
 
-    /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`
-    /// （`PlayObject.Message.cs:765`），其中的 `VerifyTick` 段
-    /// （`BaseObject.Base.cs:223-228`）对每个在场玩家每 30s 调一次
-    /// [`World::verify_map_time`]。
-    ///
-    /// oracle 的玩家 `Run` 由 `WorldServer.cs:697` 每 ~200ms 驱动；本骨架玩家没有独立的
-    /// `Run` 方法 ⇒ 在 [`World::tick`] 的 AOI 段之前补这一趟（`race == Play && !Ghost`，
-    /// `Ghost` 玩家已从 `PlayObjectList` 移除、不再 Run，见 `WorldServer.cs:708-711`）。
-    /// 30s 门在 [`World::verify_map_time`] 内 ⇒ 常态每 tick 只是一次整数比较。
+    /// **P3a**：`World::can_walk_cell` 的共用核心（阻挡判定走 [`DupAccess::is_blocking`]）。
+    fn can_walk_cell_core<A: DupAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+    ) -> bool {
+        let Some(map) = sim.maps.get(map_id) else {
+            return false;
+        };
+        if !map.cell_match(x, y) {
+            return false;
+        }
+        let (cell, ok) = map.get_cell_info(x, y);
+        // C# `if (cellSuccess && cellInfo.Valid)`；`get_cell_info` 的 `ok` 已含 `valid()`。
+        if !ok {
+            return false;
+        }
+        if !cell.is_available() {
+            return true;
+        }
+        !cell
+            .obj_list
+            .iter()
+            .any(|o| o.actor_object && access.is_blocking(o.cell_obj_id))
+    }
+
     fn verify_players_map_time(&mut self) {
         let ids: Vec<i32> = self
             .entities
@@ -8676,12 +8864,85 @@ mod tests {
                 TickStage::SimExtraAbil,
                 TickStage::SimMapEvents,
                 TickStage::SimPlayerRunExpiry,
+                TickStage::SimDup,
                 TickStage::OutputDrain,
                 TickStage::TailSuperManRefill,
                 TickStage::OutputAoi
             ],
             "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
         );
+    }
+
+    /// **P3a**：`SimDup` 段与旧 facade 内联实现逐项等价（同一场景的**改动前后**向量对拍）。
+    ///
+    /// 场景：3 名玩家同格 (5,5)、`check_dup_obj_tick=0`。clock=10_000 第一趟只置位
+    /// `BoDuplication/DupStartTick`（零推挤）；clock=13_001 第二趟 ⇒ 槽位首名 id=1 过
+    /// `>=3 && elapsed>3000` 门，抽 `RandomByte(8)` 恰一次并逐格推进到 (4,6)；后两名看到
+    /// 2 个对象且 `elapsed=3001 <= 10000` ⇒ 零抽数。
+    ///
+    /// 期望值来自**改动前**（base `f823bf8ca` 的 `World::check_dup_obj` 内联实现）在同一夹具上
+    /// 的实跑记录：`first=[]` / `second=[(1, dir=1, 4, 6)]` / RNG 后继 5 值 `[1,1,4,1,2]` /
+    /// `dup_states=[(13001,true,10000);3]`。迁移后必须逐项相同（抽数点/次数/次序与推挤序列）。
+    ///
+    /// 牙：① 删 `SimDup` 注册 ⇒ `head.run(SimDup)` panic（trace 序列牙同时红）；
+    /// ② 删 `set_dup_check_tick` 写回 ⇒ `dup_states` 首项断言红（13001 变 10000）；
+    /// ③ 删 `!bo → 置 true/start=now` 分支 ⇒ 第二趟 elapsed=0 ⇒ 零推挤 ⇒ 向量红；
+    /// ④ `StageDupAccess::order_ids` 反序 ⇒ 推挤者从 id=1 变 id=3 ⇒ 向量红。
+    #[test]
+    fn sim_dup_stage_matches_recorded_vectors() {
+        let mut w = World::new(8, 8);
+        for id in 1..=3 {
+            let mut e = crate::EntitySpawn::new(id, "p", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            w.entities.insert(e);
+            assert!(w.enter_world(id));
+        }
+        w.clock_ms = 10_000;
+        for id in 1..=3 {
+            w.entities.dup_state_mut(id).unwrap().check_dup_obj_tick = 0;
+        }
+        let first = w.check_dup_obj();
+        assert!(first.is_empty(), "第一趟只置位 BoDuplication，零推挤");
+        w.clock_ms = 13_001;
+        let second = w.check_dup_obj();
+        assert_eq!(
+            second,
+            vec![crate::action::PushEvent {
+                actor_id: 1,
+                dir: 1,
+                x: 4,
+                y: 6
+            }],
+            "第二趟只有槽位首名过门；推挤序列与改动前一致"
+        );
+        let tail: Vec<u8> = (0..5).map(|_| w.rng.random_byte(8)).collect();
+        assert_eq!(
+            tail,
+            vec![1, 1, 4, 1, 2],
+            "RNG 后继序列必须与改动前逐值一致（抽数点/次数/次序）"
+        );
+        let states: Vec<(i64, bool, i64)> = (1..=3)
+            .map(|id| {
+                let d = w.entities.dup_state(id).unwrap();
+                (d.check_dup_obj_tick, d.bo_duplication, d.dup_start_tick)
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![(13_001, true, 10_000); 3],
+            "check_dup_obj_tick / DupStartTick 的写回必须落地"
+        );
+        // 位置写回：逐格推进必须落到 `Transform`（删 `set_xy` 即红）。
+        assert_eq!(
+            w.entities.get(1).map(|e| (e.x, e.y)),
+            Some((4, 6)),
+            "推挤后的坐标必须写回组件"
+        );
+        // 3s 门：同一时钟再跑一趟（13001）必须零推挤（`now - last = 0 <= 3000`）。
+        let third = w.check_dup_obj();
+        assert!(third.is_empty(), "3s 门内不得重复结算");
     }
 
     /// **P2b**：`SimMapEvents` 段与旧 `run_map_events` 的判定链等价（火墙命中入队）。

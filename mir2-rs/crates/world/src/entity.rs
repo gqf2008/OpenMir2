@@ -3289,6 +3289,103 @@ impl EntityStore {
     }
 }
 
+/// **P3a**：`SimDup` 的实体访问面（facade `EntityStore` 与段访问器各实现一份）。
+///
+/// 只抽 `check_dup_obj` / `char_pushed_now` 实际用到的字段级操作（12 个方法）：`char_pushed_now`
+/// 与 `Command::Push` / slave 自投递共用，**签名不动**（coordinator 裁决）；逐格推进逻辑抽成
+/// 泛型核心后，facade 与段系统走同一份代码——不复制 RNG 邻接的移动/推挤判定。
+/// 段内实现见 `crate::world::StageDupAccess`（`crate::entity` 不依赖段 runner 类型）。
+pub trait DupAccess {
+    /// 槽位顺序的业务 id（与 `EntityStore::order_index` 同一契约）。
+    fn order_ids(&self) -> Vec<i32>;
+    /// `(race, ghost)`；实体不存在 ⇒ `None`。
+    fn actor_flags(&self, id: i32) -> Option<(u8, bool)>;
+    /// `(map_id, x, y)`；实体不存在 ⇒ `None`（与旧 `entities.get(id).map(|e| (e.map_id, e.x, e.y))` 同序）。
+    fn xy(&self, id: i32) -> Option<(usize, i32, i32)>;
+    /// `(check_dup_obj_tick, bo_duplication, dup_start_tick)`；组件缺失 ⇒ `None`。
+    fn dup_ticks(&self, id: i32) -> Option<(i64, bool, i64)>;
+    fn set_dup_check_tick(&mut self, id: i32, now: i64);
+    fn set_dup_bo(&mut self, id: i32, bo: bool);
+    fn set_dup_start(&mut self, id: i32, start: i64);
+    /// `!Ghost && !Death && !FixedHideMode && !ObMode`（`CanWalk`/`MoveToMovingObject` 的阻挡集合）。
+    fn is_blocking(&self, id: i32) -> bool;
+    /// `(Dir, x, y, map_id, race)` 一次取齐（`char_pushed_now` 的入口快照）。
+    fn push_actor(&self, id: i32) -> Option<DupActor>;
+    fn set_dir(&mut self, id: i32, dir: u8);
+    fn set_xy(&mut self, id: i32, x: i32, y: i32);
+    fn add_walk_tick(&mut self, id: i32, delta: i64);
+}
+
+/// `char_pushed_now` 的入口快照（一次取齐，避免逐字段 `get` 之间的中间态）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DupActor {
+    pub dir: u8,
+    pub x: i32,
+    pub y: i32,
+    pub map_id: usize,
+    pub race: u8,
+}
+
+impl DupAccess for EntityStore {
+    fn order_ids(&self) -> Vec<i32> {
+        self.order_index()
+    }
+    fn actor_flags(&self, id: i32) -> Option<(u8, bool)> {
+        self.get(id).map(|e| (e.race, e.ghost))
+    }
+    fn xy(&self, id: i32) -> Option<(usize, i32, i32)> {
+        self.get(id).map(|e| (e.map_id, e.x, e.y))
+    }
+    fn dup_ticks(&self, id: i32) -> Option<(i64, bool, i64)> {
+        self.dup_state(id)
+            .map(|d| (d.check_dup_obj_tick, d.bo_duplication, d.dup_start_tick))
+    }
+    fn set_dup_check_tick(&mut self, id: i32, now: i64) {
+        if let Some(d) = self.dup_state_mut(id) {
+            d.check_dup_obj_tick = now;
+        }
+    }
+    fn set_dup_bo(&mut self, id: i32, bo: bool) {
+        if let Some(d) = self.dup_state_mut(id) {
+            d.bo_duplication = bo;
+        }
+    }
+    fn set_dup_start(&mut self, id: i32, start: i64) {
+        if let Some(d) = self.dup_state_mut(id) {
+            d.dup_start_tick = start;
+        }
+    }
+    fn is_blocking(&self, id: i32) -> bool {
+        self.get(id)
+            .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
+    }
+    fn push_actor(&self, id: i32) -> Option<DupActor> {
+        self.get(id).map(|e| DupActor {
+            dir: e.ai.dir,
+            x: e.x,
+            y: e.y,
+            map_id: e.map_id,
+            race: e.race,
+        })
+    }
+    fn set_dir(&mut self, id: i32, dir: u8) {
+        if let Some(e) = self.get_mut(id) {
+            e.ai.dir = dir;
+        }
+    }
+    fn set_xy(&mut self, id: i32, x: i32, y: i32) {
+        if let Some(t) = self.transform_mut(id) {
+            t.x = x;
+            t.y = y;
+        }
+    }
+    fn add_walk_tick(&mut self, id: i32, delta: i64) {
+        if let Some(e) = self.get_mut(id) {
+            e.ai.walk_tick += delta;
+        }
+    }
+}
+
 /// **P2b**：段内「完整实体快照」的查询形状——24 个组件的**嵌套只读元组**（15 + 4 + 5），
 /// 与 [`EntityStore::spawn_cloned`] 的三个读视图逐项同序。
 ///
