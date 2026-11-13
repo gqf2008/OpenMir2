@@ -17,8 +17,8 @@ use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
 use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
 use mir2_shared::rng::RandomNumber;
 use mir2_world_bevy::{
-    advance_clock_system, tick::StageTrace, Appearance, CombatAttribution, LifeCycle, TickClock,
-    TickOwnerThread, TickRunner, TickStage,
+    advance_clock_system, tick::StageTrace, Appearance, BuffState, CombatAttribution, LifeCycle,
+    TickClock, TickOwnerThread, TickRunner, TickStage,
 };
 
 use crate::aoi::CELL_OBJECT_EXPIRE_MS;
@@ -1454,6 +1454,7 @@ impl HeadRunner {
         me.add(TickStage::Clock, advance_clock_system);
         me.add(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
         me.add(TickStage::SimExpireHitters, expire_hitters_stage_system);
+        me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
         me.add(TickStage::OutputDrain, output_drain_system);
         me
     }
@@ -1587,6 +1588,59 @@ pub fn expire_hitters_stage_system(world: &mut bevy_ecs::world::World) {
     }
 }
 
+mir2_world_bevy::stage_spec!(
+    SimExtraAbil,
+    TickStage::SimExtraAbil,
+    read: [],
+    write: [BuffState]
+);
+
+/// **P2 段 #6 `SimExtraAbil`**：`ExtraAbil` 过期（oracle `PlayObject.Run` 的消息泵，
+/// 本骨架每 world tick 一次，相位差登记 T-B5-2）。
+///
+/// 逐项对应旧 `World::expire_extra_abil`：按槽位序对每个实体扫 7 个槽；到期（严格 `>`）
+/// 清 `extra_abil`/`extra_abil_flag` 并记 `Restored`，到期前 10s 且 flag==0 记
+/// `TenSecondsBefore`；只有 `events` 非空的实体进输出。不抽 RNG。
+pub fn expire_extra_abil_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimExtraAbil);
+    let now = world.resource::<SimState>().clock_ms;
+    let mut out = Vec::new();
+    {
+        let mut ad = mir2_world_bevy::tick::StageEntities::<SimExtraAbil>::new(world);
+        for (id, _) in ad.order() {
+            let Some(buff) = ad.get_mut::<BuffState>(id) else {
+                continue;
+            };
+            let mut expiry = ExtraAbilExpiry {
+                actor_id: id,
+                ..ExtraAbilExpiry::default()
+            };
+            for i in 0..7usize {
+                if buff.extra_abil[i] == 0 {
+                    continue;
+                }
+                if now > buff.extra_abil_times[i] {
+                    buff.extra_abil[i] = 0;
+                    buff.extra_abil_flag[i] = 0;
+                    expiry.health_changed = true;
+                    expiry
+                        .events
+                        .push(ExtraAbilEventKind::Restored(u8::try_from(i).unwrap_or(0)));
+                } else if buff.extra_abil_flag[i] == 0 && now > buff.extra_abil_times[i] - 10_000 {
+                    buff.extra_abil_flag[i] = 1;
+                    expiry.events.push(ExtraAbilEventKind::TenSecondsBefore(
+                        u8::try_from(i).unwrap_or(0),
+                    ));
+                }
+            }
+            if !expiry.events.is_empty() {
+                out.push(expiry);
+            }
+        }
+    }
+    world.resource_mut::<StageOut>().extra_abil_expiries = out;
+}
+
 pub struct World {
     pub entities: EntityStore,
     /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
@@ -1662,6 +1716,17 @@ impl World {
         let out = f(entities.world_mut(), head_runner);
         self.leave_stage_world();
         out
+    }
+
+    /// 取走 `SimExtraAbil` 段落到 [`StageOut`] 的输出（段边界之后调用）。
+    fn take_extra_abil_expiries(&mut self) -> Vec<ExtraAbilExpiry> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .extra_abil_expiries,
+        )
     }
 
     /// 跑一个 tail 侧段（当前只有 `OutputAoi`）。
@@ -1764,6 +1829,8 @@ impl World {
         entities
             .world_mut()
             .insert_resource(TickOwnerThread::default());
+        // S4d-3/P2：段输出旁路（`SimExtraAbil` / `SimPlayerRunExpiry` 的 TickRecord 字段）。
+        entities.world_mut().insert_resource(StageOut::default());
         // S4d-3/P1：head 侧三段（Clock / SimHiterSnapshot / OutputDrain）收进 `HeadRunner`。
         let head_runner = HeadRunner::new();
         // S3b/P2：tail 侧段（`TailSuperManRefill` / `OutputAoi`）收进 `TailRunner`。
@@ -4856,49 +4923,6 @@ impl World {
         }
     }
 
-    /// **P3-B5**：`ExtraAbil` 过期/到期前 10s 检查（`PlayObject.Message.cs:163-227`）。
-    ///
-    /// 节拍：宿主在每个 world tick 调一次（oracle 在每个 `PlayObject.Run` 的消息泵里；
-    /// 相位差登记 T-B5-2）。**过期不 recalc、不发 52**——只 `HealthSpellChanged()`（53）。
-    #[must_use]
-    pub fn expire_extra_abil(&mut self) -> Vec<ExtraAbilExpiry> {
-        let now = self.clock_ms;
-        let mut out = Vec::new();
-        for id in self.entities.order_index() {
-            let Some(e) = self.entities.get_mut(id) else {
-                continue;
-            };
-            let mut expiry = ExtraAbilExpiry {
-                actor_id: id,
-                ..ExtraAbilExpiry::default()
-            };
-            for i in 0..7usize {
-                if e.buff.extra_abil[i] == 0 {
-                    continue;
-                }
-                if now > e.buff.extra_abil_times[i] {
-                    e.buff.extra_abil[i] = 0;
-                    e.buff.extra_abil_flag[i] = 0;
-                    expiry.health_changed = true;
-                    expiry
-                        .events
-                        .push(ExtraAbilEventKind::Restored(u8::try_from(i).unwrap_or(0)));
-                } else if e.buff.extra_abil_flag[i] == 0
-                    && now > e.buff.extra_abil_times[i] - 10_000
-                {
-                    e.buff.extra_abil_flag[i] = 1;
-                    expiry.events.push(ExtraAbilEventKind::TenSecondsBefore(
-                        u8::try_from(i).unwrap_or(0),
-                    ));
-                }
-            }
-            if !expiry.events.is_empty() {
-                out.push(expiry);
-            }
-        }
-        out
-    }
-
     /// **魔号 8（`SKILL_FIREWIND` 抗拒火环）/ 37（`SKILL_ENERGYREPULSOR` 气功波）效果体**：
     /// `MagicManager.MagPushArround`（`src/M2Server/Magic/MagicManager.cs:24-52`）的生产入口。
     /// oracle 两处 `case` 的函数体逐字相同：`:259-264`（8）与 `:601-606`（37），
@@ -5670,7 +5694,9 @@ impl World {
         // **P3-B5**：`ExtraAbil` 过期检查（oracle 在 `PlayObject.Run` 的消息泵；
         // 本骨架每 world tick 一次，相位差登记 T-B5-2）与地图事件处理器
         // （`EventProcessor.ExecuteInternal` 的 20ms 周期 / 每事件 500ms `RunTick` 门）。
-        record.extra_abil_expiries = self.expire_extra_abil();
+        // S4d-3/P2 #6：段系统（`SimExtraAbil`），段位与旧内联调用完全相同。
+        self.run_head_stage(|world, head| head.run(TickStage::SimExtraAbil, world));
+        record.extra_abil_expiries = self.take_extra_abil_expiries();
         self.run_map_events();
 
         // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
@@ -8370,6 +8396,7 @@ mod tests {
                 TickStage::Clock,
                 TickStage::SimHiterSnapshot,
                 TickStage::SimExpireHitters,
+                TickStage::SimExtraAbil,
                 TickStage::OutputDrain,
                 TickStage::OutputAoi
             ],
