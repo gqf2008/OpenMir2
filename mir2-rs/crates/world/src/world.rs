@@ -10,6 +10,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::thread::ThreadId;
+use std::time::Instant;
 
 use bevy_ecs::prelude::ResMut;
 use bevy_ecs::system::IntoSystem;
@@ -2403,6 +2404,8 @@ pub struct World {
     /// 段内 panic 时不会回到 `false` ⇒ 下一次 `tick_head`/`tick_tail` 入口立即以明确断言
     /// 停机。本项目**不做段内热恢复**（那会在空 `SimState` 上继续跑），语义见设计件 §2.5。
     sim_in_flight: bool,
+    /// **T10 热点剖析**：分段计时（缺省 `None` = 生产路径零开销；见 [`TickProfile`]）。
+    tick_profile: Option<TickProfile>,
 }
 
 impl std::ops::Deref for World {
@@ -2415,6 +2418,65 @@ impl std::ops::Deref for World {
 impl std::ops::DerefMut for World {
     fn deref_mut(&mut self) -> &mut SimState {
         &mut self.sim
+    }
+}
+
+/// **T10 热点剖析**：tick 分段计时（**缺省关闭**，见 [`World::enable_tick_profile`]）。
+///
+/// 设计约束（卡 `openmir2-t10-tick-hotspot-profile`）：计时只在**段边界**取 `Instant`，
+/// 关闭时每 tick 只多 ~20 次 `Option::is_some` / 布尔判断；热循环（实体遍历、AOI 扫描、AI）
+/// 内**没有**任何计时语句。因此它不改变 tick 的可见行为，也不进入生产路径。
+///
+/// `ns` 是该段累计墙钟（含段边界 `SimState` 搬移开销与段内缓冲分配/释放）。
+#[derive(Debug, Default, Clone)]
+pub struct TickProfile {
+    /// `(段, 累计 ns, 调用次数)`
+    stage_nanos: Vec<(TickStage, u64, u64)>,
+    /// 细于段的命名探针（`slot_order` 调用、AI 收集、buff 单 pass…）。
+    probe_nanos: Vec<(&'static str, u64, u64)>,
+    /// 已计入的 tick 数（`tick_head` 入口自增）。
+    pub ticks: u64,
+    /// **同进程 A/B 用**：暂停累计但保留已有数据（`prof_begin` 返回 `None`）。
+    pub paused: bool,
+}
+
+impl TickProfile {
+    fn add_stage(&mut self, stage: TickStage, ns: u64) {
+        match self.stage_nanos.iter_mut().find(|(s, _, _)| *s == stage) {
+            Some((_, total, calls)) => {
+                *total += ns;
+                *calls += 1;
+            }
+            None => self.stage_nanos.push((stage, ns, 1)),
+        }
+    }
+
+    fn add_probe(&mut self, name: &'static str, ns: u64) {
+        match self.probe_nanos.iter_mut().find(|(n, _, _)| *n == name) {
+            Some((_, total, calls)) => {
+                *total += ns;
+                *calls += 1;
+            }
+            None => self.probe_nanos.push((name, ns, 1)),
+        }
+    }
+
+    /// 各段累计：`(段, 累计 ns, 调用次数)`（按首次记录顺序）。
+    #[must_use]
+    pub fn stages(&self) -> &[(TickStage, u64, u64)] {
+        &self.stage_nanos
+    }
+
+    /// 命名探针累计：`(名字, 累计 ns, 调用次数)`。
+    #[must_use]
+    pub fn probes(&self) -> &[(&'static str, u64, u64)] {
+        &self.probe_nanos
+    }
+
+    /// 全部段累计 ns。
+    #[must_use]
+    pub fn stage_total_ns(&self) -> u64 {
+        self.stage_nanos.iter().map(|(_, n, _)| *n).sum()
     }
 }
 
@@ -2610,6 +2672,7 @@ impl World {
             tail_runner,
             sim,
             sim_in_flight: false,
+            tick_profile: None,
         };
         // **M3②③ 隔离口径**：`MIR2_RNG_ISOLATE_ATTACK` 开启时按 `MIR2_RNG_SEED` 派生专用流
         // （缺省未设 ⇒ `None`，`isolate_attack` 保持 `false`，一字不改）。读 env 的 fail-closed
@@ -2634,7 +2697,73 @@ impl World {
         self.isolate_attack
     }
 
-    /// 开启怪物 AI 驱动（缺省关闭；见 `World` 的 `ai_enabled` 字段说明）。
+    /// **T10 诊断**：开启 tick 分段计时（**缺省关闭**；只在 bench/诊断路径调用）。
+    ///
+    /// 关闭状态（缺省）下 tick 只多一次 `Option::is_some` 判断，不取 `Instant`、不分配。
+    /// 本方法不改变任何 tick 行为（不写实体、不抽 RNG）。
+    pub fn enable_tick_profile(&mut self) {
+        self.tick_profile = Some(TickProfile::default());
+    }
+
+    /// 关闭分段计时并丢弃已有累计。
+    pub fn disable_tick_profile(&mut self) {
+        self.tick_profile = None;
+    }
+
+    /// 只清累计值并保持开启状态（bench 预热后清零用）。
+    ///
+    /// **注意**：`TickProfile::default()` 会把 `paused` 一并复位为 `false`（清完即恢复累计）。
+    pub fn reset_tick_profile(&mut self) {
+        if let Some(p) = self.tick_profile.as_mut() {
+            *p = TickProfile::default();
+        }
+    }
+
+    /// **同进程 A/B**：暂停/恢复累计（保留已累计数据）。
+    pub fn set_tick_profile_paused(&mut self, paused: bool) {
+        if let Some(p) = self.tick_profile.as_mut() {
+            p.paused = paused;
+        }
+    }
+
+    /// 当前累计（未开启时为 `None`）。
+    #[must_use]
+    pub fn tick_profile(&self) -> Option<&TickProfile> {
+        self.tick_profile.as_ref()
+    }
+
+    /// 段计时入口：关闭/暂停时返回 `None`（**不**取 `Instant`）。
+    #[inline]
+    fn prof_begin(&self) -> Option<Instant> {
+        match self.tick_profile.as_ref() {
+            Some(p) if !p.paused => Some(Instant::now()),
+            _ => None,
+        }
+    }
+
+    /// 段计时出口：累计到 [`TickProfile`]。
+    #[inline]
+    fn prof_end(&mut self, stage: TickStage, t: Option<Instant>) {
+        if let (Some(t), Some(p)) = (t, self.tick_profile.as_mut()) {
+            p.add_stage(stage, t.elapsed().as_nanos() as u64);
+        }
+    }
+
+    /// 命名探针入口（crate 内诊断用，如 `slot_order`、`monai.collect`）。
+    #[inline]
+    pub(crate) fn probe_begin(&self) -> Option<Instant> {
+        self.prof_begin()
+    }
+
+    /// 命名探针出口。
+    #[inline]
+    pub(crate) fn probe_end(&mut self, name: &'static str, t: Option<Instant>) {
+        if let (Some(t), Some(p)) = (t, self.tick_profile.as_mut()) {
+            p.add_probe(name, t.elapsed().as_nanos() as u64);
+        }
+    }
+
+    /// 开启怪物 AI 驱动（缺省关闭；见 [`World`] 的 `ai_enabled` 字段说明）。
     ///
     /// 幂等：重复调用无副作用。生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；
     /// 合成 golden 场景保持关闭 ⇒ 既有 `tests/parity/world` 逐字节不变。
@@ -2773,7 +2902,9 @@ impl World {
         let mut out = BuffTickOutcome::default();
         for i in 0..BUFF_PASSES_PER_TICK {
             let now = base + i * BUFF_PASS_INTERVAL_MS;
+            let __prof_pass = self.probe_begin();
             let pass = self.buff_do_work(now);
+            self.probe_end("buff.pass", __prof_pass);
             out.status_changes.extend(pass.status_changes);
             out.sysmsgs.extend(pass.sysmsgs);
             out.recalcs.extend(pass.recalcs);
@@ -6193,9 +6324,16 @@ impl World {
             ),
         }
 
+        if let Some(p) = self.tick_profile.as_mut() {
+            if !p.paused {
+                p.ticks += 1;
+            }
+        }
+
         // S1 tick 骨架：时钟推进（+ 线程断言）在单线程 Schedule 里跑。
         // facade 仍是事实源（`clock_ms`/`tick_seq` 是对外 pub 字段）：先把值写进资源，
         // 跑完读回；数值语义与原 `clock_ms += 200; tick_seq += 1` 逐 tick 相同。
+        let __prof_clock = self.prof_begin();
         {
             // facade 字段 → 资源（S4d-1：`sim` 经 `Deref`，先取值避开与 `entities` 的借用重叠）。
             let (clock_ms, tick_seq) = (self.clock_ms, self.tick_seq);
@@ -6212,6 +6350,7 @@ impl World {
             self.clock_ms = clock_ms;
             self.tick_seq = tick_seq;
         }
+        self.prof_end(TickStage::Clock, __prof_clock);
         let mut record = TickRecord {
             tick_seq: self.tick_seq,
             clock_ms: self.clock_ms,
@@ -6254,6 +6393,7 @@ impl World {
         };
 
         // 命令 FIFO
+        let __prof_cmd = self.prof_begin();
         while let Some(cmd) = self.pending.pop_front() {
             match cmd {
                 Command::Enter { actor_id } => {
@@ -6374,6 +6514,8 @@ impl World {
             }
         }
 
+        self.prof_end(TickStage::Command, __prof_cmd);
+
         // **PL-1 硬前置（spike §4.3-3 / §5.5-1）**：oracle 的 P32（`PlayObject.Message.cs:747-763`）
         // 在 `base.Run()` 的 LastHiter 清理（`BaseObject.Base.cs:119-132`）**之前**读 `LastHiter`；
         // 本骨架的 `expire_hitters()` 在 tick 开头统一清 ⇒ 必须在**清理之前**给每个玩家留快照，
@@ -6385,17 +6527,23 @@ impl World {
         // **S4d-2 `SimHiterSnapshot` 段（#2）**：快照作为系统运行（槽位顺序由 `TickEntityIds`
         // 显式给出，不迭代 `Query` 求序）。段序与迁移前一致：命令 FIFO 之后、`expire_hitters` 之前。
         {
+            let __prof_slot = self.probe_begin();
             let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self.entities.slot_order();
+            self.probe_end("slot_order.hiter_snapshot", __prof_slot);
+            let __prof_stage = self.prof_begin();
             self.run_head_stage(move |world, head| {
                 world.insert_resource(TickEntityIds(ids));
                 head.run(TickStage::SimHiterSnapshot, world);
                 let _ = world.remove_resource::<TickEntityIds>();
             });
+            self.prof_end(TickStage::SimHiterSnapshot, __prof_stage);
         }
 
         // 命中者过期清理（照 `BaseObject.Base.cs:119-132` 的结构；墙钟那两项不在本骨架）
         // S4d-3/P2 #3：段系统（`SimExpireHitters`），段位与旧内联调用完全相同。
+        let __prof_eh = self.prof_begin();
         self.run_head_stage(|world, head| head.run(TickStage::SimExpireHitters, world));
+        self.prof_end(TickStage::SimExpireHitters, __prof_eh);
         // 死亡结算：`tick_head` 只结算**非玩家**（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才
         // `Die()`）。玩家的 `base.Run` 的 Die 在 P32 之后 ⇒ 留到 [`World::tick_tail`]
         // （oracle 序：PlayObject.Run 的 P21→…→P32 → base.Run:70-73）。既有 golden 的 death
@@ -6403,6 +6551,7 @@ impl World {
         // S4d-3/P3b #4：段系统（`SimSettleDeaths`），段位与旧内联调用完全相同。
         // `TickRecord` 由段边界以 `TickRecordRes` 搬入、段后取回（与 OutputDrain 同口径）。
         {
+            let __prof_sd = self.prof_begin();
             let record_res = TickRecordRes(std::mem::take(&mut record));
             record = self.run_head_stage(move |world, head| {
                 world.insert_resource(record_res);
@@ -6412,6 +6561,7 @@ impl World {
                     .expect("SimSettleDeaths 后必须归还 TickRecordRes（段边界契约）")
                     .0
             });
+            self.prof_end(TickStage::SimSettleDeaths, __prof_sd);
         }
 
         // **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：oracle
@@ -6421,20 +6571,28 @@ impl World {
         // **先于** `BaseObject.Run` 的宝宝清表（`BaseObject.Base.cs:208-217`）。同序放置。
         // P3-B2：`RM_MAGHEALING`（治疗）不依赖该开关；主人死族在 `deliver_self_delay_msgs`
         // 内部仍按 `slave_self_delay_enabled` 过滤（关闭时保持入队）。
+        let __prof_selfd = self.prof_begin();
         record.slave_self_deliveries = self.deliver_self_delay_msgs();
+        self.prof_end(TickStage::SimSelfDeliver, __prof_selfd);
         // **P3-B5**：`ExtraAbil` 过期检查（oracle 在 `PlayObject.Run` 的消息泵；
         // 本骨架每 world tick 一次，相位差登记 T-B5-2）与地图事件处理器
         // （`EventProcessor.ExecuteInternal` 的 20ms 周期 / 每事件 500ms `RunTick` 门）。
         // S4d-3/P2 #6：段系统（`SimExtraAbil`），段位与旧内联调用完全相同。
+        let __prof_ea = self.prof_begin();
         self.run_head_stage(|world, head| head.run(TickStage::SimExtraAbil, world));
         record.extra_abil_expiries = self.take_extra_abil_expiries();
+        self.prof_end(TickStage::SimExtraAbil, __prof_ea);
+        let __prof_me = self.prof_begin();
         self.run_map_events();
+        self.prof_end(TickStage::SimMapEvents, __prof_me);
 
         // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
         // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后
         // 按槽位顺序对每个**持有宝宝**的实体跑一次。空表 ⇒ 零动作（golden 逐字节不变）。
         // S4d-3/P4 #8：段系统（`SimSlaveCleanup`），段位与旧内联调用完全相同。
+        let __prof_sc = self.prof_begin();
         self.run_head_stage(|world, head| head.run(TickStage::SimSlaveCleanup, world));
+        self.prof_end(TickStage::SimSlaveCleanup, __prof_sc);
 
         // **车道 B1（buff 系统）**：buff pass（oracle `ActorBuffProcessor` 的 50ms `DoWork`
         // 单线程等价物，见 [`crate::buff`]）。**缺省关闭**（`buff_enabled=false`）⇒ 既有 golden
@@ -6442,6 +6600,7 @@ impl World {
         // 位置：死亡结算之后、怪物 AI 之前（设计件 §3.3）。每 world tick（200ms）串行跑
         // [`BUFF_PASSES_PER_TICK`] 个 50ms pass（U-A2 口径）。buff 段**不抽 RNG** ⇒ 对
         // RNG 账本零影响（消费者次序不变）。
+        let __prof_buff = self.prof_begin();
         if self.buff_enabled {
             let out = self.buff_tick();
             record.buff_status_changes = out.status_changes;
@@ -6449,14 +6608,17 @@ impl World {
             record.buff_recalcs = out.recalcs;
             record.buff_health_changes = out.health_spell_changes;
         }
+        self.prof_end(TickStage::SimBuff, __prof_buff);
 
         // M3④-实现 C：怪物 AI 一步（oracle `ProcessMonsters` → 每只 `monster.Run()`）。
         // **缺省关闭**：合成 golden 场景不含 oracle 的怪物线程，开 AI 会把 RNG 序列整体移位；
         // 由 `bins/game-svr` 的 sim 循环显式 `enable_monster_ai()`（见字段说明）。
         // 单线程串行：按实体槽位顺序（`EntityStore` 显式索引），在死亡结算之后、AOI 之前。
+        let __prof_ai = self.prof_begin();
         if self.ai_enabled {
             crate::monai::monster_ai_tick(self);
         }
+        self.prof_end(TickStage::SimMonsterAi, __prof_ai);
         // **S4d-1**：AI/命令段的输出累积（结构事件、AI 攻击、武器升级/磨损）不再内联转抄，
         // 统一由 `OutputDrain` 段系统在孤儿段之后转抄（见下）。
 
@@ -6471,6 +6633,7 @@ impl World {
         //   命令 FIFO → 命中者过期 → 死亡结算 → 宝宝自投递 → 宝宝清表 → monster_ai_tick
         //   → **npc_tick** → merchant_tick → AOI。
         // 缺省 `npc_enabled=false`（合成 golden 不含 oracle 的 NPC 线程）⇒ 既有对拍逐字节不变。
+        let __prof_npc = self.prof_begin();
         if self.npc_enabled {
             let n = self.npc_tick();
             record.npcs_run = n.ran;
@@ -6478,10 +6641,12 @@ impl World {
             record.npc_hits = n.hits;
             record.npc_removed = n.removed;
         }
+        self.prof_end(TickStage::SimNpc, __prof_npc);
 
         // **M3⑤-实现 2 第②片**：商人 tick（oracle `MerchantProcessor` 的 200ms 线程单线程等价物）。
         // 单线程串行：在怪物 AI 之后、AOI 刷新之前（与 oracle 同 tick 内的显式定序；oracle 里是两个
         // 独立 200ms 线程，跨系统交错不可复现 ⇒ 由 owner 裁决不在判据内）。
+        let __prof_mch = self.prof_begin();
         if self.merchant_enabled {
             let m = self.merchant_tick();
             record.merchants_run = m.ran;
@@ -6491,25 +6656,31 @@ impl World {
             record.merchant_space_moves = m.space_moves;
             record.merchant_removed = m.removed;
         }
+        self.prof_end(TickStage::SimMerchant, __prof_mch);
 
         // **`PlayObject.Run` 的状态到期段**（`PlayObject.Message.cs:54-64`）：烈火 20s / 双龙 60s。
         // 在玩家 `base.Run`（VerifyMapTime 段）之前；两者都不抽随机数。oracle 的玩家 `Run`
         // 名义 300ms 一次、本骨架每个 world tick（200ms）一次——相位差与既有玩家散段同口径登记。
         // S4d-3/P2 #13：段系统（`SimPlayerRunExpiry`），段位与旧内联调用完全相同。
+        let __prof_pre = self.prof_begin();
         self.run_head_stage(|world, head| head.run(TickStage::SimPlayerRunExpiry, world));
         record.run_state_expiries = self.take_run_state_expiries();
+        self.prof_end(TickStage::SimPlayerRunExpiry, __prof_pre);
 
         // **`PlayObject.Run` 的重叠推挤段**（`PlayObject.Message.cs:263-285`）：
         // 3s 周期门内 `GetXYObjCount`；`>=2` 记 `BoDuplication/DupStartTick`；
         // `>=3 且 >3s` / `==2 且 >10s` 且 `<20s` ⇒ `CharPushed(RandomByte(8), 1)`。
         // 位置照 oracle：在 FireHit/TwinHit 到期段之后、`base.Run` 的 VerifyMapTime 之前。
         // 只有三处门全部通过才取数（`crate::run_gap::dup_push_dir`）；事件进 `record.pushes`。
+        let __prof_dup = self.prof_begin();
         record.pushes.extend(self.check_dup_obj());
+        self.prof_end(TickStage::SimDup, __prof_dup);
 
         // **S4d-1 `OutputDrain` 段（#15）**：非实体状态在这一刻整体移入 bevy `World` 的
         // `SimState` 资源，段系统转抄完再整体移回——同一时刻只有一个所有者（设计件 §4.2）。
         // 本段不抽 RNG、只读累积向量，因此 RNG 消费者次序与行为逐字节不变。
         {
+            let __prof_od = self.prof_begin();
             let record_res = TickRecordRes(std::mem::take(&mut record));
             record = self.run_head_stage(move |world, head| {
                 world.insert_resource(record_res);
@@ -6519,6 +6690,7 @@ impl World {
                     .expect("OutputDrain 后必须归还 TickRecordRes（tick 边界契约）")
                     .0
             });
+            self.prof_end(TickStage::OutputDrain, __prof_od);
         }
         // 宿主段（P21 → P22 → [P24] → P25 → P26 → P27 → P31 → P32；oracle 行号见
         // [`World::tick`] 文档）在 [`World::tick_head`] 与 [`World::tick_tail`] 之间由
@@ -6556,12 +6728,15 @@ impl World {
         //    玩家此前**没有**调用点 ⇒ `Entity.super_man = true`（`@3`）只挡死、不回血。
         //    本段无写入者时是纯 no-op（`super_man` 默认 false）⇒ 既有 golden 逐字节不变。
         // S4d-3/P2 #16：段系统（`TailSuperManRefill`），段位与旧内联调用完全相同。
+        let __prof_sm = self.prof_begin();
         self.run_tail_stage(|world, tail| tail.run(TickStage::TailSuperManRefill, world));
+        self.prof_end(TickStage::TailSuperManRefill, __prof_sm);
 
         // 1. 玩家死亡结算（oracle `base.Run:70-73`）：在 P32 复活门之后。
         self.tail_phase_log.push(TailPhase::Die);
         // S4d-3/P3b #17：段系统（`TailPlayerDeaths`），段位与旧内联调用完全相同。
         {
+            let __prof_pd = self.prof_begin();
             let record_res = TickRecordRes(std::mem::take(record));
             *record = self.run_tail_stage(move |world, tail| {
                 world.insert_resource(record_res);
@@ -6571,6 +6746,7 @@ impl World {
                     .expect("TailPlayerDeaths 后必须归还 TickRecordRes（段边界契约）")
                     .0
             });
+            self.prof_end(TickStage::TailPlayerDeaths, __prof_pd);
         }
 
         // 2. **玩家 `BaseObject.Run` 的 VerifyMapTime 段**（oracle `WorldServer.cs:697` 每 ~200ms
@@ -6579,7 +6755,9 @@ impl World {
         // `verify_map_time` 内。
         self.tail_phase_log.push(TailPhase::VerifyMapTime);
         // S4d-3/P4 #18：段系统（`TailVerifyMapTime`），段位与旧内联调用完全相同。
+        let __prof_vmt = self.prof_begin();
         self.run_tail_stage(|world, tail| tail.run(TickStage::TailVerifyMapTime, world));
+        self.prof_end(TickStage::TailVerifyMapTime, __prof_vmt);
         // 钳制段触发的玩家 `HealthSpellChanged()`（`BaseObject.cs:700-703` 只对 Play 发帧）。
         record
             .verify_health_changes
@@ -6588,7 +6766,10 @@ impl World {
         // AOI 刷新：`TickStage::OutputAoi` 系统（S3b）。地图表在 tick 边界一次性移入
         // `MapsRes`，跑完移回 facade —— 同一时刻只有一个所有者（设计件 §4.2）。
         {
+            let __prof_slot = self.probe_begin();
             let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self.entities.slot_order();
+            self.probe_end("slot_order.aoi", __prof_slot);
+            let __prof_stage = self.prof_begin();
             let maps = std::mem::take(&mut self.maps);
             let events = std::mem::take(&mut self.fire_burn_events);
             let (clock_ms, clear_drop_on_floor_item_time, event_sight) = (
@@ -6626,6 +6807,7 @@ impl World {
             record.hides.extend(out.hides);
             record.hide_observer_kinds.extend(out.hide_observer_kinds);
             record.event_hides.extend(out.event_hides);
+            self.prof_end(TickStage::OutputAoi, __prof_stage);
         }
 
         self.last_tick = record.clone();
@@ -9164,6 +9346,51 @@ pub struct FloorItemView {
 mod tests {
     use super::*;
     use crate::entity::{EntitySpawn, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+
+    /// **T10 热点剖析**：分段计时**缺省关闭**，且开/关不改变 tick 的任何可见行为。
+    ///
+    /// 牙齿（逐条可证伪）：
+    /// 1. 缺省 `tick_profile()` 必须是 `None`（删掉「缺省 None」⇒ 红）；
+    /// 2. 同种子、同实体、同 tick 数，一遍全程不计时、一遍全程计时，`last_tick` 必须相等
+    ///    （计时若插入任何写实体/抽 RNG 的语句 ⇒ 红）；
+    /// 3. 开启后 `ticks` 与非空 `stages()`（只加了开关不接线 ⇒ 红）；
+    /// 4. `paused=true` 期间不计 tick、不记段（暂停语义被删 ⇒ 红）。
+    #[test]
+    fn tick_profile_is_opt_in_and_behavior_neutral() {
+        let mut a = World::new(20, 20);
+        let mut b = World::new(20, 20);
+        for w in [&mut a, &mut b] {
+            let mut e = EntitySpawn::new(1, "m1".to_string(), 3, 3);
+            e.race = 80;
+            w.add_entity(e);
+            w.enable_monster_ai();
+        }
+        assert!(a.tick_profile().is_none(), "缺省必须关闭分段计时");
+        for _ in 0..3 {
+            a.tick();
+        }
+        b.enable_tick_profile();
+        for _ in 0..3 {
+            b.tick();
+        }
+        assert_eq!(a.last_tick, b.last_tick, "计时不得改变 tick 行为");
+        let ticks = {
+            let p = b.tick_profile().expect("已开启");
+            assert_eq!(p.ticks, 3, "每个 tick 计一次");
+            assert!(!p.stages().is_empty(), "开启后必须记到段");
+            p.ticks
+        };
+        assert_eq!(ticks, 3);
+        // 暂停：不累计 tick、不记段。
+        b.reset_tick_profile();
+        b.set_tick_profile_paused(true);
+        for _ in 0..2 {
+            b.tick();
+        }
+        let p = b.tick_profile().expect("开启状态保留");
+        assert_eq!(p.ticks, 0, "暂停期间不得计 tick");
+        assert!(p.stages().is_empty(), "暂停期间不得记段");
+    }
 
     /// **世界 tick 扩容首批（T3）· ② 世界时钟（C-L2）**：`refresh_game_time` 只在桶值**变化**时
     /// 返回 `true`（oracle `PlayObject.Base.cs:826` 的 `Bright != M2Share.GameTime` 门）；

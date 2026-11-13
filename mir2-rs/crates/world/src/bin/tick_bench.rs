@@ -76,6 +76,23 @@ fn main() {
         baseline_path = Some(args.remove(i + 1));
         args.remove(i);
     }
+    let mut profile_mode = false;
+    if let Some(i) = args.iter().position(|a| a == "--profile") {
+        args.remove(i);
+        profile_mode = true;
+    }
+    let mut bots: usize = 0;
+    if let Some(i) = args.iter().position(|a| a == "--bots") {
+        if i + 1 >= args.len() {
+            eprintln!("usage: tick_bench --profile [--bots <N>] <entities> <ticks> [...]");
+            std::process::exit(2);
+        }
+        bots = args.remove(i + 1).parse().unwrap_or_else(|_| {
+            eprintln!("--bots 需要非负整数");
+            std::process::exit(2);
+        });
+        args.remove(i);
+    }
     if args.is_empty() || !args.len().is_multiple_of(2) {
         eprintln!("usage: tick_bench [--baseline <file>] <entities> <ticks> [...]");
         std::process::exit(2);
@@ -84,6 +101,10 @@ fn main() {
         .chunks(2)
         .map(|p| (p[0].parse().unwrap(), p[1].parse().unwrap()))
         .collect();
+    if profile_mode {
+        run_profile_mode(&tiers, bots);
+        return;
+    }
     let baseline: Vec<BaselineTier> = match &baseline_path {
         Some(p) => match std::fs::read_to_string(p) {
             Ok(text) => parse_baseline(&text),
@@ -216,6 +237,194 @@ fn main() {
     } else {
         println!("GREEN: 三档 P99 均在 {P99_BUDGET_US}us 以内");
     }
+}
+
+/// T10 热点剖析：profile 场景的怪物 race（`> ACTOR_RACE_PLAY(0)` ⇒ 进入 `monster_ai_tick`）。
+const PROFILE_RACE: u8 = 80;
+/// 同进程 A/B 的每轮 tick 数（两轮：先「计时暂停」、后「计时开启」）。
+///
+/// **为什么不用逐 tick 交替**：交替设计让两态落在不同的世界状态上（怪物迁移/可见集变化），
+/// 曾给出 +20% 的假差异。本设计用**同种子、同 tick 数、同世界构造**跑两遍：计时不改变任何
+/// tick 行为（不写实体、不抽 RNG）⇒ 两遍做的是逐字节相同的工作，总墙钟比值即计时开销。
+const AB_TICKS: usize = 50;
+
+/// T10：一档的 profile 结果。
+struct ProfileRun {
+    profiled_ticks: u64,
+    stage_total_ns: u64,
+    stages: Vec<(String, u64, u64)>,
+    probes: Vec<(String, u64, u64)>,
+    /// 计时开启块的每 tick 墙钟（µs，升序）。
+    on_us: Vec<u64>,
+    /// 计时暂停块的每 tick 墙钟（µs，升序）。
+    off_us: Vec<u64>,
+    total_on_ns: u64,
+}
+
+/// T10：`--profile` 模式入口（**测量专用**，与门禁路径完全分开）。
+fn run_profile_mode(tiers: &[(usize, usize)], bots: usize) {
+    println!(
+        "# T10 tick 热点剖析：AI + buff + npc + merchant 全开（= 生产宿主 sim 循环的接线），无玩家移动命令"
+    );
+    println!(
+        "# 场景同 tick_bench：200x200、奇数坐标、相邻 2 格、固定种子 42；race={PROFILE_RACE} 怪物（进入 monster_ai_tick）"
+    );
+    println!("# 每档跑两遍：A 遍计时未启用、B 遍计时启用（同种子、同 tick 数、各自 1 tick 预热）⇒ 两遍工作量逐字节相同，总墙钟比值 = 计时开销");
+    if bots > 0 {
+        println!(
+            "# 追加 {bots} 个假玩家（race=0，均布在图内；无会话/无出站帧）；玩家视野扫描有 1000ms 到点门，\n# 且 RM_UPDATEVIEWRANGE 有跨度门 |Δ| <= viewer.view_range - other.view_range（双向缺省 ViewRange=5 ⇒ span=0，只有同格怪可能命中）"
+        );
+    }
+    for (entities, ticks) in tiers {
+        let r = run_profile_tier(*entities, *ticks, bots);
+        print_profile(*entities, *ticks, &r);
+    }
+}
+
+fn build_profile_world(entities: usize, bots: usize) -> World {
+    let mut world = World::new(MAP, MAP);
+    for i in 0..entities {
+        // **不能沿用 `run_tier` 的 y = 1+2*(i/100)**：11k 时 y 会越过 200 行（i>9900 出图），
+        // 每实体成本会被「图外实体」污染。这里用 199 列 × 逐行铺满，11k ⇒ 56 行，全在图内。
+        let x = 1 + (i as i32 % 199);
+        let y = 1 + (i as i32 / 199);
+        let mut e = mir2_world::EntitySpawn::new((i + 1) as i32, format!("b{i}"), x, y);
+        e.race = PROFILE_RACE;
+        world.add_entity(e);
+    }
+    // 假玩家：race=0 即 `ACTOR_RACE_PLAY`；`add_entity` 走 Enter，落图后 AOI 会把他们视野内的怪
+    // 标成 `visible_active`（演示舰队的 10 bot 同构）。无会话 ⇒ 不出站帧；AOI 的观察者扫描照跑。
+    if bots > 0 {
+        let stride = entities.checked_div(bots).unwrap_or(1).max(1);
+        for k in 0..bots {
+            let idx = k * stride;
+            let x = 1 + (idx as i32 % 199);
+            let y = 1 + (idx as i32 / 199);
+            let mut p = mir2_world::EntitySpawn::new(1_000_000 + k as i32, format!("bot{k}"), x, y);
+            p.race = 0;
+            world.add_entity(p);
+        }
+    }
+    world.enable_monster_ai();
+    world.enable_buff_tick();
+    world.enable_npc_tick();
+    world.enable_merchant_tick();
+    world.tick(); // 预热：Enter 命令一次性落图，不计入样本
+    world
+}
+
+/// A 遍（**计时未启用**）：`ticks` 个 tick，返回 `(每 tick µs 升序, 总 ns)`。
+fn run_profile_pass(entities: usize, bots: usize, ticks: usize) -> (Vec<u64>, u64) {
+    let mut world = build_profile_world(entities, bots);
+    let mut us = Vec::with_capacity(ticks);
+    let mut total_ns = 0u64;
+    for _ in 0..ticks {
+        let t0 = Instant::now();
+        world.tick();
+        let ns = t0.elapsed().as_nanos() as u64;
+        total_ns += ns;
+        us.push(ns / 1000);
+    }
+    us.sort_unstable();
+    (us, total_ns)
+}
+
+fn run_profile_tier(entities: usize, ticks: usize, bots: usize) -> ProfileRun {
+    let n = ticks.max(AB_TICKS);
+    let (off_us, off_ns) = run_profile_pass(entities, bots, n);
+    // B 遍（计时启用）：同构造、同种子、同 tick 数；计时开启后取分段累计。
+    let mut world = build_profile_world(entities, bots);
+    world.enable_tick_profile();
+    world.reset_tick_profile();
+    let mut on_us = Vec::with_capacity(n);
+    let mut on_ns = 0u64;
+    for _ in 0..n {
+        let t0 = Instant::now();
+        world.tick();
+        let ns = t0.elapsed().as_nanos() as u64;
+        on_ns += ns;
+        on_us.push(ns / 1000);
+    }
+    on_us.sort_unstable();
+    let p = world.tick_profile().expect("profile 已开启");
+    let _ = off_ns;
+    ProfileRun {
+        profiled_ticks: p.ticks,
+        stage_total_ns: p.stage_total_ns(),
+        stages: p
+            .stages()
+            .iter()
+            .map(|(s, n, c)| (format!("{s:?}"), *n, *c))
+            .collect(),
+        probes: p
+            .probes()
+            .iter()
+            .map(|(s, n, c)| ((*s).to_string(), *n, *c))
+            .collect(),
+        on_us,
+        off_us,
+        total_on_ns: on_ns,
+    }
+}
+
+fn print_profile(entities: usize, ticks: usize, r: &ProfileRun) {
+    let pt = r.profiled_ticks.max(1) as f64;
+    let total_ns = r.total_on_ns.max(1) as f64;
+    let ms_on = r.total_on_ns as f64 / 1e6 / pt;
+    let ms_stage = r.stage_total_ns as f64 / 1e6 / pt;
+    println!();
+    println!("## 实体数 {entities} / 请求 tick {ticks}（计时开启 {pt:.0} tick）");
+    println!(
+        "每 tick 总墙钟 = {ms_on:.3} ms；段合计 = {ms_stage:.3} ms；未计入（tick 记录构造/段边界搬移/宿主段）= {:.3} ms",
+        ms_on - ms_stage
+    );
+    println!(
+        "每实体每 tick = {:.3} µs",
+        r.total_on_ns as f64 / 1000.0 / pt / entities as f64
+    );
+    println!(
+        "{:<26} {:>12} {:>10} {:>8} {:>14}",
+        "阶段", "总ms", "ms/tick", "占比%", "µs/实体/tick"
+    );
+    let mut stages = r.stages.clone();
+    stages.sort_by_key(|a| std::cmp::Reverse(a.1));
+    for (name, ns, calls) in &stages {
+        println!(
+            "{:<26} {:>12.3} {:>10.3} {:>8.2} {:>14.4}  ({} 次)",
+            name,
+            *ns as f64 / 1e6,
+            *ns as f64 / 1e6 / pt,
+            *ns as f64 / total_ns * 100.0,
+            *ns as f64 / 1000.0 / pt / entities as f64,
+            calls
+        );
+    }
+    println!("-- 探针 --");
+    let mut probes = r.probes.clone();
+    probes.sort_by_key(|a| std::cmp::Reverse(a.1));
+    for (name, ns, calls) in &probes {
+        println!(
+            "{:<26} {:>12.3} {:>10.3} {:>8.2} {:>14.4}  ({} 次)",
+            name,
+            *ns as f64 / 1e6,
+            *ns as f64 / 1e6 / pt,
+            *ns as f64 / total_ns * 100.0,
+            *ns as f64 / 1000.0 / pt / entities as f64,
+            calls
+        );
+    }
+    // 同进程 A/B：计时开启 vs 暂停 的每 tick 墙钟（P50/P99），证明关闭态无额外开销。
+    let p50_on = percentile(&r.on_us, 50.0);
+    let p99_on = percentile(&r.on_us, 99.0);
+    let p50_off = percentile(&r.off_us, 50.0);
+    let p99_off = percentile(&r.off_us, 99.0);
+    println!(
+        "-- A/B（同种子两遍：A 计时未启用 / B 计时启用）：启用 P50={p50_on}us P99={p99_on}us（n={}）；未启用 P50={p50_off}us P99={p99_off}us（n={}）；ΔP50 {:+.2}% ΔP99 {:+.2}%",
+        r.on_us.len(),
+        r.off_us.len(),
+        degrade_pct(p50_on, p50_off),
+        degrade_pct(p99_on, p99_off)
+    );
 }
 
 /// 跑一档，返回每 tick 的耗时（µs，升序）。
