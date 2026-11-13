@@ -63,13 +63,16 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
    - **16–18 字节**：`tempBuff = destinationSpan[2..^1]` 长为 13–15，`deCodeLen` = 9/10/11
      `< 12` ⇒ 关会话。
    - **≥ 19 字节**：`deCodeLen ≥ 12`，两道门全过；截断的编码流被解成垃圾字节，
-     `MemoryMarshal.Read<ClientMessage>` 取到垃圾 `Ident`，落到 `switch` 的 default
-     （不命中任何速度/聊天规则），随后按 `deCodeLen` 重新编码并以 `GM_DATA` 垃圾帧
+     `MemoryMarshal.Read<ClientMessage>` 取到垃圾 `Ident`，不命中任何 `case` 时顺序贯穿到
+     switch 之后的转发代码（该 switch **没有 `default` 标签**；垃圾 `Ident` 是 16-bit 值，
+     理论上有约 20/65536 的概率命中某个 `CM_*` case，届时走该分支规则，但不改变
+     「未分类垃圾帧以 `GM_DATA` 转发」的结论），随后按 `deCodeLen` 重新编码并以 `GM_DATA` 垃圾帧
      **转发给 GameSvr**（`deCodeLen == 12` 转发 12 字节固定头；`> 12` 走 oracle 的 `Encode(decodeBuff, deCodeLen - 12)` + `tempBuff[16..]` 重编码分支）。
    后段（同一帧的剩余字节）会被下一次 read 当成新帧，`[2..^1]` 剥掉它自己的首 2 字节后
-   再独立处理。**登录前**：片段 ≥ 3 字节走 `EDCode.DeCodeString` → `ClientLogin`，
-   失败即 `Kick(1)` 剔除；只有 < 3 字节的片段因 `[2..(packetLen-1)]` 越界抛异常、
-   被 `ServerManager` 的 catch 吞掉 ⇒ 丢帧、会话存活。
+   再独立处理。**登录前**：片段 ≥ 4 字节走 `EDCode.DeCodeString` → `ClientLogin`，
+   失败即 `Kick(1)` 剔除；≤ 3 字节的片段都到不了 `ClientLogin`（3 字节时 `[2..2]` 是空
+   payload，`DeCodeString` 的 `IsEmpty` 检查抛 `ArgumentNullException`；1–2 字节时
+   `[2..(packetLen-1)]` 越界），异常被 `ServerManager` 的 catch 吞掉 ⇒ 丢帧、会话存活。
 2. **合帧**（两帧落进同一次 read，例如同拍连写 say+walk）：整段被当成**一帧**；剥壳只去
    首 `#1` 与尾 `!`，中间的第二帧头留在解码流里。后果见 A1.1 最后一条（SAY 吞帧头、
    后续帧绕过分类/限速）。
