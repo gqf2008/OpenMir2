@@ -44,9 +44,13 @@ Rust 侧 `mir2-rs/bins/game-gate/src/lib.rs` 按同一假设实现，模块文�
 
 - `client_loop` 的读循环每次 `read(&mut buf)` 得到 `n`，直接交给
   `handle_frame(&buf[..n], ...)`，没有跨 read 的重组缓冲。
-- `classify_frame` 与 oracle 同构：`payload = &frame[2..frame.len() - 1]` 剥壳后整体
-  `mir2_protocol::edcode::decode(payload)`；登录前的短帧、登录后的 `< COMMAND_FIXED_LENGTH`
-  （`GateShare.CommandFixedLength` = 16）、心跳（长度 1）等门都以**这一次 read 的总长度**为准。
+- `classify_frame` 与 oracle 同构 —— 限定为**修掉登录前 3 字节偏差之后**（卡
+  `openmir2-game-gate-3byte-prelogin`：登录前 `frame.len() <= 3` 一律 `Ignore`，与下面 A1.3 第 1
+  条的三分支一致；修复前的门是 `< 3`，3 字节会被当登录帧、被 `packetLen <= 15` 判失败而
+  **关会话**，与 oracle 的「丢帧、会话存活」不等价）：`payload = &frame[2..frame.len() - 1]`
+  剥壳后整体 `mir2_protocol::edcode::decode(payload)`；登录前的短帧、登录后的
+  `< COMMAND_FIXED_LENGTH`（`GateShare.CommandFixedLength` = 16）、心跳（长度 1）等门都以
+  **这一次 read 的总长度**为准。
 - `rebuild_command_frame` 按 `decoded.len() > COMMAND_MESSAGE_SIZE`（= 12）决定是否带尾部，
   与 oracle 的转发口径一致。
 - 注意：该文件读循环上方的注释「帧被 TCP 拆开/合并时的后果与 oracle 一致（都会被剔除）」
