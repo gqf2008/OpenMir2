@@ -237,6 +237,13 @@ impl SlotTable {
         }
     }
 
+    /// **P5-pre**：段内结构插入的槽位登记（与 `EcsStore::insert` 的 `take_free_slot` + `bind`
+    /// 同序）；由 `crate::tick::StageEntities::insert` 调用（world-bevy 内 `pub(crate)`）。
+    pub(crate) fn bind_new(&mut self, id: i32, entity: Entity) {
+        let slot_idx = self.take_free_slot();
+        self.bind(slot_idx, id, entity);
+    }
+
     /// 把 (id, bevy 实体) 绑到刚取的槽位，并推进 `next_id`。
     fn bind(&mut self, slot_idx: usize, id: i32, entity: Entity) {
         self.slots[slot_idx].entity = Some(entity);
@@ -460,7 +467,11 @@ impl<T: Component<Mutability = Mutable>> EcsStore<T> {
     }
 
     /// 结构变更（spawn/despawn/组件集合变化）后刷新三个缓存查询状态的 archetype 匹配集。
-    fn refresh_archetypes(&mut self) {
+    ///
+    /// **P5-pre**：公开给 `crate::world::EntityStore::refresh_views()`——段内结构变更（只经
+    /// `StageEntities` 的 bevy `World` 裸句柄）绕过了本结构的 `insert`/`remove`，facade 必须在
+    /// 段后调用本方法，否则 `get`/`iter` 的缓存会漏掉新实体/仍见已删实体。
+    pub fn refresh_archetypes(&mut self) {
         self.read_state.update_archetypes(&self.world);
         self.write_state.update_archetypes(&self.world);
         self.pairs_state.update_archetypes(&self.world);

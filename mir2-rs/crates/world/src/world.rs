@@ -32,7 +32,7 @@ use crate::combat::{
     attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
     AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
 };
-use crate::entity::{DupAccess, DupActor, EntitySpawn, EntityStore, PvpView, StageSnapshotExt};
+use crate::entity::{EntitySpawn, EntityStore, PvpView, StageSnapshotExt};
 use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
 use crate::session::SessionRegistry;
 
@@ -1959,109 +1959,57 @@ mir2_world_bevy::stage_spec!(
     SimDup,
     TickStage::SimDup,
     read: [
-        Appearance,
-        LifeCycle,
-        Flags,
+        crate::entity::Entity,
         Transform,
-        DupState,
-        crate::entity::AiState
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        DupState
     ],
-    write: [DupState, Transform, crate::entity::AiState]
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        DupState
+    ]
 );
-
-/// **P3a**：`SimDup` 段的实体访问器（[`crate::entity::DupAccess`] 的段内实现）。
-///
-/// 与 facade 的 `EntityStore` 实现共用 `check_dup_obj_core` / `char_pushed_core` / `can_walk_cell_core`
-/// ——逐格推进与 RNG 邻接判定只有一份实现（`char_pushed_now` 的签名不动）。
-struct StageDupAccess<'a, 'w, S: StageSpec> {
-    ad: &'a mut StageEntities<'w, S>,
-}
-
-impl<S> DupAccess for StageDupAccess<'_, '_, S>
-where
-    S: StageSpec
-        + mir2_world_bevy::tick::Reads<Appearance>
-        + mir2_world_bevy::tick::Reads<LifeCycle>
-        + mir2_world_bevy::tick::Reads<Flags>
-        + mir2_world_bevy::tick::Reads<Transform>
-        + mir2_world_bevy::tick::Reads<DupState>
-        + mir2_world_bevy::tick::Reads<crate::entity::AiState>
-        + mir2_world_bevy::tick::Writes<DupState>
-        + mir2_world_bevy::tick::Writes<Transform>
-        + mir2_world_bevy::tick::Writes<crate::entity::AiState>,
-{
-    fn order_ids(&self) -> Vec<i32> {
-        self.ad.order().into_iter().map(|(id, _)| id).collect()
-    }
-    fn actor_flags(&self, id: i32) -> Option<(u8, bool)> {
-        let race = self.ad.get::<Appearance>(id)?.race;
-        let ghost = self.ad.get::<LifeCycle>(id)?.ghost;
-        Some((race, ghost))
-    }
-    fn xy(&self, id: i32) -> Option<(usize, i32, i32)> {
-        let t = self.ad.get::<Transform>(id)?;
-        Some((t.map_id, t.x, t.y))
-    }
-    fn dup_ticks(&self, id: i32) -> Option<(i64, bool, i64)> {
-        let d = self.ad.get::<DupState>(id)?;
-        Some((d.check_dup_obj_tick, d.bo_duplication, d.dup_start_tick))
-    }
-    fn set_dup_check_tick(&mut self, id: i32, now: i64) {
-        if let Some(d) = self.ad.get_mut::<DupState>(id) {
-            d.check_dup_obj_tick = now;
-        }
-    }
-    fn set_dup_bo(&mut self, id: i32, bo: bool) {
-        if let Some(d) = self.ad.get_mut::<DupState>(id) {
-            d.bo_duplication = bo;
-        }
-    }
-    fn set_dup_start(&mut self, id: i32, start: i64) {
-        if let Some(d) = self.ad.get_mut::<DupState>(id) {
-            d.dup_start_tick = start;
-        }
-    }
-    fn is_blocking(&self, id: i32) -> bool {
-        let Some(life) = self.ad.get::<LifeCycle>(id) else {
-            return false;
-        };
-        if life.ghost || life.death {
-            return false;
-        }
-        let Some(flags) = self.ad.get::<Flags>(id) else {
-            return false;
-        };
-        !flags.fixed_hide_mode && !flags.ob_mode
-    }
-    fn push_actor(&self, id: i32) -> Option<DupActor> {
-        let dir = self.ad.get::<crate::entity::AiState>(id)?.ai.dir;
-        let t = self.ad.get::<Transform>(id)?;
-        let race = self.ad.get::<Appearance>(id)?.race;
-        Some(DupActor {
-            dir,
-            x: t.x,
-            y: t.y,
-            map_id: t.map_id,
-            race,
-        })
-    }
-    fn set_dir(&mut self, id: i32, dir: u8) {
-        if let Some(a) = self.ad.get_mut::<crate::entity::AiState>(id) {
-            a.ai.dir = dir;
-        }
-    }
-    fn set_xy(&mut self, id: i32, x: i32, y: i32) {
-        if let Some(t) = self.ad.get_mut::<Transform>(id) {
-            t.x = x;
-            t.y = y;
-        }
-    }
-    fn add_walk_tick(&mut self, id: i32, delta: i64) {
-        if let Some(a) = self.ad.get_mut::<crate::entity::AiState>(id) {
-            a.ai.walk_tick += delta;
-        }
-    }
-}
 
 /// **S4d-3/P3a 段 #14 `SimDup`**：重叠推挤（`PlayObject.Run:263-285`）。
 ///
@@ -2081,7 +2029,7 @@ pub fn sim_dup_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("SimState 必须在段窗口内（段边界契约）");
     let pushes = {
         let mut ad = StageEntities::<SimDup>::new(world);
-        let mut access = StageDupAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
         World::check_dup_obj_core(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -6958,56 +6906,63 @@ impl World {
         Self::char_pushed_core(entities, sim, actor_id, n_dir, n_push_count)
     }
 
-    /// **P3a**：`check_dup_obj` 的共用核心（facade 与 `SimDup` 段走同一份）。
+    /// **P3a/P5**：`check_dup_obj` 的共用核心（facade `EntityStore` 与 `SimDup` 段的 `StageAccess`
+    /// 同走 `EntityAccess`——单一实现，无 `DupAccess` 第二套接口）。
     ///
     /// 逐行对应旧 `World::check_dup_obj`：槽位序筛 `Race == Play && !Ghost`；3s 门严格 `>`；
     /// 过门先刷 `check_dup_obj_tick = now`；`GetXYObjCount`（`count_at_cell_with`）；`>=2` 首次
     /// 置位 `BoDuplication/DupStartTick`、`<2` 只清 `BoDuplication`；推挤门
     /// `((>=3 && elapsed>3000) || (==2 && elapsed>10000)) && elapsed<20000`；
     /// 过门才抽 `RandomByte(8)` 并调 `char_pushed_core`。
-    fn check_dup_obj_core<A: DupAccess>(
+    fn check_dup_obj_core<A: crate::entity::EntityAccess>(
         access: &mut A,
         sim: &mut SimState,
     ) -> Vec<crate::action::PushEvent> {
         let now = sim.clock_ms;
-        let ids: Vec<i32> = access
-            .order_ids()
-            .into_iter()
-            .filter(|&id| {
-                access
-                    .actor_flags(id)
-                    .is_some_and(|(race, ghost)| race == crate::entity::ACTOR_RACE_PLAY && !ghost)
-            })
-            .collect();
+        let mut ids: Vec<i32> = Vec::new();
+        for id in access.order_ids() {
+            if let Some(e) = access.get(id) {
+                if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
+                    ids.push(id);
+                }
+            }
+        }
         let mut pushes = Vec::new();
         for id in ids {
-            let Some((map_id, x, y)) = access.xy(id) else {
+            let Some((map_id, x, y)) = access.get(id).map(|e| (e.map_id, e.x, e.y)) else {
                 continue;
             };
-            let Some((last, bo, start)) = access.dup_ticks(id) else {
+            let Some(d) = access.dup_state(id) else {
                 continue;
             };
+            let (last, bo, start) = (d.check_dup_obj_tick, d.bo_duplication, d.dup_start_tick);
             // `:263` 严格 `>`：恰 3000ms 不检查。
             if now - last <= 3000 {
                 continue;
             }
             // `:265` `CheckDupObjTick = GetTickCount()`（本 tick 内同一 `now`）。
-            access.set_dup_check_tick(id, now);
+            if let Some(d) = access.dup_state_mut(id) {
+                d.check_dup_obj_tick = now;
+            }
             // `:267` `tObjCount = Envir.GetXYObjCount(CurrX, CurrY)`（含自己）。
             let t_obj_count = crate::monai::count_at_cell_with(&sim.maps, map_id, x, y, |cid| {
-                access.is_blocking(cid)
+                Self::is_blocking(access, cid)
             });
             // `:268-279`：`>=2` 首次置位；`<2` 清 `BoDuplication`（`DupStartTick` 不复位）。
             let start_after = if t_obj_count >= 2 {
                 if bo {
                     start
                 } else {
-                    access.set_dup_bo(id, true);
-                    access.set_dup_start(id, now);
+                    if let Some(d) = access.dup_state_mut(id) {
+                        d.bo_duplication = true;
+                        d.dup_start_tick = now;
+                    }
                     now
                 }
             } else {
-                access.set_dup_bo(id, false);
+                if let Some(d) = access.dup_state_mut(id) {
+                    d.bo_duplication = false;
+                }
                 start
             };
             let elapsed = now - start_after;
@@ -7024,24 +6979,37 @@ impl World {
         pushes
     }
 
-    /// **P3a**：`char_pushed_now` 的共用核心（逐格推进；RNG 只在调用方，本函数零抽数）。
-    fn char_pushed_core<A: DupAccess>(
+    /// 阻挡判定（`CanWalk`/`MoveToMovingObject` 的集合）：`!Ghost && !Death && !FixedHideMode && !ObMode`。
+    fn is_blocking<A: crate::entity::EntityAccess>(access: &A, id: i32) -> bool {
+        access
+            .get(id)
+            .is_some_and(|o| !o.ghost && !o.death && !o.fixed_hide_mode && !o.ob_mode)
+    }
+
+    /// **P3a/P5**：`char_pushed_now` 的共用核心（逐格推进；RNG 只在调用方，本函数零抽数）。
+    ///
+    /// facade `World::char_pushed_now`（Command `Push` 与 slave 自投递共用，签名不变）与 `SimDup`
+    /// 段都调本函数：单一实现，`EntityAccess` 同时覆盖 `EntityStore` 与 `StageAccess`。
+    fn char_pushed_core<A: crate::entity::EntityAccess>(
         access: &mut A,
         sim: &mut SimState,
         actor_id: i32,
         n_dir: u8,
         n_push_count: u8,
     ) -> Vec<crate::action::PushEvent> {
-        let Some(actor) = access.push_actor(actor_id) else {
+        let Some((old_dir, mut x, mut y, map_id, race)) = access
+            .get(actor_id)
+            .map(|e| (e.ai.dir, e.x, e.y, e.map_id, e.race))
+        else {
             return Vec::new();
         };
-        let old_dir = actor.dir;
-        let (mut x, mut y, map_id, race) = (actor.x, actor.y, actor.map_id, actor.race);
         let Some((w, h)) = sim.maps.get(map_id).map(|m| (m.width, m.height)) else {
             return Vec::new();
         };
         // `:857 Dir = nDir;`（先落，末尾按 result 决定是否复原）。
-        access.set_dir(actor_id, n_dir);
+        if let Some(e) = access.get_mut(actor_id) {
+            e.ai.dir = n_dir;
+        }
         let back = crate::magic::back_dir(n_dir);
         let mut out = Vec::new();
         for _ in 0..n_push_count {
@@ -7068,7 +7036,7 @@ impl World {
                         // `CheckDupObj` 只对玩家生效 ⇒ cert 的 `CellType` 恒 `Play`。
                         cert_cell_type: crate::map::CellType::Play,
                     },
-                    |cid| access.is_blocking(cid),
+                    |cid| Self::is_blocking(access, cid),
                 )
             };
             if !moved {
@@ -7076,10 +7044,15 @@ impl World {
             }
             x = nx;
             y = ny;
-            access.set_xy(actor_id, x, y);
+            if let Some(t) = access.transform_mut(actor_id) {
+                t.x = x;
+                t.y = y;
+            }
             // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
             if race >= crate::entity::ACTOR_RACE_ANIMAL {
-                access.add_walk_tick(actor_id, 800);
+                if let Some(e) = access.get_mut(actor_id) {
+                    e.ai.walk_tick += 800;
+                }
             }
             // `:871 SendRefMsg(RM_PUSH, nBackDir, CurrX, CurrY, 0, "")` —— 逐格一条。
             out.push(crate::action::PushEvent {
@@ -7091,12 +7064,14 @@ impl World {
         }
         // `:890-895 Dir = nBackDir; if (result == 0) Dir = olddir;`
         let final_dir = if out.is_empty() { old_dir } else { back };
-        access.set_dir(actor_id, final_dir);
+        if let Some(e) = access.get_mut(actor_id) {
+            e.ai.dir = final_dir;
+        }
         out
     }
 
-    /// **P3a**：`World::can_walk_cell` 的共用核心（阻挡判定走 [`DupAccess::is_blocking`]）。
-    fn can_walk_cell_core<A: DupAccess>(
+    /// **P3a/P5**：`World::can_walk_cell` 的共用核心（阻挡判定走 `Self::is_blocking`）。
+    fn can_walk_cell_core<A: crate::entity::EntityAccess>(
         access: &A,
         sim: &SimState,
         map_id: usize,
@@ -7120,7 +7095,7 @@ impl World {
         !cell
             .obj_list
             .iter()
-            .any(|o| o.actor_object && access.is_blocking(o.cell_obj_id))
+            .any(|o| o.actor_object && Self::is_blocking(access, o.cell_obj_id))
     }
 
     /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`
@@ -9378,6 +9353,128 @@ mod tests {
             vec![p1, p2],
             "钳制事件按槽位序进 record"
         );
+    }
+
+    mir2_world_bevy::stage_spec!(
+        StructuralProbe,
+        TickStage::SimDup,
+        read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ],
+        write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ]
+    );
+    impl mir2_world_bevy::tick::Structural for StructuralProbe {}
+
+    /// **P5-pre**：段内 `insert` 后，facade 在 `refresh_views()` 之后**立即可见**（get/iter/get_mut）。
+    ///
+    /// 牙：删 `EntityStore::refresh_views()` 的调用（或删其 `refresh_archetypes`/`refresh_view`）
+    /// ⇒ 段后 facade 断言红。注意：未 refresh 前 `get` 必须仍看不到（缓存未更新）——这一半也在钉
+    /// 「refresh 真的承重」。
+    #[test]
+    fn structural_stage_insert_is_visible_to_facade_after_refresh() {
+        use crate::entity::EntityAccess;
+        use mir2_world_bevy::tick::StageEntities;
+        let mut w = World::new(16, 16);
+        let id = 7;
+        let spawn = {
+            let mut e = crate::EntitySpawn::new(id, "born-in-stage", 3, 4);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 37;
+            e.max_hp = 100;
+            e
+        };
+        {
+            let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert_eq!(
+                crate::entity::StructuralAccess::insert(&mut access, spawn),
+                id
+            );
+            // 段内立即可见（与 facade 插入同组件集）。
+            assert_eq!(access.get(id).map(|e| (e.x, e.y, e.hp)), Some((3, 4, 37)));
+        }
+        assert!(
+            w.entities.get(id).is_none(),
+            "未 refresh_views 前 facade 缓存不得看到新实体（否则牙失效）"
+        );
+        w.entities.refresh_views();
+        let e = w.entities.get(id).expect("refresh_views 后必须立即可见");
+        assert_eq!((e.x, e.y, e.hp), (3, 4, 37));
+        assert!(
+            w.entities.iter().any(|x| x.id == id),
+            "内核 read_state 也必须刷新（iter 才看得到）"
+        );
+        assert!(w.entities.get_mut(id).is_some(), "写视图缓存同样要刷新");
+        assert_eq!(w.entities.order_index(), vec![id], "槽位按插入序");
+    }
+
+    /// **P5-pre**：段内 `remove` 后 facade **立即查不到**（槽位表是唯一真值），且槽位释放。
+    #[test]
+    fn structural_stage_remove_is_invisible_to_facade() {
+        use crate::entity::EntityAccess;
+        use mir2_world_bevy::tick::StageEntities;
+        let mut w = World::new(16, 16);
+        let id = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "gone", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 10;
+            e.max_hp = 10;
+            e
+        });
+        assert!(w.entities.get(id).is_some());
+        {
+            let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert!(crate::entity::StructuralAccess::remove(&mut access, id));
+            assert!(access.get(id).is_none());
+        }
+        assert!(w.entities.get(id).is_none(), "remove 后 facade 立即查不到");
+        assert!(!w.entities.iter().any(|e| e.id == id));
+        assert!(w.entities.order_index().is_empty());
     }
 
     /// **P4**：`SimSlaveCleanup` 段与旧 `slave_list_cleanup_all` 同语义（槽位序 + 表内倒序删除）。
