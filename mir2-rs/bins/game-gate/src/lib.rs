@@ -1263,24 +1263,28 @@ async fn deliver_gm_data(ctx: &LinkCtx, msg: &ServerMessage, body: &[u8]) {
     let guard = ctx.sessions.lock().await;
     if let Some(tx) = guard.get(&msg.session_id) {
         let ok = tx.send(wire).is_ok();
-        if misdeliver_log_enabled() {
+        // **只对 SM_LOGON(50) 打行**：AOI 帧可达 1e4/s，逐帧日志会拖慢网关读循环
+        // （2026-11-15 首轮 200 档实测：24.7 万行 DBG 把进世界流水拖到停滞，结果不可用）。
+        let ident = inner_ident(body).unwrap_or(0);
+        if misdeliver_log_enabled() && ident == mir2_protocol::messages::SM_LOGON {
             glog!(
                 "DBG",
                 "MISDELIVER_DELIVER sid={} owner={} ident={} bytes={} send_ok={}",
                 msg.session_id,
                 owner_label(owner.as_ref()),
-                inner_ident(body).unwrap_or(0),
+                ident,
                 body.len(),
                 u8::from(ok)
             );
         }
     } else {
-        if misdeliver_log_enabled() {
+        let ident = inner_ident(body).unwrap_or(0);
+        if misdeliver_log_enabled() && ident == mir2_protocol::messages::SM_LOGON {
             glog!(
                 "DBG",
                 "MISDELIVER_NOROUTE sid={} ident={} bytes={}",
                 msg.session_id,
-                inner_ident(body).unwrap_or(0),
+                ident,
                 body.len()
             );
         }
