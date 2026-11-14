@@ -2150,34 +2150,52 @@ pub fn monster_class_run(world: &mut World, actor_id: i32) -> Option<ClassRunBas
 }
 
 /// [`monster_class_run`] 的返回值 → oracle `base.Run()` 链的落地（四个调用点共用）。
+///
+/// 单点/非段调用形态：本函数自带一个空的玩家数缓存（= 每次死亡支各算一次，
+/// 与 `monster_ai_tick` 循环外调用 `base.Run()` 的语义一致）。
 fn run_class_base_impl<A: crate::entity::EntityAccess>(
     access: &mut A,
     sim: &mut crate::world::SimState,
     actor_id: i32,
     base: ClassRunBase,
 ) {
+    let mut play_count = None;
+    run_class_base_impl_cached(access, sim, actor_id, base, &mut play_count);
+}
+
+/// [`run_class_base_impl`] 的**共享玩家数缓存**版本（`monster_ai_tick_impl_probed` 的逐怪循环用）。
+///
+/// `play_count` 由段级循环持有、跨怪复用：死亡支第一次执行时才做一次 `order_ids()` 全扫，
+/// 其余死亡支直接复用（见 [`play_object_count_impl`] 的不变性依据）。
+fn run_class_base_impl_cached<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    base: ClassRunBase,
+    play_count: &mut Option<i32>,
+) {
     match base {
         ClassRunBase::Animal => {
             animal_run_impl(access, sim, actor_id);
-            base_object_run_monster_impl(access, sim, actor_id);
+            base_object_run_monster_impl_cached(access, sim, actor_id, play_count);
         }
         ClassRunBase::AnimalTwice => {
             // `SandMobObject.Run` 的两次 `base.Run()`（各早退成 `AnimalObject.Run`）。
             animal_run_impl(access, sim, actor_id);
-            base_object_run_monster_impl(access, sim, actor_id);
+            base_object_run_monster_impl_cached(access, sim, actor_id, play_count);
             animal_run_impl(access, sim, actor_id);
-            base_object_run_monster_impl(access, sim, actor_id);
+            base_object_run_monster_impl_cached(access, sim, actor_id, play_count);
         }
         ClassRunBase::Monster => {
             monster_run_impl(access, sim, actor_id);
             animal_run_impl(access, sim, actor_id);
-            base_object_run_monster_impl(access, sim, actor_id);
+            base_object_run_monster_impl_cached(access, sim, actor_id, play_count);
         }
         ClassRunBase::MagicMonster => {
             magic_monster_run_impl(access, sim, actor_id);
             monster_run_impl(access, sim, actor_id);
             animal_run_impl(access, sim, actor_id);
-            base_object_run_monster_impl(access, sim, actor_id);
+            base_object_run_monster_impl_cached(access, sim, actor_id, play_count);
         }
         ClassRunBase::None => {}
     }
@@ -5814,6 +5832,37 @@ fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
     monster_run_away_expiry_impl(&mut world.entities, &mut world.sim, actor_id, now)
 }
 
+/// oracle `GetMonstersZenTime` 读的**全服在册玩家数**（`PlayObjectCount`）口径：`race == Play` 的实体数。
+///
+/// **同一 `monster_ai_tick` pass 内该计数不变**（把「每只死亡怪各算一次」提升为「每段算一次」的
+/// 前提）。逐调用点依据：
+///
+/// 1. **实体集合只经** [`crate::entity::EntityAccess`] **变更**：该 trait 只有
+///    `get`/`get_mut`/`spawn_cloned`/`set_progression`/`map_binding_mut`/`dup_state*`/
+///    `transform_mut`/`recovery_mut`/`ai_mut`/`order_ids`——**没有新增/移除实体的方法**；
+///    段循环体内的每个 `_impl` 函数都只拿 `&mut A: EntityAccess`（不拿 `&mut World`）
+///    ⇒ 循环期间不可能出生/移除实体。实体的真正增删在别的段（登录/离场、
+///    `World::release_entity` 由 `mongen::process_cert_lists` 的 5min Ghost 清理调用、
+///    召唤/复制在 [`World::flush_sculture_spawns`] 于 `world.tick()` **之后**排水）——
+///    与 `SimMonsterAi` 段不重叠。
+/// 2. **`race`/存活态写点**：循环体内唯一改 race 的路径是 `elf_warrior_appear_now`
+///    （`appearance.race = ElfWarriormon`），只作用于**怪物 → 怪物**，且该 world 形态函数在
+///    `flush_sculture_spawns` 的 `MakeClone` 支被调用（`world.tick()` 之后），不在本段循环里。
+///    死亡（`life_cycle.death`）可在本段被写（死亡支 `MakeGhost`、`RM_STRUCK` 的 `Struck`），
+///    但**只改非 `Play` 实体的生死**（本段不驱动玩家 AI、不结算玩家死亡），`race == Play`
+///    的判定与实体存在性都不受影响。`ghost`/`invisible` 同理不进本口径。
+/// 3. 因此 `order_ids()` + `race == Play` 过滤的结果在整段内是**常量**，缓存值与逐次全扫等价。
+///
+/// 计数口径与旧实现逐字相同（`order_ids` 槽位序 + `access.get` 存在性 + `race == Play`）；
+/// 本函数不消费 RNG、不写实体。
+fn play_object_count_impl<A: crate::entity::EntityAccess>(access: &A) -> i32 {
+    access
+        .order_ids()
+        .into_iter()
+        .filter(|id| access.get(*id).is_some_and(|x| x.race == ACTOR_RACE_PLAY))
+        .count() as i32
+}
+
 /// `BaseObject.Run()`（`BaseObject.Base.cs:24-316`）的**怪侧公共段**：恢复 / 体力点 / `TargetCret` 清理。
 ///
 /// oracle 里这三段在 `monster.Run()` 的**末尾**执行：`MonsterObject.Run` 的两个出口
@@ -5860,10 +5909,27 @@ pub fn base_object_run_monster(world: &mut World, actor_id: i32) {
 /// AOI 的可见刷新经 [`crate::aoi::update_monster_visible`]（同一份格扫算法），由
 /// [`crate::entity::AoiAccess`] 把 `EntityAccess` 适配成 `AoiStore`。`SimState` 侧的读/写
 /// （`pending_show_hp_health_changes`、`make_ghost_time` 等）与 facade 形态逐项同源。
+///
+/// 单点调用形态：自带空的玩家数缓存 ⇒ 死亡支仍按「每次执行各算一次」取数（行为与计数口径同旧实现）。
 pub(crate) fn base_object_run_monster_impl<A: crate::entity::EntityAccess>(
     access: &mut A,
     sim: &mut crate::world::SimState,
     actor_id: i32,
+) {
+    let mut play_count = None;
+    base_object_run_monster_impl_cached(access, sim, actor_id, &mut play_count);
+}
+
+/// [`base_object_run_monster_impl`] 的**共享玩家数缓存**版本。
+///
+/// `play_count`（`race == Play` 的实体数，= oracle `PlayObjectCount`）在同一段循环内**只算一次**：
+/// 首次执行死亡支时填缓存，其后所有死亡支复用。正确性前提是「同一段内该计数不变」，依据见
+/// [`play_object_count_impl`]。除该计数的取数时机外，本函数与旧实现逐条相同（无 RNG、无帧面差异）。
+pub(crate) fn base_object_run_monster_impl_cached<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+    play_count: &mut Option<i32>,
 ) {
     // `BaseObject.Run` 的**消息段**（`BaseObject.Base.cs:26-30`）按 FIFO 出队。本骨架有两条队列：
     // `RM_UPDATEVIEWRANGE`（上一 tick 玩家扫描末尾投递）与 `RM_STRUCK`（本 tick 攻击入队）。
@@ -5946,11 +6012,19 @@ pub(crate) fn base_object_run_monster_impl<A: crate::entity::EntityAccess>(
         //
         // 两条门都是**严格 >**。`GetMonstersZenTime` 读全服 `PlayObjectCount`
         // （`WorldServer.MonGen.cs:168-190`）⇒ 这里数 `race == Play` 的实体（宿主同口径）。
-        let play_object_count = access
-            .order_ids()
-            .into_iter()
-            .filter(|id| access.get(*id).is_some_and(|x| x.race == ACTOR_RACE_PLAY))
-            .count() as i32;
+        //
+        // **O(dead×N) 消除**：该计数在同一段循环内不变（依据见 [`play_object_count_impl`]），
+        // 由段级循环持有缓存 ⇒ 每个到点 pass 至多做**一次** `order_ids()` 全扫，而不是每只
+        // 死亡怪各做一次。取数时机从「每只死亡怪到达死亡支时」提前到「本段第一次到达死亡支时」，
+        // 计数值相同（不变性证明见该函数的文档）。
+        let play_object_count = match *play_count {
+            Some(n) => n,
+            None => {
+                let n = play_object_count_impl(access);
+                *play_count = Some(n);
+                n
+            }
+        };
         // `get_monsters_zen_time` 只读这两项；其余字段用 oracle 构造缺省（不参与计算）。
         let cfg = crate::mongen::MonGenConfig {
             user_full: sim.mon_gen_user_full,
@@ -6483,6 +6557,10 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
         probe.scan_gate(access, sim, &ids);
     }
     let t_loop = probe.timer_begin();
+    // **O(dead×N) 消除**：`race == Play` 计数在本段内不变（依据见 [`play_object_count_impl`]），
+    // 故整段共用一个缓存：第一次有怪走到死亡支时全扫一次，其后所有死亡支复用。
+    // 本段没有任何死亡支时（`dead=0`）不扫 ⇒ 与旧实现同样零额外开销。
+    let mut play_count_cache: Option<i32> = None;
     for id in ids {
         // **不可见怪跳步门**（`WorldServer.MonGen.cs:294-296/314`）：
         //
@@ -6519,7 +6597,7 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
             let race = access.get(id).map_or(0, |e| e.race);
             if matches!(race, 110 | 111) && has_castle_binding_impl(access, sim, id) {
                 castle_structure_run_impl(access, sim, id, race);
-                base_object_run_monster_impl(access, sim, id);
+                base_object_run_monster_impl_cached(access, sim, id, &mut play_count_cache);
                 continue;
             }
             // oracle `ProcessMonsters` 对 `!Ghost` 的怪**照常调 `Run()`**（`WorldServer.MonGen.cs:288`）
@@ -6539,11 +6617,11 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
                 .is_some_and(|e| matches!(e.race, 96 | 113 | 114 | 100 | 120 | 132 | 214 | 215))
             {
                 if let Some(base) = monster_class_run_impl(access, sim, id) {
-                    run_class_base_impl(access, sim, id, base);
+                    run_class_base_impl_cached(access, sim, id, base, &mut play_count_cache);
                     continue;
                 }
             }
-            base_object_run_monster_impl(access, sim, id);
+            base_object_run_monster_impl_cached(access, sim, id, &mut play_count_cache);
             continue;
         }
         // **Lane B**：城堡门/墙（race 110/111）**不得**进入 `monster_run`（`GuardUnit:NormNpc`
@@ -6553,7 +6631,7 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
             castle_structure_run_impl(access, sim, id, race_now);
             // `CastleDoor.Run`/`WallStructure.Run` 末尾的 `base.Run()`。
             animal_run_impl(access, sim, id);
-            base_object_run_monster_impl(access, sim, id);
+            base_object_run_monster_impl_cached(access, sim, id, &mut play_count_cache);
             continue;
         }
         // `GuardList` 放置的守卫（race 11/12/20/112）不继承 `MonsterObject.Run`
@@ -6566,14 +6644,14 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
             archer_guard_run_impl(access, sim, id);
             // `NormNpc.Run` 的 `base.Run()` = `AnimalObject.Run` → `BaseObject.Run`。
             animal_run_impl(access, sim, id);
-            base_object_run_monster_impl(access, sim, id);
+            base_object_run_monster_impl_cached(access, sim, id, &mut play_count_cache);
             continue;
         }
         if is_guard_race(access.get(id).map_or(0, |e| e.race)) {
             // `NormNpc.Run`（`NormNpc.cs:1604-1611`）→ `base.Run()` = `AnimalObject.Run`
             // （HolySeize 到期）→ `BaseObject.Run`。
             animal_run_impl(access, sim, id);
-            base_object_run_monster_impl(access, sim, id);
+            base_object_run_monster_impl_cached(access, sim, id, &mut play_count_cache);
             continue;
         }
         // 专用怪 `BeeQueen`/`SpiderHouseMonster` 覆写 `Run`（`BeeQueen.cs:51-79` /
@@ -6582,7 +6660,7 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
         // Wondering/CheckRoyalty/CrazyMode 段。
         if crate::special_monster::special_monster_run_impl(access, sim, id) {
             animal_run_impl(access, sim, id);
-            base_object_run_monster_impl(access, sim, id);
+            base_object_run_monster_impl_cached(access, sim, id, &mut play_count_cache);
             continue;
         }
         // **MB-1**：四个专用怪的 `Run` 覆写（`StickMonster`/`DigOutZombi`/
@@ -6591,14 +6669,14 @@ pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
         // `base.Run()` 链（`Animal`/`AnimalTwice`/`Monster`/`MagicMonster`/`None`）见
         // [`run_class_base`]。
         if let Some(base) = monster_class_run_impl(access, sim, id) {
-            run_class_base_impl(access, sim, id, base);
+            run_class_base_impl_cached(access, sim, id, base, &mut play_count_cache);
             continue;
         }
         monster_run_impl(access, sim, id);
         // `MonsterObject.Run` 的末尾 `base.Run()`（`MonsterObject.cs:255/359`）：
         // `AnimalObject.Run`（HolySeize 到期）→ `BaseObject.Run`。
         animal_run_impl(access, sim, id);
-        base_object_run_monster_impl(access, sim, id);
+        base_object_run_monster_impl_cached(access, sim, id, &mut play_count_cache);
     }
     probe.record_loop(t_loop);
 }
