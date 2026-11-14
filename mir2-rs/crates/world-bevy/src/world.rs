@@ -2972,10 +2972,19 @@ pub fn sim_monster_ai_stage_system(world: &mut bevy_ecs::world::World) {
     let mut sim = world
         .remove_resource::<SimState>()
         .expect("段边界：SimState 必须已在 bevy World（SimMonsterAi）");
+    // **卡 `openmir2-simmonsterai-profile`**：探针资源只在 `TickProfile` 开启时由
+    // `tick_head` 插入；缺席（生产缺省）⇒ 走无探针路径，逐怪循环零附加判别。
+    let mut probe = world.remove_resource::<crate::monai::MonaiProbe>();
     {
         let mut ad = StageEntities::<SimMonsterAi>::new(world);
         let mut access = crate::entity::StageAccess::new(&mut ad);
-        crate::monai::monster_ai_tick_impl(&mut access, &mut sim);
+        match probe.as_mut() {
+            Some(p) => crate::monai::monster_ai_tick_impl_probed(&mut access, &mut sim, p),
+            None => crate::monai::monster_ai_tick_impl(&mut access, &mut sim),
+        }
+    }
+    if let Some(p) = probe {
+        world.insert_resource(p);
     }
     world.insert_resource(sim);
 }
@@ -3142,9 +3151,23 @@ pub struct TickProfile {
     probe_nanos: Vec<(&'static str, u64, u64)>,
     /// 已计入的 tick 数（`tick_head` 入口自增）。
     pub ticks: u64,
+    /// **卡 `openmir2-simmonsterai-profile`**：逐 tick 的 `SimMonsterAi` 段 ns 样本
+    /// （最近 [`SIM_AI_SAMPLE_CAP`] 条；**tick 级分位数**用它算，不是 50-tick 桶近似）。
+    pub sim_ai_tick_ns: Vec<u64>,
+    /// 自开启起累计写入的 `sim_ai_tick_ns` 条数（**单调递增**，不受环形上限影响；
+    /// 窗口增量用它算"本轮新增几条"，截断时也不会漏/重复）。
+    pub sim_ai_samples_total: u64,
+    /// `SimMonsterAi` 内部探针的**窗口累计**（`monai_ticks` 次 tick 之和/计数）。
+    pub monai: crate::monai::MonaiProbe,
+    /// `monai` 累计覆盖的 tick 数（探针开启的 tick）。
+    pub monai_ticks: u64,
     /// **同进程 A/B 用**：暂停累计但保留已有数据（`prof_begin` 返回 `None`）。
     pub paused: bool,
 }
+
+/// [`TickProfile::sim_ai_tick_ns`] 的环形上限（防止长跑诊断会话无界增长；
+/// 生产窗口是 50 tick，1024 条 ≈ 20 个窗口）。
+pub const SIM_AI_SAMPLE_CAP: usize = 1024;
 
 impl TickProfile {
     fn add_stage(&mut self, stage: TickStage, ns: u64) {
@@ -3165,6 +3188,33 @@ impl TickProfile {
             }
             None => self.probe_nanos.push((name, ns, 1)),
         }
+    }
+
+    /// **卡 `openmir2-simmonsterai-profile`**：把一次 `SimMonsterAi` 段的 [`crate::monai::MonaiProbe`]
+    /// 累加进本 profile。只做加法（探针已在段内完成计时/计数），不改变任何 tick 行为。
+    pub fn merge_monai(&mut self, p: &crate::monai::MonaiProbe) {
+        self.monai.collect_ns = self.monai.collect_ns.saturating_add(p.collect_ns);
+        self.monai.gate_ns = self.monai.gate_ns.saturating_add(p.gate_ns);
+        self.monai.loop_ns = self.monai.loop_ns.saturating_add(p.loop_ns);
+        self.monai.slot_total = self.monai.slot_total.saturating_add(p.slot_total);
+        self.monai.scanned = self.monai.scanned.saturating_add(p.scanned);
+        self.monai.skipped_throttle = self
+            .monai
+            .skipped_throttle
+            .saturating_add(p.skipped_throttle);
+        self.monai.ran = self.monai.ran.saturating_add(p.ran);
+        self.monai.ran_dead = self.monai.ran_dead.saturating_add(p.ran_dead);
+        self.monai.ran_frozen = self.monai.ran_frozen.saturating_add(p.ran_frozen);
+        self.monai.ran_no_target = self.monai.ran_no_target.saturating_add(p.ran_no_target);
+        self.monai.ran_idle_wander = self.monai.ran_idle_wander.saturating_add(p.ran_idle_wander);
+        self.monai.ran_walk_due = self.monai.ran_walk_due.saturating_add(p.ran_walk_due);
+        self.monai.ran_target = self.monai.ran_target.saturating_add(p.ran_target);
+        self.monai.scanned_inactive = self
+            .monai
+            .scanned_inactive
+            .saturating_add(p.scanned_inactive);
+        self.monai.enabled = true;
+        self.monai_ticks += 1;
     }
 
     /// 各段累计：`(段, 累计 ns, 调用次数)`（按首次记录顺序）。
@@ -3448,10 +3498,21 @@ impl World {
     }
 
     /// 段计时出口：累计到 [`TickProfile`]。
+    ///
+    /// **卡 `openmir2-simmonsterai-profile`**：`SimMonsterAi` 段额外把**逐 tick** ns 追加到
+    /// `sim_ai_tick_ns`（tick 级分位数用；其它段行为不变）。
     #[inline]
     fn prof_end(&mut self, stage: TickStage, t: Option<Instant>) {
         if let (Some(t), Some(p)) = (t, self.tick_profile.as_mut()) {
-            p.add_stage(stage, t.elapsed().as_nanos() as u64);
+            let ns = t.elapsed().as_nanos() as u64;
+            p.add_stage(stage, ns);
+            if stage == TickStage::SimMonsterAi {
+                if p.sim_ai_tick_ns.len() >= SIM_AI_SAMPLE_CAP {
+                    p.sim_ai_tick_ns.remove(0);
+                }
+                p.sim_ai_tick_ns.push(ns);
+                p.sim_ai_samples_total += 1;
+            }
         }
     }
 
@@ -7672,7 +7733,25 @@ impl World {
         // **S4d-3/P6b2 #10**：段系统（`SimMonsterAi`），段位与旧内联调用完全相同。
         let __prof_ai = self.prof_begin();
         if self.ai_enabled {
+            // **卡 `openmir2-simmonsterai-profile`**：只在探针开启（`MIR2_TICK_PROFILE=1` 且未暂停）
+            // 时插入 `MonaiProbe` 资源，段内跑只读子探针；跑完取回并累加进 profile。
+            // 探针关闭（生产缺省）⇒ 不插入 ⇒ 段内走无探针路径。
+            let monai_probe_on = self.tick_profile.as_ref().is_some_and(|p| !p.paused);
+            if monai_probe_on {
+                self.entities
+                    .world_mut()
+                    .insert_resource(crate::monai::MonaiProbe::enabled_probe());
+            }
             self.run_head_stage(|world, head| head.run(TickStage::SimMonsterAi, world));
+            if monai_probe_on {
+                let probe = self
+                    .entities
+                    .world_mut()
+                    .remove_resource::<crate::monai::MonaiProbe>();
+                if let (Some(probe), Some(p)) = (probe, self.tick_profile.as_mut()) {
+                    p.merge_monai(&probe);
+                }
+            }
         }
         self.prof_end(TickStage::SimMonsterAi, __prof_ai);
         // **S4d-1**：AI/命令段的输出累积（结构事件、AI 攻击、武器升级/磨损）不再内联转抄，
@@ -11221,6 +11300,52 @@ mod tests {
             w.entities.get(id).unwrap().ai.walk_tick,
             w.clock_ms,
             "可见怪首 tick 必须 Run（walk 推进到 now）"
+        );
+    }
+
+    /// **卡 `openmir2-simmonsterai-profile` 牙**：探针开启时 `SimMonsterAi` **每 tick 一条**
+    /// `sim_ai_tick_ns` 样本，且 `MonaiProbe` 被累计（= 探针资源确实在段边界被插入/取回）；
+    /// 缺省（未 `enable_tick_profile`）时 `tick_profile()` 恒 `None` ⇒ 零开销路径。
+    ///
+    /// 变异：把 `tick_head` 里的 `if monai_probe_on { insert_resource }` 删掉 ⇒ 段走无探针路径
+    /// ⇒ `monai_ticks == 0` ⇒ 红；把 `prof_end` 里 `sim_ai_tick_ns.push` 删掉 ⇒ 长度 0 ⇒ 红。
+    #[test]
+    fn sim_monster_ai_profile_records_per_tick_samples() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        w.set_process_monster_interval(0);
+        w.enable_monster_ai();
+        let _id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "probed".to_string(), 5, 5);
+            e.race = ACTOR_RACE_MONSTER;
+            e
+        });
+        w.enable_tick_profile();
+        for _ in 0..5 {
+            w.tick_head();
+        }
+        let p = w.tick_profile().expect("profile 已开启");
+        assert_eq!(p.sim_ai_tick_ns.len(), 5, "每 tick 一条 SimMonsterAi 样本");
+        assert_eq!(
+            p.sim_ai_samples_total, 5,
+            "单调计数与样本条数一致（未截断）"
+        );
+        assert_eq!(p.monai_ticks, 5, "探针资源必须在每个 tick 被插入/取回");
+        assert!(p.monai.scanned > 0, "必须扫到那只怪");
+        assert!(p.monai.loop_ns > 0, "逐怪循环必须被计时");
+
+        // 缺省（生产路径）：不开启 profile ⇒ 无样本、无探针资源。
+        let mut off = World::new(20, 20);
+        off.enable_monster_ai();
+        off.add_entity({
+            let mut e = EntitySpawn::new(0, "plain".to_string(), 5, 5);
+            e.race = ACTOR_RACE_MONSTER;
+            e
+        });
+        off.tick_head();
+        assert!(
+            off.tick_profile().is_none(),
+            "缺省必须无 profile（零开销路径）"
         );
     }
 
