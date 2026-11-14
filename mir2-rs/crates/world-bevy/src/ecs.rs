@@ -169,6 +169,17 @@ impl SlotTable {
         self.slots.get(slot_idx)?.entity
     }
 
+    /// 槽位顺序的 `(业务 id, bevy 实体)` **零分配迭代**（处理顺序的唯一契约）。
+    ///
+    /// 与 [`Self::order`] 逐项同序；只借 `&self`，供热路径（AOI 分桶/全量扫描）避免
+    /// 每 tick 克隆 11k 项的表。
+    pub fn order_iter(&self) -> impl Iterator<Item = (i32, Entity)> + '_ {
+        self.slots.iter().filter_map(|s| match (s.key, s.entity) {
+            (Some(k), Some(e)) => Some((k, e)),
+            _ => None,
+        })
+    }
+
     /// 槽位顺序的 `(业务 id, bevy 实体)` 表（处理顺序的唯一契约）。
     pub fn order(&self) -> Vec<(i32, Entity)> {
         self.slots
@@ -573,6 +584,29 @@ mod tests {
             s.insert(*id, Item(*id));
         }
         s
+    }
+
+    /// **T10c**：`order_iter`（零分配）与 `order`（克隆）**逐项同序**。
+    ///
+    /// 牙：把 `order_iter` 的过滤条件改成「只取个别槽」或按 id 排序 ⇒ 两者不等 ⇒ 红。
+    /// 为什么需要它：AOI 段的扫描顺序已从 `order()` 克隆改为 `order_iter()`，顺序真值
+    /// 必须仍是「槽位序 = 插入序 + 空闲槽 LIFO 复用」。
+    #[test]
+    fn order_iter_matches_order() {
+        let mut s = store_with(&[1, 2, 3, 5]);
+        s.remove(2);
+        s.insert(7, Item(7)); // 复用 2 的槽位
+        let table = s.world().resource::<SlotTable>();
+        assert_eq!(
+            table.order_iter().collect::<Vec<_>>(),
+            table.order(),
+            "order_iter 必须与 order 逐项同序（槽位序唯一真值）"
+        );
+        assert_eq!(
+            table.order_iter().map(|(id, _)| id).collect::<Vec<_>>(),
+            table.order_index(),
+            "id 序列也必须与 order_index 一致"
+        );
     }
 
     #[test]

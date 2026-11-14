@@ -7756,9 +7756,6 @@ impl World {
         // AOI 刷新：`TickStage::OutputAoi` 系统（S3b）。地图表在 tick 边界一次性移入
         // `MapsRes`，跑完移回 facade —— 同一时刻只有一个所有者（设计件 §4.2）。
         {
-            let __prof_slot = self.probe_begin();
-            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self.entities.slot_order();
-            self.probe_end("slot_order.aoi", __prof_slot);
             let __prof_stage = self.prof_begin();
             let maps = std::mem::take(&mut self.maps);
             let events = std::mem::take(&mut self.fire_burn_events);
@@ -7769,7 +7766,6 @@ impl World {
             );
             let (maps_back, params_back, out) = self.run_tail_stage(move |world, tail| {
                 world.insert_resource(mir2_world_bevy::MapsRes(maps));
-                world.insert_resource(crate::aoi::AoiIds(ids));
                 world.insert_resource(crate::aoi::AoiParams {
                     clock_ms,
                     clear_drop_on_floor_item_time,
