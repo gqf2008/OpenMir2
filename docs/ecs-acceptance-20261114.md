@@ -145,7 +145,13 @@ MOVEFAIL 分类来自 `E:/UserFleet/archive/movefail-annotated.csv`（131 行逐
 
 1. `openmir2-simmonsterai-profile`：**已合入** `a680b01f6`（review `e9a093b5` approve，tier L）；F3–F7 留 follow-up。
 2. `openmir2-s5-stale-path-refs`：分支 `card/s5-stale-paths` @ `07098f900` 已交审（68 文件 / 195 行纯文本迁移），等独立复审。
-3. `openmir2-monai-deathbranch-count`：已派工（tier R，分支基 `a680b01f6`）；判据用**结构断言**（`order_ids()` 旧 = dead 次数 → 新 = 1 次），墙钟只作观察值；真机窗口另排。
+3. `openmir2-monai-deathbranch-count`：**已合入并关闭** `2a795bae8`（review `c48034c9` approve，tier R）。
+   结构性判据 `order_ids()`：dead=64 时 65（collect 1 + 死亡支 64）→ **2**（collect 1 + 段级 1），dead=0 两边都是 1。
+   真机 A/B 窗口（旧 `19628d6d7` vs 新 `2a795bae8`，seed 42，20 假人群、真实击杀 35–39 只）：
+   `b_dead` **0.4563 ± 0.0084 → 0.0604 ± 0.0081 ms/只/tick**（R² 0.998/0.997），dead=0 不慢；
+   帧面 20/20 客户侧逐条一致；存档同表同行但**边界不同**；RNG **不可比**（同二进制重跑也在第 14859 抽分叉）、
+   ProcessRunCount **未采集**（无 dump 接缝）——后两项由变异验证过的单测牙兜底，已在卡面显式登记，
+   引用性能数字须写「作者车道观测，非独立复现」。证据：`E:/UserFleet/archive/monai-death-window-2038/`。
 4. `openmir2-no-parallel-substring-guard`：新登记（`no_parallel` 的 `TickRunner` 正向断言是子串匹配，改名 `TickRunnerMut` 不咬）。
 5. 容量文档勘误：**已落**（`0ffed4c5f`，§3 c1 行 `OutputAoi` 0.43 → 4.207，增益归 c2）。
 6. 1000 bot 真栈窗口：10k 端到端验收的前置。
