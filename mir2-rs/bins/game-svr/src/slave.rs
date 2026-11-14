@@ -1,4 +1,4 @@
-//! 宝宝/召唤（slave）宿主侧接线 —— `crates/world::slave` 的 [`SlaveSpawner`] 生产实现
+//! 宝宝/召唤（slave）宿主侧接线 —— `crates/world-bevy::slave` 的 [`SlaveSpawner`] 生产实现
 //! （`WorldEngine.RegenMonsterByName` 的等价物）+ `Server.conf` 的宝宝配置读侧。
 //!
 //! 交付卡：`openmir2-m3-pet-slave-summon`（M3⑨-实现 2）。
@@ -10,7 +10,7 @@
 //!   （`WorldServer.MonGen.cs:382-432` → `CreateMonster`）落到 **④-B 的同一条刷怪路径**：
 //!   用 [`create_monster_oracle`] 在宿主的 `world.rng` 上按 oracle 次序抽数并生成实体。
 //!   ——RNG 取数次序与 MonGen 刷怪完全同源，故 Claim B 账本不新增分叉。
-//! - [`summon_from_spell`]：把 `crates/world::summon_slave`（选型/门/落尾/神兽回召）与
+//! - [`summon_from_spell`]：把 `crates/world-bevy::summon_slave`（选型/门/落尾/神兽回召）与
 //!   上面的 spawner 拼成宿主一次调用。
 //! - [`pet_slave_config_from_conf`]：`Server.conf` → [`PetSlaveConfig`]（`crates/data::pet_slave`
 //!   的 `from_ini`；只读，不写回）。
@@ -25,7 +25,7 @@
 //! ## 第③片（⑨-2 接线，20 诱惑）
 //!
 //! - [`TammingCastInput`] / [`cast_tamming_spell`]：`SKILL_TAMMING`（20）效果体 ——
-//!   `IsProperTarget && !Animal` 门 → `mag_tamming`（取数账本在 `crates/world::magic`）→
+//!   `IsProperTarget && !Animal` 门 → `mag_tamming`（取数账本在 `crates/world-bevy::magic`）→
 //!   `TargetCret = null` → 受奴时 [`World::tame_adopt`] 落尾（Master/MasterRoyaltyTick/
 //!   SlaveMakeLevel/MasterTick/WalkSpeed/NextHitTime/BreakHolySeizeMode/SlaveList.Add）→
 //!   非受奴支 `HP = 0` → 共享尾。`Animal` 用构造期等价物
@@ -34,12 +34,12 @@
 //! ## 未接（登记，别按常识补）
 //!
 //! - **`MakeSlave` 的 `RecalcAbilitys` 已落**（⑨-2 reviewer-5 `M-1` 收口）：
-//!   `crates/world::slave::make_slave_adopt` 现按 oracle 先跑 `ApplySlaveLevelAbilitys`
+//!   `crates/world-bevy::slave::make_slave_adopt` 现按 oracle 先跑 `ApplySlaveLevelAbilitys`
 //!   （`WAbil.DC`/`WAbil.MaxHP`，`BaseObject.Abil.cs:133-170`，`Race >= Animal` 门 + 三类支）
 //!   再跑三个派生类的速度覆写（`WhiteSkeleton.cs:21-27` / `ElfMonster.cs:31-41` /
 //!   `ElfWarriorMonster.cs:35-39,105-110`）；`RefNameColor` 色彩仍归帧面接线片。
 //! - **46 分身**（`MagMakeClone`）：已接 —— [`CloneCastInput`] / [`cast_clone_spell`] 造玩家型
-//!   克隆体（`crates/world::slave::spawn_clone`）并走共享尾；帧面（`RM_SPELL`/克隆 `RM_TURN`/
+//!   克隆体（`crates/world-bevy::slave::spawn_clone`）并走共享尾；帧面（`RM_SPELL`/克隆 `RM_TURN`/
 //!   `RM_MAGICFIRE`/`RM_MAGIC_LVEXP`）在宿主 `handle_spell_cmd` 的 46 支。克隆体的 tick/AI
 //!   生命周期未建模（登记白名单 `T-51`）。
 //! - **20 的 `RM_MAKEHOLYSEIZEMODE` 帧**（`MagicManager.cs:712/812`）与 **`OpenCrazyMode` 狂暴态/
@@ -160,7 +160,7 @@ impl SlaveSpawner for MonsterTableSpawner<'_> {
     }
 }
 
-/// 宿主一次调用：`crates/world::summon_slave` + [`MonsterTableSpawner`]。
+/// 宿主一次调用：`crates/world-bevy::summon_slave` + [`MonsterTableSpawner`]。
 ///
 /// `caster_dir` = 主人的 `BaseObject.Dir`（玩家在宿主侧的权威 `Dir` 在 `downlink::DisplayTable`
 /// —— 客户端指令维护；`Entity.ai.dir` 只对怪物由 AI 维护 ⇒ 调用方显式传入）。
@@ -243,7 +243,7 @@ pub struct SlaveCastOutcome {
 /// - 41：`case SKILL_ANGEL`（`:462-473`）：`CheckAmulet(2,1)` → `UseAmulet(2,1)` → `MagMakeAngelSlave`；
 /// - 尾：`if (boSpellFail) return false;` → `if (boSpellFire) SendRefMsg(RM_MAGICFIRE,…)` →
 ///   `if (Level < 3 && boTrain) { … TrainSkill(Random(3)+1) … }`（`:644-669`，实现见
-///   `crates/world::magic::do_spell_tail`）。
+///   `crates/world-bevy::magic::do_spell_tail`）。
 ///
 /// `boTrain` 只在 `MakeSlave != null`（[`SummonOutcome::Spawned`]）时为真：神兽的回召分支
 /// （`Recalled`）oracle 里 `result` 仍为 `false`（`MagicManager.cs:1300-1306`）。

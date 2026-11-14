@@ -72,7 +72,7 @@
 //!
 //! 本模块做「加载 + 取尺寸 + 换 id」三件事，**外加**静态装载的最后一个搬运步骤
 //! （[`apply_map_cells`]：把 `mir2_envir` 已解析的每格属性灌进 `world.maps`——本仓
-//! `crates/world` 不依赖 `crates/envir`，跨 crate 的搬运只能落在宿主）。不碰 `crates/envir`
+//! `crates/world-bevy` 不依赖 `crates/envir`，跨 crate 的搬运只能落在宿主）。不碰 `crates/envir`
 //! 内部，也不建世界（那是 `sim_loop` 的事）。`WorldMaps`（S1 占位尺寸）作为**没有 Envir**（开发/测试）时的回退保留并登记：
 //! 真机验收（始终有 `Envir/MapInfo.txt`）之后应删掉占位键。三种加载结果的处置见 [`Maps`]。
 
@@ -187,7 +187,7 @@ pub fn apply_map_file_cells(f: &MapFile, grid: &mut MapGrid) -> usize {
 /// `Envirnoment.LoadMapData`（写属性，`Envirnoment.cs:903`/`943-951`）、后 `Maps.LoadMapInfo` 尾段
 /// 的 `MapManager.AddMapRoute`（`src/GameSrv/Maps/Maps.cs:361-379`）；而 `AddMapRoute` 有
 /// `cellSuccess && cellInfo.Valid` 门（`Envirnoment.cs:176`）⇒ **墙格上的连接点在 oracle 侧本来
-/// 就落不下**。属性灌入前每格都是 `Walk`，`crates/world/src/map.rs` 的 `add_map_route` 那道具
+/// 就落不下**。属性灌入前每格都是 `Walk`，`crates/world-bevy/src/map.rs` 的 `add_map_route` 那道具
 /// 形同虚设；本函数把次序摆正后，那道门才真正生效（墙格 route 被丢 ⇒ `added < routes.len()`）。
 ///
 /// 返回实际写入的格子总数（各图 `W*H` 之和；有图长度不符时会更小 ⇒ 调用方打印该值自证）。
@@ -330,7 +330,7 @@ pub struct EnterShift {
 ///
 /// `#[track_caller]`：RNG trace 站点归组见 `tests/parity/m3/rng-trace-probe/consumer_groups.tsv`
 /// 的 `startup` 组（Rust 侧登记为 `bins/game-svr/src/lib.rs:`）。本函数由宿主 `sim_loop` 调用，
-/// 传播调用点后站点落在 `lib.rs`，**不新增未登记组**（与 `crates/world` 的 `#[track_caller]` 先例同法）。
+/// 传播调用点后站点落在 `lib.rs`，**不新增未登记组**（与 `crates/world-bevy` 的 `#[track_caller]` 先例同法）。
 #[must_use]
 #[track_caller]
 pub fn shift_enter_position(
@@ -837,7 +837,7 @@ mod tests {
     ///
     /// **夹具次序说明（必须写清）**：先落实体、后灌属性——因为 `add_map_object` 有 `cell.Valid`
     /// 门，实体**进不了**墙格。生产里「实体已在场上、其格随后被掩码」只可能来自**运行期**掩码
-    /// （城门/城墙结构事件 `crates/world/src/castle.rs::apply_structure_events`，归卡 `M3⑧`）；
+    /// （城门/城墙结构事件 `crates/world-bevy/src/castle.rs::apply_structure_events`，归卡 `M3⑧`）；
     /// `.map` 静态装载本身发生在任何实体落图**之前**（故生产次序上本牙的「装载前后」两半不会同时
     /// 真实发生，这里是把它当**等价状态**构造出来）。两侧共同点：`get_cell_info` 对 `LowWall` 格
     /// 返回 `ok=false` ⇒ `cetin_near_xy` 跳过 ⇒ 下游 `spell_snap_target` 不 snap。

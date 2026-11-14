@@ -15,7 +15,7 @@
 //! 由 [`do_spell_tail`] 逐行实现并按门/取数顺序做行为断言，**不冒充真身向量**。
 //!
 //! **为什么读 TSV 而不是 JSON**：与同目录 `combat_skill_vectors.rs` / `attack_skill_vectors.rs` 同因——
-//! `tests/no_parallel.rs` 把 `crates/world` 的依赖面钉死（连 dev-dependencies 也扫），加 `serde_json` 会判红。
+//! `tests/no_parallel.rs` 把 `crates/world-bevy` 的依赖面钉死（连 dev-dependencies 也扫），加 `serde_json` 会判红。
 //!
 //! 同一 RNG 取数路径：攻击路径调用方的 `Random(3)+1` 账本按 `ReplayRandom` 行式格式带出，
 //! 本用例强制回放同值（断言取数序列零分歧 + 消费到底 + 抽到的 `n_tran_point` 与向量一致）。

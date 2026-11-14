@@ -20,7 +20,7 @@
 //!
 //! 本模块只做**解析**（行过滤 + 两列分词），产出记录供宿主**计数**用；`RobotObject` **世界实体**
 //! **未建模**（无 `RobotCharacter`/`AutoRun` 驱动器）⇒ 宿主按 **fold** 口径处理：**只按行数补抽
-//! 4×行数、不建实体**（见 `crates/world/src/ctor_fold.rs` 的 `CtorFoldSite::RobotObject`）。
+//! 4×行数、不建实体**（见 `crates/world-bevy/src/ctor_fold.rs` 的 `CtorFoldSite::RobotObject`）。
 //! 实体缺口另见 `tests/parity/m3/design-buff-and-tick-20261016.md` §4.4.2 与 whitelist 登记。
 
 use mir2_shared::hutil32::get_valid_str3;

@@ -14,7 +14,7 @@
 //! - **不负责**：真怪物的**构造与生成取数**。`RegenMonsterByName`（`WorldServer.MonGen.cs:382`）
 //!   → `CreateMonster` 的 RNG 次序由宿主侧 `create_monster_oracle`（`bins/game-svr::mongen`）
 //!   驱动；本模块通过 [`World::make_slave_adopt`] 接收**已生成**的怪 id 并落尾。
-//!   ——这与 ④-B 的 MonGen 接线同形（刷怪取数在宿主、状态落 `crates/world`）。
+//!   ——这与 ④-B 的 MonGen 接线同形（刷怪取数在宿主、状态落 `crates/world-bevy`）。
 //! - **本模块同时实现 ⑨-3 的生命周期**（卡 `openmir2-m3-pet-slave-lifecycle`）：`SlaveList` 清表
 //!   （`BaseObject.Base.cs:208-217`）、`CheckRoyalty` 叛变/到期（`MonsterObject.cs:363-397`）、
 //!   主人死/幽灵的 `ProcessSlaveMutiny`/`ProcessSlaveGhost`（`PlayObject.Base.cs:331-370`）、

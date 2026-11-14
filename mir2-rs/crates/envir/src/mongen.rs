@@ -28,7 +28,7 @@
 //! ## 与 oracle 的建模差异（登记）
 //!
 //! - `MonGenInfo.CertList`（`IList<IMonsterActor>`）与 `MonGenInfo.Envir`（`IEnvirnoment`）
-//!   属 `crates/world` 的运行时对象表，本 crate 只承载**可与 oracle 逐字段对拍**的配置/计数列；
+//!   属 `crates/world-bevy` 的运行时对象表，本 crate 只承载**可与 oracle 逐字段对拍**的配置/计数列；
 //!   世界侧另存 actor 列表，`ThreadMonLimit` 的判定见 [`MON_GEN_THREAD_MON_LIMIT`]。
 //! - `GetMapInfo(ServerIndex, MapName)`（`MapManager.cs:151-162`）额外要求 `ServerIndex` 相等；
 //!   部署态所有地图的 `ServerIndex` 都是 0，[`MapRegistry::id_of`] 与之等价，故本模块用

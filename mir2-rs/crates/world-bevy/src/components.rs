@@ -1,10 +1,10 @@
-//! **P0 / S3+ 组件骨架**：把 `crates/world` 的 151 字段大组件 `Entity` 拆成细粒度 ECS 组件的
+//! **P0 / S3+ 组件骨架**：把 `crates/world-bevy` 的 151 字段大组件 `Entity` 拆成细粒度 ECS 组件的
 //! **落点**（设计件：`docs/world-ecs-migration-20261113.md`）。
 //!
 //! ## 这个文件在 P0 里是什么
 //!
 //! * **是**：组件布局的权威定义（25 个组件、覆盖 151 个字段）+ 迁移用适配器的形状；
-//! * **不是**：生产路径。本 crate 不接入任何 tick 系统，`crates/world` 的 `Entity` / `EntityStore`
+//! * **不是**：生产路径。本 crate 不接入任何 tick 系统，`crates/world-bevy` 的 `Entity` / `EntityStore`
 //!   一行未改；P0 的门禁只要求「能编译 + 字段 round-trip 不改值」。
 //!
 //! ## 为什么有几个组件带泛型载荷
@@ -29,7 +29,7 @@
 //!
 //! ⇒ 适配器只能作为 **dev-dependency + `cfg(test)`** 存在（`Cargo.toml` 的
 //! `[dev-dependencies]` 不在白名单扫描域内）。它们的作用是给 P0 的 round-trip 与 P1 的切片
-//! 验证当**迁移工具**；生产代码永远不引用它们。P1 的迁移工具应放在 `crates/world` 侧
+//! 验证当**迁移工具**；生产代码永远不引用它们。P1 的迁移工具应放在 `crates/world-bevy` 侧
 //! （它本来就依赖本 crate），而不是反向依赖。
 //!
 //! ## 顺序契约（不变）

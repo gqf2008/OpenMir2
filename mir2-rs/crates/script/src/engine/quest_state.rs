@@ -28,7 +28,7 @@
 //! `crates/script/tests/quest_state_vectors.rs` 逐字段核对，含改坏必红。
 //!
 //! 会话载入/存档写回（`src/GameSrv/Word/WorldServer.cs:1160-1162` / `:1291-1293` 的
-//! `playObject.Quest* = humData.Quest*`）不在本模块：它属 `crates/world`/`bins/game-svr`
+//! `playObject.Quest* = humData.Quest*`）不在本模块：它属 `crates/world-bevy`/`bins/game-svr`
 //! 接线面，按 owner 08:10/08:20 的写集纪律停机交 owner（见本卡 patch body 的「写集边界」）。
 //! `crates/storage`/`bins/game-svr` 的 `Quest*[128]` 编解码已由 M2 `record-fields` stage6 落地。
 

@@ -15,7 +15,7 @@
 //!
 //! ## 为什么门在宿主侧
 //! `SystemShare.MapMgr.FindMap(MapName)` 的部署态等价物是 `MapRegistry::id_of`（同 `MapInfo` +
-//! `Map/*.map` 合并口径，见 `crates/envir`）。`crates/world` 只持有**下标式**地图表、不含逻辑名
+//! `Map/*.map` 合并口径，见 `crates/envir`）。`crates/world-bevy` 只持有**下标式**地图表、不含逻辑名
 //! ⇒ 名字→`map_id` 的解析归宿主；本模块只负责「拿到 `map_id` 后的挂图/落格」。
 //!
 //! ## 未建模（登记）
@@ -51,7 +51,7 @@ use crate::world::World;
 /// 把本值写进 [`Entity::race`] 会让 `PlayObject.IsAttackTarget` 的 `HAM_ALL` 门
 /// （`target.Race < NPC(10) || > PeaceNpc(15)`）把商人当动物，玩家可选中/攻击商人（T-31 修正）。
 ///
-/// `crates/world` 的怪物 AI（[`crate::monai::monster_ai_tick`]）按 [`Entity::merchant`] 是否存在
+/// `crates/world-bevy` 的怪物 AI（[`crate::monai::monster_ai_tick`]）按 [`Entity::merchant`] 是否存在
 /// 显式排除商人实体，**不**依赖 race 数值；商人 tick 同理走 [`World::merchant_tick`]。
 pub const ACTOR_RACE_MERCHANT: u8 = 50;
 
@@ -96,7 +96,7 @@ pub const MERCHANT_TURN_DIR_MAX: u8 = 8;
 
 /// `Merchant` 脚本头 `(...)` 命令位（`ScriptFlagConst`；与 `crates/script::MerchantFlags` 同形）。
 ///
-/// `crates/world` **不依赖** `crates/script`（模拟层不引脚本引擎）⇒ 本片定义同形结构，
+/// `crates/world-bevy` **不依赖** `crates/script`（模拟层不引脚本引擎）⇒ 本片定义同形结构，
 /// 由宿主 `bins/game-svr` 在装载时逐字段搬入。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MerchantFlags {
@@ -118,7 +118,7 @@ pub struct MerchantFlags {
 
 /// `IMerchant.GoodsList` 里的一件：oracle `UserItem`（`Item`/`MakeIndex`/`Dura`/`DuraMax` + `Desc`）。
 ///
-/// 与 `crates/world` 已有的掉落/定价口径同型（`mir2_formula::drop::UserItem`）⇒ ⑤-4 的买/卖
+/// 与 `crates/world-bevy` 已有的掉落/定价口径同型（`mir2_formula::drop::UserItem`）⇒ ⑤-4 的买/卖
 /// 直接复用公式层（`mir2_formula::shop`）的取价函数，宿主只做 `BagItem` ↔ `MerchantItem` 互转。
 pub use mir2_formula::drop::UserItem as MerchantItem;
 
@@ -597,7 +597,7 @@ impl World {
     /// 物品名 → 1-based 序号（oracle `GameItemSystem.GetStdItemIdx`，`GameItemSystem.cs:93-111`：
     /// `Name.Equals(name, OrdinalIgnoreCase)`，首个命中，1-based）。
     ///
-    /// `crates/world` 的物品目录是 `Vec<StdItem>`、无 `Id` 列，与 `mir2-formula` 的
+    /// `crates/world-bevy` 的物品目录是 `Vec<StdItem>`、无 `Id` 列，与 `mir2-formula` 的
     /// `VecItemCatalog` 同口径（下标 + 1；`drop.rs:78-89`）。
     #[must_use]
     pub fn std_item_idx_by_name(&self, name: &str) -> usize {
@@ -3033,7 +3033,7 @@ mod tests {
 
     /// `openmir2-merchant-race-bias`：oracle 商人**行为轴** `Race = ActorRace.NPC(10)`
     /// （`NormNpc.cs:42`；`Merchant` ctor 不覆写 `Race`），**外观轴**
-    /// `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`）。`crates/world` 用独立
+    /// `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`）。`crates/world-bevy` 用独立
     /// [`Entity::race_img`] 承载外观轴，`race` 保持 10 供所有攻击/受击判定读取。
     ///
     /// 改坏必红：把 `insert_merchant` 的 `e.race` 改回 `ACTOR_RACE_MERCHANT(50)` ⇒ race 断言红；

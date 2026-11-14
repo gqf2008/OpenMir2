@@ -2,7 +2,7 @@
 //! `openmir2-npcs-fixed-loading`，放置半）。
 //!
 //! 解析半在 `mir2-rs/crates/envir/src/npcs.rs`（`LocalDB.cs:655-713` 的逐行 1:1）；
-//! 世界面在 `mir2-rs/crates/world/src/npc.rs`（`World::{insert_npc,attach_npc_to_map}`）。
+//! 世界面在 `mir2-rs/crates/world-bevy/src/npc.rs`（`World::{insert_npc,attach_npc_to_map}`）。
 //! 本模块把两者接到宿主：
 //!
 //! 1. [`load_npcs_file`] = 文件半：`M2Share.GetEnvirFilePath("Npcs.txt")`（`LocalDB.cs:664`）+
@@ -33,7 +33,7 @@
 //!   残余：`CastleOfficial` 本体（T-40/T-140）、`@Login`/`QFunction` 入口、真机窗口判据，见
 //!   `tests/parity/whitelist.md` T-137。
 //! - **NPC 的 `Run()`/`ProcessNpcs` 已建模**（**世界 tick 扩容首批 T3**，卡
-//!   `openmir2-world-tick-expansion`）：`crates/world/src/npc.rs` 的 `World::npc_tick`/`npc_run`（固定 NPC
+//!   `openmir2-world-tick-expansion`）：`crates/world-bevy/src/npc.rs` 的 `World::npc_tick`/`npc_run`（固定 NPC
 //!   `GuildOfficial.Run` / `Merchant.Run`），由宿主 `sim_loop` 起世界时 `enable_npc_tick()`。仍差：
 //!   `NpcLimit` 墙钟预算（`whitelist.md` T-64）与 `RM_TURN`/`RM_HIT` 帧面（B-4）。
 
@@ -317,7 +317,7 @@ pub fn place_fixed_npcs_with_scripts(
         if let Some(e) = world.entities.get_mut(npc.actor_id) {
             // **T-154 Minor-2**：oracle `BaseObject()` ctor `Dir = 4`（`BaseObject.cs:378`），
             // `NormNpc`/`Merchant` ctor 不覆写 ⇒ 首个 `TurnTo` 之前的出现帧方向恒 4。
-            // `EntitySpawn::new` 的 `ai.dir` 缺省 0（`crates/world` 不在本卡写集）⇒ 宿主在此补齐，
+            // `EntitySpawn::new` 的 `ai.dir` 缺省 0（`crates/world-bevy` 不在本卡写集）⇒ 宿主在此补齐，
             // 再投影进展示表（`d.dir = e.ai.dir`）。
             e.ai.dir = crate::downlink::NPC_INITIAL_DIR;
             displays.set(
@@ -658,8 +658,8 @@ mod tests {
     /// oracle 里怪物 / 固定 NPC / 商人列表**都经**同一条 ctor 公共链
     /// `BaseObject`（`BaseObject.cs:439/441`）→ `AnimalObject`（`AnimalObject.cs:76/77`），
     /// 抽同样的 4 个数、同序。不变量 = 一处定义（`mir2_world_bevy::BASE_ANIMAL_CTOR_DRAW_MODS` +
-    /// `BaseAnimalCtorDraws::draw`）+ 两模块三调用点直接消费（`crates/world/src/npc.rs` 的
-    /// `insert_npc`；`crates/world/src/merchant.rs` 的 `merchant_ctor_run_delay`/`spawn_merchant`）+
+    /// `BaseAnimalCtorDraws::draw`）+ 两模块三调用点直接消费（`crates/world-bevy/src/npc.rs` 的
+    /// `insert_npc`；`crates/world-bevy/src/merchant.rs` 的 `merchant_ctor_run_delay`/`spawn_merchant`）+
     /// 一条被本门钉齐的同值副本（怪物路径 `bins/game-svr/src/mongen.rs` 硬编码 4 抽）。
     /// 本判据把三条路径都钉在同一张表上 ⇒ 改任一路径的抽数即红。
     ///

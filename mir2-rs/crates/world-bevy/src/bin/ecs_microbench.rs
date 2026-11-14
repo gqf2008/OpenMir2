@@ -9,7 +9,7 @@
 //!    （`IdIndex` 形态）；
 //! 2. 组件读取：`World::get::<T>(entity)`（每次查 `TypeId→ComponentId`，再走
 //!    `entity → archetype → table row`）vs 缓存 `QueryState<&T>::get_manual`；
-//! 3. 端到端：`EcsStore::get(id)`（= 第 1+2 段组合，即 `crates/world` 的
+//! 3. 端到端：`EcsStore::get(id)`（= 第 1+2 段组合，即 `crates/world-bevy` 的
 //!    `EntityStore::get` 实际走的那条路径）。
 //!
 //! 门禁仍是 `tick_bench` 的同会话 A/B（见 S2 报告 §3）；本 bench 只解释"为什么变快"。

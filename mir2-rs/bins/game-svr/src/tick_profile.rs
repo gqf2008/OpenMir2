@@ -2,7 +2,7 @@
 //!
 //! 背景：T10 只量了 `World::tick`（11k 实体 63.97ms），而演示栈端到端 tick ≈ 2000ms ——
 //! 32× 差额在**宿主段**（`bins/game-svr` 的 `sim_loop`：P21..P32、帧生成/会话输出、AOI 下行、
-//! DB 轮询、踢人/存盘落地等）。本模块把这些段按**与 `crates/world` 的 `TickProfile` 同一口径**
+//! DB 轮询、踢人/存盘落地等）。本模块把这些段按**与 `crates/world-bevy` 的 `TickProfile` 同一口径**
 //! （PascalCase 段名 + `(段, 累计 ns, 调用次数)` 三元组）计时，使两套探针能拼成一张 tick 分解表。
 //!
 //! ## 口径与拼接

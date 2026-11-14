@@ -13,7 +13,7 @@
 //!    （`DoorList` 里仍是各自独立条目）。Rust 用「`door_status` 数组下标」表示实例身份。
 //! 8. `ObjList` 只在「首个墙格之前」的格被分配（源码 `isInitialize` 只置 false 不复位）；
 //!    真图 `0.map` / `0129.map` 全部为 NULL。**处置**：Rust 的 `MapGrid` 每格恒有一个空 `Vec`
-//!    （`crates/world`），因为 `ObjList == null` 与「空表」在**可观测层面等价**
+//!    （`crates/world-bevy`），因为 `ObjList == null` 与「空表」在**可观测层面等价**
 //!    （`IsAvailable => ObjList?.Count > 0` 两者都是 false，`AddMapObject` 遇 null 也会**懒分配**，
 //!    `Envirnoment.cs:261-264`）——所以不引入 `Option`；本模块仍保留 `obj_list_allocated()`
 //!    以便把「首个墙格」这一源码事实作为证据输出。
@@ -180,7 +180,7 @@ impl MapFile {
             .count()
     }
 
-    /// 把本图已解析的门表逐字段搬成 `crates/world` 的镜像结构（`MapDoor`/`DoorStatus`）。
+    /// 把本图已解析的门表逐字段搬成 `crates/world-bevy` 的镜像结构（`MapDoor`/`DoorStatus`）。
     ///
     /// 逐字段同型、**保序**且**保留 `status_id` 身份**（同组门共享同一 `DoorStatus`），供
     /// `MapGrid::set_doors` 使用。oracle `Envirnoment.LoadMapData` 加载即建 `DoorList`
@@ -215,7 +215,7 @@ impl MapFile {
         (doors, status)
     }
 
-    /// 转成 `crates/world` 的 `MapGrid`（属性 + 门表 + 空对象表）。
+    /// 转成 `crates/world-bevy` 的 `MapGrid`（属性 + 门表 + 空对象表）。
     ///
     /// **对象表处置**：`MapGrid` 每格恒有一个空 `Vec`，不带 `Option`——见模块头第 8 条，
     /// null 与空表在可观测层面等价。`MapGrid::new` 要求 W/H 均为正（本模块已保证 > 1）。

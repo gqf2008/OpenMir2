@@ -3336,7 +3336,7 @@ impl EntityStore {
         self.inner.ids_sorted()
     }
 
-    /// **显式处理顺序索引**：槽位顺序的业务 id（`crates/world` 的处理顺序契约）。
+    /// **显式处理顺序索引**：槽位顺序的业务 id（`crates/world-bevy` 的处理顺序契约）。
     pub fn order_index(&self) -> Vec<i32> {
         self.inner.order_index()
     }

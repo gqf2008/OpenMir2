@@ -3,7 +3,7 @@
 //! oracle 是 `PlayObject` 上的**会话内内存状态机**（不落库，盘点 §1.M）：`Dealing` /
 //! `DealCreat` / `DealItemList` / `DealGolds` / `DealSuccess` / `DealLastTick`，收发 6 条
 //! `CM_DEAL*`、回 `SM_DEAL*`。本仓库把「背包/金币」放在 bins 会话态
-//! （[`crate::ground::GroundState`] 的 `item_list`/`gold`），把组队态放在 `crates/world`
+//! （[`crate::ground::GroundState`] 的 `item_list`/`gold`），把组队态放在 `crates/world-bevy`
 //! 的 `Entity` —— 交易态**同时**依赖「对手 `ActorId`」（世界身份）与「双方背包/金币」
 //! （bins 会话态），所以本模块放在 bins，与 [`crate::ground`]/[`crate::bag`] 同形：
 //! **纯函数 + 事件**，不碰 I/O、不碰 `HashMap`、不碰时间源（`now` 由宿主注入，见 §4.2.2
@@ -51,7 +51,7 @@
 //!   与 `CustomItemSystem.GetItemName` 自定义名：与 `T-24` 同源（`SM_ADDITEM` 展示层缺口），
 //!   本模块对 `Desc[13]==0`（非自定义名）的物品逐字节一致，其余登记。
 //! - `DealCancelA` 的 `Abil.HP = WAbil.HP`（`Base.cs:750`）：本仓 `Abil.HP`（基础能力）从不参与
-//!   任何可观测路径（`WAbil.HP` 才是真 HP，落在 `crates/world` 的 `Entity::hp`）⇒ **无可观测差异**；
+//!   任何可观测路径（`WAbil.HP` 才是真 HP，落在 `crates/world-bevy` 的 `Entity::hp`）⇒ **无可观测差异**；
 //!   取消路径统一走 [`deal_cancel`]。
 
 use crate::ability::{Ability, ItemCatalog};

@@ -1,6 +1,6 @@
 //! 组队（party）接缝 —— M3⑦-实现 2（卡 `openmir2-m3-party-group-state`）。
 //!
-//! 世界侧的状态机在 [`mir2_world_bevy::party`]（`crates/world/src/party.rs`）；本模块只做两件事：
+//! 世界侧的状态机在 [`mir2_world_bevy::party`]（`crates/world-bevy/src/party.rs`）；本模块只做两件事：
 //! ① 把 `GateConfig` 的 `[Setup]` 值 + 缺省文案装成 [`mir2_world_bevy::PartyConfig`]；
 //! ② 把一条 [`PartyEvent`] 编成 `(收件人 ActorId, GM_DATA body)`（**纯函数**，无 I/O）。
 //! 按 `[GateIdx, Socket]` 路由由 `lib.rs` 的派发层完成（与既有 handler 同口径）。

@@ -29,7 +29,7 @@
 //!   `GetMonsterThreadId` 需要 `InitializeMonster` 建好的线程表；本宿主要求 `MonGenHost` 已就绪
 //!   （无 `Envir/MonGen.txt` ⇒ 不接城堡块，部署件有该文件）。
 //! - **`AntiPoison=200` / `CellType=Door`**：`Entity` 无对应字段（登记，见
-//!   `crates/world/src/mongen.rs` 的 class-constant 注释）。
+//!   `crates/world-bevy/src/mongen.rs` 的 class-constant 注释）。
 //!
 //! ## RNG 账本
 //!
@@ -454,7 +454,7 @@ pub struct CastleSaveReport {
 
 /// 城堡文件宿主：路径口径 + 有序 ini base 缓存（每城一份）+ `CastleManager.Save` 等价物。
 ///
-/// 只做 IO 与编排；「写什么值」由 `crates/world` 的 `UserCastle::save_snapshot` 定死（P1），
+/// 只做 IO 与编排；「写什么值」由 `crates/world-bevy` 的 `UserCastle::save_snapshot` 定死（P1），
 /// 「怎么写字节」由 `crates/envir` 的 `write_sabuk_w`/`write_attack_sabuk_wall`/
 /// `write_castle_list` 定死（P2）。
 pub struct CastleStore {
@@ -822,7 +822,7 @@ pub struct CastleDateTextChange {
 ///
 /// oracle 在 `UserCastle.Run` 里直接赋 `IncomeToday = DateTime.Now`（`UserCastle.cs:337`）
 /// 与 `WarDate = DateTime.Now`（`:357`），`SaveConfig` 原样落盘；本仓 `UserCastle::run`
-/// 只更新日粒度（`crates/world` 不取墙钟，P1 只存原串），所以宿主必须在 `run(now)` 前后
+/// 只更新日粒度（`crates/world-bevy` 不取墙钟，P1 只存原串），所以宿主必须在 `run(now)` 前后
 /// 比较日粒度并刷新对应 `*_text`，否则跨天后 `Castle/Castle/SabukW.txt` 的
 /// `IncomeToday`/`WarDate` 仍是启动注入的旧串（F1；T-152 ② 的 P3 义务）。
 ///
@@ -1084,7 +1084,7 @@ pub fn load_sabuk_config(
 /// ② 前缀只在 `SendBroadCastMsg`（`WorldServer.cs:1738-1765`）里拼，本路径**不拼** `SysMsgPreFix`。
 ///
 /// 入队序 = `texts` 序（调用方按「城堡列表序 × 每座城 `Run` 的事件序」收集）；同优先级由四叉堆
-/// sift 决定出队序（`crates/world/src/msgqueue.rs`）。
+/// sift 决定出队序（`crates/world-bevy/src/msgqueue.rs`）。
 pub(crate) fn fan_out_sysmessage_to_all(
     online: &crate::OnlineRegistry,
     world: &mir2_world_bevy::World,
@@ -1286,7 +1286,7 @@ fn castle_unit_entity_at(
 /// `UserCastle.Run` 的 `Structure(Ref*)` 事件 → [`mir2_world_bevy::monai::MonsterRefMsg`]。
 ///
 /// **为什么重新入队而不是直接出帧**：门/墙 `Run`（`CastleDoor.Run`/`WallStructure.Run`）在
-/// `crates/world/src/monai.rs::castle_structure_run` 里已经走 `send_ref_msg` →
+/// `crates/world-bevy/src/monai.rs::castle_structure_run` 里已经走 `send_ref_msg` →
 /// `pending_monster_ref_msgs` → 宿主 `drain_monster_ref_msgs` 的同一条链（`SM_DIGUP`/`SM_DIGDOWN`/
 /// `SM_TURN`+`SM_FEATURECHANGED`/`SM_ALIVE` 的逐 ident 口径全在那里）。`UserCastle.Run` 的
 /// `MainDoorControl(true)`（`UserCastle.cs:373`）走 `CastleDoor.Close()` 的 `RM_DIGDOWN`，与 Run 的

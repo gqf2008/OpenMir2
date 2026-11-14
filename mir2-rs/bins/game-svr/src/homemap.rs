@@ -46,7 +46,7 @@
 //! oracle 在这条路径上**同序消费 3 抽**（owner `784be562` / `020acba0`）：
 //! `GetHomeInfo` 在 `StartPointList.Count > StartPointSize` 时抽 **1×`Random(StartPointSize)`**
 //! （否则 0 抽），随后 `GetRandHomeX`/`GetRandHomeY`（`WorldServer.cs:1409-1417`）各抽 **1×`Random(3)`**。
-//! 本宿主用 `crates/world::World.rng`（`mir2_shared::rng::RandomNumber`，D2 的同种子注入口）
+//! 本宿主用 `crates/world-bevy::World.rng`（`mir2_shared::rng::RandomNumber`，D2 的同种子注入口）
 //! **按同序同次抽**——少抽会让**后续 RNG 流偏移 3 抽**（M3②③ 的固定种子攻击序列会对不上）。
 //! 真实 `E:/MirServer/M2GameSvr/Envir/StartPoint.txt` 前 `StartPointSize`(=2) 条的 `MapName` 都是 `0`
 //! ⇒ 进图地图与随机值无关，仅坐标在 `(289,618)`/`(650,631)` 两条间漂移。

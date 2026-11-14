@@ -178,7 +178,7 @@ pub struct RouteHop {
 
 /// 启动灌入**一条**连接点所需的最小信息（`map_id` 由调用方按注册表下标给出）。
 ///
-/// `crates/world` 不依赖 `crates/envir`（避免反向依赖）⇒ 用本中立结构承载
+/// `crates/world-bevy` 不依赖 `crates/envir`（避免反向依赖）⇒ 用本中立结构承载
 /// `mir2_envir::ResolvedRoute` 的字段，由宿主（`bins/game-svr`）做映射。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct MapRouteSpec {
@@ -195,7 +195,7 @@ pub struct MapRouteSpec {
 /// 可变状态（引用类型 ⇒ 同组门共享同一实例）。
 ///
 /// 与 `crates/envir/src/mapfile.rs:83-90` 的 `DoorStatus` **逐字段同型**（`open_tick` 是 `i32`
-/// 不是 `i64`——对齐 C# `int`；`crates/world` 不依赖 `crates/envir`，故此处镜像定义，由宿主搬运）。
+/// 不是 `i64`——对齐 C# `int`；`crates/world-bevy` 不依赖 `crates/envir`，故此处镜像定义，由宿主搬运）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct DoorStatus {
     pub opened: bool,

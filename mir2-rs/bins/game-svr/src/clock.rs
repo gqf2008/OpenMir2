@@ -3,7 +3,7 @@
 //! 用途：M3 的 ⑧/⑦/⑤ 家族判据里有大量**时间门**（攻城时限 `CastleWarTime`、门/墙 60s
 //! `StruckTick`、金库 10min `SaveTick`、商人 200ms 节奏…）。oracle 侧这些门读
 //! `HUtil32.GetTickCount()`（`Environment.TickCount`，`src/OpenMir2/HUtil32.cs:36-39`）与
-//! `DateTime.Now`；Rust 侧对应 `bins/game-svr::now_ms()` 与 `crates/world::World::clock_ms`。
+//! `DateTime.Now`；Rust 侧对应 `bins/game-svr::now_ms()` 与 `crates/world-bevy::World::clock_ms`。
 //! 两侧若各跑各的墙钟，时间门就**不可判**（只能目测手感）。
 //!
 //! 本模块把「可注入时钟」的 **Rust 侧半边** 接上，口径与既有 `MIR2_RNG_SEED`（T-30，

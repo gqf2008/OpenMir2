@@ -1,9 +1,9 @@
 //! **世界模拟 crate（S5 合并后）**：`bevy_ecs` 承载「实体存储 + tick 骨架」（[`ecs`] / [`tick`]），
-//! D3 的「掉落」系统（纯函数式：输入快照 → 输出命令），以及自 `crates/world` 并入的
+//! D3 的「掉落」系统（纯函数式：输入快照 → 输出命令），以及自 `crates/world-bevy` 并入的
 //! 26 个模拟模块（实体/地图/AOI/战斗/魔法/城堡/怪物 AI/会话…，模块清单在本文件末）。
 //!
-//! 历史（S1–S4）：ECS 内核先住在本 crate、由 `crates/world` 依赖（`world -> world-bevy`）。
-//! S5 把 `crates/world` 的模拟层整体并入本 crate：两侧不再互为依赖，`snapshot_from_world`
+//! 历史（S1–S4）：ECS 内核先住在本 crate、由 `crates/world-bevy` 依赖（`world -> world-bevy`）。
+//! S5 把 `crates/world-bevy` 的模拟层整体并入本 crate：两侧不再互为依赖，`snapshot_from_world`
 //! 适配层随之并入 [`bevy_bridge`]。
 //!
 //! ## 四条硬约束怎么落实（§4.2.2）
@@ -34,7 +34,7 @@ use mir2_shared::rng::RandomNumber;
 
 // ============================ S1 迁移内核（实体存储 + tick 骨架） ============================
 //
-// 卡片 `openmir2-world-bevy-migration` 的 S1：`crates/world` 的**实体存储**与**tick 骨架**
+// 卡片 `openmir2-world-bevy-migration` 的 S1：`crates/world-bevy` 的**实体存储**与**tick 骨架**
 // 迁到 `bevy_ecs`。内核与 D3 的掉落系统同 crate、同约束：单线程 executor + 自有序索引。
 pub mod components;
 pub mod ecs;
@@ -363,7 +363,7 @@ pub fn plan_floor_placement(snapshot: &PlaceSnapshot) -> Vec<FloorPlaceOut> {
 // 注：D3 的 `snapshot_from_world` 适配层（读世界实体 → 掉落快照）住在 [`bevy_bridge`]。
 // S5 起模拟层与 ECS 内核同 crate，适配层不再跨 crate，函数签名与行为不变。
 
-// ============================ 自 crates/world 并入的模拟层（S5） ============================
+// ============================ 自 crates/world-bevy 并入的模拟层（S5） ============================
 // M2 世界模拟骨架（单线程 tick + 实体存储 + 地图/AOI + 会话进出）。
 //
 // 行为基准：`src/GameSvr/Word/WorldServer.cs`（`ProcessHumans` 的 200ms 节拍）与

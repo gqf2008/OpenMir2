@@ -1,6 +1,6 @@
 //! 门数据装载判据（卡 `openmir2-mapdoor-derive-plumbing`）：`crates/envir` 从 `.map` 解出的门表
 //! 经 `MapFile::door_tables()`（生产宿主 `game_svr::mapdoor::apply_map_doors` 的同一映射）进
-//! `crates/world` 的 `MapGrid`。
+//! `crates/world-bevy` 的 `MapGrid`。
 //!
 //! 判据分级：本文件是**构造级**证据（L 级可离线收口）；真机窗口项 W-R1 仍按 `whitelist.md` T-65
 //! （门相邻 route 格的换图被门控挡住）另跑。

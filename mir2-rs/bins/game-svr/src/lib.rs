@@ -2321,7 +2321,7 @@ impl DynVarStore {
 /// `GateEvent::Closed` 清理块用的 actor id：**world session 优先，回落到 host 侧会话**。
 ///
 /// 卡 `openmir2-softclose-cleanup-residue` A1：`CM_SOFTCLOSE` 走 `world.soft_close` 后，
-/// world session 的 `actor_id` 已被置 None（`crates/world/src/session.rs:540`），而 host 侧
+/// world session 的 `actor_id` 已被置 None（`crates/world-bevy/src/session.rs:540`），而 host 侧
 /// `SessionGround.actor_id` 仍然有效 ⇒ 展示表清理必须用后者兜底，否则整块被跳过、
 /// actor id 被内核回收复用时新占用者会带旧展示值上屏。
 fn closed_cleanup_actor_id(world_aid: Option<i32>, host_aid: Option<i32>) -> Option<i32> {
@@ -2349,7 +2349,7 @@ fn cleanup_closed_display(displays: &mut downlink::DisplayTable, aid: Option<i32
 ///
 /// **结构性约束**：host aid 的**唯一**来源是 `ground_sessions.remove()` 的返回值 ⇒
 /// 「先 `remove` 后取值」在写法上不可能出现。旧写法是「先 `get` 拿 host aid、再 `remove`」，
-/// 而 `CM_SOFTCLOSE` 已经把 world session 的 `actor_id` 置 None（`crates/world/src/session.rs`），
+/// 而 `CM_SOFTCLOSE` 已经把 world session 的 `actor_id` 置 None（`crates/world-bevy/src/session.rs`），
 /// 所以 soft-close 路径只能靠 host 兜底——谁先谁后就决定了展示表摘不摘得掉。
 ///
 /// **不承重的顺序**：本函数相对 `world.disconnect(&chr_name)` 的先后**不承重**——
@@ -2913,7 +2913,7 @@ fn handle_whisper(
 /// **收包字段口径**：`CM_GROUPMODE` 判的是 `processMsg.nParam2`（12B 头的 `Param` 字段）；
 /// 其余三条用尾 `Msg`（`Recog`/`Tag` 不参与）。
 ///
-/// 世界侧状态机在 `crates/world/src/party.rs`；本函数只负责「找会话 → 调状态机 → 把事件按
+/// 世界侧状态机在 `crates/world-bevy/src/party.rs`；本函数只负责「找会话 → 调状态机 → 把事件按
 /// `[GateIdx, Socket]` 回帧」（事件顺序已按 oracle 的「立即帧 / `MsgQueue` 出队序」排好，别重排）。
 ///
 /// `PartyEvent::GotoLabel`（oracle `FunctionNPC.GotoLable(this, "@GroupClose"/"@GroupCreate"/
@@ -3320,7 +3320,7 @@ fn drain_party_death_events(
 ///
 /// 状态层（`World::deliver_self_delay_msgs` → `slave::process_slave_mutiny`）已由本卡前片落地，
 /// 事件落在 [`mir2_world_bevy::TickRecord::slave_self_deliveries`]；本函数只负责把 `mutinied` 出帧（
-/// `crates/world/src/world.rs:107-109` 的「宿主据本记录出帧」）。
+/// `crates/world-bevy/src/world.rs:107-109` 的「宿主据本记录出帧」）。
 ///
 /// # oracle 链路（逐行）
 ///
@@ -4066,7 +4066,7 @@ fn emit_def_frames(
 /// `PlayObject.Message.cs:802-808` 读 `processMsg.nParam1`。**不是** 12B 头的 `param`——
 /// 旧注释误写 `param`，`openmir2-dropitem-recog-param-mixup` 修正）。
 ///
-/// **已知缺口（登记，不静默）**：拾取删格对 `crates/world` 的**写回**尚未开（owner §25.1 (A)
+/// **已知缺口（登记，不静默）**：拾取删格对 `crates/world-bevy` 的**写回**尚未开（owner §25.1 (A)
 /// 只批只读分片）⇒ 地面物品在 world 里不消失（客户端已由 `SM_ITEMHIDE` 隐藏）；成功 drop 的
 /// `Envir.AddItemToMap` 在本仓 oracle 下恒失败（`MapItem.ItemId == 0`，`ground.rs` 模块头 T-19）。
 #[allow(clippy::too_many_arguments)]
@@ -5909,7 +5909,7 @@ fn handle_click_npc_cmd(
 /// 支 ⇒ `MakeGhost()`（离开世界）；`BoReconnection` 置真 ⇒ 跳过 `!BoReconnection && BoSoftClose` 的行会
 /// 退出提示支（行会未建模）。
 ///
-/// **本片已实现**：三道置位 + `world.soft_close()`（= `MakeGhost` 的世界侧等价物，`crates/world::session`）。
+/// **本片已实现**：三道置位 + `world.soft_close()`（= `MakeGhost` 的世界侧等价物，`crates/world-bevy::session`）。
 /// **登记**：`OffLineFlag`（挂机态）未建模 ⇒ 恒 `false`（门恒通过）；`BoKickFlag` 支
 /// （`SM_OUTOFCONNECTION`）不属本命令。
 /// **G3**：四条断线宿主共享的行会/落盘句柄（`CM_SOFTCLOSE` 由 `dispatch_inbound_p0`
@@ -9556,7 +9556,7 @@ fn emit_script_frames(
 /// [`game_svr::msgqueue::NetPriorityQueue`] 并按入队序灌堆再出队。本路径的 ident 恒为
 /// `RM_SYSMESSAGE`（`& 0xFF = 252`）=> 多条同 ident 的出队序由四叉堆 sift 决定
 /// （3 条 `[0,2,1]`、4 条 `[0,3,2,1]`），**不是**入队序、也不是稳定排序
-/// （卡 `openmir2-frame-drain-order-audit` 的结论 + `crates/world/src/msgqueue.rs`）。
+/// （卡 `openmir2-frame-drain-order-audit` 的结论 + `crates/world-bevy/src/msgqueue.rs`）。
 ///
 /// 未建模（登记）：收件人队列里**同时**还有别的系统投来的帧时的跨源合并——与本仓既有各排水点
 /// 同口径（每个排水点只排本次事件产出的帧）。
@@ -11476,8 +11476,8 @@ fn apply_ability_to_entity(
     e.vitals.max_mp = wabil.max_mp;
     e.progression.level = wabil.level;
     // oracle `PlayObject.cs:1310-1312`：`Abil.Exp/MaxExp` 与 `WAbil` 同源，实体是战斗侧
-    // （`crates/world/src/combat.rs::win_exp`）的唯一读点。旧实现不写 ⇒ 实体缺省 `0/0`
-    // （`crates/world/src/entity.rs:1006`），登录后首杀必 `exp >= 0` 伪升级（等级 +1）。
+    // （`crates/world-bevy/src/combat.rs::win_exp`）的唯一读点。旧实现不写 ⇒ 实体缺省 `0/0`
+    // （`crates/world-bevy/src/entity.rs:1006`），登录后首杀必 `exp >= 0` 伪升级（等级 +1）。
     e.progression.exp = wabil.exp;
     e.progression.max_exp = wabil.max_exp;
     // `RecalcAbilitys` 的 `AntiMagic = 1 + AddAbil.AntiMagic`（`BaseObject.Abil.cs:30/67`）。
@@ -11818,7 +11818,7 @@ fn handle_hit_cmd(
         //   `PlayObject.cs:2929/2932`）；
         //   之后 `_Attack(null)`（`BaseObject.Attack.cs:32`）与 `AttackSuccess(…, null)`
         //   （`PlayObject.Attack.cs:215-218` 开头 `return`）都不再取数。
-        // 接线到 m3cs 的 `World::attack_swing`（`crates/world/src/world.rs:199`，owner 20:10 裁决）：
+        // 接线到 m3cs 的 `World::attack_swing`（`crates/world-bevy/src/world.rs:199`，owner 20:10 裁决）：
         // 缺这一段 ⇒ 真机「有攻击命令、无目标」的 84 击取数整段缺失（C# 120 段 vs Rust 36 段）。
         let _ = world.attack_swing(actor_id);
         glog!(
@@ -15500,7 +15500,7 @@ fn set_actor_weapon_strong(
 }
 
 /// `MagicBase.CheckAmulet`（`MagicBase.cs:47-105`）的**宿主侧查表**：把 `UseItems[slot]`
-/// 的 `UserItem{Index,Dura}` + `StdItem{StdMode,Shape}` 装成 `crates/world::magic::AmuletSlot`。
+/// 的 `UserItem{Index,Dura}` + `StdItem{StdMode,Shape}` 装成 `crates/world-bevy::magic::AmuletSlot`。
 /// `Index == 0` / 槽空 / 模板缺 ⇒ `None`（oracle `Index > 0` + `GetStdItem != null` 的门）。
 fn amulet_slot(
     sg: Option<&SessionGround>,
@@ -15841,7 +15841,7 @@ fn apply_login_record_scalars(
     ent.set_login_attack_mode(data.map_or(0, |d| d.attatck_mode));
 }
 
-/// 帮 `ActorDisplay.dir` 随转向/走步更新（展示字段在 `bins/game-svr` 的展示表里，不进 `crates/world`）。
+/// 帮 `ActorDisplay.dir` 随转向/走步更新（展示字段在 `bins/game-svr` 的展示表里，不进 `crates/world-bevy`）。
 ///
 /// **`openmir2-player-dir-supply`**：`Entity.ai.dir` 是唯一权威（oracle `BaseObject.Dir`），
 /// 展示表的 `dir` 只是它的**投影**——所有写入点先写实体，再调本函数把实体值抄进展示表。
@@ -16124,7 +16124,7 @@ fn entity_in_cell_index(world: &mir2_world_bevy::World, e: mir2_world_bevy::Enti
 /// `VisibleFlag.Hidden` 支，`src/M2Server/Player/PlayObject.cs:3214-3222`）。
 ///
 /// 世界侧 [`mir2_world_bevy::aoi::search_view_range`] 在移除 `VisibleFlag::Hidden` 条目时把
-/// `(观察者, 离开者)` 记进 `TickRecord::hides`（`crates/world` 只管事件、不出帧）；本函数按
+/// `(观察者, 离开者)` 记进 `TickRecord::hides`（`crates/world-bevy` 只管事件、不出帧）；本函数按
 /// `SM_DISAPPEAR(30)`（[`downlink::disappear_frame`]）逐条路由给**观察者自己**
 /// （oracle 6 参 `SendMsg(IActor baseObject, …)`，`BaseObject.Message.cs:98` ⇒
 /// `SendMessage.ActorId = baseObject.ActorId` = **离开者**；帧经**观察者自己**的消息队列发出 ⇒
@@ -16425,7 +16425,7 @@ fn aoi_appearance_slots(
 /// （`PlayObject.cs:3240`）⇒ 进**观察者自己的** `PriorityQueue<SendMessage, byte>`
 /// （`ActorEntity.cs:16`），优先级 `(byte)RM_TURN = 17`。`PlayObject.Run()` 的
 /// `while (GetMessage())`（`PlayObject.Message.cs:359-363`）按 **.NET 8 四叉最小堆**出队
-/// （`crates/world/src/msgqueue.rs` 逐位复刻）⇒ **同优先级不是 FIFO**，出队序由堆数组
+/// （`crates/world-bevy/src/msgqueue.rs` 逐位复刻）⇒ **同优先级不是 FIFO**，出队序由堆数组
 /// 与队列里其它条目共同决定。真机 `E:/tmp/window-20261026/run2/move_walk/` 登录期
 /// idx 19–26：入队序 = 玛法足球场→行会争霸→盟重老兵→沙巴克铁匠，oracle 实发序 =
 /// 行会争霸→盟重老兵→玛法足球场→沙巴克铁匠。
@@ -16675,7 +16675,7 @@ fn drain_aoi_events(
 ///
 /// # 本宿主的检测口径（世界层不产 `RM_WALK`，且本车道写集只含 `bins/game-svr/**`）
 ///
-/// `crates/world` 的 `monai::walk_to` → `World::try_step_now` 只改 `e.x/e.y`，**不产生事件**
+/// `crates/world-bevy` 的 `monai::walk_to` → `World::try_step_now` 只改 `e.x/e.y`，**不产生事件**
 /// （审计 B.1 已确证），`MonsterRefMsg` 也没有 `RM_WALK` 支 ⇒ 宿主按**逐 tick 位置差**还原
 /// 「谁走了一格」：
 ///
@@ -17043,14 +17043,14 @@ fn drain_npc_merchant_hits(
 /// 那时实体已 `fixed_hide_mode = true` ⇒ **不能**在这里调 [`broadcast_ref_msg`]（它走
 /// `chat::hear_targets`，对隐藏 sender 只返回 `[自己]`，`include_self = false` 再把它丢掉 ⇒
 /// 整帧静默丢失）。因此收件人在 `merchant_run` 的发帧点就快照进
-/// `TickRecord::merchant_disappears` 的 `(id, recipients)`（`crates/world/src/merchant.rs`），
+/// `TickRecord::merchant_disappears` 的 `(id, recipients)`（`crates/world-bevy/src/merchant.rs`），
 /// 本函数只做 actor → 网关会话的路由（同形先例：`monai.rs` 的 `StickMonster.ComeDown`）。
 ///
 /// # 与 `drain_aoi_disappear` 不重复
 ///
 /// 两条路径**不会**对同一对象各发一条：AOI 支的消失帧由世界侧
 /// `aoi::search_view_range_with_updates` 产出 `TickRecord::hides`，而它对
-/// `fixed_hide_mode` 的目标**本就过滤**（`mir2-rs/crates/world/src/aoi.rs:296-303`，与 oracle
+/// `fixed_hide_mode` 的目标**本就过滤**（`mir2-rs/crates/world-bevy/src/aoi.rs:296-303`，与 oracle
 /// `PlayObject.cs:3214-3222` 的 `!FixedHideMode && !Ghost` 同形）⇒ 进入战中的商人只会出现在
 /// 本函数的 `merchant_disappears` 里。判据见用例
 /// `castle_merchant_disappear_is_not_duplicated_by_aoi_branch`。
@@ -17538,7 +17538,7 @@ fn drain_show_hp_health_changes(
 ///
 /// **玩法路径（2026-10-25 订正）**：地图链接格 `MapRoute` **已接生产**——`sim_loop` 装载
 /// `add_map_routes`（本文件 `:20306-20321`），玩家踩连接格经 `walk_route_check`（CM_TURN）/
-/// `step_with_route`（CM_WALK）→ `route_enter`（`crates/world/src/world.rs:7344`）→ `switch_map`。
+/// `step_with_route`（CM_WALK）→ `route_enter`（`crates/world-bevy/src/world.rs:7344`）→ `switch_map`。
 /// 原「尚未移植 / 真机无调用者」的登记已过期（reviewer-20 `a78c28078f` F1）；传送技能换图支
 /// 不在本次订正范围。
 /// `RM_CHANGEMAP` 观测点随后还有 `RefUserState()`/`SendMapDescription()`/`SendServerConfig()` 三帧（另一族、不在本卡帧集）。
@@ -18529,7 +18529,7 @@ fn drain_stamina(
             // 其 ShowHp 广播支要按**当时的** ShowHp 计数（C1 复核：清位提前会少 2 条 53）。
             let show_hp = sg.show_hp;
             let max_hp = sg.state.wabil.max_hp;
-            // 回写世界实体：攻击结算（`crates/world`）与逐击 `SERVER_STATE` dump 读 `Entity.hp`。
+            // 回写世界实体：攻击结算（`crates/world-bevy`）与逐击 `SERVER_STATE` dump 读 `Entity.hp`。
             // **恢复写点镜像进实体**（卡 `openmir2-spell-fill-projection-mirror`）：P7 的
             // MP 支（`BaseObject.Base.cs:57-68`，`MaxMP/18+1` 夹 `MaxMP`）与 HP 支（`:44-55`）
             // 在 oracle 里写同一份 `WAbil` ⇒ 恢复永存；本宿主 `stamina_tick` 只写投影
@@ -18754,7 +18754,7 @@ fn drain_run_downlinks_with_magic(
     // （无名尾）。真机锚 `E:/tmp/window/20261021-r3/cking/s2c/capture.jsonl`：国王 30s 内 3 对
     // nameless 转身（`series 0x0203/0x0205/0x0207`）。`RM_TURN`(优先级 17) 与出现帧同优先级、
     // 早于 `RM_WALK(18)`/`RM_HIT(20)` ⇒ 排在消失/出现帧之前（世界侧线性化 `npc_tick` →
-    // `merchant_tick` → AOI，见 `crates/world/src/world.rs` 的 `World::tick`）。
+    // `merchant_tick` → AOI，见 `crates/world-bevy/src/world.rs` 的 `World::tick`）。
     let t = tick_profile::probe_begin(&prof);
     let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);
     tick_profile::probe_end(&mut prof, "HostAoiNpcTurn", t);
@@ -19109,7 +19109,7 @@ fn push_name_color_self(
 ///
 /// # 世界侧
 ///
-/// - `world.use_lamps()`（`crates/world/src/world.rs`，按 `DecLightItemDrugTime` 节流）
+/// - `world.use_lamps()`（`crates/world-bevy/src/world.rs`，按 `DecLightItemDrugTime` 节流）
 ///   → `TickRecord` 不需要通道（返回值直接是 [`mir2_world_bevy::LampDuraChange`] 列表）；
 /// - `World::attack_once` 的 `CheckWeaponUpgrade` 结算 → `TickRecord::weapon_breaks`。
 ///
@@ -21033,7 +21033,7 @@ fn gm_regen_monster(
 /// 在 `SlaveExpLevel > 0` 时同样按公式改 `WAbil.DC` / `WAbil.MaxHP`；随后三族覆写再调
 /// `ResetElfMon` 改 `NextHitTime/WalkSpeed/WalkTick`。
 ///
-/// 复用 `crates/world::slave` 的**同一实现**（review I1：此前宿主只复刻了派生速度、漏了
+/// 复用 `crates/world-bevy::slave` 的**同一实现**（review I1：此前宿主只复刻了派生速度、漏了
 /// `ApplySlaveLevelAbilitys`，三族 DC/MaxHP 与 oracle 不一致）。`AntiMagic` 置 1 同
 /// `BaseObject.Abil.cs:30`。
 fn gm_mob_recalc(world: &mut mir2_world_bevy::World, id: i32, level: u8, now: i64) {
@@ -21077,7 +21077,7 @@ fn gm_recall_ex_adopt(
 }
 
 /// `RefNameColor()`（`BaseObject.cs:730-733`）在宿主侧的 656 帧：色彩由接收者侧
-/// `GetChrColor(baseObject)` 现算（`crates/world::slave::get_chr_color`；NPC 支传 oracle 缺省 255）。
+/// `GetChrColor(baseObject)` 现算（`crates/world-bevy::slave::get_chr_color`；NPC 支传 oracle 缺省 255）。
 fn gm_push_name_color(
     buf: &mut SpellFrameBuf,
     world: &mir2_world_bevy::World,
@@ -21242,7 +21242,7 @@ fn apply_pending_gm_m_commands(
                 // 不置标记。**oracle 确有消费者**（`MonsterObject` 无目标时以 MissionX/Y 为
                 // Target；`SuperGuard` 忽略 Mission 目标的攻击），故这是真实 AI 建模缺口——
                 // 但 `@MobPlace` perm_min=10、生产 Permission 恒 0 ⇒ 生产不可达（脚本桥未装配
-                // `ScriptGmHost`（缺省）时退化零帧）⇒ 以白名单 T-271 登记，不动 crates/world（卡面 forbidden）。
+                // `ScriptGmHost`（缺省）时退化零帧）⇒ 以白名单 T-271 登记，不动 crates/world-bevy（卡面 forbidden）。
                 glog!(
                     "DBG",
                     "@MobPlace：Mission/MissionX/MissionY 标记未建模（Entity 无字段）⇒ 只按数量刷怪，标记登记"
@@ -22551,7 +22551,7 @@ struct EnterConfig {
     /// `stditems` 物品目录（`game_svr::ability::StdItemCatalog`，**1-based** 查表，见 `crate::items`）；
     /// 空目录 = 未加载/无配置。帧 50/41 的 `StdItem.Shape` 与 52/752 的 `RecalcAbilitys` 共用。
     catalog: game_svr::ability::StdItemCatalog,
-    /// 生产宿主喂给 `crates/world` 的**顺序**物品模板表（`items[i]` ⇒ `Index = i + 1`）。
+    /// 生产宿主喂给 `crates/world-bevy` 的**顺序**物品模板表（`items[i]` ⇒ `Index = i + 1`）。
     ///
     /// 与 `catalog`（`stditems` 的 `HashMap` 查表，供帧/能力面）**同源同表**：world 侧的
     /// `VecItemCatalog`（死亡删装/怪物掉落）按 1-based **表内位置**查，必须拿到原始顺序
@@ -24450,7 +24450,7 @@ fn tick_world_with_specials(
 /// 本 tick 命中 3s 门的在线玩家，按**当前地图**用 [`homemap::get_start_point`] 覆盖记录里的
 /// `HomeMap/HomeX/HomeY`（PvpLevel `pk_point/100` >= 2 时走 RedHome*）。
 ///
-/// 与 world 侧 `check_dup_obj`（`mir2-rs/crates/world/src/world.rs:5706`，其 `:5731` 原为
+/// 与 world 侧 `check_dup_obj`（`mir2-rs/crates/world-bevy/src/world.rs:5706`，其 `:5731` 原为
 /// 「处置（登记）」）配对；`GetXYObjCount`/`BoDuplication` 的顺序**不动**。
 fn apply_get_start_point_after_tick(
     world: &mir2_world_bevy::World,
@@ -25388,7 +25388,7 @@ fn sim_loop(
     // 不能喂给这个墙钟协议门；`keepalive_clock_ms()` 零参、内部取 `clock::now_ms()`。
     let mut online_hum_gate = startup_online_hum_gate();
     // **M3 T-30**：种子注入只在设了 `MIR2_RNG_SEED` 时覆盖随机源（未设 ⇒ 保持 `World::with_maps`
-    // 的既有随机源，`crates/world` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
+    // 的既有随机源，`crates/world-bevy` 行为一字不改）。发一条与 C# 钩子同形的 `SEED_PROBE` 自证行：
     // 参考序列走**独立实例**（[`seed_probe_text`]）——与 C# 钩子 / `rng_trace` 头部同口径，
     // 不消耗游戏流，也**不进** `MIR2_RNG_LOG` 逐次流水（经 `RandomNumber` 取那 8 项会把两侧
     // `site/order` 账本的第一分歧钉到 index 0）。
@@ -25428,7 +25428,7 @@ fn sim_loop(
         // `LoadMapData`（写属性）后 `Maps.LoadMapInfo` 尾段的 `MapManager.AddMapRoute`
         // （`src/GameSrv/Maps/Maps.cs:361-379`），而 `AddMapRoute` 有 `cellSuccess && cellInfo.Valid`
         // 门（`Envirnoment.cs:176`）⇒ 墙格上的连接点在 oracle 侧**本来就落不下**；属性未灌之前
-        // 每格都是 `Walk`，`crates/world/src/map.rs` 的 `add_map_route` 那道具形同虚设。
+        // 每格都是 `Walk`，`crates/world-bevy/src/map.rs` 的 `add_map_route` 那道具形同虚设。
         // 本片之前：`get_cell_info` 对界内每格恒 `ok=true`（掩码面只有运行期城门写得到）。
         let cell_total = mapwire::apply_map_cells(reg, &mut world);
         let mut walk_cells = 0usize;
@@ -25646,7 +25646,7 @@ fn sim_loop(
     // （重抽会让共享 RNG 流错位 4）。账本缺站点 ⇒ `None` ⇒ 宿主不建实体并记 ERR（fail-closed）。
     let qfunction_run_tick = ctor_fold::hidden_qfunction_run_tick(&ctor_ledger_m1, world.clock_ms);
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
-    // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
+    // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world-bevy`**。
     // **Lane B**：提前到城堡块之前——门/墙/弓手由 `WorldMonsterSink` 登记展示层，
     // 与后续商人/守卫/AOI 共用同一张表。
     let mut displays = downlink::DisplayTable::new();
@@ -25997,7 +25997,7 @@ fn sim_loop(
     let mut gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>> =
         std::collections::HashMap::new();
     // S3 后半段（第一格）：同屏 AOI 下行要用的展示表（`ActorId -> Dir/Light/Feature/…`）。
-    // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world`**。
+    // 展示字段来自角色记录 + 装备（属 bins/game-svr 的读档面），**不进 `crates/world-bevy`**。
     // **Lane B**：声明已提前到城堡块之前（门/墙/弓手在启动期登记展示层）。
     // **接线批 A**：`CM_PASSWORD` 的会话密码态（`PlayObject.StoragePwdState` + `ActionLocks`）。
     let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
@@ -27951,7 +27951,7 @@ fn sim_loop(
                                                 // 防止 `50` 尾与两条 `657` 的 `Param/Tag` 漂移。
                                                 // 会话实体刚由 `enter_map` 建好：`world.get_char_status`
                                                 // 读 `ActorBuffSystem.GetBuffStatus() | (CharStatusEx & 0xFFFF)`
-                                                // 的等价实现（`crates/world/src/buff.rs`）；新登录无 buff、
+                                                // 的等价实现（`crates/world-bevy/src/buff.rs`）；新登录无 buff、
                                                 // `char_status_ex` 初值 0 ⇒ 当前值恒 0（与金标准 #3 的
                                                 // `CharStatus == 0` 一致），但走真实实现而非硬编码。
                                                 let login_char_status: i32 = world.get_char_status(id);
@@ -28902,7 +28902,7 @@ fn sim_loop(
         // `WorldEngine.OnlinePlayObject`（`WorldServer.cs:98/190-193` = `PlayObjectList.Count`）：
         // `MakeGhost` 后对象仍留在 `PlayObjectList`，直到 RunTick 门到点才 Remove
         // （`WorldServer.cs:635/709`）⇒ **不能排除 ghost**。与既有宿主口径一致：MonGen 两条门
-        // 与 `crates/world/src/monai.rs` 的 `MakeGhost` 门都数 `race == Play`（不含 ghost），
+        // 与 `crates/world-bevy/src/monai.rs` 的 `MakeGhost` 门都数 `race == Play`（不含 ghost），
         // 否则幽灵/断线窗口里本段会比 oracle 小 1..N（reviewer-1 m-2）。
         let online_play_objects = world
             .entities
@@ -28996,7 +28996,7 @@ fn sim_loop(
                 world.clock_ms,
             );
             // 运行期 `*_text` 刷新的注入墙钟（`UserCastle.cs:337/357` 的 `DateTime.Now`；
-            // `crates/world` 的 `run` 只改日粒度，P1 只存原串 ⇒ 宿主负责格式化回写，F1）。
+            // `crates/world-bevy` 的 `run` 只改日粒度，P1 只存原串 ⇒ 宿主负责格式化回写，F1）。
             let wall_clock = local.format("%Y-%m-%d %H:%M:%S").to_string();
             // **T-127**：跨城先收集、循环后统一排水（oracle 每个 `PlayObject` 只有一条 `MsgQueue`，
             // 入队序 = 城堡列表序 × 每座城 `Run` 的事件序 ⇒ 同优先级出队序由四叉堆 sift 决定）。
@@ -31844,7 +31844,7 @@ mod tests {
     ///    `World::enter_map` 的「进图时刻」基准（那正是本卡要消掉的漂移）。
     ///
     /// 红检：把生产调用改回 `world.enter_map(&head.chr_name, ent, map_id)`，或删掉 ctor 捕获行
-    /// ⇒ 本用例必红。（行为面牙见 `crates/world` 的
+    /// ⇒ 本用例必红。（行为面牙见 `crates/world-bevy` 的
     /// `first_scan_base_is_playobject_ctor_not_map_entry`。）
     #[test]
     fn login_search_base_is_captured_at_playobject_ctor() {
@@ -32391,7 +32391,7 @@ mod tests {
     /// `SM_GROUPMODECHANGED(659)` 且 `Param=0`（无组 ⇒ `ClientGroupClose` 只清
     /// `AllowGroup`，oracle `Operate.cs:787-791`；回帧无条件 `PlayObject.Message.cs:924-929`）。
     ///
-    /// 红检（变异 M-删回帧，本人 worktree 重放）：把 `crates/world/src/party.rs::
+    /// 红检（变异 M-删回帧，本人 worktree 重放）：把 `crates/world-bevy/src/party.rs::
     /// party_group_mode` 的 `em.now(PartyEvent::GroupModeChanged…)` 删掉 ⇒ 本用例与
     /// 既有 659(1) 断言、`party_vectors::group_mode_*` 同时红。
     #[test]
@@ -33437,7 +33437,7 @@ mod tests {
     /// 真机依据（`E:/tmp/window-20261026/run2/`）：`dice_chain_auto` oracle `10×3 / 41×4` 里多出的两对
     /// nameless 转身、`move_walk` rust 尾帧 `SM_HIT(14)`。**存在性**由两侧 RNG 流位决定（oracle
     /// `new Random()` 墙钟播种，`src/OpenMir2/RandomNumber.cs:35`；rust `with_seed(42)`，
-    /// `crates/world/src/world.rs:1301`）⇒ 可判的只有**帧形状 / 配对 / 次序**，不是「这个窗口有没有抽中」。
+    /// `crates/world-bevy/src/world.rs:1301`）⇒ 可判的只有**帧形状 / 配对 / 次序**，不是「这个窗口有没有抽中」。
     #[test]
     fn npc_random_idle_frames_through_production_drain_run() {
         use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
@@ -33605,7 +33605,7 @@ mod tests {
     /// `FixedHideMode` 解除支（`Merchant.cs:152-157`，`SendRefMsg(RM_HIT,…)` 在 `:156`）是
     /// **确定性**发点——与 `tools/conformance/rules.json` 里 ident 14 的 `ignore` 理由
     /// （RNG 支，`Merchant.cs:138-140`）不同类。本用例走生产链路：
-    /// `World::merchant_tick` → `crates/world/src/merchant.rs::merchant_run`（`:143-160`）→
+    /// `World::merchant_tick` → `crates/world-bevy/src/merchant.rs::merchant_run`（`:143-160`）→
     /// `TickRecord::merchant_hits` → [`drain_npc_merchant_hits`] → [`downlink::hit_frame`]。
     ///
     /// 断言：
@@ -34358,7 +34358,7 @@ mod tests {
     ///
     /// oracle 两侧都显式抑制 `FixedHideMode` 目标：
     /// · AOI 支 `PlayObject.cs:3214-3222` 的 `if (!baseObject.FixedHideMode && !baseObject.Ghost)`
-    ///   ⇒ 本仓 `mir2-rs/crates/world/src/aoi.rs:296-303` 的 `!e.fixed_hide_mode && !e.ghost`
+    ///   ⇒ 本仓 `mir2-rs/crates/world-bevy/src/aoi.rs:296-303` 的 `!e.fixed_hide_mode && !e.ghost`
     ///   过滤器把它从 `TickRecord::hides` 里剔除（条目仍从 `VisibleActors` 移除）；
     /// · 新支 `Merchant.cs:147` 的 `RM_DISAPPEAR` 才是唯一发点。
     ///
@@ -34499,7 +34499,7 @@ mod tests {
     /// NPC 只作发帧者、不作收件人。收件人残余见 whitelist D-13 / T-154 残余④
     /// （500ms `VisibleHumanList` 缓存、非 Play 的 `WantRefMsg` 名单未建模）。
     ///
-    /// 链路：`World::npc_tick` → `mir2-rs/crates/world/src/npc.rs`（`guild_official_run_body`：
+    /// 链路：`World::npc_tick` → `mir2-rs/crates/world-bevy/src/npc.rs`（`guild_official_run_body`：
     /// `GuildOfficial.cs:39-53` 的 `Random(40)==0 ⇒ TurnTo(RandomByte(8))`，否则
     /// `Random(30)==0 ⇒ RM_HIT`）→ `TickRecord::npc_hits` →
     /// `mir2-rs/bins/game-svr/src/lib.rs`（`drain_npc_merchant_hits`）→ `downlink::hit_frame`。
@@ -35202,7 +35202,7 @@ mod tests {
     /// 红检（**实测口径**，见下条 `aoi_disappear_reachable_through_drain_run_downlinks`）：
     /// 本用例**直接调** [`drain_aoi_disappear`]，故 `drain_run_downlinks` 里的生产调用**删掉也不红**
     /// （原「去掉 `drain_run_downlinks` 里的调用 ⇒ 本用必红」的注释**不成立，已订正**）。
-    /// 本用例真正的牙 = **世界侧**：删 `crates/world/src/world.rs` 的 `record.hides.push(...)`
+    /// 本用例真正的牙 = **世界侧**：删 `crates/world-bevy/src/world.rs` 的 `record.hides.push(...)`
     /// ⇒ `rec2.hides` 为空 ⇒ 首个 `hides.contains(&(a,b))` 断言必红。
     /// 生产调用点的牙由下条的 `drain_run_downlinks` 级用例负责（删那行 ⇒ 那条必红）。
     #[test]
@@ -42312,7 +42312,7 @@ break
     ///   又因墙失败 ⇒ **坐标不动但源格登记被摘**（orphan）⇒ 第三段「源格登记仍在」断言**必红**
     ///   （坐标/帧断言此时仍绿——第二层 `move_object`/`add_map_object` 也查属性，所以只摘 `cell_free`
     ///   这一层不改坐标，这一点正是本牙要钉出来的：属性门是**两层**，缺一层就 orphan）。
-    /// - **牙②**：把 `crates/world/src/map.rs::MapCellInfo::valid()` 改成恒 `true`（等价于「装载没生效 /
+    /// - **牙②**：把 `crates/world-bevy/src/map.rs::MapCellInfo::valid()` 改成恒 `true`（等价于「装载没生效 /
     ///   属性门全失效」）⇒ `cell_free`/`move_object`/`add_map_object` 三处一起放行 ⇒ mover 直接走上
     ///   墙格 ⇒ 坐标 + 帧断言**必红**。实测：先命中前置断言 `cell_valid(12,10)==false`
     ///   （`assert!(left: true)`）；把该前置一并去掉后，坐标断言 `(e.x,e.y)==(11,10)` 命中
@@ -45533,7 +45533,7 @@ break
     }
 
     /// `@2`（`ChangeObModeCommand`）必须写**权威** `Entity.ob_mode`：
-    /// AOI 可见性过滤 `!other.ob_mode`（`crates/world/src/aoi.rs:231`，
+    /// AOI 可见性过滤 `!other.ob_mode`（`crates/world-bevy/src/aoi.rs:231`，
     /// oracle `PlayObject.cs:3127`）⇒ 隐身者不再被观察者收进视野。
     ///
     /// 牙：删 Entity 写入 ⇒ 观察者第二次扫描仍看得到 ⇒ 红。
@@ -45576,7 +45576,7 @@ break
 
     /// `@Rest`（`ChangeSalveStatusCommand`）必须写**权威** `Entity.slave_relax`：
     /// 宝宝 `Run` 的 `Master.SlaveRelax` 支（`MonsterObject.cs:334`）⇒ **跳过**
-    /// `GotoTargetXY`/`CrazyMode` 到期（`crates/world/src/monai.rs` 的同一门）。
+    /// `GotoTargetXY`/`CrazyMode` 到期（`crates/world-bevy/src/monai.rs` 的同一门）。
     ///
     /// 引擎入口直接取 `monai::monster_run`（`world.tick` 的 `monster_ai_tick` 对每只怪调的
     /// 就是这个函数），绕开 AI 开关只影响「谁驱动」，不影响判据。
@@ -52807,7 +52807,7 @@ SendRefMsgRange=15
     // `bag_equip`/`eat_item` 是「尾段之后」，`butch_two_draws` 是「出现帧之后、654 之前」——
     // `csharp/frames.ndjson` seq 72 t=2581 的 201 夹在 seq 71 `41` 与 seq 73 `654` 之间）。
     // 本宿主把登录尾段延到会话首次 AOI 扫描（`PLAYER_SEARCH_TIME`=1000ms，见 [`drain_login_tail`]
-    // 与 `crates/world` 的 `first_scan_base_is_playobject_ctor_not_map_entry`），于是下一 tick 的
+    // 与 `crates/world-bevy` 的 `first_scan_base_is_playobject_ctor_not_map_entry`），于是下一 tick 的
     // 201 落进这段窗口。该「登录帧 → 首扫帧」间隔已由 **T-184** 登记为 **T-73**（`RunNotice` →
     // `CM_LOGINNOTICEOK` → `UserLogon` 等待环未建模，选项 a 的既决设计）的既决偏差，窗口项由
     // 卡 `openmir2-searchtick-origin-parity` 持有 ⇒ **本卡不改登录/首扫时序**（改它 = 推翻 T-73
@@ -54935,7 +54935,7 @@ SendRefMsgRange=15
     /// 片 `openmir2-snap-cell-fidelity` 两条牙共用的一次施法（走**生产入口** `handle_spell_cmd`）。
     ///
     /// `mask = Some((mx,my))` 时先把该格掩码（`MapGrid::set_map_xy_flag(mx, my, false)`
-    /// ⇒ `CellAttribute::LowWall`，生产侧唯一写掩码的口是 `crates/world/src/castle.rs:591`
+    /// ⇒ `CellAttribute::LowWall`，生产侧唯一写掩码的口是 `crates/world-bevy/src/castle.rs:591`
     /// `apply_structure_events` 的城门/城墙 `SetMapXyFlag`）——被掩码格
     /// `MapCellInfo::valid() == false` ⇒ `get_cell_info` 返回 `success=false` ⇒ oracle
     /// `CretInNearXy` 的 `if (cellSuccess && cellInfo.IsAvailable)` 跳过该格。
@@ -55027,7 +55027,7 @@ SendRefMsgRange=15
     ///
     /// 断言：① 世界 RNG **必须前进**（走到 `power_*` 取数）；② 技能 31 ⇒ 施法者获 `MagicShield`；
     /// ③ 技能 14/15 ⇒ 目标**不得**获 buff——oracle `MagMakeDefenceArea` 的已知 bug 只对
-    /// **中心格** `(nX,nY) = 点击格 (18,10)` 施加（`crates/world/src/world.rs:671` 逐行复刻），
+    /// **中心格** `(nX,nY) = 点击格 (18,10)` 施加（`crates/world-bevy/src/world.rs:671` 逐行复刻），
     /// 目标在 (19,10) ⇒ 中心格无人 ⇒ 零命中（这一条同时钉住「不 snap」本身：若坐标被改成目标格，
     /// 目标就会获 buff ⇒ 断言 ③ 必红）。
     ///
@@ -64628,7 +64628,7 @@ SendRefMsgRange=15
             );
             // 取数与现状相同：本夹具的 `MonsterTable`/`MapRegistry` 皆空 ⇒ 召唤不 `Spawned`
             // ⇒ `boTrain=false` ⇒ `:659` 训练尾门不过 ⇒ **0 抽**（现状如此；召唤成功支的
-            // `Random(3)+1` 次序由 `crates/world::slave` 的既有用例覆盖）。本片不碰成功路径。
+            // `Random(3)+1` 次序由 `crates/world-bevy::slave` 的既有用例覆盖）。本片不碰成功路径。
             assert_eq!(
                 draws_between(&fresh, &rig.world.rng),
                 0,
@@ -66380,7 +66380,7 @@ SendRefMsgRange=15
     ///
     /// 红检：① 把 `MagCanHitTarget` 误加给 11/45（oracle 没有）⇒ 现有几何仍过，不红；
     /// 但把 `IsProperTarget` 挪到骰后 ⇒ 不可攻击目标会多抽 1 次 ⇒ T6 红；
-    /// ② 去掉不死 ×1.5（纯数值）由 `crates/world` 的 `lightening_undead_multiplier` 直调用例兜底。
+    /// ② 去掉不死 ×1.5（纯数值）由 `crates/world-bevy` 的 `lightening_undead_multiplier` 直调用例兜底。
     #[test]
     fn spell_p3b1_lightening_family_draw_order_and_frames() {
         for magic_id in [11u16, 45] {
@@ -82118,7 +82118,7 @@ GMEXECUTE f
     /// 来自**固定 NPC 处理器的随机转身**——`老人` 在 `Npcs.txt` 是 type 0 ⇒ oracle 实例化
     /// `Merchant`（`LocalDB.cs:688-698`），`Merchant.Run`（`Merchant.cs:132-134`）每 Run 抽
     /// `Random(50)==0 ⇒ TurnTo(RandomByte(8))`；rust 同构
-    /// （`crates/world/src/npc.rs::merchant_body_run`），经 `drain_npc_merchant_turns` 落
+    /// （`crates/world-bevy/src/npc.rs::merchant_body_run`），经 `drain_npc_merchant_turns` 落
     /// `turn_pair_nameless`（无名对、recog=NPC）。观测序（100×4 → 转身对 → 643）与 oracle
     /// `MsgQueue` 优先级出队序（RM_SYSMESSAGE=252 → RM_TURN=17 → RM_MERCHANTSAY=1，降序）一致
     /// ⇒ **连次序都是 oracle 口径**；两侧差异只在「该窗口转身抽没抽中」——共享 `RandomNumber`

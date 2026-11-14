@@ -304,7 +304,7 @@ pub struct TickRecord {
     /// 的 `RM_MASTERDIEMUTINY` / `RM_MASTERDIEGHOST` 支）。
     ///
     /// 帧面（`RefNameColor` ⇒ `RM_CHANGENAMECOLOR` / `RefShowName` ⇒ `RM_USERNAME`）不在
-    /// `crates/world` 层（见 `crate::slave` 模块头），宿主据本记录出帧或登记 `not_verified`。
+    /// `crates/world-bevy` 层（见 `crate::slave` 模块头），宿主据本记录出帧或登记 `not_verified`。
     pub slave_self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
     /// **P3-B5**：本 tick 的 `ExtraAbil` 过期/到期前 10s 事件（`PlayObject.Message.cs:163-227`）。
     pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
@@ -7157,7 +7157,7 @@ impl World {
 
     /// 把注册表 `MapFile.doors`/`door_status` 搬进某图（`Envirnoment.cs:934-991` 加载即建 `DoorList`）。
     /// 越界 `map_id` 静默忽略。幂等（重复调用覆盖）。缺省空 ⇒ `arround_door_opened` 恒 `true`
-    /// （改动前行为逐字节不变）。`crates/world` 不依赖 `crates/envir` ⇒ 用本中立结构
+    /// （改动前行为逐字节不变）。`crates/world-bevy` 不依赖 `crates/envir` ⇒ 用本中立结构
     /// [`crate::map::MapDoor`]/[`crate::map::DoorStatus`]，由宿主做映射。
     pub fn set_map_doors(
         &mut self,

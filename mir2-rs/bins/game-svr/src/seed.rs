@@ -2,7 +2,7 @@
 //!
 //! C# 侧用 `mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs`（.NET Startup Hook，只放**影子副本**）
 //! 把 oracle 的随机源换成 `new Random(seed)`；而 Rust game-svr 的生产路径此前只吃
-//! `crates/world::World::with_maps` 里写死的 `RandomNumber::with_seed(42)`，**不读任何种子环境变数**
+//! `crates/world-bevy::World::with_maps` 里写死的 `RandomNumber::with_seed(42)`，**不读任何种子环境变数**
 //! ⇒ 真机两侧「固定种子 100 次攻击伤害序列逐项相同」跑不出结论（whitelist T-30）。
 //!
 //! 本模块把 C# 钩子的读取口径 1:1 搬过来（变数名/格式/失败处置），只在**设了变数**时覆盖随机源：
@@ -177,7 +177,7 @@ mod tests {
     }
 
     /// 构造性用例：**不设**环境变数（`None`）时不得动世界的既有随机源 ——
-    /// 即「与现状逐字节相同」（`crates/world::World::with_maps` 的 seed 42）。
+    /// 即「与现状逐字节相同」（`crates/world-bevy::World::with_maps` 的 seed 42）。
     #[test]
     fn unset_seed_keeps_existing_world_rng() {
         let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);

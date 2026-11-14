@@ -761,7 +761,7 @@ pub fn is_proper_target_grouped_direct(
     is_attack_target_base(attacker, target)
 }
 
-/// 兼容别名：`crates/world` 旧调用点与既有用例用的名字（现与 [`is_proper_target`] 同义）。
+/// 兼容别名：`crates/world-bevy` 旧调用点与既有用例用的名字（现与 [`is_proper_target`] 同义）。
 pub fn is_attack_target(attacker: &impl PvpView, target: &impl PvpView) -> bool {
     is_proper_target(attacker, target)
 }

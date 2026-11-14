@@ -32,7 +32,7 @@ pub const CELL_OBJECT_EXPIRE_MS: i64 = 60 * 1000;
 
 /// AOI 扫描所需的实体访问面（S3b）。
 ///
-/// 两个实现：`crates/world` 的 [`EntityStore`]（facade/测试路径）与 bevy `World` 适配器
+/// 两个实现：`crates/world-bevy` 的 [`EntityStore`]（facade/测试路径）与 bevy `World` 适配器
 /// [`BevyAoiStore`]（`TickStage::OutputAoi` 系统路径）。扫描算法只依赖这三个方法，
 /// 因此系统化不复制算法、也不引入第二份真值。
 pub trait AoiStore {

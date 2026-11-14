@@ -5,7 +5,7 @@
 //! → `residual-case-probe/vectors/residual_case.{json,tsv}`。
 //!
 //! **为什么读 TSV 而不是 JSON**：与 `combat_skill_vectors.rs` / `dispatch_surface_vectors.rs` 同理——
-//! `crates/world` 的依赖面被 `tests/no_parallel.rs` 钉成「内部 crate + bevy_ecs/bevy_app」，
+//! `crates/world-bevy` 的依赖面被 `tests/no_parallel.rs` 钉成「内部 crate + bevy_ecs/bevy_app」，
 //! 加 `serde_json` 会被判红；探针同一次运行产出行式伴生件，本用例零依赖解析。
 //!
 //! ## 本片回答的问题

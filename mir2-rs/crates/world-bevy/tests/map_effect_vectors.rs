@@ -8,7 +8,7 @@
 //! 7 行三分类 `vectors/context_reachability.tsv`。
 //!
 //! **为什么读 TSV 而不是 JSON**：与同目录 `magic_effect_vectors.rs` 同因 ——
-//! `tests/no_parallel.rs` 把 `crates/world` 的依赖面钉死，加 `serde_json` 会被判红。
+//! `tests/no_parallel.rs` 把 `crates/world-bevy` 的依赖面钉死，加 `serde_json` 会被判红。
 //!
 //! 同一 RNG 取数路径：向量把取数账本按 `ReplayRandom` 行式格式带出，本用例用
 //! [`ReplayRandom`] **强制回放同值**，再断言「取数序列零分歧（arg/kind 逐条相同）+

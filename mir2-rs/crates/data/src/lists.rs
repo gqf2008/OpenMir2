@@ -268,7 +268,7 @@ pub fn parse_game_log_item_name_list(text: &str) -> Vec<String> {
 ///
 /// `["*"]`（通配）⇒ 任何物品名皆 `true`；否则按 `string.Compare(…, OrdinalIgnoreCase)` 找。
 /// OrdinalIgnoreCase 在「ASCII + GBK 汉字（无大小写折叠）」实语料上等价于
-/// [`str::eq_ignore_ascii_case`]（同 `crates/world/src/mongen.rs:377-379` 的登记口径）。
+/// [`str::eq_ignore_ascii_case`]（同 `crates/world-bevy/src/mongen.rs:377-379` 的登记口径）。
 #[must_use]
 pub fn game_logs_item(list: &[String], item_name: &str) -> bool {
     if list.len() == 1 && list[0].starts_with('*') {

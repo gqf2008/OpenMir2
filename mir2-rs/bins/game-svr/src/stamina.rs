@@ -82,7 +82,7 @@
 //! # 登记（未建模，不静默）
 //!
 //! - `SuperMan`（GM 无敌）分支（`:31-35`）：未建模（本宿主无 GM 态）。
-//! - `if (HP == 0) Die()`（`:65`）：死亡由 `crates/world` 的攻击结算负责，本段不重复结算。
+//! - `if (HP == 0) Die()`（`:65`）：死亡由 `crates/world-bevy` 的攻击结算负责，本段不重复结算。
 //! - 目标清理/`LastHiter` 清理（`:111-131`）：属 world 侧，另有卡。
 
 use crate::ability::Ability;
