@@ -277,7 +277,81 @@ MIR2_HOST_AOI_BENCH=1 CARGO_TARGET_DIR=E:/UserTemp/w84-rel \
   `disabled_probe_does_no_work` 钉关闭态不写 `probes`/`tick_sum_ns`、
   `probe_does_not_change_residual_and_window_takes_probes` 钉子探针不进残差。
 
-## 11. 残留物清单
+## 11. 优化后复测（卡 `openmir2-host-aoi-fanout-index`）
+
+> 本节由后续卡追加：§0–§10 是**优化前**的测量，本节是**改后同 harness 复测**。
+> 测量时段 2026-11-14 14:36–14:38（+0800），release，`CARGO_TARGET_DIR=E:/UserTemp/w84-rel`，
+> 命令与 §2 完全相同。原始输出：`E:/UserTemp/w84-measure/bench-fanout.txt`（run1）与
+> `bench-fanout-run2.txt`（run2）。
+
+### 11.1 改了什么（语义不变）
+
+`drain_monster_walk_downlink` 拆成两阶段：
+
+1. 仍按 `ids_sorted` 扫一遍实体（走位检测、`seen` 游标、告警全部原样），**顺带**收集
+   `race == ACTOR_RACE_PLAY` 实体的 `(id, map_id, x, y, ghost)` 候选（`WalkFanoutCandidate`）；
+2. 再对每个走位者只在这份候选上按 `chat::hear_targets_at` 的**原判据**重判
+   「同图 / ±`SendRefMsgRange` / `!ghost`」；说话者 `ObMode || FixedHideMode` ⇒ 只发自身的
+   支路原样保留。帧的**相对次序**（走位者按 id 升序、收件人按 id 升序）与投递代码
+   （`send_ref_msg_to_targets`，与全扫描版共用同一份）都没有变。
+
+候选集**没有用地图格子表**：① `enter_map` 在墙格/越界格上保留角色但**不入格表**；
+② `MoveToMovingObject` 可能把别的 `CellObjId` 追加到目标格（`mto_quirk_*`）。
+两条都会让「格表里的 actor」不等于「`hear_targets_at` 扫得到的 actor」，用它取候选会改变
+收件人集合。`chat.rs` 的 `hear_targets*` 未改（其它发点仍走全扫描）。
+
+### 11.2 门槛（A3）
+
+| 档 | 改前 Fanout | 改后 run1 / run2 | 倍数 |
+| --- | --- | --- | --- |
+| 7,908 / 0 | 43.736 | 0.018 / 0.019 | ~2,300–2,400× |
+| 11,000 / 0 | 86.902 | 0.024 / 0.026 | ~3,300–3,600× |
+| 11,000 / 1 | 84.370 | 0.024 / 0.025 | ~3,400–3,500× |
+| 11,000 / 100 | 94.976 | 0.096 / 0.090 | ~990–1,050× |
+| **11,000 / 1,000** | **107.762** | **1.358 / 1.521** | **71–79×** |
+
+- 11k/1,000 bot：**1.36–1.52 ms/tick < 10 ms**（门槛留 ≥6.5× 余量）。
+- 1 bot 档：0.024–0.025 ms/tick（改前 84.370）⇒ 不退化。
+- 单价：0.10–0.11 µs/走位者（0–1 bot，候选集为空）、0.36–0.38（100 bot）、5.2–5.8（1,000 bot）。
+  1,000 bot 档的单价来自「每个走位者线性过滤 1,000 个候选」，与实体总数脱钩。
+
+### 11.3 其它子项（ms/tick，`on` 臂）：没有反向变慢
+
+| 子项 | 改前 1 / 100 / 1,000 | 改后 run1 1/100/1,000 | 改后 run2 1/100/1,000 |
+| --- | --- | --- | --- |
+| `HostAoiStamina` | 0.980 / 1.063 / 2.481 | 0.992 / 1.098 / 2.334 | 0.987 / 1.023 / 2.468 |
+| `HostAoiAppear` | 0.002 / 0.060 / 0.590 | 0.001 / 0.057 / 0.628 | 0.001 / 0.056 / 0.602 |
+| ├ `HostAoiAppearSelect` | 0.000 / 0.006 / 0.153 | 0.000 / 0.006 / 0.171 | 0.000 / 0.005 / 0.160 |
+| ├ `HostAoiAppearBuild` | 0.000 / 0.041 / 0.328 | 0.000 / 0.039 / 0.343 | 0.000 / 0.039 / 0.331 |
+| └ `HostAoiAppearEnqueue` | 0.000 / 0.003 / 0.021 | 0.000 / 0.002 / 0.023 | 0.000 / 0.002 / 0.023 |
+| `HostAoiEvent` | 0.001 / 0.007 / 0.173 | 0.000 / 0.007 / 0.178 | 0.000 / 0.007 / 0.175 |
+| 走位扫描+帧构造（残差） | 2.087 / 2.484 / 5.699 | 1.511 / 2.002 / 5.249 | 1.511 / 1.855 / 5.562 |
+
+- `Appear` / `Event` 的分支代码**未被本卡触碰**；上表差异（≤0.04 ms）在**同进程三臂噪声带内**
+  ——同一批运行里 `off vs none` 的均值差是 +0.24…+6.72%（run1）与 −1.64…+3.18%（run2）。
+- 走位扫描+帧构造（残差）反而略降（5.699 → 5.25–5.56）：同一段扫描不再夹着每走位者的
+  全实体遍历，缓存压力更小。
+
+### 11.4 端到端等价信号（A1/A2 的规模面）
+
+同档、同种子下五档的 `frames/tick` 与 `hides/tick` 与 §3 逐位相同：
+`0.0/0.0`、`0.0/0.0`、`1.9/0.0`、`673.7/2.9`、`6906.3/25.1`；走位者数（Fanout 调用数）
+`165.9 / 230.8 / 230.8 / 254.7 / 263.4` 也逐位相同 ⇒ 帧面（集合 + 数量）在没有逐帧比对
+的规模下没有可观测变化。
+
+### 11.5 等价性单元测试（改后新增）
+
+| 用例 | 钉住什么 |
+| --- | --- |
+| `walk_fanout_targets_match_hear_targets_on_boundaries` | 候选集版 vs **未改动的** `chat::hear_targets` 逐元素相同：恰好 12 格（x/y/对角）、13 格（正负两侧）、跨图、死亡（仍收）、Ghost（不收）、非 Play 阵营（不收）、说话者 `ob_mode`/`fixed_hide_mode`（只发自己）、未知说话者、range 12/1/0 |
+| `walk_fanout_candidates_cover_every_play_entity_even_if_unmapped` | 候选集 == `iter_ref()` 里全部 `Race==Play` 实体；含**墙格未落格玩家**（格子表索引会漏掉它）与 Ghost 玩家；怪物不入候选 |
+| `monster_walk_frames_match_full_scan_reference` | 两个走位者同 tick：`drain_monster_walk_downlink` 的 `(socket, 走位者)` 帧序列与「全扫描 `chat::hear_targets` + 同一投递段」逐条相同；同一走位者帧体逐字节相同 |
+
+既有走位用例（`monster_walk_emits_sm_walk_with_oracle_fields`、
+`monster_walk_recipients_exclude_self_and_out_of_range_and_players`、
+`monster_walk_one_frame_per_step_and_never_for_push_or_teleport`）不改一行、仍全绿。
+
+## 12. 残留物清单
 
 - `E:/UserTemp/w84-target`（debug 五门用）、`E:/UserTemp/w84-rel`（release 测量用）：本线专用
   target 目录，**保留**以便复核；不属于仓库内容。
