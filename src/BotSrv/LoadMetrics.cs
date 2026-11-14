@@ -247,8 +247,11 @@ namespace BotSrv
         }
 
         /// <summary>同一会话已绑定 actor 之后，又收到**别的 actor** 的 `SM_LOGON` 并被身份守卫拒绝。
-        /// 只作观测：跨连接错投的根因定位在卡 `openmir2-sm-logon-cross-session-delivery`（D-*），
-        /// 本计数让夹具侧不再静默接受，但不在夹具侧重试/掩盖。</summary>
+        /// 只作观测：跨连接错投的根因已由 D-18（卡 `openmir2-sm-logon-cross-session-delivery`，
+        /// merge `a5869cd6f`，closed）在网关 `SessionId` 撞号层修复，本计数让夹具侧不再静默接受。
+        /// **口径（F12②）**：这是「同连接 actor 冲突被拒次数」，**不等于错投帧数**——错投帧先到时会
+        /// 拒后到的正确帧（+1）；只有错投帧、没有正确帧时反而不计数。
+        /// **禁止把 `logon_misdelivered=0` 读成「无错投」**。</summary>
         public static void LogonMisdelivered()
         {
             lock (Sync)

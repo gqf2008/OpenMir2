@@ -88,7 +88,9 @@ namespace BotSrv
                 && again.ProbeXForTest == 649 && again.ProbeYForTest == 629,
                 $"first=({297},{616}) now=({again.ProbeXForTest},{again.ProbeYForTest}) actor={again.MyActorIdForTest} want (649,629)");
 
-            // ④ 身份守卫（F3）：同一连接内换 actor = 错投 ⇒ 拒绝 + 计数 +1 + 坐标/actor 不变。
+            // ④ 身份守卫（F3）：同一连接内换 actor ⇒ 拒绝 + 计数 +1 + 坐标/actor 不变。
+            // 注意（F12②）：本用例钉的是「actor 冲突被拒」；logon_misdelivered 不等于错投帧数，
+            // 错投先到时会拒正确帧（计数 +1），只有错投帧时反而不计数——不要把它读成错投计数。
             var mis = new RobotPlayer();
             long misBefore = LoadMetrics.LogonMisdeliveredCount;
             bool bind = mis.MarkInWorldOnConnectionForTest(4001, 10, 20, 11);
