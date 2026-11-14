@@ -35,7 +35,7 @@
 | --- | --- | --- | --- | --- |
 | 200 | 198（0.5s 内到齐） | ~49s | 543 → 1880 MB | **27.1 MB/s** |
 | 500 | 404（45s 到齐） | ~31s | 2322 → 3332 MB | **32.6 MB/s** |
-| 1000（supp-hold360） | 425（90s 到齐） | ~207s | 3309 → 4410 MB（触及 4GiB 上限后震荡） | 受硬上限钳制，~14 MB/s |
+| 1000（supp-hold360） | 425（90s 到齐） | ~207s | 3309 → 4410 MB | 受 4GiB 硬上限钳制（触顶后震荡，全程 4.5 MB/s），**不能当未钳制斜率用** |
 
 所以内存不是「每 bot 一个常数 × bot 数」，而是 **每 bot 常数 × bot 数 + 时间项**。只按 bot 数外推会低估需要的堆。
 
@@ -117,7 +117,7 @@ Model B:  WS(MB) = -423.9 + 6.767 × N + 0.0942 × N×T  R² = 0.9738
 - 500 档同样在 **404/500** 处平台化（45s 后 30s 内一个都没进）；200 档只丢 2 个（198/200）。
 - 即：**本栈的 in-world 容量墙在 ~400–430，与目标档位无关**。今晚不是「1000 档慢」，是「超过 ~425 就再也进不去」。
 - 同时段 game-svr 的 `HostTickTotal` 工作段均值从 3.7ms/tick 升到 ~140ms/tick（p99 出现 22.2s 的单次 tick），服务端也在饱和。
-- 候选原因（未证）：`ClientManager` 的收包队列是 `Channel.CreateUnbounded`（`src/BotSrv/ClientManager.cs`），由 socket 回调逐 chunk 入队，消费端单协程串行 `ProcessPacket`。1000 档实测 recv 速率 30–48k chunk/s（200 档 22.8k/s、500 档 47.8k/s），消费端一旦追不上，新 bot 的握手包排在队尾 → 进世界超时。**这与内存增长也可能是同一个根因的两个表现**，但需要一次带 `dotnet-counters`/GC 统计的诊断窗口才能定案。
+- 候选原因（未证）：`ClientManager` 的收包队列是 `Channel.CreateUnbounded`（`src/BotSrv/ClientManager.cs`），由 socket 回调逐 chunk 入队，消费端单协程串行 `ProcessPacket`。实测 recv 速率：200 档 22.8k chunk/s、500 档 47.8k chunk/s、1000 档 ~30k chunk/s（297s 均值）。消费端一旦追不上，新 bot 的握手包排在队尾 → 进世界超时。**这与内存增长也可能是同一个根因的两个表现**，但需要一次带 `dotnet-counters`/GC 统计的诊断窗口才能定案。
 
 结论：在做到 1000 档「全员进世界」之前，A2 无法验证；建议单开一张卡查 in-world 平台（BotSrv 收包并发/服务端 tick 饱和二选一或都有）。
 
