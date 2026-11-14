@@ -335,6 +335,11 @@ DB 轮询/节拍 sleep）。生产 `HostTickTotal` 工作段（A6 窗口均值 1
 所以优化必须落在 B/C；A 只对"有死亡怪"的窗口有效，但一旦有死亡怪，它是**超线性**的，优先级
 取决于真栈 `dead` 计数（下一次真栈窗口可直接读到）。
 
+**2026-11-14 更新**：A 已由卡 `openmir2-monai-deathbranch-count`（tier R）落地——按上表 A 的
+第二方案「把 `play_object_count` 每 tick 算一次传给死亡支」，**不维护增量计数**（避开增量在
+出生/死亡/复活/换图/下线/变身/跨服七条路径上的漏更新风险）。结构性判据、红→绿与修复后
+读数见 §11。
+
 ## 9. 边界（本报告**没有**证明什么）
 
 1. **没有真栈窗口**：`SimMonsterAi` 的份额/计数结论来自合成 harness；A6 的 5.73 ms 折算只是把
@@ -373,3 +378,66 @@ MIR2_SIMMON_BENCH=1 MIR2_SIMMON_TICKS=200 CARGO_BUILD_JOBS=4 \
   - `world::tests::sim_monster_ai_profile_records_per_tick_samples`（每 tick 一条样本 + 资源插入/取回）；
   - `tick_profile::tests::end_tick_records_work_segment_per_tick`（工作段 = total − sleep）；
   - `tick_profile::tests::percentile_ns_uses_nearest_rank` / `world_delta_carries_per_tick_samples_without_repeating`。
+
+## 11. 交付后更新（2026-11-14）：死亡支 O(dead×N) 已消除
+
+卡 `openmir2-monai-deathbranch-count`（tier R）落地了 §5.2 / §8 表 A 的优化项：
+
+- **改法（卡面首选方案，不做增量计数）**：`race == Play` 计数从「每只死亡怪各做一次
+  `order_ids()` 全扫」提升为**段级一次算**。`monster_ai_tick_impl_probed` 的逐怪循环持有
+  `Option<i32>` 缓存，本段第一次到达死亡支时算一次、其后所有死亡支复用；本段没有死亡支
+  （`dead=0`）时**一次都不算**。`base_object_run_monster_impl` / `run_class_base_impl`
+  保留单点调用形态（自带空缓存），`npc`/`merchant` 段与其它 facade 调用者行为不变。
+- **正确性前置（同一 pass 内计数不变）**：段循环体内所有 `_impl` 只拿
+  `crate::entity::EntityAccess`，该 trait 的 11 个方法里**没有新增/移除实体**的入口；
+  实体增删发生在别的段（登录/离场、`World::release_entity` 的 5min Ghost 清理、
+  召唤/复制在 `World::flush_sculture_spawns` 于 `world.tick()` **之后**排水）。
+  循环体内唯一改 `race` 的路径（`elf_warrior_appear_now`，怪物 → 怪物）只在
+  `flush_sculture_spawns` 的 `MakeClone` 支被调用，不在本段循环里；`death`/`ghost`
+  可在本段写，但只涉及非 `Play` 实体，且 `race == Play` 口径不看 `ghost`/`death`。
+
+### 11.1 结构性判据（与机器负载无关）
+
+用**仅测试可见**的 `EntityAccess` 包装统计 `order_ids()` 调用次数（其余方法逐项转发），
+直接驱动生产的 `monster_ai_tick_impl_probed`。场景：8 玩家 + 64 死怪 / 无死怪，
+`process_monster_interval = 0`（本 pass 全部真跑）。
+
+| 场景 | 实现 | `order_ids()` 调用次数 |
+| --- | --- | --- |
+| dead=64 | 旧（死亡支各自全扫） | **65** = collect 1 + 64 |
+| dead=64 | 新（段级一次算） | **2** = collect 1 + 1 |
+| dead=0 | 新 | **1** = 只有 collect（dead=0 不变慢） |
+
+红→绿证据：把实现改回旧形态后同一断言 `65 != 2` 红；dead=0 断言在「段入口无条件算」的
+变异下 `2 != 1` 红。两种变异重放后均已还原（文件 sha256 与变异前相同、无残留标记）。
+
+### 11.2 观测（非判据）：harness 死亡臂
+
+`simmonsterai_bench` 死亡臂（N=11000、bots=0、100 tick、`interval=2`，与 §5.2 同口径）。
+**口径**：卡面 A2 的「<1ms」按**死亡支增量**（`dead=64` 与 `dead=0` 的差）判读——整段
+`SimMonsterAi` 的基数是 O(N) 主循环（§3.1：11k 档 AI 体 ≈5.96 ms + 遍历/门 ≈1.19 ms），
+任何只改死亡支的改动都到不了「整段 <1ms」。该解读已写进交付报告，未调门槛。
+
+| 死亡怪数 | 每 tick 执行数 | 修复前 ms/tick（§5.2） | 修复后 ms/tick |
+| --- | --- | --- | --- |
+| 0 | 0 | 7.762 | **7.627** |
+| 8 | 3 | 9.307 | **8.349** |
+| 32 | 11 | 14.126 | **8.208** |
+| 64 | 21 | 20.649 | **8.225** |
+
+结论：`dead=64` 与 `dead=0` 的差从 ≈12.9 ms 收敛到 **≈0.60 ms**（噪声带内：dead=8 档 8.349 反而略高于 dead=64 档，说明档间排序是噪声，不存在随 dead 单调增长的分量）；斜率项（≈0.60 ms/执行中的
+死亡怪 @11k）消失，`dead×N` 项不再存在。修复后四档同一噪声带内（本机与其它车道共享，
+见 §2.3 口径说明）。
+
+复现：release、独立 target `E:/UserTemp/w83-rel`、`MIR2_SIMMON_BENCH=1 MIR2_SIMMON_TICKS=100`、
+同一条 `simmonsterai_bench`；原始输出 `E:/UserTemp/w83-measure/simmon-ai-postfix.txt`
+（sha256 `05b867a4d717900d9029704260aacbbfe1853c50571b8d2ce2fca592cf03535e`，mtime 2026-11-14 19:55）。
+该文件里死亡臂的打印文案「（含 dead 的 O(dead×N) 项）」是**修复前**的 harness 措辞（harness 文件不在
+本卡写集内，未改）。
+
+### 11.3 语义不变（牙）
+
+同一提交的 `monai::death_branch_count_tests` 覆盖：RNG 流位置（死怪 pass 零抽取）、
+帧面（`pending_monster_ref_msgs` 为空）、存档面（`snapshot_sorted` 逐项不变）、
+`ProcessRunCount` 节流轨迹（1→2→0）、以及「缓存值真的进 `MakeGhost` 门判定」
+（8 玩家 gate 10s ⇒ 20.001s 到点；0 玩家 gate 40s ⇒ 不到点）。
