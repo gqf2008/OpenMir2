@@ -94,6 +94,7 @@ namespace BotSrv
         private static long _goodTickFrames;     // 其中前缀为 "+GD/" 的次数（ack 已到达 BotSrv，先于解析）
         private static string _actFirstPayload = "";
         private static long _probePosFollowed;   // 探针坐标跟随服务端位移的次数（推挤/空间移动）
+        private static long _logonMisdelivered;  // 同一会话收到**别的 actor** 的 SM_LOGON 并拒绝的次数（错投观测）
 
         // ==== 登录连接级观测（C6 第 5 轮，T-11）：把「残余丢包」的方向证出来 ====
         // T-8 的 ident 直方图只能证明「服务端回的总数 < 假人数」，分不出这两种：
@@ -243,6 +244,23 @@ namespace BotSrv
             {
                 _probePosFollowed++;
             }
+        }
+
+        /// <summary>同一会话已绑定 actor 之后，又收到**别的 actor** 的 `SM_LOGON` 并被身份守卫拒绝。
+        /// 只作观测：跨连接错投的根因定位在卡 `openmir2-sm-logon-cross-session-delivery`（D-*），
+        /// 本计数让夹具侧不再静默接受，但不在夹具侧重试/掩盖。</summary>
+        public static void LogonMisdelivered()
+        {
+            lock (Sync)
+            {
+                _logonMisdelivered++;
+            }
+        }
+
+        /// <summary>自检/诊断读取用：被身份守卫拒绝的错投 `SM_LOGON` 累计次数。</summary>
+        public static long LogonMisdeliveredCount
+        {
+            get { lock (Sync) { return _logonMisdelivered; } }
         }
 
         /// <summary>记下进程内第一条动作短包的原文（诊断 rtime 时钟口径用）。</summary>
@@ -816,6 +834,7 @@ namespace BotSrv
               .Append(",\"register_send_closed\":").Append(_registerSendClosed)
               .Append(",\"probe_sent\":").Append(_probeSent)
               .Append(",\"probe_pos_updates\":").Append(_probePosFollowed)
+              .Append(",\"logon_misdelivered\":").Append(_logonMisdelivered)
               .Append(",\"login_begin\":").Append(_loginBegin)
               .Append(",\"login_sent\":").Append(_loginSent)
               .Append(",\"login_send_closed\":").Append(_loginSendClosed)
