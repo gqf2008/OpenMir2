@@ -53,6 +53,8 @@ mod mapwire;
 mod notice;
 mod record;
 mod seed;
+#[cfg(test)]
+mod simmonsterai_bench;
 mod state_log;
 mod storage;
 mod strings;

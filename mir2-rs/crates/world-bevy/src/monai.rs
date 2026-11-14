@@ -6258,16 +6258,207 @@ fn has_castle_binding(world: &World, actor_id: i32) -> bool {
     has_castle_binding_impl(&world.entities, &world.sim, actor_id)
 }
 
+/// **SimMonsterAi 内部热点探针**（卡 `openmir2-simmonsterai-profile`；**默认关闭**）。
+///
+/// 只读观测：**不写实体、不抽 RNG、不改 AI 逻辑**。关闭态（`enabled == false`，即生产缺省）
+/// 下每个探针点只做一次 `bool` 判别即返回（**不取 `Instant`、不分配**）；逐怪的 AI 循环
+/// 与无探针时逐字节相同（见 [`monster_ai_tick_impl_probed`] 的注释）。
+///
+/// ## 切分口径（A1：见 `docs/simmonsterai-profile-20261114.md` §1）
+///
+/// - `collect_ns`：`order_ids()` + 身份门 `retain`（= 实体遍历）。
+/// - `gate_ns`：一次**只读预扫描**，逐 id 复刻门判定的读取
+///   （`access.get` + `ProcessRunCount` + `is_visible_active` 分支），并顺带分类计数。
+///   它**不含**真实循环里的 `set_process_run_count` 写回（那笔归入 `loop_ns`）。
+/// - `loop_ns`：真实逐怪循环的整墙钟（门判定写回 + 全部 AI 体）。
+/// - 因此 `AI 体 ≈ loop_ns − gate_ns`；`遍历 + 门判定 = collect_ns + gate_ns`。
+///
+/// 这些字段是**本 tick** 的值（每次 [`monster_ai_tick_impl_probed`] 覆盖）；窗口累计由
+/// `world::TickProfile::merge_monai` 完成。
+#[derive(Debug, Default, Clone, bevy_ecs::prelude::Resource)]
+pub struct MonaiProbe {
+    /// 门控（**只有显式构造为 `true` 时才计时/计数**）。
+    pub enabled: bool,
+    /// 实体遍历（`order_ids` + 身份门 `retain`）ns。
+    pub collect_ns: u64,
+    /// 只读门判定预扫描 ns（口径见类型文档）。
+    pub gate_ns: u64,
+    /// 真实逐怪循环整墙钟 ns（含门判定写回 + AI 体）。
+    pub loop_ns: u64,
+    /// 槽位实体总数（身份门**之前**）。
+    pub slot_total: u64,
+    /// 身份门后进入怪物门的实体数（= 本 tick 被扫的怪）。
+    pub scanned: u64,
+    /// 节流跳过（`!visible_active && ProcessRunCount < ProcessMonsterInterval`）。
+    pub skipped_throttle: u64,
+    /// 过了节流门、本 tick 真正进入 `Run` 链的实体数。
+    pub ran: u64,
+    /// 其中 `Death`（只剩 `base.Run` 的死亡支 / 类覆写）。
+    pub ran_dead: u64,
+    /// 其中"无法行动"（`holy_seize` / `stone_mode` / `fixed_hide_mode`）——最接近"睡眠"的等价物。
+    pub ran_frozen: u64,
+    /// 其中 `TargetCret == null`（无目标；oracle/本仓**无仇恨表**，仇恨等价于目标）。
+    pub ran_no_target: u64,
+    /// 其中 `TargetCret == null` 且 `TargetX == -1`（无目标、只会走 `Wondering`）。
+    pub ran_idle_wander: u64,
+    /// 其中 `WalkTick` 到点（`!WalkWaitLocked && now − WalkTick > WalkSpeed`）——真正会进
+    /// 走动/攻击段的子集（未到点的怪在 `monster_run` 里早退到 `CheckRoyalty`）。
+    pub ran_walk_due: u64,
+    /// 其中 `TargetCret != null`（有目标）。
+    pub ran_target: u64,
+    /// 被扫的怪里 `IsVisibleActive == false` 的数量。
+    pub scanned_inactive: u64,
+}
+
+impl MonaiProbe {
+    /// 探针开启态（只由测量路径构造；生产缺省恒 `default()` = 关闭）。
+    #[must_use]
+    pub fn enabled_probe() -> Self {
+        Self {
+            enabled: true,
+            ..Self::default()
+        }
+    }
+
+    /// 累计差值（窗口增量用）：`self − prev`（饱和到 0）。
+    #[must_use]
+    pub fn delta_since(&self, prev: &Self) -> Self {
+        let sub = |a: u64, b: u64| a.saturating_sub(b);
+        Self {
+            enabled: self.enabled,
+            collect_ns: sub(self.collect_ns, prev.collect_ns),
+            gate_ns: sub(self.gate_ns, prev.gate_ns),
+            loop_ns: sub(self.loop_ns, prev.loop_ns),
+            slot_total: sub(self.slot_total, prev.slot_total),
+            scanned: sub(self.scanned, prev.scanned),
+            skipped_throttle: sub(self.skipped_throttle, prev.skipped_throttle),
+            ran: sub(self.ran, prev.ran),
+            ran_dead: sub(self.ran_dead, prev.ran_dead),
+            ran_frozen: sub(self.ran_frozen, prev.ran_frozen),
+            ran_no_target: sub(self.ran_no_target, prev.ran_no_target),
+            ran_idle_wander: sub(self.ran_idle_wander, prev.ran_idle_wander),
+            ran_walk_due: sub(self.ran_walk_due, prev.ran_walk_due),
+            ran_target: sub(self.ran_target, prev.ran_target),
+            scanned_inactive: sub(self.scanned_inactive, prev.scanned_inactive),
+        }
+    }
+
+    /// 计时起点：关闭态返回 `None`（**不取 `Instant`**）。
+    #[inline]
+    fn timer_begin(&self) -> Option<std::time::Instant> {
+        if self.enabled {
+            Some(std::time::Instant::now())
+        } else {
+            None
+        }
+    }
+
+    #[inline]
+    fn record_collect(&mut self, t: Option<std::time::Instant>, slot_total: usize, scanned: usize) {
+        let Some(t) = t else { return };
+        self.collect_ns = u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.slot_total = slot_total as u64;
+        self.scanned = scanned as u64;
+    }
+
+    #[inline]
+    fn record_loop(&mut self, t: Option<std::time::Instant>) {
+        let Some(t) = t else { return };
+        self.loop_ns = u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX);
+    }
+
+    /// 门判定模型的**只读预扫描**：复刻门判定的读取（`access.get` + `ProcessRunCount` +
+    /// `IsVisibleActive` 分支），并顺带做分类计数。**不写任何状态**。
+    fn scan_gate<A: crate::entity::EntityAccess>(
+        &mut self,
+        access: &A,
+        sim: &crate::world::SimState,
+        ids: &[i32],
+    ) {
+        let t = std::time::Instant::now();
+        let interval = sim.process_monster_interval;
+        let now = sim.clock_ms;
+        let mut skipped = 0u64;
+        let mut ran = 0u64;
+        let mut dead = 0u64;
+        let mut frozen = 0u64;
+        let mut no_target = 0u64;
+        let mut idle_wander = 0u64;
+        let mut walk_due = 0u64;
+        let mut target = 0u64;
+        let mut inactive = 0u64;
+        for &id in ids {
+            let Some(e) = access.get(id) else { continue };
+            if !e.is_visible_active {
+                inactive += 1;
+            }
+            let run_count = crate::world::World::process_run_count_impl(sim, id);
+            if !e.is_visible_active && run_count < interval {
+                skipped += 1;
+                continue;
+            }
+            ran += 1;
+            if e.death {
+                dead += 1;
+                continue;
+            }
+            if e.ai.holy_seize || e.stone_mode || e.fixed_hide_mode {
+                frozen += 1;
+            }
+            if e.ai.target_creature.is_some() {
+                target += 1;
+            } else {
+                no_target += 1;
+                if e.ai.target_x == -1 {
+                    idle_wander += 1;
+                }
+            }
+            if !e.ai.walk_wait_locked && (now - e.ai.walk_tick) > e.ai.walk_speed {
+                walk_due += 1;
+            }
+        }
+        self.gate_ns = u64::try_from(t.elapsed().as_nanos()).unwrap_or(u64::MAX);
+        self.skipped_throttle = skipped;
+        self.ran = ran;
+        self.ran_dead = dead;
+        self.ran_frozen = frozen;
+        self.ran_no_target = no_target;
+        self.ran_idle_wander = idle_wander;
+        self.ran_walk_due = walk_due;
+        self.ran_target = target;
+        self.scanned_inactive = inactive;
+    }
+}
+
 pub fn monster_ai_tick_impl<A: crate::entity::EntityAccess>(
     access: &mut A,
     sim: &mut crate::world::SimState,
+) {
+    // 无探针路径：传关闭态探针（每个探针点一次 `bool` 判别后返回，不取 `Instant`）。
+    let mut off = MonaiProbe::default();
+    monster_ai_tick_impl_probed(access, sim, &mut off);
+}
+
+/// [`monster_ai_tick_impl`] 的**可选探针**版本（探针开启时由 `SimMonsterAi` 段传入）。
+///
+/// **关闭态（`probe.enabled == false`）**：本函数只多两次 `Option` 判别（`timer_begin` /
+/// `record_*`）——逐怪循环体与无探针版本**逐字节相同**；不写 `MonaiProbe` 任何字段。
+///
+/// **开启态**：在 `retain` 之后、真实循环之前插一次**只读**预扫描（`scan_gate`）；真实循环
+/// 仍逐字节不变，只被一次 `Instant` 对包围。因此探针不会改变门判定、RNG 次序或帧面。
+pub fn monster_ai_tick_impl_probed<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    probe: &mut MonaiProbe,
 ) {
     // 全量收集阶段：槽位顺序（`EntityAccess::order_ids` = `iter_ref` 同序）。
     // **P6b2**：按 pass 的 T10 命名探针 `monai.collect` 取消（段级聚合耗时仍由
     // `TickProfile` 的 `SimMonsterAi` 段给出），收集逻辑不变。
     // **T10 Top2**：`order_ids()` 的结果**原地**过滤（旧实现 `filter().collect()` 再分配
     // 一个等长 `Vec`）。过滤判据与顺序逐条不变。
+    let t_collect = probe.timer_begin();
     let mut ids = access.order_ids();
+    let slot_total = ids.len();
     ids.retain(|id| {
         // `race > Play` 会把交易商人也命中（商人 race = `ActorRace.NPC(10)`）⇒
         // 身份门显式排除 `merchant.is_some()` 的实体（M3⑤-实现 2：商人由自己的 tick 驱动；
@@ -6286,6 +6477,12 @@ pub fn monster_ai_tick_impl<A: crate::entity::EntityAccess>(
                 && !e.ghost
         })
     });
+    probe.record_collect(t_collect, slot_total, ids.len());
+    if probe.enabled {
+        // 只读门判定预扫描（A1 口径；不写实体、不抽 RNG）——关闭态完全不走。
+        probe.scan_gate(access, sim, &ids);
+    }
+    let t_loop = probe.timer_begin();
     for id in ids {
         // **不可见怪跳步门**（`WorldServer.MonGen.cs:294-296/314`）：
         //
@@ -6403,6 +6600,7 @@ pub fn monster_ai_tick_impl<A: crate::entity::EntityAccess>(
         animal_run_impl(access, sim, id);
         base_object_run_monster_impl(access, sim, id);
     }
+    probe.record_loop(t_loop);
 }
 
 pub fn monster_ai_tick(world: &mut World) {
@@ -17056,5 +17254,144 @@ mod mb89_tests {
                 "race {race} 的 base.Run 链"
             );
         }
+    }
+
+    // ==================================================================
+    // 卡 `openmir2-simmonsterai-profile`：探针的行为中性 + 计数牙
+    // ==================================================================
+
+    /// **探针开启态与关闭态行为等价**：两个同构世界跑同样 8 个 pass，A 走无探针
+    /// `monster_ai_tick`，B 走 `_probed` 且探针开启（每 pass 都跑只读预扫描）。断言 RNG 流
+    /// 位置、实体状态、`ProcessRunCount` 全部一致 ⇒ 探针不改变门判定/AI 体/抽数次序。
+    ///
+    /// 变异：把 `scan_gate` 里的读改成写（例如顺带 `set_process_run_count`）⇒ 计数或状态红；
+    /// 在 `scan_gate` 里抽随机数 ⇒ RNG 流位置红。
+    #[test]
+    fn monai_probe_is_behavior_neutral() {
+        fn build() -> (World, Vec<i32>) {
+            let mut world = World::new(60, 60);
+            world.clock_ms = 1000;
+            let mut ids = Vec::new();
+            for i in 0..6 {
+                let mut e = crate::EntitySpawn::new(0, "m".to_string(), 5 + i * 2, 5 + (i % 2) * 2);
+                e.race = 81;
+                e.hp = 60;
+                e.max_hp = 60;
+                e.ai.walk_speed = 1_000_000;
+                ids.push(world.add_entity(e));
+            }
+            let mut p = crate::EntitySpawn::new(0, "p".to_string(), 12, 10);
+            p.race = 0;
+            let pid = world.add_entity(p);
+            ids.push(pid);
+            world
+                .entities
+                .map_binding_mut(ids[0])
+                .unwrap()
+                .visible_actors = vec![VisibleBaseObject {
+                target: pid,
+                flag: VisibleFlag::Show,
+            }];
+            world
+                .entities
+                .map_binding_mut(ids[0])
+                .unwrap()
+                .is_visible_active = true;
+            world.rng = RandomNumber::with_seed(4242);
+            world.enable_monster_ai();
+            world.set_process_monster_interval(2);
+            (world, ids)
+        }
+        let (mut a, ids_a) = build();
+        let (mut b, ids_b) = build();
+        let mut probe = MonaiProbe::enabled_probe();
+        for _ in 0..8 {
+            a.clock_ms += 200;
+            b.clock_ms += 200;
+            monster_ai_tick(&mut a);
+            monster_ai_tick_impl_probed(&mut b.entities, &mut b.sim, &mut probe);
+        }
+        for k in 0..8 {
+            assert_eq!(
+                a.rng.random_below(1_000_000),
+                b.rng.random_below(1_000_000),
+                "第 {k} 次探针后的 RNG 抽取必须相同（流位置一致）"
+            );
+        }
+        for (ia, ib) in ids_a.iter().zip(ids_b.iter()) {
+            let ea = a.entities.get(*ia).unwrap();
+            let eb = b.entities.get(*ib).unwrap();
+            assert_eq!(
+                (
+                    ea.x,
+                    ea.y,
+                    ea.ai.dir,
+                    ea.ai.target_creature,
+                    ea.ai.walk_tick,
+                    ea.ai.attack_tick,
+                    ea.hp,
+                ),
+                (
+                    eb.x,
+                    eb.y,
+                    eb.ai.dir,
+                    eb.ai.target_creature,
+                    eb.ai.walk_tick,
+                    eb.ai.attack_tick,
+                    eb.hp,
+                ),
+                "实体 {ia} 的状态必须逐项相同"
+            );
+            assert_eq!(
+                a.process_run_count(*ia),
+                b.process_run_count(*ib),
+                "ProcessRunCount 必须相同（跳步门写回未被探针改变）"
+            );
+        }
+        assert!(probe.scanned > 0, "开启态探针必须真的扫到怪");
+    }
+
+    /// **探针计数牙**：`interval=2` 的不可见怪三个 pass 的轨迹 = skip/skip/ran。
+    /// 同时钉住 `slot_total`（身份门之前）与 `scanned`（身份门之后）。
+    ///
+    /// 变异：把 `scan_gate` 的 `!visible_active &&` 漏掉（只按计数节流）⇒ pass1 记成 ran ⇒ 红；
+    /// 把 `slot_total` 记成 `ids.len()`（身份门之后）⇒ 首条断言红。
+    #[test]
+    fn monai_probe_counts_throttle_gate() {
+        let mut world = World::new(60, 60);
+        let mid = {
+            let mut e = crate::EntitySpawn::new(0, "m".to_string(), 10, 10);
+            e.race = 81;
+            e.hp = 60;
+            e.max_hp = 60;
+            e.ai.walk_speed = 1_000_000;
+            world.add_entity(e)
+        };
+        let mut p = crate::EntitySpawn::new(0, "p".to_string(), 12, 10);
+        p.race = 0;
+        let _pid = world.add_entity(p);
+        world
+            .entities
+            .map_binding_mut(mid)
+            .unwrap()
+            .is_visible_active = false;
+        world.set_process_monster_interval(2);
+        world.enable_monster_ai();
+        let mut probe = MonaiProbe::enabled_probe();
+        let pass = |world: &mut World, probe: &mut MonaiProbe, now: i64| {
+            world.clock_ms = now;
+            monster_ai_tick_impl_probed(&mut world.entities, &mut world.sim, probe);
+        };
+        pass(&mut world, &mut probe, 1000);
+        assert_eq!(probe.slot_total, 2, "槽位总数 = 怪 + 玩家（身份门之前）");
+        assert_eq!(probe.scanned, 1, "身份门后只剩怪");
+        assert_eq!(probe.skipped_throttle, 1, "pass1：0 < 2 ⇒ 只计数");
+        assert_eq!(probe.ran, 0);
+        pass(&mut world, &mut probe, 1200);
+        assert_eq!(probe.skipped_throttle, 1, "pass2：1 < 2 ⇒ 只计数");
+        assert_eq!(probe.ran, 0);
+        pass(&mut world, &mut probe, 1400);
+        assert_eq!(probe.skipped_throttle, 0, "pass3：2 < 2 假 ⇒ 真跑");
+        assert_eq!(probe.ran, 1);
     }
 }

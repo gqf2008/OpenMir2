@@ -66,9 +66,18 @@ pub struct HostTickProfile {
     window_ns: u64,
     /// 本 tick 已计入各段的 ns 之和（算 `HostUnaccounted` 用；`end_tick` 末尾清零）。
     tick_sum_ns: u64,
+    /// **卡 `openmir2-simmonsterai-profile`**：本 tick 的 `HostSleep` ns（`end_tick` 用它算工作段）。
+    tick_sleep_ns: u64,
+    /// 逐 tick 的**工作段** ns 样本（`HostTickTotal − HostSleep`）。tick 级分位数用；
+    /// 每窗口保留最近 [`SAMPLE_CAP`] 个（防止长跑无界增长）。
+    work_samples: Vec<u64>,
     /// 自开启起累计完成的 tick 数（诊断用）。
     total_ticks: u64,
 }
+
+/// 逐 tick 样本上限（每窗口最多保留这么多，丢最旧）。生产窗口是 50 tick；取 256 让
+/// 测量 harness 跑 100+ tick 时仍装得下。
+pub const SAMPLE_CAP: usize = 256;
 
 /// 一个窗口的宿主汇总（由 [`HostTickProfile::take_window`] 产出）。
 #[derive(Debug, Clone, Default)]
@@ -78,6 +87,8 @@ pub struct HostWindow {
     pub rows: Vec<(&'static str, u64, u64)>,
     /// 命名子探针（与 `rows` 同形；同窗口取走）。
     pub probes: Vec<(&'static str, u64, u64)>,
+    /// **卡 `openmir2-simmonsterai-profile`**：本窗口的逐 tick 工作段 ns 样本（tick 级分位数用）。
+    pub work_samples: Vec<u64>,
 }
 
 /// World 探针的**增量**快照（累计值之差）。字段与 `TickProfile` 同序同名。
@@ -89,6 +100,13 @@ pub struct WorldDelta {
     pub stages: Vec<(String, u64, u64)>,
     /// `(探针名, 增量 ns, 增量调用次数)`
     pub probes: Vec<(String, u64, u64)>,
+    /// **卡 `openmir2-simmonsterai-profile`**：本窗口的逐 tick `SimMonsterAi` ns 样本
+    /// （tick 级分位数；不是 50-tick 桶）。
+    pub sim_ai_tick_ns: Vec<u64>,
+    /// `SimMonsterAi` 内部探针的**本窗口累计**（`crate::monai` 子探针）。
+    pub monai: mir2_world_bevy::monai::MonaiProbe,
+    /// 本窗口内 `monai` 覆盖的 tick 数。
+    pub monai_ticks: u64,
 }
 
 /// 跨窗口保存的 World 累计快照（用于算增量；World 探针本身不 reset）。
@@ -97,6 +115,11 @@ pub struct WorldSnapshot {
     ticks: u64,
     stages: Vec<(String, u64, u64)>,
     probes: Vec<(String, u64, u64)>,
+    /// 已消费到的 `TickProfile::sim_ai_tick_ns` 下标。
+    sim_ai_cursor: usize,
+    /// 已消费的 `monai` 累计（用于算窗口增量）。
+    monai: mir2_world_bevy::monai::MonaiProbe,
+    monai_ticks: u64,
 }
 
 /// 环境变量取值 → 门控：只有 `"1"` 为真（其余一律关，含 `"true"`/`"0"`/空）。
@@ -157,6 +180,9 @@ impl HostTickProfile {
     pub fn end(&mut self, name: &'static str, at: Option<Instant>) {
         let Some(at) = at else { return };
         let ns = nanos_since(at);
+        if name == "HostSleep" {
+            self.tick_sleep_ns = ns;
+        }
         self.add(name, ns);
         self.tick_sum_ns = self.tick_sum_ns.saturating_add(ns);
     }
@@ -179,6 +205,9 @@ impl HostTickProfile {
 
     /// 整 tick 终点：记 `HostTickTotal` + 残差 `HostUnaccounted`，并推进窗口计数。
     ///
+    /// **卡 `openmir2-simmonsterai-profile`**：同时把**本 tick 工作段**（`total − HostSleep`）
+    /// 追加到 `work_samples`（tick 级分位数；不是 50-tick 桶近似）。超过 [`SAMPLE_CAP`] 丢最旧。
+    ///
     /// 关闭时：一次 `Option` 判别 ⇒ 直接返回。
     #[inline]
     pub fn end_tick(&mut self, at: Option<Instant>) {
@@ -189,10 +218,23 @@ impl HostTickProfile {
         if total > sum {
             self.add("HostUnaccounted", total - sum);
         }
+        let work = total.saturating_sub(self.tick_sleep_ns);
+        if self.work_samples.len() >= SAMPLE_CAP {
+            self.work_samples.remove(0);
+        }
+        self.work_samples.push(work);
+        self.tick_sleep_ns = 0;
         self.tick_sum_ns = 0;
         self.window_ticks += 1;
         self.window_ns = self.window_ns.saturating_add(total);
         self.total_ticks += 1;
+    }
+
+    /// **卡 `openmir2-simmonsterai-profile`**：逐 tick 工作段样本（ns，旧→新）。测量 harness 用。
+    #[cfg(test)]
+    #[must_use]
+    pub fn work_samples(&self) -> &[u64] {
+        &self.work_samples
     }
 
     /// 窗口是否满（`REPORT_TICKS` tick 或 `REPORT_WINDOW_NS` 墙钟，先到者）。
@@ -214,6 +256,7 @@ impl HostTickProfile {
             total_ns: self.window_ns,
             rows: std::mem::take(&mut self.rows),
             probes: std::mem::take(&mut self.probes),
+            work_samples: std::mem::take(&mut self.work_samples),
         };
         self.window_ticks = 0;
         self.window_ns = 0;
@@ -233,6 +276,41 @@ impl HostTickProfile {
 
 fn nanos_since(at: Instant) -> u64 {
     u64::try_from(at.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// **最近秩分位数**（ns）：与 `tick_bench` 同口径 `s[ceil(p/100·len) − 1]`。
+///
+/// **逐 tick 样本**，不是 50-tick 桶近似（卡 `openmir2-simmonsterai-profile` 的 opc 要求）。
+#[must_use]
+pub fn percentile_ns(samples: &[u64], p: f64) -> u64 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let mut s = samples.to_vec();
+    s.sort_unstable();
+    let idx = ((p / 100.0) * s.len() as f64).ceil() as usize;
+    s[idx.clamp(1, s.len()) - 1]
+}
+
+/// 一行分位数摘要：`n/p50/p95/p99/max/mean`（ns → ms）。
+fn log_quantiles(label: &str, samples: &[u64]) {
+    if samples.is_empty() {
+        return;
+    }
+    let n = samples.len() as f64;
+    let mean_ns = samples.iter().map(|v| *v as f64).sum::<f64>() / n;
+    let max = *samples.iter().max().unwrap_or(&0);
+    let ms = |v: u64| v as f64 / 1e6;
+    crate::glog!(
+        "DBG",
+        "[TICKPROF]   {label} 逐 tick 分位数（n={:.0}）：p50 {:.3} / p95 {:.3} / p99 {:.3} / max {:.3} / mean {:.3} ms",
+        n,
+        ms(percentile_ns(samples, 50.0)),
+        ms(percentile_ns(samples, 95.0)),
+        ms(percentile_ns(samples, 99.0)),
+        ms(max),
+        mean_ns / 1e6
+    );
 }
 
 /// 子探针起点（`Option<&mut HostTickProfile>` 版）：`None` 或无门控 ⇒ `None`（**不取时钟**）。
@@ -277,10 +355,21 @@ pub fn world_delta(
     );
     let ticks = p.ticks.saturating_sub(last.ticks);
     last.ticks = p.ticks;
+    // **卡 `openmir2-simmonsterai-profile`**：逐 tick `SimMonsterAi` 样本增量 + 子探针累计增量。
+    let cursor = last.sim_ai_cursor.min(p.sim_ai_tick_ns.len());
+    let sim_ai_tick_ns = p.sim_ai_tick_ns[cursor..].to_vec();
+    last.sim_ai_cursor = p.sim_ai_tick_ns.len();
+    let monai = p.monai.delta_since(&last.monai);
+    last.monai = p.monai.clone();
+    let monai_ticks = p.monai_ticks.saturating_sub(last.monai_ticks);
+    last.monai_ticks = p.monai_ticks;
     Some(WorldDelta {
         ticks,
         stages,
         probes,
+        sim_ai_tick_ns,
+        monai,
+        monai_ticks,
     })
 }
 
@@ -364,6 +453,8 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         work_ns as f64 / 1e6 / ticks,
         work_ns as f64 / total_ns * 100.0
     );
+    // **逐 tick 分位数**（不是 50-tick 桶近似；卡 `openmir2-simmonsterai-profile`）。
+    log_quantiles("HostTickTotal 工作段", &host.work_samples);
     let Some(world) = world else {
         crate::glog!(
             "DBG",
@@ -390,6 +481,43 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
             *ns as f64 / w_sum.max(1) as f64 * 100.0,
             *ns as f64 / total_ns * 100.0,
             calls / world.ticks.max(1)
+        );
+    }
+    // **卡 `openmir2-simmonsterai-profile`**：`SimMonsterAi` 的逐 tick 分位数 + 内部子项。
+    // 逐 tick 样本来自 `TickProfile::sim_ai_tick_ns`（每个 tick 一个值，**不是** 50-tick 桶）。
+    log_quantiles("World.SimMonsterAi", &world.sim_ai_tick_ns);
+    if world.monai_ticks > 0 {
+        let mt = world.monai_ticks as f64;
+        let m = &world.monai;
+        let loop_ns = m.loop_ns as f64;
+        crate::glog!(
+            "DBG",
+            "[TICKPROF]   SimMonsterAi 结构分解（{} tick 累计；collect=遍历, gate=门判定模型, loop=门+AI 体）：",
+            world.monai_ticks
+        );
+        crate::glog!(
+            "DBG",
+            "[TICKPROF]     collect {:.3} ms/tick；gate {:.3} ms/tick；loop {:.3} ms/tick ⇒ AI 体（loop−gate）{:.3} ms/tick",
+            m.collect_ns as f64 / 1e6 / mt,
+            m.gate_ns as f64 / 1e6 / mt,
+            m.loop_ns as f64 / 1e6 / mt,
+            (loop_ns - m.gate_ns as f64).max(0.0) / 1e6 / mt
+        );
+        let per = |v: u64| v as f64 / mt;
+        crate::glog!(
+            "DBG",
+            "[TICKPROF]     counts/tick：slot {:.0}，scanned {:.0}（inactive {:.0}），throttle-skip {:.0}，ran {:.0}（dead {:.0} / frozen {:.0} / no-target {:.0} / idle-wander {:.0} / walk-due {:.0} / target {:.0}）",
+            per(m.slot_total),
+            per(m.scanned),
+            per(m.scanned_inactive),
+            per(m.skipped_throttle),
+            per(m.ran),
+            per(m.ran_dead),
+            per(m.ran_frozen),
+            per(m.ran_no_target),
+            per(m.ran_idle_wander),
+            per(m.ran_walk_due),
+            per(m.ran_target)
         );
     }
     // 对账：宿主量到的 World 两段 vs World 自己量到的段合计（差 = 专用怪产仔/ref 排水等宿主附加）。
@@ -578,5 +706,80 @@ mod tests {
         assert_eq!(rows2[0].2, 30);
         let rows3 = diff_rows([("SimDup".to_string(), 0, 0)].into_iter(), &mut last);
         assert_eq!(rows3[0].1, 0, "计数回退必须饱和为 0（不 panic、不重计）");
+    }
+
+    /// **卡 `openmir2-simmonsterai-profile` 牙**：`end_tick` 把**逐 tick 工作段**
+    /// （`HostTickTotal − HostSleep`）记进 `work_samples`，`take_window` 把它带走。
+    ///
+    /// 变异：删掉 `end` 里 `self.tick_sleep_ns = ns` ⇒ work 恒等于 total（含 sleep）⇒ 红；
+    /// 删掉 `end_tick` 的 push ⇒ 长度 0 ⇒ 红。
+    #[test]
+    fn end_tick_records_work_segment_per_tick() {
+        let mut p = HostTickProfile::with_enabled(true);
+        let slot = p.begin().unwrap();
+        let t = p.begin().unwrap();
+        std::thread::sleep(Duration::from_millis(2));
+        p.end("HostWorldHead", Some(t));
+        let t = p.begin().unwrap();
+        std::thread::sleep(Duration::from_millis(6));
+        p.end("HostSleep", Some(t));
+        p.end_tick(Some(slot));
+        assert_eq!(p.work_samples().len(), 1, "每 tick 一条工作段样本");
+        let total = p
+            .rows
+            .iter()
+            .find(|(n, _, _)| *n == "HostTickTotal")
+            .expect("必须记 HostTickTotal")
+            .1;
+        let sleep = p
+            .rows
+            .iter()
+            .find(|(n, _, _)| *n == "HostSleep")
+            .expect("必须记 HostSleep")
+            .1;
+        assert_eq!(p.work_samples()[0], total - sleep, "工作段 = total − sleep");
+        assert!(
+            p.work_samples()[0] > 0 && p.work_samples()[0] < total,
+            "工作段必须小于整 tick（sleep 被排除）"
+        );
+        let w = p.take_window().expect("窗口非空");
+        assert_eq!(w.work_samples.len(), 1, "take_window 必须带走样本");
+        assert!(p.work_samples().is_empty(), "取走后清零");
+    }
+
+    /// **逐 tick 分位数口径**：最近秩 `s[ceil(p/100·n)−1]`，输入乱序也要先排序；
+    /// 空集返回 0（退化形态不 panic）。
+    #[test]
+    fn percentile_ns_uses_nearest_rank() {
+        let s = [5u64, 1, 3, 2, 4];
+        assert_eq!(percentile_ns(&s, 50.0), 3);
+        assert_eq!(percentile_ns(&s, 95.0), 5);
+        assert_eq!(percentile_ns(&s, 0.0), 1, "p0 = 最小值");
+        assert_eq!(percentile_ns(&[42], 99.0), 42);
+        assert_eq!(percentile_ns(&[], 50.0), 0, "空集退化 ⇒ 0");
+    }
+
+    /// **逐 tick 样本的窗口增量**：第二次 `world_delta` 只取**新增**样本（游标），
+    /// `monai` 累计取差值。变异：把 `last.sim_ai_cursor = p.sim_ai_tick_ns.len()` 删掉
+    /// ⇒ 第二次仍返回全量 ⇒ 红。
+    #[test]
+    fn world_delta_carries_per_tick_samples_without_repeating() {
+        let mut p = mir2_world_bevy::world::TickProfile::default();
+        p.sim_ai_tick_ns = vec![100, 200];
+        p.monai_ticks = 2;
+        p.monai.scanned = 10;
+        let mut last = WorldSnapshot::default();
+        let d1 = world_delta(Some(&p), &mut last).expect("profile 存在");
+        assert_eq!(d1.sim_ai_tick_ns, vec![100, 200], "首窗全量");
+        assert_eq!(d1.monai.scanned, 10, "首窗 monai 全量");
+        assert_eq!(d1.monai_ticks, 2);
+
+        p.sim_ai_tick_ns.push(300);
+        p.monai_ticks = 3;
+        p.monai.scanned = 15;
+        let d2 = world_delta(Some(&p), &mut last).expect("profile 存在");
+        assert_eq!(d2.sim_ai_tick_ns, vec![300], "次窗只取新增样本（不重复）");
+        assert_eq!(d2.monai.scanned, 5, "monai 取差值");
+        assert_eq!(d2.monai_ticks, 1);
     }
 }
