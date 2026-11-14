@@ -29815,7 +29815,23 @@ async fn apply_sim_cmd_async(
             };
             let mut wire = head.to_bytes().to_vec();
             wire.extend_from_slice(&body);
-            send_gate_msg(tx, state, check_block, &wire).await
+            let decision = send_gate_msg(tx, state, check_block, &wire).await?;
+            // **卡 openmir2-sm-logon-cross-session-delivery**：SM_LOGON(50) 的三方对齐服务端侧
+            // （总监归因判据 step2）。只在本卡诊断开关下打印，默认关 ⇒ 生产日志与行为不变。
+            // 字段：(actor, chr, socket, gate_idx 不在本函数、session_id, decision)。
+            if misdeliver_log_enabled() {
+                if let Some((ident, actor)) = sm_logon_head(&body) {
+                    glog!(
+                        "INF",
+                        "MISDELIVER_SRV event=send ident={ident} actor={actor} chr={} socket={} session_id={} bytes={} decision={decision:?}",
+                        u.chr_name,
+                        u.socket,
+                        u.session_id,
+                        body.len()
+                    );
+                }
+            }
+            Ok(())
         }
         SimToGate::SendRaw { socket, payload } => {
             apply_sim_send_raw(socket, &payload, users, tx, state, check_block).await
@@ -29855,7 +29871,32 @@ async fn apply_sim_send_raw(
     };
     let mut wire = head.to_bytes().to_vec();
     wire.extend_from_slice(payload);
-    send_gate_msg(tx, state, check_block, &wire).await
+    send_gate_msg(tx, state, check_block, &wire).await?;
+    Ok(())
+}
+
+/// 卡 `openmir2-sm-logon-cross-session-delivery` 的诊断开关（默认关；纯日志，不改语义）。
+///
+/// 归因判据 step2 要求服务端在同一刻打印「我把 actor=X 的 SM_LOGON 发到了 session=Y」，
+/// 并包含发送口的 hold/drop 判定（否则「服务端没发」与「发了被丢弃」不可分）。
+fn misdeliver_log_enabled() -> bool {
+    std::env::var_os("MIR2_LOG_MISDELIVER").is_some_and(|v| v == "1")
+}
+
+/// 从 `GM_DATA` 的 body（12B 命令头 + 尾）取出 `(Ident, Recog)`。
+fn command_head(body: &[u8]) -> Option<(u16, i32)> {
+    if body.len() < COMMAND_MESSAGE_SIZE {
+        return None;
+    }
+    let ident = u16::from_le_bytes([body[4], body[5]]);
+    let recog = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+    Some((ident, recog))
+}
+
+/// 只对 `SM_LOGON(50)` 返回 `(ident, actor)`；其它帧返回 `None`（诊断行不刷屏）。
+fn sm_logon_head(body: &[u8]) -> Option<(u16, i32)> {
+    let (ident, recog) = command_head(body)?;
+    (ident == mir2_protocol::messages::SM_LOGON).then_some((ident, recog))
 }
 
 /// 保活/阻塞计数（C# `GateInfo.SendKeepAlive/SendChecked/SendBlockCount/SendCheckTick`）。
@@ -29886,7 +29927,7 @@ fn now_ms() -> i64 {
 }
 
 /// 发送口的判定结果（`ProcessBufferSend` `:58-90` 的纯函数版，便于单测）。
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SendDecision {
     /// `SendChecked > 0`（等网关回 `GM_RECEIVE_OK`）：**包括刚超时清零的那一次也压住不发**（`:58-66` 的无条件 `return`）
     Hold,
@@ -29929,9 +29970,10 @@ async fn send_gate_msg(
     state: &mut KeepAlive,
     check_block: usize,
     wire: &[u8],
-) -> Result<()> {
-    match send_decision(state, check_block, wire.len(), now_ms()) {
-        SendDecision::Hold | SendDecision::Drop => return Ok(()),
+) -> Result<SendDecision> {
+    let decision = send_decision(state, check_block, wire.len(), now_ms());
+    match decision {
+        SendDecision::Hold | SendDecision::Drop => return Ok(decision),
         SendDecision::CheckFirst => {}
         SendDecision::Send => {}
     }
@@ -29952,7 +29994,7 @@ async fn send_gate_msg(
     }
     send_raw(tx, wire).await?;
     state.send_block_count += wire.len();
-    Ok(())
+    Ok(decision)
 }
 
 #[allow(clippy::too_many_arguments)]

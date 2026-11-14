@@ -10,6 +10,7 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Globalization;
 
 namespace BotSrv.Player
 {
@@ -184,6 +185,8 @@ namespace BotSrv.Player
             if (MShare.ConnectionStep == ConnectionStep.Play)
             {
                 ClientSocket.IsConnected = true;
+                // 卡 sm-logon-cross-session-delivery：游戏网关连接建立即自报（本端端点 = 对齐键）。
+                SelfReport.Write("connect", SelfIdentityFields());
                 SendRunLogin();
                 if (!MShare.g_boServerChanging)
                 {
@@ -2596,10 +2599,33 @@ namespace BotSrv.Player
 
         #endregion
 
+        /// <summary>自报身份字段（`connect` 与 `sm_logon` 两条事件共用；卡 sm-logon-cross-session-delivery）。</summary>
+        private string SelfIdentityFields()
+        {
+            string local = ClientSocket?.LocalEndPoint?.ToString() ?? string.Empty;
+            string remote = ClientSocket?.RemoteEndPoint?.ToString() ?? string.Empty;
+            int connSeq = ClientSocket?.ConnSeq ?? -1;
+            return "\"chr\":" + SelfReport.Q(ChrName)
+                + ",\"login_id\":" + SelfReport.Q(LoginId)
+                + ",\"bot_session\":" + SelfReport.Q(SessionId)
+                + ",\"conn_seq\":" + connSeq.ToString(CultureInfo.InvariantCulture)
+                + ",\"local_ep\":" + SelfReport.Q(local)
+                + ",\"remote_ep\":" + SelfReport.Q(remote);
+        }
+
         /// <summary>收到 SM_LOGON = 服务端确认本假人已进世界（探针武装 + tick 覆盖率分子），幂等。
         /// `x`/`y` = 该消息里服务端给本假人的落点（PlayScene 的 SM_LOGON 分支就用它们 NewActor）。</summary>
         public void MarkInWorld(int actorId, int x, int y)
         {
+            // **卡 openmir2-sm-logon-cross-session-delivery**（总监归因判据 step1）：收到 SM_LOGON
+            // 就自报身份，**在幂等门之前**记录——错投/重复投递的每一条都必须留痕。
+            SelfReport.Write(
+                "sm_logon",
+                SelfIdentityFields()
+                + ",\"actor\":" + actorId.ToString(CultureInfo.InvariantCulture)
+                + ",\"x\":" + x.ToString(CultureInfo.InvariantCulture)
+                + ",\"y\":" + y.ToString(CultureInfo.InvariantCulture)
+                + ",\"in_world_counted\":" + (_inWorldCounted ? "true" : "false"));
             if (_inWorldCounted)
             {
                 return;

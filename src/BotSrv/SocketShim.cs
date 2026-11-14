@@ -42,6 +42,10 @@ namespace BotSrv
         public int ConnSeq { get; private set; }
 
         public IPEndPoint RemoteEndPoint { get; set; }
+
+        /// <summary>卡 openmir2-sm-logon-cross-session-delivery：本连接的本端端点
+        /// （与网关 accept 的 peer 一一对应，用作三方对齐键）。连接前为 null。</summary>
+        public IPEndPoint LocalEndPoint { get; private set; }
         public bool IsConnected { get => _connected; set => _connected = value; }
 
         public event EventHandler<DSCClientConnectedEventArgs> OnConnected;
@@ -69,6 +73,7 @@ namespace BotSrv
                 return;
             }
             ConnSeq = Interlocked.Increment(ref _connSeqSeed);
+            LocalEndPoint = _socket.LocalEndPoint as IPEndPoint;
             _connected = true;
             _recvThread = new Thread(RecvLoop) { IsBackground = true, Name = "ScoketClient-recv" };
             _recvThread.Start();

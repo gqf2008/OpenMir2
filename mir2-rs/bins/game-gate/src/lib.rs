@@ -126,6 +126,26 @@ macro_rules! glog {
 /// 会话表：`SessionId → 该客户端连接的发送端`（一条网关→服务器连接一张表）。
 type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<Vec<u8>>>>>;
 
+/// 卡 `openmir2-sm-logon-cross-session-delivery`：**诊断用**的会话键占用者登记
+/// （`SessionId → (handle, peer)`）。与 [`Sessions`] 同键、同生命周期，只用于把
+/// 「某 sid 当前指向哪条连接」打进日志；**不参与任何路由判定**（路由仍只看 `sessions`）。
+type RouteOwners = Arc<Mutex<HashMap<u16, (i32, String)>>>;
+
+/// 诊断开关：`MIR2_LOG_MISDELIVER=1` 才打印三方对齐日志（默认关 ⇒ 生产日志与行为不变）。
+fn misdeliver_log_enabled() -> bool {
+    std::env::var_os("MIR2_LOG_MISDELIVER").is_some_and(|v| v == "1")
+}
+
+/// `GM_DATA` body 里的 12B 命令头 → 内层 `Ident`（不足 12B 时返回 `None`）。
+fn inner_ident(body: &[u8]) -> Option<u16> {
+    (body.len() >= COMMAND_MESSAGE_SIZE).then(|| u16::from_le_bytes([body[4], body[5]]))
+}
+
+/// 诊断行里的 owner 标签：`handle@peer`（无登记时 `-`）。
+fn owner_label(owner: Option<&(i32, String)>) -> String {
+    owner.map_or_else(|| "-".to_string(), |(h, p)| format!("{h}@{p}"))
+}
+
 /// 空闲清理登记项（oracle `SessionInfo` 的 `Socket`/`ReceiveTick` 在 `SessionArray` 里的那一格）：
 /// 最近一次上行时刻 + 空闲关闭信号。关掉读循环即等价于 `Socket.Close()`（`ClientThread.cs:417-424`）。
 ///
@@ -362,6 +382,8 @@ enum LinkEvent {
 struct LinkCtx {
     downstream: Downstream,
     sessions: Sessions,
+    /// 诊断：会话键占用者（见 [`RouteOwners`]；不参与路由）。
+    route_owner: RouteOwners,
     indexes: SessionIndexes,
     idle: IdleSessions,
     state: Arc<StdMutex<GateState>>,
@@ -449,31 +471,64 @@ struct SlotOwner {
 /// 新会话拿到的是那个陈旧槽的 `SckHandle`（`allocate` 的返回值复刻该语义）。
 struct SessionSlots {
     slots: Vec<Option<SlotOwner>>,
+    /// 本线**在用**的 `SessionId` 集合（卡 `openmir2-sm-logon-cross-session-delivery`）。
+    ///
+    /// oracle 的 `GetSessionId`（`GameGate/Services/ClientThread.cs:128-159`）取 4 位随机数、
+    /// **无唯一性检查**，`SessionContainer` 以它为下标 ⇒ 同线两条会话撞号时后者覆盖前者
+    /// （下行按 `msg.session_id` 查表 ⇒ 前者的帧被投到后者的连接、前者写端被丢弃）。
+    /// 本集合让分配**避开**在用键：撞号时改用下一个空闲 4 位值。线上字段仍是 4 位
+    /// （`0..=9999`），客户端不可见该值 ⇒ 协议形状不变；这是相对 oracle 的**有意修复**，
+    /// 登记为 D-18（见 `mir2-rs/tests/parity/whitelist.md`）。
+    live_sids: std::collections::HashSet<u16>,
 }
+
+/// `SessionId` 的取值空间（`gen_session_id` 的 4 位十进制，`0..=9999`）。
+const SESSION_ID_SPACE: u16 = 10_000;
 
 impl SessionSlots {
     fn new(capacity: usize) -> Self {
         Self {
             slots: (0..capacity).map(|_| None).collect(),
+            live_sids: std::collections::HashSet::new(),
         }
     }
 
+    /// 给新会话分配一个**本线唯一**的 `SessionId`：候选值空闲就用它，否则顺序找下一个空闲值；
+    /// 空间耗尽（理论上只在本线已有 10000 条会话时）才回落候选值（照 oracle 覆盖）。
+    fn claim_sid(&mut self, candidate: u16) -> u16 {
+        let mut sid = candidate % SESSION_ID_SPACE;
+        for _ in 0..SESSION_ID_SPACE {
+            if self.live_sids.insert(sid) {
+                return sid;
+            }
+            sid = (sid + 1) % SESSION_ID_SPACE;
+        }
+        glog!(
+            "WRN",
+            "会话 SessionId 空间耗尽（{} 条在用），回落 oracle 覆盖语义 candidate={candidate}",
+            self.live_sids.len()
+        );
+        candidate
+    }
+
     /// 分配：首个空槽；全满则照 oracle 返回**最后一个非空槽**的 `SckHandle`
-    /// 与宿主会话 id（新会话不入槽）。
-    fn allocate(&mut self, sid: u16, handle: i32) -> (i32, Option<u16>) {
+    /// 与宿主会话 id（新会话不入槽）。返回 `(slot_handle, donor, 最终 sid)`。
+    fn allocate(&mut self, sid: u16, handle: i32) -> (i32, Option<u16>, u16) {
         if let Some(idx) = self.slots.iter().position(Option::is_none) {
+            let sid = self.claim_sid(sid);
             self.slots[idx] = Some(SlotOwner { sid, handle });
-            return (handle, None);
+            return (handle, None, sid);
         }
         match self.slots.last().and_then(Option::as_ref) {
-            Some(owner) => (owner.handle, Some(owner.sid)),
+            // 槽满分支的新会话不登记路由（复用宿主），故不占用新的 `SessionId` 键。
+            Some(owner) => (owner.handle, Some(owner.sid), sid),
             // 容量为 0（仅测试注入；oracle 的 10000 不会走这里）。
-            None => (handle, None),
+            None => (handle, None, sid),
         }
     }
 
     /// 断开回收：只清**属于该会话**的槽（oracle 按 `ConnectionId` 匹配，`ServerService.cs:166-201`；
-    /// 槽满分支的新会话从未入槽，因此不得误清宿主槽）。
+    /// 槽满分支的新会话从未入槽，因此不得误清宿主槽），并释放它的 `SessionId` 键。
     fn release(&mut self, sid: u16) {
         if let Some(slot) = self
             .slots
@@ -481,6 +536,8 @@ impl SessionSlots {
             .find(|s| matches!(s, Some(o) if o.sid == sid))
         {
             *slot = None;
+            // 只有**确实占有槽**的会话才释放键（槽满分支的 sid 从未登记）。
+            self.live_sids.remove(&sid);
         }
     }
 
@@ -574,6 +631,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
     let mut tasks = Vec::new();
     for (i, ep) in cfg.endpoints.into_iter().enumerate() {
         let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
+        // 诊断：会话键占用者（卡 sm-logon-cross-session-delivery；默认只做登记、不打日志）。
+        let route_owner: RouteOwners = Arc::new(Mutex::new(HashMap::new()));
         // 会话→引擎侧索引（`SvrListIdx`；由 `GM_SERVERUSERINDEX` 下发）
         let indexes: SessionIndexes = Arc::new(Mutex::new(HashMap::new()));
         // 会话槽表（`ClientThread.SessionArray`）与本线引擎状态（`GateReady`/`RunningState`）。
@@ -601,6 +660,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
         let link_ctx = LinkCtx {
             downstream: downstream.clone(),
             sessions: Arc::clone(&sessions),
+            route_owner: Arc::clone(&route_owner),
             indexes: Arc::clone(&indexes),
             idle: Arc::clone(&idle),
             state: Arc::clone(&state),
@@ -650,6 +710,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
             // ⇒ 第 i 组端点的线号就是 i（合成登录包的第 7 段用它）。
             service_id: u8::try_from(i).unwrap_or(0),
             sessions,
+            route_owner,
             indexes,
             idle,
             downstream,
@@ -677,6 +738,8 @@ struct GateCtx {
     service_id: u8,
     /// 本线会话表：`SessionId → 该客户端连接的发送端`。
     sessions: Sessions,
+    /// 诊断：会话键占用者（见 [`RouteOwners`]；不参与路由）。
+    route_owner: RouteOwners,
     /// 本线会话→引擎侧索引（`SvrListIdx`）。
     indexes: SessionIndexes,
     /// 空闲清理登记（`SessionArray` 的非空槽）。
@@ -738,13 +801,24 @@ async fn accept_loop(
             continue;
         }
         let handle = raw_socket_i32(&sock);
-        let sid = gen_session_id(&format!("{peer}|{}|{}", ctx.gate_addr, ctx.gate_port));
+        let candidate = gen_session_id(&format!("{peer}|{}|{}", ctx.gate_addr, ctx.gate_port));
         // `ServerService.cs:131-147`：找首个空槽；全满则返回**最后一个非空槽**的 SckHandle
         // （`donor` 是那个宿主会话，复用其下行路由，见 `client_loop`）。
-        let (slot_handle, donor) = match slots.lock() {
-            Ok(mut table) => table.allocate(sid, handle),
-            Err(_) => (handle, None),
+        // 卡 `openmir2-sm-logon-cross-session-delivery`（D-18）：同一把锁里给本线挑一个**唯一**的
+        // `SessionId`（oracle 无此检查 ⇒ 撞号时后建连覆盖前建连的会话键）。
+        let (sid, slot_handle, donor) = match slots.lock() {
+            Ok(mut table) => {
+                let (slot_handle, donor, sid) = table.allocate(candidate, handle);
+                (sid, slot_handle, donor)
+            }
+            Err(_) => (candidate, handle, None),
         };
+        if sid != candidate {
+            glog!(
+                "WRN",
+                "会话 SessionId 撞号：candidate={candidate} ⇒ 改用空闲值 {sid}（{peer}）"
+            );
+        }
         glog!("INF", "开始连接: {peer} (SessionId={sid} socket={handle})");
         let ctx = ctx.clone();
         let slots = Arc::clone(&slots);
@@ -767,8 +841,40 @@ async fn accept_loop(
     }
 }
 
+/// 登记一条客户端会话的下行路由（`SessionContainer.AddSession` 的落地）。
+///
+/// 卡 `openmir2-sm-logon-cross-session-delivery`（D-18）：`SessionId` 已由
+/// [`SessionSlots::claim_sid`] 保证本线唯一，这里仍保留一次占用者观测——若将来有人把
+/// 唯一性去掉，`collision=1` 会立刻在日志里现形（路由语义仍按 `sessions` 覆盖，与 oracle 同）。
+async fn register_session(
+    ctx: &GateCtx,
+    sid: u16,
+    handle: i32,
+    peer: &str,
+    route_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
+) {
+    let Some(route_tx) = route_tx else {
+        return;
+    };
+    let prev = ctx.route_owner.lock().await.get(&sid).cloned();
+    if misdeliver_log_enabled() {
+        glog!(
+            "INF",
+            "MISDELIVER_ACCEPT peer={peer} sid={sid} handle={handle} collision={} owner_peer={}",
+            u8::from(prev.is_some()),
+            owner_label(prev.as_ref())
+        );
+    }
+    ctx.route_owner
+        .lock()
+        .await
+        .insert(sid, (handle, peer.to_string()));
+    ctx.sessions.lock().await.insert(sid, route_tx);
+}
+
 /// 单客户端会话：登记会话表 → 发 `GM_OPEN` → 逐帧处置 → 断开发 `GM_CLOSE`。
 #[allow(clippy::too_many_arguments)] // sid/handle/槽 handle/宿主/对端 都是 oracle 同名概念
+#[allow(clippy::too_many_lines)] // 登记→读循环→离开三段与 oracle `ClientSession` 生命周期一一对应
 async fn client_loop(
     sock: TcpStream,
     sid: u16,
@@ -828,9 +934,7 @@ async fn client_loop(
     // oracle 顺序：先 `UserEnter`（发 GM_OPEN）、后 `SessionContainer.AddSession`
     // （`ServerService.cs:147-159`）⇒ 这里同样**在发送之后**登记会话与空闲项；
     // 发送不再可失败（断链时按 `Send` 的 `Online` 门静默丢弃），也就不存在失败早退的泄漏路径。
-    if let Some(route_tx) = route_tx {
-        ctx.sessions.lock().await.insert(sid, route_tx);
-    }
+    register_session(&ctx, sid, handle, &peer, route_tx).await;
     // 只有**占槽**的会话进入 `SessionArray` 的空闲清理面（槽满复用分支不新增 SessionInfo）。
     if donor.is_none() {
         ctx.idle.lock().await.insert(
@@ -917,6 +1021,15 @@ async fn client_loop(
     // **同步发送**：oracle `ClientThread.UserLeave` → `SendServerMsg` → `Send` 是同步
     // `_clientSocket.Send`（`ClientThread.cs:384-399`），返回时帧已进内核。这里必须等写任务
     // 回执，否则客户端先看到 EOF、测试/进程收工会把还在队列里的 `GM_CLOSE` 丢掉。
+    // 诊断：离开时记录该 sid 的键占用者（可能是**另一条**连接，见 accept 的 collision 行）。
+    let exiting_owner = ctx.route_owner.lock().await.remove(&sid);
+    if misdeliver_log_enabled() {
+        glog!(
+            "INF",
+            "MISDELIVER_CLOSE peer={peer} sid={sid} handle={handle} map_owner={}",
+            owner_label(exiting_owner.as_ref())
+        );
+    }
     ctx.sessions.lock().await.remove(&sid);
     ctx.indexes.lock().await.remove(&sid);
     ctx.idle.lock().await.remove(&sid);
@@ -1140,24 +1253,64 @@ async fn handle_login(
     }
 }
 
+/// 下行 `GM_DATA`：按 `session_id` 取该会话的写端并投递（`ClientThread.cs:310-316`）。
+///
+/// 卡 `openmir2-sm-logon-cross-session-delivery`：`send_ok=false` / 无路由都要留诊断
+/// （oracle 与修复前都是 `let _ = tx.send(...)` 静默吞掉）。
+async fn deliver_gm_data(ctx: &LinkCtx, msg: &ServerMessage, body: &[u8]) {
+    let wire = client_frame(msg.pack_length, body);
+    let owner = ctx.route_owner.lock().await.get(&msg.session_id).cloned();
+    let guard = ctx.sessions.lock().await;
+    if let Some(tx) = guard.get(&msg.session_id) {
+        let ok = tx.send(wire).is_ok();
+        // **只对 SM_LOGON(50) 打行**：AOI 帧可达 1e4/s，逐帧日志会拖慢网关读循环
+        // （2026-11-15 首轮 200 档实测：24.7 万行 DBG 把进世界流水拖到停滞，结果不可用）。
+        let ident = inner_ident(body).unwrap_or(0);
+        if misdeliver_log_enabled() && ident == mir2_protocol::messages::SM_LOGON {
+            glog!(
+                "DBG",
+                "MISDELIVER_DELIVER sid={} owner={} ident={} bytes={} send_ok={}",
+                msg.session_id,
+                owner_label(owner.as_ref()),
+                ident,
+                body.len(),
+                u8::from(ok)
+            );
+        }
+    } else {
+        let ident = inner_ident(body).unwrap_or(0);
+        if misdeliver_log_enabled() && ident == mir2_protocol::messages::SM_LOGON {
+            glog!(
+                "DBG",
+                "MISDELIVER_NOROUTE sid={} ident={} bytes={}",
+                msg.session_id,
+                ident,
+                body.len()
+            );
+        }
+        glog!(
+            "WRN",
+            "会话[{}]不存在，丢弃下行 {} 字节",
+            msg.session_id,
+            body.len()
+        );
+    }
+}
+
 /// 网关 ↔ GameSvr：收管理帧并分派（`GM_*`，`ClientThread.cs:265-300` 的同构实现）。
 async fn handle_server_message(ctx: &LinkCtx, msg: ServerMessage, body: &[u8]) {
     match u8::try_from(msg.ident).unwrap_or(0) {
-        grobal2::GM_DATA => {
-            let wire = client_frame(msg.pack_length, body);
-            let guard = ctx.sessions.lock().await;
-            if let Some(tx) = guard.get(&msg.session_id) {
-                let _ = tx.send(wire);
-            } else {
+        grobal2::GM_DATA => deliver_gm_data(ctx, &msg, body).await,
+        grobal2::GM_CLOSE => {
+            let owner = ctx.route_owner.lock().await.remove(&msg.session_id);
+            if misdeliver_log_enabled() {
                 glog!(
-                    "WRN",
-                    "会话[{}]不存在，丢弃下行 {} 字节",
+                    "INF",
+                    "MISDELIVER_CLOSE_BY_SERVER sid={} map_owner={}",
                     msg.session_id,
-                    body.len()
+                    owner_label(owner.as_ref())
                 );
             }
-        }
-        grobal2::GM_CLOSE => {
             ctx.sessions.lock().await.remove(&msg.session_id);
             ctx.indexes.lock().await.remove(&msg.session_id);
             glog!("INF", "游戏服务要求关闭会话[{}]", msg.session_id);
@@ -1892,6 +2045,7 @@ mod tests {
             gate_port: 0,
             service_id: 0,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            route_owner: Arc::new(Mutex::new(HashMap::new())),
             indexes: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             downstream: down,
@@ -1940,6 +2094,7 @@ mod tests {
             gate_port: 0,
             service_id: 0,
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            route_owner: Arc::new(Mutex::new(HashMap::new())),
             indexes: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             downstream: Downstream::new("127.0.0.1".into(), 0),
@@ -2087,22 +2242,52 @@ mod tests {
     #[test]
     fn session_slots_allocate_release_and_full_branch() {
         let mut slots = SessionSlots::new(2);
-        assert_eq!(slots.allocate(11, 100), (100, None));
-        assert_eq!(slots.allocate(22, 200), (200, None));
+        assert_eq!(slots.allocate(11, 100), (100, None, 11));
+        assert_eq!(slots.allocate(22, 200), (200, None, 22));
         assert_eq!(slots.active(), 2);
         assert_eq!(
             slots.allocate(33, 300),
-            (200, Some(22)),
+            (200, Some(22), 33),
             "槽满：返回最后一个非空槽（22）的 SckHandle，宿主 sid=22"
         );
         assert_eq!(slots.active(), 2, "槽满不新增槽");
         // 释放后同一 sid 可再用（旧 `used: HashSet` 泄漏的回归牙）。
         slots.release(11);
         assert_eq!(slots.active(), 1);
-        assert_eq!(slots.allocate(11, 111), (111, None));
+        assert_eq!(slots.allocate(11, 111), (111, None, 11));
         // 回收必须按宿主匹配：槽满分支的新会话从未入槽，断开它不得误清宿主槽。
         slots.release(33);
         assert_eq!(slots.active(), 2, "33 从未入槽，release 不得清掉宿主槽");
+    }
+
+    /// **D-18 回归牙**（卡 `openmir2-sm-logon-cross-session-delivery`）：同线两条会话
+    /// 撞到同一个 4 位候选 `SessionId` 时，**后者必须换到空闲值**，不得覆盖前者的会话键。
+    ///
+    /// 删除 `SessionSlots::claim_sid` 的 `live_sids` 判重（直接返回 candidate）⇒ 第二个
+    /// `allocate` 返回 7 ⇒ 本用例红。反向：`release` 不释放键 ⇒ 第三个会话拿不到 7。
+    #[test]
+    fn session_slots_collision_gets_a_unique_sid() {
+        let mut slots = SessionSlots::new(4);
+        assert_eq!(slots.allocate(7, 100), (100, None, 7));
+        assert_eq!(
+            slots.allocate(7, 200).2,
+            8,
+            "撞号必须换到下一个空闲 4 位值（否则后者覆盖前者的下行路由）"
+        );
+        assert_eq!(slots.live_sids.len(), 2);
+        // 释放 7 后，新会话可以重新拿到 7。
+        slots.release(7);
+        assert_eq!(slots.allocate(7, 300).2, 7, "键必须随槽回收而释放");
+        // 槽满分支不占用新键（它不入槽、不登记路由）。
+        let mut full = SessionSlots::new(1);
+        assert_eq!(full.allocate(9, 1).2, 9);
+        let (h, donor, sid) = full.allocate(9, 2);
+        assert_eq!(
+            (h, donor, sid),
+            (1, Some(9), 9),
+            "槽满分支沿用候选、不登记新键"
+        );
+        assert_eq!(full.live_sids.len(), 1, "槽满分支不得泄漏 SessionId 键");
     }
 
     // ------------------------------------------------------------------
@@ -2278,6 +2463,7 @@ mod tests {
         let ctx = LinkCtx {
             downstream: down.clone(),
             sessions: Arc::new(Mutex::new(HashMap::new())),
+            route_owner: Arc::new(Mutex::new(HashMap::new())),
             indexes: Arc::new(Mutex::new(HashMap::new())),
             idle: Arc::new(Mutex::new(HashMap::new())),
             state: Arc::new(StdMutex::new(GateState {
@@ -2374,13 +2560,14 @@ mod tests {
         for i in 0..MAX_SESSION {
             let sid = u16::try_from(i % 10_000).unwrap();
             let handle = i32::try_from(i).unwrap();
-            assert_eq!(slots.allocate(sid, handle), (handle, None));
+            assert_eq!(slots.allocate(sid, handle), (handle, None, sid));
         }
         assert_eq!(
             slots.allocate(1, 42),
             (
                 i32::try_from(MAX_SESSION - 1).unwrap(),
-                Some(u16::try_from(MAX_SESSION - 1).unwrap())
+                Some(u16::try_from(MAX_SESSION - 1).unwrap()),
+                1
             ),
             "第 10001 个连接返回最后一个槽（9999）的 handle，不 panic"
         );
