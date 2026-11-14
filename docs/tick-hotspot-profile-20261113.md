@@ -494,3 +494,20 @@ grep -a TICKPROF E:/tmp/t10b-w85/logs/game-svr.out.log
 原始证据（未入库）：`E:/tmp/t10b-w85/logs/game-svr.out.log`（`TICKPROF` 行）、
 `game-svr.err.log`、`bots/bot2.out.log`（bot 进世界/小退时间线）、`start.ps1`、
 `logs/pids.txt`（本车道起的 4 个 pid）。
+
+## 13. T10c 复查（2026-11-14）：本报告的每实体数字已被 P6b2 改写
+
+> 卡 `openmir2-capacity-model-10k`。本节**只做口径提示**，不改本文 §1–§12 的历史数据。
+
+- 本文 §3/§4/§5 的「每实体 5.57–5.82µs / `SimMonsterAi` 6.88ms（11k）」是 **P6b2 迁段之前**
+  的 master。P6b2（`SimMonsterAi` 迁成段系统）之后，同一 harness、同一台机器实测：
+  `SimMonsterAi` **4.78µs/实体**（11k 52.63ms）、`World::tick` **8.58µs/实体**（94.34ms）。
+  根因是 `StageAccess::get` 的逐组件取数路径（不是 Top1 的问题），修复与数据见
+  `docs/capacity-model-20261114.md` §2/§5.1。
+- 本卡（T10c）交付后的当前值：**1.209µs/实体**（11k 13.30ms；多次窗口 1.20–1.25µs，
+  `SimMonsterAi` 0.635µs/实体）。
+- §6 的 Top1 已落地（`0115c843f`）；**Top2 / Top4（AOI 半）已由本卡落地**；
+  Top3（四段合并）、Top5（buff 多 pass）、Top4 残余（`slot_order.hiter_snapshot`）
+  仍为建议项，不做/延后的理由见新文档 §6。
+- §9 的「34,500 实体触顶」按新口径变为 **≈160,600 实体**（`World::tick` 单独、200ms）；
+  端到端仍是瓶颈，但瓶颈项已从 World tick 移到宿主段。
