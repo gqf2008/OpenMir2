@@ -442,7 +442,7 @@ P0 组件大多 `derive(Default)`，但 `EntitySpawn::new`（各 `BaseObject` ct
 | # | 段 | 现符号 | 建议阶段 | 抽 RNG？ | 串行约束 |
 | --- | --- | --- | --- | --- | --- |
 | 0 | 线程断言 + 时钟 | `advance_clock_system` | `Clock` | 否 | 已注册；每 tick 只跑一次 |
-| 1 | 命令 FIFO | `World::tick_head` 的 `match cmd` → `enter_world`/`leave_world`/`try_step`/`attack_once`/`spawn_monster_now`/`push_now`/`rush_now`/`butch_now`/`butch_effect_now` | `Command` | **是**（攻击/推挤/生成掉落） | 必须**逐条 FIFO**，一个系统；不得拆散/并行 |
+| 1 | 命令 FIFO | `sim_command_stage_system`（段内 `while let Some(cmd) = queue.pop_front()`），逐臂 `World::apply_command` → `enter_world_impl`/`leave_world_impl`/`try_step_impl`/`attack_once_impl`/`spawn_monster_now_impl`/`push_now_impl`/`rush_now_impl`/`butch_now_impl`/`butch_effect_now_impl`（**P7 起无内联 `match cmd`**） | `Command` | **是**（攻击/推挤/生成掉落） | 必须**逐条 FIFO**，一个系统；不得拆散/并行 |
 | 2 | PL-1 玩家命中者快照 | `player_hiter_snapshot` 填充 | `SimHiterSnapshot` | 否 | 必须在 #3 之前（读清理前的值） |
 | 3 | 命中者过期 | `World::expire_hitters` | `SimExpireHitters` | 否 | 在 #2 之后 |
 | 4 | 非玩家死亡结算 | `World::settle_deaths(false)` | `SimSettleDeaths` | **是**（掉落/经验） | 在命令后；玩家死亡留到 tail |
@@ -1287,8 +1287,62 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5 + P6a2b 的 #11 + P6b 的 #12 +
 > 本批 #10），**余 1 段：`#1 Command`**。
 
+> **S4d-3/P7 落地登记（2026-11-14，#1 `Command`；20/20 收口）**：命令 FIFO 的内联 `match cmd`
+> 整体切成段系统，`tick_head` 只剩边界代码。
+> - **段系统**：`sim_command_stage_system`（`TickStage::Command`，#1）；注册在 `HeadRunner::new`
+>   （`Clock` 之后第一个段），`StageTrace` 记 `TickStage::Command`。段位 = 迁移前那一行
+>   （`Clock` 之后、PL-1 快照 `SimHiterSnapshot` 之前）⇒ **RNG 消费者次序不变**。
+> - **FIFO 入队序 = 处理序**：段内是**一个** `while let Some(cmd) = pending.0.pop_front()` 循环 +
+>   逐臂 `World::apply_command`（九族一律调已 port 的 `*_impl`）；队列本身由 `CommandQueueRes`
+>   在段边界整条移入/移出（tick 内不产命令 ⇒ 只减不增）。**不重排、不拆系统、不并行**。
+>   牙 `command_stage_keeps_fifo_order_within_one_tick`：同一 tick 内
+>   `SpawnMonster(2) → Attack(p→2) → Walk(p,+1)`，断言 `record.processed` 的 id 序 = `[2, p, p]`、
+>   `record.attacks` 恰一条（**同段 `insert` 的实体对后续命令立即可见**）、`Walk` 生效。
+>   把 `pop_front` 改 `pop_back` ⇒ 处理序变成 `[p, p, 2]` 且攻击看不到目标 ⇒ 红（实测 2 条用例红）。
+> - **传真实 `TickRecord`（P5-A3 遗留 cleanup）**：`TickRecordRes` 在段边界插入、段内取用；
+>   `spawn_monster_now` / `butch_effect_now` / `butch_now` 三个 facade **不再自造 scratch record**
+>   （P7 起接收调用方的 `&mut TickRecord`），`record.processed` 仍由 `World::apply_command`（调用点）
+>   记，`butches`/`skeletons` 由各自 impl 独占写入（迁移前是 facade scratch + `tick_head` 手工补写，
+>   向量互不相交 ⇒ 逐项相同）。等价牙 `butch_stage_access_path_matches_facade_path` 增两条断言：
+>   facade 传真实 record 的 `skeletons`/`butches` 与段路径逐项相同。
+> - **结构段**：`Command::SpawnMonster`（`insert`）与 `Command::Leave`（`remove`）⇒
+>   `impl Structural for SimCommand`；`tick_head` 在段边界后立即 `EntityStore::refresh_views()`
+>   （快照/结算/AI/宿主段必须看得到新生成的怪、看不到已离场的实体）。非结构段编译期仍拿不到
+>   `insert`/`remove`（`StructuralAccess` 的 `S: Structural` 门未放宽）。
+>   **无独立牙（如实登记）**：本仓所有实体共用同一个 25 组件 bundle ⇒ 只有单一 archetype，
+>   facade 的缓存 `QueryState` 在结构变更后仍解析得到新实体 ⇒ 删 `refresh_views()` 不会让
+>   「段后可见」断言变红（实测绿）。该调用是 P5-pre 的段边界契约，等组件允许缺省时才承重。
+> - **写集**：`EntityMutData` 的 20 组件 + `Transform`（`try_step`/`char_pushed_core` 落点）+
+>   `MapBinding`（`enter_world_impl` 的 `add_to_mapped`）；读集为 `StageAccess` 的 24 组件全集
+>   （`EntityMut` 组合视图要求）。`PvpState`/`Recovery`/`DupState` 本段不写（未声明写）。
+> - **facade 清点**：`World::try_step`（唯一无测试引用的薄包装）随 P7 删除；
+>   `attack_once`/`rush_now`/`spawn_monster_now`/`butch_effect_now`/`butch_now` 保留为用例的
+>   `EntityStore` 对照入口（`#[allow(dead_code)]`，与 `death_drop.rs` / `monai.rs` 同口径注释）。
+> - **RNG 逐点 trace（`MIR2_RNG_LOG` + `MIR2_RNG_SEED=42`，五列 seq/kind/max/result/site）**：
+>   base `8cf3e8dee`（`git show` 取回旧 `world.rs`，sha256=`6550913c3e41…`，跑完恢复并核
+>   sha256=`e5400ca4aa7c…`）与 head 各跑三族夹具：`attack_outcome_is_deterministic`（12 行）、
+>   `monster_death_drops_items_and_awards_exp`（9 行，含 spawn 的掉落预算）、
+>   `butch_effect_hits_zero_leathery_sets_skeleton_and_records_event`（7 行，恰 2 抽）。
+>   **seq/kind/max/result 四列逐行 `diff` 0 行**（三族全覆盖）。
+> - **变异（只在本人 worktree 重放；恢复后 sha256 相等、`git status` 只有本批改动）**：
+>   M1 删 `HeadRunner::new` 的 `TickStage::Command` 注册 ⇒ 段序牙 panic（`段 Command 未在
+>   HeadRunner 注册`），`mir2-world` lib 全量 **125 failed / 643 passed**；M2 `pop_front` 改
+>   `pop_back` ⇒ FIFO 牙红（`[1,1,2]` vs `[2,1,1]`），全量 **2 failed / 766 passed**
+>   （另一条是 `p3b2_mag_objects_in_range_order_is_x_then_y_then_objlist`，同样对处理序敏感）。
+> - **可回滚**：单独一个提交；`git revert <sha>` 后回到 `tick_head` 内联 `while let Some(cmd) =
+>   self.pending.pop_front() { match cmd { … } }` 形态（facade 签名、`try_step`、三族 record 参数、
+>   段注册一并还原），仍编译、测试绿（revert 树 = base 树）。
+> - **判据**：六份 golden blob 6/6 与 base 相等（`git hash-object` 逐个对照）；三族 RNG trace 四列
+>   diff 0；五门 @head 见本卡 patch 的 `gates_at_head`。
+
+> **段数口径（P7 交付 head；单位 = 20 阶段）**：**20/20 全部系统化**（本批补 #1 `Command`）。
+> `HeadRunner` 仍是「每段一个 `TickRunner`」（段边界要搬 `SimState`/`TickRecordRes`/
+> `CommandQueueRes`/`TickEntityIds`）；合成单个 `TickRunner` 需要把这些资源窗口统一到整条 head
+> 链，属后续优化，不影响段序或 RNG 消费者序。
+
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含五段（`SimBuff` / `SimMonsterAi` /
-> `SimNpc` / `SimMerchant` 在各自 `*_enabled` 门内、开门后进 trace）。
+> `SimNpc` / `SimMerchant` 在各自 `*_enabled` 门内、开门后进 trace），并已补 `TickStage::Command`
+> （P7）。
 
 > **尚未做（以 P6b2 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **1** 段——#1 Command）、
 > `SlotTable` 的 `QueryState` 缓存优化（按需）、`TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、
