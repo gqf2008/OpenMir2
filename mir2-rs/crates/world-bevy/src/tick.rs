@@ -492,12 +492,16 @@ impl StageSkip {
 /// archetype 后，缓存的读状态必须显式 update，否则对新实体**永久** `None`。
 trait DynQueryState: Send + Sync {
     fn update_archetypes(&mut self, world: &World);
+    fn as_any(&self) -> &dyn Any;
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }
 
 impl<Q: QueryData + 'static> DynQueryState for QueryState<Q> {
     fn update_archetypes(&mut self, world: &World) {
         QueryState::<Q>::update_archetypes(self, world);
+    }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
     fn as_any_mut(&mut self) -> &mut dyn Any {
         self
@@ -507,6 +511,13 @@ impl<Q: QueryData + 'static> DynQueryState for QueryState<Q> {
 #[derive(Resource, Default)]
 pub struct StageQueries {
     states: HashMap<TypeId, Box<dyn DynQueryState>>,
+    /// **T10c**：只读组合视图的缓存状态（[`StageEntities::read_view`] 用）。
+    ///
+    /// 与 `states` 分表的原因：只读视图的取数入口是 `QueryState::get_manual(&self, …)`
+    /// （不需要 `&mut state`），而 `&mut` 视图仍需 `&mut QueryState`。分表后
+    /// [`StageEntities::read_view`] 只需 `&self`（`EntityAccess::get` 同形），
+    /// 不用引入 `RefCell`/锁。刷新面（`refresh_archetypes`）覆盖两张表。
+    read_states: HashMap<TypeId, Box<dyn DynQueryState>>,
 }
 
 impl StageQueries {
@@ -526,12 +537,60 @@ impl StageQueries {
             .expect("StageQueries 的 TypeId 键与 QueryData 类型必须一一对应")
     }
 
+    /// **T10c**：只读组合视图的缓存状态（首次调用时建表；只有建表需要 `&mut World`）。
+    fn ensure_read_state<Q: QueryData + 'static>(
+        &mut self,
+        world: &mut World,
+    ) -> &mut QueryState<Q> {
+        self.read_states
+            .entry(TypeId::of::<Q>())
+            .or_insert_with(|| Box::new(world.query::<Q>()))
+            .as_any_mut()
+            .downcast_mut::<QueryState<Q>>()
+            .expect("StageQueries::read_states 的 TypeId 键与 QueryData 类型必须一一对应")
+    }
+
+    /// 已建的只读组合视图状态（未建 ⇒ `None`；建表入口只有 [`Self::ensure_read_state`]）。
+    fn read_state<Q: QueryData + 'static>(&self) -> Option<&QueryState<Q>> {
+        self.read_states
+            .get(&TypeId::of::<Q>())?
+            .as_any()
+            .downcast_ref::<QueryState<Q>>()
+    }
+
     /// **P5P-1**：段内结构变更后刷新**全部**已缓存的段侧 QueryState（只刷新已建条目）。
     fn refresh_archetypes(&mut self, world: &World) {
         for state in self.states.values_mut() {
             state.update_archetypes(world);
         }
+        for state in self.read_states.values_mut() {
+            state.update_archetypes(world);
+        }
     }
+}
+
+/// **T10c**：只读组合视图的取数钩子（把状态借用 `'s` 从 item 类型里消掉）。
+///
+/// 为什么需要它：`QueryState::get_manual` 的返回类型是 `ROQueryItem<'w, 's, D>`；在
+/// **泛型**上下文里编译器无法归一化该投影，会保守地认为 item 借用了 `&QueryState`
+/// 的 `'s`，于是 `&self` 取数 + 返回 item 会被判 `E0515`（返回了局部变量的引用）。
+/// 把取数下沉到**具体类型**的 `impl` 里（`D::Item<'w,'s>` 在这里归一化为只含 `'w` 的
+/// 引用元组），泛型侧只剩 `D::Item<'w, 'w>`，不再可能借用状态。
+///
+/// 形态：**world 侧**用本地标记类型实现（`type Data = <只读组合视图元组>`）。为什么不是
+/// 「直接在元组上实现本 trait」：元组是外部类型、本 trait 是外部 trait ⇒ 触发孤儿规则。
+///
+/// 约束：`Data` 必须是只读组合视图（`QueryData<ReadOnly = Data>`）。
+pub trait ReadViewData: Sized + 'static {
+    /// 只读组合视图的 `QueryData`（`&C` 元组的嵌套形态）。
+    type Data: QueryData<ReadOnly = Self::Data> + 'static;
+
+    /// 按显式句柄取数（不迭代 Query 求顺序；组件缺失 ⇒ `None`）。
+    fn fetch<'w>(
+        state: &QueryState<Self::Data>,
+        world: &'w World,
+        entity: Entity,
+    ) -> Option<<Self::Data as QueryData>::Item<'w, 'w>>;
 }
 
 /// **组合视图的访问声明**（P2b P2-VIEW-MUT-BYPASS，设计 §3.3 的实现形态）。
@@ -670,6 +729,14 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         self.world.resource::<SlotTable>().order()
     }
 
+    /// 槽位顺序的业务 id（**零分配**迭代；与 [`Self::order`] 逐项同序）。
+    pub fn order_index_iter(&self) -> impl Iterator<Item = i32> + '_ {
+        self.world
+            .resource::<SlotTable>()
+            .order_iter()
+            .map(|(id, _)| id)
+    }
+
     /// id -> bevy 实体（三态之一的 **id 不在槽位表 / 槽已空** 都落到 `None`）。
     pub fn resolve(&self, id: i32) -> Option<Entity> {
         self.world.resource::<SlotTable>().entity_of(id)
@@ -799,6 +866,43 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         let queries = self.queries.as_mut()?;
         let state = queries.state::<Q>(self.world);
         state.get_manual(&*self.world, entity).ok()
+    }
+
+    /// **T10c**：预创建只读组合视图的缓存状态（[`Self::read_view`] 的前提）。
+    ///
+    /// 建表需要 `&mut World`（`world.query::<Q>()`），只能在持有 `&mut self` 时做；
+    /// 运行期白名单核对照旧（`assert_view_access` 逐项核对，被拒的视图在这里就 panic ——
+    /// 不会因为「先建表」放宽任何判据）。
+    pub fn prepare_read_view<V: ReadViewData>(&mut self)
+    where
+        V::Data: ViewAccess,
+    {
+        self.assert_view_access::<V::Data>();
+        let Some(queries) = self.queries.as_mut() else {
+            return;
+        };
+        queries.ensure_read_state::<V::Data>(self.world);
+    }
+
+    /// **T10c**：只读组合视图的一次取齐（`&self`；状态须先经 [`Self::prepare_read_view`]）。
+    ///
+    /// 比逐组件 `get::<C>` 快的地方：一次 `SlotTable` 解析 + 一次 `QueryState::get_manual`
+    /// （archetype 解析 + 逐列取值），而不是「每组件一次 `TypeId → ComponentId` 解析 +
+    /// 一次 archetype 解析」。组件缺失 ⇒ `None`（与逐组件路径的跳过语义一致），
+    /// 并且**照旧记 [`StageSkip::component_missing`]**——`id` 已由 `resolve` 证明存在，
+    /// 此时 `fetch` 返回 `None` 的唯一原因就是缺列（reviewer-26 R-P3：旧实现漏记，
+    /// 让 `StageSkip` 不再覆盖 `StageAccess::get` 的半实体路径）。
+    pub fn read_view<V: ReadViewData>(
+        &self,
+        id: i32,
+    ) -> Option<<V::Data as QueryData>::Item<'_, '_>> {
+        let entity = self.resolve(id)?;
+        let state = self.queries.as_ref()?.read_state::<V::Data>()?;
+        let item = <V as ReadViewData>::fetch(state, &*self.world, entity);
+        if item.is_none() {
+            self.note_component_missing();
+        }
+        item
     }
 
     /// **组合视图**（P2 前置，设计 §3.3）：一次借用拿到同实体上 `Q` 声明的多组件
@@ -1449,6 +1553,68 @@ mod stage_adapter_tests {
         let mut ad = StageEntities::<StructUnreg>::new(store.world_mut());
         ad.insert(id, (A(1), Unregistered2(9)));
         let _ = ad.get::<Unregistered2>(id);
+    }
+
+    // ---------------- T10c：只读组合视图（StageAccess::get 的快路径） ----------------
+
+    /// 只读组合视图的实现载体（`(A, B)` 两列）。
+    struct ReadProbePair;
+    impl ReadViewData for ReadProbePair {
+        type Data = (&'static A, &'static B);
+        fn fetch<'w>(
+            state: &QueryState<Self::Data>,
+            world: &'w World,
+            entity: Entity,
+        ) -> Option<<Self::Data as QueryData>::Item<'w, 'w>> {
+            state.get_manual(world, entity).ok()
+        }
+    }
+
+    /// **T10c**：`read_view` 与逐组件 `get` 逐字段同值；半实体/不存在 id ⇒ `None`。
+    ///
+    /// 牙：把 `read_view` 的半实体分支改成 `expect`（panic）⇒ 第 2 条红；
+    /// 把 `Data` 的组件换掉 ⇒ 第 1 条红。
+    #[test]
+    fn t_read_view_matches_per_component_get_and_skips_half_entities() {
+        let mut store = store_with(&[1, 2]);
+        assert!(store.insert_component(1, B(6)));
+        // 2 是半实体（只有 A，没有 B）
+        {
+            let mut ad = StageEntities::<Probe>::new(store.world_mut());
+            ad.prepare_read_view::<ReadProbePair>();
+            let (a, b) = ad.read_view::<ReadProbePair>(1).expect("两列齐全");
+            assert_eq!((a.0, b.0), (1, 6));
+            assert_eq!(a.0, ad.get::<A>(1).unwrap().0, "与逐组件路径逐字段同值");
+            assert_eq!(b.0, ad.get::<B>(1).unwrap().0, "与逐组件路径逐字段同值");
+            assert!(
+                ad.read_view::<ReadProbePair>(2).is_none(),
+                "缺一列 ⇒ None（半实体跳过，不 panic）"
+            );
+            assert!(
+                ad.read_view::<ReadProbePair>(99).is_none(),
+                "id 不存在 ⇒ None"
+            );
+        }
+        // reviewer-26 R-P3：半实体走 read_view 也必须记 StageSkip（与逐组件 get 同口径）。
+        // 牙：删掉 `read_view` 里的 `note_component_missing` ⇒ 计数 0 ⇒ 红。
+        // 注意「id 不存在」（99）不得计入：`resolve` 先返回 None，走不到计数点。
+        assert_eq!(
+            store.world().resource::<StageSkip>().get(),
+            1,
+            "半实体经 read_view 必须记一次 component_missing（且只记一次）"
+        );
+    }
+
+    /// **T10c**：预建表的 fail-closed 不放宽——`Data` 里任一组件不在本段读白名单 ⇒ 建表时 panic。
+    ///
+    /// 牙：把 `prepare_read_view` 里的 `assert_view_access` 删掉 ⇒ 本用例不再 panic ⇒ 红。
+    #[test]
+    #[should_panic(expected = "越白名单")]
+    fn t_read_view_prepare_keeps_whitelist_fail_closed() {
+        let mut store = store_with(&[1]);
+        let mut ad = StageEntities::<ReadOnlyProbe>::new(store.world_mut());
+        // `ReadOnlyProbe` 只声明读 A；`ReadProbePair` 还要 B ⇒ 必须拒。
+        ad.prepare_read_view::<ReadProbePair>();
     }
 
     // ---------------- T10 Top1：预编译白名单（compiled_whitelist） ----------------

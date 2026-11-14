@@ -20,16 +20,12 @@
 //! 任何字段（过滤器读的是被观察者的 Race/Master/标志位），两阶段与就地等价。
 
 use crate::entity::{
-    AbilitySnapshot, AiState, AnimalState, Appearance, BaseAbil, BuffState, CombatAttribution,
-    DropState, Entity, EntityRef, EntityStore, Flags, GroupState, Inventory, LifeCycle, MapBinding,
-    MerchantState, MonsterClassState, NpcState, PlayerRunState, Progression, PvpState, Recovery,
-    Revival, SlaveState, SpawnBinding, Transform, VisibleBaseObject, VisibleEvent, VisibleFlag,
-    Vitals, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
+    AiState, AnimalState, EntityRef, EntityStore, MapBinding, Transform, VisibleBaseObject,
+    VisibleEvent, VisibleFlag, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY,
 };
 use crate::map::{CellType, MapGrid};
 use bevy_ecs::prelude::Resource;
 use mir2_world_bevy::MapsRes;
-use std::collections::HashMap;
 
 /// 格子内对象过期阈值（`BaseObject.ViewRange.cs:95`：`60 * 1000` 毫秒）。
 pub const CELL_OBJECT_EXPIRE_MS: i64 = 60 * 1000;
@@ -570,10 +566,6 @@ pub fn visible_snapshot<S: AoiStore>(store: &S, id: i32) -> Vec<(i32, u8)> {
 
 // ============================ S3b：OutputAoi 系统 ============================
 
-/// 本 tick 的「业务 id → bevy 实体句柄」索引（槽位顺序；facade 在 tick 边界灌入）。
-#[derive(Resource, Default)]
-pub struct AoiIds(pub Vec<(i32, bevy_ecs::entity::Entity)>);
-
 /// `OutputAoi` 系统的输入快照（时钟 / 掉落清理门 / 事件与 sight 镜像）。
 #[derive(Resource, Default)]
 pub struct AoiParams {
@@ -587,6 +579,13 @@ pub struct AoiParams {
 #[derive(Resource, Default)]
 pub struct AoiScratch {
     pub by_map: Vec<Vec<i32>>,
+    /// **T10 Top2**：全组件读视图的缓存 `QueryState`（跨 tick 复用）。
+    ///
+    /// `Option` 的原因：`world.query::<Q>()` 需要 `&mut World`，只能在系统里首次建表；
+    /// 之后每 tick 用 `get_manual`（共享借用）按显式句柄取数，不迭代 Query 求顺序。
+    pub view: Option<bevy_ecs::query::QueryState<crate::entity::EntityRefData>>,
+    /// 分桶用的 `Transform` 只读视图（只取 `map_id`，不构造完整 `EntityRef`）。
+    pub map_view: Option<bevy_ecs::query::QueryState<(&'static Transform,)>>,
 }
 
 /// `OutputAoi` 系统的输出（facade 跑完 schedule 后转抄进 `TickRecord`）。
@@ -601,101 +600,42 @@ pub struct AoiOut {
 /// bevy `World` 侧的 [`AoiStore`] 实现：按显式句柄取三组件，**不迭代 Query 求顺序**。
 struct BevyAoiStore<'a> {
     world: &'a mut bevy_ecs::world::World,
-    index: &'a HashMap<i32, bevy_ecs::entity::Entity>,
+    /// 槽位表（本段期间从 bevy `World` **移出**后借用；段内无结构变更 ⇒ 顺序/解析恒定）。
+    ///
+    /// 这样 `id -> bevy 实体` 走 [`mir2_world_bevy::ecs::SlotTable::entity_of`] 的 O(1)
+    /// 稠密索引，不再每 tick 建 11k 项 `HashMap`（T10 Top2）。
+    table: &'a mir2_world_bevy::ecs::SlotTable,
+    /// 全组件读视图（跨 tick 缓存的 `QueryState`；见 [`AoiScratch::view`]）。
+    view: &'a bevy_ecs::query::QueryState<crate::entity::EntityRefData>,
 }
 
 impl AoiStore for BevyAoiStore<'_> {
     fn get(&self, id: i32) -> Option<EntityRef<'_>> {
-        let e = *self.index.get(&id)?;
-        let entity = self.world.get::<Entity>(e)?;
-        let transform = self.world.get::<Transform>(e)?;
-        let binding = self.world.get::<MapBinding>(e)?;
-        // S4a：`EntityStore::insert` 保证每个实体都挂三组件（缺组件是插入期硬断言），
-        // 这里用 `expect` 而不是 `unwrap_or_default`：静默用默认值会让 AOI 读到假属性。
-        let vitals = self
-            .world
-            .get::<Vitals>(e)
-            .expect("实体必须挂 Vitals 组件（插入期已断言）");
-        let ability = self
-            .world
-            .get::<AbilitySnapshot<BaseAbil>>(e)
-            .expect("实体必须挂 AbilitySnapshot 组件（插入期已断言）");
-        let progression = self
-            .world
-            .get::<Progression>(e)
-            .expect("实体必须挂 Progression 组件（插入期已断言）");
-        let spawn = self
-            .world
-            .get::<SpawnBinding>(e)
-            .expect("实体必须挂 SpawnBinding 组件（插入期已断言）");
-        let drop = self
-            .world
-            .get::<DropState>(e)
-            .expect("实体必须挂 DropState 组件（插入期已断言）");
-        let attribution = self
-            .world
-            .get::<CombatAttribution>(e)
-            .expect("实体必须挂 CombatAttribution 组件（插入期已断言）");
-        let recovery = self
-            .world
-            .get::<Recovery>(e)
-            .expect("实体必须挂 Recovery 组件（插入期已断言）");
-        let pvp = self
-            .world
-            .get::<PvpState>(e)
-            .expect("实体必须挂 PvpState 组件（插入期已断言）");
-        let flags = self
-            .world
-            .get::<Flags>(e)
-            .expect("实体必须挂 Flags 组件（插入期已断言）");
-        let life_cycle = self
-            .world
-            .get::<LifeCycle>(e)
-            .expect("实体必须挂 LifeCycle 组件（插入期已断言）");
-        let appearance = self
-            .world
-            .get::<Appearance>(e)
-            .expect("实体必须挂 Appearance 组件（插入期已断言）");
-        let monster_class = self
-            .world
-            .get::<MonsterClassState>(e)
-            .expect("实体必须挂 MonsterClassState 组件（插入期已断言）");
-        let player_run = self
-            .world
-            .get::<PlayerRunState>(e)
-            .expect("实体必须挂 PlayerRunState 组件（插入期已断言）");
-        let group = self
-            .world
-            .get::<GroupState>(e)
-            .expect("实体必须挂 GroupState 组件（插入期已断言）");
-        let revival = self
-            .world
-            .get::<Revival>(e)
-            .expect("实体必须挂 Revival 组件（插入期已断言）");
-        let buff = self
-            .world
-            .get::<BuffState>(e)
-            .expect("实体必须挂 BuffState 组件（插入期已断言）");
-        let slave = self
-            .world
-            .get::<SlaveState>(e)
-            .expect("实体必须挂 SlaveState 组件（插入期已断言）");
-        let inventory = self
-            .world
-            .get::<Inventory>(e)
-            .expect("实体必须挂 Inventory 组件（插入期已断言）");
-        let merchant = self
-            .world
-            .get::<MerchantState>(e)
-            .expect("实体必须挂 MerchantState 组件（插入期已断言）");
-        let npc = self
-            .world
-            .get::<NpcState>(e)
-            .expect("实体必须挂 NpcState 组件（插入期已断言）");
-        let ai = self
-            .world
-            .get::<AiState>(e)
-            .expect("实体必须挂 AiState 组件（插入期已断言）");
+        let e = self.table.entity_of(id)?;
+        // 一次组合视图取齐（T10 Top2）：旧实现逐组件 `world.get::<C>` = 24 次
+        // `TypeId → ComponentId` + archetype 解析；现在一次 `get_manual`。组件缺失的跳过
+        // 语义不变（任一列缺失 ⇒ `Err` ⇒ `None`），S4a 的「缺组件是插入期硬断言」意不变。
+        let (
+            (
+                entity,
+                transform,
+                binding,
+                vitals,
+                ability,
+                progression,
+                spawn,
+                drop,
+                attribution,
+                recovery,
+                pvp,
+                flags,
+                life_cycle,
+                appearance,
+                monster_class,
+            ),
+            (player_run, group, revival, buff),
+            (slave, inventory, merchant, npc, ai),
+        ) = self.view.get_manual(&*self.world, e).ok()?;
         Some(EntityRef::from_components(
             entity,
             transform,
@@ -725,14 +665,14 @@ impl AoiStore for BevyAoiStore<'_> {
     }
 
     fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
-        let e = *self.index.get(&id)?;
+        let e = self.table.entity_of(id)?;
         self.world
             .get_mut::<AiState>(e)
             .map(|m| &mut bevy_ecs::change_detection::Mut::into_inner(m).ai)
     }
 
     fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
-        let e = *self.index.get(&id)?;
+        let e = self.table.entity_of(id)?;
         self.world
             .get_mut::<MapBinding>(e)
             .map(bevy_ecs::change_detection::Mut::into_inner)
@@ -741,56 +681,91 @@ impl AoiStore for BevyAoiStore<'_> {
 
 /// `TickStage::OutputAoi` 的系统：AOI 刷新的唯一生产实现。
 ///
-/// 输入（资源，facade 在 tick 边界一次性移入）：[`AoiIds`] + [`AoiParams`] +
-/// [`MapsRes<MapGrid>`] + [`AoiScratch`]；输出：[`AoiOut`]。扫描顺序 = `AoiIds` 的槽位顺序
-///（facade 从 `EcsStore` 显式槽位索引生成），**从不迭代 `Query` 求顺序**。
+/// 输入（资源，facade 在 tick 边界一次性移入）：[`AoiParams`] + [`MapsRes<MapGrid>`] +
+/// [`AoiScratch`]；输出：[`AoiOut`]。扫描顺序 = **本段自己借用的 [`SlotTable`] 槽位顺序**
+///（T10 Top2：此前是 facade 每 tick `slot_order()` 克隆进 `AoiIds` 资源），
+/// **从不迭代 `Query` 求顺序**。
 pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
-    // S3b 评审 P3：三个输入资源由 facade 在 tick 边界**无条件**移入（见 `World::tick` 的
+    // S3b 评审 P3：输入资源由 facade 在 tick 边界**无条件**移入（见 `World::tick` 的
     // `OutputAoi` 段）⇒ 缺失是接线错误，用 `expect` 立即失败，而不是静默按空表跑
     //（`unwrap_or_default` 会让 AOI 静默不出/漏出，golden 仍可能绿）。
-    let ids: Vec<(i32, bevy_ecs::entity::Entity)> = world
-        .get_resource::<AoiIds>()
-        .expect("OutputAoi 前必须插入 AoiIds（facade tick 边界）")
-        .0
-        .clone();
     let mut params = world
         .remove_resource::<AoiParams>()
         .expect("OutputAoi 前必须插入 AoiParams（facade tick 边界）");
     let mut maps = world
         .remove_resource::<MapsRes<MapGrid>>()
         .expect("OutputAoi 前必须插入 MapsRes（facade tick 边界）");
-    // `AoiScratch` 是**每 tick 新建的复用缓冲**（facade 不持有、不跨 tick 存），缺省构造是
-    // 合法初始态 ⇒ 保持 `unwrap_or_default`。
+    // `AoiScratch` 是本段**跨 tick 复用**的资源：系统每 tick 把它从 `World` 取出、段尾原样
+    // 放回（资源本身跨 tick 存活，`by_map` 缓冲与两个 `QueryState` 都复用）。缺省构造是
+    // 合法初始态（含两个未建表的视图缓存）⇒ 保持 `unwrap_or_default`（首 tick 建表）。
     let mut scratch = world.remove_resource::<AoiScratch>().unwrap_or_default();
+    // **T10 Top2/Top4**：槽位表就是「id → 实体 + 槽位序」的唯一真值。本段把它从 bevy
+    // `World` 移出后借用：既得到 O(1) 的 `entity_of`（替代每 tick 重建的 11k 项
+    // `HashMap`），又直接按槽位序迭代（替代 facade 每 tick 的 `slot_order()` 克隆）。
+    // 段内无结构变更（AOI 只改组件），段尾原样放回。
+    let table = world
+        .remove_resource::<mir2_world_bevy::ecs::SlotTable>()
+        .expect("OutputAoi 前必须已插入 SlotTable（ECS 内核不变量）");
     let mut out = AoiOut::default();
-    let index: HashMap<i32, bevy_ecs::entity::Entity> = ids.iter().copied().collect();
+
+    // 两个缓存视图：建表（首次）与 archetype 刷新（结构变更发生在其它段）。
+    scratch
+        .view
+        .get_or_insert_with(|| world.query::<crate::entity::EntityRefData>())
+        .update_archetypes(world);
+    scratch
+        .map_view
+        .get_or_insert_with(|| world.query::<(&'static Transform,)>())
+        .update_archetypes(world);
+    let view = scratch
+        .view
+        .as_ref()
+        .expect("view 刚由 get_or_insert_with 建立");
+    let map_view = scratch
+        .map_view
+        .as_ref()
+        .expect("map_view 刚由 get_or_insert_with 建立");
+
+    let mut by_map = std::mem::take(&mut scratch.by_map);
+    by_map.clear();
+    by_map.resize_with(maps.0.len(), Vec::new);
+    for v in by_map.iter_mut() {
+        v.clear();
+    }
+    // 分桶只读 `Transform`（地图 id）——旧实现为拿 `map_id` 构造完整 24 组件 `EntityRef`。
+    for (id, entity) in table.order_iter() {
+        if let Ok((transform,)) = map_view.get_manual(&*world, entity) {
+            if let Some(v) = by_map.get_mut(transform.map_id) {
+                v.push(id);
+            }
+        }
+    }
     {
         let mut store = BevyAoiStore {
             world: &mut *world,
-            index: &index,
+            table: &table,
+            view,
         };
-        scratch.by_map.clear();
-        scratch.by_map.resize_with(maps.0.len(), Vec::new);
-        for v in scratch.by_map.iter_mut() {
-            v.clear();
-        }
-        for (id, _) in &ids {
-            if let Some(e) = store.get(*id) {
-                if let Some(v) = scratch.by_map.get_mut(e.map_id) {
-                    v.push(*id);
-                }
-            }
-        }
-        let by_map = std::mem::take(&mut scratch.by_map);
         for (map_id, map_ids) in by_map.iter().enumerate() {
             let Some(map) = maps.0.get_mut(map_id) else {
                 continue;
             };
             for id in map_ids {
-                let death = match store.get(*id) {
-                    Some(e) => e.death,
+                // **T10 Top2**：death/race/ghost/搜索门在同一快照里取一次（旧实现为这三项
+                // 各构造一次完整 `EntityRef`；三项都是只读字段，且本段内 race/death 不变）。
+                let snap = match store.get(*id) {
+                    Some(e) => (
+                        e.death,
+                        e.race,
+                        e.ghost,
+                        e.ai.search_tick,
+                        e.ai.search_time,
+                        e.is_clone,
+                        crate::monai::monster_self_scans(&e),
+                    ),
                     None => continue,
                 };
+                let (death, race, ghost, search_tick, search_time, is_clone, self_scans) = snap;
                 if death {
                     search_view_range_death(
                         map,
@@ -800,21 +775,22 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                         params.clear_drop_on_floor_item_time,
                     );
                 } else {
-                    let (scan, observer_kind) = match store.get(*id) {
-                        Some(e) if e.race == crate::entity::ACTOR_RACE_PLAY => (
-                            !e.ghost && params.clock_ms - e.ai.search_tick > e.ai.search_time,
-                            if e.is_clone {
+                    let (scan, observer_kind) = if race == crate::entity::ACTOR_RACE_PLAY {
+                        (
+                            !ghost && params.clock_ms - search_tick > search_time,
+                            if is_clone {
                                 crate::world::HideObserverKind::Clone
                             } else {
                                 crate::world::HideObserverKind::Player
                             },
-                        ),
-                        Some(e) if !e.ghost && crate::monai::monster_self_scans(&e) => (
-                            params.clock_ms - e.ai.search_tick > e.ai.search_time,
+                        )
+                    } else if !ghost && self_scans {
+                        (
+                            params.clock_ms - search_tick > search_time,
                             crate::world::HideObserverKind::NonPlayer,
-                        ),
-                        Some(_) => (false, crate::world::HideObserverKind::Player),
-                        None => continue,
+                        )
+                    } else {
+                        (false, crate::world::HideObserverKind::Player)
                     };
                     if !scan {
                         out.aoi_order.push(*id);
@@ -839,10 +815,7 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                             }
                         }
                     }
-                    if store
-                        .get(*id)
-                        .is_some_and(|e| e.race == crate::entity::ACTOR_RACE_PLAY)
-                    {
+                    if race == crate::entity::ACTOR_RACE_PLAY {
                         for (idx, x, y) in search_view_range_events(
                             map,
                             &mut store,
@@ -857,8 +830,9 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                 out.aoi_order.push(*id);
             }
         }
-        scratch.by_map = by_map;
     }
+    scratch.by_map = by_map;
+    world.insert_resource(table);
     world.insert_resource(maps);
     world.insert_resource(params);
     world.insert_resource(scratch);

@@ -914,6 +914,69 @@ impl SimState {
     }
 }
 
+/// `AnimalObject.ProcessRunCount` 的旁挂容器（键 = `ActorId`，值 0 表示「无条目」）。
+///
+/// 形态：`id ∈ [1, DENSE_CAP)` 走 `dense` 数组（下标 = id）；范围外（含非正 id）走
+/// `sparse` 兜底。语义与旧 `BTreeMap<i32, i32>` 逐条相同——**插入 0 等价于删除**
+/// （调用点 [`World::set_process_run_count_impl`] 已把 0 归到 `remove`，这里再兜一层）。
+///
+/// 为什么不是 `BTreeMap`：唯一读点是 AI 跳步门，每 tick 对每个实体一次 `get` + 一次
+/// `set/remove`；11k 实体下这是 22k 次 O(log n) 树操作（插入还会分配节点）。键稠密单调
+/// （`ActorMgr.GetNextIdentity` 小区间复用）⇒ 数组定位是常数时间、无分配。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProcessRunCounts {
+    /// `dense[id]` = 计数（0 = 无条目）。
+    dense: Vec<i32>,
+    /// 范围外 id 的兜底（非正 id 或 `id >= DENSE_CAP`）。
+    sparse: std::collections::BTreeMap<i32, i32>,
+}
+
+impl ProcessRunCounts {
+    /// 与 `mir2_world_bevy` 的 `IdIndex` 同一上界（4MiB / 每项 4B）。
+    const DENSE_CAP: usize = 1 << 20;
+
+    fn is_dense(id: i32) -> bool {
+        id >= 1 && (id as usize) < Self::DENSE_CAP
+    }
+
+    /// 读计数（无条目 ⇒ 0，与 oracle ctor 缺省一致）。
+    pub fn get(&self, id: i32) -> i32 {
+        if Self::is_dense(id) {
+            self.dense.get(id as usize).copied().unwrap_or(0)
+        } else {
+            self.sparse.get(&id).copied().unwrap_or(0)
+        }
+    }
+
+    /// 写计数；`0` 等价于删除（表项不堆积）。
+    pub fn set(&mut self, id: i32, value: i32) {
+        if value == 0 {
+            self.remove(id);
+            return;
+        }
+        if Self::is_dense(id) {
+            let i = id as usize;
+            if self.dense.len() <= i {
+                self.dense.resize(i + 1, 0);
+            }
+            self.dense[i] = value;
+        } else {
+            self.sparse.insert(id, value);
+        }
+    }
+
+    /// 删条目（不存在是 no-op）。
+    pub fn remove(&mut self, id: i32) {
+        if Self::is_dense(id) {
+            if let Some(v) = self.dense.get_mut(id as usize) {
+                *v = 0;
+            }
+        } else {
+            self.sparse.remove(&id);
+        }
+    }
+}
+
 /// **S4d-1 资源层**：`World` 的全部**非实体**状态。
 ///
 /// 实体组件仍在 `EntityStore` 的 bevy `World`；本类型在 tick 边界被移入同一个 bevy `World`
@@ -1116,7 +1179,12 @@ pub struct SimState {
     /// 选 `BTreeMap` 仅为消除哈希随机性；`EntityStore::alloc_id` 单调递增、不复用 id ⇒ 无键冲突）。
     ///
     /// 生命周期：`release_entity` 时删键；复活成功时清零（`WorldServer.MonGen.cs:289`）。
-    pub process_run_counts: std::collections::BTreeMap<i32, i32>,
+    ///
+    /// **T10 Top2**：容器从 `BTreeMap` 换成 [`ProcessRunCounts`]（稠密下标数组 + 稀疏兜底）。
+    /// 唯一读点是每 tick 对**每个实体**的 `get` + `insert/remove`（11k 实体 ⇒ 22k 次 O(log n)
+    /// 树操作 + 插入期节点分配）；键是稠密单调的小 id，数组直接命中。只按 id 查/写、从不遍历，
+    /// 因此容器替换不影响任何可见顺序。
+    pub process_run_counts: ProcessRunCounts,
     /// C# `Config.ClearDropOnFloorItemTime`
     pub clear_drop_on_floor_item_time: i64,
     /// 每张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）：
@@ -1377,7 +1445,7 @@ impl SimState {
             mon_gen_zen_fast_step: 300,
             // `GameSvrConf.cs:1895` 构造缺省；部署件由 `ServerConf.cs:636` 覆盖。
             process_monster_interval: 2,
-            process_run_counts: std::collections::BTreeMap::new(),
+            process_run_counts: ProcessRunCounts::default(),
             clear_drop_on_floor_item_time: 5 * 60 * 1000,
             map_exp_rate: vec![None; maps_len],
             spirit_mutiny_tick: 0,
@@ -1543,7 +1611,7 @@ where
         .expect("Command 段：CommandQueueRes 必须由段边界插入（段边界契约）");
     {
         let mut ad = StageEntities::<S>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         // **FIFO 合同**：严格按入队顺序处理，逐条、不重排（`openmir2-world-ecs-p7-command-stage` A2）。
         while let Some(cmd) = pending.0.pop_front() {
             World::apply_command(&mut access, &mut sim, &mut record.0, cmd);
@@ -2225,7 +2293,7 @@ pub fn sim_dup_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("SimState 必须在段窗口内（段边界契约）");
     let pushes = {
         let mut ad = StageEntities::<SimDup>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         World::check_dup_obj_core(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -2423,7 +2491,7 @@ fn settle_deaths_stage_core<S: FullAccessSpec>(
         .expect("TickRecordRes 必须由段边界插入（结算段契约）");
     {
         let mut ad = StageEntities::<S>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         World::settle_deaths_impl(&mut access, &mut sim, &mut record.0, only_players);
     }
     world.insert_resource(record);
@@ -2500,7 +2568,7 @@ mir2_world_bevy::stage_spec!(
 pub fn sim_slave_cleanup_stage_system(world: &mut bevy_ecs::world::World) {
     StageTrace::record(world, TickStage::SimSlaveCleanup);
     let mut ad = StageEntities::<SimSlaveCleanup>::new(world);
-    let mut access = crate::entity::StageAccess { ad: &mut ad };
+    let mut access = crate::entity::StageAccess::new(&mut ad);
     crate::slave::slave_list_cleanup_all_impl(&mut access);
 }
 
@@ -2578,7 +2646,7 @@ pub fn sim_buff_stage_system(world: &mut bevy_ecs::world::World) {
     let mut out = BuffTickOutcome::default();
     {
         let mut ad = StageEntities::<SimBuff>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         for i in 0..BUFF_PASSES_PER_TICK {
             let now = base + i * BUFF_PASS_INTERVAL_MS;
             sim.buff_pass_tick = now;
@@ -2670,7 +2738,7 @@ pub fn sim_self_deliver_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("段边界：SimState 必须已在 bevy World（SimSelfDeliver）");
     let out = {
         let mut ad = StageEntities::<SimSelfDeliver>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         crate::slave::deliver_self_delay_msgs_impl(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -2761,7 +2829,7 @@ pub fn sim_npc_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("段边界：SimState 必须已在 bevy World（SimNpc）");
     let out = {
         let mut ad = StageEntities::<SimNpc>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         crate::npc::npc_tick_impl(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -2906,7 +2974,7 @@ pub fn sim_monster_ai_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("段边界：SimState 必须已在 bevy World（SimMonsterAi）");
     {
         let mut ad = StageEntities::<SimMonsterAi>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         crate::monai::monster_ai_tick_impl(&mut access, &mut sim);
     }
     world.insert_resource(sim);
@@ -2940,7 +3008,7 @@ pub fn sim_merchant_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("段边界：SimState 必须已在 bevy World（SimMerchant）");
     let out = {
         let mut ad = StageEntities::<SimMerchant>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         crate::merchant::merchant_tick_impl(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -3016,7 +3084,7 @@ pub fn tail_verify_map_time_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("SimState 必须在段窗口内（段边界契约）");
     {
         let mut ad = StageEntities::<TailVerifyMapTime>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         World::verify_players_map_time_impl(&mut access, &mut sim);
     }
     world.insert_resource(sim);
@@ -3458,7 +3526,7 @@ impl World {
     /// **P6b2**：`process_run_count` 的 facade/段共用实现（`SimMonsterAi` 段共用）。
     #[must_use]
     pub(crate) fn process_run_count_impl(sim: &SimState, actor_id: i32) -> i32 {
-        sim.process_run_counts.get(&actor_id).copied().unwrap_or(0)
+        sim.process_run_counts.get(actor_id)
     }
 
     /// 写 `ProcessRunCount`；`0` 等价于 oracle 的「置 0」（表项删除，避免空项堆积）。
@@ -3469,9 +3537,9 @@ impl World {
     /// **P6b2**：`set_process_run_count` 的 facade/段共用实现（`SimMonsterAi` 段共用）。
     pub(crate) fn set_process_run_count_impl(sim: &mut SimState, actor_id: i32, value: i32) {
         if value == 0 {
-            sim.process_run_counts.remove(&actor_id);
+            sim.process_run_counts.remove(actor_id);
         } else {
-            sim.process_run_counts.insert(actor_id, value);
+            sim.process_run_counts.set(actor_id, value);
         }
     }
 
@@ -7756,9 +7824,6 @@ impl World {
         // AOI 刷新：`TickStage::OutputAoi` 系统（S3b）。地图表在 tick 边界一次性移入
         // `MapsRes`，跑完移回 facade —— 同一时刻只有一个所有者（设计件 §4.2）。
         {
-            let __prof_slot = self.probe_begin();
-            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self.entities.slot_order();
-            self.probe_end("slot_order.aoi", __prof_slot);
             let __prof_stage = self.prof_begin();
             let maps = std::mem::take(&mut self.maps);
             let events = std::mem::take(&mut self.fire_burn_events);
@@ -7769,7 +7834,6 @@ impl World {
             );
             let (maps_back, params_back, out) = self.run_tail_stage(move |world, tail| {
                 world.insert_resource(mir2_world_bevy::MapsRes(maps));
-                world.insert_resource(crate::aoi::AoiIds(ids));
                 world.insert_resource(crate::aoi::AoiParams {
                     clock_ms,
                     clear_drop_on_floor_item_time,
@@ -8477,7 +8541,7 @@ impl World {
     /// + 对象失引用）：摘格 + 从实体仓库移除。不消费随机数。
     pub fn release_entity(&mut self, actor_id: i32) -> bool {
         // `ProcessRunCount` 旁挂项随实体一起清（id 单调不复用，删除只为控内存）。
-        self.process_run_counts.remove(&actor_id);
+        self.process_run_counts.remove(actor_id);
         self.disappear_a(actor_id);
         self.entities.remove(actor_id).is_some()
     }
@@ -10658,6 +10722,58 @@ mod tests {
     use super::*;
     use crate::entity::{EntitySpawn, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 
+    /// **T10 Top2**：`ProcessRunCounts` 的稠密 / 稀疏 / 删除语义（等价于旧 `BTreeMap`：
+    /// 无条目 ⇒ 0；写 0 等价于删除），并**直接钉住容器落点**（稠密 id 进数组、范围外进 sparse）。
+    ///
+    /// 牙（reviewer-26 R-P3 实测后重写，逐条可证伪）：
+    /// 1. **只改公开语义咬不住容器选择**：把 `get` 改成 `dense[i]` 直取、或把 `set(id,0)`
+    ///    直写 0，输出都仍是 0（`0` 哨兵本来就等价于删除）⇒ 必须断言内部落点。
+    /// 2. `set(3, 1)` 后断言 `dense[3] == 1` 且 `sparse` 无 3：把 `is_dense` 上界改小
+    ///    （3 被判成范围外）⇒ 红；把 dense 分支删掉全走 sparse ⇒ 红。
+    /// 3. `set(big, 1)`（`big = DENSE_CAP + 9`）后断言 `sparse[big] == 1` 且
+    ///    `dense.len() <= DENSE_CAP`：把上界改成「恒稠密」⇒ 数组被 resize 到 big+1 ⇒ 红。
+    /// 4. `set(-5, 3)` / `get(0)`：删掉 `id >= 1` 守卫 ⇒ 负数按 `usize` 解释 ⇒
+    ///    `dense.resize(巨大)` panic ⇒ 红。
+    #[test]
+    fn process_run_counts_dense_sparse_and_zero_removes() {
+        let mut t = ProcessRunCounts::default();
+        assert_eq!(t.get(1), 0, "无条目 ⇒ 0（= oracle ctor 缺省）");
+        t.set(1, 2);
+        assert_eq!(t.get(1), 2);
+        t.set(1, 0);
+        assert_eq!(t.get(1), 0, "写 0 = 删除条目");
+        // 范围外：非正 id 走 sparse 兜底（删 `id >= 1` 守卫 ⇒ 负数被当 usize ⇒ resize panic）
+        t.set(-5, 3);
+        assert_eq!(t.get(-5), 3);
+        assert!(!t.sparse.is_empty(), "负 id 必须落 sparse，不得触 dense");
+        t.remove(-5);
+        assert_eq!(t.get(-5), 0);
+        assert_eq!(t.get(0), 0);
+        // 稠密落点：id 3 必须在 dense、且不在 sparse（改上界/删 dense 分支 ⇒ 红）
+        t.set(3, 1);
+        assert_eq!(t.get(3), 1);
+        assert_eq!(t.dense.get(3).copied(), Some(1), "稠密 id 必须落数组");
+        assert!(!t.sparse.contains_key(&3), "稠密 id 不得落 sparse");
+        // 范围外落点：>= DENSE_CAP 必须走 sparse，且 dense 不得被撑大（恒稠密 ⇒ 红）
+        let big = ProcessRunCounts::DENSE_CAP + 9;
+        let big = big as i32;
+        t.set(big, 1);
+        assert_eq!(t.get(big), 1);
+        assert_eq!(
+            t.sparse.get(&big).copied(),
+            Some(1),
+            "超上界 id 必须落 sparse"
+        );
+        assert!(
+            t.dense.len() <= ProcessRunCounts::DENSE_CAP,
+            "dense 不得为超上界 id 扩容（当前 {}）",
+            t.dense.len()
+        );
+        t.set(big, 0);
+        assert_eq!(t.get(big), 0);
+        assert!(!t.sparse.contains_key(&big), "写 0 必须删 sparse 条目");
+    }
+
     /// **T10 热点剖析**：分段计时**缺省关闭**，且开/关不改变 tick 的任何可见行为。
     ///
     /// 牙齿（逐条可证伪）：
@@ -11365,7 +11481,7 @@ mod tests {
         };
         {
             let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert_eq!(
                 crate::entity::StructuralAccess::insert(&mut access, spawn),
                 id
@@ -11404,7 +11520,7 @@ mod tests {
         assert!(w.entities.get(id).is_some());
         {
             let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(crate::entity::StructuralAccess::remove(&mut access, id));
             assert!(access.get(id).is_none());
         }
@@ -11503,7 +11619,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut w;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(
                 !World::try_step_impl(&mut access, sim, 1, 1, 0),
                 "撞墙必须返回 false"
@@ -11519,7 +11635,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut w;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(World::try_step_impl(&mut access, sim, 1, 0, 1), "空格可走");
         }
         let e = w.entities.get(1).unwrap();
@@ -11562,7 +11678,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut w;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(World::enter_world_impl(&mut access, sim, id));
             assert!(
                 access
@@ -11587,7 +11703,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut w;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(World::leave_world_impl(&mut access, sim, id));
         }
         w.entities.refresh_views();
@@ -11628,7 +11744,7 @@ mod tests {
         let stage_rush = {
             let World { entities, sim, .. } = &mut b;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             World::rush_now_impl(&mut access, sim, 1, crate::magic::DIR_RIGHT, 3)
         };
         let stage_pos = {
@@ -11650,7 +11766,7 @@ mod tests {
         let walled = {
             let World { entities, sim, .. } = &mut c;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             World::rush_now_impl(&mut access, sim, 1, crate::magic::DIR_RIGHT, 4)
         };
         assert_eq!(
@@ -11685,7 +11801,7 @@ mod tests {
         let stage_push = {
             let World { entities, sim, .. } = &mut f;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             World::push_now_impl(&mut access, sim, 1, crate::magic::DIR_UP, 3)
         };
         assert_eq!(stage_push, facade_push, "push：两条路径事件逐条相同");
@@ -11793,7 +11909,7 @@ mod tests {
         let (ok_b, stage_record) = {
             let World { entities, sim, .. } = &mut b;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             let mut record = TickRecord::default();
             let ok = World::spawn_monster_now_impl(
                 &mut access,
@@ -11868,7 +11984,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut c;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(
                 !World::spawn_monster_now_impl(
                     &mut access,
@@ -11937,7 +12053,7 @@ mod tests {
         let (stage_ev, stage_record) = {
             let World { entities, sim, .. } = &mut b;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             let mut record = TickRecord::default();
             let ev = World::butch_effect_now_impl(&mut access, sim, &mut record, pb, tb, 11, 10);
             (ev, record)
@@ -11997,7 +12113,7 @@ mod tests {
         let (stage_butch, butch_record) = {
             let World { entities, sim, .. } = &mut c;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let access = crate::entity::StageAccess { ad: &mut ad };
+            let access = crate::entity::StageAccess::new(&mut ad);
             let mut record = TickRecord::default();
             let ev = World::butch_now_impl(&access, &*sim, &mut record, pc, 5);
             (ev, record)
@@ -12223,7 +12339,7 @@ mod tests {
         let b = {
             let World { entities, sim, .. } = &mut staged;
             let mut ad = StageEntities::<AttackProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(
                 access.get(hero2).is_some(),
                 "段访问器必须能按 id 解析到攻方"

@@ -2085,6 +2085,70 @@ type ReadView3Query = bevy_ecs::query::QueryState<(
     &'static AiState,
 )>;
 
+/// **T10c**：`StageAccess::get` / `spawn_cloned` 的**一次取齐**组合视图
+/// （与 [`ReadViewQuery`] / [`ReadView2Query`] / [`ReadView3Query`] 同一份 24 组件集合，
+/// 只按显式句柄 `get_manual` 取）。
+///
+/// 为什么需要它：`StageAccess::get` 原先逐组件调用 `StageEntities::get::<C>` ⇒ 一个
+/// `EntityRef` = 24 次「`TypeId → ComponentId` 解析 + archetype 解析」。AI 的 Run 链每次
+/// 实体访问都要走这条路，11k 实体下 `SimMonsterAi` 从 7.0ms 涨到 52.6ms（P6b2 迁段后，
+/// 见 `docs/capacity-model-20261114.md`）。改成一次组合视图后回到「1 次解析 + 24 列取值」。
+pub(crate) type EntityRefData = (ReadViewQueryData, ReadView2QueryData, ReadView3QueryData);
+
+/// [`EntityRefData`] 的第一组（与 [`ReadViewQuery`] 同型）。
+type ReadViewQueryData = (
+    &'static Entity,
+    &'static Transform,
+    &'static MapBinding,
+    &'static Vitals,
+    &'static AbilitySnapshot<BaseAbil>,
+    &'static Progression,
+    &'static SpawnBinding,
+    &'static DropState,
+    &'static CombatAttribution,
+    &'static Recovery,
+    &'static PvpState,
+    &'static Flags,
+    &'static LifeCycle,
+    &'static Appearance,
+    &'static MonsterClassState,
+);
+
+/// [`EntityRefData`] 的第二组（与 [`ReadView2Query`] 同型）。
+type ReadView2QueryData = (
+    &'static PlayerRunState,
+    &'static GroupState,
+    &'static Revival,
+    &'static BuffState,
+);
+
+/// [`EntityRefData`] 的第三组（与 [`ReadView3Query`] 同型）。
+type ReadView3QueryData = (
+    &'static SlaveState,
+    &'static Inventory,
+    &'static MerchantState,
+    &'static NpcState,
+    &'static AiState,
+);
+
+/// [`EntityRefData`] 的本地标记类型（`ReadViewData` 的实现载体；元组是外部类型，不能直接
+/// 实现外部 trait）。
+pub struct EntityRefView;
+
+impl mir2_world_bevy::tick::ReadViewData for EntityRefView {
+    type Data = EntityRefData;
+
+    /// 具体类型上的取数：`Item<'w,'s>` 在这里归一化为只含 `'w` 的引用元组 ⇒
+    /// 泛型侧的 `read_view(&self)` 不会借用 `QueryState`（见 trait 文档）。
+    fn fetch<'w>(
+        state: &bevy_ecs::query::QueryState<Self::Data>,
+        world: &'w bevy_ecs::world::World,
+        entity: bevy_ecs::entity::Entity,
+    ) -> Option<<Self::Data as bevy_ecs::query::QueryData>::Item<'w, 'w>> {
+        state.get_manual(world, entity).ok()
+    }
+}
+
 /// 写路径缓存查询：`Entity` 主组件 + S4a/S4b 组件 + S4c-1 四组件（[`EntityMut`] 用）。
 ///
 /// bevy 扁平元组上限 15；S4c-1 追加 4 个组件后改用**嵌套元组**（内层 15 + 内层 4，
@@ -3389,6 +3453,18 @@ pub struct StageAccess<'a, 'w, S: mir2_world_bevy::tick::StageSpec> {
     pub ad: &'a mut mir2_world_bevy::tick::StageEntities<'w, S>,
 }
 
+impl<'a, 'w, S> StageAccess<'a, 'w, S>
+where
+    S: mir2_world_bevy::tick::StageSpec,
+{
+    /// **T10c**：构造段访问器，并把 [`EntityRefData`] 的只读组合视图状态预建进本段的
+    /// `StageQueries`（`read_view` 的 `&self` 取数前提）。
+    pub fn new(ad: &'a mut mir2_world_bevy::tick::StageEntities<'w, S>) -> Self {
+        ad.prepare_read_view::<EntityRefView>();
+        Self { ad }
+    }
+}
+
 impl<S> EntityAccess for StageAccess<'_, '_, S>
 where
     S: mir2_world_bevy::tick::StageSpec
@@ -3418,35 +3494,59 @@ where
         + mir2_world_bevy::tick::Reads<AiState>,
 {
     fn order_ids(&self) -> Vec<i32> {
-        self.ad.order().into_iter().map(|(id, _)| id).collect()
+        // **T10 Top2**：旧实现 `order()`（克隆 11k 项 `(id, Entity)` Vec）+ 再 `collect`
+        // 一个 `Vec<i32>` = 每 tick 两次全量分配；改为从槽位表**一次**收集 id。
+        self.ad.order_index_iter().collect()
     }
     fn get(&self, id: i32) -> Option<EntityRef<'_>> {
-        self.ad.resolve(id)?;
+        // **T10c**：一次组合视图取齐（见 [`EntityRefData`]）。组件缺失 / id 不存在 ⇒ `None`
+        // 的跳过语义与逐组件路径逐条相同（`get_manual` 任一列缺失即 `Err`）。
+        let (
+            (
+                entity,
+                transform,
+                binding,
+                vitals,
+                ability,
+                progression,
+                spawn,
+                drop,
+                attribution,
+                recovery,
+                pvp,
+                flags,
+                life_cycle,
+                appearance,
+                monster_class,
+            ),
+            (player_run, group, revival, buff),
+            (slave, inventory, merchant, npc, ai),
+        ) = self.ad.read_view::<EntityRefView>(id)?;
         Some(EntityRef::from_components(
-            self.ad.get::<Entity>(id)?,
-            self.ad.get::<Transform>(id)?,
-            self.ad.get::<MapBinding>(id)?,
-            self.ad.get::<Vitals>(id)?,
-            self.ad.get::<AbilitySnapshot<BaseAbil>>(id)?,
-            self.ad.get::<Progression>(id)?,
-            self.ad.get::<SpawnBinding>(id)?,
-            self.ad.get::<DropState>(id)?,
-            self.ad.get::<CombatAttribution>(id)?,
-            self.ad.get::<Recovery>(id)?,
-            self.ad.get::<PvpState>(id)?,
-            self.ad.get::<Flags>(id)?,
-            self.ad.get::<LifeCycle>(id)?,
-            self.ad.get::<Appearance>(id)?,
-            self.ad.get::<MonsterClassState>(id)?,
-            self.ad.get::<PlayerRunState>(id)?,
-            self.ad.get::<GroupState>(id)?,
-            self.ad.get::<Revival>(id)?,
-            self.ad.get::<BuffState>(id)?,
-            self.ad.get::<SlaveState>(id)?,
-            self.ad.get::<Inventory>(id)?,
-            self.ad.get::<MerchantState>(id)?,
-            self.ad.get::<NpcState>(id)?,
-            self.ad.get::<AiState>(id)?,
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
+            ai,
         ))
     }
     fn get_mut(&mut self, id: i32) -> Option<EntityMut<'_>> {
@@ -3496,32 +3596,53 @@ where
         })
     }
     fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
-        self.ad.resolve(id)?;
+        // **T10c**：同 [`EntityAccess::get`]，一次组合视图取齐。
+        let (
+            (
+                entity,
+                transform,
+                binding,
+                vitals,
+                ability,
+                progression,
+                spawn,
+                drop,
+                attribution,
+                recovery,
+                pvp,
+                flags,
+                life_cycle,
+                appearance,
+                monster_class,
+            ),
+            (player_run, group, revival, buff),
+            (slave, inventory, merchant, npc, ai),
+        ) = self.ad.read_view::<EntityRefView>(id)?;
         Some(EntityStore::from_components(
-            self.ad.get::<Entity>(id)?,
-            self.ad.get::<Transform>(id)?,
-            self.ad.get::<MapBinding>(id)?,
-            self.ad.get::<Vitals>(id)?,
-            self.ad.get::<AbilitySnapshot<BaseAbil>>(id)?,
-            self.ad.get::<Progression>(id)?,
-            self.ad.get::<SpawnBinding>(id)?,
-            self.ad.get::<DropState>(id)?,
-            self.ad.get::<CombatAttribution>(id)?,
-            self.ad.get::<Recovery>(id)?,
-            self.ad.get::<PvpState>(id)?,
-            self.ad.get::<Flags>(id)?,
-            self.ad.get::<LifeCycle>(id)?,
-            self.ad.get::<Appearance>(id)?,
-            self.ad.get::<MonsterClassState>(id)?,
-            self.ad.get::<PlayerRunState>(id)?,
-            self.ad.get::<GroupState>(id)?,
-            self.ad.get::<Revival>(id)?,
-            self.ad.get::<BuffState>(id)?,
-            self.ad.get::<SlaveState>(id)?,
-            self.ad.get::<Inventory>(id)?,
-            self.ad.get::<MerchantState>(id)?,
-            self.ad.get::<NpcState>(id)?,
-            self.ad.get::<AiState>(id)?,
+            entity,
+            transform,
+            binding,
+            vitals,
+            ability,
+            progression,
+            spawn,
+            drop,
+            attribution,
+            recovery,
+            pvp,
+            flags,
+            life_cycle,
+            appearance,
+            monster_class,
+            player_run,
+            group,
+            revival,
+            buff,
+            slave,
+            inventory,
+            merchant,
+            npc,
+            ai,
         ))
     }
     fn set_progression(&mut self, id: i32, progression: Progression) -> bool {
