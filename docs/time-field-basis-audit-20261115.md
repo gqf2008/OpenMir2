@@ -23,7 +23,8 @@
 4. 世界时钟（`World::clock_ms`，0 起、+200ms/tick）与 oracle 墙钟的差异属**已登记族**
    （whitelist T-42/T-64/T-66/T-68/T-78/T-85/T-104/T-130）；本报告复核了该族的边界，未新增未登记偏离。
 5. 大量「时间消息」在 oracle 侧就是死码：`+FL`、`SM_TIMECHECK_MSG`、`CM_CHECKTIME`、
-   `ISM_STANDARDTICK*`、`SS_LOGINCOST`、`ISM_GAMETIMEOFTIMECARDUSER`、账户到期查询（后者是**传递性死码**，见 O20）；
+   `ISM_STANDARDTICK*`、`SS_LOGINCOST`、`ISM_GAMETIMEOFTIMECARDUSER`、账户到期查询（后者是**传递性死码**；
+   Rust 侧发送已实现、接收端未实现，复活后两栈不等价，见 O20）；
    对照表逐条给出「无发送点 / 无活触发者」证据（§3/§4）。
 
 ## 1. 方法（可复跑）
@@ -111,7 +112,7 @@ grep -rn "now_ms\|clock_ms\|UNIX_EPOCH\|SystemTime\|Instant\|Environment.TickCou
 | C3 | `HUtil32.GetTimestamp(TimeSpan)` | `src/OpenMir2/HUtil32.cs:46` | Unix 毫秒 + 偏移 | int64 | 同上族 |
 | C4 | `DateTime.Now` | 多处（`src/M2Server/Npc/NormNpc.cs:357`、`src/Modules/ScriptEngine/ProcessingBase.cs:148`） | 本地墙钟 | DateTime | 脚本日期变量、城堡日期 |
 | C5 | `DateTime.UtcNow` | `src/GameGate/Auth/DynamicAuthenticator.cs:115` | UTC | DateTime | 仅 TOTP/统计，不进游戏协议 |
-| C6 | `DateTimeOffset.Now` | `src/LoginSrv/Storage/AccountStorage.cs:283-286` | 带偏移的本地时间 | DateTimeOffset | 账户有效期列 |
+| C6 | `DateTimeOffset.Now` | `src/LoginSrv/Storage/AccountStorage.cs:283-286` | 带偏移本地时间；**MySqlConnector 2.3.5 折成 UTC 后下发** | DateTimeOffset | 账户有效期列（落库为 UTC DATETIME，见 N1） |
 | C7 | 直接 `Environment.TickCount` | `src/BotSrv/LoadMetrics.cs:151`、`src/BotSrv/Player/RobotPlayer.cs:6951` | 开机毫秒 | int32 | 压测夹具的测量域 |
 
 ## 3. 出站字段（客户端可见 / 跨进程）
@@ -130,14 +131,14 @@ grep -rn "now_ms\|clock_ms\|UNIX_EPOCH\|SystemTime\|Instant\|Environment.TickCou
 | O10 | 物品 `MakeIndex`（帧/DB） | 物品唯一 ID | 纯计数器 | 计数器 + `GetTickCount()` | 否，已登记 D-1 | `src/M2Server/M2Share.cs:547-569` `GetItemNumber`/`GetItemNumberEx`；whitelist D-1（DB 列已掩码） |
 | O11 | 日志行时间前缀 | 跨栈时间线 | 6 个 Rust 二进制 **UTC** | Serilog 本地时间 | **否（P2）** | 实测 §7 S2；C# 模板 `src/BotSrv/AppServer.cs:48` |
 | O12 | db-srv 日志前缀 | 同上 | **UTC+8 硬编码** | 本地时间 | 本机等价；换时区错 | `mir2-rs/bins/db-srv/src/log.rs:14` `stamp` |
-| O13 | NPC 说词 `<$DATETIME>` | 本地日期时间文本 | `chrono::Local` `%Y-%m-%d %H:%M:%S`，但**只在 merchant 漏斗注入** | `DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")` | 部分（P3，现网不可达） | Rust：`lib.rs` `run_merchant_goto`（L9074）内 L9146 注入 `wall_clock`，`npc.rs` `base_variable_text`（L1253）展开；C#：`src/M2Server/Npc/NormNpc.cs:357` |
+| O13 | NPC 说词 `<$DATETIME>` | 本地日期时间文本 | `chrono::Local` `%Y-%m-%d %H:%M:%S`，但**只在 merchant 漏斗注入** | `DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss")` | 部分（P3，现网不可达） | Rust：`lib.rs` `run_merchant_goto`（L9074）内 L9146 注入 `wall_clock`，`npc.rs` `base_variable_text`（L1249；`$DATETIME` 分支 L1402-1404）展开；C#：`src/M2Server/Npc/NormNpc.cs:357` |
 | O14 | NPC 说词 `<$DATE>` | 本地日期 | 未接线 | `DateTime.Now.ToString("yyyy-MM-dd")` | 部署件 0 次 | `src/Modules/ScriptEngine/ProcessingBase.cs:153`；`E:/MirServer/M2GameSvr/Envir` 全树 `<$DATE>` = 0 文件 |
 | O15 | `<$MACRUNTIME>` / `<$SERVERRUNTIME>` | 开机天数 / 开服时间 | 未接线 | `GetTickCount()/86400000`；`StartTime` epoch | 部署件 0 次 | `src/Modules/ScriptEngine/ProcessingBase.cs:138-147`；部署 grep 均 0 文件 |
-| O16 | `%logontime` / `%logonint` | 登录时间 / 在线分钟 | 未实现（`high_*_info` 恒 `None`） | `LogonTime`（Unix 毫秒）+ `GetTickCount()-LogonTick` | oracle 侧亦不可达 | `src/M2Server/Player/PlayObject.Base.cs:3127-3128`；`HighLevelHuman` 赋值点在 `src/GameSrv/TimedService.cs:102-138` 全部注释 ⇒ 恒 0 ⇒ `????` |
+| O16 | `%logontime` / `%logonint` | 登录时间 / 在线分钟 | 未实现（`high_*_info` 恒 `None`） | `LogonTime`（Unix 毫秒）+ `GetTickCount()-LogonTick` | oracle 侧亦不可达 | `src/M2Server/Player/PlayObject.Base.cs:3127-3128`；`HighLevelHuman` 的设置点（`src/GameSrv/TimedService.cs:102-138`）全注释；唯一活写点是 `src/M2Server/Player/PlayObject.cs:3429` 的清零（`MakeGhost`）⇒ 仍恒 0 ⇒ `????` |
 | O17 | 城堡说词 `$CASTLEWARDATE` / `$CASTLECHANGEDATE` | 攻城区间/占领日期文本 | 本地日期文本（`chrono::Local` 注入） | `DateTime` 解析 + `DateTime.Now` | 是（形状偏差已登记） | `mir2-rs/bins/game-svr/src/castle.rs` `change_date_text`（L1427）；C# `src/M2Server/Castle/UserCastle.cs` |
 | O18 | `SS_LOGINCOST(30002)` 跨服 | 登录耗时秒 | 无发送点 | 发送方法存在，调用点被注释 | 双侧死码 | `src/GameSrv/Services/AuthenticationService.cs:107-110`；调用点 `src/M2Server/Player/PlayObject.Base.cs:388` 已注释 |
 | O19 | `ISM_GAMETIMEOFTIMECARDUSER(112)` 跨服 | 剩余游戏秒 | 无发送点 | 发送方法存在，调用点被注释 | 双侧死码 | `src/GameSrv/Services/AuthenticationService.cs:116-122`；调用点 `src/M2Server/Player/PlayObject.Message.cs:42` 已注释 |
-| O20 | `ISM_QUERYPLAYTIME(116)` / `ISM_QUERYACCOUNTEXPIRETIME(115)` / `ISM_CHECKTIMEACCOUNT(116)` | 账户剩余游戏秒 | 无处理 | **有活发送点与活接收分支**：LoginSrv `src/LoginSrv/Services/SessionServer.cs:213`/`:264` 发、GameSrv `src/GameSrv/Services/AuthenticationService.cs:181` 收；但上游触发 `ISM_GAMETIMEOFTIMECARDUSER(112)`/`ISM_QUERYACCOUNTEXPIRETIME(115)` 在 GameSrv 无活发送（`src/M2Server/Player/PlayObject.Base.cs:388`、`src/M2Server/Player/PlayObject.Message.cs:42` 已注释） | **传递性死码 + 潜在风险** | `src/LoginSrv/Services/SessionServer.cs:213`、`src/LoginSrv/Services/SessionServer.cs:264`、`src/GameSrv/Services/AuthenticationService.cs:181`；常量 `src/OpenMir2/Messages.cs:447-448`（注意 116 同时被 `ISM_QUERYPLAYTIME`/`ISM_CHECKTIMEACCOUNT` 使用）。**112 一旦启用，这条秒级跨进程帧即活**，其 `seconds` 是时长（i64 文本），不是时间戳 |
+| O20 | `ISM_QUERYPLAYTIME(116)` / `ISM_QUERYACCOUNTEXPIRETIME(115)` / `ISM_CHECKTIMEACCOUNT(116)` | 账户剩余游戏秒 | **login-srv 已实现发送**（`mir2-rs/bins/login-srv/src/session_server.rs:585`/`:688`，同 payment-mode 门）；**game-svr 接收端未实现**（`ids.rs` 模块头 L23-24 登记 114/116「不做」） | 活发送点 LoginSrv `src/LoginSrv/Services/SessionServer.cs:213`/`:264`、活接收分支 GameSrv `src/GameSrv/Services/AuthenticationService.cs:181` | **传递性死码 + 复活后两栈不等价（潜在风险）** | 上游触发：112（`src/M2Server/Player/PlayObject.Message.cs:42` 注释）、115（全仓无发送点）；常量 `src/OpenMir2/Messages.cs:447-448`（116 同时被 `ISM_QUERYPLAYTIME`/`ISM_CHECKTIMEACCOUNT` 使用）。**112 一旦启用：C# GameSvr 会走 `QueryAccountExpired` 处理 116，Rust game-svr 按 `ids.rs` 登记忽略 ⇒ 两栈行为不等价**；秒数是时长（i64 文本），不是时间戳 |
 
 ## 4. 入站字段（客户端/跨服 → 服务端）
 
@@ -160,7 +161,7 @@ grep -rn "now_ms\|clock_ms\|UNIX_EPOCH\|SystemTime\|Instant\|Environment.TickCou
 | P3 | `characters_indexes.CreateDate/ModifyDate` | 角色索引时间 | `now()` | `now()` | 是 | 建角 Rust `mir2-rs/bins/db-srv/src/db.rs:431`；C# `PlayDataStorage.Add.cs` 建索引处 |
 | P4 | `account.CreateTime/ModifyTime/LastLoginTime` | 注册/修改/最后登录 | `UNIX_TIMESTAMP()`（建号与 `update_login_record`）；Unix 秒 | `ToUnixTimeSeconds()`；Unix 秒 | 是（同为绝对秒；时钟源 DB vs 应用） | `sql/mir2_account.sql:36-38`；Rust `mir2-rs/crates/storage/src/account.rs:341`/`:432`；C# `src/LoginSrv/Storage/AccountStorage.cs:289-291`、`:402-407` |
 | P5 | `account.PassFailTime` | 密码失败时间 | **`tick_as_i32()`：Unix 毫秒截 u32 再转 i32** | **开机毫秒** `GetTickCount` / int32 | **否（P1）** | `sql/mir2_account.sql:29`；Rust `mir2-rs/bins/login-srv/src/login_server.rs:449` 调 `update_login_record`（fn `:389`），`mir2-rs/crates/storage/src/account.rs:435` 绑 `action_tick`；`action_tick=tick_as_i32()`（`mir2-rs/bins/login-srv/src/login_server.rs:39`、`mir2-rs/bins/login-srv/src/state.rs:20-25`）；C# `src/LoginSrv/Storage/AccountStorage.cs:404` `ActionTick`。读取方按 `GetTickCount()-PassFailTime` 会得到错误量级（§6 D2） |
-| P6 | `account.ValidFrom/ValidUntil/StopUntil` | 有效期 | 建号写 `NOW()`（**DB 会话时区**） | `DateTimeOffset.Now`（应用本地） | 本机形状不一致（P2） | `sql/mir2_account.sql:30-34`；Rust `mir2-rs/crates/storage/src/account.rs:341`；C# `src/LoginSrv/Storage/AccountStorage.cs:283-286`；实测行见 §7 S5（datetime 文本比同一时刻本地早 8h） |
+| P6 | `account.ValidFrom/ValidUntil/StopUntil` | 有效期（UTC 时刻） | 建号写 `NOW()`；sqlx 缺省会话时区 `+00:00` ⇒ UTC 文本 | `DateTimeOffset.Now` 经 MySqlConnector 2.3.5 折成 **UTC** 后写入 | 是（两栈同为 UTC 文本；列语义见 N1） | `sql/mir2_account.sql:30-34`；Rust `mir2-rs/crates/storage/src/account.rs:341`；C# `src/LoginSrv/Storage/AccountStorage.cs:283-286`；复审只读探针与 §7 S5 |
 | P7 | `goldsales.SellDateTime` | 寄售成交时间 | 读入后只展示，未实现 save | 赋值 `DateTime.Now`，但三个保存调用点全注释 | 双侧死码 | `sql/mir2_data.sql:28`；`src/M2Server/Player/PlayObject.Sale.cs:566`；保存调用点注释见 Rust `goldsales.rs` 模块头（`src/GameSrv/DB/MySqlDB.cs:293-330`） |
 | P8 | `upgradeinfo.UpgradeTime/CreateTIme/ModifyTIme` | 武器升级时间 | 未实现 | Load/Save 是 `//todo` stub 恒 `-1` | 双侧死码 | `sql/mir2_data.sql:2004-2007`；`src/GameSrv/DB/MySqlDB.cs:339-350` |
 | P9 | `Castle/<n>/SabukW.txt` 日期键 | 攻城/占领日期 | 本地日期文本 | `DateTime.Now` / `ReadWriteDate` | 是（culture 形状已登记） | `src/M2Server/Castle/CastleConf.cs:19-21`；Rust `castle.rs` `refresh_castle_date_texts`（L833） |
@@ -218,19 +219,7 @@ grep -rn "now_ms\|clock_ms\|UNIX_EPOCH\|SystemTime\|Instant\|Environment.TickCou
 - 现状：该族已在 whitelist 登记（T-42/T-64/T-66/T-68/T-78/T-85/T-104/T-130），本报告**不新增结论**；
   列出是为了让后续卡在「跨栈绝对时刻」类判据上不要误用墙钟期望值。
 
-### D5（P2，持久化形状）`account.ValidFrom/ValidUntil/StopUntil` 的 UTC/本地文本偏差
-
-- 现象：Rust 建号用 SQL `NOW()` 写这三列（`mir2-rs/crates/storage/src/account.rs:341`），
-  但 login-srv 的账户连接池**没有钉 `session.time_zone`**（`mir2-rs/crates/storage/src/account.rs:193-195` 直接
-  `MySqlPoolOptions::connect`），sqlx 缺省会话时区 `+00:00` ⇒ `NOW()` 返回 **UTC 墙钟文本**；
-  oracle 用应用侧 `DateTimeOffset.Now`（本地）写（`src/LoginSrv/Storage/AccountStorage.cs:283-286`）。
-- 实测（§7 S5）：同一行 `CreateTime`（Unix 秒）换算成本地 21:28:25，而 `ValidFrom/StopUntil`
-  存的是 13:28:25 —— 恰好早 8 小时；2026-10-13 的 `m3w*`（Rust M3 车道账号）行同样早 8h。
-- 影响：本仓未见这三列的读取方（oracle 查询未取用），但任何按本地语义读该列的
-  运维/跨栈消费者都会把有效期/停机截止看成提前 8 小时；与 db-srv 已显式钉 `SYSTEM` 的做法不一致。
-- 处置：建议归入账户写入面（`openmir2-account-passfailtime-basis` 或另开小卡），本卡只登记实测。
-
-### D6（P3，覆盖缺口，现网不可达）`$DATETIME` 只在 merchant 漏斗注入
+### D5（P3，覆盖缺口，现网不可达）`$DATETIME` 只在 merchant 漏斗注入
 
 - 现象：Rust 只在 `run_merchant_goto` 内注入 `wall_clock`；`run_party_goto_label`、`run_std_mode_func_script`
   等其他脚本漏斗建 `NpcPlayer` 时 `wall_clock` 为空 ⇒ `<$DATETIME>` 展开为空串。
@@ -239,7 +228,7 @@ grep -rn "now_ms\|clock_ms\|UNIX_EPOCH\|SystemTime\|Instant\|Environment.TickCou
   的物品** ⇒ 当前内容不可达。
 - 建议：随脚本漏斗统一化另开小卡（或在该卡登记），不单独修。
 
-### D7（P3，内部，delta-only）Rust 侧 epoch→i32 截断 3 处
+### D6（P3，内部，delta-only）Rust 侧 epoch→i32 截断 3 处
 
 - `game-svr` 的 `player.tick = now_ms() as i32`（`lib.rs` L3134/L28415）→ 脚本 `ScriptPlayer::tick_count()`
   （`npc.rs` L2133），供 `DELAYCALL`/`TIMERECALL`/`SETOFFLINE` 的 `wrapping_add` 差值使用；
@@ -249,11 +238,27 @@ grep -rn "now_ms\|clock_ms\|UNIX_EPOCH\|SystemTime\|Instant\|Environment.TickCou
   `account.PassFailTime`**（见 D2）。三者与 oracle 的 `GetTickCount` int32 回绕在**同侧差值**上
   行为等价（回绕周期同为 2^32 ms）；但**禁止**把绝对值写进帧/DB/日志判据——D2 正是这条被违反的实例。
 
-### D8（P3，已登记）`MakeIndex` 不含 `GetTickCount`
+### D7（P3，已登记）`MakeIndex` 不含 `GetTickCount`
 
 - C# `GetItemNumber/GetItemNumberEx` 返回 `计数器 + GetTickCount()`；Rust 只返回计数器。
 - 已由 whitelist D-1 登记（C# 两次运行都不一致，不存在可对拍真值；DB 列在 `rules.json` 掩码）。
   本报告只确认：**这是有意的基底差异，不是漏改**。
+
+### 说明 N1（非偏离）`account.ValidFrom/ValidUntil/StopUntil` 是 UTC 文本
+
+- 事实：Rust 建号 `NOW()` 走 sqlx 缺省会话时区 `+00:00`（`mir2-rs/crates/storage/src/account.rs:193-195`
+  未覆盖时区），得 UTC 文本；oracle 虽用 `DateTimeOffset.Now`（`src/LoginSrv/Storage/AccountStorage.cs:283-286`），
+  但 **MySqlConnector 2.3.5（部署 DLL 2.3.5.0）把 `DateTimeOffset` 参数折成 UTC 再下发**
+  （复审只读探针：`DateTimeOffset(2026-11-15 12:00+08:00)` → `2026-11-15 04:00:00`；`DateTime`(Unspecified) 原样）。
+  ⇒ **两栈写的是同一 UTC 文本，不是偏离**。
+- S5 的「21:28 vs 13:28」是**列语义/显示差**：`CreateTime` 是 epoch **秒**（绝对量），
+  `ValidFrom/StopUntil` 是 **UTC 墙钟文本**（DATETIME 无偏移）；按各自语义解析到同一时刻。
+  只读库统计 `HOUR(TIMEDIFF(ValidFrom, FROM_UNIXTIME(CreateTime)))`：8 有 4471 行、7 有 2089 行
+  （7 是分钟借位）、0 有 0 行 —— 与「UTC 文本 + 本地显示」一致。
+- **反例警示（勿修）**：若照「看齐本地时间」的直觉给 login-srv 钉 `session.time_zone='SYSTEM'`，
+  `NOW()` 会写 +08 文本，而 C# 仍写 UTC ⇒ **制造真实的跨栈分歧**。db-srv 钉 `SYSTEM` 是因为
+  两侧都用 SQL `now()`，这条经验**不能**套到 login-srv 的参数化写入上。
+- 处置：不修；若将来有消费者按本地语义读这三列，应显式按 UTC 解析，而不是改写入端。
 
 ## 7. 运行时抽样（A3）
 
@@ -309,7 +314,7 @@ Rust db-srv 会话时区被显式钉成 `SYSTEM`（`mir2-rs/bins/db-srv/src/db.r
 - `goldsales.SellDateTime`、`upgradeinfo.UpgradeTime` 无写入路径（§5），无样本可取；
   `PassFailTime` 因无失败登录样本恒 0（列形状见 S5）。
 
-### S5 账户时间列形状（PassFailTime 无失败样本，Valid* 有实据）
+### S5 账户时间列形状（列语义：epoch 秒 vs UTC 文本）
 
 ```
 mysql> SELECT Account, FROM_UNIXTIME(CreateTime), ValidFrom, StopUntil, PassFailTime
@@ -320,8 +325,9 @@ eb10 | 2026-11-14 21:27:54 | 2026-11-14 13:27:54 | 2026-11-14 13:27:54 | 0
 ```
 
 结论：`CreateTime/ModifyTime/LastLoginTime` 是 Unix **秒**（绝对量，与 C# 一致）；
-`ValidFrom/StopUntil` 是比同一时刻本地早 8h 的 UTC 文本（D5）；`PassFailTime` 当前全 0
-（无失败登录），其基底偏离由代码路径 + D2 的算术示例证明，**失败登录实测待补**（本卡未构造错误密码）。
+`ValidFrom/StopUntil` 是 **UTC 文本**（DATETIME 无偏移），不是「比本地早 8h 的偏离」——
+两栈写入端同为 UTC（N1）；`PassFailTime` 当前全 0（无失败登录），其基底偏离由代码路径 + D2 的
+算术示例证明，**失败登录实测待补**（本卡未构造错误密码）。
 
 ## 8. 覆盖边界（未覆盖的帧/表）
 
@@ -338,7 +344,7 @@ eb10 | 2026-11-14 21:27:54 | 2026-11-14 13:27:54 | 2026-11-14 13:27:54 | 0
    冻结客户端是否同样溢出未直接验证。
 3. **`mir2_account` 的遗留表**：`sql/mir2_account.sql` 中 `CreateTime/ModifyTime`（datetime，行 6170-6171）、
    `LoginTime`（行 12230）、`FLD_TIME/FLD_UNTIL/...` 等众多 datetime 列不在 Rust 实现面，未逐列对照；
-   注意 **`account` 主表已在 Rust 实现面**（§5 P4-P6：P5 偏离见 D2，P6 形状见 D5）。
+   注意 **`account` 主表已在 Rust 实现面**（§5 P4-P6：P5 偏离见 D2，P6 列语义见 N1）。
 4. **帧体逐字段全量 diff 未做**：采用「按时间符号定向搜索 + 发送点穷举」；没有时间语义的计数字段
    （背包/负重/技能点等）只抽了经验/金币两类。
 5. **`SendMessage.DeliveryTime` 等进程内队列时间**：只确认不出帧，未逐路径核差值语义。
