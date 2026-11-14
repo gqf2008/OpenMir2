@@ -32,6 +32,7 @@ mod config;
 mod dbclient;
 mod enter;
 mod gamegold;
+mod gate_backpressure;
 mod goldsales;
 mod guild_cmd;
 mod guild_frames;
@@ -29705,6 +29706,8 @@ async fn gate_conn(
         send_keep_alive: false,
         ..KeepAlive::default()
     };
+    // 卡 `openmir2-gateway-backpressure-frame-drop`：本 gate 线的丢帧观测计数（只观测，不改判定）。
+    let mut drop_stats = gate_backpressure::DropStats::new(service_id, now_ms());
     loop {
         let mut head = [0u8; ServerMessage::SIZE];
         // sim 侧的命令（清槽等）**不能等下一次入站帧**才处理：oracle 的 `CloseUser` 是调用线程直接清
@@ -29712,7 +29715,7 @@ async fn gate_conn(
         let head_res = tokio::select! {
             r = rd.read_exact(&mut head) => r,
             Some(cmd) = sim_rx.recv() => {
-                if let Err(e) = apply_sim_cmd_async(cmd, &mut users, &tx, &mut state, check_block).await {
+                if let Err(e) = apply_sim_cmd_async(cmd, &mut users, &tx, &mut state, &mut drop_stats, check_block).await {
                     glog!("WRN", "sim→gate 命令发送失败：{e:#}");
                 }
                 continue;
@@ -29720,6 +29723,7 @@ async fn gate_conn(
         };
         if head_res.is_err() {
             glog!("ERR", "网关连接断开。");
+            emit_final_drop_summary(&drop_stats);
             return Ok(());
         }
         let Some(msg) = ServerMessage::from_bytes(&head) else {
@@ -29737,6 +29741,7 @@ async fn gate_conn(
         let mut body = vec![0u8; body_len];
         if body_len > 0 && rd.read_exact(&mut body).await.is_err() {
             glog!("ERR", "读取网关载荷失败。");
+            emit_final_drop_summary(&drop_stats);
             return Ok(());
         }
         dispatch(
@@ -29753,7 +29758,15 @@ async fn gate_conn(
         .await?;
         // 处理与本帧同批到达的 sim 命令（清槽/入图发包等）
         while let Ok(cmd) = sim_rx.try_recv() {
-            if let Err(e) = apply_sim_cmd_async(cmd, &mut users, &tx, &mut state, check_block).await
+            if let Err(e) = apply_sim_cmd_async(
+                cmd,
+                &mut users,
+                &tx,
+                &mut state,
+                &mut drop_stats,
+                check_block,
+            )
+            .await
             {
                 glog!("WRN", "sim→gate 命令发送失败：{e:#}");
             }
@@ -29795,6 +29808,7 @@ async fn apply_sim_cmd_async(
     users: &mut UserList,
     tx: &Arc<Mutex<OwnedWriteHalf>>,
     state: &mut KeepAlive,
+    stats: &mut gate_backpressure::DropStats,
     check_block: usize,
 ) -> Result<()> {
     match cmd {
@@ -29819,7 +29833,8 @@ async fn apply_sim_cmd_async(
             };
             let mut wire = head.to_bytes().to_vec();
             wire.extend_from_slice(&body);
-            let decision = send_gate_msg(tx, state, check_block, &wire).await?;
+            let (decision, note) = send_gate_msg(tx, state, stats, check_block, &wire).await?;
+            emit_drop_note(note);
             // **卡 openmir2-sm-logon-cross-session-delivery**：SM_LOGON(50) 的三方对齐服务端侧
             // （总监归因判据 step2）。只在本卡诊断开关下打印，默认关 ⇒ 生产日志与行为不变。
             // 字段：(actor, chr, socket, gate_idx 不在本函数、session_id, decision)。
@@ -29838,7 +29853,7 @@ async fn apply_sim_cmd_async(
             Ok(())
         }
         SimToGate::SendRaw { socket, payload } => {
-            apply_sim_send_raw(socket, &payload, users, tx, state, check_block).await
+            apply_sim_send_raw(socket, &payload, users, tx, state, stats, check_block).await
         }
         other => {
             apply_sim_cmd(other, users);
@@ -29854,6 +29869,7 @@ async fn apply_sim_send_raw(
     users: &mut UserList,
     tx: &Arc<Mutex<OwnedWriteHalf>>,
     state: &mut KeepAlive,
+    stats: &mut gate_backpressure::DropStats,
     check_block: usize,
 ) -> Result<()> {
     // `PlayObject.Socket.cs:63-64`：`Socket = SocketId`、`SessionId = SocketIdx`。
@@ -29875,7 +29891,8 @@ async fn apply_sim_send_raw(
     };
     let mut wire = head.to_bytes().to_vec();
     wire.extend_from_slice(payload);
-    send_gate_msg(tx, state, check_block, &wire).await?;
+    let (_, note) = send_gate_msg(tx, state, stats, check_block, &wire).await?;
+    emit_drop_note(note);
     Ok(())
 }
 
@@ -29972,14 +29989,34 @@ fn send_decision(state: &mut KeepAlive, check_block: usize, len: usize, now: i64
 async fn send_gate_msg(
     tx: &Arc<Mutex<OwnedWriteHalf>>,
     state: &mut KeepAlive,
+    stats: &mut gate_backpressure::DropStats,
     check_block: usize,
     wire: &[u8],
-) -> Result<SendDecision> {
+) -> Result<(SendDecision, gate_backpressure::Note)> {
+    let send_checked_at_entry = state.send_checked;
     let decision = send_decision(state, check_block, wire.len(), now_ms());
     match decision {
-        SendDecision::Hold | SendDecision::Drop => return Ok(decision),
-        SendDecision::CheckFirst => {}
-        SendDecision::Send => {}
+        // 卡 `openmir2-gateway-backpressure-frame-drop`：两处 oracle 静默 `return` 在这里被**观测**
+        // （计数按 gate/ident/session + 限速结构化日志 + 周期汇总），但**丢帧行为不变**。
+        SendDecision::Hold | SendDecision::Drop => {
+            let reason = match decision {
+                SendDecision::Hold => gate_backpressure::DropReason::SendChecked,
+                _ => gate_backpressure::DropReason::Oversize,
+            };
+            let (ident, session) = wire_ident_session(wire);
+            let note = stats.note(
+                reason,
+                ident,
+                session,
+                wire.len(),
+                send_checked_at_entry,
+                state.send_checked,
+                state.send_block_count,
+                now_ms(),
+            );
+            return Ok((decision, note));
+        }
+        SendDecision::CheckFirst | SendDecision::Send => {}
     }
     if state.send_checked == 0
         && state.send_block_count + wire.len() >= check_block.saturating_mul(10)
@@ -29998,7 +30035,53 @@ async fn send_gate_msg(
     }
     send_raw(tx, wire).await?;
     state.send_block_count += wire.len();
-    Ok(decision)
+    Ok((decision, gate_backpressure::Note::default()))
+}
+
+/// 从一帧下行 wire 取 `(ident, session)`：`ident` 优先取内层 12B 命令头的 SM_* 标识
+/// （`GM_DATA` 帧；短包取不到时退回外层 `ServerMessage.ident`），`session` 取外层头
+/// `session_id`（与网关路由同源）。
+fn wire_ident_session(wire: &[u8]) -> (u16, u16) {
+    let outer = ServerMessage::from_bytes(wire);
+    let session = outer.map_or(0, |m| m.session_id);
+    let outer_ident = outer.map_or(0, |m| m.ident);
+    let inner_ident = wire
+        .get(ServerMessage::SIZE..)
+        .and_then(command_head)
+        .map(|(ident, _)| ident);
+    (inner_ident.unwrap_or(outer_ident), session)
+}
+
+/// 把丢帧观测落到本进程既有日志出口（`glog`）与可选 NDJSON（`MIR2_GATE_STATS_OUT`）。
+fn emit_drop_note(note: gate_backpressure::Note) {
+    if let Some(line) = note.log {
+        glog!("WRN", "{line}");
+    }
+    if let Some(line) = note.summary {
+        glog!("WRN", "{line}");
+    }
+    if let Some(json) = note.summary_json {
+        if let Some(dir) = gate_backpressure::stats_out_dir() {
+            if let Err(e) = gate_backpressure::append_ndjson(&dir, &json) {
+                glog!("WRN", "gate_stats.ndjson 写入失败：{e}");
+            }
+        }
+    }
+}
+
+/// 网关断线时的终值汇总（有丢帧才落；避免最后 5s 的计数只停在限速日志里）。
+fn emit_final_drop_summary(stats: &gate_backpressure::DropStats) {
+    let now = now_ms();
+    if let Some(line) = stats.final_summary(now) {
+        glog!("WRN", "{line}");
+    }
+    if let Some(dir) = gate_backpressure::stats_out_dir() {
+        if let Some(json) = stats.final_summary_json(now) {
+            if let Err(e) = gate_backpressure::append_ndjson(&dir, &json) {
+                glog!("WRN", "gate_stats.ndjson 写入失败：{e}");
+            }
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -32154,6 +32237,91 @@ mod tests {
         assert_eq!(st4.send_block_count, 0);
         // 清零后的下一包才正常发
         assert_eq!(send_decision(&mut st4, 12288, 20, 1061), SendDecision::Send);
+    }
+
+    /// 判据 A4（接线牙，卡 `openmir2-gateway-backpressure-frame-drop`）：`SendChecked>0` ⇒
+    /// `send_gate_msg` 判 `Hold`、**不写 socket**，但仍计数 +1 并产出含 ident/session/reason 的
+    /// 结构化日志；单包超 `CheckBlock*10` ⇒ `Drop` 同理单独计数。
+    /// 删掉 `send_gate_msg` 里的 `stats.note(...)` ⇒ 计数断言红；删掉提前 return ⇒ 对端读到字节红。
+    #[tokio::test]
+    async fn send_gate_msg_observes_hold_and_oversize_without_sending() {
+        use std::time::Duration as StdDuration;
+        use tokio::io::AsyncReadExt;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let accept = tokio::spawn(async move { listener.accept().await.unwrap().0 });
+        let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let (_, wr) = accept.await.unwrap().into_split();
+        let tx = Arc::new(Mutex::new(wr));
+        let now = now_ms();
+
+        // 一条 GM_DATA 下行帧（内层命令头 ident=50/SM_LOGON、外层 session=42）。
+        let wire = |ident: u16, session: u16| -> Vec<u8> {
+            let mut body = vec![0u8; COMMAND_MESSAGE_SIZE];
+            body[4..6].copy_from_slice(&ident.to_le_bytes());
+            let head = ServerMessage {
+                packet_code: grobal2::PacketCode,
+                socket: 900,
+                session_id: session,
+                ident: u16::from(grobal2::GM_DATA),
+                session_index: 0,
+                pack_length: i32::try_from(body.len()).unwrap(),
+            };
+            let mut v = head.to_bytes().to_vec();
+            v.extend_from_slice(&body);
+            v
+        };
+
+        // ① Hold：`SendChecked=1` 且未超时（`send_check_tick=now` ⇒ 差值 0 < 50ms）。
+        let mut state = KeepAlive {
+            send_keep_alive: false,
+            send_checked: 1,
+            send_check_tick: now,
+            send_block_count: 0,
+        };
+        let mut stats = gate_backpressure::DropStats::new(7, now);
+        let (decision, note) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &wire(50, 42))
+            .await
+            .unwrap();
+        assert_eq!(decision, SendDecision::Hold);
+        assert_eq!(stats.hold_frames(), 1, "SendChecked>0 的丢帧必须计数 +1");
+        let log = note.log.expect("Hold 必须产出结构化日志");
+        for needle in [
+            "reason=SendChecked>0",
+            "ident=50",
+            "session=42",
+            "gate=7",
+            "send_checked_at_entry=1",
+        ] {
+            assert!(log.contains(needle), "丢帧日志缺 {needle}：{log}");
+        }
+        // 行为不变：Hold 时一个字节都不写 socket。
+        let mut buf = [0u8; 1];
+        assert!(
+            tokio::time::timeout(StdDuration::from_millis(80), client.read(&mut buf))
+                .await
+                .is_err(),
+            "Hold 帧不得上线"
+        );
+
+        // ② Drop：`CheckBlock=1` ⇒ 阈值 10；单包 32B 且累计 0 ⇒ 直接丢，同样要计数 + 日志。
+        let mut state2 = KeepAlive::default();
+        let mut stats2 = gate_backpressure::DropStats::new(8, now);
+        let (decision2, note2) = send_gate_msg(&tx, &mut state2, &mut stats2, 1, &wire(50, 42))
+            .await
+            .unwrap();
+        assert_eq!(decision2, SendDecision::Drop);
+        assert_eq!(stats2.oversize_frames(), 1, "单包超阈值丢帧必须单独计数");
+        let log2 = note2.log.expect("Drop 必须产出结构化日志");
+        assert!(log2.contains("reason=Oversize"), "{log2}");
+        assert!(log2.contains("gate=8"), "{log2}");
+        assert!(
+            tokio::time::timeout(StdDuration::from_millis(80), client.read(&mut buf))
+                .await
+                .is_err(),
+            "Drop 帧不得上线"
+        );
     }
 
     /// N1（reviewer-3）的红检：`MarkInWorld` 必须按该用户的 `gate_idx` 路由，不能「随便挑一个网关」。
