@@ -922,7 +922,8 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **实现形状**：按 2026-11-13 裁决，段内 `remove_resource::<SimState>()` 取走 owned `SimState`，
 > 与 `StageEntities` 并行使用，段尾归还（设计 §3.4 的 `StageWorld` 不再实现，偏差 Dv5）。
 > **共用函数不动**：`char_pushed_now` 与 `Command::Push` / slave 自投递共用，**签名保持不变**
-> （coordinator 裁决：P5 Command 迁移时统一）；逐格推进/RNG 邻接判定抽成
+> （coordinator 裁决：P5 Command 迁移时统一；**P5-A2 已兑现**：`char_pushed_now` 已删除、
+> `push_now` 走 `push_now_impl` → `char_pushed_core`，`can_walk_cell` 死代码同批删除）；逐格推进/RNG 邻接判定抽成
 > `char_pushed_core` / `check_dup_obj_core` / `can_walk_cell_core`，facade 与段访问器
 > （`StageAccess`，实现 `crate::entity::EntityAccess`）走**同一份**实现，不复制。
 > `monai::count_at_cell` 拆出 `count_at_cell_with(maps, …, is_blocking)`（只读辅助，语义逐行相同）。
@@ -1030,6 +1031,45 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > - **判据**：六份 golden（`tests/parity/world/golden/*.txt`）blob 与 base 逐个相等（6/6）；
 >   `cargo test -p mir2-parity-tests` 35 passed / 0 failed / 1 ignored（`table_counts` 需 MySQL）。
 >
+> **S4d-3/P5-A2 落地登记（2026-11-14，Command·walk/enter/leave/rush/push 五族 port）**：五族 handler 已改成
+> 「`EntityAccess`（leave 另需 `StructuralAccess`）+ `&mut SimState`」形态。**本批只做 port：
+> Command 段仍未切系统，FIFO 入队序 = 处理序不变；`tick_head` 的 `match cmd` 一行未动**。
+> - `World::try_step` → `try_step_impl`（判据链 `try_step_blocked_impl` / `cell_free_blocked_impl` /
+>   `classify_block_impl` 在 P6b2 已是 impl 形态）；P6b2 遗留的无 impl 包装 `try_step_blocked`
+>   删除，其「先删后判」文档并入 `try_step_blocked_impl`。
+> - `World::enter_world` → `enter_world_impl`（落格类型 `entity_cell_type` + `map.add_map_object` +
+>   `MapBinding.add_to_mapped`）；`World::leave_world` → `leave_world_impl<A: EntityAccess + StructuralAccess>`
+>   （摘格 `retain`/`clear` + `entities.remove` → `StructuralAccess::remove`）。
+> - `World::rush_now` → `rush_now_impl`；私有 `can_walk_ignore_objects` → `can_walk_ignore_objects_impl(sim, ..)`。
+> - `World::push_now` → `push_now_impl`，逐格推进体仍是 P3a 的 `char_pushed_core`（单一实现，
+>   与 `SimDup` / slave `RM_DELAYPUSHED` 共用）。P3a 登记的「P5 统一时清理」按约执行：删除无调用方的
+>   `World::char_pushed_now` facade（slave 已直接调 `char_pushed_core`）与 `World::can_walk_cell` 死代码；
+>   oracle 逐句文档随函数迁到 `char_pushed_core`。
+> - **WalkXY 面**：`ClientWalkXY` 的同步移动 `try_step_now` 已在 P6b2 port；host 侧 CM_WALK 的
+>   `step_with_route` / `route_enter`（TransMap）**不属于 Command(#1) 段**，且 `route_enter` 依赖
+>   `session.rs` 的 `switch_map`（本卡写集外）⇒ 本批不 port（若 Leader 需要，另行开卡扩写集）。
+> - **RNG 逐点 trace（`MIR2_RNG_LOG` + `MIR2_RNG_SEED=42`，五列 seq/kind/arg/result/site）**：
+>   base `62fc26fd7`（`git archive` 导出树 + 独立 target）与 head 各跑五副夹具
+>   （`session_and_drops_match_csharp` 会话进/离图 + 走位 + 掉落、`push_command_emits_backstep_per_step`、
+>   `rush_command_emits_rush_per_step`、`tick_order_is_deterministic_and_documented`、
+>   `world_tick_consumes_rng_npc_before_merchant`）：**seq/kind/arg/result 四列逐行 diff 0**
+>   （取数行 4 / 0 / 0 / 0 / 200,008；session 的 4 抽落在未改动的 `drop.rs:591/593/603`）。
+>   site 列在 rngorder 夹具上有 **8 个位移对 / 120,000 行**，逐条回读两树源码文本相同——全部是
+>   **用例自身的期望流复算行**（测试模块随本批插入下移 +323 行：11769→12092 等），
+>   **零生产抽点位移**。本批五族自身**零抽数**（`try_step`/`enter`/`leave`/`rush`/`char_pushed_core`
+>   均无 `Random` 调用），用整 tick 夹具证明其它消费者的取数序列未平移。
+> - **牙（3 颗段语义 + 5 个变异重放）**：`walk_stage_access_blocked_wall_keeps_coords_and_drops_source_cell`
+>   （撞墙：坐标不动 + 源格按 `move_object` 先删后判摘空；可走格 `Transform` 与格子一起迁移）、
+>   `enter_leave_stage_access_lands_and_removes_actor`（落格 + `add_to_mapped`；摘格 + `remove`）、
+>   `rush_push_stage_access_path_matches_facade_path`（段访问器与 facade 逐事件相同；rush 3 格截断 /
+>   `RushKung` 正前格；push `nBackDir` + 走后格）。变异（只在本人 worktree 重放、恢复后 sha256 相等）：
+>   删 `try_step_blocked_impl` 的 `Transform` 写回 / 删 enter 的 `add_to_mapped` 写回 / 删 leave 的
+>   `access.remove` / rush 步数截到 1 / push 的 `back_dir` 改 `n_dir`，五者均 RED。
+> - **判据**：六份 golden blob 6/6 与 base 相等；`cargo test --workspace --no-fail-fast` =
+>   **157 suites / 3876 passed / 0 failed / 69 ignored**（本批 +3 条段语义牙，`mir2-world` lib
+>   762→765；parity 全清单 0 failed）；段序牙与既有 FIFO（`tick_order_is_deterministic_and_documented`）/
+>   推挤/冲刺用例未放宽。
+
 > **S4d-3/P6a 落地登记（2026-11-13，模块段批量化）**：本批只交付 **#9 `SimBuff`**；
 > #5 `SimSelfDeliver` 与 #11 `SimNpc` **受阻**（依赖面超出卡面写集，按 Leader 批量化口径登记，未扩写集）。
 > - **#9 `SimBuff`（已系统化）**：段系统 `sim_buff_stage_system`（`TickStage::SimBuff`，#9）；段位 =
@@ -1218,6 +1258,11 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > **尚未做（以 P6b2 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **1** 段——#1 Command）、
 > `SlotTable` 的 `QueryState` 缓存优化（按需）、`TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、
 > `crates/world` 删除（S5，等 Owner 授权）。段号清单与写集见设计 §2.1/§4。
+
+> **段数口径（P5-A2 交付 head；单位 = 20 阶段）**：结构段数不变 **19/20**（`#1 Command` 仍未切系统）。
+> Command 九族 handler port 进度：attack（P5-A1）+ walk/enter/leave/rush/push（P5-A2）已 port；
+> `spawn_monster_now` 与 `butch_now` / `butch_effect_now` 两族未 port；九族齐后由收口卡一次性把
+> Command FIFO 切成 `TickStage::Command` 系统（入队序 = 处理序仍为硬契约）。
 
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——

@@ -3332,7 +3332,7 @@ pub trait EntityAccess {
     fn dup_state(&mut self, id: i32) -> Option<mir2_world_bevy::DupState>;
     /// `DupState` 可变视图（`check_dup_obj` 的 tick/置位写回）。
     fn dup_state_mut(&mut self, id: i32) -> Option<&mut mir2_world_bevy::DupState>;
-    /// `Transform` 可变视图（`EntityMut` 不含该组件；`char_pushed_now` 逐格推进写坐标）。
+    /// `Transform` 可变视图（`EntityMut` 不含该组件；`char_pushed_core` 逐格推进写坐标）。
     fn transform_mut(&mut self, id: i32) -> Option<&mut Transform>;
     /// `Recovery` 可变视图（`EntityMut` 不含该组件；`SimBuff` 毒伤段写 `health_tick`/`spell_tick`）。
     fn recovery_mut(&mut self, id: i32) -> Option<&mut Recovery>;
