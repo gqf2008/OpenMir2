@@ -1438,6 +1438,122 @@ impl Default for SimState {
 #[derive(bevy_ecs::prelude::Resource)]
 pub struct TickRecordRes(pub TickRecord);
 
+/// **P7 `Command` 段（#1）**：命令 FIFO 的载体资源。
+///
+/// `World::tick_head` 在 `TickStage::Command` 段边界把 facade 的 `World::pending` 整条队列移入
+/// bevy `World`，[`sim_command_stage_system`] 按**入队顺序**逐条 `pop_front` 处理，段尾原样归还
+/// （同一时刻只有一个所有者，与 [`TickRecordRes`] / `SimState` 同口径）。
+///
+/// 队列内容在段内**只减不增**：唯一入队点是会话线程的 [`World::enqueue`]，tick 本身不产命令
+/// ⇒ 「入队序 = 处理序」不受段边界影响。
+#[derive(bevy_ecs::prelude::Resource)]
+pub struct CommandQueueRes(pub VecDeque<Command>);
+
+mir2_world_bevy::stage_spec!(
+    SimCommand,
+    TickStage::Command,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding
+    ]
+);
+
+/// **P7**：命令段是**结构段**——`spawn_monster`（生成落图）与 `leave`（离场）会 `insert`/`remove`
+/// 整个实体。只有声明本标记的段能拿到 `StructuralAccess`（`StageEntities::insert`/`remove` 的
+/// 编译期门）；段边界后 `World::tick_head` 调 `EntityStore::refresh_views()` 刷新 facade 缓存。
+impl mir2_world_bevy::tick::Structural for SimCommand {}
+
+/// **P7 `Command` 段（#1）**：`tick_head` 原「命令 FIFO」内联循环。
+///
+/// 段位与迁移前逐字相同（`Clock` 之后、`SimHiterSnapshot` 之前）；**入队序 = 处理序**由
+/// `command_stage_core` 的 `pop_front` 循环保证（一个系统、逐条、不得拆散/并行）。
+///
+/// **RNG**：攻击（`AttackDir` 抽数）、推挤/冲撞（`CharPushed`/`MapRandomMove`）、生成（掉落预算
+/// `generate_drops`）、屠宰效果体（恰 2 抽）都在本段抽数 ⇒ 段位固定，RNG 消费者次序不变。
+///
+/// **产物**：`processed` 记账仍在调用点（`World::apply_command`），语义事件由各族 impl 直接写
+/// 真实 [`TickRecord`]（P7：不再经过 facade 的一次性 scratch record）。
+pub fn sim_command_stage_system(world: &mut bevy_ecs::world::World) {
+    command_stage_core::<SimCommand>(world)
+}
+
+/// `Command` 段的共用执行体（泛型只为让段 spec 与其访问面同源）。
+///
+/// 借用形状照 [`settle_deaths_stage_core`]：owned `SimState` + [`StageEntities`] 借 bevy `World`，
+/// 段尾逐项归还；`TickRecordRes` / [`CommandQueueRes`] 由段边界插入、段内取用后放回。
+fn command_stage_core<S>(world: &mut bevy_ecs::world::World)
+where
+    S: FullAccessSpec + mir2_world_bevy::tick::Structural,
+{
+    StageTrace::record(world, TickStage::Command);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("Command 段：SimState 必须在段窗口内（段边界契约）");
+    let mut record = world
+        .remove_resource::<TickRecordRes>()
+        .expect("Command 段：TickRecordRes 必须由段边界插入（段边界契约）");
+    let mut pending = world
+        .remove_resource::<CommandQueueRes>()
+        .expect("Command 段：CommandQueueRes 必须由段边界插入（段边界契约）");
+    {
+        let mut ad = StageEntities::<S>::new(world);
+        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        // **FIFO 合同**：严格按入队顺序处理，逐条、不重排（`openmir2-world-ecs-p7-command-stage` A2）。
+        while let Some(cmd) = pending.0.pop_front() {
+            World::apply_command(&mut access, &mut sim, &mut record.0, cmd);
+        }
+    }
+    world.insert_resource(pending);
+    world.insert_resource(record);
+    world.insert_resource(sim);
+}
+
 /// **S4d-1/S4d-2**：本 tick 的实体句柄表（业务 id + bevy 实体，槽位顺序）。
 ///
 /// tick 边界从 `EntityStore::order_index` / `order_entities` 一次性填入；系统按它取组件，
@@ -1522,6 +1638,7 @@ impl HeadRunner {
             runners: Vec::new(),
         };
         me.add(TickStage::Clock, advance_clock_system);
+        me.add(TickStage::Command, sim_command_stage_system);
         me.add(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
         me.add(TickStage::SimExpireHitters, expire_hitters_stage_system);
         me.add(TickStage::SimSettleDeaths, sim_settle_deaths_stage_system);
@@ -7012,6 +7129,145 @@ impl World {
         self.pending.push_back(cmd);
     }
 
+    /// **P7**：命令 FIFO 的**单条处理体**（`TickStage::Command` 段逐条调用；`tick_head` 不再内联
+    /// `match cmd`）。
+    ///
+    /// 逐臂与迁移前 `tick_head` 的内联循环**同序同记账**：
+    ///
+    /// * 九族动作一律走各族 `*_impl`（`EntityAccess`(+`StructuralAccess`) + `&mut SimState` 形态），
+    ///   与 facade 同一份实现；
+    /// * `record.processed` 记账仍留在本函数（与迁移前「调用点记账」的拆分逐项相同）；
+    /// * **语义事件写真实 record**：`spawn`/`butch`/`butch_effect` 的 `*_impl` 直接写传进来的
+    ///   `record`（P5-A3 已把记账放进 impl：`butches`/`skeletons` 各恰一条）——迁移前 facade 造
+    ///   一次性 scratch record 再丢弃、由 `tick_head` 手工补写；P7 起两组向量由 impl 独占写入，
+    ///   不再有 scratch record，也不再双重记账。
+    ///
+    /// `StructuralAccess` 绑定是 `Command::Leave`（`remove`）与 `Command::SpawnMonster`（`insert`）
+    /// 的编译期门：非结构段拿不到本函数。
+    fn apply_command<A>(access: &mut A, sim: &mut SimState, record: &mut TickRecord, cmd: Command)
+    where
+        A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
+    {
+        match cmd {
+            Command::Enter { actor_id } => {
+                let ok = Self::enter_world_impl(access, sim, actor_id);
+                record.processed.push((actor_id, ok));
+            }
+            Command::Leave { actor_id } => {
+                let ok = Self::leave_world_impl(access, sim, actor_id);
+                record.processed.push((actor_id, ok));
+            }
+            Command::Walk { actor_id, dx, dy } => {
+                let ok = Self::try_step_impl(access, sim, actor_id, dx, dy);
+                record.processed.push((actor_id, ok));
+            }
+            Command::Kill { target_id } => {
+                let ok = match access.get_mut(target_id) {
+                    Some(e) => {
+                        // 直接 `Die()` 入口（GM `KillCommand.cs:40` `baseObject.Die()`；
+                        // 脚本 `KILL` 的 `playerActor.Die()`）。oracle 的 `Die()` **不改
+                        // HP**；SuperMan 的目标在 `Die` 首行早退后由下一次 `Run` 回满，
+                        // 因此这里**不写 HP**（否则会污染 `CastleDoor.Run` 的 HP 判据）。
+                        // 非 SuperMan 仍写 `hp = 0`：本骨架的死亡结算以 `hp == 0` 为触发，
+                        // 与既有行为保持一致。
+                        if !e.flags.super_man {
+                            e.vitals.hp = 0;
+                        }
+                        e.life_cycle.die_called = true;
+                        true
+                    }
+                    None => false,
+                };
+                record.processed.push((target_id, ok));
+            }
+            Command::Attack {
+                actor_id,
+                target_id,
+            } => {
+                let outcome = Self::attack_once_impl(access, sim, actor_id, target_id);
+                match outcome {
+                    Some(o) => {
+                        record.processed.push((actor_id, o.hit));
+                        record.attacks.push((actor_id, target_id, o));
+                    }
+                    None => record.processed.push((actor_id, false)),
+                }
+            }
+            Command::SpawnMonster {
+                id,
+                name,
+                x,
+                y,
+                map_id,
+                level,
+                exp,
+                hp,
+                dc,
+                ac,
+                undead,
+                hit_point,
+                speed_point,
+                drop_list,
+            } => {
+                let ok = Self::spawn_monster_now_impl(
+                    access,
+                    sim,
+                    record,
+                    id,
+                    &name,
+                    x,
+                    y,
+                    map_id,
+                    level,
+                    exp,
+                    hp,
+                    dc,
+                    ac,
+                    undead,
+                    hit_point,
+                    speed_point,
+                    &drop_list,
+                );
+                record.processed.push((id, ok));
+            }
+            Command::Push {
+                actor_id,
+                dir,
+                count,
+            } => {
+                let events = Self::push_now_impl(access, sim, actor_id, dir, count);
+                record.processed.push((actor_id, !events.is_empty()));
+                record.pushes.extend(events);
+            }
+            Command::Rush {
+                actor_id,
+                dir,
+                steps,
+            } => {
+                let events = Self::rush_now_impl(access, sim, actor_id, dir, steps);
+                record.processed.push((actor_id, !events.is_empty()));
+                record.rushes.extend(events);
+            }
+            Command::Butch { actor_id, dir } => {
+                // `butch_now_impl` 直接把 `ButchEvent` 记进 `record.butches`（P5-A3 拆分）。
+                let event = Self::butch_now_impl(access, sim, record, actor_id, dir);
+                record.processed.push((actor_id, event.is_some()));
+            }
+            Command::ButchEffect {
+                actor_id,
+                target_id,
+                n_x,
+                n_y,
+            } => {
+                // `butch_effect_now_impl` 直接把 `SkeletonEvent` 记进 `record.skeletons`；
+                // `processed` 恒 true 仍由本函数记（与迁移前同口径）。
+                let _ =
+                    Self::butch_effect_now_impl(access, sim, record, actor_id, target_id, n_x, n_y);
+                record.processed.push((actor_id, true));
+            }
+        }
+    }
+
     /// 会话进入世界并落图。
     pub fn add_entity(&mut self, mut spawn: EntitySpawn) -> i32 {
         if spawn.id <= 0 {
@@ -7210,128 +7466,37 @@ impl World {
             castle_structures: Vec::new(),
         };
 
-        // 命令 FIFO
+        // 命令 FIFO —— **P7：`TickStage::Command` 段（#1）**。
+        //
+        // 段位与迁移前逐字相同（`Clock` 之后、PL-1 快照之前）；**入队序 = 处理序**由段内
+        // `pop_front` 循环保证（一个系统、逐条、不重排）。`SimState` 由 `run_head_stage` 搬入，
+        // 命令队列与 `TickRecord` 在这里按段边界搬入/搬回（同一时刻只有一个所有者）。
         let __prof_cmd = self.prof_begin();
-        while let Some(cmd) = self.pending.pop_front() {
-            match cmd {
-                Command::Enter { actor_id } => {
-                    let ok = self.enter_world(actor_id);
-                    record.processed.push((actor_id, ok));
-                }
-                Command::Leave { actor_id } => {
-                    let ok = self.leave_world(actor_id);
-                    record.processed.push((actor_id, ok));
-                }
-                Command::Walk { actor_id, dx, dy } => {
-                    let ok = self.try_step(actor_id, dx, dy);
-                    record.processed.push((actor_id, ok));
-                }
-                Command::Kill { target_id } => {
-                    let ok = match self.entities.get_mut(target_id) {
-                        Some(e) => {
-                            // 直接 `Die()` 入口（GM `KillCommand.cs:40` `baseObject.Die()`；
-                            // 脚本 `KILL` 的 `playerActor.Die()`）。oracle 的 `Die()` **不改
-                            // HP**；SuperMan 的目标在 `Die` 首行早退后由下一次 `Run` 回满，
-                            // 因此这里**不写 HP**（否则会污染 `CastleDoor.Run` 的 HP 判据）。
-                            // 非 SuperMan 仍写 `hp = 0`：本骨架的死亡结算以 `hp == 0` 为触发，
-                            // 与既有行为保持一致。
-                            if !e.flags.super_man {
-                                e.vitals.hp = 0;
-                            }
-                            e.life_cycle.die_called = true;
-                            true
-                        }
-                        None => false,
-                    };
-                    record.processed.push((target_id, ok));
-                }
-                Command::Attack {
-                    actor_id,
-                    target_id,
-                } => {
-                    let outcome = self.attack_once(actor_id, target_id);
-                    match outcome {
-                        Some(o) => {
-                            record.processed.push((actor_id, o.hit));
-                            record.attacks.push((actor_id, target_id, o));
-                        }
-                        None => record.processed.push((actor_id, false)),
-                    }
-                }
-                Command::SpawnMonster {
-                    id,
-                    name,
-                    x,
-                    y,
-                    map_id,
-                    level,
-                    exp,
-                    hp,
-                    dc,
-                    ac,
-                    undead,
-                    hit_point,
-                    speed_point,
-                    drop_list,
-                } => {
-                    let ok = self.spawn_monster_now(
-                        id,
-                        &name,
-                        x,
-                        y,
-                        map_id,
-                        level,
-                        exp,
-                        hp,
-                        dc,
-                        ac,
-                        undead,
-                        hit_point,
-                        speed_point,
-                        &drop_list,
-                    );
-                    record.processed.push((id, ok));
-                }
-                Command::Push {
-                    actor_id,
-                    dir,
-                    count,
-                } => {
-                    let events = self.push_now(actor_id, dir, count);
-                    record.processed.push((actor_id, !events.is_empty()));
-                    record.pushes.extend(events);
-                }
-                Command::Rush {
-                    actor_id,
-                    dir,
-                    steps,
-                } => {
-                    let events = self.rush_now(actor_id, dir, steps);
-                    record.processed.push((actor_id, !events.is_empty()));
-                    record.rushes.extend(events);
-                }
-                Command::Butch { actor_id, dir } => {
-                    let event = self.butch_now(actor_id, dir);
-                    record.processed.push((actor_id, event.is_some()));
-                    if let Some(event) = event {
-                        record.butches.push(event);
-                    }
-                }
-                Command::ButchEffect {
-                    actor_id,
-                    target_id,
-                    n_x,
-                    n_y,
-                } => {
-                    let skeleton = self.butch_effect_now(actor_id, target_id, n_x, n_y);
-                    record.processed.push((actor_id, true));
-                    if let Some(ev) = skeleton {
-                        record.skeletons.push(ev);
-                    }
-                }
-            }
+        {
+            let pending = std::mem::take(&mut self.pending);
+            let record_res = TickRecordRes(std::mem::take(&mut record));
+            let (record_back, pending_back) = self.run_head_stage(move |world, head| {
+                world.insert_resource(CommandQueueRes(pending));
+                world.insert_resource(record_res);
+                head.run(TickStage::Command, world);
+                (
+                    world
+                        .remove_resource::<TickRecordRes>()
+                        .expect("Command 后必须归还 TickRecordRes（段边界契约）")
+                        .0,
+                    world
+                        .remove_resource::<CommandQueueRes>()
+                        .expect("Command 后必须归还 CommandQueueRes（段边界契约）")
+                        .0,
+                )
+            });
+            record = record_back;
+            self.pending = pending_back;
         }
-
+        // **结构段边界**：`Command::SpawnMonster`（`insert`）与 `Command::Leave`（`remove`）会增删
+        // 实体 ⇒ facade 的缓存视图必须刷新，否则后续段（快照/结算/AI/宿主段）`get`/`iter` 看不到
+        // 新生成的怪，或仍看得到已离场的实体。与 `SimNpc`/`SimMerchant` 的结构段收尾同口径。
+        self.entities.refresh_views();
         self.prof_end(TickStage::Command, __prof_cmd);
 
         // **PL-1 硬前置（spike §4.3-3 / §5.5-1）**：oracle 的 P32（`PlayObject.Message.cs:747-763`）
@@ -8656,11 +8821,17 @@ impl World {
         Self::enter_world_impl(access, sim, spawned)
     }
 
-    /// **P5-A3**：`spawn_monster_now` 的 facade（签名与 `tick_head` 调用点零改动）——一行委派
+    /// **P5-A3 / P7**：`spawn_monster_now` 的 facade —— 一行委派
     /// [`World::spawn_monster_now_impl`]。
+    ///
+    /// **P7 起接收调用方的 `record`**：迁移前这里造一次性 scratch `TickRecord` 再丢弃（tick 路径
+    /// 另有 `processed` 记账点）；现在 tick 路径由 `Command` 段把**真实 record** 传进来，
+    /// 本 facade 只剩「已持有实体仓库 + SimState 的调用方」的便捷入口（用例直调）。
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
     #[allow(clippy::too_many_arguments)]
     fn spawn_monster_now(
         &mut self,
+        record: &mut TickRecord,
         id: i32,
         name: &str,
         x: i32,
@@ -8676,11 +8847,10 @@ impl World {
         speed_point: u8,
         drop_list: &[MonsterDropItem],
     ) -> bool {
-        let mut record = TickRecord::default();
         Self::spawn_monster_now_impl(
             &mut self.entities,
             &mut self.sim,
-            &mut record,
+            record,
             id,
             name,
             x,
@@ -9332,6 +9502,7 @@ impl World {
             .unwrap_or_default()
     }
 
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
     pub(crate) fn attack_once(&mut self, actor_id: i32, target_id: i32) -> Option<AttackOutcome> {
         Self::attack_once_impl(&mut self.entities, &mut self.sim, actor_id, target_id)
     }
@@ -9944,12 +10115,7 @@ impl World {
         Ok(())
     }
 
-    /// 单步移动（bool 口径，行为与卡 `openmir2-movefail-log-reason` 之前逐例相同）。
-    fn try_step(&mut self, actor_id: i32, dx: i32, dy: i32) -> bool {
-        Self::try_step_impl(&mut self.entities, &mut self.sim, actor_id, dx, dy)
-    }
-
-    /// **P5-A2**：`try_step` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    /// **P5-A2 / P7**：`try_step` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
     ///
     /// 判据链与旧实现逐句相同：`try_step_blocked_impl`（`cell_match` → `move_object` →
     /// 分类 → `Transform` 写回）。`Command::Walk` 的 facade 与段只有这一份实现。
@@ -10099,6 +10265,7 @@ impl World {
     ///
     /// **不在本片**（登记）：有正前目标支（`:1404-1440`：`CharPushed` 目标 + 进占其旧格 + 伤害）、
     /// `bo35 == false` 时的 `RM_STRUCK` 伤害段（`:1469-1486`）。
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
     fn rush_now(&mut self, actor_id: i32, n_dir: u8, steps: i32) -> Vec<crate::action::RushEvent> {
         Self::rush_now_impl(&mut self.entities, &mut self.sim, actor_id, n_dir, steps)
     }
@@ -10181,20 +10348,24 @@ impl World {
     /// ——本仓尸体无 `ItemList`，属 G-物品面登记（T-206）；`ApplyMeatQuality` 同上。
     ///
     /// 返回：命中骨架支 ⇒ `Some(SkeletonEvent)`（以尸体为发送者），否则 `None`。
-    /// **P5-A3**：`Command::ButchEffect` 的 facade（签名与 `tick_head` 调用点零改动）——
-    /// 一行委派 [`World::butch_effect_now_impl`]（oracle 逐行对照表见该实现上方的说明）。
+    /// **P5-A3 / P7**：`Command::ButchEffect` 的 facade —— 一行委派
+    /// [`World::butch_effect_now_impl`]（oracle 逐行对照表见该实现上方的说明）。
+    ///
+    /// **P7 起接收调用方的 `record`**（迁移前的一次性 scratch record 已删除）：tick 路径由
+    /// `Command` 段传入真实 record，`skeletons` 记账由 impl 独占写入。
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
     fn butch_effect_now(
         &mut self,
+        record: &mut TickRecord,
         actor_id: i32,
         target_id: i32,
         n_x: i32,
         n_y: i32,
     ) -> Option<crate::action::SkeletonEvent> {
-        let mut record = TickRecord::default();
         Self::butch_effect_now_impl(
             &mut self.entities,
             &mut self.sim,
-            &mut record,
+            record,
             actor_id,
             target_id,
             n_x,
@@ -10307,11 +10478,19 @@ impl World {
     /// oracle 末尾**无条件** `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`；`Dir` 由宿主
     /// （`CM_BUTCH` 门面）按 oracle 的「2 格 + `IsValidObject` + 具肉动物尸」门解析后传入——本片
     /// 不含该入站门面，故事件只承载 `(dir, CurrX, CurrY)`。actor 不在世界 ⇒ 无事件。
-    /// **P5-A3**：`Command::Butch` 的 facade（签名与 `tick_head` 调用点零改动）——一行委派
-    /// [`World::butch_now_impl`]（`RM_BUTCH` 世界侧事件的逐句文档见该实现）。
-    fn butch_now(&self, actor_id: i32, dir: u8) -> Option<crate::action::ButchEvent> {
-        let mut record = TickRecord::default();
-        Self::butch_now_impl(&self.entities, &self.sim, &mut record, actor_id, dir)
+    /// **P5-A3 / P7**：`Command::Butch` 的 facade —— 一行委派 [`World::butch_now_impl`]
+    /// （`RM_BUTCH` 世界侧事件的逐句文档见该实现）。
+    ///
+    /// **P7 起接收调用方的 `record`**（迁移前的一次性 scratch record 已删除）：tick 路径由
+    /// `Command` 段传入真实 record，`butches` 记账由 impl 独占写入。
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
+    fn butch_now(
+        &self,
+        record: &mut TickRecord,
+        actor_id: i32,
+        dir: u8,
+    ) -> Option<crate::action::ButchEvent> {
+        Self::butch_now_impl(&self.entities, &self.sim, record, actor_id, dir)
     }
 
     /// **P5-A3**：`butch_now` 的 facade/段共用实现（`EntityAccess` + `&SimState`
@@ -10646,6 +10825,7 @@ mod tests {
             trace,
             vec![
                 TickStage::Clock,
+                TickStage::Command,
                 TickStage::SimHiterSnapshot,
                 TickStage::SimExpireHitters,
                 TickStage::SimSettleDeaths,
@@ -10666,6 +10846,82 @@ mod tests {
                 TickStage::OutputAoi
             ],
             "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
+        );
+    }
+
+    /// **P7 `Command` 段 FIFO 牙**：同一 tick 内的多条命令按**入队序**处理（段内 `pop_front`）。
+    ///
+    /// 夹具（一次 `tick()` 里三条命令，次序即合同）：
+    /// `SpawnMonster(id=2)` → `Attack(p → 2)` → `Walk(p, +1, 0)`。
+    ///
+    /// 判据：
+    /// * `record.processed` 的处理序 = 入队序（业务 id 序列 `[2, p, p]`）；**把段内
+    ///   `pop_front` 改成 `pop_back`（逆序）⇒ 首项变成 `p` 且攻击跑在生成之前 ⇒ 必红**；
+    /// * 次序的**语义**承重：攻击必须看得到同一段里刚生成的实体（`record.attacks` 恰一条且
+    ///   攻守 id 正确）。逆序时目标尚未 `insert` ⇒ `attack_once_impl` 返回 `None` ⇒ 无 attacks；
+    /// * 结构段边界：`spawn` 的 `insert` 在段后对 facade **可见**（`entities.get(2)` 断言）。
+    ///   注：本仓所有实体共用同一个 25 组件 bundle ⇒ 只有**单一 archetype**，facade 的缓存
+    ///   `QueryState` 在结构变更后仍解析得到新实体 ⇒ **删 `refresh_views()` 不会让本断言变红**
+    ///   （实测）。该调用是 P5-pre 的段边界契约（组件将来允许缺省时才承重），本卡如实登记为
+    ///   「结构段刷新无独立牙」。
+    #[test]
+    fn command_stage_keeps_fifo_order_within_one_tick() {
+        let mut w = World::new(64, 64);
+        let p = w.add_entity(player(1, "hero", 5, 5, 10));
+        w.tick(); // 让玩家先落图（`add_map_object`），与本模块既有命令用例同口径。
+
+        w.enqueue(Command::SpawnMonster {
+            id: 2,
+            name: "鸡".into(),
+            x: 6,
+            y: 6,
+            map_id: 0,
+            level: 1,
+            exp: 10,
+            hp: 5,
+            dc: 1,
+            ac: 0,
+            undead: 0,
+            hit_point: 5,
+            speed_point: 15,
+            drop_list: vec![],
+        });
+        w.enqueue(Command::Attack {
+            actor_id: p,
+            target_id: 2,
+        });
+        w.enqueue(Command::Walk {
+            actor_id: p,
+            dx: 1,
+            dy: 0,
+        });
+
+        let r = w.tick();
+
+        assert_eq!(
+            r.processed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![2, p, p],
+            "FIFO：处理序必须等于入队序（逆序会变成 [{p}, {p}, 2]）"
+        );
+        assert!(
+            r.processed[0].1,
+            "SpawnMonster 成功 ⇒ processed[0] = (2, true)"
+        );
+        assert_eq!(
+            r.attacks.len(),
+            1,
+            "攻击必须看得到**同一段内**刚生成的实体（逆序时目标不存在 ⇒ 无 attacks）"
+        );
+        assert_eq!((r.attacks[0].0, r.attacks[0].1), (p, 2), "攻守 id");
+        assert_eq!(r.processed[2], (p, true), "Walk 在末位且成功");
+        assert_eq!(
+            w.entities.get(p).map(|e| (e.x, e.y)),
+            Some((6, 5)),
+            "Walk 生效（末位命令）"
+        );
+        assert!(
+            w.entities.get(2).is_some(),
+            "结构段边界：同段 `insert` 的实体在段后对 facade 可见（refresh_views）"
         );
     }
 
@@ -11507,7 +11763,23 @@ mod tests {
 
         // A = facade 路径。
         let mut a = build();
-        let ok_a = a.spawn_monster_now(2, "僵尸", 11, 10, 0, 1, 500, 3, 1, 0, 0, 5, 15, &drop_list);
+        let ok_a = a.spawn_monster_now(
+            &mut TickRecord::default(),
+            2,
+            "僵尸",
+            11,
+            10,
+            0,
+            1,
+            500,
+            3,
+            1,
+            0,
+            0,
+            5,
+            15,
+            &drop_list,
+        );
         let facade_mark = a.rng.random();
         assert!(ok_a, "facade：生成成功");
         assert_ne!(
@@ -11639,10 +11911,14 @@ mod tests {
         use mir2_world_bevy::tick::StageEntities;
         const SEED: i32 = 20_261_023;
 
-        // A = facade 路径。
+        // A = facade 路径（**P7**：传调用方的真实 record，facade 不再自造 scratch record）。
         let (mut a, pa, ta, n10) = butch_rig(SEED, 53, true);
         a.entities.get_mut(ta).unwrap().ai.body_leathery = n10; // 本次抽恰好归零
-        let facade_ev = a.butch_effect_now(pa, ta, 11, 10);
+        let (facade_ev, facade_record) = {
+            let mut rec = TickRecord::default();
+            let ev = a.butch_effect_now(&mut rec, pa, ta, 11, 10);
+            (ev, rec)
+        };
         let facade_mark = a.rng.random();
         let (facade_bl, facade_mq, facade_skel, facade_dt) = {
             let t = a.entities.get(ta).unwrap();
@@ -11705,11 +11981,18 @@ mod tests {
             vec![facade_ev.unwrap()],
             "impl 的 skeletons 记账与旧 tick_head 的 record 口径相同"
         );
+        assert_eq!(
+            facade_record.skeletons, stage_record.skeletons,
+            "P7：facade 传真实 record ⇒ skeletons 记账与段路径逐项相同（无 scratch record）"
+        );
         assert!(stage_record.processed.is_empty(), "processed 仍在调用点记");
 
         // butch_now：ButchEvent = 屠宰者坐标；actor 不在世界 ⇒ None + processed false。
         let (mut c, pc, _, _) = butch_rig(SEED, 53, true);
-        let facade_butch = c.butch_now(pc, 5);
+        let (facade_butch, facade_butch_record) = {
+            let mut rec = TickRecord::default();
+            (c.butch_now(&mut rec, pc, 5), rec)
+        };
         let (stage_butch, butch_record) = {
             let World { entities, sim, .. } = &mut c;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
@@ -11730,6 +12013,10 @@ mod tests {
             "事件承载屠宰者当前位置"
         );
         assert_eq!(butch_record.butches, vec![facade_butch.unwrap()]);
+        assert_eq!(
+            facade_butch_record.butches, butch_record.butches,
+            "P7：facade 传真实 record ⇒ butches 记账与段路径逐项相同（无 scratch record）"
+        );
         assert!(butch_record.processed.is_empty(), "processed 仍在调用点记");
 
         let missing = {
@@ -14983,7 +15270,7 @@ mod tests {
         let (mut w, p, t, n10) = butch_rig(4_242, 53, true);
         // 起值 = 本次抽 + 10 ⇒ 减完必 > 0（且不触发回绕：n10+10 >= n10）。
         w.entities.get_mut(t).unwrap().ai.body_leathery = n10 + 10;
-        let ev = w.butch_effect_now(p, t, 11, 10);
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
         assert!(ev.is_none(), "BodyLeathery != 0 ⇒ 不发 RM_SKELETON");
         let e = w.entities.get(t).unwrap();
         assert!(!e.ai.skeleton, "未归零 ⇒ Skeleton 不置位");
@@ -14996,7 +15283,7 @@ mod tests {
     fn butch_effect_race_at_or_above_monster_never_skeletons() {
         let (mut w, p, t, n10) = butch_rig(7_777, 82, true);
         w.entities.get_mut(t).unwrap().ai.body_leathery = n10;
-        let ev = w.butch_effect_now(p, t, 11, 10);
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
         assert!(ev.is_none(), "race 82 ∉ [50,80) ⇒ 无骨架事件");
         let e = w.entities.get(t).unwrap();
         assert!(!e.ai.skeleton);
@@ -15020,7 +15307,7 @@ mod tests {
             e.ai.body_leathery = n10; // 本次抽恰好归零
             e.ai.meat_quality = 1000;
         }
-        let ev = w.butch_effect_now(p, t, 11, 10);
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
         assert!(ev.is_none(), "race 105 ≥ Monster(80) ⇒ 不置骨架");
         let mut r = mir2_shared::rng::RandomNumber::with_seed(SEED);
         let _n10 = r.random_below(16) + 5;
@@ -15058,7 +15345,7 @@ mod tests {
         w.entities.get_mut(t).unwrap().life_cycle.ghost = true;
         assert!(w.disappear_a(t), "尸体原本在格内 ⇒ 摘格成功");
         let baseline = mir2_shared::rng::RandomNumber::with_seed(SEED).random();
-        let ev = w.butch_effect_now(p, t, 11, 10);
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
         assert!(ev.is_none(), "已摘格的尸体 ⇒ IsValidObject 假");
         assert_eq!(w.rng.random(), baseline, "零抽数");
         let e = w.entities.get(t).unwrap();
@@ -15073,7 +15360,7 @@ mod tests {
         const SEED: i32 = 5_550_555;
         let (mut w, p, t, n10) = butch_rig(SEED, 53, true);
         w.entities.get_mut(t).unwrap().ai.body_leathery = n10 + 1;
-        let ev = w.butch_effect_now(p, t, 11, 10);
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
         assert!(ev.is_none(), "扣完 = 1 ≠ 0 ⇒ 不发骨架");
         let e = w.entities.get(t).unwrap();
         assert_eq!(e.ai.body_leathery, 1, "停在 1（不复位 50）");
@@ -15093,7 +15380,7 @@ mod tests {
                 e.ai.body_leathery = n10; // 过门则归零 + 骨架
                 e.ai.meat_quality = 1000;
             }
-            let ev = w.butch_effect_now(p, t, cx, 10);
+            let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, cx, 10);
             let e = w.entities.get(t).unwrap();
             if should_pass {
                 assert!(
@@ -15140,7 +15427,7 @@ mod tests {
             e.ai.body_leathery = BODY0;
             e.ai.meat_quality = MEAT0;
         }
-        let ev = w.butch_effect_now(p, t, 11, 10);
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
         assert!(ev.is_none(), "起值远离 0 ⇒ 不触发骨架，只观察扣减量");
         let mark_a = w.rng.random();
         let (bl_a, meat_a) = {
@@ -15216,7 +15503,7 @@ mod tests {
                 let e = w.entities.get(t).unwrap();
                 (e.x, e.y)
             };
-            let ev = w.butch_effect_now(p, t, nx, ny);
+            let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, nx, ny);
             assert!(ev.is_none(), "{why} ⇒ 无骨架事件");
             assert_eq!(
                 w.rng.random(),
@@ -15227,7 +15514,7 @@ mod tests {
 
         // 目标格不符（`IsValidObject` 查的是 (nX,nY)，目标不在该格）。
         let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
-        let ev = w.butch_effect_now(p, t, 10, 10); // 尸体在 (11,10)
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 10, 10); // 尸体在 (11,10)
         assert!(ev.is_none(), "目标不在 (nX,nY) ⇒ 无事件");
         assert_eq!(w.rng.random(), baseline, "目标格不符 ⇒ 零抽数");
     }
@@ -15239,7 +15526,7 @@ mod tests {
         let (mut w, p, t, n10) = butch_rig(99, 53, true);
         assert!(n10 >= 5, "Random(16)+5 ∈ [5,20]");
         w.entities.get_mut(t).unwrap().ai.body_leathery = 3;
-        let ev = w.butch_effect_now(p, t, 11, 10);
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
         assert!(ev.is_none(), "回绕成 254 ⇒ 不发骨架");
         let e = w.entities.get(t).unwrap();
         assert_eq!(e.ai.body_leathery, 3u8.wrapping_sub(n10), "unchecked 回绕");

@@ -109,7 +109,7 @@ pub struct TickOrder(pub Vec<i32>);
 pub enum TickStage {
     /// #0 线程断言 + 虚拟时钟推进（`clock_ms` / `tick_seq`）。
     Clock,
-    /// #1 命令 FIFO（`World::tick_head` 的 `match cmd`；逐条、一个系统、不得拆散）。
+    /// #1 命令 FIFO（`sim_command_stage_system`：段内按 `pop_front` 逐条处理；一个系统、不得拆散）。
     Command,
     /// #2 PL-1 玩家命中者快照（读清理前的 `LastHiter`）。
     SimHiterSnapshot,
