@@ -1070,6 +1070,41 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   762→765；parity 全清单 0 failed）；段序牙与既有 FIFO（`tick_order_is_deterministic_and_documented`）/
 >   推挤/冲刺用例未放宽。
 
+> **S4d-3/P5-A3 落地登记（2026-11-14，Command·spawn/butch 两族 port；九族收尾）**：spawn / butch /
+> butch_effect 三族 handler 已改成「`EntityAccess`（spawn 另需 `StructuralAccess`）+ `&mut SimState`
+> + `&mut TickRecord`」形态。**本批只做 port：Command 段仍未切系统，FIFO 入队序 = 处理序不变；
+> `tick_head` 的 `match cmd` 一行未动**。
+> - `World::spawn_monster_now` → `Self::spawn_monster_now_impl<A: EntityAccess + StructuralAccess>`：
+>   越界门 → 掉落预算（`generate_drops`，生成时取数）→ `monster_from_row` → `StructuralAccess::insert`
+>   → `enter_world_impl` 落格。facade 一行委派并返回 `ok`；`_record` 只为统一 Command-handler 形态
+>   保留（本族不产 `TickRecord` 事件，`processed` 记账仍在 `tick_head` 调用点）。
+> - `World::butch_effect_now` → `butch_effect_now_impl<A: EntityAccess>`：全部门（`|Δ|<=2` /
+>   `IsValidObject` 格成员 / `Death && !Skeleton && Animal`）在两次抽**之前**；门过 ⇒ 恰 2 抽
+>   （先 `Random(16)+5`、再 `Random(201)+100`）。命中骨架支 ⇒ `record.skeletons` 一条（发送者 = 尸体）。
+> - `World::butch_now` → `butch_now_impl<A: EntityAccess>`：只读屠宰者坐标；`record.butches` 一条。
+>   本族无 RNG、不读非实体状态（`_sim` 保留统一形态）。
+> - 三族的 `processed` 记账仍由**调用点**按返回值记（与旧 `tick_head` 同拆分）；facade 用一次性
+>   scratch `TickRecord` 承接语义事件，真实 record 的入队点未变。
+> - **RNG 逐点 trace（`MIR2_RNG_LOG` + `MIR2_RNG_SEED=42`，五列 seq/kind/max/result/site）**：
+>   base `08fa9c890`（`git show` 取回旧 `world.rs`，跑完恢复并核 sha256）与 head 各跑三副夹具：
+>   `monster_death_drops_items_and_awards_exp`（整 tick 7 抽，含 spawn 的掉落预算）、
+>   `butch_effect_hits_zero_leathery_sets_skeleton_and_records_event`（生产 2 抽 + 用例参照 3 抽）、
+>   `butch_command_emits_event_at_current_cell`（0 抽）。**seq/kind/max/result 四列逐行 diff 0**；
+>   site 列位移 5 对，逐条回读两树源码文本相同：生产两抽 `world.rs:10171/10172 →
+>   10261/10262`（函数迁到 impl，接收者 `self.rng` → `sim.rng`；位移 = spawn impl 增长的 +90 行），
+>   用例参照抽 3 行随测试模块下移（+402）——**零生产抽点位移**（formula/combat 站点逐行相同）。
+> - **牙（2 颗段语义 + 4 个变异重放）**：
+>   `spawn_stage_access_path_matches_facade_path`：结构插入 + `enter_world` 落格（cell 登记
+>   `CellType::Monster` + `add_to_mapped`）、`race = 80`、金币/掉落清单、掉落预算的 RNG 流位置，
+>   以及越界门「零抽数」；`butch_stage_access_path_matches_facade_path`：尸体转肉（`BodyLeathery`
+>   归零 ⇒ `Skeleton = true` 且复位 50、`MeatQuality` 按第 2 抽回绕扣减、`SkeletonEvent` 发送者为
+>   尸体、屠宰者 `DeathTick`）+ 恰 2 抽 + `butch_now` 的屠宰者坐标/缺失实体支。变异（只在本人
+>   worktree 重放、恢复后 sha256 相等）：删 spawn 的 `enter_world_impl` 调用 / 对调 butch 两次抽 /
+>   删 `record.skeletons` 记账 / 写错 `ButchEvent` 的 y 坐标，四者均 RED。
+> - **判据**：六份 golden blob 6/6 与 base 相等（`git diff 08fa9c890 -- tests/parity/world/golden`
+>   空）；`cargo test --workspace --no-fail-fast` = **157 suites / 3878 passed / 0 failed / 69 ignored**
+>   （本批 +2 条段语义牙，`mir2-world` lib 765→767；parity 全清单 0 failed）；五门见证 head。
+
 > **S4d-3/P6a 落地登记（2026-11-13，模块段批量化）**：本批只交付 **#9 `SimBuff`**；
 > #5 `SimSelfDeliver` 与 #11 `SimNpc` **受阻**（依赖面超出卡面写集，按 Leader 批量化口径登记，未扩写集）。
 > - **#9 `SimBuff`（已系统化）**：段系统 `sim_buff_stage_system`（`TickStage::SimBuff`，#9）；段位 =
@@ -1259,10 +1294,10 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > `SlotTable` 的 `QueryState` 缓存优化（按需）、`TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、
 > `crates/world` 删除（S5，等 Owner 授权）。段号清单与写集见设计 §2.1/§4。
 
-> **段数口径（P5-A2 交付 head；单位 = 20 阶段）**：结构段数不变 **19/20**（`#1 Command` 仍未切系统）。
-> Command 九族 handler port 进度：attack（P5-A1）+ walk/enter/leave/rush/push（P5-A2）已 port；
-> `spawn_monster_now` 与 `butch_now` / `butch_effect_now` 两族未 port；九族齐后由收口卡一次性把
-> Command FIFO 切成 `TickStage::Command` 系统（入队序 = 处理序仍为硬契约）。
+> **段数口径（P5-A3 交付 head；单位 = 20 阶段）**：结构段数不变 **19/20**（`#1 Command` 仍未切系统）。
+> Command 九族 handler port **已齐**：attack（P5-A1）+ walk/enter/leave/rush/push（P5-A2）+
+> spawn/butch/butch_effect（P5-A3）；由 **P7 收口卡**一次性把 Command FIFO 切成
+> `TickStage::Command` 系统（入队序 = 处理序仍为硬契约）。
 
 
 > **模块级收口登记（评审 P2-2）**：`crates/world` 的 28 个模块逐一有归宿——

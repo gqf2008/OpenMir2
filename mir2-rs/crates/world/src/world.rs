@@ -8576,9 +8576,25 @@ impl World {
         true
     }
 
+    /// **P5-A3**：`Command::SpawnMonster` 的 facade/段共用实现
+    /// （`EntityAccess` + `StructuralAccess` + `&mut SimState` + `&mut TickRecord`）。
+    ///
+    /// 逐句与旧 `World::spawn_monster_now` 相同，唯一差异是接收者换成访问器
+    /// （`self.entities` → `access`、`self.maps`/`self.rng`/`self.item_catalog`/… → `sim`）。
+    ///
+    /// **取数点（RNG 逐点 trace 的锚）**：`generate_drops` 在**生成时**预算掉落
+    /// （`WorldServer.MonGen.cs:440` 的时机）——`map_id` 越界的门在预算**之前**，与旧实现同序
+    /// （越界 ⇒ 零抽数）。落格走 [`World::enter_world_impl`]（cell 类型 = `entity_cell_type`）。
+    ///
+    /// **产物**：本族不产 `TickRecord` 事件（`processed` 记账仍由调用点按返回值做，
+    /// 与旧 `tick_head` 同拆分）；`_record` 只为统一 Command-handler 形态保留。
     #[allow(clippy::too_many_arguments)]
-    fn spawn_monster_now(
-        &mut self,
+    pub(crate) fn spawn_monster_now_impl<
+        A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
+    >(
+        access: &mut A,
+        sim: &mut SimState,
+        _record: &mut TickRecord,
         id: i32,
         name: &str,
         x: i32,
@@ -8594,16 +8610,15 @@ impl World {
         speed_point: u8,
         drop_list: &[MonsterDropItem],
     ) -> bool {
-        if map_id >= self.maps.len() {
+        if map_id >= sim.maps.len() {
             return false;
         }
         // 掉落预算（`WorldServer.MonGen.cs:440` 的时机）：RNG 在这里消耗
-        let catalog_items = std::mem::take(&mut self.item_catalog);
+        let catalog_items = std::mem::take(&mut sim.item_catalog);
         let (gold, items) = {
             let catalog = VecItemCatalog {
                 items: &catalog_items,
             };
-            let World { sim, .. } = self;
             generate_drops(
                 &mut sim.rng,
                 drop_list,
@@ -8613,7 +8628,7 @@ impl World {
                 &mut sim.item_number,
             )
         };
-        self.item_catalog = catalog_items;
+        sim.item_catalog = catalog_items;
 
         let mut e = crate::combat::monster_from_row(crate::combat::MonsterRow {
             id,
@@ -8634,11 +8649,53 @@ impl World {
         e.gold = gold;
         e.drop_items = items;
         // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：按落图时刻重盖（buff 轴）。
-        e.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
+        e.poisoning_tick = sim.clock_ms + BUFF_EPOCH_MS;
         // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
-        e.map_binding.verify_tick = self.clock_ms;
-        let id = self.entities.insert(e);
-        self.enter_world(id)
+        e.map_binding.verify_tick = sim.clock_ms;
+        let spawned = access.insert(e);
+        Self::enter_world_impl(access, sim, spawned)
+    }
+
+    /// **P5-A3**：`spawn_monster_now` 的 facade（签名与 `tick_head` 调用点零改动）——一行委派
+    /// [`World::spawn_monster_now_impl`]。
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_monster_now(
+        &mut self,
+        id: i32,
+        name: &str,
+        x: i32,
+        y: i32,
+        map_id: usize,
+        level: u8,
+        exp: i32,
+        hp: u16,
+        dc: u16,
+        ac: u16,
+        undead: u8,
+        hit_point: u8,
+        speed_point: u8,
+        drop_list: &[MonsterDropItem],
+    ) -> bool {
+        let mut record = TickRecord::default();
+        Self::spawn_monster_now_impl(
+            &mut self.entities,
+            &mut self.sim,
+            &mut record,
+            id,
+            name,
+            x,
+            y,
+            map_id,
+            level,
+            exp,
+            hp,
+            dc,
+            ac,
+            undead,
+            hit_point,
+            speed_point,
+            drop_list,
+        )
     }
 
     /// **生成期的掉落预算**（`MonGetRandomItems` 的时机）——用**调用方给定的**随机流。
@@ -10124,6 +10181,8 @@ impl World {
     /// ——本仓尸体无 `ItemList`，属 G-物品面登记（T-206）；`ApplyMeatQuality` 同上。
     ///
     /// 返回：命中骨架支 ⇒ `Some(SkeletonEvent)`（以尸体为发送者），否则 `None`。
+    /// **P5-A3**：`Command::ButchEffect` 的 facade（签名与 `tick_head` 调用点零改动）——
+    /// 一行委派 [`World::butch_effect_now_impl`]（oracle 逐行对照表见该实现上方的说明）。
     fn butch_effect_now(
         &mut self,
         actor_id: i32,
@@ -10131,9 +10190,40 @@ impl World {
         n_x: i32,
         n_y: i32,
     ) -> Option<crate::action::SkeletonEvent> {
+        let mut record = TickRecord::default();
+        Self::butch_effect_now_impl(
+            &mut self.entities,
+            &mut self.sim,
+            &mut record,
+            actor_id,
+            target_id,
+            n_x,
+            n_y,
+        )
+    }
+
+    /// **P5-A3**：`butch_effect_now` 的 facade/段共用实现
+    /// （`EntityAccess` + `&mut SimState` + `&mut TickRecord`）——逐句与旧实现相同，
+    /// 唯一差异是接收者换成访问器；oracle 逐行对照表见 [`World::butch_effect_now`] 的文档
+    /// （本函数与它同一份判据链）。
+    ///
+    /// **取数点（R 级判据）**：门全过 ⇒ 恰 2 抽（先 `Random(16)+5`、再 `Random(201)+100`，
+    /// `Operate.cs:722-723`）；任一门前置不过 ⇒ **零抽数**（所有门都在两次抽之前）。
+    ///
+    /// **产物**：命中骨架支 ⇒ `record.skeletons` 一条；`processed` 记账仍在调用点
+    /// （旧 `tick_head` 对 `Command::ButchEffect` 恒记 true，与本函数拆分口径一致）。
+    fn butch_effect_now_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        record: &mut TickRecord,
+        actor_id: i32,
+        target_id: i32,
+        n_x: i32,
+        n_y: i32,
+    ) -> Option<crate::action::SkeletonEvent> {
         // `:716` `Math.Abs(nX - CurrX) <= 2 && Math.Abs(nY - CurrY) <= 2`（`this` = 屠宰者）。
         let (curr_x, curr_y, map_id) = {
-            let actor = self.entities.get(actor_id)?;
+            let actor = access.get(actor_id)?;
             (actor.x, actor.y, actor.map_id)
         };
         if (n_x - curr_x).abs() > 2 || (n_y - curr_y).abs() > 2 {
@@ -10146,8 +10236,8 @@ impl World {
         // ⇒ 已 `make_ghost`/`DisappearA` 摘格的尸体（坐标不变但不在格内）不再过门——这正是
         // oracle 的语义；只看坐标会把它们放行（多 2 抽 + 多一条 SM_SKELETON）。
         {
-            let target = self.entities.get(target_id)?;
-            let (cell, cell_success) = self.maps.get(map_id)?.get_cell_info(n_x, n_y);
+            let target = access.get(target_id)?;
+            let (cell, cell_success) = sim.maps.get(map_id)?.get_cell_info(n_x, n_y);
             if !cell_success
                 || !cell.is_available()
                 || !cell
@@ -10168,13 +10258,16 @@ impl World {
         }
 
         // `:722-723` 两次抽（**次序与模数**即 R 级判据）：先 `Random(16)+5`，再 `Random(201)+100`。
-        let n10 = u8::try_from(self.rng.random_below(16) + 5).unwrap_or(0);
-        let meat_draw = u16::try_from(self.rng.random_below(201) + 100).unwrap_or(0);
-        let now = self.clock_ms;
+        let n10 = u8::try_from(sim.rng.random_below(16) + 5).unwrap_or(0);
+        let meat_draw = u16::try_from(sim.rng.random_below(201) + 100).unwrap_or(0);
+        let now = sim.clock_ms;
 
         let mut skeleton = None;
-        let (target_x_now, target_y_now) = self.entities.xy(target_id)?;
-        let e = self.entities.get_mut(target_id)?;
+        let (target_x_now, target_y_now) = {
+            let target = access.get(target_id)?;
+            (target.x, target.y)
+        };
+        let e = access.get_mut(target_id)?;
         // `:724-729`：`byte` / `ushort` 的 unchecked 回绕（**不夹取**；`<=0` 只命中 `==0`）。
         e.ai.body_leathery = e.ai.body_leathery.wrapping_sub(n10);
         e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(meat_draw);
@@ -10200,8 +10293,11 @@ impl World {
             e.ai.body_leathery = 50;
         }
         // `:744` `DeathTick = HUtil32.GetTickCount();` —— 方法内 `this` = **屠宰者**。
-        if let Some(actor) = self.entities.get_mut(actor_id) {
+        if let Some(actor) = access.get_mut(actor_id) {
             actor.life_cycle.death_tick = now;
+        }
+        if let Some(ev) = skeleton {
+            record.skeletons.push(ev);
         }
         skeleton
     }
@@ -10211,14 +10307,35 @@ impl World {
     /// oracle 末尾**无条件** `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`；`Dir` 由宿主
     /// （`CM_BUTCH` 门面）按 oracle 的「2 格 + `IsValidObject` + 具肉动物尸」门解析后传入——本片
     /// 不含该入站门面，故事件只承载 `(dir, CurrX, CurrY)`。actor 不在世界 ⇒ 无事件。
+    /// **P5-A3**：`Command::Butch` 的 facade（签名与 `tick_head` 调用点零改动）——一行委派
+    /// [`World::butch_now_impl`]（`RM_BUTCH` 世界侧事件的逐句文档见该实现）。
     fn butch_now(&self, actor_id: i32, dir: u8) -> Option<crate::action::ButchEvent> {
-        let e = self.entities.get(actor_id)?;
-        Some(crate::action::ButchEvent {
+        let mut record = TickRecord::default();
+        Self::butch_now_impl(&self.entities, &self.sim, &mut record, actor_id, dir)
+    }
+
+    /// **P5-A3**：`butch_now` 的 facade/段共用实现（`EntityAccess` + `&SimState`
+    /// + `&mut TickRecord`）。
+    ///
+    /// 本族只读实体坐标（不读任何非实体状态）⇒ `_sim` 只为统一 Command-handler 形态保留。
+    /// **产物**：`record.butches` 一条；`processed` 记账仍在调用点（旧 `tick_head` 的
+    /// `(actor_id, event.is_some())` 口径）。actor 不在世界 ⇒ 无事件。
+    fn butch_now_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        _sim: &SimState,
+        record: &mut TickRecord,
+        actor_id: i32,
+        dir: u8,
+    ) -> Option<crate::action::ButchEvent> {
+        let e = access.get(actor_id)?;
+        let event = crate::action::ButchEvent {
             actor_id,
             dir,
             x: e.x,
             y: e.y,
-        })
+        };
+        record.butches.push(event);
+        Some(event)
     }
 
     /// 对拍用地面物品清单：`(map_id, x, y, obj_id)`，按 `(map, x, y, obj_id)` 升序。
@@ -11045,6 +11162,10 @@ mod tests {
     // `Transform`（`try_step` 写坐标）+ `MapBinding`（`enter_world` 写 `add_to_mapped`）。
     // `Structural`：`leave_world` 走 `StructuralAccess::remove`。
     // 挂 `TickStage::Command`：本族原本就在命令 FIFO 里处理（本卡只做 port，不切系统）。
+    //
+    // **P5-A3**：spawn / butch / butch_effect 三族**复用本 spec**（读写面相同：spawn 走
+    // `StructuralAccess::insert` + `MapBinding` 写；butch_effect 只写 `EntityMut` 组件）；
+    // 不另建第二份同形 spec。
     mir2_world_bevy::stage_spec!(
         MoveProbe,
         TickStage::Command,
@@ -11337,6 +11458,287 @@ mod tests {
         );
         let e = f.entities.get(1).unwrap();
         assert_eq!((e.x, e.y), (5, 2), "push 终态坐标");
+    }
+
+    /// **P5-A3 牙（spawn）**：`spawn_monster_now_impl` 在段访问器下与 facade 同语义。
+    ///
+    /// 钉三件事：
+    /// - **结构插入 + 落格**：`StructuralAccess::insert` 后 `enter_world_impl` 必须把实体登记进
+    ///   `(11,10)` 的格子（`cell_type = Monster`、`add_to_mapped = true`）——删 `enter_world_impl`
+    ///   调用 ⇒ 段路径格子断言红；
+    /// - **掉落预算**：`generate_drops` 在生成时消耗 RNG，两路流的下一值必须相等且**不等于**
+    ///   「零生成」基线——删预算调用 ⇒ `assert_ne!(facade_mark, baseline_mark)` 红；
+    /// - **越界门在预算之前**：`map_id` 越界 ⇒ `false` + 零抽数（与旧实现同序）。
+    ///
+    /// `race = 80`（`monster_from_row` 的 `ActorRace.Monster`）同时钉住生成的类属性落点。
+    #[test]
+    fn spawn_stage_access_path_matches_facade_path() {
+        use mir2_world_bevy::tick::StageEntities;
+        let drop_list = vec![
+            MonsterDropItem {
+                sel_point: 9,
+                max_point: 10,
+                item_name: "金币".into(),
+                count: 300,
+            },
+            MonsterDropItem {
+                sel_point: 9,
+                max_point: 10,
+                item_name: "金创药(小量)".into(),
+                count: 1,
+            },
+        ];
+        let build = || {
+            let mut w = World::new(32, 32);
+            w.item_catalog = vec![StdItem {
+                name: "金创药(小量)".into(),
+                dura_max: 1,
+                ..Default::default()
+            }];
+            w.mon_random_add_value = 1; // 必出极品 ⇒ 消耗 RNG 的分支也覆盖
+            w
+        };
+
+        // 零生成基线：用于证明「掉落预算真的抽了数」。
+        let baseline_mark = {
+            let mut base = build();
+            base.rng.random()
+        };
+
+        // A = facade 路径。
+        let mut a = build();
+        let ok_a = a.spawn_monster_now(2, "僵尸", 11, 10, 0, 1, 500, 3, 1, 0, 0, 5, 15, &drop_list);
+        let facade_mark = a.rng.random();
+        assert!(ok_a, "facade：生成成功");
+        assert_ne!(
+            facade_mark, baseline_mark,
+            "生成期必须消耗掉落预算的 RNG（否则本用例的流位置断言没有承重力）"
+        );
+
+        // B = 段访问器路径（`insert` 不经 facade 缓存 ⇒ 段后 `refresh_views`）。
+        let mut b = build();
+        let (ok_b, stage_record) = {
+            let World { entities, sim, .. } = &mut b;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut record = TickRecord::default();
+            let ok = World::spawn_monster_now_impl(
+                &mut access,
+                sim,
+                &mut record,
+                2,
+                "僵尸",
+                11,
+                10,
+                0,
+                1,
+                500,
+                3,
+                1,
+                0,
+                0,
+                5,
+                15,
+                &drop_list,
+            );
+            (ok, record)
+        };
+        b.entities.refresh_views();
+        assert!(ok_b, "段路径：生成成功");
+        assert!(
+            stage_record.processed.is_empty(),
+            "impl 不代记 processed（记账仍在 tick_head 调用点）"
+        );
+        assert_eq!(b.rng.random(), facade_mark, "两路掉落预算的 RNG 流位置相同");
+
+        let ea = a.entities.get(2).expect("facade 生成实体");
+        let eb = b
+            .entities
+            .get(2)
+            .expect("段路径生成实体（refresh_views 后）");
+        assert_eq!(
+            (ea.x, ea.y, ea.map_id, ea.race, ea.hp),
+            (11, 10, 0, 80, 3),
+            "生成实体的坐标/图/race/HP"
+        );
+        assert_eq!(
+            (eb.x, eb.y, eb.map_id, eb.race, eb.hp),
+            (ea.x, ea.y, ea.map_id, ea.race, ea.hp),
+            "段路径与 facade 的实体属性相同"
+        );
+        assert_eq!(ea.gold, eb.gold, "金币预算相同");
+        assert_eq!(ea.drop_items, eb.drop_items, "掉落清单相同");
+        assert_eq!(
+            (ea.verify_tick, ea.poisoning_tick),
+            (eb.verify_tick, eb.poisoning_tick)
+        );
+
+        // 落格：格子登记 + cell 类型（`BaseObject.Initialize` → `AddToMap`）。
+        for (name, w) in [("facade", &a), ("stage", &b)] {
+            assert!(
+                w.entities.get(2).unwrap().add_to_mapped,
+                "{name}：AddToMapped"
+            );
+            let (cell, ok) = w.maps[0].get_cell_info(11, 10);
+            assert!(ok, "{name}：目标格在图内");
+            let entry = cell
+                .obj_list
+                .iter()
+                .find(|o| o.actor_object && o.cell_obj_id == 2)
+                .unwrap_or_else(|| panic!("{name}：生成实体必须登记进 (11,10) 的格子"));
+            assert_eq!(entry.cell_type, CellType::Monster, "{name}：cell 类型");
+        }
+
+        // 越界门：零抽数（门在掉落预算之前）。
+        let mut c = build();
+        let mut record = TickRecord::default();
+        {
+            let World { entities, sim, .. } = &mut c;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            assert!(
+                !World::spawn_monster_now_impl(
+                    &mut access,
+                    sim,
+                    &mut record,
+                    2,
+                    "僵尸",
+                    11,
+                    10,
+                    9, // 越界（只有 map 0）
+                    1,
+                    500,
+                    3,
+                    1,
+                    0,
+                    0,
+                    5,
+                    15,
+                    &drop_list,
+                ),
+                "map_id 越界 ⇒ false"
+            );
+        }
+        assert_eq!(c.rng.random(), baseline_mark, "越界门在预算之前 ⇒ 零抽数");
+    }
+
+    /// **P5-A3 牙（butch / butch_effect）**：两族 impl 在段访问器下与 facade 同语义。
+    ///
+    /// `butch_effect`：门全过 ⇒ 恰 2 抽（`Random(16)+5` / `Random(201)+100`）；`BodyLeathery`
+    /// 恰好归零 + race 53 ∈ `[50,80)` ⇒ **尸体转肉**：`Skeleton = true`、`BodyLeathery = 50`、
+    /// `MeatQuality` 按第 2 抽回绕扣减、`SkeletonEvent` 以尸体为发送者、屠宰者 `DeathTick` 写 now。
+    /// 两路的返回值/实体终态/RNG 流位置必须逐项相同。
+    ///
+    /// `butch_now`：`ButchEvent` 取**屠宰者**当前坐标（actor 不在世界 ⇒ None + processed false）。
+    ///
+    /// 红检：删 `record.skeletons.push` ⇒ `stage_record` 断言红；删 `skeleton = true` 或
+    /// `body_leathery` 写回 ⇒ 两路终态断言红；对调两次抽 ⇒ 既有
+    /// `butch_effect_rng_draws_match_oracle_order_and_mods` 红（它现在穿的就是本 impl）。
+    #[test]
+    fn butch_stage_access_path_matches_facade_path() {
+        use mir2_world_bevy::tick::StageEntities;
+        const SEED: i32 = 20_261_023;
+
+        // A = facade 路径。
+        let (mut a, pa, ta, n10) = butch_rig(SEED, 53, true);
+        a.entities.get_mut(ta).unwrap().ai.body_leathery = n10; // 本次抽恰好归零
+        let facade_ev = a.butch_effect_now(pa, ta, 11, 10);
+        let facade_mark = a.rng.random();
+        let (facade_bl, facade_mq, facade_skel, facade_dt) = {
+            let t = a.entities.get(ta).unwrap();
+            (
+                t.ai.body_leathery,
+                t.ai.meat_quality,
+                t.ai.skeleton,
+                t.death_tick,
+            )
+        };
+
+        // B = 段访问器路径。
+        let (mut b, pb, tb, n10b) = butch_rig(SEED, 53, true);
+        b.entities.get_mut(tb).unwrap().ai.body_leathery = n10b;
+        let (stage_ev, stage_record) = {
+            let World { entities, sim, .. } = &mut b;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut record = TickRecord::default();
+            let ev = World::butch_effect_now_impl(&mut access, sim, &mut record, pb, tb, 11, 10);
+            (ev, record)
+        };
+        let stage_mark = b.rng.random();
+        let (stage_bl, stage_mq, stage_skel, stage_dt) = {
+            let t = b.entities.get(tb).unwrap();
+            (
+                t.ai.body_leathery,
+                t.ai.meat_quality,
+                t.ai.skeleton,
+                t.death_tick,
+            )
+        };
+
+        assert!(facade_ev.is_some(), "骨架支必须结算");
+        assert_eq!(stage_ev, facade_ev, "两路 SkeletonEvent 相同");
+        assert_eq!(
+            facade_ev,
+            Some(crate::action::SkeletonEvent {
+                actor_id: ta,
+                dir: 5,
+                x: 11,
+                y: 10,
+            }),
+            "尸体转肉：事件发送者 = 尸体、位置 = 尸体坐标"
+        );
+        assert_eq!(
+            (facade_bl, facade_mq, facade_skel),
+            (stage_bl, stage_mq, stage_skel),
+            "两路实体终态相同"
+        );
+        assert_eq!(
+            (facade_bl, facade_skel),
+            (50, true),
+            "BodyLeathery 归零 ⇒ Skeleton = true 且复位 50"
+        );
+        assert_eq!(facade_dt, stage_dt, "DeathTick 写屠宰者且两路相同");
+        assert_eq!(stage_mark, facade_mark, "恰 2 抽且流位置相同");
+        assert_eq!(
+            stage_record.skeletons,
+            vec![facade_ev.unwrap()],
+            "impl 的 skeletons 记账与旧 tick_head 的 record 口径相同"
+        );
+        assert!(stage_record.processed.is_empty(), "processed 仍在调用点记");
+
+        // butch_now：ButchEvent = 屠宰者坐标；actor 不在世界 ⇒ None + processed false。
+        let (mut c, pc, _, _) = butch_rig(SEED, 53, true);
+        let facade_butch = c.butch_now(pc, 5);
+        let (stage_butch, butch_record) = {
+            let World { entities, sim, .. } = &mut c;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let access = crate::entity::StageAccess { ad: &mut ad };
+            let mut record = TickRecord::default();
+            let ev = World::butch_now_impl(&access, &*sim, &mut record, pc, 5);
+            (ev, record)
+        };
+        assert_eq!(stage_butch, facade_butch, "两路 ButchEvent 相同");
+        assert_eq!(
+            facade_butch,
+            Some(crate::action::ButchEvent {
+                actor_id: pc,
+                dir: 5,
+                x: 10,
+                y: 10,
+            }),
+            "事件承载屠宰者当前位置"
+        );
+        assert_eq!(butch_record.butches, vec![facade_butch.unwrap()]);
+        assert!(butch_record.processed.is_empty(), "processed 仍在调用点记");
+
+        let missing = {
+            let mut record = TickRecord::default();
+            let ev = World::butch_now_impl(&c.entities, &c.sim, &mut record, 999, 5);
+            (ev, record)
+        };
+        assert!(missing.0.is_none(), "actor 不在世界 ⇒ 无事件");
+        assert!(missing.1.butches.is_empty());
     }
 
     // **P5-A1**：attack 族的段 spec（测试专用）。
