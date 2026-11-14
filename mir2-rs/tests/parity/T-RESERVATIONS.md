@@ -313,3 +313,4 @@
 | T-278 | openmir2-t284-hero-rank-kinds | 2026-11-04T13:13:41Z | 在用 |
 | T-279 | openmir2-t283-wings-server | 2026-11-04T13:16:26Z | 在用 |
 | T-280 | openmir2-botsrv-action-probe-turn-coords | 2026-11-14T17:15:08Z | 在用 |
+| T-281 | openmir2-gateway-backpressure-frame-drop | 2026-11-14T19:22:28Z | 在用 |
