@@ -38,6 +38,10 @@ mod guild_frames;
 mod guild_official;
 mod guild_runtime;
 mod homemap;
+/// 卡 `openmir2-host-aoi-downlink-profile`：`HostAoiDownlink` 子探针的测量 harness
+/// （`#[ignore]` + `MIR2_HOST_AOI_BENCH=1`；只观测，不是判据）。
+#[cfg(test)]
+mod host_aoi_bench;
 mod hutil;
 mod ids;
 mod items;
@@ -16217,11 +16221,18 @@ fn drain_aoi_disappear_with_counts(
     rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    mut prof: Option<&mut tick_profile::HostTickProfile>,
 ) -> (usize, DisappearObserverCounts) {
     let mut sent = 0usize;
     let mut counts = DisappearObserverCounts::default();
     for (observer_id, target_id) in &rec.hides {
-        match hide_observer_kind(rec, *observer_id, *target_id) {
+        // **离开差分的观察者类别解析**：`hide_observer_kind` 在 `rec.hide_observer_kinds`
+        // 上线性查找（与 `rec.hides` 同序，故第 i 条命中在第 i 位）——本探针用于量化
+        // 「每 hide 一次查找」的 O(H×H) 形态。
+        let t_kind = tick_profile::probe_begin(&prof);
+        let kind = hide_observer_kind(rec, *observer_id, *target_id);
+        tick_profile::probe_end(&mut prof, "HostAoiLeaveKind", t_kind);
+        match kind {
             mir2_world_bevy::HideObserverKind::NonPlayer => {
                 // 自扫怪不在 OnlineRegistry 是**预期**：不发帧、不打 WRN、不查路由。
                 counts.nonplayer_observer += 1;
@@ -16246,13 +16257,21 @@ fn drain_aoi_disappear_with_counts(
             );
             continue;
         };
+        // **编码入队**：网关线号路由 + `SM_DISAPPEAR(30)` 帧构造（保持原次序：先路由、后构造）。
+        // 帧构造是 `HostAoiLeaveEnqueue` 的嵌套子项（原实现里它就在 `tx.send` 实参内）。
+        let t_enq = tick_profile::probe_begin(&prof);
         let Some(tx) = route_to_gate(gates, observer.gate_idx, observer.socket, "消失帧") else {
+            tick_profile::probe_end(&mut prof, "HostAoiLeaveEnqueue", t_enq);
             continue;
         };
+        let t_build = tick_profile::probe_begin(&prof);
+        let body = downlink::disappear_frame(*target_id);
+        tick_profile::probe_end(&mut prof, "HostAoiLeaveBuild", t_build);
         let _ = tx.send(SimToGate::SendFrame {
             socket: observer.socket,
-            body: downlink::disappear_frame(*target_id),
+            body,
         });
+        tick_profile::probe_end(&mut prof, "HostAoiLeaveEnqueue", t_enq);
         sent += 1;
         counts.emitted += 1;
     }
@@ -16263,13 +16282,14 @@ fn drain_aoi_disappear_with_counts(
     (sent, counts)
 }
 
-/// 生产入口：保持原签名/返回值（`usize` = 实发条数），内部分类型计数并分流日志。
+/// 生产入口：保持原返回值（`usize` = 实发条数），内部分类型计数并分流日志。
 fn drain_aoi_disappear(
     rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    prof: Option<&mut tick_profile::HostTickProfile>,
 ) -> usize {
-    let (sent, _counts) = drain_aoi_disappear_with_counts(rec, online, gates);
+    let (sent, _counts) = drain_aoi_disappear_with_counts(rec, online, gates, prof);
     sent
 }
 
@@ -16409,6 +16429,7 @@ fn drain_aoi_downlink(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     login_pending: Option<&std::collections::HashMap<String, smframe::EnterWorldInputs>>,
+    mut prof: Option<&mut tick_profile::HostTickProfile>,
 ) -> Vec<(String, usize)> {
     let mut sent: Vec<(String, usize)> = Vec::new();
     for sess in world.sessions.iter() {
@@ -16433,12 +16454,16 @@ fn drain_aoi_downlink(
         {
             continue;
         }
+        // **可见集/进入差分选择**：在线坐标查找 + `visible_actors` 过滤 + 入队槽 + 出队序。
+        // （`online` 是按插入序的 `Vec` ⇒ 这里的按名查找是 O(会话数)，本探针会把它计入。）
+        let t_select = tick_profile::probe_begin(&prof);
         let Some(entry) = online.iter().find(|e| e.chr_name == sess.chr_name) else {
             glog!(
                 "WRN",
                 "同屏下行：ChrName={} 已进世界但无在线网关坐标 ⇒ 不猜线、跳过",
                 sess.chr_name
             );
+            tick_profile::probe_end(&mut prof, "HostAoiAppearSelect", t_select);
             continue;
         };
         let mut sent_here = 0usize;
@@ -16450,9 +16475,13 @@ fn drain_aoi_downlink(
             Some(inputs) => inputs.appearance_order(&slots),
             None => (0..targets.len()).collect(),
         };
+        tick_profile::probe_end(&mut prof, "HostAoiAppearSelect", t_select);
         for idx in order {
             let target_id = targets[idx];
+            // **帧构造**：展示表查表 + 朝向覆盖 + `appear_frames` 编码成 wire bytes。
+            let t_build = tick_profile::probe_begin(&prof);
             let Some(target) = world.entities.get(target_id) else {
+                tick_profile::probe_end(&mut prof, "HostAoiAppearBuild", t_build);
                 continue;
             };
             let Some(display) = displays.get(target_id) else {
@@ -16461,6 +16490,7 @@ fn drain_aoi_downlink(
                     "同屏下行：actor={} 无展示表（怪物/未登记）⇒ 跳过（登记）",
                     target_id
                 );
+                tick_profile::probe_end(&mut prof, "HostAoiAppearBuild", t_build);
                 continue;
             };
             let x = u16::from_ne_bytes(i16::try_from(target.x).unwrap_or(0).to_ne_bytes());
@@ -16471,8 +16501,12 @@ fn drain_aoi_downlink(
             // 只是投影 ⇒ 出现帧一律用世界**当前**朝向（oracle `SendMsg(…, Dir, …)`）。
             frame_display.dir = target.ai.dir;
             let bodies = downlink::appear_frames(target.id, x, y, &frame_display, target.death);
+            tick_profile::probe_end(&mut prof, "HostAoiAppearBuild", t_build);
+            // **编码入队**：网关线号路由 + 逐帧 `tx.send`（`SimToGate::SendFrame`）。
+            let t_enq = tick_profile::probe_begin(&prof);
             let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "同屏下行")
             else {
+                tick_profile::probe_end(&mut prof, "HostAoiAppearEnqueue", t_enq);
                 continue;
             };
             for body in bodies {
@@ -16482,6 +16516,7 @@ fn drain_aoi_downlink(
                 });
                 sent_here += 1;
             }
+            tick_profile::probe_end(&mut prof, "HostAoiAppearEnqueue", t_enq);
         }
         if sent_here > 0 {
             sent.push((sess.chr_name.clone(), sent_here));
@@ -16651,6 +16686,7 @@ fn drain_monster_walk_downlink(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     seen: &mut std::collections::HashMap<i32, (usize, i32, i32)>,
+    mut prof: Option<&mut tick_profile::HostTickProfile>,
 ) -> usize {
     let mut sent = 0usize;
     // 本 tick 已经被别的动作帧解释过的位移（推挤/冲刺）。
@@ -16710,7 +16746,12 @@ fn drain_monster_walk_downlink(
         ) else {
             continue;
         };
+        // **收件人扇出**：`broadcast_ref_msg` → `chat::hear_targets`（对**全实体**做
+        // ±`SendRefMsgRange` 的 `race == PLAY` 过滤）。每个走位者一次 ⇒ 本探针量化
+        // 「走位者数 × 全实体数」的扫描成本（与收件人数无关的那部分）。
+        let t_fanout = tick_profile::probe_begin(&prof);
         broadcast_ref_msg(world, online, gates, id, &[body]);
+        tick_profile::probe_end(&mut prof, "HostAoiWalkFanout", t_fanout);
         sent += 1;
     }
     // 已消失的 actor 从游标里摘掉（ActorId 会被内核回收复用）。
@@ -18507,10 +18548,16 @@ fn drain_run_downlinks(
         None,
         None,
         None,
+        None,
     )
 }
 
 /// 带 210/212 审计的 [`drain_run_downlinks`]（生产路径）。
+///
+/// **`prof`**（卡 `openmir2-host-aoi-downlink-profile`）：本段的**命名子探针**句柄。
+/// 生产 `sim_loop` 恒传 `Some(&mut host_prof)`；门控关闭时 [`tick_profile::HostTickProfile`]
+/// 的 `enabled == false` ⇒ 每个子探针只付一次 `bool`/`Option` 判别（不取 `Instant`、不分配、
+/// 不写状态），与既有 `Host*` 段的关闭态口径逐字相同。测试与其它调用方传 `None`。
 #[allow(clippy::too_many_arguments)]
 fn drain_run_downlinks_with_magic(
     rec: &mir2_world_bevy::TickRecord,
@@ -18525,9 +18572,11 @@ fn drain_run_downlinks_with_magic(
     spell_fill_time: i32,
     client_layout: bool,
     magic: Option<MagicSource<'_>>,
+    mut prof: Option<&mut tick_profile::HostTickProfile>,
     login_tails: Option<&mut std::collections::HashMap<String, smframe::EnterWorldInputs>>,
     walk_seen: Option<&mut std::collections::HashMap<i32, (usize, i32, i32)>>,
 ) -> Vec<(String, usize)> {
+    let t = tick_profile::probe_begin(&prof);
     drain_kill_exp_chain_with_magic(
         rec,
         world,
@@ -18540,6 +18589,7 @@ fn drain_run_downlinks_with_magic(
         client_layout,
         magic,
     );
+    tick_profile::probe_end(&mut prof, "HostAoiKillExp", t);
     // **orphan 编码器接线首批**：本 tick 的 AOI 消失帧（`SM_DISAPPEAR(30)`）——与下面
     // [`drain_aoi_downlink`] 的出现帧同属 oracle `PlayObject.Run()` 里 `VisibleActors` 的那趟循环。
     // oracle 必「先整批消失、后整批出现」（新见对象 `VisibleActors.Add` 追加到表尾 ⇒ `Hidden` 下标恒
@@ -18549,32 +18599,64 @@ fn drain_run_downlinks_with_magic(
     // nameless 转身（`series 0x0203/0x0205/0x0207`）。`RM_TURN`(优先级 17) 与出现帧同优先级、
     // 早于 `RM_WALK(18)`/`RM_HIT(20)` ⇒ 排在消失/出现帧之前（世界侧线性化 `npc_tick` →
     // `merchant_tick` → AOI，见 `crates/world/src/world.rs` 的 `World::tick`）。
+    let t = tick_profile::probe_begin(&prof);
     let _npc_turns = drain_npc_merchant_turns(rec, world, displays, online, gates);
-    let _disappeared = drain_aoi_disappear(rec, online, gates);
-    let aoi_frames = drain_aoi_downlink(world, displays, online, gates, login_tails.as_deref());
+    tick_profile::probe_end(&mut prof, "HostAoiNpcTurn", t);
+    let t = tick_profile::probe_begin(&prof);
+    let _disappeared = drain_aoi_disappear(rec, online, gates, prof.as_deref_mut());
+    tick_profile::probe_end(&mut prof, "HostAoiDisappear", t);
+    let t = tick_profile::probe_begin(&prof);
+    let aoi_frames = drain_aoi_downlink(
+        world,
+        displays,
+        online,
+        gates,
+        login_tails.as_deref(),
+        prof.as_deref_mut(),
+    );
+    tick_profile::probe_end(&mut prof, "HostAoiAppear", t);
     // **卡 `openmir2-map-event-frames`**：地图事件可见性上行（804/805）。oracle `SearchViewRange`
     // 收尾的最后一趟循环（actors → items → events）⇒ 排在 [`drain_aoi_downlink`] 之后。
+    let t = tick_profile::probe_begin(&prof);
     let _event_frames = drain_aoi_events(world, rec, online, gates);
+    tick_profile::probe_end(&mut prof, "HostAoiEvent", t);
     // **卡 `openmir2-monster-smwalk`**：怪物走位 `SM_WALK(11)`。位置按队列优先级定：
     // `RM_TURN(17)`（出现帧）< `RM_WALK(18)` < `RM_CHANGELIGHT(153)`（654）—— 故夹在
     // [`drain_aoi_downlink`] 与 [`drain_login_tail`] 之间。
     if let Some(seen) = walk_seen {
-        let _ = drain_monster_walk_downlink(rec, world, displays, online, gates, seen);
+        let t = tick_profile::probe_begin(&prof);
+        let _ = drain_monster_walk_downlink(
+            rec,
+            world,
+            displays,
+            online,
+            gates,
+            seen,
+            prof.as_deref_mut(),
+        );
+        tick_profile::probe_end(&mut prof, "HostAoiMonsterWalk", t);
     }
     // **T-154 F1**：本 tick 固定 NPC / 商人的 `RM_HIT` ⇒ `SM_HIT(14)`。队列优先级
     // `(byte)RM_HIT = 20` ⇒ 晚于 `RM_TURN(17)`/`RM_WALK(18)`、早于 `RM_CHANGELIGHT(153)` 起的
     // 登录尾帧（[`drain_login_tail`]）⇒ 本段夹在两者之间。
+    let t = tick_profile::probe_begin(&prof);
     let _npc_hits = drain_npc_merchant_hits(rec, world, displays, online, gates);
+    tick_profile::probe_end(&mut prof, "HostAoiNpcHit", t);
     // **卡 `openmir2-castle-merchant-disappear-downlink`**：城堡商人进入战中的
     // `RM_DISAPPEAR` ⇒ `SM_DISAPPEAR(30)`（`Merchant.cs:147`）。入队优先级
     // `(byte)RM_DISAPPEAR(8061) = 125` ⇒ 晚于 `RM_HIT(20)`、早于登录尾帧 `RM_CHANGELIGHT(153)`。
     // 收件人是**发帧时刻**的快照（世界侧 `merchant_run` 格扫），本段只路由。
+    let t = tick_profile::probe_begin(&prof);
     let _merchant_disappears = drain_merchant_disappears(rec, online, gates);
+    tick_profile::probe_end(&mut prof, "HostAoiMerchantLeave", t);
     // **lane654**：登录队列 `after` 段（654/42/100）在**出现帧之后**补发（oracle 同一
     // `Run()` 里 17 < 153 < 165 < 252 的出队序），且在任何体力/魔力段帧之前。
+    let t = tick_profile::probe_begin(&prof);
     if let Some(pending) = login_tails {
         drain_login_tail(world, online, gates, pending, range);
     }
+    tick_profile::probe_end(&mut prof, "HostAoiLoginTail", t);
+    let t = tick_profile::probe_begin(&prof);
     drain_stamina(
         sessions,
         world,
@@ -18585,6 +18667,7 @@ fn drain_run_downlinks_with_magic(
         spell_fill_time,
         &rec.verify_health_changes,
     );
+    tick_profile::probe_end(&mut prof, "HostAoiStamina", t);
     aoi_frames
 }
 
@@ -29308,6 +29391,7 @@ fn sim_loop(
                 saves: &mut saves,
                 cfg: magic_cfg_of(&enter_cfg),
             }),
+            Some(&mut host_prof),
             Some(&mut login_tails),
             Some(&mut monster_walk_seen),
         );
@@ -31691,9 +31775,10 @@ mod tests {
             );
         }
         // **卡 `openmir2-monster-smwalk`**：怪物走位帧必须夹在出现帧（17）与 654（153）之间。
-        let walk = src
-            .find("drain_monster_walk_downlink(rec, world, displays, online, gates, seen);")
-            .expect("怪物走位下行调用");
+        // 锚只钉「生产赋值调用前缀」，不钉实参串与闭括号 ⇒ 允许签名演进（本批在末尾追加了
+        // 子探针句柄 `prof`）与 rustfmt 换行；该句柄不参与帧面/次序语义。
+        let walk_needle = concat!("let _ = drain_monster_walk_", "downlink(");
+        let walk = src.find(walk_needle).expect("怪物走位下行调用");
         let tail = src
             .find("drain_login_tail(world, online, gates, pending, range);")
             .expect("延迟段补发调用");
@@ -32692,7 +32777,7 @@ mod tests {
         gates.insert(0, tx0);
         gates.insert(1, tx1);
 
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
 
         let collect = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> Vec<(i32, u16)> {
             let mut out = Vec::new();
@@ -32793,7 +32878,7 @@ mod tests {
                 ..Default::default()
             },
         );
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending));
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending), None);
         assert_eq!(sent, vec![("p".to_string(), 8)], "4 对帧 = 8 条");
 
         let mut turn_recogs = Vec::new();
@@ -32900,7 +32985,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
         assert_eq!(
             sent,
             vec![("p".to_string(), 2)],
@@ -32990,7 +33075,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
         assert_eq!(sent, vec![("p".to_string(), 2)]);
         let frames = aoi_collect_frames(&mut rx0);
         let turn = frames
@@ -33270,6 +33355,7 @@ mod tests {
             None,
             None,
             None,
+            None,
         );
         let raws = collect(&mut rx);
         let msgs: Vec<mir2_protocol::frame::CommandMessage> = raws
@@ -33338,6 +33424,7 @@ mod tests {
             0,
             0,
             false,
+            None,
             None,
             None,
             None,
@@ -34470,7 +34557,7 @@ mod tests {
 
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
         let frames = aoi_collect_frames(&mut rx0);
 
         let mon_turn = frames
@@ -34777,7 +34864,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -34895,7 +34982,7 @@ mod tests {
         // tick 1：怪物首次出现 ⇒ `new >= 1`，实发 2 帧（SM_TURN + SM_FEATURECHANGED），
         // 累计 `af >= 2`；`vis` 也必须 >= 1。
         let _ = tick_until_next_player_scan(&mut world);
-        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None) {
+        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None, None) {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
         let mut sent_tick1 = 0usize;
@@ -34920,7 +35007,7 @@ mod tests {
         // tick 2：怪仍在视野 ⇒ `update_visible_gay` 置 `Invisible` ⇒ `new == 0`，
         // 但当前可见集必须仍 >= 1（旧实现这里恒 0，正是 root 误判的来源）。
         let _ = tick_until_next_player_scan(&mut world);
-        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None) {
+        for (chr, n) in drain_aoi_downlink(&world, &displays, &online, &gates, None, None) {
             *aoi_frames_total.entry(chr).or_insert(0) += n;
         }
         let mut sent_tick2 = 0usize;
@@ -35010,7 +35097,7 @@ mod tests {
             "首 tick 互相进入视野 ⇒ 无消失事件：{:?}",
             rec1.hides
         );
-        let _ = drain_aoi_disappear(&rec1, &online, &gates);
+        let _ = drain_aoi_disappear(&rec1, &online, &gates, None);
         assert!(rx0.try_recv().is_err(), "首 tick 不应有消失帧");
 
         // 让 `b` 走远出 `a` 的视野（世界侧同步移动格子登记；Chebyshev 20 > 12）。
@@ -35021,7 +35108,7 @@ mod tests {
             "`b` 离开 `a` 视野 ⇒ hides 记 (a,b)：{:?}",
             rec2.hides
         );
-        drain_aoi_disappear(&rec2, &online, &gates);
+        drain_aoi_disappear(&rec2, &online, &gates, None);
 
         // 只发观察者：socket 901 收 `SM_DISAPPEAR(30)`，`Recog = b`，全 0 头 + 无尾。
         let mut to_a: Vec<Vec<u8>> = Vec::new();
@@ -35120,7 +35207,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
         assert_eq!(
             counts,
             DisappearObserverCounts {
@@ -35177,7 +35264,7 @@ mod tests {
             hide_observer_kinds: vec![(player, target, HideObserverKind::Player)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
         assert_eq!(sent, 0, "玩家缺失不得发帧（不猜线）");
         assert_eq!(counts.player_observer, 1);
         assert_eq!(counts.missing_online, 1, "玩家缺失必须大声计数");
@@ -35190,7 +35277,7 @@ mod tests {
             hide_observer_kinds: vec![(guard, target, HideObserverKind::NonPlayer)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
         assert_eq!(sent, 0);
         assert_eq!(counts.nonplayer_observer, 1);
         assert_eq!(counts.nonplayer_ids, vec![guard], "DBG 数据面保留 id");
@@ -35207,7 +35294,7 @@ mod tests {
             hide_observer_kinds: vec![(clone, target, HideObserverKind::Clone)],
             ..Default::default()
         };
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
         assert_eq!(sent, 0, "克隆体不发帧");
         assert_eq!(counts.clone_observer, 1);
         assert_eq!(counts.clone_ids, vec![clone]);
@@ -35250,7 +35337,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates);
+        let (sent, counts) = drain_aoi_disappear_with_counts(&rec, &online, &gates, None);
         assert_eq!(counts.clone_observer, 1, "Clone 单独计数");
         assert_eq!(counts.clone_ids, vec![clone]);
         assert_eq!(counts.player_observer, 1);
@@ -35443,7 +35530,7 @@ mod tests {
             "仅 `a` 观察 `b` 离开（单方向）：{:?}",
             rec2.hides
         );
-        drain_aoi_disappear(&rec2, &online, &gates);
+        drain_aoi_disappear(&rec2, &online, &gates, None);
 
         let mut to_a: Vec<Vec<u8>> = Vec::new();
         let mut to_b: Vec<Vec<u8>> = Vec::new();
@@ -36582,7 +36669,7 @@ mod tests {
             0,
             "离世帧只发一次（ghost 不重复 DisappearA）"
         );
-        let sent_aoi = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let sent_aoi = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
         assert!(
             sent_aoi.is_empty(),
             "ghost 会话不得再产出现帧：{sent_aoi:?}"
@@ -52842,7 +52929,7 @@ SendRefMsgRange=15
 
         // 登录路径的两类排水（顺序同生产 tick：② aoi → ③ 尾段）；尾段跑两遍覆盖清缓冲。
         let displays = downlink::DisplayTable::new();
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending));
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, Some(&pending), None);
         let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
         let _ = drain_login_tail(&world, &online, &gates, &mut pending, 12);
 
@@ -69285,14 +69372,14 @@ SendRefMsgRange=15
             world.entities.get(p).is_some(),
             "夹具前提：stage=Left 时实体仍在（M-3 的 ghost 形态）"
         );
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
         let frames = aoi_collect_frames(&mut rx0);
         assert!(sent.is_empty(), "stage=Left ⇒ 不产出现帧");
         assert!(frames.is_empty(), "stage=Left ⇒ 零帧（A1 stage 门）");
 
         // 还原 stage ⇒ 同一夹具照常出帧（门只挡 Left）。
         set_stage(&mut world, mir2_world_bevy::WorldStage::InWorld);
-        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
         assert_eq!(
             sent,
             vec![("p".to_string(), 2)],
@@ -72605,7 +72692,7 @@ SendRefMsgRange=15
         let mut frames: Vec<(i32, u16, u16, u16, u16)> = Vec::new();
         for _ in 0..400 {
             world.tick();
-            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
             collect_frames(&mut rx, &mut frames);
         }
         assert_eq!(world.clock_ms, 80_000, "400 × 200ms");
@@ -72676,7 +72763,7 @@ SendRefMsgRange=15
         let mut frames: Vec<(i32, u16, u16, u16, u16)> = Vec::new();
         for _ in 0..149 {
             world.tick();
-            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+            let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
             collect_frames(&mut rx, &mut frames);
         }
         assert_eq!(world.clock_ms, 29_800, "149 × 200ms");
@@ -74953,7 +75040,7 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None);
+        let _ = drain_aoi_downlink(&world, &displays, &online, &gates, None, None);
 
         let mut frames = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx0.try_recv() {
@@ -82652,13 +82739,13 @@ GMEXECUTE f
         let mut seen = std::collections::HashMap::new();
         let rec = mir2_world_bevy::TickRecord::default();
         assert_eq!(
-            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
             0,
             "首次见到只建游标，不发帧"
         );
         world.entities.transform_mut(mid).unwrap().x = 11;
         assert_eq!(
-            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
             1,
             "走一格 ⇒ 一条 SM_WALK"
         );
@@ -82697,7 +82784,7 @@ GMEXECUTE f
         let (mut world, mid, near, online, gates, mut rx0, displays) = walk_fixture();
         let mut seen = std::collections::HashMap::new();
         let rec = mir2_world_bevy::TickRecord::default();
-        drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen);
+        drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None);
         let _ = collect_raw(&mut rx0);
         // 在线玩家走一格（`CM_WALK` 路径的职责）：本函数不得出帧。
         // 方向也设成走位方向，确保**只有**「在线玩家跳过」这一条门能挡住它
@@ -82708,7 +82795,7 @@ GMEXECUTE f
         }
         world.entities.transform_mut(near).unwrap().x += 1;
         assert_eq!(
-            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
             0,
             "在线玩家的位移不归本函数（否则与 CM_WALK 的帧重复）"
         );
@@ -82717,7 +82804,7 @@ GMEXECUTE f
         world.entities.transform_mut(mid).unwrap().y = 11;
         world.entities.get_mut(mid).unwrap().ai.dir = 4; // 下
         assert_eq!(
-            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
             1
         );
         let got = collect_raw(&mut rx0);
@@ -82751,7 +82838,7 @@ GMEXECUTE f
         let run = |world: &mir2_world_bevy::World,
                    rec: &mir2_world_bevy::TickRecord,
                    seen: &mut std::collections::HashMap<i32, (usize, i32, i32)>| {
-            drain_monster_walk_downlink(rec, world, &displays, &online, &gates, seen)
+            drain_monster_walk_downlink(rec, world, &displays, &online, &gates, seen, None)
         };
         assert_eq!(run(&world, &rec, &mut seen), 0, "建游标");
         // ① 走一格（右）

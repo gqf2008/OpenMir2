@@ -55,6 +55,11 @@ pub struct HostTickProfile {
     enabled: bool,
     /// `(段, 累计 ns, 调用次数)`，按首次记录顺序；窗口结束时整体取走（`take_window`）。
     rows: Vec<(&'static str, u64, u64)>,
+    /// 命名**子探针** `(名, 累计 ns, 调用次数)`：只观测、**不进** `tick_sum_ns`
+    /// （故不改变 `HostUnaccounted` 的对账口径），语义同 World `TickProfile::probes`。
+    ///
+    /// 用于把一个聚合段拆开（本批：`HostAoiDownlink` 的可见集选择/帧构造/入队/分发各支）。
+    probes: Vec<(&'static str, u64, u64)>,
     /// 当前窗口已完成的 tick 数。
     window_ticks: u64,
     /// 当前窗口 `HostTickTotal` 之和。
@@ -71,6 +76,8 @@ pub struct HostWindow {
     pub ticks: u64,
     pub total_ns: u64,
     pub rows: Vec<(&'static str, u64, u64)>,
+    /// 命名子探针（与 `rows` 同形；同窗口取走）。
+    pub probes: Vec<(&'static str, u64, u64)>,
 }
 
 /// World 探针的**增量**快照（累计值之差）。字段与 `TickProfile` 同序同名。
@@ -116,6 +123,24 @@ impl HostTickProfile {
         self.enabled
     }
 
+    /// **测量 harness 专用**：不读环境变量直接建开启/关闭两臂（`docs/host-aoi-profile-20261114.md`
+    /// 的同进程 A/B 用；生产路径只走 [`Self::from_env`]）。
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_enabled(enabled: bool) -> Self {
+        Self {
+            enabled,
+            ..Self::default()
+        }
+    }
+
+    /// 已记录的子探针 `(名, 累计 ns, 调用次数)`（只读；窗口未取走时）。测量 harness 用。
+    #[cfg(test)]
+    #[must_use]
+    pub fn probes(&self) -> &[(&'static str, u64, u64)] {
+        &self.probes
+    }
+
     /// 段起点。关闭时：一次 `bool` 判别 ⇒ `None`（**不取 `Instant`**）。
     #[must_use]
     #[inline]
@@ -134,6 +159,22 @@ impl HostTickProfile {
         let ns = nanos_since(at);
         self.add(name, ns);
         self.tick_sum_ns = self.tick_sum_ns.saturating_add(ns);
+    }
+
+    /// 命名**子探针**终点。与 [`Self::end`] 同样的关闭态口径（`at == None` ⇒ 一次 `Option`
+    /// 判别后直接返回），但**不写 `tick_sum_ns`** ⇒ 子探针与父段可以嵌套计时而不让
+    /// `HostUnaccounted` 出现负残差。
+    #[inline]
+    pub fn probe(&mut self, name: &'static str, at: Option<Instant>) {
+        let Some(at) = at else { return };
+        let ns = nanos_since(at);
+        match self.probes.iter_mut().find(|(n, _, _)| *n == name) {
+            Some((_, total, calls)) => {
+                *total = total.saturating_add(ns);
+                *calls += 1;
+            }
+            None => self.probes.push((name, ns, 1)),
+        }
     }
 
     /// 整 tick 终点：记 `HostTickTotal` + 残差 `HostUnaccounted`，并推进窗口计数。
@@ -172,6 +213,7 @@ impl HostTickProfile {
             ticks: self.window_ticks,
             total_ns: self.window_ns,
             rows: std::mem::take(&mut self.rows),
+            probes: std::mem::take(&mut self.probes),
         };
         self.window_ticks = 0;
         self.window_ns = 0;
@@ -191,6 +233,27 @@ impl HostTickProfile {
 
 fn nanos_since(at: Instant) -> u64 {
     u64::try_from(at.elapsed().as_nanos()).unwrap_or(u64::MAX)
+}
+
+/// 子探针起点（`Option<&mut HostTickProfile>` 版）：`None` 或无门控 ⇒ `None`（**不取时钟**）。
+///
+/// 生产 `sim_loop` 恒传 `Some(&mut host_prof)`；门控关闭时 `begin()` 的 `enabled == false`
+/// 短路 ⇒ 与既有段探针同一关闭态口径（`bool` 判别 + `Option` 判别，无 `Instant`/分配/写状态）。
+#[inline]
+#[must_use]
+pub fn probe_begin(prof: &Option<&mut HostTickProfile>) -> Option<Instant> {
+    match prof {
+        Some(p) => p.begin(),
+        None => None,
+    }
+}
+
+/// 子探针终点（见 [`probe_begin`]）：`None`/关闭态 ⇒ 一次判别后返回，不写任何状态。
+#[inline]
+pub fn probe_end(prof: &mut Option<&mut HostTickProfile>, name: &'static str, at: Option<Instant>) {
+    if let Some(p) = prof.as_deref_mut() {
+        p.probe(name, at);
+    }
 }
 
 /// 把 World 探针的累计值转成本窗口增量（`last` 被更新为当前值；探针不 reset）。
@@ -275,6 +338,26 @@ pub fn log_window(host: &HostWindow, world: Option<&WorldDelta>, entities: usize
         );
     }
     let work_ns = host.total_ns.saturating_sub(sleep_ns);
+    // **子探针**（本批：HostAoiDownlink 的细分）。它们是**父段内部**的嵌套计时，
+    // 不进 `tick_sum_ns` ⇒ 不影响上面的残差对账；占比按整 tick 算，可与父段直接相减。
+    if !host.probes.is_empty() {
+        let mut probes = host.probes.clone();
+        probes.sort_by_key(|(_, ns, _)| std::cmp::Reverse(*ns));
+        crate::glog!(
+            "DBG",
+            "[TICKPROF] 宿主命名子探针（默认关闭；MIR2_TICK_PROFILE=1 时每窗口输出）："
+        );
+        for (name, ns, calls) in &probes {
+            crate::glog!(
+                "DBG",
+                "[TICKPROF]   {:<26} {:>9.3} ms/tick {:>7.2}% tick  ({} 次/tick)",
+                name,
+                *ns as f64 / 1e6 / ticks,
+                *ns as f64 / total_ns * 100.0,
+                calls / host.ticks.max(1)
+            );
+        }
+    }
     crate::glog!(
         "DBG",
         "[TICKPROF] 工作段合计（= HostTickTotal - HostSleep）= {:.2} ms/tick，占比 {:.2}%",
@@ -365,6 +448,52 @@ mod tests {
         assert_eq!(p.total_ticks, 0);
         assert!(!p.due());
         assert!(p.take_window().is_none());
+    }
+
+    /// **子探针关闭态牙**：`probe(None)` 与 `probe_begin(None)`/`probe_begin(&None)` 都不得
+    /// 写状态、不得取时钟；关闭态的 `probe_end` 也不得落行。
+    ///
+    /// 变异：把 `probe` 的 `let Some(at) = at else { return }` 删掉 ⇒ `probes` 非空 ⇒ 红；
+    /// 把 `probe` 改成恒 `Instant::now()` ⇒ `probe_begin(&None).is_some()` ⇒ 红。
+    #[test]
+    fn disabled_probe_does_no_work() {
+        let mut p = HostTickProfile::default();
+        for _ in 0..100 {
+            p.probe("HostAoiAppearSelect", None);
+        }
+        assert!(p.probes.is_empty(), "关闭态不得记录任何子探针");
+        assert_eq!(p.tick_sum_ns, 0, "子探针不得写 tick_sum_ns");
+        let none: Option<&mut HostTickProfile> = None;
+        assert!(probe_begin(&none).is_none(), "None 句柄不得取时钟");
+        let mut off = HostTickProfile::default();
+        let mut off_opt: Option<&mut HostTickProfile> = Some(&mut off);
+        assert!(probe_begin(&off_opt).is_none(), "关闭态 begin 不得取时钟");
+        probe_end(&mut off_opt, "X", None);
+        let off_ref = off_opt.expect("Some");
+        assert!(off_ref.probes.is_empty());
+    }
+
+    /// **子探针不吃残差**：开启态记录 `probe` 后 `tick_sum_ns` 不变（父段与子探针可嵌套）。
+    /// 窗口取走后 `probes` 清零。
+    #[test]
+    fn probe_does_not_change_residual_and_window_takes_probes() {
+        let mut p = HostTickProfile {
+            enabled: true,
+            ..HostTickProfile::default()
+        };
+        p.tick_sum_ns = 123;
+        let at = p.begin();
+        assert!(at.is_some());
+        p.probe("HostAoiAppearBuild", at);
+        assert_eq!(p.tick_sum_ns, 123, "probe 不得改 tick_sum_ns");
+        assert_eq!(p.probes.len(), 1);
+        assert!(p.probes[0].1 > 0, "累计 ns 必须 > 0");
+        // 手工推进窗口（不依赖真实 tick）。
+        p.window_ticks = 1;
+        p.window_ns = 1;
+        let w = p.take_window().expect("窗口非空");
+        assert_eq!(w.probes.len(), 1);
+        assert!(p.probes.is_empty(), "取走窗口后子探针必须清零");
     }
 
     /// **环境门**：只有字面 `"1"` 开启；`"true"`/`"0"`/空/缺省一律关（fail-closed）。
