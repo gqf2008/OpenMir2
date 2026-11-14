@@ -729,6 +729,14 @@ impl<'w, S: StageSpec> StageEntities<'w, S> {
         self.world.resource::<SlotTable>().order()
     }
 
+    /// 槽位顺序的业务 id（**零分配**迭代；与 [`Self::order`] 逐项同序）。
+    pub fn order_index_iter(&self) -> impl Iterator<Item = i32> + '_ {
+        self.world
+            .resource::<SlotTable>()
+            .order_iter()
+            .map(|(id, _)| id)
+    }
+
     /// id -> bevy 实体（三态之一的 **id 不在槽位表 / 槽已空** 都落到 `None`）。
     pub fn resolve(&self, id: i32) -> Option<Entity> {
         self.world.resource::<SlotTable>().entity_of(id)

@@ -6265,9 +6265,10 @@ pub fn monster_ai_tick_impl<A: crate::entity::EntityAccess>(
     // 全量收集阶段：槽位顺序（`EntityAccess::order_ids` = `iter_ref` 同序）。
     // **P6b2**：按 pass 的 T10 命名探针 `monai.collect` 取消（段级聚合耗时仍由
     // `TickProfile` 的 `SimMonsterAi` 段给出），收集逻辑不变。
-    let ids: Vec<i32> = access
-        .order_ids()
-        .into_iter()
+    // **T10 Top2**：`order_ids()` 的结果**原地**过滤（旧实现 `filter().collect()` 再分配
+    // 一个等长 `Vec`）。过滤判据与顺序逐条不变。
+    let mut ids = access.order_ids();
+    ids.retain(|id| {
         // `race > Play` 会把交易商人也命中（商人 race = `ActorRace.NPC(10)`）⇒
         // 身份门显式排除 `merchant.is_some()` 的实体（M3⑤-实现 2：商人由自己的 tick 驱动；
         // **不得**把身份门换成 race 比较——`NPC(10)` 与固定 NPC 同值、`RaceImg(50)` 与动物同值）。
@@ -6275,18 +6276,16 @@ pub fn monster_ai_tick_impl<A: crate::entity::EntityAccess>(
         // `ProcessNpcs`（`WorldServer.Merchant.cs:118`）驱动，本仓已由 `World::npc_tick`
         // 建模（同一次序）；此处必须不跑怪物 AI（否则会用与 oracle 不同的取数路径污染
         // RNG 流，且与 `npc_tick` 双驱固定 NPC）。
-        .filter(|id| {
-            access.get(*id).is_some_and(|e| {
-                e.race > ACTOR_RACE_PLAY
-                    && e.merchant.is_none()
-                    && e.npc.is_none()
-                    // `Ghost` 怪在 oracle `ProcessMonsters` 里整只跳过（`:320-333` 只做 5min 清理，
-                    // 由 [`crate::mongen::process_cert_lists`] 承担）⇒ 本 tick 不再驱动。
-                    // **死亡但未 Ghost** 的怪仍要跑 `base.Run`（死亡支 `MakeGhost`，`:85-101`）⇒ 不过滤。
-                    && !e.ghost
-            })
+        access.get(*id).is_some_and(|e| {
+            e.race > ACTOR_RACE_PLAY
+                && e.merchant.is_none()
+                && e.npc.is_none()
+                // `Ghost` 怪在 oracle `ProcessMonsters` 里整只跳过（`:320-333` 只做 5min 清理，
+                // 由 [`crate::mongen::process_cert_lists`] 承担）⇒ 本 tick 不再驱动。
+                // **死亡但未 Ghost** 的怪仍要跑 `base.Run`（死亡支 `MakeGhost`，`:85-101`）⇒ 不过滤。
+                && !e.ghost
         })
-        .collect();
+    });
     for id in ids {
         // **不可见怪跳步门**（`WorldServer.MonGen.cs:294-296/314`）：
         //

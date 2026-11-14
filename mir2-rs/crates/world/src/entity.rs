@@ -3494,7 +3494,9 @@ where
         + mir2_world_bevy::tick::Reads<AiState>,
 {
     fn order_ids(&self) -> Vec<i32> {
-        self.ad.order().into_iter().map(|(id, _)| id).collect()
+        // **T10 Top2**：旧实现 `order()`（克隆 11k 项 `(id, Entity)` Vec）+ 再 `collect`
+        // 一个 `Vec<i32>` = 每 tick 两次全量分配；改为从槽位表**一次**收集 id。
+        self.ad.order_index_iter().collect()
     }
     fn get(&self, id: i32) -> Option<EntityRef<'_>> {
         // **T10c**：一次组合视图取齐（见 [`EntityRefData`]）。组件缺失 / id 不存在 ⇒ `None`
