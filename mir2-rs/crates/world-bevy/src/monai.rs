@@ -17690,18 +17690,29 @@ mod death_branch_count_tests {
 
     /// 语义牙（RNG / 帧面 / 存档面）：**只有死怪**的 pass 不抽随机数、不发帧，
     /// 也不改存档面字段（`snapshot_sorted` = id/map/x/y/hp/level/exp/视野）。
+    ///
+    /// **非空前置**：`snapshot_sorted` 只列 `add_to_mapped == true` 的实体，而 `add_entity`
+    /// 只入队 `Command::Enter`（本测试直调 probed、不过命令 FIFO）⇒ 必须显式置
+    /// `add_to_mapped`，否则快照是空 Vec、`assert_eq!(空, 空)` 恒真（复审 F1：空集空过）。
     #[test]
     fn dead_branch_pass_keeps_rng_frames_and_saved_state() {
         let mut world = World::new(60, 60);
         for i in 0..4_i32 {
             let id = monster_at(&mut world, 10 + i, 10);
             kill(&mut world, id, 0);
+            // 落格等价设置：让存档面牙真的观察到这 4 只怪。
+            world.entities.map_binding_mut(id).unwrap().add_to_mapped = true;
         }
         world.sim.clock_ms = 1_000; // 缺省 MakeGhostTime = 180s ⇒ 不 Ghost（只走判定）
         world.set_process_monster_interval(0);
         world.sim.rng = RandomNumber::with_seed(7);
         let rng_before = world.sim.rng.clone();
         let snap_before = world.snapshot_sorted();
+        assert!(
+            !snap_before.is_empty(),
+            "存档面牙必须先观察到实体（否则空集空过）"
+        );
+        assert_eq!(snap_before.len(), 4, "4 只死怪都必须在存档面里");
         let mut probe = MonaiProbe::default();
         monster_ai_tick_impl_probed(&mut world.entities, &mut world.sim, &mut probe);
 
@@ -17721,6 +17732,73 @@ mod death_branch_count_tests {
             snap_before,
             "存档面（id/map/x/y/hp/level/exp/视野）逐项不变"
         );
+    }
+
+    /// **F2**：`8 玩家 + MakeGhost 到点` 的 pass —— 覆盖「缓存值 → 门判定 → MakeGhost →
+    /// 帧面/存档面」这条唯一受计数影响的链路。
+    ///
+    /// 门判定同 [`cached_play_count_drives_make_ghost_gate`] 的 8 玩家侧（ZenTime 24s ⇒ gate 10s，
+    /// Δ=20.001s 到点）；`can_re_alive = true` ⇒ `MakeGhost` 置 `invisible` + 摘格
+    /// （`add_to_mapped = false`）⇒ 存档面从 12 项降到 8 项（4 只死怪消失、8 玩家保留），
+    /// 且本实现不发任何怪物 RefMsg。
+    #[test]
+    fn make_ghost_due_pass_keeps_frames_and_save_surface() {
+        let mut world = World::new(80, 80);
+        let mut players = Vec::new();
+        for i in 0..8_i32 {
+            let id = player_at(&mut world, 2 + i, 2);
+            world.entities.map_binding_mut(id).unwrap().add_to_mapped = true;
+            players.push(id);
+        }
+        let mut dead = Vec::new();
+        for i in 0..4_i32 {
+            let id = monster_at(&mut world, 40 + i, 40);
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.life_cycle.death = true;
+                e.life_cycle.death_tick = 1_000;
+                e.life_cycle.can_re_alive = true;
+                e.spawn.mon_gen = Some(0);
+                e.spawn.mon_gen_zen_time = 60_000;
+            }
+            world.entities.map_binding_mut(id).unwrap().add_to_mapped = true;
+            dead.push(id);
+        }
+        world.sim.mon_gen_user_full = 0;
+        world.sim.mon_gen_zen_fast_step = 1;
+        world.sim.clock_ms = 21_001; // Δ = 20_001 ms ⇒ 8 玩家侧 gate 10s ⇒ 到点
+        world.set_process_monster_interval(0);
+
+        let snap_before = world.snapshot_sorted();
+        assert_eq!(
+            snap_before.len(),
+            12,
+            "前置：8 玩家 + 4 只死怪都在存档面里（非空、可观察）"
+        );
+        let mut probe = MonaiProbe::default();
+        monster_ai_tick_impl_probed(&mut world.entities, &mut world.sim, &mut probe);
+
+        assert!(
+            world.sim.pending_monster_ref_msgs.is_empty(),
+            "本实现的 MakeGhost（摘格 + Ghost/Invisible 置位）不发怪物 RefMsg"
+        );
+        for id in &dead {
+            let e = world.entities.get(*id).unwrap();
+            assert_eq!(e.ghost_tick, 21_001, "MakeGhost 必须到点执行");
+            assert!(e.invisible, "can_re_alive ⇒ Invisible 而不是 Ghost");
+            assert!(!e.add_to_mapped, "MakeGhost ⇒ DisappearA 摘格");
+        }
+        let snap_after: Vec<i32> = world.snapshot_sorted().iter().map(|s| s.0).collect();
+        assert_eq!(snap_after.len(), 8, "存档面：4 只死怪摘格后只剩 8 名玩家");
+        for id in &players {
+            assert!(snap_after.contains(id), "玩家必须仍在存档面里（id={id}）");
+        }
+        for id in &dead {
+            assert!(
+                !snap_after.contains(id),
+                "摘格的死怪不得留在存档面（id={id}）"
+            );
+        }
     }
 
     /// 语义牙（`ProcessRunCount`）：节流门轨迹与旧实现一致；且**每个 pass 至多 1 次**玩家数扫描。
