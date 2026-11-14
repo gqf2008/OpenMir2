@@ -141,11 +141,14 @@ MOVEFAIL 分类来自 `E:/UserFleet/archive/movefail-annotated.csv`（131 行逐
 
 **未完成（有卡，按序推进）**
 
-1. `openmir2-simmonsterai-profile`：复审 request_changes，作者补 docs（F1/F2）后合并。
-2. `openmir2-monai-deathbranch-count`：死亡支改一次计数；判据用**结构断言**（旧 N 次 → 新 1 次），墙钟只作观察值。
-3. `openmir2-s5-stale-path-refs`：195 处注释 + 5 处断言/文本串仍写 `crates/world` 旧路径。
-4. 容量文档勘误：`docs/capacity-model-20261114.md` §3 c1 行 `OutputAoi` 0.43 → 4.207（增益归 c2）。
-5. 1000 bot 真栈窗口：10k 端到端验收的前置。
+> 2026-11-14 晚更新：下表按当日推进状态改写（探针已合、旧路径已交审、容量勘误已落）。
+
+1. `openmir2-simmonsterai-profile`：**已合入** `a680b01f6`（review `e9a093b5` approve，tier L）；F3–F7 留 follow-up。
+2. `openmir2-s5-stale-path-refs`：分支 `card/s5-stale-paths` @ `07098f900` 已交审（68 文件 / 195 行纯文本迁移），等独立复审。
+3. `openmir2-monai-deathbranch-count`：已派工（tier R，分支基 `a680b01f6`）；判据用**结构断言**（`order_ids()` 旧 = dead 次数 → 新 = 1 次），墙钟只作观察值；真机窗口另排。
+4. `openmir2-no-parallel-substring-guard`：新登记（`no_parallel` 的 `TickRunner` 正向断言是子串匹配，改名 `TickRunnerMut` 不咬）。
+5. 容量文档勘误：**已落**（`0ffed4c5f`，§3 c1 行 `OutputAoi` 0.43 → 4.207，增益归 c2）。
+6. 1000 bot 真栈窗口：10k 端到端验收的前置。
 
 **已知红（既有，非本次引入，S5 交付时逐条记录在 `docs/s5-execution-20261114.md` §10）**
 
