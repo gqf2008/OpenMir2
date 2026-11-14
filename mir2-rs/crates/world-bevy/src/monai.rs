@@ -17473,3 +17473,283 @@ mod mb89_tests {
         assert_eq!(probe.ran, 1);
     }
 }
+
+/// 卡 `openmir2-monai-deathbranch-count` 的牙：**死亡支 `order_ids()` 结构性调用次数**（A4 主判据）
+/// 与语义四条（RNG / 帧面 / 存档面 / `ProcessRunCount`）。
+///
+/// 计数做法：本模块的 [`CountingAccess`] 是**仅测试可见**的 `EntityAccess` 包装，唯一的额外职责
+/// 是给 `order_ids()` 计数，其余方法逐项转发给真实的 [`EntityStore`]。用它直接驱动
+/// [`monster_ai_tick_impl_probed`]（= 生产 `SimMonsterAi` 段），因此断言的是**生产代码路径**，
+/// 不是复刻模型。
+#[cfg(test)]
+mod death_branch_count_tests {
+    use super::*;
+    use crate::components::{Progression, Recovery, Transform};
+    use crate::entity::{AnimalState, EntityMut, EntityRef, EntitySpawn, EntityStore, MapBinding};
+    use crate::world::World;
+    use mir2_shared::rng::RandomNumber;
+    use std::cell::Cell;
+
+    /// **仅测试可见**的 `EntityAccess` 计数包装（`order_ids()` 调用计数 + 逐项转发）。
+    struct CountingAccess<'a> {
+        inner: &'a mut EntityStore,
+        order_ids_calls: Cell<usize>,
+    }
+
+    impl crate::entity::EntityAccess for CountingAccess<'_> {
+        fn order_ids(&self) -> Vec<i32> {
+            self.order_ids_calls.set(self.order_ids_calls.get() + 1);
+            self.inner.order_index()
+        }
+        fn get(&self, id: i32) -> Option<EntityRef<'_>> {
+            self.inner.get(id)
+        }
+        fn get_mut(&mut self, id: i32) -> Option<EntityMut<'_>> {
+            self.inner.get_mut(id)
+        }
+        fn spawn_cloned(&self, id: i32) -> Option<EntitySpawn> {
+            self.inner.spawn_cloned(id)
+        }
+        fn set_progression(&mut self, id: i32, progression: Progression) -> bool {
+            self.inner.set_progression(id, progression)
+        }
+        fn map_binding_mut(&mut self, id: i32) -> Option<&mut MapBinding> {
+            self.inner.map_binding_mut(id)
+        }
+        fn dup_state(&mut self, id: i32) -> Option<crate::DupState> {
+            self.inner.dup_state(id)
+        }
+        fn dup_state_mut(&mut self, id: i32) -> Option<&mut crate::DupState> {
+            self.inner.dup_state_mut(id)
+        }
+        fn transform_mut(&mut self, id: i32) -> Option<&mut Transform> {
+            self.inner.transform_mut(id)
+        }
+        fn recovery_mut(&mut self, id: i32) -> Option<&mut Recovery> {
+            self.inner.recovery_mut(id)
+        }
+        fn ai_mut(&mut self, id: i32) -> Option<&mut AnimalState> {
+            self.inner.ai_mut(id)
+        }
+    }
+
+    /// 怪物（`race = 80`）；缺省 AI 计时器与既有测试同源。
+    fn monster_at(world: &mut World, x: i32, y: i32) -> i32 {
+        let mut e = EntitySpawn::new(0, "稻草人".to_string(), x, y);
+        e.race = crate::entity::ACTOR_RACE_MONSTER;
+        e.hp = 60;
+        e.max_hp = 60;
+        world.add_entity(e)
+    }
+
+    /// 玩家：`EntitySpawn::new` 的 `race` 缺省 = `ActorRace.Play(0)`。
+    fn player_at(world: &mut World, x: i32, y: i32) -> i32 {
+        let mut e = EntitySpawn::new(0, "m2r".to_string(), x, y);
+        e.hp = 100;
+        e.max_hp = 100;
+        world.add_entity(e)
+    }
+
+    fn kill(world: &mut World, id: i32, death_tick: i64) {
+        let e = world.entities.get_mut(id).unwrap();
+        e.life_cycle.death = true;
+        e.life_cycle.death_tick = death_tick;
+    }
+
+    /// **A4 主判据**：同一 pass 内 64 只死亡怪的死亡支，`order_ids()` 总调用 = **2** 次
+    /// （段入口 collect 1 次 + 段级 `race == Play` 计数 1 次）。
+    ///
+    /// 旧实现（死亡支各自全扫）= `1 + 64 = 65` 次；本卡交付时的变异重放已实测 65（红），
+    /// 见卡 `openmir2-monai-deathbranch-count` 的 patch 条目。
+    #[test]
+    fn death_branch_scans_play_count_once_per_pass() {
+        let mut world = World::new(160, 160);
+        for i in 0..8_i32 {
+            player_at(&mut world, 2 + i, 2);
+        }
+        let mut dead = Vec::new();
+        for i in 0..64_i32 {
+            let id = monster_at(&mut world, 10 + i % 100, 10 + i / 100);
+            kill(&mut world, id, 0);
+            dead.push(id);
+        }
+        // `MakeGhost` 立刻到点：每只死怪的死亡支都会留下 `ghost_tick` 见证（= 死亡支确实执行过）。
+        world.sim.make_ghost_time = 0;
+        world.sim.clock_ms = 1_000;
+        world.set_process_monster_interval(0); // 不节流 ⇒ 本 pass 全部真跑
+        let calls = {
+            let mut counting = CountingAccess {
+                inner: &mut world.entities,
+                order_ids_calls: Cell::new(0),
+            };
+            let mut probe = MonaiProbe::default();
+            monster_ai_tick_impl_probed(&mut counting, &mut world.sim, &mut probe);
+            counting.order_ids_calls.get()
+        };
+        for id in dead {
+            assert_eq!(
+                world.entities.get(id).unwrap().ghost_tick,
+                1_000,
+                "死亡支必须对每只死怪执行（MakeGhost 见证），否则计数断言没有意义"
+            );
+        }
+        assert_eq!(
+            calls, 2,
+            "collect 1 次 + 段级玩家数 1 次；旧实现是 1 + 64 = 65 次"
+        );
+    }
+
+    /// **dead=0 不得变慢（结构性口径）**：没有死亡支时连段级玩家数都不算 ⇒ `order_ids()` 只被
+    /// collect 调 1 次（与旧实现相同）。
+    #[test]
+    fn no_death_branch_keeps_single_collect_scan() {
+        let mut world = World::new(120, 120);
+        for i in 0..100_i32 {
+            monster_at(&mut world, 10 + i % 50, 10 + i / 50);
+        }
+        for i in 0..8_i32 {
+            player_at(&mut world, 2 + i, 2);
+        }
+        world.sim.clock_ms = 1_000;
+        world.set_process_monster_interval(0);
+        let mut counting = CountingAccess {
+            inner: &mut world.entities,
+            order_ids_calls: Cell::new(0),
+        };
+        let mut probe = MonaiProbe::default();
+        monster_ai_tick_impl_probed(&mut counting, &mut world.sim, &mut probe);
+        assert_eq!(
+            counting.order_ids_calls.get(),
+            1,
+            "dead=0：除 collect 外不得有任何全扫（否则 dead=0 会变慢）"
+        );
+    }
+
+    /// 计数语义牙：`race == Play` **只按 race 判**——`ghost`/`death` 的玩家仍计入，
+    /// 怪/NPC/动物（race 非 0）不计入。删掉 race 过滤或加 `!ghost` 门都会红。
+    #[test]
+    fn play_object_count_counts_race_play_only_including_ghosts() {
+        let mut world = World::new(60, 60);
+        for i in 0..4_i32 {
+            player_at(&mut world, 2 + i, 2);
+        }
+        let ghost = player_at(&mut world, 8, 2);
+        world.entities.get_mut(ghost).unwrap().life_cycle.ghost = true;
+        let dead = player_at(&mut world, 10, 2);
+        kill(&mut world, dead, 0);
+        monster_at(&mut world, 12, 2);
+        monster_at(&mut world, 13, 2);
+        let mut npc = EntitySpawn::new(0, "管理员".to_string(), 14, 2);
+        npc.race = crate::entity::ACTOR_RACE_NPC;
+        world.add_entity(npc);
+        let mut animal = EntitySpawn::new(0, "鸡".to_string(), 16, 2);
+        animal.race = crate::entity::ACTOR_RACE_ANIMAL;
+        world.add_entity(animal);
+
+        assert_eq!(
+            play_object_count_impl(&world.entities),
+            6,
+            "6 名玩家（含 ghost/死亡玩家）计入；怪/NPC/动物不计入"
+        );
+    }
+
+    /// 计数**真的进了门判定**：同一只死怪的 `MakeGhost` 到点结果随球员数改变。
+    ///
+    /// 0 玩家 ⇒ `d10 = 0` ⇒ ZenTime 60s ⇒ gate = 60s − 20s = 40s ⇒ Δ=20.001s 不到点；
+    /// 8 玩家（`UserFull=0`/`ZenFastStep=1` ⇒ `d10=8` 夹 6）⇒ ZenTime 24s ⇒ gate = max(10s, 4s) = 10s
+    /// ⇒ 到点。若缓存值恒 0/恒错，两支会同时红。
+    #[test]
+    fn cached_play_count_drives_make_ghost_gate() {
+        let run = |players: i32| {
+            let mut world = World::new(80, 80);
+            for i in 0..players {
+                player_at(&mut world, 2 + i % 30, 2 + i / 30);
+            }
+            let id = monster_at(&mut world, 60, 60);
+            {
+                let e = world.entities.get_mut(id).unwrap();
+                e.life_cycle.death = true;
+                e.life_cycle.death_tick = 1_000;
+                e.life_cycle.can_re_alive = true;
+                e.spawn.mon_gen = Some(0);
+                e.spawn.mon_gen_zen_time = 60_000;
+            }
+            world.sim.mon_gen_user_full = 0;
+            world.sim.mon_gen_zen_fast_step = 1;
+            world.sim.clock_ms = 21_001; // Δ = 20_001 ms
+            world.set_process_monster_interval(0);
+            let mut probe = MonaiProbe::default();
+            monster_ai_tick_impl_probed(&mut world.entities, &mut world.sim, &mut probe);
+            world.entities.get(id).unwrap().ghost_tick
+        };
+        assert_eq!(run(8), 21_001, "8 玩家 ⇒ gate 10s ⇒ 20.0s 已过 ⇒ MakeGhost");
+        assert_eq!(run(0), 0, "0 玩家 ⇒ gate 40s ⇒ 20.0s 未过 ⇒ 不 MakeGhost");
+    }
+
+    /// 语义牙（RNG / 帧面 / 存档面）：**只有死怪**的 pass 不抽随机数、不发帧，
+    /// 也不改存档面字段（`snapshot_sorted` = id/map/x/y/hp/level/exp/视野）。
+    #[test]
+    fn dead_branch_pass_keeps_rng_frames_and_saved_state() {
+        let mut world = World::new(60, 60);
+        for i in 0..4_i32 {
+            let id = monster_at(&mut world, 10 + i, 10);
+            kill(&mut world, id, 0);
+        }
+        world.sim.clock_ms = 1_000; // 缺省 MakeGhostTime = 180s ⇒ 不 Ghost（只走判定）
+        world.set_process_monster_interval(0);
+        world.sim.rng = RandomNumber::with_seed(7);
+        let rng_before = world.sim.rng.clone();
+        let snap_before = world.snapshot_sorted();
+        let mut probe = MonaiProbe::default();
+        monster_ai_tick_impl_probed(&mut world.entities, &mut world.sim, &mut probe);
+
+        let mut expected = rng_before;
+        let mut actual = world.sim.rng.clone();
+        assert_eq!(
+            actual.random(),
+            expected.random(),
+            "死亡支与玩家数计数都不消费 RNG"
+        );
+        assert!(
+            world.sim.pending_monster_ref_msgs.is_empty(),
+            "死怪 pass 不发任何怪物 RefMsg"
+        );
+        assert_eq!(
+            world.snapshot_sorted(),
+            snap_before,
+            "存档面（id/map/x/y/hp/level/exp/视野）逐项不变"
+        );
+    }
+
+    /// 语义牙（`ProcessRunCount`）：节流门轨迹与旧实现一致；且**每个 pass 至多 1 次**玩家数扫描。
+    /// interval=2 ⇒ pass1/2 只计数、pass3 真跑：`order_ids` = 1 + 1 + 2 = 4。
+    #[test]
+    fn death_branch_cache_keeps_process_run_count_trajectory() {
+        let mut world = World::new(60, 60);
+        for i in 0..3_i32 {
+            player_at(&mut world, 2 + i, 2);
+        }
+        let id = monster_at(&mut world, 20, 20);
+        kill(&mut world, id, 0);
+        world.sim.clock_ms = 1_000;
+        world.set_process_monster_interval(2);
+        let mut counting = CountingAccess {
+            inner: &mut world.entities,
+            order_ids_calls: Cell::new(0),
+        };
+        for (pass, want) in [(1_u8, 1_i32), (2, 2), (3, 0)] {
+            let mut probe = MonaiProbe::default();
+            monster_ai_tick_impl_probed(&mut counting, &mut world.sim, &mut probe);
+            assert_eq!(
+                World::process_run_count_impl(&world.sim, id),
+                want,
+                "pass{pass} 的 ProcessRunCount 轨迹必须与节流门一致"
+            );
+        }
+        assert_eq!(
+            counting.order_ids_calls.get(),
+            4,
+            "3 次 collect + 只在 pass3 真跑时扫一次玩家数"
+        );
+    }
+}
