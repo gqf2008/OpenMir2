@@ -15676,6 +15676,24 @@ fn broadcast_ref_msg_opt(
         }
         None => chat::hear_targets(world, actor_id, chat::send_ref_msg_range()),
     };
+    send_ref_msg_to_targets(online, gates, actor_id, targets, bodies, include_self);
+}
+
+/// `SendRefMsg` 的**投递段**：收件人 id 已按升序算好（`chat::hear_targets*` 的返回契约），
+/// 这里只做「各自那条连接」的路由与发送。
+///
+/// 从 [`broadcast_ref_msg_opt`] 原样提出，供走位扇出的候选集版
+/// （[`broadcast_ref_msg_from_walk_candidates`]）共用**同一份**投递代码——两条路径的收件人
+/// 计算方式不同，投递口径（`include_self` 门、`online` 查表、`route_to_gate` 返回 `None`
+/// 即跳过、逐 `body` 克隆发送）必须逐字节相同。
+fn send_ref_msg_to_targets(
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    actor_id: i32,
+    targets: Vec<i32>,
+    bodies: &[Vec<u8>],
+    include_self: bool,
+) {
     for target_id in targets {
         if !include_self && target_id == actor_id {
             continue;
@@ -16675,10 +16693,23 @@ fn drain_aoi_events(
 /// 位置：`drain_aoi_downlink`（出现帧，优先级 17）之后、`drain_login_tail`（654=153）之前 ——
 /// 与 `RM_TURN(17) < RM_WALK(18) < RM_CHANGELIGHT(153)` 的队列优先级同序。
 ///
-/// 返回本 tick **识别出的走位步数**（诊断用）：每个通过上述全部门、并已交给
-/// [`broadcast_ref_msg`] 的 actor 计 1（**无收件人时也 +1**，所以不等于实际发出的帧数）。
+/// 返回本 tick **识别出的走位步数**（诊断用）：每个通过上述全部门、并已交给扇出的 actor
+/// 计 1（**无收件人时也 +1**，所以不等于实际发出的帧数）。
 /// 注意 `max(|dx|,|dy|) != 1` 的**整段位移**（≥2 格，例如一次瞬移两步）直接跳过 ⇒ **零帧**；
 /// 本函数不按格拆帧，也不会「只发最后一格」（旧 T-146 residual ① 的口径已按实现订正）。
+///
+/// # 收件人扇出 = 候选集索引（卡 `openmir2-host-aoi-fanout-index`）
+///
+/// 收件人集合 = `SendRefMsg` 的 ±`SendRefMsgRange` 格内 `Race==Play && !Ghost` 玩家
+/// （`BaseObject.Message.cs:383-444`，判据同 [`chat::hear_targets`]）。原实现每个走位者调一次
+/// `broadcast_ref_msg` ⇒ `chat::hear_targets` 对**全部实体**做 `iter_ref()` 扫描，成本
+/// O(走位者数 × 实体数)（11k 实体 / 263 走位者 ≈ 108 ms/tick，占宿主段 92–96%）。
+///
+/// 现在拆两阶段（行为等价，理由见 [`collect_monster_walk_batch`]）：扫描实体时顺带收集
+/// `race == PLAY` 候选（[`WalkFanoutCandidate`]），再对每个走位者只在这些候选上按原判据重判
+/// 「同图 / ±range / `!ghost`」；走位者自己那条由 `include_self = false` 挡掉。
+/// 候选集**不用地图格子表**（原因见 [`WalkFanoutCandidate`] 的文档），也不改 `chat.rs` 的
+/// `hear_targets*`（其它调用的收件人逻辑保持原样）。
 fn drain_monster_walk_downlink(
     rec: &mir2_world_bevy::TickRecord,
     world: &mir2_world_bevy::World,
@@ -16688,7 +16719,74 @@ fn drain_monster_walk_downlink(
     seen: &mut std::collections::HashMap<i32, (usize, i32, i32)>,
     mut prof: Option<&mut tick_profile::HostTickProfile>,
 ) -> usize {
-    let mut sent = 0usize;
+    let (candidates, walkers) = collect_monster_walk_batch(rec, world, displays, online, seen);
+    // **收件人扇出**：原来是 `broadcast_ref_msg` → `chat::hear_targets` 对**全实体**做
+    // ±`SendRefMsgRange` 的 `race == PLAY` 过滤（走位者数 × 实体数）。现在只扫
+    // [`WalkFanoutCandidate`]（= 本 tick 的 `race == PLAY` 实体，见
+    // [`collect_monster_walk_batch`]），最终判定原样保留。探针口径不变：仍是**每个走位者一次**
+    // 扇出的墙钟（含候选集查找，与原来含全实体扫描的位置对齐）。
+    for (id, body) in &walkers {
+        let t_fanout = tick_profile::probe_begin(&prof);
+        broadcast_ref_msg_from_walk_candidates(
+            world,
+            online,
+            gates,
+            &candidates,
+            *id,
+            std::slice::from_ref(body),
+        );
+        tick_profile::probe_end(&mut prof, "HostAoiWalkFanout", t_fanout);
+    }
+    walkers.len()
+}
+
+/// 走位扇出的**候选集**一条：`Race == Play` 实体在本 tick 开始时的位置快照。
+///
+/// # 为什么不用地图格子表（`maps[map].cell(x,y).obj_list`）取候选
+///
+/// 卡片方向建议「用地图格子表」，但格子表**不是** actor 位置的可靠索引，用它取候选会改变
+/// 收件人集合（A1 不允许）：
+///
+/// 1. **落格失败 ≠ 不在图里**：`enter_map` 在墙格/越界格上保留角色但**不入格表**
+///    （牙 `enter_map_wall_cell_keeps_actor_unmapped` /
+///    `enter_map_out_of_bounds_keeps_actor_unmapped`）。这种玩家仍会被
+///    `chat::hear_targets_at` 的 `iter_ref` 扫到。
+/// 2. **`MoveToMovingObject` 的 oracle 怪癖**：源格删 cert、目标格追加的是源格循环里
+///    **最后一次赋值**的对象（通常不是 cert）⇒ 同一 `CellObjId` 可能同时在两格、也可能
+///    格内登记指向别家（`map.rs` 的 `mto_quirk_*` 测试逐条钉住）。
+///
+/// 因此候选集**从实体表**取（与 `hear_targets_at` 同源），只提前收窄**唯一**可以在扫描层
+/// 安全收窄的条件：`race == ACTOR_RACE_PLAY`。其余条件（同图 / ±range / `!ghost` /
+/// 说话者 `ObMode || FixedHideMode` 退化为自收）全部留在最终判定里按原逻辑重判。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct WalkFanoutCandidate {
+    id: i32,
+    map_id: usize,
+    x: i32,
+    y: i32,
+    ghost: bool,
+}
+
+/// `drain_monster_walk_downlink` 的**阶段一**：本 tick 只扫一遍实体表，同时产出
+///
+/// 1. 走位扇出的候选集（`race == Play`，见 [`WalkFanoutCandidate`]），供阶段二按走位者查；
+/// 2. 待广播的 `(走位者, SM_WALK 帧体)`，**按 `ids_sorted` 升序**（与逐走位者即时广播的
+///    原实现同序）。
+///
+/// 拆两阶段的原因：候选集必须覆盖全部实体，而扇出发生在扫描过程中；把「广播」推迟到扫描
+/// 结束后，才能用**完整**候选集做收窄。被推迟的只有 `tx.send` 的**时刻**——帧的**相对次序**
+/// （走位者按 id 升序、每个走位者的收件人按 id 升序、下一条走位者不早于上一条）与
+/// 「逐 `body` 克隆发送」的行为都与原实现相同；帧构造（`move_frame`）是纯函数，不读任何会
+/// 被广播影响的状态，所以「先构造后广播」与「边构造边广播」的帧面逐字节相同。
+fn collect_monster_walk_batch(
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
+    displays: &downlink::DisplayTable,
+    online: &OnlineRegistry,
+    seen: &mut std::collections::HashMap<i32, (usize, i32, i32)>,
+) -> (Vec<WalkFanoutCandidate>, Vec<(i32, Vec<u8>)>) {
+    let mut candidates: Vec<WalkFanoutCandidate> = Vec::new();
+    let mut walkers: Vec<(i32, Vec<u8>)> = Vec::new();
     // 本 tick 已经被别的动作帧解释过的位移（推挤/冲刺）。
     let mut explained: std::collections::HashSet<i32> =
         rec.pushes.iter().map(|e| e.actor_id).collect();
@@ -16700,6 +16798,17 @@ fn drain_monster_walk_downlink(
             continue;
         };
         alive.insert(id);
+        // 候选人：`SendRefMsg` 收件人的**唯一**可以在扫描层收窄的条件（种族门）在这里收窄；
+        // 同图/距离/Ghost 在 [`hear_targets_from_walk_candidates`] 里按 `hear_targets_at` 重判。
+        if e.race == mir2_world_bevy::ACTOR_RACE_PLAY {
+            candidates.push(WalkFanoutCandidate {
+                id,
+                map_id: e.map_id,
+                x: e.x,
+                y: e.y,
+                ghost: e.ghost,
+            });
+        }
         let prev = seen.insert(id, (e.map_id, e.x, e.y));
         // 在线玩家：走/跑帧由 `CM_WALK`/`CM_RUN` 路径下发，这里不得重复。
         if online.iter().any(|o| o.actor_id == id) {
@@ -16746,17 +16855,64 @@ fn drain_monster_walk_downlink(
         ) else {
             continue;
         };
-        // **收件人扇出**：`broadcast_ref_msg` → `chat::hear_targets`（对**全实体**做
-        // ±`SendRefMsgRange` 的 `race == PLAY` 过滤）。每个走位者一次 ⇒ 本探针量化
-        // 「走位者数 × 全实体数」的扫描成本（与收件人数无关的那部分）。
-        let t_fanout = tick_profile::probe_begin(&prof);
-        broadcast_ref_msg(world, online, gates, id, &[body]);
-        tick_profile::probe_end(&mut prof, "HostAoiWalkFanout", t_fanout);
-        sent += 1;
+        // 帧构造留在扫描阶段（纯函数、不依赖广播）；广播推迟到阶段二，见函数头。
+        walkers.push((id, body));
     }
     // 已消失的 actor 从游标里摘掉（ActorId 会被内核回收复用）。
     seen.retain(|id, _| alive.contains(id));
-    sent
+    (candidates, walkers)
+}
+
+/// [`collect_monster_walk_batch`] 候选集版 `chat::hear_targets`：**同一份**判定逻辑
+/// （`speaker` 缺失 ⇒ 空；`ob_mode || fixed_hide_mode` ⇒ 只发自己；否则同图 + `!ghost` +
+/// `|dx| <= range` + `|dy| <= range`，输出按 id 升序），只是把「遍历全实体」换成
+/// 「遍历 `race == Play` 候选」。
+///
+/// 等价性依据是集合关系而不是近似：`chat::hear_targets_at` 过滤式里的
+/// `race == ACTOR_RACE_PLAY` 正是候选集的**构造谓词**，其余谓词逐条原样保留 ⇒ 对任意输入
+/// 两边输出集合逐元素相同（牙 `walk_fanout_targets_match_hear_targets_on_boundaries`
+/// 与 `monster_walk_frames_match_full_scan_reference`）。
+fn hear_targets_from_walk_candidates(
+    world: &mir2_world_bevy::World,
+    candidates: &[WalkFanoutCandidate],
+    speaker_id: i32,
+    range: i32,
+) -> Vec<i32> {
+    let Some(speaker) = world.entities.get(speaker_id) else {
+        return Vec::new();
+    };
+    if speaker.ob_mode || speaker.fixed_hide_mode {
+        return vec![speaker_id];
+    }
+    let (map_id, x, y) = (speaker.map_id, speaker.x, speaker.y);
+    let mut out: Vec<i32> = candidates
+        .iter()
+        .filter(|c| {
+            c.map_id == map_id && !c.ghost && (c.x - x).abs() <= range && (c.y - y).abs() <= range
+        })
+        .map(|c| c.id)
+        .collect();
+    // 候选集按 `ids_sorted`（升序）收集 ⇒ 本已有序；保留与 `hear_targets_at` 同形的显式排序，
+    // 让「输出按 ActorId 升序」不依赖收集序。
+    out.sort_unstable();
+    out
+}
+
+/// [`broadcast_ref_msg`] 的候选集版（`include_self = false`）：收件人 = 走位者
+/// ±`SendRefMsgRange` 格内 `Race==Play && !Ghost` 的玩家（`BaseObject.Message.cs:383-444`），
+/// 计算方式见 [`hear_targets_from_walk_candidates`]；投递段与全扫描版共用
+/// [`send_ref_msg_to_targets`]（同一份 `include_self`/`route_to_gate`/`tx.send` 代码）。
+fn broadcast_ref_msg_from_walk_candidates(
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    candidates: &[WalkFanoutCandidate],
+    actor_id: i32,
+    bodies: &[Vec<u8>],
+) {
+    let targets =
+        hear_targets_from_walk_candidates(world, candidates, actor_id, chat::send_ref_msg_range());
+    send_ref_msg_to_targets(online, gates, actor_id, targets, bodies, false);
 }
 
 /// **T-154 F1**：本 tick 固定 NPC / 商人的 `RM_TURN`（`TurnTo`）下行。
@@ -82873,6 +83029,390 @@ GMEXECUTE f
         // 累计：只有 ① 那一帧。
         assert_eq!(collect_raw(&mut rx0).len(), 1, "全程只应出一条 SM_WALK");
     }
+    // =========================================================================================
+    // 卡 `openmir2-host-aoi-fanout-index`（tier R）：走位扇出候选集的**等价性**
+    //
+    // 新路径 = `collect_monster_walk_batch`（扫一遍实体，收 `race == PLAY` 候选）+
+    // `hear_targets_from_walk_candidates` / `broadcast_ref_msg_from_walk_candidates`（只在候选上
+    // 重判原条件）。旧路径 = `chat::hear_targets` 全实体 `iter_ref()` 扫描——**没有删**，所以下面
+    // 每个用例都拿它当参照逐元素比对（不是「按新实现写期望值」）。
+    // =========================================================================================
+
+    /// 用**生产收集器**取本 tick 的扇出候选集。
+    ///
+    /// 首次调用没有上一 tick 快照 ⇒ `walkers` 必空（静态夹具里没有走位），候选集与走位无关。
+    fn walk_candidates(world: &mir2_world_bevy::World) -> Vec<WalkFanoutCandidate> {
+        let displays = downlink::DisplayTable::new();
+        let online: OnlineRegistry = Vec::new();
+        let mut seen = std::collections::HashMap::new();
+        let (candidates, walkers) = collect_monster_walk_batch(
+            &mir2_world_bevy::TickRecord::default(),
+            world,
+            &displays,
+            &online,
+            &mut seen,
+        );
+        assert!(walkers.is_empty(), "静态夹具没有走位者");
+        candidates
+    }
+
+    /// 生成一个静态 actor（不落图：直接进实体表；`hear_targets_at` 只读实体字段）。
+    fn spawn_actor(
+        world: &mut mir2_world_bevy::World,
+        name: &str,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        race: u8,
+        ghost: bool,
+    ) -> i32 {
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+        e.race = race;
+        e.ghost = ghost;
+        e.map_id = map_id;
+        world.add_entity(e)
+    }
+
+    /// **A1 语义不变（判定面）**：候选集版收件人必须与 `chat::hear_targets`（全实体扫描，
+    /// 未改动）**逐元素相同**。逐条覆盖卡面点名的边界：
+    ///
+    /// - 恰好听距边缘：`|dx| = |dy| = range`（x 轴 / y 轴 / 对角三处）⇒ 收；
+    /// - 边缘外一格（正负两侧）⇒ 不收；
+    /// - 跨地图（坐标完全相同但 `map_id` 不同）⇒ 不收；
+    /// - 死亡 ⇒ **仍收**（`hear_targets_at` 的过滤式只有 `Ghost`，没有 `Death`，不得顺手加门）；
+    /// - 隐身（`ghost`）⇒ 不收；
+    /// - 不同阵营（`Race != Play`）⇒ 不收（也正是候选集唯一允许提前收窄的谓词）；
+    /// - 说话者 `ob_mode` / `fixed_hide_mode` ⇒ 只发自己（原支路原样保留）；
+    /// - 未知说话者 ⇒ 空集；range 变化（12 / 1 / 0）⇒ 同步变化。
+    ///
+    /// 红检（会红）：把候选集换成「地图格子表里的 actor」⇒ 未落格玩家（见下一条用例）漏收；
+    /// 把 `!c.ghost` 或距离门删掉/放宽 ⇒ 边缘与 Ghost 断言红；把 `race` 收窄条件挪进最终判定
+    /// （即收集全部实体）⇒ 本用例仍绿但候选集断言（下一条）红 ⇒ 两处配合钉住「只收候选」。
+    #[test]
+    fn walk_fanout_targets_match_hear_targets_on_boundaries() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mon = spawn_actor(
+            &mut world,
+            "hen",
+            0,
+            10,
+            10,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+        // 恰好 12 格（range 边界，三个方向）
+        let edge_x = spawn_actor(&mut world, "edge_x", 0, 22, 10, 0, false);
+        let edge_y = spawn_actor(&mut world, "edge_y", 0, 10, 22, 0, false);
+        let edge_corner = spawn_actor(&mut world, "edge_corner", 0, 22, 22, 0, false);
+        // 边缘外一格（+ / − 两侧）
+        let out_pos = spawn_actor(&mut world, "out_pos", 0, 23, 10, 0, false);
+        let out_neg = spawn_actor(&mut world, "out_neg", 0, -3, 10, 0, false);
+        // 跨地图：坐标相同、map_id 不同
+        let other_map = spawn_actor(&mut world, "other_map", 1, 10, 10, 0, false);
+        // 死亡玩家：仍在收件人里（原过滤式没有 Death 门）
+        let dead = spawn_actor(&mut world, "dead", 0, 11, 10, 0, false);
+        world.entities.life_cycle_mut(dead).unwrap().death = true;
+        // Ghost
+        let ghost = spawn_actor(&mut world, "ghost", 0, 12, 10, 0, true);
+        // 不同阵营（怪物）
+        let mon2 = spawn_actor(
+            &mut world,
+            "mon2",
+            0,
+            13,
+            10,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+
+        let candidates = walk_candidates(&world);
+        let range = chat::send_ref_msg_range();
+        for speaker in [mon, edge_x] {
+            for r in [range, 1, 0] {
+                assert_eq!(
+                    hear_targets_from_walk_candidates(&world, &candidates, speaker, r),
+                    chat::hear_targets(&world, speaker, r),
+                    "speaker={speaker} range={r}：候选集版必须与全实体扫描逐元素相同"
+                );
+            }
+        }
+        let want = chat::hear_targets(&world, mon, range);
+        assert!(
+            want.contains(&edge_x) && want.contains(&edge_y) && want.contains(&edge_corner),
+            "恰好 12 格（轴/对角）必须在收件人里"
+        );
+        assert!(
+            !want.contains(&out_pos) && !want.contains(&out_neg),
+            "13 格（正负两侧）出界"
+        );
+        assert!(!want.contains(&other_map), "跨地图不收");
+        assert!(!want.contains(&ghost), "Ghost 不收");
+        assert!(
+            want.contains(&dead),
+            "死亡不在 hear_targets_at 的过滤式里 ⇒ 与原实现一致地收（不得顺手加 Death 门）"
+        );
+        assert!(!want.contains(&mon2), "Race != Play 不收");
+        assert!(
+            !want.contains(&mon),
+            "怪物说话者自己不是 Play ⇒ 不在收件人里"
+        );
+
+        // 说话者 `ObMode || FixedHideMode` ⇒ 只发自己（逐支验证）
+        world.entities.flags_mut(edge_x).unwrap().ob_mode = true;
+        assert_eq!(chat::hear_targets(&world, edge_x, range), vec![edge_x]);
+        assert_eq!(
+            hear_targets_from_walk_candidates(&world, &candidates, edge_x, range),
+            vec![edge_x]
+        );
+        world.entities.flags_mut(edge_x).unwrap().ob_mode = false;
+        world.entities.flags_mut(edge_x).unwrap().fixed_hide_mode = true;
+        assert_eq!(chat::hear_targets(&world, edge_x, range), vec![edge_x]);
+        assert_eq!(
+            hear_targets_from_walk_candidates(&world, &candidates, edge_x, range),
+            vec![edge_x]
+        );
+
+        // 未知说话者 / 空世界 ⇒ 空集（退化形态）
+        assert!(hear_targets_from_walk_candidates(&world, &candidates, 999_999, range).is_empty());
+        assert!(chat::hear_targets(&world, 999_999, range).is_empty());
+        let empty = mir2_world_bevy::World::new(8, 8);
+        let empty_candidates = walk_candidates(&empty);
+        assert!(empty_candidates.is_empty(), "空世界没有 Play 候选");
+        assert!(hear_targets_from_walk_candidates(&empty, &empty_candidates, 1, range).is_empty());
+    }
+
+    /// **候选集覆盖（A1 的集合前提）**：候选集必须恰好是 `iter_ref()` 里 `Race == Play` 的全部
+    /// 实体——少一个就会漏收，多一个不改变结果（但会把成本还回去）。
+    ///
+    /// 关键是**未落格玩家**：`enter_map` 在墙格上保留角色但不入格表
+    /// （`enter_map_wall_cell_keeps_actor_unmapped`），这种玩家 `chat::hear_targets` 能扫到、
+    /// 地图格子表扫不到 ⇒ 这张卡不能用格子表取候选。本用例把这个反例钉死在扇出路径上。
+    #[test]
+    fn walk_fanout_candidates_cover_every_play_entity_even_if_unmapped() {
+        // 一张 16x16 图，(3,3) 置 HighWall ⇒ 玩家落格失败、实体仍在。
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
+        let mut attrs = vec![mir2_world_bevy::map::CellAttribute::Walk; 16 * 16];
+        attrs[3 * 16 + 3] = mir2_world_bevy::map::CellAttribute::HighWall;
+        assert_eq!(world.maps[0].set_cell_attributes(&attrs), 16 * 16);
+        world.open_session("wall");
+        let mut wall_spawn = mir2_world_bevy::EntitySpawn::new(0, "wall".to_string(), 3, 3);
+        wall_spawn.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let wall_id = world
+            .enter_map("wall", wall_spawn, 0)
+            .expect("墙格进图 = 保留角色（oracle Initialize 语义）");
+        assert!(
+            !world.entities.get(wall_id).unwrap().add_to_mapped,
+            "前提：墙格玩家不入格表（这正是格子表不适合作索引的原因）"
+        );
+        assert!(
+            !world.maps[0]
+                .cell(3, 3)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == wall_id),
+            "前提复核：该玩家确实不在格子表里"
+        );
+
+        // 其它形态：普通玩家、Ghost 玩家（仍是 Play ⇒ 仍是候选，ghost 门在最终判定里）、怪物。
+        let normal = spawn_actor(&mut world, "normal", 0, 4, 4, 0, false);
+        let ghost_play = spawn_actor(&mut world, "ghost_play", 0, 5, 5, 0, true);
+        let mon = spawn_actor(
+            &mut world,
+            "mon",
+            0,
+            6,
+            6,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+
+        let candidates = walk_candidates(&world);
+        let mut got: Vec<i32> = candidates.iter().map(|c| c.id).collect();
+        got.sort_unstable();
+        let mut want: Vec<i32> = world
+            .entities
+            .iter_ref()
+            .filter(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)
+            .map(|e| e.id)
+            .collect();
+        want.sort_unstable();
+        assert_eq!(
+            got, want,
+            "候选集 = iter_ref 里全部 Race==Play 实体（未落格玩家也在内）"
+        );
+        assert!(
+            got.contains(&wall_id),
+            "未落格玩家必须是候选（用地图格子表取候选会漏掉它 ⇒ 收件人集合改变）"
+        );
+        assert!(got.contains(&normal) && got.contains(&ghost_play));
+        assert!(!got.contains(&mon), "怪物不是候选（种族门在收集阶段收窄）");
+    }
+
+    /// **A1 + A2 端到端**：两个走位者同 tick、多个收件人（含边界/界外/跨图/Ghost）时，
+    /// 生产路径 `drain_monster_walk_downlink` 发出的帧序列必须与「旧全扫描扇出」
+    /// （`chat::hear_targets` + 同一份投递段）逐条相同：`(socket, 被观察的走位者)` 序列相等，
+    /// 且同一走位者的所有帧体逐字节相同（一次构造、多收件人克隆）。
+    ///
+    /// 这条钉住两件事：① 收件人集合等价；② 拆两阶段后**跨走位者的帧次序**不变（走位者按 id
+    /// 升序、每个走位者的收件人按 id 升序）。
+    ///
+    /// 红检（会红）：候选集在种族门之外再提前剔同图/距离（漏收/错收）；把两阶段改成「先建全表、
+    /// 再按 walkers 倒序广播」⇒ 序列断言红。
+    #[test]
+    fn monster_walk_frames_match_full_scan_reference() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
+        // 收件人（全部 OnLine ⇒ 走位检测跳过它们）
+        let p1 = spawn_actor(&mut world, "p1", 0, 12, 10, 0, false); // 两个走位者都在范围
+        let p2 = spawn_actor(&mut world, "p2", 0, 10, 15, 0, false); // 在范围
+        let p3 = spawn_actor(&mut world, "p3", 0, 40, 40, 0, false); // 界外
+        let p4 = spawn_actor(&mut world, "p4", 0, 11, 10, 0, true); // Ghost ⇒ 不收
+        let p5 = spawn_actor(&mut world, "p5", 1, 10, 10, 0, false); // 跨图 ⇒ 不收
+        let p6 = spawn_actor(&mut world, "p6", 0, 22, 22, 0, false); // 走位者 1 的 12/12 边界
+
+        // 走位者：两个怪物，同 tick 各走一格（直接写坐标 = `walk_to` 的效果）
+        let m1 = spawn_actor(
+            &mut world,
+            "m1",
+            0,
+            10,
+            10,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+        let m2 = spawn_actor(
+            &mut world,
+            "m2",
+            0,
+            12,
+            12,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+        world.entities.get_mut(m1).unwrap().ai.dir = 2; // 右
+        world.entities.get_mut(m2).unwrap().ai.dir = 4; // 下
+
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            m1,
+            downlink::ActorDisplay::new(2, 0, 0x1111_1111, 0, 0, 255, b"m1".to_vec()),
+        );
+        displays.set(
+            m2,
+            downlink::ActorDisplay::new(4, 0, 0x2222_2222, 0, 0, 255, b"m2".to_vec()),
+        );
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "p1".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: p1,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "p2".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: p2,
+            },
+            OnlineEntry {
+                account: "c".into(),
+                chr_name: "p3".into(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 903,
+                actor_id: p3,
+            },
+            OnlineEntry {
+                account: "d".into(),
+                chr_name: "p4".into(),
+                session_id: 4,
+                gate_idx: 0,
+                socket: 904,
+                actor_id: p4,
+            },
+            OnlineEntry {
+                account: "e".into(),
+                chr_name: "p5".into(),
+                session_id: 5,
+                gate_idx: 0,
+                socket: 905,
+                actor_id: p5,
+            },
+            OnlineEntry {
+                account: "f".into(),
+                chr_name: "p6".into(),
+                session_id: 6,
+                gate_idx: 0,
+                socket: 906,
+                actor_id: p6,
+            },
+        ];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+
+        let rec = mir2_world_bevy::TickRecord::default();
+        let mut seen = std::collections::HashMap::new();
+        // 建游标（首见不出帧）。
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            0
+        );
+        assert!(collect_raw(&mut rx0).is_empty());
+        // 同 tick 两个走位者各走一格。
+        world.entities.transform_mut(m1).unwrap().x = 11;
+        world.entities.transform_mut(m2).unwrap().y = 13;
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            2,
+            "两个走位者各算一步"
+        );
+
+        // 实发帧：`(socket, 被观察的走位者)`，并核对同一走位者的帧体逐字节相同。
+        let frames = collect_raw(&mut rx0);
+        let mut got: Vec<(i32, i32)> = Vec::new();
+        let mut body_by_walker: HashMap<i32, Vec<u8>> = HashMap::new();
+        for (socket, body) in &frames {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(body).unwrap();
+            assert_eq!(cm.ident, mir2_protocol::messages::SM_WALK);
+            match body_by_walker.get(&cm.recog) {
+                Some(prev) => assert_eq!(prev, body, "同一走位者的帧体必须逐字节相同"),
+                None => {
+                    body_by_walker.insert(cm.recog, body.clone());
+                }
+            }
+            got.push((*socket, cm.recog));
+        }
+
+        // 旧路径参照：全实体扫描的 `chat::hear_targets` + 同一份投递口径（走位者按 id 升序）。
+        let range = chat::send_ref_msg_range();
+        let mut walkers = vec![m1, m2];
+        walkers.sort_unstable();
+        let mut want: Vec<(i32, i32)> = Vec::new();
+        for walker in &walkers {
+            for target in chat::hear_targets(&world, *walker, range) {
+                if target == *walker {
+                    continue;
+                }
+                if let Some(t) = online.iter().find(|e| e.actor_id == target) {
+                    want.push((t.socket, *walker));
+                }
+            }
+        }
+        assert_eq!(got, want, "帧序列必须与全扫描参照逐条相同（集合 + 次序）");
+        assert!(
+            got.iter().all(|(s, _)| *s != 903 && *s != 904 && *s != 905),
+            "界外 / Ghost / 跨图玩家不收"
+        );
+        assert!(
+            got.iter().any(|(s, w)| *s == 906 && *w == m1),
+            "走位者 m1 的 12/12 对角边界玩家必须收"
+        );
+    }
+
     // =========================================================================================
     // T-203：`SM_QUERYYBDEAL(23023)` / `SM_QUERYYBSELL(23021)` —— 可达性钉（**不可达登记**）
     //
