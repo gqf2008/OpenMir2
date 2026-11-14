@@ -2,7 +2,7 @@
 
 卡：`openmir2-simmonsterai-profile`（tier L：**只加默认关闭探针 + 测量 + 报告，不改 AI 逻辑**）。
 分支：`card/simmonsterai-probe`，基 `f19dfb42f`（master）。测量时段
-**2026-11-14 17:0x–17:2x（+0800）**，release、独立 target `E:/UserTemp/w84-rel`；
+**2026-11-14 16:20–16:38（+0800）**，release、独立 target `E:/UserTemp/w84-rel`；
 未占用真栈窗口（卡面 `window_required=false`），全机禁编窗口（14:20–14:35）之外。
 
 > **口径声明（先读）**
@@ -112,7 +112,7 @@
 | 8,000 / 0 | 0.437 | 0.443 | 4.823 | 4.380 | 8.3% | 8.4% | 83.3% |
 | 8,000 / 8 | 0.448 | 0.472 | 4.985 | 4.514 | 8.2% | 8.7% | 83.1% |
 | 11,000 / 0 | 0.607 | 0.641 | 7.002 | 6.361 | 8.0% | 8.4% | 83.6% |
-| 11,000 / 8 | 0.629 | 0.630 | 7.003 | 6.372 | 8.2% | 8.2% | 83.6% |
+| 11,000 / 8 | 0.629 | 0.630 | 7.003 | 6.372 | 8.2% | 8.3% | 83.5% |
 
 **回答**：`SimMonsterAi` 约 **1/6 是"扫描 + 门"，5/6 是单怪 AI 体**。扫描与门判定都已做过
 T10 优化（`order_ids` 单次收集 + 原地 `retain`、`ProcessRunCounts` 密集数组），进一步压缩的空间
@@ -220,7 +220,9 @@ oracle 的 `GetMonstersZenTime` 读全服 `PlayObjectCount`；本仓用"扫一�
 
 ### 6.1 生产接线（本批改动）
 
-- World 侧：`TickProfile::sim_ai_tick_ns` 每个 tick 追加一条 `SimMonsterAi` 段 ns；
+- World 侧：`TickProfile::sim_ai_tick_ns` 每个 tick 追加一条 `SimMonsterAi` 段 ns
+  （环形上限 `SIM_AI_SAMPLE_CAP = 1024`，防长跑诊断会话无界增长；另有单调计数
+  `sim_ai_samples_total`，窗口增量按它算，截断时既不漏也不重复）；
   `MonaiProbe` 的窗口累计与计数一并由 `tick_head` 合并。
 - Host 侧：`HostTickProfile::end_tick` 每个 tick 追加一条 `HostTickTotal − HostSleep`
   （`work_samples`）；`take_window` 带走。

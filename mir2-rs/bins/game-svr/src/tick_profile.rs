@@ -115,8 +115,8 @@ pub struct WorldSnapshot {
     ticks: u64,
     stages: Vec<(String, u64, u64)>,
     probes: Vec<(String, u64, u64)>,
-    /// 已消费到的 `TickProfile::sim_ai_tick_ns` 下标。
-    sim_ai_cursor: usize,
+    /// 已消费到的 `TickProfile::sim_ai_samples_total`（单调计数；环形截断时也正确）。
+    sim_ai_total: u64,
     /// 已消费的 `monai` 累计（用于算窗口增量）。
     monai: mir2_world_bevy::monai::MonaiProbe,
     monai_ticks: u64,
@@ -356,9 +356,13 @@ pub fn world_delta(
     let ticks = p.ticks.saturating_sub(last.ticks);
     last.ticks = p.ticks;
     // **卡 `openmir2-simmonsterai-profile`**：逐 tick `SimMonsterAi` 样本增量 + 子探针累计增量。
-    let cursor = last.sim_ai_cursor.min(p.sim_ai_tick_ns.len());
-    let sim_ai_tick_ns = p.sim_ai_tick_ns[cursor..].to_vec();
-    last.sim_ai_cursor = p.sim_ai_tick_ns.len();
+    let new_samples = p.sim_ai_samples_total.saturating_sub(last.sim_ai_total);
+    last.sim_ai_total = p.sim_ai_samples_total;
+    // 环形缓冲可能把本轮新增的样本裁掉一部分 ⇒ 至多取现有条数。
+    let take = usize::try_from(new_samples)
+        .unwrap_or(usize::MAX)
+        .min(p.sim_ai_tick_ns.len());
+    let sim_ai_tick_ns = p.sim_ai_tick_ns[p.sim_ai_tick_ns.len() - take..].to_vec();
     let monai = p.monai.delta_since(&last.monai);
     last.monai = p.monai.clone();
     let monai_ticks = p.monai_ticks.saturating_sub(last.monai_ticks);
@@ -760,12 +764,13 @@ mod tests {
     }
 
     /// **逐 tick 样本的窗口增量**：第二次 `world_delta` 只取**新增**样本（游标），
-    /// `monai` 累计取差值。变异：把 `last.sim_ai_cursor = p.sim_ai_tick_ns.len()` 删掉
+    /// `monai` 累计取差值。变异：把 `last.sim_ai_total = p.sim_ai_samples_total` 删掉
     /// ⇒ 第二次仍返回全量 ⇒ 红。
     #[test]
     fn world_delta_carries_per_tick_samples_without_repeating() {
         let mut p = mir2_world_bevy::world::TickProfile::default();
         p.sim_ai_tick_ns = vec![100, 200];
+        p.sim_ai_samples_total = 2;
         p.monai_ticks = 2;
         p.monai.scanned = 10;
         let mut last = WorldSnapshot::default();
@@ -775,6 +780,7 @@ mod tests {
         assert_eq!(d1.monai_ticks, 2);
 
         p.sim_ai_tick_ns.push(300);
+        p.sim_ai_samples_total = 3;
         p.monai_ticks = 3;
         p.monai.scanned = 15;
         let d2 = world_delta(Some(&p), &mut last).expect("profile 存在");

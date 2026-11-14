@@ -3152,8 +3152,11 @@ pub struct TickProfile {
     /// 已计入的 tick 数（`tick_head` 入口自增）。
     pub ticks: u64,
     /// **卡 `openmir2-simmonsterai-profile`**：逐 tick 的 `SimMonsterAi` 段 ns 样本
-    /// （`len == ticks` 时逐项一一对应；**tick 级分位数**用它算，不是 50-tick 桶近似）。
+    /// （最近 [`SIM_AI_SAMPLE_CAP`] 条；**tick 级分位数**用它算，不是 50-tick 桶近似）。
     pub sim_ai_tick_ns: Vec<u64>,
+    /// 自开启起累计写入的 `sim_ai_tick_ns` 条数（**单调递增**，不受环形上限影响；
+    /// 窗口增量用它算"本轮新增几条"，截断时也不会漏/重复）。
+    pub sim_ai_samples_total: u64,
     /// `SimMonsterAi` 内部探针的**窗口累计**（`monai_ticks` 次 tick 之和/计数）。
     pub monai: crate::monai::MonaiProbe,
     /// `monai` 累计覆盖的 tick 数（探针开启的 tick）。
@@ -3161,6 +3164,10 @@ pub struct TickProfile {
     /// **同进程 A/B 用**：暂停累计但保留已有数据（`prof_begin` 返回 `None`）。
     pub paused: bool,
 }
+
+/// [`TickProfile::sim_ai_tick_ns`] 的环形上限（防止长跑诊断会话无界增长；
+/// 生产窗口是 50 tick，1024 条 ≈ 20 个窗口）。
+pub const SIM_AI_SAMPLE_CAP: usize = 1024;
 
 impl TickProfile {
     fn add_stage(&mut self, stage: TickStage, ns: u64) {
@@ -3500,7 +3507,11 @@ impl World {
             let ns = t.elapsed().as_nanos() as u64;
             p.add_stage(stage, ns);
             if stage == TickStage::SimMonsterAi {
+                if p.sim_ai_tick_ns.len() >= SIM_AI_SAMPLE_CAP {
+                    p.sim_ai_tick_ns.remove(0);
+                }
                 p.sim_ai_tick_ns.push(ns);
+                p.sim_ai_samples_total += 1;
             }
         }
     }
@@ -11315,6 +11326,10 @@ mod tests {
         }
         let p = w.tick_profile().expect("profile 已开启");
         assert_eq!(p.sim_ai_tick_ns.len(), 5, "每 tick 一条 SimMonsterAi 样本");
+        assert_eq!(
+            p.sim_ai_samples_total, 5,
+            "单调计数与样本条数一致（未截断）"
+        );
         assert_eq!(p.monai_ticks, 5, "探针资源必须在每个 tick 被插入/取回");
         assert!(p.monai.scanned > 0, "必须扫到那只怪");
         assert!(p.monai.loop_ns > 0, "逐怪循环必须被计时");
