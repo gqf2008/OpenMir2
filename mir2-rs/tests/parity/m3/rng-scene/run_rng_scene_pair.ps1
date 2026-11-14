@@ -143,8 +143,8 @@ function New-ScenePair([string]$Dir, [string]$Map, [int]$Seed, [string]$MonsterN
 $Script:SiteCtor = 'M2Server.Actor.BaseObject..ctor@BaseObject.cs:438'
 $Script:SiteSpawnC = 'GameSrv.Word.WorldServer.CreateMonster@WorldServer.MonGen.cs:498'
 $Script:SiteAiC = 'M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427'
-$Script:SiteSpawnR = 'crates\world\src\mongen.rs:624'
-$Script:SiteAiR = 'crates\world\src\monai.rs:164'
+$Script:SiteSpawnR = 'crates\world-bevy\src\mongen.rs:624'
+$Script:SiteAiR = 'crates\world-bevy\src\monai.rs:164'
 $Script:SiteDropC = 'GameSrv.Word.WorldServer.MonGetRandomItems@WorldServer.MonGen.cs:451'
 $Script:SiteDropR = 'crates\formula\src\drop.rs:109'
 

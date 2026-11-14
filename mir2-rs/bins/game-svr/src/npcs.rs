@@ -12,10 +12,10 @@
 //!    O-1 口径在构造（抽数）前过门**（部署件三图俱在 ⇒ 门不触发；合成用例才是门的牙齿；
 //!    与 oracle「先构造抽数、后 FindMap」的次序差异登记见模块尾）。
 //! 3. [`place_npcs`] = 建实体 + 挂图两段（照 [`crate::merchant::spawn_merchants`]）：
-//!    **正序** [`mir2_world::World::insert_npc`]（`LocalDB.LoadNpcs` 文件序；每条经 ctor 公共链
+//!    **正序** [`mir2_world_bevy::World::insert_npc`]（`LocalDB.LoadNpcs` 文件序；每条经 ctor 公共链
 //!    `BaseObject`+`AnimalObject` 抽 **4 次**：`Random(1500)`/`Random(2000)+2000`/`Random(3000)`/
 //!    `Random(3000)`，`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）、**倒序**
-//!    [`mir2_world::World::attach_npc_to_map`]（`NpCinitialize` 的 `for (i=Count-1;i>=0;i--)`）。
+//!    [`mir2_world_bevy::World::attach_npc_to_map`]（`NpCinitialize` 的 `for (i=Count-1;i>=0;i--)`）。
 //!
 //! ## 与 oracle 的建模差异（登记）
 //!
@@ -44,7 +44,7 @@ use mir2_envir::paths::envir_file_path;
 use mir2_envir::{decode_text, MapLoader};
 use mir2_script::{LocalFs, ScriptParsers};
 use mir2_shared::rng::RandomNumber;
-use mir2_world::npc::{NpcSpawn, NpcState};
+use mir2_world_bevy::npc::{NpcSpawn, NpcState};
 
 use crate::downlink::{npc_display, DisplayTable};
 use crate::npc::{MerchantNpc, MerchantScriptBook, NpcDef, NpcLoadFailure};
@@ -112,9 +112,9 @@ pub fn build_npc_spawns(
 ///
 /// 1. `LocalDB.LoadNpcs` **正序**逐条 `new …`（ctor 公共链抽 4 次：`Random(1500)`/`Random(2000)+2000`/
 ///    `Random(3000)`/`Random(3000)`，`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）
-///    ⇒ 先**正序** [`mir2_world::World::insert_npc`]（实体槽位序 = 文件序）；
+///    ⇒ 先**正序** [`mir2_world_bevy::World::insert_npc`]（实体槽位序 = 文件序）；
 /// 2. `NpCinitialize`（`WorldServer.Merchant.cs:39`）的 `for (i = Count-1; i >= 0; i--)`
-///    ⇒ **倒序** [`mir2_world::World::attach_npc_to_map`] 落格（map cell `obj_list` 追加序 = 倒序）。
+///    ⇒ **倒序** [`mir2_world_bevy::World::attach_npc_to_map`] 落格（map cell `obj_list` 追加序 = 倒序）。
 ///
 /// 返回 `(留在世界的 NPC 数, 挂图失败被移除的 ChrName)`。
 ///
@@ -122,7 +122,10 @@ pub fn build_npc_spawns(
 /// [`place_npcs_recording`]（本函数是它的丢弃包装）。
 #[must_use]
 #[cfg(test)]
-pub fn place_npcs(world: &mut mir2_world::World, spawns: Vec<NpcSpawn>) -> (usize, Vec<String>) {
+pub fn place_npcs(
+    world: &mut mir2_world_bevy::World,
+    spawns: Vec<NpcSpawn>,
+) -> (usize, Vec<String>) {
     let (kept, failed, _) = place_npcs_recording(
         world,
         spawns.into_iter().map(|s| (s, String::new())).collect(),
@@ -151,7 +154,7 @@ pub struct PlacedNpc {
 /// `for (i = Count-1; i >= 0; i--)`，也即 `LoadNPCScript` 的调用序（脚本装载必须按此序抽数）。
 #[must_use]
 pub fn place_npcs_recording(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     spawns: Vec<NpcSpawnWithMap>,
 ) -> (usize, Vec<String>, Vec<PlacedNpc>) {
     // ① 正序建实体（ctor 抽数 = LocalDB.LoadNpcs 文件序，走 world.rng 同一条流）。
@@ -296,7 +299,7 @@ pub struct FixedNpcLoadReport {
 /// `rename_rand` 取 `world.rng`（取出、装载、原样放回），与 oracle「世界同一条 `RandomNumber`」一致。
 #[must_use]
 pub fn place_fixed_npcs_with_scripts(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     npcs: &[NpcInfo],
     resolve_map: impl Fn(&str) -> Option<usize>,
     envir_root: &Path,
@@ -466,7 +469,7 @@ mod tests {
     }
 
     /// 按实体槽位序列出固定 NPC 的字段快照（闭包捕获冲突 ⇒ 独立函数）。
-    fn npc_fields(world: &mir2_world::World) -> Vec<NpcRow> {
+    fn npc_fields(world: &mir2_world_bevy::World) -> Vec<NpcRow> {
         world
             .npc_ids_sorted()
             .into_iter()
@@ -512,7 +515,7 @@ mod tests {
         assert!(dropped.is_empty(), "三图俱在 ⇒ 门不触发");
         assert_eq!(spawns.len(), 3);
 
-        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
         let (kept, failed) = place_npcs(&mut world, spawns);
         assert_eq!(kept, 3);
         assert!(failed.is_empty());
@@ -560,7 +563,7 @@ mod tests {
         for row in npc_fields(&world) {
             assert_eq!(
                 world.entities.get(row.id).unwrap().race,
-                mir2_world::combat::ACTOR_RACE_NPC
+                mir2_world_bevy::combat::ACTOR_RACE_NPC
             );
         }
     }
@@ -580,7 +583,7 @@ mod tests {
         assert_eq!(dropped, vec![("乙".to_string(), "9999".to_string())]);
         assert_eq!(spawns.len(), 2);
 
-        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
         let (kept, _) = place_npcs(&mut world, spawns);
         assert_eq!(kept, 2);
         let names: Vec<String> = npc_fields(&world).into_iter().map(|f| f.name).collect();
@@ -603,7 +606,7 @@ mod tests {
     #[test]
     fn insert_npc_draws_four_ctor_values_in_oracle_order() {
         let seed = 4242;
-        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
         world.rng = RandomNumber::with_seed(seed);
         let spawns = vec![
             to_spawn(&info("甲", NpcType::Merchant, "0", 1, 1, 0, 8), 0),
@@ -654,7 +657,7 @@ mod tests {
     /// **跨路径一致性门（本卡重点，防「少抽 2 次」复发）**：
     /// oracle 里怪物 / 固定 NPC / 商人列表**都经**同一条 ctor 公共链
     /// `BaseObject`（`BaseObject.cs:439/441`）→ `AnimalObject`（`AnimalObject.cs:76/77`），
-    /// 抽同样的 4 个数、同序。不变量 = 一处定义（`mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS` +
+    /// 抽同样的 4 个数、同序。不变量 = 一处定义（`mir2_world_bevy::BASE_ANIMAL_CTOR_DRAW_MODS` +
     /// `BaseAnimalCtorDraws::draw`）+ 两模块三调用点直接消费（`crates/world/src/npc.rs` 的
     /// `insert_npc`；`crates/world/src/merchant.rs` 的 `merchant_ctor_run_delay`/`spawn_merchant`）+
     /// 一条被本门钉齐的同值副本（怪物路径 `bins/game-svr/src/mongen.rs` 硬编码 4 抽）。
@@ -670,14 +673,14 @@ mod tests {
     fn base_animal_ctor_chain_matches_oracle_on_all_three_paths() {
         // ① 定义侧（一处定义）：kind + 顺序 = oracle。
         assert_eq!(
-            mir2_world::BASE_ANIMAL_CTOR_DRAW_MODS,
+            mir2_world_bevy::BASE_ANIMAL_CTOR_DRAW_MODS,
             [1500, 2000, 3000, 3000]
         );
 
         let seed = 20261017_i32;
         let expect_of = |seed: i32| {
             let mut r = RandomNumber::with_seed(seed);
-            mir2_world::BaseAnimalCtorDraws::draw(&mut r)
+            mir2_world_bevy::BaseAnimalCtorDraws::draw(&mut r)
         };
 
         // ② 怪物路径（宿主 `mongen::draw_monster_construct`；race 11 = GuardUnit，公共链后无额外抽）。
@@ -704,7 +707,7 @@ mod tests {
 
         // ③ 固定 NPC 路径（`World::insert_npc`）。
         {
-            let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
             world.rng = RandomNumber::with_seed(seed);
             let id = world
                 .spawn_npc(to_spawn(&info("甲", NpcType::Merchant, "0", 1, 1, 0, 8), 0))
@@ -729,7 +732,7 @@ mod tests {
             // 流位置：同 4 抽后 `world.rng` 必须落回参考流同一位置。只比上面 4 个值**抓不到
             // 「多抽 1 次」**（不改这 4 个值、只挪流位置）⇒ 显式比流位置（照 ④ 商人分支写法）。
             let mut refr = RandomNumber::with_seed(seed);
-            let _ = mir2_world::BaseAnimalCtorDraws::draw(&mut refr);
+            let _ = mir2_world_bevy::BaseAnimalCtorDraws::draw(&mut refr);
             assert_eq!(
                 world.rng.random(),
                 refr.random(),
@@ -739,12 +742,12 @@ mod tests {
 
         // ④ 商人列表路径（宿主 `spawn_merchants` 的预抽 = `World::merchant_ctor_run_delay`）。
         {
-            let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
             world.clock_ms = 0;
             world.rng = RandomNumber::with_seed(seed);
             let got_run = world.merchant_ctor_run_delay();
             let mut refr = RandomNumber::with_seed(seed);
-            let e = mir2_world::BaseAnimalCtorDraws::draw(&mut refr);
+            let e = mir2_world_bevy::BaseAnimalCtorDraws::draw(&mut refr);
             assert_eq!(
                 got_run,
                 i64::from(e.run_tick_delta),
@@ -769,7 +772,7 @@ mod tests {
             to_spawn(&info("A", NpcType::Merchant, "0", 2, 2, 0, 8), 0),
             to_spawn(&info("B", NpcType::Merchant, "0", 2, 2, 0, 8), 0),
         ];
-        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
         let (kept, _) = place_npcs(&mut world, spawns);
         assert_eq!(kept, 2);
 
@@ -810,7 +813,7 @@ mod tests {
                 .0,
         )
         .unwrap();
-        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
         let mut book = MerchantScriptBook::new(30);
         let mut displays = DisplayTable::new();
         let report = place_fixed_npcs_with_scripts(
@@ -891,7 +894,7 @@ mod tests {
     fn missing_file_yields_zero_npcs() {
         let f = fixture();
         let loader = MapLoader::new(f.base.clone(), "Map", "Envir");
-        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
         if let Some(npcs) = load_npcs_file(&loader).unwrap() {
             let (spawns, _) = build_npc_spawns(&npcs, |n| f.registry.id_of(n));
             let _ = place_npcs(&mut world, spawns);
@@ -971,7 +974,7 @@ mod tests {
         let mut book = MerchantScriptBook::new(30);
         let mut failures = Vec::new();
         let mut missing = Vec::new();
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         let mut rng = std::mem::replace(&mut world.rng, RandomNumber::with_seed(1));
         {
             let mut rename_rand = |min: i32, max: i32| rng.get_random_number(min, max);
@@ -1043,7 +1046,7 @@ mod tests {
                 8,
             ),
         ];
-        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
         let mut book = MerchantScriptBook::new(30);
         let mut displays = DisplayTable::new();
         let report = place_fixed_npcs_with_scripts(

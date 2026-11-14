@@ -123,11 +123,11 @@
 use mir2_data::models::StdItem;
 use mir2_envir::makeitem::MakeItemRegistry;
 use mir2_formula::shop::{self, ItemPrice, PriceTables, ShopConfig, StdItemSource};
-use mir2_world::castle::UserCastle;
-use mir2_world::castle_tax::{
+use mir2_world_bevy::castle::UserCastle;
+use mir2_world_bevy::castle_tax::{
     merchant_tax_intent, CastleTaxConfig, IncRateGoldOutcome, MerchantTaxIntent, MerchantTaxTarget,
 };
-use mir2_world::merchant::{
+use mir2_world_bevy::merchant::{
     GetBackupgWeaponOutcome, MerchantFlags, MerchantItem, UpgradeWaponOutcome,
 };
 
@@ -1657,7 +1657,7 @@ fn recalc_weight(catalog: &dyn ItemCatalog, item_list: &[BagItem]) -> u16 {
 // ───────────────────── 武器升级 NPC 接缝（`@upgradenow` / `@getbackupgnow`） ─────────────────────
 //
 // oracle：`Merchant.cs:883`（`@upgradenow` → `UpgradeWapon`）/ `:890`（`@getbackupgnow` →
-// `GetBackupgWeapon`）。判定/状态迁移/RNG 全在 `mir2_world::merchant`（**宿主不抽数**）；
+// `GetBackupgWeapon`）。判定/状态迁移/RNG 全在 `mir2_world_bevy::merchant`（**宿主不抽数**）；
 // 本接缝只做「世界结果 → 帧 + 跳转标签」，并把宿主必须执行的动作钉在 [`UpgradeOutcome`]。
 
 /// `ScriptFlagConst.sUPGRADENOW`（`ScriptFlagConst.cs:52`）。
@@ -3573,7 +3573,7 @@ mod tests {
     }
 
     fn castle(name: &str) -> UserCastle {
-        UserCastle::new(name, mir2_world::castle::CastleSiegeConfig::default())
+        UserCastle::new(name, mir2_world_bevy::castle::CastleSiegeConfig::default())
     }
 
     fn tax_merchant(

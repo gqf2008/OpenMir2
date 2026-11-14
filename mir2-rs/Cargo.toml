@@ -8,7 +8,6 @@ members = [
     "tools/replay",
     # D 线：数据层 + 数值公式
     "crates/shared",
-    "crates/world",
     "crates/world-bevy",
     # G11 跨服（Planes）线协议编解码：逐字节对齐 C# PlanesServer / PlanesClient
     "crates/planes",

@@ -1,0 +1,18383 @@
+//! 世界 tick 循环 —— 对齐 C# `GameSvr/Word/WorldServer.cs::ProcessHumans` 的 **200ms** 节拍
+//!（`WorldServer.cs:487`：`if ((HUtil32.GetTickCount() - ProcessLoadPlayTick) > 200)`）。
+//!
+//! 本骨架的边界（与设计文档 §4.2 一致）：
+//! - **单线程串行**：`World` 只在创建它的线程上推进；`tick()` 每次校验线程 id（判据③）；
+//! - **确定性**：时钟是**虚拟时钟**（`clock_ms`，每 tick +200），模拟逻辑不读墙钟；
+//!   实体处理顺序 = 槽位顺序（= 插入顺序），命令按 FIFO 处理；随机源是**同种子**的
+//!   `RandomNumber`（与 C# 侧按同一调用顺序消费）；
+//! - 不实现 M1 的边界服务（登录/网关/DBSrv），只做世界内的 tick/实体/地图/AOI/会话/战斗。
+
+use std::collections::{HashMap, VecDeque};
+use std::thread::ThreadId;
+use std::time::Instant;
+
+use crate::{
+    advance_clock_system,
+    tick::{StageEntities, StageSpec, StageTrace},
+    Appearance, BuffState, CombatAttribution, DupState, Flags, LifeCycle, PlayerRunState,
+    TickClock, TickOwnerThread, TickRunner, TickStage, Transform, Vitals,
+};
+use bevy_ecs::prelude::ResMut;
+use bevy_ecs::system::IntoSystem;
+use mir2_data::models::{MonsterDropItem, StdItem, STRING_GOLD_NAME};
+use mir2_formula::drop::{ItemNumberCounter, VecItemCatalog};
+use mir2_shared::rng::RandomNumber;
+
+use crate::aoi::CELL_OBJECT_EXPIRE_MS;
+use crate::buff::{
+    BuffSysMsg, BuffSystem, BuffTickOutcome, BuffType, BUFF_EPOCH_MS, BUFF_PASSES_PER_TICK,
+    BUFF_PASS_INTERVAL_MS, MAX_STATUS_ATTRIBUTE,
+};
+use crate::combat::{
+    attack_dir_grouped_poison_ws, generate_drops, get_exp_raw, swing_power, win_exp, AttackOutcome,
+    AttackPoisonState, AttackPowerMode, CombatConfig, WeaponWearEvent,
+};
+use crate::entity::{EntitySpawn, EntityStore, PvpView, StageSnapshotExt};
+use crate::map::{CellType, FloorItemKind, MapGrid, MapRouteSpec};
+use crate::session::SessionRegistry;
+
+/// C# `ProcessHumans` 的节拍（毫秒）。
+pub const TICK_INTERVAL_MS: i64 = 200;
+
+/// `MagicConst.SKILL_HANGMAJINBUB`（`src/Modules/SystemModule/Const/MagicConst.cs:60`）——幽灵盾。
+/// 效果体走 `MagMakeDefenceArea(..., btState = 1)` ⇒ `MagDefenceUp`（`MagicManager.cs:352-357`）。
+pub const SKILL_HANGMAJINBUB: u16 = 14;
+/// `MagicConst.SKILL_DEJIWONHO`（`MagicConst.cs:64`）——神圣战甲术。
+/// 效果体走 `MagMakeDefenceArea(..., btState = 0)` ⇒ `DefenceUp`（`MagicManager.cs:359-365`）。
+pub const SKILL_DEJIWONHO: u16 = 15;
+/// `MagicConst.SKILL_SHIELD`（`MagicConst.cs:128`）——魔法盾。
+/// 效果体走 `MagBubbleDefenceUp` ⇒ `MagicShield`（`MagicManager.cs:472-478`）。
+pub const SKILL_SHIELD: u16 = 31;
+
+/// **P3-B3** 六魔号（按 `MagicConst.cs` 的 ID 钉死；中文名见合同 §1.1）。
+pub const SKILL_HOLYSHIELD: u16 = 16; // `MagicConst.cs:68` 捆魔咒（部署名「困魔咒」）
+pub const SKILL_CLOAK: u16 = 18; // `MagicConst.cs:76` 隐身术
+pub const SKILL_BIGCLOAK: u16 = 19; // `MagicConst.cs:80` 集体隐身术
+pub const SKILL_SHOWHP: u16 = 28; // `MagicConst.cs:116` 心灵启示
+pub const SKILL_KILLUNDEAD: u16 = 32; // `MagicConst.cs:132` 圣言术
+pub const SKILL_UNAMYOUNSUL: u16 = 40; // `MagicConst.cs:140` 解毒术常量（部署行「十方斩」）
+
+/// 世界 tick 里排队执行的命令。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    /// 进入世界（会话建立后）
+    Enter { actor_id: i32 },
+    /// 离开世界（掉线/小退）
+    Leave { actor_id: i32 },
+    /// 走一步（服务端做格子校验后更新坐标）
+    Walk { actor_id: i32, dx: i32, dy: i32 },
+    /// 攻击（`_Attack` 一次结算 + 命中者登记）——`combat.json` 场景用它把 `_Attack` 的 RNG 面纳入 golden
+    Attack { actor_id: i32, target_id: i32 },
+    /// 脚本化击杀：直接调用目标 `Die()`（本骨架以 HP=0 + 一次性 `die_called` 标记承载；
+    /// 战斗伤害只写 HP，不置该标记）
+    Kill { target_id: i32 },
+    /// 生成怪物（掉落在地图生成时按 C# 时机预算）
+    SpawnMonster {
+        id: i32,
+        name: String,
+        x: i32,
+        y: i32,
+        map_id: usize,
+        level: u8,
+        exp: i32,
+        hp: u16,
+        dc: u16,
+        ac: u16,
+        undead: u8,
+        /// `HitPoint` / `SpeedPoint`（命中判定用；缺省照 `BaseObject` 构造 = 5 / 15）
+        hit_point: u8,
+        speed_point: u8,
+        drop_list: Vec<MonsterDropItem>,
+    },
+    /// **出站接线片 W2**：被推（`BaseObject.CharPushed`，`src/M2Server/Actor/BaseObject.cs:854-901`）。
+    /// `dir` = `nDir`（推进方向）、`count` = `nPushCount`。tick 里逐格推进并记 [`crate::action::PushEvent`]。
+    Push { actor_id: i32, dir: u8, count: u8 },
+    /// **出站接线片 W2**：野蛮冲撞（`PlayObject.DoMotaebo` 的**无正前目标**支，
+    /// `src/M2Server/Player/PlayObject.Base.cs:1443-1467`）。`dir` = `nDir`、`steps` = `_MAX(2, level+1)`。
+    Rush { actor_id: i32, dir: u8, steps: i32 },
+    /// **出站接线片 W2**：宰杀（`PlayObject.ClientGetButchItem` 的转发，`PlayObject.Operate.cs:702-750`）。
+    /// `dir` = 已解析的 `Dir`（目标 2 格内且有效 ⇒ `btDir`，否则当前朝向；解析在宿主 `CM_BUTCH` 门面）。
+    Butch { actor_id: i32, dir: u8 },
+    /// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：屠宰**效果体**（`PlayObject.Operate.cs:716-745`）。
+    ///
+    /// 宿主 `CM_BUTCH` 门面在 `client_butch` 判定「进入效果体」后、`Command::Butch` **之前**入队
+    /// （oracle 次序：效果体 `:718-745` 先于 `RM_BUTCH` `:749`）。世界 tick 在本命令里按
+    /// **oracle 同序同模**抽两次随机数（`Random(16)+5` → `Random(201)+100`），改目标尸体的
+    /// `body_leathery`/`meat_quality`/`skeleton`，命中骨架支时记 [`crate::action::SkeletonEvent`]。
+    ///
+    /// 门**在 tick 里重查**（不采信宿主入队时刻的快照）：`|nX-CurrX|<=2`、目标在该格、
+    /// `Death && !Skeleton && Animal`——与 oracle 同一条链；门不过 ⇒ **零抽数**。
+    ButchEffect {
+        /// 屠宰者（`this`）——只用于 `|Δ|<=2` 门与效果体末尾的 `DeathTick = now`（`:744`）。
+        actor_id: i32,
+        /// 目标尸体（`CM_BUTCH` 的 `charId` = `processMsg.nParam1` = 客户端 `recog`）。
+        target_id: i32,
+        /// `nX` / `nY`（`CM_BUTCH` 的 `param`/`tag`）= `Envir.IsValidObject` 的判格。
+        n_x: i32,
+        n_y: i32,
+    },
+}
+
+/// `PlayObject.Run` 状态到期事件（`PlayObject.Message.cs:54-64`）。
+///
+/// 事件按 oracle 的**发出顺序**记录：烈火到期 = `SysMsg(SpiritsGone)` → `SendSocket("+UFIR")`；
+/// 双龙到期 = `SendSocket("+UTWN")`。`SendSocket(string)` 走短包（`'#' + 正文 + '!'`，
+/// 见 `mir2_protocol::frame`）；帧面由宿主 `bins/game-svr` 按本记录出。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RunStateExpiry {
+    /// `SysMsg(MessageSettings.SpiritsGone, MsgColor.Red, MsgType.Hint)`（`:56`）——
+    /// `SpiritsGone = "召唤烈火结束!!!"`（`SystemModule/MessageSettings.cs:60`）。
+    SpiritsGone,
+    /// `SendSocket("+UFIR")`（`:58`）。
+    FireHitSocket,
+    /// `SendSocket("+UTWN")`（`:63`）。
+    TwinHitSocket,
+}
+
+/// `DropUseItems` 的一条删除记录：`(装备槽, ItemName, MakeIndex)`。
+///
+/// `ItemName` 在第一段（`ItemDesc & 8`）恒空串（oracle `DeleteItem.ItemName` 缺省 null）。
+pub type UseItemDeletion = (usize, String, i32);
+
+/// **Lane B（城堡实体挂图）**：本 tick 由门/墙状态机产生的一条结构事件（顺序 = oracle 调用序）。
+///
+/// `event` 的 `SetMapXyFlag` 在**产生时**就已按序作用到 `World.maps[map_id]`
+/// （oracle `Envir.SetMapXyFlag`）；本记录保留原始序供帧排水/判据（尤其 B-15：
+/// `LowWall` 格无法被后续 `walk=true` 恢复 ⇒ 重放 `apply_structure_events` 的 changed 数可判）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CastleStructureAt {
+    /// `World.castles` 的下标。
+    pub castle_index: usize,
+    /// 事件作用的 `map_id`。
+    pub map_id: usize,
+    /// 门/墙的一次副作用。
+    pub event: crate::castle::StructureEvent,
+}
+
+/// `ItemLocation.Weapon`（`src/OpenMir2/Enums/ItemLocation.cs:11`）：`UseItems` 的武器位。
+pub const ITEM_LOCATION_WEAPON: usize = 1;
+/// `ItemLocation.RighThand`（`src/OpenMir2/Enums/ItemLocation.cs:16`）：`UseItems` 的右手位
+/// （火把/蜡烛，`UseLamp` 的结算槽）。
+pub const ITEM_LOCATION_RIGHTHAND: usize = 2;
+/// `ItemAttr.WeaponUpgrade`（`src/OpenMir2/Packets/ClientPackets/ClientUserItem.cs:11`）。
+pub const ITEM_ATTR_WEAPON_UPGRADE: usize = 10;
+/// `EfftypeConst.EFFECTIVE_HIGHLEVEL`（`src/M2Server/Actor/ActorConst.cs:43`）——
+/// `GetMyLight()` 的等级基线门（`PlayObject.cs:5404-5425`）。
+pub const EFFECTIVE_HIGHLEVEL: u8 = 50;
+
+/// `UseLamp()` 的一次 `RM_LAMPCHANGEDURA` 自投递（`PlayObject.Message.cs:2265` / `:2274`）。
+///
+/// `Recog` 的线上口径（v2 订正）：处理器 `PlayObject.Message.cs:1843` 写的是
+/// `SendDefMessage(SM_LAMPCHANGEDURA, processMsg.nParam1, 0, 0, 0)`，而
+/// `SendDefMessage(short wIdent, int nRecog, int nParam, int nTag, int nSeries)`
+/// （`PlayObject.Socket.cs:17`）的第 2 实参就是 **`Recog`** ⇒ **`Recog = Dura`、`Param = 0`**。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct LampDuraChange {
+    /// 收件人（`SendMsg` 只投自己，`BaseObject.Message.cs:152-183`）。
+    pub actor_id: i32,
+    /// 线上 `Recog`：燃尽支 = `0`（`:2265`）；千位变化支 = 当前 `Dura`（`:2274`）。
+    pub recog: i32,
+}
+
+/// `CheckWeaponUpgrade` 的两个分支（`src/M2Server/Player/PlayObject.cs:4110-4144`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WeaponUpgradeOutcome {
+    /// `UseItems[Weapon].Index == 0`（`:4118`）⇒ `SendRefMsg(RM_BREAKWEAPON)`（`:4121`）。
+    Broke,
+    /// 升级成功（`:4130`）⇒ `SendUpdateItem` + `RM_ABILITY/RM_SUBABILITY`（本卡不扩范围）。
+    Refined,
+}
+
+/// 一次武器升级结算事件（见 [`TickRecord::weapon_breaks`]）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeaponUpgradeEvent {
+    pub actor_id: i32,
+    pub outcome: WeaponUpgradeOutcome,
+}
+
+/// `HUtil32.Round(double)`（`System.Math.Round(x, MidpointRounding.AwayFromZero)`）——值域非负。
+#[must_use]
+fn hutil_round(v: f64) -> i32 {
+    v.round() as i32
+}
+
+/// `TickRecord::hides` 观察者类别（**可观测性标注**；不参与帧集合/顺序）。
+///
+/// `hides` 的生产点 = [`World::tick_tail`] 的 AOI 自扫循环，观察者分三类：
+/// - `Player`：`race == ACTOR_RACE_PLAY && !ghost && !is_clone` 且过 `SearchTime` 门的真玩家；
+/// - `NonPlayer`：`!ghost && crate::monai::monster_self_scans(e)` 的自扫怪
+///   （Guard / ArcherGuard / SlaveMonster / 下属；`WorldServer.MonGen.cs:300-313`）；
+/// - `Clone`：`PlayCloneObject`（`spawn_clone` 造出，`race == PLAY`、`!ghost`、`is_clone`）
+///   ——**玩家型但无真实客户端会话**，不进 `OnlineRegistry`。
+///
+/// 只有真玩家会在 `OnlineRegistry` 里登记；非玩家自扫怪与克隆体**不在** ⇒ 宿主对
+/// 「无在线网关坐标」的处理必须按类别分流：后两类是预期噪声，玩家缺失才是真丢帧（卡
+/// `openmir2-aoi-disappear-observer-scope`，tier=R）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HideObserverKind {
+    Player,
+    NonPlayer,
+    Clone,
+}
+
+/// 一个 tick 的处理记录（判据①：断言"谁、按什么顺序"被处理）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct TickRecord {
+    pub tick_seq: u64,
+    pub clock_ms: i64,
+    /// 按处理顺序记录的 `(actor_id, 结果)`；`result` = 移动是否成功 / 进出是否成功 / 攻击是否命中
+    pub processed: Vec<(i32, bool)>,
+    /// 本 tick 执行的 AOI 刷新顺序（按地图、再按槽位顺序）
+    pub aoi_order: Vec<i32>,
+    /// 本 tick 的攻击结算（对拍用）
+    pub attacks: Vec<(i32, i32, AttackOutcome)>,
+    /// **卡 `openmir2-weapon-durability-frames`（tier=R）**：本 tick `CheckWeaponUpgrade`
+    /// （`src/M2Server/Player/PlayObject.cs:4110`）的结算结果，按攻击结算序。
+    ///
+    /// 生产点：`PlayObject.Attack.cs:25-31` 的 `AttackDir`——门是
+    /// `UseItems[Weapon].Index > 0 && Desc[WeaponUpgrade] > 0` **且 `attackTarget != null`**
+    /// （空挥不算）。`Index == 0` 分支（`:4118-4121`）⇒ `SendRefMsg(RM_BREAKWEAPON)`；
+    /// 升级成功分支（`:4130`）⇒ `SendUpdateItem` + `RM_ABILITY/RM_SUBABILITY`（本卡不扩范围）。
+    /// 宿主据 [`WeaponUpgradeOutcome::Broke`] 出 `SM_BREAKWEAPON(1102)`。
+    pub weapon_breaks: Vec<WeaponUpgradeEvent>,
+    /// **卡 `openmir2-attack-weapon-wear-642`（tier=R）**：本 tick `PlayObject.AttackSuccess`
+    /// （`PlayObject.Attack.cs:225-229`）的武器耐久磨损，按攻击结算序。
+    ///
+    /// 生产点：[`World::attack_once`] → [`crate::combat::attack_dir_grouped_poison_ws`] 的
+    /// [`crate::combat::attack_success_weapon_wear`]（只对**玩家攻方**、且本次攻击**有目标**；
+    /// 空挥走 `attack_swing` ⇒ 不结算）。宿主按 [`WeaponWearEvent::frames`] 的发帧序出
+    /// `SM_DELITEM(202)`（`SendDelItems` 直发）与 `SM_DURACHANGE(642)`。
+    pub weapon_wears: Vec<WeaponWearEvent>,
+    /// 本 tick 的死亡结算：`(死者 id, 掉落物品数, 金币, 经验归属者, 获得经验)`
+    /// —— 归属者取 C# `ExpHitter`（不是 `LastHiter`），见 `Entity::exp_hitter`
+    pub deaths: Vec<(i32, usize, i32, Option<i32>, i32)>,
+    /// **`openmir2-player-drop-useitems`**：本 tick 玩家死亡 `DropUseItems`
+    /// （`PlayObject.Message.cs:2152-2228`）的删除列表，按死亡结算序：
+    /// `(玩家 id, [(装备槽, 物品名 GBK 字节, MakeIndex)])`。
+    ///
+    /// `ItemName` 只在第一段（`ItemDesc & 8`）为空串——oracle 那里只填 `MakeIndex`
+    /// （`PlayObject.Message.cs:2170`），`SendDelItemList` 拼成 `"/MakeIndex/"`。
+    pub death_use_item_drops: Vec<(i32, Vec<UseItemDeletion>)>,
+    /// 本 tick 的**经验归属**（oracle `BaseObject.cs:2429 KillFunc` → `RM_PLAYERKILLMONSTER`
+    /// → `PlayObject.cs:1632 KillTargetTrigger`）：
+    /// `(获得者 id, 本次获得, 是否进入升级块, 升级后等级)`。
+    /// 与 `deaths` 的 5 元组不同，这里把 `ExpHitter.Master`（宠物/下属击杀给主人）与
+    /// `ExpHitter` 本人**都**列出——oracle 对二者**各发一条** `RM_PLAYERKILLMONSTER`
+    /// （`BaseObject.cs:2434-2444`）。供宿主出 `SM_WINEXP(44)`；第 3 位 = `GetExp`
+    /// （`PlayObject.Base.cs:149-165`）是否进了 `Abil.Exp >= Abil.MaxExp` 块（满级也置位），
+    /// 宿主据此出升级链（`SM_LEVELUP(45)`/`SM_ABILITY(52)`/`SM_SUBABILITY(752)`/`SM_HEALTHSPELLCHANGED(53)`）。
+    pub exp_awards: Vec<(i32, i32, bool, u8)>,
+    /// **M3⑤-实现 2 第②片**：本 tick 的商人 `ProcessMerchants` 结果。
+    pub merchants_run: Vec<i32>,
+    /// 本 tick `Merchant.Run` 的 `TurnTo`：`(merchant_id, dir)`（`RM_TURN`；帧面归 ⑤-4）。
+    pub merchant_turns: Vec<(i32, u8)>,
+    /// 本 tick 商人 `RM_HIT` 的 id。
+    pub merchant_hits: Vec<i32>,
+    /// **卡 `openmir2-castle-merchant-disappear-downlink`**：本 tick 商人
+    /// `RM_DISAPPEAR`（`Merchant.cs:147`）的 `(商人 id, 发帧时刻收件人快照)`。
+    ///
+    /// 收件人在**发帧时刻**由 [`crate::merchant::merchant_run`] 格扫快照（`SendRefMsg` 冷路径，
+    /// ±`SEND_REF_MSG_RANGE`、`Race==Play && !Ghost`）——oracle `:148` 紧接其后就置
+    /// `FixedHideMode = true`，排水时实体已隐藏 ⇒ 宿主不得按当前状态重算收件人。
+    pub merchant_disappears: Vec<(i32, Vec<i32>)>,
+    /// 本 tick 商人 `MapRandomMove` 的 id。
+    pub merchant_space_moves: Vec<i32>,
+    /// 本 tick 被 Ghost 60s 门移除的商人 id。
+    pub merchant_removed: Vec<i32>,
+    /// **世界 tick 扩容首批（T3）**：本 tick 的固定 NPC `ProcessNpcs` 结果。
+    pub npcs_run: Vec<i32>,
+    /// 本 tick NPC `Run` 的 `TurnTo`：`(npc_id, dir)`（`RM_TURN`；帧面归 B-4）。
+    pub npc_turns: Vec<(i32, u8)>,
+    /// 本 tick NPC `RM_HIT` 的 id。
+    pub npc_hits: Vec<i32>,
+    /// 本 tick 被 Ghost 60s 门移除的 NPC id。
+    pub npc_removed: Vec<i32>,
+    /// **M3⑦-实现 2 F-1**：本 tick 死亡触发的组队帧。
+    ///
+    /// oracle `PlayObject.Die()`（`src/M2Server/Player/PlayObject.cs:1964-1978`）在置 `Death` 之后、
+    /// `base.Die()` 之前判 `if (GroupOwner != 0) groupOwnerPlay.DelMember(this)`（`:1975-1977`）
+    /// ⇒ 死亡者立即退组（团长死亡 ⇒ 整组散）。事件序 = [`crate::party::PartyEvent`] 的
+    /// 「立即帧 → `MsgQueue` 出队序」，由宿主（`bins/game-svr`）逐条回帧。
+    pub party_events: Vec<crate::party::PartyEvent>,
+    /// **M3⑨ 主人死/幽灵自投递**：本 tick **到点投递**的自身延时消息（oracle `PlayObject.Operate`
+    /// 的 `RM_MASTERDIEMUTINY` / `RM_MASTERDIEGHOST` 支）。
+    ///
+    /// 帧面（`RefNameColor` ⇒ `RM_CHANGENAMECOLOR` / `RefShowName` ⇒ `RM_USERNAME`）不在
+    /// `crates/world` 层（见 `crate::slave` 模块头），宿主据本记录出帧或登记 `not_verified`。
+    pub slave_self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
+    /// **P3-B5**：本 tick 的 `ExtraAbil` 过期/到期前 10s 事件（`PlayObject.Message.cs:163-227`）。
+    pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
+    /// **PL-1 硬前置**：`BaseObject.Run` 的 HP/MP 超上限钳制段
+    /// （`BaseObject.Base.cs:230-245`，30s `VerifyTick` 门内、`VerifyMapTime` 之后）
+    /// 触发的**玩家** `HealthSpellChanged()`：`(actor_id, hp_after, mp_after)`，保序。
+    ///
+    /// 宿主据此出 `SM_HEALTHSPELLCHANGED(53)` 的**第一支**（`Race == Play` 的 `SendUpdateMsg`；
+    /// 第二支 `ShowHp` 没有 race 门，见 [`TickRecord::show_hp_health_changes`]）。
+    /// `(actor_id, hp_after, mp_after, hp_clamped, mp_clamped)`：两个 flag 分别对应 oracle
+    /// 的 `if (WAbil.HP > WAbil.MaxHP)` / `if (WAbil.MP > WAbil.MaxMP)` 分支——宿主按 flag
+    /// 把**该字段**写成 `Max-1`（P8 钳制在 P7 填充/扣血之后），未被钳制的字段保留 P7 终值。
+    /// 该段不消费 RNG ⇒ 五批 trace 不变。
+    pub verify_health_changes: Vec<(i32, u16, u16, bool, bool)>,
+    /// **卡 `openmir2-monster-showhp-53-broadcast`**：本 tick **非 Play** 实体（怪物/NPC/守卫）
+    /// 的 `HealthSpellChanged()` **第二支**（`BaseObject.cs:706-708`
+    /// `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)`）每次调用记
+    /// `(actor_id, hp_after, mp_after)`，保序。
+    ///
+    /// oracle 的第二支**没有 race 门**：`ShowHp == true`（心灵启示 28 的
+    /// `MakeOpenHealth`，`BaseObject.cs:944-950`）时，怪/NPC 的恢复
+    /// （`BaseObject.Base.cs:55/:68`）、负体力扣血（`:109`）、魔法受击
+    /// （`BaseObject.cs:628`）、毒伤（`ActorBuffSystem.cs:255`）与超上限钳制
+    /// （`BaseObject.Base.cs:230-245`）都会向 ±`SendRefMsgRange`(12) 的玩家广播 53。
+    ///
+    /// 本字段**只装非会话实体**：玩家路径由宿主会话 `WAbil`/`HealthSpellSlots` 出帧
+    /// （`SendUpdateMsg` 自见 + 第二支自发副本），装进来会重复。宿主按每条一次
+    /// `SendRefMsg` 向观察者发同一字节的 53（载荷 = 该 actor 的 `HP/MP/MaxHP`）。
+    pub show_hp_health_changes: Vec<(i32, u16, u16)>,
+    /// **Lane B（城堡实体挂图）**：本 tick 门/墙状态机（race 110/111 的 `Run` + 门死亡掩码）
+    /// 产生的结构事件，保序。`SetMapXyFlag` 已同步作用到 `MapGrid`；`Ref*` 已转成
+    /// `MonsterRefMsg`（`RM_DIGUP/DIGDOWN/TURN/ALIVE`）由宿主排水出帧。
+    pub castle_structures: Vec<CastleStructureAt>,
+    /// **出站接线片 W2**：本 tick 的 `RM_PUSH` 族（`SM_BACKSTEP(9)`）——`CharPushed` 每推进一格一条，保序。
+    ///
+    /// 两个来源共用本表（顺序 = 先命令 FIFO、后玩家 `Run` 的重叠推挤段）：
+    /// ① `Command::Push`（`World::push_now`）；② `World::check_dup_obj`（`PlayObject.Message.cs:283`）。
+    pub pushes: Vec<crate::action::PushEvent>,
+    /// **出站接线片 W2**：本 tick 的 `RM_RUSH`/`RM_RUSHKUNG` 族（`SM_RUSH(6)`/`SM_RUSHKUNG(7)`）——
+    /// `DoMotaebo` 每成功推进一格一条 `Rush`，末尾若有则追加一条 `RushKung`，保序。
+    pub rushes: Vec<crate::action::RushEvent>,
+    /// **出站接线片 W2**：本 tick 的 `RM_BUTCH` 族（`SM_BUTCH(637)`）——每次 `ClientGetButchItem` 一条。
+    pub butches: Vec<crate::action::ButchEvent>,
+    /// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：本 tick 屠宰效果体产出的 `RM_SKELETON`
+    /// （`PlayObject.Operate.cs:736`，以**尸体自己**为发送者）。
+    ///
+    /// 只在「`body_leathery` 打到 0 **且** race ∈ `[Animal(50), Monster(80))`」时出现；
+    /// 宿主按 `SM_SKELETON(33)` 出帧，收件人 = `SendRefMsg` 的 ±12 格 `Race==Play && !Ghost`
+    /// （`BaseObject.Message.cs:383-475`）。队内优先级：`(byte)RM_SKELETON(10024)=40` 先于
+    /// `(byte)RM_BUTCH(10119)=55`（`BaseObject.Message.cs:182` 的 `PriorityQueue` 最小先出）。
+    pub skeletons: Vec<crate::action::SkeletonEvent>,
+    /// **orphan 编码器接线首批**：本 tick 各观察者「离开视野」的对象
+    /// （`(观察者 id, 离开者 id)`，保序 = AOI 移除顺序）。
+    ///
+    /// 对应 oracle `PlayObject.Run()` 的 `VisibleFlag.Hidden` 支（`src/M2Server/Player/PlayObject.cs:3214-3222`）：
+    /// 观察者 `SendMsg(baseObject, RM_DISAPPEAR, 0, 0, 0, 0)` 走的是 **6 参**重载
+    /// `SendMsg(IActor baseObject, int wIdent, …)`（`BaseObject.Message.cs:98`）——它把
+    /// `SendMessage.ActorId` 置为 **`baseObject.ActorId` = 离开者**的 ActorId（**不是** `this`）；
+    /// 帧经**观察者自己**的消息队列发出 ⇒ 收件人 = 观察者，`Recog` = 离开者。
+    /// 由 [`crate::aoi::search_view_range`] 的返回值填充；帧面由宿主（`bins/game-svr`）出。
+    pub hides: Vec<(i32, i32)>,
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：本 tick `hides` 各事件的观察者
+    /// 类别，`(观察者 id, 离开者 id, 类别)`；按 `(observer, target)` 查（顺序非契约）。
+    ///
+    /// `hides` 本体语义/顺序不变，本字段只做**可观测分类**（玩家 / 非玩家自扫怪），供宿主
+    /// （`bins/game-svr::drain_aoi_disappear`）把「非玩家自扫怪不在 OnlineRegistry」从
+    /// 「玩家观察者缺失（真丢帧）」里分流出来。缺标注时宿主按 `Player` 处理（fail-safe loud）。
+    pub hide_observer_kinds: Vec<(i32, i32, HideObserverKind)>,
+    /// **卡 `openmir2-map-event-frames`**：本 tick 各玩家观察者「离开事件视野」的
+    /// `(观察者 id, 事件下标, nX, nY)`（保序 = 下标升序移除序）。
+    ///
+    /// 对应 oracle `PlayObject.cs:3275-3279` 的 `VisibleFlag.Hidden` 支：
+    /// `SendMsg(RM_HIDEEVENT, 0, mapEvent.Id, mapEvent.nX, mapEvent.nY)` ⇒ 宿主出
+    /// `SM_HIDEEVENT(805)`（`PlayObject.Message.cs:1992-1994`）。`nX/nY` 是观察者**首次**
+    /// 看到该事件时扫描的格子坐标；`Id` 恒 0（折叠）。只对玩家观察者产生（oracle 仅
+    /// `PlayObject.SearchViewRange` 处理 `CellType.Event`）。由
+    /// [`crate::aoi::search_view_range_events`] 填充；帧面由宿主出。
+    pub event_hides: Vec<(i32, usize, i32, i32)>,
+    /// **车道 B1（buff 系统）**：本 tick `StatusChanged()` 的结果 `(actor_id, 新 CharStatus)`，保序。
+    ///
+    /// oracle `ActorBuffSystem.Operate` 的 `boChg` 支（`ActorBuffSystem.cs:220-224`）⇒
+    /// `BaseObject.StatusChanged()`（`BaseObject.cs:1517-1520`）⇒ `RM_CHARSTATUSCHANGED(10139)`
+    /// ⇒ 宿主出 `SM_CHARSTATUSCHANGED(657)`（`PlayObject.Message.cs:1845-1846`）。
+    pub buff_status_changes: Vec<(i32, i32)>,
+    /// 本 tick buff 递减段对玩家发的 `SysMsg`：`(actor_id, msg)`。帧面（聊天/提示行）归接线层。
+    pub buff_sysmsgs: Vec<(i32, BuffSysMsg)>,
+    /// 本 tick buff 的 `boNeedRecalc` 触发的 `RecalcAbilitys()`：actor_id
+    /// （`RM_ABILITY` 帧面归能力层接线，deferred）。
+    pub buff_recalcs: Vec<i32>,
+    /// 本 tick buff 毒伤段每次 `HealthSpellChanged()`：`(actor_id, hp_after, mp_after)`，保序。
+    pub buff_health_changes: Vec<(i32, u16, u16)>,
+    /// 本 tick `PlayObject.Run` 的烈火/双龙到期事件（`PlayObject.Message.cs:54-64`）：
+    /// `(actor_id, 事件)`，按玩家槽位顺序、每个玩家内按 oracle 发出顺序（见 [`RunStateExpiry`]）。
+    pub run_state_expiries: Vec<(i32, RunStateExpiry)>,
+}
+
+/// **移动被拒原因**（卡 `openmir2-movefail-log-reason`，`L` 级：**纯日志分类，不参与判定**）。
+///
+/// 与 [`World::try_step_blocked_impl`] / [`World::cell_free_blocked_impl`] 的既有门一一对应；成功/失败集合
+/// 与改动前逐例相同（本枚举只把「为什么失败」带出来）：
+/// - [`StepBlock::Bounds`] —— 目标格越界（`MapGrid::cell_match` 为假；oracle
+///   `Envirnoment.MoveToMovingObject` 的首个 `CellMatch` 门）；
+/// - [`StepBlock::Terrain`] —— 目标格地形不可走（`cell.valid()` 为假 / `GetCellInfo` 的
+///   `cellSuccess` 为假），也含非玩家落点命中 `CellType::MapRoute` 的阻挡与 `EnterAnotherMap`
+///   目的地不可进的失败（日志词汇里最贴近的一类）；
+/// - [`StepBlock::Actor`] —— 目标格有活着的 actor（`!Ghost && !Death && !FixedHideMode && !ObMode`，
+///   与 `move_object` 的 `is_blocking` 同口径）；
+/// - [`StepBlock::Other`] —— 退化输入（`steps <= 0` / `(0,0)`）或 actor/地图缺失。
+///
+/// 日志字面量只由 [`StepBlock::reason`] 产出；客户端 lane（`ai-actor-avoid`）只解析
+/// `actor`/`terrain`/`bounds`。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StepBlock {
+    /// 目标格有活着的 actor 占位。
+    Actor,
+    /// 目标格地形不可走（或换图目的地不可进）。
+    Terrain,
+    /// 目标格越界。
+    Bounds,
+    /// 非上述三类（退化输入 / 内部缺失）；日志字面量 `other`。
+    Other,
+}
+
+impl StepBlock {
+    /// 日志字面量（**客户端只认 `actor`/`terrain`/`bounds`**；`other` 不属三类）。
+    #[must_use]
+    pub const fn reason(self) -> &'static str {
+        match self {
+            StepBlock::Actor => "actor",
+            StepBlock::Terrain => "terrain",
+            StepBlock::Bounds => "bounds",
+            StepBlock::Other => "other",
+        }
+    }
+}
+
+/// **L1 TransMap 触发**：`World::step_with_route` 的结果（供宿主排帧序）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StepOutcome {
+    /// 位移是否被接受。`false` = 底层 [`World::try_step_now`] 失败**或**落点格命中 `MapRoute` 且
+    /// `EnterAnotherMap` 门失败（已回滚到走前格，宿主不得发移动帧）。
+    pub moved: bool,
+    /// 是否发生换图（移动后落点格命中 `CellType::MapRoute` 且 `EnterAnotherMap` 门通过）。
+    pub changed_map: bool,
+    /// **`EnterAnotherMap` 已走进落地段、但 `AddToMap` 失败并回滚**（`PlayObject.cs:3787-3796`）。
+    ///
+    /// oracle 的前置门失败（等级/`NeedSetonFlag`/`CellValid`/城堡）**提前 `return false`**，
+    /// 不执行泡点计时复位；只有 `AddToMap` 失败的回滚支仍会走到
+    /// `AutoGetExpTick = GetTickCount()`（`:3796`）。宿主据本字段决定「回滚支也要复位」。
+    pub rolled_back: bool,
+    /// **卡 `openmir2-movefail-log-reason`**：本条移动被拒的原因（`moved == true` 时恒 `None`）。
+    /// **只用于日志分类**——不改变 `moved`/`changed_map`/`rolled_back` 的任何语义。
+    pub blocked: Option<StepBlock>,
+}
+
+/// [`World::route_enter`] 的结果：区分「无 route / 被门跳过」「成功换图」「`EnterAnotherMap` 失败」。
+///
+/// 对应 oracle `PlayObject.Walk` 覆写的 `result` 布尔（`PlayObject.cs:1851/1878`）：`Skipped`/`Switched`
+/// ⇒ `result == true`（发移动帧）；`Failed` ⇒ `result == false`（上游回滚、不发移动帧）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RouteOutcome {
+    /// 当前格无 `MapRoute`，或命中但被门跳过（非玩家 / `NEEDHOLE` 等）⇒ 无换图、不回滚。
+    Skipped,
+    /// 至少一条 `MapRoute` 的 `EnterAnotherMap` 成功 ⇒ 换图（终落点 = 最后一条成功者）。
+    Switched,
+    /// `EnterAnotherMap` 的**前置门**失败（`CellValid` 等，`PlayObject.cs:3721-3757`）⇒ 调用方
+    /// 回滚、不发移动帧；oracle 提前 `return false`，**不执行**泡点计时复位。
+    Failed,
+    /// 至少一条 `MapRoute` 已走进 `EnterAnotherMap` 的落地段，但 `AddToMap` 失败并回滚
+    /// （`PlayObject.cs:3787-3796`）⇒ 调用方回滚、不发移动帧；oracle **仍执行**
+    /// `AutoGetExpTick = GetTickCount()`。
+    RolledBack,
+}
+
+/// [`World::walk_route_check`] 的结果（`CM_TURN` 原地转身的路线检查）。
+///
+/// 与 [`StepOutcome`] 同口径：oracle `EnterAnotherMap` 的前置门失败提前 `return`（不复位），
+/// 只有 `AddToMap` 失败的回滚支仍走到 `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3796`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RouteCheck {
+    /// 无 route / 门跳过 / 前置门失败 ⇒ 未换图、不复位泡点时间。
+    NoMapChange,
+    /// 换图成功 ⇒ oracle 复位泡点时间。
+    Switched,
+    /// `EnterAnotherMap` 已进入落地段但 `AddToMap` 失败 ⇒ 回滚；oracle 仍复位泡点时间。
+    RolledBack,
+}
+
+/// **P3-B1（单体直击/骰门族）**：`DoSpell` 单个目标效果体的返回值（供共享尾与用例观察）。
+///
+/// `target` = oracle `:160-163` 死亡归一 + case 内可能再次置 null 之后，共享尾
+/// `RM_MAGICFIRE` 读的 `targetObject.ActorId`（`None ⇒ 0`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpellStrikeOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源（`None ⇒ 0`）。
+    pub target: Option<i32>,
+    /// `boTrain`（`true` 才可能在共享尾抽 `Random(3)+1`）。
+    pub bo_train: bool,
+    /// `RM_DELAYMAGIC` 的威力（宿主据此 `SendSelfDelayMsg`，入队零抽数）。
+    pub power: i32,
+    /// 是否排入 `RM_DELAYMAGIC`（`SendSelfDelayMsg`）。
+    pub delayed: bool,
+    /// `RM_DELAYMAGIC` 的延迟毫秒（600 / 13 的 1200）。
+    pub delay_ms: i32,
+    /// 44 的 `RM_DELAYPUSHED` 推挤格数（`push > 0` 时 oracle 才发）。
+    pub push: Option<u8>,
+}
+
+/// **P3-B2**：一条已入目标队列、尚未处理的 `RM_MAGSTRUCK(8044)`（`MagicManager.cs:1111/1138`）。
+///
+/// oracle 的 `targetObject.SendMsg(baseObject, RM_MAGSTRUCK, 0, nPower, 0, 0)` 进的是**目标自己的**
+/// `MsgQueue`（优先级 `(byte)8044 = 108`）；本仓记录后由宿主 `World::deliver_mag_struck` 按
+/// **入队序**逐目标完整处理（构造级判据口径，见合同 §4.2）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PendingMagStruck {
+    pub target_id: i32,
+    pub caster_id: i32,
+    /// `RM_MAGSTRUCK.nParam1` = 施法者算出的 `nPower`（24 的非不死目标已 `/10`）。
+    pub power: i32,
+    /// **P3-B5**：`true` = `RM_MAGSTRUCK_MINE`（22 火墙事件），`false` = `RM_MAGSTRUCK`
+    /// （9/10 穿透延迟帧 / 11/45 / B4 延迟魔法）。
+    ///
+    /// 两者共用处理器（`BaseObject.Base.cs:618-686`），唯一差别 = `Random(1000)` 只对
+    /// `RM_MAGSTRUCK` 生效（`:620` 的 `wIdent == RM_MAGSTRUCK` 门）。
+    pub mine: bool,
+    /// **宿主排水序**（消息创建序，`World::next_msg_order`）：oracle 的 `RM_MAGSTRUCK`
+    /// 进的是**目标自己的** `MsgQueue`，由 `ProcessMonsters` 的目标顺序泵出；本仓用一条
+    /// 批次列表替代，故把批内顺序**钉在创建序**（= 五批 RNG trace 基线的口径）。
+    /// **不参与**任何队列/战斗语义。
+    pub order: u64,
+}
+
+/// **P3-B2**：一条 `RM_MAGSTRUCK` 交付段处理后的观察值（`BaseObject.Base.cs:618-686`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MagStruckOutcome {
+    pub target_id: i32,
+    pub caster_id: i32,
+    /// `StruckDamage` 后的实际扣血（`nDamage > 0` 才非 0）。
+    pub damage: i32,
+    pub hp_after: u16,
+    /// `StruckDamage` 后的 `WAbil.MP`（53 的 `Tag`）。
+    pub mp_after: u16,
+    pub max_hp: u16,
+    /// 目标 `Race == ActorRace.Play`（第一支 `SendUpdateMsg` 的判据）。
+    pub is_player: bool,
+    /// 目标当时的 `ShowHp`（第二支 `SendRefMsg` 的判据；**无 race 门**）。
+    pub show_hp: bool,
+    /// 受击怪物自消息链是否产生 `RM_CHANGENAMECOLOR`（`!ObMode && !FixedHideMode`）。
+    pub name_color: bool,
+    /// `GetChrColor`（656 的 Param）。
+    pub chr_color: u8,
+}
+
+/// **P3-B2**：治疗族（2/29）效果体返回值。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HealingSpellOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源（2 的「目标为空/死亡 ⇒ 自己」已在此回落）。
+    pub target: Option<i32>,
+    /// 共享尾坐标（2 的死亡/空目标回落会把坐标改写为施法者坐标）。
+    pub tx: i32,
+    pub ty: i32,
+    /// `boTrain`：2 = `IsProperFriend && HP<MaxHP`；29 = 至少一个 `HP<MaxHP` 的 proper friend。
+    pub bo_train: bool,
+    /// `nPower`（`ceil(nPower/5)` 条恢复 53 的来源）。
+    pub power: i32,
+    /// 2 的 `IsProperFriend` 门是否通过（false ⇒ 0 抽、无 case 帧）。
+    pub allowed: bool,
+    /// 收到 `RM_MAGHEALING`（延迟 800）的目标（枚举序）。
+    pub healed: Vec<i32>,
+    /// 收到 `RM_ABILSEEHEALGAUGE` 的目标（2 单目标 / 29 全部 proper friend，不看 HP；枚举序）。
+    pub gauges: Vec<i32>,
+}
+
+/// **P3-B2**：AoE 族（23/24/33/47）效果体返回值。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AreaSpellOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源（死亡归一后的点击目标）。
+    pub target: Option<i32>,
+    /// 至少一个 `IsProperTarget`（与 `MSD` 后的伤害无关）。
+    pub bo_train: bool,
+    /// 施法者侧 `nPower`（24 的每目标 `/10` 在交付消息载荷里）。
+    pub power: i32,
+    /// `RM_MAGSTRUCK` 的目标（枚举序）。
+    pub targets: Vec<i32>,
+}
+
+/// **P3-B4**：6/48 的单目标施毒结果（`MagicManager.cs:235-252` / `:914-932`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PoisonStrikeOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源（proper 目标）。
+    pub target: Option<i32>,
+    /// 骰门通过且形状为 1/2（`Race == Play || >= Animal`）。
+    pub bo_train: bool,
+    /// 是否投了 `RM_POISON`。
+    pub poisoned: bool,
+    /// `nPower`（= `RM_POISON` 的 `nParam1`/时间）。
+    pub power: i32,
+    /// `PoisonState`（0=DECHEALTH 绿毒、1=DAMAGEARMOR 红毒）。
+    pub poison_type: u8,
+    /// `RM_POISON.nParam1`（时长 = `nPower`）。
+    pub time: i32,
+    /// `RM_POISON.nParam3`（中毒点）。
+    pub point: i32,
+}
+
+/// **P3-B4**：48 群体施毒的逐目标结果（枚举序）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupPoisonOutcome {
+    pub bo_train: bool,
+    pub targets: Vec<PoisonStrikeOutcome>,
+}
+
+/// **P3-B4**：50 `MabMabe` 的效果结果。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MabMabeSpellOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的 ActorId 来源。
+    pub target: Option<i32>,
+    /// `boTrain = MabMabe(...)`（完整成功臂才为 true）。
+    pub bo_train: bool,
+    /// case 级 4 抽算出的 `nPower`。
+    pub power: i32,
+    /// 成功臂 `GetMagStruckDamage` 后的 `nPower`（未成功臂为 0）。
+    pub msd_power: i32,
+    /// 玩家目标的 `SetPkFlag` ⇒ 656（由目标发，cast tick）。
+    pub name_color: Option<crate::slave::NameColorDelivery>,
+}
+
+/// **P3-B4**：42 `MagGroupLightening` 的逐目标载荷。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupLighteningTarget {
+    pub target_id: i32,
+    /// `RM_DELAYMAGIC` 的 `wParam`（不死系已 ×1.5）。
+    pub power: i32,
+}
+
+/// **P3-B4**：42 `MagGroupLightening` 的结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupLighteningOutcome {
+    /// helper `:987` 的 `RM_MAGICFIRE`（638）的 ActorId（= `targetObject.ActorId`）。
+    pub fire_target: i32,
+    /// 任一目标 `Race >= Animal`（`:1005-1008`）。
+    pub bo_train: bool,
+    /// 命中骰门并排入 `RM_DELAYMAGIC` 的目标（枚举序）。
+    pub targets: Vec<GroupLighteningTarget>,
+    /// `RM_10205` ⇒ `SM_716` 的坐标（每个非中心 proper 目标一条，枚举序）。
+    pub icons_716: Vec<(i32, i32)>,
+}
+
+/// **P3-B3**：16 `MagMakeHolyCurtain` 的结果（`MagicManager.cs:1146-1207`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HolyCurtainOutcome {
+    /// 共享尾 `RM_MAGICFIRE` 的坐标（= snap 后的点击点）。
+    pub tx: i32,
+    pub ty: i32,
+    /// 已求值的 `nPower`（`GetPower13(40) + GetRPow(SC)*3`；`*1000` 后作为 `wParam`）。
+    pub power: i32,
+    /// `Envir.CanWalk(tx,ty,true)` 是否通过（失败 ⇒ `result=0` 且零 helper 抽）。
+    pub can_walk: bool,
+    /// 收到 `RM_MAKEHOLYSEIZEMODE` 的对象（枚举序）。
+    pub eligible: Vec<i32>,
+    /// `result`（**最后一段连续合格对象**的数量；任一不合格对象会把已累计值归零）。
+    pub result: i32,
+}
+
+/// **P3-B3**：18 `MagMakePrivateTransparent` 的结果（`MagicManager.cs:673-699`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PrivateTransparentOutcome {
+    /// helper 是否走到收尾（`StatusTimeArr[8] > 0` ⇒ 早退 ⇒ **无 657**）。
+    pub status_changed: bool,
+    /// `GetCharStatus()`（657 的 `nParam1`）。
+    pub status: i32,
+    /// `StatusTimeArr[8] = (ushort)nHTime` 之后的值。
+    pub status_time: u16,
+}
+
+/// **P3-B3**：19 `MagMakeGroupTransparent` 的结果（`MagicManager.cs:1209-1228`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GroupTransparentOutcome {
+    pub n_h_time: i32,
+    /// 收到 `RM_TRANSPARENT`（800ms）的友方（枚举序）。
+    pub friends: Vec<i32>,
+    /// helper 返回值（至少一个合格友方 ⇒ true）。
+    pub result: bool,
+}
+
+/// **P3-B3**：28 `SKILL_SHOWHP` 的结果（`MagicManager.cs:431-442`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ShowHpOutcome {
+    /// `targetObject != null && !ShowHp` 门是否通过（false ⇒ 零抽、无 1100/640）。
+    pub gate_passed: bool,
+    /// `Random(6) <= Level + 3` 是否通过。
+    pub roll_passed: bool,
+    /// `boTrain`（门 + 骰都过才 true）。
+    pub bo_train: bool,
+}
+
+/// **P3-B3**：32 `MagTurnUndead` 的结果（`MagicManager.cs:827-856`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TurnUndeadSpellOutcome {
+    /// `(AnimalObject)target` 抛 `InvalidCastException`（target 是 `PlayObject` 且
+    /// `LA_UNDEAD`）——oracle 被 `PlayObject.Base.cs:1525-1529` 吞掉 ⇒ `DoSpell` 返回 false
+    /// ⇒ 恰一条 `SM_MAGICFIRE_FAIL(639)`、**无共享尾**。
+    pub invalid_cast: bool,
+    /// `boTrain`（`MagTurnUndead` 返回 true = `target.WAbil.HP = 0`）。
+    pub bo_train: bool,
+    /// `target.WAbil.HP == 0` 已被写入。
+    pub hp_zeroed: bool,
+}
+
+/// **P3-B3**：40 常量名解毒术（部署行「十方斩」）的结果（`MagicManager.cs:495-523`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UnamyounsulOutcome {
+    /// `IsProperFriend` 门是否通过（false ⇒ 零抽）。
+    pub allowed: bool,
+    /// `Random(7) - (Level + 1) < 0` 是否通过。
+    pub roll_passed: bool,
+    /// 任一计时器非 0 且置 1（`boTrain`）。
+    pub bo_train: bool,
+}
+
+/// **P3-B5**：一次穿透命中（`MagPassThroughMagic`，`BaseObject.cs:896-931`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PassThroughHit {
+    pub target_id: i32,
+    /// 本次命中投递的 `magPwr`（10 的 `undeadAttack` 会**逐击复合** ×1.5）。
+    pub power: i32,
+}
+
+/// **P3-B5**：9/10 穿透效果体结果（`MagicManager.cs:265-288`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PassThroughOutcome {
+    /// `MagPassThroughMagic(...) > 0`（`boTrain`）。
+    pub bo_train: bool,
+    /// 命中序（延迟帧的入队序；每项进被击中者自己的队列）。
+    pub hits: Vec<PassThroughHit>,
+    /// `nTargetX/nTargetY` 的终点（步长 5 = 9 / 8 = 10；共享尾 638 用它）。
+    pub end_x: i32,
+    pub end_y: i32,
+}
+
+/// **P3-B5**：22 火墙效果体结果（`MagicManager.cs:412-417` + `:1064-1098`）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FireWallOutcome {
+    /// `MagMakeFireCross(...)` 的返回值（安全区门失败 ⇒ false ⇒ 无训练抽）。
+    pub bo_train: bool,
+    /// 安全区门失败（`DisableInSafeZoneFireCross && InSafeZone`）——调用方据此发 `SM_SYSMESSAGE(100)`。
+    pub safe_zone_blocked: bool,
+}
+
+/// **P3-B5**：36 无极真气效果体结果（`MagicManager.cs:610-630`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UEnhancerOutcome {
+    /// `IsProperFriend(target)` 门（false ⇒ 零抽、`boSpellFail` 保持 true ⇒ 恰一条 639）。
+    pub allowed: bool,
+    /// `:612-617` 归一后的目标（`targetObject == null ⇒ this`）。
+    pub target: i32,
+    /// `(ushort)(Level + 1 + Random(Level))`。
+    pub n_power: u16,
+    /// `GetAttackPower(GetPower13(60) + Lo(SC)*10, ΔSC+1)`。
+    pub n_time: i32,
+    /// `(IPlayerActor)targetObject` 的防御臂（当前玩家入口不可达）：oracle 抛
+    /// `InvalidCastException` 被 `PlayObject.Base.cs:1525-1529` 吞掉 ⇒ 639、无尾；
+    /// **但 `UseAmulet` 已消耗、抽数已发生**。
+    pub invalid_cast: bool,
+}
+
+/// **P3-B5**：`ExtraAbil[i]` 过期的观察值（`PlayObject.Message.cs:163-227`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExtraAbilEventKind {
+    /// `now > ExtraAbilTimes[i]` ⇒ 清零 + `SysMsg("…恢复正常。")` + 循环后 `HealthSpellChanged()`。
+    Restored(u8),
+    /// `ExtraAbilFlag[i] == 0 && now > ExtraAbilTimes[i] - 10000` ⇒ 置 1 + `SysMsg("…10秒后恢复正常。")`。
+    TenSecondsBefore(u8),
+}
+
+/// **P3-B5**：一个 actor 一批过期检查的结果。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ExtraAbilExpiry {
+    pub actor_id: i32,
+    pub events: Vec<ExtraAbilEventKind>,
+    /// 任一槽过期 ⇒ `boNeedRecalc` ⇒ 只 `HealthSpellChanged()`（**不 recalc、不发 52**）。
+    pub health_changed: bool,
+}
+
+/// **P3-B5**：一格火墙事件（`MapEvent` + `FireBurnEvent` 的最小字段集）。
+///
+/// **BUG-REPLICA 1**：`MapEvent.Id` 恒 0（赋值行被注释）⇒ `CellObjectMgr.TryAdd(0, …)`
+/// 第一条胜；`Envir.GetEvent` 返回管理器里的第一条，不是当前格对象。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FireBurnEvent {
+    /// `OwnBaseObject`（施法者）；`Ghost || Death` 后置 `None`（oracle `MapEvent.Run` 尾）。
+    pub owner_id: Option<i32>,
+    /// `MapEvent.Envirnoment` 的图下标（`AddMapEvent` 落在施法者当前图）。
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    /// `EventType`：`Grobal2.ET_FIRE = 1`。
+    pub event_type: i32,
+    pub damage: i32,
+    pub open_start_ms: i64,
+    pub continue_ms: i32,
+    pub run_start_ms: i64,
+    pub run_tick_ms: i64,
+    /// `FireBurnEvent.FireRunTick`（初值 0 ⇒ uptime > 3000ms 时第一次 Run 就造成伤害）。
+    pub fire_run_tick_ms: i64,
+    pub closed: bool,
+    pub visible: bool,
+    pub active: bool,
+    /// **P3-B5（must_fix）**：该事件是否成功进入格子的 `CellObjectMgr`（`CellType::Event` 格对象
+    /// 从 `map.add_event_cell` 返回 true）。oracle 里只有**第一条**注册成功的事件能被
+    /// `GetEvent` 取到；越界/不可走格子的事件只进全局表（BUG-REPLICA 3）⇒ 不能作为
+    /// `event_at` 的返回值。字段名对应合同 §2.8 的 `first_registered_event`。
+    pub registered: bool,
+}
+
+/// `MapEvent`（`src/Modules/SystemModule/MagicEvent/MapEvent.cs`）的最小等价物——
+/// 只承载 `DigOutZombi.Turned` 的 `ET_DIGOUTZOMBI` 洞穴事件（`DigOutZombi.cs:59`）。
+///
+/// 消费点：`PlayObject.Walk` 的 NEEDHOLE 门
+/// （`PlayObject.cs:1874`：`EventMgr.GetEvent(Envir, CurrX, CurrY, ET_DIGOUTZOMBI) != null`）。
+/// `EventManager.GetEvent`（`src/M2Server/Event/EventManager.cs:29-42`）逆插入序找**首个**
+/// 同 `EventType/Envir/nX/nY` 的事件；`EventProcessor.ExecuteInternal`（`:31-48`）每
+/// `RunTick(500ms)` 跑一次 `MapEvent.Run`，`now - OpenStartTick > ContinueTime` 即移出
+/// `Events`（`Closed` 后下一轮进 `ClosedEvents`，`GetEvent` 便再也取不到）。
+#[derive(Clone, Copy, Debug)]
+pub struct DigOutEvent {
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    /// `Grobal2.ET_DIGOUTZOMBI = 1`（`src/OpenMir2/Grobal2.cs:41`）。
+    pub event_type: i32,
+    pub open_start_ms: i64,
+    pub continue_ms: i64,
+    pub run_start_ms: i64,
+    pub run_tick_ms: i64,
+    pub closed: bool,
+}
+
+/// **PL-1 硬前置**：P32 复活戒指读取的 **`LastHiter` 快照**。
+///
+/// oracle 的 P32（`PlayObject.Message.cs:747-763`）在 `PlayObject.Run` 尾、`base.Run()` 之前执行；
+/// 而 `LastHiter` 的 30s / 命中者死亡 / 隐身清理在 `base.Run` 内（`BaseObject.Base.cs:119-132`）——
+/// 即 **P32 看到的 `LastHiter` 尚未被本轮清理**。本骨架的 `expire_hitters()` 是「每 tick 统一清」
+/// 的结构等价物、位置在 tick 开头，比 P32 早 ⇒ [`World::tick_head`] 在命令 FIFO 之后、
+/// `expire_hitters()` **之前**为每个玩家留一份快照，供宿主在两段之间驱动的 P32 段读取
+/// （spike §4.3-3 / §5.5-1）。快照只在 `tick_head` 内刷新，`tick_tail` 不读写。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PlayerHiterSnapshot {
+    /// 玩家自身 id（`Race == Play`）。
+    pub actor_id: i32,
+    /// 清理前的 `LastHiter`。
+    pub last_hiter: Option<i32>,
+    /// 清理前的 `LastHiterTick`（毫秒，sim 时钟域）。
+    pub last_hiter_tick: i64,
+}
+
+/// **PL-1 判据**：`tick_tail` 内部的段执行序（oracle `base.Run` 的定序）
+///
+/// 只作可观测诊断（每次 [`World::tick_head`] 清空，[`World::tick_tail`] 逐段 push）；
+/// 不参与状态、不抽 RNG、不落库。用于把「Die 在 VerifyMapTime 之前」变成可断言的事实
+/// （`BaseObject.Base.cs:70-73` 早于 `:223-245`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TailPhase {
+    /// `BaseObject.Base.cs:70-73`：玩家 `WAbil.HP == 0 ⇒ Die()`。
+    Die,
+    /// `BaseObject.Base.cs:223-245`：`VerifyMapTime` + HP/MP 超上限钳制。
+    VerifyMapTime,
+}
+
+/// **P31（`SETAUTOGETEXP`）** 的每玩家会话态（oracle `PlayObject.cs:804-808` 的 5 个字段）。
+///
+/// 归属宿主 `SessionGround`（PR-3 spike §3.3：`AutoGetExp*` 属会话态），本结构只是
+/// 调 [`World::auto_get_exp`] 时的传参/回写载体；`envir_map_id` 是
+/// `AutoGetExpEnvir` 的 Rust 等价物（`None` = oracle 的 `null`，`Some(map_id)` = 该图对象）。
+///
+/// `AutoGetExpTick` 的 ctor 初值 = `GetTickCount()`（`PlayObject.cs:1009`），登录与换图
+/// 各复位一次（`:1485` / `:3796`），**不落库、死亡不清**（§3.3 表）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AutoGetExpState {
+    /// `PlayObject.AutoGetExpTick`（毫秒，宿主时钟域）。
+    pub tick: i64,
+    /// `PlayObject.AutoGetExpTime`（`int`；脚本写入 `nTime * 1000`，unchecked）。
+    pub time_ms: i32,
+    /// `PlayObject.AutoGetExpPoint`。
+    pub point: i32,
+    /// `PlayObject.AutoGetExpEnvir` 的 map_id；`None` = `null` ⇒ 不判地图。
+    pub envir_map_id: Option<usize>,
+    /// `PlayObject.AutoGetExpInSafeZone`（true ⇒ 还需 `InSafeZone()`）。
+    pub in_safe_zone: bool,
+}
+
+impl SimState {
+    /// `GuardUnit.Struck` 的 `CrimeforCastle` 置位（`GuardUnit.cs:27-33`；同 id 刷新时刻）。
+    ///
+    /// **P6a2**：从 `World` 搬到 `SimState`——段系统（`SimSelfDeliver` 的 `RM_STRUCK` 支）
+    /// 只有 `&mut SimState`，单一实现由 facade 与本方法共用。
+    pub(crate) fn set_guard_crime_for_castle(&mut self, actor_id: i32, now: i64) {
+        if let Some(slot) = self
+            .guard_castle_crime
+            .iter_mut()
+            .find(|(id, _)| *id == actor_id)
+        {
+            slot.1 = now;
+        } else {
+            self.guard_castle_crime.push((actor_id, now));
+        }
+    }
+}
+
+/// `AnimalObject.ProcessRunCount` 的旁挂容器（键 = `ActorId`，值 0 表示「无条目」）。
+///
+/// 形态：`id ∈ [1, DENSE_CAP)` 走 `dense` 数组（下标 = id）；范围外（含非正 id）走
+/// `sparse` 兜底。语义与旧 `BTreeMap<i32, i32>` 逐条相同——**插入 0 等价于删除**
+/// （调用点 [`World::set_process_run_count_impl`] 已把 0 归到 `remove`，这里再兜一层）。
+///
+/// 为什么不是 `BTreeMap`：唯一读点是 AI 跳步门，每 tick 对每个实体一次 `get` + 一次
+/// `set/remove`；11k 实体下这是 22k 次 O(log n) 树操作（插入还会分配节点）。键稠密单调
+/// （`ActorMgr.GetNextIdentity` 小区间复用）⇒ 数组定位是常数时间、无分配。
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct ProcessRunCounts {
+    /// `dense[id]` = 计数（0 = 无条目）。
+    dense: Vec<i32>,
+    /// 范围外 id 的兜底（非正 id 或 `id >= DENSE_CAP`）。
+    sparse: std::collections::BTreeMap<i32, i32>,
+}
+
+impl ProcessRunCounts {
+    /// 与 `mir2_world_bevy` 的 `IdIndex` 同一上界（4MiB / 每项 4B）。
+    const DENSE_CAP: usize = 1 << 20;
+
+    fn is_dense(id: i32) -> bool {
+        id >= 1 && (id as usize) < Self::DENSE_CAP
+    }
+
+    /// 读计数（无条目 ⇒ 0，与 oracle ctor 缺省一致）。
+    pub fn get(&self, id: i32) -> i32 {
+        if Self::is_dense(id) {
+            self.dense.get(id as usize).copied().unwrap_or(0)
+        } else {
+            self.sparse.get(&id).copied().unwrap_or(0)
+        }
+    }
+
+    /// 写计数；`0` 等价于删除（表项不堆积）。
+    pub fn set(&mut self, id: i32, value: i32) {
+        if value == 0 {
+            self.remove(id);
+            return;
+        }
+        if Self::is_dense(id) {
+            let i = id as usize;
+            if self.dense.len() <= i {
+                self.dense.resize(i + 1, 0);
+            }
+            self.dense[i] = value;
+        } else {
+            self.sparse.insert(id, value);
+        }
+    }
+
+    /// 删条目（不存在是 no-op）。
+    pub fn remove(&mut self, id: i32) {
+        if Self::is_dense(id) {
+            if let Some(v) = self.dense.get_mut(id as usize) {
+                *v = 0;
+            }
+        } else {
+            self.sparse.remove(&id);
+        }
+    }
+}
+
+/// **S4d-1 资源层**：`World` 的全部**非实体**状态。
+///
+/// 实体组件仍在 `EntityStore` 的 bevy `World`；本类型在 tick 边界被移入同一个 bevy `World`
+/// 的 `SimState` 资源，供 tick 系统通过 `ResMut<SimState>` 访问（设计件 §4.1/§4.2）。
+/// 字段可见性/语义与迁移前 `World` 同名字段逐项一致；`World` 经 `Deref` 保留原访问形态。
+#[derive(bevy_ecs::prelude::Resource)]
+pub struct SimState {
+    /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
+    pub maps: Vec<MapGrid>,
+    pub sessions: SessionRegistry,
+    /// 虚拟时钟（毫秒），每 tick 前进 `TICK_INTERVAL_MS`
+    pub clock_ms: i64,
+    pub tick_seq: u64,
+    /// 随机源（同种子 = 与 C# 可对拍）
+    pub rng: RandomNumber,
+    /// **M3②③ 活栈隔离口径（owner 2026-10-12 21:15）**：攻击路径**专用**随机流。
+    ///
+    /// 与 `rng` 同源但独立推进：种子 = [`mir2_shared::rng::attack_seed`]`(MIR2_RNG_SEED)`。
+    /// 仅在 [`World::attack_isolation_enabled`] 时被攻击路径取数；关闭时（缺省）**一次都不会被取数**，
+    /// 行为与改动前逐字节相同。
+    pub rng_attack: RandomNumber,
+    /// 是否把攻击路径取数路由到 [`World::rng_attack`]。缺省 `false`（生产/既有 golden 路径不变）。
+    isolate_attack: bool,
+    /// 是否在 [`World::tick`] 里驱动怪物 AI（[`crate::monai::monster_ai_tick`]）。
+    ///
+    /// **缺省 `false`**：M2 的 golden 场景（`tests/parity/world/scenarios/*.json`）是「直接驱动
+    /// `_Attack`」的合成探针（`csharp/WorldGolden`），不含 oracle 的 `ProcessMonsters` 线程，
+    /// 因此**不能**默认跑 AI（否则每次 `CreateMonster` 后的第一只怪就会多抽 `Wondering`，
+    /// 把 golden 的 RNG 序列整体移位）。接线层（`bins/game-svr` 的 sim 循环）在起世界时显式
+    /// [`World::enable_monster_ai`]；`openmir2-m3-monster-ai-tick` 的宿主接线为后续分片。
+    ai_enabled: bool,
+    /// **M3⑤-实现 2 第②片**：是否在 [`World::tick`] 里驱动商人 tick
+    /// （[`crate::World::merchant_tick`]，oracle `MerchantProcessor` 的单线程等价物）。
+    ///
+    /// **缺省 `false`**：合成 golden 场景不含 oracle 的商人 200ms 线程；由 `bins/game-svr` 的 sim
+    /// 循环在起世界时 `enable_merchant_tick()`（生产路径）。
+    merchant_enabled: bool,
+    /// `MerchantPosition`（`WorldServer.Merchant.cs:66`）：本 pass 的起始索引。
+    ///
+    /// 本片丢掉墙钟预算（`NpcLimit`）分支 ⇒ 一趟扫到底、扫完归 0；保留字段与循环起点以与 oracle 同形
+    /// （将来若恢复预算断点续跑，语义不变）。
+    pub merchant_position: usize,
+    /// 上一趟 `ProcessMerchants` 的 sim 时钟（200ms 节奏门）。
+    pub merchant_pass_tick: i64,
+    /// **世界 tick 扩容首批（T3）**：是否在 [`World::tick`] 里驱动固定 NPC 的 `ProcessNpcs`
+    /// （[`crate::World::npc_tick`]）。
+    ///
+    /// **缺省 `false`**：合成 golden 场景不含 oracle 的 `MerchantProcessor` 200ms 线程；由
+    /// `bins/game-svr` 的 sim 循环在起世界时 `enable_npc_tick()`（生产路径）。
+    /// oracle `MerchantProcessor.ExecuteInternal`（`MerchantProcessor.cs:28-32`）**先**
+    /// `ProcessNpcs()` **后** `ProcessMerchants()` ⇒ 本字段驱动的 `npc_tick` 在
+    /// [`World::tick`] 里排在 `merchant_tick` **之前**（RNG 消费者次序，见 `World::tick` 注释）。
+    npc_enabled: bool,
+    /// `NpcPosition`（`WorldServer.Merchant.cs:120`）：本 pass 的起始索引。
+    ///
+    /// 本片丢掉墙钟预算（`NpcLimit`）分支 ⇒ 一趟扫到底、扫完归 0（照 [`World::merchant_position`]）。
+    pub npc_position: usize,
+    /// 上一趟 `ProcessNpcs` 的 sim 时钟（200ms 节奏门）。
+    pub npc_pass_tick: i64,
+    /// oracle `M2Share.GameTime`（`M2Share.cs:182`）——**世界级单值**的世界时钟桶值
+    /// （`1`=白天 `2`=日落 `0`=日出 `3`=夜晚）。
+    ///
+    /// 由宿主按 `SystemProcessor.GetGameTime`（`SystemProcessor.cs:98-134`）的**本地小时桶**
+    /// 口径经 [`World::refresh_game_time`] 周期刷新（原缺省 `0` = oracle `M2Share.GameTime` 初值）。
+    pub game_time: u8,
+    /// **车道 B1（buff 系统）**：精灵状态系统（oracle `M2Share.ActorBuffSystem` 等价物，见
+    /// [`crate::buff`]）。
+    pub buffs: BuffSystem,
+    /// 是否在 [`World::tick`] 里驱动 buff pass（oracle `ActorBuffProcessor` 50ms `DoWork` 的
+    /// 单线程等价物）。
+    ///
+    /// **缺省 `false`** ⇒ 既有 golden 逐字节不变；宿主 `bins/game-svr` 的 sim 循环
+    /// `enable_buff_tick()`（生产路径）。每 world tick（200ms）跑 [`BUFF_PASSES_PER_TICK`] 个
+    /// 50ms pass（U-A2 口径，见 [`crate::buff`] 模块头）。
+    buff_enabled: bool,
+    /// 上一 buff pass 的 sim 时钟（`clock_ms + BUFF_EPOCH_MS`；诊断/测试用）。
+    pub buff_pass_tick: i64,
+    /// `Config.PosionDecHealthTime`（`GameSvrConf.cs:893/1766` 缺省 2500；`ServerConf.cs:544`
+    /// 读 `[Setup] PosionDecHealthTime`）——毒伤 DoT 的周期门（`ActorBuffSystem.cs:235`）。
+    /// 宿主未解析该键 ⇒ 缺省 2500（= oracle 缺省；接线待 Envir 侧解析，登记）。
+    pub poison_dec_health_time: i32,
+    /// `Config.DieDropUseItemRate`（`GameSvrConf.cs:768/1714` 缺省 30；`ServerConf.cs:492`
+    /// 读 `[Setup] DieDropUseItemRate`，部署件 = 50）——玩家死亡 `DropUseItems` 的
+    /// `PvpLevel() <= 2` 支逐槽骰 `Random(nRate)`（`PlayObject.Message.cs:2183`）。
+    pub die_drop_use_item_rate: i32,
+    /// `Config.DieRedDropUseItemRate`（`GameSvrConf.cs:772/1715` 缺省 15；部署件 = 15）——
+    /// `PvpLevel() > 2` 支（红名）。
+    pub die_red_drop_use_item_rate: i32,
+    /// `Config.DropItemRage`（`GameSvrConf.cs:1754` 缺省 3，`Server.conf [Setup]`）——
+    /// `DropUseItems` 的 `dropWide = MIN(DropItemRage, 3)`（`PlayObject.Message.cs:2194`）。
+    pub drop_item_rage: i32,
+    /// `M2Share.DisableTakeOffList` 的键集合（`M2Share.cs:1482`：`ContainsKey(Index - 1)`）——
+    /// `DropUseItems` 的「禁止取下列表」门（`PlayObject.Message.cs:2191`）。
+    ///
+    /// **装载登记**：部署件 `Envir/DisableTakeOffList.txt` 为 **0 字节** ⇒ 真机恒空；
+    /// 本仓未接文件装载（T-81），缺省空与部署件等价。
+    pub disable_take_off_keys: Vec<u16>,
+    /// `Config.KillByHumanDropUseItem`（`GameSvrConf.cs:780/1717` 缺省 `false`；
+    /// `ServerConf.cs:495`，部署件 `=1`）——`KillTargetTrigger` 第二段
+    /// （`PlayObject.cs:1785-1800`）对**玩家**击杀者的 `DropUseItems` 门。
+    pub kill_by_human_drop_use_item: bool,
+    /// `Config.KillByMonstDropUseItem`（`GameSvrConf.cs:784/1718` 缺省 `true`；
+    /// `ServerConf.cs:496`，部署件 `=1`）——同上，对**非玩家**击杀者。
+    pub kill_by_monst_drop_use_item: bool,
+    /// 物品目录（掉落生成按名查 `StdItem`）
+    pub item_catalog: Vec<StdItem>,
+    /// 怪物极品掉落几率（`Config.MonRandomAddValue`）
+    pub mon_random_add_value: i32,
+    /// 经验表（`Exps.conf` 的 `NeedExps`）
+    pub need_exps: Vec<i32>,
+    pub combat_config: CombatConfig,
+    /// **M3⑦-实现 2 F-1**：死亡退组（oracle `Die()` 的 `DelMember`）所用配置。
+    ///
+    /// 由宿主在起世界时用与 4 条 `CM_*` 组队派发**同一份** [`crate::party::PartyConfig`] 灌入
+    /// （缺省 = 常量默认值，与 `Server.conf` 缺键口径一致）。
+    pub party_cfg: crate::party::PartyConfig,
+    /// **P3-B4**：`MabMabe` / 施毒术的配置项（`GameSvrConf.cs:1763/1778-1781`）。
+    ///
+    /// 缺省 = oracle 缺省（`hit_rand_rate=100`/`hit_min_lv_limit=10`/`hit_success_rate=21`/
+    /// `hit_mabe_time_rate=20`/`amy_ounsul_point=10`）；宿主 `bins/game-svr` 用
+    /// [`World::set_b4_config`] 从 `Server.conf` 的 `[Setup]` 灌入。
+    pub b4_cfg: crate::magic_effect::MabMabeConfig,
+    /// **P3-B5**：22/36 的配置项（`DisableInSafeZoneFireCross` + 两对 `SysMsg` 颜色）。
+    /// 宿主 `bins/game-svr` 用 [`World::set_b5_config`] 从 `Server.conf` 灌入。
+    pub b5_cfg: crate::magic_effect::B5Config,
+    /// **P3 收尾残余**：`SystemShare.Config.MagTurnUndeadLevel`（`GameSvrConf.cs:1773` 缺省 `50`）。
+    ///
+    /// `MagicManager.cs:842-853` 的 `targetObject.Abil.Level < Config.MagTurnUndeadLevel` 门。
+    /// 宿主 `bins/game-svr` 用 [`World::set_mag_turn_undead_level`] 从 `Server.conf` 灌入；
+    /// 缺省 = oracle 源码缺省（既有 golden 路径不变）。
+    pub mag_turn_undead_level: i32,
+    /// **P3 收尾残余**：`SystemShare.Config.dwPKFlagTime`（`GameSvrConf.cs:1395` 缺省 `60 * 1000`）
+    /// —— [`World::check_pk_status`] 的 `PvpFlag` 过期门（`PlayObject.cs:4359`）。
+    pub pk_flag_time_ms: i64,
+    /// `SystemShare.Config.DecLightItemDrugTime`（`GameSvrConf.cs:1398` 缺省 `500`）——
+    /// oracle 里 `CheckPkStatus()` 挂在玩家 `Run()` 的该周期块内（`PlayObject.Message.cs:257-262`）。
+    /// 本骨架按同一周期在 [`World::check_pk_status`] 内节流。
+    pub dec_light_item_drug_time_ms: i64,
+    /// `SystemShare.Config.DecLampDura`（`GameSvrConf.cs:1504` 缺省 `true`；
+    /// `ServerConf.cs:281` 读 `[Setup] DecLampDura`，部署件 = 1）——
+    /// [`World::use_lamps`] 里「右手火把每周期 `Dura - 1`」的开关
+    /// （`PlayObject.Message.cs:2247-2254`）。
+    pub dec_lamp_dura: bool,
+    /// `SystemShare.Config.UpgradeWeaponMaxPoint`（`GameSvrConf.cs:1419` 缺省 `20`；
+    /// `ServerConf.cs:233` 读 `[Setup] UpgradeWeaponMaxPoint`，**部署件 = 7**）——
+    /// `CheckWeaponUpgradeStatus`（`PlayObject.cs:4148`）的破碎门。
+    pub upgrade_weapon_max_point: i32,
+    /// 上一趟 [`World::use_lamps`] 的 sim 时钟（oracle `DecLightItemDrugTick`，与
+    /// `CheckPkStatus` 共用同一字段；本仓两趟分别节流，宿主相邻调用 ⇒ 同步推进）。
+    pub lamp_tick: i64,
+    /// [`World::lamp_tick`] 是否已按首次调用时钟惰性初始化（与 T-78 同口径）。
+    lamp_tick_initialized: bool,
+    /// 本 tick `attack_once` 里 `CheckWeaponUpgrade` 产生的待抄事件（见
+    /// [`TickRecord::weapon_breaks`]）；tick 末尾转抄进记录。
+    pub(crate) pending_weapon_breaks: Vec<WeaponUpgradeEvent>,
+    /// 本 tick `attack_once` 里 `AttackSuccess` 产生的武器磨损待抄事件（见
+    /// [`TickRecord::weapon_wears`]）；tick 末尾转抄进记录。
+    pub(crate) pending_weapon_wears: Vec<WeaponWearEvent>,
+    /// 上一趟 `CheckPkStatus` 的 sim 时钟（oracle `DecLightItemDrugTick`）。
+    ///
+    /// **T-78 修复（惰性初始化）**：oracle 在玩家构造时用 `GetTickCount()` 初始化该游标
+    /// （`PlayObject.cs:969`）；本仓的等价物是**首次调用** [`World::check_pk_status`] 的时刻——
+    /// 首次调用把它钉到当时的 [`World::clock_ms`]，而不是构造时的 0。否则 `clock_ms` 被注入为
+    /// 墙钟量级（`MIR2_CLOCK_MS ≈ 1.7e12`）时 `clock - 0 > 500` 恒真，节流退化为每 tick 一次。
+    pub pk_check_tick: i64,
+    /// [`World::pk_check_tick`] 是否已按首次调用时钟惰性初始化（T-78 修复的内部状态）。
+    /// 直接写 `pk_check_tick`（宿主/测试强制提前检查）不改变该标志。
+    pk_check_tick_initialized: bool,
+    /// `SystemShare.Config.HealthFillTime` / `SpellFillTime`（`GameSvrConf.cs:1323-1324` 缺省
+    /// `300` / `800`；`ServerConf.cs:152-153` 可覆盖）。
+    ///
+    /// `BaseObject.Run` 恢复段（`BaseObject.Base.cs:47/57`）的到点门；由接线层
+    /// （`bins/game-svr` 的 sim 循环）用同一份配置灌入。合成 golden 场景不跑 [`World`] 的
+    /// 怪物 AI（`ai_enabled=false`）⇒ 这两个值在既有对拍里不被消费。
+    pub health_fill_time: i32,
+    pub spell_fill_time: i32,
+    /// `Config.MakeGhostTime`（`GameSvrConf.cs:431`，构造缺省 `:1486` = `3 * 60 * 1000`；
+    /// `ServerConf.cs:567` 读 `[Setup] MakeGhostTime`；部署件 = 90000）。
+    ///
+    /// `BaseObject.Run` 死亡支（`BaseObject.Base.cs:85-101`）的两条门都读它。缺省取 oracle
+    /// 构造值；宿主用 [`World::set_corpse_config`] 灌入 `Server.conf` 的值。
+    pub make_ghost_time: i32,
+    /// `GetMonstersZenTime`（`WorldServer.MonGen.cs:168-190`）用的 `Config.UserFull`。
+    /// 与 [`crate::mongen::MonGenConfig::user_full`] 同源（宿主灌入）。
+    pub mon_gen_user_full: i32,
+    /// `GetMonstersZenTime` 用的 `Config.ZenFastStep`（同 [`Self::mon_gen_user_full`]）。
+    pub mon_gen_zen_fast_step: i32,
+    /// `Config.ProcessMonsterInterval`（`GameSvrConf.cs:1142`，构造缺省 `:1895` = 2；
+    /// `ServerConf.cs:636` 读 `[Setup] ProcessMonsterInterval`）。
+    ///
+    /// 唯一读点 = [`crate::monai::monster_ai_tick`] 的不可见怪跳步门
+    /// （`WorldServer.MonGen.cs:294`）：`!IsVisibleActive && ProcessRunCount < 该值` ⇒ 只计数、
+    /// 不跑 AI。缺省 2 = oracle 构造缺省；宿主用 [`World::set_process_monster_interval`] 灌部署值。
+    pub process_monster_interval: i32,
+    /// `AnimalObject.ProcessRunCount` 的**旁挂表**（键 = `ActorId`）。
+    ///
+    /// oracle 把该计数放在 `AnimalObject` 字段上（`src/M2Server/Actor/AnimalObject.cs:46`，
+    /// ctor `:85` 置 0）。本仓刻意**不加** `Entity` 字段：`Entity` 是 HIGH_CHURN 且参与存档/
+    /// 序列化/对拍，旁挂表能让既有 golden/存档逐字节不变（本表只按 id 查/写，从不遍历 ⇒
+    /// 选 `BTreeMap` 仅为消除哈希随机性；`EntityStore::alloc_id` 单调递增、不复用 id ⇒ 无键冲突）。
+    ///
+    /// 生命周期：`release_entity` 时删键；复活成功时清零（`WorldServer.MonGen.cs:289`）。
+    ///
+    /// **T10 Top2**：容器从 `BTreeMap` 换成 [`ProcessRunCounts`]（稠密下标数组 + 稀疏兜底）。
+    /// 唯一读点是每 tick 对**每个实体**的 `get` + `insert/remove`（11k 实体 ⇒ 22k 次 O(log n)
+    /// 树操作 + 插入期节点分配）；键是稠密单调的小 id，数组直接命中。只按 id 查/写、从不遍历，
+    /// 因此容器替换不影响任何可见顺序。
+    pub process_run_counts: ProcessRunCounts,
+    /// C# `Config.ClearDropOnFloorItemTime`
+    pub clear_drop_on_floor_item_time: i64,
+    /// 每张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）：
+    /// `None` = 该图无 `EXPRATE` 行（不加倍）；`Some(rate)` = 杀怪经验 × `rate/100`。
+    /// 由接线层按 `MapRegistry::flag_of(map_id)` 逐图灌入（缺省全 `None` ⇒ 行为与改动前逐字节相同）。
+    pub map_exp_rate: Vec<Option<i32>>,
+    /// C# `M2Share.SpiritMutinyTick`（`M2Share.cs:185`）：神之祈祷的全服窗口到期时刻。
+    ///
+    /// `ProcessSpiritSuite`（`PlayObject.Base.cs:326`）置 `GetTickCount() + Config.SpiritMutinyTime`；
+    /// `MonsterObject.CheckRoyalty`（`MonsterObject.cs:370-372`）读它：窗口未过期且
+    /// `SlaveExpLevel < 5` ⇒ `MasterRoyaltyTick = 0`（立即叛变）。归 `openmir2-m3-pet-slave-lifecycle`（⑨-3）。
+    /// 缺省 `0`（= 无窗口）⇒ 既有 golden 路径一字不改。
+    pub spirit_mutiny_tick: i64,
+    /// **M3⑨ 主人死/幽灵自投递（卡 `openmir2-m3-pet-slave-masterdie-wire`）**：是否在
+    /// [`World::tick`] 里驱动「自身延时消息」队列（oracle `BaseObject.MsgQueue` +
+    /// `BaseObject.SendSelfDelayMsg`）。
+    ///
+    /// **缺省 `false`**：合成 golden 场景不含 oracle 的玩家 `Run()` 消息段；生产宿主
+    /// （`bins/game-svr` 的 sim 循环）起世界时用 [`World::enable_slave_self_delay`] 打开。
+    /// 关闭时 `settle_deaths` 不入队、`tick` 不投递 ⇒ 既有对拍逐字节不变。
+    pub(crate) slave_self_delay_enabled: bool,
+    /// **卡 `openmir2-rm-refmessage-delay-layer`**：是否启用 7 参 `SendStruckDelayMsg`
+    /// （`RM_REFMESSAGE` 延时层，`BaseObject.Message.cs:211-228`）。
+    ///
+    /// **缺省 `false`**：合成 golden 场景（`tests/parity/csharp/WorldGolden`）的 `_Attack`
+    /// 桩是 oracle 的**取数子集**（`StubsCombat.cs:248-284` 只折叠即时 `RM_STRUCK`，
+    /// 不含 `SendStruckDelayMsg`）⇒ 默认开启会把 200ms 后的 `Struck` 抽数插进既有
+    /// golden 的 RNG 序列，破坏 `diff = 0`。生产宿主 `bins/game-svr` 在起世界时
+    /// [`World::enable_refmessage_delay`] 打开（与 `enable_monster_ai` 同口径）。
+    ///
+    /// **P5-A1**：`pub(crate)` —— `crate::slave` 的段共用实现
+    /// （`send_struck_delay_msg_refmessage_impl`）在 `&SimState` 上读该开关（getter 挂在
+    /// `impl World` 上，段路径拿不到 `World`）。
+    pub(crate) refmessage_delay_enabled: bool,
+    /// **P3-B2**：待处理的 `RM_MAGSTRUCK`（目标自有队列的插入序等价物）。
+    ///
+    /// 由效果体（23/24/33/47）入队，宿主调 `World::deliver_mag_struck` 逐目标处理
+    /// （`R(1000)` → `MSD` → `nDamage>0` 链）。队列为空时零行为变化。
+    pub pending_mag_struck: Vec<PendingMagStruck>,
+    /// **卡 `openmir2-run-gap-monster-specials`**：待执行的 `Operate(RM_ZEN_BEE)`
+    /// （`BeeQueen`/`SpiderHouseMonster` 产仔），由 [`crate::slave::World::deliver_self_delay_msgs`]
+    /// 在 500ms 自投递到点时入队；宿主用 [`World::flush_special_spawns`] 在同一条 `rng` 上造怪。
+    pub pending_special_spawns: Vec<crate::special_monster::SpecialSpawnRequest>,
+    /// 专用怪 `SendRefMsg(RM_HIT, …)` 的帧事件（宿主出 `SM_HIT`；保序）。
+    pub pending_special_ref_msgs: Vec<crate::special_monster::SpecialRefMsg>,
+    /// **MB-1**：怪物 `Run` 覆写里的 `SendRefMsg(...)` 帧事件（`StickMonster`/
+    /// `DigOutZombi`/`ScultureMonster`/`BigHeartMonster`），宿主按 ident 出
+    /// `SM_DIGUP`/`SM_DIGDOWN`/`SM_HIT`/`SM_716`（保序；见 [`crate::monai::MonsterRefMsg`]）。
+    pub pending_monster_ref_msgs: Vec<crate::monai::MonsterRefMsg>,
+    /// **Lane B**：`World.castles`（oracle `SystemShare.CastleMgr.CastleList` 的本服单城等价物）。
+    ///
+    /// 生产宿主（`bins/game-svr`）在 `LoadMapQuest` 之后、`LoadMerchant` 之前推入一座
+    /// `UserCastle`（oracle `CastleMgr.Initialize` 的时机）；`monster_ai_tick` / `settle_deaths`
+    /// 按 `Entity.castle_binding` 反查这里的状态机。
+    pub castles: Vec<crate::castle::UserCastle>,
+    /// **Lane B**：`monster_ai_tick` 里门/墙 `Run` 产生的结构事件（下一 tick 头转抄进
+    /// [`TickRecord::castle_structures`]）。
+    pub pending_castle_structures: Vec<CastleStructureAt>,
+    /// **卡 `guard-target`**：`PlayObject.MyGuild` 的等价物（actor id → 行会 [`crate::castle::GuildId`]）。
+    ///
+    /// `GuardUnit.IsProperTarget` 的 `MasterGuild`/盟友豁免读它。生产写入点 = 行会会话车道
+    /// （入会/退会时调 [`World::set_actor_guild`]）；缺省无记录 = oracle 无行会角色
+    /// （`MyGuild == null`）。
+    pub actor_guilds: Vec<(i32, crate::castle::GuildId)>,
+    /// **卡 `guard-target`**：`GuildInfo.GuildAllList` 的等价物（行会 → 盟友行会表）。
+    ///
+    /// oracle 的两处 `GuildAllList.Add` 均被注释（`GuildInfo.cs` 的 `AllyGuild` 与加载分支）
+    /// ⇒ 生产恒空；本表缺省空与之一致，写入点 = 行会接线车道。
+    pub guild_allies: Vec<(crate::castle::GuildId, Vec<crate::castle::GuildId>)>,
+    /// **卡 `guard-target`**：`GuardUnit.CrimeforCastle` / `CrimeforCastleTime`
+    /// （`GuardUnit.cs:12-13`）的等价物（actor id → 置位时刻；**存在 = `CrimeforCastle=true`**）。
+    ///
+    /// 写侧 = [`World::set_guard_crime_for_castle`]（`GuardUnit.Struck`，由
+    /// [`crate::monai::animal_struck`] 在 `Castle != null` 时调用）。
+    pub guard_castle_crime: Vec<(i32, i64)>,
+    /// **卡 `openmir2-rm-refmessage-delay-layer`**：`Operate(RM_REFMESSAGE)`
+    /// （`BaseObject.Base.cs:699-710`）的 `SendRefMsg(RM_STRUCK, …)` 广播事件（保序）。
+    ///
+    /// 入列时刻 = 延时消息**到点**（`World::deliver_self_delay_msgs`），因此宿主从这里出的
+    /// `SM_STRUCK` 天然带 oracle 的 200/300/500ms 广播延时；载荷是发送时刻的
+    /// HP/MaxHP 快照（`SendStruckDelayMsg` 的 `nParam1/nParam2`）。
+    pub pending_refmessage_frames: Vec<crate::slave::RefMessageFrame>,
+    /// `GameSvrConf.Bee`（`GameSvrConf.cs:1316` 缺省 `"蝙蝠"`；`ServerConf.cs:100` 读 `[Names] Bee`）。
+    pub bee_name: String,
+    /// `GameSvrConf.Spider`（`GameSvrConf.cs:1317` 缺省 `"爆裂蜘蛛"`；`ServerConf.cs:101` 读 `[Names] Spider`）。
+    pub spider_name: String,
+    /// **MB-3（R34）**：`GameSvrConf.Zuma[4]`（`GameSvrConf.cs:159/1315`；`ServerConf.cs:96-99`
+    /// 读 `[Names] Zuma1..4`）——`ScultureKingMonster.CallSlave` 的
+    /// `Config.Zuma[Random(4)]` 怪名表。缺省 = oracle 构造缺省（部署件同值）。
+    pub zuma_names: [String; 4],
+    /// **T-132（castle-war）**：`[Setup]` 的四个名字色（`ServerConf.cs:509-512`；
+    /// `GameSvrConf.cs:1731-1736` 缺省 47/180/69/221）。宿主启动时用
+    /// [`World::set_castle_name_colors`] 灌入；缺省 = oracle 构造缺省（部署件同值）。
+    pub castle_name_colors: crate::castle::CastleNameColors,
+    /// **MB-3（R34）**：待执行的 `RegenMonsterByName` 请求（`ScultureKingMonster.CallSlave`）。
+    /// 宿主用 [`crate::monai::World::flush_sculture_spawns`]（或同签名方法）在 `world.rng` 上排水。
+    pub pending_sculture_spawns: Vec<crate::monai::ScultureSpawnRequest>,
+    /// **P3-B5**：`SystemShare.EventMgr.Events` 的火墙事件表（插入序 = `EventMgr.AddEvent` 序）。
+    ///
+    /// `EventProcessor.ExecuteInternal`（`:31-48`）逆插入序遍历、每事件 `RunTick=500ms` 门；
+    /// `Closed` 的事件留在表里但不再 `Run`（oracle 移到 `ClosedEvents`，语义等价）。
+    /// 缺省空表 ⇒ 既有 golden 逐字节不变。
+    pub fire_burn_events: Vec<FireBurnEvent>,
+    /// **卡 `openmir2-map-event-frames`（review `39262b65` F3）**：折叠对象（key 0 的第一条
+    /// registered 事件）的共享 `MapEvent.nX/nY`（`MapEvent.cs:17-18`）。
+    ///
+    /// oracle 里 `nX/nY` 是**共享对象字段**：ctor 写注册格（`MapEvent.cs:70-71`），此后唯一写点是
+    /// `UpdateVisibleEvent` 的**首见支**（`PlayObject.cs:5483-5484`，每个观察者首见都覆写同一份；
+    /// 已在列表的早退支**不写**，`:5471-5473`）；`RM_HIDEEVENT` 读的是**发送时刻的共享值**
+    /// （`:3278`）⇒ 双观察者首见格不同时，先见者离场的 805 坐标 = **后写者的格**。804 的坐标在
+    /// 同一趟扫描内写读无间隔（早退支不覆写）⇒ 观察者条目里的 add 时刻快照与之恒相等
+    /// （`VisibleEvent.x/y` 只服务 804）。缺省 (0,0)——首见支必然先于任何 805 读而覆写。
+    pub event_sight: (i32, i32),
+    /// **MB-1**：`EventMgr.Events` 里 `ET_DIGOUTZOMBI` 事件的最小表（插入序）。
+    ///
+    /// 只由 `DigOutZombi.Turned` 写入（5 分钟 `ContinueTime`），由 [`World::run_map_events`]
+    /// 按 `RunTick=500ms` 门到期移除；`PlayObject.Walk` 的 NEEDHOLE 门读它。
+    pub dig_out_events: Vec<DigOutEvent>,
+    /// **P3-B5**：`CellObjectMgr` 里是否已有 `CellObjId = 0` 的事件（`TryAdd` 第一条胜）。
+    ///
+    /// `Envir.GetEvent(x,y)` 的判据 = 「该格有 `CellType::Event` 对象」**且**本标记为真
+    /// （`:1344-1360` 先找格对象，再 `CellObjectMgr.Get<MapEvent>(0)`）。
+    pub event_registered: bool,
+    /// 自身延时消息队列（oracle `BaseObject.MsgQueue` 的已建模子集，**每 actor 一把**）。
+    ///
+    /// [`crate::slave::SelfDelayQueue`] 是**四叉堆（.NET 8 `Arity=4`）**，与
+    /// `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:21`）逐操作等价：
+    /// `Enqueue` sift-up（父 `(i-1) >> 2`）/ `Dequeue`「末元素移根 + sift-down」
+    /// （首子 `(i << 2) + 1`，四子取首个严格最小）、比较为**严格小于**。
+    /// 因此等优先级时堆是**不稳定**的，
+    /// 未到点重入队（`GetMessage`，`BaseObject.Message.cs:334-378`）后下一次泵会先投递
+    /// 其它已到点项——必须照搬，不能退回插入序/FIFO。
+    ///
+    /// 投递语义见 [`crate::slave::World::deliver_self_delay_msgs`]：泵 = `peek → 未到点则
+    /// 出队并以 `Lowest` 重入队 + 结束本次调用`；**没有跨调用的 blocked 状态**；不同 actor
+    /// 的队列互不阻塞。
+    /// 优先级：`SendSelfDelayMsg` / `SendStruckDelayMsg` 一律 `Lowest`(255)；即时
+    /// `SendMsg(int…)` 用 `(byte)wIdent`（本层只建模 `RM_MAKEHOLYSEIZEMODE` 的 `send_msg_now`）。
+    /// 产者：`RM_MASTERDIEMUTINY`/`RM_MASTERDIEGHOST`（玩家 1000ms）、`RM_MAGHEALING` 800ms、
+    /// `RM_TRANSPARENT` 800ms、`RM_DOOPENHEALTH` 1500ms、`RM_MAGIC_LVEXP` 800/1000ms、
+    /// `RM_MAKEHOLYSEIZEMODE`（即时）、`RM_DELAYMAGIC`/`RM_POISON`、`RM_MAGSTRUCK` 600ms
+    /// （8 参 `SendStruckDelayMsg`，目标队列）、`RM_ZEN_BEE` 500ms（BeeQueen/SpiderHouse）。
+    /// R19 的真实生产路径是 `FireballMonster.cs:41` 的 **7 参** `SendStruckDelayMsg`
+    /// （入怪**自己**的队列，ident = `RM_DELAYMAGIC`），生产者接线归 MB-9。
+    pub self_delay_msgs: crate::slave::SelfDelayQueue,
+    /// 消息创建序计数器（自投递入队与即时 `pending_mag_struck` 入列共用）。
+    ///
+    /// 只用于宿主按创建序排水 [`PendingMagStruck`]（见其 `order` 字段），不参与队列比较、
+    /// 战斗数值或落库。
+    pub(crate) msg_order: u64,
+    /// `Server.conf` 的宝宝配置（`ProcessSlaveMutiny` 的 `Config.MasterDieMutiny*` 输入）；
+    /// 由宿主 [`World::enable_slave_self_delay`] 灌入。缺省 = [`PetSlaveConfig::default`]。
+    pub pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig,
+    /// 帧内待处理命令（FIFO）
+    pending: VecDeque<Command>,
+    /// **PL-1 判据**：`tick_tail` 的段执行序诊断（[`TailPhase`]）。
+    ///
+    /// 每次 [`World::tick_head`] 清空，[`World::tick_tail`] 按执行序 push。
+    pub tail_phase_log: Vec<TailPhase>,
+    /// **PL-1 硬前置**：本 tick 玩家 `LastHiter` 的清理前快照（[`PlayerHiterSnapshot`]）。
+    ///
+    /// 刷新点 = [`World::tick_head`] 的命令 FIFO 之后、`expire_hitters()` 之前；按实体槽位序。
+    /// P32（宿主段）从这里读，保证「被怪物打死后 30s 内」仍能看到 oracle 会看到的非玩家命中者。
+    pub player_hiter_snapshot: Vec<PlayerHiterSnapshot>,
+    /// **PL-1 硬前置**：`verify_map_time` 的 `BaseObject.Base.cs:230-245` 钳制段触发的
+    /// 玩家 `HealthSpellChanged()`（`(actor_id, hp_after, mp_after, hp_clamped, mp_clamped)`，保序）。
+    ///
+    /// 累积到 [`World::tick_tail`] 末尾转抄进 [`TickRecord::verify_health_changes`]（宿主出 53）。
+    /// 只记 `Race == Play` 的**第一支**（`SendUpdateMsg`）；非 Play 的 `ShowHp` 第二支进
+    /// [`World::pending_show_hp_health_changes`]。
+    pub(crate) pending_verify_health_changes: Vec<(i32, u16, u16, bool, bool)>,
+    /// **卡 `openmir2-monster-showhp-53-broadcast`**：非 Play 实体 `HealthSpellChanged()`
+    /// 第二支（`ShowHp`）的 53 事件 `(actor_id, hp_after, mp_after)`，保序。
+    /// 每次 [`World::tick_head`] 清空，结束时转抄进 [`TickRecord::show_hp_health_changes`]。
+    pub(crate) pending_show_hp_health_changes: Vec<(i32, u16, u16)>,
+    /// 判据③：tick 必须始终跑在同一个线程上
+    owner_thread: Option<ThreadId>,
+    /// 掉落物品的 `MakeIndex` 计数器（`M2Share.GetItemNumber`）
+    pub(crate) item_number: ItemNumberCounter,
+    /// 最近一次 tick 的记录
+    pub last_tick: TickRecord,
+    /// **W4 怪物 AI 攻击支**：本 tick 由 [`crate::monai::attack_target`]（怪物 AI）
+    /// 发起的攻击结算。`World::tick` 在 AI 段之后转抄进 [`TickRecord::attacks`]，
+    /// 使既有的 `drain_combat_downlink` ①（`SM_STRUCK` 受击广播）**无需宿主改动**
+    /// 即覆盖「怪打玩家」（oracle `AnimalObject.Attack` → `_Attack` 走同一条
+    /// `SendStruckDelayMsg(RM_REFMESSAGE) → SendRefMsg(RM_STRUCK)` 路径）。
+    ///
+    /// 只在 `ai_enabled` 时被写入 ⇒ 关闭时恒空、既有 golden 一字不改。
+    pub(crate) pending_ai_attacks: Vec<(i32, i32, AttackOutcome)>,
+    /// **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221`）的**攻/守双方**
+    /// 运行态（`Paralysis` / `UnParalysis` / `AntiPoison`），按 actor id 挂世界侧。
+    ///
+    /// 与 [`World::buffs`] 同体例（`Entity` 里没有这三个字段的本仓，先挂世界表；由宿主
+    /// `bins/game-svr` 在攻击派发前用 [`World::set_attack_poison`] 灌入）。**缺省空表** ⇒ 无任何
+    /// actor 有麻痹态 ⇒ [`World::attack_once`] 的毒门短路（不抽），既有 golden 逐字节不变。
+    pub attack_poison: HashMap<i32, AttackPoisonState>,
+    /// `AddAbil.WeaponStrong`（`AddAbility.cs:72`）——攻击成功磨损量的减项，按 actor id 挂世界侧。
+    ///
+    /// 来源：`AddAbility::weapon_strong`（`StdMode 5/6/24/26` 且 `SpecialPwr ∈ 1..=10` 的**赋值**，
+    /// `PlayObject.cs:4424-4426` / `:4563-4566`）；宿主在攻击派发前用
+    /// [`World::set_attack_weapon_strong`] 灌入。**缺省空表 ⇒ 0**（oracle 新角色默认），
+    /// 既有 golden 与不含该属性的部署逐字节不变。
+    pub attack_weapon_strong: HashMap<i32, u16>,
+}
+
+impl SimState {
+    /// 按地图表构造（= 迁移前 `World::with_maps` 的非实体初始化）。
+    pub fn with_maps(maps: Vec<MapGrid>) -> Self {
+        let maps_len = maps.len();
+        SimState {
+            maps,
+            sessions: SessionRegistry::new(),
+            clock_ms: 0,
+            tick_seq: 0,
+            rng: RandomNumber::with_seed(42),
+            rng_attack: RandomNumber::with_seed(42),
+            isolate_attack: false,
+            ai_enabled: false,
+            merchant_enabled: false,
+            merchant_position: 0,
+            merchant_pass_tick: i64::MIN,
+            npc_enabled: false,
+            npc_position: 0,
+            npc_pass_tick: i64::MIN,
+            game_time: 0,
+            buffs: BuffSystem::new(),
+            buff_enabled: false,
+            buff_pass_tick: i64::MIN,
+            poison_dec_health_time: 2500,
+            die_drop_use_item_rate: 30,
+            die_red_drop_use_item_rate: 15,
+            drop_item_rage: 3,
+            disable_take_off_keys: Vec::new(),
+            kill_by_human_drop_use_item: false,
+            kill_by_monst_drop_use_item: true,
+            item_catalog: Vec::new(),
+            mon_random_add_value: 40,
+            need_exps: vec![0; 1000],
+            combat_config: CombatConfig::default(),
+            party_cfg: crate::party::PartyConfig::default(),
+            b4_cfg: crate::magic_effect::MabMabeConfig::default(),
+            b5_cfg: crate::magic_effect::B5Config::default(),
+            mag_turn_undead_level: 50,
+            pk_flag_time_ms: 60 * 1000,
+            dec_light_item_drug_time_ms: 500,
+            pk_check_tick: 0,
+            pk_check_tick_initialized: false,
+            dec_lamp_dura: true,
+            upgrade_weapon_max_point: 20,
+            lamp_tick: 0,
+            lamp_tick_initialized: false,
+            pending_weapon_breaks: Vec::new(),
+            pending_weapon_wears: Vec::new(),
+            health_fill_time: 300,
+            spell_fill_time: 800,
+            make_ghost_time: 3 * 60 * 1000,
+            mon_gen_user_full: 5000,
+            mon_gen_zen_fast_step: 300,
+            // `GameSvrConf.cs:1895` 构造缺省；部署件由 `ServerConf.cs:636` 覆盖。
+            process_monster_interval: 2,
+            process_run_counts: ProcessRunCounts::default(),
+            clear_drop_on_floor_item_time: 5 * 60 * 1000,
+            map_exp_rate: vec![None; maps_len],
+            spirit_mutiny_tick: 0,
+            slave_self_delay_enabled: false,
+            pending_mag_struck: Vec::new(),
+            pending_special_spawns: Vec::new(),
+            pending_special_ref_msgs: Vec::new(),
+            pending_refmessage_frames: Vec::new(),
+            refmessage_delay_enabled: false,
+            pending_monster_ref_msgs: Vec::new(),
+            castles: Vec::new(),
+            pending_castle_structures: Vec::new(),
+            actor_guilds: Vec::new(),
+            guild_allies: Vec::new(),
+            guard_castle_crime: Vec::new(),
+            bee_name: crate::special_monster::DEFAULT_BEE_NAME.to_string(),
+            spider_name: crate::special_monster::DEFAULT_SPIDER_NAME.to_string(),
+            zuma_names: [
+                "祖玛卫士".to_string(),
+                "祖玛雕像".to_string(),
+                "祖玛弓箭手".to_string(),
+                "楔蛾".to_string(),
+            ],
+            castle_name_colors: crate::castle::CastleNameColors::default(),
+            pending_sculture_spawns: Vec::new(),
+            fire_burn_events: Vec::new(),
+            event_sight: (0, 0),
+            dig_out_events: Vec::new(),
+            event_registered: false,
+            self_delay_msgs: crate::slave::SelfDelayQueue::new(),
+            msg_order: 0,
+            pet_slave_cfg: mir2_data::pet_slave::PetSlaveConfig::default(),
+            pending: VecDeque::new(),
+            tail_phase_log: Vec::new(),
+            player_hiter_snapshot: Vec::new(),
+            pending_verify_health_changes: Vec::new(),
+            pending_show_hp_health_changes: Vec::new(),
+            owner_thread: None,
+            item_number: ItemNumberCounter::default(),
+            last_tick: TickRecord::default(),
+            pending_ai_attacks: Vec::new(),
+            attack_poison: HashMap::new(),
+            attack_weapon_strong: HashMap::new(),
+        }
+    }
+}
+
+impl Default for SimState {
+    fn default() -> Self {
+        Self::with_maps(Vec::new())
+    }
+}
+
+/// **S4d-1**：`TickRecord` 的资源载体。
+///
+/// `World::tick_head` 在 `OutputDrain` 边界把本 tick 的记录移入 bevy `World`，系统转抄完再移回；
+/// 记录同一时刻只有一个所有者（设计件 §4.2）。
+#[derive(bevy_ecs::prelude::Resource)]
+pub struct TickRecordRes(pub TickRecord);
+
+/// **P7 `Command` 段（#1）**：命令 FIFO 的载体资源。
+///
+/// `World::tick_head` 在 `TickStage::Command` 段边界把 facade 的 `World::pending` 整条队列移入
+/// bevy `World`，[`sim_command_stage_system`] 按**入队顺序**逐条 `pop_front` 处理，段尾原样归还
+/// （同一时刻只有一个所有者，与 [`TickRecordRes`] / `SimState` 同口径）。
+///
+/// 队列内容在段内**只减不增**：唯一入队点是会话线程的 [`World::enqueue`]，tick 本身不产命令
+/// ⇒ 「入队序 = 处理序」不受段边界影响。
+#[derive(bevy_ecs::prelude::Resource)]
+pub struct CommandQueueRes(pub VecDeque<Command>);
+
+crate::stage_spec!(
+    SimCommand,
+    TickStage::Command,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding
+    ]
+);
+
+/// **P7**：命令段是**结构段**——`spawn_monster`（生成落图）与 `leave`（离场）会 `insert`/`remove`
+/// 整个实体。只有声明本标记的段能拿到 `StructuralAccess`（`StageEntities::insert`/`remove` 的
+/// 编译期门）；段边界后 `World::tick_head` 调 `EntityStore::refresh_views()` 刷新 facade 缓存。
+impl crate::tick::Structural for SimCommand {}
+
+/// **P7 `Command` 段（#1）**：`tick_head` 原「命令 FIFO」内联循环。
+///
+/// 段位与迁移前逐字相同（`Clock` 之后、`SimHiterSnapshot` 之前）；**入队序 = 处理序**由
+/// `command_stage_core` 的 `pop_front` 循环保证（一个系统、逐条、不得拆散/并行）。
+///
+/// **RNG**：攻击（`AttackDir` 抽数）、推挤/冲撞（`CharPushed`/`MapRandomMove`）、生成（掉落预算
+/// `generate_drops`）、屠宰效果体（恰 2 抽）都在本段抽数 ⇒ 段位固定，RNG 消费者次序不变。
+///
+/// **产物**：`processed` 记账仍在调用点（`World::apply_command`），语义事件由各族 impl 直接写
+/// 真实 [`TickRecord`]（P7：不再经过 facade 的一次性 scratch record）。
+pub fn sim_command_stage_system(world: &mut bevy_ecs::world::World) {
+    command_stage_core::<SimCommand>(world)
+}
+
+/// `Command` 段的共用执行体（泛型只为让段 spec 与其访问面同源）。
+///
+/// 借用形状照 [`settle_deaths_stage_core`]：owned `SimState` + [`StageEntities`] 借 bevy `World`，
+/// 段尾逐项归还；`TickRecordRes` / [`CommandQueueRes`] 由段边界插入、段内取用后放回。
+fn command_stage_core<S>(world: &mut bevy_ecs::world::World)
+where
+    S: FullAccessSpec + crate::tick::Structural,
+{
+    StageTrace::record(world, TickStage::Command);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("Command 段：SimState 必须在段窗口内（段边界契约）");
+    let mut record = world
+        .remove_resource::<TickRecordRes>()
+        .expect("Command 段：TickRecordRes 必须由段边界插入（段边界契约）");
+    let mut pending = world
+        .remove_resource::<CommandQueueRes>()
+        .expect("Command 段：CommandQueueRes 必须由段边界插入（段边界契约）");
+    {
+        let mut ad = StageEntities::<S>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        // **FIFO 合同**：严格按入队顺序处理，逐条、不重排（`openmir2-world-ecs-p7-command-stage` A2）。
+        while let Some(cmd) = pending.0.pop_front() {
+            World::apply_command(&mut access, &mut sim, &mut record.0, cmd);
+        }
+    }
+    world.insert_resource(pending);
+    world.insert_resource(record);
+    world.insert_resource(sim);
+}
+
+/// **S4d-1/S4d-2**：本 tick 的实体句柄表（业务 id + bevy 实体，槽位顺序）。
+///
+/// tick 边界从 `EntityStore::order_index` / `order_entities` 一次性填入；系统按它取组件，
+/// 不迭代 `Query` 求顺序（与 `AoiIds` 同口径）。只在系统运行期间存在。
+#[derive(bevy_ecs::prelude::Resource)]
+pub struct TickEntityIds(pub Vec<(i32, bevy_ecs::entity::Entity)>);
+
+/// **S4d-2 `SimHiterSnapshot` 段（#2）**：PL-1 玩家 `LastHiter` 清理前快照。
+///
+/// 只读实体组件（`Appearance`/`LifeCycle`/`CombatAttribution`），按 `SlotOrder` 的槽位序
+/// （`TickEntityIds`）扫描，结果写入 `SimState::player_hiter_snapshot`。不抽 RNG、不改实体。
+pub fn sim_hiter_snapshot_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimHiterSnapshot);
+    let ids = world.resource::<TickEntityIds>().0.clone();
+    let mut snapshot = Vec::new();
+    for (id, entity) in &ids {
+        let (Some(appearance), Some(life), Some(attribution)) = (
+            world.get::<Appearance>(*entity),
+            world.get::<LifeCycle>(*entity),
+            world.get::<CombatAttribution>(*entity),
+        ) else {
+            continue;
+        };
+        // 卡 `openmir2-makeghost-lifecycle` M-2（矩阵 B2）：ghost 不进快照 ⇒「快照 = 本轮真正
+        // 会跑的玩家」。与迁移前 `tick_head` 的 `iter_ref` 过滤逐项一致。
+        if appearance.race == crate::entity::ACTOR_RACE_PLAY && !life.ghost {
+            snapshot.push(PlayerHiterSnapshot {
+                actor_id: *id,
+                last_hiter: attribution.last_hiter,
+                last_hiter_tick: attribution.last_hiter_tick,
+            });
+        }
+    }
+    world.resource_mut::<SimState>().player_hiter_snapshot = snapshot;
+}
+
+/// **S4d-1 `OutputDrain` 段（#15）**：把本 tick 各段累积的输出事件按发生序转抄进 [`TickRecord`]。
+///
+/// 本段不抽 RNG、不访问实体；输入只来自 `SimState` 的累积向量，因此不改变 RNG 消费者次序。
+/// 转抄顺序与迁移前 `tick_head` 的 5 处 `record.*.append` 逐项一致（每个向量内部保持发生序）。
+pub fn output_drain_system(
+    mut sim: ResMut<SimState>,
+    mut record: ResMut<TickRecordRes>,
+    mut trace: Option<ResMut<StageTrace>>,
+) {
+    if let Some(t) = trace.as_deref_mut() {
+        t.0.push(TickStage::OutputDrain);
+    }
+    let record = &mut record.0;
+    // **Lane B**：门/墙 `Run` 产生的结构事件（顺序 = AI 槽位序）。
+    record
+        .castle_structures
+        .append(&mut sim.pending_castle_structures);
+    // **W4**：怪物 AI 的攻击结算（与命令 FIFO 的 `record.attacks` 同一份记录，命令在前）。
+    record.attacks.append(&mut sim.pending_ai_attacks);
+    // **武器耐久**：命令 FIFO / 怪物 AI 的 `CheckWeaponUpgrade` 结算（发生序）。
+    record.weapon_breaks.append(&mut sim.pending_weapon_breaks);
+    // **642 武器磨损**：同一发生序。
+    record.weapon_wears.append(&mut sim.pending_weapon_wears);
+    // **monster-showhp-53**：非 Play 实体的 `ShowHp` 53 事件。
+    record
+        .show_hp_health_changes
+        .append(&mut sim.pending_show_hp_health_changes);
+}
+
+/// **S4d-3/P1 起、P2/P2b 扩到 7 段**：head 侧的段运行器组（`Clock` / `SimHiterSnapshot` /
+/// `SimExpireHitters` / `SimExtraAbil` / `SimMapEvents` / `SimPlayerRunExpiry` / `OutputDrain`）。
+///
+/// 为什么是七个 `TickRunner` 而不是一个：这些段之间仍夹着尚未系统化的内联段
+/// （命令 FIFO、死亡结算、…、重叠推挤；P3–P7 逐批消灭）。合成一次 `run` 会把已系统化的段
+/// 挤到一起，改变段序与 RNG 消费者次序（`SimHiterSnapshot` 必须在命令 FIFO 之后、
+/// `SimMapEvents` 必须在 `SimExtraAbil` 之后且 `SimSlaveCleanup` 之前、`OutputDrain` 必须在
+/// `check_dup_obj` 之后）。P7 收口后 head 侧应合成**一个** `TickRunner`。
+pub struct HeadRunner {
+    /// 段 -> 该段的 `TickRunner`（每段一个 schedule，段之间仍由 facade 的内联段分隔）。
+    runners: Vec<(TickStage, TickRunner)>,
+}
+
+impl HeadRunner {
+    pub fn new() -> Self {
+        let mut me = HeadRunner {
+            runners: Vec::new(),
+        };
+        me.add(TickStage::Clock, advance_clock_system);
+        me.add(TickStage::Command, sim_command_stage_system);
+        me.add(TickStage::SimHiterSnapshot, sim_hiter_snapshot_system);
+        me.add(TickStage::SimExpireHitters, expire_hitters_stage_system);
+        me.add(TickStage::SimSettleDeaths, sim_settle_deaths_stage_system);
+        me.add(TickStage::SimSelfDeliver, sim_self_deliver_stage_system);
+        me.add(TickStage::SimExtraAbil, expire_extra_abil_stage_system);
+        me.add(TickStage::SimMapEvents, sim_map_events_stage_system);
+        me.add(TickStage::SimSlaveCleanup, sim_slave_cleanup_stage_system);
+        me.add(TickStage::SimBuff, sim_buff_stage_system);
+        me.add(TickStage::SimMonsterAi, sim_monster_ai_stage_system);
+        me.add(TickStage::SimNpc, sim_npc_stage_system);
+        me.add(TickStage::SimMerchant, sim_merchant_stage_system);
+        me.add(
+            TickStage::SimPlayerRunExpiry,
+            expire_player_run_state_stage_system,
+        );
+        me.add(TickStage::SimDup, sim_dup_stage_system);
+        me.add(TickStage::OutputDrain, output_drain_system);
+        me
+    }
+
+    /// 注册一段（一个系统）。重复注册同一段是接线错误（运行期 panic）。
+    fn add<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) {
+        assert!(
+            !self.runners.iter().any(|(s, _)| *s == stage),
+            "段 {:?} 重复注册（HeadRunner）",
+            stage
+        );
+        let mut runner = TickRunner::new();
+        runner.add_systems(stage, system);
+        self.runners.push((stage, runner));
+    }
+
+    /// 跑一段；未注册 ⇒ panic（接线错误，与既有 `expect` 口径一致）。
+    fn run(&mut self, stage: TickStage, world: &mut bevy_ecs::world::World) {
+        let (_, runner) = self
+            .runners
+            .iter_mut()
+            .find(|(s, _)| *s == stage)
+            .unwrap_or_else(|| panic!("段 {:?} 未在 HeadRunner 注册", stage));
+        runner.run(world);
+    }
+}
+
+impl Default for HeadRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// **S4d-3/P2**：tail 侧段运行器组（当前 `TailSuperManRefill` + `OutputAoi`）。
+///
+/// 与 [`HeadRunner`] 同形：每段一个 `TickRunner`，段之间由 facade 的内联段分隔；
+/// P7 收口后 tail 侧应合成一个 runner。
+pub struct TailRunner {
+    runners: Vec<(TickStage, TickRunner)>,
+}
+
+impl TailRunner {
+    pub fn new() -> Self {
+        let mut me = TailRunner {
+            runners: Vec::new(),
+        };
+        me.add(
+            TickStage::TailSuperManRefill,
+            tail_super_man_refill_stage_system,
+        );
+        me.add(TickStage::TailPlayerDeaths, tail_player_deaths_stage_system);
+        me.add(
+            TickStage::TailVerifyMapTime,
+            tail_verify_map_time_stage_system,
+        );
+        me.add(TickStage::OutputAoi, output_aoi_stage_system);
+        me
+    }
+
+    fn add<M>(&mut self, stage: TickStage, system: impl IntoSystem<(), (), M>) {
+        assert!(
+            !self.runners.iter().any(|(s, _)| *s == stage),
+            "段 {:?} 重复注册（TailRunner）",
+            stage
+        );
+        let mut runner = TickRunner::new();
+        runner.add_systems(stage, system);
+        self.runners.push((stage, runner));
+    }
+
+    fn run(&mut self, stage: TickStage, world: &mut bevy_ecs::world::World) {
+        let (_, runner) = self
+            .runners
+            .iter_mut()
+            .find(|(s, _)| *s == stage)
+            .unwrap_or_else(|| panic!("段 {:?} 未在 TailRunner 注册", stage));
+        runner.run(world);
+    }
+}
+
+impl Default for TailRunner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// **S4d-3/P2**：段输出旁路（资源）。
+///
+/// `tick_head` 里的 `TickRecord` 仍是栈上局部变量（其余内联段还在写它），因此需要把
+/// 「段系统产出的 `TickRecord` 字段」先落到本资源，facade 在该段跑完后取走——与
+/// `OutputDrain` 的边界搬移同口径（段内不长期持有 record）。
+#[derive(bevy_ecs::prelude::Resource, Default)]
+pub struct StageOut {
+    pub extra_abil_expiries: Vec<ExtraAbilExpiry>,
+    pub run_state_expiries: Vec<(i32, RunStateExpiry)>,
+    /// **P3a**：`SimDup` 段的推挤事件（`record.pushes` 的一段；facade 在段后取走）。
+    pub pushes: Vec<crate::action::PushEvent>,
+    /// **P6a**：`SimBuff` 段的合并产出（`BUFF_PASSES_PER_TICK` 个 pass 拼接；facade 在段后取走）。
+    pub buff: Option<BuffTickOutcome>,
+    /// **P6a2**：`SimSelfDeliver` 段的自投递产出（facade 在段后取走）。
+    pub self_deliveries: Vec<crate::slave::SelfDelayOutcome>,
+    /// **P6a2b**：`SimNpc` 段的 `ProcessNpcs` 产出（facade 在段后取走）。
+    pub npc: Option<crate::npc::NpcTickOutcome>,
+    /// **P6b**：`SimMerchant` 段的 `ProcessMerchants` 产出（facade 在段后取走）。
+    pub merchant: Option<crate::merchant::MerchantTickOutcome>,
+}
+
+/// **S4d-3/P1**：`OutputAoi` 段的注册壳——记 [`StageTrace`] 后委派给既有
+/// [`crate::aoi::output_aoi_system`]（`aoi.rs` 不在本卡写集，故用薄壳统一记段序）。
+pub fn output_aoi_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::OutputAoi);
+    crate::aoi::output_aoi_system(world);
+}
+
+crate::stage_spec!(
+    SimExpireHitters,
+    TickStage::SimExpireHitters,
+    read: [LifeCycle],
+    write: [CombatAttribution]
+);
+
+/// **P2 段 #3 `SimExpireHitters`**：命中者过期（`BaseObject.Base.cs` 的 `LastHiter` 清理）。
+///
+/// 逐项对应旧 `World::expire_hitters`：先按槽位序收集 `gone`（`death || ghost`），再按
+/// **同一槽位序**逐个实体清理 `last_hiter`（30s）/`exp_hitter`（6s），目标已 `gone` 也清。
+pub fn expire_hitters_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimExpireHitters);
+    let now = world.resource::<SimState>().clock_ms;
+    let mut ad = crate::tick::StageEntities::<SimExpireHitters>::new(world);
+    let gone: Vec<i32> = ad
+        .order()
+        .into_iter()
+        .filter(|(id, _)| ad.get::<LifeCycle>(*id).is_some_and(|l| l.death || l.ghost))
+        .map(|(id, _)| id)
+        .collect();
+    for (id, _) in ad.order() {
+        let Some(attr) = ad.get_mut::<CombatAttribution>(id) else {
+            continue;
+        };
+        if let Some(h) = attr.last_hiter {
+            if (now - attr.last_hiter_tick) > 30_000 || gone.contains(&h) {
+                attr.last_hiter = None;
+            }
+        }
+        if let Some(h) = attr.exp_hitter {
+            if (now - attr.exp_hitter_tick) > 6_000 || gone.contains(&h) {
+                attr.exp_hitter = None;
+            }
+        }
+    }
+}
+
+crate::stage_spec!(
+    SimExtraAbil,
+    TickStage::SimExtraAbil,
+    read: [],
+    write: [BuffState]
+);
+
+/// **P2 段 #6 `SimExtraAbil`**：`ExtraAbil` 过期（oracle `PlayObject.Run` 的消息泵，
+/// 本骨架每 world tick 一次，相位差登记 T-B5-2）。
+///
+/// 逐项对应旧 `World::expire_extra_abil`：按槽位序对每个实体扫 7 个槽；到期（严格 `>`）
+/// 清 `extra_abil`/`extra_abil_flag` 并记 `Restored`，到期前 10s 且 flag==0 记
+/// `TenSecondsBefore`；只有 `events` 非空的实体进输出。不抽 RNG。
+pub fn expire_extra_abil_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimExtraAbil);
+    let now = world.resource::<SimState>().clock_ms;
+    let mut out = Vec::new();
+    {
+        let mut ad = crate::tick::StageEntities::<SimExtraAbil>::new(world);
+        for (id, _) in ad.order() {
+            let Some(buff) = ad.get_mut::<BuffState>(id) else {
+                continue;
+            };
+            let mut expiry = ExtraAbilExpiry {
+                actor_id: id,
+                ..ExtraAbilExpiry::default()
+            };
+            for i in 0..7usize {
+                if buff.extra_abil[i] == 0 {
+                    continue;
+                }
+                if now > buff.extra_abil_times[i] {
+                    buff.extra_abil[i] = 0;
+                    buff.extra_abil_flag[i] = 0;
+                    expiry.health_changed = true;
+                    expiry
+                        .events
+                        .push(ExtraAbilEventKind::Restored(u8::try_from(i).unwrap_or(0)));
+                } else if buff.extra_abil_flag[i] == 0 && now > buff.extra_abil_times[i] - 10_000 {
+                    buff.extra_abil_flag[i] = 1;
+                    expiry.events.push(ExtraAbilEventKind::TenSecondsBefore(
+                        u8::try_from(i).unwrap_or(0),
+                    ));
+                }
+            }
+            if !expiry.events.is_empty() {
+                out.push(expiry);
+            }
+        }
+    }
+    world.resource_mut::<StageOut>().extra_abil_expiries = out;
+}
+
+crate::stage_spec!(
+    SimPlayerRunExpiry,
+    TickStage::SimPlayerRunExpiry,
+    read: [Appearance, LifeCycle],
+    write: [PlayerRunState]
+);
+
+/// **P2 段 #13 `SimPlayerRunExpiry`**：`PlayObject.Run` 的烈火 20s / 双龙 60s 到期段。
+///
+/// 逐项对应旧 `World::expire_player_run_state`：槽位序筛 `Race==Play && !Ghost`，
+/// 严格 `>` 到期（20s / 60s）；烈火先 `SpiritsGone` 再 `FireHitSocket`（oracle 行序），
+/// 双龙只有 `TwinHitSocket`。不抽 RNG，段位不变。
+pub fn expire_player_run_state_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimPlayerRunExpiry);
+    let now = world.resource::<SimState>().clock_ms;
+    let mut events = Vec::new();
+    {
+        let mut ad = crate::tick::StageEntities::<SimPlayerRunExpiry>::new(world);
+        let ids: Vec<i32> = ad
+            .order()
+            .into_iter()
+            .filter(|(id, _)| {
+                ad.get::<Appearance>(*id)
+                    .is_some_and(|a| a.race == crate::entity::ACTOR_RACE_PLAY)
+                    && ad.get::<LifeCycle>(*id).is_some_and(|l| !l.ghost)
+            })
+            .map(|(id, _)| id)
+            .collect();
+        for id in ids {
+            let Some(pr) = ad.get_mut::<PlayerRunState>(id) else {
+                continue;
+            };
+            if pr.fire_hit_skill && (now - pr.latest_fire_hit_tick) > 20 * 1000 {
+                pr.fire_hit_skill = false;
+                events.push((id, RunStateExpiry::SpiritsGone));
+                events.push((id, RunStateExpiry::FireHitSocket));
+            }
+            if pr.twin_hit_skill && (now - pr.latest_twin_hit_tick) > 60 * 1000 {
+                pr.twin_hit_skill = false;
+                events.push((id, RunStateExpiry::TwinHitSocket));
+            }
+        }
+    }
+    world.resource_mut::<StageOut>().run_state_expiries = events;
+}
+
+crate::stage_spec!(
+    TailSuperManRefill,
+    TickStage::TailSuperManRefill,
+    read: [Appearance, Flags],
+    write: [Vitals]
+);
+
+/// **P2 段 #16 `TailSuperManRefill`**：玩家 `BaseObject.Run` 的 SuperMan 回满段
+/// （`BaseObject.Base.cs:32-36`，在 `HP == 0 ⇒ Die()` 之前）。
+///
+/// 逐项对应旧 `tick_tail` 的 `for_each_mut`：槽位序、`Race==Play && Flags.super_man`、
+/// 回满 `HP=MaxHP` / `MP=MaxMP`；非玩家侧的同段仍在各自 `Run` 里（不在本段）。
+pub fn tail_super_man_refill_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::TailSuperManRefill);
+    let mut ad = crate::tick::StageEntities::<TailSuperManRefill>::new(world);
+    for (id, _) in ad.order() {
+        let is_play = ad
+            .get::<Appearance>(id)
+            .is_some_and(|a| a.race == crate::entity::ACTOR_RACE_PLAY);
+        let super_man = ad.get::<Flags>(id).is_some_and(|f| f.super_man);
+        if !(is_play && super_man) {
+            continue;
+        }
+        if let Some(v) = ad.get_mut::<Vitals>(id) {
+            v.hp = v.max_hp;
+            v.mp = v.max_mp;
+        }
+    }
+}
+
+crate::stage_spec!(
+    SimMapEvents,
+    TickStage::SimMapEvents,
+    read: [
+        crate::entity::Entity,
+        crate::entity::Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::Recovery,
+        crate::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::MonsterClassState,
+        PlayerRunState,
+        crate::GroupState,
+        crate::Revival,
+        BuffState,
+        crate::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: []
+);
+
+/// 段内计划：一个已过 `fire_run_tick` 门的火墙事件要做的实体工作。
+struct MapEventWork {
+    owner_id: Option<i32>,
+    damage: i32,
+    /// 事件格的 `GetBaseObjects(..., boFlag=true)` **枚举面**（未做 Death 过滤）。
+    candidates: Vec<i32>,
+}
+
+/// `Envirnoment.GetBaseObjects(nX, nY, boFlag=true)` 的枚举面（`Envirnoment.cs:1311-1342`）：
+/// 格子有效 ⇒ 依 `ObjList` 顺序给出 `cell_obj_id > 0 && actor_object` 的 id。
+///
+/// 与 [`World::base_objects_at`] 的差别只在最后一步：那里用 `entities.get(id).death` 过滤；
+/// 段内没有 `EntityStore`，Death 位由 `StageEntities` 读**同一个 `LifeCycle` 组件** ⇒ 真值源与
+/// 过滤次序（格判定之后、逐项短路）都相同。
+fn map_cell_object_ids(maps: &[MapGrid], map_id: usize, x: i32, y: i32) -> Vec<i32> {
+    let Some(map) = maps.get(map_id) else {
+        return Vec::new();
+    };
+    let (cell, success) = map.get_cell_info(x, y);
+    if !success || !cell.is_available() {
+        return Vec::new();
+    }
+    cell.obj_list
+        .iter()
+        .filter(|o| o.cell_obj_id > 0 && o.actor_object)
+        .map(|o| o.cell_obj_id)
+        .collect()
+}
+
+/// 段内的 `IsGroupMember` 注册表源（旧 [`World::attacker_group_members`] 的同源实现）：
+/// 团长（`GroupOwner`）实体持有的 `GroupMembers`；`GroupOwner == 0` ⇒ 空表。
+fn stage_group_members<S>(ad: &mut StageEntities<'_, S>, attacker: &EntitySpawn) -> Vec<i32>
+where
+    S: StageSpec + crate::tick::Reads<crate::GroupState>,
+{
+    let group = attacker.group_state();
+    if group.group_owner == 0 {
+        return Vec::new();
+    }
+    ad.get::<crate::GroupState>(group.group_owner)
+        .map(|g| g.group_members.clone())
+        .unwrap_or_default()
+}
+
+/// **S4d-3/P2b 段 #7 `SimMapEvents`**：地图事件处理器（`EventProcessor.ExecuteInternal` 的单线程
+/// 等价物），逐项对应旧 `World::run_map_events`：
+///
+/// 1. 火墙**逆插入序**、三重门（`closed` / `!active` / `now - run_start <= run_tick` 跳过）；
+///    过门先 `run_start = now`，再过 `now - fire_run_tick > 3000` 才结算（`fire_run_tick = now`）；
+/// 2. 施法者 = `snapshot_spawn(owner_id)` 且 `!ghost && !death`（与旧 `spawn_cloned` 同源）；
+/// 3. 目标枚举 = 事件格 `GetBaseObjects(..., boFlag=true)`（格内序）→ 段内按 `LifeCycle.death`
+///    过滤（与旧 `base_objects_at` 的 `!e.death` 同源）；
+/// 4. 组队成员表 = 团长实体的 `GroupMembers`（与旧 `attacker_group_members` 同源）；
+/// 5. `is_proper_target_grouped_direct(&o, &t, &group)` 的 target 是 `EntityRef`（与旧
+///    `entities.get(tid)` 同源）；命中目标按「事件逆序 × 格内序」入 `pending_mag_struck`，
+///    `order` 从段入口的 `msg_order` 起连续递增；
+/// 6. 关闭门（严格 `>`）与 `owner_id` 归一（`Ghost || Death` ⇒ `None`）；`DigOut` 事件同门；
+/// 7. **不抽 RNG**（与旧实现一致）。
+///
+/// 分段理由（设计 §2.2 A4）：`maps` 与实体组件不能同时借用 ⇒ Phase 1 只碰 `SimState`
+/// （时钟 / 事件表 / 格子表枚举），Phase 2 只碰实体（`StageEntities`），Phase 3 回写 `SimState`。
+/// 段内没有实体写入，因此三个阶段的拆分不改变任何可观测顺序。
+pub fn sim_map_events_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimMapEvents);
+
+    // ---- Phase 1：只碰 SimState；收集实体工作与「存活检查」清单 ----
+    let mut work: Vec<MapEventWork> = Vec::new();
+    let mut alive_checks: Vec<(usize, Option<i32>)> = Vec::new();
+    {
+        let mut sim_guard = world.resource_mut::<SimState>();
+        let now = sim_guard.clock_ms;
+        let SimState {
+            maps,
+            fire_burn_events,
+            dig_out_events,
+            ..
+        } = &mut *sim_guard;
+        let len = fire_burn_events.len();
+        for i in (0..len).rev() {
+            let ev = &fire_burn_events[i];
+            if ev.closed || !ev.active || now - ev.run_start_ms <= ev.run_tick_ms {
+                continue;
+            }
+            fire_burn_events[i].run_start_ms = now;
+            let (map_id, x, y, damage, owner_id) = {
+                let ev = &fire_burn_events[i];
+                (ev.map_id, ev.x, ev.y, ev.damage, ev.owner_id)
+            };
+            if now - fire_burn_events[i].fire_run_tick_ms > 3000 {
+                fire_burn_events[i].fire_run_tick_ms = now;
+                work.push(MapEventWork {
+                    owner_id,
+                    damage,
+                    candidates: map_cell_object_ids(maps, map_id, x, y),
+                });
+            }
+            let (open_start, continue_ms) = {
+                let ev = &fire_burn_events[i];
+                (ev.open_start_ms, i64::from(ev.continue_ms))
+            };
+            if now - open_start > continue_ms {
+                fire_burn_events[i].closed = true;
+                fire_burn_events[i].visible = false;
+            }
+            alive_checks.push((i, owner_id));
+        }
+        // `ET_DIGOUTZOMBI`：`RunTick=500ms` 门 + 关闭门（严格 `>`），`Closed` 即 retain 掉。
+        if !dig_out_events.is_empty() {
+            for ev in dig_out_events.iter_mut() {
+                if ev.closed || now - ev.run_start_ms <= ev.run_tick_ms {
+                    continue;
+                }
+                ev.run_start_ms = now;
+                if now - ev.open_start_ms > ev.continue_ms {
+                    ev.closed = true;
+                }
+            }
+            dig_out_events.retain(|e| !e.closed);
+        }
+    }
+
+    // ---- Phase 2：只碰实体（快照 / 判定链）；输出 owned 的待入队消息与存活位 ----
+    let mut pending: Vec<PendingMagStruck> = Vec::new();
+    let mut alive: Vec<(usize, bool)> = Vec::with_capacity(alive_checks.len());
+    {
+        let mut ad = crate::tick::StageEntities::<SimMapEvents>::new(world);
+        for w in &work {
+            let owner = w
+                .owner_id
+                .and_then(|id| ad.snapshot_spawn(id))
+                .filter(|e| !e.ghost && !e.death);
+            let Some(o) = owner else {
+                continue;
+            };
+            let group = stage_group_members(&mut ad, &o);
+            for tid in &w.candidates {
+                // 旧 `base_objects_at` 的 `!e.death`（同一 `LifeCycle` 组件；id 不在槽位表 ⇒ 跳过）。
+                if !ad.get::<LifeCycle>(*tid).is_some_and(|l| !l.death) {
+                    continue;
+                }
+                let Some(t) = ad.entity_ref(*tid) else {
+                    continue;
+                };
+                if crate::combat::is_proper_target_grouped_direct(&o, &t, &group) {
+                    pending.push(PendingMagStruck {
+                        target_id: *tid,
+                        caster_id: o.id,
+                        power: w.damage,
+                        mine: true,
+                        order: 0,
+                    });
+                }
+            }
+        }
+        for (index, owner_id) in &alive_checks {
+            let still_alive = owner_id.is_some_and(|id| {
+                ad.get::<LifeCycle>(id)
+                    .is_some_and(|l| !l.ghost && !l.death)
+            });
+            alive.push((*index, still_alive));
+        }
+    }
+
+    // ---- Phase 3：回写 SimState（`owner_id` 归一 + 消息入队序） ----
+    {
+        let mut sim = world.resource_mut::<SimState>();
+        for (index, still_alive) in alive {
+            if !still_alive {
+                if let Some(ev) = sim.fire_burn_events.get_mut(index) {
+                    ev.owner_id = None;
+                }
+            }
+        }
+        let base = sim.msg_order;
+        let count = pending.len() as u64;
+        for (offset, mut msg) in pending.into_iter().enumerate() {
+            msg.order = base + offset as u64;
+            sim.pending_mag_struck.push(msg);
+        }
+        sim.msg_order = base + count;
+    }
+}
+
+crate::stage_spec!(
+    SimDup,
+    TickStage::SimDup,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        DupState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        DupState
+    ]
+);
+
+/// **S4d-3/P3a 段 #14 `SimDup`**：重叠推挤（`PlayObject.Run:263-285`）。
+///
+/// 段位与旧内联调用完全相同（`tick_head` 里 `record.pushes.extend(self.check_dup_obj())` 那一行；
+/// `check_dup_obj` 现在是本段的兼容入口）。RNG：每个过 `should_push` 门的实体恰抽一次
+/// `RandomByte(8)`（`run_gap::dup_push_dir`），抽数点/次数/次序由 `check_dup_obj_core` 与
+/// facade 共用同一份实现。
+///
+/// **段内借用形状（2026-11-13 裁决）**：`remove_resource::<SimState>()` 取走 owned `SimState`
+/// → 与 `StageEntities` 并行使用（实体在 bevy World、RNG/地图在 owned SimState）→ 段尾
+/// `insert_resource` 归还。这是 P0/P1 边界搬移的同构形态，搬移点在系统内部；不用
+/// 设计 §3.4 的 `StageWorld`（见设计件 DvX）。
+pub fn sim_dup_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimDup);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("SimState 必须在段窗口内（段边界契约）");
+    let pushes = {
+        let mut ad = StageEntities::<SimDup>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        World::check_dup_obj_core(&mut access, &mut sim)
+    };
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().pushes = pushes;
+}
+
+crate::stage_spec!(
+    SimSettleDeaths,
+    TickStage::SimSettleDeaths,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+crate::stage_spec!(
+    TailPlayerDeaths,
+    TickStage::TailPlayerDeaths,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+/// **P3b**：结算段 spec 的共同读集（[`crate::entity::StageAccess`] 的 24 个读组件）。
+///
+/// 组合视图（`EntityRef`/`EntityMut`）要取齐整条记录，所以 spec 必须声明全集；写集 20 个
+/// 是 `EntityMut` 的可变字段（`Transform`/`MapBinding`/`Recovery`/`PvpState` 不在其中）。
+trait FullAccessSpec:
+    StageSpec
+    + crate::tick::Reads<crate::entity::Entity>
+    + crate::tick::Reads<Transform>
+    + crate::tick::Reads<crate::entity::MapBinding>
+    + crate::tick::Reads<Vitals>
+    + crate::tick::Reads<crate::entity::Ability>
+    + crate::tick::Reads<crate::entity::Progression>
+    + crate::tick::Reads<crate::entity::SpawnBinding>
+    + crate::tick::Reads<crate::entity::DropState>
+    + crate::tick::Reads<CombatAttribution>
+    + crate::tick::Reads<crate::entity::Recovery>
+    + crate::tick::Reads<crate::entity::PvpState>
+    + crate::tick::Reads<Flags>
+    + crate::tick::Reads<LifeCycle>
+    + crate::tick::Reads<Appearance>
+    + crate::tick::Reads<crate::entity::MonsterClassState>
+    + crate::tick::Reads<PlayerRunState>
+    + crate::tick::Reads<crate::entity::GroupState>
+    + crate::tick::Reads<crate::entity::Revival>
+    + crate::tick::Reads<BuffState>
+    + crate::tick::Reads<crate::entity::SlaveState>
+    + crate::tick::Reads<crate::entity::Inventory>
+    + crate::tick::Reads<crate::entity::MerchantState>
+    + crate::tick::Reads<crate::entity::NpcState>
+    + crate::tick::Reads<crate::entity::AiState>
+{
+}
+impl<T> FullAccessSpec for T where
+    T: StageSpec
+        + crate::tick::Reads<crate::entity::Entity>
+        + crate::tick::Reads<Transform>
+        + crate::tick::Reads<crate::entity::MapBinding>
+        + crate::tick::Reads<Vitals>
+        + crate::tick::Reads<crate::entity::Ability>
+        + crate::tick::Reads<crate::entity::Progression>
+        + crate::tick::Reads<crate::entity::SpawnBinding>
+        + crate::tick::Reads<crate::entity::DropState>
+        + crate::tick::Reads<CombatAttribution>
+        + crate::tick::Reads<crate::entity::Recovery>
+        + crate::tick::Reads<crate::entity::PvpState>
+        + crate::tick::Reads<Flags>
+        + crate::tick::Reads<LifeCycle>
+        + crate::tick::Reads<Appearance>
+        + crate::tick::Reads<crate::entity::MonsterClassState>
+        + crate::tick::Reads<PlayerRunState>
+        + crate::tick::Reads<crate::entity::GroupState>
+        + crate::tick::Reads<crate::entity::Revival>
+        + crate::tick::Reads<BuffState>
+        + crate::tick::Reads<crate::entity::SlaveState>
+        + crate::tick::Reads<crate::entity::Inventory>
+        + crate::tick::Reads<crate::entity::MerchantState>
+        + crate::tick::Reads<crate::entity::NpcState>
+        + crate::tick::Reads<crate::entity::AiState>
+{
+}
+
+/// **P3b**：结算段的共用执行体（`SimSettleDeaths` 与 `TailPlayerDeaths` 同一实现点）。
+///
+/// 借用形状按 2026-11-13 裁决：`remove_resource::<SimState>()` 取 owned SimState →
+/// `StageEntities` 借 bevy World → 段尾归还；`TickRecordRes` 由段边界插入/段内取用后再放回。
+fn settle_deaths_stage_core<S: FullAccessSpec>(
+    world: &mut bevy_ecs::world::World,
+    only_players: bool,
+) {
+    StageTrace::record(
+        world,
+        if only_players {
+            TickStage::TailPlayerDeaths
+        } else {
+            TickStage::SimSettleDeaths
+        },
+    );
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("SimState 必须在段窗口内（段边界契约）");
+    let mut record = world
+        .remove_resource::<TickRecordRes>()
+        .expect("TickRecordRes 必须由段边界插入（结算段契约）");
+    {
+        let mut ad = StageEntities::<S>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        World::settle_deaths_impl(&mut access, &mut sim, &mut record.0, only_players);
+    }
+    world.insert_resource(record);
+    world.insert_resource(sim);
+}
+
+/// **S4d-3/P3b 段 #4 `SimSettleDeaths`**：非玩家死亡结算（`tick_head` 原位）。
+pub fn sim_settle_deaths_stage_system(world: &mut bevy_ecs::world::World) {
+    settle_deaths_stage_core::<SimSettleDeaths>(world, false);
+}
+
+/// **S4d-3/P3b 段 #17 `TailPlayerDeaths`**：玩家死亡结算（`tick_tail` 原位；P32 复活门之后）。
+pub fn tail_player_deaths_stage_system(world: &mut bevy_ecs::world::World) {
+    settle_deaths_stage_core::<TailPlayerDeaths>(world, true);
+}
+
+crate::stage_spec!(
+    SimSlaveCleanup,
+    TickStage::SimSlaveCleanup,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+/// **S4d-3/P4 段 #8 `SimSlaveCleanup`**：宝宝清表（`BaseObject.Base.cs:208-217`）。
+///
+/// 段位 = `tick_head` 原 `slave::slave_list_cleanup_all(self)` 那一行（地图事件之后、buff 之前）；
+/// 处理顺序 = 槽位序（`order_ids`）+ 表内**倒序**删除（`slave_list_cleanup_impl`）。不抽 RNG。
+pub fn sim_slave_cleanup_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimSlaveCleanup);
+    let mut ad = StageEntities::<SimSlaveCleanup>::new(world);
+    let mut access = crate::entity::StageAccess::new(&mut ad);
+    crate::slave::slave_list_cleanup_all_impl(&mut access);
+}
+
+crate::stage_spec!(
+    SimBuff,
+    TickStage::SimBuff,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+/// **S4d-3/P6a 段 #9 `SimBuff`**：buff pass（`crate::buff` 的 `BUFF_PASSES_PER_TICK` 个 50ms `DoWork`）。
+///
+/// 段位 = `tick_head` 原 `if self.buff_enabled { self.buff_tick() }` 那一行（宝宝清表之后、怪物 AI
+/// 之前；设计 §5.2 的 RNG 消费者序不变）。段内借用形状按 Dv5：先 `remove_resource::<SimState>()`
+/// 取 owned 状态，`StageEntities` 借 bevy `World`，段尾归还；`BuffSystem` 从 `SimState` 取出交给
+/// [`crate::buff::BuffSystem::do_work_impl`]，与 facade `World::buff_do_work` 共用同一份实现。
+///
+/// **RNG**：buff 段不抽随机数（`operate` / `reap_destroyed` / `damage_health_impl` 无 `rng` 调用）
+/// ⇒ 对世界 RNG 流零影响，消费者次序不变。
+pub fn sim_buff_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimBuff);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimBuff）");
+    let base = sim.clock_ms + BUFF_EPOCH_MS;
+    let poison_dec_health_time = sim.poison_dec_health_time;
+    let mut buffs = std::mem::take(&mut sim.buffs);
+    let mut out = BuffTickOutcome::default();
+    {
+        let mut ad = StageEntities::<SimBuff>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        for i in 0..BUFF_PASSES_PER_TICK {
+            let now = base + i * BUFF_PASS_INTERVAL_MS;
+            sim.buff_pass_tick = now;
+            let pass = buffs.do_work_impl(&mut access, now, poison_dec_health_time);
+            out.status_changes.extend(pass.status_changes);
+            out.sysmsgs.extend(pass.sysmsgs);
+            out.recalcs.extend(pass.recalcs);
+            out.health_spell_changes.extend(pass.health_spell_changes);
+        }
+    }
+    sim.buffs = buffs;
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().buff = Some(out);
+}
+
+crate::stage_spec!(
+    SimSelfDeliver,
+    TickStage::SimSelfDeliver,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::PvpState
+    ]
+);
+
+/// **P6a2 段 #5 `SimSelfDeliver`**：宝宝自投递（oracle `PlayObject.Run()` 的消息段，
+/// `PlayObject.Message.cs:360-364`）。
+///
+/// 段位 = `tick_head` 原 `record.slave_self_deliveries = self.deliver_self_delay_msgs()` 那一行
+/// （非玩家死亡结算之后、`ExtraAbil` 过期之前；设计 §5.2 的 RNG 消费者序不变）。借用形状按
+/// Dv5：owned `SimState` + `StageEntities`；实现体 =
+/// [`crate::slave::deliver_self_delay_msgs_impl`]（facade 与段共用同一份，无第二份拷贝）。
+///
+/// **RNG**：本段会抽数（`RM_TRANSPARENT` 的 `R(2)`、`RM_DELAYMAGIC` 的 MSD、`RM_STRUCK` 的
+/// `Random(6)`/`Random(300)`、主人死族叛变的 `Random(MasterDieMutinyRate)`）⇒ 段的先后位置
+/// 必须与迁移前逐点一致（本批不动段位）。
+///
+/// **写集**：`EntityMutData` 的 20 组件（`get_mut` 组合视图）+ `Transform`（`char_pushed_core`
+/// 逐格推进）+ `PvpState`（`RM_POISON` 的 `SetPkFlag`）；读集为 `StageAccess` 的 24 组件全集。
+pub fn sim_self_deliver_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimSelfDeliver);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimSelfDeliver）");
+    let out = {
+        let mut ad = StageEntities::<SimSelfDeliver>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        crate::slave::deliver_self_delay_msgs_impl(&mut access, &mut sim)
+    };
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().self_deliveries = out;
+}
+
+crate::stage_spec!(
+    SimNpc,
+    TickStage::SimNpc,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding,
+        crate::entity::Recovery
+    ]
+);
+
+/// **P6a2b**：`SimNpc` 是**结构段**——Ghost 60s 过期支会 `QuestNpcList.RemoveAt(i)`
+/// （等价物 `StageEntities::remove`）。只有声明本标记的段能拿到 `StructuralAccess`。
+impl crate::tick::Structural for SimNpc {}
+
+/// **P6a2b 段 #11 `SimNpc`**：固定 NPC 的 `ProcessNpcs`（`WorldServer.Merchant.cs:118-160`）。
+///
+/// 段位 = `tick_head` 原 `let n = self.npc_tick();` 那一行（`SimMonsterAi` 之后、
+/// `SimMerchant` 之前；oracle `MerchantProcessor.ExecuteInternal` 先 `ProcessNpcs` 后
+/// `ProcessMerchants` ⇒ RNG 消费者序不变）。借用形状按 Dv5：owned `SimState` +
+/// `StageEntities`；实现体 = [`crate::npc::npc_tick_impl`]（facade 与段共用同一份）。
+///
+/// **RNG**：本段会抽数（`GuildOfficial.Run` 的 `Random(40)`/`RandomByte(8)`/`Random(30)`、
+/// `Merchant.Run` 的 `Random(50)`/`RandomByte(8)`/`Random(50)`、`BoCanMove` 支的
+/// `MapRandomMove` 两抽 + 移位环）——段位与迁移前逐点一致。
+///
+/// **写集**：`EntityMutData` 的 20 组件（`get_mut` 组合视图）+ `Transform`（`MapRandomMove` 落点）+
+/// `MapBinding`（`VerifyMapTime` / `ClearTargetCreat` / `DisappearA` / 可见刷新）+
+/// `Recovery`（`base.Run` 恢复段）。读集为 `StageAccess` 的 24 组件全集。
+///
+/// **结构变更**：Ghost 支 `remove` 实体 ⇒ facade 在段边界后 `refresh_views()`
+/// （见 `World::run_npc_stage`）。
+pub fn sim_npc_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimNpc);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimNpc）");
+    let out = {
+        let mut ad = StageEntities::<SimNpc>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        crate::npc::npc_tick_impl(&mut access, &mut sim)
+    };
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().npc = Some(out);
+}
+
+crate::stage_spec!(
+    SimMerchant,
+    TickStage::SimMerchant,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding,
+        crate::entity::Recovery
+    ]
+);
+
+crate::stage_spec!(
+    SimMonsterAi,
+    TickStage::SimMonsterAi,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding,
+        crate::entity::Recovery
+    ]
+);
+
+/// **P6b2 段 #10 `SimMonsterAi`**：怪物 AI 的全量扫描（`ProcessMonsters` → 每只 `Run()`）。
+///
+/// 段位 = `tick_head` 原 `if self.ai_enabled { crate::monai::monster_ai_tick(self); }` 那一行
+/// （`SimBuff` 之后、`SimNpc` 之前；oracle 线程序 + 设计 §5.2 的 RNG 消费者序不变）。
+/// 借用形状按 Dv5：owned `SimState` + `StageEntities`；实现体 =
+/// [`crate::monai::monster_ai_tick_impl`]（facade `monster_ai_tick` 与段共用同一份）。
+///
+/// **槽位序 / 可见性门**：收集走 `EntityAccess::order_ids`（= `EntityStore::iter_ref` 同序），
+/// `ProcessRunCount`/`IsVisibleActive` 门与 `ProcessMonsterInterval` 语义逐句不变（T10 全量
+/// 11k 实体扫描路径）。
+///
+/// **RNG**：本段是全服最大的随机数消费者（Think/Wandering/AttackTarget/专用怪 `Run`）；
+/// 段位不变 ⇒ 消费者次序逐点不变。
+///
+/// **写集**：`EntityMutData` 的 20 组件 + `Transform`（`WalkTo`/`TryStepNow` 落点）+
+/// `MapBinding`（`SearchTarget` 的可见集 / `VerifyMapTime`）+ `Recovery`（`base.Run` 恢复段）；
+/// 读集为 `StageAccess` 的 24 组件全集。
+///
+/// **无结构变更**：产仔/召唤走既有 `pending_*` 队列（宿主排水），段内不 `insert`/`remove`。
+pub fn sim_monster_ai_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimMonsterAi);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimMonsterAi）");
+    {
+        let mut ad = StageEntities::<SimMonsterAi>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        crate::monai::monster_ai_tick_impl(&mut access, &mut sim);
+    }
+    world.insert_resource(sim);
+}
+
+/// **P6b**：`SimMerchant` 是**结构段**——Ghost 60s 过期支会 `MerchantList.RemoveAt(i)`
+/// （等价物 `StageEntities::remove`）。只有声明本标记的段能拿到 `StructuralAccess`。
+impl crate::tick::Structural for SimMerchant {}
+
+/// **P6b 段 #12 `SimMerchant`**：商人的 `ProcessMerchants`（`WorldServer.Merchant.cs:65-110`）。
+///
+/// 段位 = `tick_head` 原 `if self.merchant_enabled { let m = self.merchant_tick(); }` 那一行
+/// （`SimNpc` 之后、`SimPlayerRunExpiry` 之前；oracle `MerchantProcessor.ExecuteInternal`
+/// 先 `ProcessNpcs` 后 `ProcessMerchants` ⇒ RNG 消费者序不变）。借用形状按 Dv5：owned
+/// `SimState` + `StageEntities`；实现体 = [`crate::merchant::merchant_tick_impl`]
+/// （facade 与段共用同一份，无第二份拷贝）。
+///
+/// **RNG**：本段抽数（`Merchant.Run` 的 `Random(50)`/`RandomByte(8)`/`Random(50)`、
+/// `BoCanMove` 支的 `MapRandomMove` 两抽 + 移位环）——段位与迁移前逐点一致。
+///
+/// **写集**：`EntityMutData` 的 20 组件（`get_mut` 组合视图）+ `Transform`（`MapRandomMove` 落点）+
+/// `MapBinding`（尾段 `VerifyMapTime`）+ `Recovery`（尾段 `base.Run` 恢复段）。读集为
+/// `StageAccess` 的 24 组件全集。
+///
+/// **结构变更**：Ghost 支 `remove` 实体 ⇒ facade 在段边界后 `refresh_views()`
+/// （见 `World::run_merchant_stage`）。
+pub fn sim_merchant_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::SimMerchant);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("段边界：SimState 必须已在 bevy World（SimMerchant）");
+    let out = {
+        let mut ad = StageEntities::<SimMerchant>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        crate::merchant::merchant_tick_impl(&mut access, &mut sim)
+    };
+    world.insert_resource(sim);
+    world.resource_mut::<StageOut>().merchant = Some(out);
+}
+
+crate::stage_spec!(
+    TailVerifyMapTime,
+    TickStage::TailVerifyMapTime,
+    read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ],
+    write: [
+        crate::entity::Entity,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+    ]
+);
+
+/// **S4d-3/P4 段 #18 `TailVerifyMapTime`**：`base.Run` 的 `VerifyMapTime` + HP/MP 钳制
+/// （`BaseObject.Base.cs:223-245`）。
+///
+/// 段位 = `tick_tail` 原 `self.verify_players_map_time()` 那一行（玩家死亡结算之后、AOI 之前）；
+/// 处理顺序 = 槽位序（`order_ids`）；`pending_verify_health_changes` 由 facade 在段后 append
+/// 进 `record.verify_health_changes`（与原顺序相同）。不抽 RNG。
+///
+/// 借用形状沿用裁决：`remove_resource::<SimState>()` 取 owned → `StageEntities` 并行 → 归还。
+pub fn tail_verify_map_time_stage_system(world: &mut bevy_ecs::world::World) {
+    StageTrace::record(world, TickStage::TailVerifyMapTime);
+    let mut sim = world
+        .remove_resource::<SimState>()
+        .expect("SimState 必须在段窗口内（段边界契约）");
+    {
+        let mut ad = StageEntities::<TailVerifyMapTime>::new(world);
+        let mut access = crate::entity::StageAccess::new(&mut ad);
+        World::verify_players_map_time_impl(&mut access, &mut sim);
+    }
+    world.insert_resource(sim);
+}
+
+pub struct World {
+    pub entities: EntityStore,
+    /// S4d-3/P1：head 侧段运行器组（`Clock` / `SimHiterSnapshot` / `OutputDrain`）。
+    head_runner: HeadRunner,
+    /// S4d-3/P2：tail 侧段运行器组（`TailSuperManRefill` / `OutputAoi`）。
+    tail_runner: TailRunner,
+    /// **S4d-1 资源层**：全部非实体世界状态（maps/sessions/rng/时钟/配置/命令队列/输出累积…）。
+    ///
+    /// tick 边界把它移入 bevy `World` 的 `SimState` 资源供系统访问，跑完移回（同一时刻
+    /// 只有一个所有者，见设计件 §4.2）。本结构对 `SimState` 实现 `Deref`/`DerefMut`，因此
+    /// 既有的 `world.clock_ms` / `world.rng` 等字段访问形态不变；crate 内需要与 `entities`
+    /// 同时分借用时直接解构本字段（`let World { entities, sim, .. } = self;`）。
+    pub sim: SimState,
+    /// **S4d-3/P0 段边界哨兵**（设计件 §2.5，review F5）：`true` = 正处于段窗口内
+    /// （`SimState` 归 bevy `World` 资源所有，或已被段内 `remove_resource` 取成 owned 局部——
+    /// Dv5），facade 侧是 `Default` 占位；只在一次 runner 调用窗口内为真。
+    ///
+    /// 段内 panic 时不会回到 `false` ⇒ 下一次 `tick_head`/`tick_tail` 入口立即以明确断言
+    /// 停机。本项目**不做段内热恢复**（那会在空 `SimState` 上继续跑），语义见设计件 §2.5。
+    sim_in_flight: bool,
+    /// **T10 热点剖析**：分段计时（缺省 `None` = 生产路径零开销；见 [`TickProfile`]）。
+    tick_profile: Option<TickProfile>,
+}
+
+impl std::ops::Deref for World {
+    type Target = SimState;
+    fn deref(&self) -> &SimState {
+        &self.sim
+    }
+}
+
+impl std::ops::DerefMut for World {
+    fn deref_mut(&mut self) -> &mut SimState {
+        &mut self.sim
+    }
+}
+
+/// **T10 热点剖析**：tick 分段计时（**缺省关闭**，见 [`World::enable_tick_profile`]）。
+///
+/// 设计约束（卡 `openmir2-t10-tick-hotspot-profile`）：计时只在**段边界**取 `Instant`，
+/// 关闭时每 tick 只多 ~20 次 `Option::is_some` / 布尔判断；热循环（实体遍历、AOI 扫描、AI）
+/// 内**没有**任何计时语句。因此它不改变 tick 的可见行为，也不进入生产路径。
+///
+/// `ns` 是该段累计墙钟（含段边界 `SimState` 搬移开销与段内缓冲分配/释放）。
+#[derive(Debug, Default, Clone)]
+pub struct TickProfile {
+    /// `(段, 累计 ns, 调用次数)`
+    stage_nanos: Vec<(TickStage, u64, u64)>,
+    /// 细于段的命名探针（`slot_order` 调用、AI 收集、buff 单 pass…）。
+    probe_nanos: Vec<(&'static str, u64, u64)>,
+    /// 已计入的 tick 数（`tick_head` 入口自增）。
+    pub ticks: u64,
+    /// **同进程 A/B 用**：暂停累计但保留已有数据（`prof_begin` 返回 `None`）。
+    pub paused: bool,
+}
+
+impl TickProfile {
+    fn add_stage(&mut self, stage: TickStage, ns: u64) {
+        match self.stage_nanos.iter_mut().find(|(s, _, _)| *s == stage) {
+            Some((_, total, calls)) => {
+                *total += ns;
+                *calls += 1;
+            }
+            None => self.stage_nanos.push((stage, ns, 1)),
+        }
+    }
+
+    fn add_probe(&mut self, name: &'static str, ns: u64) {
+        match self.probe_nanos.iter_mut().find(|(n, _, _)| *n == name) {
+            Some((_, total, calls)) => {
+                *total += ns;
+                *calls += 1;
+            }
+            None => self.probe_nanos.push((name, ns, 1)),
+        }
+    }
+
+    /// 各段累计：`(段, 累计 ns, 调用次数)`（按首次记录顺序）。
+    #[must_use]
+    pub fn stages(&self) -> &[(TickStage, u64, u64)] {
+        &self.stage_nanos
+    }
+
+    /// 命名探针累计：`(名字, 累计 ns, 调用次数)`。
+    #[must_use]
+    pub fn probes(&self) -> &[(&'static str, u64, u64)] {
+        &self.probe_nanos
+    }
+
+    /// 全部段累计 ns。
+    #[must_use]
+    pub fn stage_total_ns(&self) -> u64 {
+        self.stage_nanos.iter().map(|(_, n, _)| *n).sum()
+    }
+}
+
+impl World {
+    /// **段边界（进入）**：把 `SimState` 移入 bevy `World` 的 `SimState` 资源，并置哨兵。
+    ///
+    /// 同一时刻只有一个所有者（设计件 §4.2 规则 2）。哨兵语义见 [`World::sim_in_flight`]：
+    /// 上一次 tick 在段内 panic ⇒ 这次入口立即断言停机（**不做热恢复**，设计件 §2.5）。
+    fn enter_stage_world(&mut self) {
+        assert!(
+            !self.sim_in_flight,
+            "上一次 tick 在段内 panic 且未恢复：facade 侧是 Default 占位，SimState 可能仍在 bevy World，也可能已被段内 remove_resource 取走（owned 局部随 unwind 丢弃）——两种态都不可继续。\
+             按设计件 §2.5 不做热恢复，世界需重建（fail-fast）"
+        );
+        self.sim_in_flight = true;
+        let sim = std::mem::take(&mut self.sim);
+        self.entities.world_mut().insert_resource(sim);
+    }
+
+    /// **段边界（离开）**：把 `SimState` 从 bevy `World` 取回 facade，并清哨兵。
+    fn leave_stage_world(&mut self) {
+        let sim = self
+            .entities
+            .world_mut()
+            .remove_resource::<SimState>()
+            .expect("段边界：SimState 必须归还（tick 边界契约）");
+        self.sim = sim;
+        self.sim_in_flight = false;
+    }
+
+    /// 跑一个 head 侧段：`enter` -> `f` -> `leave`。`f` 里可插入段专用资源并驱动 runner。
+    fn run_head_stage<R>(
+        &mut self,
+        f: impl FnOnce(&mut bevy_ecs::world::World, &mut HeadRunner) -> R,
+    ) -> R {
+        self.enter_stage_world();
+        let World {
+            entities,
+            head_runner,
+            ..
+        } = self;
+        let out = f(entities.world_mut(), head_runner);
+        self.leave_stage_world();
+        out
+    }
+
+    /// **兼容入口**（P2 起段逻辑在 `SimPlayerRunExpiry` 系统里）：跑一次该段并返回输出。
+    ///
+    /// 供既有 `tests/run_state_expiry_vectors.rs` 等「直接驱动一段」的用例使用；tick 内
+    /// 走 `tick_head` 的注册调用，行为同一份实现。
+    pub fn expire_player_run_state(&mut self) -> Vec<(i32, RunStateExpiry)> {
+        self.run_head_stage(|world, head| head.run(TickStage::SimPlayerRunExpiry, world));
+        self.take_run_state_expiries()
+    }
+
+    /// 取走 `SimPlayerRunExpiry` 段落到 [`StageOut`] 的输出。
+    fn take_run_state_expiries(&mut self) -> Vec<(i32, RunStateExpiry)> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .run_state_expiries,
+        )
+    }
+
+    /// 取走 `SimDup` 段落到 [`StageOut`] 的推挤事件（段边界之后调用；P3a）。
+    fn take_stage_pushes(&mut self) -> Vec<crate::action::PushEvent> {
+        std::mem::take(&mut self.entities.world_mut().resource_mut::<StageOut>().pushes)
+    }
+
+    /// 取走 `SimExtraAbil` 段落到 [`StageOut`] 的输出（段边界之后调用）。
+    fn take_extra_abil_expiries(&mut self) -> Vec<ExtraAbilExpiry> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .extra_abil_expiries,
+        )
+    }
+
+    /// 跑一个 tail 侧段（当前只有 `OutputAoi`）。
+    fn run_tail_stage<R>(
+        &mut self,
+        f: impl FnOnce(&mut bevy_ecs::world::World, &mut TailRunner) -> R,
+    ) -> R {
+        self.enter_stage_world();
+        let World {
+            entities,
+            tail_runner,
+            ..
+        } = self;
+        let out = f(entities.world_mut(), tail_runner);
+        self.leave_stage_world();
+        out
+    }
+}
+
+/// [`World::cast_space_move_spell`] 的可观测结果（魔号 21 `MagSaceMove` `MagicManager.cs:876-891`）。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SpaceMoveCastOutcome {
+    /// oracle `MagSaceMove` 的返回值（`Random(11)` 门通过即 `true`，与是否找到 HomeMap/是否落地无关）。
+    pub result: bool,
+    /// `MapRandomMove` 找到了 HomeMap（`MapMgr.FindMap(HomeMap) != null`）。
+    pub map_found: bool,
+    /// `SpaceMoveGetRandXY` 找到落点并 `AddMapObject` 成功。
+    pub moved: bool,
+    /// 落地后的坐标（未移动时 = 调用前坐标）。
+    pub x: i32,
+    pub y: i32,
+    /// 落地后的 `map_id`（未移动时 = 调用前 `map_id`）。
+    pub map_id: usize,
+    /// oracle `SpaceMoved = true`（仅成功落地）。
+    pub space_moved: bool,
+    /// oracle `if (envir != playObject.Envir && Race == ActorRace.Play) IsTimeRecall = false;`
+    /// —— 本骨架无 `IsTimeRecall` 字段（登记）；这里只回报「是否跨图」供宿主/测试判读。
+    pub cross_map: bool,
+}
+
+/// [`World::base_object_move_player`] 的目标（oracle `BaseObjectMove`，`PlayObject.Base.cs:2318-2327`）。
+///
+/// `map_id` 由宿主用 `MapRegistry::id_of(HomeMap)` 解析——`None`/解析失败 ⇒ 调用方不构造
+/// 目标（= oracle `FindMap == null`，0 抽不动）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HomeMoveTarget {
+    /// `sX != 0 && sY != 0` ⇒ `SpaceMove(sMap, sX, sY, 0)`：以 `(x, y)` 为起点找可走格。
+    Fixed { map_id: usize, x: i32, y: i32 },
+    /// 任一轴为 0 ⇒ `MapRandomMove(sMap, 0)`：先两抽随机起点，再 `SpaceMove`。
+    Random { map_id: usize },
+}
+
+/// [`World::base_object_move_player`] 的可观测结果。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BaseObjectMoveOutcome {
+    /// `MapMgr.FindMap(sMap) != null`（`target.is_some()` 且 `map_id` 在表内）。
+    pub map_found: bool,
+    /// `SpaceMoveGetRandXY` 找到落点并切图成功。
+    pub moved: bool,
+    /// oracle `SpaceMoved = true`（仅成功落地）。
+    pub space_moved: bool,
+    /// 落地后的 `map_id`（未移动时 = 调用前 `map_id`）。
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+}
+
+/// `BaseObject.Run` 的 `VerifyTick` 30s 门（`BaseObject.Base.cs:223`：`> 30 * 1000`）。
+///
+/// 命中后 `Envir.VerifyMapTime` 刷新本格 `CellObject.AddTime`（`Envirnoment.cs:858-897`），
+/// 静止 actor（卫士 / 固定 NPC / 停走怪）因此不会在 60s 后被 AOI 扫描当作过期项逐出。
+pub const VERIFY_MAP_TIME_MS: i64 = 30 * 1000;
+
+/// `BaseObject.CellType` 的等价物（`PlayObject.cs:1034` = Play、`AnimalObject.cs:86` = Monster、
+/// `NormNpc.cs:50` = Merchant）；`verify_map_time` 重新登记时用它保持落格类型。
+pub(crate) fn entity_cell_type(e: &impl PvpView) -> CellType {
+    if e.merchant_exists() || e.npc_exists() {
+        CellType::Merchant
+    } else if e.race() == crate::entity::ACTOR_RACE_PLAY {
+        CellType::Play
+    } else {
+        CellType::Monster
+    }
+}
+
+impl World {
+    /// 单地图世界（与 M2 上半程的 `World::new` 语义一致）。
+    pub fn new(width: i32, height: i32) -> Self {
+        Self::with_maps(vec![(width, height)])
+    }
+
+    /// 多地图世界（切图用）；`map_id` = 下标。
+    pub fn with_maps(sizes: Vec<(i32, i32)>) -> Self {
+        let maps: Vec<MapGrid> = sizes.into_iter().map(|(w, h)| MapGrid::new(w, h)).collect();
+        // S1：实体存储是 bevy_ecs 内核；时钟/线程断言/顺序收集都走它的单线程骨架。
+        let mut entities = EntityStore::new();
+        entities
+            .world_mut()
+            .insert_resource(TickClock::new(TICK_INTERVAL_MS));
+        entities
+            .world_mut()
+            .insert_resource(TickOwnerThread::default());
+        // S4d-3/P2：段输出旁路（`SimExtraAbil` / `SimPlayerRunExpiry` 的 TickRecord 字段）。
+        entities.world_mut().insert_resource(StageOut::default());
+        // S4d-3/P1：head 侧三段（Clock / SimHiterSnapshot / OutputDrain）收进 `HeadRunner`。
+        let head_runner = HeadRunner::new();
+        // S3b/P2：tail 侧段（`TailSuperManRefill` / `OutputAoi`）收进 `TailRunner`。
+        let tail_runner = TailRunner::new();
+        let sim = SimState::with_maps(maps);
+        let mut world = World {
+            entities,
+            head_runner,
+            tail_runner,
+            sim,
+            sim_in_flight: false,
+            tick_profile: None,
+        };
+        // **M3②③ 隔离口径**：`MIR2_RNG_ISOLATE_ATTACK` 开启时按 `MIR2_RNG_SEED` 派生专用流
+        // （缺省未设 ⇒ `None`，`isolate_attack` 保持 `false`，一字不改）。读 env 的 fail-closed
+        // 语义见 [`mir2_shared::rng::attack_isolation_seed_from_env`]。
+        if let Some(seed) = mir2_shared::rng::attack_isolation_seed_from_env() {
+            world.enable_attack_isolation(seed);
+        }
+        world
+    }
+
+    /// 显式开启攻击路径专用流（种子由调用方按两侧同口径给出）。
+    ///
+    /// 幂等：重复调用只重播专用流。测试与真机接线（经 [`World::with_maps`] 的环境入口）共用本方法。
+    pub fn enable_attack_isolation(&mut self, attack_seed: i32) {
+        self.rng_attack = RandomNumber::with_seed(attack_seed);
+        self.isolate_attack = true;
+    }
+
+    /// 攻击路径专用流是否开启（隔离口径的真机自证）。
+    #[must_use]
+    pub fn attack_isolation_enabled(&self) -> bool {
+        self.isolate_attack
+    }
+
+    /// **T10 诊断**：开启 tick 分段计时（**缺省关闭**；只在 bench/诊断路径调用）。
+    ///
+    /// 关闭状态（缺省）下 tick 只多一次 `Option::is_some` 判断，不取 `Instant`、不分配。
+    /// 本方法不改变任何 tick 行为（不写实体、不抽 RNG）。
+    pub fn enable_tick_profile(&mut self) {
+        self.tick_profile = Some(TickProfile::default());
+    }
+
+    /// 关闭分段计时并丢弃已有累计。
+    pub fn disable_tick_profile(&mut self) {
+        self.tick_profile = None;
+    }
+
+    /// 只清累计值并保持开启状态（bench 预热后清零用）。
+    ///
+    /// **注意**：`TickProfile::default()` 会把 `paused` 一并复位为 `false`（清完即恢复累计）。
+    pub fn reset_tick_profile(&mut self) {
+        if let Some(p) = self.tick_profile.as_mut() {
+            *p = TickProfile::default();
+        }
+    }
+
+    /// **同进程 A/B**：暂停/恢复累计（保留已累计数据）。
+    pub fn set_tick_profile_paused(&mut self, paused: bool) {
+        if let Some(p) = self.tick_profile.as_mut() {
+            p.paused = paused;
+        }
+    }
+
+    /// 当前累计（未开启时为 `None`）。
+    #[must_use]
+    pub fn tick_profile(&self) -> Option<&TickProfile> {
+        self.tick_profile.as_ref()
+    }
+
+    /// 段计时入口：关闭/暂停时返回 `None`（**不**取 `Instant`）。
+    #[inline]
+    fn prof_begin(&self) -> Option<Instant> {
+        match self.tick_profile.as_ref() {
+            Some(p) if !p.paused => Some(Instant::now()),
+            _ => None,
+        }
+    }
+
+    /// 段计时出口：累计到 [`TickProfile`]。
+    #[inline]
+    fn prof_end(&mut self, stage: TickStage, t: Option<Instant>) {
+        if let (Some(t), Some(p)) = (t, self.tick_profile.as_mut()) {
+            p.add_stage(stage, t.elapsed().as_nanos() as u64);
+        }
+    }
+
+    /// 命名探针入口（crate 内诊断用，如 `slot_order`、`monai.collect`）。
+    #[inline]
+    pub(crate) fn probe_begin(&self) -> Option<Instant> {
+        self.prof_begin()
+    }
+
+    /// 命名探针出口。
+    #[inline]
+    pub(crate) fn probe_end(&mut self, name: &'static str, t: Option<Instant>) {
+        if let (Some(t), Some(p)) = (t, self.tick_profile.as_mut()) {
+            p.add_probe(name, t.elapsed().as_nanos() as u64);
+        }
+    }
+
+    /// 开启怪物 AI 驱动（缺省关闭；见 [`World`] 的 `ai_enabled` 字段说明）。
+    ///
+    /// 幂等：重复调用无副作用。生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；
+    /// 合成 golden 场景保持关闭 ⇒ 既有 `tests/parity/world` 逐字节不变。
+    pub fn enable_monster_ai(&mut self) {
+        self.ai_enabled = true;
+    }
+
+    /// 怪物 AI 驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn monster_ai_enabled(&self) -> bool {
+        self.ai_enabled
+    }
+
+    /// 设置 `BaseObject.Run` 恢复段的到点门（`SystemShare.Config.HealthFillTime`/`SpellFillTime`）。
+    ///
+    /// 生产宿主在起世界时用 `[Setup] HealthFillTime/SpellFillTime`（缺省 300/800）灌入；
+    /// 合成 golden/单测不调 ⇒ 保持缺省，行为与改动前逐字节相同。
+    pub fn set_recovery_fill_times(&mut self, health_fill_time: i32, spell_fill_time: i32) {
+        self.health_fill_time = health_fill_time;
+        self.spell_fill_time = spell_fill_time;
+    }
+
+    /// 灌入尸体/复活面配置（`Config.MakeGhostTime` + `GetMonstersZenTime` 的两项）。
+    ///
+    /// 生产宿主在起世界时用 `Server.conf` 的 `[Setup] MakeGhostTime` 与 `[Server]
+    /// UserFull/ZenFastStep` 调用；合成 golden/单测不调 ⇒ 保持 oracle 构造缺省，
+    /// 既有对拍逐字节不变（本组字段只在死亡支/复活路径被读）。
+    pub fn set_corpse_config(
+        &mut self,
+        make_ghost_time: i32,
+        mon_gen_user_full: i32,
+        mon_gen_zen_fast_step: i32,
+    ) {
+        self.make_ghost_time = make_ghost_time;
+        self.mon_gen_user_full = mon_gen_user_full;
+        self.mon_gen_zen_fast_step = mon_gen_zen_fast_step;
+    }
+
+    /// 灌入 `[Setup] ProcessMonsterInterval`（`ServerConf.cs:636`；构造缺省
+    /// `GameSvrConf.cs:1895` = 2）。
+    ///
+    /// 生产宿主在起世界时用 `MonGenConfig::process_monster_interval` 灌入；合成 golden/单测
+    /// 不调 ⇒ 保持 oracle 构造缺省（且 `ai_enabled=false` 时该值不被消费）。
+    pub fn set_process_monster_interval(&mut self, interval: i32) {
+        self.process_monster_interval = interval;
+    }
+
+    /// `AnimalObject.ProcessRunCount`（旁挂表，见 [`Self::process_run_counts`]）。
+    #[must_use]
+    pub fn process_run_count(&self, actor_id: i32) -> i32 {
+        Self::process_run_count_impl(&self.sim, actor_id)
+    }
+
+    /// **P6b2**：`process_run_count` 的 facade/段共用实现（`SimMonsterAi` 段共用）。
+    #[must_use]
+    pub(crate) fn process_run_count_impl(sim: &SimState, actor_id: i32) -> i32 {
+        sim.process_run_counts.get(actor_id)
+    }
+
+    /// 写 `ProcessRunCount`；`0` 等价于 oracle 的「置 0」（表项删除，避免空项堆积）。
+    pub fn set_process_run_count(&mut self, actor_id: i32, value: i32) {
+        Self::set_process_run_count_impl(&mut self.sim, actor_id, value);
+    }
+
+    /// **P6b2**：`set_process_run_count` 的 facade/段共用实现（`SimMonsterAi` 段共用）。
+    pub(crate) fn set_process_run_count_impl(sim: &mut SimState, actor_id: i32, value: i32) {
+        if value == 0 {
+            sim.process_run_counts.remove(actor_id);
+        } else {
+            sim.process_run_counts.set(actor_id, value);
+        }
+    }
+
+    /// 灌入 `[Setup]` 的四个名字色（T-132；与 oracle `ServerConf.cs:509-512` 同源）。
+    ///
+    /// 生产宿主在起世界时调用；合成 golden/单测不调 ⇒ 保持 oracle 构造缺省
+    /// （47/180/69/221），既有对拍逐字节不变（本字段只在名字色查询路径被读）。
+    pub fn set_castle_name_colors(&mut self, colors: crate::castle::CastleNameColors) {
+        self.castle_name_colors = colors;
+    }
+
+    /// `ProcessSpiritSuite`（`PlayObject.Base.cs:322-330`）的尾：把全服宝宝叛变窗口
+    /// `M2Share.SpiritMutinyTick` 置为 `now + Config.SpiritMutinyTime`。
+    ///
+    /// oracle 的完整 `ProcessSpiritSuite` 还要校验 `IsSpirit` + 拆卸祈祷套装物品
+    /// （`UseItems` 的 `SpiritItem1..4`）——那部分归 `CM_SPELL`/物品面接线片；本函数只落
+    /// 被 `CheckRoyalty` 消费的那个全局量。
+    pub fn activate_spirit_mutiny(&mut self, duration_ms: i32) {
+        self.spirit_mutiny_tick = self.clock_ms + i64::from(duration_ms);
+    }
+
+    /// 开启商人 tick 驱动（缺省关闭；见 `merchant_enabled` 字段说明）。
+    ///
+    /// 幂等：生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；合成 golden 场景保持关闭
+    /// ⇒ 既有 `tests/parity/world` 逐字节不变。
+    pub fn enable_merchant_tick(&mut self) {
+        self.merchant_enabled = true;
+    }
+
+    /// 商人 tick 驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn merchant_tick_enabled(&self) -> bool {
+        self.merchant_enabled
+    }
+
+    /// 开启固定 NPC tick 驱动（缺省关闭；见 `npc_enabled` 字段说明）。
+    ///
+    /// 幂等：生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；合成 golden 场景保持关闭
+    /// ⇒ 既有 `tests/parity/world` 逐字节不变。
+    pub fn enable_npc_tick(&mut self) {
+        self.npc_enabled = true;
+    }
+
+    /// 固定 NPC tick 驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn npc_tick_enabled(&self) -> bool {
+        self.npc_enabled
+    }
+
+    /// 开启 buff tick 驱动（缺省关闭；见 `buff_enabled` 字段说明）。
+    ///
+    /// 幂等：生产路径由 `bins/game-svr` 的 sim 循环在起世界时调用；合成 golden 场景保持关闭
+    /// ⇒ 既有 `tests/parity/world` 逐字节不变。
+    pub fn enable_buff_tick(&mut self) {
+        self.buff_enabled = true;
+    }
+
+    /// buff tick 驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn buff_tick_enabled(&self) -> bool {
+        self.buff_enabled
+    }
+
+    /// buff 门的「当前时刻」= `clock_ms + BUFF_EPOCH_MS`（与 [`World::buff_tick`] 的 pass 同基）。
+    #[must_use]
+    pub fn buff_now(&self) -> i64 {
+        self.clock_ms + BUFF_EPOCH_MS
+    }
+
+    /// 一趟 buff 进：跑 [`BUFF_PASSES_PER_TICK`] 个 50ms pass（每个 pass 一个 `DoWork`）。
+    ///
+    /// pass 的 `now` = `clock_ms + BUFF_EPOCH_MS + i*50`（与 `add_buff`/`make_posion` 同一基）。
+    /// 返回合并后的可观测产出（供 `TickRecord`）。oracle 的 `ActorBuffProcessor` 是独立 50ms
+    /// 线程；本骨架在 200ms 的世界 tick 内串行跑 4 个 pass（U-A2 口径，见 [`crate::buff`] 模块头）。
+    ///
+    /// **P6a**：实现已迁到段系统 [`sim_buff_stage_system`]（`TickStage::SimBuff`）；本函数只驱动
+    /// 该段并取走 [`StageOut::buff`]。原按 pass 的命名探针 `buff.pass` 随之取消——聚合耗时仍由
+    /// `TickProfile` 的 `SimBuff` 段给出。
+    pub fn buff_tick(&mut self) -> BuffTickOutcome {
+        // **P6a**：兼容入口——驱动 `SimBuff` 段并取该段输出（段系统是唯一实现）。
+        self.run_head_stage(|world, head| head.run(TickStage::SimBuff, world));
+        self.take_buff_outcome()
+    }
+
+    /// 取走 `SimBuff` 段落到 [`StageOut`] 的合并产出（段边界之后调用）。
+    fn take_buff_outcome(&mut self) -> BuffTickOutcome {
+        self.entities
+            .world_mut()
+            .resource_mut::<StageOut>()
+            .buff
+            .take()
+            .expect("SimBuff 段必须产出 BuffTickOutcome（段边界契约）")
+    }
+
+    /// 取走 `SimSelfDeliver` 段落到 [`StageOut`] 的自投递产出（段边界之后调用；P6a2）。
+    fn take_self_deliveries(&mut self) -> Vec<crate::slave::SelfDelayOutcome> {
+        std::mem::take(
+            &mut self
+                .entities
+                .world_mut()
+                .resource_mut::<StageOut>()
+                .self_deliveries,
+        )
+    }
+
+    /// **P6a2b**：驱动 `SimNpc` 段并取该段输出（`tick_head` 与 facade `World::npc_tick` 共用）。
+    ///
+    /// 段内 Ghost 过期支会 `StageEntities::remove` 实体（结构变更）⇒ 段边界后必须
+    /// `refresh_views()`，否则 facade 的读缓存仍看得到已删实体。
+    pub(crate) fn run_npc_stage(&mut self) -> crate::npc::NpcTickOutcome {
+        self.run_head_stage(|world, head| head.run(TickStage::SimNpc, world));
+        self.entities.refresh_views();
+        self.entities
+            .world_mut()
+            .resource_mut::<StageOut>()
+            .npc
+            .take()
+            .expect("SimNpc 段必须产出 NpcTickOutcome（段边界契约）")
+    }
+
+    /// **P6b**：驱动 `SimMerchant` 段并取该段输出（`tick_head` 与 facade `World::merchant_tick`
+    /// 共用）。
+    ///
+    /// Ghost 60s 过期支会 `remove` 实体（结构变更）⇒ 段边界后 `refresh_views()`，
+    /// 否则 facade 的缓存视图与 `EcsStore` 元数据可能滞后于本次结构变更。
+    pub(crate) fn run_merchant_stage(&mut self) -> crate::merchant::MerchantTickOutcome {
+        self.run_head_stage(|world, head| head.run(TickStage::SimMerchant, world));
+        self.entities.refresh_views();
+        self.entities
+            .world_mut()
+            .resource_mut::<StageOut>()
+            .merchant
+            .take()
+            .expect("SimMerchant 段必须产出 MerchantTickOutcome（段边界契约）")
+    }
+
+    /// 单 pass 的 buff `DoWork`（供单测直接驱动；tick 路径经段系统 [`sim_buff_stage_system`]）。
+    /// `now_ms` 必须与 `add_buff`/`make_posion` 的基一致（`clock_ms + BUFF_EPOCH_MS + …`）。
+    pub fn buff_do_work(&mut self, now_ms: i64) -> BuffTickOutcome {
+        self.buff_pass_tick = now_ms;
+        // 把 `BuffSystem` 从 `World` 里取出，避免 `do_work_impl` 同时借 `&mut self`（两条秩序都在
+        // `do_work_impl` 里改，且它要 `&mut A: EntityAccess` 调用伤害/实体写）。
+        let poison_dec_health_time = self.poison_dec_health_time;
+        let mut buffs = std::mem::take(&mut self.buffs);
+        let out = buffs.do_work_impl(&mut self.entities, now_ms, poison_dec_health_time);
+        self.buffs = buffs;
+        out
+    }
+
+    /// `BaseObject.GetCharStatus()`（`BaseObject.cs:1499-1503`）：
+    /// `GetBuffStatus(this) | (CharStatusEx & 0x0000FFFF)`。见 [`crate::buff::get_char_status`]。
+    #[must_use]
+    pub fn get_char_status(&self, actor_id: i32) -> i32 {
+        Self::get_char_status_impl(&self.entities, &self.sim, actor_id)
+    }
+
+    /// **P5-A1**：`get_char_status` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+    ///
+    /// 与 [`crate::buff::get_char_status`] 逐句相同（实体侧只读 `CharStatusEx`，buff 位来自
+    /// `BuffSystem`）；后者保留为 `&World` 形态的公开入口（`buff.rs` 自有调用点），本函数是
+    /// 段路径与 `make_posion_impl` 的唯一实现点。
+    #[must_use]
+    pub(crate) fn get_char_status_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        actor_id: i32,
+    ) -> i32 {
+        let ex = access.get(actor_id).map_or(0, |e| e.char_status_ex);
+        sim.buffs.char_status_with(actor_id, ex)
+    }
+
+    /// `BaseObject.MakePosion`（`BaseObject.cs:1941-1968`）：加毒 buff + 写 `CharStatus`/
+    /// `GreenPoisoningPoint`。**返回值语义照 oracle**：`nType >= MAX_STATUS_ATTRIBUTE` ⇒ `false`
+    /// （`:1943` 的首门）；否则**无条件 `return true`**（`:1966`）——与 `CharStatus` 是否变化**无关**。
+    ///
+    /// **登记（帧面 deferred，A-5）**：oracle 尾 `if (nOldCharStatus != CharStatus) StatusChanged();`
+    /// （⇒ `RM_CHARSTATUSCHANGED`）与 `Race==Play` 的 `SysMsg` 未接（帧面归接线层）。
+    ///
+    /// **消费方（A-5 接线 + MB-5 专用怪 Run 覆写后的口径订正）**：本仓生产入口有两条：
+    /// ① **玩家攻击路径**——`PlayObject.Attack.cs:223` 的麻痹戒指命中（宿主 `bins/game-svr` 的
+    /// `handle_hit_cmd` → `World::attack_once` 的 `attack_dir_grouped_poison_ws` 那一次
+    /// `make_posion(STONE, AttackPosionTime, 0)`）；
+    /// ② **专用怪 `Run` 覆写**（MB-5，`crates/world-bevy/src/monai.rs`）：`GreenMonster`(208)/
+    /// `RedMonster`(209) 的 [`crate::monai::monster_class_run`] ⇒ `green_red_monster_run` 在
+    /// 毒门命中时 `make_posion(DECHEALTH/DAMAGEARMOR, 30, 1)`；`Khazard`(206) ⇒ `khazard_run`
+    /// 在毒门命中时 `make_posion(DECHEALTH, 35, 2)` 后 `return`。⇒ 本函数**不再**是「只有玩家
+    /// 攻击路径可达」。oracle 其余 3 个按类调用点（`CentipedeKingMonster`、`GasAttackMonster`、
+    /// `SpitSpider`）仍未接线（对应 `Run`/攻击覆写尚未移植）。
+    ///
+    /// **登记订正 3（独立复验 2026-10-17）**：上面「oracle 入口」的枚举**低估**了——除本函数的
+    /// 玩家攻击路径（`PlayObject.Attack.cs:223`）与 6 个怪物类（`CentipedeKingMonster.cs:70/74`、
+    /// `GasAttackMonster.cs:33`、`GreenMonster.cs:25`、`Khazard.cs:32/46`、`RedMonster.cs:25`、
+    /// `SpitSpider.cs:48`）外，还有**延迟消息路径**：`MagicManager.cs:241/245`
+    /// （施毒术 `RM_POISON` DECHEALTH/DAMAGEARMOR）、`:921/:925`、`:1257`（麻痹 STONE）经
+    /// `SendSelfDelayMsg(Messages.RM_POISON, …)` 落到 `BaseObject.Base.cs:740-758` 的
+    /// `case Messages.RM_POISON:` ⇒ `MakePosion(processMsg.wParam, (ushort)nParam1, nParam3)`
+    /// （另见 `BaseObject.Message.cs:44/108` 的同名 case 的延迟投递路径）。
+    /// 本仓这些路径**都没有**（`SendSelfDelayMsg` 定时消息面未移植）⇒ 「本仓唯一可达生产入口 =
+    /// 玩家攻击路径」这句**仍成立**，但 oracle 侧入口枚举按此**如实放宽**（保守方向）。
+    ///
+    /// 前置：`actor_id` 须是已落图的实体（oracle 里 `this` 恒有效）；`nType` 的 `from_index` 在
+    /// `n_type < MAX_STATUS_ATTRIBUTE` 后恒 `Some`（12 值全覆盖）。
+    pub fn make_posion(&mut self, actor_id: i32, n_type: u8, n_time: i32, n_point: i32) -> bool {
+        Self::make_posion_impl(
+            &mut self.entities,
+            &mut self.sim,
+            actor_id,
+            n_type,
+            n_time,
+            n_point,
+        )
+    }
+
+    /// **P5-A1**：`make_posion` 的 facade/段共用实现（逐句与旧实现相同）。
+    ///
+    /// 读：`buff_now()`（= `clock_ms + BUFF_EPOCH_MS`）、`buffs.char_status_with` + 实体的
+    /// `char_status_ex`（经 [`World::get_char_status_impl`]）。写：buff 表 + 实体的
+    /// `buff.char_status` / `buff.green_poisoning_point` 两处回写。
+    pub(crate) fn make_posion_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        n_type: u8,
+        n_time: i32,
+        n_point: i32,
+    ) -> bool {
+        if n_type >= MAX_STATUS_ATTRIBUTE {
+            return false;
+        }
+        let Some(buff_type) = BuffType::from_index(n_type) else {
+            return false;
+        };
+        let now = sim.clock_ms + BUFF_EPOCH_MS;
+        sim.buffs
+            .add_buff(actor_id, buff_type, n_time, n_point, now);
+        let status = Self::get_char_status_impl(access, sim, actor_id);
+        if let Some(e) = access.get_mut(actor_id) {
+            e.buff.char_status = status;
+            e.buff.green_poisoning_point = n_point as u8;
+        }
+        true
+    }
+
+    /// `BaseObject.DefenceUp`（`BaseObject.cs:2137-2165`）：有 ⇒ `TryUpdate`，无 ⇒ `AddBuff`。
+    /// （oracle 尾还有 `SysMsg`/`RecalcAbilitys`/`RM_ABILITY`，帧面/能力面 deferred，登记。）
+    pub fn defence_up(&mut self, actor_id: i32, n_sec: i32) {
+        let now = self.buff_now();
+        if self.buffs.has_buff(actor_id, BuffType::DefensePower) {
+            self.buffs
+                .try_update(actor_id, BuffType::DefensePower, n_sec);
+        } else {
+            self.buffs
+                .add_buff(actor_id, BuffType::DefensePower, n_sec, n_sec, now);
+        }
+        let status = self.get_char_status(actor_id);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = status;
+        }
+    }
+
+    /// `BaseObject.MagDefenceUp`（`BaseObject.cs:2167-2185`）：无条件 `AddBuff`。
+    pub fn mag_defence_up(&mut self, actor_id: i32, n_sec: i32) {
+        let now = self.buff_now();
+        self.buffs
+            .add_buff(actor_id, BuffType::MagicDefensePower, n_sec, n_sec, now);
+        let status = self.get_char_status(actor_id);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = status;
+        }
+    }
+
+    /// `CharacterObject.MagicShield(nSec)`（`CharacterObject.cs:103`）：加魔法盾 buff + 置
+    /// `MagicShield`（`DamageHealth` 的 MP 抵扣门）。
+    pub fn magic_shield_on(&mut self, actor_id: i32, n_sec: i32) {
+        let now = self.buff_now();
+        self.buffs
+            .add_buff(actor_id, BuffType::MagicShield, n_sec, n_sec, now);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.magic_shield = true;
+        }
+    }
+
+    /// **片 A-5（buff 生产者接线）**：写入某 actor 的攻击命中中毒门运行态
+    /// （[`crate::combat::AttackPoisonState`]）。宿主 `bins/game-svr` 在攻击派发前灌入；幂等（覆盖）。
+    ///
+    /// 与 [`World::attack_poison`] 表、[`crate::combat::attack_dir_grouped_poison`] 同源。
+    pub fn set_attack_poison(&mut self, actor_id: i32, state: crate::combat::AttackPoisonState) {
+        self.attack_poison.insert(actor_id, state);
+    }
+
+    /// 灌 `AddAbil.WeaponStrong`（见 [`World::attack_weapon_strong`]）。0 ⇒ 删表项（等价缺省）。
+    pub fn set_attack_weapon_strong(&mut self, actor_id: i32, weapon_strong: u16) {
+        if weapon_strong == 0 {
+            self.attack_weapon_strong.remove(&actor_id);
+        } else {
+            self.attack_weapon_strong.insert(actor_id, weapon_strong);
+        }
+    }
+
+    /// **P3-B4**：灌入 `MabMabe`/施毒术配置（`Server.conf` 的 `[Setup]`）。
+    /// **P3-B5**：灌入 22/36 的配置项（缺省 = oracle 源码缺省；宿主从 `Server.conf` 覆盖）。
+    pub fn set_b5_config(&mut self, cfg: crate::magic_effect::B5Config) {
+        self.b5_cfg = cfg;
+    }
+
+    pub fn set_b4_config(&mut self, cfg: crate::magic_effect::MabMabeConfig) {
+        self.b4_cfg = cfg;
+    }
+
+    /// **P3 收尾残余**：灌入 `SystemShare.Config.MagTurnUndeadLevel`（`Server.conf [Setup]`）。
+    /// 缺省已经是 oracle 源码缺省 50；宿主仅在配置层读到键时调用。
+    pub fn set_mag_turn_undead_level(&mut self, level: i32) {
+        self.mag_turn_undead_level = level;
+    }
+
+    /// **P3 收尾残余**：灌入 `PKFlagTime` / `DecLightItemDrugTime`（`Server.conf [Setup]`）。
+    ///
+    /// `pk_flag_time_ms` = `Config.dwPKFlagTime`（缺省 60_000）；
+    /// `dec_light_item_drug_time_ms` = `Config.DecLightItemDrugTime`（缺省 500，`CheckPkStatus`
+    /// 的调用周期）。
+    pub fn set_pk_flag_config(&mut self, pk_flag_time_ms: i64, dec_light_item_drug_time_ms: i64) {
+        self.pk_flag_time_ms = pk_flag_time_ms;
+        self.dec_light_item_drug_time_ms = dec_light_item_drug_time_ms;
+    }
+
+    /// **卡 `openmir2-weapon-durability-frames`**：灌入 `[Setup] DecLampDura` /
+    /// `UpgradeWeaponMaxPoint`（`ServerConf.cs:281/233`；部署件 = `1` / `7`）。
+    ///
+    /// 缺省（oracle `GameSvrConf.cs:1504/1419`）= `true` / `20`；合成 golden 路径不调用本函数
+    /// ⇒ 世界保持构造缺省，既有对拍逐字节不变。
+    pub fn set_weapon_durability_config(
+        &mut self,
+        dec_lamp_dura: bool,
+        upgrade_weapon_max_point: i32,
+    ) {
+        self.dec_lamp_dura = dec_lamp_dura;
+        self.upgrade_weapon_max_point = upgrade_weapon_max_point;
+    }
+
+    /// `PlayObject.GetMyLight()`（`PlayObject.cs:5404-5425`）：
+    /// 基线 = `Level >= EFFECTIVE_HIGHLEVEL ? 1 : 0`；遍历 13 个装备槽，
+    /// `Index > 0 && Dura > 0` 的模板 `StdItem.Light` 取最大值。
+    ///
+    /// **注意**：本仓物品目录是 1-based 顺序表（`items[i] ⇒ Index = i + 1`，
+    /// [`World::std_item_by_idx`]），与宿主 `ItemCatalog::get(index)` 同口径。
+    #[must_use]
+    pub fn my_light_of(&self, actor_id: i32) -> Option<u8> {
+        let e = self.entities.get(actor_id)?;
+        let mut light = if e.level >= EFFECTIVE_HIGHLEVEL { 1 } else { 0 };
+        for slot in e.use_items {
+            if slot.index > 0 && slot.dura > 0 {
+                if let Some(std) = self.std_item_by_idx(usize::from(slot.index)) {
+                    if light < std.light {
+                        light = std.light;
+                    }
+                }
+            }
+        }
+        Some(light)
+    }
+
+    /// `PlayObject.UseLamp()`（`PlayObject.Message.cs:2233-2278`）的全世界等价物，
+    /// 按 `DecLightItemDrugTime` 周期（缺省 500ms）对**每个玩家**跑一次。
+    ///
+    /// 触发链（oracle）：`PlayObject.Run` 的周期块（`:257-262`）
+    /// `if ((GetTickCount() - DecLightItemDrugTick) > Config.DecLightItemDrugTime)
+    ///  { DecLightItemDrugTick += 周期; UseLamp(); CheckPkStatus(); }`
+    /// ⇒ 本方法对应 `UseLamp()`，[`World::check_pk_status`] 对应 `CheckPkStatus()`。
+    /// 两趟各自节流（oracle 共用一个游标），宿主在**同一处相邻调用** ⇒ 周期同步推进。
+    ///
+    /// 逐行口径（连 oracle 的 ushort 回绕一起搬）：
+    /// - `UseItems[RighThand].Index == 0` ⇒ 直接返回（`:2240`）；
+    /// - 模板缺失或 `SpecialPwr != 0` ⇒ 直接返回（`:2243-2246`，只有火把/蜡烛 `SpecialPwr==0`）；
+    /// - `nOldDura = Round((ushort)(Dura / 1000.0))`（**左侧先截断、再 Round**，`:2245`；Round 对
+    ///   整数是恒等 ⇒ 等价 `Dura / 1000` 的整数除法）；`nDura = DecLampDura ? (ushort)(Dura - 1) : Dura`
+    ///   ——`Dura == 0` 时 `(ushort)(0 - 1)` **回绕成 65535**（`:2249`），**不破零**；
+    /// - `nDura <= 0`（对 `ushort` 等价于 `== 0`）：`Dura = 0`、`SendDelItems`（Play）、
+    ///   `Index = 0`、`Light = GetMyLight()`、`RM_CHANGELIGHT`、**655（`Recog = 0`）**、
+    ///   `RecalcAbilitys()`（`:2260-2272`）；
+    /// - 否则 `Dura = nDura`（`:2276`）；
+    /// - **末尾无条件** `if (nOldDura != HUtil32.Round(nDura / 1000.0))` ⇒ **655（`Recog = 当前 Dura`）**
+    ///   （`:2272-2275`）。左值截断、右值四舍五入 ⇒ 帧只在 `trunc(D/1000) != round((D-1)/1000)`
+    ///   时发（`D % 1000 ∈ 501..=999`；`DecLampDura=false` 时是 `trunc(D/1000) != round(D/1000)`，
+    ///   即 `D % 1000 ∈ 500..=999` 时即使耐久未变也每周期发一条——oracle 既有行为）。
+    ///   燃尽只在 `Dura ∈ {0, 1}` 时发生 ⇒ `nOldDura` 恒 `0`，与 `Round(0)` 相等 ⇒ 该支不会与燃尽支
+    ///   重复发帧（同一次调用最多一条 655）。
+    ///
+    /// **本卡未接的伴随帧（登记）**：`SendDelItems`（709）与 `RM_CHANGELIGHT`（654）；
+    /// `RecalcAbilitys` 的宿主侧重算。两侧状态（`Dura` / `Index` / `Light`）已逐行落地。
+    pub fn use_lamps(&mut self) -> Vec<LampDuraChange> {
+        if !self.lamp_tick_initialized {
+            self.lamp_tick = self.clock_ms;
+            self.lamp_tick_initialized = true;
+        }
+        if self.clock_ms - self.lamp_tick <= self.dec_light_item_drug_time_ms {
+            return Vec::new();
+        }
+        self.lamp_tick += self.dec_light_item_drug_time_ms;
+        let mut out = Vec::new();
+        for id in self.entities.ids_sorted() {
+            if self
+                .entities
+                .get(id)
+                .is_some_and(|e| e.race == crate::entity::ACTOR_RACE_PLAY)
+            {
+                self.use_lamp(id, &mut out);
+            }
+        }
+        out
+    }
+
+    /// 单个玩家的 `UseLamp()`（见 [`World::use_lamps`]）。
+    fn use_lamp(&mut self, actor_id: i32, out: &mut Vec<LampDuraChange>) {
+        let Some(slot) = self
+            .entities
+            .get(actor_id)
+            .map(|e| e.use_items[ITEM_LOCATION_RIGHTHAND])
+        else {
+            return;
+        };
+        if slot.index == 0 {
+            return;
+        }
+        let Some(std) = self.std_item_by_idx(usize::from(slot.index)) else {
+            return;
+        };
+        if std.special_pwr != 0 {
+            return;
+        }
+        // **oracle 口径（`PlayObject.Message.cs:2245`）**：
+        // `int nOldDura = HUtil32.Round((ushort)(UseItems[RighThand].Dura / 1000.0));`
+        // ——`(ushort)` 先把 `Dura / 1000.0` **截断**（等价 u16 整数除法），`Round` 对整数是恒等；
+        // **只有新值侧**（`:2272`）才是 `HUtil32.Round(nDura / 1000.0)`（AwayFromZero）。
+        // 两侧口径不同是 oracle 既有行为（连 bug 一起搬）：`Dura % 1000 >= 500` 时左值比「四舍五入」
+        // 小 1，发射点整体偏移——照抄，不许「修正」。
+        let old_dura = i32::from(slot.dura / 1000);
+        let n_dura: u16 = if self.dec_lamp_dura {
+            // **unchecked ushort 回绕**照 oracle（`PlayObject.Message.cs:2249`）。
+            slot.dura.wrapping_sub(1)
+        } else {
+            slot.dura
+        };
+        if n_dura == 0 {
+            // 燃尽支（`:2260-2272`）。`SendDelItems` 只对 `Race == Play`；本函数的调用面
+            // 恒为玩家（`use_lamps` 的 `Race` 门），`709` 未接（登记）。
+            if let Some(e) = self.entities.get_mut(actor_id) {
+                e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].dura = 0;
+                // oracle 先 `SendDelItems(UseItems[RighThand])` 再 `Index = 0`；
+                // `SendDelItems` 读的是清位**前**的槽（709 未接 ⇒ 只落状态）。
+                e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].index = 0;
+            }
+            // `Light = GetMyLight()`（`:2263`，在 `Index = 0` 之后算）。
+            if let Some(light) = self.my_light_of(actor_id) {
+                if let Some(e) = self.entities.get_mut(actor_id) {
+                    e.appearance.light = light;
+                }
+            }
+            out.push(LampDuraChange { actor_id, recog: 0 });
+        } else if let Some(e) = self.entities.get_mut(actor_id) {
+            e.inventory.use_items[ITEM_LOCATION_RIGHTHAND].dura = n_dura;
+        }
+        // 千位变化支（`:2274`）：比较的是局部 `nDura`，发的是落槽后的 `Dura`。
+        if old_dura != hutil_round(f64::from(n_dura) / 1000.0) {
+            let dura = self
+                .entities
+                .get(actor_id)
+                .map_or(0, |e| e.use_items[ITEM_LOCATION_RIGHTHAND].dura);
+            out.push(LampDuraChange {
+                actor_id,
+                recog: i32::from(dura),
+            });
+        }
+    }
+
+    /// `PlayObject.CheckWeaponUpgrade` + `CheckWeaponUpgradeStatus`
+    /// （`PlayObject.cs:4110-4172`）的结算（在武器槽上原地作用）。
+    ///
+    /// 门（`AttackDir`，`PlayObject.Attack.cs:25-31`）：`Index > 0 && Desc[10] > 0`
+    /// **且 `attackTarget != null`**——调用面 [`World::attack_once`] 保证有目标；
+    /// 空挥 [`World::attack_swing`] 不调本函数。
+    ///
+    /// `CheckWeaponUpgradeStatus` 逐行：
+    /// - `Desc[0]+Desc[1]+Desc[2] < UpgradeWeaponMaxPoint`：`Desc[10]==1 ⇒ Index = 0`（碎）；
+    ///   `Desc[10] ∈ 10..=13 ⇒ Desc[0] += Desc[10]-9`；`20..=23 ⇒ Desc[1] += Desc[10]-19`；
+    ///   `30..=33 ⇒ Desc[2] += Desc[10]-29`（C# `(byte)(...)` ⇒ 模 256 回绕）；
+    /// - 否则（和 ≥ 上限）⇒ `Index = 0`（碎）；
+    /// - **无论哪支**末尾 `Desc[10] = 0`（一次性消耗）。
+    ///
+    /// **P5-A1**：facade 与段路径（`EntityAccess` + `SimState`）共用本实现。只读配置值
+    /// `UpgradeWeaponMaxPoint`（`Config`，不读任何实体）⇒ 把配置值作为入参，两路传同一个值。
+    #[must_use]
+    pub(crate) fn check_weapon_upgrade_status_impl(
+        upgrade_weapon_max_point: i32,
+        weapon: &mut crate::entity::UseItemSlot,
+    ) -> Option<WeaponUpgradeOutcome> {
+        if weapon.index == 0 || weapon.desc[ITEM_ATTR_WEAPON_UPGRADE] == 0 {
+            return None;
+        }
+        let upgrade = weapon.desc[ITEM_ATTR_WEAPON_UPGRADE];
+        let status =
+            i32::from(weapon.desc[0]) + i32::from(weapon.desc[1]) + i32::from(weapon.desc[2]);
+        if status < upgrade_weapon_max_point {
+            if upgrade == 1 {
+                weapon.index = 0;
+            }
+            if (10..=13).contains(&upgrade) {
+                weapon.desc[0] = weapon.desc[0].wrapping_add(upgrade - 9);
+            }
+            if (20..=23).contains(&upgrade) {
+                weapon.desc[1] = weapon.desc[1].wrapping_add(upgrade - 19);
+            }
+            if (30..=33).contains(&upgrade) {
+                weapon.desc[2] = weapon.desc[2].wrapping_add(upgrade - 29);
+            }
+        } else {
+            weapon.index = 0;
+        }
+        weapon.desc[ITEM_ATTR_WEAPON_UPGRADE] = 0;
+        Some(if weapon.index == 0 {
+            WeaponUpgradeOutcome::Broke
+        } else {
+            WeaponUpgradeOutcome::Refined
+        })
+    }
+
+    /// `PlayObject.CheckPkStatus()`（`PlayObject.cs:4357-4364`）的**全世界**等价物。
+    ///
+    /// 调度口径：oracle 把它挂在玩家 `Run()` 的 `DecLightItemDrugTime` 周期块里
+    /// （`PlayObject.Message.cs:257-262`，缺省 500ms，`DecLightItemDrugTick += 周期`），
+    /// 本骨架在同一方法内按 [`World::dec_light_item_drug_time_ms`] 节流；宿主每 world tick
+    /// 调一次即可（200ms 量化与 oracle 的真实墙钟 tick 差异登记）。
+    ///
+    /// ```text
+    /// :4359 if (PvpFlag && ((GetTickCount() - PvpNameColorTick) > Config.dwPKFlagTime))
+    /// :4361   PvpFlag = false;
+    /// :4362   RefNameColor();
+    /// ```
+    ///
+    /// 返回 `RefNameColor` 的观察值（`RM_CHANGENAMECOLOR` 的宿主侧载荷）：色 = 清位后
+    /// `GetChrColor`（玩家 ⇒ `NameColor`，本骨架 ctor = 255）。
+    pub fn check_pk_status(&mut self) -> Vec<crate::slave::NameColorDelivery> {
+        // oracle 的 `DecLightItemDrugTick` 在玩家构造时 = `GetTickCount()`（`PlayObject.cs:969`），
+        // 即从「创建时刻」起算；本仓的等价物是**首次调用**时刻。若沿用构造时的 0，注入墙钟
+        // （`MIR2_CLOCK_MS ≈ 1.7e12`）后 `clock - 0 > 500` 恒真 ⇒ 节流失效（T-78）。
+        if !self.pk_check_tick_initialized {
+            self.pk_check_tick = self.clock_ms;
+            self.pk_check_tick_initialized = true;
+        }
+        if self.clock_ms - self.pk_check_tick <= self.dec_light_item_drug_time_ms {
+            return Vec::new();
+        }
+        self.pk_check_tick += self.dec_light_item_drug_time_ms;
+        let now = self.clock_ms;
+        let mut out = Vec::new();
+        for id in self.entities.ids_sorted() {
+            let Some(e) = self.entities.get(id) else {
+                continue;
+            };
+            if e.race != crate::entity::ACTOR_RACE_PLAY {
+                continue;
+            }
+            if !e.pvp_flag || now - e.pvp_name_color_tick <= self.pk_flag_time_ms {
+                continue;
+            }
+            let Some(t) = self.entities.get(id) else {
+                continue;
+            };
+            let color = crate::slave::get_chr_color(&t, &[], 0);
+            if let Some(p) = self.entities.pvp_state_mut(id) {
+                p.pvp_flag = false;
+            }
+            out.push(crate::slave::NameColorDelivery {
+                target_id: id,
+                color,
+            });
+        }
+        out
+    }
+
+    /// 清某 actor 的攻击中毒门运行态（离场/卸麻痹戒指）。幂等。
+    pub fn clear_attack_poison(&mut self, actor_id: i32) {
+        self.attack_poison.remove(&actor_id);
+    }
+
+    /// **片 A-5（buff 生产者接线）**：`BaseObject.MagMakeDefenceArea`
+    /// （`BaseObject.cs:2094-2132`）——技能 14/15 的 `DefenceUp`/`MagDefenceUp` 生产入口。
+    ///
+    /// **1:1 复刻 oracle 的一处 bug（不许"修正"）**：oracle 的双层循环虽有 `cX`/`cY`，但
+    /// `ref Envir.GetCellInfo(nX, nY, out …)` 传的是**函数入参** `nX/nY`（`BaseObject.cs:2108`），
+    /// **不是** `cX/cY` ⇒ `(2*range+1)^2` 个迭代**全部读中心格 `(nX,nY)`** ⇒ 效果等同
+    /// 「中心格的每个友军各加 `(2*range+1)^2` 次 buff，周围格一个不加」。
+    ///
+    /// `bt_state == 0` ⇒ `baseObject.DefenceUp(nSec)`；否则 ⇒ `baseObject.MagDefenceUp(nSec)`
+    /// （`BaseObject.cs:2117-2125`）。友军门 = [`crate::combat::is_proper_friend`]（`IsProperFriend`）；
+    /// `Ghost` 目标跳过（oracle `!baseObject.Ghost`）。返回 `result`（命中次数求和，供 `boTrain` 的 `> 0` 门）。
+    ///
+    /// **登记**：oracle 的格 `ObjList` 只含**地图落格对象**（本仓 actors 不落格）⇒ 这里按
+    /// 「世界内坐标 == `(nX,nY)` 且 `Race` 属 `Play`/`Monster`」的实体（槽位序）代替格列表；
+    /// `cellSuccess`/`IsAvailable` 两支由「格内无实体 ⇒ 无命中」自然覆盖（登记）。
+    pub fn mag_make_defence_area(
+        &mut self,
+        caster_id: i32,
+        n_x: i32,
+        n_y: i32,
+        n_range: i32,
+        n_sec: i32,
+        bt_state: u8,
+    ) -> i32 {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return 0;
+        };
+        let map_id = caster.map_id;
+        let group_members = self.attacker_group_members(&caster);
+        let mut result = 0;
+        for _c_x in (n_x - n_range)..=(n_x + n_range) {
+            for _c_y in (n_y - n_range)..=(n_y + n_range) {
+                // oracle bug：读的是中心格 `(nX,nY)`（见方法文档）。
+                let ents = &self.entities;
+                let ids: Vec<i32> = self
+                    .entities
+                    .iter_ref()
+                    .filter(|e| {
+                        ents.map_id(e.id) == Some(map_id)
+                            && ents.x(e.id) == Some(n_x)
+                            && ents.y(e.id) == Some(n_y)
+                            && (e.race == crate::entity::ACTOR_RACE_PLAY
+                                || e.race >= crate::entity::ACTOR_RACE_ANIMAL)
+                    })
+                    .map(|e| e.id)
+                    .collect();
+                for id in ids {
+                    let Some(obj) = self.entities.spawn_cloned(id) else {
+                        continue;
+                    };
+                    if obj.ghost {
+                        continue;
+                    }
+                    let in_group = group_members.contains(&id);
+                    if !crate::combat::is_proper_friend(&caster, &obj, in_group) {
+                        continue;
+                    }
+                    if bt_state == 0 {
+                        self.defence_up(id, n_sec);
+                    } else {
+                        self.mag_defence_up(id, n_sec);
+                    }
+                    result += 1;
+                }
+            }
+        }
+        result
+    }
+
+    /// **片 A-5（buff 生产者接线）**：技能 31（`SKILL_SHIELD` 魔法盾）的生产入口
+    /// （`MagicManager.cs:472-478` 的 `SKILL_SHIELD` 支 → `CharacterObject.MagBubbleDefenceUp`
+    /// `CharacterObject.cs:96-110`）。
+    ///
+    /// `nSec = GetPower(GetRPow(MC) + 15)`（取数顺序：`GetRPow(MC)` → `GetPower`，见
+    /// [`crate::magic::power_shield`]）；随后 `AddBuff(MagicShield, nSec, nSec)` + 置 `MagicShield`。
+    /// 返回 `nSec`（供 `boTrain`/测试）。`MagBubbleDefenceUp` 的 `StatusTimeArr[BubbleDefenceUP] != 0`
+    /// 早退门读的是**旧机制**（本骨架未建模 ⇒ 恒 0 ⇒ 不早退，登记）。
+    pub fn cast_shield_spell(
+        &mut self,
+        actor_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        mc: i32,
+    ) -> i32 {
+        let n_sec = crate::magic::power_shield(&mut self.rng, magic, level, mc);
+        self.magic_shield_on(actor_id, n_sec);
+        n_sec
+    }
+
+    /// `SKILL_FIREBALL(1)` / `SKILL_FIREBALL2(5)` 效果体（`MagicManager.cs:174-203`）。
+    ///
+    /// 逐行顺序（**取数序即 oracle 表达式序**）：
+    /// ```text
+    /// :176 MagCanHitTarget(CurrX, CurrY, target)                       纯门
+    /// :178 IsProperTarget(target)                                      纯门
+    /// :180 target.AntiMagic <= Random(10)                              ← 第 1 抽
+    /// :180 |target.CurrX - nTargetX| <= 1 && |...Y| <= 1               纯门
+    /// :182 nPower = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC+1)     ← 第 2..5 抽
+    /// :183 SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(tx,ty), 2, target.ActorId, "", 600)
+    /// :184 if (target.Race >= Animal) boTrain = true
+    /// else 各失败支 ⇒ targetObject = null（共享尾 ActorId=0）
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_fireball_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        anti_magic: i32,
+        mc: i32,
+    ) -> SpellStrikeOutcome {
+        let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
+            return SpellStrikeOutcome::default();
+        };
+        if !self.spell_can_hit(&caster, &t) {
+            return SpellStrikeOutcome::default();
+        }
+        if !crate::combat::is_proper_target_grouped(
+            &caster,
+            &t,
+            &self.attacker_group_members(&caster),
+        ) {
+            return SpellStrikeOutcome::default();
+        }
+        // `:180 targetObject.AntiMagic <= Random(10)`；失败 ⇒ `targetObject = null`。
+        if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
+            return SpellStrikeOutcome::default();
+        }
+        if (t.x - target_x).abs() > 1 || (t.y - target_y).abs() > 1 {
+            return SpellStrikeOutcome::default();
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        SpellStrikeOutcome {
+            target: Some(tid),
+            bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
+            power,
+            delayed: true,
+            delay_ms: 600,
+            push: None,
+        }
+    }
+
+    /// `SKILL_LIGHTENING(11)` / `SKILL_45(45)` 效果体（`MagicManager.cs:289-314` / `:563-588`）。
+    ///
+    /// 两个 case 的语句逐字相同（`:289-314` 与 `:563-588`）：
+    /// ```text
+    /// :291 IsProperTarget(target)                                      纯门
+    /// :292 Random(10) >= target.AntiMagic                              ← 第 1 抽
+    /// :294 nPower = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC+1)     ← 第 2..5 抽
+    /// :296 if (target.LifeAttrib == LA_UNDEAD) nPower = Round(nPower * 1.5)
+    /// :299 SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(tx,ty), 2, target.ActorId, "", 600)
+    /// :300 if (target.Race >= Animal) boTrain = true
+    /// else 各失败支 ⇒ targetObject = null
+    /// ```
+    /// **注意**：11/45 **没有** `MagCanHitTarget` 门（与 1/5 不同）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_lightening_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        anti_magic: i32,
+        mc: i32,
+    ) -> SpellStrikeOutcome {
+        let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
+            return SpellStrikeOutcome::default();
+        };
+        if !crate::combat::is_proper_target_grouped(
+            &caster,
+            &t,
+            &self.attacker_group_members(&caster),
+        ) {
+            return SpellStrikeOutcome::default();
+        }
+        if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
+            return SpellStrikeOutcome::default();
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let mut power =
+            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        if t.life_attrib == crate::magic_effect::LA_UNDEAD {
+            // `nPower = (ushort)HUtil32.Round(nPower * 1.5)`（`:296`）。
+            power = mir2_shared::hutil::round(f64::from(power) * 1.5);
+        }
+        SpellStrikeOutcome {
+            target: Some(tid),
+            bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
+            power,
+            delayed: true,
+            delay_ms: 600,
+            push: None,
+        }
+    }
+
+    /// `SKILL_FIRECHARM(13)` 效果体（`MagicManager.cs:328-351`）。
+    ///
+    /// 护身符门（`:322-325` `CheckAmulet`/`UseAmulet`）由**调用方**（宿主会话层）完成；
+    /// 门不过时 oracle `boSpellFail` 保持 true ⇒ 不调用本函数（无效果体、零抽、尾不发）。
+    ///
+    /// 逐行顺序：
+    /// ```text
+    /// :330 MagCanHitTarget(CurrX, CurrY, target)     纯门；**失败 ⇒ targetObject = null**
+    /// :332 IsProperTarget(target)                    纯门；失败 ⇒ target 保持（不置 null）
+    /// :334 Random(10) >= target.AntiMagic            ← 第 1 抽；失败 ⇒ target 保持
+    /// :336 |target.CurrX - nTargetX| <= 1 && |...Y| <= 1   纯门；失败 ⇒ target 保持
+    /// :337 nPower = GetAttackPower(GetPower(MPow) + Lo(SC), ΔSC+1)  ← 第 2..5 抽
+    /// :338 SendSelfDelayMsg(RM_DELAYMAGIC, nPower, MakeLong(tx,ty), 2, target.ActorId, "", 1200)
+    /// :339 if (target.Race >= Animal) boTrain = true
+    /// ```
+    /// ⇒ **只有 `MagCanHitTarget` 失败才把 target 置 null**；其余失败支目标保留，
+    /// 共享尾 `RM_MAGICFIRE` 仍带该 ActorId（oracle 的非对称行为，必须照抄）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_firecharm_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        anti_magic: i32,
+        sc: i32,
+    ) -> SpellStrikeOutcome {
+        let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
+            return SpellStrikeOutcome::default();
+        };
+        if !self.spell_can_hit(&caster, &t) {
+            return SpellStrikeOutcome::default();
+        }
+        // 以下失败支**保持** targetObject（`MagicManager.cs:332-341` 无 else）。
+        let stayed = SpellStrikeOutcome {
+            target: Some(tid),
+            ..SpellStrikeOutcome::default()
+        };
+        if !crate::combat::is_proper_target_grouped(
+            &caster,
+            &t,
+            &self.attacker_group_members(&caster),
+        ) {
+            return stayed;
+        }
+        if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
+            return stayed;
+        }
+        if (t.x - target_x).abs() > 1 || (t.y - target_y).abs() > 1 {
+            return stayed;
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::single_hit_power_sc(&mut self.rng, magic, level, sc, atk);
+        SpellStrikeOutcome {
+            target: Some(tid),
+            bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
+            power,
+            delayed: true,
+            delay_ms: 1200,
+            push: None,
+        }
+    }
+
+    /// `SKILL_44(44)` 效果体 —— `MagicManager.MagHbFireBall`（`MagicManager.cs:1020-1064`）
+    /// 的调用点 `case SKILL_44`（`:557-562`）。
+    ///
+    /// 逐行顺序：
+    /// ```text
+    /// :1023 MagCanHitTarget(CurrX, CurrY, target)            纯门；失败 ⇒ target = null、return false
+    /// :1028 IsProperTarget(target)                           纯门；失败 ⇒ target = null、return false
+    /// :1032 target.AntiMagic > Random(10) || |Δx|>1 || |Δy|>1  ← 第 1 抽；失败 ⇒ target = null
+    /// :1038 nPower = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC+1)  ← 第 2..5 抽
+    /// :1039 SendSelfDelayMsg(RM_DELAYMAGIC, nPower, ..., target.ActorId, "", 600)
+    /// :1040 if (target.Race >= Animal) result = true
+    /// :1044 if (caster.Abil.Level > target.Abil.Level && !target.StickMode)
+    /// :1047   if (Random(20) < 6 + Level*3 + levelgap)        ← 第 6 抽
+    /// :1049     push = Random(Level) - 1                      ← 第 7 抽（Level=0 也抽）
+    /// :1050     if (push > 0) SendSelfDelayMsg(RM_DELAYPUSHED, ...)
+    /// ```
+    /// `boTrain` = `result`（只看 `Race >= Animal`，与推挤是否命中无关）。
+    /// `StickMode` 读目标实体的 `Entity.stick_mode`（普通目标缺省 false）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_hb_fireball_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        anti_magic: i32,
+        mc: i32,
+    ) -> SpellStrikeOutcome {
+        let Some((caster, t, tid)) = self.spell_strike_targets(caster_id, target) else {
+            return SpellStrikeOutcome::default();
+        };
+        if !self.spell_can_hit(&caster, &t) {
+            return SpellStrikeOutcome::default();
+        }
+        if !crate::combat::is_proper_target_grouped(
+            &caster,
+            &t,
+            &self.attacker_group_members(&caster),
+        ) {
+            return SpellStrikeOutcome::default();
+        }
+        // `:1032 targetObject.AntiMagic > Random(10) || ...`（短路口径与
+        // `Random(10) >= AntiMagic` 失败等价；距离检查纯量）。
+        if !crate::magic_effect::anti_magic_roll(&mut self.rng, anti_magic) {
+            return SpellStrikeOutcome::default();
+        }
+        if (t.x - target_x).abs() > 1 || (t.y - target_y).abs() > 1 {
+            return SpellStrikeOutcome::default();
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        let push = crate::magic_effect::hb_fireball_push(
+            &mut self.rng,
+            level,
+            caster.level,
+            t.level,
+            t.stick_mode, // `BaseObject.StickMode`（`BeeQueen`/`SpiderHouseMonster` ctor 置 true）
+        );
+        SpellStrikeOutcome {
+            target: Some(tid),
+            bo_train: t.race >= crate::entity::ACTOR_RACE_ANIMAL,
+            power,
+            delayed: true,
+            delay_ms: 600,
+            push,
+        }
+    }
+
+    // ====================== P3-B4（毒族 / 群体列表：6/48/50/42）======================
+
+    /// `PlayObject.PvpLevel()`（`PlayObject.cs:4352`）：`(byte)(PkPoint / 100)`。
+    #[must_use]
+    pub fn pvp_level(pk_point: i32) -> u8 {
+        u8::try_from(pk_point / 100).unwrap_or(0)
+    }
+
+    /// `GameSvrConf.PKFlagNameColor`（`GameSvrConf.cs:1731` 缺省 `0x2F`）。
+    pub const PK_FLAG_NAME_COLOR: u8 = 0x2F;
+
+    /// `PlayObject.SetPkFlag(IActor)`（`PlayObject.cs:4326-4341`）。
+    ///
+    /// ```text
+    /// :4328 if (baseObject.Race == Play)
+    /// :4331   if (PvpLevel() < 2 && targetObject.PvpLevel() < 2
+    ///            && !Envir.Flag.FightZone && !Envir.Flag.Fight3Zone && !PvpFlag)
+    /// :4333     targetObject.PvpNameColorTick = GetTickCount();
+    /// :4336     if (!targetObject.PvpFlag) { targetObject.PvpFlag = true; targetObject.RefNameColor(); }
+    /// ```
+    ///
+    /// 本仓 `FightZone`/`Fight3Zone` 未建模 ⇒ 恒 `false`（不阻塞置位）。
+    /// 返回 `RefNameColor` 的观察值（由 **`target_id`** 发出；颜色按接收侧
+    /// `PlayObject.GetChrColor` 的 `PvpFlag` 支 = `PKFlagNameColor`）。
+    pub fn set_pk_flag(
+        &mut self,
+        this_id: i32,
+        target_id: i32,
+    ) -> Option<crate::slave::NameColorDelivery> {
+        let World { entities, sim, .. } = self;
+        Self::set_pk_flag_impl(entities, sim, this_id, target_id)
+    }
+
+    /// **P6a2**：`SetPkFlag` 的 facade/段共用实现（`RM_POISON` 的玩家对玩家支）。
+    ///
+    /// `PvpState` 不在 `EntityMut` 组合视图内 ⇒ 走 [`crate::entity::PvpStateAccess`]
+    /// （段 spec 须声明写 `PvpState`）。
+    pub(crate) fn set_pk_flag_impl<
+        A: crate::entity::EntityAccess + crate::entity::PvpStateAccess,
+    >(
+        access: &mut A,
+        sim: &SimState,
+        this_id: i32,
+        target_id: i32,
+    ) -> Option<crate::slave::NameColorDelivery> {
+        // oracle 的判据全在 `this`/`target` 的只读字段上；先取值再释放借用（供下面写计时）。
+        let (this_level, this_flagged, target_level, target_race, target_flagged) = {
+            let this = access.get(this_id)?;
+            let target = access.get(target_id)?;
+            (
+                Self::pvp_level(this.pk_point),
+                this.pvp_flag,
+                Self::pvp_level(target.pk_point),
+                target.race,
+                target.pvp_flag,
+            )
+        };
+        // `baseObject.Race == ActorRace.Play`
+        if target_race != crate::entity::ACTOR_RACE_PLAY {
+            return None;
+        }
+        // `PvpLevel() < 2 && targetObject.PvpLevel() < 2 && !PvpFlag`
+        if this_level >= 2 || target_level >= 2 || this_flagged {
+            return None;
+        }
+        // `:4333` 计时**无条件刷新**（在 `if (!targetObject.PvpFlag)` 之前）：目标已带 flag 时
+        // 再来一次 `SetPkFlag` 不产帧，但会把过期时刻推后（oracle 原样，不许「顺手」改成早退）。
+        let now = sim.clock_ms;
+        if let Some(p) = access.pvp_state_mut(target_id) {
+            p.pvp_name_color_tick = now;
+        }
+        if target_flagged {
+            return None;
+        }
+        if let Some(p) = access.pvp_state_mut(target_id) {
+            p.pvp_flag = true;
+        }
+        Some(crate::slave::NameColorDelivery {
+            target_id,
+            color: Self::PK_FLAG_NAME_COLOR,
+        })
+    }
+
+    /// 目标的 `AntiPoison`（`BaseObject.cs:109`）。唯一注入面 = [`World::attack_poison`]；
+    /// 未注入 ⇒ 0（普通 `MonGen` 怪与 oracle 普通生成路径同）。
+    #[must_use]
+    pub fn target_anti_poison(&self, target_id: i32) -> i32 {
+        Self::target_anti_poison_impl(&self.sim, target_id)
+    }
+
+    /// **P6b2**：`target_anti_poison` 的 facade/段共用实现（只碰 `SimState`）。
+    #[must_use]
+    pub(crate) fn target_anti_poison_impl(sim: &SimState, target_id: i32) -> i32 {
+        sim.attack_poison
+            .get(&target_id)
+            .map_or(0, |s| i32::from(s.anti_poison))
+    }
+
+    /// 目标的 `UnParalysis`（`BaseObject.cs:85`）。注入面同 [`World::target_anti_poison`]；
+    /// oracle 全仓无赋值点 ⇒ 恒 `false`。
+    #[must_use]
+    pub fn target_un_paralysis(&self, target_id: i32) -> bool {
+        self.attack_poison
+            .get(&target_id)
+            .is_some_and(|s| s.un_paralysis)
+    }
+
+    /// `SKILL_AMYOUNSUL(6)` / `SKILL_GROUPAMYOUNSUL(48)` 的**单目标效果体**
+    /// （`MagicManager.cs:235-252` / `:914-932`）。
+    ///
+    /// 护身符门（`CheckAmulet`/`UseAmulet`）与 `SetTargetCreat` 在宿主侧完成（需要会话 `UseItems`）；
+    /// 本函数承接骰门之后的**取数与投毒**：
+    /// ```text
+    /// :235/:914 if (Random(antiPoison + 7) <= 6) {
+    /// :237/:917   switch (stdItem.Shape)
+    ///               case 1: nPower = GP13(40) + RP(SC)*2; RM_POISON(DECHEALTH, nPower, caster, point, 1000)
+    ///               case 2: nPower = GP13(30) + RP(SC)*2; RM_POISON(DAMAGEARMOR, ...)
+    /// :248/:928   if (Race == Play || Race >= Animal) boTrain = true
+    /// ```
+    /// `shape` 来自 `UseItems[nAmuletIdx].Index` 的 `StdItem.Shape`（同一确定性表；见合同 §2.5）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_poison_on_target(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target_id: i32,
+        sc: i32,
+        shape: u8,
+        cfg: &crate::magic_effect::MabMabeConfig,
+    ) -> PoisonStrikeOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return PoisonStrikeOutcome::default();
+        };
+        let Some(target) = self.entities.spawn_cloned(target_id) else {
+            return PoisonStrikeOutcome::default();
+        };
+        let _ = caster;
+        let anti_poison = self.target_anti_poison(target_id);
+        let mut out = PoisonStrikeOutcome {
+            target: Some(target_id),
+            ..PoisonStrikeOutcome::default()
+        };
+        // `:235/:914 Random(AntiPoison + 7) <= 6`（失败 ⇒ 不抽 GP13/RP）。
+        if !crate::magic_effect::poison_dice(&mut self.rng, anti_poison) {
+            return out;
+        }
+        // `:237/:917 switch (stdItem.Shape)`——只有 1/2 两支可达（合同 §2.5）。
+        let (n_int, poison_type) = match shape {
+            1 => (40, 0u8), // DECHEALTH
+            2 => (30, 1u8), // DAMAGEARMOR
+            _ => return out,
+        };
+        let power = crate::magic::power_poison(&mut self.rng, magic, level, sc, n_int);
+        let point = crate::magic_effect::poison_point(level, power, cfg.amy_ounsul_point);
+        // `SendSelfDelayMsg(RM_POISON, type, nPower, caster, point, "", 1000)`
+        // ⇒ wParam=type、nParam1(时间)=nPower、nParam2=caster、nParam3=point。
+        self.send_self_delay_msg_full(
+            target_id,
+            crate::slave::RM_POISON,
+            i32::from(poison_type),
+            power,
+            caster_id,
+            point,
+            1000,
+        );
+        out.poisoned = true;
+        out.power = power;
+        out.poison_type = poison_type;
+        out.time = power;
+        out.point = point;
+        out.bo_train = target.race == crate::entity::ACTOR_RACE_PLAY
+            || target.race >= crate::entity::ACTOR_RACE_ANIMAL;
+        out
+    }
+
+    /// `SKILL_GROUPAMYOUNSUL(48)` 的**逐目标循环**（`MagicManager.cs:893-940`）。
+    ///
+    /// `use_amulet(target_id)` 由宿主实现：执行 `CheckAmulet` + `UseAmulet`（帧面 642/202 也由
+    /// 宿主出），成功返回 `Some(StdItem.Shape)`，失败返回 `None`（⇒ 该目标**零抽**且
+    /// **不** `SetTargetCreat`）。回调按枚举序（`x→y→格内 ObjList 插入序`）逐目标调用，
+    /// 因此护身符消耗/帧面与 oracle 的循环体同序。
+    ///
+    /// 本函数返回 `boTrain`（任一目标命中 `Race == Play || >= Animal`）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn cast_group_poison_spell<F>(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target_x: i32,
+        target_y: i32,
+        sc: i32,
+        cfg: &crate::magic_effect::MabMabeConfig,
+        mut use_amulet: F,
+    ) -> GroupPoisonOutcome
+    where
+        F: FnMut(i32) -> Option<u8>,
+    {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return GroupPoisonOutcome::default();
+        };
+        let range = i32::from(level).max(1);
+        let mut out = GroupPoisonOutcome::default();
+        for tid in self.mag_objects_in_range(caster.map_id, target_x, target_y, range) {
+            if tid == caster_id {
+                continue;
+            }
+            let Some(t) = self.entities.spawn_cloned(tid) else {
+                continue;
+            };
+            if t.death || t.ghost {
+                continue;
+            }
+            if !crate::combat::is_proper_target_grouped(
+                &caster,
+                &t,
+                &self.attacker_group_members(&caster),
+            ) {
+                continue;
+            }
+            let Some(shape) = use_amulet(tid) else {
+                continue;
+            };
+            // `:934 playObject.SetTargetCreat(baseObject);`（在 `if (CheckAmulet)` 内）。
+            if let Some(c) = self.entities.get_mut(caster_id) {
+                c.ai.target_creature = Some(tid);
+            }
+            let one = self.cast_poison_on_target(caster_id, magic, level, tid, sc, shape, cfg);
+            out.bo_train |= one.bo_train;
+            out.targets.push(one);
+        }
+        out
+    }
+
+    /// `SKILL_MABE(50)` 效果体 —— `case` `MagicManager.cs:530-536` + helper `:1230-1267`。
+    ///
+    /// **case 级的 4 抽无条件发生**（`targetObject == null` 也抽）：
+    /// `nPower = GetAttackPower(GetPower(MPow) + Lo(MC), ΔMC + 1)`
+    /// （`MPow` → `GetPower` → `GetAttackPower`）。
+    ///
+    /// helper 的门序（短路，逐抽见合同 §3.3）：
+    /// `MagCanHitTarget` → `IsProperTarget` → `R(10)` 抗魔门 → 距离 ≤1 →
+    /// **入队第一条 `RM_DELAYMAGIC(nPower/3, ..., 600)`** → `R(2)` 等级门 →
+    /// `R(hit_rand_rate)` → `R(hit_success_rate)` → 成功臂 `GetMagStruckDamage`（第 9 抽）→
+    /// 入队第二条 `RM_DELAYMAGIC(post-MSD nPower, ..., 600)` → 玩家且 `!UnParalysis` 再
+    /// `R(nLevel)` 并投 `RM_POISON(STONE, ..., 650)`。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_mab_mabe_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        mc: i32,
+        cfg: &crate::magic_effect::MabMabeConfig,
+    ) -> MabMabeSpellOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return MabMabeSpellOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        // `:531` —— 4 抽无条件。
+        let power = crate::magic::power_get_power_plus_mc(&mut self.rng, magic, level, mc, atk);
+        let mut out = MabMabeSpellOutcome {
+            target,
+            power,
+            ..MabMabeSpellOutcome::default()
+        };
+        let Some(tid) = target else {
+            return out;
+        };
+        let Some(t) = self.entities.spawn_cloned(tid) else {
+            return out;
+        };
+        // `:1233 MagCanHitTarget` / `:1235 IsProperTarget`（纯门、零抽）。
+        if !self.spell_can_hit(&caster, &t)
+            || !crate::combat::is_proper_target_grouped(
+                &caster,
+                &t,
+                &self.attacker_group_members(&caster),
+            )
+        {
+            return out;
+        }
+        // `:1237` 的 `&&` 里距离门与 R(10) 同一条件（距离失败 ⇒ 不抽 R(2)）。
+        let in_range = (t.x - target_x).abs() <= 1 && (t.y - target_y).abs() <= 1;
+        let gates = crate::magic_effect::mab_mabe_gates(
+            &mut self.rng,
+            i32::from(t.anti_magic),
+            in_range,
+            i32::from(caster.level),
+            i32::from(t.level),
+            level,
+            cfg,
+        );
+        if !gates.anti_magic_pass || !in_range {
+            return out;
+        }
+        // `:1239` 第一条 RM_DELAYMAGIC（**先于** `:1240` 的等级门）。
+        self.send_self_delay_msg_full(
+            caster_id,
+            crate::slave::RM_DELAYMAGIC,
+            power / 3,
+            mir2_shared::hutil::make_long_unsigned(target_x as u16, target_y as u16),
+            2,
+            tid,
+            600,
+        );
+        if !gates.level_gate_pass || !gates.rand_gate_pass || !gates.success_gate_pass {
+            return out;
+        }
+        // `:1247-1251`：玩家目标 ⇒ `SetPkFlag`（⇒ 656，由 target 发）+ `SetTargetCreat`。
+        if t.race == crate::entity::ACTOR_RACE_PLAY {
+            out.name_color = self.set_pk_flag(caster_id, tid);
+            if let Some(c) = self.entities.get_mut(caster_id) {
+                c.ai.target_creature = Some(tid);
+            }
+        }
+        // `:1252 targetObject.SetLastHiter(playObject)`
+        let now = self.clock_ms;
+        if let Some(mut tm) = self.entities.get_mut(tid) {
+            tm.set_last_hiter(caster_id, now);
+        }
+        // `:1253 nPower = targetObject.GetMagStruckDamage(playObject, nPower)`（第 9 抽）。
+        let n_power = crate::combat::get_mag_struck_damage(
+            &mut self.rng,
+            t.mac,
+            power,
+            Some(caster.undead_power),
+        );
+        out.msd_power = n_power;
+        // `:1254` 第二条 RM_DELAYMAGIC。
+        self.send_self_delay_msg_full(
+            caster_id,
+            crate::slave::RM_DELAYMAGIC,
+            n_power,
+            mir2_shared::hutil::make_long_unsigned(target_x as u16, target_y as u16),
+            2,
+            tid,
+            600,
+        );
+        // `:1255-1258`：玩家且 `!UnParalysis` ⇒ `R(nLevel)` 后投 STONE（650ms）。
+        if t.race == crate::entity::ACTOR_RACE_PLAY && !self.target_un_paralysis(tid) {
+            let time = n_power / cfg.hit_mabe_time_rate + self.rng.random_below(i32::from(level));
+            self.send_self_delay_msg_full(
+                tid,
+                crate::slave::RM_POISON,
+                5, // PoisonState.STONE
+                time,
+                caster_id,
+                i32::from(level),
+                650,
+            );
+        }
+        out.bo_train = true;
+        out
+    }
+
+    /// `SKILL_GROUPLIGHTENING(42)` 效果体 —— `MagGroupLightening`（`MagicManager.cs:981-1018`）。
+    ///
+    /// **调用前提**：`targetObject != null`（helper 在 `:987` 直接读 `targetObject.ActorId`；
+    /// null ⇒ NPE ⇒ 639 失败臂，由宿主处理，不调用本函数）。
+    ///
+    /// 逐目标（`x→y→格内 ObjList 插入序`）：
+    /// ```text
+    /// :995  IsProperTarget（纯门；失败 ⇒ 零抽）
+    /// :997  Random(10) >= AntiMagic                   ← 1 抽
+    /// :999  nPower = AP(GP(MPow)+Lo(MC), ΔMC+1)        ← 4 抽
+    /// :1000 LA_UNDEAD ⇒ Round(*1.5)
+    /// :1004 RM_DELAYMAGIC(nPower, MakeLong(obj.CurrX,obj.CurrY), 2, obj.ActorId, 600)
+    /// :1005 Race >= Animal ⇒ result = true
+    /// :1010 obj.CurrX/Y != nTargetX/Y ⇒ RM_10205（716，**骰门之外**）
+    /// ```
+    /// `boSpellFire = false` 由 `case` 的 `ref` 置（`:984`），宿主据返回值不再发共享尾 638。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_group_lightening_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target_id: i32,
+        target_x: i32,
+        target_y: i32,
+        mc: i32,
+    ) -> GroupLighteningOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return GroupLighteningOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let range = i32::from(level).max(1);
+        let mut out = GroupLighteningOutcome {
+            fire_target: target_id,
+            ..GroupLighteningOutcome::default()
+        };
+        for tid in self.mag_objects_in_range(caster.map_id, target_x, target_y, range) {
+            if tid == caster_id {
+                continue;
+            }
+            let Some(t) = self.entities.spawn_cloned(tid) else {
+                continue;
+            };
+            if t.death || t.ghost {
+                continue;
+            }
+            if !crate::combat::is_proper_target_grouped(
+                &caster,
+                &t,
+                &self.attacker_group_members(&caster),
+            ) {
+                continue;
+            }
+            // `:997 Random(10) >= AntiMagic`
+            if crate::magic_effect::anti_magic_roll(&mut self.rng, i32::from(t.anti_magic)) {
+                // `:999`
+                let mut power =
+                    crate::magic::power_get_power_plus_mc(&mut self.rng, magic, level, mc, atk);
+                // `:1000-1003`
+                if t.life_attrib == crate::magic_effect::LA_UNDEAD {
+                    power = mir2_shared::hutil::round(f64::from(power) * 1.5);
+                }
+                // `:1004`
+                self.send_self_delay_msg_full(
+                    caster_id,
+                    crate::slave::RM_DELAYMAGIC,
+                    power,
+                    mir2_shared::hutil::make_long_unsigned(t.x as u16, t.y as u16),
+                    2,
+                    tid,
+                    600,
+                );
+                // `:1005-1008 if (baseObject.Race >= ActorRace.Animal) result = true;`
+                if t.race >= crate::entity::ACTOR_RACE_ANIMAL {
+                    out.bo_train = true;
+                }
+                out.targets.push(GroupLighteningTarget {
+                    target_id: tid,
+                    power,
+                });
+            }
+            // `:1010-1013`（骰门之外）。
+            if t.x != target_x || t.y != target_y {
+                out.icons_716.push((t.x, t.y));
+            }
+        }
+        out
+    }
+
+    /// 取 `(施法者, 目标, 目标 id)`（均 clone ⇒ 后续可安全 `&mut self.rng`）。
+    /// `target` 为 `None` / 实体不存在 ⇒ `None`（oracle 的 `targetObject == null`）。
+    fn spell_strike_targets(
+        &self,
+        caster_id: i32,
+        target: Option<i32>,
+    ) -> Option<(EntitySpawn, EntitySpawn, i32)> {
+        let caster = self.entities.spawn_cloned(caster_id)?;
+        let tid = target?;
+        let t = self.entities.spawn_cloned(tid)?;
+        Some((caster, t, tid))
+    }
+
+    /// `BaseObject.MagCanHitTarget` 的世界层调用（图 = 施法者当前图；目标坐标 = 实体坐标）。
+    fn spell_can_hit(&self, caster: &EntitySpawn, target: &EntitySpawn) -> bool {
+        crate::magic::mag_can_hit_target(
+            self.map(caster.map_id),
+            caster.x,
+            caster.y,
+            target.x,
+            target.y,
+        )
+    }
+
+    // ====================== P3-B2（治疗/爆炸 AoE：2/29/23/24/33/47）======================
+
+    /// `BaseObject.GetMapBaseObjects`（`BaseObject.cs:2808-2844`）的**有序**等价物（合同 §1.4）。
+    ///
+    /// ```text
+    /// :2817  for (x = nX-range; x <= nX+range; x++)           外层升序
+    /// :2819    for (y = nY-range; y <= nY+range; y++)         内层升序
+    /// :2821      cellInfo = GetCellInfo(x, y, out cellSuccess)  只在 Valid(Walk) 时 success
+    /// :2822      if (cellSuccess && cellInfo.IsAvailable)
+    /// :2824        for (i = 0; i < cellInfo.ObjList.Count; i++) 格内 **ObjList 插入序**
+    /// :2827          if (cellObject.CellObjId > 0 && cellObject.ActorObject)
+    /// :2830            if (baseObject != null && !baseObject.Death && !baseObject.Ghost)
+    /// ```
+    ///
+    /// **不得**用 `EntityStore::iter` 的槽位序（槽复用会换位）。
+    #[must_use]
+    pub fn mag_objects_in_range(&self, map_id: usize, n_x: i32, n_y: i32, range: i32) -> Vec<i32> {
+        Self::mag_objects_in_range_impl(&self.entities, &self.sim, map_id, n_x, n_y, range)
+    }
+
+    /// **P6a2**：`mag_objects_in_range` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+    pub(crate) fn mag_objects_in_range_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        n_x: i32,
+        n_y: i32,
+        range: i32,
+    ) -> Vec<i32> {
+        let Some(map) = sim.maps.get(map_id) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        for x in (n_x - range)..=(n_x + range) {
+            for y in (n_y - range)..=(n_y + range) {
+                let (cell, success) = map.get_cell_info(x, y);
+                if !success || !cell.is_available() {
+                    continue;
+                }
+                for obj in &cell.obj_list {
+                    if obj.cell_obj_id <= 0 || !obj.actor_object {
+                        continue;
+                    }
+                    if let Some(e) = access.get(obj.cell_obj_id) {
+                        if !e.death && !e.ghost {
+                            out.push(e.id);
+                        }
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `SKILL_HEALLING(2)` 效果体（`MagicManager.cs:204-224`）。
+    ///
+    /// ```text
+    /// :205-210  target == null => target = self, nTargetX/nTargetY = CurrX/CurrY
+    /// :211      if (IsProperFriend(target)) {                       <- 失败 => 0 抽 / 0 case 帧
+    /// :213        nPower = GetAttackPower(GetPower(MPow) + Lo(SC)*2, (Hi-Lo)*2+1)  <- 4 抽
+    /// :214        if (target.HP < target.MaxHP) {
+    /// :216          target.SendSelfDelayMsg(RM_MAGHEALING, 0, nPower, 0,0,"",800)
+    /// :217          boTrain = true }
+    /// :219-222    if (AbilSeeHealGauge) playObject.SendMsg(target, RM_ABILSEEHEALGAUGE, ...)
+    /// ```
+    ///
+    /// 宿主负责 `AbilSeeHealGauge` 门与 1103 帧（本函数只返回 gauge 目标）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_healing_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        target_x: i32,
+        target_y: i32,
+        sc: i32,
+    ) -> HealingSpellOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return HealingSpellOutcome::default();
+        };
+        // `:160-163` 死亡归一在宿主已完成；这里再兜一次（直调用例）。
+        let target = target.filter(|id| self.entities.get(*id).is_some_and(|e| !e.death));
+        let (tid, tx, ty) = match target {
+            Some(id) => (id, target_x, target_y),
+            // `:205-210` 目标为空 => 治疗自己并**改写尾帧坐标**。
+            None => (caster.id, caster.x, caster.y),
+        };
+        let Some(t) = self.entities.spawn_cloned(tid) else {
+            return HealingSpellOutcome::default();
+        };
+        let mut out = HealingSpellOutcome {
+            target: Some(tid),
+            tx,
+            ty,
+            ..HealingSpellOutcome::default()
+        };
+        let in_group = self.attacker_group_members(&caster).contains(&tid);
+        // `:211` —— 门在**抽数之前**；失败 => `allowed=false`、`target` 保留（尾仍带该 id）。
+        if !crate::combat::is_proper_friend(&caster, &t, in_group) {
+            return out;
+        }
+        out.allowed = true;
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::power_healing(&mut self.rng, magic, level, sc, atk);
+        out.power = power;
+        if t.hp < t.max_hp {
+            self.send_self_delay_msg_with(tid, crate::slave::RM_MAGHEALING, 0, power, 800);
+            out.bo_train = true;
+            out.healed.push(tid);
+        }
+        // `:219-222`：对**每个** proper friend 都发（不看 HP）。
+        out.gauges.push(tid);
+        out
+    }
+
+    /// `SKILL_BIGHEALLING(29)` 效果体 + `MagBigHealing`（`MagicManager.cs:443-449` / `:54-76`）。
+    ///
+    /// 施法者侧恒 4 抽（**无前置门**）；helper 内 0 抽。枚举 = `GetMapBaseObjects(..., 1, ...)`
+    /// 的 3x3 有序集；只治 `IsProperFriend && HP<MaxHP` 的玩家；gauge 对所有 proper friend。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_big_healing_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        n_x: i32,
+        n_y: i32,
+        sc: i32,
+    ) -> HealingSpellOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return HealingSpellOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::power_healing(&mut self.rng, magic, level, sc, atk);
+        let mut out = HealingSpellOutcome {
+            target,
+            tx: n_x,
+            ty: n_y,
+            power,
+            ..HealingSpellOutcome::default()
+        };
+        let group_members = self.attacker_group_members(&caster);
+        for tid in self.mag_objects_in_range(caster.map_id, n_x, n_y, 1) {
+            let Some(t) = self.entities.spawn_cloned(tid) else {
+                continue;
+            };
+            let in_group = group_members.contains(&tid);
+            if !crate::combat::is_proper_friend(&caster, &t, in_group) {
+                continue;
+            }
+            // `:69-72` gauge **不看 HP**。
+            out.gauges.push(tid);
+            if t.hp < t.max_hp {
+                self.send_self_delay_msg_with(tid, crate::slave::RM_MAGHEALING, 0, power, 800);
+                out.bo_train = true;
+                out.healed.push(tid);
+            }
+        }
+        out
+    }
+
+    /// `MagicManager.MagBigExplosion`（`MagicManager.cs:1100-1117`）——
+    /// `SKILL_FIREBOOM(23)` / `SKILL_SNOWWIND(33)` / `SKILL_47(47)` 共用。
+    ///
+    /// ```text
+    /// :1104  GetMapBaseObjects(envir, nX, nY, nRage, ...)          有序枚举（合同 §1.4）
+    /// :1108  baseObject.IsProperTarget(targetObject)               纯门（不取数）
+    /// :1110  baseObject.SetTargetCreat(targetObject)               只改**施法者**的 TargetCret
+    /// :1111  targetObject.SendMsg(baseObject, RM_MAGSTRUCK, 0, nPower, 0, 0)
+    /// ```
+    ///
+    /// 施法者侧 4 抽先于枚举（oracle 是实参求值序）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_big_explosion_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        n_x: i32,
+        n_y: i32,
+        range: i32,
+        mc: i32,
+    ) -> AreaSpellOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return AreaSpellOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::power_magic_attack(&mut self.rng, magic, level, mc, atk);
+        let mut out = AreaSpellOutcome {
+            target,
+            power,
+            ..AreaSpellOutcome::default()
+        };
+        let group_members = self.attacker_group_members(&caster);
+        let mut last_target = None;
+        for tid in self.mag_objects_in_range(caster.map_id, n_x, n_y, range) {
+            let Some(t) = self.entities.spawn_cloned(tid) else {
+                continue;
+            };
+            if !crate::combat::is_proper_target_grouped(&caster, &t, &group_members) {
+                continue;
+            }
+            last_target = Some(tid);
+            out.targets.push(tid);
+            out.bo_train = true;
+            let order = self.msg_order;
+            self.msg_order += 1;
+            self.pending_mag_struck.push(PendingMagStruck {
+                target_id: tid,
+                caster_id,
+                power,
+                mine: false,
+                order,
+            });
+        }
+        // `SetTargetCreat` 逐目标覆盖；末值 = 最后一个 proper target（oracle 同）。
+        let now = self.clock_ms;
+        if let (Some(tid), Some(e)) = (last_target, self.entities.get_mut(caster_id)) {
+            e.ai.target_creature = Some(tid);
+            e.ai.target_focus_tick = now;
+        }
+        out
+    }
+
+    /// `MagicManager.MagElecBlizzard`（`MagicManager.cs:1119-1144`）——`SKILL_LIGHTFLOWER(24)`。
+    ///
+    /// ```text
+    /// :1123  GetMapBaseObjects(envir, baseObject.CurrX, baseObject.CurrY, ElecBlizzardRange)
+    ///        —— 中心是**施法者坐标**，不是点击坐标（合同 §5-C5）
+    /// :1128  if (target.LifeAttrib != LA_UNDEAD) nPowerPoint = nPower / 10  （整除）
+    /// :1134  else                               nPowerPoint = nPower
+    /// :1136  if (baseObject.IsProperTarget(targetObject))
+    /// :1138    targetObject.SendMsg(baseObject, RM_MAGSTRUCK, 0, nPowerPoint, 0, 0)
+    /// ```
+    ///
+    /// `nPowerPoint` 在 `IsProperTarget` **之前**算（无抽数）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_elec_blizzard_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        range: i32,
+        mc: i32,
+    ) -> AreaSpellOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return AreaSpellOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let power = crate::magic_effect::power_magic_attack(&mut self.rng, magic, level, mc, atk);
+        let mut out = AreaSpellOutcome {
+            target,
+            power,
+            ..AreaSpellOutcome::default()
+        };
+        let group_members = self.attacker_group_members(&caster);
+        for tid in self.mag_objects_in_range(caster.map_id, caster.x, caster.y, range) {
+            let Some(t) = self.entities.spawn_cloned(tid) else {
+                continue;
+            };
+            let power_point = if t.life_attrib != crate::magic_effect::LA_UNDEAD {
+                power / 10
+            } else {
+                power
+            };
+            if !crate::combat::is_proper_target_grouped(&caster, &t, &group_members) {
+                continue;
+            }
+            out.targets.push(tid);
+            out.bo_train = true;
+            let order = self.msg_order;
+            self.msg_order += 1;
+            self.pending_mag_struck.push(PendingMagStruck {
+                target_id: tid,
+                caster_id,
+                power: power_point,
+                mine: false,
+                order,
+            });
+        }
+        out
+    }
+
+    /// **P3-B2**：`RM_MAGSTRUCK` 交付处理器（`BaseObject.Base.cs:618-686`）的**有序**批量版。
+    ///
+    /// 逐目标（入队序）：
+    /// ```text
+    /// :620-623  if (Race >= Animal && !RushMode && Level < 50) WalkTick += 800 + Random(1000)
+    /// :624      nDamage = GetMagStruckDamage(null, nParam1)          <- MSD 1 抽（undead 项不生效）
+    /// :625      if (nDamage > 0) {
+    /// :627        StruckDamage(nDamage)                               玩家：STD（R(10)+每格 R(8)）
+    /// :628        HealthSpellChanged()                               仅玩家出 53（宿主）
+    /// :629        SendRefMsg(RM_STRUCK_MAG, ...)                     31（宿主）
+    /// :672-679    if (Race > Play) { MeatQuality -= nDamage*1000; SendMsg(RM_STRUCK) }
+    ///             -- AnimalObject.Operate：SetLastHiter -> Struck（TargetCret!=null 且
+    ///                GetAttackDir 失败抽 R(6)）-> Animal 抽 R(300) -> BreakHolySeizeMode（656）
+    /// ```
+    ///
+    /// `RushMode` 本骨架无字段 => 恒 false（合同 §3.1 的夹具 pin；登记）。
+    /// `MonDelHptoExp`/`MonSayMsg`/`Disable*Struck` 缺省 false（合同 §3.1），不建模其支。
+    pub fn deliver_mag_struck(&mut self) -> Vec<MagStruckOutcome> {
+        let mut msgs = std::mem::take(&mut self.pending_mag_struck);
+        // 宿主排水序 = 消息创建序（见 `PendingMagStruck::order`）；稳定排序。
+        msgs.sort_by_key(|m| m.order);
+        let mut out = Vec::new();
+        for msg in msgs {
+            let Some(mut t) = self.entities.spawn_cloned(msg.target_id) else {
+                continue;
+            };
+            // `CloneMonster.Operate`（`Clone.cs:14-30`）吞掉 `RM_MAGSTRUCK`（以及
+            // `RM_MAGSTRUCK_MINE` 等一切消息）⇒ **不**跑 `BaseObject.Base.cs:618-686`
+            // 的 `R(1000)`/MSD/`StruckDamage` 段；只做 `Master.MP -= (ushort)wParam`。
+            // 已知的所有发送点 `wParam` 都是 0（`MagicManager.cs:1111/1138`、
+            // `BaseObject.Base.cs:726`）⇒ 数值上 MP 不变，但 `MP <= 0 ⇒ HP = 0` 仍生效。
+            if t.race == crate::special_monster::RACE_CLONE_MONSTER {
+                let ident = if msg.mine {
+                    crate::special_monster::RM_MAGSTRUCK_MINE
+                } else {
+                    crate::special_monster::RM_MAGSTRUCK
+                };
+                let clone_id = msg.target_id;
+                crate::special_monster::clone_operate(self, clone_id, ident, 0, 0);
+                let (hp_after, max_hp) = self
+                    .entities
+                    .get(clone_id)
+                    .map_or((t.hp, t.max_hp), |e| (e.hp, e.max_hp));
+                out.push(MagStruckOutcome {
+                    target_id: clone_id,
+                    caster_id: msg.caster_id,
+                    damage: 0,
+                    hp_after,
+                    mp_after: t.mp,
+                    max_hp,
+                    is_player: false,
+                    // `CloneMonster.Operate` 恒 `return false` ⇒ 不执行
+                    // `StruckDamage`/`HealthSpellChanged`，ShowHp 支不得出帧。
+                    show_hp: false,
+                    name_color: false,
+                    chr_color: 0,
+                });
+                continue;
+            }
+            let is_monster = t.race >= crate::entity::ACTOR_RACE_ANIMAL;
+            // `:620-623` —— 只对怪物的 `RM_MAGSTRUCK`（**不是** `RM_MAGSTRUCK_MINE`）取
+            // `Random(1000)`（与伤害无关）；`!RushMode` 是 P3-B5 补上的第三道门。
+            if !msg.mine && is_monster && !t.rush_mode && t.level < 50 {
+                let draw = crate::magic_effect::mag_struck_walk_draw(&mut self.rng);
+                t.ai.walk_tick += 800 + i64::from(draw);
+            }
+            // `:624` — `GetMagStruckDamage(null, nPower)`：`baseObject == null` => 无 undead 加项。
+            let damage =
+                crate::combat::get_mag_struck_damage(&mut self.rng, t.mac, msg.power, None);
+            let mut name_color = false;
+            let mut chr_color = 0u8;
+            if damage > 0 {
+                // `base.StruckDamage`（`:827-851`）：本夹具配置倍率均缺省 10 => 数值不变；
+                // `LastHiter` 缩放面未在本层复刻（合同 §3.1 pin `LastHiter=null`，登记）。
+                t.hp = if damage >= i32::from(t.hp) {
+                    0
+                } else {
+                    t.hp - u16::try_from(damage).unwrap_or(u16::MAX)
+                };
+                if is_monster {
+                    // `:672-679` `SendMsg(RM_STRUCK)` -> `AnimalObject.Operate`（`AnimalObject.cs:118-133`）。
+                    t.set_last_hiter(msg.caster_id, self.clock_ms);
+                    // `Struck`（`AnimalObject.cs:336-358`）。
+                    let mut set_target = false;
+                    match t.ai.target_creature {
+                        None => set_target = true, // 短路：不抽 `Random(6)`
+                        Some(tc) => {
+                            let dir_ok = self.entities.get(tc).is_some_and(|o| {
+                                (t.x - o.x).abs() <= 1
+                                    && (t.y - o.y).abs() <= 1
+                                    && !(t.x == o.x && t.y == o.y)
+                            });
+                            if dir_ok
+                                || crate::magic_effect::mag_struck_attack_dir_roll(&mut self.rng)
+                            {
+                                set_target = true;
+                            }
+                        }
+                    }
+                    if set_target {
+                        if let Some(c) = self.entities.get(msg.caster_id) {
+                            if crate::combat::is_proper_target(&t, &c) {
+                                t.ai.target_creature = Some(msg.caster_id);
+                                t.ai.target_focus_tick = self.clock_ms;
+                            }
+                        }
+                    }
+                    if t.ai.animal {
+                        let draw = crate::magic_effect::mag_struck_meat_roll(&mut self.rng);
+                        t.ai.meat_quality = (i32::from(t.ai.meat_quality) - draw).max(0) as u16;
+                    }
+                    // `:672` `MeatQuality -= nDamage * 1000`（无抽数，值面）。
+                    t.ai.meat_quality =
+                        (i32::from(t.ai.meat_quality) - damage * 1000).max(0) as u16;
+                    // `BreakHolySeizeMode`（`:125`）-> `RefNameColor`（`BaseObject.cs:730-733`）。
+                    name_color = !t.ob_mode && !t.fixed_hide_mode;
+                    chr_color = crate::slave::get_chr_color(&t, &[], 0);
+                } else {
+                    // `PlayObject.StruckDamage` 的 RNG 段（`PlayObject.cs:2957/3000`）。
+                    let target_race = t.race;
+                    crate::combat::struck_damage_durability(
+                        &mut self.rng,
+                        &mut t.use_items,
+                        target_race,
+                    );
+                }
+            }
+            let (hp_after, max_hp) = (t.hp, t.max_hp);
+            let mp_after = t.mp;
+            let show_hp = t.show_hp;
+            let is_player = t.race == crate::entity::ACTOR_RACE_PLAY;
+            // S4a：属性真值在组件里，必须整包写回（只写 `t.entity` 会丢 HP/MP）。
+            self.entities.write_back(msg.target_id, t);
+            out.push(MagStruckOutcome {
+                target_id: msg.target_id,
+                caster_id: msg.caster_id,
+                damage,
+                hp_after,
+                mp_after,
+                max_hp,
+                is_player,
+                show_hp,
+                name_color,
+                chr_color,
+            });
+        }
+        out
+    }
+
+    /// **片 A-5（buff 生产者接线）**：技能 14/15（`SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO`）的生产入口
+    /// （`MagicManager.cs:352-366` 的 `SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO` 支）。
+    ///
+    /// `nPower = GetAttackPower(GetPower13(userMagic, 60) + Lo(SC)*10, ΔSC + 1)`（取数顺序：
+    /// `GetPower13` → `GetAttackPower`；玩家 `GetAttackPower` override 若 `Luck <= 0` 多抽一次
+    /// `Random(10)`）；随后 `MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, btState)`
+    /// （`btState == 0` ⇒ `DefenceUp`；否则 ⇒ `MagDefenceUp`）。返回 `result`（供 `boTrain` 的 `> 0` 门）。
+    /// **P3-B3**：16 `MagMakeHolyCurtain`（`MagicManager.cs:1146-1207`）。
+    ///
+    /// 取数次序：先求实参 `GetPower13(40)`（1 抽 `R(0)`）→ `GetRPow(SC)`（0/1 抽），**再**进
+    /// helper。helper 内：
+    /// 1. `Envir.CanWalk(tx,ty,true)` 失败 ⇒ `result=0`（零 helper 抽）；
+    /// 2. `GetMapBaseObjects(..., 1, ...)` 为空 ⇒ 0；
+    /// 3. 逐对象：`Race >= Animal`（false ⇒ 不抽、直接 else）⇒ **必抽 `R(4)`** ⇒
+    ///    `R(4)+caster.Level-1 > obj.Level` 且 `obj.Master == null` ⇒
+    ///    `SendMsg(RM_MAKEHOLYSEIZEMODE, nPower*1000)`、`result++`；否则 `result = 0`。
+    ///    ⇒ 最终 `result` = **最后一段连续合格对象**的数量（已发帧不回滚）。
+    #[must_use]
+    pub fn cast_holy_curtain_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+        tx: i32,
+        ty: i32,
+    ) -> HolyCurtainOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return HolyCurtainOutcome::default();
+        };
+        // C# 实参求值先于调用：`GetPower13(userMagic, 40) + GetRPow(WAbil.SC) * 3`。
+        let power = crate::magic_effect::get_power13(&mut self.rng, magic, level, 40)
+            + i32::from(crate::magic_effect::get_rpow(&mut self.rng, sc)) * 3;
+        let mut out = HolyCurtainOutcome {
+            tx,
+            ty,
+            power,
+            ..HolyCurtainOutcome::default()
+        };
+        // `baseObject.Envir.CanWalk(nX, nY, true)`（`Envirnoment.cs:442-451`）：
+        // `cellSuccess && cellInfo.Valid`；`get_cell_info` 的 `success` 已同时含 Valid。
+        let can_walk = self
+            .maps
+            .get(caster.map_id)
+            .is_some_and(|m| m.get_cell_info(tx, ty).1);
+        out.can_walk = can_walk;
+        if !can_walk {
+            return out;
+        }
+        let objects = self.mag_objects_in_range(caster.map_id, tx, ty, 1);
+        if objects.is_empty() {
+            return out;
+        }
+        let caster_level = i32::from(caster.level);
+        let mut result = 0i32;
+        for id in objects {
+            let Some(obj) = self.entities.spawn_cloned(id) else {
+                continue;
+            };
+            if obj.race >= crate::entity::ACTOR_RACE_ANIMAL {
+                // C# `&&` 从左到右：Race 过了就**必抽** `Random(4)`（即使 Master 非空）。
+                let draw = crate::magic_effect::holy_curtain_draw(&mut self.rng);
+                if draw + (caster_level - 1) > i32::from(obj.level) && obj.master.is_none() {
+                    self.send_msg_now(
+                        id,
+                        crate::slave::RM_MAKEHOLYSEIZEMODE,
+                        power * 1000,
+                        0,
+                        0,
+                        0,
+                    );
+                    out.eligible.push(id);
+                    result += 1;
+                } else {
+                    result = 0;
+                }
+            } else {
+                result = 0;
+            }
+        }
+        out.result = result;
+        out
+    }
+
+    /// **P3-B3**：`MagMakePrivateTransparent`（`MagicManager.cs:673-699`）的**投递时**执行体。
+    ///
+    /// 18 在施法 tick 直接调用；19 在 `RM_TRANSPARENT` 的 800ms 到点投递时调用（重读
+    /// `StatusTimeArr[8]`）。helper 内零前置抽；只有「`Race>=Animal && TargetCret==目标` 且
+    /// `|dx|<=1 && |dy|<=1`」的对象各抽一次 `R(2)`（坐标不合格 ⇒ 短路不抽）。
+    pub fn mag_make_private_transparent(
+        &mut self,
+        target_id: i32,
+        n_h_time: u16,
+    ) -> crate::slave::TransparentDelivery {
+        let World { entities, sim, .. } = self;
+        Self::mag_make_private_transparent_impl(entities, sim, target_id, n_h_time)
+    }
+
+    /// **P6a2**：`mag_make_private_transparent` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// `SimSelfDeliver` 的 `RM_TRANSPARENT` 到点投递支走本函数。
+    pub(crate) fn mag_make_private_transparent_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        target_id: i32,
+        n_h_time: u16,
+    ) -> crate::slave::TransparentDelivery {
+        let mut d = crate::slave::TransparentDelivery {
+            target_id,
+            n_h_time,
+            ..crate::slave::TransparentDelivery::default()
+        };
+        let Some(base) = access.spawn_cloned(target_id) else {
+            return d;
+        };
+        if base.status_time[crate::entity::POISON_STATETRANSPARENT] > 0 {
+            return d;
+        }
+        let objects = Self::mag_objects_in_range_impl(access, sim, base.map_id, base.x, base.y, 9);
+        for id in objects {
+            let Some(obj) = access.spawn_cloned(id) else {
+                continue;
+            };
+            if obj.race >= crate::entity::ACTOR_RACE_ANIMAL
+                && obj.ai.target_creature == Some(target_id)
+            {
+                let dx = (obj.x - base.x).abs();
+                let dy = (obj.y - base.y).abs();
+                let clear = if dx > 1 || dy > 1 {
+                    true
+                } else {
+                    crate::magic_effect::private_transparent_draw(&mut sim.rng) == 0
+                };
+                if clear {
+                    if let Some(e) = access.get_mut(id) {
+                        e.ai.target_creature = None;
+                    }
+                }
+            }
+        }
+        let status = Self::get_char_status_impl(access, sim, target_id);
+        if let Some(e) = access.get_mut(target_id) {
+            e.buff.status_time[crate::entity::POISON_STATETRANSPARENT] = n_h_time;
+            e.buff.char_status = status;
+            e.flags.hide_mode = true;
+            e.buff.transparent = true;
+        }
+        d.status_changed = true;
+        d.status = status;
+        d
+    }
+
+    /// **P3-B3**：18 `SKILL_CLOAK`（`MagicManager.cs:378-383`）。
+    ///
+    /// 实参 `(ushort)(GetPower13(30) + GetRPow(SC)*3)` **先求值**（即使 helper 因
+    /// `StatusTimeArr[8] > 0` 早退，这两抽也已发生）。
+    #[must_use]
+    pub fn cast_private_transparent_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+    ) -> PrivateTransparentOutcome {
+        let n_h_time = (crate::magic_effect::get_power13(&mut self.rng, magic, level, 30)
+            + i32::from(crate::magic_effect::get_rpow(&mut self.rng, sc)) * 3)
+            as u16;
+        let d = self.mag_make_private_transparent(caster_id, n_h_time);
+        PrivateTransparentOutcome {
+            status_changed: d.status_changed,
+            status: d.status,
+            status_time: n_h_time,
+        }
+    }
+
+    /// **P3-B3**：19 `SKILL_BIGCLOAK`（`MagicManager.cs:384-389` + `:1209-1228`）。
+    ///
+    /// 实参先求值（`GetPower13(30) + GetRPow(SC)*3`，**int** 不 cast）；helper 内零 RNG：
+    /// 3×3 有序枚举（中心 = snap 后的点击点），`IsProperFriend && StatusTimeArr[8] == 0`
+    /// ⇒ `SendSelfDelayMsg(RM_TRANSPARENT, 0, nHTime, 0, 0, "", 800)`。
+    #[must_use]
+    pub fn cast_group_transparent_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+        tx: i32,
+        ty: i32,
+    ) -> GroupTransparentOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return GroupTransparentOutcome::default();
+        };
+        let n_h_time = crate::magic_effect::get_power13(&mut self.rng, magic, level, 30)
+            + i32::from(crate::magic_effect::get_rpow(&mut self.rng, sc)) * 3;
+        let mut out = GroupTransparentOutcome {
+            n_h_time,
+            ..GroupTransparentOutcome::default()
+        };
+        for id in self.mag_objects_in_range(caster.map_id, tx, ty, 1) {
+            let Some(obj) = self.entities.spawn_cloned(id) else {
+                continue;
+            };
+            let in_group = self.attacker_group_members(&caster).contains(&id);
+            if crate::combat::is_proper_friend(&caster, &obj, in_group)
+                && obj.status_time[crate::entity::POISON_STATETRANSPARENT] == 0
+            {
+                self.send_self_delay_msg_full(
+                    id,
+                    crate::slave::RM_TRANSPARENT,
+                    0,
+                    n_h_time,
+                    0,
+                    0,
+                    800,
+                );
+                out.friends.push(id);
+                out.result = true;
+            }
+        }
+        out
+    }
+
+    /// **P3-B3**：28 `SKILL_SHOWHP`（`MagicManager.cs:431-442`）。
+    ///
+    /// 门：`target != null && !ShowHp`（false ⇒ **零抽**）。`R(6) <= Level+3` 过门后：
+    /// `ShowHpTick/ShowHpInterval` 落目标、`SendSelfDelayMsg(RM_DOOPENHEALTH, …, 1500)`、
+    /// `boTrain = true`。取数顺序：`R(6)` → `GetRPow(SC)` → `GetPower13(RP*2+30)`。
+    #[must_use]
+    pub fn cast_show_hp_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+        target: Option<i32>,
+    ) -> ShowHpOutcome {
+        let Some(tid) = target else {
+            return ShowHpOutcome::default();
+        };
+        let Some(t) = self.entities.spawn_cloned(tid) else {
+            return ShowHpOutcome::default();
+        };
+        let _ = caster_id;
+        if t.show_hp {
+            return ShowHpOutcome::default();
+        }
+        let mut out = ShowHpOutcome {
+            gate_passed: true,
+            ..ShowHpOutcome::default()
+        };
+        let roll = crate::magic_effect::show_hp_gate_draw(&mut self.rng);
+        if roll > i32::from(level) + 3 {
+            return out;
+        }
+        out.roll_passed = true;
+        out.bo_train = true;
+        let interval = crate::magic::power_show_hp_interval(&mut self.rng, magic, level, sc);
+        let now = self.clock_ms;
+        if let Some(e) = self.entities.get_mut(tid) {
+            e.buff.show_hp_tick = now;
+            e.buff.show_hp_interval = interval;
+        }
+        // 立即把 1500ms 自投递排到**目标自己**的队列。
+        self.send_self_delay_msg_full(tid, crate::slave::RM_DOOPENHEALTH, 0, 0, 0, 0, 1500);
+        out
+    }
+
+    /// **P3-B3**：`MakeOpenHealth`（`BaseObject.cs:944-950`）——`RM_DOOPENHEALTH` 的到点投递。
+    pub fn make_open_health(&mut self, target_id: i32) -> crate::slave::OpenHealthDelivery {
+        let World { entities, sim, .. } = self;
+        Self::make_open_health_impl(entities, sim, target_id)
+    }
+
+    /// **P6a2**：`MakeOpenHealth` 的 facade/段共用实现（`RM_DOOPENHEALTH` 到点投递）。
+    pub(crate) fn make_open_health_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        target_id: i32,
+    ) -> crate::slave::OpenHealthDelivery {
+        let Some(e) = access.spawn_cloned(target_id) else {
+            return crate::slave::OpenHealthDelivery::default();
+        };
+        let status_ex = e.char_status_ex | crate::entity::POISON_OPENHEATH;
+        let mut d = crate::slave::OpenHealthDelivery {
+            target_id,
+            hp: e.hp,
+            max_hp: e.max_hp,
+        };
+        let status =
+            Self::get_char_status_impl(access, sim, target_id) | crate::entity::POISON_OPENHEATH;
+        if let Some(e) = access.get_mut(target_id) {
+            e.buff.show_hp = true;
+            e.buff.char_status_ex = status_ex;
+            e.buff.char_status = status;
+        }
+        d.hp = access.get(target_id).map_or(d.hp, |e| e.hp);
+        d.max_hp = access.get(target_id).map_or(d.max_hp, |e| e.max_hp);
+        d
+    }
+
+    /// **P3-B3**：`OpenHolySeizeMode(dwInterval)`（`AnimalObject.cs:322-328`）+ `RefNameColor`。
+    ///
+    /// **656 的颜色不是 `MonsterObject.GetChrColor` 的 `HolySeize ⇒ 0x7D` 覆写**：
+    /// `RM_CHANGENAMECOLOR` 由**接收者**处理（`PlayObject.Message.cs:1677-1679`）——
+    /// `PlayObject.GetChrColor(baseObject)`（`PlayObject.cs:3585-3656`）走
+    /// `BaseObject.GetChrColor`（`BaseObject.Base.cs:869-883/904-907`）⇒ 非 NPC/非宝宝的
+    /// 怪取 `GetNameColor()`，即构造置 255 的 `BaseObject.cs:385 name_color`。
+    /// `MonsterObject.GetChrColor`（`MonsterObject.cs:482-492`）的 HolySeize 分支只在怪物
+    /// **自己**计算颜色时可达，本处理器（接收者是玩家）不可达。
+    pub fn open_holy_seize_mode(
+        &mut self,
+        target_id: i32,
+        interval: i32,
+    ) -> crate::slave::NameColorDelivery {
+        let World { entities, sim, .. } = self;
+        Self::open_holy_seize_mode_impl(entities, sim, target_id, interval)
+    }
+
+    /// **P6a2**：`OpenHolySeizeMode` 的 facade/段共用实现（`RM_MAKEHOLYSEIZEMODE` 到点投递）。
+    pub(crate) fn open_holy_seize_mode_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        target_id: i32,
+        interval: i32,
+    ) -> crate::slave::NameColorDelivery {
+        let now = sim.clock_ms;
+        let Some(color) = access
+            .get(target_id)
+            .map(|e| crate::slave::get_chr_color(&e, &[], 0))
+        else {
+            return crate::slave::NameColorDelivery::default();
+        };
+        if let Some(e) = access.get_mut(target_id) {
+            e.ai.holy_seize = true;
+            e.ai.holy_seize_tick = now;
+            e.ai.holy_seize_interval = i64::from(interval);
+        }
+        crate::slave::NameColorDelivery { target_id, color }
+    }
+
+    /// **P3-B3**：32 `MagTurnUndead`（`MagicManager.cs:827-856`）。
+    ///
+    /// `IsProperTarget` 由宿主在死亡归一后判（false ⇒ 零抽）；本函数从
+    /// `SuperMan || LifeAttrib != LA_UNDEAD` 开始。目标为玩家（`Race == Play`）时 oracle 的
+    /// `(AnimalObject)target` 抛 `InvalidCastException` ⇒ [outcome.invalid_cast]（**无尾**）。
+    #[must_use]
+    pub fn cast_turn_undead_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        cfg_turn_undead_level: i32,
+    ) -> TurnUndeadSpellOutcome {
+        let _ = magic;
+        let Some(tid) = target else {
+            return TurnUndeadSpellOutcome::default();
+        };
+        let (Some(caster), Some(t)) = (
+            self.entities.spawn_cloned(caster_id),
+            self.entities.spawn_cloned(tid),
+        ) else {
+            return TurnUndeadSpellOutcome::default();
+        };
+        // `:830-833` `target.SuperMan || target.LifeAttrib != LA_UNDEAD` ⇒ false（零抽）。
+        if t.super_man || t.life_attrib != crate::magic_effect::LA_UNDEAD {
+            return TurnUndeadSpellOutcome::default();
+        }
+        // `:834` `((AnimalObject)targetObject).Struck(playObject)` —— 玩家不是 AnimalObject。
+        if t.race == crate::entity::ACTOR_RACE_PLAY {
+            return TurnUndeadSpellOutcome {
+                invalid_cast: true,
+                ..TurnUndeadSpellOutcome::default()
+            };
+        }
+        let target_creature_present = t.ai.target_creature.is_some();
+        let attack_dir_ok =
+            t.ai.target_creature
+                .is_some_and(|tc| crate::monai::get_attack_dir(self, tid, tc).is_some());
+        let caster_is_proper_target = crate::combat::is_proper_target(&t, &caster);
+        let inp = crate::magic_effect::TurnUndeadInput {
+            super_man: t.super_man,
+            life_attrib: t.life_attrib,
+            animal: t.ai.animal,
+            caster_level: i32::from(caster.level),
+            target_level: i32::from(t.level),
+            magic_level: level,
+            mag_turn_undead_level: cfg_turn_undead_level,
+            target_creature_present,
+            attack_dir_ok,
+            caster_is_proper_target,
+            target_is_animal_object: true,
+        };
+        let out = crate::magic_effect::mag_turn_undead(&mut self.rng, &inp);
+        let now = self.clock_ms;
+        if let Some(e) = self.entities.get_mut(tid) {
+            e.ai.struck_tick = now;
+            if out.target_targeted_by_caster {
+                e.ai.target_creature = Some(caster_id);
+                e.ai.target_focus_tick = now;
+            }
+            if let Some(draw) = out.meat_draw {
+                // BUG-REPLICA（合同 §3.4 B3-32-3）：`MeatQuality` 是 `ushort`，赋值先截断，
+                // oracle 的 `if (MeatQuality < 0)` 恒 false ⇒ **按 16 位回绕**，不钳 0。
+                e.ai.meat_quality =
+                    e.ai.meat_quality
+                        .wrapping_sub(u16::try_from(draw).unwrap_or(0));
+            }
+            e.ai.attack_tick += i64::from(out.attack_tick_delta);
+        }
+        if out.target_run_away {
+            if let Some(e) = self.entities.get_mut(tid) {
+                e.ai.run_away_mode = true;
+                e.ai.run_away_start = now;
+                e.ai.run_away_time = 10 * 1000;
+            }
+        }
+        if out.result {
+            // `targetObject.SetLastHiter(playObject); targetObject.WAbil.HP = 0;`
+            if let Some(mut e) = self.entities.get_mut(tid) {
+                e.set_last_hiter(caster_id, now);
+                e.vitals.hp = 0;
+            }
+        }
+        // `MagicManager.cs:841` `playObject.SetTargetCreat(targetObject)`（**无条件**，Struck 之后）：
+        // 写**施法者**的 `TargetCret + TargetFocusTick`（`BaseObject.Base.cs:557-561`）。
+        // 与 [`World::cast_big_explosion_spell`] 的「逐目标覆盖、末值胜」同口径（本处仅一个目标）。
+        if out.caster_target_is_target {
+            if let Some(e) = self.entities.get_mut(caster_id) {
+                e.ai.target_creature = Some(tid);
+                e.ai.target_focus_tick = now;
+            }
+        }
+        TurnUndeadSpellOutcome {
+            invalid_cast: false,
+            bo_train: out.result,
+            hp_zeroed: out.target_hp_zeroed,
+        }
+    }
+
+    /// **P3-B3**：40 `SKILL_UNAMYOUNSUL`（常量名解毒术；部署行「十方斩」= `MagicManager.cs:495-523`）。
+    ///
+    /// `IsProperFriend` 失败 ⇒ 零抽。`R(7) - (Level+1) < 0` 过门后：三个计时器
+    /// `DECHEALTH/DAMAGEARMOR/STONE` 各自 `!= 0 ⇒ 置 1` 并 `boTrain = true`（**不是清 0**）。
+    #[must_use]
+    pub fn cast_unamyounsul_spell(
+        &mut self,
+        caster_id: i32,
+        level: u8,
+        target: Option<i32>,
+    ) -> UnamyounsulOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return UnamyounsulOutcome::default();
+        };
+        let tid = target.unwrap_or(caster_id);
+        let Some(t) = self.entities.spawn_cloned(tid) else {
+            return UnamyounsulOutcome::default();
+        };
+        let in_group = self.attacker_group_members(&caster).contains(&tid);
+        let mut out = UnamyounsulOutcome::default();
+        if !crate::combat::is_proper_friend(&caster, &t, in_group) {
+            return out;
+        }
+        out.allowed = true;
+        let roll = crate::magic_effect::unamyounsul_gate_draw(&mut self.rng);
+        if roll - (i32::from(level) + 1) >= 0 {
+            return out;
+        }
+        out.roll_passed = true;
+        if let Some(e) = self.entities.get_mut(tid) {
+            if e.buff.status_time[crate::entity::POISON_DECHEALTH] != 0 {
+                e.buff.status_time[crate::entity::POISON_DECHEALTH] = 1;
+                out.bo_train = true;
+            }
+            if e.buff.status_time[crate::entity::POISON_DAMAGEARMOR] != 0 {
+                e.buff.status_time[crate::entity::POISON_DAMAGEARMOR] = 1;
+                out.bo_train = true;
+            }
+            if e.buff.status_time[crate::entity::POISON_STONE] != 0 {
+                e.buff.status_time[crate::entity::POISON_STONE] = 1;
+                out.bo_train = true;
+            }
+        }
+
+        out
+    }
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_defence_area_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        sc: i32,
+        n_target_x: i32,
+        n_target_y: i32,
+        bt_state: u8,
+    ) -> i32 {
+        let atk = self
+            .entities
+            .get(caster_id)
+            .map_or(AttackPowerMode::Base, |e| AttackPowerMode::for_attacker(&e));
+        let n_power = crate::magic::power_defence_area(&mut self.rng, magic, level, sc, atk);
+        self.mag_make_defence_area(caster_id, n_target_x, n_target_y, 3, n_power, bt_state)
+    }
+
+    // ======================================================================================
+    // **P3-B5**（魔号 9 / 10 / 22 / 36）
+    // ======================================================================================
+
+    /// `Envirnoment.GetMovingObject(nX, nY, boFlag)`（`Envirnoment.cs:1203-1240`）逐行移植。
+    ///
+    /// 按格子 `ObjList` 的**插入序**找第一个 `CellObjId > 0 && ActorObject`、实体存在、
+    /// `!Ghost`、且（`boFlag=true` 时）`!Death` 的对象。**不得**用实体表/`HashMap` 序。
+    #[must_use]
+    pub fn moving_object_at(
+        &self,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        exclude_dead: bool,
+    ) -> Option<i32> {
+        Self::moving_object_at_impl(&self.entities, &self.sim, map_id, x, y, exclude_dead)
+    }
+
+    /// **P6b2**：`moving_object_at` 的 facade/段共用实现（怪物 AI 段共用）。
+    pub(crate) fn moving_object_at_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        exclude_dead: bool,
+    ) -> Option<i32> {
+        let map = sim.maps.get(map_id)?;
+        let (cell, success) = map.get_cell_info(x, y);
+        if !success || !cell.is_available() {
+            return None;
+        }
+        for o in &cell.obj_list {
+            if o.cell_obj_id > 0 && o.actor_object {
+                if let Some(e) = access.get(o.cell_obj_id) {
+                    if !e.ghost && (!exclude_dead || !e.death) {
+                        return Some(o.cell_obj_id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// `Envirnoment.GetBaseObjects(nX, nY, boFlag=true, ref list)`（`Envirnoment.cs:1311-1342`）。
+    ///
+    /// `boFlag=true` 时判据按 C# 的 `(!Ghost && !boFlag) || !Death` 化简为 **`!Death`**
+    /// （存活但 `Ghost` 的对象仍会被收集——oracle 的运算符优先级怪行为，照搬）。
+    ///
+    /// **P6b2**：facade 一行委托——段侧（`SimMonsterAi` 的攻击覆写族）与 `monai`
+    /// 测试（`base_objects_at(0, 11, 10)`）共用 [`Self::base_objects_at_impl`]；
+    /// `SimMapEvents` 段的格子枚举仍走 [`map_cell_object_ids`] + 段内 `LifeCycle.death` 过滤。
+    #[allow(dead_code)]
+    pub(crate) fn base_objects_at(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
+        Self::base_objects_at_impl(&self.entities, &self.sim, map_id, x, y, false)
+    }
+
+    /// **P6b2**：`base_objects_at_including_dead` 的 facade/段共用实现（`boFlag=false` 口径）。
+    pub(crate) fn base_objects_at_including_dead_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+    ) -> Vec<i32> {
+        Self::base_objects_at_impl(access, sim, map_id, x, y, true)
+    }
+
+    /// **P6b2**：`GetBaseObjects` 两口径的 facade/段共用实现（怪物 AI 段）。
+    ///
+    /// `including_dead == false` ⇒ `!Death` 口径（`boFlag=true`）；
+    /// `including_dead == true` ⇒ `!Ghost || !Death` 口径（`boFlag=false`）。
+    pub(crate) fn base_objects_at_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        including_dead: bool,
+    ) -> Vec<i32> {
+        let Some(map) = sim.maps.get(map_id) else {
+            return Vec::new();
+        };
+        let (cell, success) = map.get_cell_info(x, y);
+        if !success || !cell.is_available() {
+            return Vec::new();
+        }
+        let mut out = Vec::new();
+        for o in &cell.obj_list {
+            if o.cell_obj_id > 0 && o.actor_object {
+                if let Some(e) = access.get(o.cell_obj_id) {
+                    let keep = if including_dead {
+                        !e.ghost || !e.death
+                    } else {
+                        !e.death
+                    };
+                    if keep {
+                        out.push(o.cell_obj_id);
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// `Envirnoment.GetBaseObjects(nX, nY, boFlag=false, ref list)`（`Envirnoment.cs:1311-1342`）。
+    ///
+    /// `boFlag=false` 的 oracle 判据是 `(!Ghost && !boFlag) || !Death` = **`!Ghost || !Death`**
+    /// （非城堡门支；`base_objects_at` 是 `boFlag=true` = `!Death` 口径）。差别只有一类：
+    /// **已死但尚未 `Ghost`** 的同格对象——`HitMagAttackTarget`（`AnimalObject.cs:365`）用本口径。
+    ///
+    /// 登记（MB-3b F4）：本口径只修「枚举面」；命中判定仍走 [`crate::combat::is_proper_target`]，
+    /// 该函数顶部折入 `death/ghost/invisible`（既有缺口 **G09**，见
+    /// `tests/parity/m3/audit-attack-search-coverage-20261018.md`）⇒ 死对象此处仍会被拒绝，
+    /// 与 oracle `IsAttackTarget`（`BaseObject.Base.cs:377-466`，不判 `Death/Ghost`）的**剩余**
+    /// 差异归属 G09，不在本卡扩大修复范围。
+    #[allow(dead_code)] // facade；段侧走 `base_objects_at_including_dead_impl`
+    pub(crate) fn base_objects_at_including_dead(&self, map_id: usize, x: i32, y: i32) -> Vec<i32> {
+        Self::base_objects_at_impl(&self.entities, &self.sim, map_id, x, y, true)
+    }
+
+    /// `Envirnoment.GetEvent(nX, nY)`（`:1344-1360`）的格子 + 管理器双层门。
+    ///
+    /// **BUG-REPLICA 1**：`MapEvent.Id` 恒 0，`CellObjectMgr.Add` 是 `ConcurrentDictionary.TryAdd`
+    /// ⇒ 管理器只保留**第一条**注册成功的事件；`GetEvent` 返回它，**不是**当前格的事件对象。
+    /// 只放格对象而管理器无 id=0 时仍返回 `None`（该格会被重复新建）。
+    ///
+    /// **P3-B5（must_fix）**：返回**第一条已注册**的事件（`registered == true` 且属于本图），
+    /// 不是全局表的 `first()`——首建事件格非法（`AddMapEvent` no-op）但后续事件注册成功时，
+    /// `first()` 会错误地返回那条**未注册**的事件。`CellObjectMgr` 是 per-`Environment` 的，
+    /// 故另加 `map_id` 过滤。
+    #[must_use]
+    pub fn event_at(&self, map_id: usize, x: i32, y: i32) -> Option<&FireBurnEvent> {
+        Self::event_at_impl(&self.sim, map_id, x, y)
+    }
+
+    /// **P6b2**：`event_at` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn event_at_impl(
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+    ) -> Option<&FireBurnEvent> {
+        let map = sim.maps.get(map_id)?;
+        if !map.has_event_cell(x, y) {
+            return None;
+        }
+        sim.fire_burn_events
+            .iter()
+            .find(|e| e.registered && e.map_id == map_id)
+    }
+
+    /// `MagMakeFireCross` 的 `new FireBurnEvent(...) + EventMgr.AddEvent(...)` 等价物。
+    ///
+    /// `pub` 供夹具按 oracle「ctor + AddMapEvent」预置事件（F22-C 的中心格占用）。
+    pub fn add_fire_burn_event(
+        &mut self,
+        owner_id: i32,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        damage: i32,
+        continue_ms: i32,
+    ) {
+        Self::add_fire_burn_event_impl(&mut self.sim, owner_id, map_id, x, y, damage, continue_ms);
+    }
+
+    /// **P6b2**：`add_fire_burn_event` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn add_fire_burn_event_impl(
+        sim: &mut SimState,
+        owner_id: i32,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        damage: i32,
+        continue_ms: i32,
+    ) {
+        let now = sim.clock_ms;
+        // review `39262b65` F2：oracle `ET_FIRE = 5`（`src/OpenMir2/Grobal2.cs:48`；
+        // `MagicManager.cs:1074-1089` 四处全传 `ET_FIRE`）。基线误写 1（= `ET_DIGOUTZOMBI` 的号，
+        // `Grobal2.cs:41`）——本卡把它送上 804 线（`wParam`/`Param` 字节）⇒ 一并订正。
+        // （NEEDHOLE 联锁核实：`route_enter`/`step_with_route` 的门读 `dig_out_event_at`
+        // = `dig_out_events` 表 + `event_type == 1`（world.rs `dig_out_event_at`），火墙在
+        // `fire_burn_events` 另表 ⇒ 基线的 1 并不构成 NEEDHOLE 误触发，但仍是 oracle 偏离。）
+        sim.fire_burn_events.push(FireBurnEvent {
+            owner_id: Some(owner_id),
+            map_id,
+            x,
+            y,
+            event_type: 5, // `Grobal2.ET_FIRE`（`src/OpenMir2/Grobal2.cs:48`）
+            damage,
+            open_start_ms: now,
+            continue_ms,
+            run_start_ms: now,
+            run_tick_ms: 500,
+            fire_run_tick_ms: 0,
+            closed: false,
+            visible: true,
+            active: true,
+            registered: false,
+        });
+        // **BUG-REPLICA 3**：越界/不可走的格子 `AddMapEvent` no-op，但事件仍进全局表；
+        // 只有格子真正追加成功时 `CellObjectMgr.Add(0, event)` 才执行（第一条胜）。
+        let added = sim
+            .maps
+            .get_mut(map_id)
+            .is_some_and(|m| m.add_event_cell(x, y, now));
+        if added {
+            if let Some(evt) = sim.fire_burn_events.last_mut() {
+                evt.registered = true;
+            }
+            // 折叠对象 = 第一条 registered 事件（`CellObjectMgr.TryAdd(0, …)` 第一条胜）；
+            // 其 ctor 的 `nX/nY` = 注册格（`MapEvent.cs:69-70`）。之后只由
+            // `UpdateVisibleEvent` 的首见支覆写。
+            if sim.fire_burn_events.iter().filter(|e| e.registered).count() == 1 {
+                sim.event_sight = (x, y);
+            }
+            sim.event_registered = true;
+        }
+    }
+
+    /// **MB-1**：`new MapEvent(Envir, X, Y, ET_DIGOUTZOMBI, 5*60*1000, true) + EventMgr.AddEvent`
+    /// （`DigOutZombi.cs:59-60`）。
+    ///
+    /// **建模差异（登记）**：oracle ctor 的 `Envir.AddMapEvent` 还会在该格追加一个
+    /// `CellType.Event`、`CellObjId=0` 的格子对象；本仓的 `event_at`（火墙）与
+    /// `CellObjectMgr` 是简化模型，混入 dig-out 格会让火墙判据串味 ⇒ 这里只维护
+    /// `EventMgr.Events` 注册表（NEEDHOLE 门的唯一消费面），不落格子对象。
+    pub fn add_dig_out_event(&mut self, map_id: usize, x: i32, y: i32) {
+        Self::add_dig_out_event_impl(&mut self.sim, map_id, x, y);
+    }
+
+    /// **P6b2**：`add_dig_out_event` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn add_dig_out_event_impl(sim: &mut SimState, map_id: usize, x: i32, y: i32) {
+        Self::add_map_event_at_impl(sim, map_id, x, y, 1, 5 * 60 * 1000); // ET_DIGOUTZOMBI
+    }
+
+    /// **MB-3**：`new MapEvent(Envir, X, Y, nType, dwETime, true) + EventMgr.AddEvent`
+    /// （`MapEvent.cs:60-79` + `EventManager.cs`）的事件表落点。
+    ///
+    /// `event_type`：`Grobal2.ET_DIGOUTZOMBI=1`（`DigOutZombi.Turned`）、
+    /// `ET_SCULPEICE=6`（`ScultureKingMonster.MeltStone`，`ScultureKingMonster.cs:31-32`）。
+    /// 与 [`Self::add_dig_out_event`] 共用同一条 `EventMgr.Events` 表与 500ms `RunTick` 关闭门
+    /// （`EventProcessor.ExecuteInternal`）；NEEDHOLE 门只读 `event_type == 1`，不会误命中。
+    pub fn add_map_event_at(
+        &mut self,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        event_type: i32,
+        continue_ms: i64,
+    ) {
+        Self::add_map_event_at_impl(&mut self.sim, map_id, x, y, event_type, continue_ms);
+    }
+
+    /// **P6b2**：`add_map_event_at` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn add_map_event_at_impl(
+        sim: &mut SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        event_type: i32,
+        continue_ms: i64,
+    ) {
+        let now = sim.clock_ms;
+        sim.dig_out_events.push(DigOutEvent {
+            map_id,
+            x,
+            y,
+            event_type,
+            open_start_ms: now,
+            continue_ms,
+            run_start_ms: now,
+            run_tick_ms: 500,
+            closed: false,
+        });
+    }
+
+    /// `EventMgr.GetEvent(envir, nX, nY, ET_DIGOUTZOMBI) != null`（`EventManager.cs:29-42`：
+    /// **逆插入序**找首个匹配；`Closed` 的事件已移出 `Events`）。
+    #[must_use]
+    pub fn dig_out_event_at(&self, map_id: usize, x: i32, y: i32) -> bool {
+        self.dig_out_events
+            .iter()
+            .rev()
+            .any(|e| !e.closed && e.event_type == 1 && e.map_id == map_id && e.x == x && e.y == y)
+    }
+
+    /// **卡 `guard-target`**：写 `PlayObject.MyGuild` 的等价物（actor → 行会 id）。
+    ///
+    /// 行会会话车道在入会/退会时调用；缺省无记录 ⇔ oracle `MyGuild == null`。
+    pub fn set_actor_guild(&mut self, actor_id: i32, guild: crate::castle::GuildId) {
+        if let Some(slot) = self.actor_guilds.iter_mut().find(|(id, _)| *id == actor_id) {
+            slot.1 = guild;
+        } else {
+            self.actor_guilds.push((actor_id, guild));
+        }
+    }
+
+    /// [`Self::set_actor_guild`] 的读侧：`None` ⇔ oracle `MyGuild == null`。
+    #[must_use]
+    pub fn actor_guild(&self, actor_id: i32) -> Option<crate::castle::GuildId> {
+        Self::actor_guild_impl(&self.sim, actor_id)
+    }
+
+    /// **P6b2**：`actor_guild` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn actor_guild_impl(
+        sim: &SimState,
+        actor_id: i32,
+    ) -> Option<crate::castle::GuildId> {
+        sim.actor_guilds
+            .iter()
+            .find(|(id, _)| *id == actor_id)
+            .map(|(_, guild)| *guild)
+    }
+
+    /// **P6b2**：`is_ally_guild` 的 facade/段共用实现（只碰 `SimState`）。
+    #[must_use]
+    pub(crate) fn is_ally_guild_impl(
+        sim: &SimState,
+        guild: crate::castle::GuildId,
+        other: crate::castle::GuildId,
+    ) -> bool {
+        sim.guild_allies
+            .iter()
+            .find(|(g, _)| *g == guild)
+            .is_some_and(|(_, allies)| allies.contains(&other))
+    }
+
+    /// **P6b2**：`castle_exempts_guild` 的 facade/段共用实现（守卫 AI 的 `IsProperTarget`）。
+    #[must_use]
+    pub(crate) fn castle_exempts_guild_impl(
+        sim: &SimState,
+        master_guild: crate::castle::GuildId,
+        guild: Option<crate::castle::GuildId>,
+    ) -> bool {
+        guild.is_some_and(|g| g == master_guild || Self::is_ally_guild_impl(sim, master_guild, g))
+    }
+
+    /// **卡 `guard-target`**：写 `GuildInfo.GuildAllList` 的等价物（行会 → 盟友表）。
+    ///
+    /// oracle 的 `GuildAllList.Add` 被注释 ⇒ 生产恒空；本方法只是接线口
+    /// （行会车道 / 构造级用例），缺省不调用即与 oracle 等价。
+    pub fn set_guild_allies(
+        &mut self,
+        guild: crate::castle::GuildId,
+        allies: &[crate::castle::GuildId],
+    ) {
+        if let Some(slot) = self.guild_allies.iter_mut().find(|(g, _)| *g == guild) {
+            slot.1 = allies.to_vec();
+        } else {
+            self.guild_allies.push((guild, allies.to_vec()));
+        }
+    }
+
+    /// `GuildInfo.IsAllyGuild`（`GuildInfo.cs:146-159`）：`guild` 的盟友表是否含 `other`。
+    #[must_use]
+    pub fn is_ally_guild(
+        &self,
+        guild: crate::castle::GuildId,
+        other: crate::castle::GuildId,
+    ) -> bool {
+        Self::is_ally_guild_impl(&self.sim, guild, other)
+    }
+
+    /// `CastleManager.InCastleWarArea(IActor/IEnvir)`（`CastleManager.cs:38-59`）：
+    /// 按 `CastleList` 顺序返回**首个**命中的城堡下标。
+    ///
+    /// `map_id = None` ⇔ oracle `Envir == null` ⇒ `InCastleWarArea` 恒 false。
+    #[must_use]
+    pub fn castle_war_area_at(&self, map_id: Option<usize>, x: i32, y: i32) -> Option<usize> {
+        self.castles
+            .iter()
+            .position(|c| c.in_castle_war_area(map_id, x, y))
+    }
+
+    /// `CastleManager.IsCastleMember(playObject)`（`CastleManager.cs:115-124`）：
+    /// 按 `CastleList` 顺序返回首个 `IsMasterGuild(MyGuild)` 命中的城堡下标。
+    ///
+    /// 名字口径 = `GuildMgr.MemberOfGuild(ChrName)` 的会名，且城堡 `MasterGuild` 必须已挂
+    /// （oracle `IsMasterGuild` 的 `MasterGuild != null` 门；启动时行会表未装载 ⇒ 恒 `None`
+    /// ⇒ 本函数恒 `None`，见 `UserCastle::is_master_guild_name`）。
+    #[must_use]
+    pub fn castle_member_at(&self, guild_name: Option<&str>) -> Option<usize> {
+        self.castles
+            .iter()
+            .position(|c| c.is_master_guild_name(guild_name))
+    }
+
+    /// `GuardUnit.IsProperTarget` 的豁免表达式（`GuardUnit.cs:73/86`）：
+    /// `MasterGuild == guild || MasterGuild.IsAllyGuild(guild)`。
+    ///
+    /// `guild == None`（无行会）⇒ `false`（oracle 两次比较都落空）。
+    #[must_use]
+    pub fn castle_exempts_guild(
+        &self,
+        master_guild: crate::castle::GuildId,
+        guild: Option<crate::castle::GuildId>,
+    ) -> bool {
+        Self::castle_exempts_guild_impl(&self.sim, master_guild, guild)
+    }
+
+    /// `GuardUnit.CrimeforCastle = true; CrimeforCastleTime = GetTickCount();`
+    /// （`GuardUnit.cs:27-33`，由 [`crate::monai::animal_struck`] 在 `Castle != null` 时调）。
+    /// `guardObject.CrimeforCastle` 的读侧：`Some(CrimeforCastleTime)` ⇔ 置位中。
+    #[must_use]
+    #[allow(dead_code)] // facade；段侧走 `guard_crime_for_castle_tick_impl`
+    pub(crate) fn guard_crime_for_castle_tick(&self, actor_id: i32) -> Option<i64> {
+        Self::guard_crime_for_castle_tick_impl(&self.sim, actor_id)
+    }
+
+    /// **P6b2**：`guard_crime_for_castle_tick` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn guard_crime_for_castle_tick_impl(sim: &SimState, actor_id: i32) -> Option<i64> {
+        sim.guard_castle_crime
+            .iter()
+            .find(|(id, _)| *id == actor_id)
+            .map(|(_, tick)| *tick)
+    }
+
+    /// `guardObject.CrimeforCastle = false;`（`GuardUnit.cs:58/62`）。
+    #[allow(dead_code)] // facade；段侧走 `clear_guard_crime_for_castle_impl`
+    pub(crate) fn clear_guard_crime_for_castle(&mut self, actor_id: i32) {
+        Self::clear_guard_crime_for_castle_impl(&mut self.sim, actor_id);
+    }
+
+    /// **P6b2**：`clear_guard_crime_for_castle` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn clear_guard_crime_for_castle_impl(sim: &mut SimState, actor_id: i32) {
+        sim.guard_castle_crime.retain(|(id, _)| *id != actor_id);
+    }
+
+    /// **Lane B**：把一个成功挂图的防御单元绑到实体（oracle `BaseObject.Castle = this`）。
+    ///
+    /// 调用点 = 宿主在 `UserCastle::initialize` 返回后，对每条 `CastleEvent::SpawnDefenseUnit`
+    /// 调用（`castle_index` = 该城在 [`World::castles`] 的下标）。
+    ///
+    /// - 守卫（`castle_owner == false`）**不绑**（`UserCastle.cs:202-206` 只写 `HP`）；
+    /// - 门/墙补 ctor 常量 `StickMode=true` / `Animal=false`（`CastleDoor.cs:14-21` /
+    ///   `WallStructure.cs:9-15`；110/111 的 `AntiPoison=200`/`CellType=Door` 因本骨架无字段登记）；
+    /// - 墙补 `WallStructure.Initialize` 的 `Dir = 0`（`WallStructure.cs:17-21`）；
+    /// - 弓手补 `GuardDirection = 3`（`UserCastle.cs:187`）。
+    pub fn bind_castle_defense(
+        &mut self,
+        castle_index: usize,
+        spawn: &crate::castle::DefenseSpawn,
+    ) {
+        let is_wall = matches!(
+            spawn.role,
+            crate::castle::DefenseRole::LeftWall
+                | crate::castle::DefenseRole::CenterWall
+                | crate::castle::DefenseRole::RightWall
+        );
+        let is_door = spawn.role == crate::castle::DefenseRole::MainDoor;
+        // `CastleDoor.Open()` 写 `Dir=7`、`WallStructure.Initialize` 写 `Dir=0`——绑定后同步到
+        // 实体（弓手的 `Dir` 保持 `CreateMonster` 的 `RandomByte(8)`，不得覆盖）。
+        let unit_dir = if is_wall {
+            // `WallStructure.Initialize`（`WallStructure.cs:17-21`）：`Dir = 0`。
+            Some(0)
+        } else if is_door {
+            // 只有 `Open()`（`CastleDoor.cs:46-58`）写 `Dir=7`；未开的门保留 ctor 的
+            // `RandomByte(8)`（`Initialize` 不碰 `Dir`）。
+            self.castles
+                .get(castle_index)
+                .and_then(|c| c.defense_unit(spawn.role))
+                .filter(|u| u.opened)
+                .map(|u| u.dir)
+        } else {
+            None
+        };
+        let Some(e) = self.entities.get_mut(spawn.actor_id) else {
+            return;
+        };
+        // `UserCastle.cs:133/147/157/167/185/205`：`BaseObject.WAbil.HP = nHP`（**不改 MaxHP**）。
+        // 守卫也写（`UserCastle.cs:205`），只是不绑 `Castle`。
+        e.vitals.hp = spawn.hp;
+        if !spawn.castle_owner {
+            return;
+        }
+        e.spawn.castle_binding = Some(crate::entity::CastleBinding {
+            castle_index,
+            role: spawn.role,
+        });
+        if is_door || is_wall {
+            e.flags.stick_mode = true;
+            e.ai.animal = false;
+        }
+        if let Some(dir) = unit_dir {
+            e.ai.dir = dir;
+        }
+        if matches!(spawn.role, crate::castle::DefenseRole::Archer(_)) {
+            e.monster_class.guard_direction = spawn.guard_direction.unwrap_or(3);
+        }
+    }
+
+    /// **Lane B**：把一条 `SetMapXyFlag` 按序作用到 `MapGrid`（oracle `Envir.SetMapXyFlag`）。
+    /// **P3b**：`apply_castle_map_event` 的 facade/段共用实现（只碰 `sim.maps`）。
+    pub(crate) fn apply_castle_map_event_impl(
+        sim: &mut SimState,
+        map_id: usize,
+        event: &crate::castle::StructureEvent,
+    ) {
+        if let crate::castle::StructureEvent::SetMapXyFlag { x, y, walk } = *event {
+            if let Some(grid) = sim.maps.get_mut(map_id) {
+                grid.set_map_xy_flag(i32::from(x), i32::from(y), walk);
+            }
+        }
+    }
+
+    #[allow(dead_code)] // facade；段侧走 `apply_castle_map_event_impl`
+    pub(crate) fn apply_castle_map_event(
+        &mut self,
+        map_id: usize,
+        event: &crate::castle::StructureEvent,
+    ) {
+        Self::apply_castle_map_event_impl(&mut self.sim, map_id, event);
+    }
+
+    /// **Lane B**：记录一条门/墙结构事件（`SetMapXyFlag` 同步落到地图，其余保留原始序）。
+    #[allow(dead_code)] // facade；段侧走 `record_castle_structure_impl`
+    pub(crate) fn record_castle_structure(
+        &mut self,
+        castle_index: usize,
+        map_id: usize,
+        event: crate::castle::StructureEvent,
+    ) {
+        Self::record_castle_structure_impl(&mut self.sim, castle_index, map_id, event);
+    }
+
+    /// **P6b2**：`record_castle_structure` 的 facade/段共用实现（只碰 `SimState`）。
+    pub(crate) fn record_castle_structure_impl(
+        sim: &mut SimState,
+        castle_index: usize,
+        map_id: usize,
+        event: crate::castle::StructureEvent,
+    ) {
+        Self::apply_castle_map_event_impl(sim, map_id, &event);
+        sim.pending_castle_structures.push(CastleStructureAt {
+            castle_index,
+            map_id,
+            event,
+        });
+    }
+
+    /// 取走本 tick 的怪物 `SendRefMsg` 帧事件（保序）。
+    pub fn take_monster_ref_msgs(&mut self) -> Vec<crate::monai::MonsterRefMsg> {
+        std::mem::take(&mut self.pending_monster_ref_msgs)
+    }
+
+    /// 取走本 tick **到点**的 `RM_REFMESSAGE` 广播事件（保序）。宿主据此出 `SM_STRUCK`。
+    pub fn take_refmessage_frames(&mut self) -> Vec<crate::slave::RefMessageFrame> {
+        std::mem::take(&mut self.pending_refmessage_frames)
+    }
+
+    /// **P3-B5**：9/10 穿透效果体（`MagicManager.cs:265-288` + `BaseObject.cs:896-931`）。
+    ///
+    /// 有序门与取数：
+    /// 1. `GetNextPosition(CurrX,CurrY,nextDir,1)` 失败 ⇒ **零抽**、无效果体
+    ///    （共享尾仍用点击坐标发 638）；
+    /// 2. `GetNextPosition(CurrX,CurrY,nextDir,steps)`（5 = 9 / 8 = 10）求终点；
+    /// 3. `nPower = GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)`（4 抽）；
+    /// 4. 逐格（≤12 次）：`GetMovingObject(sx,sy,true)` → `IsProperTarget` → `R(10) >= AntiMagic`
+    ///    →（10）`magPwr = Round(magPwr*1.5)` → `SendStruckDelayMsg(..., 600)`。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_pass_through_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        click_x: i32,
+        click_y: i32,
+        mc: i32,
+        steps: i32,
+        undead_attack: bool,
+    ) -> PassThroughOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return PassThroughOutcome {
+                end_x: click_x,
+                end_y: click_y,
+                ..PassThroughOutcome::default()
+            };
+        };
+        let map_id = caster.map_id;
+        let next_dir = crate::magic::next_direction(caster.x, caster.y, click_x, click_y);
+        // `:267` `if (Envir.GetNextPosition(CurrX, CurrY, nextDir, 1, ref n14, ref n18))`
+        let Some((mut sx, mut sy)) = self
+            .maps
+            .get(map_id)
+            .and_then(|m| m.get_next_position(caster.x, caster.y, next_dir, 1))
+        else {
+            return PassThroughOutcome {
+                end_x: click_x,
+                end_y: click_y,
+                ..PassThroughOutcome::default()
+            };
+        };
+        // `:269/:281` 终点；`GetNextPosition` 先写 `snx=sx` ⇒ 未变时 = 施法者坐标。
+        let (end_x, end_y) = self
+            .maps
+            .get(map_id)
+            .and_then(|m| m.get_next_position(caster.x, caster.y, next_dir, steps))
+            .unwrap_or((caster.x, caster.y));
+        // `:270/:282` 威力（4 抽；按施法者分派 `GetAttackPower` override）。
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let mut mag_pwr =
+            crate::magic_effect::single_hit_power_mc(&mut self.rng, magic, level, mc, atk);
+        let group = self.attacker_group_members(&caster);
+        let mut hits = Vec::new();
+        for _ in 0..12 {
+            if let Some(obj_id) = self.moving_object_at(map_id, sx, sy, true) {
+                let proper = self.entities.get(obj_id).is_some_and(|t| {
+                    crate::combat::is_proper_target_grouped_direct(&caster, &t, &group)
+                });
+                if proper {
+                    let anti = self
+                        .entities
+                        .get(obj_id)
+                        .map_or(0, |t| i32::from(t.anti_magic));
+                    if crate::magic_effect::anti_magic_roll(&mut self.rng, anti) {
+                        if undead_attack {
+                            mag_pwr = crate::magic_effect::scale_undead_attack(mag_pwr);
+                        }
+                        self.send_struck_delay_msg(obj_id, caster_id, mag_pwr, 600);
+                        hits.push(PassThroughHit {
+                            target_id: obj_id,
+                            power: mag_pwr,
+                        });
+                    }
+                }
+            }
+            if sx == end_x && sy == end_y {
+                break;
+            }
+            let nd = crate::magic::next_direction(sx, sy, end_x, end_y);
+            let Some((nx, ny)) = self
+                .maps
+                .get(map_id)
+                .and_then(|m| m.get_next_position(sx, sy, nd, 1))
+            else {
+                break;
+            };
+            sx = nx;
+            sy = ny;
+        }
+        PassThroughOutcome {
+            bo_train: !hits.is_empty(),
+            hits,
+            end_x,
+            end_y,
+        }
+    }
+
+    /// `BaseObject.MagPassThroughMagic(short sx, short sy, short tx, short ty, byte nDir,
+    /// int magPwr, bool undeadAttack)`（`BaseObject.cs:896-925`）的**怪侧**入口。
+    ///
+    /// 与 [`World::cast_pass_through_spell`] 的区别：威力由调用方先算好
+    /// （`LightingZombi.LightingAttack` 的 `Random(|Hi(DC)-Lo(DC)|+1)` 在**调用前**已抽），
+    /// 且 `IsProperTarget` 走**怪**的基版（不带组队表）。逐句：
+    ///
+    /// ```text
+    /// for (i = 0; i < 12; i++) {
+    ///   baseObject = Envir.GetMovingObject(sx, sy, true);
+    ///   if (baseObject != null && IsProperTarget(baseObject)
+    ///       && Random(10) >= baseObject.AntiMagic) {
+    ///       if (undeadAttack) magPwr = Round(magPwr * 1.5);          // 逐次复合
+    ///       baseObject.SendStruckDelayMsg(this.ActorId, RM_MAGSTRUCK, 0, magPwr, 0, 0, "", 600);
+    ///       tcount++;
+    ///   }
+    ///   if (!(sx == tx && sy == ty)) {
+    ///       nDir = GetNextDirection(sx, sy, tx, ty);
+    ///       if (!GetNextPosition(sx, sy, nDir, 1, ref sx, ref sy)) break;
+    ///   } else break;
+    /// }
+    /// ```
+    ///
+    /// 取数：每格最多一次 `Random(10)`（`anti_magic_roll`），**只在**该格有合法目标时抽；
+    /// `undeadAttack` 的 1.5 倍是**原地复合**（命中越多，后续越大）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn mag_pass_through_magic(
+        &mut self,
+        caster_id: i32,
+        sx: i32,
+        sy: i32,
+        tx: i32,
+        ty: i32,
+        n_dir: u8,
+        mag_pwr: i32,
+        undead_attack: bool,
+    ) -> i32 {
+        Self::mag_pass_through_magic_impl(
+            &mut self.entities,
+            &mut self.sim,
+            caster_id,
+            sx,
+            sy,
+            tx,
+            ty,
+            n_dir,
+            mag_pwr,
+            undead_attack,
+        )
+    }
+
+    /// **P6b2**：`mag_pass_through_magic` 的 facade/段共用实现（怪物 AI 段共用）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn mag_pass_through_magic_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        caster_id: i32,
+        sx: i32,
+        sy: i32,
+        tx: i32,
+        ty: i32,
+        _n_dir: u8,
+        mag_pwr: i32,
+        undead_attack: bool,
+    ) -> i32 {
+        let Some(caster) = access.spawn_cloned(caster_id) else {
+            return 0;
+        };
+        let map_id = caster.map_id;
+        // `nDir` 形参在 oracle 里只作为 `GetNextDirection` 的初值，而循环第一轮必先重算 ⇒ 不读。
+        let (mut sx, mut sy, mut mag_pwr) = (sx, sy, mag_pwr);
+        let mut tcount = 0;
+        for _ in 0..12 {
+            if let Some(obj_id) = Self::moving_object_at_impl(access, sim, map_id, sx, sy, true) {
+                let proper = access
+                    .get(obj_id)
+                    .is_some_and(|t| crate::combat::is_proper_target(&caster, &t));
+                if proper {
+                    let anti = access.get(obj_id).map_or(0, |t| i32::from(t.anti_magic));
+                    if crate::magic_effect::anti_magic_roll(&mut sim.rng, anti) {
+                        if undead_attack {
+                            mag_pwr = crate::magic_effect::scale_undead_attack(mag_pwr);
+                        }
+                        crate::slave::send_struck_delay_msg_impl(
+                            access, sim, obj_id, caster_id, mag_pwr, 600,
+                        );
+                        tcount += 1;
+                    }
+                }
+            }
+            if sx == tx && sy == ty {
+                break;
+            }
+            let n_dir = crate::magic::next_direction(sx, sy, tx, ty);
+            let Some((nx, ny)) = sim
+                .maps
+                .get(map_id)
+                .and_then(|m| m.get_next_position(sx, sy, n_dir, 1))
+            else {
+                break;
+            };
+            sx = nx;
+            sy = ny;
+        }
+        tcount
+    }
+
+    /// **P3-B5**：22 火墙效果体（`MagicManager.cs:412-417` + `:1064-1098`）。
+    ///
+    /// **取数在安全区门之前**（C# 实参先求值）：`nDamage = GetAttackPower(GetPower(MPow)+Lo(MC), ΔMC+1)`
+    /// （4 抽）→ `time = GetPower(10) + (GetRPow(MC) >> 1)`（1 + 0/1 抽）。
+    /// 安全区门失败 ⇒ `SysMsg(..., Red, Notice)` + `return false`（调用方发 100），**事件零落地**。
+    /// 否则按固定顺序 上/左/中/右/下 逐格 `GetEvent == null` 才建事件；`boTrain = true`
+    /// （与是否真的新建了事件**无关**）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_fire_wall_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        click_x: i32,
+        click_y: i32,
+        mc: i32,
+        disable_in_safe_zone: bool,
+    ) -> FireWallOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return FireWallOutcome::default();
+        };
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let (damage, time) = crate::magic::power_fire_wall(&mut self.rng, magic, level, mc, atk);
+        // `:1066-1070`：`DisableInSafeZoneFireCross && InSafeZone(Envir, nX, nY)`。
+        // 夹具/生产用施法者实体的 `in_safe_zone`（= `Envir.Flag.SafeArea` 的第 1 步）。
+        if disable_in_safe_zone && caster.in_safe_zone {
+            return FireWallOutcome {
+                bo_train: false,
+                safe_zone_blocked: true,
+            };
+        }
+        let map_id = caster.map_id;
+        for (x, y) in [
+            (click_x, click_y - 1),
+            (click_x - 1, click_y),
+            (click_x, click_y),
+            (click_x + 1, click_y),
+            (click_x, click_y + 1),
+        ] {
+            if self.event_at(map_id, x, y).is_none() {
+                self.add_fire_burn_event(caster_id, map_id, x, y, damage, time * 1000);
+            }
+        }
+        FireWallOutcome {
+            bo_train: true,
+            safe_zone_blocked: false,
+        }
+    }
+
+    /// `EventProcessor.ExecuteInternal`（`EventProcessor.cs:31-48`）的单线程等价物：
+    /// 逆插入序遍历，`Active && now - RunStart > RunTick(500ms)` 才 `RunStart = now; Run()`；
+    /// `Run()` 造成的 `RM_MAGSTRUCK_MINE` 进入各目标自己的队列（`pending_mag_struck.mine=true`），
+    /// 由宿主随后 [`World::deliver_mag_struck`] 处理（MSD 照抽、**无** `R(1000)`）。
+    ///
+    /// `FireBurnEvent.Run`（`FireBurnEvent.cs:23-43`）：`now - FireRunTick > 3000` 才结算；
+    /// `MapEvent.Run` 尾：`now - OpenStartTick > ContinueTime`（严格大于）⇒ `Closed`。
+    pub fn run_map_events(&mut self) {
+        // S4d-3/P2b #7：段系统（`SimMapEvents`），段位与旧内联调用完全相同。
+        // 段内实现见 [`sim_map_events_stage_system`]；本入口保留给宿主（`bins/game-svr`）
+        // 与直接驱动一段的用例（与 [`World::expire_player_run_state`] 同形的兼容入口）。
+        self.run_head_stage(|world, head| head.run(TickStage::SimMapEvents, world));
+    }
+
+    /// **P3-B5**：36 无极真气效果体（`MagicManager.cs:610-630` 的 `:612-625`）。
+    ///
+    /// 前置（`IsProperFriend` / `CheckAmulet` / `UseAmulet`）由调用方完成；本函数从
+    /// 「目标归一 + 友方门」开始，到抽数为止（`AttPowerUp` 由宿主在 recalc 后落地）。
+    ///
+    /// - `targetObject == null ⇒ this`（`target = caster_id`）；
+    /// - `IsProperFriend`：玩家施法者只放行 `Race == Play`（`PlayObject.Attack.cs:755-822`），
+    ///   非玩家目标 ⇒ false（零抽；`boSpellFail` 保持 true ⇒ 恰一条 639、无尾）；
+    /// - 抽数：`R(Level)`（`Level == 0` 也推进）→ `GP13` → `AP`；
+    /// - 防御臂：目标非玩家（当前入口不可达）⇒ `invalid_cast = true`（抽数已发生）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn cast_uenhancer_spell(
+        &mut self,
+        caster_id: i32,
+        magic: &mir2_data::MagicInfo,
+        level: u8,
+        target: Option<i32>,
+        sc: i32,
+    ) -> UEnhancerOutcome {
+        let Some(caster) = self.entities.spawn_cloned(caster_id) else {
+            return UEnhancerOutcome::default();
+        };
+        let tid = target.unwrap_or(caster_id);
+        let Some(t) = self.entities.spawn_cloned(tid) else {
+            return UEnhancerOutcome {
+                target: tid,
+                ..UEnhancerOutcome::default()
+            };
+        };
+        let in_group = self.attacker_group_members(&caster).contains(&tid);
+        if !crate::combat::is_proper_friend(&caster, &t, in_group) {
+            return UEnhancerOutcome {
+                allowed: false,
+                target: tid,
+                ..UEnhancerOutcome::default()
+            };
+        }
+        let atk = AttackPowerMode::for_attacker(&caster);
+        let (n_power, n_time) =
+            crate::magic_effect::power_uenhancer(&mut self.rng, magic, level, sc, atk);
+        UEnhancerOutcome {
+            allowed: true,
+            target: tid,
+            n_power: n_power as u16,
+            n_time,
+            // `(IPlayerActor)targetObject`：`Race != Play` 时抛 `InvalidCastException`。
+            invalid_cast: t.race != crate::entity::ACTOR_RACE_PLAY,
+        }
+    }
+
+    /// **P3-B5**：`PlayObject.AttPowerUp`（`PlayObject.cs:5323-5330`）的状态面。
+    ///
+    /// 只写 `ExtraAbil[0]/ExtraAbilTimes[0]`；`SysMsg` / `RecalcAbilitys` / `RM_ABILITY`
+    /// 由宿主完成（`RecalcAbilitys` 需要 `record.data` 与目录）。
+    pub fn att_power_up(&mut self, target_id: i32, n_power: u16, n_time: i32) {
+        let now = self.clock_ms;
+        if let Some(e) = self.entities.get_mut(target_id) {
+            e.buff.extra_abil[0] = n_power;
+            e.buff.extra_abil_times[0] = now + i64::from(n_time) * 1000;
+        }
+    }
+
+    /// **魔号 8（`SKILL_FIREWIND` 抗拒火环）/ 37（`SKILL_ENERGYREPULSOR` 气功波）效果体**：
+    /// `MagicManager.MagPushArround`（`src/M2Server/Magic/MagicManager.cs:24-52`）的生产入口。
+    /// oracle 两处 `case` 的函数体逐字相同：`:259-264`（8）与 `:601-606`（37），
+    /// 都是 `if (MagPushArround(playObject, userMagic.Level) > 0) boTrain = true;`。
+    ///
+    /// 逐行口径（`VisibleActors` 顺序 = 施法者 `visible_actors` 列表序，两侧同源）：
+    /// ```text
+    /// :27  for i in VisibleActors
+    /// :30  |Cx-Tx| <= 1 && |Cy-Ty| <= 1
+    /// :32  !Death && target != playObject
+    /// :34  playObject.Abil.Level > target.Abil.Level && !target.StickMode
+    /// :36  levelgap = ...
+    /// :37  Random(20) < 6 + nPushLevel*3 + levelgap     <- magic_effect::push_chance
+    /// :39  IsProperTarget(target)
+    /// :41  push = 1 + MAX(0, nPushLevel-1) + Random(2)  <- magic_effect::push_steps
+    /// :42  nDir = GetNextDirection(...)
+    /// :43  target.CharPushed(nDir, push); result++     <- 本仓 push_now（逐格 RM_PUSH 事件）
+    /// ```
+    ///
+    /// 返回 `(oracle result, 逐格推挤事件)`。**`result` 是「调用了 `CharPushed` 的目标数」**，
+    /// 与 `CharPushed` 实际推进几格无关（oracle 不看其返回值）——训练尾 `boTrain` 的判据。
+    ///
+    /// **登记（本卡不实现）**：`CharPushed` 的
+    /// `WalkTick += 800`（`Race >= Animal` 支）本骨架未建模；`IsProperTarget` 用
+    /// [`crate::combat::is_proper_target_grouped`]（组队成员表 = `Entity::group_members`）。
+    #[must_use]
+    pub fn cast_firewind_spell(
+        &mut self,
+        actor_id: i32,
+        push_level: i32,
+    ) -> (i32, Vec<crate::action::PushEvent>) {
+        let Some(caster) = self.entities.spawn_cloned(actor_id) else {
+            return (0, Vec::new());
+        };
+        // oracle `VisibleActors` 的迭代序即列表序（本骨架 `Entity::visible_actors` 同源）。
+        let visible: Vec<i32> = caster
+            .map_binding
+            .visible_actors
+            .iter()
+            .map(|v| v.target)
+            .collect();
+        let group_members = self.attacker_group_members(&caster);
+        let mut result = 0;
+        let mut events = Vec::new();
+        for target_id in visible {
+            let Some(target) = self.entities.spawn_cloned(target_id) else {
+                continue;
+            };
+            if (caster.x - target.x).abs() > 1 || (caster.y - target.y).abs() > 1 {
+                continue;
+            }
+            if target.death || target_id == actor_id {
+                continue;
+            }
+            if caster.level <= target.level || target.stick_mode {
+                // `:34 playObject.Abil.Level > targetObject.Abil.Level && !targetObject.StickMode`
+                // ——StickMode 目标**零抽**（`Random(20)` 在门内，漏掉此门会平移整条 RNG 流）。
+                continue;
+            }
+            let level_gap = i32::from(caster.level) - i32::from(target.level);
+            if !crate::magic_effect::push_chance(&mut self.rng, push_level, level_gap) {
+                continue;
+            }
+            // `PlayObject.IsProperTarget`：组队成员按 `HAM_GROUP` 剔除（oracle 读内存里的
+            // `GroupOwner/GroupMembers`；本骨架同源字段在 `Entity::{group_owner,group_members}`）。
+            if !crate::combat::is_proper_target_grouped(&caster, &target, &group_members) {
+                continue;
+            }
+            let push = crate::magic_effect::push_steps(&mut self.rng, push_level);
+            let n_dir = crate::magic::next_direction(caster.x, caster.y, target.x, target.y);
+            let pushed = self.push_now(target_id, n_dir, push);
+            // oracle `CharPushed`：循环内 `Dir = nDir`，收尾 `Dir = nBackDir`（`result > 0`）或旧值
+            // （`result == 0`）。本骨架 `push_now` 不改 `Dir` => 在此按 oracle 收尾语义补写。
+            if !pushed.is_empty() {
+                if let Some(e) = self.entities.get_mut(target_id) {
+                    e.ai.dir = crate::magic::back_dir(n_dir);
+                }
+            }
+            events.extend(pushed);
+            // oracle `result++` 在 `CharPushed` 调用之后、**不看**其返回值。
+            result += 1;
+        }
+        (result, events)
+    }
+
+    /// **魔号 21（`SKILL_SPACEMOVE` 瞬息移动）效果体**：`MagicManager.MagSaceMove`
+    /// （`MagicManager.cs:876-891`）+ `BaseObject.MapRandomMove`（`:1214-1237`）+
+    /// `BaseObject.SpaceMove`（`:1103-1168`，同服支）的生产入口。
+    ///
+    /// 取数次序（与 oracle 逐条同序）：
+    /// 1. `Random(11) < nLevel*2 + 4`（`:879`，站点 `magic_effect`）；门不过 => **一个数都不多抽**；
+    /// 2. `MapRandomMove` 两次初始取数（`:1235/1236`，站点 `merchant`）；**只有 `home_map` 解析成功才抽**；
+    /// 3. `SpaceMoveGetRandXY` 的移位环（`BaseObject.cs:1040-1096`，站点 `space_move`）。
+    ///
+    /// `home_map` = 宿主用 `MapRegistry::id_of(CharacterData.HomeMap)` 解析的结果（`None` =>
+    /// oracle `FindMap == null` => 不抽、不移动）。落地用 [`World::switch_map_space`]（记一条
+    /// [`crate::session::MapChange`]，`space_move_show = Some(true)` = oracle `nInt == 1` 的
+    /// `RM_SPACEMOVE_SHOW2`）。
+    ///
+    /// **失败支（oracle `if (!moveSuccess)` 回滚）**：本实现在**落地前**算完 `SpaceMoveGetRandXY`，
+    /// 未找到落点 => 一个格子都不动（等价于 oracle 的「恢复旧 `Envir/CurrX/CurrY` + 重新
+    /// `AddMapObject`」；oracle 那一步在可观测状态上恒等于「没动」）。
+    ///
+    /// **登记（本卡不实现）**：`IsTimeRecall = false`（无该字段，仅回报 `cross_map`）、
+    /// `OnEnvirnomentChanged()`、`VisibleHumanList.Clear()`、`SpaceMoved` 字段。
+    pub fn cast_space_move_spell(
+        &mut self,
+        chr_name: &str,
+        actor_id: i32,
+        level: i32,
+        home_map: Option<usize>,
+    ) -> SpaceMoveCastOutcome {
+        self.cast_space_move_spell_with(chr_name, actor_id, level, home_map, |_| {})
+    }
+
+    /// [`World::cast_space_move_spell`] 的宿主挂钩版：`after_gate` 在 `Random(11)` 门**通过后、
+    /// `MapRandomMove` 之前**调用（oracle `MagicManager.cs:881` 的
+    /// `SendRefMsg(RM_SPACEMOVE_FIRE2, …)` 恰在这个位置——收件人必须按**施法前**的旧图/旧坐标算）。
+    ///
+    /// 不传钩子的调用方用 [`World::cast_space_move_spell`]（行为与取数次序逐字节不变）。
+    pub fn cast_space_move_spell_with<F>(
+        &mut self,
+        chr_name: &str,
+        actor_id: i32,
+        level: i32,
+        home_map: Option<usize>,
+        after_gate: F,
+    ) -> SpaceMoveCastOutcome
+    where
+        F: FnOnce(&World),
+    {
+        let mut out = SpaceMoveCastOutcome::default();
+        let Some(e) = self.entities.get(actor_id) else {
+            return out;
+        };
+        out.x = e.x;
+        out.y = e.y;
+        out.map_id = e.map_id;
+        if !crate::magic_effect::sace_move_gate(&mut self.rng, level) {
+            return out;
+        }
+        out.result = true;
+        // oracle `:881 SendRefMsg(RM_SPACEMOVE_FIRE2, …)`：在 `MapRandomMove` **之前**。
+        after_gate(&*self);
+        let Some(dst) = home_map else {
+            return out;
+        };
+        if dst >= self.maps.len() {
+            return out;
+        }
+        out.map_found = true;
+        let (w, h) = {
+            let map = &self.maps[dst];
+            (map.width, map.height)
+        };
+        // `MapRandomMove` 的两次初始取数（`merchant` 组）。
+        let (nx, ny) = crate::merchant::map_random_move_xy(&mut self.rng, w, h);
+        // `SpaceMove` 的移位环（`space_move` 组）；`can_walk` = `CanWalk(x,y,true)`（`cellSuccess && Valid`）。
+        let found = {
+            let World { sim, .. } = self;
+            let rng = &mut sim.rng;
+            let map = &sim.maps[dst];
+            crate::space_move::space_move_get_rand_xy(rng, w, h, nx, ny, |x, y| {
+                map.get_cell_info(x, y).1
+            })
+        };
+        let Some((fx, fy)) = found else {
+            return out;
+        };
+        // `BaseObject.SpaceMove` 同服支：旧图摘除 -> 新图登记 -> 记 `MapChange`（宿主出 633/634/SHOW2）。
+        if self.switch_map_space(chr_name, dst, fx, fy, true).is_err() {
+            return out;
+        }
+        out.moved = true;
+        out.space_moved = true;
+        out.cross_map = dst != out.map_id;
+        out.x = fx;
+        out.y = fy;
+        out.map_id = dst;
+        out
+    }
+
+    /// `BaseObjectMove`（`PlayObject.Base.cs:2312-2327`，由 `MoveToHome` 调用）的玩家落地。
+    ///
+    /// 两个分支都落在 `BaseObject.SpaceMove(sMap, nX, nY, 0)`（`BaseObject.cs:1103-1172`）：
+    ///
+    /// - [`HomeMoveTarget::Fixed`]：`sX != 0 && sY != 0` ⇒ 以 `(x, y)` 为起点找可走格
+    ///   （落点可走 ⇒ **0 抽**；不可走 ⇒ `SpaceMoveGetRandXY` 的 `space_move` 移位环）；
+    /// - [`HomeMoveTarget::Random`]：任一轴为 0 ⇒ `MapRandomMove(sMap, 0)`（`:1214-1237`）：
+    ///   先两抽 `Random(Width-nEgdey-1)+nEgdey` / `Random(Height-nEgdey-1)+nEgdey`（`merchant` 组，
+    ///   `nEgdey` 只看**目标图**高），再以该点为起点进移位环。
+    ///
+    /// `target == None` ⇒ oracle `FindMap(sMap) == null` ⇒ **0 抽、不动、不出帧**（`SpaceMove`
+    /// 的 `if (envir != null)` 门；`MoveToHome` 已先发的 `RM_SPACEMOVE_FIRE` 不在本函数内）。
+    ///
+    /// 落地成功 ⇒ [`World::switch_map_space`]（记一条 `MapChange{space_move_show: Some(false)}`
+    /// = oracle `nInt == 0` 的 `RM_SPACEMOVE_SHOW`(801)；宿主据此出 633/634/801）。
+    /// 201 轮仍不可走 ⇒ oracle 回滚旧 `Envir/CurrX/CurrY`（`:1147-1151`）⇒ 本实现**落地前**就算完，
+    /// 失败时一格不动（与 [`World::cast_space_move_spell_with`] 同一口径）。
+    ///
+    /// **登记（本函数不实现）**：`IsTimeRecall`（oracle 那段是恒假死分支，见设计件 §0.5）、
+    /// `OnEnvirnomentChanged()`、`SpaceMoved` 字段、`VisibleHumanList.Clear()`（视野由视差集表现）。
+    pub fn base_object_move_player(
+        &mut self,
+        chr_name: &str,
+        actor_id: i32,
+        target: Option<HomeMoveTarget>,
+    ) -> BaseObjectMoveOutcome {
+        let mut out = BaseObjectMoveOutcome::default();
+        let Some(e) = self.entities.get(actor_id) else {
+            return out;
+        };
+        out.map_id = e.map_id;
+        out.x = e.x;
+        out.y = e.y;
+        // `SpaceMove`: `IEnvirnoment envir = FindMap(sMap); if (envir != null)`。
+        let Some(target) = target else {
+            return out;
+        };
+        let map_id = match target {
+            HomeMoveTarget::Fixed { map_id, .. } | HomeMoveTarget::Random { map_id } => map_id,
+        };
+        if map_id >= self.maps.len() {
+            return out;
+        }
+        out.map_found = true;
+        let (w, h) = {
+            let map = &self.maps[map_id];
+            (map.width, map.height)
+        };
+        // `MapRandomMove` 的两次初始取数（`merchant` 组）——只有 Random 支才抽。
+        let (sx, sy) = match target {
+            HomeMoveTarget::Fixed { x, y, .. } => (x, y),
+            HomeMoveTarget::Random { .. } => {
+                crate::merchant::map_random_move_xy(&mut self.rng, w, h)
+            }
+        };
+        // `SpaceMove` 的移位环（`space_move` 组）；`can_walk` = `CanWalk(x,y,true)`。
+        let found = {
+            let World { sim, .. } = self;
+            let rng = &mut sim.rng;
+            let map = &sim.maps[map_id];
+            crate::space_move::space_move_get_rand_xy(rng, w, h, sx, sy, |x, y| {
+                map.get_cell_info(x, y).1
+            })
+        };
+        let Some((fx, fy)) = found else {
+            return out;
+        };
+        // `SpaceMove` 同服支：删旧格 -> 新图登记 -> 记 `MapChange`（`nInt == 0` ⇒ SHOW(801)）。
+        if self
+            .switch_map_space(chr_name, map_id, fx, fy, false)
+            .is_err()
+        {
+            return out;
+        }
+        out.moved = true;
+        out.space_moved = true;
+        out.map_id = map_id;
+        out.x = fx;
+        out.y = fy;
+        out
+    }
+
+    /// oracle `SystemProcessor.GetGameTime`（`SystemProcessor.cs:48/98-134`）的周期刷新等价物。
+    ///
+    /// 入参 `bucket` = 宿主按本地小时桶算出的桶值（`1`/`2`/`0`/`3`；生产路径走
+    /// `enter::game_time_from_hour(chrono::Local::now().hour())`，**同一份换算**，不复制第二份）。
+    /// 返回**是否发生变化**——oracle `PlayObject.Base.cs:824-830` 的
+    /// `if (Bright != M2Share.GameTime)` 门；宿主据此对**每个**在线会话（各自缓存 `Bright`）
+    /// 重发 `RM_DAYCHANGING`（`SM_DAYCHANGING(46)`）。
+    ///
+    /// **节奏口径**：oracle 每 50ms 重算一次；本骨架世界 tick 固定 200ms（`TICK_INTERVAL_MS`）
+    /// ⇒ 宿主每 tick 调一次（U-A2/U-C3 的 50ms vs 200ms 适配，登记 `whitelist`）。因桶值只随
+    /// **真实本地小时**翻页，200ms 与 50ms 的重算在**小时桶上等价**（错过的只是一个桶内无变化的
+    /// 重算，不影响任何出帧时刻）。
+    pub fn refresh_game_time(&mut self, bucket: u8) -> bool {
+        let changed = bucket != self.game_time;
+        self.game_time = bucket;
+        changed
+    }
+
+    /// **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：开启
+    /// 「自身延时消息」驱动并灌入宝宝配置。
+    ///
+    /// 生产宿主（`bins/game-svr` 的 sim 循环）在起世界时用 `Server.conf` 的
+    /// [`mir2_data::pet_slave::PetSlaveConfig`] 调一次（oracle `SystemShare.Config.MasterDieMutiny*`）。
+    /// 缺省关闭（见 `World` 的 `slave_self_delay_enabled` 字段说明）⇒ 合成 golden 场景逐字节不变。
+    /// 幂等：重复调用只覆盖配置。
+    pub fn enable_slave_self_delay(&mut self, cfg: mir2_data::pet_slave::PetSlaveConfig) {
+        self.pet_slave_cfg = cfg;
+        self.slave_self_delay_enabled = true;
+    }
+
+    /// 开启 7 参 `SendStruckDelayMsg`（`RM_REFMESSAGE`）延时层（缺省关闭；见
+    /// [`World::refmessage_delay_enabled`]）。生产宿主起世界时调用；合成 golden 保持关闭。
+    pub fn enable_refmessage_delay(&mut self) {
+        self.refmessage_delay_enabled = true;
+    }
+
+    /// 7 参 `SendStruckDelayMsg`（`RM_REFMESSAGE`）延时层是否开启。
+    #[must_use]
+    pub fn refmessage_delay_enabled(&self) -> bool {
+        self.refmessage_delay_enabled
+    }
+
+    /// 自身延时消息驱动是否开启（自证/测试用）。
+    #[must_use]
+    pub fn slave_self_delay_enabled(&self) -> bool {
+        self.slave_self_delay_enabled
+    }
+
+    /// 设置某张地图的 `Envir.Flag.boEXPRATE`/`ExpRate`（see [`World::map_exp_rate`]）。
+    /// 越界 `map_id` 静默忽略（接线层的图下标来自同一注册表）。幂等。
+    pub fn set_map_exp_rate(&mut self, map_id: usize, rate: Option<i32>) {
+        if let Some(slot) = self.map_exp_rate.get_mut(map_id) {
+            *slot = rate;
+        }
+    }
+
+    /// 设置某张地图的 `Envir.Flag.boNEEDHOLE`（route 落地门的输入，`PlayObject.cs:1874`）。
+    /// 越界 `map_id` 静默忽略。幂等。生产宿主在起世界时按注册表逐图灌入；缺省 `false`。
+    pub fn set_map_need_hole(&mut self, map_id: usize, need_hole: bool) {
+        if let Some(map) = self.maps.get_mut(map_id) {
+            map.set_need_hole(need_hole);
+        }
+    }
+
+    /// 设置某张地图的 `Envir.Flag.FightZone`/`Fight3Zone`（`DieDropItems` 的地图门，
+    /// `BaseObject.cs:2452`）。越界 `map_id` 静默忽略。幂等。生产宿主在起世界时按注册表逐图灌入。
+    pub fn set_map_fight_zone(&mut self, map_id: usize, fight_zone: bool, fight3_zone: bool) {
+        if let Some(map) = self.maps.get_mut(map_id) {
+            map.set_fight_zone(fight_zone, fight3_zone);
+        }
+    }
+
+    /// **`openmir2-player-drop-useitems`**：灌入玩家死亡 `DropUseItems` 的配置
+    /// （`Server.conf [Setup] DieDropUseItemRate`/`DieRedDropUseItemRate`/`DropItemRage`
+    /// + `Envir/DisableTakeOffList.txt` 的键集合）。缺省 = oracle 缺省（30/15/3/空）。
+    pub fn set_death_drop_config(
+        &mut self,
+        die_drop_use_item_rate: i32,
+        die_red_drop_use_item_rate: i32,
+        drop_item_rage: i32,
+        disable_take_off_keys: Vec<u16>,
+    ) {
+        self.die_drop_use_item_rate = die_drop_use_item_rate;
+        self.die_red_drop_use_item_rate = die_red_drop_use_item_rate;
+        self.drop_item_rage = drop_item_rage;
+        self.disable_take_off_keys = disable_take_off_keys;
+    }
+
+    /// **`openmir2-player-drop-useitems`**：`KillTargetTrigger` 第二段的两个配置门
+    /// （`[Setup] KillByHumanDropUseItem` / `KillByMonstDropUseItem`）。
+    pub fn set_death_drop_kill_config(
+        &mut self,
+        kill_by_human_drop_use_item: bool,
+        kill_by_monst_drop_use_item: bool,
+    ) {
+        self.kill_by_human_drop_use_item = kill_by_human_drop_use_item;
+        self.kill_by_monst_drop_use_item = kill_by_monst_drop_use_item;
+    }
+
+    /// **生产入口**：灌入 `stditems` 的**顺序表**作为物品目录。
+    ///
+    /// `items[i]` 对应 `Index = i + 1`（oracle `GameItemSystem` 的 1-based 口径，
+    /// 同 `bins/game-svr::items::catalog_from`）。目录必须是**原始表顺序**（空名项也占位）：
+    /// `VecItemCatalog::get_std_item` 按 `wrapping_sub(1)` 取下标、空名返回 `None`；
+    /// 未灌入（空向量）时查表恒 `None`。
+    ///
+    /// 消费点：`death_drop::drop_use_items_on_death`、怪物掉落生成等所有走
+    /// `VecItemCatalog` 的路径。宿主 `bins/game-svr` 在建世界时用
+    /// `EnterConfig::world_item_catalog`（与帧/能力面的 `StdItemCatalog` 同源同表）喂入。
+    pub fn set_item_catalog(&mut self, items: Vec<StdItem>) {
+        self.item_catalog = items;
+    }
+
+    /// 设置某张地图的 `Envir.Flag.NoDropItem`（`KillTargetTrigger` 第二段的地图门）。
+    pub fn set_map_no_drop_item(&mut self, map_id: usize, no_drop_item: bool) {
+        if let Some(map) = self.maps.get_mut(map_id) {
+            map.set_no_drop_item(no_drop_item);
+        }
+    }
+
+    /// 把注册表 `MapFile.doors`/`door_status` 搬进某图（`Envirnoment.cs:934-991` 加载即建 `DoorList`）。
+    /// 越界 `map_id` 静默忽略。幂等（重复调用覆盖）。缺省空 ⇒ `arround_door_opened` 恒 `true`
+    /// （改动前行为逐字节不变）。`crates/world` 不依赖 `crates/envir` ⇒ 用本中立结构
+    /// [`crate::map::MapDoor`]/[`crate::map::DoorStatus`]，由宿主做映射。
+    pub fn set_map_doors(
+        &mut self,
+        map_id: usize,
+        doors: Vec<crate::map::MapDoor>,
+        status: Vec<crate::map::DoorStatus>,
+    ) {
+        if let Some(map) = self.maps.get_mut(map_id) {
+            map.set_doors(doors, status);
+        }
+    }
+
+    /// 攻击路径取数的统一入口：按隔离开关选流。
+    ///
+    /// **只把攻击路径的取数**（[`crate::combat::attack_dir`] / [`crate::combat::swing_power`] 及其
+    /// 全部下取：`atk_power_a/b`、`hit_gate`、`hit_struck_damage`、`struck_durability`、
+    /// `attack_success`）路由到专用流；其余消费者仍走全局 `rng`。
+    fn attack_rng(&mut self) -> &mut RandomNumber {
+        Self::attack_rng_of(&mut self.sim)
+    }
+
+    /// **P5-A1**：`attack_rng` 的 facade/段共用实现（同一份实现，无第二套分流逻辑）。
+    pub(crate) fn attack_rng_of(sim: &mut SimState) -> &mut RandomNumber {
+        if sim.isolate_attack {
+            &mut sim.rng_attack
+        } else {
+            &mut sim.rng
+        }
+    }
+
+    pub fn map(&self, map_id: usize) -> &MapGrid {
+        &self.maps[map_id]
+    }
+
+    /// 入队一条命令（会话线程 → 世界线程的交接点；本骨架里同线程、仍走队列以保证顺序）。
+    pub fn enqueue(&mut self, cmd: Command) {
+        self.pending.push_back(cmd);
+    }
+
+    /// **P7**：命令 FIFO 的**单条处理体**（`TickStage::Command` 段逐条调用；`tick_head` 不再内联
+    /// `match cmd`）。
+    ///
+    /// 逐臂与迁移前 `tick_head` 的内联循环**同序同记账**：
+    ///
+    /// * 九族动作一律走各族 `*_impl`（`EntityAccess`(+`StructuralAccess`) + `&mut SimState` 形态），
+    ///   与 facade 同一份实现；
+    /// * `record.processed` 记账仍留在本函数（与迁移前「调用点记账」的拆分逐项相同）；
+    /// * **语义事件写真实 record**：`spawn`/`butch`/`butch_effect` 的 `*_impl` 直接写传进来的
+    ///   `record`（P5-A3 已把记账放进 impl：`butches`/`skeletons` 各恰一条）——迁移前 facade 造
+    ///   一次性 scratch record 再丢弃、由 `tick_head` 手工补写；P7 起两组向量由 impl 独占写入，
+    ///   不再有 scratch record，也不再双重记账。
+    ///
+    /// `StructuralAccess` 绑定是 `Command::Leave`（`remove`）与 `Command::SpawnMonster`（`insert`）
+    /// 的编译期门：非结构段拿不到本函数。
+    fn apply_command<A>(access: &mut A, sim: &mut SimState, record: &mut TickRecord, cmd: Command)
+    where
+        A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
+    {
+        match cmd {
+            Command::Enter { actor_id } => {
+                let ok = Self::enter_world_impl(access, sim, actor_id);
+                record.processed.push((actor_id, ok));
+            }
+            Command::Leave { actor_id } => {
+                let ok = Self::leave_world_impl(access, sim, actor_id);
+                record.processed.push((actor_id, ok));
+            }
+            Command::Walk { actor_id, dx, dy } => {
+                let ok = Self::try_step_impl(access, sim, actor_id, dx, dy);
+                record.processed.push((actor_id, ok));
+            }
+            Command::Kill { target_id } => {
+                let ok = match access.get_mut(target_id) {
+                    Some(e) => {
+                        // 直接 `Die()` 入口（GM `KillCommand.cs:40` `baseObject.Die()`；
+                        // 脚本 `KILL` 的 `playerActor.Die()`）。oracle 的 `Die()` **不改
+                        // HP**；SuperMan 的目标在 `Die` 首行早退后由下一次 `Run` 回满，
+                        // 因此这里**不写 HP**（否则会污染 `CastleDoor.Run` 的 HP 判据）。
+                        // 非 SuperMan 仍写 `hp = 0`：本骨架的死亡结算以 `hp == 0` 为触发，
+                        // 与既有行为保持一致。
+                        if !e.flags.super_man {
+                            e.vitals.hp = 0;
+                        }
+                        e.life_cycle.die_called = true;
+                        true
+                    }
+                    None => false,
+                };
+                record.processed.push((target_id, ok));
+            }
+            Command::Attack {
+                actor_id,
+                target_id,
+            } => {
+                let outcome = Self::attack_once_impl(access, sim, actor_id, target_id);
+                match outcome {
+                    Some(o) => {
+                        record.processed.push((actor_id, o.hit));
+                        record.attacks.push((actor_id, target_id, o));
+                    }
+                    None => record.processed.push((actor_id, false)),
+                }
+            }
+            Command::SpawnMonster {
+                id,
+                name,
+                x,
+                y,
+                map_id,
+                level,
+                exp,
+                hp,
+                dc,
+                ac,
+                undead,
+                hit_point,
+                speed_point,
+                drop_list,
+            } => {
+                let ok = Self::spawn_monster_now_impl(
+                    access,
+                    sim,
+                    record,
+                    id,
+                    &name,
+                    x,
+                    y,
+                    map_id,
+                    level,
+                    exp,
+                    hp,
+                    dc,
+                    ac,
+                    undead,
+                    hit_point,
+                    speed_point,
+                    &drop_list,
+                );
+                record.processed.push((id, ok));
+            }
+            Command::Push {
+                actor_id,
+                dir,
+                count,
+            } => {
+                let events = Self::push_now_impl(access, sim, actor_id, dir, count);
+                record.processed.push((actor_id, !events.is_empty()));
+                record.pushes.extend(events);
+            }
+            Command::Rush {
+                actor_id,
+                dir,
+                steps,
+            } => {
+                let events = Self::rush_now_impl(access, sim, actor_id, dir, steps);
+                record.processed.push((actor_id, !events.is_empty()));
+                record.rushes.extend(events);
+            }
+            Command::Butch { actor_id, dir } => {
+                // `butch_now_impl` 直接把 `ButchEvent` 记进 `record.butches`（P5-A3 拆分）。
+                let event = Self::butch_now_impl(access, sim, record, actor_id, dir);
+                record.processed.push((actor_id, event.is_some()));
+            }
+            Command::ButchEffect {
+                actor_id,
+                target_id,
+                n_x,
+                n_y,
+            } => {
+                // `butch_effect_now_impl` 直接把 `SkeletonEvent` 记进 `record.skeletons`；
+                // `processed` 恒 true 仍由本函数记（与迁移前同口径）。
+                let _ =
+                    Self::butch_effect_now_impl(access, sim, record, actor_id, target_id, n_x, n_y);
+                record.processed.push((actor_id, true));
+            }
+        }
+    }
+
+    /// 会话进入世界并落图。
+    pub fn add_entity(&mut self, mut spawn: EntitySpawn) -> i32 {
+        if spawn.id <= 0 {
+            spawn.id = self.entities.alloc_id();
+        }
+        // `BaseObject` ctor `PoisoningTick = GetTickCount()`（`BaseObject.cs:443`）：毒伤 DoT 的周期门
+        // 从**实体落图那一刻**起算（buff 轴 = `clock_ms + BUFF_EPOCH_MS`，与 `buff_tick`/`make_posion` 同基）。
+        // `EntitySpawn::new`（ctor 等价物）拿不到 `World` 时钟 ⇒ 在此按落图时刻精确重盖（同 `auto_recovery_tick`）。
+        spawn.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：按落图时刻重盖（S3b：MapBinding 组件）。
+        spawn.map_binding.verify_tick = self.clock_ms;
+        // `BaseObject.cs:442` ctor `SearchTick = GetTickCount()`（玩家 ctor 又在
+        // `PlayObject.cs:901` 置一次）：ctor 等价物拿不到世界时钟 ⇒ 按落图时刻重盖。
+        // 之后 `World::tick` 的玩家 scanner 按 `now - SearchTick > SearchTime(=1000)` 节流。
+        spawn.ai.search_tick = self.clock_ms;
+        let id = self.entities.insert(spawn);
+        // `PlayObject.cs:913` ctor `CheckDupObjTick = GetTickCount()`（重叠推挤的 3s 门从落图时刻起算）。
+        // S3a：该字段已迁入 `DupState` 组件，经受控 API 重盖（`EntityStore::insert` 先给默认 0）。
+        self.entities
+            .dup_state_mut(id)
+            .expect("EntityStore::insert 必须给每个实体插 DupState")
+            .check_dup_obj_tick = self.clock_ms;
+        self.enqueue(Command::Enter { actor_id: id });
+        id
+    }
+
+    /// 走一步（入队，tick 时按序生效）。
+    pub fn walk(&mut self, actor_id: i32, dx: i32, dy: i32) {
+        self.enqueue(Command::Walk { actor_id, dx, dy });
+    }
+
+    /// 攻击（入队）。
+    pub fn attack_cmd(&mut self, actor_id: i32, target_id: i32) {
+        self.enqueue(Command::Attack {
+            actor_id,
+            target_id,
+        });
+    }
+
+    /// **无目标挥砍**（`PlayObject.AttackDir(targetObject = null)`，`PlayObject.Attack.cs:25`）。
+    ///
+    /// oracle 在**取目标之前**就调 `GetAttackPowerHit(wHitMode, GetBaseAttackPoewr(), …)` ⇒
+    /// 即使前方格无目标（`GetPoseCreate()` 返回 null），**攻击力取数照抽**（玩家 `Luck <= 0` 时
+    /// `Random(power+1)` + `Random(10)` 共 2 抽）；之后 `_Attack(null)` 立刻 `return false`、
+    /// `AttackSuccess(…, null)` 也在开头 `return` ⇒ **不再有别的取数**。
+    ///
+    /// 返回本次挥砍抽出的攻击力（`GetBaseAttackPoewr` 的结果）；actor 不存在 ⇒ `None`。
+    ///
+    /// **接线（`bins/game-svr`，属 m2-svr 写集）**：`handle_hit_cmd` 在“前方格无目标”支目前
+    /// 只记日志（`lib.rs` 的「只播动作帧（oracle `_Attack(null)` 返回 false）」支）⇒ 必须改调本方法；
+    /// 否则 C# 侧那 115/120「有攻击命令、无目标」的 `atk_power_a/b` 两抽在 Rust 侧**整段缺失**
+    /// （本片 .rs 侧归因，见 `M3RNG攻击路径三差归因报告-20261012.md`）。本 crate 不改 `bins/**`。
+    #[must_use]
+    pub fn attack_swing(&mut self, actor_id: i32) -> Option<i32> {
+        let (dc, mode) = {
+            let attacker = self.entities.get(actor_id)?;
+            (attacker.dc, AttackPowerMode::for_attacker(&attacker))
+        };
+        let power = swing_power(self.attack_rng(), dc, mode);
+        Some(power)
+    }
+
+    /// 脚本化击杀（入队）。
+    pub fn kill(&mut self, target_id: i32) {
+        self.enqueue(Command::Kill { target_id });
+    }
+
+    /// 离开世界（入队）。
+    pub fn leave(&mut self, actor_id: i32) {
+        self.enqueue(Command::Leave { actor_id });
+    }
+
+    /// 推进一个 tick（固定 200ms；不做 sleep —— 调度归调用方）。
+    ///
+    /// = [`World::tick_head`] + [`World::tick_tail`] 的组合（中间宿主段为空）。既有 golden /
+    /// 单测调用点不变；玩家死亡结算已从 tick 开头移到 `tick_tail`（P32 复活门之前不得先置
+    /// `Death`），见 [`World::tick_tail`]。
+    ///
+    /// # 段序（oracle → Rust 段位）
+    ///
+    /// 玩家 `Run` 总序：`src/M2Server/Player/PlayObject.Message.cs:19-766`；末尾无条件
+    /// `base.Run()`：`src/M2Server/Actor/BaseObject.Base.cs:25-316`。
+    ///
+    /// ```text
+    /// [tick_head]
+    ///   命令 FIFO                        PlayObject.Run:356-400（GetMessage/Operate）
+    ///   [PL-1] 玩家 LastHiter 快照       P32 读值早于 base.Run:119-132 的清理
+    ///   expire_hitters                   base.Run:119-132（每 tick 结构等价物）
+    ///   非玩家死亡结算                   base.Run:70-73（Die）—— 玩家留到 tail
+    ///   宝宝自投递                       PlayObject.Run:360-364
+    ///   extra_abil                       PlayObject.Run:158-227
+    ///   地图事件 / 宝宝清表              base.Run:208-217
+    ///   buff / 怪物 AI / NPC / 商人      各自 Run()
+    ///   expire_player_run_state          PlayObject.Run:54-64
+    ///   check_dup_obj                    PlayObject.Run:263-285
+    /// --- 宿主段（bins/game-svr 在两段之间驱动；PL-1 起由 A2 填 P21/P32）---
+    ///   P21 装备需求每 Run 复检          PlayObject.Run:403-441
+    ///   P22 元宝自动增减 / 地图旗标      PlayObject.Run:442-529
+    ///   P24 游戏点（不在 PL-1..4）       PlayObject.Run:548-568
+    ///   P25 地图 DECHP/INCHP             PlayObject.Run:569-594
+    ///   P26 饥饿系统                     PlayObject.Run:596-635
+    ///   P27 经验/攻击倍率 1s 递减        PlayObject.Run:636-657
+    ///   P31 自动经验                     PlayObject.Run:738-745
+    ///   P32 复活戒指                     PlayObject.Run:747-763
+    /// [tick_tail]
+    ///   玩家死亡结算                     base.Run:70-73（在 P32 之后）
+    ///   verify_players_map_time          base.Run:223-245（VerifyMapTime + HP/MP 钳制）
+    ///   AOI 刷新
+    /// ```
+    pub fn tick(&mut self) -> TickRecord {
+        let mut record = self.tick_head();
+        self.tick_tail(&mut record);
+        record
+    }
+
+    /// **tick 前半段**：命令 FIFO → 命中者过期 → 非玩家死亡结算 → … → `check_dup_obj`。
+    ///
+    /// 玩家死亡**不在此段**结算（`settle_deaths` 只结算 `Race != Play`）。宿主在两段之间驱动
+    /// P21..P32 后再调 [`World::tick_tail`]，P32 才有机会把 `HP == 0` 的玩家救活。
+    /// 本方法会推进时钟（+200ms）并做单线程断言；[`World::tick_tail`] 只推进状态，不再推进时钟。
+    pub fn tick_head(&mut self) -> TickRecord {
+        let current = std::thread::current().id();
+        match self.owner_thread {
+            None => self.owner_thread = Some(current),
+            Some(t) => assert_eq!(
+                t, current,
+                "世界 tick 必须始终在同一线程上串行执行（设计文档 §4.2：禁止并行）"
+            ),
+        }
+
+        if let Some(p) = self.tick_profile.as_mut() {
+            if !p.paused {
+                p.ticks += 1;
+            }
+        }
+
+        // S1 tick 骨架：时钟推进（+ 线程断言）在单线程 Schedule 里跑。
+        // facade 仍是事实源（`clock_ms`/`tick_seq` 是对外 pub 字段）：先把值写进资源，
+        // 跑完读回；数值语义与原 `clock_ms += 200; tick_seq += 1` 逐 tick 相同。
+        let __prof_clock = self.prof_begin();
+        {
+            // facade 字段 → 资源（S4d-1：`sim` 经 `Deref`，先取值避开与 `entities` 的借用重叠）。
+            let (clock_ms, tick_seq) = (self.clock_ms, self.tick_seq);
+            let mut clock = self.entities.world_mut().resource_mut::<TickClock>();
+            clock.clock_ms = clock_ms;
+            clock.tick_seq = tick_seq;
+        }
+        self.run_head_stage(|world, head| head.run(TickStage::Clock, world));
+        {
+            let (clock_ms, tick_seq) = {
+                let clock = self.entities.world().resource::<TickClock>();
+                (clock.clock_ms, clock.tick_seq)
+            };
+            self.clock_ms = clock_ms;
+            self.tick_seq = tick_seq;
+        }
+        self.prof_end(TickStage::Clock, __prof_clock);
+        let mut record = TickRecord {
+            tick_seq: self.tick_seq,
+            clock_ms: self.clock_ms,
+            processed: Vec::new(),
+            aoi_order: Vec::new(),
+            event_hides: Vec::new(),
+            attacks: Vec::new(),
+            weapon_breaks: Vec::new(),
+            weapon_wears: Vec::new(),
+            deaths: Vec::new(),
+            death_use_item_drops: Vec::new(),
+            exp_awards: Vec::new(),
+            merchants_run: Vec::new(),
+            merchant_turns: Vec::new(),
+            merchant_hits: Vec::new(),
+            merchant_disappears: Vec::new(),
+            merchant_space_moves: Vec::new(),
+            merchant_removed: Vec::new(),
+            npcs_run: Vec::new(),
+            npc_turns: Vec::new(),
+            npc_hits: Vec::new(),
+            npc_removed: Vec::new(),
+            party_events: Vec::new(),
+            slave_self_deliveries: Vec::new(),
+            extra_abil_expiries: Vec::new(),
+            pushes: Vec::new(),
+            rushes: Vec::new(),
+            butches: Vec::new(),
+            skeletons: Vec::new(),
+            hides: Vec::new(),
+            hide_observer_kinds: Vec::new(),
+            buff_status_changes: Vec::new(),
+            buff_sysmsgs: Vec::new(),
+            buff_recalcs: Vec::new(),
+            buff_health_changes: Vec::new(),
+            run_state_expiries: Vec::new(),
+            verify_health_changes: Vec::new(),
+            show_hp_health_changes: Vec::new(),
+            castle_structures: Vec::new(),
+        };
+
+        // 命令 FIFO —— **P7：`TickStage::Command` 段（#1）**。
+        //
+        // 段位与迁移前逐字相同（`Clock` 之后、PL-1 快照之前）；**入队序 = 处理序**由段内
+        // `pop_front` 循环保证（一个系统、逐条、不重排）。`SimState` 由 `run_head_stage` 搬入，
+        // 命令队列与 `TickRecord` 在这里按段边界搬入/搬回（同一时刻只有一个所有者）。
+        let __prof_cmd = self.prof_begin();
+        {
+            let pending = std::mem::take(&mut self.pending);
+            let record_res = TickRecordRes(std::mem::take(&mut record));
+            let (record_back, pending_back) = self.run_head_stage(move |world, head| {
+                world.insert_resource(CommandQueueRes(pending));
+                world.insert_resource(record_res);
+                head.run(TickStage::Command, world);
+                (
+                    world
+                        .remove_resource::<TickRecordRes>()
+                        .expect("Command 后必须归还 TickRecordRes（段边界契约）")
+                        .0,
+                    world
+                        .remove_resource::<CommandQueueRes>()
+                        .expect("Command 后必须归还 CommandQueueRes（段边界契约）")
+                        .0,
+                )
+            });
+            record = record_back;
+            self.pending = pending_back;
+        }
+        // **结构段边界**：`Command::SpawnMonster`（`insert`）与 `Command::Leave`（`remove`）会增删
+        // 实体 ⇒ facade 的缓存视图必须刷新，否则后续段（快照/结算/AI/宿主段）`get`/`iter` 看不到
+        // 新生成的怪，或仍看得到已离场的实体。与 `SimNpc`/`SimMerchant` 的结构段收尾同口径。
+        self.entities.refresh_views();
+        self.prof_end(TickStage::Command, __prof_cmd);
+
+        // **PL-1 硬前置（spike §4.3-3 / §5.5-1）**：oracle 的 P32（`PlayObject.Message.cs:747-763`）
+        // 在 `base.Run()` 的 LastHiter 清理（`BaseObject.Base.cs:119-132`）**之前**读 `LastHiter`；
+        // 本骨架的 `expire_hitters()` 在 tick 开头统一清 ⇒ 必须在**清理之前**给每个玩家留快照，
+        // 供宿主段里的 P32 读（读清理前的值，含「命中者 30s 未过期 / 命中者是非玩家」两态）。
+        // 快照点在命令 FIFO 之后（同一 Run 的攻击命令可写 `LastHiter`，与 oracle 消息泵同相位）。
+        self.pending_verify_health_changes.clear();
+        self.pending_show_hp_health_changes.clear();
+        self.tail_phase_log.clear();
+        // **S4d-2 `SimHiterSnapshot` 段（#2）**：快照作为系统运行（槽位顺序由 `TickEntityIds`
+        // 显式给出，不迭代 `Query` 求序）。段序与迁移前一致：命令 FIFO 之后、`expire_hitters` 之前。
+        {
+            let __prof_slot = self.probe_begin();
+            let ids: Vec<(i32, bevy_ecs::entity::Entity)> = self.entities.slot_order();
+            self.probe_end("slot_order.hiter_snapshot", __prof_slot);
+            let __prof_stage = self.prof_begin();
+            self.run_head_stage(move |world, head| {
+                world.insert_resource(TickEntityIds(ids));
+                head.run(TickStage::SimHiterSnapshot, world);
+                let _ = world.remove_resource::<TickEntityIds>();
+            });
+            self.prof_end(TickStage::SimHiterSnapshot, __prof_stage);
+        }
+
+        // 命中者过期清理（照 `BaseObject.Base.cs:119-132` 的结构；墙钟那两项不在本骨架）
+        // S4d-3/P2 #3：段系统（`SimExpireHitters`），段位与旧内联调用完全相同。
+        let __prof_eh = self.prof_begin();
+        self.run_head_stage(|world, head| head.run(TickStage::SimExpireHitters, world));
+        self.prof_end(TickStage::SimExpireHitters, __prof_eh);
+        // 死亡结算：`tick_head` 只结算**非玩家**（C# 在实体下一次 `Run()` 里发现 `HP == 0` 才
+        // `Die()`）。玩家的 `base.Run` 的 Die 在 P32 之后 ⇒ 留到 [`World::tick_tail`]
+        // （oracle 序：PlayObject.Run 的 P21→…→P32 → base.Run:70-73）。既有 golden 的 death
+        // 行全部是怪物 ⇒ 该拆分不改任何既有 golden（spike §4.3-4）。
+        // S4d-3/P3b #4：段系统（`SimSettleDeaths`），段位与旧内联调用完全相同。
+        // `TickRecord` 由段边界以 `TickRecordRes` 搬入、段后取回（与 OutputDrain 同口径）。
+        {
+            let __prof_sd = self.prof_begin();
+            let record_res = TickRecordRes(std::mem::take(&mut record));
+            record = self.run_head_stage(move |world, head| {
+                world.insert_resource(record_res);
+                head.run(TickStage::SimSettleDeaths, world);
+                world
+                    .remove_resource::<TickRecordRes>()
+                    .expect("SimSettleDeaths 后必须归还 TickRecordRes（段边界契约）")
+                    .0
+            });
+            self.prof_end(TickStage::SimSettleDeaths, __prof_sd);
+        }
+
+        // **M3⑨ 主人死/幽灵自投递**（卡 `openmir2-m3-pet-slave-masterdie-wire`）：oracle
+        // `PlayObject.Run()`（`PlayObject.Message.cs:360-364`）在 `base.Run()`（`:765`）之前
+        // 先跑 `while (GetMessage(GetMessageTick, ...)) Operate(...)` 消息段 ⇒ 自投递的
+        // `ProcessSlaveMutiny` / `ProcessSlaveGhost`（`PlayObject.Message.cs:2116-2121`）
+        // **先于** `BaseObject.Run` 的宝宝清表（`BaseObject.Base.cs:208-217`）。同序放置。
+        // P3-B2：`RM_MAGHEALING`（治疗）不依赖该开关；主人死族在 `deliver_self_delay_msgs`
+        // 内部仍按 `slave_self_delay_enabled` 过滤（关闭时保持入队）。
+        // S4d-3/P6a2 #5：段系统（`SimSelfDeliver`），段位与旧内联调用完全相同。
+        let __prof_selfd = self.prof_begin();
+        self.run_head_stage(|world, head| head.run(TickStage::SimSelfDeliver, world));
+        record.slave_self_deliveries = self.take_self_deliveries();
+        self.prof_end(TickStage::SimSelfDeliver, __prof_selfd);
+        // **P3-B5**：`ExtraAbil` 过期检查（oracle 在 `PlayObject.Run` 的消息泵；
+        // 本骨架每 world tick 一次，相位差登记 T-B5-2）与地图事件处理器
+        // （`EventProcessor.ExecuteInternal` 的 20ms 周期 / 每事件 500ms `RunTick` 门）。
+        // S4d-3/P2 #6：段系统（`SimExtraAbil`），段位与旧内联调用完全相同。
+        let __prof_ea = self.prof_begin();
+        self.run_head_stage(|world, head| head.run(TickStage::SimExtraAbil, world));
+        record.extra_abil_expiries = self.take_extra_abil_expiries();
+        self.prof_end(TickStage::SimExtraAbil, __prof_ea);
+        let __prof_me = self.prof_begin();
+        self.run_map_events();
+        self.prof_end(TickStage::SimMapEvents, __prof_me);
+
+        // **M3⑨-实现 3**：`BaseObject.Run` 的宝宝列表清理（`BaseObject.Base.cs:208-217`）。
+        // oracle 里这跑在每个主人（玩家）自己的 `Run()` 里；本骨架玩家无 `Run` ⇒ 在死亡结算后
+        // 按槽位顺序对每个**持有宝宝**的实体跑一次。空表 ⇒ 零动作（golden 逐字节不变）。
+        // S4d-3/P4 #8：段系统（`SimSlaveCleanup`），段位与旧内联调用完全相同。
+        let __prof_sc = self.prof_begin();
+        self.run_head_stage(|world, head| head.run(TickStage::SimSlaveCleanup, world));
+        self.prof_end(TickStage::SimSlaveCleanup, __prof_sc);
+
+        // **车道 B1（buff 系统）**：buff pass（oracle `ActorBuffProcessor` 的 50ms `DoWork`
+        // 单线程等价物，见 [`crate::buff`]）。**缺省关闭**（`buff_enabled=false`）⇒ 既有 golden
+        // 逐字节不变；宿主 `bins/game-svr` 的 sim 循环 `enable_buff_tick()`（生产路径）。
+        // 位置：死亡结算之后、怪物 AI 之前（设计件 §3.3）。每 world tick（200ms）串行跑
+        // [`BUFF_PASSES_PER_TICK`] 个 50ms pass（U-A2 口径）。buff 段**不抽 RNG** ⇒ 对
+        // RNG 账本零影响（消费者次序不变）。
+        // S4d-3/P6a #9：段系统（`SimBuff`），段位与旧内联调用完全相同。
+        let __prof_buff = self.prof_begin();
+        if self.buff_enabled {
+            self.run_head_stage(|world, head| head.run(TickStage::SimBuff, world));
+            let out = self.take_buff_outcome();
+            record.buff_status_changes = out.status_changes;
+            record.buff_sysmsgs = out.sysmsgs;
+            record.buff_recalcs = out.recalcs;
+            record.buff_health_changes = out.health_spell_changes;
+        }
+        self.prof_end(TickStage::SimBuff, __prof_buff);
+
+        // M3④-实现 C：怪物 AI 一步（oracle `ProcessMonsters` → 每只 `monster.Run()`）。
+        // **缺省关闭**：合成 golden 场景不含 oracle 的怪物线程，开 AI 会把 RNG 序列整体移位；
+        // 由 `bins/game-svr` 的 sim 循环显式 `enable_monster_ai()`（见字段说明）。
+        // 单线程串行：按实体槽位顺序（`EntityStore` 显式索引），在死亡结算之后、AOI 之前。
+        // **S4d-3/P6b2 #10**：段系统（`SimMonsterAi`），段位与旧内联调用完全相同。
+        let __prof_ai = self.prof_begin();
+        if self.ai_enabled {
+            self.run_head_stage(|world, head| head.run(TickStage::SimMonsterAi, world));
+        }
+        self.prof_end(TickStage::SimMonsterAi, __prof_ai);
+        // **S4d-1**：AI/命令段的输出累积（结构事件、AI 攻击、武器升级/磨损）不再内联转抄，
+        // 统一由 `OutputDrain` 段系统在孤儿段之后转抄（见下）。
+
+        // **世界 tick 扩容首批（T3）· ① NPC Run**：固定 NPC tick（oracle `MerchantProcessor` 的
+        // `ProcessNpcs()`，200ms 线程单线程等价物）。
+        //
+        // **消费者次序（RNG 账本合同，必须固定）**：oracle `MerchantProcessor.ExecuteInternal`
+        // （`MerchantProcessor.cs:28-32`）**先** `ProcessNpcs()` **后** `ProcessMerchants()`
+        // ⇒ 本 `npc_tick` 排在 `merchant_tick` **之前**（U-B6 裁决：照 oracle 先后）。
+        // `npc_run` 每次都从全服共享 `world.rng` 抽数 ⇒ 该次序决定共享 RNG 流的逐次序列
+        // （B-R1 的「同窗口批次前提」）。整条线性化消费者序：
+        //   命令 FIFO → 命中者过期 → 死亡结算 → 宝宝自投递 → 宝宝清表 → monster_ai_tick
+        //   → **npc_tick** → merchant_tick → AOI。
+        // 缺省 `npc_enabled=false`（合成 golden 不含 oracle 的 NPC 线程）⇒ 既有对拍逐字节不变。
+        // **S4d-3/P6a2b #11**：段系统（`SimNpc`），段位与旧内联调用完全相同；实现体 =
+        // `crate::npc::npc_tick_impl`（facade `World::npc_tick` 与段共用同一份）。
+        let __prof_npc = self.prof_begin();
+        if self.npc_enabled {
+            let n = self.run_npc_stage();
+            record.npcs_run = n.ran;
+            record.npc_turns = n.turns;
+            record.npc_hits = n.hits;
+            record.npc_removed = n.removed;
+        }
+        self.prof_end(TickStage::SimNpc, __prof_npc);
+
+        // **M3⑤-实现 2 第②片**：商人 tick（oracle `MerchantProcessor` 的 200ms 线程单线程等价物）。
+        // 单线程串行：在怪物 AI 之后、AOI 刷新之前（与 oracle 同 tick 内的显式定序；oracle 里是两个
+        // 独立 200ms 线程，跨系统交错不可复现 ⇒ 由 owner 裁决不在判据内）。
+        let __prof_mch = self.prof_begin();
+        if self.merchant_enabled {
+            let m = self.run_merchant_stage();
+            record.merchants_run = m.ran;
+            record.merchant_turns = m.turns;
+            record.merchant_hits = m.hits;
+            record.merchant_disappears = m.disappears;
+            record.merchant_space_moves = m.space_moves;
+            record.merchant_removed = m.removed;
+        }
+        self.prof_end(TickStage::SimMerchant, __prof_mch);
+
+        // **`PlayObject.Run` 的状态到期段**（`PlayObject.Message.cs:54-64`）：烈火 20s / 双龙 60s。
+        // 在玩家 `base.Run`（VerifyMapTime 段）之前；两者都不抽随机数。oracle 的玩家 `Run`
+        // 名义 300ms 一次、本骨架每个 world tick（200ms）一次——相位差与既有玩家散段同口径登记。
+        // S4d-3/P2 #13：段系统（`SimPlayerRunExpiry`），段位与旧内联调用完全相同。
+        let __prof_pre = self.prof_begin();
+        self.run_head_stage(|world, head| head.run(TickStage::SimPlayerRunExpiry, world));
+        record.run_state_expiries = self.take_run_state_expiries();
+        self.prof_end(TickStage::SimPlayerRunExpiry, __prof_pre);
+
+        // **`PlayObject.Run` 的重叠推挤段**（`PlayObject.Message.cs:263-285`）：
+        // 3s 周期门内 `GetXYObjCount`；`>=2` 记 `BoDuplication/DupStartTick`；
+        // `>=3 且 >3s` / `==2 且 >10s` 且 `<20s` ⇒ `CharPushed(RandomByte(8), 1)`。
+        // 位置照 oracle：在 FireHit/TwinHit 到期段之后、`base.Run` 的 VerifyMapTime 之前。
+        // 只有三处门全部通过才取数（`crate::run_gap::dup_push_dir`）；事件进 `record.pushes`。
+        let __prof_dup = self.prof_begin();
+        record.pushes.extend(self.check_dup_obj());
+        self.prof_end(TickStage::SimDup, __prof_dup);
+
+        // **S4d-1 `OutputDrain` 段（#15）**：非实体状态在这一刻整体移入 bevy `World` 的
+        // `SimState` 资源，段系统转抄完再整体移回——同一时刻只有一个所有者（设计件 §4.2）。
+        // 本段不抽 RNG、只读累积向量，因此 RNG 消费者次序与行为逐字节不变。
+        {
+            let __prof_od = self.prof_begin();
+            let record_res = TickRecordRes(std::mem::take(&mut record));
+            record = self.run_head_stage(move |world, head| {
+                world.insert_resource(record_res);
+                head.run(TickStage::OutputDrain, world);
+                world
+                    .remove_resource::<TickRecordRes>()
+                    .expect("OutputDrain 后必须归还 TickRecordRes（tick 边界契约）")
+                    .0
+            });
+            self.prof_end(TickStage::OutputDrain, __prof_od);
+        }
+        // 宿主段（P21 → P22 → [P24] → P25 → P26 → P27 → P31 → P32；oracle 行号见
+        // [`World::tick`] 文档）在 [`World::tick_head`] 与 [`World::tick_tail`] 之间由
+        // `bins/game-svr` 驱动。直接调用 [`World::tick`] 时该段为空。
+        record
+    }
+
+    /// **tick 后半段**（`World::tick()` = `tick_head()` + 宿主段 + `tick_tail()`）。
+    ///
+    /// 段序照 oracle `base.Run()`（`BaseObject.Base.cs:25-316`），且全部在 P21..P32 之后：
+    ///
+    /// 1. **玩家死亡结算**（`:70-73` `if (WAbil.HP == 0) Die();`）—— P32（`PlayObject.Message.cs:747-763`）
+    ///    复活门已在宿主段跑过；本段才置 `Death`（非玩家的死亡在 [`World::tick_head`] 已结算）。
+    /// 2. **`VerifyMapTime` + HP/MP 超上限钳制**（`:223-245`）——oracle 的 `VerifyTick` 30s 门下先
+    ///    `Envir.VerifyMapTime`，再 `HP > MaxHP ⇒ MaxHP-1` / `MP > MaxMP ⇒ MaxMP-1` + `HealthSpellChanged()`。
+    ///    （Rust 此前只建模 `:223-228`，本提交补 `:230-245`；钳制帧进
+    ///    [`TickRecord::verify_health_changes`]。）
+    /// 3. **AOI 刷新**。
+    ///
+    /// 不推进时钟（时钟在 [`World::tick_head`]）。不消费 RNG ⇒ 五批 trace 不变。
+    pub fn tick_tail(&mut self, record: &mut TickRecord) {
+        let current = std::thread::current().id();
+        match self.owner_thread {
+            None => self.owner_thread = Some(current),
+            Some(t) => assert_eq!(
+                t, current,
+                "世界 tick 必须始终在同一线程上串行执行（设计文档 §4.2：禁止并行）"
+            ),
+        }
+
+        // 0. **玩家 `BaseObject.Run` 的 `SuperMan` 回满段**（`BaseObject.Base.cs:32-36`：
+        //    `if (SuperMan) { HP = MaxHP; MP = MaxMP; }`）——oracle 在 `HP == 0 ⇒ Die()`
+        //    （`:70-73`，= 下面的玩家死亡结算）**之前**。非玩家侧的同段已在各自 `Run`
+        //    （[`Entity::run_super_man_refill`] 于 `base_object_run_monster` / NPC / 商人）调用；
+        //    玩家此前**没有**调用点 ⇒ `Entity.super_man = true`（`@3`）只挡死、不回血。
+        //    本段无写入者时是纯 no-op（`super_man` 默认 false）⇒ 既有 golden 逐字节不变。
+        // S4d-3/P2 #16：段系统（`TailSuperManRefill`），段位与旧内联调用完全相同。
+        let __prof_sm = self.prof_begin();
+        self.run_tail_stage(|world, tail| tail.run(TickStage::TailSuperManRefill, world));
+        self.prof_end(TickStage::TailSuperManRefill, __prof_sm);
+
+        // 1. 玩家死亡结算（oracle `base.Run:70-73`）：在 P32 复活门之后。
+        self.tail_phase_log.push(TailPhase::Die);
+        // S4d-3/P3b #17：段系统（`TailPlayerDeaths`），段位与旧内联调用完全相同。
+        {
+            let __prof_pd = self.prof_begin();
+            let record_res = TickRecordRes(std::mem::take(record));
+            *record = self.run_tail_stage(move |world, tail| {
+                world.insert_resource(record_res);
+                tail.run(TickStage::TailPlayerDeaths, world);
+                world
+                    .remove_resource::<TickRecordRes>()
+                    .expect("TailPlayerDeaths 后必须归还 TickRecordRes（段边界契约）")
+                    .0
+            });
+            self.prof_end(TickStage::TailPlayerDeaths, __prof_pd);
+        }
+
+        // 2. **玩家 `BaseObject.Run` 的 VerifyMapTime 段**（oracle `WorldServer.cs:697` 每 ~200ms
+        // 驱动一次 `playObject.Run()`，末尾无条件 `base.Run()`）——必须在 AOI 扫描之前刷新
+        // 静止玩家的格子时间（`BaseObject.Base.cs:223-228`）。30s 门与 `:230-245` 钳制在
+        // `verify_map_time` 内。
+        self.tail_phase_log.push(TailPhase::VerifyMapTime);
+        // S4d-3/P4 #18：段系统（`TailVerifyMapTime`），段位与旧内联调用完全相同。
+        let __prof_vmt = self.prof_begin();
+        self.run_tail_stage(|world, tail| tail.run(TickStage::TailVerifyMapTime, world));
+        self.prof_end(TickStage::TailVerifyMapTime, __prof_vmt);
+        // 钳制段触发的玩家 `HealthSpellChanged()`（`BaseObject.cs:700-703` 只对 Play 发帧）。
+        record
+            .verify_health_changes
+            .append(&mut self.pending_verify_health_changes);
+
+        // AOI 刷新：`TickStage::OutputAoi` 系统（S3b）。地图表在 tick 边界一次性移入
+        // `MapsRes`，跑完移回 facade —— 同一时刻只有一个所有者（设计件 §4.2）。
+        {
+            let __prof_stage = self.prof_begin();
+            let maps = std::mem::take(&mut self.maps);
+            let events = std::mem::take(&mut self.fire_burn_events);
+            let (clock_ms, clear_drop_on_floor_item_time, event_sight) = (
+                self.clock_ms,
+                self.clear_drop_on_floor_item_time,
+                self.event_sight,
+            );
+            let (maps_back, params_back, out) = self.run_tail_stage(move |world, tail| {
+                world.insert_resource(crate::MapsRes(maps));
+                world.insert_resource(crate::aoi::AoiParams {
+                    clock_ms,
+                    clear_drop_on_floor_item_time,
+                    event_sight,
+                    events,
+                });
+                tail.run(TickStage::OutputAoi, world);
+                (
+                    world
+                        .remove_resource::<crate::MapsRes<MapGrid>>()
+                        .map(|r| r.0)
+                        .unwrap_or_default(),
+                    world.remove_resource::<crate::aoi::AoiParams>(),
+                    world
+                        .remove_resource::<crate::aoi::AoiOut>()
+                        .unwrap_or_default(),
+                )
+            });
+            self.maps = maps_back;
+            if let Some(params) = params_back {
+                self.fire_burn_events = params.events;
+                self.event_sight = params.event_sight;
+            }
+            record.aoi_order.extend(out.aoi_order);
+            record.hides.extend(out.hides);
+            record.hide_observer_kinds.extend(out.hide_observer_kinds);
+            record.event_hides.extend(out.event_hides);
+            self.prof_end(TickStage::OutputAoi, __prof_stage);
+        }
+
+        self.last_tick = record.clone();
+    }
+
+    /// `Envirnoment.VerifyMapTime`（`Envirnoment.cs:858-897`）的等价物 + `BaseObject.Run` 的
+    /// 30s 门（`BaseObject.Base.cs:223-228`）。
+    ///
+    /// 语义逐条照抄：
+    /// 1. `(now - VerifyTick) > 30*1000` 才动作（严格大于；命中先 `VerifyTick = now`）；
+    /// 2. 在本格 `ObjList` 中按**下标升序**扫描：`now - AddTime >= 60s` 的项**先删除**；
+    ///    C# 是 `for (i = 0; i < Count; i++)` 里的 `continue` ⇒ 删除后 `i++` **会跳过**被前移的
+    ///    下一项（照抄该怪癖，不"修"）；
+    /// 3. 未过期的项里若 `ActorObject && CellObjId == ActorId` ⇒ `AddTime = now` 并停止；
+    /// 4. 循环结束仍未命中（`boVerify == false`）⇒ `AddMapObject` 重新登记（`AddMapObject`
+    ///    同时置 `AddToMaped`/`AddObject`）。
+    ///
+    /// `DenyRefStatus` 本仓未建模（oracle ctor `:453` 恒 false、全仓无写点）⇒ 恒执行刷新。
+    /// **不消费随机数**（纯状态演进），因此五批 RNG trace / golden 逐字节不变。
+    ///
+    /// 返回 `true` = 本次过了 30s 门并执行了刷新；`false` = 未到门 / actor 不存在。
+    /// **P4**：`verify_map_time` 的 facade/段共用实现（30s 门 + `VerifyMapTime` + 钳制，逐句与旧方法相同）。
+    pub(crate) fn verify_map_time_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) -> bool {
+        let now = sim.clock_ms;
+        let Some(e) = access.get(actor_id) else {
+            return false;
+        };
+        // `BaseObject.Base.cs:223`：`(HUtil32.GetTickCount() - VerifyTick) > 30 * 1000`。
+        if now - e.verify_tick <= VERIFY_MAP_TIME_MS {
+            return false;
+        }
+        let (x, y, map_id) = (e.x, e.y, e.map_id);
+        // `baseObject.CellType`：`PlayObject` = Play、`AnimalObject` = Monster、`NormNpc` = Merchant。
+        let cell_type = entity_cell_type(&e);
+        if let Some(b) = access.map_binding_mut(actor_id) {
+            b.verify_tick = now;
+        }
+        if let Some(map) = sim.maps.get_mut(map_id) {
+            let mut bo_verify = false;
+            {
+                let (cell, cell_success) = map.get_cell_info_mut(x, y);
+                if cell_success && cell.is_available() {
+                    let mut i = 0usize;
+                    while i < cell.count() {
+                        let obj = cell.obj_list[i];
+                        if now - obj.add_time >= CELL_OBJECT_EXPIRE_MS {
+                            // `boVerify = true; cellInfo.Remove(i);`
+                            bo_verify = true;
+                            cell.remove_at(i);
+                            if cell.count() > 0 {
+                                // C# `for` 的 `continue` 仍执行 `i++` ⇒ 跳过前移后的下一项。
+                                i += 1;
+                                continue;
+                            }
+                            cell.clear();
+                            break;
+                        }
+                        if obj.actor_object && obj.cell_obj_id == actor_id {
+                            // `cellInfo.Update(i, ref cellObject)` ⇒ `AddTime = GetTickCount()`。
+                            cell.obj_list[i].add_time = now;
+                            bo_verify = true;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+            }
+            if !bo_verify {
+                // `AddMapObject`（`Envirnoment.cs:252-296`）：成功时置 `AddToMaped`/`AddObject`。
+                if map.add_map_object(x, y, cell_type, actor_id, now) {
+                    if let Some(b) = access.map_binding_mut(actor_id) {
+                        b.add_to_mapped = true;
+                    }
+                }
+            }
+        }
+        // **PL-1**：`base.Run` 的 `:230-245` 钳制段——在**同一个 30s `VerifyTick` 门内**、
+        // `VerifyMapTime` 之后（oracle 行序）。此前 Rust 只建模 `:223-228`（缺口登记于 spike §1.1）。
+        Self::clamp_overflow_abilitys_impl(access, sim, actor_id);
+        true
+    }
+
+    /// 旧 facade 入口（测试直接驱动用）：委托 [`Self::verify_map_time_impl`]。
+    pub fn verify_map_time(&mut self, actor_id: i32) -> bool {
+        Self::verify_map_time_impl(&mut self.entities, &mut self.sim, actor_id)
+    }
+
+    /// `BaseObject.Run` 的 HP/MP 超上限钳制（`src/M2Server/Actor/BaseObject.Base.cs:230-245`）：
+    ///
+    /// ```csharp
+    /// bool needRecalc = false;
+    /// if (WAbil.HP > WAbil.MaxHP) { needRecalc = true; WAbil.HP = (ushort)(WAbil.MaxHP - 1); }
+    /// if (WAbil.MP > WAbil.MaxMP) { needRecalc = true; WAbil.MP = (ushort)(WAbil.MaxMP - 1); }
+    /// if (needRecalc) HealthSpellChanged();
+    /// ```
+    ///
+    /// 照抄点：① 两分支独立判、改的是 `MaxHP-1` / `MaxMP-1`（不是 `MaxHP`）；② `ushort` 减法在
+    /// C# 先提升为 int 再截断 ⇒ 用 `wrapping_sub(1)`（`MaxHP == 0` 时得到 65535，不 panic）；
+    /// ③ `HealthSpellChanged()` 的第一支只对 `Race == Play` 发帧（`BaseObject.cs:700-703`）；
+    ///    第二支 `if (ShowHp)` **没有 race 门** ⇒ 非 Play 实体在 `ShowHp` 时同样广播 53
+    ///    （进 [`World::pending_show_hp_health_changes`]）。
+    ///
+    /// 调用点：仅 [`World::verify_map_time`]（30s 门内、`VerifyMapTime` 之后）。不消费 RNG。
+    /// **P4**：HP/MP 超上限钳制（`:230-245`）的 facade/段共用实现。
+    fn clamp_overflow_abilitys_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) {
+        let Some(e) = access.get_mut(actor_id) else {
+            return;
+        };
+        let mut hp_clamped = false;
+        let mut mp_clamped = false;
+        if e.vitals.hp > e.vitals.max_hp {
+            e.vitals.hp = e.vitals.max_hp.wrapping_sub(1);
+            hp_clamped = true;
+        }
+        if e.vitals.mp > e.vitals.max_mp {
+            e.vitals.mp = e.vitals.max_mp.wrapping_sub(1);
+            mp_clamped = true;
+        }
+        let is_play = e.appearance.race == crate::entity::ACTOR_RACE_PLAY;
+        let show_hp = e.buff.show_hp;
+        let (id, hp, mp) = (e.id, e.vitals.hp, e.vitals.mp);
+        if (hp_clamped || mp_clamped) && is_play {
+            sim.pending_verify_health_changes
+                .push((id, hp, mp, hp_clamped, mp_clamped));
+        } else if (hp_clamped || mp_clamped) && show_hp {
+            // `BaseObject.cs:706-708` 第二支：`ShowHp` 无 race 门 ⇒ ±12 广播 53。
+            sim.pending_show_hp_health_changes.push((id, hp, mp));
+        }
+    }
+
+    #[allow(dead_code)] // 段路径走 `Self::clamp_overflow_abilitys_impl`
+    fn clamp_overflow_abilitys(&mut self, actor_id: i32) {
+        Self::clamp_overflow_abilitys_impl(&mut self.entities, &mut self.sim, actor_id)
+    }
+
+    /// `Envirnoment.GetXYObjCount`（`src/M2Server/Maps/Envirnoment.cs:1062-1093`）的世界侧入口：
+    /// 统计 `(x, y)` 格上 `!Ghost && !Death && !FixedHideMode && !ObMode` 的 actor 对象数。
+    ///
+    /// **建模差异（登记）**：`CastleDoor` 的 `HoldPlace` 支（门建筑只有在 `HoldPlace && !Ghost &&
+    /// !Death && !FixedHideMode && !ObMode` 时计数）未建模——本仓的城门/城墙不在 `EntityStore`
+    /// （见 `crate::castle` 的独立结构体），故走普通 actor 支。
+    #[must_use]
+    pub fn xy_obj_count(&self, map_id: usize, x: i32, y: i32) -> i32 {
+        crate::monai::count_at_cell(self, map_id, x, y)
+    }
+
+    /// `PlayObject.Run` 的重叠推挤段（`PlayObject.Message.cs:263-285`），按玩家槽位顺序。
+    ///
+    /// 逐行口径（三处门都以 `>` 严格比较，照 oracle 原式）：
+    ///
+    /// ```text
+    /// :263 if ((now - CheckDupObjTick) > 3000) {
+    /// :265   CheckDupObjTick = now;
+    /// :266   GetStartPoint();
+    /// :267   tObjCount = Envir.GetXYObjCount(CurrX, CurrY);
+    /// :268   if (tObjCount >= 2) { if (!BoDuplication) { BoDuplication = true; DupStartTick = now; } }
+    /// :276   else { BoDuplication = false; }
+    /// :280   if ((tObjCount >= 3 && now - DupStartTick > 3000 || tObjCount == 2 && now - DupStartTick > 10000)
+    /// :281       && (now - DupStartTick < 20000))
+    /// :283     CharPushed(RandomNumber.RandomByte(8), 1);
+    /// ```
+    ///
+    /// **`GetStartPoint()` 处置（登记）**：`PlayObject.Base.cs:704-723` 的它只写
+    /// `HomeMap/HomeX/HomeY`——`PvpLevel() >= 2` ⇒ `Config.RedHome*`，否则按当前 `Envir.MapName`
+    /// 在 `M2Share.StartPointList` 里顺序查（`OrdinalIgnoreCase`）；**零取数**，且不参与
+    /// `tObjCount`/推挤门。本仓的落点由**宿主**解析（`bins/game-svr/src/homemap.rs` +
+    /// `MapRegistry::id_of(CharacterData.HomeMap)`，登录/回城时一次性给 `MapRandomMove`），
+    /// 世界侧没有 per-entity `HomeMap` 状态 ⇒ 本段**不建模**（不影响本函数判据）。
+    ///
+    /// **取数**：只有三处门全部通过才调用 [`crate::run_gap::dup_push_dir`]（= C# `RandomByte(8)`，
+    /// `random.Next(8)` **恰一次**、值域 `0..=7`）；随后 [`World::char_pushed_core`] 逐格发
+    /// `RM_PUSH`。玩家选取 = `Race == Play && !Ghost`（oracle `PlayObjectList` 不含幽灵）。
+    pub fn check_dup_obj(&mut self) -> Vec<crate::action::PushEvent> {
+        // S4d-3/P3a：段系统（`SimDup`），段位与旧内联调用完全相同（`tick_head` 的同一行）。
+        self.run_head_stage(|world, head| head.run(TickStage::SimDup, world));
+        self.take_stage_pushes()
+    }
+
+    /// `Envirnoment.CanFly(nsX, nsY, ndX, ndY)`（`Envirnoment.cs:1371-1393`）。
+    ///
+    /// **oracle 原样照抄（含两处怪行为）**：
+    /// - `r30 = (ndY - ndX) / 10.0`——第二轴减的是 **ndX**（不是 `nsY`），照搬；
+    /// - 循环体里 `nsX/nsY` **从不推进**，10 次迭代检查的是**同一格** ⇒ 首轮失败即失败，
+    ///   首轮通过则后续 9 轮同样通过。判据只看 `CanWalk(flyX, flyY, true)`（忽略角色）。
+    #[must_use]
+    pub fn can_fly(&self, map_id: usize, ns_x: i32, ns_y: i32, nd_x: i32, nd_y: i32) -> bool {
+        Self::can_fly_impl(&self.entities, &self.sim, map_id, ns_x, ns_y, nd_x, nd_y)
+    }
+
+    /// **P6b2**：`can_fly` 的 facade/段共用实现（怪物 AI 段共用）。
+    pub(crate) fn can_fly_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        ns_x: i32,
+        ns_y: i32,
+        nd_x: i32,
+        nd_y: i32,
+    ) -> bool {
+        let r28 = f64::from(nd_x - ns_x) / 1.0e1;
+        let r30 = f64::from(nd_y - nd_x) / 1.0e1;
+        let fly_x = mir2_shared::hutil::round(f64::from(ns_x) + r28);
+        let fly_y = mir2_shared::hutil::round(f64::from(ns_y) + r30);
+        // `CanWalk(..., boFlag=true)`：`cellSuccess && cellInfo.Valid` ⇒ 忽略角色阻挡。
+        Self::can_walk_at_impl(access, sim, map_id, fly_x, fly_y, true)
+    }
+
+    /// **P3a/P5**：`check_dup_obj` 的共用核心（facade `EntityStore` 与 `SimDup` 段的 `StageAccess`
+    /// 同走 `EntityAccess`——单一实现，无 `DupAccess` 第二套接口）。
+    ///
+    /// 逐行对应旧 `World::check_dup_obj`：槽位序筛 `Race == Play && !Ghost`；3s 门严格 `>`；
+    /// 过门先刷 `check_dup_obj_tick = now`；`GetXYObjCount`（`count_at_cell_with`）；`>=2` 首次
+    /// 置位 `BoDuplication/DupStartTick`、`<2` 只清 `BoDuplication`；推挤门
+    /// `((>=3 && elapsed>3000) || (==2 && elapsed>10000)) && elapsed<20000`；
+    /// 过门才抽 `RandomByte(8)` 并调 `char_pushed_core`。
+    fn check_dup_obj_core<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+    ) -> Vec<crate::action::PushEvent> {
+        let now = sim.clock_ms;
+        let mut ids: Vec<i32> = Vec::new();
+        for id in access.order_ids() {
+            if let Some(e) = access.get(id) {
+                if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
+                    ids.push(id);
+                }
+            }
+        }
+        let mut pushes = Vec::new();
+        for id in ids {
+            let Some((map_id, x, y)) = access.get(id).map(|e| (e.map_id, e.x, e.y)) else {
+                continue;
+            };
+            let Some(d) = access.dup_state(id) else {
+                continue;
+            };
+            let (last, bo, start) = (d.check_dup_obj_tick, d.bo_duplication, d.dup_start_tick);
+            // `:263` 严格 `>`：恰 3000ms 不检查。
+            if now - last <= 3000 {
+                continue;
+            }
+            // `:265` `CheckDupObjTick = GetTickCount()`（本 tick 内同一 `now`）。
+            if let Some(d) = access.dup_state_mut(id) {
+                d.check_dup_obj_tick = now;
+            }
+            // `:267` `tObjCount = Envir.GetXYObjCount(CurrX, CurrY)`（含自己）。
+            let t_obj_count = crate::monai::count_at_cell_with(&sim.maps, map_id, x, y, |cid| {
+                Self::is_blocking(access, cid)
+            });
+            // `:268-279`：`>=2` 首次置位；`<2` 清 `BoDuplication`（`DupStartTick` 不复位）。
+            let start_after = if t_obj_count >= 2 {
+                if bo {
+                    start
+                } else {
+                    if let Some(d) = access.dup_state_mut(id) {
+                        d.bo_duplication = true;
+                        d.dup_start_tick = now;
+                    }
+                    now
+                }
+            } else {
+                if let Some(d) = access.dup_state_mut(id) {
+                    d.bo_duplication = false;
+                }
+                start
+            };
+            let elapsed = now - start_after;
+            // `:280-281`：C# 原式 `(A && B || C && D) && E`（`&&` 优先于 `||`）。
+            let should_push = ((t_obj_count >= 3 && elapsed > 3000)
+                || (t_obj_count == 2 && elapsed > 10000))
+                && elapsed < 20000;
+            if should_push {
+                // `:283` 实参求值顺序：先取数，再 `CharPushed`。
+                let dir = crate::run_gap::dup_push_dir(&mut sim.rng);
+                pushes.extend(Self::char_pushed_core(access, sim, id, dir, 1));
+            }
+        }
+        pushes
+    }
+
+    /// 阻挡判定（`CanWalk`/`MoveToMovingObject` 的集合）：`!Ghost && !Death && !FixedHideMode && !ObMode`。
+    fn is_blocking<A: crate::entity::EntityAccess>(access: &A, id: i32) -> bool {
+        access
+            .get(id)
+            .is_some_and(|o| !o.ghost && !o.death && !o.fixed_hide_mode && !o.ob_mode)
+    }
+
+    /// `BaseObject.CharPushed(nDir, nPushCount)`（`src/M2Server/Actor/BaseObject.cs:854-897`）的
+    /// 世界侧**逐句**实现（`Command::Push` 与重叠推挤共用）。
+    ///
+    /// 逐句：
+    ///
+    /// ```text
+    /// :857 Dir = nDir;
+    /// :858 nBackDir = GetBackDir(nDir);
+    /// :859 for i in 0..nPushCount {
+    /// :861   GetFrontPosition(ref nx, ref ny)                  // 用当前 Dir(= nDir) 与 CurrX/Y
+    /// :862   if (Envir.CanWalk(nx, ny, false)) {
+    /// :864     if (Envir.MoveToMovingObject(CurrX,CurrY,this,nx,ny,false)) {
+    /// :866       CurrX = nx; CurrY = ny;
+    /// :871       SendRefMsg(RM_PUSH, nBackDir, CurrX, CurrY, 0, "");
+    /// :873       result++;
+    /// :874       if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;
+    /// :878     } else break; :882 } else break;
+    /// :890 Dir = nBackDir;
+    /// :891 if (result == 0) Dir = olddir;
+    /// ```
+    ///
+    /// `MoveToMovingObject` 的阻挡集合与 `CanWalk` 同源（`!Ghost && !Death && !FixedHideMode &&
+    /// !ObMode`），故 `CanWalk` 通过后格子簿记必成功；这里仍走 `MapGrid::move_object`（源格摘除 +
+    /// 目标格追加），**不**经 `try_step`（后者额外挡非玩家 `MapRoute`，而 oracle
+    /// `MoveToMovingObject` 不挡——照抄）。
+    ///
+    /// **建模差异（登记）**：`CastleDoor.HoldPlace` 阻挡支不建模（城门不在 `EntityStore`）。
+    /// **P3a/P5-A2**：`CharPushed` 的共用核心（逐格推进；RNG 只在调用方，本函数零抽数）。
+    ///
+    /// 调用方：`Command::Push`（经 `push_now_impl`）、`SimDup` 段的 `check_dup_obj_core`、
+    /// slave 的 `RM_DELAYPUSHED`。单一实现，`EntityAccess` 同时覆盖 `EntityStore` 与 `StageAccess`。
+    pub(crate) fn char_pushed_core<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        n_dir: u8,
+        n_push_count: u8,
+    ) -> Vec<crate::action::PushEvent> {
+        let Some((old_dir, mut x, mut y, map_id, race)) = access
+            .get(actor_id)
+            .map(|e| (e.ai.dir, e.x, e.y, e.map_id, e.race))
+        else {
+            return Vec::new();
+        };
+        let Some((w, h)) = sim.maps.get(map_id).map(|m| (m.width, m.height)) else {
+            return Vec::new();
+        };
+        // `:857 Dir = nDir;`（先落，末尾按 result 决定是否复原）。
+        if let Some(e) = access.get_mut(actor_id) {
+            e.ai.dir = n_dir;
+        }
+        let back = crate::magic::back_dir(n_dir);
+        let mut out = Vec::new();
+        for _ in 0..n_push_count {
+            let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
+            // `:862 Envir.CanWalk(nx, ny, false)`（含自身；不可走即 break）。
+            if !Self::can_walk_cell_core(access, sim, map_id, nx, ny) {
+                break;
+            }
+            // `:864 Envir.MoveToMovingObject(CurrX, CurrY, this, nx, ny, false)`。
+            let now = sim.clock_ms;
+            let moved = {
+                let Some(map) = sim.maps.get_mut(map_id) else {
+                    break;
+                };
+                map.move_object(
+                    crate::map::MoveRequest {
+                        from_x: x,
+                        from_y: y,
+                        actor_id,
+                        to_x: nx,
+                        to_y: ny,
+                        ignore_block: false,
+                        add_time: now,
+                        // `CheckDupObj` 只对玩家生效 ⇒ cert 的 `CellType` 恒 `Play`。
+                        cert_cell_type: crate::map::CellType::Play,
+                    },
+                    |cid| Self::is_blocking(access, cid),
+                )
+            };
+            if !moved {
+                break;
+            }
+            x = nx;
+            y = ny;
+            if let Some(t) = access.transform_mut(actor_id) {
+                t.x = x;
+                t.y = y;
+            }
+            // `:874-877 if (Race >= ActorRace.Animal) WalkTick = WalkTick + 800;`
+            if race >= crate::entity::ACTOR_RACE_ANIMAL {
+                if let Some(e) = access.get_mut(actor_id) {
+                    e.ai.walk_tick += 800;
+                }
+            }
+            // `:871 SendRefMsg(RM_PUSH, nBackDir, CurrX, CurrY, 0, "")` —— 逐格一条。
+            out.push(crate::action::PushEvent {
+                actor_id,
+                dir: back,
+                x,
+                y,
+            });
+        }
+        // `:890-895 Dir = nBackDir; if (result == 0) Dir = olddir;`
+        let final_dir = if out.is_empty() { old_dir } else { back };
+        if let Some(e) = access.get_mut(actor_id) {
+            e.ai.dir = final_dir;
+        }
+        out
+    }
+
+    /// **P3a/P5-A2**：`CharPushed` 的 `CanWalk` 核心（阻挡判定走 `Self::is_blocking`）。
+    fn can_walk_cell_core<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+    ) -> bool {
+        let Some(map) = sim.maps.get(map_id) else {
+            return false;
+        };
+        if !map.cell_match(x, y) {
+            return false;
+        }
+        let (cell, ok) = map.get_cell_info(x, y);
+        // C# `if (cellSuccess && cellInfo.Valid)`；`get_cell_info` 的 `ok` 已含 `valid()`。
+        if !ok {
+            return false;
+        }
+        if !cell.is_available() {
+            return true;
+        }
+        !cell
+            .obj_list
+            .iter()
+            .any(|o| o.actor_object && Self::is_blocking(access, o.cell_obj_id))
+    }
+
+    /// 玩家 `BaseObject.Run` 的等价路径：`PlayObject.Run()` 末尾无条件 `base.Run()`
+    /// （`PlayObject.Message.cs:765`），其中的 `VerifyTick` 段
+    /// （`BaseObject.Base.cs:223-228`）对每个在场玩家每 30s 调一次
+    /// [`World::verify_map_time`]。
+    ///
+    /// oracle 的玩家 `Run` 由 `WorldServer.cs:697` 每 ~200ms 驱动；本骨架玩家没有独立的
+    /// `Run` 方法 ⇒ 在 [`World::tick`] 的 AOI 段之前补这一趟（`race == Play && !Ghost`，
+    /// `Ghost` 玩家已从 `PlayObjectList` 移除、不再 Run，见 `WorldServer.cs:708-711`）。
+    /// 30s 门在 [`World::verify_map_time`] 内 ⇒ 常态每 tick 只是一次整数比较。
+    /// **P4**：`verify_players_map_time` 的 facade/段共用实现（槽位序 + 30s 门在 `verify_map_time_impl`）。
+    pub(crate) fn verify_players_map_time_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+    ) {
+        // 槽位序收集（与旧 `iter_ref().filter(Play && !Ghost)` 同序）。
+        let mut ids: Vec<i32> = Vec::new();
+        for id in access.order_ids() {
+            if let Some(e) = access.get(id) {
+                if e.race == crate::entity::ACTOR_RACE_PLAY && !e.ghost {
+                    ids.push(id);
+                }
+            }
+        }
+        for id in ids {
+            Self::verify_map_time_impl(access, sim, id);
+        }
+    }
+
+    /// 旧 facade 入口（`tick_tail` 已走段系统；测试/宿主仍可调）。
+    #[allow(dead_code)]
+    fn verify_players_map_time(&mut self) {
+        Self::verify_players_map_time_impl(&mut self.entities, &mut self.sim)
+    }
+
+    /// 进图：实体落进 `map_id` 的格子（对应 `Envirnoment.AddMapObject`）。
+    pub fn enter_world(&mut self, actor_id: i32) -> bool {
+        Self::enter_world_impl(&mut self.entities, &mut self.sim, actor_id)
+    }
+
+    /// **P5-A2**：`enter_world` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 逐句与旧 `World::enter_world` 相同：取实体坐标/落格类型 → `map.add_map_object` →
+    /// 写回 `MapBinding.add_to_mapped`。唯一差异是接收者换成访问器（`self.entities` → `access`）。
+    pub(crate) fn enter_world_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) -> bool {
+        let Some(e) = access.get(actor_id) else {
+            return false;
+        };
+        let (x, y, map_id) = (e.x, e.y, e.map_id);
+        // **落格类型按类分派**：`BaseObject.Initialize()`（`BaseObject.Base.cs:18`）调
+        // `AddToMap()`，而 `CellType` 是对象自己的属性（`AnimalObject.cs:86`
+        // `CellType = CellType.Monster`；`PlayObject` = `Play`；`NormNpc/Merchant` = `Merchant`）。
+        // oracle `CreateMonster` 也显式用 `CellType.Monster` 登记（`WorldServer.MonGen.cs:788`）。
+        // 之前这里恒用 `Play` ⇒ 玩家 AOI 的 `baseObject.CellType == CellType.Monster`
+        // 距离门（`PlayObject.cs:3131`）对刚落图的怪永不命中。
+        let cell_type = entity_cell_type(&e);
+        let now = sim.clock_ms;
+        let Some(map) = sim.maps.get_mut(map_id) else {
+            return false;
+        };
+        if !map.add_map_object(x, y, cell_type, actor_id, now) {
+            return false;
+        }
+        if let Some(b) = access.map_binding_mut(actor_id) {
+            b.add_to_mapped = true;
+        }
+        true
+    }
+
+    /// 离开世界：从格子摘除 + 从仓库移除。
+    pub fn leave_world(&mut self, actor_id: i32) -> bool {
+        Self::leave_world_impl(&mut self.entities, &mut self.sim, actor_id)
+    }
+
+    /// **P5-A2**：`leave_world` 的 facade/段共用实现（`EntityAccess` + `StructuralAccess` + `SimState`）。
+    ///
+    /// 逐句与旧 `World::leave_world` 相同：摘格（`retain` + 空格 `clear`）→ `entities.remove`。
+    /// `remove` 是结构变更 ⇒ 段实现要求 `StructuralAccess`（与 `merchant_tick_impl` 同口径）。
+    pub(crate) fn leave_world_impl<
+        A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
+    >(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) -> bool {
+        let Some(e) = access.get(actor_id) else {
+            return false;
+        };
+        let (x, y, map_id) = (e.x, e.y, e.map_id);
+        let Some(map) = sim.maps.get_mut(map_id) else {
+            return false;
+        };
+        let (cell, success) = map.get_cell_info_mut(x, y);
+        if success {
+            let before = cell.count();
+            cell.obj_list
+                .retain(|o| !(o.actor_object && o.cell_obj_id == actor_id));
+            if cell.count() == 0 {
+                cell.clear();
+            }
+            if cell.count() == before {
+                return false;
+            }
+        }
+        access.remove(actor_id);
+        true
+    }
+
+    /// `CLEARMAPMON`：清指定地图的存活怪（`ActionOfClearMapMon`，`ExecutionProcessingSys.cs:2983-3003`
+    /// + `WorldEngine.GetMapMonster`，`WorldServer.cs:1639-1674`）。
+    ///
+    /// **候选集与顺序逐行照 oracle**：先按 `MonGenInfoThreadMap` 的遍历序（thread id 升序 →
+    /// 条目序 → `CertList` 序）**整表收集**，再逐个 `MakeGhost`（C# 也是先 `GetMapMonster`
+    /// 填 `monList` 再循环）⇒ 快照语义：本函数先固定 id 列表再改动实体。
+    ///
+    /// **过滤**：
+    /// - `!mon.Death && !mon.Ghost && mon.Envir == envir`（本仓 `entity.map_id == map_id`；
+    ///   地图名不存在由调用方先解析成 `map_id`，`FindMap == null` ⇒ 调用方零操作）；
+    /// - `mon.Master != null` ⇒ 跳过（宠物/召唤物）；
+    /// - `SystemShare.GetNoClearMonList(name)` **恒 false**（`M2Share.cs:1782-1794` 整段注释）
+    ///   ⇒ 不设过滤（与 `crates/envir` 的 no-op 实现同口径）。
+    ///
+    /// **副作用（逐怪、按序）**：
+    /// 1. `mon.NoItem = true`（禁止掉落；不是立即删实体）；
+    /// 2. `mon.MakeGhost()` = 置 `Invisible`/`Ghost` + `GhostTick = now` + `DisappearA()`；
+    /// 3. `DisappearA` 的 `SendRefMsg(RM_DISAPPEAR)`：收件人 = **清场时刻** ±`SEND_REF_MSG_RANGE`
+    ///    格内 `Race == Play && !Ghost` 的玩家（与离世广播同口径格扫），逐条登记进
+    ///    [`SessionRegistry::push_depart`]，宿主同点出 `SM_DISAPPEAR(30)`。
+    ///
+    /// `CertList` 条目**保留**（oracle 同）：`Ghost` 的怪由 [`crate::mongen::process_cert_lists`]
+    /// 到期释放、`Invisible` 的可复活怪走 `ReAliveEx`。不消费随机数。
+    pub fn clear_map_monsters(
+        &mut self,
+        map_id: usize,
+        state: &crate::mongen::MonGenState,
+    ) -> Vec<crate::mongen::ClearMapMonRecord> {
+        // ① 候选快照（oracle 先 `GetMapMonster` 收集、后循环 MakeGhost）。
+        let mut ids: Vec<i32> = Vec::new();
+        for thread in state.threads.values() {
+            for &entry_idx in &thread.entries {
+                let Some(entry) = state.entries.get(entry_idx) else {
+                    continue;
+                };
+                for &id in &entry.cert_list {
+                    let Some(e) = self.entities.get(id) else {
+                        continue;
+                    };
+                    if e.death || e.ghost || e.map_id != map_id {
+                        continue;
+                    }
+                    if e.master.is_some() {
+                        continue;
+                    }
+                    ids.push(id);
+                }
+            }
+        }
+        // ② 逐个 MakeGhost（帧面收件人在**清场时刻**格扫；oracle `DisappearA` 同步广播）。
+        let mut out = Vec::with_capacity(ids.len());
+        for id in ids {
+            let Some((x, y, name, can_re_alive)) = self
+                .entities
+                .get(id)
+                .map(|e| (e.x, e.y, e.name.clone(), e.can_re_alive))
+            else {
+                continue;
+            };
+            let observers = crate::session::send_ref_msg_targets_at(
+                self,
+                id,
+                map_id,
+                x,
+                y,
+                crate::session::SEND_REF_MSG_RANGE,
+            );
+            for observer in observers {
+                self.sessions.push_depart(observer, id);
+            }
+            if let Some(e) = self.entities.get_mut(id) {
+                e.drop.no_item = true;
+            }
+            crate::monai::make_ghost(self, id);
+            out.push(crate::mongen::ClearMapMonRecord {
+                actor_id: id,
+                name,
+                x,
+                y,
+                can_re_alive,
+            });
+        }
+        out
+    }
+
+    /// `BaseObject.DisappearA()` 的格子面（`BaseObject.cs:1519-1522`）：
+    /// `Envir.DeleteFromMap(CurrX, CurrY, CellType, ActorId, this)`。
+    ///
+    /// 只摘格、**不删实体**（oracle 对象仍被 `MonGen.CertList` 持有，可复活）。帧面
+    /// `SendRefMsg(RM_DISAPPEAR)` 由 AOI 的视野差集在下一 tick 表现（本函数不产生帧记录）。
+    /// oracle 的 `DisappearA` 不改 `AddToMaped`；本仓用 `add_to_mapped` 表示「已落格」，
+    /// 摘格后同步清位以保持不变量（登记：非逐字段等价，仅本仓内部状态位）。
+    pub fn disappear_a(&mut self, actor_id: i32) -> bool {
+        let World { entities, sim, .. } = self;
+        Self::disappear_a_impl(entities, sim, actor_id)
+    }
+
+    /// **P6a2b**：`DisappearA` 的格子面 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+    ///
+    /// [`crate::monai::make_ghost_impl`]（`SimNpc` 段的死亡实体 `MakeGhost` 支）走本函数；
+    /// 摘格算法与 facade 逐句相同（`maps` 从 `SimState` 取，`add_to_mapped` 走 `map_binding_mut`）。
+    pub(crate) fn disappear_a_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+    ) -> bool {
+        let Some(e) = access.get(actor_id) else {
+            return false;
+        };
+        let (x, y, map_id) = (e.x, e.y, e.map_id);
+        let Some(map) = sim.maps.get_mut(map_id) else {
+            return false;
+        };
+        let (cell, success) = map.get_cell_info_mut(x, y);
+        let mut removed = false;
+        if success {
+            let before = cell.count();
+            cell.obj_list
+                .retain(|o| !(o.actor_object && o.cell_obj_id == actor_id));
+            if cell.count() == 0 {
+                cell.clear();
+            }
+            removed = cell.count() != before;
+        }
+        if let Some(b) = access.map_binding_mut(actor_id) {
+            b.add_to_mapped = false;
+        }
+        removed
+    }
+
+    /// Ghost 5 分钟门后释放实体（`WorldServer.MonGen.cs:320-333` 的 `CertList.RemoveAt`
+    /// + 对象失引用）：摘格 + 从实体仓库移除。不消费随机数。
+    pub fn release_entity(&mut self, actor_id: i32) -> bool {
+        // `ProcessRunCount` 旁挂项随实体一起清（id 单调不复用，删除只为控内存）。
+        self.process_run_counts.remove(actor_id);
+        self.disappear_a(actor_id);
+        self.entities.remove(actor_id).is_some()
+    }
+
+    /// 在指定图/格落位（先摘旧格）。`CellType` 取 [`entity_cell_type`]（怪 = `Monster`）。
+    fn place_actor_at(&mut self, actor_id: i32, x: i32, y: i32, now: i64) -> bool {
+        self.disappear_a(actor_id);
+        let Some(e) = self.entities.get(actor_id) else {
+            return false;
+        };
+        let map_id = e.map_id;
+        let cell_type = entity_cell_type(&e);
+        // oracle `CurrX/CurrY` 在 `AddMapObject` 之前就已写入（`BaseObject.cs:2674-2676`）。
+        if let Some(t) = self.entities.transform_mut(actor_id) {
+            t.x = x;
+            t.y = y;
+        }
+        let Some(map) = self.maps.get_mut(map_id) else {
+            return false;
+        };
+        if !map.add_map_object(x, y, cell_type, actor_id, now) {
+            return false;
+        }
+        if let Some(b) = self.entities.map_binding_mut(actor_id) {
+            b.add_to_mapped = true;
+        }
+        true
+    }
+
+    /// `Envirnoment.CanWalk(x, y, boFlag)` 的等价物。
+    ///
+    /// `ignore_actors = true`（oracle `boFlag` 支）：只判 `cellSuccess && Valid`；
+    /// `false`：再排除格上的活体（`!Ghost && !Death && !FixedHideMode && !ObMode`）。
+    pub(crate) fn can_walk_at(&self, map_id: usize, x: i32, y: i32, ignore_actors: bool) -> bool {
+        Self::can_walk_at_impl(&self.entities, &self.sim, map_id, x, y, ignore_actors)
+    }
+
+    /// **P6b2**：`can_walk_at` 的 facade/段共用实现（怪物 AI 段共用）。
+    pub(crate) fn can_walk_at_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        x: i32,
+        y: i32,
+        ignore_actors: bool,
+    ) -> bool {
+        let Some(map) = sim.maps.get(map_id) else {
+            return false;
+        };
+        let (cell, success) = map.get_cell_info(x, y);
+        if !success {
+            return false;
+        }
+        if ignore_actors {
+            return true;
+        }
+        for obj in &cell.obj_list {
+            if !obj.actor_object {
+                continue;
+            }
+            if let Some(e) = access.get(obj.cell_obj_id) {
+                if !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode {
+                    return false;
+                }
+            }
+        }
+        true
+    }
+
+    /// `BaseObject.ReAliveEx(MonGenInfo)`（`BaseObject.cs:2466-2750`）的已建模子集。
+    ///
+    /// 已建模：字段复位（`Gold=0`/`ShowHp=false`/`StoneMode=false`/`FixedHideMode=false`/
+    /// `HP=MaxHP`/`MP=MaxMP`/`Death=false`/`Invisible=false`），`Animal` 的肉质重掷与
+    /// race 51/52/53/95/96/97 的 switch 抽数、race 54 的 `Animal=true`，
+    /// `monGen.X/Range` 位置重抽（2 抽）、`CanWalk(...,true)` + 回退循环（含
+    /// `Random(Width/2)`/`Random(Height/2)` 抽数）、`AddToMap`/`AddMapObject`、
+    /// `RM_TURN` 帧（[`crate::mongen::ReviveOutcome::frames`]）。
+    ///
+    /// **未建模（登记）**：`WAbil=Abil`/`RecalcAbilitys()`（本仓怪属性静态）、`NoItem`/
+    /// `Skeleton`/各专用怪标志复位（`MagicMonster.DupMode`/`WallStructure.SetMapFlaged` 等）、
+    /// `CharStatus/StatusChanged()`、`OnEnvirnomentChanged` 的换图清位（本仓无怪换图路径 ⇒
+    /// 恒不触发）、`MonsterSayMessage(null, MonStatus.MonGen)`（oracle 对
+    /// `monsterObject == null` 直接返回，`AnimalObject.cs:280-283` ⇒ 无帧）、
+    /// `GetFeatureToLong()` 的怪物 `CharDesc`（展示层，本仓怪物帧面未建模）。
+    ///
+    /// 返回 `None`：实体不存在或地图不存在（oracle `if (Envir == null) return false;`）。
+    pub fn revive_monster(
+        &mut self,
+        actor_id: i32,
+        mon_gen_x: i16,
+        mon_gen_y: i16,
+        range: u8,
+        now: i64,
+    ) -> Option<crate::mongen::ReviveOutcome> {
+        let (race, animal_now, map_id) = self.entities.get(actor_id).map(|e| {
+            (
+                e.race,
+                e.ai.animal || crate::monai::is_animal_race(e.race),
+                e.map_id,
+            )
+        })?;
+        let (width, height) = {
+            let map = self.maps.get(map_id)?;
+            (map.width, map.height)
+        };
+        // 1) `if (Animal) { MeatQuality = Random(3500) + 3000; }`（`BaseObject.cs:2568-2570`）。
+        let mut meat_quality = None;
+        if animal_now {
+            meat_quality = Some(self.rng.random_below(3500) + 3000);
+        }
+        // 2) `switch (Race)`（`BaseObject.cs:2572-2620`）的抽数；169/170 只改 StickMode（未建模，无抽）。
+        //
+        // 同一 `switch` 里 `case 51/52/53` 还写 `BodyLeathery`（`:2583/2593/2599`：51 ⇒ 50、
+        // 52/53 ⇒ 150）——该 `switch` **没有 default**，其余 race 保留原值（本仓同口径）。
+        let mut body_leathery = None;
+        match race {
+            51 => {
+                meat_quality = Some(self.rng.random_below(3500) + 3000);
+                body_leathery = Some(50);
+            }
+            52 => {
+                meat_quality = Some(if self.rng.random_below(30) == 0 {
+                    self.rng.random_below(20000) + 10000
+                } else {
+                    self.rng.random_below(8000) + 8000
+                });
+                body_leathery = Some(150);
+            }
+            53 => {
+                meat_quality = Some(self.rng.random_below(8000) + 8000);
+                body_leathery = Some(150);
+            }
+            95 => {
+                self.rng.random_below(2);
+            }
+            96 => {
+                self.rng.random_below(4);
+            }
+            97 => {
+                self.rng.random_below(2);
+            }
+            _ => {}
+        }
+
+        // 3) 字段复位（`BaseObject.cs:2468-2479` + `:2678-2687`）。
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.life_cycle.death = false;
+            // `BaseObject.Die`（`BaseObject.Base.cs:318-345`）**每次**死亡都无条件置 `Death`/`DeathTick`，
+            // 复活后 `CanReAlive` 仍为 true ⇒ oracle 允许「死→复活→再死」无限循环。本仓的死亡结算是
+            // 一次性闩锁（`settle_deaths` 的 `!death_settled` 过滤），复活必须把它清掉，否则第二次死亡
+            // 永不结算（复验 F1：复活即免死）。
+            e.life_cycle.death_settled = false;
+            e.flags.invisible = false;
+            e.life_cycle.ghost = false;
+            e.vitals.hp = e.vitals.max_hp;
+            e.vitals.mp = e.vitals.max_mp;
+            e.drop.gold = 0;
+            e.buff.show_hp = false;
+            // `ReAliveEx` 的 `Skeleton = false`（`BaseObject.cs:2472`）——`BaseObject.Skeleton`
+            // 的**唯一清点**（setter 只有屠宰效果体）。
+            e.ai.skeleton = false;
+            e.flags.stone_mode = false;
+            e.flags.fixed_hide_mode = false;
+            e.life_cycle.re_alive_tick = now;
+            if let Some(bl) = body_leathery {
+                e.ai.body_leathery = bl;
+            }
+            if race == 54 {
+                // `case 54: Animal = true; break;`（`BaseObject.cs:2601-2603`）。
+                e.ai.animal = true;
+            }
+            if let Some(q) = meat_quality {
+                e.ai.meat_quality = u16::try_from(q).unwrap_or(u16::MAX);
+            }
+        }
+
+        // 4) 位置重抽（`BaseObject.cs:2640-2641`）。
+        let span = i32::from(range) * 2 + 1;
+        let mut n_x = i32::from(mon_gen_x) - i32::from(range) + self.rng.random_below(span);
+        let mut n_y = i32::from(mon_gen_y) - i32::from(range) + self.rng.random_below(span);
+        let mut frames = Vec::new();
+        let mut error_on_init = true;
+        if self.can_walk_at(map_id, n_x, n_y, true) && self.place_actor_at(actor_id, n_x, n_y, now)
+        {
+            error_on_init = false;
+            // `AddToMap()` 内部的 `RM_TURN`（`BaseObject.cs:1370-1378`；刚清 `FixedHideMode` ⇒ 恒发）。
+            // 注：oracle **无论 `AddMapObject` 成败都发**该帧；本仓只在落位成功时记帧——因
+            // `can_walk_at(...,true)` 成立即蕴含 `cell_match && Valid`（`map.rs`），`AddMapObject`
+            // 失败在此分支不可达（复验 F3），故无行为差。
+            if let Some(e) = self.entities.get(actor_id) {
+                frames.push(crate::mongen::ReviveFrame {
+                    dir: e.ai.dir,
+                    x: e.x,
+                    y: e.y,
+                });
+            }
+        }
+        // `nX2/nY2` 在首次落位尝试**之后**取（`BaseObject.cs:2684-2685`）。
+        let x2 = self.entities.get(actor_id).map_or(0, |e| e.x);
+        let y2 = self.entities.get(actor_id).map_or(0, |e| e.y);
+
+        if error_on_init {
+            let n_range = if width < 50 { 2 } else { 3 };
+            let n_range2 = if height < 250 {
+                if height < 30 {
+                    2
+                } else {
+                    20
+                }
+            } else {
+                50
+            };
+            let mut n_c = 0;
+            let mut add_obj = false;
+            loop {
+                if !self.can_walk_at(map_id, n_x, n_y, false) {
+                    if width - n_range2 - 1 > n_x {
+                        n_x += n_range;
+                    } else {
+                        n_x = self.rng.random_below(width / 2) + n_range2;
+                    }
+                    if height - n_range2 - 1 > n_y {
+                        n_y += n_range;
+                    } else {
+                        n_y = self.rng.random_below(height / 2) + n_range2;
+                    }
+                } else {
+                    // 直接 `Envir.AddMapObject`（不经 `AddToMap` ⇒ 无 `RM_TURN`）。
+                    add_obj = self.place_actor_at(actor_id, n_x, n_y, now);
+                    break;
+                }
+                n_c += 1;
+                if n_c > 46 {
+                    break;
+                }
+            }
+            if !add_obj {
+                // `CurrX = nX2; CurrY = nY2; Envir.AddMapObject(...)`（直接调用 ⇒ 无 `RM_TURN`）。
+                self.place_actor_at(actor_id, x2, y2, now);
+            }
+        }
+
+        // 5) 尾部 `SendRefMsg(RM_TURN, Dir, CurrX, CurrY, GetFeatureToLong(), "")`
+        //    （`BaseObject.cs:2747`）——无条件发一条。
+        let e = self.entities.get(actor_id)?;
+        frames.push(crate::mongen::ReviveFrame {
+            dir: e.ai.dir,
+            x: e.x,
+            y: e.y,
+        });
+        Some(crate::mongen::ReviveOutcome { actor_id, frames })
+    }
+
+    /// 生成怪物：入队后由 tick 处理（掉落按 C# 时机在**生成时**预算）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_monster(&mut self, cmd: Command) -> bool {
+        let Command::SpawnMonster { .. } = &cmd else {
+            return false;
+        };
+        self.enqueue(cmd);
+        true
+    }
+
+    /// **P5-A3**：`Command::SpawnMonster` 的 facade/段共用实现
+    /// （`EntityAccess` + `StructuralAccess` + `&mut SimState` + `&mut TickRecord`）。
+    ///
+    /// 逐句与旧 `World::spawn_monster_now` 相同，唯一差异是接收者换成访问器
+    /// （`self.entities` → `access`、`self.maps`/`self.rng`/`self.item_catalog`/… → `sim`）。
+    ///
+    /// **取数点（RNG 逐点 trace 的锚）**：`generate_drops` 在**生成时**预算掉落
+    /// （`WorldServer.MonGen.cs:440` 的时机）——`map_id` 越界的门在预算**之前**，与旧实现同序
+    /// （越界 ⇒ 零抽数）。落格走 [`World::enter_world_impl`]（cell 类型 = `entity_cell_type`）。
+    ///
+    /// **产物**：本族不产 `TickRecord` 事件（`processed` 记账仍由调用点按返回值做，
+    /// 与旧 `tick_head` 同拆分）；`_record` 只为统一 Command-handler 形态保留。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn spawn_monster_now_impl<
+        A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
+    >(
+        access: &mut A,
+        sim: &mut SimState,
+        _record: &mut TickRecord,
+        id: i32,
+        name: &str,
+        x: i32,
+        y: i32,
+        map_id: usize,
+        level: u8,
+        exp: i32,
+        hp: u16,
+        dc: u16,
+        ac: u16,
+        undead: u8,
+        hit_point: u8,
+        speed_point: u8,
+        drop_list: &[MonsterDropItem],
+    ) -> bool {
+        if map_id >= sim.maps.len() {
+            return false;
+        }
+        // 掉落预算（`WorldServer.MonGen.cs:440` 的时机）：RNG 在这里消耗
+        let catalog_items = std::mem::take(&mut sim.item_catalog);
+        let (gold, items) = {
+            let catalog = VecItemCatalog {
+                items: &catalog_items,
+            };
+            generate_drops(
+                &mut sim.rng,
+                drop_list,
+                &catalog,
+                sim.mon_random_add_value,
+                STRING_GOLD_NAME,
+                &mut sim.item_number,
+            )
+        };
+        sim.item_catalog = catalog_items;
+
+        let mut e = crate::combat::monster_from_row(crate::combat::MonsterRow {
+            id,
+            name,
+            x,
+            y,
+            level,
+            exp,
+            hp,
+            dc,
+            ac,
+            undead,
+            hit_point,
+            speed_point,
+        });
+        e.id = id;
+        e.map_id = map_id;
+        e.gold = gold;
+        e.drop_items = items;
+        // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：按落图时刻重盖（buff 轴）。
+        e.poisoning_tick = sim.clock_ms + BUFF_EPOCH_MS;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
+        e.map_binding.verify_tick = sim.clock_ms;
+        let spawned = access.insert(e);
+        Self::enter_world_impl(access, sim, spawned)
+    }
+
+    /// **P5-A3 / P7**：`spawn_monster_now` 的 facade —— 一行委派
+    /// [`World::spawn_monster_now_impl`]。
+    ///
+    /// **P7 起接收调用方的 `record`**：迁移前这里造一次性 scratch `TickRecord` 再丢弃（tick 路径
+    /// 另有 `processed` 记账点）；现在 tick 路径由 `Command` 段把**真实 record** 传进来，
+    /// 本 facade 只剩「已持有实体仓库 + SimState 的调用方」的便捷入口（用例直调）。
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_monster_now(
+        &mut self,
+        record: &mut TickRecord,
+        id: i32,
+        name: &str,
+        x: i32,
+        y: i32,
+        map_id: usize,
+        level: u8,
+        exp: i32,
+        hp: u16,
+        dc: u16,
+        ac: u16,
+        undead: u8,
+        hit_point: u8,
+        speed_point: u8,
+        drop_list: &[MonsterDropItem],
+    ) -> bool {
+        Self::spawn_monster_now_impl(
+            &mut self.entities,
+            &mut self.sim,
+            record,
+            id,
+            name,
+            x,
+            y,
+            map_id,
+            level,
+            exp,
+            hp,
+            dc,
+            ac,
+            undead,
+            hit_point,
+            speed_point,
+            drop_list,
+        )
+    }
+
+    /// **生成期的掉落预算**（`MonGetRandomItems` 的时机）——用**调用方给定的**随机流。
+    ///
+    /// oracle `WorldServer.MonGen.cs:441-488` 的 `MonGetRandomItems` 在 `CreateMonster`
+    /// 内部、即 **Dir 抽之后、CoolEye 抽之前** 发生在同一 `M2Share.RandomNumber` 上。
+    /// 接线层的 `MonsterCreator` 回调（[`crate::mongen::regen_monsters`]）需要在「两次位置抽
+    /// 之间」把这半段插入正确位置；本方法让回调不必碰 `World` 私有字段（`item_catalog` /
+    /// `item_number` / `mon_random_add_value`）就能在**同一条**流上预算。
+    pub fn budget_monster_drops(
+        &mut self,
+        rng: &mut RandomNumber,
+        drop_list: &[MonsterDropItem],
+    ) -> (i32, Vec<crate::combat::DropItem>) {
+        let catalog_items = std::mem::take(&mut self.item_catalog);
+        let (gold, items) = {
+            let catalog = VecItemCatalog {
+                items: &catalog_items,
+            };
+            generate_drops(
+                rng,
+                drop_list,
+                &catalog,
+                self.mon_random_add_value,
+                STRING_GOLD_NAME,
+                &mut self.item_number,
+            )
+        };
+        self.item_catalog = catalog_items;
+        (gold, items)
+    }
+
+    /// 生成**已预算好掉落/朝向**的怪物：**不再取任何随机数**（掉落预算由调用方在
+    /// [`World::budget_monster_drops`] 里按 oracle 次序完成；构造函数链的取数由调用方的
+    /// `CreateMonster` 回调完成）。
+    ///
+    /// 与 [`World::spawn_monster_now`] 的唯一差别是「不自己抽掉落」——用于
+    /// `RegenMonsters` 的 `CreateMonster` 回调（拖到 tick 里再抽会与 oracle 的 interleaving 不同）。
+    /// `ctor` = 构造函数链已抽出的值（[`crate::entity::MonsterCtorDraws`]），随生成结果落实体；
+    /// `dir`/`cool_eye` = `CreateMonster` 的 `cert.Dir = RandomByte(8)`（`WorldServer.MonGen.cs:740`）
+    /// 与 `CoolEye`（`:745-747`）——与本函数**同时**作为生成期取数落进 `Entity.ai` 的初始态
+    /// （[`crate::entity::AnimalState::seed_from_spawn`]），供 `World::tick` 的 AI 消费。
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_monster_precomputed(
+        &mut self,
+        name: &str,
+        x: i32,
+        y: i32,
+        map_id: usize,
+        race: u8,
+        level: u8,
+        exp: i32,
+        hp: u16,
+        dc: u16,
+        ac: u16,
+        undead: u8,
+        hit_point: u8,
+        speed_point: u8,
+        gold: i32,
+        drop_items: Vec<crate::combat::DropItem>,
+        ctor: crate::entity::MonsterCtorDraws,
+        dir: u8,
+        cool_eye: bool,
+    ) -> Option<i32> {
+        if map_id >= self.maps.len() {
+            return None;
+        }
+        let id = self.entities.alloc_id();
+        let mut e = crate::combat::monster_from_row(crate::combat::MonsterRow {
+            id,
+            name,
+            x,
+            y,
+            level,
+            exp,
+            hp,
+            dc,
+            ac,
+            undead,
+            hit_point,
+            speed_point,
+        });
+        e.race = race;
+        // `WorldServer.MonGen.cs:521-551` 的对象初始化式：`AnimalDeer(52)`/`AnimalWolf(53)` ⇒
+        // `BodyLeathery = 150`；`AnimalChicken(51)` 与其余 race 保持 `BaseObject()` ctor 的 50
+        // （`BaseObject.cs:401`）。该字段只被屠宰效果体的 `== 0` 门读。
+        if race == 52 || race == 53 {
+            e.ai.body_leathery = 150;
+        }
+        e.id = id;
+        e.map_id = map_id;
+        e.gold = gold;
+        e.drop_items = drop_items;
+        e.ctor_draws = ctor;
+        // 生成期取数已全部完成（本函数不再抽随机数）；把结果写进 AI 初始态。
+        e.ai.seed_from_spawn(dir, cool_eye, &ctor, self.clock_ms);
+        // 专用怪 ctor 的非抽数字段（`ViewRange`/`SearchTick`/`StickMode`；
+        // `BeeQueen.cs:13-21`、`SpiderHouseMonster.cs:13-21`、`Clone.cs:9-12`）。
+        crate::special_monster::apply_ctor_fields(&mut e, self.clock_ms);
+        // `BaseObject` ctor `AutoRecoveryTick = GetTickCount()`（`BaseObject.cs:445`）：
+        // 恢复段从实体落库那一刻起算。
+        e.auto_recovery_tick = self.clock_ms;
+        // `BaseObject.cs:443` ctor `PoisoningTick = GetTickCount()`：同上，按落图时刻重盖（buff 轴）。
+        e.poisoning_tick = self.clock_ms + BUFF_EPOCH_MS;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`：同上。
+        e.map_binding.verify_tick = self.clock_ms;
+        let id = self.entities.insert(e);
+        if !self.enter_world(id) {
+            self.entities.remove(id);
+            return None;
+        }
+        Some(id)
+    }
+
+    /// **P31 / `SETAUTOGETEXP`**（`PlayObject.Message.cs:738-745`）的 per-Run 结算。
+    ///
+    /// 逐行照搬 oracle（**连缺陷一起**）：
+    /// ```text
+    /// if (AutoGetExpPoint > 0
+    ///     && (AutoGetExpEnvir == null || AutoGetExpEnvir == Envir)
+    ///     && (GetTickCount() - AutoGetExpTick) > AutoGetExpTime)
+    /// {
+    ///     AutoGetExpTick = GetTickCount();               // 先刷新（安全区门失败也刷新）
+    ///     if (!AutoGetExpInSafeZone || AutoGetExpInSafeZone && InSafeZone())
+    ///         GetExp(AutoGetExpPoint);                   // 裸 GetExp，不乘倍率
+    /// }
+    /// ```
+    ///
+    /// - **严格 `>`**（`elapsed == time` 不触发）；
+    /// - `AutoGetExpTick` 在**安全区判定之前**刷新 ⇒ 进安全区失败也吃掉这一周期；
+    /// - **无 `!Death` 门**（照抄）；
+    /// - `GetExp` 走 [`get_exp_raw`]，**不得**走 [`World::gain_exp`]（后者含 `CalcGetExp`/
+    ///   倍率/组队均分，见 PR-3 spike P31 口径）；
+    /// - `InSafeZone()` 由**调用方**按 `registry.flag_of(map_id).safe_area` 传入
+    ///   （oracle `BaseObject.cs:1777-1808`：`Envir == null ⇒ true` 在实体恒有图时不适用；
+    ///   第 2–4 步未建模见 whitelist T-75）。**不得**读 `Entity.in_safe_zone`——该字段
+    ///   在生产没有写入点（F1），读它等于安全区门恒 `false`。
+    ///
+    /// 命中时返回 `(actor_id, 本次加值, 是否进升级块, 升级后等级)`——调用方追加进
+    /// [`TickRecord::exp_awards`]，由既有 `drain_kill_exp_chain` 出
+    /// `53 → 44 → 45/52/752`（与击杀经验同一队列序）。
+    pub fn auto_get_exp(
+        &mut self,
+        actor_id: i32,
+        state: &mut AutoGetExpState,
+        now: i64,
+        in_safe_zone: bool,
+    ) -> Option<(i32, i32, bool, u8)> {
+        let map_id = self.entities.get(actor_id)?.map_id;
+        // 门 ①：`AutoGetExpPoint > 0`。
+        if state.point <= 0 {
+            return None;
+        }
+        // 门 ②：`AutoGetExpEnvir == null || AutoGetExpEnvir == Envir`。
+        if state.envir_map_id.is_some_and(|id| id != map_id) {
+            return None;
+        }
+        // 门 ③：严格 `>`。
+        if now - state.tick <= i64::from(state.time_ms) {
+            return None;
+        }
+        // **先刷新 Tick，再判安全区**（oracle 的语句序，不可换）。
+        state.tick = now;
+        // 安全区门：`!AutoGetExpInSafeZone || AutoGetExpInSafeZone && InSafeZone()`。
+        if state.in_safe_zone && !in_safe_zone {
+            return None;
+        }
+        let need_exps = std::mem::take(&mut self.need_exps);
+        let Some(mut e) = self.entities.spawn_cloned(actor_id) else {
+            self.need_exps = need_exps;
+            return None;
+        };
+        let out = get_exp_raw(&mut e, state.point, &need_exps);
+        self.entities
+            .set_progression(actor_id, e.progression_component());
+        self.need_exps = need_exps;
+        Some((actor_id, out.0, out.1, out.2))
+    }
+
+    /// oracle `PlayObject.GainExp(int dwExp)`（`PlayObject.Base.cs:764-821`）。
+    ///
+    /// 在**经验获得者**（`KillTargetTrigger` 的 `this`）上调用：
+    ///
+    /// - `GroupOwner != 0` 但**团长对象不在注册表**（`ActorMgr.Get` 取不到，775 行）⇒ `GroupMembers`
+    ///   空引用抛异常、被 `catch`（818-821）吞掉 ⇒ **本次零经验、零授奖**（不会退回单人满经验）；
+    /// - `GroupOwner != 0` ⇒ 遍历**团长** `GroupMembers`，统计「`!Death` + 同图 +
+    ///   `|CurrX - x| <= 12` + `|CurrX - x| <= 12`」的 `sumlv`/`n` —— **两处都比 `CurrX`、
+    ///   都漏了 `CurrY`，是 oracle 的既有缺陷，照搬**（§1 硬约束③），并在判据里带该缺陷向量；
+    /// - `sumlv > 0 && n > 1` ⇒ `dwExp = Round(dwExp * bonus[n])`（`n <= GroupMax` 门），再逐成员
+    ///   `WinExp(Round(dwExp / n))`（`HighLevelKillMonFixExp = true`）或
+    ///   `WinExp(Round(dwExp / sumlv * level))`（`false`）；
+    /// - 否则 ⇒ 对获得者本人 `WinExp(dwExp)`。
+    ///
+    /// 返回**获得者本人**本次获得的经验（= [`TickRecord::deaths`] 5 元组的第 5 项），
+    /// 并把每个进了 `WinExp` 的成员的 `(id, amount, leveled, level)` 按 oracle 的成员遍历序
+    /// 追加进 `record.exp_awards`（宿主据此逐人出 `SM_WINEXP(44)`）。
+    /// **P3b**：`gain_exp` 的 facade/段共用实现（`win_exp` 的抽数点不变）。
+    pub(crate) fn gain_exp_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        recipient: i32,
+        mon_exp: i32,
+        record: &mut TickRecord,
+    ) -> i32 {
+        let cfg = sim.combat_config;
+        let need_exps = std::mem::take(&mut sim.need_exps);
+        // `KillTargetTrigger`：`monsterExp = CalcGetExp(WAbil.Level, fightExp)`（入参即自己等级）。
+        let (monster_exp, group_owner, rx, rmap) = match access.get(recipient) {
+            Some(e) => (
+                mir2_formula::exp::calc_get_exp(
+                    i32::from(e.level),
+                    i32::from(e.level),
+                    mon_exp,
+                    cfg.high_level_kill_mon_fix_exp,
+                ),
+                e.group_owner,
+                e.x,
+                e.map_id,
+            ),
+            None => {
+                sim.need_exps = need_exps;
+                return 0;
+            }
+        };
+        let map_rate = sim.map_exp_rate.get(rmap).copied().flatten();
+        let mut my_gain = 0;
+        if group_owner != 0 {
+            // oracle `PlayObject.Base.cs:771-776`：`GroupOwner != 0` 时先
+            // `(IPlayerActor)SystemShare.ActorMgr.Get(GroupOwner)` 取团长对象；取不到
+            // ⇒ `groupOwnerPlay.GroupMembers` 空引用抛异常，被 818-821 的 `catch` 吞掉
+            // ⇒ 本次**零经验、零授奖**（不会退回单人满经验）。可达成因由：`leave_world`
+            // 移除实体时不清同组成员的 `group_owner`（见 `leave_world`）。
+            let members = match access.get(group_owner) {
+                Some(owner) => owner.group_members.clone(),
+                None => {
+                    sim.need_exps = need_exps;
+                    return 0;
+                }
+            };
+            // 条件 = 团长成员表 ∩「同图 + !Death + |CurrX-x|<=12 + |CurrX-x|<=12（漏 CurrY，oracle 照搬）」。
+            let in_range: Vec<i32> = members
+                .iter()
+                .copied()
+                .filter(|&m| {
+                    access.get(m).is_some_and(|me| {
+                        !me.death
+                            && me.map_id == rmap
+                            && (me.x - rx).abs() <= 12
+                            && (me.x - rx).abs() <= 12
+                    })
+                })
+                .collect();
+            let sumlv: i32 = in_range
+                .iter()
+                .filter_map(|&m| access.get(m))
+                .map(|me| i32::from(me.level))
+                .sum();
+            let n = in_range.len();
+            if sumlv > 0 && n > 1 {
+                let mut dw_exp = monster_exp;
+                // oracle：`if (n >= 0 && n <= Grobal2.GroupMax) dwExp = Round(dwExp * bonus[n]);`
+                if n <= crate::party::PARTY_GROUP_MAX {
+                    dw_exp = mir2_shared::hutil::round(
+                        f64::from(dw_exp) * crate::party::PARTY_EXP_BONUS[n],
+                    );
+                }
+                for &m in &in_range {
+                    let level = access.get(m).map_or(0, |me| i32::from(me.level));
+                    let amount = if cfg.high_level_kill_mon_fix_exp {
+                        mir2_shared::hutil::round(f64::from(dw_exp) / n as f64)
+                    } else {
+                        mir2_shared::hutil::round(
+                            f64::from(dw_exp) / f64::from(sumlv) * f64::from(level),
+                        )
+                    };
+                    let Some(mut k) = access.spawn_cloned(m) else {
+                        continue;
+                    };
+                    let (g, l, lvl) = win_exp(&mut k, amount, &need_exps, &cfg, map_rate);
+                    access.set_progression(m, k.progression_component());
+                    if m == recipient {
+                        my_gain = g;
+                    }
+                    record.exp_awards.push((m, g, l, lvl));
+                }
+            } else {
+                let (g, l, lvl) = match access.spawn_cloned(recipient) {
+                    Some(mut k) => {
+                        let out = win_exp(&mut k, monster_exp, &need_exps, &cfg, map_rate);
+                        access.set_progression(recipient, k.progression_component());
+                        out
+                    }
+                    None => {
+                        sim.need_exps = need_exps;
+                        return 0;
+                    }
+                };
+                my_gain = g;
+                record.exp_awards.push((recipient, g, l, lvl));
+            }
+        } else {
+            let (g, l, lvl) = match access.spawn_cloned(recipient) {
+                Some(mut k) => {
+                    let out = win_exp(&mut k, monster_exp, &need_exps, &cfg, map_rate);
+                    access.set_progression(recipient, k.progression_component());
+                    out
+                }
+                None => {
+                    sim.need_exps = need_exps;
+                    return 0;
+                }
+            };
+            my_gain = g;
+            record.exp_awards.push((recipient, g, l, lvl));
+        }
+        sim.need_exps = need_exps;
+        my_gain
+    }
+
+    #[allow(dead_code)] // 段路径走 `Self::gain_exp_impl`
+    fn gain_exp(&mut self, recipient: i32, mon_exp: i32, record: &mut TickRecord) -> i32 {
+        Self::gain_exp_impl(
+            &mut self.entities,
+            &mut self.sim,
+            recipient,
+            mon_exp,
+            record,
+        )
+    }
+
+    /// **P3b**：`settle_deaths` 的 facade/段共用实现（逐句与旧实现相同）。
+    ///
+    /// `SimSettleDeaths`（`only_players=false`，tick_head）与 `TailPlayerDeaths`
+    /// （`only_players=true`，tick_tail）是同一实现点，两段共用本函数。
+    pub(crate) fn settle_deaths_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        record: &mut TickRecord,
+        only_players: bool,
+    ) {
+        // **PL-1 硬前置（spike §4.3）**：玩家死亡必须晚于 P32 复活门（oracle 的 Die 在
+        // `base.Run:70-73`，P32 在 `PlayObject.Run:747-763`）⇒ 本函数按 `only_players` 分两段调用：
+        // `tick_head` 结算非玩家、`tick_tail` 结算玩家。既有 golden 的死亡行全是怪物 ⇒ 不变。
+        let mut dead: Vec<i32> = Vec::new();
+        for id in access.order_ids() {
+            let Some(e) = access.get(id) else {
+                continue;
+            };
+            {}
+            if (e.hp == 0 || e.die_called)
+                && !e.death_settled
+                && !e.ghost
+                && (e.race == crate::entity::ACTOR_RACE_PLAY) == only_players
+            {
+                dead.push(id);
+            }
+        }
+        for id in dead {
+            let Some(e) = access.get(id) else {
+                continue;
+            };
+            // **`BaseObject.Die()` 首行早退**（`src/M2Server/Actor/BaseObject.Base.cs:318-322`，
+            // 卡 `openmir2-superman-normnpc`）：`if (SuperMan) { return; }` ⇒ 通用段
+            // （`Death = true; DeathTick = ...`、`KillFunc` 掉落/经验、`DelMember` 退组）**全部跳过**；
+            // **子类覆写体在 `base.Die()` 返回后照常继续**（多态，见下逐点锚）。
+            //
+            // 可达性口径（2026-10-21 复核订正）：SuperMan 实体在各自 `Run` 的
+            // **base 段**被回满（`BaseObject.Base.cs:32-36`，Rust 侧
+            // [`Entity::run_super_man_refill`] 在 `base_object_run_monster` /
+            // `npc_run` / 商人 `Run` 的同一位置调用），而 `HP == 0 ⇒ Die()`（`:70-73`）
+            // 在回满之后 ⇒ oracle 的伤害路径**永不调用 `Die()`**。
+            // **本函数因此绝不提前回满**：回满必须发生在实体的 `Run` 段，否则会早于
+            // `CastleDoor.Run` 的 `3 - Round(HP/MaxHP*3)`（`CastleDoor.cs:99-104`）
+            // 改变门的 `Dir`/`RM_TURN` 判据。伤害致的 `hp == 0` 在这里只跳过、不置
+            // `Death`、不回满；下一次 `Run` 自行回满。
+            // 只有一次性 `die_called`（`Command::Kill` = GM `KillCommand.Die()` /
+            // 脚本直接 `Die()`）执行子类覆写体。SuperMan 永不进入通用死亡闩锁：
+            // `death_settled` 保持 false，避免永久闩锁吞掉第二次直接 `Die()`。
+            if e.super_man {
+                let race = e.race;
+                let map_id = e.map_id;
+                let direct_die = e.die_called;
+                if let Some(e) = access.get_mut(id) {
+                    e.life_cycle.die_called = false;
+                }
+                if !direct_die {
+                    continue;
+                }
+                // 子类覆写体（`base.Die()` 早退**不**影响它们）：
+                // - `CastleDoor.Die()`（`CastleDoor.cs:78-82`）：`base.Die(); SetMapXyFlag(2);`
+                //   ⇒ 12 项有序掩码照发；`Death` 不置位（`CastleUnit.death` 镜像保持 false，
+                //   `CastleDoor.Run:84-93` 的 `Death && Castle != null` 支因此不命中）。
+                // - `WallStructure.Die()`（`WallStructure.cs:42-45`）：**只有** `base.Die()`
+                //   ⇒ 子类段零动作（格子恢复只在 `WallStructure.Run:47-66` 读 `Death`）。
+                // - `AnimalObject.Die()`（`AnimalObject.cs:96-110`）：`if (!SuperMan) return;`
+                //   ⇒ 说词段**仅** SuperMan 走；本骨架未建模 `MonsterSayMessage`（T-31 残余）。
+                if race == 110 {
+                    if let Some(b) = access.get(id).and_then(|e| e.castle_binding) {
+                        let events = sim
+                            .castles
+                            .get(b.castle_index)
+                            .and_then(|c| c.defense_unit(b.role))
+                            .map(crate::castle::CastleUnit::door_die_flag2_events)
+                            .unwrap_or_default();
+                        for event in events {
+                            Self::apply_castle_map_event_impl(sim, map_id, &event);
+                            record.castle_structures.push(CastleStructureAt {
+                                castle_index: b.castle_index,
+                                map_id,
+                                event,
+                            });
+                        }
+                    }
+                }
+                continue;
+            }
+            let (map_id, gold, mon_exp, exp_hitter, group_owner, is_play) = (
+                e.map_id,
+                e.gold,
+                e.mon_exp,
+                e.exp_hitter,
+                e.group_owner,
+                e.race == crate::entity::ACTOR_RACE_PLAY,
+            );
+            // 死亡标记（C# `Die()` 的 `Death = true`）
+            let now = sim.clock_ms;
+            if let Some(e) = access.get_mut(id) {
+                e.life_cycle.death = true;
+                // `BaseObject.cs:323`：`Death = true; DeathTick = HUtil32.GetTickCount();`
+                e.life_cycle.death_tick = now;
+                e.life_cycle.death_settled = true;
+                e.life_cycle.die_called = false;
+            }
+            // **Lane B（城堡实体挂图）**：race 110/111 的 `Die()` 多态分派。
+            //
+            // - `CastleDoor.Die()`（`CastleDoor.cs:78-82`）：`base.Die()` 之后 `SetMapXyFlag(2)`
+            //   ⇒ 12 项有序掩码（`door_map_xy_flag_ops(2)`）。`base.Die()` 的通用段已由上面的
+            //   `Death/DeathTick` 置位等价完成，这里只补门掩码（顺序 = oracle：先通用后掩码）。
+            // - `WallStructure.Die()`（`WallStructure.cs:42-45`）：**只** `base.Die()`；格子恢复
+            //   留到下一 tick 的 `WallStructure.Run`（§2.4），这里只同步 `unit.death`。
+            let race = access.get(id).map_or(0, |e| e.race);
+            if matches!(race, 110 | 111) {
+                if let Some(b) = access.get(id).and_then(|e| e.castle_binding) {
+                    let mut events: Vec<crate::castle::StructureEvent> = Vec::new();
+                    if let Some(castle) = sim.castles.get_mut(b.castle_index) {
+                        if let Some(unit) = castle.defense_unit_mut(b.role) {
+                            unit.hp = 0;
+                            if race == 110 {
+                                events = unit.door_die();
+                            } else {
+                                unit.death = true;
+                            }
+                        }
+                    }
+                    for event in events {
+                        Self::apply_castle_map_event_impl(sim, map_id, &event);
+                        record.castle_structures.push(CastleStructureAt {
+                            castle_index: b.castle_index,
+                            map_id,
+                            event,
+                        });
+                    }
+                }
+            }
+            // **M3⑦-实现 2 F-1**：oracle `Die()`（`PlayObject.cs:1964-1978`）在置 `Death` 之后、
+            // `base.Die()`（掉落）之前判 `if (GroupOwner != 0) groupOwnerPlay.DelMember(this)`
+            // （`:1975-1977`）⇒ 死亡者立即退组；团长死亡 ⇒ 逐成员 `LeaveGroup` 后整组散。
+            // 与断线路径（`Disappear()`）的差别：死亡者**仍在线**，它自己的回帧照发（由宿主决定）。
+            if group_owner != 0 {
+                let cfg = sim.party_cfg.clone();
+                let events = crate::party::party_del_member_impl(access, group_owner, id, &cfg);
+                record.party_events.extend(events);
+            }
+            // 掉落结算（oracle `DieDropItems`，`BaseObject.cs:2450-2464`）：
+            // `ScatterBagItems`（`BaseObject.Base.cs:501-550`，**倒序**遍历 `ItemList`）
+            // + `ScatterGolds`（`:1711`）逐件调 `DropItemDown`（`BaseObject.cs:522-580`）/
+            // `DropGoldDown`（`:730-768`）：先 `GetDropPosition`（`:459-524`，**纯格子扫描、不消费
+            // RNG**），再 `Envir.AddItemToMap`（`Envirnoment.cs:88-130`）——而后者的**首行**是
+            // `if (mapItem.ItemId == 0) return false;`。
+            // oracle 全仓**无** `MapItem.ItemId` 赋值点（`MapItem.cs:41` 被注释；`rg 'ItemId\s*=' src`
+            // 其余 4 处全是 `ItemId == 0` 守卫）⇒ **死亡掉落（物品 + 金币）恒不落地**，
+            // `DropItemDown`/`DropGoldDown` 成功支的 `SendRefMsg(RM_ITEMSHOW,…)`（`:570`/`:752`）
+            // 与客户端 `SM_ITEMSHOW(610)` **恒不执行**（与 M3① 的 T-19/T-25 同根；owner 已在
+            // T-25 裁决「无地面物」为唯一可达形态）。
+            // ⇒ Rust 照抄：**不再**把 `e.drop_items`/`Gold` 写进地图（`placed` 恒 0）。
+            //    掉落**生成**（`MonGetRandomItems` 的预算）不受影响，仍是本卡判据要对比的「掉落列表」。
+            let placed = 0usize;
+            // 经验：`KillFunc`（`BaseObject.cs:2429`）认的是 `ExpHitter`，不是 `LastHiter`
+            // —— `ExpHitter` 是**第一个**命中者（`SetLastHiter` 里 `if (ExpHitter == null)`）。
+            // "命中者死亡/隐身后不再认领"由**每 tick 的 `expire_hitters()`** 按 oracle 的结构清理
+            // （`BaseObject.Base.cs:119-132` 在命中者自己的 `Run()` 里清），故这里只判"归属者是玩家本人"
+            // —— 与 `KillFunc` 的形状一致。
+            // 子集口径：`ExpHitter.Master != null`（宝宝击杀）不在本骨架；30s/6s 的**墙钟**过期也不做。
+            let mut gained = 0;
+            if let Some(hitter_id) = exp_hitter {
+                let hitter_master = access.get(hitter_id).and_then(|k| k.master);
+                let hitter_is_player = access
+                    .get(hitter_id)
+                    .is_some_and(|k| k.race == crate::entity::ACTOR_RACE_PLAY);
+                // oracle `KillFunc`（`BaseObject.cs:2434-2444`）：`ExpHitter.Master != null` ⇒
+                // 给 master；`ExpHitter.Race == Play` ⇒ 再给 `ExpHitter` 本人（两支照抄，
+                // 真实实体上互斥）。`deaths` 的 5 元组口径仍取「主获得者」= master 优先。
+                let mut winners: Vec<i32> = Vec::new();
+                if let Some(m) = hitter_master {
+                    winners.push(m);
+                }
+                if hitter_is_player {
+                    winners.push(hitter_id);
+                }
+                let primary = hitter_master.unwrap_or(hitter_id);
+                for winner in winners {
+                    // oracle `KillTargetTrigger` → `GainExp`：每名 `RM_PLAYERKILLMONSTER`
+                    // 获得者独立跑一次 `CalcGetExp` + `GainExp`（组队分配见 [`World::gain_exp`]）。
+                    let amount = Self::gain_exp_impl(access, sim, winner, mon_exp, record);
+                    if winner == primary {
+                        gained = amount;
+                    }
+                }
+            }
+            // **`openmir2-player-drop-useitems`**：玩家死亡 `DropUseItems`
+            // （`PlayObject.Message.cs:2152-2228`）。oracle 的触发链是
+            // `Die()` → `KillFunc()` → `SendMsg(RM_DIEDROPITEM)` → `Operate` →
+            // `DieDropItems`（`BaseObject.cs:2437-2464`）；本骨架在死亡结算点执行
+            // ——同点（死亡结算）、同次（每次死亡恰一次），相位差见 T-81。
+            //
+            // 三道**产生**门（缺一不抽）：
+            // ① `KillFunc` 的 `ExpHitter != null && (ExpHitter.Master != null || ExpHitter.Race == Play)`；
+            // ② `DieDropItems` 的 `!Envir.Flag.FightZone && !Envir.Flag.Fight3Zone`；
+            // ③ `!Animal`（玩家恒 false）。
+            if is_play {
+                // `KillFunc`（`BaseObject.cs:2431-2445`）是两个**独立** if：
+                // `ExpHitter.Master != null` 发一次、`ExpHitter.Race == Play` 再发一次。
+                // 两条件同时成立时 oracle 会执行**两次** `DropUseItems`；本骨架的 Play 实体
+                // 不置 `Master`（`PlayCloneObject` ctor 也不置）⇒ 实际互斥，单次调用与
+                // oracle 等价（相位/触发点登记见 T-81）。
+                let hitter_is_actor = exp_hitter.and_then(|h| access.get(h)).is_some_and(|h| {
+                    h.master.is_some() || h.race == crate::entity::ACTOR_RACE_PLAY
+                });
+                let fight_zone = sim.maps.get(map_id).is_some_and(|m| m.is_fight_zone());
+                let animal = access.get(id).is_some_and(|x| x.ai.animal);
+                if hitter_is_actor && !fight_zone && !animal {
+                    let deleted = crate::death_drop::drop_use_items_on_death_impl(access, sim, id);
+                    if !deleted.is_empty() {
+                        record.death_use_item_drops.push((id, deleted));
+                    }
+                }
+                // **第二段 `DropUseItems`（oracle `KillTargetTrigger`）**：
+                // 击杀者（`ExpHitter` 或其主人）是玩家时，它处理
+                // `RM_PLAYERKILLMONSTER`（`PlayObject.cs:1632`）的尾部会再调
+                // `killObject.DropUseItems(0)`（`:1787-1798`）。部署件
+                // `KillByHumanDropUseItem=1` ⇒ PvP 死亡**两次**逐槽抽数（第二次的删除列表
+                // 恒空：第一段已把 `ItemDesc&8` 清空）。
+                // `PlayObject.cs:1787-1793` 的前置与 `!NoItem || !Envir.Flag.NoDropItem`
+                // 都取 **`this`**——即处理 `RM_PLAYERKILLMONSTER` 的 PlayObject：
+                // `ExpHitter.Master` 存在时是主人（`KillFunc` 把消息发给 Master），
+                // 否则是 `ExpHitter` 本人。**不是**死者（`killObject`）。
+                let kill_trigger_id =
+                    exp_hitter.and_then(|h| access.get(h).map(|h| h.master.unwrap_or(h.id)));
+                let kill_trigger = kill_trigger_id.and_then(|k| access.get(k));
+                let no_item = kill_trigger.is_some_and(|k| k.no_item);
+                let killer_map_id = kill_trigger.map(|k| k.map_id);
+                let killer_map = killer_map_id.and_then(|m| sim.maps.get(m));
+                let map_no_drop = killer_map.is_some_and(|m| m.no_drop_item());
+                let killer_fight_zone = killer_map.is_some_and(|m| m.is_fight_zone());
+                // `:1788-1793 AttackBaseObject = killObject.Master ?? killObject`——human/monster
+                // 门由**死者侧**的 `AttackBaseObject.Race` 选（不是击杀者；死者是 Play 但
+                // `Master` 非 Play 时仍走 `KillByMonstDropUseItem`）。
+                let attack_base_race_play = match access.get(id).and_then(|e| e.master) {
+                    None => true,
+                    Some(m) => access
+                        .get(m)
+                        .is_none_or(|e| e.race == crate::entity::ACTOR_RACE_PLAY),
+                };
+                let kill_gate = if attack_base_race_play {
+                    sim.kill_by_human_drop_use_item
+                } else {
+                    sim.kill_by_monst_drop_use_item
+                };
+                if hitter_is_actor && !killer_fight_zone && (!no_item || !map_no_drop) && kill_gate
+                {
+                    let _ = crate::death_drop::drop_use_items_on_death_impl(access, sim, id);
+                }
+            }
+            record.deaths.push((id, placed, gold, exp_hitter, gained));
+            // **MB-2（R43）**：`ZilKinZombi.Die()` 覆写（`ZilKinZombi.cs:24-33`）——在 `base.Die()`
+            // 之后、`if (ZilKillCount > 0)` 时抽 `(Random(20)+4)*1000`，随后**无条件** `-= 1`。
+            // 抽数落在 `crates/world-bevy/src/monai.rs`（`monster_ai` 组），本处只是调用点。
+            if !is_play {
+                crate::monai::zil_kin_zombi_die_impl(access, sim, id);
+            }
+            // **M3⑨ 主人死/幽灵自投递**：oracle `PlayObject.Die()` 尾
+            // （`src/M2Server/Player/PlayObject.cs:1993-1996`）在 `base.Die()`（掉落）**之后**
+            // `SendSelfDelayMsg(RM_MASTERDIEMUTINY, 0,0,0,0,"",1000)`（玩家 `Race == Play` 的
+            // `Die()` override；怪物走 `BaseObject.Die()` 不发）。1s 后由本 tick 的自投递段
+            // 触发 `ProcessSlaveMutiny`。
+            if is_play && sim.slave_self_delay_enabled {
+                crate::slave::send_master_die_mutiny_impl(access, sim, id);
+            }
+        }
+    }
+
+    /// 旧 facade 入口（测试/内部调用）：委托 [`Self::settle_deaths_impl`]。
+    #[allow(dead_code)] // tick 走两段系统；本入口保留给测试与 P5 清理前的旧调用面
+    fn settle_deaths(&mut self, record: &mut TickRecord, only_players: bool) {
+        Self::settle_deaths_impl(&mut self.entities, &mut self.sim, record, only_players)
+    }
+
+    /// 一次攻击结算（`_Attack`）。
+    /// `PlayObject.IsGroupMember`（`PlayObject.cs:5158-5175`）的注册表源：**团长**
+    /// （`GroupOwner`）实体持有的 `GroupMembers`；`GroupOwner == 0` ⇒ 空表。
+    ///
+    /// 本仓只有团长 Entity 持成员表（`party.rs:542-544/624`；`JoinGroup` 只给加入者写
+    /// `group_owner`，`party.rs:322`）⇒ **非团长施法者自身的 `group_members` 恒空**。
+    /// `HAM_GROUP` 的 `IsProperTarget` 必须读这张表（`PlayObject.Attack.cs:686-697` 调
+    /// `IsGroupMember`），不能读施法者自己的——否则同组玩家会被误判为合法目标
+    /// （多抽、白扣护身符、638/642 而非恰 1 条 639）。
+    #[must_use]
+    pub fn attacker_group_members(&self, attacker: &impl PvpView) -> Vec<i32> {
+        Self::attacker_group_members_impl(&self.entities, attacker)
+    }
+
+    /// **P5-A1**：`attacker_group_members` 的 facade/段共用实现（单一实现，无第二套接口）。
+    pub(crate) fn attacker_group_members_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        attacker: &impl PvpView,
+    ) -> Vec<i32> {
+        let group = attacker.group_state();
+        if group.group_owner == 0 {
+            return Vec::new();
+        }
+        access
+            .get(group.group_owner)
+            .map(|e| e.group_members.clone())
+            .unwrap_or_default()
+    }
+
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
+    pub(crate) fn attack_once(&mut self, actor_id: i32, target_id: i32) -> Option<AttackOutcome> {
+        Self::attack_once_impl(&mut self.entities, &mut self.sim, actor_id, target_id)
+    }
+
+    /// **P5-A1**：attack 族 handler 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 逐句与旧 `World::attack_once` 相同：取数（攻守双方快照 + `LastHiter` + 组团表 +
+    /// 毒门运行态）→ `attack_dir_grouped_poison_ws` → 写回（目标 HP / `UseItems` 耐久 /
+    /// `LastHiter` + `RM_STRUCK` 入队；武器升级 `UseItems` + `pending_weapon_breaks`；
+    /// 武器磨损 `UseItems` + `pending_weapon_wears`）→ 中毒 `make_posion`。
+    /// 取数/写回点与次序一字未动 ⇒ RNG 账本不变。
+    pub(crate) fn attack_once_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        target_id: i32,
+    ) -> Option<AttackOutcome> {
+        if access.get(actor_id).is_none() || access.get(target_id).is_none() {
+            return None;
+        }
+        // 取出双方属性做结算（避免同时可变借用），再写回
+        let mut attacker = access.spawn_cloned(actor_id)?;
+        let mut target = access.spawn_cloned(target_id)?;
+        // **卡 `openmir2-weapon-durability-frames`（tier=R）**：`AttackDir` 在算攻击力**之前**
+        // 先跑 `CheckWeaponUpgrade()`（`PlayObject.Attack.cs:25-31`，门：武器 `Index>0 &&
+        // Desc[10]>0` 且 `attackTarget != null`——本函数按构造恒有目标；空挥走
+        // [`World::attack_swing`]，**不**结算）。它不抽 RNG ⇒ 取数账本不变；但会改
+        // `UseItems[Weapon]`（碎 / 强化）⇒ 攻击结算后必须写回实体（oracle 改的是同一对象）。
+        let weapon_outcome: Option<WeaponUpgradeOutcome> =
+            if attacker.race == crate::entity::ACTOR_RACE_PLAY {
+                Self::check_weapon_upgrade_status_impl(
+                    sim.upgrade_weapon_max_point,
+                    &mut attacker.use_items[ITEM_LOCATION_WEAPON],
+                )
+            } else {
+                None
+            };
+        // `StruckDamage` 的倍率取目标**当下存着**的 `LastHiter`（= 上一次命中者：本次命中者要等
+        // 目标下一轮 `Run()` 处理 `RM_STRUCK` 才登记）。默认倍率 10 时数值不可分辨，非默认配置下
+        // 才有差异 ⇒ 必须照 oracle 取，别改成本次攻击者。
+        let last_hitter =
+            target
+                .last_hiter
+                .and_then(|id| access.get(id))
+                .map(|h| crate::combat::LastHitter {
+                    race: h.race,
+                    job: h.job,
+                    has_master: h.master.is_some(),
+                });
+        let cfg = sim.combat_config;
+        // 攻方攻击力口径：oracle 的 `GetBaseAttackPoewr` 走**虚函数** `GetAttackPower`
+        //（`BaseObject.Attack.cs:25` → `BaseObject.Base.cs:886` 基版；`PlayObject.cs:2909` 玩家 override）。
+        // 玩家（`Race == ActorRace.Play`）走 override（`Luck`/`PowerRate`/`BoPowerItem`）；
+        // 怪物等无 override 的对象走基版。两版**取数次数不同**（`Luck <= 0` 时 override 多一次
+        // `Random(10)`）⇒ 必须按对象分派，不能一律走 `Base`（否则跨侧序列从第一次命中起错位）。
+        //
+        // 玩家攻方还要走完整的 `PlayObject.AttackDir`：`_Attack` 之后 `AttackSuccess` 再抽一次
+        // `Random(5)`（`PlayObject.Attack.cs:225`）—— 由 [`crate::combat::attack_dir`] 统一补上；
+        // 怪物攻方无这条（`AttackSuccess` 是 `PlayObject` 私有方法）。
+        // `HAM_GROUP` 的 `IsGroupMember(target)`（`PlayObject.Attack.cs:671-677`）需要攻方所在
+        // 组团长的成员表；`GroupOwner == 0` ⇒ 空表（`IsGroupMember` 第一步即 `false`）。
+        let attacker_group_members = Self::attacker_group_members_impl(access, &attacker);
+        // **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221-224`）的运行态。
+        // 每个 actor 的表项存**自身**的三个属性（`Paralysis` 作攻方 + `UnParalysis`/`AntiPoison`
+        // 作守方）；门取**攻方**的 `Paralysis` 与**守方**的另两项。buff 关闭时传 `None` ⇒ 与
+        // [`attack_dir_grouped`] 逐取数等价（既有 golden 不变）；开启且攻方有麻痹态时，在
+        // `Random(5)` **之前**插一次 `Random(AntiPoison + AttackPosionRate)`（oracle 取数次序）。
+        let poison = if sim.buff_enabled {
+            sim.attack_poison.get(&actor_id).map(|a| AttackPoisonState {
+                paralysis: a.paralysis,
+                un_paralysis: sim
+                    .attack_poison
+                    .get(&target_id)
+                    .is_some_and(|t| t.un_paralysis),
+                anti_poison: sim
+                    .attack_poison
+                    .get(&target_id)
+                    .map_or(0, |t| t.anti_poison),
+            })
+        } else {
+            None
+        };
+        // 卡 `openmir2-ability-weaponstrong`：`AddAbil.WeaponStrong` 由宿主在派发前灌入；缺省 0。
+        // 作为 [crate::combat::attack_dir_grouped_poison_ws] 的**末位实参**传入——`_ws` 只在原函数
+        // 参数行加参、函数体不移动 ⇒ 毒门 `random_below` 仍在 `combat.rs:1260`（RNG 账本合同，
+        // review `f3be880d1` 修法 (a)）。
+        let weapon_strong = sim
+            .attack_weapon_strong
+            .get(&actor_id)
+            .copied()
+            .unwrap_or(0);
+        let (outcome, poisoned, weapon_wear) = attack_dir_grouped_poison_ws(
+            Self::attack_rng_of(sim),
+            &mut attacker,
+            &mut target,
+            last_hitter,
+            &cfg,
+            &attacker_group_members,
+            poison,
+            weapon_strong,
+        );
+        let now = sim.clock_ms;
+        if let Some(mut e) = access.get_mut(target_id) {
+            e.vitals.hp = target.hp;
+            // **G-06 耐久面回写（`openmir2-persist-useitems-wiring`）**：`attack_dir_grouped_poison`
+            // 在 `target` 的副本上跑 `PlayObject.StruckDamage` 的耐久段（`PlayObject.cs:2954-3036`），
+            // 只回写 `hp` 会把磨损/破零整段丢掉（实体槽永远停在受击前）。oracle 改的是会话
+            // `UseItems` 对象本身 ⇒ 这里必须把 `use_items` 一并写回实体。
+            e.inventory.use_items = target.use_items;
+            // 命中者登记的**折叠**：C# 在 `_Attack` 里对 `Race > ActorRace.Play` 的目标
+            // `SendMsg(RM_STRUCK)`（`BaseObject.Attack.cs:61-64`），由目标在自己的 `Run()` 里
+            // `SetLastHiter(攻击方)`（`AnimalObject.cs:118-124`）。这里在结算之后立刻登记：
+            // 本次 `_Attack` 期间的 `StruckDamage` 仍看到旧的 `LastHiter`，与 C# 同序。
+            if target.race > crate::entity::ACTOR_RACE_PLAY {
+                // `CloneMonster.Operate` 覆盖了 `RM_STRUCK` 的 `base.Operate`
+                // （`Clone.cs:14-30` 恒 `return false`）⇒ `AnimalObject.Operate` 的
+                // `SetLastHiter` 不会执行。普通怪照旧。
+                if target.race != crate::special_monster::RACE_CLONE_MONSTER {
+                    e.set_last_hiter(actor_id, now);
+                }
+                // `targetObject.SendMsg(targetObject, RM_STRUCK, nPower, …)`（`BaseObject.Attack.cs:61-64`）
+                // 的**入队等价物**：`SendMsg` 只在 `!Ghost` 时入队（`BaseObject.Message.cs:152-183`）。
+                // `wParam = nPower`（护甲减免后的实际伤害）随队携带，供 `CloneMonster` 扣主人 MP。
+                // 出队处理在目标的 `base.Run`（[`crate::monai::base_object_run_monster`]）。
+                if !e.life_cycle.ghost {
+                    e.ai.pending_struck.push(crate::entity::StruckMsg {
+                        hiter: actor_id,
+                        // oracle `SendMsg(target, RM_STRUCK, nPower, …)`（`BaseObject.Attack.cs:61-64`）
+                        // 的 `nPower` = `GetHitStruckDamage` 之后（`struck_power`），不是倍率后的
+                        // `damage`；默认配置下两者相等。
+                        w_param: i32::from(outcome.struck_power),
+                    });
+                }
+            }
+        }
+        // **卡 `openmir2-rm-refmessage-delay-layer`**：`_Attack` 的
+        // `targetObject.SendStruckDelayMsg(RM_REFMESSAGE, nPower, target.WAbil.HP,
+        // target.WAbil.MaxHP, ActorId, "", 200)`（`BaseObject.Attack.cs:57`）。
+        // `nPower` = `GetHitStruckDamage` 之后（`struck_power`），门为 `> 0`。
+        // 入队零抽数；到点由 `deliver_self_delay_msgs` 的 `RM_REFMESSAGE` 支处理
+        // （广播框架 + `Race != Play` 自投 `RM_STRUCK` → `Struck` 的 `Random(6)`/`Random(300)`）。
+        if outcome.struck_power > 0 {
+            crate::slave::send_struck_delay_msg_refmessage_impl(
+                access,
+                sim,
+                target_id,
+                actor_id,
+                i32::from(outcome.struck_power),
+                crate::monai::ATTACK_STRUCK_DELAY_MS,
+            );
+        }
+        // `targetObject.MakePosion(PoisonState.STONE, SystemShare.Config.AttackPosionTime, 0)`
+        // （`PlayObject.Attack.cs:223`）：命中中毒门过了 ⇒ 给**目标**上石化毒 buff。
+        // `STONE = 5` 与 `BuffType::Paralysis` 数值对齐（见 [`crate::buff`] 的索引表）。
+        // `MakePosion` 不抽数 ⇒ 取数账本不受影响（那一次抽取已在
+        // [`attack_dir_grouped_poison`] 里按 oracle 的位置、`&&` 短路口径发生）。
+        if poisoned {
+            Self::make_posion_impl(
+                access,
+                sim,
+                target_id,
+                BuffType::Paralysis as u8,
+                cfg.attack_poison_time,
+                0,
+            );
+        }
+        // 武器升级结算的回写（`UseItems[Weapon]` 是 oracle 的同一个对象；本仓攻方是副本）。
+        // 只回写 `use_items`：其余攻方字段在 oracle 里也不由 `AttackDir` 改。
+        if let Some(outcome) = weapon_outcome {
+            if let Some(e) = access.get_mut(actor_id) {
+                e.inventory.use_items = attacker.use_items;
+            }
+            sim.pending_weapon_breaks
+                .push(WeaponUpgradeEvent { actor_id, outcome });
+        }
+        // **卡 `openmir2-attack-weapon-wear-642`**：`AttackSuccess` 的武器耐久磨损
+        // （`PlayObject.Attack.cs:225-229` → `DoDamageWeapon`）改的是 oracle 的同一个
+        // `UseItems[Weapon]` 对象；本仓攻方是副本 ⇒ 这里**必须**无条件写回（与上面
+        // `weapon_outcome` 的条件式写回不同：没有升级 `Desc[10]` 的普通武器也照样磨损）。
+        if let Some(wear) = weapon_wear {
+            if let Some(e) = access.get_mut(actor_id) {
+                e.inventory.use_items = attacker.use_items;
+            }
+            sim.pending_weapon_wears.push(WeaponWearEvent {
+                actor_id,
+                frames: wear.frames,
+            });
+        }
+        Some(outcome)
+    }
+
+    /// 把注册表解析出的连接点灌进对应 `MapGrid`（oracle `Maps.LoadMapInfo` 加载即
+    /// `Envirnoment.AddMapRoute` 落格）。返回**实际落格**的条数。
+    ///
+    /// `map_id` 越界 ⇒ 该条跳过（不 panic）。无注册表时宿主不调用本方法 ⇒ 无 route，行为一字不变。
+    pub fn add_map_routes<I>(&mut self, routes: I) -> usize
+    where
+        I: IntoIterator<Item = MapRouteSpec>,
+    {
+        let mut added = 0;
+        for spec in routes {
+            let Some(map) = self.maps.get_mut(spec.map_id) else {
+                continue;
+            };
+            if map.add_map_route(spec.x, spec.y, spec.route_id, spec.hop) {
+                added += 1;
+            }
+        }
+        added
+    }
+
+    /// **L1 TransMap 触发（核心）**：先按 [`World::try_step_now`] 移动；**移动成功后**读落点格
+    /// （`PlayObject.Walk` 覆写读 `CurrX/CurrY` 格，`PlayObject.cs:1868`），命中 `CellType::MapRoute`
+    /// 且是玩家时走 `EnterAnotherMap` 门并 `switch_map`。
+    ///
+    /// **失败契约（照 oracle）**：落点格是 `MapRoute` 但 `EnterAnotherMap` 门失败（目标格非
+    /// `CellValid`）⇒ oracle `Walk()` 返回 `false`（`PlayObject.cs:1878`）⇒ 上游 `BaseObject.WalkTo`
+    /// 把坐标**回滚到走前格**（`BaseObject.cs:685-688`）⇒ 因 `if (result)` 不成立而**不发移动帧**
+    /// （`PlayObject.cs:1911-1913`）。本方法据此返回 `moved == false` 并回滚，宿主因此不发 `SM_WALK`。
+    ///
+    /// 只对**玩家**触发（`PlayObject.Walk` 覆写专属）；怪物 AI 的 `monai::walk_to` 也走 `try_step_now`，
+    /// 但非玩家在 `try_step_now` 即被**非玩家 `MapRoute` 阻挡**拦下（`BaseObject.cs:1548` 的
+    /// `result = false` 配 `WalkTo` 回滚 `:683-688`——**只挡路、不换图**，坐标不变）⇒ 根本到不了本函数；
+    /// 即便到了，`route_enter` 对非玩家也直接返回 [`RouteOutcome::Skipped`]（不换图）。
+    #[must_use]
+    pub fn step_with_route(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> StepOutcome {
+        let Some(e) = self.entities.get(actor_id) else {
+            // actor 不在世界：不是移动判定语义 ⇒ 不分类（日志落 `other`）。
+            return StepOutcome {
+                moved: false,
+                changed_map: false,
+                rolled_back: false,
+                blocked: None,
+            };
+        };
+        // 走前格（回滚落点；oracle `WalkTo` 的 `oldX/oldY`/`oldEnvir`）。
+        let (old_x, old_y, old_map) = (e.x, e.y, e.map_id);
+        if let Err(block) = self.try_step_now_blocked(actor_id, dx, dy, steps) {
+            return StepOutcome {
+                moved: false,
+                changed_map: false,
+                rolled_back: false,
+                blocked: Some(block),
+            };
+        }
+        // 记下本轮起点，失败回滚时把误记的 `MapChange` 撤掉（否则宿主多发一组换图簇）。
+        let mc_len = self.sessions.map_changes().len();
+        match self.route_enter(actor_id) {
+            RouteOutcome::Failed => {
+                self.sessions.truncate_map_changes(mc_len);
+                self.rollback_move(actor_id, old_x, old_y, old_map);
+                StepOutcome {
+                    moved: false,
+                    changed_map: false,
+                    rolled_back: false,
+                    // `EnterAnotherMap` 前置门（`CellValid` 等）⇒ 目的地不可进，按地形归类。
+                    blocked: Some(StepBlock::Terrain),
+                }
+            }
+            RouteOutcome::RolledBack => {
+                // oracle `Walk()` 返回 false ⇒ 上游 `WalkTo` 同样回滚坐标、不发移动帧；
+                // 但 `EnterAnotherMap` 的落地失败支仍执行泡点计时复位（`:3796`）。
+                self.sessions.truncate_map_changes(mc_len);
+                self.rollback_move(actor_id, old_x, old_y, old_map);
+                StepOutcome {
+                    moved: false,
+                    changed_map: false,
+                    rolled_back: true,
+                    // `AddToMap` 落地失败（目标格不可登记）⇒ 同样按地形归类。
+                    blocked: Some(StepBlock::Terrain),
+                }
+            }
+            RouteOutcome::Switched => StepOutcome {
+                moved: true,
+                changed_map: true,
+                rolled_back: false,
+                blocked: None,
+            },
+            RouteOutcome::Skipped => StepOutcome {
+                moved: true,
+                changed_map: false,
+                rolled_back: false,
+                blocked: None,
+            },
+        }
+    }
+
+    /// **L1 TransMap 触发**：actor 在**当前格**做一次路线检查（走/跑/骑跑成功移动之后，或 `CM_TURN`
+    /// 原地转身）。返回值见 [`RouteCheck`]：`Switched` = 换图成功，`RolledBack` = 已进
+    /// `EnterAnotherMap` 落地段但 `AddToMap` 失败并回滚，`NoMapChange` = 无换图（含前置门失败）。
+    ///
+    /// 调用点：① [`World::step_with_route`]（走）；② `CM_TURN` 原地转身（oracle `ClientChangeDir`
+    /// 也调 `Walk(RM_TURN)`，`PlayObject.Operate.cs:334`）。转身路径无「走前格」可回滚，故失败支
+    /// 只撤掉误记的 `MapChange`（oracle 转身时 `Walk()` 返回 false ⇒ 不发转身帧而回
+    /// `RM_MOVEFAIL`；**该帧本宿主未接，登记**）。
+    pub fn walk_route_check(&mut self, actor_id: i32) -> RouteCheck {
+        let mc_len = self.sessions.map_changes().len();
+        match self.route_enter(actor_id) {
+            RouteOutcome::Switched => RouteCheck::Switched,
+            RouteOutcome::Failed => {
+                self.sessions.truncate_map_changes(mc_len);
+                RouteCheck::NoMapChange
+            }
+            RouteOutcome::RolledBack => {
+                self.sessions.truncate_map_changes(mc_len);
+                RouteCheck::RolledBack
+            }
+            RouteOutcome::Skipped => RouteCheck::NoMapChange,
+        }
+    }
+
+    /// **`PlayObject.Walk` 覆写（`PlayObject.cs:1850-1918`）的路线检查本体**：读 actor 的当前格，
+    /// **顺序遍历该格 `ObjList` 里的全部 `CellType::MapRoute`**（oracle 的 `for` **不 break**，
+    /// `PlayObject.cs:1862-1884`），逐个走门 + `EnterAnotherMap`（复用 [`World::switch_map`] 落地）。
+    ///
+    /// 逐项对照 oracle 门（`PlayObject.cs:1869-1882` 外套 `EnterAnotherMap`，`:3718-3757`）：
+    /// - `Envir.CellMatch(CurrX,CurrY)` 失败 ⇒ `return true`（无换图、不回滚）；
+    /// - `cellSuccess && cellInfo.IsAvailable` 失败 ⇒ 不进 `for`（无换图）；
+    /// - `mapRoute.Envir != null`：本仓 hop 表命中即非空；
+    /// - `Envir.ArroundDoorOpened(CurrX,CurrY)`：**已建模**——读本图门表（`MapGrid::arround_door_opened`，
+    ///   宿主按注册表灌入）。±1 邻域内有门且该门 `!Opened` ⇒ 整支跳过、**不换图**（oracle 门结构性
+    ///   恒未开 ⇒ 门相邻的 route 格恒被挡；无门表 ⇒ 恒 true，合成场景行为不变）；
+    /// - `(!mapRoute.Envir.Flag.boNEEDHOLE) || EventMgr.GetEvent(Envir,CurrX,CurrY,ET_DIGOUTZOMBI) != null`：
+    ///   **本仓无 `MapEvent` 模型 ⇒ 事件恒不存在** ⇒ 落到 Rust 就是「**目标图 `boNEEDHOLE` 命中即挡**」
+    ///   （`PlayObject.cs:1874`）。这是一个**真门**：真实 `MapInfo.txt` 有 `Q004/R001/H007/H106` 四段带
+    ///   `NEEDHOLE`，共 **7** 条真实 route 以它们为目标图（见下方 `route_enter` 的登记块）⇒ 这些 route
+    ///   在 oracle **不换图**。**将来若建事件模型**：把此判据换回
+    ///   `!dst.need_hole() || self.event_at(dst, hop.dst_x, hop.dst_y, ET_DIGOUTZOMBI).is_some()`
+    ///   （接口位留在此处，`event_at` 待增）。
+    /// - `M2Share.ServerIndex == mapRoute.Envir.ServerIndex`：**单区单 World ⇒ 恒同**（登记；异支
+    ///   `ChangeSpaceMove` 跨服搬家**未建**）；
+    /// - `EnterAnotherMap` 的其余门（`:3721-3757`）：等级门 `Abil.Level < envir.EnterLevel`（oracle
+    ///   `EnterLevel` 是恒 0 的 get-only 属性 ⇒ 照搬"死门"恒过，登记）、`NeedSetonFlag` 门（本仓无任务
+    ///   标志 ⇒ 恒过，登记）、`!envir.CellValid(nDMapX,nDMapY)`（**实门**）、castle 门（无城堡注册表 ⇒
+    ///   恒过，登记）、`NoHorse`（无骑马字段 ⇒ 不建模，登记）。
+    ///
+    /// **多 route 终落点**：oracle 顺序处理、**不 break** ⇒ 终落点 = **最后一条**成功换图的 route 目标
+    /// （真实数据有重复源格：如 `D5069(90,76)` 同时 `→D5062(8,39)` 与 `→D5071(8,10)`，终落点 = `D5071`）。
+    fn route_enter(&mut self, actor_id: i32) -> RouteOutcome {
+        let Some(e) = self.entities.get(actor_id) else {
+            return RouteOutcome::Skipped;
+        };
+        // `PlayObject.Walk` 覆写专属 ⇒ 只有玩家（`Race == ActorRace.Play`）触发；非玩家走
+        // `BaseObject.Walk` 的 `CellType.MapRoute => result = false`（只挡路、不换图）。
+        if e.race != crate::entity::ACTOR_RACE_PLAY {
+            return RouteOutcome::Skipped;
+        }
+        let (x, y, map_id) = (e.x, e.y, e.map_id);
+        // 顺序收集该格全部 `MapRoute`（oracle 的 `for` 不 break）——**在换图前**收集，复刻
+        // oracle「`cellInfo` 在 `EnterAnotherMap` 改 `Envir` 前已捕获」的语义。
+        let route_ids: Vec<i32> = {
+            let Some(map) = self.maps.get(map_id) else {
+                return RouteOutcome::Skipped;
+            };
+            // `if (!Envir.CellMatch(CurrX, CurrY)) return true;`
+            if !map.cell_match(x, y) {
+                return RouteOutcome::Skipped;
+            }
+            // `if (cellSuccess && cellInfo.IsAvailable)`。
+            let (cell, cell_success) = map.get_cell_info(x, y);
+            if !(cell_success && cell.is_available()) {
+                return RouteOutcome::Skipped;
+            }
+            cell.obj_list
+                .iter()
+                .filter(|o| o.cell_type == CellType::MapRoute)
+                .map(|o| o.cell_obj_id)
+                .collect()
+        };
+        if route_ids.is_empty() {
+            return RouteOutcome::Skipped;
+        }
+        let mut switched = false;
+        let mut failed = false;
+        let mut rolled_back = false;
+        for route_id in route_ids {
+            // `M2Share.CellObjectMgr.Get<MapRouteItem>(CellObjId)`；`mapRoute.Envir != null`。
+            let Some(hop) = self
+                .maps
+                .get(map_id)
+                .and_then(|m| m.route_hop(route_id).copied())
+            else {
+                continue;
+            };
+            // `if (Envir.ArroundDoorOpened(CurrX, CurrY))`（`PlayObject.cs:1872`；
+            // `Envirnoment.cs:1185-1203`）：±1 邻域内有门且该门 `!Opened` ⇒ 整支跳过（不换图；
+            // `result` 保持 true ⇒ 走位照常、不回滚——与 NEEDHOLE 门同型）。门数据由宿主
+            // （`bins/game-svr`）按注册表逐图 `set_doors` 灌入；无门表 ⇒ 恒 true（改动前行为不变）。
+            // oracle 门恒未开（`CM_OPENDOOR` 结构性 no-op，见 `design-door-and-mapevent-20261016.md`
+            // §2.2）⇒ 与门相邻（±1）的 route 格**恒被挡**。
+            let door_ok = self
+                .maps
+                .get(map_id)
+                .is_some_and(|m| m.arround_door_opened(x, y));
+            if !door_ok {
+                continue;
+            }
+            // `(!mapRoute.Envir.Flag.boNEEDHOLE) || EventMgr.GetEvent(...) != null`：
+            // 无 `MapEvent` 模型 ⇒ 事件恒 null ⇒ 目标图 `boNEEDHOLE` 命中即**挡**（门跳过：result 保持
+            // true，不换图、不回滚）。**登记：`Q004/R001/H007/H106` 四段带 `NEEDHOLE`，共 7 条真实
+            // route 以它们为目标**（`D402(138,107|138,108|137,107|137,108)→Q004(14,14)`、
+            // `D717(80,28)→R001(162,169)`、`H006(83,25)→H007(161,172)`、`h006(80,28)→H106(163,169)`）
+            // ⇒ 踩这些源格在 oracle **不换图**（moved 正常、changed_map=false）。
+            // **MB-1**：`(!mapRoute.Envir.Flag.boNEEDHOLE) ||
+            // EventMgr.GetEvent(Envir, CurrX, CurrY, ET_DIGOUTZOMBI) != null`——事件查的是
+            // **玩家当前图/当前格**（`Envir`/`CurrX/CurrY`），不是目标图/目标格。
+            if self.maps.get(hop.dst_map_id).is_some_and(|m| m.need_hole())
+                && !self.dig_out_event_at(map_id, x, y)
+            {
+                continue;
+            }
+            // `!envir.CellValid(nDMapX, nDMapY)` ⇒ `EnterAnotherMap` 返回 false。
+            let dst_valid = self
+                .maps
+                .get(hop.dst_map_id)
+                .is_some_and(|m| m.cell_valid(hop.dst_x, hop.dst_y));
+            if !dst_valid {
+                // oracle `!envir.CellValid(...)` 是 `EnterAnotherMap` 的前置门：提前 `return
+                // false` ⇒ 不执行落地段/泡点复位。
+                failed = true;
+                continue;
+            }
+            // 复用既有 `switch_map` 落地（旧图摘除 → 新图登记 → 记一条 `MapChange`）。
+            let Some(chr_name) = self
+                .sessions
+                .iter()
+                .find(|s| s.actor_id == Some(actor_id))
+                .map(|s| s.chr_name.clone())
+            else {
+                continue;
+            };
+            // oracle `PlayObject.cs:1878-1881`：`if (!EnterAnotherMap(...)) { result = false; }`
+            // ⇒ **任何** `EnterAnotherMap` 失败都必须置 `result=false`，不只看前置门。
+            // 目标越界时 `CellValid` 返回 **true**（`Envirnoment.cs:307-314`）⇒ 前置门放行，
+            // 由 `AddMapObject` 的 `CellMatch` 失败返回 false（`PlayObject.cs:3779-3791`）
+            // ⇒ 本仓对应 `switch_map` 的 `Err(CellRejected)`（已在其中回滚旧图旧格，`df5a260ea`）。
+            // `NoSuchMap`/`NotInWorld` 是 Rust 独有护栏（oracle `EnterAnotherMap` 无对应错误；
+            // 目标图由 route 表校验、会话由宿主建立）⇒ 按「失败」保守处理，与 `result=false` 同支。
+            match self.switch_map(&chr_name, hop.dst_map_id, hop.dst_x, hop.dst_y) {
+                Ok(()) => switched = true,
+                // `CellRejected` = oracle `AddToMap()` 返回 false ⇒ 走回滚支；该支之后仍执行
+                // `AutoGetExpTick = GetTickCount()`（`PlayObject.cs:3793-3796`）。
+                Err(crate::session::SessionError::CellRejected) => rolled_back = true,
+                // `NoSuchMap`/`NotInWorld` 等 Rust 独有护栏（oracle 无对应）⇒ 按前置失败处理：
+                // 不进落地段、不复位泡点时间（保守取「不回滚支」）。
+                Err(_) => failed = true,
+            }
+        }
+        // oracle `if (result)`：任一 `EnterAnotherMap` 失败 ⇒ result=false（即便另一条成功过，
+        // oracle 的 `result` 也被置 false；该「部分成功 + 部分失败」病态混合在真实数据不可达，本仓
+        // 按"任一失败 ⇒ 回滚到走前格"处理并登记）。
+        //
+        // 复位口径：`RolledBack` 优先于 `Failed`——oracle 的 `AddToMap` 失败支在 `if/else`
+        // 之后仍执行复位；前置门失败则提前 `return`，永不复位。
+        if rolled_back {
+            RouteOutcome::RolledBack
+        } else if failed {
+            RouteOutcome::Failed
+        } else if switched {
+            RouteOutcome::Switched
+        } else {
+            RouteOutcome::Skipped
+        }
+    }
+
+    /// **走前格回滚**（oracle `BaseObject.WalkTo:685-688`）：`Envir.DeleteFromMap(CurrX,CurrY)`
+    /// → `CurrX=oldX; CurrY=oldY` → `Envir.AddMapObject(oldX,oldY)`。**不查阻挡**（照 oracle）。
+    ///
+    /// 用于 [`World::step_with_route`] 在 `EnterAnotherMap` 失败后的坐标回滚。注意 oracle 在
+    /// 「先成功换图、后有 route 失败」这种病态混合下会把玩家登记到**目标图**的**源坐标**上（现实
+    /// 不可达）；本仓统一按"回到源图走前格"处理（已登记）。
+    fn rollback_move(&mut self, actor_id: i32, fx: i32, fy: i32, map_id: usize) {
+        let Some(e) = self.entities.get(actor_id) else {
+            return;
+        };
+        let cur_map = e.map_id;
+        // 从当前格摘除（可能是目标图，也可能是同图的目标格）。
+        self.remove_from_map(actor_id, cur_map);
+        if let Some(t) = self.entities.transform_mut(actor_id) {
+            t.map_id = map_id;
+            t.x = fx;
+            t.y = fy;
+        }
+        let now = self.clock_ms;
+        self.maps[map_id].add_map_object(fx, fy, CellType::Play, actor_id, now);
+    }
+
+    /// **同步移动**（`openmir2-m3-move-wiring` 的接线入口）：`steps` = 走 / 跑 / 骑跑的格数（1/2/3）。
+    ///
+    /// oracle 的 `ClientWalkXY`/`ClientRunXY`/`ClientHorseRunXY` 在**消息处理线程上立即**改坐标
+    /// （`WalkTo`/`RunTo`/`HorseRunTo` → `Envir.MoveToMovingObject`），不等 tick；本方法对应
+    /// `Command::Walk` 的**同一套** `try_step` 判据（阻挡/格子校验逐字节同构），只是不入队。
+    ///
+    /// `steps > 1` 时照 oracle 的写法**先逐格判可走、再一次性移动**（`RunTo` 的
+    /// `CanWalkEx(cur+1) && CanWalkEx(cur+2) && MoveToMovingObject(cur, cur+2)`；
+    /// `HorseRunTo` 为 3 格）：中途任一格不可走 ⇒ 一格都不动（不是走一段再失败）。
+    ///
+    /// **非玩家 `MapRoute` 阻挡**（`BaseObject.Walk` 的非玩家支）：落点格含 `CellType::MapRoute`
+    /// 且 actor `race != ACTOR_RACE_PLAY` ⇒ 拒绝该步（坐标不变、返回 `false`），语义等价 oracle
+    /// `BaseObject.Walk` 的 `case CellType.MapRoute: result = false`（`BaseObject.cs:1548`）与**上游
+    /// `WalkTo` 回滚**（`DeleteFromMap` → `CurrX=oldX;CurrY=oldY` → `AddMapObject`，`:683-688`）。
+    /// **只挡非玩家**——玩家走 `PlayObject.Walk` 覆写（对 MapRoute 走 `EnterAnotherMap` **换图**、
+    /// 不是阻断），由 [`World::step_with_route`] 负责（`PlayObject.cs:1868-1892`）。
+    ///
+    /// 红检（变异牙）：删掉本函数里的 `race != ACTOR_RACE_PLAY` 落点检查 ⇒
+    /// `try_step_now` 会被怪物走上 route 格、`step_with_route_does_not_switch_for_monster` 必红。
+    ///
+    /// **卡 `openmir2-movefail-log-reason`**：判定体已移到 [`World::try_step_now_blocked`]（带回原因）；
+    /// 本函数保留 bool 口径，返回真值与改动前逐例相同。
+    #[must_use]
+    pub fn try_step_now(&mut self, actor_id: i32, dx: i32, dy: i32, steps: i32) -> bool {
+        Self::try_step_now_impl(&mut self.entities, &mut self.sim, actor_id, dx, dy, steps)
+    }
+
+    /// **P6b2**：`try_step_now` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+    ///
+    /// 怪物 AI（`SimMonsterAi` 段）的 `WalkTo` 落点走本函数；facade 与段只有这一份实现。
+    pub(crate) fn try_step_now_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+        steps: i32,
+    ) -> bool {
+        Self::try_step_now_blocked_impl(access, sim, actor_id, dx, dy, steps).is_ok()
+    }
+
+    /// [`World::try_step_now`] 的**分类版**：判定顺序与原实现逐条相同，额外把被拒原因带出来
+    /// （只供日志分类，不参与判定）。
+    ///
+    /// 多格（跑/骑跑）时报告**第一处**失败格的原因（`k` 从 1 起，与 `cell_free_blocked` 的判序一致）；
+    /// 落点格（走完的 `CurrX/CurrY`）含 `MapRoute` 且非玩家 ⇒ 归 `Terrain`。
+    fn try_step_now_blocked(
+        &mut self,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+        steps: i32,
+    ) -> Result<(), StepBlock> {
+        Self::try_step_now_blocked_impl(&mut self.entities, &mut self.sim, actor_id, dx, dy, steps)
+    }
+
+    fn try_step_now_blocked_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+        steps: i32,
+    ) -> Result<(), StepBlock> {
+        if steps <= 0 || (dx == 0 && dy == 0) {
+            return Err(StepBlock::Other);
+        }
+        let Some(e) = access.get(actor_id) else {
+            return Err(StepBlock::Other);
+        };
+        let (fx, fy, map_id) = (e.x, e.y, e.map_id);
+        let race = e.race;
+        for k in 1..=steps {
+            Self::cell_free_blocked_impl(access, sim, map_id, fx + dx * k, fy + dy * k, actor_id)?;
+        }
+        // 落点格（走完的 `CurrX/CurrY`）含 MapRoute 且非玩家 ⇒ 挡（oracle `BaseObject.cs:1548`
+        // `result = false` + `WalkTo` 回滚 `:683-688`）。玩家由 `step_with_route` 的换图负责。
+        if race != crate::entity::ACTOR_RACE_PLAY
+            && sim
+                .maps
+                .get(map_id)
+                .is_some_and(|m| m.has_map_route(fx + dx * steps, fy + dy * steps))
+        {
+            // 不是活体占位、也不是越界（格存在且是 route 格）⇒ 按「地形不可走」归类。
+            return Err(StepBlock::Terrain);
+        }
+        Self::try_step_blocked_impl(access, sim, actor_id, dx * steps, dy * steps)
+    }
+
+    /// 目标格是否可站的**分类版**（与 `try_step_blocked_impl` 的阻挡口径同源：`cell_match` +
+    /// `valid()/is_available()` + 阻挡 actor 的 `!Ghost && !Death && !FixedHideMode && !ObMode`；
+    /// `self_id` 自己不算阻挡）。`Ok(())` = 可站。
+    fn cell_free_blocked_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        tx: i32,
+        ty: i32,
+        self_id: i32,
+    ) -> Result<(), StepBlock> {
+        let Some(map) = sim.maps.get(map_id) else {
+            return Err(StepBlock::Other);
+        };
+        if !map.cell_match(tx, ty) {
+            return Err(StepBlock::Bounds);
+        }
+        let (cell, ok) = map.get_cell_info(tx, ty);
+        if !ok {
+            return Err(StepBlock::Terrain);
+        }
+        if !(cell.valid() && cell.is_available()) {
+            return Ok(());
+        }
+        if cell.obj_list.iter().any(|o| {
+            o.actor_object
+                && o.cell_obj_id != self_id
+                && access
+                    .get(o.cell_obj_id)
+                    .is_some_and(|e| !e.ghost && !e.death && !e.fixed_hide_mode && !e.ob_mode)
+        }) {
+            return Err(StepBlock::Actor);
+        }
+        Ok(())
+    }
+
+    /// **P5-A2 / P7**：`try_step` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 判据链与旧实现逐句相同：`try_step_blocked_impl`（`cell_match` → `move_object` →
+    /// 分类 → `Transform` 写回）。`Command::Walk` 的 facade 与段只有这一份实现。
+    fn try_step_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+    ) -> bool {
+        Self::try_step_blocked_impl(access, sim, actor_id, dx, dy).is_ok()
+    }
+
+    /// 单步移动的**分类版**：格子校验 → 更新坐标。`Ok(())` = 已移动；`Err(_)` = 未移动及原因。
+    ///
+    /// **判序与原 `try_step` 完全一致**：`cell_match` 假在调 `move_object` 之前就返回（base 同样
+    /// 不调，无侧效应）；其余一律交给 `move_object`，分类发生在它返回 false **之后**。这个顺序
+    /// 是必需的——oracle `MoveToMovingObject` 对「界内但 `CellValid` 假」的目标格会**先把 actor
+    /// 从源格摘除、再因 `cellSuccess` 假返回 false**（本仓 `move_object` 的「先删后判」同构）。
+    /// 若提前短路分类，源格登记会与 base 不同（撞墙后 base 源格 = 0、提前短路 = 1，R26-1 实测）。
+    /// **P5-A2**：`try_step_blocked` 的 facade/段共用实现（`Command::Walk` 的 `try_step` 与
+    /// 怪物 AI 段的 `WalkTo` 单步移动同走这一份）。
+    fn try_step_blocked_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        dx: i32,
+        dy: i32,
+    ) -> Result<(), StepBlock> {
+        let Some(e) = access.get(actor_id) else {
+            return Err(StepBlock::Other);
+        };
+        let (fx, fy, map_id) = (e.x, e.y, e.map_id);
+        let cert_cell_type = entity_cell_type(&e);
+        let (tx, ty) = (fx + dx, fy + dy);
+        // `move_object` 的 `is_blocking` 闭包需要「不可变借用 `maps` 期间」算好的 id 名单。
+        // 前置 `cell_match` 与 base 同：越界在调 `move_object` 之前返回（base 也无侧效应）。
+        let blockers: Vec<i32> = {
+            let Some(map) = sim.maps.get(map_id) else {
+                return Err(StepBlock::Other);
+            };
+            if !map.cell_match(tx, ty) {
+                return Err(StepBlock::Bounds);
+            }
+            let (cell, _) = map.get_cell_info(tx, ty);
+            cell.obj_list
+                .iter()
+                .filter(|o| o.actor_object)
+                .map(|o| o.cell_obj_id)
+                .collect()
+        };
+        let blocking: Vec<i32> = blockers
+            .into_iter()
+            .filter(|id| {
+                access
+                    .get(*id)
+                    .is_some_and(|o| !o.ghost && !o.death && !o.fixed_hide_mode && !o.ob_mode)
+            })
+            .collect();
+        let now = sim.clock_ms;
+        let Some(map) = sim.maps.get_mut(map_id) else {
+            return Err(StepBlock::Other);
+        };
+        let moved = map.move_object(
+            crate::map::MoveRequest {
+                from_x: fx,
+                from_y: fy,
+                actor_id,
+                cert_cell_type,
+                to_x: tx,
+                to_y: ty,
+                ignore_block: false,
+                add_time: now,
+            },
+            |cid| blocking.contains(&cid),
+        );
+        if !moved {
+            // **分类必须在 `move_object` 之后**：保留它「先删源格、后判 cellSuccess」的 oracle
+            // 侧效应（见函数头注释）。界内 invalid ⇒ Terrain、活体占位 ⇒ Actor；`cell_free_blocked`
+            // 回 `Ok` 的残余失败（如 `(0,0)` 自占格被 `is_blocking` 命中）⇒ Other。
+            return Err(Self::classify_block_impl(
+                access, sim, map_id, tx, ty, actor_id,
+            ));
+        }
+        if let Some(t) = access.transform_mut(actor_id) {
+            t.x = tx;
+            t.y = ty;
+        }
+        Ok(())
+    }
+
+    /// `move_object` 判假之后的**原因分类**（只允许在调用之后用：见
+    /// [`World::try_step_blocked_impl`] 的「先删后判」说明）。与 [`World::cell_free_blocked_impl`] 同口径；
+    /// 该函数回 `Ok` 的残余失败（如 `(0,0)` 自占格被 `is_blocking` 命中）归 `Other`。
+    fn classify_block_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        sim: &SimState,
+        map_id: usize,
+        tx: i32,
+        ty: i32,
+        self_id: i32,
+    ) -> StepBlock {
+        Self::cell_free_blocked_impl(access, sim, map_id, tx, ty, self_id)
+            .err()
+            .unwrap_or(StepBlock::Other)
+    }
+
+    /// **出站接线片 W2**：`Command::Push` → `BaseObject.CharPushed`
+    /// （`src/M2Server/Actor/BaseObject.cs:854-897`）——委托给逐句实现
+    /// [`World::char_pushed_core`]（含 `Dir` 复原与 `WalkTick += 800`；帧面在宿主）。
+    fn push_now(&mut self, actor_id: i32, n_dir: u8, count: u8) -> Vec<crate::action::PushEvent> {
+        Self::push_now_impl(&mut self.entities, &mut self.sim, actor_id, n_dir, count)
+    }
+
+    /// **P5-A2**：`Command::Push` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 逐格推进的唯一实现在 [`World::char_pushed_core`]（P3a 已抽出，`SimDup` 与
+    /// `RM_DELAYPUSHED` 共用）；本函数只是命令面的命名入口，逐格推进体与 `char_pushed_core` 相同。
+    pub(crate) fn push_now_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        n_dir: u8,
+        count: u8,
+    ) -> Vec<crate::action::PushEvent> {
+        Self::char_pushed_core(access, sim, actor_id, n_dir, count)
+    }
+
+    /// `Envirnoment.CanWalk(nx, ny, true)` 的 `cellSuccess` 子集（`Envirnoment.cs:442-486` 的
+    /// **boFlag=true** 支：只判 `cellSuccess && Valid`，不查格上对象）——`DoMotaebo` 的
+    /// `if (Envir.CanWalk(nX, nY, true)) n28 = 0;`（`src/M2Server/Player/PlayObject.Base.cs:1461`）。
+    fn can_walk_ignore_objects_impl(sim: &SimState, map_id: usize, x: i32, y: i32) -> bool {
+        sim.maps
+            .get(map_id)
+            .is_some_and(|m| m.get_cell_info(x, y).1)
+    }
+
+    /// **出站接线片 W2**：`PlayObject.DoMotaebo`（`src/M2Server/Player/PlayObject.Base.cs:1389-1490`）
+    /// 的**无正前目标**支（`else`，`:1443-1467`）的世界侧转发。
+    ///
+    /// 向前冲刺至多 `steps` 格：每成功一格发 `SendRefMsg(RM_RUSH, nDir, CurrX, CurrY, 0, "")`
+    /// ⇒ 记 [`crate::action::RushEvent`]（`frame = Rush`、`dir = nDir`、位置 = 走**后**格）；
+    /// 被挡时若正前**不可走**（`CanWalk(nX, nY, true)` 为假）⇒ `bo35`，循环末尾 `GetFrontPosition`
+    /// 后再发 `SendRefMsg(RM_RUSHKUNG, Dir, nX, nY, 0, "")` ⇒ 追加一条 `frame = RushKung` 事件
+    /// （位置 = **被挡的正前格**，角色不在该格上）。正前可走但被活体挡 ⇒ 照 oracle 继续循环
+    /// （`n28 = 0` 只影响伤害，非本例建模面）。
+    ///
+    /// **不在本片**（登记）：有正前目标支（`:1404-1440`：`CharPushed` 目标 + 进占其旧格 + 伤害）、
+    /// `bo35 == false` 时的 `RM_STRUCK` 伤害段（`:1469-1486`）。
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
+    fn rush_now(&mut self, actor_id: i32, n_dir: u8, steps: i32) -> Vec<crate::action::RushEvent> {
+        Self::rush_now_impl(&mut self.entities, &mut self.sim, actor_id, n_dir, steps)
+    }
+
+    /// **P5-A2**：`rush_now` 的 facade/段共用实现（`EntityAccess` + `SimState`）。
+    ///
+    /// 逐句与旧 `World::rush_now` 相同：每格 `front_position` → `try_step_impl`
+    /// （判据与 `Command::Walk` 同源）→ 被挡时 `can_walk_ignore_objects_impl` 决定
+    /// `RushKung`。取数点为零（本族不抽 RNG）。
+    pub(crate) fn rush_now_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        actor_id: i32,
+        n_dir: u8,
+        steps: i32,
+    ) -> Vec<crate::action::RushEvent> {
+        if steps <= 0 {
+            return Vec::new();
+        }
+        let Some(e) = access.get(actor_id) else {
+            return Vec::new();
+        };
+        let (mut x, mut y, map_id) = (e.x, e.y, e.map_id);
+        let Some((w, h)) = sim.maps.get(map_id).map(|m| (m.width, m.height)) else {
+            return Vec::new();
+        };
+        let mut out = Vec::new();
+        let mut blocked_front = false;
+        for _ in 0..steps {
+            let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
+            if Self::try_step_impl(access, sim, actor_id, nx - x, ny - y) {
+                x = nx;
+                y = ny;
+                out.push(crate::action::RushEvent {
+                    actor_id,
+                    frame: crate::action::RushFrame::Rush,
+                    dir: n_dir,
+                    x,
+                    y,
+                });
+            } else if !Self::can_walk_ignore_objects_impl(sim, map_id, nx, ny) {
+                // `CanWalk(nX, nY, true)` 为假 ⇒ `bo35 = true; break;`
+                blocked_front = true;
+                break;
+            }
+        }
+        if blocked_front {
+            let (nx, ny) = crate::magic::front_position(x, y, n_dir, w, h);
+            out.push(crate::action::RushEvent {
+                actor_id,
+                frame: crate::action::RushFrame::RushKung,
+                dir: n_dir,
+                x: nx,
+                y: ny,
+            });
+        }
+        out
+    }
+
+    /// **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：屠宰效果体
+    /// （`src/M2Server/Player/PlayObject.Operate.cs:716-745`）。
+    ///
+    /// 逐行对照（行号 = 本仓 `283a27460` 的 `src/M2Server/Player/PlayObject.Operate.cs`）：
+    ///
+    /// | oracle | 本函数 |
+    /// |---|---|
+    /// | `:716` 两轴 `|nX-CurrX|<=2` | 同（屠宰者坐标） |
+    /// | `:718` `Envir.IsValidObject(nX,nY,2,baseObject)` | `get_cell_info(nX,nY)` 成功（格子在图内且是 `Walk`）**且** `IsAvailable`（`ObjList` 非空，`MapCellInfo.cs:30`）**且** 该格 `ObjList` 里有 `actor_object && cell_obj_id == 尸体.ActorId` 的成员（oracle 的循环变量 `nXx/nYy` **未被使用**，`GetCellInfo` 恒查 `(nX,nY)` ⇒ 实际只判该格；已 `make_ghost`/`DisappearA` 摘格的尸体不再过门） |
+    /// | `:720` `baseObject.Death && !Skeleton && Animal` | `death && !ai.skeleton && (ai.animal || is_animal_race(race))`——`Animal` 的**运行时等价物**是 [`crate::monai::is_animal_race`]（ctor 继承补 105/106/114/132；118/119 显式 false 已排除），**不是** `combat::race_is_animal`（那只是 `SKILL_TAMMING` 门） |
+    /// | `:722` `n10 = (byte)(Random(16) + 5)` | `random_below(16) + 5`（**第 1 抽**） |
+    /// | `:723` `meatQuality = (ushort)(Random(201) + 100)` | `random_below(201) + 100`（**第 2 抽**） |
+    /// | `:724` `BodyLeathery -= n10`（`byte` 回绕） | `wrapping_sub` |
+    /// | `:725-729` `MeatQuality -= meatQuality; if (<=0) = 0`（`ushort` 回绕，`<=0` 只命中 0） | `wrapping_sub` + 恒等清零 |
+    /// | `:730` `if (BodyLeathery <= 0)` | `== 0`（`u8` 无负值） |
+    /// | `:732-736` `Race ∈ [Animal(50), Monster(80))` ⇒ `Skeleton=true; ApplyMeatQuality(); RM_SKELETON` | 置位 + 记 [`crate::action::SkeletonEvent`]；`ApplyMeatQuality`（改 `ItemList` 中 `StdMode==40` 物品的 `Dura`）**未建模**（本仓尸体无 `ItemList`，登记 T-206） |
+    /// | `:738-742` `TakeBagItems` / `BodyLeathery = 50` | 未建模物品转移（登记）；`body_leathery = 50` 同 |
+    /// | `:744` `DeathTick = GetTickCount()`（**玩家自己**的字段） | `actor.death_tick = clock_ms` |
+    ///
+    /// **不建模**：`TakeBagItems`（把尸体 `ItemList` 逐件塞进屠宰者背包，失败时 `SysMsg(YouFoundNothing)`）
+    /// ——本仓尸体无 `ItemList`，属 G-物品面登记（T-206）；`ApplyMeatQuality` 同上。
+    ///
+    /// 返回：命中骨架支 ⇒ `Some(SkeletonEvent)`（以尸体为发送者），否则 `None`。
+    /// **P5-A3 / P7**：`Command::ButchEffect` 的 facade —— 一行委派
+    /// [`World::butch_effect_now_impl`]（oracle 逐行对照表见该实现上方的说明）。
+    ///
+    /// **P7 起接收调用方的 `record`**（迁移前的一次性 scratch record 已删除）：tick 路径由
+    /// `Command` 段传入真实 record，`skeletons` 记账由 impl 独占写入。
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
+    fn butch_effect_now(
+        &mut self,
+        record: &mut TickRecord,
+        actor_id: i32,
+        target_id: i32,
+        n_x: i32,
+        n_y: i32,
+    ) -> Option<crate::action::SkeletonEvent> {
+        Self::butch_effect_now_impl(
+            &mut self.entities,
+            &mut self.sim,
+            record,
+            actor_id,
+            target_id,
+            n_x,
+            n_y,
+        )
+    }
+
+    /// **P5-A3**：`butch_effect_now` 的 facade/段共用实现
+    /// （`EntityAccess` + `&mut SimState` + `&mut TickRecord`）——逐句与旧实现相同，
+    /// 唯一差异是接收者换成访问器；oracle 逐行对照表见 [`World::butch_effect_now`] 的文档
+    /// （本函数与它同一份判据链）。
+    ///
+    /// **取数点（R 级判据）**：门全过 ⇒ 恰 2 抽（先 `Random(16)+5`、再 `Random(201)+100`，
+    /// `Operate.cs:722-723`）；任一门前置不过 ⇒ **零抽数**（所有门都在两次抽之前）。
+    ///
+    /// **产物**：命中骨架支 ⇒ `record.skeletons` 一条；`processed` 记账仍在调用点
+    /// （旧 `tick_head` 对 `Command::ButchEffect` 恒记 true，与本函数拆分口径一致）。
+    fn butch_effect_now_impl<A: crate::entity::EntityAccess>(
+        access: &mut A,
+        sim: &mut SimState,
+        record: &mut TickRecord,
+        actor_id: i32,
+        target_id: i32,
+        n_x: i32,
+        n_y: i32,
+    ) -> Option<crate::action::SkeletonEvent> {
+        // `:716` `Math.Abs(nX - CurrX) <= 2 && Math.Abs(nY - CurrY) <= 2`（`this` = 屠宰者）。
+        let (curr_x, curr_y, map_id) = {
+            let actor = access.get(actor_id)?;
+            (actor.x, actor.y, actor.map_id)
+        };
+        if (n_x - curr_x).abs() > 2 || (n_y - curr_y).abs() > 2 {
+            return None;
+        }
+        // `:718` `Envir.IsValidObject(nX, nY, 2, baseObject)`（`Envirnoment.cs:1254-1275`）：
+        // oracle 的双层循环变量 `nXx/nYy` **未被使用**（`GetCellInfo` 恒查 `(nX,nY)`），所以
+        // 实际判据 = 该格 `cellSuccess && IsAvailable`（`MapCellInfo.cs:30`：`ObjList.Count > 0`）
+        // **且** 该格 `ObjList` 里存在 `CellObjId == baseObject.ActorId` 的成员。
+        // ⇒ 已 `make_ghost`/`DisappearA` 摘格的尸体（坐标不变但不在格内）不再过门——这正是
+        // oracle 的语义；只看坐标会把它们放行（多 2 抽 + 多一条 SM_SKELETON）。
+        {
+            let target = access.get(target_id)?;
+            let (cell, cell_success) = sim.maps.get(map_id)?.get_cell_info(n_x, n_y);
+            if !cell_success
+                || !cell.is_available()
+                || !cell
+                    .obj_list
+                    .iter()
+                    .any(|o| o.actor_object && o.cell_obj_id == target_id)
+            {
+                return None;
+            }
+            // `:720` `Death && !Skeleton && Animal`。`Animal` 的运行时等价物 =
+            // [`crate::monai::is_animal_race`]（ctor 继承补 105/106/114/132；118/119 已排除），
+            // **不是** `combat::race_is_animal`（后者只服务 `SKILL_TAMMING` 门，会让这 4 个
+            // race 在 oracle 抽 2 次、本仓零抽 ⇒ 每次屠宰推移世界 RNG 流）。
+            let animal = target.ai.animal || crate::monai::is_animal_race(target.race);
+            if !(target.death && !target.ai.skeleton && animal) {
+                return None;
+            }
+        }
+
+        // `:722-723` 两次抽（**次序与模数**即 R 级判据）：先 `Random(16)+5`，再 `Random(201)+100`。
+        let n10 = u8::try_from(sim.rng.random_below(16) + 5).unwrap_or(0);
+        let meat_draw = u16::try_from(sim.rng.random_below(201) + 100).unwrap_or(0);
+        let now = sim.clock_ms;
+
+        let mut skeleton = None;
+        let (target_x_now, target_y_now) = {
+            let target = access.get(target_id)?;
+            (target.x, target.y)
+        };
+        let e = access.get_mut(target_id)?;
+        // `:724-729`：`byte` / `ushort` 的 unchecked 回绕（**不夹取**；`<=0` 只命中 `==0`）。
+        e.ai.body_leathery = e.ai.body_leathery.wrapping_sub(n10);
+        e.ai.meat_quality = e.ai.meat_quality.wrapping_sub(meat_draw);
+        if e.ai.meat_quality == 0 {
+            e.ai.meat_quality = 0;
+        }
+        // `:730` `if (baseObject.BodyLeathery <= 0)`
+        if e.ai.body_leathery == 0 {
+            // `:732` `Race >= ActorRace.Animal && Race < ActorRace.Monster`
+            if e.appearance.race >= crate::entity::ACTOR_RACE_ANIMAL
+                && e.appearance.race < crate::entity::ACTOR_RACE_MONSTER
+            {
+                // `:734-736` `Skeleton = true; ApplyMeatQuality(); SendRefMsg(RM_SKELETON, …)`
+                e.ai.skeleton = true;
+                skeleton = Some(crate::action::SkeletonEvent {
+                    actor_id: target_id,
+                    dir: e.ai.dir,
+                    x: target_x_now,
+                    y: target_y_now,
+                });
+            }
+            // `:738-742` `TakeBagItems`（未建模，登记）/ `BodyLeathery = 50`
+            e.ai.body_leathery = 50;
+        }
+        // `:744` `DeathTick = HUtil32.GetTickCount();` —— 方法内 `this` = **屠宰者**。
+        if let Some(actor) = access.get_mut(actor_id) {
+            actor.life_cycle.death_tick = now;
+        }
+        if let Some(ev) = skeleton {
+            record.skeletons.push(ev);
+        }
+        skeleton
+    }
+
+    /// **出站接线片 W2**：`RM_BUTCH`（`src/M2Server/Player/PlayObject.Operate.cs:749`）的世界侧事件。
+    ///
+    /// oracle 末尾**无条件** `SendRefMsg(RM_BUTCH, Dir, CurrX, CurrY, 0, "")`；`Dir` 由宿主
+    /// （`CM_BUTCH` 门面）按 oracle 的「2 格 + `IsValidObject` + 具肉动物尸」门解析后传入——本片
+    /// 不含该入站门面，故事件只承载 `(dir, CurrX, CurrY)`。actor 不在世界 ⇒ 无事件。
+    /// **P5-A3 / P7**：`Command::Butch` 的 facade —— 一行委派 [`World::butch_now_impl`]
+    /// （`RM_BUTCH` 世界侧事件的逐句文档见该实现）。
+    ///
+    /// **P7 起接收调用方的 `record`**（迁移前的一次性 scratch record 已删除）：tick 路径由
+    /// `Command` 段传入真实 record，`butches` 记账由 impl 独占写入。
+    #[allow(dead_code)] // P7 起 tick 路径走段系统；本 facade 是用例的 EntityStore 对照入口
+    fn butch_now(
+        &self,
+        record: &mut TickRecord,
+        actor_id: i32,
+        dir: u8,
+    ) -> Option<crate::action::ButchEvent> {
+        Self::butch_now_impl(&self.entities, &self.sim, record, actor_id, dir)
+    }
+
+    /// **P5-A3**：`butch_now` 的 facade/段共用实现（`EntityAccess` + `&SimState`
+    /// + `&mut TickRecord`）。
+    ///
+    /// 本族只读实体坐标（不读任何非实体状态）⇒ `_sim` 只为统一 Command-handler 形态保留。
+    /// **产物**：`record.butches` 一条；`processed` 记账仍在调用点（旧 `tick_head` 的
+    /// `(actor_id, event.is_some())` 口径）。actor 不在世界 ⇒ 无事件。
+    fn butch_now_impl<A: crate::entity::EntityAccess>(
+        access: &A,
+        _sim: &SimState,
+        record: &mut TickRecord,
+        actor_id: i32,
+        dir: u8,
+    ) -> Option<crate::action::ButchEvent> {
+        let e = access.get(actor_id)?;
+        let event = crate::action::ButchEvent {
+            actor_id,
+            dir,
+            x: e.x,
+            y: e.y,
+        };
+        record.butches.push(event);
+        Some(event)
+    }
+
+    /// 对拍用地面物品清单：`(map_id, x, y, obj_id)`，按 `(map, x, y, obj_id)` 升序。
+    ///
+    /// 对应 C# 侧驱动从各 `EnvirnomentStub.CellArray` 扫出来的 `CellType.Item` 项。
+    pub fn floor_items_sorted(&self) -> Vec<(usize, i32, i32, i32)> {
+        let mut out = Vec::new();
+        for (map_id, map) in self.maps.iter().enumerate() {
+            for x in 0..map.width {
+                for y in 0..map.height {
+                    let (cell, ok) = map.get_cell_info(x, y);
+                    if !ok {
+                        continue;
+                    }
+                    for o in &cell.obj_list {
+                        if o.cell_type == CellType::Item {
+                            out.push((map_id, x, y, o.cell_obj_id));
+                        }
+                    }
+                }
+            }
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// 地面物品的**最小身份视图**（world 侧只读分片，owner §25.1 裁决 (A)）：
+    /// 每个 `CellType::Item` 格子对象一条，按 `(map, x, y, obj_id, item_id)` 升序。
+    ///
+    /// 字段全部来自 world 在**掉落落地时**的记账（`FloorItemMeta`），不派生、不改模拟语义；
+    /// 接线层拿它 + item_catalog 装配 `ground::GroundItem`，不需要反推金币 `count` 或归属。
+    /// `can_pick_up_tick` = 落地时间（`CellObject.add_time` 的虚拟时钟转 `i32`）。
+    pub fn floor_items_view_sorted(&self) -> Vec<FloorItemView> {
+        let mut out = Vec::new();
+        for (map_id, map) in self.maps.iter().enumerate() {
+            for x in 0..map.width {
+                for y in 0..map.height {
+                    let (cell, ok) = map.get_cell_info(x, y);
+                    if !ok {
+                        continue;
+                    }
+                    for o in &cell.obj_list {
+                        if o.cell_type != CellType::Item {
+                            continue;
+                        }
+                        let Some(meta) = o.item else {
+                            continue;
+                        };
+                        out.push(FloorItemView {
+                            map_id,
+                            x,
+                            y,
+                            obj_id: o.cell_obj_id,
+                            kind: meta.kind,
+                            index: meta.index,
+                            count: meta.count,
+                            item_id: meta.item_id,
+                            of_base_object: meta.of_base_object,
+                            can_pick_up_tick: o.add_time as i32,
+                        });
+                    }
+                }
+            }
+        }
+        out.sort_unstable_by_key(|v| (v.map_id, v.x, v.y, v.obj_id, v.item_id));
+        out
+    }
+
+    /// 对拍用快照：**在地图上的**实体的 `(id, map, x, y, hp, level, exp, 视野列表)`，**按 id 升序**。
+    ///
+    /// **过滤 `add_to_mapped == false` 的理由**（卡 `openmir2-makeghost-lifecycle-m3` 的 parity
+    /// 返工，tester-1 的 `world_session_parity` 红灯）：
+    /// `ent` 行是**地图投影**（`(id, map, x, y, …)`，map id 必填）⇒ 不在任何格表上的实体**表达不出来**；
+    /// oracle 侧 `MakeGhost`（`BaseObject.Base.cs:484-495`）→ `DisappearA` →
+    /// `Envir.DeleteFromMap`（`BaseObject.cs:1519-1522`）之后它就不在任何 Envir 上。
+    /// 本仓 M-3 之后 `soft_close` 保留 ghost 实体（oracle 的 `PlayObjectList` 也保留到
+    /// `RunTime=250` 的门，≈250–300ms）但**已摘格**（`add_to_mapped=false`）⇒ 投影按
+    /// 「在不在格表上」过滤。
+    ///
+    /// **为什么用 `add_to_mapped` 而不是 `ghost`**：
+    /// ① **实测承重的一半**：夹具命令 `ghost`（C# `ApplyGhost`）只置位、仍留在图上，参考侧**照列**它
+    ///    ⇒ 按 `ghost` 过滤会误删（换成 `!e.ghost` ⇒
+    ///    `world_combat_parity::ghosted_hitter_loses_exp_credit_in_same_tick` 红）。
+    /// ② **已登记的边界（不是证据）**：`enter_map` 落格失败但保留的角色（`session.rs` 的未落格注释）
+    ///    同样 `add_to_mapped=false`；按 oracle 的 Envir 语义它不该出现在地图投影里，但**参考 harness
+    ///    对每次 enter 无条件登记**（`WorldGolden/Program.cs:536-543` 的 `ApplyEnter` +
+    ///    `:485-492` 的 `RegisterActor`，**不看 `AddMapObject` 返回值**）⇒ 该形态一旦出现，
+    ///    harness 反而会列它。现有场景没有这种 enter，故**没有比对证据**；将来若出现未落格 enter，
+    ///    本过滤要重新评估。
+    pub fn snapshot_sorted(&self) -> Vec<EntitySnapshot> {
+        let mut ids = self.entities.ids_sorted();
+        ids.sort_unstable();
+        ids.into_iter()
+            .filter(|id| self.entities.get(*id).is_some_and(|e| e.add_to_mapped))
+            .filter_map(|id| {
+                self.entities.get(id).map(|e| {
+                    (
+                        e.id,
+                        e.map_id,
+                        e.x,
+                        e.y,
+                        e.hp,
+                        e.level,
+                        e.exp,
+                        crate::aoi::visible_snapshot(&self.entities, id),
+                    )
+                })
+            })
+            .collect()
+    }
+}
+
+/// 对拍/输出用的实体快照：`(id, map_id, x, y, hp, level, exp, 视野列表[(目标 id, 标志)])`。
+pub type EntitySnapshot = (i32, usize, i32, i32, u16, u8, i32, Vec<(i32, u8)>);
+
+/// 地面物品的最小身份视图（[`World::floor_items_view_sorted`] 的元素）。
+///
+/// `obj_id` = `CellObject.cell_obj_id`（**与 `floor_items_sorted` 同口径**，不变）；
+/// `item_id` 是拾取/删除格子的**唯一键**（物品 = `UserItem.MakeIndex`，金币 = 落主 `ActorId`）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FloorItemView {
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    pub obj_id: i32,
+    pub kind: FloorItemKind,
+    /// `StdItem` 序号（1-based）；金币 = 0。
+    pub index: u16,
+    /// 金币数 / 物品数（物品恒 1）。
+    pub count: i32,
+    /// 唯一 id。
+    pub item_id: i32,
+    /// 掉落归属者（0 = 任何人可拾）。
+    pub of_base_object: i32,
+    /// 可拾起时刻（落地时的虚拟时钟）。
+    pub can_pick_up_tick: i32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entity::{EntitySpawn, MonsterCtorDraws, ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+
+    /// **T10 Top2**：`ProcessRunCounts` 的稠密 / 稀疏 / 删除语义（等价于旧 `BTreeMap`：
+    /// 无条目 ⇒ 0；写 0 等价于删除），并**直接钉住容器落点**（稠密 id 进数组、范围外进 sparse）。
+    ///
+    /// 牙（reviewer-26 R-P3 实测后重写，逐条可证伪）：
+    /// 1. **只改公开语义咬不住容器选择**：把 `get` 改成 `dense[i]` 直取、或把 `set(id,0)`
+    ///    直写 0，输出都仍是 0（`0` 哨兵本来就等价于删除）⇒ 必须断言内部落点。
+    /// 2. `set(3, 1)` 后断言 `dense[3] == 1` 且 `sparse` 无 3：把 `is_dense` 上界改小
+    ///    （3 被判成范围外）⇒ 红；把 dense 分支删掉全走 sparse ⇒ 红。
+    /// 3. `set(big, 1)`（`big = DENSE_CAP + 9`）后断言 `sparse[big] == 1` 且
+    ///    `dense.len() <= DENSE_CAP`：把上界改成「恒稠密」⇒ 数组被 resize 到 big+1 ⇒ 红。
+    /// 4. `set(-5, 3)` / `get(0)`：删掉 `id >= 1` 守卫 ⇒ 负数按 `usize` 解释 ⇒
+    ///    `dense.resize(巨大)` panic ⇒ 红。
+    #[test]
+    fn process_run_counts_dense_sparse_and_zero_removes() {
+        let mut t = ProcessRunCounts::default();
+        assert_eq!(t.get(1), 0, "无条目 ⇒ 0（= oracle ctor 缺省）");
+        t.set(1, 2);
+        assert_eq!(t.get(1), 2);
+        t.set(1, 0);
+        assert_eq!(t.get(1), 0, "写 0 = 删除条目");
+        // 范围外：非正 id 走 sparse 兜底（删 `id >= 1` 守卫 ⇒ 负数被当 usize ⇒ resize panic）
+        t.set(-5, 3);
+        assert_eq!(t.get(-5), 3);
+        assert!(!t.sparse.is_empty(), "负 id 必须落 sparse，不得触 dense");
+        t.remove(-5);
+        assert_eq!(t.get(-5), 0);
+        assert_eq!(t.get(0), 0);
+        // 稠密落点：id 3 必须在 dense、且不在 sparse（改上界/删 dense 分支 ⇒ 红）
+        t.set(3, 1);
+        assert_eq!(t.get(3), 1);
+        assert_eq!(t.dense.get(3).copied(), Some(1), "稠密 id 必须落数组");
+        assert!(!t.sparse.contains_key(&3), "稠密 id 不得落 sparse");
+        // 范围外落点：>= DENSE_CAP 必须走 sparse，且 dense 不得被撑大（恒稠密 ⇒ 红）
+        let big = ProcessRunCounts::DENSE_CAP + 9;
+        let big = big as i32;
+        t.set(big, 1);
+        assert_eq!(t.get(big), 1);
+        assert_eq!(
+            t.sparse.get(&big).copied(),
+            Some(1),
+            "超上界 id 必须落 sparse"
+        );
+        assert!(
+            t.dense.len() <= ProcessRunCounts::DENSE_CAP,
+            "dense 不得为超上界 id 扩容（当前 {}）",
+            t.dense.len()
+        );
+        t.set(big, 0);
+        assert_eq!(t.get(big), 0);
+        assert!(!t.sparse.contains_key(&big), "写 0 必须删 sparse 条目");
+    }
+
+    /// **T10 热点剖析**：分段计时**缺省关闭**，且开/关不改变 tick 的任何可见行为。
+    ///
+    /// 牙齿（逐条可证伪）：
+    /// 1. 缺省 `tick_profile()` 必须是 `None`（删掉「缺省 None」⇒ 红）；
+    /// 2. 同种子、同实体、同 tick 数，一遍全程不计时、一遍全程计时，`last_tick` 必须相等
+    ///    （计时若插入任何写实体/抽 RNG 的语句 ⇒ 红）；
+    /// 3. 开启后 `ticks` 与非空 `stages()`（只加了开关不接线 ⇒ 红）；
+    /// 4. `paused=true` 期间不计 tick、不记段（暂停语义被删 ⇒ 红）。
+    #[test]
+    fn tick_profile_is_opt_in_and_behavior_neutral() {
+        let mut a = World::new(20, 20);
+        let mut b = World::new(20, 20);
+        for w in [&mut a, &mut b] {
+            let mut e = EntitySpawn::new(1, "m1".to_string(), 3, 3);
+            e.race = 80;
+            w.add_entity(e);
+            w.enable_monster_ai();
+        }
+        assert!(a.tick_profile().is_none(), "缺省必须关闭分段计时");
+        for _ in 0..3 {
+            a.tick();
+        }
+        b.enable_tick_profile();
+        for _ in 0..3 {
+            b.tick();
+        }
+        assert_eq!(a.last_tick, b.last_tick, "计时不得改变 tick 行为");
+        let ticks = {
+            let p = b.tick_profile().expect("已开启");
+            assert_eq!(p.ticks, 3, "每个 tick 计一次");
+            assert!(!p.stages().is_empty(), "开启后必须记到段");
+            p.ticks
+        };
+        assert_eq!(ticks, 3);
+        // 暂停：不累计 tick、不记段。
+        b.reset_tick_profile();
+        b.set_tick_profile_paused(true);
+        for _ in 0..2 {
+            b.tick();
+        }
+        let p = b.tick_profile().expect("开启状态保留");
+        assert_eq!(p.ticks, 0, "暂停期间不得计 tick");
+        assert!(p.stages().is_empty(), "暂停期间不得记段");
+    }
+
+    /// **世界 tick 扩容首批（T3）· ② 世界时钟（C-L2）**：`refresh_game_time` 只在桶值**变化**时
+    /// 返回 `true`（oracle `PlayObject.Base.cs:826` 的 `Bright != M2Share.GameTime` 门）；
+    /// 同值重复调用 ⇒ `false`（不发帧）。改坏必红：把 `!=` 写成 `==`、或恒返回 `true` ⇒ 红。
+    #[test]
+    fn refresh_game_time_reports_change_only_on_difference() {
+        let mut w = World::new(8, 8);
+        // 初值 = oracle `M2Share.GameTime = 0`。
+        assert_eq!(w.game_time, 0);
+        // 桶值 1（白天）：0→1 变化。
+        assert!(w.refresh_game_time(1), "0→1 应报变化");
+        assert_eq!(w.game_time, 1);
+        // 同值：不变。
+        assert!(!w.refresh_game_time(1), "同值不得报变化");
+        assert_eq!(w.game_time, 1);
+        // 跨桶：1→2（日落）。
+        assert!(w.refresh_game_time(2), "1→2 应报变化");
+        assert_eq!(w.game_time, 2);
+        // 回到初值桶 0：变化（oracle 同样会发）。
+        assert!(w.refresh_game_time(0), "2→0 应报变化");
+        assert_eq!(w.game_time, 0);
+    }
+
+    /// **C-L3（跨桶）**：把一个「小时」映射为桶值（复用 `enter::game_time_from_hour` 的同口径
+    /// 公式在此以字面量表达）后断言跨小时边界 `10:59 → 11:00` 使桶 `1 → 2`、`refresh_game_time`
+    /// 报变化（⇒ 宿主出 1 帧 46）。这是 oracle `GetGameTime` 的桶切换。
+    ///
+    /// 注：本测试只钉 `refresh_game_time` 的**变化检测**；`hour→bucket` 映射的 24 值全覆盖在
+    /// `bins/game-svr/src/enter.rs` 的 `C-L1`（唯一真源，不在此复制）。
+    #[test]
+    fn refresh_game_time_crosses_hour_bucket() {
+        let mut w = World::new(8, 8);
+        // 10 点 = 白天(1)（`GetGameTime`：`5..=10 | 16..=19 | 21 ⇒ 1`）。
+        assert!(w.refresh_game_time(1));
+        // 11 点 = 日落(2)（`11 | 20 | 23 ⇒ 2`）⇒ 跨小时边界翻桶。
+        assert!(w.refresh_game_time(2), "10:59→11:00 应翻桶");
+        // 11 点内不再变。
+        assert!(!w.refresh_game_time(2));
+    }
+
+    /// **P2 段 #6 写回牙**：`ExtraAbil` 到期后**槽位值**被清位（不是只清计时）。
+    ///
+    /// 变异：删掉 `buff.extra_abil[i] = 0` ⇒ 槽位仍为 1 ⇒ 本用例红（M6）。
+    #[test]
+    fn extra_abil_expiry_clears_slot_value() {
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(player(1, "hero", 5, 5, 1));
+        {
+            let b = w.entities.buff_mut(id).expect("buff");
+            b.extra_abil[2] = 1;
+            b.extra_abil_flag[2] = 1;
+            b.extra_abil_times[2] = -1; // tick 后 now=200 > -1 ⇒ 到期
+        }
+        let mut rec = w.tick_head();
+        w.tick_tail(&mut rec);
+        let b = w.entities.buff(id).expect("buff");
+        assert_eq!(b.extra_abil[2], 0, "到期必须清槽位值（M6 写回）");
+        assert_eq!(b.extra_abil_flag[2], 0, "到期必须复位 flag");
+        assert!(
+            !rec.extra_abil_expiries.is_empty(),
+            "到期事件必须进 TickRecord"
+        );
+    }
+
+    /// **P2 段 #16 写回牙**：Play + super_man ⇒ `tick_tail` 的 TailSuperManRefill 把
+    /// **HP/MP 实际补到 max**（不只是翻标志）。
+    ///
+    /// 变异：删掉 `v.hp = v.max_hp` ⇒ HP 停在 0（随后被玩家死亡结算处理）⇒ 本用例红（M8）。
+    #[test]
+    fn super_man_refill_restores_hp_mp_in_tail() {
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(player(1, "hero", 5, 5, 1));
+        {
+            let f = w.entities.flags_mut(id).expect("flags");
+            f.super_man = true;
+        }
+        {
+            let v = w.entities.vitals_mut(id).expect("vitals");
+            v.max_hp = 50;
+            v.max_mp = 30;
+            v.hp = 0;
+            v.mp = 0;
+        }
+        let mut rec = w.tick_head();
+        w.tick_tail(&mut rec);
+        let v = w.entities.vitals(id).expect("vitals");
+        assert_eq!(
+            v.hp, 50,
+            "TailSuperManRefill 必须把 HP 补到 MaxHP（M8 写回）"
+        );
+        assert_eq!(v.mp, 30, "TailSuperManRefill 必须把 MP 补到 MaxMP");
+    }
+
+    /// **S4d-3/P1 段注册牙**：tick 驱动的真实 runner 必须按 `STAGE_ORDER` 的对应切片记录段序。
+    ///
+    /// 牙：删掉 `HeadRunner::new` 里任一 `add_systems`（或 `World::with_maps` 里
+    /// `output_aoi_stage_system` 的注册）⇒ trace 缺一项 ⇒ 红。
+    #[test]
+    fn tick_stage_registrations_are_wired_in_order() {
+        let mut w = World::new(8, 8);
+        // **P6a**：`SimBuff` 在 `buff_enabled` 门内运行 ⇒ 开门后才进 trace。
+        w.enable_buff_tick();
+        // **P6a2b**：`SimNpc` 同理在 `npc_enabled` 门内运行。
+        w.enable_npc_tick();
+        // **P6b2**：`SimMonsterAi` 同理在 `ai_enabled` 门内运行。
+        w.enable_monster_ai();
+        // **P6b**：`SimMerchant` 同理在 `merchant_enabled` 门内运行。
+        w.enable_merchant_tick();
+        w.entities
+            .world_mut()
+            .insert_resource(crate::tick::StageTrace::default());
+        let mut record = w.tick_head();
+        w.tick_tail(&mut record);
+        let trace = w
+            .entities
+            .world()
+            .resource::<crate::tick::StageTrace>()
+            .0
+            .clone();
+        assert_eq!(
+            trace,
+            vec![
+                TickStage::Clock,
+                TickStage::Command,
+                TickStage::SimHiterSnapshot,
+                TickStage::SimExpireHitters,
+                TickStage::SimSettleDeaths,
+                TickStage::SimSelfDeliver,
+                TickStage::SimExtraAbil,
+                TickStage::SimMapEvents,
+                TickStage::SimSlaveCleanup,
+                TickStage::SimBuff,
+                TickStage::SimMonsterAi,
+                TickStage::SimNpc,
+                TickStage::SimMerchant,
+                TickStage::SimPlayerRunExpiry,
+                TickStage::SimDup,
+                TickStage::OutputDrain,
+                TickStage::TailSuperManRefill,
+                TickStage::TailPlayerDeaths,
+                TickStage::TailVerifyMapTime,
+                TickStage::OutputAoi
+            ],
+            "tick 必须按 STAGE_ORDER 推进 head/tail 已系统化的每一段"
+        );
+    }
+
+    /// **P7 `Command` 段 FIFO 牙**：同一 tick 内的多条命令按**入队序**处理（段内 `pop_front`）。
+    ///
+    /// 夹具（一次 `tick()` 里三条命令，次序即合同）：
+    /// `SpawnMonster(id=2)` → `Attack(p → 2)` → `Walk(p, +1, 0)`。
+    ///
+    /// 判据：
+    /// * `record.processed` 的处理序 = 入队序（业务 id 序列 `[2, p, p]`）；**把段内
+    ///   `pop_front` 改成 `pop_back`（逆序）⇒ 首项变成 `p` 且攻击跑在生成之前 ⇒ 必红**；
+    /// * 次序的**语义**承重：攻击必须看得到同一段里刚生成的实体（`record.attacks` 恰一条且
+    ///   攻守 id 正确）。逆序时目标尚未 `insert` ⇒ `attack_once_impl` 返回 `None` ⇒ 无 attacks；
+    /// * 结构段边界：`spawn` 的 `insert` 在段后对 facade **可见**（`entities.get(2)` 断言）。
+    ///   注：**删 `refresh_views()` 不会让本断言变红**（实测）——同一 tick 先 `add_entity` 了
+    ///   玩家，facade 早已见过 25 组件 archetype，本用例的段后可见断言**不承重**。
+    ///   `refresh_views()` 的独立牙在 `budget_monster_drops_matches_spawn_monster_now_drop_budget`：
+    ///   空世界首实体经 Command 段 spawn，archetype 段内才首次创建，缺这次刷新 ⇒ 段后
+    ///   `entities.get` 为 `None`（review f6f410d3 F1；P5-pre 的段边界契约）。
+    #[test]
+    fn command_stage_keeps_fifo_order_within_one_tick() {
+        let mut w = World::new(64, 64);
+        let p = w.add_entity(player(1, "hero", 5, 5, 10));
+        w.tick(); // 让玩家先落图（`add_map_object`），与本模块既有命令用例同口径。
+
+        w.enqueue(Command::SpawnMonster {
+            id: 2,
+            name: "鸡".into(),
+            x: 6,
+            y: 6,
+            map_id: 0,
+            level: 1,
+            exp: 10,
+            hp: 5,
+            dc: 1,
+            ac: 0,
+            undead: 0,
+            hit_point: 5,
+            speed_point: 15,
+            drop_list: vec![],
+        });
+        w.enqueue(Command::Attack {
+            actor_id: p,
+            target_id: 2,
+        });
+        w.enqueue(Command::Walk {
+            actor_id: p,
+            dx: 1,
+            dy: 0,
+        });
+
+        let r = w.tick();
+
+        assert_eq!(
+            r.processed.iter().map(|(id, _)| *id).collect::<Vec<_>>(),
+            vec![2, p, p],
+            "FIFO：处理序必须等于入队序（逆序会变成 [{p}, {p}, 2]）"
+        );
+        assert!(
+            r.processed[0].1,
+            "SpawnMonster 成功 ⇒ processed[0] = (2, true)"
+        );
+        assert_eq!(
+            r.attacks.len(),
+            1,
+            "攻击必须看得到**同一段内**刚生成的实体（逆序时目标不存在 ⇒ 无 attacks）"
+        );
+        assert_eq!((r.attacks[0].0, r.attacks[0].1), (p, 2), "攻守 id");
+        assert_eq!(r.processed[2], (p, true), "Walk 在末位且成功");
+        assert_eq!(
+            w.entities.get(p).map(|e| (e.x, e.y)),
+            Some((6, 5)),
+            "Walk 生效（末位命令）"
+        );
+        assert!(
+            w.entities.get(2).is_some(),
+            "结构段边界：同段 `insert` 的实体在段后对 facade 可见（refresh_views）"
+        );
+    }
+
+    /// **P6a2 `SimSelfDeliver` 段语义牙**：到点 `RM_TRANSPARENT` 经段系统落到实体三处
+    /// （`StatusTimeArr[STATETRANSPARENT]` / `flags.hide_mode` / `buff.transparent`）与
+    /// `record.slave_self_deliveries`。
+    ///
+    /// 牙：① 删 `HeadRunner::new` 的 `SimSelfDeliver` 注册 ⇒ tick panic（段序牙同红）；
+    /// ② 删段内 `mag_make_private_transparent_impl` 的 `hide_mode` 回写 ⇒ 本用例红；
+    /// ③ 删 `record.slave_self_deliveries = self.take_self_deliveries();` ⇒ record 断言红。
+    #[test]
+    fn sim_self_deliver_stage_applies_transparent_and_records_outcome() {
+        let mut w = World::new(8, 8);
+        w.clock_ms = 10_000;
+        let id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "cloaked", 3, 3);
+            e.race = ACTOR_RACE_MONSTER;
+            e.hp = 50;
+            e.max_hp = 50;
+            e
+        });
+        // 800ms 自投递（`nParam1` = `nHTime`）。
+        w.send_self_delay_msg_with(id, crate::slave::RM_TRANSPARENT, 0, 500, 800);
+        // 到点（10_800）之后跑一个 head tick：段系统投递并落写回。
+        w.clock_ms = 15_000;
+        let record = w.tick_head();
+        assert_eq!(record.slave_self_deliveries.len(), 1, "段必须投递一条");
+        let out = &record.slave_self_deliveries[0];
+        assert_eq!(out.ident, crate::slave::RM_TRANSPARENT);
+        assert!(out.transparent.is_some(), "RM_TRANSPARENT 必须产出透明载荷");
+        let e = w.entities.get(id).expect("实体仍在");
+        assert_eq!(
+            e.status_time[crate::entity::POISON_STATETRANSPARENT],
+            500,
+            "段系统必须写回透明时长"
+        );
+        assert!(e.hide_mode, "段系统必须置 hide_mode");
+        assert!(e.transparent, "段系统必须置透明位");
+    }
+
+    /// **P6b `SimMerchant` 段语义牙**：`merchant_tick`（= 段系统）先写 `RunTick = now` 再跑
+    /// `Merchant.Run`；Ghost 60s 过期支在段内 `remove` 实体（结构变更）且在段边界
+    /// `refresh_views()` 后对 facade 可见。
+    ///
+    /// 牙：① 删 `HeadRunner::new` 的 `SimMerchant` 注册 ⇒ 段序牙 panic；
+    /// ② 删 `merchant_tick_impl` 的 `st.run_tick = now` 回写 ⇒ `run_tick` 断言红；
+    /// ③ 删 Ghost 支的 `access.remove(id)` ⇒ 实体仍在 ⇒ 红。
+    #[test]
+    fn merchant_stage_runs_then_ghost_expiry_removes() {
+        use crate::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+
+        let mut w = World::with_maps(vec![(20, 20)]);
+        let id = w
+            .spawn_merchant(MerchantSpawn {
+                name: "老人".to_string(),
+                x: 4,
+                y: 4,
+                map_id: 0,
+                state: MerchantState::new(
+                    String::new(),
+                    String::new(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商人挂图成功");
+
+        // ① Run 门：`RunTick = 0` + 时钟 10s ⇒ 到点；段必须先写 `RunTick = now` 再 `Run()`。
+        w.clock_ms = 10_000;
+        if let Some(s) = w.entities.merchant_mut(id) {
+            s.run_tick = 0;
+        }
+        w.merchant_pass_tick = i64::MIN;
+        let out = w.merchant_tick();
+        assert_eq!(out.ran, vec![id], "过 Run 门必须由段系统跑一次");
+        assert_eq!(
+            w.entities.merchant(id).map(|s| s.run_tick),
+            Some(10_000),
+            "段系统必须先写 RunTick = now 再 Run()"
+        );
+
+        // ② Ghost 60s 门：`Ghost = true` 且 `GhostTick` 早于 60s ⇒ 段内 `remove` + 结构刷新。
+        if let Some(e) = w.entities.get_mut(id) {
+            e.life_cycle.ghost = true;
+            e.life_cycle.ghost_tick = 10_000;
+        }
+        w.clock_ms = 10_000 + 61_000;
+        w.merchant_pass_tick = i64::MIN;
+        let out2 = w.merchant_tick();
+        assert_eq!(out2.removed, vec![id], "Ghost 超过 60s 必须移除");
+        assert!(w.entities.get(id).is_none(), "段内 remove 后实体必须查不到");
+        assert!(
+            w.merchant_ids_sorted().is_empty(),
+            "段后 refresh_views 后商人列表必须为空"
+        );
+    }
+
+    /// **P6b2 `SimMonsterAi` 段语义牙 ①**：`ProcessRunCount` / `ProcessMonsterInterval` 门
+    /// （`WorldServer.MonGen.cs:294-314`）在段内逐 tick 生效。
+    ///
+    /// 不可见怪（`IsVisibleActive == false`）且 `interval = 2`：
+    /// tick1/tick2 只把计数 0→1→2（**不 Run**），tick3 才清零并 Run。
+    ///
+    /// 牙：① 删/短路 `!visible_active && run_count < interval` 分支 ⇒ tick1 就 Run、
+    /// `process_run_count` 恒 0 ⇒ 前两条断言红；② 把 `<` 改成 `<=` ⇒ tick2 就 Run ⇒ 第二条红；
+    /// ③ 删除计数清零 ⇒ tick3 后计数仍为 2 ⇒ 第三条红。
+    #[test]
+    fn monster_ai_stage_process_run_count_gate_throttles_invisible_monster() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        w.set_process_monster_interval(2);
+        w.enable_monster_ai();
+        let id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "invis".to_string(), 5, 5);
+            e.race = ACTOR_RACE_MONSTER;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+            e
+        });
+        w.tick_head();
+        assert_eq!(w.process_run_count(id), 1, "tick1 只计数（0 < 2）");
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.think_tick,
+            0,
+            "tick1 不得 Run（think 未刷新）"
+        );
+        w.tick_head();
+        assert_eq!(w.process_run_count(id), 2, "tick2 只计数（1 < 2）");
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.walk_tick,
+            0,
+            "tick2 不得 Run（walk 未推进）"
+        );
+        w.tick_head();
+        assert_eq!(
+            w.process_run_count(id),
+            0,
+            "tick3 Run 前必须清零（2 < 2 为假）"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.think_tick,
+            w.clock_ms,
+            "tick3 必须真的 Run（think 刷新到 now）"
+        );
+    }
+
+    /// **P6b2 `SimMonsterAi` 段语义牙 ②**：`IsVisibleActive == true` 绕过 `ProcessRunCount` 门
+    /// （`if (!monster.IsVisibleActive && …) 计数 else { 清零 + Run }`）。
+    ///
+    /// 牙：删掉 `!visible_active &&`（只按计数节流）⇒ 首 tick 计数变 1、walk 不推进 ⇒ 两条断言红。
+    #[test]
+    fn monster_ai_stage_visible_active_bypasses_process_run_count_gate() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        w.set_process_monster_interval(2);
+        w.enable_monster_ai();
+        let id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "visible".to_string(), 5, 5);
+            e.race = ACTOR_RACE_MONSTER;
+            e.map_binding.is_visible_active = true;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+            e
+        });
+        w.tick_head();
+        assert_eq!(
+            w.process_run_count(id),
+            0,
+            "可见怪即使 interval=2 也必须走 else 支（计数清零、直接 Run）"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.walk_tick,
+            w.clock_ms,
+            "可见怪首 tick 必须 Run（walk 推进到 now）"
+        );
+    }
+
+    /// **P6b2 `SimMonsterAi` 段语义牙 ③**：段内经 `StageAccess` 写 `Transform`
+    /// （`GotoTargetXY → WalkTo → TryStepNow`）——`Transform` 缺失/只读 ⇒ `view_mut` 运行期 panic。
+    ///
+    /// 夹具：`no_attack_mode=true` 保 `TargetX/Y` 不被无目标支清掉；`interval=0` 使
+    /// `0 < 0` 为假 ⇒ 每 tick 都 Run；目标格 (8,5) 在东侧 ⇒ 单步右移到 (6,5)。
+    #[test]
+    fn monster_ai_stage_walk_writes_transform_through_stage_access() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        w.set_process_monster_interval(0);
+        w.enable_monster_ai();
+        let id = w.add_entity({
+            let mut e = EntitySpawn::new(0, "walker".to_string(), 5, 5);
+            e.race = ACTOR_RACE_MONSTER;
+            e.ai.no_attack_mode = true;
+            e.ai.target_x = 8;
+            e.ai.target_y = 5;
+            e.ai.walk_tick = 0;
+            e.ai.walk_speed = 0;
+            e
+        });
+        w.tick_head();
+        let e = w.entities.get(id).expect("怪仍在世界");
+        assert_eq!(
+            (e.x, e.y),
+            (6, 5),
+            "段系统必须把 GotoTargetXY 的单步落点写回 Transform"
+        );
+    }
+
+    /// **P6a `SimBuff` 段语义牙**：毒伤 DoT 经段系统落到 HP/MeatQuality/record 三处。
+    ///
+    /// 夹具照 `buff::tests::a_l4_poison_dot_rhythm_and_meat_quality`：玩家已存活 3000ms 且
+    /// `GreenPoisoningPoint=3`，首 pass 跨 `PosionDecHealthTime=2500` ⇒ `DamageHealth(point+1)`。
+    ///
+    /// 牙：① 删 `HeadRunner::new` 的 `SimBuff` 注册 ⇒ tick panic（段序牙也红）；
+    /// ② 段内漏写 `poisoning_tick` 回写 ⇒ 后续 pass 重复扣血（hp 断言红）；
+    /// ③ 漏走 `damage_health_impl` ⇒ hp 不变（红）；④ 漏 `health_spell_changes` 回传 ⇒ record 红。
+    #[test]
+    fn sim_buff_stage_applies_green_poison_dot_and_records_health() {
+        let mut w = World::new(8, 8);
+        w.enable_buff_tick();
+        w.clock_ms = 100_000;
+        let id = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "poisoned", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        let base = w.clock_ms + BUFF_EPOCH_MS;
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.ai.animal = true;
+            e.ai.meat_quality = 5000;
+            e.vitals.hp = 100;
+            // 「已存活 3000ms」⇒ 首 pass `now - poisoning_tick` = 3200 > 2500。
+            e.buff.poisoning_tick = base - 3000;
+        }
+        assert!(w.make_posion(id, BuffType::GreenPoison as u8, 30, 3));
+        let rec = w.tick();
+        assert_eq!(
+            w.entities.get(id).unwrap().hp,
+            96,
+            "HP -= (GreenPoisoningPoint + 1) = 4（经 SimBuff 段）"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().ai.meat_quality,
+            4000,
+            "Animal ⇒ MeatQuality -= 1000"
+        );
+        assert_eq!(
+            rec.buff_health_changes.len(),
+            1,
+            "一个 world tick 内只有首个 pass 跨 2500ms 门"
+        );
+        assert_eq!(rec.buff_health_changes[0], (id, 96, 0), "record 记 hp/mp");
+        // 段内 4 个 pass 的时钟 = (clock 已 +200) + EPOCH + i*50；最后一 pass = base+350。
+        assert_eq!(
+            w.buff_pass_tick,
+            base + 200 + 3 * BUFF_PASS_INTERVAL_MS,
+            "段内 pass 时钟基与 facade `buff_tick` 相同（clock_ms + EPOCH + i*50）"
+        );
+    }
+
+    /// **P6a `SimBuff` 段语义牙（写回）**：透明 buff 到期 ⇒ 段内清 `flags.hide_mode` 并把
+    /// 新 `CharStatus` 写回 `buff.char_status` + 送进 `record.buff_status_changes`。
+    ///
+    /// 牙：删 `flags.hide_mode` 写回 ⇒ 第一条断言红；删 `buff.char_status` 写回 ⇒ 第二条红；
+    /// 删 `status_changes` 回传 ⇒ record 断言红。
+    #[test]
+    fn sim_buff_stage_clears_transparent_and_records_status_change() {
+        let mut w = World::new(8, 8);
+        w.enable_buff_tick();
+        w.clock_ms = 100_000;
+        let id = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "hide", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        w.entities.get_mut(id).unwrap().flags.hide_mode = true;
+        let now = w.clock_ms + BUFF_EPOCH_MS;
+        w.buffs.add_buff(id, BuffType::Transparent, 1, 0, now);
+        let rec = w.tick();
+        assert!(
+            !w.entities.get(id).unwrap().flags().hide_mode,
+            "透明 buff 递减到 0 必须清 hide_mode"
+        );
+        assert_eq!(
+            w.entities.get(id).unwrap().buff().char_status & 0x8000_0000u32 as i32,
+            0,
+            "状态位随 state_tick=0 清空并写回 buff.char_status"
+        );
+        assert_eq!(
+            rec.buff_status_changes
+                .iter()
+                .map(|c| c.0)
+                .collect::<Vec<_>>(),
+            vec![id],
+            "boChg ⇒ record.buff_status_changes 记该 actor"
+        );
+    }
+
+    /// **P4**：`TailVerifyMapTime` 段与旧 `verify_players_map_time` 同语义（槽位序 + 30s 门 +
+    /// `VerifyMapTime` 刷格 + HP/MP 钳制）。
+    ///
+    /// 牙：① 删段注册 ⇒ 格 add_time/verify_tick 不刷新（本条 + trace 牙红）；② 删
+    /// `b.verify_tick = now` ⇒ verify_tick 断言红；③ 删 `cell.obj_list[i].add_time = now` ⇒
+    /// add_time 断言红；④ 删钳制写回 ⇒ HP 断言红；⑤ 删 pending 写回 ⇒ `record.verify_health_changes` 红。
+    #[test]
+    fn tail_verify_map_time_stage_refreshes_and_clamps_in_slot_order() {
+        let mut w = World::new(16, 16);
+        let mk_play = |w: &mut World, name: &str, x: i32| {
+            w.add_entity({
+                let mut e = crate::EntitySpawn::new(0, name, x, 5);
+                e.race = crate::entity::ACTOR_RACE_PLAY;
+                e.hp = 100;
+                e.max_hp = 50;
+                e.mp = 10;
+                e.max_mp = 10;
+                e
+            })
+        };
+        let p1 = mk_play(&mut w, "p1", 5);
+        let p2 = mk_play(&mut w, "p2", 6);
+        w.tick(); // clock=200：Enter 落格（add_time=200）；30s 门未过。
+        let cell_add = |w: &World, id: i32| {
+            let (x, y) = w.entities.get(id).map(|e| (e.x, e.y)).unwrap();
+            w.maps[0]
+                .cell(x, y)
+                .obj_list
+                .iter()
+                .find(|o| o.actor_object && o.cell_obj_id == id)
+                .expect("格子项存在")
+                .add_time
+        };
+        assert_eq!(cell_add(&w, p1), 200);
+        // 30s 门严格大于：tick_head 每 tick +200。
+        // 29_800 → tick 后 30_000：`30_000 - 0 == 30_000` 不刷新。
+        w.clock_ms = 29_800;
+        w.tick();
+        assert_eq!(cell_add(&w, p1), 200, "等于 30s 不刷新");
+        // 30_000 → tick 后 30_200：`30_200 - 0 > 30_000` ⇒ 刷新。
+        w.clock_ms = 30_000;
+        let rec = w.tick();
+        let now = w.clock_ms;
+        assert_eq!(now, 30_200);
+        assert_eq!(cell_add(&w, p1), now, "VerifyMapTime 必须刷格 add_time");
+        assert_eq!(w.entities.get(p1).unwrap().verify_tick, now);
+        assert_eq!(w.entities.get(p1).unwrap().hp, 49, "HP > MaxHP ⇒ MaxHP-1");
+        assert_eq!(w.entities.get(p2).unwrap().hp, 49);
+        assert_eq!(
+            rec.verify_health_changes
+                .iter()
+                .map(|c| c.0)
+                .collect::<Vec<_>>(),
+            vec![p1, p2],
+            "钳制事件按槽位序进 record"
+        );
+    }
+
+    crate::stage_spec!(
+        StructuralProbe,
+        TickStage::SimDup,
+        read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ],
+        write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ]
+    );
+    impl crate::tick::Structural for StructuralProbe {}
+
+    /// **P5-pre**：段内 `insert` 后，facade 在 `refresh_views()` 之后**立即可见**（get/iter/get_mut）。
+    ///
+    /// 牙：删 `EntityStore::refresh_views()` 的调用（或删其 `refresh_archetypes`/`refresh_view`）
+    /// ⇒ 段后 facade 断言红。注意：未 refresh 前 `get` 必须仍看不到（缓存未更新）——这一半也在钉
+    /// 「refresh 真的承重」。
+    #[test]
+    fn structural_stage_insert_is_visible_to_facade_after_refresh() {
+        use crate::entity::EntityAccess;
+        use crate::tick::StageEntities;
+        let mut w = World::new(16, 16);
+        let id = 7;
+        let spawn = {
+            let mut e = crate::EntitySpawn::new(id, "born-in-stage", 3, 4);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 37;
+            e.max_hp = 100;
+            e
+        };
+        {
+            let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            assert_eq!(
+                crate::entity::StructuralAccess::insert(&mut access, spawn),
+                id
+            );
+            // 段内立即可见（与 facade 插入同组件集）。
+            assert_eq!(access.get(id).map(|e| (e.x, e.y, e.hp)), Some((3, 4, 37)));
+        }
+        assert!(
+            w.entities.get(id).is_none(),
+            "未 refresh_views 前 facade 缓存不得看到新实体（否则牙失效）"
+        );
+        w.entities.refresh_views();
+        let e = w.entities.get(id).expect("refresh_views 后必须立即可见");
+        assert_eq!((e.x, e.y, e.hp), (3, 4, 37));
+        assert!(
+            w.entities.iter().any(|x| x.id == id),
+            "内核 read_state 也必须刷新（iter 才看得到）"
+        );
+        assert!(w.entities.get_mut(id).is_some(), "写视图缓存同样要刷新");
+        assert_eq!(w.entities.order_index(), vec![id], "槽位按插入序");
+    }
+
+    /// **P5-pre**：段内 `remove` 后 facade **立即查不到**（槽位表是唯一真值），且槽位释放。
+    #[test]
+    fn structural_stage_remove_is_invisible_to_facade() {
+        use crate::entity::EntityAccess;
+        use crate::tick::StageEntities;
+        let mut w = World::new(16, 16);
+        let id = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "gone", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_MONSTER;
+            e.hp = 10;
+            e.max_hp = 10;
+            e
+        });
+        assert!(w.entities.get(id).is_some());
+        {
+            let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            assert!(crate::entity::StructuralAccess::remove(&mut access, id));
+            assert!(access.get(id).is_none());
+        }
+        assert!(w.entities.get(id).is_none(), "remove 后 facade 立即查不到");
+        assert!(!w.entities.iter().any(|e| e.id == id));
+        assert!(w.entities.order_index().is_empty());
+    }
+
+    // **P5-A2**：walk / enter / leave / rush / push 五族的段 spec（测试专用）。
+    //
+    // 读集 = `StageAccess` 组合视图全集（24 读）；写集 = `EntityMut` 的 20 个组件 +
+    // `Transform`（`try_step` 写坐标）+ `MapBinding`（`enter_world` 写 `add_to_mapped`）。
+    // `Structural`：`leave_world` 走 `StructuralAccess::remove`。
+    // 挂 `TickStage::Command`：本族原本就在命令 FIFO 里处理（本卡只做 port，不切系统）。
+    //
+    // **P5-A3**：spawn / butch / butch_effect 三族**复用本 spec**（读写面相同：spawn 走
+    // `StructuralAccess::insert` + `MapBinding` 写；butch_effect 只写 `EntityMut` 组件）；
+    // 不另建第二份同形 spec。
+    crate::stage_spec!(
+        MoveProbe,
+        TickStage::Command,
+        read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ],
+        write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState,
+        Transform,
+        crate::entity::MapBinding
+        ]
+    );
+    impl crate::tick::Structural for MoveProbe {}
+
+    /// **P5-A2 牙（walk）**：`Command::Walk` 的 `try_step_impl` 在段访问器下与 facade 同语义。
+    ///
+    /// - 撞墙（`HighWall` ⇒ `get_cell_info` 的 `cellSuccess` 假）：返回 false、坐标不动；
+    ///   **源格登记被摘空**——`MapGrid::move_object` 的「先删后判」与 oracle 同构
+    ///   （`Envirnoment.MoveToMovingObject` 先 `DeleteFromMap`，再因 `cellSuccess` 假返回 false）；
+    ///   若把分类提前到 `move_object` 之前，源格会残留 1 个对象（与 base 不同，R26-1）；
+    /// - 可走格：坐标与格子登记一起迁移（`Transform` 写回 + `move_object` 摘源格/落目标格）。
+    ///
+    /// 红检：删 `try_step_blocked_impl` 末尾的 `transform_mut` 写回 ⇒ 成功支坐标断言红；
+    /// 把 `try_step_impl` 改成恒 true ⇒ 撞墙断言红。
+    #[test]
+    fn walk_stage_access_blocked_wall_keeps_coords_and_drops_source_cell() {
+        use crate::map::CellAttribute;
+        use crate::tick::StageEntities;
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick(); // Enter 落格
+        assert_eq!(w.maps[0].cell(5, 5).count(), 1, "前置：源格已登记");
+        w.maps[0]
+            .get_cell_info_mut(6, 5)
+            .0
+            .set_attribute(CellAttribute::HighWall);
+        {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            assert!(
+                !World::try_step_impl(&mut access, sim, 1, 1, 0),
+                "撞墙必须返回 false"
+            );
+        }
+        let e = w.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (5, 5), "撞墙坐标不动");
+        assert_eq!(
+            w.maps[0].cell(5, 5).count(),
+            0,
+            "源格被摘空（move_object 先删后判，与 oracle MoveToMovingObject 同构）"
+        );
+        {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            assert!(World::try_step_impl(&mut access, sim, 1, 0, 1), "空格可走");
+        }
+        let e = w.entities.get(1).unwrap();
+        assert_eq!(
+            (e.x, e.y),
+            (5, 6),
+            "段访问器写回 Transform（dx=0, dy=1 ⇒ 南向一格）"
+        );
+        assert!(
+            w.maps[0]
+                .cell(5, 6)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == 1),
+            "目标格登记"
+        );
+        assert!(
+            !w.maps[0]
+                .cell(5, 5)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == 1),
+            "源格已摘除"
+        );
+    }
+
+    /// **P5-A2 牙（enter/leave）**：`enter_world_impl` 落格 + 写 `MapBinding.add_to_mapped`；
+    /// `leave_world_impl` 摘格 + `StructuralAccess::remove` 删实体。
+    ///
+    /// 红检：删 enter 的 `b.add_to_mapped = true` ⇒ 首段断言红；删 leave 的 `access.remove`
+    /// ⇒ 「实体必须被删」断言红；删摘格 `retain` ⇒ 格内仍能找到该 actor。
+    #[test]
+    fn enter_leave_stage_access_lands_and_removes_actor() {
+        use crate::entity::EntityAccess;
+        use crate::tick::StageEntities;
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(crate::EntitySpawn::new(0, "hero", 5, 5));
+        // 未 tick：`Command::Enter` 仍在队列里，实体尚未落格。
+        assert_eq!(w.maps[0].cell(5, 5).count(), 0, "前置：尚未落格");
+        {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            assert!(World::enter_world_impl(&mut access, sim, id));
+            assert!(
+                access
+                    .map_binding_mut(id)
+                    .expect("MapBinding 必须存在")
+                    .add_to_mapped,
+                "段内写回 add_to_mapped"
+            );
+        }
+        assert!(
+            w.entities.get(id).expect("实体仍在").add_to_mapped,
+            "facade 读回 enter 的 MapBinding 写回"
+        );
+        assert!(
+            w.maps[0]
+                .cell(5, 5)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == id),
+            "enter 必须在格表登记"
+        );
+        {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            assert!(World::leave_world_impl(&mut access, sim, id));
+        }
+        w.entities.refresh_views();
+        assert!(w.entities.get(id).is_none(), "leave 必须删实体");
+        assert!(
+            !w.maps[0]
+                .cell(5, 5)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == id),
+            "leave 必须摘格"
+        );
+    }
+
+    /// **P5-A2 牙（rush/push）**：五族的段访问器路径与 facade 路径逐事件相同，并钉住语义面。
+    ///
+    /// - rush：3 格截断（`(5,5) → (8,5)`，恰 3 条 `Rush`）、被墙挡时 `RushKung` 落在**正前格**；
+    /// - push：方向 = `nBackDir`、逐格位置 = 走后格、最终坐标 = 3 步后。
+    ///
+    /// 红检：把 `push_now_impl` 换成 `char_pushed_core` 之外的第二份实现/改 `back_dir` ⇒ 事件
+    /// 断言红；把 `rush_now_impl` 的 `try_step_impl` 换成恒成功 ⇒ 撞墙 `RushKung` 断言红。
+    #[test]
+    fn rush_push_stage_access_path_matches_facade_path() {
+        use crate::action::{PushEvent, RushEvent, RushFrame};
+        use crate::map::CellAttribute;
+        use crate::tick::StageEntities;
+
+        // ---- rush：facade vs 段访问器（同初值同参数 ⇒ 同事件、同终态）----
+        let mut a = world_with(&[(1, 5, 5)]);
+        a.tick();
+        let facade_rush = a.rush_now(1, crate::magic::DIR_RIGHT, 3);
+        let facade_pos = {
+            let e = a.entities.get(1).unwrap();
+            (e.x, e.y)
+        };
+        let mut b = world_with(&[(1, 5, 5)]);
+        b.tick();
+        let stage_rush = {
+            let World { entities, sim, .. } = &mut b;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            World::rush_now_impl(&mut access, sim, 1, crate::magic::DIR_RIGHT, 3)
+        };
+        let stage_pos = {
+            let e = b.entities.get(1).unwrap();
+            (e.x, e.y)
+        };
+        assert_eq!(stage_rush, facade_rush, "rush：两条路径事件逐条相同");
+        assert_eq!(stage_pos, facade_pos, "rush：两条路径终态坐标相同");
+        assert_eq!(stage_pos, (8, 5), "rush 3 格截断");
+        assert_eq!(stage_rush.len(), 3, "逐格一条");
+
+        // ---- rush 被墙挡：格数截断 + RushKung 落在正前格 ----
+        let mut c = world_with(&[(1, 5, 5)]);
+        c.tick();
+        c.maps[0]
+            .get_cell_info_mut(7, 5)
+            .0
+            .set_attribute(CellAttribute::HighWall);
+        let walled = {
+            let World { entities, sim, .. } = &mut c;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            World::rush_now_impl(&mut access, sim, 1, crate::magic::DIR_RIGHT, 4)
+        };
+        assert_eq!(
+            walled,
+            vec![
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 6,
+                    y: 5
+                },
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::RushKung,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 7,
+                    y: 5
+                },
+            ],
+            "撞墙截断：1 格 Rush + 正前格 RushKung"
+        );
+        let e = c.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (6, 5), "角色停在墙前");
+
+        // ---- push：facade vs 段访问器 ----
+        let mut d = world_with(&[(1, 5, 5)]);
+        d.tick();
+        let facade_push = d.push_now(1, crate::magic::DIR_UP, 3);
+        let mut f = world_with(&[(1, 5, 5)]);
+        f.tick();
+        let stage_push = {
+            let World { entities, sim, .. } = &mut f;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            World::push_now_impl(&mut access, sim, 1, crate::magic::DIR_UP, 3)
+        };
+        assert_eq!(stage_push, facade_push, "push：两条路径事件逐条相同");
+        assert_eq!(
+            stage_push,
+            vec![
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 4
+                },
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 3
+                },
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 2
+                },
+            ],
+            "推挤方向 = nBackDir、位置 = 走后格"
+        );
+        let e = f.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (5, 2), "push 终态坐标");
+    }
+
+    /// **P5-A3 牙（spawn）**：`spawn_monster_now_impl` 在段访问器下与 facade 同语义。
+    ///
+    /// 钉三件事：
+    /// - **结构插入 + 落格**：`StructuralAccess::insert` 后 `enter_world_impl` 必须把实体登记进
+    ///   `(11,10)` 的格子（`cell_type = Monster`、`add_to_mapped = true`）——删 `enter_world_impl`
+    ///   调用 ⇒ 段路径格子断言红；
+    /// - **掉落预算**：`generate_drops` 在生成时消耗 RNG，两路流的下一值必须相等且**不等于**
+    ///   「零生成」基线——删预算调用 ⇒ `assert_ne!(facade_mark, baseline_mark)` 红；
+    /// - **越界门在预算之前**：`map_id` 越界 ⇒ `false` + 零抽数（与旧实现同序）。
+    ///
+    /// `race = 80`（`monster_from_row` 的 `ActorRace.Monster`）同时钉住生成的类属性落点。
+    #[test]
+    fn spawn_stage_access_path_matches_facade_path() {
+        use crate::tick::StageEntities;
+        let drop_list = vec![
+            MonsterDropItem {
+                sel_point: 9,
+                max_point: 10,
+                item_name: "金币".into(),
+                count: 300,
+            },
+            MonsterDropItem {
+                sel_point: 9,
+                max_point: 10,
+                item_name: "金创药(小量)".into(),
+                count: 1,
+            },
+        ];
+        let build = || {
+            let mut w = World::new(32, 32);
+            w.item_catalog = vec![StdItem {
+                name: "金创药(小量)".into(),
+                dura_max: 1,
+                ..Default::default()
+            }];
+            w.mon_random_add_value = 1; // 必出极品 ⇒ 消耗 RNG 的分支也覆盖
+            w
+        };
+
+        // 零生成基线：用于证明「掉落预算真的抽了数」。
+        let baseline_mark = {
+            let mut base = build();
+            base.rng.random()
+        };
+
+        // A = facade 路径。
+        let mut a = build();
+        let ok_a = a.spawn_monster_now(
+            &mut TickRecord::default(),
+            2,
+            "僵尸",
+            11,
+            10,
+            0,
+            1,
+            500,
+            3,
+            1,
+            0,
+            0,
+            5,
+            15,
+            &drop_list,
+        );
+        let facade_mark = a.rng.random();
+        assert!(ok_a, "facade：生成成功");
+        assert_ne!(
+            facade_mark, baseline_mark,
+            "生成期必须消耗掉落预算的 RNG（否则本用例的流位置断言没有承重力）"
+        );
+
+        // B = 段访问器路径（`insert` 不经 facade 缓存 ⇒ 段后 `refresh_views`）。
+        let mut b = build();
+        let (ok_b, stage_record) = {
+            let World { entities, sim, .. } = &mut b;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            let mut record = TickRecord::default();
+            let ok = World::spawn_monster_now_impl(
+                &mut access,
+                sim,
+                &mut record,
+                2,
+                "僵尸",
+                11,
+                10,
+                0,
+                1,
+                500,
+                3,
+                1,
+                0,
+                0,
+                5,
+                15,
+                &drop_list,
+            );
+            (ok, record)
+        };
+        b.entities.refresh_views();
+        assert!(ok_b, "段路径：生成成功");
+        assert!(
+            stage_record.processed.is_empty(),
+            "impl 不代记 processed（记账仍在 tick_head 调用点）"
+        );
+        assert_eq!(b.rng.random(), facade_mark, "两路掉落预算的 RNG 流位置相同");
+
+        let ea = a.entities.get(2).expect("facade 生成实体");
+        let eb = b
+            .entities
+            .get(2)
+            .expect("段路径生成实体（refresh_views 后）");
+        assert_eq!(
+            (ea.x, ea.y, ea.map_id, ea.race, ea.hp),
+            (11, 10, 0, 80, 3),
+            "生成实体的坐标/图/race/HP"
+        );
+        assert_eq!(
+            (eb.x, eb.y, eb.map_id, eb.race, eb.hp),
+            (ea.x, ea.y, ea.map_id, ea.race, ea.hp),
+            "段路径与 facade 的实体属性相同"
+        );
+        assert_eq!(ea.gold, eb.gold, "金币预算相同");
+        assert_eq!(ea.drop_items, eb.drop_items, "掉落清单相同");
+        assert_eq!(
+            (ea.verify_tick, ea.poisoning_tick),
+            (eb.verify_tick, eb.poisoning_tick)
+        );
+
+        // 落格：格子登记 + cell 类型（`BaseObject.Initialize` → `AddToMap`）。
+        for (name, w) in [("facade", &a), ("stage", &b)] {
+            assert!(
+                w.entities.get(2).unwrap().add_to_mapped,
+                "{name}：AddToMapped"
+            );
+            let (cell, ok) = w.maps[0].get_cell_info(11, 10);
+            assert!(ok, "{name}：目标格在图内");
+            let entry = cell
+                .obj_list
+                .iter()
+                .find(|o| o.actor_object && o.cell_obj_id == 2)
+                .unwrap_or_else(|| panic!("{name}：生成实体必须登记进 (11,10) 的格子"));
+            assert_eq!(entry.cell_type, CellType::Monster, "{name}：cell 类型");
+        }
+
+        // 越界门：零抽数（门在掉落预算之前）。
+        let mut c = build();
+        let mut record = TickRecord::default();
+        {
+            let World { entities, sim, .. } = &mut c;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            assert!(
+                !World::spawn_monster_now_impl(
+                    &mut access,
+                    sim,
+                    &mut record,
+                    2,
+                    "僵尸",
+                    11,
+                    10,
+                    9, // 越界（只有 map 0）
+                    1,
+                    500,
+                    3,
+                    1,
+                    0,
+                    0,
+                    5,
+                    15,
+                    &drop_list,
+                ),
+                "map_id 越界 ⇒ false"
+            );
+        }
+        assert_eq!(c.rng.random(), baseline_mark, "越界门在预算之前 ⇒ 零抽数");
+    }
+
+    /// **P5-A3 牙（butch / butch_effect）**：两族 impl 在段访问器下与 facade 同语义。
+    ///
+    /// `butch_effect`：门全过 ⇒ 恰 2 抽（`Random(16)+5` / `Random(201)+100`）；`BodyLeathery`
+    /// 恰好归零 + race 53 ∈ `[50,80)` ⇒ **尸体转肉**：`Skeleton = true`、`BodyLeathery = 50`、
+    /// `MeatQuality` 按第 2 抽回绕扣减、`SkeletonEvent` 以尸体为发送者、屠宰者 `DeathTick` 写 now。
+    /// 两路的返回值/实体终态/RNG 流位置必须逐项相同。
+    ///
+    /// `butch_now`：`ButchEvent` 取**屠宰者**当前坐标（actor 不在世界 ⇒ None + processed false）。
+    ///
+    /// 红检：删 `record.skeletons.push` ⇒ `stage_record` 断言红；删 `skeleton = true` 或
+    /// `body_leathery` 写回 ⇒ 两路终态断言红；对调两次抽 ⇒ 既有
+    /// `butch_effect_rng_draws_match_oracle_order_and_mods` 红（它现在穿的就是本 impl）。
+    #[test]
+    fn butch_stage_access_path_matches_facade_path() {
+        use crate::tick::StageEntities;
+        const SEED: i32 = 20_261_023;
+
+        // A = facade 路径（**P7**：传调用方的真实 record，facade 不再自造 scratch record）。
+        let (mut a, pa, ta, n10) = butch_rig(SEED, 53, true);
+        a.entities.get_mut(ta).unwrap().ai.body_leathery = n10; // 本次抽恰好归零
+        let (facade_ev, facade_record) = {
+            let mut rec = TickRecord::default();
+            let ev = a.butch_effect_now(&mut rec, pa, ta, 11, 10);
+            (ev, rec)
+        };
+        let facade_mark = a.rng.random();
+        let (facade_bl, facade_mq, facade_skel, facade_dt) = {
+            let t = a.entities.get(ta).unwrap();
+            (
+                t.ai.body_leathery,
+                t.ai.meat_quality,
+                t.ai.skeleton,
+                t.death_tick,
+            )
+        };
+
+        // B = 段访问器路径。
+        let (mut b, pb, tb, n10b) = butch_rig(SEED, 53, true);
+        b.entities.get_mut(tb).unwrap().ai.body_leathery = n10b;
+        let (stage_ev, stage_record) = {
+            let World { entities, sim, .. } = &mut b;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            let mut record = TickRecord::default();
+            let ev = World::butch_effect_now_impl(&mut access, sim, &mut record, pb, tb, 11, 10);
+            (ev, record)
+        };
+        let stage_mark = b.rng.random();
+        let (stage_bl, stage_mq, stage_skel, stage_dt) = {
+            let t = b.entities.get(tb).unwrap();
+            (
+                t.ai.body_leathery,
+                t.ai.meat_quality,
+                t.ai.skeleton,
+                t.death_tick,
+            )
+        };
+
+        assert!(facade_ev.is_some(), "骨架支必须结算");
+        assert_eq!(stage_ev, facade_ev, "两路 SkeletonEvent 相同");
+        assert_eq!(
+            facade_ev,
+            Some(crate::action::SkeletonEvent {
+                actor_id: ta,
+                dir: 5,
+                x: 11,
+                y: 10,
+            }),
+            "尸体转肉：事件发送者 = 尸体、位置 = 尸体坐标"
+        );
+        assert_eq!(
+            (facade_bl, facade_mq, facade_skel),
+            (stage_bl, stage_mq, stage_skel),
+            "两路实体终态相同"
+        );
+        assert_eq!(
+            (facade_bl, facade_skel),
+            (50, true),
+            "BodyLeathery 归零 ⇒ Skeleton = true 且复位 50"
+        );
+        assert_eq!(facade_dt, stage_dt, "DeathTick 写屠宰者且两路相同");
+        assert_eq!(stage_mark, facade_mark, "恰 2 抽且流位置相同");
+        assert_eq!(
+            stage_record.skeletons,
+            vec![facade_ev.unwrap()],
+            "impl 的 skeletons 记账与旧 tick_head 的 record 口径相同"
+        );
+        assert_eq!(
+            facade_record.skeletons, stage_record.skeletons,
+            "P7：facade 传真实 record ⇒ skeletons 记账与段路径逐项相同（无 scratch record）"
+        );
+        assert!(stage_record.processed.is_empty(), "processed 仍在调用点记");
+
+        // butch_now：ButchEvent = 屠宰者坐标；actor 不在世界 ⇒ None + processed false。
+        let (mut c, pc, _, _) = butch_rig(SEED, 53, true);
+        let (facade_butch, facade_butch_record) = {
+            let mut rec = TickRecord::default();
+            (c.butch_now(&mut rec, pc, 5), rec)
+        };
+        let (stage_butch, butch_record) = {
+            let World { entities, sim, .. } = &mut c;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let access = crate::entity::StageAccess::new(&mut ad);
+            let mut record = TickRecord::default();
+            let ev = World::butch_now_impl(&access, &*sim, &mut record, pc, 5);
+            (ev, record)
+        };
+        assert_eq!(stage_butch, facade_butch, "两路 ButchEvent 相同");
+        assert_eq!(
+            facade_butch,
+            Some(crate::action::ButchEvent {
+                actor_id: pc,
+                dir: 5,
+                x: 10,
+                y: 10,
+            }),
+            "事件承载屠宰者当前位置"
+        );
+        assert_eq!(butch_record.butches, vec![facade_butch.unwrap()]);
+        assert_eq!(
+            facade_butch_record.butches, butch_record.butches,
+            "P7：facade 传真实 record ⇒ butches 记账与段路径逐项相同（无 scratch record）"
+        );
+        assert!(butch_record.processed.is_empty(), "processed 仍在调用点记");
+
+        let missing = {
+            let mut record = TickRecord::default();
+            let ev = World::butch_now_impl(&c.entities, &c.sim, &mut record, 999, 5);
+            (ev, record)
+        };
+        assert!(missing.0.is_none(), "actor 不在世界 ⇒ 无事件");
+        assert!(missing.1.butches.is_empty());
+    }
+
+    // **P5-A1**：attack 族的段 spec（测试专用）。
+    //
+    // 读/写集 = `StageAccess` 的组合视图全集（24 读 / 20 写，与 `SimSettleDeaths` 同口径）；
+    // 段号挂 `Command`（本族原本就在命令 FIFO 里处理）。只为让 `attack_once_impl` 能在
+    // 「访问器 + `SimState`」形态下跑起来并被断言——本卡不把 Command 切成系统。
+    crate::stage_spec!(
+        AttackProbe,
+        TickStage::Command,
+        read: [
+        crate::entity::Entity,
+        Transform,
+        crate::entity::MapBinding,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        crate::entity::Recovery,
+        crate::entity::PvpState,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ],
+        write: [
+        crate::entity::Entity,
+        Vitals,
+        crate::entity::Ability,
+        crate::entity::Progression,
+        crate::entity::SpawnBinding,
+        crate::entity::DropState,
+        CombatAttribution,
+        Flags,
+        LifeCycle,
+        Appearance,
+        crate::entity::MonsterClassState,
+        PlayerRunState,
+        crate::entity::GroupState,
+        crate::entity::Revival,
+        BuffState,
+        crate::entity::SlaveState,
+        crate::entity::Inventory,
+        crate::entity::MerchantState,
+        crate::entity::NpcState,
+        crate::entity::AiState
+        ]
+    );
+
+    /// attack 夹具：玩家攻方（持升级标记武器）+ 团长成员表 + 怪物守方 + 中毒运行态。
+    ///
+    /// 玩家攻方 ⇒ 完整 `AttackPowerMode::Player` 取数链（攻击力两抽 + 毒门 + `Random(5)`）；
+    /// 怪物守方 ⇒ 命中者登记（`LastHiter`）与 `RM_STRUCK` 入队分支可达；武器带升级标记
+    /// ⇒ `CheckWeaponUpgradeStatus` 写回分支可达；`enable_refmessage_delay` ⇒ 200ms
+    /// `RM_REFMESSAGE` 入队分支可达。
+    ///
+    /// `plain_weapon` = `true` 时武器无升级标记（只走 `AttackSuccess` 的磨损写回，
+    /// 用来把「耐久写回」与「升级写回」两支隔离开）。
+    fn attack_probe_world(plain_weapon: bool) -> (World, i32, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        w.rng = RandomNumber::with_seed(42);
+        w.set_weapon_durability_config(true, 7);
+        w.enable_buff_tick();
+        w.enable_refmessage_delay();
+        w.combat_config.attack_poison_rate = 1;
+        w.combat_config.attack_poison_time = 5;
+
+        let mut leader = crate::EntitySpawn::new(3, "leader", 9, 9);
+        leader.race = crate::entity::ACTOR_RACE_PLAY;
+        let leader = w.add_entity(leader);
+        w.entities.get_mut(leader).unwrap().group.group_members = vec![leader];
+
+        let mut hero = crate::EntitySpawn::new(1, "hero", 10, 10);
+        hero.race = crate::entity::ACTOR_RACE_PLAY;
+        hero.dc = 10;
+        hero.hit_point = 100;
+        hero.group_owner = leader;
+        let hero = w.add_entity(hero);
+        let mut desc = [0u8; 14];
+        if !plain_weapon {
+            desc[ITEM_ATTR_WEAPON_UPGRADE] = 13;
+        }
+        w.entities.get_mut(hero).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            crate::entity::UseItemSlot {
+                make_index: 1,
+                index: 10,
+                dura: 5000,
+                dura_max: 10_000,
+                desc,
+            };
+
+        let mut mon = crate::EntitySpawn::new(2, "foe", 11, 10);
+        mon.race = crate::entity::ACTOR_RACE_MONSTER;
+        mon.hp = 100;
+        mon.max_hp = 100;
+        mon.hit_point = 10;
+        mon.speed_point = 10;
+        mon.ac = 0;
+        let mon = w.add_entity(mon);
+
+        w.set_attack_poison(
+            hero,
+            crate::combat::AttackPoisonState {
+                paralysis: true,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        w.set_attack_poison(
+            mon,
+            crate::combat::AttackPoisonState {
+                paralysis: false,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        (w, hero, mon)
+    }
+
+    /// 攻击后双方实体 + 待抄事件的完整快照（段路径与 facade 路径逐项比对用）。
+    #[allow(clippy::type_complexity)]
+    fn attack_state_snapshot(
+        w: &World,
+        hero: i32,
+        mon: i32,
+    ) -> (
+        u16,
+        u16,
+        u8,
+        [u8; 14],
+        u16,
+        i32,
+        Vec<(i32, i32)>,
+        i32,
+        Vec<WeaponUpgradeEvent>,
+        Vec<WeaponWearEvent>,
+        usize,
+    ) {
+        let h = w.entities.get(hero).unwrap();
+        let m = w.entities.get(mon).unwrap();
+        let wslot = h.use_items[ITEM_LOCATION_WEAPON];
+        let struck: Vec<(i32, i32)> =
+            m.ai.pending_struck
+                .iter()
+                .map(|s| (s.hiter, s.w_param))
+                .collect();
+        (
+            wslot.index,
+            wslot.dura,
+            wslot.desc[ITEM_ATTR_WEAPON_UPGRADE],
+            wslot.desc,
+            m.hp,
+            m.last_hiter.unwrap_or(0),
+            struck,
+            m.char_status,
+            w.pending_weapon_breaks.clone(),
+            w.pending_weapon_wears.clone(),
+            w.self_delay_msgs.len(),
+        )
+    }
+
+    /// **P5-A1**：`attack_once_impl` 的段路径（`StageAccess`）与 facade 路径**逐项同结果**。
+    ///
+    /// 同一夹具跑两遍：`World::attack_once`（facade → `EntityStore`）与
+    /// `World::attack_once_impl(&mut StageAccess, &mut SimState, …)`。断言 `AttackOutcome`
+    /// 六字段、双方实体状态（HP / `UseItems` / `LastHiter` / `RM_STRUCK` 队列 / `CharStatus`）、
+    /// 待抄事件（武器升级/磨损）与 `RM_REFMESSAGE` 队列长度逐值相同，且 RNG 后继流相同。
+    ///
+    /// 牙：段路径任一处取数/写回被搬错（读错表、少写回、写错对象、`StageAccess::get_mut`
+    /// 不回写实体）⇒ 两侧快照分叉 ⇒ 红。HP 那一项还额外钉住「绝对写回」而不是「两侧一起错」。
+    #[test]
+    fn attack_stage_access_path_matches_facade_path() {
+        use crate::entity::EntityAccess;
+        use crate::tick::StageEntities;
+
+        let (mut facade, hero, mon) = attack_probe_world(false);
+        let (mut staged, hero2, mon2) = attack_probe_world(false);
+        assert_eq!((hero, mon), (hero2, mon2));
+        let hp_before = facade.entities.get(mon).unwrap().hp;
+
+        let a = facade.attack_once(hero, mon).expect("facade 路径必须结算");
+        let b = {
+            let World { entities, sim, .. } = &mut staged;
+            let mut ad = StageEntities::<AttackProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            assert!(
+                access.get(hero2).is_some(),
+                "段访问器必须能按 id 解析到攻方"
+            );
+            World::attack_once_impl(&mut access, sim, hero2, mon2).expect("段路径必须结算")
+        };
+
+        let key = |o: &crate::combat::AttackOutcome| {
+            (
+                o.power,
+                o.hit,
+                o.damage,
+                o.struck_power,
+                o.killed,
+                o.target_hp_after,
+            )
+        };
+        assert_eq!(key(&a), key(&b), "AttackOutcome 必须逐字段相同");
+        assert!(a.hit, "夹具命中门必须过");
+        assert!(a.damage > 0, "夹具必须造成伤害");
+
+        let sa = attack_state_snapshot(&facade, hero, mon);
+        let sb = attack_state_snapshot(&staged, hero2, mon2);
+        assert_eq!(sa, sb, "段路径与 facade 路径的实体/事件快照必须逐项相同");
+        assert_eq!(
+            sa.4,
+            hp_before - a.damage,
+            "伤害必须绝对写回目标 HP（删 e.vitals.hp 回写即红）"
+        );
+
+        let tail_a: Vec<i32> = (0..5).map(|_| facade.rng.random_below(1000)).collect();
+        let tail_b: Vec<i32> = (0..5).map(|_| staged.rng.random_below(1000)).collect();
+        assert_eq!(tail_a, tail_b, "两条路径的 RNG 后继流必须逐值相同");
+    }
+
+    /// **P5-A1**：武器磨损必须写回实体 `UseItems[Weapon]`（不只是记事件）。
+    ///
+    /// 夹具用**无升级标记**武器 ⇒ `weapon_outcome` 为 `None`，唯一可能改武器槽的是
+    /// `AttackSuccess` 的磨损支。牙：删 `e.inventory.use_items = attacker.use_items`
+    /// （`weapon_wear` 那一处回写）⇒ 实体耐久不再下降 ⇒ 红。
+    #[test]
+    fn attack_writeback_weapon_wear_reaches_entity() {
+        let (mut w, hero, mon) = attack_probe_world(true);
+        let before = w.entities.get(hero).unwrap().use_items[ITEM_LOCATION_WEAPON].dura;
+        w.attack_cmd(hero, mon);
+        let rec = w.tick();
+        assert_eq!(rec.weapon_wears.len(), 1, "无升级标记 ⇒ 只剩磨损事件");
+        assert!(rec.weapon_breaks.is_empty());
+        let after = w.entities.get(hero).unwrap().use_items[ITEM_LOCATION_WEAPON].dura;
+        assert!(
+            after < before,
+            "磨损必须写回实体 UseItems（删 use_items 回写即红）：{before} -> {after}"
+        );
+        assert_eq!(rec.weapon_wears[0].actor_id, hero);
+    }
+
+    /// **P5-A1**：受击耐久（目标侧）必须写回目标实体 `UseItems`。
+    ///
+    /// 玩家守方 + 衣服槽 `Index>0` ⇒ `StruckDamage` 的耐久段必然扣 `Random(10)+5`
+    /// （衣服特判不抽数）；本仓攻方/守方都是副本 ⇒ 不回写就整段丢失。
+    /// 牙：删目标那一处 `e.inventory.use_items = target.use_items` ⇒ 实体衣服耐久不变 ⇒ 红。
+    #[test]
+    fn attack_writeback_target_durability_reaches_entity() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        w.rng = RandomNumber::with_seed(42);
+        w.set_weapon_durability_config(true, 7);
+        let hero = w.add_entity({
+            let mut e = crate::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.dc = 10;
+            e.hit_point = 100;
+            e
+        });
+        let foe = w.add_entity({
+            let mut e = crate::EntitySpawn::new(2, "foe", 11, 10);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 200;
+            e.max_hp = 200;
+            e.hit_point = 100;
+            e
+        });
+        w.entities.get_mut(foe).unwrap().inventory.use_items[crate::combat::ITEM_LOCATION_DRESS] =
+            crate::entity::UseItemSlot {
+                make_index: 1,
+                index: 5,
+                dura: 5000,
+                dura_max: 10_000,
+                desc: [0u8; 14],
+            };
+        let before =
+            w.entities.get(foe).unwrap().use_items[crate::combat::ITEM_LOCATION_DRESS].dura;
+        let out = w.attack_once(hero, foe).expect("结算");
+        assert!(out.hit, "夹具命中门必须过");
+        let after = w.entities.get(foe).unwrap().use_items[crate::combat::ITEM_LOCATION_DRESS].dura;
+        assert!(
+            after < before,
+            "受击耐久必须写回目标 UseItems（删目标 use_items 回写即红）：{before} -> {after}"
+        );
+    }
+
+    /// **P5-A1**：中毒门命中后 `MakePosion` 的 `CharStatus` 必须写回实体。
+    ///
+    /// 夹具：攻方 `Paralysis=true`、守方 `UnParalysis=false`、`AttackPosionRate=1`
+    /// ⇒ `Random(0+1)==0` 必过 ⇒ `poisoned=true`。牙：删 `make_posion_impl` 里的
+    /// `e.buff.char_status = status` 写回 ⇒ 实体 `CharStatus` 仍为 0 ⇒ 红；
+    /// 删 `poisoned` 支的调用 ⇒ 同样红（buff 表也不再有该项）。
+    #[test]
+    fn attack_writeback_poison_status_reaches_entity() {
+        let (mut w, hero, mon) = attack_probe_world(false);
+        assert_eq!(
+            w.entities.get(mon).unwrap().char_status,
+            0,
+            "攻击前守方 CharStatus 必须为 0（牙的前置）"
+        );
+        let _ = w.attack_once(hero, mon).expect("结算");
+        let m = w.entities.get(mon).unwrap();
+        assert_ne!(m.char_status, 0, "石化毒位必须置起（删写回即红）");
+        assert_eq!(
+            m.char_status,
+            w.get_char_status(mon),
+            "实体 CharStatus 必须与 BuffSystem 一致（删写回 / 删调用都会分叉）"
+        );
+        assert!(
+            w.buffs.has_buff(mon, crate::buff::BuffType::Paralysis),
+            "buff 表必须登记石化毒"
+        );
+    }
+
+    /// **P5-A1**：命中者登记与 `RM_STRUCK` 入队必须写回目标实体（状态标志面）。
+    ///
+    /// 牙：删 `e.set_last_hiter(actor_id, now)` ⇒ `last_hiter` 仍为 `None` ⇒ 红；
+    /// 删 `e.ai.pending_struck.push(…)` ⇒ 队列为空 ⇒ 红；
+    /// 删 `if target.race > ACTOR_RACE_PLAY` 门的外观（改成恒真/恒假）⇒ 另一侧红。
+    #[test]
+    fn attack_writeback_last_hiter_and_struck_queue() {
+        let (mut w, hero, mon) = attack_probe_world(false);
+        let before = w.entities.get(mon).unwrap().hp;
+        let out = w.attack_once(hero, mon).expect("结算");
+        let m = w.entities.get(mon).unwrap();
+        assert_eq!(
+            m.hp,
+            before - out.damage,
+            "伤害必须写回目标 HP（删 e.vitals.hp 回写即红）"
+        );
+        assert_eq!(
+            m.last_hiter,
+            Some(hero),
+            "命中者登记必须写回（删 set_last_hiter 即红）"
+        );
+        let struck: Vec<(i32, i32)> =
+            m.ai.pending_struck
+                .iter()
+                .map(|s| (s.hiter, s.w_param))
+                .collect();
+        assert_eq!(
+            struck,
+            vec![(hero, i32::from(out.struck_power))],
+            "RM_STRUCK 必须按 struck_power 入队（删 push 即红）"
+        );
+        assert_eq!(out.target_hp_after, m.hp);
+    }
+
+    /// **P4**：`SimSlaveCleanup` 段与旧 `slave_list_cleanup_all` 同语义（槽位序 + 表内倒序删除）。
+    ///
+    /// 主人持 4 个宝宝：alive 保留；dead/ghost/已换主三项移除。ghost 主人不替它清表。
+    ///
+    /// 牙：① 删段注册 ⇒ 列表不清理（本条/trace 牙红）；② 删 `list.remove(i)` ⇒ 红；
+    /// ③ 删写回 `m.slave.slave_list = list` ⇒ 红；④ 删 `!e.ghost` 过滤 ⇒ ghost 主人那侧红。
+    #[test]
+    fn sim_slave_cleanup_stage_removes_dead_ghost_and_reassigned() {
+        let mut w = World::new(16, 16);
+        let mk_mon = |w: &mut World, name: &str, x: i32| {
+            w.add_entity({
+                let mut e = crate::EntitySpawn::new(0, name, x, 5);
+                e.race = crate::entity::ACTOR_RACE_MONSTER;
+                e.hp = 100;
+                e.max_hp = 100;
+                e
+            })
+        };
+        let master = mk_mon(&mut w, "master", 5);
+        let other_master = mk_mon(&mut w, "other", 9);
+        let alive = mk_mon(&mut w, "alive", 6);
+        let dead = mk_mon(&mut w, "dead", 7);
+        let ghost = mk_mon(&mut w, "ghost", 8);
+        let reassigned = mk_mon(&mut w, "reassigned", 10);
+        let ghost_master = mk_mon(&mut w, "ghost-master", 11);
+        w.entities.get_mut(alive).unwrap().slave.master = Some(master);
+        {
+            let e = w.entities.get_mut(dead).unwrap();
+            e.slave.master = Some(master);
+            e.life_cycle.death = true;
+            e.life_cycle.death_settled = true;
+        }
+        {
+            let e = w.entities.get_mut(ghost).unwrap();
+            e.slave.master = Some(master);
+            e.life_cycle.ghost = true;
+        }
+        w.entities.get_mut(reassigned).unwrap().slave.master = Some(other_master);
+        w.entities.get_mut(ghost_master).unwrap().life_cycle.ghost = true;
+        w.entities.get_mut(master).unwrap().slave.slave_list = vec![alive, dead, ghost, reassigned];
+        w.entities.get_mut(ghost_master).unwrap().slave.slave_list = vec![dead];
+
+        w.tick();
+
+        assert_eq!(
+            w.entities.get(master).unwrap().slave_list.clone(),
+            vec![alive],
+            "死亡/幽灵/换主的宝宝必须从表里移除，存活项保持原序"
+        );
+        assert_eq!(
+            w.entities.get(ghost_master).unwrap().slave_list.clone(),
+            vec![dead],
+            "ghost 主人不 Run ⇒ 集中扫描不替它清表（B14）"
+        );
+    }
+
+    /// **P3b**：死亡结算的「退组 → 记录死亡」顺序语义（oracle `Die()`：`DelMember` 在置
+    /// `Death` 之后、掉落/经验之前；本仓同一实现点里先 `party_del_member` 再 push `deaths`）。
+    ///
+    /// 牙：① 删 `party_del_member_em_impl` 里的 `group_members.remove(pos)`（退组那一步）⇒
+    /// 团长成员表仍含死者、`party_events` 无 `GroupCancel` ⇒ 红；② 删 `death_settled = true`
+    /// 写回 ⇒ 第二次 tick 重复结算（`deaths` 非空）⇒ 红。
+    #[test]
+    fn settle_deaths_removes_member_from_group_and_latches_once() {
+        let mut w = World::new(16, 16);
+        let leader = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "leader", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        let member = w.add_entity({
+            let mut e = crate::EntitySpawn::new(0, "member", 6, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 0;
+            e.max_hp = 100;
+            e.group_owner = leader;
+            e
+        });
+        // 本仓只有团长持成员表（`party.rs`）。
+        w.entities.get_mut(leader).unwrap().group.group_members = vec![leader, member];
+
+        let rec = w.tick();
+        assert!(
+            rec.deaths.iter().any(|d| d.0 == member),
+            "玩家死亡在 tick_tail 的 TailPlayerDeaths 结算"
+        );
+        assert!(
+            w.entities.get(member).unwrap().death,
+            "死亡位（LifeCycle.death）必须写回"
+        );
+        let g = w.entities.get(leader).unwrap();
+        assert!(
+            !g.group_members.contains(&member),
+            "死亡者必须先被移出团长成员表（DelMember 先于掉落/经验）"
+        );
+        assert!(
+            rec.party_events
+                .iter()
+                .any(|e| matches!(e, crate::party::PartyEvent::GroupCancel { target } if *target == leader)),
+            "散组事件必须进 record.party_events"
+        );
+        // 一次性闩锁：`death_settled` 写回后第二次 tick 不得重复结算。
+        let rec2 = w.tick();
+        assert!(
+            rec2.deaths.is_empty(),
+            "death_settled 写回后不得重复结算（删该写回即红）"
+        );
+    }
+
+    /// **P3a**：`SimDup` 段与旧 facade 内联实现逐项等价（同一场景的**改动前后**向量对拍）。
+    ///
+    /// 场景：3 名玩家同格 (5,5)、`check_dup_obj_tick=0`。clock=10_000 第一趟只置位
+    /// `BoDuplication/DupStartTick`（零推挤）；clock=13_001 第二趟 ⇒ 槽位首名 id=1 过
+    /// `>=3 && elapsed>3000` 门，抽 `RandomByte(8)` 恰一次并逐格推进到 (4,6)；后两名看到
+    /// 2 个对象且 `elapsed=3001 <= 10000` ⇒ 零抽数。
+    ///
+    /// 期望值来自**改动前**（base `f823bf8ca` 的 `World::check_dup_obj` 内联实现）在同一夹具上
+    /// 的实跑记录：`first=[]` / `second=[(1, dir=1, 4, 6)]` / RNG 后继 5 值 `[1,1,4,1,2]` /
+    /// `dup_states=[(13001,true,10000);3]`。迁移后必须逐项相同（抽数点/次数/次序与推挤序列）。
+    ///
+    /// 牙：① 删 `SimDup` 注册 ⇒ `head.run(SimDup)` panic（trace 序列牙同时红）；
+    /// ② 删 `set_dup_check_tick` 写回 ⇒ `dup_states` 首项断言红（13001 变 10000）；
+    /// ③ 删 `!bo → 置 true/start=now` 分支 ⇒ 第二趟 elapsed=0 ⇒ 零推挤 ⇒ 向量红；
+    /// ④ `StageAccess::order_ids` 反序 ⇒ 推挤者从 id=1 变 id=3 ⇒ 向量红。
+    #[test]
+    fn sim_dup_stage_matches_recorded_vectors() {
+        let mut w = World::new(8, 8);
+        for id in 1..=3 {
+            let mut e = crate::EntitySpawn::new(id, "p", 5, 5);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            w.entities.insert(e);
+            assert!(w.enter_world(id));
+        }
+        w.clock_ms = 10_000;
+        for id in 1..=3 {
+            w.entities.dup_state_mut(id).unwrap().check_dup_obj_tick = 0;
+        }
+        let first = w.check_dup_obj();
+        assert!(first.is_empty(), "第一趟只置位 BoDuplication，零推挤");
+        w.clock_ms = 13_001;
+        let second = w.check_dup_obj();
+        assert_eq!(
+            second,
+            vec![crate::action::PushEvent {
+                actor_id: 1,
+                dir: 1,
+                x: 4,
+                y: 6
+            }],
+            "第二趟只有槽位首名过门；推挤序列与改动前一致"
+        );
+        let tail: Vec<u8> = (0..5).map(|_| w.rng.random_byte(8)).collect();
+        assert_eq!(
+            tail,
+            vec![1, 1, 4, 1, 2],
+            "RNG 后继序列必须与改动前逐值一致（抽数点/次数/次序）"
+        );
+        let states: Vec<(i64, bool, i64)> = (1..=3)
+            .map(|id| {
+                let d = w.entities.dup_state(id).unwrap();
+                (d.check_dup_obj_tick, d.bo_duplication, d.dup_start_tick)
+            })
+            .collect();
+        assert_eq!(
+            states,
+            vec![(13_001, true, 10_000); 3],
+            "check_dup_obj_tick / DupStartTick 的写回必须落地"
+        );
+        // 位置写回：逐格推进必须落到 `Transform`（删 `set_xy` 即红）。
+        assert_eq!(
+            w.entities.get(1).map(|e| (e.x, e.y)),
+            Some((4, 6)),
+            "推挤后的坐标必须写回组件"
+        );
+        // 3s 门：同一时钟再跑一趟（13001）必须零推挤（`now - last = 0 <= 3000`）。
+        let third = w.check_dup_obj();
+        assert!(third.is_empty(), "3s 门内不得重复结算");
+    }
+
+    /// **P2b**：`SimMapEvents` 段与旧 `run_map_events` 的判定链等价（火墙命中入队）。
+    ///
+    /// 造一个 `Race == Play` 的施法者 + 同格同族目标，火墙事件过两个门后应产生**恰一条**
+    /// `RM_MAGSTRUCK_MINE`（`mine=true`、`power` = 事件伤害、`caster_id` = 施法者）。
+    ///
+    /// 牙①：删掉段内 `is_proper_target_grouped_direct` 调用（改为无条件 push）⇒ 追加的
+    /// 「施法者自身」也会入队 ⇒ 条数断言红；
+    /// 牙②：删掉 `now - fire_run_tick > 3000` 门（或删 `fire_run_tick = now`）⇒ 第二次调用
+    /// 重复入队 ⇒ 条数断言红；
+    /// 牙③：删掉施法者 `!ghost && !death` 过滤 ⇒ 幽灵施法者用例红（见下一条用例）。
+    #[test]
+    fn sim_map_events_stage_enqueues_mag_struck_for_proper_targets() {
+        let mut w = World::new(8, 8);
+        let caster_id = w.entities.insert({
+            let mut e = crate::EntitySpawn::new(1, "caster", 2, 2);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        let target_id = w.entities.insert({
+            let mut e = crate::EntitySpawn::new(2, "target", 2, 2);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        assert!(w.enter_world(caster_id));
+        assert!(w.enter_world(target_id));
+
+        w.add_fire_burn_event(caster_id, 0, 2, 2, 17, 60_000);
+        w.clock_ms = 5_000;
+        w.fire_burn_events[0].run_start_ms = 1_000;
+        w.fire_burn_events[0].fire_run_tick_ms = 0;
+        // 前置（同源对照）：facade 的 `base_objects_at`（含 Death 过滤）与段内的
+        // 「格子枚举 + LifeCycle.death 过滤」在同一份格子表上给出同一条目表。
+        assert_eq!(
+            w.base_objects_at(0, 2, 2),
+            vec![caster_id, target_id],
+            "旧 facade 枚举面"
+        );
+        assert_eq!(
+            map_cell_object_ids(&w.maps, 0, 2, 2),
+            vec![caster_id, target_id],
+            "段内枚举面必须与旧 facade 同序同集（同格两实体都在场）"
+        );
+        let base_order = w.msg_order;
+        w.run_map_events();
+        assert_eq!(
+            w.pending_mag_struck.len(),
+            1,
+            "同格同族目标 ⇒ 恰一条；施法者自身必须被 id 相等门排除"
+        );
+        let msg = w.pending_mag_struck[0];
+        assert_eq!(
+            (msg.target_id, msg.caster_id, msg.power, msg.mine),
+            (target_id, caster_id, 17, true),
+            "RM_MAGSTRUCK_MINE 的载荷必须逐字段来自事件/施法者"
+        );
+        assert_eq!(msg.order, base_order, "order 从段入口 msg_order 起连续");
+        assert_eq!(w.msg_order, base_order + 1);
+        // 3s 门：同一时钟下再跑一次不得重复入队（fire_run_tick 已刷成 now）。
+        w.run_map_events();
+        assert_eq!(
+            w.pending_mag_struck.len(),
+            1,
+            "fire_run_tick 门必须阻止同一窗口内重复结算"
+        );
+        assert_eq!(w.msg_order, base_order + 1, "未入队则 msg_order 不得推进");
+    }
+
+    /// **P2b**：施法者 `Ghost || Death` ⇒ 火墙不结算（旧 `spawn_cloned(...).filter(!ghost && !death)`）。
+    ///
+    /// 牙：删掉段内 `.filter(|e| !e.ghost && !e.death)` ⇒ 本用例出现 1 条消息 ⇒ 红。
+    #[test]
+    fn sim_map_events_stage_skips_ghost_owner() {
+        let mut w = World::new(8, 8);
+        let caster_id = w.entities.insert({
+            let mut e = crate::EntitySpawn::new(1, "caster", 3, 3);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        let target_id = w.entities.insert({
+            let mut e = crate::EntitySpawn::new(2, "target", 3, 3);
+            e.race = crate::entity::ACTOR_RACE_PLAY;
+            e.hp = 100;
+            e.max_hp = 100;
+            e
+        });
+        assert!(w.enter_world(caster_id));
+        assert!(w.enter_world(target_id));
+        w.entities.get_mut(caster_id).unwrap().life_cycle.ghost = true;
+
+        w.add_fire_burn_event(caster_id, 0, 3, 3, 9, 60_000);
+        w.clock_ms = 5_000;
+        w.fire_burn_events[0].run_start_ms = 1_000;
+        w.fire_burn_events[0].fire_run_tick_ms = 0;
+        w.run_map_events();
+        assert!(
+            w.pending_mag_struck.is_empty(),
+            "Ghost 施法者不得产生 RM_MAGSTRUCK_MINE"
+        );
+        assert!(
+            w.fire_burn_events[0].owner_id.is_none(),
+            "事件尾的 owner_id 归一必须落地（Ghost/Death ⇒ None），与旧 run_map_events 同项"
+        );
+    }
+
+    /// **S4d-3/P0 段边界哨兵**（设计件 §2.5 / review F5）：段内 panic 后不做热恢复，
+    /// 下一次 tick 入口必须 fail-fast，而不是在 `SimState::default()` 上空转。
+    ///
+    /// 牙：把 `enter_stage_world` 开头的 `assert!` 删掉 ⇒ 本用例第二次 `tick_head` 不再
+    /// panic（会在空世界上正常跑完）⇒ 红。
+    #[test]
+    fn stage_boundary_sentinel_fails_fast_after_panic() {
+        let mut w = World::new(8, 8);
+        // 模拟「某段 panic 后」的中间态：进入边界但未离开（SimState 留在 bevy World）。
+        w.enter_stage_world();
+        let caught = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            w.tick_head();
+        }));
+        let payload = caught.expect_err("哨兵必须在 tick_head 入口 panic");
+        let msg = if let Some(s) = payload.downcast_ref::<&str>() {
+            (*s).to_string()
+        } else if let Some(s) = payload.downcast_ref::<String>() {
+            s.clone()
+        } else {
+            String::new()
+        };
+        assert!(
+            msg.contains("未恢复"),
+            "断言信息必须点名「未恢复」，实际: {msg}"
+        );
+    }
+
+    /// **T3·①（本批最重要的判据）：`world.tick` 内 `npc_tick` 必先于 `merchant_tick`
+    /// 消费共享 RNG**（oracle `MerchantProcessor.ExecuteInternal` 先 `ProcessNpcs()` 后
+    /// `ProcessMerchants()`，`MerchantProcessor.cs:28-32`）。
+    ///
+    /// 同一 tick 内让一个固定 NPC（`GuildOfficial`）与一个商人（`Merchant`）**都过 Run 门**，
+    /// 再以一个同种子独立流按**字面量 oracle 参数**复算合并后的抽数序列：先 NPC 体
+    /// （`Random(40)` → [`RandomByte(8)` | `Random(30)`]），后商人体
+    /// （`Random(50)` → [`RandomByte(8)` | `Random(50)`]）。
+    ///
+    /// **牙**：把 `world.rs` 里 `if self.npc_enabled {…}` 与 `if self.merchant_enabled {…}`
+    /// 两块**对调**（RNG 消费序反转）⇒ 期望序列错位 ⇒ 必红。扫 **20000** 种子
+    /// （`40/30/50` 模数 ±1 的区分窗口 ~1/1600/seed ⇒ 须大样本才咬得住）。
+    #[test]
+    fn world_tick_consumes_rng_npc_before_merchant() {
+        use crate::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use crate::npc::{NpcSpawn, NpcState, NPC_TYPE_GUILD_OFFICIAL};
+
+        // 世界/两实体建一次；每轮重播种共享流并把两块 tick 的门都拨到「必跑」。
+        let mut w = World::with_maps(vec![(20, 20)]);
+        w.enable_npc_tick();
+        w.enable_merchant_tick();
+        let npc = w
+            .spawn_npc(NpcSpawn {
+                name: "比奇国王".to_string(),
+                x: 3,
+                y: 3,
+                map_id: 0,
+                state: NpcState {
+                    npc_type: NPC_TYPE_GUILD_OFFICIAL,
+                    ..NpcState::default()
+                },
+            })
+            .expect("NPC 挂图成功");
+        let mer = w
+            .spawn_merchant(MerchantSpawn {
+                name: "老人".to_string(),
+                x: 4,
+                y: 4,
+                map_id: 0,
+                state: MerchantState::new(
+                    String::new(),
+                    String::new(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags::default(),
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("商人挂图成功");
+
+        for seed in 0..20_000i32 {
+            // 重播种共享流（无需复算 ctor 抽数：重播种抹掉 ctor 已消费的那几抽）。
+            w.rng = RandomNumber::with_seed(seed);
+            let mut exp = RandomNumber::with_seed(seed);
+            if let Some(n) = w.entities.npc_state_mut(npc) {
+                n.run_tick = 0;
+            }
+            if let Some(s) = w.entities.merchant_mut(mer) {
+                s.run_tick = 0;
+            }
+            w.npc_pass_tick = i64::MIN;
+            w.merchant_pass_tick = i64::MIN;
+            w.clock_ms = 10_000;
+            let rec = w.tick();
+
+            // 期望（**字面量 oracle 参数**）：先 NPC 体 40→[8|30]，后商人体 50→[8|50]。
+            let npc_expect = if exp.random_below(40) == 0 {
+                (Some(exp.random_byte(8)), false)
+            } else {
+                (None, exp.random_below(30) == 0)
+            };
+            let mer_expect = if exp.random_below(50) == 0 {
+                (Some(exp.random_byte(8)), false)
+            } else {
+                (None, exp.random_below(50) == 0)
+            };
+
+            assert_eq!(rec.npcs_run, vec![npc], "seed={seed}: NPC 先过 Run 门");
+            assert_eq!(rec.merchants_run, vec![mer], "seed={seed}: 商人后过 Run 门");
+            assert_eq!(
+                (
+                    rec.npc_turns.first().map(|t| t.1),
+                    rec.npc_hits.contains(&npc)
+                ),
+                npc_expect,
+                "seed={seed}: NPC 体先抽（40→[8|30]）"
+            );
+            assert_eq!(
+                (
+                    rec.merchant_turns.first().map(|t| t.1),
+                    rec.merchant_hits.contains(&mer)
+                ),
+                mer_expect,
+                "seed={seed}: 商人体后抽（50→[8|50]）"
+            );
+            assert_eq!(
+                w.rng.random(),
+                exp.random(),
+                "seed={seed}: 合并抽数次序/次数"
+            );
+        }
+    }
+
+    fn world_with(entities: &[(i32, i32, i32)]) -> World {
+        let mut w = World::new(64, 64);
+        for (id, x, y) in entities {
+            let mut e = crate::EntitySpawn::new(*id, format!("e{id}"), *x, *y);
+            e.id = *id;
+            w.add_entity(e);
+        }
+        w
+    }
+
+    // ==============================================================================
+    // **卡 `openmir2-map-event-frames`**：地图事件可见性的世界侧（`VisibleEvents` 差集）。
+    // ==============================================================================
+
+    /// **判据①（世界侧）**：观察者（玩家）进入含 `Visible` 事件的格（视距内）⇒ 首次扫描后
+    /// `visible_events` 恰 1 条 `Show`、坐标 = 事件格（`UpdateVisibleEvent` 的 `wX/wY`）、
+    /// `event_hides` 为空。
+    #[test]
+    fn map_event_visible_observer_gets_one_show_entry() {
+        let mut w = World::new(64, 64);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
+        for _ in 0..6 {
+            w.tick(); // 1200ms：玩家 SearchTime(1000) 的严格大于门首次命中
+        }
+        let vis = &w.entities.get(p).unwrap().visible_events;
+        assert_eq!(vis.len(), 1, "恰 1 条可见事件条目");
+        assert_eq!(vis[0].event, 0, "折叠对象 = 第一条 registered 事件");
+        assert_eq!((vis[0].x, vis[0].y), (10, 10), "坐标 = 扫描到的事件格");
+        assert_eq!(vis[0].flag, crate::entity::VisibleFlag::Show);
+        assert!(w.last_tick.event_hides.is_empty(), "无离开 ⇒ 无 HIDEEVENT");
+    }
+
+    /// **判据②（世界侧）**：观察者走出视距 ⇒ 下一次扫描把条目 `Hidden` 移除并记
+    /// `event_hides = (观察者, 事件下标, nX, nY)`（宿主据此发 `SM_HIDEEVENT(805)`）。
+    #[test]
+    fn map_event_leave_records_one_hide() {
+        let mut w = World::new(64, 64);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert_eq!(w.entities.get(p).unwrap().visible_events.len(), 1);
+        // 走出视距：11 → 23，Chebyshev 距离 13 > 12。
+        for _ in 0..12 {
+            w.walk(p, 1, 0);
+        }
+        for _ in 0..6 {
+            w.tick(); // 2400ms：下一次扫描
+        }
+        assert!(
+            w.entities.get(p).unwrap().visible_events.is_empty(),
+            "离开 ⇒ 条目移除"
+        );
+        assert_eq!(
+            w.last_tick.event_hides,
+            vec![(p, 0, 10, 10)],
+            "恰 1 条 HIDEEVENT 记录（含首次看到时的格子坐标）"
+        );
+    }
+
+    /// **判据③（世界侧）**：事件 `Visible = false`（`ContinueTime` 到期 `Close()`）⇒
+    /// 扫描不加入可见集、无 `event_hides` ⇒ 宿主零帧。
+    #[test]
+    fn map_event_not_visible_no_entries() {
+        let mut w = World::new(64, 64);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 100); // 100ms 即 Close
+        for _ in 0..3 {
+            w.tick(); // 600ms：RunTick(500) 门过后立刻 Close
+        }
+        assert!(!w.fire_burn_events[0].visible);
+        assert!(w.fire_burn_events[0].registered, "key 0 仍被它占住");
+        for _ in 0..3 {
+            w.tick(); // 1200ms：首次扫描
+        }
+        assert!(
+            w.entities.get(p).unwrap().visible_events.is_empty(),
+            "零条目"
+        );
+        assert!(w.last_tick.event_hides.is_empty(), "零 HIDEEVENT");
+    }
+
+    /// **折叠语义（1:1 硬约束）**：同一观察者视距内有**两个** `Visible` 事件格、同一趟扫描
+    /// 先后命中 ⇒ `visible_events` 仍只 **1 条**（两条都解析到第一条 registered 事件；oracle
+    /// `Get<MapEvent>(0)` 与格子无关），且第二次 `UpdateVisibleEvent` 把 `Show` 打成
+    /// `Invisible`（oracle `:5468-5471`）⇒ 发帧循环（扫描结束后读旗标）什么都不发。
+    /// 把它改成「每事件唯一 id」⇒ 两条 `Show` ⇒ 本用例必红。
+    #[test]
+    fn map_event_id_zero_fold_single_entry() {
+        let mut w = World::new(64, 64);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 60_000);
+        w.add_fire_burn_event(p, 0, 12, 10, 5, 60_000);
+        for _ in 0..6 {
+            w.tick();
+        }
+        let vis = &w.entities.get(p).unwrap().visible_events;
+        assert_eq!(vis.len(), 1, "折叠 ⇒ 至多 1 条");
+        assert_eq!(vis[0].event, 0);
+        assert_eq!((vis[0].x, vis[0].y), (10, 10), "坐标 = 扫描序首个事件格");
+        assert_eq!(
+            vis[0].flag,
+            crate::entity::VisibleFlag::Invisible,
+            "同趟第二次命中 ⇒ Show 被打成 Invisible（oracle :5468-5471）"
+        );
+        assert!(w.last_tick.event_hides.is_empty());
+    }
+
+    /// **退化语义（oracle 审计 §4.3-⑤）**：折叠槽（key 0）被首个事件占住后**永不替换**
+    /// （`DeleteFromMap` 只在 `CellObjId > 0` 支移除）——首个事件 `Close()` 后，即使视距内
+    /// 出现新的 `Visible` 事件，观察者也看不到（零条目）。
+    #[test]
+    fn map_event_closed_slot_never_replaced() {
+        let mut w = World::new(64, 64);
+        let mut e = crate::EntitySpawn::new(0, "p", 11, 10);
+        e.view_range = 12;
+        let p = w.add_entity(e);
+        w.add_fire_burn_event(p, 0, 10, 10, 5, 100); // 首个事件：100ms 即 Close
+        for _ in 0..3 {
+            w.tick();
+        }
+        assert!(!w.fire_burn_events[0].visible);
+        w.add_fire_burn_event(p, 0, 12, 10, 5, 60_000); // 新事件：Visible，但 TryAdd 恒失败
+        for _ in 0..3 {
+            w.tick();
+        }
+        assert!(
+            w.entities.get(p).unwrap().visible_events.is_empty(),
+            "折叠槽被已关闭的首个事件占住 ⇒ 新事件不可见"
+        );
+        assert!(w.last_tick.event_hides.is_empty());
+    }
+
+    #[test]
+    fn tick_advances_clock_by_200ms() {
+        let mut w = World::new(16, 16);
+        assert_eq!(w.clock_ms, 0);
+        let r1 = w.tick();
+        assert_eq!(r1.clock_ms, 200);
+        assert_eq!(r1.tick_seq, 1);
+        let r2 = w.tick();
+        assert_eq!(r2.clock_ms, 400);
+    }
+
+    #[test]
+    fn tick_order_is_deterministic_and_documented() {
+        let mut w = world_with(&[(1, 10, 10), (2, 12, 10), (3, 20, 20)]);
+        w.walk(2, 1, 0);
+        w.walk(1, 0, 1);
+        let r = w.tick();
+        assert_eq!(
+            r.processed,
+            vec![(1, true), (2, true), (3, true), (2, true), (1, true)],
+            "命令必须按 FIFO 处理"
+        );
+        assert_eq!(r.aoi_order, vec![1, 2, 3]);
+
+        let mut w2 = world_with(&[(1, 10, 10), (2, 12, 10), (3, 20, 20)]);
+        w2.walk(2, 1, 0);
+        w2.walk(1, 0, 1);
+        let r2 = w2.tick();
+        assert_eq!(r.processed, r2.processed);
+        assert_eq!(r.aoi_order, r2.aoi_order);
+    }
+
+    /// **卡 `openmir2-player-searchviewrange-cadence` 判据 (a) + (b) 的严格大于边界**。
+    ///
+    /// oracle 证据：
+    /// - `WorldServer.cs:663-667`：`if ((GetTickCount() - playObject.SearchTick) > playObject.SearchTime)`
+    ///   `{ playObject.SearchTick = GetTickCount(); playObject.SearchViewRange(); }`（严格大于）；
+    /// - `PlayObject.cs:899-901`：ctor 里 `SearchTime = 1000; SearchTick = GetTickCount();`
+    ///   （覆盖 `BaseObject.cs:441` 的 `Random(2000)+2000`）；
+    /// - `BaseObject.cs:442`：ctor `SearchTick = GetTickCount()`。
+    ///
+    /// 世界 tick = 200ms ⇒ 1200ms 才命中（1000ms 不满足 `>`），周期 1200ms。
+    /// 用「离开世界后 `visible_actors` 仍残留」观测**没有重扫**——若每 tick 都扫，
+    /// 残留会在下一 tick 立即消失。
+    #[test]
+    fn player_search_view_range_throttled_and_strictly_greater() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(crate::EntitySpawn::new(0, "p", 10, 10));
+        let q = w.add_entity(crate::EntitySpawn::new(0, "q", 11, 10));
+
+        // 玩家 ctor 覆盖值：必须是常量 1000（tooth ③ 会打掉这条并在失败信息里打印实际值）。
+        let st = w.entities.get(p).unwrap().ai.search_time;
+        assert_eq!(
+            st, 1000,
+            "玩家 SearchTime 必须是 1000（PlayObject.cs:900），实际 {st}"
+        );
+
+        // (a) 200ms × 5 = 恰好 1000ms —— 严格大于 ⇒ 一次都不扫。
+        for _ in 0..5 {
+            w.tick();
+            assert!(
+                w.entities.get(p).unwrap().visible_actors.is_empty(),
+                "clock={}ms：玩家不得扫描（SearchTime=1000，必须严格大于）",
+                w.clock_ms
+            );
+            assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 0);
+        }
+        // (b) 恰 1000ms：仍不扫。
+        assert_eq!(w.clock_ms, 1000);
+        assert!(
+            w.entities.get(p).unwrap().visible_actors.is_empty(),
+            "恰 1000ms 不满足 `> 1000` ⇒ 不得扫描"
+        );
+
+        // 第 6 tick（1200ms > 1000）⇒ 扫一次，q 进入视野。
+        w.tick();
+        assert_eq!(w.clock_ms, 1200);
+        assert_eq!(
+            w.entities.get(p).unwrap().ai.search_tick,
+            1200,
+            "命中后 SearchTick = now"
+        );
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "1200ms 必须扫到 q"
+        );
+
+        // q 离开世界：1400ms 的 tick 不得重扫 ⇒ p 的可见集仍残留 q。
+        w.leave(q);
+        w.tick(); // 1400ms
+        assert_eq!(w.clock_ms, 1400);
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 1200);
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "1400ms 距上次扫描仅 200ms ⇒ 不得重扫"
+        );
+        // 直到 2200ms（= 1200 + 1000）都不满足 `>` ⇒ 仍不扫。
+        for _ in 0..4 {
+            w.tick();
+            assert!(
+                w.entities
+                    .get(p)
+                    .unwrap()
+                    .visible_actors
+                    .iter()
+                    .any(|v| v.target == q),
+                "clock={}ms：2200ms 之前不得重扫",
+                w.clock_ms
+            );
+        }
+        assert_eq!(w.clock_ms, 2200);
+        // 2400ms（距上次 1200ms > 1000）⇒ 重扫并移除已离开世界的 q。
+        w.tick();
+        assert_eq!(w.clock_ms, 2400);
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 2400);
+        assert!(
+            !w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "2400ms 必须重扫（q 已离开世界 ⇒ 从视野移除）"
+        );
+    }
+
+    /// 判据 (c)：同一 `SearchTime` 窗口内的连续 tick 不重复扫（`SearchTick` 只在命中时推进）。
+    #[test]
+    fn player_search_view_range_does_not_rescan_within_window() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(crate::EntitySpawn::new(0, "p", 10, 10));
+        w.add_entity(crate::EntitySpawn::new(0, "q", 11, 10));
+
+        for _ in 0..6 {
+            w.tick(); // 1200ms 首次命中
+        }
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 1200);
+
+        // 同窗口内重复推进（1400/1600/1800/2000/2200）：SearchTick 不动。
+        for _ in 0..5 {
+            w.tick();
+            assert_eq!(
+                w.entities.get(p).unwrap().ai.search_tick,
+                1200,
+                "clock={}ms：同一 SearchTime 窗口内不得重扫",
+                w.clock_ms
+            );
+        }
+        assert_eq!(w.clock_ms, 2200);
+        // 窗口外的第一 tick（2400ms）才推进。
+        w.tick();
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 2400);
+    }
+
+    /// 判据 (d)：死亡玩家走 `search_view_range_death`（清空视野，不刷新 `SearchTick`），
+    /// ghost 玩家不扫描（oracle `WorldServer.cs:708-711` 已把 Ghost 移出 `PlayObjectList`）。
+    #[test]
+    fn dead_and_ghost_players_do_not_scan() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(crate::EntitySpawn::new(0, "p", 10, 10));
+        let q = w.add_entity(crate::EntitySpawn::new(0, "q", 11, 10));
+        for _ in 0..6 {
+            w.tick(); // 1200ms 首次命中
+        }
+        assert!(w
+            .entities
+            .get(p)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .any(|v| v.target == q));
+
+        // 死亡：走既有 death 支（清空视野），不是 scan ⇒ SearchTick 保持 1200。
+        w.entities.get_mut(p).unwrap().life_cycle.death = true;
+        w.tick(); // 1400ms
+        assert!(
+            w.entities.get(p).unwrap().visible_actors.is_empty(),
+            "死亡玩家的 search_view_range_death 必须清空 visible_actors（语义不变）"
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().ai.search_tick,
+            1200,
+            "死亡清空不是扫描，不得刷新 SearchTick"
+        );
+        for _ in 0..10 {
+            w.tick();
+        }
+        assert!(
+            w.entities.get(p).unwrap().visible_actors.is_empty(),
+            "死亡玩家不得扫描"
+        );
+
+        // ghost：从进图起推进 6 tick（>1000ms）也不得扫。
+        let g = w.add_entity(crate::EntitySpawn::new(0, "g", 20, 20));
+        let q2 = w.add_entity(crate::EntitySpawn::new(0, "q2", 21, 20));
+        w.entities.get_mut(g).unwrap().life_cycle.ghost = true;
+        let g_tick = w.entities.get(g).unwrap().ai.search_tick;
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert!(
+            w.entities.get(g).unwrap().visible_actors.is_empty(),
+            "ghost 玩家不得扫描（clock={}ms）",
+            w.clock_ms
+        );
+        assert_eq!(
+            w.entities.get(g).unwrap().ai.search_tick,
+            g_tick,
+            "ghost 跳过不得刷新 SearchTick"
+        );
+        assert!(
+            w.entities.get(q2).is_some(),
+            "q2 仍在世界（仅是观察者不可见）"
+        );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 卡 `openmir2-monster-view-throttle`（tier=R）：怪物视野由玩家 `RM_UPDATEVIEWRANGE`
+    // 投递并按 `SearchTime` 节流；非玩家只有 `IsSlave || Race in {11,112,254}` 自扫。
+    // oracle：`PlayObject.cs:3129-3139`、`MonsterObject.cs:136-185`、`WorldServer.MonGen.cs:300-313`。
+    // ---------------------------------------------------------------------------------------
+
+    /// **生产口径玩家**：`PlayObject` ctor `WantRefMsg = true`（`PlayObject.cs:889`）。
+    /// `EntitySpawn::new` 的缺省 `false` 是构造等价物的空缺，宿主 `new_player_entity` 会置 true。
+    fn mview_player(w: &mut World, x: i32, y: i32, view_range: i32) -> i32 {
+        let mut e = crate::EntitySpawn::new(0, "p", x, y);
+        e.race = ACTOR_RACE_PLAY;
+        e.want_ref_msg = true;
+        e.view_range = view_range;
+        w.add_entity(e)
+    }
+
+    /// **普通野怪（被动视野）**：`walk_speed = MAX` 钉住位置，避免 `Wondering` 移动干扰断言。
+    fn mview_monster(w: &mut World, x: i32, y: i32, view_range: i32, search_time: i64) -> i32 {
+        let mut e = crate::EntitySpawn::new(0, "m", x, y);
+        e.race = ACTOR_RACE_MONSTER;
+        e.view_range = view_range;
+        e.ai.search_time = search_time;
+        e.ai.walk_speed = i64::MAX;
+        w.add_entity(e)
+    }
+
+    fn mview_visible(w: &World, id: i32) -> Vec<(i32, u8)> {
+        w.entities
+            .get(id)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .map(|v| (v.target, v.flag as u8))
+            .collect()
+    }
+
+    /// **判据①：普通怪不再每 tick 全扫**（oracle `WorldServer.MonGen.cs:300-313`）。
+    ///
+    /// 玩家 `ViewRange(12) - 怪 ViewRange(12) = 0` ⇒ dx=1 不满足距离门 ⇒ 不投递；
+    /// 若怪仍每 tick 全扫，`baseObject.Race == Play` 会让它在第一 tick 就看见玩家。
+    /// 用 `SearchTick` 恒 0 + 可见集恒空断言“从未自扫”。
+    ///
+    /// 牙：恢复 AOI pass 的「所有非玩家每 tick 全扫」⇒ 可见集非空 ⇒ 必红。
+    #[test]
+    fn passive_monster_never_self_scans() {
+        let mut w = World::new(32, 32);
+        let p = mview_player(&mut w, 11, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 12, 0);
+        for _ in 0..10 {
+            w.tick();
+        }
+        assert!(
+            w.entities.get(m).unwrap().visible_actors.is_empty(),
+            "普通怪不得自扫：{:?}",
+            mview_visible(&w, m)
+        );
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            0,
+            "普通怪的自扫路径不得推进 SearchTick"
+        );
+        // 阴性对照：玩家自己的扫描确实跑了（看见怪）——否则本条不构成「怪不自扫」的证据。
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == m),
+            "玩家扫描必须看见怪（want_ref=true）"
+        );
+    }
+
+    /// **判据②+⑦：投递在怪物自己的 `base.Run()` 消费；`SearchTime` 严格大于门。**
+    ///
+    /// 时间线（200ms tick）：玩家 1200ms 首次扫描 ⇒ 入队；怪 1400ms 消费
+    /// （`1400 - 0 > 1000`）⇒ 加入可见集并 `SearchTick = 1400`。玩家下次 2400ms 扫描
+    /// ⇒ 入队；怪 2600ms 消费（`2600 - 1400 = 1200 > 1000`）⇒ 已存在项打 `Invisible`。
+    #[test]
+    fn monster_view_update_consumed_at_search_time_boundary() {
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p = mview_player(&mut w, 11, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 5, 1000);
+        // 本条测「消息段何时消费」，不是跳步门本身 ⇒ 用 interval=0 关掉门（oracle 合法配置）。
+        w.set_process_monster_interval(0);
+
+        for _ in 0..6 {
+            w.tick(); // 1200ms：玩家扫描末尾投递
+        }
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.pending_view_updates,
+            vec![p],
+            "1200ms：玩家扫描必须投递 RM_UPDATEVIEWRANGE"
+        );
+        assert!(
+            w.entities.get(m).unwrap().visible_actors.is_empty(),
+            "1200ms：怪自己还没 Run，消息不得提前消费"
+        );
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 0);
+
+        w.tick(); // 1400ms：monster_ai_tick 的 base.Run 消息段消费
+        assert!(w
+            .entities
+            .get(m)
+            .unwrap()
+            .ai
+            .pending_view_updates
+            .is_empty());
+        assert_eq!(mview_visible(&w, m), vec![(p, 2)], "Show = 2");
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 1400);
+        assert!(
+            w.entities.get(m).unwrap().is_visible_active,
+            "收到玩家 ⇒ IsVisibleActive = true"
+        );
+
+        for _ in 0..5 {
+            w.tick(); // 2400ms：玩家第二次扫描（2400-1200>1000）
+        }
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            1400,
+            "2400ms：怪未到下一次 Run 消费，SearchTick 不动"
+        );
+        w.tick(); // 2600ms
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 2600);
+        assert_eq!(
+            mview_visible(&w, m),
+            vec![(p, 1)],
+            "已在列表 ⇒ UpdateMonsterVisible 打 Invisible(1)，不重复追加"
+        );
+    }
+
+    /// **判据①：节流窗口内的投递被丢弃；窗口外的投递生效。**
+    ///
+    /// `SearchTime = 2000`：1400ms 消费 `1400 - 0 <= 2000` ⇒ 丢弃（`SearchTick` 不推进）；
+    /// 2600ms 消费 `2600 - 0 > 2000` ⇒ 生效。
+    #[test]
+    fn monster_view_update_dropped_within_search_time() {
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p = mview_player(&mut w, 11, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 5, 2000);
+        // 本条测 `SearchTime` 节流，不是跳步门 ⇒ interval=0 关掉门。
+        w.set_process_monster_interval(0);
+
+        for _ in 0..6 {
+            w.tick(); // 1200ms 投递
+        }
+        w.tick(); // 1400ms 消费：1400 <= 2000 ⇒ 丢弃
+        assert!(
+            w.entities
+                .get(m)
+                .unwrap()
+                .ai
+                .pending_view_updates
+                .is_empty(),
+            "消息已出队（oracle 先判门再更新）"
+        );
+        assert!(
+            w.entities.get(m).unwrap().visible_actors.is_empty(),
+            "节流窗口内不得更新可见集"
+        );
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            0,
+            "节流丢弃时 oracle 不写 SearchTick（return 在赋值之前）"
+        );
+
+        for _ in 0..5 {
+            w.tick(); // 2400ms 玩家再次投递
+        }
+        w.tick(); // 2600ms：2600-0 > 2000 ⇒ 生效
+        assert_eq!(mview_visible(&w, m), vec![(p, 2)]);
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 2600);
+    }
+
+    /// **判据①：同一 tick 的第二个玩家投递被同一 `SearchTime` 窗口丢弃**（oracle 单怪单队列）。
+    ///
+    /// 两个玩家同 tick 扫描 ⇒ 队列 `[p1, p2]`；怪在自己的 Run 里按入队序消费：
+    /// p1 通过并 `SearchTick = now`；p2 随即命中 `<= SearchTime` ⇒ 丢弃。
+    #[test]
+    fn second_player_update_dropped_in_same_tick() {
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p1 = mview_player(&mut w, 11, 10, 12);
+        let p2 = mview_player(&mut w, 9, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 5, 0);
+        // 本条测同 tick 双投递的窗口丢弃，不是跳步门 ⇒ interval=0 关掉门。
+        w.set_process_monster_interval(0);
+
+        for _ in 0..6 {
+            w.tick(); // 1200ms：p1、p2 按槽位序投递
+        }
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.pending_view_updates,
+            vec![p1, p2]
+        );
+        w.tick(); // 1400ms：第一个通过，第二个被 SearchTime=0 丢弃
+        assert_eq!(mview_visible(&w, m), vec![(p1, 2)], "只接受第一个投递");
+        assert_eq!(w.entities.get(m).unwrap().ai.search_tick, 1400);
+    }
+
+    /// **判据③：距离门精确边界（差 1 格）通过侧**——`|Δx| = ViewRange(12) - ViewRange(5) = 7`。
+    /// 失败侧（8 格）在 `aoi.rs::player_scan_view_update_distance_gate_exact_boundary`。
+    #[test]
+    fn player_update_reaches_monster_at_exact_view_range_span() {
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        // 本条测距离门边界，不是跳步门 ⇒ interval=0 关掉门。
+        let p = mview_player(&mut w, 10, 10, 12);
+        let m = mview_monster(&mut w, 17, 10, 5, 0); // dx = 7 == 12 - 5
+        w.set_process_monster_interval(0);
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert_eq!(w.entities.get(m).unwrap().ai.pending_view_updates, vec![p]);
+        w.tick(); // 1400ms
+        assert_eq!(
+            mview_visible(&w, m),
+            vec![(p, 2)],
+            "恰好 7 格必须通过距离门"
+        );
+    }
+
+    /// **判据④：`IsVisibleActive` 置位条件**——玩家或宝宝（`Master != null`）触发；
+    /// 普通怪/无主怪不触发（`MonsterObject.cs:145-149`）。
+    ///
+    /// 由 `aoi.rs::monster_view_update_sets_visible_active_for_player_and_baby` 直接钉住
+    /// 消费函数；此处在世界路径上确认玩家投递 ⇒ `true`（见上一条）。
+    ///
+    /// **判据⑤：跨图不投递**——玩家 `SearchViewRange` 只扫自己地图的格子。
+    #[test]
+    fn player_update_does_not_cross_maps() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        let _p = mview_player(&mut w, 10, 10, 12);
+        let mut e = crate::EntitySpawn::new(0, "m", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.view_range = 5;
+        e.ai.search_time = 0;
+        e.ai.walk_speed = i64::MAX;
+        e.map_id = 1;
+        let m = w.add_entity(e);
+
+        for _ in 0..8 {
+            w.tick();
+        }
+        assert!(
+            w.entities
+                .get(m)
+                .unwrap()
+                .ai
+                .pending_view_updates
+                .is_empty(),
+            "异图不得投递 RM_UPDATEVIEWRANGE"
+        );
+        assert!(w.entities.get(m).unwrap().visible_actors.is_empty());
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            0,
+            "普通怪不自扫、无异图投递 ⇒ SearchTick 恒 0"
+        );
+    }
+
+    /// **判据⑥：死亡目标 vs Ghost 目标**。
+    ///
+    /// oracle `PlayObject.SearchViewRange` **没有 `Death` 门**（`PlayObject.cs:3125-3129`）
+    /// ⇒ 尸体仍可见、仍投递 `RM_UPDATEVIEWRANGE`（`:3130-3139`），且死者 `BaseObject.Run`
+    /// 的消息段照常出队（`BaseObject.Base.cs:26-30`）。`Ghost` 则在过滤器里被排除
+    /// （`!baseObject.Ghost`），且 `ProcessMonsters` 整只跳过 Ghost 怪。
+    #[test]
+    fn dead_monster_gets_update_but_ghost_monster_does_not() {
+        // 死亡怪：投递 + 消费。
+        let mut w = World::new(32, 32);
+        w.enable_monster_ai();
+        let p = mview_player(&mut w, 11, 10, 12);
+        let m = mview_monster(&mut w, 10, 10, 5, 0);
+        w.entities.get_mut(m).unwrap().life_cycle.death = true;
+        // 本条测死亡/幽灵的消息段消费，不是跳步门 ⇒ interval=0 关掉门。
+        w.set_process_monster_interval(0);
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.pending_view_updates,
+            vec![p],
+            "死亡目标仍应收到 RM_UPDATEVIEWRANGE（PlayObject 无 Death 门）"
+        );
+        w.tick(); // 1400ms：死者 base.Run 消息段照常出队
+                  // 消费证据用 `SearchTick`（`UpdateMonsterVisible` 唯一留下的可观测状态）：本仓死亡支
+                  // 仍在同一 tick 末尾跑 `search_view_range_death`（清空 `visible_actors` 并复位
+                  // `is_visible_active`，既有近似、本片不动）⇒ 列表/标志在 tick 结束时已被清掉。
+        assert!(w
+            .entities
+            .get(m)
+            .unwrap()
+            .ai
+            .pending_view_updates
+            .is_empty());
+        assert_eq!(
+            w.entities.get(m).unwrap().ai.search_tick,
+            1400,
+            "死者收到并消费了 RM_UPDATEVIEWRANGE（SearchTime=0 门通过）"
+        );
+
+        // Ghost 怪：玩家过滤器 `!Ghost` 排除 ⇒ 不投递。
+        let mut w2 = World::new(32, 32);
+        mview_player(&mut w2, 11, 10, 12);
+        let g = mview_monster(&mut w2, 10, 10, 5, 0);
+        w2.entities.get_mut(g).unwrap().life_cycle.ghost = true;
+        for _ in 0..6 {
+            w2.tick();
+        }
+        assert!(
+            w2.entities
+                .get(g)
+                .unwrap()
+                .ai
+                .pending_view_updates
+                .is_empty(),
+            "Ghost 目标不得进入玩家可见集/投递"
+        );
+        assert!(w2.entities.get(g).unwrap().visible_actors.is_empty());
+    }
+
+    /// **判据①：非玩家自扫集合 = `IsSlave || Race in {11,112,254}`**，且用同一
+    /// `SearchTime` 严格大于门（`WorldServer.MonGen.cs:300-313`）。
+    ///
+    /// 卫士（race 11）`SearchTime = 1000`：1000ms 不扫、1200ms 扫；宝宝（`is_slave`）
+    /// `SearchTime = 0`：200ms 即扫。
+    #[test]
+    fn guard_and_slave_self_scan_on_their_own_cadence() {
+        let mut w = World::new(32, 32);
+        let mut e = crate::EntitySpawn::new(0, "guard", 10, 10);
+        e.race = 11;
+        e.view_range = 5;
+        e.ai.search_time = 1000;
+        e.ai.walk_speed = i64::MAX;
+        let g = w.add_entity(e);
+        let p = mview_player(&mut w, 11, 10, 12);
+
+        for _ in 0..5 {
+            w.tick(); // 1000ms
+        }
+        assert!(
+            w.entities.get(g).unwrap().visible_actors.is_empty(),
+            "1000ms：1000 - 0 > 1000 不成立 ⇒ 卫士不得自扫"
+        );
+        assert_eq!(w.entities.get(g).unwrap().ai.search_tick, 0);
+        w.tick(); // 1200ms
+        assert!(
+            w.entities
+                .get(g)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == p),
+            "1200ms：1200 - 0 > 1000 ⇒ 卫士自扫看见玩家"
+        );
+        assert_eq!(w.entities.get(g).unwrap().ai.search_tick, 1200);
+
+        // 宝宝（race 80 + is_slave）：200ms 即自扫（SearchTime = 0）。
+        let mut w2 = World::new(32, 32);
+        let mut e = crate::EntitySpawn::new(0, "slave", 10, 10);
+        e.race = ACTOR_RACE_MONSTER;
+        e.is_slave = true;
+        e.view_range = 5;
+        e.ai.search_time = 0;
+        e.ai.walk_speed = i64::MAX;
+        let s = w2.add_entity(e);
+        let p2 = mview_player(&mut w2, 11, 10, 12);
+        w2.tick(); // 200ms
+        assert!(
+            w2.entities
+                .get(s)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == p2),
+            "宝宝（is_slave）必须在自己 SearchTime 门后自扫"
+        );
+        assert_eq!(w2.entities.get(s).unwrap().ai.search_tick, 200);
+    }
+
+    /// `openmir2-m3-move-wiring`：同步移动（`ClientWalkXY`/`RunTo`/`HorseRunTo` 口径）。
+    /// - 1/2/3 格的 `steps` 语义；
+    /// - `steps > 1` 时**任一中间格不可走 ⇒ 一格都不动**（oracle `RunTo` 先 `CanWalkEx(cur+1) &&
+    ///   CanWalkEx(cur+2)` 再 `MoveToMovingObject`，不是走一段再失败）；
+    /// - `(0,0)` / `steps <= 0` 拒绝。
+    #[test]
+    fn try_step_now_is_synchronous_and_atomic() {
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick(); // Enter 落格
+        assert!(w.try_step_now(1, 1, 0, 1));
+        assert_eq!(
+            (w.entities.get(1).unwrap().x, w.entities.get(1).unwrap().y),
+            (6, 5),
+            "走 1 格"
+        );
+        assert!(w.try_step_now(1, 1, 0, 2));
+        assert_eq!(
+            (w.entities.get(1).unwrap().x, w.entities.get(1).unwrap().y),
+            (8, 5),
+            "跑 2 格"
+        );
+        assert!(w.try_step_now(1, 0, 1, 3));
+        assert_eq!(
+            (w.entities.get(1).unwrap().x, w.entities.get(1).unwrap().y),
+            (8, 8),
+            "骑跑 3 格"
+        );
+        assert!(!w.try_step_now(1, 0, 0, 1), "(0,0) 拒绝");
+        assert!(!w.try_step_now(1, 1, 0, 0), "steps<=0 拒绝");
+
+        // 中间格被另一个 actor 占住 ⇒ 2 格跑一格都不动（整段原子）。
+        let mut w2 = world_with(&[(1, 5, 5), (2, 6, 5)]);
+        w2.tick();
+        assert!(!w2.try_step_now(1, 1, 0, 2), "第 1 格被占 ⇒ 整段不动");
+        assert_eq!(
+            (w2.entities.get(1).unwrap().x, w2.entities.get(1).unwrap().y),
+            (5, 5)
+        );
+    }
+
+    #[test]
+    fn aoi_boundary_at_view_range() {
+        let mut w = world_with(&[(1, 30, 30), (2, 35, 30), (3, 36, 30)]);
+        // 玩家 `SearchTime=1000`（`PlayObject.cs:900`）⇒ 200ms tick 下首次扫描在第 6 tick。
+        for _ in 0..6 {
+            w.tick();
+        }
+        let vis = crate::aoi::visible_snapshot(&w.entities, 1);
+        let targets: Vec<i32> = vis.iter().map(|(t, _)| *t).collect();
+        assert!(targets.contains(&2), "dx=ViewRange 必须可见（闭区间）");
+        assert!(!targets.contains(&3), "dx=ViewRange+1 不可见");
+    }
+
+    #[test]
+    fn aoi_scan_order_is_x_outer_y_inner() {
+        let mut w = world_with(&[(1, 30, 30), (10, 33, 32), (11, 34, 31)]);
+        // 玩家 `SearchTime=1000` ⇒ 首次扫描在第 6 tick（1200ms，严格大于 1000）。
+        for _ in 0..6 {
+            w.tick();
+        }
+        let vis = crate::aoi::visible_snapshot(&w.entities, 1);
+        let order: Vec<i32> = vis.iter().map(|(t, _)| *t).collect();
+        assert_eq!(
+            order,
+            vec![1, 10, 11],
+            "扫描顺序：自己先入列（无自排除），随后 X 升序外层、Y 升序内层"
+        );
+    }
+
+    #[test]
+    fn session_enter_leave_world() {
+        let mut w = World::new(16, 16);
+        let id = w.add_entity(crate::EntitySpawn::new(0, "p", 5, 5));
+        w.tick();
+        assert!(w.entities.get(id).unwrap().add_to_mapped);
+        assert_eq!(w.map(0).cell(5, 5).count(), 1);
+        w.leave(id);
+        w.tick();
+        assert!(w.entities.get(id).is_none(), "离开世界后实体应从仓库移除");
+        assert_eq!(w.map(0).cell(5, 5).count(), 0);
+    }
+
+    fn player(id: i32, name: &str, x: i32, y: i32, level: u8) -> EntitySpawn {
+        let mut e = crate::EntitySpawn::new(id, name, x, y);
+        e.race = ACTOR_RACE_PLAY;
+        e.level = level;
+        e.hp = 200;
+        e.max_hp = 200;
+        e.dc = 0x0A_14; // LoByte=20, HiByte=10 → 攻击力 20+(0..0)（差为负 → 归零）
+        e.ac = 0x00_00;
+        e.hit_point = 10;
+        e.speed_point = 0;
+        e.max_exp = 1000;
+        e
+    }
+    /// **M-2（矩阵 §6#2）`settle_deaths` 跳过 ghost**：oracle 的 ghost 不 `Run`
+    /// （`PlayObject.Message.cs:360` 起的 `Run` 链路）⇒ 走不到 `base.Run` 的 `HP==0 ⇒ Die()`
+    /// （`BaseObject.Base.cs:70-73`）⇒ 尸位不结算。
+    ///
+    /// 牙：删 filter 里的 `&& !e.ghost` ⇒ ghost 被结算（`death_settled = true`）⇒ 红。
+    /// 规则 19 退化输入：同场非 ghost 的 `hp==0` 玩家必须照常结算（门只挡 ghost）。
+    #[test]
+    fn m2_settle_deaths_skips_ghost_players() {
+        let mut w = World::new(32, 32);
+        let mut g = player(1, "ghost", 10, 10, 10);
+        g.hp = 0;
+        g.ghost = true;
+        let gid = w.add_entity(g);
+        let mut l = player(2, "live", 11, 10, 10);
+        l.hp = 0;
+        let lid = w.add_entity(l);
+        let mut rec = TickRecord::default();
+        w.settle_deaths(&mut rec, true);
+        let ge = w.entities.get(gid).unwrap();
+        assert!(
+            !ge.death_settled && !ge.death,
+            "ghost 的尸位不得结算（oracle 不 Run ⇒ 不 Die）"
+        );
+        let le = w.entities.get(lid).unwrap();
+        assert!(
+            le.death_settled && le.death,
+            "非 ghost 的 hp==0 玩家照常结算（门只挡 ghost）"
+        );
+    }
+
+    /// **M-2（矩阵 §6#7）`tick_head` 的 `player_hiter_snapshot` 跳过 ghost**：快照只服务 P32，
+    /// 而 P32 在会话侧受 stage 门 ⇒ 快照语义 = 「本轮真正会跑的玩家」。
+    ///
+    /// 牙：删 `&& !e.ghost` ⇒ ghost 进快照 ⇒ 红。
+    /// 规则 19 退化输入：活玩家必须仍在快照里（门只挡 ghost）。
+    #[test]
+    fn m2_tick_head_snapshot_excludes_ghost_players() {
+        let mut w = World::new(32, 32);
+        let live = w.add_entity(player(1, "live", 10, 10, 10));
+        let mut g = player(2, "ghost", 11, 10, 10);
+        g.ghost = true;
+        let ghost = w.add_entity(g);
+        let _ = w.tick_head();
+        let ids: Vec<i32> = w.player_hiter_snapshot.iter().map(|s| s.actor_id).collect();
+        assert!(ids.contains(&live), "活玩家必须在快照里");
+        assert!(!ids.contains(&ghost), "ghost 不得进 P32 快照");
+    }
+
+    /// 战斗子集：固定种子下攻击结算可复现（判据①「可证伪」）。
+    #[test]
+    fn attack_outcome_is_deterministic() {
+        let build = || {
+            let mut w = World::new(32, 32);
+            let p = w.add_entity(player(1, "hero", 10, 10, 10));
+            w.spawn_monster(Command::SpawnMonster {
+                id: 2,
+                name: "鸡".into(),
+                x: 11,
+                y: 10,
+                map_id: 0,
+                level: 1,
+                exp: 10,
+                hp: 5,
+                dc: 1,
+                ac: 0,
+                undead: 0,
+                hit_point: 5,
+                speed_point: 15,
+                drop_list: vec![],
+            });
+            w.tick();
+            w.attack_cmd(p, 2);
+            let rec = w.tick();
+            rec.attacks[0].2
+        };
+        let a = build();
+        let b = build();
+        assert_eq!(a, b, "同种子同输入的攻击结算必须一致");
+        assert!(
+            a.power >= 20,
+            "攻击力下限 = LoByte(DC) = 20，实际 {}",
+            a.power
+        );
+        assert!(a.damage > 0, "护甲 0 时伤害应大于 0");
+    }
+
+    /// 死亡 → 掉落**生成** + 击杀者得经验；再 tick 不重复结算。
+    /// oracle 语义下掉落恒不落地（`AddItemToMap` 的 `MapItem.ItemId == 0` 门，同 T-25）。
+    #[test]
+    fn monster_death_drops_items_and_awards_exp() {
+        let mut w = World::new(32, 32);
+        // 经验表：1 级需 1000，2 级需 2000（自造，只为验证升级路径）
+        w.need_exps[1] = 1000;
+        w.need_exps[2] = 2000;
+        w.mon_random_add_value = 1; // 必出极品（消耗 RNG 的分支也要覆盖）
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        w.spawn_monster(Command::SpawnMonster {
+            id: 2,
+            name: "鸡".into(),
+            x: 11,
+            y: 10,
+            map_id: 0,
+            level: 1,
+            exp: 500,
+            hp: 3,
+            dc: 1,
+            ac: 0,
+            undead: 0,
+            hit_point: 5,
+            speed_point: 15,
+            drop_list: vec![mir2_data::models::MonsterDropItem {
+                sel_point: 9,
+                max_point: 10,
+                item_name: "金币".into(),
+                count: 100,
+            }],
+        });
+        w.tick(); // 生成（掉落预算在这里消耗 RNG）
+        let exp_before = w.entities.get(p).unwrap().exp;
+        w.attack_cmd(p, 2);
+        let rec = w.tick(); // 攻击 → HP 归零；同 tick 内死亡结算
+        assert_eq!(rec.deaths.len(), 1, "应有 1 次死亡结算: {rec:?}");
+        let (dead_id, placed, gold, killer, gained) = rec.deaths[0];
+        assert_eq!(dead_id, 2);
+        assert!(gold > 0, "金币掉落应大于 0");
+        assert_eq!(placed, 0, "oracle 语义 ⇒ 掉落恒不落地（T-19/T-25 同根）");
+        assert_eq!(killer, Some(p));
+        assert!(gained > 0, "击杀者应获得经验");
+        assert_eq!(w.entities.get(p).unwrap().exp, exp_before + gained);
+        assert!(w.entities.get(2).unwrap().death);
+        // 再 tick 不重复结算
+        let rec2 = w.tick();
+        assert!(rec2.deaths.is_empty(), "死亡只能结算一次: {rec2:?}");
+    }
+
+    /// `KillFunc` 的 `ExpHitter.Master != null` 支（`BaseObject.cs:2434-2437`）：宠物/下属击杀 ⇒
+    /// 经验给**主人**；`TickRecord::exp_awards` 列出获得者（供宿主出 `SM_WINEXP(44)`）。
+    /// 改坏必红：删掉 master 支（只给 `ExpHitter` 本人）⇒ 主人 `exp` 不变、`exp_awards` 空。
+    #[test]
+    fn pet_kill_awards_exp_to_master() {
+        let mut w = World::new(32, 32);
+        w.need_exps[1] = 1000;
+        let master = w.add_entity(player(1, "hero", 10, 10, 5));
+        let pet = {
+            let mut e = crate::EntitySpawn::new(0, "pet", 11, 10);
+            e.race = ACTOR_RACE_MONSTER; // 非 Play ⇒ `KillFunc` 只走 master 支
+            e.master = Some(master);
+            w.add_entity(e)
+        };
+        // 直接造一只 `hp=0`、`ExpHitter = 宠物` 的怪（本用例只测经验归属，不走攻击路径）。
+        let mon = {
+            let mut e = crate::EntitySpawn::new(0, "鸡", 12, 10);
+            e.race = ACTOR_RACE_MONSTER;
+            e.mon_exp = 400;
+            e.exp_hitter = Some(pet);
+            w.add_entity(e)
+        };
+        w.entities.get_mut(mon).unwrap().vitals.hp = 0;
+        let exp_before = w.entities.get(master).unwrap().exp;
+        let pet_exp_before = w.entities.get(pet).unwrap().exp;
+        let rec = w.tick();
+        assert_eq!(rec.exp_awards.len(), 1, "只有 master 一支: {rec:?}");
+        let (winner, amount, _leveled, _level) = rec.exp_awards[0];
+        assert_eq!(winner, master, "经验归属者 = ExpHitter.Master");
+        assert!(amount > 0, "master 应获得经验");
+        assert_eq!(w.entities.get(master).unwrap().exp, exp_before + amount);
+        assert_eq!(
+            w.entities.get(pet).unwrap().exp,
+            pet_exp_before,
+            "宠物本人（非 Play race）不获得经验"
+        );
+        assert_eq!(rec.deaths[0].4, amount, "deaths 的 5 元组口径 = 主获得者");
+    }
+
+    /// `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）：地图倍率在
+    /// `KillMonExpRate` 之后、`GetExp` 之前施加。
+    /// 改坏必红：不乘地图倍率（或乘错次序）⇒ 本用例的 `rate_amt` 断言必红。
+    #[test]
+    fn map_exp_rate_multiplies_kill_exp() {
+        let build = |rate: Option<i32>| {
+            let mut w = World::new(32, 32);
+            w.need_exps[1] = 1_000_000; // 不升级，只看单次经验
+            w.set_map_exp_rate(0, rate);
+            let p = w.add_entity(player(1, "hero", 10, 10, 5));
+            let mon = {
+                let mut e = crate::EntitySpawn::new(0, "鸡", 11, 10);
+                e.race = ACTOR_RACE_MONSTER;
+                e.mon_exp = 400;
+                e.exp_hitter = Some(p);
+                w.add_entity(e)
+            };
+            w.entities.get_mut(mon).unwrap().vitals.hp = 0;
+            let rec = w.tick();
+            (rec.exp_awards[0].1, w.entities.get(p).unwrap().exp)
+        };
+        let (base_amt, base_total) = build(None);
+        let (rate_amt, rate_total) = build(Some(200));
+        assert_eq!(
+            base_amt, 400,
+            "无 EXPRATE 时 = mon_exp（KillMonExpRate=100）"
+        );
+        assert_eq!(rate_amt, 800, "EXPRATE=200 ⇒ 单次经验 ×2");
+        assert_eq!(rate_total, base_total * 2, "累计经验同样 ×2");
+    }
+
+    /// `GetExp`（`PlayObject.Base.cs:149-165`）的升级块触发口径：`exp_awards` 的第 3 位 = **进了**
+    /// `Abil.Exp >= Abil.MaxExp` 块（不是「等级真的 +1」）——`Abil.Level++` 才有 `< MAXUPLEVEL(255)`
+    /// 门，而块内 `HasLevelUp`/`IncHealthSpell(2000,2000)` **无条件**发生 ⇒ 满级仍要置位（宿主据此出
+    /// `SM_LEVELUP(45)`/`SM_ABILITY(52)`/`SM_SUBABILITY(752)`/`SM_HEALTHSPELLCHANGED(53)`）。
+    ///
+    /// 改坏必红：把 `leveled` 退回「仅 `level < 255` 时置位」⇒ 满级用例的 `leveled` 断言必红。
+    #[test]
+    fn kill_exp_marks_levelup_block_even_at_max_level() {
+        let build = |level: u8, exp: i32, need255: i32| {
+            let mut w = World::new(32, 32);
+            w.need_exps[1] = 1000;
+            w.need_exps[255] = need255;
+            let mut p = player(1, "hero", 10, 10, level);
+            p.exp = exp;
+            p.max_exp = if level == 255 { need255 } else { 1000 };
+            let p = w.add_entity(p);
+            let mon = {
+                let mut e = crate::EntitySpawn::new(0, "鸡", 11, 10);
+                e.race = ACTOR_RACE_MONSTER;
+                e.mon_exp = 100;
+                e.exp_hitter = Some(p);
+                w.add_entity(e)
+            };
+            w.entities.get_mut(mon).unwrap().vitals.hp = 0;
+            let rec = w.tick();
+            (rec.exp_awards[0].2, w.entities.get(p).unwrap().level)
+        };
+        // 1 级：exp 990 + 100 ⇒ 进升级块 + 等级 +1
+        let (leveled, level) = build(1, 990, 0);
+        assert!(leveled, "exp >= max_exp ⇒ leveled");
+        assert_eq!(level, 2);
+        // 255 级：同样进块（`HasLevelUp`/回血要发生），但 `Level++` 被 MAXUPLEVEL 门挡住
+        let (leveled, level) = build(255, 1000, 1000);
+        assert!(leveled, "满级仍进升级块（oracle 的 if 而非 while）");
+        assert_eq!(level, 255, "MAXUPLEVEL 门 ⇒ 等级不变");
+    }
+
+    /// **oracle 忠实语义（M3④-D 掉落侧）**：死亡掉落（物品 + 金币）**恒不落地**。
+    ///
+    /// oracle `DieDropItems`（`BaseObject.cs:2450-2464`）逐件走 `DropItemDown`/`DropGoldDown`，
+    /// 而 `Envir.AddItemToMap` 的**首行**是 `if (mapItem.ItemId == 0) return false;`
+    /// （`Envirnoment.cs:88-92`）——oracle 全仓无 `MapItem.ItemId` 赋值点（`MapItem.cs:41` 被注释）
+    /// ⇒ 掉落物加不进地图、`RM_ITEMSHOW`/`SM_ITEMSHOW(610)` 恒不发（同 M3① T-19/T-25 根因）。
+    ///
+    /// 本用例同时钉住「掉落**生成**不受影响」（金币预算仍 > 0）与「只读分片机制仍可工作」
+    /// （显式落格后视图与格子状态逐项一致）。
+    /// **红检**：把 `settle_deaths` 改回「落地」（重新写 `add_floor_item`）⇒ 本用例必红。
+    #[test]
+    fn monster_death_drops_do_not_land_matches_oracle_add_item_to_map_gate() {
+        let mut w = World::new(32, 32);
+        // 1-based 查表：下标 0 → `index = 1`（与 `combat.json` 的 `金创药(小量)` 同口径）
+        w.item_catalog = vec![StdItem {
+            name: "金创药(小量)".into(),
+            dura_max: 1,
+            ..Default::default()
+        }];
+        w.mon_random_add_value = 1; // 必出极品（消耗 RNG 的分支也覆盖）
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        w.spawn_monster(Command::SpawnMonster {
+            id: 2,
+            name: "僵尸".into(),
+            x: 11,
+            y: 10,
+            map_id: 0,
+            level: 1,
+            exp: 500,
+            hp: 3,
+            dc: 1,
+            ac: 0,
+            undead: 0,
+            hit_point: 5,
+            speed_point: 15,
+            // 金币 + 普通物品双掉落（与 `world/scenarios/combat.json` 的 `僵尸` 同形）
+            drop_list: vec![
+                MonsterDropItem {
+                    sel_point: 9,
+                    max_point: 10,
+                    item_name: "金币".into(),
+                    count: 300,
+                },
+                MonsterDropItem {
+                    sel_point: 9,
+                    max_point: 10,
+                    item_name: "金创药(小量)".into(),
+                    count: 1,
+                },
+            ],
+        });
+        w.tick(); // 生成（掉落预算在这里消耗 RNG）
+        w.attack_cmd(p, 2);
+        let rec = w.tick(); // 攻击 → 死亡结算
+        assert_eq!(rec.deaths.len(), 1, "应有 1 次死亡结算: {rec:?}");
+        // 掉落**生成**仍在（金币预算 > 0），但 **oracle 语义下恒不落地**（`placed` 恒 0）。
+        assert!(rec.deaths[0].2 > 0, "本用例需金币掉落预算: {rec:?}");
+        assert_eq!(rec.deaths[0].1, 0, "oracle `AddItemToMap` 门 ⇒ 落地数恒 0");
+        assert!(
+            w.floor_items_sorted().is_empty(),
+            "oracle 语义 ⇒ 地面物表恒空: {:?}",
+            w.floor_items_sorted()
+        );
+        assert!(
+            w.floor_items_view_sorted().is_empty(),
+            "oracle 语义 ⇒ 地面物视图恒空"
+        );
+
+        // 只读分片机制本身仍须正确：显式落格（非 0 唯一键）后视图与格子状态逐项一致。
+        use crate::map::FloorItemMeta;
+        assert!(w.maps[0].add_floor_item(
+            12,
+            11,
+            1,
+            FloorItemMeta {
+                kind: FloorItemKind::Item,
+                index: 1,
+                count: 1,
+                item_id: 77,
+                of_base_object: 5,
+            },
+            0,
+        ));
+        assert!(w.maps[0].add_floor_item(
+            13,
+            11,
+            2,
+            FloorItemMeta {
+                kind: FloorItemKind::Gold,
+                index: 0,
+                count: 300,
+                item_id: 2,
+                of_base_object: 5,
+            },
+            0,
+        ));
+        let view = w.floor_items_view_sorted();
+        // 与既有对拍口径一致：`floor_items_sorted` 的 `(map,x,y,obj_id)` 必须与视图逐项相同
+        let legacy: Vec<(usize, i32, i32, i32)> = view
+            .iter()
+            .map(|v| (v.map_id, v.x, v.y, v.obj_id))
+            .collect();
+        assert_eq!(
+            legacy,
+            w.floor_items_sorted(),
+            "视图的 obj_id 口径必须与 floor_items_sorted 相同"
+        );
+
+        let gold = view
+            .iter()
+            .find(|v| v.kind == FloorItemKind::Gold)
+            .expect("应有金币地面物");
+        assert_eq!(
+            (gold.index, gold.count, gold.item_id, gold.of_base_object),
+            (0, 300, 2, 5)
+        );
+        let item = view
+            .iter()
+            .find(|v| v.kind == FloorItemKind::Item)
+            .expect("应有普通物品地面物");
+        assert_eq!(
+            (item.index, item.count, item.item_id, item.of_base_object),
+            (1, 1, 77, 5)
+        );
+        // 可拾起时刻 = 落地时的虚拟时钟（非 None/占位 0 的构造口径）
+        assert!(view.iter().all(|v| v.can_pick_up_tick >= 0));
+    }
+
+    /// 攻击目标判定（`is_proper_target`）：F-K 修复后按 oracle `IsProperTarget` 忠实建模。
+    ///
+    /// 关键变化（原 `is_attack_target` 子集 ⇒ oracle）：**`HAM_ALL`（新角色默认 `AttatckMode=0`）
+    /// 下允许 PvP**（`PlayObject.Attack.cs:632-640` 对 `Race=Play` 目标 `result=true`，再经
+    /// `IsProtectTarget` 安全区门）；自己宝宝在 `HAM_ALL` 下也被允许（`PlayObject.cs:1944-1948`），
+    /// 非 `HAM_ALL` 才拒。
+    #[test]
+    fn attack_target_rules_follow_oracle_proper_target() {
+        use crate::combat::{is_proper_target, ATTACK_MODE_HAM_ALL, ATTACK_MODE_HAM_PEACE};
+
+        let mut attacker = player(1, "hero", 10, 10, 10);
+        let other = player(2, "rival", 11, 10, 10);
+        // 新角色 `PlayObject.cs:908`：HAM_ALL。
+        assert_eq!(attacker.attack_mode, ATTACK_MODE_HAM_ALL);
+        // PvP：HAM_ALL 且非安全区 ⇒ 允许（旧子集恒 false，F-K 的真实缺口）。
+        assert!(
+            is_proper_target(&attacker, &other),
+            "HAM_ALL 非安全区应允许 PvP"
+        );
+        // 自己：恒拒。
+        assert!(!is_proper_target(&attacker, &attacker));
+        // 安全区：PvP 拒；怪仍可打（安全区只挡 Play 目标）。
+        let mut safe = attacker.clone();
+        safe.in_safe_zone = true;
+        assert!(!is_proper_target(&safe, &other), "任一方在安全区应拒绝 PvP");
+
+        // 自己宝宝（非玩、Master==自己）：HAM_ALL 允许，HAM_PEACE 拒。
+        let mut pet = player(3, "pet", 11, 10, 1);
+        pet.race = 80;
+        pet.master = Some(attacker.id);
+        assert!(
+            is_proper_target(&attacker, &pet),
+            "HAM_ALL 下自己宝宝允许（oracle）"
+        );
+        attacker.attack_mode = ATTACK_MODE_HAM_PEACE;
+        assert!(
+            !is_proper_target(&attacker, &pet),
+            "非 HAM_ALL 下自己宝宝拒绝"
+        );
+        attacker.attack_mode = ATTACK_MODE_HAM_ALL;
+
+        // 已死/幽灵/隐身：不可被选为目标（折入的目标可见性门）。
+        let mut dead = other.clone();
+        dead.death = true;
+        assert!(!is_proper_target(&attacker, &dead));
+        let mut ghost = other.clone();
+        ghost.ghost = true;
+        assert!(!is_proper_target(&attacker, &ghost));
+
+        // 世界路径仍能把拒绝转成「无伤害」（`World::attack_cmd` 走同一函数）。
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        w.tick();
+        w.attack_cmd(p, p); // 自己
+        let rec = w.tick();
+        assert!(
+            rec.attacks.iter().all(|(_, _, o)| o.damage == 0),
+            "打自己不应造成伤害: {:?}",
+            rec.attacks
+        );
+        assert!(rec.processed.iter().any(|(_, ok)| !*ok));
+    }
+
+    /// F-K 真机根因的正向回归：**两个玩家**在 `World::attack_cmd` 生产路径上能真的造成伤害
+    /// （旧 `is_attack_target` 对人打人恒 false ⇒ 恒无 `SM_STRUCK`）。
+    #[test]
+    fn pvp_attack_lands_damage_in_world_path() {
+        let mut w = World::new(32, 32);
+        let a = w.add_entity(player(1, "hero", 10, 10, 10));
+        let b = w.add_entity(player(2, "rival", 11, 10, 10));
+        // `player()` 的 HitPoint=10 / SpeedPoint=0 ⇒ 命中判定必中（`10 < RandomByte(0)=0` 为假）。
+        w.tick();
+        w.attack_cmd(a, b);
+        let rec = w.tick();
+        let out = rec
+            .attacks
+            .iter()
+            .find(|(atk, tgt, _)| *atk == a && *tgt == b)
+            .map(|(_, _, o)| *o)
+            .expect("PvP 攻击必须产生结算记录");
+        assert!(out.damage > 0, "HAM_ALL 下 PvP 应造成伤害，实际 {out:?}");
+        assert!(w.entities.get(b).unwrap().hp < 200, "目标 HP 应下降");
+    }
+
+    /// 掉线：离开世界、会话留在 `Left`（与"小退"的区别：不计数 softclose、语义上不可再进同一会话实例）。
+    #[test]
+    fn session_disconnect_leaves_world_without_softclose_count() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let mut e = crate::EntitySpawn::new(0, "hero", 3, 3);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w.enter_map("hero", e, 0).unwrap();
+        assert_eq!(w.map(0).cell(3, 3).count(), 1);
+
+        w.disconnect("hero").unwrap();
+        assert!(w.entities.get(id).is_none(), "掉线后实体应从世界移除");
+        assert_eq!(w.map(0).cell(3, 3).count(), 0, "掉线必须清掉格子登记");
+        let sess = w.session("hero").unwrap();
+        assert_eq!(sess.stage, crate::session::WorldStage::Left);
+        assert_eq!(sess.actor_id, None);
+        assert_eq!(sess.soft_close_count, 0, "掉线不计入小退次数");
+
+        // 掉线后再掉线是非法转移（显式报错，不静默）
+        assert_eq!(
+            w.disconnect("hero").unwrap_err(),
+            crate::session::SessionError::NotInWorld
+        );
+    }
+
+    /// 会话状态机：进图 → 切图 → 小退 → 再进（新的 actor_id），并且视野列表整体失效。
+    #[test]
+    fn session_state_machine_enter_switch_softclose_reenter() {
+        let mut w = World::with_maps(vec![(32, 32), (32, 32)]);
+        w.open_session("hero");
+        let mut e = crate::EntitySpawn::new(0, "hero", 5, 5);
+        e.race = ACTOR_RACE_PLAY;
+        let first = w.enter_map("hero", e, 0).unwrap();
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(first));
+        assert_eq!(w.map(0).cell(5, 5).count(), 1);
+
+        // 切图：旧图摘除、新图登记、视野清空
+        w.switch_map("hero", 1, 7, 9).unwrap();
+        assert_eq!(w.map(0).cell(5, 5).count(), 0, "旧图必须摘除");
+        assert_eq!(w.map(1).cell(7, 9).count(), 1, "新图必须登记");
+        assert_eq!(w.entities.get(first).unwrap().map_id, 1);
+        assert!(w.entities.get(first).unwrap().visible_actors.is_empty());
+
+        // 小退（卡 `openmir2-makeghost-lifecycle-m3` A1）：oracle `MakeGhost` **不销毁对象**
+        // ⇒ 实体与 `actor_id` 保留、`ghost=true`、已摘格；`stage=Left` 与 `actor_id=Some` 并存合法（A2）。
+        w.soft_close("hero").unwrap();
+        {
+            let e = w.entities.get(first).expect("soft_close 之后实体必须仍在");
+            assert!(e.ghost, "MakeGhost ⇒ Ghost=true");
+            assert!(!e.add_to_mapped, "DeleteFromMap ⇒ AddToMaped=false");
+            assert!(e.visible_actors.is_empty(), "视野列表整体失效");
+        }
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(first));
+        assert_eq!(w.session("hero").unwrap().soft_close_count, 1);
+        assert_eq!(w.map(1).cell(7, 9).count(), 0, "必须已摘格");
+
+        // `disconnect` 是移除门（oracle `WorldServer.cs:707-716`）：Left 上仍能把 ghost 收走。
+        w.disconnect("hero").unwrap();
+        assert!(w.entities.get(first).is_none(), "移除门必须摘掉 ghost 实体");
+        assert_eq!(w.session("hero").unwrap().actor_id, None);
+
+        // 再进：会话仍在 Left，可重进（C# 侧重新建 PlayObject）。
+        // **F6（reviewer-21 `993d3e7a`）**：原 `assert_ne!(first, second)` 已删——`entities.alloc_id`
+        // 会复用刚摘掉的槽位，id 相同并不违反语义（C# 的 ActorId 也复用）。本用例只走
+        // 「disconnect 之后重进」这条正常路径；**不 disconnect 直接重进**那条（F1 泄漏路径）由
+        // `m3_reenter_after_soft_close_reaps_leftover_ghost` 覆盖。
+        let mut e2 = crate::EntitySpawn::new(0, "hero", 7, 9);
+        e2.race = ACTOR_RACE_PLAY;
+        let second = w.enter_map("hero", e2, 1).unwrap();
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(second));
+        assert_eq!(w.map(1).cell(7, 9).count(), 1);
+    }
+
+    /// **M-3 A3 ④：ghost 不占格、不参与碰撞**（oracle `MakeGhost` ⇒ `DeleteFromMap`，
+    /// `Envirnoment.cs:660-661`；`DisappearA` 在 `BaseObject.cs:1519-1522`）。
+    ///
+    /// 牙：软关分支里删掉 `remove_from_map` ⇒ 格子仍被占 ⇒ 红（第二条断言）。
+    /// 规则 19 退化对照：非 ghost 的玩家占着同一格时，第二个人**进不去/走不进去**。
+    #[test]
+    fn m3_soft_close_ghost_frees_the_cell() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let actor = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        assert_eq!(w.map(0).cell(5, 5).count(), 1, "在世人占格");
+
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            0,
+            "ghost 不占格（DeleteFromMap）"
+        );
+        assert!(
+            !w.entities.get(actor).expect("实体保留").add_to_mapped,
+            "AddToMaped 必须为 false"
+        );
+
+        // 另一个玩家能走进该格（碰撞不认 ghost）。
+        w.open_session("other");
+        let other = w
+            .enter_map("other", player(0, "other", 6, 5, 10), 0)
+            .expect("other 进图");
+        assert!(
+            w.try_step_now(other, -1, 0, 1),
+            "ghost 原来的格子必须可走进去"
+        );
+        assert_eq!(
+            (
+                w.entities.get(other).unwrap().x,
+                w.entities.get(other).unwrap().y
+            ),
+            (5, 5)
+        );
+        assert_eq!(w.map(0).cell(5, 5).count(), 1, "走进来的是 other");
+
+        // 退化对照：活玩家占格时，第二个人走不进去。
+        w.open_session("blocker");
+        let blocker = w
+            .enter_map("blocker", player(0, "blocker", 5, 5, 10), 0)
+            .expect("blocker 直接落在 (5,5)（进图不查占格）");
+        let _ = blocker;
+        w.open_session("walker");
+        let walker = w
+            .enter_map("walker", player(0, "walker", 6, 5, 10), 0)
+            .expect("walker 进图");
+        assert!(
+            !w.try_step_now(walker, -1, 0, 1),
+            "活玩家占格时第二个人必须走不进去（证明上面那条不是恒真）"
+        );
+    }
+
+    /// **F1 牙（reviewer-21 `993d3e7a`）**：`soft_close` 之后**不 disconnect 直接重进**，
+    /// `enter_map_at` 必须收走遗留 ghost —— 同名实体恰 **1** 个且是新的。
+    ///
+    /// 为什么需要它：`open_session` 对已有会话是 no-op、`enter_map_at` 只在 `InWorld` 时拒绝，
+    /// Left 放行且过去不清理旧 `actor_id` ⇒ 同名 ghost 永久留在 `entities`（槽位/名字泄漏，
+    /// `online_play_objects` 永久多算 1）。
+    ///
+    /// 牙：删掉 `enter_map_at` 里「收走遗留 `actor_id`」那三行 ⇒ 同名实体 2 个（旧 ghost + 新玩家）⇒ 红。
+    /// 规则 19 退化输入：没有遗留 ghost 的正常重进（先 `disconnect`）⇒ 仍恰 1 个。
+    #[test]
+    fn m3_reenter_after_soft_close_reaps_leftover_ghost() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let first = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+        assert!(
+            w.entities.get(first).is_some_and(|e| e.ghost),
+            "前置：soft_close 保留 ghost"
+        );
+
+        // **不 disconnect**，直接重进（F1 路径）。
+        let second = w
+            .enter_map("hero", player(0, "hero", 7, 9, 10), 0)
+            .expect("Left 允许重进");
+        let named: Vec<(i32, bool)> = w
+            .entities
+            .iter_ref()
+            .filter(|e| e.name == "hero")
+            .map(|e| (e.id, e.ghost))
+            .collect();
+        assert_eq!(
+            named,
+            vec![(second, false)],
+            "重进必须收走遗留 ghost：同名实体恰 1 个且是新玩家"
+        );
+        assert!(w.entities.get(first).is_none(), "旧 ghost 必须已被摘除");
+        assert_eq!(w.session("hero").unwrap().actor_id, Some(second));
+
+        // 退化对照：正常路径（先 disconnect 再重进）⇒ 同样恰 1 个。
+        w.disconnect("hero").expect("移除门");
+        let third = w
+            .enter_map("hero", player(0, "hero", 9, 9, 10), 0)
+            .expect("再进");
+        let named: Vec<i32> = w
+            .entities
+            .iter()
+            .filter(|e| e.name == "hero")
+            .map(|e| e.id)
+            .collect();
+        assert_eq!(named, vec![third], "正常路径同样恰 1 个同名实体");
+    }
+
+    /// **F1 的顺序牙（Leader 派单 `must_added`）**：`enter_map_at` 的「收走遗留 ghost」必须在
+    /// **全部入参校验之后** —— 非法地图入参失败时**不得**顺手摘掉 ghost。
+    ///
+    /// 牙：把 `if let Some(old) = sess.actor_id { … }` 那三行挪到 `if map_id >= self.maps.len()`
+    /// 之**前** ⇒ 本用例红（`Err(NoSuchMap)` 之后实体已消失）。
+    #[test]
+    fn m3_failed_reenter_keeps_leftover_ghost() {
+        // 只建一张图（map 0）⇒ `map_id = 1` 必走 `NoSuchMap`。
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let first = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+
+        let err = w.enter_map("hero", player(0, "hero", 7, 9, 10), 1);
+        assert!(
+            matches!(err, Err(crate::session::SessionError::NoSuchMap)),
+            "前置：非法地图必须 `Err(NoSuchMap)`，实得 {err:?}"
+        );
+        assert!(
+            w.entities.get(first).is_some_and(|e| e.ghost),
+            "入参校验失败时**不得**摘掉遗留 ghost（收走动作必须在全部校验之后）"
+        );
+        assert_eq!(
+            w.session("hero").unwrap().actor_id,
+            Some(first),
+            "校验失败不得清 actor_id"
+        );
+    }
+
+    /// **parity 返工牙（tester-1 的 `world_session_parity` 红灯）**：`snapshot_sorted` 只列
+    /// **在图上**（`add_to_mapped`）的实体。
+    ///
+    /// 背景：M-3 之后 `soft_close` 保留 ghost 实体但已摘格；C# 侧 `MakeGhost` 先 `DeleteFromMap`，
+    /// 对拍生成器（`WorldGolden/Program.cs:560-574`）干脆把它从 `actors` 摘掉 ⇒ 输出里没有它。
+    ///
+    /// 牙：删掉 `snapshot_sorted` 的 `filter(|id| … add_to_mapped)` ⇒ soft_close 之后 ghost 重新出现 ⇒ 红。
+    /// 退化对照：夹具命令 `ghost`（C# `ApplyGhost`，只置位不摘格）必须**仍在**快照里 —— 所以
+    /// 过滤条件只能是 `add_to_mapped`，不能是 `ghost`。
+    #[test]
+    fn snapshot_sorted_lists_only_on_map_entities() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let a = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("进图");
+        assert!(w.entities.get(a).unwrap().add_to_mapped, "前置：成功落格");
+        let ids: Vec<i32> = w.snapshot_sorted().iter().map(|s| s.0).collect();
+        assert_eq!(ids, vec![a], "在图上 ⇒ 必须列出");
+
+        w.soft_close("hero").expect("CM_SOFTCLOSE");
+        let ids: Vec<i32> = w.snapshot_sorted().iter().map(|s| s.0).collect();
+        assert!(
+            ids.is_empty(),
+            "soft_close 之后已摘格 ⇒ 快照不得列出（C# 的 ApplySoftClose 同样摘掉）：{ids:?}"
+        );
+
+        // 退化对照：`ghost` 夹具命令只置位、不摘格 ⇒ 必须仍在快照里。
+        w.disconnect("hero").expect("移除门");
+        let b = w
+            .enter_map("hero", player(0, "hero", 5, 5, 10), 0)
+            .expect("再进");
+        w.entities.get_mut(b).unwrap().life_cycle.ghost = true;
+        let ids: Vec<i32> = w.snapshot_sorted().iter().map(|s| s.0).collect();
+        assert_eq!(
+            ids,
+            vec![b],
+            "夹具命令 ghost（仍在图上）必须照列（过滤条件只能是 add_to_mapped）"
+        );
+    }
+
+    /// **切图成功语义**（oracle `PlayObject.EnterAnotherMap` 的正向支，`PlayObject.cs:3772-3783`）：
+    /// 目标格可走 ⇒ 旧图摘除、新图落格、`add_to_mapped` 保持 true、`Session.map_id` 更新、
+    /// 记一条 `MapChange`（`space_move_show == None`）。
+    ///
+    /// 红检（变异牙）：把 `switch_map_inner` 的成功支改成不记 `MapChange` ⇒ 本测必红；
+    /// 把旧图摘除删掉 ⇒ 旧格计数断言必红。
+    #[test]
+    fn switch_map_success_lands_new_map_and_reports_map_change() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        assert_eq!(w.map(0).cell(5, 4).count(), 1, "进图先落旧格");
+
+        w.switch_map("hero", 1, 7, 9).expect("目标格可走 ⇒ 成功");
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (1, 7, 9), "实体字段切到新图新坐标");
+        assert!(e.add_to_mapped, "成功落格 ⇒ add_to_mapped = true");
+        assert!(
+            e.visible_actors.is_empty(),
+            "切图后视野列表整体失效（oracle 清 Visible*）"
+        );
+        assert_eq!(w.map(0).cell(5, 4).count(), 0, "旧图格已摘除");
+        assert!(
+            w.map(1)
+                .cell(7, 9)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "新图格登记了该玩家"
+        );
+        assert_eq!(w.session("hero").unwrap().map_id, 1, "会话 map_id 更新");
+        let ch = w.sessions.map_changes();
+        assert_eq!(ch.len(), 1, "成功恰记一条 MapChange");
+        assert_eq!(
+            (
+                ch[0].actor_id,
+                ch[0].map_id,
+                ch[0].x,
+                ch[0].y,
+                ch[0].space_move_show
+            ),
+            (hero, 1, 7, 9, None)
+        );
+    }
+
+    /// **切图失败语义 · 目标格墙**（oracle `PlayObject.EnterAnotherMap` 失败支，
+    /// `PlayObject.cs:3787-3791`）：`AddToMap()` 返回 false ⇒
+    /// `Envir = oldEnvir; CurrX = nOldX; CurrY = nOldY; Envir.AddMapObject(...)`。
+    /// 断言重点是**旧图格登记真的恢复**（只把实体字段改回去不算数）：
+    /// 实体仍在旧图旧坐标、`add_to_mapped == true`、旧格 `ObjList` 里能找回该玩家，
+    /// 且不记 `MapChange`（本仓只在成功落地时记）。
+    ///
+    /// 红检（变异牙 ①）：把失败支改回直接 `return Err(CellRejected)`（不回滚）⇒
+    /// `map_id/坐标` 与旧格登记断言必红；
+    /// 红检（变异牙 ②）：只回滚实体字段、不调旧图 `add_map_object` ⇒ 旧格登记断言必红。
+    #[test]
+    fn switch_map_wall_cell_rolls_back_to_old_map_and_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        // 目标图 (7,9) → LowWall（oracle CellValid 失败 ⇒ AddToMap 失败）。
+        assert!(w.maps[1].set_map_xy_flag(7, 9, false));
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        assert_eq!(w.map(0).cell(5, 4).count(), 1);
+
+        let err = w.switch_map("hero", 1, 7, 9).unwrap_err();
+        assert_eq!(
+            err,
+            crate::session::SessionError::CellRejected,
+            "oracle 返回 false；本仓用 CellRejected 表达（返回前已回滚）"
+        );
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (0, 5, 4),
+            "回滚旧图旧坐标（oracle :3788-3789）"
+        );
+        assert!(e.add_to_mapped, "旧格重新落格 ⇒ add_to_mapped 恢复 true");
+        assert_eq!(w.session("hero").unwrap().map_id, 0, "会话 map_id 仍是旧图");
+        assert!(
+            w.map(0)
+                .cell(5, 4)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "**旧图格登记必须恢复**（oracle `Envir.AddMapObject`，:3790）"
+        );
+        assert_eq!(
+            w.map(0).cell(5, 4).count(),
+            1,
+            "旧格恰一个对象（无重复登记）"
+        );
+        assert!(
+            !w.map(1)
+                .cell(7, 9)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "目标墙格不得留下玩家登记"
+        );
+        assert!(w.sessions.map_changes().is_empty(), "失败不发换图簇");
+    }
+
+    /// 同上，目标坐标**越界**：oracle `CellValid` 对越界返回 `true`（`Envirnoment.cs:307-314`
+    /// 的方向）⇒ `EnterAnotherMap` 的门放行，随后 `AddMapObject` 的 `CellMatch` 失败
+    /// （`Envirnoment.cs:258-261`）⇒ 走**同一回滚支**（旧图旧坐标 + 重落旧格）。
+    ///
+    /// 红检（变异牙）：失败支不回滚 ⇒ 旧格登记与坐标断言必红。
+    #[test]
+    fn switch_map_out_of_bounds_cell_rolls_back_to_old_map_and_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+
+        let err = w.switch_map("hero", 1, 99, 99).unwrap_err();
+        assert_eq!(
+            err,
+            crate::session::SessionError::CellRejected,
+            "越界落格失败 = oracle AddMapObject false"
+        );
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "回滚旧图旧坐标");
+        assert!(e.add_to_mapped, "重落旧格");
+        assert!(
+            w.map(0)
+                .cell(5, 4)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "旧图格登记必须恢复"
+        );
+        assert!(w.sessions.map_changes().is_empty());
+    }
+
+    /// 目标**图**不存在：`Env` 模型里没有此分支（oracle 的 `envir` 恒有效），这是本仓护栏。
+    /// 它在**任何状态变更之前**返回 `NoSuchMap` ⇒ 角色仍留在旧图旧格（旧格登记不丢）。
+    ///
+    /// 红检（变异牙）：把 `map_id >= maps.len()` 检查移到旧图摘除之后 ⇒ 本测旧格/坐标断言必红。
+    #[test]
+    fn switch_map_unknown_map_leaves_actor_in_old_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+
+        let err = w.switch_map("hero", 2, 3, 3).unwrap_err();
+        assert_eq!(err, crate::session::SessionError::NoSuchMap);
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "未动旧图旧坐标");
+        assert!(e.add_to_mapped);
+        assert!(
+            w.map(0)
+                .cell(5, 4)
+                .obj_list
+                .iter()
+                .any(|o| o.actor_object && o.cell_obj_id == hero),
+            "旧图格登记保持不变"
+        );
+        assert!(w.sessions.map_changes().is_empty());
+    }
+
+    /// **卡 `openmir2-enter-map-cell-rejected-vs-oracle`·墙格进图**：进图落在**墙格**时，
+    /// oracle `BaseObject.Base.cs:14-23` `Initialize()` 只「不进格表」而**不摘除角色**
+    ///（`AddtoMapSuccess` 保持 `true` = 未落图；`PlayObject.UserLogon` 之后无条件继续）⇒
+    /// `enter_map` 必须返回 `Ok`（**不是** `Err(CellRejected)`）、保留实体、`add_to_mapped == false`、
+    /// 会话照常进世界。
+    ///
+    /// 红检：把 `enter_map` 的落格失败支改回 `entities.remove(id) + Err(CellRejected)` ⇒ 本用例必红。
+    #[test]
+    fn enter_map_wall_cell_keeps_actor_unmapped() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        // 只把 (3,3) 置成 `HighWall`（`set_cell_attributes` 列主序 `x*H+y`、fail-closed）。
+        let mut attrs = vec![crate::map::CellAttribute::Walk; 16 * 16];
+        attrs[3 * 16 + 3] = crate::map::CellAttribute::HighWall;
+        assert_eq!(w.maps[0].set_cell_attributes(&attrs), 16 * 16);
+        assert_eq!(
+            w.maps[0].cell_attribute(3, 3),
+            Some(crate::map::CellAttribute::HighWall)
+        );
+
+        w.open_session("hero");
+        let mut e = crate::EntitySpawn::new(0, "hero", 3, 3);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w
+            .enter_map("hero", e, 0)
+            .expect("墙格进图 = oracle Initialize 语义（保留角色，不进格表），不是 Err");
+
+        assert!(
+            w.entities.get(id).is_some(),
+            "oracle Initialize 落格失败不移除角色 ⇒ 实体必须还在"
+        );
+        assert!(
+            !w.entities.get(id).unwrap().add_to_mapped,
+            "未进格表 ⇒ add_to_mapped 必须为 false"
+        );
+        assert_eq!(w.map(0).cell(3, 3).count(), 0, "墙格不得落对象");
+        let sess = w.session("hero").unwrap();
+        assert_eq!(sess.stage, crate::session::WorldStage::InWorld);
+        assert_eq!(sess.actor_id, Some(id));
+    }
+
+    /// 同上，坐标**越界**：oracle `CanWalk(x,y,true)`（经 `GetCellInfo`）对越界同样返回 `false`
+    /// ⇒ `Initialize()` 同样只「不落图」不移除角色 ⇒ `enter_map` 返回 `Ok`、实体保留、`add_to_mapped=false`。
+    #[test]
+    fn enter_map_out_of_bounds_keeps_actor_unmapped() {
+        let mut w = World::with_maps(vec![(16, 16)]);
+        w.open_session("hero");
+        let mut e = crate::EntitySpawn::new(0, "hero", 99, 99);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w
+            .enter_map("hero", e, 0)
+            .expect("越界落格 = oracle Initialize 语义（保留角色），不是 Err");
+        assert!(w.entities.get(id).is_some(), "越界落格不移除角色");
+        assert!(!w.entities.get(id).unwrap().add_to_mapped, "越界不入格表");
+        assert_eq!(
+            w.session("hero").unwrap().stage,
+            crate::session::WorldStage::InWorld
+        );
+    }
+
+    /// **卡 `openmir2-searchtick-origin-parity`**：首扫基准 = `PlayObject` ctor 时刻，**不是**进图时刻。
+    ///
+    /// oracle：`SearchTick` 只在 ctor 写一次（`src/M2Server/Player/PlayObject.cs:901`：
+    /// `SearchTime = 1000; SearchTick = GetTickCount();`）；`UserLogon`/`AddToMap`/切图都不重置；
+    /// 首扫门 `src/GameSrv/Word/WorldServer.cs:663-667`：`(now - SearchTick) > SearchTime` ⇒
+    /// 先 `SearchTick = now` 再 `SearchViewRange()`（严格大于）。
+    ///
+    /// 构造：ctor = 0、进图 = 800ms（模拟登录等待环把进图推后）⇒ 首个 `SearchViewRange` 必须落在
+    /// **1200ms**（200ms tick 下第一个 `> ctor+1000` 的 tick），而不是 2000ms（进图 + 1200ms）。
+    ///
+    /// 红检：把 [`World::enter_map_at`] 的 `entity.ai.search_tick = ctor_tick` 改回
+    /// `self.clock_ms` ⇒ 本用例必红（首次扫描被推到 2000ms）。
+    #[test]
+    fn first_scan_base_is_playobject_ctor_not_map_entry() {
+        let mut w = World::new(32, 32);
+        w.open_session("p");
+        let q = w.add_entity(crate::EntitySpawn::new(0, "q", 11, 10));
+        let mut p_ent = crate::EntitySpawn::new(0, "p", 10, 10);
+        p_ent.race = ACTOR_RACE_PLAY;
+        // `new PlayObject()` 等价点 = ctor 0ms；登录等待环把进图推到 800ms。
+        w.clock_ms = 800;
+        let p = w.enter_map_at("p", p_ent, 0, 0).expect("进图");
+        assert_eq!(
+            w.entities.get(p).unwrap().ai.search_tick,
+            0,
+            "SearchTick 必须取 ctor 基准（PlayObject.cs:901），不得被进图时刻重盖"
+        );
+
+        // 1000ms：`now - ctor == 1000` 不满足严格大于 ⇒ 不扫。
+        w.tick();
+        assert_eq!(w.clock_ms, 1000);
+        assert!(
+            w.entities.get(p).unwrap().visible_actors.is_empty(),
+            "1000ms 不满足 `> 1000` ⇒ 不得扫描"
+        );
+        assert_eq!(w.entities.get(p).unwrap().ai.search_tick, 0);
+
+        // 1200ms：ctor + 1200 > ctor + 1000 ⇒ 首扫；q 进入视野。
+        w.tick();
+        assert_eq!(w.clock_ms, 1200);
+        assert_eq!(
+            w.entities.get(p).unwrap().ai.search_tick,
+            1200,
+            "首扫命中后 SearchTick = now（WorldServer.cs:665）"
+        );
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == q),
+            "首扫必须发生在 ctor+1200（不是进图+1200）"
+        );
+    }
+
+    /// **卡 `openmir2-verify-tick-base`**：`verify_tick`（30s）与 `check_dup_obj_tick`（3s）的
+    /// 基准同样是 `PlayObject`/`BaseObject` **ctor 时刻**，不是进图时刻（与 `SearchTick` 同组）。
+    ///
+    /// oracle 事实（全仓写点清点）：
+    /// - `VerifyTick = GetTickCount()` 只在 ctor `src/M2Server/Actor/BaseObject.cs:444` 写一次；
+    ///   第二个写点是命中后的 `BaseObject.Base.cs:225`；读点 `:223` `(now - VerifyTick) > 30*1000`。
+    ///   `UserLogon`/`AddToMap` 均不重置。
+    /// - `CheckDupObjTick = GetTickCount()` 只在 ctor `src/M2Server/Player/PlayObject.cs:913` 写一次；
+    ///   第二个写点是命中后的 `PlayObject.Message.cs:265`；读点 `:263` `> 3000`。
+    ///   `UserLogon`/`AddToMap` 均不重置。
+    ///
+    /// 构造：ctor = 0、进图 = 800ms（模拟登录等待环 T-73 把进图推后）⇒ 首个 `VerifyMapTime`
+    /// 必须落在 30200（不是进图 + 30000 = 30800），首个重叠检查落在 3200（不是 3800）。
+    ///
+    /// 红检：把 [`World::enter_map_at`] 的 `entity.verify_tick` /
+    /// `dup_state_mut().check_dup_obj_tick` 改回 `self.clock_ms` ⇒ 本用例两条门断言必红。
+    #[test]
+    fn verify_and_dup_ticks_base_is_playobject_ctor_not_map_entry() {
+        let mut w = World::new(32, 32);
+        w.open_session("p");
+        let mut p_ent = crate::EntitySpawn::new(0, "p", 10, 10);
+        p_ent.race = ACTOR_RACE_PLAY;
+        // `new PlayObject()` 等价点 = ctor 0ms；登录等待环把进图推到 800ms。
+        w.clock_ms = 800;
+        let p = w.enter_map_at("p", p_ent, 0, 0).expect("进图");
+
+        {
+            let e = w.entities.get(p).unwrap();
+            assert_eq!(
+                e.verify_tick, 0,
+                "VerifyTick 必须取 ctor 基准（BaseObject.cs:444），不得被进图时刻重盖"
+            );
+            assert_eq!(
+                w.entities.dup_state(p).unwrap().check_dup_obj_tick,
+                0,
+                "CheckDupObjTick 必须取 ctor 基准（PlayObject.cs:913），不得被进图时刻重盖"
+            );
+        }
+
+        // 30s 门：`now - ctor == 30000` 不满足严格大于 ⇒ 不刷新。
+        w.clock_ms = 30_000;
+        assert!(
+            !w.verify_map_time(p),
+            "恰 30000ms 不得刷新（BaseObject.Base.cs:223 严格 >）"
+        );
+        // ctor + 30200：首刷。若基准是进图 800ms，此处 now - 800 = 29400 ⇒ 不会刷新。
+        w.clock_ms = 30_200;
+        assert!(
+            w.verify_map_time(p),
+            "首个 VerifyMapTime 必须落在 ctor+30200（不是进图+30000=30800）"
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().verify_tick,
+            30_200,
+            "命中后 VerifyTick = now（BaseObject.Base.cs:225）"
+        );
+
+        // 3s 门：`now - ctor == 3000` 不满足严格大于 ⇒ 不检查。
+        w.clock_ms = 3_000;
+        w.check_dup_obj();
+        assert_eq!(
+            w.entities.dup_state(p).unwrap().check_dup_obj_tick,
+            0,
+            "恰 3000ms 不得检查（PlayObject.Message.cs:263 严格 >）"
+        );
+        // ctor + 3200：首次检查。若基准是进图 800ms，此处 now - 800 = 2400 ⇒ 仍不检查。
+        w.clock_ms = 3_200;
+        w.check_dup_obj();
+        assert_eq!(
+            w.entities.dup_state(p).unwrap().check_dup_obj_tick,
+            3_200,
+            "首个重叠检查必须落在 ctor+3200（不是进图+3000=3800）"
+        );
+    }
+
+    /// `spawn_monster_precomputed`（M3④-实现 B 第 ③ 片的新 API）：掉落/朝向/构造抽已在回调里
+    /// 按 oracle 次序预算完，本方法**不再取任何随机数**；构造抽结果随实体落库。
+    ///
+    /// **C 第 ② 片追加**：`dir`/`cool_eye`/构造抽同时写进 `Entity.ai` 的初始态
+    /// （`AnimalState::seed_from_spawn`）。
+    #[test]
+    fn spawn_monster_precomputed_consumes_no_rng() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 50_000;
+        let mut fresh = w.rng.clone();
+        let ctor = MonsterCtorDraws {
+            run_tick_delta: 11,
+            base_search_time: 2222,
+            attack_tick_delta: 33,
+            walk_tick_delta: 44,
+            search_time: 3333,
+            meat_quality: 555,
+            bo_fear_fire: true,
+            zil_kill_count: 6,
+        };
+        let id = w
+            .spawn_monster_precomputed(
+                "鸡",
+                3,
+                3,
+                0,
+                80,
+                2,
+                30,
+                40,
+                0x0A_14,
+                5,
+                0,
+                6,
+                7,
+                99,
+                vec![],
+                ctor,
+                5,
+                true,
+            )
+            .expect("生成成功");
+        let e = w.entities.get(id).expect("怪物在仓库");
+        assert_eq!(e.name, "鸡");
+        assert_eq!(e.race, 80);
+        assert_eq!(e.hp, 40);
+        assert_eq!(e.max_hp, 40);
+        assert_eq!(e.dc, 0x0A_14);
+        assert_eq!(e.ac, 5);
+        assert_eq!(e.life_attrib, 0);
+        assert_eq!(e.hit_point, 6);
+        assert_eq!(e.speed_point, 7);
+        assert_eq!(e.mon_exp, 30);
+        assert_eq!(e.gold, 99, "预置金币必须原样落库");
+        assert!(e.drop_items.is_empty());
+        assert_eq!(e.ctor_draws, ctor, "构造抽结果必须原样落实体");
+        assert!(e.add_to_mapped, "生成后必须落图");
+        // 生成期取数落进 AI 初始态（`CreateMonster` 的 `cert.Dir`/`CoolEye` + 构造链计时器）。
+        assert_eq!(e.ai.dir, 5, "dir 必须是 CreateMonster 的 cert.Dir");
+        assert!(e.ai.cool_eye, "cool_eye 必须随生成结果落库");
+        assert!(e.ai.bo_fear_fire, "bo_fear_fire 来自构造抽");
+        assert_eq!(e.ai.attack_tick, 50_000 - 33);
+        assert_eq!(e.ai.walk_tick, 50_000 - 44);
+        assert_eq!(e.ai.search_time, 3333);
+        assert_eq!(e.ai.search_tick, 50_000);
+        assert_eq!(e.ai.think_tick, 50_000);
+        assert_eq!(e.ai.walk_wait_tick, 50_000);
+        // `world.rng` 必须一步未动。
+        assert_eq!(w.rng.random(), fresh.random());
+        // 越界地图 ⇒ None（不落库）。
+        assert!(w
+            .spawn_monster_precomputed(
+                "鸡",
+                3,
+                3,
+                9,
+                80,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                vec![],
+                MonsterCtorDraws::default(),
+                0,
+                false,
+            )
+            .is_none());
+    }
+
+    /// `budget_monster_drops`（新 API）的掉落预算与 `spawn_monster_now`（既有路径）逐字节相同。
+    #[test]
+    fn budget_monster_drops_matches_spawn_monster_now_drop_budget() {
+        let drop_list = vec![MonsterDropItem {
+            max_point: 100,
+            sel_point: 100, // 恒命中
+            item_name: STRING_GOLD_NAME.to_string(),
+            count: 1000,
+        }];
+        let mut a = World::new(16, 16);
+        let mut rng = RandomNumber::with_seed(5);
+        let (gold, items) = a.budget_monster_drops(&mut rng, &drop_list);
+
+        let mut b = World::new(16, 16);
+        b.rng = RandomNumber::with_seed(5);
+        b.spawn_monster(Command::SpawnMonster {
+            id: 2,
+            name: "鸡".into(),
+            x: 1,
+            y: 1,
+            map_id: 0,
+            level: 1,
+            exp: 0,
+            hp: 5,
+            dc: 0,
+            ac: 0,
+            undead: 0,
+            hit_point: 5,
+            speed_point: 15,
+            drop_list: drop_list.clone(),
+        });
+        b.tick();
+        let e = b.entities.get(2).expect("spawned");
+        assert_eq!(e.gold, gold, "预算金币必须与既有生成路径一致");
+        assert_eq!(
+            e.drop_items.as_slice(),
+            items.as_slice(),
+            "预算物品必须一致"
+        );
+    }
+
+    /// **S4d-2 牙**：PL-1 快照必须保留 `expire_hitters` **清理前**的 `LastHiter`。
+    ///
+    /// 变异：删掉 `HeadRunner` 的 `SimHiterSnapshot` 系统注册（或删 `sim_hiter_snapshot_system`
+    /// 的 push）⇒ 快照为空 / `None`，本用例在 `expect("玩家必须进 PL-1 快照")` 或值断言处红。
+    #[test]
+    fn tick_snapshot_keeps_player_last_hiter_before_expiry() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 9, 9, 1));
+        let mon = {
+            let mut e = crate::EntitySpawn::new(0, "鸡", 10, 10);
+            e.race = ACTOR_RACE_MONSTER;
+            e.hp = 100;
+            e.max_hp = 100;
+            w.add_entity(e)
+        };
+        // 命中者 = 怪物；`LastHiterTick = 0`。31s 后 `expire_hitters` 会清掉实体上的值。
+        w.entities.get_mut(p).unwrap().set_last_hiter(mon, 0);
+        w.clock_ms = 31_000;
+        let _ = w.tick();
+        assert_eq!(
+            w.entities.get(p).unwrap().last_hiter,
+            None,
+            "31s > 30s ⇒ 实体侧 LastHiter 已过期"
+        );
+        let snap = w
+            .player_hiter_snapshot
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家必须进 PL-1 快照");
+        assert_eq!(snap.last_hiter, Some(mon), "快照 = 清理前的 LastHiter");
+        assert_eq!(snap.last_hiter_tick, 0);
+    }
+
+    /// `BaseObject.Run` 的过期段（`BaseObject.Base.cs:119-132`）：`LastHiter` 30s、`ExpHitter` 6s。
+    ///
+    /// `SetLastHiter`（`BaseObject.cs:1753-1770`）每次命中刷新 `LastHiterTick`；`ExpHitter` 只在为空时
+    /// 认领、同一命中者再次命中才续 `ExpHitterTick`。
+    /// 改坏必红：把 `expire_hitters` 的 30s/6s 门拆回「只看命中者死/隐身」（旧版）⇒ 本用例前两段红。
+    #[test]
+    fn expire_hitters_uses_wall_clock_last_hiter_30s_exp_hitter_6s() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 9, 9, 1));
+        let mon = {
+            let mut e = crate::EntitySpawn::new(0, "鸡", 10, 10);
+            e.race = ACTOR_RACE_MONSTER;
+            e.hp = 100;
+            e.max_hp = 100;
+            w.add_entity(e)
+        };
+        // 命中登记：两者都置。
+        w.entities.get_mut(mon).unwrap().set_last_hiter(p, 0);
+        // 5s：两个都没过期。
+        w.clock_ms = 5_000;
+        w.tick();
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!(e.last_hiter, Some(p), "5s < 30s ⇒ LastHiter 未过期");
+        assert_eq!(e.exp_hitter, Some(p), "5s < 6s ⇒ ExpHitter 未过期");
+        // 7s：`ExpHitter` 过期（6s），`LastHiter` 仍在（7s < 30s）。
+        w.clock_ms = 7_000;
+        w.tick();
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!(e.exp_hitter, None, "7s > 6s ⇒ ExpHitter 过期");
+        assert_eq!(e.last_hiter, Some(p), "7s < 30s ⇒ LastHiter 未过期");
+        // 31s：`LastHiter` 过期。
+        w.clock_ms = 31_000;
+        w.tick();
+        assert_eq!(
+            w.entities.get(mon).unwrap().last_hiter,
+            None,
+            "31s > 30s ⇒ 过期"
+        );
+        // 同一命中者再次命中 ⇒ `ExpHitter` 重新认领并刷新 tick（清空后重新登记）。
+        w.entities.get_mut(mon).unwrap().set_last_hiter(p, 31_000);
+        w.clock_ms = 36_000; // 距上次登记 5s ⇒ 未过期
+        w.tick();
+        assert_eq!(
+            w.entities.get(mon).unwrap().exp_hitter,
+            Some(p),
+            "重新登记后 5s 内未过期"
+        );
+        // 命中者死亡 ⇒ 无论时间都清（oracle 的 `||` 右支）。
+        w.entities.get_mut(p).unwrap().life_cycle.death = true;
+        w.entities.get_mut(mon).unwrap().set_last_hiter(p, 36_000);
+        w.clock_ms = 36_100;
+        w.tick();
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!(e.last_hiter, None, "命中者死亡 ⇒ LastHiter 清");
+        assert_eq!(e.exp_hitter, None, "命中者死亡 ⇒ ExpHitter 清");
+    }
+
+    // ---- 出站接线片 W2：RM_PUSH / RM_RUSH / RM_RUSHKUNG / RM_BUTCH 的 tick 产出 ------------------
+
+    /// `Command::Push` → `BaseObject.CharPushed`（`BaseObject.cs:854-901`）的逐格 `RM_PUSH`：
+    /// **每成功推一格一条**事件、`dir = nBackDir`、位置 = 走**后**格；被挡即停。
+    ///
+    /// 红检：把 `push_now` 里的 `back` 改成 `n_dir`（正推方向）或把事件位置改成走**前**格 ⇒ 必红。
+    #[test]
+    fn push_command_emits_backstep_per_step() {
+        use crate::action::PushEvent;
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick(); // 先跑 Enter 落图（`add_map_object`），否则格子簿记无源格可摘。
+        w.enqueue(Command::Push {
+            actor_id: 1,
+            dir: crate::magic::DIR_UP,
+            count: 3,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.pushes,
+            vec![
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 4
+                },
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 3
+                },
+                PushEvent {
+                    actor_id: 1,
+                    dir: crate::magic::DIR_DOWN,
+                    x: 5,
+                    y: 2
+                },
+            ],
+            "每推一格一条，dir = nBackDir(DIR_DOWN)，位置 = 走后格"
+        );
+        let e = w.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (5, 2), "世界权威坐标随推进更新");
+    }
+
+    /// `Command::Push` 与既有**已验收**的 [`crate::magic::char_pushed`] 末端状态必须一致
+    /// （同一图、同一初值 ⇒ 同 `result`、同 `(x, y)`、同终态 `dir`）——防逐格重写引入漂移。
+    #[test]
+    fn push_now_final_state_matches_magic_char_pushed() {
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick();
+        w.enqueue(Command::Push {
+            actor_id: 1,
+            dir: crate::magic::DIR_UP,
+            count: 4,
+        });
+        let r = w.tick();
+        let steps = i32::try_from(r.pushes.len()).unwrap();
+        let (wx, wy) = {
+            let e = w.entities.get(1).unwrap();
+            (e.x, e.y)
+        };
+
+        let mut map = crate::map::MapGrid::new(64, 64);
+        let (mut x, mut y, mut dir) = (5_i32, 5_i32, 0_u8);
+        let res = crate::magic::char_pushed(
+            &mut map,
+            &mut x,
+            &mut y,
+            &mut dir,
+            crate::magic::DIR_UP,
+            4,
+            1,
+            crate::map::CellType::Play,
+        );
+
+        assert_eq!(res, steps, "成功步数 = 事件数");
+        assert_eq!((wx, wy), (x, y), "末端坐标一致");
+        assert_eq!(dir, crate::magic::DIR_DOWN, "result>0 ⇒ Dir 落 nBackDir");
+    }
+
+    /// **StickMode 门（`MagicManager.cs:34`）**：`!target.StickMode` 在 `Random(20)` **之前**
+    /// ⇒ StickMode 目标既不被推、也**零抽**（漏门会平移整条 RNG 流）。
+    ///
+    /// 红检：删掉 `cast_firewind_spell` 里的 `|| target.stick_mode` ⇒ `result=1`、有事件、
+    /// RNG 流前进 ⇒ 三条断言全红。
+    #[test]
+    fn firewind_stick_mode_target_is_skipped_without_drawing() {
+        let mut w = World::new(64, 64);
+        let caster = w.add_entity(player(1, "caster", 10, 10, 60));
+        let mut sticky = player(2, "sticky", 11, 10, 1);
+        sticky.stick_mode = true;
+        let sticky = w.add_entity(sticky);
+        {
+            let b = w.entities.map_binding_mut(caster).unwrap();
+            b.visible_actors.push(crate::entity::VisibleBaseObject {
+                target: sticky,
+                flag: crate::entity::VisibleFlag::Show,
+            });
+        }
+        let before = format!("{:?}", w.rng);
+        let (result, events) = w.cast_firewind_spell(caster, 3);
+        assert_eq!(result, 0, "StickMode ⇒ 不调 CharPushed、result 不 ++");
+        assert!(events.is_empty(), "StickMode ⇒ 无逐格 RM_PUSH");
+        assert_eq!(
+            format!("{:?}", w.rng),
+            before,
+            "StickMode ⇒ Random(20) 零抽"
+        );
+    }
+
+    /// `Command::Rush`（`DoMotaebo` 无正前目标支，`PlayObject.Base.cs:1443-1467`）：向前冲刺，
+    /// 每格一条 `Rush`（`dir = nDir`、位置 = 走后格），不产 `RushKung`。
+    ///
+    /// 红检：把 `rush_now` 的 `Rush` 事件 ident 换成 `RushKung`（或方向改 `back_dir`）⇒ 必红。
+    #[test]
+    fn rush_command_emits_rush_per_step() {
+        use crate::action::{RushEvent, RushFrame};
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick();
+        w.enqueue(Command::Rush {
+            actor_id: 1,
+            dir: crate::magic::DIR_RIGHT,
+            steps: 3,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.rushes,
+            vec![
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 6,
+                    y: 5
+                },
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 7,
+                    y: 5
+                },
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 8,
+                    y: 5
+                },
+            ]
+        );
+        let e = w.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (8, 5));
+    }
+
+    /// `Command::Rush` 被**不可走**格挡住 ⇒ `bo35` ⇒ 末尾一条 `RushKung`，且其坐标是**正前格**
+    /// （角色不在该格上），`dir = Dir`（= `nDir`）。
+    ///
+    /// 红检：把 `RushKung` 的位置改成角色当前格（`x, y`）而非 `front_position` ⇒ 必红。
+    #[test]
+    fn rush_blocked_emits_rushkung_at_front_cell() {
+        use crate::action::{RushEvent, RushFrame};
+        use crate::map::CellAttribute;
+        let mut w = world_with(&[(1, 5, 5)]);
+        w.tick();
+        w.maps[0]
+            .get_cell_info_mut(7, 5)
+            .0
+            .set_attribute(CellAttribute::HighWall);
+        w.enqueue(Command::Rush {
+            actor_id: 1,
+            dir: crate::magic::DIR_RIGHT,
+            steps: 4,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.rushes,
+            vec![
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::Rush,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 6,
+                    y: 5
+                },
+                RushEvent {
+                    actor_id: 1,
+                    frame: RushFrame::RushKung,
+                    dir: crate::magic::DIR_RIGHT,
+                    x: 7,
+                    y: 5
+                },
+            ],
+            "走到 (6,5) 后正前 (7,5) 是墙 ⇒ RushKung 落在正前格"
+        );
+        let e = w.entities.get(1).unwrap();
+        assert_eq!((e.x, e.y), (6, 5), "角色停在墙前，不入正前格");
+    }
+
+    /// `Command::Butch`（`PlayObject.Operate.cs:749`）：一条事件，位置 = 当前 `CurrX/CurrY`、
+    /// `dir` = 传入的已解析 `Dir`。
+    #[test]
+    fn butch_command_emits_event_at_current_cell() {
+        use crate::action::ButchEvent;
+        let mut w = world_with(&[(1, 7, 9)]);
+        w.tick();
+        w.enqueue(Command::Butch {
+            actor_id: 1,
+            dir: 3,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.butches,
+            vec![ButchEvent {
+                actor_id: 1,
+                dir: 3,
+                x: 7,
+                y: 9
+            }]
+        );
+    }
+
+    // ==============================================================================
+    // **卡 `openmir2-sm-skeleton-wiring`（tier=R）**：屠宰效果体（`PlayObject.Operate.cs:716-745`）。
+    //
+    // 两次抽的**次序与模数**是 R 级判据：先 `Random(16)+5`（`BodyLeathery` 扣减），
+    // 再 `Random(201)+100`（`MeatQuality` 扣减）。次序对调会平移整条世界 RNG 流。
+    // ==============================================================================
+
+    /// 造一个「玩家 + 动物尸体」的世界。`race` 决定骨架支是否可达（`[50,80)` 才发骨架）。
+    ///
+    /// 同时把 `w.rng` 切成固定种子，并**手抽一次**还原首个 `n10`（`Random(16)+5`）——
+    /// 调用方据此把 `body_leathery` 设成「恰好归零」或「不归零」的确定值。
+    fn butch_rig(seed: i32, race: u8, target_death: bool) -> (World, i32, i32, u8) {
+        butch_rig_at(seed, race, target_death, 11, 10)
+    }
+
+    /// 与 [`butch_rig`] 相同，但尸体落在 `(cx, cy)`（用于 `|Δ|` 闭边界用例）。
+    fn butch_rig_at(
+        seed: i32,
+        race: u8,
+        target_death: bool,
+        cx: i32,
+        cy: i32,
+    ) -> (World, i32, i32, u8) {
+        let mut w = World::new(64, 64);
+        let p = w.add_entity(player(1, "butcher", 10, 10, 10));
+        let mut e = crate::EntitySpawn::new(2, "corpse", cx, cy);
+        e.race = race;
+        e.death = target_death;
+        e.ai.dir = 5;
+        let t = w.add_entity(e);
+        // `IsValidObject` 读的是格子的 `ObjList` 成员关系 ⇒ 必须先让 `Enter` 命令落地
+        // （`add_entity` 只是入队）。`tick()` 本身不抽随机数；随后重设种子保证抽数可复算。
+        w.tick();
+        w.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let n10 =
+            u8::try_from(mir2_shared::rng::RandomNumber::with_seed(seed).random_below(16) + 5)
+                .unwrap();
+        (w, p, t, n10)
+    }
+
+    /// 判据①（成功支）：`body_leathery` **恰好**被本次抽打归零 + race ∈ `[50,80)` ⇒
+    /// `skeleton = true`、`body_leathery` 复位 50，且 `TickRecord::skeletons` 恰一条
+    /// （`actor_id` / `dir` / `x` / `y` 全部取**尸体**）。
+    #[test]
+    fn butch_effect_hits_zero_leathery_sets_skeleton_and_records_event() {
+        use crate::action::SkeletonEvent;
+        let (mut w, p, t, n10) = butch_rig(20_261_023, 53, true);
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+        w.enqueue(Command::ButchEffect {
+            actor_id: p,
+            target_id: t,
+            n_x: 11,
+            n_y: 10,
+        });
+        let r = w.tick();
+        assert_eq!(
+            r.skeletons,
+            vec![SkeletonEvent {
+                actor_id: t,
+                dir: 5,
+                x: 11,
+                y: 10
+            }],
+            "骨架事件以**尸体自己**为发送者（`RM_SKELETON, Dir, CurrX, CurrY`）"
+        );
+        // 第二抽（`Random(201)+100`）的手算值：尸体起值 `MeatQuality = 0` ⇒ `ushort` 回绕。
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(20_261_023);
+        let _n10b = rng.random_below(16) + 5;
+        let mq = u16::try_from(rng.random_below(201) + 100).unwrap();
+        let e = w.entities.get(t).unwrap();
+        assert!(e.ai.skeleton, "BodyLeathery 归零 ⇒ Skeleton = true");
+        assert_eq!(e.ai.body_leathery, 50, "`:742` BodyLeathery = 50");
+        assert_eq!(
+            e.ai.meat_quality,
+            0u16.wrapping_sub(mq),
+            "`:725` `MeatQuality -= Random(201)+100`（ushort 回绕，不夹取）"
+        );
+    }
+
+    /// 判据②（**另一支**）：`body_leathery` 未被本次抽打到 0 ⇒ **零骨架事件**、`skeleton` 保持
+    /// false，但两处数值都按 oracle 扣减（`byte` 不回绕的普通支）。
+    #[test]
+    fn butch_effect_miss_branch_reduces_leathery_without_skeleton() {
+        let (mut w, p, t, n10) = butch_rig(4_242, 53, true);
+        // 起值 = 本次抽 + 10 ⇒ 减完必 > 0（且不触发回绕：n10+10 >= n10）。
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10 + 10;
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
+        assert!(ev.is_none(), "BodyLeathery != 0 ⇒ 不发 RM_SKELETON");
+        let e = w.entities.get(t).unwrap();
+        assert!(!e.ai.skeleton, "未归零 ⇒ Skeleton 不置位");
+        assert_eq!(e.ai.body_leathery, n10 + 10 - n10, "扣减 = Random(16)+5");
+    }
+
+    /// 判据②b（race 门）：`Race >= Monster(80)` 的动物（毒蜘蛛 82）即使 `BodyLeathery` 归零，
+    /// 也**不**置 `Skeleton`、**不**发帧；但 `BodyLeathery` 照样复位 50（`:742` 在 race 门之外）。
+    #[test]
+    fn butch_effect_race_at_or_above_monster_never_skeletons() {
+        let (mut w, p, t, n10) = butch_rig(7_777, 82, true);
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
+        assert!(ev.is_none(), "race 82 ∉ [50,80) ⇒ 无骨架事件");
+        let e = w.entities.get(t).unwrap();
+        assert!(!e.ai.skeleton);
+        assert_eq!(e.ai.body_leathery, 50, "归零后照样复位 50");
+    }
+
+    /// **F1（review `8c4da05a`，blocking）**：`Animal` 必须是 [`crate::monai::is_animal_race`]
+    /// （ctor 继承补 105/106/114/132），不是 `combat::race_is_animal`。
+    ///
+    /// race 105（楔蛾，部署 MonGen 有 252 行）在 oracle 里 `Animal=true`（GasAttackMonster ctor
+    /// 继承）⇒ 效果体照跑（**2 抽** + `BodyLeathery`/`MeatQuality`/`DeathTick` 写入）；用错谓词
+    /// 会提前 return ⇒ **零抽数**，每次屠宰让世界 RNG 流比 oracle 少 2 抽。
+    ///
+    /// 红检（实测）：把 `is_animal_race` 改回 `combat::race_is_animal` ⇒ 本用例红（零抽 + 状态不变）。
+    #[test]
+    fn butch_effect_inherited_ctor_animal_race_draws_twice_without_skeleton() {
+        const SEED: i32 = 8_675_309;
+        let (mut w, p, t, n10) = butch_rig(SEED, 105, true);
+        {
+            let e = w.entities.get_mut(t).unwrap();
+            e.ai.body_leathery = n10; // 本次抽恰好归零
+            e.ai.meat_quality = 1000;
+        }
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
+        assert!(ev.is_none(), "race 105 ≥ Monster(80) ⇒ 不置骨架");
+        let mut r = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let _n10 = r.random_below(16) + 5;
+        let mq = u16::try_from(r.random_below(201) + 100).unwrap();
+        let e = w.entities.get(t).unwrap();
+        assert_eq!(e.ai.body_leathery, 50, "归零后仍复位 50（race 门外）");
+        assert_eq!(
+            e.ai.meat_quality,
+            1000u16.wrapping_sub(mq),
+            "第 2 抽必须发生（`MeatQuality` 被扣）"
+        );
+        assert!(!e.ai.skeleton);
+        // 流位置 = 恰 2 抽。
+        let mark_a = w.rng.random();
+        let mut b = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let _ = b.random_below(16);
+        let _ = b.random_below(201);
+        assert_eq!(
+            mark_a,
+            b.random(),
+            "race 105 必须与 oracle 一样抽 2 次（用 race_is_animal 会零抽 ⇒ 流错位）"
+        );
+    }
+
+    /// **F2（review `8c4da05a`，important）**：`IsValidObject` 的成员关系——已 `make_ghost` /
+    /// `DisappearA` 摘格的尸体（坐标不变、格子仍 Walk）**不得**过门：零事件 + **零抽数**。
+    ///
+    /// 红检（实测）：把门改回「只判坐标 + 格子 valid」⇒ 本用例红（返 `Some` + 2 抽）。
+    #[test]
+    fn butch_effect_removed_corpse_fails_gate_and_draws_nothing() {
+        const SEED: i32 = 31_415_926;
+        let (mut w, p, t, n10) = butch_rig(SEED, 53, true);
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10;
+        // `make_ghost` / `DisappearA` 的等价物：置 ghost + 摘格（坐标仍是 (11,10)）。
+        w.entities.get_mut(t).unwrap().life_cycle.ghost = true;
+        assert!(w.disappear_a(t), "尸体原本在格内 ⇒ 摘格成功");
+        let baseline = mir2_shared::rng::RandomNumber::with_seed(SEED).random();
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
+        assert!(ev.is_none(), "已摘格的尸体 ⇒ IsValidObject 假");
+        assert_eq!(w.rng.random(), baseline, "零抽数");
+        let e = w.entities.get(t).unwrap();
+        assert!(!e.ai.skeleton);
+        assert_eq!(e.ai.body_leathery, n10, "未被扣减");
+    }
+
+    /// **复审 `48eae6ce` minor 2**：`if (BodyLeathery <= 0)` 在 `byte` 上只等于 `== 0`——
+    /// 扣完**恰好剩 1** 时不得置骨架、也不得复位 50。把 `== 0` 改成 `<= 1` ⇒ 本用例红。
+    #[test]
+    fn butch_effect_leathery_exactly_one_after_draw_is_not_zero() {
+        const SEED: i32 = 5_550_555;
+        let (mut w, p, t, n10) = butch_rig(SEED, 53, true);
+        w.entities.get_mut(t).unwrap().ai.body_leathery = n10 + 1;
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
+        assert!(ev.is_none(), "扣完 = 1 ≠ 0 ⇒ 不发骨架");
+        let e = w.entities.get(t).unwrap();
+        assert_eq!(e.ai.body_leathery, 1, "停在 1（不复位 50）");
+        assert!(!e.ai.skeleton);
+    }
+
+    /// **F4（review `8c4da05a`，minor）**：`|Δ|<=2` 是**闭**边界——`|Δx|==2` 必须过门（2 抽），
+    /// `|Δx|==3` 必须不过门（0 抽）。把 `>2` 改成 `>1` ⇒ ±2 两条必红。
+    #[test]
+    fn butch_effect_delta_boundary_is_inclusive_two() {
+        const SEED: i32 = 2_718_281;
+        for (dx, should_pass) in [(-2_i32, true), (2, true), (-3, false), (3, false)] {
+            let cx = 10 + dx;
+            let (mut w, p, t, n10) = butch_rig_at(SEED, 53, true, cx, 10);
+            {
+                let e = w.entities.get_mut(t).unwrap();
+                e.ai.body_leathery = n10; // 过门则归零 + 骨架
+                e.ai.meat_quality = 1000;
+            }
+            let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, cx, 10);
+            let e = w.entities.get(t).unwrap();
+            if should_pass {
+                assert!(
+                    ev.is_some(),
+                    "|Δx|={} 恰在闭边界内 ⇒ 必须结算（骨架）",
+                    dx.abs()
+                );
+                assert!(e.ai.skeleton);
+                assert_eq!(e.ai.body_leathery, 50);
+            } else {
+                assert!(ev.is_none(), "|Δx|={} ⇒ 不过门", dx.abs());
+                assert!(!e.ai.skeleton);
+                assert_eq!(e.ai.body_leathery, n10, "零扣减");
+                assert_eq!(e.ai.meat_quality, 1000, "零扣减");
+            }
+        }
+    }
+
+    /// **R 级判据核心（金种子三路法）**：两次抽的**次序 + 模数**。
+    ///
+    /// A = 生产路径（`butch_effect_now`）；B = 按 oracle 手抽（先 `Random(16)+5` 扣
+    /// `BodyLeathery`，再 `Random(201)+100` 扣 `MeatQuality`）；C = **对调次序**的阴性对照。
+    ///
+    /// 判据双重：
+    /// ① **抽数个数**：A 之后的流位置 == B（恰 2 抽；少抽/多抽 ⇒ 世界流错位）。
+    /// ② **次序/模数**：A 落库的两处**扣减量**必须等于 B 的两个值；把两次抽对调 ⇒ 扣减量
+    ///    互换（`BodyLeathery` 减 `100..300`、`MeatQuality` 减 `5..20`）⇒ 与 A 必不相同。
+    ///
+    /// 注意 `.NET` legacy `Random.Next(n)` **每次只消耗一个 Sample**（与模数无关），所以
+    /// 「对调次序」**不会**改变下一次 `random()` 的返回值——`mark` 只能钉抽数个数，钉次序
+    /// 靠的是扣减量（本用例的 ②）。
+    ///
+    /// 红检（实测）：把 `butch_effect_now` 里两次 `random_below` 的顺序对调 ⇒ ② 必红。
+    #[test]
+    fn butch_effect_rng_draws_match_oracle_order_and_mods() {
+        const SEED: i32 = 20_261_023;
+        const BODY0: u8 = 200;
+        const MEAT0: u16 = 1000;
+
+        // A：生产路径（一次有效屠宰；起值保证不归零、不回绕）。
+        let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
+        {
+            let e = w.entities.get_mut(t).unwrap();
+            e.ai.body_leathery = BODY0;
+            e.ai.meat_quality = MEAT0;
+        }
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
+        assert!(ev.is_none(), "起值远离 0 ⇒ 不触发骨架，只观察扣减量");
+        let mark_a = w.rng.random();
+        let (bl_a, meat_a) = {
+            let e = w.entities.get(t).unwrap();
+            (e.ai.body_leathery, e.ai.meat_quality)
+        };
+
+        // B：oracle 手抽（`Operate.cs:722` 先 `Random(16)+5`，`:723` 再 `Random(201)+100`）。
+        let mut b = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let n10 = u8::try_from(b.random_below(16) + 5).unwrap();
+        let mq = u16::try_from(b.random_below(201) + 100).unwrap();
+        let mark_b = b.random();
+
+        // C：**真对调实现**的阴性对照——语句对调后，`BodyLeathery` 减的是**第 1 次**
+        // `Random(201)+100`（`u8` 截断），`MeatQuality` 减的是**第 2 次** `Random(16)+5`。
+        let mut c = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let mq_swapped = c.random_below(201) + 100;
+        let n10_swapped = c.random_below(16) + 5;
+
+        assert_eq!(
+            mark_a, mark_b,
+            "屠宰效果体必须恰好 2 抽（少抽/多抽 ⇒ 世界流错位）"
+        );
+        assert_eq!(
+            bl_a,
+            BODY0.wrapping_sub(n10),
+            "`BodyLeathery -= Random(16)+5`（第 1 抽 = mod 16）"
+        );
+        assert_eq!(
+            meat_a,
+            MEAT0.wrapping_sub(mq),
+            "`MeatQuality -= Random(201)+100`（第 2 抽 = mod 201）"
+        );
+        assert_ne!(
+            (bl_a, meat_a),
+            (
+                // 真对调：`BodyLeathery` 减 `(Random(201)+100)`，按 C# `(byte)` 截断（`as u8`）。
+                BODY0.wrapping_sub(mq_swapped as u8),
+                // `MeatQuality` 减 `(Random(16)+5)`（`ushort`）。
+                MEAT0.wrapping_sub(n10_swapped as u16),
+            ),
+            "对调次序后的扣减量必须不同（阴性对照：`BodyLeathery` 减 100..300、`MeatQuality` 减 5..20）"
+        );
+    }
+
+    /// 判据③（不满足前置 ⇒ 零帧**且零抽数**）：逐条门各构造一例，`butch_effect_now` 后
+    /// RNG 流位置必须与「一次都不抽」的参照完全相同。
+    #[test]
+    fn butch_effect_gate_failures_draw_nothing() {
+        const SEED: i32 = 1_234_567;
+        let mut r = mir2_shared::rng::RandomNumber::with_seed(SEED);
+        let baseline = r.random();
+        /// 门破坏器：`(world, target_id) => ()`。
+        type Mutate = fn(&mut World, i32);
+        let cases: Vec<(&str, Mutate)> = vec![
+            ("目标未死（Death=false）", |w: &mut World, t| {
+                w.entities.get_mut(t).unwrap().life_cycle.death = false;
+            }),
+            ("已经是骨架（Skeleton=true）", |w: &mut World, t| {
+                w.entities.get_mut(t).unwrap().ai.skeleton = true;
+            }),
+            ("非动物 race 83（稻草人）", |w: &mut World, t| {
+                w.entities.get_mut(t).unwrap().appearance.race = 83;
+            }),
+            ("超出 2 格（|Δx|=3）", |w: &mut World, t| {
+                w.entities.transform_mut(t).unwrap().x = 13;
+            }),
+        ];
+        for (why, mutate) in cases {
+            let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
+            mutate(&mut w, t);
+            let (nx, ny) = {
+                let e = w.entities.get(t).unwrap();
+                (e.x, e.y)
+            };
+            let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, nx, ny);
+            assert!(ev.is_none(), "{why} ⇒ 无骨架事件");
+            assert_eq!(
+                w.rng.random(),
+                baseline,
+                "{why} ⇒ **零抽数**（少抽/多抽都会平移世界 RNG 流）"
+            );
+        }
+
+        // 目标格不符（`IsValidObject` 查的是 (nX,nY)，目标不在该格）。
+        let (mut w, p, t, _n10) = butch_rig(SEED, 53, true);
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 10, 10); // 尸体在 (11,10)
+        assert!(ev.is_none(), "目标不在 (nX,nY) ⇒ 无事件");
+        assert_eq!(w.rng.random(), baseline, "目标格不符 ⇒ 零抽数");
+    }
+
+    /// `BodyLeathery` 是 **`byte`**：`-= n10` 在 C# unchecked 下回绕（`3 - 5 = 254`），
+    /// `<= 0` 因此只命中**恰好 0** ⇒ 回绕后既不置骨架也不是负值。
+    #[test]
+    fn butch_effect_body_leathery_wraps_like_oracle() {
+        let (mut w, p, t, n10) = butch_rig(99, 53, true);
+        assert!(n10 >= 5, "Random(16)+5 ∈ [5,20]");
+        w.entities.get_mut(t).unwrap().ai.body_leathery = 3;
+        let ev = w.butch_effect_now(&mut TickRecord::default(), p, t, 11, 10);
+        assert!(ev.is_none(), "回绕成 254 ⇒ 不发骨架");
+        let e = w.entities.get(t).unwrap();
+        assert_eq!(e.ai.body_leathery, 3u8.wrapping_sub(n10), "unchecked 回绕");
+        assert!(e.ai.body_leathery > 200, "3 - (≥5) 必须回绕成大值");
+        assert!(!e.ai.skeleton);
+    }
+
+    /// **L1 TransMap 触发（核心）**：玩家走一格踩中 `MapRoute` ⇒ `EnterAnotherMap` 门通过 ⇒
+    /// `switch_map`，实体换图、旧图摘除/新图登记、`SessionRegistry` 记一条 `MapChange`（无 show）。
+    ///
+    /// 红检（变异牙）：把 `step_with_route` 里 `walk_route_check` 调用删掉 ⇒ `changed_map` 断言必红；
+    /// 把 `walk_route_check` 的 `race != Play` 门去掉 ⇒ `step_with_route_does_not_switch_for_monster` 必红。
+    #[test]
+    fn step_with_route_triggers_enter_another_map_for_player() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        let n = w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        assert_eq!(n, 1);
+
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved, "走一格被接受");
+        assert!(out.changed_map, "踩中 route 应换图");
+
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (1, 7, 9));
+        assert_eq!(w.map(0).cell(5, 4).count(), 0, "旧格已摘除");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            1,
+            "旧图 (5,5) 只剩 route cell（玩家已摘除）"
+        );
+        assert_eq!(w.map(1).cell(7, 9).count(), 1, "新图已登记");
+
+        let ch = w.sessions.map_changes();
+        assert_eq!(ch.len(), 1, "恰一条 MapChange");
+        assert_eq!(ch[0].actor_id, hero);
+        assert_eq!((ch[0].map_id, ch[0].x, ch[0].y), (1, 7, 9));
+        assert_eq!(
+            ch[0].space_move_show, None,
+            "EnterAnotherMap 无 SM_SPACEMOVE_SHOW"
+        );
+    }
+
+    /// **负向对照**：怪物踩同一 route 格 ⇒ **被挡在走前格**（oracle `BaseObject.Walk:1548` 对 `MapRoute`
+    /// 只 `result = false`，上游 `WalkTo` 回滚坐标 `:683-688`；换图是 `PlayObject.Walk` 覆写专属）。
+    ///
+    /// **原断言与 oracle 相反、已改正**（`openmir2-worker-5`，片 R1 `openmir2-maptrigger-monster-and-door`，
+    /// 2026-10-17）：旧版写 `assert!(out.moved, "怪物走一格仍成功")`——把「怪物不换图」误当成「怪物能走上
+    /// route 格」，漏了 oracle 非玩家 `MapRoute` 支的 `result = false` + `WalkTo` 回滚 ⇒ 实测怪物会走上
+    /// route 格（probe：`moved=true, pos=(5,5)`）。现按 oracle 改为 `!out.moved` + 坐标不动。
+    ///
+    /// 红检（变异牙）：删掉 `try_step_now` 的 `race != ACTOR_RACE_PLAY` 落点检查 ⇒ `out.moved` 变 true、
+    /// 坐标变 (5,5) ⇒ 本测必红。
+    #[test]
+    fn step_with_route_does_not_switch_for_monster() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        // 走 `enter_map` 建会话——否则「无会话 ⇒ 不换图」会掩盖 `race != Play` 门的作用。
+        w.open_session("mon");
+        let mon = w
+            .enter_map(
+                "mon",
+                {
+                    let mut e = crate::EntitySpawn::new(0, "mon", 5, 4);
+                    e.race = ACTOR_RACE_MONSTER;
+                    e
+                },
+                0,
+            )
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        let out = w.step_with_route(mon, 0, 1, 1);
+        assert!(
+            !out.moved,
+            "非玩家被 MapRoute 挡在走前格（oracle BaseObject.cs:1548 result=false + :683-688 回滚）"
+        );
+        assert!(!out.changed_map, "怪物不得触发换图");
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标回到走前格、仍留原图");
+        assert!(w.sessions.map_changes().is_empty());
+    }
+
+    /// **非玩家 `MapRoute` 阻挡（生产怪物路径）**：`monai::walk_to` → `try_step_now` 对非玩家在落点
+    /// 格含 `MapRoute` 时**拒绝该步**（坐标不变）——oracle `BaseObject.Walk` 的非玩家支
+    /// （`BaseObject.cs:1548` `result = false` + `:683-688` 回滚）。
+    ///
+    /// 红检（变异牙）：把 `try_step_now` 的落点检查删掉 ⇒ 本测 `moved`/坐标断言必红。
+    #[test]
+    fn try_step_now_blocks_non_player_on_map_route_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("mon");
+        let mon = w
+            .enter_map(
+                "mon",
+                {
+                    let mut e = crate::EntitySpawn::new(0, "mon", 5, 4);
+                    e.race = ACTOR_RACE_MONSTER;
+                    e
+                },
+                0,
+            )
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        assert!(
+            !w.try_step_now(mon, 0, 1, 1),
+            "非玩家踩 route 格 ⇒ 拒绝该步（oracle result=false）"
+        );
+        let e = w.entities.get(mon).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标不变（留在走前格）");
+        assert!(w.sessions.map_changes().is_empty());
+    }
+
+    /// `EnterAnotherMap` 的 `CellValid` 门：目标格不可走（墙）⇒ **换图失败** ⇒ 照 oracle
+    /// `PlayObject.Walk()==false`（`PlayObject.cs:1878`）上游 `WalkTo` **回滚坐标到走前格**
+    /// （`BaseObject.cs:685-688`），因 `if (result)` 不成立而**不发移动帧**（`:1911-1913`）
+    /// ⇒ 本方法返回 `moved == false`。
+    ///
+    /// **为何原先写反了**：旧断言写 `moved == true`（"走一格仍成功"），是把 `step_with_route`
+    /// 当成"移动与路线检查互不影响"来看——漏了 oracle 的 `Walk()` 返回值是**整条走命令的结果**，
+    /// 失败会连同位移一起回滚。验证者给的真实证据（`BaseObject.cs:666-673` 的回滚三步 + `:1911-1913`
+    /// 的 `if (result)` 才发帧）推翻了旧断言。
+    ///
+    /// 红检（变异牙）：把 `step_with_route` 的 `RouteOutcome::Failed` 支里的 `rollback_move` 删掉
+    /// （或不再返回 `moved == false`）⇒ 下面 `moved`/坐标/旧格断言必红。
+    #[test]
+    fn step_with_route_blocked_when_dest_cell_is_wall() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.maps[1].set_map_xy_flag(7, 9, false); // 目标格 → LowWall
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(!out.moved, "EnterAnotherMap 失败 ⇒ Walk()=false ⇒ 位移回滚");
+        assert!(!out.changed_map, "目标格不可走 ⇒ EnterAnotherMap 失败");
+        // 坐标回滚到走前格 (5,4)，仍留原图。
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标回滚到走前格");
+        // 格子簿记也回滚：源格 (5,4) 重新登记玩家、目标格 (5,5) 只剩 route cell。
+        assert_eq!(w.map(0).cell(5, 4).count(), 1, "源格重新登记玩家");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            1,
+            "目标格 (5,5) 只剩 route cell"
+        );
+        assert!(w.sessions.map_changes().is_empty(), "失败不发换图簇");
+    }
+
+    /// **`EnterAnotherMap` 对越界目标坐标的行为**：`Envirnoment.CellValid` 对**越界返回 true**
+    /// （`Envirnoment.cs:307-314`）⇒ oracle 仍进 `EnterAnotherMap`，由 `AddMapObject` 的 `CellMatch`
+    /// 失败返回 false（`PlayObject.cs:3779-3791`）⇒ `PlayObject.Walk` 的 `result=false`
+    /// （`:1878-1881`）⇒ 上游 `WalkTo` 回滚坐标（`BaseObject.cs:685-688`）、不发移动帧
+    /// （`:1911-1913`）。本仓对应 `switch_map` 的 `Err(CellRejected)`；本片修的是「该 `Err` 必须
+    /// 置 `failed`」——否则会被误判成 `Skipped`（`moved=true`、不回滚），与 oracle 分叉。
+    ///
+    /// 红检（变异牙 ①）：把 `switch_map` 结果分支改回 `is_ok() { switched = true }`（`Err` 不置
+    /// `failed`）⇒ 本测 `moved`/坐标/`MapChange` 断言必红（越界被当成正常走位）。
+    #[test]
+    fn step_with_route_out_of_bounds_dest_rolls_back() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 99, // 越界：cell_valid 返回 true，落地 CellMatch 失败
+            },
+        }]);
+        assert!(
+            w.map(1).cell_valid(7, 99),
+            "oracle CellValid 对越界返回 true（Envirnoment.cs:307-314）"
+        );
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(
+            !out.moved,
+            "EnterAnotherMap 失败 ⇒ Walk()=false ⇒ 位移回滚、不发移动帧"
+        );
+        assert!(!out.changed_map, "越界目标落格失败 ⇒ 不换图");
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 4), "坐标回滚到走前格");
+        assert_eq!(w.map(0).cell(5, 4).count(), 1, "源格重新登记玩家");
+        assert_eq!(
+            w.map(0).cell(5, 5).count(),
+            1,
+            "目标格 (5,5) 只剩 route cell"
+        );
+        assert!(w.sessions.map_changes().is_empty(), "失败不发换图簇");
+    }
+
+    /// **must_fix #1 阳性对照**：目标图带 `Flag.boNEEDHOLE`（无 `ET_DIGOUTZOMBI` 事件模型）⇒
+    /// oracle `PlayObject.cs:1874` 的门**挡**下 ⇒ **不换图**，但走本身成功（`moved == true`、
+    /// 坐标落在源图的 route 格上、无回滚、无 `MapChange`）。这正是真实数据里
+    /// `D402→Q004` / `D717→R001` / `H006→H007` / `h006→H106` 等 7 条 route 的行为。
+    ///
+    /// 红检（变异牙）：把 `route_enter` 里 `m.need_hole()` 的门删掉（恒不挡）⇒ 本测 `changed_map`
+    /// 断言必红（会误换图）。
+    #[test]
+    fn step_with_route_needhole_dest_blocks_map_change() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.set_map_need_hole(1, true); // 目标图带 NEEDHOLE（Q004/R001/H007/H106 同型）
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 14,
+                dst_y: 14,
+            },
+        }]);
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved, "NEEDHOLE 门只挡换图，不挡走（Walk() 仍 true）");
+        assert!(!out.changed_map, "目标图 NEEDHOLE ⇒ 不换图");
+        // 落在源图的 route 格上（未回滚），仍在原图。
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 5), "未换图、未回滚");
+        assert!(w.sessions.map_changes().is_empty(), "无换图簇");
+    }
+
+    /// **门控①（`ArroundDoorOpened`）**：route 落点格与**未开门相邻（±1）** ⇒ oracle
+    /// `PlayObject.cs:1872` `Envir.ArroundDoorOpened(CurrX,CurrY)` 返回 false ⇒ **整支跳过、不换图**，
+    /// 但走位照常（`moved == true`、坐标落在源图 route 格、无回滚、无 `MapChange`）——与 NEEDHOLE 门
+    /// 同型。oracle 门恒未开（`CM_OPENDOOR` 结构性 no-op）⇒ 门相邻 route 格**恒被挡**
+    /// （`tests/parity/m3/design-door-and-mapevent-20261016.md` §2.2）。
+    ///
+    /// 红检（变异牙）：把 `route_enter` 里的 `arround_door_opened` 门删掉 ⇒ 本测 `changed_map` 断言必红
+    /// （会误换图）。
+    #[test]
+    fn step_with_route_blocked_when_door_adjacent_unopened() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        // 源图 (5,4) 放一条未开门：route 落点 (5,5) 与门 Chebyshev 距离 1 ⇒ 挡。
+        w.set_map_doors(
+            0,
+            vec![crate::map::MapDoor {
+                x: 5,
+                y: 4,
+                n08: 1,
+                door_id: 0,
+                status_id: 0,
+            }],
+            vec![crate::map::DoorStatus {
+                opened: false,
+                open_tick: 0,
+            }],
+        );
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved, "门控只挡换图，不挡走（Walk() 仍 true）");
+        assert!(!out.changed_map, "与未开门相邻 ⇒ 不换图");
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (0, 5, 5), "未换图、未回滚");
+        assert!(w.sessions.map_changes().is_empty(), "无换图簇");
+    }
+
+    /// **门控②（阳性对照）**：同一门 `Opened=true`（测试注入）⇒ `arround_door_opened` 返回 true ⇒
+    /// **照常换图**（证明门控读的是门状态、不是恒挡）。
+    #[test]
+    fn step_with_route_proceeds_when_door_adjacent_opened() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.set_map_doors(
+            0,
+            vec![crate::map::MapDoor {
+                x: 5,
+                y: 4,
+                n08: 1,
+                door_id: 0,
+                status_id: 0,
+            }],
+            vec![crate::map::DoorStatus {
+                opened: true,
+                open_tick: 0,
+            }],
+        );
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 1,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 7,
+                dst_y: 9,
+            },
+        }]);
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved, "走位照常");
+        assert!(
+            out.changed_map,
+            "门开 ⇒ arround_door_opened=true ⇒ 照常换图"
+        );
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!((e.map_id, e.x, e.y), (1, 7, 9), "换到目标图目标格");
+    }
+
+    /// **must_fix #3**：同一源格有**多个** `MapRoute` 对象 ⇒ oracle `for` **不 break**，逐个
+    /// `EnterAnotherMap` ⇒ **终落点 = 最后一条**（`PlayObject.cs:1862-1884`）。真实数据：
+    /// `D5069(90,76)` 同时 `→D5062(8,39)` 与 `→D5071(8,10)`，终落点 = `D5071`。
+    ///
+    /// 红检（变异牙）：把 `route_enter` 收集改回 `find_map` 取**第一条**（`find_map(...)`）⇒
+    /// 终落点断言必红（会停在第一条目标）。
+    #[test]
+    fn step_with_route_multiple_routes_last_wins() {
+        let mut w = World::with_maps(vec![(64, 64), (64, 64), (64, 64)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 4), 0)
+            .unwrap();
+        // 同一源格 (5,5) 落两条 route：第一条 → map1(8,39)，第二条 → map2(8,10)。
+        w.add_map_routes(vec![
+            MapRouteSpec {
+                map_id: 0,
+                x: 5,
+                y: 5,
+                route_id: 1,
+                hop: crate::map::RouteHop {
+                    dst_map_id: 1,
+                    dst_x: 8,
+                    dst_y: 39,
+                },
+            },
+            MapRouteSpec {
+                map_id: 0,
+                x: 5,
+                y: 5,
+                route_id: 2,
+                hop: crate::map::RouteHop {
+                    dst_map_id: 2,
+                    dst_x: 8,
+                    dst_y: 10,
+                },
+            },
+        ]);
+        assert_eq!(w.map(0).cell(5, 5).count(), 2, "同格两条 route cell");
+        let out = w.step_with_route(hero, 0, 1, 1);
+        assert!(out.moved && out.changed_map, "命中 route ⇒ 换图");
+        let e = w.entities.get(hero).unwrap();
+        assert_eq!(
+            (e.map_id, e.x, e.y),
+            (2, 8, 10),
+            "终落点 = 最后一条 route（D5071 同型）"
+        );
+        // 两条 route 各记一条 MapChange（oracle 会发两组 633/634），终落点为最后一条。
+        let ch = w.sessions.map_changes();
+        assert_eq!(ch.len(), 2, "两条 route ⇒ 两组换图簇");
+        assert_eq!((ch[1].map_id, ch[1].x, ch[1].y), (2, 8, 10));
+    }
+
+    /// 原地转身（`CM_TURN`）：actor 已站在 route 格上 ⇒ `walk_route_check` 直接触发换图。
+    #[test]
+    fn walk_route_check_triggers_on_current_cell() {
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.open_session("hero");
+        let hero = w
+            .enter_map("hero", crate::EntitySpawn::new(0, "hero", 5, 5), 0)
+            .unwrap();
+        w.add_map_routes(vec![MapRouteSpec {
+            map_id: 0,
+            x: 5,
+            y: 5,
+            route_id: 3,
+            hop: crate::map::RouteHop {
+                dst_map_id: 1,
+                dst_x: 2,
+                dst_y: 2,
+            },
+        }]);
+        assert_eq!(
+            w.walk_route_check(hero),
+            RouteCheck::Switched,
+            "当前格命中 route ⇒ 换图"
+        );
+        assert_eq!(
+            (
+                w.entities.get(hero).unwrap().map_id,
+                w.entities.get(hero).unwrap().x
+            ),
+            (1, 2)
+        );
+        assert_eq!(w.sessions.map_changes().len(), 1);
+    }
+
+    // ================= 片 A-5（buff 生产者接线）: 攻击中毒门 =================
+
+    fn ent(id: i32, name: &str, x: i32, y: i32, race: u8) -> EntitySpawn {
+        let mut e = crate::EntitySpawn::new(id, name, x, y);
+        e.race = race;
+        e
+    }
+
+    /// **A-5 端到端（攻击 → `make_posion` → 657）**：玩家戴麻痹戒指攻击一个玩家目标，中毒门命中
+    /// （`Random(AntiPoison + AttackPosionRate) == 0`）⇒ `World::attack_once` 调
+    /// `make_posion(STONE, AttackPosionTime, 0)` ⇒ 目标获得 `Paralysis` buff（`CharStatus` 置位）；
+    /// buff 递减到 0 时 `Operate` 的 `boChg` 支 ⇒ `TickRecord.buff_status_changes` 非空
+    /// （宿主 `drain_buff_downlink` 出 `SM_CHARSTATUSCHANGED(657)`）。
+    #[test]
+    fn attack_poison_end_to_end_yields_char_status_change() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        // `Random(rate) == 0` 必中：把 rate 压到 1（`random_below(1)` 恒 0）。
+        w.combat_config.attack_poison_rate = 1;
+        w.combat_config.attack_poison_time = 5;
+        w.add_entity(ent(1, "hero", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "foe", 11, 10, ACTOR_RACE_PLAY));
+        // 攻方持麻痹态（`set_attack_poison` = 宿主灌入 `PlayObject.Paralysis`）。
+        w.set_attack_poison(
+            1,
+            AttackPoisonState {
+                paralysis: true,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        w.attack_cmd(1, 2);
+        w.tick();
+        assert!(
+            w.buffs.has_buff(2, BuffType::Paralysis),
+            "中毒门命中 ⇒ 目标上石化毒 buff（`STONE = 5`）"
+        );
+        assert_ne!(
+            w.entities.get(2).unwrap().char_status,
+            0,
+            "`MakePosion` 写 `CharStatus`（含 Paralysis 位）"
+        );
+        // 推进到 buff 过期（state_tick 5，每 tick 4 pass ⇒ 2 tick 内到 0）。
+        let mut saw_change = false;
+        for _ in 0..4 {
+            w.tick();
+            if w.last_tick
+                .buff_status_changes
+                .iter()
+                .any(|(id, _)| *id == 2)
+            {
+                saw_change = true;
+                break;
+            }
+        }
+        assert!(
+            saw_change,
+            "buff 过期 ⇒ buff_status_changes 记目标（宿主出 657）"
+        );
+        // 红检（变异牙）：① 去掉 `attack_once` 里的 `make_posion` 调用 ⇒ 首个 `has_buff` 断言必红；
+        // ② 不接线（`poisoned` 恒 false）⇒ 同上；③ 把 `if self.buff_enabled` 去掉成恒读表 ⇒
+        // `attack_poison_caller_absent_when_buff_disabled` 必红。
+    }
+
+    /// **A-5 关闭语义**：`buff_enabled == false` 时**不接线**——即使攻方有麻痹态且 rate=1，也不上毒
+    /// （既有 golden 逐字节不变）。
+    #[test]
+    fn attack_poison_caller_absent_when_buff_disabled() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        // 不 `enable_buff_tick`。
+        w.combat_config.attack_poison_rate = 1;
+        w.add_entity(ent(1, "hero", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "foe", 11, 10, ACTOR_RACE_PLAY));
+        w.set_attack_poison(
+            1,
+            AttackPoisonState {
+                paralysis: true,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        w.attack_cmd(1, 2);
+        w.tick();
+        assert!(
+            !w.buffs.has_buff(2, BuffType::Paralysis),
+            "buff 关闭 ⇒ 不接线、不上毒"
+        );
+    }
+
+    /// **A-5 攻方无麻痹态 ⇒ 不抽不上毒**（oracle `PlayObject.Attack.cs:221` 的 `&&` 短路 + `Paralysis` 门）。
+    #[test]
+    fn attack_poison_requires_paralysis_flag() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        w.combat_config.attack_poison_rate = 1;
+        w.add_entity(ent(1, "hero", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "foe", 11, 10, ACTOR_RACE_PLAY));
+        w.set_attack_poison(
+            1,
+            AttackPoisonState {
+                paralysis: false,
+                un_paralysis: false,
+                anti_poison: 0,
+            },
+        );
+        w.attack_cmd(1, 2);
+        w.tick();
+        assert!(
+            !w.buffs.has_buff(2, BuffType::Paralysis),
+            "无麻痹态 ⇒ 不上毒"
+        );
+    }
+
+    // ================= 片 A-5: 技能生产链（14/15/31） =================
+
+    fn magic(magic_id: u16) -> mir2_data::MagicInfo {
+        mir2_data::MagicInfo {
+            magic_id,
+            def_max_power: 1, // `GetPower` 的 `random_below(def_max_power - def_power)` 分界 > 0
+            ..Default::default()
+        }
+    }
+
+    /// **A-5 技能 15（`SKILL_DEJIWONHO`）→ `defence_up` + oracle 的中心格 bug**：
+    /// `MagMakeDefenceArea` 的 `(2*3+1)^2 = 49` 个迭代全读**中心格** ⇒ 中心格的唯一友军被
+    /// `DefenceUp` 49 次（`hits == 49`），邻格友军一次都不加。
+    #[test]
+    fn skill_dejiwonho_defence_up_follows_oracle_center_cell_bug() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        w.add_entity(ent(1, "caster", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "friend", 12, 12, ACTOR_RACE_PLAY));
+        w.add_entity(ent(3, "bystander", 11, 10, ACTOR_RACE_PLAY));
+        let m = magic(SKILL_DEJIWONHO);
+        let hits = w.cast_defence_area_spell(1, &m, 0, 0, 12, 12, 0);
+        assert_eq!(
+            hits, 49,
+            "中心格友军各 49 次（oracle `GetCellInfo(nX,nY)` 未用循环变量的 bug）"
+        );
+        assert!(
+            w.buffs.has_buff(2, BuffType::DefensePower),
+            "中心格友军获 `DefencePower`"
+        );
+        assert!(
+            !w.buffs.has_buff(3, BuffType::DefensePower),
+            "邻格（非中心）一次都不加"
+        );
+        // 红检（变异牙）：把 `GetCellInfo(nX,nY)` 的 bug「修正」成按 `(cX,cY)` 遍历 ⇒ `hits` 变 **3**
+        // （**订正 F3**，独立复验 2026-10-17：车道自述里的「49→1」**不实**——按 `(cX,cY)` 遍历时，
+        // 中心格 `(12,12)` 的友军 1 次，邻格 `(11,10)` 的旁观者 1 次，**外加施法者自己 `(10,10)`**
+        // （落在这 7×7 窗内，且缺省 `HAM_ALL` 下也是自己的友军）1 次 ⇒ **恰 3**）⇒ 上面的
+        // `hits == 49` 断言（以及 `bystander` 的 `!has_buff` 断言）必红。
+    }
+
+    /// **A-5 技能 14（`SKILL_HANGMAJINBUB`）→ `mag_defence_up`**：同一中心格 bug，加的是
+    /// `MagicDefensePower`（`btState == 1`）。
+    #[test]
+    fn skill_hangmajinbub_mag_defence_up() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        w.add_entity(ent(1, "caster", 10, 10, ACTOR_RACE_PLAY));
+        w.add_entity(ent(2, "friend", 12, 12, ACTOR_RACE_PLAY));
+        let m = magic(SKILL_HANGMAJINBUB);
+        let hits = w.cast_defence_area_spell(1, &m, 0, 0, 12, 12, 1);
+        assert_eq!(hits, 49, "中心格友军各 49 次");
+        assert!(w.buffs.has_buff(2, BuffType::MagicDefensePower));
+        assert!(
+            !w.buffs.has_buff(2, BuffType::DefensePower),
+            "btState=1 ⇒ 走 MagDefenceUp"
+        );
+    }
+
+    /// **A-5 技能 31（`SKILL_SHIELD`）→ `magic_shield_on`**：加 `MagicShield` buff + 置实体
+    /// `magic_shield`（`DamageHealth` 的 MP 抵扣门，`BaseObject.cs:779`）。
+    #[test]
+    fn skill_shield_adds_magic_shield_buff_and_flag() {
+        let mut w = World::new(8, 8);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        w.add_entity(ent(1, "hero", 5, 5, ACTOR_RACE_PLAY));
+        let m = magic(SKILL_SHIELD);
+        let n_sec = w.cast_shield_spell(1, &m, 0, 0);
+        assert!(n_sec >= 0);
+        assert!(
+            w.buffs.has_buff(1, BuffType::MagicShield),
+            "魔法盾 buff 已加"
+        );
+        assert!(
+            w.entities.get(1).unwrap().magic_shield,
+            "`MagicShield` 置位（DamageHealth 抵扣门）"
+        );
+        // 红检（变异牙）：去掉 `mag_make_defence_area` 的 `self.defence_up/mag_defence_up` 调用、
+        // 或去掉 `magic_shield_on` 的 `add_buff` ⇒ 上述 `has_buff` 断言必红。
+    }
+
+    /// **A-5 友军门**：`HAM_DEAR`（只保护配偶）下，非配偶友军**不**被加点 ⇒ `hits == 0`。
+    #[test]
+    fn skill_defence_area_respects_attack_mode_friend_gate() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 100_000;
+        w.enable_buff_tick();
+        let mut caster = ent(1, "caster", 10, 10, ACTOR_RACE_PLAY);
+        caster.attack_mode = crate::combat::ATTACK_MODE_HAM_DEAR;
+        caster.dear_human = Some(99); // 配偶不是 (12,12) 的那位
+        w.add_entity(caster);
+        w.add_entity(ent(2, "stranger", 12, 12, ACTOR_RACE_PLAY));
+        let m = magic(SKILL_DEJIWONHO);
+        let hits = w.cast_defence_area_spell(1, &m, 0, 0, 12, 12, 0);
+        assert_eq!(hits, 0, "HAM_DEAR ⇒ 非配偶友军不被加点");
+        assert!(!w.buffs.has_buff(2, BuffType::DefensePower));
+    }
+    /// **B2-1**：`mag_objects_in_range` 的顺序契约 = x 外层升序 → y 内层升序 → 格内
+    /// **ObjList 插入序**（`BaseObject.cs:2817-2832`）；过滤 `Death`/`Ghost`，且只认
+    /// `CellObjId>0 && ActorObject`。
+    ///
+    /// 红检：把内层/外层循环互换、或改用 `EntityStore::iter` 槽位序 ⇒ 断言必红。
+    #[test]
+    fn p3b2_mag_objects_in_range_order_is_x_then_y_then_objlist() {
+        let mut w = World::new(32, 32);
+        let mut mk = |name: &str, x: i32, y: i32, race: u8, ghost: bool, death: bool| {
+            let mut e = crate::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = race;
+            e.ghost = ghost;
+            e.death = death;
+            w.add_entity(e)
+        };
+        // 同格双对象：插入序必须可观测。
+        let a = mk("a", 10, 10, ACTOR_RACE_PLAY, false, false);
+        let b = mk("b", 10, 10, ACTOR_RACE_MONSTER, false, false);
+        // y 更大的格子（x 相同时按 y 升序）。
+        let c = mk("c", 10, 11, ACTOR_RACE_PLAY, false, false);
+        // x 更小的格子（内层 y 走完才轮到下一个 x）。
+        let d = mk("d", 9, 11, ACTOR_RACE_PLAY, false, false);
+        let dead = mk("dead", 9, 9, ACTOR_RACE_MONSTER, false, true);
+        let ghost = mk("ghost", 11, 9, ACTOR_RACE_MONSTER, true, false);
+        w.tick(); // Enter 落格（cell.obj_list 插入序 = add_entity 序）
+        let got = w.mag_objects_in_range(0, 10, 10, 1);
+        assert_eq!(
+            got,
+            vec![d, a, b, c],
+            "x=9 的 d 先于 x=10 的 a/b/c；同格 a 先于 b；dead/ghost 被过滤"
+        );
+        assert!(!got.contains(&dead) && !got.contains(&ghost));
+    }
+
+    /// **B2-2**：`get_mag_struck_damage` = `MAX(0, nPower - (Lo(MAC)+Random(Δ+1)))`；
+    /// `baseObject == null`（`RM_MAGSTRUCK` 的真实调用）不加 undead 项；`Some` 才加。
+    ///
+    /// 红检：把 `Random(Δ+1)` 写成 `Random(Δ)`（Δ=0 时不抽）⇒ 对照流状态不等。
+    #[test]
+    fn p3b2_get_mag_struck_damage_mac_roll_and_null_undead() {
+        use mir2_shared::rng::RandomNumber;
+        let mac: u16 = 0x0A00; // Lo=0, Hi=10 ⇒ Random(11)
+        let seed = 42;
+        let mut rng = RandomNumber::with_seed(seed);
+        let draw = rng.random_below(11);
+        let want = (20 - draw).max(0);
+        let mut rng2 = RandomNumber::with_seed(seed);
+        assert_eq!(
+            crate::combat::get_mag_struck_damage(&mut rng2, mac, 20, None),
+            want
+        );
+        assert_eq!(
+            format!("{rng2:?}"),
+            format!("{:?}", {
+                let mut r = RandomNumber::with_seed(seed);
+                let _ = r.random_below(11);
+                r
+            }),
+            "MSD 恰 1 抽 R(11)"
+        );
+        // undead 项只在 baseObject != null（Some）时生效。
+        let mut rng3 = RandomNumber::with_seed(seed);
+        assert_eq!(
+            crate::combat::get_mag_struck_damage(&mut rng3, mac, 20, Some(7)),
+            want + 7
+        );
+    }
+
+    /// **B1**：`SKILL_LIGHTENING(11)` 的不死系 ×1.5（`MagicManager.cs:296`）。
+    /// 期望值 = **手写推导**：`MPow` → `GetPower` → `GetAttackPower`（玩家 override）→ `Round(x*1.5)`。
+    /// 同时钉住返回值口径（`bo_train = Race >= Animal`、`delay_ms = 600`、target 保留）。
+    #[test]
+    fn p3b1_lightening_undead_multiplier() {
+        let mut w = World::new(32, 32);
+        let mut c = crate::EntitySpawn::new(0, "c".to_string(), 10, 10);
+        c.race = ACTOR_RACE_PLAY;
+        c.level = 5;
+        let caster = w.add_entity(c);
+        let mut t = crate::EntitySpawn::new(0, "t".to_string(), 11, 10);
+        t.race = ACTOR_RACE_MONSTER;
+        t.level = 1;
+        t.life_attrib = crate::magic_effect::LA_UNDEAD;
+        let target = w.add_entity(t);
+        w.tick();
+        let magic = mir2_data::MagicInfo {
+            power: 5,
+            max_power: 10,
+            def_power: 2,
+            def_max_power: 8,
+            train_lv: 3,
+            ..Default::default()
+        };
+        // 骰门（AntiMagic=1）通过的固定种子。
+        let seed = (1..1000)
+            .find(|s| RandomNumber::with_seed(*s).random_below(10) >= 1)
+            .unwrap();
+        let mut control = RandomNumber::with_seed(seed);
+        let _ = control.random_below(10);
+        let mp_draw = control.random_below(5);
+        let gp_draw = control.random_below(6);
+        // `GetAttackPower(..., Hi-Lo+1)` 内部 `Random(nPower + 1)` ⇒ `Random(0+2)`。
+        let atk_draw = control.random_below(2);
+        let luck_draw = control.random_below(10);
+        let mpow = 5 + mp_draw;
+        let base = mir2_shared::hutil::round(f64::from(mpow) / 4.0 * 2.0) + 2 + gp_draw;
+        // `Luck <= 0` 且 `Random(10)==0` ⇒ `result = nBasePower`（不再加 atk 抽）。
+        let power = if luck_draw == 0 {
+            base
+        } else {
+            base + atk_draw
+        };
+        let want = mir2_shared::hutil::round(f64::from(power) * 1.5);
+        w.rng = RandomNumber::with_seed(seed);
+        let out = w.cast_lightening_spell(caster, &magic, 1, Some(target), 1, 0);
+        let mut probe = RandomNumber::with_seed(seed);
+        let _ = probe.random_below(10);
+        assert_eq!(
+            out.power, want,
+            "不死系威力 = Round(GetAttackPower(...) * 1.5)"
+        );
+        assert!(out.bo_train, "Race >= Animal ⇒ boTrain");
+        assert_eq!(out.target, Some(target), "成功支保留目标");
+        assert!(out.delayed);
+        assert_eq!(out.delay_ms, 600);
+    }
+
+    /// **T-78**：构造一个 `PvpFlag = true` 的玩家；`pvp_name_color_tick = clock_ms - expired_by_ms`
+    /// （`expired_by_ms > pk_flag_time_ms` ⇒ 一旦被检查就清位 + 一条 656 载荷）。
+    fn pk_world(clock_ms: i64, expired_by_ms: i64) -> (World, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = clock_ms;
+        let mut e = crate::EntitySpawn::new(7, "p7", 10, 10);
+        e.pvp_flag = true;
+        e.pvp_name_color_tick = clock_ms - expired_by_ms;
+        assert_eq!(w.add_entity(e), 7);
+        (w, 7)
+    }
+
+    /// **T-78 修复**：`clock_ms` 被注入成墙钟量级（`MIR2_CLOCK_MS ≈ 1.7e12`）时，
+    /// `pk_check_tick` 必须在**首次调用**时惰性对齐到 `clock_ms`（oracle
+    /// `DecLightItemDrugTick = GetTickCount()`，`PlayObject.cs:969`）；否则
+    /// `clock - 0 > 500` 恒真 ⇒ 过期检查退化为每 tick 一次。
+    ///
+    /// 夹具里的 `PvpFlag` 已过期：若首调就检查，会立刻清位并返回一条 656 载荷。
+    ///
+    /// 牙①：把惰性初始化改回「构造时 0」⇒ 首调即 `out.len() == 1`、flag 被清 ⇒ 红。
+    #[test]
+    fn pk_check_throttle_holds_with_injected_wall_clock() {
+        const T0: i64 = 1_700_000_000_000;
+        let (mut w, id) = pk_world(T0, 61_000);
+
+        // 首调：只建立基线，不检查（过期者仍在）。
+        assert!(w.check_pk_status().is_empty(), "首调不得检查");
+        assert_eq!(
+            w.pk_check_tick, T0,
+            "游标必须惰性初始化到当前 clock_ms（不是 0）"
+        );
+        assert!(w.entities.get(id).unwrap().pvp_flag, "首调不得清位");
+
+        // 500ms 内：不检查。
+        w.clock_ms = T0 + 200;
+        assert!(w.check_pk_status().is_empty());
+        w.clock_ms = T0 + 500;
+        assert!(w.check_pk_status().is_empty(), "500ms 内不得检查");
+        assert!(w.entities.get(id).unwrap().pvp_flag);
+        assert_eq!(w.pk_check_tick, T0);
+
+        // 超过 500ms：检查一次 ⇒ 过期清位、恰一条 656 载荷（宿主 1:1 出帧）。
+        w.clock_ms = T0 + 600;
+        let out = w.check_pk_status();
+        assert_eq!(out.len(), 1, "过期者恰一条 656");
+        assert_eq!(out[0].target_id, id);
+        assert!(!w.entities.get(id).unwrap().pvp_flag, "过期清位");
+        assert_eq!(w.pk_check_tick, T0 + 500);
+        // 同一时刻再调：游标已推进到 T0+500，100ms < 500ms ⇒ 不重复检查。
+        assert!(w.check_pk_status().is_empty());
+    }
+
+    /// **T-78 回归**：未注入时钟（`clock_ms` 从 0 起）时，500ms 节流与修复前逐位一致
+    /// （首调 0 时刻建基线；`clock - tick > 500` 才检查，严格 `>`）。
+    #[test]
+    fn pk_check_throttle_unchanged_when_clock_starts_at_zero() {
+        let (mut w, id) = pk_world(0, 100_000); // pvp_name_color_tick = -100_000（已过期）
+        assert!(w.check_pk_status().is_empty());
+        assert_eq!(w.pk_check_tick, 0, "从 0 起的基线仍是 0");
+        for t in [200_i64, 500] {
+            w.clock_ms = t;
+            assert!(w.check_pk_status().is_empty(), "t={t} 未过 500ms 不得检查");
+            assert!(w.entities.get(id).unwrap().pvp_flag);
+            assert_eq!(w.pk_check_tick, 0);
+        }
+        w.clock_ms = 600;
+        let out = w.check_pk_status();
+        assert_eq!(out.len(), 1, "t=600 首次检查 ⇒ 过期者恰一条 656");
+        assert_eq!(out[0].target_id, id);
+        assert!(!w.entities.get(id).unwrap().pvp_flag);
+        assert_eq!(w.pk_check_tick, 500, "游标 += 周期（oracle 同式）");
+    }
+
+    /// **T-78 边界**：过期门是严格 `>`（oracle `:4359` `(now - PvpNameColorTick) > dwPKFlagTime`）
+    /// ⇒ 恰 60s 不清、60s+1ms 清且**恰一条** 656；节流门同样严格 `>` ⇒ 恰 500ms 不检查。
+    ///
+    /// 牙②：把节流门改 `>=` ⇒ `T0+500` 就检查、游标被推进 ⇒ 本用例红。
+    #[test]
+    fn pk_check_expiry_boundary_strictly_greater_reports_once() {
+        const T0: i64 = 1_700_000_000_000;
+        let (mut w, id) = pk_world(T0, 0); // pvp_name_color_tick = T0
+        assert!(w.check_pk_status().is_empty(), "首调只建基线");
+        assert_eq!(w.pk_check_tick, T0);
+
+        // 恰 500ms：节流门 `>` 严格 ⇒ 不检查、游标不动。
+        w.clock_ms = T0 + 500;
+        assert!(w.check_pk_status().is_empty());
+        assert_eq!(w.pk_check_tick, T0, "恰 500ms 不得推进游标（牙②）");
+
+        // 恰 60s：检查发生，但过期门 `>` 严格 ⇒ 不清位、零 656。
+        w.clock_ms = T0 + 60_000;
+        assert!(w.check_pk_status().is_empty(), "恰 60s 不得过期");
+        assert!(w.entities.get(id).unwrap().pvp_flag);
+        assert_eq!(w.pk_check_tick, T0 + 500, "周期门已过 ⇒ 游标推进");
+
+        // 60s+1ms：过期 ⇒ 恰一条 656、清位。
+        w.clock_ms = T0 + 60_001;
+        let out = w.check_pk_status();
+        assert_eq!(out.len(), 1, "恰在严格 > 后触发一次 656");
+        assert_eq!(out[0].target_id, id);
+        assert!(!w.entities.get(id).unwrap().pvp_flag);
+
+        // 再调：不重复投递。
+        assert!(w.check_pk_status().is_empty(), "656 不得重复");
+    }
+
+    /// `World::verify_map_time` 的 30s 门与刷新（`BaseObject.Base.cs:223-228` +
+    /// `Envirnoment.cs:858-897`）。
+    ///
+    /// 红检：删掉 30s 门（无条件刷新）⇒ 第一次 `assert!(!w.verify_map_time(id))` 红；
+    /// 删掉 `cell.obj_list[i].add_time = now` ⇒ 第二次后的 `add_time` 断言红。
+    #[test]
+    fn verify_map_time_gate_refreshes_cell_add_time() {
+        let mut w = World::new(64, 64);
+        let mut e = crate::EntitySpawn::new(0, "mon", 10, 10);
+        e.race = crate::entity::ACTOR_RACE_MONSTER;
+        let id = w.add_entity(e);
+        w.tick(); // clock=200，Enter 落格（add_time=200）；verify_tick 在 add_entity 时=0
+        assert_eq!(w.clock_ms, 200);
+        let cell_add = |w: &World| {
+            w.maps[0]
+                .cell(10, 10)
+                .obj_list
+                .iter()
+                .find(|o| o.actor_object && o.cell_obj_id == id)
+                .expect("格子项存在")
+                .add_time
+        };
+        assert_eq!(cell_add(&w), 200);
+        // 严格大于：`now - verify_tick == 30_000` 不动。
+        w.clock_ms = 30_000;
+        assert!(!w.verify_map_time(id), "等于 30s 不刷新（oracle 严格大于）");
+        assert_eq!(cell_add(&w), 200);
+        // > 30s ⇒ 刷新（`add_time = now`）。
+        w.clock_ms = 30_200;
+        assert!(w.verify_map_time(id));
+        assert_eq!(cell_add(&w), 30_200);
+        assert_eq!(w.entities.get(id).unwrap().verify_tick, 30_200);
+        // 再过 200ms 仍不到下一个 30s 门。
+        w.clock_ms = 30_400;
+        assert!(!w.verify_map_time(id));
+        assert_eq!(cell_add(&w), 30_200);
+    }
+
+    /// 找不到自己的 `CellObject` ⇒ `AddMapObject` 重新登记（`Envirnoment.cs:894`），
+    /// 并按 `baseObject.CellType` 落格（`AnimalObject.cs:86` = Monster）。
+    ///
+    /// 红检：删掉 `if !bo_verify { map.add_map_object(...) }` 支 ⇒ 格子项数断言红。
+    #[test]
+    fn verify_map_time_reinserts_missing_cell_entry() {
+        let mut w = World::new(64, 64);
+        let mut e = crate::EntitySpawn::new(0, "mon", 10, 10);
+        e.race = crate::entity::ACTOR_RACE_MONSTER;
+        let id = w.add_entity(e);
+        w.tick();
+        {
+            let (cell, _) = w.maps[0].get_cell_info_mut(10, 10);
+            cell.obj_list.clear();
+        }
+        w.entities.map_binding_mut(id).unwrap().add_to_mapped = false;
+        w.clock_ms = 30_200;
+        assert!(w.verify_map_time(id));
+        let cell = w.maps[0].cell(10, 10);
+        assert_eq!(cell.count(), 1, "找不到自己 ⇒ 重新 AddMapObject");
+        let obj = cell.obj_list[0];
+        assert_eq!(obj.cell_obj_id, id);
+        assert_eq!(obj.cell_type, crate::map::CellType::Monster);
+        assert_eq!(obj.add_time, 30_200);
+        assert!(w.entities.get(id).unwrap().add_to_mapped);
+    }
+
+    /// `Entity.verify_tick` 在落图/生成时 = 当时的 `clock_ms`（`BaseObject.cs:444`）。
+    ///
+    /// 红检：把 `entity.verify_tick = self.clock_ms;` 从 `add_entity` 删掉 ⇒ 恒 0 ⇒ 时钟
+    /// 从 0 直接跳到 30_200 的用例会按「已过门」刷新；本用例钉住落图时刻值。
+    #[test]
+    fn entity_verify_tick_stamped_at_enter_time() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 5_000;
+        let e = crate::EntitySpawn::new(0, "p", 10, 10);
+        let id = w.add_entity(e);
+        assert_eq!(w.entities.get(id).unwrap().verify_tick, 5_000);
+    }
+
+    /// **PL-1 判据①（tick 切分）**：玩家 `HP == 0 && !death_settled` 时，死亡结算发生在
+    /// `tick_tail`（= P32 槽位之后），`tick_head` 只结算非玩家。
+    ///
+    /// 牙：① 把 `tick_head` 的 `settle_deaths(&mut record, false)` 的过滤去掉（结算全部）⇒
+    /// 第一段 `rec.deaths.is_empty()` 红；② 删掉 `tick_tail` 的 `settle_deaths(record, true)`
+    /// ⇒ `death` / `death_tick` 断言红。
+    #[test]
+    fn pl1_player_death_settles_in_tick_tail() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        let _ = w.tick(); // Enter 落图（clock=200）
+        w.entities.get_mut(p).unwrap().vitals.hp = 0;
+        let mut rec = w.tick_head();
+        assert!(
+            rec.deaths.is_empty(),
+            "玩家死亡不得在 tick_head 结算（P32 复活门之前）: {rec:?}"
+        );
+        assert!(!w.entities.get(p).unwrap().death);
+        assert!(!w.entities.get(p).unwrap().death_settled);
+        w.tick_tail(&mut rec);
+        assert_eq!(rec.deaths.len(), 1, "tail 结算恰一次: {rec:?}");
+        assert_eq!(rec.deaths[0].0, p);
+        let e = w.entities.get(p).unwrap();
+        assert!(e.death && e.death_settled);
+        assert_eq!(e.death_tick, w.clock_ms, "DeathTick = 本 tick 时钟");
+        // 再一个完整 tick 不重复结算。
+        let rec2 = w.tick();
+        assert!(rec2.deaths.is_empty(), "死亡只结算一次: {rec2:?}");
+    }
+
+    /// **PL-1 判据②（怪物回归）**：非玩家死亡仍在 `tick_head` 结算（oracle 的怪物 `Run` 与
+    /// 玩家段无关），`tick_tail` 不重复结算。
+    ///
+    /// 牙：把 `settle_deaths` 的 `only_players` 过滤写成恒 `true`（head 只结算玩家）⇒
+    /// 第一段 `rec.deaths.len() == 1` 红。
+    #[test]
+    fn pl1_monster_death_still_settles_in_tick_head() {
+        let mut w = World::new(32, 32);
+        let mut m = crate::EntitySpawn::new(0, "mon", 10, 10);
+        m.race = ACTOR_RACE_MONSTER;
+        m.hp = 0;
+        let id = w.add_entity(m);
+        let mut rec = w.tick_head();
+        assert_eq!(rec.deaths.len(), 1, "怪物死亡在 head 结算: {rec:?}");
+        assert_eq!(rec.deaths[0].0, id);
+        assert!(w.entities.get(id).unwrap().death);
+        w.tick_tail(&mut rec);
+        assert_eq!(rec.deaths.len(), 1, "tail 不重复结算: {rec:?}");
+    }
+
+    /// **SuperMan 判据 (a)**（卡 `openmir2-superman-normnpc`）：守卫（race 11，
+    /// `SuperGuard : GuardUnit : NormNpc`，`NormNpc.cs:41` 置 `SuperMan=true`）受致死伤害后，
+    /// `BaseObject.Run:32-36` 先于 `:70-73` 回满 ⇒ 不调用 `Die()`，不置 `Death`、不进
+    /// `record.deaths`（无掉落/经验/退组）。关掉 AI 后在 `tick_head` 立即断言，排除靠
+    /// 后续怪物 `Run` 回满而误绿。
+    ///
+    /// **复核订正（2026-10-21）**：回满只发生在实体自己的 `Run` 段（oracle
+    /// `BaseObject.Base.cs:32-36`），不在 `settle_deaths` 提前做——否则会早于
+    /// `CastleDoor.Run` 的 HP 判据。
+    ///
+    /// 牙：删 `base_object_run_monster` 的 `run_super_man_refill` ⇒ Run 后 HP/MP 断言红；
+    /// 删整个 `if e.super_man` 支 ⇒ `Death`/`record.deaths` 红。
+    #[test]
+    fn superman_guard_lethal_damage_refills_without_die() {
+        let mut w = World::new(32, 32);
+        let mut guard = crate::EntitySpawn::new(0, "守卫", 10, 10);
+        guard.race = 11;
+        guard.max_hp = 300;
+        guard.hp = 0; // 致死伤害后的状态，未经过直接 Die 入口
+        guard.max_mp = 40;
+        guard.mp = 0;
+        crate::mongen::apply_monster_class_constants(&mut guard, 11, 0);
+        assert!(
+            guard.super_man,
+            "`NormNpc()` ctor 置 SuperMan=true（`NormNpc.cs:41`）"
+        );
+        let id = w.add_entity(guard);
+        // 本条测 `BaseObject.Run:32-36` 的回满次序，不是跳步门 ⇒ interval=0 关掉门。
+        w.set_process_monster_interval(0);
+        let rec = w.tick_head();
+        assert!(
+            rec.deaths.is_empty(),
+            "伤害路径不调用 Die（`BaseObject.Base.cs:32-36` 先于 `:70-73`）: {rec:?}"
+        );
+        let e = w.entities.get(id).unwrap();
+        assert!(!e.death, "伤害路径不得置位 `Death`");
+        assert_eq!(e.death_tick, 0, "`DeathTick` 也跳过");
+        assert!(!e.death_settled, "SuperMan 不进通用死亡闩锁");
+        assert!(!e.die_called, "伤害不伪造直接 Die 标记");
+        assert_eq!(
+            e.hp, 0,
+            "死亡结算段不得提前回满（回满在实体 Run 的 base 段）"
+        );
+        assert_eq!(e.mp, 0, "MP 同段不回满");
+        // 实体自己的 Run：`base_object_run_monster` 的 SuperMan 段回满。
+        crate::monai::monster_ai_tick(&mut w);
+        let e = w.entities.get(id).unwrap();
+        assert!(!e.death, "Run 段回满后 `HP == 0 ⇒ Die()` 仍不可达");
+        assert_eq!(e.hp, 300, "`BaseObject.Run:32-36` 回满 HP");
+        assert_eq!(e.mp, 40, "`BaseObject.Run:32-36` 回满 MP");
+    }
+
+    /// **F4 回归**：SuperMan 的直接 `Die()` 不得分派 `ZilKinZombi.Die()`（race 96
+    /// 不是 SuperMan）。给守卫放上非零 `ZilKillCount` 探针：若误走该覆写会减计数并抽 RNG。
+    /// 删除 SuperMan 支里的恒 no-op 调用前后本用例均绿；race 96 正向行为由
+    /// `mb2_r43_zilkin_die_counts_and_revive_gate` 覆盖。
+    #[test]
+    fn superman_direct_die_does_not_run_zil_kin_zombi_override() {
+        let mut w = World::new(32, 32);
+        let mut guard = crate::EntitySpawn::new(0, "守卫", 10, 10);
+        guard.race = 11;
+        guard.max_hp = 300;
+        guard.hp = 300;
+        guard.ai.zil_kill_count = 2;
+        crate::mongen::apply_monster_class_constants(&mut guard, 11, 0);
+        let id = w.add_entity(guard);
+        w.rng = RandomNumber::with_seed(777);
+        w.kill(id);
+        let rec = w.tick_head();
+        assert!(rec.deaths.is_empty());
+        let e = w.entities.get(id).unwrap();
+        assert_eq!(e.ai.zil_kill_count, 2, "不得进入 race 96 的 Die 覆写");
+        assert_eq!(e.re_alive_tick, 0);
+        assert_eq!(e.ai.zilkin_die_tick, 0);
+        assert_eq!(
+            w.rng.random(),
+            RandomNumber::with_seed(777).random(),
+            "SuperMan 直接 Die 不消费 ZilKin 的 Random(20)"
+        );
+    }
+
+    /// **SuperMan 判据 (d) 回归**：普通怪（非 SuperMan）死亡行为不变；对照支证明
+    /// `super_man` 是唯一门（同一 race 11 实体**不置位**时照常死亡）。
+    ///
+    /// 牙：把 `settle_deaths` 的 `if e.super_man` 写成恒 `true`（全员早退）⇒ 两条死亡断言红；
+    /// 把 `apply_monster_class_constants` 的 super_man 置位改成无条件 ⇒ 对照支红。
+    #[test]
+    fn non_superman_death_behaviour_unchanged() {
+        // 普通怪：照常死亡 + 进结算。
+        let mut w = World::new(32, 32);
+        let mut m = crate::EntitySpawn::new(0, "鸡", 10, 10);
+        m.race = ACTOR_RACE_MONSTER;
+        m.max_hp = 60;
+        m.hp = 0;
+        let id = w.add_entity(m);
+        let rec = w.tick();
+        assert_eq!(rec.deaths.len(), 1, "普通怪死亡仍结算: {rec:?}");
+        assert_eq!(rec.deaths[0].0, id);
+        assert!(w.entities.get(id).unwrap().death);
+        assert_eq!(w.entities.get(id).unwrap().death_tick, w.clock_ms);
+
+        // 对照：race 11 但**未经 ctor 置位**（super_man=false）⇒ 与普通怪同死。
+        let mut w2 = World::new(32, 32);
+        let mut g = crate::EntitySpawn::new(0, "守卫", 10, 10);
+        g.race = 11;
+        g.max_hp = 60;
+        g.hp = 0;
+        assert!(!g.super_man, "未走 ctor ⇒ 缺省 false");
+        let gid = w2.add_entity(g);
+        let rec2 = w2.tick();
+        assert_eq!(rec2.deaths.len(), 1, "super_man=false 的守卫照常死亡");
+        assert_eq!(rec2.deaths[0].0, gid);
+        assert!(w2.entities.get(gid).unwrap().death);
+    }
+
+    /// **PL-1 判据③（tail 段序）**：oracle `base.Run` 的 `Die()`（`:70-73`）在
+    /// `VerifyMapTime` + 钳制（`:223-245`）**之前**。
+    ///
+    /// 牙：把 `tick_tail` 里 `settle_deaths` 与 `verify_players_map_time` 的调用对调 ⇒
+    /// `tail_phase_log` 断言红。
+    #[test]
+    fn pl1_tail_order_die_before_verify_map_time() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        let _ = w.tick();
+        w.entities.get_mut(p).unwrap().vitals.hp = 0;
+        let mut rec = w.tick_head();
+        assert!(w.tail_phase_log.is_empty(), "head 不产生 tail 段序");
+        w.tick_tail(&mut rec);
+        assert_eq!(
+            w.tail_phase_log,
+            vec![TailPhase::Die, TailPhase::VerifyMapTime],
+            "oracle base.Run: Die(:70-73) 早于 VerifyMapTime(:223-245)"
+        );
+    }
+
+    /// **PL-1 判据④（LastHiter 快照）**：P32 必须看到 `expire_hitters()` **清理前**的
+    /// `LastHiter`（oracle 的清理在 `base.Run:119-132`，晚于 P32 `PlayObject.Message.cs:747-763`）。
+    ///
+    /// 牙：把快照采集移到 `expire_hitters()` 之后 ⇒ `snap.last_hiter` 变 `None` ⇒ 红。
+    #[test]
+    fn pl1_player_hiter_snapshot_precedes_expire_hitters() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        let mut m = crate::EntitySpawn::new(0, "mon", 11, 10);
+        m.race = ACTOR_RACE_MONSTER;
+        let mid = w.add_entity(m);
+        let _ = w.tick();
+        let stale_tick = w.clock_ms - 30_001; // 严格大于 30s ⇒ expire_hitters 会清
+        {
+            let e = w.entities.get_mut(p).unwrap();
+            e.attribution.last_hiter = Some(mid);
+            e.attribution.last_hiter_tick = stale_tick;
+        }
+        let _ = w.tick_head();
+        assert_eq!(
+            w.entities.get(p).unwrap().last_hiter,
+            None,
+            "expire_hitters 在 head 清掉 30s 过期的 LastHiter"
+        );
+        let snap = w
+            .player_hiter_snapshot
+            .iter()
+            .find(|s| s.actor_id == p)
+            .expect("玩家快照存在");
+        assert_eq!(snap.last_hiter, Some(mid), "快照保留清理前的值（P32 口径）");
+        assert_eq!(snap.last_hiter_tick, stale_tick);
+    }
+
+    /// **PL-1 判据⑤（`:230-245` 钳制段）**：`VerifyTick` 30s 门内、`VerifyMapTime` 之后执行；
+    /// `HP > MaxHP ⇒ HP = MaxHP-1`、`MP > MaxMP ⇒ MP = MaxMP-1`，且 C# 的 `(ushort)(Max-1)`
+    /// 在 `Max == 0` 时回绕到 65535（照抄，不修）；玩家出 `HealthSpellChanged` 记录。
+    ///
+    /// 牙：删掉 `clamp_overflow_abilitys` 调用 ⇒ HP/MP 不变、`verify_health_changes` 空 ⇒ 红。
+    #[test]
+    fn pl1_verify_map_time_clamps_overflow_hp_mp() {
+        let mut w = World::new(32, 32);
+        let p = w.add_entity(player(1, "hero", 10, 10, 10));
+        let mut q = player(2, "wrap", 12, 12, 10);
+        q.max_hp = 0; // 回绕向量：HP 1 > MaxHP 0 ⇒ (ushort)(0-1) = 65535
+        q.hp = 1;
+        let q = w.add_entity(q);
+        let _ = w.tick();
+        {
+            let e = w.entities.get_mut(p).unwrap();
+            e.vitals.hp = 250;
+            e.vitals.max_hp = 200;
+            e.vitals.mp = 300;
+            e.vitals.max_mp = 200;
+        }
+        // 未过 30s 门 ⇒ 钳制不执行（oracle 钳制在 VerifyTick 门内）。
+        w.clock_ms += 100;
+        let mut rec = TickRecord::default();
+        w.tick_tail(&mut rec);
+        assert_eq!(w.entities.get(p).unwrap().hp, 250, "30s 门内不钳制");
+        assert!(rec.verify_health_changes.is_empty());
+        // 过门 ⇒ MaxHP-1 / MaxMP-1 + 玩家 HealthSpellChanged 记录。
+        w.clock_ms += 30_000;
+        let mut rec = TickRecord::default();
+        w.tick_tail(&mut rec);
+        let e = w.entities.get(p).unwrap();
+        assert_eq!((e.hp, e.mp), (199, 199), "HP=MaxHP-1 / MP=MaxMP-1");
+        assert_eq!(
+            rec.verify_health_changes,
+            vec![(p, 199, 199, true, true), (q, u16::MAX, 0, true, false)],
+            "两个玩家各一条 HealthSpellChanged（槽位序；flag = 实际命中的分支）"
+        );
+        assert_eq!(
+            w.entities.get(q).unwrap().hp,
+            u16::MAX,
+            "ushort 回绕：(ushort)(0-1) = 65535（照抄 oracle 缺陷）"
+        );
+    }
+
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）· N1/Y1**：
+    /// `PlayCloneObject`（`spawn_clone`，`race==PLAY`、`!ghost`、**无真实会话**）的 hides
+    /// 观察者必须标 `Clone`，**不得**与真玩家 `Player` 混淆（否则 drain 的 `missing_online`
+    /// 会把克隆体当玩家缺失打 WRN）。
+    ///
+    /// 场景：真玩家 `caster` 与它造出的克隆体同格，二者都能看见玩家 `target`；`target` 走出
+    /// 视野后，两边的 hides 事件同时出现，类别分别为 `Player` / `Clone`。
+    ///
+    /// 红检：把生产点分类改回「race==PLAY ⇒ Player」（忽略 `is_clone`）⇒ 本用例
+    /// `kind_of(clone) == Some(Clone)` 必红。
+    #[test]
+    fn hides_classify_play_clone_observer_as_clone_not_player() {
+        let mut w = World::new(64, 64);
+        w.open_session("caster");
+        let caster = w
+            .enter_map(
+                "caster",
+                {
+                    let mut e = crate::EntitySpawn::new(0, "caster", 10, 10);
+                    e.view_range = 12;
+                    e.want_ref_msg = true;
+                    e
+                },
+                0,
+            )
+            .expect("caster 进图");
+        w.open_session("target");
+        let target = w
+            .enter_map("target", crate::EntitySpawn::new(0, "target", 12, 10), 0)
+            .expect("target 进图");
+        let clone = crate::slave::spawn_clone(&mut w, caster, 2)
+            .expect("主人在世界 ⇒ 应造出克隆体")
+            .clone_id;
+        assert!(
+            w.entities
+                .get(clone)
+                .is_some_and(|e| e.is_clone && !e.is_slave),
+            "前提：克隆体是 is_clone（不是 slave）"
+        );
+
+        // 首轮扫描：caster 与 clone 都看见 target（克隆体走 PlayObject ctor 的 1000ms 节拍）。
+        for _ in 0..6 {
+            w.tick();
+        }
+        assert!(
+            w.entities
+                .get(clone)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == target),
+            "前提：克隆体首轮看得见 target"
+        );
+
+        // target 向东走 20 格出视野。
+        assert!(w.try_step_now(target, 1, 0, 20), "target 应能向东走 20 格");
+        let mut hides = Vec::new();
+        let mut kinds = Vec::new();
+        for _ in 0..6 {
+            let rec = w.tick();
+            hides.extend(rec.hides);
+            kinds.extend(rec.hide_observer_kinds);
+        }
+        assert!(
+            hides.contains(&(caster, target)),
+            "真玩家 caster 的消失事件：{hides:?}"
+        );
+        assert!(
+            hides.contains(&(clone, target)),
+            "克隆体观察者的消失事件：{hides:?}"
+        );
+        let kind_of = |observer: i32| {
+            kinds
+                .iter()
+                .find_map(|&(o, t, kind)| (o == observer && t == target).then_some(kind))
+        };
+        assert_eq!(kind_of(caster), Some(HideObserverKind::Player));
+        assert_eq!(
+            kind_of(clone),
+            Some(HideObserverKind::Clone),
+            "克隆体必须是 Clone（不是 Player）"
+        );
+    }
+
+    /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）**：`TickRecord::hides` 的观察者
+    /// 分类标注——玩家观察者 ⇒ `Player`；自扫怪观察者（Guard/ArcherGuard/SlaveMonster/下属）⇒
+    /// `NonPlayer`。`hides` 本体（`(observer, target)` 内容与顺序）不变。
+    ///
+    /// 场景：玩家 `p` 与 Guard(11) 怪 `g` 同屏、共同看得见玩家 `t`；首轮扫描后把 `t` 摘出
+    /// 世界（格 + 实体）⇒ 下一轮两者的 AOI 都把 `t` 标 `Hidden` ⇒ `hides` 同时含 `(p, t)`
+    /// 与 `(g, t)`，类别分别为 `Player` / `NonPlayer`。
+    ///
+    /// 红检：删掉生产点的 `record.hide_observer_kinds.push(...)` ⇒ 末尾「每个 hides 事件都
+    /// 必须有标注」与两条 `kind_of` 断言必红；把两臂的类别互换 ⇒ `kind_of` 断言必红。
+    #[test]
+    fn hides_classify_player_and_self_scan_monster_observers() {
+        let mut w = World::new(64, 64);
+
+        w.open_session("p");
+        let p = w
+            .enter_map(
+                "p",
+                {
+                    let mut e = crate::EntitySpawn::new(0, "p", 20, 20);
+                    e.view_range = 12;
+                    e.want_ref_msg = true;
+                    e
+                },
+                0,
+            )
+            .expect("p 进图");
+        // Guard(11) ∈ `monster_self_scans`：会主动 `SearchViewRange`。
+        let g = {
+            let mut e = crate::EntitySpawn::new(9_001, "g", 20, 24);
+            e.race = 11;
+            e.view_range = 12;
+            e.ai.search_time = 1_000;
+            let id = w.entities.insert(e);
+            assert!(w.enter_world(id), "g 落图");
+            id
+        };
+        w.open_session("t");
+        let t = w
+            .enter_map("t", crate::EntitySpawn::new(0, "t", 20, 22), 0)
+            .expect("t 进图");
+
+        // 首轮扫描（玩家/Guard 的 SearchTime=1000，200ms tick ⇒ 1200ms 命中）：两者都把
+        // `t` 收进视野，无消失事件。
+        let mut first_hides = Vec::new();
+        for _ in 0..6 {
+            first_hides.extend(w.tick().hides);
+        }
+        assert!(
+            first_hides.is_empty(),
+            "首轮只出现、不消失：{first_hides:?}"
+        );
+        assert!(
+            w.entities
+                .get(p)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == t),
+            "前提：p 首轮看得见 t"
+        );
+        assert!(
+            w.entities
+                .get(g)
+                .unwrap()
+                .visible_actors
+                .iter()
+                .any(|v| v.target == t),
+            "前提：自扫怪 g 首轮看得见 t"
+        );
+
+        // `t` 走出 p/g 的视野（同图同步移动；实体仍在表里——`removed` 的守卫要求目标实体存在
+        // 且 `!FixedHideMode && !Ghost`）⇒ 下一轮 p/g 的扫描都把它标 `Hidden`。
+        assert!(w.try_step_now(t, 1, 0, 20), "t 应能向东走 20 格");
+
+        let mut hides = Vec::new();
+        let mut kinds = Vec::new();
+        for _ in 0..6 {
+            let rec = w.tick();
+            hides.extend(rec.hides);
+            kinds.extend(rec.hide_observer_kinds);
+        }
+        assert!(
+            hides.contains(&(p, t)),
+            "玩家观察者 p 的消失事件：{hides:?}"
+        );
+        assert!(
+            hides.contains(&(g, t)),
+            "自扫怪观察者 g 的消失事件：{hides:?}"
+        );
+        let kind_of = |observer: i32| {
+            kinds
+                .iter()
+                .find_map(|&(o, target, kind)| (o == observer && target == t).then_some(kind))
+        };
+        assert_eq!(kind_of(p), Some(HideObserverKind::Player));
+        assert_eq!(kind_of(g), Some(HideObserverKind::NonPlayer));
+        // 每个 `hides` 事件都必须有标注（漏标 ⇒ 宿主 fail-safe 按玩家处理，需在此先咬住）。
+        for (observer, target) in &hides {
+            assert!(
+                kinds
+                    .iter()
+                    .any(|&(o, t2, _)| o == *observer && t2 == *target),
+                "hides 事件 ({observer}, {target}) 缺观察者类别标注"
+            );
+        }
+    }
+}
+
+/// **PL-2 / P31** 判据（`PlayObject.Message.cs:738-745`）。
+#[cfg(test)]
+mod p31_auto_get_exp_tests {
+    use super::*;
+
+    fn player_world(exp: i32, max_exp: i32) -> (World, i32) {
+        let mut w = World::new(16, 16);
+        // `Exps.conf` 的升级表（下标 = 新等级）。
+        w.need_exps[1] = 1000;
+        w.need_exps[2] = 2000;
+        let mut e = crate::EntitySpawn::new(0, "p31", 2, 2);
+        e.level = 1;
+        e.exp = exp;
+        e.max_exp = max_exp;
+        let id = w.add_entity(e);
+        (w, id)
+    }
+
+    /// 判据 1：门是**严格 `>`**；命中先刷新 `tick`，未命中不刷新。
+    #[test]
+    fn p31_gate_strict_and_tick_refresh() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        let mut st = AutoGetExpState {
+            tick: 1_000,
+            time_ms: 5_000,
+            point: 7,
+            ..Default::default()
+        };
+        assert!(
+            w.auto_get_exp(id, &mut st, 6_000, false).is_none(),
+            "elapsed == time ⇒ 严格 > 不触发"
+        );
+        assert_eq!(st.tick, 1_000, "未命中不得刷新 tick");
+        let a = w
+            .auto_get_exp(id, &mut st, 6_001, false)
+            .expect("elapsed > time 命中");
+        assert_eq!(a, (id, 7, false, 1));
+        assert_eq!(st.tick, 6_001, "命中先刷新 AutoGetExpTick");
+        assert_eq!(w.entities.get(id).unwrap().exp, 7, "Abil.Exp += point");
+    }
+
+    /// 判据 2：`point <= 0` 整段不发（且不刷新 tick）。
+    #[test]
+    fn p31_non_positive_point_is_noop() {
+        for point in [0, -5] {
+            let (mut w, id) = player_world(3, 10_000_000);
+            let mut st = AutoGetExpState {
+                tick: 0,
+                time_ms: 0,
+                point,
+                ..Default::default()
+            };
+            assert!(w.auto_get_exp(id, &mut st, 10_000, false).is_none());
+            assert_eq!(st.tick, 0);
+            assert_eq!(w.entities.get(id).unwrap().exp, 3);
+        }
+    }
+
+    /// 判据 3：`AutoGetExpEnvir` 两态——`null` 不判地图；非空必须**同图**。
+    #[test]
+    fn p31_envir_null_or_same_map() {
+        // 两张图：玩家在 0 号图，`AutoGetExpEnvir` 试 0 / 1 两态。
+        let mut w = World::with_maps(vec![(16, 16), (16, 16)]);
+        w.need_exps[1] = 1000;
+        let mut e = crate::EntitySpawn::new(0, "p31", 2, 2);
+        e.level = 1;
+        e.exp = 0;
+        e.max_exp = 10_000_000;
+        let id = w.add_entity(e);
+        assert_eq!(w.entities.get(id).unwrap().map_id, 0);
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 100,
+            point: 9,
+            envir_map_id: Some(1),
+            ..Default::default()
+        };
+        assert!(
+            w.auto_get_exp(id, &mut st, 101, false).is_none(),
+            "Envir = map1、玩家在 map0 ⇒ 不发"
+        );
+        assert_eq!(st.tick, 0, "地图门失败不刷新");
+        st.envir_map_id = Some(0);
+        assert!(
+            w.auto_get_exp(id, &mut st, 101, false).is_some(),
+            "同图 ⇒ 发"
+        );
+        st.tick = 0;
+        st.envir_map_id = None;
+        assert!(
+            w.auto_get_exp(id, &mut st, 101, false).is_some(),
+            "null ⇒ 不判地图"
+        );
+    }
+
+    /// 判据 4（**先刷新 Tick，再判安全区**）：安全区门失败也吃掉这一周期。
+    #[test]
+    fn p31_refresh_precedes_safe_zone_check() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 1_000,
+            point: 5,
+            in_safe_zone: true,
+            ..Default::default()
+        };
+        // 不在安全区（宿主传入 `false`）⇒ 不发，但 tick 已刷新。
+        assert!(w.auto_get_exp(id, &mut st, 1_001, false).is_none());
+        assert_eq!(
+            st.tick, 1_001,
+            "安全区门失败必须已刷新 Tick（oracle 语句序）"
+        );
+        assert_eq!(w.entities.get(id).unwrap().exp, 0);
+        // 同一周期内（未过 1s）即使传入安全区也不发。
+        assert!(w.auto_get_exp(id, &mut st, 1_500, true).is_none());
+        // 下一周期 ⇒ 发。
+        assert!(w.auto_get_exp(id, &mut st, 2_002, true).is_some());
+        assert_eq!(w.entities.get(id).unwrap().exp, 5);
+        // `AutoGetExpInSafeZone = false` ⇒ 无论安全区与否都发。
+        st.in_safe_zone = false;
+        assert!(w.auto_get_exp(id, &mut st, 3_003, false).is_some());
+    }
+
+    /// 判据 5（**裸 `GetExp` 不乘倍率**）：系统/人物/地图倍率全开，加值仍 == point。
+    #[test]
+    fn p31_raw_get_exp_ignores_all_multipliers() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        w.combat_config.kill_mon_exp_multiple = 3;
+        w.combat_config.mn_kill_mon_exp_multiple = 5;
+        w.entities.get_mut(id).unwrap().player_run.kill_mon_exp_rate = 250;
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 13,
+            ..Default::default()
+        };
+        let a = w.auto_get_exp(id, &mut st, 1, false).expect("命中");
+        assert_eq!(a.1, 13, "GetExp(point) 直加：不得乘任何倍率");
+        assert_eq!(w.entities.get(id).unwrap().exp, 13);
+    }
+
+    /// 判据 6：升级链由裸 `GetExp` 驱动（单步 `if`、`Level++` 门、`MaxExp` 重取）。
+    #[test]
+    fn p31_levelup_uses_raw_get_exp_block() {
+        let (mut w, id) = player_world(990, 1_000);
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 20,
+            ..Default::default()
+        };
+        let a = w.auto_get_exp(id, &mut st, 1, false).expect("命中");
+        assert_eq!(a, (id, 20, true, 2), "进升级块 ⇒ 宿主出 53/45/52/752");
+        let e = w.entities.get(id).unwrap();
+        assert_eq!(e.exp, 10, "990 + 20 - 1000");
+        assert_eq!(e.level, 2);
+        assert_eq!(e.max_exp, 2_000, "MaxExp = get_level_exp(level=2)");
+    }
+
+    /// 判据 7：**无 `!Death` 门**（oracle 原样）+ 死亡不清字段（调用方不清 tick）。
+    #[test]
+    fn p31_no_death_gate() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        w.entities.get_mut(id).unwrap().life_cycle.death = true;
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 4,
+            ..Default::default()
+        };
+        assert!(
+            w.auto_get_exp(id, &mut st, 1, false).is_some(),
+            "死玩家照跑"
+        );
+        assert_eq!(w.entities.get(id).unwrap().exp, 4);
+    }
+
+    /// 判据 8：**0 抽数**——P31 不得推进共享 RNG（五批 trace 不变的结构前提）。
+    #[test]
+    fn p31_consumes_no_rng() {
+        let (mut w, id) = player_world(0, 10_000_000);
+        let mut control = World::new(16, 16);
+        let mut st = AutoGetExpState {
+            tick: 0,
+            time_ms: 0,
+            point: 6,
+            ..Default::default()
+        };
+        assert!(w.auto_get_exp(id, &mut st, 1, false).is_some());
+        // 同种子 42 的两条流：P31 后下一次抽数必须与未结算的对照流相同。
+        assert_eq!(w.rng.random_below(1_000), control.rng.random_below(1_000));
+    }
+}
+
+/// **PL-4 / P22**：`BaseObjectMove` / `MoveToHome` 的落地（`PlayObject.Base.cs:2306-2333`）。
+#[cfg(test)]
+mod pl4_base_object_move_tests {
+    use super::*;
+    use crate::map::CellAttribute;
+    use crate::ACTOR_RACE_PLAY;
+    use mir2_shared::rng::RandomNumber;
+
+    /// 两张图（0 = 当前，1 = Home），玩家已进世界。
+    fn world_with_player() -> (World, i32) {
+        let mut w = World::with_maps(vec![(16, 16), (32, 32)]);
+        w.open_session("hero");
+        let mut e = crate::EntitySpawn::new(0, "hero", 5, 5);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w.enter_map("hero", e, 0).expect("进图");
+        (w, id)
+    }
+
+    /// 判据 7（R）：`HomeX/HomeY != 0` 且落点可走 ⇒ **0 抽**、目标格 = Home 坐标、
+    /// `MapChange{space_move_show: Some(false)}`（= 801）。
+    #[test]
+    fn p22_move_home_fixed_walkable_consumes_no_draws() {
+        let (mut w, id) = world_with_player();
+        let out = w.base_object_move_player(
+            "hero",
+            id,
+            Some(HomeMoveTarget::Fixed {
+                map_id: 1,
+                x: 7,
+                y: 9,
+            }),
+        );
+        assert!(out.map_found && out.moved && out.space_moved);
+        assert_eq!((out.map_id, out.x, out.y), (1, 7, 9));
+        assert_eq!(w.entities.get(id).unwrap().map_id, 1);
+        assert_eq!(w.session("hero").unwrap().map_id, 1);
+        // 0 抽：下一抽与同种子对照流一致。
+        assert_eq!(
+            w.rng.random_below(1000),
+            RandomNumber::with_seed(42).random_below(1000)
+        );
+        // 换图事件 = `nInt == 0` ⇒ SM_SPACEMOVE_SHOW(801)，不是 SHOW2。
+        let changes = w.sessions.map_changes();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].map_id, 1);
+        assert_eq!(changes[0].space_move_show, Some(false));
+    }
+
+    /// 判据 7（R）：`HomeX=0`（Random 支）⇒ `merchant` 组恰 2 抽（`Random(W-nEgdey-1)`，
+    /// `nEgdey` 按**目标图**高：32 ⇒ 20？不——32 < 150 且 >= 30 ⇒ 20）。
+    ///
+    /// 牙：用当前图（16）的宽高算抽数 ⇒ 本用例红。
+    #[test]
+    fn p22_move_home_random_draws_target_map_size() {
+        // 目标图用 (32, 64)（与当前图 (16,16) 尺寸不同），两抽的参数不同 ⇒ 次序可辨。
+        let mut w = World::with_maps(vec![(16, 16), (32, 64)]);
+        w.open_session("hero");
+        let mut e = crate::EntitySpawn::new(0, "hero", 5, 5);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w.enter_map("hero", e, 0).expect("进图");
+        let _ = w.sessions.drain_map_changes();
+        // 目标图 (32,64)：`nEgdey = 20`（64 <150 且 >=30）⇒ X 抽 `Random(32-20-1=11)`、
+        // Y 抽 `Random(64-20-1=43)`。**顺序 X 先于 Y**（交换次序 ⇒ 断言必红）。
+        // 选一个两抽结果不同的种子，让「X/Y 次序」可辨（同值种子下交换不可见）。
+        let mut seed = 1;
+        let (nx, ny) = loop {
+            let mut r = RandomNumber::with_seed(seed);
+            let a = r.random_below(11) + 20;
+            let b = r.random_below(43) + 20;
+            if a != b {
+                break (a, b);
+            }
+            seed += 1;
+        };
+        w.rng = RandomNumber::with_seed(seed);
+        let out = w.base_object_move_player("hero", id, Some(HomeMoveTarget::Random { map_id: 1 }));
+        assert!(out.moved);
+        assert_eq!((out.x, out.y), (nx, ny), "两抽的参数按目标图宽高、X 先于 Y");
+        // 恰 2 抽：下一抽与重放一致。
+        let mut replay = RandomNumber::with_seed(seed);
+        replay.random_below(11);
+        replay.random_below(43);
+        assert_eq!(w.rng.random_below(1000), replay.random_below(1000));
+        assert_eq!(out.map_id, 1);
+    }
+
+    /// 判据 9（R）：`FindMap == null`（target=None）⇒ 0 抽、不动、无换图簇。
+    ///
+    /// `MoveToHome` 的 800 已由宿主在调用前发（见 host 用例）；世界侧什么都不做。
+    #[test]
+    fn p22_move_home_no_map_is_noop() {
+        let (mut w, id) = world_with_player();
+        let _ = w.sessions.drain_map_changes();
+        let out = w.base_object_move_player("hero", id, None);
+        assert_eq!(
+            out,
+            BaseObjectMoveOutcome {
+                map_found: false,
+                moved: false,
+                space_moved: false,
+                map_id: 0,
+                x: 5,
+                y: 5
+            }
+        );
+        assert_eq!(w.session("hero").unwrap().map_id, 0);
+        assert!(w.sessions.map_changes().is_empty());
+        assert_eq!(
+            w.rng.random_below(1000),
+            RandomNumber::with_seed(42).random_below(1000)
+        );
+    }
+
+    /// 判据 7（R）：定坐标落点不可走 ⇒ 进 `space_move` 移位环（先按 `n18=3` 步进；
+    /// 到边界后抽 `Random(W)`/`Random(H)`）。这里把起点设在右下角，强制走两次 `Random(32)`。
+    #[test]
+    fn p22_move_home_blocked_start_enters_space_move_ring() {
+        let (mut w, id) = world_with_player();
+        let mut attrs = vec![CellAttribute::Walk; 32 * 32];
+        attrs[30 * 32 + 30] = CellAttribute::HighWall; // (30,30) 列主序 x*H+y
+        assert_eq!(w.maps[1].set_cell_attributes(&attrs), 32 * 32);
+        let _ = w.sessions.drain_map_changes();
+        let out = w.base_object_move_player(
+            "hero",
+            id,
+            Some(HomeMoveTarget::Fixed {
+                map_id: 1,
+                x: 30,
+                y: 30,
+            }),
+        );
+        assert!(out.moved);
+        // Height=32 < 50 ⇒ n1C=2；`W-n1C-1 == 29`，起点两轴都 >= 29 ⇒ 各抽一次 `Random(32)`。
+        let mut replay = RandomNumber::with_seed(42);
+        let rx = replay.random_below(32);
+        let ry = replay.random_below(32);
+        assert_eq!((out.x, out.y), (rx, ry), "移位环的两次 Random(32)");
+        assert_eq!(w.rng.random_below(1000), replay.random_below(1000));
+    }
+
+    /// 判据 9（R）补充：201 轮仍不可走 ⇒ 不落地、不记 `MapChange`、坐标不变（oracle 回滚）。
+    #[test]
+    fn p22_move_home_fully_blocked_rolls_back() {
+        let (mut w, id) = world_with_player();
+        let attrs = vec![CellAttribute::HighWall; 32 * 32];
+        assert_eq!(w.maps[1].set_cell_attributes(&attrs), 32 * 32);
+        let _ = w.sessions.drain_map_changes();
+        let out = w.base_object_move_player(
+            "hero",
+            id,
+            Some(HomeMoveTarget::Fixed {
+                map_id: 1,
+                x: 3,
+                y: 4,
+            }),
+        );
+        assert!(out.map_found);
+        assert!(!out.moved, "201 轮仍不可走 ⇒ 回滚");
+        assert_eq!((out.map_id, out.x, out.y), (0, 5, 5), "坐标/地图不动");
+        assert!(w.sessions.map_changes().is_empty());
+        assert_eq!(w.entities.get(id).unwrap().map_id, 0);
+    }
+
+    /// **F5 非方图**：`space_move` 的两次随机跳点必须按**目标图的宽/高各自**抽
+    /// （`Random(Width)` 给 X、`Random(Height)` 给 Y）；方图夹具交换 W/H 不可见。
+    ///
+    /// 图 (100, 40)：`n18=10`（Width>=80）、`n1C=2`（Height<50）。起点 (99,39) 不可走
+    /// ⇒ `x >= 100-2-1` ⇒ `x=Random(100)`；`y >= 40-2-1` ⇒ `y=Random(40)`。
+    /// 牙：把两抽的 W/H 互换 ⇒ 期望值不同（且 Y 可能越界后重抽）⇒ 红。
+    #[test]
+    fn p22_move_home_non_square_ring_uses_width_and_height() {
+        let mut w = World::with_maps(vec![(16, 16), (100, 40)]);
+        w.open_session("hero");
+        let mut e = crate::EntitySpawn::new(0, "hero", 5, 5);
+        e.race = ACTOR_RACE_PLAY;
+        let id = w.enter_map("hero", e, 0).expect("进图");
+        // 只挡起点 (99,39)（列主序 x*Height+y），其余可走。
+        let mut attrs = vec![CellAttribute::Walk; 100 * 40];
+        attrs[99 * 40 + 39] = CellAttribute::HighWall;
+        assert_eq!(w.maps[1].set_cell_attributes(&attrs), 100 * 40);
+        let _ = w.sessions.drain_map_changes();
+        // 选一个落点不等于被挡起点的种子（否则移位环会再抽一轮）。
+        let mut seed = 42;
+        let (rx, ry) = loop {
+            let mut r = RandomNumber::with_seed(seed);
+            let a = r.random_below(100);
+            let b = r.random_below(40);
+            if (a, b) != (99, 39) {
+                break (a, b);
+            }
+            seed += 1;
+        };
+        w.rng = RandomNumber::with_seed(seed);
+        let out = w.base_object_move_player(
+            "hero",
+            id,
+            Some(HomeMoveTarget::Fixed {
+                map_id: 1,
+                x: 99,
+                y: 39,
+            }),
+        );
+        assert!(out.moved);
+        assert_eq!(
+            (out.x, out.y),
+            (rx, ry),
+            "X 抽 Random(Width=100)、Y 抽 Random(Height=40)（互换即红）"
+        );
+        let mut replay = RandomNumber::with_seed(seed);
+        replay.random_below(100);
+        replay.random_below(40);
+        assert_eq!(w.rng.random_below(1000), replay.random_below(1000));
+        assert_eq!(out.map_id, 1);
+    }
+}
+
+/// **Lane B（城堡实体挂图）**：门/墙运行时接线判据（C3b / C5 / C6 / C7 / C8）。
+#[cfg(test)]
+mod castle_wire_tests {
+    use super::*;
+    use crate::castle::{
+        apply_structure_events, door_map_xy_flag_ops, CastleSiegeConfig, CastleUnit, DefenseRole,
+        StructureEvent, UserCastle,
+    };
+    use crate::entity::CastleBinding;
+
+    fn castle_world(race: u8, hp: u16, max_hp: u16, dir: u8) -> (World, i32) {
+        let mut w = World::new(20, 20);
+        let mut e = crate::EntitySpawn::new(1, "castle-unit", 5, 5);
+        e.race = race;
+        e.hp = hp;
+        e.max_hp = max_hp;
+        e.ai.dir = dir;
+        let id = w.add_entity(e);
+        let unit = CastleUnit {
+            entity_id: Some(id),
+            x: 5,
+            y: 5,
+            hp: i32::from(hp),
+            max_hp: i32::from(max_hp),
+            dir,
+            ..CastleUnit::default()
+        };
+        let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+        if race == 110 {
+            castle.main_door = Some(unit);
+        } else {
+            castle.left_wall = Some(unit);
+        }
+        w.castles.push(castle);
+        let role = if race == 110 {
+            DefenseRole::MainDoor
+        } else {
+            DefenseRole::LeftWall
+        };
+        w.entities.get_mut(id).unwrap().spawn.castle_binding = Some(CastleBinding {
+            castle_index: 0,
+            role,
+        });
+        w.enable_monster_ai();
+        // 本组用例只测 `Castle*Run` 段；`ProcessMonsterInterval` 跳步门是另一条轴，
+        // 用 oracle 合法的 `interval = 0`（每次到点都 Run）把它关掉。
+        w.set_process_monster_interval(0);
+        (w, id)
+    }
+
+    fn unit_of(w: &World) -> CastleUnit {
+        w.castles[0]
+            .defense_unit(DefenseRole::MainDoor)
+            .or_else(|| w.castles[0].defense_unit(DefenseRole::LeftWall))
+            .copied()
+            .expect("unit")
+    }
+
+    fn expected_door_flag2_events() -> Vec<StructureEvent> {
+        door_map_xy_flag_ops(2)
+            .into_iter()
+            .map(|(dx, dy, walk)| StructureEvent::SetMapXyFlag {
+                x: 5 + dx,
+                y: 5 + dy,
+                walk,
+            })
+            .collect()
+    }
+
+    /// **C3b `castle_unit_hp_tracks_entity_after_struck`**：受击后 `CastleUnit.hp` 跟实体走，
+    /// 且同 tick 的 `door_run` 用新 HP 算 `Dir`。
+    ///
+    /// 牙：把 `unit.hp` 固定为生成值（不在每 tick 同步）⇒ 本用例红。
+    #[test]
+    fn castle_unit_hp_tracks_entity_after_struck() {
+        let (mut w, id) = castle_world(110, 9999, 10000, 5);
+        let attacker = crate::EntitySpawn::new(99, "hero", 6, 5);
+        let mut rng = std::mem::replace(&mut w.rng, RandomNumber::with_seed(0));
+        let cfg = w.combat_config;
+        let (_, killed) = {
+            // S4a：`apply_struck_damage` 在生成期载体上跑（属性真值在组件）⇒ 结算后回写。
+            let mut target = w.entities.spawn_cloned(id).unwrap();
+            let out = crate::combat::apply_struck_damage(
+                &mut rng,
+                &attacker,
+                &mut target,
+                5000,
+                None,
+                &cfg,
+            );
+            if let Some(v) = w.entities.vitals_mut(id) {
+                v.hp = target.hp;
+            }
+            if let Some(inv) = w.entities.inventory_mut(id) {
+                inv.use_items = target.use_items;
+            }
+            out
+        };
+        w.rng = rng;
+        assert!(!killed);
+        let after_hp = w.entities.get(id).unwrap().hp;
+        assert!(after_hp < 9999, "受击必须扣血");
+        let _rec = w.tick();
+        let unit = unit_of(&w);
+        assert_eq!(
+            unit.hp,
+            i32::from(after_hp),
+            "CastleUnit.hp 必须等于实体权威 HP（防双份状态漂移）"
+        );
+        let n08 = 3 - crate::castle::hutil32_round(f64::from(after_hp) / 10000.0 * 3.0);
+        if n08 < 3 {
+            assert_eq!(i32::from(unit.dir), n08, "door_run 用实体 HP 重算 Dir");
+        }
+    }
+
+    /// **C5 `door_die_sets_flag2_after_death`**：死亡 ⇒ `death` + 12 项有序掩码；B-15 下已开/已关
+    /// 的门板格仍是 `LowWall`（破门不能恢复）。
+    ///
+    /// 牙：删 `door_die` 或把 `nFlag=2` 改成 1 ⇒ 事件数/顺序红；在 `base.Die` 之前发掩码 ⇒ 红。
+    #[test]
+    fn door_die_sets_flag2_after_death() {
+        // 前置 A：门关闭（nFlag=1 把 3 个门板格置 LowWall）。
+        let (mut w, id) = castle_world(110, 0, 10000, 0);
+        let close_events = w.castles[0]
+            .defense_unit_mut(DefenseRole::MainDoor)
+            .unwrap()
+            .door_close();
+        let grid = &mut w.maps[0];
+        assert_eq!(apply_structure_events(grid, &close_events), 12);
+        let rec = w.tick();
+        assert!(w.entities.get(id).unwrap().death);
+        assert!(w.castles[0].main_door.unwrap().death);
+        assert_eq!(
+            rec.castle_structures.len(),
+            12,
+            "SetMapXyFlag(2) 恰好 12 项（door_map_xy_flag_ops(2)）"
+        );
+        let want: Vec<StructureEvent> = door_map_xy_flag_ops(2)
+            .into_iter()
+            .map(|(dx, dy, walk)| StructureEvent::SetMapXyFlag {
+                x: 5 + dx,
+                y: 5 + dy,
+                walk,
+            })
+            .collect();
+        let got: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
+        assert_eq!(got, want, "掩码顺序 = oracle 调用序");
+        assert!(rec.deaths.iter().any(|d| d.0 == id), "死亡结算含门");
+        // B-15：已关的门 3 个门板格仍 LowWall（nFlag=2 的 true 无法恢复）。
+        for (dx, dy) in [(0, -2), (1, -1), (1, -2)] {
+            assert_eq!(
+                w.maps[0].cell_attribute(5 + dx, 5 + dy),
+                Some(crate::map::CellAttribute::LowWall),
+                "B-15：门板格不能被破门恢复"
+            );
+        }
+
+        // 前置 B：门已开（Open 的最后 3 项把门板格置 LowWall）。
+        let (mut w2, _) = castle_world(110, 0, 10000, 0);
+        let open_events = w2.castles[0]
+            .defense_unit_mut(DefenseRole::MainDoor)
+            .unwrap()
+            .door_open();
+        let grid = &mut w2.maps[0];
+        let _ = apply_structure_events(grid, &open_events);
+        let _ = w2.tick();
+        for (dx, dy) in [(0, -2), (1, -1), (1, -2)] {
+            assert_eq!(
+                w2.maps[0].cell_attribute(5 + dx, 5 + dy),
+                Some(crate::map::CellAttribute::LowWall),
+                "B-15：已开门被打破后门板格仍 LowWall"
+            );
+        }
+    }
+
+    /// **C6 `wall_run_toggles_cell_and_digup`**：首 tick 置 `LowWall`、`Dir` 不变无 `RM_DIGUP`；
+    /// HP 2000 ⇒ `RM_DIGUP(2)`；HP=0 ⇒ 恢复事件 + `Dir=4`，但格子仍是 `LowWall`（B-15）。
+    ///
+    /// 牙：删死亡恢复事件 ⇒ 红；把 `n08 < 5` 改成 `< 3` ⇒ HP=0 的 `Dir=4` 帧丢失 ⇒ 红。
+    #[test]
+    fn wall_run_toggles_cell_and_digup() {
+        let (mut w, id) = castle_world(111, 4999, 5000, 0);
+        let rec = w.tick();
+        assert_eq!(rec.castle_structures.len(), 1);
+        assert_eq!(
+            rec.castle_structures[0].event,
+            StructureEvent::SetMapXyFlag {
+                x: 5,
+                y: 5,
+                walk: false
+            }
+        );
+        assert!(unit_of(&w).set_map_flaged);
+        assert_eq!(
+            w.maps[0].cell_attribute(5, 5),
+            Some(crate::map::CellAttribute::LowWall)
+        );
+        assert!(
+            !rec.castle_structures
+                .iter()
+                .any(|c| matches!(c.event, StructureEvent::RefDigUp { .. })),
+            "HP 4999/5000 ⇒ n08=0，Dir 已是 0 ⇒ 无 RM_DIGUP"
+        );
+
+        w.entities.get_mut(id).unwrap().vitals.hp = 2000;
+        let rec = w.tick();
+        assert!(
+            rec.castle_structures
+                .iter()
+                .any(|c| c.event == StructureEvent::RefDigUp { dir: 2, x: 5, y: 5 }),
+            "HP 2000/5000 ⇒ n08=2 ⇒ RM_DIGUP(2)"
+        );
+
+        w.entities.get_mut(id).unwrap().vitals.hp = 0;
+        let rec = w.tick();
+        let events: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
+        assert_eq!(
+            events,
+            vec![
+                StructureEvent::SetMapXyFlag {
+                    x: 5,
+                    y: 5,
+                    walk: true
+                },
+                StructureEvent::RefDigUp { dir: 4, x: 5, y: 5 },
+            ],
+            "死亡：先恢复格（事件照发）再 RM_DIGUP(4)"
+        );
+        assert!(!unit_of(&w).set_map_flaged);
+        // B-15：`walk=true` 对已置 `LowWall` 的格恒无效 ⇒ 重放返回 0 changed。
+        let changed = apply_structure_events(&mut w.maps[0], &events);
+        assert_eq!(changed, 0, "B-15：LowWall 格无法被 walk=true 恢复");
+        assert_eq!(
+            w.maps[0].cell_attribute(5, 5),
+            Some(crate::map::CellAttribute::LowWall)
+        );
+    }
+
+    /// **C7 `door_run_turn_and_death_tick`**：未开门 + `Dir=5` ⇒ 一 tick 后 `Dir=0` + 1 帧
+    /// `RM_TURN(0)`；死亡后连续两 tick `DeathTick` 每次刷新为当前 `now`。
+    ///
+    /// 牙：每 tick 无条件发 `RM_TURN` ⇒ 第二 tick 帧数红；死亡不刷 `DeathTick` ⇒ 红。
+    #[test]
+    fn door_run_turn_and_death_tick() {
+        let (mut w, id) = castle_world(110, 9999, 10000, 5);
+        let rec = w.tick();
+        let turns: Vec<StructureEvent> = rec
+            .castle_structures
+            .iter()
+            .map(|c| c.event)
+            .filter(|e| matches!(e, StructureEvent::RefTurn { .. }))
+            .collect();
+        assert_eq!(turns, vec![StructureEvent::RefTurn { dir: 0, x: 5, y: 5 }]);
+        assert_eq!(unit_of(&w).dir, 0);
+        let msgs = w.take_monster_ref_msgs();
+        assert!(
+            msgs.iter()
+                .any(|m| m.ident == crate::monai::RM_TURN && m.w_param == 0),
+            "RM_TURN 必须入出帧队列"
+        );
+        // 第二 tick 不再发（Dir 已等于 n08）。
+        let rec2 = w.tick();
+        assert!(
+            !rec2
+                .castle_structures
+                .iter()
+                .any(|c| matches!(c.event, StructureEvent::RefTurn { .. })),
+            "每 tick 无条件 RM_TURN 是错的"
+        );
+
+        // 死亡：`DeathTick` 每 tick 刷新。
+        w.entities.get_mut(id).unwrap().vitals.hp = 0;
+        let r1 = w.tick();
+        let t1 = unit_of(&w).death_tick;
+        assert_eq!(t1, r1.clock_ms);
+        let r2 = w.tick();
+        let t2 = unit_of(&w).death_tick;
+        assert_eq!(t2, r2.clock_ms);
+        assert!(t2 > t1, "死亡且属城堡 ⇒ 每 tick 刷 DeathTick");
+    }
+
+    /// **C8 `castle_structures_do_not_wander`**：100 tick 无玩家 ⇒ 门/墙坐标、目标不变，
+    /// 且不消费 RNG（不进入 `monster_run`）。
+    ///
+    /// 牙：让 110/111 落到 `monster_run` ⇒ 位置/目标/RNG 流水红（当前 bug 的回归牙）。
+    #[test]
+    fn castle_structures_do_not_wander() {
+        let (mut w, door_id) = castle_world(110, 9999, 10000, 0);
+        let wall_id = {
+            let mut e = crate::EntitySpawn::new(2, "wall", 8, 8);
+            e.race = 111;
+            e.hp = 4999;
+            e.max_hp = 5000;
+            let id = w.add_entity(e);
+            let unit = CastleUnit {
+                entity_id: Some(id),
+                x: 8,
+                y: 8,
+                hp: 4999,
+                max_hp: 5000,
+                ..CastleUnit::default()
+            };
+            w.castles[0].left_wall = Some(unit);
+            w.entities.get_mut(id).unwrap().spawn.castle_binding = Some(CastleBinding {
+                castle_index: 0,
+                role: DefenseRole::LeftWall,
+            });
+            id
+        };
+        w.rng = RandomNumber::with_seed(777);
+        for _ in 0..100 {
+            let _ = w.tick();
+        }
+        for (id, (x, y)) in [(door_id, (5, 5)), (wall_id, (8, 8))] {
+            let e = w.entities.get(id).unwrap();
+            assert_eq!((e.x, e.y), (x, y));
+            assert_eq!(e.ai.target_creature, None, "门/墙不索敌");
+        }
+        assert_eq!(
+            w.rng.random(),
+            RandomNumber::with_seed(777).random(),
+            "门/墙 Run 不消费 RNG（未落 monster_run）"
+        );
+    }
+
+    /// **C3 补充**：`bind_castle_defense` 的 `Dir` 同步——已开的门 = `Open()` 的 7；
+    /// **未开的门保留 `CreateMonster` 的 `RandomByte(8)`**（`Initialize` 不碰 `Dir`）；
+    /// 墙恒 0（`WallStructure.Initialize`）。
+    ///
+    /// 牙：把未开门也强写 0 ⇒ 第二条断言红。
+    #[test]
+    fn castle_binding_syncs_door_dir_only_when_opened() {
+        use crate::castle::DefenseSpawn;
+        let make = |opened: bool| {
+            let mut w = World::new(10, 10);
+            let mut e = crate::EntitySpawn::new(1, "门", 5, 5);
+            e.race = 110;
+            e.ai.dir = 5; // ctor 的 RandomByte(8)
+            let id = w.add_entity(e);
+            let mut unit = CastleUnit {
+                entity_id: Some(id),
+                x: 5,
+                y: 5,
+                hp: 9999,
+                max_hp: 10000,
+                dir: if opened { 7 } else { 0 },
+                opened,
+                ..CastleUnit::default()
+            };
+            if opened {
+                let _ = unit.door_open();
+            }
+            let mut castle = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+            castle.main_door = Some(unit);
+            w.castles.push(castle);
+            let spawn = DefenseSpawn {
+                role: DefenseRole::MainDoor,
+                actor_id: id,
+                map_name: "3".to_string(),
+                name: "沙巴克城门".to_string(),
+                x: 5,
+                y: 5,
+                hp: 9999,
+                castle_owner: true,
+                guard_direction: None,
+            };
+            w.bind_castle_defense(0, &spawn);
+            (w, id)
+        };
+        let (w_open, id_open) = make(true);
+        assert_eq!(w_open.entities.get(id_open).unwrap().ai.dir, 7);
+        assert_eq!(w_open.entities.get(id_open).unwrap().hp, 9999);
+        let (w_closed, id_closed) = make(false);
+        assert_eq!(
+            w_closed.entities.get(id_closed).unwrap().ai.dir,
+            5,
+            "未开的门保留 ctor 随机 Dir"
+        );
+    }
+
+    /// **SuperMan 判据 (b-i)**：城门 110 被**伤害**打到 HP=0 时，oracle 的
+    /// `BaseObject.Run:32-36` 先回满，`:70-73` 的 `Die()` 不可达 ⇒ 不产生
+    /// `CastleDoor.Die()` 的 12 项 `SetMapXyFlag(2)`，也不写 `record.castle_structures`。
+    ///
+    /// 牙：删伤害支回满 ⇒ HP/MP 断言红；让伤害支落入直接 Die 子类段 ⇒ 空事件断言红。
+    #[test]
+    fn superman_castle_door_lethal_damage_refills_without_die_or_flag2_mask() {
+        // `dir=2` 是非零初始值：若结算段提前回满，`CastleDoor.Run` 会看到满血
+        // （`n08=0`）并把 Dir 刷成 0 且发 `RM_TURN`——正是本判据要排除的次序错误。
+        let (mut w, id) = castle_world(110, 0, 10_000, 2);
+        // 开 AI：oracle 的回满发生在实体自己的 `Run`（`BaseObject.Run:32-36`），
+        // 必须先让 `CastleDoor.Run` 读到 HP=0，再在 base 段回满。
+        crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 110, 0);
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.vitals.max_mp = 40;
+            e.vitals.mp = 0;
+        }
+        assert!(w.entities.get(id).unwrap().super_man);
+        let rec = w.tick_head();
+        assert!(rec.deaths.is_empty(), "伤害路径不调用 Die: {rec:?}");
+        assert!(
+            rec.castle_structures.is_empty(),
+            "伤害路径不得执行 CastleDoor.Die 子类段: {rec:?}"
+        );
+        let e = w.entities.get(id).unwrap();
+        assert!(!e.death);
+        assert!(!e.death_settled, "SuperMan 不进通用死亡闩锁");
+        assert!(!e.die_called);
+        assert_eq!(
+            e.hp, 10_000,
+            "`BaseObject.Run:32-36` 在自己的 Run 段回满（tick_head 内含怪物 Run）"
+        );
+        assert_eq!(e.mp, 40);
+        assert_eq!(
+            e.ai.dir, 2,
+            "门 Run 先读到 HP=0（n08=3 不刷 Dir），base 段才回满 ⇒ 不得出现满血分支的 Dir=0"
+        );
+        assert_eq!(unit_of(&w).dir, 2, "`CastleUnit.dir` 同样保持");
+        assert!(
+            !w.castles[0].main_door.unwrap().death,
+            "`CastleUnit.death` 镜像保持 false"
+        );
+    }
+
+    /// **SuperMan 判据 (b-ii)**：`World::kill` 是脚本/GM 的**直接 `Die()`** 入口；
+    /// `base.Die()` 早退 ⇒ `death=false`，但 `CastleDoor.Die()` 子类段仍产生恰 12 项掩码。
+    /// 标记消费后，下一个无 kill 的 tick 只回满，不重发子类段。
+    ///
+    /// 牙：删 `Command::Kill` 的 `die_called=true` ⇒ 12 项断言红；不消费标记 ⇒
+    /// 下一 tick 的空事件断言红；子类段误置 `death` ⇒ Death 断言红。
+    #[test]
+    fn superman_castle_door_direct_kill_emits_flag2_mask_without_death() {
+        let (mut w, id) = castle_world(110, 10_000, 10_000, 0);
+        w.ai_enabled = false;
+        crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 110, 0);
+        w.kill(id);
+        let rec = w.tick_head();
+        assert!(rec.deaths.is_empty(), "SuperMan 不进通用死亡: {rec:?}");
+        let got: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
+        assert_eq!(got, expected_door_flag2_events(), "直接 Die 恰发 12 项掩码");
+        let e = w.entities.get(id).unwrap();
+        assert!(!e.death, "`base.Die()` 早退 ⇒ 实体 Death 不置位");
+        assert!(!e.death_settled, "直接 Die 后不留下永久闩锁");
+        assert!(!e.die_called, "一次性直接 Die 标记已消费");
+        assert_eq!(e.hp, 10_000, "直接 Die() 不改 HP（`KillCommand.cs:40`）");
+        assert!(
+            !w.castles[0].main_door.unwrap().death,
+            "`CastleUnit.death` 是 Death 镜像 ⇒ 保持 false"
+        );
+
+        let rec2 = w.tick_head();
+        assert!(rec2.castle_structures.is_empty(), "无新 Die 调用不得重发");
+        assert_eq!(w.entities.get(id).unwrap().hp, 10_000, "HP 保持");
+    }
+
+    /// **F2**：oracle 每次 `CastleDoor.Die()` 都重发掩码；两次 `World::kill` 必须得到
+    /// 两批各 12 项，不能被 `death_settled` 永久闩锁吞掉第二次。
+    ///
+    /// 牙：SuperMan 支若改回 `death_settled=true`，第二次 kill 的 12 项断言红。
+    #[test]
+    fn superman_castle_door_direct_kill_twice_emits_flag2_mask_twice() {
+        let (mut w, id) = castle_world(110, 10_000, 10_000, 0);
+        w.ai_enabled = false;
+        crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 110, 0);
+        for round in 1..=2 {
+            w.kill(id);
+            let rec = w.tick_head();
+            let got: Vec<StructureEvent> = rec.castle_structures.iter().map(|c| c.event).collect();
+            assert_eq!(
+                got,
+                expected_door_flag2_events(),
+                "第 {round} 次直接 Die 都必须发 12 项"
+            );
+            let e = w.entities.get(id).unwrap();
+            assert!(!e.death);
+            assert!(!e.death_settled, "第 {round} 次结算后闩锁必须复位");
+            assert!(!e.die_called, "第 {round} 次标记必须消费");
+        }
+    }
+
+    /// **SuperMan 判据 (c)**：城墙 111 同形——`death=false`；`WallStructure.Die()`
+    /// （`WallStructure.cs:42-45`）**只有** `base.Die()` ⇒ 子类段零动作（**不**置
+    /// `CastleUnit.death`、不发格子事件；格子恢复只在 `WallStructure.Run` 读 `Death`）。
+    ///
+    /// 牙：把 `settle_deaths` 的 super_man 支写成也置 `unit.death=true` ⇒ 断言红；
+    /// 删早退（落回通用死亡支）⇒ `entity.death`/`record.deaths` 断言红。
+    #[test]
+    fn superman_castle_wall_does_not_die_or_touch_cell() {
+        let (mut w, id) = castle_world(111, 5_000, 5_000, 0);
+        // 只跑死亡结算段：关掉怪物 AI（`WallStructure.Run` 会另发格子事件，混入判据）。
+        w.ai_enabled = false;
+        crate::mongen::apply_monster_class_constants_at(&mut w.entities, id, 111, 0);
+        assert!(w.entities.get(id).unwrap().super_man);
+        w.kill(id);
+        let rec = w.tick_head();
+        assert!(rec.deaths.is_empty(), "SuperMan 不进死亡结算: {rec:?}");
+        let e = w.entities.get(id).unwrap();
+        assert!(!e.death, "`base.Die()` 早退 ⇒ Death 不置位");
+        assert!(!e.death_settled, "直接 Die 后不留下永久闩锁");
+        assert!(!e.die_called, "一次性标记已消费");
+        assert!(
+            !w.castles[0].left_wall.unwrap().death,
+            "WallStructure.Die 无子类段 ⇒ unit.death 不置位"
+        );
+        assert!(
+            rec.castle_structures.is_empty(),
+            "WallStructure.Die 无子类段 ⇒ 不发结构事件"
+        );
+    }
+}
+
+/// **卡 `openmir2-weapon-durability-frames`（tier=R）**：武器耐久族上游生产者的构造级判据。
+///
+/// 对照表（oracle 触发链，文件:行）：
+///
+/// - `SM_LAMPCHANGEDURA(655)`：`PlayObject.Run` 周期块（`PlayObject.Message.cs:257-262`）⇒
+///   `UseLamp()`（`:2233-2278`）⇒ `SendMsg(RM_LAMPCHANGEDURA, 0, {0|Dura}, 0, 0)`（`:2265`/`:2274`）；
+///   千位门 = `Round((ushort)(Dura / 1000.0))`（**左值先截断**，`:2245`）
+///   vs `Round(nDura / 1000.0)`（右值四舍五入，`:2272`）⇒ 处理器 `:1843`
+///   `SendDefMessage(SM_LAMPCHANGEDURA, nParam1, 0, 0, 0)` ⇒
+///   **`Recog = Dura`、`Param = 0`**（`PlayObject.Socket.cs:17` 的第 2 实参是 `nRecog`）。
+///
+/// - `SM_BREAKWEAPON(1102)`：`AttackDir`（`PlayObject.Attack.cs:25-31`，门 `attackTarget != null`
+///   与武器 `Index>0 && Desc[10]>0`）⇒ `CheckWeaponUpgrade`（`PlayObject.cs:4110`）⇒
+///   `Index == 0` 支 `SendRefMsg(RM_BREAKWEAPON)`（`:4121`）⇒ 处理器 `:2015-2017`。
+#[cfg(test)]
+mod weapon_durability_tests {
+    use super::*;
+    use crate::entity::UseItemSlot;
+
+    fn slot(index: u16, dura: u16, desc: [u8; 14]) -> UseItemSlot {
+        UseItemSlot {
+            make_index: 1,
+            index,
+            dura,
+            dura_max: 10_000,
+            desc,
+        }
+    }
+
+    fn player(w: &mut World, name: &str, x: i32, y: i32) -> i32 {
+        let mut e = crate::EntitySpawn::new(0, name, x, y);
+        e.race = crate::entity::ACTOR_RACE_PLAY;
+        w.add_entity(e)
+    }
+
+    fn lamp_world(dura: u16, special_pwr: i8, catalog_item: bool) -> (World, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        if catalog_item {
+            w.set_item_catalog(vec![mir2_data::StdItem {
+                name: "蜡烛".to_string(),
+                special_pwr,
+                light: 3,
+                ..Default::default()
+            }]);
+        }
+        w.set_weapon_durability_config(true, 7);
+        let p = player(&mut w, "hero", 10, 10);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_RIGHTHAND] =
+            slot(1, dura, [0; 14]);
+        (w, p)
+    }
+
+    fn lamp_after_500ms(w: &mut World) -> Vec<LampDuraChange> {
+        let first = w.use_lamps();
+        assert!(
+            first.is_empty(),
+            "首调只初始化 `DecLightItemDrugTick` 游标（T-78 口径）"
+        );
+        w.clock_ms += 501;
+        w.use_lamps()
+    }
+
+    /// **C-1 钉（oracle「先截断、后取整」口径）**：`PlayObject.Message.cs:2245` 的
+    /// `int nOldDura = HUtil32.Round((ushort)(UseItems[RighThand].Dura / 1000.0));`
+    /// —— 左值 **先 `(ushort)` 截断**（等价 `Dura / 1000` 整数除法），而新值侧 `:2272` 才是
+    /// `HUtil32.Round(nDura / 1000.0)`（AwayFromZero）。两侧口径不同 ⇒ 帧只在
+    /// `trunc(D/1000) != round((D-1)/1000)` 时发（`D % 1000 ∈ 501..=999`）。
+    ///
+    /// 表里的 1500 与 2600 正是旧实现（两侧都四舍五入）错位的两个方向：1500 **多发**、
+    /// 2600 **漏发**。
+    #[test]
+    fn lamp_thousand_boundary_table_matches_oracle_truncation() {
+        // (本次 UseLamp 前的 Dura, 期望的 655 `Recog`；`None` = 零帧）
+        let cases: [(u16, Option<i32>); 8] = [
+            (9999, Some(9998)), // old=trunc(9.999)=9, new=round(9.998)=10 ⇒ 发
+            (9500, None),       // old=9, new=round(9.499)=9 ⇒ 零
+            (9501, Some(9500)), // old=9, new=round(9.5)=10 ⇒ 发
+            (1501, Some(1500)), // old=1, new=round(1.5)=2 ⇒ 发
+            (1500, None),       // old=1, new=round(1.499)=1 ⇒ 零（旧错口径：多发 Recog=1499）
+            (1499, None),       // old=1, new=round(1.498)=1 ⇒ 零
+            (2600, Some(2599)), // old=2, new=round(2.599)=3 ⇒ 发（旧错口径：漏发）
+            (2500, None),       // old=2, new=round(2.499)=2 ⇒ 零
+        ];
+        for (dura, want) in cases {
+            let (mut w, p) = lamp_world(dura, 0, true);
+            let out = lamp_after_500ms(&mut w);
+            let got: Vec<i32> = out.iter().map(|d| d.recog).collect();
+            match want {
+                Some(recog) => assert_eq!(
+                    got,
+                    vec![recog],
+                    "Dura={dura} ⇒ 恰好一条 655 且 Recog = 新 Dura（oracle: old=trunc, new=round）"
+                ),
+                None => assert!(
+                    got.is_empty(),
+                    "Dura={dura} ⇒ 零帧（oracle: old=trunc 与 new=round 相等）；实收 {got:?}"
+                ),
+            }
+            assert!(out.iter().all(|d| d.actor_id == p));
+            assert_eq!(
+                w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+                dura - 1,
+                "耐久照减（发不发帧与扣不扣耐久是两件事）"
+            );
+        }
+    }
+
+    /// 判据 ①（帧内容）：真实跨界点 `Dura 1501 → 1500` ⇒ **恰好一条** 655，`Recog = 新 Dura`。
+    #[test]
+    fn lamp_frame_recog_is_the_new_durability() {
+        let (mut w, p) = lamp_world(1501, 0, true);
+        let out = lamp_after_500ms(&mut w);
+        assert_eq!(
+            out,
+            vec![LampDuraChange {
+                actor_id: p,
+                recog: 1500
+            }],
+            "`:2274` ⇒ Recog = 新 Dura（不是 Param）"
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1500
+        );
+    }
+
+    /// `DecLampDura = false`：耐久**不扣**，但 oracle 的两侧口径仍不同（左截断、右四舍五入）
+    /// ⇒ `D % 1000 ∈ 500..=999` 时**每周期都发**一条 `Recog = 当前 Dura`（oracle 既有行为）。
+    #[test]
+    fn lamp_dec_lamp_dura_false_still_emits_when_rounding_differs() {
+        // 1500：trunc(1.5)=1 vs round(1.5)=2 ⇒ 发，且 Dura 不变。
+        let (mut w, p) = lamp_world(1500, 0, true);
+        w.set_weapon_durability_config(false, 7);
+        let out = lamp_after_500ms(&mut w);
+        assert_eq!(
+            out,
+            vec![LampDuraChange {
+                actor_id: p,
+                recog: 1500
+            }],
+            "耐久未变但两侧取整口径不同 ⇒ 仍发一条（oracle 既有怪癖）"
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1500
+        );
+
+        // 1499：trunc(1.499)=1 vs round(1.499)=1 ⇒ 零帧。
+        let (mut w2, p2) = lamp_world(1499, 0, true);
+        w2.set_weapon_durability_config(false, 7);
+        assert!(lamp_after_500ms(&mut w2).is_empty());
+        assert_eq!(
+            w2.entities.get(p2).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1499
+        );
+    }
+
+    /// 判据 ②（燃尽）：`Dura == 1` ⇒ `nDura == 0` ⇒ `Dura = 0`、`Index = 0`（槽被清）、
+    /// `Light` 重算、恰好一条 655 且 `Recog = 0`（`:2265`）。
+    #[test]
+    fn lamp_burnout_clears_slot_and_emits_recog_zero() {
+        let (mut w, p) = lamp_world(1, 0, true);
+        // 燃尽前 `Light` 由装备模板给（`StdItem.Light = 3`）。
+        assert_eq!(w.my_light_of(p), Some(3));
+        let out = lamp_after_500ms(&mut w);
+        assert_eq!(
+            out,
+            vec![LampDuraChange {
+                actor_id: p,
+                recog: 0
+            }],
+            "燃尽支 Recog = 0，且不与千位支重复"
+        );
+        let e = w.entities.get(p).unwrap();
+        assert_eq!(
+            (
+                e.use_items[ITEM_LOCATION_RIGHTHAND].index,
+                e.use_items[ITEM_LOCATION_RIGHTHAND].dura
+            ),
+            (0, 0),
+            "`:2262-2265`：Dura=0 + Index=0（MakeIndex/DuraMax/Desc 保留）"
+        );
+        assert_eq!(
+            e.light, 0,
+            "`Light = GetMyLight()`（Index 已清 ⇒ 模板不再计光）"
+        );
+    }
+
+    /// **oracle 怪癖（连 bug 一起搬）**：`Dura == 0` 时 `(ushort)(Dura - 1)` **回绕成 65535**
+    /// （`:2249`）⇒ `nDura <= 0` 不成立 ⇒ 槽被写成 65535 并发一条 `Recog = 65535` 的 655。
+    #[test]
+    fn lamp_zero_durability_wraps_to_65535_like_oracle() {
+        let (mut w, p) = lamp_world(0, 0, true);
+        let out = lamp_after_500ms(&mut w);
+        assert_eq!(
+            out,
+            vec![LampDuraChange {
+                actor_id: p,
+                recog: 65535
+            }]
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            65535
+        );
+    }
+
+    /// 判据 ③（负例）：`SpecialPwr != 0`（非火把/蜡烛）或模板缺失 ⇒ 完全不动、零帧。
+    #[test]
+    fn lamp_non_lamp_item_or_missing_template_is_untouched() {
+        let (mut w, p) = lamp_world(1501, 1, true);
+        assert!(lamp_after_500ms(&mut w).is_empty());
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1501
+        );
+
+        let (mut w2, p2) = lamp_world(1501, 0, false);
+        assert!(lamp_after_500ms(&mut w2).is_empty());
+        assert_eq!(
+            w2.entities.get(p2).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1501
+        );
+    }
+
+    /// 判据 ③（负例）：非玩家实体不跑 `UseLamp`（oracle 只在 `PlayObject.Run` 里调）。
+    #[test]
+    fn lamp_never_runs_for_non_players() {
+        let (mut w, id) = lamp_world(1500, 0, true);
+        w.entities.get_mut(id).unwrap().appearance.race = 80;
+        assert!(lamp_after_500ms(&mut w).is_empty());
+        assert_eq!(
+            w.entities.get(id).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1500
+        );
+    }
+
+    fn weapon_world(desc: [u8; 14]) -> (World, i32, i32) {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 100_000;
+        // 部署件 `Server.conf:293 UpgradeWeaponMaxPoint=7`。
+        w.set_weapon_durability_config(true, 7);
+        let p = player(&mut w, "hero", 10, 10);
+        w.entities.get_mut(p).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON] =
+            slot(10, 5000, desc);
+        let mut m = crate::EntitySpawn::new(0, "foe", 11, 10);
+        m.race = 80;
+        let mid = w.add_entity(m);
+        (w, p, mid)
+    }
+
+    fn attack_once(w: &mut World, p: i32, mid: i32) -> TickRecord {
+        w.attack_cmd(p, mid);
+        w.tick()
+    }
+
+    /// 判据 ②（升级成功支）：`Desc[10] = 13` 且 `Desc[0..2]` 和 < 上限 ⇒ `Desc[0] += 4`、
+    /// `Desc[10] = 0`、`Index` 不变；**不发** `RM_BREAKWEAPON`（`Refined` 事件）。
+    #[test]
+    fn weapon_upgrade_success_adds_desc_and_clears_marker() {
+        let mut desc = [0u8; 14];
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 13;
+        let (mut w, p, mid) = weapon_world(desc);
+        let rec = attack_once(&mut w, p, mid);
+        assert_eq!(
+            rec.weapon_breaks,
+            vec![WeaponUpgradeEvent {
+                actor_id: p,
+                outcome: WeaponUpgradeOutcome::Refined
+            }]
+        );
+        let wslot = w.entities.get(p).unwrap().use_items[ITEM_LOCATION_WEAPON];
+        assert_eq!(wslot.desc[0], 4, "`Desc[0] + Desc[10] - 9`（`:4153`）");
+        assert_eq!(wslot.desc[ITEM_ATTR_WEAPON_UPGRADE], 0, "末尾无条件清标记");
+        assert_eq!(wslot.index, 10, "成功支不清 Index");
+    }
+
+    /// 判据 ②（破碎支 A）：和 ≥ 上限 ⇒ `Index = 0` ⇒ `Broke`（`SM_BREAKWEAPON` 的生产事件）。
+    #[test]
+    fn weapon_sum_at_cap_breaks_and_emits_broke_event() {
+        let mut desc = [0u8; 14];
+        desc[0] = 7;
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 10;
+        let (mut w, p, mid) = weapon_world(desc);
+        let rec = attack_once(&mut w, p, mid);
+        assert_eq!(
+            rec.weapon_breaks,
+            vec![WeaponUpgradeEvent {
+                actor_id: p,
+                outcome: WeaponUpgradeOutcome::Broke
+            }]
+        );
+        let wslot = w.entities.get(p).unwrap().use_items[ITEM_LOCATION_WEAPON];
+        assert_eq!(
+            wslot.index, 0,
+            "`:4168` 和 ≥ 上限 ⇒ Index = 0（槽对象保留）"
+        );
+        assert_eq!(wslot.desc[ITEM_ATTR_WEAPON_UPGRADE], 0);
+        assert_eq!(wslot.make_index, 1, "MakeIndex 保留（oracle 只清 Index）");
+    }
+
+    /// 判据 ②（破碎支 B）：`Desc[10] == 1` ⇒ 必碎（`:4150-4152`）。
+    #[test]
+    fn weapon_marker_one_always_breaks() {
+        let mut desc = [0u8; 14];
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 1;
+        let (mut w, p, mid) = weapon_world(desc);
+        let rec = attack_once(&mut w, p, mid);
+        assert_eq!(
+            rec.weapon_breaks,
+            vec![WeaponUpgradeEvent {
+                actor_id: p,
+                outcome: WeaponUpgradeOutcome::Broke
+            }]
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_WEAPON].index,
+            0
+        );
+    }
+
+    /// 判据 ③（负例）：无武器 / 无升级标记 ⇒ 零事件。
+    #[test]
+    fn no_weapon_or_no_marker_produces_no_event() {
+        let (mut w, p, mid) = weapon_world([0u8; 14]);
+        let rec = attack_once(&mut w, p, mid);
+        assert!(
+            rec.weapon_breaks.is_empty(),
+            "Desc[10]==0 ⇒ 不进 CheckWeaponUpgrade"
+        );
+
+        let mut desc = [0u8; 14];
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 13;
+        let (mut w2, p2, mid2) = weapon_world(desc);
+        w2.entities.get_mut(p2).unwrap().inventory.use_items[ITEM_LOCATION_WEAPON].index = 0;
+        let rec2 = attack_once(&mut w2, p2, mid2);
+        assert!(rec2.weapon_breaks.is_empty(), "Index==0 ⇒ 无武器，不结算");
+    }
+
+    /// 判据 ③（门）：**空挥**（`attackTarget == null`）不跑 `CheckWeaponUpgrade`
+    /// （`PlayObject.Attack.cs:27-31` 的 `if (attackTarget != null)`）⇒ 零事件、武器不动。
+    #[test]
+    fn attack_swing_without_target_does_not_check_weapon_upgrade() {
+        let mut desc = [0u8; 14];
+        desc[ITEM_ATTR_WEAPON_UPGRADE] = 1;
+        let (mut w, p, _mid) = weapon_world(desc);
+        assert!(w.attack_swing(p).is_some(), "空挥照抽攻击力（既有口径）");
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_WEAPON].index,
+            10,
+            "无目标 ⇒ 升级结算不跑（武器不碎）"
+        );
+        let rec = w.tick();
+        assert!(rec.weapon_breaks.is_empty());
+    }
+
+    /// 周期门：500ms 内重复调用 ⇒ 只结算一次（`DecLightItemDrugTime`，`:257-262`）。
+    #[test]
+    fn lamp_cycle_is_throttled_to_dec_light_item_drug_time() {
+        let (mut w, p) = lamp_world(1501, 0, true);
+        assert!(w.use_lamps().is_empty(), "首调初始化游标");
+        w.clock_ms += 501;
+        assert_eq!(w.use_lamps().len(), 1, "1501 → 1500 跨界 ⇒ 一条 655");
+        assert!(w.use_lamps().is_empty(), "同一周期内不重复结算");
+        w.clock_ms += 500;
+        assert!(w.use_lamps().is_empty(), "严格 `>` 门：恰 500ms 不算");
+        w.clock_ms += 1;
+        assert!(
+            w.use_lamps().is_empty(),
+            "1500 → 1499：trunc(1.5)=1 与 round(1.499)=1 相等 ⇒ 零帧"
+        );
+        assert_eq!(
+            w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
+            1499
+        );
+    }
+}

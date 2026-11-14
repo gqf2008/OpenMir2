@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 mir2-shared = { path = "../shared" }
-mir2-world = { path = "../world" }
+mir2-world-bevy = { path = "../world-bevy" }
 mir2-data = { path = "../data" }
 mir2-encoding = { path = "../encoding" }
 mir2-script = { path = "../script" }

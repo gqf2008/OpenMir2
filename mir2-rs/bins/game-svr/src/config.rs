@@ -1544,8 +1544,8 @@ impl GateConfig {
     /// `AllyAndGuildNameColor` / `WarGuildNameColor` / `InFreePKAreaNameColor`
     /// （`ServerConf.cs:509-512`）；本方法只是搬运，缺省已在 [`load`] 里按 `GameSvrConf.cs:1731-1736` 落。
     #[must_use]
-    pub fn castle_name_colors(&self) -> mir2_world::castle::CastleNameColors {
-        mir2_world::castle::CastleNameColors {
+    pub fn castle_name_colors(&self) -> mir2_world_bevy::castle::CastleNameColors {
+        mir2_world_bevy::castle::CastleNameColors {
             pk_flag: self.pk_flag_name_color,
             ally_guild: self.ally_and_guild_name_color,
             war_guild: self.war_guild_name_color,
@@ -2599,7 +2599,7 @@ HungerSystem=garbage
         );
         assert_eq!(
             c.castle_name_colors(),
-            mir2_world::castle::CastleNameColors::default()
+            mir2_world_bevy::castle::CastleNameColors::default()
         );
         let c2 = load(&write(
             &dir,
@@ -2611,7 +2611,7 @@ HungerSystem=garbage
         .unwrap();
         assert_eq!(
             c2.castle_name_colors(),
-            mir2_world::castle::CastleNameColors {
+            mir2_world_bevy::castle::CastleNameColors {
                 pk_flag: 10,
                 ally_guild: 20,
                 war_guild: 30,

@@ -76,7 +76,7 @@ class Prereq(Exception):
 
 
 def norm_site(site):
-    """`crates\\world\\src\\x.rs:1` / `M2Server\\...` 统一成 `/` 再比（与 ②③ 同口径）。"""
+    """`crates\\world-bevy\\src\\x.rs:1` / `M2Server\\...` 统一成 `/` 再比（与 ②③ 同口径）。"""
     return (site or "").replace("\\", "/").strip()
 
 
@@ -772,14 +772,14 @@ def cmd_selftest(_args):
         rmeas = os.path.join(tmp, "real-rust-ok.tsv")
         _write_text(rmeas, _stream_text([
             "crates/formula/src/drop.rs:109",
-            "crates/world/src/mongen.rs:624",
+            "crates/world-bevy/src/mongen.rs:624",
             "bins/game-svr/src/mongen.rs:289",
         ]))
         case("real-table-rust-green", "GREEN",
              lambda: _judge_file(DEFAULT_TABLE, rmeas, side="rust")[0])
         # ⑯ 击杀路径（combat.rs）归 measured（不是 unknown）。
         rkill = os.path.join(tmp, "real-rust-kill.tsv")
-        _write_text(rkill, _stream_text(["crates/world/src/combat.rs:831"]))
+        _write_text(rkill, _stream_text(["crates/world-bevy/src/combat.rs:831"]))
         case("real-table-kill-measured", "GREEN",
              lambda: _judge_file(DEFAULT_TABLE, rkill, side="rust")[0])
         # ⑰ 真表分类正确：C# 掉落（MonGetRandomItems）+ 构造（BaseObject..ctor）⇒ GREEN。
@@ -793,7 +793,7 @@ def cmd_selftest(_args):
         # ⑱ 改坏必红：Rust 侧 pin 抑制失效（monai.rs Wondering 出现）⇒ RED 且点名 wallclock。
         rwall = os.path.join(tmp, "real-rust-wall.tsv")
         _write_text(rwall, _stream_text(["crates/formula/src/drop.rs:109",
-                                         "crates/world/src/monai.rs:172"]))
+                                         "crates/world-bevy/src/monai.rs:172"]))
         case("real-table-rust-wallclock-red", "RED",
              lambda: _judge_file(DEFAULT_TABLE, rwall, side="rust")[0])
         case("real-table-rust-wallclock-names", True,
@@ -802,7 +802,7 @@ def cmd_selftest(_args):
         # ⑲ 改坏必红：未登记站点（castle.rs）⇒ RED（fail-closed）。
         runk = os.path.join(tmp, "real-rust-unknown.tsv")
         _write_text(runk, _stream_text(["crates/formula/src/drop.rs:109",
-                                        "crates/world/src/castle.rs:1"]))
+                                        "crates/world-bevy/src/castle.rs:1"]))
         case("real-table-rust-unknown-red", "RED",
              lambda: _judge_file(DEFAULT_TABLE, runk, side="rust")[0])
 

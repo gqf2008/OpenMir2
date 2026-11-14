@@ -9,7 +9,7 @@ r"""whitelist_anchor_gate.py — `mir2-rs/tests/parity/whitelist.md` 行号锚�
 `whitelist.md` 是「行为差异登记」的唯一真源，里面用 `` `path:line` `` 形式引用源码锚点。
 其中一批登记（`T-15`/`T-26`/`T-27`/`T-31`/`T-33`/`T-56`/`T-65` 等「已实现 / 退役」条）
 的 file:line 是**对着 master 某一历史 tip（`b08e065fc`）**抄的；master 一直在动
-（尤其 `bins/game-svr/src/main.rs`、`crates/world/src/{world,map,combat}.rs` 这些
+（尤其 `bins/game-svr/src/main.rs`、`crates/world-bevy/src/{world,map,combat}.rs` 这些
 **多车道共享的增长文件**，10 天内被改 150/39/6/13 次）⇒ 行号**静默失准**：审查者按行号
 找代码会找错位置、甚至误判假绿。此前**没有任何机判门**能发现这类漂移（`check_anchors.py`
 只守 `DRIVER-CONTRACT.md`，不守 `whitelist.md`；`m3_whitelist_registry_audit.py` 只审
@@ -62,7 +62,7 @@ DEFAULT_WHITELIST = os.path.normpath(
 # ---------------------------------------------------------------------------
 # 高 churn 文件清单（判据 4）。判定依据：`git log --since="10 days ago" --name-only
 # -- '*.rs'` 的**改次计数**（可复跑）。阈值 = **≥5 次 / 10 天**（多车道共享的增长文件），
-# 外加任务显式点名的 `crates/world/src/npc.rs`（当天被多个车道改过；其改次 2，
+# 外加任务显式点名的 `crates/world-bevy/src/npc.rs`（当天被多个车道改过；其改次 2，
 # 但属同一 contention 区，保守纳入）。Rust 源 + 工具侧 `src/BotSrv/**`（T-1 登记的
 # 工具例外，同样被多张夹具卡反复扩展，10 天 20 次）。
 # ---------------------------------------------------------------------------
@@ -71,16 +71,16 @@ HIGH_CHURN = (
     # 2026-10-21 单二进制搬迁：宿主代码整体 `git mv` 到 lib.rs（main.rs 只剩三行薄包装），
     # 高 churn 监控与符号锚一律跟到 lib.rs。
     ("mir2-rs/bins/game-svr/src/lib.rs", 150, "game-svr 宿主（多车道增长，搬迁前为 main.rs；行号锚实测漂 ≥6 次）"),
-    ("mir2-rs/crates/world/src/world.rs", 39, "世界模拟主模块"),
-    ("mir2-rs/crates/world/src/entity.rs", 21, "实体层"),
-    ("mir2-rs/crates/world/src/combat.rs", 13, "战斗数值"),
-    ("mir2-rs/crates/world/src/monai.rs", 10, "怪 AI tick"),
+    ("mir2-rs/crates/world-bevy/src/world.rs", 39, "世界模拟主模块"),
+    ("mir2-rs/crates/world-bevy/src/entity.rs", 21, "实体层"),
+    ("mir2-rs/crates/world-bevy/src/combat.rs", 13, "战斗数值"),
+    ("mir2-rs/crates/world-bevy/src/monai.rs", 10, "怪 AI tick"),
     ("mir2-rs/bins/game-svr/src/useitem.rs", 8, "CM_EAT 面"),
-    ("mir2-rs/crates/world/src/map.rs", 6, "地图格/门/地面物"),
+    ("mir2-rs/crates/world-bevy/src/map.rs", 6, "地图格/门/地面物"),
     ("mir2-rs/bins/game-svr/src/mongen.rs", 5, "MonGen 刷怪 sink"),
     ("mir2-rs/bins/game-svr/src/dbclient.rs", 5, "存档 DB 客户端"),
     ("mir2-rs/bins/game-svr/src/smframe.rs", 13, "出站编码器面（本文件 13 次/10 天；`smframe*.rs` 合计 22。2026-10-27 turn-order 的 +150/−46 把 T-206 锚顶走 69 行）"),
-    ("mir2-rs/crates/world/src/npc.rs", 2, "固定 NPC tick（任务点名，contention 区）"),
+    ("mir2-rs/crates/world-bevy/src/npc.rs", 2, "固定 NPC tick（任务点名，contention 区）"),
     ("src/BotSrv/AppService.cs", 20, "BotSrv 装配（工具例外，多夹具卡扩展）"),
     ("src/BotSrv/MShare.cs", 20, "BotSrv 静态位（工具例外，多夹具卡扩展）"),
 )

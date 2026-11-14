@@ -265,7 +265,7 @@ if ($SelfCheckNoStack) {
     #    的 Rust 流水绿灯（不再 PREREQ；本项与 ⑩/⑪ 同口径地证明门不是「Rust 恒 PREREQ」）。
     $pRustMeasuredSite = 'crates/formula/src/drop.rs:109'
     $pRustSetupSite = 'bins/game-svr/src/mongen.rs:289'
-    $pRustWallSite = 'crates/world/src/monai.rs:172'
+    $pRustWallSite = 'crates/world-bevy/src/monai.rs:172'
     $pRustClean = Join-Path $tmpRoot 'purity-rust-clean.tsv'
     $pRustWall = Join-Path $tmpRoot 'purity-rust-wall.tsv'
     New-DexpStream -Path $pRustClean -Sites @($pRustMeasuredSite, $pRustSetupSite)

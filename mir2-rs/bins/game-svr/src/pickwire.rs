@@ -40,7 +40,7 @@ use crate::ground::{
 use crate::npc::SendMsg;
 use crate::smframe;
 use crate::useitem::{my_status, QueuedNotice, RM_HEALTHSPELLCHANGED, RM_MYSTATUS};
-use mir2_world::{FloorItemKind, FloorItemView};
+use mir2_world_bevy::{FloorItemKind, FloorItemView};
 
 /// 接线层在一次 pickup/drop 处理里需要读到的**会话态**（oracle `PlayObject` 上的当下值）。
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -54,7 +54,7 @@
 - 本卡要 `monster_ai > 0`：`rng_trace_scenario.json` 的
   `isolation.wallclock_ai_expected` + `trace.groups_expected == [monster_ai, spawn, drop]`。
 - ④ 要 `monai == 0`：`drop-exp/drop_exp_scenario.json` `purity.wallclock_policy = "pinned"`；
-  `drop-exp/drop_exp_consumers.tsv` 的 rust `wallclock` 行 = `crates/world/src/monai\.rs:`，`max=0`
+  `drop-exp/drop_exp_consumers.tsv` 的 rust `wallclock` 行 = `crates/world-bevy/src/monai\.rs:`，`max=0`
   （「pin 抑制必须使其为 0」）。
 - master 生产宿主**无条件**开怪 AI：`mir2-rs/bins/game-svr/src/lib.rs`（调用
   `game_svr::mongen::enable_production_monster_ai(&mut world)`；**故意不写行号锚**：该宿主文件是
@@ -62,7 +62,7 @@
   `5229 → 5440 → 5488 → 5598 → 5665 → 5795`，全是别的车道插代码推平 ⇒ 改由「符号存在且唯一」
   机判保鲜，见 §6）
   → `mongen.rs:61 pub fn enable_production_monster_ai` → `world.enable_monster_ai()`
-  ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world/src/monai.rs:5259 monster_ai_tick`；
+  ⇒ 只要场上有活怪，`World::tick` 就按槽位驱动 `crates/world-bevy/src/monai.rs:5259 monster_ai_tick`；
   无目标且 walk 到点时 `monai.rs:236 wondering` **至少抽 1 次 `Random(20)`**
   （oracle 锚 `src/M2Server/Actor/AnimalObject.cs:425`）。
 

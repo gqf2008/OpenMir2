@@ -28,9 +28,9 @@
 //! （见 `bins/game-svr/src/stamina.rs`）。
 //!
 //! **`Death`/`STONE` 守卫**（`PlayObject.Operate.cs:312`、`PlayObject.Attack.cs:1373/1297/980`）：
-//! `Death` 已接（`handle_move_cmd` 读 `mir2_world::Entity.death`，为真则整支拒绝）；
+//! `Death` 已接（`handle_move_cmd` 读 `mir2_world_bevy::Entity.death`，为真则整支拒绝）；
 //! `STONE = StatusTimeArr[PoisonState.STONE] != 0` 属**麻痹/状态位面，未移植** ⇒ **未接登记**
-//! （`mir2_world::Entity` 无该字段，不造一份假状态）。
+//! （`mir2_world_bevy::Entity` 无该字段，不造一份假状态）。
 
 use mir2_protocol::messages;
 

@@ -66,7 +66,7 @@ use game_svr::smframe;
 use mir2_data::guild::{GuildFileSections, GuildStore};
 use mir2_data::guild_castle::GuildCastleConfig;
 use mir2_protocol::messages;
-use mir2_world::{GuildConfig, GuildManager, GuildWarEvent, GuildWarRequest};
+use mir2_world_bevy::{GuildConfig, GuildManager, GuildWarEvent, GuildWarRequest};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::guild_cmd::GuildSession;
@@ -385,8 +385,8 @@ pub(crate) trait FixedNpcScript {
         // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 跳线要的宿主视图两件
         //（`GmWorld.guilds` / `GmWorld.world`）。本 handler 自己持有 `&mut`，只能在调用点
         // 重借一次只读交给脚本 ⇒ 由 trait 传入，而不是塞进 `script` 的构造参数。
-        world: &mir2_world::World,
-        guilds: &mir2_world::GuildManager,
+        world: &mir2_world_bevy::World,
+        guilds: &mir2_world_bevy::GuildManager,
     ) -> (
         Vec<game_svr::npc::SayMsg>,
         Vec<game_svr::npc::SendMsg>,
@@ -474,7 +474,7 @@ pub(crate) fn handle_select(
     sessions: &mut HashMap<String, SessionGround>,
     shop_sessions: &mut HashMap<String, ShopSession>,
     displays: &DisplayTable,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     guilds: &mut GuildManager,
     guild_store: Option<&GuildStore>,
     guild_sections: &GuildFileSections,
@@ -541,7 +541,7 @@ pub(crate) fn handle_select(
     // 只有 `GuildOfficial` 的 `UserSelect` 在本模块；type 0 `Merchant` 的脚本半由
     // `handle_shop_cmd` 的固定 NPC 臂负责（T-137），type 2 `CastleOfficial` 由两条臂的
     // `fixed_npc_script_allowed` 类型门拦下（T-140 / T-137 残余①）⇒ 二者都不进本函数。
-    if npc_type != mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL {
+    if npc_type != mir2_world_bevy::npc::NPC_TYPE_GUILD_OFFICIAL {
         glog!(
             "DBG",
             "NPC 对话：npc={npc_actor_id} type={npc_type} 非 GuildOfficial ⇒ 不派发 ChrName={chr_name}"
@@ -773,7 +773,7 @@ pub(crate) fn handle_select(
             actor_id,
             guild_frames::sm_donate_ok_764(0),
         );
-    } else if mir2_world::castle::compare_lstr(label, LABEL_REQUEST_CASTLE_WAR) {
+    } else if mir2_world_bevy::castle::compare_lstr(label, LABEL_REQUEST_CASTLE_WAR) {
         // `HUtil32.CompareLStr(sLabel, sREQUESTCASTLEWAR)`（`GuildOfficial.cs:82`）是**前缀**
         // 匹配（大小写不敏感）⇒ 后缀 = 城堡下标（`sLabel[prefix.Length..]`，`:84`）。
         request_castle_war(
@@ -912,7 +912,7 @@ fn request_castle_war(
     actor_id: i32,
     s_index: &str,
     sg: &mut SessionGround,
-    castles: &[mir2_world::castle::UserCastle],
+    castles: &[mir2_world_bevy::castle::UserCastle],
     castle_cfg: &GuildCastleConfig,
     red_color: (u8, u8),
     catalog: &dyn ItemCatalog,
@@ -967,7 +967,7 @@ fn war_select(
     chr_name: &str,
     sg: &mut SessionGround,
     online: &OnlineRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &DisplayTable,
     guilds: &mut GuildManager,
     guild_store: Option<&GuildStore>,
@@ -1075,7 +1075,7 @@ fn war_events_to_frames(
     chr_name: &str,
     events: &[GuildWarEvent],
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &DisplayTable,
     guilds: &GuildManager,
     guild_msg_cfg: &GuildMsgCfg,

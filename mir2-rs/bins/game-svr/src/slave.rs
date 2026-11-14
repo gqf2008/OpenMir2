@@ -29,7 +29,7 @@
 //!   `TargetCret = null` → 受奴时 [`World::tame_adopt`] 落尾（Master/MasterRoyaltyTick/
 //!   SlaveMakeLevel/MasterTick/WalkSpeed/NextHitTime/BreakHolySeizeMode/SlaveList.Add）→
 //!   非受奴支 `HP = 0` → 共享尾。`Animal` 用构造期等价物
-//!   [`mir2_world::combat::race_is_animal`]（race 51/52/53/82/84/85/90）。
+//!   [`mir2_world_bevy::combat::race_is_animal`]（race 51/52/53/82/84/85/90）。
 //!
 //! ## 未接（登记，别按常识补）
 //!
@@ -46,7 +46,7 @@
 //!   时长**（`:797/805`）：前者无编码器、后者本骨架无 `CrazyMode` 字段（对应抽数已在
 //!   `mag_tamming` 消费，账本不变）⇒ 帧面/状态登记未接。
 //! - **race 54 的 `Animal = true`**（`BaseObject.ReAliveEx` `:2601-2603`）：复活路径未建模（⑨-3 登记）
-//!   ⇒ [`mir2_world::combat::race_is_animal`] 不计入。
+//!   ⇒ [`mir2_world_bevy::combat::race_is_animal`] 不计入。
 //! - **护身符扣光分支的 `SM_DELITEM` 帧已接**：oracle `UseAmulet` 的 `else` 支
 //!   （`MagicBase.cs:124-126`）`SendDelItems(UseItems[idx])` ⇒ `SM_DELITEM(202)` + `EncodeBuffer(clientItem)`
 //!   （`PlayObject.Base.cs:1648-1665`）；帧体见 [`deleted_amulet_body`]，宿主在 `CM_SPELL` 的
@@ -59,11 +59,11 @@ use mir2_data::pet_slave::PetSlaveConfig;
 use mir2_data::MagicInfo;
 use mir2_envir::MapRegistry;
 use mir2_shared::rng::RandomNumber;
-use mir2_world::magic::{self, AmuletSlot, AmuletUse, SkillTrainState};
-use mir2_world::slave::{
+use mir2_world_bevy::magic::{self, AmuletSlot, AmuletUse, SkillTrainState};
+use mir2_world_bevy::slave::{
     spawn_clone, CloneSpawn, SKILL_ANGEL, SKILL_SINSU, SKILL_SKELLETON, SKILL_TAMMING,
 };
-use mir2_world::{SlaveSpawner, SummonOutcome, World};
+use mir2_world_bevy::{SlaveSpawner, SummonOutcome, World};
 
 use crate::ability::ItemCatalog;
 use crate::bag::{item_display_name, BagItem};
@@ -184,7 +184,7 @@ pub fn summon_from_spell(
         table,
         displays,
     };
-    mir2_world::summon_slave(
+    mir2_world_bevy::summon_slave(
         world,
         caster_id,
         caster_dir,
@@ -351,7 +351,7 @@ pub struct TammingCastOutcome {
     /// [`World::tame_adopt`] 落，不在本字段重复）。
     pub target_hp: Option<u16>,
     /// `OpenCrazyMode(Random(20)+10)` 支（`MagicManager.cs:797/805`）——抽数已在
-    /// [`magic::mag_tamming`] 内消费；状态由本函数调 [`mir2_world::monai::open_crazy_mode`] 落
+    /// [`magic::mag_tamming`] 内消费；状态由本函数调 [`mir2_world_bevy::monai::open_crazy_mode`] 落
     /// （`CrazyModeInterval = 秒 * 1000`）。
     pub crazy_mode: bool,
     /// 随 `crazy_mode` 的 `Random(20)+10` 秒数（非狂暴支为 0）。
@@ -364,21 +364,21 @@ pub struct TammingCastOutcome {
 ///
 /// 两道门逐字对应 `MagicManager.cs:395`：`playObject.IsProperTarget(targetObject)`
 /// （`PlayObject.cs:1929`，含 M3⑦-4 的 `HAM_GROUP` 组剔除）与 `!targetObject.Animal`
-/// （[`mir2_world::combat::race_is_animal`] 的构造期等价物）。
+/// （[`mir2_world_bevy::combat::race_is_animal`] 的构造期等价物）。
 fn tamming_input(world: &World, input: &TammingCastInput<'_>) -> Option<magic::TammingInput> {
     let target_id = input.target_id?;
     let caster = world.entities.get(input.caster_id)?;
     let target = world.entities.get(target_id)?;
     // `IsGroupMember` 读的是**团长**（`caster.GroupOwner`）的成员表（`PlayObject.cs:5158-5175`）；
     // 非团长施法者自身的 `group_members` 恒空（`party.rs` 的 `JoinGroup` 只写 `group_owner`）。
-    if !mir2_world::combat::is_proper_target_grouped(
+    if !mir2_world_bevy::combat::is_proper_target_grouped(
         &caster,
         &target,
         &world.attacker_group_members(&caster),
     ) {
         return None;
     }
-    if mir2_world::combat::race_is_animal(target.race) {
+    if mir2_world_bevy::combat::race_is_animal(target.race) {
         return None;
     }
     Some(magic::TammingInput {
@@ -424,8 +424,8 @@ fn tamming_input(world: &World, input: &TammingCastInput<'_>) -> Option<magic::T
 ///   `Random(2) != 0`）——该帧无编码器，登记；状态面无副作用。
 /// - `BreakCrazyMode()` / `OpenCrazyMode()` 的狂暴态与时长（`:738/797/805`）：`mag_tamming` 已把
 ///   对应抽数消费掉（账本不变）并返回 `crazy_mode`/`crazy_interval`；本函数按 oracle 分支落
-///   [`mir2_world::monai::break_crazy_mode`]（受奴成功支）或
-///   [`mir2_world::monai::open_crazy_mode`]（`Random(20)+10` 秒）。
+///   [`mir2_world_bevy::monai::break_crazy_mode`]（受奴成功支）或
+///   [`mir2_world_bevy::monai::open_crazy_mode`]（`Random(20)+10` 秒）。
 /// - `CanReAlive` / `MonGen.ActiveCount`（`:761-770`）：同 ⑨-3 登记（`MonGen` 未建模）。
 pub fn cast_tamming_spell(
     world: &mut World,
@@ -463,7 +463,7 @@ pub fn cast_tamming_spell(
                 out.royalty_draw,
             );
             // 受奴成功支的 `targetObject.BreakCrazyMode()`（`MagicManager.cs:738`）。
-            mir2_world::monai::break_crazy_mode(world, target_id);
+            mir2_world_bevy::monai::break_crazy_mode(world, target_id);
         } else if out.target_hp != tin.target_hp {
             // 非受奴支的 `targetObject.WAbil.HP = 0`（`:783/790`）。
             let hp = u16::try_from(out.target_hp.max(0)).unwrap_or(0);
@@ -476,7 +476,7 @@ pub fn cast_tamming_spell(
         crazy_interval = out.crazy_interval;
         // 非受奴支的 `targetObject.OpenCrazyMode(Random(20)+10)`（`MagicManager.cs:797/805`）。
         if crazy_mode {
-            mir2_world::monai::open_crazy_mode(world, target_id, out.crazy_interval);
+            mir2_world_bevy::monai::open_crazy_mode(world, target_id, out.crazy_interval);
         }
         bo_train = out.result;
     }
@@ -534,7 +534,7 @@ pub struct CloneCastOutcome {
 /// 逐行锚 oracle：
 /// - `case SKILL_46`（`MagicManager.cs:589-592`）：`if (MagMakeClone(playObject, userMagic)) { boTrain = true; }`
 ///   —— `MagMakeClone`（`:1337-1341`）恒返回 `true`；实体构造见
-///   [`mir2_world::slave::spawn_clone`]（`PlayCloneObject.cs:5-23`）。
+///   [`mir2_world_bevy::slave::spawn_clone`]（`PlayCloneObject.cs:5-23`）。
 /// - 尾（`:644-669`）：46 没有置 `boSpellFail` 的分支 ⇒ `boSpellFail=false`、`boSpellFire=true`；
 ///   `boTrain=true` ⇒ `userMagic.Level < 3` 时走 `TrainSkill(Random(3)+1)` + `CheckMagicLevelUp`。
 ///
@@ -610,8 +610,8 @@ mod tests {
     fn cast_world() -> (World, i32) {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "主人".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)
         };
@@ -716,13 +716,13 @@ mod tests {
     ) -> (World, i32, i32) {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "主人".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)
         };
         let target = {
-            let mut e = mir2_world::EntitySpawn::new(0, "怪".to_string(), 11, 10);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "怪".to_string(), 11, 10);
             e.race = target_race;
             e.level = target_level;
             e.hp = target_hp;
@@ -805,7 +805,7 @@ mod tests {
         let mut adopted = None;
         for seed in 0..5_000 {
             let (mut w, caster, target) =
-                tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
+                tamming_world(seed, mir2_world_bevy::ACTOR_RACE_MONSTER, 30, 1);
             w.entities.get_mut(target).unwrap().ai.target_creature = Some(999);
             let mut train = tamming_train();
             let input = tamming_cast(caster, Some(target), &cfg, &magic);
@@ -839,7 +839,7 @@ mod tests {
         let mut hit = false;
         for seed in 0..5_000 {
             let (mut w, caster, target) =
-                tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
+                tamming_world(seed, mir2_world_bevy::ACTOR_RACE_MONSTER, 30, 1);
             {
                 let t = w.entities.get_mut(target).unwrap();
                 t.slave.master = Some(caster);
@@ -883,7 +883,7 @@ mod tests {
         let mut hit = None;
         for seed in 0..50_000 {
             let (mut w, caster, target) =
-                tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
+                tamming_world(seed, mir2_world_bevy::ACTOR_RACE_MONSTER, 30, 1);
             let mut train = tamming_train();
             let input = tamming_cast(caster, Some(target), &cfg, &magic);
             let out = cast_tamming_spell(&mut w, &input, &mut train);
@@ -913,7 +913,7 @@ mod tests {
         let mut hit = None;
         for seed in 0..50_000 {
             let (mut w, caster, target) =
-                tamming_world(seed, mir2_world::ACTOR_RACE_MONSTER, 30, 1);
+                tamming_world(seed, mir2_world_bevy::ACTOR_RACE_MONSTER, 30, 1);
             {
                 let t = w.entities.get_mut(target).unwrap();
                 t.ai.crazy_mode = true;
@@ -940,14 +940,14 @@ mod tests {
     fn cast_clone_spawns_and_runs_train_tail() {
         let mut w = World::new(32, 32);
         let caster = {
-            let mut e = mir2_world::EntitySpawn::new(0, "主人".to_string(), 5, 5);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "主人".to_string(), 5, 5);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.level = 40;
             w.add_entity(e)
         };
         w.tick();
         let mk_train = || SkillTrainState {
-            magic_id: mir2_world::SKILL_46,
+            magic_id: mir2_world_bevy::SKILL_46,
             level: 1,
             tran_point: 0,
             train_lv: 3,

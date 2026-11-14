@@ -21,7 +21,7 @@
 Rust 实现落点（本片）：
 - `mir2-rs/crates/shared/src/rng.rs`：`ISOLATE_ATTACK_ENV` / `ATTACK_SEED_DELTA` / `attack_seed()` /
   `attack_isolation_seed_from_env()`（解析 + fail-closed）。
-- `mir2-rs/crates/world/src/world.rs`：`World::rng_attack`（专用流）+ `isolate_attack` 开关 +
+- `mir2-rs/crates/world-bevy/src/world.rs`：`World::rng_attack`（专用流）+ `isolate_attack` 开关 +
   `enable_attack_isolation()` + `attack_rng()`；`attack_once`（`attack_dir`）与 `attack_swing` 按开关选流。
 - `mir2-rs/crates/shared/src/rng_trace.rs`：隔离开启时流水头部补一行 `ISOLATE_ATTACK <attack_seed>`
   （空格分隔，既有解析器按「首列非 int」跳过），让会话产物自证「这次跑的是隔离口径」。

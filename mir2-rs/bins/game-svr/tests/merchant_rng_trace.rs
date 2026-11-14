@@ -4,7 +4,7 @@
 //! 开关是进程级全局（`OnceLock`），只有独占进程才不会被别的用例的取数污染。
 //!
 //! 判据：开着 `MIR2_RNG_LOG` 同口径的 trace，跑一次 `World::spawn_merchant` + `merchant_tick`
-//! 与 `merchant_rename_rand`，落盘里必须出现 **`crates/world/src/merchant.rs:<line>`** 站点
+//! 与 `merchant_rename_rand`，落盘里必须出现 **`crates/world-bevy/src/merchant.rs:<line>`** 站点
 //! （`consumer_groups.tsv` 的 `merchant`/`rust` 行）——认不出即 Claim B 判红。
 //!
 //! 证据用法（把真实 trace 留给 `rng_ledger_diff.py groups` 复算）：
@@ -15,8 +15,8 @@
 
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState};
-use mir2_world::World;
+use mir2_world_bevy::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState};
+use mir2_world_bevy::World;
 
 fn merchant_state(goods: Vec<MerchantGoods>) -> MerchantState {
     MerchantState::new(
@@ -70,7 +70,7 @@ fn merchant_draws_record_world_merchant_module_sites() {
 
     // O-2 `rename_rand` 也必须记到 world/merchant.rs（宿主的闭包只转发）。
     let mut rng = RandomNumber::with_seed(2024);
-    let _ = mir2_world::merchant::merchant_rename_rand(&mut rng, 1, 200);
+    let _ = mir2_world_bevy::merchant::merchant_rename_rand(&mut rng, 1, 200);
 
     let txt = std::fs::read_to_string(&path).expect("读 trace");
     if from_env.is_none() {
@@ -89,8 +89,8 @@ fn merchant_draws_record_world_merchant_module_sites() {
         "trace 应含 world/merchant.rs 站点（否则 Claim B merchant 组认不出）:\n{txt}"
     );
     assert!(
-        txt.contains("crates/world/src/merchant.rs:")
-            || txt.contains("crates\\world\\src\\merchant.rs:"),
-        "站点必须落在 crates/world/src/merchant.rs（不是 bins/**）:\n{txt}"
+        txt.contains("crates/world-bevy/src/merchant.rs:")
+            || txt.contains("crates\\world-bevy\\src\\merchant.rs:"),
+        "站点必须落在 crates/world-bevy/src/merchant.rs（不是 bins/**）:\n{txt}"
     );
 }

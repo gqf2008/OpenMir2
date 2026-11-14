@@ -48,7 +48,7 @@ pub const REPORT_WINDOW_NS: u64 = 10_000_000_000;
 
 /// 宿主段计时器（缺省关闭；`MIR2_TICK_PROFILE=1` 开启）。
 ///
-/// 一条记录 = `(段名, 累计 ns, 调用次数)`，与 `mir2_world::world::TickProfile` 的
+/// 一条记录 = `(段名, 累计 ns, 调用次数)`，与 `mir2_world_bevy::world::TickProfile` 的
 /// `stages()` 三元组同形。
 #[derive(Debug, Default)]
 pub struct HostTickProfile {
@@ -196,7 +196,7 @@ fn nanos_since(at: Instant) -> u64 {
 /// 把 World 探针的累计值转成本窗口增量（`last` 被更新为当前值；探针不 reset）。
 #[must_use]
 pub fn world_delta(
-    profile: Option<&mir2_world::world::TickProfile>,
+    profile: Option<&mir2_world_bevy::world::TickProfile>,
     last: &mut WorldSnapshot,
 ) -> Option<WorldDelta> {
     let p = profile?;

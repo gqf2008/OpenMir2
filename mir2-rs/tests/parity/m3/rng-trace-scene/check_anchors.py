@@ -115,12 +115,12 @@ ANCHORS = (
          rx=r"pub fn enable_production_monster_ai\(",
          why="宿主 AI 开关接缝",
          basename_ok=True),
-    dict(literal="crates/world/src/monai.rs",
-         path="mir2-rs/crates/world/src/monai.rs",
+    dict(literal="crates/world-bevy/src/monai.rs",
+         path="mir2-rs/crates/world-bevy/src/monai.rs",
          rx=r"pub fn monster_ai_tick\(",
          why="World::tick 的怪 AI 槽位驱动"),
     dict(literal="monai.rs",
-         path="mir2-rs/crates/world/src/monai.rs",
+         path="mir2-rs/crates/world-bevy/src/monai.rs",
          rx=r"pub fn wondering\(",
          why="Wondering 的 Random(20) 抽数入口",
          basename_ok=True),
@@ -138,7 +138,7 @@ ANCHORS = (
          why="站点表的 R-6 折叠理由行",
          # 同一 literal 的**同行裸续引用**必须在此登记（旧口径不校验裸 :NN ⇒ 可静默漂移）。
          also=(dict(line=57,
-                    rx=r"^spawn\trust\tcrates/world/src/mongen",
+                    rx=r"^spawn\trust\tcrates/world-bevy/src/mongen",
                     why="Rust spawn 行（表内唯一 rust spawn 站点；固定场景唯一 spawn 来源）"),)),
 )
 
@@ -401,16 +401,16 @@ def selftest():
     #    也必须判 `ANCHOR_AMBIGUOUS`。旧实现按「匹配**行**数」计数会把同行两遍算 1 次 ⇒ 假绿；
     #    新实现按「匹配总次数」计数 ⇒ 必红。（用临时源文件，跑完即删，不留痕。）
     with tempfile.TemporaryDirectory() as td:
-        src_dir = os.path.join(td, "crates", "world", "src")
+        src_dir = os.path.join(td, "crates", "world-bevy", "src")
         os.makedirs(src_dir)
         with open(os.path.join(src_dir, "dup_same_line.rs"), "w", encoding="utf-8") as fh:
             fh.write("spawn(); spawn();\n")
-        dup_same_line_anchor = dict(literal="crates/world/src/dup_same_line.rs",
-                                    path="crates/world/src/dup_same_line.rs",
+        dup_same_line_anchor = dict(literal="crates/world-bevy/src/dup_same_line.rs",
+                                    path="crates/world-bevy/src/dup_same_line.rs",
                                     rx=r"spawn\(\)",
                                     why="改坏：符号在同一物理行出现两次",
                                     symbol_unique=True)
-        bad1e = check_doc_text("（另见 `crates/world/src/dup_same_line.rs`）\n",
+        bad1e = check_doc_text("（另见 `crates/world-bevy/src/dup_same_line.rs`）\n",
                                root=td,
                                anchors=(dup_same_line_anchor,))
     check_case("mutation-symbol-ambiguous-same-line-red",
@@ -432,7 +432,7 @@ def selftest():
                "; ".join(bad3))
 
     # ⑤ 改坏必红④：文档新增一个**未登记**的 `path:line` 引用 ⇒ `UNGUARDED_ANCHOR` 必红。
-    unguarded = text + "\n（另见 `crates/world/src/merchant.rs:999`）\n"
+    unguarded = text + "\n（另见 `crates/world-bevy/src/merchant.rs:999`）\n"
     bad4 = check_doc_text(unguarded)
     check_case("mutation-unguarded-anchor-red",
                any("UNGUARDED_ANCHOR" in p and "merchant.rs" in p for p in bad4),
@@ -487,7 +487,7 @@ def selftest():
 
     # ⑪ 改坏必红⑩（reviewer-6 M-1 收口）：同行裸续引用归属的**完整引用本身未登记锚点** ⇒
     #    `BARE_REF_UNGUARDED` 必红（此前该分支无活用例）。
-    unguarded_bare = text + "\n（另见 `crates/world/src/merchant.rs:999`、`:12`）\n"
+    unguarded_bare = text + "\n（另见 `crates/world-bevy/src/merchant.rs:999`、`:12`）\n"
     bad10 = check_doc_text(unguarded_bare)
     check_case("mutation-bare-ref-unguarded-red",
                any("BARE_REF_UNGUARDED" in p for p in bad10),
@@ -495,12 +495,12 @@ def selftest():
 
     # ⑫ 改坏必红⑪（reviewer-6 M-1 收口）：裸续引用已登记、行号在范围内，但归属文件**不存在**
     #    ⇒ `BARE_REF_FILE_MISSING` 必红（此前该分支无活用例）。
-    fake_missing = dict(literal="crates/world/src/no_such_module.rs",
-                        path="mir2-rs/crates/world/src/no_such_module.rs",
+    fake_missing = dict(literal="crates/world-bevy/src/no_such_module.rs",
+                        path="mir2-rs/crates/world-bevy/src/no_such_module.rs",
                         rx=r"pub fn nothing",
                         why="改坏：归属文件缺失",
                         also=(dict(line=7, rx=r".", why="改坏：归属文件缺失"),))
-    bad11 = check_doc_text(text + "\n（另见 `crates/world/src/no_such_module.rs:3`、`:7`）\n",
+    bad11 = check_doc_text(text + "\n（另见 `crates/world-bevy/src/no_such_module.rs:3`、`:7`）\n",
                            anchors=tuple(list(ANCHORS) + [fake_missing]))
     check_case("mutation-bare-ref-file-missing-red",
                any("BARE_REF_FILE_MISSING" in p for p in bad11),

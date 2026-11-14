@@ -190,7 +190,7 @@ pub fn client_get_min_map(min_map: i16) -> DefFrame {
 ///（= oracle 字段初值，`Envirnoment.cs:60`；`ClientGetMinMap` 据此走 FAIL 支）。
 #[must_use]
 pub fn session_min_map(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     chr_name: &str,
     registry: Option<&mir2_envir::MapRegistry>,
     minimap: Option<&mir2_envir::minimap::MiniMapRegistry>,

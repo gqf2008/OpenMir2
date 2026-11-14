@@ -26,7 +26,7 @@
 use std::io::Write;
 
 use mir2_envir::MapRegistry;
-use mir2_world::World;
+use mir2_world_bevy::World;
 
 use crate::downlink::DisplayTable;
 
@@ -97,7 +97,7 @@ impl StateLog {
         let mut first = true;
         for e in world.entities.iter_ref() {
             // 只看玩家族（C# `Race==0` == `ActorRace.Play`），与 `DumpActors` 一致。
-            if e.race != mir2_world::ACTOR_RACE_PLAY {
+            if e.race != mir2_world_bevy::ACTOR_RACE_PLAY {
                 continue;
             }
             // `Entity.ai.dir` 是 `BaseObject.Dir` 的唯一权威（展示表只是投影）。
@@ -155,24 +155,24 @@ mod tests {
 
     /// 构造一个 attacker `(17,20)`、victim `(18,20)` 的两玩家世界（`0137` 的 pin 摆位）。
     fn two_player_world() -> (World, i32, i32) {
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         let atk = {
-            let mut e = mir2_world::EntitySpawn::new(0, "m3sd0".to_string(), 17, 20);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "m3sd0".to_string(), 17, 20);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.hp = 19;
             e.max_hp = 19;
             world.add_entity(e)
         };
         let vic = {
-            let mut e = mir2_world::EntitySpawn::new(0, "m3sd1".to_string(), 18, 20);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "m3sd1".to_string(), 18, 20);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.hp = 19;
             e.max_hp = 19;
             world.add_entity(e)
         };
         // 夹一个怪物，验证 dump **只**落玩家族（`Race==0`）。
-        let mut mon = mir2_world::EntitySpawn::new(0, "mon".to_string(), 19, 20);
-        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 19, 20);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         world.add_entity(mon);
         // 注册表用 0 号图的真名（若上游无注册表则字段退化为空串，gate 不读 map）。
         (world, atk, vic)

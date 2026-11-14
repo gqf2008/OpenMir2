@@ -1,13 +1,13 @@
 //! 组队（party）接缝 —— M3⑦-实现 2（卡 `openmir2-m3-party-group-state`）。
 //!
-//! 世界侧的状态机在 [`mir2_world::party`]（`crates/world/src/party.rs`）；本模块只做两件事：
-//! ① 把 `GateConfig` 的 `[Setup]` 值 + 缺省文案装成 [`mir2_world::PartyConfig`]；
+//! 世界侧的状态机在 [`mir2_world_bevy::party`]（`crates/world/src/party.rs`）；本模块只做两件事：
+//! ① 把 `GateConfig` 的 `[Setup]` 值 + 缺省文案装成 [`mir2_world_bevy::PartyConfig`]；
 //! ② 把一条 [`PartyEvent`] 编成 `(收件人 ActorId, GM_DATA body)`（**纯函数**，无 I/O）。
 //! 按 `[GateIdx, Socket]` 路由由 `lib.rs` 的派发层完成（与既有 handler 同口径）。
 //!
 //! 帧映射与 oracle 锚点见 [`Event`] 的每个分支注释；编码在 [`crate::smframe`]。
 
-use mir2_world::{PartyConfig, PartyEvent};
+use mir2_world_bevy::{PartyConfig, PartyEvent};
 
 use crate::downlink::gbk;
 use crate::smframe;
@@ -52,7 +52,7 @@ pub fn world_config(
 /// - [`PartyEvent::SysMessage`] ⇒ `SM_SYSMESSAGE(100)`（`PlayObject.Message.cs:1715-1724` 的
 ///   `RM_SYSMESSAGE`/`RM_GROUPMESSAGE` 出队映射）；
 /// - [`PartyEvent::GotoLabel`] ⇒ **`None`**（不是帧；宿主 drain 时特判并执行 `QFunction` 脚本，
-///   脚本说词另经 `RM_MERCHANTSAY` 下发，见 `mir2_world::party::PartyEvent::GotoLabel`）。
+///   脚本说词另经 `RM_MERCHANTSAY` 下发，见 `mir2_world_bevy::party::PartyEvent::GotoLabel`）。
 #[must_use]
 pub fn event_body(ev: &PartyEvent) -> Option<(i32, Vec<u8>)> {
     match ev {
@@ -166,7 +166,7 @@ mod tests {
         assert_eq!(
             event_body(&PartyEvent::GotoLabel {
                 target: 7,
-                label: mir2_world::party::PARTY_LABEL_GROUP_CREATE,
+                label: mir2_world_bevy::party::PARTY_LABEL_GROUP_CREATE,
             }),
             None
         );

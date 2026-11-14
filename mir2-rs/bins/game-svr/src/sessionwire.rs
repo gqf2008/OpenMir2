@@ -15,7 +15,7 @@
 use crate::smframe;
 use crate::smframe_ext;
 use mir2_protocol::messages;
-use mir2_world::session::MapChange;
+use mir2_world_bevy::session::MapChange;
 
 /// `SystemShare.Config.nClientKey`（`GameSvrConf.cs:1886-1887`：先 `6534` 再覆盖成 `500`）。
 ///

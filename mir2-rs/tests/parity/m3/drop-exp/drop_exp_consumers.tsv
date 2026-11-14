@@ -17,15 +17,15 @@
 # 本表分两层：
 #   ① **oracle 源码 + 真机实测确认**的行（C# 掉落/构造/墙钟、两侧攻击路径） —— 见下方证据锚；
 #   ② Rust 侧按 ④-D（master 4521d451）实现逐条补的**文件级**站点行（`#[track_caller]` 记到世界层
-#      调用点）：drop = `crates/formula/src/drop.rs`，kill = `crates/world/src/combat.rs`，
-#      setup = `bins/game-svr/src/mongen.rs`（生成期构造抽数）+ `crates/world/src/mongen.rs`（刷怪/复活）。
+#      调用点）：drop = `crates/formula/src/drop.rs`，kill = `crates/world-bevy/src/combat.rs`，
+#      setup = `bins/game-svr/src/mongen.rs`（生成期构造抽数）+ `crates/world-bevy/src/mongen.rs`（刷怪/复活）。
 #      `max` 未实测者留 `*`（窗口期按真实计数收紧）；**不许**为了拿绿把类别放宽。
 #
 # 真机实测证据（C# 活栈 1,670,754 次抽数的消费者清单）见：
 #   mir2-rs/tests/parity/m3/evidence-attack-my-field-20261012/06-rng-ledger-summary-csharp.txt
 # 两侧攻击路径站点的一一对应（oracle 锚 + F-1 真机实测次数）见：
 #   mir2-rs/tests/parity/m3/rng-isolate-attack/attack_sites.tsv
-# Rust 侧实现锚（④-D 折叠后）：crates/world/src/world.rs:670/720 → crates/world/src/combat.rs
+# Rust 侧实现锚（④-D 折叠后）：crates/world-bevy/src/world.rs:670/720 → crates/world-bevy/src/combat.rs
 #   generate_drops → crates/formula/src/drop.rs mon_get_random_items / random_upgrade_item /
 #   random_set_unknown_item；生成期构造抽数 = bins/game-svr/src/mongen.rs。
 
@@ -48,9 +48,9 @@ csharp	wallclock	GameSrv\.Npc\.Merchant\.Run@Merchant\.cs:(132|138)	0	src/GameSr
 
 # ---- Rust（④-D 实现；文件级 = #[track_caller] 世界层调用点）------------------
 rust	measured	crates/formula/src/drop\.rs:	*	crates/formula/src/drop.rs	掉落取数：mon_get_random_items / random_upgrade_item / random_set_unknown_item（被测量路径）
-rust	measured	crates/world/src/combat\.rs:	*	crates/world/src/combat.rs	击杀路径：GetAttackPower/hit_gate/GetHitStruckDamage/StruckDamage/AttackSuccess/耐久（attack_sites.tsv 的 rust 侧一一对应）
+rust	measured	crates/world-bevy/src/combat\.rs:	*	crates/world-bevy/src/combat.rs	击杀路径：GetAttackPower/hit_gate/GetHitStruckDamage/StruckDamage/AttackSuccess/耐久（attack_sites.tsv 的 rust 侧一一对应）
 rust	setup	bins/game-svr/src/mongen\.rs:	*	bins/game-svr/src/mongen.rs	场景构建：生成期构造抽数（R-6 折叠后 C# construct → Rust spawn）
-rust	setup	crates/world/src/mongen\.rs:	*	crates/world/src/mongen.rs	场景构建：刷怪/复活位置与分片抽数
-rust	wallclock	crates/world/src/monai\.rs:	0	crates/world/src/monai.rs	怪 AI tick（Wondering/SearchTarget 等）；pin 抑制必须使其为 0
-rust	wallclock	crates/world/src/merchant\.rs:	0	crates/world/src/merchant.rs	商人 tick 抽数在 RunTick/RunTime + 200ms sim 节奏门后 ⇒ 墙钟消费者；pin 场景无商人 ⇒ 必须 0
+rust	setup	crates/world-bevy/src/mongen\.rs:	*	crates/world-bevy/src/mongen.rs	场景构建：刷怪/复活位置与分片抽数
+rust	wallclock	crates/world-bevy/src/monai\.rs:	0	crates/world-bevy/src/monai.rs	怪 AI tick（Wondering/SearchTarget 等）；pin 抑制必须使其为 0
+rust	wallclock	crates/world-bevy/src/merchant\.rs:	0	crates/world-bevy/src/merchant.rs	商人 tick 抽数在 RunTick/RunTime + 200ms sim 节奏门后 ⇒ 墙钟消费者；pin 场景无商人 ⇒ 必须 0
 rust	other	bins/game-svr/src/homemap\.rs:	0	bins/game-svr/src/homemap.rs	落点/Home 计算抽数；pin 场景不走（须 fail-closed 报红）

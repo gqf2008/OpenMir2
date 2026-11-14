@@ -18,7 +18,7 @@
   selftest
       合成件：连续块 ⇒ intra_noise_attacks=0；夹一条噪声 ⇒ 必红（intra_noise>0 且定位到段）。
 
-站点分隔符归一：Windows 落盘是 `crates\\world\\src\\combat.rs:109`，统一成 `/` 再比。
+站点分隔符归一：Windows 落盘是 `crates\\world-bevy\\src\\combat.rs:109`，统一成 `/` 再比。
 退出码：0 = GREEN（分析完成）；1 = RED（自检失败）；2 = PREREQ（文件缺失/无 marker/解析空）。
 """
 import argparse
@@ -176,10 +176,10 @@ def cmd_selftest(args):
     import contextlib
 
     tmp = tempfile.mkdtemp(prefix="rng-trace-probe-selftest-")
-    M = "crates/world/src/combat.rs:109"
-    A = "crates/world/src/combat.rs:606"
-    A2 = "crates/world/src/combat.rs:579"
-    N = "crates/world/src/animal.rs:427"
+    M = "crates/world-bevy/src/combat.rs:109"
+    A = "crates/world-bevy/src/combat.rs:606"
+    A2 = "crates/world-bevy/src/combat.rs:579"
+    N = "crates/world-bevy/src/animal.rs:427"
     RE = r"combat\.rs:(109|579|606)"
     checks, failures = [], []
 

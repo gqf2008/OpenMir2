@@ -24,7 +24,7 @@ r"""mir2_probe.py — 无头协议对拍台的**驱动器**（模拟客户端）
      收到 SM_LOGON(50)        -> 发 CM_QUERYBAGITEMS(81, recog=1)。
      心跳：服务端单字节 '*'，回 '*'。
   7. 进世界后先做**延迟段 dwell**（``--dwell-ms``，默认 1200ms，0 = 旧行为）：
-     Rust 首个 SearchViewRange 在 enter_map+1000ms（crates/world/src/entity.rs 的
+     Rust 首个 SearchViewRange 在 enter_map+1000ms（crates/world-bevy/src/entity.rs 的
      PLAYER_SEARCH_TIME），dwell 不足会在延迟段帧（10/41/654/657/100…）到达之前
      CM_SOFTCLOSE 小退，对拍时被误判成「对侧独有」。
   8. 执行场景步骤（scenarios/README.md 的 DSL），全程落 ``frames.ndjson``。
@@ -117,7 +117,7 @@ DIRECTION_BY_DELTA = {(0, -1): 0, (1, -1): 1, (1, 0): 2, (1, 1): 3,
 CLIENT_VERSION_NUMBER = 1200409180  # src/OpenMir2/Grobal2.cs
 HEARTBEAT = b"*"
 # 进世界后的延迟段 dwell 默认值：Rust 首个 SearchViewRange 在 enter_map+1000ms
-# （crates/world/src/entity.rs PLAYER_SEARCH_TIME），留 200ms 余量。
+# （crates/world-bevy/src/entity.rs PLAYER_SEARCH_TIME），留 200ms 余量。
 DEFAULT_DWELL_MS = 1200
 
 
@@ -2957,7 +2957,7 @@ def dwell_after_enter(conn, dwell_ms, legacy_pump_ms=0):
     ``dwell_ms > 0``：至少 ``dwell_ms`` 的收帧窗口（纯墙钟下限，不看 ident）；
     ``dwell_ms == 0``：旧行为 —— 只 ``pump(legacy_pump_ms)``（= ``--between-ms``）。
     为什么需要：Rust 首个 SearchViewRange 在 enter_map+1000ms
-    （crates/world/src/entity.rs 的 PLAYER_SEARCH_TIME），进世界后立刻小退会把
+    （crates/world-bevy/src/entity.rs 的 PLAYER_SEARCH_TIME），进世界后立刻小退会把
     整段延迟帧（10/41/654/657/100…）丢掉，对拍时被误判成对侧独有。
     """
     requested = max(0, int(dwell_ms or 0))

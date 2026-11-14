@@ -2729,7 +2729,7 @@
         "src/M2Server/Player/PlayObject.Message.cs:1403-1410（RM_WALK 下行）"
       ],
       "rust": [
-        "mir2-rs/crates/world/src/monai.rs:232-245（Wondering）",
+        "mir2-rs/crates/world-bevy/src/monai.rs:232-245（Wondering）",
         "mir2-rs/bins/game-svr/src/lib.rs:15443-15558（位置差还原及下行）",
         "mir2-rs/bins/game-svr/src/downlink.rs:384-397（编码）"
       ]
@@ -2749,7 +2749,7 @@
         "src/OpenMir2/RandomNumber.cs:35（new Random() 墙钟播种）"
       ],
       "rust": [
-        "mir2-rs/crates/world/src/world.rs:1343-1344（with_seed(42)，独立进程流位不相同）"
+        "mir2-rs/crates/world-bevy/src/world.rs:1343-1344（with_seed(42)，独立进程流位不相同）"
       ]
     }
   },

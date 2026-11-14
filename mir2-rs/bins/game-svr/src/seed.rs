@@ -170,7 +170,7 @@ mod tests {
     /// 从**该实例**取出的序列必须与 C# 同种子逐项相同。
     #[test]
     fn injected_world_rng_matches_csharp_probe() {
-        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
         world.rng = RandomNumber::with_seed(42);
         let got: Vec<i32> = (0..PROBE_LEN).map(|_| world.rng.random()).collect();
         assert_eq!(got, CSHARP_SEED42_PROBE);
@@ -180,7 +180,7 @@ mod tests {
     /// 即「与现状逐字节相同」（`crates/world::World::with_maps` 的 seed 42）。
     #[test]
     fn unset_seed_keeps_existing_world_rng() {
-        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
         assert_eq!(
             world.rng.random(),
             RandomNumber::with_seed(42).random(),

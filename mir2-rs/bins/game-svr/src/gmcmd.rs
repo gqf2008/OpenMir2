@@ -1339,7 +1339,7 @@ impl GmEntityState {
     /// `PlayObject` 字段」的可观察次序一致（不需要额外一拍）。
     ///
     /// 实体不在场（`self_entity()` 为 `None` 时根本不会生成差量）⇒ 本函数兜底为 no-op。
-    pub fn apply(&self, world: &mut mir2_world::World) {
+    pub fn apply(&self, world: &mut mir2_world_bevy::World) {
         let Some(e) = world.entities.get_mut(self.actor_id) else {
             return;
         };
@@ -2002,11 +2002,11 @@ pub struct GmMissionState {
 pub struct GmWorld<'a> {
     /// `SystemShare.GuildMgr`；`FindGuild` 是 `GuildName == sGuildName` **精确**比较
     /// （`GuildManager.cs:66-76`，不是 `OrdinalIgnoreCase`）。
-    pub guilds: &'a mir2_world::GuildManager,
+    pub guilds: &'a mir2_world_bevy::GuildManager,
     /// `M2Share.MapMgr` 的等价物；`None` = S1 占位世界（无 Envir 注册表）。
     pub maps: Option<&'a mir2_envir::MapRegistry>,
     /// `SystemShare.WorldEngine` 的实体表（`GetPlayObject`/坐标/`CastleList`）；`None` = 未接线。
-    pub world: Option<&'a mir2_world::World>,
+    pub world: Option<&'a mir2_world_bevy::World>,
     /// 命令发起者 `ChrName`（`@天地合一` 的 `GroupOwner == ActorId` 自比用）。
     pub speaker: &'a str,
     /// 命令发起者的 `ActorId`（`OnlineEntry.actor_id` / `SessionGround.actor_id`）＝ oracle
@@ -2058,7 +2058,7 @@ pub struct GmWorld<'a> {
 impl<'a> GmWorld<'a> {
     /// 空视图（只带行会表）：测试与「无 Envir / 无世界」的调用方用。
     #[must_use]
-    pub fn new(guilds: &'a mir2_world::GuildManager) -> Self {
+    pub fn new(guilds: &'a mir2_world_bevy::GuildManager) -> Self {
         Self {
             guilds,
             maps: None,
@@ -2092,7 +2092,7 @@ impl<'a> GmWorld<'a> {
     }
 
     #[must_use]
-    pub fn with_world(mut self, world: &'a mir2_world::World) -> Self {
+    pub fn with_world(mut self, world: &'a mir2_world_bevy::World) -> Self {
         self.world = Some(world);
         self
     }
@@ -2170,14 +2170,16 @@ impl<'a> GmWorld<'a> {
 
     /// `WorldEngine.GetPlayObject`（`WorldServer.cs:937-954`）：`PlayObjectList` 顺序扫，
     /// `ChrName` **OrdinalIgnoreCase** 命中首个、且 `!Ghost`。本仓实体表含怪物 ⇒ 加 `Race == Play` 门。
-    fn play_by_name(&self, name: &str) -> Option<mir2_world::EntityRef<'a>> {
+    fn play_by_name(&self, name: &str) -> Option<mir2_world_bevy::EntityRef<'a>> {
         let world = self.world?;
         world.entities.iter_ref().find(|e| {
-            e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost && e.name.eq_ignore_ascii_case(name)
+            e.race == mir2_world_bevy::ACTOR_RACE_PLAY
+                && !e.ghost
+                && e.name.eq_ignore_ascii_case(name)
         })
     }
 
-    fn entity(&self, id: i32) -> Option<mir2_world::EntityRef<'a>> {
+    fn entity(&self, id: i32) -> Option<mir2_world_bevy::EntityRef<'a>> {
         self.world?.entities.get(id)
     }
 
@@ -2247,12 +2249,12 @@ impl<'a> GmWorld<'a> {
     }
 
     /// `PlayObject.UseItems[n]`（**说话者自己**的佩戴位；`SmakeItemCommand.cs:28` 的读源）。
-    fn self_use_item(&self, slot: usize) -> Option<&'a mir2_world::entity::UseItemSlot> {
+    fn self_use_item(&self, slot: usize) -> Option<&'a mir2_world_bevy::entity::UseItemSlot> {
         let id = self.self_entity()?.id;
         self.world?.entities.get(id)?.use_items.get(slot)
     }
 
-    fn self_entity(&self) -> Option<mir2_world::EntityRef<'a>> {
+    fn self_entity(&self) -> Option<mir2_world_bevy::EntityRef<'a>> {
         if self.speaker.is_empty() {
             return None;
         }
@@ -2315,7 +2317,7 @@ impl<'a> GmWorld<'a> {
                 if !ignore_actor && obj.cell_obj_id > 0 && obj.actor_object {
                     return None;
                 }
-                if !ignore_item && obj.cell_type == mir2_world::CellType::Item {
+                if !ignore_item && obj.cell_type == mir2_world_bevy::CellType::Item {
                     return Some(false);
                 }
             }
@@ -2629,11 +2631,11 @@ fn dotnet_format(template: &str, args: &[String]) -> String {
 /// `CellAttribute` 枚举名的 C# `ToString()` 字面（`标志: {name}` 用）。
 /// `GetCellInfo` success 门要求 `Valid`（= Walk）⇒ 命令实际只可能输出 `Walk`；
 /// 另两名为结构完备保留。
-fn cell_attribute_name(a: mir2_world::CellAttribute) -> &'static str {
+fn cell_attribute_name(a: mir2_world_bevy::CellAttribute) -> &'static str {
     match a {
-        mir2_world::CellAttribute::Walk => "Walk",
-        mir2_world::CellAttribute::HighWall => "HighWall",
-        mir2_world::CellAttribute::LowWall => "LowWall",
+        mir2_world_bevy::CellAttribute::Walk => "Walk",
+        mir2_world_bevy::CellAttribute::HighWall => "HighWall",
+        mir2_world_bevy::CellAttribute::LowWall => "LowWall",
     }
 }
 
@@ -2653,7 +2655,10 @@ fn map_human_count(world: &GmWorld<'_>, map_id: usize) -> Option<i32> {
         w.entities
             .iter_ref()
             .filter(|e| {
-                e.race == mir2_world::ACTOR_RACE_PLAY && !e.death && !e.ghost && e.map_id == map_id
+                e.race == mir2_world_bevy::ACTOR_RACE_PLAY
+                    && !e.death
+                    && !e.ghost
+                    && e.map_id == map_id
             })
             .count() as i32,
     )
@@ -2669,7 +2674,7 @@ fn map_monster_count(world: &GmWorld<'_>, map_id: usize) -> Option<i32> {
         w.entities
             .iter_ref()
             .filter(|e| {
-                e.race >= mir2_world::ACTOR_RACE_ANIMAL
+                e.race >= mir2_world_bevy::ACTOR_RACE_ANIMAL
                     && !e.death
                     && !e.ghost
                     && e.map_id == map_id
@@ -2683,7 +2688,11 @@ fn map_monster_count(world: &GmWorld<'_>, map_id: usize) -> Option<i32> {
 ///
 /// 读源 = [`GmWorld::quests`] 里该目标的三组位图快照（宿主派发前从会话记录
 /// `saves.record.data.quest_flag` 克隆）。快照未注入（脚本桥/测试）⇒ 0（= 新角色全零位阵）。
-fn target_quest_flag_status(world: &GmWorld<'_>, target: &mir2_world::Entity, n_flag: i32) -> i32 {
+fn target_quest_flag_status(
+    world: &GmWorld<'_>,
+    target: &mir2_world_bevy::Entity,
+    n_flag: i32,
+) -> i32 {
     world
         .quest_of(&target.name)
         .map_or(0, |q| q.flag.get(n_flag))
@@ -7837,7 +7846,7 @@ mod tests {
 
     /// 每个用例新建一个空 `GuildManager`（`GmWorld` 的借用源）。
     fn exec(sess: &mut GmSession, cfg: &GmConfig, line: &str) -> GmResult {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = GmWorld::new(&guilds);
         execute(sess, cfg, &world, line)
     }
@@ -7907,8 +7916,8 @@ mod tests {
     /// （帧 + `SS_207`），宿主未建模 ⇒ 只留 note（whitelist T-263），不许静默当等价。
     #[test]
     fn batch5a_guild_master_path_is_registered_not_silent() {
-        let mut gm = mir2_world::GuildManager::new();
-        assert!(gm.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        let mut gm = mir2_world_bevy::GuildManager::new();
+        assert!(gm.add_guild("测试会", "boss", &mir2_world_bevy::GuildConfig::default()));
         let world = GmWorld {
             guilds: &gm,
             maps: None,
@@ -8518,8 +8527,8 @@ mod tests {
     /// `@ReloadGuild` 命中支：`FindGuild` 精确匹配 ⇒ `行会{name}重加载成功...`（Red）。
     #[test]
     fn reload_guild_found_uses_exact_name_match() {
-        let mut gm = mir2_world::GuildManager::new();
-        gm.guilds.push(mir2_world::GuildState::new("血盟"));
+        let mut gm = mir2_world_bevy::GuildManager::new();
+        gm.guilds.push(mir2_world_bevy::GuildState::new("血盟"));
         let world = GmWorld::new(&gm);
         let mut sess = GmSession {
             permission: 10,
@@ -8530,8 +8539,8 @@ mod tests {
         assert!(r.log_note.is_some(), "LoadGuild 宿主未接要留痕");
         // 大小写不同 = 不同会名（oracle `GuildName ==` 精确），但这里中文无大小写；
         // 用 ASCII 会名钉住「不是 OrdinalIgnoreCase」。
-        let mut gm = mir2_world::GuildManager::new();
-        gm.guilds.push(mir2_world::GuildState::new("Blood"));
+        let mut gm = mir2_world_bevy::GuildManager::new();
+        gm.guilds.push(mir2_world_bevy::GuildState::new("Blood"));
         let world = GmWorld::new(&gm);
         let r = execute(
             &mut sess,
@@ -8641,10 +8650,10 @@ mod tests {
     }
 
     /// 20×20 单图世界 + `gm`(5,5) / `bob`(6,6) 两个玩家。
-    fn gm_world() -> mir2_world::World {
-        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
-        w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
+    fn gm_world() -> mir2_world_bevy::World {
+        let mut w = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5));
+        w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "bob", 6, 6));
         w
     }
 
@@ -8694,7 +8703,7 @@ mod tests {
     /// `@dfsgf567`/`@sadasd`/`@fdgh56j`：翻会话开关，颜色与文本照 oracle。
     #[test]
     fn allow_recall_commands_toggle_session_flags() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         let mut sess = gm_session();
@@ -8728,7 +8737,7 @@ mod tests {
             ..mir2_envir::MapInfoFlag::default()
         });
         let w = gm_world();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         // 未婚（`string.IsNullOrEmpty(DearName)`）⇒ 第一条文案。
@@ -8778,7 +8787,7 @@ mod tests {
     fn map_and_position_move_texts() {
         let f = map_fixture(mir2_envir::MapInfoFlag::default());
         let w = gm_world();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = GmWorld::new(&guilds)
@@ -8841,7 +8850,7 @@ mod tests {
     #[test]
     fn ting_family_online_checks_and_quirks() {
         let w = gm_world();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let f = map_fixture(mir2_envir::MapInfoFlag::default());
@@ -8921,7 +8930,7 @@ mod tests {
     /// `@jkt76`：师父门、徒弟列表空、10s 冷却、末端对方字段残余。
     #[test]
     fn master_recall_branches() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = GmWorld::new(&guilds).with_now(20000);
@@ -8949,7 +8958,7 @@ mod tests {
     /// `@bb` / `@MoveMobTo` / `@SignMapMove`：帮助、参数越界、oracle 自身 no-op。
     #[test]
     fn recall_mob_move_mob_to_and_sign_map_move_frames() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = GmWorld::new(&guilds);
@@ -8992,12 +9001,12 @@ mod tests {
     /// `@天地合一`：团长自比、成员允许门、冷却与 `GroupRecallTime` 复位。
     #[test]
     fn group_recall_member_gate_and_cooldown() {
-        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let gm_id = w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
-        let bob_id = w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
+        let mut w = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let gm_id = w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5));
+        let bob_id = w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "bob", 6, 6));
         w.entities.get_mut(gm_id).unwrap().group.group_owner = gm_id;
         w.entities.get_mut(gm_id).unwrap().group.group_members = vec![gm_id];
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         {
@@ -9064,7 +9073,7 @@ mod tests {
             ..mir2_envir::MapInfoFlag::default()
         });
         let w = gm_world();
-        let mut guilds = mir2_world::GuildManager::new();
+        let mut guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         // 无行会 ⇒ 不是掌门。
@@ -9078,7 +9087,7 @@ mod tests {
                 vec![(GmColor::Red, "行会掌门人才可以使用此功能!!!")]
             );
         }
-        assert!(guilds.add_guild("G1", "gm", &mir2_world::GuildConfig::default()));
+        assert!(guilds.add_guild("G1", "gm", &mir2_world_bevy::GuildConfig::default()));
         // 成员遍历在 oracle 里注释 ⇒ 恒 0/0。
         {
             let view = GmWorld::new(&guilds)
@@ -9108,8 +9117,10 @@ mod tests {
         );
         // 攻城区域（首个命中的城堡 `UnderWar`）。
         let mut w_war = gm_world();
-        let mut castle =
-            mir2_world::UserCastle::new("沙巴克", mir2_world::CastleSiegeConfig::default());
+        let mut castle = mir2_world_bevy::UserCastle::new(
+            "沙巴克",
+            mir2_world_bevy::CastleSiegeConfig::default(),
+        );
         castle.castle_map_id = Some(0);
         castle.home_x = 5;
         castle.home_y = 5;
@@ -9137,7 +9148,7 @@ mod tests {
             ..mir2_envir::MapInfoFlag::default()
         });
         let w = gm_world();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         assert_eq!(
@@ -9210,7 +9221,7 @@ mod tests {
         );
         // 格上物品 + `UserMoveCanOnItem=0` ⇒ Green（正文用当前地图名 + 原字符串坐标）。
         let mut w_item = gm_world();
-        w_item.maps[0].add_map_object(3, 3, mir2_world::CellType::Item, 999, 0);
+        w_item.maps[0].add_map_object(3, 3, mir2_world_bevy::CellType::Item, 999, 0);
         let cfg_block = GmConfig {
             user_move_can_on_item: false,
             ..GmConfig::default()
@@ -9272,7 +9283,7 @@ mod tests {
             permission: 10,
             ..GmSession::default()
         };
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         let expected = [
@@ -9368,7 +9379,7 @@ mod tests {
             permission: 10,
             ..GmSession::default()
         };
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         assert_eq!(
@@ -9506,7 +9517,7 @@ mod tests {
         assert_eq!(use_item_idx(""), -1);
         // 在线三支：bob 在 world 里。
         let (fx, mut w, _gm_id, bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         // ② 空槽（默认全零）⇒ 红 NoItemMsg。
@@ -9579,7 +9590,7 @@ mod tests {
         assert_eq!(sess.attack_mode, 3);
         assert_eq!(sess.re_level, 7);
         sess.permission = 10;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         // 从持久值 3 起算：3 → 4 → 5（`@AttackMode` 连加两次）⇒ 行会攻击。
@@ -9766,7 +9777,7 @@ mod tests {
     #[test]
     fn shutup_script_gmexecute_path_through_npc_player_seam() {
         use mir2_script::engine::ScriptPlayer;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         let mut sess = GmSession::default();
@@ -9855,11 +9866,11 @@ mod tests {
     /// `:25-30`：目标不在线 ⇒ 一条 Red「…现在不在线，或在其它服务器上!!!」。
     #[test]
     fn clear_bag_item_offline_target_reports_not_online() {
-        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut w = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "victim", 5, 5);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(e);
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
@@ -9938,16 +9949,16 @@ mod tests {
     /// 造一个说话者实体（`GmWorld::self_entity` 的来源），可带一个佩戴件。
     fn smake_world_with_slot(
         slot: usize,
-        item: mir2_world::entity::UseItemSlot,
-    ) -> (mir2_world::World, mir2_world::GuildManager) {
-        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        item: mir2_world_bevy::entity::UseItemSlot,
+    ) -> (mir2_world_bevy::World, mir2_world_bevy::GuildManager) {
+        let mut w = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         if slot < e.use_items.len() {
             e.use_items[slot] = item;
         }
         w.add_entity(e);
-        (w, mir2_world::GuildManager::new())
+        (w, mir2_world_bevy::GuildManager::new())
     }
 
     /// `:26` 三参范围守卫：任一越界 ⇒ **静默 return**（零帧、无副作用）。
@@ -9982,7 +9993,7 @@ mod tests {
     /// （`{Index}-{MakeIndex} {Dura}/{DuraMax} {Desc0}/…/{Desc13}`）。
     #[test]
     fn smake_item_writes_desc_and_reports_blue_dump() {
-        let item = mir2_world::entity::UseItemSlot {
+        let item = mir2_world_bevy::entity::UseItemSlot {
             make_index: 77,
             index: 5,
             dura: 100,
@@ -10010,7 +10021,7 @@ mod tests {
     /// `:44-55`：`nValueType` 14 ⇒ `Dura = _MIN(65, nValue) * 1000`；15 ⇒ `DuraMax` 同式。
     #[test]
     fn smake_item_types_14_and_15_set_durability() {
-        let item = mir2_world::entity::UseItemSlot {
+        let item = mir2_world_bevy::entity::UseItemSlot {
             make_index: 9,
             index: 3,
             dura: 1,
@@ -10075,7 +10086,7 @@ mod tests {
     #[test]
     fn show_effect_script_gmexecute_path_is_zero_frames() {
         use mir2_script::engine::ScriptPlayer;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         let mut sess = GmSession::default();
@@ -10240,7 +10251,7 @@ mod tests {
     #[test]
     fn shutup_release_script_gmexecute_path_through_npc_player_seam() {
         use mir2_script::engine::ScriptPlayer;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         let mut sess = GmSession::default();
@@ -10362,11 +10373,11 @@ mod tests {
     /// 目标不在线 ⇒ 一条 Red/Hint `"{name} 现在不在线，或在其它服务器上!!!"`（`:32-38`）。
     #[test]
     fn kick_human_offline_target_reports_not_online() {
-        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut w = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "victim", 5, 5);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(e);
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
@@ -10411,14 +10422,14 @@ mod tests {
     /// （`GetPlayObject` 的 `!Ghost` 门）。
     #[test]
     fn kick_human_online_target_sets_pending_kick_without_frames() {
-        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut w = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
         for (name, ghost) in [("alive", false), ("gone", true)] {
-            let mut e = mir2_world::EntitySpawn::new(0, name, 5, 5);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name, 5, 5);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.ghost = ghost;
             w.add_entity(e);
         }
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = GmWorld::new(&guilds).with_world(&w).with_speaker("gm");
@@ -10449,11 +10460,11 @@ mod tests {
     #[test]
     fn kick_human_script_gmexecute_path_sets_pending_kick() {
         use mir2_script::engine::ScriptPlayer;
-        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut e = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut w = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "victim", 5, 5);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(e);
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = GmWorld::new(&guilds).with_world(&w);
         let cfg = GmConfig::default();
         let mut sess = GmSession::default();
@@ -10596,7 +10607,7 @@ mod tests {
     #[test]
     fn mob_fire_burn_existing_map_registers_event_and_stays_silent() {
         let f = map_fixture(mir2_envir::MapInfoFlag::default());
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = GmWorld::new(&guilds).with_maps(&f.registry);
@@ -10613,7 +10624,7 @@ mod tests {
     #[test]
     fn mob_fire_burn_map_not_found_prints_command_name() {
         let f = map_fixture(mir2_envir::MapInfoFlag::default());
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = GmWorld::new(&guilds).with_maps(&f.registry);
@@ -10646,7 +10657,7 @@ mod tests {
     #[test]
     fn mob_fire_burn_script_gmexecute_path_reports_help() {
         use mir2_script::engine::ScriptPlayer;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         let mut sess = GmSession::default();
@@ -11040,7 +11051,7 @@ mod tests {
             "红字支零副作用"
         );
         // ③ 背包有马牌（宿主预解析 mount_id=3）：上马 + 独立骑乘帧。
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = GmWorld::new(&guilds).with_horse_plate_mount(Some(3));
         let mut sess = GmSession {
             permission: 10,
@@ -11087,7 +11098,7 @@ mod tests {
     #[test]
     fn t_family_disable_filter_flips_shared_global_bit() {
         let filter_word = std::cell::Cell::new(true); // 部署启动值（GameApp.cs:70）
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = GmWorld::new(&guilds).with_filter_word(&filter_word);
         let mut sess_a = GmSession {
             permission: 10,
@@ -11154,18 +11165,18 @@ mod tests {
 
     /// 族 Q 夹具：`map_fixture`（图名 `map`/描述 `测试地图`/20×20，默认 Flag）+ 双玩家世界，
     /// 返回 (fixture, world, gm_id, bob_id)。**只读命令**：命令体不得改任何状态（卡面 forbidden）。
-    fn q_fixture() -> (MapFixture, mir2_world::World, i32, i32) {
+    fn q_fixture() -> (MapFixture, mir2_world_bevy::World, i32, i32) {
         let fx = map_fixture(mir2_envir::MapInfoFlag::default());
-        let mut w = mir2_world::World::with_maps(vec![(20, 20)]);
-        let gm_id = w.add_entity(mir2_world::EntitySpawn::new(0, "gm", 5, 5));
-        let bob_id = w.add_entity(mir2_world::EntitySpawn::new(0, "bob", 6, 6));
+        let mut w = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let gm_id = w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5));
+        let bob_id = w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "bob", 6, 6));
         (fx, w, gm_id, bob_id)
     }
 
     fn q_view<'a>(
         fx: &'a MapFixture,
-        w: &'a mir2_world::World,
-        guilds: &'a mir2_world::GuildManager,
+        w: &'a mir2_world_bevy::World,
+        guilds: &'a mir2_world_bevy::GuildManager,
     ) -> GmWorld<'a> {
         GmWorld::new(guilds)
             .with_maps(&fx.registry)
@@ -11219,12 +11230,12 @@ mod tests {
     #[test]
     fn q_family_counts_help_not_found_and_green_counts() {
         let (fx, mut w, gm_id, bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
-        let exec_at = |w: &mir2_world::World,
+        let exec_at = |w: &mir2_world_bevy::World,
                        fx: &MapFixture,
-                       guilds: &mir2_world::GuildManager,
+                       guilds: &mir2_world_bevy::GuildManager,
                        sess: &mut GmSession,
                        line: &str|
          -> GmResult {
@@ -11265,8 +11276,8 @@ mod tests {
             vec![(GmColor::Green, "怪物数量：0")]
         );
         // 怪物实体：race >= ACTOR_RACE_ANIMAL ⇒ MobCount +1；HumanCount 不变。
-        let mut mon = mir2_world::EntitySpawn::new(0, "怪甲", 7, 7);
-        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "怪甲", 7, 7);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         w.add_entity(mon);
         assert_eq!(
             texts(&exec_at(&w, &fx, &guilds, &mut sess, "@MobCountwa map")),
@@ -11280,8 +11291,8 @@ mod tests {
         // 怪乙 Ghost ⇒ 不计。
         w.entities.get_mut(bob_id).unwrap().life_cycle.death = true;
         w.entities.get_mut(gm_id).unwrap().life_cycle.ghost = true;
-        let mut mon2 = mir2_world::EntitySpawn::new(0, "怪乙", 8, 8);
-        mon2.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mon2 = mir2_world_bevy::EntitySpawn::new(0, "怪乙", 8, 8);
+        mon2.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let mon2_id = w.add_entity(mon2);
         w.entities.get_mut(mon2_id).unwrap().life_cycle.ghost = true;
         assert_eq!(
@@ -11303,12 +11314,12 @@ mod tests {
     #[test]
     fn q_family_map_param_quirks() {
         let (fx, mut w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
-        let exec_at = |w: &mir2_world::World,
+        let exec_at = |w: &mir2_world_bevy::World,
                        fx: &MapFixture,
-                       guilds: &mir2_world::GuildManager,
+                       guilds: &mir2_world_bevy::GuildManager,
                        sess: &mut GmSession,
                        line: &str|
          -> GmResult {
@@ -11355,10 +11366,13 @@ mod tests {
             vec![(GmColor::Green, "标志: Walk")]
         );
         // ①' 有对象 ⇒ 两条绿字（标志 + 对象数）。
-        w.maps
-            .get_mut(0)
-            .expect("map 0")
-            .add_map_object(5, 5, mir2_world::CellType::Play, 777, 0);
+        w.maps.get_mut(0).expect("map 0").add_map_object(
+            5,
+            5,
+            mir2_world_bevy::CellType::Play,
+            777,
+            0,
+        );
         assert_eq!(
             texts(&exec_at(&w, &fx, &guilds, &mut sess, "@Map 5 5 map")),
             vec![
@@ -11374,7 +11388,7 @@ mod tests {
     #[test]
     fn q_family_show_map_info_and_mode() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = q_view(&fx, &w, &guilds);
         let cfg = GmConfig::default();
         let mut sess = gm_session();
@@ -11423,7 +11437,7 @@ mod tests {
     #[test]
     fn q_family_ip_always_help_and_info_online_silent() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = q_view(&fx, &w, &guilds);
         let cfg = GmConfig::default();
         let mut sess = gm_session();
@@ -11481,7 +11495,7 @@ mod tests {
             bob.inventory.use_items[7].index = 42; // 第二件
             bob.inventory.use_items[9].index = 0; // Index==0 ⇒ 跳过
         }
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = q_view(&fx, &w, &guilds);
         let cfg = GmConfig::default();
         let mut sess = gm_session();
@@ -11522,7 +11536,7 @@ mod tests {
     #[test]
     fn q_family_showflag_and_lottery() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = q_view(&fx, &w, &guilds);
         let mut sess = gm_session();
         // showflag 四支。
@@ -11631,7 +11645,7 @@ mod tests {
     /// `@ShowMapMode`/`@Map` 都按 [`NOTE_NO_MAP_REGISTRY`] 登记零帧，不当图不存在红字。
     #[test]
     fn q_family_registry_not_injected_is_not_map_not_found() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = GmWorld::new(&guilds);
         let cfg = GmConfig::default();
         let mut sess = gm_session();
@@ -11684,7 +11698,7 @@ mod tests {
     #[test]
     fn x1_null_table_zero_frames() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = q_view(&fx, &w, &guilds);
         let cfg = GmConfig::default();
         let mut sess = gm_session();
@@ -11739,7 +11753,7 @@ mod tests {
     #[test]
     fn x1_view_whisper_quirks() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let view = q_view(&fx, &w, &guilds);
         let cfg = GmConfig::default();
         let mut sess = gm_session();
@@ -11804,7 +11818,7 @@ mod tests {
     #[test]
     fn x2b_kill_face_target_branch() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = q_view(&fx, &w, &guilds).with_pose_target("bob");
@@ -11867,7 +11881,7 @@ mod tests {
     #[test]
     fn x2b_target_control_texts_and_pending() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = q_view(&fx, &w, &guilds);
@@ -12015,9 +12029,9 @@ mod tests {
             dura_max: 5000,
             desc: [0; 14],
         };
-        let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
-        let victim_id = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 11, 11));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11));
         // 10 = 复活戒指（Shape 114），11 = 火焰戒指（Shape 115）。
         let mut catalog = game_svr::ability::StdItemCatalog::new();
         catalog.insert(
@@ -12253,9 +12267,9 @@ mod tests {
         };
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
-        let victim_id = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 11, 11));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11));
         // 5 = 命中项（Desc=「目标技能」、MagicName 与火球/治愈均不同）；
         // 6 = 非命中项（Desc/MagicName 都不匹配命令与审计）。
         let magic_table = crate::magics::MagicTable::new(vec![
@@ -12463,7 +12477,7 @@ mod tests {
     #[test]
     fn x2a_l_subitems_texts_and_globals() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         // DelNpc：恒红（有无世界都同答）。
@@ -12560,7 +12574,7 @@ mod tests {
     #[test]
     fn x2a_search_human_quirk() {
         let (fx, w, _gm_id, _bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = q_view(&fx, &w, &guilds).with_now(50_000);
@@ -12591,7 +12605,7 @@ mod tests {
     #[test]
     fn x2a_master_dear_searches() {
         let (fx, mut w, gm_id, bob_id) = q_fixture();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let view = q_view(&fx, &w, &guilds);
@@ -12667,7 +12681,7 @@ mod tests {
     /// 零帧 + 接缝 note。
     #[test]
     fn x2a_reconnection_and_gotolable_seams() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = GmConfig::default();
         let mut sess = gm_session();
         let bare = GmWorld::new(&guilds);
@@ -12795,13 +12809,13 @@ mod tests {
     }
 
     /// 世界：`gm`（调用者）+ `bob`（目标），均 `Race = Play`（`GetPlayObject` 的命中面）。
-    fn f_world_entities() -> mir2_world::World {
-        let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
-        gm.race = mir2_world::ACTOR_RACE_PLAY;
+    fn f_world_entities() -> mir2_world_bevy::World {
+        let mut w = mir2_world_bevy::World::new(20, 20);
+        let mut gm = mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5);
+        gm.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut bob = mir2_world::EntitySpawn::new(0, "bob", 6, 6);
-        bob.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut bob = mir2_world_bevy::EntitySpawn::new(0, "bob", 6, 6);
+        bob.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(bob);
         w
     }
@@ -12835,8 +12849,8 @@ mod tests {
 
     fn f_exec(
         sess: &mut GmSession,
-        world: &mir2_world::World,
-        guilds: &mir2_world::GuildManager,
+        world: &mir2_world_bevy::World,
+        guilds: &mir2_world_bevy::GuildManager,
         quests: &std::collections::HashMap<String, GmQuestFlags>,
         line: &str,
     ) -> GmResult {
@@ -12869,7 +12883,7 @@ mod tests {
     /// 结果位阵带 bob 的位 2 且丢调用者的位 1。
     #[test]
     fn f_setflag_writes_caller_not_target() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = f_world_entities();
         // 调用者既有位：flag 1 = ON；目标 bob 的位 2 = ON（见 `f_snapshot`）。
         let quests = f_snapshot(f_bit(1, true), QuestBitmap::new(), QuestBitmap::new());
@@ -12912,7 +12926,7 @@ mod tests {
     /// 变异红：把 `sess.pending_quest` 的装填移到 target 判空之前 ⇒ 本用例红。
     #[test]
     fn f_offline_or_short_args_zero_frames_no_write() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = f_world_entities();
         let quests = f_snapshot(QuestBitmap::new(), QuestBitmap::new(), QuestBitmap::new());
         let mut sess = gm_session();
@@ -12945,7 +12959,7 @@ mod tests {
     /// 变异红：交换 `UnitOpen`/`Unit` 两支 ⇒ 本用例红。
     #[test]
     fn f_setopen_and_setunit_are_isomorphic() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = f_world_entities();
         let quests = f_snapshot(QuestBitmap::new(), QuestBitmap::new(), QuestBitmap::new());
         let mut sess = gm_session();
@@ -12982,7 +12996,7 @@ mod tests {
     /// 变异红：用 `n_value != 0` 直接当判据（跳过读回）⇒ 越界 flag 支会印 ON，本用例红。
     #[test]
     fn f_readback_decides_on_off_after_write() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = f_world_entities();
         let quests = f_snapshot(QuestBitmap::new(), QuestBitmap::new(), QuestBitmap::new());
         let mut sess = gm_session();
@@ -13009,7 +13023,7 @@ mod tests {
     /// 变异红：`target_quest_flag_status` 改回恒 0 ⇒ ON 支断言红。
     #[test]
     fn f_showflag_reads_real_target_bitmap() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = f_world_entities();
         // 只关心 bob 的 flag 组；bob 位 7 = ON。
         let mut quests = f_snapshot(QuestBitmap::new(), QuestBitmap::new(), QuestBitmap::new());
@@ -13035,20 +13049,20 @@ mod tests {
     // ==================== 族 M · 刷怪/造物（6，卡 `openmir2-gm-family-m-spawn-make`，tier=R）====================
 
     /// 刷怪世界：`gm`（5,5，Race=Play）+ `bob`；各自带一张 20×20 地图。
-    fn m_world() -> mir2_world::World {
-        let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
-        gm.race = mir2_world::ACTOR_RACE_PLAY;
+    fn m_world() -> mir2_world_bevy::World {
+        let mut w = mir2_world_bevy::World::new(20, 20);
+        let mut gm = mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5);
+        gm.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut bob = mir2_world::EntitySpawn::new(0, "bob", 6, 6);
-        bob.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut bob = mir2_world_bevy::EntitySpawn::new(0, "bob", 6, 6);
+        bob.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(bob);
         w
     }
 
     fn m_view<'a>(
-        guilds: &'a mir2_world::GuildManager,
-        world: &'a mir2_world::World,
+        guilds: &'a mir2_world_bevy::GuildManager,
+        world: &'a mir2_world_bevy::World,
     ) -> GmWorld<'a> {
         GmWorld::new(guilds)
             .with_world(world)
@@ -13079,7 +13093,7 @@ mod tests {
     /// （建 NPC 体整段注释）；第二条空名检查不可达。
     #[test]
     fn m_mob_npc_gates_and_silence() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = m_world();
         let view = m_view(&guilds, &world);
         let mut sess = gm_session();
@@ -13100,7 +13114,7 @@ mod tests {
     /// 足参才进命令体（空名/`?` 红；x/y 负归 0；色钳 [0,255]）。
     #[test]
     fn m_recall_mob_ex_guard_and_clamps() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = m_world();
         let view = m_view(&guilds, &world);
         let mut sess = gm_session();
@@ -13157,7 +13171,7 @@ mod tests {
     /// 坐标 = 说话者**面前格**（`Dir` 注入）。
     #[test]
     fn m_mob_spawn_clamps_and_front_position() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = m_world();
         let view = m_view(&guilds, &world); // dir=2 Right ⇒ (6,5)
         let mut sess = gm_session();
@@ -13227,7 +13241,7 @@ mod tests {
     /// `nDura` 原样入 pending（`<=0` 由宿主抽 `Random(18)+3`）；权限重检死支照抄。
     #[test]
     fn m_give_mine_guard_and_stage() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = m_world();
         let view = m_view(&guilds, &world);
         let mut sess = gm_session();
@@ -13274,7 +13288,7 @@ mod tests {
     /// → `nCount=1`。
     #[test]
     fn m_make_clamps_and_four_gates() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let mut world = m_world();
         let view = m_view(&guilds, &world);
         let mut sess = gm_session();
@@ -13302,8 +13316,10 @@ mod tests {
         );
         // ② 攻城区：can_make_item=true（测试驱动结构）⇒ 首个城堡命中 ⇒ 攻城红。
         let mut w_war = m_world();
-        let mut castle =
-            mir2_world::UserCastle::new("沙巴克", mir2_world::CastleSiegeConfig::default());
+        let mut castle = mir2_world_bevy::UserCastle::new(
+            "沙巴克",
+            mir2_world_bevy::CastleSiegeConfig::default(),
+        );
         castle.castle_map_id = Some(0);
         castle.home_x = 5;
         castle.home_y = 5;
@@ -13349,7 +13365,7 @@ mod tests {
     /// 已设 ⇒ 装 `MobPlace` 请求（`nCount` 夹 500）并带 Mission 三元。
     #[test]
     fn m_mob_place_mission_gates_and_stage() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = m_world();
         let fx = map_fixture(mir2_envir::MapInfoFlag::default());
         let view = GmWorld::new(&guilds)
@@ -13440,7 +13456,7 @@ mod tests {
     /// 命令一律零帧 + note，**不装 pending**（部署脚本无其可达调用）。
     #[test]
     fn m_family_degenerate_without_host() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = m_world();
         let mut mission = GmMissionState {
             bo_mission: true,
@@ -13479,21 +13495,21 @@ mod tests {
     // ==================== 族 C · 城堡/赛事（5，卡 `openmir2-gm-family-c-castle`，tier=R）====================
 
     /// 世界：`gm`（Race=Play，5,5，map 0 上）。城堡/地图由各用例添加。
-    fn c_world() -> mir2_world::World {
-        let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
-        gm.race = mir2_world::ACTOR_RACE_PLAY;
+    fn c_world() -> mir2_world_bevy::World {
+        let mut w = mir2_world_bevy::World::new(20, 20);
+        let mut gm = mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5);
+        gm.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(gm);
         w
     }
 
-    fn c_castle(name: &str) -> mir2_world::UserCastle {
-        mir2_world::UserCastle::new(name, mir2_world::CastleSiegeConfig::default())
+    fn c_castle(name: &str) -> mir2_world_bevy::UserCastle {
+        mir2_world_bevy::UserCastle::new(name, mir2_world_bevy::CastleSiegeConfig::default())
     }
 
     fn c_view<'a>(
-        guilds: &'a mir2_world::GuildManager,
-        world: &'a mir2_world::World,
+        guilds: &'a mir2_world_bevy::GuildManager,
+        world: &'a mir2_world_bevy::World,
         fx: &'a MapFixture,
     ) -> GmWorld<'a> {
         GmWorld::new(guilds)
@@ -13524,8 +13540,8 @@ mod tests {
     /// `行会: X 不存在!!!`；存在 ⇒ **静默**（得分 SysMsg 注释）。
     #[test]
     fn c_contest_point_three_branches() {
-        let mut guilds = mir2_world::GuildManager::new();
-        assert!(guilds.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        assert!(guilds.add_guild("测试会", "boss", &mir2_world_bevy::GuildConfig::default()));
         let world = c_world();
         let fx = map_fixture(mir2_envir::MapInfoFlag::default());
         let view = c_view(&guilds, &world, &fx);
@@ -13566,7 +13582,7 @@ mod tests {
     /// 非法运算符/金币 ⇒ 红；合法 ⇒ 装 `('='|'-'|'+', nGold)`。
     #[test]
     fn c_sabuk_wall_gold_quirks() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let mut world = c_world();
         world.castles.push(c_castle("沙巴克"));
         let fx = map_fixture(mir2_envir::MapInfoFlag::default());
@@ -13641,8 +13657,8 @@ mod tests {
     /// （`UserCastle.GetCastle(IGuild)` 抛 NotImplementedException）。
     #[test]
     fn c_change_sabuk_lord_not_impl() {
-        let mut guilds = mir2_world::GuildManager::new();
-        assert!(guilds.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        assert!(guilds.add_guild("测试会", "boss", &mir2_world_bevy::GuildConfig::default()));
         let mut world = c_world();
         world.castles.push(c_castle("沙巴克"));
         let fx = map_fixture(mir2_envir::MapInfoFlag::default());
@@ -13704,7 +13720,7 @@ mod tests {
     /// `@开始攻城`：空名红 / 城堡不存在红；存在 ⇒ 装「翻转后的 UnderWar」请求。
     #[test]
     fn c_forced_wallconquest_war_stages_toggle() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let mut world = c_world();
         let mut castle = c_castle("沙巴克");
         castle.under_war = false;
@@ -13755,7 +13771,7 @@ mod tests {
     /// + 装范围请求 + CryCry 零帧 note；`@params` 被忽略（`Execute(IPlayerActor)`）。
     #[test]
     fn c_start_contest_gate_and_messages() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = c_world();
         let fx_off = map_fixture(mir2_envir::MapInfoFlag::default());
         let view_off = c_view(&guilds, &world, &fx_off);
@@ -13811,20 +13827,20 @@ mod tests {
     // ==================== 族 W · 行会（4，卡 `openmir2-gm-family-w-guild`，tier=R）====================
 
     /// 世界：`gm`（调用者，Race=Play）+ `chief`（Race=Play）。
-    fn w_world() -> mir2_world::World {
-        let mut w = mir2_world::World::new(20, 20);
-        let mut gm = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
-        gm.race = mir2_world::ACTOR_RACE_PLAY;
+    fn w_world() -> mir2_world_bevy::World {
+        let mut w = mir2_world_bevy::World::new(20, 20);
+        let mut gm = mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5);
+        gm.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(gm);
-        let mut chief = mir2_world::EntitySpawn::new(0, "chief", 6, 6);
-        chief.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut chief = mir2_world_bevy::EntitySpawn::new(0, "chief", 6, 6);
+        chief.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         w.add_entity(chief);
         w
     }
 
     fn w_view<'a>(
-        guilds: &'a mir2_world::GuildManager,
-        world: &'a mir2_world::World,
+        guilds: &'a mir2_world_bevy::GuildManager,
+        world: &'a mir2_world_bevy::World,
         caller_guild: Option<&'a GmGuildState>,
     ) -> GmWorld<'a> {
         let view = GmWorld::new(guilds)
@@ -13857,8 +13873,8 @@ mod tests {
     /// 掌门已有所属 ⇒ **静默**（`MemberOfGuild` 门）/ 成功 ⇒ 装 AddGuild 请求。
     #[test]
     fn w_add_guild_gates_and_member_of_guild() {
-        let mut guilds = mir2_world::GuildManager::new();
-        assert!(guilds.add_guild("现有会", "chief", &mir2_world::GuildConfig::default()));
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        assert!(guilds.add_guild("现有会", "chief", &mir2_world_bevy::GuildConfig::default()));
         let world = w_world();
         let view = w_view(&guilds, &world, None);
         let mut sess = gm_session();
@@ -13906,7 +13922,7 @@ mod tests {
         assert!(r.msgs.is_empty() && r.frames.is_empty());
         assert!(sess.pending_add_guild.is_none());
         // 未入会 + 在线 ⇒ 装请求。
-        let free = mir2_world::GuildManager::new();
+        let free = mir2_world_bevy::GuildManager::new();
         let view_free = w_view(&free, &world, None);
         let _ = execute(
             &mut sess,
@@ -13937,7 +13953,7 @@ mod tests {
     /// `@删除行会`：`ServerIndex!=0` 红 / 空名红 Help / 足参装 DelGuild 请求。
     #[test]
     fn w_del_guild_gates_and_stage() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = w_world();
         let view = w_view(&guilds, &world, None);
         let mut sess = gm_session();
@@ -13970,11 +13986,11 @@ mod tests {
     /// `@退出门派` 三支：无行会红 / 掌门拒红 / 成员成功装请求；`IsMember==false` ⇒ 静默。
     #[test]
     fn w_end_guild_three_branches() {
-        let mut guilds = mir2_world::GuildManager::new();
-        assert!(guilds.add_guild("测试会", "boss", &mir2_world::GuildConfig::default()));
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        assert!(guilds.add_guild("测试会", "boss", &mir2_world_bevy::GuildConfig::default()));
         guilds.find_guild_mut("测试会").unwrap().add_member(
             "gm",
-            &mir2_world::GuildConfig::default(),
+            &mir2_world_bevy::GuildConfig::default(),
             0,
         );
         let world = w_world();
@@ -14027,7 +14043,7 @@ mod tests {
         // 恢复成员 ⇒ 装请求。
         guilds.find_guild_mut("测试会").unwrap().add_member(
             "gm",
-            &mir2_world::GuildConfig::default(),
+            &mir2_world_bevy::GuildConfig::default(),
             0,
         );
         let v_again = w_view(&guilds, &world, Some(&ghost_member));
@@ -14043,7 +14059,7 @@ mod tests {
     /// `@允许天地合一`：toggle 双绿字 + `pending_entity.allow_group_re_call`（落库真源）。
     #[test]
     fn w_allow_group_recall_toggle_and_entity_write() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = w_world();
         let view = w_view(&guilds, &world, None);
         let mut sess = gm_session();
@@ -14094,7 +14110,7 @@ mod tests {
     /// `sess.allow_guild_re_call` ⇒ 本用例红（探针原缺陷：先 @sadasd 再 toggle 得 OFF）。
     #[test]
     fn w_allow_group_recall_independent_of_sadasd() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = w_world();
         let view = w_view(&guilds, &world, None);
         let mut sess = gm_session();
@@ -14150,7 +14166,7 @@ mod test_permission_seam {
         r.msgs.iter().map(|m| (m.color, m.text.as_str())).collect()
     }
 
-    fn world_with_horse<'a>(gm: &'a mir2_world::GuildManager) -> GmWorld<'a> {
+    fn world_with_horse<'a>(gm: &'a mir2_world_bevy::GuildManager) -> GmWorld<'a> {
         GmWorld {
             guilds: gm,
             maps: None,
@@ -14197,7 +14213,7 @@ mod test_permission_seam {
         // 未安装 ⇒ startup_permission = 0（本进程测试不安装全局）
         assert_eq!(startup_permission(), 0, "默认必须 0");
 
-        let gm = mir2_world::GuildManager::new();
+        let gm = mir2_world_bevy::GuildManager::new();
         let world = world_with_horse(&gm);
         let cfg = GmConfig::default();
 

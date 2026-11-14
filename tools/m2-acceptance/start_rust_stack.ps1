@@ -28,7 +28,7 @@
     `SEED_PROBE` 行，两者须能对上。
     **A2（卡 `openmir2-window-collector-preflight`）默认种子对称**：`-Seed` 与 `MIR2_RNG_SEED` 都未给时
     **回落默认 42**（与 C# 启动器 `start-csharp-hook.ps1` 的 `[int]$Seed = 42` 对称）。理由：Rust 生产默认
-    随机源**本就是 seed 42**（`crates/world/src/world.rs::with_maps` 的 `RandomNumber::with_seed(42)`，未设
+    随机源**本就是 seed 42**（`crates/world-bevy/src/world.rs::with_maps` 的 `RandomNumber::with_seed(42)`，未设
     `MIR2_RNG_SEED` 即沿用）⇒ 回落 42 **RNG 行为零变化**，只把「声明层」补齐（两侧都有种子自证行，消除
     「C# 恒 42 / Rust 未传不注入」的假不对称 ⇒ 假 RED/假 GREEN 源）。显式 `-Seed` / `$env:MIR2_RNG_SEED` 仍优先。
     非法种子（`-Seed`/环境变量不是 int）⇒ fail-closed：打印 `RED` 并 exit 1（不起栈，不静默降级）。

@@ -21,7 +21,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mir2_world::{CellAttribute, MapGrid};
+use mir2_world_bevy::{CellAttribute, MapGrid};
 
 use crate::error::EnvirError;
 use crate::points::{parse_points, PointInfo};
@@ -190,13 +190,13 @@ impl MapFile {
     pub fn door_tables(
         &self,
     ) -> (
-        Vec<mir2_world::map::MapDoor>,
-        Vec<mir2_world::map::DoorStatus>,
+        Vec<mir2_world_bevy::map::MapDoor>,
+        Vec<mir2_world_bevy::map::DoorStatus>,
     ) {
         let doors = self
             .doors
             .iter()
-            .map(|d| mir2_world::map::MapDoor {
+            .map(|d| mir2_world_bevy::map::MapDoor {
                 x: d.x,
                 y: d.y,
                 n08: d.n08,
@@ -207,7 +207,7 @@ impl MapFile {
         let status = self
             .door_status
             .iter()
-            .map(|s| mir2_world::map::DoorStatus {
+            .map(|s| mir2_world_bevy::map::DoorStatus {
                 opened: s.opened,
                 open_tick: s.open_tick,
             })

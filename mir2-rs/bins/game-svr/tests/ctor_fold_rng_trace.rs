@@ -5,11 +5,11 @@
 //!
 //! 判据（一条）：开着与 C# 钩子同口径的 trace 跑一遍构造段 fold + 屏障 A，落盘流水（跳过两行头部）
 //! **逐行**等于 [`CtorFoldLedger`] 的同序号条目：
-//! - ctor 公共链的 `site` 必须落在 `crates/world/src/entity.rs:`（`consumer_groups.tsv` 的
+//! - ctor 公共链的 `site` 必须落在 `crates/world-bevy/src/entity.rs:`（`consumer_groups.tsv` 的
 //!   `construct` 组；`BaseAnimalCtorDraws::draw` 是 ctor 链的**唯一抽数点**）；
 //! - 屏障 A（`ServerConf.cs:114` 的 `Random(10000)`）的 `site` 必须**外传到调用方**（该抽数点标了
 //!   `#[track_caller]`）：生产 = `bins/game-svr/src/lib.rs`（`consumer_groups.tsv` 的
-//!   `startup|rust|bins/game-svr/src/lib\.rs:` 行）⇒ 断言它**不落** `crates/world/src/`，
+//!   `startup|rust|bins/game-svr/src/lib\.rs:` 行）⇒ 断言它**不落** `crates/world-bevy/src/`，
 //!   否则结构一致性门会把它算成 `other` 组判红；
 //! - `kind`/`arg`/`result` 逐列相等 ⇒ 账本**就是**真流水的一份符号化投影（site 换成 oracle 锚），
 //!   真机对拍时两侧比较的就是这批行。
@@ -23,7 +23,7 @@
 use mir2_envir::MapLoader;
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::{CtorFoldEntry, CtorFoldSite};
+use mir2_world_bevy::{CtorFoldEntry, CtorFoldSite};
 
 const SEED: i32 = 20240229;
 const DEPLOYED_ROBOT_TXT: &str = ";机器人名称 脚本名称\r\n系统控制 AutoRunRobot\r\n";
@@ -111,7 +111,7 @@ fn fold_ledger_row_by_row_equals_rng_trace() {
     assert_eq!(plan.load_map_info.len(), 3, "3 CHECKQUEST");
     assert_eq!(plan.load_map_quest.len(), 5, "2 M1 行 + 3 隐藏 NPC");
 
-    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
     world.rng = RandomNumber::with_seed(SEED);
     // 四段按 oracle 次序落账（段① → 屏障 A → 段② → 段③；屏障 B/C 本用例不涉及）。
     let seg1 = world.fold_ctor_draws_game_app_ctor(&plan);
@@ -142,17 +142,17 @@ fn fold_ledger_row_by_row_equals_rng_trace() {
         if entry.site == CtorFoldSite::BarrierAItemNumber {
             // 屏障 A 的抽数点标了 `#[track_caller]` ⇒ 站点**外传到调用方**（生产 =
             // `bins/game-svr/src/lib.rs`）；本用例在测试进程里调 ⇒ 记为**本测试文件**。
-            // 唯一不许的是落回 `crates/world/src/`（那会让它掉出 `startup` 组、落 `other` 判红）。
+            // 唯一不许的是落回 `crates/world-bevy/src/`（那会让它掉出 `startup` 组、落 `other` 判红）。
             assert!(
-                !row.site.contains("crates/world/src/")
-                    && !row.site.contains("crates\\world\\src\\"),
+                !row.site.contains("crates/world-bevy/src/")
+                    && !row.site.contains("crates\\world-bevy\\src\\"),
                 "第 {i} 行（屏障 A）site 必须外传到调用方（`#[track_caller]`）：{}",
                 row.site
             );
         } else {
             assert!(
-                row.site.contains("crates/world/src/entity.rs:")
-                    || row.site.contains("crates\\world\\src\\entity.rs:"),
+                row.site.contains("crates/world-bevy/src/entity.rs:")
+                    || row.site.contains("crates\\world-bevy\\src\\entity.rs:"),
                 "第 {i} 行 site 必须落在 ctor 链唯一抽数点 entity.rs（`construct` 组）：{}",
                 row.site
             );

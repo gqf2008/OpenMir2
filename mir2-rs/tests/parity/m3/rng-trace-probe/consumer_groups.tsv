@@ -30,9 +30,9 @@
 #   other       未归类（**表漂移信号**：`--require-closed` 下判红，拒给假绿）
 #
 # 注意（2026-10-17 订正，片114）：Rust 侧的 `construct` 组**已启用**——固定 NPC（`insert_npc`）
-#   与商人列表（`merchant_ctor_run_delay`/`spawn_merchant`）的构造链经 `crates/world/src/entity.rs`
+#   与商人列表（`merchant_ctor_run_delay`/`spawn_merchant`）的构造链经 `crates/world-bevy/src/entity.rs`
 #   的 `BaseAnimalCtorDraws::draw` 落独立站点（片114 由 `merchant.rs`/`npc.rs` 迁出）；
-#   **怪物**构造期抽数仍折叠在刷怪路径内（`crates/world/src/mongen.rs` 的
+#   **怪物**构造期抽数仍折叠在刷怪路径内（`crates/world-bevy/src/mongen.rs` 的
 #   `AnimalState::seed_from_spawn` + 宿主 `bins/game-svr/src/mongen.rs`），oracle 侧
 #   `BaseObject..ctor` 等是独立站点。**R-6 裁决（owner 2026-10-13）**：把这个折叠登记为建模差异，
 #   但要求**机判等价** —— `rng_consumer_groups.FOLD_RULES = {construct: spawn}`（两侧同折），
@@ -43,25 +43,25 @@ monster_ai	csharp	AnimalObject\.Wondering@AnimalObject\.cs:	src/M2Server/Actor/A
 monster_ai	csharp	AnimalObject\.GotoTargetXY@AnimalObject\.cs:	src/M2Server/Actor/AnimalObject.cs:222	游走目标格
 monster_ai	csharp	MonsterObject\.Think@MonsterObject\.cs:	src/M2Server/Monster/MonsterObject.cs:208	MonsterObject.Run/Think
 monster_ai	csharp	BigHeartMonster\.AttackTarget@BigHeartMonster\.cs:	src/M2Server/Monster/Monsters/BigHeartMonster.cs:22	MB-1 R04：Random(|Hi(DC)-Lo(DC)|+1)（唯一取数点）
-monster_ai	rust	crates/world/src/monai\.rs:	crates/world/src/monai.rs	Wondering/SearchTarget 世界层调用点（#[track_caller]）
+monster_ai	rust	crates/world-bevy/src/monai\.rs:	crates/world-bevy/src/monai.rs	Wondering/SearchTarget 世界层调用点（#[track_caller]）
 drop	csharp	MonGetRandomItems@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:440	掉落在地图生成怪物时预算
 drop	csharp	GameItemSystem\.GetUpgrade@GameItemSystem\.cs:	src/M2Server/Items/GameItemSystem.cs:142	升级随机（GetUpgrade）
 drop	csharp	GameItemSystem\.UpgradeRandom\w+@GameItemSystem\.cs:	src/M2Server/Items/GameItemSystem.cs:182	UpgradeRandomWeapon/Dress/Necklace/Barcelet/Rings
 drop	csharp	GameItemSystem\.RandomSetUnknownBracelet@GameItemSystem\.cs:	src/M2Server/Items/GameItemSystem.cs:645	RandomSetUnknownBracelet
 drop	rust	crates/formula/src/drop\.rs:	crates/formula/src/drop.rs	mon_get_random_items + upgrade_random_*
 merchant	csharp	Merchant\.Run@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:132	Merchant.Run / RefillGoods
-merchant	rust	crates/world/src/merchant\.rs:	crates/world/src/merchant.rs	Merchant.Run/RefillGoods tick（⑤-2 已实现，merchant_run :661）+ O-2 rename_rand 站点（:649）；构造抽已迁 entity.rs（见 construct 行）
+merchant	rust	crates/world-bevy/src/merchant\.rs:	crates/world-bevy/src/merchant.rs	Merchant.Run/RefillGoods tick（⑤-2 已实现，merchant_run :661）+ O-2 rename_rand 站点（:649）；构造抽已迁 entity.rs（见 construct 行）
 spawn	csharp	RegenMonsters@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:815	RegenMonsters 定时刷怪
 spawn	csharp	CreateMonster@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:498	CreateMonster 生成期抽数
 spawn	csharp	InitializeMonster@WorldServer\.MonGen\.cs:	src/GameSrv/Word/WorldServer.MonGen.cs:66	InitializeMonster 属性初始化
-spawn	rust	crates/world/src/mongen\.rs:	crates/world/src/mongen.rs	刷怪 + 生成期构造抽数（含 ④-D 构造折叠）
+spawn	rust	crates/world-bevy/src/mongen\.rs:	crates/world-bevy/src/mongen.rs	刷怪 + 生成期构造抽数（含 ④-D 构造折叠）
 construct	csharp	BaseObject\.\.ctor@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:438	BaseObject ctor 的 Random(3000) 等
 construct	csharp	AnimalObject\.\.ctor@AnimalObject\.cs:	src/M2Server/Actor/AnimalObject.cs:75	AnimalObject ctor（AttackTick/WalkTick）
 construct	csharp	MonsterObject\.\.ctor@MonsterObject\.cs:	src/M2Server/Monster/MonsterObject.cs:65	MonsterObject ctor
 construct	csharp	Monsters\.\w+\.\.ctor@	src/M2Server/Monster/Monsters/*.cs	各具体怪 ctor（MeatQuality 等）
 construct	csharp	PlayObject\.\.ctor@PlayObject\.cs:	src/M2Server/Player/PlayObject.cs:1046	PlayObject ctor
-construct	rust	crates/world/src/entity\.rs:	crates/world/src/entity.rs	已启用：固定 NPC（insert_npc）/商人列表（merchant_ctor_run_delay/spawn_merchant）构造链唯一抽数点 BaseAnimalCtorDraws::draw（4 抽）；**怪物**构造仍折在 mongen 宿主（spawn 组）
-construct	rust	crates/world/src/ctor_fold\.rs:	crates/world/src/ctor_fold.rs	登录 PlayObject ctor 第 5 抽 RandomNo = Random(999999)（PlayObject.cs:1047）；前 4 抽经 entity.rs 的 BaseAnimalCtorDraws::draw（同 construct 组）
+construct	rust	crates/world-bevy/src/entity\.rs:	crates/world-bevy/src/entity.rs	已启用：固定 NPC（insert_npc）/商人列表（merchant_ctor_run_delay/spawn_merchant）构造链唯一抽数点 BaseAnimalCtorDraws::draw（4 抽）；**怪物**构造仍折在 mongen 宿主（spawn 组）
+construct	rust	crates/world-bevy/src/ctor_fold\.rs:	crates/world-bevy/src/ctor_fold.rs	登录 PlayObject ctor 第 5 抽 RandomNo = Random(999999)（PlayObject.cs:1047）；前 4 抽经 entity.rs 的 BaseAnimalCtorDraws::draw（同 construct 组）
 npc_ai	csharp	GuildOfficial\.Run@GuildOfficial\.cs:	src/GameSrv/Npc/GuildOfficial.cs:41	行会 NPC AI（非商人）
 revive	csharp	BaseObject\.ReAliveEx@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:2744	复活点随机
 homemap	csharp	GetHomeInfo@WorldServer\.cs:	src/GameSrv/Word/WorldServer.cs:1413	回城点
@@ -75,28 +75,28 @@ startup	rust	bins/game-svr/src/lib\.rs:	bins/game-svr/src/lib.rs	宿主启动期
 # ---- 窗口前置审计补登记（2026-10-13，本行追加在表末以免移动上方锚行行号）----------------
 # 宿主侧 `bins/game-svr/src/mongen.rs`（`create_monster_oracle` / `draw_monster_construct`）抽
 # **同一批构造期随机数**（BaseObject/AnimalObject/MonsterObject ctor 计时器、MeatQuality 等）
-# ⇒ 同表 `spawn`。固定场景（图 0137，MonGen 0 行）里 `crates/world/src/mongen.rs` 不抽，
+# ⇒ 同表 `spawn`。固定场景（图 0137，MonGen 0 行）里 `crates/world-bevy/src/mongen.rs` 不抽，
 # 唯一的 `spawn` 来源就是这只 pin 怪的**宿主构造抽数**；漏归类会被算成 `other` ⇒
 # `groupdiff --fold --strict` 的 `GROUP_SET_DIFF` + DoD② 的 `MISSING_EXPECTED_GROUPS(spawn)`
 # 双红（会在与 ④ 共用的独占窗口里空转一轮）。机判见 `rng_consumer_groups.py selftest`（含删行必红）。
 spawn	rust	bins/game-svr/src/mongen\.rs:	bins/game-svr/src/mongen.rs	宿主生成期构造抽数（create_monster_oracle/draw_monster_construct）；R-6 折叠后 C# construct → Rust spawn，与 drop_exp_consumers.tsv 的 setup 行同口径
-npc_ai	rust	crates/world/src/npc\.rs:	crates/world/src/npc.rs	固定 NPC Run（WorldServer.ProcessNpcs 驱动；GuildOfficial.Run / Merchant.Run 两类 body，RNG 抽数逐次同一 site）；构造抽已迁 entity.rs（construct 组）⇒ 本行现只承 Run 段；卡 openmir2-world-tick-expansion
+npc_ai	rust	crates/world-bevy/src/npc\.rs:	crates/world-bevy/src/npc.rs	固定 NPC Run（WorldServer.ProcessNpcs 驱动；GuildOfficial.Run / Merchant.Run 两类 body，RNG 抽数逐次同一 site）；构造抽已迁 entity.rs（construct 组）⇒ 本行现只承 Run 段；卡 openmir2-world-tick-expansion
 
 # ---- 2026-10-17 追加：`space_move` / `slave_mutiny` 两组（来源：RNG 分组核查的门红 MF-1）----
 #
 # `BaseObject.SpaceMoveGetRandXY`（BaseObject.cs:1040-1096）被**两个** oracle 函数共用：
 #   * `BaseObject.RecallSlave`（:1850，魔号 30 宝宝满/造怪失败的回召移位）
 #   * `BaseObject.MapRandomMove`（:1214，商人随机移动）
-# ⇒ 归 **space_move** 组。Rust 侧原先该取数在 `crates/world/src/slave.rs`，但同文件还住着**另一个**
+# ⇒ 归 **space_move** 组。Rust 侧原先该取数在 `crates/world-bevy/src/slave.rs`，但同文件还住着**另一个**
 # oracle 函数 `PlayObject.ProcessSlaveMutiny`（PlayObject.Base.cs:331，抽在 :344）⇒ 整文件归组会把两者
 # 吞进同一组、在叛变场景与 C# 侧分组不一致（假红）。故 2026-10-17 把该取数**移入独立模块**
-# `crates/world/src/space_move.rs`（`slave.rs` 用 `pub use` 再导出，公开 API 未变），实现站点按**函数**对齐：
-#   space_move   = crates/world/src/space_move.rs（两侧共用同一取数）
-#   slave_mutiny = crates/world/src/slave.rs（只剩主人死亡叛变抽样）
+# `crates/world-bevy/src/space_move.rs`（`slave.rs` 用 `pub use` 再导出，公开 API 未变），实现站点按**函数**对齐：
+#   space_move   = crates/world-bevy/src/space_move.rs（两侧共用同一取数）
+#   slave_mutiny = crates/world-bevy/src/slave.rs（只剩主人死亡叛变抽样）
 space_move	csharp	BaseObject\.SpaceMoveGetRandXY@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:1040	SpaceMoveGetRandXY：召回落（RecallSlave）与商人随机移动（MapRandomMove）共用的移位环取数（Random(Width)/Random(Height)，至多 201 次）；2026-10-17 由 groups --require-closed 的 UNCLASSIFIED 暴露后补登记
-space_move	rust	crates/world/src/space_move\.rs:	crates/world/src/space_move.rs	同上的 Rust 实现（2026-10-17 从 slave.rs 单独成模块，以与 oracle 函数对齐；slave.rs 里 pub use 再导出）
+space_move	rust	crates/world-bevy/src/space_move\.rs:	crates/world-bevy/src/space_move.rs	同上的 Rust 实现（2026-10-17 从 slave.rs 单独成模块，以与 oracle 函数对齐；slave.rs 里 pub use 再导出）
 slave_mutiny	csharp	PlayObject\.ProcessSlaveMutiny@PlayObject\.Base\.cs:	src/M2Server/Player/PlayObject.Base.cs:344	主人死亡叛变抽样 Random(MasterDieMutinyRate)（方法在 :331，抽在 :344）
-slave_mutiny	rust	crates/world/src/slave\.rs:	crates/world/src/slave.rs	同上（process_slave_mutiny，由 deliver_self_delay_msgs 驱动；方法在 slave.rs:882、抽在 :898、调用点 :1035——行号为 2026-10-17 搬迁后实测）
+slave_mutiny	rust	crates/world-bevy/src/slave\.rs:	crates/world-bevy/src/slave.rs	同上（process_slave_mutiny，由 deliver_self_delay_msgs 驱动；方法在 slave.rs:882、抽在 :898、调用点 :1035——行号为 2026-10-17 搬迁后实测）
 
 # ---- 2026-10-17 追加（复验 surviving）：C# `MapRandomMove` 自身的两抽补登记 ----
 # oracle `BaseObject.MapRandomMove`（BaseObject.cs:1214-1237）的两次初始取数在 :1235/:1236
@@ -105,7 +105,7 @@ slave_mutiny	rust	crates/world/src/slave\.rs:	crates/world/src/slave.rs	同上�
 # 注：MapRandomMove 内部进 `SpaceMove` 后的移位环取数归 `space_move` 组（见上），不重复登记。
 merchant	csharp	BaseObject\.MapRandomMove@BaseObject\.cs:	src/M2Server/Actor/BaseObject.cs:1214	商人随机移动到点的两次初始取数（:1235/:1236）；Rust 对应 merchant.rs:869/870（同组 merchant；行号为 2026-10-17 patch 后实测：`map_random_move_xy` 的两抽）
 #
-# （2026-10-17 订正，卡 openmir2-m3-firewind-spacemove-wire）：`crates/world/src/magic.rs` 的**私有**
+# （2026-10-17 订正，卡 openmir2-m3-firewind-spacemove-wire）：`crates/world-bevy/src/magic.rs` 的**私有**
 # `space_move_get_rand_xy` 副本已删除；`mag_sace_move` 与生产入口都复用 `crate::space_move`。
 #
 # 顺带更正：`consumer_groups.tsv` 第 96 行的 `slave.rs:` 行号按搬迁后实测为 :882/:898/:1035（原写 :1082）。
@@ -120,9 +120,9 @@ startup	csharp	WorldServer\.ProcessHumansMakeNewHuman@WorldServer\.cs:	src/GameS
 # ---- 2026-10-17 追加：`magic_effect` 组（魔号 8/21 效果体接线）----------------------------
 #
 # 背景：魔号 8（`SKILL_FIREWIND`）与 21（`SKILL_SPACEMOVE`）的效果体在本卡接线后才首次产生
-# 生产取数。取数若留在 `crates/world/src/magic.rs`，会被 `rng_ledger_diff.py` 的
+# 生产取数。取数若留在 `crates/world-bevy/src/magic.rs`，会被 `rng_ledger_diff.py` 的
 # `RUST_ATTACK_RE`（整文件 `magic\.rs:`）误归 `attack` 组 —— 那是历史语义漂移，**不要依赖**。
-# 因此新增独立模块 `crates/world/src/magic_effect.rs`，两侧按**函数**对齐：
+# 因此新增独立模块 `crates/world-bevy/src/magic_effect.rs`，两侧按**函数**对齐：
 #   magic_effect = MagicManager.MagPushArround（:37/:41）+ MagSaceMove（:879）
 # 其余两处取数沿用既有组，不重复登记：
 #   merchant   = BaseObject.MapRandomMove（:1235/:1236；调用者是 MagSaceMove 时 site 不变）
@@ -130,7 +130,7 @@ startup	csharp	WorldServer\.ProcessHumansMakeNewHuman@WorldServer\.cs:	src/GameS
 magic_effect	csharp	MagicManager\.MagPushArround@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:37	MagPushArround：`Random(20)`（:37）与 `Random(2)`（:41）——`IsProperTarget` 只作门、不抽数
 magic_effect	csharp	MagicManager\.MagSaceMove@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:879	MagSaceMove：施放门 `Random(11) < nLevel*2+4`（:879）
 magic_effect	csharp	MagicManager\.DoSpell@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:663	共享尾训练点 `Random(3)+1`（:663；`Level < 3 && boTrain && TrainLevel[Level] <= Abil.Level` 门内才抽）；Rust 对应 magic_effect.rs 的 `spell_train_points`（留在 `magic.rs` 会被 RUST_ATTACK_RE 整文件吞成 attack）
-magic_effect	rust	crates/world/src/magic_effect\.rs:	crates/world/src/magic_effect.rs	push_chance/push_steps/sace_move_gate/spell_train_points（唯一抽数点；`#[track_caller]` 站点落本文件）
+magic_effect	rust	crates/world-bevy/src/magic_effect\.rs:	crates/world-bevy/src/magic_effect.rs	push_chance/push_steps/sace_move_gate/spell_train_points（唯一抽数点；`#[track_caller]` 站点落本文件）
 #
 # ---- 2026-10-17 追加（卡 openmir2-rng-attack-narrow）+ 方案 C 收口（卡 openmir2-magic-draws-move）----
 #
@@ -145,14 +145,14 @@ magic_effect	rust	crates/world/src/magic_effect\.rs:	crates/world/src/magic_effe
 #     `mag_turn_undead`、`mag_tamming`（文件级行已覆盖）；
 #   · `combat.rs`       ← `power_uenhancer` / `group_melee_damage`（站点仍归 `magic_effect`，
 #     精确行见下；**不**加进 `RUST_ATTACK_RE`，否则 `--no-attack` 会静默剔除它们）。
-# `magic.rs` 若重新出现取数，`crates/world/tests/magic_draws_rng_trace.rs` 的静态断言会红；
+# `magic.rs` 若重新出现取数，`crates/world-bevy/tests/magic_draws_rng_trace.rs` 的静态断言会红；
 # **不得**再用「整文件 `magic\.rs:` 归 attack」或「整文件归 magic_effect」的豁免式口径。
 #
 # 两套 helper：oracle 的 `MagicManager.*`（private，单目标 DoSpell 支）与 `MagicBase.*`（public，
 # 组支）同式；Rust 只有一套（2026-10-17 起落 `magic_effect.rs` 的 `mpow`/`get_power`/
 # `get_power13`/`get_rpow`），故 4 个 Rust 站点 ↔ 8 个 C# 站点名。
 # `DoSpell` 行已由 m821fix 提供（方法级，覆盖 :623 无极真气与 :663 共享尾）。
-magic_effect	rust	crates/world/src/combat\.rs:(1442|1467)$	crates/world/src/combat.rs:1442	方案 C 搬迁（2026-10-17）：`power_uenhancer` 的 `Random(Level)`（:1383，oracle `MagicManager.cs:623`）与 `group_melee_damage` 的 `Random(SpeedPoint)`（:1408，oracle `MagicManager.cs:957`）从 `magic.rs` **等价搬入** `combat.rs`。二者都不是近战攻击路径（C# 对侧不匹配 `CSHARP_ATTACK_RE`）⇒ 精确行归 `magic_effect`，**不**加入 `RUST_ATTACK_RE`（否则 `--no-attack` 下静默消失，重现历史漂移）；行号漂移 ⇒ 本行失配 ⇒ `other` RED（漂移信号）
+magic_effect	rust	crates/world-bevy/src/combat\.rs:(1442|1467)$	crates/world-bevy/src/combat.rs:1442	方案 C 搬迁（2026-10-17）：`power_uenhancer` 的 `Random(Level)`（:1383，oracle `MagicManager.cs:623`）与 `group_melee_damage` 的 `Random(SpeedPoint)`（:1408，oracle `MagicManager.cs:957`）从 `magic.rs` **等价搬入** `combat.rs`。二者都不是近战攻击路径（C# 对侧不匹配 `CSHARP_ATTACK_RE`）⇒ 精确行归 `magic_effect`，**不**加入 `RUST_ATTACK_RE`（否则 `--no-attack` 下静默消失，重现历史漂移）；行号漂移 ⇒ 本行失配 ⇒ `other` RED（漂移信号）
 magic_effect	csharp	MagicManager\.MPow@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:104	MPow：`Random(MaxPower-Power)`（:104；单目标 DoSpell 支）
 magic_effect	csharp	MagicManager\.GetPower@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:110	GetPower：`Random(DefMaxPower-DefPower)`（:110）
 magic_effect	csharp	MagicManager\.GetPower13@MagicManager\.cs:	src/M2Server/Magic/MagicManager.cs:117	GetPower13：`Random(DefMaxPower-DefPower)`（:117）
@@ -174,34 +174,34 @@ magic_effect	csharp	AnimalObject\.Struck@AnimalObject\.cs:352$	src/M2Server/Acto
 # 塞进「每次攻击恰一次」的分段锚，破坏逐 k 对齐）。它属于怪物 AI，与 Rust 侧 `monai.rs::animal_struck`
 # 的 `Random(6)`（文件级已归 `monster_ai`）对称。用**精确行**登记，避免吞掉同方法 :352 的 `Random(300)`
 # （后者已归 `magic_effect`，见上）。
-monster_ai	csharp	AnimalObject\.Struck@AnimalObject\.cs:342$	src/M2Server/Actor/AnimalObject.cs:342	Struck 的攻击方向骰 `Random(6)`（:342，仅 `TargetCret != null` 且 `!GetAttackDir` 时抽）；**不是攻击路径**（受害者 AI 重选目标，`Operate(RM_STRUCK)` 在受害者消息段执行）⇒ 不加入 `CSHARP_ATTACK_RE`；Rust 对侧 `crates/world/src/monai.rs::animal_struck`（同组 monster_ai）
+monster_ai	csharp	AnimalObject\.Struck@AnimalObject\.cs:342$	src/M2Server/Actor/AnimalObject.cs:342	Struck 的攻击方向骰 `Random(6)`（:342，仅 `TargetCret != null` 且 `!GetAttackDir` 时抽）；**不是攻击路径**（受害者 AI 重选目标，`Operate(RM_STRUCK)` 在受害者消息段执行）⇒ 不加入 `CSHARP_ATTACK_RE`；Rust 对侧 `crates/world-bevy/src/monai.rs::animal_struck`（同组 monster_ai）
 
 # ---- 2026-10-17 追加（卡 P3-B2）：`RM_MAGSTRUCK` 交付段的 MSD/STD 取数 --------------------
 #
 # `MagicManager.cs` 的 2/29/23/24/33/47 效果体首次让**交付段**取数可达：
 #   * `BaseObject.GetMagStruckDamage(IActor, int)`（`BaseObject.Base.cs:814`）—— `RM_MAGSTRUCK`
 #     处理器（`:624`）唯一骰：`Lo(MAC) + Random(|Hi-Lo|+1)`。Rust 落
-#     `crates/world/src/combat.rs` 的 `get_mag_struck_damage`（**精确行**，行号漂移即 RED）。
+#     `crates/world-bevy/src/combat.rs` 的 `get_mag_struck_damage`（**精确行**，行号漂移即 RED）。
 #   * `PlayObject.StruckDamage`（`PlayObject.cs:2957` 的 `Random(10)`、`:3000` 的逐格 `Random(8)`）
-#     —— 玩家受击耐久磨损。Rust 落 `crates/world/src/combat.rs` 的 `struck_damage_durability`
+#     —— 玩家受击耐久磨损。Rust 落 `crates/world-bevy/src/combat.rs` 的 `struck_damage_durability`
 #     （既有函数；此前无 trace 触达 ⇒ 未登记）。
 #
 # 归 `magic_effect` 组（与 `AnimalObject.Struck@:352$` 的 `Random(300)` 同族：由法术交付驱动，
 # 不是攻击方 `_Attack` 的伤害账本 ⇒ 不进 `RUST_ATTACK_RE`/`CSHARP_ATTACK_RE`）。
 magic_effect	csharp	BaseObject\.GetMagStruckDamage@BaseObject\.Base\.cs:	src/M2Server/Actor/BaseObject.Base.cs:814	`GetMagStruckDamage` 的 MAC 骰 `Random(|Hi(MAC)-Lo(MAC)|+1)`（:814）；`baseObject != null` 才加 `AddAbil.UndeadPower`（`RM_MAGSTRUCK` 处理器传 null ⇒ 不生效）
 magic_effect	csharp	PlayObject\.StruckDamage@PlayObject\.cs:	src/M2Server/Player/PlayObject.cs:2957	玩家受击耐久 `Random(10)`（:2957）与逐格 `Random(8)`（:3000）
-magic_effect	rust	crates/world/src/combat\.rs:809$	crates/world/src/combat.rs:809	`get_mag_struck_damage` 的 `Random(|Hi-Lo|+1)`（P3-B2；精确行 = 漂移信号）
-magic_effect	rust	crates/world/src/combat\.rs:829$	crates/world/src/combat.rs:829	`struck_damage_durability` 的 `Random(10)`（P3-B2 首次触达；精确行）
-magic_effect	rust	crates/world/src/combat\.rs:837$	crates/world/src/combat.rs:837	`struck_damage_durability` 的逐格 `Random(8)`（P3-B2 首次触达；**MB-4 F4**：838→837，`combat.rs` 插入行后漂移，真机 trace 实测落 837）
+magic_effect	rust	crates/world-bevy/src/combat\.rs:809$	crates/world-bevy/src/combat.rs:809	`get_mag_struck_damage` 的 `Random(|Hi-Lo|+1)`（P3-B2；精确行 = 漂移信号）
+magic_effect	rust	crates/world-bevy/src/combat\.rs:829$	crates/world-bevy/src/combat.rs:829	`struck_damage_durability` 的 `Random(10)`（P3-B2 首次触达；精确行）
+magic_effect	rust	crates/world-bevy/src/combat\.rs:837$	crates/world-bevy/src/combat.rs:837	`struck_damage_durability` 的逐格 `Random(8)`（P3-B2 首次触达；**MB-4 F4**：838→837，`combat.rs` 插入行后漂移，真机 trace 实测落 837）
 
 # ---- 2026-10-18 追加（卡 openmir2-run-gap-monster-master-follow）--------------------------
 # `MonsterObject.Run` 的 Master 跟随段（`MonsterObject.cs:320`）在异图 / 超距时调用
-# `BaseObject.SpaceMove`，其落点移位环复用 `crates/world/src/space_move.rs` 的
+# `BaseObject.SpaceMove`，其落点移位环复用 `crates/world-bevy/src/space_move.rs` 的
 # `space_move_get_rand_xy` ⇒ **取数站点不变、仍归 `space_move` 组**，本卡不新增站点/组。
 # C# 侧的站点仍是 `BaseObject.SpaceMoveGetRandXY@BaseObject.cs:1040`（调用者由
 # `RecallSlave`/`MapRandomMove` 增加 `MonsterObject.Run`，同一 oracle 函数 ⇒ 同组）。
 player_run	csharp	PlayObject\.Run@PlayObject\.Message\.cs:	src/M2Server/Player/PlayObject.Message.cs:283	CheckDupObj 的 `RandomByte(8)`（:283；三处门 3s/10s/20s 全过才抽，含 `<20000` 上限）
-player_run	rust	crates/world/src/run_gap\.rs:	crates/world/src/run_gap.rs	dup_push_dir（CheckDupObj 推挤方向；独立文件避免 world.rs 宽 pattern 误吞 MabMabe/攻击站点）
+player_run	rust	crates/world-bevy/src/run_gap\.rs:	crates/world-bevy/src/run_gap.rs	dup_push_dir（CheckDupObj 推挤方向；独立文件避免 world.rs 宽 pattern 误吞 MabMabe/攻击站点）
 
 # ---- 2026-10-18 追加（卡 openmir2-run-gap-monster-specials）--------------------------------
 # BeeQueen(103)/SpiderHouseMonster(116) 的派生 ctor `SearchTime = Random(1500) + 2500` 与
@@ -221,18 +221,18 @@ monster_ai	csharp	ZilKinZombi\.Die@ZilKinZombi\.cs:	src/M2Server/Monster/Monster
 # ---- 2026-10-18 追加（MB-3：R07/R21/R34/R02）------------------------------------------
 # 怪物侧抽数站点（oracle 行号实测：`CentipedeKingMonster.cs`/`GasMothMonster.cs`/
 # `ScultureKingMonster.cs`/`ArcherGuard.cs`）。Rust 世界层站点均在
-# `crates/world/src/monai.rs`（上面的文件级 `monster_ai rust` 行已覆盖），
+# `crates/world-bevy/src/monai.rs`（上面的文件级 `monster_ai rust` 行已覆盖），
 # 宿主侧的 `Random(4)`/造怪构造抽在 `bins/game-svr/src/mongen.rs`（上面的 `spawn rust` 行已覆盖）。
 monster_ai	csharp	CentipedeKingMonster\.AttackTarget@CentipedeKingMonster\.cs:	src/M2Server/Monster/Monsters/CentipedeKingMonster.cs:52	MB-3 R07：`Random(|Hi(DC)-Lo(DC)|+1)`（`:52`，无条件）+ `Random(4)`（`:66`）+ `Random(3)`（`:68`）；Rust `monai.rs::centipede_king_attack_target`
 monster_ai	csharp	GasMothMonster\.GasAttack@GasMothMonster\.cs:	src/M2Server/Monster/Monsters/GasMothMonster.cs:17	MB-3 R21：`Random(3)`（`:17`，`baseObject != null` 后**先抽**再判 `HideMode`）；Rust `monai.rs::gas_attack`（`transparent_on_hit`）
 monster_ai	csharp	GasAttackMonster\.GasAttack@GasAttackMonster\.cs:	src/M2Server/Monster/Monsters/GasAttackMonster.cs:19	MB-3 R21：`GasAttack` 基版 `Random(|Hi(DC)-Lo(DC)|+1)`（`:19`）/ `Random(SpeedPoint)`（`:24`）/ `Random(AntiPoison+20)`（`:31`）；Rust `monai.rs::gas_attack`
 monster_ai	csharp	ScultureKingMonster\.Attack@ScultureKingMonster\.cs:	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:57	MB-3 R34：`GetAttackPower(Lo(DC), |Hi-Lo|)`（`:57`）→ `HitMagAttackTarget`；Rust `monai.rs::sculture_king_attack`
 monster_ai	csharp	ScultureKingMonster\.CallSlave@ScultureKingMonster\.cs:39$	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:39	MB-3 R34：`Random(6) + 6`（`:39`，召唤次数）；Rust `monai.rs::sculture_king_call_slave`
-monster_ai	csharp	ScultureKingMonster\.CallSlave@ScultureKingMonster\.cs:47$	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:47	MB-3 R34（MB-3b F3 订正）：`Config.Zuma[Random(4)]`（`:47`）是 **AI 取数**；Rust 站点在 `crates/world/src/monai.rs::flush_sculture_spawns`（`RandomNumber::random_below` 的 `#[track_caller]` 站点落 monai.rs）⇒ 归 `monster_ai`（此前误登 `spawn`）。同点的 `RegenMonsterByName` **构造抽**由 `Monsters.\w+..ctor@` 按 oracle 归 `construct`→折叠 `spawn`；`spawn` 只覆盖那部分构造抽
+monster_ai	csharp	ScultureKingMonster\.CallSlave@ScultureKingMonster\.cs:47$	src/M2Server/Monster/Monsters/ScultureKingMonster.cs:47	MB-3 R34（MB-3b F3 订正）：`Config.Zuma[Random(4)]`（`:47`）是 **AI 取数**；Rust 站点在 `crates/world-bevy/src/monai.rs::flush_sculture_spawns`（`RandomNumber::random_below` 的 `#[track_caller]` 站点落 monai.rs）⇒ 归 `monster_ai`（此前误登 `spawn`）。同点的 `RegenMonsterByName` **构造抽**由 `Monsters.\w+..ctor@` 按 oracle 归 `construct`→折叠 `spawn`；`spawn` 只覆盖那部分构造抽
 monster_ai	csharp	ArcherGuard\.AttackTarger@ArcherGuard\.cs:	src/M2Server/Monster/Monsters/ArcherGuard.cs:24	MB-3 R02：`Random(|Hi(DC)-Lo(DC)|+1)`（`:24`，方法名 oracle 拼写 `AttackTarger`）；Rust `monai.rs::archer_guard_attack_targer`
 
 # ---- 2026-10-19 追加（卡 `openmir2-attacktarget-overrides`，tier=R）------------------------
-# 余下 `AttackTarget` 覆写族的 oracle 取数站点。Rust 侧全部落 `crates/world/src/monai.rs`
+# 余下 `AttackTarget` 覆写族的 oracle 取数站点。Rust 侧全部落 `crates/world-bevy/src/monai.rs`
 # （上方文件级 `monster_ai rust` 行已覆盖，**不新增 Rust 行**）；下列 C# 行按方法登记，
 # 供 `groups --side csharp --require-closed` 在真机窗口出现这些怪时归类。
 # 无取数类（`MagicMonster`/`PercentMonster` 的 AttackTarget）不登记（零 RNG）。
@@ -248,10 +248,10 @@ monster_ai	csharp	ElfWarriorMonster\.SpitAttack@ElfWarriorMonster\.cs:	src/M2Ser
 # oracle `PlayObject.DropUseItems`（`PlayObject.Message.cs:2152-2228`）第二段对**全部 13 槽**
 # 逐槽抽 `Random(nRate)`（空槽也抽），命中后再走 `DropItemDown`；`StdMode == 45` 的
 # `M2Share.GetRandomLook`（`M2Share.cs:524-527`）再抽一次 `Random(Shape)`。
-# Rust 唯一取数点 = `crates/world/src/death_drop.rs`（`drop_use_items_on_death`）。
+# Rust 唯一取数点 = `crates/world-bevy/src/death_drop.rs`（`drop_use_items_on_death`）。
 drop	csharp	PlayObject\.DropUseItems@PlayObject\.Message\.cs:	src/M2Server/Player/PlayObject.Message.cs:2152	死亡逐槽 Random(DieDropUseItemRate / DieRedDropUseItemRate)（:2183/:2185，13 次含空槽）
 drop	csharp	M2Share\.GetRandomLook@M2Share\.cs:	src/M2Server/M2Share.cs:524	DropItemDown 的 StdMode45 Looks 随机：Random(StdItem.Shape)（:526）
-drop	rust	crates/world/src/death_drop\.rs:	crates/world/src/death_drop.rs	drop_use_items_on_death：13×Random(nRate) →（StdMode45）Random(Shape)；文件级行（漂移信号）
+drop	rust	crates/world-bevy/src/death_drop\.rs:	crates/world-bevy/src/death_drop.rs	drop_use_items_on_death：13×Random(nRate) →（StdMode45）Random(Shape)；文件级行（漂移信号）
 
 # ---- 2026-10-19 追加（PL-1 复验 F6）：P21 `CheckItemsNeed` 的 DropItemDown 抽数 -------------
 # P21（`PlayObject.Message.cs:403-441`）在背包满时走 `DropItemDown(UseItems[i], …)`；
@@ -263,7 +263,7 @@ drop	rust	bins/game-svr/src/ground\.rs:	bins/game-svr/src/ground.rs	P21 drop_ite
 # ---- 2026-10-20 追加（卡 `openmir2-m3-upgrade-npc`，Lane A）------------------------------
 # oracle 武器升级 NPC：提交 `UpgradeWapon`（`Merchant.cs:527-586`）**零 RNG**；取回
 # `GetBackupgWeapon`（`:592-759`）RNG 密集（耐久分支 + `Random(3)` + DC/MC/SC 三支）。
-# Rust 侧全部抽数落 `crates/world/src/merchant.rs`（上方 `merchant`/rust 行已按文件覆盖，
+# Rust 侧全部抽数落 `crates/world-bevy/src/merchant.rs`（上方 `merchant`/rust 行已按文件覆盖，
 # 不新增 rust 行）。这两行只为 C# 侧的新站点提供归类，避免 `--require-closed` 报 UNCLASSIFIED。
 merchant	csharp	Merchant\.UpgradeWapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:529	武器升级提交（零 RNG；入口行=方法声明行；**2026-10-27 订正**：原写 :527，实际 `UpgradeWapon` 声明在 `:529`（`:527` 是上一个方法的 `}`）⇒ 属陈旧快照漂移，非逻辑错误）
 merchant	csharp	Merchant\.GetBackupgWeapon@Merchant\.cs:	src/GameSrv/Npc/Merchant.cs:594	武器升级取回（**2026-10-27 订正**：原写 `:592`，那是本方法的 `/// </summary>` 行；声明在 `:594`） Random(Dura)/Random(Dura-18)、Random(3)、DC/MC/SC 三支 Random(Rate)[+Two/ThreePointRate]（:621/:637/:647/:677/:698/:719）
@@ -296,11 +296,11 @@ magic_effect	csharp	MagicManager\.MagMakePrivateTransparent@MagicManager\.cs:	sr
 # MagicMonObject：`LightingAttack` 是空函数（`MagicMonObject.cs:18-21`）⇒ 零 RNG 站点，不登记。
 #
 # MB-6 R31 **窗口前待办（未闭）**：`AroundAttack` 逐个 `_Attack` 的命中骰
-#   （`RandomByte(target.SpeedPoint)`）在 Rust 落 `crates/world/src/monai.rs::ron_attack`
+#   （`RandomByte(target.SpeedPoint)`）在 Rust 落 `crates/world-bevy/src/monai.rs::ron_attack`
 #   （本表文件级 `monster_ai` 行），而 oracle 站点是 `BaseObject._Attack@BaseObject.Attack.cs:41`
 #   （C# 侧命中 `CSHARP_ATTACK_RE` ⇒ `attack` 组）。
 #   `GetHitStruckDamage` 的护甲/耐久抽在两侧都在 `combat.rs`（attack 组）⇒ 只有命中骰这一项分组不对称。
-#   闭合方式二选一：①把命中骰下沉到 `crates/world/src/combat.rs`（改 `combat.rs`，本车道写集外）；
+#   闭合方式二选一：①把命中骰下沉到 `crates/world-bevy/src/combat.rs`（改 `combat.rs`，本车道写集外）；
 #   ②`groupdiff` 按段折叠。真机窗口（race 200/133/131 均无对象）前必须先定。
 monster_ai	csharp	SoccerBall\.Struck@SoccerBall\.cs:83$	src/M2Server/Monster/Monsters/SoccerBall.cs:83	MB-8 R36：`SoccerBall.Struck` 完全覆写 `AnimalObject.Struck`，只抽 `Random(4)`（`:83`）累加 `N550`；Rust `monai.rs::soccer_ball_struck`（`animal_struck` 的 race 120 转派）
 monster_ai	csharp	RunAway\.Run@RunAway\.cs:44$	src/M2Server/Monster/Monsters/RunAway.cs:44	MB-8 R32（死类）：目标两轴均 1 格时的 `RandomByte(4)`（`:44`）；Rust `monai.rs::run_away_run`

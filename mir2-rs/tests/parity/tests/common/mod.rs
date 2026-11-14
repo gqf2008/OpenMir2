@@ -8,7 +8,7 @@
 //! 2. 怪物掉落在地图**生成时**预算（`WorldServer.MonGen.cs:440` 的时机，RNG 在这里消耗）；
 //! 3. `attack`：`GetBaseAttackPoewr()`（攻击力 RNG）→ `_Attack`（命中 + 护甲 RNG）→
 //!    若目标 `Race > ActorRace.Play` 则 `SetLastHiter(攻击方)`（折叠 C# 的 `RM_STRUCK` 消息，
-//!    见 `crates/world/src/combat.rs` 与 `csharp/WorldGolden/StubsCombat.cs` 的说明）。
+//!    见 `crates/world-bevy/src/combat.rs` 与 `csharp/WorldGolden/StubsCombat.cs` 的说明）。
 //!
 //! 输出行（`extended` 场景才有 `atk`/`death`/`floor`）：
 //! ```text
@@ -23,7 +23,7 @@
 use std::path::{Path, PathBuf};
 
 use mir2_data::models::MonsterDropItem;
-use mir2_world::{EntitySpawn, World};
+use mir2_world_bevy::{EntitySpawn, World};
 
 pub fn world_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("world")
@@ -94,7 +94,7 @@ struct SessionSpec {
 
 impl SessionSpec {
     fn entity(&self, id: i32, x: i32, y: i32) -> EntitySpawn {
-        let mut e = mir2_world::EntitySpawn::new(id, self.chr.clone(), x, y);
+        let mut e = mir2_world_bevy::EntitySpawn::new(id, self.chr.clone(), x, y);
         e.map_id = self.map;
         e.level = self.level;
         e.hp = self.hp;
@@ -248,7 +248,7 @@ pub fn run_scenario(name: &str) -> String {
                             count: d.count,
                         })
                         .collect();
-                    world.enqueue(mir2_world::Command::SpawnMonster {
+                    world.enqueue(mir2_world_bevy::Command::SpawnMonster {
                         id: m.id,
                         name: m.name.clone(),
                         x: m.x,

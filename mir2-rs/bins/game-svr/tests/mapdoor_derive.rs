@@ -20,7 +20,7 @@ use std::path::PathBuf;
 use mir2_envir::{
     DoorStatus as EnvirDoorStatus, MapCell, MapDoor as EnvirMapDoor, MapFile, MapLoader,
 };
-use mir2_world::map::MapGrid;
+use mir2_world_bevy::map::MapGrid;
 
 fn envir_door(x: i16, y: i16, n08: u8, status_id: usize) -> EnvirMapDoor {
     EnvirMapDoor {

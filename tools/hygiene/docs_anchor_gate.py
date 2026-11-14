@@ -22,7 +22,7 @@ reviewer-21 审 M-1 后记时发现：矩阵里的 oracle/harness 行号**在合
 | 红 | 定位到 item，但符号不在其正文 | **`ANCHOR_SYMBOL_MISSING`** |
 | **rc=2** | **定位不到 item**（多解/跨文件/解析失败） | **判不了并点名**——**绝不静默跳过** |
 | 红 | 文件解析不到（`[[base_dirs]]` 都试过） | **`ANCHOR_PATH_MISSING`** |
-| 红 | 高 churn 文件（`crates/world/**`、`bins/game-svr/**`、`tests/parity/csharp/**`）写行号锚 | **`HIGH_CHURN_LINE_ANCHOR`** |
+| 红 | 高 churn 文件（`crates/world-bevy/**`、`bins/game-svr/**`、`tests/parity/csharp/**`）写行号锚 | **`HIGH_CHURN_LINE_ANCHOR`** |
 
 例外：`[[exceptions]]` 每条必须 `card` + `reason`，并在输出里以 `EXCEPTION(used)` 列出；
 文档里已无该锚 ⇒ `STALE_EXCEPTION` 红（例外也会腐烂）。
@@ -99,7 +99,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 REGISTRY_REL = "tools/hygiene/docs_anchor_registry.toml"
 
 HIGH_CHURN_PREFIXES = (
-    "mir2-rs/crates/world/",
+    "mir2-rs/crates/world-bevy/",
     "mir2-rs/bins/game-svr/",
     "mir2-rs/tests/parity/csharp/",
 )
@@ -841,8 +841,8 @@ def selftest():
     tmp = tempfile.mkdtemp(prefix="dag-")
     try:
         os.makedirs(os.path.join(tmp, "docs"))
-        os.makedirs(os.path.join(tmp, "mir2-rs", "crates", "world", "src"))
-        with open(os.path.join(tmp, "mir2-rs/crates/world/src/w.rs"), "w", encoding="utf-8") as fh:
+        os.makedirs(os.path.join(tmp, "mir2-rs", "crates", "world-bevy", "src"))
+        with open(os.path.join(tmp, "mir2-rs/crates/world-bevy/src/w.rs"), "w", encoding="utf-8") as fh:
             fh.write(
                 "fn alpha() {\n    // beta 只在注释里\n    let _ = 1;\n}\n"
                 "fn beta_v2() {}\n"
@@ -861,7 +861,7 @@ def selftest():
         reg = os.path.join(tmp, "reg.toml")
         with open(reg, "w", encoding="utf-8") as fh:
             fh.write('[[files]]\npath = "docs/m.md"\nwhy = "t"\n'
-                     '[[base_dirs]]\ndir = "mir2-rs/crates/world/src/"\n')
+                     '[[base_dirs]]\ndir = "mir2-rs/crates/world-bevy/src/"\n')
         rc, out = _cap(run, reg, tmp)
         check("绿：符号在 item 正文", rc in (1, 2) and "w.rs + alpha" not in out, out[-300:])
         check("红：只在注释里出现（剥注释）", "ANCHOR_SYMBOL_MISSING" in out and "beta" in out, out[-300:])
@@ -871,13 +871,13 @@ def selftest():
         check("整体 RED", rc == 1, rc)
 
         # 多解 ⇒ rc=2（嵌套 fn：一行落在两个 item 里）
-        with open(os.path.join(tmp, "mir2-rs/crates/world/src/w.rs"), "a", encoding="utf-8") as fh:
+        with open(os.path.join(tmp, "mir2-rs/crates/world-bevy/src/w.rs"), "a", encoding="utf-8") as fh:
             fh.write("fn outer2() {\n    fn inner2() {\n        let _ = 1;\n    }\n}\n")
         with open(os.path.join(tmp, "docs", "m.md"), "a", encoding="utf-8") as fh:
             fh.write("| h | `w.rs:11` | x |\n")  # 该行同时落在 outer2 与 inner2
         # 行号锚在 w.rs（高 churn）⇒ 直接红；用符号锚不能指定行，改测 locate_item 本身
         sp = item_spans(strip_rust_comments(open(os.path.join(
-            tmp, "mir2-rs/crates/world/src/w.rs"), encoding="utf-8").read()))
+            tmp, "mir2-rs/crates/world-bevy/src/w.rs"), encoding="utf-8").read()))
         item, why = locate_item(sp, 11)
         check("定位不到（多解）⇒ fail-closed", item is None and "多解" in (why or ""), (item, why))
     finally:
@@ -934,8 +934,8 @@ def _prose_teeth():
             # 1 fn gamma / 2 fn delta  —— **不带末尾换行**（2 行）
             fh.write("fn gamma() {}\nfn delta() {}")
         # 高 churn 前缀文件（行号锚判据的靶子；前缀见 HIGH_CHURN_PREFIXES）
-        os.makedirs(os.path.join(tmp, "mir2-rs", "crates", "world", "src"))
-        with open(os.path.join(tmp, "mir2-rs/crates/world/src/hc.rs"), "w",
+        os.makedirs(os.path.join(tmp, "mir2-rs", "crates", "world-bevy", "src"))
+        with open(os.path.join(tmp, "mir2-rs/crates/world-bevy/src/hc.rs"), "w",
                   encoding="utf-8") as fh:
             fh.write("fn alpha() {}\nfn beta() {}\n")
         with open(os.path.join(tmp, "docs", "base.md"), "w", encoding="utf-8") as fh:
@@ -1014,13 +1014,13 @@ def _prose_teeth():
               rc == 0 and "检查 0 / 悬空 0 / 越界 0" in out and "没有任何" in out, out[-300:])
 
         # 牙⑤：HIGH_CHURN 行号锚 ⇒ 红（与表模式同口径）
-        write_doc("高 churn 行号锚 `mir2-rs/crates/world/src/hc.rs:2` `beta`")
+        write_doc("高 churn 行号锚 `mir2-rs/crates/world-bevy/src/hc.rs:2` `beta`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙⑤HIGH_CHURN 文件行号锚 ⇒ 红（高churn 1）",
               rc == 1 and "HIGH_CHURN_LINE_ANCHOR" in out and "高churn 1" in out,
               out[-300:])
         # 牙⑥：同一内容改成路径/符号锚 ⇒ 绿（没有行号锚，prose 域不判）
-        write_doc("高 churn 路径/符号锚 `mir2-rs/crates/world/src/hc.rs` `beta`")
+        write_doc("高 churn 路径/符号锚 `mir2-rs/crates/world-bevy/src/hc.rs` `beta`")
         rc, out = _cap(scan_prose, tmp, base, reg)
         check("牙⑥HIGH_CHURN 改成路径/符号锚 ⇒ 绿",
               rc == 0 and "RESULT: GREEN" in out and "HIGH_CHURN_LINE_ANCHOR" not in out,
@@ -1187,8 +1187,8 @@ def _extra_teeth():
     tmp = tempfile.mkdtemp(prefix="dag-hdr-")
     try:
         os.makedirs(os.path.join(tmp, "docs"))
-        os.makedirs(os.path.join(tmp, "mir2-rs", "crates", "world", "src"))
-        with open(os.path.join(tmp, "mir2-rs/crates/world/src/w.rs"), "w", encoding="utf-8") as fh:
+        os.makedirs(os.path.join(tmp, "mir2-rs", "crates", "world-bevy", "src"))
+        with open(os.path.join(tmp, "mir2-rs/crates/world-bevy/src/w.rs"), "w", encoding="utf-8") as fh:
             fh.write("fn alpha() {{}}{0}fn beta() {{ let _ = 1; }}{0}".format(chr(10)))
         doc = chr(10).join([
             "| # | 路径 | 位置 | 会话 ghost 时 | 依据 |",
@@ -1204,7 +1204,7 @@ def _extra_teeth():
         reg = os.path.join(tmp, "reg.toml")
         with open(reg, "w", encoding="utf-8") as fh:
             fh.write('[[files]]{0}path = "docs/m.md"{0}why = "t"{0}'
-                     '[[base_dirs]]{0}dir = "mir2-rs/crates/world/src/"{0}'.format(chr(10)))
+                     '[[base_dirs]]{0}dir = "mir2-rs/crates/world-bevy/src/"{0}'.format(chr(10)))
         rc, out = _cap(run, reg, tmp)
         check("覆盖面：A 表位置列（cells[3]）被扫到",
               "no_such_symbol_a" in out and "ANCHOR_SYMBOL_MISSING" in out, out[-300:])
@@ -1227,8 +1227,8 @@ def _extra_teeth():
     tmp2 = tempfile.mkdtemp(prefix="dag-o1-")
     try:
         os.makedirs(os.path.join(tmp2, "docs"))
-        os.makedirs(os.path.join(tmp2, "mir2-rs", "crates", "world", "src"))
-        with open(os.path.join(tmp2, "mir2-rs/crates/world/src/o.rs"), "w", encoding="utf-8") as fh:
+        os.makedirs(os.path.join(tmp2, "mir2-rs", "crates", "world-bevy", "src"))
+        with open(os.path.join(tmp2, "mir2-rs/crates/world-bevy/src/o.rs"), "w", encoding="utf-8") as fh:
             fh.write("fn outer() {{{0}    fn inner() {{{0}        let x = placeholder_sym;{0}    }}{0}}}{0}"
                      .format(chr(10)))
         with open(os.path.join(tmp2, "docs", "m.md"), "w", encoding="utf-8") as fh:
@@ -1240,7 +1240,7 @@ def _extra_teeth():
         reg2 = os.path.join(tmp2, "reg.toml")
         with open(reg2, "w", encoding="utf-8") as fh:
             fh.write('[[files]]{0}path = "docs/m.md"{0}why = "t"{0}'
-                     '[[base_dirs]]{0}dir = "mir2-rs/crates/world/src/"{0}'.format(chr(10)))
+                     '[[base_dirs]]{0}dir = "mir2-rs/crates/world-bevy/src/"{0}'.format(chr(10)))
         rc3, out3 = _cap(run, reg2, tmp2)
         check("O1：无声明 + 命中行落在嵌套 item ⇒ rc=2 且 detail 含「定位不到」",
               rc3 == 2 and "UNDECIDABLE" in out3 and "定位不到" in out3, out3[-300:])

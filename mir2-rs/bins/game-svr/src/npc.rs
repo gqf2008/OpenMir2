@@ -188,7 +188,7 @@ pub struct CastleVars {
     /// `Castle.TodayIncome`（`$TODAYINCOME`；`:48-51`）。
     pub today_income: i32,
     /// `$CASTLEDOORSTATE` 的三分支文本（`:52-69`，由宿主用
-    /// [`mir2_world::castle::door_state_text`] 从 `MainDoor` 实体算出）。
+    /// [`mir2_world_bevy::castle::door_state_text`] 从 `MainDoor` 实体算出）。
     ///
     /// **`None` = `Castle.MainDoor.BaseObject == null`** ⇒ oracle 在该 token 处抛
     /// `NullReferenceException`（无 null 检查）⇒ 整页说词中止（见
@@ -4559,7 +4559,7 @@ Other
         action: QuestActionInfo,
     ) -> (Vec<SendMsg>, u8, Vec<&'static str>, Vec<gmcmd::GmFrame>) {
         let host = host_with(vec![def_with_actions("QManage", "@Login", vec![action])]);
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = gmcmd::GmWorld::new(&guilds);
         let cfg = gmcmd::GmConfig::default();
         let mut sess = gmcmd::GmSession {
@@ -4662,7 +4662,7 @@ Other
     /// 直接调跳线（不经动作，`Permission` 保持进入值 0）⇒ `GameCommand.cs:37-39` 的权限门。
     #[test]
     fn gmexecute_seam_without_lift_is_permission_too_low() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = gmcmd::GmWorld::new(&guilds);
         let cfg = gmcmd::GmConfig::default();
         let mut sess = gmcmd::GmSession::default();
@@ -4711,7 +4711,7 @@ Other
     /// 拦截层：会话在密码状态机里时，跳线**不执行**命令体（oracle `Chat.cs:241-362` 先于 `@` 支）。
     #[test]
     fn gmexecute_seam_is_blocked_by_password_state_machine() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = gmcmd::GmWorld::new(&guilds);
         let cfg = gmcmd::GmConfig::default();
         let mut sess = gmcmd::GmSession::default();
@@ -4748,7 +4748,7 @@ Other
             "@Login",
             vec![gmexec_action("禁言", "self", "10000")],
         )]);
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let world = gmcmd::GmWorld::new(&guilds);
         let cfg = gmcmd::GmConfig::default();
         let mut sess = gmcmd::GmSession::default();

@@ -8,7 +8,7 @@
 （卡 `openmir2-m3-guild-war`）的 reviewer-6 **O-1** 指出：NPC 层
 `GuildOfficial.ReQuestGuildWar`（`GuildOfficial.cs:186`）先 `DecGold(GuildWarPrice)`，
 `PlayObject.ReQuestGuildWar`（`PlayObject.Base.cs:3351`）才判 `IsGuildMaster()` ⇒
-「非掌门 / 非 0 区 / 目标缺失也白扣」这条照搬怪行为当时只在 `crates/world/src/guild.rs`
+「非掌门 / 非 0 区 / 目标缺失也白扣」这条照搬怪行为当时只在 `crates/world-bevy/src/guild.rs`
 模块头 + 证据 README 说明，`whitelist.md` 无行 ⇒「登记在案」不可机判、将来被「修好」不会被发现。
 
 本件把「T-54 登记行**存在**、编号**唯一**、且带 oracle 锚 + Rust 锁定用例名」做成一条命令 +

@@ -99,7 +99,7 @@
 
 **owner 裁决（2026-10-13）**：C# 的 `construct` 组（`BaseObject..ctor` / `AnimalObject..ctor` /
 `MonsterObject..ctor` / `Monsters.*..ctor` / `PlayObject..ctor` 的构造期抽数）在 Rust 侧被**折叠进
-刷怪路径**（`crates/world/src/mongen.rs` 的 `AnimalState::from_spawn_draws`）⇒ 接受为**登记建模差异**，
+刷怪路径**（`crates/world-bevy/src/mongen.rs` 的 `AnimalState::from_spawn_draws`）⇒ 接受为**登记建模差异**，
 但**必须机判等价**：
 
 > C# `construct` 折叠到 Rust `spawn` 后，**折叠计数与相对次序必须相等**；**只写白名单不校验不算达成**。
@@ -350,7 +350,7 @@ reviewer-6 在 approve `f11129a84` 时记了一条非阻塞 Minor（M-1）：`ch
 
 | 新牙 | 构造 | 期望 RED |
 | --- | --- | --- |
-| `mutation-bare-ref-unguarded-red` | 文档新增 `` `crates/world/src/merchant.rs:999`、`:12` ``（前一个完整引用本身未登记锚点） | `BARE_REF_UNGUARDED` |
+| `mutation-bare-ref-unguarded-red` | 文档新增 `` `crates/world-bevy/src/merchant.rs:999`、`:12` ``（前一个完整引用本身未登记锚点） | `BARE_REF_UNGUARDED` |
 | `mutation-bare-ref-file-missing-red` | 注入一条 `path` 指向不存在文件的锚点 + 其 `also` 登记行 | `BARE_REF_FILE_MISSING` |
 | `mutation-bare-ref-out-of-range-red` | 已登记的 `also` 行号改成 `99999`（超出文件行数）并把文档裸续引用同步改 `:99999` | `BARE_REF_OUT_OF_RANGE` |
 
@@ -529,5 +529,5 @@ powershell -ExecutionPolicy Bypass -File rng-trace-scene/run_rng_trace_pair.ps1 
   `222bffe3` 的 `missing_driver` + `4ca2854c` 的 `driver_card_spec_delta`；依据 `AGENTS.md` §5
   「面向人的报告作为文件进仓库」）。承接卡落地前该文件 §7 的阻塞不变。
 - **Rust 侧 `monster_ai`/`spawn`/`drop` 站点在含怪场景的实跑读数**尚未取得 ⇒ 基线 §2.1 的 Rust 侧
-  「0」是窗口/场景缺，不是代码没写（`crates/world/src/monai.rs` / `mongen.rs`、`crates/formula/src/drop.rs` 已在 master）。
+  「0」是窗口/场景缺，不是代码没写（`crates/world-bevy/src/monai.rs` / `mongen.rs`、`crates/formula/src/drop.rs` 已在 master）。
 - `merchant` / `npc_ai` / `revive` 组仍缺 Rust 实现（R-4/R-7），本卡不覆盖，随各自系统卡收拢。

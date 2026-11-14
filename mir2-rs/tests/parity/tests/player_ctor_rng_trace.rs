@@ -6,13 +6,13 @@
 //! 机器可判三件事：
 //! 1. 登录批 **恰 5 行**：`1500, 2000, 3000, 3000, 999999`，结果的符号化账本
 //!    `batch = Login`（startup 批 = `batch = Startup`，同一条流首尾相接）；
-//! 2. 前 4 抽的流水 `site` 与 startup **相同**（都落 `crates/world/src/entity.rs:` 的
+//! 2. 前 4 抽的流水 `site` 与 startup **相同**（都落 `crates/world-bevy/src/entity.rs:` 的
 //!    `BaseAnimalCtorDraws::draw`）⇒ **只靠 site 不能分桶**，必须靠 `CtorFoldLedger::batch`；
-//! 3. 第 5 抽（`RandomNo`）的 site 落在 `crates/world/src/ctor_fold.rs:`（登录 fold 点）。
+//! 3. 第 5 抽（`RandomNo`）的 site 落在 `crates/world-bevy/src/ctor_fold.rs:`（登录 fold 点）。
 
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::{CtorDrawBatch, CtorFoldPlan, World, CTOR_FOLD_DRAW_KIND};
+use mir2_world_bevy::{CtorDrawBatch, CtorFoldPlan, World, CTOR_FOLD_DRAW_KIND};
 
 const SEED: i32 = 20261027;
 
@@ -49,12 +49,13 @@ fn parse_rows(text: &str) -> Vec<Row> {
 }
 
 fn is_entity_site(site: &str) -> bool {
-    site.contains("crates/world/src/entity.rs:") || site.contains("crates\\world\\src\\entity.rs:")
+    site.contains("crates/world-bevy/src/entity.rs:")
+        || site.contains("crates\\world-bevy\\src\\entity.rs:")
 }
 
 fn is_ctor_fold_site(site: &str) -> bool {
-    site.contains("crates/world/src/ctor_fold.rs:")
-        || site.contains("crates\\world\\src\\ctor_fold.rs:")
+    site.contains("crates/world-bevy/src/ctor_fold.rs:")
+        || site.contains("crates\\world-bevy\\src\\ctor_fold.rs:")
 }
 
 #[test]

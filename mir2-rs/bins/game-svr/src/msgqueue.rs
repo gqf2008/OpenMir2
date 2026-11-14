@@ -1,4 +1,4 @@
-//! `game_svr::msgqueue` —— [`mir2_world::msgqueue`] 的**再导出**。
+//! `game_svr::msgqueue` —— [`mir2_world_bevy::msgqueue`] 的**再导出**。
 //!
 //! 实现（.NET 8 `PriorityQueue` 的四叉最小堆逐操作复刻 + `SendUpdateMsg` 队首-only 去重模型）
 //! 已下沉到 `crates/world/src/msgqueue.rs`（卡 `openmir2-frame-drain-order-audit`）：宿主的排水点
@@ -7,7 +7,7 @@
 //! 本模块只为保留既有引用路径（`game_svr::msgqueue::NetPriorityQueue` /
 //! `game_svr::msgqueue::send_update_msg`）而存在。
 
-pub use mir2_world::msgqueue::*;
+pub use mir2_world_bevy::msgqueue::*;
 
 #[cfg(test)]
 mod tests {

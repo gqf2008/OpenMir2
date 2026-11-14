@@ -86,4 +86,4 @@ pub use startpoint::{
 pub use text::{decode_config_text, decode_text};
 
 // 便于调用方/测试直接引用属性类型（`MapFile::attribute` 的返回类型）。
-pub use mir2_world::CellAttribute;
+pub use mir2_world_bevy::CellAttribute;

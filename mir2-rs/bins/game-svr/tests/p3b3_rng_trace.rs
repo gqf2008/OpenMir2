@@ -1,9 +1,9 @@
 //! **P3-B3 取数站点自证**（魔号 16/18/19/28/32/40）。
 //!
 //! 判据（合同 §5 与 B2 trace 同口径）：
-//! - B3 的新增取数必须落在 `crates/world/src/magic_effect.rs`（`consumer_groups.tsv` 的
-//!   `magic_effect` 组）；**不得**出现在 `crates/world/src/magic.rs:`（会被 `RUST_ATTACK_RE`
-//!   整文件吞成 `attack` 组）或 `crates/world/src/world.rs:`（世界路径）。
+//! - B3 的新增取数必须落在 `crates/world-bevy/src/magic_effect.rs`（`consumer_groups.tsv` 的
+//!   `magic_effect` 组）；**不得**出现在 `crates/world-bevy/src/magic.rs:`（会被 `RUST_ATTACK_RE`
+//!   整文件吞成 `attack` 组）或 `crates/world-bevy/src/world.rs:`（世界路径）。
 //!
 //! ```text
 //! M2_P3B3_TRACE_PATH=E:/tmp/p3b3-rust.tsv \
@@ -13,8 +13,8 @@
 use mir2_data::models::MagicInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::entity::{ACTOR_RACE_ANIMAL, ACTOR_RACE_PLAY};
-use mir2_world::EntitySpawn;
+use mir2_world_bevy::entity::{ACTOR_RACE_ANIMAL, ACTOR_RACE_PLAY};
+use mir2_world_bevy::EntitySpawn;
 
 const SEED: i32 = 20261017;
 
@@ -31,14 +31,14 @@ fn magic(id: u16) -> MagicInfo {
 }
 
 fn player(id: i32, name: &str, x: i32, y: i32) -> EntitySpawn {
-    let mut e = mir2_world::EntitySpawn::new(id, name.to_string(), x, y);
+    let mut e = mir2_world_bevy::EntitySpawn::new(id, name.to_string(), x, y);
     e.race = ACTOR_RACE_PLAY;
     e.level = 60;
     e
 }
 
 fn monster(id: i32, name: &str, x: i32, y: i32) -> EntitySpawn {
-    let mut e = mir2_world::EntitySpawn::new(id, name.to_string(), x, y);
+    let mut e = mir2_world_bevy::EntitySpawn::new(id, name.to_string(), x, y);
     e.race = ACTOR_RACE_ANIMAL;
     e.level = 30;
     e.life_attrib = 1;
@@ -57,7 +57,7 @@ fn p3b3_draws_land_in_magic_effect_only() {
     let _ = std::fs::remove_file(&path);
     rng_trace::enable(&path, SEED).expect("打开 rng trace");
 
-    let mut w = mir2_world::World::new(64, 64);
+    let mut w = mir2_world_bevy::World::new(64, 64);
     let caster = w.add_entity(player(0, "caster", 10, 10));
     let friend = w.add_entity(player(0, "friend", 11, 10));
     // 16 的 3×3 目标（3 只合格 Animal）。
@@ -102,15 +102,15 @@ fn p3b3_draws_land_in_magic_effect_only() {
     println!("P3B3_TRACE_PATH {path:?}");
     let norm = txt.replace('\\', "/");
     assert!(
-        norm.contains("crates/world/src/magic_effect.rs:"),
+        norm.contains("crates/world-bevy/src/magic_effect.rs:"),
         "B3 取数必须落到 magic_effect.rs:\n{txt}"
     );
     assert!(
-        !norm.contains("crates/world/src/magic.rs:"),
+        !norm.contains("crates/world-bevy/src/magic.rs:"),
         "不得把取数放回 magic.rs（会被整文件吞成 attack）:\n{txt}"
     );
     assert!(
-        !norm.contains("crates/world/src/world.rs:"),
+        !norm.contains("crates/world-bevy/src/world.rs:"),
         "不得在 world.rs 直接取数（站点组会漂）:\n{txt}"
     );
     for line in norm.lines() {
@@ -118,7 +118,7 @@ fn p3b3_draws_land_in_magic_effect_only() {
             continue;
         }
         assert!(
-            line.contains("crates/world/src/magic_effect.rs:"),
+            line.contains("crates/world-bevy/src/magic_effect.rs:"),
             "B3 站点只允许 magic_effect.rs: {line}"
         );
     }

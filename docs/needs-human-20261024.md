@@ -417,11 +417,12 @@ owner 的一句话「复核口径」：是接受「有可核非作者 approve �
 | 旧条目 | 现状 | 证据（可复跑） | 还差什么 | 结论 |
 |---|---|---|---|---|
 | `@upgradenow` / `@getbackupgnow` 只 `glog` 不执行 | **已实现**：卡 `openmir2-upgrade-npc` 已合入 master，只剩 5 项真机窗口判据（R 卡保留 `in-progress`） | `git merge-base --is-ancestor 35c039c8d master` → 真；`mir2-rs/bins/game-svr/src/shop.rs:1290-1313`（标签接缝）/ `:1349 upgrade_request_for` / `:1372 upgrade_wapon_outcome`；宿主调用在 `mir2-rs/bins/game-svr/src/lib.rs:5802`（Lane A）/ `:5899`（提交）/ `:5995/6006`（取回）——行号取自 master `917376a45`（2026-10-24 订正；旧行号 @ `55a8e7fca`：1288-1307 / 1346 / 1369 / 5809 / 5908 / 5949/5959） | 只剩窗口（同 §1） | **本条可关闭（不是 owner 的事）** |
-| `DoDamageWeapon` / `SM_DURACHANGE(642)`（旧记「未接」） | **已合入 master `8dcb8c8ca`**（合并提交即该条）；卡 `openmir2-attack-weapon-wear-642` 为 R 卡，**真机窗口未跑**（保持 `in-progress`） | `git merge-base --is-ancestor 0a0655c24 master` → 真；`git grep -c attack_success_weapon_wear master -- mir2-rs/crates/world/src/combat.rs` → 9；`grep -cE '642\|DURACHANGE' mir2-rs/crates/world/src/combat.rs` → 23；复审 `dbcf22f8e`（reviewer-6，approve / tier=R / `window_required=true`）；本版复核 @ `917376a45`：9 / 23 未变（2026-10-24 订正） | 只剩窗口（`equip_struck_save` 已解锁） | **本条可关闭（只剩窗口，不是 owner 的事）** |
+| `DoDamageWeapon` / `SM_DURACHANGE(642)`（旧记「未接」） | **已合入 master `8dcb8c8ca`**（合并提交即该条）；卡 `openmir2-attack-weapon-wear-642` 为 R 卡，**真机窗口未跑**（保持 `in-progress`） | `git merge-base --is-ancestor 0a0655c24 master` → 真；`git grep -c attack_success_weapon_wear master -- mir2-rs/crates/world-bevy/src/combat.rs` → 9；`grep -cE '642\|DURACHANGE' mir2-rs/crates/world-bevy/src/combat.rs` → 23；复审 `dbcf22f8e`（reviewer-6，approve / tier=R / `window_required=true`）；本版复核 @ `917376a45`：9 / 23 未变（2026-10-24 订正） | 只剩窗口（`equip_struck_save` 已解锁） | **本条可关闭（只剩窗口，不是 owner 的事）** |
 
 > 两句提醒：① `openmir2-ability-weaponstrong` 已合入 master `d38acf25b`（tier=R）；`goal_gate` 里现为
 > `state=pass / category=window_required / merged=true`，**不是 FAIL**，只剩真机窗口（R 卡不 closed；本版复核 @ `917376a45`）。
 > ② 642 的尾桶门保留了 oracle 的 `Math.Abs(nDura/1.03) != nDuraPoint` 怪癖（未取整 double vs int），返工说明见卡面 `765b21c4`。
+> ③ S5（`openmir2-s5-execute-world-retire`）把 world crate 整体并入 `mir2-rs/crates/world-bevy`；本表内 `combat.rs` 的引用已随迁（内容逐字节一致）。
 
 ---
 

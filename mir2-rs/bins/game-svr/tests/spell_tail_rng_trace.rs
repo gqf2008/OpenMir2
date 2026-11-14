@@ -5,7 +5,7 @@
 //! `Level < 3 && boTrain && TrainLevel[Level] <= Abil.Level` 门，抽出 `Random(3)+1`。
 //!
 //! 判据：trace 里**恰好**一条站点，且必须是
-//! `crates/world/src/magic_effect.rs:<line>`；**不得**出现 `crates/world/src/magic.rs:`。
+//! `crates/world-bevy/src/magic_effect.rs:<line>`；**不得**出现 `crates/world-bevy/src/magic.rs:`。
 //! 后者留在 `magic.rs` 会被 `rng_ledger_diff.py` 的 `RUST_ATTACK_RE`（整文件 `magic\.rs:`）
 //! 吞成 `attack` 组（Claim B 豁免），而 C# 侧该抽登记为 `magic_effect` ⇒ `groups
 //! --require-closed` 的 `--side csharp` 口径会因两侧 vocabulary 不对称而判红。
@@ -18,7 +18,7 @@
 
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::magic::{self, SkillTrainState};
+use mir2_world_bevy::magic::{self, SkillTrainState};
 
 #[test]
 fn spell_tail_train_draw_lands_in_magic_effect_not_attack_file() {
@@ -63,11 +63,11 @@ fn spell_tail_train_draw_lands_in_magic_effect_not_attack_file() {
     println!("SPELL_TAIL_ROWS {rows:?}");
     assert_eq!(rows.len(), 1, "尾部只抽一次 Random(3)；实得 {rows:?}");
     assert!(
-        rows[0].contains("crates/world/src/magic_effect.rs:"),
+        rows[0].contains("crates/world-bevy/src/magic_effect.rs:"),
         "尾部取数站点必须在 magic_effect.rs（consumer_groups.tsv 的 magic_effect 组）: {rows:?}"
     );
     assert!(
-        !norm.contains("crates/world/src/magic.rs:"),
+        !norm.contains("crates/world-bevy/src/magic.rs:"),
         "尾部取数**不得**留在 magic.rs（RUST_ATTACK_RE 会整文件吞成 attack）:\n{txt}"
     );
 }
