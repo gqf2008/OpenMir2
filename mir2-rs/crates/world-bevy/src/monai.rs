@@ -5843,11 +5843,13 @@ fn monster_run_away_expiry(world: &mut World, actor_id: i32, now: i64) {
 ///    段循环体内的每个 `_impl` 函数都只拿 `&mut A: EntityAccess`（不拿 `&mut World`）
 ///    ⇒ 循环期间不可能出生/移除实体。实体的真正增删在别的段（登录/离场、
 ///    `World::release_entity` 由 `mongen::process_cert_lists` 的 5min Ghost 清理调用、
-///    召唤/复制在 [`World::flush_sculture_spawns`] 于 `world.tick()` **之后**排水）——
+///    召唤/复制由 [`World::flush_sculture_spawns`] 在宿主 `tick_head()` **之后**、
+///    `World::tick_tail` **之前**排水，见 `tick_world_head_with_specials`）——
 ///    与 `SimMonsterAi` 段不重叠。
 /// 2. **`race`/存活态写点**：循环体内唯一改 race 的路径是 `elf_warrior_appear_now`
 ///    （`appearance.race = ElfWarriormon`），只作用于**怪物 → 怪物**，且该 world 形态函数在
-///    `flush_sculture_spawns` 的 `MakeClone` 支被调用（`world.tick()` 之后），不在本段循环里。
+///    `flush_sculture_spawns` 的 `MakeClone` 支被调用（同样在 `tick_head()` 之后、
+///    `tick_tail` 之前，不在本段循环里）。
 ///    死亡（`life_cycle.death`）可在本段被写（死亡支 `MakeGhost`、`RM_STRUCK` 的 `Struck`），
 ///    但**只改非 `Play` 实体的生死**（本段不驱动玩家 AI、不结算玩家死亡），`race == Play`
 ///    的判定与实体存在性都不受影响。`ghost`/`invisible` 同理不进本口径。

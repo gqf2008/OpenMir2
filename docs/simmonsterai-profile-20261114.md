@@ -391,7 +391,8 @@ MIR2_SIMMON_BENCH=1 MIR2_SIMMON_TICKS=200 CARGO_BUILD_JOBS=4 \
 - **正确性前置（同一 pass 内计数不变）**：段循环体内所有 `_impl` 只拿
   `crate::entity::EntityAccess`，该 trait 的 11 个方法里**没有新增/移除实体**的入口；
   实体增删发生在别的段（登录/离场、`World::release_entity` 的 5min Ghost 清理、
-  召唤/复制在 `World::flush_sculture_spawns` 于 `world.tick()` **之后**排水）。
+  召唤/复制由 `World::flush_sculture_spawns` 在宿主 `tick_head()` **之后**、
+  `World::tick_tail` **之前**排水，见 `tick_world_head_with_specials`）。
   循环体内唯一改 `race` 的路径（`elf_warrior_appear_now`，怪物 → 怪物）只在
   `flush_sculture_spawns` 的 `MakeClone` 支被调用，不在本段循环里；`death`/`ghost`
   可在本段写，但只涉及非 `Play` 实体，且 `race == Play` 口径不看 `ghost`/`death`。
