@@ -2626,14 +2626,17 @@ namespace BotSrv.Player
                 + ",\"x\":" + x.ToString(CultureInfo.InvariantCulture)
                 + ",\"y\":" + y.ToString(CultureInfo.InvariantCulture)
                 + ",\"in_world_counted\":" + (_inWorldCounted ? "true" : "false"));
+            // **落点每收一次就刷新**（卡 `openmir2-botsrv-action-probe-turn-coords`）：同一会话/actor 重发
+            // SM_LOGON 时，探针跟最新落点；进世界计数仍只记一次。
+            MainOutMessage($"SM_LOGON actor={actorId} ({x},{y})");   // 诊断（卡 action-probe-turn-coords）
+            _myActorId = actorId;
+            _probeX = x;
+            _probeY = y;
             if (_inWorldCounted)
             {
                 return;
             }
             _inWorldCounted = true;
-            _myActorId = actorId;
-            _probeX = x;
-            _probeY = y;
             _inWorld = true;
             ArmBagEquipSequence();
             ArmAttackSequence();
@@ -2652,6 +2655,30 @@ namespace BotSrv.Player
                 return;
             }
             LoadMetrics.InWorld();
+        }
+
+        /// <summary>探针坐标跟随的生产唯一应用点：服务端把本假人挪动时（推挤 `SM_BACKSTEP` /
+        /// 空间移动 `SM_SPACEMOVE_SHOW*`），把 `_probeX/_probeY` 跟到服务端当前坐标
+        /// （判定见 [`ProbeCoords.TrySelfPosition`]）。改坏必红：`--selftest-probecoords`。
+        internal void ApplySelfMoveFrame(int ident, int recog, int param, int tag)
+        {
+            if (!ProbeCoords.TrySelfPosition(ident, recog, param, tag, _myActorId, out int x, out int y))
+            {
+                return;
+            }
+            _probeX = x;
+            _probeY = y;
+            LoadMetrics.ProbePosFollowed();
+            MainOutMessage($"PROBEFOLLOW ident={ident} recog={recog} -> ({x},{y})");   // 诊断
+        }
+
+        internal int ProbeXForTest => _probeX;
+        internal int ProbeYForTest => _probeY;
+        internal void SetProbeForTest(int actorId, int x, int y)
+        {
+            _myActorId = actorId;
+            _probeX = x;
+            _probeY = y;
         }
 
         /// <summary>本会话是否已收到服务端对本连接的 `SM_LOGON`（= 真的进了世界）。
@@ -6960,8 +6987,11 @@ namespace BotSrv.Player
         private void ProcessActMsg(string datablock)
         {
             string tagstr = string.Empty;
+            LoadMetrics.ActFrameSeen();
+            LoadMetrics.ActFrameSample(datablock);
             if ((datablock[1] == 'G') && (datablock[2] == 'D') && (datablock[3] == '/'))
             {
+                LoadMetrics.GoodTickSeen();
                 string data = datablock[1..];
                 data = HUtil32.GetValidStr3(data, ref tagstr, HUtil32.Backslash);
                 if (data != "")

@@ -397,6 +397,9 @@ namespace BotSrv.Player
                     }
                     break;
                 case Messages.SM_BACKSTEP:
+                    // 被推挤后服务端会把**本假人自己**的新坐标放在 Param/Tag（RM_PUSH ⇒ SM_BACKSTEP）；
+                    // 探针必须跟过去，否则之后每个 CM_TURN 的 target 都还是登录落点（卡 action-probe-turn-coords）。
+                    ApplySelfMoveFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag);
                     n = BotHelper.GetCodeMsgSize((float)8 * 4 / 3);//sizeof(CharDesc)
                     if (body.Length > n)
                     {
@@ -431,6 +434,8 @@ namespace BotSrv.Player
                     break;
                 case Messages.SM_SPACEMOVE_SHOW:
                 case Messages.SM_SPACEMOVE_SHOW2:
+                    // 空间移动同样是服务端驱动位移（Param/Tag = 新落点），探针坐标跟着走。
+                    ApplySelfMoveFrame(msg.Ident, msg.Recog, msg.Param, msg.Tag);
                     n = BotHelper.GetCodeMsgSize((float)8 * 4 / 3);//sizeof(CharDesc)
                     if (body.Length > n)
                     {

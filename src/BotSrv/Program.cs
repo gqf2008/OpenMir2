@@ -56,6 +56,12 @@ namespace BotSrv
             {
                 System.Environment.Exit(SceneSeqSelfCheck.Run());
             }
+            // 压测动作探针坐标口径（卡 `openmir2-botsrv-action-probe-turn-coords`）：服务端驱动位移后的
+            // 探针坐标跟随 + 重入落点刷新（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-probecoords")
+            {
+                System.Environment.Exit(ProbeCoordsSelfCheck.Run());
+            }
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             GCSettings.LatencyMode = GCSettings.IsServerGC ? GCLatencyMode.Batch : GCLatencyMode.Interactive;
             AppServer serviceRunner = new AppServer();
