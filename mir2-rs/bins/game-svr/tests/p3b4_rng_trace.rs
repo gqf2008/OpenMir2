@@ -1,12 +1,12 @@
 //! **P3-B4 取数站点自证**（魔号 6/48/50/42）。
 //!
 //! 判据（合同 §5 与 B2/B3 trace 同口径）：
-//! - 毒族/群体的**魔号取数**必须落在 `crates/world/src/magic_effect.rs`
+//! - 毒族/群体的**魔号取数**必须落在 `crates/world-bevy/src/magic_effect.rs`
 //!   （`consumer_groups.tsv` 的 `magic_effect` 组）；
-//! - 共享的 `GetMagStruckDamage`（投递者侧 + 目标侧）落 `crates/world/src/combat.rs`
+//! - 共享的 `GetMagStruckDamage`（投递者侧 + 目标侧）落 `crates/world-bevy/src/combat.rs`
 //!   （与 B2 同口径的 attack 组——合同 §5 指定「MSD 唯一取数点」）；
-//! - trace 中**不得**出现 `crates/world/src/magic.rs:`（`RUST_ATTACK_RE` 会把整文件吞成
-//!   `attack` 组），也不得出现 `crates/world/src/world.rs:`（世界路径）。
+//! - trace 中**不得**出现 `crates/world-bevy/src/magic.rs:`（`RUST_ATTACK_RE` 会把整文件吞成
+//!   `attack` 组），也不得出现 `crates/world-bevy/src/world.rs:`（世界路径）。
 //!
 //! ```text
 //! M2_P3B4_TRACE_PATH=E:/tmp/p3b4-rust.tsv \
@@ -16,7 +16,7 @@
 use mir2_data::models::MagicInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::EntitySpawn;
+use mir2_world_bevy::EntitySpawn;
 
 const SEED: i32 = 20261017;
 
@@ -33,14 +33,14 @@ fn magic(id: u16, power: u16, max_power: u16, def_power: u8, def_max_power: u8) 
 }
 
 fn player(id: i32, name: &str, x: i32, y: i32) -> EntitySpawn {
-    let mut e = mir2_world::EntitySpawn::new(id, name.to_string(), x, y);
+    let mut e = mir2_world_bevy::EntitySpawn::new(id, name.to_string(), x, y);
     e.race = 0;
     e.level = 60;
     e
 }
 
 fn monster(id: i32, name: &str, x: i32, y: i32, level: u8) -> EntitySpawn {
-    let mut e = mir2_world::EntitySpawn::new(id, name.to_string(), x, y);
+    let mut e = mir2_world_bevy::EntitySpawn::new(id, name.to_string(), x, y);
     e.race = 80;
     e.level = level;
     e.hp = 100;
@@ -58,7 +58,7 @@ fn p3b4_draws_land_in_magic_effect_and_combat_only() {
     let _ = std::fs::remove_file(&path);
     rng_trace::enable(&path, SEED).expect("打开 rng trace");
 
-    let mut w = mir2_world::World::new(64, 64);
+    let mut w = mir2_world_bevy::World::new(64, 64);
     let caster = w.add_entity(player(0, "caster", 10, 10));
     let _obs = w.add_entity(player(0, "obs", 18, 10));
     let t6 = w.add_entity(monster(0, "t6", 11, 10, 10));
@@ -75,7 +75,7 @@ fn p3b4_draws_land_in_magic_effect_and_combat_only() {
     let m48 = magic(48, 1, 1, 0, 0);
     let m50 = magic(50, 1, 1, 0, 0);
     let m42 = magic(42, 0, 0, 0, 0);
-    let cfg = mir2_world::magic_effect::MabMabeConfig::default();
+    let cfg = mir2_world_bevy::magic_effect::MabMabeConfig::default();
 
     let _ = w.cast_poison_on_target(caster, &m6, 2, t6, 0x0A05, 1, &cfg);
     let _ = w.cast_group_poison_spell(caster, &m48, 2, 11, 11, 0x0A05, &cfg, |_| Some(1));
@@ -94,19 +94,19 @@ fn p3b4_draws_land_in_magic_effect_and_combat_only() {
     println!("P3B4_TRACE_PATH {path:?}");
     let norm = txt.replace('\\', "/");
     assert!(
-        norm.contains("crates/world/src/magic_effect.rs:"),
+        norm.contains("crates/world-bevy/src/magic_effect.rs:"),
         "B4 魔号取数必须落到 magic_effect.rs:\n{txt}"
     );
     assert!(
-        norm.contains("crates/world/src/combat.rs:"),
+        norm.contains("crates/world-bevy/src/combat.rs:"),
         "MSD 必须落到 combat.rs:\n{txt}"
     );
     assert!(
-        !norm.contains("crates/world/src/magic.rs:"),
+        !norm.contains("crates/world-bevy/src/magic.rs:"),
         "不得把取数放回 magic.rs（会被整文件吞成 attack）:\n{txt}"
     );
     assert!(
-        !norm.contains("crates/world/src/world.rs:"),
+        !norm.contains("crates/world-bevy/src/world.rs:"),
         "不得在 world.rs 直接取数（站点组会漂）:\n{txt}"
     );
     for line in norm.lines() {
@@ -114,8 +114,8 @@ fn p3b4_draws_land_in_magic_effect_and_combat_only() {
             continue;
         }
         assert!(
-            line.contains("crates/world/src/magic_effect.rs:")
-                || line.contains("crates/world/src/combat.rs:"),
+            line.contains("crates/world-bevy/src/magic_effect.rs:")
+                || line.contains("crates/world-bevy/src/combat.rs:"),
             "B4 站点只允许 magic_effect.rs / combat.rs: {line}"
         );
     }

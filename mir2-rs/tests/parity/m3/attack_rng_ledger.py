@@ -21,9 +21,9 @@ r"""attack_rng_ledger.py — M3②③ 攻击对拍的**同种子抽数账本**�
   summary <trace.tsv> [--side csharp|rust] [--attack-re RE] [--top N]
       总数 + 攻击路径取数 vs **噪声取数**（怪 AI `AnimalObject.Wondering`、`Merchant.Run`、
       `MonGetRandomItems` …）的占比与 Top 站点。噪声占比高 ⇒ 「同种子 ⇒ 逐 k 相同」的前提不成立。
-      `--side rust` 时按 Rust 站点表（`crates/world/src/combat.rs:…`）分类。
+      `--side rust` 时按 Rust 站点表（`crates/world-bevy/src/combat.rs:…`）分类。
   segment <trace.tsv> [--marker <site>] [--side csharp|rust] [--attack-re RE] [--json out.jsonl]
-      按 marker 分段（`--side rust` 时缺省 marker = `crates\world\src\combat.rs:109`），逐段输出
+      按 marker 分段（`--side rust` 时缺省 marker = `crates\world-bevy\src\combat.rs:109`），逐段输出
       `{"seg":k,"draws_total":N,"draws_attack":A,"draws_noise":M,"first_seq":…,"last_seq":…}`。
   diff <a.segments.jsonl> <b.segments.jsonl> [--max-diffs N]
       跨侧逐 k 对齐：`draws_total/attack/noise` 任一不等即 RED，打印「a 多抽/少抽 X」。长度不等即 RED。
@@ -63,7 +63,7 @@ CSHARP_ATTACK_RE = re.compile(
 # 1007，`bbf9694aa` 才到 1014）。三行都必须分类为 attack，否则玩家攻击链的两次
 # `AttackSuccess` 取数在 segment/summary 里被算成 noise。
 # 两处 `RUST_ATTACK_RE` 由 selftest 钉成**逐字同一张表**；selftest 另从
-# `crates/world/src/combat.rs` **现读**这三处取数的物理行，表漏行/代码搬家未同步 ⇒ 必红
+# `crates/world-bevy/src/combat.rs` **现读**这三处取数的物理行，表漏行/代码搬家未同步 ⇒ 必红
 # （不再靠人记行号）。
 # **MB-4 F4**：补 `struck_damage_durability` / `get_hit_struck_damage` 的当前取数行
 # 829/837/856/858（CowKing `Attack` 打带装备玩家会触达；改前落 UNCLASSIFIED）。
@@ -73,7 +73,7 @@ RUST_ATTACK_RE = re.compile(
 
 # 每侧缺省：分段锚（每次攻击恰调用一次的站点）+ 攻击路径正则。
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
-RUST_MARKER = r"crates\world\src\combat.rs:109"
+RUST_MARKER = r"crates\world-bevy\src\combat.rs:109"
 SIDE_DEFAULTS = {
     "csharp": (CSHARP_MARKER, CSHARP_ATTACK_RE),
     "rust": (RUST_MARKER, RUST_ATTACK_RE),
@@ -81,7 +81,7 @@ SIDE_DEFAULTS = {
 
 
 def norm_site(site):
-    """Windows 落盘 `crates\\world\\src\\combat.rs:109` ⇒ 统一成 `/` 再比（与 m3cs 同口径）。"""
+    """Windows 落盘 `crates\\world-bevy\\src\\combat.rs:109` ⇒ 统一成 `/` 再比（与 m3cs 同口径）。"""
     return (site or "").replace("\\", "/")
 
 
@@ -364,10 +364,10 @@ def cmd_selftest(args):
     check("segcount-mismatch-red", out[0] == 1, "rc=%d" % out[0])
 
     # ---- Rust 侧（--side rust）：同形 TSV + 反斜杠站点 + 同表攻击路径 ----
-    RM = r"crates\world\src\combat.rs:109"
-    RA = r"crates\world\src\combat.rs:111"
-    RB = r"crates\world\src\combat.rs:736"
-    RN = r"crates\world\src\animal.rs:10"  # 非攻击路径（噪声）
+    RM = r"crates\world-bevy\src\combat.rs:109"
+    RA = r"crates\world-bevy\src\combat.rs:111"
+    RB = r"crates\world-bevy\src\combat.rs:736"
+    RN = r"crates\world-bevy\src\animal.rs:10"  # 非攻击路径（噪声）
     # 3 次攻击，每次 = marker + 2 攻击路径取数（连续块）；外加 1 条噪声
     sites_r = [RM, RA, RB, RM, RA, RB, RN, RM, RA, RB]
     tr = os.path.join(tmp, "rust.tsv")
@@ -389,7 +389,7 @@ def cmd_selftest(args):
     # 归一：显式正斜杠 marker 也能命中反斜杠 trace（m3cs 口径）；单独落盘，勿覆盖基准
     sr_norm = os.path.join(tmp, "rust_norm.seg.jsonl")
     check("rust-marker-normalized-rc",
-          cmd_segment(argparse.Namespace(trace=tr, marker="crates/world/src/combat.rs:109",
+          cmd_segment(argparse.Namespace(trace=tr, marker="crates/world-bevy/src/combat.rs:109",
                                          json=sr_norm, side=None, attack_re="")) == 0)
     check("rust-marker-normalized-3", len(load_segments(sr_norm)) == 3)
     # 改坏：Rust 侧 k=2 段多抽一次噪声 ⇒ 必红且报「b 多抽 1」
@@ -410,10 +410,10 @@ def cmd_selftest(args):
         # 2026-10-19（bbf9694aa）起的三处当前活栈：命中骰 / AttackSuccess Random(5) / 毒门
         "1150", "1258",
     ):
-        site = "crates\\world\\src\\combat.rs:" + line
+        site = "crates\\world-bevy\\src\\combat.rs:" + line
         check("rust-site-%s-is-attack" % line, bool(RUST_ATTACK_RE.search(site)), site)
     check("rust-nonsite-not-attack",
-          not bool(RUST_ATTACK_RE.search("crates\\world\\src\\animal.rs:10")),
+          not bool(RUST_ATTACK_RE.search("crates\\world-bevy\\src\\animal.rs:10")),
           "animal.rs:10")
     # C# 侧同表：atk_power_base（BaseObject.GetAttackPower）必须算攻击路径。
     check("csharp-atk-power-base-is-attack",
@@ -438,7 +438,7 @@ def cmd_selftest(args):
     # 跑 trace 夹具，证明当前活栈 + 历史别名全部被归 `attack_path`、无 noise。
     _combat_rs = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..",
-        "mir2-rs", "crates", "world", "src", "combat.rs"))
+        "mir2-rs", "crates", "world-bevy", "src", "combat.rs"))
     _needles = (
         ("hit-dice", "rng.random_byte(target.speed_point)"),
         ("attack-success-random5", "(rng.random_below(5) + 2) as u16"),
@@ -458,7 +458,7 @@ def cmd_selftest(args):
               "combat.rs 中 `%s` 应恰有 1 处（实际行号 %r）" % (_needle, _hits))
         if len(_hits) != 1:
             continue
-        _site = r"crates\world\src\combat.rs:%d" % _hits[0]
+        _site = r"crates\world-bevy\src\combat.rs:%d" % _hits[0]
         _live_sites.append(_site)
         check("rust-%s-live-line-is-attack" % _tag,
               bool(RUST_ATTACK_RE.search(_site)), _site)
@@ -468,7 +468,7 @@ def cmd_selftest(args):
     # 历史别名按 git 事实归类（`e7d432189` 时代）：936=hit_gate、1018/1126=attack_success。
     for _line, _want_canon in (("936", "hit_gate"), ("1018", "attack_success"),
                                ("1126", "attack_success")):
-        _legacy = r"crates\world\src\combat.rs:" + _line
+        _legacy = r"crates\world-bevy\src\combat.rs:" + _line
         check("rust-legacy-%s-is-attack" % _line,
               bool(RUST_ATTACK_RE.search(_legacy)), _legacy)
         check("rust-legacy-%s-canonical-%s" % (_line, _want_canon),
@@ -476,9 +476,9 @@ def cmd_selftest(args):
     # 真 CLI：marker + 三处当前活栈 + 三处历史别名 ⇒ 全部 attack_path、noise=0。
     _sites_trace = os.path.join(tmp, "attack_sites.tsv")
     _write_trace(_sites_trace, [RM] + _live_sites + [
-        r"crates\world\src\combat.rs:936",
-        r"crates\world\src\combat.rs:1018",
-        r"crates\world\src\combat.rs:1126",
+        r"crates\world-bevy\src\combat.rs:936",
+        r"crates\world-bevy\src\combat.rs:1018",
+        r"crates\world-bevy\src\combat.rs:1126",
     ])
     _sites_out = _capture(lambda: cmd_summary(argparse.Namespace(
         trace=_sites_trace, top=8, side="rust", attack_re="")))
@@ -502,8 +502,8 @@ def cmd_selftest(args):
           "AnimalObject.Struck@:342 应归 monster_ai")
 
     # ---- Claim B（owner 2026-10-13 09:35）：非攻击站点组口径（groups 子命令，与 rng_ledger_diff 同源）----
-    RW = r"crates\world\src\monai.rs:164"
-    RSP = r"crates\world\src\mongen.rs:624"
+    RW = r"crates\world-bevy\src\monai.rs:164"
+    RSP = r"crates\world-bevy\src\mongen.rs:624"
     RDR = r"crates\formula\src\drop.rs:109"
     RST = r"bins\game-svr\src\main.rs:2856"
     tg = os.path.join(tmp, "grp.tsv")

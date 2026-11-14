@@ -33,7 +33,7 @@
 //! - `ban_guild_chat` 唯一写点是 GM `@BanGuildChat` 与跨服 `SwitchData`（本仓未移植）⇒ **恒 true**
 //!   （名字是反向的：`true` = **允许**收行会消息，见 `PlayObject.cs:1007`）。
 //!
-//! 管理器 `mir2_world::GuildManager` 才是真源；会话字段是 `PlayObject` 侧缓存。G2 的写点只有
+//! 管理器 `mir2_world_bevy::GuildManager` 才是真源；会话字段是 `PlayObject` 侧缓存。G2 的写点只有
 //! 登录物化（[`materialize`]）、1038 成功（目标）、1039 删人/自删（目标/自己）。
 //!
 //! # 回帧的「直发 vs 排队」口径
@@ -63,7 +63,7 @@ use game_svr::downlink::{self, DisplayTable};
 use mir2_data::guild::{GuildFileSections, GuildRecord, GuildStore};
 use mir2_protocol::messages;
 use mir2_shared::hutil32::to_upper;
-use mir2_world::{GuildConfig, GuildManager};
+use mir2_world_bevy::{GuildConfig, GuildManager};
 
 use crate::guild_frames;
 use crate::guild_runtime::{self, GuildMsgCfg};
@@ -188,7 +188,7 @@ impl GuildServerEvent {
 /// 本仓 `IsPasswordLocked`/`AdminMode` 未建模（`pwd_sessions` 只有密码流程）⇒ 只判 `Ghost`。
 pub(crate) fn find_play_object<'a>(
     online: &'a OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     name: &str,
 ) -> Option<&'a OnlineEntry> {
     let upper = to_upper(name);
@@ -208,7 +208,7 @@ pub(crate) fn handle_guild_cmd<S: GuildSessions>(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &DisplayTable,
     guilds: &mut GuildManager,
     cfg: &GuildConfig,
@@ -300,7 +300,7 @@ struct Ctx<'a, S: GuildSessions> {
     chr_name: &'a str,
     me: &'a OnlineEntry,
     online: &'a OnlineRegistry,
-    world: &'a mir2_world::World,
+    world: &'a mir2_world_bevy::World,
     displays: &'a DisplayTable,
     guilds: &'a mut GuildManager,
     cfg: &'a GuildConfig,
@@ -473,7 +473,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
         let Some(panel) = self
             .guilds
             .find_guild(&name)
-            .map(|g| mir2_world::guild::open_dlg_text(g, rank_no))
+            .map(|g| mir2_world_bevy::guild::open_dlg_text(g, rank_no))
         else {
             crate::glog!(
                 "WRN",
@@ -498,7 +498,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
         let text = self
             .guilds
             .find_guild(&name)
-            .map_or_else(String::new, mir2_world::GuildState::member_list_text);
+            .map_or_else(String::new, mir2_world_bevy::GuildState::member_list_text);
         // 文本为空 ⇒ `SendSocket(defMsg, "")` 整帧不发（`PlayObject.Socket.cs:108-111`）。
         if let Some(body) = guild_frames::sm_guild_member_list_756(&text) {
             self.send_self(body);
@@ -534,7 +534,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
                                 .find_guild(&my_guild)
                                 .map_or(0, |g| g.ranks.len());
                             if target_has_guild
-                                || rank_count >= mir2_world::guild::GUILD_RANK_LIST_LIMIT
+                                || rank_count >= mir2_world_bevy::guild::GUILD_RANK_LIST_LIMIT
                             {
                                 n_c = 4;
                             } else {
@@ -587,7 +587,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
             .find_guild(my_guild)
             .and_then(|g| g.get_rank_name(target_chr))
             .unwrap_or((
-                mir2_world::guild::GUILD_RANK_NO_MEMBER,
+                mir2_world_bevy::guild::GUILD_RANK_NO_MEMBER,
                 self.cfg.guild_member_rank.clone(),
             ));
         if let Some(s) = self.sessions.guild_mut(target_chr) {
@@ -727,7 +727,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
         if self.rank_no() != 1 {
             return;
         }
-        let notices = mir2_world::guild::notices_from_text(self.tail);
+        let notices = mir2_world_bevy::guild::notices_from_text(self.tail);
         if let Some(g) = self.guilds.find_guild_mut(&name) {
             g.notices = notices;
         }
@@ -826,7 +826,7 @@ mod tests {
 
     use game_svr::downlink::ActorDisplay;
     use mir2_protocol::edcode;
-    use mir2_world::{World, ACTOR_RACE_PLAY};
+    use mir2_world_bevy::{World, ACTOR_RACE_PLAY};
 
     const GM: &str = "掌门";
     const MEMBER: &str = "成员";
@@ -861,7 +861,7 @@ mod tests {
     }
 
     fn add_player(world: &mut World, name: &str, x: i32, y: i32, dir: u8) -> i32 {
-        let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
         e.race = ACTOR_RACE_PLAY;
         e.ai.dir = dir;
         world.add_entity(e)
@@ -958,7 +958,7 @@ mod tests {
                 .add_member(name, &cfg, 0);
             let s = self.sessions.get_mut(name).unwrap();
             s.guild_name = Some(GUILD.to_string());
-            s.rank_no = mir2_world::guild::GUILD_RANK_NO_MEMBER;
+            s.rank_no = mir2_world_bevy::guild::GUILD_RANK_NO_MEMBER;
             s.rank_name = self.cfg.guild_member_rank.clone();
         }
 
@@ -1073,7 +1073,9 @@ mod tests {
         assert!(rig.drain().is_empty(), "无会必须零帧");
 
         // 有会但 ranks 空（N3 后的形态）：文本空 ⇒ `SendSocket(defMsg, "")` 整帧不发。
-        rig.guilds.guilds.push(mir2_world::GuildState::new("空会"));
+        rig.guilds
+            .guilds
+            .push(mir2_world_bevy::GuildState::new("空会"));
         rig.sessions.get_mut(GM).unwrap().guild_name = Some("空会".to_string());
         rig.cmd(messages::CM_GUILDMEMBERLIST, "");
         assert!(rig.drain().is_empty(), "ranks 空必须零帧");
@@ -1176,8 +1178,8 @@ mod tests {
         rig.sessions.get_mut(MEMBER).unwrap().allow_guild = true;
         {
             let g = rig.guilds.find_guild_mut(GUILD).unwrap();
-            for i in 0..mir2_world::guild::GUILD_RANK_LIST_LIMIT {
-                g.ranks.push(mir2_world::GuildRank {
+            for i in 0..mir2_world_bevy::guild::GUILD_RANK_LIST_LIMIT {
+                g.ranks.push(mir2_world_bevy::GuildRank {
                     rank_no: (i % 99 + 1) as i16,
                     rank_name: format!("r{i}"),
                     members: Vec::new(),

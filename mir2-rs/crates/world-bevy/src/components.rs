@@ -249,7 +249,7 @@ pub struct PlayerRunState {
 /// 重叠推挤状态（`PlayObject.Run` 的 `CheckDupObj` 段）。
 ///
 /// **S3a 首个落地组件**：3 个字段、无存档面、专项用例
-/// `crates/world/tests/check_dup_obj_vectors.rs`。字段的 oracle 语义：
+/// `crates/world-bevy/tests/check_dup_obj_vectors.rs`。字段的 oracle 语义：
 ///
 /// - `check_dup_obj_tick`：上一次重叠检查的时刻；ctor `CheckDupObjTick = GetTickCount()`
 ///   （`PlayObject.cs:913`）⇒ `EntityStore::insert` 默认 `0`，落图点（`World::add_entity` /
@@ -446,9 +446,9 @@ pub struct GroupState {
 #[cfg(test)]
 mod adapters {
     use super::*;
-    use mir2_world::entity::{AnimalState, EntitySpawn, UseItemSlot};
-    use mir2_world::merchant::MerchantState as WorldMerchantState;
-    use mir2_world::npc::NpcState as WorldNpcState;
+    use crate::entity::{AnimalState, EntitySpawn, UseItemSlot};
+    use crate::merchant::MerchantState as WorldMerchantState;
+    use crate::npc::NpcState as WorldNpcState;
 
     /// 迁移工具用：把生成期载体（`EntitySpawn`，S4c 起承载全部字段）读成组件。
     pub trait FromSpawn {
@@ -581,14 +581,14 @@ mod adapters {
 mod tests {
     use super::adapters::EntityComponents;
     use super::*;
-    use mir2_world::castle::DefenseRole;
-    use mir2_world::combat::DropItem;
-    use mir2_world::entity::{
+    use crate::castle::DefenseRole;
+    use crate::combat::DropItem;
+    use crate::entity::{
         BaseAbil, CastleBinding, EntitySpawn, MonsterCtorDraws, UseItemSlot, ACTOR_RACE_PLAY,
     };
-    use mir2_world::entity::{VisibleBaseObject, VisibleEvent};
-    use mir2_world::merchant::{MerchantFlags, MerchantState as WorldMerchantState};
-    use mir2_world::npc::NpcState as WorldNpcState;
+    use crate::entity::{VisibleBaseObject, VisibleEvent};
+    use crate::merchant::{MerchantFlags, MerchantState as WorldMerchantState};
+    use crate::npc::NpcState as WorldNpcState;
 
     /// 给 **`Entity` 当前全部字段逐个** 赋非缺省值：任何一组适配器漏字段/写错字段，
     /// 全量 round-trip 的 `Debug` 比对都会红。
@@ -600,7 +600,7 @@ mod tests {
     /// `Entity` 剩 **17 字段**（P0 的 151 减 134，即 S4c 的 CoreIdentity/Ai/Slave/Merchant/Npc/Inventory）。迁出字段的 value 语义由各自的
     /// 组件契约用例（如 `s4a_component_ctor_defaults_match_entity_new`）钉住。
     fn distinctive_entity() -> EntitySpawn {
-        let mut e = mir2_world::EntitySpawn::new(91, "ecs-p0", 13, 27);
+        let mut e = crate::EntitySpawn::new(91, "ecs-p0", 13, 27);
 
         // CoreIdentity
         // Appearance
@@ -855,7 +855,7 @@ mod tests {
         let src = distinctive_entity();
         let split = EntityComponents::split(&src);
 
-        let mut restored = mir2_world::EntitySpawn::new(0, "", 0, 0);
+        let mut restored = crate::EntitySpawn::new(0, "", 0, 0);
         split.apply_to(&mut restored);
 
         assert_eq!(debug_snapshot(&src), debug_snapshot(&restored));
@@ -907,7 +907,7 @@ mod tests {
     /// 把 `CTOR_HP` 改成 0 ⇒ 进图即被死亡结算当死者（本用例红）。
     #[test]
     fn s4a_component_ctor_defaults_match_entity_new() {
-        let e = mir2_world::EntitySpawn::new(1, "x", 0, 0);
+        let e = crate::EntitySpawn::new(1, "x", 0, 0);
         assert_eq!((e.hp, e.max_hp), (100, 100), "ctor 缺省 HP/MaxHP=100/100");
         assert_eq!(e.level, 1, "ctor 缺省 Abil.Level=1");
         assert_eq!(e.abil, None, "生成路径不取 Abil 快照");
@@ -932,7 +932,7 @@ mod tests {
     /// 牙：把 `EntitySpawn::new`/`EntitySpawn::new` 的 `name_color` 改成 0 ⇒ 本用例红。
     #[test]
     fn s4b1_component_ctor_defaults_match_entity_new() {
-        let e = mir2_world::EntitySpawn::new(1, "x", 0, 0);
+        let e = crate::EntitySpawn::new(1, "x", 0, 0);
         assert_eq!(e.race, ACTOR_RACE_PLAY, "ctor 缺省 Race=Play(0)");
         assert_eq!(e.race_img, 0, "ctor 缺省 RaceImg=0");
         assert_eq!(e.appr, 0);
@@ -959,12 +959,12 @@ mod tests {
     /// 牙：把 `EntitySpawn` 的 `power_rate`/`poisoning_tick` 缺省改 0 ⇒ 本用例红。
     #[test]
     fn s4b2_component_ctor_defaults_match_entity_new() {
-        let e = mir2_world::EntitySpawn::new(1, "x", 0, 0);
+        let e = crate::EntitySpawn::new(1, "x", 0, 0);
         assert_eq!((e.power_rate, e.kill_mon_exp_rate), (100, 100));
         assert_eq!((e.power_rate_time, e.kill_mon_exp_rate_time), (0, 0));
         assert_eq!(e.luck, 0);
         assert_eq!(e.random_no, 0);
-        assert_eq!(e.poisoning_tick, mir2_world::buff::BUFF_EPOCH_MS);
+        assert_eq!(e.poisoning_tick, crate::buff::BUFF_EPOCH_MS);
         assert!(e.status_time.iter().all(|&v| v == 0));
         assert!(e.extra_abil.iter().all(|&v| v == 0));
         assert_eq!(e.group_owner, 0);

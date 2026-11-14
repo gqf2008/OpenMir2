@@ -48,12 +48,12 @@ use mir2_envir::castle::{
 };
 use mir2_envir::{MapInfoFlag, MapLoader, MapRegistry};
 use mir2_shared::rng::RandomNumber;
-use mir2_world::castle::{
+use mir2_world_bevy::castle::{
     area_state, CastleDate, CastleDefenseSpecs, CastleEvent, CastleNow, CastleSaveSkip,
     CastleSaveSnapshot, CastleSaveUnit, CastleSiegeConfig, DefenseCreature, DefenseUnitSpec,
     RedDieHome, UserCastle,
 };
-use mir2_world::mongen::MonGenState;
+use mir2_world_bevy::mongen::MonGenState;
 
 use crate::downlink;
 use crate::mongen::{MonsterTable, WorldMonsterSink};
@@ -106,7 +106,7 @@ pub fn specs_from_sabuk(cfg: &SabukWConfig) -> CastleDefenseSpecs {
 
 /// `CastleInitializeEnv` 的生产实现（同一条 `world.rng`，逐次同步造怪）。
 pub struct WorldCastleEnv<'a> {
-    pub world: &'a mut mir2_world::World,
+    pub world: &'a mut mir2_world_bevy::World,
     pub registry: &'a MapRegistry,
     pub table: &'a MonsterTable,
     pub state: &'a mut MonGenState,
@@ -117,7 +117,7 @@ pub struct WorldCastleEnv<'a> {
     pub warns: Vec<String>,
 }
 
-impl mir2_world::castle::CastleInitializeEnv for WorldCastleEnv<'_> {
+impl mir2_world_bevy::castle::CastleInitializeEnv for WorldCastleEnv<'_> {
     fn map_owner_is_self(&self, map_name: &str) -> bool {
         // `MapManager.GetMapOfServerIndex`（`MapManager.cs:169-180`）：
         // 找不到（或空名）⇒ 0；否则该图 `ServerIndex`。再与 `M2Share.ServerIndex` 比。
@@ -185,7 +185,7 @@ pub struct CastleStartupReport {
 /// 随机源必须是 `world.rng`（调用方按 `step_mon_gen` 同款 `mem::replace` 移出/还回）。
 #[allow(clippy::too_many_arguments)]
 pub fn initialize_castle(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     registry: &MapRegistry,
     table: &MonsterTable,
     state: &mut MonGenState,
@@ -225,7 +225,7 @@ pub fn initialize_castle(
             CastleEvent::Structure(ev) => {
                 if let (
                     Some(map_id),
-                    mir2_world::castle::StructureEvent::SetMapXyFlag { x, y, walk },
+                    mir2_world_bevy::castle::StructureEvent::SetMapXyFlag { x, y, walk },
                 ) = (map_id, *ev)
                 {
                     if let Some(grid) = world.maps.get_mut(map_id) {
@@ -265,21 +265,21 @@ pub fn area_state_with(flag: &MapInfoFlag, in_guild_war_area: bool) -> u16 {
 ///
 /// 颜色取 `world.castle_name_colors`（T-132 已接线）：oracle 从 `Server.conf [Setup]` 读
 /// `PKFlagNameColor` 等四键（`ServerConf.cs:509-512`；缺省 `GameSvrConf.cs:1731-1736`），
-/// 宿主启动时经 [`mir2_world::World::set_castle_name_colors`] 灌入（缺省 47/180/69/221）。
+/// 宿主启动时经 [`mir2_world_bevy::World::set_castle_name_colors`] 灌入（缺省 47/180/69/221）。
 ///
 /// # Errors
-/// 见 [`mir2_world::castle::ChrColorError`]（有行会观察者在攻城区 ⇒ oracle 抛 N1，
+/// 见 [`mir2_world_bevy::castle::ChrColorError`]（有行会观察者在攻城区 ⇒ oracle 抛 N1，
 /// 本函数把失败交给调用方丢弃该帧）。**当前生产调用点**把 `viewer_in_guild_war_area`/
 /// `target_in_guild_war_area` 硬传 `false` ⇒ N1 分支不可达（`Err` 丢帧是死代码镜像，登记 T-128）。
 pub fn query_user_name_color(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     viewer_guild: Option<&str>,
     target_guild: Option<&str>,
-    target: mir2_world::EntityRef<'_>,
+    target: mir2_world_bevy::EntityRef<'_>,
     target_name_color: u8,
     viewer_in_guild_war_area: bool,
     target_in_guild_war_area: bool,
-) -> Result<u8, mir2_world::castle::ChrColorError> {
+) -> Result<u8, mir2_world_bevy::castle::ChrColorError> {
     let castle = world
         .castle_war_area_at(Some(target.map_id), target.x, target.y)
         .and_then(|i| world.castles.get(i));
@@ -287,10 +287,10 @@ pub fn query_user_name_color(
         (Some(a), Some(b)) if a == b => 1,
         _ => 0,
     };
-    let input = mir2_world::castle::ChrColorInput {
+    let input = mir2_world_bevy::castle::ChrColorInput {
         castle,
         target_name_color,
-        target_pvp_level: mir2_world::World::pvp_level(target.pk_point),
+        target_pvp_level: mir2_world_bevy::World::pvp_level(target.pk_point),
         target_pvp_flag: target.pvp_flag,
         target_fight3_zone: false,
         my_guild_name: viewer_guild,
@@ -300,7 +300,7 @@ pub fn query_user_name_color(
         viewer_in_guild_war_area,
         target_in_guild_war_area,
     };
-    mir2_world::castle::get_chr_color(&input, &world.castle_name_colors).map(|r| r.color)
+    mir2_world_bevy::castle::get_chr_color(&input, &world.castle_name_colors).map(|r| r.color)
 }
 
 /// `Server.conf` 的 `RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
@@ -1064,7 +1064,7 @@ pub fn load_sabuk_config(
 // | `Broadcast` | `SendBroadCastMsgExt(s, MsgType.System)`（`UserCastle.cs:370/414/556/594`） | 每个 `!Ghost` 在线玩家一条 `SM_SYSMESSAGE(100)`（[`fan_out_sysmessage_to_all`]） |
 // | `ServerGroupMsg` | `SendServerGroupMsg(SS_204/SS_212, …)`（`WorldServer.cs:885-893`） | **planes 跨服通道**，客户端不可见；单服无对端 ⇒ 只记日志（同 `SS_205` 先例） |
 // | `RefreshShowName` | `StartWallconquestWar` 的 `GetMapRageHuman(PalaceEnvir,HomeX,HomeY,100)` + `RefShowName()`（`UserCastle.cs:564-575`、`BaseObject.Base.cs:1174-1177`） | 皇宫 100 格内玩家逐个 `SendRefMsg(RM_USERNAME)`（[`refresh_show_name_in_area`]） |
-// | `Structure(Ref*)` | `CastleDoor.Open/Close` 的 `SendRefMsg(RM_DIGUP/RM_DIGDOWN)`（`CastleDoor.cs:44-76`） | 重新入队成 [`mir2_world::monai::MonsterRefMsg`]，与门/墙 `Run` 共用同一条排水（[`queue_structure_ref_msg`]） |
+// | `Structure(Ref*)` | `CastleDoor.Open/Close` 的 `SendRefMsg(RM_DIGUP/RM_DIGDOWN)`（`CastleDoor.cs:44-76`） | 重新入队成 [`mir2_world_bevy::monai::MonsterRefMsg`]，与门/墙 `Run` 共用同一条排水（[`queue_structure_ref_msg`]） |
 //
 // 排水序的口径与既有各排水点一致：**每个收件人一条** `NetPriorityQueue`，优先级 = `(byte)wIdent`；
 // 跨源（同一玩家队列里同时有城堡广播与其它系统帧）的合并不建模（登记，见卡报告）。
@@ -1087,7 +1087,7 @@ pub fn load_sabuk_config(
 /// sift 决定出队序（`crates/world/src/msgqueue.rs`）。
 pub(crate) fn fan_out_sysmessage_to_all(
     online: &crate::OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, tokio::sync::mpsc::UnboundedSender<crate::SimToGate>>,
     texts: &[String],
     f_color: u8,
@@ -1163,11 +1163,11 @@ fn guild_name_of(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn refresh_show_name_in_area(
     online: &crate::OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &crate::downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, tokio::sync::mpsc::UnboundedSender<crate::SimToGate>>,
     sessions: &std::collections::HashMap<String, crate::SessionGround>,
-    war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
+    war_states: &std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
     palace_map_id: Option<usize>,
     home_x: i16,
     home_y: i16,
@@ -1265,7 +1265,7 @@ pub(crate) fn refresh_show_name_in_area(
 /// `castle_official_action_exec` 的 `emit`）都走它——`RepairWall` 返回的是**墙**的
 /// `RefStatus`（`UserCastle.cs:981/991`），只查门会整帧丢失（review `4a165328` F2）。
 fn castle_unit_entity_at(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     castle_index: usize,
     x: i16,
     y: i16,
@@ -1283,7 +1283,7 @@ fn castle_unit_entity_at(
     .and_then(|u| u.entity_id)
 }
 
-/// `UserCastle.Run` 的 `Structure(Ref*)` 事件 → [`mir2_world::monai::MonsterRefMsg`]。
+/// `UserCastle.Run` 的 `Structure(Ref*)` 事件 → [`mir2_world_bevy::monai::MonsterRefMsg`]。
 ///
 /// **为什么重新入队而不是直接出帧**：门/墙 `Run`（`CastleDoor.Run`/`WallStructure.Run`）在
 /// `crates/world/src/monai.rs::castle_structure_run` 里已经走 `send_ref_msg` →
@@ -1301,16 +1301,16 @@ fn castle_unit_entity_at(
 ///
 /// 返回是否入队（`SetMapXyFlag` / 无绑定实体 / 实体不在世界 ⇒ `false`）。
 pub(crate) fn queue_structure_ref_msg(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     castle_index: usize,
-    event: &mir2_world::castle::StructureEvent,
+    event: &mir2_world_bevy::castle::StructureEvent,
 ) -> bool {
-    use mir2_world::castle::StructureEvent;
+    use mir2_world_bevy::castle::StructureEvent;
     let (ident, dir, x, y) = match *event {
-        StructureEvent::RefDigUp { dir, x, y } => (mir2_world::monai::RM_DIGUP, dir, x, y),
-        StructureEvent::RefDigDown { dir, x, y } => (mir2_world::monai::RM_DIGDOWN, dir, x, y),
-        StructureEvent::RefTurn { dir, x, y } => (mir2_world::monai::RM_TURN, dir, x, y),
-        StructureEvent::RefAlive { dir, x, y } => (mir2_world::monai::RM_ALIVE, dir, x, y),
+        StructureEvent::RefDigUp { dir, x, y } => (mir2_world_bevy::monai::RM_DIGUP, dir, x, y),
+        StructureEvent::RefDigDown { dir, x, y } => (mir2_world_bevy::monai::RM_DIGDOWN, dir, x, y),
+        StructureEvent::RefTurn { dir, x, y } => (mir2_world_bevy::monai::RM_TURN, dir, x, y),
+        StructureEvent::RefAlive { dir, x, y } => (mir2_world_bevy::monai::RM_ALIVE, dir, x, y),
         StructureEvent::SetMapXyFlag { .. } => return false,
     };
     let actor_id = castle_unit_entity_at(world, castle_index, x, y);
@@ -1328,18 +1328,18 @@ pub(crate) fn queue_structure_ref_msg(
     else {
         return false;
     };
-    let recipients = mir2_world::session::send_ref_msg_targets_at(
+    let recipients = mir2_world_bevy::session::send_ref_msg_targets_at(
         world,
         // 门/墙不是玩家 ⇒ sender 永不在收件人集合里；`SendRefMsg` 的格扫本身不排除 sender。
         i32::MIN,
         map_id,
         i32::from(x),
         i32::from(y),
-        mir2_world::session::SEND_REF_MSG_RANGE,
+        mir2_world_bevy::session::SEND_REF_MSG_RANGE,
     );
     world
         .pending_monster_ref_msgs
-        .push(mir2_world::monai::MonsterRefMsg {
+        .push(mir2_world_bevy::monai::MonsterRefMsg {
             actor_id,
             ident,
             w_param: i32::from(dir),
@@ -1373,7 +1373,7 @@ pub(crate) fn queue_structure_ref_msg(
 /// `today` = 宿主墙钟的 `(y, m, d)`（`$CASTLEGETDAYS` 的 `HUtil32.GetDayCount(DateTime.Now, ChangeDate)`）。
 #[must_use]
 pub fn castle_vars_for(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     actor_id: i32,
     today: (i32, u32, u32),
 ) -> Option<game_svr::npc::CastleVars> {
@@ -1386,7 +1386,7 @@ pub fn castle_vars_for(
 /// `$CASTLEWARDATE` 回退）与「`$CASTLEWARDATE` 写回后的粘滞解析」都用它。
 #[must_use]
 pub fn castle_vars_for_index(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     index: usize,
     today: (i32, u32, u32),
 ) -> Option<game_svr::npc::CastleVars> {
@@ -1409,7 +1409,7 @@ pub fn castle_vars_for_index(
             .main_door
             .as_ref()
             .filter(|d| d.entity_id.is_some())
-            .map(mir2_world::castle::door_state_text),
+            .map(mir2_world_bevy::castle::door_state_text),
         under_war: c.under_war,
         war_date_text: castle_war_date_text(c),
         war_list_text: castle_attack_war_list_text(c),
@@ -1448,7 +1448,7 @@ fn change_date_text(raw: &str) -> Option<String> {
 /// `UserCastle.GetWarDate()`（`UserCastle.cs:712-725`）：`AttackWarList` 空 ⇒ `""`，
 /// 否则**首条**申请的 `{年}年{月}月{日}日`。
 #[must_use]
-pub fn castle_war_date_text(c: &mir2_world::castle::UserCastle) -> String {
+pub fn castle_war_date_text(c: &mir2_world_bevy::castle::UserCastle) -> String {
     let Some(first) = c.attack_war_list.first() else {
         return String::new();
     };
@@ -1464,7 +1464,7 @@ pub fn castle_war_date_text(c: &mir2_world::castle::UserCastle) -> String {
 /// `n10 > 40` 时先插 `\` 再重置；条目文本 = `"行会名"`（两侧 ASCII 双引号）。
 /// 空表 ⇒ `""`（部署 `Castle/0/AttackSabukWall.txt` 0 字节 ⇒ `$LISTOFWAR` 走整行替换）。
 #[must_use]
-pub fn castle_attack_war_list_text(c: &mir2_world::castle::UserCastle) -> String {
+pub fn castle_attack_war_list_text(c: &mir2_world_bevy::castle::UserCastle) -> String {
     let mut result = String::new();
     let (mut wy, mut wm, mut wd) = (0i32, 0u32, 0u32);
     let mut n10 = 0usize;
@@ -1524,13 +1524,13 @@ pub struct OfficialActionOutcome {
 
 /// `CastleOfficial.UserSelect` 的动作 switch（`CastleOfficial.cs:199-238`）构造级实现。
 ///
-/// `label` 经 [`mir2_world::castle::castle_official_action`] 判类（精确匹配优先、`CompareLStr`
+/// `label` 经 [`mir2_world_bevy::castle::castle_official_action`] 判类（精确匹配优先、`CompareLStr`
 /// 前缀匹配次之）；未命中 ⇒ `None`（oracle 的 switch 也没有该分支）。
 ///
 /// `prices` = `(RepairDoorPrice, RepairWallPrice)`（`Server.conf [Setup] RepairDoor/RepairWall`）。
 #[allow(clippy::too_many_arguments)]
 pub fn castle_official_action_exec(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &crate::downlink::DisplayTable,
     castle_index: usize,
     now_tick: i64,
@@ -1539,7 +1539,7 @@ pub fn castle_official_action_exec(
     green: (u8, u8),
     red: (u8, u8),
 ) -> Option<OfficialActionOutcome> {
-    use mir2_world::castle::{
+    use mir2_world_bevy::castle::{
         castle_official_action, official_repair_door, official_repair_wall, CastleOfficialAction,
         StructureEvent,
     };
@@ -1552,7 +1552,7 @@ pub fn castle_official_action_exec(
         ..Default::default()
     };
     // 事件 → 帧：`SetMapXyFlag` 落到该城地图；`Ref*` 按 `SendRefMsg` 口径出帧。
-    let mut emit = |world: &mut mir2_world::World, events: Vec<StructureEvent>| {
+    let mut emit = |world: &mut mir2_world_bevy::World, events: Vec<StructureEvent>| {
         for ev in events {
             match ev {
                 StructureEvent::SetMapXyFlag { x, y, walk } => {
@@ -1571,9 +1571,9 @@ pub fn castle_official_action_exec(
                 | StructureEvent::RefDigDown { dir, x, y }
                 | StructureEvent::RefAlive { dir, x, y } => {
                     let ident = match ev {
-                        StructureEvent::RefDigUp { .. } => mir2_world::monai::RM_DIGUP,
-                        StructureEvent::RefDigDown { .. } => mir2_world::monai::RM_DIGDOWN,
-                        _ => mir2_world::monai::RM_ALIVE,
+                        StructureEvent::RefDigUp { .. } => mir2_world_bevy::monai::RM_DIGUP,
+                        StructureEvent::RefDigDown { .. } => mir2_world_bevy::monai::RM_DIGDOWN,
+                        _ => mir2_world_bevy::monai::RM_ALIVE,
                     };
                     let Some(unit) = castle_unit_entity_at(world, castle_index, x, y) else {
                         continue;
@@ -1589,7 +1589,7 @@ pub fn castle_official_action_exec(
                     let d = displays.get(unit);
                     let (feature, light) = d.map_or((0, 0), |d| (d.feature, d.light));
                     let body = match ident {
-                        mir2_world::monai::RM_DIGUP => crate::smframe::sm_digup(
+                        mir2_world_bevy::monai::RM_DIGUP => crate::smframe::sm_digup(
                             unit,
                             u16::try_from(x).unwrap_or(0),
                             u16::try_from(y).unwrap_or(0),
@@ -1598,7 +1598,7 @@ pub fn castle_official_action_exec(
                             feature,
                             entity_status,
                         ),
-                        mir2_world::monai::RM_DIGDOWN => crate::smframe::sm_digdown(
+                        mir2_world_bevy::monai::RM_DIGDOWN => crate::smframe::sm_digdown(
                             unit,
                             u16::try_from(x).unwrap_or(0),
                             u16::try_from(y).unwrap_or(0),
@@ -1616,13 +1616,13 @@ pub fn castle_official_action_exec(
                             &crate::downlink::char_desc(feature, d.map_or(0, |d| d.status)),
                         ),
                     };
-                    for r in mir2_world::session::send_ref_msg_targets_at(
+                    for r in mir2_world_bevy::session::send_ref_msg_targets_at(
                         world,
                         i32::MIN,
                         map_id,
                         i32::from(x),
                         i32::from(y),
-                        mir2_world::session::SEND_REF_MSG_RANGE,
+                        mir2_world_bevy::session::SEND_REF_MSG_RANGE,
                     ) {
                         out.frames.push((r, body.clone()));
                     }
@@ -1639,7 +1639,7 @@ pub fn castle_official_action_exec(
                 .main_door_control(close)
                 .into_iter()
                 .filter_map(|e| match e {
-                    mir2_world::castle::CastleEvent::Structure(ev) => Some(ev),
+                    mir2_world_bevy::castle::CastleEvent::Structure(ev) => Some(ev),
                     _ => None,
                 })
                 .collect();
@@ -1697,7 +1697,7 @@ mod persist_tests {
 
     use super::*;
     use mir2_envir::castle::parse_sabuk_w_bytes;
-    use mir2_world::castle::GuildId;
+    use mir2_world_bevy::castle::GuildId;
 
     // ------------------------------------------------------------------
     // 夹具

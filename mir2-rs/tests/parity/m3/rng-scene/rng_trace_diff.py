@@ -58,8 +58,8 @@ import rng_consumer_groups as rcg  # noqa: E402
 # 站点常量（与 `rng-trace-scene/run_rng_trace_pair.ps1` / consumer_groups.tsv 同源）。
 SITE_CTOR_C = "M2Server.Actor.BaseObject..ctor@BaseObject.cs:438"      # csharp construct
 SITE_AI_C = "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427"  # csharp monster_ai
-SITE_SPAWN_R = "crates\\world\\src\\mongen.rs:624"                      # rust spawn
-SITE_AI_R = "crates\\world\\src\\monai.rs:164"                          # rust monster_ai
+SITE_SPAWN_R = "crates\\world-bevy\\src\\mongen.rs:624"                      # rust spawn
+SITE_AI_R = "crates\\world-bevy\\src\\monai.rs:164"                          # rust monster_ai
 
 EXIT_GREEN, EXIT_RED, EXIT_PREREQ = 0, 1, 2
 

@@ -6,11 +6,11 @@ use mir2_data::models::MonsterInfo;
 use mir2_envir::castle::{parse_sabuk_w_bytes, SabukWConfig};
 use mir2_envir::{MapLoader, MapRegistry};
 use mir2_shared::rng::{DotNetRandom, RandomNumber};
-use mir2_world::castle::{
+use mir2_world_bevy::castle::{
     area_state, CastleDate, CastleDefenseSpecs, CastleNow, CastleSiegeConfig, DefenseRole,
     DefenseUnitSpec, RedDieHome,
 };
-use mir2_world::mongen::MonGenConfig;
+use mir2_world_bevy::mongen::MonGenConfig;
 
 use crate::downlink;
 use crate::mongen::{MonGenHost, MonsterTable};
@@ -254,7 +254,7 @@ fn castle_table() -> MonsterTable {
 fn castle_deployment_defaults_zero_entities_four_warns() {
     let f = fixture("3");
     let table = MonsterTable::new(vec![row("弓箭手", 112, 2000)]);
-    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
     let mut host = MonGenHost::start(
         Vec::new(),
         &table,
@@ -300,7 +300,7 @@ fn castle_deployment_defaults_zero_entities_four_warns() {
 fn castle_fixture_spawns_sixteen_with_six_draws_each() {
     let f = fixture("3");
     let table = castle_table();
-    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
     let mut host = MonGenHost::start(
         Vec::new(),
         &table,
@@ -330,7 +330,7 @@ fn castle_fixture_spawns_sixteen_with_six_draws_each() {
 
     // ---- 逐只 6 抽：与独立 `DotNetRandom(SEED)` 的手算序列逐值对照 ----
     let mut hand = DotNetRandom::new(SEED);
-    let mut hand_entity = |world: &mir2_world::World, id: i32, dir_override: Option<u8>| {
+    let mut hand_entity = |world: &mir2_world_bevy::World, id: i32, dir_override: Option<u8>| {
         let v1 = hand.next_max(1500);
         let v2 = hand.next_max(2000) + 2000;
         let v3 = hand.next_max(3000);
@@ -388,7 +388,7 @@ fn castle_fixture_spawns_sixteen_with_six_draws_each() {
     );
     assert_eq!(
         door.castle_binding,
-        Some(mir2_world::entity::CastleBinding {
+        Some(mir2_world_bevy::entity::CastleBinding {
             castle_index: 0,
             role: DefenseRole::MainDoor
         })
@@ -461,7 +461,11 @@ fn c5_area_state_vectors_and_766_frame() {
 
     // 同一 bit 重复置位幂等（累加器生产实现）。
     let mut n8 = area_state(false, false, true);
-    mir2_world::castle::set_area_flag(&mut n8, mir2_world::castle::AREA_STATE_GUILD_WAR, true);
+    mir2_world_bevy::castle::set_area_flag(
+        &mut n8,
+        mir2_world_bevy::castle::AREA_STATE_GUILD_WAR,
+        true,
+    );
     assert_eq!(n8, 4);
 
     // 766：Recog = n8，Param/Tag/Series = 0，无尾。
@@ -482,7 +486,7 @@ fn c5_area_state_vectors_and_766_frame() {
 fn c8_ghost_reclaim_through_production_run() {
     let f = fixture("3");
     let table = castle_table();
-    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
     let mut host = MonGenHost::start(
         Vec::new(),
         &table,
@@ -505,9 +509,9 @@ fn c8_ghost_reclaim_through_production_run() {
     );
     assert_eq!(report.spawned, 16);
     let entities_before = world.entities.iter().count();
-    world.castles[0].guards[0] = Some(mir2_world::castle::CastleUnit {
+    world.castles[0].guards[0] = Some(mir2_world_bevy::castle::CastleUnit {
         ghost: true,
-        ..mir2_world::castle::CastleUnit::default()
+        ..mir2_world_bevy::castle::CastleUnit::default()
     });
     world.castles[0].archers[0].as_mut().unwrap().ghost = true;
     let events = world.castles[0].run(CastleNow::new(CastleDate::new(2026, 10, 21), 3, 10_000));
@@ -538,7 +542,7 @@ fn castle_production_call_order_is_wired() {
     )
     .expect("读 lib.rs");
     let reloc = main_rs
-        .find("mir2_world::castle::relocate_on_enter(")
+        .find("mir2_world_bevy::castle::relocate_on_enter(")
         .expect("进图改写调用必须存在");
     let shift = main_rs
         .find("let shift = mapwire::shift_enter_position(")
@@ -546,7 +550,7 @@ fn castle_production_call_order_is_wired() {
     assert!(reloc < shift, "城堡改写必须在移位环之前");
 
     let tick = main_rs
-        .find("mir2_world::castle::castle_war_tick(")
+        .find("mir2_world_bevy::castle::castle_war_tick(")
         .expect("每 tick 城堡检查必须存在");
     let sim_loop = main_rs.find("fn sim_loop(").expect("sim_loop 必须存在");
     let tick_head = sim_loop
@@ -633,7 +637,7 @@ fn red_die_home_defaults_and_ini() {
 fn initialize_leaves_master_guild_none_phase_contract() {
     let f = fixture("3");
     let table = MonsterTable::new(vec![row("弓箭手", 112, 2000)]);
-    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
     let mut host = MonGenHost::start(
         Vec::new(),
         &table,
@@ -677,11 +681,11 @@ fn initialize_leaves_master_guild_none_phase_contract() {
 /// 缺省 World ⇒ PKFlag 目标取 47；`set_castle_name_colors(pk_flag=200)` ⇒ 取 200。
 ///
 /// 红检（改坏必红）：把 `query_user_name_color` 的 `&world.castle_name_colors` 改回
-/// `&mir2_world::castle::CastleNameColors::default()`（本卡要修的原始状态）⇒ 200 断言必红。
+/// `&mir2_world_bevy::castle::CastleNameColors::default()`（本卡要修的原始状态）⇒ 200 断言必红。
 #[test]
 fn query_user_name_color_reads_world_castle_name_colors() {
-    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
-    let mut target = mir2_world::EntitySpawn::new(1, "p", 10, 10);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+    let mut target = mir2_world_bevy::EntitySpawn::new(1, "p", 10, 10);
     target.pvp_flag = true;
     target.pk_point = 0; // `PvpLevel() = 0 < 2`
     world.add_entity(target);
@@ -693,7 +697,7 @@ fn query_user_name_color_reads_world_castle_name_colors() {
         assert_eq!(c, 47, "缺省名字色 PKFlag = 0x2F");
     }
     // 配置覆盖（11/22/33/44，**经 setter**）：PKFlag 目标取 11。
-    world.set_castle_name_colors(mir2_world::castle::CastleNameColors {
+    world.set_castle_name_colors(mir2_world_bevy::castle::CastleNameColors {
         pk_flag: 11,
         ally_guild: 22,
         war_guild: 33,
@@ -706,9 +710,9 @@ fn query_user_name_color_reads_world_castle_name_colors() {
         assert_eq!(c, 11, "world.castle_name_colors.pk_flag 必须生效");
     }
     // 城堡战区（under_war + 两侧 InGuildWarArea + 无行会）⇒ `in_free_pk=44`。
-    let mut castle = mir2_world::castle::UserCastle::new(
+    let mut castle = mir2_world_bevy::castle::UserCastle::new(
         "沙巴克",
-        mir2_world::castle::CastleSiegeConfig::default(),
+        mir2_world_bevy::castle::CastleSiegeConfig::default(),
     );
     castle.castle_map_id = Some(0);
     castle.home_x = 10;
@@ -733,9 +737,9 @@ fn query_user_name_color_reads_world_castle_name_colors() {
 // ② `refresh_show_name_in_area` 去掉 `map_id != palace_map_id` 门 ⇒ 宫外玩家多收 2 帧 ⇒ 计数红；
 // ③ `queue_structure_ref_msg` 把 `RM_DIGDOWN`/`RM_DIGUP` 对调 ⇒ `SM_DIGDOWN` 逐字节断言红。
 
-fn play_entity(name: &str, x: i32, y: i32) -> mir2_world::EntitySpawn {
-    let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-    e.race = mir2_world::ACTOR_RACE_PLAY;
+fn play_entity(name: &str, x: i32, y: i32) -> mir2_world_bevy::EntitySpawn {
+    let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+    e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
     e
 }
 
@@ -779,7 +783,7 @@ fn recog_of(body: &[u8]) -> i32 {
 /// `PlayObject.Message.cs:1715-1718`、`WorldServer.cs:1726-1737`（`!Ghost` 门、无 caller 排除）。
 #[test]
 fn t127_broadcast_fans_out_to_every_nonghost_player_in_heap_order() {
-    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
     world.open_session("甲");
     let a_id = world
         .enter_map("甲", play_entity("甲", 5, 5), 0)
@@ -856,7 +860,7 @@ fn t127_broadcast_fans_out_to_every_nonghost_player_in_heap_order() {
 /// 「宫外玩家不进目标集」是本条的核心断言（牙②）。
 #[test]
 fn t127_ref_show_name_targets_only_palace_area_players() {
-    let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
     world.open_session("甲");
     let a_id = world
         .enter_map("甲", play_entity("甲", 5, 5), 0)
@@ -898,7 +902,7 @@ fn t127_ref_show_name_targets_only_palace_area_players() {
     ]
     .into_iter()
     .collect();
-    let war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
+    let war_states: std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState> =
         std::collections::HashMap::new();
 
     let sent = super::refresh_show_name_in_area(
@@ -954,7 +958,7 @@ fn t127_ref_show_name_targets_only_palace_area_players() {
 /// 牙④：把 `Err` 分支从 `continue` 改成「照发」⇒ 第一段断言（0 帧）红。
 #[test]
 fn t127_ref_show_name_n1_drops_frame_for_guilded_viewer_in_war_area() {
-    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
     world.open_session("甲");
     let a_id = world
         .enter_map("甲", play_entity("甲", 5, 5), 0)
@@ -963,9 +967,9 @@ fn t127_ref_show_name_n1_drops_frame_for_guilded_viewer_in_war_area() {
     let b_id = world
         .enter_map("乙", play_entity("乙", 6, 5), 0)
         .expect("乙 进图");
-    let mut castle = mir2_world::castle::UserCastle::new(
+    let mut castle = mir2_world_bevy::castle::UserCastle::new(
         "沙巴克",
-        mir2_world::castle::CastleSiegeConfig::default(),
+        mir2_world_bevy::castle::CastleSiegeConfig::default(),
     );
     // `CastlePlaceMap` 命中 ⇒ `InCastleWarArea` 恒真（`UserCastle.cs:674-678` 的皇宫/密道支）。
     castle.palace_map_id = Some(0);
@@ -982,10 +986,10 @@ fn t127_ref_show_name_n1_drops_frame_for_guilded_viewer_in_war_area() {
     let online: crate::OnlineRegistry =
         vec![online_entry("甲", 5, a_id), online_entry("乙", 6, b_id)];
     let displays = downlink::DisplayTable::new();
-    let mut war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
+    let mut war_states: std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState> =
         std::collections::HashMap::new();
     for id in [a_id, b_id] {
-        let mut st = mir2_world::castle::CastleWarState::new(0);
+        let mut st = mir2_world_bevy::castle::CastleWarState::new(0);
         st.in_guild_war_area = true;
         war_states.insert(id, st);
     }
@@ -1056,25 +1060,25 @@ fn t127_ref_show_name_n1_drops_frame_for_guilded_viewer_in_war_area() {
 /// 牙③：把 `RM_DIGDOWN`/`RM_DIGUP` 对调 ⇒ ident 断言红。
 #[test]
 fn t127_door_close_structure_event_drains_to_sm_digdown() {
-    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
-    let mut door = mir2_world::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
+    let mut door = mir2_world_bevy::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
     door.race = 110;
     let door_id = world.add_entity(door);
     world.open_session("甲");
     let a_id = world
         .enter_map("甲", play_entity("甲", 6, 5), 0)
         .expect("甲 进图");
-    let mut castle = mir2_world::castle::UserCastle::new(
+    let mut castle = mir2_world_bevy::castle::UserCastle::new(
         "沙巴克",
-        mir2_world::castle::CastleSiegeConfig::default(),
+        mir2_world_bevy::castle::CastleSiegeConfig::default(),
     );
-    castle.main_door = Some(mir2_world::castle::CastleUnit {
+    castle.main_door = Some(mir2_world_bevy::castle::CastleUnit {
         entity_id: Some(door_id),
         x: 5,
         y: 5,
         hp: 9_999,
         max_hp: 9_999,
-        ..mir2_world::castle::CastleUnit::default()
+        ..mir2_world_bevy::castle::CastleUnit::default()
     });
     world.castles.push(castle);
 
@@ -1082,7 +1086,7 @@ fn t127_door_close_structure_event_drains_to_sm_digdown() {
     assert!(!super::queue_structure_ref_msg(
         &mut world,
         0,
-        &mir2_world::castle::StructureEvent::RefDigDown {
+        &mir2_world_bevy::castle::StructureEvent::RefDigDown {
             dir: 0,
             x: 99,
             y: 99
@@ -1093,12 +1097,12 @@ fn t127_door_close_structure_event_drains_to_sm_digdown() {
     assert!(super::queue_structure_ref_msg(
         &mut world,
         0,
-        &mir2_world::castle::StructureEvent::RefDigDown { dir: 0, x: 5, y: 5 }
+        &mir2_world_bevy::castle::StructureEvent::RefDigDown { dir: 0, x: 5, y: 5 }
     ));
     assert_eq!(world.pending_monster_ref_msgs.len(), 1);
     let queued = &world.pending_monster_ref_msgs[0];
     assert_eq!(queued.actor_id, door_id);
-    assert_eq!(queued.ident, mir2_world::monai::RM_DIGDOWN);
+    assert_eq!(queued.ident, mir2_world_bevy::monai::RM_DIGDOWN);
     assert_eq!(queued.recipients, vec![a_id], "收件人 = 门 ±12 格内玩家");
 
     let (tx0, mut rx0) = tokio::sync::mpsc::unbounded_channel::<crate::SimToGate>();
@@ -1171,27 +1175,27 @@ fn t127_frame_priorities_are_low_byte_of_rm_ident() {
 /// 牙：把 `fan_out_sysmessage_to_all` 挪回 username 之前（上一版实现）⇒ 首帧断言红。
 #[test]
 fn t127_cross_source_frames_follow_priority_order() {
-    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
-    let mut door = mir2_world::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
+    let mut door = mir2_world_bevy::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
     door.race = 110;
     let door_id = world.add_entity(door);
     world.open_session("甲");
     let a_id = world
         .enter_map("甲", play_entity("甲", 5, 5), 0)
         .expect("甲 进图");
-    let mut castle = mir2_world::castle::UserCastle::new(
+    let mut castle = mir2_world_bevy::castle::UserCastle::new(
         "沙巴克",
-        mir2_world::castle::CastleSiegeConfig::default(),
+        mir2_world_bevy::castle::CastleSiegeConfig::default(),
     );
     // `CastlePlaceMap` = map 0 ⇒ `InCastleWarArea` 为真（`UserCastle.cs:674-678` 皇宫支）。
     castle.palace_map_id = Some(0);
-    castle.main_door = Some(mir2_world::castle::CastleUnit {
+    castle.main_door = Some(mir2_world_bevy::castle::CastleUnit {
         entity_id: Some(door_id),
         x: 5,
         y: 5,
         hp: 9_999,
         max_hp: 9_999,
-        ..mir2_world::castle::CastleUnit::default()
+        ..mir2_world_bevy::castle::CastleUnit::default()
     });
     world.castles.push(castle);
 
@@ -1207,7 +1211,7 @@ fn t127_cross_source_frames_follow_priority_order() {
         [("甲".to_string(), crate::tests::test_session_ground(a_id))]
             .into_iter()
             .collect();
-    let war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
+    let war_states: std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState> =
         std::collections::HashMap::new();
 
     // 相位①（165）：`StartWallconquestWar` 的 `RefShowName`。
@@ -1228,7 +1232,7 @@ fn t127_cross_source_frames_follow_priority_order() {
     assert!(super::queue_structure_ref_msg(
         &mut world,
         0,
-        &mir2_world::castle::StructureEvent::RefDigDown { dir: 0, x: 5, y: 5 }
+        &mir2_world_bevy::castle::StructureEvent::RefDigDown { dir: 0, x: 5, y: 5 }
     ));
     crate::drain_monster_ref_msgs(
         &mut world,
@@ -1385,23 +1389,23 @@ fn castle_official_aboutwar_whole_line_rules() {
 /// 牙④：把 `castle_war_area_at` 换成「取 castles[0]」⇒ 图外实体也命中 ⇒ 断言红。
 #[test]
 fn castle_vars_for_resolves_by_war_area_not_by_index() {
-    let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
-    let mut castle = mir2_world::castle::UserCastle::new(
+    let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
+    let mut castle = mir2_world_bevy::castle::UserCastle::new(
         "沙巴克",
-        mir2_world::castle::CastleSiegeConfig::default(),
+        mir2_world_bevy::castle::CastleSiegeConfig::default(),
     );
     castle.palace_map_id = Some(0); // 皇宫图
     castle.total_gold = 777;
     castle.today_income = 88;
     castle.change_date = Some("2026-10-20 19:00:00".to_string());
     castle.own_guild = Some(String::new());
-    castle.main_door = Some(mir2_world::castle::CastleUnit {
+    castle.main_door = Some(mir2_world_bevy::castle::CastleUnit {
         entity_id: Some(1),
         x: 5,
         y: 5,
         death: false,
         opened: true,
-        ..mir2_world::castle::CastleUnit::default()
+        ..mir2_world_bevy::castle::CastleUnit::default()
     });
     world.castles.push(castle);
     world.open_session("甲");
@@ -1522,28 +1526,28 @@ fn change_date_text_pads_date_and_time() {
 // **卡 `openmir2-castle-official-actions`（tier R，构造级）**：动作 switch
 // ---------------------------------------------------------------------------
 
-fn action_world() -> (mir2_world::World, i32, i32) {
-    let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
-    let mut door = mir2_world::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
+fn action_world() -> (mir2_world_bevy::World, i32, i32) {
+    let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
+    let mut door = mir2_world_bevy::EntitySpawn::new(0, "沙巴克城门".to_string(), 5, 5);
     door.race = 110;
     let door_id = world.add_entity(door);
     world.open_session("甲");
     let a_id = world
         .enter_map("甲", play_entity("甲", 6, 5), 0)
         .expect("甲 进图");
-    let mut castle = mir2_world::castle::UserCastle::new(
+    let mut castle = mir2_world_bevy::castle::UserCastle::new(
         "沙巴克",
-        mir2_world::castle::CastleSiegeConfig::default(),
+        mir2_world_bevy::castle::CastleSiegeConfig::default(),
     );
     castle.castle_map_id = Some(0);
     castle.total_gold = 3_000_000;
-    castle.main_door = Some(mir2_world::castle::CastleUnit {
+    castle.main_door = Some(mir2_world_bevy::castle::CastleUnit {
         entity_id: Some(door_id),
         x: 5,
         y: 5,
         hp: 9_999,
         max_hp: 9_999,
-        ..mir2_world::castle::CastleUnit::default()
+        ..mir2_world_bevy::castle::CastleUnit::default()
     });
     world.castles.push(castle);
     (world, door_id, a_id)
@@ -1730,18 +1734,18 @@ fn castle_official_action_repair_wall_emits_wall_frames_after_60s() {
         .as_ref()
         .and_then(|d| d.entity_id)
         .expect("门实体");
-    let mut wall = mir2_world::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    let mut wall = mir2_world_bevy::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
     wall.race = 111;
     let wall_actor = world.add_entity(wall);
     assert_ne!(wall_actor, door_actor, "Minor①：门与墙必须是不同实体");
-    world.castles[0].left_wall = Some(mir2_world::castle::CastleUnit {
+    world.castles[0].left_wall = Some(mir2_world_bevy::castle::CastleUnit {
         entity_id: Some(wall_actor),
         x: 4,
         y: 5,
         hp: 5,
         max_hp: 10,
         struck_tick: 0,
-        ..mir2_world::castle::CastleUnit::default()
+        ..mir2_world_bevy::castle::CastleUnit::default()
     });
     let out = super::castle_official_action_exec(
         &mut world,
@@ -1789,18 +1793,18 @@ fn castle_official_action_repair_wall_emits_wall_frames_after_60s() {
 fn castle_official_action_alive_status_uses_display_layer() {
     // —— 格①：展示层登记了 status（与实体源可分）——
     let (mut world, _door, a_id) = action_world();
-    let mut wall = mir2_world::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    let mut wall = mir2_world_bevy::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
     wall.race = 111;
     wall.char_status = 0x1234; // 实体源故意非零 ⇒ 改回实体源的变异必被识破
     let wall_actor = world.add_entity(wall);
-    world.castles[0].left_wall = Some(mir2_world::castle::CastleUnit {
+    world.castles[0].left_wall = Some(mir2_world_bevy::castle::CastleUnit {
         entity_id: Some(wall_actor),
         x: 4,
         y: 5,
         hp: 5,
         max_hp: 10,
         struck_tick: 0,
-        ..mir2_world::castle::CastleUnit::default()
+        ..mir2_world_bevy::castle::CastleUnit::default()
     });
     let mut displays = downlink::DisplayTable::new();
     displays.set(
@@ -1851,18 +1855,18 @@ fn castle_official_action_alive_status_uses_display_layer() {
 
     // —— 格②：展示层未登记 ⇒ Status=0（不得回落实体 char_status）——
     let (mut world2, _door2, a_id2) = action_world();
-    let mut wall2 = mir2_world::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
+    let mut wall2 = mir2_world_bevy::EntitySpawn::new(0, "沙巴克左城墙".to_string(), 4, 5);
     wall2.race = 111;
     wall2.char_status = 0x1234;
     let wall_actor2 = world2.add_entity(wall2);
-    world2.castles[0].left_wall = Some(mir2_world::castle::CastleUnit {
+    world2.castles[0].left_wall = Some(mir2_world_bevy::castle::CastleUnit {
         entity_id: Some(wall_actor2),
         x: 4,
         y: 5,
         hp: 5,
         max_hp: 10,
         struck_tick: 0,
-        ..mir2_world::castle::CastleUnit::default()
+        ..mir2_world_bevy::castle::CastleUnit::default()
     });
     let out2 = super::castle_official_action_exec(
         &mut world2,

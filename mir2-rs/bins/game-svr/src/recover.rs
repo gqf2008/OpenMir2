@@ -29,7 +29,7 @@
 //!
 //! # 登记（未建模，不静默）
 //!
-//! - **`Death`**：由调用方从世界实体 [`mir2_world::Entity::death`] 读入（与 `movewire` 同源）。
+//! - **`Death`**：由调用方从世界实体 [`mir2_world_bevy::Entity::death`] 读入（与 `movewire` 同源）。
 //! - **`ShowHp`** 的下行广播（`HealthSpellChanged` 的 `if (ShowHp)` 支）在 oracle 里由
 //!   `MakeOpenHealth()`（`BaseObject.cs:944`）置位，而它只被 `RM_DOOPENHEALTH` 驱动
 //!   （`BaseObject.Base.cs:763`），发点是技能「心灵启示」`MagicManager.cs:438`

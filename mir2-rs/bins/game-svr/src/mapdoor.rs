@@ -17,7 +17,7 @@
 //!   `crates/world/src/world.rs::route_enter`；本模块只让门表/状态可读，不参与路由判定。
 
 use mir2_envir::MapRegistry;
-use mir2_world::World;
+use mir2_world_bevy::World;
 
 /// 把注册表每图的门表灌进 `world.maps[map_id]`，返回门总数（日志用）。
 ///

@@ -17,9 +17,9 @@
 //!   ⇒ 置 0（只影响 `Merchant.Run` 的补货延时门，见 `crates/world::merchant`）。
 //! - 次序：oracle `LocalDB.LoadMerchant` 正序构造抽、`MerchantList` 正序（倒序 `Initialize`
 //!   **不**重排它）、`MerchantInitialize` 只把 `AddToMap` 的 `obj_list` 追加序倒过来。⇒ 本层
-//!   **正序** [`mir2_world::World::merchant_ctor_run_delay`] + **正序**
-//!   [`mir2_world::World::insert_merchant`] 建实体（槽位序 = 文件序 = tick 序），仅
-//!   **倒序** [`mir2_world::World::attach_merchant_to_map`] 落格（`obj_list` 反序）；
+//!   **正序** [`mir2_world_bevy::World::merchant_ctor_run_delay`] + **正序**
+//!   [`mir2_world_bevy::World::insert_merchant`] 建实体（槽位序 = 文件序 = tick 序），仅
+//!   **倒序** [`mir2_world_bevy::World::attach_merchant_to_map`] 落格（`obj_list` 反序）；
 //!   见 [`spawn_merchants`]（reviewer-5 `0f220cac` F-1 返工）。
 //! - `is_hide`：`Merchant.txt` 记录恒 `false`（`LocalDB.LoadMerchant` 的 `new Merchant` 不置位）；
 //!   **隐藏 `QFunction` 走 `LocalDB.cs:220` 的 `IsHide = true`**，由 [`qfunction_spawn`] 注入
@@ -29,7 +29,7 @@
 use mir2_envir::{MapLoader, QuestNpcRecord};
 use mir2_script::ScriptInfo;
 use mir2_shared::rng::RandomNumber;
-use mir2_world::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState};
+use mir2_world_bevy::merchant::{MerchantFlags, MerchantGoods, MerchantSpawn, MerchantState};
 
 use crate::downlink::{npc_display, DisplayTable};
 use crate::npc::{MerchantNpc, MerchantScriptBook, NpcDef};
@@ -132,7 +132,7 @@ pub fn to_spawn(record: mir2_envir::MerchantRecord, map_id: usize) -> MerchantSp
 ///
 /// **`run_tick` 必须由调用方用构造段账本预置**（`CtorFoldSite::HiddenQFunction` 的第 1 抽 =
 /// `BaseObject.cs:439` 的 `Random(1500)`）——`insert_merchant` 见
-/// [`mir2_world::merchant::MERCHANT_RUN_TICK_UNSET`] 才会补抽 4 次，重抽会让共享 RNG 流错位。
+/// [`mir2_world_bevy::merchant::MERCHANT_RUN_TICK_UNSET`] 才会补抽 4 次，重抽会让共享 RNG 流错位。
 #[must_use]
 pub fn qfunction_spawn(record: &QuestNpcRecord, map_id: usize) -> MerchantSpawn {
     let script_name = record
@@ -171,11 +171,11 @@ pub fn qfunction_spawn(record: &QuestNpcRecord, map_id: usize) -> MerchantSpawn 
 /// 序 = `[QFunction, …Merchant.txt]`，`ProcessMerchants`（`WorldServer.Merchant.cs:68`）正序
 /// tick 时 QFunction **最先** Run。**挂图不在这里做**：`MerchantInitialize`（`:8`）倒序遍历
 /// `MerchantList` ⇒ QFunction 排在**最后**挂图（`obj_list` 追加序），由调用方在商人挂完之后调
-/// [`mir2_world::World::attach_merchant_to_map`]。
+/// [`mir2_world_bevy::World::attach_merchant_to_map`]。
 ///
 /// `run_tick` = 构造段账本值（见 [`qfunction_spawn`]）；返回 `Some(id)` = 已入世界。
 pub fn insert_hidden_qfunction(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     record: &QuestNpcRecord,
     map_id: usize,
     run_tick: i64,
@@ -189,7 +189,7 @@ pub fn insert_hidden_qfunction(
 ///
 /// oracle 的 `ClearExpreUpgradeListData`（`Merchant.cs:1076-1088`）在 `Merchant.Run` 的 10min
 /// 门里按该配置删过期在途升级（部署 3 天；`GameSvrConf.cs:1423` 缺省 8）。
-pub fn set_upgrade_clear_days(world: &mut mir2_world::World, days: u8) {
+pub fn set_upgrade_clear_days(world: &mut mir2_world_bevy::World, days: u8) {
     for id in world.merchant_ids_sorted() {
         if let Some(st) = world.entities.merchant_mut(id) {
             st.clear_expire_upgrade_days = days;
@@ -222,7 +222,7 @@ pub fn load_merchant_spawns(
     // 经 `crates/world::merchant::merchant_rename_rand` 转发 ⇒ `#[track_caller]` 记到的站点是
     // `crates/world/src/merchant.rs`（`merchant` 组），**不**在宿主产生未归类站点。
     let mut rename_rand =
-        |min: i32, max: i32| mir2_world::merchant::merchant_rename_rand(rng, min, max);
+        |min: i32, max: i32| mir2_world_bevy::merchant::merchant_rename_rand(rng, min, max);
     let records = loader
         .load_merchants_loaded(&mut rename_rand)
         .map_err(|e| e.to_string())?
@@ -262,17 +262,17 @@ pub fn load_merchant_spawns(
 /// reviewer-5 `0f220cac` F-1 返工）：
 ///
 /// 1. `LocalDB.LoadMerchant` 是**正序**逐条 `new Merchant()`（ctor 抽 `RunTick`，
-///    `BaseObject.cs:439`）⇒ 先正序 [`mir2_world::World::merchant_ctor_run_delay`] 把每条构造抽
+///    `BaseObject.cs:439`）⇒ 先正序 [`mir2_world_bevy::World::merchant_ctor_run_delay`] 把每条构造抽
 ///    落定（取数次序 = 文件行序）；
 /// 2. `MerchantList` 由 `AddMerchant` **正序**追加，`MerchantInitialize`
 ///    （`WorldServer.Merchant.cs:8`）的 `for (i = Count-1; i >= 0; i--)` **不重排它**，
 ///    `ProcessMerchants`（`:68`）又从 `MerchantPosition` 起**正序**遍历 ⇒ **实体槽位序
-///    （[`mir2_world::World::merchant_ids_sorted`] / `merchant_tick` 的 pass 内次序）必须是文件正序**；
+///    （[`mir2_world_bevy::World::merchant_ids_sorted`] / `merchant_tick` 的 pass 内次序）必须是文件正序**；
 /// 3. 倒序只作用于 `Initialize()` 里 `AddToMap` 对 map cell `obj_list` 的**追加次序**
 ///    ⇒ **只有挂图这一步倒序**。
 ///
-/// ⇒ 先**正序** [`mir2_world::World::insert_merchant`] 建实体（槽位序 = 文件序）、再**倒序**
-/// [`mir2_world::World::attach_merchant_to_map`] 落格（`obj_list` 追加 = 反序）。两个次序解耦，
+/// ⇒ 先**正序** [`mir2_world_bevy::World::insert_merchant`] 建实体（槽位序 = 文件序）、再**倒序**
+/// [`mir2_world_bevy::World::attach_merchant_to_map`] 落格（`obj_list` 追加 = 反序）。两个次序解耦，
 /// **不可**把整个 spawn 循环一起 `rev()`（那会把 tick 次序也反过来；reviewer-5 F-1 自复现过）。
 ///
 /// 返回 `(挂图成功数, 挂图失败被移除的 ChrName)`。
@@ -283,7 +283,7 @@ pub fn load_merchant_spawns(
 #[must_use]
 #[cfg(test)]
 pub fn spawn_merchants(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     spawns: Vec<MerchantSpawn>,
     displays: &mut DisplayTable,
 ) -> (usize, Vec<String>) {
@@ -300,7 +300,7 @@ pub fn spawn_merchants(
 /// 次序约束（reviewer-5 `0f220cac` F-1 + owner `b311a876b1`）不变：正序建实体、倒序挂图。
 #[must_use]
 pub fn spawn_merchants_with_scripts(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     mut spawns: Vec<MerchantSpawn>,
     seeds: Vec<MerchantScriptSeed>,
     displays: &mut DisplayTable,
@@ -436,7 +436,7 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
                 refill_tick: 0,
             }];
         }
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         // DuraMax 必须 >0：`AddItemToGoodsList` 对 `Dura == 0` 直接丢。
         world.set_item_catalog(vec![StdItem {
             name: "potion".to_string(),
@@ -499,7 +499,7 @@ DB/script jiaren 1 1 dummy 0 3 0\n";
             &mut rng,
         )
         .expect("装载不应失败");
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mut displays = DisplayTable::new();
         let (kept, failed) = spawn_merchants(&mut world, spawns, &mut displays);
         assert_eq!(kept, 2);
@@ -561,7 +561,7 @@ smith main
         .expect("装载不应失败");
         assert_eq!(report.kept, spawns.len());
         assert_eq!(seeds.len(), spawns.len(), "seeds 与 spawns 下标对齐");
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mut displays = DisplayTable::new();
         let (kept, failed, book) =
             spawn_merchants_with_scripts(&mut world, spawns, seeds, &mut displays);
@@ -620,7 +620,7 @@ C
         let mut rng = RandomNumber::with_seed(42);
         let mut rename_rand = |min: i32, max: i32| {
             calls += 1;
-            mir2_world::merchant::merchant_rename_rand(&mut rng, min, max)
+            mir2_world_bevy::merchant::merchant_rename_rand(&mut rng, min, max)
         };
         let list = loader
             .load_merchants_loaded(&mut rename_rand)
@@ -731,7 +731,7 @@ C
                 ),
             }
         }
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let mut displays = DisplayTable::new();
         let (kept, failed) = spawn_merchants(
             &mut world,
@@ -782,7 +782,7 @@ C
         let mut rng = RandomNumber::with_seed(42);
         let (spawns, _report, seeds) =
             load_merchant_spawns(&loader, |_| Some(0), &mut rng).expect("装载不应失败");
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mut displays = DisplayTable::new();
         let (_kept, _failed, _book) =
             spawn_merchants_with_scripts(&mut world, spawns, seeds, &mut displays);
@@ -850,7 +850,7 @@ C
         assert_eq!(spawn.state.process_refill_index, 0);
         assert_eq!(
             spawn.state.run_tick,
-            mir2_world::merchant::MERCHANT_RUN_TICK_UNSET,
+            mir2_world_bevy::merchant::MERCHANT_RUN_TICK_UNSET,
             "run_tick 必须由调用方按构造段账本预置（[`insert_hidden_qfunction`] 做这件事）"
         );
     }
@@ -873,7 +873,7 @@ C
             .find(|r| r.chr_name == "QFunction")
             .expect("QFunction 记录");
 
-        let mut world = mir2_world::World::new(16, 16);
+        let mut world = mir2_world_bevy::World::new(16, 16);
         world.rng = RandomNumber::with_seed(20240229);
         let mut expected = world.rng.clone();
         let id = insert_hidden_qfunction(&mut world, record, 0, 1234).expect("QFunction 入世界");
@@ -905,7 +905,7 @@ C
             .iter()
             .find(|r| r.chr_name == "QFunction")
             .expect("QFunction 记录");
-        let mut world = mir2_world::World::new(8, 8);
+        let mut world = mir2_world_bevy::World::new(8, 8);
         let mut spawn = qfunction_spawn(record, 0);
         spawn.x = -1; // 越界 ⇒ `CanWalk`/`AddToMap` 失败
         spawn.state.run_tick = 0;
@@ -939,7 +939,7 @@ C
             .iter()
             .find(|r| r.chr_name == "QFunction")
             .expect("QFunction 记录");
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mut displays = DisplayTable::new();
         let qid = insert_hidden_qfunction(&mut world, record, 0, 0).expect("QFunction 入世界");
         let (_kept, failed, _book) =

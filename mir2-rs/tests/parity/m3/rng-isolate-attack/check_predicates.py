@@ -14,7 +14,7 @@ r"""check_predicates.py — M3②③ 活栈隔离口径的**分流谓词机判**
 数据格式：
   * 表：`attack_sites.tsv`（制表符分隔；`#` 起注释；列见文件头）。
   * 实测 site 列表文件：**每行一个 site 字符串**（C# = hook 记录的 `Type.Method@file:line`；
-    Rust = `MIR2_RNG_LOG` 里攻击路径行的第 5 列，如 `crates\world\src\combat.rs:109`）。
+    Rust = `MIR2_RNG_LOG` 里攻击路径行的第 5 列，如 `crates\world-bevy\src\combat.rs:109`）。
     空行/`#`/`SEED_PROBE`/`INJECT_OK`/`ISOLATE_ATTACK` 行忽略。
 
 退出码：0 = GREEN；1 = RED（缺站点/未登记/次序分歧）；2 = PREREQ（表/文件缺失或解析为空）。
@@ -212,9 +212,9 @@ def cmd_selftest(args):
     rs_bad = os.path.join(tmp, "rs_bad.txt")
     cs_unknown = os.path.join(tmp, "cs_unknown.txt")
     _write(cs_good, ["Foo@Foo.cs:10", "Foo@Foo.cs:20"])
-    _write(rs_good, [r"crates\world\src\combat.rs:10", r"crates\world\src\combat.rs:20"])
+    _write(rs_good, [r"crates\world-bevy\src\combat.rs:10", r"crates\world-bevy\src\combat.rs:20"])
     _write(cs_bad, ["Foo@Foo.cs:20"])                     # 缺 a_a
-    _write(rs_bad, [r"crates\world\src\combat.rs:20", r"crates\world\src\combat.rs:10"])  # 次序错
+    _write(rs_bad, [r"crates\world-bevy\src\combat.rs:20", r"crates\world-bevy\src\combat.rs:10"])  # 次序错
     _write(cs_unknown, ["Bar@Bar.cs:99"])                 # 未登记
 
     checks = [

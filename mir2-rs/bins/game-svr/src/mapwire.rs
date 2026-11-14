@@ -79,7 +79,7 @@
 use std::path::{Path, PathBuf};
 
 use mir2_envir::{MapFile, MapLoader, MapRegistry};
-use mir2_world::{CellAttribute, MapGrid, World};
+use mir2_world_bevy::{CellAttribute, MapGrid, World};
 
 /// 运行目录 = `Server.conf` 所在目录。
 ///
@@ -815,11 +815,11 @@ mod tests {
         }
         // 可落对象（`AddMapObject` 的 `Valid` 门放行）。
         assert!(
-            world.maps[1].add_map_object(2, 1, mir2_world::CellType::Play, 7, 0),
+            world.maps[1].add_map_object(2, 1, mir2_world_bevy::CellType::Play, 7, 0),
             "全 Walk 格仍可落对象"
         );
         // `cetin_near_xy` 仍可命中（同一格上的实体）。
-        let target = world.add_entity(mir2_world::EntitySpawn::new(0, "t", 2, 1));
+        let target = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "t", 2, 1));
         world.tick();
         assert!(
             crate::queryuser::cetin_near_xy(&world, 0, 2, 1, target),
@@ -850,7 +850,7 @@ mod tests {
         let reg = registry_dir(&env.dir);
         let mut world = World::with_maps(sizes(&reg));
         // 先在**未灌属性**（全 Walk）的世界上落实体（见用例头的次序说明）。
-        let target = world.add_entity(mir2_world::EntitySpawn::new(0, "t", 2, 2));
+        let target = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "t", 2, 2));
         world.tick();
         assert!(
             crate::queryuser::cetin_near_xy(&world, 0, 1, 2, target),
@@ -893,15 +893,15 @@ mod tests {
         let env = WallsEnv::new();
         let reg = registry_dir(&env.dir);
         assert_eq!(reg.routes().len(), 2, "夹具两条 route 都解析成功");
-        let specs: Vec<mir2_world::map::MapRouteSpec> = reg
+        let specs: Vec<mir2_world_bevy::map::MapRouteSpec> = reg
             .routes()
             .iter()
-            .map(|r| mir2_world::map::MapRouteSpec {
+            .map(|r| mir2_world_bevy::map::MapRouteSpec {
                 map_id: r.src_map_id,
                 x: r.src_x,
                 y: r.src_y,
                 route_id: r.route_id,
-                hop: mir2_world::map::RouteHop {
+                hop: mir2_world_bevy::map::RouteHop {
                     dst_map_id: r.dst_map_id,
                     dst_x: r.dst_x,
                     dst_y: r.dst_y,

@@ -34,7 +34,7 @@ import re
 import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-RUST_SRC = os.path.join(REPO_ROOT, "mir2-rs", "crates", "world", "src", "world.rs")
+RUST_SRC = os.path.join(REPO_ROOT, "mir2-rs", "crates", "world-bevy", "src", "world.rs")
 RUST_FN_SIG = "fn butch_effect_now("
 C_SRC = os.path.join(REPO_ROOT, "src", "M2Server", "Player", "PlayObject.Operate.cs")
 C_FN_SIG = "ClientGetButchItem("
@@ -268,7 +268,7 @@ _BS = chr(92)
 
 
 def _rust_site(tail):
-    return _BS.join(["crates", "world", "src", tail])
+    return _BS.join(["crates", "world-bevy", "src", tail])
 
 
 def _case(rows, side="csharp", span=(100, 200)):

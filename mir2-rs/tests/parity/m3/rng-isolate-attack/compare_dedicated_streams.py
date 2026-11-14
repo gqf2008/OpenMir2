@@ -34,7 +34,7 @@ oracle：`src/M2Server/Actor/BaseObject.Attack.cs:37-44`（`_Attack` 命中门�
 
 - C# 影子 hook 的**专用流**：`kind \t arg \t result \t site`（site = `Type.Method@file:line`）。
 - Rust 的 `MIR2_RNG_LOG` 全局 trace：`seq \t kind \t arg \t result \t site`；本工具**只取**
-  site 命中「攻击路径站点」的行（`crates/world/src/combat.rs:*`）。
+  site 命中「攻击路径站点」的行（`crates/world-bevy/src/combat.rs:*`）。
 
 行号/站点口径见同目录 `attack_sites.tsv`（唯一事实源）。
 """

@@ -110,7 +110,7 @@ use anyhow::{Context, Result};
 use game_svr::party as partywire;
 use mir2_protocol::frame::ServerMessage;
 use mir2_protocol::messages::grobal2;
-use mir2_world::magic;
+use mir2_world_bevy::magic;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
@@ -1053,7 +1053,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 "WRN",
                 "解析刷怪配置失败（{e}）⇒ 用 GameSvrConf 构造缺省（登记）"
             );
-            mir2_world::mongen::MonGenConfig::default()
+            mir2_world_bevy::mongen::MonGenConfig::default()
         }
     };
     // **GuardList 放置半（片71）**：`LocalDB.LoadGuardList`（`LocalDB.cs:100-144`）的
@@ -1391,10 +1391,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         string_conf.guild_member(),
                     ),
                     guild_msg_cfg: guild_runtime::GuildMsgCfg::from_config(
-                        &mir2_world::GuildConfig {
+                        &mir2_world_bevy::GuildConfig {
                             guild_msg_f_color: cfg.guild_msg_f_color,
                             guild_msg_b_color: cfg.guild_msg_b_color,
-                            ..mir2_world::GuildConfig::default()
+                            ..mir2_world_bevy::GuildConfig::default()
                         },
                         cfg.show_pre_fix_msg,
                         string_conf.guild_msg_prefix(),
@@ -1426,7 +1426,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     cry_msg_f_color: cfg.cry_msg_f_color,
                     cry_msg_b_color: cfg.cry_msg_b_color,
                     can_shout_msg_level: cfg.can_shout_msg_level,
-                    b4: mir2_world::magic_effect::MabMabeConfig {
+                    b4: mir2_world_bevy::magic_effect::MabMabeConfig {
                         hit_rand_rate: cfg.mab_mabe_hit_rand_rate,
                         hit_min_lv_limit: cfg.mab_mabe_hit_min_lv_limit,
                         hit_success_rate: cfg.mab_mabe_hit_sucess_rate,
@@ -1452,7 +1452,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                         castle_one_day_gold,
                         castle_gold_max,
                         human_max_gold: cfg.human_max_gold,
-                        upgrade: mir2_world::merchant::UpgradeWeaponConfig {
+                        upgrade: mir2_world_bevy::merchant::UpgradeWeaponConfig {
                             price: cfg.upgrade_weapon_price,
                             get_back_time_ms: i64::from(cfg.upgrade_weapon_get_back_time),
                             clear_expire_days: cfg.clear_expire_upgrade_weapon_days,
@@ -1806,12 +1806,12 @@ fn route_to_gate<'a>(
 /// 行会/组队/文案/等级门/地图旗标，收敛成本结构，避免 `fn` 参数继续膨胀。
 struct ChatHost<'a> {
     online: &'a OnlineRegistry,
-    world: &'a mir2_world::World,
+    world: &'a mir2_world_bevy::World,
     gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     /// `WorldEngine` 的行会表（`MyGuild.SendGuildMsg` 的 `GuildInfo` 等价物）。
-    guilds: &'a mir2_world::GuildManager,
+    guilds: &'a mir2_world_bevy::GuildManager,
     guild_msg_cfg: &'a guild_runtime::GuildMsgCfg,
-    party_cfg: &'a mir2_world::PartyConfig,
+    party_cfg: &'a mir2_world_bevy::PartyConfig,
     strings: &'a strings::StringConf,
     colors: &'a MsgColors,
     /// `@` 命令体要读的配置（`SystemShare.Config` 半边；部署 `PasswordLockHumanLogin=0`）。
@@ -2355,7 +2355,7 @@ fn cleanup_closed_display(displays: &mut downlink::DisplayTable, aid: Option<i32
 ///
 /// 返回摘掉的 actor id（`None` = 两侧都没有 id ⇒ 展示表没动）。
 fn close_cleanup_residue(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     chr_name: &str,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -2392,7 +2392,7 @@ fn close_cleanup_residue(
 /// 本函数收的是「已摘下的 `SessionGround`」，所以「先 remove 后取值」在写法上不可能出现。
 /// 清理相对 `world.disconnect` 的先后**不承重**（`disconnect` 不碰 `ground_sessions`）。
 fn cleanup_display_for_closed(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     chr_name: &str,
     closed_sg: Option<&SessionGround>,
     displays: &mut downlink::DisplayTable,
@@ -2406,7 +2406,7 @@ fn cleanup_display_for_closed(
 fn apply_pending_gm_entity(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
 ) -> bool {
     match sessions
         .get_mut(chr_name)
@@ -2435,7 +2435,7 @@ fn apply_pending_level_up(
     chr_name: &str,
     catalog: &dyn game_svr::ability::ItemCatalog,
     need_exps: &[i32],
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> bool {
@@ -2507,7 +2507,7 @@ fn apply_pending_gm_feature_changed(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
     catalog: &dyn game_svr::ability::ItemCatalog,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     ref_msg_range: i32,
@@ -2566,7 +2566,7 @@ fn apply_pending_gm_feature_changed(
 fn apply_pending_gm_mountride(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     displays: &mut downlink::DisplayTable,
@@ -2621,7 +2621,7 @@ fn apply_pending_gm_mountride(
 fn apply_pending_gm_use_item(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) -> Option<Vec<u8>> {
     let sg = sessions.get_mut(chr_name)?;
@@ -2632,7 +2632,7 @@ fn apply_pending_gm_use_item(
 /// （不能再整体借 `ground_sessions`）⇒ 直接对那一个会话落地。
 fn apply_pending_gm_use_item_in(
     sg: &mut SessionGround,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) -> Option<Vec<u8>> {
     let w = sg.gm.pending_use_item.take()?;
@@ -2644,7 +2644,7 @@ fn apply_pending_gm_use_item_in(
 fn apply_gm_use_item_write(
     sg: &mut SessionGround,
     w: gmcmd::GmUseItemWrite,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) -> Option<Vec<u8>> {
     if w.slot >= sg.use_items.len() {
@@ -2706,7 +2706,7 @@ fn apply_gm_use_item_write(
 /// 返回 `(actor_id, SM_UPDATEITEM(203) body)`，由调用方按在线登记路由。
 fn collect_gm_use_item_pending(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) -> Vec<(i32, Vec<u8>)> {
     let mut names: Vec<String> = sessions
@@ -2857,7 +2857,7 @@ fn send_self_sysmsg_color(
 /// ⇒ 进程级私聊判据必红。
 fn handle_whisper(
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     speaker: &OnlineEntry,
     colors: MsgColors,
@@ -2875,7 +2875,7 @@ fn handle_whisper(
     // 近似 `BoReadyRun`：目标必须已在世界（`WorldStage::InWorld`）。
     let ready = world
         .session(&target.chr_name)
-        .is_some_and(|s| s.stage == mir2_world::WorldStage::InWorld);
+        .is_some_and(|s| s.stage == mir2_world_bevy::WorldStage::InWorld);
     if !ready {
         glog!(
             "DBG",
@@ -2924,9 +2924,9 @@ fn handle_party_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    party_cfg: &mir2_world::PartyConfig,
+    party_cfg: &mir2_world_bevy::PartyConfig,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     npc_host: Option<&game_svr::npc::NpcHost>,
@@ -2959,7 +2959,7 @@ fn handle_party_cmd(
     };
     let mut delivered = 0usize;
     for ev in &events {
-        if let mir2_world::PartyEvent::GotoLabel { label, .. } = ev {
+        if let mir2_world_bevy::PartyEvent::GotoLabel { label, .. } = ev {
             // oracle `FunctionNPC.GotoLable`：不是帧。在此位置执行脚本，脚本说词经
             // `RM_MERCHANTSAY`（优先级字节 1）→ `SM_MERCHANTSAY` 在本批帧序里就地下发。
             run_party_goto_label(
@@ -3014,7 +3014,7 @@ fn run_party_goto_label(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     npc_host: Option<&game_svr::npc::NpcHost>,
@@ -3280,7 +3280,7 @@ fn run_party_goto_label(
 /// ⇒ 它自己的回帧照发（`online` 里找得到它），**不要**复用「已摘 online ⇒ 丢自身帧」口径。
 /// 事件顺序已按 oracle 的「立即帧 / `MsgQueue` 出队序」排好，别重排。
 fn drain_party_death_events(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
@@ -3315,7 +3315,7 @@ fn drain_party_death_events(
 /// （`:351-352` `SlaveList[i].RefNameColor(); SlaveList[i].RefShowName();`）的**下行帧**。
 ///
 /// 状态层（`World::deliver_self_delay_msgs` → `slave::process_slave_mutiny`）已由本卡前片落地，
-/// 事件落在 [`mir2_world::TickRecord::slave_self_deliveries`]；本函数只负责把 `mutinied` 出帧（
+/// 事件落在 [`mir2_world_bevy::TickRecord::slave_self_deliveries`]；本函数只负责把 `mutinied` 出帧（
 /// `crates/world/src/world.rs:107-109` 的「宿主据本记录出帧」）。
 ///
 /// # oracle 链路（逐行）
@@ -3334,7 +3334,7 @@ fn drain_party_death_events(
 /// oracle `SendMsg`（`BaseObject.Message.cs:98/181`：`SendMsg(IActor, …)` 的 `MsgQueue.Enqueue(msg, (byte)wIdent)`）入队，
 /// 而 `MsgQueue` 是 `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`）。入队序 = 每只宝宝
 /// `RefNameColor(); RefShowName();`（`:351-352`），宝宝按 `SlaveList` **末尾往前**
-/// （[`mir2_world::slave::process_slave_mutiny`] 返回的就是该序）。
+/// （[`mir2_world_bevy::slave::process_slave_mutiny`] 返回的就是该序）。
 ///
 /// 出队序 = **优先级字节升序**：`(byte)RM_CHANGENAMECOLOR` = `8090 & 0xFF` = **154**
 /// < `(byte)RM_USERNAME` = `8101 & 0xFF` = **165** ⇒ **同一观察者上所有宝宝的色帧先于所有名帧**。
@@ -3373,8 +3373,8 @@ enum MutinyFrame {
 
 #[allow(clippy::too_many_arguments)]
 fn drain_slave_mutiny_downlink(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     cfg: &mir2_data::pet_slave::PetSlaveConfig,
@@ -3388,7 +3388,7 @@ fn drain_slave_mutiny_downlink(
     // 每只叛变宝宝的 `(观察者, 宝宝 id, 色, 名)`（宝宝按 `mutinied` 序 = `SlaveList` 末尾往前）。
     let mut hits: Vec<(i32, i32, u8, Vec<u8>)> = Vec::new();
     for outcome in &rec.slave_self_deliveries {
-        if outcome.ident != mir2_world::slave::RM_MASTERDIEMUTINY {
+        if outcome.ident != mir2_world_bevy::slave::RM_MASTERDIEMUTINY {
             continue;
         }
         for sid in &outcome.mutinied {
@@ -3396,8 +3396,11 @@ fn drain_slave_mutiny_downlink(
                 continue;
             };
             // 观察者侧 `GetChrColor(baseObject)`：叛变后 `Master == null` ⇒ 怪的 `NameColor`。
-            let color =
-                mir2_world::slave::get_chr_color(&e, &cfg.slave_color, NPC_NAME_COLOR_UNMODELED);
+            let color = mir2_world_bevy::slave::get_chr_color(
+                &e,
+                &cfg.slave_color,
+                NPC_NAME_COLOR_UNMODELED,
+            );
             // `BaseObject.GetShowName()`（`BaseObject.Base.cs:779`）：怪物走 `FilterShowName`（GBK 字节）。
             let show_name = downlink::gbk(downlink::filter_show_name(&e.name));
             for observer in game_svr::chat::hear_targets(world, *sid, range) {
@@ -3506,7 +3509,7 @@ fn handle_inbound_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -3828,14 +3831,14 @@ fn handle_inbound_cmd(
                 // `World::butch_effect_now` 里按**tick 时刻的活状态**重查（不采信本处快照），
                 // 门不过 ⇒ 零抽数。
                 if out.butchered && target_id != 0 {
-                    world.enqueue(mir2_world::Command::ButchEffect {
+                    world.enqueue(mir2_world_bevy::Command::ButchEffect {
                         actor_id,
                         target_id,
                         n_x,
                         n_y,
                     });
                 }
-                world.enqueue(mir2_world::Command::Butch { actor_id, dir });
+                world.enqueue(mir2_world_bevy::Command::Butch { actor_id, dir });
             }
             glog!(
                 "INF",
@@ -3895,7 +3898,7 @@ fn handle_inbound_cmd(
 /// `CM_LEVELRANK(1060)` 应答共用本采集点（不写第二份排序）。
 fn level_rank_players<'a>(
     online: &'a OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
 ) -> Vec<(&'a str, i32, i32)> {
     online
         .iter()
@@ -3909,7 +3912,7 @@ fn level_rank_players<'a>(
 /// `SM_LEVELRANK(1108)` **英雄榜**（kind `4..=7`）的唯一采集点。
 ///
 /// **本仓没有英雄实体建模**：C# oracle 的 `SM_HEROSTATE(899)` 无发射点、SQL 三库无
-/// hero 表/列、`mir2_world::Entity` 无 `is_hero` 字段（只有宝宝主人 `master`）⇒
+/// hero 表/列、`mir2_world_bevy::Entity` 无 `is_hero` 字段（只有宝宝主人 `master`）⇒
 /// 没有「玩家英雄」可采集。故本函数目前恒返回空：英雄页输出 10 个零行
 /// （客户端 `present()` 按 `master_len != 0` 判空，不画行），这是契约内的**空榜**，
 /// 不是伪造数据。
@@ -3918,7 +3921,7 @@ fn level_rank_players<'a>(
 /// 纯函数 `enter::hero_rank_body` 固定（level desc、同级 GBK 名升序）。
 fn level_rank_heroes<'a>(
     _online: &'a OnlineRegistry,
-    _world: &mir2_world::World,
+    _world: &mir2_world_bevy::World,
 ) -> Vec<(&'a str, &'a str, u16, u16)> {
     Vec::new()
 }
@@ -3937,7 +3940,7 @@ fn handle_level_rank_request_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     enabled: bool,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
@@ -3993,7 +3996,7 @@ fn handle_level_rank_request_cmd(
 fn send_movefail(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     displays: &downlink::DisplayTable,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     actor_id: i32,
     socket: i32,
     gate_idx: i32,
@@ -4076,7 +4079,7 @@ fn handle_ground_cmd(
     // `PlayObject.Dealing` / `PlayObject.DealLastTick`（M3⑦-实现 3/4）的真值来源。
     // 传整表而非两个散值：取值固定在 `handle_ground_cmd` 内，调用点无法各自漏接/写死。
     trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -4233,7 +4236,7 @@ fn handle_ground_cmd(
 /// `!Ghost && !Death` 的对象。朝向取**实体** `Entity.ai.dir`（oracle `BaseObject.Dir`；
 /// 见 [`actor_dir`]），展示表只作实体缺失时的回退。
 fn pose_create(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     actor_id: i32,
 ) -> Option<i32> {
@@ -4244,7 +4247,7 @@ fn pose_create(
 /// 同一时刻持着 `&mut displays`），拿不到 `&DisplayTable`。`actor_dir` 在实体**存在**时读
 /// `e.ai.dir`（`displays` 只在实体缺失时兜底，而 `pose_create` 那时已返回 `None`）⇒ 用调用者
 /// 实体的 `ai.dir` 直接调本函数，与客户端直呼路径逐字节同值。
-fn pose_create_dir(world: &mir2_world::World, dir: u8, actor_id: i32) -> Option<i32> {
+fn pose_create_dir(world: &mir2_world_bevy::World, dir: u8, actor_id: i32) -> Option<i32> {
     let e = world.entities.get(actor_id)?;
     let (width, height) = world
         .maps
@@ -4267,7 +4270,7 @@ fn pose_create_dir(world: &mir2_world::World, dir: u8, actor_id: i32) -> Option<
 /// - 玩家且 `== this` ⇒ `:936` 内层 `if (targetPlayObject != this)` 无 `else` ⇒ **不发帧**；
 /// - 玩家且 `!= this` ⇒ `:938` 取对方 `GetPoseCreate()` 是否回指自己（`faces_me`）。
 fn deal_try_target_of(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     actor_id: i32,
     pose_id: Option<i32>,
@@ -4289,11 +4292,11 @@ fn deal_try_target_of(
 }
 
 /// `poseObject.Race == ActorRace.Play`（`PlayObject.Operate.cs:933`）。
-fn is_play_actor(world: &mir2_world::World, id: i32) -> bool {
+fn is_play_actor(world: &mir2_world_bevy::World, id: i32) -> bool {
     world
         .entities
         .get(id)
-        .is_some_and(|e| e.race == mir2_world::ACTOR_RACE_PLAY)
+        .is_some_and(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)
 }
 
 /// `CM_DEALTRY/ADDITEM/DELITEM/CANCEL/CHGGOLD/END` 的派发（M3⑦-实现 3）。
@@ -4313,7 +4316,7 @@ fn handle_deal_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
@@ -4483,7 +4486,7 @@ fn handle_deal_cmd(
 fn deal_cancel_between(
     chr_name: &str,
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     trade_sessions: &mut std::collections::HashMap<String, game_svr::trade::DealState>,
@@ -4513,7 +4516,7 @@ fn deal_cancel_between(
 /// ⇒ `DealCancel()`。遍历前先按 `ChrName` 排序（确定性；`HashMap` 迭代序不是契约）。
 #[allow(clippy::too_many_arguments)]
 fn drain_deal_tick(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -4601,7 +4604,7 @@ fn handle_bag_cmd(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     ref_msg_range: i32,
     dealing: bool,
@@ -4643,7 +4646,7 @@ fn handle_bag_cmd_with_magic(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     ref_msg_range: i32,
     dealing: bool,
@@ -5058,7 +5061,7 @@ fn handle_query_bag_cmd(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &game_svr::ability::StdItemCatalog,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
 ) {
     let Some(entry) = online.iter().find(|e| e.chr_name == chr_name) else {
         glog!(
@@ -5152,7 +5155,7 @@ fn handle_query_user_name_cmd(
     socket: i32,
     online: &OnlineRegistry,
     sessions: &std::collections::HashMap<String, SessionGround>,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
@@ -5269,7 +5272,7 @@ fn handle_query_user_state_cmd(
     socket: i32,
     online: &OnlineRegistry,
     sessions: &std::collections::HashMap<String, SessionGround>,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) {
@@ -5301,7 +5304,7 @@ fn handle_query_user_state_cmd(
     let Some(target) = world
         .entities
         .get(char_id)
-        .filter(|t| t.race == mir2_world::ACTOR_RACE_PLAY)
+        .filter(|t| t.race == mir2_world_bevy::ACTOR_RACE_PLAY)
     else {
         glog!(
             "DBG",
@@ -5422,7 +5425,7 @@ fn handle_query_val_cmd(
     socket: i32,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
 ) -> bool {
     let _ = (npc, socket); // `npc`/`socket` 供 `ValNpcType` 的 `GotoLable` 分发用（未接线，登记）。
     if online.iter().all(|e| e.chr_name != chr_name) {
@@ -5493,11 +5496,11 @@ fn handle_query_val_cmd(
 /// `FindMerchant(nParam1) ?? FindNpc(nParam1)`，而 `FindMerchant` = `ActorMgr.Get<IMerchant>`
 /// （`ActorManager.cs:58-61`）是 **`(T)actor` 硬转**。⇒ 三种结果、两种帧面：
 ///
-/// * [`mir2_world::npc::MerchantLookup::NotMerchant`]（`Npcs.txt` **type=1 `GuildOfficial`**、怪物、玩家…）
+/// * [`mir2_world_bevy::npc::MerchantLookup::NotMerchant`]（`Npcs.txt` **type=1 `GuildOfficial`**、怪物、玩家…）
 ///   ⇒ **抛 `InvalidCastException`**，被 `PlayObject.Run` 的 catch 吞（`PlayObject.Message.cs:392-400`；
 ///   `Ident != 0` ⇒ 不 `MakeGhost`）⇒ **零帧**，且 `?? FindNpc` 第二臂永不执行 ⇒ **不进任何脚本**；
-/// * [`mir2_world::npc::MerchantLookup::Absent`] ⇒ 两个查找都 `null` ⇒ 静默零帧（C3）；
-/// * [`mir2_world::npc::MerchantLookup::Merchant`] ⇒ 正常按**实际类**虚调用 `UserSelect`：
+/// * [`mir2_world_bevy::npc::MerchantLookup::Absent`] ⇒ 两个查找都 `null` ⇒ 静默零帧（C3）；
+/// * [`mir2_world_bevy::npc::MerchantLookup::Merchant`] ⇒ 正常按**实际类**虚调用 `UserSelect`：
 ///   `Npcs.txt` type 0/2 与 `MerChant` 商人走 `handle_shop_cmd` 的固定 NPC / 商店臂。
 ///
 /// **注意（本卡结论）**：`merchant_lookup` 对 `npc_type=1` 返回 `NotMerchant` ⇒
@@ -5520,14 +5523,14 @@ enum DlgSelectRoute {
 }
 
 fn merchant_dlgselect_route(
-    lookup: mir2_world::npc::MerchantLookup,
+    lookup: mir2_world_bevy::npc::MerchantLookup,
     npc_type: Option<i32>,
 ) -> DlgSelectRoute {
     match lookup {
-        mir2_world::npc::MerchantLookup::NotMerchant => DlgSelectRoute::NotMerchant,
-        mir2_world::npc::MerchantLookup::Absent => DlgSelectRoute::Absent,
-        mir2_world::npc::MerchantLookup::Merchant => {
-            if npc_type == Some(mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL) {
+        mir2_world_bevy::npc::MerchantLookup::NotMerchant => DlgSelectRoute::NotMerchant,
+        mir2_world_bevy::npc::MerchantLookup::Absent => DlgSelectRoute::Absent,
+        mir2_world_bevy::npc::MerchantLookup::Merchant => {
+            if npc_type == Some(mir2_world_bevy::npc::NPC_TYPE_GUILD_OFFICIAL) {
                 DlgSelectRoute::GuildOfficial
             } else {
                 DlgSelectRoute::Shop
@@ -5539,11 +5542,14 @@ fn merchant_dlgselect_route(
 /// `sim_loop` 的 1011 派发**决定**：只有 `CM_MERCHANTDLGSELECT` 才做分类，其余命令一律 `Shop`
 /// （= 保持既有派发不变）。单独成函数是为了让「派发决定」可离线钉（`sim_loop` 需要 tokio 事件循环
 /// + DB wiring，无法在单测里跑；帧面由卡面 A4 的真机项覆盖）。
-fn dlgselect_route_for(ident: u16, entity: Option<mir2_world::EntityRef<'_>>) -> DlgSelectRoute {
+fn dlgselect_route_for(
+    ident: u16,
+    entity: Option<mir2_world_bevy::EntityRef<'_>>,
+) -> DlgSelectRoute {
     if ident != game_svr::shop::CM_MERCHANTDLGSELECT {
         return DlgSelectRoute::Shop;
     }
-    let lookup = mir2_world::npc::merchant_lookup(entity);
+    let lookup = mir2_world_bevy::npc::merchant_lookup(entity);
     let npc_type = entity.and_then(|e| e.npc).map(|st| st.npc_type);
     merchant_dlgselect_route(lookup, npc_type)
 }
@@ -5558,7 +5564,7 @@ fn dlgselect_route_for(ident: u16, entity: Option<mir2_world::EntityRef<'_>>) ->
 /// （`ClientClickNpc` / `ClientMerchantDlgSelect`）都先调 `FindMerchant(id)`，而它是
 /// `ActorMgr.Get<IMerchant>` 的 **`(T)actor` 硬转**（`ActorManager.cs:58-61`）⇒ `GuildOfficial`
 /// （只实现 `INormNpc`）**抛 `InvalidCastException`**，`?? FindNpc` 永不执行 ⇒ **type=1 恒零帧**。
-/// 点击臂已改由 `mir2_world::npc::merchant_lookup` 在**查找阶段**收口（`NotMerchant` ⇒ 零帧）；
+/// 点击臂已改由 `mir2_world_bevy::npc::merchant_lookup` 在**查找阶段**收口（`NotMerchant` ⇒ 零帧）；
 /// 本门仍放行 type=1 的**唯一**原因是 `CM_MERCHANTDLGSELECT` 的派发门
 /// （`guild_official::handle_select`）尚未按 oracle 收口——这是本卡的**待裁决项**，不是等价结论。
 ///
@@ -5572,7 +5578,7 @@ fn dlgselect_route_for(ident: u16, entity: Option<mir2_world::EntityRef<'_>>) ->
 fn fixed_npc_script_allowed(npc_type: i32) -> bool {
     matches!(
         npc_type,
-        mir2_world::npc::NPC_TYPE_MERCHANT | mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL
+        mir2_world_bevy::npc::NPC_TYPE_MERCHANT | mir2_world_bevy::npc::NPC_TYPE_GUILD_OFFICIAL
     )
 }
 
@@ -5613,7 +5619,7 @@ fn handle_click_npc_cmd(
     socket: i32,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     merchant_book: &game_svr::npc::MerchantScriptBook,
     shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
@@ -5691,22 +5697,22 @@ fn handle_click_npc_cmd(
     //     `MakeGhost`）⇒ **同样零帧（X）**；
     //   * `Merchant`：`MerChant` 商人 / `Npcs.txt` type 0、type 2 ⇒ 继续走 `normNpc.Click`。
     // 前两者**都零帧**但路径不同，判据必须分开钉（卡 `openmir2-click-npc-guildofficial-cast`）。
-    match mir2_world::npc::merchant_lookup(world.entities.get(npc_actor_id)) {
-        mir2_world::npc::MerchantLookup::Absent => {
+    match mir2_world_bevy::npc::merchant_lookup(world.entities.get(npc_actor_id)) {
+        mir2_world_bevy::npc::MerchantLookup::Absent => {
             glog!(
                 "DBG",
                 "CM_CLICKNPC：FindMerchant/FindNpc({npc_actor_id}) == null（actor 不在世界）⇒ 忽略"
             );
             return false;
         }
-        mir2_world::npc::MerchantLookup::NotMerchant => {
+        mir2_world_bevy::npc::MerchantLookup::NotMerchant => {
             glog!(
                 "DBG",
                 "CM_CLICKNPC：({npc_actor_id}) 不是 IMerchant ⇒ oracle 的 (IMerchant)actor 硬转抛 InvalidCastException、被 PlayObject.Run 吞掉 ⇒ 零帧 ChrName={chr_name}"
             );
             return false;
         }
-        mir2_world::npc::MerchantLookup::Merchant => {}
+        mir2_world_bevy::npc::MerchantLookup::Merchant => {}
     }
     let Some(ne) = world.entities.get(npc_actor_id) else {
         // `merchant_lookup` 刚判定为 `Merchant` ⇒ 实体必然在；本臂只为结束不可变借用。
@@ -5721,7 +5727,7 @@ fn handle_click_npc_cmd(
     // 无城 ⇒ 一条红字 `SM_SYSMESSAGE`；有城但未授权 ⇒ 零帧；授权 ⇒ `base.Click`（见下）。
     // `ClickNpcTime` 已在门外按 oracle 置位（`PlayObject.Base.cs:678-682`），不属本门。
     if let Some(ntype) = ntype {
-        if ntype == mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL {
+        if ntype == mir2_world_bevy::npc::NPC_TYPE_CASTLE_OFFICIAL {
             // `CastleOfficial.Click`（`CastleOfficial.cs:20-31`）：
             // ```text
             // if (Castle == null) { SysMsg("NPC不属于城堡!!!", Red, Hint); return; }
@@ -5905,7 +5911,7 @@ fn handle_click_npc_cmd(
 /// **G3**：四条断线宿主共享的行会/落盘句柄（`CM_SOFTCLOSE` 由 `dispatch_inbound_p0`
 /// 透传；测试可传 `None`，G3 侧完全 no-op）。
 struct GuildDisconnect<'a> {
-    guilds: &'a mut mir2_world::GuildManager,
+    guilds: &'a mut mir2_world_bevy::GuildManager,
     store: Option<&'a mir2_data::guild::GuildStore>,
     sections: &'a mir2_data::guild::GuildFileSections,
     msg_cfg: &'a guild_runtime::GuildMsgCfg,
@@ -5920,7 +5926,7 @@ fn handle_soft_close_cmd(
     socket: i32,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     guild: Option<&mut GuildDisconnect<'_>>,
     // 卡 `openmir2-dir-persistence-writeback`：离世快照的落点（见函数内的快照段）。
     saves: &mut std::collections::HashMap<String, SavedHuman>,
@@ -6018,7 +6024,7 @@ fn dispatch_inbound_p0(
     socket: i32,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
@@ -6427,7 +6433,7 @@ fn handle_selloff_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     sell_off_sessions: &mut std::collections::HashMap<String, game_svr::selloff::SellOffState>,
     book: &mut game_svr::selloff::SellOffBook,
@@ -6592,8 +6598,8 @@ fn handle_selloff_cmd(
 ///
 /// `UpgradeWeaponPrice` 取 `shop_cfg.upgrade.price`（与 `Merchant.cs:552/1265/1400/1652` 的
 /// `SystemShare.Config.UpgradeWeaponPrice` 同一来源）。
-fn shop_castle_tax_config(shop_cfg: &ShopCfg) -> mir2_world::castle_tax::CastleTaxConfig {
-    mir2_world::castle_tax::CastleTaxConfig {
+fn shop_castle_tax_config(shop_cfg: &ShopCfg) -> mir2_world_bevy::castle_tax::CastleTaxConfig {
+    mir2_world_bevy::castle_tax::CastleTaxConfig {
         castle_tax_rate: shop_cfg.castle_tax_rate,
         castle_one_day_gold: shop_cfg.castle_one_day_gold,
         castle_gold_max: shop_cfg.castle_gold_max,
@@ -6606,9 +6612,9 @@ fn shop_castle_tax_config(shop_cfg: &ShopCfg) -> mir2_world::castle_tax::CastleT
 /// 把商税意图落到 `world.castles`（`game_svr::shop::apply_merchant_tax` 的宿主封装）。
 /// `tick_ms` 取 `world.clock_ms`（虚拟时钟；`HUtil32.GetTickCount()` 的确定性等价）。
 fn apply_merchant_tax_to_world(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     castle_index: Option<usize>,
-    intent: Option<mir2_world::castle_tax::MerchantTaxIntent>,
+    intent: Option<mir2_world_bevy::castle_tax::MerchantTaxIntent>,
     shop_cfg: &ShopCfg,
 ) {
     let cfg = shop_castle_tax_config(shop_cfg);
@@ -6620,13 +6626,13 @@ fn apply_merchant_tax_to_world(
 /// 武器升级的税（`Merchant.cs:546-554`）：在 `DecGold(UpgradeWeaponPrice)` 之后立刻收。
 /// Castle 目标税基 = `UpgradeWeaponPrice`；CastleManager 目标同样恒 `UpgradeWeaponPrice`。
 fn apply_upgrade_weapon_tax(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     castle_index: Option<usize>,
     castle_merchant: bool,
     shop_cfg: &ShopCfg,
 ) {
     let price = shop_cfg.upgrade.price;
-    let intent = mir2_world::castle_tax::merchant_tax_intent(
+    let intent = mir2_world_bevy::castle_tax::merchant_tax_intent(
         price,
         castle_merchant,
         shop_cfg.get_all_npc_tax,
@@ -6669,7 +6675,7 @@ fn handle_shop_cmd_inner(
     sell_off_book: &mut game_svr::selloff::SellOffBook,
     trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
     shop_cfg: &ShopCfg,
     colors: &MsgColors,
@@ -6771,7 +6777,7 @@ fn handle_shop_cmd_inner(
                 me.x,
                 me.y,
                 me.map_id,
-                mir2_world::merchant::MerchantFlags::default(),
+                mir2_world_bevy::merchant::MerchantFlags::default(),
                 100,
                 false,
                 Vec::new(),
@@ -6793,8 +6799,8 @@ fn handle_shop_cmd_inner(
         // oracle 在 base 之后还有 Castle 自己的段：`Castle == null ⇒ SysMsg("NPC不属于城堡!!!")`、
         // 非 `@` 数据 ⇒ `RM_MENU_OK("你没有权利使用.")`、以及
         // `IsMasterGuild && IsGuildMaster` 门后的动作 switch（部署不可达，R-0；登记 T-40/T-140 剩余）。
-        let dialog_allowed =
-            fixed_npc_script_allowed(ntype) || ntype == mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL;
+        let dialog_allowed = fixed_npc_script_allowed(ntype)
+            || ntype == mir2_world_bevy::npc::NPC_TYPE_CASTLE_OFFICIAL;
         if !dialog_allowed {
             glog!(
                 "DBG",
@@ -7150,13 +7156,13 @@ fn handle_shop_cmd_inner(
                 return;
             }
             // **Lane A**：`@upgradenow`（`Merchant.cs:883`）/ `@getbackupgnow`（`:890`）。
-            // 判定/RNG 全在 `mir2_world::merchant`（宿主禁止抽数）；本臂只做状态回写、重算与出帧。
+            // 判定/RNG 全在 `mir2_world_bevy::merchant`（宿主禁止抽数）；本臂只做状态回写、重算与出帧。
             if let Some(req) = game_svr::shop::upgrade_request_for(label, &view) {
                 match req {
                     game_svr::shop::UpgradeRequest::UpgradeWapon => {
                         let weapon = sg.use_items.get(1).and_then(|c| c.as_ref()).cloned();
                         let weapon_item = weapon.as_ref().map(game_svr::shop::to_merchant);
-                        let mut bag: Vec<mir2_world::merchant::MerchantItem> = sg
+                        let mut bag: Vec<mir2_world_bevy::merchant::MerchantItem> = sg
                             .state
                             .item_list
                             .iter()
@@ -7171,7 +7177,7 @@ fn handle_shop_cmd_inner(
                             &shop_cfg.upgrade,
                         );
                         let r = match begin {
-                            mir2_world::merchant::UpgradeWaponBegin::Accepted(info) => {
+                            mir2_world_bevy::merchant::UpgradeWaponBegin::Accepted(info) => {
                                 // `Merchant.cs:546-554`：begin 已做 `DecGold(UpgradeWeaponPrice)`；
                                 // 税紧随其后（在 `GoldChanged`/摘武器/`RecalcAbilitys` 之前）。
                                 apply_upgrade_weapon_tax(world, mcastle_index, mcastle, shop_cfg);
@@ -7218,13 +7224,13 @@ fn handle_shop_cmd_inner(
                                 );
                                 sg.state.item_list =
                                     bag.iter().map(game_svr::shop::to_bag).collect();
-                                mir2_world::merchant::UpgradeWaponOutcome::Ok(result)
+                                mir2_world_bevy::merchant::UpgradeWaponOutcome::Ok(result)
                             }
-                            mir2_world::merchant::UpgradeWaponBegin::AlreadyUpgrading => {
-                                mir2_world::merchant::UpgradeWaponOutcome::AlreadyUpgrading
+                            mir2_world_bevy::merchant::UpgradeWaponBegin::AlreadyUpgrading => {
+                                mir2_world_bevy::merchant::UpgradeWaponOutcome::AlreadyUpgrading
                             }
-                            mir2_world::merchant::UpgradeWaponBegin::Fail => {
-                                mir2_world::merchant::UpgradeWaponOutcome::Fail
+                            mir2_world_bevy::merchant::UpgradeWaponBegin::Fail => {
+                                mir2_world_bevy::merchant::UpgradeWaponOutcome::Fail
                             }
                         };
                         // `FeatureChanged()`（`Merchant.cs:571`）的 41 帧输入。
@@ -7722,7 +7728,7 @@ fn handle_shop_cmd(
     sell_off_book: &mut game_svr::selloff::SellOffBook,
     trade_sessions: &std::collections::HashMap<String, game_svr::trade::DealState>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
     shop_cfg: &ShopCfg,
     colors: &MsgColors,
@@ -7833,7 +7839,7 @@ fn handle_storage_cmd(
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
     shop_cfg: &ShopCfg,
     colors: &MsgColors,
@@ -8462,7 +8468,7 @@ impl<'a> ScriptGmHost<'a> {
         spirit_mutiny_tick: &'a std::cell::Cell<i64>,
         saves: &std::collections::HashMap<String, SavedHuman>,
         ground_sessions: &std::collections::HashMap<String, SessionGround>,
-        world: &mir2_world::World,
+        world: &mir2_world_bevy::World,
         chr_name: &str,
     ) -> Self {
         let session = ground_sessions.get(chr_name);
@@ -8512,7 +8518,7 @@ fn gm_caller_guild(sg: &SessionGround) -> gmcmd::GmGuildState {
 /// 与客户端直呼路径的 `pose_create(world, displays, speaker)` 同源：`actor_dir` 在实体
 /// **存在**时读 `e.ai.dir`（`displays` 只在实体缺失时兜底，而 `pose_create` 那时已返回
 /// `None`）⇒ 脚本桥只需要 `&World`，不必把宿主的 `&mut displays` 再借一次。
-fn script_pose_target(world: &mir2_world::World, actor_id: i32) -> Option<String> {
+fn script_pose_target(world: &mir2_world_bevy::World, actor_id: i32) -> Option<String> {
     let dir = world.entities.get(actor_id)?.ai.dir;
     pose_create_dir(world, dir, actor_id)
         .and_then(|id| world.entities.get(id))
@@ -8529,7 +8535,7 @@ pub struct ScriptGmParts<'a> {
 }
 
 impl<'a> ScriptGmParts<'a> {
-    fn with<'g>(&'g self, guilds: &'g mir2_world::GuildManager) -> ScriptGmEnv<'g>
+    fn with<'g>(&'g self, guilds: &'g mir2_world_bevy::GuildManager) -> ScriptGmEnv<'g>
     where
         'a: 'g,
     {
@@ -8545,7 +8551,7 @@ impl<'a> ScriptGmParts<'a> {
 
 pub struct ScriptGmEnv<'a> {
     /// `SystemShare.GuildMgr`。
-    pub guilds: &'a mir2_world::GuildManager,
+    pub guilds: &'a mir2_world_bevy::GuildManager,
     /// `M2Share.MapMgr`（`WorldMap` 注册表）；`None` = 无 Envir。
     pub maps: Option<&'a mir2_envir::MapRegistry>,
     /// `SystemShare.Config` 的 GM 半边（`GmConfig`）。
@@ -8580,7 +8586,7 @@ impl ScriptGmEnv<'_> {
     fn bridge<'g>(
         &'g self,
         sess: &'g mut gmcmd::GmSession,
-        world: &'g mir2_world::World,
+        world: &'g mir2_world_bevy::World,
         chr_name: &'g str,
         actor_id: i32,
     ) -> game_svr::npc::NpcGm<'g> {
@@ -8687,7 +8693,7 @@ fn run_std_mode_func_script(
     socket: i32,
     gate_idx: i32,
     host: &game_svr::npc::NpcHost,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sg: &mut SessionGround,
     map_text: &str,
     catalog: &dyn game_svr::ability::ItemCatalog,
@@ -8895,7 +8901,7 @@ pub(crate) struct ScriptWorldCtx<'a> {
 /// 此处不再有脚本抽数穿插）。应用序 = 动作序 ⇒ 多条 `MONGENEX` 的创建抽数序仍是脚本里的
 /// 先后序；但相对脚本内其它抽数动作的位置已移到脚本尾（`NpcPlayer::mon_gen_enabled` 文档登记）。
 fn apply_script_world_actions(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     ctx: &mut Option<&mut ScriptWorldCtx<'_>>,
     actions: Vec<mir2_script::engine::WorldAction>,
 ) {
@@ -8978,9 +8984,9 @@ fn apply_script_world_actions(
 ///    `SM_SPACEMOVE_HIDE(800)`（`PlayObject.Message.cs:1955-1966`）。本宿主在落地前
 ///    [`broadcast_ref_msg_with_self`] 一次；`FindMap == null` / 201 轮不可走时**照发**
 ///    （oracle 的 FIRE 先于 `SpaceMove` 的成功判定）。
-/// 2. 落地复用 [`mir2_world::World::base_object_move_player`]（`Fixed` = `MAPMOVE` 指定坐标支、
+/// 2. 落地复用 [`mir2_world_bevy::World::base_object_move_player`]（`Fixed` = `MAPMOVE` 指定坐标支、
 ///    `Random` = `MAP` 随机支）⇒ `switch_map_space(..., show2=false)` 记一条
-///    [`mir2_world::session::MapChange`]。
+///    [`mir2_world_bevy::session::MapChange`]。
 /// 3. 换图簇 `SM_CLEAROBJECTS(633)` → `SM_CHANGEMAP(634)` → `SM_SPACEMOVE_SHOW(801)` 仍由世界
 ///    tick 的 [`drain_map_change`] 发（`space_move_show = Some(false)` = `nInt == 0`）；
 ///    会话 `map_id` 与实体坐标由 `switch_map_space` 改写，存档 [`build_save_record`] 因此取到
@@ -8991,7 +8997,7 @@ fn apply_script_world_actions(
 /// **登记**：QFunction（`@StdModeFunc*`）漏斗没有 `ShopSession` 载体 ⇒ 该路脚本里的
 /// `MAPMOVE`/`MAP` 仍不落地（与 `SETMPAMODE` 的登记一致）。
 fn apply_pending_space_moves(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -9029,14 +9035,14 @@ fn apply_pending_space_moves(
         };
         let target = match mv {
             game_svr::npc::PendingSpaceMove::Fixed { x, y, .. } => {
-                mir2_world::HomeMoveTarget::Fixed {
+                mir2_world_bevy::HomeMoveTarget::Fixed {
                     map_id,
                     x: i32::from(x),
                     y: i32::from(y),
                 }
             }
             game_svr::npc::PendingSpaceMove::Random { .. } => {
-                mir2_world::HomeMoveTarget::Random { map_id }
+                mir2_world_bevy::HomeMoveTarget::Random { map_id }
             }
         };
         let out = world.base_object_move_player(chr_name, actor_id, Some(target));
@@ -9081,7 +9087,7 @@ fn run_merchant_goto(
     rng: &mut mir2_shared::rng::RandomNumber,
     // **卡 `openmir2-gm-script-exec-seams`**：脚本 `GMEXECUTE` 的宿主跳线视图。
     // `world` 与 `gm` 都给了才装桥；否则保持 `ScriptPlayer` 缺省 no-op（无桥用例）。
-    world: Option<&mir2_world::World>,
+    world: Option<&mir2_world_bevy::World>,
     gm: Option<&ScriptGmEnv<'_>>,
     // `SENDMSG 0-3`（`WorldServer.SendBroadCastMsg`）的扇出正文（卡 `openmir2-script-sendmsg-host`）。
     // 本例玩家自己那一份已在 `NpcPlayer.frames` 里（`RM_SYSMESSAGE`），本表只装**其余**玩家要收的
@@ -9162,7 +9168,7 @@ fn run_merchant_goto(
             player.vars.castle_official = w
                 .entities
                 .npc_state(merchant_actor_id)
-                .is_some_and(|st| st.npc_type == mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL);
+                .is_some_and(|st| st.npc_type == mir2_world_bevy::npc::NPC_TYPE_CASTLE_OFFICIAL);
         }
         // **卡 `openmir2-gm-script-exec-seams`**：装 GM 跳线（`sess` = 移出的会话 GM 态）。
         if let (Some(env), Some(w), Some(sess)) = (gm, world, gm_sess.as_mut()) {
@@ -9288,7 +9294,7 @@ fn emit_merchant_goto_result(
     script_frames: &[game_svr::npc::SendMsg],
     script_broadcasts: &[String],
     sg: &mut SessionGround,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     // **卡 `openmir2-script-handler-msgqueue`（tier R）**：本 handler 的 per-recipient 队列；
     // 说词与脚本帧都只**入队**，由 `handle_shop_cmd` 统一按 `(byte)RM_*` 堆序出队
     //（同一条 oracle `MsgQueue`）。世界侧扇出登记到 `deferred`，在发送者队列 flush 之后执行
@@ -9388,8 +9394,8 @@ impl guild_official::FixedNpcScript for FixedNpcScriptCtx<'_> {
         npc_actor_id: i32,
         label: &str,
         bo_ext_jmp: bool,
-        world: &mir2_world::World,
-        guilds: &mir2_world::GuildManager,
+        world: &mir2_world_bevy::World,
+        guilds: &mir2_world_bevy::GuildManager,
     ) -> (
         Vec<game_svr::npc::SayMsg>,
         Vec<game_svr::npc::SendMsg>,
@@ -9552,7 +9558,7 @@ fn emit_script_frames(
 /// 同口径（每个排水点只排本次事件产出的帧）。
 fn fan_out_world_sysmessage(
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     caller_actor_id: i32,
     texts: &[String],
@@ -9628,7 +9634,7 @@ fn script_hear_says(frames: &[game_svr::npc::SendMsg]) -> Vec<(String, u8, u8)> 
 /// NPC 侧 `Envir == null`（隐藏 NPC）由 `ScriptNpc::send_say_msg` 返回 `None` 直接挡住，
 /// 到不了这里。
 fn caller_within_hear_range(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     caller_actor_id: i32,
     npc_actor_id: i32,
     range: i32,
@@ -9654,7 +9660,7 @@ fn caller_within_hear_range(
 /// 本路径 ident 恒为 `RM_HEAR`（`& 0xFF = 249`）=> 同 ident 多帧按四叉堆 sift 出队。
 fn fan_out_npc_hear(
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     caller_actor_id: i32,
     npc_actor_id: i32,
@@ -9713,7 +9719,7 @@ fn drain_script_frames_with_host(
     sg: &SessionGround,
     frames: &[game_svr::npc::SendMsg],
     broadcasts: &[String],
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     caller_actor_id: i32,
@@ -9909,7 +9915,7 @@ fn drain_login_script_batch(
     // `SENDMSG 0-3` 的其余玩家扇出正文（本例玩家自己那份已在 `frames` 里）。
     broadcasts: &[String],
     online: &OnlineRegistry,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     // `SystemShare.Config.RedMsgFColor/BColor`（= 脚本侧 `SysMsg(_, MsgColor.Red, …)` 的 `Param`）。
     red: (u8, u8),
@@ -9967,7 +9973,7 @@ fn handle_eat_cmd(
     catalog: &dyn game_svr::ability::ItemCatalog,
     // **卡 `openmir2-gm-script-exec-seams`**：`StdMode 31 / AniCount != 0` 的
     // `@StdModeFunc<N>` 脚本要抽 `world.rng`、并把脚本副作用写回世界/实体 ⇒ 需要 `&mut`。
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     colors: &MsgColors,
     registry: Option<&mir2_envir::MapRegistry>,
     // `M2Share.UnbindList`（`M2Share.cs:85`）：StdMode 31 解包按 `StdItem.Shape` 查物品名。
@@ -10215,7 +10221,7 @@ fn handle_eat_cmd(
 /// 非玩家目标的 `WantRefMsg` 名单也不在
 /// 本实现内（本宿主只承载玩家）。这两项对所有 `RM_*` 广播同源，随具体 `SM_*` 再接。
 fn broadcast_feature_changed(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
@@ -10234,7 +10240,7 @@ fn broadcast_feature_changed(
 /// 653 → 709`）⇒ 广播时跳过自己，避免同一线缆上出现两条 `41`。
 #[allow(clippy::too_many_arguments)]
 fn broadcast_feature_changed_except(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
@@ -10280,7 +10286,7 @@ fn broadcast_feature_changed_except(
 /// 每条的 `Series` 是**收件人自己**的 `HitSpeed`（`PlayObject.Message.cs:1846` 的 `this.HitSpeed`）；
 /// `Recog/Param/Tag` 是**发送者**的 `ActorId` 与 `CharStatus` 的 Lo/Hi。
 fn broadcast_charstatuschanged_except_self(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
@@ -10406,13 +10412,13 @@ struct EntityDerived {
     /// ⚠ **可能是全零**（该路径的实体块从未同步装备）⇒ 消费端**必须先过
     /// [`use_items_loaded`]** 再采用，禁止直接写库——否则会把会话里已装备的物品写成
     /// `Index=0/Dura=0`（G-06 物资丢失形态）。接缝无条件拷 `e.use_items`，本不变量不在接缝里。
-    use_items: [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
+    use_items: [mir2_world_bevy::entity::UseItemSlot; mir2_world_bevy::entity::USE_ITEM_SLOTS],
 }
 
 /// **单一接缝**：实体 → 派生快照。全部派生字段一次取全（`x/y/dir/attack_mode/allow_group/allow_group_re_call/use_items`）。
 ///
 /// 禁止在 soft-close / 存档处散写这些字段（散写必然与实体漂移，也必然漏字段）。
-fn entity_derived_snapshot(e: mir2_world::EntityRef<'_>) -> EntityDerived {
+fn entity_derived_snapshot(e: mir2_world_bevy::EntityRef<'_>) -> EntityDerived {
     EntityDerived {
         x: e.x,
         y: e.y,
@@ -10429,7 +10435,7 @@ fn entity_derived_snapshot(e: mir2_world::EntityRef<'_>) -> EntityDerived {
 /// 全零实体 = 本路径从未同步（单测/旧路径）⇒ 不能拿它覆盖会话，否则会把会话里已装备的物品
 /// 清零（G-06 的既有口径）。
 fn use_items_loaded(
-    items: &[mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
+    items: &[mir2_world_bevy::entity::UseItemSlot; mir2_world_bevy::entity::USE_ITEM_SLOTS],
 ) -> bool {
     items
         .iter()
@@ -10565,13 +10571,14 @@ fn bag_items_for_save(item_list: &[game_svr::bag::BagItem]) -> Vec<Option<record
 ///
 /// 逐字段搬运 `index/dura/dura_max/desc`（`None` = oracle 的 `null` 槽 ⇒ 默认全零槽）。
 fn apply_use_items_to_entity(
-    use_items_slots: &mut [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
+    use_items_slots: &mut [mir2_world_bevy::entity::UseItemSlot;
+             mir2_world_bevy::entity::USE_ITEM_SLOTS],
     use_items: &[Option<game_svr::bag::BagItem>],
 ) {
     for (i, slot) in use_items_slots.iter_mut().enumerate() {
         *slot = use_items.get(i).and_then(Option::as_ref).map_or_else(
-            mir2_world::entity::UseItemSlot::default,
-            |it| mir2_world::entity::UseItemSlot {
+            mir2_world_bevy::entity::UseItemSlot::default,
+            |it| mir2_world_bevy::entity::UseItemSlot {
                 make_index: it.make_index,
                 index: it.index,
                 dura: it.dura,
@@ -10583,7 +10590,7 @@ fn apply_use_items_to_entity(
 }
 
 /// 会话 → 实体：整表同步（进世界装载 / 穿脱后）。
-fn sync_use_items_to_entity(world: &mut mir2_world::World, sg: &SessionGround) {
+fn sync_use_items_to_entity(world: &mut mir2_world_bevy::World, sg: &SessionGround) {
     if let Some(inv) = world.entities.inventory_mut(sg.actor_id) {
         apply_use_items_to_entity(&mut inv.use_items, &sg.use_items);
     }
@@ -10591,18 +10598,18 @@ fn sync_use_items_to_entity(world: &mut mir2_world::World, sg: &SessionGround) {
 
 /// 会话 → 实体：单槽同步（护身符消耗只动一格，不整表覆盖，避免抹掉同 tick 的磨损）。
 pub(crate) fn sync_use_item_slot_to_entity(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sg: &SessionGround,
     slot: usize,
 ) {
-    if slot >= mir2_world::entity::USE_ITEM_SLOTS {
+    if slot >= mir2_world_bevy::entity::USE_ITEM_SLOTS {
         return;
     }
     if let Some(entity) = world.entities.get_mut(sg.actor_id) {
         entity.inventory.use_items[slot] =
             sg.use_items.get(slot).and_then(Option::as_ref).map_or_else(
-                mir2_world::entity::UseItemSlot::default,
-                |it| mir2_world::entity::UseItemSlot {
+                mir2_world_bevy::entity::UseItemSlot::default,
+                |it| mir2_world_bevy::entity::UseItemSlot {
                     make_index: it.make_index,
                     index: it.index,
                     dura: it.dura,
@@ -10619,7 +10626,7 @@ pub(crate) fn sync_use_item_slot_to_entity(
 /// 破零 `Index = 0; Dura = 0`）⇒ `MakeSaveRcd` 读到的就是磨损后的值。Rust 侧实体是磨损的
 /// 权威存储、会话是存档读取源 ⇒ 每 tick 攻击/受击排水之后必须回写。破零槽保留
 /// `MakeIndex/DuraMax/Desc`（oracle 只清 `Index`/`Dura`，对象仍在 `UseItems[i]` 里）。
-fn sync_use_items_to_session(world: &mir2_world::World, sg: &mut SessionGround) {
+fn sync_use_items_to_session(world: &mir2_world_bevy::World, sg: &mut SessionGround) {
     let Some(entity) = world.entities.get(sg.actor_id) else {
         return;
     };
@@ -10627,7 +10634,7 @@ fn sync_use_items_to_session(world: &mir2_world::World, sg: &mut SessionGround) 
         .use_items
         .iter_mut()
         .enumerate()
-        .take(mir2_world::entity::USE_ITEM_SLOTS)
+        .take(mir2_world_bevy::entity::USE_ITEM_SLOTS)
     {
         let src = &entity.use_items[i];
         match cell {
@@ -10810,7 +10817,7 @@ fn recovery_from_record(d: &record::CharacterData, now: i64) -> game_svr::recove
 fn build_save_record(
     saved: &SavedHuman,
     chr_name: &str,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     sg: &SessionGround,
     registry: Option<&mir2_envir::MapRegistry>,
 ) -> record::PlayerRecord {
@@ -10925,7 +10932,7 @@ fn build_save_record(
     // **§11.1 定级**：`use_items` 与上面四个标量不同级——它的兜底是**会话实时值**（每 tick
     // 回写，只丢 ≤1 tick），不是载入记录；快照只为覆盖「离世那一刻的精确值」（如最后一刀磨损）。
     let entity_use_items: Option<
-        [mir2_world::entity::UseItemSlot; mir2_world::entity::USE_ITEM_SLOTS],
+        [mir2_world_bevy::entity::UseItemSlot; mir2_world_bevy::entity::USE_ITEM_SLOTS],
     > = world
         .session(chr_name)
         .and_then(|s| s.actor_id)
@@ -10944,7 +10951,7 @@ fn build_save_record(
         for (i, cell) in save_use_items
             .iter_mut()
             .enumerate()
-            .take(mir2_world::entity::USE_ITEM_SLOTS)
+            .take(mir2_world_bevy::entity::USE_ITEM_SLOTS)
         {
             if let Some(it) = cell {
                 it.index = items[i].index;
@@ -10985,7 +10992,7 @@ fn save_human_rcd(
     engine: &mut load::FrontEngine,
     saved: &SavedHuman,
     chr_name: &str,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     sg: &SessionGround,
     registry: Option<&mir2_envir::MapRegistry>,
 ) -> Option<i32> {
@@ -11063,7 +11070,7 @@ struct ShutdownSaveSummary {
 fn shutdown_save_all(
     sessions: &std::collections::HashMap<String, SessionGround>,
     saves: &std::collections::HashMap<String, SavedHuman>,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     db: &mut Option<DbWiring>,
     engine: &mut load::FrontEngine,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -11145,12 +11152,12 @@ fn shutdown_save_all(
 
 /// **卡 `openmir2-movefail-log-reason`**：`StepOutcome` → 日志里的 `reason=` 字面量。
 ///
-/// 真实拒绝由 [`mir2_world::StepBlock::reason`] 产出（`actor` / `terrain` / `bounds`）；
+/// 真实拒绝由 [`mir2_world_bevy::StepBlock::reason`] 产出（`actor` / `terrain` / `bounds`）；
 /// 未分类（actor/地图缺失、退化输入）落 `other`。
-fn movefail_reason(outcome: &mir2_world::StepOutcome) -> &'static str {
+fn movefail_reason(outcome: &mir2_world_bevy::StepOutcome) -> &'static str {
     outcome
         .blocked
-        .map_or("other", mir2_world::StepBlock::reason)
+        .map_or("other", mir2_world_bevy::StepBlock::reason)
 }
 
 /// **卡 `openmir2-movefail-log-reason`**：第一条 MOVEFAIL 日志的**完整行文本**。
@@ -11163,7 +11170,7 @@ fn movefail_blocked_log(
     dir: u8,
     steps: i32,
     chr_name: &str,
-    outcome: &mir2_world::StepOutcome,
+    outcome: &mir2_world_bevy::StepOutcome,
 ) -> String {
     format!(
         "移动：actor_id={actor_id} 方向={dir} {steps} 格被挡/越界 ⇒ 不动（已回 SM_MOVEFAIL(28)）reason={} ChrName={chr_name}",
@@ -11199,7 +11206,7 @@ fn handle_move_cmd(
     socket: i32,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -11262,7 +11269,7 @@ fn handle_move_cmd(
             // 仍会执行该行；前置门失败（`CellValid` 等）提前 `return`，**不**复位。
             if matches!(
                 route,
-                mir2_world::RouteCheck::Switched | mir2_world::RouteCheck::RolledBack
+                mir2_world_bevy::RouteCheck::Switched | mir2_world_bevy::RouteCheck::RolledBack
             ) {
                 if let Some(sg) = sessions.get_mut(chr_name) {
                     sg.auto_get_exp_tick = now_ms();
@@ -11272,7 +11279,7 @@ fn handle_move_cmd(
                     sg.p22.inc_game_gold_tick = sg.auto_get_exp_tick;
                 }
             }
-            if route == mir2_world::RouteCheck::Switched {
+            if route == mir2_world_bevy::RouteCheck::Switched {
                 // 帧序：换图簇（633/634）必须先于 SM_TURN（oracle `Walk` 尾段才发移动/转身帧）。
                 drain_map_change(world, online, gates, displays, registry);
             }
@@ -11446,7 +11453,7 @@ fn handle_move_cmd(
 /// （`dc/ac/hit_point/speed_point=0`、`hp/max_hp=100`）⇒ 攻方攻击力恒 0，且
 /// **守方** `hit_point==0` 让命中门短路 ⇒ 真机 120 击全记躲闪（`attack_diff.py` 的 k=2 分岔根因）。
 fn apply_ability_to_entity(
-    e: &mut mir2_world::EntityMut,
+    e: &mut mir2_world_bevy::EntityMut,
     wabil: &game_svr::ability::Ability,
     sub: &game_svr::ability::SubAbility,
     hit_speed: u16,
@@ -11483,7 +11490,7 @@ fn apply_ability_to_entity(
 /// 载体字段与组件同值，插入后由 `EntityStore::insert` 落成组件。
 #[cfg(test)]
 fn apply_ability_to_spawn(
-    e: &mut mir2_world::EntitySpawn,
+    e: &mut mir2_world_bevy::EntitySpawn,
     wabil: &game_svr::ability::Ability,
     sub: &game_svr::ability::SubAbility,
     hit_speed: u16,
@@ -11656,7 +11663,7 @@ fn magic_cfg_of(enter_cfg: &EnterConfig) -> MagicCfg<'_> {
 /// 真机 84/120「前方格 (18,20) 无目标」是受害者在 k=36 HP 归零、`death=true` 后的**正常
 /// oracle 行为**（不是取目标算错）；本函数把这一语义钉成可判红/红检的单测。
 fn front_target(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     actor_id: i32,
     map_id: usize,
     fx: i32,
@@ -11703,7 +11710,7 @@ fn handle_hit_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -11789,7 +11796,7 @@ fn handle_hit_cmd(
     }
     if let Some(tid) = target_id {
         // **片 A-5（buff 生产者接线）**：攻击命中中毒门（`PlayObject.Attack.cs:221-224`）的攻/守双方
-        // 运行态灌进世界（吸收于下一次 world tick 的 [`mir2_world::World::attack_once`]）。
+        // 运行态灌进世界（吸收于下一次 world tick 的 [`mir2_world_bevy::World::attack_once`]）。
         // 攻方条目带 `Paralysis`（麻痹戒指 `RING_MAKESTONE_ITEM` 置位，`PlayObject.cs:2230-2239`）；
         // 守方条目带 `UnParalysis`/`AntiPoison`。buff 关闭（`buff_enabled` false）时 `attack_once`
         // 不读该表 ⇒ 既有 golden 逐字节不变。
@@ -11879,7 +11886,7 @@ fn handle_hit_cmd(
 /// `hit=false` ⇒ `tx/ty` = 原始点击坐标。
 #[must_use]
 fn spell_snap_target(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     self_map: usize,
     target_actor_id: i32,
     target_x: i32,
@@ -11904,11 +11911,11 @@ fn spell_snap_target(
 /// - `BaseObject.RecalcAbilitys`（`BaseObject.Abil.cs:30` 置 1、`:67` 累加 `AddAbil.AntiMagic`）
 ///   ⇒ `1 + AddAbil.AntiMagic`。**普通 `MonGen` 生成路径不调用 `RecalcAbilitys`** ⇒ 普通怪恒为 0。
 ///
-/// 本仓读目标实体的 [`mir2_world::Entity::anti_magic`]：
+/// 本仓读目标实体的 [`mir2_world_bevy::Entity::anti_magic`]：
 /// - 玩家目标 ⇒ 登录/升级时由 [`apply_ability_to_entity`] 写入 `SubAbility.anti_magic`
 ///   （同一份 `RecalcAbilitys` 输出，= `1 + AddAbil.AntiMagic`）；
 /// - 普通 `MonGen` 怪 ⇒ **0** ⇒ `Random(10) >= 0` 恒真（骰门**永不失败**，与 oracle 一致）；
-/// - 宝宝 ⇒ 召唤时 [`mir2_world::World::make_slave_adopt`] 按 `BaseObject.cs:1198` 的
+/// - 宝宝 ⇒ 召唤时 [`mir2_world_bevy::World::make_slave_adopt`] 按 `BaseObject.cs:1198` 的
 ///   `RecalcAbilitys` 置 1。
 ///
 /// 目标不在世界（`CretInNearXy` 未命中 ⇒ `targetObject == null`）⇒ 0；此时各效果体先短路。
@@ -11916,7 +11923,7 @@ fn spell_snap_target(
 /// **登记**：复活（`BaseObject.cs:2739`）、怪物 `MakeClone`/`GainSlaveExp` 等
 /// `RecalcAbilitys` 面，以及装备/卸下后的实体同步尚未建模 ⇒ 这些路径上实体保持 0
 /// （B1 报告 §5；设计锚 `design-monster-run-overrides-20261017.md` §4.1.2-5 / §5-2）。
-fn spell_target_anti_magic(world: &mir2_world::World, target_id: i32) -> i32 {
+fn spell_target_anti_magic(world: &mir2_world_bevy::World, target_id: i32) -> i32 {
     world
         .entities
         .get(target_id)
@@ -11987,7 +11994,7 @@ impl SpellFrameBuf {
     /// `SendRefMsg` 收件人集合（±`SendRefMsgRange` 的 `Race==Play && !Ghost`）中在线者。
     fn push_broadcast(
         &mut self,
-        world: &mir2_world::World,
+        world: &mir2_world_bevy::World,
         online: &OnlineRegistry,
         actor_id: i32,
         include_self: bool,
@@ -12148,7 +12155,7 @@ mod spell_frame_buf_tests {
 
 /// **P3-B2**：`RM_MAGSTRUCK` 交付段的宿主角（世界抽数 → 帧入 B2 缓冲）。
 ///
-/// 世界 [`mir2_world::World::deliver_mag_struck`] 逐目标（入队序）完成
+/// 世界 [`mir2_world_bevy::World::deliver_mag_struck`] 逐目标（入队序）完成
 /// `R(1000)` → `MSD` → `nDamage>0` 链（含玩家 `STD`、怪物 `R(6)`/`R(300)`），返回观察值；
 /// 本函数只按 oracle 把帧放进缓冲（优先级取自 `RM_*` 的低字节）：
 /// - 受击玩家 `HealthSpellChanged` ⇒ `SM_HEALTHSPELLCHANGED(53)`（优先级 68）仅自己（+`ShowHp` 广播）；
@@ -12159,7 +12166,7 @@ mod spell_frame_buf_tests {
 ///
 /// `nDamage == 0` 的目标整段跳过（合同 §2.3(b)：无 53/31/656、不抽 `R(300)`）。
 fn drain_mag_struck_b2(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     displays: &downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -12247,7 +12254,7 @@ fn drain_mag_struck_b2(
 /// 完成该 case 的**全部**效果体取数：本函数是这些 case 上唯一且最后一次 `Random(3)+1`。
 #[allow(clippy::too_many_arguments)]
 fn finish_spell_tail(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
@@ -12292,7 +12299,7 @@ fn finish_spell_tail(
 /// 共享尾**不再**发 638，唯一 638 来自 helper `:987`）。
 #[allow(clippy::too_many_arguments)]
 fn finish_spell_tail_with(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
@@ -12382,7 +12389,7 @@ fn finish_spell_tail_with(
                 if tail.train.level_up {
                     world.update_self_delay_msg_full(
                         actor_id,
-                        mir2_world::slave::RM_MAGIC_LVEXP,
+                        mir2_world_bevy::slave::RM_MAGIC_LVEXP,
                         0,
                         i32::from(magic_id),
                         i32::from(train.level),
@@ -12392,7 +12399,7 @@ fn finish_spell_tail_with(
                 } else {
                     world.send_self_delay_msg_full(
                         actor_id,
-                        mir2_world::slave::RM_MAGIC_LVEXP,
+                        mir2_world_bevy::slave::RM_MAGIC_LVEXP,
                         0,
                         i32::from(magic_id),
                         i32::from(train.level),
@@ -12433,7 +12440,7 @@ fn finish_spell_tail_with(
 /// 不经过队列 ⇒ 保持直发。
 #[allow(clippy::too_many_arguments)]
 fn consume_b3_amulet(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -12533,7 +12540,7 @@ fn handle_spell_cmd(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     catalog: &dyn game_svr::ability::ItemCatalog,
@@ -12585,7 +12592,7 @@ fn handle_spell_cmd_with_magic(
     chr_name: &str,
     socket: i32,
     online: &OnlineRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     catalog: &dyn game_svr::ability::ItemCatalog,
@@ -12839,7 +12846,7 @@ fn handle_spell_cmd_with_magic(
     //
     // **登记（效果体层）**：`:160-163` 死亡归一（各效果体各自归一）。
     // **已接（2026-10-17，卡 `openmir2-gateb1-loginnotice-versiongate`）**：`:167` 版本/魔号门
-    // （[`mir2_world::magic::spell_version_gate`]，调用点 = 本块 `Some(magic)` 分支内、
+    // （[`mir2_world_bevy::magic::spell_version_gate`]，调用点 = 本块 `Some(magic)` 分支内、
     // 无条件广播**之后**、效果体之前；失败恰发一条 639 并提前返回）。因此本条广播仍天然落在
     // 「版本门之前」；**反面牙**：把它挪到版本门之后 ⇒ `magic_id > 80`（如 81）必丢帧。
     // `:172-643` 的 45 条 `case` 效果体、`:648-658` `RM_MAGICFIRE`、`:659-668` 训练尾（含 RNG 抽数
@@ -12913,7 +12920,7 @@ fn handle_spell_cmd_with_magic(
                             (0, 0)
                         }
                     };
-                    if !mir2_world::magic::spell_version_gate(
+                    if !mir2_world_bevy::magic::spell_version_gate(
                         soft_version_date,
                         client_tick,
                         i32::from(req.magic_id),
@@ -13015,7 +13022,7 @@ fn handle_spell_cmd_with_magic(
         // ⇒ 破坏 RNG 流水等价（R 级，见 `docs/Rust重写设计文档.md` §17.1 判据分级）。
         //
         // **裁决（登记订正 4，独立复验 2026-10-17）**：门改在 **i32 域**比较
-        // （[`mir2_world::magic::spell_in_range_i32`]）——oracle 的 `Math.Abs(short - short)` 在 C#
+        // （[`mir2_world_bevy::magic::spell_in_range_i32`]）——oracle 的 `Math.Abs(short - short)` 在 C#
         // 里本就提升为 `int`，且本仓 `cur_x`/`tx` 是 `i32`；原 `i16::try_from(..).unwrap_or(0)`
         // 会把超 `i16` 的坐标**静默折成 0** 参与判定 = fail-open，故弃用。兄弟块（17/30/41、20、46）
         // 的门本片同步改用同一 i32 口径（同一逻辑变更）。
@@ -13048,7 +13055,7 @@ fn handle_spell_cmd_with_magic(
                 // ——作用于**施法者自身**（不读目标坐标）⇒ 坐标口径对 31 无影响。
                 // oracle 该 case **不调 `CheckAmulet`**、不置 `boSpellFail`（`:474-479`）
                 // ⇒ 无护身符也可施放（与 14/15 的 13..=19 组不同）。
-                mir2_world::world::SKILL_SHIELD => {
+                mir2_world_bevy::world::SKILL_SHIELD => {
                     if let Some(magic) = magic_table.get(req.magic_id) {
                         let _ = world.cast_shield_spell(actor_id, magic, magic_level, mc);
                         // `bo_train = true`：见 [`finish_spell_tail`] 的文档（`MagBubbleDefenceUp`
@@ -13081,7 +13088,8 @@ fn handle_spell_cmd_with_magic(
                 // **门不过 ⇒ 不上 buff、不走尾** ⇒ `:644-647 return false` ⇒ 调用方
                 // `Attack.cs:1279-1281` 补**恰一条** `SM_MAGICFIRE_FAIL(639)`；包装层的 MP/53 与
                 // `:159` 的 `SM_SPELL` 发生在更早处，不回退。
-                mir2_world::world::SKILL_HANGMAJINBUB | mir2_world::world::SKILL_DEJIWONHO => {
+                mir2_world_bevy::world::SKILL_HANGMAJINBUB
+                | mir2_world_bevy::world::SKILL_DEJIWONHO => {
                     if let Some(magic) = magic_table.get(req.magic_id) {
                         let gate = magic::amulet_requirement(i32::from(req.magic_id)).and_then(
                             |(count, amulet_type)| {
@@ -13150,12 +13158,12 @@ fn handle_spell_cmd_with_magic(
                             // case 效果（`:352-365`）：`btState == 1` ⇒ `MagDefenceUp`（14）；
                             // `0` ⇒ `DefenceUp`（15）。中心坐标 = snap 后的 `tx`/`ty`；
                             // `bo_train` = `MagMakeDefenceArea(...) > 0`（实际命中数）。
-                            let bt_state = if req.magic_id == mir2_world::world::SKILL_HANGMAJINBUB
-                            {
-                                1
-                            } else {
-                                0
-                            };
+                            let bt_state =
+                                if req.magic_id == mir2_world_bevy::world::SKILL_HANGMAJINBUB {
+                                    1
+                                } else {
+                                    0
+                                };
                             let hits = world.cast_defence_area_spell(
                                 actor_id,
                                 magic,
@@ -13213,9 +13221,9 @@ fn handle_spell_cmd_with_magic(
     //   效果体内部的帧（21 的 `RM_MAGICFIRE`、`RM_SPACEMOVE_FIRE2`、逐格 `RM_PUSH`）在本支按 oracle 序发。
     if matches!(
         req.magic_id,
-        mir2_world::magic::SKILL_FIREWIND
-            | mir2_world::magic::SKILL_ENERGYREPULSOR
-            | mir2_world::magic::SKILL_SPACEMOVE
+        mir2_world_bevy::magic::SKILL_FIREWIND
+            | mir2_world_bevy::magic::SKILL_ENERGYREPULSOR
+            | mir2_world_bevy::magic::SKILL_SPACEMOVE
     ) {
         if let Some(magic) = magic_table.get(req.magic_id) {
             // `CretInNearXy` 的 snap（与 17/30/41、20、46 同口径）：命中才把坐标改成目标实际坐标。
@@ -13243,7 +13251,7 @@ fn handle_spell_cmd_with_magic(
                 // `boSpellFire`：8 保持 `true`（共享尾发帧）；21 在 case 内发帧后置 `false`。
                 let mut bo_spell_fire = true;
                 let bo_train: bool;
-                if req.magic_id == mir2_world::magic::SKILL_SPACEMOVE {
+                if req.magic_id == mir2_world_bevy::magic::SKILL_SPACEMOVE {
                     // `:406` `RM_MAGICFIRE`（在 `MagSaceMove` **之前**）。处理器无「排除自己」守卫
                     // （`PlayObject.Message.cs:1788-1793`）=> 收件人含施法者自己。
                     let body = smframe::sm_magicfire(
@@ -13394,9 +13402,9 @@ fn handle_spell_cmd_with_magic(
     // **第②片**：召唤面（17/30/41）的 `default` 支效果体（`PlayObject.Attack.cs:1271-1279` + `MagicManager.cs:145-670`）。
     if matches!(
         req.magic_id,
-        mir2_world::slave::SKILL_SKELLETON
-            | mir2_world::slave::SKILL_SINSU
-            | mir2_world::slave::SKILL_ANGEL
+        mir2_world_bevy::slave::SKILL_SKELLETON
+            | mir2_world_bevy::slave::SKILL_SINSU
+            | mir2_world_bevy::slave::SKILL_ANGEL
     ) {
         if let (Some(magic), Some(reg)) = (magic_table.get(req.magic_id), registry) {
             // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
@@ -13414,7 +13422,7 @@ fn handle_spell_cmd_with_magic(
             let target_id = if hit { Some(req.target_actor_id) } else { None };
             // `DoSpell` 距离门（`MagicManager.cs:155`，`SystemShare.Config.MagicAttackRage`）。
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
-            // 见 [`mir2_world::magic::spell_in_range_i32`]。
+            // 见 [`mir2_world_bevy::magic::spell_in_range_i32`]。
             if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
                 // **帧序（`openmir2-default-arm-spell-surface`）**：本魔号（17/30/41）的 `RM_SPELL`
                 // 已由**本函数开头的无条件广播**发出（`:159`，位置先于本支）⇒ 这里**不再发**，
@@ -13568,7 +13576,7 @@ fn handle_spell_cmd_with_magic(
     }
     // **⑨-2 第③片（20 诱惑）**：`SKILL_TAMMING` 效果体
     // （`PlayObject.Attack.cs:1268-1278` → `MagicManager.cs:394-397` → `MagTamming` `:704-825`）。
-    if req.magic_id == mir2_world::slave::SKILL_TAMMING {
+    if req.magic_id == mir2_world_bevy::slave::SKILL_TAMMING {
         if let Some(magic) = magic_table.get(req.magic_id) {
             // `CretInNearXy(targetObject, nTargetX, nTargetY)`：与召唤面**同一写法**
             // （[`spell_snap_target`] ⇒ [`queryuser::cetin_near_xy`]）⇒ 命中才修正到目标实际坐标并
@@ -13585,7 +13593,7 @@ fn handle_spell_cmd_with_magic(
             let target_id = if hit { Some(req.target_actor_id) } else { None };
             // `DoSpell` 的距离门（`MagicManager.cs:155`）。
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
-            // 见 [`mir2_world::magic::spell_in_range_i32`]。
+            // 见 [`mir2_world_bevy::magic::spell_in_range_i32`]。
             if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
                 // **帧序（`openmir2-default-arm-spell-surface`）**：20 的 `RM_SPELL` 已由**本函数开头的
                 // 无条件广播**发出（`:159`，位置先于本支）⇒ 这里**不再发**（否则双发/错序）。
@@ -13662,7 +13670,7 @@ fn handle_spell_cmd_with_magic(
     // 46 走 `ClientSpellXY` 的 `default` 支（非 `EXPLICIT_CASE_MAG_IDX`）⇒ 上面的
     // `takes_default_dir` 分支已把主人展示方向转向目标（`PlayObject.Attack.cs:1269`），
     // 克隆体的 `Dir = GetBackDir(主人.Dir)` 取的是**转向后**的 `Dir`。
-    if req.magic_id == mir2_world::slave::SKILL_46 {
+    if req.magic_id == mir2_world_bevy::slave::SKILL_46 {
         if let Some(magic) = magic_table.get(req.magic_id) {
             // `CretInNearXy(targetObject, nTargetX, nTargetY)`（`PlayObject.Base.cs:984-1011`）：
             // 与召唤/诱惑面**同一写法**（[`spell_snap_target`] ⇒ [`queryuser::cetin_near_xy`]）⇒
@@ -13679,7 +13687,7 @@ fn handle_spell_cmd_with_magic(
             let target_id = if hit { Some(req.target_actor_id) } else { None };
             // `DoSpell` 的距离门（`MagicManager.cs:155`，`SystemShare.Config.MagicAttackRage`）。
             // i32 域比较（登记订正 4）：弃用 `i16::try_from(..).unwrap_or(0)` 的 fail-open 折 0，
-            // 见 [`mir2_world::magic::spell_in_range_i32`]。
+            // 见 [`mir2_world_bevy::magic::spell_in_range_i32`]。
             if magic::spell_in_range_i32(cur_x, cur_y, tx, ty, magic_attack_rage) {
                 // **帧序（`openmir2-default-arm-spell-surface`）**：46 的 `RM_SPELL` 已由**本函数开头的
                 // 无条件广播**发出（`:159`，位置先于本支）⇒ 这里**不再发**（否则双发/错序）。
@@ -13951,7 +13959,7 @@ fn handle_spell_cmd_with_magic(
                     if outcome.delayed {
                         world.send_self_delay_msg_full(
                             actor_id,
-                            mir2_world::slave::RM_DELAYMAGIC,
+                            mir2_world_bevy::slave::RM_DELAYMAGIC,
                             outcome.power,
                             // `HUtil32.MakeLong(tx, ty)` 收 `ushort`：`(ushort)tx` 保留
                             // 低 16 位二补数（[`wire_coord`]），越界不归 0。
@@ -13965,12 +13973,12 @@ fn handle_spell_cmd_with_magic(
                         let target = outcome.target.unwrap_or(0);
                         let dir = world.entities.get(actor_id).map_or(0, |c| {
                             world.entities.get(target).map_or(0, |t| {
-                                mir2_world::magic::next_direction(c.x, c.y, t.x, t.y)
+                                mir2_world_bevy::magic::next_direction(c.x, c.y, t.x, t.y)
                             })
                         });
                         world.send_self_delay_msg_full(
                             actor_id,
-                            mir2_world::slave::RM_DELAYPUSHED,
+                            mir2_world_bevy::slave::RM_DELAYPUSHED,
                             i32::from(dir),
                             // `HUtil32.MakeLong(tx, ty)` 收 `ushort`：`(ushort)tx` 保留
                             // 低 16 位二补数（[`wire_coord`]），越界不归 0。
@@ -14061,7 +14069,7 @@ fn handle_spell_cmd_with_magic(
                 // 自己的队列；处理器 `PlayObject.Message.cs:2018-2020` 把帧发给施法者客户端，
                 // ActorId/HP/MaxHP 取目标值）。
                 let push_gauges =
-                    |world: &mir2_world::World, buf: &mut SpellFrameBuf, targets: &[i32]| {
+                    |world: &mir2_world_bevy::World, buf: &mut SpellFrameBuf, targets: &[i32]| {
                         if !gauge {
                             return;
                         }
@@ -14194,12 +14202,12 @@ fn handle_spell_cmd_with_magic(
         && !magic::is_warr_skill(i32::from(req.magic_id))
         && matches!(
             req.magic_id,
-            mir2_world::world::SKILL_HOLYSHIELD
-                | mir2_world::world::SKILL_CLOAK
-                | mir2_world::world::SKILL_BIGCLOAK
-                | mir2_world::world::SKILL_SHOWHP
-                | mir2_world::world::SKILL_KILLUNDEAD
-                | mir2_world::world::SKILL_UNAMYOUNSUL
+            mir2_world_bevy::world::SKILL_HOLYSHIELD
+                | mir2_world_bevy::world::SKILL_CLOAK
+                | mir2_world_bevy::world::SKILL_BIGCLOAK
+                | mir2_world_bevy::world::SKILL_SHOWHP
+                | mir2_world_bevy::world::SKILL_KILLUNDEAD
+                | mir2_world_bevy::world::SKILL_UNAMYOUNSUL
         )
     {
         if let Some(magic) = magic_table.get(req.magic_id) {
@@ -14232,9 +14240,9 @@ fn handle_spell_cmd_with_magic(
                 let mut buf = SpellFrameBuf::new();
                 match req.magic_id {
                     // ---- 16 / 18 / 19：13..=19 共享组（`:315-393`）的护身符门 ----
-                    mir2_world::world::SKILL_HOLYSHIELD
-                    | mir2_world::world::SKILL_CLOAK
-                    | mir2_world::world::SKILL_BIGCLOAK => {
+                    mir2_world_bevy::world::SKILL_HOLYSHIELD
+                    | mir2_world_bevy::world::SKILL_CLOAK
+                    | mir2_world_bevy::world::SKILL_BIGCLOAK => {
                         // `:322 boSpellFail = true` → `:323 CheckAmulet(1,1)` → `:325 UseAmulet(1,1)`；
                         // 门不过 ⇒ `:644-647 return false` ⇒ 恰好一条 639（无效果体、无尾、零抽）。
                         if consume_b3_amulet(
@@ -14250,7 +14258,7 @@ fn handle_spell_cmd_with_magic(
                         ) {
                             match req.magic_id {
                                 // `:366-371`：`GetPower13(40) + GetRPow(SC)*3` → `MagMakeHolyCurtain`。
-                                mir2_world::world::SKILL_HOLYSHIELD => {
+                                mir2_world_bevy::world::SKILL_HOLYSHIELD => {
                                     let out = world.cast_holy_curtain_spell(
                                         actor_id,
                                         magic,
@@ -14280,7 +14288,7 @@ fn handle_spell_cmd_with_magic(
                                     );
                                 }
                                 // `:378-383`：`(ushort)(GetPower13(30)+GetRPow*3)` → helper。
-                                mir2_world::world::SKILL_CLOAK => {
+                                mir2_world_bevy::world::SKILL_CLOAK => {
                                     let out = world.cast_private_transparent_spell(
                                         actor_id,
                                         magic,
@@ -14352,7 +14360,7 @@ fn handle_spell_cmd_with_magic(
                         }
                     }
                     // ---- 28 心灵启示（`:431-442`）----
-                    mir2_world::world::SKILL_SHOWHP => {
+                    mir2_world_bevy::world::SKILL_SHOWHP => {
                         let out =
                             world.cast_show_hp_spell(actor_id, magic, magic_level, sc, base_target);
                         let see_heal_gauge = finish_spell_tail(
@@ -14383,7 +14391,7 @@ fn handle_spell_cmd_with_magic(
                         }
                     }
                     // ---- 32 圣言术（`:480-488`）----
-                    mir2_world::world::SKILL_KILLUNDEAD => {
+                    mir2_world_bevy::world::SKILL_KILLUNDEAD => {
                         // `:481 IsProperTarget(targetObject)`：false ⇒ 零抽，但共享尾照发
                         // （`boSpellFail` 恒 false）。目标为 null ⇒ false。
                         // `:481 IsProperTarget(targetObject)`：`HAM_GROUP` 支读**团长**的成员表
@@ -14395,7 +14403,7 @@ fn handle_spell_cmd_with_magic(
                                 .get(actor_id)
                                 .zip(world.entities.get(tid))
                                 .is_some_and(|(c, t)| {
-                                    mir2_world::combat::is_proper_target_grouped(
+                                    mir2_world_bevy::combat::is_proper_target_grouped(
                                         &c,
                                         &t,
                                         &world.attacker_group_members(&c),
@@ -14567,7 +14575,7 @@ fn handle_spell_cmd_with_magic(
                                 .get(actor_id)
                                 .zip(world.entities.get(tid))
                                 .is_some_and(|(c, t)| {
-                                    mir2_world::combat::is_proper_target_grouped(
+                                    mir2_world_bevy::combat::is_proper_target_grouped(
                                         &c,
                                         &t,
                                         &caster_group_members,
@@ -15100,7 +15108,7 @@ fn handle_spell_cmd_with_magic(
                             .zip(world.entities.get(target_id))
                             .is_some_and(|(c, t)| {
                                 let in_group = world.attacker_group_members(&c).contains(&t.id);
-                                mir2_world::combat::is_proper_friend(&c, &t, in_group)
+                                mir2_world_bevy::combat::is_proper_friend(&c, &t, in_group)
                             });
                         // `:620 CheckAmulet(1,1)` → `:622 UseAmulet`：642/202 入缓冲/直发。
                         let amulet_ok = friend_ok
@@ -15420,14 +15428,14 @@ fn ring_paralysis(
         }
         game_svr::ability::ItemCatalog::get(catalog, it.index).map(|s| s.shape)
     };
-    mir2_world::combat::paralysis_from_ring_shapes([
+    mir2_world_bevy::combat::paralysis_from_ring_shapes([
         shape_of(game_svr::ability::SLOT_RING_L),
         shape_of(game_svr::ability::SLOT_RING_R),
     ])
 }
 
 /// **片 A-5（buff 生产者接线）**：把某 actor 的**自身**攻击中毒门运行态灌进世界
-/// （[`mir2_world::World::set_attack_poison`]）。
+/// （[`mir2_world_bevy::World::set_attack_poison`]）。
 ///
 /// - `paralysis`：麻痹戒指（`RING_MAKESTONE_ITEM`）⇒ `PlayObject.Paralysis`（`PlayObject.cs:2230-2239`）；
 /// - `anti_poison`：`BaseObject.AntiPoison`（`BaseObject.cs:109` 的 `public byte AntiPoison`）。
@@ -15445,9 +15453,9 @@ fn ring_paralysis(
 ///   （只有 `Attack.cs:221` / `MagicManager.cs:1255` 两处**读**）⇒ 恒 `false`；本骨架常 `false`
 ///   ⇒ **与 oracle 一致，不是缺口**（登记订正 2；原先笼统写作「未建模」易被误读为偏差）。
 ///
-/// 目标不在场 / 无会话（怪物）⇒ 不写（[`mir2_world::World::attack_once`] 对缺席守方取缺省 `false`/`0`）。
+/// 目标不在场 / 无会话（怪物）⇒ 不写（[`mir2_world_bevy::World::attack_once`] 对缺席守方取缺省 `false`/`0`）。
 fn set_actor_poison_state(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &std::collections::HashMap<String, SessionGround>,
     catalog: &dyn game_svr::ability::ItemCatalog,
     actor_id: i32,
@@ -15460,7 +15468,7 @@ fn set_actor_poison_state(
     };
     world.set_attack_poison(
         actor_id,
-        mir2_world::combat::AttackPoisonState {
+        mir2_world_bevy::combat::AttackPoisonState {
             paralysis: ring_paralysis(Some(sg), catalog),
             un_paralysis: false,
             anti_poison: 0,
@@ -15468,9 +15476,9 @@ fn set_actor_poison_state(
     );
 }
 
-/// 灌 `AddAbil.WeaponStrong`（见 [`mir2_world::World::set_attack_weapon_strong`]）。
+/// 灌 `AddAbil.WeaponStrong`（见 [`mir2_world_bevy::World::set_attack_weapon_strong`]）。
 fn set_actor_weapon_strong(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &std::collections::HashMap<String, SessionGround>,
     catalog: &dyn game_svr::ability::ItemCatalog,
     actor_id: i32,
@@ -15494,13 +15502,13 @@ fn amulet_slot(
     sg: Option<&SessionGround>,
     slot: usize,
     catalog: &dyn game_svr::ability::ItemCatalog,
-) -> Option<mir2_world::magic::AmuletSlot> {
+) -> Option<mir2_world_bevy::magic::AmuletSlot> {
     let it = sg?.use_items.get(slot)?.as_ref()?;
     if it.index == 0 {
         return None;
     }
     let std = game_svr::ability::ItemCatalog::get(catalog, it.index)?;
-    Some(mir2_world::magic::AmuletSlot {
+    Some(mir2_world_bevy::magic::AmuletSlot {
         index: i32::from(it.index),
         std_mode: std.std_mode,
         shape: std.shape,
@@ -15508,13 +15516,13 @@ fn amulet_slot(
     })
 }
 
-/// `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）的**宿主副作用**：按 [`mir2_world::magic::AmuletUse`]
+/// `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）的**宿主副作用**：按 [`mir2_world_bevy::magic::AmuletUse`]
 /// 扣耐久或清槽（oracle `Dura -= …` / `Dura = 0; Index = 0`）。
 /// 帧面（`RM_DURACHANGE` / `RM_DELITEMS`）由调用方发。
 fn apply_amulet_use(
     sg: Option<&mut SessionGround>,
     slot: u8,
-    used: mir2_world::magic::AmuletUse,
+    used: mir2_world_bevy::magic::AmuletUse,
 ) -> Option<usize> {
     let sg = sg?;
     let idx = usize::from(slot);
@@ -15535,10 +15543,10 @@ fn apply_amulet_use(
 /// 其它格的世界侧磨损）。`cast_group_poison_spell` 的回调里 `world` 被外借 ⇒ 那里改用
 /// [`apply_amulet_use`] 收集槽号、调用返回后统一同步。
 fn apply_amulet_use_in_world(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sg: Option<&mut SessionGround>,
     slot: u8,
-    used: mir2_world::magic::AmuletUse,
+    used: mir2_world_bevy::magic::AmuletUse,
 ) {
     let Some(sg) = sg else { return };
     if let Some(idx) = apply_amulet_use(Some(&mut *sg), slot, used) {
@@ -15612,7 +15620,7 @@ fn handle_magic_key_cmd(
 /// 有 `ActorId != ActorId` 守卫）；`RM_MAGICFIRE` 的处理器**没有**该守卫
 /// （`PlayObject.Message.cs:1788-1793`）⇒ 施法者自己也收帧，用 [`broadcast_ref_msg_with_self`]。
 fn broadcast_ref_msg(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
@@ -15624,7 +15632,7 @@ fn broadcast_ref_msg(
 /// `RM_MAGICFIRE` 口径（`PlayObject.Message.cs:1788-1793` 无 `ActorId != ActorId` 守卫）：
 /// 广播集合**包含施法者自己**。
 fn broadcast_ref_msg_with_self(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
@@ -15638,7 +15646,7 @@ fn broadcast_ref_msg_with_self(
 /// `CharPushed` 的逐格 `RM_PUSH` 用它：oracle 每推进一格立即发（`BaseObject.cs:871`），
 /// 收件人按**该步**的 `CurrX/CurrY` 计算，而不是整段推挤结束后的最终坐标。
 fn broadcast_ref_msg_with_self_at(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
@@ -15650,7 +15658,7 @@ fn broadcast_ref_msg_with_self_at(
 
 /// [`broadcast_ref_msg`] / [`broadcast_ref_msg_with_self`] 的公共体。
 fn broadcast_ref_msg_opt(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
@@ -15690,12 +15698,12 @@ fn broadcast_ref_msg_opt(
 /// 纳入可见集 —— 只靠 `race == ActorRace.Play` 只能看到其他玩家。
 ///
 /// oracle 同一构造器还置 **`ViewRange = 12`**（`PlayObject.cs:904`；`BaseObject` 缺省 5，
-/// `BaseObject.cs:383` = [`mir2_world::EntitySpawn::new`] 的 `view_range` 缺省）。AOI 扫描是边长
+/// `BaseObject.cs:383` = [`mir2_world_bevy::EntitySpawn::new`] 的 `view_range` 缺省）。AOI 扫描是边长
 /// `2*ViewRange+1` 的正方形（`BaseObject.ViewRange.cs:71-74`）⇒ 玩家窗口应为 25×25；
 /// 缺这行只剩 11×11，Chebyshev 距离 6..12 的怪/其他 actor 不进 `visible_actors`、
 /// `drain_aoi_downlink` 也不发 ⇒ 客户端同屏少怪（卡 `openmir2-client-e2e-enter-gaps` 缺口②）。
-fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::EntitySpawn {
-    let mut e = mir2_world::EntitySpawn::new(0, chr_name, x, y);
+fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world_bevy::EntitySpawn {
+    let mut e = mir2_world_bevy::EntitySpawn::new(0, chr_name, x, y);
     e.want_ref_msg = true;
     e.view_range = 12;
     // **PL-3 / P27**：`PlayObject.cs:942` 的 ctor 取钟（`ExpRateTick = GetTickCount()`）。
@@ -15708,7 +15716,7 @@ fn new_player_entity(chr_name: String, x: i32, y: i32) -> mir2_world::EntitySpaw
 /// 登录批 `new PlayObject()`（`WorldServer.cs:234`）5 抽里**存活到实体**的两个值
 /// （卡 `openmir2-player-ctor-rng-order`）。
 ///
-/// 抽数本身由 [`mir2_world::World::fold_login_player_ctor_draws`] 在**落点改写之前**完成
+/// 抽数本身由 [`mir2_world_bevy::World::fold_login_player_ctor_draws`] 在**落点改写之前**完成
 /// （位置契约见该函数）：`RunTick`/`SearchTime`/`AttackTick` 三抽的值被 `PlayObject`
 /// 派生 ctor 覆盖（`PlayObject.cs:898/900/918`），故不在此处落值；只有
 /// - `WalkTick = ctor_tick - Random(3000)`（`AnimalObject.cs:77`，派生 ctor 不覆盖；玩家路径
@@ -15721,9 +15729,9 @@ fn new_player_entity_with_login_ctor(
     chr_name: String,
     x: i32,
     y: i32,
-    ctor: &mir2_world::LoginPlayerCtorDraws,
+    ctor: &mir2_world_bevy::LoginPlayerCtorDraws,
     ctor_tick: i64,
-) -> mir2_world::EntitySpawn {
+) -> mir2_world_bevy::EntitySpawn {
     let mut e = new_player_entity(chr_name, x, y);
     e.ai.walk_tick = ctor.walk_tick(ctor_tick);
     e.random_no = ctor.random_no;
@@ -15738,15 +15746,15 @@ fn new_player_entity_with_login_ctor(
 ///
 /// 抽与不抽是**同一处**决策：返回 `Some` = 已用共享 `world.rng` 抽满 5 抽并把结果带回；
 /// `None` = **0 抽**。生产 `sim_loop` **只**经本函数进入登录 5 抽（不直接调
-/// [`mir2_world::World::fold_login_player_ctor_draws`]）⇒ 把抽数改成无条件、或把它挪进重复
+/// [`mir2_world_bevy::World::fold_login_player_ctor_draws`]）⇒ 把抽数改成无条件、或把它挪进重复
 /// 分支，都会改变这里的可观测 RNG 行为。行为牙：
 /// `mod tests::login_ctor_draws_only_on_non_duplicate_login`（直接驱动本函数并按流位核算抽数，
 /// 不是源码文本 grep）。
 fn login_ctor_draws_for(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     in_save: bool,
     in_world: bool,
-) -> Option<mir2_world::LoginPlayerCtorDraws> {
+) -> Option<mir2_world_bevy::LoginPlayerCtorDraws> {
     if in_save || in_world {
         None
     } else {
@@ -15774,7 +15782,7 @@ pub(crate) trait LoginScalarTarget {
     fn set_login_allow_group_re_call(&mut self, allow: bool);
 }
 
-impl LoginScalarTarget for mir2_world::EntitySpawn {
+impl LoginScalarTarget for mir2_world_bevy::EntitySpawn {
     fn set_login_dir(&mut self, dir: u8) {
         self.ai.dir = dir;
     }
@@ -15786,7 +15794,7 @@ impl LoginScalarTarget for mir2_world::EntitySpawn {
     }
 }
 
-impl LoginScalarTarget for mir2_world::EntityMut<'_> {
+impl LoginScalarTarget for mir2_world_bevy::EntityMut<'_> {
     fn set_login_dir(&mut self, dir: u8) {
         self.ai.dir = dir;
     }
@@ -15824,7 +15832,7 @@ fn set_display_dir(displays: &mut downlink::DisplayTable, actor_id: i32, dir: u8
 
 /// 把实体 `Entity.ai.dir` 投影到展示表（展示表缺失时不动）。
 fn sync_display_dir(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     actor_id: i32,
 ) {
@@ -15838,7 +15846,11 @@ fn sync_display_dir(
 /// `GetPoseCreate`/`GetBackPosition`/`CharPushed`/施法方向等所有「读对象当前朝向」的路径
 /// 都必须走这里，不得直接读展示表——展示表是投影，可能在失败支落后于实体（走/跑被挡时
 /// oracle 的 `Dir` 已改成尝试方向）。
-fn actor_dir(world: &mir2_world::World, displays: &downlink::DisplayTable, actor_id: i32) -> u8 {
+fn actor_dir(
+    world: &mir2_world_bevy::World,
+    displays: &downlink::DisplayTable,
+    actor_id: i32,
+) -> u8 {
     world
         .entities
         .get(actor_id)
@@ -16001,14 +16013,14 @@ impl WorldDiag {
 /// `aoi_frames` = 每会话**累计**实发的 AOI 出现帧数（由 sim 循环从 [`drain_aoi_downlink`]
 /// 的返回值累加；按 `chr_name` 键，避免实体槽位 LIFO 复用把旧会话的计数带过来）。
 fn world_aoi_diag(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     aoi_frames: &std::collections::HashMap<String, usize>,
 ) -> WorldDiag {
-    let entities: Vec<mir2_world::EntityRef<'_>> = world.entities.iter_ref().collect();
+    let entities: Vec<mir2_world_bevy::EntityRef<'_>> = world.entities.iter_ref().collect();
     let mut sessions = Vec::new();
     for sess in world.sessions.iter() {
-        if sess.stage != mir2_world::WorldStage::InWorld {
+        if sess.stage != mir2_world_bevy::WorldStage::InWorld {
             continue;
         }
         let Some(actor_id) = sess.actor_id else {
@@ -16025,12 +16037,12 @@ fn world_aoi_diag(
         let vis = e
             .visible_actors
             .iter()
-            .filter(|v| v.target != actor_id && v.flag != mir2_world::VisibleFlag::Hidden)
+            .filter(|v| v.target != actor_id && v.flag != mir2_world_bevy::VisibleFlag::Hidden)
             .count();
         let new = e
             .visible_actors
             .iter()
-            .filter(|v| v.target != actor_id && v.flag == mir2_world::VisibleFlag::Show)
+            .filter(|v| v.target != actor_id && v.flag == mir2_world_bevy::VisibleFlag::Show)
             .count();
         let frames = aoi_frames.get(&sess.chr_name).copied().unwrap_or(0);
         let mut same_map = 0usize;
@@ -16077,7 +16089,7 @@ fn world_aoi_diag(
 /// 实体是否仍在格子索引里（`MapGrid` 对应格的 `ObjList` 有 `ActorObject` 且 id 匹配）。
 ///
 /// AOI 诊断 `nearest` 的新口径要求（审计 §4.4：`nearest` 不能统计已被 60s 过期逐出的实体）。
-fn entity_in_cell_index(world: &mir2_world::World, e: mir2_world::EntityRef<'_>) -> bool {
+fn entity_in_cell_index(world: &mir2_world_bevy::World, e: mir2_world_bevy::EntityRef<'_>) -> bool {
     world.maps.get(e.map_id).is_some_and(|m| {
         m.cell(e.x, e.y)
             .obj_list
@@ -16089,7 +16101,7 @@ fn entity_in_cell_index(world: &mir2_world::World, e: mir2_world::EntityRef<'_>)
 /// **orphan 编码器接线首批**：本 tick 的 AOI **消失帧**（oracle `PlayObject.Run()` 的
 /// `VisibleFlag.Hidden` 支，`src/M2Server/Player/PlayObject.cs:3214-3222`）。
 ///
-/// 世界侧 [`mir2_world::aoi::search_view_range`] 在移除 `VisibleFlag::Hidden` 条目时把
+/// 世界侧 [`mir2_world_bevy::aoi::search_view_range`] 在移除 `VisibleFlag::Hidden` 条目时把
 /// `(观察者, 离开者)` 记进 `TickRecord::hides`（`crates/world` 只管事件、不出帧）；本函数按
 /// `SM_DISAPPEAR(30)`（[`downlink::disappear_frame`]）逐条路由给**观察者自己**
 /// （oracle 6 参 `SendMsg(IActor baseObject, …)`，`BaseObject.Message.cs:98` ⇒
@@ -16108,7 +16120,7 @@ fn entity_in_cell_index(world: &mir2_world::World, e: mir2_world::EntityRef<'_>)
 ///
 /// **卡 `openmir2-aoi-disappear-observer-scope`（tier=R）· 观察者分类计数**。
 ///
-/// `TickRecord::hides` 的观察者有三类（世界侧 [`mir2_world::HideObserverKind`] 标注）：
+/// `TickRecord::hides` 的观察者有三类（世界侧 [`mir2_world_bevy::HideObserverKind`] 标注）：
 /// - `Player`：`race == PLAY && !ghost && !is_clone` 的真玩家 ⇒ 必须在 `OnlineRegistry` 里；
 /// - `NonPlayer`：`monster_self_scans` 的自扫怪（Guard/ArcherGuard/SlaveMonster/下属）
 ///   ⇒ **本来就不在** `OnlineRegistry`，此前统一打 WRN 属**预期噪声**（真机 actor=290 已定性）；
@@ -16184,14 +16196,14 @@ fn skip_observer_dbg_lines(counts: &DisappearObserverCounts) -> Vec<String> {
 /// **缺标注 ⇒ 按 `Player` 处理**（fail-safe loud）：漏标/旧构造不得把玩家缺失静音成
 /// 「非玩家/克隆体预期噪声」。顺序不是契约，按二元组查而非下标对齐。
 fn hide_observer_kind(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     observer_id: i32,
     target_id: i32,
-) -> mir2_world::HideObserverKind {
+) -> mir2_world_bevy::HideObserverKind {
     rec.hide_observer_kinds
         .iter()
         .find_map(|&(o, t, kind)| (o == observer_id && t == target_id).then_some(kind))
-        .unwrap_or(mir2_world::HideObserverKind::Player)
+        .unwrap_or(mir2_world_bevy::HideObserverKind::Player)
 }
 
 /// 去程守卫：观察者不在线（`online` 无登记）⇒ 跳过。**按类别分流**：
@@ -16202,7 +16214,7 @@ fn hide_observer_kind(
 /// 离开者是否 `FixedHideMode`/`Ghost` 已在世界侧 `search_view_range` 过滤，此处不再查实体
 /// （实体可能已被移除）。
 fn drain_aoi_disappear_with_counts(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> (usize, DisappearObserverCounts) {
@@ -16210,19 +16222,19 @@ fn drain_aoi_disappear_with_counts(
     let mut counts = DisappearObserverCounts::default();
     for (observer_id, target_id) in &rec.hides {
         match hide_observer_kind(rec, *observer_id, *target_id) {
-            mir2_world::HideObserverKind::NonPlayer => {
+            mir2_world_bevy::HideObserverKind::NonPlayer => {
                 // 自扫怪不在 OnlineRegistry 是**预期**：不发帧、不打 WRN、不查路由。
                 counts.nonplayer_observer += 1;
                 push_unique_id(&mut counts.nonplayer_ids, *observer_id);
                 continue;
             }
-            mir2_world::HideObserverKind::Clone => {
+            mir2_world_bevy::HideObserverKind::Clone => {
                 // 克隆体 race=PLAY 但无真实会话（N1）：同样预期，且**不得**算 missing_online。
                 counts.clone_observer += 1;
                 push_unique_id(&mut counts.clone_ids, *observer_id);
                 continue;
             }
-            mir2_world::HideObserverKind::Player => {
+            mir2_world_bevy::HideObserverKind::Player => {
                 counts.player_observer += 1;
             }
         }
@@ -16253,7 +16265,7 @@ fn drain_aoi_disappear_with_counts(
 
 /// 生产入口：保持原签名/返回值（`usize` = 实发条数），内部分类型计数并分流日志。
 fn drain_aoi_disappear(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> usize {
@@ -16273,14 +16285,14 @@ fn drain_aoi_disappear(
 /// ⇒ `Recog` = 离开者。即：**观察者收 `SM_DISAPPEAR(离开者)`**（与 [`drain_aoi_disappear`] 同帧面，
 /// 差别在触发时机：这里不依赖观察者当轮 `SearchViewRange`）。
 ///
-/// 世界侧收件人集合 = **离开时刻的 ±12 格扫结果**（`mir2_world::send_ref_msg_targets_at`：
+/// 世界侧收件人集合 = **离开时刻的 ±12 格扫结果**（`mir2_world_bevy::send_ref_msg_targets_at`：
 /// `CellMatch` / `GetCellInfo` / `ActorObject` / `!Ghost` / `Race==Play`；与 oracle
 /// `SendRefMsg` 冷路径同口径，**不再依赖观察者的 `visible_actors`**——后者按
 /// `SearchTime=1000` 节流，会把上次扫描后才进入 ±12 的玩家漏掉），由
-/// [`mir2_world::World::drain_departs`] 取走（`(观察者, 离开者)`，保序）；本函数按观察者的
+/// [`mir2_world_bevy::World::drain_departs`] 取走（`(观察者, 离开者)`，保序）；本函数按观察者的
 /// `[GateIdx, Socket]` 逐条路由回**观察者自己**。离世者自身不在集合里（格扫按 `ActorId` 排除；oracle 此时已 `Ghost=true`）。
 fn drain_depart_frames(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> usize {
@@ -16318,7 +16330,7 @@ fn drain_depart_frames(
 /// 红检（**实测**）：删掉本函数体里的 `sent += drain_depart_frames(world, online, gates);`
 /// 那一整行 ⇒ `sent` 恒为 0（本函数仍编译）⇒ 该用例收不到 `SM_DISAPPEAR` ⇒ 必红。
 fn drain_depart_downlink(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> usize {
@@ -16333,11 +16345,11 @@ fn drain_depart_downlink(
 /// 过滤与 oracle `PlayObject.Run()` 的收尾循环同一口径（`PlayObject.cs:3234-3240`）：
 /// `VisibleFlag::Show && target != 自己`。**顺序 = 列表下标升序**（oracle `n18` 升序 =
 /// 扫描序：`x` 升序 → `y` 升序 → 格内 `ObjList` 下标升序）。
-fn aoi_show_targets(entity: mir2_world::EntityRef<'_>, observer_id: i32) -> Vec<i32> {
+fn aoi_show_targets(entity: mir2_world_bevy::EntityRef<'_>, observer_id: i32) -> Vec<i32> {
     entity
         .visible_actors
         .iter()
-        .filter(|v| v.flag == mir2_world::VisibleFlag::Show && v.target != observer_id)
+        .filter(|v| v.flag == mir2_world_bevy::VisibleFlag::Show && v.target != observer_id)
         .map(|v| v.target)
         .collect()
 }
@@ -16346,7 +16358,10 @@ fn aoi_show_targets(entity: mir2_world::EntityRef<'_>, observer_id: i32) -> Vec<
 ///
 /// [`drain_aoi_downlink`]（出帧）与 [`drain_login_tail`]（算 `after` 的堆形）**必须共用**，
 /// 否则出现帧序与 `654` 之后的堆序会来自两个形状不同的队列。
-fn aoi_appearance_slots(world: &mir2_world::World, targets: &[i32]) -> Vec<smframe::OtherAppear> {
+fn aoi_appearance_slots(
+    world: &mir2_world_bevy::World,
+    targets: &[i32],
+) -> Vec<smframe::OtherAppear> {
     targets
         .iter()
         .map(|id| {
@@ -16389,7 +16404,7 @@ fn aoi_appearance_slots(world: &mir2_world::World, targets: &[i32]) -> Vec<smfra
 /// 累加成诊断读数 `af=`（root 2026-10-14 要求「打印可见集大小与下发帧数」）。
 /// 这里只对 `Show`（＝首次看见）发帧，是对齐 oracle `Run()` 里 `VisibleFlag.Show` 支。
 fn drain_aoi_downlink(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -16397,7 +16412,7 @@ fn drain_aoi_downlink(
 ) -> Vec<(String, usize)> {
     let mut sent: Vec<(String, usize)> = Vec::new();
     for sess in world.sessions.iter() {
-        if sess.stage != mir2_world::WorldStage::InWorld {
+        if sess.stage != mir2_world_bevy::WorldStage::InWorld {
             continue;
         }
         let Some(observer_id) = sess.actor_id else {
@@ -16413,7 +16428,8 @@ fn drain_aoi_downlink(
         // 其间 `VisibleFlag::Show` 会一直保留到下一次扫描才置回 `Invisible` ⇒
         // 宿主若每 tick 都按 `Show` 出帧，会把同一对出现帧重复发到下一次扫描前。
         // 玩家：`SearchTick == clock_ms` ⇔ 本 tick 扫过；非玩家 viewer 每 tick 都扫（本片不变）。
-        if observer.race == mir2_world::ACTOR_RACE_PLAY && observer.ai.search_tick != world.clock_ms
+        if observer.race == mir2_world_bevy::ACTOR_RACE_PLAY
+            && observer.ai.search_tick != world.clock_ms
         {
             continue;
         }
@@ -16506,8 +16522,8 @@ fn drain_aoi_downlink(
 /// Show 支的观察者门 = 与 [`drain_aoi_downlink`] 相同的「本 tick 实际扫过」判据
 /// （`SearchTick == clock_ms`）——`Show` 标志会保留到下一次扫描，不设门会把同一对 804 重复发。
 fn drain_aoi_events(
-    world: &mir2_world::World,
-    rec: &mir2_world::TickRecord,
+    world: &mir2_world_bevy::World,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> usize {
@@ -16534,7 +16550,7 @@ fn drain_aoi_events(
     // ② `Show` ⇒ `SM_SHOWEVENT(804)`：`SendMsg(RM_SHOWEVENT, (short)EventType, Id,
     //    MakeLong(nX, EventParam), nY)`（`PlayObject.cs:3284`）。
     for sess in world.sessions.iter() {
-        if sess.stage != mir2_world::WorldStage::InWorld {
+        if sess.stage != mir2_world_bevy::WorldStage::InWorld {
             continue;
         }
         let Some(observer_id) = sess.actor_id else {
@@ -16544,7 +16560,8 @@ fn drain_aoi_events(
             continue;
         };
         // 只在该观察者「本 tick 实际扫过」时出帧（同 [`drain_aoi_downlink`] 的判据）。
-        if observer.race == mir2_world::ACTOR_RACE_PLAY && observer.ai.search_tick != world.clock_ms
+        if observer.race == mir2_world_bevy::ACTOR_RACE_PLAY
+            && observer.ai.search_tick != world.clock_ms
         {
             continue;
         }
@@ -16557,7 +16574,7 @@ fn drain_aoi_events(
             continue;
         };
         for visible in observer.visible_events {
-            if visible.flag != mir2_world::VisibleFlag::Show {
+            if visible.flag != mir2_world_bevy::VisibleFlag::Show {
                 continue;
             }
             // `mapEvent.EventType` 取**折叠对象**（第一条 registered 事件）的类型；
@@ -16628,8 +16645,8 @@ fn drain_aoi_events(
 /// 注意 `max(|dx|,|dy|) != 1` 的**整段位移**（≥2 格，例如一次瞬移两步）直接跳过 ⇒ **零帧**；
 /// 本函数不按格拆帧，也不会「只发最后一格」（旧 T-146 residual ① 的口径已按实现订正）。
 fn drain_monster_walk_downlink(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -16665,7 +16682,7 @@ fn drain_monster_walk_downlink(
         if dx.abs().max(dy.abs()) != 1 {
             continue; // 只认单格（传送/成群刷怪不算走位）。
         }
-        if (dx, dy) != mir2_world::monai::dir_delta(e.ai.dir) {
+        if (dx, dy) != mir2_world_bevy::monai::dir_delta(e.ai.dir) {
             continue; // 方向必须与「先置 Dir 再走」的 walk_to 一致。
         }
         if explained.contains(&id) {
@@ -16735,8 +16752,8 @@ fn drain_monster_walk_downlink(
 ///
 /// 牙：删调用点 ⇒ `npc_turn_frames_through_production_drain` 的帧数断言归零 ⇒ 红。
 fn drain_npc_merchant_turns(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -16779,8 +16796,8 @@ fn drain_npc_merchant_turns(
 ///
 /// 牙：删调用点 ⇒ `npc_hit_frames_through_production_drain` 的帧数断言归零 ⇒ 红。
 fn drain_npc_merchant_hits(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -16852,7 +16869,7 @@ fn drain_npc_merchant_hits(
 /// `castle_merchant_disappear_downlink_through_production_drain` 收不到帧 ⇒ 红；
 /// ② 把 `merchant_run` 的收件人格扫范围放开（或改成「全网关」）⇒ 远处观察者多收一条 ⇒ 红。
 fn drain_merchant_disappears(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> usize {
@@ -16900,7 +16917,7 @@ fn drain_merchant_disappears(
 /// （`ai.search_tick == world.clock_ms`，与 [`drain_aoi_downlink`] 同一判据）时按登录时的队列序
 /// 补发 `after`。扫描前不补发（不猜时机）；扫描前已掉线 ⇒ 缓冲作废。
 fn drain_login_tail(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     pending: &mut std::collections::HashMap<String, smframe::EnterWorldInputs>,
@@ -16921,7 +16938,7 @@ fn drain_login_tail(
             finished.push(chr);
             continue;
         };
-        if sess.stage != mir2_world::WorldStage::InWorld {
+        if sess.stage != mir2_world_bevy::WorldStage::InWorld {
             continue;
         }
         let Some(actor_id) = sess.actor_id else {
@@ -16931,7 +16948,9 @@ fn drain_login_tail(
             continue;
         };
         // 本 tick 没扫 ⇒ 出现帧还没发 ⇒ 654 也不能先走（oracle 同一次 Run 里 17 < 153）。
-        if entity.race != mir2_world::ACTOR_RACE_PLAY || entity.ai.search_tick != world.clock_ms {
+        if entity.race != mir2_world_bevy::ACTOR_RACE_PLAY
+            || entity.ai.search_tick != world.clock_ms
+        {
             continue;
         }
         let Some(tx) = route_to_gate(gates, entry.gate_idx, entry.socket, "登录延迟段") else {
@@ -16983,14 +17002,14 @@ fn drain_login_tail(
 ///   格内，oracle 会判假（review `8c4da05a` F2）。目标不存在 ⇒ false（oracle 里 `ActorMgr.Get`
 ///   返回 null 后 `IsValidObject` 会解引用 null，客户端必发有效 id；本仓按 false 处理，不猜）。
 /// - `target_butcherable` = `Death && !Skeleton && Animal`（`:720`）；`Animal` 的运行时等价物 =
-///   显式位 `ai.animal` 或 [`mir2_world::is_animal_race`]（ctor 继承补 105/106/114/132），
+///   显式位 `ai.animal` 或 [`mir2_world_bevy::is_animal_race`]（ctor 继承补 105/106/114/132），
 ///   **不是** `combat::race_is_animal`（那只服务 `SKILL_TAMMING` 门，会漏掉这 4 个 race ⇒
 ///   本仓零抽数而 oracle 抽 2 次，推移世界 RNG 流；review `8c4da05a` F1）。
 ///
 /// 注意：本函数只做**宿主侧入队门**（决定是否入队效果体命令）；权威判据在
 /// `World::butch_effect_now` 里按 tick 时刻的活状态**重查**（同一套门，含 `|Δ|<=2`）。
 fn butch_target_gates(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     actor_id: i32,
     target_id: i32,
     n_x: i32,
@@ -17018,7 +17037,7 @@ fn butch_target_gates(
     });
     let target_butcherable = target.death
         && !target.ai.skeleton
-        && (target.ai.animal || mir2_world::is_animal_race(target.race));
+        && (target.ai.animal || mir2_world_bevy::is_animal_race(target.race));
     (valid_object, target_butcherable)
 }
 
@@ -17040,8 +17059,8 @@ fn butch_target_gates(
 /// 早于同 tick 的 AOI 出现帧与战斗下行；故本函数在 sim 循环里紧接 `drain_party_death_events`
 /// （同属「本 tick 动作段」）调用，先于 [`drain_aoi_downlink`]/[`drain_combat_downlink`]。
 fn drain_action_downlink(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -17101,8 +17120,8 @@ fn drain_action_downlink(
 /// 红检（实测）：把 `sim_loop` 里的调用行注释掉 ⇒ 接线用例红；把本函数改成发
 /// `SM_DEATH(32)` ⇒ 帧 ident 断言红。
 fn drain_skeleton_downlink(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -17128,7 +17147,7 @@ fn drain_skeleton_downlink(
     }
 }
 
-/// **车道 B1（buff 系统）**：本 tick 由 [`mir2_world::World::buff_tick`] 记下的 buff 帧。
+/// **车道 B1（buff 系统）**：本 tick 由 [`mir2_world_bevy::World::buff_tick`] 记下的 buff 帧。
 ///
 /// - `rec.buff_status_changes`（oracle `ActorBuffSystem.Operate` 的 `boChg` 支 ⇒ `StatusChanged()`）
 ///   ⇒ `SM_CHARSTATUSCHANGED(657)`（`PlayObject.Message.cs:1845-1846`：
@@ -17155,8 +17174,8 @@ fn drain_skeleton_downlink(
 /// 照 0 发（`SM_CHARSTATUSCHANGED` 的 `Series`）。
 #[allow(clippy::too_many_arguments)]
 fn drain_buff_downlink(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     online: &OnlineRegistry,
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -17210,7 +17229,7 @@ fn drain_buff_downlink(
     // ShowPreFixMsg=0` 才是本处裸文案逐字节正确的真因，review `4abf1507` N1）⇒ `SM_SYSMESSAGE(100)`、
     // `Recog` = 自己、`Param = MakeWord(GreenF, GreenB)`、`Series = 1`、尾 = `EncodeString(msg)`。
     for (actor_id, msg) in &rec.buff_sysmsgs {
-        use mir2_world::buff::BuffSysMsg;
+        use mir2_world_bevy::buff::BuffSysMsg;
         let text: &str = match msg {
             BuffSysMsg::DefensePowerRecovered => "防御力回复正常.",
             BuffSysMsg::MagicDefensePowerRecovered => "魔法防御力回复正常.",
@@ -17284,7 +17303,7 @@ fn drain_buff_downlink(
 /// `if (ShowHp) SendRefMsg(RM_HEALTHSPELLCHANGED)`）⇒ 向 ±`SendRefMsgRange` 玩家广播
 /// `SM_HEALTHSPELLCHANGED(53)`。
 ///
-/// 来源（世界侧 [`mir2_world::TickRecord::show_hp_health_changes`] 按调用序记录）：
+/// 来源（世界侧 [`mir2_world_bevy::TickRecord::show_hp_health_changes`] 按调用序记录）：
 /// - 怪物/守卫 `base.Run()` 的 HP/MP 恢复（`BaseObject.Base.cs:55/:68`）与负体力扣血（`:109`）；
 /// - `VerifyMapTime` 段的 HP/MP 超上限钳制（`:230-245`）。
 /// - 魔法受击（`BaseObject.cs:628`）与毒伤（`ActorBuffSystem.cs:255`）分别在
@@ -17294,8 +17313,8 @@ fn drain_buff_downlink(
 /// 与玩家路径（`SendUpdateMsg` 自见 + 第二支自发）区分。载荷逐字段 =
 /// `Recog/ActorId`、`Param/HP`、`Tag/MP`、`Series/MaxHP`（`PlayObject.Message.cs:1737`）。
 fn drain_show_hp_health_changes(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     range: i32,
@@ -17343,7 +17362,7 @@ fn drain_show_hp_health_changes(
 /// 自己的节奏）未建模 ⇒ 本骨架在**桶变化的那一 tick** 立即发（≈ 跨小时时刻 +≤1 tick）；
 /// 逐玩家门对齐（U-C2）作为 `window_required` 项登记。无 `registry`/`flag` ⇒ 跳过并记 WRN。
 fn broadcast_day_changing(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -17422,7 +17441,7 @@ fn drain_line_notice(
 }
 
 fn drain_map_change(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     displays: &downlink::DisplayTable,
@@ -17552,8 +17571,8 @@ fn body_luck_level_of(body_luck: f64) -> i32 {
 ///   `Param/Tag=本次增量的 Lo/Hi`），并把世界实体的经验/等级同步回会话（存档 `build_save_record`
 ///   读 `sg.equip.abil`）。
 fn drain_combat_downlink(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -17744,8 +17763,8 @@ fn drain_combat_downlink(
 /// 带 210/212 审计的升级重算（生产路径；`magic = None` 即加参前行为）。
 #[allow(clippy::too_many_arguments)]
 fn drain_levelup_healthspell_with_magic(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -17893,7 +17912,7 @@ fn send_levelup_frames(
 /// 已被注释（`PlayObject.cs:5249-5252`）⇒ 不发；`AddBodyLuck(100)` 已在
 /// [`drain_combat_downlink`] 的经验循环里按 oracle 次序（`dwExp*0.002` 之后）落账。
 fn drain_levelup_downlink(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -17921,8 +17940,8 @@ fn drain_levelup_downlink(
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn drain_kill_exp_chain(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -17948,8 +17967,8 @@ fn drain_kill_exp_chain(
 /// 带 210/212 审计的 [`drain_kill_exp_chain`]（生产路径）。
 #[allow(clippy::too_many_arguments)]
 fn drain_kill_exp_chain_with_magic(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -17997,7 +18016,7 @@ fn drain_kill_exp_chain_with_magic(
 /// 作用域限 `super_man`：`race == PLAY && super_man` 的写入者只有 GM `@3`（见 whitelist T-196），
 /// 非 GM 角色恒 false ⇒ 对既有路径是纯 no-op、不改变任何既有 golden。
 fn sync_super_man_wabil(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
 ) {
     for sg in sessions.values_mut() {
@@ -18057,19 +18076,19 @@ fn sync_super_man_wabil(
 /// [`broadcast_day_changing`] 只遍历 `online`（非会话容器），oracle 同样门在 `!Ghost` 内
 /// （`WorldServer.cs:661-696`）⇒ 同一族风险，但它们的收件人是「即将断开的 socket」，
 /// 改动会动帧面，按 R 级单独对拍。
-fn session_in_world(world: &mir2_world::World, chr_name: &str, sg: &SessionGround) -> bool {
+fn session_in_world(world: &mir2_world_bevy::World, chr_name: &str, sg: &SessionGround) -> bool {
     if sg.bo_soft_close || sg.bo_emergency_close {
         return false;
     }
     match world.session(chr_name) {
-        Some(s) => s.stage == mir2_world::WorldStage::InWorld,
+        Some(s) => s.stage == mir2_world_bevy::WorldStage::InWorld,
         None => true,
     }
 }
 
 fn drain_recovery(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     slots: &mut game_svr::healthspell::HealthSpellSlots,
 ) {
     let now = now_ms();
@@ -18119,7 +18138,7 @@ fn drain_recovery(
 #[allow(clippy::too_many_arguments)]
 fn flush_healthspell_slots(
     slots: &mut game_svr::healthspell::HealthSpellSlots,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     sessions: &std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -18201,7 +18220,7 @@ fn flush_healthspell_slots(
 /// （帧数不变）；最后一 Run 无变更 ⇒ **新入队一条**（多一帧，载荷取钳制终态）。
 ///
 /// **与 [`drain_recovery`] 的差别**：本段改动的是 `BaseObject.Run()` 里的 `WAbil.HP/MP`，
-/// 攻击结算与 `state_log` 的 `SERVER_STATE` dump 读的是世界实体 [`mir2_world::Entity::hp`]
+/// 攻击结算与 `state_log` 的 `SERVER_STATE` dump 读的是世界实体 [`mir2_world_bevy::Entity::hp`]
 /// ⇒ 命中后回写实体（卡 `openmir2-spell-fill-projection-mirror` 前只回写 `hp`；现在
 /// `hp`/`mp` 双侧镜像——oracle 单份 `WAbil`，`Entity` 的 `mp/max_mp`（`entity.rs:754-755`）
 /// 与投影必须在每个写点同步，见下方两处回写点的教义注释）。
@@ -18217,7 +18236,7 @@ fn flush_healthspell_slots(
 #[allow(clippy::too_many_arguments)]
 fn drain_stamina(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     range: i32,
@@ -18400,7 +18419,7 @@ fn drain_stamina(
 ///
 /// 帧面由 [`drain_close_health_for`] 出（±12 玩家，`Recog` = 到期者）。
 fn drain_close_health_residual(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -18418,7 +18437,7 @@ fn drain_close_health_residual(
 ///
 /// 抽成独立函数是为了让这颗牙**不被 [`drain_close_health_for`] 的实体门遮蔽**：
 /// 两处 `!e.ghost` 语义重叠，若只测帧面，删任一处另一处仍挡住，变异测不出来。
-fn close_health_scan_ids(world: &mir2_world::World) -> Vec<i32> {
+fn close_health_scan_ids(world: &mir2_world_bevy::World) -> Vec<i32> {
     world
         .entities
         .iter_ref()
@@ -18461,8 +18480,8 @@ fn periodic_save_due(save_rcd_tick: &mut i64, save_time: i64, now: i64) -> bool 
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn drain_run_downlinks(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -18494,8 +18513,8 @@ fn drain_run_downlinks(
 /// 带 210/212 审计的 [`drain_run_downlinks`]（生产路径）。
 #[allow(clippy::too_many_arguments)]
 fn drain_run_downlinks_with_magic(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -18581,7 +18600,7 @@ fn drain_run_downlinks_with_magic(
 /// 的实际序是 `drain_recovery`（P1）→ 本函数 → …（复验 V1/V2/V3 重构后），两者都在 G-A flush
 /// 之前，帧面等价。
 fn drain_mag_healing_delivery(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
 ) {
@@ -18640,7 +18659,7 @@ fn drain_mag_healing_delivery(
 fn drain_periodic_save(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     saves: &std::collections::HashMap<String, SavedHuman>,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     db: &mut Option<DbWiring>,
     engine: &mut load::FrontEngine,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -18703,7 +18722,7 @@ fn drain_periodic_save(
 /// `HealthSpellChanged()` 的 `ShowHp` 支（`SendRefMsg(RM_HEALTHSPELLCHANGED,…)`）在同一图上按
 /// `SendRefMsgRange` 广播；`body` 是源 actor 的那条 `SM_HEALTHSPELLCHANGED`（观察者收到同一字节）。
 fn broadcast_healthspellchanged(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     actor_id: i32,
@@ -18754,7 +18773,7 @@ fn broadcast_healthspellchanged(
 /// 53 写出（合同 F6-G/F48-C：`202 → 53`）。本宿主的 53 平时直接发帧；对 6/48 改为先存本结构，
 /// 由 B4 分支在护身符删除支之后补发。`show_hp` 时仍按 `SendRefMsg` 广播同一 body。
 fn emit_deferred_health(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     chr_name: &str,
@@ -18780,7 +18799,7 @@ fn emit_deferred_health(
 /// 优先级 `(byte)RM_CHARSTATUSCHANGED = 155`。
 fn push_charstatuschanged(
     buf: &mut SpellFrameBuf,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     actor_id: i32,
     status: i32,
@@ -18802,7 +18821,7 @@ fn push_charstatuschanged(
 /// `World::open_holy_seize_mode`）。
 fn push_name_color(
     buf: &mut SpellFrameBuf,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     actor_id: i32,
     color: u8,
@@ -18824,7 +18843,7 @@ fn push_name_color(
 /// `T: 17 → 638 → 656`）。
 fn push_name_color_self(
     buf: &mut SpellFrameBuf,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     actor_id: i32,
     color: u8,
@@ -18852,7 +18871,7 @@ fn push_name_color_self(
 /// # 世界侧
 ///
 /// - `world.use_lamps()`（`crates/world/src/world.rs`，按 `DecLightItemDrugTime` 节流）
-///   → `TickRecord` 不需要通道（返回值直接是 [`mir2_world::LampDuraChange`] 列表）；
+///   → `TickRecord` 不需要通道（返回值直接是 [`mir2_world_bevy::LampDuraChange`] 列表）；
 /// - `World::attack_once` 的 `CheckWeaponUpgrade` 结算 → `TickRecord::weapon_breaks`。
 ///
 /// # 收件人
@@ -18869,8 +18888,8 @@ fn push_name_color_self(
 /// - 破碎支/成功支的 `SysMsg`（100）、`SM_UPDATEITEM(203)`、`RM_ABILITY(19)`/`RM_SUBABILITY(62)`、
 ///   `FeatureChanged`（10116）。T-79⑥/T-95① 已登记。
 fn drain_weapon_durability(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) -> usize {
@@ -18892,7 +18911,7 @@ fn drain_weapon_durability(
     // ② `SM_BREAKWEAPON(1102)`：`SendRefMsg` 收件人（±12 格 Play；`hear_targets` 已含
     //    ObMode/FixedHideMode 的「只自送」头门），`Recog = 断武器者 ActorId`。
     for ev in &rec.weapon_breaks {
-        if !matches!(ev.outcome, mir2_world::WeaponUpgradeOutcome::Broke) {
+        if !matches!(ev.outcome, mir2_world_bevy::WeaponUpgradeOutcome::Broke) {
             continue;
         }
         let body = smframe_ext::sm_breakweapon(ev.actor_id);
@@ -18918,7 +18937,7 @@ fn drain_weapon_durability(
 /// # oracle 触发链（文件:行）
 ///
 /// - 抽数：`AttackSuccess` 对**有目标**的每次攻击无条件抽 `Random(5)`（`:225`；
-///   躲闪/伤害 0 都抽）；该次抽数**已在** [`mir2_world::combat::attack_dir_grouped_poison`] 里
+///   躲闪/伤害 0 都抽）；该次抽数**已在** [`mir2_world_bevy::combat::attack_dir_grouped_poison`] 里
 ///   发生（本函数**不抽数**，只用世界给出的结果）；
 /// - 扣耐久/破零/发帧：`DoDamageWeapon`（`:1436-1470`）——`Dura -= nWeaponDamage`（ushort 回绕）；
 ///   `nDura == 0` 支：`Dura = 0` → `SendDelItems` → `Index = 0` → `SendMsg(RM_DURACHANGE, …)`；
@@ -18934,10 +18953,10 @@ fn drain_weapon_durability(
 ///   [`SpellFrameBuf`] 末了 flush）；
 /// - 两者都**只投攻击者自己**（`SendDelItems`/`SendMsg(this)`），同图其它玩家零帧。
 ///
-/// 帧序列完全由世界侧 [`mir2_world::combat::WeaponWearFrame`] 给出（含破零支的重复 642 怪癖），
+/// 帧序列完全由世界侧 [`mir2_world_bevy::combat::WeaponWearFrame`] 给出（含破零支的重复 642 怪癖），
 /// 本函数不重算 oracle 的分支。
 fn drain_attack_weapon_wear(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     catalog: &dyn game_svr::ability::ItemCatalog,
@@ -18950,7 +18969,7 @@ fn drain_attack_weapon_wear(
         };
         for frame in &ev.frames {
             match frame {
-                mir2_world::combat::WeaponWearFrame::DelItem { slot } => {
+                mir2_world_bevy::combat::WeaponWearFrame::DelItem { slot } => {
                     let Some(body) = weapon_broken_body(ev.actor_id, slot, catalog) else {
                         continue;
                     };
@@ -18965,7 +18984,7 @@ fn drain_attack_weapon_wear(
                     });
                     sent += 1;
                 }
-                mir2_world::combat::WeaponWearFrame::DuraChange {
+                mir2_world_bevy::combat::WeaponWearFrame::DuraChange {
                     dura,
                     dura_max,
                     slot,
@@ -18993,7 +19012,7 @@ fn drain_attack_weapon_wear(
 /// 含 `StdMode == 50` 的 `" #"+Dura` 名尾怪癖）。`GetStdItem(Index) == null` ⇒ 无帧（oracle 同）。
 fn weapon_broken_body(
     actor_id: i32,
-    slot: &mir2_world::entity::UseItemSlot,
+    slot: &mir2_world_bevy::entity::UseItemSlot,
     catalog: &dyn game_svr::ability::ItemCatalog,
 ) -> Option<Vec<u8>> {
     let item = game_svr::bag::BagItem {
@@ -19008,12 +19027,12 @@ fn weapon_broken_body(
 
 /// **P3 收尾残余**：`PlayObject.CheckPkStatus()`（`PlayObject.cs:4357-4364`）的宿主出帧。
 ///
-/// 世界侧 [`mir2_world::World::check_pk_status`] 按 `DecLightItemDrugTime` 周期（缺省 500ms）
+/// 世界侧 [`mir2_world_bevy::World::check_pk_status`] 按 `DecLightItemDrugTime` 周期（缺省 500ms）
 /// 清 `PvpFlag` 并返回 `RefNameColor` 观察值；这里按 oracle 的 `SendRefMsg(RM_CHANGENAMECOLOR)`
 /// 语义出 `SM_CHANGENAMECOLOR(656)`（优先级字节 154，**含发送者自己**：`RefNameColor` 的
 /// `SendRefMsg` 对同格玩家自己同样投递，且 `RM_CHANGENAMECOLOR` 处理器无自守卫）。
 fn drain_pk_flag_downlink(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
@@ -19063,7 +19082,7 @@ fn drain_pk_flag_downlink(
 /// **早 ≤1 tick（≈200ms）**，与 T-89「P22 同 tick 直发」同族。帧内容与相对序（53 → 1101）不变。
 /// 不抽 RNG、不落库。
 fn drain_close_health_for(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -19083,11 +19102,11 @@ fn drain_close_health_for(
     // （oracle 原样），不是清位——与 `MakeOpenHealth` 的 OR 互为逆操作。
     if let Some(e) = world.entities.get_mut(actor_id) {
         e.buff.show_hp = false;
-        e.buff.char_status_ex ^= mir2_world::entity::POISON_OPENHEATH;
+        e.buff.char_status_ex ^= mir2_world_bevy::entity::POISON_OPENHEATH;
     }
     // `CharStatus = GetCharStatus()` = `GetBuffStatus | (CharStatusEx & 0xFFFF)`：
     // 必须在 XOR **之后**读，故分两次借（`get_char_status` 取 `&World`）。
-    let status = mir2_world::buff::get_char_status(world, actor_id);
+    let status = mir2_world_bevy::buff::get_char_status(world, actor_id);
     if let Some(e) = world.entities.get_mut(actor_id) {
         e.buff.char_status = status;
     }
@@ -19115,7 +19134,7 @@ fn drain_close_health_for(
 /// 优先级 `(byte)RM_OPENHEALTH = 170`。
 fn push_open_health(
     buf: &mut SpellFrameBuf,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     target_id: i32,
     hp: u16,
@@ -19145,8 +19164,8 @@ fn push_open_health(
 /// `GetMessage`）：656=154 → 657=155 → 1100=170 → 640(Lowest)=255。
 /// 同优先级帧保持入缓冲序（队列侧 `SelfDelayQueue` 是四叉堆 `Arity=4`，不是插入序）。
 fn drain_b3_self_deliveries(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -19194,7 +19213,7 @@ fn drain_b3_self_deliveries(
 /// 本函数只出帧；槽清空已由世界侧 `DropUseItems` 完成，`sync_use_items_to_session` 随后把
 /// `Index = 0` 回写进存档会话。
 fn drain_death_use_item_drops(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
@@ -19232,8 +19251,8 @@ fn drain_death_use_item_drops(
 /// oracle 每个 actor 一条队列、投递顺序跨 actor 不确定 ⇒ 判据按 socket 子序列。
 #[allow(clippy::too_many_arguments)]
 fn drain_b4_self_deliveries(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     displays: &mut downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -19460,7 +19479,7 @@ fn send_guild_notices(
 /// `&mut ground_sessions` 重叠借用（E0502）。
 fn guild_recipients<'a>(
     online: &'a OnlineRegistry,
-    world: &'a mir2_world::World,
+    world: &'a mir2_world_bevy::World,
     ban: &'a std::collections::HashMap<String, bool>,
 ) -> impl Fn(&str) -> Option<(i32, bool)> + 'a {
     move |name: &str| {
@@ -19550,7 +19569,7 @@ fn collect_gm_kick_pending(
 
 #[allow(clippy::too_many_arguments)]
 fn drain_kicks(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     online: &mut OnlineRegistry,
     kick_pending: &mut Vec<String>,
@@ -19564,7 +19583,7 @@ fn drain_kicks(
     // 卡 `openmir2-kick-display-residue`：顶号路径也必须能摘展示表（见函数尾部）。
     displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
-    guilds: &mut mir2_world::GuildManager,
+    guilds: &mut mir2_world_bevy::GuildManager,
     guild_store: Option<&mir2_data::guild::GuildStore>,
     guild_sections: &mir2_data::guild::GuildFileSections,
     guild_msg_cfg: &guild_runtime::GuildMsgCfg,
@@ -19737,7 +19756,7 @@ fn handle_kick_account(
 /// `BoKickFlag` 支、要先发 `SM_OUTOFCONNECTION`(528)。
 #[allow(clippy::too_many_arguments)]
 fn drain_soft_close(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     online: &mut OnlineRegistry,
     soft_close_pending: &mut Vec<String>,
@@ -19751,7 +19770,7 @@ fn drain_soft_close(
     // 卡 `openmir2-kick-display-residue`：账号级顶号（`BoSoftClose` 支）同样要摘展示表。
     displays: &mut downlink::DisplayTable,
     registry: Option<&mir2_envir::MapRegistry>,
-    guilds: &mut mir2_world::GuildManager,
+    guilds: &mut mir2_world_bevy::GuildManager,
     guild_store: Option<&mir2_data::guild::GuildStore>,
     guild_sections: &mir2_data::guild::GuildFileSections,
     guild_msg_cfg: &guild_runtime::GuildMsgCfg,
@@ -19854,7 +19873,7 @@ struct GroundCfg {
 /// 商店定价/修理/税的配置层输入（`Server.conf [Setup]`；oracle 读取点见 `config.rs`）。
 ///
 /// 价目/修理数值口径在 `mir2_formula::shop`（已合入的 ⑤-3）；本结构只带**配置层**字段，
-/// `price_rate`/`castle_merchant`/`item_type_list` 随商人实体（[`mir2_world::merchant::MerchantState`]）。
+/// `price_rate`/`castle_merchant`/`item_type_list` 随商人实体（[`mir2_world_bevy::merchant::MerchantState`]）。
 #[derive(Debug, Clone)]
 struct ShopCfg {
     /// `Config.CastleMemberPriceRate`（`Merchant.cs:772`）。
@@ -19876,7 +19895,7 @@ struct ShopCfg {
     /// `Config.HumanMaxGold`（`IncGold` 上限，`PlayObject.Base.cs:168`）。
     human_max_gold: i32,
     /// 武器升级 NPC 的配置面（`Merchant.cs:527-759`；`[Names] BlackStone` + `[Setup] UpgradeWeapon*`）。
-    upgrade: mir2_world::merchant::UpgradeWeaponConfig,
+    upgrade: mir2_world_bevy::merchant::UpgradeWeaponConfig,
     /// `Config.SendRefMsgRange`（`FeatureChanged`/`SendRefMsg` 的广播半径，`BaseObject.cs:1509`）。
     send_ref_msg_range: i32,
     /// `PlayObject.Permission`（`GetBackupgWeapon` 的 `Permission >= 4` 豁免门）。
@@ -19897,7 +19916,7 @@ impl Default for ShopCfg {
             castle_one_day_gold: 2_000_000,
             castle_gold_max: 10_000_000,
             human_max_gold: 10_000_000,
-            upgrade: mir2_world::merchant::UpgradeWeaponConfig::default(),
+            upgrade: mir2_world_bevy::merchant::UpgradeWeaponConfig::default(),
             send_ref_msg_range: 12,
             permission: 0,
         }
@@ -20264,7 +20283,7 @@ fn apply_pending_gm_target_ops(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     catalog: &dyn game_svr::ability::ItemCatalog,
     magic_cfg: MagicCfg<'_>,
     displays: &downlink::DisplayTable,
@@ -20286,19 +20305,19 @@ fn apply_pending_gm_target_ops(
     // **族 F**：`@setflag/@setopen/@setunit` 的会话任务位写（写的是**调用者**，回执给目标）。
     let quest = sg.gm.pending_quest.clone();
 
-    let find_id = |world: &mir2_world::World, name: &str| -> Option<i32> {
+    let find_id = |world: &mir2_world_bevy::World, name: &str| -> Option<i32> {
         world
             .entities
             .iter_ref()
             .find(|e| {
-                e.race == mir2_world::ACTOR_RACE_PLAY
+                e.race == mir2_world_bevy::ACTOR_RACE_PLAY
                     && !e.ghost
                     && e.name.eq_ignore_ascii_case(name)
             })
             .map(|e| e.id)
     };
     // review M2：规范名（world 实体名 = GetPlayObject 的 OrdinalIgnoreCase 命中结果）。
-    let canonical = |world: &mir2_world::World, name: &str| -> Option<String> {
+    let canonical = |world: &mir2_world_bevy::World, name: &str| -> Option<String> {
         find_id(world, name).and_then(|id| world.entities.get(id).map(|e| e.name.clone()))
     };
 
@@ -20734,7 +20753,7 @@ fn next_item_number_ex(counter: &mut i32) -> i32 {
 /// （移出→造怪→归位，与 `step_mon_gen`/`summon_slave` 同法）。
 #[allow(clippy::too_many_arguments)]
 fn gm_regen_monster(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     host: &mut game_svr::mongen::MonGenHost,
     registry: &mir2_envir::MapRegistry,
@@ -20778,13 +20797,13 @@ fn gm_regen_monster(
 /// 复用 `crates/world::slave` 的**同一实现**（review I1：此前宿主只复刻了派生速度、漏了
 /// `ApplySlaveLevelAbilitys`，三族 DC/MaxHP 与 oracle 不一致）。`AntiMagic` 置 1 同
 /// `BaseObject.Abil.cs:30`。
-fn gm_mob_recalc(world: &mut mir2_world::World, id: i32, level: u8, now: i64) {
+fn gm_mob_recalc(world: &mut mir2_world_bevy::World, id: i32, level: u8, now: i64) {
     let Some(mut e) = world.entities.get_mut(id) else {
         return;
     };
     e.slave.slave_exp_level = level;
-    mir2_world::slave::apply_slave_level_abilitys(&mut e);
-    mir2_world::slave::apply_derived_slave_recalc(&mut e, now);
+    mir2_world_bevy::slave::apply_slave_level_abilitys(&mut e);
+    mir2_world_bevy::slave::apply_derived_slave_recalc(&mut e, now);
     e.vitals.anti_magic = 1;
 }
 
@@ -20795,7 +20814,12 @@ fn gm_mob_recalc(world: &mut mir2_world::World, id: i32, level: u8, now: i64) {
 /// 复用 `World::make_slave_adopt` 的 `RecalcAbilitys`（含 `ApplySlaveLevelAbilitys` 与派生覆写，
 /// `pub(crate)` 无法直调）后**撤回** oracle 此处没有的三项（`MakeSlave` 才有）：`IsSlave=true`、
 /// `MasterRoyaltyTick=now`、HP 补半；`SlaveMakeLevel` 传 0（ctor 缺省，oracle 此处未赋值）。
-fn gm_recall_ex_adopt(world: &mut mir2_world::World, caster_id: i32, mon_id: i32, name_color: u8) {
+fn gm_recall_ex_adopt(
+    world: &mut mir2_world_bevy::World,
+    caster_id: i32,
+    mon_id: i32,
+    name_color: u8,
+) {
     let hp_before = world.entities.get(mon_id).map_or(0, |e| e.hp);
     let adopted = world.make_slave_adopt(caster_id, mon_id, 0, 1, 0);
     if let Some(e) = world.entities.get_mut(mon_id) {
@@ -20817,7 +20841,7 @@ fn gm_recall_ex_adopt(world: &mut mir2_world::World, caster_id: i32, mon_id: i32
 /// `GetChrColor(baseObject)` 现算（`crates/world::slave::get_chr_color`；NPC 支传 oracle 缺省 255）。
 fn gm_push_name_color(
     buf: &mut SpellFrameBuf,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     mon_id: i32,
     slave_color: &[u8],
@@ -20825,7 +20849,7 @@ fn gm_push_name_color(
     let Some(e) = world.entities.get(mon_id) else {
         return;
     };
-    let color = mir2_world::slave::get_chr_color(&e, slave_color, 255);
+    let color = mir2_world_bevy::slave::get_chr_color(&e, slave_color, 255);
     push_name_color(buf, world, online, mon_id, color);
 }
 
@@ -20845,7 +20869,7 @@ fn gm_push_name_color(
 fn apply_pending_gm_m_commands(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     mon_host: Option<&mut game_svr::mongen::MonGenHost>,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -21162,10 +21186,10 @@ fn apply_pending_gm_m_commands(
 fn apply_pending_gm_castle_commands(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
-    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     pending_broadcasts: &mut Vec<String>,
@@ -21204,7 +21228,7 @@ fn apply_pending_gm_castle_commands(
         }
         if req.start {
             let local = chrono::Local::now();
-            let date = mir2_world::castle::CastleDate::new(
+            let date = mir2_world_bevy::castle::CastleDate::new(
                 chrono::Datelike::year(&local),
                 chrono::Datelike::month(&local),
                 chrono::Datelike::day(&local),
@@ -21223,7 +21247,7 @@ fn apply_pending_gm_castle_commands(
             // HomeY, 100)` + 逐个 `RefShowName()`（含目标自己，逐观察者算色）。
             let show_events = world.castles[idx].start_wallconquest_war();
             for ev in show_events {
-                if let mir2_world::castle::CastleEvent::RefreshShowName { x, y, range } = ev {
+                if let mir2_world_bevy::castle::CastleEvent::RefreshShowName { x, y, range } = ev {
                     let palace_map_id = world.castles.get(idx).and_then(|c| c.palace_map_id);
                     let _ = game_svr::castle::refresh_show_name_in_area(
                         online,
@@ -21251,8 +21275,8 @@ fn apply_pending_gm_castle_commands(
             let door_events = world.castles[idx].main_door_control(true);
             let castle_map_id = world.castles[idx].castle_map_id;
             for ev in &door_events {
-                if let mir2_world::castle::CastleEvent::Structure(structure) = ev {
-                    if let mir2_world::castle::StructureEvent::SetMapXyFlag { x, y, walk } =
+                if let mir2_world_bevy::castle::CastleEvent::Structure(structure) = ev {
+                    if let mir2_world_bevy::castle::StructureEvent::SetMapXyFlag { x, y, walk } =
                         structure
                     {
                         if let Some(id) = castle_map_id.filter(|id| *id < world.maps.len()) {
@@ -21279,11 +21303,11 @@ fn apply_pending_gm_castle_commands(
             let events = world.castles[idx].stop_wallconquest_war();
             for ev in events {
                 match ev {
-                    mir2_world::castle::CastleEvent::Broadcast(msg) => {
+                    mir2_world_bevy::castle::CastleEvent::Broadcast(msg) => {
                         glog!("INF", "SS_204（单服无接收端）: {msg}");
                         pending_broadcasts.push(msg);
                     }
-                    mir2_world::castle::CastleEvent::ServerGroupMsg { code, text } => {
+                    mir2_world_bevy::castle::CastleEvent::ServerGroupMsg { code, text } => {
                         glog!("INF", "SS_{code}（单服无接收端）: {text}");
                     }
                     _ => {}
@@ -21357,9 +21381,9 @@ fn apply_pending_gm_castle_commands(
 fn apply_pending_gm_guild_commands(
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     chr_name: &str,
-    world: &mir2_world::World,
-    guilds: &mut mir2_world::GuildManager,
-    guild_cfg: &mir2_world::GuildConfig,
+    world: &mir2_world_bevy::World,
+    guilds: &mut mir2_world_bevy::GuildManager,
+    guild_cfg: &mir2_world_bevy::GuildConfig,
     guild_store: Option<&mir2_data::guild::GuildStore>,
     guild_sections: &mir2_data::guild::GuildFileSections,
     server_index: i32,
@@ -21550,16 +21574,16 @@ fn drain_script_gm_pendings(
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
     registry: Option<&mir2_envir::MapRegistry>,
     mon_table: &game_svr::mongen::MonsterTable,
-    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
-    guilds: &mut mir2_world::GuildManager,
-    guild_cfg: &mir2_world::GuildConfig,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
+    guilds: &mut mir2_world_bevy::GuildManager,
+    guild_cfg: &mir2_world_bevy::GuildConfig,
     guild_store: Option<&mir2_data::guild::GuildStore>,
     colors: &MsgColors,
     enter_cfg: &EnterConfig,
@@ -21721,16 +21745,16 @@ fn command_event_tail_gm_drain(
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
     registry: Option<&mir2_envir::MapRegistry>,
     mon_table: &game_svr::mongen::MonsterTable,
-    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
-    guilds: &mut mir2_world::GuildManager,
-    guild_cfg: &mir2_world::GuildConfig,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
+    guilds: &mut mir2_world_bevy::GuildManager,
+    guild_cfg: &mir2_world_bevy::GuildConfig,
     guild_store: Option<&mir2_data::guild::GuildStore>,
     colors: &MsgColors,
     enter_cfg: &EnterConfig,
@@ -21787,7 +21811,7 @@ fn execute_admin_gm_command(
     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
     pwd_sessions: &mut std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -21797,9 +21821,9 @@ fn execute_admin_gm_command(
     mon_gen_host: Option<&mut game_svr::mongen::MonGenHost>,
     registry: Option<&mir2_envir::MapRegistry>,
     mon_table: &game_svr::mongen::MonsterTable,
-    castle_war_states: &std::collections::HashMap<i32, mir2_world::castle::CastleWarState>,
-    guilds: &mut mir2_world::GuildManager,
-    guild_cfg: &mir2_world::GuildConfig,
+    castle_war_states: &std::collections::HashMap<i32, mir2_world_bevy::castle::CastleWarState>,
+    guilds: &mut mir2_world_bevy::GuildManager,
+    guild_cfg: &mir2_world_bevy::GuildConfig,
     guild_store: Option<&mir2_data::guild::GuildStore>,
     colors: &MsgColors,
     enter_cfg: &EnterConfig,
@@ -22136,7 +22160,7 @@ fn drain_reconnects(
 fn switch_data_send_change_server(
     st: &SwitchDataState,
     name: &str,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     registry: Option<&mir2_envir::MapRegistry>,
     server_table: &[RouteInfo],
@@ -22255,9 +22279,9 @@ struct NewbieItems {
 struct EnterConfig {
     game_conf: Option<mir2_envir::GameSvrConf>,
     /// `[Setup]` 的四个名字色（T-132；`ServerConf.cs:509-512`）。
-    castle_name_colors: mir2_world::castle::CastleNameColors,
+    castle_name_colors: mir2_world_bevy::castle::CastleNameColors,
     /// `[Setup] RedDieHomeMap/RedDieHomeX/RedDieHomeY`（`WorldServer.cs:343-348`）。
-    red_die_home: mir2_world::castle::RedDieHome,
+    red_die_home: mir2_world_bevy::castle::RedDieHome,
     /// `M2Share.StartPointList`（`Envir/StartPoint.txt`）：`GetStartPoint()` 的匹配表
     /// （`PlayObject.Base.cs:704-721`；登录 `PlayObject.cs:1199` + 3s `CheckDupObjTick` 支）。
     home_start_points: Vec<mir2_envir::startpoint::StartPoint>,
@@ -22276,7 +22300,7 @@ struct EnterConfig {
     spirit_mutiny_time: i32,
     /// **G2**：同一份 `Server.conf` 的行会/城堡配置（`mir2_data::guild_castle::GuildCastleConfig::load`）。
     ///
-    /// G2 只用其中的行会键映射成 `mir2_world::GuildConfig`（简报 §8）；G3 直接复用它建 `GuildStore`
+    /// G2 只用其中的行会键映射成 `mir2_world_bevy::GuildConfig`（简报 §8）；G3 直接复用它建 `GuildStore`
     /// （`GuildFileSections::from_config`）。
     guild_castle_cfg: mir2_data::guild_castle::GuildCastleConfig,
     /// **G3**：`GuildBase/GuildList.txt` + `Guilds/<名>.txt` 仓库（`[Share] GuildDir/GuildFile`）。
@@ -22333,7 +22357,7 @@ struct EnterConfig {
     /// `[Setup] CanShoutMsgLevel`（`!` 喊话等级门；缺省 7，部署件 34）。
     can_shout_msg_level: i32,
     /// **P3-B4**：`[Setup]` 的 `MabMabe*` / `AmyOunsulPoint`（缺省 = oracle 缺省）。
-    b4: mir2_world::magic_effect::MabMabeConfig,
+    b4: mir2_world_bevy::magic_effect::MabMabeConfig,
     /// `CM_PICKUP`/`CM_DROPITEM` 的 `[Setup]` 输入。
     ground: GroundCfg,
     /// `CM_*` 商店动作的 `[Setup]` 输入（⑤-4 第①片）。
@@ -22406,7 +22430,7 @@ struct EnterConfig {
     /// 的 `Random(10000)`，**已补**）→ 段②（`:124` M2 `CHECKQUEST`）→【屏障 B：`InitializeMonster`】→
     /// 段③（`:184` M1 + L2/L1/L3）→【屏障 C：`LoadMerchant`/`LoadNpcs`】。
     /// 无注册表 / 计划算不出 ⇒ `game_svr::ctor_fold::minimal_plan()`（**只含屏障 A**，与语料无关）。
-    ctor_fold_plan: mir2_world::CtorFoldPlan,
+    ctor_fold_plan: mir2_world_bevy::CtorFoldPlan,
     /// **M3④-实现 B 第 ③ 片**：MonGen 刷怪启动输入（怪物模板表 + `Envir/MonGen.txt` 运行时条目
     /// + `Server.conf` 刷怪参数）；`entries=None` ⇒ 无 `MonGen.txt`，不建宿主。
     mon_gen: MonGenStartup,
@@ -22475,8 +22499,8 @@ impl EnterConfig {
     fn for_test(string_conf: crate::strings::StringConf) -> Self {
         Self {
             game_conf: None,
-            castle_name_colors: mir2_world::castle::CastleNameColors::default(),
-            red_die_home: mir2_world::castle::RedDieHome::default(),
+            castle_name_colors: mir2_world_bevy::castle::CastleNameColors::default(),
+            red_die_home: mir2_world_bevy::castle::RedDieHome::default(),
             // 卡 `openmir2-home-coords-divergence` 的新字段：单测缺省 = 无 StartPoint。
             // RedHome* 不在这里存 —— 唯一配置源是 `game_conf`（`None` ⇒ ctor 默认值）。
             home_start_points: Vec::new(),
@@ -22490,7 +22514,7 @@ impl EnterConfig {
             guild_store: None,
             guild_sections: mir2_data::guild::GuildFileSections::oracle_defaults(),
             guild_msg_cfg: guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -22509,7 +22533,7 @@ impl EnterConfig {
             cry_msg_f_color: 0,
             cry_msg_b_color: 0x97,
             can_shout_msg_level: 7,
-            b4: mir2_world::magic_effect::MabMabeConfig::default(),
+            b4: mir2_world_bevy::magic_effect::MabMabeConfig::default(),
             ground: GroundCfg {
                 human_max_gold: 5_000_000,
                 floor_item_can_pick_up_time: 0,
@@ -22566,11 +22590,11 @@ impl EnterConfig {
             },
             need_exps: Vec::new(),
             rng_seed: None,
-            ctor_fold_plan: mir2_world::CtorFoldPlan::default(),
+            ctor_fold_plan: mir2_world_bevy::CtorFoldPlan::default(),
             mon_gen: MonGenStartup {
                 table: game_svr::mongen::MonsterTable::new(Vec::new()),
                 entries: None,
-                config: mir2_world::mongen::MonGenConfig::default(),
+                config: mir2_world_bevy::mongen::MonGenConfig::default(),
             },
             guards: None,
             minimap: None,
@@ -22602,8 +22626,8 @@ impl EnterConfig {
 /// MonGen 刷怪启动输入（[`game_svr::mongen`]）。
 struct MonGenStartup {
     table: game_svr::mongen::MonsterTable,
-    entries: Option<Vec<mir2_world::mongen::MonGenEntry>>,
-    config: mir2_world::mongen::MonGenConfig,
+    entries: Option<Vec<mir2_world_bevy::mongen::MonGenEntry>>,
+    config: mir2_world_bevy::mongen::MonGenConfig,
 }
 
 /// `SEED_PROBE` 的 8 项参照序列（`new Random(seed).Next()` 前 `seed::PROBE_LEN` 项）。
@@ -22639,7 +22663,7 @@ fn step_mon_gen(
     host: &mut game_svr::mongen::MonGenHost,
     table: &game_svr::mongen::MonsterTable,
     registry: &mir2_envir::MapRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
     play_object_count: i32,
 ) {
@@ -22647,7 +22671,7 @@ fn step_mon_gen(
     // oracle `map.HumCount`：当前图上的玩家数。
     let mut hum_by_map: std::collections::HashMap<usize, i32> = std::collections::HashMap::new();
     for e in world.entities.iter_ref() {
-        if e.race == mir2_world::ACTOR_RACE_PLAY {
+        if e.race == mir2_world_bevy::ACTOR_RACE_PLAY {
             *hum_by_map.entry(e.map_id).or_insert(0) += 1;
         }
     }
@@ -22711,7 +22735,7 @@ fn step_mon_gen(
     // 与 oracle 同一 `SystemShare.RandomNumber`（`world.rng`）⇒ 复活取数（`ReAliveEx`）按
     // 遍历序接在 regen 取数之后；无到点尸体时零抽数（五批 trace 不变）。
     let cfg = host.config;
-    let _cert = mir2_world::mongen::process_cert_lists(
+    let _cert = mir2_world_bevy::mongen::process_cert_lists(
         &mut host.state,
         world,
         world.clock_ms,
@@ -22737,13 +22761,13 @@ fn step_mon_gen(
 /// （`SendRefMsg` 的 `Envir.GetCellInfo` 扫描；本仓用 [`chat::hear_targets_at`] 的等价窗口）。
 /// 事件带 `map_id` 与发帧坐标，避免 drain 时实体已移动。
 fn drain_special_ref_msgs(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
     for m in world.take_special_ref_msgs() {
         // 本卡只产 `RM_HIT`；未知 ident 不猜映射（登记为余量）。
-        if m.ident != mir2_world::special_monster::RM_HIT {
+        if m.ident != mir2_world_bevy::special_monster::RM_HIT {
             continue;
         }
         let body = smframe::sm_action_hit(
@@ -22795,8 +22819,8 @@ fn drain_special_ref_msgs(
 /// 两种帧共用同一 gate channel ⇒ 必须按此函数顺序调用，否则线上反序。
 #[allow(clippy::too_many_arguments)]
 fn drain_attack_wear_then_monster_refs(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -22810,7 +22834,7 @@ fn drain_attack_wear_then_monster_refs(
 
 #[allow(clippy::let_and_return)]
 fn drain_monster_ref_msgs(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &downlink::DisplayTable,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -22823,7 +22847,7 @@ fn drain_monster_ref_msgs(
         // **Lane B**：城堡门 `CastleDoor.Run` 的 `RM_TURN`（`CastleDoor.cs:93-101`）。
         // 收件人支 = `PlayObject.Message.cs:1524-1560`：`SM_TURN` + 紧随 `SM_FEATURECHANGED`
         // 两帧；`sMsg` 空 ⇒ `SM_TURN` 尾只有 `Encode(8B CharDesc)`（无名尾）。
-        if m.ident == mir2_world::monai::RM_TURN {
+        if m.ident == mir2_world_bevy::monai::RM_TURN {
             let Some(d) = displays.get(m.actor_id) else {
                 continue;
             };
@@ -22856,7 +22880,7 @@ fn drain_monster_ref_msgs(
         // `PlayObject`）⇒ 不能一条 body 广播，逐收件人重编码（与 [`push_charstatuschanged`]
         // 同口径）。`RM_CHARSTATUSCHANGED` 的处理器**无自己守卫**；收件人集合已由
         // `send_ref_msg` 在发帧时刻快照（怪物 sender ⇒ 只有 `Race == Play` 的格扫命中项）。
-        if m.ident == mir2_world::monai::RM_CHARSTATUSCHANGED {
+        if m.ident == mir2_world_bevy::monai::RM_CHARSTATUSCHANGED {
             for target_id in &m.recipients {
                 let Some(t) = online.iter().find(|e| e.actor_id == *target_id) else {
                     continue;
@@ -22875,7 +22899,7 @@ fn drain_monster_ref_msgs(
             continue;
         }
         let body = match m.ident {
-            mir2_world::monai::RM_HIT => smframe::sm_action_hit(
+            mir2_world_bevy::monai::RM_HIT => smframe::sm_action_hit(
                 mir2_protocol::messages::SM_HIT,
                 m.actor_id,
                 wire_coord(m.x),
@@ -22893,14 +22917,14 @@ fn drain_monster_ref_msgs(
                 // ctor 缺省 255（`GameSvrConf.cs:1923`）而非任意 0；未来若接入 NPC
                 // 命中路径，必须改为读取 `NpcNameColor` 配置。
                 const NPC_NAME_COLOR_ORACLE_DEFAULT: u8 = 255;
-                let color = mir2_world::slave::get_chr_color(
+                let color = mir2_world_bevy::slave::get_chr_color(
                     &e,
                     &pet_cfg.slave_color,
                     NPC_NAME_COLOR_ORACLE_DEFAULT,
                 );
                 smframe::sm_changenamecolor(m.actor_id, color)
             }
-            mir2_world::monai::RM_DIGUP => {
+            mir2_world_bevy::monai::RM_DIGUP => {
                 let (feature, light) = displays
                     .get(m.actor_id)
                     .map_or((0, 0), |d| (d.feature, d.light));
@@ -22915,15 +22939,15 @@ fn drain_monster_ref_msgs(
                 );
                 digup
             }
-            mir2_world::monai::RM_DIGDOWN => {
+            mir2_world_bevy::monai::RM_DIGDOWN => {
                 smframe::sm_digdown(m.actor_id, wire_coord(m.x), wire_coord(m.y))
             }
-            mir2_world::monai::RM_10205 => {
+            mir2_world_bevy::monai::RM_10205 => {
                 smframe_ext::sm_716(m.actor_id, m.n_param1, m.n_param2, m.n_param3)
             }
             // **MB-2（R13）**：`DualAxeMonster.FlyAxeAttack` 的 `RM_FLYAXE`（`DualAxeMonster.cs:29`）
             // ⇒ `SM_FLYAXE(22)`。oracle 外层 `ActorMgr.Get(nParam3) != null` 守卫：目标不在场 ⇒ 不发帧。
-            mir2_world::monai::RM_FLYAXE => {
+            mir2_world_bevy::monai::RM_FLYAXE => {
                 if world.entities.get(m.n_param3).is_none() {
                     continue;
                 }
@@ -22940,7 +22964,7 @@ fn drain_monster_ref_msgs(
             }
             // **MB-2（R24）**：`LightingZombi.LightingAttack` 的 `RM_LIGHTING`（`LightingZombi.cs:22`）
             // ⇒ `SM_LIGHTING(23)`；同样有目标存在守卫（`PlayObject.Message.cs:1921`）。
-            mir2_world::monai::RM_LIGHTING => {
+            mir2_world_bevy::monai::RM_LIGHTING => {
                 if world.entities.get(m.n_param3).is_none() {
                     continue;
                 }
@@ -22958,7 +22982,7 @@ fn drain_monster_ref_msgs(
             }
             // **MB-2（R43）**：`BaseObject.ReAlive()` 的 `RM_ALIVE`（`BaseObject.Base.cs:357`）
             // ⇒ `SM_ALIVE(27)`（头 `(X,Y,Dir)` + 8B `CharDesc`）。
-            mir2_world::monai::RM_ALIVE => {
+            mir2_world_bevy::monai::RM_ALIVE => {
                 let (feature, status) = displays
                     .get(m.actor_id)
                     .map_or((0, 0), |d| (d.feature, d.status));
@@ -22979,7 +23003,7 @@ fn drain_monster_ref_msgs(
             // 怪物 sender 无客户端且收件人只含玩家 ⇒ 无自帧。
             // （world 侧唯一发帧点 `wParam = 48`，低 8 位即全值；`sm_spell` 的 `effect: u8`
             // 与 oracle `(ushort)wParam` 在该发帧点逐字节相同。）
-            mir2_world::monai::RM_SPELL => smframe::sm_spell(
+            mir2_world_bevy::monai::RM_SPELL => smframe::sm_spell(
                 m.actor_id,
                 wire_coord(m.n_param1),
                 wire_coord(m.n_param2),
@@ -22993,7 +23017,7 @@ fn drain_monster_ref_msgs(
             // `EncodeBuffer(BitConverter.GetBytes(nParam3), 4)`（targetId 的 4B 小端再 EDCode）。
             // `nParam1` 按 oracle `MakeWord(LoByte, HiByte)` 拆回 `(EffectType, Effect)`；
             // **无自己守卫**（与 `RM_SPELL` 不同），收件人原样转发。
-            mir2_world::monai::RM_MAGICFIRE => smframe::sm_magicfire(
+            mir2_world_bevy::monai::RM_MAGICFIRE => smframe::sm_magicfire(
                 m.actor_id,
                 smframe::lo_word(m.n_param2),
                 smframe::hi_word(m.n_param2),
@@ -23005,7 +23029,7 @@ fn drain_monster_ref_msgs(
             // （`Khazard.cs:28/42`，由 `TargetCret` 发）的
             // `SendRefMsg(RM_SPACEMOVE_FIRE, 0, 0, 0, 0, "")` ⇒ `SM_SPACEMOVE_HIDE(800)`
             // （`PlayObject.Message.cs:1955-1966`）：头 `(ActorId, 0, 0, 0)`，**无尾**。
-            mir2_world::monai::RM_SPACEMOVE_FIRE => {
+            mir2_world_bevy::monai::RM_SPACEMOVE_FIRE => {
                 smframe::sm_spacemove_hide(mir2_protocol::messages::SM_SPACEMOVE_HIDE, m.actor_id)
             }
             // 未建模 ident：不猜映射（登记为余量）。
@@ -23020,7 +23044,7 @@ fn drain_monster_ref_msgs(
         // 收件人快照按 oracle 格扫**包含 sender 自己**（见 `NO_SENDER_EXCLUSION`），
         // 因此必须在这里按接收者 id 去掉「自己发给自己」的那一份
         // （卡 `openmir2-rust-extra-ident14-hit`：run32 玩家攻击后收到自己的 14）。
-        let drop_self = m.ident == mir2_world::monai::RM_HIT;
+        let drop_self = m.ident == mir2_world_bevy::monai::RM_HIT;
         for target_id in &m.recipients {
             if drop_self && *target_id == m.actor_id {
                 continue;
@@ -23044,7 +23068,7 @@ fn drain_monster_ref_msgs(
 ///
 /// `Entity.use_items` 是磨损权威（G-06，`StruckDamage` 写它）；但全新实体全零 ≠ "装备被清空"。
 /// 判定口径与 [`build_save_record`] 相同：任一槽有 `index>0 || dura_max!=0 || desc!=0` 才算装载。
-fn sync_use_items_from_entity_if_loaded(world: &mir2_world::World, sg: &mut SessionGround) {
+fn sync_use_items_from_entity_if_loaded(world: &mir2_world_bevy::World, sg: &mut SessionGround) {
     let loaded = world.entities.get(sg.actor_id).is_some_and(|e| {
         e.use_items
             .iter()
@@ -23107,7 +23131,7 @@ impl game_svr::bag::WeightSink for P21WeightSink<'_> {
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn drain_player_need_recheck(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -23127,7 +23151,7 @@ fn drain_player_need_recheck(
 
 /// 带 210/212 审计的 [`drain_player_need_recheck`]（生产路径）。
 fn drain_player_need_recheck_with_magic(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -23358,7 +23382,7 @@ fn flush_map_mode_writes(
 ///
 /// 写回：`Entity.hp` 是权威（战斗/死亡读它），`sg.state.wabil.hp` 是 53/存档的投影。
 fn drain_player_map_hp(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -23424,7 +23448,7 @@ fn drain_player_map_hp(
 /// 帧只入 G-B 队列（53/708 按 RM ident 低字节排序），组边界统一 flush。
 #[allow(clippy::too_many_arguments)]
 fn drain_player_hunger(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     catalog: &dyn game_svr::ability::ItemCatalog,
@@ -23522,7 +23546,7 @@ fn drain_player_hunger(
 /// - 归零各发一条**红色** `SysMsg`（`MsgColor.Red` + `MsgType.Hint`），顺序「经验 → 攻击」；
 ///   文本是 oracle 的**硬编码字面量**，走 GBK。
 fn drain_player_run_rates(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &std::collections::HashMap<String, SessionGround>,
     red_f_color: u8,
     red_b_color: u8,
@@ -23588,7 +23612,7 @@ fn drain_player_run_rates(
 /// - `ShowHp` 的观察者副本在源自己那份发完后逐目标发（同一 body）。
 fn flush_run_frames(
     frames: &mut game_svr::run_frames::RunFrames,
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     sessions: &std::collections::HashMap<String, SessionGround>,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -23668,19 +23692,19 @@ fn flush_run_frames(
 /// - 四字段 seed 自 `SessionGround`（`SETAUTOGETEXP` 的唯一权威写入途径）；
 /// - `AutoGetExpEnvir` 存的是地图名（oracle 存 `IEnvirnoment` 引用）⇒ 经注册表解析成
 ///   `map_id` 做同一性比较；名字不在表内 = `FindMap` 返回 null ⇒ `None`；
-/// - 调 [`mir2_world::World::auto_get_exp`]：严格 `>` 门、**先刷新 Tick 再判安全区**、
+/// - 调 [`mir2_world_bevy::World::auto_get_exp`]：严格 `>` 门、**先刷新 Tick 再判安全区**、
 ///   **无 `!Death` 门**（oracle 原样）；
 /// - 命中追加 `(actor_id, point, leveled, level)` 进 `TickRecord::exp_awards` ⇒ 既有
 ///   [`drain_kill_exp_chain`] 按 `53 → 44 → 45/52/752` 出帧。P31 是**裸 `GetExp`**
 ///   （不过 `CalcGetExp`/倍率/组队），所以**不得**走 `World::gain_exp`。
 #[allow(clippy::too_many_arguments)]
 fn drain_player_auto_get_exp(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     registry: Option<&mir2_envir::MapRegistry>,
     now: i64,
-    record: &mut mir2_world::TickRecord,
+    record: &mut mir2_world_bevy::TickRecord,
 ) {
     let mut names: Vec<String> = sessions.keys().cloned().collect();
     names.sort();
@@ -23723,7 +23747,7 @@ fn drain_player_auto_get_exp(
                     .and_then(|e| r.flag_of(e.map_id))
             })
             .is_some_and(|f| f.safe_area);
-        let mut state = mir2_world::AutoGetExpState {
+        let mut state = mir2_world_bevy::AutoGetExpState {
             tick: sg.auto_get_exp_tick,
             time_ms: sg.auto_get_exp_time,
             point: sg.auto_get_exp_point,
@@ -23747,7 +23771,7 @@ fn drain_player_auto_get_exp(
 /// 1. `SendRefMsg(RM_SPACEMOVE_FIRE, …)`（`PlayObject.Base.cs:2308`）⇒ 旧位置 ±12（**含自己**）
 ///    收 `SM_SPACEMOVE_HIDE(800)`；必须在移动**之前**（`broadcast_ref_msg_with_self`）。
 /// 2. `BaseObjectMove(HomeMap, HomeX, HomeY)`（`:2309/2312-2327`）⇒
-///    [`mir2_world::World::base_object_move_player`]；`FindMap` 为空 ⇒ **0 抽不动**。
+///    [`mir2_world_bevy::World::base_object_move_player`]；`FindMap` 为空 ⇒ **0 抽不动**。
 /// 3. 换图簇 633/634/801 由后续 [`drain_map_change`] 发（同 tick 天然排在 653 之后，与 oracle
 ///    `MsgQueue` 按 `(byte)wIdent` 出队的相对序一致：800 → 653 → 633 → 634 → 801）。
 ///
@@ -23760,7 +23784,7 @@ fn drain_player_auto_get_exp(
 /// 两次 `MoveToHome` 之间**重新取** `flag`（oracle 的移动立即改 `Envir`，见设计件 §1.2/§3.2）。
 #[allow(clippy::too_many_arguments)]
 fn drain_player_game_gold(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -23823,7 +23847,7 @@ fn drain_player_game_gold(
 }
 
 /// P22 的「当前图」：优先读实体（`MoveToHome` 后已变）；实体缺失时退回调用前的快照。
-fn p22_current_map(world: &mir2_world::World, actor_id: i32, fallback: usize) -> usize {
+fn p22_current_map(world: &mir2_world_bevy::World, actor_id: i32, fallback: usize) -> usize {
     world.entities.get(actor_id).map_or(fallback, |e| e.map_id)
 }
 
@@ -23834,7 +23858,7 @@ fn p22_current_map(world: &mir2_world::World, actor_id: i32, fallback: usize) ->
 /// 移动之前调用（否则旧图观察者漏收）。
 #[allow(clippy::too_many_arguments)]
 fn p22_move_to_home(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -23873,13 +23897,13 @@ fn p22_move_to_home(
         .and_then(|r| r.id_of(&home.map_name))
         .map(|map_id| {
             if home.fixed {
-                mir2_world::HomeMoveTarget::Fixed {
+                mir2_world_bevy::HomeMoveTarget::Fixed {
                     map_id,
                     x: i32::from(home.x),
                     y: i32::from(home.y),
                 }
             } else {
-                mir2_world::HomeMoveTarget::Random { map_id }
+                mir2_world_bevy::HomeMoveTarget::Random { map_id }
             }
         });
     if target.is_none() {
@@ -23909,7 +23933,7 @@ fn p22_move_to_home(
 /// ⇒ `RevivalTick = now; ItemDamageRevivalRing(); HP = MaxHP; HealthSpellChanged();
 ///    SysMsg(RevivalRecoverMsg, Green, Hint)`。
 ///
-/// `LastHiter` 取 [`mir2_world::World::player_hiter_snapshot`]（`tick_head` 在 `expire_hitters()`
+/// `LastHiter` 取 [`mir2_world_bevy::World::player_hiter_snapshot`]（`tick_head` 在 `expire_hitters()`
 /// **之前**留的清理前快照）；无快照（直接调用/单测）⇒ 回落实体当前值。
 ///
 /// `ItemDamageRevivalRing`（`PlayObject.cs:5355-5392`）逐槽：
@@ -23925,7 +23949,7 @@ fn p22_move_to_home(
 #[allow(clippy::too_many_arguments)]
 #[cfg(test)]
 fn drain_player_revival(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -23959,7 +23983,7 @@ fn drain_player_revival(
 /// 带 210/212 审计的 [`drain_player_revival`]（生产路径）。
 #[allow(clippy::too_many_arguments)]
 fn drain_player_revival_with_magic(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -23993,7 +24017,7 @@ fn drain_player_revival_with_magic(
         let Some(entity) = world.entities.get(actor_id) else {
             continue;
         };
-        if entity.death || entity.hp != 0 || entity.race != mir2_world::ACTOR_RACE_PLAY {
+        if entity.death || entity.hp != 0 || entity.race != mir2_world_bevy::ACTOR_RACE_PLAY {
             continue;
         }
         if !entity.revival || now - entity.revival_tick <= revival_time {
@@ -24010,7 +24034,7 @@ fn drain_player_revival_with_magic(
             Some(id) => world
                 .entities
                 .get(id)
-                .is_some_and(|h| h.race == mir2_world::ACTOR_RACE_PLAY && !h.un_revival),
+                .is_some_and(|h| h.race == mir2_world_bevy::ACTOR_RACE_PLAY && !h.un_revival),
         };
         if !hiter_ok {
             continue;
@@ -24154,18 +24178,18 @@ fn drain_player_revival_with_magic(
 /// **卡 `openmir2-run-gap-monster-specials`（F1）**：`world.tick()` + 专用怪的两条排水。
 ///
 /// 1. **产仔排水**：`World::tick` 的消息段把到点的 `RM_ZEN_BEE` 放进
-///    [`mir2_world::World::pending_special_spawns`]（无 spawner 路径）；这里用生产
+///    [`mir2_world_bevy::World::pending_special_spawns`]（无 spawner 路径）；这里用生产
 ///    [`game_svr::mongen::WorldSpecialSpawner`] 逐条 `RegenMonsterByName`。
 ///    不排水 ⇒ 有目标的 BeeQueen/SpiderHouse 每 2s 追加一条、永不释放（无界增长）。
 /// 2. **`RM_HIT` 出帧**：`MakeChildBee`/`GenBb` 的 `SendRefMsg` 事件在
-///    [`mir2_world::World::pending_special_ref_msgs`]；这里按 RM_HIT 口径出 `SM_HIT`。
+///    [`mir2_world_bevy::World::pending_special_ref_msgs`]；这里按 RM_HIT 口径出 `SM_HIT`。
 ///
 /// 宿主（`sim_loop`）与回归用例走**同一个**函数 ⇒ 删任一条排水都会让「队列有界 /
 /// 产仔」用例变红。
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn tick_world_with_specials(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     host: Option<&mut game_svr::mongen::MonGenHost>,
     table: &game_svr::mongen::MonsterTable,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -24173,7 +24197,7 @@ fn tick_world_with_specials(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
-) -> mir2_world::TickRecord {
+) -> mir2_world_bevy::TickRecord {
     let mut rec = tick_world_head_with_specials(
         world, host, table, registry, displays, online, gates, pet_cfg,
     );
@@ -24190,7 +24214,7 @@ fn tick_world_with_specials(
 /// 与 world 侧 `check_dup_obj`（`mir2-rs/crates/world/src/world.rs:5706`，其 `:5731` 原为
 /// 「处置（登记）」）配对；`GetXYObjCount`/`BoDuplication` 的顺序**不动**。
 fn apply_get_start_point_after_tick(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     saves: &mut std::collections::HashMap<String, SavedHuman>,
     online: &OnlineRegistry,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -24270,7 +24294,7 @@ fn apply_start_point_for_fired_players(
 /// 单测/回归仍走组合版 `tick_world_with_specials`（宿主段为空，行为与 A1 前一致）。
 #[allow(clippy::too_many_arguments)]
 fn tick_world_head_with_specials(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     host: Option<&mut game_svr::mongen::MonGenHost>,
     table: &game_svr::mongen::MonsterTable,
     registry: Option<&mir2_envir::MapRegistry>,
@@ -24278,7 +24302,7 @@ fn tick_world_head_with_specials(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     pet_cfg: &mir2_data::pet_slave::PetSlaveConfig,
-) -> mir2_world::TickRecord {
+) -> mir2_world_bevy::TickRecord {
     let rec = world.tick_head();
     // oracle `Operate(RM_ZEN_BEE)` 的 `RegenMonsterByName`：与本 tick 其它怪物/商人取数
     // 同一条 `world.rng`（`flush_special_spawns` 内部移出/移入）。
@@ -24308,8 +24332,8 @@ fn tick_world_head_with_specials(
 /// 测试自行 parse 一份文本。
 #[allow(clippy::too_many_arguments)]
 fn drain_b4_with_enter_cfg(
-    rec: &mir2_world::TickRecord,
-    world: &mut mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     displays: &mut downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -24339,8 +24363,8 @@ fn drain_b4_with_enter_cfg(
 /// 返回的 [`SpellFrameBuf`] 由调用方在 **53 flush 之后**发出：oracle 的 53 优先级 68 < SysMsg 252
 /// （`BaseObject.Message.cs:94` + `Count<=i` 的优先级比较）⇒ `53 → SM_SYSMESSAGE`。
 fn drain_extra_abil_expiries(
-    rec: &mir2_world::TickRecord,
-    world: &mir2_world::World,
+    rec: &mir2_world_bevy::TickRecord,
+    world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
     sessions: &std::collections::HashMap<String, SessionGround>,
     slots: &mut game_svr::healthspell::HealthSpellSlots,
@@ -24351,9 +24375,9 @@ fn drain_extra_abil_expiries(
     for exp in &rec.extra_abil_expiries {
         for ev in &exp.events {
             let text: &[u8] = match ev {
-                mir2_world::ExtraAbilEventKind::Restored(0) =>
+                mir2_world_bevy::ExtraAbilEventKind::Restored(0) =>
                     b"\xb9\xa5\xbb\xf7\xc1\xa6\xbb\xd6\xb8\xb4\xd5\xfd\xb3\xa3\xa1\xa3",
-                mir2_world::ExtraAbilEventKind::TenSecondsBefore(0) =>
+                mir2_world_bevy::ExtraAbilEventKind::TenSecondsBefore(0) =>
                     b"\xb9\xa5\xbb\xf7\xc1\xa6\x31\x30\xc3\xeb\xba\xf3\xbb\xd6\xb8\xb4\xd5\xfd\xb3\xa3\xa1\xa3",
                 // 槽 1..6 在本骨架无写者（`AttPowerUp` 只写槽 0）⇒ 不可达（登记）。
                 _ => &[],
@@ -24384,7 +24408,7 @@ fn drain_extra_abil_expiries(
 /// [`drain_mag_struck_b2`]（`R(1000)` 条件 + MSD + 31/53/656）。该段的 53 属 **P3 消息段**
 /// （`RM_MAGSTRUCK` 的 Operate），不在 G-A 批次内。
 fn drain_b5_self_deliveries(
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     online: &OnlineRegistry,
     displays: &downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
@@ -24406,7 +24430,7 @@ fn drain_b5_self_deliveries(
 /// 事件序 = oracle 的发出序（烈火先 `SysMsg` 后 `+UFIR`）。事件已在 `World::tick` 里按
 /// actor 槽位顺序生成，本函数逐条同步投递到同一网关 mpsc ⇒ 顺序保持。
 fn drain_run_state_expiries(
-    rec: &mir2_world::TickRecord,
+    rec: &mir2_world_bevy::TickRecord,
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     red_f_color: u8,
@@ -24423,7 +24447,7 @@ fn drain_run_state_expiries(
             continue;
         };
         match ev {
-            mir2_world::RunStateExpiry::SpiritsGone => {
+            mir2_world_bevy::RunStateExpiry::SpiritsGone => {
                 let body = smframe::sm_sysmessage(
                     *actor_id,
                     u16::from(red_f_color),
@@ -24435,13 +24459,13 @@ fn drain_run_state_expiries(
                     body,
                 });
             }
-            mir2_world::RunStateExpiry::FireHitSocket => {
+            mir2_world_bevy::RunStateExpiry::FireHitSocket => {
                 let _ = tx.send(SimToGate::SendRaw {
                     socket: entry.socket,
                     payload: b"+UFIR".to_vec(),
                 });
             }
-            mir2_world::RunStateExpiry::TwinHitSocket => {
+            mir2_world_bevy::RunStateExpiry::TwinHitSocket => {
                 let _ = tx.send(SimToGate::SendRaw {
                     socket: entry.socket,
                     payload: b"+UTWN".to_vec(),
@@ -24460,8 +24484,8 @@ fn drain_run_state_expiries(
 fn production_world(
     map_sizes: Vec<(i32, i32)>,
     item_catalog: &mut Vec<mir2_data::StdItem>,
-) -> mir2_world::World {
-    let mut world = mir2_world::World::with_maps(map_sizes);
+) -> mir2_world_bevy::World {
+    let mut world = mir2_world_bevy::World::with_maps(map_sizes);
     world.set_item_catalog(std::mem::take(item_catalog));
     world
 }
@@ -24483,7 +24507,7 @@ fn production_world(
 /// `whitelist.md` 的 T-129。
 #[allow(clippy::too_many_arguments)]
 fn rewrite_enter_position(
-    world: &mir2_world::World,
+    world: &mir2_world_bevy::World,
     rng: &mut mir2_shared::rng::RandomNumber,
     rec: &mut record::PlayerRecord,
     map_name: &str,
@@ -24494,7 +24518,7 @@ fn rewrite_enter_position(
     is_new_human: bool,
     fight3_zone: bool,
     registry: Option<&mir2_envir::MapRegistry>,
-    red_die: &mir2_world::castle::RedDieHome,
+    red_die: &mir2_world_bevy::castle::RedDieHome,
 ) -> (String, usize, i16, i16, bool) {
     let mut hp = rec.data.abil.as_ref().map_or(0, |a| i32::from(a.hp));
     let record_max_hp = rec.data.abil.as_ref().map_or(0, |a| a.max_hp);
@@ -24522,8 +24546,8 @@ fn rewrite_enter_position(
     let (mut x, mut y) = (x, y);
     // 进图两臂（`WorldServer.cs:299-318`）——`HomeMap/HomeX/HomeY` 取**记录**。
     let enter_castle = world.castle_war_area_at(Some(map_id), i32::from(x), i32::from(y));
-    if let Some(reloc) = mir2_world::castle::relocate_on_enter(
-        &mir2_world::castle::EnterRelocateInput {
+    if let Some(reloc) = mir2_world_bevy::castle::relocate_on_enter(
+        &mir2_world_bevy::castle::EnterRelocateInput {
             castle: enter_castle.and_then(|i| world.castles.get(i)),
             map_id,
             x: i32::from(x),
@@ -24547,8 +24571,8 @@ fn rewrite_enter_position(
     let member_castle = world
         .castle_member_at(my_guild_name)
         .and_then(|i| world.castles.get(i));
-    let died = if let Some(reloc) = mir2_world::castle::relocate_on_death(
-        &mir2_world::castle::DeathRelocateInput {
+    let died = if let Some(reloc) = mir2_world_bevy::castle::relocate_on_death(
+        &mir2_world_bevy::castle::DeathRelocateInput {
             member_castle,
             hp,
             pvp_level,
@@ -24976,7 +25000,7 @@ fn sim_loop(
     mut enter_cfg: EnterConfig,
     notice: Vec<u8>,
     colors: MsgColors,
-    party_cfg: mir2_world::PartyConfig,
+    party_cfg: mir2_world_bevy::PartyConfig,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
     shutdown_rx: std::sync::mpsc::Receiver<()>,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
@@ -25041,7 +25065,8 @@ fn sim_loop(
         show_prefix_msg: enter_cfg.line_notice_cfg.show_pre_fix_msg,
         sys_msg_prefix: game_svr::npc::BroadcastCfg::default().sys_msg_prefix,
     };
-    let mut guild_cfg = mir2_world::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
+    let mut guild_cfg =
+        mir2_world_bevy::GuildConfig::from_guild_castle(&enter_cfg.guild_castle_cfg);
     guild_cfg.guild_chief = enter_cfg.string_conf.guild_chief().to_string();
     guild_cfg.guild_member_rank = enter_cfg.string_conf.guild_member_rank().to_string();
     guild_cfg.guild_msg_f_color = enter_cfg.guild_msg_cfg.f_color;
@@ -25063,8 +25088,10 @@ fn sim_loop(
     let mut castle_store: Option<game_svr::castle::CastleStore> = None;
     // 每个在线玩家的 `InGuildWarArea` / `NameColorChanged` / `DiscountForNightTick`
     // （oracle `PlayObject` 会话位；本仓按 actor id 侧挂，生命周期随在线表清理）。
-    let mut castle_war_states: std::collections::HashMap<i32, mir2_world::castle::CastleWarState> =
-        std::collections::HashMap::new();
+    let mut castle_war_states: std::collections::HashMap<
+        i32,
+        mir2_world_bevy::castle::CastleWarState,
+    > = std::collections::HashMap::new();
     // **族 C（卡 `openmir2-gm-family-c-castle`）**：`@开始攻城` 的 `SendBroadCastMsg` 正文
     // （`RM_SYSMESSAGE` 优先级 252）必须在 tick head 把门/墙 216/217 排完之后才扇出
     // （oracle 每个 `PlayObject` 的 MsgQueue 按优先级升序）⇒ 先压这里，稍后并入
@@ -25095,7 +25122,7 @@ fn sim_loop(
         enter_cfg.kill_by_monst_drop_use_item,
     );
     // **P3-B5**：22/36 的配置项（安全区门 + 两对 `SysMsg` 颜色）。
-    world.set_b5_config(mir2_world::magic_effect::B5Config {
+    world.set_b5_config(mir2_world_bevy::magic_effect::B5Config {
         disable_in_safe_zone_fire_cross: enter_cfg.disable_in_safe_zone_fire_cross,
         red_msg_f_color: enter_cfg.red_msg_f_color,
         red_msg_b_color: enter_cfg.red_msg_b_color,
@@ -25180,15 +25207,15 @@ fn sim_loop(
         );
         // **L1 TransMap**：把注册表解析出的地图连接点灌进各图格子（oracle `Maps.LoadMapInfo`
         // 加载即 `MapManager.AddMapRoute` 落格）。无注册表 ⇒ 无 route，行为一字不变。
-        let specs: Vec<mir2_world::map::MapRouteSpec> = reg
+        let specs: Vec<mir2_world_bevy::map::MapRouteSpec> = reg
             .routes()
             .iter()
-            .map(|r| mir2_world::map::MapRouteSpec {
+            .map(|r| mir2_world_bevy::map::MapRouteSpec {
                 map_id: r.src_map_id,
                 x: r.src_x,
                 y: r.src_y,
                 route_id: r.route_id,
-                hop: mir2_world::map::RouteHop {
+                hop: mir2_world_bevy::map::RouteHop {
                     dst_map_id: r.dst_map_id,
                     dst_x: r.dst_x,
                     dst_y: r.dst_y,
@@ -25429,7 +25456,7 @@ fn sim_loop(
                     // （`GameApp.cs:246`）。墙钟只在**宿主**注入（P1 的 `*_text` 只存不格式化）。
                     let local = chrono::Local::now();
                     let wall_clock = local.format("%Y-%m-%d %H:%M:%S").to_string();
-                    let now_date = mir2_world::castle::CastleDate::new(
+                    let now_date = mir2_world_bevy::castle::CastleDate::new(
                         chrono::Datelike::year(&local),
                         chrono::Datelike::month(&local),
                         chrono::Datelike::day(&local),
@@ -25889,7 +25916,7 @@ fn sim_loop(
     glog!(
         "INF",
         "sim 线程就绪：tick={}ms，地图 {} 张（{}）",
-        mir2_world::TICK_INTERVAL_MS,
+        mir2_world_bevy::TICK_INTERVAL_MS,
         world.maps.len(),
         if registry.is_some() {
             "Envir 真地图"
@@ -25898,7 +25925,7 @@ fn sim_loop(
         }
     );
     let tick = std::time::Duration::from_millis(
-        u64::try_from(mir2_world::TICK_INTERVAL_MS).unwrap_or(200),
+        u64::try_from(mir2_world_bevy::TICK_INTERVAL_MS).unwrap_or(200),
     );
     let mut ticks: u64 = 0;
     // **T10b · 宿主段计时**（默认关闭；`MIR2_TICK_PROFILE=1` 开启）。关闭态每段边界只多一次
@@ -27076,7 +27103,7 @@ fn sim_loop(
                                 "INF",
                                 "断线清世界 ChrName:{chr_name} socket={socket} index={index}（FrontEngine.DeleteHuman + WorldEngine 摘除）"
                             ),
-                            Err(mir2_world::SessionError::NotInWorld) => glog!(
+                            Err(mir2_world_bevy::SessionError::NotInWorld) => glog!(
                                 "DBG",
                                 "sim: index={index} ChrName={chr_name} 关闭但未在世界（无需摘除）"
                             ),
@@ -27281,7 +27308,7 @@ fn sim_loop(
                                     let in_save = engine.in_save_rcd_list(&head.chr_name);
                                     let in_world = matches!(
                                         world.session(&head.chr_name).map(|s| s.stage),
-                                        Some(mir2_world::WorldStage::InWorld)
+                                        Some(mir2_world_bevy::WorldStage::InWorld)
                                     );
                                     // **oracle `WorldServer.cs:234` 的 `new PlayObject()`（5 抽）**
                                     // （卡 `openmir2-player-ctor-rng-order`）：位置必须早于
@@ -28453,7 +28480,7 @@ fn sim_loop(
                                             // oracle `WorldServer.cs:503` 的准入判据：
                                             // `AlreadyInWorld` 在加了上面的预检后基本不可达（`in_world` 已挡在前面）；
                                             // 保留为安全网：`enter_map` 报此错 ⇒ 旧必在世界 ⇒ `kick_old = true`。
-                                            Err(mir2_world::SessionError::AlreadyInWorld) => {
+                                            Err(mir2_world_bevy::SessionError::AlreadyInWorld) => {
                                                 handle_duplicate_enter(
                                                     &gates,
                                                     &mut kick_pending,
@@ -28641,7 +28668,7 @@ fn sim_loop(
         let online_play_objects = world
             .entities
             .iter_ref()
-            .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY)
+            .filter(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)
             .count() as i32;
         ids_online.store(online_play_objects, std::sync::atomic::Ordering::SeqCst);
         // `SystemProcessor.ShowOnline`（`:54-68`，10s 分支在 `:63-67`）：严格 `>`，
@@ -28720,8 +28747,8 @@ fn sim_loop(
             std::mem::take(&mut pending_gm_castle_broadcasts);
         if castle_due.run {
             let local = chrono::Local::now();
-            let now = mir2_world::castle::CastleNow::new(
-                mir2_world::castle::CastleDate::new(
+            let now = mir2_world_bevy::castle::CastleNow::new(
+                mir2_world_bevy::castle::CastleDate::new(
                     chrono::Datelike::year(&local),
                     chrono::Datelike::month(&local),
                     chrono::Datelike::day(&local),
@@ -28752,8 +28779,8 @@ fn sim_loop(
                 for ev in castle_events {
                     match ev {
                         // 门/墙的通行掩码：按序落到**该城**的地图格子（`Envir.SetMapXyFlag`）。
-                        mir2_world::castle::CastleEvent::Structure(
-                            mir2_world::castle::StructureEvent::SetMapXyFlag { x, y, walk },
+                        mir2_world_bevy::castle::CastleEvent::Structure(
+                            mir2_world_bevy::castle::StructureEvent::SetMapXyFlag { x, y, walk },
                         ) => {
                             if let Some(id) = castle_map_id.filter(|id| *id < world.maps.len()) {
                                 if let Some(grid) = world.maps.get_mut(id) {
@@ -28764,7 +28791,7 @@ fn sim_loop(
                         // **A-22 P3**：`UserCastle.Run` 的 `SaveAttackSabukWall()`（`UserCastle.cs:367`）
                         // 立刻写 `Castle/<config_dir>/AttackSabukWall.txt`（运行期 `ConfigDir`；
                         // 读侧仍是 ctor 路径，设计 §1.6）。单服部署 `UnderWar=false` 时不可达。
-                        mir2_world::castle::CastleEvent::SaveAttackSabukWall => {
+                        mir2_world_bevy::castle::CastleEvent::SaveAttackSabukWall => {
                             if let Some(store) = castle_store.as_ref() {
                                 if let Err(e) = store.save_attack(&world.castles[idx]) {
                                     glog!("ERR", "城堡 {} 写申请表失败：{e}", idx);
@@ -28774,27 +28801,29 @@ fn sim_loop(
                         // **T-127**：`CastleEvent::Broadcast` ⇒ `SendBroadCastMsgExt`
                         // （`UserCastle.cs:370/414/556/594`）⇒ 每个 `!Ghost` 在线玩家一条
                         // `SM_SYSMESSAGE(100)`；跨城先收集，`Run` 全部跑完后统一排水（见块尾）。
-                        mir2_world::castle::CastleEvent::Broadcast(msg) => broadcasts.push(msg),
+                        mir2_world_bevy::castle::CastleEvent::Broadcast(msg) => {
+                            broadcasts.push(msg)
+                        }
                         // **T-127**：`CastleEvent::ServerGroupMsg` ⇒ `SendServerGroupMsg`
                         // （`WorldServer.cs:885-893`）：`ServerIndex==0` 走 `PlanesServer.SendServerSocket`、
                         // 否则 `PlanesClient.SendSocket`——两条都是**跨服 planes 通道**，客户端不可见；
                         // 本仓单服无 planes 对端 ⇒ 与 `SS_205` 同口径只记日志（`guild_official.rs` 先例）。
-                        mir2_world::castle::CastleEvent::ServerGroupMsg { code, text } => {
+                        mir2_world_bevy::castle::CastleEvent::ServerGroupMsg { code, text } => {
                             glog!("INF", "SS_{code}（单服无接收端）: {text}");
                         }
                         // **T-127**：`StartWallconquestWar` 的 `RefShowName`（`UserCastle.cs:564-575`）。
                         // 目标解析要读在线表/展示表/会话态 ⇒ 同样延后到城堡循环之后（见块尾）。
-                        mir2_world::castle::CastleEvent::RefreshShowName { x, y, range } => {
+                        mir2_world_bevy::castle::CastleEvent::RefreshShowName { x, y, range } => {
                             show_name_requests.push((idx, x, y, range));
                         }
                         // **T-127**：门/墙的 `SendRefMsg(RM_DIGUP/RM_DIGDOWN/…)`
                         // （`CastleDoor.cs:44-76`；`MainDoorControl(true)` 的关主门）⇒ 重新入队成
                         // `MonsterRefMsg`，与门/墙 `Run` 共用 `drain_monster_ref_msgs` 的逐 ident 口径。
-                        mir2_world::castle::CastleEvent::Structure(ref ev) => {
+                        mir2_world_bevy::castle::CastleEvent::Structure(ref ev) => {
                             let _ = game_svr::castle::queue_structure_ref_msg(&mut world, idx, ev);
                         }
                         // `Initialize` 才产的事件（`RegenMonsterByName`）；`Run` 不会发 ⇒ 零动作。
-                        mir2_world::castle::CastleEvent::SpawnDefenseUnit(_) => {}
+                        mir2_world_bevy::castle::CastleEvent::SpawnDefenseUnit(_) => {}
                     }
                 }
             }
@@ -28848,7 +28877,7 @@ fn sim_loop(
                     world
                         .entities
                         .iter_ref()
-                        .filter(|e| e.race == mir2_world::ACTOR_RACE_PLAY)
+                        .filter(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY)
                         .count(),
                 )
                 .unwrap_or(i32::MAX);
@@ -28898,11 +28927,11 @@ fn sim_loop(
             let online_ids: std::collections::HashSet<i32> =
                 online.iter().map(|e| e.actor_id).collect();
             castle_war_states.retain(|id, _| online_ids.contains(id));
-            let players: Vec<mir2_world::castle::CastleWarPlayer> = online
+            let players: Vec<mir2_world_bevy::castle::CastleWarPlayer> = online
                 .iter()
                 .filter_map(|e| {
                     let ent = world.entities.get(e.actor_id)?;
-                    Some(mir2_world::castle::CastleWarPlayer {
+                    Some(mir2_world_bevy::castle::CastleWarPlayer {
                         actor_id: e.actor_id,
                         map_id: ent.map_id,
                         x: ent.x,
@@ -28913,7 +28942,7 @@ fn sim_loop(
                     })
                 })
                 .collect();
-            let events = mir2_world::castle::castle_war_tick(
+            let events = mir2_world_bevy::castle::castle_war_tick(
                 &world.castles,
                 &players,
                 &mut castle_war_states,
@@ -28921,7 +28950,7 @@ fn sim_loop(
             );
             for ev in events {
                 match ev {
-                    mir2_world::castle::CastleWarEvent::AreaState {
+                    mir2_world_bevy::castle::CastleWarEvent::AreaState {
                         actor_id,
                         in_guild_war_area,
                     } => {
@@ -28947,7 +28976,7 @@ fn sim_loop(
                     }
                     // `RefShowName` 的逐观察者重发属 AOI 侧（`GetChrColor` 按观察者语义），
                     // 本片只产事件，接线登记 T-128。
-                    mir2_world::castle::CastleWarEvent::ShowName { .. } => {}
+                    mir2_world_bevy::castle::CastleWarEvent::ShowName { .. } => {}
                 }
             }
         }
@@ -30183,7 +30212,9 @@ mod tests {
     /// `(now - SearchTick) > SearchTime(=1000)` 节流（`WorldServer.cs:663`、
     /// `PlayObject.cs:900` 常量覆盖），世界 200ms tick ⇒ 每 6 tick（1200ms）扫一次。
     /// 依赖「tick 一次就看见」的用例一律改用本函数。
-    fn tick_until_next_player_scan(world: &mut mir2_world::World) -> mir2_world::TickRecord {
+    fn tick_until_next_player_scan(
+        world: &mut mir2_world_bevy::World,
+    ) -> mir2_world_bevy::TickRecord {
         let mut guard = 0;
         loop {
             guard += 1;
@@ -30196,7 +30227,7 @@ mod tests {
             let scanned = world
                 .entities
                 .iter_ref()
-                .any(|e| e.race == mir2_world::ACTOR_RACE_PLAY && e.ai.search_tick == now);
+                .any(|e| e.race == mir2_world_bevy::ACTOR_RACE_PLAY && e.ai.search_tick == now);
             if scanned {
                 return rec;
             }
@@ -30223,11 +30254,11 @@ mod tests {
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             run_state_expiries: vec![
-                (7, mir2_world::RunStateExpiry::SpiritsGone),
-                (7, mir2_world::RunStateExpiry::FireHitSocket),
-                (7, mir2_world::RunStateExpiry::TwinHitSocket),
+                (7, mir2_world_bevy::RunStateExpiry::SpiritsGone),
+                (7, mir2_world_bevy::RunStateExpiry::FireHitSocket),
+                (7, mir2_world_bevy::RunStateExpiry::TwinHitSocket),
             ],
             ..Default::default()
         };
@@ -30312,7 +30343,7 @@ mod tests {
     /// ⇒ 本用例必红。修复前的真机形态 = 全部默认 0（本用例开头的断言锁死它）。
     #[test]
     fn apply_ability_to_entity_loads_wabil_and_sub() {
-        let mut e = mir2_world::EntitySpawn::new(0, "k2", 17, 20);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "k2", 17, 20);
         // 进世界前的空实体默认值（＝修复前真机形态：dc/ac/hit_point/speed_point=0）。
         assert_eq!((e.dc, e.ac, e.hit_point, e.speed_point), (0, 0, 0, 0));
         let wabil = game_svr::ability::Ability {
@@ -30378,15 +30409,15 @@ mod tests {
     /// 红检：删掉 `front_target` 的 `!t.death` ⇒ 死亡后 `None` 断言必红；删 `!t.ghost` ⇒ 幽灵断言必红。
     #[test]
     fn front_target_dir2_finds_victim_and_excludes_ghost_or_dead() {
-        let mut world = mir2_world::World::new(30, 33);
+        let mut world = mir2_world_bevy::World::new(30, 33);
         let atk = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "atk", 17, 20);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "atk", 17, 20);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let vic = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(2, "vic", 18, 20);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(2, "vic", 18, 20);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.hp = 19;
             e.max_hp = 19;
             e
@@ -30432,8 +30463,8 @@ mod tests {
     #[test]
     fn drain_buff_downlink_emits_charstatuschanged_and_healthspellchanged() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
-        let hero = world.add_entity(mir2_world::EntitySpawn::new(1, "hero", 10, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10));
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             hero,
@@ -30459,7 +30490,7 @@ mod tests {
 
         // 造一条 tick 记录：一个状态变化（CharStatus = 0x8000_0002）+ 一次毒伤（HP 90 / MP 85）。
         let status: i32 = 0x8000_0002u32 as i32;
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         rec.buff_status_changes.push((hero, status));
         rec.buff_health_changes.push((hero, 90, 85));
 
@@ -30533,8 +30564,8 @@ mod tests {
     #[test]
     fn drain_buff_downlink_emits_ability_then_657_then_sysmsg() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
-        let hero = world.add_entity(mir2_world::EntitySpawn::new(1, "hero", 10, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10));
         let mut displays = downlink::DisplayTable::new();
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         ground_sessions.insert("hero".into(), test_session_ground(hero));
@@ -30555,10 +30586,12 @@ mod tests {
         gates.insert(0, tx0);
 
         let status: i32 = 0x8000_0002u32 as i32;
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         rec.buff_recalcs.push(hero);
-        rec.buff_sysmsgs
-            .push((hero, mir2_world::buff::BuffSysMsg::DefensePowerRecovered));
+        rec.buff_sysmsgs.push((
+            hero,
+            mir2_world_bevy::buff::BuffSysMsg::DefensePowerRecovered,
+        ));
         rec.buff_status_changes.push((hero, status));
 
         let catalog = game_svr::ability::StdItemCatalog::new();
@@ -30632,8 +30665,8 @@ mod tests {
     #[test]
     fn drain_buff_downlink_sysmsg_ten_sec_and_empty_rec_is_silent() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
-        let hero = world.add_entity(mir2_world::EntitySpawn::new(1, "hero", 10, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10));
         let mut displays = downlink::DisplayTable::new();
         let mut ground_sessions: HashMap<String, SessionGround> = HashMap::new();
         ground_sessions.insert("hero".into(), test_session_ground(hero));
@@ -30655,9 +30688,11 @@ mod tests {
         let catalog = game_svr::ability::StdItemCatalog::new();
 
         // ① 预告格：只有 100，无 52（recalcs 空）。
-        let mut rec = mir2_world::TickRecord::default();
-        rec.buff_sysmsgs
-            .push((hero, mir2_world::buff::BuffSysMsg::MagicDefensePower10Sec));
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.buff_sysmsgs.push((
+            hero,
+            mir2_world_bevy::buff::BuffSysMsg::MagicDefensePower10Sec,
+        ));
         drain_buff_downlink(
             &rec,
             &world,
@@ -30687,7 +30722,7 @@ mod tests {
         );
 
         // ② 空 rec ⇒ 零帧（不得变成每 tick 噪声源）。
-        let rec = mir2_world::TickRecord::default();
+        let rec = mir2_world_bevy::TickRecord::default();
         drain_buff_downlink(
             &rec,
             &world,
@@ -30720,9 +30755,9 @@ mod tests {
     fn monster_show_hp_mag_struck_broadcasts_53_to_observer() {
         use mir2_protocol::frame::CommandMessage;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let obs = world.add_entity(new_player_entity("p".to_string(), 10, 11));
-        let mut mon = mir2_world::EntitySpawn::new(0, "怪".to_string(), 10, 10);
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "怪".to_string(), 10, 10);
         mon.race = 80;
         mon.hp = 100;
         mon.max_hp = 100;
@@ -30749,7 +30784,7 @@ mod tests {
         // `RM_MAGSTRUCK` 已到点（`deliver_self_delay_msgs` 的产物）：直接入队，驱动交付段。
         world
             .pending_mag_struck
-            .push(mir2_world::world::PendingMagStruck {
+            .push(mir2_world_bevy::world::PendingMagStruck {
                 target_id: mon_id,
                 caster_id: obs,
                 power: 10,
@@ -30788,7 +30823,7 @@ mod tests {
         world.entities.get_mut(mon_id).unwrap().buff.show_hp = false;
         world
             .pending_mag_struck
-            .push(mir2_world::world::PendingMagStruck {
+            .push(mir2_world_bevy::world::PendingMagStruck {
                 target_id: mon_id,
                 caster_id: obs,
                 power: 10,
@@ -30813,9 +30848,9 @@ mod tests {
     fn drain_show_hp_health_changes_broadcasts_exact_53_bytes() {
         use mir2_protocol::frame::CommandMessage;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let obs = world.add_entity(new_player_entity("p".to_string(), 10, 12));
-        let mut mon = mir2_world::EntitySpawn::new(0, "怪".to_string(), 10, 10);
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "怪".to_string(), 10, 10);
         mon.race = 80;
         mon.hp = 42;
         mon.max_hp = 100;
@@ -30835,7 +30870,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         rec.show_hp_health_changes.push((mon_id, 42, 7));
         drain_show_hp_health_changes(&rec, &world, &online, &gates, 12);
 
@@ -30885,9 +30920,9 @@ mod tests {
     fn monster_buff_dot_show_hp_broadcasts_53() {
         use mir2_protocol::frame::CommandMessage;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let obs = world.add_entity(new_player_entity("p".to_string(), 11, 11));
-        let mut mon = mir2_world::EntitySpawn::new(0, "怪".to_string(), 10, 10);
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "怪".to_string(), 10, 10);
         mon.race = 80;
         mon.hp = 30;
         mon.max_hp = 100;
@@ -30909,7 +30944,7 @@ mod tests {
         let mut displays = downlink::DisplayTable::new();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
 
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         rec.buff_health_changes.push((mon_id, 30, 5));
         drain_buff_downlink(
             &rec,
@@ -30959,10 +30994,14 @@ mod tests {
     #[test]
     fn drain_stamina_super_man_refill_keeps_entity_hp_and_emits_no_53() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.open_session("hero");
         let hid = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .expect("hero 进世界");
         let now = world.clock_ms;
         {
@@ -31039,14 +31078,14 @@ mod tests {
     #[test]
     fn broadcast_healthspellchanged_boundary_dx12_in_dx13_out_cross_map_out() {
         use mir2_protocol::frame::CommandMessage;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40), (40, 40)]);
-        let mut mon = mir2_world::EntitySpawn::new(0, "怪".to_string(), 10, 10);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40), (40, 40)]);
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "怪".to_string(), 10, 10);
         mon.race = 80;
         mon.show_hp = true;
         let mon_id = world.add_entity(mon);
         let mut mk = |name: &str, x: i32, y: i32, map_id: usize, socket: i32| {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.map_id = map_id;
             let id = world.add_entity(e);
             (id, socket)
@@ -31097,13 +31136,13 @@ mod tests {
     #[test]
     fn broadcast_healthspellchanged_hidden_play_source_gets_degraded_self_copy() {
         use mir2_protocol::frame::CommandMessage;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
-        let mut play = mir2_world::EntitySpawn::new(0, "hero".to_string(), 10, 10);
-        play.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
+        let mut play = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 10, 10);
+        play.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         play.ob_mode = true; // 隐身（GM @ObMode；FixedHideMode 同口径）
         let src = world.add_entity(play);
-        let mut obs = mir2_world::EntitySpawn::new(0, "p".to_string(), 12, 10); // dx=2 ∈ ±12
-        obs.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut obs = mir2_world_bevy::EntitySpawn::new(0, "p".to_string(), 12, 10); // dx=2 ∈ ±12
+        obs.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let obs_id = world.add_entity(obs);
         let online: OnlineRegistry = vec![
             OnlineEntry {
@@ -31156,13 +31195,13 @@ mod tests {
 
     #[test]
     fn deal_try_target_distinguishes_absent_from_non_player() {
-        use mir2_world::{ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+        use mir2_world_bevy::{ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 
         // `front = Some((race, peer_dir))`：在前方格 (11,10) 放一个该 race/朝向的实体。
         // hero 在 (10,10) 且 dir=2（Right）⇒ 前方格 = (11,10)。
         let probe = |front: Option<(u8, u8)>| -> (Option<i32>, game_svr::trade::DealTryTarget) {
-            let mut world = mir2_world::World::new(32, 32);
-            let hero = world.add_entity(mir2_world::EntitySpawn::new(1, "hero", 10, 10));
+            let mut world = mir2_world_bevy::World::new(32, 32);
+            let hero = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10));
             world.entities.get_mut(hero).unwrap().ai.dir = 2;
             let mut displays = downlink::DisplayTable::new();
             displays.set(
@@ -31171,7 +31210,7 @@ mod tests {
             );
             if let Some((race, peer_dir)) = front {
                 let fid = world.add_entity({
-                    let mut e = mir2_world::EntitySpawn::new(2, "front", 11, 10);
+                    let mut e = mir2_world_bevy::EntitySpawn::new(2, "front", 11, 10);
                     e.race = race;
                     e
                 });
@@ -31231,11 +31270,11 @@ mod tests {
     fn deal_cm_try_no_front_object_emits_no_frame_on_production_path() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.clock_ms = 100_000;
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         // dir=2（Right）⇒ 前方格 = (11,10)；实体是权威，展示表只是投影。
@@ -31300,8 +31339,8 @@ mod tests {
 
         // ② 非空转对照：前方格放一只怪（非玩家）⇒ `:958-960` else ⇒ `SM_DEALTRY_FAIL`。
         world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(2, "mon", 11, 10);
-            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            let mut e = mir2_world_bevy::EntitySpawn::new(2, "mon", 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             e
         });
         handle_deal_cmd(
@@ -31356,11 +31395,11 @@ mod tests {
 
         // 返回 (本角色 socket 收到的 ident 列表, drain 后 dealing, drain 后 deal_creature)。
         let run = |case: Case| -> (Vec<u16>, bool, Option<i32>) {
-            let mut world = mir2_world::World::new(32, 32);
+            let mut world = mir2_world_bevy::World::new(32, 32);
             world.clock_ms = 100_000;
             let hero = world.add_entity({
-                let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-                e.race = mir2_world::ACTOR_RACE_PLAY;
+                let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
                 e
             });
             world.entities.get_mut(hero).unwrap().ai.dir = 2;
@@ -31378,8 +31417,8 @@ mod tests {
                 Case::StaleOther => Some(9999),
                 Case::Alive => {
                     let front = world.add_entity({
-                        let mut e = mir2_world::EntitySpawn::new(2, "front", 11, 10);
-                        e.race = mir2_world::ACTOR_RACE_PLAY;
+                        let mut e = mir2_world_bevy::EntitySpawn::new(2, "front", 11, 10);
+                        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
                         e
                     });
                     displays.set(
@@ -31479,7 +31518,7 @@ mod tests {
     /// （未扫描也发 654）。
     #[test]
     fn drain_login_tail_waits_for_first_scan_and_clears_buffer() {
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.open_session("p");
         let id = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -31538,7 +31577,7 @@ mod tests {
     /// 下一次同名登录）。
     #[test]
     fn drain_login_tail_drops_pending_when_session_not_online() {
-        let world = mir2_world::World::new(32, 32);
+        let world = mir2_world_bevy::World::new(32, 32);
         let online: OnlineRegistry = Vec::new();
         let (_tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
@@ -31897,7 +31936,7 @@ mod tests {
     /// 打乱 ⇒ 本用例必 FAILED。
     #[test]
     fn party_cm_dispatch_emits_oracle_frames_on_both_connections() {
-        use mir2_world::PartyConfig;
+        use mir2_world_bevy::PartyConfig;
         use std::collections::HashMap;
 
         // 收 **(socket, body)**：oracle 的 `MsgQueue` 是**每人一条**，跨收件人的相对序不可观测
@@ -31923,9 +31962,9 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(32, 32);
-        let l = world.add_entity(mir2_world::EntitySpawn::new(1, "L", 10, 10));
-        let t = world.add_entity(mir2_world::EntitySpawn::new(2, "T", 11, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
+        let t = world.add_entity(mir2_world_bevy::EntitySpawn::new(2, "T", 11, 10));
 
         let online: OnlineRegistry = vec![
             OnlineEntry {
@@ -32116,7 +32155,7 @@ mod tests {
     /// 既有 659(1) 断言、`party_vectors::group_mode_*` 同时红。
     #[test]
     fn party_cm_groupmode_close_replies_659_zero() {
-        use mir2_world::PartyConfig;
+        use mir2_world_bevy::PartyConfig;
         use std::collections::HashMap;
 
         fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<Vec<u8>> {
@@ -32134,8 +32173,8 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(32, 32);
-        let p = world.add_entity(mir2_world::EntitySpawn::new(3, "P", 12, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let p = world.add_entity(mir2_world_bevy::EntitySpawn::new(3, "P", 12, 10));
         let online: OnlineRegistry = vec![OnlineEntry {
             account: "c".into(),
             chr_name: "P".into(),
@@ -32189,7 +32228,7 @@ mod tests {
     #[test]
     fn party_gotolabel_runs_qfunction_script_at_queued_position() {
         use mir2_script::{SayingProcedure, SayingRecord, ScriptInfo};
-        use mir2_world::PartyConfig;
+        use mir2_world_bevy::PartyConfig;
         use std::collections::HashMap;
 
         fn ident(body: &[u8]) -> u16 {
@@ -32243,9 +32282,9 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(32, 32);
-        let l = world.add_entity(mir2_world::EntitySpawn::new(1, "L", 10, 10));
-        let t = world.add_entity(mir2_world::EntitySpawn::new(2, "T", 11, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
+        let t = world.add_entity(mir2_world_bevy::EntitySpawn::new(2, "T", 11, 10));
         world.entities.get_mut(t).unwrap().group.allow_group = true;
         let online: OnlineRegistry = vec![
             OnlineEntry {
@@ -32370,7 +32409,7 @@ mod tests {
     /// 红检：把 `settle_deaths` 里的 `party_del_member` 调用删掉 ⇒ 本用例必 FAILED（无帧 + owner 不清）。
     #[test]
     fn die_triggers_del_member_frames_on_production_path() {
-        use mir2_world::PartyConfig;
+        use mir2_world_bevy::PartyConfig;
         use std::collections::HashMap;
 
         fn drain(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> Vec<(i32, Vec<u8>)> {
@@ -32391,9 +32430,9 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(32, 32);
-        let l = world.add_entity(mir2_world::EntitySpawn::new(1, "L", 10, 10));
-        let t = world.add_entity(mir2_world::EntitySpawn::new(2, "T", 11, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
+        let t = world.add_entity(mir2_world_bevy::EntitySpawn::new(2, "T", 11, 10));
         let online: OnlineRegistry = vec![
             OnlineEntry {
                 account: "a".into(),
@@ -32601,14 +32640,14 @@ mod tests {
     fn aoi_show_emits_turn_pair_routed_by_gate() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("a");
         world.open_session("b");
         let a = world
-            .enter_map("a", mir2_world::EntitySpawn::new(0, "a", 10, 10), 0)
+            .enter_map("a", mir2_world_bevy::EntitySpawn::new(0, "a", 10, 10), 0)
             .expect("a 进图");
         let b = world
-            .enter_map("b", mir2_world::EntitySpawn::new(0, "b", 12, 10), 0)
+            .enter_map("b", mir2_world_bevy::EntitySpawn::new(0, "b", 12, 10), 0)
             .expect("b 进图");
         // 推进到玩家的首次 AOI 扫描（`SearchTime=1000` ⇒ 第 6 tick）让彼此标 `Show`。
         let _ = tick_until_next_player_scan(&mut world);
@@ -32699,7 +32738,7 @@ mod tests {
     fn turn_order_login_appearance_frames_follow_heap_dequeue_order() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(400, 400);
+        let mut world = mir2_world_bevy::World::new(400, 400);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 320, 328), 0)
@@ -32714,8 +32753,8 @@ mod tests {
         let mut displays = downlink::DisplayTable::new();
         let mut ids = Vec::new();
         for (name, x, y, dir) in npcs {
-            let mut e = mir2_world::EntitySpawn::new(0, name, x, y);
-            e.race = mir2_world::ACTOR_RACE_NPC;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name, x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_NPC;
             e.ai.dir = dir;
             let id = world.add_entity(e);
             displays.set(
@@ -32732,7 +32771,7 @@ mod tests {
             .expect("玩家实体")
             .visible_actors
             .iter()
-            .filter(|v| v.flag == mir2_world::VisibleFlag::Show && v.target != p)
+            .filter(|v| v.flag == mir2_world_bevy::VisibleFlag::Show && v.target != p)
             .map(|v| v.target)
             .collect();
         assert_eq!(
@@ -32823,7 +32862,7 @@ mod tests {
     /// 把 `npc_display` 的 Feature 写成 0 ⇒ `(param,tag)=(50,8)` 断言红。
     #[test]
     fn fixed_npc_display_frames_through_production_aoi() {
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -32902,9 +32941,9 @@ mod tests {
     /// 牙：删登记 ⇒ 零帧；把 Appr 读成 `Entity.appr`（恒 0）⇒ tag=16 断言红。
     #[test]
     fn merchant_display_frames_through_production_aoi() {
-        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -32990,9 +33029,9 @@ mod tests {
     /// 把受击帧 `Series` 换成 `MakeWord(dir, light)` ⇒ series 断言红。
     #[test]
     fn npc_and_merchant_turn_hit_frames_through_production_drain() {
-        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -33056,7 +33095,7 @@ mod tests {
 
         let (online, gates, mut rx) = aoi_observer_fixture(p);
         // 真机同形：Dir=3/7、Light=2 ⇒ `Series = 0x0203 / 0x0207`。
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             npc_turns: vec![(npc_id, 3)],
             merchant_turns: vec![(mer_id, 7)],
             npc_hits: vec![npc_id],
@@ -33160,9 +33199,9 @@ mod tests {
     /// `crates/world/src/world.rs:1301`）⇒ 可判的只有**帧形状 / 配对 / 次序**，不是「这个窗口有没有抽中」。
     #[test]
     fn npc_random_idle_frames_through_production_drain_run() {
-        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -33212,7 +33251,7 @@ mod tests {
         };
 
         // ① 转身支（`TurnTo`，`Merchant.cs:134` / `GuildOfficial.cs:43`）。
-        let rec_turn = mir2_world::TickRecord {
+        let rec_turn = mir2_world_bevy::TickRecord {
             merchant_turns: vec![(mer_id, 6)],
             ..Default::default()
         };
@@ -33283,7 +33322,7 @@ mod tests {
         );
 
         // ② 受击支（`RM_HIT`，`Merchant.cs:140`）：恰一条 `SM_HIT(14)`，**不补 41**。
-        let rec_hit = mir2_world::TickRecord {
+        let rec_hit = mir2_world_bevy::TickRecord {
             merchant_hits: vec![mer_id],
             ..Default::default()
         };
@@ -33339,9 +33378,9 @@ mod tests {
     /// ② 把补发挪到「进入战中」⇒ ① 多一条、② 归零 ⇒ 红。
     #[test]
     fn castle_merchant_unhide_hit_is_one_sm_hit_with_merchant_coords() {
-        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         // 种子：前两次 `Run` 的 RNG 支都不受击——否则会混入 `RM_HIT` 噪声，①/② 的条数断言失效。
         world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
         world.clock_ms = 100_000;
@@ -33387,7 +33426,7 @@ mod tests {
         world.entities.get_mut(mer_id).unwrap().ai.dir = 5;
         let (online, gates, mut rx) = aoi_observer_fixture(p);
 
-        let set_war = |world: &mut mir2_world::World, war: bool| {
+        let set_war = |world: &mut mir2_world_bevy::World, war: bool| {
             let st = world.entities.merchant_mut(mer_id).expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
             st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
@@ -33398,7 +33437,7 @@ mod tests {
         let enter = world.merchant_tick();
         assert!(enter.hits.is_empty(), "进入战中不得发 RM_HIT");
         assert!(world.entities.get(mer_id).unwrap().fixed_hide_mode);
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             merchant_hits: enter.hits.clone(),
             ..Default::default()
         };
@@ -33410,11 +33449,11 @@ mod tests {
 
         // ② `UnderWar true→false`：恰好一条 `SM_HIT(14)`。
         set_war(&mut world, false);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let leave = world.merchant_tick();
         assert_eq!(leave.hits, vec![mer_id], "解除时恰好一条 RM_HIT");
         assert!(!world.entities.get(mer_id).unwrap().fixed_hide_mode);
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             merchant_hits: leave.hits.clone(),
             ..Default::default()
         };
@@ -33438,7 +33477,7 @@ mod tests {
         // ③ 战中稳态 + RNG 受击：`Merchant.cs:140` 的 `RM_HIT` 在 `FixedHideMode` 下只自送
         //    （`BaseObject.Message.cs:390-394`）⇒ 客户端零帧。
         set_war(&mut world, true);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         assert!(
             world.merchant_tick().hits.is_empty(),
             "重新进入战中：RM_DISAPPEAR 不算 SM_HIT"
@@ -33453,7 +33492,7 @@ mod tests {
             .expect("存在受击种子");
         world.rng = mir2_shared::rng::RandomNumber::with_seed(hit_seed);
         set_war(&mut world, true); // 仅重置 `Run` 门（状态仍为战中）
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let hidden_tick = world.merchant_tick();
         assert!(
             hidden_tick.hits.is_empty(),
@@ -33464,7 +33503,7 @@ mod tests {
             vec![mer_id],
             "受击支确实命中，但只自送"
         );
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             merchant_hits: hidden_tick.hits.clone(),
             ..Default::default()
         };
@@ -33477,7 +33516,7 @@ mod tests {
 
         // ④ 战后解除（可见）：这次转换本身是一条 `SM_HIT`（与 ② 同形，`:155` 先清零再发）。
         set_war(&mut world, false);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let unhide_again = world.merchant_tick();
         assert_eq!(unhide_again.hits, vec![mer_id], "解除支恒为可见帧");
         assert!(!world.entities.get(mer_id).unwrap().fixed_hide_mode);
@@ -33492,10 +33531,10 @@ mod tests {
             .expect("存在安静种子");
         world.rng = mir2_shared::rng::RandomNumber::with_seed(quiet_seed);
         set_war(&mut world, false);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let steady = world.merchant_tick();
         assert!(steady.hits.is_empty(), "战后稳态零帧");
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             merchant_hits: steady.hits.clone(),
             ..Default::default()
         };
@@ -33531,10 +33570,10 @@ mod tests {
     /// 改大或改成「全网关」）⇒ `q` 多收一条 ⇒ 必红。
     #[test]
     fn castle_merchant_disappear_downlink_through_production_drain() {
-        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.clock_ms = 100_000;
         world.open_session("p");
         let p = world
@@ -33588,7 +33627,7 @@ mod tests {
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let catalog = game_svr::ability::StdItemCatalog::new();
 
-        let set_war = |world: &mut mir2_world::World, war: bool| {
+        let set_war = |world: &mut mir2_world_bevy::World, war: bool| {
             let st = world.entities.merchant_mut(mer_id).expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
             st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
@@ -33633,7 +33672,7 @@ mod tests {
             vec![mer_id],
             "排水时刻实体已隐藏 ⇒ 若此刻重算收件人只会得到自己（正是必须快照的理由）"
         );
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             merchant_hits: enter.hits.clone(),
             merchant_disappears: enter.disappears.clone(),
             ..Default::default()
@@ -33673,13 +33712,13 @@ mod tests {
 
         // ② 已置位后再 tick ⇒ `merchant_disappears` 为空 ⇒ 零帧。
         set_war(&mut world, true); // 仅重置 `Run` 门（状态仍为战中）
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let steady = world.merchant_tick();
         assert!(
             steady.disappears.is_empty(),
             "`if (!FixedHideMode)` 守卫 ⇒ 不重复发"
         );
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             merchant_hits: steady.hits.clone(),
             merchant_disappears: steady.disappears.clone(),
             ..Default::default()
@@ -33701,14 +33740,14 @@ mod tests {
 
         // ③ 退出战中 ⇒ 走 `RM_HIT` 支（`:156`）：1 条 `SM_HIT`、**0** 条 `SM_DISAPPEAR`。
         set_war(&mut world, false);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let leave = world.merchant_tick();
         assert!(
             leave.disappears.is_empty(),
             "解除显隐不发 RM_DISAPPEAR（`Merchant.cs:152-157` 只发 RM_HIT）"
         );
         assert_eq!(leave.hits, vec![mer_id], "解除支恒为可见帧");
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             merchant_hits: leave.hits.clone(),
             merchant_disappears: leave.disappears.clone(),
             ..Default::default()
@@ -33749,10 +33788,10 @@ mod tests {
     /// 还原即绿。禁止源码文本判据（本用例走生产排水函数全链路）。
     #[test]
     fn castle_merchant_frame_order_hit_before_disappear_same_tick() {
-        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         // 种子钉死：各次 `Run` 的 RNG 支（`Random(50)==0` ⇒ TURN/HIT 噪声）必须安静，
         // 否则 1+1 条数断言失效——条数断言本身就是噪声探测器（红 = 种子漂移，不是实现坏）。
         world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
@@ -33805,7 +33844,7 @@ mod tests {
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let catalog = game_svr::ability::StdItemCatalog::new();
 
-        let set_war = |world: &mut mir2_world::World, id: i32, war: bool| {
+        let set_war = |world: &mut mir2_world_bevy::World, id: i32, war: bool| {
             let st = world.entities.merchant_mut(id).expect("商人状态在");
             st.castle_under_war = war; // `Castle.UnderWar` 快照
             st.run_tick = -1000; // `Run` 门（`now - RunTick > 250`）
@@ -33831,7 +33870,7 @@ mod tests {
         // tick0：B 先**真实**进入战中（`fixed_hide_mode` 置位）——它的消失帧不入 record、
         // 不排水；下一拍才有「B true→false」可转，且 boot 拍的 RNG 流位置就此钉死。
         set_war(&mut world, b_id, true);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let boot = world.merchant_tick();
         assert!(
             boot.disappears.iter().any(|(id, _)| *id == b_id),
@@ -33845,12 +33884,12 @@ mod tests {
         // **同一拍**：A false→true（DISAPPEAR）＋ B true→false（HIT）。
         set_war(&mut world, a_id, true);
         set_war(&mut world, b_id, false);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let both = world.merchant_tick();
         assert_eq!(both.hits, vec![b_id], "B 退出战中 ⇒ 恰一条 RM_HIT");
         assert_eq!(both.disappears.len(), 1, "恰 A 一个商人进入战中");
         assert_eq!(both.disappears[0].0, a_id, "消失对象 = A 的 ActorId");
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             merchant_hits: both.hits.clone(),
             merchant_disappears: both.disappears.clone(),
             ..Default::default()
@@ -33902,10 +33941,10 @@ mod tests {
     /// 同一世界按相 ph 级推进（每拍只允许一个转态），RNG 噪声由条数断言探掉。
     #[test]
     fn castle_merchant_frame_order_degenerate_cells_count_explicit() {
-        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
         world.clock_ms = 100_000;
         world.open_session("p");
@@ -33954,7 +33993,7 @@ mod tests {
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let catalog = game_svr::ability::StdItemCatalog::new();
 
-        let set_war = |world: &mut mir2_world::World, id: i32, war: bool| {
+        let set_war = |world: &mut mir2_world_bevy::World, id: i32, war: bool| {
             let st = world.entities.merchant_mut(id).expect("商人状态在");
             st.castle_under_war = war;
             st.run_tick = -1000;
@@ -33976,14 +34015,14 @@ mod tests {
                 .map(|(_, b)| b.clone())
                 .collect()
         };
-        let drain_tick = |world: &mut mir2_world::World,
+        let drain_tick = |world: &mut mir2_world_bevy::World,
                           hits: Vec<i32>,
                           disappears: Vec<(i32, Vec<i32>)>,
                           sessions: &mut HashMap<String, SessionGround>,
                           rx: &mut mpsc::UnboundedReceiver<SimToGate>,
                           catalog: &dyn game_svr::ability::ItemCatalog|
          -> Vec<(i32, Vec<u8>)> {
-            let rec = mir2_world::TickRecord {
+            let rec = mir2_world_bevy::TickRecord {
                 merchant_hits: hits,
                 merchant_disappears: disappears,
                 ..Default::default()
@@ -33997,13 +34036,13 @@ mod tests {
 
         // boot：B 真实进入战中（帧不排水）。
         set_war(&mut world, b_id, true);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let boot = world.merchant_tick();
         assert!(boot.disappears.iter().any(|(id, _)| *id == b_id));
 
         // 格①：只 A 转 ⇒ 1 DISAPPEAR / 0 HIT。
         set_war(&mut world, a_id, true);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let c1 = world.merchant_tick();
         assert_eq!(c1.disappears.len(), 1, "格①：恰 A 转");
         assert!(c1.hits.is_empty(), "格①：无 HIT（A 进战不发 RM_HIT）");
@@ -34028,7 +34067,7 @@ mod tests {
 
         // 格②：只 B 转 ⇒ 1 HIT / 0 DISAPPEAR。
         set_war(&mut world, b_id, false);
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let c2 = world.merchant_tick();
         assert_eq!(c2.hits, vec![b_id], "格②：恰 B 退战");
         assert!(c2.disappears.is_empty(), "格②：无 DISAPPEAR");
@@ -34052,7 +34091,7 @@ mod tests {
         );
 
         // 格③：双不转 ⇒ record 空 ⇒ 观察者 0 帧。
-        world.clock_ms += mir2_world::merchant::MERCHANT_PASS_INTERVAL_MS;
+        world.clock_ms += mir2_world_bevy::merchant::MERCHANT_PASS_INTERVAL_MS;
         let c3 = world.merchant_tick();
         assert!(
             c3.hits.is_empty() && c3.disappears.is_empty(),
@@ -34087,9 +34126,9 @@ mod tests {
     /// （同时客户端会收到两条）。
     #[test]
     fn castle_merchant_disappear_is_not_duplicated_by_aoi_branch() {
-        use mir2_world::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
+        use mir2_world_bevy::merchant::{MerchantFlags, MerchantSpawn, MerchantState};
 
-        let mut world = mir2_world::World::new(200, 200);
+        let mut world = mir2_world_bevy::World::new(200, 200);
         world.enable_merchant_tick();
         world.rng = mir2_shared::rng::RandomNumber::with_seed(11);
         world.clock_ms = 100_000;
@@ -34237,7 +34276,7 @@ mod tests {
     fn npc_hit_frames_only_for_world_branch_and_never_to_npc() {
         use mir2_shared::rng::RandomNumber;
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -34316,7 +34355,7 @@ mod tests {
         // `TickRecord::default()` 两列为空是构造事实，不单列断言；要咬的是 drain 的
         // 「按 rec 发帧」契约：空记录**连抽两次**都必须零帧，且通道里始终不得出现任何帧
         // （若 drain 改成按本图固定 NPC 遍历发帧，计数/通道两条断言至少一条红）。
-        let empty = mir2_world::TickRecord::default();
+        let empty = mir2_world_bevy::TickRecord::default();
         for round in 1..=2 {
             assert_eq!(
                 drain_npc_merchant_hits(&empty, &world, &displays, &online, &gates),
@@ -34346,7 +34385,7 @@ mod tests {
         );
         assert!(out.turns.is_empty(), "同一次 Run 转身/命中互斥");
 
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             npc_hits: out.hits.clone(),
             ..Default::default()
         };
@@ -34382,7 +34421,7 @@ mod tests {
     /// 两条路径互不覆盖。
     #[test]
     fn monster_display_path_not_regressed_next_to_npc() {
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -34412,8 +34451,8 @@ mod tests {
         let npc_id = report.placed_npcs[0].actor_id;
 
         // 怪物（既有 `monster_display` 路径）。
-        let mut mon = mir2_world::EntitySpawn::new(0, "稻草人", 9, 10);
-        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "稻草人", 9, 10);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let mon_id = world.add_entity(mon);
         displays.set(
             mon_id,
@@ -34476,7 +34515,7 @@ mod tests {
             e.want_ref_msg,
             "oracle PlayObject 构造器置 WantRefMsg=true（PlayObject.cs:889）"
         );
-        assert_eq!(e.race, mir2_world::ACTOR_RACE_PLAY);
+        assert_eq!(e.race, mir2_world_bevy::ACTOR_RACE_PLAY);
         // oracle `PlayObject.cs:904`：玩家 ViewRange=12（缺省 5 是 `BaseObject.cs:383`）。
         // 红检：删掉 `e.view_range = 12;` ⇒ 缺省 5 ⇒ 本断言必红。
         assert_eq!(
@@ -34491,7 +34530,7 @@ mod tests {
     /// 抽数本身在落点改写之前完成（见 [`login_player_ctor_draws_wired_before_position_rewrite`]）。
     #[test]
     fn new_player_entity_applies_walk_tick_and_random_no() {
-        let mut w = mir2_world::World::with_maps(vec![(8, 8)]);
+        let mut w = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
         w.rng = mir2_shared::rng::RandomNumber::with_seed(4242);
         let d = w.fold_login_player_ctor_draws();
         let e = new_player_entity_with_login_ctor("p".to_string(), 10, 10, &d, 5_000);
@@ -34522,23 +34561,23 @@ mod tests {
     #[test]
     fn login_ctor_draws_only_on_non_duplicate_login() {
         const SEED: i32 = 20261027;
-        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
         world.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
         let d = login_ctor_draws_for(&mut world, false, false)
             .expect("非重复登录必须构造 PlayObject：5 抽");
 
         // ① 账本：login 批、5 条、site/arg = oracle 继承链逐抽对应。
-        assert_eq!(d.ledger.batch, mir2_world::CtorDrawBatch::Login);
-        let sites: Vec<mir2_world::CtorFoldSite> =
+        assert_eq!(d.ledger.batch, mir2_world_bevy::CtorDrawBatch::Login);
+        let sites: Vec<mir2_world_bevy::CtorFoldSite> =
             d.ledger.entries.iter().map(|e| e.site).collect();
         assert_eq!(
             sites,
             vec![
-                mir2_world::CtorFoldSite::PlayerBaseRunTick,
-                mir2_world::CtorFoldSite::PlayerBaseSearchTime,
-                mir2_world::CtorFoldSite::PlayerAnimalAttackTick,
-                mir2_world::CtorFoldSite::PlayerAnimalWalkTick,
-                mir2_world::CtorFoldSite::PlayerRandomNo,
+                mir2_world_bevy::CtorFoldSite::PlayerBaseRunTick,
+                mir2_world_bevy::CtorFoldSite::PlayerBaseSearchTime,
+                mir2_world_bevy::CtorFoldSite::PlayerAnimalAttackTick,
+                mir2_world_bevy::CtorFoldSite::PlayerAnimalWalkTick,
+                mir2_world_bevy::CtorFoldSite::PlayerRandomNo,
             ],
             "登录批 5 抽的 oracle 次序"
         );
@@ -34550,7 +34589,7 @@ mod tests {
 
         // ② 流位核算：同种子孪生世界按同一模数重放 5 抽 ⇒ 返回值逐项相等、下一格相同
         //    （证明恰 5 抽：多抽/少抽/换序都会让下面任一条不等）。
-        let mut twin = mir2_world::World::with_maps(vec![(8, 8)]);
+        let mut twin = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
         twin.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
         assert_eq!(twin.rng.random_below(1500), d.run_tick_delta);
         assert_eq!(twin.rng.random_below(2000) + 2000, d.base_search_time);
@@ -34566,13 +34605,13 @@ mod tests {
 
         // ③ 重复登录（in_save ∨ in_world）⇒ 0 抽：流与「从未抽过」的孪生世界逐格相同。
         for (in_save, in_world) in [(true, false), (false, true), (true, true)] {
-            let mut w = mir2_world::World::with_maps(vec![(8, 8)]);
+            let mut w = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
             w.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
             assert!(
                 login_ctor_draws_for(&mut w, in_save, in_world).is_none(),
                 "重复登录 in_save={in_save} in_world={in_world} 不得构造 PlayObject"
             );
-            let mut fresh = mir2_world::World::with_maps(vec![(8, 8)]);
+            let mut fresh = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
             fresh.rng = mir2_shared::rng::RandomNumber::with_seed(SEED);
             for m in [1500, 2000, 3000, 3000, 999_999, 62] {
                 assert_eq!(
@@ -34650,18 +34689,18 @@ mod tests {
     /// 可见集 ⇒ 本用例必红。
     #[test]
     fn player_aoi_window_covers_view_range_12() {
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
         // Chebyshev 12：oracle 的 25×25 窗口内 ⇒ 必须可见；缺省 5 的窗口 ⇒ 不可见。
-        let mut edge = mir2_world::EntitySpawn::new(0, "edge", 22, 10);
-        edge.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut edge = mir2_world_bevy::EntitySpawn::new(0, "edge", 22, 10);
+        edge.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let edge_id = world.add_entity(edge);
         // Chebyshev 13：连 oracle 的 25×25 都出界 ⇒ 必须不可见（钉住窗口上界，不是越大越好）。
-        let mut out = mir2_world::EntitySpawn::new(0, "out", 23, 10);
-        out.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut out = mir2_world_bevy::EntitySpawn::new(0, "out", 23, 10);
+        out.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let out_id = world.add_entity(out);
         let _ = tick_until_next_player_scan(&mut world);
 
@@ -34671,7 +34710,7 @@ mod tests {
             .unwrap()
             .visible_actors
             .iter()
-            .filter(|v| v.flag == mir2_world::VisibleFlag::Show)
+            .filter(|v| v.flag == mir2_world_bevy::VisibleFlag::Show)
             .map(|v| v.target)
             .collect();
         assert!(
@@ -34695,18 +34734,18 @@ mod tests {
     fn aoi_show_emits_monster_turn_pair_with_world_dir() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
-            .enter_map("p", mir2_world::EntitySpawn::new(0, "p", 10, 10), 0)
+            .enter_map("p", mir2_world_bevy::EntitySpawn::new(0, "p", 10, 10), 0)
             .expect("玩家进图");
         // oracle `PlayObject` 构造器置 `WantRefMsg = true`（`PlayObject.cs:889`）——玩家靠它
         // 才能把怪物纳入可见集（AOI 可见过滤，`BaseObject.ViewRange.cs:112`）。
         world.entities.get_mut(p).unwrap().flags.want_ref_msg = true;
         // 怪物以 `add_entity` 入队 `Command::Enter`（tick 时上格）；登记展示时 dir=2，
         // 随后 AI 把世界朝向改成 5 —— 出现帧必须取世界值。
-        let mut mon = mir2_world::EntitySpawn::new(0, "稻草人2", 12, 10);
-        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "稻草人2", 12, 10);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let mon_id = world.add_entity(mon);
         let _ = tick_until_next_player_scan(&mut world);
 
@@ -34768,18 +34807,18 @@ mod tests {
     /// 红检：把 `same_map`/`nearest` 的 `o.id == actor_id` 自身排除删掉、或把 `map_id` 比较写反 ⇒ 必红。
     #[test]
     fn world_aoi_diag_reports_visible_and_nearest() {
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
-            .enter_map("p", mir2_world::EntitySpawn::new(0, "p", 10, 10), 0)
+            .enter_map("p", mir2_world_bevy::EntitySpawn::new(0, "p", 10, 10), 0)
             .expect("玩家进图");
         // 玩家靠 `WantRefMsg=true` 才能把怪物纳入可见集（`BaseObject.ViewRange.cs:112`）。
         world.entities.get_mut(p).unwrap().flags.want_ref_msg = true;
-        let mut near = mir2_world::EntitySpawn::new(0, "near", 12, 10);
-        near.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut near = mir2_world_bevy::EntitySpawn::new(0, "near", 12, 10);
+        near.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let near_id = world.add_entity(near);
-        let mut far = mir2_world::EntitySpawn::new(0, "far", 30, 30);
-        far.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut far = mir2_world_bevy::EntitySpawn::new(0, "far", 30, 30);
+        far.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let far_id = world.add_entity(far);
         let _ = tick_until_next_player_scan(&mut world);
 
@@ -34818,14 +34857,14 @@ mod tests {
     fn world_aoi_diag_vis_is_current_view_not_new_appearances() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
         // 怪物以 `add_entity` 入队 `Command::Enter`（tick 时上格），Chebyshev 2 ≤ ViewRange(12)。
-        let mut mon = mir2_world::EntitySpawn::new(0, "稻草人", 12, 10);
-        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "稻草人", 12, 10);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let mon_id = world.add_entity(mon);
 
         let mut displays = downlink::DisplayTable::new();
@@ -34913,7 +34952,7 @@ mod tests {
     /// （oracle `PlayObject.Run()` 的 `VisibleFlag.Hidden` 支，`PlayObject.cs:3214-3222`）。
     ///
     /// 口子：观察者 `a` 与 `b` 互相可见；把 `b` 挪到视野外（Chebyshev > 12）⇒ 下一 tick `a` 的 AOI
-    /// 刷新把 `b` 以 `Hidden` 移除（世界侧 [`mir2_world::aoi::search_view_range`] 返回它、
+    /// 刷新把 `b` 以 `Hidden` 移除（世界侧 [`mir2_world_bevy::aoi::search_view_range`] 返回它、
     /// `TickRecord::hides` 记 `(a, b)`）⇒ [`drain_aoi_disappear`] 给 `a` 发 `SM_DISAPPEAR(30)`
     /// （`Recog = b`、`Param/Tag/Series = 0`、**无尾**、只发观察者 `a` 自己）。
     ///
@@ -34927,7 +34966,7 @@ mod tests {
     fn aoi_disappear_frame_sent_when_target_leaves_view() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(200, 200);
+        let mut world = mir2_world_bevy::World::new(200, 200);
         world.open_session("a");
         let a = world
             .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
@@ -35011,7 +35050,7 @@ mod tests {
     /// ⇒ 本用必红。
     #[test]
     fn aoi_disappear_skips_ghost_targets() {
-        let mut world = mir2_world::World::new(200, 200);
+        let mut world = mir2_world_bevy::World::new(200, 200);
         world.open_session("a");
         let a = world
             .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
@@ -35057,14 +35096,14 @@ mod tests {
     #[test]
     fn aoi_disappear_counts_split_player_and_nonplayer_observers() {
         use mir2_protocol::frame::CommandMessage;
-        use mir2_world::HideObserverKind;
+        use mir2_world_bevy::HideObserverKind;
         use std::collections::HashMap;
 
         let player = 1_001;
         let guard = 9_001;
         let target = 2_002;
 
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             hides: vec![(player, target), (guard, target)],
             hide_observer_kinds: vec![
                 (player, target, HideObserverKind::Player),
@@ -35120,7 +35159,7 @@ mod tests {
     /// ⇒ 第二条的 `missing_online == 0` 必红。
     #[test]
     fn aoi_disappear_missing_player_online_is_counted_but_nonplayer_is_not() {
-        use mir2_world::HideObserverKind;
+        use mir2_world_bevy::HideObserverKind;
         use std::collections::HashMap;
 
         let player = 1_001;
@@ -35133,7 +35172,7 @@ mod tests {
         gates.insert(0, tx0);
 
         // ① 玩家观察者不在 online ⇒ missing_online（loud）。
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             hides: vec![(player, target)],
             hide_observer_kinds: vec![(player, target, HideObserverKind::Player)],
             ..Default::default()
@@ -35146,7 +35185,7 @@ mod tests {
         assert!(rx0.try_recv().is_err(), "玩家缺失不发帧");
 
         // ② 非玩家自扫怪不在 online ⇒ 预期噪声，只计 nonplayer_observer。
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             hides: vec![(guard, target)],
             hide_observer_kinds: vec![(guard, target, HideObserverKind::NonPlayer)],
             ..Default::default()
@@ -35163,7 +35202,7 @@ mod tests {
 
         // ③ 克隆体（Clone）同样不在 online ⇒ 单独计数，不算 missing_online。
         let clone = 8_001;
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             hides: vec![(clone, target)],
             hide_observer_kinds: vec![(clone, target, HideObserverKind::Clone)],
             ..Default::default()
@@ -35188,14 +35227,14 @@ mod tests {
     /// clone 会走 online 分支发帧 ⇒ `emitted==0`/`clone_observer==1`/「903 无帧」断言必红。
     #[test]
     fn aoi_disappear_clone_observer_is_skipped_and_separate_from_missing_player() {
-        use mir2_world::HideObserverKind;
+        use mir2_world_bevy::HideObserverKind;
         use std::collections::HashMap;
 
         let player = 1_001; // 真玩家，且**不在** online ⇒ missing_online
         let clone = 8_001; // PlayCloneObject，无真实会话
         let target = 2_002;
 
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             hides: vec![(clone, target), (player, target)],
             hide_observer_kinds: vec![
                 (clone, target, HideObserverKind::Clone),
@@ -35293,7 +35332,7 @@ mod tests {
     /// 「玩家 observer 永远在 online」的证明。
     #[test]
     fn live_players_are_in_online_at_aoi_drain_points_constructed_invariant() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("a");
         let a = world
             .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
@@ -35304,7 +35343,7 @@ mod tests {
             .expect("b 进图");
         // 自扫怪（Guard, race=11）——不在 online 是**预期**，用于覆盖混合场景。
         let g = {
-            let mut e = mir2_world::EntitySpawn::new(9_001, "g", 12, 12);
+            let mut e = mir2_world_bevy::EntitySpawn::new(9_001, "g", 12, 12);
             e.race = 11;
             e.view_range = 12;
             e.ai.search_time = 1_000;
@@ -35325,7 +35364,7 @@ mod tests {
                 // **N1**：`PlayCloneObject` 也是 `race == PLAY && !ghost`，但无真实会话、
                 // 不在 `OnlineRegistry` —— 它是这条「玩家 ⊆ online」不变量的**已知反例**
                 // （Y1）；故只对 `!is_clone` 的真玩家断言。
-                if e.race == mir2_world::ACTOR_RACE_PLAY && !e.ghost && !e.is_clone {
+                if e.race == mir2_world_bevy::ACTOR_RACE_PLAY && !e.ghost && !e.is_clone {
                     assert!(
                         online.iter().any(|o| o.actor_id == e.id),
                         "tick {tick}: live player {} 不在 online.actor_id 集合内",
@@ -35339,8 +35378,8 @@ mod tests {
                     .iter()
                     .find_map(|&(o, t, k)| (o == *observer && t == *target).then_some(k))
                     // 缺标注 = 宿主 fail-safe 按玩家处理 ⇒ 这里同样按玩家核。
-                    .unwrap_or(mir2_world::HideObserverKind::Player);
-                if kind == mir2_world::HideObserverKind::Player {
+                    .unwrap_or(mir2_world_bevy::HideObserverKind::Player);
+                if kind == mir2_world_bevy::HideObserverKind::Player {
                     assert!(
                         online.iter().any(|o| o.actor_id == *observer),
                         "tick {tick}: Player 类 hides 观察者 {observer} 不在 online（真丢帧风险）"
@@ -35364,7 +35403,7 @@ mod tests {
     fn aoi_disappear_routes_only_to_observer_socket() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(200, 200);
+        let mut world = mir2_world_bevy::World::new(200, 200);
         world.open_session("a");
         let a = world
             .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
@@ -35440,7 +35479,7 @@ mod tests {
     fn aoi_disappear_reachable_through_drain_run_downlinks() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(200, 200);
+        let mut world = mir2_world_bevy::World::new(200, 200);
         world.open_session("a");
         let a = world
             .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
@@ -35453,7 +35492,7 @@ mod tests {
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         rec.hides.push((a, b));
 
         let displays = downlink::DisplayTable::new();
@@ -35519,15 +35558,15 @@ mod tests {
     /// ③ 把 `drain_aoi_disappear` 函数体改空 ⇒ 同上。三者都让「至少一条消失帧」或序断言红。
     #[test]
     fn drain_run_downlinks_sends_disappear_before_appear_frames() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
         // 出现帧需要 `world.entities` 里的真实体 + 展示表登记：`spawn_clone` 造一个（与
         // `aoi_show_clone_uses_entity_back_dir` 同一夹具手法）。
-        let out =
-            mir2_world::slave::spawn_clone(&mut world, p, 2).expect("主人在世界 ⇒ 应造出克隆体");
+        let out = mir2_world_bevy::slave::spawn_clone(&mut world, p, 2)
+            .expect("主人在世界 ⇒ 应造出克隆体");
         let seen = out.clone_id;
         let caster_display =
             downlink::ActorDisplay::new(2, 0, 0, 0, 0, downlink::PLAYER_NAME_COLOR, Vec::new());
@@ -35539,9 +35578,9 @@ mod tests {
             .map_binding_mut(p)
             .unwrap()
             .visible_actors
-            .push(mir2_world::entity::VisibleBaseObject {
+            .push(mir2_world_bevy::entity::VisibleBaseObject {
                 target: seen,
-                flag: mir2_world::VisibleFlag::Show,
+                flag: mir2_world_bevy::VisibleFlag::Show,
             });
         world.entities.get_mut(p).unwrap().ai.search_tick = world.clock_ms;
 
@@ -35549,7 +35588,7 @@ mod tests {
 
         // 同一 tick：世界侧记下的消失事件 + 上面构造的出现事件。
         let vanished = 4242;
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         rec.hides.push((p, vanished));
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -35653,13 +35692,13 @@ mod tests {
     /// 「本 tick 必须至少一条死亡出现帧」断言红。
     #[test]
     fn drain_run_downlinks_sends_disappear_before_death_appearance() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
-        let out =
-            mir2_world::slave::spawn_clone(&mut world, p, 2).expect("主人在世界 ⇒ 应造出克隆体");
+        let out = mir2_world_bevy::slave::spawn_clone(&mut world, p, 2)
+            .expect("主人在世界 ⇒ 应造出克隆体");
         let seen = out.clone_id;
         let caster_display =
             downlink::ActorDisplay::new(2, 0, 0, 0, 0, downlink::PLAYER_NAME_COLOR, Vec::new());
@@ -35672,16 +35711,16 @@ mod tests {
             .map_binding_mut(p)
             .unwrap()
             .visible_actors
-            .push(mir2_world::entity::VisibleBaseObject {
+            .push(mir2_world_bevy::entity::VisibleBaseObject {
                 target: seen,
-                flag: mir2_world::VisibleFlag::Show,
+                flag: mir2_world_bevy::VisibleFlag::Show,
             });
         world.entities.get_mut(p).unwrap().ai.search_tick = world.clock_ms;
 
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
 
         let vanished = 4242;
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         rec.hides.push((p, vanished));
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -35748,8 +35787,10 @@ mod tests {
 
     /// 事件视野夹具：玩家 (11,10)（`view_range=12`）+ 一发火墙事件 (10,10)（Visible、60s），
     /// 推进到首次玩家扫描。返回 `(world, 玩家 id, 该 tick 的 TickRecord)`。
-    fn map_event_fixture(continue_ms: i32) -> (mir2_world::World, i32, mir2_world::TickRecord) {
-        let mut world = mir2_world::World::new(64, 64);
+    fn map_event_fixture(
+        continue_ms: i32,
+    ) -> (mir2_world_bevy::World, i32, mir2_world_bevy::TickRecord) {
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 11, 10), 0)
@@ -35884,7 +35925,7 @@ mod tests {
     /// 改成「每事件唯一 id」⇒ 两个格子各推一条 `Show` 条目 ⇒ 2 条 804 + 2 条目 ⇒ 本用例必红。
     #[test]
     fn map_event_id_zero_fold_same_scan_two_cells_no_frame() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 11, 10), 0)
@@ -35898,7 +35939,7 @@ mod tests {
         assert_eq!((vis[0].x, vis[0].y), (10, 10), "坐标 = 扫描序首个事件格");
         assert_eq!(
             vis[0].flag,
-            mir2_world::VisibleFlag::Invisible,
+            mir2_world_bevy::VisibleFlag::Invisible,
             "同趟第二次命中 ⇒ Show 被打成 Invisible（oracle :5468-5471）"
         );
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
@@ -35919,7 +35960,7 @@ mod tests {
     /// 805 = Tag 12 / Series 10。按观察者各存快照的旧实现会发 (10,10) ⇒ 本用例红。
     #[test]
     fn map_event_hideevent_coords_are_shared_sight() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("a");
         world.open_session("b");
         let a = world
@@ -35981,7 +36022,7 @@ mod tests {
     /// ⇒ 即使视距内有别的 `Visible` 事件也**零帧**。改成「关闭后替换」或「每事件唯一 id」⇒ 必红。
     #[test]
     fn map_event_closed_slot_never_replaced() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 11, 10), 0)
@@ -36096,12 +36137,12 @@ mod tests {
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         world.open_session("lb1a");
         let actor = world
             .enter_map(
                 "lb1a",
-                mir2_world::EntitySpawn::new(0, "lb1a".to_string(), 10, 20),
+                mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 10, 20),
                 0,
             )
             .expect("旧会话在世界里");
@@ -36149,11 +36190,11 @@ mod tests {
             &mut sell_off,
             &mut displays,
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -36191,12 +36232,12 @@ mod tests {
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         world.open_session("lb1b");
         let actor = world
             .enter_map(
                 "lb1b",
-                mir2_world::EntitySpawn::new(0, "lb1b".to_string(), 10, 20),
+                mir2_world_bevy::EntitySpawn::new(0, "lb1b".to_string(), 10, 20),
                 0,
             )
             .expect("旧会话在世界里");
@@ -36238,11 +36279,11 @@ mod tests {
             &mut sell_off,
             &mut displays,
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -36270,7 +36311,7 @@ mod tests {
     /// `SessionGround.actor_id`（soft-close 后 world 侧已是 None，只有它还留着）。
     /// 展示表里预置 `world_id` 与 `host_id` 两条，用来判「摘的是哪一个」。
     struct ResidueRig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         saves: HashMap<String, SavedHuman>,
         ground: HashMap<String, SessionGround>,
         shop: HashMap<String, ShopSession>,
@@ -36280,9 +36321,9 @@ mod tests {
 
     impl ResidueRig {
         fn new(world_id: i32, host_id: i32) -> Self {
-            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
             world.open_session("hero");
-            let mut ent = mir2_world::EntitySpawn::new(0, "hero".to_string(), 11, 22);
+            let mut ent = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 11, 22);
             ent.id = world_id; // 正数 id 会被 `enter_map_at` 原样采用
             world.enter_map("hero", ent, 0).expect("进世界");
             assert_eq!(
@@ -36422,7 +36463,7 @@ mod tests {
     fn disconnect_broadcasts_sm_disappear_to_observers() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(200, 200);
+        let mut world = mir2_world_bevy::World::new(200, 200);
         world.open_session("a");
         let a = world
             .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
@@ -36482,7 +36523,7 @@ mod tests {
     fn m3_soft_close_ghost_disappears_once_then_stays_silent() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(200, 200);
+        let mut world = mir2_world_bevy::World::new(200, 200);
         world.open_session("a");
         let a = world
             .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
@@ -36592,7 +36633,7 @@ mod tests {
     fn disconnect_broadcast_reachable_through_depart_downlink() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(200, 200);
+        let mut world = mir2_world_bevy::World::new(200, 200);
         world.open_session("a");
         let a = world
             .enter_map("a", new_player_entity("a".to_string(), 10, 10), 0)
@@ -36938,7 +36979,7 @@ mod tests {
     /// 直接调 `seed_player_gold_deal` 的往返用例（`t142_gold_deal_seed_and_write_back_round_trip`）
     /// 是辅助函数级假牙，删掉生产接线它不会红。
     struct T142Rig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         merchant_id: i32,
         sessions: HashMap<String, SessionGround>,
         online: OnlineRegistry,
@@ -36957,19 +36998,19 @@ mod tests {
 
     impl T142Rig {
         fn new(records: Vec<mir2_script::SayingRecord>) -> Self {
-            let mut world = mir2_world::World::new(32, 32);
+            let mut world = mir2_world_bevy::World::new(32, 32);
             let hero = world.add_entity({
-                let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-                e.race = mir2_world::ACTOR_RACE_PLAY;
+                let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
                 e
             });
             let merchant_id = world
-                .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                .insert_merchant(mir2_world_bevy::merchant::MerchantSpawn {
                     name: "商人".to_string(),
                     x: 11,
                     y: 10,
                     map_id: 0,
-                    state: mir2_world::merchant::MerchantState::new(
+                    state: mir2_world_bevy::merchant::MerchantState::new(
                         "卫家店".to_string(),
                         "0".to_string(),
                         0,
@@ -36978,7 +37019,7 @@ mod tests {
                         false,
                         false,
                         0,
-                        mir2_world::merchant::MerchantFlags {
+                        mir2_world_bevy::merchant::MerchantFlags {
                             is_buy: true,
                             ..Default::default()
                         },
@@ -37236,7 +37277,7 @@ mod tests {
             vec![gmexec_act("f", "", "")],
         )]);
         rig.sessions.get_mut("hero").unwrap().gm.permission = 3;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let env = ScriptGmEnv {
@@ -37293,7 +37334,7 @@ mod tests {
             "",
             vec![gmexec_act("f", "", "")],
         )]);
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let env = ScriptGmEnv {
@@ -38858,10 +38899,10 @@ break
             "生产解析必须把 Market_Def 脚本收进 seeds（装载调用）"
         );
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let mut displays = game_svr::downlink::DisplayTable::new();
@@ -38981,10 +39022,10 @@ break
         let (spawns, _, seeds) =
             game_svr::merchant::load_merchant_spawns(&loader, |_| Some(0), &mut rng)
                 .expect("装载不应失败");
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let mut displays = game_svr::downlink::DisplayTable::new();
@@ -39054,10 +39095,10 @@ break
         let (spawns, _, seeds) =
             game_svr::merchant::load_merchant_spawns(&loader, |_| Some(0), &mut rng)
                 .expect("装载不应失败");
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let mut displays = game_svr::downlink::DisplayTable::new();
@@ -39144,7 +39185,7 @@ break
             "路径口径 = Market_Def/<ScriptName>-<MapName>.txt"
         );
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mut displays = game_svr::downlink::DisplayTable::new();
         let (kept, _, book) = game_svr::merchant::spawn_merchants_with_scripts(
             &mut world,
@@ -39545,10 +39586,14 @@ break
             kick_off_line_tick: 0,
             guild: guild_cmd::GuildSession::default(),
         };
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
         world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                0,
+            )
             .expect("进世界");
         let rec = build_save_record(&saved, "hero", &world, &sg, None);
         let parsed = mir2_storage::SaveCharacterData::from_bytes(
@@ -39632,9 +39677,9 @@ break
         let mut sg = test_session_ground(1);
         sg.recovery.inc_healing = 300;
         sg.server_index = 7;
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
-        let mut ent = mir2_world::EntitySpawn::new(0, "hero", 11, 22);
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22);
         ent.ai.dir = 5;
         world.enter_map("hero", ent, 0).expect("进世界");
         let rec = build_save_record(&saved, "hero", &world, &sg, None);
@@ -39664,10 +39709,10 @@ break
     fn attack_syncs_entity_dir_on_hit_and_whiff_for_save() {
         use mir2_protocol::messages::CM_HIT;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("atk");
-        let mut atk_ent = mir2_world::EntitySpawn::new(0, "atk".to_string(), 10, 10);
-        atk_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut atk_ent = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+        atk_ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let attacker = world.enter_map("atk", atk_ent, 0).expect("进世界");
         world.tick();
         let mut displays = downlink::DisplayTable::new();
@@ -39728,8 +39773,8 @@ break
         // ② 命中：展示朝向已被上一击改成 4（下）⇒ 前方格 (10,11) 放一只怪；
         //    本帧 dir=2（右）⇒ 取目标用状态化朝向（下）命中，但 Dir 改为 2。
         let monster = {
-            let mut e = mir2_world::EntitySpawn::new(0, "mon".to_string(), 10, 11);
-            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 10, 11);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             e.hp = 200;
             e.max_hp = 200;
             world.add_entity(e)
@@ -39767,10 +39812,10 @@ break
     #[test]
     fn default_spell_syncs_entity_dir_for_save() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("caster");
-        let mut caster_ent = mir2_world::EntitySpawn::new(0, "caster".to_string(), 10, 10);
-        caster_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut caster_ent = mir2_world_bevy::EntitySpawn::new(0, "caster".to_string(), 10, 10);
+        caster_ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let caster = world.enter_map("caster", caster_ent, 0).expect("进世界");
         world.tick();
         let mut displays = downlink::DisplayTable::new();
@@ -39870,10 +39915,10 @@ break
     fn blocked_walk_and_run_keep_attempted_dir_for_save() {
         use mir2_protocol::messages::{CM_RUN, CM_WALK};
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("mover");
-        let mut mover_ent = mir2_world::EntitySpawn::new(0, "mover".to_string(), 10, 10);
-        mover_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut mover_ent = mir2_world_bevy::EntitySpawn::new(0, "mover".to_string(), 10, 10);
+        mover_ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let mover = world.enter_map("mover", mover_ent, 0).expect("进世界");
         world.tick();
         let mut displays = downlink::DisplayTable::new();
@@ -39930,7 +39975,7 @@ break
         world.maps[0]
             .get_cell_info_mut(11, 9)
             .0
-            .set_attribute(mir2_world::CellAttribute::HighWall);
+            .set_attribute(mir2_world_bevy::CellAttribute::HighWall);
         assert!(!world.maps[0].cell_valid(11, 9), "前置：(11,9) 必须是墙");
         handle_move_cmd(
             CM_WALK,
@@ -39957,7 +40002,7 @@ break
         world.maps[0]
             .get_cell_info_mut(11, 11)
             .0
-            .set_attribute(mir2_world::CellAttribute::HighWall);
+            .set_attribute(mir2_world_bevy::CellAttribute::HighWall);
         assert!(!world.maps[0].cell_valid(11, 11), "前置：(11,11) 必须是墙");
         handle_move_cmd(
             CM_RUN,
@@ -40009,10 +40054,14 @@ break
         ];
         // 锁只影响取回门（⑤-4 第②片），不改存档内容（`IsCanGetBackItem` 不是记录字段）。
         sg.storage.is_can_get_back_item = false;
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
         world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                0,
+            )
             .expect("进世界");
         let rec = build_save_record(&saved, "hero", &world, &sg, None);
         let parsed = mir2_storage::SaveCharacterData::from_bytes(
@@ -40082,8 +40131,8 @@ break
         dura: u16,
         dura_max: u16,
         desc: [u8; 14],
-    ) -> mir2_world::entity::UseItemSlot {
-        mir2_world::entity::UseItemSlot {
+    ) -> mir2_world_bevy::entity::UseItemSlot {
+        mir2_world_bevy::entity::UseItemSlot {
             make_index,
             index,
             dura,
@@ -40093,9 +40142,9 @@ break
     }
 
     /// 玩家目标（耐久段只对 `Race == ActorRace.Play` 生效，`:2954` 的 override）。
-    fn durability_player(items: &[(usize, u16, u16)]) -> mir2_world::EntitySpawn {
-        let mut e = mir2_world::EntitySpawn::new(0, "hero", 10, 10);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+    fn durability_player(items: &[(usize, u16, u16)]) -> mir2_world_bevy::EntitySpawn {
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         e.hp = 30_000;
         e.max_hp = 30_000;
         for &(slot, index, dura) in items {
@@ -40150,7 +40199,7 @@ break
             "GetHumData：UseItems[Helmet] = HumItems[Helmet]"
         );
 
-        let mut entity = mir2_world::EntitySpawn::new(0, "hero", 10, 10);
+        let mut entity = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
         apply_use_items_to_entity(&mut entity.use_items, &session_items);
         assert_eq!(
             entity.use_items[SLOT_DRESS],
@@ -40167,7 +40216,7 @@ break
         );
         assert_eq!(
             entity.use_items[SLOT_WEAPON],
-            mir2_world::entity::UseItemSlot::default(),
+            mir2_world_bevy::entity::UseItemSlot::default(),
             "空槽 = oracle 的 null/Index 0"
         );
     }
@@ -40219,15 +40268,15 @@ break
     #[test]
     fn attack_hit_wears_dress_durability_and_syncs_to_session() {
         use game_svr::ability::SLOT_DRESS;
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.clock_ms = 100_000;
 
         let mut hero = durability_player(&[(SLOT_DRESS, 11, 60_000)]);
         hero.use_items[SLOT_DRESS].dura_max = 60_000;
         let hero_id = world.add_entity(hero);
 
-        let mut foe = mir2_world::EntitySpawn::new(0, "foe", 11, 10);
-        foe.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut foe = mir2_world_bevy::EntitySpawn::new(0, "foe", 11, 10);
+        foe.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         // LoByte == HiByte == 10 ⇒ 攻击力恰为 10（`get_attack_power` 的 `random_range(0,1)` 返回 0）。
         foe.dc = 10 | (10 << 8);
         let foe_id = world.add_entity(foe);
@@ -40272,7 +40321,7 @@ break
         hero.use_items[SLOT_DRESS].desc = [7; 14];
         let mut rng = LedgerRandom::new(vec![0, 1]);
         let hero_race = hero.race;
-        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
+        mir2_world_bevy::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
 
         assert_eq!(
             rng.draws,
@@ -40309,7 +40358,7 @@ break
         // 脚本：Random(10)=0 ⇒ nDam=5；Random(8) 依次 1（槽0 不再磨损）、0（槽1 磨损）、2（槽7 不磨损）。
         let mut rng = LedgerRandom::new(vec![0, 1, 0, 2]);
         let hero_race = hero.race;
-        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
+        mir2_world_bevy::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
 
         assert_eq!(
             rng.draws,
@@ -40351,10 +40400,14 @@ break
         sg.use_items[SLOT_NECKLACE] = Some(game_svr::bag::BagItem::new(9002, 88));
         sg.use_items[SLOT_HELMET] = Some(game_svr::bag::BagItem::new(9003, 99));
 
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
         world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                0,
+            )
             .expect("进世界");
         let id = world
             .session("hero")
@@ -40404,7 +40457,7 @@ break
     /// `soft_close()` 走生产入口 [`handle_soft_close_cmd`]（内含离世快照段），
     /// `save()` 走生产入口 [`build_save_record`]（实体 → 快照 → 记录）。
     struct SoftCloseRig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         sessions: HashMap<String, SessionGround>,
         saves: HashMap<String, SavedHuman>,
         online: OnlineRegistry,
@@ -40416,10 +40469,10 @@ break
     impl SoftCloseRig {
         fn new() -> Self {
             use game_svr::ability::SLOT_WEAPON;
-            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
             world.open_session("hero");
-            let mut ent = mir2_world::EntitySpawn::new(0, "hero".to_string(), 11, 22);
-            ent.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut ent = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 11, 22);
+            ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             ent.ai.dir = 0; // 实时朝向；载入值在下面写成 3
             let actor = world.enter_map("hero", ent, 0).expect("进世界");
             world.tick();
@@ -40776,8 +40829,8 @@ break
             .get_mut(rig.actor)
             .expect("实体在场")
             .inventory
-            .use_items =
-            [mir2_world::entity::UseItemSlot::default(); mir2_world::entity::USE_ITEM_SLOTS];
+            .use_items = [mir2_world_bevy::entity::UseItemSlot::default();
+            mir2_world_bevy::entity::USE_ITEM_SLOTS];
         assert_eq!(
             rig.world
                 .entities
@@ -40795,7 +40848,7 @@ break
             derived
                 .use_items
                 .iter()
-                .all(|s| *s == mir2_world::entity::UseItemSlot::default()),
+                .all(|s| *s == mir2_world_bevy::entity::UseItemSlot::default()),
             "前置：快照的 use_items 全零（接缝无条件拷贝，未装载块照样进快照）"
         );
         // ③④ 存档必须回落到会话装备，而不是把全零写库。
@@ -40859,7 +40912,7 @@ break
         assert_eq!(warns(), base, "实体在 ⇒ 不发第三档 WRN（普通断线不刷屏）");
 
         // ② 从未进世界（无会话）⇒ session 门控拦下，不 WRN。
-        let world = mir2_world::World::with_maps(vec![(10, 10)]);
+        let world = mir2_world_bevy::World::with_maps(vec![(10, 10)]);
         let saved = SavedHuman {
             account: "ua".into(),
             record: stage6_record(),
@@ -40900,7 +40953,7 @@ break
         let mut hero = durability_player(&[]);
         let mut rng = LedgerRandom::new(vec![0]);
         let hero_race = hero.race;
-        mir2_world::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
+        mir2_world_bevy::combat::struck_damage_durability(&mut rng, &mut hero.use_items, hero_race);
         assert_eq!(
             rng.draws,
             vec![10],
@@ -40909,7 +40962,7 @@ break
         assert!(
             hero.use_items
                 .iter()
-                .all(|s| *s == mir2_world::entity::UseItemSlot::default()),
+                .all(|s| *s == mir2_world_bevy::entity::UseItemSlot::default()),
             "无装备 ⇒ 槽位零动作"
         );
     }
@@ -40919,7 +40972,7 @@ break
     #[test]
     fn session_equipment_changes_propagate_to_entity() {
         use game_svr::ability::SLOT_WEAPON;
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         let id = world.add_entity(new_player_entity("hero".to_string(), 10, 10));
         let mut sg = test_session_ground(id);
         sg.use_items[SLOT_WEAPON] = Some(game_svr::bag::BagItem::new(9001, 207));
@@ -41128,10 +41181,14 @@ break
     #[test]
     fn periodic_save_ignores_in_save_list_and_resets_tick() {
         use std::sync::atomic::AtomicI32;
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
         let actor_id = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                0,
+            )
             .expect("进世界");
         let mut sg = test_session_ground(actor_id);
         sg.save_rcd_tick = 1_000; // 到期：now - tick > 5_000
@@ -41227,10 +41284,14 @@ break
         use mir2_storage::MemPack;
         use std::sync::atomic::AtomicI32;
 
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
         let actor_id = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                0,
+            )
             .expect("进世界");
         let mut sg = test_session_ground(actor_id);
         sg.state.gold = 649;
@@ -41360,11 +41421,11 @@ break
     }
 
     fn two_player_world() -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         std::collections::HashMap<String, SessionGround>,
         std::collections::HashMap<String, SavedHuman>,
     ) {
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         let mut sessions = std::collections::HashMap::new();
         let mut saves = std::collections::HashMap::new();
         for (name, x, y, gold, account) in [
@@ -41373,7 +41434,7 @@ break
         ] {
             world.open_session(name);
             let actor_id = world
-                .enter_map(name, mir2_world::EntitySpawn::new(0, name, x, y), 0)
+                .enter_map(name, mir2_world_bevy::EntitySpawn::new(0, name, x, y), 0)
                 .expect("进世界");
             let mut sg = test_session_ground(actor_id);
             sg.state.gold = gold;
@@ -41478,7 +41539,7 @@ break
     /// **判据 c（无玩家时不发起）**：空会话表 ⇒ 0 次请求、不等待、不走超时支；in-save 表不变。
     #[test]
     fn shutdown_with_no_sessions_fires_nothing() {
-        let world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         let sessions: std::collections::HashMap<String, SessionGround> =
             std::collections::HashMap::new();
         let saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
@@ -41711,15 +41772,15 @@ break
     fn move_cmd_dispatches_turn_walk_ack_and_aoi() {
         use mir2_protocol::messages::{CM_TURN, CM_WALK, SM_TURN, SM_WALK};
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mover = {
-            let mut e = mir2_world::EntitySpawn::new(0, "mover".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mover".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let observer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "obs".to_string(), 12, 12);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick(); // Enter 落格（`try_step` 要从源格里摘除）
@@ -42017,15 +42078,15 @@ break
     fn move_cmd_blocked_by_wall_cell_sends_no_move_frame() {
         use mir2_protocol::messages::{CM_WALK, SM_WALK};
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mover = {
-            let mut e = mir2_world::EntitySpawn::new(0, "mover".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mover".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let observer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "obs".to_string(), 12, 12);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick(); // Enter 落格（10,10）
@@ -42113,7 +42174,7 @@ break
         world.maps[0]
             .get_cell_info_mut(12, 10)
             .0
-            .set_attribute(mir2_world::CellAttribute::HighWall);
+            .set_attribute(mir2_world_bevy::CellAttribute::HighWall);
         assert!(
             !world.maps[0].cell_valid(12, 10),
             "前置：目标格 (12,10) 必须是墙（cell_valid==false）"
@@ -42179,13 +42240,13 @@ break
     // ==============================================================================
 
     /// 场景夹具：`(chr, x, y)` 逐个进图（玩家 race），返回世界与首个 actor id。
-    fn world_with_actors(actors: &[(&str, i32, i32)]) -> (mir2_world::World, i32) {
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+    fn world_with_actors(actors: &[(&str, i32, i32)]) -> (mir2_world_bevy::World, i32) {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         let mut first = 0;
         for (i, (name, x, y)) in actors.iter().enumerate() {
             world.open_session(name);
             let mut e = new_player_entity((*name).to_string(), *x, *y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let id = world.enter_map(name, e, 0).expect("进图");
             if i == 0 {
                 first = id;
@@ -42200,7 +42261,7 @@ break
         let (mut world, a) = world_with_actors(&[("a", 5, 4), ("b", 5, 5)]);
         let out = world.step_with_route(a, 0, 1, 1);
         assert!(!out.moved, "目标格有活人 ⇒ 不走");
-        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Actor));
+        assert_eq!(out.blocked, Some(mir2_world_bevy::StepBlock::Actor));
         assert_eq!(movefail_reason(&out), "actor", "日志字面量必须是 actor");
         let e = world.entities.get(a).expect("a 仍在");
         assert_eq!((e.x, e.y), (5, 4), "坐标不动");
@@ -42216,7 +42277,7 @@ break
         );
         let out = world.step_with_route(a, 0, 1, 1);
         assert!(!out.moved, "目标格是墙 ⇒ 不走");
-        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Terrain));
+        assert_eq!(out.blocked, Some(mir2_world_bevy::StepBlock::Terrain));
         assert_eq!(movefail_reason(&out), "terrain", "日志字面量必须是 terrain");
         let e = world.entities.get(a).expect("a 仍在");
         assert_eq!((e.x, e.y), (5, 4), "坐标不动");
@@ -42228,7 +42289,7 @@ break
         let (mut world, a) = world_with_actors(&[("a", 0, 4)]);
         let out = world.step_with_route(a, -1, 0, 1);
         assert!(!out.moved, "越界 ⇒ 不走");
-        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Bounds));
+        assert_eq!(out.blocked, Some(mir2_world_bevy::StepBlock::Bounds));
         assert_eq!(movefail_reason(&out), "bounds", "日志字面量必须是 bounds");
         let e = world.entities.get(a).expect("a 仍在");
         assert_eq!((e.x, e.y), (0, 4), "坐标不动");
@@ -42240,7 +42301,7 @@ break
         let (mut world, a) = world_with_actors(&[("a", 5, 4), ("b", 5, 5)]);
         let out = world.step_with_route(a, 0, 1, 2);
         assert!(!out.moved, "第 1 格被占 ⇒ 整段不动（RunTo 原子）");
-        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Actor));
+        assert_eq!(out.blocked, Some(mir2_world_bevy::StepBlock::Actor));
         assert_eq!(movefail_reason(&out), "actor");
         let e = world.entities.get(a).expect("a 仍在");
         assert_eq!((e.x, e.y), (5, 4), "坐标不动");
@@ -42250,14 +42311,14 @@ break
     /// 删掉分类里的存活过滤（`!Ghost && !Death && !FixedHideMode && !ObMode`）⇒ 本用例必红。
     #[test]
     fn movefail_reason_ignores_dead_actor_on_target_cell() {
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("a");
         let mut ea = new_player_entity("a".to_string(), 5, 4);
-        ea.race = mir2_world::ACTOR_RACE_PLAY;
+        ea.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.enter_map("a", ea, 0).expect("a 进图");
         world.open_session("b");
         let mut eb = new_player_entity("b".to_string(), 5, 5);
-        eb.race = mir2_world::ACTOR_RACE_PLAY;
+        eb.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let b = world.enter_map("b", eb, 0).expect("b 进图");
         world.entities.get_mut(b).expect("b 实体").life_cycle.death = true;
         let out = world.step_with_route(a, 0, 1, 1);
@@ -42285,7 +42346,7 @@ break
         // actor：目标格有活人。
         let (mut world, a) = world_with_actors(&[("a", 5, 4), ("b", 5, 5)]);
         let out = world.step_with_route(a, 0, 1, 1);
-        assert_eq!(out.blocked, Some(mir2_world::StepBlock::Actor));
+        assert_eq!(out.blocked, Some(mir2_world_bevy::StepBlock::Actor));
         let line = movefail_blocked_log(a, 4, 1, "a", &out);
         assert!(
             line.contains("reason=actor"),
@@ -42304,7 +42365,7 @@ break
             "前置：(5,5) 置墙"
         );
         let out2 = world2.step_with_route(a2, 0, 1, 1);
-        assert_eq!(out2.blocked, Some(mir2_world::StepBlock::Terrain));
+        assert_eq!(out2.blocked, Some(mir2_world_bevy::StepBlock::Terrain));
         let line2 = movefail_blocked_log(a2, 4, 1, "a", &out2);
         assert!(
             line2.contains("reason=terrain"),
@@ -42322,7 +42383,7 @@ break
             world.maps[0].set_map_xy_flag(5, 5, false),
             "前置：(5,5) 置墙"
         );
-        world.enqueue(mir2_world::Command::Walk {
+        world.enqueue(mir2_world_bevy::Command::Walk {
             actor_id: a,
             dx: 0,
             dy: 1,
@@ -42357,15 +42418,15 @@ break
     fn pickup_gold_dispatches_and_updates_session() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.set_item_catalog(vec![mir2_data::StdItem {
             name: "金币".into(),
             ..Default::default()
         }]);
         world.mon_random_add_value = 0;
         let p = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.hp = 200;
             e.max_hp = 200;
             e.dc = 0x0A_14; // LoByte=20, HiByte=10 ⇒ 攻击力足以一击击杀
@@ -42384,8 +42445,8 @@ break
             gold_x,
             gold_y,
             p,
-            mir2_world::map::FloorItemMeta {
-                kind: mir2_world::FloorItemKind::Gold,
+            mir2_world_bevy::map::FloorItemMeta {
+                kind: mir2_world_bevy::FloorItemKind::Gold,
                 index: 0,
                 count: expected_count,
                 item_id: p,
@@ -42694,7 +42755,7 @@ break
         gates.insert(0, tx0);
 
         // actor 42 不在世界里 ⇒ `FeatureChanged()` 广播无收件人（本用例只断言自己的出帧序）。
-        let mut world = mir2_world::World::new(8, 8);
+        let mut world = mir2_world_bevy::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
         // `recog=60001`（物品 `MakeIndex`）、`param=0`（槽位）、`tag` 未用、`name` 尾（C-1）。
@@ -42876,7 +42937,7 @@ break
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::new(8, 8);
+        let mut world = mir2_world_bevy::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
         // recog=60001（MakeIndex）、param=0（真槽位）、tag=7（诱饵，oracle 不读）。
@@ -43035,7 +43096,7 @@ break
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::new(8, 8);
+        let mut world = mir2_world_bevy::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
         // recog=60001（MakeIndex）、param=0（Dress 槽）、tag=0、名称尾 = 模板名。
@@ -43105,16 +43166,20 @@ break
     fn bag_equip_broadcasts_feature_changed_to_nearby() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("hero");
         world.open_session("watcher");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .expect("hero 进图");
         let watcher = world
             .enter_map(
                 "watcher",
-                mir2_world::EntitySpawn::new(0, "watcher", 12, 10),
+                mir2_world_bevy::EntitySpawn::new(0, "watcher", 12, 10),
                 0,
             )
             .expect("watcher 进图");
@@ -43396,9 +43461,9 @@ break
         gates.insert(1, tx1);
 
         // 旧会话已在世界里
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         world.open_session("lb1a");
-        let ent = mir2_world::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
+        let ent = mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
         let actor = world.enter_map("lb1a", ent, 0).expect("旧会话应先在世界里");
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("acct1", "lb1a", 77, 0, 901, actor));
@@ -43430,11 +43495,11 @@ break
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -43459,7 +43524,7 @@ break
         // 旧会话确实离开世界、实体被摘（MakeGhost）
         assert_eq!(
             world.session("lb1a").unwrap().stage,
-            mir2_world::WorldStage::Left
+            mir2_world_bevy::WorldStage::Left
         );
         assert!(
             world.entities.get(actor).is_none(),
@@ -43473,7 +43538,7 @@ break
     fn drain_kicks_is_idempotent_and_safe_without_coords() {
         use std::collections::HashMap;
         let gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         let mut online: OnlineRegistry = Vec::new();
         let mut kick_pending = vec!["ghost".to_string()];
         drain_kicks(
@@ -43489,11 +43554,11 @@ break
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -43519,12 +43584,12 @@ break
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         world.open_session("lb1a");
         let actor = world
             .enter_map(
                 "lb1a",
-                mir2_world::EntitySpawn::new(0, "lb1a".to_string(), 10, 20),
+                mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 10, 20),
                 0,
             )
             .expect("旧会话在世界里");
@@ -43557,11 +43622,11 @@ break
             &mut std::collections::HashMap::new(),
             &mut displays,
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -43591,12 +43656,12 @@ break
         let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         world.open_session("lb1b");
         let actor = world
             .enter_map(
                 "lb1b",
-                mir2_world::EntitySpawn::new(0, "lb1b".to_string(), 10, 20),
+                mir2_world_bevy::EntitySpawn::new(0, "lb1b".to_string(), 10, 20),
                 0,
             )
             .expect("旧会话在世界里");
@@ -43629,11 +43694,11 @@ break
             &mut std::collections::HashMap::new(),
             &mut displays,
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -43659,8 +43724,8 @@ break
     fn gm_pending_kick_is_collected_and_landed_with_sm_outofconnection() {
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
-        let victim = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 5, 5));
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let victim = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "victim", 5, 5));
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut sg = test_session_ground(victim);
         sg.gm.pending_kick = Some("victim".to_string());
@@ -43696,11 +43761,11 @@ break
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -43732,17 +43797,17 @@ break
     fn gm_pending_kick_canonicalizes_mixed_case_target_and_lands_528() {
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
-        let mut ev = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
-        ev.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut ev = mir2_world_bevy::EntitySpawn::new(0, "victim", 5, 5);
+        ev.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let victim = world.add_entity(ev);
-        let mut eg = mir2_world::EntitySpawn::new(0, "gm", 5, 5);
-        eg.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut eg = mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 5);
+        eg.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let gm_actor = world.add_entity(eg);
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut sg = test_session_ground(gm_actor);
         sg.gm.permission = 10; // `[Permission] Kick=10`（脚本 GMEXECUTE 抬到 10 后的会话态）
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         {
             let view = gmcmd::GmWorld::new(&guilds)
@@ -43777,11 +43842,11 @@ break
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -43818,9 +43883,9 @@ break
 
     /// **`openmir2-channel-chat`**：`handle_say` 的宿主上下文夹具（生产入参收敛后的形状）。
     struct TestChatCtx {
-        guilds: mir2_world::GuildManager,
+        guilds: mir2_world_bevy::GuildManager,
         guild_msg_cfg: guild_runtime::GuildMsgCfg,
-        party_cfg: mir2_world::PartyConfig,
+        party_cfg: mir2_world_bevy::PartyConfig,
         strings: crate::strings::StringConf,
         can_shout_level: i32,
         /// `SystemShare.FilterWord` 全局位（部署启动 true；`@DisableFilter` 翻转）。
@@ -43837,14 +43902,14 @@ break
     impl TestChatCtx {
         fn new() -> Self {
             Self {
-                guilds: mir2_world::GuildManager::new(),
+                guilds: mir2_world_bevy::GuildManager::new(),
                 guild_msg_cfg: guild_runtime::GuildMsgCfg {
                     show_pre_fix_msg: false,
                     prefix: String::new(),
                     f_color: 0,
                     b_color: 0,
                 },
-                party_cfg: mir2_world::PartyConfig::default(),
+                party_cfg: mir2_world_bevy::PartyConfig::default(),
                 strings: crate::strings::StringConf::defaults(),
                 can_shout_level: 0,
                 filter_word: std::cell::Cell::new(true),
@@ -43858,7 +43923,7 @@ break
         fn host<'a>(
             &'a self,
             online: &'a OnlineRegistry,
-            world: &'a mir2_world::World,
+            world: &'a mir2_world_bevy::World,
             gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
             colors: &'a MsgColors,
         ) -> ChatHost<'a> {
@@ -43890,7 +43955,7 @@ break
     struct GmRig {
         gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         rx: mpsc::UnboundedReceiver<SimToGate>,
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         online: OnlineRegistry,
         sessions: std::collections::HashMap<String, SessionGround>,
         actor: i32,
@@ -43911,9 +43976,9 @@ break
             let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
             let mut gates = std::collections::HashMap::new();
             gates.insert(0, tx);
-            let mut world = mir2_world::World::new(64, 64);
-            let mut e = mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut world = mir2_world_bevy::World::new(64, 64);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let actor = world.add_entity(e);
             let mut online: OnlineRegistry = Vec::new();
             online_set(&mut online, entry("a", "aaa", 1, 0, 901, actor));
@@ -44166,11 +44231,11 @@ break
     /// 变异红：M-B1..M-B5（每条副作用删/改向）⇒ 对应用例红。
     #[test]
     fn gm_target_ops_apply_state_and_quirk() {
-        use mir2_world::World;
+        use mir2_world_bevy::World;
         use std::collections::HashMap;
         let mut world = World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
-        let mut victim_e = mir2_world::EntitySpawn::new(0, "victim", 11, 11);
+        let hero_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
+        let mut victim_e = mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11);
         victim_e.death = true;
         victim_e.death_settled = true; // 已结算过的尸体：复活必须清闩锁（F2 牙敏感点）
         victim_e.hp = 1;
@@ -44250,7 +44315,7 @@ break
             },
         );
         // F2-R1 牙敏感点：视野内有一个 **Ghost** 观察者（online 仍含它）——SM_ALIVE 不得发它。
-        let mut ghost_e = mir2_world::EntitySpawn::new(0, "watcher", 12, 12);
+        let mut ghost_e = mir2_world_bevy::EntitySpawn::new(0, "watcher", 12, 12);
         ghost_e.ghost = true;
         let watcher_id = world.add_entity(ghost_e);
         online_set(
@@ -44414,9 +44479,9 @@ break
     #[test]
     fn gm_del_skill_host_apply_emits_212_and_greens() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
-        let victim_id = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 11, 11));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11));
         let mag = |mag_idx: u16| {
             Some(record::MagicRcd {
                 mag_idx,
@@ -44722,8 +44787,8 @@ break
     #[test]
     fn gm_clear_copy_self_target_uses_live_table() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
         let mut catalog = game_svr::ability::StdItemCatalog::new();
         catalog.insert(
             10,
@@ -44822,9 +44887,9 @@ break
     #[test]
     fn gm_target_ops_use_canonical_lowercase_name() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
-        let hero_id = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
-        let victim_id = world.add_entity(mir2_world::EntitySpawn::new(0, "victim", 11, 11));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
+        let victim_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11));
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut hero_sg = test_session_ground(hero_id);
         hero_sg.gm.pending_set_permission = Some(("VICTIM".into(), 7)); // 大写输入
@@ -44886,8 +44951,8 @@ break
         let mut rig = GmRig::new();
         // 说话者朝右（dir=2 ⇒ front=(x+1,y)），前方 (11,10) 放一个活人。
         rig.world.entities.get_mut(rig.actor).unwrap().ai.dir = 2;
-        let mut foe = mir2_world::EntitySpawn::new(0, "foe", 11, 10);
-        foe.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut foe = mir2_world_bevy::EntitySpawn::new(0, "foe", 11, 10);
+        foe.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let foe_id = rig.world.add_entity(foe);
         let bodies = rig.say_gm("@vv杀死");
         assert!(
@@ -45144,8 +45209,8 @@ break
     /// 命中门是 `attacker.HitPoint < RandomByte(target.SpeedPoint)`（`BaseObject.Attack.cs:37`）；
     /// 把**目标的** `hit_point` 置 0 即 `target.HitPoint > 0` 不成立 ⇒ 必命中，且不依赖种子。
     fn add_hitting_monster(rig: &mut GmRig, hp_dc: i32) -> i32 {
-        let mut mob = mir2_world::EntitySpawn::new(0, "稻草人", 11, 10);
-        mob.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mob = mir2_world_bevy::EntitySpawn::new(0, "稻草人", 11, 10);
+        mob.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         mob.dc = hp_dc;
         let mob = rig.world.add_entity(mob);
         rig.world
@@ -45232,15 +45297,15 @@ break
     #[test]
     fn gm_ob_mode_hides_entity_from_observer_aoi() {
         let mut rig = GmRig::new();
-        let mut obs = mir2_world::EntitySpawn::new(0, "obs", 12, 10);
-        obs.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut obs = mir2_world_bevy::EntitySpawn::new(0, "obs", 12, 10);
+        obs.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let obs = rig.world.add_entity(obs);
         // 玩家 `SearchTime = 1000`（`PlayObject.cs:900`）⇒ 200ms tick 下第 6 tick 才首扫。
         for _ in 0..6 {
             rig.world.tick();
         }
         let visible = |rig: &GmRig, id: i32| -> bool {
-            mir2_world::aoi::visible_snapshot(&rig.world.entities, id)
+            mir2_world_bevy::aoi::visible_snapshot(&rig.world.entities, id)
                 .iter()
                 .any(|(t, _)| *t == rig.actor)
         };
@@ -45279,8 +45344,8 @@ break
         let mut rig = GmRig::new();
         rig.world.tick();
         let master = rig.actor;
-        let mut slave = mir2_world::EntitySpawn::new(0, "宝宝", 12, 10);
-        slave.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut slave = mir2_world_bevy::EntitySpawn::new(0, "宝宝", 12, 10);
+        slave.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         slave.master = Some(master);
         let slave = rig.world.add_entity(slave);
         rig.world.tick();
@@ -45314,7 +45379,7 @@ break
             e.ai.target_y = 10;
         };
         arm(&mut rig);
-        mir2_world::monai::monster_run(&mut rig.world, slave);
+        mir2_world_bevy::monai::monster_run(&mut rig.world, slave);
         assert!(
             rig.world.entities.get(slave).unwrap().ai.crazy_mode,
             "SlaveRelax ⇒ 早退（CrazyMode 到期被跳过）"
@@ -45324,7 +45389,7 @@ break
         let frames = rig.say_gm("@Rest");
         assert_eq!(texts_of(&frames), vec!["下属：攻击".to_string()]);
         arm(&mut rig);
-        mir2_world::monai::monster_run(&mut rig.world, slave);
+        mir2_world_bevy::monai::monster_run(&mut rig.world, slave);
         assert!(
             !rig.world.entities.get(slave).unwrap().ai.crazy_mode,
             "对照：非 SlaveRelax ⇒ CrazyMode 照常到期"
@@ -45389,9 +45454,9 @@ break
     /// 牙：删 `sync_super_man_wabil` 的调用 ⇒ 实体被回写成低血（`2`）且多一条 53 ⇒ 红。
     #[test]
     fn gm_super_man_refill_projection_feeds_recovery_and_stamina() {
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let mut e = new_player_entity("gm".to_string(), 5, 5);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         e.hp = 0;
         e.max_hp = 100;
         e.mp = 0;
@@ -45465,8 +45530,8 @@ break
                 ..Default::default()
             },
         );
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
-        let actor = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 5, 5));
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
+        let actor = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5));
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut sg = test_session_ground(actor);
         let mut desc = [0u8; 14];
@@ -45527,7 +45592,7 @@ break
         );
         {
             let e = rig.world.entities.get_mut(rig.actor).expect("aaa 实体");
-            e.inventory.use_items[3] = mir2_world::entity::UseItemSlot {
+            e.inventory.use_items[3] = mir2_world_bevy::entity::UseItemSlot {
                 make_index: 42,
                 index: 5,
                 dura: 100,
@@ -45624,7 +45689,7 @@ break
         });
         {
             let e = f.world.entities.get_mut(1).expect("hero 实体");
-            e.inventory.use_items[3] = mir2_world::entity::UseItemSlot {
+            e.inventory.use_items[3] = mir2_world_bevy::entity::UseItemSlot {
                 make_index: 42,
                 index: 5,
                 dura: 100,
@@ -45731,11 +45796,11 @@ break
                 ..Default::default()
             },
         );
-        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut ev = mir2_world::EntitySpawn::new(0, "victim", 5, 5);
-        ev.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let mut ev = mir2_world_bevy::EntitySpawn::new(0, "victim", 5, 5);
+        ev.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         world.add_entity(ev);
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let mut sess = gmcmd::GmSession {
             permission: 10,
@@ -46110,7 +46175,7 @@ break
             enter_map: "0".into(),
             derived: None,
         };
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("atk");
         let id = world
             .enter_map("atk", new_player_entity("atk".to_string(), 11, 22), 0)
@@ -46171,12 +46236,12 @@ break
             blue_f: 251,
             blue_b: 252,
         };
-        let mut world = mir2_world::World::new(32, 32);
-        let mut hero = mir2_world::EntitySpawn::new(0, "hero", 10, 10);
-        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let mut hero = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
+        hero.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let hero_id = world.add_entity(hero);
-        let mut victim = mir2_world::EntitySpawn::new(0, "victim", 11, 11);
-        victim.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut victim = mir2_world_bevy::EntitySpawn::new(0, "victim", 11, 11);
+        victim.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let victim_id = world.add_entity(victim);
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("h", "hero", 1, 0, 901, hero_id));
@@ -46322,7 +46387,7 @@ break
     /// 玩家 `hero`（actor id 1，socket 901）+ 空会话/收帧通道。
     struct MGmRig {
         fx: ClearMapRegistry,
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         host: game_svr::mongen::MonGenHost,
         table: game_svr::mongen::MonsterTable,
         displays: downlink::DisplayTable,
@@ -46346,10 +46411,10 @@ break
         /// 线程表（否则 `RegenMonsterByName` 的 `GetMonsterThreadId == -1` ⇒ 生成失败）。
         fn with_monsters(specs: &[(&str, u8)]) -> Self {
             let fx = clear_map_registry("map");
-            let mut world = mir2_world::World::new(32, 32);
+            let mut world = mir2_world_bevy::World::new(32, 32);
             world.rng = mir2_shared::rng::RandomNumber::with_seed(2026_1031);
-            let mut e = mir2_world::EntitySpawn::new(0, "hero".to_string(), 5, 5);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 5, 5);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let actor = world.add_entity(e);
             let table = game_svr::mongen::MonsterTable::new(
                 specs
@@ -46361,13 +46426,15 @@ break
             );
             let entries = specs
                 .iter()
-                .map(|(n, _)| mir2_world::mongen::MonGenEntry::new("map", 5, 5, *n, 1, 1, 0, 0))
+                .map(|(n, _)| {
+                    mir2_world_bevy::mongen::MonGenEntry::new("map", 5, 5, *n, 1, 1, 0, 0)
+                })
                 .collect();
             let host = game_svr::mongen::MonGenHost::start(
                 entries,
                 &table,
                 false,
-                mir2_world::mongen::MonGenConfig::default(),
+                mir2_world_bevy::mongen::MonGenConfig::default(),
                 &mut world.rng,
             );
             let mut sessions = std::collections::HashMap::new();
@@ -47071,8 +47138,8 @@ break
 
     // ==================== 族 C · 城堡/赛事宿主（卡 `openmir2-gm-family-c-castle`，tier=R）====================
 
-    fn c_castle_unit(entity_id: i32, x: i16, y: i16) -> mir2_world::castle::CastleUnit {
-        mir2_world::castle::CastleUnit {
+    fn c_castle_unit(entity_id: i32, x: i16, y: i16) -> mir2_world_bevy::castle::CastleUnit {
+        mir2_world_bevy::castle::CastleUnit {
             entity_id: Some(entity_id),
             ghost: false,
             death: false,
@@ -47114,18 +47181,21 @@ break
     /// （42→100）⇒ 本用例红。
     #[test]
     fn gm_c_forced_war_frames_in_priority_order() {
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.clock_ms = 1_000;
-        let mut hero = mir2_world::EntitySpawn::new(0, "hero".to_string(), 5, 5);
-        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut hero = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 5, 5);
+        hero.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let hero_id = world.add_entity(hero);
         // 门帧收件人走 `send_ref_msg_targets_at` 的**地图格**扫描 ⇒ 玩家必须落格。
         assert!(world.enter_world(hero_id), "hero 落格");
-        let mut door = mir2_world::EntitySpawn::new(0, "城门".to_string(), 7, 7);
+        let mut door = mir2_world_bevy::EntitySpawn::new(0, "城门".to_string(), 7, 7);
         door.race = 112;
         let door_id = world.add_entity(door);
         let mut castle = c_castle_unit(door_id, 7, 7);
-        let mut c = mir2_world::UserCastle::new("沙巴克", mir2_world::CastleSiegeConfig::default());
+        let mut c = mir2_world_bevy::UserCastle::new(
+            "沙巴克",
+            mir2_world_bevy::CastleSiegeConfig::default(),
+        );
         c.palace_map_id = Some(0);
         c.castle_map_id = Some(0);
         c.home_x = 5;
@@ -47224,12 +47294,15 @@ break
     /// 无 RefShowName / 门帧。变异红：把停战也走开战支 ⇒ 本用例红。
     #[test]
     fn gm_c_forced_war_stop_broadcasts_end() {
-        let mut world = mir2_world::World::new(32, 32);
-        let mut c = mir2_world::UserCastle::new("沙巴克", mir2_world::CastleSiegeConfig::default());
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let mut c = mir2_world_bevy::UserCastle::new(
+            "沙巴克",
+            mir2_world_bevy::CastleSiegeConfig::default(),
+        );
         c.under_war = true;
         world.castles.push(c);
-        let mut hero = mir2_world::EntitySpawn::new(0, "hero".to_string(), 5, 5);
-        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut hero = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 5, 5);
+        hero.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let hero_id = world.add_entity(hero);
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero_id));
@@ -47278,13 +47351,13 @@ break
     /// 变异红：删钳 0 / 把 `-` 写成 `-= nGold` ⇒ 本用例红。
     #[test]
     fn gm_c_sabuk_wall_gold_ops_and_clamp() {
-        let mut world = mir2_world::World::new(32, 32);
-        world.castles.push(mir2_world::UserCastle::new(
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        world.castles.push(mir2_world_bevy::UserCastle::new(
             "沙巴克",
-            mir2_world::CastleSiegeConfig::default(),
+            mir2_world_bevy::CastleSiegeConfig::default(),
         ));
-        let mut hero = mir2_world::EntitySpawn::new(0, "hero".to_string(), 5, 5);
-        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut hero = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 5, 5);
+        hero.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let hero_id = world.add_entity(hero);
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(hero_id));
@@ -47297,7 +47370,7 @@ break
         let mut displays = downlink::DisplayTable::new();
         let mut broadcasts: Vec<String> = Vec::new();
         // `world` 作为**参数**传入（不被闭包捕获），便于两次调用之间读 `world.castles`。
-        let mut apply = |world: &mut mir2_world::World, op: char, gold: i32| {
+        let mut apply = |world: &mut mir2_world_bevy::World, op: char, gold: i32| {
             sessions.get_mut("hero").unwrap().gm.pending_sbk_gold = Some(gmcmd::GmSbkGoldRequest {
                 castle_index: 0,
                 op,
@@ -47333,10 +47406,10 @@ break
     /// 变异红：把 `||` 改成 `&&`（bob 被误清）/ 去掉范围门（dave 被清）⇒ 本用例红。
     #[test]
     fn gm_c_start_contest_resets_die_count_in_range() {
-        let mut world = mir2_world::World::with_maps(vec![(32, 32), (32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32), (32, 32)]);
         let mut mk = |name: &str, map_id: usize, x: i32, y: i32, ob: bool, admin: bool| {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.map_id = map_id;
             e.ob_mode = ob;
             e.admin_mode = admin;
@@ -47425,11 +47498,11 @@ break
     // ==================== 族 W · 行会宿主（卡 `openmir2-gm-family-w-guild`，tier=R）====================
 
     /// 进世界夹具：`name` 角色 Race=Play，落在 map 0 的 (11,22)（`RefShowName` 需要实体落格）。
-    fn w_session_world(name: &str) -> (mir2_world::World, i32) {
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+    fn w_session_world(name: &str) -> (mir2_world_bevy::World, i32) {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session(name);
-        let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), 11, 22);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), 11, 22);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let actor = world.enter_map(name, e, 0).expect("进世界");
         world.tick();
         (world, actor)
@@ -47467,7 +47540,7 @@ break
     /// 变异红：删 `EntityDerived` 采集或 `build_save_record` 写回 ⇒ 落库断言红。
     #[test]
     fn w_allow_group_recall_persists_to_record() {
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let (mut world, actor) = w_session_world("hero");
         let mut sessions = std::collections::HashMap::new();
         let mut sg = test_session_ground(actor);
@@ -47542,7 +47615,7 @@ break
     /// 删 `EntityDerived` 的 `allow_group` 采集 ⇒ 编译错。
     #[test]
     fn w_allow_group_mode_persists_live_allow_group_to_record() {
-        let cfg = mir2_world::PartyConfig::default();
+        let cfg = mir2_world_bevy::PartyConfig::default();
         let (mut world, actor) = w_session_world("hero");
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(actor));
@@ -47584,7 +47657,7 @@ break
             derived: None,
         };
         saved_loaded_on.record.data.allow_group = 1;
-        let mut orphan_world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut orphan_world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         orphan_world.open_session("hero");
         let rec = build_save_record(
             &saved_loaded_on,
@@ -47601,8 +47674,8 @@ break
     /// 变异红：删 DelMember / 把 750 放广播后 / 不清会话 ⇒ 本用例红。
     #[test]
     fn w_end_guild_host_frames_and_side_effects() {
-        let mut guilds = mir2_world::GuildManager::new();
-        let cfg = mir2_world::GuildConfig::default();
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        let cfg = mir2_world_bevy::GuildConfig::default();
         assert!(guilds.add_guild("测试会", "boss", &cfg));
         guilds
             .find_guild_mut("测试会")
@@ -47678,12 +47751,12 @@ break
     #[test]
     fn w_add_guild_end_to_end_and_member_gate() {
         let mut ctx = TestChatCtx::new();
-        let mut world = mir2_world::World::new(32, 32);
-        let mut hero = mir2_world::EntitySpawn::new(0, "hero".to_string(), 5, 5);
-        hero.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let mut hero = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 5, 5);
+        hero.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let hero_id = world.add_entity(hero);
-        let mut chief = mir2_world::EntitySpawn::new(0, "chief".to_string(), 6, 6);
-        chief.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut chief = mir2_world_bevy::EntitySpawn::new(0, "chief".to_string(), 6, 6);
+        chief.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         world.add_entity(chief);
         let mut sessions = std::collections::HashMap::new();
         let mut sg = test_session_ground(hero_id);
@@ -47697,9 +47770,9 @@ break
         let displays = downlink::DisplayTable::new();
         let colors = w_colors();
         let saves: std::collections::HashMap<String, SavedHuman> = std::collections::HashMap::new();
-        let cfg = mir2_world::GuildConfig::default();
+        let cfg = mir2_world_bevy::GuildConfig::default();
         let apply = |sessions: &mut std::collections::HashMap<String, SessionGround>,
-                     guilds: &mut mir2_world::GuildManager| {
+                     guilds: &mut mir2_world_bevy::GuildManager| {
             apply_pending_gm_guild_commands(
                 sessions,
                 "hero",
@@ -47782,8 +47855,8 @@ break
         let txt = base.join("测试会.txt");
         std::fs::write(&txt, "old-body").unwrap();
         let store = mir2_data::guild::GuildStore::new(&base, &guild_file);
-        let cfg = mir2_world::GuildConfig::default();
-        let mut guilds = mir2_world::GuildManager::new();
+        let cfg = mir2_world_bevy::GuildConfig::default();
+        let mut guilds = mir2_world_bevy::GuildManager::new();
         let (world, actor) = w_session_world("hero");
         let mut sessions = std::collections::HashMap::new();
         sessions.insert("hero".to_string(), test_session_ground(actor));
@@ -47835,8 +47908,8 @@ break
     /// 变异红：删 `del_guild` 落点 / 把拒删也报成功 ⇒ 本用例红。
     #[test]
     fn w_del_guild_host_success_and_refusal() {
-        let cfg = mir2_world::GuildConfig::default();
-        let mut guilds = mir2_world::GuildManager::new();
+        let cfg = mir2_world_bevy::GuildConfig::default();
+        let mut guilds = mir2_world_bevy::GuildManager::new();
         assert!(guilds.add_guild("可删会", "boss", &cfg));
         assert!(guilds.add_guild("多人会", "boss2", &cfg));
         guilds
@@ -47853,7 +47926,7 @@ break
         gates.insert(0, tx);
         let displays = downlink::DisplayTable::new();
         let colors = w_colors();
-        let mut apply = |guilds: &mut mir2_world::GuildManager, name: &str| {
+        let mut apply = |guilds: &mut mir2_world_bevy::GuildManager, name: &str| {
             sessions.get_mut("hero").unwrap().gm.pending_del_guild =
                 Some(gmcmd::GmDelGuildRequest {
                     guild_name: name.to_string(),
@@ -48231,10 +48304,10 @@ break
         gates.insert(1, tx1);
         gates.insert(2, tx2);
 
-        let mut world = mir2_world::World::with_maps(vec![(64, 64), (64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64), (64, 64)]);
         let mut mk = |name: &str, x: i32, y: i32, map_id: usize| {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.map_id = map_id;
             world.add_entity(e)
         };
@@ -48355,10 +48428,10 @@ SendRefMsgRange=15
         gates.insert(2, tx2);
         gates.insert(3, tx3);
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mut mk = |name: &str, x: i32, y: i32| {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let a = mk("aaa", 10, 10);
@@ -48506,12 +48579,12 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
         gates.insert(1, tx1);
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("aaa");
         let a = world
             .enter_map(
                 "aaa",
-                mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10),
+                mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10),
                 0,
             )
             .expect("说话者进图");
@@ -48519,7 +48592,7 @@ SendRefMsgRange=15
         let b = world
             .enter_map(
                 "bbb",
-                mir2_world::EntitySpawn::new(0, "bbb".to_string(), 30, 30),
+                mir2_world_bevy::EntitySpawn::new(0, "bbb".to_string(), 30, 30),
                 0,
             )
             .expect("目标进图");
@@ -48600,10 +48673,10 @@ SendRefMsgRange=15
         gates.insert(1, tx1);
         gates.insert(2, tx2);
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mut mk = |name: &str, x: i32, y: i32| {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let a = mk("aaa", 10, 10);
@@ -48689,10 +48762,10 @@ SendRefMsgRange=15
         gates.insert(1, tx1);
         gates.insert(2, tx2);
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mut mk = |name: &str, x: i32, y: i32| {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let a = mk("aaa", 10, 10);
@@ -48726,7 +48799,7 @@ SendRefMsgRange=15
         sessions.insert("ccc".into(), test_session_ground(outsider));
 
         let mut ctx = TestChatCtx::new();
-        let guild_cfg = mir2_world::GuildConfig::default();
+        let guild_cfg = mir2_world_bevy::GuildConfig::default();
         assert!(ctx.guilds.add_guild("G", "chief", &guild_cfg));
         ctx.guilds
             .find_guild_mut("G")
@@ -48793,10 +48866,10 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 20_000;
-        let mut e = mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
@@ -48852,10 +48925,10 @@ SendRefMsgRange=15
         gates.insert(2, tx2);
         gates.insert(3, tx3);
 
-        let mut world = mir2_world::World::with_maps(vec![(200, 200), (200, 200)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(200, 200), (200, 200)]);
         let mut mk = |name: &str, x: i32, y: i32, map_id: usize| {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.map_id = map_id;
             world.add_entity(e)
         };
@@ -48927,9 +49000,9 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(64, 64);
-        let mut e = mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
         world.clock_ms = 20_000;
         let mut online: OnlineRegistry = Vec::new();
@@ -49022,9 +49095,9 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(64, 64);
-        let mut e = mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
         world.clock_ms = 20_000;
         let mut online: OnlineRegistry = Vec::new();
@@ -49096,9 +49169,9 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(64, 64);
-        let mut e = mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
@@ -49169,10 +49242,10 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 20_000;
-        let mut e = mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
@@ -49212,10 +49285,10 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 20_000;
-        let mut e = mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let a = world.add_entity(e);
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("a", "aaa", 1, 0, 901, a));
@@ -49260,9 +49333,9 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         world.open_session("lb1a");
-        let ent = mir2_world::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
+        let ent = mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
         let actor = world.enter_map("lb1a", ent, 0).expect("旧会话应在世界里");
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("Acct1", "lb1a", 77, 0, 901, actor));
@@ -49318,7 +49391,7 @@ SendRefMsgRange=15
         // 旧会话此时还在世界（oracle 是置标志、下一 tick 才 MakeGhost）
         assert_eq!(
             world.session("lb1a").unwrap().stage,
-            mir2_world::WorldStage::InWorld
+            mir2_world_bevy::WorldStage::InWorld
         );
         // 下一 tick 落地
         drain_soft_close(
@@ -49334,11 +49407,11 @@ SendRefMsgRange=15
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -49351,7 +49424,7 @@ SendRefMsgRange=15
         }
         assert_eq!(
             world.session("lb1a").unwrap().stage,
-            mir2_world::WorldStage::Left,
+            mir2_world_bevy::WorldStage::Left,
             "MakeGhost：离开世界"
         );
         assert!(online.is_empty(), "在线登记被摘");
@@ -49364,16 +49437,16 @@ SendRefMsgRange=15
     #[test]
     fn drain_soft_close_respects_bo_reconnection_snapshot() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("a");
         let a = world
-            .enter_map("a", mir2_world::EntitySpawn::new(0, "a", 5, 5), 0)
+            .enter_map("a", mir2_world_bevy::EntitySpawn::new(0, "a", 5, 5), 0)
             .unwrap();
-        let mut b_ent = mir2_world::EntitySpawn::new(0, "b", 6, 5);
-        b_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut b_ent = mir2_world_bevy::EntitySpawn::new(0, "b", 6, 5);
+        b_ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let b = world.add_entity(b_ent);
-        let mut gm_ent = mir2_world::EntitySpawn::new(0, "gm", 5, 6);
-        gm_ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut gm_ent = mir2_world_bevy::EntitySpawn::new(0, "gm", 5, 6);
+        gm_ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let gm = world.add_entity(gm_ent);
 
         let mut online: OnlineRegistry = Vec::new();
@@ -49391,12 +49464,12 @@ SendRefMsgRange=15
         sessions.insert("b".into(), test_session_ground(b));
         sessions.insert("gm".into(), test_session_ground(gm));
 
-        let c = mir2_world::GuildConfig {
+        let c = mir2_world_bevy::GuildConfig {
             guild_chief: "掌门X".into(),
             guild_member_rank: "职位X".into(),
-            ..mir2_world::GuildConfig::default()
+            ..mir2_world_bevy::GuildConfig::default()
         };
-        let mut guilds = mir2_world::GuildManager::new();
+        let mut guilds = mir2_world_bevy::GuildManager::new();
         assert!(guilds.add_guild("G", "gm", &c));
         guilds.find_guild_mut("G").unwrap().add_member("a", &c, 0);
         guilds.find_guild_mut("G").unwrap().add_member("b", &c, 0);
@@ -49461,11 +49534,11 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
         gates.insert(1, tx1);
 
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         let mut online: OnlineRegistry = Vec::new();
         for (chr, gate, sock) in [("lb1a", 0_i32, 901_i32), ("lb1b", 1, 902)] {
             world.open_session(chr);
-            let ent = mir2_world::EntitySpawn::new(0, chr.to_string(), 10, 20);
+            let ent = mir2_world_bevy::EntitySpawn::new(0, chr.to_string(), 10, 20);
             let actor = world.enter_map(chr, ent, 0).expect("会话进世界");
             online_set(&mut online, entry("acct1", chr, 7, gate, sock, actor));
         }
@@ -49528,11 +49601,11 @@ SendRefMsgRange=15
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -49540,11 +49613,11 @@ SendRefMsgRange=15
         );
         assert_eq!(
             world.session("lb1a").unwrap().stage,
-            mir2_world::WorldStage::Left
+            mir2_world_bevy::WorldStage::Left
         );
         assert_eq!(
             world.session("lb1b").unwrap().stage,
-            mir2_world::WorldStage::Left
+            mir2_world_bevy::WorldStage::Left
         );
         assert!(online.is_empty(), "两条会话都被摘");
     }
@@ -49573,9 +49646,9 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
         gates.insert(1, tx1);
 
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         world.open_session("lb1a");
-        let ent = mir2_world::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
+        let ent = mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 10, 20);
         let actor = world.enter_map("lb1a", ent, 0).unwrap();
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("a", "lb1a", 1, 0, 901, actor));
@@ -49601,11 +49674,11 @@ SendRefMsgRange=15
             &mut std::collections::HashMap::new(),
             &mut downlink::DisplayTable::new(),
             None,
-            &mut mir2_world::GuildManager::new(),
+            &mut mir2_world_bevy::GuildManager::new(),
             None,
             &mir2_data::guild::GuildFileSections::oracle_defaults(),
             &guild_runtime::GuildMsgCfg::from_config(
-                &mir2_world::GuildConfig::default(),
+                &mir2_world_bevy::GuildConfig::default(),
                 false,
                 "",
             ),
@@ -49615,7 +49688,7 @@ SendRefMsgRange=15
         let _ = rx0.try_recv(); // KickUser
         assert_eq!(
             world.session("lb1a").unwrap().stage,
-            mir2_world::WorldStage::Left
+            mir2_world_bevy::WorldStage::Left
         );
         assert!(
             !engine.in_save_rcd_list("lb1a") && online.is_empty(),
@@ -49623,14 +49696,14 @@ SendRefMsgRange=15
         );
 
         // 支路 2（轮 A）：旧已离场 ⇒ 放行。
-        let ent2 = mir2_world::EntitySpawn::new(0, "lb1a".to_string(), 11, 21);
+        let ent2 = mir2_world_bevy::EntitySpawn::new(0, "lb1a".to_string(), 11, 21);
         let id2 = world
             .enter_map("lb1a", ent2, 0)
             .expect("旧已离场 ⇒ 新必须放行");
         online_set(&mut online, entry("a", "lb1a", 2, 1, 902, id2));
         assert_eq!(
             world.session("lb1a").unwrap().stage,
-            mir2_world::WorldStage::InWorld
+            mir2_world_bevy::WorldStage::InWorld
         );
 
         // 支路 3：旧不在世界但**在保存中**（`InSaveRcdList`）⇒ 仍然关新（且旧不在世界 ⇒ 不踢旧）。
@@ -49702,7 +49775,7 @@ SendRefMsgRange=15
             goto_count_limit: 40,
         };
         let make_index = 77;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut sg = test_session_ground(7);
         sg.state.item_list = vec![game_svr::bag::BagItem {
@@ -49742,7 +49815,7 @@ SendRefMsgRange=15
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
         let mut item_number = 0;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let env = ScriptGmEnv {
@@ -49832,7 +49905,7 @@ SendRefMsgRange=15
                 ..Default::default()
             },
         );
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let make_index = 29_033_300;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert(
@@ -50026,7 +50099,7 @@ SendRefMsgRange=15
         let mut unbind = game_svr::unbindlist::UnbindList::default();
         unbind.map.insert(5, "解包物".to_string());
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let make_index = 29_033_300;
         let mut sg = test_session_ground(7);
         sg.state.item_list = vec![game_svr::bag::BagItem {
@@ -50161,10 +50234,14 @@ SendRefMsgRange=15
     fn recovery_tick_skips_session_after_soft_close_and_preserves_pool() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .expect("hero 进世界");
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -50196,7 +50273,7 @@ SendRefMsgRange=15
         );
         assert_eq!(
             world.session("hero").unwrap().stage,
-            mir2_world::WorldStage::Left,
+            mir2_world_bevy::WorldStage::Left,
             "CM_SOFTCLOSE ⇒ MakeGhost（stage=Left）"
         );
 
@@ -50232,14 +50309,14 @@ SendRefMsgRange=15
     fn sc_gate_fixture(
         chr: &str,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         HashMap<String, SessionGround>,
         OnlineRegistry,
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         mpsc::UnboundedReceiver<SimToGate>,
         i32,
     ) {
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.open_session(chr);
         let mut ent = new_player_entity(chr.to_string(), 10, 10);
         ent.hp = 100;
@@ -50564,7 +50641,7 @@ SendRefMsgRange=15
             sg.auto_get_exp_envir = None;
             sg.bo_soft_close = true;
         }
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         drain_player_auto_get_exp(&mut world, &mut sessions, &online, None, 1_000, &mut rec);
         assert!(rec.exp_awards.is_empty(), "幽灵不得发经验");
 
@@ -50727,10 +50804,14 @@ SendRefMsgRange=15
 
         // ---- A：软关（ghost 等价物）⇒ 周期存档不触发 ----
         {
-            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
             world.open_session("hero");
             let actor_id = world
-                .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+                .enter_map(
+                    "hero",
+                    mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                    0,
+                )
                 .expect("进世界");
             let mut sg = test_session_ground(actor_id);
             sg.save_rcd_tick = 1_000;
@@ -50760,10 +50841,14 @@ SendRefMsgRange=15
 
         // ---- B：会话在世、实体 ghost 位 ⇒ 周期存档同样不触发 ----
         {
-            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
             world.open_session("hero");
             let actor_id = world
-                .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+                .enter_map(
+                    "hero",
+                    mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                    0,
+                )
                 .expect("进世界");
             world.entities.get_mut(actor_id).unwrap().life_cycle.ghost = true;
             let mut sg = test_session_ground(actor_id);
@@ -50787,10 +50872,14 @@ SendRefMsgRange=15
 
         // ---- C：移除时那次存档仍然发生（drain_kicks = oracle :713 的等价物）----
         {
-            let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
             world.open_session("hero");
             let actor_id = world
-                .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+                .enter_map(
+                    "hero",
+                    mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                    0,
+                )
                 .expect("进世界");
             world.entities.get_mut(actor_id).unwrap().life_cycle.ghost = true;
             let mut sg = test_session_ground(actor_id);
@@ -50829,11 +50918,11 @@ SendRefMsgRange=15
                 &mut HashMap::new(),
                 &mut downlink::DisplayTable::new(),
                 None,
-                &mut mir2_world::GuildManager::new(),
+                &mut mir2_world_bevy::GuildManager::new(),
                 None,
                 &mir2_data::guild::GuildFileSections::oracle_defaults(),
                 &guild_runtime::GuildMsgCfg::from_config(
-                    &mir2_world::GuildConfig::default(),
+                    &mir2_world_bevy::GuildConfig::default(),
                     false,
                     "",
                 ),
@@ -50942,14 +51031,22 @@ SendRefMsgRange=15
             },
         );
 
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.open_session("hero");
         let hid = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .expect("hero 进世界");
         world.open_session("obs");
         let oid = world
-            .enter_map("obs", mir2_world::EntitySpawn::new(0, "obs", 11, 11), 0)
+            .enter_map(
+                "obs",
+                mir2_world_bevy::EntitySpawn::new(0, "obs", 11, 11),
+                0,
+            )
             .expect("obs 进世界");
 
         let make_index = 29_033_300;
@@ -51168,10 +51265,14 @@ SendRefMsgRange=15
     fn drain_stamina_drops_one_hp_writes_back_and_emits_frame() {
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.open_session("hero");
         let hid = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .expect("hero 进世界");
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut sg = test_session_ground(hid);
@@ -51264,10 +51365,10 @@ SendRefMsgRange=15
     fn tick_frame_order_puts_stamina_after_kill_exp_chain() {
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let killer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "killer".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -51307,7 +51408,7 @@ SendRefMsgRange=15
         sg.stamina.auto_recovery_tick = sg.stamina.replay_cursor;
         sessions.insert("killer".into(), sg);
 
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             exp_awards: vec![(killer, 500, true, 11)],
             ..Default::default()
         };
@@ -51363,10 +51464,10 @@ SendRefMsgRange=15
     fn move_run_consumes_stamina_and_per_pool() {
         use mir2_protocol::messages::{CM_HORSERUN, CM_RUN, CM_WALK};
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let mover = {
-            let mut e = mir2_world::EntitySpawn::new(0, "mover".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mover".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -51563,11 +51664,11 @@ SendRefMsgRange=15
     #[test]
     fn barrier_a_draw_moves_newbie_make_index() {
         // 生产位置与生产顺序：段①（1 Robot + 3 孤儿 = 16 抽）→ 屏障 A（1 抽）。
-        let mut plan = mir2_world::CtorFoldPlan::new();
+        let mut plan = mir2_world_bevy::CtorFoldPlan::new();
         plan.push_robot_objects(1);
         plan.push_orphan_merchants();
         plan.push_barrier_a();
-        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
         world.rng = mir2_shared::rng::RandomNumber::with_seed(20240229);
         assert_eq!(
             world.fold_ctor_draws_game_app_ctor(&plan).len(),
@@ -51821,11 +51922,11 @@ SendRefMsgRange=15
     // ---------------------------------------------------------------------
 
     /// 带一座「战时 + 皇宫在 map_id=0」的城：任何进图/死亡都命中城堡改写臂。
-    fn rewrite_test_world_with_castle() -> mir2_world::World {
-        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
-        let mut castle = mir2_world::castle::UserCastle::new(
+    fn rewrite_test_world_with_castle() -> mir2_world_bevy::World {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
+        let mut castle = mir2_world_bevy::castle::UserCastle::new(
             "沙巴克",
-            mir2_world::castle::CastleSiegeConfig::default(),
+            mir2_world_bevy::castle::CastleSiegeConfig::default(),
         );
         castle.map_name = Some("3".to_string());
         castle.palace_map_id = Some(0);
@@ -51883,7 +51984,7 @@ SendRefMsgRange=15
             false,
             false,
             None,
-            &mir2_world::castle::RedDieHome::default(),
+            &mir2_world_bevy::castle::RedDieHome::default(),
         );
         assert_eq!(
             map_name, "recordHome",
@@ -51918,7 +52019,7 @@ SendRefMsgRange=15
             false,
             false,
             None,
-            &mir2_world::castle::RedDieHome::default(),
+            &mir2_world_bevy::castle::RedDieHome::default(),
         );
         assert_eq!(map_name, "recordHome", "死亡落点必须用记录 HomeMap");
         assert!((98..=102).contains(&x), "x 以记录 HomeX=100 为基准：{x}");
@@ -51937,7 +52038,7 @@ SendRefMsgRange=15
     /// 牙：只改局部 `hp` 不写回记录 ⇒ HP/MP 仍是 0 红；不置位 ⇒ `die` false 红。
     #[test]
     fn fight3_zone_recovery_writes_record_hp_mp_and_die_bit() {
-        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
         let mut rec = rewrite_test_record();
         {
             let a = rec.data.abil.as_mut().unwrap();
@@ -51957,7 +52058,7 @@ SendRefMsgRange=15
             false,
             true,
             None,
-            &mir2_world::castle::RedDieHome::default(),
+            &mir2_world_bevy::castle::RedDieHome::default(),
         );
         let a = rec.data.abil.as_ref().unwrap();
         assert_eq!((a.hp, a.mp), (60, 30), "HP=MaxHP、MP=MaxMP 写回记录");
@@ -51970,7 +52071,7 @@ SendRefMsgRange=15
     /// `FightZoneDieCount=0`（oracle 的 else 分支），HP/MP 不动。
     #[test]
     fn fight3_zone_else_resets_fight_zone_die_count() {
-        let world = mir2_world::World::with_maps(vec![(20, 20)]);
+        let world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
         let mut rec = rewrite_test_record();
         rec.data.fight_zone_die_count = 2;
         let mut rng = mir2_shared::rng::RandomNumber::with_seed(20261021);
@@ -51986,7 +52087,7 @@ SendRefMsgRange=15
             false,
             true,
             None,
-            &mir2_world::castle::RedDieHome::default(),
+            &mir2_world_bevy::castle::RedDieHome::default(),
         );
         assert_eq!(rec.data.fight_zone_die_count, 0, "else 支清记录计数");
         assert_eq!(rec.data.abil.as_ref().unwrap().hp, 40, "HP>0 不动");
@@ -52156,11 +52257,11 @@ SendRefMsgRange=15
         assert_eq!(e.exp, 0, "实体 Exp = WAbil.Exp（记录值）");
         assert_eq!(e.max_exp, 10, "实体 MaxExp = Exps[1]");
         // 首杀：1 点经验 < 10 ⇒ 不得升级。
-        let (_, leveled, _) = mir2_world::combat::win_exp(
+        let (_, leveled, _) = mir2_world_bevy::combat::win_exp(
             &mut e,
             1,
             &need_exps,
-            &mir2_world::combat::CombatConfig::default(),
+            &mir2_world_bevy::combat::CombatConfig::default(),
             None,
         );
         assert!(!leveled, "登录后首杀不得伪升级（exp=1 < max_exp=10）");
@@ -52169,11 +52270,11 @@ SendRefMsgRange=15
         let mut d = new_player_entity("hero2".to_string(), 10, 10);
         d.exp = 0;
         d.max_exp = 0;
-        let (_, bogus, _) = mir2_world::combat::win_exp(
+        let (_, bogus, _) = mir2_world_bevy::combat::win_exp(
             &mut d,
             1,
             &need_exps,
-            &mir2_world::combat::CombatConfig::default(),
+            &mir2_world_bevy::combat::CombatConfig::default(),
             None,
         );
         assert!(bogus, "对照：0/0 ⇒ 首杀伪升级（证明本判据有牙）");
@@ -52206,7 +52307,7 @@ SendRefMsgRange=15
         let mut n = names.item_number;
         add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
 
-        let world = mir2_world::World::new(32, 32);
+        let world = mir2_world_bevy::World::new(32, 32);
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert(
             "hero".into(),
@@ -52342,7 +52443,7 @@ SendRefMsgRange=15
         let mut n = names.item_number;
         add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.clock_ms = 40_000;
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         let mut sg = test_session_ground(7);
@@ -52610,7 +52711,7 @@ SendRefMsgRange=15
         add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
 
         // 世界：一个已进世界、且**本 tick 已扫**的玩家（登录尾段可排水）。
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.open_session("hero");
         let id = world
             .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
@@ -52702,7 +52803,7 @@ SendRefMsgRange=15
         let mut n = names.item_number;
         add_newbie_items(&mut list, &catalog, &names, 0, &mut n);
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.open_session("hero");
         let id = world
             .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
@@ -52775,21 +52876,21 @@ SendRefMsgRange=15
     fn hit_cmd_dispatches_ack_action_frame_and_world_attack() {
         use mir2_protocol::messages::{CM_HEAVYHIT, CM_HIT, SM_HEAVYHIT, SM_HIT};
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let attacker = {
-            let mut e = mir2_world::EntitySpawn::new(0, "atk".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.dc = 0x0064; // DC 100
             world.add_entity(e)
         };
         let observer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "obs".to_string(), 12, 12);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 12, 12);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let monster = {
-            let mut e = mir2_world::EntitySpawn::new(0, "mon".to_string(), 10, 9); // 正上方（Dir=0）
-            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 10, 9); // 正上方（Dir=0）
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             e.hp = 200;
             e.max_hp = 200;
             e.hit_point = 0; // `BaseObject.Attack.cs:39` 的命中判定：HitPoint==0 ⇒ 必中
@@ -53006,10 +53107,10 @@ SendRefMsgRange=15
     fn hit_cmd_without_target_still_draws_attack_power() {
         use mir2_protocol::messages::CM_HIT;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let attacker = {
-            let mut e = mir2_world::EntitySpawn::new(0, "atk".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.dc = 0x1E14; // LoByte=0x14=20、HiByte=0x1E=30 ⇒ (base=20, power=10)
             e.luck = 0;
             e.power_rate = 100;
@@ -53045,7 +53146,7 @@ SendRefMsgRange=15
         // oracle 期望值：玩家 `GetBaseAttackPoewr` 版（`Random(LoByte(DC)+1)` + `Luck<=0` 的
         // `Random(10)`）。用**独立**参照流手推，不由生产 `attack_swing` 反推。
         let mut expected = mir2_shared::rng::RandomNumber::with_seed(SEED);
-        let expected_power = mir2_world::combat::get_base_attack_power_player(
+        let expected_power = mir2_world_bevy::combat::get_base_attack_power_player(
             &mut expected,
             0x1E14,
             0,
@@ -53119,10 +53220,10 @@ SendRefMsgRange=15
     #[test]
     fn spell_cmd_dispatches_guard_ack_and_magic_key_change() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let caster = {
-            let mut e = mir2_world::EntitySpawn::new(0, "caster".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "caster".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -53371,7 +53472,7 @@ SendRefMsgRange=15
         target_x: i32,
         target_y: i32,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         i32,
         i32,
         OnlineRegistry,
@@ -53382,7 +53483,7 @@ SendRefMsgRange=15
         mpsc::UnboundedReceiver<SimToGate>,
     ) {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         // 生产宿主 `lib.rs` 的 `world.enable_buff_tick()` —— A-5 支的运行前提。
         // 缺省（关闭）时 A-5 支整段不执行（与既有 golden 逐字节不变的口径一致）。
         world.enable_buff_tick();
@@ -53519,7 +53620,7 @@ SendRefMsgRange=15
     /// 与 [`a5_spell_rig`] 的差别：本夹具接受 seed / 训练门 / 护身符耐久，便于在同一测试里
     /// 跑「门开」与「门关」两条**同种子**对照流（断言必须比较整段流水，不用单抽）。
     struct P2Rig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         caster: i32,
         target: i32,
         online: OnlineRegistry,
@@ -53544,7 +53645,7 @@ SendRefMsgRange=15
             seed: i32,
         ) -> Self {
             use std::collections::HashMap;
-            let mut world = mir2_world::World::new(64, 64);
+            let mut world = mir2_world_bevy::World::new(64, 64);
             world.enable_buff_tick();
             let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
             let target =
@@ -53767,13 +53868,13 @@ SendRefMsgRange=15
                 14 => assert!(
                     rig.world
                         .buffs
-                        .has_buff(rig.target, mir2_world::BuffType::MagicDefensePower),
+                        .has_buff(rig.target, mir2_world_bevy::BuffType::MagicDefensePower),
                     "14 `MagMakeDefenceArea(..., btState=1)` ⇒ 目标获 MagicDefensePower"
                 ),
                 _ => assert!(
                     rig.world
                         .buffs
-                        .has_buff(rig.target, mir2_world::BuffType::DefensePower),
+                        .has_buff(rig.target, mir2_world_bevy::BuffType::DefensePower),
                     "15 `MagMakeDefenceArea(..., btState=0)` ⇒ 目标获 DefensePower"
                 ),
             }
@@ -53940,7 +54041,7 @@ SendRefMsgRange=15
                 assert!(
                     !rig.world
                         .buffs
-                        .has_buff(rig.target, mir2_world::BuffType::DefensePower),
+                        .has_buff(rig.target, mir2_world_bevy::BuffType::DefensePower),
                     "[Dura=49] 门不过 ⇒ 目标不得获 buff"
                 );
                 for socket in [911, 912] {
@@ -53968,7 +54069,7 @@ SendRefMsgRange=15
             assert!(
                 rig.world
                     .buffs
-                    .has_buff(rig.target, mir2_world::BuffType::DefensePower),
+                    .has_buff(rig.target, mir2_world_bevy::BuffType::DefensePower),
                 "[Dura={dura}] 门过 ⇒ buff 生效"
             );
             assert!(
@@ -54051,13 +54152,13 @@ SendRefMsgRange=15
                 assert!(
                     !rig.world
                         .buffs
-                        .has_buff(id, mir2_world::BuffType::DefensePower),
+                        .has_buff(id, mir2_world_bevy::BuffType::DefensePower),
                     "[魔号 {magic_id}] 无护身符 ⇒ {who} 不得获 DefensePower"
                 );
                 assert!(
                     !rig.world
                         .buffs
-                        .has_buff(id, mir2_world::BuffType::MagicDefensePower),
+                        .has_buff(id, mir2_world_bevy::BuffType::MagicDefensePower),
                     "[魔号 {magic_id}] 无护身符 ⇒ {who} 不得获 MagicDefensePower"
                 );
             }
@@ -54138,7 +54239,7 @@ SendRefMsgRange=15
         assert!(
             open.world
                 .buffs
-                .has_buff(open.caster, mir2_world::BuffType::MagicShield),
+                .has_buff(open.caster, mir2_world_bevy::BuffType::MagicShield),
             "31 ⇒ 施法者获 MagicShield buff"
         );
         assert!(
@@ -54275,7 +54376,7 @@ SendRefMsgRange=15
         assert!(
             world
                 .buffs
-                .has_buff(target, mir2_world::BuffType::DefensePower),
+                .has_buff(target, mir2_world_bevy::BuffType::DefensePower),
             "in-range（|Δ|=2 ≤ MagicAttackRage=8）⇒ 目标获 `DefencePower`（技能 15 → `DefenceUp`）"
         );
         assert!(
@@ -54352,17 +54453,19 @@ SendRefMsgRange=15
             // ① 任何 buff 都不得落（三个生产者对应的三种 buff 全查；目标与施法者都查）。
             for (who, id) in [("target", target), ("caster", caster)] {
                 assert!(
-                    !world.buffs.has_buff(id, mir2_world::BuffType::DefensePower),
+                    !world.buffs.has_buff(id, mir2_world_bevy::BuffType::DefensePower),
                     "[魔号 {magic_id}] 越界（|Δ|=15 > 8）⇒ {who} 不得获 `DefencePower`（不抽数不施放）"
                 );
                 assert!(
                     !world
                         .buffs
-                        .has_buff(id, mir2_world::BuffType::MagicDefensePower),
+                        .has_buff(id, mir2_world_bevy::BuffType::MagicDefensePower),
                     "[魔号 {magic_id}] 越界 ⇒ {who} 不得获 `MagicDefensePower`"
                 );
                 assert!(
-                    !world.buffs.has_buff(id, mir2_world::BuffType::MagicShield),
+                    !world
+                        .buffs
+                        .has_buff(id, mir2_world_bevy::BuffType::MagicShield),
                     "[魔号 {magic_id}] 越界 ⇒ {who} 不得获 `MagicShield` buff"
                 );
                 assert!(
@@ -54475,17 +54578,21 @@ SendRefMsgRange=15
             // ② 三种 buff 全无（目标 + 施法者）。
             for (who, id) in [("target", target), ("caster", caster)] {
                 assert!(
-                    !world.buffs.has_buff(id, mir2_world::BuffType::DefensePower),
+                    !world
+                        .buffs
+                        .has_buff(id, mir2_world_bevy::BuffType::DefensePower),
                     "[魔号 {magic_id}] snap 后越界 ⇒ {who} 不得获 `DefencePower`"
                 );
                 assert!(
                     !world
                         .buffs
-                        .has_buff(id, mir2_world::BuffType::MagicDefensePower),
+                        .has_buff(id, mir2_world_bevy::BuffType::MagicDefensePower),
                     "[魔号 {magic_id}] snap 后越界 ⇒ {who} 不得获 `MagicDefensePower`"
                 );
                 assert!(
-                    !world.buffs.has_buff(id, mir2_world::BuffType::MagicShield),
+                    !world
+                        .buffs
+                        .has_buff(id, mir2_world_bevy::BuffType::MagicShield),
                     "[魔号 {magic_id}] snap 后越界 ⇒ {who} 不得获 `MagicShield` buff"
                 );
                 assert!(
@@ -54562,19 +54669,19 @@ SendRefMsgRange=15
                 31 => assert!(
                     world
                         .buffs
-                        .has_buff(caster, mir2_world::BuffType::MagicShield),
+                        .has_buff(caster, mir2_world_bevy::BuffType::MagicShield),
                     "snap 后在界 ⇒ 施法者获 `MagicShield`（技能 31 作用于自身）"
                 ),
                 14 => assert!(
                     world
                         .buffs
-                        .has_buff(target, mir2_world::BuffType::MagicDefensePower),
+                        .has_buff(target, mir2_world_bevy::BuffType::MagicDefensePower),
                     "snap 后在界 ⇒ 目标获 `MagicDefensePower`（技能 14 → `MagDefenceUp`）"
                 ),
                 _ => assert!(
                     world
                         .buffs
-                        .has_buff(target, mir2_world::BuffType::DefensePower),
+                        .has_buff(target, mir2_world_bevy::BuffType::DefensePower),
                     "snap 后在界 ⇒ 目标获 `DefencePower`（技能 15 → `DefenceUp`）"
                 ),
             }
@@ -54654,13 +54761,13 @@ SendRefMsgRange=15
             draws_between(&rng_before, &world.rng),
             world
                 .buffs
-                .has_buff(caster, mir2_world::BuffType::MagicShield),
+                .has_buff(caster, mir2_world_bevy::BuffType::MagicShield),
             world
                 .buffs
-                .has_buff(target, mir2_world::BuffType::DefensePower)
+                .has_buff(target, mir2_world_bevy::BuffType::DefensePower)
                 || world
                     .buffs
-                    .has_buff(target, mir2_world::BuffType::MagicDefensePower),
+                    .has_buff(target, mir2_world_bevy::BuffType::MagicDefensePower),
         )
     }
 
@@ -54794,14 +54901,14 @@ SendRefMsgRange=15
         assert!(
             world
                 .buffs
-                .has_buff(target, mir2_world::BuffType::DefensePower),
+                .has_buff(target, mir2_world_bevy::BuffType::DefensePower),
             "前置：in-range ⇒ 目标已获 `DefencePower`"
         );
         let _ = a5_take_idents(&mut rx0);
         // 推到 buff 到期（`Operate` 的 `d.state_tick == 0` 支 ⇒ `bo_chg`）。
         let mut seen = false;
         for _ in 0..400 {
-            world.clock_ms += mir2_world::BUFF_STATE_TICK_GATE_MS;
+            world.clock_ms += mir2_world_bevy::BUFF_STATE_TICK_GATE_MS;
             world.tick();
             drain_buff_downlink(
                 &world.last_tick,
@@ -54836,7 +54943,7 @@ SendRefMsgRange=15
     #[test]
     fn spell_cmd_summon_wires_amulet_and_frames() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let caster = {
             let mut e = new_player_entity("caster".to_string(), 10, 10);
             e.level = 40;
@@ -55026,7 +55133,7 @@ SendRefMsgRange=15
     #[test]
     fn spell_cmd_summon_exhausted_amulet_emits_delitem() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let caster = {
             let mut e = new_player_entity("caster".to_string(), 10, 10);
             e.level = 40;
@@ -55189,7 +55296,7 @@ SendRefMsgRange=15
     #[test]
     fn spell_cmd_clone_wires_entity_and_frames() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let caster = {
             let mut e = new_player_entity("caster".to_string(), 10, 10);
             e.level = 40;
@@ -55302,12 +55409,12 @@ SendRefMsgRange=15
             let c = world
                 .entities
                 .iter_ref()
-                .find(|e| e.name == mir2_world::CLONE_NAME)
+                .find(|e| e.name == mir2_world_bevy::CLONE_NAME)
                 .expect("应造出克隆体实体");
             (c.id, c.x, c.y, c.race, c.slave_list.len())
         };
         assert_eq!((cx, cy), (10, 10), "坐标 = 主人坐标");
-        assert_eq!(cray, mir2_world::ACTOR_RACE_PLAY, "玩家型克隆体");
+        assert_eq!(cray, mir2_world_bevy::ACTOR_RACE_PLAY, "玩家型克隆体");
         assert_eq!(cslaves, 0, "克隆体不入 SlaveList");
         assert!(
             world.entities.get(caster).unwrap().slave_list.is_empty(),
@@ -55419,15 +55526,15 @@ SendRefMsgRange=15
     #[test]
     fn combat_downlink_sends_struck_and_nowdeath() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let victim = {
-            let mut e = mir2_world::EntitySpawn::new(0, "victim".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "victim".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let attacker = {
-            let mut e = mir2_world::EntitySpawn::new(0, "atk".to_string(), 11, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -55456,11 +55563,11 @@ SendRefMsgRange=15
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("victim".into(), test_session_ground(victim));
 
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             attacks: vec![(
                 attacker,
                 victim,
-                mir2_world::AttackOutcome {
+                mir2_world_bevy::AttackOutcome {
                     power: 10,
                     hit: true,
                     damage: 7,
@@ -55474,7 +55581,7 @@ SendRefMsgRange=15
         };
         world
             .pending_refmessage_frames
-            .push(mir2_world::slave::RefMessageFrame {
+            .push(mir2_world_bevy::slave::RefMessageFrame {
                 actor_id: victim,
                 ident: mir2_protocol::messages::RM_STRUCK,
                 w_param: 7,
@@ -55572,20 +55679,20 @@ SendRefMsgRange=15
     #[test]
     fn combat_downlink_broadcasts_struck_to_all_visible_players() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let victim = {
-            let mut e = mir2_world::EntitySpawn::new(0, "victim".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "victim".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let attacker = {
-            let mut e = mir2_world::EntitySpawn::new(0, "atk".to_string(), 11, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let observer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "obs".to_string(), 21, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 21, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -55623,11 +55730,11 @@ SendRefMsgRange=15
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("victim".into(), test_session_ground(victim));
 
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             attacks: vec![(
                 attacker,
                 victim,
-                mir2_world::AttackOutcome {
+                mir2_world_bevy::AttackOutcome {
                     power: 10,
                     hit: true,
                     damage: 7,
@@ -55640,7 +55747,7 @@ SendRefMsgRange=15
         };
         world
             .pending_refmessage_frames
-            .push(mir2_world::slave::RefMessageFrame {
+            .push(mir2_world_bevy::slave::RefMessageFrame {
                 actor_id: victim,
                 ident: mir2_protocol::messages::RM_STRUCK,
                 w_param: 7,
@@ -55701,15 +55808,15 @@ SendRefMsgRange=15
     #[test]
     fn combat_downlink_struck_uses_live_hp_not_payload_snapshot() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let victim = {
-            let mut e = mir2_world::EntitySpawn::new(0, "victim".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "victim".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let attacker = {
-            let mut e = mir2_world::EntitySpawn::new(0, "atk".to_string(), 11, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -55741,10 +55848,10 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("victim".into(), test_session_ground(victim));
-        let rec = mir2_world::TickRecord::default();
+        let rec = mir2_world_bevy::TickRecord::default();
         world
             .pending_refmessage_frames
-            .push(mir2_world::slave::RefMessageFrame {
+            .push(mir2_world_bevy::slave::RefMessageFrame {
                 actor_id: victim,
                 ident: mir2_protocol::messages::RM_STRUCK,
                 w_param: 7,
@@ -55784,22 +55891,22 @@ SendRefMsgRange=15
     #[test]
     fn combat_downlink_broadcasts_struck_for_monster_target() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let monster = {
-            let mut e = mir2_world::EntitySpawn::new(0, "mon".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             e.hp = 200;
             e.max_hp = 200;
             world.add_entity(e)
         };
         let attacker = {
-            let mut e = mir2_world::EntitySpawn::new(0, "atk".to_string(), 11, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "atk".to_string(), 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let observer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "obs".to_string(), 13, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 13, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -55825,11 +55932,11 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
 
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             attacks: vec![(
                 attacker,
                 monster,
-                mir2_world::AttackOutcome {
+                mir2_world_bevy::AttackOutcome {
                     power: 30,
                     hit: true,
                     damage: 20,
@@ -55842,7 +55949,7 @@ SendRefMsgRange=15
         };
         world
             .pending_refmessage_frames
-            .push(mir2_world::slave::RefMessageFrame {
+            .push(mir2_world_bevy::slave::RefMessageFrame {
                 actor_id: monster,
                 ident: mir2_protocol::messages::RM_STRUCK,
                 w_param: 20,
@@ -55900,27 +56007,27 @@ SendRefMsgRange=15
     #[test]
     fn slave_mutiny_downlink_emits_namecolor_then_username() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let master = {
-            let mut e = mir2_world::EntitySpawn::new(0, "master".to_string(), 9, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "master".to_string(), 9, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.death = true;
             world.add_entity(e)
         };
         // 叛变后的宝宝：`Master == null`（`process_slave_mutiny` 已置）⇒ `GetChrColor` = `NameColor`(255)。
         let slave = {
-            let mut e = mir2_world::EntitySpawn::new(0, "骷髅2".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "骷髅2".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             world.add_entity(e)
         };
         let near = {
-            let mut e = mir2_world::EntitySpawn::new(0, "near".to_string(), 12, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "near".to_string(), 12, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let far = {
-            let mut e = mir2_world::EntitySpawn::new(0, "far".to_string(), 40, 40);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "far".to_string(), 40, 40);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -55945,10 +56052,10 @@ SendRefMsgRange=15
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let rec = mir2_world::TickRecord {
-            slave_self_deliveries: vec![mir2_world::slave::SelfDelayOutcome {
+        let rec = mir2_world_bevy::TickRecord {
+            slave_self_deliveries: vec![mir2_world_bevy::slave::SelfDelayOutcome {
                 actor_id: master,
-                ident: mir2_world::slave::RM_MASTERDIEMUTINY,
+                ident: mir2_world_bevy::slave::RM_MASTERDIEMUTINY,
                 mutinied: vec![slave],
                 ghosted: Vec::new(),
                 mag_healing: None,
@@ -56003,22 +56110,22 @@ SendRefMsgRange=15
     #[test]
     fn slave_mutiny_downlink_follows_msgqueue_heap_order() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let master = {
-            let mut e = mir2_world::EntitySpawn::new(0, "master".to_string(), 9, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "master".to_string(), 9, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.death = true;
             world.add_entity(e)
         };
         let mut slaves = Vec::new();
         for (name, x) in [("s1", 10_i32), ("s2", 11)] {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, 10);
-            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             slaves.push(world.add_entity(e));
         }
         let obs = {
-            let mut e = mir2_world::EntitySpawn::new(0, "obs".to_string(), 12, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 12, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -56039,10 +56146,10 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
 
         // `mutinied` 序 = `SlaveList` 末尾往前 ⇒ [s2, s1]。
-        let rec = mir2_world::TickRecord {
-            slave_self_deliveries: vec![mir2_world::slave::SelfDelayOutcome {
+        let rec = mir2_world_bevy::TickRecord {
+            slave_self_deliveries: vec![mir2_world_bevy::slave::SelfDelayOutcome {
                 actor_id: master,
-                ident: mir2_world::slave::RM_MASTERDIEMUTINY,
+                ident: mir2_world_bevy::slave::RM_MASTERDIEMUTINY,
                 mutinied: vec![slaves[1], slaves[0]],
                 ghosted: Vec::new(),
                 mag_healing: None,
@@ -56079,10 +56186,10 @@ SendRefMsgRange=15
     #[test]
     fn exp_downlink_sends_sm_winexp_and_syncs_session() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let killer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "killer".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -56112,7 +56219,7 @@ SendRefMsgRange=15
         sessions.insert("killer".into(), test_session_ground(killer));
 
         // 增量 0x0001_0203（Param=0x0203、Tag=0x0001），总量 1234。
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             exp_awards: vec![(killer, 0x0001_0203, true, 9)],
             ..Default::default()
         };
@@ -56184,10 +56291,10 @@ SendRefMsgRange=15
     #[test]
     fn levelup_downlink_sends_levelup_frames_heals_and_syncs_entity() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let killer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "killer".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -56223,7 +56330,7 @@ SendRefMsgRange=15
         sg.state.wabil.mp = 5;
         sessions.insert("killer".into(), sg);
 
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             exp_awards: vec![(killer, 500, true, 11)],
             ..Default::default()
         };
@@ -56308,10 +56415,10 @@ SendRefMsgRange=15
     fn c5_recovery_then_levelup_emit_two_frames() {
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hid = {
-            let mut e = mir2_world::EntitySpawn::new(0, "hero".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -56357,7 +56464,7 @@ SendRefMsgRange=15
         flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
 
         // P3：击杀升级链 ⇒ 第 2 条 53 + 44 + 45/52/752。
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             exp_awards: vec![(hid, 500, true, 11)],
             ..Default::default()
         };
@@ -56439,10 +56546,10 @@ SendRefMsgRange=15
     #[test]
     fn body_luck_accumulates_on_getexp_and_persists() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let killer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "killer".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "killer".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -56475,7 +56582,7 @@ SendRefMsgRange=15
         sessions.insert("killer".into(), sg);
 
         // 非升级（`leveled=false`）⇒ 只加 `dwExp*0.002 = 5000`；`BodyLuckLevel = 1`。
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             exp_awards: vec![(killer, 2_500_000, false, 11)],
             ..Default::default()
         };
@@ -56608,17 +56715,17 @@ SendRefMsgRange=15
     fn pickup_group_attribution_uses_registry() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.set_item_catalog(vec![mir2_data::StdItem {
             name: "金币".into(),
             ..Default::default()
         }]);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
-        let mate = world.add_entity(mir2_world::EntitySpawn::new(2, "mate", 11, 10));
+        let mate = world.add_entity(mir2_world_bevy::EntitySpawn::new(2, "mate", 11, 10));
         let (gx, gy) = (11, 10);
         let count = 300;
         // 地面金币归属 = mate（`MapItem.OfBaseObject`）。
@@ -56626,8 +56733,8 @@ SendRefMsgRange=15
             gx,
             gy,
             mate,
-            mir2_world::map::FloorItemMeta {
-                kind: mir2_world::map::FloorItemKind::Gold,
+            mir2_world_bevy::map::FloorItemMeta {
+                kind: mir2_world_bevy::map::FloorItemKind::Gold,
                 index: 0,
                 count,
                 item_id: mate,
@@ -56768,7 +56875,7 @@ SendRefMsgRange=15
 
         // 情形 B：hero 与 mate 同组（hero 团长）⇒ `ClientPickUpItemIsOfGroup(mate)` 成立 ⇒ 可拾。
         world.entities.get_mut(mate).unwrap().group.allow_group = true;
-        let _ = world.party_create_group(hero, "mate", &mir2_world::PartyConfig::default());
+        let _ = world.party_create_group(hero, "mate", &mir2_world_bevy::PartyConfig::default());
         assert_eq!(world.entities.get(hero).unwrap().group_owner, hero);
         assert_eq!(world.entities.get(mate).unwrap().group_owner, hero);
         handle_ground_cmd(
@@ -56907,7 +57014,7 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::new(8, 8);
+        let mut world = mir2_world_bevy::World::new(8, 8);
         let mut displays = downlink::DisplayTable::new();
 
         // `recog=60001`（MakeIndex）、`param=0`（槽位）、`dealing=true`。
@@ -56964,11 +57071,11 @@ SendRefMsgRange=15
     fn drop_blocked_by_fresh_deal_last_tick() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.clock_ms = 10_000;
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
 
@@ -57274,7 +57381,7 @@ SendRefMsgRange=15
 
         /// 一个用例派发所需的最小生产上下文（world/会话/回帧队列/配置/交易态）。
         struct Harness {
-            world: mir2_world::World,
+            world: mir2_world_bevy::World,
             sessions: HashMap<String, SessionGround>,
             online: OnlineRegistry,
             gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -57285,12 +57392,16 @@ SendRefMsgRange=15
 
         fn harness_from(case: &Value) -> Harness {
             let c = &case["ctx"];
-            let mut world = mir2_world::World::new(64, 64);
+            let mut world = mir2_world_bevy::World::new(64, 64);
             world.clock_ms = case["now_tick"].as_i64().unwrap();
             let p = world.add_entity({
-                let mut e =
-                    mir2_world::EntitySpawn::new(1, "hero", i32v(&c["curr_x"]), i32v(&c["curr_y"]));
-                e.race = mir2_world::ACTOR_RACE_PLAY;
+                let mut e = mir2_world_bevy::EntitySpawn::new(
+                    1,
+                    "hero",
+                    i32v(&c["curr_x"]),
+                    i32v(&c["curr_y"]),
+                );
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
                 e
             });
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -57345,7 +57456,7 @@ SendRefMsgRange=15
         /// 走生产派发入口（`sim_loop` 的同一条），只取回 600/601 帧体。
         #[allow(clippy::too_many_arguments)]
         fn run_drop(
-            world: &mir2_world::World,
+            world: &mir2_world_bevy::World,
             sessions: &mut HashMap<String, SessionGround>,
             online: &OnlineRegistry,
             gates: &HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -57519,11 +57630,11 @@ SendRefMsgRange=15
         // ③ `MakeIndex = 100_001`（> u16）：`Recog` 是 i32 全宽；截断成 u16 ⇒ 34465 必红。
         {
             let make_index: i32 = 100_001;
-            let mut world = mir2_world::World::new(64, 64);
+            let mut world = mir2_world_bevy::World::new(64, 64);
             world.clock_ms = 1_200_000;
             let p = world.add_entity({
-                let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-                e.race = mir2_world::ACTOR_RACE_PLAY;
+                let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
                 e
             });
             let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -57687,7 +57798,7 @@ SendRefMsgRange=15
             },
         );
         let cfg = game_svr::selloff::SellOffConfig::default();
-        let world = mir2_world::World::new(32, 32);
+        let world = mir2_world_bevy::World::new(32, 32);
 
         // ① 卖方把一件背包物品加进寄售窗（`CM_SELLOFFADDITEM`，`recog=MakeIndex`、尾=名字）
         handle_selloff_cmd(
@@ -57856,7 +57967,7 @@ SendRefMsgRange=15
             },
         );
         let cfg = game_svr::selloff::SellOffConfig::default();
-        let world = mir2_world::World::new(32, 32);
+        let world = mir2_world_bevy::World::new(32, 32);
         let online: OnlineRegistry = vec![
             OnlineEntry {
                 account: "a".into(),
@@ -58153,19 +58264,19 @@ SendRefMsgRange=15
         use std::collections::HashMap;
 
         // —— 世界：玩家 (10,10) + 买入商人 (11,10)，在售 1 件 `Index=1` 的货。
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let merchant_id = world
-            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+            .insert_merchant(mir2_world_bevy::merchant::MerchantSpawn {
                 name: "商人".to_string(),
                 x: 11,
                 y: 10,
                 map_id: 0,
-                state: mir2_world::merchant::MerchantState::new(
+                state: mir2_world_bevy::merchant::MerchantState::new(
                     "卫家店".to_string(),
                     "0".to_string(),
                     0,
@@ -58174,7 +58285,7 @@ SendRefMsgRange=15
                     false,
                     false,
                     0,
-                    mir2_world::merchant::MerchantFlags {
+                    mir2_world_bevy::merchant::MerchantFlags {
                         is_buy: true,
                         ..Default::default()
                     },
@@ -58186,7 +58297,7 @@ SendRefMsgRange=15
             .expect("商人入世界");
         world.merchant_add_item_to_goods_list(
             merchant_id,
-            mir2_world::merchant::MerchantItem {
+            mir2_world_bevy::merchant::MerchantItem {
                 make_index: 7,
                 index: 1,
                 dura: 10,
@@ -58399,19 +58510,19 @@ SendRefMsgRange=15
     fn shop_dealybme_opens_consignment_form() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let merchant_id = world
-            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+            .insert_merchant(mir2_world_bevy::merchant::MerchantSpawn {
                 name: "商人".to_string(),
                 x: 11,
                 y: 10,
                 map_id: 0,
-                state: mir2_world::merchant::MerchantState::new(
+                state: mir2_world_bevy::merchant::MerchantState::new(
                     "卫家店".to_string(),
                     "0".to_string(),
                     0,
@@ -58420,7 +58531,7 @@ SendRefMsgRange=15
                     false,
                     false,
                     0,
-                    mir2_world::merchant::MerchantFlags {
+                    mir2_world_bevy::merchant::MerchantFlags {
                         is_yb_deal: true,
                         ..Default::default()
                     },
@@ -58651,19 +58762,19 @@ SendRefMsgRange=15
     fn cm_usermakedrugitem_full_chain_over_gate() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let merchant_id = world
-            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+            .insert_merchant(mir2_world_bevy::merchant::MerchantSpawn {
                 name: "药商".to_string(),
                 x: 11,
                 y: 10,
                 map_id: 0,
-                state: mir2_world::merchant::MerchantState::new(
+                state: mir2_world_bevy::merchant::MerchantState::new(
                     "药铺".to_string(),
                     "0".to_string(),
                     0,
@@ -58672,7 +58783,7 @@ SendRefMsgRange=15
                     false,
                     false,
                     0,
-                    mir2_world::merchant::MerchantFlags {
+                    mir2_world_bevy::merchant::MerchantFlags {
                         is_make_drug: true,
                         ..Default::default()
                     },
@@ -58685,7 +58796,7 @@ SendRefMsgRange=15
         // 在售组首件 = 成品「金创药」（`Index=3`）。
         world.merchant_add_item_to_goods_list(
             merchant_id,
-            mir2_world::merchant::MerchantItem {
+            mir2_world_bevy::merchant::MerchantItem {
                 make_index: 9,
                 index: 3,
                 dura: 12,
@@ -58962,17 +59073,17 @@ SendRefMsgRange=15
     #[test]
     fn cm_butch_e2e_enqueues_butch_effect_and_sends_skeleton() {
         const SEED: i32 = 20_261_023;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
             std::collections::HashMap::new();
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.want_ref_msg = true;
             e
         });
         // 尸体在 (12,9)：`param=12`、`tag=9`、`series=4`、`recog`=尸体——四值互异且 |Δx|=2。
-        let mut corpse = mir2_world::EntitySpawn::new(0, "corpse", 12, 9);
+        let mut corpse = mir2_world_bevy::EntitySpawn::new(0, "corpse", 12, 9);
         corpse.race = 53; // AnimalWolf：`Animal=true` 且 race ∈ [50,80) ⇒ 可出骨架
         corpse.death = true;
         corpse.ai.dir = 5;
@@ -59102,12 +59213,12 @@ SendRefMsgRange=15
     #[test]
     fn cm_butch_enqueues_and_host_emits_sm_butch() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let mut pwd_sessions: std::collections::HashMap<String, game_svr::inbound::PwdSession> =
             std::collections::HashMap::new();
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.want_ref_msg = true;
             e
         });
@@ -59257,14 +59368,22 @@ SendRefMsgRange=15
     #[test]
     fn query_user_name_near_username_far_ghost_missing_no_frame() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         world.open_session("tgt");
         let tgt = world
-            .enter_map("tgt", mir2_world::EntitySpawn::new(0, "tgt", 11, 10), 0)
+            .enter_map(
+                "tgt",
+                mir2_world_bevy::EntitySpawn::new(0, "tgt", 11, 10),
+                0,
+            )
             .unwrap();
 
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -59331,19 +59450,27 @@ SendRefMsgRange=15
     #[test]
     fn query_user_state_frame_fields_and_non_player_guard() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         world.open_session("tgt");
         let tgt = world
-            .enter_map("tgt", mir2_world::EntitySpawn::new(0, "tgt", 11, 10), 0)
+            .enter_map(
+                "tgt",
+                mir2_world_bevy::EntitySpawn::new(0, "tgt", 11, 10),
+                0,
+            )
             .unwrap();
         // 一只怪（非玩家）目标，验「非玩家 ⇒ 不发帧」。
         let mon = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "mon", 11, 11);
-            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mon", 11, 11);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             e
         });
         world.tick();
@@ -59418,10 +59545,14 @@ SendRefMsgRange=15
     #[test]
     fn query_val_writes_mns_or_mnm_and_clears_label() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
@@ -59497,10 +59628,14 @@ SendRefMsgRange=15
     #[test]
     fn soft_close_sets_flags_and_leaves_world() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
@@ -59524,7 +59659,7 @@ SendRefMsgRange=15
         assert!(sg.bo_emergency_close, "wParam==1 ⇒ BoEmergencyClose=true");
         assert_eq!(
             world.session("hero").unwrap().stage,
-            mir2_world::WorldStage::Left,
+            mir2_world_bevy::WorldStage::Left,
             "BoSoftClose 支 ⇒ MakeGhost（离开世界）"
         );
         assert_eq!(world.session("hero").unwrap().soft_close_count, 1);
@@ -59541,7 +59676,11 @@ SendRefMsgRange=15
 
         // ② 再进世界后 wParam=0 ⇒ 不置 emergency（旧的 emergency 需先清）。
         let hero2 = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 12, 12), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 12, 12),
+                0,
+            )
             .unwrap();
         sessions.get_mut("hero").unwrap().actor_id = hero2;
         sessions.get_mut("hero").unwrap().bo_emergency_close = false;
@@ -59593,7 +59732,7 @@ SendRefMsgRange=15
         assert_eq!(table[0].game_gate_ips, vec!["127.0.0.1".to_string()]);
         assert_eq!(table[0].game_gate_ports, vec![7200], "GateCount=1");
 
-        let mut world = mir2_world::World::new(16, 16);
+        let mut world = mir2_world_bevy::World::new(16, 16);
         let mut pending: Vec<ReconnectPending> = Vec::new();
         assert!(
             try_cross_server_redirect(
@@ -59658,10 +59797,14 @@ SendRefMsgRange=15
     /// 本用例的「零条」与 `soft_close_body_does_not_share_the_reconnect_channel` **同时**必红。
     #[test]
     fn soft_close_sets_flag_without_any_sm_reconnect() {
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
@@ -59733,15 +59876,15 @@ SendRefMsgRange=15
             "GateCount=2（两对 ip/port）"
         );
 
-        let mut world = mir2_world::World::new(16, 16);
+        let mut world = mir2_world_bevy::World::new(16, 16);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let other = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(2, "other", 12, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(2, "other", 12, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -59924,19 +60067,19 @@ SendRefMsgRange=15
     #[test]
     fn click_npc_guards_and_reach_click_point() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let mid = world
-            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+            .insert_merchant(mir2_world_bevy::merchant::MerchantSpawn {
                 name: "商人".to_string(),
                 x: 11,
                 y: 10,
                 map_id: 0,
-                state: mir2_world::merchant::MerchantState::new(
+                state: mir2_world_bevy::merchant::MerchantState::new(
                     "卫家店".to_string(),
                     "0".to_string(),
                     0,
@@ -59945,7 +60088,7 @@ SendRefMsgRange=15
                     false,
                     false,
                     0,
-                    mir2_world::merchant::MerchantFlags {
+                    mir2_world_bevy::merchant::MerchantFlags {
                         is_buy: true,
                         ..Default::default()
                     },
@@ -60128,10 +60271,14 @@ SendRefMsgRange=15
     #[test]
     fn p0_dispatch_softclose_series_0_1_sets_flags() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
@@ -60170,13 +60317,17 @@ SendRefMsgRange=15
         assert!(sg.bo_emergency_close, "Series=1 ⇒ BoEmergencyClose=true");
         assert_eq!(
             world.session("hero").unwrap().stage,
-            mir2_world::WorldStage::Left,
+            mir2_world_bevy::WorldStage::Left,
             "BoSoftClose 支 ⇒ 离开世界"
         );
 
         // ② 再进世界、Series=0 ⇒ 不置 emergency（先清旧值）。
         let hero2 = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 12, 12), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 12, 12),
+                0,
+            )
             .unwrap();
         {
             let sg = sessions.get_mut("hero").unwrap();
@@ -60223,14 +60374,22 @@ SendRefMsgRange=15
     #[test]
     fn p0_dispatch_queryuser_name_param_tag_map_to_ghost_xy() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         world.open_session("tgt");
         let tgt = world
-            .enter_map("tgt", mir2_world::EntitySpawn::new(0, "tgt", 11, 10), 0)
+            .enter_map(
+                "tgt",
+                mir2_world_bevy::EntitySpawn::new(0, "tgt", 11, 10),
+                0,
+            )
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
@@ -60346,14 +60505,22 @@ SendRefMsgRange=15
     #[test]
     fn p0_dispatch_queryuser_state_param_tag_map_to_nx_ny() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         world.open_session("tgt");
         let tgt = world
-            .enter_map("tgt", mir2_world::EntitySpawn::new(0, "tgt", 11, 10), 0)
+            .enter_map(
+                "tgt",
+                mir2_world_bevy::EntitySpawn::new(0, "tgt", 11, 10),
+                0,
+            )
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
@@ -60428,19 +60595,19 @@ SendRefMsgRange=15
     #[test]
     fn p0_dispatch_clicknpc_arm_and_rate_limit_side_effect() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let mid = world
-            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+            .insert_merchant(mir2_world_bevy::merchant::MerchantSpawn {
                 name: "商人".to_string(),
                 x: 11,
                 y: 10,
                 map_id: 0,
-                state: mir2_world::merchant::MerchantState::new(
+                state: mir2_world_bevy::merchant::MerchantState::new(
                     "卫家店".to_string(),
                     "0".to_string(),
                     0,
@@ -60449,7 +60616,7 @@ SendRefMsgRange=15
                     false,
                     false,
                     0,
-                    mir2_world::merchant::MerchantFlags {
+                    mir2_world_bevy::merchant::MerchantFlags {
                         is_buy: true,
                         ..Default::default()
                     },
@@ -60515,10 +60682,14 @@ SendRefMsgRange=15
     #[test]
     fn p0_dispatch_membership_and_queryval_tail() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(40, 40)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(40, 40)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 10, 10), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10),
+                0,
+            )
             .unwrap();
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("hero".into(), test_session_ground(hero));
@@ -60635,8 +60806,8 @@ SendRefMsgRange=15
         use mir2_protocol::messages;
         use std::collections::HashMap;
         // `World::new` 只建 0 号图 ⇒ 手工加 1 号图供换图落地。
-        let mut world = mir2_world::World::new(64, 64);
-        world.maps.push(mir2_world::map::MapGrid::new(64, 64));
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.maps.push(mir2_world_bevy::map::MapGrid::new(64, 64));
         world.open_session("hero");
         let hero = world
             .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
@@ -60652,8 +60823,8 @@ SendRefMsgRange=15
             .expect("far 进图");
         // 近处怪物（Race != Play）⇒ 不该收 SHOW。
         world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "mon", 8, 9);
-            e.race = mir2_world::ACTOR_RACE_MONSTER;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mon", 8, 9);
+            e.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
             e.map_id = 1;
             e
         });
@@ -60757,8 +60928,8 @@ SendRefMsgRange=15
     fn drain_map_change_enter_another_map_has_no_show_frame() {
         use mir2_protocol::messages;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
-        world.maps.push(mir2_world::map::MapGrid::new(64, 64));
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.maps.push(mir2_world_bevy::map::MapGrid::new(64, 64));
         world.open_session("hero");
         let hero = world
             .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
@@ -60851,10 +61022,14 @@ SendRefMsgRange=15
         assert_eq!(minimap.get("map"), Some(7));
 
         // ③ 世界：hero 进 0 号图（map_id 0）。
-        let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
         world.open_session("hero");
         let hero = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 5, 5), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5),
+                0,
+            )
             .unwrap();
         assert_eq!(world.session("hero").unwrap().map_id, 0);
 
@@ -60975,7 +61150,7 @@ SendRefMsgRange=15
     /// ⇒ 用例里的「重算前真值」= oracle 进世界时 `RecalcAbilitys()` 的产物；装备槽装一把木剑
     /// （`newbie_catalog` 的 3 号，`std_mode 5`、`weight 5`）让 52 的载荷不是全零。
     struct AdjustBonusFix {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         online: OnlineRegistry,
         sessions: HashMap<String, SessionGround>,
         gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -60986,10 +61161,14 @@ SendRefMsgRange=15
 
     impl AdjustBonusFix {
         fn new(bonus_point: i32) -> Self {
-            let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
             world.open_session("hero");
             let actor = world
-                .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 5, 5), 0)
+                .enter_map(
+                    "hero",
+                    mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5),
+                    0,
+                )
                 .unwrap();
             let online: OnlineRegistry = vec![OnlineEntry {
                 account: "a".into(),
@@ -61241,7 +61420,7 @@ SendRefMsgRange=15
     fn cm_password_emits_sm_password_on_reset_branch() {
         use mir2_protocol::messages;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
         online_set(
@@ -61327,7 +61506,7 @@ SendRefMsgRange=15
     fn cm_password_wparam_zero_emits_nothing() {
         use mir2_protocol::messages;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let displays = downlink::DisplayTable::new();
         let mut online: OnlineRegistry = Vec::new();
         online_set(
@@ -61443,8 +61622,8 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::new(8, 8);
-        world.add_entity(mir2_world::EntitySpawn::new(42, "hero", 3, 3));
+        let mut world = mir2_world_bevy::World::new(8, 8);
+        world.add_entity(mir2_world_bevy::EntitySpawn::new(42, "hero", 3, 3));
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             42,
@@ -61495,8 +61674,8 @@ SendRefMsgRange=15
     fn move_cmd_route_emits_transmap_cluster_before_move_frame() {
         use mir2_protocol::messages::{CM_WALK, SM_CHANGEMAP, SM_CLEAROBJECTS, SM_WALK};
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
-        world.maps.push(mir2_world::map::MapGrid::new(64, 64));
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.maps.push(mir2_world_bevy::map::MapGrid::new(64, 64));
         world.open_session("hero");
         let hero = world
             .enter_map("hero", new_player_entity("hero".to_string(), 5, 4), 0)
@@ -61508,12 +61687,12 @@ SendRefMsgRange=15
             .expect("obs 进图");
         // map0 (5,5) → map1 (7,9)
         assert_eq!(
-            world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+            world.add_map_routes(vec![mir2_world_bevy::map::MapRouteSpec {
                 map_id: 0,
                 x: 5,
                 y: 5,
                 route_id: 1,
-                hop: mir2_world::map::RouteHop {
+                hop: mir2_world_bevy::map::RouteHop {
                     dst_map_id: 1,
                     dst_x: 7,
                     dst_y: 9,
@@ -61599,7 +61778,7 @@ SendRefMsgRange=15
     /// 存档里学会的魔号、魔法模板表（逐 `(魔号, Effect)`），以及 `ArmRingl` 槽里的护身符
     /// （`dura = 600` ⇒ `Round(600/100) = 6`，满足 `CheckAmulet` 三档需求 1/5/2）。
     struct SpellFrameRig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         caster: i32,
         online: OnlineRegistry,
         saves: std::collections::HashMap<String, SavedHuman>,
@@ -61621,7 +61800,7 @@ SendRefMsgRange=15
             observers: &[(&str, i32, i32, bool, i32)],
         ) -> Self {
             use std::collections::HashMap;
-            let mut world = mir2_world::World::new(64, 64);
+            let mut world = mir2_world_bevy::World::new(64, 64);
             let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
             let mut displays = downlink::DisplayTable::new();
             displays.set(
@@ -62175,7 +62354,7 @@ SendRefMsgRange=15
         home_map: Option<&str>,
         tag: &str,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         i32,
         OnlineRegistry,
         std::collections::HashMap<String, SavedHuman>,
@@ -62186,8 +62365,8 @@ SendRefMsgRange=15
         std::path::PathBuf,
     ) {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
-        world.maps.push(mir2_world::MapGrid::new(64, 64));
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.maps.push(mir2_world_bevy::MapGrid::new(64, 64));
         world.open_session("caster");
         let mut e = new_player_entity("caster".to_string(), 10, 10);
         e.level = caster_level;
@@ -62312,14 +62491,14 @@ SendRefMsgRange=15
     ) -> (
         Vec<(i32, Vec<u8>)>,
         Vec<(i32, Vec<u8>)>,
-        mir2_world::World,
+        mir2_world_bevy::World,
         std::collections::HashMap<String, SessionGround>,
         i32,
         i32,
     ) {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
-        world.maps.push(mir2_world::MapGrid::new(64, 64));
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.maps.push(mir2_world_bevy::MapGrid::new(64, 64));
         world.open_session("caster");
         let mut e = new_player_entity("caster".to_string(), 10, 10);
         e.level = 20;
@@ -62334,9 +62513,9 @@ SendRefMsgRange=15
             .entities
             .map_binding_mut(caster)
             .unwrap()
-            .visible_actors = vec![mir2_world::entity::VisibleBaseObject {
+            .visible_actors = vec![mir2_world_bevy::entity::VisibleBaseObject {
             target,
-            flag: mir2_world::entity::VisibleFlag::Show,
+            flag: mir2_world_bevy::entity::VisibleFlag::Show,
         }];
         world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let mut displays = downlink::DisplayTable::new();
@@ -62461,10 +62640,10 @@ SendRefMsgRange=15
     /// ③ 扣减公式改 `+1` ⇒ 本用例红（实测记录见补丁说明）。
     #[test]
     fn spell_cmd_mp_wrapper_deducts_and_health_frame_precedes_spell() {
-        let magic_id = mir2_world::magic::SKILL_FIREWIND;
+        let magic_id = mir2_world_bevy::magic::SKILL_FIREWIND;
         let (frames, _raws, _world, sessions, caster, _target) =
             mp_wrap_run(magic_id, 8, 2, 50, false, 1);
-        let want = mir2_world::magic::get_spell_point(
+        let want = mir2_world_bevy::magic::get_spell_point(
             &mir2_data::MagicInfo {
                 spell: 8,
                 def_spell: 2,
@@ -62544,7 +62723,7 @@ SendRefMsgRange=15
     fn spell_cmd_mp_wrapper_insufficient_mp_fails_without_frames_or_draws() {
         use mir2_shared::rng::RandomNumber;
         let seed = 7;
-        let magic_id = mir2_world::magic::SKILL_FIREWIND;
+        let magic_id = mir2_world_bevy::magic::SKILL_FIREWIND;
         let (frames, raws, world, sessions, caster, _target) =
             mp_wrap_run(magic_id, 8, 2, 5, false, seed);
 
@@ -62612,7 +62791,7 @@ SendRefMsgRange=15
     /// （`SM_SPELL` + 效果体照常）。
     #[test]
     fn spell_cmd_mp_wrapper_zero_spell_point_is_transparent() {
-        let magic_id = mir2_world::magic::SKILL_FIREWIND;
+        let magic_id = mir2_world_bevy::magic::SKILL_FIREWIND;
         let (frames, raws, _world, sessions, _caster, _target) =
             mp_wrap_run(magic_id, 0, 0, 50, false, 3);
         assert_eq!(
@@ -62660,13 +62839,13 @@ SendRefMsgRange=15
     ) -> (
         Vec<(i32, Vec<u8>)>,
         Vec<(i32, Vec<u8>)>,
-        mir2_world::World,
+        mir2_world_bevy::World,
         std::collections::HashMap<String, SessionGround>,
         i32,
     ) {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
-        world.maps.push(mir2_world::MapGrid::new(64, 64));
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.maps.push(mir2_world_bevy::MapGrid::new(64, 64));
         world.open_session("caster");
         let mut e = new_player_entity("caster".to_string(), 10, 10);
         e.level = 20;
@@ -62778,8 +62957,8 @@ SendRefMsgRange=15
     fn spell_cmd_distance_gate_failure_emits_exactly_one_639() {
         use mir2_shared::rng::RandomNumber;
         for magic_id in [
-            mir2_world::world::SKILL_HANGMAJINBUB,
-            mir2_world::magic::SKILL_FIREWIND,
+            mir2_world_bevy::world::SKILL_HANGMAJINBUB,
+            mir2_world_bevy::magic::SKILL_FIREWIND,
         ] {
             let seed = 7;
             let (frames, raws, world, sessions, caster) =
@@ -62846,7 +63025,7 @@ SendRefMsgRange=15
     /// 随后距离门失败回 639。magic 8 / spell 8 / def 2 / level 1 / MP 50 ⇒ MP 44。
     #[test]
     fn spell_cmd_distance_gate_failure_deducts_mp_before_639() {
-        let magic_id = mir2_world::magic::SKILL_FIREWIND;
+        let magic_id = mir2_world_bevy::magic::SKILL_FIREWIND;
         let (frames, raws, _world, sessions, caster) = distfail_run(magic_id, 8, 2, 50, 25, 25, 1);
         assert_eq!(
             sessions["caster"].state.wabil.mp, 44,
@@ -62906,7 +63085,7 @@ SendRefMsgRange=15
     #[test]
     fn spell_cmd_distance_gate_in_range_has_no_639() {
         let (frames, _raws, _world, _sessions, _caster, _target) =
-            mp_wrap_run(mir2_world::magic::SKILL_FIREWIND, 8, 2, 50, false, 1);
+            mp_wrap_run(mir2_world_bevy::magic::SKILL_FIREWIND, 8, 2, 50, false, 1);
         let ids: Vec<u16> = frames.iter().map(|(_, b)| mp_ident(b)).collect();
         assert_eq!(
             ids.iter()
@@ -62930,7 +63109,7 @@ SendRefMsgRange=15
     fn mp_clobber_harness(
         seed: i32,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         std::collections::HashMap<String, SessionGround>,
         OnlineRegistry,
         std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -62942,8 +63121,8 @@ SendRefMsgRange=15
         i32,
     ) {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
-        world.maps.push(mir2_world::MapGrid::new(64, 64));
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        world.maps.push(mir2_world_bevy::MapGrid::new(64, 64));
         world.open_session("caster");
         let mut e = new_player_entity("caster".to_string(), 10, 10);
         e.level = 20;
@@ -62979,7 +63158,7 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
         let mut record = stage6_record();
         record.data.magic = Some(vec![Some(record::MagicRcd {
-            mag_idx: mir2_world::magic::SKILL_FIREWIND,
+            mag_idx: mir2_world_bevy::magic::SKILL_FIREWIND,
             level: 1,
             magic_key: u16::from(b'm'),
             tran_point: 0,
@@ -62996,7 +63175,7 @@ SendRefMsgRange=15
         );
         // spell=0、def_spell=2、learned level=1 ⇒ GetSpellPoint = Round(0/4*(1+1)) + 2 = 2/发。
         let magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
-            magic_id: mir2_world::magic::SKILL_FIREWIND,
+            magic_id: mir2_world_bevy::magic::SKILL_FIREWIND,
             effect: 3,
             effect_type: 4,
             spell: 0,
@@ -63067,13 +63246,13 @@ SendRefMsgRange=15
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         // 只共享借用的部件进闭包；可变部件（world/会话/存档/显示表）按参传入，
         // 以便两发之间插 P21 刷回。
-        let cast = |world: &mut mir2_world::World,
+        let cast = |world: &mut mir2_world_bevy::World,
                     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
                     saves: &mut std::collections::HashMap<String, SavedHuman>,
                     displays: &mut downlink::DisplayTable| {
             handle_spell_cmd(
                 game_svr::feature::make_long(25, 25),
-                mir2_world::magic::SKILL_FIREWIND,
+                mir2_world_bevy::magic::SKILL_FIREWIND,
                 0,
                 0,
                 "caster",
@@ -63216,13 +63395,13 @@ SendRefMsgRange=15
         ) = mp_clobber_harness(5);
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
-        let cast = |world: &mut mir2_world::World,
+        let cast = |world: &mut mir2_world_bevy::World,
                     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
                     saves: &mut std::collections::HashMap<String, SavedHuman>,
                     displays: &mut downlink::DisplayTable| {
             handle_spell_cmd(
                 game_svr::feature::make_long(25, 25),
-                mir2_world::magic::SKILL_FIREWIND,
+                mir2_world_bevy::magic::SKILL_FIREWIND,
                 0,
                 0,
                 "caster",
@@ -63388,13 +63567,13 @@ SendRefMsgRange=15
         ) = mp_clobber_harness(5);
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
-        let cast = |world: &mut mir2_world::World,
+        let cast = |world: &mut mir2_world_bevy::World,
                     ground_sessions: &mut std::collections::HashMap<String, SessionGround>,
                     saves: &mut std::collections::HashMap<String, SavedHuman>,
                     displays: &mut downlink::DisplayTable| {
             handle_spell_cmd(
                 game_svr::feature::make_long(25, 25),
-                mir2_world::magic::SKILL_FIREWIND,
+                mir2_world_bevy::magic::SKILL_FIREWIND,
                 0,
                 0,
                 "caster",
@@ -63601,10 +63780,10 @@ SendRefMsgRange=15
                 ..Default::default()
             },
         );
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.open_session("hero");
         let mut ent = new_player_entity("hero".to_string(), 5, 5);
-        ent.race = mir2_world::ACTOR_RACE_PLAY;
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         ent.hp = 10;
         ent.mp = 20;
         ent.max_hp = 100;
@@ -63670,7 +63849,7 @@ SendRefMsgRange=15
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
         let mut item_number = 0;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let env = ScriptGmEnv {
@@ -63683,7 +63862,7 @@ SendRefMsgRange=15
         };
         let eat = |make_index: i32,
                    sessions: &mut HashMap<String, SessionGround>,
-                   world: &mut mir2_world::World,
+                   world: &mut mir2_world_bevy::World,
                    item_number: &mut i32| {
             handle_eat_cmd(
                 make_index,
@@ -63840,10 +64019,10 @@ SendRefMsgRange=15
                 ..Default::default()
             },
         );
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.open_session("hero");
         let mut ent = new_player_entity("hero".to_string(), 5, 5);
-        ent.race = mir2_world::ACTOR_RACE_PLAY;
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let actor = world.enter_map("hero", ent, 0).expect("进图");
         world.tick();
         {
@@ -63899,7 +64078,7 @@ SendRefMsgRange=15
         };
         let unbind = game_svr::unbindlist::UnbindList::default();
         let mut item_number = 0;
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let env = ScriptGmEnv {
@@ -64220,7 +64399,7 @@ SendRefMsgRange=15
     ///
     /// 期望表**独立复算**：另起一条同 seed 的 `RandomNumber`，按 `MagicManager.cs:37/41` 的
     /// 字面式重算 `Random(20)` 门与 `Random(2)` 步数；落点用**已验收**的
-    /// [`mir2_world::magic::char_pushed`]（对拍向量覆盖）在同一初始格上复算。
+    /// [`mir2_world_bevy::magic::char_pushed`]（对拍向量覆盖）在同一初始格上复算。
     #[test]
     fn spell_cmd_firewind_enters_effect_draws_and_pushes() {
         use mir2_shared::rng::RandomNumber;
@@ -64234,7 +64413,7 @@ SendRefMsgRange=15
             gates,
             mut rx,
             dir,
-        ) = effect_rig(20, mir2_world::magic::SKILL_FIREWIND, None, "fw");
+        ) = effect_rig(20, mir2_world_bevy::magic::SKILL_FIREWIND, None, "fw");
         // 目标：相邻（11,10）、等级 15；远端（20,20）也在 VisibleActors 里（应被 |Δ|<=1 门挡掉）。
         let target = {
             let mut e = new_player_entity("target".to_string(), 11, 10);
@@ -64267,13 +64446,13 @@ SendRefMsgRange=15
             .map_binding_mut(caster)
             .unwrap()
             .visible_actors = vec![
-            mir2_world::entity::VisibleBaseObject {
+            mir2_world_bevy::entity::VisibleBaseObject {
                 target: far,
-                flag: mir2_world::entity::VisibleFlag::Show,
+                flag: mir2_world_bevy::entity::VisibleFlag::Show,
             },
-            mir2_world::entity::VisibleBaseObject {
+            mir2_world_bevy::entity::VisibleBaseObject {
                 target,
-                flag: mir2_world::entity::VisibleFlag::Show,
+                flag: mir2_world_bevy::entity::VisibleFlag::Show,
             },
         ];
         let seed = 1;
@@ -64290,17 +64469,17 @@ SendRefMsgRange=15
             0
         };
         assert!(want_chance, "本 seed 必须让门通过，否则正例无判别力");
-        let mut probe_map = mir2_world::MapGrid::new(64, 64);
+        let mut probe_map = mir2_world_bevy::MapGrid::new(64, 64);
         let (mut px, mut py, mut pdir) = (11_i32, 10_i32, 0_u8);
-        let want_moved = mir2_world::magic::char_pushed(
+        let want_moved = mir2_world_bevy::magic::char_pushed(
             &mut probe_map,
             &mut px,
             &mut py,
             &mut pdir,
-            mir2_world::magic::next_direction(10, 10, 11, 10),
+            mir2_world_bevy::magic::next_direction(10, 10, 11, 10),
             u8::try_from(want_steps).unwrap(),
             target,
-            mir2_world::map::CellType::Play,
+            mir2_world_bevy::map::CellType::Play,
         );
         assert_eq!(
             want_moved, want_steps,
@@ -64318,7 +64497,7 @@ SendRefMsgRange=15
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(
             game_svr::feature::make_long(11, 10),
-            mir2_world::magic::SKILL_FIREWIND,
+            mir2_world_bevy::magic::SKILL_FIREWIND,
             0,
             0,
             "caster",
@@ -64350,7 +64529,7 @@ SendRefMsgRange=15
         assert_eq!((e.x, e.y), (px, py), "落点必须等于 oracle 复算");
         assert_eq!(
             e.dir(),
-            mir2_world::magic::back_dir(2),
+            mir2_world_bevy::magic::back_dir(2),
             "CharPushed 收尾 Dir = nBackDir"
         );
         // ③ 帧序：SM_SPELL 先；逐格 SM_BACKSTEP；SM_MAGICFIRE 在共享尾最后。
@@ -64403,7 +64582,7 @@ SendRefMsgRange=15
             gates,
             mut rx,
             dir,
-        ) = effect_rig(15, mir2_world::magic::SKILL_FIREWIND, None, "fw-neg");
+        ) = effect_rig(15, mir2_world_bevy::magic::SKILL_FIREWIND, None, "fw-neg");
         let target = {
             let mut e = new_player_entity("target".to_string(), 11, 10);
             e.level = 15;
@@ -64429,9 +64608,9 @@ SendRefMsgRange=15
             .entities
             .map_binding_mut(caster)
             .unwrap()
-            .visible_actors = vec![mir2_world::entity::VisibleBaseObject {
+            .visible_actors = vec![mir2_world_bevy::entity::VisibleBaseObject {
             target,
-            flag: mir2_world::entity::VisibleFlag::Show,
+            flag: mir2_world_bevy::entity::VisibleFlag::Show,
         }];
         let seed = 1;
         world.rng = RandomNumber::with_seed(seed);
@@ -64446,7 +64625,7 @@ SendRefMsgRange=15
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(
             game_svr::feature::make_long(11, 10),
-            mir2_world::magic::SKILL_FIREWIND,
+            mir2_world_bevy::magic::SKILL_FIREWIND,
             0,
             0,
             "caster",
@@ -64499,7 +64678,12 @@ SendRefMsgRange=15
     fn spell_cmd_spacemove_enters_effect_draws_and_moves_home() {
         use mir2_shared::rng::RandomNumber;
         let (mut world, caster, online, mut saves, magic_table, mut displays, gates, mut rx, dir) =
-            effect_rig(50, mir2_world::magic::SKILL_SPACEMOVE, Some("home"), "sm");
+            effect_rig(
+                50,
+                mir2_world_bevy::magic::SKILL_SPACEMOVE,
+                Some("home"),
+                "sm",
+            );
         let seed = 1;
         world.rng = RandomNumber::with_seed(seed);
         let before = world.rng.clone();
@@ -64519,7 +64703,7 @@ SendRefMsgRange=15
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(
             game_svr::feature::make_long(10, 10),
-            mir2_world::magic::SKILL_SPACEMOVE,
+            mir2_world_bevy::magic::SKILL_SPACEMOVE,
             0,
             0,
             "caster",
@@ -64601,14 +64785,14 @@ SendRefMsgRange=15
             dir,
         ) = effect_rig(
             50,
-            mir2_world::magic::SKILL_SPACEMOVE,
+            mir2_world_bevy::magic::SKILL_SPACEMOVE,
             Some("home"),
             "sm-obs",
         );
         // 旧图观察者：与施法者 (10,10) 相邻，±12 内且 Race==Play（`new_player_entity` 已置）。
         let obs = {
             let mut e = new_player_entity("obs".to_string(), 11, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         online_set(
@@ -64637,7 +64821,7 @@ SendRefMsgRange=15
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(
             game_svr::feature::make_long(10, 10),
-            mir2_world::magic::SKILL_SPACEMOVE,
+            mir2_world_bevy::magic::SKILL_SPACEMOVE,
             0,
             0,
             "caster",
@@ -64695,7 +64879,7 @@ SendRefMsgRange=15
         let (mut world, caster, online, mut saves, magic_table, mut displays, gates, mut rx, dir) =
             effect_rig(
                 0,
-                mir2_world::magic::SKILL_SPACEMOVE,
+                mir2_world_bevy::magic::SKILL_SPACEMOVE,
                 Some("home"),
                 "sm-neg",
             );
@@ -64727,7 +64911,7 @@ SendRefMsgRange=15
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(
             game_svr::feature::make_long(10, 10),
-            mir2_world::magic::SKILL_SPACEMOVE,
+            mir2_world_bevy::magic::SKILL_SPACEMOVE,
             0,
             0,
             "caster",
@@ -64785,7 +64969,12 @@ SendRefMsgRange=15
     fn spell_cmd_spacemove_missing_home_map_gate_still_fires() {
         use mir2_shared::rng::RandomNumber;
         let (mut world, caster, online, mut saves, magic_table, mut displays, gates, mut rx, dir) =
-            effect_rig(50, mir2_world::magic::SKILL_SPACEMOVE, None, "sm-nohome");
+            effect_rig(
+                50,
+                mir2_world_bevy::magic::SKILL_SPACEMOVE,
+                None,
+                "sm-nohome",
+            );
         let seed = 1;
         let magic_level = 1;
         world.rng = RandomNumber::with_seed(seed);
@@ -64802,7 +64991,7 @@ SendRefMsgRange=15
         let table = game_svr::mongen::MonsterTable::new(Vec::new());
         handle_spell_cmd(
             game_svr::feature::make_long(10, 10),
-            mir2_world::magic::SKILL_SPACEMOVE,
+            mir2_world_bevy::magic::SKILL_SPACEMOVE,
             0,
             0,
             "caster",
@@ -64856,7 +65045,7 @@ SendRefMsgRange=15
         magic_id: u16,
         tag: &str,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         i32,
         OnlineRegistry,
         std::collections::HashMap<String, SavedHuman>,
@@ -64900,13 +65089,13 @@ SendRefMsgRange=15
             .map_binding_mut(caster)
             .unwrap()
             .visible_actors = vec![
-            mir2_world::entity::VisibleBaseObject {
+            mir2_world_bevy::entity::VisibleBaseObject {
                 target: far,
-                flag: mir2_world::entity::VisibleFlag::Show,
+                flag: mir2_world_bevy::entity::VisibleFlag::Show,
             },
-            mir2_world::entity::VisibleBaseObject {
+            mir2_world_bevy::entity::VisibleBaseObject {
                 target,
-                flag: mir2_world::entity::VisibleFlag::Show,
+                flag: mir2_world_bevy::entity::VisibleFlag::Show,
             },
         ];
         (
@@ -64926,7 +65115,7 @@ SendRefMsgRange=15
     /// 走**生产入口** `handle_spell_cmd` 施放 8/37（`magic_attack_rage = 8`，与既有 8/21 用例同口径）。
     #[allow(clippy::too_many_arguments)]
     fn cast_push_magic(
-        world: &mut mir2_world::World,
+        world: &mut mir2_world_bevy::World,
         caster: i32,
         online: &OnlineRegistry,
         saves: &mut std::collections::HashMap<String, SavedHuman>,
@@ -64991,9 +65180,9 @@ SendRefMsgRange=15
     fn spell_cmd_energyrepulsor_matches_firewind_byte_for_byte() {
         use mir2_shared::rng::RandomNumber;
         let (mut w8, c8, on8, mut sv8, mt8, mut dp8, g8, mut rx8, dir8, t8) =
-            push_scene(mir2_world::magic::SKILL_FIREWIND, "fw37-a");
+            push_scene(mir2_world_bevy::magic::SKILL_FIREWIND, "fw37-a");
         let (mut w37, c37, on37, mut sv37, mt37, mut dp37, g37, mut rx37, dir37, t37) =
-            push_scene(mir2_world::magic::SKILL_ENERGYREPULSOR, "fw37-b");
+            push_scene(mir2_world_bevy::magic::SKILL_ENERGYREPULSOR, "fw37-b");
         assert_eq!(
             c8, c37,
             "两 rig 的实体 id 分配必须相同（跨 rig 逐字节对拍前提）"
@@ -65011,7 +65200,7 @@ SendRefMsgRange=15
             &mt8,
             &mut dp8,
             &g8,
-            mir2_world::magic::SKILL_FIREWIND,
+            mir2_world_bevy::magic::SKILL_FIREWIND,
             11,
             10,
         );
@@ -65023,7 +65212,7 @@ SendRefMsgRange=15
             &mt37,
             &mut dp37,
             &g37,
-            mir2_world::magic::SKILL_ENERGYREPULSOR,
+            mir2_world_bevy::magic::SKILL_ENERGYREPULSOR,
             11,
             10,
         );
@@ -65103,7 +65292,7 @@ SendRefMsgRange=15
             mut rx,
             dir,
             _,
-        ) = push_scene(mir2_world::magic::SKILL_ENERGYREPULSOR, "er-range");
+        ) = push_scene(mir2_world_bevy::magic::SKILL_ENERGYREPULSOR, "er-range");
         // 目标放到 10 格外（施法者 10,10 -> 目标 20,10 ⇒ |Δx|=10 > 8）。
         let target = {
             let mut e = new_player_entity("target2".to_string(), 20, 10);
@@ -65130,9 +65319,9 @@ SendRefMsgRange=15
             .entities
             .map_binding_mut(caster)
             .unwrap()
-            .visible_actors = vec![mir2_world::entity::VisibleBaseObject {
+            .visible_actors = vec![mir2_world_bevy::entity::VisibleBaseObject {
             target,
-            flag: mir2_world::entity::VisibleFlag::Show,
+            flag: mir2_world_bevy::entity::VisibleFlag::Show,
         }];
         let seed = 1;
         world.rng = RandomNumber::with_seed(seed);
@@ -65145,7 +65334,7 @@ SendRefMsgRange=15
             &magic_table,
             &mut displays,
             &gates,
-            mir2_world::magic::SKILL_ENERGYREPULSOR,
+            mir2_world_bevy::magic::SKILL_ENERGYREPULSOR,
             20,
             10,
         );
@@ -65194,7 +65383,7 @@ SendRefMsgRange=15
             mut rx,
             dir,
             target,
-        ) = push_scene(mir2_world::magic::SKILL_ENERGYREPULSOR, "er-level");
+        ) = push_scene(mir2_world_bevy::magic::SKILL_ENERGYREPULSOR, "er-level");
         // `push_scene` 的施法者 20 级 / 目标 15 级；降到与目标同级 ⇒ 等级门不过。
         world.entities.get_mut(caster).unwrap().progression.level = 15;
         let seed = 1;
@@ -65208,7 +65397,7 @@ SendRefMsgRange=15
             &magic_table,
             &mut displays,
             &gates,
-            mir2_world::magic::SKILL_ENERGYREPULSOR,
+            mir2_world_bevy::magic::SKILL_ENERGYREPULSOR,
             11,
             10,
         );
@@ -65785,8 +65974,8 @@ SendRefMsgRange=15
     /// `MonGen` 生成路径**不调用** `RecalcAbilitys` ⇒ `Random(10) >= 0` **恒真**，骰门永不失败。
     /// 返回 `(actor_id)`；`world.tick()` 让它落格（`cetin_near_xy` 走格表）。
     fn b1_monster(rig: &mut SpellFrameRig, x: i32, y: i32, level: u8, life: u8) -> i32 {
-        let mut e = mir2_world::EntitySpawn::new(0, "mob".to_string(), x, y);
-        e.race = mir2_world::ACTOR_RACE_ANIMAL;
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "mob".to_string(), x, y);
+        e.race = mir2_world_bevy::ACTOR_RACE_ANIMAL;
         e.level = level;
         e.life_attrib = life;
         let id = rig.world.add_entity(e);
@@ -65800,8 +65989,8 @@ SendRefMsgRange=15
     /// 骰门**失败支**必须用它：普通怪 `anti_magic = 0` 时 `Random(10) >= 0` 恒真，
     /// 构造不出 `Random(10) < AntiMagic`（oracle 的普通怪同样永不失败）。
     fn b1_player(rig: &mut SpellFrameRig, x: i32, y: i32, level: u8, life: u8) -> i32 {
-        let mut e = mir2_world::EntitySpawn::new(0, "player".to_string(), x, y);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "player".to_string(), x, y);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         e.level = level;
         e.life_attrib = life;
         e.anti_magic = 1;
@@ -65955,7 +66144,13 @@ SendRefMsgRange=15
             let seed = b1_seed(0, None); // 普通怪 anti_magic=0 ⇒ 骰门恒过
             let mut rig = b1_rig(magic_id, 9);
             rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
-            let target = b1_monster(&mut rig, 11, 10, 1, mir2_world::magic_effect::LA_UNDEAD);
+            let target = b1_monster(
+                &mut rig,
+                11,
+                10,
+                1,
+                mir2_world_bevy::magic_effect::LA_UNDEAD,
+            );
             let _ = target;
             let before = rig.world.rng.clone();
             rig.cast(magic_id, (11, 10), target);
@@ -66429,7 +66624,7 @@ SendRefMsgRange=15
             sessions["caster"].client_tick, 0,
             "初值 0（PlayObject.cs:810）"
         );
-        let world = mir2_world::World::new(32, 32);
+        let world = mir2_world_bevy::World::new(32, 32);
 
         let mut cmd = CommandMessage {
             recog: 1234,
@@ -66640,7 +66835,7 @@ SendRefMsgRange=15
         assert!(
             !world
                 .buffs
-                .has_buff(caster, mir2_world::BuffType::DefensePower),
+                .has_buff(caster, mir2_world_bevy::BuffType::DefensePower),
             "无效果体落 buff"
         );
     }
@@ -66933,8 +67128,8 @@ SendRefMsgRange=15
     }
 
     fn b2_add_monster(rig: &mut SpellFrameRig, name: &str, x: i32, y: i32, mac: u16) -> i32 {
-        let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-        e.race = mir2_world::ACTOR_RACE_ANIMAL;
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+        e.race = mir2_world_bevy::ACTOR_RACE_ANIMAL;
         e.level = 30;
         e.hp = 1000;
         e.max_hp = 1000;
@@ -66967,7 +67162,7 @@ SendRefMsgRange=15
         rig.world
             .self_delay_msgs
             .iter()
-            .filter(|m| m.ident == mir2_world::slave::RM_MAGHEALING)
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAGHEALING)
             .map(|m| (m.actor_id, m.n_param1))
             .collect()
     }
@@ -67546,7 +67741,7 @@ SendRefMsgRange=15
     }
 
     struct B3Rig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         caster: i32,
         observer: i32,
         far: i32,
@@ -67562,7 +67757,7 @@ SendRefMsgRange=15
     impl B3Rig {
         fn new(magic_id: u16, magic_level: u8, with_amulet: bool) -> Self {
             use std::collections::HashMap;
-            let mut world = mir2_world::World::new(64, 64);
+            let mut world = mir2_world_bevy::World::new(64, 64);
             let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
             let observer = world.add_entity(new_player_entity("obs".to_string(), 11, 10));
             let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
@@ -67724,7 +67919,7 @@ SendRefMsgRange=15
         fn deliver(&mut self, advance_ms: i64) -> Vec<SfFrame> {
             self.world.clock_ms += advance_ms;
             let outs = self.world.deliver_self_delay_msgs();
-            let rec = mir2_world::TickRecord {
+            let rec = mir2_world_bevy::TickRecord {
                 slave_self_deliveries: outs,
                 ..Default::default()
             };
@@ -67752,7 +67947,7 @@ SendRefMsgRange=15
             target_creature: Option<i32>,
             master: Option<i32>,
         ) -> i32 {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
             e.race = race;
             e.level = level;
             e.hp = 100;
@@ -67842,7 +68037,7 @@ SendRefMsgRange=15
             rig.world
                 .self_delay_msgs
                 .iter()
-                .filter(|m| m.ident == mir2_world::slave::RM_MAKEHOLYSEIZEMODE)
+                .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE)
                 .count(),
             3,
             "F16-A 三只怪各收一条 RM_MAKEHOLYSEIZEMODE"
@@ -67901,7 +68096,7 @@ SendRefMsgRange=15
             rig.world
                 .self_delay_msgs
                 .iter()
-                .filter(|m| m.ident == mir2_world::slave::RM_MAKEHOLYSEIZEMODE)
+                .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAKEHOLYSEIZEMODE)
                 .count(),
             2,
             "两只合格怪各收一条"
@@ -67950,7 +68145,7 @@ SendRefMsgRange=15
             let map = &mut rig.world.maps[0];
             let (cell, ok) = map.get_cell_info_mut(12, 12);
             assert!(ok);
-            cell.attribute = mir2_world::CellAttribute::HighWall;
+            cell.attribute = mir2_world_bevy::CellAttribute::HighWall;
         }
         let before = rig.world.rng.clone();
         rig.cast(16, (12, 12), 0);
@@ -68122,7 +68317,7 @@ SendRefMsgRange=15
             .world
             .self_delay_msgs
             .iter()
-            .filter(|m| m.ident == mir2_world::slave::RM_TRANSPARENT)
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_TRANSPARENT)
             .map(|m| m.actor_id)
             .collect();
         assert_eq!(
@@ -68134,7 +68329,7 @@ SendRefMsgRange=15
             .world
             .self_delay_msgs
             .iter()
-            .filter(|m| m.ident == mir2_world::slave::RM_TRANSPARENT)
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_TRANSPARENT)
             .all(|m| m.deliver_at_ms == rig.world.clock_ms + 800 && m.n_param1 == 46));
         // 800ms：两条投递、两条 657；caster 的投递额外抽一次 R(2)（M4 贴身）。
         let before_del = rig.world.rng.clone();
@@ -68288,7 +68483,7 @@ SendRefMsgRange=15
             rig.world
                 .self_delay_msgs
                 .iter()
-                .filter(|m| m.ident == mir2_world::slave::RM_DOOPENHEALTH)
+                .filter(|m| m.ident == mir2_world_bevy::slave::RM_DOOPENHEALTH)
                 .count(),
             2,
             "重复施法各入队一条（oracle 无去重）"
@@ -68653,8 +68848,8 @@ SendRefMsgRange=15
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::new(8, 8);
-        world.add_entity(mir2_world::EntitySpawn::new(42, "hero", 3, 3));
+        let mut world = mir2_world_bevy::World::new(8, 8);
+        world.add_entity(mir2_world_bevy::EntitySpawn::new(42, "hero", 3, 3));
         let mut displays = downlink::DisplayTable::new();
 
         // 穿上：`RecalcAbilitys` 的 `AddAbil.HitSpeed = RealAttackSpeed(Hi(MAC)=13) = 3`。
@@ -68863,7 +69058,7 @@ SendRefMsgRange=15
     #[test]
     fn closehealth_expiry_emits_1101_bytes_and_clears_status() {
         const SM_1101: u16 = mir2_protocol::messages::SM_CLOSEHEALTH;
-        const OPENHEATH: i32 = mir2_world::entity::POISON_OPENHEATH;
+        const OPENHEATH: i32 = mir2_world_bevy::entity::POISON_OPENHEATH;
 
         let mut rig = B3Rig::new(18, 2, false);
         let target = rig.caster;
@@ -68876,7 +69071,7 @@ SendRefMsgRange=15
             e.buff.char_status_ex |= OPENHEATH;
         }
         // `MakeOpenHealth` 的产物：`CharStatus = GetBuffStatus | (ex & 0xFFFF)`（含 OPENHEATH 位）。
-        let status_before = mir2_world::buff::get_char_status(&rig.world, target);
+        let status_before = mir2_world_bevy::buff::get_char_status(&rig.world, target);
         rig.world.entities.get_mut(target).unwrap().buff.char_status = status_before;
         rig.ground_sessions.get_mut("caster").unwrap().show_hp = true;
 
@@ -68926,7 +69121,7 @@ SendRefMsgRange=15
         assert_eq!(e.char_status_ex & OPENHEATH, 0, "OPENHEATH 位必须 XOR 掉");
         assert_eq!(
             e.char_status,
-            mir2_world::buff::get_char_status(&rig.world, target),
+            mir2_world_bevy::buff::get_char_status(&rig.world, target),
             "CharStatus 必须是 GetCharStatus() 的重算值"
         );
         assert!(
@@ -68995,7 +69190,7 @@ SendRefMsgRange=15
     #[test]
     fn m2_close_health_skips_ghost_entity_and_scan_list() {
         const SM_1101: u16 = mir2_protocol::messages::SM_CLOSEHEALTH;
-        const OPENHEATH: i32 = mir2_world::entity::POISON_OPENHEATH;
+        const OPENHEATH: i32 = mir2_world_bevy::entity::POISON_OPENHEATH;
 
         let mut rig = B3Rig::new(18, 2, false);
         let target = rig.caster;
@@ -69055,13 +69250,13 @@ SendRefMsgRange=15
     /// 规则 19 退化输入：同一夹具把 stage 还原为 `InWorld` ⇒ 照常出 2 帧（证明零帧确由 stage 门给出）。
     #[test]
     fn m2_aoi_downlink_zero_frames_when_stage_left_but_entity_remains() {
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
-        let mut mon = mir2_world::EntitySpawn::new(0, "稻草人", 9, 10);
-        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "稻草人", 9, 10);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let mon_id = world.add_entity(mon);
         let mut displays = downlink::DisplayTable::new();
         displays.set(
@@ -69080,12 +69275,12 @@ SendRefMsgRange=15
         let _ = tick_until_next_player_scan(&mut world);
         let (online, gates, mut rx0) = aoi_observer_fixture(p);
 
-        let set_stage = |world: &mut mir2_world::World, stage| {
+        let set_stage = |world: &mut mir2_world_bevy::World, stage| {
             world.sessions.get_mut("p").expect("会话在").stage = stage;
         };
 
         // A4 形态：stage=Left，实体与 actor_id 都还在。
-        set_stage(&mut world, mir2_world::WorldStage::Left);
+        set_stage(&mut world, mir2_world_bevy::WorldStage::Left);
         assert!(
             world.entities.get(p).is_some(),
             "夹具前提：stage=Left 时实体仍在（M-3 的 ghost 形态）"
@@ -69096,7 +69291,7 @@ SendRefMsgRange=15
         assert!(frames.is_empty(), "stage=Left ⇒ 零帧（A1 stage 门）");
 
         // 还原 stage ⇒ 同一夹具照常出帧（门只挡 Left）。
-        set_stage(&mut world, mir2_world::WorldStage::InWorld);
+        set_stage(&mut world, mir2_world_bevy::WorldStage::InWorld);
         let sent = drain_aoi_downlink(&world, &displays, &online, &gates, None);
         assert_eq!(
             sent,
@@ -69116,10 +69311,14 @@ SendRefMsgRange=15
     /// 规则 19 退化输入：同一夹具在 `stage=InWorld` 时 ② 必给实体值（证明红只由 stage 门引起）。
     #[test]
     fn m2_a4_left_stage_keeps_stage_guard_and_entity_reads() {
-        let mut world = mir2_world::World::with_maps(vec![(100, 100)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(100, 100)]);
         world.open_session("hero");
         let actor_id = world
-            .enter_map("hero", mir2_world::EntitySpawn::new(0, "hero", 11, 22), 0)
+            .enter_map(
+                "hero",
+                mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
+                0,
+            )
             .expect("进世界");
         let mut saved = SavedHuman {
             account: "acct".into(),
@@ -69141,7 +69340,7 @@ SendRefMsgRange=15
 
         // A4 形态：stage=Left + actor_id 仍在 + 实体仍在（ghost）
         {
-            world.sessions.get_mut("hero").unwrap().stage = mir2_world::WorldStage::Left;
+            world.sessions.get_mut("hero").unwrap().stage = mir2_world_bevy::WorldStage::Left;
             world.entities.get_mut(actor_id).unwrap().life_cycle.ghost = true;
         }
         assert_eq!(
@@ -69166,7 +69365,7 @@ SendRefMsgRange=15
         let t = world.clock_ms;
         let again = world.enter_map_at(
             "hero",
-            mir2_world::EntitySpawn::new(0, "hero", 11, 22),
+            mir2_world_bevy::EntitySpawn::new(0, "hero", 11, 22),
             0,
             t,
         );
@@ -69199,7 +69398,7 @@ SendRefMsgRange=15
             e.buff.show_hp = true;
             e.buff.show_hp_tick = 95_000;
             e.buff.show_hp_interval = 4_000; // 100_000 - 95_000 = 5_000 > 4_000 ⇒ 到期
-            e.buff.char_status_ex |= mir2_world::entity::POISON_OPENHEATH;
+            e.buff.char_status_ex |= mir2_world_bevy::entity::POISON_OPENHEATH;
         }
         sessions.get_mut("clamp").unwrap().show_hp = true;
 
@@ -69253,7 +69452,7 @@ SendRefMsgRange=15
         let (mut world, mut sessions, online, gates, mut rx, _player) =
             clamp_fixture(100, 0, 100, 0);
         world.clock_ms = 100_000;
-        let mut mon = mir2_world::EntitySpawn::new(0, "mon".to_string(), 3, 3);
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "mon".to_string(), 3, 3);
         mon.race = 80; // 非 Play（怪物族）
         mon.hp = 40;
         mon.max_hp = 40;
@@ -69263,7 +69462,7 @@ SendRefMsgRange=15
             e.buff.show_hp = true;
             e.buff.show_hp_tick = 95_000;
             e.buff.show_hp_interval = 4_000; // 100_000 - 95_000 = 5_000 > 4_000 ⇒ 到期
-            e.buff.char_status_ex |= mir2_world::entity::POISON_OPENHEATH;
+            e.buff.char_status_ex |= mir2_world_bevy::entity::POISON_OPENHEATH;
         }
 
         drain_stamina(&mut sessions, &mut world, &online, &gates, 12, 0, 0, &[]);
@@ -69283,7 +69482,7 @@ SendRefMsgRange=15
         let e = world.entities.get(mon_id).unwrap();
         assert!(!e.show_hp, "怪物 ShowHp 复位");
         assert_eq!(
-            e.char_status_ex & mir2_world::entity::POISON_OPENHEATH,
+            e.char_status_ex & mir2_world_bevy::entity::POISON_OPENHEATH,
             0,
             "怪物 OPENHEATH 位 XOR 掉"
         );
@@ -69510,7 +69709,7 @@ SendRefMsgRange=15
             .world
             .self_delay_msgs
             .iter()
-            .filter(|m| m.ident == mir2_world::slave::RM_MAGIC_LVEXP)
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAGIC_LVEXP)
             .collect();
         assert_eq!(pending.len(), 1, "未升级 ⇒ 恰一条 1000ms 640");
         assert_eq!(pending[0].deliver_at_ms, rig.world.clock_ms + 1000);
@@ -69534,7 +69733,7 @@ SendRefMsgRange=15
             .world
             .self_delay_msgs
             .iter()
-            .filter(|m| m.ident == mir2_world::slave::RM_MAGIC_LVEXP)
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAGIC_LVEXP)
             .collect();
         assert_eq!(pending.len(), 1, "升级 ⇒ UpdateDelayMsg 先删旧 640");
         assert_eq!(pending[0].deliver_at_ms, rig.world.clock_ms + 800);
@@ -69577,7 +69776,7 @@ SendRefMsgRange=15
             .world
             .self_delay_msgs
             .iter()
-            .find(|m| m.ident == mir2_world::slave::RM_MAGIC_LVEXP)
+            .find(|m| m.ident == mir2_world_bevy::slave::RM_MAGIC_LVEXP)
             .expect("升级支 800ms 640");
         assert_eq!(pending.deliver_at_ms, rig.world.clock_ms + 800);
         let f = rig.deliver(800);
@@ -69693,7 +69892,7 @@ SendRefMsgRange=15
     }
 
     struct B4Rig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         caster: i32,
         far: i32,
         online: OnlineRegistry,
@@ -69717,7 +69916,7 @@ SendRefMsgRange=15
         ) -> Self {
             use std::collections::HashMap;
             let magic_id = magic.magic_id;
-            let mut world = mir2_world::World::new(64, 64);
+            let mut world = mir2_world_bevy::World::new(64, 64);
             let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
             let observer = world.add_entity(new_player_entity("obs".to_string(), 18, 10));
             let far = world.add_entity(new_player_entity("far".to_string(), 40, 40));
@@ -69904,7 +70103,7 @@ SendRefMsgRange=15
         fn deliver(&mut self, advance_ms: i64) -> Vec<SfFrame> {
             self.world.clock_ms += advance_ms;
             let outs = self.world.deliver_self_delay_msgs();
-            let rec = mir2_world::TickRecord {
+            let rec = mir2_world_bevy::TickRecord {
                 slave_self_deliveries: outs,
                 ..Default::default()
             };
@@ -69939,7 +70138,7 @@ SendRefMsgRange=15
             anti_magic: u16,
             mac: u16,
         ) -> i32 {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
             e.race = race;
             e.level = level;
             e.hp = 100;
@@ -70013,7 +70212,7 @@ SendRefMsgRange=15
                 .target_creature
         }
 
-        fn delay_msgs(&self, ident: u16) -> Vec<&mir2_world::slave::SelfDelayMsg> {
+        fn delay_msgs(&self, ident: u16) -> Vec<&mir2_world_bevy::slave::SelfDelayMsg> {
             self.world
                 .self_delay_msgs
                 .iter()
@@ -70109,11 +70308,11 @@ SendRefMsgRange=15
             "642 slot=ArmRingl/dura_max"
         );
         assert_eq!(
-            rig.delay_msgs(mir2_world::slave::RM_POISON).len(),
+            rig.delay_msgs(mir2_world_bevy::slave::RM_POISON).len(),
             1,
             "恰一条 RM_POISON"
         );
-        let p = rig.delay_msgs(mir2_world::slave::RM_POISON)[0];
+        let p = rig.delay_msgs(mir2_world_bevy::slave::RM_POISON)[0];
         assert_eq!(
             (p.actor_id, p.w_param, p.n_param1, p.n_param2, p.n_param3),
             (m, 0, 45, rig.caster, 3),
@@ -70144,7 +70343,7 @@ SendRefMsgRange=15
         let m = rig.add_monster("m", 11, 10, 80, 10, 0, 0, 0);
         rig.world.set_attack_poison(
             m,
-            mir2_world::combat::AttackPoisonState {
+            mir2_world_bevy::combat::AttackPoisonState {
                 anti_poison: 100,
                 ..Default::default()
             },
@@ -70159,7 +70358,7 @@ SendRefMsgRange=15
             "F6-B 只抽骰门"
         );
         assert_eq!(b4_seq(&frames, 911), vec![SM_53, SM_638, SM_642]);
-        assert!(rig.delay_msgs(mir2_world::slave::RM_POISON).is_empty());
+        assert!(rig.delay_msgs(mir2_world_bevy::slave::RM_POISON).is_empty());
         let f = rig.deliver(1000);
         assert_eq!(b4_count(&f, 911, SM_657), 0);
         assert_eq!(b4_count(&f, 911, SM_640), 0);
@@ -70222,7 +70421,7 @@ SendRefMsgRange=15
             "SELF：202 直发先于 53；删除支无 642"
         );
         assert_eq!(b4_count(&frames, 911, SM_642), 0);
-        assert_eq!(rig.delay_msgs(mir2_world::slave::RM_POISON).len(), 1);
+        assert_eq!(rig.delay_msgs(mir2_world_bevy::slave::RM_POISON).len(), 1);
         let f = rig.deliver(1000);
         assert_eq!(b4_count(&f, 911, SM_657), 1);
         assert_eq!(b4_count(&f, 911, SM_640), 1);
@@ -70241,7 +70440,7 @@ SendRefMsgRange=15
         let caster_id = rig.caster;
         {
             let c = rig.world.entities.get_mut(caster_id).unwrap();
-            c.flags.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
+            c.flags.attack_mode = mir2_world_bevy::combat::ATTACK_MODE_HAM_GROUP;
             c.group.group_owner = leader;
             c.group.group_members.clear();
             assert!(c.group.group_members.is_empty(), "非团长自身表必须为空");
@@ -70279,7 +70478,7 @@ SendRefMsgRange=15
             600,
             "护身符耐久保持 600"
         );
-        assert!(rig.delay_msgs(mir2_world::slave::RM_POISON).is_empty());
+        assert!(rig.delay_msgs(mir2_world_bevy::slave::RM_POISON).is_empty());
         let f = rig.deliver(1000);
         assert_eq!(b4_count(&f, 911, SM_657), 0);
         assert_eq!(b4_count(&f, 911, SM_640), 0);
@@ -70309,7 +70508,7 @@ SendRefMsgRange=15
         // 投递 1000ms：`RM_POISON` 到点 ⇒ 657/100/656，走与 `sim_loop` 相同的接线函数。
         rig.world.clock_ms += 1000;
         let outs = rig.world.deliver_self_delay_msgs();
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             slave_self_deliveries: outs,
             ..Default::default()
         };
@@ -70377,7 +70576,7 @@ SendRefMsgRange=15
             "每成功目标一条 642（三条同 ident，出队序 = 四叉堆 sift 序，**不是**目标枚举序；             本断言只比 ident 序列，故与枚举序无关）"
         );
         assert_eq!(b4_seq(&frames, 912), vec![SM_17, SM_638]);
-        let poisons = rig.delay_msgs(mir2_world::slave::RM_POISON);
+        let poisons = rig.delay_msgs(mir2_world_bevy::slave::RM_POISON);
         assert_eq!(poisons.len(), 3);
         assert_eq!(
             poisons
@@ -70442,7 +70641,7 @@ SendRefMsgRange=15
             ],
             "F48-B 与 A 逐项相同的 RNG 账本"
         );
-        let poisons = rig.delay_msgs(mir2_world::slave::RM_POISON);
+        let poisons = rig.delay_msgs(mir2_world_bevy::slave::RM_POISON);
         assert_eq!(
             poisons.iter().map(|p| p.n_param1).collect::<Vec<_>>(),
             vec![49, 57, 47],
@@ -70474,7 +70673,7 @@ SendRefMsgRange=15
             "202 先于 53；无 642"
         );
         assert_eq!(
-            rig.delay_msgs(mir2_world::slave::RM_POISON)
+            rig.delay_msgs(mir2_world_bevy::slave::RM_POISON)
                 .iter()
                 .map(|p| p.actor_id)
                 .collect::<Vec<_>>(),
@@ -70504,7 +70703,7 @@ SendRefMsgRange=15
             Vec::<(i32, i32)>::new()
         );
         assert_eq!(b4_seq(&frames, 911), vec![SM_53, SM_638]);
-        assert_eq!(rig.delay_msgs(mir2_world::slave::RM_POISON).len(), 0);
+        assert_eq!(rig.delay_msgs(mir2_world_bevy::slave::RM_POISON).len(), 0);
         assert_eq!(rig.target_creature(), None, "非 proper 不 SetTargetCreat");
         let f = rig.deliver(1000);
         assert_eq!(b4_count(&f, 911, SM_640), 0);
@@ -70552,7 +70751,7 @@ SendRefMsgRange=15
         );
         assert_eq!(b4_seq(&frames, 911), vec![SM_53, SM_638]);
         assert_eq!(b4_seq(&frames, 912), vec![SM_17, SM_638]);
-        let delays = rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC);
+        let delays = rig.delay_msgs(mir2_world_bevy::slave::RM_DELAYMAGIC);
         assert_eq!(delays.len(), 2, "两条 RM_DELAYMAGIC");
         assert_eq!(
             (delays[0].w_param, delays[0].n_param2, delays[0].n_param3),
@@ -70597,7 +70796,9 @@ SendRefMsgRange=15
             "F50-B 恰 5 抽（4 抽 + R(10)）"
         );
         assert_eq!(b4_seq(&frames, 911), vec![SM_53, SM_638]);
-        assert!(rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC).is_empty());
+        assert!(rig
+            .delay_msgs(mir2_world_bevy::slave::RM_DELAYMAGIC)
+            .is_empty());
 
         // ---- F50-C2：level=200 ⇒ 等级门失败，但第一条 RM_DELAYMAGIC 已入队 ----
         let mut rig = B4Rig::new(b4_magic_info(50, "50"), 2, None);
@@ -70613,7 +70814,7 @@ SendRefMsgRange=15
         );
         assert_eq!(b4_seq(&frames, 911), vec![SM_53, SM_638]);
         assert_eq!(b4_seq(&frames, 912), vec![SM_17, SM_638]);
-        let delays = rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC);
+        let delays = rig.delay_msgs(mir2_world_bevy::slave::RM_DELAYMAGIC);
         assert_eq!(delays.len(), 1, "等级门失败仍有一条 RM_DELAYMAGIC");
         assert_eq!(delays[0].w_param, 2, "nPower/3 = 7/3 = 2（整数除法）");
         let before = rig.world.rng.clone();
@@ -70632,7 +70833,7 @@ SendRefMsgRange=15
         let p = rig.add_player("target", 12, 11, 913);
         rig.world.set_attack_poison(
             p,
-            mir2_world::combat::AttackPoisonState {
+            mir2_world_bevy::combat::AttackPoisonState {
                 un_paralysis: false,
                 anti_poison: 0,
                 paralysis: false,
@@ -70728,7 +70929,7 @@ SendRefMsgRange=15
         let p = rig.add_player("target", 12, 11, 913);
         rig.world.set_attack_poison(
             p,
-            mir2_world::combat::AttackPoisonState {
+            mir2_world_bevy::combat::AttackPoisonState {
                 un_paralysis: false,
                 anti_poison: 0,
                 paralysis: false,
@@ -70768,7 +70969,7 @@ SendRefMsgRange=15
         );
         assert_eq!(b4_count(&frames, 911, SM_656), 1);
         assert!(rig.world.entities.get(p).unwrap().pvp_flag);
-        let poison = rig.delay_msgs(mir2_world::slave::RM_POISON);
+        let poison = rig.delay_msgs(mir2_world_bevy::slave::RM_POISON);
         assert_eq!(
             poison.len(),
             1,
@@ -70854,7 +71055,10 @@ SendRefMsgRange=15
         );
         let fire = sf_first(&frames, 911, SM_638);
         assert_eq!(sf_magicfire_target_id(fire), m1, "638 ActorId = 点击目标");
-        assert_eq!(rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC).len(), 2);
+        assert_eq!(
+            rig.delay_msgs(mir2_world_bevy::slave::RM_DELAYMAGIC).len(),
+            2
+        );
         let before = rig.world.rng.clone();
         let f = rig.deliver(600);
         // **oracle 队列实测**（net8.0）：两条 `RM_DELAYMAGIC`(600) 之后还有一条
@@ -70908,7 +71112,9 @@ SendRefMsgRange=15
         );
         assert_eq!(b4_seq(&frames, 911), vec![SM_53, SM_638, SM_716]);
         assert_eq!(b4_count(&frames, 911, SM_716), 1, "M2 仍收 716（骰门外）");
-        assert!(rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC).is_empty());
+        assert!(rig
+            .delay_msgs(mir2_world_bevy::slave::RM_DELAYMAGIC)
+            .is_empty());
         let f = rig.deliver(1000);
         assert_eq!(b4_count(&f, 911, SM_640), 0);
     }
@@ -70952,7 +71158,7 @@ SendRefMsgRange=15
         let caster = rig.caster;
         {
             let c = rig.world.entities.get_mut(caster).unwrap();
-            c.flags.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
+            c.flags.attack_mode = mir2_world_bevy::combat::ATTACK_MODE_HAM_GROUP;
             c.group.group_owner = leader;
             c.group.group_members.clear();
             assert!(
@@ -71080,8 +71286,8 @@ SendRefMsgRange=15
         const SM_BACKSTEP: u16 = mir2_protocol::messages::SM_BACKSTEP;
 
         let mut rig = SpellFrameRig::new(
-            mir2_world::magic::SKILL_FIREWIND,
-            &[(mir2_world::magic::SKILL_FIREWIND, 3)],
+            mir2_world_bevy::magic::SKILL_FIREWIND,
+            &[(mir2_world_bevy::magic::SKILL_FIREWIND, 3)],
             &[("obs", 12, 11, false, 912)],
         );
         rig.world
@@ -71099,15 +71305,15 @@ SendRefMsgRange=15
             .entities
             .map_binding_mut(rig.caster)
             .unwrap()
-            .visible_actors = vec![mir2_world::entity::VisibleBaseObject {
+            .visible_actors = vec![mir2_world_bevy::entity::VisibleBaseObject {
             target: ally,
-            flag: mir2_world::entity::VisibleFlag::Show,
+            flag: mir2_world_bevy::entity::VisibleFlag::Show,
         }];
 
         let seed = 1; // 既有正例同 seed：chance 门必过（gap=5, push_level=1 ⇒ 阈值 14）
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let before = rig.world.rng.clone();
-        rig.cast(mir2_world::magic::SKILL_FIREWIND, (11, 10), 0);
+        rig.cast(mir2_world_bevy::magic::SKILL_FIREWIND, (11, 10), 0);
         let (frames, _raws) = rig.drain();
 
         assert_eq!(
@@ -71134,8 +71340,8 @@ SendRefMsgRange=15
     #[test]
     fn ham_group_owner_table_tamming_excludes_same_group_player() {
         let mut rig = SpellFrameRig::new(
-            mir2_world::slave::SKILL_TAMMING,
-            &[(mir2_world::slave::SKILL_TAMMING, 3)],
+            mir2_world_bevy::slave::SKILL_TAMMING,
+            &[(mir2_world_bevy::slave::SKILL_TAMMING, 3)],
             &[("obs", 12, 11, false, 912)],
         );
         let ally = b1_player(&mut rig, 11, 10, 1, 0);
@@ -71145,7 +71351,7 @@ SendRefMsgRange=15
 
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(7);
         let before = rig.world.rng.clone();
-        rig.cast(mir2_world::slave::SKILL_TAMMING, (11, 10), ally);
+        rig.cast(mir2_world_bevy::slave::SKILL_TAMMING, (11, 10), ally);
         let (frames, _raws) = rig.drain();
 
         assert_eq!(
@@ -71176,7 +71382,7 @@ SendRefMsgRange=15
         let ally = b1_player(&mut rig, 11, 10, 1, 0);
         {
             let c = rig.world.entities.get_mut(rig.caster).unwrap();
-            c.flags.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
+            c.flags.attack_mode = mir2_world_bevy::combat::ATTACK_MODE_HAM_GROUP;
             c.group.group_owner = rig.caster;
             c.group.group_members = vec![rig.caster, ally];
         }
@@ -71274,7 +71480,7 @@ SendRefMsgRange=15
     }
 
     struct B5Rig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         caster: i32,
         observer: i32,
         _far: i32,
@@ -71298,7 +71504,7 @@ SendRefMsgRange=15
         ) -> Self {
             use std::collections::HashMap;
             let magic_id = magic.magic_id;
-            let mut world = mir2_world::World::new(64, 64);
+            let mut world = mir2_world_bevy::World::new(64, 64);
             let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
             // 合同 §3.0：观察者必须**移出 y=10 扫描线**（9/10 的穿透沿 y=10 逐格扫）。
             let observer = world.add_entity(new_player_entity("obs".to_string(), 11, 9));
@@ -71541,7 +71747,7 @@ SendRefMsgRange=15
         fn deliver(&mut self, advance_ms: i64) -> Vec<SfFrame> {
             self.world.clock_ms += advance_ms;
             let outs = self.world.deliver_self_delay_msgs();
-            let rec = mir2_world::TickRecord {
+            let rec = mir2_world_bevy::TickRecord {
                 slave_self_deliveries: outs,
                 ..Default::default()
             };
@@ -71579,7 +71785,7 @@ SendRefMsgRange=15
         }
 
         fn add_monster(&mut self, name: &str, x: i32, y: i32, level: u8, anti_magic: u16) -> i32 {
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
             e.race = 80;
             e.level = level;
             e.hp = 100;
@@ -71645,7 +71851,7 @@ SendRefMsgRange=15
                 .level
         }
 
-        fn delay_msgs(&self, ident: u16) -> Vec<&mir2_world::slave::SelfDelayMsg> {
+        fn delay_msgs(&self, ident: u16) -> Vec<&mir2_world_bevy::slave::SelfDelayMsg> {
             self.world
                 .self_delay_msgs
                 .iter()
@@ -71691,7 +71897,7 @@ SendRefMsgRange=15
         const SM_53: u16 = mir2_protocol::messages::SM_HEALTHSPELLCHANGED;
         const SM_638: u16 = mir2_protocol::messages::SM_MAGICFIRE;
         const SM_640: u16 = mir2_protocol::messages::SM_MAGIC_LVEXP;
-        const RM_MAGSTRUCK: u16 = mir2_world::slave::RM_MAGSTRUCK;
+        const RM_MAGSTRUCK: u16 = mir2_world_bevy::slave::RM_MAGSTRUCK;
 
         // ---- F9-A：M1 命中、M2 骰门失败、M3 死格 ----
         {
@@ -71936,10 +72142,11 @@ SendRefMsgRange=15
                 .unwrap()
                 .flags
                 .in_safe_zone = true;
-            rig.world.set_b5_config(mir2_world::magic_effect::B5Config {
-                disable_in_safe_zone_fire_cross: true,
-                ..mir2_world::magic_effect::B5Config::default()
-            });
+            rig.world
+                .set_b5_config(mir2_world_bevy::magic_effect::B5Config {
+                    disable_in_safe_zone_fire_cross: true,
+                    ..mir2_world_bevy::magic_effect::B5Config::default()
+                });
             rig.seed(0);
             let before = rig.world.rng.clone();
             rig.cast(22, (10, 13), 0);
@@ -72012,10 +72219,11 @@ SendRefMsgRange=15
                 .unwrap()
                 .flags
                 .in_safe_zone = true;
-            rig.world.set_b5_config(mir2_world::magic_effect::B5Config {
-                disable_in_safe_zone_fire_cross: false,
-                ..mir2_world::magic_effect::B5Config::default()
-            });
+            rig.world
+                .set_b5_config(mir2_world_bevy::magic_effect::B5Config {
+                    disable_in_safe_zone_fire_cross: false,
+                    ..mir2_world_bevy::magic_effect::B5Config::default()
+                });
             rig.seed(0);
             rig.cast(22, (10, 13), 0);
             let _ = rig.drain();
@@ -72254,11 +72462,11 @@ SendRefMsgRange=15
         let leader = rig.add_player("leader", 20, 20, 915);
         {
             let c = rig.world.entities.get_mut(rig.caster).unwrap();
-            c.flags.attack_mode = mir2_world::combat::ATTACK_MODE_HAM_GROUP;
+            c.flags.attack_mode = mir2_world_bevy::combat::ATTACK_MODE_HAM_GROUP;
             c.group.group_owner = leader;
             c.group.group_members = Vec::new(); // 真实成员布局：成员不自持表
             let a = rig.world.entities.get_mut(ally).unwrap();
-            a.progression.life_attrib = mir2_world::magic_effect::LA_UNDEAD;
+            a.progression.life_attrib = mir2_world_bevy::magic_effect::LA_UNDEAD;
             let l = rig.world.entities.get_mut(leader).unwrap();
             l.group.group_members = vec![leader, rig.caster, ally];
         }
@@ -72283,7 +72491,7 @@ SendRefMsgRange=15
         let solo = rig.add_player("solo", 11, 10, 913);
         {
             let a = rig.world.entities.get_mut(solo).unwrap();
-            a.progression.life_attrib = mir2_world::magic_effect::LA_UNDEAD;
+            a.progression.life_attrib = mir2_world_bevy::magic_effect::LA_UNDEAD;
         }
         rig.seed(0);
         rig.cast(32, (11, 10), solo);
@@ -72300,7 +72508,7 @@ SendRefMsgRange=15
     /// 生成一只**静止**卫士（race 11；`is_guard_race` ⇒ `monster_ai_tick` 只跑
     /// `base_object_run_monster`，不游走/不索敌）。`spawn_monster_precomputed` 在**首个 tick 前**
     /// 直接落格（`CellObject.add_time = clock_ms`），复刻 Guardian 装载时机。
-    fn spawn_static_guard(world: &mut mir2_world::World, x: i32, y: i32, dir: u8) -> i32 {
+    fn spawn_static_guard(world: &mut mir2_world_bevy::World, x: i32, y: i32, dir: u8) -> i32 {
         world
             .spawn_monster_precomputed(
                 "guard",
@@ -72318,7 +72526,7 @@ SendRefMsgRange=15
                 0,
                 0,
                 Vec::new(),
-                mir2_world::MonsterCtorDraws::default(),
+                mir2_world_bevy::MonsterCtorDraws::default(),
                 dir,
                 false,
             )
@@ -72375,7 +72583,7 @@ SendRefMsgRange=15
     /// 由 `aoi::tests::player_viewer_skips_cell_expiry` 单独钉住。
     #[test]
     fn vmt_static_guard_stays_visible_beyond_60s_one_appearance_pair() {
-        let mut world = mir2_world::World::new(700, 700);
+        let mut world = mir2_world_bevy::World::new(700, 700);
         world.enable_monster_ai();
         let guard = spawn_static_guard(&mut world, 281, 661, 5);
         world.open_session("p");
@@ -72417,7 +72625,7 @@ SendRefMsgRange=15
             .expect("玩家存在")
             .visible_actors
             .iter()
-            .any(|v| v.target == guard && v.flag != mir2_world::VisibleFlag::Hidden);
+            .any(|v| v.target == guard && v.flag != mir2_world_bevy::VisibleFlag::Hidden);
         assert!(vis, "玩家 visible_actors 必须仍含卫士");
 
         // ①-3 恰好一对出现帧；且没有 SM_WALK。
@@ -72451,7 +72659,7 @@ SendRefMsgRange=15
     /// `verify_tick == 0` / `add_time == 0` 断言红（刷新本身不重复出帧，但时序口径错）。
     #[test]
     fn vmt_no_duplicate_appearance_before_30s_refresh() {
-        let mut world = mir2_world::World::new(700, 700);
+        let mut world = mir2_world_bevy::World::new(700, 700);
         world.enable_monster_ai();
         let guard = spawn_static_guard(&mut world, 281, 661, 5);
         world.open_session("p");
@@ -72512,15 +72720,15 @@ SendRefMsgRange=15
     fn vmt_static_npc_and_merchant_stay_visible_beyond_60s() {
         // ---- 固定 NPC ----
         {
-            let mut world = mir2_world::World::new(700, 700);
+            let mut world = mir2_world_bevy::World::new(700, 700);
             world.enable_npc_tick();
             let npc = world
-                .insert_npc(mir2_world::NpcSpawn {
+                .insert_npc(mir2_world_bevy::NpcSpawn {
                     name: "npc".into(),
                     x: 281,
                     y: 661,
                     map_id: 0,
-                    state: mir2_world::NpcState::default(),
+                    state: mir2_world_bevy::NpcState::default(),
                 })
                 .expect("NPC 入世界");
             assert!(world.attach_npc_to_map(npc), "NPC 落格");
@@ -72546,21 +72754,21 @@ SendRefMsgRange=15
                     .unwrap()
                     .visible_actors
                     .iter()
-                    .any(|v| v.target == npc && v.flag != mir2_world::VisibleFlag::Hidden),
+                    .any(|v| v.target == npc && v.flag != mir2_world_bevy::VisibleFlag::Hidden),
                 "玩家必须仍看得见固定 NPC"
             );
         }
         // ---- 商人 ----
         {
-            let mut world = mir2_world::World::new(700, 700);
+            let mut world = mir2_world_bevy::World::new(700, 700);
             world.enable_merchant_tick();
             let merchant = world
-                .insert_merchant(mir2_world::MerchantSpawn {
+                .insert_merchant(mir2_world_bevy::MerchantSpawn {
                     name: "merchant".into(),
                     x: 281,
                     y: 661,
                     map_id: 0,
-                    state: mir2_world::MerchantState::new(
+                    state: mir2_world_bevy::MerchantState::new(
                         "merchant".into(),
                         "0".into(),
                         0,
@@ -72569,7 +72777,7 @@ SendRefMsgRange=15
                         false,
                         false,
                         0,
-                        mir2_world::MerchantFlags::default(),
+                        mir2_world_bevy::MerchantFlags::default(),
                         Vec::new(),
                         Vec::new(),
                         0,
@@ -72599,7 +72807,7 @@ SendRefMsgRange=15
                     .unwrap()
                     .visible_actors
                     .iter()
-                    .any(|v| v.target == merchant && v.flag != mir2_world::VisibleFlag::Hidden),
+                    .any(|v| v.target == merchant && v.flag != mir2_world_bevy::VisibleFlag::Hidden),
                 "玩家必须仍看得见商人"
             );
         }
@@ -72609,17 +72817,17 @@ SendRefMsgRange=15
     /// 且要求实体仍在格子索引。红检：删掉任一过滤 ⇒ 对应阶段的 `nearest` 断言红。
     #[test]
     fn world_aoi_diag_nearest_excludes_dead_ghost_and_expired() {
-        let mut world = mir2_world::World::new(100, 100);
+        let mut world = mir2_world_bevy::World::new(100, 100);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家进图");
-        let mut m = mir2_world::EntitySpawn::new(0, "m", 12, 10);
-        m.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "m", 12, 10);
+        m.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         let mon = world.add_entity(m);
         world.tick();
         let displays = downlink::DisplayTable::new();
-        let near = |w: &mir2_world::World| {
+        let near = |w: &mir2_world_bevy::World| {
             let n = world_aoi_diag(w, &displays, &std::collections::HashMap::new())
                 .sessions
                 .iter()
@@ -72674,8 +72882,8 @@ SendRefMsgRange=15
     ///   恒 0 ⇒ 红。
     #[test]
     fn special_monster_queues_stay_bounded_on_production_path() {
-        use mir2_world::entity::ACTOR_RACE_PLAY;
-        use mir2_world::mongen::MonGenEntry;
+        use mir2_world_bevy::entity::ACTOR_RACE_PLAY;
+        use mir2_world_bevy::mongen::MonGenEntry;
         use std::collections::HashMap;
 
         // 32×32 全零地形（与 `mongen` 的单测同口径：`parse_map_bytes` 只要求尺寸/字节数）。
@@ -72733,15 +72941,15 @@ SendRefMsgRange=15
             }],
             &table,
             false,
-            mir2_world::mongen::MonGenConfig::default(),
+            mir2_world_bevy::mongen::MonGenConfig::default(),
             &mut rng,
         );
 
-        let mut world = mir2_world::World::with_maps(vec![(32, 32)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(32, 32)]);
         world.enable_monster_ai();
         // 本条测产仔/帧队列是否无界增长，不是跳步门 ⇒ interval=0 关掉门（oracle 合法配置）。
         world.set_process_monster_interval(0);
-        let mut queen = mir2_world::EntitySpawn::new(0, "蜂后".to_string(), 10, 10);
+        let mut queen = mir2_world_bevy::EntitySpawn::new(0, "蜂后".to_string(), 10, 10);
         queen.race = 103;
         queen.hp = 100;
         queen.max_hp = 100;
@@ -72751,7 +72959,7 @@ SendRefMsgRange=15
         queen.ai.walk_speed = 0;
         queen.ai.next_hit_time = 2000;
         let qid = world.add_entity(queen);
-        let mut player = mir2_world::EntitySpawn::new(0, "P".to_string(), 11, 10);
+        let mut player = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 11, 10);
         player.race = ACTOR_RACE_PLAY;
         let pid = world.add_entity(player);
         world.entities.get_mut(qid).unwrap().ai.target_creature = Some(pid);
@@ -72799,7 +73007,7 @@ SendRefMsgRange=15
         assert!(max_children > 0, "生产 spawner 未接通 ⇒ 一只宝宝都没造出来");
         assert_eq!(
             max_children,
-            mir2_world::special_monster::CHILD_LIMIT,
+            mir2_world_bevy::special_monster::CHILD_LIMIT,
             "宝宝数必须受 BeeList.Count >= 15 门约束并达到上限"
         );
 
@@ -72824,14 +73032,14 @@ SendRefMsgRange=15
     /// 牙⑦：把 `RM_DIGUP` 的 `status` 尾改成 0 ⇒ 首帧逐字节断言红。
     #[test]
     fn mb1_monster_ref_msgs_encode_frames_on_production_drain() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 11, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 11, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
-        let mut m = mir2_world::EntitySpawn::new(0, "石像".to_string(), 10, 10);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "石像".to_string(), 10, 10);
         m.race = 101;
         let mid = world.add_entity(m);
-        let mut slave = mir2_world::EntitySpawn::new(0, "宝宝".to_string(), 10, 11);
+        let mut slave = mir2_world_bevy::EntitySpawn::new(0, "宝宝".to_string(), 10, 11);
         slave.race = 101;
         slave.master = Some(pid);
         slave.slave_exp_level = 2;
@@ -72855,7 +73063,7 @@ SendRefMsgRange=15
             downlink::ActorDisplay::new(2, 0, 0x0033_4455, 0, 0x2, 255, b"s".to_vec()),
         );
 
-        let msg = |ident: u16, n1: i32, n2: i32, n3: i32| mir2_world::MonsterRefMsg {
+        let msg = |ident: u16, n1: i32, n2: i32, n3: i32| mir2_world_bevy::MonsterRefMsg {
             actor_id: mid,
             ident,
             w_param: 0,
@@ -72875,16 +73083,16 @@ SendRefMsgRange=15
         };
         world
             .pending_monster_ref_msgs
-            .push(msg(mir2_world::monai::RM_DIGUP, 10, 10, 0));
+            .push(msg(mir2_world_bevy::monai::RM_DIGUP, 10, 10, 0));
         world
             .pending_monster_ref_msgs
-            .push(msg(mir2_world::monai::RM_DIGDOWN, 10, 10, 0));
+            .push(msg(mir2_world_bevy::monai::RM_DIGDOWN, 10, 10, 0));
         world
             .pending_monster_ref_msgs
-            .push(msg(mir2_world::monai::RM_HIT, 10, 10, 0));
+            .push(msg(mir2_world_bevy::monai::RM_HIT, 10, 10, 0));
         world
             .pending_monster_ref_msgs
-            .push(msg(mir2_world::monai::RM_10205, 11, 10, 1));
+            .push(msg(mir2_world_bevy::monai::RM_10205, 11, 10, 1));
         world.pending_monster_ref_msgs.push(msg(
             mir2_protocol::messages::RM_CHANGENAMECOLOR,
             0,
@@ -72893,7 +73101,7 @@ SendRefMsgRange=15
         ));
         world
             .pending_monster_ref_msgs
-            .push(mir2_world::MonsterRefMsg {
+            .push(mir2_world_bevy::MonsterRefMsg {
                 actor_id: sid,
                 ident: mir2_protocol::messages::RM_CHANGENAMECOLOR,
                 w_param: 0,
@@ -72910,7 +73118,7 @@ SendRefMsgRange=15
                 self_only: false,
                 recipients: vec![pid],
             });
-        let mut hidden = msg(mir2_world::monai::RM_DIGUP, 10, 10, 0);
+        let mut hidden = msg(mir2_world_bevy::monai::RM_DIGUP, 10, 10, 0);
         hidden.self_only = true;
         world.pending_monster_ref_msgs.push(hidden);
         let mut hidden_color = msg(mir2_protocol::messages::RM_CHANGENAMECOLOR, 0, 0, 0);
@@ -72961,11 +73169,11 @@ SendRefMsgRange=15
     /// 牙：删掉 `drop_self` 守卫 ⇒ ① 的帧数由 0 变 1。
     #[test]
     fn rust_extra_ident14_self_hit_dropped() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 11, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 11, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
-        let mut m = mir2_world::EntitySpawn::new(0, "石像".to_string(), 10, 10);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "石像".to_string(), 10, 10);
         m.race = 101;
         let mid = world.add_entity(m);
         world.tick();
@@ -72984,9 +73192,9 @@ SendRefMsgRange=15
         let displays = downlink::DisplayTable::new();
         let pet_cfg = mir2_data::pet_slave::PetSlaveConfig::default();
 
-        let hit = |actor_id: i32, recipients: Vec<i32>| mir2_world::MonsterRefMsg {
+        let hit = |actor_id: i32, recipients: Vec<i32>| mir2_world_bevy::MonsterRefMsg {
             actor_id,
-            ident: mir2_world::monai::RM_HIT,
+            ident: mir2_world_bevy::monai::RM_HIT,
             w_param: 0,
             n_param1: 0,
             n_param2: 0,
@@ -73032,8 +73240,8 @@ SendRefMsgRange=15
         assert_eq!(n_monster, 1, "怪物发的 SM_HIT 必须照常投递");
 
         // ③ 多收件人：recipients=[自己, 另一玩家] ⇒ 自己 0 帧、另一玩家 1 帧（防误杀）。
-        let mut p2 = mir2_world::EntitySpawn::new(0, "P2".to_string(), 12, 10);
-        p2.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut p2 = mir2_world_bevy::EntitySpawn::new(0, "P2".to_string(), 12, 10);
+        p2.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid2 = world.add_entity(p2);
         world.tick();
         let online2: OnlineRegistry = vec![
@@ -73085,12 +73293,12 @@ SendRefMsgRange=15
     /// ⇒ 自己的帧数由 0 变 1，本测试红。
     #[test]
     fn rm_path_teeth_broadcast_walk_turn_excludes_self() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 10, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 10, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
-        let mut q = mir2_world::EntitySpawn::new(0, "Q".to_string(), 12, 10);
-        q.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut q = mir2_world_bevy::EntitySpawn::new(0, "Q".to_string(), 12, 10);
+        q.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let qid = world.add_entity(q);
         world.tick();
 
@@ -73142,12 +73350,12 @@ SendRefMsgRange=15
     /// 牙：改成 [`broadcast_ref_msg`]（排除自己）⇒ 自己的帧数由 1 变 0，本测试红。
     #[test]
     fn rm_path_teeth_broadcast_push_rush_includes_self() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 10, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 10, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
-        let mut q = mir2_world::EntitySpawn::new(0, "Q".to_string(), 12, 10);
-        q.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut q = mir2_world_bevy::EntitySpawn::new(0, "Q".to_string(), 12, 10);
+        q.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let qid = world.add_entity(q);
         world.tick();
 
@@ -73196,11 +73404,11 @@ SendRefMsgRange=15
     /// `RM_HIT` 同款的 `recipient == actor_id` 守卫（A1 对照表「不适用」的前提）。
     #[test]
     fn rm_path_teeth_drain_spell_monster_sender_no_self() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 10, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 10, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
-        let mut m = mir2_world::EntitySpawn::new(0, "火球怪".to_string(), 20, 20);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "火球怪".to_string(), 20, 20);
         m.race = 101;
         let mid = world.add_entity(m);
         world.tick();
@@ -73221,9 +73429,9 @@ SendRefMsgRange=15
 
         world
             .pending_monster_ref_msgs
-            .push(mir2_world::MonsterRefMsg {
+            .push(mir2_world_bevy::MonsterRefMsg {
                 actor_id: mid,
-                ident: mir2_world::monai::RM_SPELL,
+                ident: mir2_world_bevy::monai::RM_SPELL,
                 w_param: 48,
                 n_param1: 20,
                 n_param2: 20,
@@ -73261,9 +73469,9 @@ SendRefMsgRange=15
     /// 牙：若有人「顺手」给 `RM_MAGICFIRE` 加自身过滤 ⇒ 本测试红。
     #[test]
     fn rm_path_teeth_drain_magicfire_player_sender_not_filtered() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 10, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 10, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
         world.tick();
 
@@ -73283,9 +73491,9 @@ SendRefMsgRange=15
 
         world
             .pending_monster_ref_msgs
-            .push(mir2_world::MonsterRefMsg {
+            .push(mir2_world_bevy::MonsterRefMsg {
                 actor_id: pid,
-                ident: mir2_world::monai::RM_MAGICFIRE,
+                ident: mir2_world_bevy::monai::RM_MAGICFIRE,
                 w_param: 0,
                 n_param1: 0x0002_0030,
                 n_param2: 48,
@@ -73329,12 +73537,12 @@ SendRefMsgRange=15
     /// ⇒ 「tick1 无 SM_STRUCK / 帧序」断言红。
     #[test]
     fn monster_attack_produces_sm_hit_then_struck_on_production_path() {
-        let mut world = mir2_world::World::with_maps(vec![(64, 64)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
         world.enable_monster_ai();
         // 本条测怪攻击 ⇒ SM_HIT 的出帧路径，不是跳步门 ⇒ interval=0 关掉门。
         world.set_process_monster_interval(0);
         world.enable_refmessage_delay();
-        let mut m = mir2_world::EntitySpawn::new(0, "半兽人".to_string(), 10, 12);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "半兽人".to_string(), 10, 12);
         m.race = 60;
         m.hp = 60;
         m.max_hp = 60;
@@ -73344,15 +73552,15 @@ SendRefMsgRange=15
         m.ai.attack_tick = -10_000; // tick1 必到点
         m.ai.next_hit_time = 2_000;
         let mid = world.add_entity(m);
-        let mut v = mir2_world::EntitySpawn::new(0, "victim".to_string(), 11, 12);
+        let mut v = mir2_world_bevy::EntitySpawn::new(0, "victim".to_string(), 11, 12);
         v.hp = 100;
         v.max_hp = 100;
         let vid = world.add_entity(v);
-        let mut o = mir2_world::EntitySpawn::new(0, "obs".to_string(), 13, 12);
+        let mut o = mir2_world_bevy::EntitySpawn::new(0, "obs".to_string(), 13, 12);
         o.hp = 100;
         o.max_hp = 100;
         let oid = world.add_entity(o);
-        let mut f = mir2_world::EntitySpawn::new(0, "far".to_string(), 40, 40);
+        let mut f = mir2_world_bevy::EntitySpawn::new(0, "far".to_string(), 40, 40);
         f.hp = 100;
         f.max_hp = 100;
         let _fid = world.add_entity(f);
@@ -73519,14 +73727,14 @@ SendRefMsgRange=15
     /// 牙：`RM_FLYAXE` 删掉目标存在守卫 ⇒ 目标缺失的消息也会出帧（本用例断言 3 帧）。
     #[test]
     fn mb2_ref_frames_encode_flyaxe_lighting_alive() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut m = mir2_world::EntitySpawn::new(0, "斧".to_string(), 10, 10);
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "斧".to_string(), 10, 10);
         m.race = 87;
         let mid = world.add_entity(m);
-        let t = mir2_world::EntitySpawn::new(0, "目标".to_string(), 11, 10);
+        let t = mir2_world_bevy::EntitySpawn::new(0, "目标".to_string(), 11, 10);
         let tid = world.add_entity(t);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 12, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 12, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
 
         let displays = downlink::DisplayTable::new();
@@ -73554,8 +73762,8 @@ SendRefMsgRange=15
                    n3: i32,
                    tx: i32,
                    ty: i32|
-         -> mir2_world::MonsterRefMsg {
-            mir2_world::MonsterRefMsg {
+         -> mir2_world_bevy::MonsterRefMsg {
+            mir2_world_bevy::MonsterRefMsg {
                 actor_id: mid,
                 ident,
                 w_param,
@@ -73574,7 +73782,7 @@ SendRefMsgRange=15
             }
         };
         world.pending_monster_ref_msgs.push(msg(
-            mir2_world::monai::RM_FLYAXE,
+            mir2_world_bevy::monai::RM_FLYAXE,
             2,
             10,
             10,
@@ -73583,7 +73791,7 @@ SendRefMsgRange=15
             10,
         ));
         world.pending_monster_ref_msgs.push(msg(
-            mir2_world::monai::RM_LIGHTING,
+            mir2_world_bevy::monai::RM_LIGHTING,
             1,
             10,
             10,
@@ -73591,12 +73799,18 @@ SendRefMsgRange=15
             11,
             10,
         ));
-        world
-            .pending_monster_ref_msgs
-            .push(msg(mir2_world::monai::RM_ALIVE, 2, 10, 10, 0, 0, 0));
+        world.pending_monster_ref_msgs.push(msg(
+            mir2_world_bevy::monai::RM_ALIVE,
+            2,
+            10,
+            10,
+            0,
+            0,
+            0,
+        ));
         // 目标不存在 ⇒ oracle `ActorMgr.Get(nParam3) != null` 守卫不发帧。
         world.pending_monster_ref_msgs.push(msg(
-            mir2_world::monai::RM_FLYAXE,
+            mir2_world_bevy::monai::RM_FLYAXE,
             2,
             10,
             10,
@@ -73640,7 +73854,7 @@ SendRefMsgRange=15
 
     /// **T-148**：怪物侧 `RM_SPELL`/`RM_MAGICFIRE` 的宿主排水。
     ///
-    /// 世界侧走**生产分派** `mir2_world::monai::monster_class_run`（race 215 =
+    /// 世界侧走**生产分派** `mir2_world_bevy::monai::monster_class_run`（race 215 =
     /// `FireballMonster`，`FireballMonster.cs:39-40`）产出两帧；宿主走生产
     /// [`drain_monster_ref_msgs`]。断言：① 两帧逐字节 = `smframe` 口径
     /// （`SM_SPELL` 头 `(ActorId, x=nParam1, y=nParam2, Series=wParam)` + `nParam3.ToString()`
@@ -73652,12 +73866,12 @@ SendRefMsgRange=15
     /// `lo_word/hi_word(nParam2)` 对调或 targetId 传 0 ⇒ 头/尾断言红。
     #[test]
     fn t148_monster_spell_and_magicfire_on_production_drain() {
-        use mir2_world::ACTOR_RACE_PLAY;
-        let mut world = mir2_world::World::new(64, 64);
+        use mir2_world_bevy::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         // `fireball_setup` 等价造景（world 侧 R19 用例同参）：怪 (10,10)、DC=10..10、
         // AntiMagic>0、SpellTick=0、NextHitTime=2000；Target=(12,10)、前格 pose=(11,10)。
-        let mut m = mir2_world::EntitySpawn::new(0, "火球".to_string(), 10, 10);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "火球".to_string(), 10, 10);
         m.race = 215;
         m.hp = 1000;
         m.max_hp = 1000;
@@ -73671,26 +73885,26 @@ SendRefMsgRange=15
         m.ai.dir = 2; // `Direction.Right`
         let mid = world.add_entity(m);
         assert!(world.enter_world(mid));
-        let mut target = mir2_world::EntitySpawn::new(0, "目标".to_string(), 12, 10);
+        let mut target = mir2_world_bevy::EntitySpawn::new(0, "目标".to_string(), 12, 10);
         target.race = ACTOR_RACE_PLAY;
         target.hp = 500;
         target.max_hp = 500;
         let tid = world.add_entity(target);
         assert!(world.enter_world(tid));
-        let mut pose = mir2_world::EntitySpawn::new(0, "前格".to_string(), 11, 10);
+        let mut pose = mir2_world_bevy::EntitySpawn::new(0, "前格".to_string(), 11, 10);
         pose.race = ACTOR_RACE_PLAY;
         pose.hp = 500;
         pose.max_hp = 500;
         pose.mac = 5 | (5 << 8);
         let pid = world.add_entity(pose);
         assert!(world.enter_world(pid));
-        let mut far = mir2_world::EntitySpawn::new(0, "界外".to_string(), 40, 40);
+        let mut far = mir2_world_bevy::EntitySpawn::new(0, "界外".to_string(), 40, 40);
         far.race = ACTOR_RACE_PLAY;
         far.hp = 500;
         far.max_hp = 500;
         let fid = world.add_entity(far);
         assert!(world.enter_world(fid));
-        let mut watcher = mir2_world::EntitySpawn::new(0, "同格怪".to_string(), 13, 10);
+        let mut watcher = mir2_world_bevy::EntitySpawn::new(0, "同格怪".to_string(), 13, 10);
         watcher.race = 60;
         watcher.hp = 100;
         watcher.max_hp = 100;
@@ -73699,7 +73913,7 @@ SendRefMsgRange=15
         world.entities.get_mut(mid).unwrap().ai.target_creature = Some(tid);
 
         assert!(
-            mir2_world::monai::monster_class_run(&mut world, mid).is_some(),
+            mir2_world_bevy::monai::monster_class_run(&mut world, mid).is_some(),
             "race 215 必须走 FireballMonster 的生产分派"
         );
         let idents: Vec<u16> = world
@@ -73710,8 +73924,8 @@ SendRefMsgRange=15
         assert_eq!(
             idents,
             vec![
-                mir2_world::monai::RM_SPELL,
-                mir2_world::monai::RM_MAGICFIRE,
+                mir2_world_bevy::monai::RM_SPELL,
+                mir2_world_bevy::monai::RM_MAGICFIRE,
                 mir2_protocol::messages::RM_CHANGENAMECOLOR,
             ],
             "world 侧先施法两帧，再有目标时的 Break 656"
@@ -73855,20 +74069,20 @@ SendRefMsgRange=15
     /// 多收一帧（红）。
     #[test]
     fn t134_spacemove_fire_on_production_drain() {
-        use mir2_world::ACTOR_RACE_PLAY;
-        let mut world = mir2_world::World::new(64, 64);
+        use mir2_world_bevy::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
-        let mut m = mir2_world::EntitySpawn::new(0, "瞬移怪".to_string(), 10, 10);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "瞬移怪".to_string(), 10, 10);
         m.race = 203; // `TeleMonster`
         let mid = world.add_entity(m);
         assert!(world.enter_world(mid));
-        let mut p = mir2_world::EntitySpawn::new(0, "目标".to_string(), 13, 10);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "目标".to_string(), 13, 10);
         p.race = ACTOR_RACE_PLAY;
         p.hp = 100;
         p.max_hp = 100;
         let pid = world.add_entity(p);
         assert!(world.enter_world(pid));
-        let mut o = mir2_world::EntitySpawn::new(0, "观察者".to_string(), 5, 10);
+        let mut o = mir2_world_bevy::EntitySpawn::new(0, "观察者".to_string(), 5, 10);
         o.race = ACTOR_RACE_PLAY;
         o.hp = 100;
         o.max_hp = 100;
@@ -73876,13 +74090,13 @@ SendRefMsgRange=15
         assert!(world.enter_world(oid));
         // 落点专属观察者：发帧点 (10,10) ±12 外（|24-10| = 14 > 12），落点 (13,10) ±12 内
         // （|24-13| = 11 ≤ 12）⇒ 只有「按落点重算」才会被命中。
-        let mut late = mir2_world::EntitySpawn::new(0, "落点观察者".to_string(), 24, 10);
+        let mut late = mir2_world_bevy::EntitySpawn::new(0, "落点观察者".to_string(), 24, 10);
         late.race = ACTOR_RACE_PLAY;
         late.hp = 100;
         late.max_hp = 100;
         let lid = world.add_entity(late);
         assert!(world.enter_world(lid));
-        let mut far = mir2_world::EntitySpawn::new(0, "界外".to_string(), 40, 40);
+        let mut far = mir2_world_bevy::EntitySpawn::new(0, "界外".to_string(), 40, 40);
         far.race = ACTOR_RACE_PLAY;
         far.hp = 100;
         far.max_hp = 100;
@@ -73896,11 +74110,11 @@ SendRefMsgRange=15
             a.search_enemy_tick = 100_000;
         }
 
-        assert!(mir2_world::monai::monster_class_run(&mut world, mid).is_some());
+        assert!(mir2_world_bevy::monai::monster_class_run(&mut world, mid).is_some());
         let frame = world
             .pending_monster_ref_msgs
             .iter()
-            .find(|f| f.ident == mir2_world::monai::RM_SPACEMOVE_FIRE)
+            .find(|f| f.ident == mir2_world_bevy::monai::RM_SPACEMOVE_FIRE)
             .expect("TeleMonster 必须产 RM_SPACEMOVE_FIRE");
         assert_eq!(frame.actor_id, mid, "`this.SendRefMsg` ⇒ 发帧者是怪自己");
         assert_eq!(
@@ -73993,10 +74207,10 @@ SendRefMsgRange=15
     /// 10139 支 ⇒ 0 帧（红）；`LoWord/HiWord(nParam1)` 对调 ⇒ 头断言（`Param=0x0002`）红。
     #[test]
     fn t135_charstatuschanged_per_recipient_hit_speed_on_production_drain() {
-        use mir2_world::ACTOR_RACE_PLAY;
-        let mut world = mir2_world::World::new(64, 64);
+        use mir2_world_bevy::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
-        let mut tiger = mir2_world::EntitySpawn::new(0, "霜虎".to_string(), 10, 10);
+        let mut tiger = mir2_world_bevy::EntitySpawn::new(0, "霜虎".to_string(), 10, 10);
         tiger.race = 210; // `FrostTiger`
         let tid = world.add_entity(tiger);
         assert!(world.enter_world(tid));
@@ -74004,24 +74218,24 @@ SendRefMsgRange=15
         // （0x0001_0002 ⇒ 低半 0x0002、高半被 `& 0xFFFF` 丢弃）；高半取 buff 首位 bit31。
         world.entities.get_mut(tid).unwrap().buff.char_status_ex = 0x0001_0002;
         world.defence_up(tid, 10);
-        let mut p1 = mir2_world::EntitySpawn::new(0, "甲".to_string(), 11, 10);
+        let mut p1 = mir2_world_bevy::EntitySpawn::new(0, "甲".to_string(), 11, 10);
         p1.race = ACTOR_RACE_PLAY;
         p1.hit_speed = 7;
         let p1id = world.add_entity(p1);
         assert!(world.enter_world(p1id));
-        let mut p2 = mir2_world::EntitySpawn::new(0, "乙".to_string(), 12, 10);
+        let mut p2 = mir2_world_bevy::EntitySpawn::new(0, "乙".to_string(), 12, 10);
         p2.race = ACTOR_RACE_PLAY;
         p2.hit_speed = 13;
         let p2id = world.add_entity(p2);
         assert!(world.enter_world(p2id));
-        let mut far = mir2_world::EntitySpawn::new(0, "界外".to_string(), 40, 40);
+        let mut far = mir2_world_bevy::EntitySpawn::new(0, "界外".to_string(), 40, 40);
         far.race = ACTOR_RACE_PLAY;
         far.hit_speed = 99;
         let fid = world.add_entity(far);
         assert!(world.enter_world(fid));
         world.entities.get_mut(tid).unwrap().ai.search_enemy_tick = 100_000;
 
-        assert!(mir2_world::monai::monster_class_run(&mut world, tid).is_some());
+        assert!(mir2_world_bevy::monai::monster_class_run(&mut world, tid).is_some());
         let status = world.entities.get(tid).unwrap().char_status;
         assert_eq!(
             status, 0x8000_0002u32 as i32,
@@ -74030,7 +74244,7 @@ SendRefMsgRange=15
         let frame = world
             .pending_monster_ref_msgs
             .iter()
-            .find(|f| f.ident == mir2_world::monai::RM_CHARSTATUSCHANGED)
+            .find(|f| f.ident == mir2_world_bevy::monai::RM_CHARSTATUSCHANGED)
             .expect("`StatusChanged()` 必须产 RM_CHARSTATUSCHANGED");
         assert_eq!(frame.actor_id, tid, "StatusChanged 由霜虎自己发");
         assert_eq!(frame.n_param1, status, "nParam1 = 收尾后的 CharStatus");
@@ -74119,11 +74333,11 @@ SendRefMsgRange=15
     /// **牙**：把排水改回 `broadcast_ref_msg_opt`（此刻重算）⇒ 本用例红（0 帧）。
     #[test]
     fn mb1_digdown_survives_come_down_hide_state() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 11, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 11, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
-        let mut m = mir2_world::EntitySpawn::new(0, "钉怪".to_string(), 10, 10);
+        let mut m = mir2_world_bevy::EntitySpawn::new(0, "钉怪".to_string(), 10, 10);
         m.race = 85;
         // `ComeDown` 之后的状态：已隐藏。
         m.fixed_hide_mode = true;
@@ -74149,9 +74363,9 @@ SendRefMsgRange=15
 
         world
             .pending_monster_ref_msgs
-            .push(mir2_world::MonsterRefMsg {
+            .push(mir2_world_bevy::MonsterRefMsg {
                 actor_id: mid,
-                ident: mir2_world::monai::RM_DIGDOWN,
+                ident: mir2_world_bevy::monai::RM_DIGDOWN,
                 w_param: 0,
                 n_param1: 0,
                 n_param2: 0,
@@ -74284,7 +74498,7 @@ SendRefMsgRange=15
             } else {
                 rig.cast(magic_id, (11, 10), m);
             }
-            let delays = rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC);
+            let delays = rig.delay_msgs(mir2_world_bevy::slave::RM_DELAYMAGIC);
             assert_eq!(delays.len(), 1, "[{magic_id}] 恰一条 RM_DELAYMAGIC");
             let d = delays[0];
             assert_eq!(
@@ -74353,10 +74567,10 @@ SendRefMsgRange=15
         let seed = seed_for_hb_push();
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         rig.cast(44, (11, 10), m);
-        let delays = rig.delay_msgs(mir2_world::slave::RM_DELAYPUSHED);
+        let delays = rig.delay_msgs(mir2_world_bevy::slave::RM_DELAYPUSHED);
         assert_eq!(delays.len(), 1, "push > 0 ⇒ 恰一条 RM_DELAYPUSHED");
         let d = delays[0];
-        let dir = mir2_world::magic::next_direction(10, 10, 11, 10);
+        let dir = mir2_world_bevy::magic::next_direction(10, 10, 11, 10);
         let push = d.n_param2;
         assert!(push > 0, "push 必须 > 0");
         assert_eq!(
@@ -74383,7 +74597,7 @@ SendRefMsgRange=15
         assert_eq!(b4_count(&f, 911, SM_BACKSTEP), 0);
         // 到点：逐格推进 `push` 格，方向 = back_dir，帧方向 = back_dir。
         let f = rig.deliver(1);
-        let back = mir2_world::magic::back_dir(dir);
+        let back = mir2_world_bevy::magic::back_dir(dir);
         let e = rig.world.entities.get(m).unwrap();
         assert_eq!(
             (e.x, e.y, e.dir()),
@@ -74413,9 +74627,11 @@ SendRefMsgRange=15
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let (expect_stream, _) = b1_six_replay(seed, &magic, 5, 0x0A05);
         rig.cast(44, (11, 10), m);
-        assert!(rig.delay_msgs(mir2_world::slave::RM_DELAYPUSHED).is_empty());
+        assert!(rig
+            .delay_msgs(mir2_world_bevy::slave::RM_DELAYPUSHED)
+            .is_empty());
         assert_eq!(
-            rig.delay_msgs(mir2_world::slave::RM_DELAYMAGIC).len(),
+            rig.delay_msgs(mir2_world_bevy::slave::RM_DELAYMAGIC).len(),
             1,
             "等级门只关推挤支，不关 RM_DELAYMAGIC"
         );
@@ -74434,15 +74650,15 @@ SendRefMsgRange=15
     #[test]
     fn player_dir_authority_beats_stale_display_table() {
         use mir2_protocol::messages::CM_TURN;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let mover = {
-            let mut e = mir2_world::EntitySpawn::new(0, "mover".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "mover".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         let target = {
-            let mut e = mir2_world::EntitySpawn::new(0, "target".to_string(), 11, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "target".to_string(), 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -74518,12 +74734,12 @@ SendRefMsgRange=15
     #[test]
     fn player_death_drop_use_items_emits_sm_delitems_and_clears_slots() {
         use mir2_protocol::messages::SM_DELITEMS;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let dead = {
-            let mut e = mir2_world::EntitySpawn::new(0, "dead".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "dead".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.hp = 0;
-            e.use_items[0] = mir2_world::entity::UseItemSlot {
+            e.use_items[0] = mir2_world_bevy::entity::UseItemSlot {
                 make_index: 77,
                 index: 1,
                 dura: 500,
@@ -74533,8 +74749,8 @@ SendRefMsgRange=15
             world.add_entity(e)
         };
         let killer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "killer".to_string(), 11, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "killer".to_string(), 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.entities.get_mut(dead).unwrap().attribution.exp_hitter = Some(killer);
@@ -74618,10 +74834,10 @@ SendRefMsgRange=15
             "顺序表已移入世界（生产路径不复制、不手工设字段）"
         );
         let dead = {
-            let mut e = mir2_world::EntitySpawn::new(0, "dead".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "dead".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.hp = 0;
-            e.use_items[0] = mir2_world::entity::UseItemSlot {
+            e.use_items[0] = mir2_world_bevy::entity::UseItemSlot {
                 make_index: 77,
                 index: 1,
                 dura: 500,
@@ -74631,8 +74847,8 @@ SendRefMsgRange=15
             world.add_entity(e)
         };
         let killer = {
-            let mut e = mir2_world::EntitySpawn::new(0, "killer".to_string(), 11, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "killer".to_string(), 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.entities.get_mut(dead).unwrap().attribution.exp_hitter = Some(killer);
@@ -74687,15 +74903,15 @@ SendRefMsgRange=15
     fn aoi_show_clone_uses_entity_back_dir() {
         use std::collections::HashMap;
 
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("p");
         let p = world
-            .enter_map("p", mir2_world::EntitySpawn::new(0, "p", 10, 10), 0)
+            .enter_map("p", mir2_world_bevy::EntitySpawn::new(0, "p", 10, 10), 0)
             .expect("玩家进图");
         world.entities.get_mut(p).unwrap().flags.want_ref_msg = true;
         // 主人施法方向 2 ⇒ 克隆体 `GetBackDir(2)` = 6。
-        let out =
-            mir2_world::slave::spawn_clone(&mut world, p, 2).expect("主人在世界 ⇒ 应造出克隆体");
+        let out = mir2_world_bevy::slave::spawn_clone(&mut world, p, 2)
+            .expect("主人在世界 ⇒ 应造出克隆体");
         assert_eq!(out.dir, 6);
         assert_eq!(
             world.entities.get(out.clone_id).unwrap().ai.dir,
@@ -74716,9 +74932,9 @@ SendRefMsgRange=15
             .map_binding_mut(p)
             .unwrap()
             .visible_actors
-            .push(mir2_world::entity::VisibleBaseObject {
+            .push(mir2_world_bevy::entity::VisibleBaseObject {
                 target: out.clone_id,
-                flag: mir2_world::VisibleFlag::Show,
+                flag: mir2_world_bevy::VisibleFlag::Show,
             });
         world.entities.get_mut(p).unwrap().ai.search_tick = world.clock_ms;
 
@@ -74779,7 +74995,7 @@ SendRefMsgRange=15
         bag_len: usize,
         catalog: &game_svr::ability::StdItemCatalog,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         HashMap<String, SessionGround>,
         OnlineRegistry,
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -74787,9 +75003,9 @@ SendRefMsgRange=15
         i32,
     ) {
         let _ = catalog;
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p21a");
-        let mut ent = mir2_world::EntitySpawn::new(0, "p21a".to_string(), 2, 2);
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "p21a".to_string(), 2, 2);
         ent.hp = 50;
         ent.max_hp = 50;
         let actor = world.enter_map("p21a", ent, 0).unwrap();
@@ -74986,17 +75202,17 @@ SendRefMsgRange=15
         max_hp: u16,
         max_mp: u16,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         HashMap<String, SessionGround>,
         OnlineRegistry,
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         mpsc::UnboundedReceiver<SimToGate>,
         i32,
     ) {
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("clamp");
-        let mut ent = mir2_world::EntitySpawn::new(0, "clamp".to_string(), 2, 2);
-        ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "clamp".to_string(), 2, 2);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         ent.hp = hp;
         ent.max_hp = max_hp;
         let actor = world.enter_map("clamp", ent, 0).unwrap();
@@ -75215,18 +75431,18 @@ SendRefMsgRange=15
     /// 牙（改坏必红）：按 Run 直接发 1 条自见 + 1 份广播（旧实现）⇒ 3/2/2 断言红。
     #[test]
     fn v3_show_hp_send_ref_copies_follow_slot_model() {
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("clamp");
-        let mut ent = mir2_world::EntitySpawn::new(0, "clamp".to_string(), 2, 2);
-        ent.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "clamp".to_string(), 2, 2);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         ent.hp = 10;
         ent.max_hp = 100;
         let actor = world.enter_map("clamp", ent, 0).unwrap();
         let mut observers = Vec::new();
         for (name, x, y, sock) in [("obs1", 3, 3, 921), ("obs2", 4, 4, 922)] {
             world.open_session(name);
-            let mut e = mir2_world::EntitySpawn::new(0, name.to_string(), x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name.to_string(), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let id = world.enter_map(name, e, 0).unwrap();
             observers.push((name.to_string(), id, sock));
         }
@@ -75309,10 +75525,10 @@ SendRefMsgRange=15
             sg.recovery = game_svr::recover::Recovery::new(0);
             sg.recovery.inc_health = 20;
         }
-        let rec = mir2_world::TickRecord {
-            extra_abil_expiries: vec![mir2_world::ExtraAbilExpiry {
+        let rec = mir2_world_bevy::TickRecord {
+            extra_abil_expiries: vec![mir2_world_bevy::ExtraAbilExpiry {
                 actor_id: actor,
-                events: vec![mir2_world::ExtraAbilEventKind::Restored(0)],
+                events: vec![mir2_world_bevy::ExtraAbilEventKind::Restored(0)],
                 health_changed: true,
             }],
             ..Default::default()
@@ -75533,7 +75749,7 @@ SendRefMsgRange=15
         max_hp: u16,
         show_hp: bool,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         HashMap<String, SessionGround>,
         OnlineRegistry,
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -75543,7 +75759,7 @@ SendRefMsgRange=15
         std::path::PathBuf,
     ) {
         let (registry, dir) = pl3_registry(flag_line);
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p25a");
         let mut ent = new_player_entity("p25a".to_string(), 2, 2);
         ent.hp = hp;
@@ -75767,14 +75983,14 @@ SendRefMsgRange=15
         hp: u16,
         dec_tick: i64,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         HashMap<String, SessionGround>,
         OnlineRegistry,
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         mpsc::UnboundedReceiver<SimToGate>,
         i32,
     ) {
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p26a");
         let mut ent = new_player_entity("p26a".to_string(), 2, 2);
         ent.hp = hp;
@@ -76027,14 +76243,14 @@ SendRefMsgRange=15
         power_time: i32,
         exp_tick: i64,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         HashMap<String, SessionGround>,
         OnlineRegistry,
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         mpsc::UnboundedReceiver<SimToGate>,
         i32,
     ) {
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p27a");
         let mut ent = new_player_entity("p27a".to_string(), 2, 2);
         ent.kill_mon_exp_rate = kill_rate;
@@ -76187,16 +76403,16 @@ SendRefMsgRange=15
         dura: u16,
         revival_tick: i64,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         HashMap<String, SessionGround>,
         OnlineRegistry,
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         mpsc::UnboundedReceiver<SimToGate>,
         i32,
     ) {
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p32a");
-        let mut ent = mir2_world::EntitySpawn::new(0, "p32a".to_string(), 2, 2);
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "p32a".to_string(), 2, 2);
         ent.hp = 0;
         ent.max_hp = 100;
         ent.revival = true;
@@ -76461,7 +76677,7 @@ SendRefMsgRange=15
             [(1u8, false, false), (0u8, true, false), (0, false, true)]
         {
             let (mut world, mut sessions, online, gates, mut rx, actor) = p32_fixture(5000, 0);
-            let mut hiter = mir2_world::EntitySpawn::new(0, "hiter".to_string(), 3, 3);
+            let mut hiter = mir2_world_bevy::EntitySpawn::new(0, "hiter".to_string(), 3, 3);
             hiter.race = race;
             hiter.un_revival = un_revival;
             let hid = world.entities.alloc_id();
@@ -76737,7 +76953,7 @@ SendRefMsgRange=15
     fn p31_drain_resolves_envir_name_and_filters_offline() {
         use std::collections::HashMap;
         let (registry, dir) = pl3_registry(""); // `[A|fa 甲]` ⇒ id 0 = "A"
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p31a");
         let actor = world
             .enter_map("p31a", new_player_entity("p31a".to_string(), 2, 2), 0)
@@ -76752,7 +76968,7 @@ SendRefMsgRange=15
         sessions.insert("p31a".to_string(), sg);
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, entry("a", "p31a", 1, 0, 901, actor));
-        let mut rec = mir2_world::TickRecord::default();
+        let mut rec = mir2_world_bevy::TickRecord::default();
         drain_player_auto_get_exp(
             &mut world,
             &mut sessions,
@@ -76798,10 +77014,10 @@ SendRefMsgRange=15
     fn p31_award_emits_single_sm_winexp() {
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let hero = {
-            let mut e = mir2_world::EntitySpawn::new(0, "p31hero".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "p31hero".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -76823,8 +77039,8 @@ SendRefMsgRange=15
         gates.insert(0, tx0);
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
         sessions.insert("p31hero".into(), test_session_ground(hero));
-        let mut rec = mir2_world::TickRecord::default();
-        let mut st = mir2_world::AutoGetExpState {
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        let mut st = mir2_world_bevy::AutoGetExpState {
             tick: 0,
             time_ms: 0,
             point: 7,
@@ -76863,10 +77079,10 @@ SendRefMsgRange=15
     fn p31_levelup_reuses_kill_exp_chain_order() {
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         let hero = {
-            let mut e = mir2_world::EntitySpawn::new(0, "p31lv".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "p31lv".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -76892,8 +77108,8 @@ SendRefMsgRange=15
         sg.state.wabil.hp = 10;
         sg.state.wabil.mp = 5;
         sessions.insert("p31lv".into(), sg);
-        let mut rec = mir2_world::TickRecord::default();
-        let mut st = mir2_world::AutoGetExpState {
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        let mut st = mir2_world_bevy::AutoGetExpState {
             tick: 0,
             time_ms: 0,
             point: 200,
@@ -76953,17 +77169,17 @@ SendRefMsgRange=15
     #[test]
     fn p31_map_route_resets_tick() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
         world.open_session("hero");
         let hero = world
             .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
             .unwrap();
-        world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+        world.add_map_routes(vec![mir2_world_bevy::map::MapRouteSpec {
             map_id: 0,
             x: 5,
             y: 5,
             route_id: 3,
-            hop: mir2_world::map::RouteHop {
+            hop: mir2_world_bevy::map::RouteHop {
                 dst_map_id: 1,
                 dst_x: 2,
                 dst_y: 2,
@@ -77010,10 +77226,10 @@ SendRefMsgRange=15
     #[test]
     fn p31_fields_survive_player_death() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = {
-            let mut e = mir2_world::EntitySpawn::new(0, "p31die".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "p31die".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             world.add_entity(e)
         };
         world.tick();
@@ -77031,7 +77247,7 @@ SendRefMsgRange=15
         sg.auto_get_exp_envir = Some("A".to_string());
         sg.auto_get_exp_in_safe_zone = true;
         sessions.insert("p31die".into(), sg);
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             deaths: vec![(hero, 0, 0, None, 0)],
             ..Default::default()
         };
@@ -77064,7 +77280,7 @@ SendRefMsgRange=15
         use std::collections::HashMap;
         for (flag_line, safe_expected) in [("SAFE", true), ("", false)] {
             let (registry, dir) = pl3_registry(flag_line);
-            let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+            let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
             world.open_session("p31safe");
             let actor = world
                 .enter_map("p31safe", new_player_entity("p31safe".to_string(), 2, 2), 0)
@@ -77079,7 +77295,7 @@ SendRefMsgRange=15
             sessions.insert("p31safe".to_string(), sg);
             let mut online: OnlineRegistry = Vec::new();
             online_set(&mut online, entry("a", "p31safe", 1, 0, 910, actor));
-            let mut rec = mir2_world::TickRecord::default();
+            let mut rec = mir2_world_bevy::TickRecord::default();
             drain_player_auto_get_exp(
                 &mut world,
                 &mut sessions,
@@ -77128,17 +77344,17 @@ SendRefMsgRange=15
     #[test]
     fn p31_cm_walk_changed_map_resets_tick() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
         world.open_session("hero");
         let hero = world
             .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
             .unwrap();
-        world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+        world.add_map_routes(vec![mir2_world_bevy::map::MapRouteSpec {
             map_id: 0,
             x: 5,
             y: 6,
             route_id: 3,
-            hop: mir2_world::map::RouteHop {
+            hop: mir2_world_bevy::map::RouteHop {
                 dst_map_id: 1,
                 dst_x: 2,
                 dst_y: 2,
@@ -77192,19 +77408,19 @@ SendRefMsgRange=15
     #[test]
     fn p31_cm_walk_rolled_back_map_still_resets_tick() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
         world.open_session("hero");
         let hero = world
             .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
             .unwrap();
         // 越界目标：oracle `CellValid` 越界返回 true ⇒ 前置门放行；
         // `AddMapObject` 的 `CellMatch` 失败 ⇒ AddToMap 失败回滚支。
-        world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+        world.add_map_routes(vec![mir2_world_bevy::map::MapRouteSpec {
             map_id: 0,
             x: 5,
             y: 6,
             route_id: 4,
-            hop: mir2_world::map::RouteHop {
+            hop: mir2_world_bevy::map::RouteHop {
                 dst_map_id: 1,
                 dst_x: 100,
                 dst_y: 100,
@@ -77254,24 +77470,24 @@ SendRefMsgRange=15
     /// （`RouteCheck::RolledBack`）在 oracle 仍执行 `AutoGetExpTick = GetTickCount()`
     /// （`PlayObject.cs:3787-3796`），与 `CM_WALK` 的回滚支同口径。
     ///
-    /// 牙：把 CM_TURN 分支 `matches!(route, … | …)` 里的 `| mir2_world::RouteCheck::RolledBack`
+    /// 牙：把 CM_TURN 分支 `matches!(route, … | …)` 里的 `| mir2_world_bevy::RouteCheck::RolledBack`
     /// 删掉（只判 `Switched`）⇒ tick 仍为 0，必红。
     #[test]
     fn p31_cm_turn_rolled_back_map_still_resets_tick() {
         use std::collections::HashMap;
-        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
         world.open_session("hero");
         let hero = world
             .enter_map("hero", new_player_entity("hero".to_string(), 5, 5), 0)
             .unwrap();
         // 转身后在本格做路线检查：越界目标 ⇒ `CellValid` 放行、`AddMapObject` 的
         // `CellMatch` 失败 ⇒ `RouteCheck::RolledBack`（与 CM_WALK 回滚用例同构造）。
-        world.add_map_routes(vec![mir2_world::map::MapRouteSpec {
+        world.add_map_routes(vec![mir2_world_bevy::map::MapRouteSpec {
             map_id: 0,
             x: 5,
             y: 5,
             route_id: 6,
-            hop: mir2_world::map::RouteHop {
+            hop: mir2_world_bevy::map::RouteHop {
                 dst_map_id: 1,
                 dst_x: 100,
                 dst_y: 100,
@@ -77610,7 +77826,7 @@ mod tests {",
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
         let (registry, dir) = pl3_registry("INCGAMEGOLD(1/30)");
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p22a");
         let actor = world
             .enter_map("p22a", new_player_entity("p22a".to_string(), 2, 2), 0)
@@ -77673,17 +77889,17 @@ mod tests {",
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
         let (registry, dir) = pl3_registry("");
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p22h");
         let actor = world
             .enter_map("p22h", new_player_entity("p22h".to_string(), 2, 2), 0)
             .unwrap();
         // 两个观察者（±12 内，旧坐标）。
-        let mut o1 = mir2_world::EntitySpawn::new(0, "obs1".to_string(), 3, 2);
-        o1.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut o1 = mir2_world_bevy::EntitySpawn::new(0, "obs1".to_string(), 3, 2);
+        o1.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let obs1 = world.add_entity(o1);
-        let mut o2 = mir2_world::EntitySpawn::new(0, "obs2".to_string(), 4, 2);
-        o2.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut o2 = mir2_world_bevy::EntitySpawn::new(0, "obs2".to_string(), 4, 2);
+        o2.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let obs2 = world.add_entity(o2);
 
         let mut sg = test_session_ground(actor);
@@ -77787,7 +78003,7 @@ mod tests {",
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
         let (registry, dir) = pl3_registry("");
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p22n");
         let actor = world
             .enter_map("p22n", new_player_entity("p22n".to_string(), 5, 5), 0)
@@ -77844,7 +78060,7 @@ mod tests {",
     fn p22_save_record_game_gold_only() {
         use std::collections::HashMap;
         let (registry, dir) = pl3_registry("INCGAMEGOLD(1/30)");
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p22s");
         let actor = world
             .enter_map("p22s", new_player_entity("p22s".to_string(), 2, 2), 0)
@@ -78164,7 +78380,7 @@ mod tests {",
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
         let (registry, dir) = pl3_registry("");
-        let mut world = mir2_world::World::with_maps(vec![(16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16)]);
         world.open_session("p22o");
         let actor = world
             .enter_map("p22o", new_player_entity("p22o".to_string(), 2, 2), 0)
@@ -78228,7 +78444,7 @@ mod tests {",
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
         let (registry, dir) = p22_two_map_registry("", "INCGAMEGOLD(1/50)");
-        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
         world.open_session("p22f");
         let actor = world
             .enter_map("p22f", new_player_entity("p22f".to_string(), 2, 2), 0)
@@ -78296,18 +78512,18 @@ mod tests {",
         use mir2_protocol::frame::CommandMessage;
         use std::collections::HashMap;
         let (registry, dir) = p22_two_map_registry("", "");
-        let mut world = mir2_world::World::with_maps(vec![(16, 16), (16, 16)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(16, 16), (16, 16)]);
         world.open_session("p22b");
         let actor = world
             .enter_map("p22b", new_player_entity("p22b".to_string(), 2, 2), 0)
             .unwrap();
         // 旧图 A 的观察者（±12 内）。
-        let mut o1 = mir2_world::EntitySpawn::new(0, "obs_old".to_string(), 3, 2);
-        o1.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut o1 = mir2_world_bevy::EntitySpawn::new(0, "obs_old".to_string(), 3, 2);
+        o1.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let obs_old = world.add_entity(o1);
         // 新图 B 的观察者：落在目的地 ±12 内，但**不在**旧位置附近。
-        let mut o2 = mir2_world::EntitySpawn::new(0, "obs_new".to_string(), 11, 10);
-        o2.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut o2 = mir2_world_bevy::EntitySpawn::new(0, "obs_new".to_string(), 11, 10);
+        o2.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         o2.map_id = 1;
         let obs_new = world.add_entity(o2);
 
@@ -78403,7 +78619,7 @@ mod tests {",
             ..mir2_data::StdItem::default()
         };
 
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.item_catalog = vec![
             black_tpl.clone(),
             acc_tpl.clone(),
@@ -78412,11 +78628,11 @@ mod tests {",
         ];
         world.clock_ms = 123_456;
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
-        let mut mstate = mir2_world::merchant::MerchantState::new(
+        let mut mstate = mir2_world_bevy::merchant::MerchantState::new(
             "铁匠".to_string(),
             "3".to_string(),
             0,
@@ -78425,10 +78641,10 @@ mod tests {",
             false,
             false,
             0,
-            mir2_world::merchant::MerchantFlags {
+            mir2_world_bevy::merchant::MerchantFlags {
                 is_upgradenow: true,
                 is_get_backupgnow: true,
-                ..mir2_world::merchant::MerchantFlags::default()
+                ..mir2_world_bevy::merchant::MerchantFlags::default()
             },
             Vec::new(),
             Vec::new(),
@@ -78437,7 +78653,7 @@ mod tests {",
         // 不抽构造数（本用例要按种子镜像取回路径的流水）。
         mstate.run_tick = 0;
         let mid = world
-            .insert_merchant(mir2_world::merchant::MerchantSpawn {
+            .insert_merchant(mir2_world_bevy::merchant::MerchantSpawn {
                 name: "铁匠".to_string(),
                 x: 11,
                 y: 10,
@@ -78502,12 +78718,12 @@ mod tests {",
             HashMap::new();
         let mut sell_off_book = game_svr::selloff::SellOffBook::default();
         let shop_cfg = ShopCfg {
-            upgrade: mir2_world::merchant::UpgradeWeaponConfig {
+            upgrade: mir2_world_bevy::merchant::UpgradeWeaponConfig {
                 get_back_time_ms: 600_000,
                 dc_rate: 50,
                 mc_rate: 50,
                 sc_rate: 50,
-                ..mir2_world::merchant::UpgradeWeaponConfig::default()
+                ..mir2_world_bevy::merchant::UpgradeWeaponConfig::default()
             },
             ..ShopCfg::default()
         };
@@ -78575,8 +78791,8 @@ mod tests {",
             .extra_abil[0] = 5;
         // **复验 F3**：12 格内近邻观察者，验证近邻 `41 → 657`。
         let obs = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "obs", 12, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "obs", 12, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         online_set(
@@ -78884,14 +79100,14 @@ mod tests {",
 
     /// 建会/宣战固定 NPC 的完整宿主夹具（世界 + 会话 + 网关 + 行会表 + 临时 GuildBase）。
     struct GuildNpcFixture {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         npc_id: i32,
         online: OnlineRegistry,
         sessions: HashMap<String, SessionGround>,
         shop_sessions: HashMap<String, ShopSession>,
         displays: downlink::DisplayTable,
-        guilds: mir2_world::GuildManager,
-        guild_cfg: mir2_world::GuildConfig,
+        guilds: mir2_world_bevy::GuildManager,
+        guild_cfg: mir2_world_bevy::GuildConfig,
         guild_msg_cfg: guild_runtime::GuildMsgCfg,
         castle_cfg: mir2_data::guild_castle::GuildCastleConfig,
         sections: mir2_data::guild::GuildFileSections,
@@ -78926,7 +79142,7 @@ mod tests {",
                 store_dir.join("GuildList.txt"),
             );
 
-            let world = mir2_world::World::new(32, 32);
+            let world = mir2_world_bevy::World::new(32, 32);
             let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
             let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
             gates.insert(0, tx);
@@ -78937,8 +79153,8 @@ mod tests {",
                 sessions: HashMap::new(),
                 shop_sessions: HashMap::new(),
                 displays: downlink::DisplayTable::new(),
-                guilds: mir2_world::GuildManager::new(),
-                guild_cfg: mir2_world::GuildConfig::default(),
+                guilds: mir2_world_bevy::GuildManager::new(),
+                guild_cfg: mir2_world_bevy::GuildConfig::default(),
                 guild_msg_cfg: guild_runtime::GuildMsgCfg {
                     show_pre_fix_msg: false,
                     prefix: String::new(),
@@ -78963,13 +79179,13 @@ mod tests {",
             // 固定 NPC 在玩家之后建：`EntityStore::alloc_id` 先到先得（避免与玩家 id 撞号）。
             f.npc_id = f
                 .world
-                .spawn_npc(mir2_world::npc::NpcSpawn {
+                .spawn_npc(mir2_world_bevy::npc::NpcSpawn {
                     name: "比奇国王".to_string(),
                     x: 11,
                     y: 10,
                     map_id: 0,
-                    state: mir2_world::npc::NpcState {
-                        npc_type: mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL,
+                    state: mir2_world_bevy::npc::NpcState {
+                        npc_type: mir2_world_bevy::npc::NPC_TYPE_GUILD_OFFICIAL,
                         ..Default::default()
                     },
                 })
@@ -78978,8 +79194,8 @@ mod tests {",
         }
 
         fn add_player(&mut self, name: &str, actor_id: i32, x: i32, y: i32, socket: i32) {
-            let mut e = mir2_world::EntitySpawn::new(actor_id, name, x, y);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(actor_id, name, x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             self.world.add_entity(e);
             let mut sg = test_session_ground(actor_id);
             sg.guild = crate::guild_cmd::materialize(&self.guilds, name);
@@ -79388,8 +79604,8 @@ GMEXECUTE f
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::new(32, 32);
-        let l = world.add_entity(mir2_world::EntitySpawn::new(1, "Hero", 10, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "Hero", 10, 10));
         let online: OnlineRegistry = vec![OnlineEntry {
             account: "a".into(),
             chr_name: "Hero".into(),
@@ -79412,7 +79628,7 @@ GMEXECUTE f
         ground_sessions.insert("Hero".into(), test_session_ground(l));
         ground_sessions.get_mut("Hero").unwrap().gm.permission = 5;
         let catalog = game_svr::ability::StdItemCatalog::new();
-        let guilds = mir2_world::GuildManager::new();
+        let guilds = mir2_world_bevy::GuildManager::new();
         let cfg = gmcmd::GmConfig::default();
         let pwd: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
         let env = ScriptGmEnv {
@@ -79525,8 +79741,8 @@ GMEXECUTE f
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
 
-        let mut world = mir2_world::World::new(32, 32);
-        let l = world.add_entity(mir2_world::EntitySpawn::new(1, "L", 10, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let l = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
         let online: OnlineRegistry = vec![OnlineEntry {
             account: "a".into(),
             chr_name: "L".into(),
@@ -79867,8 +80083,8 @@ GMEXECUTE f
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::new(32, 32);
-        let actor = world.add_entity(mir2_world::EntitySpawn::new(1, "L", 10, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let actor = world.add_entity(mir2_world_bevy::EntitySpawn::new(1, "L", 10, 10));
         let sg = production_session_ground(login_account, actor);
         let online: OnlineRegistry = vec![OnlineEntry {
             account: login_account.into(),
@@ -80524,7 +80740,7 @@ GMEXECUTE f
             .find_guild_mut("A")
             .unwrap()
             .wars
-            .push(mir2_world::WarGuild {
+            .push(mir2_world_bevy::WarGuild {
                 guild_name: "B".to_string(),
                 war_tick: 1,
                 war_time: f.castle_cfg.guild_war_time,
@@ -80600,7 +80816,7 @@ GMEXECUTE f
                         .find_guild_mut(name)
                         .unwrap()
                         .ranks
-                        .push(mir2_world::GuildRank {
+                        .push(mir2_world_bevy::GuildRank {
                             rank_no: rank,
                             rank_name: "行会成员".to_string(),
                             members: vec!["hero".to_string()],
@@ -80758,8 +80974,8 @@ GMEXECUTE f
         f.hero_session_mut().state.gold = 2_000_000;
         f.allow_labels(&["@@buildguildnow"]);
         for npc_type in [
-            mir2_world::npc::NPC_TYPE_MERCHANT,
-            mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL,
+            mir2_world_bevy::npc::NPC_TYPE_MERCHANT,
+            mir2_world_bevy::npc::NPC_TYPE_CASTLE_OFFICIAL,
         ] {
             f.set_npc_type(npc_type);
             f.call("@@buildguildnow\rMyGuild");
@@ -80785,7 +81001,7 @@ GMEXECUTE f
             );
         }
         // 同一 fixture 改回 GuildOfficial（type 1）⇒ 正常派发。
-        f.set_npc_type(mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL);
+        f.set_npc_type(mir2_world_bevy::npc::NPC_TYPE_GUILD_OFFICIAL);
         f.call("@@buildguildnow\rMyGuild");
         let me = gnp_on(&f.drain(), 901);
         assert_eq!(
@@ -80883,7 +81099,7 @@ GMEXECUTE f
     /// 固定 NPC 脚本链的生产夹具：合成 `Npcs.txt` + `Npc_def/*.txt`（GBK）、世界（玩家 + 两个
     /// 固定 NPC）、会话、在线登记表、网关下行缓冲、商店/寄售会话态。
     struct T137Rig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         king_id: i32,
         elder_id: i32,
         book: game_svr::npc::MerchantScriptBook,
@@ -80936,10 +81152,10 @@ GMEXECUTE f
                 t137_write(&dir, rel, text);
             }
 
-            let mut world = mir2_world::World::new(32, 32);
+            let mut world = mir2_world_bevy::World::new(32, 32);
             let hero = world.add_entity({
-                let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-                e.race = mir2_world::ACTOR_RACE_PLAY;
+                let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
                 e
             });
             let npcs = vec![
@@ -81210,13 +81426,13 @@ GMEXECUTE f
         let mut rig = T137Rig::new();
         let king_id = rig.king_id;
         assert_eq!(
-            mir2_world::npc::merchant_lookup(rig.world.entities.get(999_999)),
-            mir2_world::npc::MerchantLookup::Absent,
+            mir2_world_bevy::npc::merchant_lookup(rig.world.entities.get(999_999)),
+            mir2_world_bevy::npc::MerchantLookup::Absent,
             "id 不在世界 ⇒ C3"
         );
         assert_eq!(
-            mir2_world::npc::merchant_lookup(rig.world.entities.get(king_id)),
-            mir2_world::npc::MerchantLookup::NotMerchant,
+            mir2_world_bevy::npc::merchant_lookup(rig.world.entities.get(king_id)),
+            mir2_world_bevy::npc::MerchantLookup::NotMerchant,
             "type=1 ⇒ X（与 C3 不是同一条分支）"
         );
         // 帧面：两条路径都零帧、都不推进 Click 点。
@@ -81395,8 +81611,8 @@ GMEXECUTE f
         // `NotMerchant`）——这里钉住它的映射仍在，防止有人误以为「type=1 还会进 handle_select」。
         assert_eq!(
             merchant_dlgselect_route(
-                mir2_world::npc::MerchantLookup::Merchant,
-                Some(mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL)
+                mir2_world_bevy::npc::MerchantLookup::Merchant,
+                Some(mir2_world_bevy::npc::NPC_TYPE_GUILD_OFFICIAL)
             ),
             DlgSelectRoute::GuildOfficial,
             "分支保留（对齐 oracle 类枚举 + 标明 T-140 死代码），但实体模型下不可达"
@@ -81512,7 +81728,7 @@ GMEXECUTE f
     /// npc_click 窗口回放夹具：`老人`（type 0 固定 NPC ⇒ Merchant 体）+ 相邻玩家，rng 种子可注入
     /// （T137Rig 同构，但保留展示表并暴露世界给转身臂驱动 `npc_tick`）。
     struct NpcClickWindowRig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         elder_id: i32,
         displays: game_svr::downlink::DisplayTable,
         book: game_svr::npc::MerchantScriptBook,
@@ -81547,11 +81763,11 @@ GMEXECUTE f
                 "[@main]\n〖庄〗/欢迎光临-天时地利人和-赌场-系统坐庄-童叟无欺 <开-始-下-注/@ks>\n",
             );
 
-            let mut world = mir2_world::World::new(32, 32);
+            let mut world = mir2_world_bevy::World::new(32, 32);
             world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
             let hero = world.add_entity({
-                let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-                e.race = mir2_world::ACTOR_RACE_PLAY;
+                let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
                 e
             });
             let npcs = vec![mir2_envir::npcs::NpcInfo {
@@ -81773,7 +81989,7 @@ GMEXECUTE f
             .expect("老人在世界")
             .ai
             .dir; // `TurnTo` 已写进实体的本次方向（`Dir = nDir` 后才 SendRefMsg）
-        let rec = mir2_world::TickRecord {
+        let rec = mir2_world_bevy::TickRecord {
             npc_turns: vec![(turn.elder_id, dir)],
             ..Default::default()
         };
@@ -81977,7 +82193,7 @@ GMEXECUTE f
             .npc
             .as_mut()
             .expect("固定 NPC 有 NpcState")
-            .npc_type = mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL;
+            .npc_type = mir2_world_bevy::npc::NPC_TYPE_CASTLE_OFFICIAL;
 
         // Click：夹具无城 ⇒ `Castle == null` ⇒ 恰一条红字 `SM_SYSMESSAGE`（Recog = 玩家）。
         assert!(!rig.click(elder_id), "type 2 未授权 ⇒ 不落到 base.Click");
@@ -82020,7 +82236,7 @@ GMEXECUTE f
             .npc
             .as_mut()
             .expect("固定 NPC 有 NpcState")
-            .npc_type = mir2_world::npc::NPC_TYPE_MERCHANT;
+            .npc_type = mir2_world_bevy::npc::NPC_TYPE_MERCHANT;
         rig.sessions
             .get_mut("hero")
             .expect("会话存在")
@@ -82055,9 +82271,9 @@ GMEXECUTE f
             ],
             2,
         );
-        let mut castle = mir2_world::castle::UserCastle::new(
+        let mut castle = mir2_world_bevy::castle::UserCastle::new(
             "沙巴克",
-            mir2_world::castle::CastleSiegeConfig::default(),
+            mir2_world_bevy::castle::CastleSiegeConfig::default(),
         );
         castle.own_guild = Some("王者".to_string());
         rig.world.castles.push(castle);
@@ -82116,9 +82332,9 @@ GMEXECUTE f
             ],
             2,
         );
-        let mut castle = mir2_world::castle::UserCastle::new(
+        let mut castle = mir2_world_bevy::castle::UserCastle::new(
             "沙巴克",
-            mir2_world::castle::CastleSiegeConfig::default(),
+            mir2_world_bevy::castle::CastleSiegeConfig::default(),
         );
         castle.own_guild = Some("王者".to_string());
         rig.world.castles.push(castle);
@@ -82131,7 +82347,7 @@ GMEXECUTE f
             .npc
             .as_mut()
             .expect("NpcState")
-            .npc_type = mir2_world::npc::NPC_TYPE_CASTLE_OFFICIAL;
+            .npc_type = mir2_world_bevy::npc::NPC_TYPE_CASTLE_OFFICIAL;
 
         // 1011 直发 `@main`：`@main` 恒可跳（`LableIsCanJmp` 特例）⇒ 页面里的
         // `$CASTLEWARDATE` 触发 0 号城回退 + 写回。
@@ -82158,14 +82374,14 @@ GMEXECUTE f
     /// 登录延迟段的 657 判据夹具：一个已进世界并「本 tick 扫过」的玩家 + 一条在线网关。
     #[allow(clippy::type_complexity)]
     fn login_657_fixture() -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         i32,
         OnlineRegistry,
         HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         mpsc::UnboundedReceiver<SimToGate>,
         HashMap<String, smframe::EnterWorldInputs>,
     ) {
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         world.open_session("p");
         let id = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
@@ -82349,7 +82565,7 @@ GMEXECUTE f
     /// 玩家 + 一个 20 格外的玩家。
     #[allow(clippy::type_complexity)]
     fn walk_fixture() -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         i32,
         i32,
         OnlineRegistry,
@@ -82357,7 +82573,7 @@ GMEXECUTE f
         mpsc::UnboundedReceiver<SimToGate>,
         downlink::DisplayTable,
     ) {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.open_session("n");
         world.open_session("f");
         let near = world
@@ -82366,8 +82582,8 @@ GMEXECUTE f
         let _far = world
             .enter_map("f", new_player_entity("f".to_string(), 30, 30), 0)
             .expect("远邻进图");
-        let mut mon = mir2_world::EntitySpawn::new(0, "hen", 10, 10);
-        mon.race = mir2_world::ACTOR_RACE_MONSTER;
+        let mut mon = mir2_world_bevy::EntitySpawn::new(0, "hen", 10, 10);
+        mon.race = mir2_world_bevy::ACTOR_RACE_MONSTER;
         mon.ai.dir = 2; // 右
         let mid = world.add_entity(mon);
         let mut displays = downlink::DisplayTable::new();
@@ -82434,7 +82650,7 @@ GMEXECUTE f
     fn monster_walk_emits_sm_walk_with_oracle_fields() {
         let (mut world, mid, _near, online, gates, mut rx0, displays) = walk_fixture();
         let mut seen = std::collections::HashMap::new();
-        let rec = mir2_world::TickRecord::default();
+        let rec = mir2_world_bevy::TickRecord::default();
         assert_eq!(
             drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen),
             0,
@@ -82480,7 +82696,7 @@ GMEXECUTE f
     fn monster_walk_recipients_exclude_self_and_out_of_range_and_players() {
         let (mut world, mid, near, online, gates, mut rx0, displays) = walk_fixture();
         let mut seen = std::collections::HashMap::new();
-        let rec = mir2_world::TickRecord::default();
+        let rec = mir2_world_bevy::TickRecord::default();
         drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen);
         let _ = collect_raw(&mut rx0);
         // 在线玩家走一格（`CM_WALK` 路径的职责）：本函数不得出帧。
@@ -82531,9 +82747,9 @@ GMEXECUTE f
     fn monster_walk_one_frame_per_step_and_never_for_push_or_teleport() {
         let (mut world, mid, _near, online, gates, mut rx0, displays) = walk_fixture();
         let mut seen = std::collections::HashMap::new();
-        let rec = mir2_world::TickRecord::default();
-        let run = |world: &mir2_world::World,
-                   rec: &mir2_world::TickRecord,
+        let rec = mir2_world_bevy::TickRecord::default();
+        let run = |world: &mir2_world_bevy::World,
+                   rec: &mir2_world_bevy::TickRecord,
                    seen: &mut std::collections::HashMap<i32, (usize, i32, i32)>| {
             drain_monster_walk_downlink(rec, world, &displays, &online, &gates, seen)
         };
@@ -82545,8 +82761,8 @@ GMEXECUTE f
         assert_eq!(run(&world, &rec, &mut seen), 0, "没动 = 零帧");
         // ③ 推挤：位移一格但本 tick 有 RM_PUSH 事件解释它
         world.entities.transform_mut(mid).unwrap().x = 12;
-        let mut pushed = mir2_world::TickRecord::default();
-        pushed.pushes.push(mir2_world::PushEvent {
+        let mut pushed = mir2_world_bevy::TickRecord::default();
+        pushed.pushes.push(mir2_world_bevy::PushEvent {
             actor_id: mid,
             dir: 6,
             x: 12,
@@ -82875,8 +83091,8 @@ GMEXECUTE f
     /// 再挂一个在线玩家（同图、给定坐标）；返回其 `ActorId`。
     fn sendmsg_add_player(rig: &mut T142Rig, name: &str, socket: i32, pos: (i32, i32)) -> i32 {
         let id = rig.world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, name, pos.0, pos.1);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, name, pos.0, pos.1);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         online_set(
@@ -83183,11 +83399,11 @@ GMEXECUTE f
             goto_count_limit: 40,
         };
         let make_index = 77;
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         // 第二个在线玩家（同图、`!Ghost`）：`SendBroadCastMsg` 的收件人集合里必须有他。
         let other = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "other", 12, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "other", 12, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let hero = 7;
@@ -83359,12 +83575,12 @@ GMEXECUTE f
     /// 一个 32×32 世界 + 三个在线登记：`hero`（触发者）、`other`（普通收件人）、
     /// `ghost`（`Entity.ghost = true`，必须被 `if (!playObject.Ghost)` 排除）。
     /// 返回 `(world, 在线表, [hero, other, ghost])`。
-    fn login_sendmsg_world() -> (mir2_world::World, OnlineRegistry, [i32; 3]) {
-        let mut world = mir2_world::World::new(32, 32);
-        let hero = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
-        let other = world.add_entity(mir2_world::EntitySpawn::new(0, "other", 12, 10));
+    fn login_sendmsg_world() -> (mir2_world_bevy::World, OnlineRegistry, [i32; 3]) {
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
+        let other = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "other", 12, 10));
         let ghost = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "ghost", 13, 10);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "ghost", 13, 10);
             e.ghost = true;
             e
         });
@@ -83621,21 +83837,21 @@ GMEXECUTE f
     /// `other`/`ghost` 在 **gate 1**（活线）。用来把「触发者自己的网关通道」与「别人的收件通道」
     /// 分开：触发者那条线不在 `gates` 表里时，扇出仍须走到 `other`。
     fn gate_gone_world() -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         OnlineRegistry,
         [i32; 3],
         mpsc::UnboundedSender<SimToGate>,
         mpsc::UnboundedReceiver<SimToGate>,
     ) {
-        let mut world = mir2_world::World::new(32, 32);
-        let hero = world.add_entity(mir2_world::EntitySpawn::new(0, "hero", 10, 10));
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let hero = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10));
         let other = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "other", 12, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "other", 12, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let ghost = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "ghost", 13, 10);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "ghost", 13, 10);
             e.ghost = true;
             e
         });
@@ -83978,10 +84194,10 @@ fn ",
     /// 牙：删 `send_good_tick(online, gates, chr_name);` ⇒ 本用例红（0 条 `+GD`）。
     #[test]
     fn sitdown_success_emits_good_tick_and_no_powerhit_frame() {
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e
         });
         let mut sessions: HashMap<String, SessionGround> = HashMap::new();
@@ -84182,12 +84398,12 @@ fn ",
         let fx = clear_map_registry(map_name);
         let table = game_svr::mongen::MonsterTable::new(vec![clear_map_monster_row(mon_name)]);
         let mut host = game_svr::mongen::MonGenHost::start(
-            vec![mir2_world::mongen::MonGenEntry::new(
+            vec![mir2_world_bevy::mongen::MonGenEntry::new(
                 map_name, x as i16, y as i16, mon_name, 2, 1, 0, 0,
             )],
             &table,
             false,
-            mir2_world::mongen::MonGenConfig::default(),
+            mir2_world_bevy::mongen::MonGenConfig::default(),
             &mut rig.world.rng,
         );
         assert_eq!(host.state.entries.len(), 1);
@@ -84195,7 +84411,7 @@ fn ",
 
         // 清场前已有的老怪（同图 + 活 + 在 CertList；MonGen 怪 ⇒ `CanReAlive`）。
         let old_id = {
-            let mut e = mir2_world::EntitySpawn::new(0, mon_name, 5, 5);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, mon_name, 5, 5);
             e.race = 80;
             e.map_id = 0;
             e.max_hp = 100;
@@ -84286,7 +84502,7 @@ fn ",
         seed: i32,
         with_corpse: bool,
     ) -> (
-        mir2_world::World,
+        mir2_world_bevy::World,
         i32,
         i32,
         HashMap<String, SessionGround>,
@@ -84297,17 +84513,17 @@ fn ",
         downlink::DisplayTable,
         std::collections::HashMap<String, game_svr::inbound::PwdSession>,
     ) {
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(1, "hero", 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             e.want_ref_msg = true;
             e
         });
         let mut corpse_id = 0;
         if with_corpse {
             // (12,9)：`|Δx|=2` 恰在闭边界；race 53 = AnimalWolf（`Animal` 且 ∈ [50,80)）。
-            let mut corpse = mir2_world::EntitySpawn::new(0, "corpse", 12, 9);
+            let mut corpse = mir2_world_bevy::EntitySpawn::new(0, "corpse", 12, 9);
             corpse.race = 53;
             corpse.death = true;
             corpse.ai.dir = 5;
@@ -84921,7 +85137,7 @@ fn ",
     /// 通道 + 进程级全局单元（`FilterWord`/`Mission`/`SpiritMutinyTick`）。
     struct ScriptBridgeRig {
         fx: ClearMapRegistry,
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         mon_host: game_svr::mongen::MonGenHost,
         table: game_svr::mongen::MonsterTable,
         displays: downlink::DisplayTable,
@@ -84930,8 +85146,8 @@ fn ",
         online: OnlineRegistry,
         gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         rx: mpsc::UnboundedReceiver<SimToGate>,
-        guilds: mir2_world::GuildManager,
-        guild_cfg: mir2_world::GuildConfig,
+        guilds: mir2_world_bevy::GuildManager,
+        guild_cfg: mir2_world_bevy::GuildConfig,
         colors: MsgColors,
         enter_cfg: EnterConfig,
         filter_word: std::cell::Cell<bool>,
@@ -84946,25 +85162,25 @@ fn ",
     impl ScriptBridgeRig {
         fn new() -> Self {
             let fx = clear_map_registry("map");
-            let mut world = mir2_world::World::new(32, 32);
+            let mut world = mir2_world_bevy::World::new(32, 32);
             world.rng = mir2_shared::rng::RandomNumber::with_seed(2026_1031);
-            let mut hero = mir2_world::EntitySpawn::new(1, "hero", 5, 5);
-            hero.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut hero = mir2_world_bevy::EntitySpawn::new(1, "hero", 5, 5);
+            hero.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             hero.ai.dir = 2; // `Direction.Right` ⇒ 面前格 (x+1, y) = (6,5)
             let actor = world.add_entity(hero);
-            let mut victim = mir2_world::EntitySpawn::new(2, "victim", 6, 5);
-            victim.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut victim = mir2_world_bevy::EntitySpawn::new(2, "victim", 6, 5);
+            victim.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let victim = world.add_entity(victim);
             let table =
                 game_svr::mongen::MonsterTable::new(vec![m_monster_row("mob", 80, 5, 10, 100)]);
-            let entries = vec![mir2_world::mongen::MonGenEntry::new(
+            let entries = vec![mir2_world_bevy::mongen::MonGenEntry::new(
                 "map", 5, 5, "mob", 1, 1, 0, 0,
             )];
             let mon_host = game_svr::mongen::MonGenHost::start(
                 entries,
                 &table,
                 false,
-                mir2_world::mongen::MonGenConfig::default(),
+                mir2_world_bevy::mongen::MonGenConfig::default(),
                 &mut world.rng,
             );
             let mut sessions = HashMap::new();
@@ -85006,8 +85222,8 @@ fn ",
                 online,
                 gates,
                 rx,
-                guilds: mir2_world::GuildManager::new(),
-                guild_cfg: mir2_world::GuildConfig::default(),
+                guilds: mir2_world_bevy::GuildManager::new(),
+                guild_cfg: mir2_world_bevy::GuildConfig::default(),
                 colors: w_colors(),
                 enter_cfg,
                 filter_word: std::cell::Cell::new(true),
@@ -85432,7 +85648,7 @@ fn ",
         let mut rig = ScriptBridgeRig::new();
         // 命令体读的是**世界实体**的佩戴位（`GmWorld.self_use_item`）；收口落的是**会话**
         // 佩戴位（oracle 里是同一个 `PlayObject`，本仓两份同源）。
-        let slot = mir2_world::entity::UseItemSlot {
+        let slot = mir2_world_bevy::entity::UseItemSlot {
             make_index: 7,
             index: 1,
             dura: 100,
@@ -85591,9 +85807,9 @@ fn ",
     #[test]
     fn script_bridge_drain_castle_gold_lands() {
         let mut rig = ScriptBridgeRig::new();
-        rig.world.castles.push(mir2_world::UserCastle::new(
+        rig.world.castles.push(mir2_world_bevy::UserCastle::new(
             "沙巴克",
-            mir2_world::CastleSiegeConfig::default(),
+            mir2_world_bevy::CastleSiegeConfig::default(),
         ));
         let r = rig.run("@SabukWallGold 沙巴克 x= 500");
         assert!(r.found, "命令必须命中");
@@ -85654,8 +85870,8 @@ mod castle_shift_order_tests {
     //! 车道 castlewar：进图改写必须发生在 `Random(6)` 移位环之前（生产 `mapwire::shift_enter_position`）。
     use crate::mapwire;
     use mir2_shared::rng::RandomNumber;
-    use mir2_world::castle::{CastleSiegeConfig, EnterRelocateInput, UserCastle};
-    use mir2_world::map::CellAttribute;
+    use mir2_world_bevy::castle::{CastleSiegeConfig, EnterRelocateInput, UserCastle};
+    use mir2_world_bevy::map::CellAttribute;
 
     /// 期望（独立复算 seed=20261021）：`Random(5)` 前两抽 = [4,2] ⇒ 非成员落点 (646,290)；
     /// 随后 `Random(6)`（第 3 抽起）= [0,1,1,2,0,3,3,0,5,1] ⇒ (643,288)→(641,287)→(638,287)
@@ -85665,7 +85881,7 @@ mod castle_shift_order_tests {
     #[test]
     fn relocation_precedes_shift_ring_and_consumes_rng_ledger() {
         const SEED: i32 = 20261021;
-        let mut world = mir2_world::World::with_maps(vec![(800, 400)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(800, 400)]);
         {
             let (w, h) = {
                 let m = &world.maps[0];
@@ -85685,7 +85901,7 @@ mod castle_shift_order_tests {
         castle.war_range_x = 100;
         castle.war_range_y = 100;
 
-        let reloc = mir2_world::castle::relocate_on_enter(
+        let reloc = mir2_world_bevy::castle::relocate_on_enter(
             &EnterRelocateInput {
                 castle: Some(&castle),
                 map_id: 1,
@@ -86251,11 +86467,11 @@ mod castle_frame_tests {
 
     #[test]
     fn castle_rm_turn_emits_turn_and_featurechanged() {
-        let mut world = mir2_world::World::new(64, 64);
-        let mut p = mir2_world::EntitySpawn::new(0, "P".to_string(), 11, 10);
-        p.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let mut p = mir2_world_bevy::EntitySpawn::new(0, "P".to_string(), 11, 10);
+        p.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         let pid = world.add_entity(p);
-        let mut d = mir2_world::EntitySpawn::new(0, "沙巴克城门".to_string(), 10, 10);
+        let mut d = mir2_world_bevy::EntitySpawn::new(0, "沙巴克城门".to_string(), 10, 10);
         d.race = 110;
         let did = world.add_entity(d);
         world.tick();
@@ -86267,9 +86483,9 @@ mod castle_frame_tests {
         );
         world
             .pending_monster_ref_msgs
-            .push(mir2_world::monai::MonsterRefMsg {
+            .push(mir2_world_bevy::monai::MonsterRefMsg {
                 actor_id: did,
-                ident: mir2_world::monai::RM_TURN,
+                ident: mir2_world_bevy::monai::RM_TURN,
                 w_param: 3,
                 n_param1: 10,
                 n_param2: 10,
@@ -86444,7 +86660,7 @@ mod weapon_durability_downlink_tests {
     /// `Recog = 新 Dura`、`Param/Tag/Series = 0`、12B 无尾；**只投自己**（同图另一玩家零帧）。
     #[test]
     fn lamp_durability_frame_is_one_655_with_durability_as_recog() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         world.set_item_catalog(vec![mir2_data::StdItem {
             name: "蜡烛".to_string(),
@@ -86461,7 +86677,7 @@ mod weapon_durability_downlink_tests {
             .enter_map("q", new_player_entity("q".to_string(), 11, 10), 0)
             .expect("玩家 q 进图");
         world.entities.get_mut(p).unwrap().inventory.use_items[2] =
-            mir2_world::entity::UseItemSlot {
+            mir2_world_bevy::entity::UseItemSlot {
                 make_index: 1,
                 index: 1,
                 dura: 1501,
@@ -86474,7 +86690,7 @@ mod weapon_durability_downlink_tests {
         online_set(&mut online, entry("aq", "q", 1, 0, 902, q));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let gates = gates_with(tx);
-        let rec = mir2_world::TickRecord::default();
+        let rec = mir2_world_bevy::TickRecord::default();
 
         // 首次调用只初始化周期游标（`DecLightItemDrugTick`，T-78 口径）⇒ 零帧。
         let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
@@ -86505,7 +86721,7 @@ mod weapon_durability_downlink_tests {
     /// 给 ±12 格内每个玩家（含自己），`Recog = 断武器者 ActorId`；12 格外零帧。
     #[test]
     fn weapon_break_frame_is_one_1102_per_nearby_player() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         world.set_weapon_durability_config(true, 7);
         world.open_session("p");
@@ -86520,13 +86736,13 @@ mod weapon_durability_downlink_tests {
         let r = world
             .enter_map("r", new_player_entity("r".to_string(), 50, 50), 0)
             .expect("远处玩家 r 进图");
-        let mut foe = mir2_world::EntitySpawn::new(0, "foe", 10, 11);
+        let mut foe = mir2_world_bevy::EntitySpawn::new(0, "foe", 10, 11);
         foe.race = 80;
         let foe = world.add_entity(foe);
         let mut desc = [0u8; 14];
         desc[10] = 1; // `ItemAttr.WeaponUpgrade`：1 ⇒ 必碎（`PlayObject.cs:4150-4152`）
         world.entities.get_mut(p).unwrap().inventory.use_items[1] =
-            mir2_world::entity::UseItemSlot {
+            mir2_world_bevy::entity::UseItemSlot {
                 make_index: 7,
                 index: 10,
                 dura: 5000,
@@ -86570,14 +86786,14 @@ mod weapon_durability_downlink_tests {
     /// 无火把 ⇒ 零 655。
     #[test]
     fn no_weapon_or_no_target_produces_zero_frames() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         world.set_weapon_durability_config(true, 7);
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家 p 进图");
-        let mut foe = mir2_world::EntitySpawn::new(0, "foe", 10, 11);
+        let mut foe = mir2_world_bevy::EntitySpawn::new(0, "foe", 10, 11);
         foe.race = 80;
         let foe = world.add_entity(foe);
 
@@ -86597,7 +86813,7 @@ mod weapon_durability_downlink_tests {
         let mut desc = [0u8; 14];
         desc[0] = 3;
         world.entities.get_mut(p).unwrap().inventory.use_items[1] =
-            mir2_world::entity::UseItemSlot {
+            mir2_world_bevy::entity::UseItemSlot {
                 make_index: 7,
                 index: 10,
                 dura: 5000,
@@ -86636,16 +86852,17 @@ mod weapon_durability_downlink_tests {
 mod weapon_strong_numeric_tests {
     use mir2_shared::rng::RandomNumber;
 
-    fn weapon_entity(dura: u16) -> mir2_world::EntitySpawn {
-        let mut e = mir2_world::EntitySpawn::new(1, "p", 10, 10);
-        e.race = mir2_world::entity::ACTOR_RACE_PLAY;
-        e.use_items[mir2_world::world::ITEM_LOCATION_WEAPON] = mir2_world::entity::UseItemSlot {
-            make_index: 7,
-            index: 10,
-            dura,
-            dura_max: 10_000,
-            desc: [0u8; 14],
-        };
+    fn weapon_entity(dura: u16) -> mir2_world_bevy::EntitySpawn {
+        let mut e = mir2_world_bevy::EntitySpawn::new(1, "p", 10, 10);
+        e.race = mir2_world_bevy::entity::ACTOR_RACE_PLAY;
+        e.use_items[mir2_world_bevy::world::ITEM_LOCATION_WEAPON] =
+            mir2_world_bevy::entity::UseItemSlot {
+                make_index: 7,
+                index: 10,
+                dura,
+                dura_max: 10_000,
+                desc: [0u8; 14],
+            };
         e
     }
 
@@ -86656,14 +86873,14 @@ mod weapon_strong_numeric_tests {
         // ws = 0：拿到 raw = Random(5)+2
         let mut e0 = weapon_entity(5_000);
         let mut rng0 = RandomNumber::with_seed(42);
-        let out0 = mir2_world::combat::attack_success_weapon_wear_with_strong(
+        let out0 = mir2_world_bevy::combat::attack_success_weapon_wear_with_strong(
             &mut rng0,
             &mut e0.use_items,
             0,
         )
         .expect("有武器 + damage>0 ⇒ 结算");
         let dura0 = match out0.frames.first() {
-            Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
+            Some(mir2_world_bevy::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
             other => panic!("首个帧应为 DuraChange: {other:?}"),
         };
         let raw = 5_000u16.wrapping_sub(dura0);
@@ -86675,7 +86892,7 @@ mod weapon_strong_numeric_tests {
         // ws = 3：磨损量 = raw - 3（raw>=2 ⇒ 可能为负 ⇒ ushort 回绕）
         let mut e3 = weapon_entity(5_000);
         let mut rng3 = RandomNumber::with_seed(42);
-        let out3 = mir2_world::combat::attack_success_weapon_wear_with_strong(
+        let out3 = mir2_world_bevy::combat::attack_success_weapon_wear_with_strong(
             &mut rng3,
             &mut e3.use_items,
             3,
@@ -86683,7 +86900,7 @@ mod weapon_strong_numeric_tests {
         .expect("damage != 0 ⇒ 结算");
         let expect3 = 5_000u16.wrapping_sub(raw.wrapping_sub(3));
         let got3 = match out3.frames.first() {
-            Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
+            Some(mir2_world_bevy::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
             other => panic!("首个帧应为 DuraChange: {other:?}"),
         };
         assert_eq!(got3, expect3, "磨损量 = (ushort)(raw - 3)");
@@ -86691,7 +86908,7 @@ mod weapon_strong_numeric_tests {
         // ws = 9 > raw：C# `(ushort)` 回绕成 ~65527..65531 ⇒ 耐久反向回绕，不 panic
         let mut e9 = weapon_entity(5_000);
         let mut rng9 = RandomNumber::with_seed(42);
-        let out9 = mir2_world::combat::attack_success_weapon_wear_with_strong(
+        let out9 = mir2_world_bevy::combat::attack_success_weapon_wear_with_strong(
             &mut rng9,
             &mut e9.use_items,
             9,
@@ -86699,7 +86916,7 @@ mod weapon_strong_numeric_tests {
         .expect("回绕后 damage != 0 ⇒ 仍结算");
         let expect9 = 5_000u16.wrapping_sub(raw.wrapping_sub(9));
         let got9 = match out9.frames.first() {
-            Some(mir2_world::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
+            Some(mir2_world_bevy::combat::WeaponWearFrame::DuraChange { dura, .. }) => *dura,
             other => panic!("首个帧应为 DuraChange: {other:?}"),
         };
         assert_eq!(
@@ -86711,7 +86928,7 @@ mod weapon_strong_numeric_tests {
         let mut e0b = weapon_entity(5_000);
         let mut rng0b = RandomNumber::with_seed(42);
         assert!(
-            mir2_world::combat::attack_success_weapon_wear_with_strong(
+            mir2_world_bevy::combat::attack_success_weapon_wear_with_strong(
                 &mut rng0b,
                 &mut e0b.use_items,
                 raw
@@ -86720,7 +86937,7 @@ mod weapon_strong_numeric_tests {
             "`WS == Random(5)+2` ⇒ nWeaponDamage == 0 ⇒ 不扣、不发帧"
         );
         assert_eq!(
-            e0b.use_items[mir2_world::world::ITEM_LOCATION_WEAPON].dura,
+            e0b.use_items[mir2_world_bevy::world::ITEM_LOCATION_WEAPON].dura,
             5_000
         );
     }
@@ -86790,8 +87007,8 @@ mod sm_skeleton_downlink_tests {
     /// 「屠宰者 p(10,10) + 近处 q(11,11) + 远处 r(50,50) + 尸体 t(11,10)」。
     ///
     /// 返回 `(world, p, q, r, t, n10)`，`n10` = 固定种子的第 1 抽（`Random(16)+5`）。
-    fn rig(seed: i32, race: u8, death: bool) -> (mir2_world::World, i32, i32, i32, i32, u8) {
-        let mut world = mir2_world::World::new(64, 64);
+    fn rig(seed: i32, race: u8, death: bool) -> (mir2_world_bevy::World, i32, i32, i32, i32, u8) {
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         world.open_session("p");
@@ -86806,7 +87023,7 @@ mod sm_skeleton_downlink_tests {
         let r = world
             .enter_map("r", new_player_entity("r".to_string(), 50, 50), 0)
             .expect("远处玩家 r 进图");
-        let mut corpse = mir2_world::EntitySpawn::new(0, "corpse", 11, 10);
+        let mut corpse = mir2_world_bevy::EntitySpawn::new(0, "corpse", 11, 10);
         corpse.race = race;
         corpse.death = death;
         corpse.ai.dir = 5;
@@ -86852,13 +87069,13 @@ mod sm_skeleton_downlink_tests {
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let gates = gates_with(tx);
 
-        world.enqueue(mir2_world::Command::ButchEffect {
+        world.enqueue(mir2_world_bevy::Command::ButchEffect {
             actor_id: p,
             target_id: t,
             n_x: 11,
             n_y: 10,
         });
-        world.enqueue(mir2_world::Command::Butch {
+        world.enqueue(mir2_world_bevy::Command::Butch {
             actor_id: p,
             dir: 3,
         });
@@ -86922,7 +87139,7 @@ mod sm_skeleton_downlink_tests {
         online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
         let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
         let gates = gates_with(tx);
-        world.enqueue(mir2_world::Command::ButchEffect {
+        world.enqueue(mir2_world_bevy::Command::ButchEffect {
             actor_id: p,
             target_id: t,
             n_x: 11,
@@ -86952,7 +87169,7 @@ mod sm_skeleton_downlink_tests {
             online_set(&mut online, entry("ap", "p", 1, 0, 901, p));
             let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
             let gates = gates_with(tx);
-            world.enqueue(mir2_world::Command::ButchEffect {
+            world.enqueue(mir2_world_bevy::Command::ButchEffect {
                 actor_id: p,
                 target_id: t,
                 n_x,
@@ -86971,7 +87188,7 @@ mod sm_skeleton_downlink_tests {
             e.ai.skeleton = true;
             e.ai.body_leathery = n10;
         }
-        world.enqueue(mir2_world::Command::ButchEffect {
+        world.enqueue(mir2_world_bevy::Command::ButchEffect {
             actor_id: p,
             target_id: t,
             n_x: 11,
@@ -87135,8 +87352,8 @@ mod attack_weapon_wear_tests {
         catalog
     }
 
-    fn weapon_slot(dura: u16, dura_max: u16) -> mir2_world::entity::UseItemSlot {
-        mir2_world::entity::UseItemSlot {
+    fn weapon_slot(dura: u16, dura_max: u16) -> mir2_world_bevy::entity::UseItemSlot {
+        mir2_world_bevy::entity::UseItemSlot {
             make_index: 7,
             index: 10,
             dura,
@@ -87152,7 +87369,7 @@ mod attack_weapon_wear_tests {
     /// `rec.weapon_wears` 空 ⇒ 本用例必红。
     #[test]
     fn attack_success_wears_weapon_and_sends_one_642_to_attacker_only() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         world.open_session("p");
         let p = world
@@ -87162,7 +87379,7 @@ mod attack_weapon_wear_tests {
         let q = world
             .enter_map("q", new_player_entity("q".to_string(), 11, 10), 0)
             .expect("玩家 q 进图（同图旁观者）");
-        let mut foe = mir2_world::EntitySpawn::new(0, "foe", 10, 11);
+        let mut foe = mir2_world_bevy::EntitySpawn::new(0, "foe", 10, 11);
         foe.race = 80;
         foe.hp = 1000;
         foe.max_hp = 1000;
@@ -87186,7 +87403,7 @@ mod attack_weapon_wear_tests {
         assert_eq!(ev.actor_id, p, "事件挂在攻击者身上");
         assert_eq!(
             ev.frames,
-            vec![mir2_world::combat::WeaponWearFrame::DuraChange {
+            vec![mir2_world_bevy::combat::WeaponWearFrame::DuraChange {
                 dura: dura_after,
                 dura_max: 9000,
                 slot: 1,
@@ -87262,13 +87479,13 @@ mod attack_weapon_wear_tests {
     /// 红检：交换 helper 内两条 drain 调用 ⇒ 本用例红。
     #[test]
     fn attack_weapon_642_precedes_monster_ref_656() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         world.open_session("p");
         let p = world
             .enter_map("p", new_player_entity("p".to_string(), 10, 10), 0)
             .expect("玩家 p 进图");
-        let mut foe = mir2_world::EntitySpawn::new(0, "foe", 10, 11);
+        let mut foe = mir2_world_bevy::EntitySpawn::new(0, "foe", 10, 11);
         foe.race = 80;
         foe.hp = 1000;
         foe.max_hp = 1000;
@@ -87280,7 +87497,7 @@ mod attack_weapon_wear_tests {
 
         world
             .pending_monster_ref_msgs
-            .push(mir2_world::MonsterRefMsg {
+            .push(mir2_world_bevy::MonsterRefMsg {
                 actor_id: p,
                 ident: mir2_protocol::messages::RM_CHANGENAMECOLOR,
                 w_param: 0,
@@ -87337,7 +87554,7 @@ mod attack_weapon_wear_tests {
     /// （空挥流水里不得出现 `Random(5)`）。
     #[test]
     fn swing_without_target_wears_nothing_and_sends_no_frame() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         world.open_session("p");
         let p = world
@@ -87369,7 +87586,7 @@ mod attack_weapon_wear_tests {
     /// 帧由生产同一函数 `do_damage_weapon`（世界侧）产出，本用例只验宿主编码/次序。
     #[test]
     fn broken_weapon_sends_202_before_642_recog_zero() {
-        let mut world = mir2_world::World::new(64, 64);
+        let mut world = mir2_world_bevy::World::new(64, 64);
         world.clock_ms = 100_000;
         world.open_session("p");
         let p = world
@@ -87378,16 +87595,16 @@ mod attack_weapon_wear_tests {
 
         // `Dura == nWeaponDamage == 5` ⇒ `nDura == 0` ⇒ 破零支。
         let mut slot = weapon_slot(5, 9000);
-        let wear = mir2_world::combat::do_damage_weapon(&mut slot, 5);
+        let wear = mir2_world_bevy::combat::do_damage_weapon(&mut slot, 5);
         assert_eq!(slot.index, 0, "破零清 Index（世界侧）");
         assert_eq!(slot.dura, 0);
 
-        let rec = mir2_world::TickRecord {
-            weapon_wears: vec![mir2_world::combat::WeaponWearEvent {
+        let rec = mir2_world_bevy::TickRecord {
+            weapon_wears: vec![mir2_world_bevy::combat::WeaponWearEvent {
                 actor_id: p,
                 frames: wear.frames,
             }],
-            ..mir2_world::TickRecord::default()
+            ..mir2_world_bevy::TickRecord::default()
         };
         let mut online: OnlineRegistry = Vec::new();
         online_set(&mut online, online_entry("p", 901, p));
@@ -87521,21 +87738,21 @@ mod attack_weapon_wear_tests {
     /// `CastleMgr.IncRateGold(UpgradeWeaponPrice)`（**恒 UpgradeWeaponPrice**，B-16）。
     #[test]
     fn upgrade_weapon_tax_credits_castle_or_manager_with_upgrade_price() {
-        let mut world = mir2_world::World::new(32, 32);
-        world.castles.push(mir2_world::castle::UserCastle::new(
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        world.castles.push(mir2_world_bevy::castle::UserCastle::new(
             "沙巴克",
-            mir2_world::castle::CastleSiegeConfig::default(),
+            mir2_world_bevy::castle::CastleSiegeConfig::default(),
         ));
-        world.castles.push(mir2_world::castle::UserCastle::new(
+        world.castles.push(mir2_world_bevy::castle::UserCastle::new(
             "沙巴克二",
-            mir2_world::castle::CastleSiegeConfig::default(),
+            mir2_world_bevy::castle::CastleSiegeConfig::default(),
         ));
         let mk = |get_all: bool| ShopCfg {
             castle_tax_rate: 5,
             get_all_npc_tax: get_all,
-            upgrade: mir2_world::merchant::UpgradeWeaponConfig {
+            upgrade: mir2_world_bevy::merchant::UpgradeWeaponConfig {
                 price: 10_000,
-                ..mir2_world::merchant::UpgradeWeaponConfig::default()
+                ..mir2_world_bevy::merchant::UpgradeWeaponConfig::default()
             },
             ..ShopCfg::default()
         };
@@ -87605,13 +87822,13 @@ mod admin_channel_tests {
     struct AdminRig {
         gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         rx: mpsc::UnboundedReceiver<SimToGate>,
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         online: OnlineRegistry,
         sessions: HashMap<String, SessionGround>,
         saves: HashMap<String, SavedHuman>,
         displays: downlink::DisplayTable,
-        guilds: mir2_world::GuildManager,
-        guild_cfg: mir2_world::GuildConfig,
+        guilds: mir2_world_bevy::GuildManager,
+        guild_cfg: mir2_world_bevy::GuildConfig,
         filter_word: Cell<bool>,
         mission: RefCell<gmcmd::GmMissionState>,
         spirit_mutiny_tick: Cell<i64>,
@@ -87624,9 +87841,9 @@ mod admin_channel_tests {
             let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
             let mut gates = HashMap::new();
             gates.insert(0, tx);
-            let mut world = mir2_world::World::new(64, 64);
-            let mut e = mir2_world::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
-            e.race = mir2_world::ACTOR_RACE_PLAY;
+            let mut world = mir2_world_bevy::World::new(64, 64);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "aaa".to_string(), 10, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
             let actor = world.add_entity(e);
             let online: OnlineRegistry = vec![OnlineEntry {
                 account: "a".to_string(),
@@ -87656,8 +87873,8 @@ mod admin_channel_tests {
                 sessions,
                 saves,
                 displays: downlink::DisplayTable::new(),
-                guilds: mir2_world::GuildManager::default(),
-                guild_cfg: mir2_world::GuildConfig::default(),
+                guilds: mir2_world_bevy::GuildManager::default(),
+                guild_cfg: mir2_world_bevy::GuildConfig::default(),
                 filter_word: Cell::new(true),
                 mission: RefCell::new(gmcmd::GmMissionState::default()),
                 spirit_mutiny_tick: Cell::new(0),
@@ -88073,7 +88290,7 @@ mod level_rank_request_tests {
     use mir2_protocol::frame::CommandMessage as WireCmd;
 
     struct Rig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         online: OnlineRegistry,
         gates: std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
         rx0: mpsc::UnboundedReceiver<SimToGate>,
@@ -88102,19 +88319,19 @@ mod level_rank_request_tests {
     /// hero（30 级，gate0/socket100）、other（20 级，gate1/socket200）、
     /// ghost（99 级，gate0/socket300）—— ghost 必须被数据源排除，否则它会占行 0。
     fn rig() -> Rig {
-        let mut world = mir2_world::World::new(32, 32);
+        let mut world = mir2_world_bevy::World::new(32, 32);
         let hero = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "hero", 10, 10);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
             e.level = 30;
             e
         });
         let other = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "other", 11, 10);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "other", 11, 10);
             e.level = 20;
             e
         });
         let ghost = world.add_entity({
-            let mut e = mir2_world::EntitySpawn::new(0, "ghost", 12, 10);
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, "ghost", 12, 10);
             e.level = 99;
             e.ghost = true;
             e
@@ -88599,8 +88816,8 @@ mod t279_dress_eff_tests {
         let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx0);
-        let mut world = mir2_world::World::new(8, 8);
-        world.add_entity(mir2_world::EntitySpawn::new(42, "hero", 10, 10));
+        let mut world = mir2_world_bevy::World::new(8, 8);
+        world.add_entity(mir2_world_bevy::EntitySpawn::new(42, "hero", 10, 10));
         let mut displays = downlink::DisplayTable::new();
         displays.set(
             42,
@@ -88910,7 +89127,7 @@ mod t279_dress_eff_tests {
     /// 与 `T142Rig` 的差异：这里必须用 `open_session`+`enter_map` 建**世界会话**——
     /// `switch_map_space`/`base_object_move_player` 的落地前提（`T142Rig` 只 `add_entity`）。
     struct TeleportRig {
-        world: mir2_world::World,
+        world: mir2_world_bevy::World,
         hero: i32,
         merchant_id: i32,
         sessions: HashMap<String, SessionGround>,
@@ -88942,18 +89159,18 @@ mod t279_dress_eff_tests {
                 .map(|m| (m.width, m.height))
                 .collect();
             assert_eq!(sizes.len(), 5, "世界图数必须与注册表同序");
-            let mut world = mir2_world::World::with_maps(sizes);
+            let mut world = mir2_world_bevy::World::with_maps(sizes);
             world.open_session("hero");
             let hero = world
                 .enter_map("hero", new_player_entity("hero".to_string(), 10, 10), 0)
                 .expect("hero 进图");
             let merchant_id = world
-                .insert_merchant(mir2_world::merchant::MerchantSpawn {
+                .insert_merchant(mir2_world_bevy::merchant::MerchantSpawn {
                     name: "传送员".to_string(),
                     x: 11,
                     y: 10,
                     map_id: 0,
-                    state: mir2_world::merchant::MerchantState::new(
+                    state: mir2_world_bevy::merchant::MerchantState::new(
                         "比奇省传送员".to_string(),
                         "0".to_string(),
                         0,
@@ -88962,7 +89179,7 @@ mod t279_dress_eff_tests {
                         false,
                         false,
                         0,
-                        mir2_world::merchant::MerchantFlags {
+                        mir2_world_bevy::merchant::MerchantFlags {
                             is_buy: true,
                             ..Default::default()
                         },
@@ -89117,7 +89334,7 @@ mod t279_dress_eff_tests {
             out
         }
 
-        fn entity(&self) -> mir2_world::EntityRef<'_> {
+        fn entity(&self) -> mir2_world_bevy::EntityRef<'_> {
             self.world.entities.get(self.hero).expect("hero 实体在")
         }
     }
@@ -89156,7 +89373,7 @@ mod t279_dress_eff_tests {
             Vec::new(),
             &table,
             false,
-            mir2_world::mongen::MonGenConfig::default(),
+            mir2_world_bevy::mongen::MonGenConfig::default(),
             &mut rig.world.rng,
         );
         let mut displays = downlink::DisplayTable::new();
@@ -89269,7 +89486,7 @@ mod t279_dress_eff_tests {
             Vec::new(),
             &table,
             false,
-            mir2_world::mongen::MonGenConfig::default(),
+            mir2_world_bevy::mongen::MonGenConfig::default(),
             &mut rig.world.rng,
         );
         let mut displays = downlink::DisplayTable::new();
@@ -89321,7 +89538,7 @@ mod t279_dress_eff_tests {
             Vec::new(),
             &table,
             false,
-            mir2_world::mongen::MonGenConfig::default(),
+            mir2_world_bevy::mongen::MonGenConfig::default(),
             &mut rig2.world.rng,
         );
         {
@@ -89370,7 +89587,7 @@ mod t279_dress_eff_tests {
             Vec::new(),
             &table,
             false,
-            mir2_world::mongen::MonGenConfig::default(),
+            mir2_world_bevy::mongen::MonGenConfig::default(),
             &mut rig.world.rng,
         );
         let mut displays = downlink::DisplayTable::new();
@@ -89433,7 +89650,7 @@ mod t279_dress_eff_tests {
                 Vec::new(),
                 &table,
                 false,
-                mir2_world::mongen::MonGenConfig::default(),
+                mir2_world_bevy::mongen::MonGenConfig::default(),
                 &mut rig.world.rng,
             );
             let mut displays = downlink::DisplayTable::new();
@@ -89487,7 +89704,7 @@ mod t279_dress_eff_tests {
             Vec::new(),
             &table,
             false,
-            mir2_world::mongen::MonGenConfig::default(),
+            mir2_world_bevy::mongen::MonGenConfig::default(),
             &mut rig.world.rng,
         );
         let mut displays = downlink::DisplayTable::new();
@@ -89533,7 +89750,7 @@ mod t279_dress_eff_tests {
             Vec::new(),
             &table,
             false,
-            mir2_world::mongen::MonGenConfig::default(),
+            mir2_world_bevy::mongen::MonGenConfig::default(),
             &mut rig.world.rng,
         );
         let mut displays = downlink::DisplayTable::new();

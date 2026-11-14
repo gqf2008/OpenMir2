@@ -212,7 +212,7 @@ pub fn clone_display(dir: u8, caster: &ActorDisplay) -> ActorDisplay {
         0,
         0,
         PLAYER_NAME_COLOR,
-        gbk(mir2_world::CLONE_NAME),
+        gbk(mir2_world_bevy::CLONE_NAME),
     )
 }
 
@@ -427,14 +427,14 @@ fn wire_coord(v: i32) -> u16 {
     v as u16
 }
 
-/// **出站接线片 W2**：世界 [`mir2_world::action::PushEvent`]（`RM_PUSH`）→ `SM_BACKSTEP(9)`。
+/// **出站接线片 W2**：世界 [`mir2_world_bevy::action::PushEvent`]（`RM_PUSH`）→ `SM_BACKSTEP(9)`。
 ///
 /// oracle `PlayObject.Message.cs:1533-1545`：`MakeMessage(SM_BACKSTEP, ActorId, nParam1, nParam2,
 /// MakeWord((ushort)processMsg.wParam /*= nBackDir*/, baseObject.Light))` + `Encode(8B CharDesc)`。
 /// 即帧方向 = 事件的 `nBackDir`（**不是**角色 `Dir`）⇒ 这里把 `ev.dir` 写进 `d` 的克隆再走
 /// [`move_frame`]。
 #[must_use]
-pub fn backstep_frame(ev: &mir2_world::PushEvent, d: &ActorDisplay) -> Option<Vec<u8>> {
+pub fn backstep_frame(ev: &mir2_world_bevy::PushEvent, d: &ActorDisplay) -> Option<Vec<u8>> {
     let mut framed = d.clone();
     framed.dir = ev.dir;
     move_frame(
@@ -446,15 +446,15 @@ pub fn backstep_frame(ev: &mir2_world::PushEvent, d: &ActorDisplay) -> Option<Ve
     )
 }
 
-/// **出站接线片 W2**：世界 [`mir2_world::action::RushEvent`]（`RM_RUSH`/`RM_RUSHKUNG`）→
+/// **出站接线片 W2**：世界 [`mir2_world_bevy::action::RushEvent`]（`RM_RUSH`/`RM_RUSHKUNG`）→
 /// `SM_RUSH(6)`/`SM_RUSHKUNG(7)`。
 ///
 /// oracle `PlayObject.Message.cs:1536-1542`：两条同形
 /// `MakeMessage(SM_RUSH|SM_RUSHKUNG, ActorId, nParam1, nParam2, MakeWord((ushort)processMsg.wParam
 /// /*= 事件方向*/, baseObject.Light))` + `Encode(8B CharDesc)`（`Msg` 恒空 ⇒ 无名尾）。ident 由
-/// [`mir2_world::action::RushEvent::ident`] 给出（`Rush` → 6、`RushKung` → 7）。
+/// [`mir2_world_bevy::action::RushEvent::ident`] 给出（`Rush` → 6、`RushKung` → 7）。
 #[must_use]
-pub fn rush_frame(ev: &mir2_world::action::RushEvent, d: &ActorDisplay) -> Option<Vec<u8>> {
+pub fn rush_frame(ev: &mir2_world_bevy::action::RushEvent, d: &ActorDisplay) -> Option<Vec<u8>> {
     let mut framed = d.clone();
     framed.dir = ev.dir;
     move_frame(
@@ -466,7 +466,7 @@ pub fn rush_frame(ev: &mir2_world::action::RushEvent, d: &ActorDisplay) -> Optio
     )
 }
 
-/// **出站接线片 W2**：世界 [`mir2_world::action::ButchEvent`]（`RM_BUTCH`）→ `SM_BUTCH(637)`。
+/// **出站接线片 W2**：世界 [`mir2_world_bevy::action::ButchEvent`]（`RM_BUTCH`）→ `SM_BUTCH(637)`。
 ///
 /// oracle `PlayObject.Message.cs:1781-1787`：`if (processMsg.ActorId != 0) ClientMsg =
 /// MakeMessage(SM_BUTCH, processMsg.ActorId, nParam1 /*=CurrX*/, nParam2 /*=CurrY*/,
@@ -474,7 +474,7 @@ pub fn rush_frame(ev: &mir2_world::action::RushEvent, d: &ActorDisplay) -> Optio
 /// `SM_HIT` 族同形：头 `Series = Dir`、`gm_data_body(h, &[])`）。`ActorId != 0` 门由世界事件
 /// 保证（事件只对在世界里的 actor 产生，`actor_id` 必 `> 0`）。
 #[must_use]
-pub fn butch_frame(ev: &mir2_world::action::ButchEvent) -> Vec<u8> {
+pub fn butch_frame(ev: &mir2_world_bevy::action::ButchEvent) -> Vec<u8> {
     smframe::sm_action_hit(
         mir2_protocol::messages::SM_BUTCH,
         ev.actor_id,
@@ -560,7 +560,7 @@ pub fn disappear_frame(target: i32) -> Vec<u8> {
 /// ```
 ///
 /// `dead == true` ⇒ 走 [`death_frame`]（`SM_DEATH`）。**`Skeleton` 支**（`SM_SKELETON(33)`）不在本片：
-/// `mir2_world::Entity` 无 `skeleton` 字段，且 oracle 里该字段的**唯一 setter** 是
+/// `mir2_world_bevy::Entity` 无 `skeleton` 字段，且 oracle 里该字段的**唯一 setter** 是
 /// `ClientGetButchItem`（`PlayObject.Operate.cs:734`，动物尸体屠宰成骨架；属 V1-2「屠宰效果体」R 级片）
 /// ⇒ 已死即按 `SM_DEATH` 发，`SM_SKELETON` 登记为 `deferred`（编码器 `smframe::sm_skeleton` 已在，缺 setter）。
 ///
@@ -1040,7 +1040,7 @@ mod tests {
         assert_eq!(d.light, 0);
         assert_eq!(d.status, 0);
         assert_eq!(d.name_color, PLAYER_NAME_COLOR);
-        assert_eq!(d.show_name, gbk(mir2_world::CLONE_NAME));
+        assert_eq!(d.show_name, gbk(mir2_world_bevy::CLONE_NAME));
         // 克隆体 Dress=0/Weapon=0 ⇒ feature = MakeHumanFeature(0, gender, gender, hair*2+gender)。
         assert_eq!(
             d.feature,
@@ -1065,7 +1065,7 @@ mod tests {
     #[test]
     fn backstep_frame_bytes_match_oracle_layout() {
         let d = w2_display();
-        let ev = mir2_world::PushEvent {
+        let ev = mir2_world_bevy::PushEvent {
             actor_id: 9001,
             dir: 5,
             x: 18,
@@ -1090,7 +1090,7 @@ mod tests {
     /// 「事件 dir=99」⇒ 字节**必不同**（若实现误用 `d.dir`，第一组断言即红）。
     #[test]
     fn redcheck_backstep_direction_must_come_from_event() {
-        let ev5 = mir2_world::PushEvent {
+        let ev5 = mir2_world_bevy::PushEvent {
             actor_id: 9001,
             dir: 5,
             x: 18,
@@ -1104,7 +1104,7 @@ mod tests {
         let a = backstep_frame(&ev5, &sentinel).unwrap();
         let b = backstep_frame(&ev5, &same).unwrap();
         assert_eq!(a, b, "方向只由事件决定，与展示表 dir 无关");
-        let ev99 = mir2_world::PushEvent { dir: 99, ..ev5 };
+        let ev99 = mir2_world_bevy::PushEvent { dir: 99, ..ev5 };
         assert_ne!(
             &backstep_frame(&ev99, &sentinel).unwrap()[..12],
             &a[..12],
@@ -1117,7 +1117,7 @@ mod tests {
     /// 红检（见 [`redcheck_rushkung_ident_distinct_from_rush`]）。
     #[test]
     fn rush_frame_bytes_by_frame_kind() {
-        use mir2_world::{RushEvent, RushFrame};
+        use mir2_world_bevy::{RushEvent, RushFrame};
         let d = w2_display(); // dir=99 sentinel、light=7
         let rush = RushEvent {
             actor_id: 9001,
@@ -1150,7 +1150,7 @@ mod tests {
     /// ident，本断言必红。
     #[test]
     fn redcheck_rushkung_ident_distinct_from_rush() {
-        use mir2_world::{RushEvent, RushFrame};
+        use mir2_world_bevy::{RushEvent, RushFrame};
         let d = w2_display();
         let ev = RushEvent {
             actor_id: 9001,
@@ -1175,7 +1175,7 @@ mod tests {
     /// （`series = Dir`，不叠 Light）。
     #[test]
     fn butch_frame_bytes_no_tail() {
-        let ev = mir2_world::ButchEvent {
+        let ev = mir2_world_bevy::ButchEvent {
             actor_id: 9001,
             dir: 3,
             x: 18,

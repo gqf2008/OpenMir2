@@ -14,7 +14,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mir2_world::World;
+use mir2_world_bevy::World;
 
 fn parity_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("world")
@@ -82,7 +82,8 @@ fn run_scenario(name: &str) -> String {
 
     let mut world = World::new(sc.width, sc.height);
     for spec in &sc.entities {
-        let mut e = mir2_world::EntitySpawn::new(spec.id, format!("e{}", spec.id), spec.x, spec.y);
+        let mut e =
+            mir2_world_bevy::EntitySpawn::new(spec.id, format!("e{}", spec.id), spec.x, spec.y);
         e.id = spec.id;
         e.view_range = spec.view_range;
         e.race = spec.race;
@@ -230,7 +231,8 @@ fn redcheck_viewrange12_ring_collapsed_to_default_must_differ() {
     let sc: Scenario = serde_json::from_str(&text).unwrap();
     let mut world = World::new(sc.width, sc.height);
     for spec in &sc.entities {
-        let mut e = mir2_world::EntitySpawn::new(spec.id, format!("e{}", spec.id), spec.x, spec.y);
+        let mut e =
+            mir2_world_bevy::EntitySpawn::new(spec.id, format!("e{}", spec.id), spec.x, spec.y);
         e.id = spec.id;
         // 除 1 号外逐字照抄场景（含 race/want_ref_msg：这两者决定过滤器是否放行怪物）。
         e.view_range = if spec.id == 1 { 5 } else { spec.view_range };
@@ -284,7 +286,8 @@ fn redcheck_view_range_change_must_alter_visible_set() {
     let sc: Scenario = serde_json::from_str(&text).unwrap();
     let mut world = World::new(sc.width, sc.height);
     for spec in &sc.entities {
-        let mut e = mir2_world::EntitySpawn::new(spec.id, format!("e{}", spec.id), spec.x, spec.y);
+        let mut e =
+            mir2_world_bevy::EntitySpawn::new(spec.id, format!("e{}", spec.id), spec.x, spec.y);
         e.id = spec.id;
         e.view_range = if spec.id == 1 {
             spec.view_range + 3
@@ -332,8 +335,12 @@ fn redcheck_position_change_must_differ() {
     let mut world = World::new(sc.width, sc.height);
     for spec in &sc.entities {
         let dx = if spec.id == 1 { 1 } else { 0 };
-        let mut e =
-            mir2_world::EntitySpawn::new(spec.id, format!("e{}", spec.id), spec.x + dx, spec.y);
+        let mut e = mir2_world_bevy::EntitySpawn::new(
+            spec.id,
+            format!("e{}", spec.id),
+            spec.x + dx,
+            spec.y,
+        );
         e.id = spec.id;
         world.add_entity(e);
     }

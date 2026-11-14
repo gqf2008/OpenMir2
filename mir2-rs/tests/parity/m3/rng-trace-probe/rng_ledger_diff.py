@@ -33,7 +33,7 @@ r"""rng_ledger_diff.py — M3②③ 真机**两侧 RNG 账本**的站点 + 顺�
 
 站点表与 m3cs 决策片 `analyze_rng_trace.py` / m3bag `attack_rng_ledger.py` **同口径**
 （C# = `PlayObject.GetAttackPower@PlayObject.cs:2929` 为每次攻击恰一次的 marker；
-Rust = `crates\world\src\combat.rs:109`）。
+Rust = `crates\world-bevy\src\combat.rs:109`）。
 """
 import argparse
 import collections
@@ -64,7 +64,7 @@ CSHARP_ATTACK_RE = re.compile(
 RUST_ATTACK_RE = re.compile(r"combat\.rs:(67|103|106|109|111|250|579|587|601|606|608|609|628|630|736|758|763|771|790|792|829|831|837|856|858|936|1014|1016|1018|1126|1150|1152|1258|1260)")
 
 CSHARP_MARKER = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929"
-RUST_MARKER = r"crates\world\src\combat.rs:109"
+RUST_MARKER = r"crates\world-bevy\src\combat.rs:109"
 
 # canonical 映射：两侧语义一一对应的站点 → 同一名（顺序敏感比对才有仲裁力）。
 CANON_RULES = [
@@ -80,40 +80,40 @@ CANON_RULES = [
     (re.compile(r"M2Server\.Player\.PlayObject\.StruckDamage@PlayObject\.cs:2957$"), "struck_durability"),
     (re.compile(r"M2Server\.Actor\.BaseObject\.GetHitStruckDamage@BaseObject\.Base\.cs:792$"), "hit_struck_damage"),
     # Rust（世界层）
-    (re.compile(r"crates/world/src/combat\.rs:109$"), "atk_power_a"),
-    (re.compile(r"crates/world/src/combat\.rs:111$"), "atk_power_b"),
-    (re.compile(r"crates/world/src/combat\.rs:67$"), "atk_power_base"),
-    (re.compile(r"crates/world/src/combat\.rs:758$"), "hit_gate"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:109$"), "atk_power_a"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:111$"), "atk_power_b"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:67$"), "atk_power_base"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:758$"), "hit_gate"),
     # 命中骰（`_Attack` 的 `RandomByte(target.SpeedPoint)`）：**当前**活栈 1014（`bbf9694aa` 起），
     # 936（`e7d432189` magic-draws-move 时代）/ 758 / 736 只作旧 trace 别名。
-    (re.compile(r"crates/world/src/combat\.rs:1016$"), "hit_gate"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:1016$"), "hit_gate"),
     # 2026-10-21：商人 race 收口的 rustfmt 折行使三处取数各 +2 ⇒ 1016/1152/1260 为当前活栈。
-    (re.compile(r"crates/world/src/combat\.rs:1014$"), "hit_gate"),
-    (re.compile(r"crates/world/src/combat\.rs:936$"), "hit_gate"),
-    (re.compile(r"crates/world/src/combat\.rs:628$"), "hit_struck_damage"),
-    (re.compile(r"crates/world/src/combat\.rs:630$"), "hit_struck_damage2"),
-    (re.compile(r"crates/world/src/combat\.rs:601$"), "struck_durability"),
-    (re.compile(r"crates/world/src/combat\.rs:609$"), "struck_durability_slot"),
-    (re.compile(r"crates/world/src/combat\.rs:831$"), "attack_success"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:1014$"), "hit_gate"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:936$"), "hit_gate"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:628$"), "hit_struck_damage"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:630$"), "hit_struck_damage2"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:601$"), "struck_durability"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:609$"), "struck_durability_slot"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:831$"), "attack_success"),
     # `AttackSuccess` 的两处取数（**当前**活栈）：1150 = `Random(5)`（每次玩家攻击必抽）、
     # 1258 = 毒门 `Random(AntiPoison+Rate)`（`!UnParalysis && Paralysis` 时抽）。
     # 旧别名：1018 = `e7d432189` 时代的 `Random(5)`（**不是命中骰**）、
     # 1126 = `e7d432189` 时代的毒门。
-    (re.compile(r"crates/world/src/combat\.rs:(1150|1258|1152|1260|1018|1126)$"), "attack_success"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:(1150|1258|1152|1260|1018|1126)$"), "attack_success"),
     # **MB-4 F4**：`struck_damage_durability` / `get_hit_struck_damage` 的**当前**取数行
     # （改前只登记了旧行号 601/609/628/630 ⇒ 真机 trace 落 `UNCLASSIFIED`）。
-    (re.compile(r"crates/world/src/combat\.rs:829$"), "struck_durability"),
-    (re.compile(r"crates/world/src/combat\.rs:837$"), "struck_durability_slot"),
-    (re.compile(r"crates/world/src/combat\.rs:856$"), "hit_struck_damage"),
-    (re.compile(r"crates/world/src/combat\.rs:858$"), "hit_struck_damage2"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:829$"), "struck_durability"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:837$"), "struck_durability_slot"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:856$"), "hit_struck_damage"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:858$"), "hit_struck_damage2"),
     # 旧代码 trace 的行号别名（本片把 attack_success/attack_dir 加进 combat.rs 后行号位移；
     # 2026-10-12 之前采集的 Rust 活栈 trace 仍按旧行号落盘，别名保证旧件可复算）。
-    (re.compile(r"crates/world/src/combat\.rs:736$"), "hit_gate"),
-    (re.compile(r"crates/world/src/combat\.rs:606$"), "hit_struck_damage"),
-    (re.compile(r"crates/world/src/combat\.rs:608$"), "hit_struck_damage2"),
-    (re.compile(r"crates/world/src/combat\.rs:579$"), "struck_durability"),
-    (re.compile(r"crates/world/src/combat\.rs:587$"), "struck_durability_slot"),
-    (re.compile(r"crates/world/src/combat\.rs:250$"), "attack_skill_point_count"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:736$"), "hit_gate"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:606$"), "hit_struck_damage"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:608$"), "hit_struck_damage2"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:579$"), "struck_durability"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:587$"), "struck_durability_slot"),
+    (re.compile(r"crates/world-bevy/src/combat\.rs:250$"), "attack_skill_point_count"),
 ]
 
 ATTACK_CANON = {
@@ -638,8 +638,8 @@ def cmd_selftest(args):
     C = ["M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2929",
          "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934",
          "M2Server.Actor.BaseObject._Attack@BaseObject.Attack.cs:41"]
-    R = [r"crates\world\src\combat.rs:109", r"crates\world\src\combat.rs:111",
-         r"crates\world\src\combat.rs:758"]
+    R = [r"crates\world-bevy\src\combat.rs:109", r"crates\world-bevy\src\combat.rs:111",
+         r"crates\world-bevy\src\combat.rs:758"]
     sites_a = C * 3
     sites_b = R * 3
     ta = os.path.join(tmp, "a.tsv")
@@ -665,7 +665,7 @@ def cmd_selftest(args):
 
     # 逐段：a 段形状 [a,b,hit_gate]，b 段形状 [a,b,hit_gate,hit_struck_damage] ⇒ 第一段即分歧。
     _write_trace(ta, C * 2)
-    _write_trace(tb, (R + [r"crates\world\src\combat.rs:628"]) * 2)
+    _write_trace(tb, (R + [r"crates\world-bevy\src\combat.rs:628"]) * 2)
     rc, out = cap(lambda: cmd_segdiff(argparse.Namespace(
         a=ta, b=tb, a_side="csharp", b_side="rust", json="")))
     check("seg-shape-red", rc == 0 and "FIRST_SEG_DIVERGENCE seg=1" in out and "SEG_SHAPE_DIVERGENCE" in out, out[:500])
@@ -674,8 +674,8 @@ def cmd_selftest(args):
     # owner 2026-10-12 19:20 裁决②：`combat.rs:831`（`AttackSuccess` 的 `Random(5)`）必须被
     # canonical 认成 `attack_success`，且属攻击路径 —— 否则 Rust 侧新加的站点会被当噪声。
     check("attack-success-mapped",
-          canonical(r"crates\world\src\combat.rs:831") == "attack_success"
-          and is_attack(r"crates\world\src\combat.rs:831", "rust"))
+          canonical(r"crates\world-bevy\src\combat.rs:831") == "attack_success"
+          and is_attack(r"crates\world-bevy\src\combat.rs:831", "rust"))
 
     # ---- T-141（2026-10-21，卡 hit-site）：攻击链三处取数的当前活栈行归 attack + 正确 canonical ----
     # 与 attack_rng_ledger.py selftest 同口径：从源码现读三处调用的物理行（不写死 1014/1150/1258），
@@ -684,7 +684,7 @@ def cmd_selftest(args):
     # `bbf9694aa` 起三处当前活栈 = 1014 / 1150 / 1258，历史行号只作旧 trace 别名。
     _combat_rs = os.path.normpath(os.path.join(
         os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "..", "..",
-        "mir2-rs", "crates", "world", "src", "combat.rs"))
+        "mir2-rs", "crates", "world-bevy", "src", "combat.rs"))
     _needles = (
         ("hit-dice", "rng.random_byte(target.speed_point)", "hit_gate"),
         ("attack-success-random5", "(rng.random_below(5) + 2) as u16", "attack_success"),
@@ -703,14 +703,14 @@ def cmd_selftest(args):
         check("%s-live-line-found" % _tag, len(_hits) == 1, str(_hits))
         if len(_hits) != 1:
             continue
-        _site = r"crates\world\src\combat.rs:%d" % _hits[0]
+        _site = r"crates\world-bevy\src\combat.rs:%d" % _hits[0]
         check("%s-live-line-is-attack" % _tag, is_attack(_site, "rust"), _site)
         check("%s-live-line-canonical-%s" % (_tag, _want_canon),
               canonical(_site) == _want_canon, _site)
     # 历史别名按 git 事实归类：936=hit_gate、1018/1126=attack_success。
     for _line, _want_canon in (("936", "hit_gate"), ("1018", "attack_success"),
                                ("1126", "attack_success")):
-        _legacy = r"crates\world\src\combat.rs:" + _line
+        _legacy = r"crates\world-bevy\src\combat.rs:" + _line
         check("legacy-%s-is-attack" % _line, is_attack(_legacy, "rust"), _legacy)
         check("legacy-%s-canonical-%s" % (_line, _want_canon),
               canonical(_legacy) == _want_canon, _legacy)
@@ -729,15 +729,15 @@ def cmd_selftest(args):
     CT = "M2Server.Actor.BaseObject..ctor@BaseObject.cs:438"
     HM = "GameSrv.Word.WorldServer.GetHomeInfo@WorldServer.cs:1392"
     # Rust 侧真实站点（`\` 在 trace 里，归一时要能命中）
-    RW = "crates\\world\\src\\monai.rs:164"
-    RSP = "crates\\world\\src\\mongen.rs:624"
+    RW = "crates\\world-bevy\\src\\monai.rs:164"
+    RSP = "crates\\world-bevy\\src\\mongen.rs:624"
     RDR = "crates\\formula\\src\\drop.rs:109"
     RST = "bins\\game-svr\\src\\main.rs:2856"
     # 2026-10-21 单二进制搬迁：宿主代码在 lib.rs ⇒ 真机 trace 的 startup 站点实型为 lib.rs
     # （main.rs 只剩三行薄包装；RST 保留以覆盖搬迁前的历史 trace 夹具）。
     RL = "bins\\game-svr\\src\\lib.rs:16202"
     RHM = "bins\\game-svr\\src\\homemap.rs:130"
-    RMR = "crates\\world\\src\\merchant.rs:1"
+    RMR = "crates\\world-bevy\\src\\merchant.rs:1"
 
     tbl = rcg.load()
     check("groups-table-valid", tbl.validate() == [], str(tbl.validate()[:2]))

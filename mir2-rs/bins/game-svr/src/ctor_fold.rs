@@ -1,5 +1,5 @@
 //! **构造段 fold 的宿主装配**（`openmir2-ctor-draws-fold`）——把 `Envir` 语料算成
-//! [`mir2_world::CtorFoldPlan`]，并按 oracle 次序落进 sim 线程的账本。
+//! [`mir2_world_bevy::CtorFoldPlan`]，并按 oracle 次序落进 sim 线程的账本。
 //!
 //! ## 分工
 //!
@@ -38,7 +38,7 @@
 //! 位于 `GameApp` ctor **之后**（`new GameApp(...)` 由 DI 在 `AppService` 构造时发生）、
 //! `GameApp.Initialize`（`:124` M2）**之前**（`StartingAsync` 才 `LoadConfig()`）。
 //! `lib.rs` 的 `sim_loop` 在段①之后、段②之前**恰调一次**
-//! `mir2_world::World::fold_ctor_draw_item_number_barrier_a`（走同一条 `world.rng`），再把该抽交给
+//! `mir2_world_bevy::World::fold_ctor_draw_item_number_barrier_a`（走同一条 `world.rng`），再把该抽交给
 //! [`item_number_counter_init`] **加到** `config.rs` 读到的 `[Setup] ItemNumber` 初值上。⇒ 段①（部署件
 //! **16 抽** = `Robot.txt` 1 有效行 × 4 + 孤儿 × 4）→ 屏障 A（**第 17 条**）→ 段②/段③ 与 oracle
 //! **整段等距**。
@@ -53,7 +53,7 @@
 //! 无其它 RNG 消费者（`GameShare.cs:83` 的 `GetRandpmRoute` 是运行期选网关，不在启动段）。
 
 use mir2_envir::{MapLoader, QuestNpcRecord};
-use mir2_world::{CtorFoldLedger, CtorFoldPlan, CtorFoldSite, CTOR_FOLD_BARRIER_A_MOD};
+use mir2_world_bevy::{CtorFoldLedger, CtorFoldPlan, CtorFoldSite, CTOR_FOLD_BARRIER_A_MOD};
 
 /// 从 `Envir` 语料算出构造段 fold 计划（主线程；**不抽数**）。
 ///
@@ -179,7 +179,7 @@ pub fn hidden_qfunction_run_tick(ledger: &CtorFoldLedger, now_ms: i64) -> Option
         .position(|e| e.site == CtorFoldSite::HiddenQFunction)?;
     let group = ledger
         .entries
-        .get(start..start + mir2_world::CTOR_FOLD_DRAWS_PER_SITE)?;
+        .get(start..start + mir2_world_bevy::CTOR_FOLD_DRAWS_PER_SITE)?;
     let run_delta = match group {
         [first, rest @ ..]
             if first.arg == 1500
@@ -187,7 +187,7 @@ pub fn hidden_qfunction_run_tick(ledger: &CtorFoldLedger, now_ms: i64) -> Option
                     .iter()
                     .all(|e| e.site == CtorFoldSite::HiddenQFunction)
                 // 账本里只允许一组（`HIDDEN_NPCS` 里 QFunction 唯一）。
-                && !ledger.entries[start + mir2_world::CTOR_FOLD_DRAWS_PER_SITE..]
+                && !ledger.entries[start + mir2_world_bevy::CTOR_FOLD_DRAWS_PER_SITE..]
                     .iter()
                     .any(|e| e.site == CtorFoldSite::HiddenQFunction) =>
         {
@@ -201,7 +201,7 @@ pub fn hidden_qfunction_run_tick(ledger: &CtorFoldLedger, now_ms: i64) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mir2_world::{CtorFoldEntry, CTOR_FOLD_DRAW_KIND};
+    use mir2_world_bevy::{CtorFoldEntry, CTOR_FOLD_DRAW_KIND};
     use std::path::PathBuf;
 
     /// 用例级唯一临时目录（照 `guardlist.rs` 的 pid+原子计数口径）。
@@ -365,7 +365,7 @@ mod tests {
         plan.push_orphan_merchants();
         plan.push_barrier_a();
 
-        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
         world.rng = mir2_shared::rng::RandomNumber::with_seed(20240229);
         assert_eq!(world.fold_ctor_draws_game_app_ctor(&plan).len(), 16);
         let ledger = world.fold_ctor_draw_item_number_barrier_a(&plan);
@@ -440,7 +440,7 @@ mod tests {
     /// ⇒ 两条 fail-closed 断言红。
     #[test]
     fn hidden_qfunction_run_tick_reads_ledger_and_fails_closed() {
-        use mir2_world::{CtorFoldEntry, CtorFoldSite};
+        use mir2_world_bevy::{CtorFoldEntry, CtorFoldSite};
         let (base, loader) = minimal_corpus("qftick");
         std::fs::write(
             base.join("Envir/Market_Def/QFunction-0.txt"),
@@ -448,7 +448,7 @@ mod tests {
         )
         .unwrap();
         let plan = build_plan(&loader, |_| true).expect("计划成功");
-        let mut world = mir2_world::World::with_maps(vec![(8, 8)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(8, 8)]);
         world.rng = mir2_shared::rng::RandomNumber::with_seed(20240229);
         let ledger = world.fold_ctor_draws_load_map_quest(&plan);
 
@@ -502,7 +502,7 @@ mod tests {
         two.extend_from_within(start..start + 4);
         let e = CtorFoldEntry {
             site: CtorFoldSite::HiddenQFunction,
-            kind: mir2_world::CTOR_FOLD_DRAW_KIND,
+            kind: mir2_world_bevy::CTOR_FOLD_DRAW_KIND,
             arg: 1500,
             result: 0,
         };

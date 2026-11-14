@@ -17,7 +17,7 @@ doc-comment/README 锚行号是按**另一版本**抄的，与**冻结** `src/` 
 对表内**每条**锚 `(anchor, cs_relpath, [(line, token), ...])`：
 
 1. **写侧**：`anchor` 文本必须出现在本片两个落点之一 ——
-   `mir2-rs/crates/world/src/castle.rs` 或本证据目录 `README.md`
+   `mir2-rs/crates/world-bevy/src/castle.rs` 或本证据目录 `README.md`
    （把 `:113` 改回 `:111` ⇒ 注册的 `UserCastle.cs:113` 消失 ⇒ RED）；
 2. **读侧**：冻结 `src/` 对应 `line` 必须命中 `token`（改表/改行号 ⇒ RED）。
 
@@ -74,7 +74,7 @@ import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.normpath(os.path.join(HERE, "..", "..", "..", ".."))
-CASTLE_RS = os.path.join(HERE, "..", "..", "..", "crates", "world", "src", "castle.rs")
+CASTLE_RS = os.path.join(HERE, "..", "..", "..", "crates", "world-bevy", "src", "castle.rs")
 README_MD = os.path.join(
     HERE, "evidence-m3-castle-file-load-f2-20261013", "README.md")
 

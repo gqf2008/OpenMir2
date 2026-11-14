@@ -3,7 +3,7 @@
 //! 第 ① 片（`crates/envir`）给 `Envir/MonGen.txt` 的加载/解析；第 ② 片（`crates/world`）
 //! 给分组/分片/regen 门/复活判定/`RegenMonsters` 的 RNG 次序。本片把两者接到宿主：
 //!
-//! 1. **配置**：oracle `Server.conf` 的 8 个键 → [`mir2_world::mongen::MonGenConfig`]
+//! 1. **配置**：oracle `Server.conf` 的 8 个键 → [`mir2_world_bevy::mongen::MonGenConfig`]
 //!    （`ServerConf.cs:21/53/54/63/64/66/636/637`，缺省 = `GameSvrConf.cs` 构造值）；
 //! 2. **加载**：`MapLoader::load_mon_gen`（`LocalDB.cs:501`）→ 运行时条目 + 末尾哨兵标志
 //!    （`LocalDB.cs:570-590`，`Some(_) ⇒ sentinel_present = true`）；
@@ -39,12 +39,12 @@ use mir2_envir::registry::MapRegistry;
 use mir2_envir::MapLoader;
 use mir2_shared::hutil::make_word;
 use mir2_shared::rng::RandomNumber;
-use mir2_world::combat::DropItem;
-use mir2_world::mongen::{
+use mir2_world_bevy::combat::DropItem;
+use mir2_world_bevy::mongen::{
     initialize_monster, step_threads, InitializeMonsterRecord, MapCanCreate, MonGenConfig,
     MonGenEntry, MonGenState, RegenDecision, TickClockFn,
 };
-use mir2_world::MonsterCtorDraws;
+use mir2_world_bevy::MonsterCtorDraws;
 
 use crate::downlink;
 
@@ -58,7 +58,7 @@ pub const VENTURE_SERVER_DEFAULT: &str = "FALSE";
 ///
 /// `World::tick` 在死亡结算之后、AOI 刷新之前按实体槽位顺序驱动 `monster_ai_tick`
 /// （oracle `ProcessMonsters` 线程的单线程等价物，见设计文档 §4.2 硬约束①）。
-pub fn enable_production_monster_ai(world: &mut mir2_world::World) {
+pub fn enable_production_monster_ai(world: &mut mir2_world_bevy::World) {
     world.enable_monster_ai();
 }
 
@@ -636,7 +636,7 @@ impl MonGenHost {
 /// 本函数不消费随机数。
 pub fn bind_new_certificates(
     state: &MonGenState,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     before: &[usize],
     now: i64,
 ) -> Vec<i32> {
@@ -669,7 +669,7 @@ pub fn bind_new_certificates(
 /// `LifeAttrib = monster.btLifeAttrib`、`HitPoint = monster.HitPoint`、`SpeedPoint = monster.Speed`、
 /// `FightExp = monster.Exp`。`dir`/`cool_eye` 随生成结果写进 `Entity.ai`（见模块头）。
 pub struct WorldMonsterSink<'a> {
-    pub world: &'a mut mir2_world::World,
+    pub world: &'a mut mir2_world_bevy::World,
     pub registry: &'a MapRegistry,
     pub table: &'a MonsterTable,
     /// **M3④-实现 C 第 ③ 片**：怪物的展示层字段（`Feature/Light/ShowName/…`）由
@@ -687,8 +687,8 @@ impl WorldMonsterSink<'_> {
 
 /// 与 oracle `CanWalk(x,y,false)` 同构：`cellSuccess && Valid && 无阻挡活体`。
 fn cell_walkable(
-    world: &mir2_world::World,
-    map: &mir2_world::map::MapGrid,
+    world: &mir2_world_bevy::World,
+    map: &mir2_world_bevy::map::MapGrid,
     x: i32,
     y: i32,
     ignore_actors: bool,
@@ -812,7 +812,7 @@ impl MonsterSink for WorldMonsterSink<'_> {
                 e.ai.walk_wait = i64::from(m.walk_wait); // MySqlDB.cs:215 → ApplyMonsterAbility :908
             }
         }
-        mir2_world::mongen::apply_monster_class_constants_at(
+        mir2_world_bevy::mongen::apply_monster_class_constants_at(
             &mut self.world.entities,
             id,
             req.race,
@@ -857,10 +857,10 @@ pub struct WorldSpecialSpawner<'a> {
     pub displays: &'a mut downlink::DisplayTable,
 }
 
-impl mir2_world::SpecialSpawner for WorldSpecialSpawner<'_> {
+impl mir2_world_bevy::SpecialSpawner for WorldSpecialSpawner<'_> {
     fn regen_monster_by_name(
         &mut self,
-        world: &mut mir2_world::World,
+        world: &mut mir2_world_bevy::World,
         rng: &mut RandomNumber,
         map_id: usize,
         name: &str,
@@ -1642,7 +1642,7 @@ mod tests {
     /// false）。
     #[test]
     fn production_host_enables_monster_ai() {
-        let mut world = mir2_world::World::new(4, 4);
+        let mut world = mir2_world_bevy::World::new(4, 4);
         assert!(
             !world.monster_ai_enabled(),
             "缺省必须关（既有 golden/合成场景逐字节不变）"
@@ -1686,7 +1686,7 @@ mod tests {
         );
         assert_eq!(registry.id_of("0"), Some(0), "注册表必须命中 map 0");
 
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         world.clock_ms = 12_345;
         let table = MonsterTable::default();
         let ctor = MonsterCtorDraws {
@@ -1758,7 +1758,7 @@ mod tests {
                 flag: mir2_envir::MapInfoFlag::default(),
             }],
         );
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         let table = MonsterTable::new(vec![MonsterInfo {
             name: "稻草人2".to_string(),
             race: 51,
@@ -1839,7 +1839,7 @@ mod tests {
                 flag: mir2_envir::MapInfoFlag::default(),
             }],
         );
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         world.clock_ms = 12_345;
         // 表里给同一个 race 两个不同怪名：类常量只认 race，两者必须相同。
         let table = MonsterTable::new(vec![
@@ -1864,7 +1864,7 @@ mod tests {
             },
         ]);
         let mut displays = downlink::DisplayTable::new();
-        let mut spawn = |world: &mut mir2_world::World, name: &str, race: i16| {
+        let mut spawn = |world: &mut mir2_world_bevy::World, name: &str, race: i16| {
             let req = MonsterSpawnRequest {
                 map_name: "0".to_string(),
                 mon_name: name.to_string(),
@@ -1923,10 +1923,10 @@ mod tests {
     /// 已在 cert_list 里的旧成员（如 GuardList 放置，oracle `RegenMonsterByName` 不置位）保持不动。
     #[test]
     fn bind_new_certificates_only_marks_appended_ids() {
-        use mir2_world::{MonGenEntry, MonGenState, MonGenThread};
-        let mut world = mir2_world::World::new(64, 64);
-        let old = world.add_entity(mir2_world::EntitySpawn::new(0, "旧", 5, 5));
-        let new_id = world.add_entity(mir2_world::EntitySpawn::new(0, "新", 6, 6));
+        use mir2_world_bevy::{MonGenEntry, MonGenState, MonGenThread};
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        let old = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "旧", 5, 5));
+        let new_id = world.add_entity(mir2_world_bevy::EntitySpawn::new(0, "新", 6, 6));
 
         let mut state = MonGenState::default();
         let mut entry = MonGenEntry::new("0", 5, 5, "鸡", 0, 1, 60_000, 0);
@@ -2013,7 +2013,7 @@ mod tests {
             attack_speed: 2000,
             ..MonsterInfo::default()
         }]);
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         let mut displays = downlink::DisplayTable::new();
         let id = WorldMonsterSink {
             world: &mut world,
@@ -2037,7 +2037,7 @@ mod tests {
     fn missing_monster_info_keeps_ctor_defaults() {
         let (registry, base) = lane_a_registry();
         let table = MonsterTable::default();
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         let mut displays = downlink::DisplayTable::new();
         let id = WorldMonsterSink {
             world: &mut world,
@@ -2066,7 +2066,7 @@ mod tests {
     fn walk_wait_gates_after_walk_step_plus_one() {
         let (registry, base) = lane_a_registry();
         let table = MonsterTable::default();
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]); // clock = 0
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]); // clock = 0
         let mut displays = downlink::DisplayTable::new();
         let id = WorldMonsterSink {
             world: &mut world,
@@ -2085,33 +2085,33 @@ mod tests {
             e.ai.think_tick = 1000;
             e.ai.target_creature = None;
         }
-        let snap = |w: &mir2_world::World| {
+        let snap = |w: &mir2_world_bevy::World| {
             let e = w.entities.get(id).expect("怪物在仓库");
             (e.ai.walk_count, e.ai.walk_wait_locked, e.ai.walk_wait_tick)
         };
         world.clock_ms = 1000;
-        mir2_world::monai::monster_run(&mut world, id);
+        mir2_world_bevy::monai::monster_run(&mut world, id);
         assert_eq!(
             snap(&world),
             (1, false, 0),
             "第 1 步：`1 > WalkStep(1)` 为假 ⇒ 不锁"
         );
         world.clock_ms = 1400;
-        mir2_world::monai::monster_run(&mut world, id);
+        mir2_world_bevy::monai::monster_run(&mut world, id);
         assert_eq!(
             snap(&world),
             (0, true, 1400),
             "第 2 步：`2 > 1` ⇒ count=0 + 锁 + WalkWaitTick=now"
         );
         world.clock_ms = 1800;
-        mir2_world::monai::monster_run(&mut world, id);
+        mir2_world_bevy::monai::monster_run(&mut world, id);
         assert_eq!(
             snap(&world),
             (0, true, 1400),
             "400 ≤ 600 ⇒ 仍锁，不进入走步段"
         );
         world.clock_ms = 2100;
-        mir2_world::monai::monster_run(&mut world, id);
+        mir2_world_bevy::monai::monster_run(&mut world, id);
         assert_eq!(
             snap(&world),
             (1, false, 1400),

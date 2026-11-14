@@ -19,9 +19,9 @@
 //! 2. **遍历顺序显式化**：`EcsStore` **一次都不迭代 `Query` 求顺序**——`iter` / `iter_mut` /
 //!    `order_index` 全部走 `SlotTable`（槽位顺序 = 插入顺序 + 空闲槽复用）。`Query`（或 `World::get`）
 //!    只用于「按显式句柄取组件」。这一点由内核单测 `src/ecs.rs::tests::
-//!    order_follows_slots_not_query_order` 与 `crates/world/tests/ecs_migration.rs::
+//!    order_follows_slots_not_query_order` 与 `crates/world-bevy/tests/ecs_migration.rs::
 //!    entity_order_follows_slots_not_query_order` 双重钉住（把顺序改回迭代 `Query` 立刻红）。
-//! 3. **守卫升级**：`crates/world/tests/no_parallel.rs` 的白名单放宽为
+//! 3. **守卫升级**：`crates/world-bevy/tests/no_parallel.rs` 的白名单放宽为
 //!    「内部 crate + `bevy_ecs`/`bevy_app`」，仍禁 rayon/crossbeam/`bevy_tasks` 并行/`thread::spawn`；
 //! 4. **原判据不降级**：内核对外只暴露与既有 `EntityStore` 同形的语义（槽位顺序、空闲槽复用、
 //!    代际号），`crates/world` 的三个 golden 对拍逐行不变。

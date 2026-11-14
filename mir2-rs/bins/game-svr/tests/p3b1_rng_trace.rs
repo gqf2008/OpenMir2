@@ -1,10 +1,10 @@
 //! **P3-B1 取数站点自证**（魔号 1/5/11/13/44/45）。
 //!
 //! 本片新增的效果体取数（抗魔骰 / MPow / GetPower / 推挤）全部落在
-//! `crates/world/src/magic_effect.rs`（`consumer_groups.tsv` 的 `magic_effect` 组）。
-//! `GetAttackPower` 的抽数仍落 `crates/world/src/combat.rs`（两侧按攻击组登记）。
+//! `crates/world-bevy/src/magic_effect.rs`（`consumer_groups.tsv` 的 `magic_effect` 组）。
+//! `GetAttackPower` 的抽数仍落 `crates/world-bevy/src/combat.rs`（两侧按攻击组登记）。
 //!
-//! 判据：trace 中**不得**出现 `crates/world/src/magic.rs:`（RUST_ATTACK_RE 会把整文件
+//! 判据：trace 中**不得**出现 `crates/world-bevy/src/magic.rs:`（RUST_ATTACK_RE 会把整文件
 //! 吞成 attack 组）；`magic_effect.rs` 必须真的出现（否则说明效果体没接上）。
 //!
 //! ```text
@@ -15,7 +15,7 @@
 use mir2_data::models::MagicInfo;
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::entity::{ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
+use mir2_world_bevy::entity::{ACTOR_RACE_MONSTER, ACTOR_RACE_PLAY};
 
 const SEED: i32 = 20261017;
 
@@ -29,12 +29,12 @@ fn p3b1_draws_land_in_magic_effect_not_magic_rs() {
     let _ = std::fs::remove_file(&path);
     rng_trace::enable(&path, SEED).expect("打开 rng trace");
 
-    let mut w = mir2_world::World::new(64, 64);
-    let mut c = mir2_world::EntitySpawn::new(0, "caster".to_string(), 10, 10);
+    let mut w = mir2_world_bevy::World::new(64, 64);
+    let mut c = mir2_world_bevy::EntitySpawn::new(0, "caster".to_string(), 10, 10);
     c.race = ACTOR_RACE_PLAY;
     c.level = 5;
     let caster = w.add_entity(c);
-    let mut t = mir2_world::EntitySpawn::new(0, "mob".to_string(), 11, 10);
+    let mut t = mir2_world_bevy::EntitySpawn::new(0, "mob".to_string(), 11, 10);
     t.race = ACTOR_RACE_MONSTER;
     t.level = 1;
     t.life_attrib = 1; // LA_UNDEAD
@@ -71,11 +71,11 @@ fn p3b1_draws_land_in_magic_effect_not_magic_rs() {
     println!("P3B1_TRACE_PATH {path:?}");
     let norm = txt.replace('\\', "/");
     assert!(
-        norm.contains("crates/world/src/magic_effect.rs:"),
+        norm.contains("crates/world-bevy/src/magic_effect.rs:"),
         "B1 取数必须落到 magic_effect.rs:\n{txt}"
     );
     assert!(
-        !norm.contains("crates/world/src/magic.rs:"),
+        !norm.contains("crates/world-bevy/src/magic.rs:"),
         "不得把取数放回 magic.rs（会被整文件吞成 attack）:\n{txt}"
     );
     for line in norm.lines() {
@@ -83,8 +83,8 @@ fn p3b1_draws_land_in_magic_effect_not_magic_rs() {
             continue;
         }
         assert!(
-            line.contains("crates/world/src/magic_effect.rs:")
-                || line.contains("crates/world/src/combat.rs:"),
+            line.contains("crates/world-bevy/src/magic_effect.rs:")
+                || line.contains("crates/world-bevy/src/combat.rs:"),
             "B1 站点只允许 magic_effect.rs（效果取数）或 combat.rs（GetAttackPower 攻击组）: {line}"
         );
     }

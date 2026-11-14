@@ -26,7 +26,7 @@
 
 use mir2_data::guild::{GuildFileSections, GuildRecord, GuildStore, GuildStoreError, SaveStatus};
 use mir2_protocol::messages;
-use mir2_world::{GuildConfig, GuildManager, GuildRunEvent, GuildSaveReason, GuildState};
+use mir2_world_bevy::{GuildConfig, GuildManager, GuildRunEvent, GuildSaveReason, GuildState};
 
 use crate::guild_cmd::GuildSessions;
 use crate::guild_frames;

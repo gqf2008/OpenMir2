@@ -38,7 +38,7 @@ use std::path::PathBuf;
 
 use mir2_envir::MapLoader;
 use mir2_shared::rng::RandomNumber;
-use mir2_world::{
+use mir2_world_bevy::{
     CtorFoldEntry, CtorFoldSite, CTOR_FOLD_BARRIER_A_DRAWS, CTOR_FOLD_BARRIER_A_MOD,
     CTOR_FOLD_DRAW_KIND,
 };
@@ -238,7 +238,7 @@ fn ledger_prefix_matches_expected_table() {
         "2 M1 行 + 3 隐藏 NPC（:184 段）"
     );
 
-    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
     world.rng = RandomNumber::with_seed(SEED);
     // 与 world 同步的独立流（**含**屏障 A —— Rust 侧在段①之后抽它）。
     let mut exp = RandomNumber::with_seed(SEED);
@@ -344,7 +344,7 @@ fn two_line_robot_file_shifts_the_whole_ledger() {
         "52（(5 + 3 + 5) 站点 × 4）+ 屏障 A 1 抽"
     );
 
-    let mut world = mir2_world::World::with_maps(vec![(20, 20)]);
+    let mut world = mir2_world_bevy::World::with_maps(vec![(20, 20)]);
     world.rng = RandomNumber::with_seed(SEED);
     let seg1 = world.fold_ctor_draws_game_app_ctor(&plan);
     let got = rows(&seg1.entries);

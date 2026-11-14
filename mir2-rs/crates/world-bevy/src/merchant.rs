@@ -1,0 +1,4820 @@
+//! 商人（`Merchant`）世界实体 + 挂图 `Initialize` + `ProcessMerchants` tick —— M3⑤-实现 2 第①/②片。
+//!
+//! oracle 锚点（逐条复核于本片）：
+//!
+//! | 本模块 | oracle |
+//! | --- | --- |
+//! | [`MerchantState`] 字段 | `src/GameSrv/Npc/Merchant.cs:10-70`（`IMerchant`）+ `BaseObject` 的 `RunTick/RunTime`（`BaseObject.cs:439-440`） |
+//! | [`World::spawn_merchant`] 的 `Initialize`/`AddtoMapSuccess` | `src/M2Server/Actor/BaseObject.Base.cs:14-21` |
+//! | 两个**彼此独立**的次序：[`World::insert_merchant`] 的实体槽位序 = 文件正序（`MerchantList`/tick 序）；[`World::attach_merchant_to_map`] 的 `obj_list` 追加序 = 倒序 | `WorldServer.Merchant.cs:8`（倒序 `Initialize` **不**重排 `MerchantList`）+ `:68`（`ProcessMerchants` 正序）|
+//! | 挂图失败移除（`!IsHide` 例外） | `src/GameSvr/Word/WorldServer.Merchant.cs:8-25` |
+//! | `FindMap(MapName) == null ⇒ 丢弃` | `WorldServer.Merchant.cs:24-31`（**门在宿主侧按 `MapRegistry::id_of` 施加**，见 [`crate::merchant`] 模块尾与 `bins/game-svr/src/merchant.rs`） |
+//! | [`World::merchant_tick`] | `WorldServer.Merchant.cs:65-110` + `MerchantProcessor.cs:8`（200ms 定时） |
+//! | [`merchant_run`] | `Merchant.cs:112-170`（RNG/显隐/`MapRandomMove`）+ `BaseObject.cs:1214-1237` |
+//! | `refill_goods` 计时态 | `Merchant.cs:209-276`（`GoodsList` 库存已建模，见下；`SaveGoodRecord` 在 oracle 是空壳） |
+//!
+//! ## 为什么门在宿主侧
+//! `SystemShare.MapMgr.FindMap(MapName)` 的部署态等价物是 `MapRegistry::id_of`（同 `MapInfo` +
+//! `Map/*.map` 合并口径，见 `crates/envir`）。`crates/world` 只持有**下标式**地图表、不含逻辑名
+//! ⇒ 名字→`map_id` 的解析归宿主；本模块只负责「拿到 `map_id` 后的挂图/落格」。
+//!
+//! ## 未建模（登记）
+//! - `GoodsList`（在售库存，`Merchant.cs:34`）**已建模**（⑤-4 第①片）：`RefillGoods` 按实际
+//!   库存量补/删、`AddItemToGoodsList` 由玩家卖出回收。剩下的 `ItemPriceList` 覆盖价与
+//!   `SaveGoodRecord/SaveGoodPriceRecord` 在 oracle 本身就是空壳（`LocalDB.cs:916/1111/954/1162`）
+//!   ⇒ 无行为可搬，不另登记。
+//! - `ClearExpreUpgradeListData`（`Merchant.cs:1076`）：oracle 用墙钟 `DateTime.Now` + 升级表持久化
+//!   （⑤-5）⇒ 本片只推进 `clear_expre_upgrade_tick` 计时态，无可观测效果。
+//! - `ProcessRefillIndex`（`ScriptParsers.cs:838`）：⑤-1 未随记录暴露 ⇒ 置 0（补货延时门）。
+//! - `NormNpc.Initialize` 的脚本/说词加载（`NormNpc.cs:1676`）—— ⑤-4/⑤-6 接缝；商人 `RM_TURN`/
+//!   `RM_HIT`/`RM_DISAPPEAR`/`RM_SPACEMOVE_FIRE` 的**帧面**（`SM_*`）也归接线层（⑤-4）。
+//! - `MerchantState.is_hide`：`Merchant.txt` 记录恒 `false`（`LocalDB.LoadMerchant` 的 `new Merchant`
+//!   不置位）；**隐藏 `QFunction` 由宿主注入 `true`**（`LocalDB.cs:220`；卡
+//!   `openmir2-qfunction-hidden-merchant-world-wiring`）。oracle `MerchantInitialize` 在
+//!   `LoadMerchantScript` **之前**读 `IsHide`（`WorldServer.Merchant.cs:16`）⇒ 挂图失败时它是
+//!   「留在 `MerchantList` 而非 `RemoveAt`」的唯一判据（[`World::attach_merchant_to_map`]）。
+//! - `MerchantState.castle_under_war` 缺省 `false`（沙巴克攻城层属 ⑧；`Merchant.cs:143` 同「不在战中」支）。
+
+use mir2_data::models::StdItem;
+use mir2_shared::rng::RandomNumber;
+
+use crate::castle_tax::MerchantCastleBinding;
+use crate::entity::{BaseAnimalCtorDraws, BASE_OBJECT_DIR, NORM_NPC_ANTI_POISON, NORM_NPC_LIGHT};
+use crate::map::{CellType, MoveRequest};
+use crate::world::World;
+
+/// `ActorRace.Merchant`（`src/OpenMir2/Enums/Race.cs`：`Merchant = 50`，与 `Animal` 同值）。
+///
+/// ⚠ 这是**外观轴** `RaceImg` 的取值（`Merchant.cs:84` 的 `RaceImg = ActorRace.Merchant`），
+/// **不是**商人的**行为轴** `Race` —— oracle 商人的 `Race` 继承 `NormNpc` ctor 的
+/// `ActorRace.NPC`（10，`NormNpc.cs:42`）。两者在 `Merchant`/`Animal` 上同为 50，极易混用：
+/// 把本值写进 [`Entity::race`] 会让 `PlayObject.IsAttackTarget` 的 `HAM_ALL` 门
+/// （`target.Race < NPC(10) || > PeaceNpc(15)`）把商人当动物，玩家可选中/攻击商人（T-31 修正）。
+///
+/// `crates/world` 的怪物 AI（[`crate::monai::monster_ai_tick`]）按 [`Entity::merchant`] 是否存在
+/// 显式排除商人实体，**不**依赖 race 数值；商人 tick 同理走 [`World::merchant_tick`]。
+pub const ACTOR_RACE_MERCHANT: u8 = 50;
+
+/// `Merchant.Run` 的 `RunTime`（`BaseObject.cs:440`：`RunTime = 250`）。
+pub const MERCHANT_RUN_TIME: i64 = 250;
+
+/// `MerchantProcessor` 的 200ms 定时器（`MerchantProcessor.cs:8`
+/// `TimerScheduledService(TimeSpan.FromMilliseconds(200))`）。
+///
+/// **本片口径（owner `eb3bf42f` 裁决）**：用**世界 sim 时钟**的整数毫秒替代墙钟定时器
+/// ——每 200ms 跑一趟 `ProcessMerchants`（`World::tick` 步长恰为 200ms ⇒ 每 tick 一趟），
+/// 同一 200ms 窗口内的第二次调用是 no-op（节奏门）。
+pub const MERCHANT_PASS_INTERVAL_MS: i64 = 200;
+
+/// `ProcessMerchants` 的 Ghost 过期门：`(GetTickCount() - GhostTick) > 60 * 1000`
+/// （`WorldServer.Merchant.cs:84-91`）。用 sim 时钟整数毫秒（不是墙钟）。
+pub const MERCHANT_GHOST_EXPIRE_MS: i64 = 60 * 1000;
+
+/// `BaseObject` ctor 的 `RunTick = GetTickCount() + Random(1500)`（`BaseObject.cs:439`）。
+pub const MERCHANT_RUN_DELAY_MAX: i32 = 1500;
+
+/// `MerchantState::run_tick` 的「未抽」哨兵：构造抽需按 oracle 次序在**独立一步**落定
+/// （`LocalDB.LoadMerchant` 正序构造抽 → `MerchantInitialize` 倒序挂图），
+/// 故 [`MerchantState::new`] 置该值，[`World::insert_merchant`]（及一步到位的
+/// [`World::spawn_merchant`]）见它才抽。
+pub const MERCHANT_RUN_TICK_UNSET: i64 = i64::MIN;
+
+/// `Merchant.Run` 的补货间隔基数：`5 * 60 * 1000` ms（`Merchant.cs:119`）。
+/// `Merchant.Run` 的补货节拍：oracle `fb2824b6b` 起为 **30 秒**
+/// （`src/GameSrv/Npc/Merchant.cs:118-121`：`GetTickCount - RefillGoodsTick > 30000`），
+/// 且**没有** `ProcessRefillIndex * 500` 错峰。
+pub const MERCHANT_REFILL_GOODS_INTERVAL_MS: i64 = 30 * 1000;
+
+/// `Merchant.Run` 的武器升级清理间隔：`10 * 60 * 1000` ms（`Merchant.cs:126`）。
+pub const MERCHANT_CLEAR_EXPRE_UPGRADE_INTERVAL_MS: i64 = 10 * 60 * 1000;
+
+/// `Merchant.Run` 的转向门：`Random(50) == 0`（`Merchant.cs:132/138`）。
+pub const MERCHANT_TURN_RANDOM_MOD: i32 = 50;
+
+/// `Merchant.Run` 的转向方向：`RandomByte(8)`（`Merchant.cs:134`）。
+pub const MERCHANT_TURN_DIR_MAX: u8 = 8;
+
+/// `Merchant` 脚本头 `(...)` 命令位（`ScriptFlagConst`；与 `crates/script::MerchantFlags` 同形）。
+///
+/// `crates/world` **不依赖** `crates/script`（模拟层不引脚本引擎）⇒ 本片定义同形结构，
+/// 由宿主 `bins/game-svr` 在装载时逐字段搬入。
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MerchantFlags {
+    pub is_buy: bool,
+    pub is_sell: bool,
+    pub is_make_drug: bool,
+    pub is_prices: bool,
+    pub is_storage: bool,
+    pub is_getback: bool,
+    pub is_upgradenow: bool,
+    pub is_get_backupgnow: bool,
+    pub is_repair: bool,
+    pub is_sup_repair: bool,
+    pub is_send_msg: bool,
+    pub is_use_item_name: bool,
+    pub is_offline_msg: bool,
+    pub is_yb_deal: bool,
+}
+
+/// `IMerchant.GoodsList` 里的一件：oracle `UserItem`（`Item`/`MakeIndex`/`Dura`/`DuraMax` + `Desc`）。
+///
+/// 与 `crates/world` 已有的掉落/定价口径同型（`mir2_formula::drop::UserItem`）⇒ ⑤-4 的买/卖
+/// 直接复用公式层（`mir2_formula::shop`）的取价函数，宿主只做 `BagItem` ↔ `MerchantItem` 互转。
+pub use mir2_formula::drop::UserItem as MerchantItem;
+
+/// `[goods]` 区补货条目（`Goods`，`crates/script::Goods` 同形）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MerchantGoods {
+    pub item_name: String,
+    pub count: i32,
+    pub refill_time: i32,
+    /// `Goods.RefillTick`（`src/Modules/SystemModule/Data/Goods.cs:8`；脚本解析置 0，
+    /// `ScriptParsers.cs:965`）。`Merchant.Run` 的补货门按它逐条计时。
+    pub refill_tick: i64,
+}
+
+/// 商人的世界侧状态（`IMerchant` 的字段子集 + `BaseObject` 计时器）。
+#[derive(Clone, Debug)]
+pub struct MerchantState {
+    /// `IMerchant.ScriptName`（`Merchant.cs:16`）。
+    pub script_name: String,
+    /// `IMerchant.MapName`（`BaseObject.MapName`）。
+    pub map_name: String,
+    /// `IMerchant.NpcFlag`（`NormNpc`）。
+    pub npc_flag: i16,
+    /// `IMerchant.Appr`（`Merchant.cs` ctor 置 0，装载后覆盖）。
+    pub appr: u16,
+    /// 脚本头命令位（`IsBuy`…`IsYbDeal`，`Merchant.cs:47-67`）。
+    pub flags: MerchantFlags,
+    /// `IMerchant.PriceRate`（ctor 默认 100，`Merchant.cs:86`）。
+    pub price_rate: i32,
+    /// `IMerchant.ItemTypeList`（脚本 `+StdMode`）。
+    pub item_type_list: Vec<i32>,
+    /// `Merchant.ItemPriceList`（`Merchant.cs:46`）：`AddItemPrice` 追加的 `(wIndex, nPrice)`。
+    /// 由补货路径的 `CheckItemPrice(nIndex)` 填充（`Merchant.cs:230-235`，**只在这一支**），
+    /// 买家取价走 `GetItemPrice` 的「`ItemPriceList` 命中优先」。
+    pub item_price_list: Vec<(u16, i32)>,
+    /// `IMerchant.RefillGoodsList`（脚本 `[goods]`）。
+    pub refill_goods: Vec<MerchantGoods>,
+    /// `IMerchant.GoodsList`（`IList<IList<UserItem>>`，`Merchant.cs:34`）——在售库存。
+    ///
+    /// 由 `Merchant.RefillGoods`（脚本 `[goods]` 补货）与 `Merchant.AddItemToGoodsList`
+    /// （玩家卖出回收，`Merchant.cs:1417`）写入；`Merchant.ClientBuyItem` 从这里取件。
+    /// **组内顺序敏感**：写入用 `Insert(0)`（新件在前），组序 = 首次出现序。
+    pub goods_list: Vec<Vec<MerchantItem>>,
+    /// `IMerchant.CastleMerchant`（`LocalDB.cs:461-464`）。
+    pub castle_merchant: bool,
+    /// `NormNpc.Castle`（`Merchant.Castle`）——`Initialize()` 时刻
+    /// `CastleMgr.InCastleWarArea(this)`（`NormNpc.cs:1674-1678`）命中的城堡下标。
+    ///
+    /// **spawn 时刻固定**：oracle 的 `Merchant.Run → MapRandomMove` 之后不重算
+    /// （`design-castle-tax-and-item-name-20261022.md` §1.2.5），故本字段只在
+    /// [`World::insert_merchant`] 写一次（或由 [`World::set_merchant_castle_index`] 显式重绑）；
+    /// `Some(i)` ⇔ oracle `Castle != null`，与 `castle_merchant` **互相独立**
+    /// （位置落在攻城区/皇宫/密道/`EnvirList` 图内即命中）。
+    pub castle_index: Option<usize>,
+    /// `IMerchant.BoCanMove`（`LocalDB.cs:465-468`）。
+    pub can_move: bool,
+    /// `IMerchant.MoveTime`（秒，`LocalDB.cs:451`）。
+    pub move_time: i32,
+    /// `ProcessRefillIndex`（脚本 `[goods]` 的补货延时序号，`ScriptParsers.cs:838`）。
+    pub process_refill_index: i32,
+    /// `IsHide`（`NormNpc`；`MerchantInitialize` 的挂图失败移除分支按它例外）。
+    pub is_hide: bool,
+    /// `RefillGoodsTick`（`Merchant.cs:26`；ctor = `GetTickCount()`）。
+    pub refill_goods_tick: i64,
+    /// `ClearExpreUpgradeTick`（`Merchant.cs:30`；ctor = `GetTickCount()`）。
+    pub clear_expre_upgrade_tick: i64,
+    /// `MoveTick`（`Merchant.cs:42`；ctor = `GetTickCount()`）。
+    pub move_tick: i64,
+    /// `RunTick`（`BaseObject.cs:439`；ctor = `GetTickCount() + Random(1500)`）。
+    ///
+    /// 缺省 = [`MERCHANT_RUN_TICK_UNSET`]（未抽）；构造抽由 [`World::merchant_ctor_run_delay`]
+    /// （宿主**正序**预抽，`LocalDB.LoadMerchant` 口径）或 [`World::spawn_merchant`]（无预抽时）
+    /// 从共享 `world.rng` 落定（站点归 `merchant` 组）。
+    pub run_tick: i64,
+    /// `GhostTick`（`BaseObject`；`ProcessMerchants` 的 60s 过期门）。
+    pub ghost_tick: i64,
+    /// `Castle.UnderWar`（`Merchant.cs:143` 的 `CastleMerchant && Castle != null && Castle.UnderWar`）。
+    ///
+    /// 沙巴克攻城层属 ⑧ 家族，本片不建模城堡状态 ⇒ 缺省 `false`（与 oracle 「不在战中」同支）；
+    /// 接线层在 ⑧ 落地后按城堡状态覆写。
+    pub castle_under_war: bool,
+    /// `IMerchant.UpgradeWeaponList`（`Merchant.cs:54/92`）：在途武器升级记录。
+    ///
+    /// **只在内存**（oracle `SaveUpgradeWeaponRecord` 恒 `return -1`，`MySqlDB.cs:345-348`）
+    /// ⇒ 重启即丢（照抄）。缺省空表，**不改 [`MerchantState::new`] 签名**（简报 §3.1）。
+    pub upgrade_weapon_list: Vec<WeaponUpgradeInfo>,
+    /// `Config.ClearExpireUpgradeWeaponDays`（`Merchant.cs:1085`）的商人侧快照。
+    ///
+    /// `Merchant.Run` 的 10min 清理门用；缺省 = oracle 缺省 8（`GameSvrConf.cs:1423`），
+    /// 宿主装载后按部署值覆写（`[Setup] ClearExpireUpgradeWeaponDays`）。
+    pub clear_expire_upgrade_days: u8,
+}
+
+impl MerchantState {
+    /// 按 oracle ctor 的**非随机**初值构造（`Merchant.cs:70-106`）；随机项（`RunTick` 的
+    /// `Random(1500)`）留作 [`MERCHANT_RUN_TICK_UNSET`]，由调用方按 oracle 次序落定
+    /// （[`World::merchant_ctor_run_delay`] 正序，或 [`World::spawn_merchant`] 兜底）。
+    #[allow(clippy::too_many_arguments)]
+    #[must_use]
+    pub fn new(
+        script_name: String,
+        map_name: String,
+        npc_flag: i16,
+        appr: u16,
+        price_rate: i32,
+        castle_merchant: bool,
+        can_move: bool,
+        move_time: i32,
+        flags: MerchantFlags,
+        item_type_list: Vec<i32>,
+        refill_goods: Vec<MerchantGoods>,
+        process_refill_index: i32,
+    ) -> Self {
+        MerchantState {
+            script_name,
+            map_name,
+            npc_flag,
+            appr,
+            flags,
+            price_rate,
+            item_type_list,
+            item_price_list: Vec::new(),
+            refill_goods,
+            goods_list: Vec::new(),
+            castle_merchant,
+            castle_index: None,
+            can_move,
+            move_time,
+            process_refill_index,
+            is_hide: false,
+            refill_goods_tick: 0,
+            clear_expre_upgrade_tick: 0,
+            move_tick: 0,
+            run_tick: MERCHANT_RUN_TICK_UNSET,
+            ghost_tick: 0,
+            castle_under_war: false,
+            upgrade_weapon_list: Vec::new(),
+            clear_expire_upgrade_days: 8,
+        }
+    }
+}
+
+/// 一条待挂图的商人（宿主从 `MerchantRecord` + `map_id` 装配后的入参）。
+#[derive(Clone, Debug)]
+pub struct MerchantSpawn {
+    /// `ChrName`。
+    pub name: String,
+    /// `CurrX`。
+    pub x: i32,
+    /// `CurrY`。
+    pub y: i32,
+    /// `FindMap(MapName)` 命中的地图下标（宿主已过门）。
+    pub map_id: usize,
+    pub state: MerchantState,
+}
+
+impl World {
+    /// **两段挂图（①）**：建实体并入 `EntityStore`（**不挂图**）。
+    ///
+    /// oracle 里 `MerchantList` 由 `LocalDB.LoadMerchant` **正序** `AddMerchant` 追加，且
+    /// `MerchantInitialize` 的 `for (i = Count-1; i >= 0; i--)` **并不重排 `MerchantList`**
+    /// （`WorldServer.Merchant.cs:8`，只决定 `AddToMap` 对 map cell `obj_list` 的追加序）；
+    /// `ProcessMerchants`（同文件 `:68`）又从 `MerchantPosition` 起**正序**遍历 `MerchantList`
+    /// 调 `Run()`。⇒ 宿主必须**正序**逐条调用本函数（实体槽位序 = 插入序 = `MerchantList` 序），
+    /// 再**倒序** [`World::attach_merchant_to_map`] 落格；两个次序彼此独立，不可合并成
+    /// 同一个 `rev()`（见 reviewer-5 `0f220cac` F-1）。
+    ///
+    /// 返回 `Some(id)` = 已入世界（槽位已分配）；`None` = `map_id` 越界（oracle 不可达，
+    /// 宿主 `FindMap` 门已保证）。
+    ///
+    /// **构造抽**：按 oracle `new Merchant()` 的整条 ctor 公共链（`BaseObject`→`AnimalObject`）
+    /// 从**共享 `world.rng`** 抽 **4 个数**（`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`，
+    /// 唯一抽数点 [`BaseAnimalCtorDraws::draw`]；站点归 `merchant` 组）——**仅当**
+    /// [`MerchantState::run_tick`] 仍为 [`MERCHANT_RUN_TICK_UNSET`]（宿主已用
+    /// [`World::merchant_ctor_run_delay`] 按 `LocalDB.LoadMerchant` 正序预抽时不再重复抽）。
+    /// `refill_goods_tick`/`clear_expre_upgrade_tick`/`move_tick` 置为本刻 `clock_ms`（oracle ctor
+    /// 的 `GetTickCount()` 同口径；`Goods.RefillTick` 由脚本解析置 0，见 [`MerchantGoods`]）。
+    pub fn insert_merchant(&mut self, spawn: MerchantSpawn) -> Option<i32> {
+        if spawn.map_id >= self.maps.len() {
+            return None;
+        }
+        let now = self.clock_ms;
+        let map_id = spawn.map_id;
+        let (x, y) = (spawn.x, spawn.y);
+        let mut state = spawn.state;
+        // `NormNpc.Initialize()`：`Castle = SystemShare.CastleMgr.InCastleWarArea(this)`
+        // （`NormNpc.cs:1674-1678`）。在出生点解析**一次**并固定（`Merchant.Run` 的移动不重算）；
+        // 与 `CastleMerchant` 无关——只要位置落在攻城区/皇宫/密道/`EnvirList` 图内就命中。
+        state.castle_index = self.castle_war_area_at(Some(map_id), x, y);
+        if state.run_tick == MERCHANT_RUN_TICK_UNSET {
+            // 无预抽（[`World::spawn_merchant`] 一步到位）⇒ 在此抽整条公共链 4 抽，同
+            // [`World::merchant_ctor_run_delay`]；只有 `RunTick` 分量被保留（见其注释）。
+            let ctor = BaseAnimalCtorDraws::draw(&mut self.rng);
+            state.run_tick = now + i64::from(ctor.run_tick_delta);
+        }
+        state.refill_goods_tick = now;
+        state.clear_expre_upgrade_tick = now;
+        state.move_tick = now;
+        state.ghost_tick = 0;
+
+        let mut e = crate::EntitySpawn::new(0, spawn.name, x, y);
+        // `crate::EntitySpawn::new(0, …)` 的占位 id 必须换成**唯一** id（照 `World::add_entity` 的口径）：
+        // 否则所有商人 `id == 0`、`EntityStore::insert` 的 `index.insert(0, …)` 互相覆盖，
+        // `merchant_ids_sorted` 返回一串 0、`merchant_tick` 会反复 Run 同一个实体。
+        e.id = self.entities.alloc_id();
+        // 行为轴：oracle 商人继承 `NormNpc` ctor 的 `Race = ActorRace.NPC`（10，
+        // `NormNpc.cs:42`）；`Merchant` ctor **不覆写** `Race`，只置外观轴 `RaceImg`
+        // （`Merchant.cs:84`）。所有按 `Race` 的判定（攻击目标选择/受击/掉落/目标清理）
+        // 都读 10 ⇒ 玩家 `HAM_ALL` 的 `IsAttackTarget` 不会把商人当动物选中。
+        e.race = crate::entity::ACTOR_RACE_NPC;
+        // 外观轴：`RaceImg = ActorRace.Merchant`（50，`Merchant.cs:84`），供客户端可见帧
+        // `GetFeature() = MakeMonsterFeature(RaceImg, MonsterWeapon, Appr)`（`BaseObject.Base.cs:911`）。
+        e.race_img = ACTOR_RACE_MERCHANT;
+        // `Merchant : NormNpc`：`NormNpc` ctor 的常量同样生效（`Merchant.cs:82` 只做增量赋值）
+        // —— `Light = 2`（`NormNpc.cs:43`）、`AntiPoison = 99`（`NormNpc.cs:44`）、
+        // `StickMode = true`（`NormNpc.cs:45`）、`Dir = 4`（`BaseObject.cs:378`，两者均不覆写）。
+        e.light = NORM_NPC_LIGHT;
+        e.anti_poison = NORM_NPC_ANTI_POISON;
+        e.stick_mode = true;
+        e.ai.dir = BASE_OBJECT_DIR;
+        // `CellType = CellType.Merchant`（`Merchant.cs:109`）的落格语义同固定 NPC：挂图段
+        // [`World::attach_merchant_to_map`] 已按身份写 `CellType::Merchant`，
+        // [`crate::world::entity_cell_type`] 亦按 `merchant.is_some()` 派生 ⇒ 不另存字段。
+        // `Merchant : NormNpc`（`Merchant.cs:16`）⇒ `NormNpc()` ctor `SuperMan = true`
+        // （`NormNpc.cs:41`）：商人打不死（`BaseObject.Die():318-322`）且每次 `Run` 回满（`:32-36`）。
+        // **不得按 race 置位**：`ActorRace.NPC(10)` 也是普通固定 NPC 的 race，`RaceImg` 50 又与
+        // 鸡/鹿/狼等动物怪同值（`Race.cs:26/34/40`）⇒ 只能按创建点（类）置位。
+        e.super_man = true;
+        // `EntitySpawn::new` 是玩家 ctor 等价物（SearchTime=1000）⇒ 非玩家还原占位缺省值。
+        e.ai.search_time = crate::entity::BASE_ANIMAL_SEARCH_TIME;
+        e.map_id = map_id;
+        // `BaseObject.cs:444` ctor `VerifyTick = GetTickCount()`。
+        e.map_binding.verify_tick = now;
+        e.merchant = Some(state);
+        Some(self.entities.insert(e))
+    }
+
+    /// **两段挂图（②）**：执行 oracle `Initialize()` 的挂图段：
+    /// `AddtoMapSuccess = !(CanWalk(CurrX,CurrY,true) && AddToMap())`
+    /// （`BaseObject.Base.cs:14-21`）；为真且 `!IsHide` ⇒ 从世界移除
+    /// （`WorldServer.Merchant.cs:16-22`）。
+    ///
+    /// 宿主按 `MerchantInitialize` 的**倒序**逐条调用（owner `b311a876b1` 裁决）⇒ map cell
+    /// `obj_list` 的追加序 = 倒序。该序与 [`World::insert_merchant`] 决定的实体槽位序 /
+    /// `MerchantList` 序**互相独立**（reviewer-5 `0f220cac` F-1）。
+    ///
+    /// 返回 `true` = 商人留在世界；`false` = 挂图失败被移除（oracle `RemoveAt`）。
+    pub fn attach_merchant_to_map(&mut self, id: i32) -> bool {
+        let Some(entity) = self.entities.get(id) else {
+            return false;
+        };
+        let (map_id, x, y, is_hide) = (
+            entity.map_id,
+            entity.x,
+            entity.y,
+            entity.merchant.as_ref().is_some_and(|m| m.is_hide),
+        );
+        if map_id >= self.maps.len() {
+            return false;
+        }
+        let now = self.clock_ms;
+        // `Envir.CanWalk(CurrX, CurrY, true)`：`true` = 忽略活体阻挡，只看格子是否可走。
+        // `MapGrid::cell_valid` 对越界返回 `true`（复刻 C# `CellValid` 方向），故这里必须
+        // 先 `cell_match` 判界（越界 ⇒ CanWalk 失败 ⇒ `AddtoMapSuccess`）。
+        let (can_walk, added) = {
+            let map = &mut self.maps[map_id];
+            let can_walk = map.cell_match(x, y) && map.cell_valid(x, y);
+            let added = map.add_map_object(x, y, CellType::Merchant, id, now);
+            (can_walk, added)
+        };
+        let add_to_map_success = !(can_walk && added);
+        if add_to_map_success && !is_hide {
+            // oracle `LogService.Warn("Merchant Initalize fail...") + RemoveAt(i)`
+            self.entities.remove(id);
+            return false;
+        }
+        if let Some(b) = self.entities.map_binding_mut(id) {
+            b.add_to_mapped = !add_to_map_success;
+        }
+        true
+    }
+
+    /// 一步到位：建实体（[`World::insert_merchant`]）+ 挂图（[`World::attach_merchant_to_map`]）。
+    ///
+    /// 生产装载按 oracle 两段次序**分两步**调用（正序 insert、倒序 attach，见宿主
+    /// `spawn_merchants`）；本函数保留给单测 / 无预抽的直接挂图场景。
+    ///
+    /// 返回 `Some(id)` = 商人留在世界；`None` = `map_id` 越界或挂图失败被移除。
+    pub fn spawn_merchant(&mut self, spawn: MerchantSpawn) -> Option<i32> {
+        let id = self.insert_merchant(spawn)?;
+        if self.attach_merchant_to_map(id) {
+            Some(id)
+        } else {
+            None
+        }
+    }
+
+    /// 商人的 `castle_index`（`NormNpc.Castle` 的下标）；
+    /// `None` = 该 id 不是商人**或**商人无城堡（`Castle == null`）。
+    ///
+    /// 需要区分这两种 `None` 时用 [`World::merchant_castle_binding`]。
+    #[must_use]
+    pub fn merchant_castle_index(&self, id: i32) -> Option<usize> {
+        self.entities.merchant(id)?.castle_index
+    }
+
+    /// [`MerchantCastleBinding`] 视图（`castle_merchant` + `castle_index`；`None` = 非商人）。
+    #[must_use]
+    pub fn merchant_castle_binding(&self, id: i32) -> Option<MerchantCastleBinding> {
+        let st = self.entities.merchant(id)?;
+        Some(MerchantCastleBinding::new(
+            st.castle_merchant,
+            st.castle_index,
+        ))
+    }
+
+    /// 覆写 `castle_index`。oracle 只在 `Initialize()` 写一次；本 setter 供构造级夹具
+    /// （`CastleMgr` 晚于商人装载的场景）与 `GetCastle` 后的显式重绑使用。
+    ///
+    /// 返回 `false` = 该 id 不是商人（无 `merchant` 状态）。
+    pub fn set_merchant_castle_index(&mut self, id: i32, castle_index: Option<usize>) -> bool {
+        let Some(st) = self.entities.merchant_mut(id) else {
+            return false;
+        };
+        st.castle_index = castle_index;
+        true
+    }
+
+    /// 按**槽位顺序**列出所有商人实体 id（`MerchantList` 的确定性等价物；供 ⑤-4 取列表）。
+    ///
+    /// 槽位序 = [`World::insert_merchant`] 的**插入序**；宿主按 `LocalDB.LoadMerchant` 文件正序
+    /// 插入 ⇒ 本序列 = 文件序（即 `merchant_tick` 的 pass 内次序，见 [`World::merchant_tick`]）。
+    /// ⚠ 与 `MerchantInitialize` 倒序造成的 map cell `obj_list` 追加序**是两回事**（见
+    /// [`World::attach_merchant_to_map`]）；不要用槽位序去推断 `obj_list` 序，反之亦然
+    /// （reviewer-5 `0f220cac` F-1）。
+    ///
+    /// 返回的 id 由 [`World::insert_merchant`] 用 `EntityStore::alloc_id` 分配 ⇒ **唯一**
+    /// （`merchant_tick` 直接以它为键；`merchant_ids_sorted` 不再返回重复占位 id）。
+    #[must_use]
+    pub fn merchant_ids_sorted(&self) -> Vec<i32> {
+        self.entities
+            .iter_ref()
+            .filter(|e| e.merchant.is_some())
+            .map(|e| e.id)
+            .collect()
+    }
+
+    /// `Merchant.GetRefillList(int nIndex)`（`Merchant.cs:278`）：按 `goods[0].Index` 找同 `Index`
+    /// 的库存组，返回其在 `GoodsList` 里的下标（无 ⇒ `None`）。
+    #[must_use]
+    pub fn merchant_goods_group(&self, id: i32, index: u16) -> Option<usize> {
+        let st = self.entities.merchant(id)?;
+        st.goods_list
+            .iter()
+            .position(|g| g.first().is_some_and(|it| it.index == index))
+    }
+
+    /// `GoodsList` 的只读视图（`IList<IList<UserItem>>`）；供宿主出 `SM_SENDGOODSLIST` 与买/卖取件。
+    ///
+    /// 组序 = 首次出现序；组内序 = `Insert(0)` 后的新件在前（与 oracle 同，**顺序敏感**）。
+    #[must_use]
+    pub fn merchant_goods_groups(&self, id: i32) -> Option<&[Vec<MerchantItem>]> {
+        Some(&self.entities.merchant(id)?.goods_list)
+    }
+
+    /// `Merchant.ItemPriceList`（`Merchant.cs:46/184-204`）：补货时 `CheckItemPrice` 填入的
+    /// `(wIndex, nPrice)`（`nPrice` 已按 `HUtil32.Round(Price*1.1)` 取整）。
+    #[must_use]
+    pub fn merchant_item_price_list(&self, id: i32) -> &[(u16, i32)] {
+        self.entities
+            .merchant(id)
+            .map_or(&[], |st| st.item_price_list.as_slice())
+    }
+
+    /// [`World::merchant_goods_groups`] 的可变版（⑤-4 买/卖直接改在售库存）。
+    #[must_use]
+    pub fn merchant_goods_groups_mut(&mut self, id: i32) -> Option<&mut Vec<Vec<MerchantItem>>> {
+        Some(&mut self.entities.merchant_mut(id)?.goods_list)
+    }
+
+    /// **初始装货**：等价 oracle `Merchant.LoadNpcData` 末尾的 `RefillGoods()`（`Merchant.cs:1070`）。
+    ///
+    /// 宿主在挂图成功后对每个商人调用一次。不加这一下，`Run` 的计时支要等
+    /// `RefillGoodsTick + MERCHANT_REFILL_GOODS_INTERVAL_MS`（ctor 把 tick 置 now）才首次补货，
+    /// 进图后几秒内 `UserSelectBuyItem` 读到**空货架** ⇒ `SM_SENDGOODSLIST(645)` `param=0/body=0`
+    /// （W1 实测 C# `param=7/143B` vs Rust `param=0/0`；卡 `openmir2-castle-potion-buy-response`）。
+    ///
+    /// sim 时钟与 oracle 墙钟的差：oracle 的 `goods.RefillTick` 缺省 0 而 `GetTickCount()` 是开机毫秒
+    /// （很大）⇒ 首次必然 due；本侧 `clock_ms` 从 0 起 ⇒ 需要把「从未补过」的条目视作 due
+    /// （把 `refill_tick` 调到刚好过门），否则初始装货会被计时门挡掉。
+    pub fn merchant_refill_goods_now(&mut self, id: i32) -> bool {
+        let now = self.clock_ms;
+        if let Some(st) = self.entities.merchant_mut(id) {
+            for g in st.refill_goods.iter_mut() {
+                if g.refill_tick == 0 {
+                    g.refill_tick = now.saturating_sub(i64::from(g.refill_time) * 60 * 1000 + 1);
+                }
+            }
+        }
+        refill_goods(self, id)
+    }
+
+    /// `Merchant.AddItemToGoodsList`（`Merchant.cs:1417`）：`Dura <= 0` 不收；否则
+    /// `GetRefillList(Index)` 命中就 `Insert(0)`，未命中就新建组（组序 = 首次出现序）。
+    pub fn merchant_add_item_to_goods_list(&mut self, id: i32, item: MerchantItem) {
+        // oracle `if (userItem.Dura <= 0) return;`（`Merchant.cs:1419`）；`Dura` 是 `ushort` ⇒ `<= 0` ≡ `== 0`。
+        if item.dura == 0 {
+            return;
+        }
+        let Some(st) = self.entities.merchant_mut(id) else {
+            return;
+        };
+        match st
+            .goods_list
+            .iter_mut()
+            .find(|g| g.first().is_some_and(|it| it.index == item.index))
+        {
+            Some(group) => group.insert(0, item),
+            None => st.goods_list.push(vec![item]),
+        }
+    }
+
+    /// `Merchant.RefillGoodsItems`（`Merchant.cs:300-316`）：补货路径**无条件** `Insert(0)`。
+    ///
+    /// 与 [`World::merchant_add_item_to_goods_list`]（卖出回货架，`Merchant.cs:1417-1426`，
+    /// 对 `Dura <= 0` 直接 return）**不同**：补货**不过** `Dura` 过滤——冻结数据
+    /// `Market_Def/沙巴克/药店-0153.txt` 的 14 条 `[goods]` 里有 8 条 `DuraMax=0`
+    /// （包 13/14/15/16、超级金创药 17、超级魔法药 18、太阳水 23、强效太阳水 24），
+    /// 走带过滤的那条会静默丢掉 ⇒ `645` 会 `param=6` 而不是 C# 的 14。
+    pub fn merchant_refill_goods_items(&mut self, id: i32, item: MerchantItem) {
+        merchant_refill_goods_items_impl(&mut self.entities, id, item);
+    }
+
+    /// `ClientBuyItem` 的取件：`list20.RemoveAt(j)`，空组再 `GoodsList.RemoveAt(i)`
+    /// （`Merchant.cs:1269-1273`）。返回被取走的库存件；`group`/`item` 越界 ⇒ `None`。
+    pub fn merchant_take_goods_item(
+        &mut self,
+        id: i32,
+        group: usize,
+        item: usize,
+    ) -> Option<MerchantItem> {
+        let st = self.entities.merchant_mut(id)?;
+        let g = st.goods_list.get_mut(group)?;
+        if item >= g.len() {
+            return None;
+        }
+        let taken = g.remove(item);
+        if g.is_empty() {
+            st.goods_list.remove(group);
+        }
+        Some(taken)
+    }
+
+    /// `GameItemSystem.CopyToUserItemFromName`（`GameItemSystem.cs:113`）的 `Merchant.RefillGoodsItems`
+    /// 口径：按名（`OrdinalIgnoreCase`，同 [`World::std_item_idx_by_name`]）取模板首条 ⇒
+    /// `Index = 下标+1`、`Dura = DuraMax = tpl.DuraMax`、`MakeIndex = M2Share.GetItemNumber()`。
+    #[must_use]
+    pub fn make_merchant_item_by_name(&mut self, name: &str) -> Option<MerchantItem> {
+        let World { sim, .. } = self;
+        make_merchant_item_by_name_impl(sim, name)
+    }
+
+    /// `GetRefillList(nIndex)?.Count`（`Merchant.cs:286`）：同 `Index` 库存组的件数（无 ⇒ 0）。
+    #[must_use]
+    pub fn merchant_goods_count(&self, id: i32, index: u16) -> usize {
+        self.merchant_goods_group(id, index)
+            .and_then(|gi| self.merchant_goods_groups(id).map(|gs| gs[gi].len()))
+            .unwrap_or(0)
+    }
+
+    /// `Merchant.RefillDelReFillItem`（`Merchant.cs:317`）：同 `Index` 组从**尾部**删 `n` 件。
+    pub fn merchant_del_items_from_end(&mut self, id: i32, index: u16, n: usize) {
+        merchant_del_items_from_end_impl(&mut self.entities, id, index, n);
+    }
+
+    /// 物品名 → 1-based 序号（oracle `GameItemSystem.GetStdItemIdx`，`GameItemSystem.cs:93-111`：
+    /// `Name.Equals(name, OrdinalIgnoreCase)`，首个命中，1-based）。
+    ///
+    /// `crates/world` 的物品目录是 `Vec<StdItem>`、无 `Id` 列，与 `mir2-formula` 的
+    /// `VecItemCatalog` 同口径（下标 + 1；`drop.rs:78-89`）。
+    #[must_use]
+    pub fn std_item_idx_by_name(&self, name: &str) -> usize {
+        std_item_idx_by_name_in(&self.item_catalog, name)
+    }
+
+    /// 1-based 序号取模板（oracle `GetStdItem(ushort)`，`GameItemSystem`：`Idx -= 1` 回绕后越界 ⇒ null）。
+    #[must_use]
+    pub fn std_item_by_idx(&self, idx: usize) -> Option<&StdItem> {
+        std_item_by_idx_in(&self.item_catalog, idx)
+    }
+
+    /// oracle `new Merchant()` 的 ctor 公共链构造抽，单独成步以便宿主按 oracle 次序落定：
+    /// `LocalDB.LoadMerchant` **正序**逐条抽（本函数），再到 `MerchantInitialize` **倒序**挂图
+    /// （[`World::spawn_merchant`]）。
+    ///
+    /// **抽 4 个数**（整条 `BaseObject`→`AnimalObject` 链）：`RunTick = now + Random(1500)`、
+    /// `SearchTime = Random(2000)+2000`、`AttackTick = now - Random(3000)`、`WalkTick = now - Random(3000)`
+    /// （`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`）。唯一抽数点
+    /// [`BaseAnimalCtorDraws::draw`]；原实现只抽第 1 个 ⇒ 每条商人少抽 3 次、共享 RNG 流错位
+    /// （本卡订正）。商人**不消费**后三个（`Merchant.Run` 只读 `RunTick`；动物 AI 不驱动 NPC），
+    /// 故只返回 `RunTick`，余 3 抽**只推进共享 RNG 流**以保流位置与 oracle 一致。
+    ///
+    /// 取数走共享 `world.rng`，站点落 `crates/world-bevy/src/merchant.rs`（`merchant` 组）。
+    #[must_use]
+    pub fn merchant_ctor_run_delay(&mut self) -> i64 {
+        let ctor = BaseAnimalCtorDraws::draw(&mut self.rng);
+        self.clock_ms + i64::from(ctor.run_tick_delta)
+    }
+
+    /// **M3⑤-实现 2 第②片**：`ProcessMerchants`（`WorldServer.Merchant.cs:65-110`）的单线程等价物。
+    ///
+    /// oracle 是 **200ms 定时线程**（`MerchantProcessor.cs:8`）+ 持久 `MerchantPosition` 索引 +
+    /// 逐商人 `(now - RunTick) > RunTime` 门 + 墙钟预算 `(now - dwRunTick) > M2Share.NpcLimit`
+    /// 断点续跑 + Ghost 超 60s 移除。
+    ///
+    /// **本片口径（owner `eb3bf42f` 裁决）**：
+    /// 1. 节奏 200ms 用 **sim 时钟整数毫秒**（不是墙钟；同一窗口的第二次调用 no-op）；
+    /// 2. `RunTick/RunTime` 门**逐字照搬**；
+    /// 3. **丢掉墙钟预算分支**（`NpcLimit`，见 `whitelist.md` T-42）⇒ 一趟扫到底、扫完
+    ///    [`World::merchant_position`] 归 0；
+    /// 4. Ghost 用 sim 时钟的同单位整数（不是墙钟）。
+    ///
+    /// 跨 pass 交错（NpcLimit 预算决定某个该跑的商人落在哪一 pass）**不在判据内**；
+    /// 同 pass 内次序 = `MerchantList` 顺序 = 实体槽位插入序（[`World::insert_merchant`] 正序）；
+    /// `MerchantInitialize` 的倒序只定 `obj_list` 追加序，**不**改变本次序（reviewer-5 `0f220cac` F-1）。
+    pub fn merchant_tick(&mut self) -> MerchantTickOutcome {
+        // **P6b**：实现已迁到段系统 [`crate::world::sim_merchant_stage_system`]
+        // （`TickStage::SimMerchant`）；本函数只驱动该段并取走
+        // [`crate::world::StageOut::merchant`]。段内实现 = [`merchant_tick_impl`]
+        // （facade 与段共用同一份，无第二份拷贝）；签名与全部调用点不变。
+        self.run_merchant_stage()
+    }
+}
+
+/// **P6b**：`ProcessMerchants` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 与旧 `World::merchant_tick` 逐句相同：节奏门（`MERCHANT_PASS_INTERVAL_MS`）、
+/// `merchant_position` 起点、`merchant_ids_sorted` 的槽位序（[`EntityAccess::order_ids`] 上按
+/// `merchant` 身份门过滤）、Ghost 60s 移除、每商人 [`merchant_run_impl`] 与尾段
+/// [`crate::monai::animal_run_impl`] → [`crate::monai::base_object_run_monster_impl`]。
+///
+/// **RNG**：本段抽数（`Merchant.Run` 的 `Random(50)` / `RandomByte(8)` / `Random(50)`、
+/// `BoCanMove` 支的 `MapRandomMove` 两抽 + 移位环）——段位与迁移前逐点一致，取数仍走共享
+/// `sim.rng`。
+///
+/// **结构变更**：Ghost 支的 `MerchantList.RemoveAt(i)` 等价物是 `access.remove(id)`
+/// （`StructuralAccess`）；段内删实体后 facade 在段边界 `refresh_views()`
+/// （见 `World::run_merchant_stage`）。
+pub(crate) fn merchant_tick_impl<A>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+) -> MerchantTickOutcome
+where
+    A: crate::entity::EntityAccess + crate::entity::StructuralAccess,
+{
+    let now = sim.clock_ms;
+    let mut out = MerchantTickOutcome::default();
+    // 节奏门：同一 200ms 窗口内只跑一趟（`MerchantProcessor` 的 200ms 定时器，sim 时钟）。
+    if now.saturating_sub(sim.merchant_pass_tick) < MERCHANT_PASS_INTERVAL_MS {
+        return out;
+    }
+    sim.merchant_pass_tick = now;
+    // `merchant_ids_sorted` 的访问器形态：槽位序（= 插入序）里 `merchant` 身份门为真的实体。
+    let ids: Vec<i32> = access
+        .order_ids()
+        .into_iter()
+        .filter(|id| access.get(*id).is_some_and(|e| e.merchant.is_some()))
+        .collect();
+    let mut i = sim.merchant_position;
+    while i < ids.len() {
+        let id = ids[i];
+        let (is_ghost, run_tick, ghost_tick) = match access.get(id) {
+            Some(e) => {
+                let (rt, gt) = e.merchant.map_or((0, 0), |st| (st.run_tick, st.ghost_tick));
+                (e.ghost, rt, gt)
+            }
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+        if !is_ghost {
+            if (now - run_tick) > MERCHANT_RUN_TIME {
+                // oracle 先写 `RunTick = now` 再 `Run()`。
+                if let Some(e) = access.get_mut(id) {
+                    if let Some(st) = e.merchant_state.merchant.as_mut() {
+                        st.run_tick = now;
+                    }
+                }
+                let r = merchant_run_impl(access, sim, id);
+                out.ran.push(id);
+                if let Some(dir) = r.turned {
+                    out.turns.push((id, dir));
+                }
+                if r.turned_self_only {
+                    // 发帧时刻 `ObMode || FixedHideMode` ⇒ `SendRefMsg` 只自送（客户端零帧）。
+                    // 朝向已写进实体（`TurnTo` 先写 `Dir`），这里只留证据位。
+                    let dir = access.get(id).map_or(0, |e| e.dir());
+                    out.turns_self_only.push((id, dir));
+                }
+                if r.hit {
+                    out.hits.push(id);
+                }
+                if r.hit_self_only {
+                    out.hits_self_only.push(id);
+                }
+                if r.disappear {
+                    out.disappears.push((id, r.disappear_targets));
+                }
+                if r.disappear_self_only {
+                    out.disappears_self_only.push(id);
+                }
+                // `:156` 的解除受击（恒可见）。与 `r.hit` 不可同时为真：同一次 `Run` 里
+                // `:140` 能命中就说明那一刻已在 `FixedHideMode` ⇒ 它落 `hit_self_only`
+                // （客户端零帧，不进本表）。
+                if r.unhide_hit {
+                    out.hits.push(id);
+                }
+                if r.space_moved {
+                    out.space_moves.push(id);
+                }
+                // `Merchant.Run` 尾 `base.Run()`（`Merchant.cs:170`）：`AnimalObject.Run`
+                // 的 HolySeize 到期段 → `BaseObject.Run` 的 RM_STRUCK 出队/恢复段。
+                // 漏掉它 ⇒ 玩家打商店 NPC 后 `pending_struck` 永不出队，656 也不产生。
+                crate::monai::animal_run_impl(access, sim, id);
+                crate::monai::base_object_run_monster_impl(access, sim, id);
+            }
+        } else if (now - ghost_tick) > MERCHANT_GHOST_EXPIRE_MS {
+            // oracle `MerchantList.RemoveAt(i); break;`（移除后本 pass 不再跑后面的）。
+            access.remove(id);
+            out.removed.push(id);
+            break;
+        }
+        i += 1;
+    }
+    // oracle `if (!boProcessLimit) MerchantPosition = 0;` —— 本片无预算分支 ⇒ 每 pass 归 0。
+    sim.merchant_position = 0;
+    out
+}
+
+/// `Merchant.Run` 的一次结果（供宿主出帧 / 证据；帧面接线属 ⑤-4）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MerchantRunOutcome {
+    /// `TurnTo(RandomByte(8))` 的**客户端可见** `RM_TURN`（朝向）。
+    ///
+    /// `None` 可能是因为没抽中，也可能是因为发帧时刻 `ObMode || FixedHideMode`
+    /// ⇒ 只自送（见 [`Self::turned_self_only`]）。
+    pub turned: Option<u8>,
+    /// 抽中 `TurnTo` 但发帧时刻 `ObMode || FixedHideMode` ⇒ `RM_TURN` **只自送**、客户端零帧
+    /// （`BaseObject.Message.cs:390-394`）。此时 `Dir` 仍照常写入。
+    pub turned_self_only: bool,
+    /// **客户端可见**的 `RM_HIT`：RNG 支（`Random(50)==0`，`Merchant.cs:138-140`）且在发帧时刻
+    /// 不处于 `ObMode || FixedHideMode`。战中商人的该支**恒为自送**（见 [`Self::hit_self_only`]）。
+    pub hit: bool,
+    /// 抽中 RNG 受击支但处于 `ObMode || FixedHideMode` ⇒ `RM_HIT` **只自送**、客户端零帧。
+    pub hit_self_only: bool,
+    /// 发 `RM_HIT`（**确定性支**：`FixedHideMode` 解除，`Merchant.cs:152-157`，`:156`）。
+    ///
+    /// 该支先 `:155` 清 `FixedHideMode` 再发 ⇒ **恒为客户端可见**（`SendRefMsg` 头门不命中）。
+    pub unhide_hit: bool,
+    /// 发 `RM_DISAPPEAR`（沙巴克战中进入 `FixedHideMode`）。
+    ///
+    /// **发送事实**（`:147` 确实调了 `SendRefMsg`）；客户端是否可见取决于
+    /// [`Self::disappear_targets`] / [`Self::disappear_self_only`]。
+    pub disappear: bool,
+    /// `:147` `SendRefMsg(RM_DISAPPEAR, 0, 0, 0, 0, "")` 的**发帧时刻**收件人快照
+    /// （玩家 `actor_id`，格序 = X 外层 → Y 内层）。
+    ///
+    /// **必须在发帧时刻快照、不能推迟到宿主排水**：oracle `:148` 紧接着置
+    /// `FixedHideMode = true`，排水时实体已隐藏 ⇒ 若那时再按 `SendRefMsg` 头门重算
+    /// （`hear_targets_at` 对隐藏 sender 返回 `vec![自己]`）会把整帧丢成自送。
+    /// 同形先例：`monai.rs` 的 `StickMonster.ComeDown`（先发 `RM_DIGDOWN` 再置隐藏）。
+    pub disappear_targets: Vec<i32>,
+    /// `:147` 发帧时刻 `SendRefMsg` 的 `ObMode || FixedHideMode` 头门**已命中**
+    /// （只可能是 `ObMode`——`FixedHideMode` 由 `:148` 在发帧**之后**才置位）⇒ 只 `SendMsg`
+    /// 给自己（`BaseObject.Message.cs:390-394`）。商人 `Race = NPC` 无客户端 ⇒ 客户端零帧；
+    /// 仅证据位（真值恒假：商人无 `ObMode` 写点）。
+    pub disappear_self_only: bool,
+    /// `BoCanMove` 到点 ⇒ `MapRandomMove`（`RM_SPACEMOVE_FIRE`）。
+    ///
+    /// 这是**移动事实**（与可见性无关：`FixedHideMode` 时商人照样移动）。其 `RefMsg` 同受
+    /// `ObMode || FixedHideMode` 头门约束，且本仓**尚未接线**该下行（见 whitelist T-192 残余）。
+    pub space_moved: bool,
+    /// 本趟触发了补货（`RefillGoods` 有 due 条目且命中 `>` 分支）。
+    pub refilled: bool,
+}
+
+/// `ProcessMerchants` 一趟的结果（`World::tick` 写进 [`crate::world::TickRecord`]）。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct MerchantTickOutcome {
+    /// 本 pass 执行了 `Run()` 的商人 id（按 `MerchantList` 顺序）。
+    pub ran: Vec<i32>,
+    /// `(id, dir)`：本 pass **客户端可见**的 `TurnTo` 结果（`RM_TURN`）。
+    ///
+    /// 发帧时刻 `ObMode || FixedHideMode` 的转身不进本表（`SendRefMsg` 只自送 ⇒ 客户端零帧，
+    /// 见 [`MerchantRunOutcome::turned_self_only`]）。
+    pub turns: Vec<(i32, u8)>,
+    /// 本 pass **客户端可见**的 `RM_HIT` 商人 id。
+    ///
+    /// 两处来源：RNG 支 `:140` 与固定显隐解除支 `:156`；两者**客户端可见性互斥** ⇒ 同一 id
+    /// 在一次 `Run` 里至多出现一次（战中的 RNG 受击是自送，不在此表）。
+    pub hits: Vec<i32>,
+    /// 本 pass 因 `ObMode || FixedHideMode` **只自送**的 `RM_TURN`（`(id, dir)`；客户端零帧，证据用）。
+    pub turns_self_only: Vec<(i32, u8)>,
+    /// 本 pass 因 `ObMode || FixedHideMode` **只自送**的 `RM_HIT`（客户端零帧，证据用）。
+    pub hits_self_only: Vec<i32>,
+    /// 本 pass 的 `RM_DISAPPEAR`：`(商人 id, 发帧时刻收件人快照)`（`Merchant.cs:147`）。
+    ///
+    /// 收件人由世界侧在**发帧时刻**格扫（[`SEND_REF_MSG_RANGE`](crate::session::SEND_REF_MSG_RANGE)
+    /// 格、`Race==Play && !Ghost`），宿主只按 actor → 网关会话路由（[`MerchantRunOutcome::disappear_targets`]）。
+    pub disappears: Vec<(i32, Vec<i32>)>,
+    /// 本 pass 因 `ObMode` 头门**只自送**的 `RM_DISAPPEAR`（客户端零帧；证据用）。
+    pub disappears_self_only: Vec<i32>,
+    /// 本 pass `MapRandomMove` 的商人 id。
+    pub space_moves: Vec<i32>,
+    /// 本 pass 被 Ghost 60s 门移除的商人 id（oracle `RemoveAt`）。
+    pub removed: Vec<i32>,
+}
+
+/// O-2 `rename_rand`（`ScriptParsers.cs:857` 的 `SystemShare.RandomNumber.GetRandomNumber(1, 200)`）。
+///
+/// **站点归组**：本函数在 `crates/world-bevy/src/merchant.rs` 里调 `get_random_number` ⇒
+/// `#[track_caller]` 记到的站点是本文件 ⇒ Claim B 的 `merchant` 组（`consumer_groups.tsv` 的
+/// rust 行）能认出它。宿主的闭包只转发到本函数，**不得**在 `bins/**` 里直接取数
+/// （那会记成未归类站点 ⇒ `--require-closed` 判红）。
+#[must_use]
+pub fn merchant_rename_rand(rng: &mut RandomNumber, min: i32, max: i32) -> i32 {
+    rng.get_random_number(min, max)
+}
+
+// ─────────────────────── 武器升级 NPC（`@upgradenow` / `@getbackupgnow`） ───────────────────────
+//
+// oracle 锚点（逐行；卡 `openmir2-m3-upgrade-npc`，简报
+// `tests/parity/m3/design-upgrade-npc-20261020.md`，以「评审员更正 A1-A9」为准）：
+//
+// | 本模块 | oracle |
+// | --- | --- |
+// | [`UpgradeWeaponConfig`] | `GameSvrConf.cs:1418-1432` + `ServerConf.cs:230-242` + `[Names] BlackStone` |
+// | [`WeaponUpgradeInfo`] | `src/Modules/SystemModule/Data/WeaponUpgradeInfo.cs:8-20` |
+// | [`upgrade_wapon_add_value`] | `Merchant.cs:373-525`（`UpgradeWaponAddValue`，**零 RNG**） |
+// | [`upgrade_wapon_impl`] | `Merchant.cs:527-586`（`UpgradeWapon`，**零 RNG**） |
+// | [`get_backupg_weapon_impl`] | `Merchant.cs:592-759`（`GetBackupgWeapon`，RNG 密集） |
+// | [`clear_expired_upgrades`] | `Merchant.cs:1076-1088`（`ClearExpreUpgradeListData`） |
+//
+// **RNG 站点（本卡红线）**：取回路径的全部抽数都落本文件（`consumer_groups.tsv` 的
+// `merchant` 组）；宿主 `bins/game-svr` 不得直接抽数。
+//
+// **持久化**：在途列表只在内存（oracle `SaveUpgradeWeaponRecord` 恒 `return -1`、
+// `MySqlDB.cs:345-348` 无 SQL）⇒ 不实现 `upgradeinfo*` 三表，重启即丢（照抄，见简报 §2.5）。
+//
+// **照抄的 oracle 缺陷**（BUG-REPLICA，必须钉住）：
+// - 取回成功只发 `SM_ADDITEM`，**不** `AddItemToBag`（`Merchant.cs:744` 被注释）⇒ 入参
+//   `item_list` 长度不变，武器只是客户端死数据（宿主断言）。
+// - SC 支的 `n90` 取的是 `upgradeInfo.Mc`（`Merchant.cs:721`），不是 `Sc`。
+// - 提交端同名检查是 C# `==`（**区分大小写**）；取回端是 `OrdinalIgnoreCase` 且命中不 `break`。
+
+/// `Config.UpgradeWeapon*` + `[Names] BlackStone`（部署值见简报 §0/§4；缺省 = `GameSvrConf.cs`）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeWeaponConfig {
+    /// `Config.UpgradeWeaponPrice`（缺省 10000）。
+    pub price: i32,
+    /// `Config.UPgradeWeaponGetBackTime`（毫秒，缺省 3_600_000）。
+    pub get_back_time_ms: i64,
+    /// `Config.ClearExpireUpgradeWeaponDays`（byte，缺省 8）。
+    pub clear_expire_days: u8,
+    /// `[Names] BlackStone`（缺省「黑铁矿」）。
+    pub black_stone: String,
+    /// `Config.UpgradeWeaponDCRate`（缺省 100；部署 50）。
+    pub dc_rate: i32,
+    /// `Config.UpgradeWeaponDCTwoPointRate`（缺省 30）。
+    pub dc_two_point_rate: i32,
+    /// `Config.UpgradeWeaponDCThreePointRate`（缺省 200）。
+    pub dc_three_point_rate: i32,
+    /// `Config.UpgradeWeaponMCRate`。
+    pub mc_rate: i32,
+    /// `Config.UpgradeWeaponMCTwoPointRate`。
+    pub mc_two_point_rate: i32,
+    /// `Config.UpgradeWeaponMCThreePointRate`。
+    pub mc_three_point_rate: i32,
+    /// `Config.UpgradeWeaponSCRate`。
+    pub sc_rate: i32,
+    /// `Config.UpgradeWeaponSCTwoPointRate`。
+    pub sc_two_point_rate: i32,
+    /// `Config.UpgradeWeaponSCThreePointRate`。
+    pub sc_three_point_rate: i32,
+}
+
+impl Default for UpgradeWeaponConfig {
+    fn default() -> Self {
+        Self {
+            price: 10_000,
+            get_back_time_ms: 3_600_000,
+            clear_expire_days: 8,
+            black_stone: "黑铁矿".to_string(),
+            dc_rate: 100,
+            dc_two_point_rate: 30,
+            dc_three_point_rate: 200,
+            mc_rate: 100,
+            mc_two_point_rate: 30,
+            mc_three_point_rate: 200,
+            sc_rate: 100,
+            sc_two_point_rate: 30,
+            sc_three_point_rate: 200,
+        }
+    }
+}
+
+/// `WeaponUpgradeInfo`（`WeaponUpgradeInfo.cs:8-20`）：在途升级记录。
+///
+/// `get_back_tick`/`upgrade_time_ms` 用世界 **sim 时钟**（`World::clock_ms`）；
+/// oracle 用 `GetTickCount()`/`DateTime.Now`——进程内等价（简报 §2.5/§6-3）。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WeaponUpgradeInfo {
+    /// `UserName`（`PlayObject.ChrName`）。
+    pub user_name: String,
+    /// `UserItem`（提交时的武器拷贝；取回时写 `desc[10]`）。
+    pub user_item: MerchantItem,
+    /// `Dc`（`UpgradeWaponAddValue` 的 `btDc`）。
+    pub dc: u8,
+    /// `Sc`。
+    pub sc: u8,
+    /// `Mc`。
+    pub mc: u8,
+    /// `Dura`（`btDura`；取回耐久分支的输入）。
+    pub dura: u8,
+    /// `UpgradeTime`（`DateTime.Now` ⇒ sim `clock_ms`；过期清理用）。
+    pub upgrade_time_ms: i64,
+    /// `GetBackTick`（`GetTickCount()` ⇒ sim `clock_ms`；时限门用）。
+    pub get_back_tick: i64,
+}
+
+/// `UpgradeWapon` 成功的结果：删除列表 + 新记录。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpgradeWaponResult {
+    /// `(ItemName, MakeIndex)`；顺序 = 背包**从后往前**扫描的命中序（oracle `delItemList`）。
+    pub deleted: Vec<(String, i32)>,
+    /// 新加入 `UpgradeWeaponList` 的记录。
+    pub info: WeaponUpgradeInfo,
+}
+
+/// `Merchant.UpgradeWapon`（`Merchant.cs:527-586`）的**第一阶段**出口。
+///
+/// `Accepted` = 已扣费、已拷贝 `UserItem`，但**背包材料未吃**（oracle 在 `AddValue` 之前
+/// `RecalcAbilitys`）⇒ 宿主必须先重算，再调
+/// [`World::merchant_upgrade_wapon_finish`]。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpgradeWaponBegin {
+    /// 受理成功（材料仍在包里）。
+    Accepted(WeaponUpgradeInfo),
+    /// 已有同名记录（**精确 `==`**，区分大小写）⇒ `~@upgradenow_ing`。
+    AlreadyUpgrading,
+    /// 无武器 / 金币不足 / 无黑铁 ⇒ `~@upgradenow_fail`。
+    Fail,
+}
+
+/// `Merchant.UpgradeWapon`（`Merchant.cs:527-586`）的三种出口。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpgradeWaponOutcome {
+    /// 受理成功 ⇒ `~@upgradenow_ok`。
+    Ok(UpgradeWaponResult),
+    /// 已有同名记录（**精确 `==`**，区分大小写）⇒ `~@upgradenow_ing`。
+    AlreadyUpgrading,
+    /// 无武器 / 金币不足 / 无黑铁 ⇒ `~@upgradenow_fail`。
+    Fail,
+}
+
+/// `Merchant.GetBackupgWeapon`（`Merchant.cs:592-759`）的四种出口。
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GetBackupgWeaponOutcome {
+    /// `!IsEnoughBag()` ⇒ `~@getbackupgnow_bagfull`（**先查包、后找记录**）。
+    BagFull,
+    /// `nFlag == 0`（无记录）⇒ `~@getbackupgnow_fail`。
+    NoRecord,
+    /// `nFlag == 1`（记录存在但未到时限）⇒ `~@getbackupgnow_ing`。
+    NotDue,
+    /// 取回成功（已从列表移除；`user_item.desc[10]` 已写）。
+    Ok(WeaponUpgradeInfo),
+}
+
+/// `M2Share.IsAccessoryMap`（`M2Share.cs:187/207`）：`StdMode ∈ {19,20,21,22,23,24,26}`。
+#[must_use]
+pub fn is_accessory_std_mode(std_mode: u8) -> bool {
+    matches!(std_mode, 19..=24 | 26)
+}
+
+/// `GetStdItem(index)`（1-based；`index == 0`/越界 ⇒ `None`）。
+fn std_item_at(catalog: &[StdItem], index: u16) -> Option<&StdItem> {
+    if index == 0 {
+        return None;
+    }
+    catalog.get(usize::from(index) - 1)
+}
+
+/// `GetStdItemName(index)`（`None` 对应 C# `null`）。
+fn item_name_at(catalog: &[StdItem], index: u16) -> Option<&str> {
+    std_item_at(catalog, index).map(|t| t.name.as_str())
+}
+
+/// `HUtil32.MakeWord(ushort low, ushort high)`（`HUtil32.cs:66-69`）：`low | (high << 8)`。
+const fn make_word(low: u16, high: u16) -> u16 {
+    low | (high << 8)
+}
+
+/// `GetUpgradeStdItem` 的 `_MIN` 口径（`GameItemSystem.cs:892-1069`）：
+/// `MakeWord(LoByte(word), _MIN(255, HiByte(word) + desc))`——**只夹高字节**，低字节原样。
+///
+/// **与 `bins/game-svr/src/bag.rs` 的同名口径逐字同构**；`crates/shared/src/hutil32.rs`
+/// 另有 `make_word_u16`/`hi_byte_u16`/`lo_byte_u16`。本处直接手写以保持零依赖常量语义，
+/// 若将来统一到 shared helper，三处（世界/背包/bag）需同批切换。
+fn add_hi_word(word: u16, add: u8) -> u16 {
+    let hi = (i32::from(((word >> 8) & 0xFF) as u8) + i32::from(add)).min(255) as u16;
+    make_word(word & 0xFF, hi)
+}
+
+/// `Merchant.UpgradeWaponAddValue`（`Merchant.cs:373-525`）——**零 RNG**。
+///
+/// 倒序扫描背包：吃掉**全部**黑铁矿（名 **精确 `==`** `Config.BlackStone`）与**全部**首饰
+/// （`IsAccessory`）。首饰先走 `GetUpgradeStdItem`（`GameItemSystem.cs:731+`）的 **DC/SC/MC
+/// 差量**——四族（19..=24 / 26）同形 `MakeWord(LoByte(std.X), _MIN(255, HiByte(std.X) +
+/// Desc[2/3/4]))`，再取 `HiWord+LoWord`（StdMode 24/26 再 +1），维护逐项最大/次大。
+///
+/// **口径（易错）**：incoming 是 `ClientStdItem.DC/SC/MC`（`ushort`）⇒ C# 重载解析
+/// `HiWord(ushort)` = `(ushort)(v >> 16)` **恒 0**、`LoWord` 选 `LoWord(int)` = `(ushort)v`
+/// ⇒ `HiWord+LoWord` = **整 16 位字值**，不是「高字节+低字节」。见
+/// `docs/HUtil32-parity-inventory-20261020.md:119` 与 `monai.rs` 的同一结论。
+///
+/// 收尾是 oracle 的**畸形「整体反转」置换**（不是排序）：`for i { for j=len-1..i+1 { if
+/// dura[j]>dura[j-1] { duras.Reverse() } } }`；`Dura` 只累置换后的**前 5 项**。
+fn upgrade_wapon_add_value(
+    catalog: &[StdItem],
+    item_list: &mut Vec<MerchantItem>,
+    black_stone: &str,
+    info: &mut WeaponUpgradeInfo,
+) -> Vec<(String, i32)> {
+    let mut deleted: Vec<(String, i32)> = Vec::new();
+    let mut dura_list: Vec<f64> = Vec::new();
+    let (mut dc_min, mut dc_max) = (0i32, 0i32);
+    let (mut sc_min, mut sc_max) = (0i32, 0i32);
+    let (mut mc_min, mut mc_max) = (0i32, 0i32);
+    // `for (int i = itemList.Count - 1; i >= 0; i--)`
+    let mut i = item_list.len();
+    while i > 0 {
+        i -= 1;
+        let (index, make_index, dura, desc) = {
+            let it = &item_list[i];
+            (it.index, it.make_index, it.dura, it.desc)
+        };
+        // `GetStdItemName(userItem.Index) == Config.BlackStone`：C# `==` 是**区分大小写**的序数比较。
+        if item_name_at(catalog, index) == Some(black_stone) {
+            // `Math.Round(userItem.Dura / 1.0e3)`：缺省 `MidpointRounding.ToEven`（银行家舍入）。
+            dura_list.push((f64::from(dura) / 1000.0).round_ties_even());
+            deleted.push((black_stone.to_string(), make_index));
+            item_list.remove(i);
+            continue;
+        }
+        let Some(tpl) = std_item_at(catalog, index) else {
+            continue;
+        };
+        if !is_accessory_std_mode(tpl.std_mode) {
+            continue;
+        }
+        // `GetUpgradeStdItem(stdItem, userItem, ref clientItem)`（`GameItemSystem.cs:731+`）：
+        // 首饰四族 19..=24 / 26 的 DC/MC/SC **同形**取 `Desc[2]/[3]/[4]` 加高字节并夹 255；
+        // `CopyItemToClientItem` 不改 `StdMode` ⇒ switch 仍走模板值（`Merchant.cs:421`）。
+        let dc_word = add_hi_word(tpl.dc, desc[2]);
+        let sc_word = add_hi_word(tpl.sc, desc[4]);
+        let mc_word = add_hi_word(tpl.mc, desc[3]);
+        // `HiWord(ushort)` 恒 0 + `LoWord` 取整 16 位（见函数文档）⇒ `n = 字值`。
+        let (mut n_dc, mut n_sc, mut n_mc) = (0i32, 0i32, 0i32);
+        match tpl.std_mode {
+            19..=23 => {
+                n_dc = i32::from(dc_word);
+                n_sc = i32::from(sc_word);
+                n_mc = i32::from(mc_word);
+            }
+            24 | 26 => {
+                n_dc = i32::from(dc_word) + 1;
+                n_sc = i32::from(sc_word) + 1;
+                n_mc = i32::from(mc_word) + 1;
+            }
+            _ => {}
+        }
+        // `if (nMin < n) { nMax = nMin; nMin = n; } else if (nMax < n) { nMax = n; }`（逐项独立）。
+        if dc_min < n_dc {
+            dc_max = dc_min;
+            dc_min = n_dc;
+        } else if dc_max < n_dc {
+            dc_max = n_dc;
+        }
+        if sc_min < n_sc {
+            sc_max = sc_min;
+            sc_min = n_sc;
+        } else if sc_max < n_sc {
+            sc_max = n_sc;
+        }
+        if mc_min < n_mc {
+            mc_max = mc_min;
+            mc_min = n_mc;
+        } else if mc_max < n_mc {
+            mc_max = n_mc;
+        }
+        deleted.push((tpl.name.clone(), make_index));
+        item_list.remove(i);
+    }
+    // 畸形置换：`List.Reverse()` 是**整体反转**，不是排序。
+    for i in 0..dura_list.len() {
+        for j in (i + 1..dura_list.len()).rev() {
+            if dura_list[j] > dura_list[j - 1] {
+                dura_list.reverse();
+            }
+        }
+    }
+    let mut n_dura = 0i32;
+    let mut n_item_count = 0i32;
+    for d in &dura_list {
+        n_dura += *d as i32; // C# `(int)double` 截断
+        n_item_count += 1;
+        if n_item_count >= 5 {
+            break;
+        }
+    }
+    // **复验 F6（已登记 T-95⑧）**：oracle 在 `nItemCount == 0` 时 `nDura / nItemCount`
+    // 抛 `DivideByZeroException`。本入口前置 `CheckItems(BlackStone)`（`OrdinalIgnoreCase`）
+    // 与这里的精确 `==` 名单**理论上**可错位（忽略大小写命中而精确不命中），但冻结内容
+    // `BlackStone=黑铁矿` 使两者同集 ⇒ 不可达。`.max(1)` 是防御性偏离（oracle 抛异常、
+    // 本侧给 0 耐久），登记而不照搬异常。
+    let n_item_count = n_item_count.max(1);
+    let min5 = n_item_count.min(5);
+    info.dura = (f64::from(min5) + f64::from(min5) * (f64::from(n_dura / n_item_count) / 5.0))
+        .round() as u8;
+    info.dc = (dc_min / 5 + dc_max / 3) as u8;
+    info.sc = (sc_min / 5 + sc_max / 3) as u8;
+    info.mc = (mc_min / 5 + mc_max / 3) as u8;
+    deleted
+}
+
+/// `Merchant.UpgradeWapon`（`Merchant.cs:527-586`）**第一阶段**——检查/扣费/拷贝，**零 RNG**。
+///
+/// **不改背包**：oracle 在 `AddValue` 之前先 `RecalcAbilitys()`（`:570`），此时黑铁/首饰仍在
+/// `ItemList` 里 ⇒ 52 帧 `WAbil.Weight` 含材料重量。宿主必须在 [`UpgradeWaponBegin::Accepted`]
+/// 之后、[`World::merchant_upgrade_wapon_finish`] 之前做重算。
+#[allow(clippy::too_many_arguments)]
+fn upgrade_wapon_begin_impl(
+    catalog: &[StdItem],
+    list: &[WeaponUpgradeInfo],
+    chr_name: &str,
+    weapon: Option<&MerchantItem>,
+    bag: &[MerchantItem],
+    gold: &mut i32,
+    cfg: &UpgradeWeaponConfig,
+    now_ms: i64,
+) -> UpgradeWaponBegin {
+    // 1. `upgradeInfo.UserName == user.ChrName`（C# `==`：**区分大小写**）。
+    if list.iter().any(|u| u.user_name == chr_name) {
+        return UpgradeWaponBegin::AlreadyUpgrading;
+    }
+    // 2. `UseItems[Weapon] != null && Index != 0 && Gold >= price && CheckItems(BlackStone) != null`。
+    let Some(weapon) = weapon.filter(|w| w.index != 0) else {
+        return UpgradeWaponBegin::Fail;
+    };
+    if *gold < cfg.price {
+        return UpgradeWaponBegin::Fail;
+    }
+    // `CheckItems`：名 `OrdinalIgnoreCase` 命中（`BaseObject.cs:2189-2204`）。
+    let has_black_stone = bag.iter().any(|it| {
+        item_name_at(catalog, it.index)
+            .is_some_and(|n| equals_ordinal_ignore_case(n, &cfg.black_stone))
+    });
+    if !has_black_stone {
+        return UpgradeWaponBegin::Fail;
+    }
+    // 3. `DecGold(price)`（`GoldChanged` 的 653 由调用方出）。
+    *gold -= cfg.price;
+    // 4. `new UserItem(UseItems[Weapon])`（C# 的 Desc 是浅拷贝；本侧 clone；取回时不回写空槽）。
+    UpgradeWaponBegin::Accepted(WeaponUpgradeInfo {
+        user_name: chr_name.to_string(),
+        user_item: weapon.clone(),
+        dc: 0,
+        sc: 0,
+        mc: 0,
+        dura: 0,
+        upgrade_time_ms: now_ms,
+        get_back_tick: now_ms,
+    })
+}
+
+/// 一支（DC/MC/SC）的判定 + `desc[10]` 写入值（`Merchant.cs:677-733` 三支同形）。
+///
+/// `n10 = min(85, (n90 << ((3 - n90) & 31)) + 10 + Desc[3] - Desc[4] + BodyLuckLevel)`；
+/// C# 的 `<<` 在 unchecked 上下文按 32 位回绕 ⇒ Rust `wrapping_shl`（`n90=6` 恒失败）。
+#[allow(clippy::too_many_arguments)]
+fn upgrade_one_stat(
+    rng: &mut RandomNumber,
+    value: u8,
+    rate: i32,
+    two_point_rate: i32,
+    three_point_rate: i32,
+    desc: &[u8; 14],
+    body_luck_level: i32,
+    base_desc10: u8,
+) -> u8 {
+    let n90 = i32::from(value.min(11));
+    let shift = ((3 - n90) & 31) as u32;
+    let n10 = (n90.wrapping_shl(shift) + 10 + i32::from(desc[3]) - i32::from(desc[4])
+        + body_luck_level)
+        .min(85);
+    if rng.random_below(rate) < n10 {
+        // **覆盖赋值**而非累加：oracle 是 `Desc[...] = 10; if(..) Desc[...] = 11;
+        // if(..) Desc[...] = 12;`（`Merchant.cs:680-692` / `:703-715` / `:726-738`）——
+        // 两点/三点都命中时结果是 **12**（三点覆盖两点），不是 13。累加是行为偏差（tier=R）。
+        let mut d = base_desc10;
+        if n10 > 63 && rng.random_below(two_point_rate) == 0 {
+            d = base_desc10 + 1;
+        }
+        if n10 > 79 && rng.random_below(three_point_rate) == 0 {
+            d = base_desc10 + 2;
+        }
+        d
+    } else {
+        1
+    }
+}
+
+/// `Merchant.GetBackupgWeapon`（`Merchant.cs:592-759`）本体——RNG 密集。
+///
+/// 抽数顺序**严格** A（耐久）→ B（`Dc==Mc==Sc` 时的 `Random(3)` 空转）→ C/D/E（DC/MC/SC）。
+#[allow(clippy::too_many_arguments)]
+fn get_backupg_weapon_impl(
+    rng: &mut RandomNumber,
+    list: &mut Vec<WeaponUpgradeInfo>,
+    chr_name: &str,
+    permission: u8,
+    now_ms: i64,
+    bag_len: usize,
+    body_luck_level: i32,
+    cfg: &UpgradeWeaponConfig,
+) -> GetBackupgWeaponOutcome {
+    // 1. `if (!user.IsEnoughBag())`（`ItemList.Count < 46`）—— **先于**找记录。
+    if bag_len >= 46 {
+        return GetBackupgWeaponOutcome::BagFull;
+    }
+    // 2. `OrdinalIgnoreCase` 命中；未到时限**不 break**（继续找下一条同名记录）。
+    let mut n_flag = 0u8;
+    let mut info: Option<WeaponUpgradeInfo> = None;
+    let mut i = 0usize;
+    while i < list.len() {
+        if equals_ordinal_ignore_case(&list[i].user_name, chr_name) {
+            n_flag = 1;
+            if (now_ms - list[i].get_back_tick) > cfg.get_back_time_ms || permission >= 4 {
+                info = Some(list.remove(i));
+                n_flag = 2;
+                break;
+            }
+        }
+        i += 1;
+    }
+    let Some(mut info) = info else {
+        return if n_flag == 0 {
+            GetBackupgWeaponOutcome::NoRecord
+        } else {
+            GetBackupgWeaponOutcome::NotDue
+        };
+    };
+    // 3. 耐久分支（`upgradeInfo.Dura` = 提交时算出的 `btDura`）。
+    let dura = info.dura;
+    if dura <= 8 {
+        if info.user_item.dura_max > 3000 {
+            info.user_item.dura_max -= 3000;
+        } else {
+            info.user_item.dura_max >>= 1;
+        }
+        if info.user_item.dura > info.user_item.dura_max {
+            info.user_item.dura = info.user_item.dura_max;
+        }
+    } else if matches!(dura, 9..=15) {
+        if rng.random_below(i32::from(dura)) < 6 {
+            if info.user_item.dura_max > 1000 {
+                info.user_item.dura_max -= 1000;
+            }
+            if info.user_item.dura > info.user_item.dura_max {
+                info.user_item.dura = info.user_item.dura_max;
+            }
+        }
+    } else if dura >= 18 {
+        // `Random(Dura - 18)`；`Dura == 18` ⇒ `Random(0)`（**仍消耗 1 抽**）。
+        let r = rng.random_below(i32::from(dura) - 18);
+        if matches!(r, 1..=4) {
+            info.user_item.dura_max = info.user_item.dura_max.wrapping_add(1000);
+        } else if matches!(r, 5..=7) {
+            info.user_item.dura_max = info.user_item.dura_max.wrapping_add(2000);
+        } else if matches!(r, 8..=255) {
+            info.user_item.dura_max = info.user_item.dura_max.wrapping_add(4000);
+        }
+    }
+    // Dura ∈ {16, 17}：三档都不命中，耐久不变、**不抽**。
+    let (dc, mc, sc) = (info.dc, info.mc, info.sc);
+    // B：`Dc==Mc==Sc` ⇒ `Random(3)`（**n1C 从不影响分支选择** ⇒ 纯空转抽）。
+    let n1c = if dc == mc && mc == sc {
+        rng.random_below(3)
+    } else {
+        -1
+    };
+    // C：DC 支（`||` 优先级低于 `&&`）。
+    if (dc >= mc && dc >= sc) || n1c == 0 {
+        info.user_item.desc[10] = upgrade_one_stat(
+            rng,
+            dc,
+            cfg.dc_rate,
+            cfg.dc_two_point_rate,
+            cfg.dc_three_point_rate,
+            &info.user_item.desc,
+            body_luck_level,
+            10,
+        );
+    }
+    // D：MC 支。
+    if (mc >= dc && mc >= sc) || n1c == 1 {
+        info.user_item.desc[10] = upgrade_one_stat(
+            rng,
+            mc,
+            cfg.mc_rate,
+            cfg.mc_two_point_rate,
+            cfg.mc_three_point_rate,
+            &info.user_item.desc,
+            body_luck_level,
+            20,
+        );
+    }
+    // E：SC 支——**照抄 oracle bug**：`n90 = min(11, upgradeInfo.Mc)`（`Merchant.cs:721`）。
+    if (sc >= mc && sc >= dc) || n1c == 2 {
+        info.user_item.desc[10] = upgrade_one_stat(
+            rng,
+            mc,
+            cfg.sc_rate,
+            cfg.sc_two_point_rate,
+            cfg.sc_three_point_rate,
+            &info.user_item.desc,
+            body_luck_level,
+            30,
+        );
+    }
+    GetBackupgWeaponOutcome::Ok(info)
+}
+
+/// `Merchant.ClearExpreUpgradeListData`（`Merchant.cs:1076-1088`）：倒序删除
+/// `(now - UpgradeTime).TotalDays >= ClearExpireUpgradeWeaponDays` 的记录（`>=` 边界）。
+pub fn clear_expired_upgrades(list: &mut Vec<WeaponUpgradeInfo>, now_ms: i64, days: u8) {
+    let expire_ms = i64::from(days) * 24 * 60 * 60 * 1000;
+    let mut i = list.len();
+    while i > 0 {
+        i -= 1;
+        if now_ms - list[i].upgrade_time_ms >= expire_ms {
+            list.remove(i);
+        }
+    }
+}
+
+impl World {
+    /// `Merchant.UpgradeWapon`（`Merchant.cs:527-586`）的宿主入口（**零 RNG**）。
+    ///
+    /// `weapon` = `UseItems[ItemLocation.Weapon]`（`None` = `null`；`index == 0` 由内部判 fail）。
+    /// `bag`/`gold` 直接改（成功时扣费并吃掉材料）；`weapon` 槽的 `Index = 0` 由宿主执行
+    /// （oracle 是「保留槽对象、只清 Index」⇒ 宿主解构后必须写回 `Some(BagItem{index:0, ..})`）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn merchant_upgrade_wapon_begin(
+        &mut self,
+        merchant_id: i32,
+        chr_name: &str,
+        weapon: Option<&MerchantItem>,
+        bag: &[MerchantItem],
+        gold: &mut i32,
+        cfg: &UpgradeWeaponConfig,
+    ) -> UpgradeWaponBegin {
+        let now = self.clock_ms;
+        let catalog = std::mem::take(&mut self.item_catalog);
+        let result = match self.entities.merchant_mut(merchant_id) {
+            Some(st) => upgrade_wapon_begin_impl(
+                &catalog,
+                &st.upgrade_weapon_list,
+                chr_name,
+                weapon,
+                bag,
+                gold,
+                cfg,
+                now,
+            ),
+            None => UpgradeWaponBegin::Fail,
+        };
+        self.item_catalog = catalog;
+        result
+    }
+
+    /// `Merchant.UpgradeWapon` 的**第二阶段**：`UpgradeWaponAddValue`（吃材料、算 dc/sc/mc/dura）
+    /// + `UpgradeWeaponList.Add`（`SaveUpgradingList` 是空桩）。
+    ///
+    /// 必须在宿主 `RecalcAbilitys` **之后**调用（oracle 顺序：`:570` Recalc → `:572` AddValue）。
+    pub fn merchant_upgrade_wapon_finish(
+        &mut self,
+        merchant_id: i32,
+        mut info: WeaponUpgradeInfo,
+        bag: &mut Vec<MerchantItem>,
+        cfg: &UpgradeWeaponConfig,
+    ) -> UpgradeWaponResult {
+        let catalog = std::mem::take(&mut self.item_catalog);
+        let deleted = upgrade_wapon_add_value(&catalog, bag, &cfg.black_stone, &mut info);
+        if let Some(st) = self.entities.merchant_mut(merchant_id) {
+            st.upgrade_weapon_list.push(info.clone());
+        }
+        self.item_catalog = catalog;
+        UpgradeWaponResult { deleted, info }
+    }
+
+    /// 两步合一的便利入口（**只给 world 单测/无重算场景**；宿主生产路径必须分两步：
+    /// `begin` → `RecalcAbilitys` → `finish`）。
+    #[allow(clippy::too_many_arguments)]
+    pub fn merchant_upgrade_wapon(
+        &mut self,
+        merchant_id: i32,
+        chr_name: &str,
+        weapon: Option<&MerchantItem>,
+        bag: &mut Vec<MerchantItem>,
+        gold: &mut i32,
+        cfg: &UpgradeWeaponConfig,
+    ) -> UpgradeWaponOutcome {
+        match self.merchant_upgrade_wapon_begin(merchant_id, chr_name, weapon, bag, gold, cfg) {
+            UpgradeWaponBegin::Accepted(info) => {
+                let result = self.merchant_upgrade_wapon_finish(merchant_id, info, bag, cfg);
+                UpgradeWaponOutcome::Ok(result)
+            }
+            UpgradeWaponBegin::AlreadyUpgrading => UpgradeWaponOutcome::AlreadyUpgrading,
+            UpgradeWaponBegin::Fail => UpgradeWaponOutcome::Fail,
+        }
+    }
+
+    /// `Merchant.GetBackupgWeapon`（`Merchant.cs:592-759`）的宿主入口。
+    ///
+    /// `bag_len` = `ItemList.Count`（包满门）；`permission` 生产恒 0（简报 §2.3）。
+    /// 成功时记录已从列表移除、`user_item.desc[10]` 已写；**不改 `ItemList`**
+    /// （照抄 `AddItemToBag` 被注释的 oracle 缺陷）。
+    pub fn merchant_get_backupg_weapon(
+        &mut self,
+        merchant_id: i32,
+        chr_name: &str,
+        permission: u8,
+        bag_len: usize,
+        body_luck_level: i32,
+        cfg: &UpgradeWeaponConfig,
+    ) -> GetBackupgWeaponOutcome {
+        let now = self.clock_ms;
+        let World { entities, sim, .. } = self;
+        let rng = &mut sim.rng;
+        match entities.merchant_mut(merchant_id) {
+            Some(st) => get_backupg_weapon_impl(
+                rng,
+                &mut st.upgrade_weapon_list,
+                chr_name,
+                permission,
+                now,
+                bag_len,
+                body_luck_level,
+                cfg,
+            ),
+            // 宿主已在 `handle_shop_cmd` 做 `FindMerchant` 门 ⇒ 此处不可达；按「无记录」兜底。
+            None => GetBackupgWeaponOutcome::NoRecord,
+        }
+    }
+}
+
+/// `Merchant.Run`（`Merchant.cs:112-170`）。
+///
+/// RNG 站点（全部落在本文件 ⇒ `merchant` 组）：
+/// `Random(50)` → （命中时）`RandomByte(8)` → 未命中时再 `Random(50)`；
+/// `BoCanMove` 到点时的 `MapRandomMove` 内部 2 次 `Random`（`BaseObject.cs:1214-1237`）。
+///
+/// 补货门/清理门/沙巴克显隐与 oracle 同构；库存与落库（`GoodsList`/`SaveGoodRecord`）
+/// 是 ⑤-5 接缝（本片只推进计时态，见 [`refill_goods`]）。
+pub fn merchant_run(world: &mut World, actor_id: i32) -> MerchantRunOutcome {
+    let World { entities, sim, .. } = world;
+    merchant_run_impl(entities, sim, actor_id)
+}
+
+/// **P6b**：`merchant_run` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 与旧 facade 逐句相同：补货门 / 清理门 / `Random(50)`+`RandomByte(8)`|`Random(50)` /
+/// 沙巴克显隐 / `BoCanMove` 的 `MapRandomMove` / 尾 `base.Run()`（SuperMan 回满 +
+/// `VerifyMapTime`）。取数仍走共享 `sim.rng`，抽数点/次数/次序不变。
+pub(crate) fn merchant_run_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> MerchantRunOutcome {
+    let now = sim.clock_ms;
+    let mut outcome = MerchantRunOutcome::default();
+    let Some((
+        process_refill_index,
+        refill_goods_tick,
+        clear_expre_upgrade_tick,
+        castle_merchant,
+        castle_bound,
+        castle_under_war,
+        can_move,
+        move_time,
+        move_tick,
+    )) = access.get(actor_id).and_then(|e| {
+        e.merchant.map(|st| {
+            (
+                st.process_refill_index,
+                st.refill_goods_tick,
+                st.clear_expre_upgrade_tick,
+                st.castle_merchant,
+                // `Some(i)` ⇔ oracle `Castle != null`（`Merchant.cs:143` 的第二个合取项）。
+                st.castle_index.is_some(),
+                st.castle_under_war,
+                st.can_move,
+                st.move_time,
+                st.move_tick,
+            )
+        })
+    })
+    else {
+        return outcome;
+    };
+
+    // oracle `fb2824b6b`：Run 门 = 30s，**没有** `ProcessRefillIndex * 500` 的错峰；
+    // `ProcessRefillIndex` 仍保留在状态里（脚本字段），但不再参与计时。
+    let _ = process_refill_index;
+    if (now - refill_goods_tick) > MERCHANT_REFILL_GOODS_INTERVAL_MS {
+        if let Some(e) = access.get_mut(actor_id) {
+            if let Some(st) = e.merchant_state.merchant.as_mut() {
+                st.refill_goods_tick = now;
+            }
+        }
+        outcome.refilled = refill_goods_impl(access, sim, actor_id);
+    }
+    // `Merchant.cs:126-131`：清理门（`ClearExpreUpgradeListData`）。
+    //
+    // oracle 用墙钟 `DateTime.Now` 与 `WeaponUpgradeInfo.UpgradeTime` 比；本侧两者都取
+    // **sim 时钟** `sim.clock_ms`（提交时写入、清理时比较）⇒ 进程内等价（登记）。
+    if (now - clear_expre_upgrade_tick) > MERCHANT_CLEAR_EXPRE_UPGRADE_INTERVAL_MS {
+        let days = access
+            .get(actor_id)
+            .and_then(|e| e.merchant)
+            .map_or(0, |st| st.clear_expire_upgrade_days);
+        if let Some(e) = access.get_mut(actor_id) {
+            if let Some(st) = e.merchant_state.merchant.as_mut() {
+                st.clear_expre_upgrade_tick = now;
+                clear_expired_upgrades(&mut st.upgrade_weapon_list, now, days);
+            }
+        }
+    }
+    // `Merchant.cs:132-141`：`Random(50)==0` ⇒ `TurnTo(RandomByte(8))`；否则 `Random(50)==0` ⇒ `RM_HIT`。
+    //
+    // **可见性按「发帧时刻」快照**（`BaseObject.Message.cs:390-394`）：
+    // `SendRefMsg` 在 `ObMode || FixedHideMode` 时只 `SendMsg` 给自己（六参 `SendMsg` 只入
+    // `this.MsgQueue`）⇒ **客户端零帧**。这两条 `RefMsg` 都排在 `:143-160` 的显隐切换**之前**：战中
+    // 商人的 `FixedHideMode` 此刻仍为 `true` ⇒ `:140` 的 `RM_HIT` 与 `TurnTo` 的 `RM_TURN` 都只自送。
+    //
+    // 判定必须在此处（发帧前）取，**不能**推迟到宿主排水时再按实体状态过滤：`:155` 会先清
+    // `FixedHideMode` 再发 `:156`，排水时状态已翻回可见 ⇒ 那样会把唯一客户端可见的解除帧一起误杀。
+    let hidden = access
+        .get(actor_id)
+        .is_some_and(|e| e.ob_mode || e.fixed_hide_mode);
+    if sim.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+        let dir = sim.rng.random_byte(MERCHANT_TURN_DIR_MAX);
+        if let Some(e) = access.get_mut(actor_id) {
+            e.ai.dir = dir; // `TurnTo` 先写 `Dir`（写方向与可见性无关）
+        }
+        if hidden {
+            outcome.turned_self_only = true; // `ObMode || FixedHideMode` ⇒ RM_TURN 只自送
+        } else {
+            outcome.turned = Some(dir);
+        }
+    } else if sim.rng.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+        if hidden {
+            outcome.hit_self_only = true; // `ObMode || FixedHideMode` ⇒ RM_HIT 只自送
+        } else {
+            outcome.hit = true;
+        }
+    }
+    // `Merchant.cs:143-160`：`CastleMerchant && Castle != null && Castle.UnderWar` ⇒ 进
+    // `FixedHideMode`（`RM_DISAPPEAR`）；否则恢复显形（`RM_HIT`，`:156`）。
+    //
+    // **`Castle != null` 不可省**：`castle_under_war` 只是 `Castle.UnderWar` 的快照，两者独立；
+    // 缺 `castle_bound` 守卫时「`CastleMerchant=1` + 战中快照 + 未绑定城堡」会多发 `RM_DISAPPEAR`，
+    // 而 oracle 走 else 支。
+    //
+    // **两个 `RM_HIT` 语句不互斥、但客户端可见性互斥**：`CastleMerchant && Castle != null &&
+    // Castle.UnderWar` 且已隐藏 ⇒ `:140` 的 RNG 受击必然是自送（`FixedHideMode == true`），
+    // `:156` 的解除受击先 `:155` 清零再发 ⇒ **唯一客户端可见**的那条。同一次 `Run` 客户端可见的
+    // `SM_HIT(14)` 恒 **1** 条（两者都隐藏时为 0）。
+    if castle_merchant && castle_bound && castle_under_war {
+        if access.get(actor_id).is_some_and(|e| !e.fixed_hide_mode) {
+            // **oracle 次序**（`Merchant.cs:145-149`）：
+            //   if (!FixedHideMode) { SendRefMsg(RM_DISAPPEAR, …); FixedHideMode = true; }
+            // ⇒ 发帧时刻的 `SendRefMsg` 头门读的是**置位前**的状态（`FixedHideMode` 必假，
+            //   只有 `ObMode` 能命中自送支），收件人快照也必须在这一刻取。
+            let ob_mode_at_send = access.get(actor_id).is_some_and(|e| e.ob_mode);
+            outcome.disappear = true;
+            if ob_mode_at_send {
+                // 头门命中 ⇒ 只 `SendMsg` 给自己（NPC 无客户端 ⇒ 客户端零帧）。
+                outcome.disappear_self_only = true;
+            } else {
+                let (map_id, x, y) = access
+                    .get(actor_id)
+                    .map_or((0, 0, 0), |e| (e.map_id, e.x, e.y));
+                // 格扫 = oracle `SendRefMsg` 冷路径（`BaseObject.Message.cs:412-444`）；
+                // 商人 `Race = NPC` ⇒ oracle 的 `Race == Play` 门本就把自己排除，
+                // 故这里直接传 `actor_id`（不是 `monai.rs` 的「sender 可以是 Play」哨兵）。
+                outcome.disappear_targets = crate::session::send_ref_msg_targets_at_impl(
+                    access,
+                    &sim.maps,
+                    actor_id,
+                    map_id,
+                    x,
+                    y,
+                    crate::session::SEND_REF_MSG_RANGE,
+                );
+            }
+            // `Merchant.cs:148`
+            if let Some(e) = access.get_mut(actor_id) {
+                e.flags.fixed_hide_mode = true;
+            }
+        }
+    } else if access.get(actor_id).is_some_and(|e| e.fixed_hide_mode) {
+        if let Some(e) = access.get_mut(actor_id) {
+            e.flags.fixed_hide_mode = false;
+        }
+        outcome.unhide_hit = true;
+    }
+    // `Merchant.cs:161-166`：`BoCanMove && (now - MoveTick) > MoveTime*1000` ⇒ `MapRandomMove`。
+    if can_move && (now - move_tick) > i64::from(move_time) * 1000 {
+        if let Some(e) = access.get_mut(actor_id) {
+            if let Some(st) = e.merchant_state.merchant.as_mut() {
+                st.move_tick = now;
+            }
+        }
+        map_random_move_impl(access, sim, actor_id);
+        outcome.space_moved = true;
+    }
+    // `Merchant.cs:170` 末尾 `base.Run()`：先 SuperMan 回满（`BaseObject.Base.cs:32-36`），
+    // 再 VerifyMapTime 段（`:223-228`）——刷新本格 `CellObject.AddTime`，防 60s 过期。
+    if let Some(mut e) = access.get_mut(actor_id) {
+        e.run_super_man_refill();
+    }
+    crate::world::World::verify_map_time_impl(access, sim, actor_id);
+    outcome
+}
+
+/// `Merchant.RefillGoods`（`Merchant.cs:209-276`）。
+///
+/// 完整对齐 oracle：补货门 `(now - RefillTick) > RefillTime*60*1000` ⇒ 置 `RefillTick`，
+/// `GetStdItemIdx(name) > 0` 时按 `GetRefillList` 的实际库存量走
+/// `goodCout > nRefillCount`（`RefillGoodsItems` 新建 `delta` 件 + oracle `return`）或
+/// `goodCout < nRefillCount`（`RefillDelReFillItem` 从尾删）分支；`GoodsList` 超 1000 的收缩
+/// （脚本 `[goods]` 内保留 5000，否则 1000）。`LocalDb.SaveGoodRecord/SaveGoodPriceRecord`
+/// 在 oracle 是**空壳**（`LocalDB.cs:916/1111`）⇒ 不落库。
+///
+/// 返回本趟是否命中 `>` 分支（oracle 的 `return`）。
+#[must_use]
+fn refill_goods(world: &mut World, actor_id: i32) -> bool {
+    let World { entities, sim, .. } = world;
+    refill_goods_impl(entities, sim, actor_id)
+}
+
+/// **P6b**：`refill_goods` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// 与旧 facade 逐句相同（补货门、`CheckItemPrice`、`>`/`<` 两支、`GoodsList` 上限收缩）；
+/// 物品目录/序号计数改从 `sim`（`item_catalog` / `item_number`）取，访问路径不变。
+#[must_use]
+fn refill_goods_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) -> bool {
+    let now = sim.clock_ms;
+    let len = access
+        .get(actor_id)
+        .and_then(|e| e.merchant)
+        .map_or(0, |st| st.refill_goods.len());
+    let mut changed = false;
+    for i in 0..len {
+        let Some((item_name, count, refill_time, refill_tick)) =
+            access.get(actor_id).and_then(|e| e.merchant).map(|st| {
+                let g = &st.refill_goods[i];
+                (g.item_name.clone(), g.count, g.refill_time, g.refill_tick)
+            })
+        else {
+            break;
+        };
+        if (now - refill_tick) > i64::from(refill_time) * 60 * 1000 {
+            if let Some(e) = access.get_mut(actor_id) {
+                if let Some(st) = e.merchant_state.merchant.as_mut() {
+                    st.refill_goods[i].refill_tick = now;
+                }
+            }
+            let n_index = std_item_idx_by_name_in(&sim.item_catalog, &item_name);
+            if n_index > 0 {
+                let index = u16::try_from(n_index).unwrap_or(u16::MAX);
+                let n_refill_count = merchant_goods_count_impl(access, actor_id, index);
+                let target = usize::try_from(count).unwrap_or(0);
+                if target > n_refill_count {
+                    // oracle `CheckItemPrice(nIndex)`（`Merchant.cs:184-204`，调用点 `:233`）：
+                    // **只在「真要补货」这一支**调（对称支 `target < n_refill_count` **不调**）；
+                    // 无条目 ⇒ `AddItemPrice(index, HUtil32.Round(stdItem.Price * 1.1))`——
+                    // **不判 StdMode**（`ItemTypeList` 缺 StdMode 31 的商品也必须拿到价，
+                    // 否则 `GetItemPrice` 回落 `-1`、买入被 `n_price > 0` 挡掉）；
+                    // 已有条目分支在 oracle 里只算不回写（死代码），此处保持「已有即不动」。
+                    let has_price = access
+                        .get(actor_id)
+                        .and_then(|e| e.merchant)
+                        .is_some_and(|st| st.item_price_list.iter().any(|(i, _)| *i == index));
+                    if !has_price {
+                        let price = std_item_by_idx_in(&sim.item_catalog, usize::from(index))
+                            .map_or(0, |t| t.price);
+                        let n_price = mir2_shared::hutil32::round(f64::from(price) * 1.1);
+                        if let Some(e) = access.get_mut(actor_id) {
+                            if let Some(st) = e.merchant_state.merchant.as_mut() {
+                                st.item_price_list.push((index, n_price));
+                            }
+                        }
+                    }
+                    for _ in 0..(target - n_refill_count) {
+                        if let Some(item) = make_merchant_item_by_name_impl(sim, &item_name) {
+                            // oracle `RefillGoodsItems`：**无条件 Insert(0)**（不过 Dura 过滤）。
+                            merchant_refill_goods_items_impl(access, actor_id, item);
+                        }
+                    }
+                    changed = true;
+                }
+                if target < n_refill_count {
+                    merchant_del_items_from_end_impl(
+                        access,
+                        actor_id,
+                        index,
+                        n_refill_count - target,
+                    );
+                    changed = true;
+                }
+            }
+        }
+    }
+    // `GoodsList` 上限收缩（`Merchant.cs:248-274`）。
+    let group_count = access
+        .get(actor_id)
+        .and_then(|e| e.merchant)
+        .map_or(0, |st| st.goods_list.len());
+    for i in 0..group_count {
+        let Some((index, g_len)) = access
+            .get(actor_id)
+            .and_then(|e| e.merchant)
+            .and_then(|st| st.goods_list.get(i))
+            .map(|g| (g.first().map(|it| it.index), g.len()))
+            .and_then(|(idx, len)| idx.map(|i| (i, len)))
+        else {
+            continue;
+        };
+        if g_len > 1000 {
+            let in_refill = access
+                .get(actor_id)
+                .and_then(|e| e.merchant)
+                .is_some_and(|st| {
+                    st.refill_goods.iter().any(|g| {
+                        let n = std_item_idx_by_name_in(&sim.item_catalog, &g.item_name);
+                        n > 0 && u16::try_from(n).ok() == Some(index)
+                    })
+                });
+            let keep = if in_refill { 5000 } else { 1000 };
+            if g_len > keep {
+                merchant_del_items_from_end_impl(access, actor_id, index, g_len - keep);
+            }
+        }
+    }
+    changed
+}
+
+/// **P6b**：`std_item_idx_by_name` 的目录入参形态（`SimState.item_catalog` 或 facade 的同名字段）。
+fn std_item_idx_by_name_in(catalog: &[StdItem], name: &str) -> usize {
+    if name.is_empty() {
+        return 0;
+    }
+    for (i, item) in catalog.iter().enumerate() {
+        if equals_ordinal_ignore_case(&item.name, name) {
+            return i + 1;
+        }
+    }
+    0
+}
+
+/// **P6b**：`std_item_by_idx` 的目录入参形态（1-based；0/越界 ⇒ `None`）。
+fn std_item_by_idx_in(catalog: &[StdItem], idx: usize) -> Option<&StdItem> {
+    if idx == 0 {
+        return None;
+    }
+    catalog.get(idx - 1)
+}
+
+/// **P6b**：`merchant_goods_count` 的访问器形态（`GetRefillList(nIndex)?.Count`）。
+fn merchant_goods_count_impl<A: crate::entity::EntityAccess>(
+    access: &A,
+    id: i32,
+    index: u16,
+) -> usize {
+    access.get(id).and_then(|e| e.merchant).map_or(0, |st| {
+        st.goods_list
+            .iter()
+            .find(|g| g.first().is_some_and(|it| it.index == index))
+            .map_or(0, |g| g.len())
+    })
+}
+
+/// **P6b**：`Merchant.RefillGoodsItems` 的访问器形态（**无条件** `Insert(0)`）。
+fn merchant_refill_goods_items_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    id: i32,
+    item: MerchantItem,
+) {
+    let Some(e) = access.get_mut(id) else {
+        return;
+    };
+    let Some(st) = e.merchant_state.merchant.as_mut() else {
+        return;
+    };
+    match st
+        .goods_list
+        .iter_mut()
+        .find(|g| g.first().is_some_and(|it| it.index == item.index))
+    {
+        Some(group) => group.insert(0, item),
+        None => st.goods_list.push(vec![item]),
+    }
+}
+
+/// **P6b**：`Merchant.RefillDelReFillItem` 的访问器形态（同组从尾部删 `n` 件）。
+fn merchant_del_items_from_end_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    id: i32,
+    index: u16,
+    n: usize,
+) {
+    let Some(e) = access.get_mut(id) else {
+        return;
+    };
+    let Some(st) = e.merchant_state.merchant.as_mut() else {
+        return;
+    };
+    let Some(gi) = st
+        .goods_list
+        .iter()
+        .position(|g| g.first().is_some_and(|it| it.index == index))
+    else {
+        return;
+    };
+    let g = &mut st.goods_list[gi];
+    let mut left = n;
+    while left > 0 && !g.is_empty() {
+        g.pop();
+        left -= 1;
+    }
+    if g.is_empty() {
+        st.goods_list.remove(gi);
+    }
+}
+
+/// **P6b**：`make_merchant_item_by_name` 的 `SimState` 形态（目录 + `item_number` 计数）。
+fn make_merchant_item_by_name_impl(
+    sim: &mut crate::world::SimState,
+    name: &str,
+) -> Option<MerchantItem> {
+    let idx = std_item_idx_by_name_in(&sim.item_catalog, name);
+    if idx == 0 {
+        return None;
+    }
+    let tpl = std_item_by_idx_in(&sim.item_catalog, idx)?;
+    let (dura, dura_max) = (tpl.dura_max, tpl.dura_max);
+    let make_index = sim.item_number.next_value();
+    Some(MerchantItem {
+        make_index,
+        index: u16::try_from(idx).unwrap_or(u16::MAX),
+        dura,
+        dura_max,
+        desc: [0; 14],
+    })
+}
+
+/// `BaseObject.MapRandomMove`（`BaseObject.cs:1235-1236`）的**两次初始取数**：
+/// `Random(Width-nEgdey-1)+nEgdey`、`Random(Height-nEgdey-1)+nEgdey`。
+///
+/// `nEgdey` 只看**目标图高**（`BaseObject.cs:1218-1229`）：`Height < 150` ⇒（`< 30` ⇒ 2，否则 20），
+/// 否则 50。
+///
+/// **站点归 `merchant` 组**：C# 侧这两抽的 site 恒为 `BaseObject.MapRandomMove@BaseObject.cs:…`
+/// （无论调用者是 `Merchant.Run` 还是魔号 21 的 `MagSaceMove`）⇒ `consumer_groups.tsv` 把该 site
+/// 归 `merchant`。Rust 侧唯一抽数点放在本文件，保证两侧**组 vocabulary 对称**（魔号 21 接线卡）。
+#[must_use]
+pub(crate) fn map_random_move_xy(
+    rng: &mut impl mir2_shared::rng::RandomSource,
+    width: i32,
+    height: i32,
+) -> (i32, i32) {
+    let n_edge_y = if height < 150 {
+        if height < 30 {
+            2
+        } else {
+            20
+        }
+    } else {
+        50
+    };
+    let nx = rng.random_below(width - n_edge_y - 1) + n_edge_y;
+    let ny = rng.random_below(height - n_edge_y - 1) + n_edge_y;
+    (nx, ny)
+}
+
+/// `BaseObject.MapRandomMove`（`BaseObject.cs:1214-1237`）：`Random(Width-nEgdey-1)+nEgdey`
+/// 两次取数（站点归 `merchant` 组），然后 `SpaceMove`（`BaseObject.cs:1103-1172`）——
+/// **落点不可走时进 `SpaceMoveGetRandXY` 移位环继续取数**（至多 201 轮）。
+///
+/// 逐行对照（本片 2026-10-17）：
+///
+/// | oracle | 本仓 |
+/// | --- | --- |
+/// | `MapRandomMove` 首两抽 `Random(Width-nEgdey-1)` / `Random(Height-nEgdey-1)`（`:1235-1236`） | 同（`nEdgeY` 分段见下） |
+/// | `SpaceMove` 同服分支：删旧格 → `CurrX/CurrY = nX/nY` → `SpaceMoveGetRandXY`（`:1128`） | [`crate::slave::space_move_get_rand_xy`]（与 `RecallSlave` **同一** oracle 函数，不复制第二份） |
+/// | `CanWalk(x, y, true)`（`Envirnoment.cs:442-485`）：只判 `cellSuccess && Valid`，忽略格上活体 | `get_cell_info(x, y).1` |
+/// | 不可走：`x < Width-n1C-1 ⇒ x += n18`，否则 `x = Random(Width)`；`y` 同段推进 / `Random(Height)`；`n14++ >= 201` 放弃（`:1067-1094`） | 复用的函数逐句同构 |
+/// | 201 轮仍不可走 ⇒ 回滚旧坐标（`:1147-1153`） | 直接返回（坐标不动；取数流水已推进）——见下「未建模」 |
+/// | 落点可走 ⇒ `AddMapObject`（`ignore_block`，且 `SpaceMoveGetRandXY` 已保证 `Valid`） | [`crate::map::MapGrid::move_object`]（`ignore_block = true`） |
+///
+/// 不改 `Dir`。
+///
+/// **取数站点归组**：首两抽在 `map_random_move_xy`（本文件 ⇒ `merchant` 组，与 C# 的
+/// `BaseObject.MapRandomMove@BaseObject.cs:` 对齐）；环内 `Random(Width)`/`Random(Height)` 落在
+/// `crates/world-bevy/src/space_move.rs`（**`space_move` 组**，与 C# 的 `BaseObject.SpaceMoveGetRandXY@BaseObject.cs:`
+/// 对齐）——**刻意不加 `#[track_caller]`**：加了会让 Rust 侧归 `merchant` 而 C# 侧归 `space_move`，破坏对称。
+///
+/// **可达性（收窄）**：只有 `merchant_run`（DB `CanMove != 0 && MoveTime > 0`）可达。
+/// `npc_run` 的该支**不可达**——固定 NPC 经 `Npcs.txt` 装载 `BoCanMove` 恒 `false`
+/// （`npc.rs` 已登记）⇒ 不改 NPC 面。
+///
+/// **未建模（登记）**：201 轮失败时 oracle 先 `DeleteFromMap` 再回滚 `AddMapObject`（`BaseObject.cs:1114/1150`）。
+/// 本仓不预删，故失败时**坐标/取数/RNG 流水完全一致**，仅当旧格 `Valid` 且同格还有其它对象时
+/// oracle 会把本对象挪到 `obj_list` 末尾（格内顺序）——位置与可达行为无差。
+/// **`pub(crate)`**：`Merchant.Run`（`merchant.rs`）与固定 NPC 的 `Merchant` 类 Run
+/// （`npc.rs::merchant_body_run`，`CastleOfficial : Merchant`）**共用**本函数。
+pub(crate) fn map_random_move(world: &mut World, actor_id: i32) {
+    let World { entities, sim, .. } = world;
+    map_random_move_impl(entities, sim, actor_id);
+}
+
+/// **P6a2b**：`map_random_move` 的 facade/段共用实现（`EntityAccess` + `SimState` 形态）。
+///
+/// `Merchant.Run`（[`merchant_run`]）与固定 NPC 的 `Merchant.Run`（
+/// `crate::npc::merchant_body_run` → `SimNpc` 段）都走本函数——一处定义、两处消费，无第二份拷贝。
+pub(crate) fn map_random_move_impl<A: crate::entity::EntityAccess>(
+    access: &mut A,
+    sim: &mut crate::world::SimState,
+    actor_id: i32,
+) {
+    let Some(e) = access.get(actor_id) else {
+        return;
+    };
+    let (map_id, from_x, from_y) = (e.map_id, e.x, e.y);
+    let cert_cell_type = crate::world::entity_cell_type(&e);
+    let Some(map) = sim.maps.get(map_id) else {
+        return;
+    };
+    let (w, h) = (map.width, map.height);
+    // 首两抽（oracle `BaseObject.cs:1235-1236`）——与魔号 21 共用同一抽数点。
+    let (nx, ny) = map_random_move_xy(&mut sim.rng, w, h);
+    // `SpaceMove`（`BaseObject.cs:1128`）：以 `(nX, nY)` 为起点找可走格；起点即墙时
+    // `SpaceMoveGetRandXY` 进移位环继续抽数（201 轮上限）。
+    let found = {
+        let map = &sim.maps[map_id];
+        crate::slave::space_move_get_rand_xy(&mut sim.rng, w, h, nx, ny, |x, y| {
+            map.get_cell_info(x, y).1
+        })
+    };
+    let Some((nx, ny)) = found else {
+        // oracle 回滚到旧坐标（`BaseObject.cs:1147-1153`）：坐标不动。
+        return;
+    };
+    let now = sim.clock_ms;
+    let moved = sim.maps[map_id].move_object(
+        MoveRequest {
+            from_x,
+            from_y,
+            actor_id,
+            cert_cell_type,
+            to_x: nx,
+            to_y: ny,
+            ignore_block: true,
+            add_time: now,
+        },
+        |_| false,
+    );
+    if moved {
+        if let Some(t) = access.transform_mut(actor_id) {
+            t.x = nx;
+            t.y = ny;
+        }
+    }
+}
+
+/// C# `string.Equals(a, b, OrdinalIgnoreCase)` 的近似（与 `mir2-formula::drop` 同口径：
+/// 逐字符 Unicode 大写折叠后按序比较）。
+fn equals_ordinal_ignore_case(a: &str, b: &str) -> bool {
+    a.chars()
+        .flat_map(char::to_uppercase)
+        .eq(b.chars().flat_map(char::to_uppercase))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::castle::{CastleSiegeConfig, UserCastle};
+    use crate::entity::EntitySpawn;
+    use crate::map::CellAttribute;
+    use mir2_data::models::StdItem;
+
+    fn sample_state() -> MerchantState {
+        MerchantState::new(
+            "封魔谷/恶魔修理师".to_string(),
+            "0139".to_string(),
+            0,
+            9,
+            100,
+            false,
+            false,
+            0,
+            MerchantFlags::default(),
+            vec![1, 2],
+            vec![MerchantGoods {
+                item_name: "金创药(小量)".to_string(),
+                count: 5,
+                refill_time: 5,
+                refill_tick: 0,
+            }],
+            0,
+        )
+    }
+
+    fn spawn_at(x: i32, y: i32) -> MerchantSpawn {
+        MerchantSpawn {
+            name: "卫家店".to_string(),
+            x,
+            y,
+            map_id: 0,
+            state: sample_state(),
+        }
+    }
+
+    /// 卡 `openmir2-castle-potion-buy-response`：**初始装货**（oracle `Merchant.LoadNpcData`
+    /// 末尾的 `RefillGoods()`，`Merchant.cs:1070`）。
+    ///
+    /// 旧行为：`spawn_merchant` 后货架为空（只有 `Run` 的 30s 计时支会补）⇒ 进图几秒内
+    /// `SM_SENDGOODSLIST(645)` 是空货架。牙：把 `merchant_refill_goods_now` 的调用删掉/改成 no-op，
+    /// 本用例最后一个断言必红。
+    /// 卡 `openmir2-castle-potion-buy-response` **P2**：补货**不过** `Dura` 过滤。
+    ///
+    /// 用**真实药店分布**（`Market_Def/沙巴克/药店-0153.txt` 的 14 条 `[goods]`）：
+    /// 前 6 条模板 `DuraMax=1`（金创药/魔法药 小/中量、强效金/魔法药），
+    /// 后 8 条 `DuraMax=0`（金创药(小)包/魔法药(小)包/金创药(中)包/魔法药(中)包、
+    /// 超级金创药/超级魔法药、太阳水/强效太阳水）。
+    /// 若补货误走 `merchant_add_item_to_goods_list`（`Dura==0` 直接丢）⇒ 只剩 6 组 ⇒
+    /// 本断言（恰好 14 组）必红——reviewer-21 实测 `left: 6, right: 14`。
+    #[test]
+    fn merchant_refill_keeps_zero_dura_goods_groups() {
+        const DURA_ONE: [&str; 6] = [
+            "金创药(小量)",
+            "魔法药(小量)",
+            "金创药(中量)",
+            "魔法药(中量)",
+            "强效金创药",
+            "强效魔法药",
+        ];
+        const DURA_ZERO: [&str; 8] = [
+            "金创药(小)包",
+            "魔法药(小)包",
+            "金创药(中)包",
+            "魔法药(中)包",
+            "超级金创药",
+            "超级魔法药",
+            "太阳水",
+            "强效太阳水",
+        ];
+        let mut w = World::new(20, 20);
+        let mut catalog = Vec::new();
+        let mut refill = Vec::new();
+        for (names, dura_max) in [(DURA_ONE.as_slice(), 1u16), (DURA_ZERO.as_slice(), 0u16)] {
+            for name in names {
+                catalog.push(StdItem {
+                    name: (*name).to_string(),
+                    price: 10,
+                    dura_max,
+                    ..StdItem::default()
+                });
+                refill.push(MerchantGoods {
+                    item_name: (*name).to_string(),
+                    count: 3,
+                    refill_time: 0,
+                    refill_tick: 0,
+                });
+            }
+        }
+        w.set_item_catalog(catalog);
+        let mut sp = spawn_at(3, 4);
+        sp.state.refill_goods = refill;
+        let id = w.spawn_merchant(sp).expect("挂图成功");
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
+        let groups = w.merchant_goods_groups(id).expect("商人状态");
+        assert_eq!(
+            groups.len(),
+            14,
+            "真实药店 14 条 [goods]（6×DuraMax=1 + 8×DuraMax=0）必须成 14 组"
+        );
+        // **A1（组序牙）**：组序 = `[goods]` 首次出现序（C# `GoodsList.Add` 顺序；
+        // Rust 新组 `push` 顺序），组内 `Insert(0)` ⇒ 后补的在前 ⇒ `make_index` 递减。
+        // 只断言「组数」抓不到顺序漂移（例如把新组插到头部 / 用 push 而非 insert(0)）。
+        assert_eq!(
+            groups[0][0].index, 1,
+            "第 1 组 = 第 1 条 [goods] 的模板 Index"
+        );
+        assert_eq!(
+            groups[13][0].index, 14,
+            "末组 = 第 14 条 [goods] 的模板 Index"
+        );
+        assert!(
+            groups[0][0].make_index > groups[0][2].make_index,
+            "组内 Insert(0) ⇒ make_index 递减（got {:?})",
+            groups[0].iter().map(|it| it.make_index).collect::<Vec<_>>()
+        );
+    }
+
+    /// 卡 `openmir2-merchant-price-list-and-weight-frame` C 阶段：
+    /// ① 新建商人 `item_price_list` **必须为空**（空表有语义：首次补货才补 ×1.1）；
+    /// ② 补货一次 ⇒ 追加 `(Index, HUtil32.Round(Price*1.1))`，`80 → 88`；
+    /// ③ **StdMode 不在 ItemTypeList**（31 ∉ [1,2]）也必须补价——否则 `get_item_price` 回落
+    ///    `-1`、买入被 `n_price > 0` 挡掉（reviewer-20 的「买不成」形态）。
+    /// 两向牙（Leader 追加）：`ItemPriceList` 是**每商人实例**的——
+    /// ① 没触发过补货的商人 ⇒ 价格表仍为空（取价回落原始价，不 panic）；
+    /// ② 补过货的商人 ⇒ 有 `(1, 88)`；
+    /// ③ **两个商人互不串表**（只补 a ⇒ b 仍空）。
+    #[test]
+    fn item_price_list_is_per_merchant_and_only_refill_fills_it() {
+        let mut w = World::new(16, 16);
+        w.set_item_catalog(vec![StdItem {
+            name: "potion".to_string(),
+            price: 80,
+            dura_max: 10,
+            std_mode: 31,
+            ..StdItem::default()
+        }]);
+        let mut a = spawn_at(2, 2);
+        a.state.refill_goods = vec![MerchantGoods {
+            item_name: "potion".to_string(),
+            count: 1,
+            refill_time: 0,
+            refill_tick: 0,
+        }];
+        let mut b = spawn_at(3, 3);
+        b.state.refill_goods = Vec::new(); // 永不补货
+        let ia = w.spawn_merchant(a).expect("挂图成功");
+        let ib = w.spawn_merchant(b).expect("挂图成功");
+        assert!(w.merchant_item_price_list(ia).is_empty());
+        assert!(w.merchant_item_price_list(ib).is_empty());
+        assert!(w.merchant_refill_goods_now(ia), "a 应补货");
+        assert_eq!(w.merchant_item_price_list(ia), &[(1u16, 88i32)]);
+        assert!(
+            !w.merchant_refill_goods_now(ib),
+            "b 没有 [goods] ⇒ 不产生变动"
+        );
+        assert!(
+            w.merchant_item_price_list(ib).is_empty(),
+            "未补货商人不得拿到别的商人的价格表"
+        );
+    }
+
+    #[test]
+    fn refill_adds_item_price_rounding_away_from_zero_without_std_mode_filter() {
+        let mut w = World::new(16, 16);
+        w.set_item_catalog(vec![StdItem {
+            name: "potion".to_string(),
+            price: 80,
+            dura_max: 10,
+            std_mode: 31,
+            ..StdItem::default()
+        }]);
+        let mut sp = spawn_at(2, 2);
+        sp.state.refill_goods = vec![MerchantGoods {
+            item_name: "potion".to_string(),
+            count: 1,
+            refill_time: 0,
+            refill_tick: 0,
+        }];
+        let id = w.spawn_merchant(sp).expect("挂图成功");
+        assert!(
+            w.merchant_item_price_list(id).is_empty(),
+            "初始价格表必须为空"
+        );
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发");
+        assert_eq!(
+            w.merchant_item_price_list(id),
+            &[(1u16, 88i32)],
+            "Price=80 ⇒ Round(80*1.1)=88（AwayFromZero；且不判 StdMode=31）"
+        );
+    }
+
+    #[test]
+    fn merchant_refill_goods_now_fills_goods_list_at_spawn() {
+        let mut w = World::new(20, 20);
+        // 用两份**非零 DuraMax** 的药：`AddItemToGoodsList` 对 `Dura == 0` 直接丢，
+        // 首饰类模板（DuraMax=0）会被静默丢弃，测不出「补完所有条」。
+        w.set_item_catalog(vec![
+            StdItem {
+                name: "金创药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "魔法药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+        ]);
+        let name1 = "金创药(小量)".to_string();
+        let name2 = "魔法药(小量)".to_string();
+        let mut sp = spawn_at(3, 4);
+        sp.state.refill_goods = vec![
+            MerchantGoods {
+                item_name: name1,
+                count: 3,
+                refill_time: 0,
+                refill_tick: 0,
+            },
+            MerchantGoods {
+                item_name: name2,
+                count: 4,
+                refill_time: 0,
+                refill_tick: 0,
+            },
+        ];
+        let id = w.spawn_merchant(sp).expect("可走格应挂图成功");
+        assert!(
+            w.merchant_goods_groups(id).expect("商人状态").is_empty(),
+            "旧行为：spawn 后货架为空"
+        );
+        assert!(w.merchant_refill_goods_now(id), "初始装货应触发补货");
+        // **量**的牙（不是 `!is_empty`）：两条 `[goods]` ⇒ 恰好两组，每组条数 = 声明 count。
+        // 若 `refill_goods` 里保留「补一条就 return」，这里会是 1 组 ⇒ 本断言必红。
+        let groups = w.merchant_goods_groups(id).expect("商人状态");
+        assert_eq!(groups.len(), 2, "两条 [goods] ⇒ 恰好两组");
+        assert_eq!(groups[0].len(), 3, "第 1 组条数 = 声明 count");
+        assert_eq!(groups[1].len(), 4, "第 2 组条数 = 声明 count");
+    }
+
+    #[test]
+    fn merchant_attaches_to_walkable_cell_and_is_listed() {
+        let mut w = World::new(20, 20);
+        let id = w.spawn_merchant(spawn_at(3, 4)).expect("可走格应挂图成功");
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), (3, 4));
+        assert!(e.add_to_mapped, "挂图成功 ⇒ AddToMaped=true");
+        assert!(e.merchant.is_some());
+        assert_eq!(w.merchant_ids_sorted(), vec![id]);
+        // `CellType::Merchant` 落格（`Merchant.cs:433 CellType = CellType.Merchant` 的等价物）。
+        let (cell, ok) = w.map(0).get_cell_info(3, 4);
+        assert!(ok);
+        assert_eq!(cell.count(), 1);
+        assert_eq!(cell.obj_list[0].cell_type, CellType::Merchant);
+    }
+
+    #[test]
+    fn merchant_dropped_when_cell_not_walkable() {
+        // 越界格 ⇒ `CanWalk` 失败 ⇒ `AddtoMapSuccess = true` 且 `!IsHide` ⇒ 移除（oracle RemoveAt）。
+        let mut w = World::new(8, 8);
+        assert!(
+            w.spawn_merchant(spawn_at(99, 99)).is_none(),
+            "越界应挂图失败被移除"
+        );
+        assert!(w.merchant_ids_sorted().is_empty());
+        assert_eq!(
+            w.entities.len(),
+            0,
+            "oracle 从 MerchantList 移除 ⇒ 不留实体"
+        );
+    }
+
+    #[test]
+    fn std_item_lookup_is_one_based_and_case_insensitive() {
+        let mut w = World::new(4, 4);
+        w.item_catalog = vec![
+            StdItem {
+                name: "金创药(小量)".to_string(),
+                price: 100,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "WoodenSword".to_string(),
+                price: 30,
+                ..StdItem::default()
+            },
+        ];
+        assert_eq!(w.std_item_idx_by_name("金创药(小量)"), 1);
+        assert_eq!(
+            w.std_item_idx_by_name("woodensword"),
+            2,
+            "OrdinalIgnoreCase"
+        );
+        assert_eq!(w.std_item_idx_by_name("不存在"), 0);
+        assert_eq!(w.std_item_idx_by_name(""), 0);
+        assert_eq!(w.std_item_by_idx(2).map(|i| i.price), Some(30));
+        assert!(w.std_item_by_idx(0).is_none());
+        assert!(w.std_item_by_idx(9).is_none());
+    }
+
+    fn set_run_tick_stale(w: &mut World, id: i32) {
+        if let Some(st) = w.entities.merchant_mut(id) {
+            st.run_tick = -1000;
+        }
+    }
+
+    /// 复算 **整条** ctor 公共链 4 抽（`BaseObject` `:439/441` + `AnimalObject` `:76/77`，
+    /// 字面 oracle 参数），返回第 0 抽（`RunTick` 的 `Random(1500)`）。
+    ///
+    /// **订正缘由**：原测试只复算 1 抽 ⇒ 与 oracle 相反（少 3 抽）；现按 4 抽字面复算。
+    fn ctor_chain_first_draw(exp: &mut RandomNumber) -> i32 {
+        let d = exp.random_below(MERCHANT_RUN_DELAY_MAX); // #0 BaseObject.RunTick = Random(1500)
+        let _ = exp.random_below(2000); // #1 BaseObject.SearchTime = Random(2000)+2000
+        let _ = exp.random_below(3000); // #2 AnimalObject.AttackTick = Random(3000)
+        let _ = exp.random_below(3000); // #3 AnimalObject.WalkTick = Random(3000)
+        d
+    }
+
+    /// 构造抽：**整条** ctor 公共链 4 抽（`BaseObject.cs:439/441` + `AnimalObject.cs:76/77`），
+    /// `RunTick = now + Random(1500)`（`BaseObject.cs:439`）＝ 公共链第 0 抽；走共享 `world.rng`
+    /// （站点归 `merchant` 组）。
+    ///
+    /// **订正缘由**：原断言只抽 1 次（只看 `Random(1500)`）⇒ 每条商人少抽 3 次、与 oracle 相反；
+    /// 现按 4 抽复算（少抽即「同源」断言必红）。
+    #[test]
+    fn ctor_draws_run_delay_from_shared_rng() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(1234);
+        w.clock_ms = 5_000;
+        let id = w.spawn_merchant(spawn_at(3, 4)).expect("挂图成功");
+        let mut exp = RandomNumber::with_seed(1234);
+        let delay = ctor_chain_first_draw(&mut exp);
+        let st = w.entities.merchant(id).unwrap();
+        assert_eq!(st.run_tick, 5_000 + i64::from(delay));
+        // 取数与独立流对齐（同一个 `world.rng`，无私有流）。
+        assert_eq!(w.rng.random(), exp.random());
+    }
+
+    /// 节奏门（owner `eb3bf42f` ①）：同一 200ms 窗口内第二趟是 no-op —— 即使有人为把
+    /// `run_tick` 拨旧（模拟「窗口内有到期商人」），也不得再跑。
+    #[test]
+    fn merchant_pass_cadence_blocks_second_pass_in_same_window() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(7);
+        w.clock_ms = 0;
+        let a = w.spawn_merchant(spawn_at(1, 1)).expect("挂图成功");
+        set_run_tick_stale(&mut w, a);
+        let first = w.merchant_tick();
+        assert_eq!(first.ran, vec![a], "首趟应跑");
+        // 人为拨旧（现实中可由「窗口中途新挂的商人 + 旧 RunTick」触发）⇒ 节奏门必须挡住第二趟。
+        set_run_tick_stale(&mut w, a);
+        let second = w.merchant_tick();
+        assert!(second.ran.is_empty(), "同一 200ms 窗口内不得重复 Run");
+        assert!(second.turns.is_empty() && second.hits.is_empty());
+    }
+
+    /// `RunTime` 门（owner `eb3bf42f` ②）：`(now - RunTick) > 250` 才 Run
+    /// （`WorldServer.Merchant.cs:74`、`BaseObject.cs:440`）。
+    #[test]
+    fn merchant_run_time_gate_not_due_then_due() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(9);
+        w.clock_ms = 0;
+        let a = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
+        if let Some(st) = w.entities.merchant_mut(a) {
+            st.run_tick = 0;
+        }
+        w.clock_ms = MERCHANT_RUN_TIME; // 250: 250-0 不 > 250
+        assert!(w.merchant_tick().ran.is_empty(), "未到期不得 Run");
+        w.clock_ms = MERCHANT_RUN_TIME + MERCHANT_PASS_INTERVAL_MS; // 450: 450-0 > 250
+        assert_eq!(w.merchant_tick().ran, vec![a], "到期才 Run");
+    }
+
+    /// Ghost 60s 过期门（`WorldServer.Merchant.cs:84-91`）用 **sim 时钟**（不是墙钟）。
+    #[test]
+    fn merchant_ghost_expires_after_60s_sim_clock() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(11);
+        w.clock_ms = 0;
+        let a = w.spawn_merchant(spawn_at(4, 4)).expect("挂图成功");
+        if let Some(e) = w.entities.get_mut(a) {
+            e.life_cycle.ghost = true;
+        }
+        if let Some(st) = w.entities.merchant_mut(a) {
+            st.ghost_tick = 0;
+        }
+        w.clock_ms = MERCHANT_GHOST_EXPIRE_MS; // 60000: 不 > 60000
+        assert!(w.merchant_tick().removed.is_empty(), "未满 60s 不移除");
+        w.clock_ms = MERCHANT_GHOST_EXPIRE_MS + MERCHANT_PASS_INTERVAL_MS + 1; // 60201: > 60000
+        assert_eq!(
+            w.merchant_tick().removed,
+            vec![a],
+            "满 60s 移除（RemoveAt）"
+        );
+        assert!(w.merchant_ids_sorted().is_empty());
+    }
+
+    /// `Merchant.Run` 的 RNG 次序（`Merchant.cs:132-141`）：`Random(50)` →（命中）`RandomByte(8)`，
+    /// 未命中再 `Random(50)`；用第二个同种子流逐抽复算。
+    #[test]
+    fn merchant_run_rng_stream_matches_oracle_order() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(4321);
+        w.clock_ms = 100_000; // 让补货门也满足（RNG-free，不影响取数）
+        let a = w.spawn_merchant(spawn_at(5, 5)).expect("挂图成功");
+        set_run_tick_stale(&mut w, a);
+        let mut exp = RandomNumber::with_seed(4321);
+        let _ctor = ctor_chain_first_draw(&mut exp);
+        let out = merchant_run(&mut w, a);
+        if exp.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+            let d = exp.random_byte(MERCHANT_TURN_DIR_MAX);
+            assert_eq!(out.turned, Some(d), "转向支取数次序");
+            assert_eq!(w.entities.get(a).unwrap().ai.dir, d);
+        } else if exp.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+            assert!(out.hit, "RM_HIT 支取数次序");
+        }
+        assert_eq!(w.rng.random(), exp.random(), "Run 后两流仍同源");
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────────
+    // 城堡商人 `FixedHideMode` 支（卡 `openmir2-castle-merchant-fixedhide-hit`，tier=R）
+    //
+    // oracle `src/GameSrv/Npc/Merchant.cs:143-160`：
+    //   · 战中（`CastleMerchant && Castle != null && Castle.UnderWar`）且 `!FixedHideMode`
+    //     ⇒ `SendRefMsg(RM_DISAPPEAR, …)` + `FixedHideMode = true`（`:145-149`）；
+    //   · 否则（**含 `Castle == null`**）且 `FixedHideMode`
+    //     ⇒ `FixedHideMode = false` + `SendRefMsg(RM_HIT, Dir, CurrX, CurrY, 0, "")`（`:153-156`）。
+    //
+    // 本支**不抽数**（确定性）⇒ 与 RNG 支（`:132-141`）不同，可构造级逐帧判；它也正是
+    // `tools/conformance/rules.json` 里 ident 14 的 `ignore` 规则**覆盖不到**的那一条。
+    // ─────────────────────────────────────────────────────────────────────────────
+
+    fn castle_spawn(x: i32, y: i32) -> MerchantSpawn {
+        let mut spawn = spawn_at(x, y);
+        spawn.state.castle_merchant = true; // `IsCastle` 列 ≠ 0（`LocalDB.cs:461-464`）
+        spawn
+    }
+
+    fn set_castle_under_war(w: &mut World, id: i32, under_war: bool) {
+        if let Some(st) = w.entities.merchant_mut(id) {
+            st.castle_under_war = under_war; // `Castle.UnderWar` 快照（⑧ 接线后由城堡写）
+        }
+    }
+
+    /// 找一个**安静**种子：ctor 4 抽之后的前 `runs` 次 `Run` 都不命中转向支/受击支
+    /// （两支各抽 2 次 ⇒ 逐次复算）。这样显隐支的断言不会被 RNG 帧污染。
+    fn seed_with_quiet_runs(runs: usize) -> i32 {
+        (1..20_000i32)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                let _ = ctor_chain_first_draw(&mut r);
+                (0..runs).all(|_| {
+                    r.random_below(MERCHANT_TURN_RANDOM_MOD) != 0
+                        && r.random_below(MERCHANT_TURN_RANDOM_MOD) != 0
+                })
+            })
+            .expect("存在安静种子")
+    }
+
+    /// 找一个种子：ctor 4 抽 + 前 `run_index` 次 `Run` 之后，第 `run_index + 1` 次 `Run`
+    /// 命中 **RNG 受击支**（第一个 `Random(50) != 0`、第二个 `== 0`）；且前序 `Run` 都**不**受击。
+    fn seed_with_rng_hit_on_run(run_index: usize) -> i32 {
+        (1..20_000i32)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                let _ = ctor_chain_first_draw(&mut r);
+                for _ in 0..run_index {
+                    if r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+                        let _ = r.random_byte(MERCHANT_TURN_DIR_MAX);
+                    } else if r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+                        return false; // 前序 Run 不得受击（否则受击计数断言被噪声污染）
+                    }
+                }
+                r.random_below(MERCHANT_TURN_RANDOM_MOD) != 0
+                    && r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0
+            })
+            .expect("存在 RNG 受击种子")
+    }
+
+    /// 找一个种子：ctor 4 抽 + 前 `run_index` 次 `Run` 之后，第 `run_index + 1` 次 `Run`
+    /// 命中**转向支**（第一个 `Random(50) == 0`）。
+    fn seed_with_turn_on_run(run_index: usize) -> i32 {
+        (1..20_000i32)
+            .find(|s| {
+                let mut r = RandomNumber::with_seed(*s);
+                let _ = ctor_chain_first_draw(&mut r);
+                for _ in 0..run_index {
+                    if r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+                        let _ = r.random_byte(MERCHANT_TURN_DIR_MAX);
+                    } else {
+                        let _ = r.random_below(MERCHANT_TURN_RANDOM_MOD);
+                    }
+                }
+                r.random_below(MERCHANT_TURN_RANDOM_MOD) == 0
+            })
+            .expect("存在转向种子")
+    }
+
+    /// **判据①（构造级，卡 `openmir2-castle-merchant-fixedhide-hit`）**：`UnderWar` 切换的
+    /// 两向 + 两个稳态。
+    ///
+    /// · `false→true` ⇒ **一条** `RM_DISAPPEAR`（`outcome.disappear`）且 `FixedHideMode` 置位；
+    /// · 战中不变 ⇒ **零帧**；
+    /// · `true→false` ⇒ **恰好一条** `RM_HIT`（确定性支 `outcome.unhide_hit`，RNG 支安静）且标志清 0；
+    /// · 战后不变 ⇒ **零帧**（这条支不得变成噪声源）。
+    ///
+    /// 牙（红检，实测）：① 删 `:156` 对应的 `outcome.unhide_hit = true` ⇒ ④ 必红；
+    /// ② 把补发挪到「进入战中」（`disappear` 与 `unhide_hit` 互换）⇒ ②/④ 必红。
+    #[test]
+    fn castle_merchant_fixed_hide_toggles_on_war_transitions() {
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(seed_with_quiet_runs(6));
+        w.clock_ms = 100_000;
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w.set_merchant_castle_index(id, Some(0)), "Castle != null");
+
+        // ① 非战中（`UnderWar = false`）稳态：零帧、不隐藏。
+        let out = merchant_run(&mut w, id);
+        assert!(!out.disappear && !out.unhide_hit && !out.hit, "非战中零帧");
+        assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
+
+        // ② `UnderWar false→true`：恰好一条 `RM_DISAPPEAR` + `FixedHideMode = true`。
+        set_castle_under_war(&mut w, id, true);
+        let out = merchant_run(&mut w, id);
+        assert!(out.disappear, "进入战中 ⇒ RM_DISAPPEAR");
+        assert!(
+            !out.unhide_hit,
+            "进入战中不发 RM_HIT（oracle :145-149 只有 disappear）"
+        );
+        assert!(
+            w.entities.get(id).unwrap().fixed_hide_mode,
+            "FixedHideMode = true"
+        );
+        assert!(
+            !out.disappear_self_only,
+            "商人无 `ObMode` ⇒ 发帧时刻头门不命中，正常广播"
+        );
+
+        // ③ 战中不变：不重复发（`if (!FixedHideMode)` 守卫）。
+        let out = merchant_run(&mut w, id);
+        assert!(
+            !out.disappear && !out.unhide_hit && !out.hit,
+            "战中稳态零帧"
+        );
+
+        // ④ `UnderWar true→false`：恰好一条 `RM_HIT`（`:156` 确定性支），标志清 0。
+        set_castle_under_war(&mut w, id, false);
+        let out = merchant_run(&mut w, id);
+        assert!(out.unhide_hit, "解除时补发 RM_HIT（Merchant.cs:156）");
+        assert!(!out.hit, "本次 Run 的 RNG 支未命中（安静种子）⇒ 就一条");
+        assert!(!out.disappear, "解除时不发 RM_DISAPPEAR");
+        assert!(
+            !w.entities.get(id).unwrap().fixed_hide_mode,
+            "FixedHideMode = false"
+        );
+
+        // ⑤ 战后稳态：不再补发。
+        let out = merchant_run(&mut w, id);
+        assert!(
+            !out.unhide_hit && !out.disappear && !out.hit,
+            "战后稳态零帧"
+        );
+    }
+
+    /// **判据（卡 `openmir2-castle-merchant-disappear-downlink`）**：`RM_DISAPPEAR` 的
+    /// 收件人是**发帧时刻**（`:147`，`FixedHideMode` 尚未置位）的 `SendRefMsg` 格扫快照。
+    ///
+    /// · 发帧时刻 `ObMode` 为假 ⇒ 收件人 = ±`SEND_REF_MSG_RANGE` 格内 `Race==Play && !Ghost`
+    ///   的玩家（格序、排除商人自己）；`FixedHideMode` 在快照**之后**才置位（`:148` 同序）；
+    /// · 发帧时刻 `ObMode` 为真 ⇒ 头门 `ObMode || FixedHideMode` 命中，只自送（零收件人）；
+    /// · 排水时刻实体已 `fixed_hide_mode = true` ⇒ 若那时按 `SendRefMsg` 头门重算，收件人会退化成
+    ///   「只有自己」⇒ **整帧丢失**（本用例用「排水时刻实体已隐藏」的断言钉住这个前提，
+    ///   宿主侧用 `chat::hear_targets` 的同形断言，见
+    ///   `castle_merchant_disappear_downlink_through_production_drain`）。
+    ///
+    /// 牙（红检，实测）：① 先 `fixed_hide_mode = true` 再按 `SendRefMsg` 头门取快照
+    /// （= 排水时重算的语义）⇒ 落自送支、`disappear_targets` 变空 ⇒ ① 的
+    /// `disappear_self_only`/`disappear_targets` 断言必红；② 去掉发帧时刻格扫、改用
+    /// `vec![actor_id]` ⇒ ① 的 `disappear_targets == vec![p]` 必红；③ 把格扫范围从
+    /// `SEND_REF_MSG_RANGE` 放开 ⇒ ① 的「`q` 不在收件人里」必红。
+    #[test]
+    fn castle_merchant_disappear_snapshots_recipients_before_fixed_hide() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(seed_with_quiet_runs(4));
+        w.clock_ms = 100_000;
+        w.open_session("p");
+        let p = w
+            .enter_map("p", crate::EntitySpawn::new(0, "p".to_string(), 5, 5), 0)
+            .expect("玩家 p 进图");
+        w.open_session("q");
+        let q = w
+            .enter_map("q", crate::EntitySpawn::new(0, "q".to_string(), 40, 40), 0)
+            .expect("远处玩家 q 进图");
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w.set_merchant_castle_index(id, Some(0)), "Castle != null");
+
+        // ① `ObMode` 为假：发帧时刻格扫 = 可见范围内的 Play（排除自己与 12 格外的 q）。
+        set_castle_under_war(&mut w, id, true);
+        let out = merchant_run(&mut w, id);
+        assert!(out.disappear, "进入战中 ⇒ RM_DISAPPEAR");
+        assert!(!out.disappear_self_only, "发帧时刻未隐藏 ⇒ 头门不命中");
+        assert_eq!(
+            out.disappear_targets,
+            vec![p],
+            "收件人 = ±12 格内 Play（q 在 35 格外 ⇒ 不在；商人自己是 NPC ⇒ 不在）"
+        );
+        assert!(
+            !out.disappear_targets.contains(&q),
+            "12 格外的玩家不在收件人集合里（范围门）"
+        );
+        assert_ne!(
+            out.disappear_targets,
+            vec![id],
+            "快照不得取到排水时刻的隐藏态（那样只剩自己）"
+        );
+        // `:148` 同序：快照**之后**才置 `FixedHideMode`。
+        assert!(
+            w.entities.get(id).unwrap().fixed_hide_mode,
+            "FixedHideMode = true（发帧之后才置位）"
+        );
+        // 排水时刻的实体状态：`ObMode || FixedHideMode` 已为真 ⇒ 若此刻重算收件人只会得到自己。
+        {
+            let e = w.entities.get(id).unwrap();
+            assert!(e.ob_mode || e.fixed_hide_mode, "排水时已隐藏（前提）");
+        }
+
+        // ② 发帧时刻 `ObMode` 已置位 ⇒ 头门只自送（商人无客户端 ⇒ 零收件人）。
+        {
+            let e = w.entities.get_mut(id).unwrap();
+            e.flags.fixed_hide_mode = false;
+            e.flags.ob_mode = true;
+        }
+        set_castle_under_war(&mut w, id, true);
+        let out = merchant_run(&mut w, id);
+        assert!(out.disappear, "仍会调用 SendRefMsg");
+        assert!(out.disappear_self_only, "头门命中 ⇒ 只自送");
+        assert!(
+            out.disappear_targets.is_empty(),
+            "自送支不产生任何客户端收件人"
+        );
+        assert!(
+            w.entities.get(id).unwrap().fixed_hide_mode,
+            "`:148` 照常置位"
+        );
+    }
+
+    /// **判据②（`Castle != null` 守卫，`Merchant.cs:143` 第二合取项）**：
+    /// `CastleMerchant=1` + 战中快照，但 `Castle == null` ⇒ oracle 走 **else** 支：不消失；
+    /// 若此时已 `FixedHideMode`，else 支**仍**补一条 `RM_HIT`（`:153-157` 不判城堡/战中）。
+    /// 非城堡商人（`CastleMerchant=0`）同样不进消失支。
+    ///
+    /// 牙（红检）：把 `castle_bound` 守卫去掉（只留 `castle_merchant && castle_under_war`）⇒
+    /// ① 多发 `RM_DISAPPEAR` ⇒ 必红。
+    #[test]
+    fn castle_merchant_without_castle_never_enters_fixed_hide() {
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(seed_with_quiet_runs(4));
+        w.clock_ms = 100_000;
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert_eq!(w.merchant_castle_index(id), None, "Castle == null");
+        set_castle_under_war(&mut w, id, true);
+
+        // ① `Castle == null` ⇒ 不进 `FixedHideMode`（oracle 的 `Castle != null` 为假）。
+        let out = merchant_run(&mut w, id);
+        assert!(!out.disappear, "Castle == null 不得进 FixedHideMode");
+        assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
+        assert!(!out.unhide_hit, "未隐藏 ⇒ else 支也不补发");
+
+        // ② 已处于 `FixedHideMode`（例如城堡刚解绑）⇒ else 支补一条 `RM_HIT`。
+        if let Some(e) = w.entities.get_mut(id) {
+            e.flags.fixed_hide_mode = true;
+        }
+        let out = merchant_run(&mut w, id);
+        assert!(out.unhide_hit, "else 支解除 ⇒ RM_HIT");
+        assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
+
+        // ③ 非城堡商人（`CastleMerchant = 0`）+ 战中快照 + 已绑定城堡 ⇒ 仍不进消失支。
+        if let Some(st) = w.entities.merchant_mut(id) {
+            st.castle_merchant = false;
+        }
+        assert!(w.set_merchant_castle_index(id, Some(0)));
+        let out = merchant_run(&mut w, id);
+        assert!(!out.disappear, "非城堡商人不得进 FixedHideMode");
+        assert!(!w.entities.get(id).unwrap().fixed_hide_mode);
+    }
+
+    /// **判据③（`SendRefMsg` 自送头门：战中的 RNG 受击不达客户端）**：
+    /// `BaseObject.Message.cs:390-394` 的 `if (ObMode || FixedHideMode) { SendMsg(自己); return; }`
+    /// ⇒ 发帧时刻已隐藏的 `RM_HIT`/`RM_TURN` **只自送**、客户端零帧。
+    ///
+    /// 同一次 `Run` 里 RNG 受击支（`:140`）与显隐解除支（`:156`）可以**同时抽中**，但客户端可见性
+    /// 互斥：`:140` 那一刻 `FixedHideMode` 必然仍为 `true`（正是它让 `:153` 的解除支成立）⇒ 只自送；
+    /// `:156` 先 `:155` 清零再发 ⇒ **唯一**客户端可见的那条。⇒ `merchant_hits` 恒 `vec![id]`。
+    ///
+    /// 牙（红检）：去掉 `merchant_run` 的 `hidden` 判定（两条支恒记可见）⇒ `hits` 变
+    /// `vec![id, id]` ⇒ 必红。
+    #[test]
+    fn castle_merchant_unhide_hit_is_the_only_client_visible_hit() {
+        let mut w = World::new(16, 16);
+        // 第 1 次 `Run`（进入战中）不受击；第 2 次 `Run`（解除）命中 RNG 受击支。
+        w.rng = RandomNumber::with_seed(seed_with_rng_hit_on_run(1));
+        w.clock_ms = 100_000;
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w.set_merchant_castle_index(id, Some(0)));
+
+        // ① 进入战中（`RM_DISAPPEAR`，无 RM_HIT）。
+        set_castle_under_war(&mut w, id, true);
+        set_run_tick_stale(&mut w, id);
+        assert!(
+            w.merchant_tick().hits.is_empty(),
+            "进入战中的 Run 不发 RM_HIT"
+        );
+        assert!(w.entities.get(id).unwrap().fixed_hide_mode);
+
+        // ② 解除：RNG 受击支抽中但此刻仍隐藏 ⇒ 自送；解除支先清零再发 ⇒ 唯一客户端帧。
+        set_castle_under_war(&mut w, id, false);
+        set_run_tick_stale(&mut w, id);
+        w.clock_ms += MERCHANT_PASS_INTERVAL_MS;
+        let second = w.merchant_tick();
+        assert_eq!(second.hits, vec![id], "客户端可见 SM_HIT 恰好一条");
+
+        // ③ 同形态的 flags 复核（`merchant_run` 与 tick 是同一条路径，直调看自送位）。
+        let mut w2 = World::new(16, 16);
+        w2.rng = RandomNumber::with_seed(seed_with_rng_hit_on_run(0));
+        w2.clock_ms = 100_000;
+        let id2 = w2.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w2.set_merchant_castle_index(id2, Some(0)));
+        if let Some(e) = w2.entities.get_mut(id2) {
+            e.flags.fixed_hide_mode = true; // 战中稳态（解除支的入口状态）
+        }
+        let out = merchant_run(&mut w2, id2);
+        assert!(out.hit_self_only, "战中的 :140 RNG 受击 ⇒ 只自送");
+        assert!(!out.hit, "自送不是客户端帧");
+        assert!(out.unhide_hit, "解除支（:156）先清零再发 ⇒ 客户端可见");
+        assert_eq!(
+            u8::from(out.hit) + u8::from(out.unhide_hit),
+            1,
+            "同一次 Run 客户端可见的 SM_HIT 恒 1 条"
+        );
+    }
+
+    /// **判据④（战中稳态：自送帧不得漏到客户端）**：`FixedHideMode` 期间每个 `Run` 的
+    /// RNG 受击（`:140`）与 `TurnTo`（`BaseObject.cs:1585` 的 `RM_TURN`）都只自送 ⇒
+    /// `merchant_hits` / `merchant_turns` **恒空**（`hits_self_only`/`turns_self_only` 记实际抽中的
+    /// 自送帧），而 `Dir` 与抽数照常发生。
+    ///
+    /// 牙（红检）：去掉 `merchant_run` 的 `hidden` 判定 ⇒ `hits`/`turns` 各出现一条 ⇒ 必红。
+    #[test]
+    fn hidden_merchant_turn_and_rng_hit_are_self_only() {
+        // ① RNG 受击：`Run` 首次抽数即命中受击支（第一个 `Random(50)!=0`、第二个 `==0`）。
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(seed_with_rng_hit_on_run(0));
+        w.clock_ms = 100_000;
+        let id = w.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w.set_merchant_castle_index(id, Some(0)));
+        set_castle_under_war(&mut w, id, true);
+        if let Some(e) = w.entities.get_mut(id) {
+            e.flags.fixed_hide_mode = true; // 战中稳态
+        }
+        set_run_tick_stale(&mut w, id);
+        let out = merchant_run(&mut w, id);
+        assert!(out.hit_self_only, "隐藏中的 RNG 受击只自送");
+        assert!(!out.hit, "客户端零帧");
+        assert!(
+            !out.disappear,
+            "已隐藏 ⇒ `!FixedHideMode` 守卫挡住，不重复发"
+        );
+
+        set_run_tick_stale(&mut w, id);
+        let tick = w.merchant_tick();
+        assert!(tick.hits.is_empty(), "战中稳态 client-visible hits 恒空");
+        assert!(tick.turns.is_empty(), "本 Run 未走转向支");
+
+        // ② 转身：`Run` 首次抽数即命中转向支（`Random(50)==0` ⇒ `RandomByte(8)`），隐藏 ⇒ 只自送。
+        let turn_seed = seed_with_turn_on_run(0);
+        // 期望朝向 = 同种子的独立复算（ctor 4 抽 → 转向支 2 抽）。
+        let mut exp = RandomNumber::with_seed(turn_seed);
+        let _ = ctor_chain_first_draw(&mut exp);
+        let _ = exp.random_below(MERCHANT_TURN_RANDOM_MOD);
+        let want_dir = exp.random_byte(MERCHANT_TURN_DIR_MAX);
+
+        let mut w2 = World::new(16, 16);
+        w2.rng = RandomNumber::with_seed(turn_seed);
+        w2.clock_ms = 100_000;
+        let id2 = w2.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w2.set_merchant_castle_index(id2, Some(0)));
+        set_castle_under_war(&mut w2, id2, true);
+        if let Some(e) = w2.entities.get_mut(id2) {
+            e.flags.fixed_hide_mode = true;
+        }
+        set_run_tick_stale(&mut w2, id2);
+        let out2 = merchant_run(&mut w2, id2);
+        assert!(out2.turned_self_only, "隐藏中的 RM_TURN 只自送");
+        assert!(out2.turned.is_none(), "客户端零帧");
+        assert_eq!(
+            w2.entities.get(id2).unwrap().ai.dir,
+            want_dir,
+            "Dir 仍照常写入（TurnTo 先写 Dir；可见性只挡 RefMsg）"
+        );
+
+        // tick 级同口径（另行构造同一形态，让 `Run` 首次抽数再命中转向支）。
+        let mut w3 = World::new(16, 16);
+        w3.rng = RandomNumber::with_seed(turn_seed);
+        w3.clock_ms = 100_000;
+        let id3 = w3.spawn_merchant(castle_spawn(4, 4)).expect("挂图成功");
+        assert!(w3.set_merchant_castle_index(id3, Some(0)));
+        set_castle_under_war(&mut w3, id3, true);
+        if let Some(e) = w3.entities.get_mut(id3) {
+            e.flags.fixed_hide_mode = true;
+        }
+        set_run_tick_stale(&mut w3, id3);
+        let tick2 = w3.merchant_tick();
+        assert!(tick2.turns.is_empty(), "战中稳态 client-visible turns 恒空");
+        assert_eq!(
+            tick2.turns_self_only,
+            vec![(id3, want_dir)],
+            "转向支确实命中，但只自送"
+        );
+    }
+
+    /// `RefillGoods` 计时（oracle `fb2824b6b`）：到期命中 `>` 分支 ⇒ 置 `RefillTick`，
+    /// 并**一次 Run 补完所有 `[goods]` 条**（不再「补一条就 return」，也不再 5min/错峰）；
+    /// 紧接着的第二次 Run 不再补。
+    #[test]
+    fn merchant_refill_run_processes_all_goods_and_advances_tick() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(3);
+        w.item_catalog = vec![
+            StdItem {
+                name: "金创药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "魔法药(小量)".to_string(),
+                price: 100,
+                dura_max: 10,
+                ..StdItem::default()
+            },
+        ];
+        w.clock_ms = 0;
+        let mut sp = spawn_at(6, 6);
+        sp.state.refill_goods = vec![
+            MerchantGoods {
+                item_name: "金创药(小量)".to_string(),
+                count: 2,
+                refill_time: 0,
+                refill_tick: 0,
+            },
+            MerchantGoods {
+                item_name: "魔法药(小量)".to_string(),
+                count: 2,
+                refill_time: 0,
+                refill_tick: 0,
+            },
+        ];
+        let a = w.spawn_merchant(sp).expect("挂图成功");
+        w.clock_ms = MERCHANT_REFILL_GOODS_INTERVAL_MS + 1;
+        set_run_tick_stale(&mut w, a);
+        let out = merchant_run(&mut w, a);
+        assert!(out.refilled, "到期应命中补货");
+        // `Merchant.cs` 注释里的「14 种商品 70 分钟」正是「补一条就 return」的后果；这里钉死
+        // 「一次 Run 补完所有条」。
+        assert_eq!(
+            w.merchant_goods_groups(a).expect("商人状态").len(),
+            2,
+            "两条 [goods] 必须一次补完 ⇒ 两组"
+        );
+        let st = w.entities.merchant(a).unwrap();
+        assert_eq!(st.refill_goods[0].refill_tick, w.clock_ms, "补货门推进");
+        assert_eq!(st.refill_goods[1].refill_tick, w.clock_ms, "第二条也推进");
+        // 同一时刻再来一次：补货门不满足 ⇒ 不补（oracle 口径）。
+        set_run_tick_stale(&mut w, a);
+        assert!(!merchant_run(&mut w, a).refilled, "同一 tick 不重复补货");
+    }
+
+    /// `BoCanMove` 到点 ⇒ `MapRandomMove` 消耗 2 次 `Random`（`BaseObject.cs:1214-1237`）
+    /// 并按地图高定 `nEgdey`（150/30 两档）。
+    #[test]
+    fn merchant_can_move_uses_two_map_random_draws() {
+        let mut w = World::new(200, 200);
+        w.rng = RandomNumber::with_seed(99);
+        w.clock_ms = 1_000_000;
+        let mut spawn = spawn_at(10, 10);
+        spawn.state.can_move = true;
+        spawn.state.move_time = 0; // 到点条件：now - move_tick > 0（move_tick 置 now 后下次不满足）
+        let a = w.spawn_merchant(spawn).expect("挂图成功");
+        set_run_tick_stale(&mut w, a);
+        if let Some(st) = w.entities.merchant_mut(a) {
+            st.move_tick = -1000; // 到点（`now - MoveTick > MoveTime*1000`）
+        }
+        let mut exp = RandomNumber::with_seed(99);
+        let _ctor = ctor_chain_first_draw(&mut exp);
+        let out = merchant_run(&mut w, a);
+        // 复算 turn/hit 两段取数。
+        if exp.random_below(MERCHANT_TURN_RANDOM_MOD) == 0 {
+            let _d = exp.random_byte(MERCHANT_TURN_DIR_MAX);
+        } else {
+            let _h = exp.random_below(MERCHANT_TURN_RANDOM_MOD);
+        }
+        // `MapRandomMove`：nEdgey=50（height 200 >= 150）⇒ Random(200-50-1)=Random(149) 两次。
+        let nx = exp.random_below(200 - 50 - 1) + 50;
+        let ny = exp.random_below(200 - 50 - 1) + 50;
+        assert!(out.space_moved, "到点应 SpaceMove");
+        let e = w.entities.get(a).unwrap();
+        assert_eq!((e.x, e.y), (nx, ny), "落点坐标 = oracle 两次取数");
+        assert_eq!(w.rng.random(), exp.random(), "两组取数后两流仍同源");
+    }
+
+    /// owner `eb3bf42f` ① 的规模版：**256 条商人**在同一 pass 里各跑一次（不重复 Run），
+    /// 且同一 200ms 窗口的第二趟全部 no-op。
+    #[test]
+    fn merchant_pass_runs_each_of_many_merchants_once() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(21);
+        w.clock_ms = 0;
+        let mut ids = Vec::new();
+        for i in 0..256 {
+            let mut spawn = spawn_at(1 + (i % 30), 1 + (i / 30));
+            spawn.name = format!("m{i}");
+            ids.push(w.spawn_merchant(spawn).expect("挂图成功"));
+        }
+        let make_due = |w: &mut World| {
+            for id in &ids {
+                if let Some(st) = w.entities.merchant_mut(*id) {
+                    st.run_tick = -1000;
+                }
+            }
+        };
+        w.clock_ms = 10_000;
+        make_due(&mut w);
+        let out = w.merchant_tick();
+        assert_eq!(out.ran.len(), ids.len(), "256 条全部应 Run");
+        let mut unique = out.ran.clone();
+        unique.sort_unstable();
+        unique.dedup();
+        assert_eq!(unique.len(), ids.len(), "同一 pass 内不得重复 Run");
+        // 同一 200ms 窗口第二趟：即便把 RunTick 拨旧，节奏门也得挡住全部 256 条。
+        make_due(&mut w);
+        assert!(
+            w.merchant_tick().ran.is_empty(),
+            "同一 200ms 窗口内 256 条都不得重复 Run"
+        );
+    }
+
+    /// reviewer-6 **M-2**：商人识别**必须走 [`Entity::merchant`] 身份**，不能走 race ——
+    /// `monster_ai_tick` 的 `merchant.is_none()` 过滤是行为关键：商人不得被 `monster_run`
+    /// 当怪跑（置 `target_x = -1` / 消耗 AI 取数）。删掉该守卫 ⇒ 必红。
+    ///
+    /// 2026-10-21（`openmir2-merchant-race-bias`）后商人 `race` 已从 50 改为 10，但
+    /// `race > Play(0)` 仍为真 ⇒ 本守卫依旧被需要；把身份门换成 `race == 50` ⇒ 必红。
+    #[test]
+    fn monster_ai_tick_skips_merchants_race_is_animal() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(5);
+        w.clock_ms = 10_000;
+        let a = w.spawn_merchant(spawn_at(7, 7)).expect("挂图成功");
+        // 让「若被当怪跑」必然产生可观测副作用：walk 到点 + 无目标 ⇒ `monster_run` 置 `target_x=-1`
+        // 并在无目标分支调 `wondering`（消耗 RNG）。
+        if let Some(e) = w.entities.get_mut(a) {
+            e.ai.walk_speed = -1;
+            e.ai.walk_tick = 0;
+            e.ai.target_creature = None;
+            e.ai.target_x = 42; // 哨兵
+        }
+        let rng_before = w.rng.clone();
+        crate::monai::monster_ai_tick(&mut w);
+        let e = w.entities.get(a).unwrap();
+        assert_eq!(
+            e.ai.target_x, 42,
+            "商人不得被 monster_run 当怪跑（身份门 merchant.is_none）"
+        );
+        assert_eq!(e.ai.walk_tick, 0, "商人不得被 AI 推进 walk_tick");
+        let mut expect = rng_before;
+        assert_eq!(w.rng.random(), expect.random(), "跳过商人 ⇒ 不消耗 AI 取数");
+    }
+
+    fn player_entity(id: i32, name: &str, x: i32, y: i32) -> EntitySpawn {
+        let mut e = crate::EntitySpawn::new(id, name, x, y);
+        e.race = crate::entity::ACTOR_RACE_PLAY;
+        e.hp = 100;
+        e.max_hp = 100;
+        e.dc = 0x0A_14; // LoByte=20、HiByte=10 ⇒ 攻击力 20（差为负 ⇒ 0..0）
+        e.hit_point = 10;
+        e.speed_point = 0;
+        e
+    }
+
+    fn race_entity(id: i32, name: &str, x: i32, y: i32, race: u8) -> EntitySpawn {
+        let mut e = crate::EntitySpawn::new(id, name, x, y);
+        e.race = race;
+        e
+    }
+
+    /// `openmir2-merchant-race-bias`：oracle 商人**行为轴** `Race = ActorRace.NPC(10)`
+    /// （`NormNpc.cs:42`；`Merchant` ctor 不覆写 `Race`），**外观轴**
+    /// `RaceImg = ActorRace.Merchant(50)`（`Merchant.cs:84`）。`crates/world` 用独立
+    /// [`Entity::race_img`] 承载外观轴，`race` 保持 10 供所有攻击/受击判定读取。
+    ///
+    /// 改坏必红：把 `insert_merchant` 的 `e.race` 改回 `ACTOR_RACE_MERCHANT(50)` ⇒ race 断言红；
+    /// 删 `e.race_img = ACTOR_RACE_MERCHANT` ⇒ race_img 断言红。
+    #[test]
+    fn merchant_race_is_npc_and_race_img_is_merchant() {
+        let mut w = World::new(20, 20);
+        let id = w.spawn_merchant(spawn_at(3, 4)).expect("挂图成功");
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!(
+            e.race,
+            crate::entity::ACTOR_RACE_NPC,
+            "行为轴 = NormNpc ctor 的 Race"
+        );
+        assert_eq!(e.race, 10);
+        assert_eq!(
+            e.race_img, ACTOR_RACE_MERCHANT,
+            "外观轴 = Merchant ctor 的 RaceImg"
+        );
+        assert_eq!(e.race_img, 50);
+        // 身份仍按 `merchant` 标记，不依赖 race；CellType 同源（`NormNpc.cs:50`）。
+        assert!(e.merchant.is_some());
+        assert_eq!(w.merchant_ids_sorted(), vec![id]);
+        assert_eq!(crate::world::entity_cell_type(&e), CellType::Merchant);
+    }
+
+    /// 判据 1（玩家攻击路径）：**race 窗模式**（HAM_ALL/PEACE/GROUP/GUILD/PKATTACK）下
+    /// 商人不可被选中/击中，攻击不产生伤害与受击帧；`HAM_MASTER`/`HAM_DEAR` 对非玩家目标
+    /// 恒真（`PlayObject.Attack.cs:689-698`），属 oracle 既有分支，不在本判据范围。
+    ///
+    /// 走生产结算入口 [`World::attack_once`]（`Command::Attack` 的唯一结算点，玩家/怪物共用；
+    /// 等价 oracle `_Attack` + `AttackSuccess`）。受击帧 = `RM_REFMESSAGE` 到点后的
+    /// `SM_STRUCK` 广播（`pending_refmessage_frames`）。
+    ///
+    /// 改坏必红：把 `insert_merchant` 的 `e.race` 改回 50 ⇒ `HAM_ALL` 变可攻击、
+    /// `damage > 0`、受击帧非空。
+    #[test]
+    fn player_cannot_target_or_damage_merchant() {
+        use crate::combat::{
+            is_attack_target_base, is_attack_target_player_grouped, is_proper_target_grouped,
+            ATTACK_MODE_HAM_ALL, ATTACK_MODE_HAM_GROUP, ATTACK_MODE_HAM_GUILD,
+            ATTACK_MODE_HAM_PEACE, ATTACK_MODE_HAM_PKATTACK,
+        };
+
+        let mut w = World::new(32, 32);
+        w.enable_refmessage_delay();
+        w.clock_ms = 1_000;
+        let mid = w.spawn_merchant(spawn_at(5, 5)).expect("挂图成功");
+        let pid = w.add_entity(player_entity(0, "hero", 6, 5));
+        let player = w.entities.spawn_cloned(pid).expect("玩家在");
+        let merchant = w.entities.spawn_cloned(mid).expect("商人在");
+
+        // 玩家攻方：所有按 race 窗口分派的攻击模式都把 race 10 判成**不可攻击**
+        // （`HAM_DEAR` / `HAM_MASTER` 对「非 dear / 非师徒」恒真，不属 race 窗口，故不列）。
+        for mode in [
+            ATTACK_MODE_HAM_ALL,
+            ATTACK_MODE_HAM_PEACE,
+            ATTACK_MODE_HAM_GROUP,
+            ATTACK_MODE_HAM_GUILD,
+            ATTACK_MODE_HAM_PKATTACK,
+        ] {
+            let mut p = player.clone();
+            p.attack_mode = mode;
+            assert!(
+                !is_attack_target_player_grouped(&p, &merchant, &[]),
+                "攻击模式 {mode} 不得把商人当目标"
+            );
+        }
+        let mut p = player.clone();
+        p.attack_mode = ATTACK_MODE_HAM_ALL;
+        assert!(!is_proper_target_grouped(&p, &merchant, &[]));
+
+        // 基版目标规则（怪物/NPC 攻方）：普通怪不攻击商人；`NastyMode` 的 race 窗
+        // `[NPC(10), PeaceNpc(15)]` 也排除 race 10（race 50 时会被误判为可攻击）。
+        let mut plain_mon = race_entity(0, "plain", 7, 5, crate::entity::ACTOR_RACE_MONSTER);
+        plain_mon.nasty_mode = false;
+        assert!(!is_attack_target_base(&plain_mon, &merchant));
+        let mut nasty_mon = plain_mon.clone();
+        nasty_mon.nasty_mode = true;
+        assert!(
+            !is_attack_target_base(&nasty_mon, &merchant),
+            "NastyMode 的 race 窗排除商人"
+        );
+
+        // 生产结算入口：不命中、不掉血、不排 `SendStruckDelayMsg`（受击帧门）。
+        let hp_before = merchant.hp;
+        let outcome = w.attack_once(pid, mid).expect("攻击应结算");
+        assert!(!outcome.hit, "不可攻击目标不得命中");
+        assert_eq!(outcome.damage, 0, "商人不得掉血");
+        assert_eq!(outcome.struck_power, 0, "不得入队 RM_REFMESSAGE");
+        assert_eq!(w.entities.get(mid).unwrap().hp, hp_before);
+        assert!(
+            w.entities.get(mid).unwrap().merchant.is_some(),
+            "商人仍在 merchant 身份位（不得从列表消失）"
+        );
+        // 到点投递：没有 RM_REFMESSAGE ⇒ 没有任何受击帧。
+        w.clock_ms += 1_000;
+        w.deliver_self_delay_msgs();
+        assert!(
+            w.take_refmessage_frames().is_empty(),
+            "对商人攻击不得产生受击帧"
+        );
+    }
+
+    /// 玩家打商店 NPC：`_Attack` 的 `Race > Play ⇒ SendMsg(RM_STRUCK)` 入队，
+    /// `Merchant.Run` 尾的 `base.Run()` 必须出队并走 `BreakHolySeizeMode → 656`。
+    /// 红检：删 `merchant_tick` 里的 `base_object_run_monster` ⇒ 本用例红。
+    #[test]
+    fn player_attack_merchant_produces_name_color_through_base_run() {
+        let mut w = World::new(32, 32);
+        w.clock_ms = 1_000;
+        w.enable_merchant_tick();
+        let mid = w.spawn_merchant(spawn_at(5, 5)).expect("挂图成功");
+        let pid = w.add_entity(player_entity(0, "hero", 6, 5));
+        assert!(w.enter_world(pid), "玩家必须落图，656 才有观察者");
+        {
+            let st = w.entities.merchant_mut(mid).expect("商人状态");
+            st.run_tick = 0;
+        }
+
+        let outcome = w.attack_once(pid, mid).expect("攻击应结算");
+        assert_eq!(outcome.damage, 0, "NPC 不可被伤害");
+        assert_eq!(
+            w.entities.get(mid).unwrap().ai.pending_struck.len(),
+            1,
+            "race>Play ⇒ RM_STRUCK 入队"
+        );
+        w.merchant_tick();
+
+        let refs = w.take_monster_ref_msgs();
+        let colors: Vec<_> = refs
+            .iter()
+            .filter(|m| m.ident == crate::monai::RM_CHANGENAMECOLOR)
+            .collect();
+        assert_eq!(colors.len(), 1, "恰一条 656：{refs:?}");
+        let color = colors[0];
+        assert_eq!(color.actor_id, mid);
+        assert_eq!(color.recipients, vec![pid], "观察者必须收到 656");
+        assert_eq!(
+            (
+                color.w_param,
+                color.n_param1,
+                color.n_param2,
+                color.n_param3
+            ),
+            (0, 0, 0, 0)
+        );
+        assert!(!color.self_only);
+        assert!(
+            w.entities.get(mid).unwrap().ai.pending_struck.is_empty(),
+            "出队后队列必须清空"
+        );
+        assert!(!w.entities.get(mid).unwrap().ai.holy_seize);
+    }
+
+    /// 判据 2（回归）：race 50 的目标**仍可被玩家攻击**，伤害与受击帧路径不变。
+    ///
+    /// 覆盖 oracle 的「动物 race 50」语义（`ActorRace.Animal = Merchant = 50`，`Race.cs`）；
+    /// 商人 race 改成 10 不得把 race 50 一并排除。
+    ///
+    /// 改坏必红：把 `is_attack_target_player_grouped` 的 `HAM_ALL` 上界从
+    /// `ACTOR_RACE_PEACE_NPC(15)` 放宽到 `ACTOR_RACE_ANIMAL(50)` ⇒ race 50 被判不可攻击 ⇒ 红。
+    #[test]
+    fn race_50_stays_attackable_for_players() {
+        use crate::combat::{is_attack_target_player_grouped, ATTACK_MODE_HAM_ALL};
+        use crate::entity::ACTOR_RACE_ANIMAL;
+
+        let mut w = World::new(32, 32);
+        w.enable_refmessage_delay();
+        w.clock_ms = 1_000;
+        let pid = w.add_entity(player_entity(0, "hero", 6, 5));
+        let aid = w.add_entity(race_entity(0, "animal", 5, 5, ACTOR_RACE_ANIMAL));
+        let player = w.entities.spawn_cloned(pid).expect("玩家在");
+        let animal = w.entities.spawn_cloned(aid).expect("动物在");
+        let mut p = player.clone();
+        p.attack_mode = ATTACK_MODE_HAM_ALL;
+        assert!(
+            is_attack_target_player_grouped(&p, &animal, &[]),
+            "race 50 仍属可攻击集"
+        );
+        let hp_before = animal.hp;
+        let outcome = w.attack_once(pid, aid).expect("攻击应结算");
+        assert!(outcome.hit, "race 50 目标应命中");
+        assert!(outcome.damage > 0, "race 50 目标应掉血");
+        assert_eq!(
+            w.entities.get(aid).unwrap().hp,
+            hp_before - outcome.damage,
+            "伤害路径不变（HP 扣减与结算一致）"
+        );
+        w.clock_ms += 1_000;
+        w.deliver_self_delay_msgs();
+        assert!(
+            !w.take_refmessage_frames().is_empty(),
+            "race 50 受击仍产生受击帧"
+        );
+    }
+
+    /// 判据 3（身份面）：race 从 50→10 不得让商人从 `merchant_ids` / `ProcessMerchants`
+    /// 列表消失；tick 与 CellType / 视野更新门都按身份（`merchant.is_some()`）判定。
+    ///
+    /// 改坏必红：把 `merchant_ids_sorted` 的 `e.merchant.is_some()` 换成
+    /// `e.race == ACTOR_RACE_MERCHANT` ⇒ 商人列表为空、tick 不跑 ⇒ 红。
+    #[test]
+    fn merchant_tick_and_identity_do_not_depend_on_race() {
+        let mut w = World::new(20, 20);
+        w.clock_ms = 10_000;
+        let id = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
+        // 令 `RunTick` 早已到点（`ProcessMerchants` 的 `now - RunTick > RunTime` 门）。
+        if let Some(st) = w.entities.merchant_mut(id) {
+            st.run_tick = 0;
+        }
+        w.clock_ms += MERCHANT_RUN_TIME + 1;
+        let out = w.merchant_tick();
+        assert_eq!(w.merchant_ids_sorted(), vec![id], "身份列表不依赖 race");
+        assert!(out.ran.contains(&id), "商人仍由 ProcessMerchants 驱动");
+        let e = w.entities.get(id).unwrap();
+        assert_eq!(crate::world::entity_cell_type(&e), CellType::Merchant);
+        assert!(
+            !crate::monai::consumes_view_range_update(&e),
+            "商人仍不消费 RM_UPDATEVIEWRANGE"
+        );
+        assert!(e.merchant.is_some(), "点击/对话的宿主身份位仍为真");
+        assert_eq!(e.race, crate::entity::ACTOR_RACE_NPC);
+    }
+
+    fn item(index: u16, make_index: i32, dura: u16) -> MerchantItem {
+        MerchantItem {
+            make_index,
+            index,
+            dura,
+            dura_max: 10,
+            desc: [0; 14],
+        }
+    }
+
+    /// `Merchant.AddItemToGoodsList`（`Merchant.cs:1417`）：同 `Index` 组 `Insert(0)`、
+    /// `Dura <= 0` 不收、无组则新建（组序 = 首次出现序）。红检：改成 `push` ⇒ 顺序断言必红。
+    #[test]
+    fn merchant_add_item_to_goods_list_inserts_front() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 0;
+        let id = w.spawn_merchant(spawn_at(1, 1)).expect("挂图成功");
+        w.merchant_add_item_to_goods_list(id, item(1, 10, 5));
+        w.merchant_add_item_to_goods_list(id, item(2, 20, 5));
+        w.merchant_add_item_to_goods_list(id, item(1, 11, 5));
+        // `Dura <= 0` 不收。
+        w.merchant_add_item_to_goods_list(id, item(1, 12, 0));
+        let groups = w.merchant_goods_groups(id).expect("商人还在");
+        assert_eq!(groups.len(), 2, "两个 Index ⇒ 两组");
+        assert_eq!(groups[0][0].make_index, 11, "Insert(0) ⇒ 后加的在前");
+        assert_eq!(groups[0][1].make_index, 10);
+        assert_eq!(groups[1][0].index, 2, "组序 = 首次出现序");
+        assert_eq!(w.merchant_goods_count(id, 1), 2);
+        assert_eq!(w.merchant_goods_count(id, 9), 0);
+    }
+
+    /// `ClientBuyItem` 的取件：`RemoveAt(j)`，空组 `GoodsList.RemoveAt(i)`（`Merchant.cs:1269-1273`）。
+    #[test]
+    fn merchant_take_goods_item_removes_empty_group() {
+        let mut w = World::new(16, 16);
+        w.clock_ms = 0;
+        let id = w.spawn_merchant(spawn_at(1, 1)).expect("挂图成功");
+        w.merchant_add_item_to_goods_list(id, item(1, 10, 5));
+        let taken = w.merchant_take_goods_item(id, 0, 0).expect("取件");
+        assert_eq!(taken.make_index, 10);
+        assert!(w.merchant_goods_groups(id).unwrap().is_empty(), "空组移除");
+        assert!(w.merchant_take_goods_item(id, 0, 0).is_none());
+    }
+
+    /// `RefillGoods`（`Merchant.cs:209`）：到期后按 `[goods]` 目标件数 **建出对应数量** 的实例
+    /// （`CopyToUserItemFromName`：`Index` 1-based、`Dura = DuraMax = 模板 DuraMax`、
+    /// `MakeIndex = M2Share.GetItemNumber()`），并置 `RefillTick`（oracle `return`）。
+    #[test]
+    fn merchant_refill_creates_goods_items_from_script_entries() {
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(13);
+        w.clock_ms = 0;
+        w.item_catalog = vec![StdItem {
+            name: "金创药(小量)".to_string(),
+            price: 100,
+            dura_max: 10,
+            ..StdItem::default()
+        }];
+        let id = w.spawn_merchant(spawn_at(2, 2)).expect("挂图成功");
+        // 夹具 `[goods]` 的 `RefillTime=5`（分钟）⇒ 逐条门是 5min；Run 门 30s 只负责「多久检查一次」。
+        w.clock_ms = 5 * 60 * 1000 + 1;
+        set_run_tick_stale(&mut w, id);
+        let out = merchant_run(&mut w, id);
+        assert!(out.refilled, "到期应补货");
+        let groups = w.merchant_goods_groups(id).expect("商人还在");
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 5, "[goods] Count=5 ⇒ 建 5 件");
+        assert_eq!(groups[0][0].index, 1);
+        assert_eq!(groups[0][0].dura, 10);
+        assert_eq!(groups[0][0].dura_max, 10);
+        assert!(groups[0][0].make_index > 0, "MakeIndex 由计数器分配");
+    }
+
+    /// 红检牙齿：`RefillGoods` 的 `goodCout < nRefillCount` 支（库存多于 `[goods]` 目标）
+    /// 从**尾部**删到目标数（`RefillDelReFillItem`，`Merchant.cs:317`）。
+    #[test]
+    fn merchant_refill_trims_excess_from_end() {
+        let mut w = World::new(16, 16);
+        w.rng = RandomNumber::with_seed(17);
+        w.clock_ms = 0;
+        w.item_catalog = vec![StdItem {
+            name: "金创药(小量)".to_string(),
+            dura_max: 10,
+            ..StdItem::default()
+        }];
+        let id = w.spawn_merchant(spawn_at(3, 3)).expect("挂图成功");
+        // 目标 5，库存已 7 ⇒ 删 2（尾部）。
+        for i in 0..7 {
+            w.merchant_add_item_to_goods_list(id, item(1, 100 + i, 5));
+        }
+        w.clock_ms = 5 * 60 * 1000 + 1; // 夹具 `[goods]` 的 RefillTime=5min
+        set_run_tick_stale(&mut w, id);
+        // 旧实现 `<` 支不 `return` ⇒ `refilled` 为 false；现在 `refilled` 反映「有任何变动」。
+        let _ = merchant_run(&mut w, id);
+        assert_eq!(w.merchant_goods_count(id, 1), 5, "删到目标 5 件");
+    }
+
+    // ---------------------------------------------------------------------------------
+    // `MapRandomMove` 移位环（卡 `openmir2-map-random-move-shift-loop`，tier=R）
+    //
+    // 期望表的**独立复算**：下面自写 .NET Framework legacy `System.Random`（Knuth 减法）
+    // 与 oracle `MapRandomMove` / `SpaceMoveGetRandXY` 环体；**不复用**本仓的
+    // `space_move_get_rand_xy` / `DotNetRandom`（否则期望与实现同源，改坏必绿）。
+    // ---------------------------------------------------------------------------------
+
+    /// .NET `System.Random` 常量（`MBIG`/`MSEED`）。
+    const ORACLE_MBIG: i32 = i32::MAX;
+    const ORACLE_MSEED: i32 = 161_803_398;
+
+    /// .NET Framework legacy `System.Random`（Knuth 减法滞后斐波那契）的独立复刻。
+    struct OracleRandom {
+        seed_array: [i32; 56],
+        inext: usize,
+        inextp: usize,
+    }
+
+    impl OracleRandom {
+        fn new(seed: i32) -> Self {
+            let mut seed_array = [0i32; 56];
+            // `Random(int Seed)`：`subtraction = Seed == Int32.MinValue ? Int32.MaxValue : Abs(Seed)`。
+            let subtraction = if seed == i32::MIN {
+                i32::MAX
+            } else {
+                seed.abs()
+            };
+            let mut mj = ORACLE_MSEED - subtraction;
+            seed_array[55] = mj;
+            let mut mk = 1i32;
+            for i in 1..55usize {
+                let ii = (21 * i) % 55;
+                seed_array[ii] = mk;
+                mk = mj - mk;
+                if mk < 0 {
+                    mk += ORACLE_MBIG;
+                }
+                mj = seed_array[ii];
+            }
+            for _ in 1..5 {
+                for i in 1..56usize {
+                    seed_array[i] -= seed_array[1 + (i + 30) % 55];
+                    if seed_array[i] < 0 {
+                        seed_array[i] += ORACLE_MBIG;
+                    }
+                }
+            }
+            OracleRandom {
+                seed_array,
+                inext: 0,
+                inextp: 21,
+            }
+        }
+
+        fn internal_sample(&mut self) -> i32 {
+            let mut loc_inext = self.inext + 1;
+            let mut loc_inextp = self.inextp + 1;
+            if loc_inext >= 56 {
+                loc_inext = 1;
+            }
+            if loc_inextp >= 56 {
+                loc_inextp = 1;
+            }
+            let mut ret_val = self.seed_array[loc_inext] - self.seed_array[loc_inextp];
+            if ret_val == ORACLE_MBIG {
+                ret_val -= 1;
+            }
+            if ret_val < 0 {
+                ret_val += ORACLE_MBIG;
+            }
+            self.seed_array[loc_inext] = ret_val;
+            self.inext = loc_inext;
+            self.inextp = loc_inextp;
+            ret_val
+        }
+
+        /// `Next()`（后续流水比对用）。
+        fn next_value(&mut self) -> i32 {
+            self.internal_sample()
+        }
+
+        /// `Next(int maxValue)` = `(int)(Sample() * maxValue)`，`Sample() = InternalSample()/MBIG`。
+        fn next_max(&mut self, max_value: i32) -> i32 {
+            assert!(max_value >= 0);
+            (self.internal_sample() as f64 * (1.0 / f64::from(ORACLE_MBIG)) * f64::from(max_value))
+                as i32
+        }
+    }
+
+    /// oracle `SpaceMoveGetRandXY`（`BaseObject.cs:1040-1101`）的独立环体复刻。
+    /// 返回 `(成功?, 终点x, 终点y, 逐抽 (参数, 结果), 迭代数)`。
+    fn oracle_space_move_get_rand_xy<F>(
+        rng: &mut OracleRandom,
+        width: i32,
+        height: i32,
+        mut x: i32,
+        mut y: i32,
+        mut can_walk: F,
+    ) -> (bool, i32, i32, Vec<(i32, i32)>, i32)
+    where
+        F: FnMut(i32, i32) -> bool,
+    {
+        let n18 = if width < 80 { 3 } else { 10 };
+        let n1c = if height < 150 {
+            if height < 50 {
+                2
+            } else {
+                15
+            }
+        } else {
+            50
+        };
+        let mut draws = Vec::new();
+        let mut n14 = 0;
+        loop {
+            if can_walk(x, y) {
+                return (true, x, y, draws, n14);
+            }
+            if x < (width - n1c - 1) {
+                x += n18;
+            } else {
+                x = rng.next_max(width);
+                draws.push((width, x));
+                if y < (height - n1c - 1) {
+                    y += n18;
+                } else {
+                    y = rng.next_max(height);
+                    draws.push((height, y));
+                }
+            }
+            n14 += 1;
+            if n14 >= 201 {
+                break;
+            }
+        }
+        (false, x, y, draws, n14)
+    }
+
+    /// oracle `MapRandomMove`（`BaseObject.cs:1214-1237`）+ `SpaceMove` 的独立复刻。
+    /// 返回 `(SpaceMoveGetRandXY 成功?, 首两抽落点, 终点, 逐抽 (参数, 结果), 移位环迭代数)`。
+    #[allow(clippy::type_complexity)]
+    fn oracle_map_random_move<F>(
+        rng: &mut OracleRandom,
+        width: i32,
+        height: i32,
+        can_walk: F,
+    ) -> (bool, (i32, i32), (i32, i32), Vec<(i32, i32)>, i32)
+    where
+        F: FnMut(i32, i32) -> bool,
+    {
+        let n_edge_y = if height < 150 {
+            if height < 30 {
+                2
+            } else {
+                20
+            }
+        } else {
+            50
+        };
+        let mut draws = Vec::new();
+        let nx = rng.next_max(width - n_edge_y - 1) + n_edge_y;
+        draws.push((width - n_edge_y - 1, nx - n_edge_y));
+        let ny = rng.next_max(height - n_edge_y - 1) + n_edge_y;
+        draws.push((height - n_edge_y - 1, ny - n_edge_y));
+        let (ok, fx, fy, shift, iters) =
+            oracle_space_move_get_rand_xy(rng, width, height, nx, ny, can_walk);
+        draws.extend(shift);
+        (ok, (nx, ny), (fx, fy), draws, iters)
+    }
+
+    /// 把 map 0 上满足 `pred` 的格置为 `LowWall`（`Valid == false`）。
+    fn block_cells(w: &mut World, pred: impl Fn(i32, i32) -> bool) {
+        let map = &mut w.maps[0];
+        let (width, height) = (map.width, map.height);
+        for x in 0..width {
+            for y in 0..height {
+                if pred(x, y) {
+                    let (cell, ok) = map.get_cell_info_mut(x, y);
+                    assert!(ok, "({x},{y}) 应为合法格");
+                    cell.set_attribute(CellAttribute::LowWall);
+                }
+            }
+        }
+    }
+
+    /// `spawn_merchant` 走 [`BaseAnimalCtorDraws::draw`] 的 4 抽（`entity.rs:80/104-112`）；
+    /// 独立流必须同样前移，才能从 `MapRandomMove` 的**首抽**开始对表。
+    fn oracle_after_ctor(seed: i32) -> OracleRandom {
+        let mut rng = OracleRandom::new(seed);
+        for m in crate::entity::BASE_ANIMAL_CTOR_DRAW_MODS {
+            let _ = rng.next_max(m);
+        }
+        rng
+    }
+
+    /// 逐项核对期望表：同一 seed 的 `world.rng` 类型逐抽产出表中值
+    /// （参数/结果任一项不符即红；前 4 抽为商人 ctor 公共链）。
+    fn assert_draw_table_replay(seed: i32, table: &[(i32, i32)]) {
+        let mut probe = RandomNumber::with_seed(seed);
+        for m in crate::entity::BASE_ANIMAL_CTOR_DRAW_MODS {
+            let _ = probe.random_below(m);
+        }
+        for (i, &(arg, want)) in table.iter().enumerate() {
+            assert_eq!(probe.random_below(arg), want, "第 {i} 抽（Random({arg})）");
+        }
+    }
+
+    /// **阴性对照**：落点可走 ⇒ **恰好 2 抽**、落点 = 首次抽到的格。
+    ///
+    /// 「恰好 2 抽」用**随后连续三抽**断言（单抽不具判别力：`Next(10)` 在多索引上常同值）。
+    #[test]
+    fn map_random_move_walkable_landing_draws_exactly_twice() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(12_345);
+        let id = w.spawn_merchant(spawn_at(10, 10)).expect("挂图成功");
+        let mut oracle = oracle_after_ctor(12_345);
+        let (ok, init, final_xy, table, iters) =
+            oracle_map_random_move(&mut oracle, 64, 64, |_, _| true);
+        assert!(ok);
+        assert_eq!(init, (54, 55), "独立复算：首两抽落点");
+        assert_eq!(final_xy, (54, 55), "独立复算：落点可走 ⇒ 不自移位");
+        assert_eq!(table, vec![(43, 34), (43, 35)], "独立复算：恰好 2 抽");
+        assert_eq!(iters, 0, "未进入移位环");
+        assert_draw_table_replay(12_345, &table);
+
+        map_random_move(&mut w, id);
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), final_xy, "落点 = 首次抽到的格");
+        // 随后连续三抽：与只消费了 2 抽的独立流逐项一致 ⇒ 实现没有多抽。
+        for i in 0..3 {
+            assert_eq!(
+                w.rng.random(),
+                oracle.next_value(),
+                "随后第 {i} 抽：落点可走时不得有多余取数"
+            );
+        }
+    }
+
+    /// **主判据**：随机落点为墙 ⇒ 进移位环继续抽数，逐抽与独立 oracle 期望一致，
+    /// 终点也一致（64×64：`n18=3`、`n1C=15`，`x≥48` 后走 `Random(Width)`/`Random(Height)`）。
+    #[test]
+    fn map_random_move_wall_landing_enters_shift_loop_and_matches_oracle() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(5);
+        let id = w.spawn_merchant(spawn_at(10, 10)).expect("挂图成功");
+        // 最小语料：只有最右两列/最下两行可走。
+        block_cells(&mut w, |x, y| !(x >= 60 || y >= 60));
+
+        let mut oracle = oracle_after_ctor(5);
+        let (ok, init, final_xy, table, iters) =
+            oracle_map_random_move(&mut oracle, 64, 64, |x, y| x >= 60 || y >= 60);
+        assert!(ok);
+        assert_eq!(init, (39, 59));
+        assert!(
+            !(init.0 >= 60 || init.1 >= 60),
+            "语料前提：首抽落点必须是墙"
+        );
+        assert_eq!(
+            table,
+            vec![(43, 19), (43, 39), (64, 9), (64, 60)],
+            "移位环逐抽独立表（含 2 次随机跳点）"
+        );
+        assert_eq!(iters, 4, "3 次 `x += 3` 后进随机跳点支");
+        assert_eq!(final_xy, (9, 60), "独立复算终点");
+        assert_draw_table_replay(5, &table);
+
+        map_random_move(&mut w, id);
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), final_xy, "落点与 oracle 一致");
+        for i in 0..3 {
+            assert_eq!(
+                w.rng.random(),
+                oracle.next_value(),
+                "移位环后第 {i} 个后续抽"
+            );
+        }
+    }
+
+    /// **上限判据**：201 轮全不可走 ⇒ 放弃并回滚旧坐标；取数在水位处截断。
+    ///
+    /// 语料：整图 `LowWall`。独立流共 35 抽（表 31 项 = 2 初始 + 29 环内；含 ctor 4 抽），末抽发生在**第 201 轮**（`n14 == 200`）
+    /// ⇒ 环上限改成 200 时该抽消失、随后流水必错（本用例红）。
+    #[test]
+    fn map_random_move_shift_loop_stops_at_201_and_rolls_back() {
+        let mut w = World::new(64, 64);
+        w.rng = RandomNumber::with_seed(3);
+        let id = w.spawn_merchant(spawn_at(10, 10)).expect("挂图成功");
+        block_cells(&mut w, |_, _| true);
+
+        let mut oracle = oracle_after_ctor(3);
+        let (ok, init, _last_try, table, iters) =
+            oracle_map_random_move(&mut oracle, 64, 64, |_, _| false);
+        assert!(!ok, "全墙 ⇒ 201 轮后放弃");
+        assert_eq!(init, (44, 27));
+        assert_eq!(iters, 201, "环上限 201（自增后判）");
+        assert_eq!(
+            table,
+            vec![
+                (43, 24),
+                (43, 7),
+                (64, 16),
+                (64, 60),
+                (64, 22),
+                (64, 24),
+                (64, 32),
+                (64, 51),
+                (64, 44),
+                (64, 1),
+                (64, 5),
+                (64, 57),
+                (64, 7),
+                (64, 54),
+                (64, 48),
+                (64, 30),
+                (64, 13),
+                (64, 37),
+                (64, 31),
+                (64, 5),
+                (64, 63),
+                (64, 29),
+                (64, 32),
+                (64, 34),
+                (64, 24),
+                (64, 31),
+                (64, 18),
+                (64, 15),
+                (64, 32),
+                (64, 4),
+                (64, 44),
+            ],
+            "201 轮内逐抽独立表（末项 = 第 201 轮的 Random(64)）"
+        );
+        assert_draw_table_replay(3, &table);
+
+        map_random_move(&mut w, id);
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), (10, 10), "放弃后回滚旧坐标");
+        for i in 0..3 {
+            assert_eq!(w.rng.random(), oracle.next_value(), "第 {i} 个后续抽");
+        }
+    }
+
+    /// **分段判据**（大图）：`Width >= 80 ⇒ n18 = 10`、`Height >= 150 ⇒ n1C = 50`，
+    /// 且 `x`/`y` 两条随机跳点支都在集成路径上被走到。
+    #[test]
+    fn map_random_move_large_map_uses_width80_height150_segments() {
+        let mut w = World::new(200, 300);
+        w.rng = RandomNumber::with_seed(7);
+        let id = w.spawn_merchant(spawn_at(10, 10)).expect("挂图成功");
+        block_cells(&mut w, |x, y| !(x >= 190 || y >= 290));
+
+        let mut oracle = oracle_after_ctor(7);
+        let (ok, init, final_xy, table, iters) =
+            oracle_map_random_move(&mut oracle, 200, 300, |x, y| x >= 190 || y >= 290);
+        assert!(ok);
+        assert_eq!(init, (104, 218));
+        assert_eq!(
+            table,
+            vec![(149, 54), (249, 168), (200, 8), (200, 190)],
+            "n18=10 步进到 `Width-n1C-1` 后：Random(200)"
+        );
+        assert_eq!(iters, 22);
+        assert_eq!(final_xy, (190, 238));
+        assert_draw_table_replay(7, &table);
+
+        map_random_move(&mut w, id);
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!((e.x, e.y), final_xy);
+        for i in 0..3 {
+            assert_eq!(w.rng.random(), oracle.next_value(), "第 {i} 个后续抽");
+        }
+    }
+    // ───────────────────── 武器升级 NPC 判据（C1-C7/C9/C10，简报 §4 + 更正 A1-A9） ─────────────────────
+
+    fn upgrade_catalog() -> Vec<StdItem> {
+        vec![
+            // Index 1：黑铁矿（StdMode 43，DuraMax 5000，`sql/mir2_data.sql:1058`）。
+            StdItem {
+                name: "黑铁矿".to_string(),
+                std_mode: 43,
+                dura_max: 5000,
+                ..StdItem::default()
+            },
+            // Index 2：首饰 StdMode 22（`DC = 0x0201`）。oracle 的 `n` 取**整 16 位字值**
+            // （`HiWord(ushort)` 恒 0、`LoWord(int)` 取整字）⇒ n = 513（旧注释的 "Hi+Lo=3" 是错口径）。
+            StdItem {
+                name: "项链".to_string(),
+                std_mode: 22,
+                dc: 0x0201,
+                ..StdItem::default()
+            },
+            // Index 3：首饰 StdMode 24（`DC = 0x0102` ⇒ 258 + 1 = 259；`SC = 0x0200` ⇒ 512 + 1 = 513）。
+            StdItem {
+                name: "戒指".to_string(),
+                std_mode: 24,
+                dc: 0x0102,
+                sc: 0x0200,
+                ..StdItem::default()
+            },
+            // Index 4/5：武器。
+            StdItem {
+                name: "炼狱".to_string(),
+                std_mode: 5,
+                dura_max: 20000,
+                ..StdItem::default()
+            },
+            StdItem {
+                name: "屠龙".to_string(),
+                std_mode: 5,
+                dura_max: 20000,
+                ..StdItem::default()
+            },
+            // ↓ 6..=14 只服务 W1-W8 的数值向量（`GetUpgradeStdItem` 差量 / 夹 255 / 截断）。
+            // Index 6：StdMode 19，`DC=0x0003`、`MC=0x0002`、`SC=0x0001`（W1 小值，免截断）。
+            StdItem {
+                name: "19饰".to_string(),
+                std_mode: 19,
+                dc: 0x0003,
+                mc: 0x0002,
+                sc: 0x0001,
+                ..StdItem::default()
+            },
+            // Index 7：StdMode 20，`DC=0x0002`、`MC=0x0003`、`SC=0x0001`（W8 的 MC/SC 差量）。
+            StdItem {
+                name: "20饰".to_string(),
+                std_mode: 20,
+                dc: 0x0002,
+                mc: 0x0003,
+                sc: 0x0001,
+                ..StdItem::default()
+            },
+            // Index 8：StdMode 21，`DC=0x0005`、`MC=0x0004`、`SC=0x0003`（W8 次大值）。
+            StdItem {
+                name: "21饰".to_string(),
+                std_mode: 21,
+                dc: 0x0005,
+                mc: 0x0004,
+                sc: 0x0003,
+                ..StdItem::default()
+            },
+            // Index 9：StdMode 22，`DC=0x000A`(10)、`MC=0x0009`(9)、`SC=0x0007`(7)。
+            StdItem {
+                name: "22饰".to_string(),
+                std_mode: 22,
+                dc: 0x000A,
+                mc: 0x0009,
+                sc: 0x0007,
+                ..StdItem::default()
+            },
+            // Index 10：StdMode 23，`DC=0x0003`、`MC=0x0008`、`SC=0x0006`（W2 差值项）。
+            StdItem {
+                name: "23饰".to_string(),
+                std_mode: 23,
+                dc: 0x0003,
+                mc: 0x0008,
+                sc: 0x0006,
+                ..StdItem::default()
+            },
+            // Index 11：StdMode 26，`DC=0x0001`、`MC=0x0002`、`SC=0x0005`（W3 小值项）。
+            StdItem {
+                name: "26饰".to_string(),
+                std_mode: 26,
+                dc: 0x0001,
+                mc: 0x0002,
+                sc: 0x0005,
+                ..StdItem::default()
+            },
+            // Index 12：StdMode 19，`DC=0xFF07`——`Desc[2]=100` 必须夹 255、不得回绕。
+            StdItem {
+                name: "19满".to_string(),
+                std_mode: 19,
+                dc: 0xFF07,
+                ..StdItem::default()
+            },
+            // Index 13：StdMode 24，`DC=0x0004`、`MC=0x0008`、`SC=0x0006`（W3 差值 +1 项）。
+            StdItem {
+                name: "24饰".to_string(),
+                std_mode: 24,
+                dc: 0x0004,
+                mc: 0x0008,
+                sc: 0x0006,
+                ..StdItem::default()
+            },
+            // Index 14：StdMode 26，`DC=0xFFFF`（65535）+1 ⇒ 65536；两件 ⇒ 34952 ⇒ (byte)136。
+            StdItem {
+                name: "26满".to_string(),
+                std_mode: 26,
+                dc: 0xFFFF,
+                ..StdItem::default()
+            },
+        ]
+    }
+
+    fn upgrade_world(seed: i32) -> (World, i32) {
+        let mut w = World::new(32, 32);
+        w.rng = RandomNumber::with_seed(seed);
+        w.item_catalog = upgrade_catalog();
+        w.clock_ms = 1_000;
+        let mid = w
+            .spawn_merchant(MerchantSpawn {
+                name: "铁匠".to_string(),
+                x: 5,
+                y: 5,
+                map_id: 0,
+                state: MerchantState::new(
+                    "铁匠".to_string(),
+                    "3".to_string(),
+                    0,
+                    0,
+                    100,
+                    false,
+                    false,
+                    0,
+                    MerchantFlags {
+                        is_upgradenow: true,
+                        is_get_backupgnow: true,
+                        ..MerchantFlags::default()
+                    },
+                    Vec::new(),
+                    Vec::new(),
+                    0,
+                ),
+            })
+            .expect("挂图成功");
+        // 构造抽（4 抽）已发生；重播种让取回路径的流水从已知起点开始（用例镜像用）。
+        w.rng = RandomNumber::with_seed(seed);
+        (w, mid)
+    }
+
+    /// 部署值（`Server.conf`）：取回时限 600000ms、三率 50/30/200。
+    fn deploy_cfg() -> UpgradeWeaponConfig {
+        UpgradeWeaponConfig {
+            get_back_time_ms: 600_000,
+            dc_rate: 50,
+            mc_rate: 50,
+            sc_rate: 50,
+            ..UpgradeWeaponConfig::default()
+        }
+    }
+
+    fn weapon_at(index: u16) -> MerchantItem {
+        MerchantItem {
+            make_index: 900 + i32::from(index),
+            index,
+            dura: 5000,
+            dura_max: 20000,
+            desc: [0; 14],
+        }
+    }
+
+    fn black_stone(dura: u16, make_index: i32) -> MerchantItem {
+        MerchantItem {
+            make_index,
+            index: 1,
+            dura,
+            dura_max: 5000,
+            desc: [0; 14],
+        }
+    }
+
+    fn accessory(index: u16, make_index: i32) -> MerchantItem {
+        MerchantItem {
+            make_index,
+            index,
+            dura: 1000,
+            dura_max: 1000,
+            desc: [0; 14],
+        }
+    }
+
+    /// 带 `Desc` 差量的首饰（W1-W8 向量用）。
+    fn accessory_desc(index: u16, make_index: i32, desc: [u8; 14]) -> MerchantItem {
+        MerchantItem {
+            make_index,
+            index,
+            dura: 1000,
+            dura_max: 1000,
+            desc,
+        }
+    }
+
+    /// `UpgradeWaponAddValue` 是**零 RNG**：升级前后世界流水位置必须一致。
+    fn assert_rng_untouched(w: &mut World, before: &RandomNumber) {
+        let mut probe = before.clone();
+        for k in 0..3 {
+            assert_eq!(
+                w.rng.random(),
+                probe.random(),
+                "第 {k} 个后续抽必须与升级前同位置"
+            );
+        }
+    }
+
+    fn info_with(dc: u8, mc: u8, sc: u8, dura: u8, get_back_tick: i64) -> WeaponUpgradeInfo {
+        WeaponUpgradeInfo {
+            user_name: "hero".to_string(),
+            user_item: MerchantItem {
+                make_index: 77,
+                index: 4,
+                dura: 5000,
+                dura_max: 20000,
+                desc: [0; 14],
+            },
+            dc,
+            sc,
+            mc,
+            dura,
+            upgrade_time_ms: get_back_tick,
+            get_back_tick,
+        }
+    }
+
+    fn push_info(w: &mut World, mid: i32, info: WeaponUpgradeInfo) {
+        w.entities
+            .merchant_mut(mid)
+            .expect("商人在")
+            .upgrade_weapon_list
+            .push(info);
+    }
+
+    fn list_len(w: &World, mid: i32) -> usize {
+        w.entities
+            .merchant(mid)
+            .expect("商人在")
+            .upgrade_weapon_list
+            .len()
+    }
+
+    /// **C1**：提交成功——扣 10000、吃掉全部黑铁/首饰、`dc/sc/mc/dura` 手算值、
+    /// `info.user_item` 四字段拷贝、`get_back_tick == now`、列表 +1。
+    #[test]
+    fn c1_upgrade_wapon_success_state_and_fee() {
+        let (mut w, mid) = upgrade_world(1);
+        let weapon = weapon_at(4);
+        let mut bag = vec![
+            black_stone(5000, 10),
+            black_stone(5000, 11),
+            black_stone(5000, 12),
+            black_stone(5000, 13),
+            black_stone(5000, 14),
+            accessory(2, 20),
+            accessory(3, 21),
+        ];
+        let mut gold = 20_000;
+        let r = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        );
+        let UpgradeWaponOutcome::Ok(res) = r else {
+            panic!("应受理成功：{r:?}");
+        };
+        assert_eq!(gold, 10_000, "扣 UpgradeWeaponPrice");
+        assert!(bag.is_empty(), "全部黑铁与首饰被吃");
+        // 倒序扫描：戒指(21) → 项链(20) → 黑铁(14..10)。
+        assert_eq!(res.deleted.len(), 7);
+        assert_eq!(res.deleted[0], ("戒指".to_string(), 21));
+        assert_eq!(res.deleted[1], ("项链".to_string(), 20));
+        let blacks: Vec<(String, i32)> =
+            (10..=14).rev().map(|m| ("黑铁矿".to_string(), m)).collect();
+        assert_eq!(&res.deleted[2..], &blacks[..], "黑铁按背包倒序");
+        // 手算（口径：`HiWord(ushort)==0`、`LoWord`=整 16 位 ⇒ n=字值；24/26 再 +1）：
+        // 戒指(21, StdMode24) `DC=0x0102`⇒259、`SC=0x0200`⇒513、`MC`⇒1；
+        // 项链(20, StdMode22) `DC=0x0201`⇒513、`SC/MC`⇒0。
+        // `Dc = 513/5 + 259/3 = 102+86 = 188`；`Sc = 513/5 + 0/3 = 102`；`Mc = 1/5 = 0`；
+        // 5×黑铁 5000 ⇒ 每项 5，`Dura = round(5 + 5*(25/5/5.0)) = 10`。
+        let info = &res.info;
+        assert_eq!((info.dc, info.sc, info.mc, info.dura), (188, 102, 0, 10));
+        assert_eq!(info.user_item, weapon, "UserItem 四字段拷贝");
+        assert_eq!(info.user_name, "hero");
+        assert_eq!(info.get_back_tick, w.clock_ms);
+        assert_eq!(info.upgrade_time_ms, w.clock_ms);
+        assert_eq!(list_len(&w, mid), 1, "UpgradeWeaponList +1");
+        assert_eq!(
+            &w.entities.merchant(mid).unwrap().upgrade_weapon_list[0],
+            info
+        );
+    }
+
+    /// **C2**：6 件黑铁 [3,1,4,1,5,9]×1000 —— oracle 的**畸形整体反转置换**（不是排序）
+    /// ⇒ `nDura=14` / `n=5` / `Dura=7`；真降序排序会得 9。全部 6 件都被吃。
+    #[test]
+    fn c2_black_stone_count_and_malformed_reverse() {
+        let (mut w, mid) = upgrade_world(2);
+        let weapon = weapon_at(4);
+        let mut bag: Vec<MerchantItem> = [3u16, 1, 4, 1, 5, 9]
+            .into_iter()
+            .enumerate()
+            .map(|(i, k)| black_stone(k * 1000, 30 + i as i32))
+            .collect();
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        assert_eq!(
+            res.info.dura, 7,
+            "畸形置换后前 5 项和 14 ⇒ 7（真排序会得 9）"
+        );
+        assert_eq!(res.deleted.len(), 6, "全部黑铁被吃（不只 5 件）");
+        assert!(bag.is_empty());
+    }
+
+    /// **W1**：StdMode 19 —— `Desc[2]/[3]/[4]` 只加**高字节**，`n` 取整 16 位字值。
+    /// 模板 `DC=0x0003/MC=0x0002/SC=0x0001`，desc `[2]/[3]/[4]=2/1/3`
+    /// ⇒ DC=0x0203=515、MC=0x0102=258、SC=0x0301=769
+    /// ⇒ `Dc=515/5=103`、`Mc=258/5=51`、`Sc=769/5=153`；1x1000 黑铁 ⇒ Dura=1。
+    #[test]
+    fn w1_add_value_mode19_desc_high_byte_delta() {
+        let (mut w, mid) = upgrade_world(101);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[2] = 2;
+        d[3] = 1;
+        d[4] = 3;
+        let mut bag = vec![accessory_desc(6, 60, d), black_stone(1000, 61)];
+        let mut gold = 10_000;
+        let before = w.rng.clone();
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (103, 153, 51, 1));
+        assert_eq!(
+            res.deleted,
+            vec![("黑铁矿".to_string(), 61), ("19饰".to_string(), 60)],
+        );
+        assert!(bag.is_empty());
+        assert_rng_untouched(&mut w, &before);
+    }
+
+    /// **W2**：StdMode 22 + 23 —— 最大/次大**逐项独立**。
+    /// 23 饰 `DC=0x0003` + `Desc[2]=1` ⇒ 0x0103=259；22 饰 `DC=10`。
+    /// ⇒ Dc=`259/5+10/3=51+3=54`；Mc=9/5+8/3=1+2=3；Sc=7/5+6/3=1+2=3。
+    /// 黑铁 2000/3000/5000 ⇒ 置换后 [5,3,2]，`Dura=round(3+3*(10/3/5.0))=5`。
+    #[test]
+    fn w2_add_value_two_accessories_max_and_second_max() {
+        let (mut w, mid) = upgrade_world(102);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[2] = 1;
+        let mut bag = vec![
+            accessory(9, 90),
+            accessory_desc(10, 91, d),
+            black_stone(5000, 92),
+            black_stone(3000, 93),
+            black_stone(2000, 94),
+        ];
+        let mut gold = 10_000;
+        let before = w.rng.clone();
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (54, 3, 3, 5));
+        assert!(bag.is_empty());
+        assert_rng_untouched(&mut w, &before);
+    }
+
+    /// **W3**：StdMode 24/26 的 `+1` 在**差量之后**才加。
+    /// 24 饰 `DC=MakeWord(4,5)`=1284+1=1285、`MC=1288+1=1289`、`SC=1286+1=1287`；
+    /// 26 饰 `DC=1+1=2`、`MC=2+1=3`、`SC=5+1=6`
+    /// ⇒ Dc=`1285/5+2/3=257+0=257`⇒(byte)1、Mc=257+1=258⇒2、Sc=257+2=259⇒3。
+    #[test]
+    fn w3_add_value_mode24_26_plus_one_after_delta() {
+        let (mut w, mid) = upgrade_world(103);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[2] = 5;
+        d[3] = 5;
+        d[4] = 5;
+        let mut bag = vec![
+            accessory_desc(13, 130, d),
+            accessory(11, 131),
+            black_stone(5000, 132),
+        ];
+        let mut gold = 10_000;
+        let before = w.rng.clone();
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (1, 3, 2, 2));
+        assert_rng_untouched(&mut w, &before);
+    }
+
+    /// **W4**：`_MIN(255, HiByte+Desc)` **只夹高字节**：`DC=0xFF07` + `Desc[2]=100`
+    /// ⇒ 高字节夹 255（不是 `(255+100) as u8 = 99`）⇒ `n=65287`、`Dc=65287/5=13057`⇒(byte)1。
+    #[test]
+    fn w4_add_value_high_byte_clamped_at_255() {
+        let (mut w, mid) = upgrade_world(104);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[2] = 100;
+        let mut bag = vec![accessory_desc(12, 120, d), black_stone(0, 121)];
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (1, 0, 0, 1));
+    }
+
+    /// **W5**：`(byte)` **截断**（C# unchecked）：StdMode 26 + `DC=0xFFFF` ⇒ `n=65536`；
+    /// 两件 ⇒ `65536/5+65536/3=34952` ⇒ `(byte)34952 = 136`（不是 255 饱和）。
+    #[test]
+    fn w5_add_value_byte_cast_truncates_34952_to_136() {
+        let (mut w, mid) = upgrade_world(105);
+        let weapon = weapon_at(4);
+        let mut bag = vec![
+            accessory(14, 140),
+            accessory(14, 141),
+            black_stone(5000, 142),
+        ];
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (136, 0, 0, 2));
+    }
+
+    /// **W6**：只有黑铁（无首饰）⇒ `Dc/Sc/Mc=0`；6 件 `[1..6]x1000` 倒序即降序、
+    /// 不触发整体反转 ⇒ 前 5 项和 20、`n=5` ⇒ `Dura=round(5+5*(20/5/5.0))=9`。
+    #[test]
+    fn w6_add_value_black_stone_only_caps_at_five() {
+        let (mut w, mid) = upgrade_world(106);
+        let weapon = weapon_at(4);
+        let mut bag: Vec<MerchantItem> = (1u16..=6)
+            .map(|k| black_stone(k * 1000, 400 + i32::from(k)))
+            .collect();
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (0, 0, 0, 9));
+        assert_eq!(res.deleted.len(), 6, "6 件黑铁全部被吃");
+        assert!(bag.is_empty());
+    }
+
+    /// **W7**：黑铁每项 `Math.Round(Dura/1000.0)` 用**银行家舍入**：Dura=2500 ⇒ 2（不是 3）
+    /// ⇒ `Dura=round(1+1*(2/1/5.0))=round(1.4)=1`。
+    #[test]
+    fn w7_add_value_black_stone_bankers_rounding() {
+        let (mut w, mid) = upgrade_world(107);
+        let weapon = weapon_at(4);
+        let mut bag = vec![black_stone(2500, 250)];
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        assert_eq!(res.info.dura, 1);
+    }
+
+    /// **W8**：StdMode 20 的 `Desc[3]→MC`、`Desc[4]→SC` 字段映射（对调即红）。
+    /// 20 饰 desc `[3]=2,[4]=3` ⇒ MC=0x0203=515、SC=0x0301=769；21 饰 MC=4、SC=3；
+    /// ⇒ Dc=`5/5=1`、Mc=`515/5+4/3=103+1=104`、Sc=`769/5+3/3=153+1=154`。
+    #[test]
+    fn w8_add_value_mode20_mc_sc_desc_fields() {
+        let (mut w, mid) = upgrade_world(108);
+        let weapon = weapon_at(4);
+        let mut d = [0u8; 14];
+        d[3] = 2;
+        d[4] = 3;
+        let mut bag = vec![
+            accessory_desc(7, 70, d),
+            accessory(8, 71),
+            black_stone(1000, 72),
+        ];
+        let mut gold = 10_000;
+        let UpgradeWaponOutcome::Ok(res) = w.merchant_upgrade_wapon(
+            mid,
+            "hero",
+            Some(&weapon),
+            &mut bag,
+            &mut gold,
+            &UpgradeWeaponConfig::default(),
+        ) else {
+            panic!("应受理成功");
+        };
+        let i = &res.info;
+        assert_eq!((i.dc, i.sc, i.mc, i.dura), (1, 154, 104, 1));
+    }
+
+    /// **C3**：提交门控顺序——
+    /// ① 同名检查**区分大小写**（A1：大小写不同 ⇒ **继续升级并再加一条**）；
+    /// ② 武器 `Index == 0` ⇒ fail；③ 金币不足 ⇒ fail 且金币/材料不动；
+    /// ④ 金币够但无黑铁 ⇒ fail 且金币不动。
+    #[test]
+    fn c3_upgrade_gate_order_and_case_sensitive_duplicate() {
+        let (mut w, mid) = upgrade_world(3);
+        let weapon = weapon_at(4);
+        let cfg = UpgradeWeaponConfig::default();
+        // ① 记录 "HERO"（大写）已在表 ⇒ 用 "hero" 提交**不是** `_ing`（A1）。
+        push_info(&mut w, mid, info_with(1, 0, 0, 16, 0));
+        w.entities.merchant_mut(mid).unwrap().upgrade_weapon_list[0].user_name = "HERO".to_string();
+        let mut bag = vec![black_stone(5000, 1)];
+        let mut gold = 10_000;
+        let r = w.merchant_upgrade_wapon(mid, "hero", Some(&weapon), &mut bag, &mut gold, &cfg);
+        assert!(
+            matches!(r, UpgradeWaponOutcome::Ok(_)),
+            "大小写不同 ⇒ 继续升级"
+        );
+        assert_eq!(list_len(&w, mid), 2, "再加一条记录（A1）");
+        assert_eq!(gold, 0, "扣费发生");
+        // 完全同名（精确 ==）⇒ `_ing`，且一切不动。
+        let mut bag2 = vec![black_stone(5000, 2)];
+        let mut gold2 = 10_000;
+        let r = w.merchant_upgrade_wapon(mid, "hero", Some(&weapon), &mut bag2, &mut gold2, &cfg);
+        assert!(matches!(r, UpgradeWaponOutcome::AlreadyUpgrading));
+        assert_eq!(gold2, 10_000, "重复检查先于扣费");
+        assert_eq!(bag2.len(), 1, "重复检查先于吃材料");
+        // ② 武器 Index == 0 ⇒ fail。
+        let mut zero = weapon.clone();
+        zero.index = 0;
+        let mut gold3 = 10_000;
+        let mut bag3 = vec![black_stone(5000, 3)];
+        assert!(matches!(
+            w.merchant_upgrade_wapon(mid, "p2", Some(&zero), &mut bag3, &mut gold3, &cfg),
+            UpgradeWaponOutcome::Fail
+        ));
+        // ③ gold = 9999 ⇒ fail，金币/材料不动。
+        let mut gold4 = 9_999;
+        let mut bag4 = vec![black_stone(5000, 4)];
+        assert!(matches!(
+            w.merchant_upgrade_wapon(mid, "p3", Some(&weapon), &mut bag4, &mut gold4, &cfg),
+            UpgradeWaponOutcome::Fail
+        ));
+        assert_eq!((gold4, bag4.len()), (9_999, 1), "金币不足不扣、不吃材料");
+        // ④ gold 够但无黑铁 ⇒ fail，金币不动。
+        let mut gold5 = 10_000;
+        let mut bag5 = vec![accessory(2, 5)];
+        assert!(matches!(
+            w.merchant_upgrade_wapon(mid, "p4", Some(&weapon), &mut bag5, &mut gold5, &cfg),
+            UpgradeWaponOutcome::Fail
+        ));
+        assert_eq!((gold5, bag5.len()), (10_000, 1), "无黑铁不扣金");
+    }
+
+    /// **C4**：取回时限三态 + 包满；`>` 严格边界；包满门**先于**找记录；A1 的
+    /// 「OrdinalIgnoreCase 找到不 break」可取到后一条。
+    #[test]
+    fn c4_get_back_time_limit_and_bag_full() {
+        let (mut w, mid) = upgrade_world(4);
+        let cfg = deploy_cfg();
+        push_info(&mut w, mid, info_with(1, 0, 0, 16, 0));
+        // now - tick == 600000 ⇒ 不 > ⇒ `_ing`。
+        w.clock_ms = 600_000;
+        assert!(matches!(
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &cfg),
+            GetBackupgWeaponOutcome::NotDue
+        ));
+        assert_eq!(list_len(&w, mid), 1, "未到期不移除");
+        // 600001 ⇒ ok 且移除。
+        w.clock_ms = 600_001;
+        assert!(matches!(
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &cfg),
+            GetBackupgWeaponOutcome::Ok(_)
+        ));
+        assert_eq!(list_len(&w, mid), 0);
+        // 无记录 ⇒ fail。
+        assert!(matches!(
+            w.merchant_get_backupg_weapon(mid, "nobody", 0, 0, 0, &cfg),
+            GetBackupgWeaponOutcome::NoRecord
+        ));
+        // 包满 46 ⇒ bagfull，记录仍在（门先于找记录）。
+        push_info(&mut w, mid, info_with(1, 0, 0, 16, 0));
+        assert!(matches!(
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 46, 0, &cfg),
+            GetBackupgWeaponOutcome::BagFull
+        ));
+        assert_eq!(list_len(&w, mid), 1, "包满不删记录");
+        // A1：单条记录名 "HERO"、请求名 "hero" ⇒ `OrdinalIgnoreCase` 命中并取回。
+        let mut w2 = w;
+        {
+            let list = w2.entities.merchant_mut(mid).unwrap();
+            list.upgrade_weapon_list.clear();
+            list.upgrade_weapon_list.push({
+                let mut i = info_with(9, 0, 0, 16, 0);
+                i.user_name = "HERO".to_string();
+                i
+            });
+        }
+        let r = w2.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &cfg);
+        assert!(
+            matches!(r, GetBackupgWeaponOutcome::Ok(_)),
+            "OrdinalIgnoreCase 大小写不同也命中：{r:?}"
+        );
+        // A1：第一条 "HERO" 未到期 ⇒ **不 break**，第二条 "hero" 到期 ⇒ 取走后一条。
+        let now = w2.clock_ms;
+        let list = w2.entities.merchant_mut(mid).unwrap();
+        list.upgrade_weapon_list.clear();
+        list.upgrade_weapon_list.push({
+            let mut i = info_with(1, 0, 0, 16, now);
+            i.user_name = "HERO".to_string();
+            i
+        });
+        list.upgrade_weapon_list.push(info_with(2, 0, 0, 16, 0));
+        let r = w2.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &cfg);
+        let GetBackupgWeaponOutcome::Ok(info) = r else {
+            panic!("应取到后一条：{r:?}");
+        };
+        assert_eq!(info.dc, 2, "取到的是第二条（未 break 语义）");
+        assert_eq!(list_len(&w2, mid), 1, "第一条（未到期）保留");
+    }
+
+    /// **C5**：耐久分支的抽数与边界——
+    /// `[0,8]` 不抽、`[9,15]` 抽 `Random(Dura)`、`[18,255]` 抽 `Random(Dura-18)`
+    /// （`Dura==18 ⇒ Random(0)` **仍消耗 1 抽**）、`{16,17}` 不改耐久且**不抽**。
+    ///
+    /// 用同一流的下一次 `random()` 与镜像流比较（抽数错 ⇒ 后续流偏移）。
+    #[test]
+    fn c5_durability_branch_draws_and_boundaries() {
+        // (dura, dura_max, expected_dura_max after, durability_draw: Option<i32>)
+        // (dura, dura_max, 期望 DuraMax, 期望 Dura, 耐久分支抽: Option<upper>)
+        let cases = [
+            (5u8, 5000u16, 2000u16, 2000u16, None),
+            (8, 2000, 1000, 1000, None),
+            (16, 5000, 5000, 5000, None),
+            (17, 5000, 5000, 5000, None),
+            (18, 5000, 5000, 5000, Some(0)),
+        ];
+        for (dura, dura_max, exp_max, exp_dura, draw) in cases {
+            let (mut w, mid) = upgrade_world(77);
+            let mut info = info_with(1, 0, 0, dura, 0);
+            info.user_item.dura_max = dura_max;
+            info.user_item.dura = dura_max;
+            push_info(&mut w, mid, info);
+            w.clock_ms = 600_001;
+            let mut exp = RandomNumber::with_seed(77);
+            if let Some(v) = draw {
+                assert_eq!(exp.random_below(v), 0, "Random(0)/Random(0) 恒 0");
+            }
+            // 镜像 DC/MC/SC 三支（dc=1,mc=sc=0 ⇒ 仅 DC 支成立；无 n1C）。
+            let _ = exp.random_below(50);
+            let r = w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg());
+            let GetBackupgWeaponOutcome::Ok(out) = r else {
+                panic!("应取回：{r:?}");
+            };
+            assert_eq!(out.user_item.dura_max, exp_max, "Dura={dura} 的 DuraMax");
+            assert_eq!(out.user_item.dura, exp_dura, "Dura={dura} 的 Dura（clamp）");
+            assert_eq!(w.rng.random(), exp.random(), "Dura={dura} 后续流同源");
+        }
+        // Dura=12：Random(12) < 6 ⇒ DuraMax -= 1000（找不到种子则跳过——但种子空间足够大，
+        // 这里显式搜索一个 `< 6` 的种子，并把 `>= 6` 的对照也跑一遍）。
+        let seed_lt = (1..=1000)
+            .find(|&s| {
+                let mut r = RandomNumber::with_seed(s);
+                r.random_below(12) < 6
+            })
+            .expect("应有 Random(12)<6 的种子");
+        for seed in [seed_lt, seed_lt + 1] {
+            let (mut w, mid) = upgrade_world(seed);
+            let mut info = info_with(1, 0, 0, 12, 0);
+            info.user_item.dura_max = 5000;
+            info.user_item.dura = 5000;
+            push_info(&mut w, mid, info);
+            w.clock_ms = 600_001;
+            let mut exp = RandomNumber::with_seed(seed);
+            let roll = exp.random_below(12);
+            let exp_max = if roll < 6 { 4000 } else { 5000 };
+            let _ = exp.random_below(50);
+            let GetBackupgWeaponOutcome::Ok(out) =
+                w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+            else {
+                panic!("应取回");
+            };
+            assert_eq!(out.user_item.dura_max, exp_max, "Dura=12 / roll={roll}");
+            assert_eq!(w.rng.random(), exp.random(), "后续流同源");
+            if roll < 6 {
+                break;
+            }
+        }
+    }
+
+    /// **C6**：升级判定 RNG 顺序（核心）——
+    /// 例 A `Dc=Mc=Sc=0`：`Random(3)`（空转）+ DC/MC/SC 各 `Random(50)`；
+    /// 例 B `Dc=7`：DC 支 `Random(50)` 必成 + `Random(30)` + `Random(200)`；
+    /// 例 C `Dc=6`：n10 为负 ⇒ `Desc[10]=1`（仍抽 `Random(50)`）。
+    ///
+    /// 用例都用 `Dura=16`（耐久分支**不抽**）以隔离 A7 的分支。
+    #[test]
+    fn c6_upgrade_decision_rng_order() {
+        const RATE: i32 = 50;
+        // 例 A：三值全等 ⇒ 4 抽；最后一支（SC）赢。
+        let seed = 4242;
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(0, 0, 0, 16, 0));
+        w.clock_ms = 600_001;
+        let mut exp = RandomNumber::with_seed(seed);
+        let _n1c = exp.random_below(3);
+        let mut last = 0u8;
+        for base in [10u8, 20, 30] {
+            let success = exp.random_below(RATE) < 10;
+            last = if success { base } else { 1 };
+        }
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert_eq!(out.user_item.desc[10], last, "三支全成 ⇒ 最后一支（SC）赢");
+        assert_eq!(w.rng.random(), exp.random(), "例 A 恰 4 抽");
+        // 例 B：Dc=7 / Mc=Sc=0 ⇒ 3 抽（无 n1C）。
+        let seed = 7;
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(7, 0, 0, 16, 0));
+        w.clock_ms = 600_001;
+        let mut exp = RandomNumber::with_seed(seed);
+        assert!(exp.random_below(RATE) < 85, "n90=7 ⇒ n10=85 必成");
+        let _two = exp.random_below(30);
+        let _three = exp.random_below(200);
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert!(
+            matches!(out.user_item.desc[10], 10..=12),
+            "成功支 Desc[10] ∈ {{10,11,12}}，实际 {}",
+            out.user_item.desc[10]
+        );
+        assert_eq!(w.rng.random(), exp.random(), "例 B 恰 3 抽");
+        // 例 C：Dc=6 ⇒ n10 为负（`6 << 29` 回绕）⇒ 必败，仍抽 1 次 Random(50)。
+        let seed = 6;
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(6, 0, 0, 16, 0));
+        w.clock_ms = 600_001;
+        let mut exp = RandomNumber::with_seed(seed);
+        let _ = exp.random_below(RATE);
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert_eq!(out.user_item.desc[10], 1, "n90=6 恒失败");
+        assert_eq!(w.rng.random(), exp.random(), "例 C 恰 1 抽");
+    }
+
+    /// **C7**：SC 支**照抄 oracle bug**（`n90 = min(11, upgradeInfo.Mc)`，`Merchant.cs:721`）。
+    ///
+    /// `Dc=0, Mc=3, Sc=6`：只有 SC 支成立；oracle 取 `Mc=3` ⇒ `n10 = 4 + 10 - 1 = 13`
+    /// （`3 << 0 = 3`，descluck 0）⇒ 成功时 `Desc[10]=30`（**不会出现 31/32**，A2）。
+    /// 修正成 `Sc=6` ⇒ `n90=6` ⇒ n10 负 ⇒ 恒失败（1）。
+    #[test]
+    fn c7_sc_branch_uses_mc_like_oracle() {
+        let seed = (1..=10_000)
+            .find(|&s| {
+                let mut r = RandomNumber::with_seed(s);
+                r.random_below(50) < 13
+            })
+            .expect("应能找到 Random(50)<13 的种子");
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(0, 3, 6, 16, 0));
+        w.clock_ms = 600_001;
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert_eq!(
+            out.user_item.desc[10], 30,
+            "oracle 的 SC 支用 Mc ⇒ n10=13 ⇒ 30"
+        );
+        // 修正版（用 Sc）对照：同一流位置恒失败。
+        let mut rng = RandomNumber::with_seed(seed);
+        assert_eq!(
+            upgrade_one_stat(&mut rng, 6, 50, 30, 200, &[0; 14], 0, 30),
+            1,
+            "若把 SC 的 Mc 改成 Sc ⇒ n90=6 ⇒ 恒失败"
+        );
+    }
+
+    /// **C8**：两点/三点判定是**覆盖赋值**，不是累加（`Merchant.cs:680-692`/`:703-715`/`:726-738`）。
+    ///
+    /// oracle 逐行：`Desc[..] = 10; if(n10>63 && Random(Two)==0) Desc[..] = 11;
+    /// if(n10>79 && Random(Three)==0) Desc[..] = 12;` ⇒ 两点、三点**都命中**时结果是 **12**
+    /// （三点覆盖两点），不是 13；MC/SC 支同形 ⇒ 32，不是 33。
+    ///
+    /// 种子 16271：`n90=7 ⇒ n10=85`（必进两个判定），本种子两判都命中 ⇒ 旧实现（`d += 1; d += 2;`）
+    /// 返回 13/33，oracle 返回 12/32。
+    /// 牙：把 `d = base_desc10 + 2;` 改回 `d += 2;` ⇒ 本用例红（13 ≠ 12）。
+    #[test]
+    fn c8_two_and_three_point_assign_not_accumulate() {
+        let seed = 16271;
+        // 先用独立重放确认本种子「两判都命中」——否则累加与覆盖同值，用例无牙。
+        let mut r = RandomNumber::with_seed(seed);
+        assert!(r.random_below(50) < 85, "n90=7 ⇒ n10=85 必成功");
+        assert_eq!(r.random_below(30), 0, "两点判定命中（本种子的牙所在）");
+        assert_eq!(r.random_below(200), 0, "三点判定命中");
+
+        for (base, want) in [(10u8, 12u8), (20, 22), (30, 32)] {
+            let mut rng = RandomNumber::with_seed(seed);
+            assert_eq!(
+                upgrade_one_stat(&mut rng, 7, 50, 30, 200, &[0; 14], 0, base),
+                want,
+                "base={base}：三点覆盖两点 ⇒ {want}（累加会给 {}）",
+                base + 3
+            );
+        }
+
+        // 生产路径同断言（不是只测 helper）：Dc=7 ⇒ DC 支必成，desc[10] 必须是 12。
+        let (mut w, mid) = upgrade_world(seed);
+        push_info(&mut w, mid, info_with(7, 0, 0, 16, 0));
+        w.clock_ms = 600_001;
+        let GetBackupgWeaponOutcome::Ok(out) =
+            w.merchant_get_backupg_weapon(mid, "hero", 0, 0, 0, &deploy_cfg())
+        else {
+            panic!("应取回");
+        };
+        assert_eq!(
+            out.user_item.desc[10], 12,
+            "生产路径：两点+三点都命中 ⇒ oracle 覆盖成 12"
+        );
+        // 抽数次数不变（覆盖只改写入值）：Random(50)+Random(30)+Random(200) = 3 抽。
+        let mut exp = RandomNumber::with_seed(seed);
+        let _ = exp.random_below(50);
+        let _ = exp.random_below(30);
+        let _ = exp.random_below(200);
+        assert_eq!(w.rng.random(), exp.random(), "覆盖语义不改抽数序");
+    }
+
+    /// **C10**：过期清理边界——`>=` 删除、`<` 保留，且只影响过期记录。
+    #[test]
+    fn c10_clear_expired_upgrades_boundary() {
+        let day = 24 * 60 * 60 * 1000i64;
+        let now = 10 * day;
+        let mut list = vec![
+            {
+                let mut i = info_with(1, 0, 0, 16, 0);
+                i.user_name = "exact3".to_string();
+                i.upgrade_time_ms = now - 3 * day;
+                i
+            },
+            {
+                let mut i = info_with(1, 0, 0, 16, 0);
+                i.user_name = "justunder".to_string();
+                i.upgrade_time_ms = now - 3 * day + 1;
+                i
+            },
+            {
+                let mut i = info_with(1, 0, 0, 16, 0);
+                i.user_name = "old".to_string();
+                i.upgrade_time_ms = 0;
+                i
+            },
+        ];
+        clear_expired_upgrades(&mut list, now, 3);
+        let names: Vec<&str> = list.iter().map(|i| i.user_name.as_str()).collect();
+        assert_eq!(names, vec!["justunder"], "3 天整删、差 1ms 留、旧记录删");
+        // `Merchant.Run` 的 10min 门真的会调清理（days 从商人状态取）。
+        let (mut w, mid) = upgrade_world(10);
+        w.clock_ms = now;
+        {
+            let st = w.entities.merchant_mut(mid).unwrap();
+            st.clear_expre_upgrade_tick = 0;
+            st.clear_expire_upgrade_days = 3;
+            let mut old = info_with(1, 0, 0, 16, 0);
+            old.upgrade_time_ms = 0;
+            st.upgrade_weapon_list.push(old);
+        }
+        let _ = merchant_run(&mut w, mid);
+        assert_eq!(list_len(&w, mid), 0, "10min 门到点清理过期记录");
+    }
+
+    /// 攻城区型城堡：`castle_map_id` 命中 + `|home - pos| < range`（严格 `<`）。
+    fn castle_at(map_id: usize, home: (i16, i16), range: (i32, i32)) -> UserCastle {
+        let mut c = UserCastle::new("沙巴克", CastleSiegeConfig::default());
+        c.map_name = Some(map_id.to_string());
+        c.castle_map_id = Some(map_id);
+        c.home_x = home.0;
+        c.home_y = home.1;
+        c.war_range_x = range.0;
+        c.war_range_y = range.1;
+        c
+    }
+
+    /// G-T1 `merchant_castle_index_is_fixed_at_spawn`：spawn 时按
+    /// `CastleMgr.InCastleWarArea(this)`（`NormNpc.cs:1674-1678`）解析一次，之后移动**不重算**。
+    ///
+    /// 牙：把 `merchant_castle_index` 改成“按当前坐标实时重算” ⇒ 移动后断言 `Some(0)` 得 `None`（红）；
+    /// 把 `insert_merchant` 的解析删掉（恒 `None`）⇒ 首条断言红。
+    #[test]
+    fn merchant_castle_index_is_fixed_at_spawn() {
+        let mut w = World::with_maps(vec![(120, 120); 10]);
+        w.castles.push(castle_at(3, (100, 50), (100, 100)));
+
+        let mut in_area = spawn_at(1, 50); // dx = |100-1| = 99 < 100
+        in_area.map_id = 3;
+        in_area.state.castle_merchant = false; // 与 Castle 命中无关（§1.2.2）
+        let id = w.spawn_merchant(in_area).expect("map 3 界内可走");
+        assert_eq!(w.merchant_castle_index(id), Some(0));
+        let binding = w.merchant_castle_binding(id).expect("商人");
+        assert!(!binding.castle_merchant, "MerChant 第 8 列缺省 0");
+        assert_eq!(
+            binding.castle_index,
+            Some(0),
+            "CastleMerchant=false 但位置在攻城区仍命中 Castle"
+        );
+
+        // oracle：Initialize 后移动不重算（`Merchant.Run → MapRandomMove` 不刷 Castle）。
+        // 移到 dx = 100（严格 `<` 不成立）——若重算必须变 None。
+        w.entities.transform_mut(id).unwrap().x = 0;
+        assert_eq!(
+            w.merchant_castle_index(id),
+            Some(0),
+            "spawn 后移动不得重算（若重算应为 None）"
+        );
+
+        // 同一组城堡，出生点就在界外 ⇒ None（证明解析真的按位置发生，不是恒 Some）。
+        let mut out_of_area = spawn_at(1, 50);
+        out_of_area.map_id = 3;
+        out_of_area.state.castle_merchant = true;
+        w.castles[0].war_range_x = 99; // dx=99 ⇒ 严格 `<` 不成立
+        let far_id = w.spawn_merchant(out_of_area).expect("界内");
+        assert_eq!(
+            w.merchant_castle_index(far_id),
+            None,
+            "dx=99 不满足严格 `<`（range=99）"
+        );
+    }
+
+    /// `InCastleWarArea` 三支（攻城区严格 `<` / 皇宫 / 密道 / `EnvirList`）都参与 spawn 解析；
+    /// 多座城按 `CastleList` 顺序取首个命中。
+    ///
+    /// 牙：把解析改成 `castle_member_at`（按城主行会）⇒ 所有行都 `None`（红）；把严格 `<`
+    /// 改成 `<=` ⇒ dx=100 行得 `Some(0)`（红，需同步改 `castle.rs` 生产路径）。
+    #[test]
+    fn merchant_castle_index_uses_in_castle_war_area_branches() {
+        let mut w = World::with_maps(vec![(120, 120); 10]);
+        w.castles.push(castle_at(3, (100, 50), (100, 100)));
+        let mut palace = UserCastle::new("城B", CastleSiegeConfig::default());
+        palace.palace_map_id = Some(8);
+        palace.envir_map_ids = vec![7];
+        w.castles.push(palace);
+
+        let mut spawn_on = |map_id: usize, x: i32, y: i32| -> Option<usize> {
+            let mut sp = spawn_at(x, y);
+            sp.map_id = map_id;
+            let id = w.spawn_merchant(sp).expect("界内可走");
+            w.merchant_castle_index(id)
+        };
+
+        // dx=99 ⇒ 命中城 A；dx=100 ⇒ 严格 `<` 不成立。
+        assert_eq!(spawn_on(3, 1, 50), Some(0), "dx=99");
+        assert_eq!(spawn_on(3, 0, 50), None, "dx=100 严格 `<` 为 false");
+        // 皇宫 / EnvirList 支。
+        assert_eq!(spawn_on(8, 0, 0), Some(1), "PalaceEnvir");
+        assert_eq!(spawn_on(7, 0, 0), Some(1), "EnvirList");
+        // 无命中。
+        assert_eq!(spawn_on(9, 0, 0), None);
+    }
+
+    /// G-T1 变体：`castle_index` 的 setter/accessor 往返（构造级夹具与 `GetCastle` 重绑）。
+    ///
+    /// 牙：setter 改成只对 `castle_merchant=true` 的商人生效 ⇒ 缺省商人往返断言红。
+    #[test]
+    fn merchant_castle_index_setter_round_trip() {
+        let mut w = World::with_maps(vec![(20, 20); 4]);
+        let id = w.spawn_merchant(spawn_at(3, 4)).expect("map 0");
+        assert_eq!(w.merchant_castle_index(id), None, "无城堡 ⇒ Castle=null");
+
+        assert!(w.set_merchant_castle_index(id, Some(2)));
+        assert_eq!(w.merchant_castle_index(id), Some(2));
+        assert_eq!(
+            w.merchant_castle_binding(id),
+            Some(MerchantCastleBinding::new(false, Some(2)))
+        );
+
+        assert!(w.set_merchant_castle_index(id, None));
+        assert_eq!(w.merchant_castle_index(id), None);
+
+        // 非商人：setter false、getter None。
+        assert!(!w.set_merchant_castle_index(9999, Some(0)));
+        assert_eq!(w.merchant_castle_index(9999), None);
+        assert!(w.merchant_castle_binding(9999).is_none());
+    }
+
+    /// **商人 ctor 常量**（`Merchant : NormNpc`，`Merchant.cs:82` 只做增量赋值）：
+    /// `Light=2`（`NormNpc.cs:43`）、`AntiPoison=99`（`NormNpc.cs:44`）、`StickMode=true`
+    /// （`NormNpc.cs:45`）、`Dir=4`（`BaseObject.cs:378`）；`CellType=Merchant`
+    /// （`Merchant.cs:109`）由挂图落格 + [`crate::world::entity_cell_type`] 身份派生。
+    ///
+    /// **牙**：删 `insert_merchant` 的 `e.light` / `e.anti_poison` / `e.stick_mode` /
+    /// `e.ai.dir` 任一赋值 ⇒ 对应断言红；删 `entity_cell_type` 的 `merchant.is_some()` 支
+    /// ⇒ `CellType` 断言红。
+    #[test]
+    fn insert_merchant_sets_normnpc_ctor_constants() {
+        let mut w = World::new(20, 20);
+        let id = w.spawn_merchant(spawn_at(3, 4)).expect("挂图成功");
+        let e = w.entities.get(id).expect("实体在");
+        assert_eq!(e.light, 2, "NormNpc.cs:43 Light = 2");
+        assert_eq!(e.anti_poison, 99, "NormNpc.cs:44 AntiPoison = 99");
+        assert!(e.stick_mode, "NormNpc.cs:45 StickMode = true");
+        assert_eq!(e.ai.dir, 4, "BaseObject.cs:378 Dir = 4");
+        assert_eq!(
+            crate::world::entity_cell_type(&e),
+            CellType::Merchant,
+            "Merchant.cs:109 CellType = Merchant"
+        );
+    }
+}

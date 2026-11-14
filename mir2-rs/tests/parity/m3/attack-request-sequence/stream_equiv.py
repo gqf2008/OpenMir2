@@ -221,13 +221,13 @@ def cmd_selftest(_args):
         "Next(max)\t5\t2\tM2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223",
     ]
     rt_lines = [
-        "1\tNext(min,max)\t2\t0\tcrates\\world\\src\\combat.rs:109",
-        "2\tNext(min,max)\t10\t4\tcrates\\world\\src\\combat.rs:111",
-        "3\tNext(min,max)\t15\t3\tcrates\\world\\src\\combat.rs:758",
-        "4\tNext(min,max)\t37\t22\tcrates\\world\\src\\combat.rs:628",
-        "5\tNext(min,max)\t22\t15\tcrates\\world\\src\\combat.rs:630",
-        "6\tNext(max)\t10\t7\tcrates\\world\\src\\combat.rs:601",
-        "7\tNext(min,max)\t5\t2\tcrates\\world\\src\\combat.rs:831",
+        "1\tNext(min,max)\t2\t0\tcrates\\world-bevy\\src\\combat.rs:109",
+        "2\tNext(min,max)\t10\t4\tcrates\\world-bevy\\src\\combat.rs:111",
+        "3\tNext(min,max)\t15\t3\tcrates\\world-bevy\\src\\combat.rs:758",
+        "4\tNext(min,max)\t37\t22\tcrates\\world-bevy\\src\\combat.rs:628",
+        "5\tNext(min,max)\t22\t15\tcrates\\world-bevy\\src\\combat.rs:630",
+        "6\tNext(max)\t10\t7\tcrates\\world-bevy\\src\\combat.rs:601",
+        "7\tNext(min,max)\t5\t2\tcrates\\world-bevy\\src\\combat.rs:831",
     ]
 
     with tempfile.TemporaryDirectory() as td:
@@ -257,14 +257,14 @@ def cmd_selftest(_args):
         check("改坏一抽结果 ⇒ RED", nok["equivalent"] is False)
 
         # 3) 真 min>0：不归一、不抹平 ⇒ 必红
-        write_rt(["1\tNext(min,max)\t%d\t22\tcrates\\world\\src\\combat.rs:628" % ((5 << 32) | 37)])
+        write_rt(["1\tNext(min,max)\t%d\t22\tcrates\\world-bevy\\src\\combat.rs:628" % ((5 << 32) | 37)])
         write_cs(["Next(max)\t37\t22\tM2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792"])
         gok = compare(str(csp), str(rtp))
         check("真 min=5 不抹平 ⇒ RED", gok["equivalent"] is False)
 
         # 4) 抽数不等 ⇒ RED（不是 PREREQ）
         write_cs(cs_lines)
-        write_rt(rt_lines + ["8\tNext(min,max)\t5\t2\tcrates\\world\\src\\combat.rs:831"])
+        write_rt(rt_lines + ["8\tNext(min,max)\t5\t2\tcrates\\world-bevy\\src\\combat.rs:831"])
         cnt = compare(str(csp), str(rtp))
         check("抽数不等 ⇒ RED（rc=1 语义）", cnt["equivalent"] is False and cnt["first_semantic_diff"]["index_0based"] == 7)
 

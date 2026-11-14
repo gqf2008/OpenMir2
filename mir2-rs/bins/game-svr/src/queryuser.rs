@@ -9,7 +9,7 @@
 //! 以便 `cargo test -p game-svr --lib` 直接钉住字段序/几何，不依赖 tokio/网关。
 
 use mir2_data::StdItem;
-use mir2_world::World;
+use mir2_world_bevy::World;
 
 use crate::itemwire::{encode_client_item, write_ascii_string, ClientItem, ITEM_NAME_LEN};
 
@@ -193,7 +193,7 @@ mod tests {
         // 目标在 (11,10)：落在以 (10,10) 为心的 3×3 内。
         world.open_session("t");
         world
-            .enter_map("t", mir2_world::EntitySpawn::new(0, "t", 11, 10), 0)
+            .enter_map("t", mir2_world_bevy::EntitySpawn::new(0, "t", 11, 10), 0)
             .expect("进图");
         let target = world.session("t").unwrap().actor_id.unwrap();
         // 目标已在 (11,10) ⇒ 心 (10,10) 命中。

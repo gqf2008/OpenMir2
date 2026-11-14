@@ -71,7 +71,7 @@
 //! （`src/GameSrv/Word/Threads/UserProcessor.cs:7`），即**每 50ms 一次**；
 //! `recoveryTick = (now - AutoRecoveryTick)/20` 是**整数除法**，每次调用丢掉不足 20ms 的余量
 //! ⇒ 每 50ms 恰好 `+2`，长期回收率 **40/秒**（不是 50/秒）。本宿主的 world tick 是 200ms
-//! （`mir2_world::TICK_INTERVAL_MS`）≠ 50ms ⇒ 若直接按 200ms 算 `(200/20)=10` 会得到 50/秒，
+//! （`mir2_world_bevy::TICK_INTERVAL_MS`）≠ 50ms ⇒ 若直接按 200ms 算 `(200/20)=10` 会得到 50/秒，
 //! 攻方体力下滑变慢、掉血点漂移。因此这里**按 50ms 边界逐步重放** oracle 的 `Run()`，
 //! 令整数截断口径与 oracle 一致。
 //!

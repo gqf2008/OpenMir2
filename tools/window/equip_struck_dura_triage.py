@@ -505,9 +505,9 @@ def check():
         cb = "M2Server.Player.PlayObject.GetAttackPower@PlayObject.cs:2934"
         cc = "M2Server.Player.PlayObject.AttackSuccess@PlayObject.Attack.cs:223"
         w = "M2Server.Actor.AnimalObject.Wondering@AnimalObject.cs:427"
-        ra = r"crates\world\src\combat.rs:109"
-        rb_ = r"crates\world\src\combat.rs:111"
-        rc = r"crates\world\src\combat.rs:1152"
+        ra = r"crates\world-bevy\src\combat.rs:109"
+        rb_ = r"crates\world-bevy\src\combat.rs:111"
+        rc = r"crates\world-bevy\src\combat.rs:1152"
         base = "M2Server.Actor.BaseObject.GetAttackPower@BaseObject.Base.cs:892"
         hsd = "M2Server.Actor.BaseObject.GetHitStruckDamage@BaseObject.Base.cs:792"
         csharp = rng_file("csharp.tsv", [
@@ -622,7 +622,7 @@ def check():
                 "RNG 诊断牙⑤：起点不唯一 ⇒ UNDECIDABLE + attack_windows_total（不静默取第一个）")
 
         ctor_c = "M2Server.Player.PlayObject..ctor@PlayObject.cs:1046"
-        ctor_r = r"crates\world\src\ctor_fold.rs:545"
+        ctor_r = r"crates\world-bevy\src\ctor_fold.rs:545"
         ctor_csharp = rng_file("ctor-c.tsv", [
             (1, 999999, 168434, ctor_c),
             (2, 5, 3, ca), (3, 10, 8, cb), (4, 5, 3, cc)])

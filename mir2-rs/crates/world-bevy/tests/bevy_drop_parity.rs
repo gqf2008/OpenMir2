@@ -270,7 +270,7 @@ fn no_parallel_guard() {
     );
 }
 
-/// 只保留代码：去掉行/块注释与字符串字面量（与 `crates/world/tests/no_parallel.rs` 同口径）。
+/// 只保留代码：去掉行/块注释与字符串字面量（与 `crates/world-bevy/tests/no_parallel.rs` 同口径）。
 fn strip_comments_and_strings(src: &str) -> String {
     let mut out = String::with_capacity(src.len());
     let mut chars = src.chars().peekable();

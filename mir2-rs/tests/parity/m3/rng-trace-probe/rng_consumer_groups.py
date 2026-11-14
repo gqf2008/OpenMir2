@@ -47,8 +47,8 @@ OTHER_GROUP = "other"
 #
 # C# oracle 在**实体构造期**（`BaseObject..ctor` / `AnimalObject..ctor` / `MonsterObject..ctor` /
 # `Monsters.*..ctor` / `PlayObject..ctor`）独立抽数 ⇒ 独立 `construct` 组；而 Rust 把构造期抽数
-# **折叠进刷怪路径**（`crates/world/src/mongen.rs` 的 `AnimalState::from_spawn_draws`）⇒ Rust 侧
-# construct 组**已启用**（片114：固定 NPC/商人列表构造链的唯一抽数点 = `crates/world/src/entity.rs` 的 `BaseAnimalCtorDraws::draw`；怪物构造仍折在 mongen 宿主）。owner 裁决：**接受这个折叠为「登记建模差异」**，但要求**机判等价**——
+# **折叠进刷怪路径**（`crates/world-bevy/src/mongen.rs` 的 `AnimalState::from_spawn_draws`）⇒ Rust 侧
+# construct 组**已启用**（片114：固定 NPC/商人列表构造链的唯一抽数点 = `crates/world-bevy/src/entity.rs` 的 `BaseAnimalCtorDraws::draw`；怪物构造仍折在 mongen 宿主）。owner 裁决：**接受这个折叠为「登记建模差异」**，但要求**机判等价**——
 # 「C# `construct` 折叠到 Rust `spawn` 后，**折叠计数与相对次序必须相等**；**只写白名单不校验不算达成**」。
 #
 # 因此：`construct` 归一到 `spawn`（两侧同一条规则），`groupdiff --fold` 在**折叠后的序列**上
@@ -550,7 +550,7 @@ def first_divergence(a, b):
 #
 # 2026-10-13 窗口前置审计（卡 openmir2-m3-rng-trace-scene-groups）：宿主侧
 # `bins/game-svr/src/mongen.rs`（`create_monster_oracle` / `draw_monster_construct`）也抽构造期
-# 随机数，而表里只有 `crates/world/src/mongen.rs` ⇒ 固定场景（图 0137 的 MonGen 0 行）里它是
+# 随机数，而表里只有 `crates/world-bevy/src/mongen.rs` ⇒ 固定场景（图 0137 的 MonGen 0 行）里它是
 # **唯一** spawn 来源，漏归类会被算成 `other`（`groupdiff --fold --strict` 的 `GROUP_SET_DIFF`
 # + DoD② 的 `MISSING_EXPECTED_GROUPS(spawn)`）⇒ **会在共用窗口里空转一轮**。
 # 本自检把「该行存在且生效」钉成机判，并自带「删行 ⇒ 必红」样例（不再只靠散文）。
@@ -560,8 +560,8 @@ _SELFTEST_CASES = (
     # (side, site, is_attack, expected_group)
     ("rust", "bins/game-svr/src/mongen.rs:289", False, "spawn"),            # 宿主构造抽数（本片新增行）
     ("rust", "bins\\game-svr\\src\\mongen.rs:434", False, "spawn"),        # 盘上是 `\` ⇒ 归一后才命中
-    ("rust", "crates/world/src/mongen.rs:321", False, "spawn"),
-    ("rust", "crates/world/src/monai.rs:171", False, "monster_ai"),
+    ("rust", "crates/world-bevy/src/mongen.rs:321", False, "spawn"),
+    ("rust", "crates/world-bevy/src/monai.rs:171", False, "monster_ai"),
     ("rust", "crates/formula/src/drop.rs:100", False, "drop"),
     ("rust", "bins/game-svr/src/main.rs:2884", False, "startup"),
     # 2026-10-21 单二进制搬迁：宿主代码在 lib.rs（main.rs 只剩三行薄包装）⇒ 真机站点记
@@ -570,7 +570,7 @@ _SELFTEST_CASES = (
     # UNCLASSIFIED ⇒ 下个 R 窗口假漂移）。
     ("rust", "bins\\game-svr\\src\\lib.rs:16202", False, "startup"),
     ("rust", "bins/game-svr/src/lib.rs:16202", False, "startup"),
-    ("rust", "crates/world/src/combat.rs:758", True, "attack"),
+    ("rust", "crates/world-bevy/src/combat.rs:758", True, "attack"),
     ("rust", "bins/game-svr/src/not_in_table.rs:1", False, OTHER_GROUP),   # 未登记 ⇒ other（漂移信号）
     # MB-3b F3：`ScultureKingMonster.CallSlave` 的 `Random(4)`（:47）是 **AI 取数**（Rust 站点
     # `monai.rs::flush_sculture_spawns`，`#[track_caller]`）⇒ 必须归 `monster_ai`；同方法 :39 的

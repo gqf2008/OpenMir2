@@ -10,8 +10,8 @@
 
 use game_svr::downlink;
 use mir2_protocol::messages;
-use mir2_world::map::CellAttribute;
-use mir2_world::{Command, RushFrame, World};
+use mir2_world_bevy::map::CellAttribute;
+use mir2_world_bevy::{Command, RushFrame, World};
 
 fn display(dir: u8) -> downlink::ActorDisplay {
     downlink::ActorDisplay::new(dir, 7, 0x0102_0304, 0, 0x0506_0708, 255, b"hero".to_vec())
@@ -24,11 +24,11 @@ fn header_u16(body: &[u8], at: usize) -> u16 {
 #[test]
 fn push_event_from_tick_to_backstep_bytes() {
     let mut w = World::new(64, 64);
-    let id = w.add_entity(mir2_world::EntitySpawn::new(0, "hero", 5, 5));
+    let id = w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5));
     w.tick(); // 跑 Enter 落图
     w.enqueue(Command::Push {
         actor_id: id,
-        dir: mir2_world::magic::DIR_UP,
+        dir: mir2_world_bevy::magic::DIR_UP,
         count: 2,
     });
     let rec = w.tick();
@@ -52,7 +52,7 @@ fn push_event_from_tick_to_backstep_bytes() {
 #[test]
 fn rush_and_rushkung_events_from_tick_to_bytes() {
     let mut w = World::new(64, 64);
-    let id = w.add_entity(mir2_world::EntitySpawn::new(0, "hero", 5, 5));
+    let id = w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 5, 5));
     w.tick();
     // (7,5) 设为高墙 ⇒ 冲刺到 (6,5) 后正前不可走 ⇒ 末尾一条 RUSHKUNG（落在正前格 (7,5)）。
     w.maps[0]
@@ -61,7 +61,7 @@ fn rush_and_rushkung_events_from_tick_to_bytes() {
         .set_attribute(CellAttribute::HighWall);
     w.enqueue(Command::Rush {
         actor_id: id,
-        dir: mir2_world::magic::DIR_RIGHT,
+        dir: mir2_world_bevy::magic::DIR_RIGHT,
         steps: 4,
     });
     let rec = w.tick();
@@ -83,7 +83,7 @@ fn rush_and_rushkung_events_from_tick_to_bytes() {
 #[test]
 fn butch_event_from_tick_to_bytes() {
     let mut w = World::new(64, 64);
-    let id = w.add_entity(mir2_world::EntitySpawn::new(0, "hero", 7, 9));
+    let id = w.add_entity(mir2_world_bevy::EntitySpawn::new(0, "hero", 7, 9));
     w.tick();
     w.enqueue(Command::Butch {
         actor_id: id,

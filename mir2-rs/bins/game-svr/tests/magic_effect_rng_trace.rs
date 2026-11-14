@@ -4,11 +4,11 @@
 //! `rng_trace` 的开关是进程级全局（`OnceLock`），只有独占进程才不会被别的用例的取数污染。
 //!
 //! 判据：开着 `MIR2_RNG_LOG` 同口径的 trace，跑一次
-//! [`mir2_world::World::cast_firewind_spell`]（魔号 8）与
-//! [`mir2_world::World::cast_space_move_spell`]（魔号 21），落盘里必须出现三处**非攻击**站点：
-//! - `crates/world/src/magic_effect.rs:<line>`（`Random(20)`/`Random(2)`/`Random(11)`）；
-//! - `crates/world/src/merchant.rs:<line>`（`MapRandomMove` 两抽；C# site 亦归 `merchant` 组）；
-//! - `crates/world/src/space_move.rs:<line>`（`SpaceMoveGetRandXY` 移位环）。
+//! [`mir2_world_bevy::World::cast_firewind_spell`]（魔号 8）与
+//! [`mir2_world_bevy::World::cast_space_move_spell`]（魔号 21），落盘里必须出现三处**非攻击**站点：
+//! - `crates/world-bevy/src/magic_effect.rs:<line>`（`Random(20)`/`Random(2)`/`Random(11)`）；
+//! - `crates/world-bevy/src/merchant.rs:<line>`（`MapRandomMove` 两抽；C# site 亦归 `merchant` 组）；
+//! - `crates/world-bevy/src/space_move.rs:<line>`（`SpaceMoveGetRandXY` 移位环）。
 //!
 //! 证据用法（把真实 trace 留给 `rng_ledger_diff.py groups --require-closed` 复算）：
 //! ```text
@@ -22,8 +22,8 @@
 
 use mir2_shared::rng::RandomNumber;
 use mir2_shared::rng_trace;
-use mir2_world::entity::{VisibleBaseObject, VisibleFlag};
-use mir2_world::{CellAttribute, MapGrid, World};
+use mir2_world_bevy::entity::{VisibleBaseObject, VisibleFlag};
+use mir2_world_bevy::{CellAttribute, MapGrid, World};
 
 const SEED: i32 = 1;
 
@@ -53,12 +53,12 @@ fn magic_effect_draws_record_non_attack_sites() {
     w.maps.push(home);
     w.open_session("caster");
     let caster = {
-        let mut e = mir2_world::EntitySpawn::new(0, "caster".to_string(), 10, 10);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "caster".to_string(), 10, 10);
         e.level = 20;
         w.enter_map("caster", e, 0).expect("进图")
     };
     let target = {
-        let mut e = mir2_world::EntitySpawn::new(0, "target".to_string(), 11, 10);
+        let mut e = mir2_world_bevy::EntitySpawn::new(0, "target".to_string(), 11, 10);
         e.level = 15;
         w.add_entity(e)
     };
@@ -81,9 +81,9 @@ fn magic_effect_draws_record_non_attack_sites() {
     println!("MAGIC_EFFECT_TRACE_PATH {path:?}");
     let norm = txt.replace('\\', "/");
     for (tag, needle) in [
-        ("magic_effect", "crates/world/src/magic_effect.rs:"),
-        ("merchant", "crates/world/src/merchant.rs:"),
-        ("space_move", "crates/world/src/space_move.rs:"),
+        ("magic_effect", "crates/world-bevy/src/magic_effect.rs:"),
+        ("merchant", "crates/world-bevy/src/merchant.rs:"),
+        ("space_move", "crates/world-bevy/src/space_move.rs:"),
     ] {
         let n = norm.matches(needle).count();
         println!("MAGIC_EFFECT_SITE group={tag} count={n}");
@@ -94,7 +94,7 @@ fn magic_effect_draws_record_non_attack_sites() {
     }
     // 反牙：效果体站点**不得**落 `magic.rs`（`RUST_ATTACK_RE` 会把整个文件误归 attack 组）。
     assert!(
-        !norm.contains("crates/world/src/magic.rs:"),
+        !norm.contains("crates/world-bevy/src/magic.rs:"),
         "效果体取数不得留在 magic.rs（会被误归 attack 组）:\n{txt}"
     );
     assert!(

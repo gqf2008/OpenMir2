@@ -45,7 +45,7 @@ use mir2_envir::guardlist::GuardInfo;
 use mir2_envir::paths::envir_file_path;
 use mir2_envir::{decode_text, MapLoader, MapRegistry};
 use mir2_shared::rng::RandomNumber;
-use mir2_world::mongen::{MonGenEntry, MonGenState};
+use mir2_world_bevy::mongen::{MonGenEntry, MonGenState};
 
 use crate::downlink;
 use crate::mongen::{
@@ -131,7 +131,7 @@ pub fn place_guards(
     table: &MonsterTable,
     host: &mut MonGenHost,
     registry: &MapRegistry,
-    world: &mut mir2_world::World,
+    world: &mut mir2_world_bevy::World,
     displays: &mut downlink::DisplayTable,
 ) -> GuardPlacementReport {
     let mut report = GuardPlacementReport {
@@ -201,7 +201,7 @@ pub fn load_guard_list_file(loader: &MapLoader) -> Result<Option<Vec<GuardInfo>>
 mod tests {
     use super::*;
     use mir2_data::models::MonsterInfo;
-    use mir2_world::mongen::MonGenConfig;
+    use mir2_world_bevy::mongen::MonGenConfig;
 
     /// 用例级唯一临时目录的序号（照 `mongen.rs` 测试的 pid+原子计数口径）。
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
@@ -277,7 +277,7 @@ mod tests {
     }
 
     /// 世界内 race 11 守卫数（闭包捕获会与 sink 的 `&mut world` 冲突 ⇒ 独立函数）。
-    fn guard_count(world: &mir2_world::World) -> usize {
+    fn guard_count(world: &mir2_world_bevy::World) -> usize {
         world.entities.iter_ref().filter(|e| e.race == 11).count()
     }
 
@@ -289,7 +289,7 @@ mod tests {
     fn place_guards_puts_each_guard_in_world_field_by_field() {
         let f = fixture();
         let table = MonsterTable::new(vec![guard_info_row()]);
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         world.clock_ms = 12_345;
         let mut host = MonGenHost::start(
             Vec::new(),
@@ -386,7 +386,7 @@ mod tests {
         let _ = b.random_below(100);
         let configured_dir = (drawn_dir + 1) % 8;
 
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         world.rng = RandomNumber::with_seed(seed);
         let mut host = MonGenHost::start(
             Vec::new(),
@@ -425,7 +425,7 @@ mod tests {
     fn unknown_template_or_map_skips_line_without_draws() {
         let f = fixture();
         let table = MonsterTable::new(vec![guard_info_row()]);
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         let seed = 77;
         world.rng = RandomNumber::with_seed(seed);
         let mut host = MonGenHost::start(
@@ -476,7 +476,7 @@ mod tests {
         let f = fixture();
         let table = MonsterTable::new(vec![guard_info_row()]);
         let seed = 31;
-        let mut world = mir2_world::World::with_maps(vec![(5, 5)]);
+        let mut world = mir2_world_bevy::World::with_maps(vec![(5, 5)]);
         world.rng = RandomNumber::with_seed(seed);
         let mut host = MonGenHost::start(
             Vec::new(),

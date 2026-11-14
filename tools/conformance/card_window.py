@@ -4347,7 +4347,7 @@ FIXTURE_MONGEN_ZEN_TIME = 360
 #: 怪物夹具行的落盘位置。**必须是 prepend**（卡 `openmir2-fixture-monsters-prepend`）：
 #: 刷怪线程按 `RegenMonstersTime=200ms` **每次只前进一条** MonGen
 #: （C# `WorldServer.MonGen.cs:205-230` 取 `mongenList[CurrMonGenIdx]` 后 `CurrMonGenIdx++`；
-#: Rust `crates/world/src/mongen.rs` 同构）⇒ 追加到单表 3081 行末尾 ≈ 616s（≈10 分钟）才轮得到，
+#: Rust `crates/world-bevy/src/mongen.rs` 同构）⇒ 追加到单表 3081 行末尾 ≈ 616s（≈10 分钟）才轮得到，
 #: 窗口内**永远不刷**。前插 = index 0，第一个闸门（约 200ms、`StartTick==0`）就取到。
 FIXTURE_MONGEN_LAYOUT = "prepend"
 
@@ -7825,8 +7825,8 @@ def _selftest_rng_ledger(tmp):
     good = write("good.tsv",
                  "1\tINJECT_OK\t42\t0\t\n"
                  "2\tSEED_PROBE\t8\t0\t\n"
-                 "3\trand_range\t100\t7\tcrates/world/src/combat.rs:105\n"
-                 "4\trand\t10\t3\tcrates/world/src/mongen.rs:88\n")
+                 "3\trand_range\t100\t7\tcrates/world-bevy/src/combat.rs:105\n"
+                 "4\trand\t10\t3\tcrates/world-bevy/src/mongen.rs:88\n")
 
     ok, detail = check_rng_ledger(good)
     out.append((ok and "INJECT_OK" in detail and "SEED_PROBE" in detail,

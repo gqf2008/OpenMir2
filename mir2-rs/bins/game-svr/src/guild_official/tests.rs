@@ -18,7 +18,7 @@ use game_svr::downlink::{self, DisplayTable};
 use game_svr::npc::{SayMsg, SendMsg};
 use mir2_data::guild::GuildFileSections;
 use mir2_protocol::messages;
-use mir2_world::castle::{CastleSiegeConfig, GuildId, UserCastle};
+use mir2_world_bevy::castle::{CastleSiegeConfig, GuildId, UserCastle};
 use tokio::sync::mpsc;
 
 use crate::guild_runtime::GuildMsgCfg;
@@ -37,22 +37,22 @@ impl FixedNpcScript for EmptyScript {
         _npc_actor_id: i32,
         _label: &str,
         _bo_ext_jmp: bool,
-        _world: &mir2_world::World,
-        _guilds: &mir2_world::GuildManager,
+        _world: &mir2_world_bevy::World,
+        _guilds: &mir2_world_bevy::GuildManager,
     ) -> (Vec<SayMsg>, Vec<SendMsg>, Vec<usize>) {
         (Vec::new(), Vec::new(), Vec::new())
     }
 }
 
 struct Fixture {
-    world: mir2_world::World,
+    world: mir2_world_bevy::World,
     npc_id: i32,
     online: OnlineRegistry,
     sessions: HashMap<String, SessionGround>,
     shop_sessions: HashMap<String, ShopSession>,
     displays: DisplayTable,
-    guilds: mir2_world::GuildManager,
-    guild_cfg: mir2_world::GuildConfig,
+    guilds: mir2_world_bevy::GuildManager,
+    guild_cfg: mir2_world_bevy::GuildConfig,
     guild_msg_cfg: GuildMsgCfg,
     castle_cfg: mir2_data::guild_castle::GuildCastleConfig,
     sections: GuildFileSections,
@@ -63,7 +63,7 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
-        let world = mir2_world::World::new(32, 32);
+        let world = mir2_world_bevy::World::new(32, 32);
         let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
         let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
         gates.insert(0, tx);
@@ -74,8 +74,8 @@ impl Fixture {
             sessions: HashMap::new(),
             shop_sessions: HashMap::new(),
             displays: DisplayTable::new(),
-            guilds: mir2_world::GuildManager::new(),
-            guild_cfg: mir2_world::GuildConfig::default(),
+            guilds: mir2_world_bevy::GuildManager::new(),
+            guild_cfg: mir2_world_bevy::GuildConfig::default(),
             guild_msg_cfg: GuildMsgCfg {
                 show_pre_fix_msg: false,
                 prefix: String::new(),
@@ -99,13 +99,13 @@ impl Fixture {
         f.add_player("hero", 1, 10, 10, 901);
         f.npc_id = f
             .world
-            .spawn_npc(mir2_world::npc::NpcSpawn {
+            .spawn_npc(mir2_world_bevy::npc::NpcSpawn {
                 name: "比奇国王".to_string(),
                 x: 11,
                 y: 10,
                 map_id: 0,
-                state: mir2_world::npc::NpcState {
-                    npc_type: mir2_world::npc::NPC_TYPE_GUILD_OFFICIAL,
+                state: mir2_world_bevy::npc::NpcState {
+                    npc_type: mir2_world_bevy::npc::NPC_TYPE_GUILD_OFFICIAL,
                     ..Default::default()
                 },
             })
@@ -140,8 +140,8 @@ impl Fixture {
     }
 
     fn add_player(&mut self, name: &str, actor_id: i32, x: i32, y: i32, socket: i32) {
-        let mut e = mir2_world::EntitySpawn::new(actor_id, name, x, y);
-        e.race = mir2_world::ACTOR_RACE_PLAY;
+        let mut e = mir2_world_bevy::EntitySpawn::new(actor_id, name, x, y);
+        e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
         self.world.add_entity(e);
         let sg = crate::tests::test_session_ground(actor_id);
         self.sessions.insert(name.to_string(), sg);
