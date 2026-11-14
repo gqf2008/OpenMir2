@@ -1543,7 +1543,7 @@ where
         .expect("Command 段：CommandQueueRes 必须由段边界插入（段边界契约）");
     {
         let mut ad = StageEntities::<S>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         // **FIFO 合同**：严格按入队顺序处理，逐条、不重排（`openmir2-world-ecs-p7-command-stage` A2）。
         while let Some(cmd) = pending.0.pop_front() {
             World::apply_command(&mut access, &mut sim, &mut record.0, cmd);
@@ -2225,7 +2225,7 @@ pub fn sim_dup_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("SimState 必须在段窗口内（段边界契约）");
     let pushes = {
         let mut ad = StageEntities::<SimDup>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         World::check_dup_obj_core(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -2423,7 +2423,7 @@ fn settle_deaths_stage_core<S: FullAccessSpec>(
         .expect("TickRecordRes 必须由段边界插入（结算段契约）");
     {
         let mut ad = StageEntities::<S>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         World::settle_deaths_impl(&mut access, &mut sim, &mut record.0, only_players);
     }
     world.insert_resource(record);
@@ -2500,7 +2500,7 @@ mir2_world_bevy::stage_spec!(
 pub fn sim_slave_cleanup_stage_system(world: &mut bevy_ecs::world::World) {
     StageTrace::record(world, TickStage::SimSlaveCleanup);
     let mut ad = StageEntities::<SimSlaveCleanup>::new(world);
-    let mut access = crate::entity::StageAccess { ad: &mut ad };
+    let mut access = crate::entity::StageAccess::new(&mut ad);
     crate::slave::slave_list_cleanup_all_impl(&mut access);
 }
 
@@ -2578,7 +2578,7 @@ pub fn sim_buff_stage_system(world: &mut bevy_ecs::world::World) {
     let mut out = BuffTickOutcome::default();
     {
         let mut ad = StageEntities::<SimBuff>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         for i in 0..BUFF_PASSES_PER_TICK {
             let now = base + i * BUFF_PASS_INTERVAL_MS;
             sim.buff_pass_tick = now;
@@ -2670,7 +2670,7 @@ pub fn sim_self_deliver_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("段边界：SimState 必须已在 bevy World（SimSelfDeliver）");
     let out = {
         let mut ad = StageEntities::<SimSelfDeliver>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         crate::slave::deliver_self_delay_msgs_impl(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -2761,7 +2761,7 @@ pub fn sim_npc_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("段边界：SimState 必须已在 bevy World（SimNpc）");
     let out = {
         let mut ad = StageEntities::<SimNpc>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         crate::npc::npc_tick_impl(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -2906,7 +2906,7 @@ pub fn sim_monster_ai_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("段边界：SimState 必须已在 bevy World（SimMonsterAi）");
     {
         let mut ad = StageEntities::<SimMonsterAi>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         crate::monai::monster_ai_tick_impl(&mut access, &mut sim);
     }
     world.insert_resource(sim);
@@ -2940,7 +2940,7 @@ pub fn sim_merchant_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("段边界：SimState 必须已在 bevy World（SimMerchant）");
     let out = {
         let mut ad = StageEntities::<SimMerchant>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         crate::merchant::merchant_tick_impl(&mut access, &mut sim)
     };
     world.insert_resource(sim);
@@ -3016,7 +3016,7 @@ pub fn tail_verify_map_time_stage_system(world: &mut bevy_ecs::world::World) {
         .expect("SimState 必须在段窗口内（段边界契约）");
     {
         let mut ad = StageEntities::<TailVerifyMapTime>::new(world);
-        let mut access = crate::entity::StageAccess { ad: &mut ad };
+        let mut access = crate::entity::StageAccess::new(&mut ad);
         World::verify_players_map_time_impl(&mut access, &mut sim);
     }
     world.insert_resource(sim);
@@ -11364,7 +11364,7 @@ mod tests {
         };
         {
             let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert_eq!(
                 crate::entity::StructuralAccess::insert(&mut access, spawn),
                 id
@@ -11403,7 +11403,7 @@ mod tests {
         assert!(w.entities.get(id).is_some());
         {
             let mut ad = StageEntities::<StructuralProbe>::new(w.entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(crate::entity::StructuralAccess::remove(&mut access, id));
             assert!(access.get(id).is_none());
         }
@@ -11502,7 +11502,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut w;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(
                 !World::try_step_impl(&mut access, sim, 1, 1, 0),
                 "撞墙必须返回 false"
@@ -11518,7 +11518,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut w;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(World::try_step_impl(&mut access, sim, 1, 0, 1), "空格可走");
         }
         let e = w.entities.get(1).unwrap();
@@ -11561,7 +11561,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut w;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(World::enter_world_impl(&mut access, sim, id));
             assert!(
                 access
@@ -11586,7 +11586,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut w;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(World::leave_world_impl(&mut access, sim, id));
         }
         w.entities.refresh_views();
@@ -11627,7 +11627,7 @@ mod tests {
         let stage_rush = {
             let World { entities, sim, .. } = &mut b;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             World::rush_now_impl(&mut access, sim, 1, crate::magic::DIR_RIGHT, 3)
         };
         let stage_pos = {
@@ -11649,7 +11649,7 @@ mod tests {
         let walled = {
             let World { entities, sim, .. } = &mut c;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             World::rush_now_impl(&mut access, sim, 1, crate::magic::DIR_RIGHT, 4)
         };
         assert_eq!(
@@ -11684,7 +11684,7 @@ mod tests {
         let stage_push = {
             let World { entities, sim, .. } = &mut f;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             World::push_now_impl(&mut access, sim, 1, crate::magic::DIR_UP, 3)
         };
         assert_eq!(stage_push, facade_push, "push：两条路径事件逐条相同");
@@ -11792,7 +11792,7 @@ mod tests {
         let (ok_b, stage_record) = {
             let World { entities, sim, .. } = &mut b;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             let mut record = TickRecord::default();
             let ok = World::spawn_monster_now_impl(
                 &mut access,
@@ -11867,7 +11867,7 @@ mod tests {
         {
             let World { entities, sim, .. } = &mut c;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(
                 !World::spawn_monster_now_impl(
                     &mut access,
@@ -11936,7 +11936,7 @@ mod tests {
         let (stage_ev, stage_record) = {
             let World { entities, sim, .. } = &mut b;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             let mut record = TickRecord::default();
             let ev = World::butch_effect_now_impl(&mut access, sim, &mut record, pb, tb, 11, 10);
             (ev, record)
@@ -11996,7 +11996,7 @@ mod tests {
         let (stage_butch, butch_record) = {
             let World { entities, sim, .. } = &mut c;
             let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
-            let access = crate::entity::StageAccess { ad: &mut ad };
+            let access = crate::entity::StageAccess::new(&mut ad);
             let mut record = TickRecord::default();
             let ev = World::butch_now_impl(&access, &*sim, &mut record, pc, 5);
             (ev, record)
@@ -12222,7 +12222,7 @@ mod tests {
         let b = {
             let World { entities, sim, .. } = &mut staged;
             let mut ad = StageEntities::<AttackProbe>::new(entities.world_mut());
-            let mut access = crate::entity::StageAccess { ad: &mut ad };
+            let mut access = crate::entity::StageAccess::new(&mut ad);
             assert!(
                 access.get(hero2).is_some(),
                 "段访问器必须能按 id 解析到攻方"
