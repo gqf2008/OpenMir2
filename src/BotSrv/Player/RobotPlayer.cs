@@ -300,6 +300,9 @@ namespace BotSrv.Player
         /// <summary>服务端确认进世界（收到 SM_LOGON）——探针的武装条件。</summary>
         private volatile bool _inWorld;
         private bool _inWorldCounted;
+        /// <summary>第一次 SM_LOGON 绑定的登录连接序号（`ScoketClient.ConnSeq`）。身份守卫用它区分
+        /// 「同一会话收到别人的帧」与「新连接上的合法重登」：同一连接内 actor 不许换人。</summary>
+        private int _logonConnSeq;
         /// <summary>本假人自己的世界坐标（SM_LOGON 里服务端给的落点）。</summary>
         private int _probeX;
         private int _probeY;
@@ -2613,12 +2616,24 @@ namespace BotSrv.Player
                 + ",\"remote_ep\":" + SelfReport.Q(remote);
         }
 
-        /// <summary>收到 SM_LOGON = 服务端确认本假人已进世界（探针武装 + tick 覆盖率分子），幂等。
-        /// `x`/`y` = 该消息里服务端给本假人的落点（PlayScene 的 SM_LOGON 分支就用它们 NewActor）。</summary>
-        public void MarkInWorld(int actorId, int x, int y)
+        /// <summary>收到 SM_LOGON = 服务端确认本假人已进世界（探针武装 + tick 覆盖率分子）。
+        /// `x`/`y` = 该消息里服务端给本假人的落点（PlayScene 的 SM_LOGON 分支就用它们 NewActor）。
+        /// **同一会话/actor 的落点每次都刷新**，只有「进世界计数与武装」是每实例一次。
+        /// 返回 false = 被身份守卫拒绝（同一登录连接上收到了**别的 actor** 的 `SM_LOGON`）。
+        /// **守卫边界（F12①）**：`SM_LOGON` 在本方法**之前**已被 `PlayScene.SendMsg` 消费并改写
+        /// `MShare.MySelf`（`RobotPlayer.Operate.cs` 的 SM_LOGON 分支先发场景消息）；本守卫只保护
+        /// **探针坐标**与「成功进入游戏」日志，不保护、不回滚共享的 `MShare` 世界态。</summary>
+        public bool MarkInWorld(int actorId, int x, int y)
+            => MarkInWorldOnConnection(actorId, x, y, ClientSocket != null ? ClientSocket.ConnSeq : 0);
+
+        /// <summary>自检入口：显式给登录连接序号，用来分别覆盖「同一连接错投被拒」与「新连接合法重登」。</summary>
+        internal bool MarkInWorldOnConnectionForTest(int actorId, int x, int y, int connSeq)
+            => MarkInWorldOnConnection(actorId, x, y, connSeq);
+
+        private bool MarkInWorldOnConnection(int actorId, int x, int y, int connSeq)
         {
             // **卡 openmir2-sm-logon-cross-session-delivery**（总监归因判据 step1）：收到 SM_LOGON
-            // 就自报身份，**在幂等门之前**记录——错投/重复投递的每一条都必须留痕。
+            // 就自报身份，**在身份守卫与幂等门之前**记录——错投/重复投递的每一条都必须留痕。
             SelfReport.Write(
                 "sm_logon",
                 SelfIdentityFields()
@@ -2626,14 +2641,33 @@ namespace BotSrv.Player
                 + ",\"x\":" + x.ToString(CultureInfo.InvariantCulture)
                 + ",\"y\":" + y.ToString(CultureInfo.InvariantCulture)
                 + ",\"in_world_counted\":" + (_inWorldCounted ? "true" : "false"));
-            if (_inWorldCounted)
+
+            // 身份守卫（卡 `openmir2-botsrv-action-probe-turn-coords` F3）：**同一登录连接内 actor 不许换人**。
+            // SM_LOGON 帧里没有会话/角色名，夹具能拿到的身份锚只有「本连接首次绑定的 actor + ConnSeq」；
+            // 已绑定后再收别的 actor ⇒ 按错投拒绝并计数，**不再静默覆盖**探针坐标。
+            // 换到新连接（ConnSeq 变化）时允许重新绑定（合法重登）；跨连接错投/丢失的根因定位在
+            // D-* 卡 `openmir2-sm-logon-cross-session-delivery`（已合入 a5869cd6f / closed），不在夹具侧掩盖。
+            // **计数口径（F12②）**：`logon_misdelivered` 记的是「同连接 actor 冲突被拒的次数」，
+            // **不等于错投帧数**——错投帧先到时，后到的正确帧会被拒（计数 +1）；只有错投帧而没有
+            // 正确帧时它反而不计数。**禁止把 logon_misdelivered=0 读成「无错投」**。
+            if (_inWorldCounted && connSeq == _logonConnSeq && actorId != _myActorId)
             {
-                return;
+                LoadMetrics.LogonMisdelivered();
+                LogService.Warn($"机器人:[{ChrName}] SM_LOGON 身份守卫拒绝 actor={actorId} 期望={_myActorId} ({x},{y}) conn={connSeq}");
+                return false;
             }
-            _inWorldCounted = true;
+            // **落点每收一次就刷新**（卡 `openmir2-botsrv-action-probe-turn-coords`）：同一 actor 重发
+            // SM_LOGON 时，探针必须跟**最新**的服务端落点，否则会拿旧落点去探测。进世界计数仍只记一次。
+            MainOutMessage($"SM_LOGON actor={actorId} ({x},{y}) conn={connSeq}");   // 诊断（卡 action-probe-turn-coords）
             _myActorId = actorId;
             _probeX = x;
             _probeY = y;
+            _logonConnSeq = connSeq;
+            if (_inWorldCounted)
+            {
+                return true;
+            }
+            _inWorldCounted = true;
             _inWorld = true;
             ArmBagEquipSequence();
             ArmAttackSequence();
@@ -2649,9 +2683,35 @@ namespace BotSrv.Player
             {
                 // 牙齿钩子（T-12）：本假人照常进世界，但**不计** in_world（抹掉“进世界证据”）。
                 LoadMetrics.InWorldSuppressed();
-                return;
+                return true;
             }
             LoadMetrics.InWorld();
+            return true;
+        }
+
+        /// <summary>探针坐标跟随的生产唯一应用点：服务端把本假人挪动时（推挤 `SM_BACKSTEP` /
+        /// 空间移动 `SM_SPACEMOVE_SHOW*`），把 `_probeX/_probeY` 跟到服务端当前坐标
+        /// （判定见 [`ProbeCoords.TrySelfPosition`]）。改坏必红：`--selftest-probecoords`。
+        internal void ApplySelfMoveFrame(int ident, int recog, int param, int tag)
+        {
+            if (!ProbeCoords.TrySelfPosition(ident, recog, param, tag, _myActorId, out int x, out int y))
+            {
+                return;
+            }
+            _probeX = x;
+            _probeY = y;
+            LoadMetrics.ProbePosFollowed();
+            MainOutMessage($"PROBEFOLLOW ident={ident} recog={recog} -> ({x},{y})");   // 诊断
+        }
+
+        internal int ProbeXForTest => _probeX;
+        internal int ProbeYForTest => _probeY;
+        internal int MyActorIdForTest => _myActorId;
+        internal void SetProbeForTest(int actorId, int x, int y)
+        {
+            _myActorId = actorId;
+            _probeX = x;
+            _probeY = y;
         }
 
         /// <summary>本会话是否已收到服务端对本连接的 `SM_LOGON`（= 真的进了世界）。
@@ -6960,8 +7020,11 @@ namespace BotSrv.Player
         private void ProcessActMsg(string datablock)
         {
             string tagstr = string.Empty;
+            LoadMetrics.ActFrameSeen();
+            LoadMetrics.ActFrameSample(datablock);
             if ((datablock[1] == 'G') && (datablock[2] == 'D') && (datablock[3] == '/'))
             {
+                LoadMetrics.GoodTickSeen();
                 string data = datablock[1..];
                 data = HUtil32.GetValidStr3(data, ref tagstr, HUtil32.Backslash);
                 if (data != "")
