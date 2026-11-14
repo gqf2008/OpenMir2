@@ -33,6 +33,11 @@ chrono = "0.4"
 serde_json = "1"
 # `.NET` 的 `byte[] Desc` 默认序列化成 base64 字符串（`ClientUserItem.cs:19-27`）；已在 Cargo.lock（经 sqlx）。
 base64 = "0.22"
+# 卡 `openmir2-gd-ack-boot-millis`：`+GD/<t>` 的 t 是 oracle `Environment.TickCount`（开机毫秒，int32）。
+# 本 workspace 所有 crate 都 `unsafe_code = "forbid"`，不能直接调 Win32 `GetTickCount(64)`；
+# `uptime_lib` 在 Windows 上就是 `GetTickCount64() -> Duration::from_millis` 的安全封装（MIT）。
+# 固定版本（=）以免补丁版漂移；供应链评估见卡面 patch body。
+uptime_lib = "=0.3.2"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "time", "process"] }
