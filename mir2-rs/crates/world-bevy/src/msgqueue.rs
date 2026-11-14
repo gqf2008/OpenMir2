@@ -1,7 +1,7 @@
 //! `.NET PriorityQueue<TElement, TPriority>` 的**出队序**等价物（优先级 = `u8`）。
 //!
 //! 本模块原先只在 `bins/game-svr` 内；卡 `openmir2-frame-drain-order-audit` 起下沉到
-//! `crates/world`，让 `crates/world` 侧的排水点（`party.rs` 的 [`crate::party`]）与宿主共用
+//! `crates/world-bevy`，让 `crates/world-bevy` 侧的排水点（`party.rs` 的 [`crate::party`]）与宿主共用
 //! **同一份**四叉堆实现（不各处手写堆）。`game_svr::msgqueue` 只是本模块的再导出。
 //!
 //! # 为什么需要它

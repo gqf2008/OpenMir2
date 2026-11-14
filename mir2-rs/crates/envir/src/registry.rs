@@ -3,7 +3,7 @@
 //! **`map_id` 的来源**：`src/GameSrv/Maps/MapManager.cs` 的 `_mapList` 是
 //! `Dictionary<string, IEnvirnoment>(StringComparer.OrdinalIgnoreCase)`，由 `Maps.LoadMapInfo`
 //! 按 **MapInfo.txt 的 section 先后顺序**逐个 `AddMapInfo` 填入（**加载成功才入表**）。
-//! Rust 世界（`crates/world`）用 `World.maps` 的下标当 `map_id`，因此本模块把
+//! Rust 世界（`crates/world-bevy`）用 `World.maps` 的下标当 `map_id`，因此本模块把
 //! 「按 MapInfo.txt 顺序加载成功的地图」的下标定义为 `map_id`；查找大小写不敏感
 //! （对应 OrdinalIgnoreCase；地图名实际都是 ASCII，故用 ASCII 小写归一化）。
 //!

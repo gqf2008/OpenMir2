@@ -45,7 +45,7 @@
 //!
 //! ## 本片范围（第①片）
 //!
-//! 只做 **离线 crates/world 状态机**：数据 + 全部成员/封号/公告/联盟/解散变换 + `GuildManager`，
+//! 只做 **离线 crates/world-bevy 状态机**：数据 + 全部成员/封号/公告/联盟/解散变换 + `GuildManager`，
 //! 加 `check_guild_name` + 成员列表文本 + 构造级向量 + 改坏必红。
 //! 明确不含：9 个 `CM_GUILD*` 收包派发、`SM_GUILD*` 帧、`MyGuild`/`GuildRankNo` 的角色侧接线、
 //! 面板文本（`<KillGuilds>` 里 oracle 直接 `+` record struct 会打出 `WarGuild { Guild = … }` 字面量，

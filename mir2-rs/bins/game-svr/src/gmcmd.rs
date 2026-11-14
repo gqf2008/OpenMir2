@@ -1445,7 +1445,7 @@ pub struct GmSession {
     /// **待落地的权威 `Entity` 写**（卡 `openmir2-gm-admin-mode-entity-seam`）。
     ///
     /// 本结构是 oracle `PlayObject` 字段的**镜像**；引擎（战斗/AOI/怪物 AI）读的是
-    /// `crates/world/src/entity.rs` 的 `Entity` 同名字段。命令体只写镜像 ⇒ 回执发了、
+    /// `crates/world-bevy/src/entity.rs` 的 `Entity` 同名字段。命令体只写镜像 ⇒ 回执发了、
     /// 行为不变。故 `@1/@2/@3/@Rest/@AttackMode` 在翻转镜像的同时把权威值装进本缓冲，
     /// 由宿主在**同一事件内**（`lib.rs` 的 `CM_SAY` 支）取走并 [`GmEntityState::apply`]，
     /// 仍在 `world.tick()` 之前。每次命令都会整体覆盖本字段（不会残留上一次的值）。
@@ -4859,7 +4859,7 @@ fn clear_bag_item(parameters: &str, sess: &mut GmSession, world: &GmWorld<'_>) -
 // ---------------------------- 传送/召唤族（设计件 §4.4 第 2 族）----------------------------
 //
 // 口径：全部 `PermissionMin = 10`（现网 `Permission` 恒 0 ⇒ 生产一律 `权限不够!!!`）。
-// 命令体逐行照 oracle；**移动/RNG 一律不伪造**：空间移动/重刷能力已在 `crates/world`
+// 命令体逐行照 oracle；**移动/RNG 一律不伪造**：空间移动/重刷能力已在 `crates/world-bevy`
 // （`base_object_move_player`/`cast_space_move_spell_with`/`space_move_get_rand_xy`/
 // `regen_monster_by_name`），缺的是 GM 派发的 `&mut World` 通道（`GetRecallXy` 全仓无）⇒
 // 只保留 oracle 会发的 `SysMsg`（多数支本来就是零文本），并逐条 `log_note` +

@@ -3,7 +3,7 @@
 //! 机理（照 oracle，不按公式重推）：
 //!
 //! ```text
-//! 世界 tick 的 AOI 刷新（crates/world 的 SearchViewRange）
+//! 世界 tick 的 AOI 刷新（crates/world-bevy 的 SearchViewRange）
 //!   ⇒ 观察者实体的 VisibleActors 里，本轮"新看见"的对象标 VisibleFlag.Show
 //!   ⇒ PlayObject.Run 的 Show 支（PlayObject.cs:3230-3244）
 //!        SendMsg(baseObject, RM_TURN, Dir, CurrX, CurrY, 0, GetShowName())
@@ -15,10 +15,10 @@
 //! 本模块只做**纯编码 + 展示表 + 亮度计算**，不碰 I/O：路由（按 `[GateIdx, Socket]` 选通道、
 //! 发 `SimToGate::SendFrame`）留在 `lib.rs` 的 sim 循环里（它才持有 `online`/`gates`）。
 //!
-//! **为什么需要展示表**：`crates/world` 的 `Entity` 只存世界模拟字段（坐标/HP/…），
+//! **为什么需要展示表**：`crates/world-bevy` 的 `Entity` 只存世界模拟字段（坐标/HP/…），
 //! 不含 `Dir/Light/Feature/CharStatus/ShowName` 这些**展示层**字段（它们来自角色记录 + 装备，
 //! 属于 `bins/game-svr` 的读档面）。故在进世界时把 oracle 在 `SendLogon` 同轮算出的值
-//! 登记进 [`DisplayTable`]，同屏下行时按 `ActorId` 查回。**不把展示字段塞进 `crates/world`**
+//! 登记进 [`DisplayTable`]，同屏下行时按 `ActorId` 查回。**不把展示字段塞进 `crates/world-bevy`**
 //! （那是 wbevy/m3bag 的共享写集）。
 //!
 //! **本格仍缺（登记，不猜）**：
@@ -141,7 +141,7 @@ pub const NPC_LIGHT: u8 = 2;
 ///
 /// `NormNpc()`（`src/M2Server/Npc/NormNpc.cs:38-52`）与 `Merchant()` 的 ctor 都**不覆写** `Dir`
 /// ⇒ `Dir` 直到 `GuildOfficial.Run`/`Merchant.Run` 的 `TurnTo(...)`（`BaseObject.cs:1582-1586`）
-/// 才变。宿主侧 `EntitySpawn::new` 的 `ai.dir` 缺省 `0`（`crates/world` 不在本卡写集）⇒ 由
+/// 才变。宿主侧 `EntitySpawn::new` 的 `ai.dir` 缺省 `0`（`crates/world-bevy` 不在本卡写集）⇒ 由
 /// `npcs::place_fixed_npcs_with_scripts` / `merchant::spawn_merchants_with_scripts` 在挂图成功后
 /// 用本常量补齐（T-154 Minor-2）。
 pub const NPC_INITIAL_DIR: u8 = 4;
@@ -192,14 +192,14 @@ pub const PLAYER_NAME_COLOR: u8 = 255;
 /// `GetFeatureToLong()` = `MakeHumanFeature(0, gender, gender, hair*2+gender)`
 /// （`M2Share.cs:1965`：`dress*2+gender` 里 `dress=0`、`gender+weapon*2` 里 `weapon=0`）。
 ///
-/// 骨架 `Entity` 不存 Gender/Hair（见 `crates/world::slave::spawn_clone`），它们无损编码在
+/// 骨架 `Entity` 不存 Gender/Hair（见 `crates/world-bevy::slave::spawn_clone`），它们无损编码在
 /// `caster.feature` 的位域 `[raceImg:8][weapon':8][hair':8][dress':8]` 里：
 /// `weapon' = gender + weapon*2` ⇒ `gender = byte1 & 1`；
 /// `hair' = hair*2 + gender` ⇒ `hair = byte2 >> 1`。
 ///
 /// `status = 0`（无 buff）、`feature_ex = 0`（未骑马/无斗篷特效）、`light = 0`
 /// （`PlayObject` 构造器 `Light` 缺省 `0`，`BaseObject.cs:384`）、`name_color` =
-/// [`PLAYER_NAME_COLOR`]、`show_name` = GBK `"Clone"`（`crates/world::CLONE_NAME`）。
+/// [`PLAYER_NAME_COLOR`]、`show_name` = GBK `"Clone"`（`crates/world-bevy::CLONE_NAME`）。
 #[must_use]
 pub fn clone_display(dir: u8, caster: &ActorDisplay) -> ActorDisplay {
     let f = caster.feature as u32;
@@ -242,7 +242,7 @@ pub struct ActorDisplay {
     pub mount_id: u8,
 }
 
-/// `PlayObject._dir` 字段尚未进 `crates/world`，这里由进世界时的记录值初始化；
+/// `PlayObject._dir` 字段尚未进 `crates/world-bevy`，这里由进世界时的记录值初始化；
 /// 后续装备/骑乘变化会改它（属能力层，登记）。
 impl ActorDisplay {
     /// `status`/`name_color` 也由调用方给（前者 = buff 状态位，后者 = `enter::PLAY_NAME_COLOR`），

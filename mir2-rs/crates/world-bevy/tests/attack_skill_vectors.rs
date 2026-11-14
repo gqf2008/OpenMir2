@@ -11,7 +11,7 @@
 //! 两个 Hit 分支只清标志、不改威力、不置 `canHit`。
 //!
 //! **为什么读 TSV 而不是 JSON**：与同目录 `combat_skill_vectors.rs` / `magic_effect_vectors.rs` 同因——
-//! `tests/no_parallel.rs` 把 `crates/world` 的依赖面钉死（连 dev-dependencies 也扫），加 `serde_json` 会判红。
+//! `tests/no_parallel.rs` 把 `crates/world-bevy` 的依赖面钉死（连 dev-dependencies 也扫），加 `serde_json` 会判红。
 //!
 //! 同一 RNG 取数路径：向量把 oracle 的 `System.Random` 账本按 `ReplayRandom` 行式格式
 //! (`seq|Next(max)|arg|result|site`) 带出，本用例强制回放同值，再断言「取数序列零分歧 +

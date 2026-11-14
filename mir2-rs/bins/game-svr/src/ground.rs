@@ -198,7 +198,7 @@ impl GroundItem {
 /// 地图格子（`MapCellInfo.ObjList` 的极简等价物：一格一个 `Vec<GroundItem>`）。
 ///
 /// 只实现本接缝需要的语义（`GetItem`/`DeleteFromMap`/`AddItemToMap`/`GetItemEx`/`CellMatch`）。
-/// **不含**地图文件解析、门、事件、行走判定——那些属 `crates/envir`/`crates/world`。
+/// **不含**地图文件解析、门、事件、行走判定——那些属 `crates/envir`/`crates/world-bevy`。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GroundMap {
     pub width: i32,

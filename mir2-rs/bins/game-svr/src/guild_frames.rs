@@ -46,7 +46,7 @@
 //!   `sMsg` 为空则**整帧不发**（`:108-111` 早退）。⇒ 753 / 756 / 104 在尾编码为空时返回 `None`。
 //!
 //! 编码器**不做派发、不做会话态**（G2）；输入文本（753 面板、756 成员列表、104 行会消息）由调用方
-//! 按 oracle 构造好（面板/成员列表构造器属 G2 的 `crates/world`；104 的前缀规则见
+//! 按 oracle 构造好（面板/成员列表构造器属 G2 的 `crates/world-bevy`；104 的前缀规则见
 //! `GuildInfo.cs:435-438` 的 `ShowPreFixMsg`/`GuildMsgPreFix`）。
 
 #![allow(dead_code)] // G1 只交编码层；bin 副本暂无调用点（派发属 G2）。
@@ -102,7 +102,7 @@ pub fn login_changename_750(guild_name: Option<&str>, rank_name: &str) -> Option
 /// `SendSocket(defMsg, sMsg)` 在 `sMsg` 为空时**整帧不发**（`PlayObject.Socket.cs:108-111`），
 /// 故尾编码为空时返回 `None`。
 ///
-/// `panel` 由 G2 的 `crates/world` 构造器按 `Operate.cs:1233-1267` 拼好（本函数只做编码）。
+/// `panel` 由 G2 的 `crates/world-bevy` 构造器按 `Operate.cs:1233-1267` 拼好（本函数只做编码）。
 #[must_use]
 pub fn sm_guild_open_dlg_753(panel: &str) -> Option<Vec<u8>> {
     let tail = encode_string(panel);
@@ -130,7 +130,7 @@ pub fn sm_guild_open_dlg_fail_754() -> Vec<u8> {
 /// **无会时 oracle 在 `:1285-1288` 直接 return（零帧）**，本函数的 `None`（空尾）对应
 /// 有会但文本为空（如 `RankList` 为空）时 `SendSocket` 的早退。
 ///
-/// `text` 的既有生产源是 `GuildState::member_list_text`（`crates/world/src/guild.rs`，含
+/// `text` 的既有生产源是 `GuildState::member_list_text`（`crates/world-bevy/src/guild.rs`，含
 /// `>5000` UTF-16 门，逐字节已对）。
 #[must_use]
 pub fn sm_guild_member_list_756(text: &str) -> Option<Vec<u8>> {

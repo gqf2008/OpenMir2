@@ -2,7 +2,7 @@
 //!
 //! 三条独立断言（任一被破坏即红）：
 //!
-//! 1. **依赖白名单**（结构性）：`crates/world` 只允许内部 path 依赖
+//! 1. **依赖白名单**（结构性）：`crates/world-bevy` 只允许内部 path 依赖
 //!    （`mir2-shared`/`mir2-data`/`mir2-formula`/`mir2-world-bevy`）+ `bevy_ecs`/`bevy_app`；
 //!    加入 tokio/rayon/crossbeam/threadpool/`bevy_tasks` 任一"会起线程"的库，立刻红。
 //!    这是 §4.2.2「守卫升级：从禁一切并行依赖 → 只允许 `bevy_ecs`/`bevy_app`」的落地。
@@ -19,7 +19,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// 会起线程/引入异步运行时的库（一旦进入 `crates/world` 的依赖面即判红）。
+/// 会起线程/引入异步运行时的库（一旦进入 `crates/world-bevy` 的依赖面即判红）。
 const FORBIDDEN_DEPS: [&str; 12] = [
     "tokio",
     "rayon",
@@ -172,11 +172,11 @@ fn world_crate_allows_only_ecs_dependencies() {
     for d in &deps {
         assert!(
             allowed.contains(&d.as_str()),
-            "crates/world 只允许依赖 {allowed:?}；实际多了 {d}"
+            "crates/world-bevy 只允许依赖 {allowed:?}；实际多了 {d}"
         );
         assert!(
             !FORBIDDEN_DEPS.contains(&d.as_str()),
-            "crates/world 不允许依赖 {d}（会引入并行/异步）"
+            "crates/world-bevy 不允许依赖 {d}（会引入并行/异步）"
         );
     }
     // 内部依赖必须是 path 依赖（防止有人把内部名替换成同名 crates.io 包）
@@ -203,7 +203,10 @@ fn world_sources_are_single_threaded_ecs_only() {
     let src = crate_root().join("src");
     let mut files = Vec::new();
     collect_rs(&src, &mut files);
-    assert!(!files.is_empty(), "应能收集到 crates/world/src 下的源文件");
+    assert!(
+        !files.is_empty(),
+        "应能收集到 crates/world-bevy/src 下的源文件"
+    );
 
     let mut joined = String::new();
     for f in &files {
@@ -219,10 +222,10 @@ fn world_sources_are_single_threaded_ecs_only() {
         joined.push('\n');
     }
 
-    // 正面断言：tick 骨架确实来自单线程 `TickRunner`（crates/world/src 里必须引用它）。
+    // 正面断言：tick 骨架确实来自单线程 `TickRunner`（crates/world-bevy/src 里必须引用它）。
     assert!(
         joined.contains("TickRunner"),
-        "crates/world 必须用单线程 tick 骨架 `TickRunner`（§4.2.2 硬约束①）"
+        "crates/world-bevy 必须用单线程 tick 骨架 `TickRunner`（§4.2.2 硬约束①）"
     );
     // 正面断言：执行器本身在 world-bevy 的 tick 骨架里显式**调用**为单线程。
     // 注意只认 `set_executor(SingleThreadedExecutor...)` 调用形态，先剥掉 `use` 行：

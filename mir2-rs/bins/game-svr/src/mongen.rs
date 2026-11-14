@@ -1,6 +1,6 @@
 //! MonGen **宿主接线层**（卡 `openmir2-m3-mongen-load-spawn` 第 ③ 片，`bins/game-svr`）。
 //!
-//! 第 ① 片（`crates/envir`）给 `Envir/MonGen.txt` 的加载/解析；第 ② 片（`crates/world`）
+//! 第 ① 片（`crates/envir`）给 `Envir/MonGen.txt` 的加载/解析；第 ② 片（`crates/world-bevy`）
 //! 给分组/分片/regen 门/复活判定/`RegenMonsters` 的 RNG 次序。本片把两者接到宿主：
 //!
 //! 1. **配置**：oracle `Server.conf` 的 8 个键 → [`mir2_world_bevy::mongen::MonGenConfig`]
@@ -77,7 +77,7 @@ fn strip_utf8_bom(bytes: &[u8]) -> &[u8] {
 /// `:636`（`[Setup] ProcessMonsterInterval`）、`:637`（`[Setup] ProcessMonsterMultiThreadLimit`，
 /// `ReadWriteByte`）、`[Setup] GenMonRate`（`GameSvrConf.cs:334` 的字段；`ServerConf` 读它）。
 ///
-/// 缺省值 = [`MonGenConfig::default`]（= `GameSvrConf` 构造值，见 `crates/world/src/mongen.rs` 模块头）。
+/// 缺省值 = [`MonGenConfig::default`]（= `GameSvrConf` 构造值，见 `crates/world-bevy/src/mongen.rs` 模块头）。
 ///
 /// # Errors
 /// 读文件失败返回人话错误（不静默用缺省）。
@@ -110,7 +110,7 @@ pub fn mon_gen_config_from_conf(path: &Path) -> Result<MonGenConfig, String> {
     Ok(c)
 }
 
-/// `crates/envir` 的 `MonGenInfo` → `crates/world` 的运行时 [`MonGenEntry`]（逐字段）。
+/// `crates/envir` 的 `MonGenInfo` → `crates/world-bevy` 的运行时 [`MonGenEntry`]（逐字段）。
 ///
 /// 运行时列（`active_count`/`race`/`start_tick`/`cert_list`/`thread_id`）按 oracle
 /// `new MonGenInfo()` 的字段缺省给零值；`initialize_monster` 再分片/回填。
@@ -662,7 +662,7 @@ pub fn bind_new_certificates(
     bound
 }
 
-/// 生产 sink：把 [`MonsterSpawnRequest`] 落到 `crates/world` 的实体仓库。
+/// 生产 sink：把 [`MonsterSpawnRequest`] 落到 `crates/world-bevy` 的实体仓库。
 ///
 /// 能力字段照 oracle `ApplyMonsterAbility`（`WorldServer.MonGen.cs:880-910`）：
 /// `Level = monster.Level`、`HP/MaxHP = monster.HP`、`AC = AC`、`DC = MakeWord(DC, MaxDC)`、
@@ -675,7 +675,7 @@ pub struct WorldMonsterSink<'a> {
     /// **M3④-实现 C 第 ③ 片**：怪物的展示层字段（`Feature/Light/ShowName/…`）由
     /// `bins/game-svr` 的展示表承载（与玩家同表）——生成时按 `MonsterInfo` 算一次注册，
     /// 同屏下行（`drain_aoi_downlink`）/死亡广播（`drain_combat_downlink`）按 `ActorId` 查回。
-    /// 展示字段属读档/编码面，**不进** `crates/world`。
+    /// 展示字段属读档/编码面，**不进** `crates/world-bevy`。
     pub displays: &'a mut downlink::DisplayTable,
 }
 
@@ -889,7 +889,7 @@ mod tests {
     /// 用例级唯一临时目录的序号（`pid + 原子计数`，照 `LESSON_并行测试临时路径须pid加原子计数构造`）。
     static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
 
-    /// 记录型 sink：把回调结果留档，地图查询走构造表（不依赖 `crates/world`）。
+    /// 记录型 sink：把回调结果留档，地图查询走构造表（不依赖 `crates/world-bevy`）。
     #[derive(Default)]
     struct RecordingSink {
         size: Option<(i32, i32)>,

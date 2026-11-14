@@ -22,7 +22,7 @@
 //!
 //! - **实体挂图不在本片**：`UserCastle.Initialize`（`UserCastle.cs:108-226`）用
 //!   `WorldEngine.RegenMonsterByName` 造门/墙/弓手/守卫并把 `WAbil.HP` 写成配置值；这依赖
-//!   `CastleDoor` / `WallStructure` / `ArcherGuard` 三个实体类型（Rust `crates/world` 尚无，盘点 §2 #7/#22）
+//!   `CastleDoor` / `WallStructure` / `ArcherGuard` 三个实体类型（Rust `crates/world-bevy` 尚无，盘点 §2 #7/#22）
 //!   ⇒ 留给 ⑧-7 / ⑧-8 片。本片交付**防御单元规格**（名字 / 坐标 / HP），HP 已按配置就位。
 //! - **race 110/111 不缩放**已由 `crates/data/src/loaders.rs:259` 实现（非本片）。
 //! - **`SabukW.txt` 写侧见本文件末「写侧（A-22 P2）」节**（`IniOrdered` / `sabuk_w_write_back` /
@@ -1296,7 +1296,7 @@ pub struct SabukWUnitOverlay {
     pub hp: i32,
 }
 
-/// `CastleConf.SaveConfig` 的覆盖面（纯 envir 类型，与 `crates/world` 解耦）。
+/// `CastleConf.SaveConfig` 的覆盖面（纯 envir 类型，与 `crates/world-bevy` 解耦）。
 ///
 /// 只承载 oracle 写侧**从状态机取**的值；`CastleMap`/`CastleHomeMap`/各坐标/门墙 X/Y/Name
 /// 等**配置面**直接复用 base 里的有效值（与 `LoadConfig` 读回的值恒等），不重复进 overlay。

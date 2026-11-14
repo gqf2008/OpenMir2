@@ -28,7 +28,7 @@
 //!    `MonGenHost::start` 的 `Random(limit)`），断言段③ 在它**之后**；
 //! 5. **段③**（`GameApp.cs:184`：M1 行 → L2/L1/L3）5 站点 × 4 抽 ⇒ 逐项 = [`EXPECTED_SEG_THREE`]；
 //! 6. **改坏必红**：见 [`two_line_robot_file_shifts_the_whole_ledger`]（语料改 2 行 ⇒ 从第 4 条起
-//!    全部错位）、`crates/world/src/ctor_fold.rs` 的单测（删站点 / 调次序 / 挪屏障 A / 删屏障 A 站点）
+//!    全部错位）、`crates/world-bevy/src/ctor_fold.rs` 的单测（删站点 / 调次序 / 挪屏障 A / 删屏障 A 站点）
 //!    与 `bins/game-svr/src/ctor_fold.rs::barrier_a_counter_init_adds_not_assigns`（`+=` 语义）；
 //! 7. **屏障 A 的消费**：`item_number_counter_init([Setup] ItemNumber, &barrier_a)` = 初值 + 抽数
 //!    （oracle `+=`，不是赋值/丢弃）——该计数器即新角色新手物品 `MakeIndex` 的起点
@@ -131,7 +131,7 @@ const EXPECTED_SEG_THREE: [(CtorFoldSite, &str, [i64; 4]); 5] = [
 const SEED: i32 = 20240229;
 
 /// 屏障 A 的抽数上界（oracle `ServerConf.cs:114` 的 `Random(10000)`）——**唯一真源**是
-/// `crates/world/src/ctor_fold.rs` 的 `CTOR_FOLD_BARRIER_A_MOD`（此处只换宽度，不写第二份字面量）。
+/// `crates/world-bevy/src/ctor_fold.rs` 的 `CTOR_FOLD_BARRIER_A_MOD`（此处只换宽度，不写第二份字面量）。
 const BARRIER_A_MOD: i32 = CTOR_FOLD_BARRIER_A_MOD as i32;
 /// 屏障 B 槽位的占位抽数上界（oracle `WorldServer.MonGen.cs:66` 的 `Random(limit)`）。
 const MON_GEN_SLOT_MOD: i32 = 6;

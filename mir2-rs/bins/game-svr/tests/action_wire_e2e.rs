@@ -1,4 +1,4 @@
-//! **出站接线片 W2 端到端**：`crates/world` 的世界事件（`TickRecord::{pushes,rushes,butches}`）
+//! **出站接线片 W2 端到端**：`crates/world-bevy` 的世界事件（`TickRecord::{pushes,rushes,butches}`）
 //! → `game_svr::downlink` 的 `SM_*` 帧字节。
 //!
 //! 覆盖 5 条 B 类帧里的 4 条世界事件路径（`SM_BACKSTEP(9)`/`SM_RUSH(6)`/`SM_RUSHKUNG(7)`/

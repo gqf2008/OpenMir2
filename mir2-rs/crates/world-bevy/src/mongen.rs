@@ -1,7 +1,7 @@
 //! MonGen 刷怪调度 —— 1:1 复刻 C# `GameSvr/Word/WorldServer.MonGen.cs` 的
 //! **分组 / 分片 / regen 门 / 复活节拍 / `RegenMonsters` 取数次序**。
 //!
-//! 交付卡：`openmir2-m3-mongen-load-spawn`（M3④-实现 B）第 ② 片（`crates/world`）。
+//! 交付卡：`openmir2-m3-mongen-load-spawn`（M3④-实现 B）第 ② 片（`crates/world-bevy`）。
 //! 第 ① 片（`crates/envir` 的 `MonGenInfo` + `Envir/MonGen.txt` 解析）见
 //! `mir2-rs/crates/envir/src/mongen.rs`。
 //!
@@ -918,7 +918,7 @@ pub fn regen_monsters(
 /// `Death && CanReAlive && Invisible && MonGen != null`，且
 /// `(now - ReAliveTick) > GetMonstersZenTime(MonGen.ZenTime)`。
 ///
-/// 真实 `ReAliveEx` 属 `crates/world` 的怪物 AI/实体面（卡 `openmir2-m3-monster-ai-tick`），
+/// 真实 `ReAliveEx` 属 `crates/world-bevy` 的怪物 AI/实体面（卡 `openmir2-m3-monster-ai-tick`），
 /// 本函数只钉住**触发条件**（含 `GetMonstersZenTime` 这一层 RNG-free 的时间换算）。
 #[must_use]
 #[allow(clippy::too_many_arguments)]

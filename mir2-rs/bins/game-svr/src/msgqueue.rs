@@ -1,8 +1,8 @@
 //! `game_svr::msgqueue` —— [`mir2_world_bevy::msgqueue`] 的**再导出**。
 //!
 //! 实现（.NET 8 `PriorityQueue` 的四叉最小堆逐操作复刻 + `SendUpdateMsg` 队首-only 去重模型）
-//! 已下沉到 `crates/world/src/msgqueue.rs`（卡 `openmir2-frame-drain-order-audit`）：宿主的排水点
-//! 与 `crates/world` 的排水点（`party.rs`）必须共用**同一份**堆实现，不允许各处手写。
+//! 已下沉到 `crates/world-bevy/src/msgqueue.rs`（卡 `openmir2-frame-drain-order-audit`）：宿主的排水点
+//! 与 `crates/world-bevy` 的排水点（`party.rs`）必须共用**同一份**堆实现，不允许各处手写。
 //!
 //! 本模块只为保留既有引用路径（`game_svr::msgqueue::NetPriorityQueue` /
 //! `game_svr::msgqueue::send_update_msg`）而存在。
@@ -14,7 +14,7 @@ mod tests {
     use super::*;
     use mir2_protocol::messages;
 
-    /// 协议常量 ↔ `crates/world/src/msgqueue.rs` 用例里写死的字面量必须一致
+    /// 协议常量 ↔ `crates/world-bevy/src/msgqueue.rs` 用例里写死的字面量必须一致
     /// （那边不依赖 `mir2-protocol`，用字面量表达 `(byte)ident`）。
     #[test]
     fn protocol_constants_match_world_literals() {

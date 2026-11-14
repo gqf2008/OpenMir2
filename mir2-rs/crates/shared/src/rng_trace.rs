@@ -4,7 +4,7 @@
 //! 分段，但 **Rust 生产路径此前只有 `SEED_PROBE`（8 项自证）**，没有 per-call trace ⇒ 两侧账本
 //! 逐 k `diff` 跑不了（m3bag 2026-10-12 已登记，转 m3cs）。本模块补上 Rust 半：
 //!
-//! - 落点：**全局随机源本身**（[`crate::rng::RandomNumber`] 的每个取数入口），不在 `crates/world`
+//! - 落点：**全局随机源本身**（[`crate::rng::RandomNumber`] 的每个取数入口），不在 `crates/world-bevy`
 //!   各调用点手工打点 ⇒ 只要生产路径走 `RandomNumber` 就一定被记录，不会漏消费者；
 //! - 形态：与 C# 钩子（`mir2-rs/tests/parity/m3/rng-hook/StartupHook.cs`）**逐列同形**：
 //!     `seq \t kind \t max/arg \t result \t site`
@@ -14,8 +14,8 @@
 //! - **不引入新的随机源**：trace 只是旁路记录，绝不消耗/改动 `System.Random` 的状态。
 //!
 //! `#[track_caller]` 链：`RandomNumber` 的 inherent 方法 + `RandomSource` 的 trait 方法都标了
-//! `#[track_caller]`，这样 `crates/world` 里 `rng.random_range(...)` 记到的是**世界层调用点**
-//! （如 `crates/world/src/combat.rs:105`），而不是 `crates/shared/src/rng.rs` 的包装层——否则
+//! `#[track_caller]`，这样 `crates/world-bevy` 里 `rng.random_range(...)` 记到的是**世界层调用点**
+//! （如 `crates/world-bevy/src/combat.rs:105`），而不是 `crates/shared/src/rng.rs` 的包装层——否则
 //! 所有取数的 site 都长一样，账本无法把「攻击路径取数」与「其它消费者」分开。
 //!
 //! 线程：C# 侧是全局单例 + 多线程；Rust 侧 `RandomNumber` 按持有者分（`World.rng`）。本 sink 用
@@ -73,7 +73,7 @@ pub fn enable(path: &Path, seed: i32) -> std::io::Result<()> {
 /// 从环境读 [`TRACE_ENV`]（`MIR2_RNG_LOG`）并在设了非空路径时开启。**只生效一次**（进程生命周期）。
 ///
 /// 头部 `INJECT_OK <seed>` / `SEED_PROBE` 的种子取自**同一个 `MIR2_RNG_SEED`**（T-30 注入口）⇒
-/// 即使 `crates/world::World::with_maps` 先用缺省 seed 42 构造过随机源，头部也不会把注入口
+/// 即使 `crates/world-bevy::World::with_maps` 先用缺省 seed 42 构造过随机源，头部也不会把注入口
 /// 写错。两个变数缺一（或种子非法）⇒ **不开启**并点名报告（不静默降级；trace 是旁路仪器，
 /// 不开启不影响游戏逻辑）。
 ///

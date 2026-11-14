@@ -181,7 +181,7 @@ pub const WHITELIST: &[WhitelistKey] = &[
         max: 1000,
         semantics:
             "刷怪目标数除数：目标数 = max(1, round(max(1, Count) / (rate/10)))，值越大刷得越少；\
-                    启动装载时生效（crates/world/src/mongen.rs gen_mod_count）",
+                    启动装载时生效（crates/world-bevy/src/mongen.rs gen_mod_count）",
     },
     WhitelistKey {
         section: "Setup",

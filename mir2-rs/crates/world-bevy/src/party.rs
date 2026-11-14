@@ -877,7 +877,7 @@ impl World {
     }
 }
 
-/// 空实现占位：提醒 [`Entity`] 的组队字段是 `crates/world` 的权威状态（host 不另存一份）。
+/// 空实现占位：提醒 [`Entity`] 的组队字段是 `crates/world-bevy` 的权威状态（host 不另存一份）。
 #[allow(dead_code)]
 fn _party_entity_fields_are_authoritative(_e: &Entity) {}
 

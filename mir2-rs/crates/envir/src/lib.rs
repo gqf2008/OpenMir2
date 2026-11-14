@@ -5,7 +5,7 @@
 //! 不做任何写回；不改表结构/脚本语法/数据文件格式。
 //!
 //! 与既有 crate 的关系：
-//! - `crates/world` 的 `MapGrid`（属性 + 对象表）由 [`mapfile::MapFile::to_grid`] 生成；
+//! - `crates/world-bevy` 的 `MapGrid`（属性 + 对象表）由 [`mapfile::MapFile::to_grid`] 生成；
 //! - `crates/shared` 的 `HUtil32` 等价物用于 MapInfo / 点位表的分词。
 //!
 //! 集成点（**不在本卡**，登记给 m2-svr 车道）：

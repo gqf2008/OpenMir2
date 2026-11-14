@@ -29,7 +29,7 @@ pub fn collect_tick_order_system(
     }
 }
 
-/// 薄适配层：从既有世界（`crates/world`）读"要预算掉落的东西"，拼成快照。
+/// 薄适配层：从既有世界（`crates/world-bevy`）读"要预算掉落的东西"，拼成快照。
 ///
 /// 只读、不改；顺序按实体 id 升序（= 既有世界的槽位顺序口径）。
 pub fn snapshot_from_world(world: &World, seed: i32) -> DropSnapshot {

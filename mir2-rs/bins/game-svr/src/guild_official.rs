@@ -46,7 +46,7 @@
 //!   `UserCastle.AddAttackerInfo(IGuild)` 的 `throw new NotImplementedException()`
 //!   （`UserCastle.cs:670-673`），**不是** `:998` 的 `AddAttackerInfo(GuildInfo)`；异常被
 //!   `UserSelect` 的 catch（`:100-103`）吞掉 ⇒ 会长+有令的成功支**零帧、零扣件、零战表、零落盘、
-//!   零 SS_212**（`crates/world/src/castle.rs` 的 `add_attacker_info_n1` 早已把 `GuildOfficial.cs:219`
+//!   零 SS_212**（`crates/world-bevy/src/castle.rs` 的 `add_attacker_info_n1` 早已把 `GuildOfficial.cs:219`
 //!   登记为该 N1 调用点）。判据 `t138_*` 钉死这个怪行为：谁把它「修」成真登记，用例即红。
 //! - 固定 NPC 按 `Npcs.txt` 的 `type` 分流（`LocalDB.cs:688-698`）：只有 `1` =
 //!   `GuildOfficial` 进入本模块标签集；`0` = `Merchant` 的脚本半由 `handle_shop_cmd` 的

@@ -814,7 +814,7 @@ fn t127_broadcast_fans_out_to_every_nonghost_player_in_heap_order() {
 
     let frames = drain_frames(&mut rx0);
     assert_eq!(frames.len(), 3);
-    // 同优先级 3 条的 .NET 四叉堆出队序 = `[0,2,1]`（`crates/world/src/msgqueue.rs`）。
+    // 同优先级 3 条的 .NET 四叉堆出队序 = `[0,2,1]`（`crates/world-bevy/src/msgqueue.rs`）。
     let want = [&texts[0], &texts[2], &texts[1]];
     for (i, ((socket, body), text)) in frames.iter().zip(want).enumerate() {
         assert_eq!(*socket, 5, "第 {i} 帧：只投给甲（乙 Ghost）");

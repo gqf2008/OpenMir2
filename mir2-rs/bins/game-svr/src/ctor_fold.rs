@@ -44,7 +44,7 @@
 //! **整段等距**。
 //! ❗**仍未做的只有消费点/实体层**（与原登记一致，且**不改变抽数位置**）：`RobotObject` 世界实体 +
 //! `AutoRun` 驱动器、任务 NPC 进 `QuestNpcList`、L2/L3 的 `ActorId` 按序分配 —— 见
-//! `crates/world/src/ctor_fold.rs` 模块头的「实体缺口」。
+//! `crates/world-bevy/src/ctor_fold.rs` 模块头的「实体缺口」。
 //! ✅**L1 `QFunction` 进 `MerchantList` 已接**（2026-10-24，卡
 //! `openmir2-qfunction-hidden-merchant-world-wiring`）：本模块的 [`hidden_qfunction_run_tick`]
 //! 把账本第 1 抽交给 `game_svr::merchant::insert_hidden_qfunction` 当 `RunTick`（不重抽）。

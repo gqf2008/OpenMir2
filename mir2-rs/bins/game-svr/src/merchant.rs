@@ -10,11 +10,11 @@
 //! - **O-2（`rename_rand` 注入）**：`ScriptParsers.cs:857` 的重名 label 改名走
 //!   `SystemShare.RandomNumber.GetRandomNumber(1, 200)` —— 由本层把**共享 `world.rng`** 的
 //!   `get_random_number(1, 200)` 注入 `MapLoader::load_merchants`（不另开私有流；站点经
-//!   `crates/world::merchant::merchant_rename_rand` 归 `merchant` 组）。
+//!   `crates/world-bevy::merchant::merchant_rename_rand` 归 `merchant` 组）。
 //!
 //! ## 与 oracle 的建模差异（登记）
 //! - `ProcessRefillIndex`（`ScriptParsers.cs:838`，全局 `CurrentMerchantIndex++`）⑤-1 未随记录暴露
-//!   ⇒ 置 0（只影响 `Merchant.Run` 的补货延时门，见 `crates/world::merchant`）。
+//!   ⇒ 置 0（只影响 `Merchant.Run` 的补货延时门，见 `crates/world-bevy::merchant`）。
 //! - 次序：oracle `LocalDB.LoadMerchant` 正序构造抽、`MerchantList` 正序（倒序 `Initialize`
 //!   **不**重排它）、`MerchantInitialize` 只把 `AddToMap` 的 `obj_list` 追加序倒过来。⇒ 本层
 //!   **正序** [`mir2_world_bevy::World::merchant_ctor_run_delay`] + **正序**
@@ -219,8 +219,8 @@ pub fn load_merchant_spawns(
     String,
 > {
     // O-2：`SystemShare.RandomNumber.GetRandomNumber(1, 200)`（`ScriptParsers.cs:857`）。
-    // 经 `crates/world::merchant::merchant_rename_rand` 转发 ⇒ `#[track_caller]` 记到的站点是
-    // `crates/world/src/merchant.rs`（`merchant` 组），**不**在宿主产生未归类站点。
+    // 经 `crates/world-bevy::merchant::merchant_rename_rand` 转发 ⇒ `#[track_caller]` 记到的站点是
+    // `crates/world-bevy/src/merchant.rs`（`merchant` 组），**不**在宿主产生未归类站点。
     let mut rename_rand =
         |min: i32, max: i32| mir2_world_bevy::merchant::merchant_rename_rand(rng, min, max);
     let records = loader

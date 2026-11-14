@@ -4,7 +4,7 @@
 //! 反射直调 oracle 私有 `PlayObject.DoSpell` / public static `MagicManager.DoSpell`）
 //! → `dispatch-audit-probe/vectors/dispatch_audit.{json,tsv}`。
 //!
-//! **为什么读 TSV 而不是 JSON**：与 `combat_skill_vectors.rs` 同理——`crates/world` 的依赖面
+//! **为什么读 TSV 而不是 JSON**：与 `combat_skill_vectors.rs` 同理——`crates/world-bevy` 的依赖面
 //! 被 `tests/no_parallel.rs` 钉成「内部 crate + bevy_ecs/bevy_app」，加 `serde_json` 会被判红。
 //!
 //! ## 本片回答的问题

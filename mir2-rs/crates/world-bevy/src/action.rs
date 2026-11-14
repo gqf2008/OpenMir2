@@ -3,7 +3,7 @@
 //!
 //! 本模块只定义「世界发生了什么」的**确定性事件**（谁、朝哪、在哪个格、哪一族），**帧面（编码）**
 //! 在宿主 `bins/game-svr`（`smframe::sm_move`/`sm_action_hit`/`sm_death` + `downlink` 的
-//! 事件→帧翻译）。`crates/world` 不碰 `SM_*` 字节（与 `aoi`/`party`/`slave` 同口径）。
+//! 事件→帧翻译）。`crates/world-bevy` 不碰 `SM_*` 字节（与 `aoi`/`party`/`slave` 同口径）。
 //!
 //! 五条 oracle 触发点（逐条**回读**，不采信门单方结论）：
 //!

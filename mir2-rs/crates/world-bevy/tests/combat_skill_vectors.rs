@@ -7,7 +7,7 @@
 //! - `mir2-rs/tests/parity/m3/skill-probe`（C#，真魔表输入，调 `MagicBase.*` / `GetSpellPoint` / `IsTrainingSkill`）
 //!   → `skill-probe/vectors/skill_vectors.{json,tsv}` + `skills_registry.{json,tsv}`
 //!
-//! **为什么本测试读 TSV 而不是 JSON**：S1 迁移守卫 `tests/no_parallel.rs` 把 `crates/world`
+//! **为什么本测试读 TSV 而不是 JSON**：S1 迁移守卫 `tests/no_parallel.rs` 把 `crates/world-bevy`
 //! 的依赖面钉成「内部 crate + bevy_ecs/bevy_app」（连 `[dev-dependencies]` 也扫）——
 //! 加 `serde_json` 会被判红。探针因此同时产出**行式伴生件 `.tsv`**（与 JSON 同一次运行写出），
 //! 本用例零依赖解析它；JSON 保留为对外/证据用的向量。

@@ -1,14 +1,14 @@
-//! S1：**单线程 tick 骨架**（`crates/world` 的世界 tick 迁入 `bevy_ecs` 的第一批）。
+//! S1：**单线程 tick 骨架**（`crates/world-bevy` 的世界 tick 迁入 `bevy_ecs` 的第一批）。
 //!
 //! 形态：[`TickRunner`] 包一个 [`Schedule`]，**显式**装上
-//! [`SingleThreadedExecutor`]——世界 tick 仍由调用方（`crates/world` 的 `World::tick`）驱动，
+//! [`SingleThreadedExecutor`]——世界 tick 仍由调用方（`crates/world-bevy` 的 `World::tick`）驱动，
 //! 只是时钟推进/顺序收集等骨架步骤改由 ECS 系统完成。
 //!
 //! ## 系统执行顺序：显式契约（本文件是唯一权威）
 //!
 //! `Query` 的迭代序、bevy 的注册序、系统之间的参数依赖**都不是**本项目的顺序契约
 //! （AGENTS.md §4.2.2 第 2 条）。`TickRunner` 的执行顺序**只**由下面这条阶段链决定
-//! （S3a 起：与 `crates/world` 的 `tick_head` / 宿主段 / `tick_tail` oracle 段序一一对应，
+//! （S3a 起：与 `crates/world-bevy` 的 `tick_head` / 宿主段 / `tick_tail` oracle 段序一一对应，
 //! 每段一个阶段，**仍然只有单线程 executor**）：
 //!
 //! ```text
@@ -58,7 +58,7 @@
 //!
 //! ## 为什么保留「时钟 + 线程断言」这两步
 //!
-//! 既有 `crates/world` 的 `tick()` 是「先校验线程 → 推进虚拟时钟 → 处理命令 → 结算 → AOI」。
+//! 既有 `crates/world-bevy` 的 `tick()` 是「先校验线程 → 推进虚拟时钟 → 处理命令 → 结算 → AOI」。
 //! S1 把前两步（线程校验 + 时钟推进）搬进单线程 Schedule：线程断言仍在（且现在跑在系统里），
 //! 语义不变（业务逻辑可见的 `clock_ms` / `tick_seq` 逐 tick 与既有实现相同）。
 
@@ -69,7 +69,7 @@ use bevy_ecs::schedule::{LogLevel, ScheduleBuildSettings, SingleThreadedExecutor
 
 /// 虚拟时钟（资源）：`clock_ms` 每 tick 前进 `interval_ms`。
 ///
-/// 与 `crates/world` 的 `World::clock_ms` / `tick_seq` 保持**同一份事实**：
+/// 与 `crates/world-bevy` 的 `World::clock_ms` / `tick_seq` 保持**同一份事实**：
 /// facade 在 tick 前把值写进来，schedule 跑完再读回去（见 `World::tick`）。
 #[derive(Resource, Debug, Clone, Copy, PartialEq, Eq)]
 pub struct TickClock {
@@ -408,7 +408,7 @@ pub trait Structural {}
 /// 显示名用 `core::any::type_name`（含泛型参数与模块路径），因此 `Gen<u8>` / `Gen<u16>`
 /// 在诊断里也能区分（P2b P2-GENERIC-NAMES）。
 ///
-/// `EcsStore::new` 会插入空表；`EntityStore::new`（`crates/world`）把 25 个组件逐个登记。
+/// `EcsStore::new` 会插入空表；`EntityStore::new`（`crates/world-bevy`）把 25 个组件逐个登记。
 #[derive(Resource, Default)]
 pub struct ComponentRegistry {
     names: HashMap<TypeId, &'static str>,

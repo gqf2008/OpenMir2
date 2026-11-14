@@ -1,4 +1,4 @@
-//! S1：**ECS 实体存储内核**（`crates/world` → `bevy_ecs` 迁移的第一批）。
+//! S1：**ECS 实体存储内核**（`crates/world-bevy` → `bevy_ecs` 迁移的第一批）。
 //!
 //! S2 调优（同一门禁口径下把 ΔP50/ΔP99 拉回绿）集中在两条热路径（不改语义、不改
 //! 对外 API）：
@@ -24,7 +24,7 @@
 //! 3. **守卫升级**：`crates/world-bevy/tests/no_parallel.rs` 的白名单放宽为
 //!    「内部 crate + `bevy_ecs`/`bevy_app`」，仍禁 rayon/crossbeam/`bevy_tasks` 并行/`thread::spawn`；
 //! 4. **原判据不降级**：内核对外只暴露与既有 `EntityStore` 同形的语义（槽位顺序、空闲槽复用、
-//!    代际号），`crates/world` 的三个 golden 对拍逐行不变。
+//!    代际号），`crates/world-bevy` 的三个 golden 对拍逐行不变。
 
 use std::collections::HashMap;
 
@@ -283,7 +283,7 @@ impl SlotTable {
 
 /// ECS 实体存储内核：`bevy_ecs` 存组件，本结构存「谁在哪个槽、按什么顺序遍历」。
 ///
-/// 泛型参数 `T` 是业务实体组件（`crates/world` 的 `Entity`）。内核**不认识** `T` 的业务字段，
+/// 泛型参数 `T` 是业务实体组件（`crates/world-bevy` 的 `Entity`）。内核**不认识** `T` 的业务字段，
 /// 只按调用方给的 `id` 建索引，因此可以原样承载任何 `Component`。
 pub struct EcsStore<T: Component<Mutability = Mutable>> {
     world: World,

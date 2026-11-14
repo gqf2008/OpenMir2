@@ -7,7 +7,7 @@
 //! 可达性登记 `vectors/effect_registry.{json,tsv}`）。
 //!
 //! **为什么读 TSV 而不是 JSON**：与同目录 `combat_skill_vectors.rs` 同因——
-//! `tests/no_parallel.rs` 把 `crates/world` 的依赖面钉死（连 dev-dependencies 也扫），
+//! `tests/no_parallel.rs` 把 `crates/world-bevy` 的依赖面钉死（连 dev-dependencies 也扫），
 //! 加 `serde_json` 会被判红；探针同时产出行式伴生件，本用例零依赖解析。
 //!
 //! 同一 RNG 取数路径：向量把 oracle 的 `System.Random` 账本按 `ReplayRandom` 行式格式

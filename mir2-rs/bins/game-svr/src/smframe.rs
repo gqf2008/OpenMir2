@@ -1692,7 +1692,7 @@ impl EnterWorldInputs {
     /// oracle 的观察者队列是 `PriorityQueue<SendMessage, byte>`（`ActorEntity.cs:16`），
     /// 出现帧经 `SendMsg(baseObject, RM_TURN, …)`（`PlayObject.cs:3240`）入队，优先级
     /// `(byte)RM_TURN = 17`；`PlayObject.Run()` 的 `while (GetMessage())` 按 **.NET 8 四叉
-    /// 最小堆**出队（`crates/world/src/msgqueue.rs` 的逐位复刻）。**同优先级不是 FIFO**：
+    /// 最小堆**出队（`crates/world-bevy/src/msgqueue.rs` 的逐位复刻）。**同优先级不是 FIFO**：
     /// 出队序由堆数组在「登录消息 + 这些 17 槽」共同作用下决定 ⇒ 它既不是 `VisibleActors`
     /// 入队序，也不能用任何「按 body/名字排序」的观测规则凑出来。
     ///
@@ -2117,7 +2117,7 @@ pub fn sm_skeleton(actor_id: i32, x: u16, y: u16, dir: u8, char_desc: &[u8]) -> 
 /// `SendRefMsg(RM_ALIVE, Dir, CurrX, CurrY, 0, "")`。
 ///
 /// **orphan 登记（接线首批，`deferred` / registered_not_wired）**：本帧**无生产发射点**。
-/// 注意口径——`crates/world` **已有**复活判定的纯谓词 `monster_due_for_revive`
+/// 注意口径——`crates/world-bevy` **已有**复活判定的纯谓词 `monster_due_for_revive`
 ///（`mongen.rs`，钉 `Death && CanReAlive && Invisible && MonGen!=null &&
 /// (now-ReAliveTick) > GetMonstersZenTime`），故缺的**不是** `CanReAlive`/`ReAliveTick` 本身，
 /// 而是**复活状态机与生产消费者**：无 `ReAliveEx` 的落地动作、无 `RM_ALIVE` 的生产消费
