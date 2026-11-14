@@ -15894,6 +15894,10 @@ fn wire_damage(v: i32) -> u16 {
 }
 
 /// `SendSocket(M2Share.GetGoodTick)`：给**动作发起者自己**回一条 `+GD/<tick>` 短包。
+///
+/// `tick` 取 `clock::good_tick_i32()` = oracle `Environment.TickCount` 口径（开机毫秒、int32）。
+/// **不得**改回 `now_ms()`：后者是 Unix 纪元毫秒（13 位），BotSrv `int.TryParse` 溢出 ⇒
+/// `rtime=0` ⇒ `tick_samples=0`（卡 `openmir2-gd-ack-boot-millis` 的 A/B 证据）。
 fn send_good_tick(
     online: &OnlineRegistry,
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
@@ -15907,7 +15911,7 @@ fn send_good_tick(
     };
     let _ = tx.send(SimToGate::SendRaw {
         socket: me.socket,
-        payload: movewire::good_tick_payload(now_ms()),
+        payload: movewire::good_tick_payload(clock::good_tick_i32()),
     });
 }
 
@@ -84941,6 +84945,36 @@ fn ",
             raw[0].starts_with(b"+GD/"),
             "`GetGoodTick` 形状 = `+GD/<tick>`（MessageSettings.cs:6）；实际 {:?}",
             raw[0]
+        );
+        // **卡 `openmir2-gd-ack-boot-millis` 发射点牙**：t 必须是 oracle `Environment.TickCount`
+        // 口径（开机毫秒、int32 十进制），不是 Unix 纪元毫秒——修复前 13 位，BotSrv
+        // `int.TryParse` 溢出 ⇒ `rtime=0` ⇒ `tick_samples=0`。
+        // 变异「`send_good_tick` 改回 `now_ms()`」⇒ 与开机毫秒差 ~1.79e12 ⇒ 本断言红。
+        let text = std::str::from_utf8(&raw[0][4..]).expect("+GD 正文是 ASCII 十进制");
+        assert!(
+            !text.is_empty() && text.len() <= 11,
+            "t 必须是 int32 十进制（最多 `-` + 10 位）：{text:?}"
+        );
+        let t: i64 = text.parse().expect("int32 十进制");
+        assert!(
+            (i64::from(i32::MIN)..=i64::from(i32::MAX)).contains(&t),
+            "t 必须落在 int32 域：{t}"
+        );
+        // 独立参考值（**不经过** `send_good_tick`）：未注入 = 开机毫秒的 int32 位模式；
+        // 注入 = `now_ms()` 的 int32 截断（注入契约见 `clock::good_tick_i32`）。
+        let want: i64 = if clock::injected_origin().is_some() {
+            i64::from(clock::now_ms() as i32)
+        } else if cfg!(windows) {
+            let boot = uptime_lib::get().expect("Windows GetTickCount64");
+            let ms = u64::try_from(boot.as_millis()).expect("ms 在 u64 内");
+            let low = u32::try_from(ms & u64::from(u32::MAX)).expect("低 32 位在 u32 内");
+            i64::from(i32::from_ne_bytes(low.to_ne_bytes()))
+        } else {
+            t // 非 oracle 平台没有 +GD 真值：只判 int32 域
+        };
+        assert!(
+            (t - want).abs() <= 2_000,
+            "+GD 的 t 必须贴近开机毫秒（修复前是 Unix 毫秒）：t={t} want={want}"
         );
         assert!(
             !frames

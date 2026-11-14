@@ -193,9 +193,14 @@ pub const fn move_result_ok(px: i32, py: i32, nx: i32, ny: i32) -> bool {
 /// GetTickCount())`，而 `sSTATUS_GOOD = "+GD/{0}"`（`src/Modules/SystemModule/MessageSettings.cs:6`）
 /// ⇒ 被接受的客户端动作回的**短包**正文（`SendSocket(string)`：`PackLength = -len`，网关端变成
 /// `'#' + 正文 + '!'`，即真机观测到的 `#+GD/<tick>!`）。
+///
+/// **`tick` 必须是 `Environment.TickCount`（开机毫秒、int32），不是 Unix 纪元毫秒**（卡
+/// `openmir2-gd-ack-boot-millis`）：C# 的 `int` 在 2^31 ms（≈24.85 天）后为负、2^32 ms 回绕，
+/// `"{0}"` 按 int 十进制打印（含负号）——所以参数是 `i32` 而不是 `i64`。取值入口见
+/// `clock::good_tick_i32`。
 #[must_use]
-pub fn good_tick_payload(tick_ms: i64) -> Vec<u8> {
-    format!("+GD/{tick_ms}").into_bytes()
+pub fn good_tick_payload(tick: i32) -> Vec<u8> {
+    format!("+GD/{tick}").into_bytes()
 }
 
 #[cfg(test)]
@@ -274,6 +279,10 @@ mod tests {
     #[test]
     fn good_tick_payload_shape() {
         assert_eq!(good_tick_payload(1234), b"+GD/1234".to_vec());
+        assert_eq!(good_tick_payload(664_724_750), b"+GD/664724750".to_vec());
+        // `Environment.TickCount` 是 int32：2^31 ms 后为负，按 int 十进制打印带负号。
+        assert_eq!(good_tick_payload(-1), b"+GD/-1".to_vec());
+        assert_eq!(good_tick_payload(i32::MIN), b"+GD/-2147483648".to_vec());
     }
     /// **派发门牙（卡 `openmir2-horserun-3009-not-routed`）**：3009 必须能从生产派发门
     /// （`sim_loop` → `handle_move_cmd`）进入移动支；3010/3011/3013/3035 不变；非移动命令不误入。

@@ -145,6 +145,73 @@ pub fn injected_origin() -> Option<i64> {
     source().as_ref().map(|s| s.origin)
 }
 
+/// 系统开机毫秒（u64）。Windows = `GetTickCount64`（经 `uptime_lib` 安全封装，单位毫秒）。
+///
+/// **为什么不能直接用 `windows-sys`**：本 workspace 所有 crate 都 `unsafe_code = "forbid"`，
+/// `windows_sys::...::GetTickCount64` 是 `unsafe fn`，调用需要 `unsafe` 块 ⇒ 编译即红。
+/// `uptime_lib` 在 Windows 侧正是 `GetTickCount64() -> Duration::from_millis` 的 safe 包装。
+///
+/// 非 Windows：`uptime_lib` 只有秒级精度且本仓不发 `+GD` 真值 ⇒ 返回 `None`，由调用方
+/// 退回 [`process_start_ms`]（只保证可解析、单调；判据不覆盖非 oracle 平台）。
+fn system_boot_ms() -> Option<u64> {
+    #[cfg(windows)]
+    {
+        uptime_lib::get()
+            .ok()
+            .and_then(|d| u64::try_from(d.as_millis()).ok())
+    }
+    #[cfg(not(windows))]
+    {
+        None
+    }
+}
+
+/// 进程启动以来的毫秒（只在系统开机毫秒取不到时兜底；本机 `GetTickCount64` 不会失败）。
+///
+/// 目的不是冒充开机毫秒，而是**不让 `+GD` 退回 13 位 Unix 毫秒**：兜底值仍是 9–10 位的
+/// 单调毫秒，BotSrv `int.TryParse` 不会再溢出成 0。
+fn process_start_ms() -> u64 {
+    static START: OnceLock<Instant> = OnceLock::new();
+    let start = START.get_or_init(Instant::now);
+    u64::try_from(start.elapsed().as_millis()).unwrap_or(u64::MAX)
+}
+
+/// `Environment.TickCount` 的位模式：低 32 位按 int32 重解释。
+///
+/// oracle 口径：`HUtil32.GetTickCount()` = `Environment.TickCount`（`src/OpenMir2/HUtil32.cs:36-39`）
+/// 是 32 位开机毫秒——`GetTickCount` 在 2^32 ms（≈49.7 天）回绕，.NET 的 `int` 在 2^31 ms
+/// （≈24.85 天）后为负；`MessageSettings.sSTATUS_GOOD = "+GD/{0}"` 用 `int` 十进制打印 ⇒
+/// 回绕/负值都是**线上形态**，必须逐字节复刻（负值客户端/`BotSrv` 按 `rtime <= 0` 忽略，与 oracle 同）。
+fn int32_bits(ms: u64) -> i32 {
+    // `& u32::MAX` 后 `u32::try_from` 恒成功；不用 `as` 以免被误读成「饱和/截断」语义。
+    let low = u32::try_from(ms & u64::from(u32::MAX)).unwrap_or(0);
+    i32::from_ne_bytes(low.to_ne_bytes())
+}
+
+/// `+GD/<t>` 的取值规则（纯函数，便于逐支判据）：
+/// 注入启用 ⇒ `injected`（`now_ms()` = origin + 单调经过）；未启用 ⇒ 开机毫秒 `boot_ms`。
+fn good_tick_from(injected: Option<i64>, boot_ms: Option<u64>) -> i32 {
+    match injected {
+        Some(now) => int32_bits(now as u64),
+        None => int32_bits(boot_ms.unwrap_or_else(process_start_ms)),
+    }
+}
+
+/// oracle `M2Share.GetGoodTick` 的线上取值（`+GD/<t>` 的 `t`，int32）。
+///
+/// - **未注入 `MIR2_CLOCK_MS`**（生产）：系统开机毫秒（`GetTickCount64`）的 int32 位模式
+///   ⇒ 与 C# `Environment.TickCount` 同源同量纲（修复前是 Unix 纪元毫秒，13 位 ⇒ BotSrv
+///   `int.TryParse` 溢出 ⇒ `rtime=0` ⇒ 动作 ack 样本恒 0）。
+/// - **注入 `MIR2_CLOCK_MS`**（夹具/对拍）：`now_ms()` 的 int32 位模式——origin 即「虚拟开机
+///   毫秒」，与 `world.clock_ms`/所有时间门同源；测试可判（见 `good_tick_rule_*` 用例）。
+#[must_use]
+pub fn good_tick_i32() -> i32 {
+    match source() {
+        Some(_) => good_tick_from(Some(now_ms()), None),
+        None => good_tick_from(None, system_boot_ms()),
+    }
+}
+
 /// 自证行：`CLOCK_PROBE origin=<n>`（进程级判据只读日志即可；未启用 ⇒ 不打）。
 #[must_use]
 pub fn probe_line(origin: i64) -> String {
@@ -212,5 +279,75 @@ mod tests {
     #[test]
     fn probe_line_shape() {
         assert_eq!(probe_line(42), "CLOCK_PROBE origin=42");
+    }
+
+    /// **卡 `openmir2-gd-ack-boot-millis` 牙①**：`Environment.TickCount` 的 int32 位模式。
+    ///
+    /// 位模式错（例如不退化成低 32 位）⇒ 线上 `+GD` 与 oracle 不同字节。
+    #[test]
+    fn good_tick_i32_is_environment_tick_count_bits() {
+        assert_eq!(int32_bits(0), 0);
+        // C# A/B 实测 9 位值（同夹具同 BotSrv，`act_first=+GD/664724750`）原样透出。
+        assert_eq!(int32_bits(664_724_750), 664_724_750);
+        assert_eq!(int32_bits(0x7FFF_FFFF), i32::MAX);
+        assert_eq!(
+            int32_bits(0x8000_0000),
+            i32::MIN,
+            "2^31 ms 后 .NET int 为负"
+        );
+        assert_eq!(int32_bits(0xFFFF_FFFF), -1);
+        assert_eq!(int32_bits(0x1_0000_0000), 0, "2^32 ms 回绕");
+        assert_eq!(int32_bits(0x1_0000_0001), 1);
+
+        // 修复前形态的负例：Unix 纪元毫秒（13 位）**不得**原样当 tick 送出
+        // （BotSrv `int.TryParse` 溢出 ⇒ rtime=0 ⇒ tick_samples=0）。
+        let unix_ms: u64 = 1_794_674_538_681;
+        let bits = int32_bits(unix_ms);
+        assert_ne!(
+            i64::from(bits),
+            i64::try_from(unix_ms).expect("13 位在 i64 内"),
+            "Unix 毫秒不得原样透出"
+        );
+        assert_eq!(bits, i32::from_ne_bytes((unix_ms as u32).to_ne_bytes()));
+    }
+
+    /// **牙②（注入契约）**：注入优先于开机毫秒；整条规则 = `now_ms()` 的 int32 截断。
+    #[test]
+    fn good_tick_rule_prefers_injection_and_uses_boot_ms_otherwise() {
+        // 注入：只认注入值，即使同时给了开机毫秒也忽略。
+        assert_eq!(good_tick_from(Some(7_000), Some(664_000_000)), 7_000);
+        assert_eq!(
+            good_tick_from(Some(i64::from(i32::MAX) + 1), None),
+            i32::MIN,
+            "注入值按同一 int32 规则截断"
+        );
+        // 未注入：开机毫秒的位模式（含回绕侧）。
+        assert_eq!(good_tick_from(None, Some(664_724_750)), 664_724_750);
+        assert!(good_tick_from(None, Some(0x8000_0000)).is_negative());
+        assert_eq!(good_tick_from(None, Some(0x1_0000_0001)), 1);
+    }
+
+    /// **牙③（生产口径）**：未注入时 `good_tick_i32()` 与独立读取的开机毫秒一致。
+    ///
+    /// 变异「改回 Unix 毫秒」⇒ 与参考值差 ~1.79e12（远超容差）⇒ 红。
+    #[test]
+    fn good_tick_uninjected_follows_boot_ms() {
+        if source().is_some() {
+            // 门禁不设 `MIR2_CLOCK_MS`；若被外部注入，按注入契约判（见牙②）。
+            let v = i64::from(good_tick_i32());
+            let want = i64::from(int32_bits(now_ms() as u64));
+            assert!(
+                (v - want).abs() <= 2_000,
+                "注入时 +GD 必须取 now_ms()：v={v} now={want}"
+            );
+            return;
+        }
+        let reference = system_boot_ms().expect("Windows GetTickCount64 必须可用");
+        let want = i64::from(int32_bits(reference));
+        let v = i64::from(good_tick_i32());
+        assert!(
+            (v - want).abs() <= 2_000,
+            "未注入 +GD 必须等于开机毫秒（int32 位模式）：v={v} boot_ms={reference} want={want}"
+        );
     }
 }
