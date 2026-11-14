@@ -10860,10 +10860,11 @@ mod tests {
     /// * 次序的**语义**承重：攻击必须看得到同一段里刚生成的实体（`record.attacks` 恰一条且
     ///   攻守 id 正确）。逆序时目标尚未 `insert` ⇒ `attack_once_impl` 返回 `None` ⇒ 无 attacks；
     /// * 结构段边界：`spawn` 的 `insert` 在段后对 facade **可见**（`entities.get(2)` 断言）。
-    ///   注：本仓所有实体共用同一个 25 组件 bundle ⇒ 只有**单一 archetype**，facade 的缓存
-    ///   `QueryState` 在结构变更后仍解析得到新实体 ⇒ **删 `refresh_views()` 不会让本断言变红**
-    ///   （实测）。该调用是 P5-pre 的段边界契约（组件将来允许缺省时才承重），本卡如实登记为
-    ///   「结构段刷新无独立牙」。
+    ///   注：**删 `refresh_views()` 不会让本断言变红**（实测）——同一 tick 先 `add_entity` 了
+    ///   玩家，facade 早已见过 25 组件 archetype，本用例的段后可见断言**不承重**。
+    ///   `refresh_views()` 的独立牙在 `budget_monster_drops_matches_spawn_monster_now_drop_budget`：
+    ///   空世界首实体经 Command 段 spawn，archetype 段内才首次创建，缺这次刷新 ⇒ 段后
+    ///   `entities.get` 为 `None`（review f6f410d3 F1；P5-pre 的段边界契约）。
     #[test]
     fn command_stage_keeps_fifo_order_within_one_tick() {
         let mut w = World::new(64, 64);

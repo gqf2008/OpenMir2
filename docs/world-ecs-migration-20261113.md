@@ -973,7 +973,7 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   内核刷新、P5P2 删视图刷新均 RED）；段内 remove 后 facade 立即查不到（槽位真值）；半实体按
 >   组件缺失 `None` + `StageSkip` 计数；段内插入的未登记组件读取仍 panic（registry fail-closed）。
 > - **RNG**：本批 0 抽（`MIR2_RNG_LOG` 运行记录只有 2 行头 `INJECT_OK`/`SEED_PROBE`）。
-> 段数口径不变（P5-main 尚未交付：余 6 段）。
+> 段数口径（历史：P5-main 其后已交付，P7 收口后 20/20）：本批时点余 6 段。
 >
 > **T10 Top1 落地登记（2026-11-13，访问层预编译；卡 `openmir2-ecs-stage-whitelist-precompile`）**：
 > `world-bevy` 的段适配器把「运行期白名单」从**逐次**的两步核对（`ComponentRegistry` 资源查询 +
@@ -1283,9 +1283,10 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   `monster_ai_stage_walk_writes_transform_through_stage_access`（`GotoTargetXY` 单步落点经
 >   `StageAccess` 写回 `Transform`；`Transform` 缺失/只读 ⇒ `view_mut` 运行期 panic）。
 
-> **段数口径（P6b2 交付 head；单位 = 20 阶段）**：已系统化 **19 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
+> **段数口径（历史批次 P6b2 交付 head；单位 = 20 阶段）**：已系统化 **19 段**（P1 的 #0/#2/#15/#19 + P2–P4 的
 > #3/#4/#6/#7/#8/#13/#14/#16/#17/#18 + P6a 的 #9 + P6a2 的 #5 + P6a2b 的 #11 + P6b 的 #12 +
 > 本批 #10），**余 1 段：`#1 Command`**。
+> **历史注（F2）**：P7 已补 #1 `Command`，当前口径见下方「20/20 全部系统化」，本段是 P6b2 时点快照。
 
 > **S4d-3/P7 落地登记（2026-11-14，#1 `Command`；20/20 收口）**：命令 FIFO 的内联 `match cmd`
 > 整体切成段系统，`tick_head` 只剩边界代码。
@@ -1309,9 +1310,16 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 >   `impl Structural for SimCommand`；`tick_head` 在段边界后立即 `EntityStore::refresh_views()`
 >   （快照/结算/AI/宿主段必须看得到新生成的怪、看不到已离场的实体）。非结构段编译期仍拿不到
 >   `insert`/`remove`（`StructuralAccess` 的 `S: Structural` 门未放宽）。
->   **无独立牙（如实登记）**：本仓所有实体共用同一个 25 组件 bundle ⇒ 只有单一 archetype，
->   facade 的缓存 `QueryState` 在结构变更后仍解析得到新实体 ⇒ 删 `refresh_views()` 不会让
->   「段后可见」断言变红（实测绿）。该调用是 P5-pre 的段边界契约，等组件允许缺省时才承重。
+>   **独立牙（review f6f410d3 F1 更正）**：FIFO 牙 `command_stage_keeps_fifo_order_within_one_tick`
+>   的段后可见断言**不承重**——该用例同一 tick 先 `add_entity` 了玩家，facade 早已见过 25 组件
+>   archetype，删 `refresh_views()` 它仍绿。真正的独立牙是
+>   `budget_monster_drops_matches_spawn_monster_now_drop_budget`（`world.rs` 空世界首实体路径：
+>   `World::new` → `enqueue(SpawnMonster)` → `tick()` → `entities.get(2)`）：archetype 在
+>   **Command 段内才首次创建**，facade 的 `view_state`/`read_state` 只有
+>   `EntityStore::refresh_views()` 会 `update_archetypes`；删掉段边界这次调用 ⇒ 段后 `get(2)`
+>   为 `None` ⇒ `.expect("spawned")` panic（reviewer-25 独立复现：删 `tick_head` 段边界的
+>   `self.entities.refresh_views();` ⇒ 该用例 FAILED，lib 767 passed / 1 failed；head 原样
+>   768 passed）。`refresh_views()` 仍是 P5-pre 的段边界契约（结构段后可见性的唯一刷新入口）。
 > - **写集**：`EntityMutData` 的 20 组件 + `Transform`（`try_step`/`char_pushed_core` 落点）+
 >   `MapBinding`（`enter_world_impl` 的 `add_to_mapped`）；读集为 `StageAccess` 的 24 组件全集
 >   （`EntityMut` 组合视图要求）。`PvpState`/`Recovery`/`DupState` 本段不写（未声明写）。
@@ -1339,16 +1347,36 @@ P0 的适配器（`crates/world-bevy/src/components.rs` 的 `adapters` 模块）
 > `HeadRunner` 仍是「每段一个 `TickRunner`」（段边界要搬 `SimState`/`TickRecordRes`/
 > `CommandQueueRes`/`TickEntityIds`）；合成单个 `TickRunner` 需要把这些资源窗口统一到整条 head
 > 链，属后续优化，不影响段序或 RNG 消费者序。
+>
+> **S4d 收口（2026-11-14；20/20 全部系统化）**：P1–P7 的 20 个 tick 阶段全部切成段系统，
+> `tick_head` 只剩边界代码（搬 `SimState`/`TickRecordRes`/`CommandQueueRes`/`TickEntityIds`
+> 与段后 `refresh_views()`）。
+> - **段号清点（20/20）**：P1 #0/#2/#15/#19 + P2 #3/#6/#13/#16 + P2b #7 + P3a #14 +
+>   P3b #4/#17 + P4 #8/#18 + P5-pre/P5-main + P6a #9 + P6a2 #5 + P6a2b #11 + P6b #12 +
+>   P6b2 #10 + P5-A1/A2/A3 Command 九族 handler port + P7 #1 `Command`。
+> - **里程碑提交**：`80f97231e`（P7 merge，父 `e2cbb6517`）。
+> - **关键判据**：`tick_head` 只剩边界；Command FIFO 入队序 = 处理序
+>   （`command_stage_keeps_fifo_order_within_one_tick`）；`git revert` 后树 = base 树
+>   （逐字节回同）；world golden 6/6 与 base 相等、parity 包 0 failed、三族 RNG trace 的
+>   seq/kind/max/result 四列 diff 0。
+> - **遗留 follow-up（不阻塞收口）**：P5M-1..6（remove 分支刷新无牙、`refresh_archetypes`
+>   「刷全部」无牙、facade 侧 archetype 不刷新 StageQueries latent、`EntityAccess` 读/写枚举
+>   残留、patch 写集声明不实、牙注释不精确）；P6b F-1/F-2（trace 非交付 head 产出、
+>   `merchant_goods_count` 第二份实现）；A2 F-1/F-2/F-3（`whitelist.md` 旧符号、设计件 §2.1
+>   悬空引用、`try_step_impl` 可见性待收口卡确认）；P7 F1/F2/F3（refresh_views 独立牙口径、
+>   历史段落标注、`tick.rs` 写集外 1 行 doc 注释）。
+> - **S5 未做**：`crates/world` 删除**尚未执行**，等 Owner 授权原文后再开工（写集越界项见下节
+>   「S5 的写集越界提醒」）。
 
 > 段序牙 `tick_stage_registrations_are_wired_in_order` 已含五段（`SimBuff` / `SimMonsterAi` /
 > `SimNpc` / `SimMerchant` 在各自 `*_enabled` 门内、开门后进 trace），并已补 `TickStage::Command`
 > （P7）。
 
-> **尚未做（以 P6b2 交付 head 为准；单位 = 20 阶段）**：P5–P7（余 **1** 段——#1 Command）、
+> **尚未做（历史快照：以 P6b2 交付 head 为准；单位 = 20 阶段。P7 已补 #1 `Command`，当前 20/20）**：P5–P7（余 **1** 段——#1 Command）、
 > `SlotTable` 的 `QueryState` 缓存优化（按需）、`TickOrder`/`SlotOrder` 清理（D3：登记进 S5）、
 > `crates/world` 删除（S5，等 Owner 授权）。段号清单与写集见设计 §2.1/§4。
 
-> **段数口径（P5-A3 交付 head；单位 = 20 阶段）**：结构段数不变 **19/20**（`#1 Command` 仍未切系统）。
+> **段数口径（历史批次 P5-A3 交付 head；单位 = 20 阶段）**：结构段数不变 **19/20**（`#1 Command` 仍未切系统；P7 已补，当前 20/20）。
 > Command 九族 handler port **已齐**：attack（P5-A1）+ walk/enter/leave/rush/push（P5-A2）+
 > spawn/butch/butch_effect（P5-A3）；由 **P7 收口卡**一次性把 Command FIFO 切成
 > `TickStage::Command` 系统（入队序 = 处理序仍为硬契约）。
