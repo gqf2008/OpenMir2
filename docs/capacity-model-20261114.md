@@ -306,6 +306,17 @@ T10c-3 之后：`SimMonsterAi` **6.98–7.11ms**、`World::tick` **13.30ms / 1.2
   fault 类别（容忍度 0）。其中第①条正是 `LogService.Error(Exception)` 坏重载与 `load_report` 正则口径造成，
   由卡 `openmir2-botsrv-errorstack-diagnosable` 修复（复审 approve）。
   ⇒ **在 errorstack 修复合入前，任何 `internal_errors>0` 的轮次都无法从 RED 走出**（这是「必须做」的最强理由）。
+
+  **500 档已出现 GREEN 的合法轮次（2026-11-15 21:16，合入 errorstack `4bde30f13` + pool `05a0e4815` 之后）**：
+  `verdict=GREEN`、`rc=0`、`in_world=500/500`、`HoldSec=360`、`conclusion_valid=true`；
+  tick P50/P90/P99/max = **15/16/32/94ms**（稳态 ≥201ms = 0）；`internal_errors=0`（四元组全 0，
+  即本轮未触发异常、诊断链路未获验证——**零异常 ≠ 链路已验证**）；`scene_actor_ejected=4049`（10.78/s，末 120s 17.77/s）。
+  归档 `E:/UserFleet/load-360-errorstack-20261115-2116/`（清单无 BOM、7/7 verify rc=0）。
+  ⇒ 500 档「RED」的表述仅限于**错误非零的轮次**，不代表该档位不可用；本轮的 GREEN 是 hold=360 的合法结论。
+
+  **内存口径：同树两轮 360s 的 LOH 斜率相反（+0.186 vs −0.001 MB/s），差异未归因**（本轮 362s 出现 Gen2
+  稳态点 261.9MB，上轮无 Gen2）。⇒ **单轮 360s 不足以判「内存健康」**；判稳态泄漏需要 ≥2 个爬坡后 Gen2
+  after-GC 点，且两轮同口径对照。
   详见 `docs/loadgate-criteria-runbook-20261115.md` 与卡 `openmir2-loadgate-criteria-gaps`。
 - **1000 档稳态未成立**：60s 窗内无人进世界（串行存档载入 ~5–7/s）；补充 360s 到 425/1000 时
   BotSrv 在 4GiB GC 上限下 OOM；网关 `ProcessBufferSend` 在 `SendChecked>0` 时静默丢帧（386/716 SM_LOGON 未发）。
