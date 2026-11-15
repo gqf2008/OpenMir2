@@ -180,28 +180,68 @@ if ($SelfTestCriteria) {
     $pyReport = Join-Path $RepoRoot "tools\botload\load_report.py"
     $stFails = @()
 
-    function New-FakeStats([string]$Path, [int]$InternalErrors, [bool]$OmitInternalField) {
+    function New-FakeStats([string]$Path, [int]$InternalErrors, [bool]$OmitInternalField,
+                           [bool]$OmitCensus = $false, [string]$CensusKey = "recv_packet_null",
+                           [int]$CensusValue = -1, [string]$ExtraCensusKey = "",
+                           [string]$DropOperationalKey = "") {
         $zero = @(0) * 201
         $hist = @(0) * 201
         $hist[5] = 3
+        # 卡 openmir2-botsrv-recv-thread-nre：错误类别普查（与 load_report.py / BotErrorCensus.cs 同集）。
+        $censusKeys = @(
+            "recv_packet_null", "recv_packet_index", "recv_packet_other",
+            "run_round_null", "run_round_index", "run_round_other",
+            "run_loop_exception", "socket_handler_exception",
+            "socket_recv_fault", "socket_send_fault", "socket_connect_fault",
+            "metric_flush_failure", "self_report_write_failure",
+            "drop_exp_writer_open_failure", "drop_exp_writer_write_failure",
+            "bag_item_decode_failure", "unhandled_exception", "unobserved_task_exception",
+            "internal_error_unclassified", "teardown_race")
+        $census = [ordered]@{}
+        foreach ($k in $censusKeys) { $census[$k] = 0 }
+        # 默认把「未分类总数」映射到 recv_packet_null，保证 internal_errors == Σ(feeds_internal)；
+        # 用例可用 -CensusKey/-CensusValue 覆盖（如 operational 的 teardown_race、非 internal 的 metric_flush）。
+        $cv = if ($CensusValue -ge 0) { $CensusValue } else { $InternalErrors }
+        if ($census.Contains($CensusKey)) { $census[$CensusKey] = $cv }
+        if ($ExtraCensusKey -ne "") { $census[$ExtraCensusKey] = 0 }
+        $opKeys = @(
+            "conn_refused", "conn_lost", "conn_err_refused", "conn_err_reset", "conn_err_timeout",
+            "conn_err_other", "login_send_failed", "login_send_closed", "register_send_closed",
+            "partial_frames", "chunks_without_hash", "ident_overflow", "logon_misdelivered",
+            "in_world_suppressed", "autoplay_pre_world", "autoplay_skipped_pre_world")
         $rows = @(
             [ordered]@{ t_ms = 1000; login_ok = 0; tick_samples = 0; tick_sum_ms = 0; tick_max_ms = 0; conn_lost = 0; hist = $zero },
             [ordered]@{ t_ms = 2000; login_ok = 3; tick_samples = 0; tick_sum_ms = 0; tick_max_ms = 0; conn_lost = 0; hist = $zero },
             [ordered]@{ t_ms = 5000; login_ok = 3; tick_samples = 3; tick_sum_ms = 15; tick_max_ms = 5; conn_lost = 0; hist = $hist }
         )
+        foreach ($row in $rows) {
+            foreach ($k in $opKeys) {
+                if ($k -ne $DropOperationalKey) { $row[$k] = 0 }
+            }
+            if ($DropOperationalKey -ne "" -and $row.Contains($DropOperationalKey)) {
+                $row.Remove($DropOperationalKey)
+            }
+            if (-not $OmitCensus) {
+                $row["error_census_schema"] = 1
+                $row["error_census"] = $census
+            }
+        }
         if (-not $OmitInternalField) {
             $rows[0]["internal_errors"] = 0
             $rows[1]["internal_errors"] = 0
             $rows[2]["internal_errors"] = $InternalErrors
         }
-        $lines = @($rows | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 4 })
+        $lines = @($rows | ForEach-Object { $_ | ConvertTo-Json -Compress -Depth 6 })
         [System.IO.File]::WriteAllLines($Path, $lines, (New-Object System.Text.UTF8Encoding($false)))
     }
 
-    function Invoke-FakeReport([string]$Name, [int]$InternalErrors, [string]$ErrLogText, $Runtime, [string]$BotsLogText, [bool]$OmitInternalField, [string]$AllowlistPath = "") {
+    function Invoke-FakeReport([string]$Name, [int]$InternalErrors, [string]$ErrLogText, $Runtime, [string]$BotsLogText, [bool]$OmitInternalField, [string]$AllowlistPath = "",
+                               [bool]$OmitCensus = $false, [string]$CensusKey = "recv_packet_null",
+                               [int]$CensusValue = -1, [string]$ExtraCensusKey = "",
+                               [string]$DropOperationalKey = "") {
         $d = Join-Path $stRoot $Name
         New-Item -ItemType Directory -Force -Path $d | Out-Null
-        New-FakeStats (Join-Path $d "load_stats.ndjson") $InternalErrors $OmitInternalField
+        New-FakeStats (Join-Path $d "load_stats.ndjson") $InternalErrors $OmitInternalField $OmitCensus $CensusKey $CensusValue $ExtraCensusKey $DropOperationalKey
         [System.IO.File]::WriteAllText((Join-Path $d "bots.err.log"), $ErrLogText, (New-Object System.Text.UTF8Encoding($false)))
         [System.IO.File]::WriteAllText((Join-Path $d "bots.log"), $BotsLogText, (New-Object System.Text.UTF8Encoding($false)))
         $rtPath = Join-Path $d "bots_runtime.json"
@@ -303,11 +343,40 @@ if ($SelfTestCriteria) {
                      " valid=" + $r.report.internal_error_allowlist.valid)
     }
 
+    # 7) 卡 openmir2-botsrv-recv-thread-nre：错误类别普查走真实 CLI 的四颗牙。
+    # 7a) 缺 error_census ⇒ fail-closed（即使 internal_errors=0）
+    $r = Invoke-FakeReport "census-missing" 0 "" $cleanRuntime "" $false "" $true
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or -not (@($r.report.fails) -join ";" -match "缺 error_census")) {
+        $stFails += ("缺 error_census 必须 fail-closed RED，实得 rc=" + $r.rc + " fails=" + (($r.report.fails) -join ";"))
+    }
+    # 7b) 非 feeds_internal 的 fault 类别非 0 且 internal_errors=0 ⇒ RED 且点名类别
+    $r = Invoke-FakeReport "census-nonzero" 0 "" $cleanRuntime "" $false "" $false "metric_flush_failure" 1
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or -not (@($r.report.fails) -join ";" -match "metric_flush_failure=1")) {
+        $stFails += ("census 类别 metric_flush_failure=1 必须 RED 且点名，实得 rc=" + $r.rc + " fails=" + (($r.report.fails) -join ";"))
+    }
+    # 7c) 未登记类别（枚举漂移）⇒ RED
+    $r = Invoke-FakeReport "census-extra" 0 "" $cleanRuntime "" $false "" $false "recv_packet_null" 0 "brand_new_fault"
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or -not (@($r.report.fails) -join ";" -match "未登记类别")) {
+        $stFails += ("census 多出未登记类别必须 RED，实得 rc=" + $r.rc + " fails=" + (($r.report.fails) -join ";"))
+    }
+    # 7d) 既有事件计数缺失 ⇒ RED（枚举不完整）
+    $r = Invoke-FakeReport "census-op-missing" 0 "" $cleanRuntime "" $false "" $false "recv_packet_null" -1 "" "conn_lost"
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or -not (@($r.report.fails) -join ";" -match "缺既有事件计数 conn_lost")) {
+        $stFails += ("缺既有事件计数 conn_lost 必须 RED，实得 rc=" + $r.rc + " fails=" + (($r.report.fails) -join ";"))
+    }
+    # 7e) operational 类别（teardown_race）非 0 不得翻红，但必须在报告逐类列出
+    $r = Invoke-FakeReport "census-operational" 0 "" $cleanRuntime "" $false "" $false "teardown_race" 5
+    $opRow = @($r.report.error_census.categories | Where-Object { $_.category -eq "teardown_race" })
+    if ($r.rc -ne 0 -or $r.report.verdict -ne "GREEN" -or $opRow.Count -ne 1 -or $opRow[0].count -ne 5) {
+        $stFails += ("operational teardown_race=5 应 GREEN 且报告列出计数，实得 rc=" + $r.rc +
+                     " verdict=" + $r.report.verdict + " row=" + ($opRow | ConvertTo-Json -Compress))
+    }
+
     if ($stFails.Count -gt 0) {
         Write-Output ("SELFTEST_CRITERIA RED: " + ($stFails -join "；"))
         exit 1
     }
-    Write-Output "SELFTEST_CRITERIA CLI 注入通过（OOM/NRE/退出码/缺字段/白名单 4 牙/干净对照）；继续测 Get-BotSrvRuntime 取证"
+    Write-Output "SELFTEST_CRITERIA CLI 注入通过（OOM/NRE/退出码/缺字段/白名单 4 牙/错误类别普查 5 牙/干净对照）；继续测 Get-BotSrvRuntime 取证"
 }
 
 # ---- 构建 ----
