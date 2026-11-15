@@ -215,13 +215,18 @@ namespace BotSrv
                 {
                     RobotPlayer.ProcessPacketEnteredForTest = null;
                 }
+                // M3c（卡 `openmir2-botsrv-actor-pool-leak`）：per-packet 的 finally 恢复本身也要有牙。
+                // 只看「包内上下文正确」时，删掉 finally 仍全绿；所以这里额外断言两次调用后
+                // MShare.MySelf 已恢复到调用前（null）。
                 Check(
                     "processonepacket-context-per-bot",
                     packetSeen.Count == 2
                         && ReferenceEquals(packetSeen[bot1], bot1.MyActor)
-                        && ReferenceEquals(packetSeen[bot2], bot2.MyActor),
+                        && ReferenceEquals(packetSeen[bot2], bot2.MyActor)
+                        && MShare.MySelf == null,
                     $"seen1={(packetSeen.ContainsKey(bot1) && packetSeen[bot1] != null ? packetSeen[bot1].CurrX.ToString() : "null")} " +
-                    $"seen2={(packetSeen.ContainsKey(bot2) && packetSeen[bot2] != null ? packetSeen[bot2].CurrX.ToString() : "null")}");
+                    $"seen2={(packetSeen.ContainsKey(bot2) && packetSeen[bot2] != null ? packetSeen[bot2].CurrX.ToString() : "null")} " +
+                    $"after={(MShare.MySelf == null ? "null" : "leaked")}");
             }
 
             Console.WriteLine($"SHAREDSTATE {(failed == 0 ? "ALL PASS" : "FAILED")} failures={failed}");
