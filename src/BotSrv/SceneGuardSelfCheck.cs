@@ -23,9 +23,11 @@ namespace BotSrv
     ///   ③ 循环中途 `MShare.MySelf` 被置 null：BeginScene 用轮首快照，不抛（真实客户端单线程语义）；
     ///   ④ 删除点被并发改动（自删/下标前移）：跳过且不重复归属 g_FreeActorList；
     ///   ⑤ 轮内 `ActorList[i]` 读取前被并发缩表：跳过 + 计数，不抛 AOORE（F1）；
-    ///   ⑥ 删除点身份核对通过后、RemoveAt 前被并发缩表：先 RemoveAt 成功再登记 FreeActorList，
-    ///      AOORE ⇒ 跳过 + 计数，不双归属（F1b）；
-    ///   ⑦ ActorDied 的删除/插入循环遇并发缩表：计数跳过，不抛 AOORE（F1b「顺带核」）。
+    ///   ⑥a 删除点条件读取 `ActorList[i]` 前被并发缩表（F1c）；⑥b 身份核对后、RemoveAt 前
+    ///      被缩表（F1b）：都必须计数跳过、不登记 FreeActorList、不双归属；
+    ///   ⑦ ActorDied 的删除/插入循环遇并发缩表：计数跳过，不抛 AOORE；
+    ///   ⑧ RemoveAt 失败后 actor 仍在列表：不再 Insert/Add（不重复插入，P3-2）；
+    ///   ⑨ ActorDied 插入循环遇 null 槽位：跳过并计数，不解引用（P3-1）。
     ///
     /// 归因精度（F3）：隔离注入 null 槽位复现为 NRE@121、ActorList=null 为 NRE@116；
     /// 归档里的 :120 是**并发索引读取竞争**的签名，不是 null 槽位的直接证据。
@@ -36,8 +38,9 @@ namespace BotSrv
     /// 删删除点的「下标/身份核对」⇒ ④ 红（会误删/双归属）；
     /// 把 FreeActorList 登记挪回核对之前 ⇒ ④c 红（双归属）；
     /// 删轮内读取的 try/catch ⇒ ⑤ 红（AOORE）；删删除路径 try/catch ⇒ ⑥ 红（AOORE）；
-    /// 把 FreeActorList 登记挪到 RemoveAt 之前 ⇒ ⑥ 红（双归属）；
-    /// 删 ActorDied 的 try/catch ⇒ ⑦ 红（AOORE）。
+    /// 把 FreeActorList 登记挪到 RemoveAt 之前 ⇒ ⑥b 红（双归属）；
+    /// 删删除路径外层 try/catch ⇒ ⑥a/⑥b 红（AOORE）；删 ActorDied 的 try/catch ⇒ ⑦ 红；
+    /// 删「仍存在则不再插入」判断 ⇒ ⑧ 红（重复插入）；删插入循环 null 判断 ⇒ ⑨ 红（NRE）。
     /// </summary>
     internal static class SceneGuardSelfCheck
     {
@@ -268,8 +271,8 @@ namespace BotSrv
                 !threw && LoadMetrics.SceneIndexRaceSkippedCount == ib + 1,
                 $"threw={threw} skipped+={LoadMetrics.SceneIndexRaceSkippedCount - ib} want skip+1");
 
-            // ⑥ 删除路径（F1b）：身份核对通过后、RemoveAt 之前列表被并发缩表 ⇒ 必须捕获 AOORE、
-            //    跳过 + 计数 + 下标前移，且**不得**登记 g_FreeActorList（先 RemoveAt 成功再登记）。
+            // ⑥a 删除路径条件读取（F1c）：`i<Count` 通过后、`ActorList[i]` 之前被缩表 ⇒
+            //    条件读取本身要 AOORE；必须计数跳过、不登记 Free。
             scene.ActorList.Clear();
             MShare.MySelf = self;
             var doomed = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987665 };
@@ -289,16 +292,48 @@ namespace BotSrv
             catch (Exception e)
             {
                 threw = true;
-                Console.WriteLine("   remove-race threw: " + e.GetType().Name + " @ " + e.StackTrace);
+                Console.WriteLine("   remove-condition threw: " + e.GetType().Name + " @ " + e.StackTrace);
             }
             finally
             {
                 PlayScene.SceneRemoveRaceHook = null;
             }
-            Check("remove-race-aore-skipped",
+            Check("remove-condition-read-race-skipped",
                 !threw && LoadMetrics.SceneListRaceSkippedCount == db + 1
                 && scene.ActorList.Count == 0 && !MShare.g_FreeActorList.Contains(doomed),
                 $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db} count={scene.ActorList.Count} free={MShare.g_FreeActorList.Contains(doomed)}");
+
+            // ⑥b RemoveAt 窗口（F1b）：身份核对通过后、RemoveAt 之前被缩表 ⇒ AOORE 计数跳过，
+            //    且 Free 登记必须在 RemoveAt 成功之后（不得双归属）。
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            var doomed2 = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987667 };
+            scene.ActorList.Add(doomed2);
+            long db2 = LoadMetrics.SceneListRaceSkippedCount;
+            PlayScene.SceneRemoveAtRaceHook = sc =>
+            {
+                PlayScene.SceneRemoveAtRaceHook = null;
+                sc.ActorList.RemoveAt(sc.ActorList.Count - 1);
+            };
+            threw = false;
+            try
+            {
+                SetMoveTimeNow(scene);
+                scene.BeginScene();
+            }
+            catch (Exception e)
+            {
+                threw = true;
+                Console.WriteLine("   remove-at threw: " + e.GetType().Name + " @ " + e.StackTrace);
+            }
+            finally
+            {
+                PlayScene.SceneRemoveAtRaceHook = null;
+            }
+            Check("remove-at-race-skipped",
+                !threw && LoadMetrics.SceneListRaceSkippedCount == db2 + 1
+                && scene.ActorList.Count == 0 && !MShare.g_FreeActorList.Contains(doomed2),
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db2} count={scene.ActorList.Count} free={MShare.g_FreeActorList.Contains(doomed2)}");
 
             // ⑦ ActorDied「顺带核」：BeginScene 的 ProcMsg→ActorDied 在 run 线程执行，收包线程可能
             //    并发缩表；删除/插入失败必须计数跳过、不抛 AOORE。
@@ -330,6 +365,59 @@ namespace BotSrv
                 !threw && LoadMetrics.SceneListRaceSkippedCount == ab + 1
                 && scene.ActorList.Count == 1 && scene.ActorList[0] == dying,
                 $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - ab} count={scene.ActorList.Count}");
+
+            // ⑧ RemoveAt 失败后 actor 仍在列表 ⇒ 不得再 Insert/Add 造成重复（P3-2）。
+            scene.ActorList.Clear();
+            var preActor = new TestActor(robot) { CurrX = 100, CurrY = 100, RecogId = 987668 };
+            var dup = new TestActor(robot) { CurrX = 100, CurrY = 100, RecogId = 987669 };
+            scene.ActorList.Add(preActor);
+            scene.ActorList.Add(dup);
+            long db3 = LoadMetrics.SceneListRaceSkippedCount;
+            PlayScene.SceneActorDiedRaceHook = sc =>
+            {
+                PlayScene.SceneActorDiedRaceHook = null;
+                sc.ActorList.RemoveAt(0);   // 前移：dup 移到 0，RemoveAt(1) 将 AOORE，dup 仍在列表
+            };
+            threw = false;
+            try
+            {
+                scene.ActorDied(dup);
+            }
+            catch (Exception e)
+            {
+                threw = true;
+                Console.WriteLine("   actordied-dup threw: " + e.GetType().Name + " @ " + e.StackTrace);
+            }
+            finally
+            {
+                PlayScene.SceneActorDiedRaceHook = null;
+            }
+            Check("actordied-no-duplicate-when-still-present",
+                !threw && LoadMetrics.SceneListRaceSkippedCount == db3 + 1
+                && scene.ActorList.Count == 1 && scene.ActorList[0] == dup,
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db3} count={scene.ActorList.Count}");
+
+            // ⑨ ActorDied 插入循环遇 null 槽位（P3-1）：不得解引用 null，跳过并计数。
+            scene.ActorList.Clear();
+            var other = new TestActor(robot) { CurrX = 100, CurrY = 100, RecogId = 987670 };
+            var absent = new TestActor(robot) { CurrX = 100, CurrY = 100, RecogId = 987671 };
+            scene.ActorList.Add(null);
+            scene.ActorList.Add(other);
+            long nb = LoadMetrics.SceneNullActorSkippedCount;
+            threw = false;
+            try
+            {
+                scene.ActorDied(absent);
+            }
+            catch (Exception e)
+            {
+                threw = true;
+                Console.WriteLine("   actordied-null threw: " + e.GetType().Name + " @ " + e.StackTrace);
+            }
+            Check("actordied-null-slot-skipped",
+                !threw && LoadMetrics.SceneNullActorSkippedCount == nb + 1
+                && scene.ActorList.Count == 3 && scene.ActorList.Contains(absent),
+                $"threw={threw} null+={LoadMetrics.SceneNullActorSkippedCount - nb} count={scene.ActorList.Count}");
 
             MShare.MySelf = self;
             scene.ActorList.Clear();
