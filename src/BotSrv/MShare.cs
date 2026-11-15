@@ -1528,9 +1528,10 @@ namespace BotSrv
         public static IList<ClientMagic> g_MagicList = new List<ClientMagic>();
         public static IList<TDropItem> g_DropedItemList = new List<TDropItem>();
         public static ArrayList g_ChangeFaceReadyList = new ArrayList();
-        /// <summary>释放池（跨 bot 共享）：所有增删/清空必须持有 <see cref="FreeActorSync"/>。</summary>
-        public static IList<Actor> g_FreeActorList = new List<Actor>();
-        public static readonly object FreeActorSync = new object();
+        // 卡 `openmir2-botsrv-actor-pool-leak`：原 `g_FreeActorList` / `FreeActorSync`（跨 bot 自由池）
+        // 已移除。冻结客户端 PlayScn.pas 的 NewActor 从不从池取用（恒 Create）⇒ 池只是「延迟 60s Free」
+        // 的缓冲；端口里它只增不减（唯一清理函数 MinTimerTimer 从未接线）⇒ 无界泄漏。
+        // 托管运行时不需要延迟释放：驱逐点直接解除引用，池上限为 0。详见 docs/botsrv-actor-pool-fix-20261115.md。
         public static NakedAbility g_BonusTick = default;
         public static NakedAbility g_BonusAbil = default;
         public static NakedAbility g_NakedAbil = default;

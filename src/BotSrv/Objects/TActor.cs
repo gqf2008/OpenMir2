@@ -74,6 +74,10 @@ namespace BotSrv.Objects
         public long m_dwAutoTecTick = 0;
         protected int m_dwDefFrameTime;
         public long m_dwDeleteTime = 0;
+        /// <summary>最近一次从 m_MsgList 取走消息的时刻（卡 `openmir2-botsrv-actor-pool-leak`）。
+        /// 对齐冻结客户端 Actor.pas:1063 / :1695 / :2055：构造时置当前 tick，ProcMsg 每取走一条消息刷新。
+        /// AOI 驱逐按 PlayScn.pas:1219 要求本值距今 &gt;2000ms（端口此前缺此守卫）。</summary>
+        public long m_dwLastGetMessageTime = 0;
         protected int m_dwEffectFrameTime = 0;
         protected int m_dwEffectStartTime = 0;
         public long m_dwFocusFrameTick = 0;
@@ -262,6 +266,7 @@ namespace BotSrv.Objects
             m_dwGenAnicountTime = 0;
             m_dwDefFrameTime = 0;
             m_dwLoadSurfaceTime = MShare.GetTickCount();
+            m_dwLastGetMessageTime = MShare.GetTickCount();
             m_boGrouped = false;
             OpenHealth = false;
             m_noInstanceOpenHealth = false;
@@ -565,6 +570,8 @@ namespace BotSrv.Objects
             m_ChrMsg = default(TChrMsg);
             while (m_nCurrentAction == 0 && GetMessage(ref m_ChrMsg))
             {
+                // 对齐 Actor.pas:2055：每取走一条消息刷新「最后取消息时刻」，供 AOI 驱逐的 2000ms 空闲守卫使用。
+                m_dwLastGetMessageTime = MShare.GetTickCount();
                 switch (m_ChrMsg.Ident)
                 {
                     case Messages.SM_STRUCK:

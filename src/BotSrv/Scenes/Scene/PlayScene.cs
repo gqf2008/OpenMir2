@@ -70,17 +70,10 @@ namespace BotSrv.Scenes.Scene
             }
         }
 
-        /// <summary>把 actor 登记进跨 bot 释放池（所有增删都持 `MShare.FreeActorSync`）。</summary>
-        private static void AddFreeActor(Actor actor)
-        {
-            lock (MShare.FreeActorSync)
-            {
-                if (!MShare.g_FreeActorList.Contains(actor))
-                {
-                    MShare.g_FreeActorList.Add(actor);
-                }
-            }
-        }
+        // 卡 `openmir2-botsrv-actor-pool-leak`：原 `AddFreeActor`（把 actor 登记进跨 bot 自由池）已移除。
+        // 冻结客户端 `PlayScn.pas:3255-3266` 的 `NewActor` 从不从 `g_FreeActorList` 取用（恒 Create）
+        // ⇒ 池不是复用池，只是「延迟 60s Free」的缓冲；托管运行时立即解除引用即可，无需保留结构。
+        // AOI 驱逐 / DeleteActor / DelActor 三个出口现在都只做 `ActorList.Remove` + 计数。
 
         public PlayScene(RobotPlayer robotClient) : base(SceneType.PlayGame, robotClient)
         {
@@ -249,13 +242,17 @@ namespace BotSrv.Scenes.Scene
                         actor.DelActor = true;
                     }
                 }
-                if (actor.DelActor || (Math.Abs(self.CurrX - actor.CurrX) > 16) || (Math.Abs(self.CurrY - actor.CurrY) > 16))
+                // 对齐冻结客户端 PlayScn.pas:1219：AOI 驱逐要求「距上次取消息 >2000ms」**且**
+                // 「与自身坐标差 >16 格」；`DelActor` 仍无条件。端口此前缺空闲守卫 ⇒ 任何越界立即驱逐
+                // （并把 actor 永久留池），既是行为偏差也是泄漏的驱动源。
+                bool aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000;
+                if (actor.DelActor || (aoiIdleExpired && ((Math.Abs(self.CurrX - actor.CurrX) > 16) || (Math.Abs(self.CurrY - actor.CurrY) > 16))))
                 {
                     // 并发一致性（卡 `openmir2-botsrv-autoplay-nre` F1b/F1c/F2）：本槽位可能已被收包线程
                     // （SM_HIDE/SM_NEWMAP/AOI 增删）或 actor.Run() 的同线程重入改掉。删除路径的整体——
                     // **包括身份核对的条件读取 `ActorList[i]`**——都必须在同一个 try 内（F1c：核对
-                    // 读取本身也会 AOORE@209）；顺序 = 先 RemoveAt 成功、再登记 FreeActorList；
-                    // AOORE ⇒ 跳过 + 计数 + 下标前移，不登记、不清理引用。
+                    // 读取本身也会 AOORE@209）；顺序 = 先 RemoveAt 成功、再计数（无池可登记）；
+                    // AOORE ⇒ 跳过 + 计数 + 下标前移，不重复计数、不清理引用。
                     bool removed = false;
                     lock (_actorSync)
                     {
@@ -291,7 +288,8 @@ namespace BotSrv.Scenes.Scene
                     }
                     if (removed)
                     {
-                        AddFreeActor(actor);
+                        // 立即解除引用（无自由池，见类顶部说明）：actor 在此之后不可达，由 GC 回收。
+                        LoadMetrics.SceneActorEjected();
                         if (MShare.TargetCret == actor)
                         {
                             MShare.TargetCret = null;
@@ -1137,6 +1135,8 @@ namespace BotSrv.Scenes.Scene
         {
             lock (_actorSync)
             {
+            // 冻结客户端还会 Free 并清空 g_FreeActorList（PlayScn.pas:3457-3459）；本端口没有自由池
+            // （已移除，见类顶部说明），清空 ActorList 即等价：所有 actor 的最后一个引用归零。
             ActorList.Clear();
             MShare.MySelf = null;
             RobotClient.MyActor = null;
@@ -1180,8 +1180,8 @@ namespace BotSrv.Scenes.Scene
                         }
                     }
                     ActorList[i].m_dwDeleteTime = MShare.GetTickCount();
-                    AddFreeActor(ActorList[i]);
                     ActorList.RemoveAt(i);
+                    LoadMetrics.SceneActorEjected();
                 }
                 else
                 {
@@ -1206,8 +1206,8 @@ namespace BotSrv.Scenes.Scene
                 if (ActorList[i] == actor)
                 {
                     ActorList[i].m_dwDeleteTime = MShare.GetTickCount();
-                    AddFreeActor(ActorList[i]);
                     ActorList.RemoveAt(i);
+                    LoadMetrics.SceneActorEjected();
                     break;
                 }
             }
