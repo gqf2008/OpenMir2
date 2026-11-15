@@ -298,7 +298,9 @@ for rel, count, hold in runs:
 
 ### 栈配置：bot 窗口只许用 Rust `game-svr`（2026-11-15 事故）
 
-- 起栈后**必须自查** `start-stack.out.log`：要有 `START game-svr`，且**不得**出现 `GameSvr.exe`。
+- 起栈后**必须检查** `start-stack.out.log`：要有 `START game-svr`，且**不得**出现 `GameSvr.exe`。
+  **检测到 `GameSvr.exe` ⇒ 立即停栈、判本轮无效（`invalid_reason=csharp_game_svr`）、rc=2**——与 `in_world`
+  闸门同等级，**不是注脚**：自查发现问题却不中止，等于把错栈的结论继续往下游送。
 - 原因：C# oracle 的玩家数据拉取路径**本来就没实现**（`src/M2Server/Net/TCPNetChannel.cs:400 LogService.Info("待实现")`），
   500 bot 登录会在 `WorldServer::ProcessHumans` 里 `RemoveAt` 越界抛异常，只有 ~21 个能进世界。
   实例：2026-11-15 池卡 r2 用 `E:/MirServer/M2GameSvr/GameSrv.exe`（mtime 2026-10-22、来自已删 worktree `OpenMir2-wt-goods`）
