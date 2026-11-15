@@ -23,10 +23,14 @@ namespace BotSrv
     ///   ③ 同状态连写两次 ⇒ 文件不变（牙：漏 `Clear()` 会追加/重复）；
     ///   ④ 500 → 7 缩容 ⇒ 文件等于旧实现 7 条产物且**长度变短**（牙：不截断会残留旧尾）；
     ///   ⑤ 非 ASCII 键（中文 / 代理对 emoji / 引号 / 200 字符长键）⇒ 与原实现字节相同
-    ///      （牙：UTF-8 无 BOM、无额外转义、代理对跨 chunk 状态续接）；
-    ///   ⑥ 单次落盘分配量：`GC.GetAllocatedBytesForCurrentThread()` 实测，新 ≤ 旧 30% 且 ≤ 32KB
+    ///      （牙：UTF-8 无 BOM、无额外转义）；
+    ///   ⑥ **跨 chunk 代理对（P1 复审回归）**：`StringBuilder(1)` + U+D83D + U+DE00 + 40 个 b
+    ///      使 `GetChunks()` = [1,1,40]，高低代理被切口拆开 ⇒ 必须**不抛异常**且字节与旧实现
+    ///      （`File.WriteAllText(text)`）一致（牙：退回「逐 chunk GetByteCount 定容」会在 flush 时抛
+    ///      `ArgumentException: output byte buffer too small`；实测旧测量 measure=43 / actual=44）；
+    ///   ⑦ 单次落盘分配量：`GC.GetAllocatedBytesForCurrentThread()` 实测，新 ≤ 旧 30% 且 ≤ 32KB
     ///      （稳态复用后只剩 FileStream 的小对象）；
-    ///   ⑦ 接线：`Init()` + `Flush()` 真把 `login_conns.ndjson` 写成与旧实现相同的字节。
+    ///   ⑧ 接线：`Init()` + `Flush()` 真把 `login_conns.ndjson` 写成与旧实现相同的字节。
     ///
     /// 期望值说明：`CanonicalSha256` 是**改动前**旧实现（本文件 `WriteLegacy` 为逐字复刻）对
     /// `PopulateCanonical(500)` 的输出；任何让落盘字节漂移的改动都会同时打红 ②。
@@ -103,7 +107,42 @@ namespace BotSrv
                 Check("unicode-keys-byte-identical", BytesEqual(uniNew, uniLegacy),
                     $"bytes={uniNew.Length} sha_new={Sha(uniNew)} sha_legacy={Sha(uniLegacy)}");
 
-                // ---------- ⑥ 单次分配量 ----------
+                // ---------- ⑥ 跨 chunk 代理对（P1 复审回归） ----------
+                // 生产路径用 GetMaxByteCount 上界定容、stateful GetBytes 编码；旧实现是整串
+                // File.WriteAllText。本用例让 StringBuilder 的 GetChunks() 把代理对拆开。
+                var tiny = new StringBuilder(1);
+                tiny.Append((char)0xD83D);   // high surrogate
+                tiny.Append((char)0xDE00);   // low surrogate
+                tiny.Append('b', 40);
+                var chunkLens = new List<int>();
+                foreach (ReadOnlyMemory<char> chunk in tiny.GetChunks())
+                {
+                    chunkLens.Add(chunk.Length);
+                }
+                Check("cross-chunk-fixture-splits-pair",
+                    chunkLens.Count >= 2 && chunkLens[0] == 1 && chunkLens[1] == 1,
+                    $"chunks={string.Join(",", chunkLens)}");
+                string crossLegacyPath = Path.Combine(dir, "cross-chunk.legacy.txt");
+                File.WriteAllText(crossLegacyPath, tiny.ToString(), new UTF8Encoding(false));
+                byte[] crossLegacy = File.ReadAllBytes(crossLegacyPath);
+                byte[] crossNew = null;
+                Exception crossEx = null;
+                try
+                {
+                    crossNew = LoadMetrics.SelfCheckEncodeText(tiny);
+                }
+                catch (Exception ex)
+                {
+                    crossEx = ex;
+                }
+                Check("cross-chunk-surrogate-no-throw", crossEx == null,
+                    crossEx == null ? "" : crossEx.GetType().Name + ": " + crossEx.Message);
+                Check("cross-chunk-surrogate-bytes-equal", crossEx == null && BytesEqual(crossNew, crossLegacy),
+                    crossEx == null
+                        ? $"bytes={crossNew.Length} sha_new={Sha(crossNew)} sha_legacy={Sha(crossLegacy)}"
+                        : "exception (see previous case)");
+
+                // ---------- ⑦ 单次分配量 ----------
                 PopulateCanonical(CanonicalCount);
                 WriteLegacy(pathLegacy);                        // 预热（JIT）
                 long l0 = GC.GetAllocatedBytesForCurrentThread();
@@ -119,7 +158,7 @@ namespace BotSrv
                     legacyAlloc > 0 && newAlloc <= 32768 && ratio <= 0.30,
                     $"before={legacyAlloc}B after={newAlloc}B reduction={(1.0 - ratio) * 100.0:F2}% n={CanonicalCount}");
 
-                // ---------- ⑦ Flush 接线 ----------
+                // ---------- ⑧ Flush 接线 ----------
                 PopulateCanonical(CanonicalCount);
                 string wireDir = Path.Combine(dir, "wire");
                 LoadMetrics.Init(wireDir);

@@ -131,7 +131,8 @@ namespace BotSrv
         // 卡 `openmir2-botsrv-loginconns-buffer`：跨 flush 复用的落盘缓冲（稳态零大块分配）。
         // 只在 Sync 锁内使用；初值小，首次按峰值增长一次后复用（不再是每次 count*160+64 的新 char[]）。
         private static readonly StringBuilder LoginConnsText = new StringBuilder(1024);
-        private static readonly Encoder LoginConnsUtf8 = new UTF8Encoding(false).GetEncoder();
+        private static readonly Encoding LoginConnsEncoding = new UTF8Encoding(false);
+        private static readonly Encoder LoginConnsUtf8 = LoginConnsEncoding.GetEncoder();
         private static byte[] _loginConnBytes = new byte[1024];
 
         private static string _outDir;
@@ -931,12 +932,7 @@ namespace BotSrv
                   .Append(",\"resend_tick\":").Append(c.ResendTick)
                   .Append("}\n");
             }
-            int need = MeasureLoginConnsUtf8Bytes(sb);
-            if (_loginConnBytes.Length < need)
-            {
-                // 只在峰值增长时分配一次；稳态 flush 不再分配大块字节缓冲。
-                _loginConnBytes = new byte[need];
-            }
+            EnsureLoginConnBytesCapacity(sb.Length);
             int bytes = EncodeLoginConnsUtf8(sb, _loginConnBytes);
             try
             {
@@ -952,21 +948,25 @@ namespace BotSrv
             }
         }
 
-        /// <summary>登录明细的 UTF-8 字节数（无分配；`Encoder` 逐 chunk，跨 chunk 的代理对按同一状态续接）。</summary>
-        private static int MeasureLoginConnsUtf8Bytes(StringBuilder sb)
+        /// <summary>按 UTF-8 最坏情况给复用缓冲定容（P1：**不得先测量字节数**）。
+        ///
+        /// 教训：`Encoder.GetByteCount(span, flush:false)` 逐 chunk 的计数与 stateful
+        /// `GetBytes(span, dst, flush:false)` 对「代理对被 `GetChunks()` 切口拆开」的处理不一致
+        /// （实测 `StringBuilder(1)` + `U+D83D` + `U+DE00` + 40×'b'：measure=43 / actual=44），
+        /// 按测量值定容会在 flush 时抛 `ArgumentException`（被 Flush 的 catch 吞成
+        /// `RecordMetricFlushFailure`，该次不重写）。这里改用 `Encoding.GetMaxByteCount(chars)` 上界：
+        /// 缓冲按峰值只增长一次，稳态仍是零分配；写盘字节由 stateful `GetBytes` 的返回值决定。</summary>
+        private static void EnsureLoginConnBytesCapacity(int charCount)
         {
-            Encoder enc = LoginConnsUtf8;
-            enc.Reset();
-            int total = 0;
-            foreach (ReadOnlyMemory<char> chunk in sb.GetChunks())
+            int need = LoginConnsEncoding.GetMaxByteCount(charCount);
+            if (_loginConnBytes.Length < need)
             {
-                total += enc.GetByteCount(chunk.Span, flush: false);
+                _loginConnBytes = new byte[need];
             }
-            total += enc.GetByteCount(ReadOnlySpan<char>.Empty, flush: true);
-            return total;
         }
 
-        /// <summary>把登录明细按 UTF-8（无 BOM）写进复用缓冲，返回写入字节数。</summary>
+        /// <summary>把登录明细按 UTF-8（无 BOM）写进复用缓冲，返回写入字节数。`dst` 必须按
+        /// `EnsureLoginConnBytesCapacity` 的上界定容（stateful `GetBytes` 负责跨 chunk 代理对）。</summary>
         private static int EncodeLoginConnsUtf8(StringBuilder sb, byte[] dst)
         {
             Encoder enc = LoginConnsUtf8;
@@ -1008,6 +1008,20 @@ namespace BotSrv
 
         /// <summary>自检专用：读当前连接表（供「旧实现复刻」在同一枚举序上产出对照字节）。</summary>
         internal static Dictionary<string, LoginConn> SelfCheckLoginConns => LoginConns;
+
+        /// <summary>自检专用：用与 `WriteLoginConnsLocked` **同一组**定容/编码函数处理任意 StringBuilder
+        /// （跨 chunk 代理对用例需要自造 `StringBuilder` 容量以控制 `GetChunks()` 切口）。</summary>
+        internal static byte[] SelfCheckEncodeText(StringBuilder sb)
+        {
+            lock (Sync)
+            {
+                EnsureLoginConnBytesCapacity(sb.Length);
+                int n = EncodeLoginConnsUtf8(sb, _loginConnBytes);
+                byte[] exact = new byte[n];
+                Array.Copy(_loginConnBytes, exact, n);
+                return exact;
+            }
+        }
 
         /// <summary>自检专用：在调用线程上执行一次真实落盘（与 Flush 相同的 Sync 锁语义），便于测分配量。</summary>
         internal static void SelfCheckWriteLoginConns()
