@@ -13,6 +13,9 @@ namespace BotSrv.Player
     {
         public void ProcessPacket(string str)
         {
+            // 卡 `openmir2-botsrv-myself-wiring-tooth`：自检在入口读 `MShare.MySelf`，
+            // 证明 `ClientManager.ProcessOnePacket` 已按本包 bot 设置上下文。生产为 null。
+            ProcessPacketEnteredForTest?.Invoke(this);
             string data = string.Empty;
             if (!string.IsNullOrEmpty(str))
             {

@@ -60,7 +60,9 @@ namespace BotSrv
 
         /// <summary>收包线程的 per-packet 处理。**所有异常必须在这里分类计数**（N1 的 3.95 万条
         /// `[ERR] Object reference not set` 以前只进日志、不进 `internal_errors`）。</summary>
-        private void ProcessOnePacket(RecvicePacket message)
+        // 卡 `openmir2-botsrv-myself-wiring-tooth`：改为 internal 只为自检直接钉住
+        // 「按包设置/恢复 MShare.MySelf」的接线；生产逻辑不变。
+        internal void ProcessOnePacket(RecvicePacket message)
         {
             RunPacketGuard(() =>
             {
