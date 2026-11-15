@@ -146,17 +146,66 @@ close=…`、`event=gate_frame_degrade stage=in_world close=none`，各自独立
 | **SessionId 复用误投**（总监 P3 F2） | `released_session_residue_is_purged_before_id_reuse` | A 断（`GM_CLOSE`）⇒ 队列里 A 的残留被清；B 复用同一 `SessionId` ⇒ 客户端第一帧是 B 的 `SM_ADDITEM`，A 的 `SM_ABILITY` 绝不再出现 |
 | 分类集合 | `gate_criticality::tests::*` | 非关键集合逐值相等 + 升序；持久/登录/控制帧恒关键；`GM_*` 撞号不入非关键 |
 
-变异重放（本人 worktree，逐条还原并核 sha 一致 + 无残留）：
+变异重放（本人 worktree，逐条还原；`lib.rs` 的 sha256 改前=改后 `2622c446365a1444…`，`git status --short`
+为空、无 `MUTATION` 残留）：
 
-（交付时补：删 `send_gate_msg` 的非关键分支 / 删 `queue_or_reject` 的 `in_world` 降级分支 /
-删非关键的 `pending.is_empty()` 顺序守卫 —— 每条对应哪个用例红。）
+| 变异 | 红掉的用例（原始断言） |
+| --- | --- |
+| M1 删 `send_gate_msg` 的非关键通道分支 | `noncritical_frames_bypass_queue_and_never_close` / `noncritical_drop_is_superseded_by_next_tick_frame` / `noncritical_dropped_when_critical_pending` FAILED（3 条）；`critical_overflow_inworld_degrades_without_close` FAILED（关键帧被误走非关键通道） |
+| M2 删 `queue_or_reject` 的 `in_world` 降级分支 | `critical_overflow_inworld_degrades_without_close` FAILED：`已进世界 ⇒ 降级`，`left: 0 right: 1` |
+| M3 删 `send_noncritical` 的 `pending.is_empty()` 顺序守卫 | `noncritical_dropped_when_critical_pending` FAILED：`left: NonCriticalSent right: NonCriticalDrop` |
+| M4 删 `GM_CLOSE` 释放路径的 `purge_session_residue` 接线 | `released_session_residue_is_purged_before_id_reuse` FAILED：`释放会话必须清掉该 SessionId 的队列残留` |
 
-## 6. 真机 500 档（R 级窗口）
+恢复后同一批用例再跑：`noncritical` 4 passed / `critical_overflow` 2 passed /
+`released_session` 1 passed。
 
-四组必报：`close_inworld`（目标 0）、非关键丢弃计数、`in_world`、延迟分位（延迟与丢弃必须同时报，
-只报一个会得出相反结论）。
+## 6. 真机 500 档（R 级窗口，2026-11-15）
 
-（交付时补：窗口排期、栈版本、run 目录、四组数字、与 A+B run1/run2 的对照。）
+窗口：2026-11-15 10:58–11:10（协调者批准、多线实验结束后独占）。栈二进制在
+`CARGO_TARGET_DIR=E:/UserTemp/stack-rel-target-w83/release`：`game-svr.exe` sha256
+`c3a33338899abb16…`（本轮重建）；`game-gate/login-gate/sel-gate` 与 A+B 同 sha（源码未改）。
+BotSrv 用 worker-83 已重建版本（本卡零 C# 改动）。归档：`E:/UserFleet/archive/gate-criticality-20261115-w83/`
+（`tier-N1/`、`tier-N4/`；`report.json` / `gate_stats.ndjson` / `load_stats.ndjson` / `load_gate.run.log`
+的 sha256 见交付报告）。
+
+判据口径：四组（`close_inworld` 目标 0、`drop_noncritical` 按 ident、`in_world`、延迟分位）**同时报**；
+四项字段（login / no_resp / internal_errors / OOM）单列。`HoldSec=60 < 360` ⇒ `conclusion_valid=false`
+（只作冒烟，不得作为 GREEN 结论）。
+
+| 指标 | N=1（单端点 7200） | N=4（一个 game-gate 进程 4 端点 7200..7203） | A+B run1 对照 |
+| --- | --- | --- | --- |
+| login / no_resp / OOM | 100.0% (500/500) / 0 / 0 | 100.0% (500/500) / 0 / 0 | 100% / 0 / 0 |
+| internal_errors | **2405**（4 ramp + 2401 steady，4.81/bot） | **758**（2 ramp + 756 steady，1.52/bot） | 0 |
+| `in_world` | **500/500（100%）** | **500/500（100%）** | 432/500 |
+| `close_inworld`（目标 0） | **0** | **0**（4 条 gate 线全 0） | —（旧口径 rejected_sessions 497） |
+| `reject_login` / `degrade_inworld` | 0 / 0 | 0 / 0 | — |
+| `overflow_frames` | 0 | 0 | 96,309 |
+| `drop_noncritical_frames` | **7,432,438** | **4,540,792** | — |
+| 丢弃 ident 分布（按丢帧数） | 41:3,708,814 / 10:3,708,230 / 657:11,891 / 11:1,988 / 14:1,311 | 41:2,265,808 / 10:2,264,929 / 657:4,549 / 11:2,809 / 14:2,493 | — |
+| `noncritical_sent_frames` | 3,794,296 | 5,907,952 | — |
+| 关键帧 hold / queued / flushed | 21,230 / 21,230 / 21,230 | 13,262 / 13,262 / 13,262 | queued 260,839 |
+| 队列 max_depth | 458 帧 / 14,671B | 84 帧（4 线最大值） | 4,096 帧 / 177,908B |
+| tick p50 / p90 / p99 | 15 / 31 / 46 ms | 32 / 78 / 187 ms | 201 / 201 / 201 |
+| 稳态 ≥201ms | **0.13%**（32/25,538） | **0.84%**（210/24,958） | 51.8% |
+| tick max | 297 ms | 391 ms | 13,266 ms |
+| load_gate verdict | RED（internal_errors） | RED（tick p99 187>100 且 internal_errors） | — |
+
+**N=4 总监阈值**（写死）：`in_world ≥ 490` 且 `≥201ms < 5%` —— 本轮 **500/500 且 0.84%**，两条同时满足
+⇒ 按该阈值可以说「部署 + 关键性就够、协议不改（不引入流水线化/分网关）」。但通用门禁仍 **RED**：
+`tick_p99 187ms > 100ms` 与 `internal_errors=758`；且 60s 窗口只作冒烟。
+
+**internal_errors 归因（按实记录，白名单当前为空 ⇒ 判据层面 RED）**：20 条样本全是 BotSrv 侧
+`Scenes/Scene/PlayScene.cs` 的 `PlayScene.BeginScene()` 空引用（N=1 样本行 120：`ActorList[i]` 的空元素；
+N=4 样本行 161：同一循环的 actor 释放支），调用链 `RobotPlayer.Run` → `ClientManager.SafeRun` 兜住；
+`bots.err.log` 为空、BotSrv 无 OOM / 无崩溃 / 非自身退出。**本轮栈没有任何背压 `GM_CLOSE`**
+（`close_inworld=0`、`reject_login=0`、`overflow=0`）⇒ 不可能来自 GM_CLOSE teardown 竞态；与上一轮
+无关键性 N=4 的 841、以及 A+B run3（队列关、全部 Hold 丢弃）的 772 同量级，属 BotSrv 在 500 假人 +
+高频 AOI 帧流下的自身 actor 记账 NRE。**未豁免、未改白名单。**
+
+**两通道收益（与 A+B 同档对照）**：overflow 96,309 → **0**；`in_world` 432 → **500**（N=1）；
+被关会话 497 → **`close_inworld` 0 + `reject_login` 0**；AOI 帧 7.43M 走「直发或立即丢弃」通道，
+关键帧 hold 只有 2.1 万且全部补发成功；队列高水位 4,096 → 458（N=1）/ 84（N=4）；
+≥201ms 尾部 51.8% → 0.13%（N=1）/ 0.84%（N=4）。
 
 ## 7. 残留 / 已知限制
 
