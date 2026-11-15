@@ -252,6 +252,10 @@ $BotExe = Join-Path $BotBinDir "BotSrv.exe"
 $StartAll = "E:\MirServer\start-all.ps1"
 # BotSrv 也算被采样进程：M5 W2 需要"假人内存斜率"，且看门狗要能看见假人自己越界（2026-10-11 的 106GB 就是它）。
 $MemProcNames = @("GameSrv", "LoginSrv", "DBSrv", "LoginGate", "SelGate", "GameGate", "mysqld", "BotSrv")
+# 卡 `openmir2-botsrv-actor-pool-leak`（总监窗口后追加）：Rust 栈的 game-svr/三网关也要进内存曲线。
+# 只并入采样写 mem.ndjson（与 $MemProcNames 同字段），**不并入 Find-MemBreach 的越界杀进程判定**
+# （不改变门禁语义）；进程不在跑 ⇒ 该轮无行即为事实，不补 0。
+$MemSampleExtraNames = @("game-svr", "game-gate", "login-gate", "sel-gate")
 $MemKillThresholdBytes = if ($MemKillThresholdGB -gt 0) { [int64]($MemKillThresholdGB * 1GB) } else { [int64]0 }
 $GuardStart = Get-Date
 
@@ -974,6 +978,16 @@ if ($Repeat -gt 1) { Write-Output ("===== REPEAT " + $run + "/" + $Repeat + " ==
                 $iterSamples.Add([pscustomobject]@{ proc = $name; pid = $p.Id; priv_bytes = [int64]$p.PrivateMemorySize64; ws_bytes = [int64]$p.WorkingSet64 })
             }
         }
+        # Rust 服务端进程：**只采样落盘**，不喂看门狗（见 $MemSampleExtraNames 注释）。
+        foreach ($name in $MemSampleExtraNames) {
+            $ps = Get-Process -Name $name -ErrorAction SilentlyContinue
+            foreach ($p in $ps) {
+                $ws = [math]::Round($p.WorkingSet64 / 1MB, 2)
+                $pv = [math]::Round($p.PrivateMemorySize64 / 1MB, 2)
+                $cpu = $p.TotalProcessorTime.TotalSeconds
+                $memLines.Add(('{{"t_ms":{0},"proc":"{1}","pid":{2},"ws_mb":{3},"priv_mb":{4},"cpu_s":{5}}}' -f $ts, $name, $p.Id, $ws, $pv, [math]::Round($cpu, 2)))
+            }
+        }
         $memSampleIter++
         # 护栏②：看门狗——任一被采样进程越界 ⇒ 杀 BotSrv + RED + 提前终止外层档位循环（绝不静默）
         $breach = Find-MemBreach -Samples $iterSamples -ThresholdBytes $MemKillThresholdBytes
@@ -1039,6 +1053,7 @@ if ($Repeat -gt 1) { Write-Output ("===== REPEAT " + $run + "/" + $Repeat + " ==
     if (Test-Path $loginConnsPath) { $criteriaArgs += @("--login-conns", $loginConnsPath) }
     if (Test-Path $hostLoadPath) { $criteriaArgs += @("--hostload", $hostLoadPath) }
     if ($AllowMissingTick) { $criteriaArgs += "--allow-missing-tick" }
+    if ($MemSampleExtraNames.Count -gt 0) { $criteriaArgs += @("--mem-extra-names", ($MemSampleExtraNames -join ",")) }
     python (Join-Path $RepoRoot "tools\botload\load_report.py") summarize --stats $statsPath --mem $memPath `
         --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec @criteriaArgs --out $reportPath | Out-Null
     $tierRc = $LASTEXITCODE
