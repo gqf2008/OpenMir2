@@ -295,6 +295,15 @@ for rel, count, hold in runs:
   ⇒ 整轮作废。历史教训：500 档 471/500（94%）曾被误读成 29 个失败，`login` 全绿也完全看不出。
 - **每轮必报 `in_world` 峰值与稳态值，且写在结论句旁边**（不只在表格字段里）。任何人读结论时应能
   立刻看到「500 个里有多少真进去了」；缺这两个值的报告不得作为结论引用。
+
+### 栈配置：bot 窗口只许用 Rust `game-svr`（2026-11-15 事故）
+
+- 起栈后**必须自查** `start-stack.out.log`：要有 `START game-svr`，且**不得**出现 `GameSvr.exe`。
+- 原因：C# oracle 的玩家数据拉取路径**本来就没实现**（`src/M2Server/Net/TCPNetChannel.cs:400 LogService.Info("待实现")`），
+  500 bot 登录会在 `WorldServer::ProcessHumans` 里 `RemoveAt` 越界抛异常，只有 ~21 个能进世界。
+  实例：2026-11-15 池卡 r2 用 `E:/MirServer/M2GameSvr/GameSrv.exe`（mtime 2026-10-22、来自已删 worktree `OpenMir2-wt-goods`）
+  ⇒ 487 条 `ProcessHumans` 异常、`in_world` 恒 21/500 ⇒ 整轮作废。
+- 健康栈形态（360s 窗口实测）：`DBSrv`(C#) + `LoginSrv`(C#) + **`game-svr`(Rust, 5000)** + `login-gate`/`sel-gate`/`game-gate`(Rust)。
 - **一个窗口只跑一件事：跨会话和会话内都算**（2026-11-15 教训）。窗口开启期间，**任何**
   cargo/rustc/dotnet/zig/msbuild 构建都禁用——不管它来自别的会话、还是**同一条会话里另一个车道**。
   实例：同会话的 profiler 车道起 release 构建（56s），把池卡 500/90 窗口打成 `heavy_max=5`、
