@@ -311,6 +311,14 @@ for rel, count, hold in runs:
   `AppServer.LogOutputTemplate` 渲染真实 `NullReferenceException` 并断言「消息行 + 类型行 + `   at ` 帧」，
   把「诊断链路通」从「等某轮恰好复现 NRE」变成**确定性检查**。变异（`:32` 改回 `Logger.Error(ex.Message, ex)`）
   必须让它变红。**零异常的窗口不能证明诊断链路通**，只能写「未触发，诊断链路未获验证」。
+  **这条前置检查是门禁，不是仪式（fail-closed）**：
+  - 文件缺失 / selftest rc≠0 / 输出里缺少三条断言（消息行、类型行、`   at ` 帧）任一 ⇒ **本轮无效**
+    （`invalid_reason=errorstack_selftest`，rc=2），不得「记录了就继续跑」。
+  - **必须跑本轮实际使用的那个 `BotSrv.exe`**，并在同一份输出里记录该二进制的 **sha256 + mtime**；
+    跑另一份二进制只能证明「某个构建诊断链路通」，不能证明「这一轮通」。
+  - **反例可复核**：把 `src/OpenMir2/LogService.cs:32` 改回 `Logger.Error(ex.Message, ex)` ⇒ 三条断言必红、
+    本门禁必拦。谁改回坏序，门禁先于窗口拦住它（对应自检 3 条 FAIL：`log-error-event-has-exception`、
+    `-type-present`、`-stack-present`）。
 - **门禁运行的三态：PASS / FAIL / INCOMPLETE**（2026-11-15 定）。凡出现下列任一形态，一律判
   **INCOMPLETE**——**既不得计入 PASS，也不得归咎于代码**：
   rustc/cargo 在编译期被外部或系统回收器杀死；进程异常退出且**无任何 `error[...]`/`could not` 诊断行**；
