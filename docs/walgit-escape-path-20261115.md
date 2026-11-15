@@ -70,3 +70,19 @@ CLONE=<路径>
 - 这只解决「签名」；**读**（`collab_read.py`）直接走 git 读本地 refs，不受影响。
 - 克隆里的 `wg collab thread/board` 在 ref 很少时可用（实测 7/7、10/10 `verified=true`），但**不要**在主检出上跑它们。
 - 根治仍需客户端改为批量/增量 fetch（见 `docs/walgit-issue-ref-scale-20261115.md`）。
+
+## 向上游 walgit 仓库报障的专用身份（2026-11-15 建立）
+
+- **何时用**：需要向 walgit 仓库（`http://127.0.0.1:8081/gqf2008/walgit.git`）提交 issue/comment 时。
+  该仓库的 GitHub issues 是**关闭**的，`CONTRIBUTING.md` 明确 issue/PR/评审都走 `refs/collab/*` 签名条目
+  ⇒ **只能**用他们自己的账本报障，而报障必须有身份。
+- **身份**：principal `openmir2-orchestrator`（在 walgit 仓库的 `refs/collab/meta/principals/` 单独注册，
+  与 OpenMir2 仓库里同名 principal **使用不同密钥**，两套注册表互不影响）。
+- **密钥**：`~/.walgit/keys/walgit-d1-reporter.ed25519`（2026-11-15 创建；由 `wg collab join` 在临时克隆内生成后
+  **移动**到规范目录，不是复制）。**它不是通用身份**——**不要**拿它签 OpenMir2 自己的卡。
+- **用法**：低 ref 克隆 walgit 仓库 → `.git/walgit/identity` 写
+  `{"key":"C:/Users/gxh/.walgit/keys/walgit-d1-reporter.ed25519","principal":"openmir2-orchestrator"}` →
+  拷该仓库自己的 `.walgit/board.toml` → 只 fetch 该仓库 `refs/collab/meta/*` → `sign_entry.sh` 签 → 单条 push。
+- **已提交**：thread `walgit-cli-ref-scale-o1`（`wg` 客户端按 ref 数线性劣化）。
+- **注意**：同名 principal 两把钥匙并存是刻意的；**任何签名前先确认当前仓库用的是哪把**
+  （看 `git rev-parse --git-path walgit/identity`）。密钥迁移/轮换一律先报后做。
