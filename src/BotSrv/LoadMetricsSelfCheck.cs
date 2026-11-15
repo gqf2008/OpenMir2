@@ -122,6 +122,10 @@ namespace BotSrv
                 Check("cross-chunk-fixture-splits-pair",
                     chunkLens.Count >= 2 && chunkLens[0] == 1 && chunkLens[1] == 1,
                     $"chunks={string.Join(",", chunkLens)}");
+                LoadMetrics.SelfCheckSetLoginConnBytesBufferSize(1);
+                Check("cross-chunk-buffer-shrunk",
+                    LoadMetrics.SelfCheckLoginConnBytesBufferLength == 1,
+                    $"buffer={LoadMetrics.SelfCheckLoginConnBytesBufferLength}");
                 string crossLegacyPath = Path.Combine(dir, "cross-chunk.legacy.txt");
                 File.WriteAllText(crossLegacyPath, tiny.ToString(), new UTF8Encoding(false));
                 byte[] crossLegacy = File.ReadAllBytes(crossLegacyPath);
@@ -137,6 +141,11 @@ namespace BotSrv
                 }
                 Check("cross-chunk-surrogate-no-throw", crossEx == null,
                     crossEx == null ? "" : crossEx.GetType().Name + ": " + crossEx.Message);
+                Check("cross-chunk-buffer-grew",
+                    crossEx == null && LoadMetrics.SelfCheckLoginConnBytesBufferLength >= crossNew.Length,
+                    crossEx == null
+                        ? $"buffer={LoadMetrics.SelfCheckLoginConnBytesBufferLength} bytes={crossNew.Length}"
+                        : "exception");
                 Check("cross-chunk-surrogate-bytes-equal", crossEx == null && BytesEqual(crossNew, crossLegacy),
                     crossEx == null
                         ? $"bytes={crossNew.Length} sha_new={Sha(crossNew)} sha_legacy={Sha(crossLegacy)}"

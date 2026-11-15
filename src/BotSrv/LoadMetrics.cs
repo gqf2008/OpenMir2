@@ -1023,6 +1023,16 @@ namespace BotSrv
             }
         }
 
+        /// <summary>自检专用：把复用字节缓冲缩到指定大小。跨切口用例必须先缩，模拟「首次为某个
+        /// 文本增长」的定容状态；否则前面的大用例已把缓冲撑大，会掩盖定容缺陷（假绿）。</summary>
+        internal static void SelfCheckSetLoginConnBytesBufferSize(int size)
+        {
+            lock (Sync) { _loginConnBytes = new byte[size < 0 ? 0 : size]; }
+        }
+
+        /// <summary>自检专用：当前复用字节缓冲长度（元断言用）。</summary>
+        internal static int SelfCheckLoginConnBytesBufferLength => _loginConnBytes.Length;
+
         /// <summary>自检专用：在调用线程上执行一次真实落盘（与 Flush 相同的 Sync 锁语义），便于测分配量。</summary>
         internal static void SelfCheckWriteLoginConns()
         {
