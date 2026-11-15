@@ -20,12 +20,19 @@ namespace BotSrv
     ///   ① 帧引用不存在的 actor：SM_FEATURECHANGED 必须静默跳过（不新增 actor、不抛）；
     ///      SM_TURN 等位置帧按 NewActor 语义补建（等价 `PlayScn.pas:3670-3672`）。
     ///   ② ActorList 的 null 槽位：BeginScene 跳过 + 计数，不抛 NRE，其余 actor 照常处理。
-    ///   ③ 循环中途 `MShare.MySelf` 被置 null：BeginScene 用轮首快照，不抛（真实客户端单线程语义）。
+    ///   ③ 循环中途 `MShare.MySelf` 被置 null：BeginScene 用轮首快照，不抛（真实客户端单线程语义）；
+    ///   ④ 删除点被并发改动（自删/下标前移）：跳过且不重复归属 g_FreeActorList；
+    ///   ⑤ 轮内 `ActorList[i]` 读取前被并发缩表：跳过 + 计数，不抛 AOORE（F1）。
+    ///
+    /// 归因精度（F3）：隔离注入 null 槽位复现为 NRE@121、ActorList=null 为 NRE@116；
+    /// 归档里的 :120 是**并发索引读取竞争**的签名，不是 null 槽位的直接证据。
     ///
     /// 入口：`BotSrv.exe --selftest-scene-null`（不启动服务/不连端口）。
     /// 改坏必红：删 BeginScene 的 null 槽位守卫 ⇒ ② 红；把快照改回 `MShare.MySelf` ⇒ ③ 红；
     /// 删 `PlayScene.SendMsg` 的 `if (actor == null) return;` ⇒ ① 红；
-    /// 删删除点的「下标/身份核对」⇒ ④ 红（会误删下一个 actor 或抛 AOORE）。
+    /// 删删除点的「下标/身份核对」⇒ ④ 红（会误删/双归属）；
+    /// 把 FreeActorList 登记挪回核对之前 ⇒ ④c 红（双归属）；
+    /// 删轮内读取的 try/catch ⇒ ⑤ 红（AOORE）。
     /// </summary>
     internal static class SceneGuardSelfCheck
     {
@@ -35,6 +42,7 @@ namespace BotSrv
             public bool NullSelfOnRun;
             public PlayScene SceneRef;
             public bool RemoveSelfOnRun;
+            public Actor RemoveTargetOnRun;
             public TestActor(RobotPlayer robot) : base(robot) { }
             public override void RunFrameAction(int frame) { }
             public override void Run()
@@ -47,6 +55,10 @@ namespace BotSrv
                 if (RemoveSelfOnRun && SceneRef != null)
                 {
                     SceneRef.ActorList.Remove(this);
+                }
+                if (RemoveTargetOnRun != null && SceneRef != null)
+                {
+                    SceneRef.ActorList.Remove(RemoveTargetOnRun);
                 }
             }
         }
@@ -169,8 +181,9 @@ namespace BotSrv
             }
             Check("list-race-index-changed-skipped",
                 !threw && LoadMetrics.SceneListRaceSkippedCount == rb + 1
-                && scene.ActorList.Count == 1 && scene.ActorList[0] == keep,
-                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb} count={scene.ActorList.Count} keep={(scene.ActorList.Count == 1 && scene.ActorList[0] == keep)}");
+                && scene.ActorList.Count == 1 && scene.ActorList[0] == keep
+                && !MShare.g_FreeActorList.Contains(remover),
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb} count={scene.ActorList.Count} free={MShare.g_FreeActorList.Contains(remover)}");
 
             scene.ActorList.Clear();
             MShare.MySelf = self;
@@ -194,6 +207,61 @@ namespace BotSrv
                 !threw && LoadMetrics.SceneListRaceSkippedCount == rb2 + 1
                 && scene.ActorList.Count == 1 && scene.ActorList[0] == keep2,
                 $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb2} count={scene.ActorList.Count}");
+
+            // ④c 下标前移：前面元素被删 ⇒ actor 仍在列表里，旧代码会把它登记进 free-list（双归属）。
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            var shifted = new TestActor(robot) { CurrX = 100, CurrY = 100, m_nRx = 100, m_nRy = 100, RecogId = 987662 };
+            var pusher = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987663, SceneRef = scene, RemoveTargetOnRun = shifted };
+            scene.ActorList.Add(shifted);
+            scene.ActorList.Add(pusher);
+            long rb3 = LoadMetrics.SceneListRaceSkippedCount;
+            threw = false;
+            try
+            {
+                SetMoveTimeNow(scene);
+                scene.BeginScene();
+            }
+            catch (Exception e)
+            {
+                threw = true;
+                Console.WriteLine("   list-race-3 threw: " + e.GetType().Name + " @ " + e.StackTrace);
+            }
+            Check("list-race-shift-skip-no-double-claim",
+                !threw && LoadMetrics.SceneListRaceSkippedCount == rb3 + 1
+                && scene.ActorList.Count == 1 && scene.ActorList[0] == pusher
+                && !MShare.g_FreeActorList.Contains(pusher),
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb3} count={scene.ActorList.Count} still={scene.ActorList.Contains(pusher)} free={MShare.g_FreeActorList.Contains(pusher)}");
+
+            // ⑤ 轮内索引读取（F1）：Count 检查通过后、下标读取前列表被并发缩短 ⇒ 必须跳过并计数，
+            //    不能抛 AOORE。用 SceneIndexRaceHook 做确定性注入（生产为 null = 零行为变化）。
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            scene.ActorList.Add(new TestActor(robot) { CurrX = 100, CurrY = 100, m_nRx = 100, m_nRy = 100, RecogId = 987664 });
+            long ib = LoadMetrics.SceneIndexRaceSkippedCount;
+            PlayScene.SceneIndexRaceHook = sc =>
+            {
+                PlayScene.SceneIndexRaceHook = null;
+                sc.ActorList.RemoveAt(sc.ActorList.Count - 1);
+            };
+            threw = false;
+            try
+            {
+                SetMoveTimeNow(scene);
+                scene.BeginScene();
+            }
+            catch (Exception e)
+            {
+                threw = true;
+                Console.WriteLine("   index-race threw: " + e.GetType().Name + " @ " + e.StackTrace);
+            }
+            finally
+            {
+                PlayScene.SceneIndexRaceHook = null;
+            }
+            Check("index-read-race-skipped",
+                !threw && LoadMetrics.SceneIndexRaceSkippedCount == ib + 1,
+                $"threw={threw} skipped+={LoadMetrics.SceneIndexRaceSkippedCount - ib} want skip+1");
 
             MShare.MySelf = self;
             scene.ActorList.Clear();
