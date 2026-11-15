@@ -33,11 +33,27 @@
 //!
 //! 计时**只观测**：不写实体、不抽 RNG、不改帧面；开启/关闭做的工作逐字节相同
 //! （与 `World` 侧 `tick_profile_is_opt_in_and_behavior_neutral` 同一类判据，见本文件测试）。
+//!
+//! ## 逐 tick「慢 tick」段快照（卡 `openmir2-host-segment-profiler-500`）
+//!
+//! 上面的窗口汇总只有 **50 tick 均值** + 逐 tick **总工作段**样本，回答不了
+//! 「P99 尾部那一个 tick 的耗时花在哪一段」。第二道门 `MIR2_TICK_PROFILE_SLOW_MS=N`
+//! （必须同时 `MIR2_TICK_PROFILE=1`）在**单个 tick 的工作段 ≥ N ms** 时打印该 tick 的
+//! 段构成（段 → ms → 占该 tick 工作段的比例，另附该 tick 内记录的命名子探针）。
+//!
+//! - **默认关闭**：`MIR2_TICK_PROFILE_SLOW_MS` 缺省/`0`/非数字 ⇒ 不做逐 tick 记录，
+//!   `end`/`probe` 只多一次 `Option::is_some` 判别，`end_tick` 不产生快照；
+//! - 开启时每 tick 用一个**复用缓冲**（`Vec::clear` 后 push，容量稳定后不再分配）；
+//! - 快照只打印「慢 tick」，不改变任何阈值/行为，也不进 `HostUnaccounted` 对账口径。
 
 use std::time::Instant;
 
 /// 环境变量门：**只有字面 `"1"`** 才开启（`0`/`true`/空/缺省一律关；与起栈器的 fail-closed 口径同形）。
 pub const ENV_TICK_PROFILE: &str = "MIR2_TICK_PROFILE";
+
+/// **慢 tick 段快照**门（卡 `openmir2-host-segment-profiler-500`）：工作段 ≥ N ms 的 tick
+/// 打印段构成。必须同时 `MIR2_TICK_PROFILE=1`；缺省/`0`/非数字 ⇒ 关（fail-closed）。
+pub const ENV_TICK_PROFILE_SLOW_MS: &str = "MIR2_TICK_PROFILE_SLOW_MS";
 
 /// 汇总窗口（**两臂先到者**）：50 tick 或 10s 墙钟。200ms 节拍下两者等价；
 /// tick 被拖慢（演示栈端到端 ≈ 2000ms）时按墙钟臂切窗，60s 的观测窗内仍有多行汇总。
@@ -73,6 +89,87 @@ pub struct HostTickProfile {
     work_samples: Vec<u64>,
     /// 自开启起累计完成的 tick 数（诊断用）。
     total_ticks: u64,
+    /// **慢 tick 快照门**：工作段 ≥ 该 ns 时输出段构成；`None` = 关（缺省）。
+    /// 只有 `enabled && MIR2_TICK_PROFILE_SLOW_MS=N>0` 才为 `Some`。
+    slow_threshold_ns: Option<u64>,
+    /// 本 tick 的**段**记录（仅在慢 tick 门开启时填充；`end_tick` 末尾 `clear` 复用容量）。
+    tick_rows: Vec<(&'static str, u64)>,
+    /// 本 tick 的**命名子探针**记录（同上）。
+    tick_probe_rows: Vec<(&'static str, u64)>,
+    /// 最近一个慢 tick 的快照（`end_tick` 生成，`sim_loop` 每 tick 用 [`Self::take_slow_tick`] 取走）。
+    pending_slow: Option<SlowTick>,
+}
+
+/// 单个慢 tick 的段快照（由 [`HostTickProfile::end_tick`] 在工作段 ≥ 阈值时生成，
+/// [`HostTickProfile::take_slow_tick`] 取走）。
+///
+/// 打印由调用方（`sim_loop`）通过 [`SlowTick::log`] 完成——`end_tick` 本身不写日志，
+/// 便于单测直接断言快照内容（而不是抓 stderr）。
+#[derive(Debug, Clone, Default)]
+pub struct SlowTick {
+    /// 1-based tick 序号（`total_ticks + 1`）。
+    pub tick: u64,
+    /// 整 tick 墙钟（含 sleep）。
+    pub total_ns: u64,
+    /// 本 tick 的 `HostSleep`。
+    pub sleep_ns: u64,
+    /// 工作段 = `total_ns − sleep_ns`（判阈值的口径）。
+    pub work_ns: u64,
+    /// 未分段的残差（`total − Σ段`，含 sleep；与窗口 `HostUnaccounted` 同口径）。
+    pub unaccounted_ns: u64,
+    /// 本 tick 各段 `(段名, ns)`（含 `HostSleep`，调用方自己排除）。
+    pub segments: Vec<(&'static str, u64)>,
+    /// 本 tick 内记录的命名子探针 `(名, ns)`（窗口汇总口径之外的逐 tick 值）。
+    pub probes: Vec<(&'static str, u64)>,
+}
+
+impl SlowTick {
+    /// 打印成一行 `[TICKPROF] SLOW …`：段按耗时降序，百分比以**工作段**为分母。
+    pub fn log(&self) {
+        let work = self.work_ns.max(1) as f64;
+        let mut segs: Vec<(&'static str, u64)> = self
+            .segments
+            .iter()
+            .copied()
+            .filter(|(n, _)| *n != "HostSleep")
+            .collect();
+        segs.sort_by_key(|(_, ns)| std::cmp::Reverse(*ns));
+        let mut line = String::new();
+        for (name, ns) in &segs {
+            line.push_str(&format!(
+                " {name}={:.3}({:.1}%)",
+                *ns as f64 / 1e6,
+                *ns as f64 / work * 100.0
+            ));
+        }
+        let mut probes = self.probes.clone();
+        probes.sort_by_key(|(_, ns)| std::cmp::Reverse(*ns));
+        let probe_text = if probes.is_empty() {
+            String::new()
+        } else {
+            let mut s = String::from(" | probes");
+            for (name, ns) in &probes {
+                s.push_str(&format!(
+                    " {name}={:.3}({:.1}%)",
+                    *ns as f64 / 1e6,
+                    *ns as f64 / work * 100.0
+                ));
+            }
+            s
+        };
+        crate::glog!(
+            "DBG",
+            "[TICKPROF] SLOW tick#{} work={:.3}ms total={:.3}ms sleep={:.3}ms unacct={:.3}ms ({:.1}%){}{}",
+            self.tick,
+            self.work_ns as f64 / 1e6,
+            self.total_ns as f64 / 1e6,
+            self.sleep_ns as f64 / 1e6,
+            self.unaccounted_ns as f64 / 1e6,
+            self.unaccounted_ns as f64 / work * 100.0,
+            line,
+            probe_text
+        );
+    }
 }
 
 /// 逐 tick 样本上限（每窗口最多保留这么多，丢最旧）。生产窗口是 50 tick；取 256 让
@@ -128,15 +225,74 @@ pub fn enabled_from(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+/// 慢 tick 阈值（ms）→ ns：只接受**纯十进制正整数**（`"0"`/空/空白/负数/小数/非数字 ⇒ `None`）。
+///
+/// 与 [`enabled_from`] 同为 fail-closed：解析不了就关，不猜默认值。
+#[must_use]
+pub fn slow_threshold_ns_from(value: Option<&str>) -> Option<u64> {
+    let text = value?;
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let ms: u64 = text.parse().ok()?;
+    if ms == 0 {
+        return None;
+    }
+    ms.checked_mul(1_000_000)
+}
+
 impl HostTickProfile {
     /// 读环境变量建计时器（**整个进程只读一次**；tick 路径上不再读环境）。
+    ///
+    /// 慢 tick 快照门（`MIR2_TICK_PROFILE_SLOW_MS`）**只有主门开启时才解析**——主门关闭时
+    /// 快照无从谈起（没有段计时），阈值恒 `None`。
     #[must_use]
     pub fn from_env() -> Self {
         let value = std::env::var(ENV_TICK_PROFILE).ok();
+        let enabled = enabled_from(value.as_deref());
+        let slow = if enabled {
+            let slow_value = std::env::var(ENV_TICK_PROFILE_SLOW_MS).ok();
+            slow_threshold_ns_from(slow_value.as_deref())
+        } else {
+            None
+        };
         Self {
-            enabled: enabled_from(value.as_deref()),
+            enabled,
+            slow_threshold_ns: slow,
             ..Self::default()
         }
+    }
+
+    /// 慢 tick 快照门是否开启（阈值 ns）。
+    #[must_use]
+    #[inline]
+    pub fn slow_threshold_ns(&self) -> Option<u64> {
+        self.slow_threshold_ns
+    }
+
+    /// **测量 harness 专用**：同 [`Self::with_enabled`]，但带慢 tick 阈值（ns）。
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_slow_threshold_ns(threshold_ns: u64) -> Self {
+        Self {
+            enabled: true,
+            slow_threshold_ns: Some(threshold_ns),
+            ..Self::default()
+        }
+    }
+
+    /// 本 tick 已记录的段数（测试用：验证关闭态不落行）。
+    #[cfg(test)]
+    #[must_use]
+    pub fn tick_rows(&self) -> &[(&'static str, u64)] {
+        &self.tick_rows
+    }
+
+    /// 本 tick 已记录的子探针数（测试用）。
+    #[cfg(test)]
+    #[must_use]
+    pub fn tick_probe_rows(&self) -> &[(&'static str, u64)] {
+        &self.tick_probe_rows
     }
 
     /// 门控是否开启。
@@ -185,6 +341,10 @@ impl HostTickProfile {
         }
         self.add(name, ns);
         self.tick_sum_ns = self.tick_sum_ns.saturating_add(ns);
+        // 慢 tick 快照：只有第二道门开启时才保留逐 tick 行（关闭态一次 `Option` 判别）。
+        if self.slow_threshold_ns.is_some() {
+            self.tick_rows.push((name, ns));
+        }
     }
 
     /// 命名**子探针**终点。与 [`Self::end`] 同样的关闭态口径（`at == None` ⇒ 一次 `Option`
@@ -201,6 +361,9 @@ impl HostTickProfile {
             }
             None => self.probes.push((name, ns, 1)),
         }
+        if self.slow_threshold_ns.is_some() {
+            self.tick_probe_rows.push((name, ns));
+        }
     }
 
     /// 整 tick 终点：记 `HostTickTotal` + 残差 `HostUnaccounted`，并推进窗口计数。
@@ -208,26 +371,55 @@ impl HostTickProfile {
     /// **卡 `openmir2-simmonsterai-profile`**：同时把**本 tick 工作段**（`total − HostSleep`）
     /// 追加到 `work_samples`（tick 级分位数；不是 50-tick 桶近似）。超过 [`SAMPLE_CAP`] 丢最旧。
     ///
-    /// 关闭时：一次 `Option` 判别 ⇒ 直接返回。
+    /// **卡 `openmir2-host-segment-profiler-500`**：慢 tick 门开启且工作段 ≥ 阈值时，把本 tick
+    /// 的段快照暂存到 `pending_slow`（由 [`Self::take_slow_tick`] 取走打印）；否则什么都不留
+    /// 并清空逐 tick 缓冲。关闭态：一次 `Option` 判别 ⇒ 直接返回（不取时钟、不分配）。
+    ///
+    /// 返回值是 `()`：`end_tick` 的既有调用点（含测量 harness）**不需要改**；慢 tick 输出是
+    /// 可选的旁路，不取走也不影响窗口计数。
     #[inline]
     pub fn end_tick(&mut self, at: Option<Instant>) {
         let Some(at) = at else { return };
         let total = nanos_since(at);
         self.add("HostTickTotal", total);
         let sum = self.tick_sum_ns;
+        let unaccounted = total.saturating_sub(sum);
         if total > sum {
             self.add("HostUnaccounted", total - sum);
         }
-        let work = total.saturating_sub(self.tick_sleep_ns);
+        let sleep = self.tick_sleep_ns;
+        let work = total.saturating_sub(sleep);
         if self.work_samples.len() >= SAMPLE_CAP {
             self.work_samples.remove(0);
         }
         self.work_samples.push(work);
+        let tick = self.total_ticks + 1;
         self.tick_sleep_ns = 0;
         self.tick_sum_ns = 0;
         self.window_ticks += 1;
         self.window_ns = self.window_ns.saturating_add(total);
         self.total_ticks += 1;
+        self.pending_slow = match self.slow_threshold_ns {
+            Some(threshold) if work >= threshold => Some(SlowTick {
+                tick,
+                total_ns: total,
+                sleep_ns: sleep,
+                work_ns: work,
+                unaccounted_ns: unaccounted,
+                segments: std::mem::take(&mut self.tick_rows),
+                probes: std::mem::take(&mut self.tick_probe_rows),
+            }),
+            _ => None,
+        };
+        // 未构成慢 tick（或没有慢 tick 门）⇒ 本 tick 行必须丢弃，不能跨 tick 累积。
+        self.tick_rows.clear();
+        self.tick_probe_rows.clear();
+    }
+
+    /// 取走最近一个慢 tick 的快照（每 tick 由 `sim_loop` 调用一次；没有 ⇒ `None`）。
+    #[inline]
+    pub fn take_slow_tick(&mut self) -> Option<SlowTick> {
+        self.pending_slow.take()
     }
 
     /// **卡 `openmir2-simmonsterai-profile`**：逐 tick 工作段样本（ns，旧→新）。测量 harness 用。
@@ -574,6 +766,8 @@ mod tests {
         for _ in 0..100 {
             p.end("HostInbound", None);
             p.end_tick(None);
+            assert!(p.tick_rows().is_empty(), "关闭态不得保留逐 tick 行");
+            assert!(p.take_slow_tick().is_none(), "关闭态不得产生慢 tick 快照");
         }
         assert!(p.rows.is_empty(), "关闭时不得累计任何段");
         assert_eq!(p.window_ticks, 0);
@@ -637,6 +831,117 @@ mod tests {
         }
     }
 
+    /// **慢 tick 阈值解析**：只接受纯十进制正整数（ms → ns）；`0`/空/空白/符号/小数/非数字/
+    /// 溢出一律关（fail-closed）。
+    ///
+    /// 变异：把 `if ms == 0` 删掉 ⇒ `Some("0")` 得到 `Some(0)` ⇒ 每秒 tick 都打印 ⇒ 红；
+    /// 把 `checked_mul` 改成 `*` ⇒ 溢出 panic/回绕 ⇒ 红。
+    #[test]
+    fn slow_threshold_parse_is_fail_closed() {
+        assert_eq!(slow_threshold_ns_from(Some("1")), Some(1_000_000));
+        assert_eq!(slow_threshold_ns_from(Some("100")), Some(100_000_000));
+        for v in [
+            Some("0"),
+            Some(""),
+            Some(" 100"),
+            Some("100 "),
+            Some("-1"),
+            Some("+1"),
+            Some("1.5"),
+            Some("abc"),
+            None,
+        ] {
+            assert_eq!(slow_threshold_ns_from(v), None, "{v:?} 必须关闭慢 tick 门");
+        }
+        assert_eq!(
+            slow_threshold_ns_from(Some("18446744073709551615")),
+            None,
+            "ms→ns 溢出必须关（checked_mul）"
+        );
+    }
+
+    /// **慢 tick 关闭态零开销牙**：主门开启但 `MIR2_TICK_PROFILE_SLOW_MS` 未设
+    /// （`slow_threshold_ns == None`）时，`end`/`probe` 不得保留逐 tick 行，
+    /// `end_tick` 不得产生快照。
+    ///
+    /// 变异：删掉 `end` 里的 `if self.slow_threshold_ns.is_some()` 守卫（无条件 push）⇒
+    /// 第一个 tick 内 `tick_rows` 非空 ⇒ 红；删掉 `probe` 的同名守卫 ⇒ `tick_probe_rows` 非空 ⇒ 红；
+    /// 把 `end_tick` 的 `match` 改成恒 `Some(...)` ⇒ `take_slow_tick` 非 None ⇒ 红。
+    #[test]
+    fn slow_gate_off_records_no_per_tick_rows() {
+        let mut p = HostTickProfile::with_enabled(true);
+        for _ in 0..10 {
+            let slot = p.begin().expect("开启态");
+            let t = p.begin().expect("开启态");
+            p.end("HostInbound", Some(t));
+            assert!(
+                p.tick_rows().is_empty(),
+                "慢 tick 门关闭时不得保留逐 tick 段行"
+            );
+            let t = p.begin().expect("开启态");
+            p.probe("HostAoiAppearSelect", Some(t));
+            assert!(
+                p.tick_probe_rows().is_empty(),
+                "慢 tick 门关闭时不得保留逐 tick 子探针行"
+            );
+            p.end_tick(Some(slot));
+            assert!(p.take_slow_tick().is_none(), "慢 tick 门关闭时不得产生快照");
+        }
+    }
+
+    /// **慢 tick 快照内容**：只有工作段 ≥ 阈值的 tick 产生快照；段与子探针都带进快照，
+    /// 且**未达阈值的 tick 行必须清空**（不跨 tick 累积）。
+    ///
+    /// 变异：把 `_ => None` 分支换成恒 `Some` ⇒ 第一个快 tick 也出快照 ⇒ 红；
+    /// 把 `tick_rows.clear()` 删掉 ⇒ 第二个 tick 的快照里混入上一个 tick 的段 ⇒ 红。
+    #[test]
+    fn slow_gate_snapshot_only_over_threshold() {
+        // 阈值 1s：快 tick 远不到 ⇒ 无快照，且逐 tick 行被清空。
+        let mut p = HostTickProfile::with_slow_threshold_ns(1_000_000_000);
+        let slot = p.begin().expect("开启态");
+        let t = p.begin().expect("开启态");
+        p.end("HostInbound", Some(t));
+        let t = p.begin().expect("开启态");
+        p.probe("HostAoiAppearSelect", Some(t));
+        p.end_tick(Some(slot));
+        assert!(p.take_slow_tick().is_none(), "未达阈值不得产生慢 tick 快照");
+        assert!(
+            p.tick_rows().is_empty(),
+            "未产生快照的 tick 行必须清空（不跨 tick 累积）"
+        );
+        assert!(p.tick_probe_rows().is_empty());
+
+        // 阈值 1ms：睡 3ms 的段 ⇒ 工作段 ≥ 1ms ⇒ 有快照。
+        let mut p = HostTickProfile::with_slow_threshold_ns(1_000_000);
+        let slot = p.begin().expect("开启态");
+        let t = p.begin().expect("开启态");
+        std::thread::sleep(Duration::from_millis(3));
+        p.end("HostInbound", Some(t));
+        let t = p.begin().expect("开启态");
+        p.probe("HostAoiAppearSelect", Some(t));
+        p.end_tick(Some(slot));
+        let slow = p.take_slow_tick().expect("慢 tick 必须产生快照");
+        assert_eq!(slow.tick, 1, "1-based tick 序号");
+        assert!(slow.work_ns >= 1_000_000, "工作段必须 ≥ 阈值");
+        assert!(slow.total_ns >= slow.work_ns, "total 必须 ≥ work");
+        assert!(
+            slow.segments
+                .iter()
+                .any(|(n, ns)| *n == "HostInbound" && *ns >= 1_000_000),
+            "计时段必须进快照（且带真实 ns）"
+        );
+        assert!(
+            slow.probes.iter().any(|(n, _)| *n == "HostAoiAppearSelect"),
+            "命名子探针必须进快照"
+        );
+        assert_eq!(p.tick_rows().len(), 0, "快照取走后缓冲必须清空");
+        assert_eq!(p.tick_probe_rows().len(), 0);
+        assert!(
+            p.take_slow_tick().is_none(),
+            "快照只能取走一次（不重复打印）"
+        );
+    }
+
     /// **开启态累计 + 窗口**：段累计与调用次数、整 tick 残差、窗口取走与清零。
     #[test]
     fn enabled_profile_accumulates_and_takes_window() {
@@ -652,6 +957,7 @@ mod tests {
             p.end("HostInbound", seg);
             if i == 0 {
                 p.end_tick(tick);
+                assert!(p.take_slow_tick().is_none(), "慢 tick 门缺省关闭");
                 assert_eq!(p.window_ticks, 1);
                 assert!(!p.due(), "1 tick 不得触发窗口");
                 // 首轮：HostInbound 之外的耗时记进残差。
@@ -662,6 +968,7 @@ mod tests {
                 continue;
             }
             p.end_tick(tick);
+            assert!(p.take_slow_tick().is_none(), "慢 tick 门缺省关闭");
         }
         assert!(p.due(), "满 {REPORT_TICKS} tick 必须到期");
         let w = p.take_window().expect("窗口必须非空");

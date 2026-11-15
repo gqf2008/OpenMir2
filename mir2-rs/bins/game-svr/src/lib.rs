@@ -26189,6 +26189,16 @@ fn sim_loop(
             "TICK_PROFILE 开启：宿主段 + World 探针（MIR2_TICK_PROFILE=1；每 {} tick 汇总一行）",
             tick_profile::REPORT_TICKS
         );
+        // **卡 `openmir2-host-segment-profiler-500`**：慢 tick 段快照（第二道门）是否开启，
+        // 起栈时打一行明示阈值——没有这行就无法从日志区分「没开」与「没有慢 tick」。
+        if let Some(threshold_ns) = host_prof.slow_threshold_ns() {
+            glog!(
+                "INF",
+                "TICK_PROFILE 慢 tick 段快照开启：工作段 ≥ {:.0} ms 的 tick 逐打印段构成（{}）",
+                threshold_ns as f64 / 1e6,
+                tick_profile::ENV_TICK_PROFILE_SLOW_MS
+            );
+        }
     }
     // AOI 出现帧累计读数（按 `chr_name`）：root 2026-10-14 要求诊断行同时打印「可见集大小与下发帧数」。
     // 只读观测：不参与任何模拟/出帧语义。
@@ -29642,7 +29652,14 @@ fn sim_loop(
             std::thread::sleep(d);
         }
         host_prof.end("HostSleep", t);
+        // **卡 `openmir2-host-segment-profiler-500`**：第二道门（`MIR2_TICK_PROFILE_SLOW_MS=N`）
+        // 开启且本 tick 工作段 ≥ N ms ⇒ 打印该 tick 的段构成（哪一段吃掉了尾部 tick）。
+        // 关闭态：`end_tick` 在段计时前就返回，`take_slow_tick` 只做一次 `Option::take`
+        // 得到 `None`——不取时钟、不分配、不打日志。
         host_prof.end_tick(slot);
+        if let Some(slow) = host_prof.take_slow_tick() {
+            slow.log();
+        }
         if host_prof.due() {
             let delta = tick_profile::world_delta(world.tick_profile(), &mut world_prof_last);
             if let Some(window) = host_prof.take_window() {
