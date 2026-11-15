@@ -41,8 +41,11 @@
 //! （必须同时 `MIR2_TICK_PROFILE=1`）在**单个 tick 的工作段 ≥ N ms** 时打印该 tick 的
 //! 段构成（段 → ms → 占该 tick 工作段的比例，另附该 tick 内记录的命名子探针）。
 //!
-//! - **默认关闭**：`MIR2_TICK_PROFILE_SLOW_MS` 缺省/`0`/非数字 ⇒ 不做逐 tick 记录，
-//!   `end`/`probe` 只多一次 `Option::is_some` 判别，`end_tick` 不产生快照；
+//! - **默认关闭**：`MIR2_TICK_PROFILE_SLOW_MS` 缺省/空串 ⇒ 静默关；显式 `0` ⇒ 关但打一条可审计
+//!   `DBG`；**非法值 ⇒ 关 + 一条含「变量名 + 原文值」的 `WRN`，不杀进程**（诊断子门口径，
+//!   理由与对照见 `docs/tick-profile-slow-gate-20261116.md`）。关闭时 `end`/`probe` 只多一次
+//!   `Option::is_some` 判别，`end_tick` 不产生快照；
+//! - 值解析先 `trim()`（与 `clock.rs`/`seed.rs` 的「前后空白合法」同口径）：`" 100 "` = 100ms；
 //! - 开启时每 tick 用一个**复用缓冲**（`Vec::clear` 后 push，容量稳定后不再分配）；
 //! - 快照只打印「慢 tick」，不改变任何阈值/行为，也不进 `HostUnaccounted` 对账口径。
 
@@ -225,12 +228,14 @@ pub fn enabled_from(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
-/// 慢 tick 阈值（ms）→ ns：只接受**纯十进制正整数**（`"0"`/空/空白/负数/小数/非数字 ⇒ `None`）。
+/// 慢 tick 阈值（ms）→ ns：**先 `trim()` 再解析**（口径对齐 `clock.rs::parse_clock` /
+/// `seed.rs::parse_seed` 的「前后空白合法」），只接受纯十进制正整数。
 ///
-/// 与 [`enabled_from`] 同为 fail-closed：解析不了就关，不猜默认值。
+/// `None`/空串/空白串/`0`/负数/小数/非数字/ms→ns 溢出 ⇒ `None`（本函数只回答「是不是合法阈值」；
+/// 「非法」与「显式关闭」的区分由 [`slow_gate_from_env_value`] 负责）。
 #[must_use]
 pub fn slow_threshold_ns_from(value: Option<&str>) -> Option<u64> {
-    let text = value?;
+    let text = value?.trim();
     if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
         return None;
     }
@@ -241,18 +246,108 @@ pub fn slow_threshold_ns_from(value: Option<&str>) -> Option<u64> {
     ms.checked_mul(1_000_000)
 }
 
+/// 慢 tick 诊断子门的环境判定结果（纯函数，便于单测；日志由 [`HostTickProfile::from_env`] 打）。
+///
+/// **口径**（见 `docs/tick-profile-slow-gate-20261116.md`）：
+/// - 诊断子门**不因可选开关 typo 杀进程**，但**绝不静默降级**：非法值 ⇒ 门关闭 + 一条
+///   含「变量名 + 原文值」的 `WRN`（与 `rng_trace` 的 `[ERROR]+trace 关闭`同族）；
+/// - 行为性注入（`MIR2_CLOCK_MS` / `MIR2_RNG_SEED`）非法 ⇒ `Err`/fail-closed 退出，因为
+///   带着默认值跑会产出**看似有效**的错误结果；诊断子门默认关、不影响任何行为，故降一级。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlowGateEnv {
+    /// 变数未设或空串 ⇒ 静默关（与 `parse_clock` 的 `None`/`""` 同口径）。
+    Unset,
+    /// 显式 `0` ⇒ 关，但打一条可审计的 `DBG`（不当作非法）。
+    ExplicitOff,
+    /// 合法正整数毫秒 ⇒ 开（值为 ns）。
+    On(u64),
+    /// 非法值（含原始文本）⇒ 关 + `WRN`。
+    Invalid(String),
+}
+
+impl SlowGateEnv {
+    /// 门是否开（只有 [`Self::On`] 给出阈值）。
+    #[must_use]
+    pub fn threshold_ns(&self) -> Option<u64> {
+        match self {
+            Self::On(ns) => Some(*ns),
+            _ => None,
+        }
+    }
+
+    /// 非法值 ⇒ 必须用 `WRN` 打出的文案（含变量名与**原文值**，机器可抓）。
+    #[must_use]
+    pub fn warn_message(&self) -> Option<String> {
+        match self {
+            Self::Invalid(raw) => Some(format!(
+                "{ENV_TICK_PROFILE_SLOW_MS}={raw:?} 非法（期望正整数毫秒；空白会被 trim；0=显式关闭），慢 tick 快照已关闭"
+            )),
+            _ => None,
+        }
+    }
+
+    /// 显式 `0` ⇒ 可审计的 `DBG` 文案（不当作非法，也不静默）。
+    #[must_use]
+    pub fn notice_message(&self) -> Option<String> {
+        match self {
+            Self::ExplicitOff => Some(format!(
+                "{ENV_TICK_PROFILE_SLOW_MS}=0 显式关闭慢 tick 快照（不是非法值）"
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// 按环境变量原文判定慢 tick 子门（纯函数）。
+///
+/// - `None` / `Some("")` ⇒ [`SlowGateEnv::Unset`]（与 `clock.rs` 的空串口径一致）；
+/// - 只含空白的串 ⇒ [`SlowGateEnv::Invalid`]（`clock.rs` 对空白串也走 `parse` 失败）；
+/// - `trim()` 后为 `0` ⇒ [`SlowGateEnv::ExplicitOff`]；
+/// - `trim()` 后是合法正整数毫秒 ⇒ [`SlowGateEnv::On`]；
+/// - 其余 ⇒ [`SlowGateEnv::Invalid`]（保留**未 trim 的原文**供日志抓取）。
+#[must_use]
+pub fn slow_gate_from_env_value(value: Option<&str>) -> SlowGateEnv {
+    let Some(raw) = value else {
+        return SlowGateEnv::Unset;
+    };
+    if raw.is_empty() {
+        return SlowGateEnv::Unset;
+    }
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return SlowGateEnv::Invalid(raw.to_string());
+    }
+    if trimmed == "0" {
+        return SlowGateEnv::ExplicitOff;
+    }
+    match slow_threshold_ns_from(Some(raw)) {
+        Some(ns) => SlowGateEnv::On(ns),
+        None => SlowGateEnv::Invalid(raw.to_string()),
+    }
+}
+
 impl HostTickProfile {
     /// 读环境变量建计时器（**整个进程只读一次**；tick 路径上不再读环境）。
     ///
     /// 慢 tick 快照门（`MIR2_TICK_PROFILE_SLOW_MS`）**只有主门开启时才解析**——主门关闭时
     /// 快照无从谈起（没有段计时），阈值恒 `None`。
+    ///
+    /// 非法值 ⇒ **启动时一条 `WRN`（含变量名+原文）+ 门保持关闭，不杀进程**（诊断子门口径，
+    /// 见 [`SlowGateEnv`] 与 `docs/tick-profile-slow-gate-20261116.md`）。
     #[must_use]
     pub fn from_env() -> Self {
         let value = std::env::var(ENV_TICK_PROFILE).ok();
         let enabled = enabled_from(value.as_deref());
         let slow = if enabled {
             let slow_value = std::env::var(ENV_TICK_PROFILE_SLOW_MS).ok();
-            slow_threshold_ns_from(slow_value.as_deref())
+            let gate = slow_gate_from_env_value(slow_value.as_deref());
+            if let Some(msg) = gate.warn_message() {
+                crate::glog!("WRN", "{msg}");
+            }
+            if let Some(msg) = gate.notice_message() {
+                crate::glog!("DBG", "{msg}");
+            }
+            gate.threshold_ns()
         } else {
             None
         };
@@ -831,20 +926,25 @@ mod tests {
         }
     }
 
-    /// **慢 tick 阈值解析**：只接受纯十进制正整数（ms → ns）；`0`/空/空白/符号/小数/非数字/
-    /// 溢出一律关（fail-closed）。
+    /// **慢 tick 阈值解析**：先 `trim()`（对齐 `clock.rs`/`seed.rs` 的前后空白合法），再只接受
+    /// 纯十进制正整数（ms → ns）；`0`/空/空白串/符号/小数/非数字/溢出一律 `None`。
     ///
     /// 变异：把 `if ms == 0` 删掉 ⇒ `Some("0")` 得到 `Some(0)` ⇒ 每秒 tick 都打印 ⇒ 红；
-    /// 把 `checked_mul` 改成 `*` ⇒ 溢出 panic/回绕 ⇒ 红。
+    /// 把 `checked_mul` 改成 `*` ⇒ 溢出 panic/回绕 ⇒ 红；
+    /// 删掉 `trim()` ⇒ `" 100"` 从 `Some` 变 `None` ⇒ 红。
     #[test]
-    fn slow_threshold_parse_is_fail_closed() {
+    fn slow_threshold_parse_trims_then_fail_closed() {
         assert_eq!(slow_threshold_ns_from(Some("1")), Some(1_000_000));
         assert_eq!(slow_threshold_ns_from(Some("100")), Some(100_000_000));
+        assert_eq!(
+            slow_threshold_ns_from(Some(" 100 ")),
+            Some(100_000_000),
+            "前后空白必须被 trim（与 clock/seed 同口径）"
+        );
         for v in [
             Some("0"),
             Some(""),
-            Some(" 100"),
-            Some("100 "),
+            Some("   "),
             Some("-1"),
             Some("+1"),
             Some("1.5"),
@@ -858,6 +958,95 @@ mod tests {
             None,
             "ms→ns 溢出必须关（checked_mul）"
         );
+    }
+
+    /// **非法值不静默降级**（复审 P2）：非法原文 ⇒ 门关 + 必须给出含「变量名 + 原文值」的 WARN；
+    /// 未设/空串 ⇒ 静默关（与 `clock.rs` 的 `None`/`""` 同口径）。
+    ///
+    /// 变异：把 `slow_gate_from_env_value` 末尾的 `None => SlowGateEnv::Invalid(raw.to_string())`
+    /// 改成 `None => SlowGateEnv::Unset`（删掉 WARN 分支）⇒ 本用例红。
+    #[test]
+    fn slow_gate_invalid_value_warns_and_stays_closed() {
+        for raw in ["10O", "1.5", "-1", "+1", "100ms", "   ", "０"] {
+            let gate = slow_gate_from_env_value(Some(raw));
+            assert_eq!(
+                gate.threshold_ns(),
+                None,
+                "{raw:?} 非法值必须关闭慢 tick 快照（不杀进程、不开门）"
+            );
+            let warn = gate.warn_message().expect("非法值必须给出 WARN 文案");
+            assert!(
+                warn.contains(ENV_TICK_PROFILE_SLOW_MS),
+                "WARN 必须含变量名：{warn}"
+            );
+            assert!(warn.contains(raw), "WARN 必须含原文值：{warn}");
+            assert!(
+                gate.notice_message().is_none(),
+                "非法值不得混入 0 的 DBG 文案"
+            );
+        }
+        // 未设 / 空串：与 clock/seed 同口径 —— 静默关（不可审计，但也不算非法）。
+        for v in [None, Some("")] {
+            let gate = slow_gate_from_env_value(v);
+            assert_eq!(gate, SlowGateEnv::Unset, "{v:?} 必须是 Unset");
+            assert!(gate.warn_message().is_none());
+            assert!(gate.notice_message().is_none());
+        }
+    }
+
+    /// **显式 `0` = 关闭但不是非法**：门关、无 WARN、有一条含变量名的可审计 DBG 文案。
+    ///
+    /// 变异：把 `if trimmed == "0"` 分支删掉 ⇒ 落到 `_ => Invalid` ⇒ WARN 非空 ⇒ 红。
+    #[test]
+    fn slow_gate_zero_is_explicit_off_with_audit_line() {
+        let gate = slow_gate_from_env_value(Some("0"));
+        assert_eq!(gate.threshold_ns(), None, "0 必须关门");
+        assert!(gate.warn_message().is_none(), "0 不是非法值，不得 WARN");
+        let notice = gate.notice_message().expect("0 必须有可审计文案");
+        assert!(
+            notice.contains(ENV_TICK_PROFILE_SLOW_MS),
+            "审计文案必须含变量名：{notice}"
+        );
+        assert_eq!(
+            slow_gate_from_env_value(Some(" 0 ")),
+            SlowGateEnv::ExplicitOff,
+            "trim 后 0 也算显式关闭"
+        );
+    }
+
+    /// **空白与 clock/seed 对齐**：`" 100 "` ⇒ `On(100ms)`；仅空白 ⇒ `Invalid`（`clock.rs` 对
+    /// 空白串同样走 parse 失败，只有**空串**才当未设）。
+    ///
+    /// 变异：删掉 `slow_threshold_ns_from` 的 `trim()` ⇒ `" 100 "` 变 `Invalid` ⇒ 红。
+    #[test]
+    fn slow_gate_trims_like_clock_and_seed() {
+        let gate = slow_gate_from_env_value(Some(" 100 "));
+        assert_eq!(gate, SlowGateEnv::On(100_000_000));
+        assert_eq!(gate.threshold_ns(), Some(100_000_000));
+        assert!(gate.warn_message().is_none());
+        assert!(matches!(
+            slow_gate_from_env_value(Some(" \t ")),
+            SlowGateEnv::Invalid(_)
+        ));
+    }
+
+    /// **启动路径（`from_env`）实际打 WARN**：非法值 ⇒ 门关；`--nocapture` 下可见实际输出行
+    /// `… [WRN] MIR2_TICK_PROFILE_SLOW_MS="10O" 非法（…），慢 tick 快照已关闭`。
+    ///
+    /// 本用例只断言「门关」（日志内容由 `slow_gate_invalid_value_warns_and_stays_closed` 钉住，
+    /// 删 WARN 分支会让那条用例红）；这里用环境变量走真实入口，作为人工/脚本证据。
+    #[test]
+    fn from_env_warns_on_invalid_slow_value() {
+        std::env::set_var(ENV_TICK_PROFILE, "1");
+        std::env::set_var(ENV_TICK_PROFILE_SLOW_MS, "10O");
+        let p = HostTickProfile::from_env();
+        // 先恢复环境再断言，避免用例失败时把 env 留给同进程的其它用例。
+        std::env::remove_var(ENV_TICK_PROFILE_SLOW_MS);
+        std::env::remove_var(ENV_TICK_PROFILE);
+        let enabled = p.enabled();
+        let slow = p.slow_threshold_ns();
+        assert!(enabled, "主门=1 必须开启");
+        assert!(slow.is_none(), "非法 SLOW 值必须关门（不杀进程）");
     }
 
     /// **慢 tick 关闭态零开销牙**：主门开启但 `MIR2_TICK_PROFILE_SLOW_MS` 未设
