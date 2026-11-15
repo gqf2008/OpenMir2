@@ -307,12 +307,16 @@ T10c-3 之后：`SimMonsterAi` **6.98–7.11ms**、`World::tick` **13.30ms / 1.2
   由卡 `openmir2-botsrv-errorstack-diagnosable` 修复（复审 approve）。
   ⇒ **在 errorstack 修复合入前，任何 `internal_errors>0` 的轮次都无法从 RED 走出**（这是「必须做」的最强理由）。
 
-  **500 档已出现 GREEN 的合法轮次（2026-11-15 21:16，合入 errorstack `4bde30f13` + pool `05a0e4815` 之后）**：
+  **500 档：360s 有效轮次本轮 0 异常、判 GREEN；但同族树另一轮 360s 观测到 1 次未登记 `recv_packet_null`（判 RED）
+  ⇒ 偶发错误存在，稳定性未达「零错误通过」**（卡 `openmir2-botsrv-recv-null-residual` 未闭）。
+  具体（2026-11-15 21:16，合入 errorstack `4bde30f13` + pool `05a0e4815` 之后）：
   `verdict=GREEN`、`rc=0`、`in_world=500/500`、`HoldSec=360`、`conclusion_valid=true`；
   tick P50/P90/P99/max = **15/16/32/94ms**（稳态 ≥201ms = 0）；`internal_errors=0`（四元组全 0，
   即本轮未触发异常、诊断链路未获验证——**零异常 ≠ 链路已验证**）；`scene_actor_ejected=4049`（10.78/s，末 120s 17.77/s）。
   归档 `E:/UserFleet/load-360-errorstack-20261115-2116/`（清单无 BOM、7/7 verify rc=0）。
-  ⇒ 500 档「RED」的表述仅限于**错误非零的轮次**，不代表该档位不可用；本轮的 GREEN 是 hold=360 的合法结论。
+  ⇒ 本轮的 GREEN 只说明**这一轮**在 hold=360 下判据全过，**不等于 500 档稳定通过**：同一棵树
+  前一轮（`E:/UserFleet/load-actorpool500-20261115-rust-fix360b/`）有 1 次 `recv_packet_null`，判 RED。
+  同树/同档/同窗口长度、结论不同 ⇒ 属**偶发**，不得写成「已修复」。
 
   **内存口径：同树两轮 360s 的 LOH 斜率相反（+0.186 vs −0.001 MB/s），差异未归因**（本轮 362s 出现 Gen2
   稳态点 261.9MB，上轮无 Gen2）。⇒ **单轮 360s 不足以判「内存健康」**；判稳态泄漏需要 ≥2 个爬坡后 Gen2
