@@ -306,6 +306,11 @@ for rel, count, hold in runs:
   实例：2026-11-15 池卡 r2 用 `E:/MirServer/M2GameSvr/GameSrv.exe`（mtime 2026-10-22、来自已删 worktree `OpenMir2-wt-goods`）
   ⇒ 487 条 `ProcessHumans` 异常、`in_world` 恒 21/500 ⇒ 整轮作废。
 - 健康栈形态（360s 窗口实测）：`DBSrv`(C#) + `LoginSrv`(C#) + **`game-svr`(Rust, 5000)** + `login-gate`/`sel-gate`/`game-gate`(Rust)。
+- **CPU 采样一律用 `typeperf`，不要用 `Get-CimInstance Win32_Processor` 循环**（2026-11-15 实测）：
+  CIM 连续采样时 top consumer 就是**发起采样的 `powershell` 进程本身**，会把空载读数打到 38–62%，
+  从而误判「机器不空载」；同机 typeperf 6 采样为 11.8–18.7%（max 18.7 / mean 14.2）。
+  归属分析用**单次** CIM/Get-Process 快照（不要循环），并把 `cpu_attrib` 落归档。
+  ⇒ 此前报告中「cpu_max=62%」类数字须标注「CIM 自污染，实测以 typeperf 为准」。
 - **能预判会无效的运行，宁可等也不跑**（2026-11-15 总监标准）。判据已经会判它无效的运行
   （外部构建在跑、`heavy≠0`、栈形态可疑、60s 闸门必然不过），跑下去得到的不是「数据略差」，
   而是**归档里一份看起来像数据的东西**——将来有人翻到会当成有效轮次引用。实例：r2（错栈 + 
