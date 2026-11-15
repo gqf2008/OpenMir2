@@ -69,6 +69,7 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 | 稳态掉线 | **0** | §6 M5-3 |
 | tick P99 | **≤ 100ms** | §6 M5-3 |
 | **internal_errors** | **0**（默认容忍度 0；唯一放宽通道 = `tools/botload/internal-errors-allowlist.json` 按类别 `max`，随卡面评审；未列入/超 max/文件缺失为空 ⇒ RED；字段缺失 fail-closed） | 卡 `openmir2-loadgate-criteria-gaps` A1（2026-11-15） |
+| **错误类别普查（error_census）** | **枚举出的每一个 fault 类别都为 0**（或按 `error-census-allowlist.json` 的 `category+max` 登记；feeds_internal 类别也可由 internal-errors 白名单整体豁免）；缺类别/多出未登记类别/缺对象/`internal_errors` 与分类之和不等/缺任一既有事件计数 ⇒ RED | 卡 `openmir2-botsrv-recv-thread-nre`（2026-11-15）；详见 `docs/botsrv-error-census-20261115.md` |
 | **BotSrv 崩溃** | 非 0 退出 / `bots.err.log` 含 `Out of memory.` / Application Error `0xe0434352` 任一命中 ⇒ RED | 同上 A2 |
 | 内存末段斜率 | ≈ 0（M5 长跑另判：峰值-均值 < 5%） | §6 M5-2 |
 
@@ -157,7 +158,13 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
   `bots.err.log` / `bots_runtime.json` / 白名单，走真实 `load_report.py summarize` CLI，断言 OOM / NRE
   （`internal_errors>0`）/ 非 0 退出 / 缺 `internal_errors` 字段都必红，干净对照仍 GREEN；
   白名单四牙（≤max 不红但报告列出 / >max 红 / 未列入红 / 缺文件为空红）；另用 `cmd.exe` 真实退出码测
-  `Get-BotSrvRuntime` 的取证接线（含「门禁自己 Stop-Process 不算崩溃」）。
+  `Get-BotSrvRuntime` 的取证接线（含「门禁自己 Stop-Process 不算崩溃」）；**错误类别普查五牙**
+  （缺 `error_census` 红 / fault 类别非 0 红并点名 / 多出未登记类别红 / 缺既有事件计数红 /
+  operational `teardown_race` 非 0 不红但报告列出）。
+- `BotSrv.exe --selftest-error-census`：**逐类注入 +1**（20 个类别，含 recv/run 的 null/index/other、
+  socket 处理器/系统调用、证据链、进程级钩子）；负例（处理器不抛异常、ConnectionReset 等生命周期码不串类）；
+  断言 JSON 键集合 == 类别表、`internal_errors == Σ(feeds_internal 类别)`、真实 `LoadMetrics.Init/Flush`
+  落盘的 `error_census` 逐类数值一致。删任一计数器/类别必红（见 `docs/botsrv-error-census-20261115.md`）。
 - `load_report.py selftest`：分位数正确 / **尾部敏感**（挪走 20 个慢样本 P99 必须 150→5）/ 登录没达阈值判红 /
   掉线分爬坡与稳态 / 内存斜率（线性 1MB/s vs 平坦 0）/ **阈值牙齿**（同一份 960/1000 产物：阈值 100 ⇒ RED、
   阈值 95 ⇒ GREEN，判定必须随阈值变）/ **残余丢包方向判据**（`rx_bytes==0` ⇒ 上游；`rx_bytes>0` 且无 `529` ⇒ 假人侧；

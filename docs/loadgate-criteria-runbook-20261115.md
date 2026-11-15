@@ -254,3 +254,13 @@ for rel, count, hold in runs:
   证据写进 `bots_runtime.json`。
 - 本卡未重跑真机窗口；§2 的判定是对既有产物的离线复算，不替代换机后的 360s 复测；§2 表是在**空白名单**
   （容忍度 0）下得到的。
+
+## 7. 2026-11-15 起的新口径：错误类别普查（卡 `openmir2-botsrv-recv-thread-nre`）
+
+- `internal_errors` 只是总量；新判据要求 **枚举出的每一个 fault 类别都为 0**
+  （或按 `tools/botload/error-census-allowlist.json` 登记），见 `docs/botsrv-error-census-20261115.md`。
+- **旧归档（本文件 §2 复算的那些 `load_stats.ndjson`）没有 `error_census` 字段**，按新口径会被
+  fail-closed 判 RED（「缺 error_census」）。这是**有意**的：旧证据不得再用来宣布「全绿」；
+  §2 的离线复算只能当「口径变更前」的对照，新结论必须用带 census 的新构建重跑。
+- 每份新结论额外必列：`error_census_complete` / `error_census_fault_total` /
+  `error_census_nonzero`（`report.json.required_fields`）。
