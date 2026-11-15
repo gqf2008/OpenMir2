@@ -34,13 +34,22 @@ tick 服务时延（`tick_ms_*`）
 import argparse
 import json
 import os
+import re
 import sys
 
 DEFAULT_THRESHOLDS = {
     "login_success_pct": 100.0,     # §6 M5：登录成功率 100%
     "conn_lost_steady": 0,          # §6 M5：无掉线
     "tick_p99_ms": 100.0,           # §6 M5：tick P99 ≤ 100ms
+    # A1（2026-11-15）：BotSrv 兜住的内部异常数。默认 0（绝对上限）。
+    # 理由：计数器只在 catch 块自增（假人走了未建模路径），已知正常轮次实测为 0；
+    # 不用「按 bot 数归一」的阈值——绝对 0 没有「调大分母/放宽阈值让红变绿」的入口。
+    "internal_errors": 0,
 }
+
+# A4（2026-11-15）：结论级窗口前提。HoldSec < 360s 的轮次只可当冒烟，不得作为 GREEN 结论。
+# 进世界实测串行载入 ~5–7/s（tier-1000：5s 56 → 75s 425），360s 才够 1000 档走完载入并进入稳态。
+MIN_CONCLUSION_HOLD_SEC = 360
 
 # C6 第 5 轮（owner 裁决 11dbde39 / 17aa4753）：tier-1000 的登记口径是「同命令 3 连跑取最差 ≥ 阈值」。
 # tier-1000 的登录在**上游 C# 部署栈**上有 ~0-5% 的残余丢包（48~52/1000 条连接发出 CM_IDPASSWORD 后
@@ -130,6 +139,11 @@ def summarize_tick(stats, count):
         "register_send_closed": last.get("register_send_closed", 0),
         "probe_sent": last.get("probe_sent", 0),
         "internal_errors": last.get("internal_errors", 0),
+        # A1（2026-11-15）：字段是否存在要单独记 —— 缺失不得静默当 0（judge 里 fail-closed）。
+        "internal_errors_present": ("internal_errors" in last),
+        "internal_errors_ramp": base.get("internal_errors", 0),
+        "internal_errors_steady": (last.get("internal_errors", 0) - base.get("internal_errors", 0)),
+        "internal_errors_per_bot": (round(last.get("internal_errors", 0) / count, 3) if count else None),
         # T-11 登录连接级观测（残余丢包方向定位）：发出登录包后没拿到 529 的连接数，
         # 以及其中 rx_bytes==0（服务端一个字节都没回）的数量；resend 是诊断对照（默认关）。
         "login_conn_total": last.get("login_conn_total", 0),
@@ -290,8 +304,67 @@ def summarize_hostload(rows):
     return out
 
 
+_INTERNAL_ERR_RE = re.compile(r"(?:异常被兜住|压测兜住的异常)\[\d+\]：\s*([A-Za-z_][\w.`]*)")
+_STACK_RE = re.compile(r"^\s+at\s+")
+
+
+def summarize_internal_error_log(path, max_types=5, max_stack=3):
+    """A1（2026-11-15）：从 BotSrv 的 `bots.log` 摘要 `internal_errors` 的 top 类型与堆栈首行。
+
+    `load_stats.ndjson.internal_errors` 只有计数；类型/堆栈只在 BotSrv 的日志里，且
+    `LoadMetrics.ShouldLogInternalError` **只打前 20 条**（避免刷爆日志）。
+    所以本函数给的是「样本的 top」，总量一律以 ndjson 计数为准，报告里两者分开写。
+    """
+    if not path or not os.path.isfile(path):
+        return {"log": path, "available": False,
+                "reason": "bots.log 不存在/未提供（top 异常类型无从归算）"}
+    types = {}
+    logged = 0
+    cur = None
+    with open(path, "r", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            m = _INTERNAL_ERR_RE.search(line)
+            if m:
+                logged += 1
+                name = m.group(1)
+                e = types.setdefault(name, {
+                    "type": name, "count": 0, "stack_head": [],
+                    "sample": line.strip()[:300],
+                })
+                e["count"] += 1
+                cur = e
+                continue
+            if cur is not None and _STACK_RE.match(line):
+                if len(cur["stack_head"]) < max_stack:
+                    cur["stack_head"].append(line.strip()[:300])
+                continue
+            cur = None
+    ordered = sorted(types.values(), key=lambda x: (-x["count"], x["type"]))
+    return {
+        "log": path,
+        "available": True,
+        "logged_blocks": logged,
+        "types": ordered[:max_types],
+        "types_total": len(ordered),
+        "note": ("BotSrv 只打前 20 条异常（ShouldLogInternalError）；"
+                 "总量看 load_stats.ndjson.internal_errors"),
+    }
+
+
+def load_bots_runtime(path):
+    """读 `load_gate.ps1` 落的 `bots_runtime.json`（PowerShell 写 UTF-8 无 BOM，容错 BOM）。"""
+    with open(path, "rb") as f:
+        raw = f.read().decode("utf-8-sig")
+    rt = json.loads(raw)
+    if rt.get("oom_hits") is None:
+        oom_lines = rt.get("err_log_oom_lines") or []
+        rt["oom_hits"] = (len(oom_lines) if rt.get("err_log_oom") else 0) + len(rt.get("app_error_events") or [])
+    return rt
+
+
 def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
-          login_threshold=None, world_threshold=None):
+          login_threshold=None, world_threshold=None, bots_runtime=None,
+          max_internal_errors=None):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
 
     `criteria` 只选"要比哪几条阈值"，**不能用它把"缺 tick 样本"变成绿灯**（2026-10-10 的教训：
@@ -331,6 +404,56 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
             fails.append("缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick")
     elif "tick" in criteria and tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
         fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
+    # A1（2026-11-15）：internal_errors 判据。默认 0 容忍；字段缺失 fail-closed。
+    tier["max_internal_errors"] = (max_internal_errors if max_internal_errors is not None
+                                   else thresholds.get("internal_errors", 0))
+    if "internal" in criteria:
+        if tier.get("internal_errors_present") is False:
+            fails.append("load_stats 缺 internal_errors 字段（无从判定 ⇒ fail-closed）")
+        else:
+            ie = tier.get("internal_errors")
+            if ie is None:
+                fails.append("internal_errors=None（缺计数 ⇒ fail-closed）")
+            elif ie > tier["max_internal_errors"]:
+                top = ""
+                diag = tier.get("internal_error_diag") or {}
+                if diag.get("types"):
+                    top = "；top: " + ", ".join(
+                        f"{t['type']}×{t['count']}" for t in diag["types"][:3])
+                fails.append(f"internal_errors {ie} > {tier['max_internal_errors']}{top}")
+    # A2（2026-11-15）：BotSrv 崩溃判据。退出码只认「进程自己退出」；门禁 Stop-Process 的不算。
+    tier["botsrv"] = bots_runtime
+    if bots_runtime:
+        rt = bots_runtime
+        if rt.get("self_exited") is True:
+            code = rt.get("exit_code")
+            if code is None:
+                fails.append("BotSrv 自行退出但退出码不可读（fail-closed）")
+            elif int(code) != 0:
+                hexs = rt.get("exit_code_hex") or ""
+                fails.append("BotSrv 非 0 退出 code=" + str(code) +
+                             ((" (" + str(hexs) + ")") if hexs else ""))
+        if rt.get("err_log_oom") is True:
+            oom = rt.get("err_log_oom_lines") or []
+            excerpt = oom[0][:120] if oom else "见 bots.err.log"
+            fails.append("bots.err.log 含 'Out of memory.'（BotSrv OOM；" + excerpt + "）")
+        ev = rt.get("app_error_events") or []
+        if ev:
+            fails.append("Windows Application Error 0xe0434352 ×" + str(len(ev)) + "（BotSrv 崩溃事件）")
+    # A4（2026-11-15）：窗口前提。**只作结论准入，不改 verdict**（避免静默改变 M1⑤/冒烟口径）。
+    hold = tier.get("hold_sec") or 0
+    window_ok = bool(hold >= MIN_CONCLUSION_HOLD_SEC)
+    tier["window"] = {
+        "hold_sec": hold,
+        "hold_sec_required": MIN_CONCLUSION_HOLD_SEC,
+        "hold_ok": window_ok,
+        "conclusion_valid": window_ok,
+        "conclusion_invalid_reason": ("" if window_ok else
+                                      f"HoldSec {hold}s < {MIN_CONCLUSION_HOLD_SEC}s："
+                                      "只可作为冒烟，不得作为压测 GREEN 结论"),
+        "in_world_ramp_note": ("进世界串行载入实测 ~5–7/s（tier-1000：5s 56 → 75s 425）；"
+                               "HoldSec<360s 的轮次不足以让 1000 档走完载入并进入稳态"),
+    }
     tier["ramp_target"] = int(-(-tier.get("count", 0) * login_thr // 100))
     tier["criteria"] = list(criteria)
     tier["allow_missing_tick"] = bool(allow_missing_tick)
@@ -348,6 +471,11 @@ def cmd_summarize(args):
         tier["login_conn_diag"] = summarize_login_conns(load_ndjson(args.login_conns))
     if args.hostload and os.path.exists(args.hostload):
         tier["host_load"] = summarize_hostload(load_ndjson(args.hostload))
+    # A1：top 异常类型/堆栈（来自 bots.log；样本只取日志里打出来的前 20 条）。
+    if args.bots_log:
+        tier["internal_error_diag"] = summarize_internal_error_log(args.bots_log)
+    # A2：BotSrv 崩溃证据（load_gate.ps1 落的 bots_runtime.json）。
+    bots_runtime = load_bots_runtime(args.bots_runtime) if args.bots_runtime else None
     tier["count"] = args.count
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
@@ -360,7 +488,21 @@ def cmd_summarize(args):
     criteria = [c.strip() for c in args.criteria.split(",") if c.strip()]
     login_thr = args.login_threshold if args.login_threshold is not None else default_login_threshold(args.count)
     judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick,
-          login_threshold=login_thr, world_threshold=args.world_threshold)
+          login_threshold=login_thr, world_threshold=args.world_threshold,
+          bots_runtime=bots_runtime, max_internal_errors=args.max_internal_errors)
+    # 总监硬规矩（2026-11-15）：每份结论必须显式列 login / no_resp / internal_errors / OOM。
+    # None 一律表示「证据缺」，不得被下游当成 0。
+    diag = tier.get("login_conn_diag") or {}
+    tier["required_fields"] = {
+        "login_success_pct": tier.get("login_success_pct"),
+        "login_conn_no_resp": (diag.get("no_resp") if diag else None),
+        "internal_errors": (tier.get("internal_errors") if tier.get("internal_errors_present") else None),
+        "oom_hits": (bots_runtime.get("oom_hits") if bots_runtime else None),
+        "botsrv_self_exited": (bots_runtime.get("self_exited") if bots_runtime else None),
+        "botsrv_exit_code": (bots_runtime.get("exit_code") if bots_runtime else None),
+        "verdict": tier["verdict"],
+        "note": "四项必列字段；None = 证据缺（不得当作 0）",
+    }
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
         with open(args.out, "w", encoding="utf-8", newline="\n") as f:
@@ -596,10 +738,110 @@ def cmd_selftest(_args):
            "有样本时按阈值判（150ms > 100ms ⇒ RED），且开关不得改变这条判定")
     expect("tick_missing" not in t7, "有样本时不得出现 tick_missing 标注")
 
+    # 6) A1（2026-11-15）：internal_errors 判据 —— 默认 0 容忍；有异常必红；0 不变绿；缺字段 fail-closed。
+    i3 = ("login", "conn", "tick", "internal")
+    # 干净的 tick 分布（hist2 = 全部 5ms，P99=5）：让下面只由 internal/崩溃/窗口决定 verdict。
+    stats_ie_ok = [dict(stats[0], internal_errors=0),
+                   dict(stats[1], internal_errors=0, hist=list(hist2), tick_max_ms=5)]
+    stats_ie_bad = [dict(stats[0], internal_errors=0),
+                    dict(stats[1], internal_errors=1061, hist=list(hist2), tick_max_ms=5)]
+    t_ie_ok = judge(summarize_tick(stats_ie_ok, 100), DEFAULT_THRESHOLDS, i3)
+    t_ie_bad = judge(summarize_tick(stats_ie_bad, 100), DEFAULT_THRESHOLDS, i3)
+    expect(t_ie_ok["verdict"] == "GREEN", "internal_errors=0 不得把正常轮次翻红")
+    expect(t_ie_bad["verdict"] == "RED" and any("internal_errors 1061" in f for f in t_ie_bad["fails"]),
+           "internal_errors=1061 必须判红（默认阈值 0）")
+    expect(t_ie_bad["internal_errors_per_bot"] == 10.61,
+           f"按 bot 归一应可读（1061/100=10.61），实得 {t_ie_bad['internal_errors_per_bot']}")
+    # 阈值牙齿：同一份 1061 产物，阈值 2000 ⇒ GREEN（判定必须随阈值变，不是恒红/恒绿）
+    t_ie_lax = judge(summarize_tick(stats_ie_bad, 100), DEFAULT_THRESHOLDS, i3, max_internal_errors=2000)
+    expect(t_ie_lax["verdict"] == "GREEN" and t_ie_lax["max_internal_errors"] == 2000,
+           "阈值 2000 下 1061 应放行，且 report 回显生效阈值")
+    # criteria 不含 internal 时不判（M1⑤ 的 login,conn 口径不变）
+    expect(judge(summarize_tick(stats_ie_bad, 100), DEFAULT_THRESHOLDS, ("login", "conn")
+                 )["verdict"] == "GREEN",
+           "criteria 不含 internal 时不得判 internal（M1⑤ 口径不变）")
+    # 缺字段 fail-closed
+    stats_missing = [dict(stats_ie_ok[0]), dict(stats_ie_ok[1])]
+    for _r in stats_missing:
+        _r.pop("internal_errors", None)
+    t_miss = judge(summarize_tick(stats_missing, 100), DEFAULT_THRESHOLDS, i3)
+    expect(t_miss["verdict"] == "RED" and any("缺 internal_errors" in f for f in t_miss["fails"]),
+           "load_stats 缺 internal_errors 字段必须 fail-closed（不得当 0）")
+
+    # 6b) bots.log 摘要：top 类型 + 堆栈首行（BotSrv 只打前 20 条，样本语义要写清）
+    with tempfile.TemporaryDirectory() as _td2:
+        _lg = os.path.join(_td2, "bots.log")
+        with open(_lg, "w", encoding="utf-8", newline=chr(10)) as _f:
+            _f.write("02:00:00.000 [WRN] 假人[loadbot1]异常被兜住[1]："
+                     "System.NullReferenceException: Object reference not set\n")
+            _f.write("   at BotSrv.Scenes.Scene.PlayScene.BeginScene()\n")
+            _f.write("   at BotSrv.Player.RobotPlayer.Run()\n")
+            _f.write("02:00:00.100 [WRN] 假人[loadbot2]异常被兜住[2]："
+                     "System.NullReferenceException: Object reference not set\n")
+            _f.write("02:00:00.200 [WRN] 压测兜住的异常[3]：System.OutOfMemoryException: boom\n")
+        _d = summarize_internal_error_log(_lg)
+        expect(_d["available"] is True and _d["logged_blocks"] == 3,
+               f"bots.log 摘要应数出 3 条异常块，实得 {_d.get('logged_blocks')}")
+        expect(_d["types"] and _d["types"][0]["type"] == "System.NullReferenceException"
+               and _d["types"][0]["count"] == 2,
+               "top 类型应为 NRE×2（按次数排序）")
+        expect(_d["types"][0]["stack_head"]
+               and _d["types"][0]["stack_head"][0].startswith("at BotSrv.Scenes.Scene.PlayScene.BeginScene"),
+               "应保留堆栈首行")
+        expect([t["type"] for t in _d["types"]][1] == "System.OutOfMemoryException",
+               "第二种异常类型（压测兜住的异常）应被统计")
+        expect(summarize_internal_error_log(os.path.join(_td2, "nope.log"))["available"] is False,
+               "bots.log 不存在时不得假装有类型")
+
+    # 7) A2（2026-11-15）：BotSrv 崩溃判据 —— 伪造日志/退出码/事件 ⇒ 必红；门禁自停不算崩溃。
+    rt_clean = {"self_exited": False, "stopped_by_gate": True, "exit_code": -1,
+                "err_log_oom": False, "app_error_events": [], "oom_hits": 0}
+    t_rt_ok = judge(summarize_tick(stats_ie_ok, 100), DEFAULT_THRESHOLDS, i3, bots_runtime=rt_clean)
+    expect(t_rt_ok["verdict"] == "GREEN",
+           "门禁 Stop-Process 的退出码（stopped_by_gate=true）不得当崩溃")
+    rt_oom = {"self_exited": False, "exit_code": None, "err_log_oom": True,
+              "err_log_oom_lines": ["Out of memory."], "app_error_events": []}
+    t_oom = judge(summarize_tick(stats_ie_ok, 100), DEFAULT_THRESHOLDS, i3, bots_runtime=rt_oom)
+    expect(t_oom["verdict"] == "RED" and any("Out of memory" in f for f in t_oom["fails"]),
+           "伪造 bots.err.log 'Out of memory.' ⇒ 必须判红")
+    rt_exit = {"self_exited": True, "exit_code": 3762504530, "exit_code_hex": "0xE0434352",
+               "err_log_oom": False, "app_error_events": []}
+    t_exit = judge(summarize_tick(stats_ie_ok, 100), DEFAULT_THRESHOLDS, i3, bots_runtime=rt_exit)
+    expect(t_exit["verdict"] == "RED" and any("非 0 退出" in f for f in t_exit["fails"]),
+           "伪造非 0 退出（0xE0434352）⇒ 必须判红")
+    t_exit0 = judge(summarize_tick(stats_ie_ok, 100), DEFAULT_THRESHOLDS, i3,
+                    bots_runtime={"self_exited": True, "exit_code": 0,
+                                  "err_log_oom": False, "app_error_events": []})
+    expect(t_exit0["verdict"] == "GREEN", "进程自行以 0 退出不得判崩溃")
+    t_exit_none = judge(summarize_tick(stats_ie_ok, 100), DEFAULT_THRESHOLDS, i3,
+                        bots_runtime={"self_exited": True, "exit_code": None,
+                                      "err_log_oom": False, "app_error_events": []})
+    expect(t_exit_none["verdict"] == "RED" and any("退出码不可读" in f for f in t_exit_none["fails"]),
+           "自行退出但退出码不可读 ⇒ fail-closed")
+    rt_app = {"self_exited": False, "exit_code": None, "err_log_oom": False,
+              "app_error_events": [{"id": 1000, "code": "0xe0434352"}]}
+    t_app = judge(summarize_tick(stats_ie_ok, 100), DEFAULT_THRESHOLDS, i3, bots_runtime=rt_app)
+    expect(t_app["verdict"] == "RED" and any("0xe0434352" in f for f in t_app["fails"]),
+           "伪造 Windows Application Error 0xe0434352 ⇒ 必须判红")
+
+    # 8) A4（2026-11-15）：窗口前提只做结论准入，不改 verdict（否则静默改变 M1⑤/冒烟口径）。
+    _tw = summarize_tick(stats_ie_ok, 100)
+    _tw["hold_sec"] = 60
+    _tw = judge(_tw, DEFAULT_THRESHOLDS, i3)
+    expect(_tw["verdict"] == "GREEN" and _tw["window"]["conclusion_valid"] is False
+           and _tw["window"]["hold_sec_required"] == 360,
+           "HoldSec=60 时测量 verdict 仍 GREEN，但 conclusion_valid 必须 false")
+    _tw2 = summarize_tick(stats_ie_ok, 100)
+    _tw2["hold_sec"] = 360
+    _tw2 = judge(_tw2, DEFAULT_THRESHOLDS, i3)
+    expect(_tw2["window"]["conclusion_valid"] is True and _tw2["window"]["conclusion_invalid_reason"] == "",
+           "HoldSec=360 时 conclusion_valid 必须 true")
+
     if not ok:
         print("RED: load_report selftest 有未通过项")
         return 1
-    print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/残余丢包方向/本机负载窗）")
+    print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/"
+          "残余丢包方向/本机负载窗/internal_errors 阈值与 fail-closed/BotSrv 崩溃三项/窗口准入）")
     return 0
 
 
@@ -782,8 +1024,16 @@ def main():
                    help="BotSrv 落的 login_conns.ndjson（T-11 残余丢包方向归算；缺省不产出该块）")
     s.add_argument("--hostload", default="",
                    help="本机负载探针 hostload.ndjson（owner 裁决 82f8e0c3 ④；缺省不产出该块）")
-    s.add_argument("--criteria", default="login,conn,tick",
-                   help="判据子集（默认全三条）；M1 ⑤ 那种只比登录/连接的场景用 login,conn")
+    s.add_argument("--criteria", default="login,conn,tick,internal",
+                   help="判据子集（默认含 internal_errors）；M1 ⑤ 那种只比登录/连接的场景用 login,conn。"
+                        "压测结论必须含 internal（A1，2026-11-15）")
+    s.add_argument("--max-internal-errors", type=int, default=0,
+                   help="internal_errors 绝对上限（默认 0）；只在 criteria 含 internal 时生效，"
+                        "并在 report.max_internal_errors 回显")
+    s.add_argument("--bots-log", default="",
+                   help="BotSrv 的 bots.log（A1：归算 internal_errors 的 top 异常类型/堆栈首行；可选）")
+    s.add_argument("--bots-runtime", default="",
+                   help="BotSrv 运行时证据 bots_runtime.json（A2：退出码/OOM/Application Error；可选）")
     s.add_argument("--login-threshold", type=float, default=None,
                    help="登录成功率阈值（%）；缺省按档位取（tier>=1000 为 95%，其余 100%）")
     s.add_argument("--allow-missing-tick", action="store_true",
