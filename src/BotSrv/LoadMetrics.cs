@@ -99,6 +99,7 @@ namespace BotSrv
         private static long _sceneListRaceSkipped; // BeginScene 因列表被并发改动而跳过的删除次数
         private static long _sceneIndexRaceSkipped; // BeginScene 轮内下标读取被并发缩表跳过的次数
         private static long _sceneRounds;          // BeginScene 实际进入 ActorList 迭代的轮次（0.5% 上界的分母）
+        private static long _sceneActorEjected;    // actor 被移出 ActorList 并立即解除引用的累计次数（泄漏修复观测）
 
         // ==== 登录连接级观测（C6 第 5 轮，T-11）：把「残余丢包」的方向证出来 ====
         // T-8 的 ident 直方图只能证明「服务端回的总数 < 假人数」，分不出这两种：
@@ -361,6 +362,22 @@ namespace BotSrv
         public static long SceneRoundsCount
         {
             get { lock (Sync) { return _sceneRounds; } }
+        }
+
+        /// <summary>actor 被移出 ActorList 并立即解除引用（卡 `openmir2-botsrv-actor-pool-leak`）。
+        /// AOI 驱逐 / DeleteActor / DelActor 三个出口共用；自由池已移除，因此本计数不含任何保留对象。
+        /// 只作观测：它让「驱逐发生过」与「驱逐后不再留存」在压测产物里可分辨。</summary>
+        public static void SceneActorEjected()
+        {
+            lock (Sync)
+            {
+                _sceneActorEjected++;
+            }
+        }
+
+        public static long SceneActorEjectedCount
+        {
+            get { lock (Sync) { return _sceneActorEjected; } }
         }
 
         /// <summary>这个假人收到了服务端的 SM_LOGON（= 真的进了世界，而不是"本地切到 PlayScene"）。
@@ -984,6 +1001,7 @@ namespace BotSrv
               .Append(",\"scene_list_race_skipped\":").Append(_sceneListRaceSkipped)
               .Append(",\"scene_index_race_skipped\":").Append(_sceneIndexRaceSkipped)
               .Append(",\"scene_rounds\":").Append(_sceneRounds)
+              .Append(",\"scene_actor_ejected\":").Append(_sceneActorEjected)
               // 卡 openmir2-botsrv-recv-thread-nre：错误类别普查（封闭集合，逐类计数）。
               // load_report 对缺键/多键/类别非 0 都 fail-closed；schema 变更必须同步改两边。
               .Append(",\"error_census_schema\":1")

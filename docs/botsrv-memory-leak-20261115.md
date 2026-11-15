@@ -168,3 +168,12 @@ ab1/ab2（`in_world` 432/427 但只交付 4.4–4.7k 帧/s，`tick_max` 达 8.6�
 - cN1/cN4/ab3 只有 60s，进世界斜坡主导，不宜用于估计每帧字节。
 - 代码锚已按 **master `ab06da44f`** 逐一核对行号（`src/BotSrv` 行号与产生窗口的二进制 `93e0a3e7e`/`0482f715d` 不同；被分析行为在两者中相同）；客户端锚按冻结树 `E:/Users/gxh/Documents/GitHub/MirClient/Source/MirClient` 核对。
 - 本报告未改任何代码、未改 `tools/**`、未改冻结客户端；未起进程、未构建。
+
+---
+
+## 9. 后续（卡 `openmir2-botsrv-actor-pool-leak`，2026-11-15）
+
+§7 建议 1 的「`NewActor` 优先从池取」经复核**不成立**：冻结客户端 `PlayScn.pas:3255` 起的 `NewActor`
+按 `RACEfeature` 恒 `Create`，从不读 `g_FreeActorList` ⇒ 池在 oracle 里只是「延迟释放缓冲」，不是复用池。
+实际修法为「删除自由池 + 驱逐点立即释放 + 恢复 2000ms 空闲守卫」，证据与验收见
+`docs/botsrv-actor-pool-fix-20261115.md`。

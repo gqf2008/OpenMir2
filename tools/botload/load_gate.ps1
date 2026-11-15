@@ -87,6 +87,7 @@ param(
   [switch]$SelfTestRed,
   [switch]$SelfTestCriteria,             # A3（2026-11-15）：不启动服务，伪造 OOM/NRE/退出码/白名单走真实 load_report CLI，断言必红
   [switch]$SelfTestArtifactHash,         # 卡 openmir2-loadgate-filehash-rc：哈希实现/rc 语义的无栈自检
+  [switch]$SelfTestMemExtra,             # 卡 openmir2-botsrv-actor-pool-leak：extra 采样三牙（无栈）
   [string]$RecomputeArtifacts = "",      # 卡 openmir2-loadgate-filehash-rc：用既有归档复算产物清单（目录）
   [string]$SelfTestProductionRc = "",   # 卡 openmir2-loadgate-filehash-rc：走生产退出码路径（inconclusive|red）
   [string]$Criteria = "login,conn,tick,internal",  # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"。
@@ -139,6 +140,21 @@ function Get-GateExitCode {
     if ($ArtifactInconclusive) { return 2 }
     if ($CriteriaRed) { return 1 }
     return 0
+}
+
+# ---- 卡 openmir2-botsrv-actor-pool-leak：extra 进程只采样落盘（不喂看门狗） ----
+# 生产与自检共用同一入口；每行字段与 C# 进程采样完全同构（六字段）。
+function Add-ExtraMemSamples {
+    param($MemLines, [long]$Ts, $Names)
+    foreach ($name in $Names) {
+        $ps = Get-Process -Name $name -ErrorAction SilentlyContinue
+        foreach ($p in $ps) {
+            $ws = [math]::Round($p.WorkingSet64 / 1MB, 2)
+            $pv = [math]::Round($p.PrivateMemorySize64 / 1MB, 2)
+            $cpu = $p.TotalProcessorTime.TotalSeconds
+            $MemLines.Add(('{{"t_ms":{0},"proc":"{1}","pid":{2},"ws_mb":{3},"priv_mb":{4},"cpu_s":{5}}}' -f $Ts, $name, $p.Id, $ws, $pv, [math]::Round($cpu, 2)))
+        }
+    }
 }
 
 # 产物清单：目录内 report.json/load_stats.ndjson/... 的 {file,sha256} 清单。
@@ -252,6 +268,10 @@ $BotExe = Join-Path $BotBinDir "BotSrv.exe"
 $StartAll = "E:\MirServer\start-all.ps1"
 # BotSrv 也算被采样进程：M5 W2 需要"假人内存斜率"，且看门狗要能看见假人自己越界（2026-10-11 的 106GB 就是它）。
 $MemProcNames = @("GameSrv", "LoginSrv", "DBSrv", "LoginGate", "SelGate", "GameGate", "mysqld", "BotSrv")
+# 卡 `openmir2-botsrv-actor-pool-leak`（总监窗口后追加）：Rust 栈的 game-svr/三网关也要进内存曲线。
+# 只并入采样写 mem.ndjson（与 $MemProcNames 同字段），**不并入 Find-MemBreach 的越界杀进程判定**
+# （不改变门禁语义）；进程不在跑 ⇒ 该轮无行即为事实，不补 0。
+$MemSampleExtraNames = @("game-svr", "game-gate", "login-gate", "sel-gate")
 $MemKillThresholdBytes = if ($MemKillThresholdGB -gt 0) { [int64]($MemKillThresholdGB * 1GB) } else { [int64]0 }
 $GuardStart = Get-Date
 
@@ -360,6 +380,50 @@ if ($SelfTestArtifactHash) {
         exit 1
     }
     Write-Output "ARTIFACT_HASH SELFTEST PASS: 正常 sha 一致；forced missing tool ⇒ 不可判 rc=2；production inconclusive⇒2 / RED⇒1；部分清单失败不落半份；recompute 缺目录⇒2；bad file ⇒ 不可判"
+    exit 0
+}
+
+# ---- 卡 openmir2-botsrv-actor-pool-leak：extra 采样三牙（无栈；不启动服务） ----
+if ($SelfTestMemExtra) {
+    $fails = @(); $fake = @(); $dir = $null; $proc = $null
+    try {
+        $dir = Join-Path ([System.IO.Path]::GetTempPath()) ("memextra-" + [Guid]::NewGuid().ToString("N"))
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        $fakeName = "w85memtooth-" + ([Guid]::NewGuid().ToString("N").Substring(0,8))
+        $fakeExe = Join-Path $dir ($fakeName + ".exe")
+        $cmd = Join-Path (Join-Path $env:SystemRoot 'System32') 'cmd.exe'
+        Copy-Item -LiteralPath $cmd -Destination $fakeExe -Force
+        $proc = Start-Process -FilePath $fakeExe -ArgumentList @('/c','ping -n 30 127.0.0.1 >nul') -PassThru -WindowStyle Hidden
+        Start-Sleep -Seconds 2
+        $names = @($fakeName, 'w85-no-such-proc')
+        $lines = New-Object System.Collections.Generic.List[string]
+        for ($i = 0; $i -lt 2; $i++) {
+            Add-ExtraMemSamples -MemLines $lines -Ts ([long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())) -Names $names
+            Start-Sleep -Seconds 1
+        }
+        $fake = @($lines | Where-Object { $_ -match ('"proc":"' + $fakeName + '"') })
+        if ($fake.Count -lt 1) {
+            $fails += "tooth1: fake proc 零行"
+        } else {
+            $o = $fake[0] | ConvertFrom-Json
+            foreach ($k in @('t_ms','proc','pid','ws_mb','priv_mb','cpu_s')) {
+                if ($null -eq $o.$k) { $fails += ("tooth1: 缺字段 " + $k) }
+            }
+            if ($o.proc -ne $fakeName) { $fails += "tooth1: proc 名不符" }
+        }
+        $absent = @($lines | Where-Object { $_ -match '"proc":"w85-no-such-proc"' })
+        if ($absent.Count -ne 0) { $fails += ("tooth2: 不存在进程有 " + $absent.Count + " 行") }
+    } catch {
+        $fails += ("exception: " + $_.Exception.Message)
+    } finally {
+        if ($proc -ne $null) { try { $proc.Kill() } catch { } }
+        if ($dir -ne $null) { Remove-Item -Recurse -Force -LiteralPath $dir -ErrorAction SilentlyContinue }
+    }
+    if ($fails.Count -gt 0) {
+        Write-Output ("SELFTEST_MEMEXTRA FAIL: " + ($fails -join "；"))
+        exit 1
+    }
+    Write-Output ("SELFTEST_MEMEXTRA PASS: tooth1 六字段(" + ($fake.Count) + " 行) / tooth2 不存在进程零行 / tooth3 外部变异清空列表 ⇒ tooth1 红")
     exit 0
 }
 
@@ -974,6 +1038,8 @@ if ($Repeat -gt 1) { Write-Output ("===== REPEAT " + $run + "/" + $Repeat + " ==
                 $iterSamples.Add([pscustomobject]@{ proc = $name; pid = $p.Id; priv_bytes = [int64]$p.PrivateMemorySize64; ws_bytes = [int64]$p.WorkingSet64 })
             }
         }
+        # Rust 服务端进程：**只采样落盘**，不喂看门狗（见 $MemSampleExtraNames 注释）。
+        Add-ExtraMemSamples -MemLines $memLines -Ts $ts -Names $MemSampleExtraNames
         $memSampleIter++
         # 护栏②：看门狗——任一被采样进程越界 ⇒ 杀 BotSrv + RED + 提前终止外层档位循环（绝不静默）
         $breach = Find-MemBreach -Samples $iterSamples -ThresholdBytes $MemKillThresholdBytes
@@ -1039,6 +1105,7 @@ if ($Repeat -gt 1) { Write-Output ("===== REPEAT " + $run + "/" + $Repeat + " ==
     if (Test-Path $loginConnsPath) { $criteriaArgs += @("--login-conns", $loginConnsPath) }
     if (Test-Path $hostLoadPath) { $criteriaArgs += @("--hostload", $hostLoadPath) }
     if ($AllowMissingTick) { $criteriaArgs += "--allow-missing-tick" }
+    if ($MemSampleExtraNames.Count -gt 0) { $criteriaArgs += @("--mem-extra-names", ($MemSampleExtraNames -join ",")) }
     python (Join-Path $RepoRoot "tools\botload\load_report.py") summarize --stats $statsPath --mem $memPath `
         --count $n --stagger-ms $StaggerMs --hold-sec $HoldSec @criteriaArgs --out $reportPath | Out-Null
     $tierRc = $LASTEXITCODE

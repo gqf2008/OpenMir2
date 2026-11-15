@@ -74,7 +74,7 @@ namespace BotSrv.Player
             PlayScene = new PlayScene(this);
             Map = new TMap(this);
             // 共享列表/自身引用只在进程级初始化（MShare 字段初始化器），**不再每个 bot 构造时重置**：
-            // 旧代码在这里 `new List` 会把其它 bot 的掉落/魔法/释放池/自身 actor 清掉（跨 bot 污染 +
+            // 旧代码在这里 `new List` 会把其它 bot 的掉落/魔法/自身 actor 清掉（跨 bot 污染 +
             // 与 run/recv 线程并发替换）。卡 `openmir2-botsrv-shared-state-locks`。
             MShare.InitClientItems();
             MShare.g_DetectItemMineID = 0;
@@ -5248,10 +5248,8 @@ namespace BotSrv.Player
             return result;
         }
 
-        private static bool IsGroupMember(string uname)
-        {
-            return MShare.g_GroupMembers.IndexOf(uname) >= 0; ;
-        }
+        // `IsGroupMember` 随 MinTimerTimer 一并移除（卡 `openmir2-botsrv-actor-pool-leak`）：
+        // 唯一调用方是那个从未接线的死定时器；`m_boGrouped` 也没有读取方。
 
         private void CheckSpeedHack(long rtime)
         {
@@ -6332,32 +6330,9 @@ namespace BotSrv.Player
             }
         }
 
-        public void MinTimerTimer(object sender, EventArgs e1)
-        {
-            Actor[] actors = PlayScene.SnapshotActors();
-            for (int i = 0; i < actors.Length; i++)
-            {
-                if (IsGroupMember(actors[i].UserName))
-                {
-                    actors[i].m_boGrouped = true;
-                }
-                else
-                {
-                    actors[i].m_boGrouped = false;
-                }
-            }
-            lock (MShare.FreeActorSync)
-            {
-                for (int i = MShare.g_FreeActorList.Count - 1; i >= 0; i--)
-                {
-                    Actor freeActor = MShare.g_FreeActorList[i];
-                    if (freeActor == null || MShare.GetTickCount() - freeActor.m_dwDeleteTime > 60 * 1000)
-                    {
-                        MShare.g_FreeActorList.RemoveAt(i);
-                    }
-                }
-            }
-        }
+        // 卡 `openmir2-botsrv-actor-pool-leak`：原 `MinTimerTimer`（组队标志刷新 + g_FreeActorList 的
+        // 60s TTL 清理）已移除。全仓从无定时器订阅它（死代码）；g_FreeActorList 已删除，且 `m_boGrouped`
+        // 只有本函数的写入、没有任何读取方 ⇒ 删除不改变可观测行为。若将来需要组队标志，应随真实使用方另行接线。
 
         public void CheckHackTimerTimer(object sender)
         {

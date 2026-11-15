@@ -1288,6 +1288,12 @@ def cmd_summarize(args):
     tier = summarize_tick(stats, args.count)
     if args.mem:
         tier["mem"] = summarize_mem(load_ndjson(args.mem), tail_sec=args.mem_tail_sec)
+    # 卡 openmir2-botsrv-actor-pool-leak（总监追加）：只采样落盘、不参与越界判定的服务端进程名。
+    # 声明值与「实际在 mem 行里出现过的名字」分开记录：不在跑 ⇒ 无行即为事实，不补 0。
+    extra_names = [x for x in (args.mem_extra_names or "").replace(",", " ").split() if x]
+    if extra_names:
+        tier["mem_proc_names_extra"] = extra_names
+        tier["mem_proc_names_extra_present"] = [n for n in extra_names if n in (tier.get("mem") or {})]
     if args.login_conns and os.path.exists(args.login_conns):
         tier["login_conn_diag"] = summarize_login_conns(load_ndjson(args.login_conns))
     if args.hostload and os.path.exists(args.hostload):
@@ -2365,6 +2371,9 @@ def main():
     s.add_argument("--mem-tail-sec", type=int, default=60,
                    help="内存末段斜率窗口（秒）；默认 60（不传 ⇒ 与既有报告口径逐字段一致）。"
                         "只影响 slope_tail_mb_per_s / tail_window_s")
+    s.add_argument("--mem-extra-names", default="",
+                   help="只采样落盘、不参与越界判定的额外进程名（逗号/空白分隔）；"
+                        "写入 report.mem_proc_names_extra（实际有行的名字另记 mem_proc_names_extra_present）")
     s.add_argument("--count", type=int, required=True, help="目标假人数（档位）")
     s.add_argument("--stagger-ms", type=int, default=0)
     s.add_argument("--hold-sec", type=int, default=0)

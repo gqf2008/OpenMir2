@@ -21,13 +21,16 @@ namespace BotSrv
     ///      SM_TURN 等位置帧按 NewActor 语义补建（等价 `PlayScn.pas:3670-3672`）。
     ///   ② ActorList 的 null 槽位：BeginScene 跳过 + 计数，不抛 NRE，其余 actor 照常处理。
     ///   ③ 循环中途 `MShare.MySelf` 被置 null：BeginScene 用轮首快照，不抛（真实客户端单线程语义）；
-    ///   ④ 删除点被并发改动（自删/下标前移）：跳过且不重复归属 g_FreeActorList；
+    ///   ④ 删除点被并发改动（自删/下标前移）：跳过、不重复删除（自由池已移除，见卡 pool-leak）；
     ///   ⑤ 轮内 `ActorList[i]` 读取前被并发缩表：跳过 + 计数，不抛 AOORE（F1）；
     ///   ⑥a 删除点条件读取 `ActorList[i]` 前被并发缩表（F1c）；⑥b 身份核对后、RemoveAt 前
-    ///      被缩表（F1b）：都必须计数跳过、不登记 FreeActorList、不双归属；
+    ///      被缩表（F1b）：都必须计数跳过、不重复删除；
     ///   ⑦ ActorDied 的删除/插入循环遇并发缩表：计数跳过，不抛 AOORE；
     ///   ⑧ RemoveAt 失败后 actor 仍在列表：不再 Insert/Add（不重复插入，P3-2）；
     ///   ⑨ ActorDied 插入循环遇 null 槽位：跳过并计数，不解引用（P3-1）。
+    ///   ⑩ AOI 驱逐的 2000ms 空闲守卫（对齐 PlayScn.pas:1219）：消息新鲜 ⇒ 不驱逐；空闲越界 ⇒ 驱逐；DelActor 无条件；
+    ///   ⑪ ProcMsg 每取走一条消息刷新 m_dwLastGetMessageTime（守卫的输入，Actor.pas:2055）；
+    ///   ⑫ 机制证明：驱逐 N 个 actor 后 GC，WeakReference 全部死亡 ⇒ 无静态保留（池上界 N=0）。
     ///
     /// 归因精度（F3）：隔离注入 null 槽位复现为 NRE@121、ActorList=null 为 NRE@116；
     /// 归档里的 :120 是**并发索引读取竞争**的签名，不是 null 槽位的直接证据。
@@ -35,10 +38,11 @@ namespace BotSrv
     /// 入口：`BotSrv.exe --selftest-scene-null`（不启动服务/不连端口）。
     /// 改坏必红：删 BeginScene 的 null 槽位守卫 ⇒ ② 红；把快照改回 `MShare.MySelf` ⇒ ③ 红；
     /// 删 `PlayScene.SendMsg` 的 `if (actor == null) return;` ⇒ ① 红；
-    /// 删删除点的「下标/身份核对」⇒ ④ 红（会误删/双归属）；
-    /// 把 FreeActorList 登记挪回核对之前 ⇒ ④c 红（双归属）；
+    /// 删删除点的「下标/身份核对」⇒ ④ 红（会误删）；
     /// 删轮内读取的 try/catch ⇒ ⑤ 红（AOORE）；删删除路径 try/catch ⇒ ⑥ 红（AOORE）；
-    /// 把 FreeActorList 登记挪到 RemoveAt 之前 ⇒ ⑥b 红（双归属）；
+    /// 删 AOI 的 2000ms 空闲守卫 ⇒ ⑩ 红（近消息越界 actor 被误删）；
+    /// 删 ProcMsg 的时间戳刷新 ⇒ ⑪ 红（freshAge 保持 5000ms）；
+    /// 在驱逐路径重新加任意静态保留（旧自由池）⇒ ⑫ 红（WeakReference 存活）；
     /// 删删除路径外层 try/catch ⇒ ⑥a/⑥b 红（AOORE）；删 ActorDied 的 try/catch ⇒ ⑦ 红；
     /// 删「仍存在则不再插入」判断 ⇒ ⑧ 红（重复插入）；删插入循环 null 判断 ⇒ ⑨ 红（NRE）。
     /// </summary>
@@ -78,6 +82,32 @@ namespace BotSrv
             {
                 f.SetValue(scene, HUtil32.GetTickCount());
             }
+        }
+
+        /// <summary>把 actor 的「最后取消息时刻」拨老（默认 3000ms），让 AOI 驱逐的 2000ms 空闲守卫可判。</summary>
+        private static void SetIdle(Actor actor, int ageMs = 3000)
+        {
+            actor.m_dwLastGetMessageTime = MShare.GetTickCount() - ageMs;
+        }
+
+        /// <summary>A7 机制证明的构造段：把 n 个「越界且空闲」的 actor 交给 BeginScene 驱逐，
+        /// 只返回 WeakReference（本方法 NoInlining，返回后局部强引用不再存活）。</summary>
+        [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+        private static System.WeakReference[] EjectActorsForWeakRefTest(RobotPlayer robot, PlayScene scene, THumActor self, int n)
+        {
+            var refs = new System.WeakReference[n];
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            for (int i = 0; i < n; i++)
+            {
+                var a = new TestActor(robot) { CurrX = (short)(300 + i), CurrY = 300, m_nRx = (short)(300 + i), m_nRy = 300, RecogId = 900000 + i };
+                a.m_dwLastGetMessageTime = MShare.GetTickCount() - 3000;
+                scene.ActorList.Add(a);
+                refs[i] = new System.WeakReference(a);
+            }
+            SetMoveTimeNow(scene);
+            scene.BeginScene();
+            return refs;
         }
 
         public static int Run()
@@ -174,6 +204,7 @@ namespace BotSrv
             var keep = new TestActor(robot) { CurrX = 100, CurrY = 100, m_nRx = 100, m_nRy = 100, RecogId = 987658 };
             var remover = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987659, SceneRef = scene, RemoveSelfOnRun = true };
             scene.ActorList.Add(remover);
+            SetIdle(remover);
             scene.ActorList.Add(keep);
             long rb = LoadMetrics.SceneListRaceSkippedCount;
             threw = false;
@@ -189,9 +220,8 @@ namespace BotSrv
             }
             Check("list-race-index-changed-skipped",
                 !threw && LoadMetrics.SceneListRaceSkippedCount == rb + 1
-                && scene.ActorList.Count == 1 && scene.ActorList[0] == keep
-                && !MShare.g_FreeActorList.Contains(remover),
-                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb} count={scene.ActorList.Count} free={MShare.g_FreeActorList.Contains(remover)}");
+                && scene.ActorList.Count == 1 && scene.ActorList[0] == keep,
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb} count={scene.ActorList.Count}");
 
             scene.ActorList.Clear();
             MShare.MySelf = self;
@@ -199,6 +229,7 @@ namespace BotSrv
             var remover2 = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987661, SceneRef = scene, RemoveSelfOnRun = true };
             scene.ActorList.Add(keep2);
             scene.ActorList.Add(remover2);
+            SetIdle(remover2);
             long rb2 = LoadMetrics.SceneListRaceSkippedCount;
             threw = false;
             try
@@ -216,13 +247,14 @@ namespace BotSrv
                 && scene.ActorList.Count == 1 && scene.ActorList[0] == keep2,
                 $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb2} count={scene.ActorList.Count}");
 
-            // ④c 下标前移：前面元素被删 ⇒ actor 仍在列表里，旧代码会把它登记进 free-list（双归属）。
+            // ④c 下标前移：前面元素被删 ⇒ actor 仍在列表里，旧代码会把它误删/重复计数。
             scene.ActorList.Clear();
             MShare.MySelf = self;
             var shifted = new TestActor(robot) { CurrX = 100, CurrY = 100, m_nRx = 100, m_nRy = 100, RecogId = 987662 };
             var pusher = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987663, SceneRef = scene, RemoveTargetOnRun = shifted };
             scene.ActorList.Add(shifted);
             scene.ActorList.Add(pusher);
+            SetIdle(pusher);
             long rb3 = LoadMetrics.SceneListRaceSkippedCount;
             threw = false;
             try
@@ -237,9 +269,8 @@ namespace BotSrv
             }
             Check("list-race-shift-skip-no-double-claim",
                 !threw && LoadMetrics.SceneListRaceSkippedCount == rb3 + 1
-                && scene.ActorList.Count == 1 && scene.ActorList[0] == pusher
-                && !MShare.g_FreeActorList.Contains(pusher),
-                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb3} count={scene.ActorList.Count} still={scene.ActorList.Contains(pusher)} free={MShare.g_FreeActorList.Contains(pusher)}");
+                && scene.ActorList.Count == 1 && scene.ActorList[0] == pusher,
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - rb3} count={scene.ActorList.Count} still={scene.ActorList.Contains(pusher)}");
 
             // ⑤ 轮内索引读取（F1）：Count 检查通过后、下标读取前列表被并发缩短 ⇒ 必须跳过并计数，
             //    不能抛 AOORE。用 SceneIndexRaceHook 做确定性注入（生产为 null = 零行为变化）。
@@ -277,6 +308,7 @@ namespace BotSrv
             MShare.MySelf = self;
             var doomed = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987665 };
             scene.ActorList.Add(doomed);
+            SetIdle(doomed);
             long db = LoadMetrics.SceneListRaceSkippedCount;
             PlayScene.SceneRemoveRaceHook = sc =>
             {
@@ -300,15 +332,16 @@ namespace BotSrv
             }
             Check("remove-condition-read-race-skipped",
                 !threw && LoadMetrics.SceneListRaceSkippedCount == db + 1
-                && scene.ActorList.Count == 0 && !MShare.g_FreeActorList.Contains(doomed),
-                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db} count={scene.ActorList.Count} free={MShare.g_FreeActorList.Contains(doomed)}");
+                && scene.ActorList.Count == 0,
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db} count={scene.ActorList.Count}");
 
             // ⑥b RemoveAt 窗口（F1b）：身份核对通过后、RemoveAt 之前被缩表 ⇒ AOORE 计数跳过，
-            //    且 Free 登记必须在 RemoveAt 成功之后（不得双归属）。
+            //    且计数必须在 RemoveAt 成功之后（不得重复计数）。
             scene.ActorList.Clear();
             MShare.MySelf = self;
             var doomed2 = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987667 };
             scene.ActorList.Add(doomed2);
+            SetIdle(doomed2);
             long db2 = LoadMetrics.SceneListRaceSkippedCount;
             PlayScene.SceneRemoveAtRaceHook = sc =>
             {
@@ -332,8 +365,8 @@ namespace BotSrv
             }
             Check("remove-at-race-skipped",
                 !threw && LoadMetrics.SceneListRaceSkippedCount == db2 + 1
-                && scene.ActorList.Count == 0 && !MShare.g_FreeActorList.Contains(doomed2),
-                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db2} count={scene.ActorList.Count} free={MShare.g_FreeActorList.Contains(doomed2)}");
+                && scene.ActorList.Count == 0,
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db2} count={scene.ActorList.Count}");
 
             // ⑦ ActorDied「顺带核」：BeginScene 的 ProcMsg→ActorDied 在 run 线程执行，收包线程可能
             //    并发缩表；删除/插入失败必须计数跳过、不抛 AOORE。
@@ -418,6 +451,78 @@ namespace BotSrv
                 !threw && LoadMetrics.SceneNullActorSkippedCount == nb + 1
                 && scene.ActorList.Count == 3 && scene.ActorList.Contains(absent),
                 $"threw={threw} null+={LoadMetrics.SceneNullActorSkippedCount - nb} count={scene.ActorList.Count}");
+
+            // ---------- ⑩ AOI 驱逐的 2000ms 空闲守卫（卡 `openmir2-botsrv-actor-pool-leak`） ----------
+            // 冻结客户端 PlayScn.pas:1219：只有「距上次取消息 >2000ms」且「越界 >16 格」才驱逐。
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            var recentFar = new TestActor(robot) { CurrX = 300, CurrY = 300, m_nRx = 300, m_nRy = 300, RecogId = 987672 };
+            scene.ActorList.Add(recentFar);
+            long ejRecent = LoadMetrics.SceneActorEjectedCount;
+            threw = false;
+            try { SetMoveTimeNow(scene); scene.BeginScene(); }
+            catch (Exception e) { threw = true; Console.WriteLine("   aoi-recent threw: " + e.GetType().Name + " @ " + e.StackTrace); }
+            Check("aoi-idle-guard-skips-recent",
+                !threw && scene.ActorList.Count == 1 && scene.ActorList[0] == recentFar
+                && LoadMetrics.SceneActorEjectedCount == ejRecent,
+                $"threw={threw} count={scene.ActorList.Count} ejected+={LoadMetrics.SceneActorEjectedCount - ejRecent} want kept");
+
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            var idleFar = new TestActor(robot) { CurrX = 300, CurrY = 300, m_nRx = 300, m_nRy = 300, RecogId = 987673 };
+            SetIdle(idleFar);
+            scene.ActorList.Add(idleFar);
+            long ejIdle = LoadMetrics.SceneActorEjectedCount;
+            threw = false;
+            try { SetMoveTimeNow(scene); scene.BeginScene(); }
+            catch (Exception e) { threw = true; Console.WriteLine("   aoi-idle threw: " + e.GetType().Name + " @ " + e.StackTrace); }
+            Check("aoi-idle-guard-evicts-idle",
+                !threw && scene.ActorList.Count == 0
+                && LoadMetrics.SceneActorEjectedCount == ejIdle + 1,
+                $"threw={threw} count={scene.ActorList.Count} ejected+={LoadMetrics.SceneActorEjectedCount - ejIdle} want 1");
+
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            var delFar = new TestActor(robot) { CurrX = 100, CurrY = 100, m_nRx = 100, m_nRy = 100, RecogId = 987674, DelActor = true };
+            scene.ActorList.Add(delFar);   // 坐标不越界、消息新鲜：只有 DelActor 能驱逐
+            long ejDel = LoadMetrics.SceneActorEjectedCount;
+            threw = false;
+            try { SetMoveTimeNow(scene); scene.BeginScene(); }
+            catch (Exception e) { threw = true; Console.WriteLine("   aoi-delactor threw: " + e.GetType().Name + " @ " + e.StackTrace); }
+            Check("aoi-delactor-evicts-ignoring-idle",
+                !threw && scene.ActorList.Count == 0
+                && LoadMetrics.SceneActorEjectedCount == ejDel + 1,
+                $"threw={threw} count={scene.ActorList.Count} ejected+={LoadMetrics.SceneActorEjectedCount - ejDel} want 1");
+
+            // ⑪ ProcMsg 每取走一条消息刷新 m_dwLastGetMessageTime（守卫的输入，Actor.pas:2055）。
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            var procActor = new TestActor(robot) { CurrX = 100, CurrY = 100, RecogId = 987675 };
+            SetIdle(procActor, 5000);
+            long staleAge = MShare.GetTickCount() - procActor.m_dwLastGetMessageTime;
+            procActor.m_MsgList.Add(new TChrMsg { Ident = 9999 });   // 非动作帧：ProcMsg 只取走、不改状态
+            procActor.ProcMsg();
+            long freshAge = MShare.GetTickCount() - procActor.m_dwLastGetMessageTime;
+            Check("procmessage-refreshes-lastget",
+                procActor.m_MsgList.Count == 0 && freshAge < 2000 && staleAge > 2000,
+                $"left={procActor.m_MsgList.Count} staleAge={staleAge} freshAge={freshAge}");
+
+            // ⑫ 机制证明（A7）：驱逐 N 个 actor 后，它们不再被任何静态结构保留 ⇒ GC 后 WeakReference 全部死亡。
+            // 池已删除，池上界 N=0；这条是「机制上真的没漏」的正面证据（不是只看内存不涨）。
+            long ejWeak = LoadMetrics.SceneActorEjectedCount;
+            System.WeakReference[] evictedRefs = EjectActorsForWeakRefTest(robot, scene, self, 16);
+            long ejectedNow = LoadMetrics.SceneActorEjectedCount - ejWeak;
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            int aliveEvicted = 0;
+            for (int i = 0; i < evictedRefs.Length; i++)
+            {
+                if (evictedRefs[i].IsAlive) { aliveEvicted++; }
+            }
+            Check("aoi-evict-not-retained-after-gc",
+                ejectedNow == 16 && scene.ActorList.Count == 0 && aliveEvicted == 0,
+                $"ejected={ejectedNow} count={scene.ActorList.Count} aliveAfterGc={aliveEvicted} want 0");
 
             MShare.MySelf = self;
             scene.ActorList.Clear();
