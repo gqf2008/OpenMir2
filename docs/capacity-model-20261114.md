@@ -300,6 +300,12 @@ T10c-3 之后：`SimMonsterAi` **6.98–7.11ms**、`World::tick` **13.30ms / 1.2
   按新判据（`internal_errors` 绝对上限 0 + BotSrv 崩溃三条件 + `HoldSec≥360s` 结论有效性）复算：
   **200 档 = RED**（`internal_errors=1061`，`PlayScene.BeginScene` NRE）、**500 档 = RED（结论级）**
   （四项全 0 但 60s<360s，结论无效）、1000 档维持 RED。**旧口径的 GREEN 不再有效，不得引用。**
+  **500 档 RED 原因更新（2026-11-15 晚，`hold=360s`、`conclusion_valid=true`）**：不再是「窗口不足」的
+  结论级 RED，而是**确定性错误判据**——修复树 500 档 360s 轮判 `verdict=RED`、`LOADGATE_RC=1`，fails 两条：
+  ①`internal_errors=1 > 0` 且 **bots.log 无法给出异常类型归因**（fail-closed）；②`recv_packet_null=1` 属未登记
+  fault 类别（容忍度 0）。其中第①条正是 `LogService.Error(Exception)` 坏重载与 `load_report` 正则口径造成，
+  由卡 `openmir2-botsrv-errorstack-diagnosable` 修复（复审 approve）。
+  ⇒ **在 errorstack 修复合入前，任何 `internal_errors>0` 的轮次都无法从 RED 走出**（这是「必须做」的最强理由）。
   详见 `docs/loadgate-criteria-runbook-20261115.md` 与卡 `openmir2-loadgate-criteria-gaps`。
 - **1000 档稳态未成立**：60s 窗内无人进世界（串行存档载入 ~5–7/s）；补充 360s 到 425/1000 时
   BotSrv 在 4GiB GC 上限下 OOM；网关 `ProcessBufferSend` 在 `SendChecked>0` 时静默丢帧（386/716 SM_LOGON 未发）。
