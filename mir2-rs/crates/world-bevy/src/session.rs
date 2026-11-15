@@ -16,6 +16,7 @@
 use crate::entity::{EntitySpawn, ACTOR_RACE_PLAY};
 use crate::map::{CellType, MapGrid};
 use crate::world::World;
+use std::collections::HashMap;
 
 /// `[Setup] SendRefMsgRange`（oracle `GameSvrConf.cs:1503` 缺省 12；现网 `Server.conf` 同为 12；
 /// 宿主 `bins/game-svr` 从配置读同名键并缺省 12）。
@@ -169,6 +170,12 @@ pub struct MapChange {
 #[derive(Clone, Debug, Default)]
 pub struct SessionRegistry {
     sessions: Vec<Session>,
+    /// `chr_name -> sessions 下标` 的**查找索引**（卡 `openmir2-p1-hostinbound-index`）。
+    ///
+    /// `sessions` 仍是唯一真源与迭代序（`iter()` 保序）；本表只在 `open`（唯一插入点）时登记，
+    /// 会话**从不删除**、`Session.chr_name` **从不改名** ⇒ 无失同步路径。`get`/`get_mut` 由
+    /// O(sessions) 线性扫描降为 O(1)（500 档 884ns → ~O(1)；10k 档 17.8µs → ~O(1)）。
+    by_chr: HashMap<String, usize>,
     /// **接线批 A**：本 tick 内成功的切图事件（`World::switch_map` 记，宿主 drain）。保序。
     map_changes: Vec<MapChange>,
     /// **orphan 接线第二批**：掉线/小退/顶号时「能看到离开者」的观察者事件
@@ -180,9 +187,24 @@ impl SessionRegistry {
     pub fn new() -> Self {
         SessionRegistry {
             sessions: Vec::new(),
+            by_chr: HashMap::new(),
             map_changes: Vec::new(),
             departs: Vec::new(),
         }
+    }
+
+    /// 建会话并返回其下标；已存在则返回已有下标（不再重复 push）。
+    ///
+    /// 与旧 `World::open_session` 语义一致（`get().is_none()` 才 push，再取位置），
+    /// 但位置来自 `by_chr`，省掉一次 O(n) 线性 `position`。
+    pub(crate) fn open(&mut self, chr_name: &str) -> usize {
+        if let Some(&idx) = self.by_chr.get(chr_name) {
+            return idx;
+        }
+        let idx = self.sessions.len();
+        self.sessions.push(Session::new(chr_name));
+        self.by_chr.insert(chr_name.to_string(), idx);
+        idx
     }
 
     /// **orphan 接线第二批**：取走本轮的「离世广播」事件（保序，取走即清）。
@@ -205,11 +227,13 @@ impl SessionRegistry {
     }
 
     pub fn get(&self, chr_name: &str) -> Option<&Session> {
-        self.sessions.iter().find(|s| s.chr_name == chr_name)
+        let idx = *self.by_chr.get(chr_name)?;
+        self.sessions.get(idx)
     }
 
     pub fn get_mut(&mut self, chr_name: &str) -> Option<&mut Session> {
-        self.sessions.iter_mut().find(|s| s.chr_name == chr_name)
+        let idx = *self.by_chr.get(chr_name)?;
+        self.sessions.get_mut(idx)
     }
 
     pub fn iter(&self) -> impl Iterator<Item = &Session> {
@@ -245,15 +269,11 @@ impl SessionRegistry {
 
 impl World {
     /// 建会话（对应 M1 侧"角色选定、准备进世界"）；此时还没进图。
+    ///
+    /// 卡 `openmir2-p1-hostinbound-index`：索引化后位置直接来自 `SessionRegistry::by_chr`，
+    /// 不再每次 `position()` 线性扫描（原实现 O(n)）。
     pub fn open_session(&mut self, chr_name: &str) -> usize {
-        if self.sessions.get(chr_name).is_none() {
-            self.sessions.sessions.push(Session::new(chr_name));
-        }
-        self.sessions
-            .sessions
-            .iter()
-            .position(|s| s.chr_name == chr_name)
-            .expect("刚插入过")
+        self.sessions.open(chr_name)
     }
 
     pub fn session(&self, chr_name: &str) -> Option<&Session> {
