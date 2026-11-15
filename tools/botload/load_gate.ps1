@@ -86,6 +86,8 @@ param(
   [switch]$SkipBuild,
   [switch]$SelfTestRed,
   [switch]$SelfTestCriteria,             # A3（2026-11-15）：不启动服务，伪造 OOM/NRE/退出码/白名单走真实 load_report CLI，断言必红
+  [switch]$SelfTestArtifactHash,         # 卡 openmir2-loadgate-filehash-rc：哈希实现/rc 语义的无栈自检
+  [string]$RecomputeArtifacts = "",      # 卡 openmir2-loadgate-filehash-rc：用既有归档复算产物清单（目录）
   [string]$Criteria = "login,conn,tick,internal",  # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"。
                                          # internal（A1，2026-11-15）默认在判据里；去掉它的轮次不得作为压测结论
   [switch]$NoActionProbe,                # 关掉假人动作探针（默认开：否则采不到 #+GD ack ⇒ tick 无样本）
@@ -109,6 +111,65 @@ $Here = Split-Path -Parent $MyInvocation.MyCommand.Path
 $RepoRoot = (Resolve-Path (Join-Path $Here "..\..")).Path
 # 内存护栏共享 helper（进程级堆上限 / 看门狗 / 有界跑）；见 BotGuard.psm1 头部取证说明。
 Import-Module (Join-Path $Here "BotGuard.psm1") -Force
+
+# ---- 卡 `openmir2-loadgate-filehash-rc`：不依赖 Get-FileHash 的 SHA-256 与 rc 语义 ----
+# 本机 Windows PowerShell 的 Get-FileHash 不可用（窗口里 manifest 步骤抛错 ⇒ 整轮 rc=1，
+# 但 report/ndjson 数据完整）。改为 .NET SHA256，输出小写 hex（与原清单一致）。
+function Get-Sha256Hex {
+    param([string]$Path)
+    if ($env:LOADGATE_TEST_HASH_FAIL -eq "1") {
+        throw [System.InvalidOperationException]::new("simulated: hash tool unavailable (LOADGATE_TEST_HASH_FAIL=1)")
+    }
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+        try { $hash = $sha.ComputeHash($fs) } finally { $fs.Dispose() }
+    } finally { $sha.Dispose() }
+    return (($hash | ForEach-Object { $_.ToString("x2") }) -join "")
+}
+
+# 退出码语义：环境/工具问题（产物清单不可判）⇒ 2；判据 RED ⇒ 1；全绿 ⇒ 0。
+# 环境问题**不得**伪装成判据 RED；两者同时出现时以 2 为准（summary 里仍保留判据结果）。
+function Get-GateExitCode {
+    param([bool]$CriteriaRed, [bool]$ArtifactInconclusive)
+    if ($ArtifactInconclusive) { return 2 }
+    if ($CriteriaRed) { return 1 }
+    return 0
+}
+
+# 产物清单：目录内 report.json/load_stats.ndjson/... 的 {file,sha256} 清单。
+# 任何哈希失败（缺工具/坏文件）⇒ 不写半份清单，写 artifacts.sha256.inconclusive.json 并把
+# $script:ArtifactHashInconclusive 置 true（最终 rc=2，不可判；不是判据 RED）。
+function Write-ArtifactManifest {
+    param([string]$Dir)
+    $script:ArtifactHashInconclusive = $false
+    $script:ArtifactHashError = ""
+    $manifest = @()
+    try {
+        $files = @()
+        foreach ($pat in @("report.json", "load_stats.ndjson", "mem.ndjson", "hostload.ndjson", "login_conns.ndjson",
+                           "bots.err.log", "bots_runtime.json")) {
+            $files += @(Get-ChildItem -Path $Dir -Recurse -Filter $pat -ErrorAction SilentlyContinue)
+        }
+        foreach ($f in ($files | Sort-Object FullName)) {
+            $rel = $f.FullName.Substring($Dir.Length).TrimStart('\', '/')
+            $sha = Get-Sha256Hex $f.FullName
+            if ([string]::IsNullOrWhiteSpace($sha) -or ($sha -notmatch '^[0-9a-f]{64}$')) {
+                throw ("bad sha256 for " + $rel)
+            }
+            $manifest += @{ file = $rel; sha256 = $sha }
+        }
+        @{ generated_ms = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); files = $manifest } |
+            ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Dir "artifacts.sha256.json") -Encoding utf8
+    } catch {
+        $script:ArtifactHashInconclusive = $true
+        $script:ArtifactHashError = $_.Exception.Message
+        @{ status = "inconclusive"; error = $script:ArtifactHashError; generated_ms = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); files = @() } |
+            ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Dir "artifacts.sha256.inconclusive.json") -Encoding utf8
+        Write-Output ("ARTIFACT_HASH_INCONCLUSIVE: " + $script:ArtifactHashError + " —— 不可判（环境/工具问题，不是判据 RED）")
+    }
+    return $manifest
+}
 
 # 档位参数归一化 + 防线（2026-10-11 实测：`-File -Tiers 500,1000` 变 5001000，整档跑满 600s 才 RED）：
 #   ① 把 string 拆回 [int[]]：`,  空格 都算分隔符 ⇒ `-File`/`-Command` 两种传法都正确；
@@ -170,6 +231,88 @@ if ($OutDir -eq "") {
     $OutDir = Join-Path $RepoRoot ("tests\loadgate\load-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
 }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
+
+# ---- 卡 `openmir2-loadgate-filehash-rc`：无栈自检（正常/缺工具/坏文件/rc 三态） ----
+if ($SelfTestArtifactHash) {
+    $stRoot = Join-Path $OutDir "selftest-artifact-hash"
+    New-Item -ItemType Directory -Force -Path $stRoot | Out-Null
+    $stFails = @()
+    $f1 = Join-Path $stRoot "alpha.txt"
+    [System.IO.File]::WriteAllText($f1, "alpha", (New-Object System.Text.UTF8Encoding($false)))
+    $f2 = Join-Path $stRoot "beta.txt"
+    [System.IO.File]::WriteAllText($f2, "beta", (New-Object System.Text.UTF8Encoding($false)))
+    # 实际 manifest 路径：正常目录 ⇒ artifacts.sha256.json + status ok
+    $normalDir = Join-Path $stRoot "normal"
+    New-Item -ItemType Directory -Force -Path $normalDir | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $normalDir "report.json"), "{}", (New-Object System.Text.UTF8Encoding($false)))
+    $null = Write-ArtifactManifest $normalDir
+    if (-not (Test-Path -LiteralPath (Join-Path $normalDir "artifacts.sha256.json"))) { $stFails += "normal manifest missing" }
+    if ($script:ArtifactHashInconclusive) { $stFails += "normal manifest marked inconclusive" }
+    # 实际 manifest 路径：强制哈希失败 ⇒ inconclusive 标记文件 + rc=2（不是 RED）
+    $failDir = Join-Path $stRoot "fail"
+    New-Item -ItemType Directory -Force -Path $failDir | Out-Null
+    [System.IO.File]::WriteAllText((Join-Path $failDir "report.json"), "{}", (New-Object System.Text.UTF8Encoding($false)))
+    $env:LOADGATE_TEST_HASH_FAIL = "1"
+    try {
+        $null = Write-ArtifactManifest $failDir
+    } finally { Remove-Item Env:\LOADGATE_TEST_HASH_FAIL -ErrorAction SilentlyContinue }
+    if (-not $script:ArtifactHashInconclusive) { $stFails += "forced failure not marked inconclusive" }
+    if (-not (Test-Path -LiteralPath (Join-Path $failDir "artifacts.sha256.inconclusive.json"))) { $stFails += "inconclusive marker missing" }
+    if ((Get-GateExitCode $false $script:ArtifactHashInconclusive) -ne 2) { $stFails += "forced failure rc != 2" }
+    $script:ArtifactHashInconclusive = $false
+    $script:ArtifactHashError = ""
+    try {
+        $h1 = Get-Sha256Hex $f1
+        $h2 = Get-Sha256Hex $f2
+        if ($h1 -ne "8ed3f6ad685b959ead7022518e1af76cd816f8e8ec7ccdda1ed4018e8f2223f8") { $stFails += ("alpha hash mismatch: " + $h1) }
+        if ($h2 -ne "f44e64e75f3948e9f73f8dfa94721c4ce8cbb4f265c4790c702b2d41cfbf2753") { $stFails += ("beta hash mismatch: " + $h2) }
+        if ((Get-GateExitCode $false $false) -ne 0) { $stFails += "normal rc != 0" }
+        if ((Get-GateExitCode $true $false) -ne 1) { $stFails += "criteria RED rc != 1" }
+        if ((Get-GateExitCode $false $true) -ne 2) { $stFails += "inconclusive rc != 2" }
+    } catch { $stFails += ("normal threw: " + $_.Exception.Message) }
+    $env:LOADGATE_TEST_HASH_FAIL = "1"
+    try {
+        try { $null = Get-Sha256Hex $f1; $stFails += "forced missing tool did not throw" } catch { }
+    } finally { Remove-Item Env:\LOADGATE_TEST_HASH_FAIL -ErrorAction SilentlyContinue }
+    $badFile = Join-Path $stRoot "missing.bin"
+    try { $null = Get-Sha256Hex $badFile; $stFails += "bad file did not throw" } catch { }
+    if ($stFails.Count -gt 0) {
+        Write-Output ("ARTIFACT_HASH SELFTEST FAIL: " + ($stFails -join "；"))
+        exit 1
+    }
+    Write-Output "ARTIFACT_HASH SELFTEST PASS: 正常 sha 一致；forced missing tool ⇒ 不可判 rc=2；criteria RED ⇒ rc=1；bad file ⇒ 不可判"
+    exit 0
+}
+
+# ---- 卡 `openmir2-loadgate-filehash-rc`：既有归档复算产物清单（A4） ----
+if ($RecomputeArtifacts -ne "") {
+    $dir = (Resolve-Path -LiteralPath $RecomputeArtifacts).Path
+    $manifestPath = Join-Path $dir "artifacts.sha256.json"
+    if (-not (Test-Path -LiteralPath $manifestPath)) {
+        Write-Output ("ARTIFACT_RECOMPUTE INCONCLUSIVE: 缺 " + $manifestPath)
+        exit 2
+    }
+    try {
+        $old = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+        $oldFiles = @($old.files)
+        $mismatch = @()
+        foreach ($e in $oldFiles) {
+            $p = Join-Path $dir ([string]$e.file)
+            if (-not (Test-Path -LiteralPath $p)) { $mismatch += ("missing: " + $e.file); continue }
+            $h = Get-Sha256Hex $p
+            if ($h -ne ([string]$e.sha256).ToLower()) { $mismatch += ("hash: " + $e.file) }
+        }
+        if ($mismatch.Count -gt 0) {
+            Write-Output ("ARTIFACT_RECOMPUTE FAIL: " + ($mismatch -join "；"))
+            exit 1
+        }
+        Write-Output ("ARTIFACT_RECOMPUTE PASS: " + $oldFiles.Count + " 个文件与既有清单一致")
+        exit 0
+    } catch {
+        Write-Output ("ARTIFACT_RECOMPUTE INCONCLUSIVE: " + $_.Exception.Message)
+        exit 2
+    }
+}
 
 # ---- A3（2026-11-15）判据红检：不启动任何服务，伪造 OOM/NRE/退出码，走真实 load_report CLI ----
 # 目的：证明「注入一次 OOM/NRE 路径（或伪造日志/退出码）⇒ 判据必红；正常跑不变绿」。
@@ -882,13 +1025,7 @@ foreach ($pat in @("report.json", "load_stats.ndjson", "mem.ndjson", "hostload.n
                    "bots.err.log", "bots_runtime.json")) {
     $artifactFiles += @(Get-ChildItem -Path $OutDir -Recurse -Filter $pat -ErrorAction SilentlyContinue)
 }
-$artifactManifest = @()
-foreach ($f in ($artifactFiles | Sort-Object FullName)) {
-    $rel = $f.FullName.Substring($OutDir.Length).TrimStart('\', '/')
-    $artifactManifest += @{ file = $rel; sha256 = (Get-FileHash -Algorithm SHA256 -Path $f.FullName).Hash.ToLower() }
-}
-@{ generated_ms = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); files = $artifactManifest } |
-    ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $OutDir "artifacts.sha256.json") -Encoding utf8
+$artifactManifest = Write-ArtifactManifest $OutDir
 
 $summaryPath = Join-Path $OutDir "load_gate_summary.json"
 @{
@@ -936,6 +1073,8 @@ $summaryPath = Join-Path $OutDir "load_gate_summary.json"
   host_load_caliber = "CPU=Win32_Processor.LoadPercentage 均值(%)；heavy=rustc/cargo/cargo-clippy/msbuild 进程数（叧 tickbench）；只标注不判红"
   host_load_note = "tick P99 在共享机器上不可归属（C# 参考栈 vs 同机并发编译）；CPU 峰≥40% 或 heavy 峰≥4 ⇒ 该轮 P99 未归属，需空载窗口复测"
   artifacts  = $artifactManifest
+  artifacts_hash_status = $(if ($script:ArtifactHashInconclusive) { "inconclusive" } else { "ok" })
+  artifacts_hash_error = $script:ArtifactHashError
   worst_by_tier = $worstByTier
   reports    = $tierReports
 } | ConvertTo-Json -Depth 8 -WarningAction SilentlyContinue | Set-Content -Path $summaryPath -Encoding utf8
@@ -956,6 +1095,10 @@ if ($SelfTestRed) {
     exit 1
 }
 
+if ($script:ArtifactHashInconclusive) {
+    Write-Output ("INCONCLUSIVE: 产物清单不可判（" + $script:ArtifactHashError + "）—— rc=2；判据结果见 summary（环境/工具问题，不是 RED）")
+    exit 2
+}
 if ($tierReports.Count -eq 0) { Write-Output "RED: 一档都没跑成"; exit 1 }
 if ($crashAny) {
     Write-Output ("RED: BotSrv 崩溃证据命中（非 0 退出 / bots.err.log 'Out of memory.' / Application Error 0xe0434352）—— " +
