@@ -95,6 +95,8 @@ namespace BotSrv
         private static string _actFirstPayload = "";
         private static long _probePosFollowed;   // 探针坐标跟随服务端位移的次数（推挤/空间移动）
         private static long _logonMisdelivered;  // 同一会话收到**别的 actor** 的 SM_LOGON 并拒绝的次数（错投观测）
+        private static long _sceneNullActorSkipped; // BeginScene 跳过的 null 槽位次数（夹具健壮性）
+        private static long _sceneListRaceSkipped; // BeginScene 因列表被并发改动而跳过的删除次数
 
         // ==== 登录连接级观测（C6 第 5 轮，T-11）：把「残余丢包」的方向证出来 ====
         // T-8 的 ident 直方图只能证明「服务端回的总数 < 假人数」，分不出这两种：
@@ -292,6 +294,38 @@ namespace BotSrv
             {
                 _probeSent++;
             }
+        }
+
+        /// <summary>BeginScene 本轮遇到 `ActorList` 的 null 槽位并跳过（卡 `openmir2-botsrv-autoplay-nre`）。
+        /// 真实 Delphi 客户端 `m_ActorList` 只在 UI 线程读写、不会出现 null；BotSrv 的收包线程与 run
+        /// 线程并发增删才会造成瞬时 null。计数只作观测：修复后应恒 0（不为它写白名单豁免）。</summary>
+        public static void SceneNullActorSkipped()
+        {
+            lock (Sync)
+            {
+                _sceneNullActorSkipped++;
+            }
+        }
+
+        /// <summary>自检读取用：BeginScene 跳过的 null 槽位累计次数。</summary>
+        public static long SceneNullActorSkippedCount
+        {
+            get { lock (Sync) { return _sceneNullActorSkipped; } }
+        }
+
+        /// <summary>BeginScene 的删除点发现槽位已被并发改动（下标失效/已换人）而跳过删除
+        /// （卡 `openmir2-botsrv-autoplay-nre`）。修复后应恒 0；不写白名单豁免。</summary>
+        public static void SceneListRaceSkipped()
+        {
+            lock (Sync)
+            {
+                _sceneListRaceSkipped++;
+            }
+        }
+
+        public static long SceneListRaceSkippedCount
+        {
+            get { lock (Sync) { return _sceneListRaceSkipped; } }
         }
 
         /// <summary>这个假人收到了服务端的 SM_LOGON（= 真的进了世界，而不是"本地切到 PlayScene"）。
@@ -828,6 +862,8 @@ namespace BotSrv
               .Append(",\"conn_refused\":").Append(_connRefused)
               .Append(",\"conn_lost\":").Append(_connLost)
               .Append(",\"internal_errors\":").Append(_internalErrors)
+              .Append(",\"scene_null_actor_skipped\":").Append(_sceneNullActorSkipped)
+              .Append(",\"scene_list_race_skipped\":").Append(_sceneListRaceSkipped)
               .Append(",\"in_world\":").Append(_inWorld)
               .Append(",\"in_world_suppressed\":").Append(_inWorldSuppressed)
               .Append(",\"autoplay_in_world\":").Append(_autoPlayInWorld)

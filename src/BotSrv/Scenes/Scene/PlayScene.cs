@@ -1,4 +1,4 @@
-﻿using BotSrv.Data;
+using BotSrv.Data;
 using BotSrv.Maps;
 using BotSrv.Objects;
 using BotSrv.Player;
@@ -88,7 +88,12 @@ namespace BotSrv.Scenes.Scene
 
         public void BeginScene()
         {
-            if (MShare.MySelf == null)
+            // 轮首快照"自己"（卡 `openmir2-botsrv-autoplay-nre`）：真实 Delphi 客户端是单线程
+            // （收包与场景循环同一消息泵），`g_MySelf` 只可能在两轮之间变化；这里按同一语义取一次
+            // 快照，避免 BotSrv 的收包线程（SM_LOGON 重绑 / ClearActors）在循环中途把共享
+            // `MShare.MySelf` 置 null ⇒ line 161 的 NRE。快照只作本轮比较/坐标基准。
+            THumActor self = MShare.MySelf;
+            if (self == null)
             {
                 return;
             }
@@ -118,6 +123,17 @@ namespace BotSrv.Scenes.Scene
                     break;
                 }
                 Actor actor = ActorList[i];
+                if (actor == null)
+                {
+                    // 夹具健壮性（卡 `openmir2-botsrv-autoplay-nre`）：`ActorList` 会被收包线程
+                    // （SM_HIDE/SM_NEWMAP 删除、AOI 增删）与本 run 线程并发增删，槽位可能瞬时为 null。
+                    // 真实客户端 `m_ActorList` 只在 UI 线程读写（不会出现 null），且对「帧引用不存在
+                    // 的 actor」是显式跳过（`PlayScn.pas:3670-3690`：创建不出 ⇒ `if Actor = nil then Exit`）。
+                    // 这里照抄同义：跳过该槽位、计数、不抛 NRE；不自创重试/重建策略。
+                    LoadMetrics.SceneNullActorSkipped();
+                    i++;
+                    continue;
+                }
                 if (actor.Death && MShare.g_gcGeneral[8] && !actor.m_boItemExplore && (actor.Race != 0) && actor.IsIdle())
                 {
                     i++;
@@ -139,12 +155,12 @@ namespace BotSrv.Scenes.Scene
                         }
                     }
                     actor.Run();
-                    if (actor != MShare.MySelf)
+                    if (actor != self)
                     {
                         actor.ProcHurryMsg();
                     }
                 }
-                if (actor == MShare.MySelf)
+                if (actor == self)
                 {
                     actor.ProcHurryMsg();
                 }
@@ -158,10 +174,23 @@ namespace BotSrv.Scenes.Scene
                         actor.DelActor = true;
                     }
                 }
-                if (actor.DelActor || (Math.Abs(MShare.MySelf.CurrX - actor.CurrX) > 16) || (Math.Abs(MShare.MySelf.CurrY - actor.CurrY) > 16))
+                if (actor.DelActor || (Math.Abs(self.CurrX - actor.CurrX) > 16) || (Math.Abs(self.CurrY - actor.CurrY) > 16))
                 {
                     MShare.g_FreeActorList.Add(actor);
-                    ActorList.RemoveAt(i);
+                    // 并发一致性（卡 `openmir2-botsrv-autoplay-nre`）：本槽位可能已被收包线程
+                    // （SM_HIDE/SM_NEWMAP/AOI 增删）或 actor.Run() 的同线程重入改掉。真实客户端
+                    // 单线程里 RemoveAt(i) 恒指向本轮 actor；这里先核对身份/下标，不一致就按
+                    // 「跳过该槽位」处理（与上面 null 槽位同义），避免 RemoveAt 误删别人或抛
+                    // ArgumentOutOfRangeException 污染 internal_errors。
+                    if (i < ActorList.Count && ActorList[i] == actor)
+                    {
+                        ActorList.RemoveAt(i);
+                    }
+                    else
+                    {
+                        LoadMetrics.SceneListRaceSkipped();
+                        i++;
+                    }
                     if (MShare.TargetCret == actor)
                     {
                         MShare.TargetCret = null;
@@ -184,7 +213,7 @@ namespace BotSrv.Scenes.Scene
                     i++;
                 }
             }
-            RobotClient.Map.UpdateMapPos(MShare.MySelf.m_nRx, MShare.MySelf.m_nRy);
+            RobotClient.Map.UpdateMapPos(self.m_nRx, self.m_nRy);
         }
 
         public void PlaySurface(object sender)
