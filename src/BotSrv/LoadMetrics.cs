@@ -98,6 +98,7 @@ namespace BotSrv
         private static long _sceneNullActorSkipped; // BeginScene 跳过的 null 槽位次数（夹具健壮性）
         private static long _sceneListRaceSkipped; // BeginScene 因列表被并发改动而跳过的删除次数
         private static long _sceneIndexRaceSkipped; // BeginScene 轮内下标读取被并发缩表跳过的次数
+        private static long _sceneRounds;          // BeginScene 实际进入 ActorList 迭代的轮次（0.5% 上界的分母）
 
         // ==== 登录连接级观测（C6 第 5 轮，T-11）：把「残余丢包」的方向证出来 ====
         // T-8 的 ident 直方图只能证明「服务端回的总数 < 假人数」，分不出这两种：
@@ -342,6 +343,24 @@ namespace BotSrv
         public static long SceneIndexRaceSkippedCount
         {
             get { lock (Sync) { return _sceneIndexRaceSkipped; } }
+        }
+
+        /// <summary>
+        /// BeginScene 实际进入 `ActorList` 迭代的一轮（`MShare.MySelf == null` 的早退不算）。
+        /// 它是总监裁决的 null-skip 上界分母：**稳态窗口内 `scene_null_actor_skipped` 轮次占比 &lt;0.5%**。
+        /// 只计数，不改变任何行为。
+        /// </summary>
+        public static void SceneRoundStarted()
+        {
+            lock (Sync)
+            {
+                _sceneRounds++;
+            }
+        }
+
+        public static long SceneRoundsCount
+        {
+            get { lock (Sync) { return _sceneRounds; } }
         }
 
         /// <summary>这个假人收到了服务端的 SM_LOGON（= 真的进了世界，而不是"本地切到 PlayScene"）。
@@ -961,6 +980,7 @@ namespace BotSrv
               .Append(",\"scene_null_actor_skipped\":").Append(_sceneNullActorSkipped)
               .Append(",\"scene_list_race_skipped\":").Append(_sceneListRaceSkipped)
               .Append(",\"scene_index_race_skipped\":").Append(_sceneIndexRaceSkipped)
+              .Append(",\"scene_rounds\":").Append(_sceneRounds)
               // 卡 openmir2-botsrv-recv-thread-nre：错误类别普查（封闭集合，逐类计数）。
               // load_report 对缺键/多键/类别非 0 都 fail-closed；schema 变更必须同步改两边。
               .Append(",\"error_census_schema\":1")
