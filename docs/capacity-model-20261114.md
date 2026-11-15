@@ -290,6 +290,11 @@ T10c-3 之后：`SimMonsterAi` **6.98–7.11ms**、`World::tick` **13.30ms / 1.2
 - 按预算反推的**活跃客户端上限**（仅 HostInbound）：独占 200ms ⇒ **≈1,781**（理论上界，不是设计点）；
   整栈 50%（100ms）⇒ **≈913**（**设计口径**）。
 - **按名义档位拟合（R²=0.698）不可用**：1000 档只有 425 个 bot 真正发探针，用它拟合会把「没跑起来」当成「性能好」。
+- **口径更正（2026-11-15，新判据）**：上表三档按**旧判据**（login/conn/tick）曾判 200/500 GREEN；
+  按新判据（`internal_errors` 绝对上限 0 + BotSrv 崩溃三条件 + `HoldSec≥360s` 结论有效性）复算：
+  **200 档 = RED**（`internal_errors=1061`，`PlayScene.BeginScene` NRE）、**500 档 = RED（结论级）**
+  （四项全 0 但 60s<360s，结论无效）、1000 档维持 RED。**旧口径的 GREEN 不再有效，不得引用。**
+  详见 `docs/loadgate-criteria-runbook-20261115.md` 与卡 `openmir2-loadgate-criteria-gaps`。
 - **1000 档稳态未成立**：60s 窗内无人进世界（串行存档载入 ~5–7/s）；补充 360s 到 425/1000 时
   BotSrv 在 4GiB GC 上限下 OOM；网关 `ProcessBufferSend` 在 `SendChecked>0` 时静默丢帧（386/716 SM_LOGON 未发）。
   三条各有专卡（`openmir2-botsrv-heap-limit-oom`、`openmir2-gateway-backpressure-frame-drop`、

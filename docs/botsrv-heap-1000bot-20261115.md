@@ -123,7 +123,8 @@ Model B:  WS(MB) = -423.9 + 6.767 × N + 0.0942 × N×T  R² = 0.9738
 
 ## 7. 顺带发现的判据问题（影响 A2/A4）
 
-1. **A2 的 `internal_errors=0` 当前任何档都过不了**：200 档 `report.json` 记 `internal_errors=1061`（仍判 GREEN，因为 criteria 只含 login/conn/tick），1000 档 3875。这些异常主要是 `PlayScene.BeginScene` 的 `NullReferenceException`（`bots.log` 有成组堆栈）。A2 要么先修这个 NRE，要么把判据改成「不随 bot 数增长」的口径。
+<!-- 2026-11-15 口径更正：见文末勘误 -->
+1. **A2 的 `internal_errors=0` 在 200/1000 档过不了**：200 档 `report.json` 记 `internal_errors=1061`（**旧判据下仍判 GREEN，因为 criteria 只含 login/conn/tick；新判据下为 RED**），1000 档 3875；500 档该计数为 0。这些异常主要是 `PlayScene.BeginScene` 的 `NullReferenceException`（`bots.log` 有成组堆栈）。A2 要么先修这个 NRE，要么把判据改成「不随 bot 数增长」的口径。
 2. **A4 未满足**：`tools/botload/load_gate.ps1` 在 BotSrv 退出时只打 `WARN BotSrv 退出 code=…`，不读 `bots.err.log` 的 `Out of memory.`、不查 Windows Application Error、**不判 RED**。本晚 `supp-hold360` 的 RED 只来自 `tick P99 201ms`，OOM 没有任何判据痕迹。补这条是确定性的、不需要窗口（建议另开卡，或在换机窗口前一起做）。
 
 ## 8. 可选降每 bot 内存方向（本卡不做，供后续卡取舍）
@@ -142,3 +143,11 @@ Model B:  WS(MB) = -423.9 + 6.767 × N + 0.0942 × N×T  R² = 0.9738
 - 拟合口径：`mem.ndjson` 的 BotSrv 行按 `t_ms` 与 `bots.log` 的 `成功进入游戏` 墙钟直接对齐；in-world 到齐时刻取该档最后一条进世界日志。
 - 归档位置：`E:/UserFleet/archive/load-tiers-20261115-0245/`（`tier-200`、`tier-500`、`tier-1000`、`supp-hold360/tier-1000`）。
 - 本文数字都可从上述四个目录重算；脚本未入库（一次性分析）。
+
+---
+
+## 勘误（2026-11-15，判据更新后）
+
+- 本文写于旧判据时期。按新判据（`internal_errors` 上限 0、BotSrv 崩溃三条件、`HoldSec≥360s` 结论有效性），
+  当晚三档复算为：**200 = RED**（internal_errors 1061）、**500 = RED（结论级，60s<360s）**、**1000 = RED**。
+  旧口径的 GREEN 不再有效；见 `docs/loadgate-criteria-runbook-20261115.md`。
