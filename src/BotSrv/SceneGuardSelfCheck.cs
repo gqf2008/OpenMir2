@@ -22,7 +22,9 @@ namespace BotSrv
     ///   ② ActorList 的 null 槽位：BeginScene 跳过 + 计数，不抛 NRE，其余 actor 照常处理。
     ///   ③ 循环中途 `MShare.MySelf` 被置 null：BeginScene 用轮首快照，不抛（真实客户端单线程语义）；
     ///   ④ 删除点被并发改动（自删/下标前移）：跳过且不重复归属 g_FreeActorList；
-    ///   ⑤ 轮内 `ActorList[i]` 读取前被并发缩表：跳过 + 计数，不抛 AOORE（F1）。
+    ///   ⑤ 轮内 `ActorList[i]` 读取前被并发缩表：跳过 + 计数，不抛 AOORE（F1）；
+    ///   ⑥ 删除点身份核对通过后、RemoveAt 前被并发缩表：先 RemoveAt 成功再登记 FreeActorList，
+    ///      AOORE ⇒ 跳过 + 计数，不双归属（F1b）。
     ///
     /// 归因精度（F3）：隔离注入 null 槽位复现为 NRE@121、ActorList=null 为 NRE@116；
     /// 归档里的 :120 是**并发索引读取竞争**的签名，不是 null 槽位的直接证据。
@@ -32,7 +34,8 @@ namespace BotSrv
     /// 删 `PlayScene.SendMsg` 的 `if (actor == null) return;` ⇒ ① 红；
     /// 删删除点的「下标/身份核对」⇒ ④ 红（会误删/双归属）；
     /// 把 FreeActorList 登记挪回核对之前 ⇒ ④c 红（双归属）；
-    /// 删轮内读取的 try/catch ⇒ ⑤ 红（AOORE）。
+    /// 删轮内读取的 try/catch ⇒ ⑤ 红（AOORE）；删删除路径 try/catch ⇒ ⑥ 红（AOORE）；
+    /// 把 FreeActorList 登记挪到 RemoveAt 之前 ⇒ ⑥ 红（双归属）。
     /// </summary>
     internal static class SceneGuardSelfCheck
     {
@@ -262,6 +265,38 @@ namespace BotSrv
             Check("index-read-race-skipped",
                 !threw && LoadMetrics.SceneIndexRaceSkippedCount == ib + 1,
                 $"threw={threw} skipped+={LoadMetrics.SceneIndexRaceSkippedCount - ib} want skip+1");
+
+            // ⑥ 删除路径（F1b）：身份核对通过后、RemoveAt 之前列表被并发缩表 ⇒ 必须捕获 AOORE、
+            //    跳过 + 计数 + 下标前移，且**不得**登记 g_FreeActorList（先 RemoveAt 成功再登记）。
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            var doomed = new TestActor(robot) { CurrX = 200, CurrY = 200, m_nRx = 200, m_nRy = 200, RecogId = 987665 };
+            scene.ActorList.Add(doomed);
+            long db = LoadMetrics.SceneListRaceSkippedCount;
+            PlayScene.SceneRemoveRaceHook = sc =>
+            {
+                PlayScene.SceneRemoveRaceHook = null;
+                sc.ActorList.RemoveAt(sc.ActorList.Count - 1);
+            };
+            threw = false;
+            try
+            {
+                SetMoveTimeNow(scene);
+                scene.BeginScene();
+            }
+            catch (Exception e)
+            {
+                threw = true;
+                Console.WriteLine("   remove-race threw: " + e.GetType().Name + " @ " + e.StackTrace);
+            }
+            finally
+            {
+                PlayScene.SceneRemoveRaceHook = null;
+            }
+            Check("remove-race-aore-skipped",
+                !threw && LoadMetrics.SceneListRaceSkippedCount == db + 1
+                && scene.ActorList.Count == 0 && !MShare.g_FreeActorList.Contains(doomed),
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db} count={scene.ActorList.Count} free={MShare.g_FreeActorList.Contains(doomed)}");
 
             MShare.MySelf = self;
             scene.ActorList.Clear();
