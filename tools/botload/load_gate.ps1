@@ -44,6 +44,10 @@
   判据缺口（卡 `openmir2-loadgate-criteria-gaps`，2026-11-15）：
     · **internal_errors 进判据**（A1）：默认绝对上限 0；超阈判 RED，并打印 top 异常类型/堆栈首行
       （来源 bots.log；BotSrv 只打前 20 条，总量以 load_stats.ndjson 为准）。
+    · **白名单逃生口**（总监 2026-11-15 追加）：`tools/botload/internal-errors-allowlist.json`
+      按「异常类型 + 消息正则」给已评审的已知无害类别一个 max；max 内不红但报告仍列出，
+      超 max / 未列入 / 文件缺失为空 ⇒ RED（容忍度 0）。白名单随卡面 patch 评审，运行时不得改；
+      报告记录 path+sha256。当前仓库文件 entries=[]。
     · **BotSrv 崩溃检出**（A2）：进程自己非 0 退出 / `bots.err.log` 含 `Out of memory.` /
       Windows Application Error `0xe0434352` 任一命中 ⇒ 该档 RED；证据落 `bots_runtime.json` 并进产物清单。
       门禁自己 Stop-Process 的退出码不算崩溃。
@@ -81,10 +85,9 @@ param(
   [switch]$RestartStackPerTier,
   [switch]$SkipBuild,
   [switch]$SelfTestRed,
-  [switch]$SelfTestCriteria,             # A3（2026-11-15）：不启动服务，伪造 OOM/NRE/退出码走真实 load_report CLI，断言必红
+  [switch]$SelfTestCriteria,             # A3（2026-11-15）：不启动服务，伪造 OOM/NRE/退出码/白名单走真实 load_report CLI，断言必红
   [string]$Criteria = "login,conn,tick,internal",  # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"。
                                          # internal（A1，2026-11-15）默认在判据里；去掉它的轮次不得作为压测结论
-  [int]$MaxInternalErrors = 0,           # A1：internal_errors 绝对上限（默认 0 = 不容忍假人侧兜住的异常）
   [switch]$NoActionProbe,                # 关掉假人动作探针（默认开：否则采不到 #+GD ack ⇒ tick 无样本）
   [switch]$AllowMissingTick,             # 显式放行"本档没有 tick 样本"（报告里会写 missing_tick_note）；
                                          # 不加则缺样本一律判 RED——**--Criteria 不能替代本开关**
@@ -195,7 +198,7 @@ if ($SelfTestCriteria) {
         [System.IO.File]::WriteAllLines($Path, $lines, (New-Object System.Text.UTF8Encoding($false)))
     }
 
-    function Invoke-FakeReport([string]$Name, [int]$InternalErrors, [string]$ErrLogText, $Runtime, [string]$BotsLogText, [bool]$OmitInternalField) {
+    function Invoke-FakeReport([string]$Name, [int]$InternalErrors, [string]$ErrLogText, $Runtime, [string]$BotsLogText, [bool]$OmitInternalField, [string]$AllowlistPath = "") {
         $d = Join-Path $stRoot $Name
         New-Item -ItemType Directory -Force -Path $d | Out-Null
         New-FakeStats (Join-Path $d "load_stats.ndjson") $InternalErrors $OmitInternalField
@@ -204,9 +207,11 @@ if ($SelfTestCriteria) {
         $rtPath = Join-Path $d "bots_runtime.json"
         [System.IO.File]::WriteAllText($rtPath, ($Runtime | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
         $outPath = Join-Path $d "report.json"
+        $alArgs = @()
+        if ($AllowlistPath -ne "") { $alArgs = @("--allowlist", $AllowlistPath) }
         & python $pyReport summarize --stats (Join-Path $d "load_stats.ndjson") --count 3 `
-            --hold-sec 360 --criteria "login,conn,tick,internal" --max-internal-errors 0 `
-            --bots-log (Join-Path $d "bots.log") --bots-runtime $rtPath --out $outPath | Out-Null
+            --hold-sec 360 --criteria "login,conn,tick,internal" `
+            --bots-log (Join-Path $d "bots.log") --bots-runtime $rtPath @alArgs --out $outPath | Out-Null
         $rc = $LASTEXITCODE
         $rep = $null
         if (Test-Path $outPath) { $rep = Get-Content $outPath -Raw | ConvertFrom-Json }
@@ -245,12 +250,64 @@ if ($SelfTestCriteria) {
     if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or -not (@($r.report.fails) -join ";" -match "缺 internal_errors")) {
         $stFails += ("缺 internal_errors 字段必须 fail-closed RED，实得 rc=" + $r.rc + " fails=" + (($r.report.fails) -join ";"))
     }
+    # 6) A1 逃生口（总监 2026-11-15 追加）：白名单 ≤max 不红但报告列出；超 max/未列入/缺文件/条目非法 ⇒ RED
+    $nreLog2 = $nreLog +
+        "02:00:01.000 [WRN] 假人[loadbot2]异常被兜住[2]：System.NullReferenceException: Object reference not set`n" +
+        "   at BotSrv.Scenes.Scene.PlayScene.BeginScene()`n"
+    $oomLog2 = "02:00:01.000 [WRN] 假人[loadbot3]异常被兜住[1]：System.OutOfMemoryException: boom`n" +
+               "02:00:01.100 [WRN] 假人[loadbot4]异常被兜住[2]：System.OutOfMemoryException: boom`n"
+    $alPath = Join-Path $stRoot "allowlist-nre.json"
+    $alDoc = [ordered]@{
+        version = 1
+        entries = @([ordered]@{
+            id = "nre-known"; category = "System.NullReferenceException";
+            message_pattern = "Object reference not set"; max = 2;
+            reason = "selftest：已知无害"; owner = "selftest"; review_ref = "selftest" })
+    }
+    [System.IO.File]::WriteAllText($alPath, ($alDoc | ConvertTo-Json -Depth 6), (New-Object System.Text.UTF8Encoding($false)))
+    $alBadPath = Join-Path $stRoot "allowlist-bad.json"
+    [System.IO.File]::WriteAllText($alBadPath,
+        '{"entries":[{"id":"bad","category":"X","message_pattern":"","max":1,"reason":"r","owner":"o","review_ref":"x"}]}',
+        (New-Object System.Text.UTF8Encoding($false)))
+    # 6a) 白名单内 ≤max ⇒ GREEN，且报告列出 类别/次数/上限
+    $r = Invoke-FakeReport "allow-ok" 2 "" $cleanRuntime $nreLog2 $false $alPath
+    $m = @($r.report.internal_error_allowlist.matched)
+    if ($r.rc -ne 0 -or $r.report.verdict -ne "GREEN" -or $m.Count -lt 1 -or
+        $m[0].type -ne "System.NullReferenceException" -or $m[0].max -ne 2 -or $m[0].count -ne 2) {
+        $stFails += ("白名单内 2/2 应 GREEN 且列出 类别/次数/上限，实得 rc=" + $r.rc +
+                     " verdict=" + $r.report.verdict + " matched=" + ($m | ConvertTo-Json -Compress))
+    }
+    # 6b) 白名单内 >max ⇒ RED
+    $r = Invoke-FakeReport "allow-over" 5 "" $cleanRuntime $nreLog2 $false $alPath
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or -not (@($r.report.fails) -join ";" -match "白名单预算 2")) {
+        $stFails += ("白名单内 5>max 2 必须 RED，实得 rc=" + $r.rc + " fails=" + (($r.report.fails) -join ";"))
+    }
+    # 6c) 未列入的类别 ⇒ RED（即使别的类别预算很大）
+    $r = Invoke-FakeReport "allow-unlisted" 2 "" $cleanRuntime $oomLog2 $false $alPath
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or -not (@($r.report.fails) -join ";" -match "未列入白名单")) {
+        $stFails += ("未列入白名单的类别必须 RED，实得 rc=" + $r.rc + " fails=" + (($r.report.fails) -join ";"))
+    }
+    # 6d) 白名单缺文件/为空 ⇒ 容忍度 0（available=false / budget=0 / 2 次也 RED）
+    $r = Invoke-FakeReport "allow-missing" 2 "" $cleanRuntime $nreLog2 $false (Join-Path $stRoot "no-such-allowlist.json")
+    $alMiss = $r.report.internal_error_allowlist
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or -not (@($r.report.fails) -join ";" -match "未列入白名单") -or
+        $alMiss.available -ne $false -or $alMiss.budget -ne 0) {
+        $stFails += ("白名单缺文件 ⇒ 容忍度 0（available=false/budget=0/2 次也 RED），实得 rc=" + $r.rc +
+                     " available=" + $alMiss.available + " budget=" + $alMiss.budget +
+                     " fails=" + (($r.report.fails) -join ";"))
+    }
+    # 6e) 条目非法（空 message_pattern）⇒ 不生效 + 报告 valid=false
+    $r = Invoke-FakeReport "allow-invalid" 2 "" $cleanRuntime $nreLog2 $false $alBadPath
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or $r.report.internal_error_allowlist.valid -ne $false) {
+        $stFails += ("白名单条目非法 ⇒ 不生效且 RED，实得 rc=" + $r.rc +
+                     " valid=" + $r.report.internal_error_allowlist.valid)
+    }
 
     if ($stFails.Count -gt 0) {
         Write-Output ("SELFTEST_CRITERIA RED: " + ($stFails -join "；"))
         exit 1
     }
-    Write-Output "SELFTEST_CRITERIA CLI 注入通过（OOM/NRE/退出码/缺字段/干净对照）；继续测 Get-BotSrvRuntime 取证"
+    Write-Output "SELFTEST_CRITERIA CLI 注入通过（OOM/NRE/退出码/缺字段/白名单 4 牙/干净对照）；继续测 Get-BotSrvRuntime 取证"
 }
 
 # ---- 构建 ----
@@ -411,8 +468,8 @@ if ($SelfTestCriteria) {
         Write-Output ("SELFTEST_CRITERIA RED: " + ($rcFails -join "；"))
         exit 1
     }
-    Write-Output ("SELFTEST_CRITERIA GREEN: OOM/NRE/退出码注入均判红，缺字段 fail-closed，干净对照仍 GREEN；" +
-                  "Get-BotSrvRuntime 取证（exit0/exit5/OOM/门禁自停）通过")
+    Write-Output ("SELFTEST_CRITERIA GREEN: OOM/NRE/退出码注入均判红，白名单 4 牙（≤max/超max/未列入/缺文件）通过，" +
+                  "缺字段 fail-closed，干净对照仍 GREEN；Get-BotSrvRuntime 取证（exit0/exit5/OOM/门禁自停）通过")
     exit 0
 }
 
@@ -618,7 +675,6 @@ if ($Repeat -gt 1) { Write-Output ("===== REPEAT " + $run + "/" + $Repeat + " ==
     # ---- 归算 ----
     $reportPath = Join-Path $tierDir "report.json"
     $criteriaArgs = @("--criteria", $Criteria, "--login-threshold", "$loginThr",
-                      "--max-internal-errors", "$MaxInternalErrors",
                       "--bots-runtime", $botRuntimePath)
     if (Test-Path $botLog) { $criteriaArgs += @("--bots-log", $botLog) }
     if ($Criteria -notmatch '(^|,)\s*internal\s*(,|$)') {
@@ -647,6 +703,8 @@ if ($Repeat -gt 1) { Write-Output ("===== REPEAT " + $run + "/" + $Repeat + " ==
         $oomHits = if ($null -ne $rf -and $null -ne $rf.oom_hits) { [string]$rf.oom_hits } else { "NA(证据缺)" }
         Write-Output ("  FIELDS tier=" + $n + " login=" + $tierJson.login_success_pct + "% no_resp=" + $noResp +
                       " internal_errors=" + $tierJson.internal_errors + " OOM=" + $oomHits +
+                      " allowlist_budget=" + $(if ($null -ne $rf) { [string]$rf.internal_errors_allowlist_budget } else { "NA" }) +
+                      " internal_excused=" + $(if ($null -ne $rf) { [string]$rf.internal_errors_excused } else { "NA" }) +
                       " hold_sec=" + $tierJson.hold_sec + " window_valid=" + $tierJson.window.conclusion_valid +
                       " verdict=" + $tierJson.verdict)
         if ($tierJson.host_load -ne $null) {
@@ -738,7 +796,8 @@ $summaryPath = Join-Path $OutDir "load_gate_summary.json"
   criteria   = $Criteria
   criteria_complete = [bool]($Criteria -match '(^|,)\s*internal\s*(,|$)')
   criteria_note = "压测结论必须含 internal（A1，2026-11-15）；缺 internal 的轮次 GREEN 无效"
-  max_internal_errors = $MaxInternalErrors
+  max_internal_errors = "0（默认；唯一放宽通道 = tools/botload/internal-errors-allowlist.json，随卡面评审）"
+  internal_errors_allowlist = "tools/botload/internal-errors-allowlist.json（当前 entries=[] ⇒ 容忍度 0；报告 internal_error_allowlist 带 path+sha256）"
   crash_any  = [bool]$crashAny
   required_fields_note = "每份结论必须显式列 login / no_resp / internal_errors / OOM；None=证据缺，不得当作 0（见各档 report.json.required_fields）"
   window_note = "结论级窗口 HoldSec>=360s；进世界串行载入实测 ~5–7/s；report.json.window.conclusion_valid=false 的轮次只可冒烟"
@@ -814,7 +873,7 @@ if ($allGreen) {
         if (-not $t.window -or -not $t.window.conclusion_valid) { $windowAllValid = $false }
     }
     if ($windowAllValid) {
-        Write-Output ("GREEN: " + $tierReports.Count + " 轮次全过（登录 ≥ 档位阈值 / 稳态无掉线 / tick P99 ≤ 100ms / internal_errors ≤ " + $MaxInternalErrors + " / 无 BotSrv 崩溃；HoldSec=" + $HoldSec + " ≥ 360s）")
+        Write-Output ("GREEN: " + $tierReports.Count + " 轮次全过（登录 ≥ 档位阈值 / 稳态无掉线 / tick P99 ≤ 100ms / internal_errors 未超白名单预算 / 无 BotSrv 崩溃；HoldSec=" + $HoldSec + " ≥ 360s）")
     } else {
         # A4：测量判据全过但窗口不足 ⇒ 只能冒烟；不打印 GREEN:（避免被 grep 成结论）。
         Write-Output ("GREEN_SMOKE_ONLY: " + $tierReports.Count + " 轮次测量判据全过，但 HoldSec=" + $HoldSec +

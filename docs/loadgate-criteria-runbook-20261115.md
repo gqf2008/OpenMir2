@@ -15,21 +15,70 @@
 
 ## 1. 新口径
 
-### 1.1 `internal_errors` 进入判据（A1）
+### 1.1 `internal_errors` 进入判据（A1）+ 受评审白名单逃生口
 
 - **来源**：BotSrv 的 `LoadMetrics.InternalError()`，只在两个 catch 块自增：
   `ClientManager.SafeRun`（单个假人异常）与 `AppService.Run`（世界循环异常）。累计值随
   `load_stats.ndjson` 每 ~5s 落盘。
-- **阈值：绝对上限 `0`（默认 `--max-internal-errors 0`）。** 判的是该档最后一次落盘的累计值。
-- **为什么是 0 而不是「按 bot 数归一」**：这个计数器不是业务失败数，是「假人走了未建模路径」的缺陷信号；
-  2026-11-15 已知正常轮次（tier-500、tier-1000@60s）实测精确为 0。按 bot 数归一的阈值在分母大时同样是 0
-  （语义等价），但会给出一个「调大分母/放宽阈值让红变绿」的入口。绝对 0 最容易审计。
-- **超阈输出**：`report.json` 的 `fails` 写 `internal_errors N > 0；top: <类型>×<次数>, ...`；`internal_error_diag`
-  给 top 异常类型与堆栈首行（来源 `bots.log`，BotSrv 只打前 20 条，总量以 ndjson 计数为准）；压测 stdout 也打一行。
-- **字段缺失**：`load_stats.ndjson` 没有 `internal_errors` 字段 ⇒ **RED（fail-closed）**，不得当作 0。
+- **默认：容忍度 0。** 判的是该档最后一次落盘的累计值。这个计数器不是业务失败数，是「假人走了未建模路径」
+  的缺陷信号；2026-11-15 已知正常轮次（tier-500、tier-1000@60s）实测精确为 0。
+- **唯一放宽通道**：仓库内白名单 `tools/botload/internal-errors-allowlist.json`（见 §1.1.1）。
+  默认文件 `entries: []`，即容忍度 0。**没有任何 CLI 参数可以把容忍度整体调大**；运行时不能新增条目。
+- **判定语义**（总监 2026-11-15 追加）：
+  1. 未列入任何条目的类别（按 `bots.log` 样本的「类型 + 消息」）⇒ **RED**；
+  2. 已列入但该类别累计次数 > 条目的 `max` ⇒ **RED**；
+  3. 已列入且 ≤ `max` ⇒ 不 RED，但报告 `internal_error_allowlist.matched` 仍必须列出
+     **类别 / 次数 / 上限 / 条目 id**（「豁免也要留痕」）；
+  4. 白名单文件**缺失 / 为空 / JSON 坏 / 条目非法** ⇒ 容忍度 0（fail-closed），
+     `available=false` / `valid=false` 与原因落盘；**不是**「全部放行」；
+  5. `internal_errors > 0` 但 `bots.log` 没有样本可归因 ⇒ **RED**（无法证明无害）；
+  6. `load_stats.ndjson` 缺 `internal_errors` 字段 ⇒ **RED**（不得当 0）。
+- **归因口径**：BotSrv 只打前 20 条（`ShouldLogInternalError`），所以「类别/次数」是**样本**，「总量」是 ndjson。
+  每个样本桶按文件顺序匹配第一条命中的条目；预算 = 命中条目 `max` 之和（同一条目去重）；
+  判定用**总量**与预算比较。样本里有未命中类型 ⇒ 直接 RED，不能靠别的类别预算兜住。
+- **超阈输出**：`report.json.fails` 写 `internal_errors N > 白名单预算 B（类别 count/max（条目））` 或
+  `internal_errors 含未列入白名单的类别：…`；stdout 的 `FIELDS` 行给出 `allowlist_budget` / `internal_excused`。
 - **兼容**：`--criteria` 仍可选择是否判 internal。压测门禁与 `load_report.py summarize` 的默认判据都含
   `internal`；M1⑤ 的 `login,conn` 口径不变。**任何人用 `-Criteria` 去掉 `internal` 的轮次不得作为压测结论引用**
   （summary 会写 `criteria_complete=false` 并打 WARN）。
+
+#### 1.1.1 白名单格式与评审规则
+
+`tools/botload/internal-errors-allowlist.json`（当前 `entries` 为空）：
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "id": "nre-playscene-beginscene-known",
+      "category": "System.NullReferenceException",
+      "message_pattern": "Object reference not set",
+      "max": 0,
+      "reason": "为什么已知无害：现象、证据、影响面；必须能区分未知同类",
+      "owner": "openmir2-worker-<n>",
+      "review_ref": "openmir2-<card-or-review>"
+    }
+  ]
+}
+```
+
+| 字段 | 必填 | 语义 |
+| --- | --- | --- |
+| `id` | 否（缺省 `#<序号>`） | 报告里标识这一条 |
+| `category` | 是 | 异常类型，精确等于 `bots.log` 里的 `System.*` 类型 |
+| `message_pattern` | 是 | 消息的 Python 正则；**必须能区分已知无害与未知**，空/非法 ⇒ 该条不生效 |
+| `max` | 是 | 该类别允许的累计次数（非负整数）；超出 ⇒ RED |
+| `reason` | 是 | 为什么无害（判据/证据） |
+| `owner` | 是 | 提出并维护这条的人 |
+| `review_ref` | 是 | 哪次 card/review 批准的 |
+
+- **评审规则**：白名单文件是**卡面 patch 的一部分**，必须由作者之外的 principal 在钉住的 commit 上评审；
+  合并后任何修改都要新卡 + 新 review。运行时只读；`report.json.internal_error_allowlist` 记录
+  `path` + `sha256` + 生效条目，评审核对「运行时没有被换文件」。
+- `--allowlist` 只用于自测/复算；**结论轮次不得指向未评审文件**（路径会进报告）。
+- **当前复算表（§2）是在空白名单（`entries: []`，容忍度 0）下得到的**；tier-200 / supp-hold360 的
+  `internal_errors` 判 RED 与白名单无关，不能靠事后加条目追认。
 
 ### 1.2 BotSrv 崩溃检出（A2）
 
@@ -96,9 +145,10 @@ tier-500 的测量 `verdict` 是 GREEN，但 `conclusion_valid=false`，所以�
 ### 3.1 默认判据
 
 - `tools/botload/load_gate.ps1` 默认 `-Criteria "login,conn,tick,internal"`。
-- `load_report.py summarize` 默认 `--criteria "login,conn,tick,internal"`、`--max-internal-errors 0`。
+- `load_report.py summarize` 默认 `--criteria "login,conn,tick,internal"`，白名单默认
+  `tools/botload/internal-errors-allowlist.json`（当前为空，容忍度 0）。
 - 「缺 tick 样本」仍是独立开关 `--allow-missing-tick`，`--criteria` 不能替代它（2026-10-10 的恒绿回归项）。
-- `internal_errors` 字段缺失 ⇒ RED（fail-closed），`--max-internal-errors` 只能显式放宽并在报告里回显。
+- `internal_errors` 的放宽只走白名单（§1.1.1）；没有整体阈值参数，字段缺失 ⇒ RED（fail-closed）。
 
 ### 3.2 BotSrv 崩溃
 
@@ -128,10 +178,11 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 `
 | --- | --- | --- |
 | `login` | `report.json.login_success_pct` | 稳态窗内 `login_ok` 峰值 ÷ 档位人数 |
 | `no_resp` | `report.json.login_conn_diag.no_resp` | 发出 `CM_IDPASSWORD` 后没拿到 529 的连接数；`None` = 证据缺，不得当 0 |
-| `internal_errors` | `report.json.internal_errors`（另看 `internal_errors_steady` / `internal_error_diag.types`） | 超 0 必须给 top 异常类型与归属 |
+| `internal_errors` | `report.json.internal_errors`（另看 `internal_errors_steady` / `internal_error_diag.types`） | 超 0 必须给 top 异常类型与归属；若走白名单，必须列 `internal_error_allowlist.matched`（类别/次数/上限/条目）与 `path`/`sha256` |
 | `OOM` | `report.json.required_fields.oom_hits` + `report.json.botsrv` | 非 0 必须给 `bots.err.log` 行与 `bots_runtime.json` |
 
-另列：`tick_p99_ms`、`world_ok`、`hold_sec`、`window.conclusion_valid`。任何一项非零/无效都要单独解释。
+另列：`tick_p99_ms`、`world_ok`、`hold_sec`、`window.conclusion_valid`、`internal_errors_excused` /
+`allowlist_budget`。任何一项非零/无效/被豁免都要单独解释。
 
 ### 4.3 红检（改坏必红）
 
@@ -142,9 +193,10 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestCr
 ```
 
 `-SelfTestCriteria` 不启动服务、不需要 BotSrv：它伪造 `load_stats.ndjson` / `bots.log` / `bots.err.log` /
-`bots_runtime.json`，走真实 `load_report.py summarize` CLI，断言：
+`bots_runtime.json` / 白名单，走真实 `load_report.py summarize` CLI，断言：
 OOM 伪造 ⇒ RED；NRE（`internal_errors>0` + 堆栈）⇒ RED；伪造非 0 退出 ⇒ RED；缺 `internal_errors` 字段 ⇒ RED；
-干净对照 ⇒ GREEN。
+干净对照 ⇒ GREEN；白名单四牙——**≤max ⇒ GREEN 且报告列出类别/次数/上限**、**>max ⇒ RED**、
+**未列入类别 ⇒ RED**、**缺文件/为空/条目非法 ⇒ 容忍度 0**。
 
 ### 4.4 结论有效性
 
@@ -195,6 +247,10 @@ for rel, count, hold in runs:
 ## 6. 残留物与后续
 
 - 本卡只修判据，不修 `PlayScene.BeginScene` 的 NRE；该 NRE 是 BotSrv 侧真缺陷，按卡外另行处置。
+  **当前白名单为空，不追认这个已知 NRE**——在它被修复或另开卡论证「已知无害」之前，它必须继续判 RED。
+- 白名单是逃生口而不是事后追认工具：`entries: []` 是当前状态；任何新增条目都要单独评审
+  `category`/`message_pattern`/`max`/`reason`，并在报告里留下 `sha256`。
 - 归档里没有原始 Windows 事件日志，`supp-hold360` 的 0xe0434352 只能引 `results.json` 备注；新门禁会把原始事件
   证据写进 `bots_runtime.json`。
-- 本卡未重跑真机窗口；§2 的判定是对既有产物的离线复算，不替代换机后的 360s 复测。
+- 本卡未重跑真机窗口；§2 的判定是对既有产物的离线复算，不替代换机后的 360s 复测；§2 表是在**空白名单**
+  （容忍度 0）下得到的。

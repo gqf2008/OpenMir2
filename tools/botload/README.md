@@ -68,7 +68,7 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 | 登录成功率 | **tier ≥ 1000：≥ 95%（可复现下界）；tier < 1000：100%** | §6 M5-3 + owner 裁决 `11dbde39`（见下《阈值与理由》） |
 | 稳态掉线 | **0** | §6 M5-3 |
 | tick P99 | **≤ 100ms** | §6 M5-3 |
-| **internal_errors** | **0**（`--max-internal-errors`，默认 0；字段缺失 fail-closed） | 卡 `openmir2-loadgate-criteria-gaps` A1（2026-11-15） |
+| **internal_errors** | **0**（默认容忍度 0；唯一放宽通道 = `tools/botload/internal-errors-allowlist.json` 按类别 `max`，随卡面评审；未列入/超 max/文件缺失为空 ⇒ RED；字段缺失 fail-closed） | 卡 `openmir2-loadgate-criteria-gaps` A1（2026-11-15） |
 | **BotSrv 崩溃** | 非 0 退出 / `bots.err.log` 含 `Out of memory.` / Application Error `0xe0434352` 任一命中 ⇒ RED | 同上 A2 |
 | 内存末段斜率 | ≈ 0（M5 长跑另判：峰值-均值 < 5%） | §6 M5-2 |
 
@@ -154,8 +154,9 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
 
 - `load_gate.ps1 -SelfTestRed`：指向无监听端口 ⇒ 爬坡不可能完成 ⇒ 必须 `verdict=RED`（脚本自身退出 0 = 红检通过）。
 - `load_gate.ps1 -SelfTestCriteria`（2026-11-15，A3）：**不启动服务**，伪造 `load_stats.ndjson` / `bots.log` /
-  `bots.err.log` / `bots_runtime.json` 走真实 `load_report.py summarize` CLI，断言 OOM / NRE（`internal_errors>0`）/
-  非 0 退出 / 缺 `internal_errors` 字段都必红，干净对照仍 GREEN；另用 `cmd.exe` 真实退出码测
+  `bots.err.log` / `bots_runtime.json` / 白名单，走真实 `load_report.py summarize` CLI，断言 OOM / NRE
+  （`internal_errors>0`）/ 非 0 退出 / 缺 `internal_errors` 字段都必红，干净对照仍 GREEN；
+  白名单四牙（≤max 不红但报告列出 / >max 红 / 未列入红 / 缺文件为空红）；另用 `cmd.exe` 真实退出码测
   `Get-BotSrvRuntime` 的取证接线（含「门禁自己 Stop-Process 不算崩溃」）。
 - `load_report.py selftest`：分位数正确 / **尾部敏感**（挪走 20 个慢样本 P99 必须 150→5）/ 登录没达阈值判红 /
   掉线分爬坡与稳态 / 内存斜率（线性 1MB/s vs 平坦 0）/ **阈值牙齿**（同一份 960/1000 产物：阈值 100 ⇒ RED、
@@ -193,8 +194,8 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
    地图边界外越界）、`RobotPlayer.AttackTarget` 解引用共享全局态 `MShare.MySelf`（地图切换窗口为 null，
    调用点守卫挡不住**竞态**）。两处已补守卫；另外 `AppService.Run` 每轮包 try/catch 并把异常计数写进
    `load_stats.ndjson.internal_errors`（前 20 条打日志）——**压测进程不许被单个假人打死**。
-   `internal_errors > 0` 现在是**硬判据 RED**（2026-11-15 起，默认阈值 0），top 类型/堆栈见
-   `report.json.internal_error_diag`；别再只看 P99。
+   `internal_errors > 0` 现在是**硬判据 RED**（2026-11-15 起，默认容忍度 0），唯一放宽通道是按类别评审的
+   `internal-errors-allowlist.json`；top 类型/堆栈见 `report.json.internal_error_diag`，别只看 P99。
 10. **别用"杀任务树"的方式停外层脚本**（2026-10-10 实测）：编排脚本是被后台任务启动的话，
     停任务时可能连带把 mysqld / 网关一起带走 ⇒ 下一档假人全部"连上后被关闭连接"
     （LoginSrv 日志里 `Unable to connect to any of the specified MySQL hosts`）。栈的生命周期要与

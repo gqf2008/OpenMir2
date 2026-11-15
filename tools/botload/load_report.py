@@ -32,6 +32,7 @@ tick 服务时延（`tick_ms_*`）
   python tools/botload/load_report.py selftest
 """
 import argparse
+import hashlib
 import json
 import os
 import re
@@ -42,10 +43,15 @@ DEFAULT_THRESHOLDS = {
     "conn_lost_steady": 0,          # §6 M5：无掉线
     "tick_p99_ms": 100.0,           # §6 M5：tick P99 ≤ 100ms
     # A1（2026-11-15）：BotSrv 兜住的内部异常数。默认 0（绝对上限）。
-    # 理由：计数器只在 catch 块自增（假人走了未建模路径），已知正常轮次实测为 0；
-    # 不用「按 bot 数归一」的阈值——绝对 0 没有「调大分母/放宽阈值让红变绿」的入口。
+    # 唯一的放宽通道 = 卡面评审过的 internal-errors-allowlist.json（按类别 + max）。
     "internal_errors": 0,
 }
+
+# A1 逃生口（2026-11-15 总监追加）：白名单是**仓库内文件**，随卡面 patch 评审；
+# 运行时没有「随手加一条」的开关。文件缺失/为空/条目非法 ⇒ 容忍度 0（fail-closed）。
+DEFAULT_ALLOWLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                      "internal-errors-allowlist.json")
+
 
 # A4（2026-11-15）：结论级窗口前提。HoldSec < 360s 的轮次只可当冒烟，不得作为 GREEN 结论。
 # 进世界实测串行载入 ~5–7/s（tier-1000：5s 56 → 75s 425），360s 才够 1000 档走完载入并进入稳态。
@@ -304,7 +310,8 @@ def summarize_hostload(rows):
     return out
 
 
-_INTERNAL_ERR_RE = re.compile(r"(?:异常被兜住|压测兜住的异常)\[\d+\]：\s*([A-Za-z_][\w.`]*)")
+_INTERNAL_ERR_RE = re.compile(
+    r"(?:异常被兜住|压测兜住的异常)\[\d+\]：\s*([A-Za-z_][\w.`]*)\s*:?\s*(.*)$")
 _STACK_RE = re.compile(r"^\s+at\s+")
 
 
@@ -314,6 +321,9 @@ def summarize_internal_error_log(path, max_types=5, max_stack=3):
     `load_stats.ndjson.internal_errors` 只有计数；类型/堆栈只在 BotSrv 的日志里，且
     `LoadMetrics.ShouldLogInternalError` **只打前 20 条**（避免刷爆日志）。
     所以本函数给的是「样本的 top」，总量一律以 ndjson 计数为准，报告里两者分开写。
+
+    按 **(异常类型, 消息)** 分桶：白名单要「精确到能区分已知无害与未知」，
+    只看类型会把同类型的未知消息一起豁免。
     """
     if not path or not os.path.isfile(path):
         return {"log": path, "available": False,
@@ -327,8 +337,10 @@ def summarize_internal_error_log(path, max_types=5, max_stack=3):
             if m:
                 logged += 1
                 name = m.group(1)
-                e = types.setdefault(name, {
-                    "type": name, "count": 0, "stack_head": [],
+                msg = (m.group(2) or "").strip()
+                key = (name, msg)
+                e = types.setdefault(key, {
+                    "type": name, "message": msg[:300], "count": 0, "stack_head": [],
                     "sample": line.strip()[:300],
                 })
                 e["count"] += 1
@@ -339,7 +351,7 @@ def summarize_internal_error_log(path, max_types=5, max_stack=3):
                     cur["stack_head"].append(line.strip()[:300])
                 continue
             cur = None
-    ordered = sorted(types.values(), key=lambda x: (-x["count"], x["type"]))
+    ordered = sorted(types.values(), key=lambda x: (-x["count"], x["type"], x["message"]))
     return {
         "log": path,
         "available": True,
@@ -362,9 +374,166 @@ def load_bots_runtime(path):
     return rt
 
 
+ALLOWLIST_ENTRY_FIELDS = ("category", "message_pattern", "reason", "owner", "review_ref")
+
+
+def empty_allowlist(path=None, error="allowlist 未提供/缺失 ⇒ 容忍度 0（fail-closed）"):
+    """容忍度 0 的白名单：任何 internal_errors > 0 都判 RED。"""
+    return {"path": path, "available": False, "valid": True, "error": error,
+            "sha256": None, "entries": [], "entries_count": 0}
+
+
+def _validate_allowlist_entry(e, idx):
+    """返回错误列表；任何必填项缺失/非法 ⇒ 该条不得生效（不得静默豁免）。"""
+    errs = []
+    if not isinstance(e, dict):
+        return ["not an object"]
+    for k in ALLOWLIST_ENTRY_FIELDS:
+        if not isinstance(e.get(k), str) or not e.get(k).strip():
+            errs.append(k)
+    mx = e.get("max")
+    if isinstance(mx, bool) or not isinstance(mx, int) or mx < 0:
+        errs.append("max(>=0 int)")
+    pat = e.get("message_pattern")
+    if isinstance(pat, str) and pat:
+        try:
+            re.compile(pat)
+        except re.error as ex:
+            errs.append("message_pattern(regex: %s)" % ex)
+    return errs
+
+
+def load_allowlist(path):
+    """读 internal_errors 白名单（仓库文件，随卡面 patch 评审）。
+
+    语义（总监 2026-11-15）：
+      · 文件缺失/为空/JSON 坏/条目非法 ⇒ 容忍度 0（fail-closed），**不是**「全部放行」；
+      · 条目按 `category`（异常类型）+ `message_pattern`（消息正则）匹配；未列入的类别一律 RED；
+      · `max` 是该类别允许的累计次数上限；总量超过预算 ⇒ RED。
+    """
+    if not path:
+        return empty_allowlist(path, "allowlist 路径为空 ⇒ 容忍度 0（fail-closed）")
+    if not os.path.isfile(path):
+        return empty_allowlist(path, "白名单文件不存在 ⇒ 容忍度 0（fail-closed）")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as ex:
+        return empty_allowlist(path, "白名单读不了：%s ⇒ 容忍度 0" % ex)
+    out = {"path": path, "available": True, "valid": True, "error": None,
+           "sha256": hashlib.sha256(raw).hexdigest(), "entries": [], "entries_count": 0}
+    try:
+        doc = json.loads(raw.decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError) as ex:
+        out["valid"] = False
+        out["error"] = "白名单 JSON 非法：%s ⇒ 容忍度 0" % ex
+        return out
+    entries = doc.get("entries") if isinstance(doc, dict) else None
+    if not isinstance(entries, list):
+        out["valid"] = False
+        out["error"] = "白名单缺 entries[]（或不是数组）⇒ 容忍度 0"
+        return out
+    good = []
+    for i, e in enumerate(entries):
+        errs = _validate_allowlist_entry(e, i)
+        if errs:
+            out["valid"] = False
+            prev = out["error"] + "；" if out["error"] else ""
+            out["error"] = prev + ("条目 #%d 非法（%s），已忽略" % (i, ", ".join(errs)))
+            continue
+        good.append({
+            "id": (e.get("id") if isinstance(e.get("id"), str) and e.get("id").strip()
+                   else "#%d" % i),
+            "category": e["category"].strip(),
+            "message_pattern": e["message_pattern"],
+            "max": int(e["max"]),
+            "reason": e["reason"].strip(),
+            "owner": e["owner"].strip(),
+            "review_ref": e["review_ref"].strip(),
+        })
+    out["entries"] = good
+    out["entries_count"] = len(good)
+    return out
+
+
+def _allowlist_hit(entry, t):
+    if entry.get("category") != t.get("type"):
+        return False
+    try:
+        return re.search(entry["message_pattern"], t.get("message") or "") is not None
+    except re.error:
+        return False
+
+
+def evaluate_internal_errors(tier, allowlist):
+    """按白名单评估 internal_errors：返回可审计块 + fails（未列入/超预算/无法归因）。
+
+    · 总量 = load_stats.ndjson 的累计计数；类别/次数 = bots.log 的样本（BotSrv 只打前 20 条）。
+    · 每个样本桶按文件顺序匹配**第一条**命中的白名单条目；命中条目去重后 `max` 之和 = 预算。
+    · 未命中任何条目的桶 ⇒ RED；总量 > 预算 ⇒ RED；没有样本可归因但总量 > 0 ⇒ RED。
+    """
+    total = tier.get("internal_errors")
+    diag = tier.get("internal_error_diag") or {}
+    samples = diag.get("types") or []
+    ev = {
+        "path": (allowlist or {}).get("path"),
+        "sha256": (allowlist or {}).get("sha256"),
+        "available": bool((allowlist or {}).get("available")),
+        "valid": bool((allowlist or {}).get("valid", True)),
+        "error": (allowlist or {}).get("error"),
+        "entries": (allowlist or {}).get("entries", []),
+        "entries_count": (allowlist or {}).get("entries_count", 0),
+        "total": total,
+        "budget": 0,
+        "matched": [],
+        "unmatched": [],
+        "excused": False,
+        "fails": [],
+        "review_note": "白名单是卡面 patch 的一部分，必须随 patch 评审；运行时没有新增条目/覆盖路径的开关",
+    }
+    if tier.get("internal_errors_present") is False:
+        ev["fails"].append("load_stats 缺 internal_errors 字段（无从判定 ⇒ fail-closed）")
+        return ev
+    if total is None:
+        ev["fails"].append("internal_errors=None（缺计数 ⇒ fail-closed）")
+        return ev
+    if total <= 0:
+        ev["excused"] = True
+        return ev
+    if not samples:
+        ev["fails"].append("internal_errors %d > 0 但 bots.log 无异常类型归因（白名单无法证明无害 ⇒ fail-closed）" % total)
+        return ev
+    used = {}
+    for t in samples:
+        hit = None
+        for entry in ev["entries"]:
+            if _allowlist_hit(entry, t):
+                hit = entry
+                break
+        if hit is None:
+            ev["unmatched"].append({"type": t.get("type"), "count": t.get("count"),
+                                    "message": t.get("message")})
+        else:
+            ev["matched"].append({"type": t.get("type"), "count": t.get("count"),
+                                  "message": t.get("message"),
+                                  "entry_id": hit["id"], "max": hit["max"]})
+            used[hit["id"]] = hit
+    ev["budget"] = sum(e["max"] for e in used.values())
+    if ev["unmatched"]:
+        ev["fails"].append("internal_errors 含未列入白名单的类别：" + ", ".join(
+            "%s×%s" % (u["type"], u["count"]) for u in ev["unmatched"]) +
+            "（白名单只豁免已评审的已知无害类别）")
+    if total > ev["budget"]:
+        detail = ", ".join("%s %s/%s（%s）" % (m["type"], m["count"], m["max"], m["entry_id"])
+                           for m in ev["matched"]) or "无可匹配条目"
+        ev["fails"].append("internal_errors %d > 白名单预算 %d（%s）" % (total, ev["budget"], detail))
+    ev["excused"] = not ev["fails"]
+    return ev
+
+
 def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
           login_threshold=None, world_threshold=None, bots_runtime=None,
-          max_internal_errors=None):
+          allowlist=None):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
 
     `criteria` 只选"要比哪几条阈值"，**不能用它把"缺 tick 样本"变成绿灯**（2026-10-10 的教训：
@@ -404,23 +573,11 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
             fails.append("缺 tick 样本（tick_p99_ms = None）：默认判 RED；确实拿不到 tick 的场景也必须显式加 --allow-missing-tick")
     elif "tick" in criteria and tier["tick_p99_ms"] > thresholds["tick_p99_ms"]:
         fails.append(f"tick P99 {tier['tick_p99_ms']}ms > {thresholds['tick_p99_ms']}ms")
-    # A1（2026-11-15）：internal_errors 判据。默认 0 容忍；字段缺失 fail-closed。
-    tier["max_internal_errors"] = (max_internal_errors if max_internal_errors is not None
-                                   else thresholds.get("internal_errors", 0))
+    # A1（2026-11-15）：internal_errors 判据。默认 0 容忍；唯一放宽通道是按类别评审的白名单
+    # （未列入/超 max/无法归因/白名单缺失 ⇒ 都按容忍度 0 处理，fail-closed）。
+    tier["internal_error_allowlist"] = evaluate_internal_errors(tier, allowlist)
     if "internal" in criteria:
-        if tier.get("internal_errors_present") is False:
-            fails.append("load_stats 缺 internal_errors 字段（无从判定 ⇒ fail-closed）")
-        else:
-            ie = tier.get("internal_errors")
-            if ie is None:
-                fails.append("internal_errors=None（缺计数 ⇒ fail-closed）")
-            elif ie > tier["max_internal_errors"]:
-                top = ""
-                diag = tier.get("internal_error_diag") or {}
-                if diag.get("types"):
-                    top = "；top: " + ", ".join(
-                        f"{t['type']}×{t['count']}" for t in diag["types"][:3])
-                fails.append(f"internal_errors {ie} > {tier['max_internal_errors']}{top}")
+        fails.extend(tier["internal_error_allowlist"]["fails"])
     # A2（2026-11-15）：BotSrv 崩溃判据。退出码只认「进程自己退出」；门禁 Stop-Process 的不算。
     tier["botsrv"] = bots_runtime
     if bots_runtime:
@@ -476,6 +633,9 @@ def cmd_summarize(args):
         tier["internal_error_diag"] = summarize_internal_error_log(args.bots_log)
     # A2：BotSrv 崩溃证据（load_gate.ps1 落的 bots_runtime.json）。
     bots_runtime = load_bots_runtime(args.bots_runtime) if args.bots_runtime else None
+    # A1 逃生口：白名单从仓库文件读（默认 tools/botload/internal-errors-allowlist.json）；
+    # 缺失/为空/非法 ⇒ 容忍度 0。路径与 sha256 进报告，便于评审核对运行时没有被换文件。
+    allowlist = load_allowlist(args.allowlist)
     tier["count"] = args.count
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
@@ -489,10 +649,11 @@ def cmd_summarize(args):
     login_thr = args.login_threshold if args.login_threshold is not None else default_login_threshold(args.count)
     judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick,
           login_threshold=login_thr, world_threshold=args.world_threshold,
-          bots_runtime=bots_runtime, max_internal_errors=args.max_internal_errors)
+          bots_runtime=bots_runtime, allowlist=allowlist)
     # 总监硬规矩（2026-11-15）：每份结论必须显式列 login / no_resp / internal_errors / OOM。
     # None 一律表示「证据缺」，不得被下游当成 0。
     diag = tier.get("login_conn_diag") or {}
+    ie_al = tier.get("internal_error_allowlist") or {}
     tier["required_fields"] = {
         "login_success_pct": tier.get("login_success_pct"),
         "login_conn_no_resp": (diag.get("no_resp") if diag else None),
@@ -500,8 +661,11 @@ def cmd_summarize(args):
         "oom_hits": (bots_runtime.get("oom_hits") if bots_runtime else None),
         "botsrv_self_exited": (bots_runtime.get("self_exited") if bots_runtime else None),
         "botsrv_exit_code": (bots_runtime.get("exit_code") if bots_runtime else None),
+        "internal_errors_excused": ie_al.get("excused"),
+        "internal_errors_allowlist_budget": ie_al.get("budget"),
+        "internal_errors_allowlist_sha256": ie_al.get("sha256"),
         "verdict": tier["verdict"],
-        "note": "四项必列字段；None = 证据缺（不得当作 0）",
+        "note": "四项必列字段；None = 证据缺（不得当作 0）；白名单路径/sha256 见 internal_error_allowlist",
     }
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
@@ -752,10 +916,61 @@ def cmd_selftest(_args):
            "internal_errors=1061 必须判红（默认阈值 0）")
     expect(t_ie_bad["internal_errors_per_bot"] == 10.61,
            f"按 bot 归一应可读（1061/100=10.61），实得 {t_ie_bad['internal_errors_per_bot']}")
-    # 阈值牙齿：同一份 1061 产物，阈值 2000 ⇒ GREEN（判定必须随阈值变，不是恒红/恒绿）
-    t_ie_lax = judge(summarize_tick(stats_ie_bad, 100), DEFAULT_THRESHOLDS, i3, max_internal_errors=2000)
-    expect(t_ie_lax["verdict"] == "GREEN" and t_ie_lax["max_internal_errors"] == 2000,
-           "阈值 2000 下 1061 应放行，且 report 回显生效阈值")
+    # 6a) A1 逃生口（总监 2026-11-15）：白名单按「类型+消息正则」匹配，max 内不红但必须列出；
+    #     超 max / 未列入 / 缺文件 / 条目非法 ⇒ RED（容忍度 0）。
+    _al_entries = [{
+        "id": "nre-known", "category": "System.NullReferenceException",
+        "message_pattern": r"Object reference not set",
+        "max": 2, "reason": "已知无害（自测）", "owner": "selftest", "review_ref": "selftest"}]
+    _al = {"path": "<selftest>", "available": True, "valid": True, "error": None,
+           "sha256": "0" * 64, "entries": _al_entries, "entries_count": 1}
+    _diag_nre = {"available": True, "logged_blocks": 2, "types": [
+        {"type": "System.NullReferenceException", "message": "Object reference not set",
+         "count": 2, "sample": "..."}]}
+
+    def _with_ie(total, diag):
+        _t = summarize_tick([dict(stats[0], internal_errors=0),
+                             dict(stats[1], internal_errors=total, hist=list(hist2), tick_max_ms=5)], 100)
+        if diag is not None:
+            _t["internal_error_diag"] = diag
+        return _t
+
+    # ① 白名单内 ≤max ⇒ 不 RED，且报告列出 类别/次数/上限
+    t_al_ok = judge(_with_ie(2, _diag_nre), DEFAULT_THRESHOLDS, i3, allowlist=_al)
+    expect(t_al_ok["verdict"] == "GREEN", "白名单内 2/2 不得判红")
+    _m = (t_al_ok.get("internal_error_allowlist") or {}).get("matched") or []
+    expect(_m and _m[0]["type"] == "System.NullReferenceException" and _m[0]["count"] == 2
+           and _m[0]["max"] == 2 and t_al_ok["internal_error_allowlist"]["budget"] == 2,
+           "白名单命中必须在报告列出 类别/次数/上限")
+    # ② 白名单内 >max ⇒ RED
+    t_al_over = judge(_with_ie(5, {"available": True, "types": [
+        {"type": "System.NullReferenceException", "message": "Object reference not set",
+         "count": 5}]}), DEFAULT_THRESHOLDS, i3, allowlist=_al)
+    expect(t_al_over["verdict"] == "RED" and any("白名单预算 2" in f for f in t_al_over["fails"]),
+           "白名单内 5 > max 2 必须判红")
+    # ③ 未列入的类别 ⇒ RED（即便另一个类别预算很大）
+    _al_big = dict(_al)
+    _al_big["entries"] = [dict(_al_entries[0], max=100)]
+    _diag_oom = {"available": True, "types": [
+        {"type": "System.OutOfMemoryException", "message": "boom", "count": 1}]}
+    t_al_un = judge(_with_ie(1, _diag_oom), DEFAULT_THRESHOLDS, i3, allowlist=_al_big)
+    expect(t_al_un["verdict"] == "RED" and any("未列入白名单" in f for f in t_al_un["fails"]),
+           "未列入白名单的类别必须判红（不能靠别的类别预算兜住）")
+    # ④ 缺文件/为空 ⇒ 容忍度 0（1 次也 RED）
+    _missing = load_allowlist(os.path.join(tempfile.gettempdir(), "__no_such_allowlist__.json"))
+    expect(_missing["available"] is False and _missing["entries_count"] == 0, "缺文件应得到空白名单")
+    t_al_miss = judge(_with_ie(1, _diag_nre), DEFAULT_THRESHOLDS, i3, allowlist=_missing)
+    expect(t_al_miss["verdict"] == "RED" and any("未列入白名单" in f for f in t_al_miss["fails"]),
+           "白名单缺文件/为空 ⇒ 容忍度 0（1 次也 RED）")
+    # 条目非法（未通过校验）⇒ 不生效；仓库默认白名单必须存在且为空（容忍度 0）
+    _bad = {"path": "<selftest>", "available": True, "valid": False, "error": "bad",
+            "sha256": None, "entries_count": 0, "entries": []}
+    expect(judge(_with_ie(1, _diag_nre), DEFAULT_THRESHOLDS, i3, allowlist=_bad)["verdict"] == "RED",
+           "白名单条目非法/未生效 ⇒ 容忍度 0")
+    _default_al = load_allowlist(DEFAULT_ALLOWLIST_PATH)
+    expect(_default_al["available"] is True and _default_al["valid"] is True
+           and _default_al["entries_count"] == 0,
+           "仓库默认白名单必须存在且 entries 为空（容忍度 0）")
     # criteria 不含 internal 时不判（M1⑤ 的 login,conn 口径不变）
     expect(judge(summarize_tick(stats_ie_bad, 100), DEFAULT_THRESHOLDS, ("login", "conn")
                  )["verdict"] == "GREEN",
@@ -841,7 +1056,7 @@ def cmd_selftest(_args):
         print("RED: load_report selftest 有未通过项")
         return 1
     print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/"
-          "残余丢包方向/本机负载窗/internal_errors 阈值与 fail-closed/BotSrv 崩溃三项/窗口准入）")
+          "残余丢包方向/本机负载窗/internal_errors 阈值与 fail-closed/白名单四牙/BotSrv 崩溃三项/窗口准入）")
     return 0
 
 
@@ -1027,9 +1242,9 @@ def main():
     s.add_argument("--criteria", default="login,conn,tick,internal",
                    help="判据子集（默认含 internal_errors）；M1 ⑤ 那种只比登录/连接的场景用 login,conn。"
                         "压测结论必须含 internal（A1，2026-11-15）")
-    s.add_argument("--max-internal-errors", type=int, default=0,
-                   help="internal_errors 绝对上限（默认 0）；只在 criteria 含 internal 时生效，"
-                        "并在 report.max_internal_errors 回显")
+    s.add_argument("--allowlist", default=DEFAULT_ALLOWLIST_PATH,
+                   help="internal_errors 白名单（默认仓库内 tools/botload/internal-errors-allowlist.json）。"
+                        "文件缺失/为空/条目非法 ⇒ 容忍度 0；白名单随卡面 patch 评审，运行时不得改")
     s.add_argument("--bots-log", default="",
                    help="BotSrv 的 bots.log（A1：归算 internal_errors 的 top 异常类型/堆栈首行；可选）")
     s.add_argument("--bots-runtime", default="",
