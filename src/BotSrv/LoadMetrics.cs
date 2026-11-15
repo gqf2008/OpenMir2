@@ -97,6 +97,7 @@ namespace BotSrv
         private static long _logonMisdelivered;  // 同一会话收到**别的 actor** 的 SM_LOGON 并拒绝的次数（错投观测）
         private static long _sceneNullActorSkipped; // BeginScene 跳过的 null 槽位次数（夹具健壮性）
         private static long _sceneListRaceSkipped; // BeginScene 因列表被并发改动而跳过的删除次数
+        private static long _sceneIndexRaceSkipped; // BeginScene 轮内下标读取被并发缩表跳过的次数
 
         // ==== 登录连接级观测（C6 第 5 轮，T-11）：把「残余丢包」的方向证出来 ====
         // T-8 的 ident 直方图只能证明「服务端回的总数 < 假人数」，分不出这两种：
@@ -326,6 +327,21 @@ namespace BotSrv
         public static long SceneListRaceSkippedCount
         {
             get { lock (Sync) { return _sceneListRaceSkipped; } }
+        }
+
+        /// <summary>BeginScene 轮内下标读取时列表已被并发缩短（F1；复审 6a669aba）。本轮结束并计数，
+        /// 不抛 ArgumentOutOfRangeException。修复后应恒 0；不写白名单豁免。</summary>
+        public static void SceneIndexRaceSkipped()
+        {
+            lock (Sync)
+            {
+                _sceneIndexRaceSkipped++;
+            }
+        }
+
+        public static long SceneIndexRaceSkippedCount
+        {
+            get { lock (Sync) { return _sceneIndexRaceSkipped; } }
         }
 
         /// <summary>这个假人收到了服务端的 SM_LOGON（= 真的进了世界，而不是"本地切到 PlayScene"）。
@@ -864,6 +880,7 @@ namespace BotSrv
               .Append(",\"internal_errors\":").Append(_internalErrors)
               .Append(",\"scene_null_actor_skipped\":").Append(_sceneNullActorSkipped)
               .Append(",\"scene_list_race_skipped\":").Append(_sceneListRaceSkipped)
+              .Append(",\"scene_index_race_skipped\":").Append(_sceneIndexRaceSkipped)
               .Append(",\"in_world\":").Append(_inWorld)
               .Append(",\"in_world_suppressed\":").Append(_inWorldSuppressed)
               .Append(",\"autoplay_in_world\":").Append(_autoPlayInWorld)

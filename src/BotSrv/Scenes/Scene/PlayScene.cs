@@ -1,4 +1,4 @@
-using BotSrv.Data;
+﻿using BotSrv.Data;
 using BotSrv.Maps;
 using BotSrv.Objects;
 using BotSrv.Player;
@@ -19,6 +19,9 @@ namespace BotSrv.Scenes.Scene
         private readonly int _mNDefYy = 0;
         public IList<Actor> ActorList = null;
         public ProcMagic ProcMagic = null;
+        /// <summary>仅自检注入：在「Count 检查通过、下标读取之前」执行，用于确定性模拟收包线程缩表
+        /// （卡 `openmir2-botsrv-autoplay-nre` F1）。生产为 null = 零行为变化。</summary>
+        internal static Action<PlayScene> SceneIndexRaceHook;
 
         public PlayScene(RobotPlayer robotClient) : base(SceneType.PlayGame, robotClient)
         {
@@ -122,11 +125,26 @@ namespace BotSrv.Scenes.Scene
                 {
                     break;
                 }
-                Actor actor = ActorList[i];
+                SceneIndexRaceHook?.Invoke(this);
+                Actor actor;
+                try
+                {
+                    actor = ActorList[i];
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // F1（复审 6a669aba）：`Count` 检查与下标读取之间，收包线程可能已把列表缩短
+                    // （SM_HIDE/SM_NEWMAP/AOI 删除）。读取本身必须自护，不能只靠删除点校验：
+                    // 本轮直接结束并计数，不把 AOORE 抛给 SafeRun 污染 internal_errors。
+                    LoadMetrics.SceneIndexRaceSkipped();
+                    break;
+                }
                 if (actor == null)
                 {
-                    // 夹具健壮性（卡 `openmir2-botsrv-autoplay-nre`）：`ActorList` 会被收包线程
+                    // 夹具健壮性（卡 `openmir2-botsrv-autoplay-nre` F3）：`ActorList` 会被收包线程
                     // （SM_HIDE/SM_NEWMAP 删除、AOI 增删）与本 run 线程并发增删，槽位可能瞬时为 null。
+                    // 归因精度：隔离注入 null 槽位在离线复现为 NRE@121（actor.Death），ActorList=null
+                    // 为 NRE@116；归档里的 :120 是**并发下索引读取竞争**的签名（见上面 try/catch）。
                     // 真实客户端 `m_ActorList` 只在 UI 线程读写（不会出现 null），且对「帧引用不存在
                     // 的 actor」是显式跳过（`PlayScn.pas:3670-3690`：创建不出 ⇒ `if Actor = nil then Exit`）。
                     // 这里照抄同义：跳过该槽位、计数、不抛 NRE；不自创重试/重建策略。
@@ -176,14 +194,16 @@ namespace BotSrv.Scenes.Scene
                 }
                 if (actor.DelActor || (Math.Abs(self.CurrX - actor.CurrX) > 16) || (Math.Abs(self.CurrY - actor.CurrY) > 16))
                 {
-                    MShare.g_FreeActorList.Add(actor);
-                    // 并发一致性（卡 `openmir2-botsrv-autoplay-nre`）：本槽位可能已被收包线程
+                    // 并发一致性（卡 `openmir2-botsrv-autoplay-nre` F2）：本槽位可能已被收包线程
                     // （SM_HIDE/SM_NEWMAP/AOI 增删）或 actor.Run() 的同线程重入改掉。真实客户端
                     // 单线程里 RemoveAt(i) 恒指向本轮 actor；这里先核对身份/下标，不一致就按
                     // 「跳过该槽位」处理（与上面 null 槽位同义），避免 RemoveAt 误删别人或抛
                     // ArgumentOutOfRangeException 污染 internal_errors。
                     if (i < ActorList.Count && ActorList[i] == actor)
                     {
+                        // F2：只有确认「本轮 actor 仍在 i」才登记 free-list；否则跳过分支会把
+                        // 仍在列表里的 actor 双归属（列表 + FreeActorList，随后可能被 NewActor 复用）。
+                        MShare.g_FreeActorList.Add(actor);
                         ActorList.RemoveAt(i);
                     }
                     else
