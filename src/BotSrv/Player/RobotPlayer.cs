@@ -67,24 +67,15 @@ namespace BotSrv.Player
         {
             SessionId = Guid.NewGuid().ToString("N");
             _heroActor = new HeroActor(this);
-            MShare.AutoPathList = new List<FindMapNode>();
             DScreen = new ScreenManager(this);
             IntroScene = new IntroScene(this);
             LoginScene = new LoginScene(this);
             SelectChrScene = new SelectChrScene(this);
             PlayScene = new PlayScene(this);
             Map = new TMap(this);
-            MShare.g_DropedItemList = new List<TDropItem>();
-            MShare.g_MagicList = new List<ClientMagic>();
-            MShare.g_FreeActorList = new List<Actor>();
-            //EventMan = new TClEventManager();
-            MShare.g_ChangeFaceReadyList = new ArrayList();
-            MShare.g_SendSayList = new ArrayList();
-            if (MShare.MySelf != null)
-            {
-                MShare.MySelf.SlaveObject.Clear();
-                MShare.MySelf = null;
-            }
+            // 共享列表/自身引用只在进程级初始化（MShare 字段初始化器），**不再每个 bot 构造时重置**：
+            // 旧代码在这里 `new List` 会把其它 bot 的掉落/魔法/释放池/自身 actor 清掉（跨 bot 污染 +
+            // 与 run/recv 线程并发替换）。卡 `openmir2-botsrv-shared-state-locks`。
             MShare.InitClientItems();
             MShare.g_DetectItemMineID = 0;
             MShare.LastMapMusic = -1;
@@ -313,6 +304,9 @@ namespace BotSrv.Player
         /// attacker 视角与 victim 视角（真机同一击会被两个假人各落一遍；去重靠事件键，
         /// 这个字段用于统计 `other_observer` 并佐证重复来源）。</summary>
         private int _myActorId;
+        /// <summary>本假人的自身 actor（SM_LOGON 绑定；per-bot，跨 bot 不共享）。
+        /// run/recv 线程通过 `MShare.MySelf` 的线程本地上下文访问它（卡 `openmir2-botsrv-shared-state-locks`）。</summary>
+        public THumActor MyActor;
         /// <summary>防 SocketError 重入（SendText 失败会**同步**回调 OnError，见 ScoketClient.SendText）。</summary>
         private bool _sockErrorHandling;
 
@@ -719,13 +713,11 @@ namespace BotSrv.Player
             int ahp = 0;
             int amaxhp = 0;
             Actor selfActor = null;
-            if (PlayScene != null && PlayScene.ActorList != null)
+            Actor[] actors = PlayScene != null ? PlayScene.SnapshotActors() : new Actor[0];
+            for (int i = 0; i < actors.Length; i++)
             {
-                for (int i = 0; i < PlayScene.ActorList.Count; i++)
-                {
-                    Actor a = PlayScene.ActorList[i];
-                    if (a != null && a.RecogId == _myActorId) { selfActor = a; break; }
-                }
+                Actor a = actors[i];
+                if (a != null && a.RecogId == _myActorId) { selfActor = a; break; }
             }
             if (selfActor != null)
             {
@@ -750,12 +742,10 @@ namespace BotSrv.Player
             }
             Actor vic = null;
             var others = new System.Text.StringBuilder();
-            if (PlayScene != null && PlayScene.ActorList != null)
+            for (int i = 0; i < actors.Length; i++)
             {
-                for (int i = 0; i < PlayScene.ActorList.Count; i++)
-                {
-                    Actor a = PlayScene.ActorList[i];
-                    if (a == null || a.RecogId == _myActorId)
+                Actor a = actors[i];
+                if (a == null || a.RecogId == _myActorId)
                     {
                         continue;
                     }
@@ -769,7 +759,6 @@ namespace BotSrv.Player
                         others.Append($"{{\"id\":{a.RecogId},\"x\":{a.CurrX},\"y\":{a.CurrY},\"dir\":{a.m_btDir},\"death\":{(a.Death ? 1 : 0)},\"hp\":{(a.Abil != null ? a.Abil.HP : 0)}}}");
                     }
                 }
-            }
             string vicJson = "null";
             int vid = 0;
             if (vic != null)
@@ -964,9 +953,10 @@ namespace BotSrv.Player
             }
             string want = MShare.g_sShopNpcName;
             Actor fallback = null;
-            for (int i = 0; i < PlayScene.ActorList.Count; i++)
+            Actor[] actors = PlayScene.SnapshotActors();
+            for (int i = 0; i < actors.Length; i++)
             {
-                Actor a = PlayScene.ActorList[i];
+                Actor a = actors[i];
                 if (a == null || a.RecogId == _myActorId)
                 {
                     continue;
@@ -999,9 +989,10 @@ namespace BotSrv.Player
         {
             if (PlayScene != null && PlayScene.ActorList != null)
             {
-                for (int i = 0; i < PlayScene.ActorList.Count; i++)
+                Actor[] actors = PlayScene.SnapshotActors();
+                for (int i = 0; i < actors.Length; i++)
                 {
-                    Actor a = PlayScene.ActorList[i];
+                    Actor a = actors[i];
                     if (a != null && a.RecogId == _myActorId)
                     {
                         return a.m_nGold;
@@ -1247,9 +1238,10 @@ namespace BotSrv.Player
                 return null;
             }
             Actor fallback = null;
-            for (int i = 0; i < PlayScene.ActorList.Count; i++)
+            Actor[] actors = PlayScene.SnapshotActors();
+            for (int i = 0; i < actors.Length; i++)
             {
-                Actor a = PlayScene.ActorList[i];
+                Actor a = actors[i];
                 if (a == null || a.RecogId == _myActorId)
                 {
                     continue;
@@ -1448,9 +1440,10 @@ namespace BotSrv.Player
             {
                 return null;
             }
-            for (int i = 0; i < PlayScene.ActorList.Count; i++)
+            Actor[] actors = PlayScene.SnapshotActors();
+            for (int i = 0; i < actors.Length; i++)
             {
-                Actor a = PlayScene.ActorList[i];
+                Actor a = actors[i];
                 if (a != null && a.RecogId == _myActorId)
                 {
                     return a;
@@ -6337,23 +6330,27 @@ namespace BotSrv.Player
 
         public void MinTimerTimer(object sender, EventArgs e1)
         {
-            for (int i = 0; i < PlayScene.ActorList.Count; i++)
+            Actor[] actors = PlayScene.SnapshotActors();
+            for (int i = 0; i < actors.Length; i++)
             {
-                if (IsGroupMember(PlayScene.ActorList[i].UserName))
+                if (IsGroupMember(actors[i].UserName))
                 {
-                    PlayScene.ActorList[i].m_boGrouped = true;
+                    actors[i].m_boGrouped = true;
                 }
                 else
                 {
-                    PlayScene.ActorList[i].m_boGrouped = false;
+                    actors[i].m_boGrouped = false;
                 }
             }
-            for (int i = MShare.g_FreeActorList.Count - 1; i >= 0; i--)
+            lock (MShare.FreeActorSync)
             {
-                if (MShare.GetTickCount() - MShare.g_FreeActorList[i].m_dwDeleteTime > 60 * 1000)
+                for (int i = MShare.g_FreeActorList.Count - 1; i >= 0; i--)
                 {
-                    MShare.g_FreeActorList[i] = null;
-                    MShare.g_FreeActorList.RemoveAt(i);
+                    Actor freeActor = MShare.g_FreeActorList[i];
+                    if (freeActor == null || MShare.GetTickCount() - freeActor.m_dwDeleteTime > 60 * 1000)
+                    {
+                        MShare.g_FreeActorList.RemoveAt(i);
+                    }
                 }
             }
         }

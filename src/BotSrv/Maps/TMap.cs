@@ -136,9 +136,10 @@ namespace BotSrv.Maps
                         }
                     }
                 }
-                for (int i = 0; i < robotClient.PlayScene.ActorList.Count; i++)
+                Objects.Actor[] actors = robotClient.PlayScene.SnapshotActors();
+                for (int i = 0; i < actors.Length; i++)
                 {
-                    Objects.Actor Actor = robotClient.PlayScene.ActorList[i];
+                    Objects.Actor Actor = actors[i];
                     if (Actor == MShare.MySelf)
                     {
                         continue;

@@ -1521,14 +1521,16 @@ namespace BotSrv
         public static ConnectionStep ConnectionStep;
         public static string MapTitle = string.Empty;
         public static int LastMapMusic = -1;
-        public static ArrayList g_SendSayList = null;
+        public static ArrayList g_SendSayList = new ArrayList();
         public static int g_SendSayListIdx = 0;
         public static IList<string> g_GroupMembers = null;
         public static ClientMagic[] MagicArr = new ClientMagic[255];
-        public static IList<ClientMagic> g_MagicList = null;
-        public static IList<TDropItem> g_DropedItemList = null;
-        public static ArrayList g_ChangeFaceReadyList = null;
-        public static IList<Actor> g_FreeActorList = null;
+        public static IList<ClientMagic> g_MagicList = new List<ClientMagic>();
+        public static IList<TDropItem> g_DropedItemList = new List<TDropItem>();
+        public static ArrayList g_ChangeFaceReadyList = new ArrayList();
+        /// <summary>释放池（跨 bot 共享）：所有增删/清空必须持有 <see cref="FreeActorSync"/>。</summary>
+        public static IList<Actor> g_FreeActorList = new List<Actor>();
+        public static readonly object FreeActorSync = new object();
         public static NakedAbility g_BonusTick = default;
         public static NakedAbility g_BonusAbil = default;
         public static NakedAbility g_NakedAbil = default;
@@ -1581,7 +1583,7 @@ namespace BotSrv
         public static Actor FocusCret = null;
         public static Actor MagicTarget = null;
         public static MapLink g_APQueue = null;
-        public static IList<FindMapNode> AutoPathList = null;
+        public static IList<FindMapNode> AutoPathList = new List<FindMapNode>();
         public static ushort[,] g_APPass = null;
         public static ushort[,] g_APPassEmpty = new ushort[BotConst.MAXX * 3, BotConst.MAXY * 3];
         public static Actor AutoTagget = null;
@@ -1653,7 +1655,14 @@ namespace BotSrv
         public static ushort g_wAvailIDHour = 0;
         public static ushort g_wAvailIPDay = 0;
         public static ushort g_wAvailIPHour = 0;
-        public static THumActor MySelf = null;
+        /// <summary>
+        /// 当前线程正在处理的**本假人**自身 actor（per-bot 上下文；卡 `openmir2-botsrv-shared-state-locks`）。
+        /// 旧实现是跨 bot 全局静态：每个 bot 的 `SM_LOGON` 都会覆盖它，run/recv 两线程读到别人或 null。
+        /// 现在由 `ClientManager` 在「收包 per-packet」与「每 bot 一轮」边界设置/恢复；
+        /// per-bot 的权威引用在 `RobotPlayer.MyActor`。**不要**再把它当跨 bot 共享状态。
+        /// </summary>
+        [ThreadStatic] private static THumActor _mySelf;
+        public static THumActor MySelf { get => _mySelf; set => _mySelf = value; }
         public static int g_BuildAcusesStep = 0;
         public static TMovingItem[] g_BuildAcuses = new TMovingItem[8];
         /// <summary>
