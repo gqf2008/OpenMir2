@@ -24,7 +24,8 @@ namespace BotSrv
     ///   ④ 删除点被并发改动（自删/下标前移）：跳过且不重复归属 g_FreeActorList；
     ///   ⑤ 轮内 `ActorList[i]` 读取前被并发缩表：跳过 + 计数，不抛 AOORE（F1）；
     ///   ⑥ 删除点身份核对通过后、RemoveAt 前被并发缩表：先 RemoveAt 成功再登记 FreeActorList，
-    ///      AOORE ⇒ 跳过 + 计数，不双归属（F1b）。
+    ///      AOORE ⇒ 跳过 + 计数，不双归属（F1b）；
+    ///   ⑦ ActorDied 的删除/插入循环遇并发缩表：计数跳过，不抛 AOORE（F1b「顺带核」）。
     ///
     /// 归因精度（F3）：隔离注入 null 槽位复现为 NRE@121、ActorList=null 为 NRE@116；
     /// 归档里的 :120 是**并发索引读取竞争**的签名，不是 null 槽位的直接证据。
@@ -35,7 +36,8 @@ namespace BotSrv
     /// 删删除点的「下标/身份核对」⇒ ④ 红（会误删/双归属）；
     /// 把 FreeActorList 登记挪回核对之前 ⇒ ④c 红（双归属）；
     /// 删轮内读取的 try/catch ⇒ ⑤ 红（AOORE）；删删除路径 try/catch ⇒ ⑥ 红（AOORE）；
-    /// 把 FreeActorList 登记挪到 RemoveAt 之前 ⇒ ⑥ 红（双归属）。
+    /// 把 FreeActorList 登记挪到 RemoveAt 之前 ⇒ ⑥ 红（双归属）；
+    /// 删 ActorDied 的 try/catch ⇒ ⑦ 红（AOORE）。
     /// </summary>
     internal static class SceneGuardSelfCheck
     {
@@ -297,6 +299,37 @@ namespace BotSrv
                 !threw && LoadMetrics.SceneListRaceSkippedCount == db + 1
                 && scene.ActorList.Count == 0 && !MShare.g_FreeActorList.Contains(doomed),
                 $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - db} count={scene.ActorList.Count} free={MShare.g_FreeActorList.Contains(doomed)}");
+
+            // ⑦ ActorDied「顺带核」：BeginScene 的 ProcMsg→ActorDied 在 run 线程执行，收包线程可能
+            //    并发缩表；删除/插入失败必须计数跳过、不抛 AOORE。
+            scene.ActorList.Clear();
+            MShare.MySelf = self;
+            var dying = new TestActor(robot) { CurrX = 100, CurrY = 100, m_nRx = 100, m_nRy = 100, RecogId = 987666 };
+            scene.ActorList.Add(dying);
+            long ab = LoadMetrics.SceneListRaceSkippedCount;
+            PlayScene.SceneActorDiedRaceHook = sc =>
+            {
+                PlayScene.SceneActorDiedRaceHook = null;
+                sc.ActorList.RemoveAt(sc.ActorList.Count - 1);
+            };
+            threw = false;
+            try
+            {
+                scene.ActorDied(dying);
+            }
+            catch (Exception e)
+            {
+                threw = true;
+                Console.WriteLine("   actordied-race threw: " + e.GetType().Name + " @ " + e.StackTrace);
+            }
+            finally
+            {
+                PlayScene.SceneActorDiedRaceHook = null;
+            }
+            Check("actordied-race-skipped",
+                !threw && LoadMetrics.SceneListRaceSkippedCount == ab + 1
+                && scene.ActorList.Count == 1 && scene.ActorList[0] == dying,
+                $"threw={threw} skipped+={LoadMetrics.SceneListRaceSkippedCount - ab} count={scene.ActorList.Count}");
 
             MShare.MySelf = self;
             scene.ActorList.Clear();
