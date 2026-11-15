@@ -65,7 +65,7 @@ try { client.ProcessPacket(...); } finally { MShare.MySelf = prev; }
 | run | verdict | `recv_packet_null` | 服务器侧 `CM_SOFTCLOSE` | 触发类 ident（14/15/30/31/34） | 说明 |
 | --- | --- | --- | --- | --- | --- |
 | `E:/UserFleet/load-actorpool500-20261115-rust-fix360b/` | **RED** | **1** | **3**（`game-svr.out.log` 67232 / 70171 / 70859） | 73577 / 2554 / 3580 / 30195 / 2035 | 唯一 NRE：`tier-500/bots.log:47251`，20:38:37.120 |
-| `E:/UserFleet/load-360-errorstack-20261115-2116/` | GREEN | 0 | **0** | 28400 / **0** / 0 / 3758 / **0** | 360s、500/500 进世界、`typed_stacked_blocks=0`（不适用） |
+| `E:/UserFleet/load-360-errorstack-20261115-2116/` | GREEN | 0 | **0** | 28400 / **0** / **2388** / 3758 / **0** | 360s、500/500 进世界、`typed_stacked_blocks=0`（不适用） |
 
 失败轮的三次软关与三个「日志流中途停止且不再恢复」的 bot **一一对应**：
 
@@ -78,7 +78,11 @@ try { client.ProcessPacket(...); } finally { MShare.MySelf = prev; }
 唯一 NRE 20:38:37.120 落在 loadbot44 软关 **+0.85s**、loadbot73 软关 **-0.15s** 之间；同秒
 `game-svr.out.log:70216` 记录 `gate_frame_queued … hold_frames=58180`（网关背压、帧被持有后延迟投递）。
 软关后 bot 侧没有任何断开/退出日志（全程 0 条），与「离开世界但连接未关」一致。
-干净轮既 0 次软关、也 0 次高烈度战斗类 ident（15/34 为 0），属**触发类缺席**，不是「已修」的证据。
+干净轮**并非所有触发类都缺席**：软关 **0 次**、`ident 15/34 = 0` 成立；但 **`ident 30 (SM_DISAPPEAR) = 2,388 次`，
+并非 0**——它是 P0 候选 `:843` 的触发帧，在干净轮真实发生过。因此「触发类缺席」只在
+**15/34=0 与 `CM_SOFTCLOSE`=0** 上成立。另：§5.2 覆盖率闸要求 `ident 30 ≥ 3,000`，**2,388 恰好
+印证「覆盖不足」**——即干净轮即使 NRE=0，也没有达到可判「覆盖充分」的门槛，不能据此判「已修」。
+核心结论不变：**0 次软关 ⇒ 不能判已修**。
 
 局限（必须同时读）：① 三个 bot 的日志流停止也可能只是进入「追击」这种静默挂机态，不能单凭
 日志停止证明软关与 NRE 的因果；本表的因果证据是**服务器侧 `CM_SOFTCLOSE` 时间与 NRE 时间窗**，
@@ -95,7 +99,7 @@ try { client.ProcessPacket(...); } finally { MShare.MySelf = prev; }
 | --- | --- | --- | --- | --- |
 | **P0** | `src/BotSrv/Player/RobotPlayer.Operate.cs:494` | SM_WALK/RUN/HORSERUN：`msg.Recog != MShare.MySelf.RecogId` | `MyActor == null` 且收到走/跑帧（含**别人**的走跑帧） | ident 11 = 213,427 |
 | **P0** | `src/BotSrv/Player/RobotPlayer.Operate.cs:550` | SM_HIT/HEAVYHIT/…：`msg.Recog != MShare.MySelf.RecogId` | 同上，收到攻击帧 | 14 = 73,577；15 = 2,554 |
-| **P0** | `src/BotSrv/Player/RobotPlayer.Operate.cs:843` | SM_HIDE/GHOST/DISAPPEAR：`MShare.MySelf.RecogId != msg.Recog` | 同上，收到隐身/消失帧 | 30 = 3,580 |
+| **P0** | `src/BotSrv/Player/RobotPlayer.Operate.cs:843` | SM_HIDE/GHOST/DISAPPEAR：`MShare.MySelf.RecogId != msg.Recog` | 同上，收到隐身/消失帧 | 30 = 3,580（失败轮）/ **2,388（干净轮）** |
 | P1 | `src/BotSrv/Player/RobotPlayer.Operate.cs:384`（`:387`/`:397` 同分支） | SM_TURN 带尾部名字：`MShare.MySelf.UserName` / `SlaveObject` | `body.Length > 11`（带 name 后缀）且 `MyActor == null` | ident 10 极高频，带尾部名字的比例未知 |
 | P2（潜在） | `src/BotSrv/Player/RobotPlayer.Operate.cs:436` / `:459` / `:477` / `:522` / `:533` | SM_SPACEMOVE_HIDE/SHOW、SM_RUSH、SM_BUTCH、SM_SITDOWN 的 `MySelf.RecogId` | 同上 | ident 6/7/12/637/800/801/806/807 均未出现 |
 | P2（潜在） | `src/BotSrv/Player/RobotPlayer.Operate.cs:629`、`655`、`662` | SM_ABILITY/WINEXP/LEVELUP 的 `MySelf.*` | 仅当这些帧先于本 bot 的 `SM_LOGON` 或软关后到达 | 52 = 500（均在 LOGON 之后）；44/45 未出现 |
@@ -146,6 +150,8 @@ try { client.ProcessPacket(...); } finally { MShare.MySelf = prev; }
   「触发类缺席」；
 - 战斗类覆盖达到失败轮量级：`ident 31 (SM_STRUCK) ≥ 30,000`、`ident 14 (SM_HIT) ≥ 70,000`、
   `ident 15 (SM_HEAVYHIT) ≥ 2,000`、`ident 30 ≥ 3,000`、`ident 11 ≥ 200,000`（单轮 500 档 360s）。
+  （干净轮实测 `ident 30 = 2,388 < 3,000`：即使 NRE=0，也**不满足**本闸 ⇒ 按本闸应判「覆盖不足」，
+  不能判「已修」。）
 
 任一条不满足 ⇒ 报告写「**未触发（覆盖不足：缺 X）**」，不得写「已修/未复现」。
 
@@ -200,8 +206,9 @@ try { client.ProcessPacket(...); } finally { MShare.MySelf = prev; }
    未验证。
 3. **没改任何代码**：H1 缺冻结客户端证据、H3/H4 改变异常面，均不满足「逐字节等价」；`census`
    类别定义与白名单一字未动（卡面验收第 3 条）。
-4. **没有把 0 次窗口当「已修」**：干净轮 0 次软关、0 次高烈度战斗帧，属触发类缺席，只是
-   「本轮无暴露」。
+4. **没有把 0 次窗口当「已修」**：干净轮 0 次软关、`ident 15/34 = 0`，但 `ident 30 = 2,388`
+   （低于覆盖闸 3,000）⇒ 属「软关触发类缺席 + 另一 P0 触发帧覆盖不足」，只是「本轮无暴露」，
+   不是「已修复」。
 5. **没有删除/清理任何归档**：只读 `E:/UserFleet/**` 与 master 树上文件。
 
 ## 8. 写集
