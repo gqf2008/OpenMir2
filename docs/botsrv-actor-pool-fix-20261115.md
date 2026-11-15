@@ -96,9 +96,9 @@ aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000
 
 - 90s 轮只有爬坡段 Gen2 GC（in_world 0→500），**不得**用它算斜率；若 360s 仍无稳态 after-GC 点，
   报告写「**本轮未观测到稳态 after-GC 点**」，不拿堆大小替代。
-- 修前 master 在 Rust 栈上 360s/500 in-world 的 **BotSrv** 内存已平坦/略降（961.6→883.5，−0.218MB/s），
-  说明**当前健康栈不复现历史 ~10MB/s 的 BotSrv 内存表现**；`game-svr` 不在旧 `mem.ndjson` 采样集里，
-  不对服务端内存下任何结论。
+- 首轮 master 360s 的 **BotSrv** WS 平坦/略降（961.6→883.5，−0.218MB/s），但**首轮没有采 `dotnet-counters`**
+  ⇒ **两轮不可比**；修复树 360s 的尾段上升只能对本轮成立，不能推广到 master。`game-svr` 不在旧
+  `mem.ndjson` 采样集里，不对首轮服务端内存下结论。
 - 采样口径不对称（显式标注）：90s 两轮的 `mem.ndjson` 只含 C# 进程 + BotSrv（旧 `load_gate`）；
   修复树 360s 起额外采样 `game-svr`/`game-gate`/`login-gate`/`sel-gate`（**只落盘、不参与越界判定**，
   commit `24a608c54`），报告里以 `mem_proc_names_extra` / `mem_proc_names_extra_present` 标注。
@@ -123,14 +123,25 @@ aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000
 
 ### A8 结论（本轮未取得稳态 after-GC 点）
 
-- 90s 与 360s 两轮都**没有观测到稳态段（爬坡后）的 `Gen 2 GC Count > 0` 采样点**：360s 的 3 次 Gen2 GC
-  全在 t≤35s（150→231→261MB）。按总监口径：**写「本轮未观测到稳态 after-GC 点」，不拿堆大小替代斜率**；
-  A8 的「每 bot Gen2 / 斜率≈0」**本轮未取得**。
+- 修复树 90s 与 360s 都**没有观测到稳态段（爬坡后）的 `Gen 2 GC Count > 0` 采样点**：360s 的 3 次 Gen2 GC
+  全在 t≤35s（150→231→261MB）。**首轮 master 360s 未采 counters，无法判断其稳态 GC**。按总监口径：
+  写「本轮未观测到稳态 after-GC 点」，不拿堆大小替代斜率；A8 的「每 bot Gen2 / 斜率≈0」**本轮未取得**。
 - 修复树 360s 的 BotSrv WS 尾段 **+0.946MB/s**（59.6s）与首轮 master 的 +0.013MB/s（59.1s）差异**未归因**。
   可能来源：无稳态 Gen2 GC 时的 GC 惰性增长、同机背景负载、2000ms 守卫在进世界瞬态保留更多 actor。
   要判定需下一轮 `dotnet-gcdump` 数 `Actor` 实例或强制 GC 前后存活量，**不能仅凭 WS 归因**。
 - 池的量级核算：`scene_actor_ejected=4435` 若在修前全部入池，按 1.5–3KB/actor ≈ **6.6–13.3MB**，
   小于尾段 ~80MB 的 WS 增长 ⇒ **尾段增长不能归因于池**（也说明删除池不是「内存平」的充分解释）。
+
+### LOH 增长（counters 定位；另开卡跟进，本卡不归因）
+
+- `LOH Size` 爬坡后 **208MB@60s → 263MB@371s，+0.18MB/s**（趋势上升；少数采样点微降）；
+  `Gen 2 Size` 0.5→313MB；`GC Heap Size` 254/602/1320MB（min/mean/max）。
+- **Gen0 1005 / Gen1 361 / Gen2 3**（Gen2 仅在 t=17/31/35s，爬坡段）⇒ 爬坡后**没有任何 Gen2 GC**，
+  LOH 只能靠 Gen2 回收 ⇒ 只增不减。
+- `Allocation Rate` 均值 ≈400–420MB/s（口径窗口差异）、峰 ≈520–545MB/s；`Exception Count` 稳态
+  约 0–8/s（均值被 20:37:07 爬坡尖峰 ~5400–5900/s 拉高）。
+- 池量级 6.6–13.3MB **不足以解释** LOH +55MB；**尚未归因到本次修复**。LOH 归因由另卡
+  `openmir2-botsrv-loh-growth` 跟进（疑为 >85KB 大对象：收包/发送缓冲等），本卡不做归因。
 
 ### 跨轮对照（19:56 首轮 master 360s vs 本轮修复树 360s，同栈同档）
 
@@ -144,14 +155,17 @@ aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000
 | internal_errors | 4 | 1 | 同上 |
 | Gen2 次数 / after-GC 序列 | 未采 counters | 3 次：17s 150 / 31s 231 / 35s 261MB（全爬坡） | 两轮都无稳态 after-GC 点 ⇒ A8 未取得 |
 | `scene_actor_ejected` | 旧码无字段 | **4435（11.97/s 全窗；18.71/s 末 120s）** | 控制量：驱逐路径确在跑 |
-| BotSrv WS | 961.6→883.5，峰 1015.4，尾 +0.013MB/s（59.1s） | 896→987，峰 1609（22s 瞬态），尾 +0.946MB/s（59.6s） | **未归因**（见 A8 结论；池量级 6.6–13.3MB < 尾段 ~80MB） |
+| BotSrv WS | 961.6→883.5，峰 1015.4，尾 +0.013MB/s（59.1s；**无 counters**） | 896→987，峰 1609（22s 瞬态），尾 +0.946MB/s（59.6s） | **方向相反；两轮不可比（首轮无 counters）**；LOH 增长 + 无 Gen2 GC，池量级不足以解释，尚未归因 |
+| LOH Size | 未采 | 208→263MB（+0.18MB/s，爬坡后；趋势上升，少数点微降） | 仅本轮有 counters |
+| Gen0/Gen1/Gen2 GC 次数 | 未采 | **1005 / 361 / 3**（Gen2 全在 t≤35s） | 仅本轮有 counters；爬坡后无 Gen2 GC |
 | game-svr WS | 未采样 | 523→558，尾 +0.045MB/s（近似平） | 采样口径新增（仅 360s），无首轮对照 |
 | 三网关 WS | 未采样 | game-gate 42 平、login-gate 5–11、sel-gate 11 平 | 同上 |
 | gate 丢弃率 | 未采集 `gate_stats` | 未采集 `gate_stats` | **N/A（两轮一致）** |
 | host_load | cpu_mean 48.5 / peak 76 / heavy 0（CIM 口径） | cpu_mean 45.8 / peak 84 / heavy 0（CIM 口径） | 同量级；起跑前 typeperf max 16.2%/mean 6%，外部扫描与构建均在起跑前结束 |
 
-**结论口径**：无界结构已移除（A7 机制证明 + 4 颗变异逐个红）；当前健康栈不复现历史 BotSrv 内存表现。
-**不写「泄漏已修复」——历史泄漏的根因归属与当前栈的表现是两件事。**
+**结论口径**：无界结构已移除（A7 机制证明 + 4 颗变异逐个红）。**修复树 360s 尾段上升，经 counters
+定位到 LOH 单调增长（+0.18MB/s）+ 爬坡后无 Gen2 GC；池量级 6.6–13.3MB 不足以解释，尚未归因到本次修复。**
+**不写「泄漏已修复」，也不写「当前栈不复现」——首轮 master 360s 无 counters，两轮不可比。**
 
 ## 4. 变异（逐条真跑，恢复后核对 sha）
 
@@ -171,7 +185,7 @@ aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000
 - **C# `GameSvr` 不能作为 500 bot 的窗口栈**：`WorldServer.ProcessHumans` 的玩家数据加载是「待实现」，
   实测 500 bot 只进 21/500 且刷 487 条 `List.RemoveAt` 异常；部署的 `E:\MirServer\M2GameSvr\GameSrv.exe`
   （2026-10-22，来源 worktree 已删）另属栈卫生问题，已上报另开卡。历史 ~10MB/s 泄漏是在 C# 栈上观测的，
-  当前 Rust 栈不复现该内存表现。
+  修复树 360s 的 LOH 增长与首轮 master 的平坦**不可比**（首轮无 counters）。
 - **外部 I/O 与构建窗口**：20:31:00–20:36:00 项目总监自查的全盘递归扫描、20:35:30–20:36:10 审查者构建
   均在 360s 起跑前结束；360s 的 strict 采样为 20:36:20（typeperf max 16.2%/mean 6%，heavy=0）。
 - **gate 丢弃率**：本卡两轮均未采集 `gate_stats`（Rust 栈的 load_gate 不产出），对照标 N/A；不是 0。
