@@ -119,14 +119,21 @@ ERROR_CENSUS_OPERATIONAL_STATS = (
     "autoplay_pre_world", "autoplay_skipped_pre_world",
 )
 
-# 依赖卡 openmir2-botsrv-autoplay-nre（已 approve、待合并）的顶层计数：
-# 该卡在 BeginScene 加护栏时落 `scene_null_actor_skipped` / `scene_list_race_skipped`。
-# 本卡 base 上这两个字段不存在 ⇒ 报告明确标 pending_parent_card（不计失败），
-# 但只要出现一个、另一个缺失，或出现非 0，就判红（fail-closed；合并父卡后自动进入必判集）。
-ERROR_CENSUS_PENDING_PARENT = {
-    "scene_null_actor_skipped": "parent card openmir2-botsrv-autoplay-nre：BeginScene 空 Actor 槽位跳过次数",
-    "scene_list_race_skipped":  "parent card openmir2-botsrv-autoplay-nre：BeginScene 删除点并发核对失败次数",
-}
+# 卡 openmir2-botsrv-autoplay-nre 已合入 master 39d418816：BeginScene 的三类计数已接线。
+# 总监裁决（2026-11-15）：
+#   · `scene_null_actor_skipped` **每份报告必须显式列出**（是 0 也要列，不许不提）；
+#   · 上界：稳态窗口内 `scene_null_actor_skipped / scene_rounds < 0.5%`，超了必须单独解释；
+#   · 语义：并发下读到正被清尾的槽位，安全跳过，不读、不删、不登记；属「已知且受限」，不等于夹具无错；
+#   · `scene_list_race_skipped` / `scene_index_race_skipped` 是护栏触发的竞态证据，必须为 0。
+SCENE_NULL_UPPER_BOUND_PCT = 0.5
+SCENE_NULL_SEMANTICS = ("并发下读到正被清尾的槽位（收包线程 RemoveAt 的瞬时空位）：安全跳过，"
+                        "不读、不删、不登记；属已知且受限，不等于夹具无错。")
+ERROR_CENSUS_SCENE_STATS = (
+    "scene_null_actor_skipped",
+    "scene_list_race_skipped",
+    "scene_index_race_skipped",
+    "scene_rounds",
+)
 
 DEFAULT_CENSUS_ALLOWLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                              "error-census-allowlist.json")
@@ -242,6 +249,19 @@ def summarize_tick(stats, count):
     last = stats[-1]
     base = stats[ramp_idx] if ramp_idx is not None else stats[0]
     hist = hist_sub(base, last)
+
+    # 父卡场景并发计数（卡 openmir2-botsrv-autoplay-nre，master 39d418816 已接线）：
+    # 上界分母 = 稳态窗内 BeginScene 实际迭代轮次；null 槽位跳过占比必须 <0.5%。
+    def _scene_delta(key):
+        if key not in base or key not in last:
+            return None
+        return last[key] - base[key]
+
+    _scene_rounds_steady = _scene_delta("scene_rounds")
+    _scene_null_steady = _scene_delta("scene_null_actor_skipped")
+    _scene_null_pct = (round(100.0 * _scene_null_steady / _scene_rounds_steady, 4)
+                       if (_scene_rounds_steady and _scene_null_steady is not None) else None)
+
     out = {
         "samples": sum(hist),
         "samples_total": last.get("tick_samples", 0),
@@ -284,8 +304,22 @@ def summarize_tick(stats, count):
             k: last.get(k) for k in ERROR_CENSUS_OPERATIONAL_STATS},
         "error_census_operational_present": {
             k: (k in last) for k in ERROR_CENSUS_OPERATIONAL_STATS},
-        "error_census_pending_parent": {
-            k: last[k] for k in ERROR_CENSUS_PENDING_PARENT if k in last},
+        # 父卡场景并发计数（已接线）：每份报告必须显式列出；缺失与 0 区分（judge fail-closed）。
+        "scene_null_actor_skipped": last.get("scene_null_actor_skipped"),
+        "scene_null_actor_skipped_present": ("scene_null_actor_skipped" in last),
+        "scene_null_actor_skipped_ramp": base.get("scene_null_actor_skipped"),
+        "scene_null_actor_skipped_steady": _scene_null_steady,
+        "scene_list_race_skipped": last.get("scene_list_race_skipped"),
+        "scene_list_race_skipped_present": ("scene_list_race_skipped" in last),
+        "scene_list_race_skipped_steady": _scene_delta("scene_list_race_skipped"),
+        "scene_index_race_skipped": last.get("scene_index_race_skipped"),
+        "scene_index_race_skipped_present": ("scene_index_race_skipped" in last),
+        "scene_index_race_skipped_steady": _scene_delta("scene_index_race_skipped"),
+        "scene_rounds": last.get("scene_rounds"),
+        "scene_rounds_present": ("scene_rounds" in last),
+        "scene_rounds_steady": _scene_rounds_steady,
+        "scene_null_skip_pct_steady": _scene_null_pct,
+        "scene_null_skip_semantics": SCENE_NULL_SEMANTICS,
         # T-11 登录连接级观测（残余丢包方向定位）：发出登录包后没拿到 529 的连接数，
         # 以及其中 rx_bytes==0（服务端一个字节都没回）的数量；resend 是诊断对照（默认关）。
         "login_conn_total": last.get("login_conn_total", 0),
@@ -745,7 +779,9 @@ def _census_allowlist_hit(entries, category):
     return None
 
 
-def evaluate_error_census(tier, allowlist=None, internal_excused=False):
+def evaluate_error_census(tier, allowlist=None, internal_excused=False,
+                          scene_null_explanation="",
+                          scene_null_upper_bound_pct=SCENE_NULL_UPPER_BOUND_PCT):
     """逐类核对夹具错误面（卡 openmir2-botsrv-recv-thread-nre）。
 
     判定（全部 fail-closed）：
@@ -755,7 +791,11 @@ def evaluate_error_census(tier, allowlist=None, internal_excused=False):
          internal-errors-allowlist 整体豁免（同一份评审），或 census 白名单按 category+max 登记；
       4. `internal_errors` 必须等于 Σ(feeds_internal 类别)——任何绕过分类入口的计数都会被这条等式抓出；
       5. 既有事件计数（ERROR_CENSUS_OPERATIONAL_STATS）必须全部出现在 load_stats 里（缺失即枚举不完整）；
-      6. 父卡的两个场景计数：出现一个就按必判集处理；两个都没出现 = 明确标 pending_parent_card。
+      6. 父卡（master 39d418816）四个场景字段必须全部出现：
+         · `scene_null_actor_skipped` **每份报告显式列出**（0 也列）；稳态占比必须 < 上界（默认 0.5%），
+           超了必须用 `scene_null_explanation` 单独解释，否则 RED；
+         · `scene_list_race_skipped` / `scene_index_race_skipped` 是竞态证据，必须为 0；
+         · `scene_rounds` 是上界分母（BeginScene 实际迭代轮次），缺失则无法判上界 ⇒ RED。
     `operational` 类别允许非 0，但必须逐类出现在报告里。
     """
     ev = {
@@ -764,7 +804,8 @@ def evaluate_error_census(tier, allowlist=None, internal_excused=False):
         "schema": tier.get("error_census_schema"),
         "categories": [],
         "operational": [],
-        "pending_parent": [],
+        "parent_scene": [],
+        "scene_null": None,
         "fault_total": 0,
         "fault_categories_nonzero": [],
         "internal_errors": tier.get("internal_errors"),
@@ -780,7 +821,8 @@ def evaluate_error_census(tier, allowlist=None, internal_excused=False):
         },
         "fails": [],
         "review_note": ("类别表与 src/BotSrv/BotErrorCensus.cs 的 Order 必须逐字一致；"
-                        "白名单随卡面 patch 评审，运行时没有新增条目的开关"),
+                        "白名单随卡面 patch 评审，运行时没有新增条目的开关；"
+                        "父卡 scene_* 计数已接线，scene_null_actor_skipped 每份报告必列"),
     }
     if not ev["present"]:
         ev["fails"].append("load_stats 缺 error_census 字段（错误类别无法逐类核对 ⇒ fail-closed）")
@@ -859,29 +901,89 @@ def evaluate_error_census(tier, allowlist=None, internal_excused=False):
         if not present:
             ev["fails"].append("load_stats 缺既有事件计数 %s（错误面枚举不完整 ⇒ fail-closed）" % key)
 
-    # 父卡计数：两个都没出现 = pending（不计失败）；出现一个 = 必判集。
-    pending = tier.get("error_census_pending_parent") or {}
-    present_count = sum(1 for k in ERROR_CENSUS_PENDING_PARENT if k in pending)
-    if present_count not in (0, len(ERROR_CENSUS_PENDING_PARENT)):
-        ev["fails"].append("父卡场景计数只出现了一部分（必须两个都有或都没有）⇒ fail-closed")
-    for key, why in ERROR_CENSUS_PENDING_PARENT.items():
-        if key in pending:
-            v = pending[key]
-            ev["pending_parent"].append({"counter": key, "present": True, "count": v, "why": why,
-                                         "status": "present"})
-            if v != 0:
-                ev["fails"].append("父卡计数 %s=%s（合入 openmir2-botsrv-autoplay-nre 后必须为 0）"
-                                   % (key, v))
+    # 父卡场景并发计数（master 39d418816 已接线）：四个字段必须全部出现。
+    # scene_null_actor_skipped 每份报告显式列出（0 也列）；上界见 SCENE_NULL_UPPER_BOUND_PCT。
+    scene_last = {k: tier.get(k) for k in ERROR_CENSUS_SCENE_STATS}
+    scene_present = {
+        "scene_null_actor_skipped": bool(tier.get("scene_null_actor_skipped_present")),
+        "scene_list_race_skipped": bool(tier.get("scene_list_race_skipped_present")),
+        "scene_index_race_skipped": bool(tier.get("scene_index_race_skipped_present")),
+        "scene_rounds": bool(tier.get("scene_rounds_present")),
+    }
+    for key in ERROR_CENSUS_SCENE_STATS:
+        if not scene_present[key]:
+            ev["fails"].append("load_stats 缺 scene 计数 %s（父卡已接线；每份报告必须出现）⇒ fail-closed"
+                               % key)
+    null_last = scene_last["scene_null_actor_skipped"]
+    null_steady = tier.get("scene_null_actor_skipped_steady")
+    rounds_steady = tier.get("scene_rounds_steady")
+    scene_null = {
+        "counter": "scene_null_actor_skipped",
+        "count": null_last,
+        "steady": null_steady,
+        "scene_rounds": scene_last["scene_rounds"],
+        "scene_rounds_steady": rounds_steady,
+        "pct_steady": tier.get("scene_null_skip_pct_steady"),
+        "upper_bound_pct": scene_null_upper_bound_pct,
+        "semantics": SCENE_NULL_SEMANTICS,
+        "status": "missing",
+        "explanation": scene_null_explanation or "",
+    }
+    if not scene_present["scene_null_actor_skipped"] or not scene_present["scene_rounds"]:
+        scene_null["status"] = "missing"
+    elif null_steady is None or rounds_steady is None:
+        scene_null["status"] = "insufficient_window"
+        if (null_last or 0) > 0:
+            ev["fails"].append("scene_null_actor_skipped 累计 %s > 0 但稳态窗口算不出"
+                               "（base 行缺字段）⇒ fail-closed" % null_last)
+    elif null_steady < 0 or rounds_steady < 0:
+        scene_null["status"] = "invalid"
+        ev["fails"].append("scene_null/scene_rounds 稳态倒退了（last < base）⇒ fail-closed")
+    elif rounds_steady == 0:
+        if null_steady > 0:
+            scene_null["status"] = "rounds_missing"
+            ev["fails"].append("scene_null_actor_skipped 稳态 %d > 0 但 scene_rounds=0"
+                               "（分母缺 ⇒ fail-closed）" % null_steady)
         else:
-            ev["pending_parent"].append({"counter": key, "present": False, "count": None, "why": why,
-                                         "status": "pending_parent_card"})
+            scene_null["status"] = "no_rounds"
+    else:
+        pct = round(100.0 * null_steady / rounds_steady, 4)
+        scene_null["pct_steady"] = pct
+        if pct < scene_null_upper_bound_pct:
+            scene_null["status"] = "within_upper_bound"
+        elif scene_null["explanation"]:
+            scene_null["status"] = "over_upper_bound_explained"
+        else:
+            scene_null["status"] = "over_upper_bound"
+            ev["fails"].append(
+                "scene_null_actor_skipped 稳态占比 %.4f%% ≥ %.4g%%（%d/%d 轮）⇒ 需单独解释"
+                % (pct, scene_null_upper_bound_pct, null_steady, rounds_steady))
+    ev["scene_null"] = scene_null
+    for key in ERROR_CENSUS_SCENE_STATS:
+        row = {"counter": key, "present": scene_present[key], "count": scene_last[key],
+               "steady": tier.get(key + "_steady")}
+        if key == "scene_null_actor_skipped":
+            row["status"] = scene_null["status"]
+        elif key in ("scene_list_race_skipped", "scene_index_race_skipped"):
+            v = scene_last[key]
+            if not scene_present[key]:
+                row["status"] = "missing"
+            elif isinstance(v, int) and not isinstance(v, bool) and v == 0:
+                row["status"] = "zero"
+            else:
+                row["status"] = "nonzero_fault"
+                ev["fails"].append("%s=%r > 0（父卡护栏触发的竞态证据，必须为 0）" % (key, v))
+        else:
+            row["status"] = "denominator" if scene_present[key] else "missing"
+        ev["parent_scene"].append(row)
     ev["complete"] = not ev["fails"]
     return ev
 
 
 def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
           login_threshold=None, world_threshold=None, bots_runtime=None,
-          allowlist=None, census_allowlist=None):
+          allowlist=None, census_allowlist=None,
+          scene_null_explanation="", scene_null_upper_bound_pct=SCENE_NULL_UPPER_BOUND_PCT):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
 
     `criteria` 只选"要比哪几条阈值"，**不能用它把"缺 tick 样本"变成绿灯**（2026-10-10 的教训：
@@ -931,7 +1033,9 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
     _ie = tier["internal_error_allowlist"]
     tier["error_census"] = evaluate_error_census(
         tier, census_allowlist,
-        internal_excused=bool(_ie.get("excused")) and bool(_ie.get("total")))
+        internal_excused=bool(_ie.get("excused")) and bool(_ie.get("total")),
+        scene_null_explanation=scene_null_explanation,
+        scene_null_upper_bound_pct=scene_null_upper_bound_pct)
     if "internal" in criteria:
         fails.extend(tier["internal_error_allowlist"]["fails"])
         fails.extend(tier["error_census"]["fails"])
@@ -1009,12 +1113,15 @@ def cmd_summarize(args):
     judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick,
           login_threshold=login_thr, world_threshold=args.world_threshold,
           bots_runtime=bots_runtime, allowlist=allowlist,
-          census_allowlist=census_allowlist)
+          census_allowlist=census_allowlist,
+          scene_null_explanation=args.scene_null_explanation,
+          scene_null_upper_bound_pct=args.scene_null_upper_bound_pct)
     # 总监硬规矩（2026-11-15）：每份结论必须显式列 login / no_resp / internal_errors / OOM。
     # None 一律表示「证据缺」，不得被下游当成 0。
     diag = tier.get("login_conn_diag") or {}
     ie_al = tier.get("internal_error_allowlist") or {}
     ec = tier.get("error_census") or {}
+    _scene_null = ec.get("scene_null") or {}
     tier["required_fields"] = {
         "login_success_pct": tier.get("login_success_pct"),
         "login_conn_no_resp": (diag.get("no_resp") if diag else None),
@@ -1031,9 +1138,21 @@ def cmd_summarize(args):
         "error_census_nonzero": ec.get("fault_categories_nonzero"),
         "error_census_categories_checked": len(ec.get("categories") or []),
         "error_census_allowlist_sha256": (ec.get("allowlist") or {}).get("sha256"),
+        # 总监 2026-11-15：scene_null_actor_skipped 每份报告必须显式列出（0 也列），
+        # 并给稳态占比与上界；语义固定写死，避免报告措辞漂移。
+        "scene_null_actor_skipped": _scene_null.get("count"),
+        "scene_null_actor_skipped_steady": _scene_null.get("steady"),
+        "scene_null_scene_rounds_steady": _scene_null.get("scene_rounds_steady"),
+        "scene_null_skip_pct_steady": _scene_null.get("pct_steady"),
+        "scene_null_skip_upper_bound_pct": _scene_null.get("upper_bound_pct"),
+        "scene_null_skip_status": _scene_null.get("status"),
+        "scene_null_skip_explanation": _scene_null.get("explanation"),
+        "scene_null_skip_semantics": _scene_null.get("semantics"),
+        "scene_list_race_skipped": tier.get("scene_list_race_skipped"),
+        "scene_index_race_skipped": tier.get("scene_index_race_skipped"),
         "verdict": tier["verdict"],
-        "note": ("四项必列字段 + 错误类别普查；None = 证据缺（不得当作 0）；"
-                 "白名单路径/sha256 见 internal_error_allowlist / error_census.allowlist"),
+        "note": ("四项必列字段 + 错误类别普查 + scene_null 上界；None = 证据缺（不得当作 0）；"
+                 "scene_null_actor_skipped 是 0 也必须显式列出；不得写「夹具无错」"),
     }
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
@@ -1284,27 +1403,47 @@ def cmd_selftest(_args):
         d.update(over)
         return d
 
-    def _with_census(row, internal=None, census=None, ops=None, schema=ERROR_CENSUS_SCHEMA):
+    def _with_census(row, internal=None, census=None, ops=None, schema=ERROR_CENSUS_SCHEMA,
+                     scene_null=0, scene_list=0, scene_index=0, scene_rounds=100):
         r = dict(row)
         r["error_census"] = _census(**(census or {}))
         r["error_census_schema"] = schema
         for _k in ERROR_CENSUS_OPERATIONAL_STATS:
             r[_k] = (ops or {}).get(_k, 0)
+        r["scene_null_actor_skipped"] = scene_null
+        r["scene_list_race_skipped"] = scene_list
+        r["scene_index_race_skipped"] = scene_index
+        r["scene_rounds"] = scene_rounds
         if internal is not None:
             r["internal_errors"] = internal
         return r
 
     def _census_tier(internal=0, census=None, ops=None, drop_census=False, drop_cat=None,
-                     extra_cat=None, schema=ERROR_CENSUS_SCHEMA):
-        rows = [_with_census(stats[0], internal=0),
-                _with_census(dict(stats[1], hist=list(hist2), tick_max_ms=5),
-                             internal=internal, census=census, ops=ops, schema=schema)]
+                     extra_cat=None, schema=ERROR_CENSUS_SCHEMA,
+                     scene_null=0, scene_list=0, scene_index=0, scene_rounds=100,
+                     drop_scene=None):
+        # 三行：row0 = ramp-complete 基线（login 100，hist 全 0）；row1 = 中间行；row2 = last。
+        # 稳态窗口 = row2 - row0，所以 scene_null 的占比 = scene_null / scene_rounds。
+        rows = [
+            _with_census(stats[0], internal=0, scene_rounds=0),
+            _with_census(dict(stats[1], t_ms=2000, hist=list(hist2),
+                              tick_sum_ms=5000, tick_max_ms=5), internal=internal,
+                         census=census, ops=ops, schema=schema,
+                         scene_rounds=scene_rounds // 2),
+            _with_census(dict(stats[1], t_ms=3000, hist=list(hist2),
+                              tick_sum_ms=5000, tick_max_ms=5), internal=internal,
+                         census=census, ops=ops, schema=schema, scene_null=scene_null,
+                         scene_list=scene_list, scene_index=scene_index,
+                         scene_rounds=scene_rounds),
+        ]
         if drop_census:
-            rows[1].pop("error_census", None)
+            rows[2].pop("error_census", None)
         if drop_cat:
-            rows[1]["error_census"].pop(drop_cat, None)
+            rows[2]["error_census"].pop(drop_cat, None)
         if extra_cat:
-            rows[1]["error_census"][extra_cat] = 0
+            rows[2]["error_census"][extra_cat] = 0
+        if drop_scene:
+            rows[2].pop(drop_scene, None)
         return summarize_tick(rows, 100)
 
     # 干净的 tick 分布（hist2 = 全部 5ms，P99=5）：让下面只由 internal/崩溃/窗口决定 verdict。
@@ -1444,8 +1583,14 @@ def cmd_selftest(_args):
            "全 0 用例里 fault 类别计数必须都是 0")
     expect(len(_ev.get("operational") or []) == len(ERROR_CENSUS_OPERATIONAL_STATS),
            "既有事件计数必须逐项出现在报告里（枚举完整）")
-    expect(all(p.get("status") == "pending_parent_card" for p in _ev.get("pending_parent", [])),
-           "父卡计数未接线时必须显式标 pending_parent_card（不是静默 0）")
+    _scene_null = _ev.get("scene_null") or {}
+    expect(_scene_null.get("count") == 0
+           and _scene_null.get("status") in ("no_rounds", "within_upper_bound"),
+           "scene_null_actor_skipped 必须在报告显式列出（0 也列）")
+    expect(len(_ev.get("parent_scene") or []) == len(ERROR_CENSUS_SCENE_STATS),
+           "父卡 scene 计数必须逐项出现在报告里")
+    expect(all(r["present"] for r in _ev.get("parent_scene", [])),
+           "父卡四个 scene 字段必须全部接线（缺失 fail-closed）")
 
     # ① fault 类别非 0 ⇒ RED 且点名类别（不是只数总量）
     t_c_bad = judge(_census_tier(internal=1, census={"recv_packet_null": 1}),
@@ -1521,18 +1666,57 @@ def cmd_selftest(_args):
            and any("缺既有事件计数 conn_lost" in f for f in t_c_opmiss["fails"]),
            "load_stats 缺既有事件计数必须 fail-closed")
 
-    # ⑦ 父卡计数：未出现 = pending（不红）；出现非 0 = RED；两个都出现且 0 = 正常必判集
-    _t_parent = _census_tier(internal=0)
-    _t_parent["error_census_pending_parent"] = {k: 0 for k in ERROR_CENSUS_PENDING_PARENT}
-    t_c_parent_ok = judge(_t_parent, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
-    expect(t_c_parent_ok["verdict"] == "GREEN",
-           "父卡两个场景计数都出现且为 0 时不得翻红")
-    _t_parent_bad = _census_tier(internal=0)
-    _t_parent_bad["error_census_pending_parent"] = {"scene_null_actor_skipped": 1}
-    t_c_parent_bad = judge(_t_parent_bad, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
-    expect(t_c_parent_bad["verdict"] == "RED"
-           and any("父卡计数 scene_null_actor_skipped=1" in f for f in t_c_parent_bad["fails"]),
-           "父卡计数非 0（或只出现一个）必须 fail-closed")
+    # ⑦ 父卡场景计数（master 39d418816 已接线）：每份报告必列 scene_null；上界 <0.5%；list/index 必须 0。
+    t_scene_zero = judge(_census_tier(scene_null=0, scene_rounds=1000),
+                         DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _s0 = (t_scene_zero.get("error_census") or {}).get("scene_null") or {}
+    expect(t_scene_zero["verdict"] == "GREEN" and _s0.get("count") == 0
+           and _s0.get("status") == "within_upper_bound",
+           "scene_null=0 必须 GREEN 且报告显式列出 0（不许不提）")
+    t_scene_low = judge(_census_tier(scene_null=3, scene_rounds=1000),
+                        DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _s3 = (t_scene_low.get("error_census") or {}).get("scene_null") or {}
+    expect(t_scene_low["verdict"] == "GREEN" and _s3.get("pct_steady") == 0.3
+           and _s3.get("status") == "within_upper_bound",
+           "稳态 3/1000 = 0.3% < 0.5% ⇒ GREEN 且列出占比")
+    # 恰好 0.5%：判据是严格 <，所以 0.5% 已超界，必须单独解释
+    t_scene_edge = judge(_census_tier(scene_null=5, scene_rounds=1000),
+                         DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    expect(t_scene_edge["verdict"] == "RED"
+           and any("需单独解释" in f for f in t_scene_edge["fails"]),
+           "稳态 5/1000 = 0.5% 不满足 <0.5% ⇒ 必须 RED（需单独解释）")
+    t_scene_edge_x = judge(_census_tier(scene_null=5, scene_rounds=1000),
+                           DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty,
+                           scene_null_explanation="已知且受限：并发清理尾槽的瞬时空位")
+    _s5x = (t_scene_edge_x.get("error_census") or {}).get("scene_null") or {}
+    expect(t_scene_edge_x["verdict"] == "GREEN"
+           and _s5x.get("status") == "over_upper_bound_explained"
+           and "并发清理尾槽" in (_s5x.get("explanation") or ""),
+           "超界但给了单独解释 ⇒ 不判红，且解释进报告")
+    t_scene_high = judge(_census_tier(scene_null=6, scene_rounds=1000),
+                         DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    expect(t_scene_high["verdict"] == "RED",
+           "稳态 6/1000 = 0.6% 且无解释 ⇒ RED")
+    t_scene_list = judge(_census_tier(scene_list=1), DEFAULT_THRESHOLDS, i3,
+                         census_allowlist=_census_empty)
+    expect(t_scene_list["verdict"] == "RED"
+           and any("scene_list_race_skipped=1" in f for f in t_scene_list["fails"]),
+           "scene_list_race_skipped > 0（护栏触发竞态）⇒ RED")
+    t_scene_index = judge(_census_tier(scene_index=1), DEFAULT_THRESHOLDS, i3,
+                          census_allowlist=_census_empty)
+    expect(t_scene_index["verdict"] == "RED"
+           and any("scene_index_race_skipped=1" in f for f in t_scene_index["fails"]),
+           "scene_index_race_skipped > 0（护栏触发竞态）⇒ RED")
+    t_scene_miss = judge(_census_tier(drop_scene="scene_rounds"), DEFAULT_THRESHOLDS, i3,
+                         census_allowlist=_census_empty)
+    expect(t_scene_miss["verdict"] == "RED"
+           and any("缺 scene 计数 scene_rounds" in f for f in t_scene_miss["fails"]),
+           "缺 scene_rounds（上界分母）⇒ fail-closed")
+    t_scene_norounds = judge(_census_tier(scene_null=0, scene_rounds=0),
+                             DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _snr = (t_scene_norounds.get("error_census") or {}).get("scene_null") or {}
+    expect(t_scene_norounds["verdict"] == "GREEN" and _snr.get("status") == "no_rounds",
+           "窗口内 0 轮且 0 跳过 ⇒ 不判红，但状态必须写 no_rounds")
 
     # 7) A2（2026-11-15）：BotSrv 崩溃判据 —— 伪造日志/退出码/事件 ⇒ 必红；门禁自停不算崩溃。
     rt_clean = {"self_exited": False, "stopped_by_gate": True, "exit_code": -1,
@@ -1583,7 +1767,7 @@ def cmd_selftest(_args):
         return 1
     print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/"
           "残余丢包方向/本机负载窗/internal_errors 阈值与 fail-closed/白名单四牙/错误类别普查逐类与对账/"
-          "BotSrv 崩溃三项/窗口准入）")
+          "scene_null 0.5% 上界与必列/BotSrv 崩溃三项/窗口准入）")
     return 0
 
 
@@ -1776,6 +1960,11 @@ def main():
                    help="错误类别普查白名单（默认 tools/botload/error-census-allowlist.json）。"
                         "fault 类别默认容忍度 0；feeds_internal 类别也可由 internal-errors 白名单整体豁免。"
                         "文件缺失/为空 ⇒ 容忍度 0（卡 openmir2-botsrv-recv-thread-nre）")
+    s.add_argument("--scene-null-upper-bound-pct", type=float, default=SCENE_NULL_UPPER_BOUND_PCT,
+                   help="scene_null_actor_skipped 的稳态上界（%% of BeginScene rounds；默认 0.5）。"
+                        "超界时必须用 --scene-null-explanation 单独解释，否则 RED")
+    s.add_argument("--scene-null-explanation", default="",
+                   help="scene_null_actor_skipped 超过上界时的单独解释（写进报告；空 = 不接受超界）")
     s.add_argument("--bots-log", default="",
                    help="BotSrv 的 bots.log（A1：归算 internal_errors 的 top 异常类型/堆栈首行；可选）")
     s.add_argument("--bots-runtime", default="",

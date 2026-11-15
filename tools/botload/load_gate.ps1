@@ -183,7 +183,10 @@ if ($SelfTestCriteria) {
     function New-FakeStats([string]$Path, [int]$InternalErrors, [bool]$OmitInternalField,
                            [bool]$OmitCensus = $false, [string]$CensusKey = "recv_packet_null",
                            [int]$CensusValue = -1, [string]$ExtraCensusKey = "",
-                           [string]$DropOperationalKey = "") {
+                           [string]$DropOperationalKey = "",
+                           [int]$SceneNull = 0, [int]$SceneRounds = 1000,
+                           [bool]$OmitSceneRounds = $false, [int]$SceneList = 0,
+                           [int]$SceneIndex = 0) {
         $zero = @(0) * 201
         $hist = @(0) * 201
         $hist[5] = 3
@@ -210,10 +213,11 @@ if ($SelfTestCriteria) {
             "partial_frames", "chunks_without_hash", "ident_overflow", "logon_misdelivered",
             "in_world_suppressed", "autoplay_pre_world", "autoplay_skipped_pre_world")
         $rows = @(
-            [ordered]@{ t_ms = 1000; login_ok = 0; tick_samples = 0; tick_sum_ms = 0; tick_max_ms = 0; conn_lost = 0; hist = $zero },
-            [ordered]@{ t_ms = 2000; login_ok = 3; tick_samples = 0; tick_sum_ms = 0; tick_max_ms = 0; conn_lost = 0; hist = $zero },
-            [ordered]@{ t_ms = 5000; login_ok = 3; tick_samples = 3; tick_sum_ms = 15; tick_max_ms = 5; conn_lost = 0; hist = $hist }
+            [ordered]@{ t_ms = 1000; login_ok = 0; tick_samples = 0; tick_sum_ms = 0; tick_max_ms = 0; conn_lost = 0; hist = $zero; scene_null_actor_skipped = 0; scene_list_race_skipped = 0; scene_index_race_skipped = 0; scene_rounds = 0 },
+            [ordered]@{ t_ms = 2000; login_ok = 3; tick_samples = 0; tick_sum_ms = 0; tick_max_ms = 0; conn_lost = 0; hist = $zero; scene_null_actor_skipped = 0; scene_list_race_skipped = 0; scene_index_race_skipped = 0; scene_rounds = 0 },
+            [ordered]@{ t_ms = 5000; login_ok = 3; tick_samples = 3; tick_sum_ms = 15; tick_max_ms = 5; conn_lost = 0; hist = $hist; scene_null_actor_skipped = $SceneNull; scene_list_race_skipped = $SceneList; scene_index_race_skipped = $SceneIndex; scene_rounds = $SceneRounds }
         )
+        if ($OmitSceneRounds) { $rows[2].Remove("scene_rounds") }
         foreach ($row in $rows) {
             foreach ($k in $opKeys) {
                 if ($k -ne $DropOperationalKey) { $row[$k] = 0 }
@@ -238,10 +242,13 @@ if ($SelfTestCriteria) {
     function Invoke-FakeReport([string]$Name, [int]$InternalErrors, [string]$ErrLogText, $Runtime, [string]$BotsLogText, [bool]$OmitInternalField, [string]$AllowlistPath = "",
                                [bool]$OmitCensus = $false, [string]$CensusKey = "recv_packet_null",
                                [int]$CensusValue = -1, [string]$ExtraCensusKey = "",
-                               [string]$DropOperationalKey = "") {
+                               [string]$DropOperationalKey = "",
+                               [int]$SceneNull = 0, [int]$SceneRounds = 1000,
+                               [bool]$OmitSceneRounds = $false, [int]$SceneList = 0,
+                               [int]$SceneIndex = 0) {
         $d = Join-Path $stRoot $Name
         New-Item -ItemType Directory -Force -Path $d | Out-Null
-        New-FakeStats (Join-Path $d "load_stats.ndjson") $InternalErrors $OmitInternalField $OmitCensus $CensusKey $CensusValue $ExtraCensusKey $DropOperationalKey
+        New-FakeStats (Join-Path $d "load_stats.ndjson") $InternalErrors $OmitInternalField $OmitCensus $CensusKey $CensusValue $ExtraCensusKey $DropOperationalKey $SceneNull $SceneRounds $OmitSceneRounds $SceneList $SceneIndex
         [System.IO.File]::WriteAllText((Join-Path $d "bots.err.log"), $ErrLogText, (New-Object System.Text.UTF8Encoding($false)))
         [System.IO.File]::WriteAllText((Join-Path $d "bots.log"), $BotsLogText, (New-Object System.Text.UTF8Encoding($false)))
         $rtPath = Join-Path $d "bots_runtime.json"
@@ -372,11 +379,40 @@ if ($SelfTestCriteria) {
                      " verdict=" + $r.report.verdict + " row=" + ($opRow | ConvertTo-Json -Compress))
     }
 
+    # 7f) 父卡 scene_null：0 也必须在 required_fields 显式列出；超过 0.5% 无解释 ⇒ RED；
+    #     缺 scene_rounds（分母）⇒ RED；list/index 非 0 ⇒ RED。
+    $r = Invoke-FakeReport "scene-null-zero" 0 "" $cleanRuntime "" $false "" -SceneNull 0 -SceneRounds 1000
+    if ($r.rc -ne 0 -or $r.report.verdict -ne "GREEN" -or
+        $r.report.required_fields.scene_null_actor_skipped -ne 0 -or
+        $r.report.required_fields.scene_null_skip_status -notin @("within_upper_bound", "no_rounds")) {
+        $stFails += ("scene_null=0 必须 GREEN 且 required_fields 显式列出（0 也列），实得 rc=" + $r.rc +
+                     " field=" + $r.report.required_fields.scene_null_actor_skipped +
+                     " status=" + $r.report.required_fields.scene_null_skip_status)
+    }
+    $r = Invoke-FakeReport "scene-null-over" 0 "" $cleanRuntime "" $false "" -SceneNull 10 -SceneRounds 1000
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or
+        -not (@($r.report.fails) -join ";" -match "scene_null_actor_skipped 稳态占比")) {
+        $stFails += ("scene_null 1% ≥ 0.5% 无解释必须 RED，实得 rc=" + $r.rc +
+                     " fails=" + (($r.report.fails) -join ";"))
+    }
+    $r = Invoke-FakeReport "scene-rounds-missing" 0 "" $cleanRuntime "" $false "" -OmitSceneRounds $true
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or
+        -not (@($r.report.fails) -join ";" -match "缺 scene 计数 scene_rounds")) {
+        $stFails += ("缺 scene_rounds（上界分母）必须 RED，实得 rc=" + $r.rc +
+                     " fails=" + (($r.report.fails) -join ";"))
+    }
+    $r = Invoke-FakeReport "scene-list-nonzero" 0 "" $cleanRuntime "" $false "" -SceneList 1
+    if ($r.rc -ne 1 -or $r.report.verdict -ne "RED" -or
+        -not (@($r.report.fails) -join ";" -match "scene_list_race_skipped=1")) {
+        $stFails += ("scene_list_race_skipped=1 必须 RED，实得 rc=" + $r.rc +
+                     " fails=" + (($r.report.fails) -join ";"))
+    }
+
     if ($stFails.Count -gt 0) {
         Write-Output ("SELFTEST_CRITERIA RED: " + ($stFails -join "；"))
         exit 1
     }
-    Write-Output "SELFTEST_CRITERIA CLI 注入通过（OOM/NRE/退出码/缺字段/白名单 4 牙/错误类别普查 5 牙/干净对照）；继续测 Get-BotSrvRuntime 取证"
+    Write-Output "SELFTEST_CRITERIA CLI 注入通过（OOM/NRE/退出码/缺字段/白名单 4 牙/错误类别普查 5 牙/scene_null 4 牙/干净对照）；继续测 Get-BotSrvRuntime 取证"
 }
 
 # ---- 构建 ----
