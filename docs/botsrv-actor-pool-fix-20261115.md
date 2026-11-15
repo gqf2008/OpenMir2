@@ -3,6 +3,12 @@
 身份：`openmir2-worker-85`；分支 `card/botsrv-actor-pool-leak`（base = master `262a95855`）。
 分析来源：`docs/botsrv-memory-leak-20261115.md`（worker-82）。本卡只改 BotSrv 夹具，不改服务端、不改冻结客户端。
 
+## 0.1 Oracle 引用来源（provenance）
+
+本文件所有 `*.pas` 行号（`PlayScn.pas` / `Actor.pas` / `ClMain.pas`）均指
+**`gqf2008/MirClient @ c61d912d`**（路径 `MirClient/Source/MirClient`）。
+本机另有 **3 份行号不同的拷贝**；引用以该 repo+commit 为准，不以本机任意拷贝为准。
+
 ## 0. 结论与取舍（移除 vs 复用）
 
 **修法：删除自由池，驱逐点立即解除引用。** 不接线定时器、不做对象复用。
@@ -97,7 +103,7 @@ fails（原样）：
 | 修前 master 360s（归档 `load-360-20261115-now`） | Rust | master | 360 | 500/500 | 961.6→883.5，峰 1015.4，尾 **−0.218MB/s**（358s） | 未采 counters | 旧码无此计数 | 内存平坦；无 Gen2 数据 |
 | 修复树 90s（`rust-fix90`） | Rust | `5910ac42d` | 90 | **500/500**（60s 闸门 PASS） | 956→914，峰 1014，尾 **+0.31MB/s** | **3 次**：14s 77MB / 21s 130MB / 35s 243MB（均在爬坡段） | **223 ≈ 2.12/s** | 90s 无稳态 after-GC 点 |
 | master 90s（`rust-master90b`） | Rust | master `0627a0f36` | 90 | **500/500**（60s 闸门 PASS） | 874→912，峰 1036，尾 **−0.22MB/s** | **2 次**：16s 117MB / 27s 189MB（均在爬坡段） | n/a（旧码无此计数） | 同栈同口径对照；preflight CPU 偏离见 §3.1 |
-| 修复树 360s（`rust-fix360b`） | Rust | `24a608c54` | 360 | **500/500**（60s 闸门 PASS） | 896→987，峰 **1609**（22s 进世界瞬态），min 872；报告尾段 **+0.946MB/s**（59.6s） | **3 次**：17s 150MB / 31s 231MB / 35s 261MB（均在爬坡段；**无稳态 after-GC 点**） | **4435（11.97/s；末 120s 18.71/s）** | `recv_packet_null=1`（首轮 4）；verdict RED（internal_errors=1） |
+| 修复树 360s（`rust-fix360b`） | Rust | `24a608c54` | 360 | **500/500**（60s 闸门 PASS） | 896→987，峰 **1609**（22s 进世界瞬态），min 872；报告尾段 **+0.946MB/s**（59.6s） | **3 次**：17s 157.5MB / 31s 242.4MB / 35s 273.6MB（均在爬坡段；**无稳态 after-GC 点**） | **4435（11.97/s；末 120s 18.71/s）** | `recv_packet_null=1`（首轮 4）；verdict RED（internal_errors=1） |
 
 口径说明：
 
@@ -131,7 +137,7 @@ fails（原样）：
 ### A8 结论（本轮未取得稳态 after-GC 点）
 
 - 修复树 90s 与 360s 都**没有观测到稳态段（爬坡后）的 `Gen 2 GC Count > 0` 采样点**：360s 的 3 次 Gen2 GC
-  全在 t≤35s（150→231→261MB）。**首轮 master 360s 未采 counters，无法判断其稳态 GC**。按总监口径：
+  全在 t≤35s（157.5/242.4/273.6MB，MB=10^6）。**首轮 master 360s 未采 counters，无法判断其稳态 GC**。按总监口径：
   写「本轮未观测到稳态 after-GC 点」，不拿堆大小替代斜率；A8 的「每 bot Gen2 / 斜率≈0」**本轮未取得**。
 - 修复树 360s 的 BotSrv WS 尾段 **+0.946MB/s**（59.6s）与首轮 master 的 +0.013MB/s（59.1s）差异**未归因**。
   可能来源：无稳态 Gen2 GC 时的 GC 惰性增长、同机背景负载、2000ms 守卫在进世界瞬态保留更多 actor。
@@ -141,8 +147,8 @@ fails（原样）：
 
 ### LOH 增长（counters 定位；另开卡跟进，本卡不归因）
 
-- `LOH Size` 爬坡后 **208MB@60s → 263MB@371s，+0.18MB/s**（趋势上升；少数采样点微降）；
-  `Gen 2 Size` 0.5→313MB；`GC Heap Size` 254/602/1320MB（min/mean/max）。
+- `LOH Size` 爬坡后 **218.1MB@60s → 275.9MB@371s**（端点 **+0.186MB/s** / OLS **+0.140MB/s**；MB=10^6；趋势上升，少数采样点微降）；
+  `Gen 2 Size` 0.5→328.4MB；`GC Heap Size` 254/602/1320MB（min/mean/max）。
 - **Gen0 1005 / Gen1 361 / Gen2 3**（Gen2 仅在 t=17/31/35s，爬坡段）⇒ 爬坡后**没有任何 Gen2 GC**，
   LOH 只能靠 Gen2 回收 ⇒ 只增不减。
 - `Allocation Rate` 均值 ≈418MB/s（**被测实例口径未记录：counters 未落 target，疑为 BotSrv 但未证**；
@@ -165,10 +171,10 @@ fails（原样）：
 | 稳态 ≥201ms | 0（max 172） | 0（max 63） | — |
 | `recv_packet_null` | **4** | **1** | 降低但未归零 ⇒ **罕见残余竞态**，不宣称归零 |
 | internal_errors | 4 | 1 | 同上 |
-| Gen2 次数 / after-GC 序列 | 未采 counters | 3 次：17s 150 / 31s 231 / 35s 261MB（全爬坡） | 两轮都无稳态 after-GC 点 ⇒ A8 未取得 |
+| Gen2 次数 / after-GC 序列 | 未采 counters | 3 次：17s 157.5 / 31s 242.4 / 35s 273.6MB（全爬坡） | 两轮都无稳态 after-GC 点 ⇒ A8 未取得 |
 | `scene_actor_ejected` | 旧码无字段 | **4435（11.97/s 全窗；18.71/s 末 120s）** | 控制量：驱逐路径确在跑 |
 | BotSrv WS | 961.6→883.5，峰 1015.4，尾 +0.013MB/s（59.1s；**无 counters**） | 896→987，峰 1609（22s 瞬态），尾 +0.946MB/s（59.6s） | **方向相反；两轮不可比（首轮无 counters）**；LOH 增长 + 无 Gen2 GC，池量级不足以解释，尚未归因 |
-| LOH Size | 未采 | 208→263MB（+0.18MB/s，爬坡后；趋势上升，少数点微降） | 仅本轮有 counters |
+| LOH Size | 未采 | 218.1→275.9MB（端点 +0.186 / OLS +0.140 MB/s，爬坡后；MB=10^6） | 仅本轮有 counters |
 | Gen0/Gen1/Gen2 GC 次数 | 未采 | **1005 / 361 / 3**（Gen2 全在 t≤35s） | 仅本轮有 counters；爬坡后无 Gen2 GC |
 | game-svr WS | 未采样 | 523→558，尾 +0.045MB/s（近似平） | 采样口径新增（仅 360s），无首轮对照 |
 | 三网关 WS | 未采样 | game-gate 42 平、login-gate 5–11、sel-gate 11 平 | 同上 |
@@ -176,7 +182,7 @@ fails（原样）：
 | host_load | cpu_mean 48.5 / peak 76 / heavy 0（CIM 口径） | cpu_mean 45.8 / peak 84 / heavy 0（CIM 口径） | 同量级；起跑前 typeperf max 16.2%/mean 6%，外部扫描与构建均在起跑前结束 |
 
 **结论口径**：无界结构已移除（A7 机制证明 + 4 颗变异逐个红）。**修复树 360s 尾段上升，经 counters
-定位到 LOH 单调增长（+0.18MB/s）+ 爬坡后无 Gen2 GC；池量级 6.6–13.3MB 不足以解释，尚未归因到本次修复。**
+定位到 LOH 增长（端点 +0.186 / OLS +0.140 MB/s）+ 爬坡后无 Gen2 GC；池量级 6.6–13.3MB 不足以解释，尚未归因到本次修复。**
 **不写「泄漏已修复」，也不写「当前栈不复现」——首轮 master 360s 无 counters，两轮不可比。**
 
 ## 4. 变异（逐条真跑，恢复后核对 sha）
