@@ -214,9 +214,10 @@ fault 非 0 未豁免 / `internal_errors` 对账不平 / 缺任一既有事件�
   `Logger.Error(ex.Message, ex)`。Serilog 把 `(string, T)` 绑到泛型重载 `Error<T>`，
   `LogEvent.Exception` 为 null，输出模板里的 `{Exception}` 渲染为空——**只丢信息、不报错**。
   2026-11-15 全仓审计（`src/**/*.cs`，排除注释行）：`LogService.Error(` 共 **393** 处，
-  其中单参传 Exception 的 **42** 处全部走坏重载（BotSrv 1 / DBSrv 4 / GameSrv 7 / LoginGate 1 /
-  LoginSrv 18 / M2Server 3 / MapSrv 1 / Modules 3）。修法是**共享门面一行**：
-  `Logger.Error(ex, ex.Message)`，42 个调用点不动；新增调用一律 `Error(message, ex)` 或 `Error(ex)`。
+  其中单参传 Exception（含大写 `E` 变量名）的 **45** 处全部走坏重载（LoginSrv 24 /
+  GameSrv 7 / M2Server 5 / DBSrv 4 / Modules 2 / BotSrv 1 / LoginGate 1 / MapSrv 1，合计 45 ✔）。
+  修法是**共享门面一行**：`Logger.Error(ex, ex.Message)`，45 个调用点不动；
+  新增调用一律 `Error(message, ex)` 或 `Error(ex)`。
 - 根因 ②：`tools/botload/load_report.py` 的 `_INTERNAL_ERR_RE` 只认
   「异常被兜住[N]：/压测兜住的异常[N]：」，认不出 `[ERR] <msg>` 与
   `socket 事件处理器异常被兜住：`。
@@ -234,37 +235,51 @@ fault 非 0 未豁免 / `internal_errors` 对账不平 / 缺任一既有事件�
 
 - `logged_blocks`：**可识别**异常块数（含只有消息的 `[ERR]`，它可被数到但不可诊断）；
 - `typed_blocks`：能抽出**异常类型**的块数；`untyped_blocks = logged_blocks - typed_blocks`；
-- `stacked_blocks`：至少带 1 个 `   at ` 帧的块数。
+- `stacked_blocks`：至少带 1 个 `   at ` 帧的块数；
+- `typed_stacked_blocks`：**同一块内**既有类型又有堆栈的块数（R2①）。
+
+**真实模板是跨行的**：`AppServer.cs` 的 `LogOutputTemplate` = `{Message:lj}{NewLine}{Exception}`
+⇒ `[ERR] <msg>` 行之后紧跟异常类型行、再跟 `   at ` 帧。解析时类型行**并入同一块**
+（只接受非时间戳行），遇下一条时间戳行才结束；跨块拼凑不算可诊断。
 
 ### 9.3 `diagnosable` 维度（进 `evaluate_error_census.fails`）
 
-`evaluate_diagnosability(internal_errors, internal_error_diag)`：
+`evaluate_diagnosability(internal_errors, internal_error_diag)`。R2 裁决（总监 2026-11-15）：
 
-| 前提 | `diagnosable` | 结果 |
+| 前提 | `diagnosable` / status | 结果 |
 | --- | --- | --- |
-| `internal_errors` 缺失（None） | `false` | RED（缺计数） |
-| `internal_errors <= 0` | `None` | 不适用，**不误报**（空输入） |
-| 有计数、摘要不可用/缺失 | `false` | RED |
-| 有计数、`typed_blocks==0`（本轮 4 条 `[ERR]` 消息） | `false` | RED：有计数无类型 |
-| 有类型、`stacked_blocks==0` | `false` | RED：知道是什么、不知道在哪 |
-| 有类型 + 有堆栈 | `true` | 不新增 fail |
+| `internal_errors` 缺失（None） | `false` / missing_count | RED（缺计数） |
+| `internal_errors <= 0` | `None` / not_applicable | 不适用，**不误报**（空输入） |
+| 有计数、摘要不可用/缺失 | `false` / missing_diag | RED |
+| 有计数、`typed_blocks==0` | `false` / untyped_blocks | RED：有计数无类型 |
+| 有类型，但 `untyped_blocks>0` | `false` / mixed_blocks | RED（R2②：一个未类型化块就不算） |
+| 有类型、有块带堆栈，但 `typed_stacked_blocks==0` | `false` / cross_block_only | RED（R2①：跨块拼凑不算） |
+| 有类型但 `stacked_blocks==0` | `false` / no_stack | RED：不知道在哪 |
+| `typed_stacked_blocks>0` 且 `untyped_blocks==0` | `true` / ok | 不新增 fail |
 
 报告显式字段：`required_fields.internal_errors_diagnosable / _diag_status / _logged_blocks /
-_typed_blocks / _stacked_blocks / _sampled_only`，以及 `error_census.diagnosability` 全量。
+_typed_blocks / _stacked_blocks / _sampled_only`，以及 `error_census.diagnosability` 全量
+（含 `typed_stacked_blocks` / `untyped_blocks`）。
 
 **采样上限不是判据**：BotSrv 只打前 20 条（`ShouldLogInternalError`），
 `internal_errors > logged_blocks` 只记 `sampled_only=true`，不单独判红——否则 3.95 万条 NRE
-的窗口会因采样上限永久假红。判据只问「**样本**里有没有类型与堆栈」。
+的窗口会因采样上限永久假红。判据只问「**样本**是否满足 R2①②」。
 
 ### 9.4 证据
 
-- `load_report.py selftest`：四类形态归桶（`[ERR]` 修复后形态 + socket + 只有消息）、
-  `diagnosable` 五条分支（untyped / ok / no_stack / 空输入 / 采样上限）逐条红→绿。
-- `BotSrv.exe --selftest-error-census`：经 `RunPacketGuard` 注入 NRE ⇒ 捕获 sink 断言
-  `LogEvent.Exception != null`、渲染串含 `System.NullReferenceException` 与 `   at `。
+- `load_report.py selftest`：四类形态归桶；**真实模板三行形态**（消息行 + 类型行 + at 行，
+  独立 `_lg3` 用例）与同行 `[ERR]` 兼容用例分开；`diagnosable` 分支
+  （untyped / mixed / cross_block / no_stack / ok / 空输入 / 采样上限）逐条红→绿。
+  meta 牙逐字绑定 `AppServer.cs` 的 `outputTemplate` —— 改模板即红。
+- `BotSrv.exe --selftest-error-census`：经 `RunPacketGuard` 注入 NRE ⇒ 用**同一个**
+  `AppServer.LogOutputTemplate` + `MessageTemplateTextFormatter` 渲染到临时文件，断言
+  `LogEvent.Exception != null`、且文件里依次是「消息行（无类型）/ `System.NullReferenceException:` 行 /
+  `   at ` 行」；另有 `log-shape-template-bound` meta 牙。
 - 离线重算 `E:/UserFleet/archive/load-360-20261115-now/main/tier-500`：
   `logged_blocks=4, typed_blocks=0, diagnosable=false, status=untyped_blocks`，
   并新增一条 fail（与 `recv_packet_null=4` 的既有 RED 并存）。
+- 修复前实测真实模板三行（消息 + 类型 + at）曾得到 `typed_blocks=0` 的假红；返工后
+  `typed_blocks>0 / stacked_blocks>0 / typed_stacked_blocks>0`。
 
 ## 附录 A：逐站点枚举清单（可复核）
 

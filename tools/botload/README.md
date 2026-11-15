@@ -213,7 +213,7 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
    ⇒ `diagnosable=false` 并判红；`internal_errors <= 0` 时该维度不适用、不误报。
    C# 侧对应修复：`src/OpenMir2/LogService.cs` 的 `Error(Exception)` 用正确序
    `Logger.Error(ex, ex.Message)` ⇒ **C# 服务日志现含异常类型与堆栈**（此前被 Serilog 泛型重载
-   静默吞掉，42 个调用点同时受影响）。
+   静默吞掉，45 处单参异常调用点同时受影响）。
 10. **别用"杀任务树"的方式停外层脚本**（2026-10-10 实测）：编排脚本是被后台任务启动的话，
     停任务时可能连带把 mysqld / 网关一起带走 ⇒ 下一档假人全部"连上后被关闭连接"
     （LoginSrv 日志里 `Unable to connect to any of the specified MySQL hosts`）。栈的生命周期要与
