@@ -45,6 +45,10 @@ mod homemap;
 /// （`#[ignore]` + `MIR2_HOST_AOI_BENCH=1`；只观测，不是判据）。
 #[cfg(test)]
 mod host_aoi_bench;
+/// 卡 `openmir2-p1-hostinbound-index`（Phase A）：`HostInbound` 线性查找单价离线微基准
+/// （`#[ignore]` + `MIR2_HOSTINBOUND_BENCH=1`；只观测，不是判据）。
+#[cfg(test)]
+mod hostinbound_bench;
 mod hutil;
 mod ids;
 mod items;

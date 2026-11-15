@@ -277,10 +277,18 @@ impl ActorDisplay {
     }
 }
 
-/// `ActorId -> ActorDisplay` 的确定性表（`Vec`，不靠 `HashMap` 迭代序）。
+/// `ActorId -> ActorDisplay` 的确定性表（`Vec` 保序；`HashMap` 只作 `actor_id -> 下标` 的
+/// **查找索引**，不参与任何迭代/输出顺序）。
+///
+/// 卡 `openmir2-p1-hostinbound-index`：`entries` 规模随总实体数增长（500 档实测到 8,874），
+/// 原 `get`/`set`/`remove` 全是 O(entries) 线性扫描（8,874 条约 2µs/次）。本表只用
+/// `HashMap` 做 O(1) 定位；**对外可见语义不变**（`set` 覆盖、`get` 取值、`remove` 删除；
+/// 无 `iter`，条目顺序不对外暴露）。
 #[derive(Clone, Debug, Default)]
 pub struct DisplayTable {
     entries: Vec<(i32, ActorDisplay)>,
+    /// `actor_id -> entries 下标`。与 `entries` 必须同步维护（`set` 追加/覆盖、`remove` 换位）。
+    by_id: std::collections::HashMap<i32, usize>,
 }
 
 impl DisplayTable {
@@ -291,23 +299,35 @@ impl DisplayTable {
 
     /// 登记/覆盖（按 `ActorId`）。
     pub fn set(&mut self, actor_id: i32, display: ActorDisplay) {
-        if let Some(slot) = self.entries.iter_mut().find(|(id, _)| *id == actor_id) {
-            slot.1 = display;
-            return;
+        match self.by_id.get(&actor_id).copied() {
+            Some(idx) if self.entries.get(idx).is_some_and(|(id, _)| *id == actor_id) => {
+                self.entries[idx].1 = display;
+            }
+            _ => {
+                let idx = self.entries.len();
+                self.entries.push((actor_id, display));
+                self.by_id.insert(actor_id, idx);
+            }
         }
-        self.entries.push((actor_id, display));
     }
 
     #[must_use]
     pub fn get(&self, actor_id: i32) -> Option<&ActorDisplay> {
-        self.entries
-            .iter()
-            .find(|(id, _)| *id == actor_id)
-            .map(|(_, d)| d)
+        let idx = *self.by_id.get(&actor_id)?;
+        self.entries.get(idx).map(|(_, d)| d)
     }
 
     pub fn remove(&mut self, actor_id: i32) {
-        self.entries.retain(|(id, _)| *id != actor_id);
+        // 条目顺序不对外暴露（无 `iter`），故 `swap_remove` 的换位不可观测；只需修正被换位元素的下标。
+        let Some(idx) = self.by_id.remove(&actor_id) else {
+            return;
+        };
+        let removed = self.entries.swap_remove(idx);
+        debug_assert_eq!(removed.0, actor_id, "by_id 与 entries 失同步");
+        if idx < self.entries.len() {
+            let moved_id = self.entries[idx].0;
+            self.by_id.insert(moved_id, idx);
+        }
     }
 
     #[must_use]
