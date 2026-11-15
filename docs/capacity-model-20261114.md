@@ -299,6 +299,10 @@ T10c-3 之后：`SimMonsterAi` **6.98–7.11ms**、`World::tick` **13.30ms / 1.2
   BotSrv 在 4GiB GC 上限下 OOM；网关 `ProcessBufferSend` 在 `SendChecked>0` 时静默丢帧（386/716 SM_LOGON 未发）。
   三条各有专卡（`openmir2-botsrv-heap-limit-oom`、`openmir2-gateway-backpressure-frame-drop`、
   `openmir2-world-entry-serial-saves`）。⇒ 结论按「1k 活跃客户端实测、10k 外推」表述，**不写「已测到 1000」**。
+- **同图口径警告（2026-11-15）**：三档窗口里所有假人都在**同一张图** ⇒ AOI 出站 O(N²)
+  （gate 累计 Hold 3,035 万帧，top ident 41/10），平台平衡点随拓扑/时序在 280–430 漂移。
+  ⇒ **`10k 同图 O(N²) 为最坏情况上界；分散场景未测`**。在分散场景测量之前，**不得拿 10k 外推数对外讲**；
+  真实玩家分散在各图时成本会显著低于同图上界，但具体低多少没有数据。
 - Top-N（1000 会话 vs 8 bot 基线）：HostInbound 21×、HostPlayerRun 11.14ms（基线无此项）、
   ΣWorld 2.0×、AoiDownlink 1.8× ⇒ **入站帧处理取代 AOI 成为第一成本**；但工作段仅占 44.9% tick，
   本档失败主因是夹具/网关，不是 game-svr 算力饱和。
