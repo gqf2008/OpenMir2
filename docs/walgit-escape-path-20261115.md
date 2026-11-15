@@ -48,6 +48,11 @@ git -C "$MAIN" fetch walgit "+refs/collab/inbox/$PRINCIPAL/<entry_id>:refs/colla
 
 ## 安全规则（硬）
 
+**签完立刻做 actor 自检**（2026-11-16 加）：回读该条目，断源码 `actor` **等于本车道 principal**；
+不等即判本次签卡失败并立刻上报。理由：整套协作的可信度建立在「谁签的」上，条目落到别人的身份下
+比签不出来严重得多。命令示例：`git cat-file -p <entry_ref> | python -I -B -c "import json,sys;d=json.load(sys.stdin);print(d['actor'])"`。
+
+
 **克隆目录必须按 principal 区分**（2026-11-16 加）：例如 `E:/UserTemp/w<principal后缀>sign`。
 绝不能多人共用同一个克隆——克隆内的 `.git/walgit/identity` 决定签名身份，共用会在别人的 principal 下落条目（冒名）。
 发现有人指向你的克隆，先停、再让对方自建。
