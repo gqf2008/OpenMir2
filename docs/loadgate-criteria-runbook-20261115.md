@@ -333,6 +333,13 @@ for rel, count, hold in runs:
   理由：把两者混成一个 `head=`，审计时无法回答「这轮跑的到底是哪份代码」。实例：360s 轮口径写「master `05a0e4815`」，
   但 `preflight.txt` 记的是 `head=e9b807e1b`——两者之间恰有 **1 个 docs-only 提交**（`src/` diff 为空），
   二进制 `dll 8d09c454…` 由 `05a0e4815` 构建。**`.build.json` 戳落地后 preflight 直接读戳即可。**
+- **戳的产出与校验工具（2026-11-15，卡 `openmir2-csharp-stack-binary-provenance` 第 1 步）**：
+  `tools/orchestration/stamp-binaries.ps1` 为 `game-svr` / `game-gate` / `login-gate` / `sel-gate`
+  （以及 C# 侧 `DBSrv` / `LoginSrv` 等）写 `mir2-build-stamp/1` 戳；`-Check` 逐条判「戳存在 /
+  sha256 实时一致 / head 可解析 / built_at 与 mtime 差 ≤5 分钟」，空目录或无二进制判 rc=2
+  （不静默通过）；`-Selftest` 已登记进工具门。**第 2 步尚未实施**：把
+  `provenance=unknown ⇒ rc=2` 接进起栈脚本、跑通五项通电条件；实现计划与牙清单见
+  `docs/binary-provenance-stamp-20261115.md` 的 §7–§8。
 - **`dotnet-counters` 采集必须记录目标进程**：落 `counters_target=<process> pid=<pid>` 到 `preflight.txt`
   与 `report.json`。**缺这项的采集，其数字不得出现在报告结论里**（只能进附录并标「未证」）。
   实例：2026-11-15 修复树 360s 的 `Allocation Rate≈418MB/s` 因归档未记 counters PID，只能降级为「疑为 BotSrv、未证」。

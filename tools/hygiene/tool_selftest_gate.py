@@ -168,6 +168,13 @@ REGISTRY = [
     # 不验证签名（verified=null）、rc 0/1/2。自测 17 项，含 2000 条 ref 的规模牙
     # （朴素整批写会互锁挂住）。离线、合成仓库、~5s。
     ("collab_read", ["tools/orchestration/collab_read.py", "--selftest"], False),
+    # 卡 `openmir2-csharp-stack-binary-provenance`（第 1 步）：窗口拉起的 game-svr /
+    # game-gate / login-gate / sel-gate（及 C# 侧 DBSrv/LoginSrv）产 `mir2-build-stamp/1`
+    # 戳并校验。`-Selftest` 离线合成夹具：1 正例（sha 独立复算 + C# dotnet/runtime 等价字段）
+    # + 7 负例（缺字段 / 篡改 sha / head 不存在 / built_at 与 mtime 差 >5 分钟 / 空目录 /
+    # 产戳后覆盖二进制 / 产戳时 head 不可解析）；临时 git 仓库在 tempdir，不碰真实仓库/
+    # 真实二进制，`-NoToolchainProbe` 不跑 cargo/dotnet。
+    ("stamp_binaries", ["tools/orchestration/stamp-binaries.ps1", "-Selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。
