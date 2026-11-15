@@ -1,0 +1,27 @@
+{
+ "kind": "issue",
+ "title": "LoadMetrics.WriteLoginConnsLocked 每 5s 整表重写，稳态给 LOH 添 ~394KB/5s（≈0.079MB/s）",
+ "background": "2026-11-15 LOH 归因（`docs/botsrv-loh-attribution-20261115.md`，head `fef887eaa`）：两轮 500 档 360s 的稳态 LOH 增量量子 = 394,4xxB，间隔主频 5s（44/46 次），算术误差 ≤3%；来源是 `LoadMetrics.WriteLoginConnsLocked` 每 5s `StringBuilder(80,064 chars)=160,128B` + `ToString()=234,204B` 的整表重写。两轮 Gen2 只回收 0.4–1.2MB，说明**这是定时垃圾而不是泄漏**，但它是每轮 LOH 曲线的确定性成分。",
+ "goal": "把该定时分配的**单次字节数**降下来（复用 buffer / 增量写 / 降频 三选一），且**输出内容逐字节不变**。",
+ "scope": [
+  "在 `src/BotSrv/LoadMetrics.cs` 内改造 `WriteLoginConnsLocked`：优先**复用 StringBuilder`（预分配 + `Clear()`），或改为增量追加/降低重写频率；三者择一，**不得改变落盘内容**。",
+  "验收量化：同一 500 档口径下，稳态 LOH 量子消失或**下降 ≥70%**；`counters_series.py` 的稳态 OLS 斜率随之下降。",
+  "等价性：改动前后对同一输入序列跑一遍，**输出文件 diff 必须为 0**；新增/修改的单元测试覆盖「内容不变」。",
+  "本卡**不需要新窗口**：在有界合成序列上即可量化分配（幂等 + 分配次数/字节数断言）；真机复核可并入下一次已排期的窗口。"
+ ],
+ "acceptance": [
+  "`--selftest-*` 全绿；新增等价性测试（输出 diff=0）",
+  "有量化证据：单次分配字节数从 ~394KB 降到目标值，或频率下降 ≥70%",
+  "五门禁全绿；`docs/` 写明改动理由与「不改变输出」的证据",
+  "若实测发现该写入路径的输出本身可裁剪（例如只写增量），另立卡评审——本卡不改语义"
+ ],
+ "tier": "L",
+ "tier_why": "BotSrv 夹具内部的内存分配优化，不改协议/帧/DB/golden；用合成序列即可量化，不需要真机窗口。",
+ "window_required": false,
+ "owner": "待认领",
+ "write_set": [
+  "src/BotSrv/LoadMetrics.cs",
+  "src/BotSrv/*SelfCheck*.cs",
+  "docs/**"
+ ]
+}
