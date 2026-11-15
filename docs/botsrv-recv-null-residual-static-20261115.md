@@ -4,6 +4,9 @@
 > 本文件是**静态阶段**的交付物：候选归因清单 + 可判的验证方案 + 最小加固建议。
 > **本轮未开真机窗口、未取到 `type`/`stack_head`**，因此卡面验收第 1 条（类型+堆栈首行指到行）
 > 仍未满足，卡片不能收口。**本轮不改 `recv_packet_null` 的 census 类别定义，不改白名单，未改代码。**
+>
+> **卡片状态：open（needs-review）。按总监口径，无 `type`/`stack_head` 不许 closed；**
+> **本文件是静态阶段交付，不是「已修复」结论。**
 
 ## 1. 结论先行
 
@@ -131,10 +134,11 @@ try { client.ProcessPacket(...); } finally { MShare.MySelf = prev; }
    `counters_target`（采集时 provenance，不能是 post-hoc）。
 6. **per-bot 帧归属**：本轮没有 `frames.ndjson`。下一窗口至少要给「每个 session 最后一个被处理的
    ident + 时间」；有此件才能把 NRE 钉到具体 bot（否则只能靠服务器侧时间窗）。建议由
-   `load_gate` 落 `per_session_last_ident`（见 5.3）。
+   `load_gate` 落 `per_session_last_ident`（见 5.3/5.4）。
 
-### 5.2 覆盖率闸（否则 0 次不可判）
+### 5.2 覆盖率闸（补充判据；否则 0 次不可判）
 
+**主要验收手段是 5.4 的离线确定性自检；本覆盖率闸是补充，不是替代。**
 窗口必须同时满足，才允许给出「本轮未观测到」的结论：
 
 - `in_world ≥ 450/500`（卡面验收同口径）、`window.conclusion_valid=true`；
@@ -155,12 +159,16 @@ try { client.ProcessPacket(...); } finally { MShare.MySelf = prev; }
 | `internal_errors=0` 但暴露计数 >0 | 「危险状态发生过但未命中」⇒ 不能判已修；必须先修/门控，再谈窗口。 |
 
 **统计口径（为什么不能只靠 0 次）**：观测到的事件数为 4 / 1 / 0（三轮不同树、不同战斗强度，
-不可合并）。按泊松近似，一个 360s 窗口 0 事件只能给出一侧 95% 上界 λ≤3.0/窗口；要把 λ 压到
+不可合并）。
+
+> **「单窗口 0 次只能给出 λ≤3.0/窗口 的置信上界，统计上无法单独判定『已修』。」**
+
+按泊松近似，一个 360s 窗口 0 事件只能给出一侧 95% 上界 λ≤3.0/窗口；要把 λ 压到
 ≤0.1/窗口需约 30 个干净窗口（`1-exp(-λK)=0.95 ⇒ λK≈3`）。因此**结论必须落在机制层**：
 要么拿到堆栈并修（或白名单），要么用暴露计数证明「软关后残留帧不再进入世界分支」；
 单纯「再多跑几个 0 次窗口」不构成证据。
 
-### 5.4 建议的确定性自检（替代「等自然触发」）
+### 5.4 确定性自检（**主要验收手段**；替代「等自然触发」）
 
 新增 `BotSrv.exe --selftest-recv-null-context`（**本轮不实现**，需 dotnet 构建与评审）：
 
@@ -203,3 +211,51 @@ docs/botsrv-recv-null-residual-static-20261115.md   （本文件，新增）
 ```
 
 无 `src/**` 改动，无协议/帧/golden 改动，无 `load_report`/census schema 改动。
+
+## 附录：local collab ref 数量过大时的逃生路径（可复跑；**不拷贝私钥**）
+
+**症状**：主检出本地 `refs/collab/*` 数量过大时（2026-11-15 实测 15,718 条 blob ref，其中
+`refs/collab/ci-artifacts/**` 占绝大多数），`wg collab board/thread/entry` 全部挂起并以
+`GitFailed` / `RegistryReadFailed` 失败；同仓 `git fetch`/`ls-remote` 正常。此时**不要把
+identity/keys 拷贝到临时克隆**（硬规则：私钥永不复制；涉及密钥材料的操作先报后做）。
+
+**规避原理**：新建一个**共享对象库**的临时克隆（refs 从 0 开始），用 `--key` 指向**规范 key 路径**
+（不复制），只拉元数据与我方 inbox refs，签名/推送后把新 ref 拉回主检出。
+
+```sh
+REPO=E:/Users/gxh/Documents/GitHub/OpenMir2
+WT=$REPO/.worktrees/worker-87
+CLONE=$TEMP/wg-escape            # 临时目录，用后删除
+KEY=$REPO/.git/worktrees/worker-87/walgit/keys/openmir2-worker-87.ed25519
+PRINCIPAL=openmir2-worker-87
+THREAD=<thread-id>
+PARENT=<script-extracted entry oid>   # 用 collab_read.py --json thread 取值，禁键盘输入
+
+# 1) 共享对象库的临时克隆；--no-checkout；refs 从 0 开始（不复制主仓的 15k refs）
+git clone --shared --no-checkout "$REPO" "$CLONE"
+git -C "$CLONE" remote add walgit http://127.0.0.1:8081/gqf2008/OpenMir2.git
+
+# 2) 只拉签名/发布所需的 ref 面（保持 ref 数最小）
+git -C "$CLONE" fetch walgit   "+refs/collab/meta/*:refs/collab/meta/*"   "+refs/collab/inbox/$PRINCIPAL/*:refs/collab/inbox/$PRINCIPAL/*"
+
+# 3) 用 --key 指向规范 key 路径（不复制 identity/keys；身份由 --actor 显式给出）
+BODY=$(python -I -c "import json,io,sys; print(json.dumps(json.load(io.open(sys.argv[1],encoding='utf-8')),ensure_ascii=False,separators=(',',':')))" body.json)
+WALGIT_LOCAL_COMMANDS=1 wg collab entry --repo "$CLONE"   --kind patch --id "$THREAD" --actor "$PRINCIPAL" --key "$KEY"   --parent "$PARENT" --body "$BODY" --push walgit
+
+# 4) 拉回主检出并读回验证（verified=true 才算数）
+git -C "$REPO" fetch walgit "+refs/collab/inbox/$PRINCIPAL/*:refs/collab/inbox/$PRINCIPAL/*"
+WALGIT_LOCAL_COMMANDS=1 wg collab thread "$THREAD"   # 在 $CLONE 内跑（主检出仍会挂）
+
+# 5) 清理：只删本线临时目录（含 body 文件）；不动主仓 refs、不动规范 key
+rm -rf "$CLONE" <body-file>
+```
+
+**注意**：
+- `--shared` 让临时克隆通过 alternates 复用主仓对象库，parent/blob oid 可直接解析；**不复制对象**。
+- 若 `wg` 不支持 `--key`，替代方案是「在本人 worktree 内限制可见 ref 数」（例如把临时克隆的
+  `refs/collab/**` 保持为空、只按需 fetch 单条），**仍然不许拷贝身份/密钥**。
+- 主检出的本地 collab refs 与远端逐条 sha 一致（2026-11-15 审计
+  `E:/UserFleet/archive/collab-refs-audit-20261115/`，`local_only=0`）⇒ 不需要（也不获授权）删除
+  本地 refs 来「修复」wg。
+- 本条路径待 `wg` 恢复后作为**签名 comment** 补到卡片线程；本轮不签（签名能力受损，且涉及密钥
+  材料的操作先报后做）。
