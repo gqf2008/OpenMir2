@@ -130,7 +130,7 @@ operational 类别（`teardown_race`）与下列**既有事件计数**不是「�
 | `PlayScene.ActorList`（每假人视图） | 收包线程（`SendMsg` 的 NewActor/DeleteActor/DelActor）+ runThread（`BeginScene`） | runThread 与夹具读取函数 | 无 | 高 | 父卡（master `39d418816`）给 BeginScene 加轮首快照/null 槽跳过/删除点核对/下标读取护栏；本卡把收包/run 两侧异常逐类计数，并接线三个 scene 计数 + `scene_rounds` 上界。彻底修（锁或 per-bot actor store）列入后续。 |
 | `MShare.MySelf` | 收包线程（SM_LOGON 重绑 / ClearActors 置 null）+ runThread | 几乎所有挂机/移动/探针路径 | 无 | 高 | parent 卡轮首快照关「轮内变 null/换人」窗口；跨 bot 重绑仍在（reviewer F6 residual）。 |
 | `MShare.g_FreeActorList` | `BeginScene`（runThread）、组队清理 | runner 与复用路径 | 无 | 高 | 已登记为已知；与 ActorList 同源，后续随 per-bot actor store 一起修。 |
-| `ClientManager._clientList` / `_autoList` | runThread（AddClient/Run/RunAutoPlay）+ 收包线程（DelClient） | Run/RunAutoPlay/DelClient | **本卡加 `_clientSync` + 快照** | 高 → 已修 | 迭代前快照、增删加锁；不再可能并发改坏 `List` 内部状态。 |
+| `ClientManager._clientList` / `_autoList` | runThread（AddClient/Run/RunAutoPlay）+ 收包线程（DelClient） | Run/RunAutoPlay/DelClient | **本卡加 `_clientSync` + 快照** | 高 → 已修 | 迭代前快照、增删加锁；不再可能并发改坏 `List` 内部状态。**无单测**（并发用例成本高）：以真机 500 档 `run_round_index` / `recv_packet_index` 归零作为观测牙（复审 minor，已登记）。 |
 | `MShare` 的每假人玩法全局（`TargetX/Y`、`PlayerAction`、`ItemArr`、`DropedItemList`、`AutoPlay`、`MapPath`、`AutoStep`、`TargetCret/FocusCret/MagicLockActor/MagicTarget`、`MapTitle`） | 每个假人的 run/recv 路径 | 每个假人 | 无 | 高 | 已登记为已知（T-22/T-29 约定「只读自己的视图」但无机制保证）；后续清单：per-bot 状态化。 |
 | `MShare` 连接/会话全局（`SelChrAddr/Port`、`ServerConnected`、`SendLogin`、`ConnectionStep`、`SoftClosed`） | 各假人的 LoginScene/SelectChrScene | 其它假人的登录路径 | 无 | 高 | 已登记为已知；错投有 per-session actor 身份守卫（`logon_misdelivered`）兜底，但共享连接状态仍是跨 bot 污染源。 |
 | `MShare` 夹具配置静态（`g_bo*Sequence`、`g_s*`、`g_n*`） | `AppService` 构造器（起线程前一次性） | 全部 | 无需 | 低 | 只读；不改。 |

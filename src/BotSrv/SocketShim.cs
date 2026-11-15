@@ -70,7 +70,9 @@ namespace BotSrv
             catch (SocketException ex)
             {
                 BotErrorCensus.SocketExceptionSeen("connect", ex);
-                OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode));
+                // 复审 minor：Connect 阶段的 OnError 处理器也走统一护栏，
+                // 避免它是 7 处事件调用点里唯一未归类的路径。
+                InvokeHandlerGuarded(() => OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode)));
                 return;
             }
             ConnSeq = Interlocked.Increment(ref _connSeqSeed);

@@ -462,8 +462,11 @@ namespace BotSrv
             lock (Sync)
             {
                 _internalErrors++;
+                // 同一临界区内累加 census：StatsLine（持 Sync）读两者，避免 flush 快照读到
+                // internal_errors=N 而 census_sum=N-1 的瞬时对账不平（复审 minor）。
+                // 锁顺序固定 Sync → BotErrorCensus.Sync；BotErrorCensus 不回取 Sync，无死锁。
+                BotErrorCensus.Count(category);
             }
-            BotErrorCensus.Count(category);
         }
 
         /// <summary>未分类兜底：任何新增/漏改的 catch 若还走无参入口，会在 census 里以该类别露出。</summary>

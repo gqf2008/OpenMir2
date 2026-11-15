@@ -175,11 +175,10 @@ namespace BotSrv
             return ClassifyFault(ex, RunRoundNull, RunRoundIndex, RunRoundOther);
         }
 
-        /// <summary>socket 事件处理器抛异常（fire-and-forget 边界；以前会直接打死收包线程/进程）。</summary>
-        public static void SocketHandlerThrew(Exception ex)
-        {
-            Count(SocketHandlerException);
-        }
+        /// <summary>socket 事件处理器抛异常（fire-and-forget 边界；以前会直接打死收包线程/进程）。
+        /// 生产路径统一走 `SocketShim.InvokeHandlerGuarded → LoadMetrics.InternalError`，本入口仅保留注释说明，
+        /// 不再提供可直接调用的 public 方法（避免绕过 internal_errors 的陷阱；复审 minor）。</summary>
+        // SocketHandlerException 类别的唯一入口 = ScoketClient.InvokeHandlerGuarded。
 
         // ==== 单类别入口（生产 catch 与自检共用同一入口；删掉入口里的 Count ⇒ 自检必红）====
         public static void SocketConnectFailed() { Count(SocketConnectFault); }
@@ -188,7 +187,6 @@ namespace BotSrv
         public static void DropExpWriterOpenFailed() { Count(DropExpWriterOpenFailure); }
         public static void DropExpWriterWriteFailed() { Count(DropExpWriterWriteFailure); }
         public static void BagItemDecodeFailed() { Count(BagItemDecodeFailure); }
-        public static void UnclassifiedInternalError() { Count(InternalErrorUnclassified); }
 
         /// <summary>主动 Disconnect 之后仍撞到已释放的 socket（收包/发送线程），属运行期竞态，单独观测。</summary>
         public static void TeardownRaceSeen()
