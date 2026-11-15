@@ -22,6 +22,9 @@ namespace BotSrv.Scenes.Scene
         /// <summary>仅自检注入：在「Count 检查通过、下标读取之前」执行，用于确定性模拟收包线程缩表
         /// （卡 `openmir2-botsrv-autoplay-nre` F1）。生产为 null = 零行为变化。</summary>
         internal static Action<PlayScene> SceneIndexRaceHook;
+        /// <summary>仅自检注入：在「删除点身份核对通过、RemoveAt 之前」执行，用于确定性模拟收包线程缩表
+        /// （卡 `openmir2-botsrv-autoplay-nre` F1b）。生产为 null = 零行为变化。</summary>
+        internal static Action<PlayScene> SceneRemoveRaceHook;
 
         public PlayScene(RobotPlayer robotClient) : base(SceneType.PlayGame, robotClient)
         {
@@ -194,38 +197,50 @@ namespace BotSrv.Scenes.Scene
                 }
                 if (actor.DelActor || (Math.Abs(self.CurrX - actor.CurrX) > 16) || (Math.Abs(self.CurrY - actor.CurrY) > 16))
                 {
-                    // 并发一致性（卡 `openmir2-botsrv-autoplay-nre` F2）：本槽位可能已被收包线程
-                    // （SM_HIDE/SM_NEWMAP/AOI 增删）或 actor.Run() 的同线程重入改掉。真实客户端
-                    // 单线程里 RemoveAt(i) 恒指向本轮 actor；这里先核对身份/下标，不一致就按
-                    // 「跳过该槽位」处理（与上面 null 槽位同义），避免 RemoveAt 误删别人或抛
-                    // ArgumentOutOfRangeException 污染 internal_errors。
+                    // 并发一致性（卡 `openmir2-botsrv-autoplay-nre` F1b/F2）：本槽位可能已被收包线程
+                    // （SM_HIDE/SM_NEWMAP/AOI 增删）或 actor.Run() 的同线程重入改掉。删除路径不能
+                    // check-then-act：身份核对通过后、RemoveAt 之前列表仍可能被缩表。
+                    // 顺序 = **先 RemoveAt 成功，再登记 FreeActorList**；AOORE ⇒ 跳过 + 计数 + 下标前移，
+                    // 不登记、不清理引用（actor 可能仍在列表里，须避免双归属/误清目标）。
+                    bool removed = false;
                     if (i < ActorList.Count && ActorList[i] == actor)
                     {
-                        // F2：只有确认「本轮 actor 仍在 i」才登记 free-list；否则跳过分支会把
-                        // 仍在列表里的 actor 双归属（列表 + FreeActorList，随后可能被 NewActor 复用）。
-                        MShare.g_FreeActorList.Add(actor);
-                        ActorList.RemoveAt(i);
+                        SceneRemoveRaceHook?.Invoke(this);
+                        try
+                        {
+                            ActorList.RemoveAt(i);
+                            MShare.g_FreeActorList.Add(actor);
+                            removed = true;
+                        }
+                        catch (ArgumentOutOfRangeException)
+                        {
+                            LoadMetrics.SceneListRaceSkipped();
+                            i++;
+                        }
                     }
                     else
                     {
                         LoadMetrics.SceneListRaceSkipped();
                         i++;
                     }
-                    if (MShare.TargetCret == actor)
+                    if (removed)
                     {
-                        MShare.TargetCret = null;
-                    }
-                    if (MShare.FocusCret == actor)
-                    {
-                        MShare.FocusCret = null;
-                    }
-                    if (MShare.MagicLockActor == actor)
-                    {
-                        MShare.MagicLockActor = null;
-                    }
-                    if (MShare.MagicTarget == actor)
-                    {
-                        MShare.MagicTarget = null;
+                        if (MShare.TargetCret == actor)
+                        {
+                            MShare.TargetCret = null;
+                        }
+                        if (MShare.FocusCret == actor)
+                        {
+                            MShare.FocusCret = null;
+                        }
+                        if (MShare.MagicLockActor == actor)
+                        {
+                            MShare.MagicLockActor = null;
+                        }
+                        if (MShare.MagicTarget == actor)
+                        {
+                            MShare.MagicTarget = null;
+                        }
                     }
                 }
                 else
