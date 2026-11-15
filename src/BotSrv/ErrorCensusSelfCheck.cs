@@ -1,7 +1,12 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Net.Sockets;
 using System.Text.Json;
+using OpenMir2;
+using Serilog;
+using Serilog.Core;
+using Serilog.Events;
 
 namespace BotSrv
 {
@@ -214,10 +219,52 @@ namespace BotSrv
             Check("meta-delta-detects-missing-increment", !(fakeAfter == fakeBefore + 1),
                 "no-increment must fail the +1 predicate");
 
+            // ⑫ 日志可诊断性牙（卡 `openmir2-botsrv-errorstack-diagnosable`）：
+            //    经 `RunPacketGuard` 的异常必须让日志出现异常类型行与 `   at ` 堆栈帧。
+            //    根因（2026-11-15）：`LogService.Error(ex)` 曾写成 `Logger.Error(ex.Message, ex)`，
+            //    Serilog 绑到泛型 `Error<T>(string, T)` ⇒ `LogEvent.Exception=null` ⇒
+            //    输出模板 `{Exception}` 渲染为空（只丢信息、不报错）。把 :32 改回坏序
+            //    ⇒ 下面 exception/has-type/has-stack 三条必 RED。
+            var capturedEvents = new List<LogEvent>();
+            LogService.Logger = new LoggerConfiguration().MinimumLevel.Debug()
+                .WriteTo.Sink(new CapturingSink(capturedEvents)).CreateLogger();
+            ClientManager.RunPacketGuard(() => throw new NullReferenceException("census-log-tooth"));
+            LogEvent lastEvent = capturedEvents.Count > 0 ? capturedEvents[capturedEvents.Count - 1] : null;
+            string renderedException = lastEvent == null || lastEvent.Exception == null
+                ? ""
+                : lastEvent.Exception.ToString();
+            Check("log-error-event-has-exception",
+                lastEvent != null && lastEvent.Exception != null,
+                lastEvent == null
+                    ? "no-log-event"
+                    : ("exception=" + (lastEvent.Exception == null ? "null" : "set")));
+            Check("log-error-exception-type-present",
+                renderedException.Contains("System.NullReferenceException"),
+                "head=" + (renderedException.Length == 0 ? "<empty>" : renderedException.Split('\n')[0]));
+            Check("log-error-exception-stack-present",
+                renderedException.Contains("   at "),
+                "has-at=" + renderedException.Contains("   at "));
+
             Console.WriteLine(failed == 0
                 ? "CENSUS SELFTEST GREEN"
                 : $"CENSUS SELFTEST RED ({failed} failed)");
             return failed == 0 ? 0 : 1;
+        }
+
+        /// <summary>日志可诊断性牙用的内联 sink：取回原始 LogEvent（含 Exception）。</summary>
+        private sealed class CapturingSink : ILogEventSink
+        {
+            private readonly List<LogEvent> _items;
+
+            public CapturingSink(List<LogEvent> items)
+            {
+                _items = items;
+            }
+
+            public void Emit(LogEvent logEvent)
+            {
+                _items.Add(logEvent);
+            }
         }
     }
 }
