@@ -88,6 +88,7 @@ param(
   [switch]$SelfTestCriteria,             # A3（2026-11-15）：不启动服务，伪造 OOM/NRE/退出码/白名单走真实 load_report CLI，断言必红
   [switch]$SelfTestArtifactHash,         # 卡 openmir2-loadgate-filehash-rc：哈希实现/rc 语义的无栈自检
   [string]$RecomputeArtifacts = "",      # 卡 openmir2-loadgate-filehash-rc：用既有归档复算产物清单（目录）
+  [string]$SelfTestProductionRc = "",   # 卡 openmir2-loadgate-filehash-rc：走生产退出码路径（inconclusive|red）
   [string]$Criteria = "login,conn,tick,internal",  # 判据子集；M1 ⑤（只比登录+选角）用 "login,conn"。
                                          # internal（A1，2026-11-15）默认在判据里；去掉它的轮次不得作为压测结论
   [switch]$NoActionProbe,                # 关掉假人动作探针（默认开：否则采不到 #+GD ack ⇒ tick 无样本）
@@ -115,9 +116,12 @@ Import-Module (Join-Path $Here "BotGuard.psm1") -Force
 # ---- 卡 `openmir2-loadgate-filehash-rc`：不依赖 Get-FileHash 的 SHA-256 与 rc 语义 ----
 # 本机 Windows PowerShell 的 Get-FileHash 不可用（窗口里 manifest 步骤抛错 ⇒ 整轮 rc=1，
 # 但 report/ndjson 数据完整）。改为 .NET SHA256，输出小写 hex（与原清单一致）。
+# 自测钩子只在显式自测开关下生效；环境残留的 LOADGATE_TEST_HASH_FAIL 不得影响真实窗口。
+$script:TestHooksEnabled = $false
+$script:ArtifactHashFailAfter = -1
 function Get-Sha256Hex {
     param([string]$Path)
-    if ($env:LOADGATE_TEST_HASH_FAIL -eq "1") {
+    if ($script:TestHooksEnabled -and $env:LOADGATE_TEST_HASH_FAIL -eq "1") {
         throw [System.InvalidOperationException]::new("simulated: hash tool unavailable (LOADGATE_TEST_HASH_FAIL=1)")
     }
     $sha = [System.Security.Cryptography.SHA256]::Create()
@@ -151,13 +155,18 @@ function Write-ArtifactManifest {
                            "bots.err.log", "bots_runtime.json")) {
             $files += @(Get-ChildItem -Path $Dir -Recurse -Filter $pat -ErrorAction SilentlyContinue)
         }
+        $n = 0
         foreach ($f in ($files | Sort-Object FullName)) {
+            if ($script:TestHooksEnabled -and $script:ArtifactHashFailAfter -ge 0 -and $n -ge $script:ArtifactHashFailAfter) {
+                throw ("simulated: hash failure after " + $n + " files")
+            }
             $rel = $f.FullName.Substring($Dir.Length).TrimStart('\', '/')
             $sha = Get-Sha256Hex $f.FullName
             if ([string]::IsNullOrWhiteSpace($sha) -or ($sha -notmatch '^[0-9a-f]{64}$')) {
                 throw ("bad sha256 for " + $rel)
             }
             $manifest += @{ file = $rel; sha256 = $sha }
+            $n++
         }
         @{ generated_ms = [long]([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()); files = $manifest } |
             ConvertTo-Json -Depth 4 | Set-Content -Path (Join-Path $Dir "artifacts.sha256.json") -Encoding utf8
@@ -169,6 +178,47 @@ function Write-ArtifactManifest {
         Write-Output ("ARTIFACT_HASH_INCONCLUSIVE: " + $script:ArtifactHashError + " —— 不可判（环境/工具问题，不是判据 RED）")
     }
     return $manifest
+}
+
+# 生产最终退出路径（卡 `openmir2-loadgate-filehash-rc` P2-1）：主流程与
+# `-SelfTestProductionRc` 自测都走这里；任何修改 `exit` 码的变异必须能被自测抓住。
+function Exit-WithGateResult {
+    if ($script:ArtifactHashInconclusive) {
+        Write-Output ("INCONCLUSIVE: 产物清单不可判（" + $script:ArtifactHashError + "）—— rc=2；判据结果见 summary（环境/工具问题，不是 RED）")
+        exit 2
+    }
+    if ($tierReports.Count -eq 0) { Write-Output "RED: 一档都没跑成"; exit 1 }
+    if ($crashAny) {
+        Write-Output ("RED: BotSrv 崩溃证据命中（非 0 退出 / bots.err.log 'Out of memory.' / Application Error 0xe0434352）—— " +
+                      "见各档 bots_runtime.json 与 bots.err.log；该档判据必红")
+        exit 1
+    }
+    if ($guardBreachAny) {
+        Write-Output ("RED: BotGuard 内存看门狗触发（有进程越界，已杀 BotSrv，提前终止；tiers_run=" + $guardTiersRun + "/" +
+                      ($TierList.Count * $Repeat) + "，剩余档位未跑）—— 见各档 mem.ndjson 与上面的 RED BOTGUARD_MEM_BREACH 行")
+        exit 1
+    }
+    if ($guardBoundAny) {
+        Write-Output ("RED: BotGuard 有界跑上界触发（MaxRunSec=" + $MaxRunSec + " / MaxMemSamples=" + $MaxMemSamples +
+                      "；tiers_run=" + $guardTiersRun + "/" + ($TierList.Count * $Repeat) + "）—— 本轮未跑完，判不 GREEN")
+        exit 1
+    }
+    if ($allGreen) {
+        $windowAllValid = $true
+        foreach ($t in $tierReports) {
+            if (-not $t.window -or -not $t.window.conclusion_valid) { $windowAllValid = $false }
+        }
+        if ($windowAllValid) {
+            Write-Output ("GREEN: " + $tierReports.Count + " 轮次全过（登录 ≥ 档位阈值 / 稳态无掉线 / tick P99 ≤ 100ms / internal_errors 未超白名单预算 / 无 BotSrv 崩溃；HoldSec=" + $HoldSec + " ≥ 360s）")
+        } else {
+            # A4：测量判据全过但窗口不足 ⇒ 只能冒烟；不打印 GREEN:（避免被 grep 成结论）。
+            Write-Output ("GREEN_SMOKE_ONLY: " + $tierReports.Count + " 轮次测量判据全过，但 HoldSec=" + $HoldSec +
+                          "s < 360s（window.conclusion_valid=false）—— 只可冒烟，不得作为压测 GREEN 结论")
+        }
+        exit 0
+    }
+    Write-Output "RED: 有档位未达标（见各 tier 的 report.json 的 fails；结论四项必列 login/no_resp/internal_errors/OOM）"
+    exit 1
 }
 
 # 档位参数归一化 + 防线（2026-10-11 实测：`-File -Tiers 500,1000` 变 5001000，整档跑满 600s 才 RED）：
@@ -226,14 +276,14 @@ if ($SelfTestRed) {
     Write-Output "SELFTEST_RED: 指向 127.0.0.1:17999（无监听），预期判红"
 }
 
-if ($OutDir -eq "") {
-    # 默认落在 tests/loadgate/（**可入库**：报告本身是交付物）；大日志在 .gitignore 里排除
-    $OutDir = Join-Path $RepoRoot ("tests\loadgate\load-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
-}
-New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-
 # ---- 卡 `openmir2-loadgate-filehash-rc`：无栈自检（正常/缺工具/坏文件/rc 三态） ----
 if ($SelfTestArtifactHash) {
+    $script:TestHooksEnabled = $true
+    $autoOut = (-not $PSBoundParameters.ContainsKey('OutDir')) -or [string]::IsNullOrEmpty($OutDir)
+    if ($autoOut) {
+        $OutDir = Join-Path ([System.IO.Path]::GetTempPath()) ("loadgate-selftest-" + [Guid]::NewGuid().ToString("N"))
+    }
+    New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
     $stRoot = Join-Path $OutDir "selftest-artifact-hash"
     New-Item -ItemType Directory -Force -Path $stRoot | Out-Null
     $stFails = @()
@@ -261,6 +311,19 @@ if ($SelfTestArtifactHash) {
     if ((Get-GateExitCode $false $script:ArtifactHashInconclusive) -ne 2) { $stFails += "forced failure rc != 2" }
     $script:ArtifactHashInconclusive = $false
     $script:ArtifactHashError = ""
+    # P2-2：清单已开始写之后强制失败（第 3 个文件）⇒ 不得留下半份 artifacts.sha256.json
+    $partialDir = Join-Path $stRoot "partial"
+    New-Item -ItemType Directory -Force -Path $partialDir | Out-Null
+    foreach ($pf in @("report.json", "load_stats.ndjson", "mem.ndjson")) {
+        [System.IO.File]::WriteAllText((Join-Path $partialDir $pf), "{}", (New-Object System.Text.UTF8Encoding($false)))
+    }
+    $script:ArtifactHashFailAfter = 2
+    try { $null = Write-ArtifactManifest $partialDir } finally { $script:ArtifactHashFailAfter = -1 }
+    if (Test-Path -LiteralPath (Join-Path $partialDir "artifacts.sha256.json")) { $stFails += "partial manifest was written" }
+    if (-not (Test-Path -LiteralPath (Join-Path $partialDir "artifacts.sha256.inconclusive.json"))) { $stFails += "partial inconclusive marker missing" }
+    if (-not $script:ArtifactHashInconclusive) { $stFails += "partial failure not marked inconclusive" }
+    $script:ArtifactHashInconclusive = $false
+    $script:ArtifactHashError = ""
     try {
         $h1 = Get-Sha256Hex $f1
         $h2 = Get-Sha256Hex $f2
@@ -276,17 +339,38 @@ if ($SelfTestArtifactHash) {
     } finally { Remove-Item Env:\LOADGATE_TEST_HASH_FAIL -ErrorAction SilentlyContinue }
     $badFile = Join-Path $stRoot "missing.bin"
     try { $null = Get-Sha256Hex $badFile; $stFails += "bad file did not throw" } catch { }
-    if ($stFails.Count -gt 0) {
+    # P2-1：走生产最终退出路径（不是只调 Get-GateExitCode）：不可判 ⇒ 2；判据 RED ⇒ 1。
+    $scriptPath = $PSCommandPath
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $scriptPath -SelfTestProductionRc inconclusive -OutDir $OutDir | Out-Null
+    $rcInc = $LASTEXITCODE
+    if ($rcInc -ne 2) { $stFails += ("production inconclusive rc=" + $rcInc + " want 2") }
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $scriptPath -SelfTestProductionRc red -OutDir $OutDir | Out-Null
+    $rcRed = $LASTEXITCODE
+    if ($rcRed -ne 1) { $stFails += ("production RED rc=" + $rcRed + " want 1") }
+    # P3-2：RecomputeArtifacts 不存在目录 ⇒ 不可判 rc=2（不是判据 RED 的 1）
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $scriptPath -RecomputeArtifacts (Join-Path $stRoot "no-such-dir") -OutDir $OutDir | Out-Null
+    $rcRecompute = $LASTEXITCODE
+    if ($rcRecompute -ne 2) { $stFails += ("recompute missing dir rc=" + $rcRecompute + " want 2") }
+    $failed = $stFails.Count -gt 0
+    if ($autoOut) {
+        Remove-Item -Recurse -Force -LiteralPath $OutDir -ErrorAction SilentlyContinue
+    }
+    if ($failed) {
         Write-Output ("ARTIFACT_HASH SELFTEST FAIL: " + ($stFails -join "；"))
         exit 1
     }
-    Write-Output "ARTIFACT_HASH SELFTEST PASS: 正常 sha 一致；forced missing tool ⇒ 不可判 rc=2；criteria RED ⇒ rc=1；bad file ⇒ 不可判"
+    Write-Output "ARTIFACT_HASH SELFTEST PASS: 正常 sha 一致；forced missing tool ⇒ 不可判 rc=2；production inconclusive⇒2 / RED⇒1；部分清单失败不落半份；recompute 缺目录⇒2；bad file ⇒ 不可判"
     exit 0
 }
 
 # ---- 卡 `openmir2-loadgate-filehash-rc`：既有归档复算产物清单（A4） ----
 if ($RecomputeArtifacts -ne "") {
-    $dir = (Resolve-Path -LiteralPath $RecomputeArtifacts).Path
+    try {
+        $dir = (Resolve-Path -LiteralPath $RecomputeArtifacts -ErrorAction Stop).Path
+    } catch {
+        Write-Output ("ARTIFACT_RECOMPUTE INCONCLUSIVE: 目录不存在/不可读: " + $RecomputeArtifacts)
+        exit 2
+    }
     $manifestPath = Join-Path $dir "artifacts.sha256.json"
     if (-not (Test-Path -LiteralPath $manifestPath)) {
         Write-Output ("ARTIFACT_RECOMPUTE INCONCLUSIVE: 缺 " + $manifestPath)
@@ -313,6 +397,29 @@ if ($RecomputeArtifacts -ne "") {
         exit 2
     }
 }
+
+# ---- 卡 `openmir2-loadgate-filehash-rc` P2-1：走生产退出码路径（无栈；供自测子进程调用）----
+if ($SelfTestProductionRc -ne "") {
+    if ($SelfTestProductionRc -notin @("inconclusive", "red")) {
+        Write-Output "SELFTEST_PRODUCTION_RC usage: inconclusive|red"
+        exit 2
+    }
+    $tierReports = @([pscustomobject]@{ window = [pscustomobject]@{ conclusion_valid = $true } })
+    $worstByTier = @{}
+    $crashAny = $false
+    $guardBreachAny = $false
+    $guardBoundAny = $false
+    $allGreen = ($SelfTestProductionRc -eq "inconclusive")
+    $script:ArtifactHashInconclusive = ($SelfTestProductionRc -eq "inconclusive")
+    $script:ArtifactHashError = if ($SelfTestProductionRc -eq "inconclusive") { "selftest: simulated inconclusive" } else { "" }
+    Exit-WithGateResult
+}
+
+if ($OutDir -eq "") {
+    # 默认落在 tests/loadgate/（**可入库**：报告本身是交付物）；大日志在 .gitignore 里排除
+    $OutDir = Join-Path $RepoRoot ("tests\loadgate\load-" + (Get-Date -Format "yyyyMMdd-HHmmss"))
+}
+New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 
 # ---- A3（2026-11-15）判据红检：不启动任何服务，伪造 OOM/NRE/退出码，走真实 load_report CLI ----
 # 目的：证明「注入一次 OOM/NRE 路径（或伪造日志/退出码）⇒ 判据必红；正常跑不变绿」。
@@ -1095,39 +1202,4 @@ if ($SelfTestRed) {
     exit 1
 }
 
-if ($script:ArtifactHashInconclusive) {
-    Write-Output ("INCONCLUSIVE: 产物清单不可判（" + $script:ArtifactHashError + "）—— rc=2；判据结果见 summary（环境/工具问题，不是 RED）")
-    exit 2
-}
-if ($tierReports.Count -eq 0) { Write-Output "RED: 一档都没跑成"; exit 1 }
-if ($crashAny) {
-    Write-Output ("RED: BotSrv 崩溃证据命中（非 0 退出 / bots.err.log 'Out of memory.' / Application Error 0xe0434352）—— " +
-                  "见各档 bots_runtime.json 与 bots.err.log；该档判据必红")
-    exit 1
-}
-if ($guardBreachAny) {
-    Write-Output ("RED: BotGuard 内存看门狗触发（有进程越界，已杀 BotSrv，提前终止；tiers_run=" + $guardTiersRun + "/" +
-                  ($TierList.Count * $Repeat) + "，剩余档位未跑）—— 见各档 mem.ndjson 与上面的 RED BOTGUARD_MEM_BREACH 行")
-    exit 1
-}
-if ($guardBoundAny) {
-    Write-Output ("RED: BotGuard 有界跑上界触发（MaxRunSec=" + $MaxRunSec + " / MaxMemSamples=" + $MaxMemSamples +
-                  "；tiers_run=" + $guardTiersRun + "/" + ($TierList.Count * $Repeat) + "）—— 本轮未跑完，判不 GREEN")
-    exit 1
-}
-if ($allGreen) {
-    $windowAllValid = $true
-    foreach ($t in $tierReports) {
-        if (-not $t.window -or -not $t.window.conclusion_valid) { $windowAllValid = $false }
-    }
-    if ($windowAllValid) {
-        Write-Output ("GREEN: " + $tierReports.Count + " 轮次全过（登录 ≥ 档位阈值 / 稳态无掉线 / tick P99 ≤ 100ms / internal_errors 未超白名单预算 / 无 BotSrv 崩溃；HoldSec=" + $HoldSec + " ≥ 360s）")
-    } else {
-        # A4：测量判据全过但窗口不足 ⇒ 只能冒烟；不打印 GREEN:（避免被 grep 成结论）。
-        Write-Output ("GREEN_SMOKE_ONLY: " + $tierReports.Count + " 轮次测量判据全过，但 HoldSec=" + $HoldSec +
-                      "s < 360s（window.conclusion_valid=false）—— 只可冒烟，不得作为压测 GREEN 结论")
-    }
-    exit 0
-}
-Write-Output "RED: 有档位未达标（见各 tier 的 report.json 的 fails；结论四项必列 login/no_resp/internal_errors/OOM）"
-exit 1
+Exit-WithGateResult
