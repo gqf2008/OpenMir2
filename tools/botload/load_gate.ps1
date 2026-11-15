@@ -314,25 +314,31 @@ function Get-BotSrvRuntime([System.Diagnostics.Process]$Proc, [string]$ErrLogPat
     $appEvents = @()
     $appChecked = $false
     $appErr = $null
-    try {
-        $evs = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = $TierStart } -ErrorAction Stop)
-        $appChecked = $true
-        foreach ($e in $evs) {
-            $msg = [string]$e.Message
-            if ($msg -match '(?i)BotSrv\.exe' -and $msg -match '(?i)0xe0434352') {
-                $appEvents += [ordered]@{
-                    time_created = $e.TimeCreated.ToString('o')
-                    id           = $e.Id
-                    code         = '0xe0434352'
-                    message_head = (($msg -split "`r?`n") | Select-Object -First 4) -join ' | '
+    # 自行退出时 WER 可能晚 1–2s 才写事件 ⇒ 查两次（第二次前等 2s）；门禁自停的不重试。
+    $appAttempts = if ($selfExited) { 2 } else { 1 }
+    for ($appTry = 0; $appTry -lt $appAttempts; $appTry++) {
+        if ($appTry -gt 0) { Start-Sleep -Seconds 2 }
+        try {
+            $evs = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; ProviderName = 'Application Error'; StartTime = $TierStart } -ErrorAction Stop)
+            $appChecked = $true
+            foreach ($e in $evs) {
+                $msg = [string]$e.Message
+                if ($msg -match '(?i)BotSrv\.exe' -and $msg -match '(?i)0xe0434352') {
+                    $appEvents += [ordered]@{
+                        time_created = $e.TimeCreated.ToString('o')
+                        id           = $e.Id
+                        code         = '0xe0434352'
+                        message_head = (($msg -split "`r?`n") | Select-Object -First 4) -join ' | '
+                    }
                 }
             }
-        }
-    } catch {
-        if ($_.Exception.Message -match '(?i)No events were found') {
-            $appChecked = $true   # 查询成功但没有匹配事件
-        } else {
-            $appErr = $_.Exception.Message
+            if ($appEvents.Count -gt 0) { break }
+        } catch {
+            if ($_.Exception.Message -match '(?i)No events were found') {
+                $appChecked = $true   # 查询成功但没有匹配事件
+            } else {
+                $appErr = $_.Exception.Message
+            }
         }
     }
     $oomHits = $oomLines.Count + $appEvents.Count
