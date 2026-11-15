@@ -62,6 +62,12 @@ namespace BotSrv
             {
                 System.Environment.Exit(ProbeCoordsSelfCheck.Run());
             }
+            // 场景空 Actor 健壮性（卡 `openmir2-botsrv-autoplay-nre`）：null 槽位跳过 + MySelf 快照
+            // + 未知 actor 帧的显式跳过（照抄冻结 Delphi 客户端 PlayScn.pas:3670-3690 语义）。
+            if (args.Length > 0 && args[0] == "--selftest-scene-null")
+            {
+                System.Environment.Exit(SceneGuardSelfCheck.Run());
+            }
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             GCSettings.LatencyMode = GCSettings.IsServerGC ? GCLatencyMode.Batch : GCLatencyMode.Interactive;
             AppServer serviceRunner = new AppServer();

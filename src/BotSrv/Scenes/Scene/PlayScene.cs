@@ -19,6 +19,17 @@ namespace BotSrv.Scenes.Scene
         private readonly int _mNDefYy = 0;
         public IList<Actor> ActorList = null;
         public ProcMagic ProcMagic = null;
+        /// <summary>仅自检注入：在「Count 检查通过、下标读取之前」执行，用于确定性模拟收包线程缩表
+        /// （卡 `openmir2-botsrv-autoplay-nre` F1）。生产为 null = 零行为变化。</summary>
+        internal static Action<PlayScene> SceneIndexRaceHook;
+        /// <summary>仅自检注入：在「删除点身份核对通过、RemoveAt 之前」执行，用于确定性模拟收包线程缩表
+        /// （卡 `openmir2-botsrv-autoplay-nre` F1b）。生产为 null = 零行为变化。</summary>
+        internal static Action<PlayScene> SceneRemoveRaceHook;
+        /// <summary>仅自检注入：在「身份核对已通过、RemoveAt 之前」执行（F1b 的 RemoveAt 窗口）。</summary>
+        internal static Action<PlayScene> SceneRemoveAtRaceHook;
+        /// <summary>仅自检注入：在 ActorDied 删除 actor 之前执行（卡 `openmir2-botsrv-autoplay-nre` F1b
+        /// 「顺带核」）。生产为 null = 零行为变化。</summary>
+        internal static Action<PlayScene> SceneActorDiedRaceHook;
 
         public PlayScene(RobotPlayer robotClient) : base(SceneType.PlayGame, robotClient)
         {
@@ -88,7 +99,12 @@ namespace BotSrv.Scenes.Scene
 
         public void BeginScene()
         {
-            if (MShare.MySelf == null)
+            // 轮首快照"自己"（卡 `openmir2-botsrv-autoplay-nre`）：真实 Delphi 客户端是单线程
+            // （收包与场景循环同一消息泵），`g_MySelf` 只可能在两轮之间变化；这里按同一语义取一次
+            // 快照，避免 BotSrv 的收包线程（SM_LOGON 重绑 / ClearActors）在循环中途把共享
+            // `MShare.MySelf` 置 null ⇒ line 161 的 NRE。快照只作本轮比较/坐标基准。
+            THumActor self = MShare.MySelf;
+            if (self == null)
             {
                 return;
             }
@@ -117,7 +133,33 @@ namespace BotSrv.Scenes.Scene
                 {
                     break;
                 }
-                Actor actor = ActorList[i];
+                SceneIndexRaceHook?.Invoke(this);
+                Actor actor;
+                try
+                {
+                    actor = ActorList[i];
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    // F1（复审 6a669aba）：`Count` 检查与下标读取之间，收包线程可能已把列表缩短
+                    // （SM_HIDE/SM_NEWMAP/AOI 删除）。读取本身必须自护，不能只靠删除点校验：
+                    // 本轮直接结束并计数，不把 AOORE 抛给 SafeRun 污染 internal_errors。
+                    LoadMetrics.SceneIndexRaceSkipped();
+                    break;
+                }
+                if (actor == null)
+                {
+                    // 夹具健壮性（卡 `openmir2-botsrv-autoplay-nre` F3）：`ActorList` 会被收包线程
+                    // （SM_HIDE/SM_NEWMAP 删除、AOI 增删）与本 run 线程并发增删，槽位可能瞬时为 null。
+                    // 归因精度：隔离注入 null 槽位在离线复现为 NRE@121（actor.Death），ActorList=null
+                    // 为 NRE@116；归档里的 :120 是**并发下索引读取竞争**的签名（见上面 try/catch）。
+                    // 真实客户端 `m_ActorList` 只在 UI 线程读写（不会出现 null），且对「帧引用不存在
+                    // 的 actor」是显式跳过（`PlayScn.pas:3670-3690`：创建不出 ⇒ `if Actor = nil then Exit`）。
+                    // 这里照抄同义：跳过该槽位、计数、不抛 NRE；不自创重试/重建策略。
+                    LoadMetrics.SceneNullActorSkipped();
+                    i++;
+                    continue;
+                }
                 if (actor.Death && MShare.g_gcGeneral[8] && !actor.m_boItemExplore && (actor.Race != 0) && actor.IsIdle())
                 {
                     i++;
@@ -139,12 +181,12 @@ namespace BotSrv.Scenes.Scene
                         }
                     }
                     actor.Run();
-                    if (actor != MShare.MySelf)
+                    if (actor != self)
                     {
                         actor.ProcHurryMsg();
                     }
                 }
-                if (actor == MShare.MySelf)
+                if (actor == self)
                 {
                     actor.ProcHurryMsg();
                 }
@@ -158,25 +200,62 @@ namespace BotSrv.Scenes.Scene
                         actor.DelActor = true;
                     }
                 }
-                if (actor.DelActor || (Math.Abs(MShare.MySelf.CurrX - actor.CurrX) > 16) || (Math.Abs(MShare.MySelf.CurrY - actor.CurrY) > 16))
+                if (actor.DelActor || (Math.Abs(self.CurrX - actor.CurrX) > 16) || (Math.Abs(self.CurrY - actor.CurrY) > 16))
                 {
-                    MShare.g_FreeActorList.Add(actor);
-                    ActorList.RemoveAt(i);
-                    if (MShare.TargetCret == actor)
+                    // 并发一致性（卡 `openmir2-botsrv-autoplay-nre` F1b/F1c/F2）：本槽位可能已被收包线程
+                    // （SM_HIDE/SM_NEWMAP/AOI 增删）或 actor.Run() 的同线程重入改掉。删除路径的整体——
+                    // **包括身份核对的条件读取 `ActorList[i]`**——都必须在同一个 try 内（F1c：核对
+                    // 读取本身也会 AOORE@209）；顺序 = 先 RemoveAt 成功、再登记 FreeActorList；
+                    // AOORE ⇒ 跳过 + 计数 + 下标前移，不登记、不清理引用。
+                    bool removed = false;
+                    try
                     {
-                        MShare.TargetCret = null;
+                        if (i < ActorList.Count)
+                        {
+                            SceneRemoveRaceHook?.Invoke(this);   // F1c：条件读取前缩表
+                            if (ActorList[i] == actor)
+                            {
+                                SceneRemoveAtRaceHook?.Invoke(this); // F1b：RemoveAt 前缩表
+                                ActorList.RemoveAt(i);
+                                MShare.g_FreeActorList.Add(actor);
+                                removed = true;
+                            }
+                            else
+                            {
+                                LoadMetrics.SceneListRaceSkipped();
+                                i++;
+                            }
+                        }
+                        else
+                        {
+                            LoadMetrics.SceneListRaceSkipped();
+                            i++;
+                        }
                     }
-                    if (MShare.FocusCret == actor)
+                    catch (ArgumentOutOfRangeException)
                     {
-                        MShare.FocusCret = null;
+                        LoadMetrics.SceneListRaceSkipped();
+                        i++;
+                        removed = false;
                     }
-                    if (MShare.MagicLockActor == actor)
+                    if (removed)
                     {
-                        MShare.MagicLockActor = null;
-                    }
-                    if (MShare.MagicTarget == actor)
-                    {
-                        MShare.MagicTarget = null;
+                        if (MShare.TargetCret == actor)
+                        {
+                            MShare.TargetCret = null;
+                        }
+                        if (MShare.FocusCret == actor)
+                        {
+                            MShare.FocusCret = null;
+                        }
+                        if (MShare.MagicLockActor == actor)
+                        {
+                            MShare.MagicLockActor = null;
+                        }
+                        if (MShare.MagicTarget == actor)
+                        {
+                            MShare.MagicTarget = null;
+                        }
                     }
                 }
                 else
@@ -184,7 +263,7 @@ namespace BotSrv.Scenes.Scene
                     i++;
                 }
             }
-            RobotClient.Map.UpdateMapPos(MShare.MySelf.m_nRx, MShare.MySelf.m_nRy);
+            RobotClient.Map.UpdateMapPos(self.m_nRx, self.m_nRy);
         }
 
         public void PlaySurface(object sender)
@@ -885,27 +964,86 @@ namespace BotSrv.Scenes.Scene
 
         public void ActorDied(Actor actor)
         {
+            // F1b「顺带核」：ActorDied 在 BeginScene 的 ProcMsg 里由 run 线程调用，收包线程仍可能
+            // 并发增删 ActorList ⇒ 读下标/RemoveAt/Insert 都可能 AOORE。按删除路径同一模式：
+            // 读写各自自护、失败即计数跳过；插入失败回落 Add（不抛给 SafeRun）。
             for (int i = 0; i < ActorList.Count; i++)
             {
-                if (ActorList[i] == actor)
+                Actor cur;
+                try
                 {
-                    ActorList.RemoveAt(i);
+                    cur = ActorList[i];
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    LoadMetrics.SceneListRaceSkipped();
                     break;
                 }
+                if (cur == actor)
+                {
+                    SceneActorDiedRaceHook?.Invoke(this);
+                    try
+                    {
+                        ActorList.RemoveAt(i);
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        LoadMetrics.SceneListRaceSkipped();
+                    }
+                    break;
+                }
+            }
+            // P3-2：RemoveAt 可能因并发失败而 actor 仍在列表里；先判在列表则不再 Insert/Add，
+            // 避免重复插入（夹具层面）。Contains 读并发失败时保守按「仍在列表」处理。
+            bool present = false;
+            try
+            {
+                present = ActorList.Contains(actor);
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                present = true;
+                LoadMetrics.SceneListRaceSkipped();
             }
             bool flag = false;
-            for (int i = 0; i < ActorList.Count; i++)
+            if (!present)
             {
-                if (!ActorList[i].Death)
+                for (int i = 0; i < ActorList.Count; i++)
                 {
-                    ActorList.Insert(i, actor);
-                    flag = true;
-                    break;
+                    Actor cur;
+                    try
+                    {
+                        cur = ActorList[i];
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        LoadMetrics.SceneListRaceSkipped();
+                        break;
+                    }
+                    if (cur == null)
+                    {
+                        // P3-1：空槽位不能解引用；跳过并计数，继续找插入点。
+                        LoadMetrics.SceneNullActorSkipped();
+                        continue;
+                    }
+                    if (!cur.Death)
+                    {
+                        try
+                        {
+                            ActorList.Insert(i, actor);
+                            flag = true;
+                        }
+                        catch (ArgumentOutOfRangeException)
+                        {
+                            LoadMetrics.SceneListRaceSkipped();
+                        }
+                        break;
+                    }
                 }
-            }
-            if (!flag)
-            {
-                ActorList.Add(actor);
+                if (!flag)
+                {
+                    ActorList.Add(actor);
+                }
             }
         }
 
