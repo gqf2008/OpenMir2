@@ -211,36 +211,64 @@ function Get-ToolchainKind([string]$ExePath) {
   return 'rust'
 }
 
-$script:VersionCache = @{}
-function Get-ToolchainVersionFields([string]$Kind) {
-  if ($script:VersionCache.ContainsKey($Kind)) { return $script:VersionCache[$Kind] }
+$script:ToolchainCache = @{}
+
+# C# 的 runtime 字段 = **二进制自己的目标框架版本**（构建产物里的 <base>.runtimeconfig.json 的
+# runtimeOptions.framework.version，如 8.0.0），不是「本机安装的第一个 runtime」。
+# 实例（2026-11-15）：本机 --list-runtimes 第一条是 6.0.36，但 DBSrv 二进制目标为 8.0.0；
+# 只取第一条会把工具链版本写成与二进制无关的值。文件缺失时回落到 --list-runtimes。
+function Get-DotnetTargetRuntime([string]$ExePath) {
+  $dir = Split-Path -Parent $ExePath
+  $base = [System.IO.Path]::GetFileNameWithoutExtension($ExePath)
+  $cfg = Join-Path $dir ($base + '.runtimeconfig.json')
+  if (Test-Path -LiteralPath $cfg -PathType Leaf) {
+    try {
+      $j = [System.IO.File]::ReadAllText($cfg, $utf8) | ConvertFrom-Json
+      if ($null -ne $j.runtimeOptions -and $null -ne $j.runtimeOptions.framework -and
+          $null -ne $j.runtimeOptions.framework.version) {
+        $v = [string]$j.runtimeOptions.framework.version
+        if ($v -ne '') { return $v }
+      }
+    } catch { }
+  }
+  return ''
+}
+
+function Get-ToolchainVersionFields([string]$Kind, [string]$ExePath) {
   $fields = [ordered]@{}
   if ($Kind -eq 'rust') {
-    $cargo = ''
-    $rustc = ''
-    if (-not $NoToolchainProbe) {
-      try { $cargo = ((@(& cargo --version 2>&1) | ForEach-Object { "$_" }) -join ' ').Trim() } catch { $cargo = '' }
-      try { $rustc = ((@(& rustc --version 2>&1) | ForEach-Object { "$_" }) -join ' ').Trim() } catch { $rustc = '' }
+    if (-not $script:ToolchainCache.ContainsKey('rust')) {
+      $cargo = ''
+      $rustc = ''
+      if (-not $NoToolchainProbe) {
+        try { $cargo = ((@(& cargo --version 2>&1) | ForEach-Object { "$_" }) -join ' ').Trim() } catch { $cargo = '' }
+        try { $rustc = ((@(& rustc --version 2>&1) | ForEach-Object { "$_" }) -join ' ').Trim() } catch { $rustc = '' }
+      }
+      $script:ToolchainCache['rust'] = @{ cargo = $cargo; rustc = $rustc }
     }
-    $fields['cargo'] = $cargo
-    $fields['rustc'] = $rustc
+    $fields['cargo'] = $script:ToolchainCache['rust'].cargo
+    $fields['rustc'] = $script:ToolchainCache['rust'].rustc
   } else {
-    $dotnet = ''
-    $runtime = ''
-    if (-not $NoToolchainProbe) {
-      try { $dotnet = ((@(& dotnet --version 2>&1) | ForEach-Object { "$_" }) -join ' ').Trim() } catch { $dotnet = '' }
-      try {
-        $runtimes = @(& dotnet --list-runtimes 2>&1)
-        foreach ($line in $runtimes) {
-          if ("$line" -match '^Microsoft\.NETCore\.App\s+([0-9][^\s]*)') { $runtime = $Matches[1]; break }
-        }
-      } catch { $runtime = '' }
+    if (-not $script:ToolchainCache.ContainsKey('dotnet')) {
+      $dotnet = ''
+      $fallbackRuntime = ''
+      if (-not $NoToolchainProbe) {
+        try { $dotnet = ((@(& dotnet --version 2>&1) | ForEach-Object { "$_" }) -join ' ').Trim() } catch { $dotnet = '' }
+        try {
+          $runtimes = @(& dotnet --list-runtimes 2>&1)
+          foreach ($line in $runtimes) {
+            if ("$line" -match '^Microsoft\.NETCore\.App\s+([0-9][^\s]*)') { $fallbackRuntime = $Matches[1]; break }
+          }
+        } catch { $fallbackRuntime = '' }
+      }
+      $script:ToolchainCache['dotnet'] = @{ dotnet = $dotnet; fallbackRuntime = $fallbackRuntime }
     }
-    $fields['dotnet'] = $dotnet
-    $fields['runtime'] = $runtime
+    $fields['dotnet'] = $script:ToolchainCache['dotnet'].dotnet
+    $target = Get-DotnetTargetRuntime $ExePath
+    if ($target -eq '') { $target = $script:ToolchainCache['dotnet'].fallbackRuntime }
+    $fields['runtime'] = $target
   }
   if ($NoToolchainProbe) { $fields['toolchain_probe'] = 'skipped' } else { $fields['toolchain_probe'] = 'ok' }
-  $script:VersionCache[$Kind] = $fields
   return $fields
 }
 
@@ -266,7 +294,7 @@ function Write-StampFile {
     Fail ("cannot read head subject for " + $HeadSha + " (RepoRoot=" + $RepoRoot + ")")
   }
   $kind = Get-ToolchainKind $ExePath
-  $versions = Get-ToolchainVersionFields $kind
+  $versions = Get-ToolchainVersionFields $kind $ExePath
 
   $doc = [ordered]@{
     format         = $script:StampFormat
@@ -526,6 +554,11 @@ if ($Selftest) {
         $bytes[$b] = [byte](($b * 31 + $i * 7) % 251)
       }
       [System.IO.File]::WriteAllBytes($p, $bytes)
+      if ($n -eq 'DBSrv') {
+        # 合成 runtimeconfig：让 C# 等价字段 runtime 的取值**不依赖本机装了什么运行时**。
+        $cfg = '{"runtimeOptions":{"tfm":"net8.0","framework":{"name":"Microsoft.NETCore.App","version":"8.0.0"}}}'
+        [System.IO.File]::WriteAllText((Join-Path $dir ($n + '.runtimeconfig.json')), $cfg, $utf8)
+      }
       $i++
     }
     return $dir
@@ -569,6 +602,9 @@ if ($Selftest) {
     SAssert (($null -ne $dotnetStamp) -and (Test-HasField $dotnetStamp 'dotnet') -and (Test-HasField $dotnetStamp 'runtime') -and ((Get-FieldText $dotnetStamp 'toolchain_kind') -eq 'dotnet')) `
       'positive: C# stamp carries dotnet/runtime and kind=dotnet' `
       ("kind=" + (Get-FieldText $dotnetStamp 'toolchain_kind') + " fields=" + (($dotnetStamp.PSObject.Properties.Name) -join ','))
+    SAssert (($null -ne $dotnetStamp) -and ((Get-FieldText $dotnetStamp 'runtime') -eq '8.0.0')) `
+      'positive: C# runtime comes from binary runtimeconfig target' `
+      ("runtime=" + (Get-FieldText $dotnetStamp 'runtime'))
     $c = Invoke-Child @('-Check', '-BinDir', $bin, '-RepoRoot', $Repo, '-RequireAll',
                         '-Names', ($ExeNames -join ','))
     SAssert ($c.Rc -eq 0) 'positive: check healthy dir rc=0' ("rc=" + $c.Rc + " out=" + $c.Text)

@@ -68,7 +68,7 @@
 | `exe` / `sha256` / `size` | 公共 | 绝对路径（正斜杠）/ 现算 SHA256 / 字节数 |
 | `toolchain_kind` | 补充 | `rust` \| `dotnet`；`DBSrv`/`LoginSrv`/`GameSrv`/`BotSrv` 等按名字识别，其余按 `<base>.d`（Rust）或 `<base>.deps.json`（.NET）识别 |
 | `cargo` / `rustc` | Rust | `cargo --version` / `rustc --version` |
-| `dotnet` / `runtime` | C# 等价字段 | `dotnet --version`（SDK）与 `dotnet --list-runtimes` 里 `Microsoft.NETCore.App` 的版本。**注意这是产戳机器的工具链版本，不是二进制的目标框架**（各 csproj 为 `net8.0`）；要精确目标框架应另读 `<base>.runtimeconfig.json`，本批未做 |
+| `dotnet` / `runtime` | C# 等价字段 | `dotnet` = SDK 版本（`dotnet --version`）；`runtime` = **二进制自己的目标框架**（同目录 `<base>.runtimeconfig.json` 的 `runtimeOptions.framework.version`，如 `8.0.0`）。该文件缺失时才回落到本机第一个 `Microsoft.NETCore.App`。实例（2026-11-15）：本机 `--list-runtimes` 第一条是 `6.0.36`，而 `DBSrv` 目标为 `8.0.0`——只取第一条会写出与二进制无关的值 |
 | `toolchain_probe` | 补充 | `ok` \| `skipped`（`-NoToolchainProbe`，自测/窗口期用） |
 
 校验器对 `head_source`/`mtime`/`toolchain_kind`/`toolchain_probe` **只在存在时校验自洽**，所以
@@ -133,8 +133,8 @@
   逐项指定，不能用一个 `-Head` 冒充全部。
 - **没有把 commit 内嵌进二进制**：`head` 始终是外部证据；二进制与戳分离运输时二者可能脱钩，
   第 2 步必须让「起栈时 binary/stamp 同目录且 `-Check` 通过」成为硬前置。
-- **C# 的 `dotnet`/`runtime` 是产戳机器的工具链版本**，不是目标框架（csproj 为 `net8.0`）；
-  需要精确目标框架时读 `<base>.runtimeconfig.json`（未做）。
+- **C# 的 `runtime` 取二进制同目录的 `<base>.runtimeconfig.json`**；该文件缺失时回落到产戳机器的
+  第一个 `Microsoft.NETCore.App`——此时该字段语义降级为「产戳机器工具链」，不是目标框架，需人工注意。
 - **窗口期不要跑产戳**：产戳模式会执行 `cargo --version` / `dotnet --version`，空载口径把
   cargo/dotnet 进程计为外部构建；`-Selftest` 因 `-NoToolchainProbe` 不派生子进程，可随时跑。
 - **旧戳兼容**：`rebuild-server.ps1` 产出的 `mir2-server.build.json` 没有 `mtime`/`head_source`/
