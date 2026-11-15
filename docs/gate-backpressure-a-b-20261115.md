@@ -107,7 +107,10 @@ oracle `ChannelMessageHandler.ProcessBufferSend`（`src/M2Server/Net/ChannelMess
 - **run3 对照（`MIR2_GATE_SEND_QUEUE=0`，同二进制）**：tick p99 **31ms**、max 188ms、稳态 ≥201ms 占比 **0%**，
   但 SM_LOGON Hold 210 帧全部丢弃、全部 Hold 帧丢弃 4,300,320、in_world 回到 **290/500**（≈基线 283）。
   ⇒ **201ms 尾部是队列造成的**；A+B 是「用延迟换不丢」。run3 的 `internal_errors=772` 集中在单个 bot
-  （BotSrv 兜住未崩），与 run2 的 25 条同族（teardown/丢帧触发的 NRE）。
+  （BotSrv 兜住未崩），与 run2 的 25 条同族。**勘误（2026-11-15 后续批）**：该 NRE 的根因是
+  **BotSrv 两线程对 `ActorList` 无锁并发增删 + `MShare.MySelf` 跨 bot 全局静态**的夹具竞态
+  （卡 `openmir2-botsrv-autoplay-nre`），**不是「丢帧/teardown 触发」**；「NRE 与丢弃量同向」
+  的相关性已证伪（运行时长混杂）。
 - 单网关吞吐上界（1 个在途 SendChecked / 50ms 超时 / 每周期 122,880B）≈ **2.46MB/s ≈ 62k 帧/s**；
   run3 实测 offered 1.43MB/s / 38.1k 帧/s（58–62% 上界）。按每进世界会话 ~131 帧/s 外推：500 档已≈上界，
   1000 档 2.1×、10k 档 21× ⇒ 单网关不足，需流水线化/分网关（协议级决策，本卡只给数）。

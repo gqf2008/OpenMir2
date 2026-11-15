@@ -199,8 +199,10 @@ BotSrv 用 worker-83 已重建版本（本卡零 C# 改动）。归档：`E:/Use
 N=4 样本行 161：同一循环的 actor 释放支），调用链 `RobotPlayer.Run` → `ClientManager.SafeRun` 兜住；
 `bots.err.log` 为空、BotSrv 无 OOM / 无崩溃 / 非自身退出。**本轮栈没有任何背压 `GM_CLOSE`**
 （`close_inworld=0`、`reject_login=0`、`overflow=0`）⇒ 不可能来自 GM_CLOSE teardown 竞态；与上一轮
-无关键性 N=4 的 841、以及 A+B run3（队列关、全部 Hold 丢弃）的 772 同量级，属 BotSrv 在 500 假人 +
-高频 AOI 帧流下的自身 actor 记账 NRE。**未豁免、未改白名单。**
+无关键性 N=4 的 841、以及 A+B run3 的 772 同量级。**归因已于 2026-11-15 后续批更正（勘误）**：
+根因是 **BotSrv 两线程对 `ActorList` 无锁并发增删 + `MShare.MySelf` 跨 bot 全局静态**的夹具竞态
+（卡 `openmir2-botsrv-autoplay-nre`），**与丢帧量无因果关系**；早前「NRE 量级与丢弃量同向」的相关性
+**已证伪**（运行时长同时驱动两者，属混杂）。**未豁免、未改白名单。**
 
 **两通道收益（与 A+B 同档对照）**：overflow 96,309 → **0**；`in_world` 432 → **500**（N=1）；
 被关会话 497 → **`close_inworld` 0 + `reject_login` 0**；AOI 帧 7.43M 走「直发或立即丢弃」通道，
