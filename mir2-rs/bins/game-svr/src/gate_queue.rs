@@ -133,6 +133,21 @@ impl PendingQueue {
         self.frames.is_empty()
     }
 
+    /// 移除所有不满足 `keep` 的帧（保持剩余帧相对顺序；字节计数**重算**，不靠减法的假设）。
+    /// 返回移除帧数。
+    ///
+    /// 用途（卡 `openmir2-gateway-frame-criticality-queue`，总监 P3 F2）：会话释放时清掉该
+    /// `SessionId` 的残留帧。网关的 SessionId 是 4 位随机数，在 ≤50ms 的队列窗口内**可能复用**；
+    /// 共享 FIFO 若不清，旧会话的帧会被补发给复用同 id 的新会话（**玩家收到别人数据，无法察觉**）。
+    /// 清理而不是「禁用复用」的原因：复用是网关侧行为（`GM_OPEN` 头里带 SessionId），服务端无权
+    /// 阻止；队列是服务端唯一能保证不误投的地方。
+    pub(crate) fn retain(&mut self, mut keep: impl FnMut(&[u8]) -> bool) -> usize {
+        let before = self.frames.len();
+        self.frames.retain(|f| keep(f.as_slice()));
+        self.bytes = self.frames.iter().map(Vec::len).sum();
+        before - self.frames.len()
+    }
+
     pub(crate) fn len(&self) -> usize {
         self.frames.len()
     }
@@ -238,6 +253,33 @@ mod tests {
         assert_eq!(q.bytes(), 0);
         assert_eq!(q.len(), 1);
         assert_eq!(q.pop_front(), Some(Vec::new()));
+    }
+
+    /// 按谓词清理（会话释放防 SessionId 复用误投）：只删命中帧，剩余顺序不变、字节计数重算。
+    #[test]
+    fn retain_drops_matching_frames_and_recomputes_bytes() {
+        let mut q = q(1_000, 10);
+        // 载荷第 1 字节 = 会话号（测试用；真实 wire 取外层头）。
+        for session in [42u8, 7, 42, 9] {
+            let mut frame = vec![session];
+            frame.extend_from_slice(&[0u8; 3]);
+            assert_eq!(q.enqueue(frame), EnqueueOutcome::Queued);
+        }
+        assert_eq!((q.len(), q.bytes()), (4, 16));
+        let removed = q.retain(|wire| wire[0] != 42);
+        assert_eq!(removed, 2, "命中两帧");
+        assert_eq!(
+            (q.len(), q.bytes()),
+            (2, 8),
+            "字节数必须重算（不能沿用旧值）"
+        );
+        assert_eq!(q.pop_front().map(|f| f[0]), Some(7), "剩余顺序不变");
+        assert_eq!(q.pop_front().map(|f| f[0]), Some(9));
+        assert!(q.is_empty());
+        // 退化输入：没有命中 ⇒ 不删、字节不变。
+        assert_eq!(q.enqueue(vec![1, 2]), EnqueueOutcome::Queued);
+        assert_eq!(q.retain(|_| true), 0);
+        assert_eq!((q.len(), q.bytes()), (1, 2));
     }
 
     /// 环境变量解析的纯函数（不 set_var，避免测试进程环境污染）。
