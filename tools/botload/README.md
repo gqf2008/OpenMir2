@@ -206,6 +206,14 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 -SelfTestRe
    `load_stats.ndjson.internal_errors`（前 20 条打日志）——**压测进程不许被单个假人打死**。
    `internal_errors > 0` 现在是**硬判据 RED**（2026-11-15 起，默认容忍度 0），唯一放宽通道是按类别评审的
    `internal-errors-allowlist.json`；top 类型/堆栈见 `report.json.internal_error_diag`，别只看 P99。
+   **「数了 N 条」不等于「可诊断」**（卡 `openmir2-botsrv-errorstack-diagnosable`）：报告新增
+   `internal_error_diag.{logged_blocks,typed_blocks,untyped_blocks,stacked_blocks}` 与
+   `error_census.diagnosability`（`required_fields.internal_errors_diagnosable` 显式列出）。
+   `internal_errors > 0` 但样本里抽不出异常类型（只有 `[ERR] <msg>`）或没有 `   at ` 堆栈帧
+   ⇒ `diagnosable=false` 并判红；`internal_errors <= 0` 时该维度不适用、不误报。
+   C# 侧对应修复：`src/OpenMir2/LogService.cs` 的 `Error(Exception)` 用正确序
+   `Logger.Error(ex, ex.Message)` ⇒ **C# 服务日志现含异常类型与堆栈**（此前被 Serilog 泛型重载
+   静默吞掉，45 处单参异常调用点同时受影响）。
 10. **别用"杀任务树"的方式停外层脚本**（2026-10-10 实测）：编排脚本是被后台任务启动的话，
     停任务时可能连带把 mysqld / 网关一起带走 ⇒ 下一档假人全部"连上后被关闭连接"
     （LoginSrv 日志里 `Unable to connect to any of the specified MySQL hosts`）。栈的生命周期要与

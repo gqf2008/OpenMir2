@@ -11,6 +11,11 @@ namespace BotSrv
 {
     public class AppServer : ServiceHost
     {
+        /// <summary>BotSrv 日志输出模板。真实异常块形态（消息行 → 类型行 → `   at ` 行）
+        /// 由此决定：`{Message:lj}{NewLine}{Exception}`。自检与 `tools/botload/load_report.py`
+        /// 的形态牙都逐字绑定这一常量——改模板 ⇒ 两边必红，合成日志不得与真实模板漂移。</summary>
+        internal const string LogOutputTemplate = "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}";
+
         // 注：上游 ServiceHost 改版后不再内置 HostBuilder（Builder/Host 属性已移除），
         // 这里由 AppServer 自己持有 IHost，并按各网关同样的方式装配 Serilog
         //（LogService.Logger 必须先赋值，否则 AppService 构造里第一行日志就 NRE）。
@@ -45,7 +50,7 @@ namespace BotSrv
             Log.Logger = new LoggerConfiguration()
                 .MinimumLevel.Debug()
                 .WriteTo.Console(
-                    outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                    outputTemplate: LogOutputTemplate)
                 .CreateLogger();
             LogService.Logger = Log.Logger;
 

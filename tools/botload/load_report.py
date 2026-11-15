@@ -143,6 +143,10 @@ CENSUS_ALLOWLIST_ENTRY_FIELDS = ("id", "category", "max", "reason", "owner", "re
 CENSUS_CS_PATH = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "BotSrv", "BotErrorCensus.cs"))
 
+# BotSrv 日志输出模板（源文件）——真实异常块形态与牙必须绑定它；改模板 ⇒ 牙要跟着红。
+APP_SERVER_CS_PATH = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "BotSrv", "AppServer.cs"))
+
 
 def parse_census_contract(text):
     """解析 C# `BotErrorCensus.cs` 的 Order[] 与 FeedsInternalErrors 集合，和本文件的注册表对账。
@@ -480,8 +484,30 @@ def summarize_hostload(rows):
     return out
 
 
+# BotSrv 异常块的四类落盘形态（2026-11-15 卡 `openmir2-botsrv-errorstack-diagnosable`）：
+#   ① bot_round：`假人[id]异常被兜住[N]：<ex.ToString()>` —— 有类型行 + `   at ` 帧；
+#   ② run_loop ：`压测兜住的异常[N]：<Type>: <Message>`        —— 有类型，无堆栈；
+#   ③ socket   ：`socket 事件处理器异常被兜住：<ex.ToString()>` —— 有类型 + 堆栈；
+#   ④ err      ：`[ERR] <message>`（`LogService.Error(Exception)` 的产物）。修复前
+#      `LogService.cs` 写成 `Logger.Error(ex.Message, ex)` ⇒ Serilog 绑泛型重载 ⇒
+#      `LogEvent.Exception=null` ⇒ 只有消息（本轮 360s 的 4 条就是这种）；修复后
+#      消息里带 `<Type>: <Message>`，堆栈由 `{Exception}` 续在后续行。
+# 归桶键 = (类别, 异常类型, 消息)：只看类型会把同类型的未知消息一起豁免。
 _INTERNAL_ERR_RE = re.compile(
-    r"(?:异常被兜住|压测兜住的异常)\[\d+\]：\s*([A-Za-z_][\w.`]*)\s*:?\s*(.*)$")
+    r"(?:"
+    r"(?P<bot>异常被兜住\[\d+\])：|"
+    r"(?P<loop>压测兜住的异常\[\d+\])：|"
+    r"(?P<socket>socket 事件处理器异常被兜住)：|"
+    r"\[ERR\]"
+    r")\s*(?P<body>.*)$")
+# 从块首行抽异常类型：`System.NullReferenceException: ...` / `NullReferenceException: ...`。
+# 只认以 `Exception` 结尾的 .NET 全名/短名，避免把 `[ERR] some: thing` 误当类型。
+_EXC_TYPE_RE = re.compile(r"^\s*(?P<type>[A-Za-z_][\w.`]*Exception)\s*:\s*(?P<msg>.*)$")
+# 真实 bots.log 每行以 `HH:mm:ss.fff ` 开头（AppServer.cs 的 outputTemplate）。
+# 块延续只在「非时间戳行」上发生，遇到下一条时间戳行即结束。
+# **前提**：Serilog Console sink 对每个 LogEvent 原子写出（一条事件的 message/`{Exception}`
+# 不会与另一条事件交错），所以「下一条时间戳行」就是块边界；这不是在赌日志格式。
+_TS_RE = re.compile(r"^\d{1,2}:\d{2}:\d{2}[.,]\d{3}\s")
 _STACK_RE = re.compile(r"^\s+at\s+")
 
 
@@ -492,44 +518,113 @@ def summarize_internal_error_log(path, max_types=5, max_stack=3):
     `LoadMetrics.ShouldLogInternalError` **只打前 20 条**（避免刷爆日志）。
     所以本函数给的是「样本的 top」，总量一律以 ndjson 计数为准，报告里两者分开写。
 
-    按 **(异常类型, 消息)** 分桶：白名单要「精确到能区分已知无害与未知」，
+    **块 = 一条异常块，可跨行**（真实 `outputTemplate` = `{Message:lj}{NewLine}{Exception}`）：
+      `[ERR] <msg>` 行之后，紧跟的非时间戳 `System.XxxException: <msg>` 行并入**同一块**
+      作为类型/消息，其后的 `   at ` 行并入该块的 stack_head；遇下一条时间戳行才结束。
+      跨块拼凑（A 块只有类型、B 块只有堆栈）**不算可诊断**（卡
+      `openmir2-botsrv-errorstack-diagnosable` R2 裁决）。
+
+    字段词义：
+      · `logged_blocks`         = **可识别**异常块数（含只有消息的 `[ERR]`）；
+      · `typed_blocks`          = 其中能抽出**异常类型**的块数；
+      · `untyped_blocks`        = `logged_blocks - typed_blocks`；
+      · `stacked_blocks`        = 至少带 1 个 `   at ` 帧的块数；
+      · `typed_stacked_blocks`  = **同一块内**既有类型又有堆栈的块数（R2 ①）。
+    `diagnosable=true` 要求 `typed_stacked_blocks > 0` 且 `untyped_blocks == 0`（R2 ②，fail-closed）。
+
+    按 **(类别, 异常类型, 消息)** 分桶：白名单要「精确到能区分已知无害与未知」，
     只看类型会把同类型的未知消息一起豁免。
     """
     if not path or not os.path.isfile(path):
         return {"log": path, "available": False,
                 "reason": "bots.log 不存在/未提供（top 异常类型无从归算）"}
-    types = {}
-    logged = 0
+    blocks = []
     cur = None
     with open(path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
             m = _INTERNAL_ERR_RE.search(line)
             if m:
-                logged += 1
-                name = m.group(1)
-                msg = (m.group(2) or "").strip()
-                key = (name, msg)
-                e = types.setdefault(key, {
-                    "type": name, "message": msg[:300], "count": 0, "stack_head": [],
+                if m.group("bot"):
+                    cat = "bot_round"
+                elif m.group("loop"):
+                    cat = "run_loop"
+                elif m.group("socket"):
+                    cat = "socket"
+                else:
+                    cat = "err"
+                body = (m.group("body") or "").strip()
+                tm = _EXC_TYPE_RE.match(body)
+                cur = {
+                    "category": cat,
+                    "type": (tm.group("type") if tm else None),
+                    "message": (tm.group("msg").strip() if tm else body),
+                    "stack_head": [],
+                    "has_stack": False,
                     "sample": line.strip()[:300],
-                })
-                e["count"] += 1
-                cur = e
+                }
+                blocks.append(cur)
                 continue
-            if cur is not None and _STACK_RE.match(line):
+            if cur is None:
+                continue
+            if _STACK_RE.match(line):
+                if not cur["has_stack"]:
+                    cur["has_stack"] = True
                 if len(cur["stack_head"]) < max_stack:
                     cur["stack_head"].append(line.strip()[:300])
                 continue
+            # 真实模板形态：`[ERR] <msg>` 之后紧跟的类型行并入**同一块**。
+            # 只接受非时间戳行，避免把下一条日志误当成类型行。
+            if cur["type"] is None and not _TS_RE.match(line):
+                tm = _EXC_TYPE_RE.match(line)
+                if tm:
+                    cur["type"] = tm.group("type")
+                    cur["message"] = tm.group("msg").strip()
+                    continue
+            # 其余行（含下一条时间戳行）结束当前块。
             cur = None
-    ordered = sorted(types.values(), key=lambda x: (-x["count"], x["type"], x["message"]))
+    types = {}
+    typed = 0
+    stacked = 0
+    typed_stacked = 0
+    categories = {}
+    for b in blocks:
+        cat = b["category"]
+        categories[cat] = categories.get(cat, 0) + 1
+        if b["type"]:
+            typed += 1
+        if b["has_stack"]:
+            stacked += 1
+        if b["type"] and b["has_stack"]:
+            typed_stacked += 1
+        key = (cat, b["type"], b["message"])
+        e = types.setdefault(key, {
+            "category": cat, "type": b["type"], "message": b["message"][:300],
+            "count": 0, "stack_head": [], "sample": b["sample"],
+        })
+        e["count"] += 1
+        for sh in b["stack_head"]:
+            if len(e["stack_head"]) < max_stack:
+                e["stack_head"].append(sh)
+    logged = len(blocks)
+    ordered = sorted(types.values(),
+                     key=lambda x: (-x["count"], x["category"], x["type"] or "", x["message"]))
     return {
         "log": path,
         "available": True,
         "logged_blocks": logged,
+        "typed_blocks": typed,
+        "untyped_blocks": logged - typed,
+        "stacked_blocks": stacked,
+        "typed_stacked_blocks": typed_stacked,
+        "categories": categories,
         "types": ordered[:max_types],
         "types_total": len(ordered),
         "note": ("BotSrv 只打前 20 条异常（ShouldLogInternalError）；"
-                 "总量看 load_stats.ndjson.internal_errors"),
+                 "总量看 load_stats.ndjson.internal_errors。"
+                 "logged_blocks=可识别异常块数（含只有消息的 [ERR]），"
+                 "typed_blocks=能抽出异常类型的块数，stacked_blocks=带 `   at ` 帧的块数，"
+                 "typed_stacked_blocks=同块内类型+堆栈齐的块数；"
+                 "diagnosable 要求同块证据且 untyped_blocks==0"),
     }
 
 
@@ -691,7 +786,7 @@ def evaluate_internal_errors(tier, allowlist):
     ev["budget"] = sum(e["max"] for e in used.values())
     if ev["unmatched"]:
         ev["fails"].append("internal_errors 含未列入白名单的类别：" + ", ".join(
-            "%s×%s" % (u["type"], u["count"]) for u in ev["unmatched"]) +
+            "%s×%s" % (u["type"] or "(untyped)", u["count"]) for u in ev["unmatched"]) +
             "（白名单只豁免已评审的已知无害类别）")
     if total > ev["budget"]:
         detail = ", ".join("%s %s/%s（%s）" % (m["type"], m["count"], m["max"], m["entry_id"])
@@ -779,6 +874,107 @@ def _census_allowlist_hit(entries, category):
     return None
 
 
+def evaluate_diagnosability(total, diag):
+    """卡 `openmir2-botsrv-errorstack-diagnosable`：`internal_errors>0` 时必须能拿到
+    异常类型与堆栈首行；「有计数但拿不到可诊断文本」本身判红（fail-closed）。
+
+    R2 裁决（2026-11-15 总监）：`diagnosable=true` 必须**同时**满足
+      ① 至少一个块**同块**内既有类型又有 stack_head（`typed_stacked_blocks > 0`，
+         不接受 A 块出类型、B 块出堆栈的跨块拼凑）；
+      ② `untyped_blocks == 0`（有一个未类型化块就不算可诊断——宁红不绿）。
+
+    其余分支（全部 fail-closed）：
+      · total 为 None（缺计数）⇒ false + fail；
+      · total <= 0 ⇒ 不适用（`diagnosable=None`，不产生 fail；空输入不得误报）；
+      · bots.log 摘要不可用/未提供 ⇒ false + fail；
+      · 有块但 `typed_blocks==0`（只有 `[ERR] <msg>`）⇒ false + fail；
+      · 有类型也有一块带堆栈、但没有一块同时具备 ⇒ false（跨块拼凑）；
+      · 类型齐但没有任何堆栈帧 ⇒ false（知道是什么、不知道在哪）。
+
+    为什么**不**用 `internal_errors > logged_blocks` 单独判红：BotSrv 只打前 20 条
+    （`ShouldLogInternalError`），样本数天然可能小于总量；只要**样本**满足 R2①②，
+    就满足「知道是什么、在哪」。`total > logged_blocks` 只记 `sampled_only=True`
+    （报告可见），不单独判红——否则 3.95 万条 NRE 的窗口会因采样上限永久假红。
+    """
+    d = diag or {}
+    out = {
+        "internal_errors": total,
+        "diag_available": bool(d.get("available")),
+        "logged_blocks": d.get("logged_blocks"),
+        "typed_blocks": d.get("typed_blocks"),
+        "untyped_blocks": d.get("untyped_blocks"),
+        "stacked_blocks": d.get("stacked_blocks"),
+        "typed_stacked_blocks": d.get("typed_stacked_blocks"),
+        "sampled_only": None,
+        "coverage_note": "",
+        "diagnosable": None,
+        "status": "not_applicable",
+        "fails": [],
+    }
+    if total is None:
+        out["diagnosable"] = False
+        out["status"] = "missing_count"
+        out["fails"].append("internal_errors=None：无法判断异常是否可诊断 ⇒ fail-closed")
+        return out
+    if total <= 0:
+        return out
+    if not d.get("available"):
+        out["diagnosable"] = False
+        out["status"] = "missing_diag"
+        out["fails"].append(
+            "internal_errors %d > 0 但 bots.log 摘要不可用（无异常类型/堆栈）⇒ fail-closed" % total)
+        return out
+    logged = d.get("logged_blocks") or 0
+    typed = d.get("typed_blocks") or 0
+    stacked = d.get("stacked_blocks") or 0
+    typed_stacked = d.get("typed_stacked_blocks")
+    if typed_stacked is None:
+        typed_stacked = 0
+    untyped = d.get("untyped_blocks")
+    if untyped is None:
+        untyped = max(logged - typed, 0)
+    out["sampled_only"] = total > logged
+    if out["sampled_only"]:
+        out["coverage_note"] = (
+            "internal_errors %d > 样本 %d：BotSrv 只打前 20 条（ShouldLogInternalError）；"
+            "样本满足 R2 即通过，未采样部分不可逐条归因" % (total, logged))
+    if logged <= 0:
+        out["diagnosable"] = False
+        out["status"] = "no_blocks"
+        out["fails"].append(
+            "internal_errors %d > 0 但 bots.log 无可识别异常块 ⇒ 有计数无文本（fail-closed）" % total)
+    elif typed <= 0:
+        out["diagnosable"] = False
+        out["status"] = "untyped_blocks"
+        out["fails"].append(
+            "internal_errors %d > 0 但 %d 个可识别块无一抽出异常类型"
+            "（只有消息，如 `[ERR] Object reference not set...`）⇒ 不可诊断（fail-closed）"
+            % (total, logged))
+    elif untyped > 0:
+        out["diagnosable"] = False
+        out["status"] = "mixed_blocks"
+        out["fails"].append(
+            "internal_errors %d > 0：%d 个可识别块中仍有 %d 个未类型化"
+            "（R2②：有一个未类型化块就不算可诊断）⇒ fail-closed"
+            % (total, logged, untyped))
+    elif typed_stacked <= 0:
+        out["diagnosable"] = False
+        if stacked > 0:
+            out["status"] = "cross_block_only"
+            out["fails"].append(
+                "internal_errors %d > 0：有类型块也有带堆栈的块，但没有一个块**同块**具备"
+                "类型+堆栈（R2①：跨块拼凑不算可诊断）⇒ fail-closed" % total)
+        else:
+            out["status"] = "no_stack"
+            out["fails"].append(
+                "internal_errors %d > 0：%d 个块有异常类型但无堆栈帧（无法定位）⇒ fail-closed"
+                % (total, typed))
+    else:
+        out["diagnosable"] = True
+        out["status"] = "ok"
+    return out
+
+
 def evaluate_error_census(tier, allowlist=None, internal_excused=False,
                           scene_null_explanation="",
                           scene_null_upper_bound_pct=SCENE_NULL_UPPER_BOUND_PCT):
@@ -810,6 +1006,7 @@ def evaluate_error_census(tier, allowlist=None, internal_excused=False,
         "fault_categories_nonzero": [],
         "internal_errors": tier.get("internal_errors"),
         "internal_census_sum": None,
+        "diagnosability": None,
         "allowlist": {
             "path": (allowlist or {}).get("path"),
             "sha256": (allowlist or {}).get("sha256"),
@@ -891,6 +1088,12 @@ def evaluate_error_census(tier, allowlist=None, internal_excused=False,
                 ev["fails"].append(
                     "internal_errors %s ≠ 已分类故障之和 %s（存在未分类/绕过分类入口的计数）"
                     % (total, census_sum))
+
+    # 诊断维度（卡 `openmir2-botsrv-errorstack-diagnosable`）：
+    # 有 internal_errors 计数但摘要拿不到类型/堆栈 ⇒ 判红（fail-closed），并显式进报告。
+    _ie_total = tier.get("internal_errors") if tier.get("internal_errors_present") else None
+    ev["diagnosability"] = evaluate_diagnosability(_ie_total, tier.get("internal_error_diag"))
+    ev["fails"].extend(ev["diagnosability"]["fails"])
 
     # 既有事件计数：必须出现（缺失 = 枚举不完整）。
     ops = tier.get("error_census_operational_counts") or {}
@@ -1132,6 +1335,13 @@ def cmd_summarize(args):
         "internal_errors_excused": ie_al.get("excused"),
         "internal_errors_allowlist_budget": ie_al.get("budget"),
         "internal_errors_allowlist_sha256": ie_al.get("sha256"),
+        # 卡 openmir2-botsrv-errorstack-diagnosable：有计数但拿不到类型/堆栈必须可见且判红。
+        "internal_errors_diagnosable": (ec.get("diagnosability") or {}).get("diagnosable"),
+        "internal_errors_diag_status": (ec.get("diagnosability") or {}).get("status"),
+        "internal_errors_logged_blocks": (ec.get("diagnosability") or {}).get("logged_blocks"),
+        "internal_errors_typed_blocks": (ec.get("diagnosability") or {}).get("typed_blocks"),
+        "internal_errors_stacked_blocks": (ec.get("diagnosability") or {}).get("stacked_blocks"),
+        "internal_errors_sampled_only": (ec.get("diagnosability") or {}).get("sampled_only"),
         # 卡 openmir2-botsrv-recv-thread-nre：逐类普查的准入字段。
         "error_census_complete": ec.get("complete"),
         "error_census_fault_total": ec.get("fault_total"),
@@ -1467,9 +1677,15 @@ def cmd_selftest(_args):
         "max": 2, "reason": "已知无害（自测）", "owner": "selftest", "review_ref": "selftest"}]
     _al = {"path": "<selftest>", "available": True, "valid": True, "error": None,
            "sha256": "0" * 64, "entries": _al_entries, "entries_count": 1}
-    _diag_nre = {"available": True, "logged_blocks": 2, "types": [
-        {"type": "System.NullReferenceException", "message": "Object reference not set",
-         "count": 2, "sample": "..."}]}
+    # 真实形态：类型 + `   at ` 堆栈（`diagnosable` 判据要求两者都有）。
+    _diag_nre = {"available": True, "logged_blocks": 2, "typed_blocks": 2,
+                 "untyped_blocks": 0, "stacked_blocks": 2, "typed_stacked_blocks": 2,
+                 "categories": {"bot_round": 2},
+                 "types": [
+        {"category": "bot_round", "type": "System.NullReferenceException",
+         "message": "Object reference not set", "count": 2,
+         "stack_head": ["at BotSrv.Scenes.Scene.PlayScene.BeginScene()"],
+         "sample": "..."}]}
 
     def _with_ie(total, diag):
         _t = summarize_tick([_with_census(stats[0], internal=0),
@@ -1496,8 +1712,11 @@ def cmd_selftest(_args):
     # ③ 未列入的类别 ⇒ RED（即便另一个类别预算很大）
     _al_big = dict(_al)
     _al_big["entries"] = [dict(_al_entries[0], max=100)]
-    _diag_oom = {"available": True, "types": [
-        {"type": "System.OutOfMemoryException", "message": "boom", "count": 1}]}
+    _diag_oom = {"available": True, "logged_blocks": 1, "typed_blocks": 1,
+                 "untyped_blocks": 0, "stacked_blocks": 0, "typed_stacked_blocks": 0,
+                 "types": [
+        {"category": "run_loop", "type": "System.OutOfMemoryException",
+         "message": "boom", "count": 1, "stack_head": []}]}
     t_al_un = judge(_with_ie(1, _diag_oom), DEFAULT_THRESHOLDS, i3, allowlist=_al_big)
     expect(t_al_un["verdict"] == "RED" and any("未列入白名单" in f for f in t_al_un["fails"]),
            "未列入白名单的类别必须判红（不能靠别的类别预算兜住）")
@@ -1550,8 +1769,100 @@ def cmd_selftest(_args):
                "应保留堆栈首行")
         expect([t["type"] for t in _d["types"]][1] == "System.OutOfMemoryException",
                "第二种异常类型（压测兜住的异常）应被统计")
+        expect(_d["typed_blocks"] == 3 and _d["untyped_blocks"] == 0,
+               "三条块都有异常类型（typed_blocks=3），实得 "
+               + str(_d.get("typed_blocks")) + "/" + str(_d.get("untyped_blocks")))
+        expect(_d["stacked_blocks"] == 1,
+               "只有第一条 bot_round 块带 `   at ` 帧（stacked_blocks=1），实得 "
+               + str(_d.get("stacked_blocks")))
         expect(summarize_internal_error_log(os.path.join(_td2, "nope.log"))["available"] is False,
                "bots.log 不存在时不得假装有类型")
+
+        # 6b-2) 卡 openmir2-botsrv-errorstack-diagnosable：四类形态都要能归桶。
+        #   ① 修复后 `[ERR] <Type>: <Message>` + `   at ` ⇒ 抽出类型与 stack_head；
+        #   ② socket 前缀 ⇒ 抽出类型与堆栈；
+        #   ③ 本轮真实形态 `[ERR] Object reference...`（只有消息）⇒ typed_blocks=0 的那一类。
+        _lg2 = os.path.join(_td2, "bots-shapes.log")
+        with open(_lg2, "w", encoding="utf-8", newline=chr(10)) as _f:
+            _f.write("19:58:21.075 [ERR] System.NullReferenceException: "
+                     "Object reference not set to an instance of an object.\n")
+            _f.write("   at BotSrv.ClientManager.ProcessOnePacket(RecvicePacket message)\n")
+            _f.write("   at BotSrv.ClientManager.<>c.<RunPacketGuard>b__0_0()\n")
+            _f.write("19:58:22.000 [WRN] socket 事件处理器异常被兜住："
+                     "System.Net.Sockets.SocketException: reset\n")
+            _f.write("   at BotSrv.ScoketClient.OnReceivedData()\n")
+            _f.write("19:58:42.344 [ERR] Object reference not set to an instance of an object.\n")
+        _d2 = summarize_internal_error_log(_lg2)
+        expect(_d2["logged_blocks"] == 3,
+               "三行异常块都要被认出（含只有消息的 [ERR]），实得 " + str(_d2.get("logged_blocks")))
+        expect(_d2["typed_blocks"] == 2 and _d2["untyped_blocks"] == 1,
+               "修复后形态 2 条有类型、真实形态 1 条只有消息，实得 "
+               + str(_d2.get("typed_blocks")) + "/" + str(_d2.get("untyped_blocks")))
+        expect(_d2["stacked_blocks"] == 2,
+               "两条带 `   at ` 帧（[ERR] 修复后形态 + socket），实得 "
+               + str(_d2.get("stacked_blocks")))
+        _nre2 = next(t for t in _d2["types"] if t["type"] == "System.NullReferenceException")
+        expect(_nre2["category"] == "err" and _nre2["stack_head"]
+               and _nre2["stack_head"][0].startswith("at BotSrv.ClientManager.ProcessOnePacket"),
+               "`[ERR] <Type>: <msg>` + 堆栈必须抽出类型与 stack_head")
+        _sock2 = next(t for t in _d2["types"] if t["category"] == "socket")
+        expect(_sock2["type"] == "System.Net.Sockets.SocketException" and _sock2["stack_head"],
+               "socket 前缀必须抽出类型与堆栈")
+        _un2 = next(t for t in _d2["types"] if t["type"] is None)
+        expect(_un2["category"] == "err"
+               and _un2["message"].startswith("Object reference not set"),
+               "只有消息的 [ERR] 必须归到 err 且 type=None（不可诊断）")
+        expect(_d2["typed_stacked_blocks"] == 2,
+               "同行 [ERR] 与 socket 两块同块具备类型+堆栈（typed_stacked_blocks=2），实得 "
+               + str(_d2.get("typed_stacked_blocks")))
+
+        # 6b-3) R1 返工：真实模板形态 = 「消息行 + 类型行 + `   at ` 行」。
+        #   AppServer.cs 的 outputTemplate 是 `{Message:lj}{NewLine}{Exception}`，
+        #   所以 `[ERR] <msg>` 后的下一非栈行才是类型行，且不带 `[ERR]` 前缀。
+        #   旧实现在类型行清 cur ⇒ type=null/stacked=0 的假红（P1）。
+        _lg3 = os.path.join(_td2, "bots-real-shape.log")
+        with open(_lg3, "w", encoding="utf-8", newline=chr(10)) as _f:
+            _f.write("19:58:21.075 [ERR] Object reference not set to an instance of an object.\n")
+            _f.write("System.NullReferenceException: Object reference not set to an instance of an object.\n")
+            _f.write("   at OpenMir2.BotSrv.ClientManager.RunPacketGuard(System.Action action) "
+                     "in /src/BotSrv/ClientManager.cs:line 96\n")
+            _f.write("   at OpenMir2.BotSrv.ClientManager.ProcessOnePacket(RecvicePacket message)\n")
+            _f.write("19:58:22.000 [INF] 机器人:[loadbot1] 跑向目标怪物（下一条日志）\n")
+        _d3 = summarize_internal_error_log(_lg3)
+        expect(_d3["logged_blocks"] == 1,
+               "真实形态只算 1 个块（下一条时间戳行必须结束块），实得 "
+               + str(_d3.get("logged_blocks")))
+        expect(_d3["typed_blocks"] == 1 and _d3["untyped_blocks"] == 0,
+               "类型行（下一非栈行）必须并入同一块，实得 typed/untyped="
+               + str(_d3.get("typed_blocks")) + "/" + str(_d3.get("untyped_blocks")))
+        expect(_d3["stacked_blocks"] == 1 and _d3["typed_stacked_blocks"] == 1,
+               "同块必须具备类型+堆栈（stacked/typed_stacked=1/1），实得 "
+               + str(_d3.get("stacked_blocks")) + "/" + str(_d3.get("typed_stacked_blocks")))
+        _nre3 = _d3["types"][0]
+        expect(_nre3["type"] == "System.NullReferenceException"
+               and _nre3["message"].startswith("Object reference not set")
+               and _nre3["stack_head"]
+               and _nre3["stack_head"][0].startswith("at OpenMir2.BotSrv.ClientManager.RunPacketGuard"),
+               "真实形态必须抽出类型/消息/stack_head，实得 " + repr(_nre3))
+
+        # 6b-4) meta 牙：真实形态绑定 AppServer.cs 的 outputTemplate 字面量。
+        #   改模板（删 {NewLine}/{Exception}、调顺序）⇒ 这条必红，合成日志不得与真实模板漂移。
+        _expect_tpl = "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}"
+        expect(os.path.isfile(APP_SERVER_CS_PATH), "AppServer 源文件必须存在：" + APP_SERVER_CS_PATH)
+        if os.path.isfile(APP_SERVER_CS_PATH):
+            with open(APP_SERVER_CS_PATH, encoding="utf-8-sig") as _af:
+                _app_text = _af.read()
+            _tpl_m = re.search(r'LogOutputTemplate\s*=\s*"([^"]*)"', _app_text)
+            _got_tpl = _tpl_m.group(1) if _tpl_m else None
+            expect(_got_tpl == _expect_tpl,
+                   "模板字面量已变，请同步 Python 侧期望（真实形态牙绑定它）："
+                   "AppServer.LogOutputTemplate=%r，期望=%r" % (_got_tpl, _expect_tpl))
+            expect("outputTemplate: LogOutputTemplate" in _app_text,
+                   "日志装配未引用 LogOutputTemplate（常量与装配漂移），请先修复 AppServer.cs")
+            expect(_expect_tpl.index("{Message:lj}") < _expect_tpl.index("{NewLine}")
+                   < _expect_tpl.index("{Exception}"),
+                   "模板顺序已变：期望 Message→NewLine→Exception（真实形态三行的前提），"
+                   "实际=%r；请同步 Python 侧期望" % _expect_tpl)
 
     # 6c) 卡 openmir2-botsrv-recv-thread-nre：错误类别普查 —— 枚举表 vs 实现、逐类 0、对账、白名单。
     _census_empty = {"path": "<selftest>", "available": True, "valid": True, "error": None,
@@ -1666,6 +1977,117 @@ def cmd_selftest(_args):
            and any("缺既有事件计数 conn_lost" in f for f in t_c_opmiss["fails"]),
            "load_stats 缺既有事件计数必须 fail-closed")
 
+    # ⑥b) diagnosable 维度（卡 `openmir2-botsrv-errorstack-diagnosable`）：
+    #      有 internal_errors 计数但摘要素不出类型/堆栈 ⇒ 必须判红并显式进报告。
+    _diag_untyped = {"available": True, "logged_blocks": 4, "typed_blocks": 0,
+                     "untyped_blocks": 4, "stacked_blocks": 0, "typed_stacked_blocks": 0,
+                     "categories": {"err": 4}, "types": []}
+    _t_du = _census_tier(internal=4, census={"recv_packet_null": 4})
+    _t_du["internal_error_diag"] = _diag_untyped
+    _t_du = judge(_t_du, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _du = (_t_du.get("error_census") or {}).get("diagnosability") or {}
+    expect(_du.get("diagnosable") is False and _du.get("status") == "untyped_blocks",
+           "有计数但只有消息（本轮真实形态）⇒ diagnosable=false/untyped_blocks，实得 "
+           + str(_du.get("status")))
+    expect(any("不可诊断" in f for f in _t_du["fails"]),
+           "不可诊断必须进 fails（fail-closed），fails=" + repr(_t_du["fails"]))
+
+    _diag_ok = {"available": True, "logged_blocks": 4, "typed_blocks": 4,
+                "untyped_blocks": 0, "stacked_blocks": 4, "typed_stacked_blocks": 4,
+                "categories": {"err": 4},
+                "types": [{"category": "err", "type": "System.NullReferenceException",
+                           "message": "Object reference not set", "count": 4,
+                           "stack_head": ["at BotSrv.ClientManager.ProcessOnePacket(...)"]}]}
+    _t_dok = _census_tier(internal=4, census={"recv_packet_null": 4})
+    _t_dok["internal_error_diag"] = _diag_ok
+    _t_dok = judge(_t_dok, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _dok = (_t_dok.get("error_census") or {}).get("diagnosability") or {}
+    expect(_dok.get("diagnosable") is True and _dok.get("status") == "ok",
+           "类型+堆栈齐 ⇒ diagnosable=true/ok，实得 " + str(_dok.get("status")))
+    expect(not any("不可诊断" in f for f in _t_dok["fails"]),
+           "可诊断时不得新增诊断类 fails")
+
+    # 有类型但无堆栈（如只有 `压测兜住的异常[N]`）⇒ 知道是什么但不知道在哪。
+    _diag_nostack = dict(_diag_ok, stacked_blocks=0, typed_stacked_blocks=0)
+    _t_dns = _census_tier(internal=4, census={"recv_packet_null": 4})
+    _t_dns["internal_error_diag"] = _diag_nostack
+    _t_dns = judge(_t_dns, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _dns = (_t_dns.get("error_census") or {}).get("diagnosability") or {}
+    expect(_dns.get("diagnosable") is False and _dns.get("status") == "no_stack",
+           "有类型无堆栈（无法定位）⇒ diagnosable=false/no_stack")
+
+    # R2① 同块要求：有类型块 + 有堆栈块，但没有一块**同块**具备 ⇒ cross_block_only 必红。
+    _diag_cross = dict(_diag_ok, stacked_blocks=4, typed_stacked_blocks=0)
+    _t_dcross = _census_tier(internal=4, census={"recv_packet_null": 4})
+    _t_dcross["internal_error_diag"] = _diag_cross
+    _t_dcross = judge(_t_dcross, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _dcross = (_t_dcross.get("error_census") or {}).get("diagnosability") or {}
+    expect(_dcross.get("diagnosable") is False and _dcross.get("status") == "cross_block_only",
+           "跨块拼凑（类型/堆栈不在同一块）⇒ diagnosable=false/cross_block_only，实得 "
+           + str(_dcross.get("status")))
+    expect(any("跨块拼凑" in f for f in _t_dcross["fails"]),
+           "跨块拼凑必须进 fails（R2① fail-closed）")
+
+    # R2② 未类型化块：即使有同块证据，只要还有一个未类型化块 ⇒ mixed_blocks 必红。
+    _diag_mixed = dict(_diag_ok, logged_blocks=4, typed_blocks=3, untyped_blocks=1,
+                       stacked_blocks=4, typed_stacked_blocks=3)
+    _t_dmix = _census_tier(internal=4, census={"recv_packet_null": 4})
+    _t_dmix["internal_error_diag"] = _diag_mixed
+    _t_dmix = judge(_t_dmix, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _dmix = (_t_dmix.get("error_census") or {}).get("diagnosability") or {}
+    expect(_dmix.get("diagnosable") is False and _dmix.get("status") == "mixed_blocks",
+           "有 1 个未类型化块 ⇒ diagnosable=false/mixed_blocks，实得 " + str(_dmix.get("status")))
+    expect(any("未类型化" in f for f in _t_dmix["fails"]),
+           "未类型化块必须进 fails（R2② fail-closed）")
+
+    # R2① 端到端：A 块有类型无堆栈、B 块有堆栈无类型 ⇒ typed_stacked_blocks 必须为 0
+    #          （按块统计，不得把两个半缺块拼成 1 个同块证据）。
+    with tempfile.TemporaryDirectory() as _tdc:
+        _lc = os.path.join(_tdc, "cross-block.log")
+        with open(_lc, "w", encoding="utf-8", newline=chr(10)) as _f:
+            _f.write("19:58:20.000 [WRN] 压测兜住的异常[1]：System.OutOfMemoryException: boom\n")
+            _f.write("19:58:21.075 [ERR] Object reference not set to an instance of an object.\n")
+            _f.write("   at BotSrv.ClientManager.ProcessOnePacket(RecvicePacket message)\n")
+        _dc = summarize_internal_error_log(_lc)
+        expect(_dc["typed_blocks"] == 1 and _dc["stacked_blocks"] == 1
+               and _dc["typed_stacked_blocks"] == 0,
+               "跨块不得拼凑：typed/stacked/typed_stacked 应为 1/1/0，实得 "
+               + str(_dc.get("typed_blocks")) + "/" + str(_dc.get("stacked_blocks"))
+               + "/" + str(_dc.get("typed_stacked_blocks")))
+
+    # R2 端到端：真实摘要里同时有 typed（run_loop）与未类型化（[ERR] 只有消息）⇒ mixed_blocks。
+    with tempfile.TemporaryDirectory() as _tdm:
+        _lm = os.path.join(_tdm, "mixed.log")
+        with open(_lm, "w", encoding="utf-8", newline=chr(10)) as _f:
+            _f.write("19:58:20.000 [WRN] 压测兜住的异常[1]：System.OutOfMemoryException: boom\n")
+            _f.write("19:58:21.075 [ERR] Object reference not set to an instance of an object.\n")
+        _dm = summarize_internal_error_log(_lm)
+        _evm = evaluate_diagnosability(2, _dm)
+        expect(_dm["typed_blocks"] == 1 and _dm["untyped_blocks"] == 1
+               and _evm["diagnosable"] is False and _evm["status"] == "mixed_blocks",
+               "真实形态 mixed（1 typed + 1 untyped）⇒ mixed_blocks，实得 "
+               + str(_dm.get("typed_blocks")) + "/" + str(_dm.get("untyped_blocks"))
+               + "/" + str(_evm.get("status")))
+
+    # 空输入：internal_errors=0 / 无日志 ⇒ 不误报（diagnosable=None，不新增 fail）。
+    _t_dz = _census_tier(internal=0)
+    _t_dz["internal_error_diag"] = {"available": False, "reason": "empty"}
+    _t_dz = judge(_t_dz, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _dz = (_t_dz.get("error_census") or {}).get("diagnosability") or {}
+    expect(_t_dz["verdict"] == "GREEN" and _dz.get("diagnosable") is None
+           and not _dz.get("fails"),
+           "internal_errors=0 + 空日志 ⇒ diagnosable 不误报（None、无新 fail）")
+
+    # 采样上限不是可诊断性判据：internal_errors 远大于 logged_blocks，但样本带类型+堆栈
+    # ⇒ diagnosable=true，sampled_only=true（否则 3.95 万条窗口会因采样上限永久假红）。
+    _t_cap = _census_tier(internal=39500, census={"recv_packet_null": 39500})
+    _t_cap["internal_error_diag"] = dict(_diag_ok, logged_blocks=20, typed_blocks=20,
+                                         stacked_blocks=20, typed_stacked_blocks=20)
+    _t_cap = judge(_t_cap, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _dcap = (_t_cap.get("error_census") or {}).get("diagnosability") or {}
+    expect(_dcap.get("diagnosable") is True and _dcap.get("sampled_only") is True,
+           "样本可诊断但总量更大 ⇒ diagnosable=true + sampled_only=true")
+
     # ⑦ 父卡场景计数（master 39d418816 已接线）：每份报告必列 scene_null；上界 <0.5%；list/index 必须 0。
     t_scene_zero = judge(_census_tier(scene_null=0, scene_rounds=1000),
                          DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
@@ -1767,6 +2189,7 @@ def cmd_selftest(_args):
         return 1
     print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/"
           "残余丢包方向/本机负载窗/internal_errors 阈值与 fail-closed/白名单四牙/错误类别普查逐类与对账/"
+          "异常块四形态/真实模板跨行/diagnosable R2（无类型/混合/跨块必红）/"
           "scene_null 0.5% 上界与必列/BotSrv 崩溃三项/窗口准入）")
     return 0
 
