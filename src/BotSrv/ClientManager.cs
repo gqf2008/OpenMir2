@@ -1,4 +1,5 @@
-﻿using BotSrv.Player;
+﻿using BotSrv.Objects;
+using BotSrv.Player;
 using OpenMir2;
 using System;
 using System.Collections.Concurrent;
@@ -65,7 +66,18 @@ namespace BotSrv
             {
                 if (_clients.TryGetValue(message.SessionId, out RobotPlayer client))
                 {
-                    client.ProcessPacket(message.ReviceData);
+                    // per-packet per-bot 上下文（卡 `openmir2-botsrv-shared-state-locks`）：
+                    // 收包线程处理多个 bot，`MShare.MySelf` 必须按本包的 bot 设置，处理完恢复。
+                    THumActor prev = MShare.MySelf;
+                    MShare.MySelf = client.MyActor;
+                    try
+                    {
+                        client.ProcessPacket(message.ReviceData);
+                    }
+                    finally
+                    {
+                        MShare.MySelf = prev;
+                    }
                 }
             });
         }
@@ -236,21 +248,32 @@ namespace BotSrv
         /// `robot` 可为 null（只在自检里），不影响计数。</summary>
         internal static void RunBotRound(Action round, RobotPlayer robot)
         {
+            // per-bot 上下文（卡 `openmir2-botsrv-shared-state-locks`）：runThread 依次跑多个 bot，
+            // `MShare.MySelf` 必须按本 bot 设置；本轮结束恢复（自检 robot=null ⇒ null）。
+            THumActor prev = MShare.MySelf;
+            MShare.MySelf = robot?.MyActor;
             try
             {
-                round();
-            }
-            catch (Exception ex)
-            {
-                LoadMetrics.InternalError(BotErrorCensus.RunRoundCategory(ex));
-                if (LoadMetrics.ShouldLogInternalError())
+                try
                 {
-                    // 打完整 ToString()（含堆栈）——只记 type+message 时定位不到越界点
-                    // （2026-10-11 第 4 轮实测：internal_errors 非零但不知道是哪一行）。
-                    string id = robot == null ? "?" : robot.LoginId;
-                    BotErrorCensus.SafeLog(() => LogService.Warn("假人[" + id + "]异常被兜住[" + LoadMetrics.InternalErrors + "]："
-                        + ex.ToString()));
+                    round();
                 }
+                catch (Exception ex)
+                {
+                    LoadMetrics.InternalError(BotErrorCensus.RunRoundCategory(ex));
+                    if (LoadMetrics.ShouldLogInternalError())
+                    {
+                        // 打完整 ToString()（含堆栈）——只记 type+message 时定位不到越界点
+                        // （2026-10-11 第 4 轮实测：internal_errors 非零但不知道是哪一行）。
+                        string id = robot == null ? "?" : robot.LoginId;
+                        BotErrorCensus.SafeLog(() => LogService.Warn("假人[" + id + "]异常被兜住[" + LoadMetrics.InternalErrors + "]："
+                            + ex.ToString()));
+                    }
+                }
+            }
+            finally
+            {
+                MShare.MySelf = prev;
             }
         }
     }

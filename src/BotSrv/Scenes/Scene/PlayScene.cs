@@ -31,6 +31,57 @@ namespace BotSrv.Scenes.Scene
         /// 「顺带核」）。生产为 null = 零行为变化。</summary>
         internal static Action<PlayScene> SceneActorDiedRaceHook;
 
+        /// <summary>每假人场景的细粒度锁（卡 `openmir2-botsrv-shared-state-locks`）：
+        /// 收包线程（SendMsg/NewActor/DeleteActor/DelActor/ClearActors）与 runThread（BeginScene）
+        /// 对 `ActorList` 的读写都经它串行；**只保护列表结构**，不包住 actor 逻辑（保持并行度）。</summary>
+        private readonly object _actorSync = new object();
+
+        /// <summary>拷贝当前 ActorList 用于无锁迭代（读快照；不持有锁跑 actor 逻辑）。</summary>
+        public Actor[] SnapshotActors()
+        {
+            lock (_actorSync)
+            {
+                Actor[] copy = new Actor[ActorList.Count];
+                ActorList.CopyTo(copy, 0);
+                return copy;
+            }
+        }
+
+        /// <summary>原子 `Count` 检查 + 下标读取（收包线程可能在两次调用之间缩表）。</summary>
+        private bool TryGetActorAt(int index, out Actor actor)
+        {
+            lock (_actorSync)
+            {
+                if (index >= 0 && index < ActorList.Count)
+                {
+                    actor = ActorList[index];
+                    return true;
+                }
+                actor = null;
+                return false;
+            }
+        }
+
+        private int ActorCountLocked()
+        {
+            lock (_actorSync)
+            {
+                return ActorList.Count;
+            }
+        }
+
+        /// <summary>把 actor 登记进跨 bot 释放池（所有增删都持 `MShare.FreeActorSync`）。</summary>
+        private static void AddFreeActor(Actor actor)
+        {
+            lock (MShare.FreeActorSync)
+            {
+                if (!MShare.g_FreeActorList.Contains(actor))
+                {
+                    MShare.g_FreeActorList.Add(actor);
+                }
+            }
+        }
+
         public PlayScene(RobotPlayer robotClient) : base(SceneType.PlayGame, robotClient)
         {
             ProcMagic = new ProcMagic();
@@ -132,21 +183,16 @@ namespace BotSrv.Scenes.Scene
             int i = 0;
             while (true)
             {
-                if (i >= ActorList.Count)
+                if (i >= ActorCountLocked())
                 {
                     break;
                 }
                 SceneIndexRaceHook?.Invoke(this);
                 Actor actor;
-                try
+                if (!TryGetActorAt(i, out actor))
                 {
-                    actor = ActorList[i];
-                }
-                catch (ArgumentOutOfRangeException)
-                {
-                    // F1（复审 6a669aba）：`Count` 检查与下标读取之间，收包线程可能已把列表缩短
-                    // （SM_HIDE/SM_NEWMAP/AOI 删除）。读取本身必须自护，不能只靠删除点校验：
-                    // 本轮直接结束并计数，不把 AOORE 抛给 SafeRun 污染 internal_errors。
+                    // `Count` 检查与下标读取之间列表被缩短（生产由 `_actorSync` 挡住；自检 hook
+                    // 可有确定性注入）。本轮直接结束并计数，不把 AOORE 抛给 SafeRun。
                     LoadMetrics.SceneIndexRaceSkipped();
                     break;
                 }
@@ -211,17 +257,24 @@ namespace BotSrv.Scenes.Scene
                     // 读取本身也会 AOORE@209）；顺序 = 先 RemoveAt 成功、再登记 FreeActorList；
                     // AOORE ⇒ 跳过 + 计数 + 下标前移，不登记、不清理引用。
                     bool removed = false;
-                    try
+                    lock (_actorSync)
                     {
-                        if (i < ActorList.Count)
+                        try
                         {
-                            SceneRemoveRaceHook?.Invoke(this);   // F1c：条件读取前缩表
-                            if (ActorList[i] == actor)
+                            if (i < ActorList.Count)
                             {
-                                SceneRemoveAtRaceHook?.Invoke(this); // F1b：RemoveAt 前缩表
-                                ActorList.RemoveAt(i);
-                                MShare.g_FreeActorList.Add(actor);
-                                removed = true;
+                                SceneRemoveRaceHook?.Invoke(this);   // F1c：条件读取前缩表（自检）
+                                if (ActorList[i] == actor)
+                                {
+                                    SceneRemoveAtRaceHook?.Invoke(this); // F1b：RemoveAt 前缩表（自检）
+                                    ActorList.RemoveAt(i);
+                                    removed = true;
+                                }
+                                else
+                                {
+                                    LoadMetrics.SceneListRaceSkipped();
+                                    i++;
+                                }
                             }
                             else
                             {
@@ -229,20 +282,16 @@ namespace BotSrv.Scenes.Scene
                                 i++;
                             }
                         }
-                        else
+                        catch (ArgumentOutOfRangeException)
                         {
                             LoadMetrics.SceneListRaceSkipped();
                             i++;
+                            removed = false;
                         }
-                    }
-                    catch (ArgumentOutOfRangeException)
-                    {
-                        LoadMetrics.SceneListRaceSkipped();
-                        i++;
-                        removed = false;
                     }
                     if (removed)
                     {
+                        AddFreeActor(actor);
                         if (MShare.TargetCret == actor)
                         {
                             MShare.TargetCret = null;
@@ -299,16 +348,17 @@ namespace BotSrv.Scenes.Scene
 
         public Actor GetCharacter(int x, int y, int wantsel, ref int nowsel, bool liveonly)
         {
+            Actor[] __actors = SnapshotActors();
             int ccy = 0;
             Actor result = null;
             nowsel = -1;
             for (int k = ccy + 8; k >= ccy - 1; k--)
             {
-                for (int i = ActorList.Count - 1; i >= 0; i--)
+                for (int i = __actors.Length - 1; i >= 0; i--)
                 {
-                    if (ActorList[i] != MShare.MySelf)
+                    if (__actors[i] != MShare.MySelf)
                     {
-                        Actor a = ActorList[i];
+                        Actor a = __actors[i];
                         if ((!liveonly || !a.Death) && a.m_boHoldPlace && a.Visible)
                         {
                             if (a.CurrY == k)
@@ -335,6 +385,7 @@ namespace BotSrv.Scenes.Scene
         // 取得鼠标所指坐标的角色
         public Actor GetAttackFocusCharacter(int x, int y, int wantsel, ref int nowsel, bool liveonly)
         {
+            Actor[] __actors = SnapshotActors();
             int ccy = 0;
             Actor a;
             Actor result = GetCharacter(x, y, wantsel, ref nowsel, liveonly);
@@ -343,11 +394,11 @@ namespace BotSrv.Scenes.Scene
                 nowsel = -1;
                 for (int k = ccy + 8; k >= ccy - 1; k--)
                 {
-                    for (int i = ActorList.Count - 1; i >= 0; i--)
+                    for (int i = __actors.Length - 1; i >= 0; i--)
                     {
-                        if (ActorList[i] != MShare.MySelf)
+                        if (__actors[i] != MShare.MySelf)
                         {
-                            a = ActorList[i];
+                            a = __actors[i];
                             if ((!liveonly || !a.Death) && a.m_boHoldPlace && a.Visible)
                             {
                                 if (a.CurrY == k)
@@ -492,10 +543,11 @@ namespace BotSrv.Scenes.Scene
 
         private bool CrashManEx(int mx, int my)
         {
+            Actor[] __actors = SnapshotActors();
             bool result = false;
-            for (int i = 0; i < ActorList.Count; i++)
+            for (int i = 0; i < __actors.Length; i++)
             {
-                Actor actor = ActorList[i];
+                Actor actor = __actors[i];
                 if (actor == MShare.MySelf)
                 {
                     continue;
@@ -536,10 +588,11 @@ namespace BotSrv.Scenes.Scene
 
         public bool CrashMan(int mx, int my)
         {
+            Actor[] __actors = SnapshotActors();
             bool result = false;
-            for (int i = 0; i < ActorList.Count; i++)
+            for (int i = 0; i < __actors.Length; i++)
             {
-                Actor actor = ActorList[i];
+                Actor actor = __actors[i];
                 if (actor == null || actor == MShare.MySelf)
                 {
                     continue;
@@ -560,16 +613,17 @@ namespace BotSrv.Scenes.Scene
 
         public Actor FindActor(int id)
         {
+            Actor[] __actors = SnapshotActors();
             Actor result = null;
             if (id == 0)
             {
                 return result;
             }
-            for (int i = 0; i < ActorList.Count; i++)
+            for (int i = 0; i < __actors.Length; i++)
             {
-                if (ActorList[i].RecogId == id)
+                if (__actors[i].RecogId == id)
                 {
-                    result = ActorList[i];
+                    result = __actors[i];
                     break;
                 }
             }
@@ -578,10 +632,11 @@ namespace BotSrv.Scenes.Scene
 
         public Actor FindActor(string sName)
         {
+            Actor[] __actors = SnapshotActors();
             Actor result = null;
-            for (int i = 0; i < ActorList.Count; i++)
+            for (int i = 0; i < __actors.Length; i++)
             {
-                Actor actor = ActorList[i];
+                Actor actor = __actors[i];
                 if (string.Compare(actor.UserName, sName, StringComparison.OrdinalIgnoreCase) == 0)
                 {
                     result = actor;
@@ -593,10 +648,11 @@ namespace BotSrv.Scenes.Scene
 
         public Actor FindActorXY(int x, int y)
         {
+            Actor[] __actors = SnapshotActors();
             Actor result = null;
-            for (int i = 0; i < ActorList.Count; i++)
+            for (int i = 0; i < __actors.Length; i++)
             {
-                Actor a = ActorList[i];
+                Actor a = __actors[i];
                 if ((a.CurrX == x) && (a.CurrY == y))
                 {
                     result = a;
@@ -611,10 +667,11 @@ namespace BotSrv.Scenes.Scene
 
         public bool IsValidActor(Actor actor)
         {
+            Actor[] __actors = SnapshotActors();
             bool result = false;
-            for (int i = 0; i < ActorList.Count; i++)
+            for (int i = 0; i < __actors.Length; i++)
             {
-                if (ActorList[i] == actor)
+                if (__actors[i] == actor)
                 {
                     result = true;
                     break;
@@ -630,6 +687,8 @@ namespace BotSrv.Scenes.Scene
 
         public Actor NewActor(int chrid, int cx, int cy, ushort cdir, int cfeature, int cstate)
         {
+            lock (_actorSync)
+            {
             Actor actor;
             Actor result = null;
             for (int i = 0; i < ActorList.Count; i++)
@@ -963,10 +1022,13 @@ namespace BotSrv.Scenes.Scene
             ActorList.Add(actor);
             result = actor;
             return result;
-        }
+
+            }}
 
         public void ActorDied(Actor actor)
         {
+            lock (_actorSync)
+            {
             // F1b「顺带核」：ActorDied 在 BeginScene 的 ProcMsg 里由 run 线程调用，收包线程仍可能
             // 并发增删 ActorList ⇒ 读下标/RemoveAt/Insert 都可能 AOORE。按删除路径同一模式：
             // 读写各自自护、失败即计数跳过；插入失败回落 Add（不抛给 SafeRun）。
@@ -1048,10 +1110,13 @@ namespace BotSrv.Scenes.Scene
                     ActorList.Add(actor);
                 }
             }
-        }
+
+            }}
 
         public void SetActorDrawLevel(Actor actor, int level)
         {
+            lock (_actorSync)
+            {
             if (level == 0)
             {
                 for (int i = 0; i < ActorList.Count; i++)
@@ -1064,20 +1129,27 @@ namespace BotSrv.Scenes.Scene
                     }
                 }
             }
-        }
+
+            }}
 
         // 清除所有角色
         public void ClearActors()
         {
+            lock (_actorSync)
+            {
             ActorList.Clear();
             MShare.MySelf = null;
+            RobotClient.MyActor = null;
             MShare.TargetCret = null;
             MShare.FocusCret = null;
             MShare.MagicTarget = null;
-        }
+
+            }}
 
         public Actor DeleteActor(int id, bool boDeath)
         {
+            lock (_actorSync)
+            {
             Actor result = null;
             int i = 0;
             while (true)
@@ -1108,7 +1180,7 @@ namespace BotSrv.Scenes.Scene
                         }
                     }
                     ActorList[i].m_dwDeleteTime = MShare.GetTickCount();
-                    MShare.g_FreeActorList.Add(ActorList[i]);
+                    AddFreeActor(ActorList[i]);
                     ActorList.RemoveAt(i);
                 }
                 else
@@ -1117,7 +1189,8 @@ namespace BotSrv.Scenes.Scene
                 }
             }
             return result;
-        }
+
+            }}
 
         public Actor DeleteActor(int id)
         {
@@ -1126,24 +1199,28 @@ namespace BotSrv.Scenes.Scene
 
         public void DelActor(object actor)
         {
+            lock (_actorSync)
+            {
             for (int i = 0; i < ActorList.Count; i++)
             {
                 if (ActorList[i] == actor)
                 {
                     ActorList[i].m_dwDeleteTime = MShare.GetTickCount();
-                    MShare.g_FreeActorList.Add(ActorList[i]);
+                    AddFreeActor(ActorList[i]);
                     ActorList.RemoveAt(i);
                     break;
                 }
             }
-        }
+
+            }}
 
         public Actor ButchAnimal(int x, int y)
         {
+            Actor[] __actors = SnapshotActors();
             Actor result = null;
-            for (int i = 0; i < ActorList.Count; i++)
+            for (int i = 0; i < __actors.Length; i++)
             {
-                Actor a = ActorList[i];
+                Actor a = __actors[i];
                 if (a.Death)
                 {
                     if ((Math.Abs(a.CurrX - x) <= 1) && (Math.Abs(a.CurrY - y) <= 1))
@@ -1228,12 +1305,15 @@ namespace BotSrv.Scenes.Scene
                         cdir = HUtil32.LoByte(cdir);
                         actor.SendMsg(Messages.SM_TURN, x, y, cdir, feature, state, "", 0);
                     }
-                    if (MShare.MySelf != null)
+                    // per-bot 自身 actor（卡 `openmir2-botsrv-shared-state-locks`）：不再写跨 bot
+                    // 全局静态；本线程的 `MShare.MySelf` 上下文由 ClientManager per-packet/per-round
+                    // 设置，这里同时把权威引用挂到本假人实例上。
+                    if (RobotClient.MyActor != null)
                     {
-                        MShare.MySelf.SlaveObject.Clear();
-                        MShare.MySelf = null;
+                        RobotClient.MyActor.SlaveObject.Clear();
                     }
-                    MShare.MySelf = (THumActor)actor;
+                    RobotClient.MyActor = (THumActor)actor;
+                    MShare.MySelf = RobotClient.MyActor;
                     break;
                 case Messages.SM_HIDE:
                     actor = FindActor(chrid);

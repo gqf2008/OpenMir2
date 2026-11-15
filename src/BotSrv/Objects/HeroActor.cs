@@ -430,9 +430,10 @@ namespace BotSrv.Objects
                     result = MShare.AutoTagget;
                 }
             }
-            for (int i = 0; i < _robotClient.PlayScene.ActorList.Count; i++)
+            Actor[] actors = _robotClient.PlayScene.SnapshotActors();
+            for (int i = 0; i < actors.Length; i++)
             {
-                Actor actor = _robotClient.PlayScene.ActorList[i];
+                Actor actor = actors[i];
                 if (IsProperTarget(actor))
                 {
                     int dx = GetDis(actor.CurrX, actor.CurrY, MShare.MySelf.CurrX, MShare.MySelf.CurrY);
@@ -659,9 +660,10 @@ namespace BotSrv.Objects
         {
             int result = 0;
             Scenes.Scene.PlayScene wvar1 = _robotClient.PlayScene;
-            for (int i = 0; i < wvar1.ActorList.Count; i++)
+            Actor[] actors = wvar1.SnapshotActors();
+            for (int i = 0; i < actors.Length; i++)
             {
-                Actor actor = wvar1.ActorList[i];
+                Actor actor = actors[i];
                 if (Math.Abs(actor.CurrX - MShare.MySelf.CurrX) < 6 ||
                     Math.Abs(actor.CurrY - MShare.MySelf.CurrY) < 6)
                 {
@@ -678,9 +680,10 @@ namespace BotSrv.Objects
         {
             int result = 0;
             Scenes.Scene.PlayScene wvar1 = _robotClient.PlayScene;
-            for (int i = 0; i < wvar1.ActorList.Count; i++)
+            Actor[] actors = wvar1.SnapshotActors();
+            for (int i = 0; i < actors.Length; i++)
             {
-                Actor actor = wvar1.ActorList[i];
+                Actor actor = actors[i];
                 if (Math.Abs(actor.CurrX - MShare.MySelf.CurrX) < 5 ||
                     Math.Abs(actor.CurrY - MShare.MySelf.CurrY) < 5)
                 {
@@ -698,9 +701,10 @@ namespace BotSrv.Objects
         {
             int result = 0;
             Scenes.Scene.PlayScene wvar1 = _robotClient.PlayScene;
-            for (int i = 0; i < wvar1.ActorList.Count; i++)
+            Actor[] actors = wvar1.SnapshotActors();
+            for (int i = 0; i < actors.Length; i++)
             {
-                Actor actor = wvar1.ActorList[i];
+                Actor actor = actors[i];
                 if (Math.Abs(actor.CurrX - MShare.MySelf.CurrX) < 8 ||
                     Math.Abs(actor.CurrY - MShare.MySelf.CurrY) < 8)
                 {
