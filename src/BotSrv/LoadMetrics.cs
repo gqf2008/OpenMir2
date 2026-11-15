@@ -128,6 +128,12 @@ namespace BotSrv
         private static long _loginSendFailed;   // 想发但 socket.Send 抛异常（与「没连接」分开）
         private static long _loginResendWindowMs; // 0 = 关（默认，保持既有行为）
 
+        // 卡 `openmir2-botsrv-loginconns-buffer`：跨 flush 复用的落盘缓冲（稳态零大块分配）。
+        // 只在 Sync 锁内使用；初值小，首次按峰值增长一次后复用（不再是每次 count*160+64 的新 char[]）。
+        private static readonly StringBuilder LoginConnsText = new StringBuilder(1024);
+        private static readonly Encoder LoginConnsUtf8 = new UTF8Encoding(false).GetEncoder();
+        private static byte[] _loginConnBytes = new byte[1024];
+
         private static string _outDir;
         private static string _statsPath;
         private static StreamWriter _stats;
@@ -885,14 +891,25 @@ namespace BotSrv
             w.Write('\n');
         }
 
-        /// <summary>T-11 连接级明细落盘（整文件重写，每 flush 一次）。调用方持锁。</summary>
+        /// <summary>T-11 连接级明细落盘（整文件重写，每 flush 一次）。调用方持锁。
+        ///
+        /// 卡 `openmir2-botsrv-loginconns-buffer`：旧实现每次 flush 都 `new StringBuilder(count*160+64)`
+        /// 再 `ToString()` + `File.WriteAllText` —— 500 档下约 160KB + 234KB / 5s 的确定性 LOH 垃圾。
+        /// 现改为**跨 flush 复用**：
+        ///   · `LoginConnsText` 用 `Clear()` 复用同一 char 缓冲，稳态不再分配大块文本；
+        ///   · UTF-8 直接编码进复用的 `_loginConnBytes`（逐 chunk，无 `ToString()`/`GetBytes(string)`）；
+        ///   · 文件仍每次 `FileMode.Create` **全量重写** ⇒ 落盘字节与旧实现逐字节相同
+        ///     （`--selftest-loadmetrics` 用旧实现复刻做 diff=0 断言并钉 golden hash）。
+        /// 不变量：Flush 周期（5s）、字段、字段顺序、行序、换行、UTF-8 无 BOM 全部不变；不是增量写、不降频。
+        /// </summary>
         private static void WriteLoginConnsLocked()
         {
             if (string.IsNullOrEmpty(_loginConnPath))
             {
                 return;
             }
-            var sb = new StringBuilder(LoginConns.Count * 160 + 64);
+            StringBuilder sb = LoginConnsText;
+            sb.Clear();
             foreach (KeyValuePair<string, LoginConn> kv in LoginConns)
             {
                 LoginConn c = kv.Value;
@@ -914,15 +931,88 @@ namespace BotSrv
                   .Append(",\"resend_tick\":").Append(c.ResendTick)
                   .Append("}\n");
             }
+            int need = MeasureLoginConnsUtf8Bytes(sb);
+            if (_loginConnBytes.Length < need)
+            {
+                // 只在峰值增长时分配一次；稳态 flush 不再分配大块字节缓冲。
+                _loginConnBytes = new byte[need];
+            }
+            int bytes = EncodeLoginConnsUtf8(sb, _loginConnBytes);
             try
             {
-                File.WriteAllText(_loginConnPath, sb.ToString(), new UTF8Encoding(false));
+                using (var fs = new FileStream(_loginConnPath, FileMode.Create, FileAccess.Write, FileShare.Read))
+                {
+                    fs.Write(_loginConnBytes, 0, bytes);
+                }
             }
             catch
             {
                 // 同 Flush：采集失败不能让被测进程崩。但必须可见（证据链断了也要能判红）。
                 RecordMetricFlushFailure();
             }
+        }
+
+        /// <summary>登录明细的 UTF-8 字节数（无分配；`Encoder` 逐 chunk，跨 chunk 的代理对按同一状态续接）。</summary>
+        private static int MeasureLoginConnsUtf8Bytes(StringBuilder sb)
+        {
+            Encoder enc = LoginConnsUtf8;
+            enc.Reset();
+            int total = 0;
+            foreach (ReadOnlyMemory<char> chunk in sb.GetChunks())
+            {
+                total += enc.GetByteCount(chunk.Span, flush: false);
+            }
+            total += enc.GetByteCount(ReadOnlySpan<char>.Empty, flush: true);
+            return total;
+        }
+
+        /// <summary>把登录明细按 UTF-8（无 BOM）写进复用缓冲，返回写入字节数。</summary>
+        private static int EncodeLoginConnsUtf8(StringBuilder sb, byte[] dst)
+        {
+            Encoder enc = LoginConnsUtf8;
+            enc.Reset();
+            int off = 0;
+            foreach (ReadOnlyMemory<char> chunk in sb.GetChunks())
+            {
+                off += enc.GetBytes(chunk.Span, dst.AsSpan(off), flush: false);
+            }
+            off += enc.GetBytes(ReadOnlySpan<char>.Empty, dst.AsSpan(off), flush: true);
+            return off;
+        }
+
+        // ==== 自检接缝（卡 `openmir2-botsrv-loginconns-buffer`；只供 `--selftest-loadmetrics`，不参与运行时路径）====
+
+        /// <summary>自检专用：只设置 login_conns 输出路径，不启动 flusher、不改其它运行时状态。</summary>
+        internal static void SelfCheckSetLoginConnPath(string path)
+        {
+            lock (Sync) { _loginConnPath = path; }
+        }
+
+        /// <summary>自检专用：清空连接表与复用缓冲（模拟全新进程的初始态，让分配量可重复测量）。</summary>
+        internal static void SelfCheckResetLoginConns()
+        {
+            lock (Sync)
+            {
+                LoginConns.Clear();
+                LoginConnsText.Clear();
+                LoginConnsUtf8.Reset();
+                _loginConnBytes = new byte[1024];
+            }
+        }
+
+        /// <summary>自检专用：直接写入一条连接记录（字段语义与 LoginConnStart 建立的对象一致）。</summary>
+        internal static void SelfCheckAddLoginConn(string key, LoginConn c)
+        {
+            lock (Sync) { LoginConns[key] = c; }
+        }
+
+        /// <summary>自检专用：读当前连接表（供「旧实现复刻」在同一枚举序上产出对照字节）。</summary>
+        internal static Dictionary<string, LoginConn> SelfCheckLoginConns => LoginConns;
+
+        /// <summary>自检专用：在调用线程上执行一次真实落盘（与 Flush 相同的 Sync 锁语义），便于测分配量。</summary>
+        internal static void SelfCheckWriteLoginConns()
+        {
+            lock (Sync) { WriteLoginConnsLocked(); }
         }
 
         /// <summary>T-11 连接级汇总（调用方持锁）：总数 / 没拿到 529 的 / 其中 rx_bytes==0 的 / 做过重发的 / 重发后成功。</summary>

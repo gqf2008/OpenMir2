@@ -86,6 +86,13 @@ namespace BotSrv
             {
                 System.Environment.Exit(SharedStateSelfCheck.Run());
             }
+
+            // 卡 `openmir2-botsrv-loginconns-buffer`：登录连接明细落盘复用缓冲 + 输出逐字节等价的牙
+            // （不启动服务/不连端口；含旧实现复刻 diff=0、golden SHA256、缩容截断、单次分配量）。
+            if (args.Length > 0 && args[0] == "--selftest-loadmetrics")
+            {
+                System.Environment.Exit(LoadMetricsSelfCheck.Run());
+            }
             // 进程级兜底：线程入口/事件处理器之外的遗漏路径（例如 runThread 之外的线程）至少在
             // fatal.ndjson 留一行，并计入 unhandled_exception；未观察 Task 同理。
             AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
