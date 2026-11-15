@@ -200,6 +200,72 @@ fault 非 0 未豁免 / `internal_errors` 对账不平 / 缺任一既有事件�
   已在本次 rebase 接线并进入每份报告（null-skip 按 0.5% 上界 + 单独解释的口径放行）。
 - 真机 200/500 档验证需窗口；本卡交付的是代码 + 无栈自检 + 判断口径。窗口授权由总监安排。
 
+## 9. 异常日志可诊断性（卡 `openmir2-botsrv-errorstack-diagnosable`）
+
+> 结论先行：**「数了 N 条」不等于「知道是什么、在哪」**。`internal_errors` 非 0 时必须能在
+> 报告里看到异常类型与堆栈首行；拿不到可诊断文本本身判红（fail-closed）。
+
+### 9.1 360s 窗口暴露的两处断链（2026-11-15）
+
+- `recv_packet_null=4`，`bots.log` 里恰好 4 条
+  `[ERR] Object reference not set to an instance of an object.`，但**无类型行、无 `   at ` 堆栈帧**；
+  `internal_error_diag.logged_blocks=0`（旧正则认不出这种形态）。
+- 根因 ①：`src/OpenMir2/LogService.cs` 的 `Error(Exception ex)` 曾写成
+  `Logger.Error(ex.Message, ex)`。Serilog 把 `(string, T)` 绑到泛型重载 `Error<T>`，
+  `LogEvent.Exception` 为 null，输出模板里的 `{Exception}` 渲染为空——**只丢信息、不报错**。
+  2026-11-15 全仓审计（`src/**/*.cs`，排除注释行）：`LogService.Error(` 共 **393** 处，
+  其中单参传 Exception 的 **42** 处全部走坏重载（BotSrv 1 / DBSrv 4 / GameSrv 7 / LoginGate 1 /
+  LoginSrv 18 / M2Server 3 / MapSrv 1 / Modules 3）。修法是**共享门面一行**：
+  `Logger.Error(ex, ex.Message)`，42 个调用点不动；新增调用一律 `Error(message, ex)` 或 `Error(ex)`。
+- 根因 ②：`tools/botload/load_report.py` 的 `_INTERNAL_ERR_RE` 只认
+  「异常被兜住[N]：/压测兜住的异常[N]：」，认不出 `[ERR] <msg>` 与
+  `socket 事件处理器异常被兜住：`。
+
+### 9.2 摘要字段词义（固定）
+
+`summarize_internal_error_log` 按四类落盘形态归桶（键 = (类别, 异常类型, 消息)）：
+
+| 类别 | 形态 | 类型 | 堆栈 |
+| --- | --- | --- | --- |
+| `bot_round` | `假人[id]异常被兜住[N]：<ex.ToString()>` | 有 | 有 |
+| `run_loop` | `压测兜住的异常[N]：<Type>: <Message>` | 有 | 无 |
+| `socket` | `socket 事件处理器异常被兜住：<ex.ToString()>` | 有 | 有 |
+| `err` | `[ERR] <msg>`（`LogService.Error(Exception)` 的产物） | 修复前无、修复后有 | 修复前无、修复后有 |
+
+- `logged_blocks`：**可识别**异常块数（含只有消息的 `[ERR]`，它可被数到但不可诊断）；
+- `typed_blocks`：能抽出**异常类型**的块数；`untyped_blocks = logged_blocks - typed_blocks`；
+- `stacked_blocks`：至少带 1 个 `   at ` 帧的块数。
+
+### 9.3 `diagnosable` 维度（进 `evaluate_error_census.fails`）
+
+`evaluate_diagnosability(internal_errors, internal_error_diag)`：
+
+| 前提 | `diagnosable` | 结果 |
+| --- | --- | --- |
+| `internal_errors` 缺失（None） | `false` | RED（缺计数） |
+| `internal_errors <= 0` | `None` | 不适用，**不误报**（空输入） |
+| 有计数、摘要不可用/缺失 | `false` | RED |
+| 有计数、`typed_blocks==0`（本轮 4 条 `[ERR]` 消息） | `false` | RED：有计数无类型 |
+| 有类型、`stacked_blocks==0` | `false` | RED：知道是什么、不知道在哪 |
+| 有类型 + 有堆栈 | `true` | 不新增 fail |
+
+报告显式字段：`required_fields.internal_errors_diagnosable / _diag_status / _logged_blocks /
+_typed_blocks / _stacked_blocks / _sampled_only`，以及 `error_census.diagnosability` 全量。
+
+**采样上限不是判据**：BotSrv 只打前 20 条（`ShouldLogInternalError`），
+`internal_errors > logged_blocks` 只记 `sampled_only=true`，不单独判红——否则 3.95 万条 NRE
+的窗口会因采样上限永久假红。判据只问「**样本**里有没有类型与堆栈」。
+
+### 9.4 证据
+
+- `load_report.py selftest`：四类形态归桶（`[ERR]` 修复后形态 + socket + 只有消息）、
+  `diagnosable` 五条分支（untyped / ok / no_stack / 空输入 / 采样上限）逐条红→绿。
+- `BotSrv.exe --selftest-error-census`：经 `RunPacketGuard` 注入 NRE ⇒ 捕获 sink 断言
+  `LogEvent.Exception != null`、渲染串含 `System.NullReferenceException` 与 `   at `。
+- 离线重算 `E:/UserFleet/archive/load-360-20261115-now/main/tier-500`：
+  `logged_blocks=4, typed_blocks=0, diagnosable=false, status=untyped_blocks`，
+  并新增一条 fail（与 `recv_packet_null=4` 的既有 RED 并存）。
+
 ## 附录 A：逐站点枚举清单（可复核）
 
 下表覆盖 `src/BotSrv/**` 全部 `try/catch`、线程入口、socket 事件类与进程钩子。**「当前计数」列**
