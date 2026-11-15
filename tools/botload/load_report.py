@@ -926,9 +926,12 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
     tier["internal_error_allowlist"] = evaluate_internal_errors(tier, allowlist)
     # 卡 openmir2-botsrv-recv-thread-nre：internal_errors 只是「总量」，census 是「逐类」。
     # 两者一起才满足总监规则「枚举出的每一类都为 0」；internal 判据默认包含 census。
+    # 注意：internal_errors=0 时 evaluate_internal_errors 的 excused=True 只表示「无需豁免」，
+    # **不能**拿它去豁免一个非 0 的 feeds_internal 类别（否则报告状态会误导）；必须 total > 0。
+    _ie = tier["internal_error_allowlist"]
     tier["error_census"] = evaluate_error_census(
         tier, census_allowlist,
-        internal_excused=bool(tier["internal_error_allowlist"].get("excused")))
+        internal_excused=bool(_ie.get("excused")) and bool(_ie.get("total")))
     if "internal" in criteria:
         fails.extend(tier["internal_error_allowlist"]["fails"])
         fails.extend(tier["error_census"]["fails"])
@@ -1457,6 +1460,10 @@ def cmd_selftest(_args):
                      DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
     expect(t_c_cons["verdict"] == "RED" and any("已分类故障之和" in f for f in t_c_cons["fails"]),
            "internal_errors 与分类之和不一致 ⇒ fail-closed")
+    _cons_row = next(r for r in (t_c_cons.get("error_census") or {}).get("categories", [])
+                     if r["category"] == "recv_packet_null")
+    expect(_cons_row["status"] == "nonzero_fault",
+           "internal_errors=0 时不得把非 0 的 feeds_internal 类别标成 excused（状态必须诚实）")
 
     # ③ 缺类别 / 多类别 / 缺整个对象 ⇒ 三项都 RED（枚举漂移可见）
     t_c_miss = judge(_census_tier(drop_cat="recv_packet_null"), DEFAULT_THRESHOLDS, i3,

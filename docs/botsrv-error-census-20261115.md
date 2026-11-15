@@ -59,7 +59,8 @@ socket 事件调用点 4 类、进程级钩子 2 个。下表逐项给出归属�
 **fault 类别默认容忍度 0。** 豁免只有两条：
 
 1. `feeds_internal=True` 的类别，且 `internal_errors` 已被
-   `tools/botload/internal-errors-allowlist.json`（按异常类型 + 消息正则 + max）整体豁免；
+   `tools/botload/internal-errors-allowlist.json`（按异常类型 + 消息正则 + max）整体豁免
+   （要求 `internal_errors > 0` 且所有日志样本都命中白名单；`internal_errors=0` 本身不是豁免依据）；
 2. 其余 fault 类别由 `tools/botload/error-census-allowlist.json` 按 `category + max` 登记。
 
 ### 枚举到但**有意不计数**的 catch（不是遗漏）
