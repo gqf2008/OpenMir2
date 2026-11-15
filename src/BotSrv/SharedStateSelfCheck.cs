@@ -181,6 +181,49 @@ namespace BotSrv
                     $"count={scene.SnapshotActors().Length}");
             }
 
+            // ---------- ④ per-bot 上下文接线（卡 `openmir2-botsrv-myself-wiring-tooth`） ----------
+            {
+                // 清掉前面场景用例留下的线程本地值，让「恢复后 == 调用前」的断言可判。
+                MShare.MySelf = null;
+                var bot1 = new RobotPlayer();
+                bot1.MyActor = new THumActor(bot1) { CurrX = 101, CurrY = 101 };
+                var bot2 = new RobotPlayer();
+                bot2.MyActor = new THumActor(bot2) { CurrX = 202, CurrY = 202 };
+
+                var seen = new System.Collections.Generic.List<THumActor>();
+                ClientManager.RunBotRound(() => seen.Add(MShare.MySelf), bot1);
+                ClientManager.RunBotRound(() => seen.Add(MShare.MySelf), bot2);
+                Check(
+                    "runbotround-context-per-bot",
+                    seen.Count == 2 && ReferenceEquals(seen[0], bot1.MyActor) && ReferenceEquals(seen[1], bot2.MyActor)
+                        && MShare.MySelf == null,
+                    $"seen0={(seen.Count > 0 && seen[0] != null ? seen[0].CurrX.ToString() : "null")} " +
+                    $"seen1={(seen.Count > 1 && seen[1] != null ? seen[1].CurrX.ToString() : "null")} " +
+                    $"after={(MShare.MySelf == null ? "null" : "set")}");
+
+                var cm = new ClientManager();
+                cm.AddClient("tooth-s1", bot1);
+                cm.AddClient("tooth-s2", bot2);
+                var packetSeen = new System.Collections.Generic.Dictionary<RobotPlayer, THumActor>();
+                RobotPlayer.ProcessPacketEnteredForTest = r => packetSeen[r] = MShare.MySelf;
+                try
+                {
+                    cm.ProcessOnePacket(new RecvicePacket { SessionId = "tooth-s1", ReviceData = "" });
+                    cm.ProcessOnePacket(new RecvicePacket { SessionId = "tooth-s2", ReviceData = "" });
+                }
+                finally
+                {
+                    RobotPlayer.ProcessPacketEnteredForTest = null;
+                }
+                Check(
+                    "processonepacket-context-per-bot",
+                    packetSeen.Count == 2
+                        && ReferenceEquals(packetSeen[bot1], bot1.MyActor)
+                        && ReferenceEquals(packetSeen[bot2], bot2.MyActor),
+                    $"seen1={(packetSeen.ContainsKey(bot1) && packetSeen[bot1] != null ? packetSeen[bot1].CurrX.ToString() : "null")} " +
+                    $"seen2={(packetSeen.ContainsKey(bot2) && packetSeen[bot2] != null ? packetSeen[bot2].CurrX.ToString() : "null")}");
+            }
+
             Console.WriteLine($"SHAREDSTATE {(failed == 0 ? "ALL PASS" : "FAILED")} failures={failed}");
             return failed == 0 ? 0 : 1;
         }

@@ -304,6 +304,10 @@ namespace BotSrv.Player
         /// attacker 视角与 victim 视角（真机同一击会被两个假人各落一遍；去重靠事件键，
         /// 这个字段用于统计 `other_observer` 并佐证重复来源）。</summary>
         private int _myActorId;
+        /// <summary>卡 `openmir2-botsrv-myself-wiring-tooth`：仅自检注入，`ProcessPacket` 入口
+        /// （per-packet 上下文的可观测落点）。生产为 null = 零行为变化。</summary>
+        internal static Action<RobotPlayer> ProcessPacketEnteredForTest;
+
         /// <summary>本假人的自身 actor（SM_LOGON 绑定；per-bot，跨 bot 不共享）。
         /// run/recv 线程通过 `MShare.MySelf` 的线程本地上下文访问它（卡 `openmir2-botsrv-shared-state-locks`）。</summary>
         public THumActor MyActor;
