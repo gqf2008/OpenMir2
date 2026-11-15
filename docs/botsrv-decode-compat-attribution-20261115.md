@@ -27,6 +27,8 @@
   **等级 ≥23 的角色集合 = 带装备的角色集合 = loadbot10–19**，与报错集合逐条相同。
 - 每对错误顺序恒为「Ability 先、ClientItem 后约 2ms」；这与登录队列的优先级/入队序一致
   （52 与 621 同为 High，52 先入队）。
+- `load_stats.ndjson` 的 `ident_counts` 由 `LoadMetrics.IdentCountsJson` **只打印 top-24**（内部最多 48 键）；
+  本窗口 `frames_decoded - Σ(top24) = 1062` ⇒ 621 等低频键被截断，不代表未收到。
 
 > 这排除了「与负载无关的随机解码失败」：命中的是**角色数据形态**（等级 50、带装备），
 > 不是夹具内部版本号，也不是服务端字段数。
@@ -105,7 +107,8 @@ client58 level=50: THROW ... Ability property count is 22 but binary's header ma
 `SM_BAGITEMS(201)` 走 `DecodeClientBuffer<ClientItem>`（`src/BotSrv/Player/RobotPlayer.cs:5587`），
 而 `ClientPacket.ToPacket` 把 `ReadPacket` 的 `NotImplementedException` 吞掉返回 `null`
 （`src/OpenMir2/Packets/ClientPackets/ClientItem.cs:20`）—— 背包视图恒空，静默漏覆盖。
-本窗口只收到 621（未收到 200/201/202/203），故只计数了 621 这一类。
+本窗口假人没有物品交互，且 621 只发给带装备角色（`ident_counts` 只打印 top-24，200/201/202/203 未显现），
+故 `recv_packet_other` 里只有 621 这一类。
 
 ### 3.2 离线复现
 
