@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "note": "压测 internal_errors 白名单。空 entries = 容忍度 0（fail-closed）。条目必须随卡面 patch 评审（category=异常类型，message_pattern=消息正则且必须能区分已知无害与未知，max=允许累计次数，reason/owner/review_ref 必填）。运行时没有新增条目/覆盖路径的开关；报告会记录 path+sha256。",
+  "entries": []
+}
