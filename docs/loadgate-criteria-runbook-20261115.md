@@ -327,6 +327,12 @@ for rel, count, hold in runs:
   实例：2026-11-15 池卡分支 `cargo test --workspace` 编译 26 crate 后被系统 OOM 回收器整体 kill，
   rustc exit 1 且无诊断行、零 `test result:` ⇒ 判 INCOMPLETE，重跑用 `--jobs 2` 降并发。
   **任何只报「第 N 个 crate 编译失败」而不给上述证据的门禁结论，不得作为合并依据。**
+- **preflight 必须分开写 `CODE_HEAD` 与 `REPO_HEAD`**（2026-11-15 定）：
+  - `CODE_HEAD=<commit>`：**被测二进制实际来源**（首选二进制内嵌 commit；没有就写构建时的工作树 HEAD 并标 `inferred`）；
+  - `REPO_HEAD=<commit>`：起跑时的仓库 HEAD（可能包含其后若干**纯文档**提交，写明数量）；
+  理由：把两者混成一个 `head=`，审计时无法回答「这轮跑的到底是哪份代码」。实例：360s 轮口径写「master `05a0e4815`」，
+  但 `preflight.txt` 记的是 `head=e9b807e1b`——两者之间恰有 **1 个 docs-only 提交**（`src/` diff 为空），
+  二进制 `dll 8d09c454…` 由 `05a0e4815` 构建。**`.build.json` 戳落地后 preflight 直接读戳即可。**
 - **`dotnet-counters` 采集必须记录目标进程**：落 `counters_target=<process> pid=<pid>` 到 `preflight.txt`
   与 `report.json`。**缺这项的采集，其数字不得出现在报告结论里**（只能进附录并标「未证」）。
   实例：2026-11-15 修复树 360s 的 `Allocation Rate≈418MB/s` 因归档未记 counters PID，只能降级为「疑为 BotSrv、未证」。
