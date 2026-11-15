@@ -20,6 +20,11 @@ namespace BotSrv
         private readonly ConcurrentDictionary<string, RobotPlayer> _clients;
         private readonly IList<RobotPlayer> _clientList;
         private readonly IList<AutoPlayRunTime> _autoList;
+        // 卡 openmir2-botsrv-recv-thread-nre（A6）：`_clientList` / `_autoList` 是普通 List，
+        // 写者来自两个线程——runThread（AddClient / Run / RunAutoPlay）与收包线程（SocketError →
+        // DelClient）。不加锁时 List 内部状态会被并发改坏（AOORE/InvalidOperationException）。
+        // 读写都走这把锁；迭代前取快照，避免持锁跑挂机轮次。
+        private readonly object _clientSync = new object();
         private readonly Channel<RecvicePacket> _reviceQueue;
 
         public ClientManager()
@@ -47,18 +52,36 @@ namespace BotSrv
             {
                 if (_reviceQueue.Reader.TryRead(out RecvicePacket message))
                 {
-                    try
-                    {
-                        if (_clients.TryGetValue(message.SessionId, out RobotPlayer client))
-                        {
-                            client.ProcessPacket(message.ReviceData);
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        LogService.Error(ex);
-                    }
+                    ProcessOnePacket(message);
                 }
+            }
+        }
+
+        /// <summary>收包线程的 per-packet 处理。**所有异常必须在这里分类计数**（N1 的 3.95 万条
+        /// `[ERR] Object reference not set` 以前只进日志、不进 `internal_errors`）。</summary>
+        private void ProcessOnePacket(RecvicePacket message)
+        {
+            RunPacketGuard(() =>
+            {
+                if (_clients.TryGetValue(message.SessionId, out RobotPlayer client))
+                {
+                    client.ProcessPacket(message.ReviceData);
+                }
+            });
+        }
+
+        /// <summary>收包线程异常护栏（自检直接注入本方法证明「每类 +1」）。
+        /// 计数走 `LoadMetrics.InternalError(category)` ⇒ `internal_errors` 与 census 同步增长。</summary>
+        internal static void RunPacketGuard(Action action)
+        {
+            try
+            {
+                action();
+            }
+            catch (Exception ex)
+            {
+                LoadMetrics.InternalError(BotErrorCensus.RecvPacketCategory(ex));
+                BotErrorCensus.SafeLog(() => LogService.Error(ex));
             }
         }
 
@@ -72,32 +95,36 @@ namespace BotSrv
 
         public void AddClient(string sessionId, RobotPlayer objClient)
         {
-            _autoList.Add(new AutoPlayRunTime()
+            lock (_clientSync)
             {
-                SessionId = sessionId,
-                RunTick = HUtil32.GetTickCount()
-            });
+                _autoList.Add(new AutoPlayRunTime()
+                {
+                    SessionId = sessionId,
+                    RunTick = HUtil32.GetTickCount()
+                });
+                _clientList.Add(objClient);
+            }
             _clients.TryAdd(sessionId, objClient);
-            _clientList.Add(objClient);
         }
 
         public void DelClient(string sessionId)
         {
-            AutoPlayRunTime findSession = null;
-            foreach (AutoPlayRunTime item in _autoList)
+            _clients.TryRemove(sessionId, out RobotPlayer robotClient);
+            lock (_clientSync)
             {
-                if (item.SessionId == sessionId)
+                for (int i = 0; i < _autoList.Count; i++)
                 {
-                    findSession = item;
-                    break;
+                    if (_autoList[i].SessionId == sessionId)
+                    {
+                        _autoList.RemoveAt(i);
+                        break;
+                    }
+                }
+                if (robotClient != null)
+                {
+                    _clientList.Remove(robotClient);
                 }
             }
-            if (findSession != null)
-            {
-                _autoList.Remove(findSession);
-            }
-            _clients.TryRemove(sessionId, out RobotPlayer robotClient);
-            _clientList.Remove(robotClient);
             if (robotClient != null)
             {
                 LogService.Info("机器人[{0}] 会话ID:{1}]掉线或断开链接.", robotClient.ChrName, sessionId);
@@ -108,13 +135,20 @@ namespace BotSrv
         {
             dwRunTick = HUtil32.GetTickCount();
             bool boProcessLimit = false;
-            for (int i = g_nPosition; i < _clientList.Count; i++)
+            // 快照后迭代：收包线程的 DelClient 会并发改 `_clientList`（A6）。
+            RobotPlayer[] clients;
+            lock (_clientSync)
+            {
+                clients = new RobotPlayer[_clientList.Count];
+                _clientList.CopyTo(clients, 0);
+            }
+            for (int i = g_nPosition; i < clients.Length; i++)
             {
                 // **逐个假人**兜异常（不要把 try 包在整段循环外）：假人的挂机/移动层建立在跨假人共享的
                 // MShare.* 上，N 个假人会互相踩（实测 500 档 internal_errors 一路涨到 1248+）。
                 // 包在循环外时，一个假人抛异常就**中断整轮**——后面的假人永远轮不到（实测：500 档爬到
                 // 474/500 后再不动、tick 采样冻结、统计也不再落盘）。逐个兜住 ⇒ 一个坏假人不拖住其余。
-                SafeRun(_clientList[i]);
+                SafeRun(clients[i]);
                 if (((HUtil32.GetTickCount() - dwRunTick) > 20))
                 {
                     g_nPosition = i;
@@ -145,17 +179,24 @@ namespace BotSrv
             AutoRunTick = HUtil32.GetTickCount();
             if (_autoList.Count > 0)
             {
-                for (int i = 0; i < _autoList.Count; i++)
+                // 快照后迭代：DelClient（收包线程）会并发改 `_autoList`（A6）。
+                AutoPlayRunTime[] autos;
+                lock (_clientSync)
                 {
-                    if ((AutoRunTick - _autoList[i].RunTick) > 800)
+                    autos = new AutoPlayRunTime[_autoList.Count];
+                    _autoList.CopyTo(autos, 0);
+                }
+                for (int i = 0; i < autos.Length; i++)
+                {
+                    if ((AutoRunTick - autos[i].RunTick) > 800)
                     {
-                        _autoList[i].RunTick = HUtil32.GetTickCount();
+                        autos[i].RunTick = HUtil32.GetTickCount();
                         // 压测：进图后挂机定时器会被停掉，这里确保它一直开着（否则假人静止、收不到 +GD）
                         // 修（C6 退回补做，2026-10-11）：原来错用 `_clientList[i]`——循环变量属于 `_autoList`，
                         // 两个列表长度/顺序并不一致（增删各自独立），N 大时 `_clientList[i]` 越界 ⇒
                         // `IndexOutOfRangeException`（1000 档实测 internal_errors 十万级），而且即便不越界也**打错了假人**。
                         // 改为按本条目自己的 SessionId 取回对应假人。
-                        if (_clients.TryGetValue(_autoList[i].SessionId, out RobotPlayer autoRobot))
+                        if (_clients.TryGetValue(autos[i].SessionId, out RobotPlayer autoRobot))
                         {
                             // F4（T-12）：挂机只对**本会话自己那条连接**确认过进世界（SM_LOGON ⇒ `InWorld`）的
                             // 假人执行。旧行为只看跨假人共享的 `MShare.MySelf` ⇒ 未进世界的假人也被挂机、
@@ -174,10 +215,10 @@ namespace BotSrv
             }
         }
 
-        /// <summary>跑一个假人的一轮（可带挂机重臂），异常就地兜住 + 计数 + 前若干条打日志。</summary>
+        /// <summary>跑一个假人的一轮（可带挂机重臂），异常就地兜住 + 分类计数 + 前若干条打日志。</summary>
         private static void SafeRun(RobotPlayer robot, bool ensureAutoPlay = false)
         {
-            try
+            RunBotRound(() =>
             {
                 if (ensureAutoPlay)
                 {
@@ -188,16 +229,27 @@ namespace BotSrv
                 {
                     robot.Run();
                 }
+            }, robot);
+        }
+
+        /// <summary>每假人一轮的异常护栏（自检注入本方法证明 null/index/other 三类各自 +1）。
+        /// `robot` 可为 null（只在自检里），不影响计数。</summary>
+        internal static void RunBotRound(Action round, RobotPlayer robot)
+        {
+            try
+            {
+                round();
             }
             catch (Exception ex)
             {
-                LoadMetrics.InternalError();
+                LoadMetrics.InternalError(BotErrorCensus.RunRoundCategory(ex));
                 if (LoadMetrics.ShouldLogInternalError())
                 {
                     // 打完整 ToString()（含堆栈）——只记 type+message 时定位不到越界点
                     // （2026-10-11 第 4 轮实测：internal_errors 非零但不知道是哪一行）。
-                    LogService.Warn("假人[" + robot.LoginId + "]异常被兜住[" + LoadMetrics.InternalErrors + "]："
-                        + ex.ToString());
+                    string id = robot == null ? "?" : robot.LoginId;
+                    BotErrorCensus.SafeLog(() => LogService.Warn("假人[" + id + "]异常被兜住[" + LoadMetrics.InternalErrors + "]："
+                        + ex.ToString()));
                 }
             }
         }

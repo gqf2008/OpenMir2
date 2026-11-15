@@ -52,6 +52,138 @@ DEFAULT_THRESHOLDS = {
 DEFAULT_ALLOWLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                       "internal-errors-allowlist.json")
 
+# ==== 卡 openmir2-botsrv-recv-thread-nre（总监 2026-11-15）：夹具错误类别普查 ====
+# 口径：宣布「全绿」前必须**枚举完** BotSrv 有能力发出的错误类别并逐类计数；
+# 全绿 = 枚举出的每一类都出现、且为 0（或有卡面评审过的白名单条目）。
+# 本表与 src/BotSrv/BotErrorCensus.cs 的 `Order` **逐字一致**；缺键/多键都判红（枚举漂移可见）。
+ERROR_CENSUS_SCHEMA = 1
+ERROR_CENSUS_CATEGORIES = {
+    # ---- 收包线程（ClientManager.ProcessReviceMessage 的 per-packet catch）----
+    "recv_packet_null":  {"class": "fault", "feeds_internal": True,
+                          "why": "收包线程处理一帧时的 NullReferenceException；N1 窗口 ~3.95 万条就是这一类（以前只进日志）"},
+    "recv_packet_index": {"class": "fault", "feeds_internal": True,
+                          "why": "收包线程的 ArgumentOutOfRange/IndexOutOfRange（ActorList 无锁并发增删）"},
+    "recv_packet_other": {"class": "fault", "feeds_internal": True,
+                          "why": "收包线程的其它异常（未归入上述两类的兜底，出现即需逐个归因）"},
+    # ---- 每假人一轮（ClientManager.SafeRun）----
+    "run_round_null":    {"class": "fault", "feeds_internal": True,
+                          "why": "RobotPlayer.Run/RunAutoPlay 一轮里的 NRE（共享 MShare/ActorList 竞态）"},
+    "run_round_index":   {"class": "fault", "feeds_internal": True,
+                          "why": "一轮里的 AOORE/IOORE（列表并发改/下标失效）"},
+    "run_round_other":   {"class": "fault", "feeds_internal": True,
+                          "why": "一轮里的其它异常（兜底）"},
+    # ---- 整轮调度（AppService.Run 的 runThread）----
+    "run_loop_exception": {"class": "fault", "feeds_internal": True,
+                           "why": "runThread 整轮（含建号/AddClient）抛出的异常；以前建号段异常会静默打死线程"},
+    # ---- socket 事件处理器（fire-and-forget 边界）----
+    "socket_handler_exception": {"class": "fault", "feeds_internal": True,
+                                 "why": "OnConnected/OnDisconnected/OnReceivedData/OnError 处理器抛异常；以前会打死收包线程/进程"},
+    # ---- socket 系统调用（只计非生命周期错误码）----
+    "socket_recv_fault":    {"class": "fault", "feeds_internal": False,
+                             "why": "Receive 的非生命周期 SocketError（reset/refused/timeout 等另计 conn_err_*/conn_lost）"},
+    "socket_send_fault":    {"class": "fault", "feeds_internal": False,
+                             "why": "Send 的非生命周期 SocketError"},
+    "socket_connect_fault": {"class": "fault", "feeds_internal": False,
+                             "why": "Connect/登录连接建立阶段的非生命周期异常"},
+    # ---- 证据链/采集面（失败会静默丢证据）----
+    "metric_flush_failure":         {"class": "fault", "feeds_internal": False,
+                                     "why": "load_stats.ndjson / login_conns.ndjson 写盘失败（证据链断）"},
+    "self_report_write_failure":    {"class": "fault", "feeds_internal": False,
+                                     "why": "MIR2_BOT_SELFREPORT 追加失败（自报证据断）"},
+    "drop_exp_writer_open_failure": {"class": "fault", "feeds_internal": False,
+                                     "why": "掉落/经验采集 writer 打不开"},
+    "drop_exp_writer_write_failure": {"class": "fault", "feeds_internal": False,
+                                      "why": "掉落/经验行写失败"},
+    # ---- 解析/进程级 ----
+    "bag_item_decode_failure": {"class": "fault", "feeds_internal": True,
+                                "why": "SM_BAGITEMS/SM_ADDITEM 解码失败（背包视图与线上不一致）"},
+    "unhandled_exception":     {"class": "fault", "feeds_internal": True,
+                                "why": "AppDomain.UnhandledException（进程级；另落 fatal.ndjson）"},
+    "unobserved_task_exception": {"class": "fault", "feeds_internal": True,
+                                  "why": "TaskScheduler.UnobservedTaskException（fire-and-forget Task）"},
+    "internal_error_unclassified": {"class": "fault", "feeds_internal": True,
+                                    "why": "走了无类别的 LoadMetrics.InternalError()（新增 catch 漏登记 ⇒ 必须归因）"},
+    # ---- 运行期事件（允许非 0；必须出现在报告里）----
+    "teardown_race": {"class": "operational", "feeds_internal": False,
+                      "why": "主动 Disconnect 后 recv/send 撞 ObjectDisposed（预期非 0；不计故障）"},
+}
+
+# 既有的事件计数（不是异常，但属于「错误面」；报告逐项列出，缺失 fail-closed）。
+# 这些字段各自已有独立判据（login_success_pct / conn_lost_steady / E2E），本表只保证「枚举到、读得到」。
+ERROR_CENSUS_OPERATIONAL_STATS = (
+    "conn_refused", "conn_lost",
+    "conn_err_refused", "conn_err_reset", "conn_err_timeout", "conn_err_other",
+    "login_send_failed", "login_send_closed", "register_send_closed",
+    "partial_frames", "chunks_without_hash", "ident_overflow",
+    "logon_misdelivered", "in_world_suppressed",
+    "autoplay_pre_world", "autoplay_skipped_pre_world",
+)
+
+# 卡 openmir2-botsrv-autoplay-nre 已合入 master 39d418816：BeginScene 的三类计数已接线。
+# 总监裁决（2026-11-15）：
+#   · `scene_null_actor_skipped` **每份报告必须显式列出**（是 0 也要列，不许不提）；
+#   · 上界：稳态窗口内 `scene_null_actor_skipped / scene_rounds < 0.5%`，超了必须单独解释；
+#   · 语义：并发下读到正被清尾的槽位，安全跳过，不读、不删、不登记；属「已知且受限」，不等于夹具无错；
+#   · `scene_list_race_skipped` / `scene_index_race_skipped` 是护栏触发的竞态证据，必须为 0。
+SCENE_NULL_UPPER_BOUND_PCT = 0.5
+SCENE_NULL_SEMANTICS = ("并发下读到正被清尾的槽位（收包线程 RemoveAt 的瞬时空位）：安全跳过，"
+                        "不读、不删、不登记；属已知且受限，不等于夹具无错。")
+ERROR_CENSUS_SCENE_STATS = (
+    "scene_null_actor_skipped",
+    "scene_list_race_skipped",
+    "scene_index_race_skipped",
+    "scene_rounds",
+)
+
+DEFAULT_CENSUS_ALLOWLIST_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                             "error-census-allowlist.json")
+CENSUS_ALLOWLIST_ENTRY_FIELDS = ("id", "category", "max", "reason", "owner", "review_ref")
+
+# C# 类别表（源文件）——用于「枚举表两边逐字一致」的契约检查。
+CENSUS_CS_PATH = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "..", "..", "src", "BotSrv", "BotErrorCensus.cs"))
+
+
+def parse_census_contract(text):
+    """解析 C# `BotErrorCensus.cs` 的 Order[] 与 FeedsInternalErrors 集合，和本文件的注册表对账。
+
+    这**不是**行为牙（行为牙在 C# --selftest-error-census 与下面的 evaluate_error_census），
+    而是「新增/改名类别时两边必须同时改」的漂移检测：运行期 JSON 缺键/多键已经会 fail-closed，
+    本检查让漂移在**没有真机窗口**时也能暴露。
+    """
+    errs = []
+    consts = dict(re.findall(r'public const string (\w+)\s*=\s*"([^"]+)";', text))
+    m = re.search(r'private static readonly string\[\] Order\s*=\s*\{(.*?)\};', text, re.S)
+    if not m:
+        errs.append("找不到 Order[]")
+    else:
+        order = []
+        for ident in re.findall(r'\b([A-Z]\w*)\b', m.group(1)):
+            if ident in consts:
+                order.append(consts[ident])
+            else:
+                errs.append("Order 里未知常量 " + ident)
+        py_order = list(ERROR_CENSUS_CATEGORIES.keys())
+        if order != py_order:
+            errs.append("Order 与 Python 类别表不一致：C#=%r Python=%r" % (order, py_order))
+    m2 = re.search(
+        r'private static readonly HashSet<string> FeedsInternalErrors\s*=\s*new HashSet<string>'
+        r'\(StringComparer\.Ordinal\)\s*\{(.*?)\};', text, re.S)
+    if not m2:
+        errs.append("找不到 FeedsInternalErrors")
+    else:
+        feeds = set()
+        for ident in re.findall(r'\b([A-Z]\w*)\b', m2.group(1)):
+            if ident in consts:
+                feeds.add(consts[ident])
+            else:
+                errs.append("FeedsInternalErrors 里未知常量 " + ident)
+        py_feeds = set(k for k, v in ERROR_CENSUS_CATEGORIES.items() if v["feeds_internal"])
+        if feeds != py_feeds:
+            errs.append("feeds_internal 集合不一致：C#=%r Python=%r" % (sorted(feeds), sorted(py_feeds)))
+    return errs
+
+
 
 # A4（2026-11-15）：结论级窗口前提。HoldSec < 360s 的轮次只可当冒烟，不得作为 GREEN 结论。
 # 进世界实测串行载入 ~5–7/s（tier-1000：5s 56 → 75s 425），360s 才够 1000 档走完载入并进入稳态。
@@ -117,6 +249,19 @@ def summarize_tick(stats, count):
     last = stats[-1]
     base = stats[ramp_idx] if ramp_idx is not None else stats[0]
     hist = hist_sub(base, last)
+
+    # 父卡场景并发计数（卡 openmir2-botsrv-autoplay-nre，master 39d418816 已接线）：
+    # 上界分母 = 稳态窗内 BeginScene 实际迭代轮次；null 槽位跳过占比必须 <0.5%。
+    def _scene_delta(key):
+        if key not in base or key not in last:
+            return None
+        return last[key] - base[key]
+
+    _scene_rounds_steady = _scene_delta("scene_rounds")
+    _scene_null_steady = _scene_delta("scene_null_actor_skipped")
+    _scene_null_pct = (round(100.0 * _scene_null_steady / _scene_rounds_steady, 4)
+                       if (_scene_rounds_steady and _scene_null_steady is not None) else None)
+
     out = {
         "samples": sum(hist),
         "samples_total": last.get("tick_samples", 0),
@@ -150,6 +295,31 @@ def summarize_tick(stats, count):
         "internal_errors_ramp": base.get("internal_errors", 0),
         "internal_errors_steady": (last.get("internal_errors", 0) - base.get("internal_errors", 0)),
         "internal_errors_per_bot": (round(last.get("internal_errors", 0) / count, 3) if count else None),
+        # 卡 openmir2-botsrv-recv-thread-nre：错误类别普查（逐类）。缺失必须与 0 区分：
+        # error_census_present=False ⇒ judge 里 fail-closed；不得静默当「全 0」。
+        "error_census": last.get("error_census"),
+        "error_census_present": ("error_census" in last),
+        "error_census_schema": last.get("error_census_schema"),
+        "error_census_operational_counts": {
+            k: last.get(k) for k in ERROR_CENSUS_OPERATIONAL_STATS},
+        "error_census_operational_present": {
+            k: (k in last) for k in ERROR_CENSUS_OPERATIONAL_STATS},
+        # 父卡场景并发计数（已接线）：每份报告必须显式列出；缺失与 0 区分（judge fail-closed）。
+        "scene_null_actor_skipped": last.get("scene_null_actor_skipped"),
+        "scene_null_actor_skipped_present": ("scene_null_actor_skipped" in last),
+        "scene_null_actor_skipped_ramp": base.get("scene_null_actor_skipped"),
+        "scene_null_actor_skipped_steady": _scene_null_steady,
+        "scene_list_race_skipped": last.get("scene_list_race_skipped"),
+        "scene_list_race_skipped_present": ("scene_list_race_skipped" in last),
+        "scene_list_race_skipped_steady": _scene_delta("scene_list_race_skipped"),
+        "scene_index_race_skipped": last.get("scene_index_race_skipped"),
+        "scene_index_race_skipped_present": ("scene_index_race_skipped" in last),
+        "scene_index_race_skipped_steady": _scene_delta("scene_index_race_skipped"),
+        "scene_rounds": last.get("scene_rounds"),
+        "scene_rounds_present": ("scene_rounds" in last),
+        "scene_rounds_steady": _scene_rounds_steady,
+        "scene_null_skip_pct_steady": _scene_null_pct,
+        "scene_null_skip_semantics": SCENE_NULL_SEMANTICS,
         # T-11 登录连接级观测（残余丢包方向定位）：发出登录包后没拿到 529 的连接数，
         # 以及其中 rx_bytes==0（服务端一个字节都没回）的数量；resend 是诊断对照（默认关）。
         "login_conn_total": last.get("login_conn_total", 0),
@@ -531,9 +701,289 @@ def evaluate_internal_errors(tier, allowlist):
     return ev
 
 
+def empty_census_allowlist(path=None, error="census 白名单未提供/缺失 ⇒ 容忍度 0（fail-closed）"):
+    return {"path": path, "available": False, "valid": True, "error": error,
+            "sha256": None, "entries": [], "entries_count": 0}
+
+
+def _validate_census_entry(e, idx):
+    errs = []
+    if not isinstance(e, dict):
+        return ["not an object"]
+    for k in CENSUS_ALLOWLIST_ENTRY_FIELDS:
+        if not isinstance(e.get(k), str) or not e.get(k).strip():
+            errs.append(k)
+    if isinstance(e.get("category"), str) and e["category"].strip() not in ERROR_CENSUS_CATEGORIES:
+        errs.append("category(未登记的类别)")
+    mx = e.get("max")
+    if isinstance(mx, bool) or not isinstance(mx, int) or mx < 0:
+        errs.append("max(>=0 int)")
+    return errs
+
+
+def load_census_allowlist(path):
+    """读「错误类别普查」白名单（仓库文件，随卡面 patch 评审）。
+
+    与 internal-errors-allowlist 的分工：
+      · feeds_internal=True 的类别照旧可由 internal-errors-allowlist 豁免（同一个异常类型白名单）；
+      · 其余 fault 类别（socket/证据链等）只能由本文件按 `category + max` 豁免；
+      · 文件缺失/空/条目非法 ⇒ 容忍度 0。`teardown_race` 是 operational，不需要豁免。
+    """
+    if not path:
+        return empty_census_allowlist(path, "census allowlist 路径为空 ⇒ 容忍度 0")
+    if not os.path.isfile(path):
+        return empty_census_allowlist(path, "census 白名单文件不存在 ⇒ 容忍度 0")
+    try:
+        with open(path, "rb") as f:
+            raw = f.read()
+    except OSError as ex:
+        return empty_census_allowlist(path, "census 白名单读不了：%s ⇒ 容忍度 0" % ex)
+    out = {"path": path, "available": True, "valid": True, "error": None,
+           "sha256": hashlib.sha256(raw).hexdigest(), "entries": [], "entries_count": 0}
+    try:
+        doc = json.loads(raw.decode("utf-8-sig"))
+    except (ValueError, UnicodeDecodeError) as ex:
+        out["valid"] = False
+        out["error"] = "census 白名单 JSON 非法：%s ⇒ 容忍度 0" % ex
+        return out
+    entries = doc.get("entries") if isinstance(doc, dict) else None
+    if not isinstance(entries, list):
+        out["valid"] = False
+        out["error"] = "census 白名单缺 entries[] ⇒ 容忍度 0"
+        return out
+    good = []
+    for i, e in enumerate(entries):
+        errs = _validate_census_entry(e, i)
+        if errs:
+            out["valid"] = False
+            prev = out["error"] + "；" if out["error"] else ""
+            out["error"] = prev + ("条目 #%d 非法（%s），已忽略" % (i, ", ".join(errs)))
+            continue
+        good.append({
+            "id": e["id"].strip(),
+            "category": e["category"].strip(),
+            "max": int(e["max"]),
+            "reason": e["reason"].strip(),
+            "owner": e["owner"].strip(),
+            "review_ref": e["review_ref"].strip(),
+        })
+    out["entries"] = good
+    out["entries_count"] = len(good)
+    return out
+
+
+def _census_allowlist_hit(entries, category):
+    for e in entries:
+        if e.get("category") == category:
+            return e
+    return None
+
+
+def evaluate_error_census(tier, allowlist=None, internal_excused=False,
+                          scene_null_explanation="",
+                          scene_null_upper_bound_pct=SCENE_NULL_UPPER_BOUND_PCT):
+    """逐类核对夹具错误面（卡 openmir2-botsrv-recv-thread-nre）。
+
+    判定（全部 fail-closed）：
+      1. `error_census` 对象必须存在、schema 匹配；
+      2. 类别集合必须与 ERROR_CENSUS_CATEGORIES **完全相等**：缺键 = 旧版本/漏接线，多键 = 未登记的新类别；
+      3. 每个 fault 类别必须为 0；>0 时只有两种豁免：feeds_internal 且 internal_errors 已被
+         internal-errors-allowlist 整体豁免（同一份评审），或 census 白名单按 category+max 登记；
+      4. `internal_errors` 必须等于 Σ(feeds_internal 类别)——任何绕过分类入口的计数都会被这条等式抓出；
+      5. 既有事件计数（ERROR_CENSUS_OPERATIONAL_STATS）必须全部出现在 load_stats 里（缺失即枚举不完整）；
+      6. 父卡（master 39d418816）四个场景字段必须全部出现：
+         · `scene_null_actor_skipped` **每份报告显式列出**（0 也列）；稳态占比必须 < 上界（默认 0.5%），
+           超了必须用 `scene_null_explanation` 单独解释，否则 RED；
+         · `scene_list_race_skipped` / `scene_index_race_skipped` 是竞态证据，必须为 0；
+         · `scene_rounds` 是上界分母（BeginScene 实际迭代轮次），缺失则无法判上界 ⇒ RED。
+    `operational` 类别允许非 0，但必须逐类出现在报告里。
+    """
+    ev = {
+        "schema_expected": ERROR_CENSUS_SCHEMA,
+        "present": bool(tier.get("error_census_present")),
+        "schema": tier.get("error_census_schema"),
+        "categories": [],
+        "operational": [],
+        "parent_scene": [],
+        "scene_null": None,
+        "fault_total": 0,
+        "fault_categories_nonzero": [],
+        "internal_errors": tier.get("internal_errors"),
+        "internal_census_sum": None,
+        "allowlist": {
+            "path": (allowlist or {}).get("path"),
+            "sha256": (allowlist or {}).get("sha256"),
+            "available": bool((allowlist or {}).get("available")),
+            "valid": bool((allowlist or {}).get("valid", True)),
+            "error": (allowlist or {}).get("error"),
+            "entries": (allowlist or {}).get("entries", []),
+            "entries_count": (allowlist or {}).get("entries_count", 0),
+        },
+        "fails": [],
+        "review_note": ("类别表与 src/BotSrv/BotErrorCensus.cs 的 Order 必须逐字一致；"
+                        "白名单随卡面 patch 评审，运行时没有新增条目的开关；"
+                        "父卡 scene_* 计数已接线，scene_null_actor_skipped 每份报告必列"),
+    }
+    if not ev["present"]:
+        ev["fails"].append("load_stats 缺 error_census 字段（错误类别无法逐类核对 ⇒ fail-closed）")
+    else:
+        if tier.get("error_census_schema") != ERROR_CENSUS_SCHEMA:
+            ev["fails"].append("error_census_schema=%s ≠ %d（口径变更必须同步两边）"
+                               % (tier.get("error_census_schema"), ERROR_CENSUS_SCHEMA))
+        actual = tier.get("error_census")
+        if not isinstance(actual, dict):
+            ev["fails"].append("error_census 不是 JSON 对象 ⇒ fail-closed")
+            actual = {}
+        missing = [c for c in ERROR_CENSUS_CATEGORIES if c not in actual]
+        extra = [k for k in actual if k not in ERROR_CENSUS_CATEGORIES]
+        if missing:
+            ev["fails"].append("error_census 缺类别：" + ", ".join(missing) +
+                               "（枚举表与实现漂移 ⇒ fail-closed）")
+        if extra:
+            ev["fails"].append("error_census 含未登记类别：" + ", ".join(extra) +
+                               "（新增错误类别必须登记到两边）")
+        entries = (allowlist or {}).get("entries", [])
+        for cat, meta in ERROR_CENSUS_CATEGORIES.items():
+            if cat not in actual:
+                continue
+            v = actual.get(cat)
+            row = {"category": cat, "class": meta["class"],
+                   "feeds_internal": bool(meta["feeds_internal"]),
+                   "count": v, "status": "zero", "why": meta["why"]}
+            valid = isinstance(v, int) and not isinstance(v, bool) and v >= 0
+            if not valid:
+                row["status"] = "invalid"
+                ev["fails"].append("error_census.%s 不是非负整数（%r）⇒ fail-closed" % (cat, v))
+            elif meta["class"] == "fault":
+                ev["fault_total"] += v
+                if v > 0:
+                    if meta["feeds_internal"] and internal_excused:
+                        row["status"] = "excused_by_internal_allowlist"
+                    else:
+                        hit = _census_allowlist_hit(entries, cat)
+                        if hit is not None and v <= hit["max"]:
+                            row["status"] = "excused_by_census_allowlist"
+                            row["allow_entry_id"] = hit["id"]
+                            row["allow_max"] = hit["max"]
+                        else:
+                            row["status"] = "nonzero_fault"
+                            ev["fault_categories_nonzero"].append(cat)
+                            why = (" 超过 census 白名单 max=%d（%s）" % (hit["max"], hit["id"])
+                                   if hit is not None else " 未登记（fault 类别默认容忍度 0）")
+                            ev["fails"].append("error_census 类别 %s=%d > 0%s" % (cat, v, why))
+            else:
+                row["status"] = "operational"
+            ev["categories"].append(row)
+
+        # internal_errors 对账：必须等于 Σ(feeds_internal 类别)。
+        if not tier.get("internal_errors_present", False):
+            ev["fails"].append("load_stats 缺 internal_errors 字段（无法与分类计数对账 ⇒ fail-closed）")
+        else:
+            total = tier.get("internal_errors")
+            census_sum = 0
+            for row in ev["categories"]:
+                if row["feeds_internal"] and isinstance(row["count"], int) and not isinstance(row["count"], bool):
+                    census_sum += row["count"]
+            ev["internal_census_sum"] = census_sum
+            if total is None:
+                ev["fails"].append("internal_errors=None（缺计数 ⇒ fail-closed）")
+            elif total != census_sum:
+                ev["fails"].append(
+                    "internal_errors %s ≠ 已分类故障之和 %s（存在未分类/绕过分类入口的计数）"
+                    % (total, census_sum))
+
+    # 既有事件计数：必须出现（缺失 = 枚举不完整）。
+    ops = tier.get("error_census_operational_counts") or {}
+    ops_present = tier.get("error_census_operational_present") or {}
+    for key in ERROR_CENSUS_OPERATIONAL_STATS:
+        present = bool(ops_present.get(key))
+        ev["operational"].append({"counter": key, "present": present, "count": ops.get(key)})
+        if not present:
+            ev["fails"].append("load_stats 缺既有事件计数 %s（错误面枚举不完整 ⇒ fail-closed）" % key)
+
+    # 父卡场景并发计数（master 39d418816 已接线）：四个字段必须全部出现。
+    # scene_null_actor_skipped 每份报告显式列出（0 也列）；上界见 SCENE_NULL_UPPER_BOUND_PCT。
+    scene_last = {k: tier.get(k) for k in ERROR_CENSUS_SCENE_STATS}
+    scene_present = {
+        "scene_null_actor_skipped": bool(tier.get("scene_null_actor_skipped_present")),
+        "scene_list_race_skipped": bool(tier.get("scene_list_race_skipped_present")),
+        "scene_index_race_skipped": bool(tier.get("scene_index_race_skipped_present")),
+        "scene_rounds": bool(tier.get("scene_rounds_present")),
+    }
+    for key in ERROR_CENSUS_SCENE_STATS:
+        if not scene_present[key]:
+            ev["fails"].append("load_stats 缺 scene 计数 %s（父卡已接线；每份报告必须出现）⇒ fail-closed"
+                               % key)
+    null_last = scene_last["scene_null_actor_skipped"]
+    null_steady = tier.get("scene_null_actor_skipped_steady")
+    rounds_steady = tier.get("scene_rounds_steady")
+    scene_null = {
+        "counter": "scene_null_actor_skipped",
+        "count": null_last,
+        "steady": null_steady,
+        "scene_rounds": scene_last["scene_rounds"],
+        "scene_rounds_steady": rounds_steady,
+        "pct_steady": tier.get("scene_null_skip_pct_steady"),
+        "upper_bound_pct": scene_null_upper_bound_pct,
+        "semantics": SCENE_NULL_SEMANTICS,
+        "status": "missing",
+        "explanation": scene_null_explanation or "",
+    }
+    if not scene_present["scene_null_actor_skipped"] or not scene_present["scene_rounds"]:
+        scene_null["status"] = "missing"
+    elif null_steady is None or rounds_steady is None:
+        scene_null["status"] = "insufficient_window"
+        if (null_last or 0) > 0:
+            ev["fails"].append("scene_null_actor_skipped 累计 %s > 0 但稳态窗口算不出"
+                               "（base 行缺字段）⇒ fail-closed" % null_last)
+    elif null_steady < 0 or rounds_steady < 0:
+        scene_null["status"] = "invalid"
+        ev["fails"].append("scene_null/scene_rounds 稳态倒退了（last < base）⇒ fail-closed")
+    elif rounds_steady == 0:
+        if null_steady > 0:
+            scene_null["status"] = "rounds_missing"
+            ev["fails"].append("scene_null_actor_skipped 稳态 %d > 0 但 scene_rounds=0"
+                               "（分母缺 ⇒ fail-closed）" % null_steady)
+        else:
+            scene_null["status"] = "no_rounds"
+    else:
+        pct = round(100.0 * null_steady / rounds_steady, 4)
+        scene_null["pct_steady"] = pct
+        if pct < scene_null_upper_bound_pct:
+            scene_null["status"] = "within_upper_bound"
+        elif scene_null["explanation"]:
+            scene_null["status"] = "over_upper_bound_explained"
+        else:
+            scene_null["status"] = "over_upper_bound"
+            ev["fails"].append(
+                "scene_null_actor_skipped 稳态占比 %.4f%% ≥ %.4g%%（%d/%d 轮）⇒ 需单独解释"
+                % (pct, scene_null_upper_bound_pct, null_steady, rounds_steady))
+    ev["scene_null"] = scene_null
+    for key in ERROR_CENSUS_SCENE_STATS:
+        row = {"counter": key, "present": scene_present[key], "count": scene_last[key],
+               "steady": tier.get(key + "_steady")}
+        if key == "scene_null_actor_skipped":
+            row["status"] = scene_null["status"]
+        elif key in ("scene_list_race_skipped", "scene_index_race_skipped"):
+            v = scene_last[key]
+            if not scene_present[key]:
+                row["status"] = "missing"
+            elif isinstance(v, int) and not isinstance(v, bool) and v == 0:
+                row["status"] = "zero"
+            else:
+                row["status"] = "nonzero_fault"
+                ev["fails"].append("%s=%r > 0（父卡护栏触发的竞态证据，必须为 0）" % (key, v))
+        else:
+            row["status"] = "denominator" if scene_present[key] else "missing"
+        ev["parent_scene"].append(row)
+    ev["complete"] = not ev["fails"]
+    return ev
+
+
 def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_tick=False,
           login_threshold=None, world_threshold=None, bots_runtime=None,
-          allowlist=None):
+          allowlist=None, census_allowlist=None,
+          scene_null_explanation="", scene_null_upper_bound_pct=SCENE_NULL_UPPER_BOUND_PCT):
     """按 §6 M5 的判据给单档结论（掉线只看稳态窗）。
 
     `criteria` 只选"要比哪几条阈值"，**不能用它把"缺 tick 样本"变成绿灯**（2026-10-10 的教训：
@@ -576,8 +1026,19 @@ def judge(tier, thresholds, criteria=("login", "conn", "tick"), allow_missing_ti
     # A1（2026-11-15）：internal_errors 判据。默认 0 容忍；唯一放宽通道是按类别评审的白名单
     # （未列入/超 max/无法归因/白名单缺失 ⇒ 都按容忍度 0 处理，fail-closed）。
     tier["internal_error_allowlist"] = evaluate_internal_errors(tier, allowlist)
+    # 卡 openmir2-botsrv-recv-thread-nre：internal_errors 只是「总量」，census 是「逐类」。
+    # 两者一起才满足总监规则「枚举出的每一类都为 0」；internal 判据默认包含 census。
+    # 注意：internal_errors=0 时 evaluate_internal_errors 的 excused=True 只表示「无需豁免」，
+    # **不能**拿它去豁免一个非 0 的 feeds_internal 类别（否则报告状态会误导）；必须 total > 0。
+    _ie = tier["internal_error_allowlist"]
+    tier["error_census"] = evaluate_error_census(
+        tier, census_allowlist,
+        internal_excused=bool(_ie.get("excused")) and bool(_ie.get("total")),
+        scene_null_explanation=scene_null_explanation,
+        scene_null_upper_bound_pct=scene_null_upper_bound_pct)
     if "internal" in criteria:
         fails.extend(tier["internal_error_allowlist"]["fails"])
+        fails.extend(tier["error_census"]["fails"])
     # A2（2026-11-15）：BotSrv 崩溃判据。退出码只认「进程自己退出」；门禁 Stop-Process 的不算。
     tier["botsrv"] = bots_runtime
     if bots_runtime:
@@ -636,6 +1097,8 @@ def cmd_summarize(args):
     # A1 逃生口：白名单从仓库文件读（默认 tools/botload/internal-errors-allowlist.json）；
     # 缺失/为空/非法 ⇒ 容忍度 0。路径与 sha256 进报告，便于评审核对运行时没有被换文件。
     allowlist = load_allowlist(args.allowlist)
+    # 卡 openmir2-botsrv-recv-thread-nre：错误类别普查白名单（文件缺失/为空 ⇒ 容忍度 0）。
+    census_allowlist = load_census_allowlist(args.census_allowlist)
     tier["count"] = args.count
     tier["stagger_ms"] = args.stagger_ms
     tier["hold_sec"] = args.hold_sec
@@ -649,11 +1112,16 @@ def cmd_summarize(args):
     login_thr = args.login_threshold if args.login_threshold is not None else default_login_threshold(args.count)
     judge(tier, DEFAULT_THRESHOLDS, criteria, allow_missing_tick=args.allow_missing_tick,
           login_threshold=login_thr, world_threshold=args.world_threshold,
-          bots_runtime=bots_runtime, allowlist=allowlist)
+          bots_runtime=bots_runtime, allowlist=allowlist,
+          census_allowlist=census_allowlist,
+          scene_null_explanation=args.scene_null_explanation,
+          scene_null_upper_bound_pct=args.scene_null_upper_bound_pct)
     # 总监硬规矩（2026-11-15）：每份结论必须显式列 login / no_resp / internal_errors / OOM。
     # None 一律表示「证据缺」，不得被下游当成 0。
     diag = tier.get("login_conn_diag") or {}
     ie_al = tier.get("internal_error_allowlist") or {}
+    ec = tier.get("error_census") or {}
+    _scene_null = ec.get("scene_null") or {}
     tier["required_fields"] = {
         "login_success_pct": tier.get("login_success_pct"),
         "login_conn_no_resp": (diag.get("no_resp") if diag else None),
@@ -664,8 +1132,27 @@ def cmd_summarize(args):
         "internal_errors_excused": ie_al.get("excused"),
         "internal_errors_allowlist_budget": ie_al.get("budget"),
         "internal_errors_allowlist_sha256": ie_al.get("sha256"),
+        # 卡 openmir2-botsrv-recv-thread-nre：逐类普查的准入字段。
+        "error_census_complete": ec.get("complete"),
+        "error_census_fault_total": ec.get("fault_total"),
+        "error_census_nonzero": ec.get("fault_categories_nonzero"),
+        "error_census_categories_checked": len(ec.get("categories") or []),
+        "error_census_allowlist_sha256": (ec.get("allowlist") or {}).get("sha256"),
+        # 总监 2026-11-15：scene_null_actor_skipped 每份报告必须显式列出（0 也列），
+        # 并给稳态占比与上界；语义固定写死，避免报告措辞漂移。
+        "scene_null_actor_skipped": _scene_null.get("count"),
+        "scene_null_actor_skipped_steady": _scene_null.get("steady"),
+        "scene_null_scene_rounds_steady": _scene_null.get("scene_rounds_steady"),
+        "scene_null_skip_pct_steady": _scene_null.get("pct_steady"),
+        "scene_null_skip_upper_bound_pct": _scene_null.get("upper_bound_pct"),
+        "scene_null_skip_status": _scene_null.get("status"),
+        "scene_null_skip_explanation": _scene_null.get("explanation"),
+        "scene_null_skip_semantics": _scene_null.get("semantics"),
+        "scene_list_race_skipped": tier.get("scene_list_race_skipped"),
+        "scene_index_race_skipped": tier.get("scene_index_race_skipped"),
         "verdict": tier["verdict"],
-        "note": "四项必列字段；None = 证据缺（不得当作 0）；白名单路径/sha256 见 internal_error_allowlist",
+        "note": ("四项必列字段 + 错误类别普查 + scene_null 上界；None = 证据缺（不得当作 0）；"
+                 "scene_null_actor_skipped 是 0 也必须显式列出；不得写「夹具无错」"),
     }
     text = json.dumps(tier, ensure_ascii=False, indent=2)
     if args.out:
@@ -904,11 +1391,67 @@ def cmd_selftest(_args):
 
     # 6) A1（2026-11-15）：internal_errors 判据 —— 默认 0 容忍；有异常必红；0 不变绿；缺字段 fail-closed。
     i3 = ("login", "conn", "tick", "internal")
+    # 卡 openmir2-botsrv-recv-thread-nre：内部判据现在含「错误类别普查」。给所有 internal 用例提供
+    # 完整的 census 对象（缺键会让旧用例变成 fail-closed 的噪声，掩盖真正要测的判定）。
+    def _census(**over):
+        d = {k: 0 for k in ERROR_CENSUS_CATEGORIES}
+        d.update(over)
+        return d
+
+    def _ops(**over):
+        d = {k: 0 for k in ERROR_CENSUS_OPERATIONAL_STATS}
+        d.update(over)
+        return d
+
+    def _with_census(row, internal=None, census=None, ops=None, schema=ERROR_CENSUS_SCHEMA,
+                     scene_null=0, scene_list=0, scene_index=0, scene_rounds=100):
+        r = dict(row)
+        r["error_census"] = _census(**(census or {}))
+        r["error_census_schema"] = schema
+        for _k in ERROR_CENSUS_OPERATIONAL_STATS:
+            r[_k] = (ops or {}).get(_k, 0)
+        r["scene_null_actor_skipped"] = scene_null
+        r["scene_list_race_skipped"] = scene_list
+        r["scene_index_race_skipped"] = scene_index
+        r["scene_rounds"] = scene_rounds
+        if internal is not None:
+            r["internal_errors"] = internal
+        return r
+
+    def _census_tier(internal=0, census=None, ops=None, drop_census=False, drop_cat=None,
+                     extra_cat=None, schema=ERROR_CENSUS_SCHEMA,
+                     scene_null=0, scene_list=0, scene_index=0, scene_rounds=100,
+                     drop_scene=None):
+        # 三行：row0 = ramp-complete 基线（login 100，hist 全 0）；row1 = 中间行；row2 = last。
+        # 稳态窗口 = row2 - row0，所以 scene_null 的占比 = scene_null / scene_rounds。
+        rows = [
+            _with_census(stats[0], internal=0, scene_rounds=0),
+            _with_census(dict(stats[1], t_ms=2000, hist=list(hist2),
+                              tick_sum_ms=5000, tick_max_ms=5), internal=internal,
+                         census=census, ops=ops, schema=schema,
+                         scene_rounds=scene_rounds // 2),
+            _with_census(dict(stats[1], t_ms=3000, hist=list(hist2),
+                              tick_sum_ms=5000, tick_max_ms=5), internal=internal,
+                         census=census, ops=ops, schema=schema, scene_null=scene_null,
+                         scene_list=scene_list, scene_index=scene_index,
+                         scene_rounds=scene_rounds),
+        ]
+        if drop_census:
+            rows[2].pop("error_census", None)
+        if drop_cat:
+            rows[2]["error_census"].pop(drop_cat, None)
+        if extra_cat:
+            rows[2]["error_census"][extra_cat] = 0
+        if drop_scene:
+            rows[2].pop(drop_scene, None)
+        return summarize_tick(rows, 100)
+
     # 干净的 tick 分布（hist2 = 全部 5ms，P99=5）：让下面只由 internal/崩溃/窗口决定 verdict。
-    stats_ie_ok = [dict(stats[0], internal_errors=0),
-                   dict(stats[1], internal_errors=0, hist=list(hist2), tick_max_ms=5)]
-    stats_ie_bad = [dict(stats[0], internal_errors=0),
-                    dict(stats[1], internal_errors=1061, hist=list(hist2), tick_max_ms=5)]
+    stats_ie_ok = [_with_census(stats[0], internal=0),
+                   _with_census(dict(stats[1], hist=list(hist2), tick_max_ms=5), internal=0)]
+    stats_ie_bad = [_with_census(stats[0], internal=0),
+                    _with_census(dict(stats[1], hist=list(hist2), tick_max_ms=5),
+                                 internal=1061, census={"recv_packet_null": 1061})]
     t_ie_ok = judge(summarize_tick(stats_ie_ok, 100), DEFAULT_THRESHOLDS, i3)
     t_ie_bad = judge(summarize_tick(stats_ie_bad, 100), DEFAULT_THRESHOLDS, i3)
     expect(t_ie_ok["verdict"] == "GREEN", "internal_errors=0 不得把正常轮次翻红")
@@ -929,8 +1472,10 @@ def cmd_selftest(_args):
          "count": 2, "sample": "..."}]}
 
     def _with_ie(total, diag):
-        _t = summarize_tick([dict(stats[0], internal_errors=0),
-                             dict(stats[1], internal_errors=total, hist=list(hist2), tick_max_ms=5)], 100)
+        _t = summarize_tick([_with_census(stats[0], internal=0),
+                             _with_census(dict(stats[1], hist=list(hist2), tick_max_ms=5),
+                                          internal=total,
+                                          census={"recv_packet_null": total})], 100)
         if diag is not None:
             _t["internal_error_diag"] = diag
         return _t
@@ -1008,6 +1553,171 @@ def cmd_selftest(_args):
         expect(summarize_internal_error_log(os.path.join(_td2, "nope.log"))["available"] is False,
                "bots.log 不存在时不得假装有类型")
 
+    # 6c) 卡 openmir2-botsrv-recv-thread-nre：错误类别普查 —— 枚举表 vs 实现、逐类 0、对账、白名单。
+    _census_empty = {"path": "<selftest>", "available": True, "valid": True, "error": None,
+                     "sha256": "0" * 64, "entries": [], "entries_count": 0}
+    # 6c-0) 跨语言契约：C# BotErrorCensus.cs 的 Order/FeedsInternalErrors 必须与本表逐字一致。
+    #        没有真机窗口也能发现的「枚举漂移」；改坏 C# 常量/删 Order 一项都必须报错（负例）。
+    expect(os.path.isfile(CENSUS_CS_PATH), "C# 类别表源文件必须存在：" + CENSUS_CS_PATH)
+    if os.path.isfile(CENSUS_CS_PATH):
+        with open(CENSUS_CS_PATH, encoding="utf-8-sig") as _csf:
+            _cs_text = _csf.read()
+        _cs_errs = parse_census_contract(_cs_text)
+        expect(not _cs_errs, "C#/Python 错误类别表必须逐字一致：" + "; ".join(_cs_errs))
+        _cs_bad_name = _cs_text.replace(
+            'public const string RecvPacketNull = "recv_packet_null";',
+            'public const string RecvPacketNull = "recv_packet_null_typo";')
+        expect(_cs_bad_name != _cs_text and bool(parse_census_contract(_cs_bad_name)),
+               "契约检查有牙：改坏 C# 类别名必须报错")
+        _cs_bad_order = _cs_text.replace("RecvPacketNull, RecvPacketIndex", "RecvPacketNull")
+        expect(_cs_bad_order != _cs_text and bool(parse_census_contract(_cs_bad_order)),
+               "契约检查有牙：删 Order 一类必须报错")
+    t_c_ok = judge(_census_tier(internal=0), DEFAULT_THRESHOLDS, i3,
+                   census_allowlist=_census_empty)
+    _ev = t_c_ok.get("error_census") or {}
+    expect(t_c_ok["verdict"] == "GREEN", "枚举类别全 0 + 对账一致 ⇒ 不得翻红")
+    expect(_ev.get("complete") is True, "complete=True 才算普查通过")
+    expect(len(_ev.get("categories") or []) == len(ERROR_CENSUS_CATEGORIES),
+           "报告必须逐类列出（categories 数 = 枚举表大小）")
+    expect(all(r["count"] == 0 for r in _ev.get("categories", []) if r["class"] == "fault"),
+           "全 0 用例里 fault 类别计数必须都是 0")
+    expect(len(_ev.get("operational") or []) == len(ERROR_CENSUS_OPERATIONAL_STATS),
+           "既有事件计数必须逐项出现在报告里（枚举完整）")
+    _scene_null = _ev.get("scene_null") or {}
+    expect(_scene_null.get("count") == 0
+           and _scene_null.get("status") in ("no_rounds", "within_upper_bound"),
+           "scene_null_actor_skipped 必须在报告显式列出（0 也列）")
+    expect(len(_ev.get("parent_scene") or []) == len(ERROR_CENSUS_SCENE_STATS),
+           "父卡 scene 计数必须逐项出现在报告里")
+    expect(all(r["present"] for r in _ev.get("parent_scene", [])),
+           "父卡四个 scene 字段必须全部接线（缺失 fail-closed）")
+
+    # ① fault 类别非 0 ⇒ RED 且点名类别（不是只数总量）
+    t_c_bad = judge(_census_tier(internal=1, census={"recv_packet_null": 1}),
+                    DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    expect(t_c_bad["verdict"] == "RED" and any("recv_packet_null=1" in f for f in t_c_bad["fails"]),
+           "recv_packet_null=1 必须判红并点名类别")
+    expect("recv_packet_null" in ((t_c_bad.get("error_census") or {}).get("fault_categories_nonzero") or []),
+           "报告必须列出非 0 的 fault 类别名")
+
+    # ② 对账：census 1 但 internal_errors=0 ⇒ RED（存在绕过分类入口的计数/漏同步）
+    t_c_cons = judge(_census_tier(internal=0, census={"recv_packet_null": 1}),
+                     DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    expect(t_c_cons["verdict"] == "RED" and any("已分类故障之和" in f for f in t_c_cons["fails"]),
+           "internal_errors 与分类之和不一致 ⇒ fail-closed")
+    _cons_row = next(r for r in (t_c_cons.get("error_census") or {}).get("categories", [])
+                     if r["category"] == "recv_packet_null")
+    expect(_cons_row["status"] == "nonzero_fault",
+           "internal_errors=0 时不得把非 0 的 feeds_internal 类别标成 excused（状态必须诚实）")
+
+    # ③ 缺类别 / 多类别 / 缺整个对象 ⇒ 三项都 RED（枚举漂移可见）
+    t_c_miss = judge(_census_tier(drop_cat="recv_packet_null"), DEFAULT_THRESHOLDS, i3,
+                     census_allowlist=_census_empty)
+    expect(t_c_miss["verdict"] == "RED" and any("缺类别" in f for f in t_c_miss["fails"]),
+           "census 缺类别必须 fail-closed")
+    t_c_extra = judge(_census_tier(extra_cat="brand_new_fault"), DEFAULT_THRESHOLDS, i3,
+                      census_allowlist=_census_empty)
+    expect(t_c_extra["verdict"] == "RED" and any("未登记类别" in f for f in t_c_extra["fails"]),
+           "census 多出未登记类别必须 fail-closed")
+    t_c_none = judge(_census_tier(drop_census=True), DEFAULT_THRESHOLDS, i3,
+                     census_allowlist=_census_empty)
+    expect(t_c_none["verdict"] == "RED" and any("缺 error_census" in f for f in t_c_none["fails"]),
+           "缺 error_census 对象必须 fail-closed（不得当全 0）")
+
+    # ④ operational 类别允许非 0（但必须在报告里逐类出现）
+    t_c_op = judge(_census_tier(internal=0, census={"teardown_race": 5}),
+                   DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _op_row = next(r for r in (t_c_op.get("error_census") or {}).get("categories", [])
+                   if r["category"] == "teardown_race")
+    expect(t_c_op["verdict"] == "GREEN" and _op_row["count"] == 5
+           and _op_row["status"] == "operational",
+           "teardown_race 是运行期事件：非 0 不得翻红，但必须列出计数")
+
+    # ⑤ census 白名单：category+max 内不红；超 max / 未登记 ⇒ RED（默认容忍度 0）
+    def _cal(cat, mx):
+        return {"path": "<selftest>", "available": True, "valid": True, "error": None,
+                "sha256": "1" * 64, "entries_count": 1,
+                "entries": [{"id": "selftest-" + cat, "category": cat, "max": mx,
+                             "reason": "selftest", "owner": "selftest", "review_ref": "selftest"}]}
+    t_c_al_ok = judge(_census_tier(internal=0, census={"metric_flush_failure": 1}),
+                      DEFAULT_THRESHOLDS, i3, census_allowlist=_cal("metric_flush_failure", 1))
+    expect(t_c_al_ok["verdict"] == "GREEN", "census 白名单内 1/1 不得翻红")
+    _al_row = next(r for r in (t_c_al_ok.get("error_census") or {}).get("categories", [])
+                   if r["category"] == "metric_flush_failure")
+    expect(_al_row["status"] == "excused_by_census_allowlist" and _al_row["allow_max"] == 1,
+           "census 白名单命中必须列出 category/count/max")
+    t_c_al_over = judge(_census_tier(internal=0, census={"metric_flush_failure": 2}),
+                        DEFAULT_THRESHOLDS, i3, census_allowlist=_cal("metric_flush_failure", 1))
+    expect(t_c_al_over["verdict"] == "RED" and any("超过 census 白名单" in f
+                                                   for f in t_c_al_over["fails"]),
+           "census 白名单内 2 > max 1 必须 RED")
+    _bad_cal = {"path": "<selftest>", "available": False, "valid": True, "error": "missing",
+                "sha256": None, "entries": [], "entries_count": 0}
+    t_c_al_missing = judge(_census_tier(internal=0, census={"metric_flush_failure": 1}),
+                           DEFAULT_THRESHOLDS, i3, census_allowlist=_bad_cal)
+    expect(t_c_al_missing["verdict"] == "RED", "census 白名单缺文件/为空 ⇒ 容忍度 0")
+
+    # ⑥ 既有事件计数缺失 ⇒ RED（枚举不完整，不得静默跳过）
+    _t_opmiss = _census_tier(internal=0)
+    _t_opmiss["error_census_operational_present"]["conn_lost"] = False
+    _t_opmiss["error_census_operational_counts"]["conn_lost"] = None
+    t_c_opmiss = judge(_t_opmiss, DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    expect(t_c_opmiss["verdict"] == "RED"
+           and any("缺既有事件计数 conn_lost" in f for f in t_c_opmiss["fails"]),
+           "load_stats 缺既有事件计数必须 fail-closed")
+
+    # ⑦ 父卡场景计数（master 39d418816 已接线）：每份报告必列 scene_null；上界 <0.5%；list/index 必须 0。
+    t_scene_zero = judge(_census_tier(scene_null=0, scene_rounds=1000),
+                         DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _s0 = (t_scene_zero.get("error_census") or {}).get("scene_null") or {}
+    expect(t_scene_zero["verdict"] == "GREEN" and _s0.get("count") == 0
+           and _s0.get("status") == "within_upper_bound",
+           "scene_null=0 必须 GREEN 且报告显式列出 0（不许不提）")
+    t_scene_low = judge(_census_tier(scene_null=3, scene_rounds=1000),
+                        DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _s3 = (t_scene_low.get("error_census") or {}).get("scene_null") or {}
+    expect(t_scene_low["verdict"] == "GREEN" and _s3.get("pct_steady") == 0.3
+           and _s3.get("status") == "within_upper_bound",
+           "稳态 3/1000 = 0.3% < 0.5% ⇒ GREEN 且列出占比")
+    # 恰好 0.5%：判据是严格 <，所以 0.5% 已超界，必须单独解释
+    t_scene_edge = judge(_census_tier(scene_null=5, scene_rounds=1000),
+                         DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    expect(t_scene_edge["verdict"] == "RED"
+           and any("需单独解释" in f for f in t_scene_edge["fails"]),
+           "稳态 5/1000 = 0.5% 不满足 <0.5% ⇒ 必须 RED（需单独解释）")
+    t_scene_edge_x = judge(_census_tier(scene_null=5, scene_rounds=1000),
+                           DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty,
+                           scene_null_explanation="已知且受限：并发清理尾槽的瞬时空位")
+    _s5x = (t_scene_edge_x.get("error_census") or {}).get("scene_null") or {}
+    expect(t_scene_edge_x["verdict"] == "GREEN"
+           and _s5x.get("status") == "over_upper_bound_explained"
+           and "并发清理尾槽" in (_s5x.get("explanation") or ""),
+           "超界但给了单独解释 ⇒ 不判红，且解释进报告")
+    t_scene_high = judge(_census_tier(scene_null=6, scene_rounds=1000),
+                         DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    expect(t_scene_high["verdict"] == "RED",
+           "稳态 6/1000 = 0.6% 且无解释 ⇒ RED")
+    t_scene_list = judge(_census_tier(scene_list=1), DEFAULT_THRESHOLDS, i3,
+                         census_allowlist=_census_empty)
+    expect(t_scene_list["verdict"] == "RED"
+           and any("scene_list_race_skipped=1" in f for f in t_scene_list["fails"]),
+           "scene_list_race_skipped > 0（护栏触发竞态）⇒ RED")
+    t_scene_index = judge(_census_tier(scene_index=1), DEFAULT_THRESHOLDS, i3,
+                          census_allowlist=_census_empty)
+    expect(t_scene_index["verdict"] == "RED"
+           and any("scene_index_race_skipped=1" in f for f in t_scene_index["fails"]),
+           "scene_index_race_skipped > 0（护栏触发竞态）⇒ RED")
+    t_scene_miss = judge(_census_tier(drop_scene="scene_rounds"), DEFAULT_THRESHOLDS, i3,
+                         census_allowlist=_census_empty)
+    expect(t_scene_miss["verdict"] == "RED"
+           and any("缺 scene 计数 scene_rounds" in f for f in t_scene_miss["fails"]),
+           "缺 scene_rounds（上界分母）⇒ fail-closed")
+    t_scene_norounds = judge(_census_tier(scene_null=0, scene_rounds=0),
+                             DEFAULT_THRESHOLDS, i3, census_allowlist=_census_empty)
+    _snr = (t_scene_norounds.get("error_census") or {}).get("scene_null") or {}
+    expect(t_scene_norounds["verdict"] == "GREEN" and _snr.get("status") == "no_rounds",
+           "窗口内 0 轮且 0 跳过 ⇒ 不判红，但状态必须写 no_rounds")
+
     # 7) A2（2026-11-15）：BotSrv 崩溃判据 —— 伪造日志/退出码/事件 ⇒ 必红；门禁自停不算崩溃。
     rt_clean = {"self_exited": False, "stopped_by_gate": True, "exit_code": -1,
                 "err_log_oom": False, "app_error_events": [], "oom_hits": 0}
@@ -1056,7 +1766,8 @@ def cmd_selftest(_args):
         print("RED: load_report selftest 有未通过项")
         return 1
     print("GREEN: load_report selftest 全过（分位数/尾部敏感/登录阈值牙齿/在线判据牙齿/掉线分窗/内存斜率/"
-          "残余丢包方向/本机负载窗/internal_errors 阈值与 fail-closed/白名单四牙/BotSrv 崩溃三项/窗口准入）")
+          "残余丢包方向/本机负载窗/internal_errors 阈值与 fail-closed/白名单四牙/错误类别普查逐类与对账/"
+          "scene_null 0.5% 上界与必列/BotSrv 崩溃三项/窗口准入）")
     return 0
 
 
@@ -1245,6 +1956,15 @@ def main():
     s.add_argument("--allowlist", default=DEFAULT_ALLOWLIST_PATH,
                    help="internal_errors 白名单（默认仓库内 tools/botload/internal-errors-allowlist.json）。"
                         "文件缺失/为空/条目非法 ⇒ 容忍度 0；白名单随卡面 patch 评审，运行时不得改")
+    s.add_argument("--census-allowlist", default=DEFAULT_CENSUS_ALLOWLIST_PATH,
+                   help="错误类别普查白名单（默认 tools/botload/error-census-allowlist.json）。"
+                        "fault 类别默认容忍度 0；feeds_internal 类别也可由 internal-errors 白名单整体豁免。"
+                        "文件缺失/为空 ⇒ 容忍度 0（卡 openmir2-botsrv-recv-thread-nre）")
+    s.add_argument("--scene-null-upper-bound-pct", type=float, default=SCENE_NULL_UPPER_BOUND_PCT,
+                   help="scene_null_actor_skipped 的稳态上界（%% of BeginScene rounds；默认 0.5）。"
+                        "超界时必须用 --scene-null-explanation 单独解释，否则 RED")
+    s.add_argument("--scene-null-explanation", default="",
+                   help="scene_null_actor_skipped 超过上界时的单独解释（写进报告；空 = 不接受超界）")
     s.add_argument("--bots-log", default="",
                    help="BotSrv 的 bots.log（A1：归算 internal_errors 的 top 异常类型/堆栈首行；可选）")
     s.add_argument("--bots-runtime", default="",

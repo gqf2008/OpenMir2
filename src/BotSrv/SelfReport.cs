@@ -51,6 +51,8 @@ namespace BotSrv
             }
             catch
             {
+                // 写失败 = 证据链断（本进程内停写）。必须可见：以前只置 _broken，报告里看不出来。
+                BotErrorCensus.SelfReportWriteFailed();
                 _broken = true;
             }
         }

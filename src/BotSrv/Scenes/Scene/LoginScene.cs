@@ -44,8 +44,11 @@ namespace BotSrv.Scenes.Scene
                         _clientSocket.Connect();
                         RobotClient.ConnectionStatus = ConnectionStatus.Connect;
                     }
-                    catch
+                    catch (System.Exception)
                     {
+                        // 卡 openmir2-botsrv-recv-thread-nre：以前这里静默吞掉（只改状态）；
+                        // 连接建立阶段的非 SocketException（地址解析/初始化等）必须可见。
+                        BotErrorCensus.SocketConnectFailed();
                         RobotClient.ConnectionStatus = ConnectionStatus.Failure;
                     }
                 }

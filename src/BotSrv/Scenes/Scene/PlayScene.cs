@@ -126,6 +126,9 @@ namespace BotSrv.Scenes.Scene
                     movetick = true;
                 }
             }
+            // 卡 openmir2-botsrv-recv-thread-nre：null-skip 上界的分母（每轮 BeginScene 一次；
+            // MySelf==null 的早退在上方已 return，不计）。只计数，不改变行为。
+            LoadMetrics.SceneRoundStarted();
             int i = 0;
             while (true)
             {

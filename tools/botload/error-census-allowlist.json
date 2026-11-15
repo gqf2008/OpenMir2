@@ -1,0 +1,5 @@
+{
+  "version": 1,
+  "note": "卡 openmir2-botsrv-recv-thread-nre 的错误类别普查白名单。空 entries = 所有 fault 类别容忍度 0（fail-closed）。条目必须随卡面 patch 评审：category 必须在 load_report.py 的 ERROR_CENSUS_CATEGORIES 里，max 是该类别允许的累计次数，reason/owner/review_ref 必填。运行时没有新增条目/覆盖路径的开关；报告会记录 path+sha256。feeds_internal=True 的类别若已由 internal-errors-allowlist 按异常类型整体豁免，则本文件无需重复登记。",
+  "entries": []
+}

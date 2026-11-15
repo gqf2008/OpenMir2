@@ -98,6 +98,7 @@ namespace BotSrv
         private static long _sceneNullActorSkipped; // BeginScene 跳过的 null 槽位次数（夹具健壮性）
         private static long _sceneListRaceSkipped; // BeginScene 因列表被并发改动而跳过的删除次数
         private static long _sceneIndexRaceSkipped; // BeginScene 轮内下标读取被并发缩表跳过的次数
+        private static long _sceneRounds;          // BeginScene 实际进入 ActorList 迭代的轮次（0.5% 上界的分母）
 
         // ==== 登录连接级观测（C6 第 5 轮，T-11）：把「残余丢包」的方向证出来 ====
         // T-8 的 ident 直方图只能证明「服务端回的总数 < 假人数」，分不出这两种：
@@ -344,6 +345,24 @@ namespace BotSrv
             get { lock (Sync) { return _sceneIndexRaceSkipped; } }
         }
 
+        /// <summary>
+        /// BeginScene 实际进入 `ActorList` 迭代的一轮（`MShare.MySelf == null` 的早退不算）。
+        /// 它是总监裁决的 null-skip 上界分母：**稳态窗口内 `scene_null_actor_skipped` 轮次占比 &lt;0.5%**。
+        /// 只计数，不改变任何行为。
+        /// </summary>
+        public static void SceneRoundStarted()
+        {
+            lock (Sync)
+            {
+                _sceneRounds++;
+            }
+        }
+
+        public static long SceneRoundsCount
+        {
+            get { lock (Sync) { return _sceneRounds; } }
+        }
+
         /// <summary>这个假人收到了服务端的 SM_LOGON（= 真的进了世界，而不是"本地切到 PlayScene"）。
         /// 探针的武装条件就是它；它同时是 tick 样本覆盖率的分子（分母 = 档位人数）。</summary>
         public static void InWorld()
@@ -432,13 +451,28 @@ namespace BotSrv
             return start < end && int.TryParse(loginId.Substring(start), out int idx) && idx == _suppressInWorldIndex;
         }
 
-        /// <summary>一轮自动挂机里被兜住的异常（压测进程不许被单个假人打死；异常数进报告）。</summary>
-        public static void InternalError()
+        /// <summary>
+        /// 一轮自动挂机里被兜住的异常（压测进程不许被单个假人打死；异常数进报告）。
+        /// **必须带类别**：`internal_errors` 是 Σ(计入该字段的错误类别)，
+        /// load_report 会校验 `internal_errors == Σ(error_census 的 feeds_internal 类别)`；
+        /// 无类别调用落到 `internal_error_unclassified`（可见的故障，不会静默）。
+        /// </summary>
+        public static void InternalError(string category)
         {
             lock (Sync)
             {
                 _internalErrors++;
+                // 同一临界区内累加 census：StatsLine（持 Sync）读两者，避免 flush 快照读到
+                // internal_errors=N 而 census_sum=N-1 的瞬时对账不平（复审 minor）。
+                // 锁顺序固定 Sync → BotErrorCensus.Sync；BotErrorCensus 不回取 Sync，无死锁。
+                BotErrorCensus.Count(category);
             }
+        }
+
+        /// <summary>未分类兜底：任何新增/漏改的 catch 若还走无参入口，会在 census 里以该类别露出。</summary>
+        public static void InternalError()
+        {
+            InternalError(BotErrorCensus.InternalErrorUnclassified);
         }
 
         /// <summary>是否需要打印这一条异常（前若干条打印，避免压测日志被刷爆）。返回 true 表示该打印。</summary>
@@ -742,8 +776,75 @@ namespace BotSrv
             }
             catch
             {
-                // 采集失败不能让被测进程崩（压测期间磁盘/句柄异常都算环境问题，由驱动侧可见）
+                // 采集失败不能让被测进程崩（压测期间磁盘/句柄异常都算环境问题，由驱动侧可见）。
+                // 但**不能静默**：证据链断了要让报告看得见（卡 openmir2-botsrv-recv-thread-nre）。
+                RecordMetricFlushFailure();
             }
+        }
+
+        /// <summary>统计落盘失败（Flush / login_conns 重写）。census-only：这是环境/证据链问题，
+        /// 不计入 `internal_errors`（`internal_errors` 只表示代码级故障）。</summary>
+        public static void RecordMetricFlushFailure()
+        {
+            BotErrorCensus.MetricFlushFailed();
+        }
+
+        /// <summary>进程级故障（AppDomain/未观察 Task）尽力落一行到 fatal.ndjson；写不了就放弃（不能让
+        /// 异常处理再抛一个异常）。</summary>
+        public static void WriteFatalMarker(string category, Exception ex)
+        {
+            try
+            {
+                string dir = _outDir;
+                if (string.IsNullOrEmpty(dir))
+                {
+                    return;
+                }
+                Directory.CreateDirectory(dir);
+                string type = ex == null ? "" : ex.GetType().FullName;
+                string msg = ex == null ? "" : ex.Message;
+                string line = "{\"t_ms\":" + Environment.TickCount
+                    + ",\"category\":\"" + JsonEsc(category)
+                    + "\",\"exception\":\"" + JsonEsc(type)
+                    + "\",\"message\":\"" + JsonEsc(msg) + "\"}\n";
+                File.AppendAllText(Path.Combine(dir, "fatal.ndjson"), line, new UTF8Encoding(false));
+                Flush();
+            }
+            catch
+            {
+                // 尽力而为：崩溃路径上不允许二次抛出。
+            }
+        }
+
+        private static string JsonEsc(string s)
+        {
+            if (string.IsNullOrEmpty(s))
+            {
+                return "";
+            }
+            var sb = new StringBuilder(s.Length + 8);
+            foreach (char c in s)
+            {
+                switch (c)
+                {
+                    case '"': sb.Append("\\\""); break;
+                    case '\\': sb.Append("\\\\"); break;
+                    case '\n': sb.Append("\\n"); break;
+                    case '\r': sb.Append("\\r"); break;
+                    case '\t': sb.Append("\\t"); break;
+                    default:
+                        if (c < ' ')
+                        {
+                            sb.Append("\\u").Append(((int)c).ToString("x4", CultureInfo.InvariantCulture));
+                        }
+                        else
+                        {
+                            sb.Append(c);
+                        }
+                        break;
+                }
+            }
+            return sb.ToString();
         }
 
         public static void Shutdown()
@@ -802,7 +903,8 @@ namespace BotSrv
             }
             catch
             {
-                // 同 Flush：采集失败不能让被测进程崩
+                // 同 Flush：采集失败不能让被测进程崩。但必须可见（证据链断了也要能判红）。
+                RecordMetricFlushFailure();
             }
         }
 
@@ -881,6 +983,11 @@ namespace BotSrv
               .Append(",\"scene_null_actor_skipped\":").Append(_sceneNullActorSkipped)
               .Append(",\"scene_list_race_skipped\":").Append(_sceneListRaceSkipped)
               .Append(",\"scene_index_race_skipped\":").Append(_sceneIndexRaceSkipped)
+              .Append(",\"scene_rounds\":").Append(_sceneRounds)
+              // 卡 openmir2-botsrv-recv-thread-nre：错误类别普查（封闭集合，逐类计数）。
+              // load_report 对缺键/多键/类别非 0 都 fail-closed；schema 变更必须同步改两边。
+              .Append(",\"error_census_schema\":1")
+              .Append(",\"error_census\":").Append(BotErrorCensus.BuildJson())
               .Append(",\"in_world\":").Append(_inWorld)
               .Append(",\"in_world_suppressed\":").Append(_inWorldSuppressed)
               .Append(",\"autoplay_in_world\":").Append(_autoPlayInWorld)

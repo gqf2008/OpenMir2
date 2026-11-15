@@ -1,4 +1,5 @@
 ﻿using System.Runtime;
+using System;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -68,6 +69,20 @@ namespace BotSrv
             {
                 System.Environment.Exit(SceneGuardSelfCheck.Run());
             }
+            // 卡 `openmir2-botsrv-recv-thread-nre`：错误类别普查的逐类牙（不启动服务/不连端口）。
+            if (args.Length > 0 && args[0] == "--selftest-error-census")
+            {
+                System.Environment.Exit(ErrorCensusSelfCheck.Run());
+            }
+            // 进程级兜底：线程入口/事件处理器之外的遗漏路径（例如 runThread 之外的线程）至少在
+            // fatal.ndjson 留一行，并计入 unhandled_exception；未观察 Task 同理。
+            AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
+                BotErrorCensus.OnUnhandledException(e.ExceptionObject as System.Exception);
+            TaskScheduler.UnobservedTaskException += (sender, e) =>
+            {
+                BotErrorCensus.OnUnobservedTaskException(e.Exception);
+                e.SetObserved();
+            };
             GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
             GCSettings.LatencyMode = GCSettings.IsServerGC ? GCLatencyMode.Batch : GCLatencyMode.Interactive;
             AppServer serviceRunner = new AppServer();

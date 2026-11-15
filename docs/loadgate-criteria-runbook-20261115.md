@@ -254,3 +254,30 @@ for rel, count, hold in runs:
   证据写进 `bots_runtime.json`。
 - 本卡未重跑真机窗口；§2 的判定是对既有产物的离线复算，不替代换机后的 360s 复测；§2 表是在**空白名单**
   （容忍度 0）下得到的。
+
+## 7. 2026-11-15 起的新口径：错误类别普查（卡 `openmir2-botsrv-recv-thread-nre`）
+
+- `internal_errors` 只是总量；新判据要求 **枚举出的每一个 fault 类别都为 0**
+  （或按 `tools/botload/error-census-allowlist.json` 登记），见 `docs/botsrv-error-census-20261115.md`。
+- **旧归档（本文件 §2 复算的那些 `load_stats.ndjson`）没有 `error_census` 字段**，按新口径会被
+  fail-closed 判 RED（「缺 error_census」）。这是**有意**的：旧证据不得再用来宣布「全绿」；
+  §2 的离线复算只能当「口径变更前」的对照，新结论必须用带 census 的新构建重跑。
+- 每份新结论额外必列：`error_census_complete` / `error_census_fault_total` /
+  `error_census_nonzero` / `scene_null_actor_skipped`（`report.json.required_fields`）。
+
+### 7.1 父卡 scene_null 口径（master `39d418816` 起）
+
+- **`scene_null_actor_skipped` 每份报告必须显式列出**（是 0 也要列，不许不提）。
+- **上界判据**：稳态窗口内 `scene_null_actor_skipped / scene_rounds < 0.5%` 轮次；超界必须用
+  `load_report.py summarize --scene-null-explanation "<单独解释>"` 显式解释，否则 RED。
+- **语义**：并发下读到正被清尾的槽位（收包线程 `RemoveAt` 的瞬时空位），**安全跳过、不读不删不登记**；
+  这是「已知且受限」，**不是「无错」**。
+- `scene_list_race_skipped` / `scene_index_race_skipped` 是护栏触发的竞态证据，必须为 0；
+  缺 `scene_rounds`（上界分母）⇒ RED。
+
+### 7.2 报告措辞（硬规则）
+
+- **不得写「夹具无错」**。census 落地后 **200 档会变红**（`recv_packet_null ≈ 10,968`）——**那是正确的红**。
+- 500 档若为 0/很低，必须写「**500 为 0 是丢弃率 39.5%、到达帧少把竞态压下去了，不是修好**」。
+- 正确表述：「本卡消除了 NRE@120/AOORE@125 两类；收包线程 NRE 尚未进入计数，由 census 卡承接，
+  并在 200 档以 `recv_packet_null` 显形（正确的红）」。

@@ -1388,6 +1388,8 @@ namespace BotSrv.Player
                 }
                 catch (Exception)
                 {
+                    // 采集面：writer 打不开 = 掉落/经验证据缺失，必须可见（census-only，不动挂机语义）。
+                    BotErrorCensus.DropExpWriterOpenFailed();
                     _dropExpWriter = null;
                 }
             }
@@ -1549,6 +1551,8 @@ namespace BotSrv.Player
             }
             catch (Exception)
             {
+                // 写行失败（磁盘/句柄）不得静默吞掉：census 里要有数。
+                BotErrorCensus.DropExpWriterWriteFailed();
             }
         }
 
@@ -5585,6 +5589,8 @@ namespace BotSrv.Player
                 }
                 catch (Exception ex)
                 {
+                    // 背包解码失败 = 夹具背包视图与线上不一致；必须进 internal_errors（不再只打日志）。
+                    LoadMetrics.InternalError(BotErrorCensus.BagItemDecodeFailure);
                     MainOutMessage($"M3BAGSEQ bag item decode ERR: {ex}");
                 }
             }

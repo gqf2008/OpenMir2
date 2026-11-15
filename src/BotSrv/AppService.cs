@@ -208,49 +208,61 @@ namespace BotSrv
             LogService.Debug("工作线程开始执行...");
             while (true)
             {
-                if (_options.TotalChrCount > 0)
+                RunLoopGuard(() =>
                 {
-                    if (((HUtil32.GetTickCount() - g_dwLogonTick) > 1000 * _options.ChrCount))
+                    if (_options.TotalChrCount > 0)
                     {
-                        g_dwLogonTick = HUtil32.GetTickCount();
-                        if (_options.TotalChrCount >= _options.ChrCount)
+                        if (((HUtil32.GetTickCount() - g_dwLogonTick) > 1000 * _options.ChrCount))
                         {
-                            _options.TotalChrCount -= _options.ChrCount;
-                        }
-                        else
-                        {
-                            _options.TotalChrCount = 0;
-                        }
-                        for (int i = 0; i < _options.ChrCount; i++)
-                        {
-                            RobotPlayer playClient = new RobotPlayer();
-                            playClient.NewAccount = _options.NewAccount;
-                            playClient.LoginId = string.Concat(_options.LoginAccount, g_nLoginIndex);
-                            playClient.LoginPasswd = playClient.LoginId;
-                            playClient.ChrName = playClient.LoginId;
-                            playClient.ConnectTick = HUtil32.GetTickCount() + (i + 1) * _options.ConnectStaggerMs;
-                            BotShare.ClientMgr.AddClient(playClient.SessionId, playClient);
-                            LoadMetrics.Spawned();
-                            g_nLoginIndex++;
+                            g_dwLogonTick = HUtil32.GetTickCount();
+                            if (_options.TotalChrCount >= _options.ChrCount)
+                            {
+                                _options.TotalChrCount -= _options.ChrCount;
+                            }
+                            else
+                            {
+                                _options.TotalChrCount = 0;
+                            }
+                            for (int i = 0; i < _options.ChrCount; i++)
+                            {
+                                RobotPlayer playClient = new RobotPlayer();
+                                playClient.NewAccount = _options.NewAccount;
+                                playClient.LoginId = string.Concat(_options.LoginAccount, g_nLoginIndex);
+                                playClient.LoginPasswd = playClient.LoginId;
+                                playClient.ChrName = playClient.LoginId;
+                                playClient.ConnectTick = HUtil32.GetTickCount() + (i + 1) * _options.ConnectStaggerMs;
+                                BotShare.ClientMgr.AddClient(playClient.SessionId, playClient);
+                                LoadMetrics.Spawned();
+                                g_nLoginIndex++;
+                            }
                         }
                     }
-                }
-                try
-                {
                     BotShare.ClientMgr.Run();
-                }
-                catch (Exception ex)
-                {
-                    // 压测进程不许被单个假人的异常打死（2026-10-10 实测：自动挂机里 MShare 共享态竞态
-                    // 出 NullReference/IndexOutOfRange，整个 1000 假人进程直接退出 ⇒ 那一档数据全废）。
-                    // 兜住并计数（进 load_stats.ndjson 的 internal_errors），前若干条打日志便于定位。
-                    LoadMetrics.InternalError();
-                    if (LoadMetrics.ShouldLogInternalError())
-                    {
-                        LogService.Warn("压测兜住的异常[" + LoadMetrics.InternalErrors + "]：" + ex.GetType().Name + ": " + ex.Message);
-                    }
-                }
+                });
                 Thread.Sleep(TimeSpan.FromMilliseconds(50));
+            }
+        }
+
+        /// <summary>
+        /// runThread 的整轮护栏（含建号/AddClient + ClientMgr.Run）。以前只包住 `ClientMgr.Run()`，
+        /// 建号段抛异常会**静默打死 runThread**（线程退出、统计不再增长）。现在整轮都兜住并计入
+        /// `run_loop_exception`（自检注入本方法证明 +1）。
+        /// </summary>
+        internal static void RunLoopGuard(Action loop)
+        {
+            try
+            {
+                loop();
+            }
+            catch (Exception ex)
+            {
+                // 压测进程不许被单个假人的异常打死（2026-10-10 实测：自动挂机里 MShare 共享态竞态
+                // 出 NullReference/IndexOutOfRange，整个 1000 假人进程直接退出 ⇒ 那一档数据全废）。
+                LoadMetrics.InternalError(BotErrorCensus.RunLoopException);
+                if (LoadMetrics.ShouldLogInternalError())
+                {
+                    BotErrorCensus.SafeLog(() => LogService.Warn("压测兜住的异常[" + LoadMetrics.InternalErrors + "]：" + ex.GetType().Name + ": " + ex.Message));
+                }
             }
         }
     }
