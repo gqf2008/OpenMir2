@@ -33,11 +33,30 @@
 //!
 //! 计时**只观测**：不写实体、不抽 RNG、不改帧面；开启/关闭做的工作逐字节相同
 //! （与 `World` 侧 `tick_profile_is_opt_in_and_behavior_neutral` 同一类判据，见本文件测试）。
+//!
+//! ## 逐 tick「慢 tick」段快照（卡 `openmir2-host-segment-profiler-500`）
+//!
+//! 上面的窗口汇总只有 **50 tick 均值** + 逐 tick **总工作段**样本，回答不了
+//! 「P99 尾部那一个 tick 的耗时花在哪一段」。第二道门 `MIR2_TICK_PROFILE_SLOW_MS=N`
+//! （必须同时 `MIR2_TICK_PROFILE=1`）在**单个 tick 的工作段 ≥ N ms** 时打印该 tick 的
+//! 段构成（段 → ms → 占该 tick 工作段的比例，另附该 tick 内记录的命名子探针）。
+//!
+//! - **默认关闭**：`MIR2_TICK_PROFILE_SLOW_MS` 缺省/空串 ⇒ 静默关；显式 `0` ⇒ 关但打一条可审计
+//!   `DBG`；**非法值 ⇒ 关 + 一条含「变量名 + 原文值」的 `WRN`，不杀进程**（诊断子门口径，
+//!   理由与对照见 `docs/tick-profile-slow-gate-20261116.md`）。关闭时 `end`/`probe` 只多一次
+//!   `Option::is_some` 判别，`end_tick` 不产生快照；
+//! - 值解析先 `trim()`（与 `clock.rs`/`seed.rs` 的「前后空白合法」同口径）：`" 100 "` = 100ms；
+//! - 开启时每 tick 用一个**复用缓冲**（`Vec::clear` 后 push，容量稳定后不再分配）；
+//! - 快照只打印「慢 tick」，不改变任何阈值/行为，也不进 `HostUnaccounted` 对账口径。
 
 use std::time::Instant;
 
 /// 环境变量门：**只有字面 `"1"`** 才开启（`0`/`true`/空/缺省一律关；与起栈器的 fail-closed 口径同形）。
 pub const ENV_TICK_PROFILE: &str = "MIR2_TICK_PROFILE";
+
+/// **慢 tick 段快照**门（卡 `openmir2-host-segment-profiler-500`）：工作段 ≥ N ms 的 tick
+/// 打印段构成。必须同时 `MIR2_TICK_PROFILE=1`；缺省/`0`/非数字 ⇒ 关（fail-closed）。
+pub const ENV_TICK_PROFILE_SLOW_MS: &str = "MIR2_TICK_PROFILE_SLOW_MS";
 
 /// 汇总窗口（**两臂先到者**）：50 tick 或 10s 墙钟。200ms 节拍下两者等价；
 /// tick 被拖慢（演示栈端到端 ≈ 2000ms）时按墙钟臂切窗，60s 的观测窗内仍有多行汇总。
@@ -73,6 +92,87 @@ pub struct HostTickProfile {
     work_samples: Vec<u64>,
     /// 自开启起累计完成的 tick 数（诊断用）。
     total_ticks: u64,
+    /// **慢 tick 快照门**：工作段 ≥ 该 ns 时输出段构成；`None` = 关（缺省）。
+    /// 只有 `enabled && MIR2_TICK_PROFILE_SLOW_MS=N>0` 才为 `Some`。
+    slow_threshold_ns: Option<u64>,
+    /// 本 tick 的**段**记录（仅在慢 tick 门开启时填充；`end_tick` 末尾 `clear` 复用容量）。
+    tick_rows: Vec<(&'static str, u64)>,
+    /// 本 tick 的**命名子探针**记录（同上）。
+    tick_probe_rows: Vec<(&'static str, u64)>,
+    /// 最近一个慢 tick 的快照（`end_tick` 生成，`sim_loop` 每 tick 用 [`Self::take_slow_tick`] 取走）。
+    pending_slow: Option<SlowTick>,
+}
+
+/// 单个慢 tick 的段快照（由 [`HostTickProfile::end_tick`] 在工作段 ≥ 阈值时生成，
+/// [`HostTickProfile::take_slow_tick`] 取走）。
+///
+/// 打印由调用方（`sim_loop`）通过 [`SlowTick::log`] 完成——`end_tick` 本身不写日志，
+/// 便于单测直接断言快照内容（而不是抓 stderr）。
+#[derive(Debug, Clone, Default)]
+pub struct SlowTick {
+    /// 1-based tick 序号（`total_ticks + 1`）。
+    pub tick: u64,
+    /// 整 tick 墙钟（含 sleep）。
+    pub total_ns: u64,
+    /// 本 tick 的 `HostSleep`。
+    pub sleep_ns: u64,
+    /// 工作段 = `total_ns − sleep_ns`（判阈值的口径）。
+    pub work_ns: u64,
+    /// 未分段的残差（`total − Σ段`，含 sleep；与窗口 `HostUnaccounted` 同口径）。
+    pub unaccounted_ns: u64,
+    /// 本 tick 各段 `(段名, ns)`（含 `HostSleep`，调用方自己排除）。
+    pub segments: Vec<(&'static str, u64)>,
+    /// 本 tick 内记录的命名子探针 `(名, ns)`（窗口汇总口径之外的逐 tick 值）。
+    pub probes: Vec<(&'static str, u64)>,
+}
+
+impl SlowTick {
+    /// 打印成一行 `[TICKPROF] SLOW …`：段按耗时降序，百分比以**工作段**为分母。
+    pub fn log(&self) {
+        let work = self.work_ns.max(1) as f64;
+        let mut segs: Vec<(&'static str, u64)> = self
+            .segments
+            .iter()
+            .copied()
+            .filter(|(n, _)| *n != "HostSleep")
+            .collect();
+        segs.sort_by_key(|(_, ns)| std::cmp::Reverse(*ns));
+        let mut line = String::new();
+        for (name, ns) in &segs {
+            line.push_str(&format!(
+                " {name}={:.3}({:.1}%)",
+                *ns as f64 / 1e6,
+                *ns as f64 / work * 100.0
+            ));
+        }
+        let mut probes = self.probes.clone();
+        probes.sort_by_key(|(_, ns)| std::cmp::Reverse(*ns));
+        let probe_text = if probes.is_empty() {
+            String::new()
+        } else {
+            let mut s = String::from(" | probes");
+            for (name, ns) in &probes {
+                s.push_str(&format!(
+                    " {name}={:.3}({:.1}%)",
+                    *ns as f64 / 1e6,
+                    *ns as f64 / work * 100.0
+                ));
+            }
+            s
+        };
+        crate::glog!(
+            "DBG",
+            "[TICKPROF] SLOW tick#{} work={:.3}ms total={:.3}ms sleep={:.3}ms unacct={:.3}ms ({:.1}%){}{}",
+            self.tick,
+            self.work_ns as f64 / 1e6,
+            self.total_ns as f64 / 1e6,
+            self.sleep_ns as f64 / 1e6,
+            self.unaccounted_ns as f64 / 1e6,
+            self.unaccounted_ns as f64 / work * 100.0,
+            line,
+            probe_text
+        );
+    }
 }
 
 /// 逐 tick 样本上限（每窗口最多保留这么多，丢最旧）。生产窗口是 50 tick；取 256 让
@@ -128,15 +228,166 @@ pub fn enabled_from(value: Option<&str>) -> bool {
     value == Some("1")
 }
 
+/// 慢 tick 阈值（ms）→ ns：**先 `trim()` 再解析**（口径对齐 `clock.rs::parse_clock` /
+/// `seed.rs::parse_seed` 的「前后空白合法」），只接受纯十进制正整数。
+///
+/// `None`/空串/空白串/`0`/负数/小数/非数字/ms→ns 溢出 ⇒ `None`（本函数只回答「是不是合法阈值」；
+/// 「非法」与「显式关闭」的区分由 [`slow_gate_from_env_value`] 负责）。
+#[must_use]
+pub fn slow_threshold_ns_from(value: Option<&str>) -> Option<u64> {
+    let text = value?.trim();
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let ms: u64 = text.parse().ok()?;
+    if ms == 0 {
+        return None;
+    }
+    ms.checked_mul(1_000_000)
+}
+
+/// 慢 tick 诊断子门的环境判定结果（纯函数，便于单测；日志由 [`HostTickProfile::from_env`] 打）。
+///
+/// **口径**（见 `docs/tick-profile-slow-gate-20261116.md`）：
+/// - 诊断子门**不因可选开关 typo 杀进程**，但**绝不静默降级**：非法值 ⇒ 门关闭 + 一条
+///   含「变量名 + 原文值」的 `WRN`（与 `rng_trace` 的 `[ERROR]+trace 关闭`同族）；
+/// - 行为性注入（`MIR2_CLOCK_MS` / `MIR2_RNG_SEED`）非法 ⇒ `Err`/fail-closed 退出，因为
+///   带着默认值跑会产出**看似有效**的错误结果；诊断子门默认关、不影响任何行为，故降一级。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SlowGateEnv {
+    /// 变数未设或空串 ⇒ 静默关（与 `parse_clock` 的 `None`/`""` 同口径）。
+    Unset,
+    /// 显式 `0` ⇒ 关，但打一条可审计的 `DBG`（不当作非法）。
+    ExplicitOff,
+    /// 合法正整数毫秒 ⇒ 开（值为 ns）。
+    On(u64),
+    /// 非法值（含原始文本）⇒ 关 + `WRN`。
+    Invalid(String),
+}
+
+impl SlowGateEnv {
+    /// 门是否开（只有 [`Self::On`] 给出阈值）。
+    #[must_use]
+    pub fn threshold_ns(&self) -> Option<u64> {
+        match self {
+            Self::On(ns) => Some(*ns),
+            _ => None,
+        }
+    }
+
+    /// 非法值 ⇒ 必须用 `WRN` 打出的文案（含变量名与**原文值**，机器可抓）。
+    #[must_use]
+    pub fn warn_message(&self) -> Option<String> {
+        match self {
+            Self::Invalid(raw) => Some(format!(
+                "{ENV_TICK_PROFILE_SLOW_MS}={raw:?} 非法（期望正整数毫秒；空白会被 trim；0=显式关闭），慢 tick 快照已关闭"
+            )),
+            _ => None,
+        }
+    }
+
+    /// 显式 `0` ⇒ 可审计的 `DBG` 文案（不当作非法，也不静默）。
+    #[must_use]
+    pub fn notice_message(&self) -> Option<String> {
+        match self {
+            Self::ExplicitOff => Some(format!(
+                "{ENV_TICK_PROFILE_SLOW_MS}=0 显式关闭慢 tick 快照（不是非法值）"
+            )),
+            _ => None,
+        }
+    }
+}
+
+/// 按环境变量原文判定慢 tick 子门（纯函数）。
+///
+/// - `None` / `Some("")` ⇒ [`SlowGateEnv::Unset`]（与 `clock.rs` 的空串口径一致）；
+/// - 只含空白的串 ⇒ [`SlowGateEnv::Invalid`]（`clock.rs` 对空白串也走 `parse` 失败）；
+/// - `trim()` 后为 `0` ⇒ [`SlowGateEnv::ExplicitOff`]；
+/// - `trim()` 后是合法正整数毫秒 ⇒ [`SlowGateEnv::On`]；
+/// - 其余 ⇒ [`SlowGateEnv::Invalid`]（保留**未 trim 的原文**供日志抓取）。
+#[must_use]
+pub fn slow_gate_from_env_value(value: Option<&str>) -> SlowGateEnv {
+    let Some(raw) = value else {
+        return SlowGateEnv::Unset;
+    };
+    if raw.is_empty() {
+        return SlowGateEnv::Unset;
+    }
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return SlowGateEnv::Invalid(raw.to_string());
+    }
+    if trimmed == "0" {
+        return SlowGateEnv::ExplicitOff;
+    }
+    match slow_threshold_ns_from(Some(raw)) {
+        Some(ns) => SlowGateEnv::On(ns),
+        None => SlowGateEnv::Invalid(raw.to_string()),
+    }
+}
+
 impl HostTickProfile {
     /// 读环境变量建计时器（**整个进程只读一次**；tick 路径上不再读环境）。
+    ///
+    /// 慢 tick 快照门（`MIR2_TICK_PROFILE_SLOW_MS`）**只有主门开启时才解析**——主门关闭时
+    /// 快照无从谈起（没有段计时），阈值恒 `None`。
+    ///
+    /// 非法值 ⇒ **启动时一条 `WRN`（含变量名+原文）+ 门保持关闭，不杀进程**（诊断子门口径，
+    /// 见 [`SlowGateEnv`] 与 `docs/tick-profile-slow-gate-20261116.md`）。
     #[must_use]
     pub fn from_env() -> Self {
         let value = std::env::var(ENV_TICK_PROFILE).ok();
+        let enabled = enabled_from(value.as_deref());
+        let slow = if enabled {
+            let slow_value = std::env::var(ENV_TICK_PROFILE_SLOW_MS).ok();
+            let gate = slow_gate_from_env_value(slow_value.as_deref());
+            if let Some(msg) = gate.warn_message() {
+                crate::glog!("WRN", "{msg}");
+            }
+            if let Some(msg) = gate.notice_message() {
+                crate::glog!("DBG", "{msg}");
+            }
+            gate.threshold_ns()
+        } else {
+            None
+        };
         Self {
-            enabled: enabled_from(value.as_deref()),
+            enabled,
+            slow_threshold_ns: slow,
             ..Self::default()
         }
+    }
+
+    /// 慢 tick 快照门是否开启（阈值 ns）。
+    #[must_use]
+    #[inline]
+    pub fn slow_threshold_ns(&self) -> Option<u64> {
+        self.slow_threshold_ns
+    }
+
+    /// **测量 harness 专用**：同 [`Self::with_enabled`]，但带慢 tick 阈值（ns）。
+    #[cfg(test)]
+    #[must_use]
+    pub fn with_slow_threshold_ns(threshold_ns: u64) -> Self {
+        Self {
+            enabled: true,
+            slow_threshold_ns: Some(threshold_ns),
+            ..Self::default()
+        }
+    }
+
+    /// 本 tick 已记录的段数（测试用：验证关闭态不落行）。
+    #[cfg(test)]
+    #[must_use]
+    pub fn tick_rows(&self) -> &[(&'static str, u64)] {
+        &self.tick_rows
+    }
+
+    /// 本 tick 已记录的子探针数（测试用）。
+    #[cfg(test)]
+    #[must_use]
+    pub fn tick_probe_rows(&self) -> &[(&'static str, u64)] {
+        &self.tick_probe_rows
     }
 
     /// 门控是否开启。
@@ -185,6 +436,10 @@ impl HostTickProfile {
         }
         self.add(name, ns);
         self.tick_sum_ns = self.tick_sum_ns.saturating_add(ns);
+        // 慢 tick 快照：只有第二道门开启时才保留逐 tick 行（关闭态一次 `Option` 判别）。
+        if self.slow_threshold_ns.is_some() {
+            self.tick_rows.push((name, ns));
+        }
     }
 
     /// 命名**子探针**终点。与 [`Self::end`] 同样的关闭态口径（`at == None` ⇒ 一次 `Option`
@@ -201,6 +456,9 @@ impl HostTickProfile {
             }
             None => self.probes.push((name, ns, 1)),
         }
+        if self.slow_threshold_ns.is_some() {
+            self.tick_probe_rows.push((name, ns));
+        }
     }
 
     /// 整 tick 终点：记 `HostTickTotal` + 残差 `HostUnaccounted`，并推进窗口计数。
@@ -208,26 +466,55 @@ impl HostTickProfile {
     /// **卡 `openmir2-simmonsterai-profile`**：同时把**本 tick 工作段**（`total − HostSleep`）
     /// 追加到 `work_samples`（tick 级分位数；不是 50-tick 桶近似）。超过 [`SAMPLE_CAP`] 丢最旧。
     ///
-    /// 关闭时：一次 `Option` 判别 ⇒ 直接返回。
+    /// **卡 `openmir2-host-segment-profiler-500`**：慢 tick 门开启且工作段 ≥ 阈值时，把本 tick
+    /// 的段快照暂存到 `pending_slow`（由 [`Self::take_slow_tick`] 取走打印）；否则什么都不留
+    /// 并清空逐 tick 缓冲。关闭态：一次 `Option` 判别 ⇒ 直接返回（不取时钟、不分配）。
+    ///
+    /// 返回值是 `()`：`end_tick` 的既有调用点（含测量 harness）**不需要改**；慢 tick 输出是
+    /// 可选的旁路，不取走也不影响窗口计数。
     #[inline]
     pub fn end_tick(&mut self, at: Option<Instant>) {
         let Some(at) = at else { return };
         let total = nanos_since(at);
         self.add("HostTickTotal", total);
         let sum = self.tick_sum_ns;
+        let unaccounted = total.saturating_sub(sum);
         if total > sum {
             self.add("HostUnaccounted", total - sum);
         }
-        let work = total.saturating_sub(self.tick_sleep_ns);
+        let sleep = self.tick_sleep_ns;
+        let work = total.saturating_sub(sleep);
         if self.work_samples.len() >= SAMPLE_CAP {
             self.work_samples.remove(0);
         }
         self.work_samples.push(work);
+        let tick = self.total_ticks + 1;
         self.tick_sleep_ns = 0;
         self.tick_sum_ns = 0;
         self.window_ticks += 1;
         self.window_ns = self.window_ns.saturating_add(total);
         self.total_ticks += 1;
+        self.pending_slow = match self.slow_threshold_ns {
+            Some(threshold) if work >= threshold => Some(SlowTick {
+                tick,
+                total_ns: total,
+                sleep_ns: sleep,
+                work_ns: work,
+                unaccounted_ns: unaccounted,
+                segments: std::mem::take(&mut self.tick_rows),
+                probes: std::mem::take(&mut self.tick_probe_rows),
+            }),
+            _ => None,
+        };
+        // 未构成慢 tick（或没有慢 tick 门）⇒ 本 tick 行必须丢弃，不能跨 tick 累积。
+        self.tick_rows.clear();
+        self.tick_probe_rows.clear();
+    }
+
+    /// 取走最近一个慢 tick 的快照（每 tick 由 `sim_loop` 调用一次；没有 ⇒ `None`）。
+    #[inline]
+    pub fn take_slow_tick(&mut self) -> Option<SlowTick> {
+        self.pending_slow.take()
     }
 
     /// **卡 `openmir2-simmonsterai-profile`**：逐 tick 工作段样本（ns，旧→新）。测量 harness 用。
@@ -574,6 +861,8 @@ mod tests {
         for _ in 0..100 {
             p.end("HostInbound", None);
             p.end_tick(None);
+            assert!(p.tick_rows().is_empty(), "关闭态不得保留逐 tick 行");
+            assert!(p.take_slow_tick().is_none(), "关闭态不得产生慢 tick 快照");
         }
         assert!(p.rows.is_empty(), "关闭时不得累计任何段");
         assert_eq!(p.window_ticks, 0);
@@ -637,6 +926,211 @@ mod tests {
         }
     }
 
+    /// **慢 tick 阈值解析**：先 `trim()`（对齐 `clock.rs`/`seed.rs` 的前后空白合法），再只接受
+    /// 纯十进制正整数（ms → ns）；`0`/空/空白串/符号/小数/非数字/溢出一律 `None`。
+    ///
+    /// 变异：把 `if ms == 0` 删掉 ⇒ `Some("0")` 得到 `Some(0)` ⇒ 每秒 tick 都打印 ⇒ 红；
+    /// 把 `checked_mul` 改成 `*` ⇒ 溢出 panic/回绕 ⇒ 红；
+    /// 删掉 `trim()` ⇒ `" 100"` 从 `Some` 变 `None` ⇒ 红。
+    #[test]
+    fn slow_threshold_parse_trims_then_fail_closed() {
+        assert_eq!(slow_threshold_ns_from(Some("1")), Some(1_000_000));
+        assert_eq!(slow_threshold_ns_from(Some("100")), Some(100_000_000));
+        assert_eq!(
+            slow_threshold_ns_from(Some(" 100 ")),
+            Some(100_000_000),
+            "前后空白必须被 trim（与 clock/seed 同口径）"
+        );
+        for v in [
+            Some("0"),
+            Some(""),
+            Some("   "),
+            Some("-1"),
+            Some("+1"),
+            Some("1.5"),
+            Some("abc"),
+            None,
+        ] {
+            assert_eq!(slow_threshold_ns_from(v), None, "{v:?} 必须关闭慢 tick 门");
+        }
+        assert_eq!(
+            slow_threshold_ns_from(Some("18446744073709551615")),
+            None,
+            "ms→ns 溢出必须关（checked_mul）"
+        );
+    }
+
+    /// **非法值不静默降级**（复审 P2）：非法原文 ⇒ 门关 + 必须给出含「变量名 + 原文值」的 WARN；
+    /// 未设/空串 ⇒ 静默关（与 `clock.rs` 的 `None`/`""` 同口径）。
+    ///
+    /// 变异：把 `slow_gate_from_env_value` 末尾的 `None => SlowGateEnv::Invalid(raw.to_string())`
+    /// 改成 `None => SlowGateEnv::Unset`（删掉 WARN 分支）⇒ 本用例红。
+    #[test]
+    fn slow_gate_invalid_value_warns_and_stays_closed() {
+        for raw in ["10O", "1.5", "-1", "+1", "100ms", "   ", "０"] {
+            let gate = slow_gate_from_env_value(Some(raw));
+            assert_eq!(
+                gate.threshold_ns(),
+                None,
+                "{raw:?} 非法值必须关闭慢 tick 快照（不杀进程、不开门）"
+            );
+            let warn = gate.warn_message().expect("非法值必须给出 WARN 文案");
+            assert!(
+                warn.contains(ENV_TICK_PROFILE_SLOW_MS),
+                "WARN 必须含变量名：{warn}"
+            );
+            assert!(warn.contains(raw), "WARN 必须含原文值：{warn}");
+            assert!(
+                gate.notice_message().is_none(),
+                "非法值不得混入 0 的 DBG 文案"
+            );
+        }
+        // 未设 / 空串：与 clock/seed 同口径 —— 静默关（不可审计，但也不算非法）。
+        for v in [None, Some("")] {
+            let gate = slow_gate_from_env_value(v);
+            assert_eq!(gate, SlowGateEnv::Unset, "{v:?} 必须是 Unset");
+            assert!(gate.warn_message().is_none());
+            assert!(gate.notice_message().is_none());
+        }
+    }
+
+    /// **显式 `0` = 关闭但不是非法**：门关、无 WARN、有一条含变量名的可审计 DBG 文案。
+    ///
+    /// 变异：把 `if trimmed == "0"` 分支删掉 ⇒ 落到 `_ => Invalid` ⇒ WARN 非空 ⇒ 红。
+    #[test]
+    fn slow_gate_zero_is_explicit_off_with_audit_line() {
+        let gate = slow_gate_from_env_value(Some("0"));
+        assert_eq!(gate.threshold_ns(), None, "0 必须关门");
+        assert!(gate.warn_message().is_none(), "0 不是非法值，不得 WARN");
+        let notice = gate.notice_message().expect("0 必须有可审计文案");
+        assert!(
+            notice.contains(ENV_TICK_PROFILE_SLOW_MS),
+            "审计文案必须含变量名：{notice}"
+        );
+        assert_eq!(
+            slow_gate_from_env_value(Some(" 0 ")),
+            SlowGateEnv::ExplicitOff,
+            "trim 后 0 也算显式关闭"
+        );
+    }
+
+    /// **空白与 clock/seed 对齐**：`" 100 "` ⇒ `On(100ms)`；仅空白 ⇒ `Invalid`（`clock.rs` 对
+    /// 空白串同样走 parse 失败，只有**空串**才当未设）。
+    ///
+    /// 变异：删掉 `slow_threshold_ns_from` 的 `trim()` ⇒ `" 100 "` 变 `Invalid` ⇒ 红。
+    #[test]
+    fn slow_gate_trims_like_clock_and_seed() {
+        let gate = slow_gate_from_env_value(Some(" 100 "));
+        assert_eq!(gate, SlowGateEnv::On(100_000_000));
+        assert_eq!(gate.threshold_ns(), Some(100_000_000));
+        assert!(gate.warn_message().is_none());
+        assert!(matches!(
+            slow_gate_from_env_value(Some(" \t ")),
+            SlowGateEnv::Invalid(_)
+        ));
+    }
+
+    /// **启动路径（`from_env`）实际打 WARN**：非法值 ⇒ 门关；`--nocapture` 下可见实际输出行
+    /// `… [WRN] MIR2_TICK_PROFILE_SLOW_MS="10O" 非法（…），慢 tick 快照已关闭`。
+    ///
+    /// 本用例只断言「门关」（日志内容由 `slow_gate_invalid_value_warns_and_stays_closed` 钉住，
+    /// 删 WARN 分支会让那条用例红）；这里用环境变量走真实入口，作为人工/脚本证据。
+    #[test]
+    fn from_env_warns_on_invalid_slow_value() {
+        std::env::set_var(ENV_TICK_PROFILE, "1");
+        std::env::set_var(ENV_TICK_PROFILE_SLOW_MS, "10O");
+        let p = HostTickProfile::from_env();
+        // 先恢复环境再断言，避免用例失败时把 env 留给同进程的其它用例。
+        std::env::remove_var(ENV_TICK_PROFILE_SLOW_MS);
+        std::env::remove_var(ENV_TICK_PROFILE);
+        let enabled = p.enabled();
+        let slow = p.slow_threshold_ns();
+        assert!(enabled, "主门=1 必须开启");
+        assert!(slow.is_none(), "非法 SLOW 值必须关门（不杀进程）");
+    }
+
+    /// **慢 tick 关闭态零开销牙**：主门开启但 `MIR2_TICK_PROFILE_SLOW_MS` 未设
+    /// （`slow_threshold_ns == None`）时，`end`/`probe` 不得保留逐 tick 行，
+    /// `end_tick` 不得产生快照。
+    ///
+    /// 变异：删掉 `end` 里的 `if self.slow_threshold_ns.is_some()` 守卫（无条件 push）⇒
+    /// 第一个 tick 内 `tick_rows` 非空 ⇒ 红；删掉 `probe` 的同名守卫 ⇒ `tick_probe_rows` 非空 ⇒ 红；
+    /// 把 `end_tick` 的 `match` 改成恒 `Some(...)` ⇒ `take_slow_tick` 非 None ⇒ 红。
+    #[test]
+    fn slow_gate_off_records_no_per_tick_rows() {
+        let mut p = HostTickProfile::with_enabled(true);
+        for _ in 0..10 {
+            let slot = p.begin().expect("开启态");
+            let t = p.begin().expect("开启态");
+            p.end("HostInbound", Some(t));
+            assert!(
+                p.tick_rows().is_empty(),
+                "慢 tick 门关闭时不得保留逐 tick 段行"
+            );
+            let t = p.begin().expect("开启态");
+            p.probe("HostAoiAppearSelect", Some(t));
+            assert!(
+                p.tick_probe_rows().is_empty(),
+                "慢 tick 门关闭时不得保留逐 tick 子探针行"
+            );
+            p.end_tick(Some(slot));
+            assert!(p.take_slow_tick().is_none(), "慢 tick 门关闭时不得产生快照");
+        }
+    }
+
+    /// **慢 tick 快照内容**：只有工作段 ≥ 阈值的 tick 产生快照；段与子探针都带进快照，
+    /// 且**未达阈值的 tick 行必须清空**（不跨 tick 累积）。
+    ///
+    /// 变异：把 `_ => None` 分支换成恒 `Some` ⇒ 第一个快 tick 也出快照 ⇒ 红；
+    /// 把 `tick_rows.clear()` 删掉 ⇒ 第二个 tick 的快照里混入上一个 tick 的段 ⇒ 红。
+    #[test]
+    fn slow_gate_snapshot_only_over_threshold() {
+        // 阈值 1s：快 tick 远不到 ⇒ 无快照，且逐 tick 行被清空。
+        let mut p = HostTickProfile::with_slow_threshold_ns(1_000_000_000);
+        let slot = p.begin().expect("开启态");
+        let t = p.begin().expect("开启态");
+        p.end("HostInbound", Some(t));
+        let t = p.begin().expect("开启态");
+        p.probe("HostAoiAppearSelect", Some(t));
+        p.end_tick(Some(slot));
+        assert!(p.take_slow_tick().is_none(), "未达阈值不得产生慢 tick 快照");
+        assert!(
+            p.tick_rows().is_empty(),
+            "未产生快照的 tick 行必须清空（不跨 tick 累积）"
+        );
+        assert!(p.tick_probe_rows().is_empty());
+
+        // 阈值 1ms：睡 3ms 的段 ⇒ 工作段 ≥ 1ms ⇒ 有快照。
+        let mut p = HostTickProfile::with_slow_threshold_ns(1_000_000);
+        let slot = p.begin().expect("开启态");
+        let t = p.begin().expect("开启态");
+        std::thread::sleep(Duration::from_millis(3));
+        p.end("HostInbound", Some(t));
+        let t = p.begin().expect("开启态");
+        p.probe("HostAoiAppearSelect", Some(t));
+        p.end_tick(Some(slot));
+        let slow = p.take_slow_tick().expect("慢 tick 必须产生快照");
+        assert_eq!(slow.tick, 1, "1-based tick 序号");
+        assert!(slow.work_ns >= 1_000_000, "工作段必须 ≥ 阈值");
+        assert!(slow.total_ns >= slow.work_ns, "total 必须 ≥ work");
+        assert!(
+            slow.segments
+                .iter()
+                .any(|(n, ns)| *n == "HostInbound" && *ns >= 1_000_000),
+            "计时段必须进快照（且带真实 ns）"
+        );
+        assert!(
+            slow.probes.iter().any(|(n, _)| *n == "HostAoiAppearSelect"),
+            "命名子探针必须进快照"
+        );
+        assert_eq!(p.tick_rows().len(), 0, "快照取走后缓冲必须清空");
+        assert_eq!(p.tick_probe_rows().len(), 0);
+        assert!(
+            p.take_slow_tick().is_none(),
+            "快照只能取走一次（不重复打印）"
+        );
+    }
+
     /// **开启态累计 + 窗口**：段累计与调用次数、整 tick 残差、窗口取走与清零。
     #[test]
     fn enabled_profile_accumulates_and_takes_window() {
@@ -652,6 +1146,7 @@ mod tests {
             p.end("HostInbound", seg);
             if i == 0 {
                 p.end_tick(tick);
+                assert!(p.take_slow_tick().is_none(), "慢 tick 门缺省关闭");
                 assert_eq!(p.window_ticks, 1);
                 assert!(!p.due(), "1 tick 不得触发窗口");
                 // 首轮：HostInbound 之外的耗时记进残差。
@@ -662,6 +1157,7 @@ mod tests {
                 continue;
             }
             p.end_tick(tick);
+            assert!(p.take_slow_tick().is_none(), "慢 tick 门缺省关闭");
         }
         assert!(p.due(), "满 {REPORT_TICKS} tick 必须到期");
         let w = p.take_window().expect("窗口必须非空");
