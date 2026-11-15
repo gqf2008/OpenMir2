@@ -306,6 +306,9 @@ for rel, count, hold in runs:
   实例：2026-11-15 池卡 r2 用 `E:/MirServer/M2GameSvr/GameSrv.exe`（mtime 2026-10-22、来自已删 worktree `OpenMir2-wt-goods`）
   ⇒ 487 条 `ProcessHumans` 异常、`in_world` 恒 21/500 ⇒ 整轮作废。
 - 健康栈形态（360s 窗口实测）：`DBSrv`(C#) + `LoginSrv`(C#) + **`game-svr`(Rust, 5000)** + `login-gate`/`sel-gate`/`game-gate`(Rust)。
+- **`dotnet-counters` 采集必须记录目标进程**：落 `counters_target=<process> pid=<pid>` 到 `preflight.txt`
+  与 `report.json`。**缺这项的采集，其数字不得出现在报告结论里**（只能进附录并标「未证」）。
+  实例：2026-11-15 修复树 360s 的 `Allocation Rate≈418MB/s` 因归档未记 counters PID，只能降级为「疑为 BotSrv、未证」。
 - **CPU 采样一律用 `typeperf`，不要用 `Get-CimInstance Win32_Processor` 循环**（2026-11-15 实测）：
   CIM 连续采样时 top consumer 就是**发起采样的 `powershell` 进程本身**，会把空载读数打到 38–62%，
   从而误判「机器不空载」；同机 typeperf 6 采样为 11.8–18.7%（max 18.7 / mean 14.2）。
