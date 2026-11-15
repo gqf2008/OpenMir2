@@ -306,6 +306,11 @@ for rel, count, hold in runs:
   实例：2026-11-15 池卡 r2 用 `E:/MirServer/M2GameSvr/GameSrv.exe`（mtime 2026-10-22、来自已删 worktree `OpenMir2-wt-goods`）
   ⇒ 487 条 `ProcessHumans` 异常、`in_world` 恒 21/500 ⇒ 整轮作废。
 - 健康栈形态（360s 窗口实测）：`DBSrv`(C#) + `LoginSrv`(C#) + **`game-svr`(Rust, 5000)** + `login-gate`/`sel-gate`/`game-gate`(Rust)。
+- **以 `internal_errors` 为判据的窗口，起跑前必须跑一次 `BotSrv.exe --selftest-error-census`**，
+  输出存进归档 `errorstack-selftest.txt`（并记录被测二进制 sha256）。理由：这条自检用真实
+  `AppServer.LogOutputTemplate` 渲染真实 `NullReferenceException` 并断言「消息行 + 类型行 + `   at ` 帧」，
+  把「诊断链路通」从「等某轮恰好复现 NRE」变成**确定性检查**。变异（`:32` 改回 `Logger.Error(ex.Message, ex)`）
+  必须让它变红。**零异常的窗口不能证明诊断链路通**，只能写「未触发，诊断链路未获验证」。
 - **门禁运行的三态：PASS / FAIL / INCOMPLETE**（2026-11-15 定）。凡出现下列任一形态，一律判
   **INCOMPLETE**——**既不得计入 PASS，也不得归咎于代码**：
   rustc/cargo 在编译期被外部或系统回收器杀死；进程异常退出且**无任何 `error[...]`/`could not` 诊断行**；
