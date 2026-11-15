@@ -129,3 +129,6 @@ oracle `ChannelMessageHandler.ProcessBufferSend`（`src/M2Server/Net/ChannelMess
   明确拒绝登录 + 计数，已进世界 ⇒ 不关、保留队列/降级。本批 B 仍按原裁决（溢出即关闭）交付，
   该失败语义的变更由 `openmir2-gateway-frame-criticality-queue` 落地；真机 run2 的
   `rejected_sessions 500/500` 即该裁决的反例。
+- **已落地**（卡 `openmir2-gateway-frame-criticality-queue`，T-282/D-20 第三批）：两条通道
+  （非关键 AOI 帧绕开队列、丢弃计数；关键帧溢出按未进世界/已进世界分流，`close_inworld` 目标 0）。
+  分类清单、实现口径、计数与牙见 `docs/gate-frame-criticality-20261115.md`。

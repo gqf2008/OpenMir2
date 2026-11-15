@@ -15,6 +15,22 @@
 //! - **仍保持 oracle 的另一个丢点**：单包就超 `CheckBlock*10`（`:76-79`）——这种帧永远无法在
 //!   流控前提下发出去，照 oracle 丢弃，但**必须计数 + 日志**（[`DropStats::note_oversize`]）。
 //!
+//! ## 两条通道（卡 `openmir2-gateway-frame-criticality-queue`，总监 2026-11-15 加严）
+//!
+//! 分类见 [`crate::gate_criticality`]：**关键帧**（登录/控制/持久状态）走上面的 A+B 队列；
+//! **非关键帧**（AOI 位置/动作/状态类，如 `SM_TURN`/`SM_FEATURECHANGED`/`SM_CHARSTATUSCHANGED`）
+//! **完全绕开队列**——队列非空或 `SendChecked>0` 时立即丢弃并计数（`drop_noncritical`），
+//! 能直发时直发；**永不入队、永不因它关会话**。
+//!
+//! 关键帧溢出（B）按**会话阶段**分流（`rejected_sessions` 500/500 的反例裁决）：
+//!
+//! - **未进世界** ⇒ 明确拒绝登录：计数 `reject_login` + 对该会话发 `GM_CLOSE`（客户端可见断开）；
+//! - **已进世界** ⇒ **绝不关会话**：丢弃这一帧并标记降级（`degrade_inworld` + 每会话标记），
+//!   队列保持有界（不扩容、不清空），会话继续用既有队列/回显路径存活；
+//! - `close_inworld`（针对已进世界会话发过 `GM_CLOSE` 的次数）**目标恒为 0**——它由
+//!   [`DropStats::note_close_sent`] 在真正写出 `GM_CLOSE` 时按 `in_world` 记账，是这条不变量的
+//!   可观测面（删掉降级分支会让它涨起来）。
+//!
 //! ## 顺序硬约束（总监裁决，实现见 `lib.rs::send_gate_msg`/`flush_pending`）
 //!
 //! **flush 只在 `SendChecked` 清零后、任何新帧直发之前完成**；否则共享 FIFO 会让同一会话的
@@ -97,6 +113,24 @@ impl CloseOutcome {
     }
 }
 
+/// 非关键帧为什么没直发（只用于日志归因；两条都在 `drop_noncritical` 计数里）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NonCriticalDropReason {
+    /// 本 gate 线正在等 `GM_RECEIVE_OK`（`SendChecked > 0` 未超时）⇒ 收不了。
+    SendChecked,
+    /// 关键帧队列非空：直发会越过积压（同会话乱序）⇒ 按「收不了」处理。
+    CriticalPending,
+}
+
+impl NonCriticalDropReason {
+    fn as_str(self) -> &'static str {
+        match self {
+            NonCriticalDropReason::SendChecked => "SendChecked>0",
+            NonCriticalDropReason::CriticalPending => "CriticalPending",
+        }
+    }
+}
+
 /// 一次记账产生的待发日志（由调用方决定落到哪个日志通道）。
 #[derive(Debug, Default, PartialEq, Eq)]
 pub(crate) struct Note {
@@ -135,6 +169,19 @@ pub(crate) struct DropStats {
     overflow_bytes: u64,
     rejected_sessions: u64,
     close_failures: u64,
+    /// 收不了（`SendChecked>0` 或关键帧积压）而**直接丢弃**的非关键帧数（两条通道的 AOI 面）。
+    drop_noncritical_frames: u64,
+    drop_noncritical_bytes: u64,
+    /// 非关键帧直发成功数（`drop_noncritical + noncritical_sent` = 非关键通道收到总数）。
+    noncritical_sent_frames: u64,
+    /// 关键帧溢出且**未进世界** ⇒ 拒绝登录（含 `GM_CLOSE` 明确失败）的帧数。
+    reject_login_frames: u64,
+    /// 关键帧溢出且**已进世界** ⇒ 只降级、不关会话的帧数。
+    degrade_inworld_frames: u64,
+    /// 对**已进世界**会话真正发出 `GM_CLOSE` 的次数（不变量：目标恒 0）。
+    close_inworld_sessions: u64,
+    /// 被标记降级的会话（去重；与 `close_inworld` 相反，这里只标记、不断开）。
+    degraded_sessions: HashSet<u16>,
     max_depth_frames: usize,
     max_depth_bytes: usize,
     oversize_frames: u64,
@@ -150,6 +197,8 @@ pub(crate) struct DropStats {
     overflow_suppressed: u64,
     last_oversize_log_ms: Option<i64>,
     oversize_suppressed: u64,
+    last_noncritical_log_ms: Option<i64>,
+    noncritical_suppressed: u64,
     last_summary_ms: Option<i64>,
 }
 
@@ -210,6 +259,42 @@ impl DropStats {
     #[cfg(test)]
     pub(crate) fn rejected_sessions(&self) -> u64 {
         self.rejected_sessions
+    }
+
+    /// 非关键帧被丢弃数（只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn drop_noncritical_frames(&self) -> u64 {
+        self.drop_noncritical_frames
+    }
+
+    /// 非关键帧直发成功数（只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn noncritical_sent_frames(&self) -> u64 {
+        self.noncritical_sent_frames
+    }
+
+    /// 关键帧溢出且未进世界（拒绝登录）的帧数（只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn reject_login_frames(&self) -> u64 {
+        self.reject_login_frames
+    }
+
+    /// 关键帧溢出且已进世界（降级）的帧数（只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn degrade_inworld_frames(&self) -> u64 {
+        self.degrade_inworld_frames
+    }
+
+    /// 被标记降级的会话数（只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn degraded_sessions(&self) -> usize {
+        self.degraded_sessions.len()
+    }
+
+    /// 对已进世界会话发过 `GM_CLOSE` 的次数（不变量，目标 0；只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn close_inworld_sessions(&self) -> u64 {
+        self.close_inworld_sessions
     }
 
     /// 首次为某会话发 `GM_CLOSE` 时返回 true（去重；集合上限 [`MAX_CLOSED_SESSIONS`]，
@@ -323,9 +408,75 @@ impl DropStats {
         out
     }
 
-    /// 记录一次 **B：队列满拒绝**（计数 + 明确失败的结果）。
+    /// 记录一次 `GM_CLOSE` **真正写出**（`Ok(())` 之后调用）；`in_world=true` ⇒ 涨
+    /// [`DropStats::close_inworld_sessions`]（不变量被破坏的可观测面）。
+    pub(crate) fn note_close_sent(&mut self, in_world: bool) {
+        if in_world {
+            self.close_inworld_sessions += 1;
+        }
+    }
+
+    /// 非关键帧（AOI 瞬时帧）直发成功：只计数（失败面才需要日志/限速）。
+    pub(crate) fn note_noncritical_sent(&mut self) {
+        self.noncritical_sent_frames += 1;
+    }
+
+    /// 记录一次 **非关键帧收不了 ⇒ 立即丢弃**（永不入队、永不关会话）。
+    ///
+    /// `depth_frames/depth_bytes` 是丢弃瞬间的关键帧队列深度（关键帧积压导致的丢弃会显示非 0）。
     #[allow(clippy::too_many_arguments)]
-    pub(crate) fn note_overflow(
+    pub(crate) fn note_drop_noncritical(
+        &mut self,
+        ident: u16,
+        session: u16,
+        bytes: usize,
+        reason: NonCriticalDropReason,
+        in_world: bool,
+        depth_frames: usize,
+        depth_bytes: usize,
+        now: i64,
+    ) -> Note {
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        self.drop_noncritical_frames += 1;
+        self.drop_noncritical_bytes = self.drop_noncritical_bytes.saturating_add(bytes);
+        self.max_depth_frames = self.max_depth_frames.max(depth_frames);
+        self.max_depth_bytes = self.max_depth_bytes.max(depth_bytes);
+        self.bump_failure_hist(ident, session);
+
+        let mut out = Note::default();
+        let due = due(self.last_noncritical_log_ms, now);
+        if due {
+            let mut line = String::new();
+            let _ = write!(
+                line,
+                "event=gate_frame_drop gate={} reason=NonCritical channel=noncritical why={} \
+                 in_world={} ident={ident} session={session} bytes={bytes} \
+                 depth_frames={depth_frames} depth_bytes={depth_bytes} queue_max_bytes={} \
+                 queue_max_frames={} suppressed_since_last={} drop_noncritical_frames={} \
+                 noncritical_sent_frames={} uptime_ms={}",
+                self.gate,
+                reason.as_str(),
+                u8::from(in_world),
+                self.queue_max_bytes,
+                self.queue_max_frames,
+                self.noncritical_suppressed,
+                self.drop_noncritical_frames,
+                self.noncritical_sent_frames,
+                now.saturating_sub(self.start_ms),
+            );
+            out.log = Some(line);
+            self.last_noncritical_log_ms = Some(now);
+            self.noncritical_suppressed = 0;
+        } else {
+            self.noncritical_suppressed += 1;
+        }
+        self.summarize(&mut out, now);
+        out
+    }
+
+    /// 记录一次 **B：关键帧队列满且会话未进世界** ⇒ 拒绝登录（计数 + `GM_CLOSE` 结果）。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn note_reject_login(
         &mut self,
         ident: u16,
         session: u16,
@@ -340,6 +491,7 @@ impl DropStats {
         self.hold_bytes = self.hold_bytes.saturating_add(bytes);
         self.overflow_frames += 1;
         self.overflow_bytes = self.overflow_bytes.saturating_add(bytes);
+        self.reject_login_frames += 1;
         self.max_depth_frames = self.max_depth_frames.max(depth_frames);
         self.max_depth_bytes = self.max_depth_bytes.max(depth_bytes);
         if close == CloseOutcome::Sent {
@@ -347,6 +499,118 @@ impl DropStats {
         } else if close == CloseOutcome::Failed {
             self.close_failures += 1;
         }
+        self.bump_failure_hist(ident, session);
+
+        let mut out = Note::default();
+        let due = due(self.last_overflow_log_ms, now);
+        if due {
+            let mut line = String::new();
+            let _ = write!(
+                line,
+                "event=gate_frame_overflow gate={} reason=QueueFull channel=critical stage=login \
+                 in_world=0 ident={ident} session={session} bytes={bytes} \
+                 depth_frames={depth_frames} depth_bytes={depth_bytes} queue_max_bytes={} \
+                 queue_max_frames={} close={} close_sent={} close_failed={} \
+                 suppressed_since_last={} overflow_frames={} overflow_bytes={} \
+                 reject_login_frames={} rejected_sessions={} close_inworld_sessions={} \
+                 uptime_ms={}",
+                self.gate,
+                self.queue_max_bytes,
+                self.queue_max_frames,
+                close.as_str(),
+                close.sent(),
+                close.failed(),
+                self.overflow_suppressed,
+                self.overflow_frames,
+                self.overflow_bytes,
+                self.reject_login_frames,
+                self.rejected_sessions,
+                self.close_inworld_sessions,
+                now.saturating_sub(self.start_ms),
+            );
+            out.log = Some(line);
+            self.last_overflow_log_ms = Some(now);
+            self.overflow_suppressed = 0;
+        } else {
+            self.overflow_suppressed += 1;
+        }
+        self.summarize(&mut out, now);
+        out
+    }
+
+    /// 记录一次 **B：关键帧队列满且会话已进世界** ⇒ **只降级、绝不关**。
+    ///
+    /// 该帧被丢弃（队列保持有界：不扩容也不清空），会话打上「降级」标记后继续存活；
+    /// 本函数**不碰** `closed_sessions` / `rejected_sessions` / `close_inworld_sessions`。
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn note_degrade_inworld(
+        &mut self,
+        ident: u16,
+        session: u16,
+        bytes: usize,
+        depth_frames: usize,
+        depth_bytes: usize,
+        now: i64,
+    ) -> Note {
+        let bytes = u64::try_from(bytes).unwrap_or(u64::MAX);
+        self.hold_frames += 1;
+        self.hold_bytes = self.hold_bytes.saturating_add(bytes);
+        self.overflow_frames += 1;
+        self.overflow_bytes = self.overflow_bytes.saturating_add(bytes);
+        self.degrade_inworld_frames += 1;
+        self.max_depth_frames = self.max_depth_frames.max(depth_frames);
+        self.max_depth_bytes = self.max_depth_bytes.max(depth_bytes);
+        let newly_marked = self.claim_session_degrade(session);
+        self.bump_failure_hist(ident, session);
+
+        let mut out = Note::default();
+        let due = due(self.last_overflow_log_ms, now);
+        if due {
+            let mut line = String::new();
+            let _ = write!(
+                line,
+                "event=gate_frame_degrade gate={} reason=QueueFull channel=critical stage=in_world \
+                 in_world=1 ident={ident} session={session} bytes={bytes} \
+                 depth_frames={depth_frames} depth_bytes={depth_bytes} queue_max_bytes={} \
+                 queue_max_frames={} close=none degraded_session={} degraded_sessions={} \
+                 suppressed_since_last={} overflow_frames={} overflow_bytes={} \
+                 degrade_inworld_frames={} close_inworld_sessions={} uptime_ms={}",
+                self.gate,
+                self.queue_max_bytes,
+                self.queue_max_frames,
+                u8::from(newly_marked),
+                self.degraded_sessions.len(),
+                self.overflow_suppressed,
+                self.overflow_frames,
+                self.overflow_bytes,
+                self.degrade_inworld_frames,
+                self.close_inworld_sessions,
+                now.saturating_sub(self.start_ms),
+            );
+            out.log = Some(line);
+            self.last_overflow_log_ms = Some(now);
+            self.overflow_suppressed = 0;
+        } else {
+            self.overflow_suppressed += 1;
+        }
+        self.summarize(&mut out, now);
+        out
+    }
+
+    /// 首次把某会话标成「降级」时返回 true（去重；集合上限 [`MAX_CLOSED_SESSIONS`]）。
+    /// **只标记、不断开**——与 [`DropStats::claim_session_close`] 的语义严格分开。
+    pub(crate) fn claim_session_degrade(&mut self, session: u16) -> bool {
+        if self.degraded_sessions.contains(&session) {
+            return false;
+        }
+        if self.degraded_sessions.len() < MAX_CLOSED_SESSIONS {
+            self.degraded_sessions.insert(session);
+        }
+        true
+    }
+
+    /// 失败面直方图（reject/degrade/oversize/drop_noncritical 共用，按 ident/session 归因）。
+    fn bump_failure_hist(&mut self, ident: u16, session: u16) {
         bump(
             &mut self.by_ident,
             &mut self.ident_overflow,
@@ -359,38 +623,6 @@ impl DropStats {
             session,
             MAX_SESSION_KEYS,
         );
-
-        let mut out = Note::default();
-        let due = due(self.last_overflow_log_ms, now);
-        if due {
-            let mut line = String::new();
-            let _ = write!(
-                line,
-                "event=gate_frame_overflow gate={} reason=QueueFull ident={ident} session={session} \
-                 bytes={bytes} depth_frames={depth_frames} depth_bytes={depth_bytes} \
-                 queue_max_bytes={} queue_max_frames={} close={} close_sent={} close_failed={} \
-                 suppressed_since_last={} overflow_frames={} overflow_bytes={} rejected_sessions={} \
-                 uptime_ms={}",
-                self.gate,
-                self.queue_max_bytes,
-                self.queue_max_frames,
-                close.as_str(),
-                close.sent(),
-                close.failed(),
-                self.overflow_suppressed,
-                self.overflow_frames,
-                self.overflow_bytes,
-                self.rejected_sessions,
-                now.saturating_sub(self.start_ms),
-            );
-            out.log = Some(line);
-            self.last_overflow_log_ms = Some(now);
-            self.overflow_suppressed = 0;
-        } else {
-            self.overflow_suppressed += 1;
-        }
-        self.summarize(&mut out, now);
-        out
     }
 
     /// 记录一次 **oracle 单包超阈值丢弃**（`:76-79`；保持 oracle 语义，只加观测）。
@@ -404,18 +636,7 @@ impl DropStats {
         let bytes_u64 = u64::try_from(bytes).unwrap_or(u64::MAX);
         self.oversize_frames += 1;
         self.oversize_bytes = self.oversize_bytes.saturating_add(bytes_u64);
-        bump(
-            &mut self.by_ident,
-            &mut self.ident_overflow,
-            ident,
-            MAX_IDENT_KEYS,
-        );
-        bump(
-            &mut self.by_session,
-            &mut self.session_overflow,
-            session,
-            MAX_SESSION_KEYS,
-        );
+        self.bump_failure_hist(ident, session);
 
         let mut out = Note::default();
         let due = due(self.last_oversize_log_ms, now);
@@ -460,7 +681,10 @@ impl DropStats {
 
     /// 是否发生过任何值得落终值汇总的事件。
     fn has_activity(&self) -> bool {
-        self.hold_frames > 0 || self.oversize_frames > 0
+        self.hold_frames > 0
+            || self.oversize_frames > 0
+            || self.drop_noncritical_frames > 0
+            || self.noncritical_sent_frames > 0
     }
 
     fn summarize(&mut self, out: &mut Note, now: i64) {
@@ -490,7 +714,10 @@ impl DropStats {
              queue_max_frames={} hold_frames={} hold_bytes={} queued_frames={} queued_bytes={} \
              queue_disabled_frames={} flushed_frames={} flushed_bytes={} flush_waits={} \
              timeout_flushes={} overflow_frames={} overflow_bytes={} oversize_frames={} \
-             oversize_bytes={} rejected_sessions={} close_failures={} max_depth_frames={} \
+             oversize_bytes={} rejected_sessions={} close_failures={} \
+             drop_noncritical_frames={} drop_noncritical_bytes={} noncritical_sent_frames={} \
+             reject_login_frames={} degrade_inworld_frames={} degraded_sessions={} \
+             close_inworld_sessions={} max_depth_frames={} \
              max_depth_bytes={} top_idents={} top_sessions={} overflow_idents={} \
              overflow_sessions={} uptime_ms={}",
             self.gate,
@@ -512,6 +739,13 @@ impl DropStats {
             self.oversize_bytes,
             self.rejected_sessions,
             self.close_failures,
+            self.drop_noncritical_frames,
+            self.drop_noncritical_bytes,
+            self.noncritical_sent_frames,
+            self.reject_login_frames,
+            self.degrade_inworld_frames,
+            self.degraded_sessions.len(),
+            self.close_inworld_sessions,
             self.max_depth_frames,
             self.max_depth_bytes,
             top_pairs(&self.by_ident),
@@ -533,6 +767,9 @@ impl DropStats {
              \"flushed_frames\":{},\"flushed_bytes\":{},\"flush_waits\":{},\"timeout_flushes\":{},\
              \"overflow_frames\":{},\"overflow_bytes\":{},\"oversize_frames\":{},\
              \"oversize_bytes\":{},\"rejected_sessions\":{},\"close_failures\":{},\
+             \"drop_noncritical_frames\":{},\"drop_noncritical_bytes\":{},\
+             \"noncritical_sent_frames\":{},\"reject_login_frames\":{},\
+             \"degrade_inworld_frames\":{},\"degraded_sessions\":{},\"close_inworld_sessions\":{},\
              \"max_depth_frames\":{},\"max_depth_bytes\":{},\"top_idents\":\"{}\",\
              \"top_sessions\":\"{}\",\"overflow_idents\":{},\"overflow_sessions\":{}}}",
             now.saturating_sub(self.start_ms),
@@ -555,6 +792,13 @@ impl DropStats {
             self.oversize_bytes,
             self.rejected_sessions,
             self.close_failures,
+            self.drop_noncritical_frames,
+            self.drop_noncritical_bytes,
+            self.noncritical_sent_frames,
+            self.reject_login_frames,
+            self.degrade_inworld_frames,
+            self.degraded_sessions.len(),
+            self.close_inworld_sessions,
             self.max_depth_frames,
             self.max_depth_bytes,
             top_pairs(&self.by_ident),
@@ -677,15 +921,24 @@ mod tests {
         assert!(queued(&mut s, 50, 1, 11_001).log.is_none());
     }
 
-    /// 判据 B（总监裁决）：队列满 ⇒ 拒绝帧计数 +1、日志 `reason=QueueFull`，
+    /// 判据 B（总监裁决）：关键帧溢出且**未进世界** ⇒ 拒绝登录计数 +1、日志 `stage=login`，
     /// 且 `close=sent` / `rejected_sessions=1`（明确失败发生了）。删掉该分支 ⇒ 本用例必红。
     #[test]
-    fn overflow_is_counted_and_logged_with_close() {
+    fn reject_login_is_counted_and_logged_with_close() {
         let mut s = stats();
-        let note = s.note_overflow(51, 43, 900, 4096, 262_144, CloseOutcome::Sent, 2_000);
+        let note = s.note_reject_login(51, 43, 900, 4096, 262_144, CloseOutcome::Sent, 2_000);
         assert_eq!(s.overflow_frames, 1);
         assert_eq!(s.overflow_bytes, 900);
+        assert_eq!(
+            s.reject_login_frames, 1,
+            "未进世界的溢出必须记 reject_login"
+        );
+        assert_eq!(s.degrade_inworld_frames, 0);
         assert_eq!(s.rejected_sessions, 1);
+        assert_eq!(
+            s.close_inworld_sessions, 0,
+            "登录阶段关闭不是 close_inworld"
+        );
         assert_eq!(s.queued_frames, 0);
         assert_eq!(s.by_ident.get(&51), Some(&1), "拒绝帧要按 ident 归因");
         assert_eq!(s.by_session.get(&43), Some(&1), "拒绝帧要按 session 归因");
@@ -693,6 +946,9 @@ mod tests {
         for needle in [
             "event=gate_frame_overflow",
             "reason=QueueFull",
+            "channel=critical",
+            "stage=login",
+            "in_world=0",
             "ident=51",
             "session=43",
             "depth_frames=4096",
@@ -700,12 +956,120 @@ mod tests {
             "close=sent",
             "close_sent=1",
             "overflow_frames=1",
+            "reject_login_frames=1",
             "rejected_sessions=1",
+            "close_inworld_sessions=0",
         ] {
-            assert!(log.contains(needle), "溢出日志缺 {needle}：{log}");
+            assert!(log.contains(needle), "拒绝登录日志缺 {needle}：{log}");
         }
         assert_eq!(s.max_depth_frames, 4096);
         assert_eq!(s.max_depth_bytes, 262_144);
+    }
+
+    /// **不变量**：关键帧溢出且**已进世界** ⇒ 只降级、不关会话；`close_inworld` 恒 0。
+    ///
+    /// 删掉 `in_world` 分支（让它也走关闭）⇒ 本用例的 `degrade_inworld_frames`/`degraded_sessions`
+    /// 断言与 `close_inworld_sessions=0` 同时红。
+    #[test]
+    fn inworld_overflow_degrades_never_closes() {
+        let mut s = stats();
+        let note = s.note_degrade_inworld(41, 77, 44, 4096, 262_144, 3_000);
+        assert_eq!(s.overflow_frames, 1);
+        assert_eq!(s.degrade_inworld_frames, 1);
+        assert_eq!(s.reject_login_frames, 0, "已进世界不得记成拒绝登录");
+        assert_eq!(s.rejected_sessions, 0, "已进世界不得关会话");
+        assert_eq!(s.close_failures, 0);
+        assert_eq!(s.close_inworld_sessions, 0, "close_inworld 目标恒 0");
+        assert_eq!(s.degraded_sessions(), 1, "必须有降级标记");
+        assert!(!s.claim_session_degrade(77), "同一会话降级标记去重");
+        let log = note.log.expect("降级必须出行");
+        for needle in [
+            "event=gate_frame_degrade",
+            "channel=critical",
+            "stage=in_world",
+            "in_world=1",
+            "close=none",
+            "degraded_session=1",
+            "degraded_sessions=1",
+            "degrade_inworld_frames=1",
+            "close_inworld_sessions=0",
+        ] {
+            assert!(log.contains(needle), "降级日志缺 {needle}：{log}");
+        }
+    }
+
+    /// `close_inworld` 的可观测面：只有真对已进世界会话写 `GM_CLOSE` 才涨（用于钉不变量）。
+    #[test]
+    fn close_inworld_counter_tracks_inworld_closes_only() {
+        let mut s = stats();
+        s.note_close_sent(false);
+        assert_eq!(s.close_inworld_sessions, 0);
+        s.note_close_sent(true);
+        assert_eq!(s.close_inworld_sessions, 1);
+    }
+
+    /// 非关键帧丢弃：计数 + 归因 + 日志；不占 `hold_frames`、不进队列（`queued_frames` 不动）。
+    #[test]
+    fn noncritical_drop_is_counted_and_logged() {
+        let mut s = stats();
+        let note = s.note_drop_noncritical(
+            41,
+            9,
+            44,
+            NonCriticalDropReason::SendChecked,
+            true,
+            0,
+            0,
+            1_000,
+        );
+        assert_eq!(s.drop_noncritical_frames, 1);
+        assert_eq!(s.drop_noncritical_bytes, 44);
+        assert_eq!(s.hold_frames, 0, "非关键通道不是 Hold 分支");
+        assert_eq!(s.queued_frames, 0, "非关键帧永不入队");
+        assert_eq!(s.overflow_frames, 0);
+        assert_eq!(s.by_ident.get(&41), Some(&1));
+        let log = note.log.expect("丢弃必须出行");
+        for needle in [
+            "event=gate_frame_drop",
+            "reason=NonCritical",
+            "channel=noncritical",
+            "why=SendChecked>0",
+            "in_world=1",
+            "ident=41",
+            "session=9",
+            "drop_noncritical_frames=1",
+        ] {
+            assert!(log.contains(needle), "非关键丢弃日志缺 {needle}：{log}");
+        }
+        s.note_drop_noncritical(
+            10,
+            9,
+            44,
+            NonCriticalDropReason::CriticalPending,
+            true,
+            2,
+            88,
+            1_001,
+        );
+        assert_eq!(s.drop_noncritical_frames, 2);
+        let log = s
+            .note_drop_noncritical(
+                10,
+                9,
+                44,
+                NonCriticalDropReason::CriticalPending,
+                true,
+                2,
+                88,
+                2_500,
+            )
+            .log
+            .expect("限速到点必须再出行");
+        assert!(log.contains("why=CriticalPending"), "{log}");
+        assert!(
+            log.contains("depth_frames=2"),
+            "必须记录丢弃时的关键帧积压：{log}"
+        );
     }
 
     /// 溢出日志与入队日志**各自限速**：同一秒内先入队再溢出，溢出那条仍要出行（不允许被吞）。
@@ -714,7 +1078,7 @@ mod tests {
         let mut s = stats();
         assert!(queued(&mut s, 50, 1, 5_000).log.is_some());
         let log = s
-            .note_overflow(50, 2, 10, 1, 10, CloseOutcome::Sent, 5_010)
+            .note_reject_login(50, 2, 10, 1, 10, CloseOutcome::Sent, 5_010)
             .log
             .expect("溢出日志不得被入队日志限速吞掉");
         assert!(log.contains("event=gate_frame_overflow"), "{log}");
@@ -792,7 +1156,7 @@ mod tests {
     fn histograms_are_bounded() {
         let mut s = stats();
         for i in 0..100u16 {
-            let _ = s.note_overflow(i, u16::MAX - i, 1, 1, 1, CloseOutcome::Duplicate, 0);
+            let _ = s.note_reject_login(i, u16::MAX - i, 1, 1, 1, CloseOutcome::Duplicate, 0);
         }
         assert_eq!(s.by_ident.len(), MAX_IDENT_KEYS);
         assert_eq!(
@@ -813,7 +1177,17 @@ mod tests {
         let mut s = DropStats::new(4, 1_000);
         s.set_queue_limits(true, 262_144, 4096);
         let _ = queued(&mut s, 50, 9, 2_000);
-        let _ = s.note_overflow(50, 9, 10, 1, 130, CloseOutcome::Sent, 2_001);
+        let _ = s.note_reject_login(50, 9, 10, 1, 130, CloseOutcome::Sent, 2_001);
+        let _ = s.note_drop_noncritical(
+            41,
+            9,
+            44,
+            NonCriticalDropReason::SendChecked,
+            false,
+            0,
+            0,
+            2_002,
+        );
         let json = s.final_summary_json(6_000).expect("有事件就要有终值");
         for key in [
             "\"wall_ms\":6000",
@@ -826,8 +1200,14 @@ mod tests {
             "\"flushed_frames\":0",
             "\"overflow_frames\":1",
             "\"rejected_sessions\":1",
-            "\"top_idents\":\"50:1\"",
-            "\"top_sessions\":\"9:1\"",
+            "\"reject_login_frames\":1",
+            "\"degrade_inworld_frames\":0",
+            "\"degraded_sessions\":0",
+            "\"close_inworld_sessions\":0",
+            "\"drop_noncritical_frames\":1",
+            "\"noncritical_sent_frames\":0",
+            "\"top_idents\":\"41:1,50:1\"",
+            "\"top_sessions\":\"9:2\"",
         ] {
             assert!(json.contains(key), "NDJSON 缺 {key}：{json}");
         }

@@ -33,6 +33,7 @@ mod dbclient;
 mod enter;
 mod gamegold;
 mod gate_backpressure;
+mod gate_criticality;
 mod gate_queue;
 mod goldsales;
 mod guild_cmd;
@@ -29881,7 +29882,11 @@ async fn apply_sim_cmd_async(
             };
             let mut wire = head.to_bytes().to_vec();
             wire.extend_from_slice(&body);
-            let (decision, note) = send_gate_msg(tx, state, stats, check_block, &wire).await?;
+            // 卡 `openmir2-gateway-frame-criticality-queue`：溢出分流按**会话阶段**判定
+            // （未进世界 ⇒ 拒绝登录；已进世界 ⇒ 只降级、绝不关）。取槽表同一时刻的真实标记。
+            let in_world = u.in_world;
+            let (decision, note) =
+                send_gate_msg(tx, state, stats, check_block, &wire, in_world).await?;
             emit_drop_note(note);
             // **卡 openmir2-sm-logon-cross-session-delivery**：SM_LOGON(50) 的三方对齐服务端侧
             // （总监归因判据 step2）。只在本卡诊断开关下打印，默认关 ⇒ 生产日志与行为不变。
@@ -29904,7 +29909,16 @@ async fn apply_sim_cmd_async(
             apply_sim_send_raw(socket, &payload, users, tx, state, stats, check_block).await
         }
         other => {
+            // 卡 `openmir2-gateway-frame-criticality-queue`（总监 P3 F2）：世界侧清槽（KickUser）
+            // 也是会话释放——先取 `SessionId`，清槽后清队列残留（防复用误投）。
+            let released_session = match &other {
+                SimToGate::KickUser { socket } => {
+                    users.find(0, *socket).map_or(0, |u| u.session_id)
+                }
+                _ => 0,
+            };
             apply_sim_cmd(other, users);
+            purge_session_residue(state, released_session);
             Ok(())
         }
     }
@@ -29939,7 +29953,8 @@ async fn apply_sim_send_raw(
     };
     let mut wire = head.to_bytes().to_vec();
     wire.extend_from_slice(payload);
-    let (_, note) = send_gate_msg(tx, state, stats, check_block, &wire).await?;
+    let in_world = u.in_world;
+    let (_, note) = send_gate_msg(tx, state, stats, check_block, &wire, in_world).await?;
     emit_drop_note(note);
     Ok(())
 }
@@ -30011,6 +30026,11 @@ enum SendDecision {
     Send,
     /// 单包就超阈值 ⇒ 丢弃（`:76-79`）
     Drop,
+    /// 卡 `openmir2-gateway-frame-criticality-queue`：非关键帧（AOI 瞬时帧）**直发**，未占队列。
+    NonCriticalSent,
+    /// 卡 `openmir2-gateway-frame-criticality-queue`：非关键帧**收不了 ⇒ 立即丢弃**（计入
+    /// `drop_noncritical`，永不入队、永不关会话）。
+    NonCriticalDrop,
 }
 
 /// 判定的纯函数（副作用只有超时清零，照 `:58-66`）。
@@ -30033,14 +30053,24 @@ fn send_decision(state: &mut KeepAlive, check_block: usize, len: usize, now: i64
     SendDecision::Send
 }
 
-/// 网关发送口的 **A+B 策略**（在 oracle `ChannelMessageHandler.cs:50-95` 的 `ProcessBufferSend`
-/// 规则上按总监裁决改两处）：
+/// 网关发送口的 **两条通道**（oracle `ChannelMessageHandler.cs:50-95` 的 `ProcessBufferSend` 规则
+/// 上按总监 2026-11-15 裁决改造；卡 `openmir2-gateway-frame-criticality-queue`）。
+///
+/// ## 非关键通道（AOI 位置/动作/状态类）
+///
+/// `gate_criticality::channel_of == NonCritical` 的帧**完全绕开队列**（见 [`send_noncritical`]）：
+/// 能直发就直发；`SendChecked > 0` 或关键帧队列非空 ⇒ **立即丢弃 + `drop_noncritical` 计数**。
+/// **永不入队、永不因它关会话**——这类帧下一次转身/移动/状态变化会被覆盖。
+///
+/// ## 关键通道（默认；登录/控制/持久状态）
 ///
 /// 1. **A 有界排队**：`SendChecked > 0`（含「刚超时清零」的那一包）不再直接丢，而是按 FIFO 进
 ///    per-gate 有界队列（[`gate_queue`]）；`GM_RECEIVE_OK` 回显或 50ms 超时清零后由
 ///    [`flush_pending`] 按序补发。
-/// 2. **B 溢出即拒**：队列满（字节/帧数）时拒绝该帧——计数 + 结构化日志 + 对该会话发
-///    `GM_CLOSE`（客户端可见断开），**不静默丢**。
+/// 2. **B 溢出按会话阶段分流**（总监加严：关掉正在玩的玩家永远不该是第一手段）：
+///    - **未进世界** ⇒ 明确拒绝登录：`reject_login` 计数 + 对该会话发 `GM_CLOSE`（客户端可见断开）；
+///    - **已进世界** ⇒ **绝不关会话**：丢弃该帧 + `degrade_inworld` 计数 + 每会话降级标记，
+///      队列保持有界（不扩容/不清空），会话靠既有回显/超时路径继续存活。`close_inworld` 目标 0。
 ///
 /// 保持 oracle 语义的两处：② 累积 `SendBlockCount + len >= CheckBlock*10` ⇒ 先发一条
 /// `GM_RECEIVE_OK` 并置 `SendChecked=1`（`:74-83`）；若 `SendBlockCount == 0 && CheckBlock*10 <= len`
@@ -30053,6 +30083,8 @@ fn send_decision(state: &mut KeepAlive, check_block: usize, len: usize, now: i64
 ///   已有积压之后，绝不会越过它们）；
 /// - `Send`/`CheckFirst` 分支若队列非空，**新帧也先入队**，再交给 [`flush_pending`] 统一按 FIFO
 ///   写出；直发路径只在队列为空时可达；
+/// - 非关键帧也一样：关键帧队列非空时**丢弃**（不直发、不插队）——否则同一会话的
+///   `SM_LOGON`（积压）与该会话的 `SM_TURN`（直发）会乱序；
 /// - `dispatch` 的 `GM_RECEIVE_OK`（清零点）与 `GM_OPEN`（直发 `GM_SERVERUSERINDEX` 前）都会先
 ///   尝试 [`flush_pending`]。
 ///
@@ -30063,13 +30095,30 @@ async fn send_gate_msg(
     stats: &mut gate_backpressure::DropStats,
     check_block: usize,
     wire: &[u8],
+    in_world: bool,
 ) -> Result<(SendDecision, gate_backpressure::Note)> {
     let now = now_ms();
+    let (ident, session, _, inner_command) = wire_identity(wire);
+    if gate_criticality::channel_of(ident, inner_command) == gate_criticality::Channel::NonCritical
+    {
+        return send_noncritical(
+            tx,
+            state,
+            stats,
+            check_block,
+            wire,
+            ident,
+            session,
+            in_world,
+            now,
+        )
+        .await;
+    }
     let decision = send_decision(state, check_block, wire.len(), now);
     match decision {
         SendDecision::Hold => {
             // A：入队（FIFO）。
-            let note = queue_or_reject(tx, state, stats, wire).await?;
+            let note = queue_or_reject(tx, state, stats, wire, in_world).await?;
             // B：若 `send_decision` 刚因 50ms 超时清零，本帧已排在积压之后 ⇒ 立刻按序补发。
             //    约束：清零后、任何新帧直发之前（此刻没有直发）。
             if state.send_checked == 0 && !state.pending.is_empty() {
@@ -30081,7 +30130,6 @@ async fn send_gate_msg(
         SendDecision::Drop => {
             // oracle `:76-79`：单包就超阈值且累计为 0 ⇒ 这一帧永远无法在流控前提下发出去，保持丢弃；
             // 但计数 + 日志（不允许静默）。
-            let (ident, session, _) = wire_identity(wire);
             let note = stats.note_oversize(ident, session, wire.len(), now);
             Ok((decision, note))
         }
@@ -30089,7 +30137,7 @@ async fn send_gate_msg(
             // **顺序硬约束**：队列非空 ⇒ 新帧先入队，再由 `flush_pending` 按 FIFO 补发；
             // 绝不越过积压帧直发（否则 `SM_SERVERUSERINDEX → SM_LOGON` 会乱序）。
             if !state.pending.is_empty() {
-                let note = queue_or_reject(tx, state, stats, wire).await?;
+                let note = queue_or_reject(tx, state, stats, wire, in_world).await?;
                 if state.send_checked == 0 && !state.pending.is_empty() {
                     flush_pending(tx, state, stats, check_block).await?;
                 }
@@ -30098,18 +30146,91 @@ async fn send_gate_msg(
             send_direct(tx, state, check_block, wire, now).await?;
             Ok((decision, gate_backpressure::Note::default()))
         }
+        // `send_decision` 只产出前四档；非关键两档由 [`send_noncritical`] 直接返回。
+        SendDecision::NonCriticalSent | SendDecision::NonCriticalDrop => {
+            unreachable!("非关键判定不在 send_decision 里")
+        }
     }
 }
 
-/// 把新帧按 FIFO 入队；队列满走 B（拒绝 + 计数 + `GM_CLOSE`）；队列被回退开关禁用时按 oracle
-/// 直接丢，但仍计数 + 日志（不静默）。
+/// **非关键通道**：AOI 瞬时帧永不入队、永不关会话。
+///
+/// - 关键帧队列非空 ⇒ 丢弃（直发会越过积压 ⇒ 同会话乱序；等价于「收不了」）；
+/// - `SendChecked > 0` 且未超 [`SOC_CHECK_TIMEOUT_MS`] ⇒ 丢弃；
+/// - 已超时 ⇒ 按 oracle 清零（非关键帧本就允许丢，清零后能发就发，不再压住）；
+/// - 否则直发（沿用 oracle 的 `CheckBlock*10` 阈值与 `SendBlockCount` 记账）。
+#[allow(clippy::too_many_arguments)]
+async fn send_noncritical(
+    tx: &Arc<Mutex<OwnedWriteHalf>>,
+    state: &mut KeepAlive,
+    stats: &mut gate_backpressure::DropStats,
+    check_block: usize,
+    wire: &[u8],
+    ident: u16,
+    session: u16,
+    in_world: bool,
+    now: i64,
+) -> Result<(SendDecision, gate_backpressure::Note)> {
+    let depth_frames = state.pending.len();
+    let depth_bytes = state.pending.bytes();
+    let drop_note = |stats: &mut gate_backpressure::DropStats,
+                     reason: gate_backpressure::NonCriticalDropReason| {
+        stats.note_drop_noncritical(
+            ident,
+            session,
+            wire.len(),
+            reason,
+            in_world,
+            depth_frames,
+            depth_bytes,
+            now,
+        )
+    };
+    if !state.pending.is_empty() {
+        return Ok((
+            SendDecision::NonCriticalDrop,
+            drop_note(
+                stats,
+                gate_backpressure::NonCriticalDropReason::CriticalPending,
+            ),
+        ));
+    }
+    if state.send_checked > 0 {
+        if now - state.send_check_tick > SOC_CHECK_TIMEOUT_MS {
+            state.send_checked = 0;
+            state.send_block_count = 0;
+        } else {
+            return Ok((
+                SendDecision::NonCriticalDrop,
+                drop_note(stats, gate_backpressure::NonCriticalDropReason::SendChecked),
+            ));
+        }
+    }
+    // oracle `:76-79` 的「单包永不可发」规则对非关键通道同样成立（保持观测口径）。
+    let threshold = check_block.saturating_mul(10);
+    if state.send_block_count == 0 && threshold <= wire.len() {
+        let note = stats.note_oversize(ident, session, wire.len(), now);
+        return Ok((SendDecision::Drop, note));
+    }
+    send_direct(tx, state, check_block, wire, now).await?;
+    stats.note_noncritical_sent();
+    Ok((
+        SendDecision::NonCriticalSent,
+        gate_backpressure::Note::default(),
+    ))
+}
+
+/// 把新帧按 FIFO 入队。队列满时按**会话阶段**分流（见 [`send_gate_msg`]）：未进世界 ⇒ 拒绝登录
+/// 并给该会话发 `GM_CLOSE`；已进世界 ⇒ 只降级、**绝不关**。队列被回退开关禁用时按 oracle 直接丢，
+/// 但仍计数 + 日志（不静默）。
 async fn queue_or_reject(
     tx: &Arc<Mutex<OwnedWriteHalf>>,
     state: &mut KeepAlive,
     stats: &mut gate_backpressure::DropStats,
     wire: &[u8],
+    in_world: bool,
 ) -> Result<gate_backpressure::Note> {
-    let (ident, session, socket) = wire_identity(wire);
+    let (ident, session, socket, _) = wire_identity(wire);
     let now = now_ms();
     match state.pending.enqueue(wire.to_vec()) {
         gate_queue::EnqueueOutcome::Queued => Ok(stats.note_queued(
@@ -30125,15 +30246,31 @@ async fn queue_or_reject(
             Ok(stats.note_dropped_hold(ident, session, wire.len(), now))
         }
         gate_queue::EnqueueOutcome::Overflow => {
-            // B：**明确失败**——给该会话发 `GM_CLOSE`（同一会话去重）。写失败不中断（链路随后会被
-            // 读错误收掉），但结果落进日志/计数（`close=failed`），不静默。
+            if in_world {
+                // **已进世界：绝不关**。丢弃这一帧 + 降级标记；队列保持有界（不扩容/不清空）。
+                return Ok(stats.note_degrade_inworld(
+                    ident,
+                    session,
+                    wire.len(),
+                    state.pending.len(),
+                    state.pending.bytes(),
+                    now,
+                ));
+            }
+            // **未进世界：明确拒绝登录**——给该会话发 `GM_CLOSE`（同一会话去重）。写失败不中断
+            // （链路随后会被读错误收掉），但结果落进日志/计数（`close=failed`），不静默。
+            // `note_close_sent(in_world)` 是 `close_inworld == 0` 不变量的可观测面：若有人删掉上面的
+            // 降级分支，`in_world=true` 会流到这里并把它涨起来。
             let close = if session == 0 {
                 gate_backpressure::CloseOutcome::NoSession
             } else if !stats.claim_session_close(session) {
                 gate_backpressure::CloseOutcome::Duplicate
             } else {
                 match send_gate_close(tx, socket, session).await {
-                    Ok(()) => gate_backpressure::CloseOutcome::Sent,
+                    Ok(()) => {
+                        stats.note_close_sent(in_world);
+                        gate_backpressure::CloseOutcome::Sent
+                    }
                     Err(e) => {
                         glog!(
                             "WRN",
@@ -30143,7 +30280,7 @@ async fn queue_or_reject(
                     }
                 }
             };
-            Ok(stats.note_overflow(
+            Ok(stats.note_reject_login(
                 ident,
                 session,
                 wire.len(),
@@ -30225,7 +30362,7 @@ async fn flush_pending(
         if state.send_block_count + len >= threshold {
             if state.send_block_count == 0 && threshold <= len {
                 // 与 oracle `:76-79` 同规则：单包就超阈值 ⇒ 无法发送，拒绝并留痕。
-                let (ident, session, _) = wire_identity(&frame);
+                let (ident, session, _, _) = wire_identity(&frame);
                 let note = stats.note_oversize(ident, session, len, now_ms());
                 emit_drop_note(note);
                 continue;
@@ -30260,10 +30397,42 @@ fn flush_deadline(state: &KeepAlive) -> Option<tokio::time::Instant> {
     Some(tokio::time::Instant::now() + dur)
 }
 
-/// 从一帧下行 wire 取 `(ident, session, socket)`：`ident` 优先取内层 12B 命令头的 SM_* 标识
-/// （仅 `GM_DATA` 且 `PackLength >= 12` 的帧；短包 `PackLength < 0` 的尾巴不是命令头），
+/// 一帧 wire 的外层 `session_id`（队列残留清理用；非 20B 头 ⇒ 0）。
+fn wire_session_id(wire: &[u8]) -> u16 {
+    ServerMessage::from_bytes(wire).map_or(0, |m| m.session_id)
+}
+
+/// 会话释放时清掉发送队列里该 **`SessionId`** 的残留帧（卡
+/// `openmir2-gateway-frame-criticality-queue`，总监 P3 F2）。
+///
+/// 为什么必须清：队列存的是**完整 wire**（外层头带 `SessionId`），补发按 FIFO 不按会话；网关的
+/// `SessionId` 是 4 位随机数，在 ≤50ms 的队列窗口内**可能被新会话复用**。不清 ⇒ 旧会话的残留帧
+/// 被投给新会话（**玩家收到别人的数据，无法察觉，日志也无异常**）。服务端无权禁止网关复用 id，
+/// 只能保证队列不持有已释放会话的帧。返回清理的帧数（>0 时打 WRN，可观测）。
+fn purge_session_residue(state: &mut KeepAlive, session: u16) -> usize {
+    if session == 0 {
+        return 0;
+    }
+    let n = state
+        .pending
+        .retain(|wire| wire_session_id(wire) != session);
+    if n > 0 {
+        glog!(
+            "WRN",
+            "会话释放：清掉 session={session} 的 {n} 帧队列残留（防 SessionId 复用误投）"
+        );
+    }
+    n
+}
+
+/// 从一帧下行 wire 取 `(ident, session, socket, inner_command)`：`ident` 优先取内层 12B 命令头的
+/// SM_* 标识（仅 `GM_DATA` 且 `PackLength >= 12` 的帧；短包 `PackLength < 0` 的尾巴不是命令头），
 /// 否则退回外层 `ServerMessage.ident`；`session`/`socket` 取外层头（与网关路由同源）。
-fn wire_identity(wire: &[u8]) -> (u16, u16, i32) {
+///
+/// `inner_command` 标明 `ident` 是否来自内层命令头。**关键性分类必须看它**：外层 `GM_*` 管理号
+/// （`GM_CLOSE=2` … `GM_STOP=8`）与 `SM_*` 前几个值数值相撞，控制帧不能被当成 AOI 帧丢掉
+/// （见 `gate_criticality` 模块文档）。
+fn wire_identity(wire: &[u8]) -> (u16, u16, i32, bool) {
     let outer = ServerMessage::from_bytes(wire);
     let session = outer.map_or(0, |m| m.session_id);
     let socket = outer.map_or(0, |m| m.socket);
@@ -30279,7 +30448,10 @@ fn wire_identity(wire: &[u8]) -> (u16, u16, i32) {
     } else {
         None
     };
-    (inner_ident.unwrap_or(outer_ident), session, socket)
+    match inner_ident {
+        Some(ident) => (ident, session, socket, true),
+        None => (outer_ident, session, socket, false),
+    }
 }
 
 /// 把丢帧观测落到本进程既有日志出口（`glog`）与可选 NDJSON（`MIR2_GATE_STATS_OUT`）。
@@ -30366,6 +30538,11 @@ async fn dispatch(
         grobal2::GM_CLOSE => {
             // `:160-162`：**按 socket** 关。角色名要先读（`close_by_socket` 会把槽置空）。
             let chr_name = users.chr_name_by_socket(msg.socket);
+            // 卡 `openmir2-gateway-frame-criticality-queue`（总监 P3 F2）：释放前先记下该会话的
+            // `SessionId`，关槽后清掉队列里它的残留帧（防 SessionId 复用误投）。
+            let released_session = users
+                .find(0, msg.socket)
+                .map_or(msg.session_id, |u| u.session_id);
             if let Some(index) = users.close_by_socket(msg.socket) {
                 glog!(
                     "INF",
@@ -30383,6 +30560,7 @@ async fn dispatch(
                     socket: msg.socket,
                 });
             }
+            purge_session_residue(state, released_session);
         }
         grobal2::GM_CHECKCLIENT => {
             // `:163-165`：只置标志。**消费者在本进程**：`src/M2Server/Net/TCPNetChannel.cs:435-439`
@@ -30476,6 +30654,9 @@ async fn dispatch(
                             msg.session_id
                         );
                         users.close_by_socket(msg.socket);
+                        // 卡 `openmir2-gateway-frame-criticality-queue`（总监 P3 F2）：认证失败也是
+                        // 会话释放，清掉该 `SessionId` 的队列残留（防复用误投）。
+                        purge_session_residue(state, msg.session_id);
                         let _ = ev_tx.send(GateEvent::Closed {
                             index: i32::from(service_id),
                             chr_name: String::new(),
@@ -32558,20 +32739,26 @@ mod tests {
     }
 
     /// F1（reviewer-26）：`wire_identity` 三条分支直接单测——内层命令头优先、短包退回外层
-    /// ident、长度不足 20B ⇒ `(0,0,0)`。改回「恒取内层」或「恒取外层」时本用例必红。
+    /// ident、长度不足 20B ⇒ `(0,0,0)`；`inner_command` 标记要能区分「内层 SM_*」与
+    /// 「外层 `GM_*` 控制帧」（关键性分类的前提，见 `gate_criticality`）。
+    /// 改回「恒取内层」或「恒取外层」时本用例必红。
     #[test]
     fn wire_identity_prefers_inner_command_head() {
         let index = queue_test_direct(grobal2::GM_SERVERUSERINDEX, 42, 900);
         assert_eq!(
             wire_identity(&index),
-            (u16::from(grobal2::GM_SERVERUSERINDEX), 42, 900),
-            "非 GM_DATA 直发帧取外层 ident/session/socket"
+            (u16::from(grobal2::GM_SERVERUSERINDEX), 42, 900, false),
+            "非 GM_DATA 直发帧取外层 ident/session/socket（且不是命令帧）"
         );
-        assert_eq!(wire_identity(&[0u8; 3]), (0, 0, 0), "短包 ⇒ (0,0,0)");
+        assert_eq!(
+            wire_identity(&[0u8; 3]),
+            (0, 0, 0, false),
+            "短包 ⇒ (0,0,0,false)"
+        );
         let logon = queue_test_wire(mir2_protocol::messages::SM_LOGON, 42);
         assert_eq!(
             wire_identity(&logon),
-            (mir2_protocol::messages::SM_LOGON, 42, 900),
+            (mir2_protocol::messages::SM_LOGON, 42, 900, true),
             "GM_DATA 取内层 SM_* ident"
         );
         // 短包（`PackLength < 0`，尾巴是 `'#' + 正文 + '!'` 的正文，不是 12B 命令头）⇒ 外层 ident。
@@ -32589,7 +32776,7 @@ mod tests {
         short.extend_from_slice(&[0xFF, 0xFF, 0, 0, 0xAB, 0xCD, 0, 0, 0, 0, 0, 0]);
         assert_eq!(
             wire_identity(&short),
-            (u16::from(grobal2::GM_DATA), 42, 900),
+            (u16::from(grobal2::GM_DATA), 42, 900, false),
             "短包不得把正文错当命令头"
         );
     }
@@ -32641,7 +32828,7 @@ mod tests {
         state.send_checked = 1;
         state.send_check_tick = now_ms();
         let logon = queue_test_wire(mir2_protocol::messages::SM_LOGON, 42);
-        let (decision, note) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &logon)
+        let (decision, note) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &logon, false)
             .await
             .unwrap();
         assert_eq!(decision, SendDecision::Hold);
@@ -32707,7 +32894,7 @@ mod tests {
 
         // 积压帧 A（INDEX 形状）在 Hold 期间入队。
         let a = queue_test_direct(grobal2::GM_SERVERUSERINDEX, 42, 900);
-        let (d, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &a)
+        let (d, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &a, false)
             .await
             .unwrap();
         assert_eq!(d, SendDecision::Hold);
@@ -32716,7 +32903,7 @@ mod tests {
         state.send_checked = 0;
         state.send_block_count = 0;
         let b = queue_test_wire(mir2_protocol::messages::SM_LOGON, 42);
-        let (d2, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &b)
+        let (d2, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &b, false)
             .await
             .unwrap();
         assert_eq!(d2, SendDecision::Send);
@@ -32757,6 +32944,7 @@ mod tests {
             &mut stats,
             12288,
             &queue_test_wire(mir2_protocol::messages::SM_LOGON, 42),
+            false,
         )
         .await
         .unwrap();
@@ -32775,10 +32963,11 @@ mod tests {
         assert_eq!(f.session_id, 42);
     }
 
-    /// **牙②（溢出，总监裁决 B）**：队列满 ⇒ 计数 +1、日志 `reason=QueueFull`，且**客户端收到
-    /// 明确失败**——该会话的 `GM_CLOSE`（不是静默丢）。同一会话去重；已入队会话不受影响。
+    /// **牙②（关键帧溢出 + 未进世界）**：队列满 ⇒ `reject_login` 计数 +1、日志 `stage=login`，
+    /// 且**客户端收到明确失败**——该会话的 `GM_CLOSE`（不是静默丢）。同一会话去重；
+    /// 已入队会话不受影响。`close_inworld` 必须仍为 0。
     #[tokio::test]
-    async fn queue_overflow_counts_and_sends_explicit_gm_close() {
+    async fn critical_overflow_login_stage_rejects_explicitly() {
         let (tx, mut client) = queue_test_socket().await;
         let now = now_ms();
         let mut state = KeepAlive {
@@ -32792,7 +32981,7 @@ mod tests {
 
         // ① 队列名额被会话 42 占满。
         let a = queue_test_wire(mir2_protocol::messages::SM_LOGON, 42);
-        let (d, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &a)
+        let (d, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &a, false)
             .await
             .unwrap();
         assert_eq!(d, SendDecision::Hold);
@@ -32802,19 +32991,29 @@ mod tests {
         // 前面的静默断言耗掉了几十毫秒；刷新 tick，保证下面仍是「未超时」的背压态
         // （否则 send_decision 会按 50ms 超时先清零再补发 A，溢出就测不到了）。
         state.send_check_tick = now_ms();
-        // ② 会话 43 的第 2 帧 ⇒ 队列满：拒绝 + 计数 + 明确失败。
+        // ② 会话 43（**未进世界**）的第 2 帧 ⇒ 队列满：拒绝登录 + 计数 + 明确失败。
         let b = queue_test_wire(mir2_protocol::messages::SM_LOGON, 43);
-        let (d2, note) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &b)
+        let (d2, note) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &b, false)
             .await
             .unwrap();
         assert_eq!(d2, SendDecision::Hold);
         assert_eq!(stats.overflow_frames(), 1, "溢出必须计数 +1");
+        assert_eq!(stats.reject_login_frames(), 1, "未进世界 ⇒ reject_login");
+        assert_eq!(stats.degrade_inworld_frames(), 0);
         assert_eq!(stats.rejected_sessions(), 1);
+        assert_eq!(
+            stats.close_inworld_sessions(),
+            0,
+            "登录阶段关闭不计入 close_inworld"
+        );
         assert_eq!(state.pending.len(), 1, "溢出帧不得入队");
         let log = note.log.expect("溢出必须有日志");
         for needle in [
             "event=gate_frame_overflow",
             "reason=QueueFull",
+            "channel=critical",
+            "stage=login",
+            "in_world=0",
             "ident=50",
             "session=43",
             "close=sent",
@@ -32829,15 +33028,347 @@ mod tests {
         // ③ 同一会话后续溢出不重复关闭（去重），但仍计数。
         state.send_check_tick = now_ms();
         let b2 = queue_test_wire(mir2_protocol::messages::SM_LOGON, 43);
-        let _ = send_gate_msg(&tx, &mut state, &mut stats, 12288, &b2)
+        let _ = send_gate_msg(&tx, &mut state, &mut stats, 12288, &b2, false)
             .await
             .unwrap();
         assert_eq!(stats.overflow_frames(), 2);
+        assert_eq!(stats.reject_login_frames(), 2);
         queue_test_assert_silent(&mut client).await;
 
         // ④ 已入队的会话 42 不受溢出影响。
         assert_eq!(state.pending.len(), 1);
         assert_eq!(stats.queued_frames(), 1);
+    }
+
+    /// **牙③（关键帧溢出 + 已进世界）**：**绝不关会话**——只打降级标记 + 计数，
+    /// 网关侧收不到 `GM_CLOSE`，会话随后仍能收发（积压帧可补发、新帧可直发）。
+    #[tokio::test]
+    async fn critical_overflow_inworld_degrades_without_close() {
+        let (tx, mut client) = queue_test_socket().await;
+        let now = now_ms();
+        let mut state = KeepAlive {
+            send_checked: 1,
+            send_check_tick: now,
+            pending: gate_queue::PendingQueue::new(true, 1 << 20, 1),
+            ..KeepAlive::default()
+        };
+        let mut stats = gate_backpressure::DropStats::new(11, now);
+        stats.set_queue_limits(true, state.pending.max_bytes(), state.pending.max_frames());
+
+        // ① 队列名额被**已进世界**的会话 42 占满（`SM_ABILITY` 是登录后一次性状态帧）。
+        let a = queue_test_wire(mir2_protocol::messages::SM_ABILITY, 42);
+        let _ = send_gate_msg(&tx, &mut state, &mut stats, 12288, &a, true)
+            .await
+            .unwrap();
+        assert_eq!(state.pending.len(), 1);
+        queue_test_assert_silent(&mut client).await;
+
+        // ② 会话 77（已进世界）再来关键帧 ⇒ 溢出：只降级。
+        state.send_check_tick = now_ms();
+        let b = queue_test_wire(mir2_protocol::messages::SM_ABILITY, 77);
+        let (d2, note) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &b, true)
+            .await
+            .unwrap();
+        assert_eq!(d2, SendDecision::Hold);
+        assert_eq!(stats.overflow_frames(), 1);
+        assert_eq!(stats.degrade_inworld_frames(), 1, "已进世界 ⇒ 降级");
+        assert_eq!(stats.reject_login_frames(), 0);
+        assert_eq!(stats.degraded_sessions(), 1, "必须留下会话级降级标记");
+        assert_eq!(stats.rejected_sessions(), 0, "绝不关会话");
+        assert_eq!(stats.close_inworld_sessions(), 0, "close_inworld 目标恒 0");
+        assert_eq!(state.pending.len(), 1, "队列保持有界（不扩容、不清空）");
+        let log = note.log.expect("降级必须出行");
+        for needle in [
+            "event=gate_frame_degrade",
+            "stage=in_world",
+            "in_world=1",
+            "close=none",
+            "degraded_session=1",
+            "close_inworld_sessions=0",
+        ] {
+            assert!(log.contains(needle), "降级日志缺 {needle}：{log}");
+        }
+        // ③ 网关侧**没有** GM_CLOSE（沉默 = 会话未被服务端关闭）。
+        queue_test_assert_silent(&mut client).await;
+
+        // ④ 会话仍活：回显到达后积压帧照常补发（会话 42 的 SM_ABILITY 到客户端）。
+        let recv_ok = ServerMessage {
+            packet_code: grobal2::PacketCode,
+            socket: 0,
+            session_id: 0,
+            ident: u16::from(grobal2::GM_RECEIVE_OK),
+            session_index: 0,
+            pack_length: 0,
+        };
+        let auth = Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
+        let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        let mut users = UserList::new();
+        dispatch(
+            &recv_ok,
+            &[],
+            &mut users,
+            &mut state,
+            &mut stats,
+            &tx,
+            &ev_tx,
+            12288,
+            &auth,
+            0,
+        )
+        .await
+        .unwrap();
+        let (flushed, body) = queue_test_read_frame(&mut client).await;
+        assert_eq!(
+            command_head(&body).unwrap().0,
+            mir2_protocol::messages::SM_ABILITY
+        );
+        assert_eq!(flushed.session_id, 42);
+        assert!(state.pending.is_empty());
+
+        // ⑤ 会话 77 的下一帧仍能直发（没有被关掉）。
+        let next = queue_test_wire(mir2_protocol::messages::SM_HEALTHSPELLCHANGED, 77);
+        let (d3, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &next, true)
+            .await
+            .unwrap();
+        assert_eq!(d3, SendDecision::NonCriticalSent);
+        let (alive, body3) = queue_test_read_frame(&mut client).await;
+        assert_eq!(alive.session_id, 77);
+        assert_eq!(
+            command_head(&body3).unwrap().0,
+            mir2_protocol::messages::SM_HEALTHSPELLCHANGED
+        );
+    }
+
+    /// **牙①（非关键通道）**：`SendChecked>0` 时 AOI 帧**直接丢弃 + 计数**，
+    /// **队列深度不增长、无 GM_CLOSE**；拥塞过去后同一类帧能直发。
+    #[tokio::test]
+    async fn noncritical_frames_bypass_queue_and_never_close() {
+        let (tx, mut client) = queue_test_socket().await;
+        let now = now_ms();
+        let mut state = KeepAlive {
+            send_checked: 1,
+            send_check_tick: now_ms(),
+            ..KeepAlive::default()
+        };
+        let mut stats = gate_backpressure::DropStats::new(12, now);
+        stats.set_queue_limits(true, state.pending.max_bytes(), state.pending.max_frames());
+
+        // ① 连发 5 个 AOI 帧（转身/外观/状态/移动/受击）：全部丢弃，队列深度恒 0。
+        for ident in [
+            mir2_protocol::messages::SM_TURN,
+            mir2_protocol::messages::SM_FEATURECHANGED,
+            mir2_protocol::messages::SM_CHARSTATUSCHANGED,
+            mir2_protocol::messages::SM_WALK,
+            mir2_protocol::messages::SM_HIT,
+        ] {
+            let wire = queue_test_wire(ident, 42);
+            let (d, note) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &wire, true)
+                .await
+                .unwrap();
+            assert_eq!(d, SendDecision::NonCriticalDrop, "ident={ident} 必须直接丢");
+            assert!(
+                note.log
+                    .map(|l| l.contains("channel=noncritical"))
+                    .unwrap_or(false)
+                    || stats.drop_noncritical_frames() > 1,
+                "首次丢弃必须出行（channel=noncritical）"
+            );
+            assert_eq!(state.pending.len(), 0, "非关键帧永不入队");
+            assert_eq!(stats.queued_frames(), 0);
+        }
+        assert_eq!(stats.drop_noncritical_frames(), 5);
+        assert_eq!(stats.overflow_frames(), 0, "非关键通道不是溢出");
+        assert_eq!(stats.degraded_sessions(), 0);
+        assert_eq!(stats.close_inworld_sessions(), 0);
+        // 拥塞期间网关一个字节都收不到（尤其没有 GM_CLOSE）。
+        queue_test_assert_silent(&mut client).await;
+
+        // ② 拥塞过去 ⇒ 同一类帧直发（不排队、不计数丢弃）。
+        state.send_checked = 0;
+        state.send_check_tick = 0;
+        let wire = queue_test_wire(mir2_protocol::messages::SM_TURN, 42);
+        let (d, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &wire, true)
+            .await
+            .unwrap();
+        assert_eq!(d, SendDecision::NonCriticalSent);
+        assert_eq!(stats.noncritical_sent_frames(), 1);
+        assert_eq!(stats.drop_noncritical_frames(), 5);
+        let (f, body) = queue_test_read_frame(&mut client).await;
+        assert_eq!(
+            command_head(&body).unwrap().0,
+            mir2_protocol::messages::SM_TURN
+        );
+        assert_eq!(f.session_id, 42);
+    }
+
+    /// **牙⑤（下一 tick 覆盖）**：被丢弃的 AOI 位置帧之后，下一 tick 的新位置帧**仍正常送达**
+    /// （证明「丢的是会被覆盖的帧」，不是把会话弄死）。
+    #[tokio::test]
+    async fn noncritical_drop_is_superseded_by_next_tick_frame() {
+        let (tx, mut client) = queue_test_socket().await;
+        let now = now_ms();
+        let mut state = KeepAlive {
+            send_checked: 1,
+            send_check_tick: now,
+            ..KeepAlive::default()
+        };
+        let mut stats = gate_backpressure::DropStats::new(13, now);
+        stats.set_queue_limits(true, state.pending.max_bytes(), state.pending.max_frames());
+        let droppped = queue_test_wire(mir2_protocol::messages::SM_WALK, 42);
+        let (d, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &droppped, true)
+            .await
+            .unwrap();
+        assert_eq!(d, SendDecision::NonCriticalDrop);
+        assert_eq!(stats.drop_noncritical_frames(), 1);
+
+        // 下一 tick：拥塞解除（回显到达）后，新的位置帧照常送达。
+        state.send_checked = 0;
+        state.send_block_count = 0;
+        let next_tick = queue_test_wire(mir2_protocol::messages::SM_WALK, 42);
+        let (d2, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &next_tick, true)
+            .await
+            .unwrap();
+        assert_eq!(d2, SendDecision::NonCriticalSent);
+        let (f, body) = queue_test_read_frame(&mut client).await;
+        assert_eq!(
+            command_head(&body).unwrap().0,
+            mir2_protocol::messages::SM_WALK,
+            "下一 tick 的新位置帧必须正常送达"
+        );
+        assert_eq!(f.session_id, 42);
+    }
+
+    /// **顺序守卫**：关键帧队列非空（有待补发的 `SM_LOGON`）时，非关键帧**不直发**（否则越过积压
+    /// ⇒ 同会话乱序）——直接丢弃并记 `why=CriticalPending`。
+    #[tokio::test]
+    async fn noncritical_dropped_when_critical_pending() {
+        let (tx, mut client) = queue_test_socket().await;
+        let now = now_ms();
+        let mut state = KeepAlive {
+            send_checked: 1,
+            send_check_tick: now,
+            ..KeepAlive::default()
+        };
+        let mut stats = gate_backpressure::DropStats::new(14, now);
+        stats.set_queue_limits(true, state.pending.max_bytes(), state.pending.max_frames());
+        let logon = queue_test_wire(mir2_protocol::messages::SM_LOGON, 42);
+        let _ = send_gate_msg(&tx, &mut state, &mut stats, 12288, &logon, false)
+            .await
+            .unwrap();
+        assert_eq!(state.pending.len(), 1);
+
+        // 回显到达、积压尚未补发（清零点后先来一个 AOI 帧）：必须丢弃而不是插队直发。
+        state.send_checked = 0;
+        state.send_block_count = 0;
+        let turn = queue_test_wire(mir2_protocol::messages::SM_TURN, 42);
+        let (d, note) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &turn, true)
+            .await
+            .unwrap();
+        assert_eq!(d, SendDecision::NonCriticalDrop);
+        assert_eq!(state.pending.len(), 1, "积压帧必须原样留着");
+        assert!(note
+            .log
+            .map(|l| l.contains("why=CriticalPending"))
+            .unwrap_or(true));
+        queue_test_assert_silent(&mut client).await;
+
+        // 随后一个关键帧到达：先补发积压 LOGON，再发新帧（顺序成立）。
+        let ability = queue_test_wire(mir2_protocol::messages::SM_ABILITY, 42);
+        let _ = send_gate_msg(&tx, &mut state, &mut stats, 12288, &ability, true)
+            .await
+            .unwrap();
+        let (f1, b1) = queue_test_read_frame(&mut client).await;
+        assert_eq!(
+            command_head(&b1).unwrap().0,
+            mir2_protocol::messages::SM_LOGON,
+            "积压的 LOGON 必须先到"
+        );
+        assert_eq!(f1.session_id, 42);
+        let (f2, b2) = queue_test_read_frame(&mut client).await;
+        assert_eq!(
+            command_head(&b2).unwrap().0,
+            mir2_protocol::messages::SM_ABILITY
+        );
+        assert_eq!(f2.session_id, 42);
+    }
+
+    /// **总监 P3 F2（SessionId 复用误投）**：会话 A 断开时清掉队列里 A 的残留帧；新会话 B 复用同一
+    /// `SessionId` ⇒ **B 收不到 A 的帧**。删掉 `purge_session_residue` 的接线 ⇒ 本用例红（B 收到的
+    /// 第一帧会变成 A 的 `SM_ABILITY`）。
+    ///
+    /// 为什么必须测「B 收到什么」而不只是「队列清空」：残留误投的坏处正是**玩家收到别人的数据且
+    /// 无法察觉**——只有端到端读到客户端第一帧才能证明不误投。
+    #[tokio::test]
+    async fn released_session_residue_is_purged_before_id_reuse() {
+        let (tx, mut client) = queue_test_socket().await;
+        let now = now_ms();
+        let mut users = UserList::new();
+        let mut state = KeepAlive {
+            send_checked: 1,
+            send_check_tick: now,
+            ..KeepAlive::default()
+        };
+        let mut stats = gate_backpressure::DropStats::new(15, now);
+        stats.set_queue_limits(true, state.pending.max_bytes(), state.pending.max_frames());
+        let auth = Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
+        let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+
+        // 会话 A：socket=900、gate SessionId=42。一帧关键帧在 Hold 期入队（= 残留）。
+        users.open(900, 42, "1.1.1.1".into());
+        let a_frame = queue_test_wire(mir2_protocol::messages::SM_ABILITY, 42);
+        let (d, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &a_frame, true)
+            .await
+            .unwrap();
+        assert_eq!(d, SendDecision::Hold);
+        assert_eq!(state.pending.len(), 1, "A 的帧必须先落进队列");
+        queue_test_assert_silent(&mut client).await;
+
+        // A 断：网关发 GM_CLOSE（按 socket 关）⇒ 释放时必须清掉 session=42 的残留。
+        let close = ServerMessage {
+            packet_code: grobal2::PacketCode,
+            socket: 900,
+            session_id: 42,
+            ident: u16::from(grobal2::GM_CLOSE),
+            session_index: 0,
+            pack_length: 0,
+        };
+        dispatch(
+            &close,
+            &[],
+            &mut users,
+            &mut state,
+            &mut stats,
+            &tx,
+            &ev_tx,
+            12288,
+            &auth,
+            0,
+        )
+        .await
+        .unwrap();
+        assert_eq!(users.online(), 0);
+        assert!(
+            state.pending.is_empty(),
+            "释放会话必须清掉该 SessionId 的队列残留"
+        );
+
+        // 新会话 B 复用同一 SessionId（42），socket 不同。
+        users.open(901, 42, "2.2.2.2".into());
+        state.send_checked = 0;
+        state.send_block_count = 0;
+        let b_frame = queue_test_wire(mir2_protocol::messages::SM_ADDITEM, 42);
+        let (d2, _) = send_gate_msg(&tx, &mut state, &mut stats, 12288, &b_frame, true)
+            .await
+            .unwrap();
+        assert_eq!(d2, SendDecision::Send, "残留已清 ⇒ B 的帧直发");
+        let (f, body) = queue_test_read_frame(&mut client).await;
+        assert_eq!(
+            command_head(&body).unwrap().0,
+            mir2_protocol::messages::SM_ADDITEM,
+            "B 必须只收到自己的帧（A 的 SM_ABILITY 不得出现）"
+        );
+        assert_eq!(f.session_id, 42);
+        queue_test_assert_silent(&mut client).await;
     }
 
     /// 补发批次：撞阈值时先发 `GM_RECEIVE_OK`、发完本帧就**停**（剩余帧等回显），
@@ -32908,6 +33439,7 @@ mod tests {
             &mut stats,
             12288,
             &queue_test_wire(mir2_protocol::messages::SM_LOGON, 42),
+            false,
         )
         .await
         .unwrap();
@@ -32936,6 +33468,7 @@ mod tests {
             &mut stats,
             1,
             &queue_test_wire(mir2_protocol::messages::SM_LOGON, 42),
+            false,
         )
         .await
         .unwrap();
