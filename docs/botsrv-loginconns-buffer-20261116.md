@@ -44,7 +44,7 @@
 ./src/BotSrv/bin/Release/BotSrv.exe --selftest-loadmetrics
 ```
 
-输出（rc=0，13/13 PASS，ALL PASS failures=0）：
+输出（rc=0，15/15 PASS，ALL PASS failures=0）：
 
 ```
 LOADMETRICS PASS empty-file-zero-bytes bytes=0
@@ -141,7 +141,7 @@ blob sha）：
   scene-null / sceneseq / selloff / shared-state / shopseq）。
 - 构建与自检结束后已执行 `dotnet build-server shutdown`。
 - P1 修复/测试加固后重跑（最终树）：`dotnet build src/BotSrv -c Release` rc=0、0 errors；
-  `--selftest-loadmetrics` 13/13 PASS；全部 15 个 `--selftest-*` rc=0；变异红版 rc=1（见 §2.1）。
+  `--selftest-loadmetrics` 15/15 PASS；全部 15 个 `--selftest-*` rc=0；变异红版 rc=1（见 §2.1）。
 - 卡面「五门禁」是 Rust workspace 的 `cargo` 命令；本卡按派工纪律**未跑 cargo**（不改 Rust），
   对应验证为上面的 dotnet build + 全量 `--selftest-*`。
 
