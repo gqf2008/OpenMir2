@@ -90,12 +90,21 @@ operational 类别（`teardown_race`）与下列**既有事件计数**不是「�
 | `autoplay_pre_world` | 未进世界仍跑挂机（仅 legacy 对照组） | 正常组必须 0 |
 | `autoplay_skipped_pre_world` | 因本会话未进世界而跳过挂机 | 正常行为，可非 0 |
 
-### 父卡依赖（明确登记，不静默）
+### 父卡场景计数（已接线；总监裁决 2026-11-15）
 
-卡 `openmir2-botsrv-autoplay-nre`（已 approve、待合并）在 BeginScene 落
-`scene_null_actor_skipped` / `scene_list_race_skipped`。本卡 base 上这两个字段不存在，报告会显式写
-`pending_parent_card`（**不计失败**，但不是静默当 0）；父卡合并后它们自动进入必判集，非 0 即 RED。
-若只出现一个、另一个缺失，直接 fail-closed。
+卡 `openmir2-botsrv-autoplay-nre` 已合入 master `39d418816`，BeginScene 的三个计数已接线。
+本卡 rebase 后把它们纳入普查报告，并新增上界分母 `scene_rounds`（每轮 BeginScene 一次，
+`MShare.MySelf == null` 的早退不计）：
+
+| 字段 | 语义 | 报告要求 |
+| --- | --- | --- |
+| `scene_null_actor_skipped` | **并发下读到正被清尾的槽位（收包线程 `RemoveAt` 的瞬时空位）：安全跳过，不读、不删、不登记**。属「已知且受限」，不等于夹具无错。 | **每份报告必须显式列出**（是 0 也要列）；稳态窗口内占比必须 **< 0.5% 轮次**；超界必须用 `--scene-null-explanation` 单独解释，否则 RED |
+| `scene_list_race_skipped` | 删除点发现槽位已被并发改动（下标失效/已换人）而跳过删除 | 必须为 0（竞态证据） |
+| `scene_index_race_skipped` | 轮内下标读取被并发缩表而跳过本轮 | 必须为 0（竞态证据） |
+| `scene_rounds` | BeginScene 实际迭代轮次（上界分母） | 必须出现；缺失 ⇒ 无法判上界 ⇒ RED |
+
+报告里 `error_census.scene_null` 固定带 `count`/`steady`/`scene_rounds_steady`/`pct_steady`/
+`upper_bound_pct`/`status`/`semantics`；`required_fields.scene_null_actor_skipped` 是 0 也会出现。
 
 ## 4. 接线与不变式
 
@@ -118,7 +127,7 @@ operational 类别（`teardown_race`）与下列**既有事件计数**不是「�
 
 | 状态 | 写者 | 读者 | 锁 | 风险 | 处置 |
 | --- | --- | --- | --- | --- | --- |
-| `PlayScene.ActorList`（每假人视图） | 收包线程（`SendMsg` 的 NewActor/DeleteActor/DelActor）+ runThread（`BeginScene`） | runThread 与夹具读取函数 | 无 | 高 | parent 卡给 BeginScene 加轮首快照/null 槽跳过/删除点核对；本卡把收包/run 两侧异常逐类计数。彻底修（锁或 per-bot actor store）列入后续。 |
+| `PlayScene.ActorList`（每假人视图） | 收包线程（`SendMsg` 的 NewActor/DeleteActor/DelActor）+ runThread（`BeginScene`） | runThread 与夹具读取函数 | 无 | 高 | 父卡（master `39d418816`）给 BeginScene 加轮首快照/null 槽跳过/删除点核对/下标读取护栏；本卡把收包/run 两侧异常逐类计数，并接线三个 scene 计数 + `scene_rounds` 上界。彻底修（锁或 per-bot actor store）列入后续。 |
 | `MShare.MySelf` | 收包线程（SM_LOGON 重绑 / ClearActors 置 null）+ runThread | 几乎所有挂机/移动/探针路径 | 无 | 高 | parent 卡轮首快照关「轮内变 null/换人」窗口；跨 bot 重绑仍在（reviewer F6 residual）。 |
 | `MShare.g_FreeActorList` | `BeginScene`（runThread）、组队清理 | runner 与复用路径 | 无 | 高 | 已登记为已知；与 ActorList 同源，后续随 per-bot actor store 一起修。 |
 | `ClientManager._clientList` / `_autoList` | runThread（AddClient/Run/RunAutoPlay）+ 收包线程（DelClient） | Run/RunAutoPlay/DelClient | **本卡加 `_clientSync` + 快照** | 高 → 已修 | 迭代前快照、增删加锁；不再可能并发改坏 `List` 内部状态。 |
@@ -139,7 +148,6 @@ operational 类别（`teardown_race`）与下列**既有事件计数**不是「�
 - **关停期取消**：`Channel.WaitToReadAsync` 的 `OperationCanceledException` 属于 teardown，
   不是稳态错误类；不计数。
 - **服务端（C#/Rust 七进程）错误**：不在 BotSrv 夹具范围。
-- **父卡的两个场景计数**：本卡 base 上未接线，已按 `pending_parent_card` 显式登记；合并后自动必判。
 
 ## 7. Runbook（「全绿」的唯一口径）
 
@@ -167,20 +175,30 @@ python -I -B tools/botload/load_report.py summarize \
    `excused_by_internal_allowlist` / `excused_by_census_allowlist`（`count <= max`）；
 3. `internal_errors == error_census.internal_census_sum`；
 4. `operational` 列表里每一项都 `present == true`（operational 非 0 允许，但必须列出）；
-5. `pending_parent` 每项要么 `pending_parent_card`（父卡未合并），要么 `count == 0`；
-6. `required_fields.error_census_complete == true`，且原有四项必列字段仍齐。
+5. 父卡四个 scene 字段全部 `present`：`scene_list_race_skipped == 0`、`scene_index_race_skipped == 0`；
+   `scene_null_actor_skipped` **显式列出**且稳态占比 `< 0.5%`（超界必须有单独解释）；
+6. `required_fields.error_census_complete == true`，且原有四项必列字段、`required_fields.scene_null_actor_skipped` 仍齐。
 
 **以下任一情况直接 RED（不是「警告」）**：缺 `error_census` / schema 不符 / 缺类别 / 多出未登记类别 /
-fault 非 0 未豁免 / `internal_errors` 对账不平 / 缺任一既有事件计数 / 父卡计数只出现一半或非 0。
+fault 非 0 未豁免 / `internal_errors` 对账不平 / 缺任一既有事件计数 / 缺 `scene_rounds` /
+`scene_list_race_skipped` 或 `scene_index_race_skipped` 非 0 / `scene_null` 超 0.5% 且无解释。
+
+### 报告措辞（硬规则）
+
+- **不得写「夹具无错」**。本卡只保证错误面**完整可见**；200 档的收包线程 NRE 仍在。
+- census 落地后 **200 档会变红**（`recv_packet_null ≈ 10,968`）——**那是正确的红**。
+- 500 档若为 0/很低，必须写「**500 为 0 是丢弃率 39.5%、到达帧少把竞态压下去了，不是修好**」。
+- 正确表述示例：「本卡消除了 NRE@120/AOORE@125 两类；收包线程 NRE 尚未进入计数，由 census 卡承接并在
+  200 档以 `recv_packet_null` 显形（正确的红）」。
 
 ## 8. 残留物与后续
 
 - 本卡**不**修 `PlayScene.SendMsg`/`ActorList` 的根因（reviewer F1/F6 的并发面仍在）；它负责让
   3.95 万条那类错误**可见且可归因**。根因修复（锁 / per-bot actor store / per-bot self）需另开卡，
   按 A6 清单逐项迁移。
-- 父卡 `openmir2-botsrv-autoplay-nre` 合并后，`scene_null_actor_skipped` / `scene_list_race_skipped`
-  自动进入必判集；本文件与 `load_report.py` 无需再改（字段名已登记）。
-- 真机 200/500 档验证需窗口；本卡交付的是代码 + 无栈自检 + 判断口径，未起栈。
+- 父卡 `openmir2-botsrv-autoplay-nre` 已合入 master `39d418816`；三个 scene 计数与 `scene_rounds`
+  已在本次 rebase 接线并进入每份报告（null-skip 按 0.5% 上界 + 单独解释的口径放行）。
+- 真机 200/500 档验证需窗口；本卡交付的是代码 + 无栈自检 + 判断口径。窗口授权由总监安排。
 
 ## 附录 A：逐站点枚举清单（可复核）
 
