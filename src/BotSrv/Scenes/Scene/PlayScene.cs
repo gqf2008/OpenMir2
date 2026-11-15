@@ -25,6 +25,9 @@ namespace BotSrv.Scenes.Scene
         /// <summary>仅自检注入：在「删除点身份核对通过、RemoveAt 之前」执行，用于确定性模拟收包线程缩表
         /// （卡 `openmir2-botsrv-autoplay-nre` F1b）。生产为 null = 零行为变化。</summary>
         internal static Action<PlayScene> SceneRemoveRaceHook;
+        /// <summary>仅自检注入：在 ActorDied 删除 actor 之前执行（卡 `openmir2-botsrv-autoplay-nre` F1b
+        /// 「顺带核」）。生产为 null = 零行为变化。</summary>
+        internal static Action<PlayScene> SceneActorDiedRaceHook;
 
         public PlayScene(RobotPlayer robotClient) : base(SceneType.PlayGame, robotClient)
         {
@@ -949,21 +952,59 @@ namespace BotSrv.Scenes.Scene
 
         public void ActorDied(Actor actor)
         {
+            // F1b「顺带核」：ActorDied 在 BeginScene 的 ProcMsg 里由 run 线程调用，收包线程仍可能
+            // 并发增删 ActorList ⇒ 读下标/RemoveAt/Insert 都可能 AOORE。按删除路径同一模式：
+            // 读写各自自护、失败即计数跳过；插入失败回落 Add（不抛给 SafeRun）。
             for (int i = 0; i < ActorList.Count; i++)
             {
-                if (ActorList[i] == actor)
+                Actor cur;
+                try
                 {
-                    ActorList.RemoveAt(i);
+                    cur = ActorList[i];
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    LoadMetrics.SceneListRaceSkipped();
+                    break;
+                }
+                if (cur == actor)
+                {
+                    SceneActorDiedRaceHook?.Invoke(this);
+                    try
+                    {
+                        ActorList.RemoveAt(i);
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        LoadMetrics.SceneListRaceSkipped();
+                    }
                     break;
                 }
             }
             bool flag = false;
             for (int i = 0; i < ActorList.Count; i++)
             {
-                if (!ActorList[i].Death)
+                Actor cur;
+                try
                 {
-                    ActorList.Insert(i, actor);
-                    flag = true;
+                    cur = ActorList[i];
+                }
+                catch (ArgumentOutOfRangeException)
+                {
+                    LoadMetrics.SceneListRaceSkipped();
+                    break;
+                }
+                if (!cur.Death)
+                {
+                    try
+                    {
+                        ActorList.Insert(i, actor);
+                        flag = true;
+                    }
+                    catch (ArgumentOutOfRangeException)
+                    {
+                        LoadMetrics.SceneListRaceSkipped();
+                    }
                     break;
                 }
             }
