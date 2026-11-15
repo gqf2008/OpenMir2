@@ -70,6 +70,9 @@ aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000
 fails（原样）：
 1. `internal_errors 1 > 0 但 bots.log 无异常类型归因（白名单无法证明无害 ⇒ fail-closed）`；
 2. `error_census 类别 recv_packet_null=1 > 0 未登记（fault 类别默认容忍度 0）`。
+**出处（避免误读）**：`gate_result.json` 只含**窗口有效性**（preflight / inworld_gate / invalid_reason）；
+`verdict=RED` / `LOADGATE_RC=1` / fails 两条在 **`loadgate.log` + `tier-500/report.json`**；
+`report.json` 的 `counters_target` 保持 **`unverified`**（post-hoc，不是采集时 provenance）。
 `recv_packet_null=1` 现场：`tier-500/bots.log:47251`（20:38:37.120），其后无类型/无 `at` 行——该轮 BotSrv
 二进制**未含 errorstack 日志修复** ⇒ 同类别、**因未合入日志修复而不可归因**。
 
