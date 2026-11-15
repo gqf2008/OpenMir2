@@ -69,6 +69,7 @@ namespace BotSrv
             }
             catch (SocketException ex)
             {
+                BotErrorCensus.SocketExceptionSeen("connect", ex);
                 OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode));
                 return;
             }
@@ -77,7 +78,7 @@ namespace BotSrv
             _connected = true;
             _recvThread = new Thread(RecvLoop) { IsBackground = true, Name = "ScoketClient-recv" };
             _recvThread.Start();
-            OnConnected?.Invoke(this, DSCClientConnectedEventArgs.Instance);
+            InvokeHandlerGuarded(() => OnConnected?.Invoke(this, DSCClientConnectedEventArgs.Instance));
         }
 
         private void RecvLoop()
@@ -91,16 +92,46 @@ namespace BotSrv
                     if (n <= 0) break;
                     var data = new byte[n];
                     Buffer.BlockCopy(buf, 0, data, 0, n);
-                    OnReceivedData?.Invoke(this, new DSCClientDataInEventArgs(data, n));
+                    // 收包线程是 fire-and-forget 边界：处理器异常以前会**静默打死整条线程**（.NET 的
+                    // 未处理线程异常会终止进程）。现在计数为 socket_handler_exception 并继续收包。
+                    InvokeHandlerGuarded(() => OnReceivedData?.Invoke(this, new DSCClientDataInEventArgs(data, n)));
                 }
             }
             catch (SocketException ex)
             {
-                if (_connected) OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode));
+                BotErrorCensus.SocketExceptionSeen("recv", ex);
+                if (_connected) InvokeHandlerGuarded(() => OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode)));
             }
-            catch (ObjectDisposedException) { /* Disconnect 主动关 */ }
+            catch (ObjectDisposedException)
+            {
+                // Disconnect 主动关：运行期竞态，单独观测（不是故障）。
+                BotErrorCensus.TeardownRaceSeen();
+            }
+            catch (Exception ex)
+            {
+                // 兜底：任何非 socket 异常都不得静默杀死收包线程。
+                BotErrorCensus.Count(BotErrorCensus.SocketRecvFault);
+                LoadMetrics.WriteFatalMarker("socket_recv_unexpected", ex);
+            }
             _connected = false;
-            OnDisconnected?.Invoke(this, DSCClientConnectedEventArgs.Instance);
+            InvokeHandlerGuarded(() => OnDisconnected?.Invoke(this, DSCClientConnectedEventArgs.Instance));
+        }
+
+        /// <summary>socket 事件处理器的统一护栏（自检注入本方法证明 +1）。</summary>
+        internal static void InvokeHandlerGuarded(Action invoke)
+        {
+            try
+            {
+                invoke();
+            }
+            catch (Exception ex)
+            {
+                LoadMetrics.InternalError(BotErrorCensus.SocketHandlerException);
+                if (LoadMetrics.ShouldLogInternalError())
+                {
+                    BotErrorCensus.SafeLog(() => LogService.Warn("socket 事件处理器异常被兜住：" + ex));
+                }
+            }
         }
 
         /// <summary>返回 true = socket.Send 未抛异常（小包在已连接 TCP 上写成功 ⇒ 已交给本机内核 / 对端可靠可达）。</summary>
@@ -111,7 +142,13 @@ namespace BotSrv
             try { _socket.Send(data); return true; }
             catch (SocketException ex)
             {
-                OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode));
+                BotErrorCensus.SocketExceptionSeen("send", ex);
+                InvokeHandlerGuarded(() => OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode)));
+                return false;
+            }
+            catch (ObjectDisposedException)
+            {
+                BotErrorCensus.TeardownRaceSeen();
                 return false;
             }
         }
@@ -120,7 +157,15 @@ namespace BotSrv
         {
             if (!_connected) return;
             try { _socket.Send(data); }
-            catch (SocketException ex) { OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode)); }
+            catch (SocketException ex)
+            {
+                BotErrorCensus.SocketExceptionSeen("send", ex);
+                InvokeHandlerGuarded(() => OnError?.Invoke(this, new DSCClientErrorEventArgs(ex.SocketErrorCode)));
+            }
+            catch (ObjectDisposedException)
+            {
+                BotErrorCensus.TeardownRaceSeen();
+            }
         }
 
         public void Disconnect()
