@@ -75,6 +75,20 @@ CLONE=<路径>
 签名条目：<entry ref/oid>  已 push=<yes>  主检出回读=<yes>
 ```
 
+## wg 挂死后的系统层清理（2026-11-16 加）
+
+wg 挂死会在系统层面留下**第二个痕迹**：它启动的 `git -C . cat-file --batch` 子进程。
+**停掉 wg 之后必须确认这些子进程也退出**，否则会跨天累积（现场观察到 2026-11-13 起的多个实例）。
+
+```powershell
+Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'git.exe' -and $_.CommandLine -like '*cat-file*' } |
+  ForEach-Object { "{0}|parent={1}|created={2}" -f $_.ProcessId,$_.ParentProcessId,$_.CreationDate }
+```
+
+**归属判据三条缺一不可**（缺任一条不要动，先上报）：① 命令行确为 `cat-file --batch`；
+② **父进程已不存在**；③ 创建时间与某次 wg 挂死时刻吻合。三条齐才可终止并记账。
+**注意**：若父进程是长期存活的 `wg mcp`，那是 MCP 的常驻 helper，不是僵尸，**不要杀**。
+
 ## 已知限制
 
 - 这只解决「签名」；**读**（`collab_read.py`）直接走 git 读本地 refs，不受影响。
