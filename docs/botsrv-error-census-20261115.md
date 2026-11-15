@@ -180,3 +180,72 @@ fault 非 0 未豁免 / `internal_errors` 对账不平 / 缺任一既有事件�
 - 父卡 `openmir2-botsrv-autoplay-nre` 合并后，`scene_null_actor_skipped` / `scene_list_race_skipped`
   自动进入必判集；本文件与 `load_report.py` 无需再改（字段名已登记）。
 - 真机 200/500 档验证需窗口；本卡交付的是代码 + 无栈自检 + 判断口径，未起栈。
+
+## 附录 A：逐站点枚举清单（可复核）
+
+下表覆盖 `src/BotSrv/**` 全部 `try/catch`、线程入口、socket 事件类与进程钩子。**「当前计数」列**
+写明本轮之后的落点；标「否（登记）」的项在 §3「有意不计数」表或本节说明理由。
+
+### A1. 运行时 catch / 护栏
+
+| # | 位置（符号） | 触发条件 | 当前计数 | 类别 |
+| --- | --- | --- | --- | --- |
+| 1 | `AppService.Run` → `RunLoopGuard` | runThread 整轮任意异常（含建号/AddClient） | 是 | `run_loop_exception` |
+| 2 | `ClientManager.ProcessReviceMessage` → `ProcessOnePacket` → `RunPacketGuard` | 收包线程处理一帧抛异常 | 是 | `recv_packet_null/index/other` |
+| 3 | `ClientManager.SafeRun` → `RunBotRound` | 单假人一轮抛异常 | 是 | `run_round_null/index/other` |
+| 4 | `LoadMetrics.Flush` catch | 统计落盘失败 | 是 | `metric_flush_failure` |
+| 5 | `LoadMetrics.WriteLoginConnsLocked` catch | login_conns 重写失败 | 是 | `metric_flush_failure` |
+| 6 | `RobotPlayer.SocketError`（try/finally，无 catch） | 处理器体抛异常 | 是（调用点护栏） | `socket_handler_exception` |
+| 7 | `RobotPlayer` drop-exp writer open catch | writer 打不开 | 是 | `drop_exp_writer_open_failure` |
+| 8 | `RobotPlayer.DropExpWriteRow` catch | 写行失败 | 是 | `drop_exp_writer_write_failure` |
+| 9 | `RobotPlayer.AppLogout`（try/finally） | 无 catch；异常上抛 | 是（上游护栏） | 调用方 `recv_packet_*` / `run_round_*` |
+| 10 | `RobotPlayer.AppExit`（try/finally） | 无 catch；异常上抛 | 是（上游护栏） | 同上 |
+| 11 | `RobotPlayer` 自动寻路 try/finally（3 处） | 无 catch；异常上抛 | 是（上游护栏） | 同上 |
+| 12 | `RobotPlayer` 背包解码 catch | `SM_BAGITEMS/SM_ADDITEM` 解码失败 | 是 | `bag_item_decode_failure` |
+| 13 | `PlayScene.SendMsg`（try/finally） | 无 catch；异常上抛 | 是（上游护栏） | 收包路径 `recv_packet_*` |
+| 14 | `LoginScene.Login` catch | 连接建立阶段非 SocketException | 是 | `socket_connect_fault` |
+| 15 | `SelfReport.Write` catch | 自报文件追加失败 | 是 | `self_report_write_failure` |
+| 16 | `ScoketClient.Connect` SocketException catch | 连接失败 | 是（区分） | 生命周期码 → `conn_err_*`；其余 → `socket_connect_fault` |
+| 17 | `ScoketClient.RecvLoop` SocketException catch | 收包 Socket 错误 | 是（区分） | reset 等 → `conn_lost`；其余 → `socket_recv_fault` |
+| 18 | `ScoketClient.RecvLoop` ObjectDisposedException | 主动关闭后收包 | 是 | `teardown_race` |
+| 19 | `ScoketClient.RecvLoop` 兜底 Exception | 非 socket 异常 | 是 | `socket_recv_fault` + fatal.ndjson |
+| 20 | `ScoketClient.SendText` SocketException / ObjectDisposed | 发送失败 / 关闭后发送 | 是 | `socket_send_fault` / `teardown_race` |
+| 21 | `ScoketClient.SendBuffer` SocketException / ObjectDisposed | 同上 | 是 | 同上 |
+| 22 | `ScoketClient.Disconnect` Shutdown/Close catch | 显式关闭 | 否（登记） | 主动 teardown，不是错误 |
+
+### A2. 自检/最后兜底 catch（有意不计数）
+
+| 位置 | 触发条件 | 当前计数 | 说明 |
+| --- | --- | --- | --- |
+| `MShare.TryGetFrameInt` JsonException | 帧里没有该字段/非法 JSON | 否（登记） | 纯分类函数返回 false；差异靠夹具 `skip` 记录 |
+| `DropExpSeqSelfCheck`（2 处） | 自检 JSON 断言 | 否（自检） | 失败直接让自检 RED |
+| `QuestSeqSelfCheck` | 自检 JSON 断言 | 否（自检） | 同上 |
+| `SceneSeqSelfCheck`（3 处） | 自检 JSON 断言 | 否（自检） | 同上 |
+| `ErrorCensusSelfCheck`（json/stats/finally） | 自检自身断言/清理 | 否（自检） | 失败直接让自检 RED |
+| `BotErrorCensus.SafeLog` catch | 日志写失败 | 否（登记） | 最后兜底：不能二次抛出，也不能可靠计数 |
+| `LoadMetrics.WriteFatalMarker` catch | fatal 记录写失败 | 否（登记） | 同上 |
+
+### A3. 线程入口 / 事件 / 进程钩子
+
+| 入口 | 位置 | 异常落点 | 备注 |
+| --- | --- | --- | --- |
+| runThread | `AppService` 构造器 `new Thread(Run)` | `RunLoopGuard` → `run_loop_exception` | 整轮（含建号）都兜住 |
+| recv 线程 | `ScoketClient.Connect` 的 `new Thread(RecvLoop)` | 处理器护栏 + socket catch + 兜底 | 不再被处理器异常打死 |
+| flush 线程 | `LoadMetrics.Init` 的 `new Thread(FlushLoop)` | `Flush` 内部 catch → `metric_flush_failure` | `Thread.Sleep` 中断仅在关停 |
+| async/channel | `ClientManager.ProcessReviceMessage` | per-packet 护栏；取消 = teardown | 无 `async void` / 未 await Task / `BeginInvoke` |
+| RobotPlayer 事件 | `OnConnected/OnDisconnected/OnReceivedData/OnError` | `socket_handler_exception` | 注册见构造器 |
+| LoginScene 事件 | `CSocketConnect/CSocketDisconnect/CSocketRead/CSocketError` | `socket_handler_exception` | 注册见构造器 |
+| SelectChrScene 事件 | `CSocketConnect/CSocketDisconnect/CSocketRead/CSocketError` | `socket_handler_exception` | 注册见构造器 |
+| 进程钩子 | `AppDomain.UnhandledException` | `unhandled_exception` + `fatal.ndjson` | `Program.Main` 注册 |
+| 进程钩子 | `TaskScheduler.UnobservedTaskException` | `unobserved_task_exception` + `fatal.ndjson` | `Program.Main` 注册 |
+| WinForms 钩子 | `Application.ThreadException` | 不适用 | 本项目无 WinForms |
+
+### A4. 复核命令
+
+```bash
+grep -rn "\btry\b" src/BotSrv --include='*.cs'
+grep -rn "catch" src/BotSrv --include='*.cs'
+grep -rn "new Thread\|Task.Run\|async void\|BeginInvoke\|UnhandledException\|ThreadException" src/BotSrv --include='*.cs'
+grep -rn "+= CSocket\|+= Socket\|+= ReceivedData" src/BotSrv --include='*.cs'
+```
+
