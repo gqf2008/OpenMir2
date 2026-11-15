@@ -306,6 +306,10 @@ for rel, count, hold in runs:
   实例：2026-11-15 池卡 r2 用 `E:/MirServer/M2GameSvr/GameSrv.exe`（mtime 2026-10-22、来自已删 worktree `OpenMir2-wt-goods`）
   ⇒ 487 条 `ProcessHumans` 异常、`in_world` 恒 21/500 ⇒ 整轮作废。
 - 健康栈形态（360s 窗口实测）：`DBSrv`(C#) + `LoginSrv`(C#) + **`game-svr`(Rust, 5000)** + `login-gate`/`sel-gate`/`game-gate`(Rust)。
+- **能预判会无效的运行，宁可等也不跑**（2026-11-15 总监标准）。判据已经会判它无效的运行
+  （外部构建在跑、`heavy≠0`、栈形态可疑、60s 闸门必然不过），跑下去得到的不是「数据略差」，
+  而是**归档里一份看起来像数据的东西**——将来有人翻到会当成有效轮次引用。实例：r2（错栈 + 
+  `heavy=5`）与 471/500 的误读，都是这样产生或放大的。等条件满足再跑，成本永远低于事后作废。
 - **一个窗口只跑一件事：跨会话和会话内都算**（2026-11-15 教训）。窗口开启期间，**任何**
   cargo/rustc/dotnet/zig/msbuild 构建都禁用——不管它来自别的会话、还是**同一条会话里另一个车道**。
   实例：同会话的 profiler 车道起 release 构建（56s），把池卡 500/90 窗口打成 `heavy_max=5`、
