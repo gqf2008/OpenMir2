@@ -60,6 +60,13 @@ aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000
 
 ## 3. 验收（A7/A8）
 
+**本轮真机结论头（原样）**：`verdict=RED`、`LOADGATE_RC=1`、`in_world=500/500`、`window.conclusion_valid=true`。
+fails（原样）：
+1. `internal_errors 1 > 0 但 bots.log 无异常类型归因（白名单无法证明无害 ⇒ fail-closed）`；
+2. `error_census 类别 recv_packet_null=1 > 0 未登记（fault 类别默认容忍度 0）`。
+`recv_packet_null=1` 现场：`tier-500/bots.log:47251`（20:38:37.120），其后无类型/无 `at` 行——该轮 BotSrv
+二进制**未含 errorstack 日志修复** ⇒ 同类别、**因未合入日志修复而不可归因**。
+
 ### A7 池大小有界
 
 - **上界 N=0**：池结构已删除，代码里不存在持有 `Actor` 的静态集合（`src/BotSrv` 只剩 `THumActor.SlaveObject`，
@@ -138,8 +145,13 @@ aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000
   `Gen 2 Size` 0.5→313MB；`GC Heap Size` 254/602/1320MB（min/mean/max）。
 - **Gen0 1005 / Gen1 361 / Gen2 3**（Gen2 仅在 t=17/31/35s，爬坡段）⇒ 爬坡后**没有任何 Gen2 GC**，
   LOH 只能靠 Gen2 回收 ⇒ 只增不减。
-- `Allocation Rate` 均值 ≈400–420MB/s（口径窗口差异）、峰 ≈520–545MB/s；`Exception Count` 稳态
-  约 0–8/s（均值被 20:37:07 爬坡尖峰 ~5400–5900/s 拉高）。
+- `Allocation Rate` 均值 ≈418MB/s（**被测实例口径未记录：counters 未落 target，疑为 BotSrv 但未证**；
+  post-hoc 从 runner 日志知 attach 时 PID=5832(BotSrv)，不能替代采集时 provenance）、峰 ≈545MB/s；
+  `Exception Count` 稳态约 0–8/s（均值被 20:37:07 爬坡尖峰 ~5400–5900/s 拉高）。
+- **counters provenance 缺口（本轮）**：`counters.log` 只有 `Starting a counter session`、CSV 只有
+  `Provider=System.Runtime`，**没有落目标进程**。已在本轮归档补 `COUNTERS_TARGET posthoc=BotSrv pid=5832
+  source=runner-poll-at-attach`，并在 `report.json` 记 `counters_target{process,pid,unverified=true}`；
+  以后采集必须在采集时落 `counters_target=<process> pid=<pid>`。
 - 池量级 6.6–13.3MB **不足以解释** LOH +55MB；**尚未归因到本次修复**。LOH 归因由另卡
   `openmir2-botsrv-loh-growth` 跟进（疑为 >85KB 大对象：收包/发送缓冲等），本卡不做归因。
 
@@ -180,14 +192,18 @@ aoiIdleExpired = MShare.GetTickCount() - actor.m_dwLastGetMessageTime > 2000
 
 - **A8 未取得**：90s/360s 均无稳态段 after-GC 点；「每 bot Gen2 / 斜率≈0」本轮不可判（见 §3 A8 结论）。
   要判定需下一轮用 `dotnet-gcdump` 数 `Actor` 实例或强制 GC 前后存活量。
-- **`recv_packet_null` 未归零**：首轮 360s=4，本轮=**1**（降低但非零）；`bots.log` 无异常类型样本
-  （`internal_error_diag.logged_blocks=0`）⇒ 记为**罕见残余竞态**，不宣称已消除。本轮 verdict 因此为 RED。
+- **`recv_packet_null` 未归零**：首轮 360s=4，本轮=**1**（降低但非零）；现场 `tier-500/bots.log:47251`
+  （20:38:37.120），其后无类型/无 `at` 行——该轮 BotSrv 二进制未含 errorstack 日志修复 ⇒
+  **同类别、因未合入日志修复而不可归因**；记为罕见残余竞态，不宣称已消除。本轮 verdict 因此为 RED。
 - **C# `GameSvr` 不能作为 500 bot 的窗口栈**：`WorldServer.ProcessHumans` 的玩家数据加载是「待实现」，
   实测 500 bot 只进 21/500 且刷 487 条 `List.RemoveAt` 异常；部署的 `E:\MirServer\M2GameSvr\GameSrv.exe`
   （2026-10-22，来源 worktree 已删）另属栈卫生问题，已上报另开卡。历史 ~10MB/s 泄漏是在 C# 栈上观测的，
   修复树 360s 的 LOH 增长与首轮 master 的平坦**不可比**（首轮无 counters）。
 - **外部 I/O 与构建窗口**：20:31:00–20:36:00 项目总监自查的全盘递归扫描、20:35:30–20:36:10 审查者构建
   均在 360s 起跑前结束；360s 的 strict 采样为 20:36:20（typeperf max 16.2%/mean 6%，heavy=0）。
+- **归档清单**：`artifacts.sha256.json` 已用 UTF-8 **无 BOM** 重写（`json.tool` 可直接读），
+  `verify_artifacts.py` → **7/7 匹配、rc=0**。`tier-500/bots.err.log` 是**空文件**（sha `e3b0c442…`），
+  **不作无错误证据**（报告/`report.json` 标 `evidence=false`）。
 - **gate 丢弃率**：本卡两轮均未采集 `gate_stats`（Rust 栈的 load_gate 不产出），对照标 N/A；不是 0。
 - 未改动 `_reviceQueue` 的无界通道（分析报告的次要候选；本卡范围外，登记为后续风险）。
 - `Actor` 单对象尺寸仍未用 gcdump 测；§3 的池量级 6.6–13.3MB 是估计值（1.5–3KB/actor）。
