@@ -48,6 +48,11 @@ git -C "$MAIN" fetch walgit "+refs/collab/inbox/$PRINCIPAL/<entry_id>:refs/colla
 
 ## 安全规则（硬）
 
+**克隆目录必须按 principal 区分**（2026-11-16 加）：例如 `E:/UserTemp/w<principal后缀>sign`。
+绝不能多人共用同一个克隆——克隆内的 `.git/walgit/identity` 决定签名身份，共用会在别人的 principal 下落条目（冒名）。
+发现有人指向你的克隆，先停、再让对方自建。
+
+
 1. **零密钥复制**：identity 是**指针 JSON**，不是密钥副本。删除前必须 `find "$CLONE" -name '*.ed25519'` 为**空**。
 2. **不手写 refs**：所有条目必须由 `wg collab entry` 生成（有真签名）。禁止 `git hash-object` + `update-ref` 手工造条目
    （2026-11-15 出现过一次，虽然事后验签通过，但绕过了 oid 闸 / parent / stale-body 三道检查）。
