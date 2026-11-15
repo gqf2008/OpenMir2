@@ -5368,7 +5368,11 @@ namespace BotSrv.Player
         {
             if (!string.IsNullOrEmpty(body))
             {
-                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
+                ClientItem cu = ClientItemCodec.Decode(body);
+                if (cu == null)
+                {
+                    return;
+                }
                 BotHelper.AddItemBag(cu);
                 if (hint != 0)
                 {
@@ -5381,7 +5385,11 @@ namespace BotSrv.Player
         {
             if (!string.IsNullOrEmpty(body))
             {
-                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
+                ClientItem cu = ClientItemCodec.Decode(body);
+                if (cu == null)
+                {
+                    return;
+                }
                 BotHelper.UpdateItemBag(cu);
                 for (int i = 0; i < MShare.UseItems.Length; i++)
                 {
@@ -5420,7 +5428,11 @@ namespace BotSrv.Player
         {
             if (!string.IsNullOrEmpty(body))
             {
-                ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(body) : EDCode.DecodeBuffer<ClientItem>(body);
+                ClientItem cu = ClientItemCodec.Decode(body);
+                if (cu == null)
+                {
+                    return;
+                }
                 BotHelper.DelItemBag(cu.Item.Name, cu.MakeIndex);
                 for (int i = 0; i < MShare.UseItems.Length; i++)
                 {
@@ -5584,8 +5596,11 @@ namespace BotSrv.Player
                 body = HUtil32.GetValidStr3(body, ref Str, HUtil32.Backslash);
                 try
                 {
-                    ClientItem cu = MShare.g_boBagEquipSequence ? ClientItemCodec.Decode(Str) : EDCode.DecodeClientBuffer<ClientItem>(Str);
-                    BotHelper.AddItemBag(cu);
+                    ClientItem cu = ClientItemCodec.Decode(Str);
+                    if (cu != null)
+                    {
+                        BotHelper.AddItemBag(cu);
+                    }
                 }
                 catch (Exception ex)
                 {
@@ -5765,8 +5780,11 @@ namespace BotSrv.Player
                 index = HUtil32.StrToInt(str, -1);
                 if (index >= 0 && index <= 13)
                 {
-                    ClientItem cu = EDCode.DecodeBuffer<ClientItem>(data);
-                    MShare.UseItems[index] = cu;
+                    ClientItem cu = ClientItemCodec.Decode(data);
+                    if (cu != null)
+                    {
+                        MShare.UseItems[index] = cu;
+                    }
                 }
             }
         }
@@ -6349,7 +6367,11 @@ namespace BotSrv.Player
         {
             if (body != "")
             {
-                ClientItem ci = EDCode.DecodeBuffer<ClientItem>(body);
+                ClientItem ci = ClientItemCodec.Decode(body);
+                if (ci == null)
+                {
+                    return;
+                }
                 BotHelper.AddDealRemoteItem(ci);
             }
         }
@@ -6358,7 +6380,11 @@ namespace BotSrv.Player
         {
             if (body != "")
             {
-                ClientItem ci = EDCode.DecodeBuffer<ClientItem>(body);
+                ClientItem ci = ClientItemCodec.Decode(body);
+                if (ci == null)
+                {
+                    return;
+                }
                 BotHelper.DelDealRemoteItem(ci);
             }
         }

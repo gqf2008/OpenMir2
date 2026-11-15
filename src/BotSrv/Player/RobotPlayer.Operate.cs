@@ -627,7 +627,11 @@ namespace BotSrv.Player
                     MShare.MySelf.Job = HUtil32.LoByte(msg.Param);
                     MShare.MySelf.m_nIPowerLvl = HUtil32.HiByte(msg.Param);
                     MShare.MySelf.m_nGameGold = HUtil32.MakeLong(msg.Tag, msg.Series);
-                    MShare.MySelf.Abil = EDCode.DecodeBuffer<Ability>(body);
+                    Ability abil = AbilityCodec.Decode(body);
+                    MShare.MySelf.Abil = abil;
+                    // 卡 `openmir2-botsrv-decode-compat`：能力视图的可观测落点（修复前旧路径这里是
+                    // 全零/错位值；窗口报告用它做「修复前后对照」，不改任何判据）。
+                    MainOutMessage($"ABILITYVIEW level={abil.Level} hp={abil.HP}/{abil.MaxHP} mp={abil.MP}/{abil.MaxMP} dc={abil.DC} weight={abil.Weight}/{abil.MaxWeight}");
                     break;
                 case Messages.SM_SUBABILITY:
                     MShare.g_nMyHitPoint = HUtil32.LoByte(msg.Param);

@@ -74,6 +74,12 @@ namespace BotSrv
             {
                 System.Environment.Exit(ErrorCensusSelfCheck.Run());
             }
+            // 卡 `openmir2-botsrv-decode-compat`：Ability 52 / ClientItem 621 解码兼容的牙
+            // （不启动服务/不连端口；含静默全零拒绝与旧分派计数负例）。
+            if (args.Length > 0 && args[0] == "--selftest-decode-compat")
+            {
+                System.Environment.Exit(DecodeCompatSelfCheck.Run());
+            }
             // 进程级兜底：线程入口/事件处理器之外的遗漏路径（例如 runThread 之外的线程）至少在
             // fatal.ndjson 留一行，并计入 unhandled_exception；未观察 Task 同理。
             AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
