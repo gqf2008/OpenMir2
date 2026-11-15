@@ -1,6 +1,8 @@
 # 给 walgit 维护方的问题报告（草案）
 
-**标题**：`wg` 客户端随本地 collab ref 数量线性劣化：15.6k 条 ref 时单次调用 >120s，且删除会被 fetch 复原
+**标题**：`wg` 客户端在 ≥200 条本地 collab ref 时挂死（二分实测断崖，非线性），且删除会被 fetch 复原
+
+> 注：本文件是**初版草案**；根因口径以 `docs/walgit-cli-ref-scale-20261115.md` §6 与上游 thread `walgit-cli-ref-scale-o1` 的更正评论为准。
 
 ## 环境
 - Windows 10 Pro 19045；`wg 0.1.0 (walgit D1 collaboration client, zig)`；服务端 `v0.15.0`（`/healthz` ok）。
@@ -14,7 +16,7 @@ timeout 120 wg collab board; echo rc=$?                                     # rc
 ```
 
 ## 关键观测
-1. `git` 侧同规模操作 **88 ms**；`wg` 侧 **>120 s**——差三个数量级，≈ **每 ref 7.7 ms**，与「每个 ref 起一次 git 子进程」的 Windows 开销吻合。
+1. `git` 侧同规模操作 **88 ms**；`wg` 侧 **>120 s**——但**这不是每 ref 成本**：二分实测 100 条与 199 条都约 0.27–0.30s、200 条起挂住（见更正评论）。
 2. **只含 3 条 ref 的 `git clone --shared` 克隆**里，`wg collab entry` **立即成功**且条目 `verified=true`。
 3. **删除无效**：本地删 10,867 条（15,720→4,853）与删 1 条（15,674→15,673）两次实验，只要接着跑任何 `wg` 读命令，ref 数**自动恢复**——读取路径会先全量 `fetch refs/collab/*`。
 4. 失败形态不稳定：早期快速返回 `GitFailed` / `RegistryReadFailed`，后期表现为**超时**；同一环境两种形态交替出现。

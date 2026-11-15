@@ -1,7 +1,7 @@
 # `wg` 故障时的合规逃生路径（低 ref 克隆 + 规范密钥路径）
 
 - 适用：`wg collab entry` 报 `RegistryReadFailed` / `GitFailed` / 挂起 >120s，且主检出 `refs/collab/*` 达 1.5 万量级
-  （成因见 `docs/walgit-cli-ref-scale-20261115.md`：客户端按 ref 数 O(n)，≈7.7ms/ref）。
+  （成因见 `docs/walgit-cli-ref-scale-20261115.md`：≥200 条 collab ref 时 wg 直接挂死（199 通过 0.27s、200 挂住），断崖精确在 200；「每 ref 7.7ms」是超时截尾的伪值，已作废。机制疑为 `cat-file --batch` 双向互锁（8 KiB 管道容量），属强证据、待直接观测。）
 - 前提：**不复制任何密钥**、**不手写 refs**、**不绕签名**。签名仍是 `sign_entry.sh` + `wg collab entry`，只是换一个 **ref 很少的仓库根**来跑。
 
 ## 为什么要换仓库根
@@ -93,6 +93,7 @@ CLONE=<路径>
 - **用法**：低 ref 克隆 walgit 仓库 → `.git/walgit/identity` 写
   `{"key":"C:/Users/gxh/.walgit/keys/walgit-d1-reporter.ed25519","principal":"openmir2-orchestrator"}` →
   拷该仓库自己的 `.walgit/board.toml` → 只 fetch 该仓库 `refs/collab/meta/*` → `sign_entry.sh` 签 → 单条 push。
-- **已提交**：thread `walgit-cli-ref-scale-o1`（`wg` 客户端按 ref 数线性劣化）。
+- **已提交**：thread `walgit-cli-ref-scale-o1`（`wg` 在 ≥200 条 collab ref 时挂死；旧「线性劣化」结论已作废并已上游更正）。
+- **硬规避**：任何 wg 操作必须在 **<200 条** collab ref 的仓库根跑。**清到 500/1000 条无效**——逃生路径之所以有效，正是因为它落在 200 以下。
 - **注意**：同名 principal 两把钥匙并存是刻意的；**任何签名前先确认当前仓库用的是哪把**
   （看 `git rev-parse --git-path walgit/identity`）。密钥迁移/轮换一律先报后做。
