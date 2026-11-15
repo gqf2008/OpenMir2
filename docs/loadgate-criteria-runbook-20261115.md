@@ -306,6 +306,14 @@ for rel, count, hold in runs:
   实例：2026-11-15 池卡 r2 用 `E:/MirServer/M2GameSvr/GameSrv.exe`（mtime 2026-10-22、来自已删 worktree `OpenMir2-wt-goods`）
   ⇒ 487 条 `ProcessHumans` 异常、`in_world` 恒 21/500 ⇒ 整轮作废。
 - 健康栈形态（360s 窗口实测）：`DBSrv`(C#) + `LoginSrv`(C#) + **`game-svr`(Rust, 5000)** + `login-gate`/`sel-gate`/`game-gate`(Rust)。
+- **门禁运行的三态：PASS / FAIL / INCOMPLETE**（2026-11-15 定）。凡出现下列任一形态，一律判
+  **INCOMPLETE**——**既不得计入 PASS，也不得归咎于代码**：
+  rustc/cargo 在编译期被外部或系统回收器杀死；进程异常退出且**无任何 `error[...]`/`could not` 诊断行**；
+  日志里**没有 `test result:` 行**（⇒ 0 个测试执行）。
+  INCOMPLETE 的证据必须齐：**被杀时刻的退出码、日志末 40 行、`test result:` 行是否存在、被采样进程与空闲内存快照**（采不到就写「未采到」）。
+  实例：2026-11-15 池卡分支 `cargo test --workspace` 编译 26 crate 后被系统 OOM 回收器整体 kill，
+  rustc exit 1 且无诊断行、零 `test result:` ⇒ 判 INCOMPLETE，重跑用 `--jobs 2` 降并发。
+  **任何只报「第 N 个 crate 编译失败」而不给上述证据的门禁结论，不得作为合并依据。**
 - **`dotnet-counters` 采集必须记录目标进程**：落 `counters_target=<process> pid=<pid>` 到 `preflight.txt`
   与 `report.json`。**缺这项的采集，其数字不得出现在报告结论里**（只能进附录并标「未证」）。
   实例：2026-11-15 修复树 360s 的 `Allocation Rate≈418MB/s` 因归档未记 counters PID，只能降级为「疑为 BotSrv、未证」。
