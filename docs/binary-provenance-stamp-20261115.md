@@ -137,6 +137,9 @@
   第一个 `Microsoft.NETCore.App`——此时该字段语义降级为「产戳机器工具链」，不是目标框架，需人工注意。
 - **窗口期不要跑产戳**：产戳模式会执行 `cargo --version` / `dotnet --version`，空载口径把
   cargo/dotnet 进程计为外部构建；`-Selftest` 因 `-NoToolchainProbe` 不派生子进程，可随时跑。
+- **校验需要 git 对象库**：`-Check` 用 `git cat-file -e` 核 head，`-RepoRoot` 必须指向包含该提交的
+  检出（worktree 共享对象库即可）；没有 git / 没有对象库的机器上 head 无法本机验证 ⇒ 判 rc=2
+  （判不了，不是绿）。第 2 步需决定「部署机的信任根」（例如在构建机校验后随包携带结果），本批不做。
 - **旧戳兼容**：`rebuild-server.ps1` 产出的 `mir2-server.build.json` 没有 `mtime`/`head_source`/
   `toolchain_kind`；本工具的 `-Check` 已兼容（补充字段只做存在时校验），但第 2 步若要把它纳入
   同一清单，应同步补齐字段或明确豁免。
