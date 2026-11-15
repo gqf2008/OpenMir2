@@ -249,4 +249,3 @@ grep -rn "catch" src/BotSrv --include='*.cs'
 grep -rn "new Thread\|Task.Run\|async void\|BeginInvoke\|UnhandledException\|ThreadException" src/BotSrv --include='*.cs'
 grep -rn "+= CSocket\|+= Socket\|+= ReceivedData" src/BotSrv --include='*.cs'
 ```
-
