@@ -65,7 +65,7 @@
 
 ### 3.1 Gen2「完整 GC 后存活量」单调上升（plateau500，283 in-world）
 
-`dotnet-counters-500.csv` 的 `Gen 2 Size` 在每次 Gen2 GC 采样点即「本次完整 GC 后存活量」：
+`dotnet-counters-500.csv` 的 `Gen 2 Size` 在每次 Gen2 GC（含后台 GC）之后即「本次 GC 后存活量」：
 
 | 时刻 | Gen2 存活 | GC 停顿 | 备注 |
 | --- | --- | --- | --- |
