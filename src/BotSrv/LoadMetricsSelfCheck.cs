@@ -28,6 +28,8 @@ namespace BotSrv
     ///      使 `GetChunks()` = [1,1,40]，高低代理被切口拆开 ⇒ 必须**不抛异常**且字节与旧实现
     ///      （`File.WriteAllText(text)`）一致（牙：退回「逐 chunk GetByteCount 定容」会在 flush 时抛
     ///      `ArgumentException: output byte buffer too small`；实测旧测量 measure=43 / actual=44）；
+    ///      附两条**可执行反面控制**：大容量文本 builder 只有单 chunk（不制造切口 ⇒ 覆盖不到），
+    ///      以及不缩字节缓冲时余量 >1B（少算 1 字节也不会抛 ⇒ 缺陷被掩盖）；
     ///   ⑦ 单次落盘分配量：`GC.GetAllocatedBytesForCurrentThread()` 实测，新 ≤ 旧 30% 且 ≤ 32KB
     ///      （稳态复用后只剩 FileStream 的小对象）；
     ///   ⑧ 接线：`Init()` + `Flush()` 真把 `login_conns.ndjson` 写成与旧实现相同的字节。
@@ -109,7 +111,15 @@ namespace BotSrv
 
                 // ---------- ⑥ 跨 chunk 代理对（P1 复审回归） ----------
                 // 生产路径用 GetMaxByteCount 上界定容、stateful GetBytes 编码；旧实现是整串
-                // File.WriteAllText。本用例让 StringBuilder 的 GetChunks() 把代理对拆开。
+                // File.WriteAllText。这里有两个互相独立的「必须」，缺任一条用例都会假绿：
+                //   (a) **文本切口**：只有小容量文本 StringBuilder（capacity=1）才把高/低代理分到
+                //       不同 GetChunks() 块（[1,1,40]）。同一串放进大容量 builder 只有一个 chunk
+                //       （见 no-shrink-text-builder-single-chunk）——首版把 emoji 放进复用的
+                //       LoginConnsText（大容量）里，代理对被吞进同一 chunk，假绿。
+                //   (b) **定容余量**：前面的用例已把复用字节缓冲撑到远大于 44B；此时即使按 measure
+                //       少算 1 字节，dst 仍有余量、不会抛（见 no-shrink-control-*）。必须先
+                //       SelfCheckSetLoginConnBytesBufferSize(1) 把缓冲缩到 1B，才能让「按 measure
+                //       精确分配」的变异真的抛 ArgumentException（红版 failures=3）。
                 var tiny = new StringBuilder(1);
                 tiny.Append((char)0xD83D);   // high surrogate
                 tiny.Append((char)0xDE00);   // low surrogate
@@ -122,13 +132,33 @@ namespace BotSrv
                 Check("cross-chunk-fixture-splits-pair",
                     chunkLens.Count >= 2 && chunkLens[0] == 1 && chunkLens[1] == 1,
                     $"chunks={string.Join(",", chunkLens)}");
+                // 反面控制 A（可执行自证）：同一串放进大容量文本 builder 只有 1 个 chunk，
+                // 即「不制造文本切口时该输入覆盖不到代理对拆分」——首版假绿的机检。
+                var bigText = new StringBuilder(1024);
+                bigText.Append((char)0xD83D);
+                bigText.Append((char)0xDE00);
+                bigText.Append('b', 40);
+                int bigChunks = 0;
+                foreach (ReadOnlyMemory<char> chunk in bigText.GetChunks())
+                {
+                    bigChunks++;
+                }
+                Check("no-shrink-text-builder-single-chunk", bigChunks == 1, $"chunks={bigChunks}");
+                string crossLegacyPath = Path.Combine(dir, "cross-chunk.legacy.txt");
+                File.WriteAllText(crossLegacyPath, tiny.ToString(), new UTF8Encoding(false));
+                byte[] crossLegacy = File.ReadAllBytes(crossLegacyPath);
+                // 反面控制 B（可执行自证）：不缩字节缓冲时余量 > 1B —— measure 少算 1 字节也
+                // 不会抛，缺陷被掩盖；因此必须先缩到 1B（下一条断言）才有牙。
+                int bufferBeforeCross = LoadMetrics.SelfCheckLoginConnBytesBufferLength;
+                byte[] noShrinkBytes = LoadMetrics.SelfCheckEncodeText(tiny);
+                Check("no-shrink-control-encode-equal", BytesEqual(noShrinkBytes, crossLegacy),
+                    $"bytes={noShrinkBytes.Length} sha={Sha(noShrinkBytes)}");
+                Check("no-shrink-control-buffer-masks-one-byte", bufferBeforeCross > crossLegacy.Length,
+                    $"buffer_before={bufferBeforeCross} actual={crossLegacy.Length}");
                 LoadMetrics.SelfCheckSetLoginConnBytesBufferSize(1);
                 Check("cross-chunk-buffer-shrunk",
                     LoadMetrics.SelfCheckLoginConnBytesBufferLength == 1,
                     $"buffer={LoadMetrics.SelfCheckLoginConnBytesBufferLength}");
-                string crossLegacyPath = Path.Combine(dir, "cross-chunk.legacy.txt");
-                File.WriteAllText(crossLegacyPath, tiny.ToString(), new UTF8Encoding(false));
-                byte[] crossLegacy = File.ReadAllBytes(crossLegacyPath);
                 byte[] crossNew = null;
                 Exception crossEx = null;
                 try
