@@ -2180,6 +2180,30 @@ type EntityMutData = (
 
 type MutViewQuery = bevy_ecs::query::QueryState<EntityMutData>;
 
+/// `SendRefMsg` 收件人谓词的**最小投影**（[`EntityStore::iter_send_ref_targets`] 产出）。
+///
+/// 只含派生收件人真正需要的四组件：`Entity`(id) / `Transform`(map_id,x,y) /
+/// `Appearance`(race) / `LifeCycle`(ghost)。改造前 `hear_targets_at` 走 [`EntityStore::iter_ref`]
+/// ——每实体取 24 组件并构造约 150 字段的 [`EntityRef`]；收件人判断只读这 6 个标量，
+/// 而该扫描在 E≈8874 时是 `HostInbound` 的主体（P1-2）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SendRefTarget {
+    pub id: i32,
+    pub map_id: usize,
+    pub x: i32,
+    pub y: i32,
+    pub race: u8,
+    pub ghost: bool,
+}
+
+/// 收件人谓词的轻量读查询：只匹配 `Entity`/`Transform`/`Appearance`/`LifeCycle` 四组件。
+type SendRefTargetQuery = bevy_ecs::query::QueryState<(
+    &'static Entity,
+    &'static Transform,
+    &'static Appearance,
+    &'static LifeCycle,
+)>;
+
 pub struct EntityStore {
     inner: crate::EcsStore<CoreIdentity>,
     /// 读路径的缓存查询（S3b/S4a）：一次按句柄取齐 `Entity` + 位置/绑定 + 属性/成长组件，
@@ -2191,6 +2215,9 @@ pub struct EntityStore {
     view3_state: ReadView3Query,
     /// 写路径的缓存查询（S4a/S4b）：一次按句柄取齐可变主组件与属性/成长/状态组件（[`EntityMut`] 用）。
     mut_view_state: MutViewQuery,
+    /// 收件人谓词的轻量读查询（`hear_targets_at` 热路径）：只取四组件，见
+    /// [`EntityStore::iter_send_ref_targets`]。
+    targets_state: SendRefTargetQuery,
 }
 
 impl std::fmt::Debug for EntityStore {
@@ -2298,12 +2325,16 @@ impl EntityStore {
                 &mut AiState,
             ),
         )>();
+        let targets_state = inner
+            .world_mut()
+            .query::<(&Entity, &Transform, &Appearance, &LifeCycle)>();
         EntityStore {
             inner,
             view_state,
             view2_state,
             view3_state,
             mut_view_state,
+            targets_state,
         }
     }
 
@@ -2328,6 +2359,7 @@ impl EntityStore {
         self.view2_state.update_archetypes(self.inner.world());
         self.view3_state.update_archetypes(self.inner.world());
         self.mut_view_state.update_archetypes(self.inner.world());
+        self.targets_state.update_archetypes(self.inner.world());
     }
 
     /// 组件注册表（只读；段适配器的运行期镜像，测试断言用）。
@@ -3317,6 +3349,29 @@ impl EntityStore {
                     ai,
                 ))
             })
+    }
+
+    /// 收件人谓词的**轻量遍历**：只取 `Entity`(id)/`Transform`/`Appearance`(race)/
+    /// `LifeCycle`(ghost) 四组件，**不构造 [`EntityRef`]**。
+    ///
+    /// 实体集合与 [`Self::iter_ref`] 相同：`EcsStore` 插入的每个实体都带完整 25 组件
+    /// （`insert_parts` / `StageAccess::insert` 逐项断言），四组件是其中子集。
+    /// 顺序为 bevy 表序（**不承诺**槽位序）⇒ 需要稳定输出序的调用方必须自行排序
+    /// （`hear_targets_at` 返回前按 ActorId 升序排）。
+    ///
+    /// `iter_manual` 不自动刷新 archetype 匹配集；本结构的插入路径（`insert_parts`）与
+    /// 段边界（[`Self::refresh_views`]）都会刷新 [`Self::targets_state`]。
+    pub fn iter_send_ref_targets(&self) -> impl Iterator<Item = SendRefTarget> + '_ {
+        self.targets_state.iter_manual(self.inner.world()).map(
+            |(entity, transform, appearance, life_cycle)| SendRefTarget {
+                id: entity.id,
+                map_id: transform.map_id,
+                x: transform.x,
+                y: transform.y,
+                race: appearance.race,
+                ghost: life_cycle.ghost,
+            },
+        )
     }
 
     pub fn iter_mut(&mut self) -> impl Iterator<Item = &mut Entity> + '_ {
@@ -4701,5 +4756,52 @@ mod tests {
             s.iter().map(|e| e.name.clone()).collect::<Vec<_>>(),
             vec!["c", "b"]
         );
+    }
+
+    /// **P1-2**：`iter_send_ref_targets`（4 组件的轻量视图）与 `iter_ref`（24 组件 +
+    /// `EntityRef`）必须看到**同一个实体集合**、同一组收件人字段值。
+    ///
+    /// 覆盖：多 map、多 race、Ghost、删除（bevy 表 swap-remove 打乱行序）与槽位复用。
+    /// 牙：把轻量查询的某一组件换成缺省值（如 `race` 恒 `ACTOR_RACE_PLAY`）⇒ 逐实体比对红。
+    #[test]
+    fn iter_send_ref_targets_matches_iter_ref_exactly() {
+        let mut s = EntityStore::new();
+        let mut ids = Vec::new();
+        for i in 0..24i32 {
+            let id = s.alloc_id();
+            let mut e = crate::EntitySpawn::new(id, format!("e{i}"), i % 5, i / 5);
+            e.map_id = (i % 3) as usize;
+            e.race = (i % 4) as u8;
+            e.ghost = i % 6 == 0;
+            ids.push(s.insert(e));
+        }
+        let check = |s: &EntityStore, label: &str| {
+            let mut by_ref: Vec<(i32, usize, i32, i32, u8, bool)> = s
+                .iter_ref()
+                .map(|e| (e.id, e.map_id, e.x, e.y, e.race, e.ghost))
+                .collect();
+            let mut by_light: Vec<(i32, usize, i32, i32, u8, bool)> = s
+                .iter_send_ref_targets()
+                .map(|t| (t.id, t.map_id, t.x, t.y, t.race, t.ghost))
+                .collect();
+            by_ref.sort_unstable();
+            by_light.sort_unstable();
+            assert_eq!(
+                by_light, by_ref,
+                "{label}: 轻量视图必须与 iter_ref 逐实体等值（集合与字段）"
+            );
+        };
+        check(&s, "初始");
+        // 删除两条（bevy 表的 swap-remove 会打乱行序），再走段边界的 refresh_views。
+        assert!(s.remove(ids[3]).is_some());
+        assert!(s.remove(ids[10]).is_some());
+        s.refresh_views();
+        check(&s, "删除后");
+        // 槽位复用：新实体落到被删槽位。
+        let id = s.alloc_id();
+        let mut e = crate::EntitySpawn::new(id, "reused", 7, 7);
+        e.race = ACTOR_RACE_PLAY;
+        ids.push(s.insert(e));
+        check(&s, "槽位复用");
     }
 }

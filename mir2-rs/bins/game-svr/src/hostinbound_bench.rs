@@ -8,6 +8,9 @@
 //!     -- --ignored --nocapture hostinbound_bench
 //! ```
 //!
+//! P1-2 起第 5 节内建**同轮旧基线**（`chat::hear_targets_at_legacy` vs `hear_targets_at`），
+//! 单次运行即得 old_ns/new_ns/ratio，不需要回旧树。
+//!
 //! 用真实类型（`OnlineRegistry`/`DisplayTable`/`World::session`/`chat::hear_targets_at`），
 //! 不改生产代码；每个 primitive 在典型规模（online=500/1000/5000、display=500/1000/5000、
 //! 实体=1000/5000/8874）下测单次耗时。dense 场景按 500 档的密度 17.7（500 玩家 / 8874 实体）
@@ -232,16 +235,43 @@ fn hostinbound_bench_primitives() {
         }
         let speaker = ids[0];
         let (sx, sy) = grid_xy(0);
-        let hits = game_svr::chat::hear_targets_at(&world, speaker, 0, sx, sy, SEND_RANGE).len();
-        let t = time_ns(300, || {
+        // **P1-2 同轮基线**：旧路径（`iter_ref`，24 组件 + 完整 EntityRef）与新路径
+        // （4 组件轻量视图）在**同一次运行、同一个世界**上测；先断言输出逐元素相等，
+        // 再报 old_ns / new_ns / ratio。不要像 P1-1 那样把 before 留在另一次运行里。
+        let old_targets =
+            game_svr::chat::hear_targets_at_legacy(&world, speaker, 0, sx, sy, SEND_RANGE);
+        let new_targets = game_svr::chat::hear_targets_at(&world, speaker, 0, sx, sy, SEND_RANGE);
+        assert_eq!(
+            new_targets, old_targets,
+            "E={e_count}: 新旧收件人必须逐元素相等（集合与顺序）"
+        );
+        // 覆盖牙：轻量扫描必须逐实体覆盖全部 E —— 否则「new 很快」可能只是静默少扫了一部分。
+        assert_eq!(
+            world.entities.iter_send_ref_targets().count(),
+            e_count,
+            "E={e_count}: 轻量收件人扫描必须覆盖全部实体"
+        );
+        let old_ns = time_ns(300, || {
+            game_svr::chat::hear_targets_at_legacy(&world, speaker, 0, sx, sy, SEND_RANGE).len()
+        });
+        let new_ns = time_ns(300, || {
             game_svr::chat::hear_targets_at(&world, speaker, 0, sx, sy, SEND_RANGE).len()
         });
+        let hits = new_targets.len();
         line(
             &format!(
-                "E={e_count:<5} players={players:<4} hear_targets_at ({} 收件人)",
+                "E={e_count:<5} players={players:<4} hear_targets_at old/iter_ref ({} 收件人)",
                 hits
             ),
-            t,
+            old_ns,
+        );
+        line(
+            &format!("E={e_count:<5} players={players:<4} hear_targets_at new/4-comp"),
+            new_ns,
+        );
+        println!(
+            "[hear_targets_at] E={e_count:<5} old_ns={old_ns:>10.3} new_ns={new_ns:>10.3} ratio={:.3}",
+            new_ns / old_ns
         );
         // 端到端扇出：hear_targets + k 次 online find（online 有 players 条）
         let online = make_online(players);

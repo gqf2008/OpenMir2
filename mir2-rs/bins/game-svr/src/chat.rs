@@ -207,6 +207,41 @@ pub fn hear_targets_at(
     }
     let mut out: Vec<i32> = world
         .entities
+        .iter_send_ref_targets()
+        .filter(|t| {
+            t.map_id == map_id
+                && t.race == ACTOR_RACE_PLAY
+                && !t.ghost
+                && (t.x - x).abs() <= range
+                && (t.y - y).abs() <= range
+        })
+        .map(|t| t.id)
+        .collect();
+    out.sort_unstable();
+    out
+}
+
+/// **同轮旧基线**（等价性用例 + `hostinbound_bench` 用）：改造前 `iter_ref` 版本的逐字副本。
+///
+/// 只在测试构建里存在。保留它（而不是在 bench 里另抄一份谓词）是为了让旧路径也用同一
+/// 生产类型、同一形参，并让「新旧输出逐元素相等」成为可机判断言（广播帧序可观测）。
+#[cfg(test)]
+pub(crate) fn hear_targets_at_legacy(
+    world: &World,
+    speaker_id: i32,
+    map_id: usize,
+    x: i32,
+    y: i32,
+    range: i32,
+) -> Vec<i32> {
+    let Some(speaker) = world.entities.get(speaker_id) else {
+        return Vec::new();
+    };
+    if speaker.ob_mode || speaker.fixed_hide_mode {
+        return vec![speaker_id];
+    }
+    let mut out: Vec<i32> = world
+        .entities
         .iter_ref()
         .filter(|e| {
             e.map_id == map_id
@@ -472,6 +507,90 @@ mod tests {
             hear_targets_at(&world, speaker, 0, 11, 10, SEND_REF_MSG_RANGE),
             vec![speaker, observer]
         );
+    }
+
+    /// **P1-2 等价性判据**：轻量收件人派生（4 组件视图）与改造前 `iter_ref` 路径
+    /// **逐元素相等**（集合**与顺序**——广播帧序可观测，必须是断言而不是人工比对）。
+    ///
+    /// 覆盖面：跨图、Ghost、三种 race、±range 边界、说话者自己、`ob_mode` /
+    /// `fixed_hide_mode` 早退、未知说话者、以及删除后槽位复用（bevy 表序被打乱）。
+    #[test]
+    fn hear_targets_at_lightweight_matches_legacy_exactly() {
+        let mut world = World::new(200, 200);
+        let mut ids = Vec::new();
+        for map_id in [0usize, 1] {
+            for i in 0..80i32 {
+                let mut e = mir2_world_bevy::EntitySpawn::new(
+                    0,
+                    format!("e{map_id}_{i}"),
+                    10 + (i % 9) * 3,
+                    10 + (i / 9) * 3,
+                );
+                e.map_id = map_id;
+                e.race = match i % 5 {
+                    0 => mir2_world_bevy::ACTOR_RACE_MONSTER,
+                    1 => mir2_world_bevy::ACTOR_RACE_NPC,
+                    _ => ACTOR_RACE_PLAY,
+                };
+                e.ghost = i % 7 == 0;
+                ids.push(world.add_entity(e));
+            }
+        }
+        let speaker0 = ids[5]; // map 0
+        let speaker1 = ids[85]; // map 1
+
+        let check = |world: &World, speaker: i32, label: &str| {
+            for (map_id, sx, sy) in [
+                (0usize, 10, 10),
+                (0, 13, 13),
+                (0, 40, 40),
+                (1, 10, 10),
+                (1, 25, 25),
+            ] {
+                for range in [0i32, 1, 5, 12, 50] {
+                    let got = hear_targets_at(world, speaker, map_id, sx, sy, range);
+                    let want = hear_targets_at_legacy(world, speaker, map_id, sx, sy, range);
+                    assert_eq!(
+                        got, want,
+                        "{label}: map={map_id} pos=({sx},{sy}) range={range} 新旧收件人必须逐元素相等"
+                    );
+                    assert!(
+                        got.windows(2).all(|w| w[0] <= w[1]),
+                        "{label}: 收件人必须按 ActorId 升序（帧序契约）"
+                    );
+                }
+            }
+        };
+
+        check(&world, speaker0, "初始");
+        check(&world, speaker1, "初始/map1");
+
+        // 早退面：ObMode / FixedHideMode ⇒ 只发自己（oracle `Message.cs:390-394`）。
+        world.entities.get_mut(speaker0).unwrap().flags.ob_mode = true;
+        check(&world, speaker0, "ob_mode");
+        world.entities.get_mut(speaker0).unwrap().flags.ob_mode = false;
+        world
+            .entities
+            .get_mut(speaker0)
+            .unwrap()
+            .flags
+            .fixed_hide_mode = true;
+        check(&world, speaker0, "fixed_hide_mode");
+
+        // 未知说话者：两条路径都必须空。
+        assert_eq!(
+            hear_targets_at(&world, 999_999, 0, 10, 10, 12),
+            hear_targets_at_legacy(&world, 999_999, 0, 10, 10, 12)
+        );
+        assert!(hear_targets_at(&world, 999_999, 0, 10, 10, 12).is_empty());
+
+        // 删除 + 槽位复用（bevy 表序 swap-remove ⇒ 迭代顺序变化；排序吸收，但集合必须仍等价）。
+        assert!(world.entities.remove(ids[7]).is_some());
+        let mut reused = mir2_world_bevy::EntitySpawn::new(0, "reused", 12, 12);
+        reused.race = ACTOR_RACE_PLAY;
+        let reused_id = world.add_entity(reused);
+        assert!(reused_id > 0, "复用槽位后的业务 id 必须是新的正 id");
+        check(&world, speaker0, "删除+槽位复用");
     }
 
     #[test]
