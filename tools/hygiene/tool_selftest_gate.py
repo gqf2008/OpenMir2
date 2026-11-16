@@ -119,6 +119,8 @@ REGISTRY = [
     ("selftest_proxy", ["tools/capture/selftest_proxy.py", "--selftest"], False),
     ("selftest_gate_shadow", ["tools/gw-capture/selftest_gate_shadow.py", "--selftest"], False),
     ("load_report", ["tools/botload/load_report.py", "selftest"], False),
+    # 卡 openmir2-botsrv-loh-growth：counters CSV -> A8-trend 复算（合成夹具 13 条；缺计数器/空样本/坏时间戳 fail-closed）。
+    ("counters_series", ["tools/botload/counters_series.py", "--selftest"], False),
     ("prepare_safe_login", ["tools/loginfixture/prepare_safe_login.py", "--selftest"], False),
     ("preflight_private_stack", ["tools/window/preflight_private_stack.py", "--selftest"], False),
     # 卡 openmir2-docs-gate-rc-semantics（Leader 2026-10-27 批准扩写集）：窗口期两个 PowerShell
