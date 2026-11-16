@@ -168,6 +168,175 @@ namespace BotSrv
                 }
             }
 
+            // ================= 同族 follow-up（P2）：本轮有流量/可证站点 =================
+            // 与上一卡同一方法论：先证明 `MShare.MySelf == null` 时该帧必 NRE，再据此加门控；
+            // 喂不抛的站点写「不可证」，不改代码。
+            int turnN = BotHelper.GetCodeMsgSize((float)8 * 4 / 3);
+            {
+                string prefix = EDCode.EncodeBuffer(SerializerUtil.Serialize(new CharDesc { Feature = 1, Status = 2 }), 8);
+                CharDesc rt = default;
+                bool ok = prefix.Length == turnN;
+                if (ok) { rt = EDCode.DecodeBuffer<CharDesc>(prefix); ok = rt.Feature == 1 && rt.Status == 2; }
+                Check("fixture-turn-prefix", ok, $"len={prefix.Length} want_n={turnN} rt=({rt.Feature},{rt.Status})");
+                if (!ok) { Console.WriteLine("RECVNULL SELFTEST FAIL (turn fixture)"); return 1; }
+            }
+            string abilityBody;
+            {
+                abilityBody = EDCode.EncodeBuffer(Client58(23), AbilityCodec.ClientLayoutSize);
+                bool ok = false;
+                string detail;
+                try
+                {
+                    Ability a = AbilityCodec.Decode(abilityBody);
+                    ok = a.Level == 23 && !AbilityCodec.IsAllZero(a);
+                    detail = $"L={a.Level} HP={a.HP} DC={a.DC}";
+                }
+                catch (Exception ex) { detail = ex.GetType().Name + ": " + ex.Message; }
+                Check("fixture-ability58", ok, detail);
+                if (!ok) { Console.WriteLine("RECVNULL SELFTEST FAIL (ability fixture)"); return 1; }
+            }
+
+            void CheckNullContext(string name, ushort ident, int recog, string frameBody, Action<RobotPlayer> prepare)
+            {
+                var bot = new RobotPlayer();
+                bot.MarkInWorldOnConnectionForTest(recog, 10, 20, 1);
+                prepare(bot);
+                var cm = new ClientManager();
+                string sid = "recvnull2-" + name;
+                cm.AddClient(sid, bot);
+                long n0 = BotErrorCensus.Get(BotErrorCensus.RecvPacketNull);
+                long o0 = BotErrorCensus.Get(BotErrorCensus.RecvPacketOther);
+                long i0 = BotErrorCensus.Get(BotErrorCensus.RecvPacketIndex);
+                cm.ProcessOnePacket(new RecvicePacket
+                {
+                    SessionId = sid,
+                    ReviceData = Frame(ident, recog, 0, 0, 0, frameBody),
+                });
+                long dn = BotErrorCensus.Get(BotErrorCensus.RecvPacketNull) - n0;
+                long dother = BotErrorCensus.Get(BotErrorCensus.RecvPacketOther) - o0;
+                long dindex = BotErrorCensus.Get(BotErrorCensus.RecvPacketIndex) - i0;
+                Check("null-" + name + "-no-recv-error", dn == 0 && dother == 0 && dindex == 0,
+                    $"delta null={dn} other={dother} index={dindex}");
+
+                var bot2 = new RobotPlayer();
+                bot2.MarkInWorldOnConnectionForTest(recog, 10, 20, 1);
+                prepare(bot2);
+                MShare.MySelf = null;
+                string outcome = "no-exception";
+                try { bot2.ProcessPacket(Frame(ident, recog, 0, 0, 0, frameBody)); }
+                catch (Exception ex) { outcome = ex.GetType().Name + " @ " + OperateFrameLine(ex); }
+                finally { MShare.MySelf = null; }
+                Check("null-" + name + "-direct-no-throw", outcome == "no-exception", outcome);
+            }
+
+            // ① SM_TURN 带名尾部（ident 10）：null ⇒ compare 行 NRE；非 null ⇒ SlaveObject 追加。
+            {
+                int selfId = 5100, otherId = 5101;
+                CheckNullContext("turn", (ushort)Messages.SM_TURN, otherId, TurnBody("x(myselfname)"),
+                    b => b.PlayScene.NewActor(otherId, 5, 6, 0, 0, 0));
+                var bot = new RobotPlayer();
+                bot.MyActor = new THumActor(bot) { RecogId = selfId, UserName = "myselfname" };
+                bot.MarkInWorldOnConnectionForTest(selfId, 10, 20, 1);
+                bot.PlayScene.NewActor(otherId, 5, 6, 0, 0, 0);
+                var cm = new ClientManager();
+                string sid = "recvnull2-turn";
+                cm.AddClient(sid, bot);
+                cm.ProcessOnePacket(new RecvicePacket
+                {
+                    SessionId = sid,
+                    ReviceData = Frame((ushort)Messages.SM_TURN, otherId, 0, 0, 0, TurnBody("x(myselfname)")),
+                });
+                Actor other = bot.PlayScene.FindActor(otherId);
+                bool added = bot.MyActor.SlaveObject.Count == 1 && ReferenceEquals(bot.MyActor.SlaveObject[0], other);
+                bool sentTurn = other != null && other.m_MsgList.Count >= 1 && other.m_MsgList[0].Ident == Messages.SM_TURN;
+                Check("nonull-turn-slave-add", added && sentTurn, $"slaves={bot.MyActor.SlaveObject.Count} sent={sentTurn}");
+                cm.ProcessOnePacket(new RecvicePacket
+                {
+                    SessionId = sid,
+                    ReviceData = Frame((ushort)Messages.SM_TURN, otherId, 0, 0, 0, TurnBody("x(othername)")),
+                });
+                Check("nonull-turn-name-mismatch-skips", bot.MyActor.SlaveObject.Count == 1,
+                    $"slaves={bot.MyActor.SlaveObject.Count}");
+            }
+
+            // ② SM_DISAPPEAR（ident 30）：null ⇒ SendMsg(SM_HIDE) 前 NRE；非 null ⇒ 删除目标 actor。
+            {
+                int selfId = 5200, otherId = 5201;
+                CheckNullContext("disappear", (ushort)Messages.SM_DISAPPEAR, otherId, body, _ => { });
+                var bot = new RobotPlayer();
+                bot.MyActor = new THumActor(bot) { RecogId = selfId };
+                bot.MarkInWorldOnConnectionForTest(selfId, 10, 20, 1);
+                bot.PlayScene.NewActor(otherId, 5, 6, 0, 0, 0);
+                bot.PlayScene.NewActor(selfId, 5, 6, 0, 0, 0);
+                var cm = new ClientManager();
+                string sid = "recvnull2-disappear";
+                cm.AddClient(sid, bot);
+                cm.ProcessOnePacket(new RecvicePacket
+                {
+                    SessionId = sid,
+                    ReviceData = Frame((ushort)Messages.SM_DISAPPEAR, otherId, 0, 0, 0, body),
+                });
+                bool deleted = bot.PlayScene.FindActor(otherId) == null;
+                Check("nonull-disappear-other-deletes", deleted, $"deleted={deleted}");
+                cm.ProcessOnePacket(new RecvicePacket
+                {
+                    SessionId = sid,
+                    ReviceData = Frame((ushort)Messages.SM_DISAPPEAR, selfId, 0, 0, 0, body),
+                });
+                bool kept = bot.PlayScene.FindActor(selfId) != null;
+                Check("nonull-disappear-self-skips", kept, $"kept={kept}");
+            }
+
+            // ③ SM_ABILITY（ident 52）：null ⇒ 首个赋值 NRE；非 null ⇒ 五个字段与 Ability 落盘。
+            {
+                int selfId = 5300;
+                CheckNullContext("ability", (ushort)Messages.SM_ABILITY, selfId, abilityBody, _ => { });
+                var bot = new RobotPlayer();
+                bot.MyActor = new THumActor(bot) { RecogId = selfId };
+                bot.MarkInWorldOnConnectionForTest(selfId, 10, 20, 1);
+                var cm = new ClientManager();
+                string sid = "recvnull2-ability";
+                cm.AddClient(sid, bot);
+                cm.ProcessOnePacket(new RecvicePacket
+                {
+                    SessionId = sid,
+                    ReviceData = Frame((ushort)Messages.SM_ABILITY, 4321, 0x0302, 0x0064, 0x0007, abilityBody),
+                });
+                Ability a = bot.MyActor.Abil;
+                bool ok = bot.MyActor.m_nGold == 4321 && bot.MyActor.Job == HUtil32.LoByte(0x0302)
+                    && bot.MyActor.m_nIPowerLvl == HUtil32.HiByte(0x0302)
+                    && bot.MyActor.m_nGameGold == HUtil32.MakeLong((ushort)0x0064, (ushort)0x0007)
+                    && a != null && a.Level == 23;
+                Check("nonull-ability-applied", ok,
+                    $"gold={bot.MyActor.m_nGold} job={bot.MyActor.Job} ip={bot.MyActor.m_nIPowerLvl} " +
+                    $"gamegold={bot.MyActor.m_nGameGold} lvl={(a == null ? -1 : a.Level)}");
+            }
+
+            // ④ SM_WINEXP（ident 44）：null ⇒ `MySelf.Abil.Exp` 行 NRE；非 null ⇒ Exp 落盘。
+            //    注意：源码 :654-656 的 SM_DAYCHANGING(46) 是**空 case**，:658 的解引用属于 SM_WINEXP(44)。
+            {
+                int selfId = 5400;
+                CheckNullContext("winexp", (ushort)Messages.SM_WINEXP, 777, body, _ => { });
+                var bot = new RobotPlayer();
+                bot.MyActor = new THumActor(bot) { RecogId = selfId };
+                bot.MarkInWorldOnConnectionForTest(selfId, 10, 20, 1);
+                var cm = new ClientManager();
+                string sid = "recvnull2-winexp";
+                cm.AddClient(sid, bot);
+                cm.ProcessOnePacket(new RecvicePacket
+                {
+                    SessionId = sid,
+                    ReviceData = Frame((ushort)Messages.SM_WINEXP, 777, 0, 0, 0, body),
+                });
+                bool ok = bot.MyActor.Abil != null && bot.MyActor.Abil.Exp == 777;
+                Check("nonull-winexp-applied", ok, $"exp={(bot.MyActor.Abil == null ? -1 : bot.MyActor.Abil.Exp)}");
+            }
+
+            // ⑤ 负对照：喂 SM_DAYCHANGING(46) 在 MySelf==null 下**不得抛**（空 case，:658 不归因于它）。
+            {
+                CheckNullContext("daychanging-empty", (ushort)Messages.SM_DAYCHANGING, 5600, body, _ => { });
+            }
+
             Console.WriteLine(failed == 0 ? "RECVNULL SELFTEST PASS" : $"RECVNULL SELFTEST FAIL ({failed})");
             return failed == 0 ? 0 : 1;
         }
@@ -184,6 +353,47 @@ namespace BotSrv
                 Series = (ushort)series,
             };
             return "#" + EDCode.EncodeMessage(msg) + body + "!";
+        }
+
+        /// <summary>SM_TURN 体：11 字符 CharDesc 前缀 + 加密名字尾部（源码按 n=GetCodeMsgSize(8*4/3) 切分）。</summary>
+        private static string TurnBody(string name)
+        {
+            byte[] raw = SerializerUtil.Serialize(new CharDesc { Feature = 1, Status = 2 });
+            return EDCode.EncodeBuffer(raw, raw.Length) + EDCode.EncodeString(name);
+        }
+
+        /// <summary>58B 冻结客户端 `TAbility` 布局（与 `--selftest-decode-compat` 的 Client58 同口径）。</summary>
+        private static byte[] Client58(ushort level)
+        {
+            byte[] b = new byte[AbilityCodec.ClientLayoutSize];
+            void W16(int off, ushort v)
+            {
+                b[off] = (byte)v;
+                b[off + 1] = (byte)(v >> 8);
+            }
+            void W32(int off, uint v)
+            {
+                for (int i = 0; i < 4; i++) { b[off + i] = (byte)(v >> (8 * i)); }
+            }
+            W16(0, level);      // Level
+            W32(2, 0);          // AC
+            W32(6, 0);          // MAC
+            W32(10, 0x0101);    // DC
+            W32(14, 0);         // MC
+            W32(18, 0);         // SC
+            W32(22, 19);        // HP
+            W32(26, 15);        // MP
+            W32(30, 19);        // MaxHP
+            W32(34, 15);        // MaxMP
+            W32(38, 0);         // Exp
+            W32(42, 10);        // MaxExp
+            W16(46, 14);        // Weight
+            W16(48, 50);        // MaxWeight
+            W16(50, 0);         // WearWeight
+            W16(52, 15);        // MaxWearWeight
+            W16(54, 0);         // HandWeight
+            W16(56, 12);        // MaxHandWeight
+            return b;
         }
 
         /// <summary>异常栈里第一条 `RobotPlayer.Operate.cs:line N`（修复前用来钉解引用行）。</summary>

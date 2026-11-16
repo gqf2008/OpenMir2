@@ -381,6 +381,9 @@ namespace BotSrv.Player
                             if (Actor.UserName.IndexOf("(", StringComparison.Ordinal) != 0)
                             {
                                 HUtil32.ArrestStringEx(Actor.UserName, "(", ")", ref data);
+                                // 软关后 MySelf==null：旧代码在下一行 compare 抛 NRE，本帧剩余（含 NameColor）
+                                // 被丢弃；break 出去等价于丢弃本帧剩余部分。改坏必红：null-turn 用例。
+                                if (MShare.MySelf == null) break;
                                 if (string.Compare(data, MShare.MySelf.UserName, StringComparison.OrdinalIgnoreCase) == 0)
                                 {
                                     j = 0;
@@ -629,6 +632,9 @@ namespace BotSrv.Player
                     PlayScene.SendMsg(Messages.SM_ALIVE, msg.Recog, msg.Param, msg.Tag, (byte)msg.Series, desc.Feature, desc.Status, "", 0);
                     break;
                 case Messages.SM_ABILITY:
+                    // 软关后 MySelf==null：旧代码在下一行抛 NRE，Abil 解码与 ABILITYVIEW 日志一并被丢弃；
+                    // break 出去等价于丢弃本帧剩余部分。改坏必红：null-ability 用例。
+                    if (MShare.MySelf == null) break;
                     MShare.MySelf.m_nGold = msg.Recog;
                     MShare.MySelf.Job = HUtil32.LoByte(msg.Param);
                     MShare.MySelf.m_nIPowerLvl = HUtil32.HiByte(msg.Param);
@@ -655,6 +661,9 @@ namespace BotSrv.Player
 
                     break;
                 case Messages.SM_WINEXP:
+                    // 软关后 MySelf==null：旧代码在下一行抛 NRE，Exp 落盘与加经验提示被丢弃；
+                    // break 出去等价于丢弃本帧剩余部分。改坏必红：null-winexp 用例。
+                    if (MShare.MySelf == null) break;
                     MShare.MySelf.Abil.Exp = msg.Recog;
                     if (!MShare.g_gcGeneral[3] || HUtil32.MakeLong(msg.Param, msg.Tag) > MShare.g_MaxExpFilter)
                     {
@@ -843,7 +852,7 @@ namespace BotSrv.Player
                 case Messages.SM_HIDE:
                 case Messages.SM_GHOST:
                 case Messages.SM_DISAPPEAR:
-                    if (MShare.MySelf.RecogId != msg.Recog)
+                    if (MShare.MySelf != null && MShare.MySelf.RecogId != msg.Recog)
                     {
                         PlayScene.SendMsg(Messages.SM_HIDE, msg.Recog, msg.Param, msg.Tag, (byte)msg.Series, 0, 0, "");
                     }
