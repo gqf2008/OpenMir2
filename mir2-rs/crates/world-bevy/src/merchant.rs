@@ -300,6 +300,11 @@ impl World {
         if spawn.map_id >= self.maps.len() {
             return None;
         }
+        // **P2-3a**：stub 上禁止实体。
+        if !self.is_map_owned(spawn.map_id) {
+            self.note_unowned_refusal();
+            return None;
+        }
         let now = self.clock_ms;
         let map_id = spawn.map_id;
         let (x, y) = (spawn.x, spawn.y);
@@ -377,6 +382,11 @@ impl World {
             entity.merchant.as_ref().is_some_and(|m| m.is_hide),
         );
         if map_id >= self.maps.len() {
+            return false;
+        }
+        // **P2-3a**：stub 上禁止实体。
+        if !self.is_map_owned(map_id) {
+            self.note_unowned_refusal();
             return false;
         }
         let now = self.clock_ms;

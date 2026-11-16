@@ -196,8 +196,18 @@ pub fn apply_map_file_cells(f: &MapFile, grid: &mut MapGrid) -> usize {
 /// `sizes(reg)` 与 `reg.maps()` 同源 ⇒ 不可达；日志的 `cells` 变小是唯一线索）。同理
 /// `MapGrid::set_cell_attributes` 遇长度不符会**整图保持 Walk** 并返 0（fail-closed，不半灌）。
 pub fn apply_map_cells(reg: &MapRegistry, world: &mut World) -> usize {
+    apply_map_cells_owned(reg, world, &[])
+}
+
+/// **P2-3a**：只给 `owned` 为真的图灌格子属性（非拥有图是 1×1 stub，不得被当成真图）。
+///
+/// `owned` 为空切片 = 全部拥有（既有调用方/单测行为不变）。返回实际写入的格子总数。
+pub fn apply_map_cells_owned(reg: &MapRegistry, world: &mut World, owned: &[bool]) -> usize {
     let mut total = 0usize;
     for (map_id, f) in reg.maps().iter().enumerate() {
+        if !owned.is_empty() && !owned.get(map_id).copied().unwrap_or(false) {
+            continue;
+        }
         let Some(grid) = world.maps.get_mut(map_id) else {
             break;
         };

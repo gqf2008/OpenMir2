@@ -986,6 +986,17 @@ impl ProcessRunCounts {
 pub struct SimState {
     /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
     pub maps: Vec<MapGrid>,
+    /// **地图归属（P2-3a）**：`owned_maps[map_id]` = 本 World 是否拥有该图。
+    ///
+    /// 长度恒等于 [`SimState::maps`]；缺省全 `true`（单片/既有行为逐字节不变）。
+    /// 非拥有图以 1×1 stub grid 承载**全局下标**，stub 上禁止实体（[`World::tick`] 的
+    /// 不变式断言）。所有换图/落格入口统一查本表并 fail-closed（`SessionError::MapNotInShard`）。
+    owned_maps: Vec<bool>,
+    /// **P2-3a release 可观测**：本 World 因「目标图不归自己」而拒绝的入口次数（单调累计）。
+    ///
+    /// 每个换图/落格入口在 fail-closed 时 `+1`；`MIR2_SHARDS=1` 恒 0。debug 的每 tick 断言之外，
+    /// 这是 release 构建里也能读到的判定值（配套 `World::unowned_map_entity_ids` 按需诊断）。
+    unowned_refusal_count: u64,
     pub sessions: SessionRegistry,
     /// 虚拟时钟（毫秒），每 tick 前进 `TICK_INTERVAL_MS`
     pub clock_ms: i64,
@@ -1391,11 +1402,70 @@ pub struct SimState {
 }
 
 impl SimState {
+    /// **P2-3a**：`map_id` 是否归本 World 拥有。
+    ///
+    /// 越界 ⇒ `false`（越界另有 `NoSuchMap` 门；这里统一按「不拥有」拒绝，fail-closed）。
+    /// 缺省（[`SimState::with_maps`]）全拥有 ⇒ 既有路径恒真、零行为变化。
+    #[must_use]
+    pub fn is_map_owned(&self, map_id: usize) -> bool {
+        self.owned_maps.get(map_id).copied().unwrap_or(false)
+    }
+
+    /// **P2-3a**：本 World 拥有的 `map_id`（升序）。
+    ///
+    /// 用于「需要逐图工作」的扫描（掉落实体清单等）：stub 不参与，避免被当成真图。
+    #[must_use]
+    pub fn owned_map_ids(&self) -> Vec<usize> {
+        self.owned_maps
+            .iter()
+            .enumerate()
+            .filter_map(|(id, owned)| owned.then_some(id))
+            .collect()
+    }
+
+    /// **P2-3a**：设置地图归属（`owned.len()` 必须等于 `maps.len()`；`[]` = 全部拥有）。
+    ///
+    /// 宿主按 `ShardLayout` 在 `World::with_maps` 之后调用一次。非拥有图由调用方以
+    /// 1×1 stub grid 承载全局下标（[`crate::map::MapGrid::new`] 要求尺寸 > 0）。
+    ///
+    /// # Panics
+    /// `owned.len() != maps.len()` ⇒ 立即 panic（构造期编程错误，不允许半套归属）。
+    pub fn set_map_ownership(&mut self, owned: &[bool]) {
+        if owned.is_empty() {
+            self.owned_maps = vec![true; self.maps.len()];
+            return;
+        }
+        assert_eq!(
+            owned.len(),
+            self.maps.len(),
+            "地图归属表长度 {} 必须等于 maps.len() {}（禁止半套归属）",
+            owned.len(),
+            self.maps.len()
+        );
+        self.owned_maps = owned.to_vec();
+    }
+
+    /// **P2-3a release 可观测**：因「目标图不归本 World」而拒绝的入口累计次数。
+    ///
+    /// debug 的每 tick 断言之外，release 构建也能读到该值；单片时恒 0。
+    #[must_use]
+    pub fn unowned_refusal_count(&self) -> u64 {
+        self.unowned_refusal_count
+    }
+
+    /// 入口拒绝时累计（crate 内使用；release 同样生效）。
+    pub(crate) fn note_unowned_refusal(&mut self) {
+        self.unowned_refusal_count += 1;
+    }
+
     /// 按地图表构造（= 迁移前 `World::with_maps` 的非实体初始化）。
     pub fn with_maps(maps: Vec<MapGrid>) -> Self {
         let maps_len = maps.len();
         SimState {
             maps,
+            // 缺省全拥有（`MIR2_SHARDS=1` / 合成 golden：所有权检查恒过、零行为变化）。
+            owned_maps: vec![true; maps_len],
+            unowned_refusal_count: 0,
             sessions: SessionRegistry::new(),
             clock_ms: 0,
             tick_seq: 0,
@@ -6982,6 +7052,11 @@ impl World {
         if dst >= self.maps.len() {
             return out;
         }
+        // **P2-3a**：目标图不归本 World（stub）⇒ 视同 `FindMap == null`：不动、不出帧。
+        if !self.is_map_owned(dst) {
+            self.note_unowned_refusal();
+            return out;
+        }
         out.map_found = true;
         let (w, h) = {
             let map = &self.maps[dst];
@@ -7055,6 +7130,11 @@ impl World {
             HomeMoveTarget::Fixed { map_id, .. } | HomeMoveTarget::Random { map_id } => map_id,
         };
         if map_id >= self.maps.len() {
+            return out;
+        }
+        // **P2-3a**：目标图不归本 World（stub）⇒ 视同 `FindMap == null`：不动、不出帧。
+        if !self.is_map_owned(map_id) {
+            self.note_unowned_refusal();
             return out;
         }
         out.map_found = true;
@@ -7943,7 +8023,41 @@ impl World {
             self.prof_end(TickStage::OutputAoi, __prof_stage);
         }
 
+        // **P2-3a 不变式**：tick 结束时，任何**已落格**实体都不得在非拥有图（stub）上。
+        // debug 构建每 tick 一次；release 由 `cfg!` 常量折叠为零开销。
+        // 变异牙：删掉本调用 ⇒ 接线用例红；让扫描跳过非拥有图 ⇒ 不变式用例不再 panic。
+        self.assert_no_entity_on_unowned_map();
+
         self.last_tick = record.clone();
+    }
+
+    /// **P2-3a 不变式**：非拥有图（stub）上禁止实体。
+    ///
+    /// 只检查 `add_to_mapped == true` 的实体（= 真的登记进了某张图的格表）；未落格实体允许
+    /// 停放任意 `map_id`（既有测试会用它构造边界态）。越界 `map_id` 同样按「不拥有」拒绝。
+    ///
+    /// debug 构建每 tick 在 [`World::tick_tail`] 末尾调用一次；release 零开销。
+    #[track_caller]
+    /// **P2-3a release 可观测**：已落格在非拥有图上的实体 `(id, map_id)`（按实体迭代序）。
+    ///
+    /// 正常恒空。debug 的每 tick 断言用它；release 构建/CI/诊断也可按需调用（O(实体)）。
+    #[must_use]
+    pub fn unowned_map_entity_ids(&self) -> Vec<(i32, usize)> {
+        self.entities
+            .iter_ref()
+            .filter(|e| e.add_to_mapped && !self.is_map_owned(e.map_id))
+            .map(|e| (e.id, e.map_id))
+            .collect()
+    }
+
+    #[track_caller]
+    pub(crate) fn assert_no_entity_on_unowned_map(&self) {
+        if !cfg!(debug_assertions) {
+            return;
+        }
+        if let Some((id, map_id)) = self.unowned_map_entity_ids().first() {
+            panic!("P2-3a 不变式破坏：实体 id={id} 已落格但 map_id={map_id} 不归本 World 拥有");
+        }
     }
 
     /// `Envirnoment.VerifyMapTime`（`Envirnoment.cs:858-897`）的等价物 + `BaseObject.Run` 的
@@ -8435,6 +8549,11 @@ impl World {
         // 距离门（`PlayObject.cs:3131`）对刚落图的怪永不命中。
         let cell_type = entity_cell_type(&e);
         let now = sim.clock_ms;
+        // **P2-3a**：stub 上禁止实体（图在全局表里存在，但不归本 World）。
+        if !sim.is_map_owned(map_id) {
+            sim.note_unowned_refusal();
+            return false;
+        }
         let Some(map) = sim.maps.get_mut(map_id) else {
             return false;
         };
@@ -8921,6 +9040,11 @@ impl World {
         if map_id >= sim.maps.len() {
             return false;
         }
+        // **P2-3a**：stub 上禁止实体；门在**掉落预算之前**（与越界门同序 ⇒ 被拒时零抽数）。
+        if !sim.is_map_owned(map_id) {
+            sim.note_unowned_refusal();
+            return false;
+        }
         // 掉落预算（`WorldServer.MonGen.cs:440` 的时机）：RNG 在这里消耗
         let catalog_items = std::mem::take(&mut sim.item_catalog);
         let (gold, items) = {
@@ -9074,6 +9198,11 @@ impl World {
         cool_eye: bool,
     ) -> Option<i32> {
         if map_id >= self.maps.len() {
+            return None;
+        }
+        // **P2-3a**：stub 上禁止实体（图存在但不归本 World）。
+        if !self.is_map_owned(map_id) {
+            self.note_unowned_refusal();
             return None;
         }
         let id = self.entities.alloc_id();
@@ -9994,6 +10123,12 @@ impl World {
             return RouteOutcome::Skipped;
         }
         let (x, y, map_id) = (e.x, e.y, e.map_id);
+        // **P2-3a**：实体所在图必须归本 World（不变式保证；这里防御性 fail-closed，
+        // 避免从 stub 上读 route 表）。
+        if !self.is_map_owned(map_id) {
+            self.note_unowned_refusal();
+            return RouteOutcome::Skipped;
+        }
         // 顺序收集该格全部 `MapRoute`（oracle 的 `for` 不 break）——**在换图前**收集，复刻
         // oracle「`cellInfo` 在 `EnterAnotherMap` 改 `Envir` 前已捕获」的语义。
         let route_ids: Vec<i32> = {
@@ -10030,6 +10165,13 @@ impl World {
             else {
                 continue;
             };
+            // **P2-3a**：目标图不归本 World（stub）⇒ 视为 `EnterAnotherMap` 前置失败：
+            // 走位回滚、不记 `MapChange`（跨片 handoff 归 P2-5）。
+            if !self.is_map_owned(hop.dst_map_id) {
+                self.note_unowned_refusal();
+                failed = true;
+                continue;
+            }
             // `if (Envir.ArroundDoorOpened(CurrX, CurrY))`（`PlayObject.cs:1872`；
             // `Envirnoment.cs:1185-1203`）：±1 邻域内有门且该门 `!Opened` ⇒ 整支跳过（不换图；
             // `result` 保持 true ⇒ 走位照常、不回滚——与 NEEDHOLE 门同型）。门数据由宿主
@@ -10665,7 +10807,9 @@ impl World {
     /// 对应 C# 侧驱动从各 `EnvirnomentStub.CellArray` 扫出来的 `CellType.Item` 项。
     pub fn floor_items_sorted(&self) -> Vec<(usize, i32, i32, i32)> {
         let mut out = Vec::new();
-        for (map_id, map) in self.maps.iter().enumerate() {
+        // **P2-3a**：只扫本 World 拥有的图（stub 不参与；单片时 = 全部，输出逐字节不变）。
+        for map_id in self.owned_map_ids() {
+            let map = &self.maps[map_id];
             for x in 0..map.width {
                 for y in 0..map.height {
                     let (cell, ok) = map.get_cell_info(x, y);
@@ -10692,7 +10836,9 @@ impl World {
     /// `can_pick_up_tick` = 落地时间（`CellObject.add_time` 的虚拟时钟转 `i32`）。
     pub fn floor_items_view_sorted(&self) -> Vec<FloorItemView> {
         let mut out = Vec::new();
-        for (map_id, map) in self.maps.iter().enumerate() {
+        // **P2-3a**：只扫本 World 拥有的图（stub 不参与；单片时输出逐字节不变）。
+        for map_id in self.owned_map_ids() {
+            let map = &self.maps[map_id];
             for x in 0..map.width {
                 for y in 0..map.height {
                     let (cell, ok) = map.get_cell_info(x, y);

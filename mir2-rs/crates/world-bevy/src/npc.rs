@@ -203,6 +203,11 @@ impl World {
         if spawn.map_id >= self.maps.len() {
             return None;
         }
+        // **P2-3a**：stub 上禁止实体。
+        if !self.is_map_owned(spawn.map_id) {
+            self.note_unowned_refusal();
+            return None;
+        }
         let mut state = spawn.state;
         // oracle 构造链 `BaseObject`（`:439/441`）→ `AnimalObject`（`:76/77`）共 **4 抽**、次序固定；
         // 唯一抽数点 = `BaseAnimalCtorDraws::draw`。原 Rust 侧只抽 `BaseObject` 的 2 抽 ⇒ 每只固定
@@ -270,6 +275,11 @@ impl World {
         };
         let (map_id, x, y) = (entity.map_id, entity.x, entity.y);
         if map_id >= self.maps.len() {
+            return false;
+        }
+        // **P2-3a**：stub 上禁止实体。
+        if !self.is_map_owned(map_id) {
+            self.note_unowned_refusal();
             return false;
         }
         let now = self.clock_ms;

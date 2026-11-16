@@ -1,10 +1,10 @@
-//! **P2-2 构造级判据**（卡 `openmir2-shard-map-partition`）：地图组划分之后，
-//! 宿主 World **物理上只有片 0 的注册表前缀**，跨片 `map_id` 由既有 `NoSuchMap` 门拒绝。
+//! **P2-2 / P2-3a 构造级判据**：地图组划分 + 全局 `map_id` 归属模型。
 //!
 //! 这组用例钉的是「拒绝来自结构，不是运行期逐点守卫」：
 //! - 布局给出两个不相交组；
-//! - 宿主 World 的 `maps.len()` 只到片 0 的前缀；
-//! - 片 1 的 `map_id` 进 `enter_map` ⇒ `NoSuchMap`；
+//! - 宿主 World 的 `maps` **全长度保序**：片 0 真实尺寸 + 其它片 1×1 stub；
+//! - `owned_maps` 位图由布局驱动；片 1 的 `map_id` 进 `enter_map` ⇒ `MapNotInShard`
+//!   （可区分错误，不是 `NoSuchMap`）；
 //! - 片 0 的 `map_id` 可正常进入（对照组，证明拒绝不是「所有图都进不去」）。
 
 use game_svr::shard::{ShardId, ShardLayout, ShardRuntime};
@@ -19,21 +19,28 @@ fn spawn(name: &str) -> EntitySpawn {
 }
 
 #[test]
-fn n2_host_world_holds_only_the_host_map_prefix() {
+fn n2_host_world_owns_only_its_map_group_with_stubs_for_others() {
     let maps = names(&["A", "B", "C", "D"]);
     let layout = ShardLayout::partition(2, &maps, Some("0:A,B;1:*")).expect("合法 N=2 划分");
     assert_eq!(layout.maps_of(ShardId::new(0)), &[0, 1]);
     assert_eq!(layout.maps_of(ShardId::new(1)), &[2, 3], "片 1 = 其余地图");
 
-    // 宿主 World 只拿片 0 的尺寸表（前缀裁切；与 `sim_loop` 的接线同一条路径）。
+    // 宿主 World 拿**全长度**尺寸表（P2-3a）：片 0 真实尺寸 + 其它片 1×1 stub。
     let all_sizes = vec![(16, 16), (17, 17), (18, 18), (19, 19)];
     let host_sizes = layout.host_map_sizes(&all_sizes);
-    assert_eq!(host_sizes, vec![(16, 16), (17, 17)]);
+    assert_eq!(
+        host_sizes,
+        vec![(16, 16), (17, 17), (1, 1), (1, 1)],
+        "全局下标保序；非拥有图 = 1×1 stub"
+    );
     let mut world = World::with_maps(host_sizes);
-    assert_eq!(world.maps.len(), 2, "宿主 World 只装片 0 的两张图");
+    assert_eq!(world.maps.len(), 4, "宿主 World 保持全长度下标空间");
+    world.set_map_ownership(&layout.host_ownership());
+    assert!(world.is_map_owned(0) && world.is_map_owned(1));
+    assert!(!world.is_map_owned(2) && !world.is_map_owned(3));
 
-    // 片 1 的 map_id 在布局里存在，但宿主 World 没有 ⇒ 既有 `NoSuchMap` 门拒绝。
-    // （`enter_map` 要求先 `open_session`；失败路径在 map 校验处返回，不改地图表。）
+    // 片 1 的 map_id 在全局表里存在，但本 World 不拥有 ⇒ 可区分错误 `MapNotInShard`。
+    // （`enter_map` 要求先 `open_session`；失败路径在归属校验处返回，不动地图表。）
     for foreign in [2usize, 3] {
         let name = format!("p{foreign}");
         world.open_session(&name);
@@ -41,8 +48,8 @@ fn n2_host_world_holds_only_the_host_map_prefix() {
             .enter_map(&name, spawn(&name), foreign)
             .expect_err("跨片 map_id 必须进不了宿主 World");
         assert!(
-            matches!(err, SessionError::NoSuchMap),
-            "期望 NoSuchMap（map_id={foreign}），实得 {err:?}"
+            matches!(err, SessionError::MapNotInShard),
+            "期望 MapNotInShard（map_id={foreign}），实得 {err:?}"
         );
     }
 
@@ -51,7 +58,7 @@ fn n2_host_world_holds_only_the_host_map_prefix() {
     let ok = world.enter_map("hero", spawn("hero"), 0);
     assert!(ok.is_ok(), "片 0 地图必须可进入：{ok:?}");
 
-    // 前缀地图表上跑一个 tick 不 panic（tick 不依赖全注册表）。
+    // 全长度（含 stub）地图表上跑一个 tick 不 panic，且不变量断言不触发。
     world.tick();
 }
 
@@ -77,7 +84,13 @@ fn single_shard_keeps_the_full_map_table() {
         "MIR2_SHARDS=1：宿主尺寸表与注册表逐元素相同（零行为变化）"
     );
     let mut world = World::with_maps(layout.host_map_sizes(&sizes));
+    world.set_map_ownership(&layout.host_ownership());
     assert_eq!(world.maps.len(), 3, "单片不裁切");
+    assert_eq!(
+        layout.host_ownership(),
+        vec![true, true, true],
+        "单片 = 全拥有（零行为变化）"
+    );
     for map_id in 0..3 {
         let name = format!("p{map_id}");
         world.open_session(&name);

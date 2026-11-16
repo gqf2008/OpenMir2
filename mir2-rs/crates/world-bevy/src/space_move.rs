@@ -126,6 +126,11 @@ pub(crate) fn monster_space_move_impl<A: crate::entity::EntityAccess>(
     let Some(dest_map) = sim.maps.get(dest_map_id) else {
         return false;
     };
+    // **P2-3a**：目标图不归本 World（stub）⇒ 不动、不摘旧格、不抽数（必须在任何写入之前）。
+    if !sim.is_map_owned(dest_map_id) {
+        sim.note_unowned_refusal();
+        return false;
+    }
     let (width, height) = (dest_map.width, dest_map.height);
     let Some((old_map_id, old_x, old_y)) = access.get(actor_id).map(|e| (e.map_id, e.x, e.y))
     else {

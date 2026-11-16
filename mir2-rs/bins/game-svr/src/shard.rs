@@ -1,20 +1,22 @@
-//! 世界分片运行时骨架（卡 `openmir2-shard-runtime-skeleton` / P2-1）。
+//! 世界分片运行时骨架（P2-1 起；卡 `openmir2-shard-runtime-skeleton` / `openmir2-shard-map-partition`）。
 //!
-//! 设计依据：`docs/10k-shard-design-20261116.md` §2.1（同进程多 World）与 §4.2 的 P2-1。
-//! 本模块只放**分片配置与宿主侧运行时骨架**，不改 `crates/world-bevy` 的任何语义：
+//! 设计依据：`docs/10k-shard-design-20261116.md` §2.1（同进程多 World）与 §4.2；
+//! 归属模型见 `docs/shard-mapid-ownership-20261116.md`。本模块放**分片配置与宿主侧运行时**：
 //!
 //! - [`ShardId`]：分片编号（0 起；[`HOST_SHARD`] = 宿主当前服务的片）；
 //! - [`ShardConfig`]：`MIR2_SHARDS`（**默认 1**；非法值 fail-closed）；
-//! - [`ShardLayout`]：`map_id → ShardId` 的**静态**归属表（P2-1 只有单片布局）；
-//! - [`ShardRuntime`]：宿主侧运行期句柄（布局 + 跨片拒绝计数）。
+//! - [`ShardLayout`]：`map_id → ShardId` 的**静态**归属表（任意分组；P2-3a 起不再要求前缀）；
+//!   [`ShardLayout::host_map_sizes`] 返回**全长度**尺寸表（拥有图真实尺寸 + 其它片 1×1 stub），
+//!   [`ShardLayout::host_ownership`] 给出 `world.set_map_ownership` 的位图；
+//! - [`ShardRuntime`]：宿主侧运行期句柄（布局 + 跨片进图/连接点/MapChange 拒绝计数）。
 //!
 //! **`MIR2_SHARDS=1` 零行为变化**：单片布局把每张图都归片 0，
 //! [`ShardRuntime::host_owns`] 与 [`ShardRuntime::route_allowed`] 恒真、
-//! [`ShardLayout::host_map_sizes`] 原样返回输入 ⇒ 所有守卫都是空操作，
+//! [`ShardLayout::host_map_sizes`] 原样返回输入、`host_ownership` 全 `true` ⇒ 所有守卫都是空操作，
 //! 且本模块在片数为 1 时**不打印任何日志**（stdout 与未设该环境变量时逐字节相同）。
 //!
-//! 本模块**不做**的事（登记给后续卡）：World 实例/线程归属（P2-2/P2-3）、
-//! 会话路由与协调器（P2-3/P2-4）、跨片 handoff（P2-5）、确定性守卫（P2-6）。
+//! 本模块**不做**的事（登记给后续卡）：多 World 实例/线程归属（P2-3b）、
+//! 会话路由与协调器（P2-3b/P2-4）、跨片 handoff（P2-5）、确定性守卫（P2-6）。
 
 use std::collections::HashMap;
 use std::fmt;
@@ -225,12 +227,11 @@ impl ShardLayout {
     ///
     /// `groups_raw` 的语法见 [`ENV_MAP_GROUPS`]；片数为 1 时允许 `None`（= 全归片 0）。
     ///
-    /// **服务约束（P2-2）**：`map_id` 是注册表下标，宿主 World 的 `maps` 只能按**前缀**裁切
-    /// （`map_id < world.maps.len()` 是既有 `NoSuchMap`/route 越界门的判据）⇒ 片 0 必须恰好拥有
-    /// 注册表前缀 `0..k`。任意非前缀分组需要 P2-3 的 `map_id` 重映射，本卡明确拒绝而不是静默错放。
+    /// **P2-3a**：不再要求片 0 是注册表前缀——`map_id` 的全局下标由宿主 World 的
+    /// `owned_maps` + 1×1 stub 承载；任意分组都可表达（入口守卫在 world-bevy）。
     ///
     /// # Errors
-    /// 语法错、未知地图、重复分配、未覆盖、空片、片号越界、片 0 非前缀 ⇒ [`ShardPlanError`]。
+    /// 语法错、未知地图、重复分配、未覆盖、空片、片号越界 ⇒ [`ShardPlanError`]。
     pub fn partition(
         count: u8,
         map_names: &[String],
@@ -317,15 +318,8 @@ impl ShardLayout {
             .map(|slot| slot.expect("覆盖 100% 已校验"))
             .collect();
         let layout = Self::from_table(count, table).map_err(ShardPlanError::Layout)?;
-        // 片 0 = 注册表前缀（见方法文档的「服务约束」）。
-        let host_maps = layout.maps_of(HOST_SHARD);
-        if let Some(pos) = host_maps.iter().enumerate().find(|(i, id)| *i != **id) {
-            return Err(ShardPlanError::NonPrefixHostShard {
-                maps: host_maps.len(),
-                offset: pos.0,
-                got: *pos.1,
-            });
-        }
+        // **P2-3a**：不再要求片 0 是注册表前缀——全局下标由宿主 World 的
+        // `owned_maps` + 1×1 stub 承载（见 `host_map_sizes` / `host_ownership`）。
         Ok(layout)
     }
 
@@ -400,20 +394,44 @@ impl ShardLayout {
         }
     }
 
-    /// 宿主 World 的 `map_sizes`：片 0 拥有的**注册表前缀**。
+    /// 宿主 World 的 `map_sizes`（**全局下标保序**，P2-3a）：长度 = 注册表地图数。
     ///
-    /// 单片时 `owned[0].len() == all.len()` ⇒ 返回与输入逐元素相同的副本（零行为变化）。
+    /// - 片 0 拥有的图 ⇒ 取 `all[map_id]` 的真实尺寸；
+    /// - 其它片 ⇒ **1×1 stub**（`MapGrid::new` 要求尺寸 > 0），承载全局下标；
+    ///   stub 上的实体由 `World::owned_maps` + 换图/落格入口 fail-closed 禁止。
+    ///
+    /// 单片时片 0 拥有全部图 ⇒ 返回与输入逐元素相同的副本（零行为变化）。
     #[must_use]
-    pub fn host_map_sizes<T: Copy>(&self, all: &[T]) -> Vec<T> {
-        let owned = self.maps_of(HOST_SHARD).len();
+    pub fn host_map_sizes(&self, all: &[(i32, i32)]) -> Vec<(i32, i32)> {
+        const STUB: (i32, i32) = (1, 1);
         debug_assert_eq!(
-            owned.min(all.len()),
-            owned,
-            "布局地图数 {} 大于尺寸表 {}（调用方必须先按同一注册表建布局）",
+            self.map_count(),
+            all.len(),
+            "布局地图数 {} 必须等于尺寸表 {}（调用方必须先按同一注册表建布局）",
             self.map_count(),
             all.len()
         );
-        all[..owned.min(all.len())].to_vec()
+        let mut sizes = vec![STUB; self.map_count()];
+        for &map_id in self.maps_of(HOST_SHARD) {
+            if let Some(&size) = all.get(map_id) {
+                sizes[map_id] = size;
+            }
+        }
+        sizes
+    }
+
+    /// 宿主 World 的 `owned_maps` 位图（长度 = 注册表地图数；`true` = 片 0 拥有）。
+    ///
+    /// 宿主在 `World::with_maps` 之后调用 `world.set_map_ownership(&layout.host_ownership())`。
+    #[must_use]
+    pub fn host_ownership(&self) -> Vec<bool> {
+        let mut owned = vec![false; self.map_count()];
+        for &map_id in self.maps_of(HOST_SHARD) {
+            if let Some(slot) = owned.get_mut(map_id) {
+                *slot = true;
+            }
+        }
+        owned
     }
 
     /// 覆盖校验输出（启动日志用）：`shards/maps/assigned/per_shard`。
@@ -616,15 +634,6 @@ pub enum ShardPlanError {
     Unassigned(Vec<String>),
     /// 某片一张图都没有。
     EmptyShard(u8),
-    /// 片 0 不是注册表前缀（`map_id` 全局下标约束；见 [`ShardLayout::partition`]）。
-    NonPrefixHostShard {
-        /// 片 0 实际拥有的地图数。
-        maps: usize,
-        /// 第一个不连续的位置（第几张）。
-        offset: usize,
-        /// 该位置上实际出现的 `map_id`。
-        got: usize,
-    },
     /// 片数 >1 但没有真地图注册表（占位形态无法按名字分组）。
     RegistryRequired {
         /// 请求的片数。
@@ -688,10 +697,6 @@ impl fmt::Display for ShardPlanError {
             Self::EmptyShard(shard) => write!(
                 f,
                 "{ENV_MAP_GROUPS} 让 shard {shard} 一张图都没有（空片 = 永不接客的 World，拒绝启动）"
-            ),
-            Self::NonPrefixHostShard { maps, offset, got } => write!(
-                f,
-                "片 0 必须拥有注册表前缀 `map_id 0..{maps}`，但第 {offset} 张是 map_id={got}（P2-2 的 map_id 是注册表全局下标，宿主 World 只能按前缀裁切；任意地图组需要 P2-3 的 map_id 重映射）⇒ fail-closed"
             ),
             Self::RegistryRequired { count } => write!(
                 f,
@@ -769,6 +774,8 @@ pub struct ShardCounters {
     pub cross_shard_route_refused: u64,
     /// 源在其它片、整条不属宿主片的地图连接点条数（与上一条**分开**累计）。
     pub foreign_shard_route_refused: u64,
+    /// **P2-3a**：宿主侧看到「目标图不归本片」的 `MapChange` 条数（防御性；正常恒 0）。
+    pub cross_shard_map_change_refused: u64,
 }
 
 /// 宿主侧分片运行时句柄：布局 + 拒绝计数。
@@ -867,6 +874,18 @@ impl ShardRuntime {
     pub fn note_foreign_shard_routes_skipped(&mut self, n: u64) -> u64 {
         self.counters.foreign_shard_route_refused += n;
         self.counters.foreign_shard_route_refused
+    }
+
+    /// **P2-3a**：宿主侧 `MapChange` 可路由判定。
+    ///
+    /// 目标图归本片 ⇒ `true`；否则累计 `cross_shard_map_change_refused` 并返回 `false`
+    /// （handoff 归 P2-5）。正常恒 `true`：world 已在所有换图入口 fail-closed，这里是宿主侧防御。
+    pub fn accept_map_change(&mut self, map_id: usize) -> bool {
+        if self.host_owns(map_id) {
+            return true;
+        }
+        self.counters.cross_shard_map_change_refused += 1;
+        false
     }
 
     /// 是否单片（P2-1 的全部守卫在此为真时都是空操作）。
@@ -1029,6 +1048,7 @@ mod tests {
                 cross_shard_entry_refused: 1,
                 cross_shard_route_refused: 2,
                 foreign_shard_route_refused: 0,
+                cross_shard_map_change_refused: 0,
             }
         );
     }
@@ -1110,6 +1130,21 @@ mod tests {
         assert_eq!(runtime.counters().cross_shard_entry_refused, 2);
     }
 
+    /// **P2-3a 牙**：宿主侧 `MapChange` 路由判定——本片放行、其它片拒绝并计数。
+    ///
+    /// 红检：把 `accept_map_change` 改成恒 `true` ⇒ 第二条断言红；删掉计数 ⇒ 累计断言红。
+    #[test]
+    fn accept_map_change_rejects_and_counts_foreign_targets() {
+        let maps = map_names(&["A", "B"]);
+        let layout = ShardLayout::partition(2, &maps, Some("0:A;1:*")).expect("两片划分");
+        let mut runtime = ShardRuntime::new(layout);
+        assert!(runtime.accept_map_change(0), "本片地图放行");
+        assert_eq!(runtime.counters().cross_shard_map_change_refused, 0);
+        assert!(!runtime.accept_map_change(1), "其它片必须拒绝");
+        assert!(!runtime.accept_map_change(1));
+        assert_eq!(runtime.counters().cross_shard_map_change_refused, 2);
+    }
+
     #[test]
     fn layout_table_rejects_out_of_range_shard() {
         let err = ShardLayout::from_table(2, vec![ShardId::new(0), ShardId::new(2)])
@@ -1170,11 +1205,12 @@ mod tests {
         assert!(report.contains("assigned=4"), "{report}");
         assert!(report.contains("unassigned=0"), "{report}");
         assert!(report.contains("per_shard=[2,2]"), "{report}");
-        // 宿主 World 只拿片 0 的尺寸（前缀裁切），跨片 id 交给既有 NoSuchMap 门。
+        // 宿主 World 拿**全长度**尺寸表：片 0 的真实尺寸 + 其它片的 1×1 stub（全局下标保序）。
         assert_eq!(
             layout.host_map_sizes(&[(1, 1), (2, 2), (3, 3), (4, 4)]),
-            vec![(1, 1), (2, 2)]
+            vec![(1, 1), (2, 2), (1, 1), (1, 1)]
         );
+        assert_eq!(layout.host_ownership(), vec![true, true, false, false]);
         // 运行期守卫：片 0 → 片 1 的连接点被拒；片内放行。
         let runtime = ShardRuntime::new(layout);
         assert!(!runtime.route_allowed(0, 2));
@@ -1183,7 +1219,7 @@ mod tests {
     }
 
     #[test]
-    fn three_shard_partition_covers_all_and_keeps_host_prefix() {
+    fn three_shard_partition_covers_all_shards() {
         let maps = map_names(&["A", "B", "C", "D"]);
         let layout = ShardLayout::partition(3, &maps, Some("0:A;1:C,B;2:*")).expect("三片划分");
         assert_eq!(layout.maps_of(HOST_SHARD), &[0]);
@@ -1213,24 +1249,27 @@ mod tests {
         );
     }
 
+    /// **P2-3a**：任意非前缀分组现在可表达（全局下标 + stub + ownership），不再拒绝。
+    ///
+    /// 宿主尺寸表仍是全长度：片 0 拥有的图取真实尺寸，其它片填 1×1 stub；
+    /// 对应 `owned_maps` 位图逐位正确。
     #[test]
-    fn non_prefix_host_shard_is_rejected_with_actionable_error() {
-        let maps = map_names(&["A", "B"]);
-        let err = ShardLayout::partition(2, &maps, Some("0:B;1:*")).expect_err("非前缀必须拒绝");
+    fn non_prefix_groups_are_supported_with_stub_sizes() {
+        let maps = map_names(&["A", "B", "C", "D"]);
+        // 片 0 拥有 B、D（map_id 1、3）；片 1 拥有 A、C（0、2）——既非前缀、也不连续。
+        let layout = ShardLayout::partition(2, &maps, Some("0:B,D;1:*")).expect("非前缀分组合法");
+        assert_eq!(layout.maps_of(HOST_SHARD), &[1, 3]);
+        assert_eq!(layout.maps_of(ShardId::new(1)), &[0, 2]);
         assert_eq!(
-            err,
-            ShardPlanError::NonPrefixHostShard {
-                maps: 1,
-                offset: 0,
-                got: 1
-            }
+            layout.host_map_sizes(&[(10, 10), (11, 11), (12, 12), (13, 13)]),
+            vec![(1, 1), (11, 11), (1, 1), (13, 13)],
+            "stub = (1,1)，全局下标不移动"
         );
-        let text = err.to_string();
-        assert!(
-            text.contains("map_id"),
-            "错误必须解释全局 map_id 约束：{text}"
-        );
-        assert!(text.contains("P2-3"), "错误必须指出后续卡：{text}");
+        assert_eq!(layout.host_ownership(), vec![false, true, false, true]);
+        // 运行期守卫按 host_owns：片 0 的图放行，片 1 的图拒绝（连接点分类不变）。
+        let runtime = ShardRuntime::new(layout);
+        assert!(runtime.host_owns(1) && runtime.host_owns(3));
+        assert!(!runtime.host_owns(0) && !runtime.host_owns(2));
     }
 
     #[test]
@@ -1268,15 +1307,11 @@ mod tests {
             Err(ShardPlanError::EmptyShard(1))
         );
         // `*` 不因书写顺序抢走显式名单：`0:*;1:A` 里 A 先被分给片 1，片 0 只剩 B
-        // ⇒ 不是空片，而是**非前缀**片 0（两种错都必须拒绝）。
-        assert_eq!(
-            ShardLayout::partition(2, &maps, Some("0:*;1:A")),
-            Err(ShardPlanError::NonPrefixHostShard {
-                maps: 1,
-                offset: 0,
-                got: 1
-            })
-        );
+        // ⇒ 两片都非空（P2-3a 起非前缀分组合法）。
+        let layout = ShardLayout::partition(2, &maps, Some("0:*;1:A")).expect("两片非空");
+        assert_eq!(layout.maps_of(HOST_SHARD), &[1]);
+        assert_eq!(layout.maps_of(ShardId::new(1)), &[0]);
+        assert_eq!(layout.host_ownership(), vec![false, true]);
     }
 
     #[test]

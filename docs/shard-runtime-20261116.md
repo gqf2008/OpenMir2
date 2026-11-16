@@ -39,8 +39,9 @@ MIR2_SHARDS=2 MIR2_SHARD_MAP_GROUPS="0:0,0129;1:*" ./mir2-server game-svr /path/
 2. **每图唯一归属**：同一张图出现在两个组 ⇒ 报错并点名地图。
 3. **片号合法且不重复**：`片号 < MIR2_SHARDS`，每片只能写一组。
 4. **每片非空**：空片 = 一个永不接客的 World ⇒ 拒绝。
-5. **片 0 必须是注册表前缀**（P2-2 的服务约束，见 §4.1）：`map_id` 是注册表全局下标，
-   宿主 World 的 `maps` 只能按前缀裁切；非前缀地图组需要 P2-3 的 `map_id` 重映射，本卡明确拒绝。
+5. **~~片 0 必须是注册表前缀~~（P2-3a 已取消）**：`map_id` 的全局下标由宿主 World 的
+   `owned_maps` + 1×1 stub 承载，任意分组都可表达；换图/落格入口在 world-bevy 单点
+   fail-closed。见 `docs/shard-mapid-ownership-20261116.md`。
 
 ## 3. fail-closed 边界（N>1）
 
@@ -70,7 +71,7 @@ MIR2_SHARDS=2 MIR2_SHARD_MAP_GROUPS="0:0,0129;1:*" ./mir2-server game-svr /path/
 2. **跨片 handoff**（P2-5）：换图一旦跨片就拒绝，不存在「一拍过渡」。
 3. **协调器/全局服务分片**（P2-4）：`online`/`display`/`guild`/`castle` 仍是单份，归宿主片。
 
-### 4.2 分片会话路由（P2-3）的第一个硬问题
+### 4.2 分片会话路由（P2-3）的第一个硬问题（**已由 P2-3a 解决**）
 
 `map_id` 是**注册表全局下标**，被实体（`Transform.map_id`）、地图连接点（`RouteHop.dst_map_id`）、
 城堡、脚本地图名解析共同使用；而 `World.maps` 是按下标索引的 `Vec`。要让每个 World 只装自己的
@@ -81,8 +82,9 @@ MIR2_SHARDS=2 MIR2_SHARD_MAP_GROUPS="0:0,0129;1:*" ./mir2-server game-svr /path/
 - **每个 World 独立本地下标 + 宿主侧双向换算**：所有「宿主 ↔ World」的 `map_id` 边界都要换算，
   漏一处就是跨片串图。
 
-本批选择「片 0 = 注册表前缀」来绕开该问题（前缀下本地下标 = 全局下标，零换算、零占位）。
-这条限制就是 P2-3 必须先解决的第一个硬问题。
+P2-2 用「片 0 = 注册表前缀」绕开该问题；**P2-3a 已按第一条路线落地**：`owned_maps` + 1×1 stub +
+所有换图/落格入口 fail-closed + 每 tick 不变式。详见 `docs/shard-mapid-ownership-20261116.md`。
+P2-3b 的会话路由可以直接依赖该模型。
 
 ## 5. 复现与证据
 

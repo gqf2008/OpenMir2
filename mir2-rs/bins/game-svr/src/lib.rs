@@ -756,7 +756,8 @@ async fn run_inner(args: &[String]) -> Result<()> {
     };
     // **P2-2 地图组划分**（卡 `openmir2-shard-map-partition`）：`MIR2_SHARDS` + `MIR2_SHARD_MAP_GROUPS`
     // → `map_id → ShardId` 静态表。校验是 fail-closed 的：覆盖 100%、每图唯一归属、片号/片数一致、
-    // 片 0 = 注册表前缀（`map_id` 全局下标约束）。
+    // 片 0 拥有哪些图由 `ShardLayout` 决定；`map_id` 全局下标由宿主 World 的
+    // `owned_maps` + 1×1 stub 承载（P2-3a；任意非前缀分组都可表达）。
     // 决策与启动日志都在 `shard::plan_layout` / `shard::startup_log_lines`（可单测）：片数为 1 且未配
     // 分组时走**不读注册表**的单片快路径，且该函数返回零行日志 ⇒ stdout 与 master 逐字节相同。
     let map_groups_raw = match std::env::var_os(shard::ENV_MAP_GROUPS) {
@@ -17716,6 +17717,16 @@ fn drain_map_change(
 ) {
     let changes = world.sessions.drain_map_changes();
     for mut ev in changes {
+        // **P2-3a**：目标图不归本 World（stub/跨片）⇒ 不发 TransMap 簇（防御性；
+        // world 已在所有换图入口 fail-closed；handoff 归 P2-5）。
+        if !world.is_map_owned(ev.map_id) {
+            glog!(
+                "WRN",
+                "切图下行：map_id={} 不归本 World（P2-3a）⇒ 跳过 TransMap 簇",
+                ev.map_id
+            );
+            continue;
+        }
         let Some(entry) = online.iter().find(|e| e.actor_id == ev.actor_id) else {
             glog!(
                 "WRN",
@@ -21588,7 +21599,8 @@ fn apply_pending_gm_castle_commands(
                     if let mir2_world_bevy::castle::StructureEvent::SetMapXyFlag { x, y, walk } =
                         structure
                     {
-                        if let Some(id) = castle_map_id.filter(|id| *id < world.maps.len()) {
+                        // **P2-3a**：stub（非拥有图）不写掩码；`is_map_owned` 同时兜住越界。
+                        if let Some(id) = castle_map_id.filter(|id| world.is_map_owned(*id)) {
                             if let Some(grid) = world.maps.get_mut(id) {
                                 grid.set_map_xy_flag(i32::from(*x), i32::from(*y), *walk);
                             }
@@ -25324,6 +25336,9 @@ fn sim_loop(
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
     let mut world = production_world(map_sizes, &mut enter_cfg.world_item_catalog);
+    // **P2-3a**：把「片 0 拥有哪些图」交给 World（全局下标保序 + 1×1 stub + 单点 fail-closed）。
+    // `MIR2_SHARDS=1` 时布局全拥有 ⇒ 所有权检查恒过、零行为变化。
+    world.set_map_ownership(&shard_runtime.layout().host_ownership());
     // **`openmir2-sendrefmsg-range-config`**：`[Setup] SendRefMsgRange` 的生效值
     // （oracle `SystemShare.Config.SendRefMsgRange`：`SendRefMsg` 每次按当时配置值扫
     // `CurrX/Y ± SendRefMsgRange`，`BaseObject.Message.cs:399-402`）。安装一次后所有生产
@@ -25480,7 +25495,8 @@ fn sim_loop(
     // `Envir.Flag.boEXPRATE`/`ExpRate`（`PlayObject.Base.cs:143-146`）——地图级杀怪经验倍率。
     // `map_id` = 注册表下标（与 `resolve_map_id` 同源）⇒ 逐图灌进 world；无注册表 ⇒ 全 `None`（行为不变）。
     if let Some(reg) = registry.as_ref() {
-        for map_id in 0..world.maps.len() {
+        // **P2-3a**：只给本片拥有的图灌 Flag（stub 不参与；单片 = 全部 ⇒ 逐字节不变）。
+        for &map_id in shard_runtime.layout().maps_of(shard::HOST_SHARD) {
             if let Some(f) = reg.flag_of(map_id) {
                 world.set_map_exp_rate(map_id, f.bo_exprate.then_some(f.exp_rate));
                 // `Envir.Flag.boNEEDHOLE`（route 落地门；`PlayObject.cs:1874` 作为目标图读）。
@@ -25502,11 +25518,17 @@ fn sim_loop(
         // 门（`Envirnoment.cs:176`）⇒ 墙格上的连接点在 oracle 侧**本来就落不下**；属性未灌之前
         // 每格都是 `Walk`，`crates/world-bevy/src/map.rs` 的 `add_map_route` 那道具形同虚设。
         // 本片之前：`get_cell_info` 对界内每格恒 `ok=true`（掩码面只有运行期城门写得到）。
-        let cell_total = mapwire::apply_map_cells(reg, &mut world);
+        let cell_total = mapwire::apply_map_cells_owned(
+            reg,
+            &mut world,
+            &shard_runtime.layout().host_ownership(),
+        );
         let mut walk_cells = 0usize;
         let mut low_cells = 0usize;
         let mut high_cells = 0usize;
-        for m in &world.maps {
+        // **P2-3a**：统计只扫本片拥有的图（stub 的 1×1 不应混进 walk/low/high）。
+        for &map_id in shard_runtime.layout().maps_of(shard::HOST_SHARD) {
+            let m = &world.maps[map_id];
             walk_cells += m.walk_count();
             low_cells += m.low_wall_count();
             high_cells += m.high_wall_count();
@@ -25574,7 +25596,11 @@ fn sim_loop(
         // [`game_svr::mapdoor`]（生产与测试共用同一函数）。oracle 门恒未开（`CM_OPENDOOR`
         // 结构性 no-op，见 `tests/parity/m3/design-door-and-mapevent-20261016.md` §2.2）⇒ 与门相邻（±1）
         // 的 route 格**恒被挡**（不换图）。
-        let door_total = game_svr::mapdoor::apply_map_doors(reg, &mut world);
+        let door_total = game_svr::mapdoor::apply_map_doors_owned(
+            reg,
+            &mut world,
+            &shard_runtime.layout().host_ownership(),
+        );
         glog!("INF", "地图门数据已灌入（MapDoor）doors={door_total}");
     }
     // **M3④-实现 C 第 ② 片**：生产宿主启用怪物 AI（oracle `ProcessMonsters` 线程的单线程等价物）。
@@ -29276,7 +29302,8 @@ fn sim_loop(
                         mir2_world_bevy::castle::CastleEvent::Structure(
                             mir2_world_bevy::castle::StructureEvent::SetMapXyFlag { x, y, walk },
                         ) => {
-                            if let Some(id) = castle_map_id.filter(|id| *id < world.maps.len()) {
+                            // **P2-3a**：stub（非拥有图）不写掩码；`is_map_owned` 同时兜住越界。
+                            if let Some(id) = castle_map_id.filter(|id| world.is_map_owned(*id)) {
                                 if let Some(grid) = world.maps.get_mut(id) {
                                     grid.set_map_xy_flag(i32::from(x), i32::from(y), walk);
                                 }
@@ -29728,6 +29755,23 @@ fn sim_loop(
         drain_show_hp_health_changes(&rec, &world, &online, &gates, enter_cfg.ref_msg_range);
         // **接线批 A**：TransMap 簇（`SM_CLEAROBJECTS(633)`/`SM_CHANGEMAP(634)`/[`SM_SPACEMOVE_SHOW(801)`]）。
         // oracle 在 `SpaceMove`/`EnterAnotherMap` 内**同步**发；本宿主在世界侧落地后由本段 drain。
+        // **P2-3a**：宿主侧 MapChange 路由判定（防御性；world 已 fail-closed，正常恒 0）。
+        // 不可路由的只拒绝 + 计数（handoff 归 P2-5），绝不把它当本片事件发帧。
+        let refused_map_changes: Vec<i32> = world
+            .sessions
+            .map_changes()
+            .iter()
+            .filter(|ev| !shard_runtime.accept_map_change(ev.map_id))
+            .map(|ev| ev.actor_id)
+            .collect();
+        for actor_id in refused_map_changes {
+            glog!(
+                "WRN",
+                "跨片 MapChange 拒绝（P2-3a；handoff 在 P2-5）：actor={} 不入下行；累计 {}",
+                actor_id,
+                shard_runtime.counters().cross_shard_map_change_refused
+            );
+        }
         drain_map_change(&mut world, &online, &gates, &displays, registry.as_ref());
         // **M3⑨-3 帧面残余**：本 tick 的 `World::tick` 已在消息段投递到点自投递消息
         // （`RM_MASTERDIEMUTINY` → `ProcessSlaveMutiny`，`world.rs:565-572`）并落

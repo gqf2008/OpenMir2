@@ -24,8 +24,18 @@ use mir2_world_bevy::World;
 /// 等价 oracle `Maps.LoadMapInfo` 之后由 `MapManager.LoadMapDoor()` 逐图 `AddDoorToMap`。
 /// 缺省（无注册表 / 无门）⇒ 每图空表，`MapGrid::arround_door_opened` 恒 `true`（改动前行为不变）。
 pub fn apply_map_doors(reg: &MapRegistry, world: &mut World) -> usize {
+    apply_map_doors_owned(reg, world, &[])
+}
+
+/// **P2-3a**：只给 `owned` 为真的图灌门表（非拥有图是 1×1 stub，不得被当成真图）。
+///
+/// `owned` 为空切片 = 全部拥有（既有调用方/单测行为不变）。
+pub fn apply_map_doors_owned(reg: &MapRegistry, world: &mut World, owned: &[bool]) -> usize {
     let mut total = 0usize;
     for (map_id, f) in reg.maps().iter().enumerate() {
+        if !owned.is_empty() && !owned.get(map_id).copied().unwrap_or(false) {
+            continue;
+        }
         let (doors, status) = f.door_tables();
         total += doors.len();
         world.set_map_doors(map_id, doors, status);

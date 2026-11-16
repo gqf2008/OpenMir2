@@ -406,6 +406,10 @@ pub mod space_move;
 pub mod special_monster;
 pub mod world;
 
+/// **P2-3a**：`map_id` 归属模型（stub 禁止实体、换图入口 fail-closed、不变式牙）的用例。
+#[cfg(test)]
+mod map_ownership_tests;
+
 pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame, SkeletonEvent};
 pub use aoi::{
     search_view_range, search_view_range_death, search_view_range_events,

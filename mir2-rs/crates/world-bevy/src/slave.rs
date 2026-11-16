@@ -2524,6 +2524,11 @@ pub fn spawn_clone(world: &mut World, caster_id: i32, caster_dir: u8) -> Option<
     if map_id >= world.maps.len() {
         return None;
     }
+    // **P2-3a**：stub 上禁止实体（主人所在图必须归本 World）。
+    if !world.is_map_owned(map_id) {
+        world.note_unowned_refusal();
+        return None;
+    }
     let clone_id = world.entities.alloc_id();
     // `Envir.AddMapObject(...)`：`mag_make_clone` 已把「格子能否放下」这一门落成 `created`。
     let out = mag_make_clone(
