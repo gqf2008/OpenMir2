@@ -409,3 +409,12 @@ for rel, count, hold in runs:
   · **不同账号可以并行**（各自一条会话），所以 N 个角色的总时长**不是** N×1 s——
     **单连接串行**才是 1/s。真正的批量约束是 sel-gate 的 60 s 排队超时 + DBSrv 吞吐。
   同一账号的 DELCHR 重试也一样要 >1 s。
+- **门禁跑之前先看内存；被系统杀掉的一律判 INCOMPLETE**（2026-11-16 夜间两次事故后固化）。
+  本机 **31.1 GB 总内存**；`cargo test --workspace` + `clippy --workspace` 同时跑会把机器压到临界，
+  2026-11-16 就发生过「后台门禁被系统因内存不足整体 kill」。
+  落地三条：
+  1. **开跑前查空闲内存**（`Get-CimInstance Win32_OperatingSystem` 的 `FreePhysicalMemory`）：
+     **< 8 GB 不开**；两包以上并行编排时按 8 GB/包估。
+  2. **一律 `-j 2`**（`cargo test --workspace -j 2` / `cargo clippy ... -j 2`），不要用默认并发。
+  3. **被杀 ⇒ 判 INCOMPLETE**（三态：不算绿、不算红、不许用"定向窄检查"顶替全量门禁——
+     窄检查只能证明那几处不红，证明不了全量绿）。要恢复绿灯必须**整条门禁重跑**。
