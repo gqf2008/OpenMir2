@@ -14,9 +14,10 @@
    `E:/MirServer/M2GameSvr/Envir/StartPoint.txt` 有 8 条，`StartPointSize=2`，前两条都是 map 0
    （289,618）与（650,631）；服务端启动日志确认 `StartPointSize=2`。
    500 档归档 `E:/UserFleet/load-360-recvnull-verify-20261116/stack-logs/game-svr.out.log` 的
-   500 条 `进世界 ChrName:... CurMap:...` 里 **499 条 CurMap=0、1 条 CurMap=0136**；落点为
-   293,617 / 650,647 两簇。⇒ **D3 对照必须是「map 0 × 两簇 250/250」**，不能是「500 一簇」，
-   否则对照里混入簇数变化，不是「同图 vs 分散」。
+   500 条 `进世界 ChrName:... CurMap:...` 里 **499 条 CurMap=0、1 条 CurMap=0136**；map 0 的
+   **分簇实测为 276/223**，两簇**落点中位数**为 289,617 / 650,631（单条日志里的 293,617 / 650,647
+   只是个体样本，不是簇中心）。⇒ **D3 对照必须是「map 0 × 两簇」**，不能是「500 一簇」；
+   主对照取**对称化 250/250**（去掉簇大小协变量），并在报告里同时列实测 276/223。
 2. **多图不增加地图装载成本。** 服务端启动即加载全部注册图：
    `Envir 真地图注册表：322 张`、`地图格子属性已灌入 ... maps=322 cells=11734654`
    （同归档 game-svr 日志）。322 个 section → 314 个不同 `.map` 文件（`mir2-rs/bins/game-svr/src/mapwire.rs`
@@ -30,7 +31,7 @@
 
 | 档 | 名称 | 簇数 | 图数 | 每簇 bot | 两两可见对指数 P | 相对 D3 | 覆盖 AOI 扇出的哪一段 |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **D3** | 极端集中（对照，等同现状） | 2 | 1 | 250 / 250 | 62,250 | 1.00 | 同簇密度最高段；peer AOI 与广播收件人最多 |
+| **D3** | 极端集中（对照；对称化 250/250） | 2 | 1 | 250 / 250（实测 276/223） | 62,250 / 62,703 | 1.00 | 同簇密度最高段；peer AOI 与广播收件人最多 |
 | **D2** | 近似运营（头部集中） | 5 | 4 | 25–150 | 30,375 | 0.49 | 热门图仍承载 30% 的单簇；覆盖「一张热图 + 尾图」的运营形态 |
 | **D1** | 均匀分散 | 8 | 6 | 62–63 | 15,376 | 0.25 | 同簇密度最低段；peer AOI 接近消失，但全局实体扫描仍在 |
 
@@ -43,6 +44,9 @@
 
 - **必须保留 D3（同图）**：没有同树同口径的同图对照，任何「分散更好」的差值都不可归因
   （既有同图数据在别的树上，见 §4.8）。
+- **D3 是「对称化控制」，不是「复刻现状」**：现状 map 0 分簇实测 276/223（另 1 个在 0136）。
+  对称化 250/250 的 P=62,250，实测 276/223 的 P=62,703（差 <1%）。取对称化的理由：
+  去掉簇大小协变量，且 0136 那 1 个是夹具残留、不是设计变量；报告仍须并列实测分簇数。
 - **D2 是「假设」，不是「真值」**：项目拿不到真实玩家分布（无生产遥测；拿生产数据还涉及敏感信息）。
   D2 的权重是**声明式假设**，必须在报告标题里带 `assumed-weights`，不得写成「真实分布」。
   替代客观口径（MonGen 权重）见 §6.2，只作灵敏度，不作主档。
@@ -81,7 +85,8 @@
 
 校验方法：按 `mir2-rs/crates/envir/src/mapfile.rs` 模块头登记的格式（52 字节头、12 字节/格、
 `k = x*Height + y`、`wFrImg` bit15 ⇒ LowWall、`wBkImg` bit15 ⇒ HighWall）**裸读只读部署 `.map`**。
-⇒ 出生点周围 ±2 格的抖动（oracle 的 `GetRandHomeX/Y = Home - 2 + Random(3)`）在这些点上全部落在可走格，
+⇒ oracle 的出生抖动是 `GetRandHomeX/Y = Home - 2 + Random(3)`，即 x/y 各取 **-2/-1/0 的 3×3**；
+这些点的 5×5 邻域全 WALK，所以 3×3 抖动必然落在可走格，
 **不会出现「进图落墙格 ⇒ 保留角色但不入格表」的伪在world**。
 
 **每簇的本地 MonGen 协变量**（计划刷怪数，按出生点 ±50 / ±100 格内统计）：
@@ -90,7 +95,7 @@
 | --- | --- | --- | --- |
 | 0a | 0 | 130 | 390 |
 | 0b | 0 | 0 | 130 |
-| 0c | 0 | 11 | 83 |
+| 0c | 0 | 21 | 83 |
 | 2 | 2 | 2 | 6 |
 | 3 | 3 | 20 | 40 |
 | 4 | 4 | 472 | 472 |
@@ -102,13 +107,17 @@
 
 ### 2.3 三档的逐簇分配（可直接照此建夹具）
 
-**D3（对照，复刻现状几何）**
+**D3（对称化对照；现状实测 276/223 + 1 个 map0136）**
 
 | 簇 | 图 | 坐标 | bot 数 |
 | --- | --- | --- | --- |
 | 0a | 0 | 289,618 | 250 |
 | 0b | 0 | 650,631 | 250 |
 | 合计 | 1 图 | | 500 |
+
+- 250/250 是对称化控制；按实测算 P=62,703（276/223），与对称化的 62,250 差 <1%。
+  报告必须并列两个分簇数。实测那 1 个 `0136` 的来源未核（推测为旧夹具角色）；本轮夹具把
+  500 个 `loadbot*` 账号全部 pin 到 map 0，所以 M2 对 D3 的期望是 map 0 = 500。
 
 **D2（近似运营；权重是假设）**
 
@@ -141,14 +150,15 @@
 
 - 每簇 bot 数取 62/63 是因为 500 = 8×62 + 4；**均匀的是簇，不是图**（map 0 有 3 个合法出生点，
   所以占 188 人）。
-- 每簇内部按账号序号做 ±2 格抖动；抖动规则与 oracle 出生抖动同形，但**逐点确定性**
-  （index 取模），保证三档之间除分配外没有别的差异。
+- 每簇内部做 **3×3 抖动**，与 oracle 出生抖动同范围（x/y 各 -2/-1/0）。确定性映射：
+  `dx = -2 + (i mod 3)`，`dy = -2 + ((i div 3) mod 3)`（i = 该簇内账号序号）。这样三档之间
+  除分配外没有别的差异；5×5 全 WALK 已核，3×3 子集必然可走。
 
 ### 2.4 AOI 预期方向（推算，未实测）
 
-同图 A 轮归档 `E:/UserFleet/load-360-slowsep-A-20261116/metrics.json` 的网关计数：
-`drop_noncritical 84,339,775 + noncritical_sent 10,417,088 = 94,756,863` 帧 / 385.123s
-⇒ **246,050 帧/s ⇒ 49,210 帧/tick，每客户端 98.4 帧/tick、492 帧/s**。
+四份同图归档的**稳态** AVI（评审者复算，口径见 §3.4）为
+**recvnull 435.6 / A 555.7 / B 551.2 / profiled 534.0 帧/客户端/s**；整窗口径（含爬坡，仅作量级）
+为 349.49 / 492.09 / 486.63 / 445.37。本设计**只用稳态口径**做判据。
 
 若广播量由「同簇 peer 收件人」主导，按 P 的比值，D1 ≈ D3 的 25%、D2 ≈ 49%。
 但这不是承诺：怪物走位扇出里 **`hear_targets_at` 的实体扫描是全局的**（§6.1 R2），
@@ -176,9 +186,15 @@
 | M1 | 进入世界的 bot 数 | `stack-logs/game-svr.out.log` 的 `进世界 ChrName:... CurMap:...`（按 ChrName 去重、取最后一次） | 500 个不同 ChrName |
 | M2 | 每图实际人数 | 同上，按 `CurMap` 分组 | 与 §2.3 计划**逐图相等** |
 | M3 | 每簇人数 | 实际 `(CurMap, 落点±3)` 分簇 | 与计划逐簇相等（±1 允许抖动越界） |
-| M4 | 结束时仍在该图 | 停机后 `characters` 快照按 `LoginID` 分组 | 与 M2 相等（防中途换图/回城） |
+| M4 | 结束时仍在该图 | **优雅停服后**（game-svr 命名管道存档成功）的 `characters` 快照，按 `LoginID` 分组 | 与 M2 相等（防中途换图/回城）；`STOPPED game-svr ... force` 或快照缺失 ⇒ PREREQ |
 
 - M1/M2 来自**服务端自己**的进图日志，不依赖 BotSrv 自报；M4 来自 DB 存档（GameSvr 关服写回）。
+- M4 的生产者必须存在：`Stop-Process -Force` 不存档（§5.3），所以每档收尾必须走 game-svr 的
+  `openmir2-gamesvr-shutdown-<pid>` 管道并确认 `STOPPED game-svr ... graceful`，随后在 MySQL
+  仍可用时（若已停则单起一次）做跑后快照。夹具的「写前/写后」快照是**写库前后**，不是跑后，
+  不能替代 M4。
+- **假设**：每个 `loadbotN` 账号恰好 1 个未删除角色（本次未连库验证；夹具必须断言）。
+  M4 以**账号**为计数单位；一个账号多角色时按账号整组写同图并只计一次。
 - 任一不满足 ⇒ **该档判 `DIST_RED`**，即使 `report.json` 是 GREEN 也不得出「分散场景达标」。
 - 现有日志格式已包含 `CurMap`（500 档归档可见），**不需要改产品代码**。
 
@@ -192,37 +208,54 @@
 | C4 | tick P99（客户端仪器） | `report.json.tick_p99_ms` | ≤ 100 ms |
 | C5 | tick P99（服务端仪器） | TICKPROF 直方图 P99 | ≤ 100 ms |
 | C6 | 超长 tick | `ge201_samples` | 0（A 轮基线也是 0；出现 1 个即标注并复跑） |
-| C7 | 非劣于同图 | 各档 vs D3 | `per_client_inbound ≤ 1.10 × D3` 且 `P99 ≤ 100` |
+| C7 | 非劣于同图 | 各档 vs **同树 D3** | `per_client_inbound ≤ 1.10 × D3` 且 `P99 ≤ 100` |
 
 C1/C7 是「分散场景达标」的主判据；C2/C3 是「总量没有恶化」的兜底。
 **不要**把 C1 读成「玩家上限」：BotSrv 是恒压动作探针，真实玩家动作频率未测（容量模型 §4.6 的口径警告）。
 
 ### 3.4 AOI 经济性（预登记，用来区分「真收益」与「噪声」）
 
-定义 **AVI**（AOI 广播尝试量，帧/客户端/秒）：
+定义 **AVI**（AOI 广播尝试量，帧/客户端/秒），**只在稳态窗内计**：
 
 ```text
-AVI = (drop_noncritical_frames + noncritical_sent_frames) / 500 / window_sec
+att(t) = drop_noncritical_frames(t) + noncritical_sent_frames(t)   # gate 累计计数
+AVI    = [att(t1) − att(t0)] / 500 / (t1 − t0)
 ```
 
-（分子来自 `game-svr.out.log` 的 `event=gate_backpressure_summary`；这是「尝试广播」量，不是丢弃率。）
+其中 t0/t1 是 §4.3 的稳态窗边界，`att(t0)/att(t1)` 取最接近该边界的
+`event=gate_backpressure_summary` 采样（约 5s 一条）。**禁止**用
+`att(最后) / 500 / window_sec`：`window_sec`/`uptime_ms` 含爬坡，会与 §4.3「禁止全窗均值」
+直接矛盾。归档与报告必须同时列整窗值与稳态值，并注明两者不同。
+
+**四份同图归档的背景值**（复审复算 `0bc7b688`；整窗口径 vs 稳态口径）：
+
+| 归档 | 整窗（含爬坡） | 稳态 |
+| --- | --- | --- |
+| `load-360-recvnull-verify-20261116`（判据轮） | 349.49 | **435.6** |
+| `load-360-slowsep-A-20261116` | 492.09 | **555.7** |
+| `load-360-slowsep-B-20261116` | 486.63 | **551.2** |
+| `load-360-recvnull-verify-20261116-profiled` | 445.37 | **534.0** |
+| 区间 | 349–492（约 41%） | 436–556（约 27%） |
 
 | # | 判据 | 通过线 | 失败时的处置 |
 | --- | --- | --- | --- |
-| A1 | D1 的 AVI 显著低于 D3 | **D1 ≤ 0.80 × D3** | 记为负结果：「分散未降低 AOI 广播量」，不得改口说「分散没用」或「分散有用」 |
-| A2 | D2 的 AVI 低于 D3 | D2 ≤ 0.90 × D3 | 同上（D2 预期收益较弱） |
+| A1 | D1 的 AVI 低于**同树 D3** | **D1 ≤ 0.80 × D3(同树)** | 记为负结果：「分散未降低 AOI 广播量」，不得改口说「分散没用」或「分散有用」 |
+| A2 | D2 的 AVI 低于**同树 D3** | D2 ≤ 0.90 × D3(同树) | 同上（D2 预期收益较弱） |
 | A3 | 网关无背压恶化 | `overflow_frames=0`、`degrade_inworld_frames=0`、`close_inworld_sessions=0` | RED |
 
-- 阈值 0.80 / 0.90 在**跑之前**登记；跑完不得改。
-- AVI 的跨轮方差从三份同图归档看很小（A 492 帧/s、B 486、profiled 445），所以 20% 的门槛不是噪声门。
+- 阈值 0.80 / 0.90 在**跑之前**登记；跑完不得改；**分母只能是同树 D3**。
+- 为什么不能跨树：同树 A/B 的稳态 AVI 只差 **0.8%**（555.7 vs 551.2），但跨树
+  recvnull/A/B/profiled 相差 **21–28%**（436–556）。⇒ 20% 的门槛只在同树内成立；
+  跨树的绝对值只作背景区间，**不得当门槛、不得混算**。
 - A1 的物理含义：如果分散只降低 game-svr 的发送编码（`HostAoiDownlink` 的 3–8%），而全局扫描不变，
   AVI 仍会明显下降——那说明收益在**网关侧**，不在 game-svr 工作段。两种结果都必须如实写。
+- 若本轮没有同树 D3：A1/A2 判 **PREREQ（不可评估）**，只出 D1/D2 的绝对量与区间，不改判 GREEN。
 
 ### 3.5 与同图 500 档的对照方式
 
 - **主对照 = 同树 D3**。D1/D2 的所有差值只对 D3 算，不跨树。
 - 既有同图数据（W2 `c74b4ce42`、A/B `57a0c9f12`）只作**背景量级**，用于检查新数据是否落在
-  已知区间（work 约 43.7–50.2ms、inbound 24.9–30.7ms、AVI 445–492 帧/s、实体均值约 4.7–4.9k）；
+  已知区间（work 约 43.7–50.2ms、inbound 24.9–30.7ms、稳态 AVI 436–556 帧/s、实体均值约 4.7–4.9k）；
   **不得**把跨树差值写成「分散收益」。
 - 如果 D3 无法在本窗口跑（例如 binary_stamp 已漂移），则本轮**只能出 D1/D2 的绝对量**，
   不得出「分散 vs 同图」的结论。
@@ -246,11 +279,19 @@ AVI = (drop_noncritical_frames + noncritical_sent_frames) / 500 / window_sec
 ### 4.2 BotSrv 配置（三档逐字相同）
 
 ```text
-ChrCount=500  TotalChrCount=500  LoginAccount=loadbot  NewAccount=false
-ConnectStaggerMs=20   MIR2_BOT_ACTION_PROBE=1   MIR2_BOT_ACTION_PROBE_MS=1000
-BotHeapLimitGB=8      MemKillThresholdGB=8      HoldSec=360
-MIR2_TICK_PROFILE=1   MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态）
+# load_gate 参数（CLI）
+-Tiers 500  -HoldSec 360  -SkipBuild  -BotHeapLimitGB 4  -MemKillThresholdGB 8
+
+# BotSrv AppSetting.json（BotPlay 段）
+ChrCount=500  TotalChrCount=500  LoginAccount=loadbot  NewAccount=false  ConnectStaggerMs=20
+
+# BotSrv / game-svr 进程环境
+MIR2_BOT_ACTION_PROBE=1  MIR2_BOT_ACTION_PROBE_MS=1000
+MIR2_TICK_PROFILE=1      MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态）
 ```
+
+- `BotHeapLimitGB=4` 与 500 基线一致（A 轮审计行 `BOTGUARD_ENV ... heap_limit_gb=4`）；
+  8 只是 runbook 的旧写法，不是本轮实际值，不能用 8 制造口径差。
 
 - `SLOW_MS` 不设：A 轮（主门开、快照关）是 500 档的正式口径；B 轮（快照开）只用于诊断代价实验。
 - `NewAccount=false`：账号已存在；角色由 §5.2 的预热相创建/校验，不能让 BotSrv 在本轮新建角色
@@ -260,7 +301,9 @@ MIR2_TICK_PROFILE=1   MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态）
 
 1. **t0** = 服务端日志第 500 条 `进世界 ChrName:` 的时间戳；用 `tier-500/load_stats.ndjson`
    首次 `in_world >= 500` 的时间交叉核对，两者相差 >10s ⇒ PREREQ（记录但不出结论）。
-2. **t_stop** = `load_gate` 开始收尾的时间（`bots.log` 的 soft-close / `stop-stack.out.log`）。
+2. **t_stop** = 发 game-svr `SHUTDOWN` 之前的墙钟时刻（`stack-stop.log` 的
+   `STOPPED game-svr ... graceful` 行附近；`bots.log` 的 soft-close 可交叉核对）。
+   收尾必须优雅存档，见 §5.2；`force` 停服的轮次 M4 判 PREREQ。
 3. 只取 **完整 50-tick TICKPROF 块**（5 tick/s ⇒ 10s/块），且满足
    `block_start >= t0` 且 `block_end <= t_stop − 15s`（15s 是 shutdown-drain 保护带）。
 4. 块内各段按 **ticks 加权平均**；缺 `HostSleep` 或 `HostTickTotal` 的块整块丢弃并计数。
@@ -275,7 +318,7 @@ MIR2_TICK_PROFILE=1   MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态）
 | 每客户端 AOI 下行 | `HostAoiDownlink / 500` | 记录，不单独设阈 |
 | 工作段 | `HostTickTotal − HostSleep` | 与既有表同义 |
 | 工作段占比 | `work / HostTickTotal` | 记录 |
-| AVI | `(drop_noncritical + noncritical_sent) / 500 / window_sec` | 帧/客户端/s；§3.4 用 |
+| AVI | `[att(t1) − att(t0)] / 500 / (t1 − t0)`，att = `drop_noncritical + noncritical_sent`，t0/t1 = §4.3 稳态窗 | 帧/客户端/s；§3.4 用；**不得用 `window_sec`** |
 | 实体密度 | `entities_mean / 500` | 每客户端世界实体数（不是同屏） |
 | 每簇成本 | 若必须分簇，只按 M3 的落点归属做静态分摊；**不假装有 per-map 运行时计费**（见 §6.2） |
 
@@ -291,6 +334,8 @@ MIR2_TICK_PROFILE=1   MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态）
 ### 4.6 网关计数
 
 - 每个 gate 取 `uptime_ms` 最大的那条 `gate_backpressure_summary`（与 `analyze_window.py` 同法）。
+- gate summary 是**累计计数**（约 5s 一条）；AVI 必须做 t0/t1 差分（§3.4），
+  `window_sec`/`uptime_ms` 只用于整窗背景值，**不进判据**。
 - 报：`drop_noncritical_frames`、`noncritical_sent_frames`、`overflow_frames`、
   `degrade_inworld_frames`、`close_inworld_sessions`、`drop_pct`、`window_sec`。
 - `drop_pct` 只是「丢弃 /（丢弃+发送）」，**不是**容量指标；AVI 才是广播量指标。
@@ -301,8 +346,8 @@ MIR2_TICK_PROFILE=1   MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态）
 
 ```text
 tier | verdict | in_world | dist_ok(M1-M4) | work | HostInbound | per_client_inbound
-     | HostAoiDownlink | AVI | P50/P90/P99/max | ge201 | entities_mean | last6_vs_prev6_pct
-     | saturation | AVI_vs_D3 | ramp_ms | census20_zero
+     | HostAoiDownlink | AVI_steady（同时记 AVI_whole） | P50/P90/P99/max | ge201
+     | entities_mean | last6_vs_prev6_pct | saturation | AVI_vs_D3 (同树) | ramp_ms | census20_zero
 ```
 
 另出「D1 vs D3」「D2 vs D3」两列差值表，并注明这是**同树配对**。
@@ -320,23 +365,34 @@ tier | verdict | in_world | dist_ok(M1-M4) | work | HostInbound | per_client_inb
 | 项 | 轮数 | 每轮 | 小计 |
 | --- | --- | --- | --- |
 | 空载 preflight（CPU<20%、无 cargo/dotnet/msbuild、端口/二进制/HEAD） | 1 | 5 min | 5 min |
-| 冒烟（500、`HoldSec=60`，只验分布 M1/M2 + 无异常） | 1 | 5 min | 5 min |
-| 结论轮（D3 / D2 / D1，各 `HoldSec=360`、新栈） | 3 | 8.5–9.5 min | 26–29 min |
+| 冒烟（500、`HoldSec=60`，验 M1/M2 分布、优雅停栈 + 跑后快照 M4、无异常） | 1 | 5 min | 5 min |
+| 结论轮（D3 / D2 / D1，各 `HoldSec=360`、新栈） | 3 | 8.9–10.0 min | 27–30 min |
 | 归算与归档（TICKPROF 稳态窗、分布、AVI、分箱、sha manifest） | 1 | 20 min | 20 min |
-| **合计（一轮/档）** | | | **约 56–59 min；按 60–75 min 申请独占** |
+| **合计（一轮/档）** | | | **约 57–60 min；按 60–75 min 申请独占** |
 
-- 每轮 8.5–9.5 min 的构成：停栈 15–20s → 单起 MySQL 10s → 夹具写库 15–30s → 起整栈 60s →
-  上线 15s → hold 360s → 收尾/归档 30–45s。与 500 档 runbook 的 45 min（smoke+1 轮+分析）一致。
+- 每轮 8.9–10.0 min 的构成：优雅停栈（game-svr 管道存档，≤8s）15–20s → 单起 MySQL 10s →
+  夹具写库 15–30s → 起整栈 60s（MySQL 已在跑，栈只打 `MYSQL already up`）→ 上线 15s → hold 360s →
+  优雅停栈 15–20s → **跑后 DB 快照** 5–10s → 停 MySQL 5s → 归档 30–45s。
+  与 500 档 runbook 的 45 min（smoke+1 轮+分析）同量级；多出的时间主要是每档两次优雅停栈。
 - **若 A1/A2 要当「结论」而不是「探索」**：每档再加 1 轮（同样的 360s），
-  合计 +26–29 min ⇒ **约 85–105 min**。建议先跑一轮/档；若 AVI 的轮间差 >10% 再补第二轮。
+  合计 +27–30 min ⇒ **约 84–90 min（= 57–60 + 27–30），按 85–95 min 申请**。
+  建议先跑一轮/档；若 AVI 的轮间差 >10% 再补第二轮。
 - 若需要「饱和态」的绝对容量数字：把 D1 的 hold 延到 600s（+4 min）；本轮**不默认**做。
 
 ### 5.2 能复用现有栈/二进制吗？
 
 **能，且不需要重建产品代码。**
 
-- 栈：`E:/MirServer/start-all.ps1`；单起 MySQL 的写法直接复用 `tools/e2e/stack_e2e.ps1` 里的
-  `mysqld --datadir=D:\mysql\data ...`。
+- 栈：测量栈由 `tools/m2-acceptance/start_rust_stack.ps1` 起（MySQL + DBSrv + LoginSrv +
+  Rust game-svr + 三网关）；单二进制 dispatcher 形态则用 `start_mir2_server.ps1`。
+  **停栈必须走 game-svr 的优雅通道**：`start_rust_stack.ps1 -Stop`（或 `stop_mir2_server.ps1`）
+  会连接 `openmir2-gamesvr-shutdown-<pid>` 写 `SHUTDOWN`，进程先存档再退出（8s 上限，内部存档 5s）；
+  **不得用 `E:/MirServer/start-all.ps1 -Stop` 或 `Stop-Process -Force`**——那条路径不存档，M4 无生产者。
+- 单起 MySQL 的写法直接复用 `tools/e2e/stack_e2e.ps1` 里的 `mysqld --datadir=D:\mysql\data ...`。
+  **推荐的每档时序**是「先单起 MySQL（不被栈的 pid 文件记录）→ pin → 起栈（栈见 3306 已通，
+  只打 `MYSQL already up`、不接管）→ 跑 → 优雅停栈（只停栈内进程，MySQL 仍在）→ 跑后快照」；
+  这样跑后快照不需要重启数据库。若 MySQL 是由栈自己启动的（pid 文件含 `MySQL`），
+  优雅停栈会把它一起停掉，则快照前再单起一次。
 - 压测：`tools/botload/load_gate.ps1`（`-Tiers 500 -HoldSec 360 -SkipBuild`）、
   `tools/botload/run_bots.ps1 -StopAfterCharCreated`（预热建角）。
 - 归算：`E:/UserFleet/load-360-recvnull-verify-20261116/env/loaded_window_compare.py` 的稳态窗逻辑，
@@ -357,11 +413,18 @@ tier | verdict | in_world | dist_ok(M1-M4) | work | HostInbound | per_client_inb
    - 默认 `--dry-run`；`--apply` 才写库；库名守卫只允许 `mir2_test_*`；写前后各出一份
      `(LoginID, ChrName, MapName, CX, CY, HomeMap, Hp, MaxHP)` 快照，`after == plan` 否则 rc=1。
    - `verify-log` 模式：解析 game-svr 的 `进世界` 行，按 §3.2 输出每图/每簇计数与 mismatch。
+   - `snapshot-post` 模式：优雅停栈后读 `characters`/`characters_ablity`（3306 须可用；必要时单起一次），
+     输出每账号 MapName/HP 与分簇计数，供 M4；拿不到 `graceful` 停服证据 ⇒ rc=2（不当作跑后状态）。
    - 自测：空输入、未知图、墙格坐标、计划 500/实际 499、单簇少 1、全在 map 0 必须红；
      不得连真库跑自测（合成夹具 + 假 DB）。
 2. **`tools/botload/distmap_window.ps1`（必需，或给 `load_gate` 加一个 `-PreTierHook`）** — 编排：
-   - 顺序固定：`start-all -Stop` → 单起 MySQL → fixture apply + 快照 → `start-all` → 等 7000 端口 →
-     `load_gate -Tiers 500 -HoldSec 360 -SkipBuild`（栈已在跑，不再 restart） → 停栈 → fixture verify-log。
+   - 顺序固定：`start_rust_stack.ps1 -Stop`（断言 `STOPPED game-svr ... graceful`）→ 单起 MySQL →
+     fixture apply + 写前快照 → 起栈（`MYSQL already up`）→ 等 7000 端口 →
+     `load_gate -Tiers 500 -HoldSec 360 -SkipBuild`（栈已在跑，不再 restart）→
+     `start_rust_stack.ps1 -Stop`（再次断言 `graceful`）→ fixture **跑后 DB 快照**（M4，
+     MySQL 仍在；若 3306 已 DOWN 则单起一次）+ `verify-log` → 停 MySQL。
+   - 若停栈日志出现 `STOPPED game-svr ... force` 或没有 `graceful` 行 ⇒ 该档 M4 判 PREREQ，
+     不得把快照当「跑后状态」。
    - 任一 rc≠0 立即中止，不跑下一档；把每档的计划、实际分布、HEAD、二进制 sha 写进归档。
    - 为什么必须新编排：`load_gate -RestartStackPerTier` 在**脚本内部**重启栈，外部无法在
      「重启后、bot 启动前」插写库；单靠现有参数做不到「每档先 pin 再跑」。
@@ -373,7 +436,8 @@ tier | verdict | in_world | dist_ok(M1-M4) | work | HostInbound | per_client_inb
 ### 5.4 磁盘与清理
 
 - 每份归档约 41MB（W2 实测）；三档 + 冒烟约 **130–170MB**。
-- DB 侧只改 `loadbot*` 角色的 6 列；快照保留；窗口结束后可恢复原值或明确记录「保持分散值」。
+- DB 侧只改 `loadbot*` 角色的 7 列（`characters` 的 MapName/CX/CY/HomeMap/HomeX/HomeY +
+  `characters_ablity` 的 Hp）；快照保留；窗口结束后可恢复原值或明确记录「保持分散值」。
   测试数据由创建方清理（列清单、备份、核验三步）。
 
 ## 6. 风险与不可行项
@@ -396,6 +460,7 @@ tier | verdict | in_world | dist_ok(M1-M4) | work | HostInbound | per_client_inb
 | R12 | **1000 档分散被顺手加入** | 1000 档有 BotSrv 4GiB/网关丢帧/串行载入三项前置，均未解除 | 窗口必失败、证据作废 | 本设计**明确不含 1000 档**；另卡处理 |
 | R13 | **窗口独占/构建抢内存** | 项目既有规则：窗口期禁 cargo；多车道并行构建会被 reaper 杀 | 判据噪声/进程被杀 | preflight 记录 `heavy_samples`；窗口期不跑构建 |
 | R14 | **DB 共享测试数据被别的车道使用** | 500 账号/角色是共享夹具 | 别的车道跑出混合分布 | 写前快照、写后记录；与 Leader 约定窗口独占 `loadbot*` 账号 |
+| R15 | **强制停服会让 M4 没有生产者** | `start-all.ps1 -Stop` / `Stop-Process -Force` 不存档；M4 依赖关服写回的 `characters` | 跑后快照与在world分布不一致，或读不到最新存档 | 用 `start_rust_stack.ps1 -Stop` / `stop_mir2_server.ps1` 的命名管道；断言 `graceful`；快照前确认 3306 可用（必要时单起） |
 
 ### 6.2 不可行项（明确写出）
 
