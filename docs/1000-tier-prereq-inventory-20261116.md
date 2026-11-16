@@ -9,7 +9,7 @@
 
 | 项 | 现状（1000 档） | 判据 | 是否解除 |
 | --- | --- | --- | --- |
-| ① BotSrv 4GiB 堆上限 OOM | 修复前：OOM 实证（`supp-hold360` 峰值 WS 4410.1MB / priv 4409.4MB，`bots.err.log` = `Out of memory.`）；修复后：**1000 档无实测**，只有 500 档平坦（WS 852–1215MB，OOM=0） | `OOM=0` 且 `bots.err.log` 无 `OutOfMemory` | **未解除**（修复后 1000 档未测；4GiB 是否够未证；本机可用内存不够 360s 口径） |
+| ① BotSrv 4GiB 堆上限 OOM | 修复前：OOM 实证（`supp-hold360` 峰值 WS 4410.1MB / priv 4409.4MB，`bots.err.log` = `Out of memory.`）；修复后：**1000 档无实测**，只有 500 档平坦（WS 852–1215MB，OOM=0） | `OOM=0` 且 `bots.err.log` 无 `OutOfMemory` | **未解除**（修复后 1000 档未测；4GiB 是否够未证——按修复后 500 档外推约 2–2.5GB，推算上可能够） |
 | ② 网关背压丢帧 | **无 1000 档后修复归档**。唯一 1000 档网关归档（`botsrv-inworld-plateau-20261115-094127`）早于关键性两通道补丁，且 schema 里没有 `close_inworld` / `reject_login` / `degrade_inworld`；其 `in_world` 只有 327/1000 | `in_world ≥95%`、`close_inworld=0`、`reject_login`/`degrade_inworld` 有数且可解释 | **未解除**（500 档全过；1000 档未测；单线吞吐在 500 已接近上界） |
 | ③ 进世界串行载入 | 1000 档 `in_world` 在 **327–425 处硬平台**，从未达到 95%（950）；旧树 1000 档进世界速率 ≈5.3/s | 窗口内 `in_world ≥95%` | **未解除**（平台未归因；`openmir2-world-entry-serial-saves` 仍待认领） |
 
@@ -32,9 +32,9 @@
 
 补充反证（500 档 + 360s 也会 OOM，修复前）：
 
-- `archive/gate-capacity-360-20261115/run/tier-500/`：`metrics.json` 的 `behavior_four` 记
-  `oom_hits=5`、`botsrv_crash=true`；`report.json` 的 BotSrv 峰值为 **WS 4320.0MB / priv 4357.8MB**；
-  `bots.err.log` 前 4 行是 `Out of memory.`，第 5 行 `Fatal error.`；同轮 `in_world` 仍到 500/500（先完成进世界后才崩）。
+- `archive/gate-capacity-360-20261115/`：**归档根**的 `metrics.json` 的 `behavior_four` 记
+  `oom_hits=5`、`botsrv_crash=true`；同轮 `run/tier-500/report.json` 的 BotSrv 峰值为 **WS 4320.0MB / priv 4357.8MB**；
+  `run/tier-500/bots.err.log` 前 4 行是 `Out of memory.`，第 5 行 `Fatal error.`；同轮 `in_world` 仍到 500/500（先完成进世界后才崩）。
   总监据此把增长重定级为「内存泄漏」（≈11.2MB/s），不是单纯堆上限问题。
 
 **修复后的现状（关键：500 档已平坦，1000 档没测）**：
@@ -48,8 +48,11 @@
   `load-360-slowsep-A-20261116/`、`load-360-slowsep-B-20261116/`）：
   BotSrv WS 峰 987.1–1215.6MB、末值 852.5–980.5MB、尾段斜率 −0.31…+0.37MB/s（噪声量级）；
   `report.json` 的 `botsrv.err_log_oom=false`、`oom_hits=0`、`crash=false`。
-- **修复后 1000 档没有任何实测归档**：全盘 `tier-1000` 目录只有三处（`load-tiers` 的两个 + `plateau-094127`），
-  都在修复前；2026-11-16 的归档只有 `tier-500`。
+- **修复后 1000 档没有任何实测归档**：`E:/UserFleet/archive/` 下的 `tier-1000` 目录共 **4 处**——
+  `load-tiers-20261115-0245/tier-1000`（60s）、`supp-hold360/tier-1000`（360s）、
+  `diag-misdeliver/tier-1000`（45s，`world_ok=330`、login 77%）、
+  `botsrv-inworld-plateau-20261115-094127/tier-1000`（150s）；`rollback-test` 下另有历史副本。
+  这些都在内存修复前；2026-11-15 之后没有再跑 1000 档。
 
 ### 1.2 判据阈值
 
@@ -66,12 +69,13 @@
 2. **4GiB 在 1000 bot 下是否够，当前只能给推算，不能给结论。**
    按修复后 500 档 ~1.0GB 稳态、LOH 基线 432KB/bot 线性外推，1000 档约 **2–2.5GB**，小于 4GiB；
    但这是推算（500 档实测 ×2 + LOH 基线 ×2），未含 1000 档的未知非线性项。
-3. **机器内存：360s 口径仍不够。** 修复前模型（`docs/botsrv-heap-1000bot-20261115.md` §4–5）给的是
-   60s 需 ≈9.0–9.5GB 托管堆（建议 `-BotHeapLimitGB 12`）/ 360s 需 ≈16–17GB（建议 20），
-   机器可用内存下限 ≥16GB（60s）/ ≥24GB（360s）。本机物理内存 32,615,808 KB；窗口期可用只有
-   7.25–11.6GB（`archive/load-tiers-20261115-0245/mem-watch.csv` 的原样数值）；2026-11-16 实测空闲
-   14,414,520 KB（约 13.8GiB），仍低于 16GB 门槛。
-   若修复后 1000 档真能压到 2–2.5GB，这条会从「内存不足」降级为「需实测确认」，但**现在不能据此开窗**。
+3. **机器内存不是本卡的既定障碍，但也没有实测支撑。** 修复前模型（`docs/botsrv-heap-1000bot-20261115.md` §4–5）
+   给 60s 需 ≈9.0–9.5GB 托管堆、360s 需 ≈16–17GB、机器可用内存 ≥16GB/≥24GB——**那是含泄漏与时间项的旧口径，
+   不能直接拿来判修复后的 1000 档**。修复后 500 档 × 360s 的 BotSrv 稳态只有 ~0.9–1.0GB（WS 峰 987–1216MB），
+   按 bot 数线性外推 1000 档约 **2–2.5GB**（含 LOH 基线 432KB/bot）⇒ **4GiB 在推算上够**。
+   本机物理 32,615,808 KB（≈31.1GiB）；窗口期可用 7,250.7–11,637.1MB（`mem-watch.csv` 的 `free_mb`，实为 MiB）；
+   2026-11-16 实测空闲 14,414,520 KB（≈13.75GiB）。若 1000 档真在 2–2.5GB，机器内存不是障碍；
+   **但这是推算，未实测，不能据此开窗。**
 
 ### 1.4 解除它需要什么
 
@@ -79,8 +83,8 @@
 
 1. **拿到 1000 档修复后实测**（可在 60s 冒烟或 360s 窗口内）：同时采 `dotnet-counters`
    （Gen2 after-GC / LOH / GC Heap）与 `bots.err.log`，证明 `OOM=0`。这是把 §1.3 的推算变成结论的唯一路径。
-2. **若实测 >4GiB**：把 `-BotHeapLimitGB` 提到 12（60s）或 20（360s），并换可用内存 ≥16GB / ≥24GB 的机器；
-   同时保留 `-MemKillThresholdGB` 看门狗（现行默认 8GiB）。
+2. **若实测 >4GiB**：把 `-BotHeapLimitGB` 提到实测值的 1.2–1.5×（修复前模型曾给 12/20GB，那只是旧口径上界参考），
+   并确保机器可用内存 ≥ 新堆上限 + 其它服务开销；同时保留 `-MemKillThresholdGB` 看门狗（现行默认 8GiB）。
 3. **若不想抬堆**：降每 bot 分配或分片。分片（多个 BotSrv 进程按账号段分摊，各自 4GiB 上限）当前**没有实现**，
    也没在归档里出现过；`docs/botsrv-heap-1000bot-20261115.md` §8 只列了候选方向，未做。
 4. 注意：修复前 `load_gate` 对 OOM **不判 RED**（只打 WARN）；该判据缺口已由 `docs/loadgate-criteria-runbook-20261115.md`
@@ -175,15 +179,21 @@
 - 官方 runbook 的口径（`docs/loadgate-criteria-runbook-20261115.md` §1.3）：
   「进世界是串行载入，实测 ~5–7/s：`supp-hold360` 的 `in_world` 从 5s 的 56 涨到 75s 的 425（≈5.3/s）后平台」。
   本次重算一致：(425−56)/(75.234−5) = **5.25/s**。
-- 1000 档 game-svr 的 DB 应答（`执行任务Id:N成功`）有**两套值，必须分开读**：
-  (a) `tier-1000`（v1 栈，60s）：窗口内 **4.28/s**（363 条 / 84.9s）；同期 v1 正处 83MB
-  「下发 SM_* 帧时 socket 槽不存在」告警风暴，整栈饱和。
-  (b) `supp-hold360`（v2 栈，重启后）：前 **1000 条在 69s 内完成（≈14.5/s）**，之后 `in_world` 仍只到 425/1000。
-  ⇒ **4.28/s 是饱和轮的症候值，不是串行载入的固有上限；v2 的 14.5/s 说明「DB 应答」不是 425 平台的那一环。**
+- 1000 档 game-svr 的 DB 应答（`执行任务Id:N成功`，**全量 DB 应答计数，不严格等于 bot 数**）有**两套值，必须分开读**：
+  (a) `tier-1000`（v1 栈，60s）：取窗 **18:51:08.072–18:52:32.935（UTC）**，该窗 **363 条 / 84.863s = 4.277/s**。
+  同期 v1 有一段「下发 SM_* 帧时 socket=… 的槽不存在」告警风暴（18:49:02.849–18:54:08.533，696,873 行，
+  整份 `game-svr.out.log` 约 83MB）；它和 4.28/s 只是**共现**——同一风暴区间也覆盖了 tier-500 的 13–15/s 阶段，
+  因此**不能把 4.28/s 归因给风暴**。（同日志取更晚的 84.9s 窗会得到 1027 行，属不同阶段；本处只取 tier-1000 窗口。）
+  (b) `supp-hold360`（v2 栈，重启后）：`执行任务Id` 共 **1312 条**；前 **1000 条在 69.3s 内完成（≈14.4/s）**，
+  尾部 **312 条约 4.2–4.4/s**（取窗边界差异）；同一轮 `in_world` 仍只到 425/1000。
+  ⇒ **4.28/s 不能当作串行载入的固有上限；v2 的 14.4/s 说明「DB 应答」不是 425 平台的那一环。**
   作为参照：tier-200 窗口 15.6/s、tier-500 窗口稳态约 13–15/s。
-- `supp-hold360` 的每 bot 进世界时延（`bots.log` 的 `准备进入游戏` → `成功进入游戏`）：
-  中位 **13.1s**、p90 **51.9s**、p99 **59.8s**、max **61.1s**；1000 个 bot 里只有 425 个成功，
-  **575 个停在 `准备进入游戏`**（`bots.log` 中 `准备进入游戏` 1000 条、`成功进入游戏` 425 条）。
+- `supp-hold360` 的每 bot 进世界时延（**按 bot 名配对**：起点 = 该 bot 自己的 `机器人:[x] 进入游戏` 行，
+  终点 = `机器人:[x] 成功进入游戏` 行；425 个成功者全部按名配上）：
+  中位 **12.13s**、p90 **42.28s**、p99 **48.50s**、max **49.49s**（nearest-rank 分位）。
+  **不能用「第 k 条准备 → 第 k 条成功」的全序配对**：本轮 425/1000 成功 ⇒ 成功行会配到别人的准备行，
+  按全序会得到 13.13/51.85/59.77/61.06 的错配值（结论不变，但数字必须用按名配对的）。
+  1000 个 bot 里只有 425 个成功，**575 个停在准备阶段**（`bots.log` 中 `成功进入游戏` 425 条）。
 - 500 档后修复树的速率：500/500 在 40.0s 到齐，`5s→35s` 段 (498−52)/30 = **14.9/s**。
 
 **两张卡的状态：**
@@ -207,11 +217,11 @@
 | X（进世界速率） | 来源 | 950 个所需时间 |
 | --- | --- | --- |
 | **5.3/s** | `supp-hold360` 1000 档实测（5s 56 → 75s 425） | **≈179s** |
-| **4.2/s** | v1 饱和轮的 DB 应答（症候值，非固有上限；v2 同环已到 ≈14.5/s） | **≈226s** |
+| **4.2/s** | v1 tier-1000 窗口实测 4.277/s（保守取 4.2；这是窗口值，不等于固有上限；v2 同环已到 ≈14.4/s） | **≈226s** |
 | **12.5–14.9/s** | 后修复树 500 档（500/500 在 40s 到齐） | **≈64–76s** |
 
-**在「速率保持不变」的前提下，360s 是够的**：最慢的 4.2/s（症候值）也只要 ≈226s，还剩 ≈134s 稳态；
-5.3/s 只要 ≈179s，还剩 ≈181s。**窗口长度本身不是约束。**
+**在「速率保持不变」的前提下，360s 是够的**：最慢的 4.2/s（v1 窗口实测 4.277/s 的保守取整）也只要 ≈226s，
+还剩 ≈134s 稳态；5.3/s 只要 ≈179s，还剩 ≈181s。**窗口长度本身不是约束。**
 
 **但现有证据里 1000 档从来没有达到 95%**：两次 1000 档长窗口都停在
 **327/1000（32.7%）** 和 **425/1000（42.5%）**，且分别在 95.3s、221.7s 内零增长。
@@ -221,7 +231,7 @@
 > **按速率算术够；按现有实测不够——因为平台把上限压在 327–425，95% 判据在到达 360s 之前就已经注定失败。**
 
 平台归因目前**未定**（这正是 `openmir2-world-entry-serial-saves` 要回答的）。候选（均未证）：
-串行载入链路的**后续环节**（`SM_LOGON` 下发 / 网关 / BotSrv 消费）——注意 v2 轮 DB 应答已到 ≈14.5/s
+串行载入链路的**后续环节**（`SM_LOGON` 下发 / 网关 / BotSrv 消费）——注意 v2 轮 DB 应答已到 ≈14.4/s
 但仍平台在 425，所以候选**不应写成「DB 应答速率」**；关键帧/AOI 互相阻塞、BotSrv 内存压力（修复前 OOM 前兆）。
 后修复树的 500 档已从 404 平台升到 500/500，说明网关关键性修复至少解除了 500 档的平台；
 **1000 档是否同样解除，没有数据。**
@@ -247,8 +257,8 @@
 
 **不可以。** 三项前置全部未解除：
 
-- ① 修复后 1000 档无实测；4GiB 够不够未证；360s 口径需要 ≥24GB 可用内存，本机窗口期只有 7.25–11.6GB
-  （当前空闲 14,414,520 KB ≈ 13.8GiB，也低于 60s 口径的 16GB 下限）。
+- ① 修复后 1000 档无实测；4GiB 够不够未证——按修复后 500 档外推约 2–2.5GB（推算），可能够；
+  本机当前空闲 14,414,520 KB（≈13.75GiB），若推算成立则不是障碍，但仍需实测确认。
 - ② 1000 档无后修复 `gate_stats`；500 档虽全过，但单线丢帧已 86–89%，1000 档必然更高，关键帧是否仍不溢出未证。
 - ③ 1000 档 `in_world` 平台 327–425，95% 从未达到；窗口长度不是约束，平台才是。
 
@@ -282,9 +292,9 @@
 
 | 用途 | 归档 | 文件与字段/行 |
 | --- | --- | --- |
-| ①②③ 1000 档主证据 | `archive/load-tiers-20261115-0245/supp-hold360/tier-1000/` | `report.json`：`world_ok=425`、`world_ok_pct=42.5`、`mem.BotSrv.ws_peak_mb=4410.1`、`priv_peak_mb=4409.4`、`samples=96`、`steady_window_ms=271890`；`bots.err.log` 第 1 行 `Out of memory.`；`load_stats.ndjson` 的 `uptime_ms`/`in_world`；`bots.log` 的 `准备进入游戏`(1000) / `成功进入游戏`(425) |
+| ①②③ 1000 档主证据 | `archive/load-tiers-20261115-0245/supp-hold360/tier-1000/` | `report.json`：`world_ok=425`、`world_ok_pct=42.5`、`mem.BotSrv.ws_peak_mb=4410.1`、`priv_peak_mb=4409.4`、`mem.BotSrv.samples=96`（**mem 采样点数**；`load_stats.ndjson` 为 60 条）、`steady_window_ms=271890`；`bots.err.log` 第 1 行 `Out of memory.`；`load_stats.ndjson` 的 `uptime_ms`/`in_world`；`bots.log` 的 `成功进入游戏`(425) |
 | ① OOM 时间线 | 同上上级目录 | `env.txt` 的「崩溃 1: BotSrv 02:59:39 OutOfMemoryException…」与「内存护栏」；`mem-watch.csv` 02:59:37 行 |
-| ① 500 档 OOM 反证 | `archive/gate-capacity-360-20261115/run/tier-500/` | `metrics.json` 的 `behavior_four.oom_hits=5`、`botsrv_crash=true`；`report.json` 的 `mem.BotSrv.ws_peak_mb=4320.0`、`priv_peak_mb=4357.8`；`bots.err.log` 前 5 行 |
+| ① 500 档 OOM 反证 | `archive/gate-capacity-360-20261115/`（`metrics.json` 在**归档根**；`run/tier-500/` 放 `report.json` 与 `bots.err.log`） | `metrics.json` 的 `behavior_four.oom_hits=5`、`botsrv_crash=true`；`run/tier-500/report.json` 的 `mem.BotSrv.ws_peak_mb=4320.0`、`priv_peak_mb=4357.8`；`run/tier-500/bots.err.log` 前 5 行 |
 | ① 修复后 500 档 | `E:/UserFleet/load-360-recvnull-verify-20261116/`（及 slowsep-A/B） | `report.json` 的 `mem.BotSrv`（`ws_peak_mb`/`ws_last_mb`/`slope_tail_mb_per_s`）、`botsrv.err_log_oom=false`、`oom_hits=0`、`crash=false` |
 | ① 内存模型（修复前，已部分作废） | `docs/botsrv-heap-1000bot-20261115.md` | §4 的 60s 9153MB/12GB、360s 16638MB/20GB；§5 的 ≥16GB/≥24GB；文末勘误 |
 | ① 修复与归因 | `docs/botsrv-actor-pool-fix-20261115.md`；master `05a0e4815`、`5692250d5`、`289fdd8bd` | §3 的 500/360 WS 896→987、峰 1609、LOH +0.186MB/s；LOH 卡结论「不是泄漏：216MB 基线 + 394KB/5s」 |
@@ -294,8 +304,8 @@
 | ② 单线吞吐上界 | 卡 `openmir2-gateway-throughput-pipeline`（issue body） | 「单线理论 ≈62k 帧/s、实测 ≈38.1k；1000 ≈131k（2.1×）」 |
 | ③ ramp 曲线 | 各归档的 `tier-*/load_stats.ndjson` | `uptime_ms` 与 `in_world` |
 | ③ 官方速率口径 | `docs/loadgate-criteria-runbook-20261115.md` | §1.3「~5–7/s；5s 56 → 75s 425（≈5.3/s）后平台」 |
-| ③ DB 应答速率 | `archive/load-tiers-20261115-0245/stack-logs-v1/game-svr.out.log`（饱和轮 4.28/s）与 `stack-logs-v2/game-svr.out.log`（v2 前 1000 条 ≈14.5/s） | `执行任务Id:N成功`（UTC 时间戳，按 +8h 对齐本地） |
-| ③ 进世界时延 | `archive/load-tiers-20261115-0245/supp-hold360/tier-1000/bots.log` | `准备进入游戏` / `机器人:[x] 成功进入游戏`（本地 +0800） |
+| ③ DB 应答速率 | `archive/load-tiers-20261115-0245/stack-logs-v1/game-svr.out.log`（tier-1000 窗 `18:51:08.072–18:52:32.935`，363 条 / 84.863s = 4.277/s）与 `stack-logs-v2/game-svr.out.log`（共 1312 条；前 1000 条约 14.4/s，尾部 312 条约 4.2–4.4/s） | `执行任务Id:N成功`（**全量 DB 应答计数**，UTC 时间戳，按 +8h 对齐本地） |
+| ③ 进世界时延 | `archive/load-tiers-20261115-0245/supp-hold360/tier-1000/bots.log` | **按 bot 名配对**：`机器人:[x] 进入游戏` → `机器人:[x] 成功进入游戏`；425/425 配对；分位用 nearest-rank |
 | ③ 待认领卡 | 看板 `openmir2-world-entry-serial-saves` | issue body 的验收 A1–A4 |
 
 ## 6. 未找到 / 明确为「无」的数据
@@ -305,4 +315,5 @@
 - **1000 档 `close_inworld` / `reject_login` / `degrade_inworld` / 后修复丢帧率：无。**
 - **1000 档 ≥95% 进世界时刻：无**（从未达到；两次长窗口分别停在 327 和 425）。
 - **平台归因（串行载入 / 网关 / 内存）：无定论。** 这正是 `openmir2-world-entry-serial-saves` 的待办。
-- **本机之外的大内存机器：无可用记录。** §1.4 的 ≥16GB / ≥24GB 是需求，不是现有资源。
+- **本机之外的大内存机器：无可用记录。** §1.4 的 ≥16GB / ≥24GB 是**修复前模型的旧上界参考**，不再是本卡的前置结论；
+  修复后 1000 档的实际内存需求未测。
