@@ -93,6 +93,12 @@ namespace BotSrv
             {
                 System.Environment.Exit(LoadMetricsSelfCheck.Run());
             }
+            // 卡 `openmir2-botsrv-recv-null-residual`：软关后残留排队帧在 `MShare.MySelf == null`
+            // 上下文里的确定性离屏复现（不启动服务/不连端口；红→绿牙 + 非 null 路径等价牙）。
+            if (args.Length > 0 && args[0] == "--selftest-recv-null-context")
+            {
+                System.Environment.Exit(RecvNullContextSelfCheck.Run());
+            }
             // 进程级兜底：线程入口/事件处理器之外的遗漏路径（例如 runThread 之外的线程）至少在
             // fatal.ndjson 留一行，并计入 unhandled_exception；未观察 Task 同理。
             AppDomain.CurrentDomain.UnhandledException += (sender, e) =>
