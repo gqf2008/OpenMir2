@@ -153,6 +153,23 @@ BotSrv 发送 CM_SELCHR / **登录串
 
 ---
 
+### 2.5 对照 oracle（A2 的结构层答案；速率层未测）
+
+- **结构层：① 是两栈共享的限制，不是 Rust 移植引入的。**
+  `mir2-rs/bins/game-svr/src/lib.rs` 的 `send_decision` / `send_gate_msg` 是 C# 参照实现
+  `ChannelMessageHandler.ProcessBufferSend` 的**逐行移植**：`SendChecked > 0` 时无条件 `return`
+  （丢帧）、单包超 `CheckBlock*10` 且累计为 0 时直接丢、发送前撞阈值先发 `GM_RECEIVE_OK`。
+  该口径在 `mir2-rs/bins/game-svr/src/gate_backpressure.rs` 模块头已逐条登记（含 C# 行号引用）。
+  ⇒ 若探针证实 ① 仍在新树丢帧，则**同一压力在 oracle 上也会丢**，「行为等价」要求我们先把
+  它的规模量出来，再决定是修 Rust 还是改窗口设计。
+- **速率层：oracle 的 1000 档进世界速率本轮没有数据。** 既有归档的 1000 档都是 Rust 栈
+  （C# 侧只有 DBSrv/LoginSrv 日志），没有 C# game-svr + 1000 bot 的 `in_world` 曲线。
+  因此「C# 是否同样卡在 327/425」**未测**，属 A2 的剩余项，需要窗口（本卡不做）。
+- **ramp 公式的形式**（给 A4 用，数值待探针标定）：若能测出发送口每批字节 `B`
+  与回显 RTT `R`（或 50ms 超时），则一条 gate 线的关键帧吞吐上限约为 `B / R` 帧预算/秒；
+  1000 个进世界所需字节 = `1000 × 15帧 × 平均帧长`。**ramp 时间应按这个信用模型算，
+  而不是把观测到的 5.3/s 当成常数**——前者随 AOI 帧量变化，后者只是某一轮的症候值。
+
 ## 3. 诊断探针轮设计（**不跑，先报批**）
 
 ### 3.1 目的（一句话）
