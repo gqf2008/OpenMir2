@@ -1401,6 +1401,38 @@ pub struct SimState {
     pub attack_weapon_strong: HashMap<i32, u16>,
 }
 
+/// **P2-3a 诊断**：`is_map_owned` 走到「归属表之外」兜底分支的次数（进程级、跨 World 累加）。
+///
+/// 该分支是 **fail-open**（按「拥有」放行）⇒ 生产若命中，说明有图在 `set_map_ownership`
+/// 之后被动态追加、或宿主忘了设归属。用例可 `reset_ownership_table_misses()` 后断言为 0。
+pub(crate) static OWNERSHIP_TABLE_MISSES: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+/// 首次命中「归属表之外」的 `map_id`（`usize::MAX` = 从未命中）。用于窗口报告点名。
+pub(crate) static OWNERSHIP_TABLE_MISS_FIRST_ID: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(usize::MAX);
+
+/// 读「归属表之外」兜底次数（诊断/用例判据）。
+#[must_use]
+pub fn ownership_table_misses() -> u64 {
+    OWNERSHIP_TABLE_MISSES.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 首次命中的 `map_id`（`None` = 从未命中）。
+#[must_use]
+pub fn ownership_table_miss_first_map_id() -> Option<usize> {
+    match OWNERSHIP_TABLE_MISS_FIRST_ID.load(std::sync::atomic::Ordering::Relaxed) {
+        usize::MAX => None,
+        id => Some(id),
+    }
+}
+
+/// 复位兜底计数器（仅测试/诊断用）。
+pub fn reset_ownership_table_misses() {
+    OWNERSHIP_TABLE_MISSES.store(0, std::sync::atomic::Ordering::Relaxed);
+    OWNERSHIP_TABLE_MISS_FIRST_ID.store(usize::MAX, std::sync::atomic::Ordering::Relaxed);
+}
+
 impl SimState {
     /// **P2-3a**：`map_id` 是否归本 World 拥有。
     ///
@@ -1408,7 +1440,35 @@ impl SimState {
     /// 缺省（[`SimState::with_maps`]）全拥有 ⇒ 既有路径恒真、零行为变化。
     #[must_use]
     pub fn is_map_owned(&self, map_id: usize) -> bool {
-        self.owned_maps.get(map_id).copied().unwrap_or(false)
+        match self.owned_maps.get(map_id) {
+            Some(owned) => *owned,
+            // **归属表之外的下标** = `set_map_ownership` 之后又直接 `maps.push` 进来的图
+            // （既有单测/开发路径）。这类图按「拥有」处理（= P2-3a 之前全拥有），**但这是
+            // fail-open 兜底 ⇒ 必须留痕**：
+            //   · `ownership_table_misses()` 进程级计数（精确，诊断/用例判据用它）；
+            //   · stderr warn 带 `map_id` 与累计次数（前 10 次每次一条，之后每 1000 次一条防刷屏）。
+            // 真正的分片宿主在 `with_maps` 后一次性 `set_map_ownership`（长度不等会 panic
+            // 「禁止半套归属」）⇒ 生产不该走到本支；走到即"动态加图"或"忘了设归属"。
+            // 越界下标仍返回 false（fail-closed；上游另有 `NoSuchMap` 门）。
+            None if map_id < self.maps.len() => {
+                let n =
+                    OWNERSHIP_TABLE_MISSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                // 首次命中的 map_id（CAS 只写一次，避免覆盖）。
+                let _ = OWNERSHIP_TABLE_MISS_FIRST_ID.compare_exchange(
+                    usize::MAX,
+                    map_id,
+                    std::sync::atomic::Ordering::Relaxed,
+                    std::sync::atomic::Ordering::Relaxed,
+                );
+                if n <= 10 || n.is_multiple_of(1000) {
+                    eprintln!(
+                        "WRN map_ownership: map_id={map_id} 落在归属表之外（动态追加/未设归属）⇒ 按「拥有」放行（fail-open 兜底）；累计 {n} 次，见 ownership_table_misses()"
+                    );
+                }
+                true
+            }
+            None => false,
+        }
     }
 
     /// **P2-3a**：本 World 拥有的 `map_id`（升序）。
@@ -17349,6 +17409,64 @@ mod tests {
                 "hides 事件 ({observer}, {target}) 缺观察者类别标注"
             );
         }
+    }
+
+    /// **P2-3a 缺口补测（R2）**：`spawn_monster_now_impl` 在 stub 图上必须 `false` 且**零抽数**。
+    ///
+    /// 与 `spawn_monster_precomputed` 同形；`impl` 是 `Command::SpawnMonster` 段的共用实现，
+    /// 也是 precomputed 之外的第二个生成入口（此前无用例）。
+    ///
+    /// 红检：删掉 `if !sim.is_map_owned(map_id)` 三行 ⇒ 掉落预算（在守卫之后）会抽数 ⇒ RNG 断言红。
+    #[test]
+    fn spawn_now_impl_refuses_stub_without_draws() {
+        let drop_list = vec![MonsterDropItem {
+            sel_point: 9,
+            max_point: 10,
+            item_name: "金币".into(),
+            count: 300,
+        }];
+        let mut w = World::with_maps(vec![(8, 8), (8, 8), (1, 1)]);
+        w.set_map_ownership(&[true, true, false]);
+        w.mon_random_add_value = 1; // 必出极品 ⇒ 若守卫失守，掉落预算一定抽数
+        w.item_catalog = vec![StdItem {
+            name: "金创药(小量)".into(),
+            dura_max: 1,
+            ..Default::default()
+        }];
+        let rng_before = format!("{:?}", w.rng);
+        let ok = {
+            let World { entities, sim, .. } = &mut w;
+            let mut ad = StageEntities::<MoveProbe>::new(entities.world_mut());
+            let mut access = crate::entity::StageAccess::new(&mut ad);
+            let mut record = TickRecord::default();
+            World::spawn_monster_now_impl(
+                &mut access,
+                sim,
+                &mut record,
+                2,
+                "僵尸",
+                0,
+                0,
+                2, // stub 图（不拥有）
+                1,
+                500,
+                3,
+                1,
+                0,
+                0,
+                5,
+                15,
+                &drop_list,
+            )
+        };
+        w.entities.refresh_views();
+        assert!(!ok, "stub 上禁止生成怪物");
+        assert_eq!(
+            format!("{:?}", w.rng),
+            rng_before,
+            "被拒时零抽数（门在掉落预算之前）"
+        );
+        assert_eq!(w.maps[2].cell(0, 0).count(), 0, "stub 上不得落格");
     }
 }
 

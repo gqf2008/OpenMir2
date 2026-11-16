@@ -28,11 +28,13 @@ stub 上**禁止实体**，所有换图/落格入口统一 fail-closed。**不�
 | `World::route_enter`（经 `walk_route_check` / `step_with_route`） | 视同 `EnterAnotherMap` 前置失败：不换图、不记 `MapChange` |
 | `World::base_object_move_player`（home move） | 视同 `FindMap == null`：`map_found=false`、不动、不抽数 |
 | `space_move::monster_space_move` | 返回 `false`；**在任何写入之前**返回（不摘旧格、不改坐标） |
+| `World::cast_space_move_spell_with`（玩家 SpaceMove/传送；`Random(11)` 门**之后**） | 视同 `FindMap == null`：`map_found=false`、**不动**、**不抽 `MapRandomMove`/`space_move_get_rand_xy`**；门后的 `RM_SPACEMOVE` 帧由宿主钩子在守卫**之前**发出（收件人按施法前旧图/旧坐标算，与目标图归属无关） |
 | `World::spawn_monster_precomputed` / `spawn_monster_now_impl` | `None` / `false`；门在掉落预算之前 ⇒ 被拒时零抽数 |
 | `World::enter_world_impl` | `false`（stub 不落格） |
 | `World::insert_merchant` / `insert_npc` | `None`；门在 ctor 取数之前 |
 | `World::spawn_clone`（防御） | `None`（主人不可能在非拥有图上） |
 
+`cast_space_move_spell_with` 是**玩家空间移动/传送**的落点门（不是怪物 `monster_space_move`）；
 `switch_map_inner` 与 `enter_map_at` 是玩家换图的**共同咽喉**：`route_enter` / home move /
 脚本与 GM 落点最终都经它们落地；其余入口在各自取数/写坐标之前加同类检查。
 

@@ -195,6 +195,9 @@ pub fn apply_map_file_cells(f: &MapFile, grid: &mut MapGrid) -> usize {
 /// **静默边界（登记）**：若 `world.maps` 比注册表**短**，本函数 `break` 掉后续图（生产里
 /// `sizes(reg)` 与 `reg.maps()` 同源 ⇒ 不可达；日志的 `cells` 变小是唯一线索）。同理
 /// `MapGrid::set_cell_attributes` 遇长度不符会**整图保持 Walk** 并返 0（fail-closed，不半灌）。
+/// **仅测试便捷入口**：生产路径一律走 [`apply_map_cells_owned`]（带 `owned` 掩码）。
+/// 保留本包装是为了让「单片/全拥有」的既有用例不必传空切片。
+#[cfg(test)]
 pub fn apply_map_cells(reg: &MapRegistry, world: &mut World) -> usize {
     apply_map_cells_owned(reg, world, &[])
 }
@@ -953,9 +956,11 @@ mod tests {
         let branch = src
             .find("if let Some(reg) = registry.as_ref()")
             .expect("sim_loop 的注册表支");
+        // **P2-3a**：生产调用点带 `owned` 掩码（`apply_map_cells_owned`）；锚必须跟着换，
+        // 否则锚失效会让本用例永远红（2026-11-16 实测：改生产后本用例 panic「调用点必须存在」）。
         let cells = src
-            .find("mapwire::apply_map_cells(reg, &mut world)")
-            .expect("生产装载调用点必须存在（sim_loop）");
+            .find("mapwire::apply_map_cells_owned(")
+            .expect("生产装载调用点必须存在（sim_loop，P2-3a 起为 apply_map_cells_owned）");
         let routes = src
             .find("let added = world.add_map_routes(specs);")
             .expect("route 装载调用点");

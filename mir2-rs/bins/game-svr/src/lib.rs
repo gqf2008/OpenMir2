@@ -1657,6 +1657,21 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 "INF",
                 "收到关服信号：停止接受新连接，转交 sim 线程保存在册会话"
             );
+            // **P2-3a 可观测性**：归属表之外的 fail-open 兜底次数必须进窗口日志
+            // （计数只活在 API 里等于没有）；报告侧据此点名 first_map_id。
+            {
+                let n = mir2_world_bevy::ownership_table_misses();
+                let first = mir2_world_bevy::ownership_table_miss_first_map_id()
+                    .map_or_else(|| "-".to_string(), |v| v.to_string());
+                if n == 0 {
+                    glog!("INF", "OWNERSHIP_TABLE_MISSES n=0 first_map_id=-");
+                } else {
+                    glog!(
+                        "WRN",
+                        "OWNERSHIP_TABLE_MISSES n={n} first_map_id={first}（fail-open 兜底命中）"
+                    );
+                }
+            }
             let _ = shutdown_tx.send(());
             notify.notify_one();
         });
@@ -25511,7 +25526,7 @@ fn sim_loop(
         // **格子属性**搬进 `world.maps`——oracle `Envirnoment.LoadMapData` 在加载时就把
         // `CellArray[nW * Height + nH].Attribute` 写死（`src/M2Server/Maps/Envirnoment.cs:903`/`943-951`：
         // `wBkImg` bit15 ⇒ `HighWall`、`wFrImg` bit15 ⇒ `LowWall`、**先判 High 再判 Low ⇒
-        // Low 覆盖 High**）。判据来源 = `mir2_envir` 已解析的那份（[`mapwire::apply_map_cells`]，
+        // Low 覆盖 High**）。判据来源 = `mir2_envir` 已解析的那份（[`mapwire::apply_map_cells_owned`]，
         // 不另写解析）。**次序硬约束**：必须早于下面的 `add_map_routes`——oracle 先
         // `LoadMapData`（写属性）后 `Maps.LoadMapInfo` 尾段的 `MapManager.AddMapRoute`
         // （`src/GameSrv/Maps/Maps.cs:361-379`），而 `AddMapRoute` 有 `cellSuccess && cellInfo.Valid`

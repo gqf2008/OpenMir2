@@ -333,10 +333,17 @@ impl World {
         ctor_tick: i64,
     ) -> Result<i32, SessionError> {
         let World { entities, sim, .. } = self;
-        let Some(sess) = sim.sessions.get_mut(chr_name) else {
+        // **P2-3a（借用顺序）**：归属检查要读 `sim`（不可变），而下面的会话是 `get_mut`（可变）
+        // ⇒ 所有「图」的校验必须在取会话可变借用**之前**做完。为保持与原实现**完全相同的错误优先级**
+        // （NoSession → AlreadyInWorld → NoSuchMap → MapNotInShard），这里先用不可变借用做前两判。
+        if sim.sessions.get(chr_name).is_none() {
             return Err(SessionError::NoSession);
-        };
-        if sess.stage == WorldStage::InWorld {
+        }
+        if sim
+            .sessions
+            .get(chr_name)
+            .is_some_and(|s| s.stage == WorldStage::InWorld)
+        {
             return Err(SessionError::AlreadyInWorld);
         }
         if map_id >= sim.maps.len() {
@@ -347,6 +354,9 @@ impl World {
             sim.note_unowned_refusal();
             return Err(SessionError::MapNotInShard);
         }
+        let Some(sess) = sim.sessions.get_mut(chr_name) else {
+            return Err(SessionError::NoSession);
+        };
         // **F1（reviewer-21 `993d3e7a`，卡 `openmir2-makeghost-lifecycle-m3` 返工）**：
         // `soft_close` 之后 `stage=Left` 但 `actor_id=Some`（遗留 ghost，M-3 的 `MakeGhost` 语义）。
         // **重进之前必须收走它**——否则同名 ghost 会永久留在 `entities` 里：

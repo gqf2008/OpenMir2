@@ -8,7 +8,8 @@
 //! - `World::walk_route_check`（route_enter 的对外入口，含 `RouteHop.dst_map_id`）；
 //! - `World::base_object_move_player`（home move / BaseObjectMove）；
 //! - `space_move::monster_space_move`（怪物的 SpaceMove 同服支）；
-//! - `World::spawn_monster_precomputed` / `World::enter_world`（落格入口）；
+//! - `World::cast_space_move_spell_with`（玩家 SpaceMove/传送；门后守卫，零取数）；
+//! - `World::spawn_monster_precomputed` / `World::spawn_monster_now_impl` / `World::enter_world`（落格入口）；
 //! - `World::insert_merchant` / `World::insert_npc`（固定 NPC/商人落格）。
 //!
 //! 未单独覆盖的两处（结构性不可达，只保留防御检查）：`World::spawn_clone`（主人已在
@@ -352,4 +353,87 @@ fn single_shard_enter_and_switch_are_unchanged() {
     let id = place_player(&mut w, "p", 2, 2);
     assert!(w.switch_map("p", 1, 3, 3).is_ok(), "单片全拥有 ⇒ 换图照旧");
     assert_eq!(w.entities.get(id).expect("实体在").map_id, 1);
+}
+
+/// **P2-3a 缺口补测（R1）**：玩家 SpaceMove/传送（`cast_space_move_spell_with`）在**门之后**判归属。
+///
+/// 三条一起钉（只钉「没移动」不够——抽数会污染后续随机序列，是隐性状态变更）：
+/// ① `map_found=false`（视同 `FindMap == null`）、实体位置/地图不变；
+/// ② **零取数**：门后钩子处与返回后的 RNG 状态必须相同（`MapRandomMove`/`space_move_get_rand_xy` 都在守卫之后）；
+/// ③ 结果面：`result=true`（`Random(11)` 门已通过），但调用方据此不发 `SM_SPACEMOVE`（`map_found=false`）。
+///
+/// 红检：把 `if !self.is_map_owned(dst)` 那三行删掉 ⇒ 本用例在 ②（RNG 变了）与 ①（map_found 变 true）同时变红。
+#[test]
+fn space_move_spell_refuses_unowned_after_gate_without_draws() {
+    let mut w = world3();
+    let id = place_player(&mut w, "p", 2, 2);
+    let before = {
+        let e = w.entities.get(id).expect("实体");
+        (e.map_id, e.x, e.y)
+    };
+    let mut hook_rng: Option<String> = None;
+    // level=5 ⇒ `random_below(11) < 5*2+4 = 14` 恒真 ⇒ Random(11) 门必过（守卫在门之后）。
+    let out = w.cast_space_move_spell_with("p", id, 5, Some(2), |world| {
+        hook_rng = Some(format!("{:?}", world.rng));
+    });
+    assert!(out.result, "Random(11) 门恒过 ⇒ result=true");
+    assert!(!out.map_found, "非拥有图 ⇒ 视同 FindMap == null");
+    assert!(
+        !out.moved && !out.space_moved,
+        "未落地（`space_moved=false` 即 oracle `SpaceMoved=false` ⇒ 调用方不发 SM_SPACEMOVE）"
+    );
+    assert_eq!((out.map_id, out.x, out.y), before, "outcome 不动");
+    let after = {
+        let e = w.entities.get(id).expect("实体仍在");
+        (e.map_id, e.x, e.y)
+    };
+    assert_eq!(after, before, "实体位置/地图不变（不摘旧格、不改坐标）");
+    assert_eq!(
+        hook_rng.as_deref(),
+        Some(format!("{:?}", w.rng).as_str()),
+        "门后到返回之间不得取数（MapRandomMove 在守卫之后）"
+    );
+    assert_eq!(w.maps[2].cell(0, 0).count(), 0, "stub 上不得落格");
+}
+
+/// **P2-3a 可观测性（fail-open 兜底必须留痕）**——**合成一条用例**，因为计数是**进程级**的：
+/// 拆成两条并行跑会互相污染（2026-11-17 实测：一条 reset 后另一条并发 +1 ⇒ 假红）。
+///
+/// 判三件事：
+/// ① 真实分片配置（`with_maps` + `set_map_ownership`，长度相等）⇒ 逐 id 调用后计数**仍为 0**；
+/// ② `set_map_ownership` 之后动态 `maps.push` 的图 ⇒ 走兜底（按「拥有」放行，= P2-3a 前行为）**且计数 +1**、
+///    `ownership_table_miss_first_map_id()` 记下该 id；
+/// ③ 越界下标仍 fail-closed（`false`）**且不计数**。
+#[test]
+fn ownership_table_misses_only_on_dynamic_maps() {
+    crate::world::reset_ownership_table_misses();
+    let mut w = world3();
+    for id in 0..3 {
+        let _ = w.is_map_owned(id);
+    }
+    assert_eq!(
+        crate::world::ownership_table_misses(),
+        0,
+        "真实配置（with_maps + set_map_ownership）不得命中 fail-open 兜底"
+    );
+
+    w.maps.push(crate::map::MapGrid::new(8, 8)); // 归属表仍只有 3 项
+    assert!(w.is_map_owned(3), "兜底按「拥有」放行（保持 P2-3a 前行为）");
+    assert_eq!(
+        crate::world::ownership_table_misses(),
+        1,
+        "兜底命中必须留痕（计数是诊断/判据的唯一精确信号）"
+    );
+    assert_eq!(
+        crate::world::ownership_table_miss_first_map_id(),
+        Some(3),
+        "首次命中的 map_id 必须可点名"
+    );
+
+    assert!(!w.is_map_owned(99), "越界仍 fail-closed");
+    assert_eq!(
+        crate::world::ownership_table_misses(),
+        1,
+        "越界下标不算兜底命中"
+    );
 }
