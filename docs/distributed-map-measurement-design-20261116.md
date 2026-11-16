@@ -214,7 +214,7 @@ AVI = (drop_noncritical_frames + noncritical_sent_frames) / 500 / window_sec
 | A3 | 网关无背压恶化 | `overflow_frames=0`、`degrade_inworld_frames=0`、`close_inworld_sessions=0` | RED |
 
 - 阈值 0.80 / 0.90 在**跑之前**登记；跑完不得改。
-- AVI 的跨轮方差从三份同图归档看很小（A 492 帧/s、B 486、profiled 449），所以 20% 的门槛不是噪声门。
+- AVI 的跨轮方差从三份同图归档看很小（A 492 帧/s、B 486、profiled 445），所以 20% 的门槛不是噪声门。
 - A1 的物理含义：如果分散只降低 game-svr 的发送编码（`HostAoiDownlink` 的 3–8%），而全局扫描不变，
   AVI 仍会明显下降——那说明收益在**网关侧**，不在 game-svr 工作段。两种结果都必须如实写。
 
@@ -222,7 +222,7 @@ AVI = (drop_noncritical_frames + noncritical_sent_frames) / 500 / window_sec
 
 - **主对照 = 同树 D3**。D1/D2 的所有差值只对 D3 算，不跨树。
 - 既有同图数据（W2 `c74b4ce42`、A/B `57a0c9f12`）只作**背景量级**，用于检查新数据是否落在
-  已知区间（work 约 43.7–50.2ms、inbound 24.9–30.7ms、AVI 449–492 帧/s、实体均值约 4.7–4.9k）；
+  已知区间（work 约 43.7–50.2ms、inbound 24.9–30.7ms、AVI 445–492 帧/s、实体均值约 4.7–4.9k）；
   **不得**把跨树差值写成「分散收益」。
 - 如果 D3 无法在本窗口跑（例如 binary_stamp 已漂移），则本轮**只能出 D1/D2 的绝对量**，
   不得出「分散 vs 同图」的结论。
