@@ -29071,6 +29071,32 @@ fn sim_loop(
                                     )
                                 }
                             }
+                        } else if ident == mir2_protocol::messages::DBR_LOADHUMANRCD {
+                            // **取档应答 recog != 1**（卡 `openmir2-entry-load-reply-buckets`）：修复前
+                            // 这里**完全静默**——应答被取走、不打日志、不计 `enter_attempt` ⇒
+                            // 「logon - attempt」的缺口是「没回包」还是「回了失败码」分不开。
+                            // 只计数与采样，不改任何分支。
+                            if let Some(line) = telemetry::record_load_reply_other() {
+                                glog!("INF", "{}", line);
+                            }
+                            if telemetry::sample_load_reply_other() {
+                                let head_hex: String = reply
+                                    .packet
+                                    .iter()
+                                    .take(32)
+                                    .map(|b| format!("{b:02x}"))
+                                    .collect();
+                                glog!(
+                                    "WRN",
+                                    "ENTRY_SAMPLE load_reply_recog_other queryId={} account={} recog={} message_len={} packet_len={} packet_head_hex={}",
+                                    qid,
+                                    account,
+                                    recog,
+                                    reply.message.len(),
+                                    reply.packet.len(),
+                                    head_hex
+                                );
+                            }
                         }
                     }
                     None => still.push((
@@ -92164,7 +92190,7 @@ mod entry_telemetry_wiring {
     /// 唯一性：每个计数恰好一个调用点（多一个 = 有人加了第二条路径，读数会重复计）。
     #[test]
     fn each_counter_has_exactly_one_call_site() {
-        for name in ["logon", "attempt", "ok"] {
+        for name in ["logon", "attempt", "ok", "load_reply_other"] {
             let n = needle(name);
             assert_eq!(SRC.matches(&n).count(), 1, "{n} 必须恰好一个调用点");
         }
@@ -92194,6 +92220,25 @@ mod entry_telemetry_wiring {
         assert!(
             seg.contains(&needle("attempt")),
             "record_attempt 必须在 DBR_LOADHUMANRCD(1100) recog==1 分支入口"
+        );
+    }
+
+    #[test]
+    fn other_bucket_sits_in_load_reply_recog_other_arm() {
+        let anchor = format!(
+            "}} else if ident == {} {{",
+            "mir2_protocol::messages::DBR_LOADHUMANRCD"
+        );
+        assert_eq!(SRC.matches(&anchor).count(), 1, "recog!=1 分支必须唯一");
+        let i = SRC.find(&anchor).expect("recog!=1 分支");
+        let seg = &SRC[i..(i + 1500).min(SRC.len())];
+        assert!(
+            seg.contains(&needle("load_reply_other")),
+            "record_load_reply_other 必须在该分支里（删掉分支 ⇒ 本用例红）"
+        );
+        assert!(
+            seg.contains("sample_load_reply_other"),
+            "该分支的样本采样也必须接线（否则只有计数、没有样本）"
         );
     }
 
