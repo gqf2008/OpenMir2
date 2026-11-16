@@ -23,10 +23,15 @@ namespace GameSrvTest;
 /// 把 `return found` 改回 `return true` ⇒ 牙（返回值）红；把异常分支的 Error 降成 Warn ⇒ 牙④红。
 /// </summary>
 [TestFixture]
+[Explicit("需要本机 MySQL（root/空口令）；门禁以 --filter 显式跑。干净环境直接 dotnet test 不跑本 fixture 是设计，不是遗漏。")]
 public class DBSrvGetQryCharTest
 {
-    private const string Db = "mir2_gq_test";
+    // 库名带进程后缀：并发跑不互踩；固定名 DROP 会误删别人的库。
+    private static readonly string Db = $"mir2_gq_test_{Environment.ProcessId}";
+    /// 空库：`Open` 成功但 `characters` 表不存在 ⇒ 触发 `GetQryChar` 的 catch（牙④的真实路径）。
+    private static readonly string DbNoTable = $"mir2_gq_test_{Environment.ProcessId}_nochr";
     private static string Cs => $"server=127.0.0.1;uid=root;pwd=;database={Db};";
+    private static string CsNoTable => $"server=127.0.0.1;uid=root;pwd=;database={DbNoTable};";
 
     private sealed class CapturingSink : ILogEventSink
     {
@@ -65,7 +70,10 @@ public class DBSrvGetQryCharTest
         using var conn = new MySqlConnection("server=127.0.0.1;uid=root;pwd=;");
         conn.Open();
         Exec(conn, $"DROP DATABASE IF EXISTS `{Db}`");
+        Exec(conn, $"DROP DATABASE IF EXISTS `{DbNoTable}`");
         Exec(conn, $"CREATE DATABASE `{Db}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
+        // 只建库、**不建 characters 表**：给牙④制造"Open 成功但查询抛异常"。
+        Exec(conn, $"CREATE DATABASE `{DbNoTable}` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_general_ci");
         Exec(conn, $"CREATE TABLE `{Db}`.`characters` (" +
                    "`Id` INT NOT NULL PRIMARY KEY, `ChrName` VARCHAR(32) NOT NULL, `Job` TINYINT NOT NULL, " +
                    "`Hair` TINYINT NOT NULL, `Sex` TINYINT NOT NULL, `Level` SMALLINT NOT NULL)");
@@ -77,16 +85,29 @@ public class DBSrvGetQryCharTest
         using var conn = new MySqlConnection("server=127.0.0.1;uid=root;pwd=;");
         conn.Open();
         Exec(conn, $"DROP DATABASE IF EXISTS `{Db}`");
+        Exec(conn, $"DROP DATABASE IF EXISTS `{DbNoTable}`");
     }
+
+    private Serilog.ILogger? _prevLogger;
 
     [SetUp]
     public void InstallSink()
     {
+        _prevLogger = LogService.Logger;
         _sink = new CapturingSink();
         LogService.Logger = new LoggerConfiguration()
             .MinimumLevel.Verbose()
             .WriteTo.Sink(_sink)
             .CreateLogger();
+    }
+
+    [TearDown]
+    public void RestoreLogger()
+    {
+        if (_prevLogger is not null)
+        {
+            LogService.Logger = _prevLogger;
+        }
     }
 
     private static void Exec(MySqlConnection conn, string sql)
@@ -154,23 +175,49 @@ public class DBSrvGetQryCharTest
     }
 
     [Test]
-    public void BadConnection_LogsError_NotWarn()
+    public void OpenFailure_LogsOpeningError_Exactly_NotWarn()
     {
-        // 端口不可达 ⇒ 连接失败路径（与「无行」必须可区分）
+        // 端口不可达 ⇒ `DBContext.Open` 自己吞掉异常并把 success 置 false（DBContext.cs:20-35）
+        // ⇒ 走 `GetQryChar` 的「打开连接失败」支。**这条只钉该支，文案精确匹配，不用「或」。**
         var bad = new PlayDataStorage(new StorageOption
         {
             DBType = "MySQL",
-            ConnectionString = "server=127.0.0.1;port=13306;uid=root;pwd=;database=mir2_gq_test;Connection Timeout=1;",
+            ConnectionString = "server=127.0.0.1;port=13306;uid=root;pwd=;database=" + Db + ";Connection Timeout=1;",
         });
         QueryChr? rcd = null;
         var ok = bad.GetQryChar(1, ref rcd);
-        Assert.That(ok, Is.False, "连不上库必须 fail-closed（不得伪装成有记录）");
-        var hasError = _sink.Has(LogEventLevel.Error, "GetQryChar 异常") ||
-                       _sink.Has(LogEventLevel.Error, "打开连接失败");
-        Assert.That(hasError, Is.True, "异常/连接失败必须是 Error 级且文案可区分（牙④）");
+        Assert.That(ok, Is.False, "连不上库必须 fail-closed");
+        Assert.That(
+            _sink.Has(LogEventLevel.Error, "GetQryChar 打开连接失败"),
+            Is.True,
+            "必须是「打开连接失败」这一支（精确文案）");
         Assert.That(
             _sink.Has(LogEventLevel.Warning, "GetQryChar 无行"),
             Is.False,
-            "异常路径不得伪装成「无行」的 warn");
+            "打开失败不得伪装成「无行」的 warn");
+    }
+
+    [Test]
+    public void QueryException_LogsExceptionError_Exactly_NotWarn()
+    {
+        // **牙④的真实路径**：`Open` 成功（库存在）但 `characters` 表不存在 ⇒ `ExecuteReader` 抛
+        // ⇒ 进入 `GetQryChar` 的 catch ⇒ `Error($"[QueryChr] GetQryChar 异常 id=…", ex)`。
+        // 删掉 Query.cs 里 catch 的这行 Error ⇒ 本用例必红（变异已重放）。
+        var noTable = new PlayDataStorage(new StorageOption
+        {
+            DBType = "MySQL",
+            ConnectionString = CsNoTable,
+        });
+        QueryChr? rcd = null;
+        var ok = noTable.GetQryChar(1, ref rcd);
+        Assert.That(ok, Is.False, "查询异常必须 fail-closed");
+        Assert.That(
+            _sink.Has(LogEventLevel.Error, "GetQryChar 异常"),
+            Is.True,
+            "异常路径必须是 Error 且文案含「异常」（精确文案，不用「或」）");
+        Assert.That(
+            _sink.Has(LogEventLevel.Warning, "GetQryChar 无行"),
+            Is.False,
+            "异常不得伪装成「无行」的 warn");
     }
 }
