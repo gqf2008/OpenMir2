@@ -107,6 +107,7 @@ pub mod run_frames;
 pub mod run_segments;
 pub mod selloff;
 pub mod sessionwire;
+pub mod shard;
 pub mod shop;
 pub mod slave;
 pub mod smframe;
@@ -594,6 +595,17 @@ async fn run_inner(args: &[String]) -> Result<()> {
         .first()
         .map_or_else(config::default_path, std::path::PathBuf::from);
     let cfg = config::load(&conf)?;
+    // **P2-1 世界分片骨架**（卡 `openmir2-shard-runtime-skeleton`，设计 `docs/10k-shard-design-20261116.md` §2.1）：
+    // `MIR2_SHARDS` **默认 1**；未设/显式 1 ⇒ 单片布局、下方所有切片行为与 master 逐字节相同（本段不打印日志）。
+    // 非法值（空/非整数/0/超上界）= fail-closed，与 `MIR2_RNG_SEED`/`MIR2_CLOCK_MS` 同款纪律：
+    // 不许「以为配了分片、其实没配」。地图组与跨片守卫见下方 P2-2 段。
+    let shard_cfg = shard::ShardConfig::from_env()?;
+    if !shard_cfg.is_single() {
+        anyhow::bail!(
+            "MIR2_SHARDS={}：P2-1 骨架阶段只支持 1 片（地图组划分与跨片拒绝路径在 P2-2）",
+            shard_cfg.count()
+        );
+    }
     // **卡 `openmir2-test-permission-seam`**：测试注入缝，**默认关**（不设 ⇒ 权限仍恒 0，oracle 行为不变）。
     // 非法值 ⇒ fail-closed（与 `MIR2_RNG_SEED` / `MIR2_CLOCK_MS` 同款纪律：不许「以为注入了、其实没有」）。
     // **卡 `openmir2-ids-keepalive-timeout`**：LoginSrv 链路观测缝，默认关（不设 ⇒ 一行不多）。
