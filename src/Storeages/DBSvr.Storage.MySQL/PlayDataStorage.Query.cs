@@ -575,8 +575,12 @@ namespace DBSrv.Storage.MySQL
             context.Open(ref success);
             if (!success)
             {
+                // fail-closed + 可诊断：连不上库**不能**伪装成「有记录」（否则调用方读 null 记录 NRE）。
+                LogService.Error($"[QueryChr] GetQryChar 打开连接失败 id={nIndex} ⇒ 按无行处理（fail-closed）");
                 return false;
             }
+            // **行存在性必须回传**：查不到行走调用方的 Warn（带 account），不得 `return true`。
+            bool found = false;
             try
             {
                 MySqlConnector.MySqlCommand command = context.CreateCommand();
@@ -585,6 +589,7 @@ namespace DBSrv.Storage.MySQL
                 using MySqlConnector.MySqlDataReader dr = command.ExecuteReader();
                 if (dr.Read())
                 {
+                    found = true;
                     queryChrRcd = new QueryChr();
                     queryChrRcd.Name = dr.GetString("ChrName");
                     queryChrRcd.Job = dr.GetByte("Job");
@@ -595,16 +600,25 @@ namespace DBSrv.Storage.MySQL
                 dr.Close();
                 dr.Dispose();
             }
-            catch (Exception)
+            catch (Exception ex)
             {
-                LogService.Error("[Exception] PlayDataStorage.GetQryChar");
+                // **与「无行」区分**：异常走 Error（带 id 与异常对象），无行走调用方的 Warn。
+                // 已知限制：返回值上两者仍不可区分（都 false）——三态 API 见卡
+                // `openmir2-dbsrv-getqrychar-tristate`。
+                LogService.Error($"[QueryChr] GetQryChar 异常 id={nIndex}", ex);
                 return false;
             }
             finally
             {
                 context.Dispose();
             }
-            return true;
+            if (!found)
+            {
+                // **内层 warn（可重复回归牙的落点）**：只带 id（存储层不持有 account）；
+                // 外层 account/id/name 的 warn 在 UserService，作为用户面/栈级证据。
+                LogService.Warn($"[QueryChr] GetQryChar 无行 id={nIndex}");
+            }
+            return found;
         }
 
         private void QueryItemAttr(StorageContext context, int playerId, ref ServerUserItem[] userItems)

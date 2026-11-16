@@ -481,6 +481,13 @@ namespace DBSrv.Services.Impl
                                 sSendMsg = sSendMsg + sChrName + "/" + chrRecord.Job + "/" + chrRecord.Hair + "/" + chrRecord.Level + "/" + chrRecord.Sex + "/";
                                 nChrCount++;
                             }
+                            else
+                            {
+                                // **fail-closed + 可诊断**（卡 openmir2-dbsrv-getqrychar-failopen）：
+                                // 索引里有条目但 characters 无行 ⇒ 按「无角色」处理，**不读 null 记录**、
+                                // 不崩、照常回 SM_QUERYCHR；这条 Warn 是**数据不一致**的可见信号（异常路径另有内层 Error，二者不要混读）。
+                                LogService.Warn($"[QueryChr] 候选无角色行 account={sAccount} id={nIndex} name={sChrName} ⇒ 按无角色处理");
+                            }
                         }
                     }
                 }
