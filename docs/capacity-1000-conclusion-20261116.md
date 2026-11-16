@@ -24,6 +24,28 @@
 - 干净轮 P99/max 下降而 P50/P90 不变 ⇒ 尾部仪器开销的典型签名；且与既有「诊断 A 臂 180s 无 counters」的 **P99=94** 精确吻合。
 - ⇒ **上一轮的 `tick P99=110ms` 是 `dotnet-counters` 的仪器代价，不是真实 tick 尾部；1000 档在干净条件下 tick P99 = 94ms ≤ 100ms。**
 
+### 1.1 二进制来源（可复核，「数字跟着二进制走」）
+
+两轮跑的都是 `E:\UserFleet\load-1000-clean360-20261116\bin\rust-target\release\`（clean 轮是 cap 轮
+`load-1000-cap360-…\bin\rust-target\release\` 的**逐字节副本**，四个 exe sha256 逐一相等）：
+
+| 二进制 | sha256（前 16） | size |
+| --- | --- | --- |
+| `game-svr.exe` | `d9b783297850ee58` | 8,926,720 |
+| `login-gate.exe` | `429bf30f1f928a7b` | 1,006,080 |
+| `sel-gate.exe` | `a766ac6d25bd93b0` | 1,062,912 |
+| `game-gate.exe` | `c1705365e7842575` | 1,550,848 |
+
+构建来源由同目录 `bin\build-head.txt`（构建脚本产物，写于 20:04:16＝构建完成 20:03–20:04 后 12 s）自证：
+`HEAD=2374d64277c09ad6c61dd76956dac7fce0fc7ea7`，且该 commit **是 master 的祖先**（`git merge-base --is-ancestor` 已核）。
+完整清单见归档 `bin-provenance.json`（含 BotSrv / C# DBSrv / LoginSrv 的 sha256）。
+
+**口径限制（必读）**：本归档的构建来源是 `bin\build-head.txt` 约定，**不是** `mir2-build-stamp/1` 的
+`*.build.json`（UserFleet 树没有该戳）。同日发现 `E:\UserTemp\stack-rel-target-w83\` 存在「重建但戳未更新」
+（exe sha `6de1dd06…` / 8,926,720 B / mtime 11-16T14:11 vs 戳 `c3a33338…` / 8,851,456 B / 11-15T10:58）——
+**那是另一棵树，与本文件两轮无关**；机制缺口（重建入口强制产戳 + 消费侧校验 `mtime−built_at`）已登记到
+`openmir2-csharp-stack-binary-provenance` 卡。
+
 ## 2. 分档闸门（两轮一致）
 
 | 闸门 | 容量轮 | 干净轮 |
@@ -70,6 +92,25 @@
 > 开 counters 会抬尾部（同窗口实测 P99 110 vs 94、max 172 vs 125），把仪器代价误当成夹具/实现差异。
 > 新夹具以「1000 档与 C# BotSrv 数据量级一致」为验收，因此**本文件的 1000 档基线（进世界 1000/1000、速率 12.81/s、
 > 解码帧量、延迟量级）是新夹具的对照基准**，须保留。
+
+> **②1,500 档「只进 613」的根因是建角速率，不是服务器容量**（2026-11-16 补记）。
+> 建角经 sel-gate → LoginSrv → DBSrv **串行落库**，实测 **≈10.49 角色/s**；sel-gate
+> `KeepConnectTimeOut=60000ms`（`E:\MirServer\SelGate\Config.ini`）⇒ 排队超过 60 s 的会话被断开。
+> 1,500 个角色 ≈143 s，远超 60 s ⇒ 613/1500 进世界是**超时丢会话**，与 game-svr 承载无关。
+> **前置推算**：每批 ≤ **600**（60 s × 10.49 ≈ 630），分批预建角、批间重连；
+> 账号名 **4–12 字符**、角色名 **3–14 字符**（`src/GameGate/Services/ClientSession.cs:1080`）。
+> 与「10k 未实测」并列：**任何 1,500+ 档报数前，先证明预建角已完成**。
+> **补：建角还有一条按会话的 1 秒守卫**——`CM_QUERYCHR` 会刷新 `dwChrTick`，之后 **>1000 ms** 才能发
+> `CM_NEWCHR`（否则 DBSrv 只打 `[Hacker Attack] NEWCHR` 并**静默不回包**，客户端只能超时）。
+> 该计时器在 `userInfo`（单会话）上 ⇒ **每个账号各自等 1.2 s、可并行**；只有「单连接串行」才是 1 个/s。
+> 因此批量预建角的真实约束是 **sel-gate 60 s 排队超时 + DBSrv 吞吐**，不是 N×1 s。
+
+
+> **③本文件的「进世界速率 12.81/s」绑定在当时的 DB 规模上**（2026-11-16 补记）。
+> C# DBSrv 取档对 `characters_bagitem` / `characters_storageitem` / `characters_item` **无 PlayerId 索引**
+> （`EXPLAIN` 为 `type=ALL`），每次进世界全表扫 ≈96 万行 ⇒ **速率按 1/行数 下降**。
+> 实测：1,498 个后加角色把 bagitem 由 337,733 撑到 406,687（**1.204×**），同期速率 13.0→10.5/s（**1.238×**）。
+> ⇒ **引用本文件的速率/进世界延迟时，必须同时给 DB 行数**；换库/清库后不能直接横向比较。
 
 - **2000 档、多 gate 线、C# oracle 1000 档对照**未测；
 - **分散地图**未测（本轮仍是同图最坏形态；设计见 `docs/distributed-map-measurement-design-20261116.md`）；

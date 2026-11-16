@@ -77,5 +77,10 @@ B 轮的慢 tick 快照：**430 行 / 1.91MB**，平均 **4.4KB/行**、最大 *
   BotSrv 4GiB 堆上限、网关背压丢帧、进世界串行载入三项阻塞，未形成有效结论；**这三项不解决，任何重跑都会重演同类失败**。
   已单独立卡 `openmir2-load-1000-rerun-prereq`，卡面写清「重跑前必须先解除哪一项」。
 - **分散地图 / 不同密度**：以上全部是 500 个 bot **同一张图**（AOI 扇出最坏形态）；分散场景未测。
+- **二进制来源未记录**：三轮归档（`load-360-recvnull-verify-*` / `load-360-slowsep-A/B-*`）里**没有**
+  `bin-provenance.json` / `build-head.txt` / `*.build.json`（`artifacts.sha256.json` 按设计排除 `bin\`）⇒
+  本文件的数**绑定到树 ref**（`c74b4ce42` / `57a0c9f12`），**不绑定到 exe 字节**。要按当前口径重新引用，
+  须用 `mir2-build-stamp/1` + `build-head.txt` 机制重跑一次并在归档里落戳（机制缺口见
+  `openmir2-csharp-stack-binary-provenance` 卡）。
 - **10k 外推**：见 `docs/capacity-model-20261114.md` 与 `docs/10k-shard-design-20261116.md`；
   本文件只对 500 档实测负责，不做 10k 结论。
