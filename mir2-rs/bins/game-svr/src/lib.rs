@@ -65,6 +65,7 @@ mod simmonsterai_bench;
 mod state_log;
 mod storage;
 mod strings;
+mod telemetry;
 mod tick_profile;
 mod users;
 
@@ -26472,6 +26473,11 @@ fn sim_loop(
     // 见 [`drain_monster_walk_downlink`]）。
     let mut monster_walk_seen: std::collections::HashMap<i32, (usize, i32, i32)> =
         std::collections::HashMap::new();
+    // **入口三段心跳**（卡 `openmir2-game-svr-entry-triple`）：每 5s 一行汇总；与上一行相同
+    // 就不打（空载不刷屏）。补「整百才打」在尾段（如 975/1000）留下的空档；被强杀时最多丢
+    // 最后一个 5s 窗口，正常关服在下面的关服分支补一行终值。只打印、不改任何分支。
+    let mut entry_telemetry_next_ms: i64 = 0;
+    let mut entry_telemetry_last: Option<String> = None;
     loop {
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
@@ -26504,10 +26510,20 @@ fn sim_loop(
                 summary.timed_out,
                 summary.elapsed.as_millis()
             );
+            // **入口三段终值**（卡 `openmir2-game-svr-entry-triple`）：关服前补一行。
+            glog!("INF", "{}", telemetry::summary_line());
             let _ = shutdown_done_tx.send(summary);
             return;
         }
         host_prof.end("HostShutdown", t);
+        if world.clock_ms >= entry_telemetry_next_ms {
+            entry_telemetry_next_ms = world.clock_ms + 5_000;
+            let line = telemetry::summary_line();
+            if entry_telemetry_last.as_deref() != Some(line.as_str()) {
+                glog!("INF", "{}", line);
+                entry_telemetry_last = Some(line);
+            }
+        }
         let next = std::time::Instant::now() + tick;
         let t = host_prof.begin();
         while let Ok(ev) = ev_rx.try_recv() {
@@ -27640,6 +27656,10 @@ fn sim_loop(
                         info.gate_idx
                     );
                     engine.add_to_load_rcd_list(info);
+                    // **入口三段计数 ①**（卡 `openmir2-game-svr-entry-triple`）：只计数、不改分支。
+                    if let Some(line) = telemetry::record_logon() {
+                        glog!("INF", "{}", line);
+                    }
                 }
                 GateEvent::RegisterGate { service_id, tx } => {
                     gates.insert(service_id, tx);
@@ -27784,6 +27804,10 @@ fn sim_loop(
                         );
                         // `PlayerDataService.cs:150`：`nIdent == DBR_LOADHUMANRCD && nRecog == 1 && data.Length > 0`
                         if ident == mir2_protocol::messages::DBR_LOADHUMANRCD && recog == 1 {
+                            // **入口三段计数 ②**：拿到角色数据、开始进世界流程。只计数、不改分支。
+                            if let Some(line) = telemetry::record_attempt() {
+                                glog!("INF", "{}", line);
+                            }
                             // **orphan 编码器/搜索基准（卡 `openmir2-searchtick-origin-parity`）**：
                             // oracle `PlayObject.cs:901` 的 `SearchTick = GetTickCount()` 在
                             // `new PlayObject()`（`WorldServer.cs:234`，紧跟 `GetPlayData` 之后）写一次，
@@ -28060,6 +28084,10 @@ fn sim_loop(
                                             login_ctor_tick,
                                         ) {
                                             Ok(id) => {
+                                                // **入口三段计数 ③**：真正进入世界。只计数、不改分支。
+                                                if let Some(line) = telemetry::record_ok() {
+                                                    glog!("INF", "{}", line);
+                                                }
                                                 // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
                                                 // 会话/actor 重置——同名角色重新登录时清掉上一会话
                                                 // 的累计值，避免 `af` 跨登录继承造成假绿。
@@ -92114,5 +92142,76 @@ mod t279_dress_eff_tests {
                 "{label} 不得发 800"
             );
         }
+    }
+}
+
+/// 卡 `openmir2-game-svr-entry-triple` 的**接线牙**。
+///
+/// 三个计数点都在 `run_sim_loop` 的巨型臂里（走通要真 DB），没有可单测的边界；计数的
+/// **行为**由 `telemetry::tests` 覆盖，这里只钉「接线在不在、在不在**对的分支**」。
+/// 判据：删掉任一 `record_*` 调用 ⇒ 对应用例红（三条用例互不覆盖）。
+///
+/// 锚点与 needle 都在**运行时拼**，不在本文件里出现完整字面量——否则
+/// `include_str!("lib.rs")` 会把这些字面量本身数进去（本用例曾因此假红：left=2）。
+#[cfg(test)]
+mod entry_telemetry_wiring {
+    const SRC: &str = include_str!("lib.rs");
+
+    fn needle(name: &str) -> String {
+        format!("telemetry::record_{name}()")
+    }
+
+    /// 唯一性：每个计数恰好一个调用点（多一个 = 有人加了第二条路径，读数会重复计）。
+    #[test]
+    fn each_counter_has_exactly_one_call_site() {
+        for name in ["logon", "attempt", "ok"] {
+            let n = needle(name);
+            assert_eq!(SRC.matches(&n).count(), 1, "{n} 必须恰好一个调用点");
+        }
+    }
+
+    #[test]
+    fn logon_counter_sits_in_load_db_request_arm() {
+        let anchor = format!("GateEvent::LoadDbRequest({} =>", "info)");
+        assert_eq!(SRC.matches(&anchor).count(), 1, "登录事件分支必须唯一");
+        let i = SRC.find(&anchor).expect("登录事件分支");
+        let seg = &SRC[i..(i + 2000).min(SRC.len())];
+        assert!(
+            seg.contains(&needle("logon")),
+            "record_logon 必须在 GateEvent::LoadDbRequest 分支里（挪走或删掉 ⇒ 本用例红）"
+        );
+    }
+
+    #[test]
+    fn attempt_counter_sits_in_load_reply_branch() {
+        let anchor = format!(
+            "if ident == {} && recog == 1 {{",
+            "mir2_protocol::messages::DBR_LOADHUMANRCD"
+        );
+        assert_eq!(SRC.matches(&anchor).count(), 1, "角色数据回包分支必须唯一");
+        let i = SRC.find(&anchor).expect("角色数据回包分支");
+        let seg = &SRC[i..(i + 1200).min(SRC.len())];
+        assert!(
+            seg.contains(&needle("attempt")),
+            "record_attempt 必须在 DBR_LOADHUMANRCD(1100) recog==1 分支入口"
+        );
+    }
+
+    #[test]
+    fn ok_counter_sits_in_enter_map_ok_arm() {
+        let anchor = format!("match world.{}(", "enter_map_at");
+        assert_eq!(
+            SRC.matches(&anchor).count(),
+            1,
+            "enter_map_at 调用点必须唯一"
+        );
+        let i = SRC.find(&anchor).expect("enter_map_at 调用点");
+        let seg = &SRC[i..(i + 3000).min(SRC.len())];
+        let ok = seg.find("Ok(id) => {").expect("enter_map_at 的 Ok 臂");
+        let arm = &seg[ok..(ok + 800).min(seg.len())];
+        assert!(
+            arm.contains(&needle("ok")),
+            "record_ok 必须在 enter_map_at 的 Ok 臂里（挪到 Err 或删掉 ⇒ 本用例红）"
+        );
     }
 }
