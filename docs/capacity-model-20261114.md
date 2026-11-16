@@ -1,5 +1,8 @@
 # 10k 容量模型 + T10 Top2–Top4 第一版（2026-11-14）
 
+> **500 档最新结论见 `docs/capacity-500-conclusion-20261116.md`（2026-11-16 定稿，内部）** —— 本文件里早前的 −59%/−77% 等粗数已作废，勿引用。
+
+
 卡：`openmir2-capacity-model-10k`（L 级；性能优化 + 容量建模）。
 分支：`card/capacity-model`，基 `80f97231e`（master）。
 前置数据：`docs/tick-hotspot-profile-20261113.md`（T10 / T10b，分段计时与真栈宿主段）。
