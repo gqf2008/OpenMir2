@@ -10,35 +10,44 @@
 
 ## 0. 结论先读
 
-**主判断：平台是「① 发送口流控丢弃」与「③ 单消费者 + O(N²) AOI」的耦合；其中 ③ 是负载的来源，
-① 是把负载转成「永久丢帧」的那道阀。** 依据见 §2.2 / §2.3，三条硬证据：
+**主判断（分级）：③ 是【已证实】的负载来源与放大器；① 是【最可能假设】的直接丢帧点。**
+现有证据只到「丢失发生在 S1 之后、S2/S3/S4 未分」；在探针给出 S2 的 SM_LOGON `decision` 分布
+与 S3 的 `MISDELIVER_DELIVER ident=50` 数之前，**不把 ① 写成已证实**。
 
-1. **game-svr 侧已经全部完成，平台不在「进世界」这一步**。两个 1000 档归档里，
+1. **【硬】丢失发生在 S1 之后**。两个 1000 档归档里，
    `进世界 ChrName` / `进世界帧下发` / `进世界标记` 各 **1000 次**，`收到角色数据` **1000 次**，
    `全字段解析失败` **0 次**，「槽不存在，丢弃」 2 次（`supp-hold360`）/ 8 次（`plateau-094127`），
    且每批都是 `共 15 条`（10 个批次 16 条）。而 BotSrv 侧只解出 **425 / 327** 个 `SM_LOGON`。
-   ⇒ 丢包发生在 **`SM_LOGON` 从 game-svr 发送口出来之后**。
-2. **发送口在 pre-queue-patch 树上按 `SendChecked>0 ⇒ 直接丢` 语义丢了 3035 万帧**
-   （`plateau-094127/gate_stats/gate_stats.ndjson` 末行 `hold_frames=30352774`、`overflow_frames=0`；
-   该 schema 里 `hold_frames` 就是「没发出去」的帧）。同一窗口 BotSrv `in_world=327`。
-   这与 `gate_backpressure.rs` 模块头记录的另一轮观测（716 条 SM_LOGON → 330 Send / 386 Hold，
-   bot 侧 `in_world=330`）是同一机制。
-3. **BotSrv 的单消费者确实饱和了，且 AOI 是 O(N²)**。`plateau-094127` 末值
+   ⇒ 丢包在 **game-svr 进世界段（S1）之后**；S2/S3/S4 三段**现在分不开**。
+   **口径限定**：`进世界帧下发` 是「入队意图」（`SimToGate::SendFrame` 之后的那条日志），
+   不是线上已发；`进世界标记` 只表示槽表存在。
+2. **【硬】BotSrv 的单消费者确实饱和了，且 AOI 是 O(N²)**。`plateau-094127` 末值
    `frames_decoded=5,442,742`，其中 `SM_TURN(10)=2,599,152` + `SM_FEATURECHANGED(41)=2,598,875`
-   = **95.5%**；解码速率在 30–47k 帧/s 之间饱和；`in_world` 增速随人口单调衰减
-   （12.4 → 10.4 → 4.1 → 0.9 → 2.9 → 1.0 → 0.2 → 0.8 → 0 个/s，见 §2.3 表）。
+   = **95.5%**；解码速率在 30–47k 帧/s 饱和（90s 后 27–38k）；`in_world` 增速与已进世界人口
+   **总体下行**（12.4 → 10.4 → 4.1 → 0.9 → 2.9 → 1.0 → 0.2 → 0.8 → 0 个/s；中间
+   0.90→2.90、0.20→0.80 两次回升，不是严格单调，见 §2.3 表）。
    `supp-hold360` 同形（`10=4,866,822` / `41=4,866,217`，97.3%）。
+3. **【假设】① 发送口流控是最可能的直接丢帧点**，但支撑只有两条间接证据：
+   (a) pre-patch 语义下 `SendChecked>0` 的帧是被**丢弃**（不是排队）；
+   (b) 同窗 `gate_stats` 的 `hold_frames=30,352,774`（旧 schema 的键是
+   `hold_frames/hold_bytes/oversize_frames/oversize_bytes/overflow_idents/overflow_sessions`，
+   **没有 `overflow_frames`**；`hold_frames` 是**全帧** hold，不是 SM_LOGON 计数；末行
+   `oversize_frames=0`、`overflow_idents=0`、`overflow_sessions=28,811,584` 是**直方图键**
+   溢出，不是帧溢出）。`gate_backpressure.rs` 模块头另记了一轮 03:00 窗口的
+   「716 条 SM_LOGON → 330 Send / 386 Hold」，那是**另一轮**观测、**不在本归档里**，只能作旁证。
+   把 ① 变成事实还差两个数：S2 的 SM_LOGON `decision` 分布、S3 的 `MISDELIVER_DELIVER ident=50`。
 
 **关键限定：以上归档都在队列补丁（`openmir2-gateway-backpressure-frame-drop` +
 `openmir2-gateway-frame-criticality-queue`）之前。** 现 master 上 `Hold` 已改为「关键帧入有界队列」，
 500 档也因此从 404 平台升到 500/500；**1000 档在补丁树上没有实测**，所以 ① 是否已被消掉、
 ③ 是否会成为新树上的唯一上限，**现在无法判定**——这就是探针轮要回答的问题。
 
-**最大不确定性**：现有证据能证明「帧在发送口之后丢」，但**分不清**丢在
-(i) 发送口队列/回显流控、(ii) 网关会话路由、(iii) BotSrv 单消费者积压、
-(iv) BotSrv 组帧解析丢弃（`ProcessPacket` 对跨 read 的残帧不缓存）这四段中的哪一段。
-第 (ii) 项在 `supp-hold360` 上不成立（`会话[..]不存在，丢弃下行` = **0** 条），在 `plateau-094127`
-上 1803 条但**集中在窗口末 teardown**（首条与首条 `断开链接` 同一毫秒），也不是平台原因。
+**最大不确定性**：现有证据只排除了「S1 之前丢」与「网关**会话路由**」两项
+（`会话[..]不存在，丢弃下行`：`supp-hold360` = 0 条；`plateau-094127` 1803 条全在窗口末
+teardown，首条与首条 `断开链接` 同一毫秒）。**没有**排除：
+(i) S2 发送口队列/回显流控、(ii) S3 网关的**单读循环**（W1；本轮 BotSrv 解码 5.4M–10.0M 帧，网关读循环的帧量级相当或更高）、
+(iii) S4 BotSrv 单消费者积压、(iv) S4 BotSrv 组帧解析丢弃（`ProcessPacket` 对跨 read 的残帧不缓存）。
+⇒ 探针的第一目标就是把 S2/S3/S4 分开。
 
 **探针轮预计成本**：2 臂 × 1000 档 × 180s，单窗口约 **20–25 分钟**（含整栈起停），
 **零代码改动**（全部走既有环境变量探针），不产出任何容量/验收结论。
@@ -69,7 +78,7 @@ BotSrv 发送 CM_SELCHR / **登录串
 | --- | --- | --- | --- | --- | --- |
 | G1 | game-svr | `mir2-rs/bins/game-svr/src/lib.rs` 的主 tick 循环（`host_prof.begin` / `TICK_INTERVAL_MS`，200ms 一拍） | **整个世界只有一个线程**：入站命令、读档发起、DB 应答消费、进图、AOI、发包全在同一拍里顺序执行；一拍超时后续全部顺延 | ① | `MIR2_TICK_PROFILE=1` 的段耗时日志；`sim: tick #N` 日志 |
 | G2 | game-svr | 同文件 DB「收侧轮询」块（`w.outstanding` + `r.take(qid)`） | 每拍把**所有已到达的应答一次处理完**，逐个做 parse → RNG → `enter_map` → 15 帧装配；**没有每拍上限**，1000 个应答同拍到达即同拍串行做完 | ①/③ | `收到角色数据 queryId=…` INF 行的时间分布；该块所在的 host 段计时 |
-| G3 | game-svr | 同文件 `进世界帧下发` 之后的 `for body in bodies { tx.send(SimToGate::SendFrame …) }` + `MarkInWorld` | 15 帧 × 1000 bot 的入队是**单线程顺序**，但目标是无界 mpsc，不阻塞 | ③ | `进世界帧下发：socket=… 共 N 条`、`进世界标记：socket=…`（各 1 行/bot） |
+| G3 | game-svr | 同文件 `进世界帧下发` 之后的 `for body in bodies { tx.send(SimToGate::SendFrame …) }` + `MarkInWorld` | 15 帧 × 1000 bot 的入队是**单线程顺序**，但目标是无界 mpsc，不阻塞。**注意**：`进世界帧下发` 是「入队意图」日志，不代表已上线 | ③ | `进世界帧下发：socket=… 共 N 条`、`进世界标记：socket=…`（各 1 行/bot） |
 | G4 | game-svr | 同文件 `send_gate_msg` / `send_decision` / `send_direct` / `flush_pending` / `queue_or_reject`；`mir2-rs/bins/game-svr/src/gate_criticality.rs` 的 `channel_of`；`mir2-rs/bins/game-svr/src/gate_queue.rs` 的 `PendingQueue` | **每条 gate 线只有 1 个 `SendChecked` 信用**：撞 `CheckBlock*10` 字节即发 `GM_RECEIVE_OK` 并停发，等网关回显或 50ms 超时；pre-patch 树「等回显期间 = 丢帧」，现树「关键帧入 256KiB/4096 帧队列，非关键帧丢弃」 | **①+②**（一进一出 + 字节预算） | `gate_stats.ndjson`：`queued/flushed/overflow/reject_login/degrade_inworld/close_inworld/max_depth`；`event=gate_frame_queued\|overflow\|degrade`；`MIR2_LOG_MISDELIVER=1` 的 `MISDELIVER_SRV event=send … decision=…` |
 | G5 | game-svr | `mir2-rs/bins/game-svr/src/dbclient.rs` 的 `run_db_link`（单写任务）+ `DbReplies::feed`（单读任务） | DB 写是单任务顺序 `write_all`，但请求是小帧且已实测 14.4/s，**不是瓶颈** | ①（证据排除） | `执行任务Id:{qid}成功` 速率；`收到角色数据` |
 | G6 | game-svr | `lib.rs` 的 `gate_conn`（每条 gate 线一个 tokio 任务）+ `apply_sim_cmd_async` | 同一条 gate 线的所有会话帧在**一个任务里逐帧 `await`**（写 socket + 流控）；`sim_rx` 一次只取一条 | ①（单线） | `WRN`「下发 SM_* 帧时 socket=… 槽不存在」；队列深度 |
@@ -99,9 +108,9 @@ BotSrv 发送 CM_SELCHR / **登录串
 
 | 类 | 定义 | 数据特征（判据） | 当前证据指向 |
 | --- | --- | --- | --- |
-| **① 真串行** | 单线程或「一进一出」信用；吞吐 = 单位作业时间 × 并发度 | 速率**与人口无关**、恒定；队列深度低或稳定；控制臂（去掉 AOI）**速率不变**；发送口 `decision=Hold` 与 `SendChecked` 回显间隔直接成比例 | game-svr 发送口（G4）：**一轮只有 1 个未回显信用**，50ms 超时 |
+| **① 真串行** | 单线程或「一进一出」信用；吞吐 = 单位作业时间 × 并发度 | 速率**与人口无关**、恒定；队列深度低或稳定；控制臂（去掉 AOI）**速率不变**；发送口 `decision=Hold` 与 `SendChecked` 回显间隔直接成比例 | **候选（未证实）**：game-svr 发送口（G4）一轮只有 1 个未回显信用 + 50ms 超时；决定性数据 = S2 的 SM_LOGON `decision` 分布 |
 | **② 限速** | 显式每 tick / 每秒 / 字节上限 | 速率是**整数台阶**且与负载无关；去掉负载后仍是同一台阶；应有可读配置项/常量 | 找不到「每 tick N 条」的常量（`drain_read_storage` 无上限、tick 循环无上限）；只有 G4 的字节预算属于 ② |
-| **③ 排队但可并行** | 消费者吞吐有限，队列只变长；作业本身可并行 | 吞吐**饱和在某个固定值**；队列/内存单调增长；速率随已进世界人口**单调衰减**；控制臂（去掉 AOI）显著改善 | BotSrv 单消费者（B1）+ O(N²) AOI 扇出：`frames_decoded` 平台 30–47k/s，`in_world` 增速随人口衰减到 0 |
+| **③ 排队但可并行** | 消费者吞吐有限，队列只变长；作业本身可并行 | 吞吐**饱和在某个固定值**；队列/内存单调增长；速率随已进世界人口**总体下行**；控制臂（去掉 AOI）显著改善 | **已证实为负载来源**：BotSrv 单消费者（B1）+ O(N²) AOI 扇出；`frames_decoded` 平台 30–47k/s（后段 27–38k），`in_world` 增速总体下行到 0。是否为**唯一**上限仍待探针 |
 
 ### 2.2 归档复读（1000 档，两次长窗口）
 
@@ -110,18 +119,19 @@ BotSrv 发送 CM_SELCHR / **登录串
 | game-svr `进世界 ChrName` / `进世界帧下发` / `进世界标记` | 1000 / 1000 / 1000 | 1000 / 1000 / 1000 |
 | game-svr `收到角色数据` / `全字段解析失败` / `槽不存在` | 1000 / 0 / 2 | 1000 / 0 / 8 |
 | 每批帧数 | 990×15 + 10×16 | 同形 |
-| BotSrv `准备进入游戏` / `进入游戏`（SendRunLogin） | 1000 / 1000 | 1000 / 2327（含重连） |
+| BotSrv `准备进入游戏` / `机器人:[x] 进入游戏`（SendRunLogin） | 1000 / 1000 | 1000 / 1000（**重连 0**；「进入游戏」子串共 2327 = 准备+进入+成功） |
 | BotSrv `SM_LOGON actor=` / `成功进入游戏` | 425 / 425 | 327 / 327 |
 | BotSrv `in_world` 末值 | 425 | 327 |
 | `frames_decoded` 末值 | 9,997,424 | 5,442,742 |
 | `SM_TURN(10)` + `SM_FEATURECHANGED(41)` 占比 | 4,866,822 + 4,866,217 = **97.3%** | 2,599,152 + 2,598,875 = **95.5%** |
-| game-svr `hold_frames` 末值 | 该轮 schema 未落盘 | **30,352,774**（`overflow_frames=0`） |
+| game-svr `hold_frames` 末值（**全帧**，非 SM_LOGON） | 该轮未落盘 | **30,352,774**；同行为 `oversize_frames=0`、`overflow_idents=0`、`overflow_sessions=28,811,584`（**直方图键**溢出） |
 | 网关 `会话[..]不存在，丢弃下行` | **0** | 1803（全在 teardown） |
 
-⇒ **S1（game-svr 发出 1000）→ S4（bot 计入 327/425）之间存在 575/673 帧的系统性丢失**，
-且丢失与「已进世界人口」正相关（人口越大，撞上 `SendChecked>0` 窗口的概率越高）。
+⇒ **S1（game-svr 进世界 1000）→ S4（bot 计入 327/425）之间有 575/673 帧丢失**；
+这是**跨 S2/S3/S4 的合并结论**，不是「发送口丢了 575」——那需要探针的分段计数。
+「流失与已进世界人口正相关」目前只是与第 2.3 节表的**同向共现**，不能当因果（缺反例组）。
 
-### 2.3 `in_world` 增速随人口衰减（`plateau-094127`，约 6s 桶）
+### 2.3 `in_world` 增速与人口（`plateau-094127`，10s 采样点，相邻采样差分）
 
 | uptime | in_world | 增速（个/s） | frames_decoded 速率（帧/s） |
 | --- | --- | --- | --- |
@@ -135,21 +145,26 @@ BotSrv 发送 CM_SELCHR / **登录串
 | 80s | 327 | 0.80 | 32.9k |
 | 90s+ | 327 | **0.00** | 27–38k（持续到 170s） |
 
-⇒ 这是 **③ 的形状**：消费者在 30–47k 帧/s 饱和，而 AOI 生产量随人口平方增长；
-**也是 ① 的形状**：`SM_LOGON` 停留在「发送口被流控压住」的窗口里的概率随 AOI 帧量上升。
-两者在数据上不可分，必须靠探针的**分段计数**和控制臂分开。
+⇒ 这张表能支撑 **③**（消费者饱和 + AOI 占绝对多数 + 增速总体下行）；
+它**不能**单独支撑 ①——「SM_LOGON 撞上 `SendChecked>0` 窗口的概率随 AOI 上升」只是机制上的
+合理推想，需要 S2 的逐帧 `decision` 计数才能变成观测。增速两次回升（0.90→2.90、0.20→0.80）
+也说明「随人口单调衰减」的写法不成立，只能写**总体下行**。
 
 ### 2.4 主判断与依据
 
-**我判「③ 提供负载、① 造成丢帧」的耦合**，排序如下：
+**我判：③ 是已证实的负载来源；① 是最可能的直接丢帧点（假设，待探针）；② 不成立。**
 
-1. **①（G4 发送口流控）是直接丢帧点**——`hold_frames=30.35M` 与 `in_world=327` 同窗，
-   且 pre-patch 语义下 Hold = 丢弃；现有的 500 档修复证据（404→500）说明这条阀一旦从「丢」改成「排队」，
-   同量级的问题会显著缓解。
-2. **③（B1 单消费者 + O(N²) AOI）是负载来源与放大器**——AOI 占解码帧 95%+，`frames_decoded` 饱和，
-   增速随人口衰减；它同时把 G4 的 `SendChecked` 压在高位，让 ① 的丢弃概率随人口上升。
+1. **③（B1 单消费者 + O(N²) AOI）＝ 已证实的负载来源与放大器。** AOI 占解码帧 95%+，
+   `frames_decoded` 饱和在 30–47k/s（后段 27–38k），`in_world` 增速总体下行到 0。
+   这部分不需要新窗口就能成立。
+2. **①（G4 发送口流控）＝ 最可能的直接丢帧点，但证据只到「合理」。** 支撑是 pre-patch 的
+   Hold=丢弃语义与同窗 30.35M 的**全帧** hold 量；它**不能**证明其中包含多少个 SM_LOGON。
+   旁证「716→330/386」来自另一轮窗口，不属本归档。**决定性数据尚未采集**：S2 的 SM_LOGON
+   `decision` 分布、S3 的 `MISDELIVER_DELIVER ident=50`。
 3. **② 基本不成立**——没有找到「每 tick / 每秒 N 条」的常量；唯一的上限是 G4 的字节预算，
    它只是 ① 的判定输入，不是独立的台限。**「5.3/s 串行」是观测值，不是代码里的限速。**
+4. **丢帧跳的排序给不出**：现有数据只到「S1 之后」。若探针在 B 臂（无 AOI）下仍平台，
+   则 ①/③ 都不足以解释，要转向 S3 单读循环或 S4 组帧解析。
 
 ---
 
@@ -179,7 +194,9 @@ BotSrv 发送 CM_SELCHR / **登录串
 
 ### 3.2 合规声明（对照 `openmir2-load-1000-rerun-prereq` 的唯一例外三条）
 
-1. **开跑前在本卡登记目的与判据**：本文即登记件；开跑前再在本卡签一条 `comment` 引用本文 §3。
+1. **开跑前登记目的与判据**：本文即登记件；开跑前在**禁令卡 `openmir2-load-1000-rerun-prereq`**
+   签一条 `comment` 引用本文 §3——该卡的 `diagnostic_exception` 是「不违反禁令」的授权来源，
+   登记必须落在**那张卡**上，不是本卡。
 2. **归档名带 `*-diag-*`，报告首行 `diagnostic=true / 不可用于容量结论`**：
    归档目录固定为 `E:/UserFleet/archive/world-entry-serial-diag-<YYYYMMDD-HHMM>/`；
    `report.json` 与任何人读报告首行写该字符串；`window.conclusion_valid=false`。
@@ -282,30 +299,35 @@ BotSrv 发送 CM_SELCHR / **登录串
 
 ## 附录 A：本批数字的复读命令（只读）
 
-```sh
-# S1：game-svr 侧 1000 次进世界（两个归档）
-grep -c "进世界 ChrName"   <arch>/stack-logs/game-svr.out.log
-grep -c "进世界帧下发"     <arch>/stack-logs/game-svr.out.log
-grep -c "进世界标记"       <arch>/stack-logs/game-svr.out.log
-grep -c "收到角色数据"     <arch>/stack-logs/game-svr.out.log
-grep -o "共 [0-9]* 条"     <arch>/stack-logs/game-svr.out.log | sort | uniq -c
+**两轮归档的日志目录不同**（`supp-hold360` 的 game-svr / 网关日志在**归档根**下的
+`stack-logs-v2/`，不在 `tier-1000/` 里；`plateau-094127` 的在归档根下的 `stack-logs/`）：
 
-# S4：bot 侧精确计数（不受 top-24 截断）
-grep -c "机器人:\[.*\] SM_LOGON actor=" <arch>/tier-1000/bots.log
-grep -c "成功进入游戏"                  <arch>/tier-1000/bots.log
+```sh
+SUPP=E:/UserFleet/archive/load-tiers-20261115-0245
+PLAT=E:/UserFleet/archive/botsrv-inworld-plateau-20261115-094127
+
+# S1：game-svr 侧进世界（supp 用 stack-logs-v2，plateau 用 stack-logs）
+grep -c "进世界 ChrName"   "$SUPP/stack-logs-v2/game-svr.out.log"
+grep -c "进世界帧下发"     "$SUPP/stack-logs-v2/game-svr.out.log"
+grep -c "进世界标记"       "$SUPP/stack-logs-v2/game-svr.out.log"
+grep -c "收到角色数据"     "$SUPP/stack-logs-v2/game-svr.out.log"
+grep -o "共 [0-9]* 条"     "$SUPP/stack-logs-v2/game-svr.out.log" | sort | uniq -c
+grep -c "进世界 ChrName"   "$PLAT/stack-logs/game-svr.out.log"
+
+# S4：bot 侧精确计数（不受 top-24 截断；「进入游戏」是子串，必须带 bot 前缀）
+grep -cE "机器人:\[[^]]+\] SM_LOGON actor=" "$PLAT/tier-1000/bots.log"
+grep -cE "机器人:\[[^]]+\] 进入游戏"        "$PLAT/tier-1000/bots.log"
+grep -c  "准备进入游戏"                       "$PLAT/tier-1000/bots.log"
 
 # ③：解码帧构成与速率
-python -I -c "import json;o=json.loads(open('<arch>/tier-1000/load_stats.ndjson').read().splitlines()[-1]);print(o['frames_decoded'],o['ident_counts'])"
+python -I -c "import json;o=json.loads(open(r'$PLAT/tier-1000/load_stats.ndjson',encoding='utf-8').read().splitlines()[-1]);print(o['frames_decoded'],o['ident_counts'])"
 
-# S2：发送口丢弃（pre-patch schema：hold_frames = 丢）
-tail -1 <arch>/gate_stats/gate_stats.ndjson
+# S2：发送口统计（旧 schema 无 overflow_frames；hold_frames 是全帧 hold，不是 SM_LOGON）
+tail -1 "$PLAT/gate_stats/gate_stats.ndjson"
 
 # 网关路由
-grep -c "不存在，丢弃下行" <arch>/stack-logs/game-gate.out.log
+grep -c "不存在，丢弃下行" "$PLAT/stack-logs/game-gate.out.log"
 ```
-
-归档：`E:/UserFleet/archive/load-tiers-20261115-0245/supp-hold360/tier-1000/`、
-`E:/UserFleet/archive/botsrv-inworld-plateau-20261115-094127/`。
 
 ## 附录 B：探针轮的开关清单（开跑前逐条核）
 
