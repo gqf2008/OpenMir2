@@ -111,3 +111,22 @@ Get-CimInstance Win32_Process | Where-Object { $_.Name -eq 'git.exe' -and $_.Com
 - **硬规避**：任何 wg 操作必须在 **<200 条** collab ref 的仓库根跑。**清到 500/1000 条无效**——逃生路径之所以有效，正是因为它落在 200 以下。
 - **注意**：同名 principal 两把钥匙并存是刻意的；**任何签名前先确认当前仓库用的是哪把**
   （看 `git rev-parse --git-path walgit/identity`）。密钥迁移/轮换一律先报后做。
+
+## 批量签卡的两个坑（2026-11-17 实测）
+
+1. **parent 必须取「刚签出那一条」的 blob，不能用 `for-each-ref | tail -1`**。
+   `for-each-ref` 按 refname 字典序输出，末条与「本次新签」无关；用它取 blob 会把 parent 挂错
+   （实例：status 的 parent 误挂到 issue，链断；须补签一条更正 status 并把作废条目留痕）。
+   正确做法：**读 `sign_entry.sh` 输出的 `refs/... <blob>` 那一行的第二列**。
+2. **签完必须回读校验链**：`git fetch` 该单条 ref → 断言 `actor` 是本 principal、`kind` 正确、
+   `parent` 等于预期上一条的 blob；没有回读就等于没签。
+3. **父条目 blob 必须在本地对象库**：逃生克隆用完即删，主检出未必有那条父条目。
+   `sign_entry.sh` 的 parent 闸门是「对象存在」，不在就报 `FAIL 拒绝解析不到的 parent`。
+   做法：先用 `git ls-remote walgit 'refs/collab/inbox/<principal>/*'` 按 **blob** 找到 ref 名，
+   再单条 `git fetch` 回主检出（**不要通配 fetch**），然后再签。
+4. **提交前先验行尾**（2026-11-17 实测）：工作树被写成 CRLF、而 HEAD blob 是 LF 时，
+   `git diff --numstat` 会把「+13 行」报成 **126/113**（看起来像整文件重写）⇒
+   **任何按行数判断改动规模的复核都会失效**。判据：看 numstat 之前先核两边行尾
+   （`git show HEAD:<path>` 与工作树各自的 CRLF 计数），不一致就先归一化
+   （`\r\n` → `\n`）再看；归一化后 `git diff --numstat` 应回到真实增量。
+   同族提醒：**数字的来源（原始字节与行尾）不问清，规模判断就是假的。**

@@ -418,3 +418,26 @@ for rel, count, hold in runs:
   2. **一律 `-j 2`**（`cargo test --workspace -j 2` / `cargo clippy ... -j 2`），不要用默认并发。
   3. **被杀 ⇒ 判 INCOMPLETE**（三态：不算绿、不算红、不许用"定向窄检查"顶替全量门禁——
      窄检查只能证明那几处不红，证明不了全量绿）。要恢复绿灯必须**整条门禁重跑**。
+- **产物来源判据（2026-11-17 起硬规矩，一晚三次「看起来对」之后固化）**。判据只认**字节**，不认观感：
+  1. **多产物栈逐个核 sha**：运行中进程的 exe **路径** + 该文件 **sha** + **本次构建产物 sha** 三者相等；
+     `DBSrv.exe` / `DBSrv.dll` / `DBSrv.Storage.MySQL.dll` 缺任何一件，就是「新 exe + 旧业务代码」
+     （2026-11-17 实测：只换 exe 与策略 DLL 时外层 warn 不出现，差点误判『改的代码没生效』）。
+  2. **产物内查特征字节**：.NET 程序集里的字符串常量在 `#US` 堆是 **UTF-16LE**；Rust 可执行文件是 **UTF-8**。
+     交付前列一张「应含 / 不应含」表逐条跑（例：`DBSrv.dll` 应含 `[EntryTelemetry]`，storage dll 应含
+     `GetQryChar 异常`，`game-gate.exe` 应含 `ENTRY_TELEMETRY`），一条不真就不算换上了。
+  3. **mtime、文件大小、路径、「我记得改过」都不算证据。**
+  4. **起栈脚本的默认行为要读代码确认**：`Copy-Runtime` 这类「只在目标不存在时复制」的实现，会让影子目录
+     **永远是旧的**；而就绪断言若只核 exe 路径不核内容 sha ⇒ 路径对、内容是旧的、断言全绿。实例：M1 栈
+     shadow 仍是 2026-10-09 的三产物（`8006c895… / 1763a55b… / bcd7781a…`），加 `-RefreshRuntime`
+     后才是当前构建（`44fd7a61… / facd51e6… / 1295963f…`）。同类登记卡：
+     `openmir2-dbsrv-build-deps`（构建产物缺依赖）、`openmir2-acceptance-stack-bin-provenance`
+     （两张 acceptance 栈脚本 `-RustBinDir` 默认指仓外共享 target 的 debug 口径、只判存在性）。
+  5. **印章自洽 ≠ 由当前 master 构建**（2026-11-17 实例，比计数本身更值钱）：`m1-bin/*.stamp.json`
+     四件与文件逐个 sha 相等（4/4）只证明「**同一份产物被一致引用**」；它不证明「这份产物由当前
+     master 构建」。来源要看 stamp 里的 `head`（与 `dirty`）：当晚 4/4 自洽，但 stamp 记的是
+     `head=2c1a3338 dirty=4 built=2026-11-16T23:22`，而 master 已是 `aa5267632` ⇒ **印章产物比 master 旧**。
+     要「由目标 rev 构建」必须**比对 `stamp.head` 与目标 rev**（且 `dirty == 0`）；只核 sha 相等会
+     把「旧但自洽」读成「就是我要的那份」。
+     **DBSrv 三产物根本不在印章体系内**（`m1-bin` 只有 game-gate/game-svr/login-gate/sel-gate 四件
+     `.stamp.json`，**没有任何 `DBSrv*`**）⇒ 说「印章态 DBSrv」是错的说法；它的来源只能靠
+     **构建记录 + 运行中进程 sha + 产物内字面量**自证。它是整条链路里唯一没有 provenance 锚的产物。
