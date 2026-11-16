@@ -69,3 +69,24 @@ WARN 形如（`{raw:?}` 保留原文与引号，便于机器 grep）：
   逐 tick 分位数交叉核对是否漏采（阈值过高会看不到 P99 以下）；
 - 起栈日志必须能看到「TICK_PROFILE 慢 tick 段快照开启：工作段 ≥ 100 ms」或非法值的 `WRN`——
   两者都没有时，先怀疑环境变量没传进进程，而不是「没有慢 tick」。
+
+## 7. 如何读 `hear_targets_at` 项
+
+卡 `openmir2-p1-3-hear-targets-probe`：慢 tick 快照新增命名子项 `hear_targets_at`
+（`tick_profile::HEAR_TARGETS_PROBE_NAME`），用于回答「P1-2 优化后它还是不是 HostInbound 的主体」。
+
+- **出现位置**：只在 `MIR2_TICK_PROFILE=1` **且** `MIR2_TICK_PROFILE_SLOW_MS=N`（N>0）时采集；
+  快照行尾 ` | probes` 段里出现 ` hear_targets_at=<ms>(<pct>%)`，百分比分母是该 tick 的**工作段**
+  （`HostTickTotal − HostSleep`），与同段其它命名子项同口径。
+- **含义**：这一行是该 tick 内**所有** `chat::hear_targets_at` 调用的累计（含经由
+  `chat::hear_targets` 的调用）；消息处理里每个广播收件人派生各累加一次。
+  它是父段 `HostInbound` 的**嵌套子项**：只读、不进 `HostUnaccounted` 的残差对账。
+- **判读**：「它还在不在热点前列」直接看两点——① 该行是否仍出现在慢 tick 快照；
+  ② 其百分比相对同一快照里 `HostInbound` 的占比。P1-2 后若它只占个位数百分比，
+  则 `HostInbound` 的剩余成本已不在该函数；若占比重新抬头，先查调用次数（同一行是累计值，
+  调用次数看窗口汇总 `(N 次/tick)`），再区分「单次变慢」与「调用变多」。
+- **没有这一行**不等于「耗时为 0」：先确认两个环境变量都传进了进程（起栈日志有
+  「慢 tick 段快照开启」且没有 `WRN`）；若该 tick 内确实没有广播收件人派生（零调用），
+  本项不落行。
+- **关闭态零开销**：主门未开或 SLOW 门未设时，`hear_targets_at` 入口只读一次线程局部槽 +
+  一次 `Option` 判别，**不取时钟、不分配、不打日志**；与 SLOW 门同开同关。

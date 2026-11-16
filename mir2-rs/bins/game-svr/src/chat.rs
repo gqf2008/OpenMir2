@@ -199,6 +199,23 @@ pub fn hear_targets_at(
     y: i32,
     range: i32,
 ) -> Vec<i32> {
+    // 慢 tick 段快照的命名子项（默认关闭；关闭态只读一次线程局部槽，不取时钟/不分配）。
+    let probe = crate::tick_profile::hear_targets_probe_begin();
+    let out = hear_targets_at_scan(world, speaker_id, map_id, x, y, range);
+    crate::tick_profile::hear_targets_probe_end(probe);
+    out
+}
+
+/// [`hear_targets_at`] 的扫描体（探针计时包在外层；谓词、排序、早退逐字不变）。
+#[inline]
+fn hear_targets_at_scan(
+    world: &World,
+    speaker_id: i32,
+    map_id: usize,
+    x: i32,
+    y: i32,
+    range: i32,
+) -> Vec<i32> {
     let Some(speaker) = world.entities.get(speaker_id) else {
         return Vec::new();
     };
@@ -591,6 +608,68 @@ mod tests {
         let reused_id = world.add_entity(reused);
         assert!(reused_id > 0, "复用槽位后的业务 id 必须是新的正 id");
         check(&world, speaker0, "删除+槽位复用");
+    }
+
+    /// **P1-3 牙**：`hear_targets_at` 的真实调用被慢 tick 子探针累计（关闭态零采集）。
+    ///
+    /// 变异：删掉 `hear_targets_at` 里的 `hear_targets_probe_begin`/`_end` 接线 ⇒ 开启态
+    /// `win.2 == 0` 且快照无该行 ⇒ 本用例红。
+    #[test]
+    fn hear_targets_at_feeds_slow_tick_probe() {
+        use crate::tick_profile;
+        struct ResetAcc;
+        impl Drop for ResetAcc {
+            fn drop(&mut self) {
+                tick_profile::set_hear_targets_probe_for_test(false);
+            }
+        }
+        let _reset = ResetAcc;
+        let name = tick_profile::HEAR_TARGETS_PROBE_NAME;
+
+        let mut world = World::new(64, 64);
+        let speaker = put(&mut world, "speaker", 10, 10);
+        for i in 0..20 {
+            put(&mut world, &format!("p{i}"), 10 + i % 5, 10 + i / 5);
+        }
+
+        // ① 关闭态：累加器未置位 ⇒ 调用多少次都不出现该项（负例，防「恒有行」假绿）。
+        tick_profile::set_hear_targets_probe_for_test(false);
+        let mut p_off = tick_profile::HostTickProfile::with_slow_threshold_ns(1);
+        let slot = p_off.begin().expect("开启态");
+        for _ in 0..5 {
+            let _ = hear_targets_at(&world, speaker, 0, 10, 10, SEND_REF_MSG_RANGE);
+        }
+        // 显式睡 1ms：让本 tick 的工作段可测到（0ns 时慢门阈值判不出 ⇒ 无快照）。
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        p_off.end_tick(Some(slot));
+        let off = p_off.take_slow_tick().expect("慢 tick 快照");
+        assert!(
+            !off.probes.iter().any(|(n, _)| *n == name),
+            "关闭态不得出现 {name} 项"
+        );
+
+        // ② 开启态：20 次真实调用必须被累计（次数 + 耗时都断言）。
+        tick_profile::set_hear_targets_probe_for_test(true);
+        let mut p_on = tick_profile::HostTickProfile::with_slow_threshold_ns(1);
+        let slot = p_on.begin().expect("开启态");
+        for _ in 0..20 {
+            let _ = hear_targets_at(&world, speaker, 0, 10, 10, SEND_REF_MSG_RANGE);
+        }
+        std::thread::sleep(std::time::Duration::from_millis(1));
+        p_on.end_tick(Some(slot));
+        let slow = p_on.take_slow_tick().expect("慢 tick 快照");
+        let row = slow
+            .probes
+            .iter()
+            .find(|(n, _)| *n == name)
+            .expect("开启态必须在慢 tick 快照里出现该项");
+        assert!(row.1 > 0, "耗时必须 > 0（真实调用被计时）");
+        let win = p_on
+            .probes()
+            .iter()
+            .find(|(n, _, _)| *n == name)
+            .expect("窗口累计必须含该项");
+        assert_eq!(win.2, 20, "调用次数必须等于真实 hear_targets_at 调用次数");
     }
 
     #[test]

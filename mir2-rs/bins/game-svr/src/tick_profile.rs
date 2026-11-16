@@ -48,7 +48,23 @@
 //! - 值解析先 `trim()`（与 `clock.rs`/`seed.rs` 的「前后空白合法」同口径）：`" 100 "` = 100ms；
 //! - 开启时每 tick 用一个**复用缓冲**（`Vec::clear` 后 push，容量稳定后不再分配）；
 //! - 快照只打印「慢 tick」，不改变任何阈值/行为，也不进 `HostUnaccounted` 对账口径。
+//!
+//! ## `hear_targets_at` 命名子探针（卡 `openmir2-p1-3-hear-targets-probe`）
+//!
+//! [`chat::hear_targets_at`](crate::chat::hear_targets_at) 在 `HostInbound` 的消息处理深处
+//! （`broadcast_ref_msg_opt`）被调用，**不携带** `&mut HostTickProfile` 句柄。若把句柄穿过
+//! 20+ 层消息处理函数，只会扩大写集与借用面；因此这里用**线程局部累加器**
+//! [`HEAR_TARGETS_TICK`]：慢 tick 门开启时由 [`HostTickProfile::from_env`] 在 sim 线程置位，
+//! `hear_targets_at` 每次进来累加 `(ns, calls)`，[`HostTickProfile::end_tick`] 每 tick 一次性
+//! 取走并作为命名子项 `hear_targets_at` 记入快照（与 `HostAoi*` 同形：名字 → ms → 占工作段%）。
+//!
+//! - **关闭态零开销**：主门未开或慢 tick 门未设时累加器为 `None`；[`hear_targets_probe_begin`]
+//!   只读一次线程局部槽 + 一次 `Option` 判别即返回 `None`——**不取 `Instant`、不分配、不打日志**。
+//! - **不改行为**：与既有子探针一样只累加数字，不进 `tick_sum_ns`；每 tick 末尾取走并清零。
 
+#![allow(clippy::missing_const_for_thread_local)]
+
+use std::cell::Cell;
 use std::time::Instant;
 
 /// 环境变量门：**只有字面 `"1"`** 才开启（`0`/`true`/空/缺省一律关；与起栈器的 fail-closed 口径同形）。
@@ -64,6 +80,96 @@ pub const REPORT_TICKS: u64 = 50;
 
 /// 汇总窗口的墙钟臂（10s；用 `window_ns`（整 tick 之和）判，不额外取时钟）。
 pub const REPORT_WINDOW_NS: u64 = 10_000_000_000;
+
+/// `hear_targets_at` 命名子项的显示名（快照里逐字出现；与 [`chat::hear_targets_at`] 同名）。
+pub const HEAR_TARGETS_PROBE_NAME: &str = "hear_targets_at";
+
+thread_local! {
+    /// `hear_targets_at` 的**本 tick 累加器**（`None` = 未启用）。
+    ///
+    /// - `None`：默认。主门 `MIR2_TICK_PROFILE` 未开，或慢 tick 门 `MIR2_TICK_PROFILE_SLOW_MS`
+    ///   未设 ⇒ [`hear_targets_probe_begin`] 不取时钟、不分配；
+    /// - `Some((累计 ns, 调用次数))`：慢 tick 门开启时由 [`HostTickProfile::from_env`] 在此线程置位，
+    ///   每 tick 由 [`HostTickProfile::end_tick`] 取走并清零。
+    ///
+    /// 用线程局部而不是字段：`chat::hear_targets_at` 在消息处理深处调用，不携带
+    /// `&mut HostTickProfile`；采集与消费都在 sim 线程（`from_env` 与 tick 循环同线程）。
+    static HEAR_TARGETS_TICK: Cell<Option<(u64, u64)>> = const { Cell::new(None) };
+}
+
+/// 置位/清位 `hear_targets_at` 累加器（只在 `from_env` 与测试里调用）。
+fn set_hear_targets_probe(active: bool) {
+    HEAR_TARGETS_TICK.with(|c| c.set(if active { Some((0, 0)) } else { None }));
+}
+
+/// **测试专用**：直接置位/清位累加器（生产只经 [`HostTickProfile::from_env`]）。
+#[cfg(test)]
+pub(crate) fn set_hear_targets_probe_for_test(active: bool) {
+    set_hear_targets_probe(active);
+}
+
+/// **测试专用**：取走并清零「探针时钟被调用次数」（证明关闭态没取时钟）。
+#[cfg(test)]
+pub(crate) fn probe_clock_calls_for_test() -> u64 {
+    clock_calls::take()
+}
+
+/// 取走本 tick 的 `hear_targets_at` 累计（并清零、保持启用态）。未启用 ⇒ `None`。
+fn take_hear_targets_tick() -> Option<(u64, u64)> {
+    HEAR_TARGETS_TICK.with(|c| {
+        let prev = c.get()?;
+        c.set(Some((0, 0)));
+        Some(prev)
+    })
+}
+
+/// **`hear_targets_at` 子探针起点**。未启用 ⇒ 一次线程局部槽读取 + `Option` 判别 ⇒ `None`：
+/// **不取时钟、不分配、不打日志**（与既有慢门同口径）。
+#[must_use]
+#[inline]
+pub fn hear_targets_probe_begin() -> Option<Instant> {
+    HEAR_TARGETS_TICK.with(|c| c.get().map(|_| probe_clock_now()))
+}
+
+/// 探针时钟：**`hear_targets_at` 子探针路径上唯一的 `Instant::now()` 入口**。
+///
+/// 测试构建里顺带累加一个线程局部计数（[`probe_clock_calls_for_test`]），用于证明关闭态
+/// [`hear_targets_probe_begin`] **根本没有调用时钟**——「不落行」只能证明没记日志，不能证明
+/// 没取时钟。非测试构建下是 `Instant::now()` 的直接内联包装，无额外成本。
+#[inline]
+fn probe_clock_now() -> Instant {
+    #[cfg(test)]
+    clock_calls::bump();
+    Instant::now()
+}
+
+/// 测试专用时钟计数（只在 [`probe_clock_now`] 的测试构建里累加）。
+#[cfg(test)]
+mod clock_calls {
+    use std::cell::Cell;
+    thread_local! {
+        static CALLS: Cell<u64> = const { Cell::new(0) };
+    }
+    pub(super) fn bump() {
+        CALLS.with(|c| c.set(c.get().saturating_add(1)));
+    }
+    /// 取走并清零计数（测试用）。
+    pub(super) fn take() -> u64 {
+        CALLS.with(|c| c.replace(0))
+    }
+}
+
+/// **`hear_targets_at` 子探针终点**（`at == None` ⇒ 直接返回，不碰线程局部状态）。
+#[inline]
+pub fn hear_targets_probe_end(at: Option<Instant>) {
+    let Some(at) = at else { return };
+    let ns = nanos_since(at);
+    HEAR_TARGETS_TICK.with(|c| {
+        if let Some((total, calls)) = c.get() {
+            c.set(Some((total.saturating_add(ns), calls.saturating_add(1))));
+        }
+    });
+}
 
 /// 宿主段计时器（缺省关闭；`MIR2_TICK_PROFILE=1` 开启）。
 ///
@@ -351,6 +457,8 @@ impl HostTickProfile {
         } else {
             None
         };
+        // `hear_targets_at` 子探针只服务慢 tick 快照 ⇒ 与 SLOW 门同开同关（关闭态零开销）。
+        set_hear_targets_probe(enabled && slow.is_some());
         Self {
             enabled,
             slow_threshold_ns: slow,
@@ -448,13 +556,18 @@ impl HostTickProfile {
     #[inline]
     pub fn probe(&mut self, name: &'static str, at: Option<Instant>) {
         let Some(at) = at else { return };
-        let ns = nanos_since(at);
+        self.record_probe_ns(name, nanos_since(at), 1);
+    }
+
+    /// 记一条命名子探针（`calls` 次调用合计 `ns`）。窗口累计与逐 tick 行同口径；
+    /// 慢 tick 门关闭时不保留逐 tick 行（一次 `Option` 判别）。
+    fn record_probe_ns(&mut self, name: &'static str, ns: u64, calls: u64) {
         match self.probes.iter_mut().find(|(n, _, _)| *n == name) {
-            Some((_, total, calls)) => {
+            Some((_, total, c)) => {
                 *total = total.saturating_add(ns);
-                *calls += 1;
+                *c = c.saturating_add(calls);
             }
-            None => self.probes.push((name, ns, 1)),
+            None => self.probes.push((name, ns, calls)),
         }
         if self.slow_threshold_ns.is_some() {
             self.tick_probe_rows.push((name, ns));
@@ -494,6 +607,16 @@ impl HostTickProfile {
         self.window_ticks += 1;
         self.window_ns = self.window_ns.saturating_add(total);
         self.total_ticks += 1;
+        // **`hear_targets_at` 命名子项**：慢 tick 门开启时，把线程局部累加器收进本 tick 的探针行
+        // （`chat::hear_targets_at` 在消息处理深处调用，不携带 `&mut HostTickProfile`）。
+        // 未启用慢门 ⇒ 累加器为 `None`，一次 `Option` 判别后什么都不做（不取时钟、不分配）。
+        if self.slow_threshold_ns.is_some() {
+            if let Some((ns, calls)) = take_hear_targets_tick() {
+                if calls > 0 {
+                    self.record_probe_ns(HEAR_TARGETS_PROBE_NAME, ns, calls);
+                }
+            }
+        }
         self.pending_slow = match self.slow_threshold_ns {
             Some(threshold) if work >= threshold => Some(SlowTick {
                 tick,
@@ -915,6 +1038,143 @@ mod tests {
         let w = p.take_window().expect("窗口非空");
         assert_eq!(w.probes.len(), 1);
         assert!(p.probes.is_empty(), "取走窗口后子探针必须清零");
+    }
+
+    /// **`hear_targets_at` 子探针关闭态零开销**：累加器未置位（主门关 / 慢门未设）时，
+    /// `hear_targets_probe_begin` 恒 `None`，且**探针时钟调用计数必须为 0**（不只是「不落行」）；
+    /// `probe_end(None)` 不写状态；即使 Slow 门开着，`end_tick` 也拿不到任何 `hear_targets_at` 行。
+    ///
+    /// 变异：把 `hear_targets_probe_begin` 改成恒 `Some(probe_clock_now())` ⇒ 时钟计数断言红。
+    #[test]
+    fn hear_targets_probe_off_does_no_work() {
+        set_hear_targets_probe_for_test(false);
+        let _ = probe_clock_calls_for_test(); // 清掉同线程可能残留的计数
+        for _ in 0..100 {
+            assert!(
+                hear_targets_probe_begin().is_none(),
+                "未启用时不得取时钟（关闭态零开销）"
+            );
+            hear_targets_probe_end(None);
+        }
+        assert_eq!(
+            probe_clock_calls_for_test(),
+            0,
+            "关闭态 begin 100 次后探针时钟调用次数必须仍为 0（证明没调 Instant::now）"
+        );
+        assert!(take_hear_targets_tick().is_none(), "未启用时不得有累计");
+        // 主门开启、慢门关闭（既有 `with_enabled(true)` 形态）也不得采集、不得取时钟：
+        let mut p = HostTickProfile::with_enabled(true);
+        let slot = p.begin().expect("开启态");
+        for _ in 0..10 {
+            let at = hear_targets_probe_begin();
+            assert!(at.is_none(), "慢门关闭时不得取时钟");
+            hear_targets_probe_end(at);
+        }
+        assert_eq!(
+            probe_clock_calls_for_test(),
+            0,
+            "慢门关闭时也不得调用探针时钟"
+        );
+        p.end_tick(Some(slot));
+        assert!(
+            !p.probes()
+                .iter()
+                .any(|(n, _, _)| *n == HEAR_TARGETS_PROBE_NAME),
+            "慢门关闭时不得出现 hear_targets_at 行"
+        );
+        // 负对照：置位后必须真的计到 1，否则上面的 0 也可能是「计数器没接线」。
+        set_hear_targets_probe_for_test(true);
+        let at = hear_targets_probe_begin();
+        assert!(at.is_some());
+        assert_eq!(
+            probe_clock_calls_for_test(),
+            1,
+            "置位后 begin 必须调用探针时钟（证明计数有接线）"
+        );
+        hear_targets_probe_end(at);
+        set_hear_targets_probe_for_test(false);
+        let _ = probe_clock_calls_for_test();
+    }
+
+    /// **跨 tick 不累积**：tick1 调用 10 次、tick2 一次都不调用 ⇒ tick2 的慢快照里
+    /// **不得出现** `hear_targets_at` 行（更不能把 tick1 的 10 次/耗时再算一遍）。
+    ///
+    /// 变异：删掉 `take_hear_targets_tick` 里的 `c.set(Some((0, 0)))`（end_tick 取走后不清零）
+    /// ⇒ tick2 再次取到 tick1 的累计并落行 ⇒ 本用例红。
+    #[test]
+    fn hear_targets_probe_does_not_accumulate_across_ticks() {
+        set_hear_targets_probe_for_test(true);
+        // tick 1：10 次调用。阈值 1ns ⇒ 两个 tick 都判慢。
+        let mut p = HostTickProfile::with_slow_threshold_ns(1);
+        let slot = p.begin().expect("开启态");
+        for _ in 0..10 {
+            let at = hear_targets_probe_begin().expect("已置位");
+            std::thread::sleep(Duration::from_micros(50));
+            hear_targets_probe_end(Some(at));
+        }
+        p.end_tick(Some(slot));
+        let t1 = p.take_slow_tick().expect("tick1 必须是慢 tick");
+        assert!(
+            t1.probes.iter().any(|(n, _)| *n == HEAR_TARGETS_PROBE_NAME),
+            "tick1 有 10 次调用 ⇒ 必须有该项"
+        );
+        // tick 2：零调用。显式睡 1ms 让本 tick 的**工作段**可测（否则 0ns < 1ns 阈值 ⇒ 无快照）。
+        let slot = p.begin().expect("开启态");
+        std::thread::sleep(Duration::from_millis(1));
+        p.end_tick(Some(slot));
+        let t2 = p.take_slow_tick().expect("tick2 必须是慢 tick");
+        assert!(
+            !t2.probes.iter().any(|(n, _)| *n == HEAR_TARGETS_PROBE_NAME),
+            "tick2 零调用 ⇒ 不得出现该项（清零缺失时这里会是 tick1 的 10 次累计）"
+        );
+        let win = p
+            .probes()
+            .iter()
+            .find(|(n, _, _)| *n == HEAR_TARGETS_PROBE_NAME)
+            .expect("窗口累计必须含 tick1 的调用");
+        assert_eq!(
+            win.2, 10,
+            "窗口累计只能是 tick1 的 10 次（tick2 不得重复计入）"
+        );
+        set_hear_targets_probe_for_test(false);
+    }
+
+    /// **`hear_targets_at` 子探针开启态**：累加 `(ns, calls)`，`end_tick` 一次性收进慢 tick
+    /// 快照的 probes 与窗口 probes；取走后本 tick 累加器清零（不跨 tick 累积）。
+    ///
+    /// 变异：删掉 `end_tick` 里的 `take_hear_targets_tick()` 接线 ⇒ `slow.probes` 为空 ⇒ 红；
+    /// 把 `record_probe_ns` 的 `calls.saturating_add(calls)` 改成 `+= 1` ⇒ 调用次数断言红。
+    #[test]
+    fn hear_targets_probe_accumulates_into_slow_snapshot() {
+        set_hear_targets_probe_for_test(true);
+        let mut p = HostTickProfile::with_slow_threshold_ns(1); // 1ns ⇒ 必判慢 tick
+        let slot = p.begin().expect("开启态");
+        for _ in 0..3 {
+            let at = hear_targets_probe_begin().expect("已置位");
+            std::thread::sleep(Duration::from_millis(1));
+            hear_targets_probe_end(Some(at));
+        }
+        p.end_tick(Some(slot));
+        set_hear_targets_probe_for_test(false);
+        let slow = p.take_slow_tick().expect("必须产生慢 tick 快照");
+        let row = slow
+            .probes
+            .iter()
+            .find(|(n, _)| *n == HEAR_TARGETS_PROBE_NAME)
+            .expect("hear_targets_at 必须进慢 tick 快照");
+        assert!(row.1 >= 3_000_000, "3 次各睡 1ms，累计必须 ≥ 3ms");
+        let win = p
+            .probes()
+            .iter()
+            .find(|(n, _, _)| *n == HEAR_TARGETS_PROBE_NAME)
+            .expect("窗口累计必须含 hear_targets_at");
+        assert_eq!(win.2, 3, "调用次数必须按真实调用累计");
+        assert!(win.1 >= 3_000_000);
+        // 取走后清零（同一 tick 不重复计入下一个快照）。
+        assert!(
+            take_hear_targets_tick().is_none(),
+            "测试已清位 ⇒ 不得残留累计"
+        );
     }
 
     /// **环境门**：只有字面 `"1"` 开启；`"true"`/`"0"`/空/缺省一律关（fail-closed）。
