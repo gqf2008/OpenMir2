@@ -333,15 +333,30 @@ impl World {
         ctor_tick: i64,
     ) -> Result<i32, SessionError> {
         let World { entities, sim, .. } = self;
-        let Some(sess) = sim.sessions.get_mut(chr_name) else {
+        // **P2-3a（借用顺序）**：归属检查要读 `sim`（不可变），而下面的会话是 `get_mut`（可变）
+        // ⇒ 所有「图」的校验必须在取会话可变借用**之前**做完。为保持与原实现**完全相同的错误优先级**
+        // （NoSession → AlreadyInWorld → NoSuchMap → MapNotInShard），这里先用不可变借用做前两判。
+        if sim.sessions.get(chr_name).is_none() {
             return Err(SessionError::NoSession);
-        };
-        if sess.stage == WorldStage::InWorld {
+        }
+        if sim
+            .sessions
+            .get(chr_name)
+            .is_some_and(|s| s.stage == WorldStage::InWorld)
+        {
             return Err(SessionError::AlreadyInWorld);
         }
         if map_id >= sim.maps.len() {
             return Err(SessionError::NoSuchMap);
         }
+        // **P2-3a**：图在全局表里但属其它片 ⇒ 可区分错误（stub 上禁止实体）。
+        if !sim.is_map_owned(map_id) {
+            sim.note_unowned_refusal();
+            return Err(SessionError::MapNotInShard);
+        }
+        let Some(sess) = sim.sessions.get_mut(chr_name) else {
+            return Err(SessionError::NoSession);
+        };
         // **F1（reviewer-21 `993d3e7a`，卡 `openmir2-makeghost-lifecycle-m3` 返工）**：
         // `soft_close` 之后 `stage=Left` 但 `actor_id=Some`（遗留 ghost，M-3 的 `MakeGhost` 语义）。
         // **重进之前必须收走它**——否则同名 ghost 会永久留在 `entities` 里：
@@ -456,6 +471,11 @@ impl World {
         }
         if map_id >= self.maps.len() {
             return Err(SessionError::NoSuchMap);
+        }
+        // **P2-3a**：图在全局表里但属其它片 ⇒ 可区分错误（stub 上禁止实体）。
+        if !self.is_map_owned(map_id) {
+            self.note_unowned_refusal();
+            return Err(SessionError::MapNotInShard);
         }
         let actor_id = sess.actor_id.ok_or(SessionError::NotInWorld)?;
         let old_map = sess.map_id;
@@ -676,6 +696,11 @@ pub enum SessionError {
     AlreadyInWorld,
     NotInWorld,
     NoSuchMap,
+    /// **P2-3a**：目标图在全局 `maps` 表里存在，但**不归本 World 拥有**（其它分片）。
+    ///
+    /// 与 [`SessionError::NoSuchMap`] 区分：前者是「注册表里没有这张图」，本变体是
+    /// 「图存在、但本 World 是 stub」⇒ 跨片换图/落格必须 fail-closed（handoff 归 P2-5）。
+    MapNotInShard,
     /// 目标格不可用（越界或不可走）——对应 C# `EnterAnotherMap` 返回 `false`
     ///（`AddToMap` → `AddMapObject` 返回 false，`PlayObject.cs:3779-3791`）。
     ///

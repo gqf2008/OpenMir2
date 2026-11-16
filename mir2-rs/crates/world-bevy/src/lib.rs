@@ -406,6 +406,10 @@ pub mod space_move;
 pub mod special_monster;
 pub mod world;
 
+/// **P2-3a**：`map_id` 归属模型（stub 禁止实体、换图入口 fail-closed、不变式牙）的用例。
+#[cfg(test)]
+mod map_ownership_tests;
+
 pub use action::{ButchEvent, PushEvent, RushEvent, RushFrame, SkeletonEvent};
 pub use aoi::{
     search_view_range, search_view_range_death, search_view_range_events,
@@ -504,9 +508,10 @@ pub use special_monster::{
     RM_MAGSTRUCK, RM_MAGSTRUCK_MINE, RM_SPELL, RM_STRUCK, RM_ZEN_BEE, ZEN_BEE_DELAY_MS,
 };
 pub use world::{
-    AutoGetExpState, BaseObjectMoveOutcome, Command, DigOutEvent, EntitySnapshot,
-    ExtraAbilEventKind, ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView,
-    HideObserverKind, HomeMoveTarget, LampDuraChange, PassThroughHit, PassThroughOutcome,
-    RouteCheck, RunStateExpiry, SpaceMoveCastOutcome, StepBlock, StepOutcome, TickRecord,
-    UEnhancerOutcome, WeaponUpgradeEvent, WeaponUpgradeOutcome, World, TICK_INTERVAL_MS,
+    ownership_table_miss_first_map_id, ownership_table_misses, AutoGetExpState,
+    BaseObjectMoveOutcome, Command, DigOutEvent, EntitySnapshot, ExtraAbilEventKind,
+    ExtraAbilExpiry, FireBurnEvent, FireWallOutcome, FloorItemView, HideObserverKind,
+    HomeMoveTarget, LampDuraChange, PassThroughHit, PassThroughOutcome, RouteCheck, RunStateExpiry,
+    SpaceMoveCastOutcome, StepBlock, StepOutcome, TickRecord, UEnhancerOutcome, WeaponUpgradeEvent,
+    WeaponUpgradeOutcome, World, TICK_INTERVAL_MS,
 };
