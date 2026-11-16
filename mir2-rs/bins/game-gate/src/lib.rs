@@ -53,6 +53,7 @@ mod config;
 mod gbk;
 mod login;
 mod rules;
+mod telemetry;
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
@@ -124,7 +125,7 @@ macro_rules! glog {
 }
 
 /// 会话表：`SessionId → 该客户端连接的发送端`（一条网关→服务器连接一张表）。
-type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<Vec<u8>>>>>;
+type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<(Vec<u8>, u16)>>>>;
 
 /// 卡 `openmir2-sm-logon-cross-session-delivery`：**诊断用**的会话键占用者登记
 /// （`SessionId → (handle, peer)`）。与 [`Sessions`] 同键、同生命周期，只用于把
@@ -628,6 +629,21 @@ async fn run_inner(args: &[String]) -> Result<()> {
         conf.display()
     );
 
+    // **心跳汇总**（卡 openmir2-entry-telemetry）：每 10s 一行；与上一行完全相同就不打，
+    // 空载不刷屏。进程被强杀（Ctrl-C / Stop-Process）时最多丢最后一个 10s 窗口，
+    // 正好补上「整千帧才打印」在短跑/尾段丢不掉也等不到的问题。
+    tokio::spawn(async {
+        let mut last = String::new();
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+            let line = telemetry::summary_line();
+            if line != last {
+                glog!("INF", "{}", line);
+                last = line;
+            }
+        }
+    });
+
     let mut tasks = Vec::new();
     for (i, ep) in cfg.endpoints.into_iter().enumerate() {
         let sessions: Sessions = Arc::new(Mutex::new(HashMap::new()));
@@ -851,7 +867,7 @@ async fn register_session(
     sid: u16,
     handle: i32,
     peer: &str,
-    route_tx: Option<mpsc::UnboundedSender<Vec<u8>>>,
+    route_tx: Option<mpsc::UnboundedSender<(Vec<u8>, u16)>>,
 ) {
     let Some(route_tx) = route_tx else {
         return;
@@ -888,7 +904,7 @@ async fn client_loop(
     // 任何退出路径（含下面的 `?` 早退）都回收槽位。
     let _slot_guard = SlotGuard { slots, sid };
     let (mut rd, mut wr) = sock.into_split();
-    let (tx, mut rx) = mpsc::unbounded_channel::<Vec<u8>>();
+    let (tx, mut rx) = mpsc::unbounded_channel::<(Vec<u8>, u16)>();
     // C# `SessionInfo.ReceiveTick`（`ClientSession.ProcessSessionPacket` 首行刷新）。
     let last_recv_ms = Arc::new(AtomicI64::new(now_ms()));
     // `ProcessIdleSession` 的 `Socket.Close()` 等价物：唤醒读循环 ⇒ 退出时关 socket、发 `GM_CLOSE`。
@@ -911,8 +927,10 @@ async fn client_loop(
 
     // 回写任务：把下行读循环已经拼好的**客户端帧**（`#…!`，见 `client_frame`）原样写给客户端
     let writer = tokio::spawn(async move {
-        while let Some(buf) = rx.recv().await {
+        while let Some((buf, ident)) = rx.recv().await {
             if wr.write_all(&buf).await.is_err() {
+                // **遥测**：下行写客户端 socket 失败（原实现静默 break，与 774→759 的缺口相关）。
+                telemetry::record_downlink_write_fail(ident);
                 break;
             }
             let _ = wr.flush().await;
@@ -1083,6 +1101,10 @@ async fn handle_frame(
     handle: i32,
     now: i64,
 ) -> Result<Step> {
+    let frames_in = telemetry::FRAMES_IN.fetch_add(1, Ordering::Relaxed) + 1;
+    if let Some(line) = telemetry::maybe_summary(frames_in) {
+        glog!("INF", "{}", line);
+    }
     match classify_frame(
         frame,
         logged_in,
@@ -1101,9 +1123,25 @@ async fn handle_frame(
             let session_index = *ctx.indexes.lock().await.get(&sid).unwrap_or(&0);
             let wire = rebuild_command_frame(&decoded, payload, handle, sid, session_index);
             // C# `ClientThread.Send`：离线时静默丢弃，不向会话层抛。
-            let _ = ctx.downstream.send_raw(&wire);
+            // **遥测**（卡 openmir2-entry-telemetry）：原实现 `let _ =` 完全静默，这里只计数、不改行为。
+            if ctx.downstream.send_raw(&wire) {
+                telemetry::GM_DATA_FORWARDED.fetch_add(1, Ordering::Relaxed);
+            } else {
+                telemetry::SEND_RAW_FAIL.fetch_add(1, Ordering::Relaxed);
+            }
             Ok(Step::Next)
         }
+    }
+}
+
+/// 规则丢弃的桶号：`Verdict::Drop` / `DropKick` 只可能来自 move/attack/spell 三支
+/// （[`classify_frame`] 的 `match ident`），故不需要「其它」兜底桶。
+fn drop_bucket(ident: u16) -> usize {
+    use mir2_protocol::messages as m;
+    match ident {
+        m::CM_WALK | m::CM_RUN => 0,
+        m::CM_SPELL => 2,
+        _ => 1,
     }
 }
 
@@ -1179,6 +1217,7 @@ fn classify_frame(
     match verdict {
         rules::Verdict::Forward => {}
         rules::Verdict::Drop => {
+            telemetry::RULE_DROPPED[drop_bucket(ident)].fetch_add(1, Ordering::Relaxed);
             glog!(
                 "DBG",
                 "超速/间隔未到，丢弃该帧（Ident={ident} SessionId={sid}）"
@@ -1186,6 +1225,7 @@ fn classify_frame(
             return Classified::Drop;
         }
         rules::Verdict::DropKick => {
+            telemetry::RULE_DROPPED[drop_bucket(ident)].fetch_add(1, Ordering::Relaxed);
             // oracle `SendKickMsg(0)` 的发送代码整段被注释（`ClientSession.cs:1030-1046`）：
             // 只 `LogService.Debug(OverSpeedSendBack)`，**不发帧、不关会话** ⇒ 这里同样只记日志。
             glog!(
@@ -1206,6 +1246,7 @@ fn classify_frame(
             gate_rules.chat_interval_ms,
         )
     {
+        telemetry::RULE_DROPPED[3].fetch_add(1, Ordering::Relaxed);
         glog!(
             "DBG",
             "聊天间隔未到（{}ms），丢弃该帧（SessionId={sid}）",
@@ -1228,9 +1269,12 @@ async fn handle_login(
 ) -> Result<Step> {
     let text = gbk::decode(&mir2_protocol::edcode::decode(&body[2..body.len() - 1]));
     match login::parse_client_login(&text, body.len()) {
-        Err(reason) => Ok(Step::Close(format!(
-            "客户端登陆消息处理失败，剔除链接: {reason}"
-        ))),
+        Err(reason) => {
+            telemetry::LOGIN_PARSE_KICK.fetch_add(1, Ordering::Relaxed);
+            Ok(Step::Close(format!(
+                "客户端登陆消息处理失败，剔除链接: {reason}"
+            )))
+        }
         Ok(fields) => {
             let login_body = login::synthetic_login_body(&fields, ctx.service_id);
             let head = ServerMessage {
@@ -1260,12 +1304,13 @@ async fn handle_login(
 async fn deliver_gm_data(ctx: &LinkCtx, msg: &ServerMessage, body: &[u8]) {
     let wire = client_frame(msg.pack_length, body);
     let owner = ctx.route_owner.lock().await.get(&msg.session_id).cloned();
+    // ident 只解一次：成功路径（随帧下传写失败归组）与「无路由」路径共用。
+    let ident = inner_ident(body).unwrap_or(0);
     let guard = ctx.sessions.lock().await;
     if let Some(tx) = guard.get(&msg.session_id) {
-        let ok = tx.send(wire).is_ok();
+        let ok = tx.send((wire, ident)).is_ok();
         // **只对 SM_LOGON(50) 打行**：AOI 帧可达 1e4/s，逐帧日志会拖慢网关读循环
         // （2026-11-15 首轮 200 档实测：24.7 万行 DBG 把进世界流水拖到停滞，结果不可用）。
-        let ident = inner_ident(body).unwrap_or(0);
         if misdeliver_log_enabled() && ident == mir2_protocol::messages::SM_LOGON {
             glog!(
                 "DBG",
@@ -1278,7 +1323,6 @@ async fn deliver_gm_data(ctx: &LinkCtx, msg: &ServerMessage, body: &[u8]) {
             );
         }
     } else {
-        let ident = inner_ident(body).unwrap_or(0);
         if misdeliver_log_enabled() && ident == mir2_protocol::messages::SM_LOGON {
             glog!(
                 "DBG",
@@ -1288,6 +1332,7 @@ async fn deliver_gm_data(ctx: &LinkCtx, msg: &ServerMessage, body: &[u8]) {
                 body.len()
             );
         }
+        telemetry::record_downlink_unknown(ident);
         glog!(
             "WRN",
             "会话[{}]不存在，丢弃下行 {} 字节",
@@ -1925,6 +1970,8 @@ pub fn run_with_args(args: &[String]) -> i32 {
         .build()
         .expect("Failed building the Runtime");
     let result = rt.block_on(run_inner(args));
+    // 退出前补一行终值（强杀拿不到，靠 10s 心跳兜底；见 `telemetry` 模块头）。
+    glog!("INF", "{} (final)", telemetry::summary_line());
     let code = match result {
         Ok(()) => 0,
         Err(err) => {
@@ -2101,6 +2148,53 @@ mod tests {
             gate_rules: gate_rules(),
             nom_client_packet_size: 400,
         }
+    }
+
+    /// 线缆帧：`#1` + Encode(12B CommandMessage) + `!`；`CM_SPELL`、`Tag=200`
+    /// （`>= 128` ⇒ oracle `ClientSession.cs:333-336` 直接丢帧，不进延时表）。
+    fn spell_drop_frame() -> Vec<u8> {
+        let mut cmd = vec![0u8; COMMAND_MESSAGE_SIZE];
+        cmd[4..6].copy_from_slice(&mir2_protocol::messages::CM_SPELL.to_le_bytes());
+        cmd[8..10].copy_from_slice(&200u16.to_le_bytes());
+        let mut frame = Vec::new();
+        frame.extend_from_slice(b"#1");
+        frame.extend_from_slice(&mir2_protocol::edcode::encode(&cmd));
+        frame.push(b'!');
+        frame
+    }
+
+    /// 桶映射本身（纯函数）：三族各归各桶，绝不都落到同一个桶。
+    #[test]
+    fn drop_bucket_maps_each_family() {
+        assert_eq!(drop_bucket(mir2_protocol::messages::CM_WALK), 0);
+        assert_eq!(drop_bucket(mir2_protocol::messages::CM_RUN), 0);
+        assert_eq!(drop_bucket(mir2_protocol::messages::CM_HEAVYHIT), 1);
+        assert_eq!(drop_bucket(mir2_protocol::messages::CM_SPELL), 2);
+    }
+
+    /// 规则丢弃**真的**进了桶：spell 的 Drop 让第 3 个桶 +1。
+    /// 用「差值」而不是绝对值——其它用例也在用同一组全局计数器；
+    /// 选 spell 桶是因为别的用例都不碰它。
+    #[test]
+    fn spell_drop_counts_into_spell_bucket() {
+        let before = telemetry::RULE_DROPPED[2].load(std::sync::atomic::Ordering::Relaxed);
+        let mut s = fresh_session();
+        let got = classify_frame(
+            &spell_drop_frame(),
+            true,
+            &mut s,
+            &gate_rules(),
+            400,
+            7,
+            1_000,
+        );
+        assert_eq!(got, Classified::Drop);
+        let after = telemetry::RULE_DROPPED[2].load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(
+            after,
+            before + 1,
+            "spell 桶必须 +1（删掉分桶计数 ⇒ 本断言红）"
+        );
     }
 
     fn fresh_session() -> SessionRules {
