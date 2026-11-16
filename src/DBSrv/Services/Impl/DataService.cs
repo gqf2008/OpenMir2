@@ -131,6 +131,12 @@ namespace DBSrv.Services.Impl
             switch (packet.Ident)
             {
                 case Messages.DB_LOADHUMANRCD:
+                    // **入口遥测**（卡 `openmir2-entry-load-reply-buckets`）：到达 5100 取档面的请求数；
+                    // 每 100 个打一行四桶汇总。只计数，不改判定/回包。
+                    if (EntryTelemetry.LoadRequestSeen() % 100 == 0)
+                    {
+                        LogService.Info(EntryTelemetry.SummaryLine());
+                    }
                     LoadHumanRcd(nQueryId, sData, connectionId);
                     break;
                 case Messages.DB_SAVEHUMANRCD:
@@ -153,6 +159,13 @@ namespace DBSrv.Services.Impl
             LoadCharacterData loadHumanPacket = SerializerUtil.Deserialize<LoadCharacterData>(data);
             if (loadHumanPacket.SessionID <= 0)
             {
+                // **入口遥测**：这里原来直接 `return`——**不回包、不打日志**，上游永远等不到应答。
+                // 必须单列一桶，否则会被误算成「请求根本没到 DBSvr」（卡 `openmir2-entry-load-reply-buckets`）。
+                long nd = EntryTelemetry.LoadDroppedNoSession();
+                if (EntryTelemetry.SampleDroppedNoSession())
+                {
+                    LogService.Warn($"[EntryTelemetry] load_dropped_no_session #{nd} Account={loadHumanPacket.Account} ChrName={loadHumanPacket.ChrName} SessionID={loadHumanPacket.SessionID} UserAddr={loadHumanPacket.UserAddr}");
+                }
                 return;
             }
             CharacterDataInfo humanRcd = null;
@@ -194,6 +207,7 @@ namespace DBSrv.Services.Impl
                 ServerRequestMessage messagePacket = new ServerRequestMessage(Messages.DBR_LOADHUMANRCD, 1, 0, 0, 1);
                 responsePack.Message = EDCode.EncodeBuffer(SerializerUtil.Serialize(messagePacket));
                 SendRequest(connectionId, queryId, responsePack, loadHumData);
+                EntryTelemetry.LoadRespondedOk();
                 LogService.Debug($"获取玩家[{loadHumanPacket.ChrName}]数据成功");
             }
             else
@@ -201,6 +215,11 @@ namespace DBSrv.Services.Impl
                 ServerRequestMessage messagePacket = new ServerRequestMessage(Messages.DBR_LOADHUMANRCD, nCheckCode, 0, 0, 0);
                 responsePack.Message = EDCode.EncodeBuffer(SerializerUtil.Serialize(messagePacket));
                 SendRequest(connectionId, queryId, responsePack);
+                long nf = EntryTelemetry.LoadRespondedFail();
+                if (EntryTelemetry.SampleReplyFail())
+                {
+                    LogService.Warn($"[EntryTelemetry] load_reply_fail #{nf} CheckCode={nCheckCode} Account={loadHumanPacket.Account} ChrName={loadHumanPacket.ChrName} SessionID={loadHumanPacket.SessionID} UserAddr={loadHumanPacket.UserAddr} boFoundSession={boFoundSession}");
+                }
             }
         }
 

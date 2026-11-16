@@ -11,10 +11,14 @@
 //! | [`LOGON_FRAMES_SEEN`] | `GateEvent::LoadDbRequest` 分支 | 网关侧认证通过、取角色进世界的登录事件到达 |
 //! | [`ENTER_ATTEMPT`] | `DBR_LOADHUMANRCD(1100) recog==1` 回包分支入口 | 拿到角色数据、开始进世界流程 |
 //! | [`ENTER_OK`] | `world.enter_map_at(..)` 返回 `Ok(id)` 分支 | 真正进入世界（会话 + 实体落图） |
+//! | [`LOAD_REPLY_OTHER`] | `ident == DBR_LOADHUMANRCD && recog != 1` 的 else 分支 | 取档应答到了但**不是成功码**（修复前该分支完全静默） |
 //!
 //! 相邻两两之差即缺口：
-//! - `logon_frames_seen - enter_attempt`：收到了但没走到进世界（取数失败/重排队/重复登录/踢出）；
+//! - `logon_frames_seen - enter_attempt - load_reply_other`：**连应答都没等到**（请求没到 DBSvr /
+//!   应答在单连接上丢或错配 / DBSvr 侧静默丢弃）——这是卡 `openmir2-entry-load-reply-buckets` 要分开的那一段；
 //! - `enter_attempt - enter_ok`：开始进世界但失败（解析失败/准入拒绝/落图失败）。
+//!
+//! `load_reply_other` 另采样前 [`SAMPLE_LIMIT`] 条原样字段（`ENTRY_SAMPLE load_reply_recog_other …`）。
 //!
 //! **不改任何协议/回包/业务分支**；打印沿用 gate 的 `ENTRY_TELEMETRY` 单行风格，带 `svc=game-svr`
 //! 便于与 gate 行区分。每 `PRINT_EVERY` 次事件打印一行（用 `fetch_add` 的返回值判档，
@@ -36,6 +40,17 @@ pub static LOGON_FRAMES_SEEN: AtomicU64 = AtomicU64::new(0);
 pub static ENTER_ATTEMPT: AtomicU64 = AtomicU64::new(0);
 /// 真正进入世界的次数（`world.enter_map_at(..)` 返回 `Ok`）。
 pub static ENTER_OK: AtomicU64 = AtomicU64::new(0);
+/// `DBR_LOADHUMANRCD(1100)` 且 **`recog != 1`** 的取档应答数（卡 `openmir2-entry-load-reply-buckets`）。
+///
+/// 该分支**修复前完全静默**：应答被取走、不打日志、不计 [`ENTER_ATTEMPT`] ⇒
+/// 「`logon_frames_seen - enter_attempt` 的缺口」到底是「没回包」还是「回了失败码」分不开。
+pub static LOAD_REPLY_OTHER: AtomicU64 = AtomicU64::new(0);
+
+/// 每个样本类别最多打印几条（前 N 条原样字段；之后只计数）。
+const SAMPLE_LIMIT: u64 = 5;
+
+/// `recog != 1` 样本的打印序号计数器（与计数无关，只用于截断前 N 条）。
+static SAMPLE_LOG_REPLY_OTHER: AtomicU64 = AtomicU64::new(0);
 
 fn bump(counter: &AtomicU64) -> Option<String> {
     let n = counter.fetch_add(1, Relaxed) + 1;
@@ -63,14 +78,27 @@ pub fn record_ok() -> Option<String> {
     bump(&ENTER_OK)
 }
 
-/// 三段计数的一行汇总（字段名固定，供日志侧机判）。
+/// `recog != 1` 的取档应答 +1；整百 ⇒ 返回一行汇总。
+#[must_use]
+pub fn record_load_reply_other() -> Option<String> {
+    bump(&LOAD_REPLY_OTHER)
+}
+
+/// 该 `recog != 1` 应答是否该打样本行（前 [`SAMPLE_LIMIT`] 条为真，其余为假）。
+#[must_use]
+pub fn sample_load_reply_other() -> bool {
+    SAMPLE_LOG_REPLY_OTHER.fetch_add(1, Relaxed) < SAMPLE_LIMIT
+}
+
+/// 三段计数 + 取档失败码应答的一行汇总（字段名固定，供日志侧机判）。
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={} load_reply_other={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
-        ENTER_OK.load(Relaxed)
+        ENTER_OK.load(Relaxed),
+        LOAD_REPLY_OTHER.load(Relaxed)
     )
 }
 
@@ -109,9 +137,35 @@ mod tests {
     fn summary_line_carries_every_field() {
         let line = summary_line();
         assert!(line.starts_with("ENTRY_TELEMETRY svc=game-svr "), "{line}");
-        for key in ["logon_frames_seen=", "enter_attempt=", "enter_ok="] {
+        for key in [
+            "logon_frames_seen=",
+            "enter_attempt=",
+            "enter_ok=",
+            "load_reply_other=",
+        ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
+    }
+
+    /// 样本只打前 `SAMPLE_LIMIT` 条：第 1..=N 条为真、之后的都是假（空集形态：第一次调用必须为真）。
+    #[test]
+    fn sample_cap_is_exactly_first_n() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = SAMPLE_LOG_REPLY_OTHER.load(Ordering::Relaxed);
+        assert!(sample_load_reply_other(), "第一条必须打样本");
+        for _ in 1..SAMPLE_LIMIT {
+            assert!(sample_load_reply_other(), "前 {SAMPLE_LIMIT} 条都要打");
+        }
+        assert!(
+            !sample_load_reply_other(),
+            "第 {} 条及以后不得再打（截断牙）",
+            SAMPLE_LIMIT + 1
+        );
+        assert_eq!(
+            SAMPLE_LOG_REPLY_OTHER.load(Ordering::Relaxed),
+            before + SAMPLE_LIMIT + 1,
+            "采样计数器必须逐次 +1（与业务计数分开）"
+        );
     }
 
     /// 三个计数器互相独立：动一个不许动另一个（同族「删任一计数 ⇒ 对应断言红」的前提）。

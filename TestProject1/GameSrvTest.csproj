@@ -26,6 +26,7 @@
   <ItemGroup>
     <ProjectReference Include="..\src\OpenMir2\OpenMir2.csproj" />
     <ProjectReference Include="..\src\Storeages\DBSvr.Storage.MySQL\DBSvr.Storage.MySQL.csproj" />
+    <ProjectReference Include="..\src\DBSrv\DBSrv.csproj" />
   </ItemGroup>
 
 </Project>
