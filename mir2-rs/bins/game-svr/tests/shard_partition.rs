@@ -87,3 +87,33 @@ fn single_shard_keeps_the_full_map_table() {
         );
     }
 }
+
+/// **P3-1 牙（follow-up）**：`sim_loop` 的登录进图路径必须在 `world.enter_map_at` **之前**
+/// 调用跨片 guard。删掉新增的 guard 臂 ⇒ 生产段里 `guard_cross_shard_enter(` 消失，本用例红。
+///
+/// 为什么需要这条：`NoSuchMap` 与 `route_allowed` 的断言只钉「World 没有这张图」，
+/// 删掉 guard 后世界仍会返回 `NoSuchMap` ⇒ 假绿；这里钉的是「guard 真的接在进图之前」。
+#[test]
+fn sim_loop_enter_path_calls_cross_shard_guard_before_world_enter() {
+    let src = std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/lib.rs"))
+        .expect("读 lib.rs");
+    let prod_end = src.find("mod tests {").expect("`mod tests {` 行");
+    let prod = &src[..prod_end];
+    let guard = prod
+        .find("guard_cross_shard_enter(")
+        .expect("跨片登图 guard 必须存在（删掉 guard 臂 ⇒ 本条红）");
+    let enter = prod
+        .find("world.enter_map_at(")
+        .expect("登录进图 call（world.enter_map_at）必须存在");
+    assert!(
+        guard < enter,
+        "guard 必须在 world.enter_map_at 之前注册（guard={guard} enter={enter}）"
+    );
+    let arm = prod[..guard]
+        .rfind("Ok((final_map_name, map_id))")
+        .expect("guard 必须写在登录 Ok 臂内");
+    assert!(
+        guard - arm < 2000,
+        "guard 必须紧邻登录 Ok 臂（arm={arm} guard={guard}）"
+    );
+}

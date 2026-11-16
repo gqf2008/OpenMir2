@@ -745,13 +745,30 @@ impl fmt::Display for ShardLayoutError {
 
 impl std::error::Error for ShardLayoutError {}
 
+/// 一条地图连接点（走路换图）在**宿主片视角**下的分类。
+///
+/// `cross_shard_route_refused` 与 `foreign_shard_route_refused` 分开累计：
+/// 前者是「从宿主片走向其它片」（P2-5 handoff 要处理的），后者是「整条连接点都不属宿主片」。
+/// 两者都拒绝注册，但日志里必须能分别核对（follow-up：旧日志把 foreign 条数写成累计之外）。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RouteClass {
+    /// 源与目标都在宿主片 ⇒ 正常注册。
+    Keep,
+    /// 源在宿主片、目标在其它片 ⇒ 跨片换图（拒绝，计入 `cross_shard_route_refused`）。
+    CrossShard,
+    /// 源在其它片 ⇒ 整条连接点不属宿主片（拒绝，计入 `foreign_shard_route_refused`）。
+    ForeignShard,
+}
+
 /// 跨片拒绝计数（P2-2 起由宿主在拒绝点累加；日志里带累计值）。
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct ShardCounters {
     /// 登录/进图目标图不属宿主片 ⇒ 拒绝进图的次数。
     pub cross_shard_entry_refused: u64,
-    /// 启动装载时被拒绝注册的跨片地图连接点条数。
+    /// 源在宿主片、目标在其它片的地图连接点条数（P2-5 handoff 的对象）。
     pub cross_shard_route_refused: u64,
+    /// 源在其它片、整条不属宿主片的地图连接点条数（与上一条**分开**累计）。
+    pub foreign_shard_route_refused: u64,
 }
 
 /// 宿主侧分片运行时句柄：布局 + 拒绝计数。
@@ -799,16 +816,57 @@ impl ShardRuntime {
         self.host_owns(src_map) && self.host_owns(dst_map)
     }
 
+    /// 地图连接点分类（**唯一分类口径**；`sim_loop` 的注册过滤与日志都走这里）。
+    ///
+    /// 顺序是契约：先看源（整条是否属宿主片），再看目标（是否跨片）。
+    #[must_use]
+    pub fn classify_route(&self, src_map: usize, dst_map: usize) -> RouteClass {
+        if !self.host_owns(src_map) {
+            RouteClass::ForeignShard
+        } else if !self.host_owns(dst_map) {
+            RouteClass::CrossShard
+        } else {
+            RouteClass::Keep
+        }
+    }
+
     /// 记一次「跨片进图被拒绝」，返回累计值。
     pub fn note_cross_shard_entry_refused(&mut self) -> u64 {
         self.counters.cross_shard_entry_refused += 1;
         self.counters.cross_shard_entry_refused
     }
 
+    /// **跨片登图守卫**：目标图归宿主片 ⇒ `None`（放行）；否则累计计数并返回要打印的 WRN 行。
+    ///
+    /// 把「判定 + 计数 + 日志文本」放在一个纯函数里，才有可变异/可断言的牙：
+    /// `sim_loop` 只负责调用并 `glog!`。删掉 `sim_loop` 的 guard 臂时，接线用例
+    /// （`tests/shard_partition.rs`）必须红。
+    #[must_use = "返回的日志行必须被打印，否则跨片拒绝不可见"]
+    pub fn guard_cross_shard_enter(
+        &mut self,
+        chr_name: &str,
+        map_name: &str,
+        map_id: usize,
+    ) -> Option<String> {
+        if self.host_owns(map_id) {
+            return None;
+        }
+        let count = self.note_cross_shard_entry_refused();
+        Some(format!(
+            "拒绝进图（跨片 fail-closed，P2-2）：ChrName:{chr_name} CurMap:{map_name} map_id={map_id} 属其它片（handoff 在 P2-5）；累计跨片进图拒绝 {count}"
+        ))
+    }
+
     /// 记一次「跨片连接点被拒绝」（`n` 条由启动装载一次性拒绝），返回累计值。
     pub fn note_cross_shard_routes_refused(&mut self, n: u64) -> u64 {
         self.counters.cross_shard_route_refused += n;
         self.counters.cross_shard_route_refused
+    }
+
+    /// 记一次「源在其它片、整条连接点不属宿主片」（与跨片计数**分开**累计），返回累计值。
+    pub fn note_foreign_shard_routes_skipped(&mut self, n: u64) -> u64 {
+        self.counters.foreign_shard_route_refused += n;
+        self.counters.foreign_shard_route_refused
     }
 
     /// 是否单片（P2-1 的全部守卫在此为真时都是空操作）。
@@ -970,8 +1028,86 @@ mod tests {
             ShardCounters {
                 cross_shard_entry_refused: 1,
                 cross_shard_route_refused: 2,
+                foreign_shard_route_refused: 0,
             }
         );
+    }
+
+    /// follow-up 牙：foreign-only 连接点必须进 `foreign_shard_route_refused`，
+    /// **不能**被算进 `cross_shard_route_refused`（旧实现的累计漏掉 foreign）。
+    ///
+    /// 红检：把 `classify_route` 的 `ForeignShard` 支改成 `CrossShard`，或让
+    /// `sim_loop` 只累计 cross ⇒ 本用例的 `cross==0 / foreign==N` 断言红。
+    #[test]
+    fn route_classification_and_counters_split_cross_from_foreign() {
+        let maps = map_names(&["A", "B", "C"]);
+        let layout = ShardLayout::partition(2, &maps, Some("0:A;1:*")).expect("两片划分");
+        let mut runtime = ShardRuntime::new(layout);
+        // 宿主片 = {0}；片 1 = {1,2}。
+        assert_eq!(runtime.classify_route(0, 0), RouteClass::Keep);
+        assert_eq!(runtime.classify_route(0, 1), RouteClass::CrossShard);
+        assert_eq!(
+            runtime.classify_route(1, 2),
+            RouteClass::ForeignShard,
+            "源不在宿主片 ⇒ 整条不属宿主片"
+        );
+        assert_eq!(runtime.classify_route(9, 0), RouteClass::ForeignShard);
+        assert_eq!(runtime.classify_route(0, 9), RouteClass::CrossShard);
+
+        // foreign-only 场景：两条连接点都源在片 1（不跨片，但整条不属宿主）。
+        let mut cross = 0u64;
+        let mut foreign = 0u64;
+        for (src, dst) in [(1usize, 2usize), (2, 1)] {
+            match runtime.classify_route(src, dst) {
+                RouteClass::Keep => {}
+                RouteClass::CrossShard => cross += 1,
+                RouteClass::ForeignShard => foreign += 1,
+            }
+        }
+        assert_eq!((cross, foreign), (0, 2), "foreign-only 不得混进 cross");
+        assert_eq!(runtime.note_cross_shard_routes_refused(cross), 0);
+        assert_eq!(runtime.note_foreign_shard_routes_skipped(foreign), 2);
+        assert_eq!(runtime.counters().cross_shard_route_refused, 0);
+        assert_eq!(runtime.counters().foreign_shard_route_refused, 2);
+
+        // mixed：cross 与 foreign 各 1，累计互不污染。
+        let mut runtime =
+            ShardRuntime::new(ShardLayout::partition(2, &maps, Some("0:A;1:*")).unwrap());
+        assert_eq!(runtime.classify_route(0, 2), RouteClass::CrossShard);
+        assert_eq!(runtime.classify_route(2, 1), RouteClass::ForeignShard);
+        runtime.note_cross_shard_routes_refused(1);
+        runtime.note_foreign_shard_routes_skipped(1);
+        assert_eq!(runtime.counters().cross_shard_route_refused, 1);
+        assert_eq!(runtime.counters().foreign_shard_route_refused, 1);
+    }
+
+    /// follow-up 牙：跨片登图 guard 必须同时给出**日志行**与**计数**；本片进图零副作用。
+    ///
+    /// 红检：删掉 `guard_cross_shard_enter` 的 `host_owns` 早退 ⇒ 本片进图也返回 Some（红）；
+    /// 删掉 `note_cross_shard_entry_refused()` ⇒ 累计断言红；把返回值改成纯 bool ⇒ 日志断言红。
+    #[test]
+    fn cross_shard_enter_guard_returns_log_line_and_counts() {
+        let maps = map_names(&["A", "B"]);
+        let layout = ShardLayout::partition(2, &maps, Some("0:A;1:*")).expect("两片划分");
+        let mut runtime = ShardRuntime::new(layout);
+        assert_eq!(
+            runtime.guard_cross_shard_enter("hero", "A", 0),
+            None,
+            "宿主片进图不拒绝、不计数"
+        );
+        assert_eq!(runtime.counters().cross_shard_entry_refused, 0);
+        let line = runtime
+            .guard_cross_shard_enter("hero", "B", 1)
+            .expect("其它片必须拒绝");
+        assert!(line.contains("跨片 fail-closed"), "{line}");
+        assert!(line.contains("map_id=1"), "{line}");
+        assert!(line.contains("累计跨片进图拒绝 1"), "{line}");
+        assert_eq!(runtime.counters().cross_shard_entry_refused, 1);
+        let line2 = runtime
+            .guard_cross_shard_enter("hero2", "B", 1)
+            .expect("重复拒绝也要计数");
+        assert!(line2.contains("累计跨片进图拒绝 2"), "{line2}");
+        assert_eq!(runtime.counters().cross_shard_entry_refused, 2);
     }
 
     #[test]

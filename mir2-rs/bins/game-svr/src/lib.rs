@@ -25521,38 +25521,43 @@ fn sim_loop(
         // **P2-2 跨片 fail-closed**：只注册**源与目标都在宿主片**的连接点。跨片连接点被拒绝注册
         // （不是「注册后走路失败」）⇒ 玩家走到该格就是普通格子，不会静默进其它片。
         // `MIR2_SHARDS=1` 时 `host_owns` 恒真 ⇒ 一条都不会被过滤（`added` 与 master 相同）。
+        // **follow-up**：cross 与 foreign 分开累计（旧日志的「累计」只含 cross，与同行的 foreign 条数矛盾）。
         let mut cross_shard_routes = 0u64;
         let mut foreign_shard_routes = 0u64;
         let specs: Vec<mir2_world_bevy::map::MapRouteSpec> = reg
             .routes()
             .iter()
-            .filter_map(|r| {
-                if !shard_runtime.host_owns(r.src_map_id) {
-                    foreign_shard_routes += 1;
-                    return None;
-                }
-                if !shard_runtime.host_owns(r.dst_map_id) {
-                    cross_shard_routes += 1;
-                    return None;
-                }
-                Some(mir2_world_bevy::map::MapRouteSpec {
-                    map_id: r.src_map_id,
-                    x: r.src_x,
-                    y: r.src_y,
-                    route_id: r.route_id,
-                    hop: mir2_world_bevy::map::RouteHop {
-                        dst_map_id: r.dst_map_id,
-                        dst_x: r.dst_x,
-                        dst_y: r.dst_y,
-                    },
-                })
-            })
+            .filter_map(
+                |r| match shard_runtime.classify_route(r.src_map_id, r.dst_map_id) {
+                    shard::RouteClass::Keep => Some(mir2_world_bevy::map::MapRouteSpec {
+                        map_id: r.src_map_id,
+                        x: r.src_x,
+                        y: r.src_y,
+                        route_id: r.route_id,
+                        hop: mir2_world_bevy::map::RouteHop {
+                            dst_map_id: r.dst_map_id,
+                            dst_x: r.dst_x,
+                            dst_y: r.dst_y,
+                        },
+                    }),
+                    shard::RouteClass::CrossShard => {
+                        cross_shard_routes += 1;
+                        None
+                    }
+                    shard::RouteClass::ForeignShard => {
+                        foreign_shard_routes += 1;
+                        None
+                    }
+                },
+            )
             .collect();
         if cross_shard_routes > 0 || foreign_shard_routes > 0 {
-            let total = shard_runtime.note_cross_shard_routes_refused(cross_shard_routes);
+            let cross_total = shard_runtime.note_cross_shard_routes_refused(cross_shard_routes);
+            let foreign_total =
+                shard_runtime.note_foreign_shard_routes_skipped(foreign_shard_routes);
             glog!(
                 "WRN",
-                "跨片地图连接点已拒绝注册（fail-closed；handoff 在 P2-5）：片 0→其它片 {cross_shard_routes} 条，其它片内部 {foreign_shard_routes} 条；累计跨片拒绝 {total}"
+                "跨片地图连接点已拒绝注册（fail-closed；handoff 在 P2-5）：片 0→其它片 {cross_shard_routes} 条（累计 {cross_total}），其它片内部 {foreign_shard_routes} 条（累计 {foreign_total}）"
             );
         }
         let added = world.add_map_routes(specs);
@@ -25875,9 +25880,16 @@ fn sim_loop(
         // 挂图**不在这里**：`MerchantInitialize`（`:8`）倒序遍历 `MerchantList`，QFunction 首位
         // ⇒ 最后挂图；见 `Merchant.txt` 装载之后的挂图块。
         let mut qfunction_id: Option<i32> = None;
-        match loader.load_map_quest(|n| {
-            reg.id_of(n)
-                .is_some_and(|id| shard_runtime.host_owns(id))
+        // **follow-up**：`load_map_quest` 的谓词只返回 bool（无法带原因），用 `Cell` 把
+        // 「注册表命中但属其它片」单独计数 ⇒ 后面能明确写「属其它片」，不伪装成未知地图。
+        let foreign_quest_records = std::cell::Cell::new(0usize);
+        match loader.load_map_quest(|n| match reg.id_of(n) {
+            None => false,
+            Some(id) if shard_runtime.host_owns(id) => true,
+            Some(_) => {
+                foreign_quest_records.set(foreign_quest_records.get() + 1);
+                false
+            }
         }) {
             Ok(load) => match load.merchants.iter().find(|r| r.chr_name == "QFunction") {
                 Some(record) => match reg.id_of(&record.map_name) {
@@ -25920,15 +25932,32 @@ fn sim_loop(
                         record.map_name
                     ),
                 },
-                None => glog!(
-                    "WRN",
-                    "MapQuest 装载无 QFunction 记录 ⇒ 不建隐藏商人实体（登记）"
-                ),
+                None => {
+                    let foreign = foreign_quest_records.get();
+                    if foreign > 0 {
+                        glog!(
+                            "WRN",
+                            "MapQuest 无 QFunction 记录（{foreign} 条记录属其它片被过滤，P2-2 未路由）⇒ 不建隐藏商人实体"
+                        );
+                    } else {
+                        glog!(
+                            "WRN",
+                            "MapQuest 装载无 QFunction 记录 ⇒ 不建隐藏商人实体（登记）"
+                        );
+                    }
+                }
             },
             Err(e) => glog!(
                 "WRN",
                 "读 MapQuest.txt 失败（{e}）⇒ QFunction 隐藏商人未建（登记）"
             ),
+        }
+        if foreign_quest_records.get() > 0 {
+            glog!(
+                "WRN",
+                "MapQuest：{} 条记录属其它片（P2-2 未路由）⇒ 不装载到宿主片",
+                foreign_quest_records.get()
+            );
         }
         match game_svr::merchant::load_merchant_spawns(
             &loader,
@@ -25952,16 +25981,40 @@ fn sim_loop(
                     &mut world,
                     enter_cfg.shop.upgrade.clear_expire_days,
                 );
-                glog!(
-                    "INF",
-                    "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，挂图失败 {} 条）⇒ 世界内商人 {}，脚本表 {} 条（Market_Def 文件缺失 {} 条）",
-                    report.records,
-                    report.dropped_unknown_map.len(),
-                    failed.len(),
-                    kept,
-                    merchant_book.len(),
-                    market_def_missing.len()
-                );
+                // **follow-up**：装载闭包把「属其它片」与「注册表里没有」都返回 None；
+                // 这里按地图归属把报告拆开，别把跨片记录写成「不在注册表」。
+                // 单片时 foreign=0 ⇒ 走 else 分支，日志与 P2-2 完全相同。
+                let foreign_merchants = report
+                    .dropped_unknown_map
+                    .iter()
+                    .filter(|(_, map)| {
+                        reg.id_of(map)
+                            .is_some_and(|id| !shard_runtime.host_owns(id))
+                    })
+                    .count();
+                if foreign_merchants > 0 {
+                    glog!(
+                        "INF",
+                        "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，其中属其它片 {foreign_merchants} 条，挂图失败 {} 条）⇒ 世界内商人 {}，脚本表 {} 条（Market_Def 文件缺失 {} 条）",
+                        report.records,
+                        report.dropped_unknown_map.len() - foreign_merchants,
+                        failed.len(),
+                        kept,
+                        merchant_book.len(),
+                        market_def_missing.len()
+                    );
+                } else {
+                    glog!(
+                        "INF",
+                        "Envir/Merchant.txt 已载入：{} 条（FindMap 门丢 {} 条，挂图失败 {} 条）⇒ 世界内商人 {}，脚本表 {} 条（Market_Def 文件缺失 {} 条）",
+                        report.records,
+                        report.dropped_unknown_map.len(),
+                        failed.len(),
+                        kept,
+                        merchant_book.len(),
+                        market_def_missing.len()
+                    );
+                }
                 for path in &market_def_missing {
                     // oracle 逐字面量：`"Script file not found: " + sScritpFileName`。
                     glog!("ERR", "Script file not found: {}", path.display());
@@ -26013,22 +26066,56 @@ fn sim_loop(
                 &mut merchant_book,
                 &mut displays,
             );
-            glog!(
-                "INF",
-                "Envir/Npcs.txt 装载完成：{} 条配置（FindMap 门丢 {}，挂图失败 {}）⇒ 世界内固定 NPC {}，Npc_def 脚本 {} 条（解析异常 {}，文件缺失 {}）",
-                report.lines,
-                report.dropped_unknown_map.len(),
-                report.dropped_add_to_map.len(),
-                report.placed,
-                report.placed_npcs.len() - report.script_missing.len(),
-                report.script_failures.len(),
-                report.script_missing.len()
-            );
-            for (name, map) in &report.dropped_unknown_map {
+            // **follow-up**：`dropped_unknown_map` 里混着「属其它片」与「注册表里没有」；
+            // 按地图归属拆开，别让跨片记录走「不在注册表」的日志。单片时 foreign=0 ⇒ 原文不变。
+            let foreign_npcs = report
+                .dropped_unknown_map
+                .iter()
+                .filter(|(_, map)| {
+                    reg.id_of(map)
+                        .is_some_and(|id| !shard_runtime.host_owns(id))
+                })
+                .count();
+            if foreign_npcs > 0 {
                 glog!(
-                    "WRN",
-                    "固定 NPC {name} 的 MapName={map} 不在注册表 ⇒ 按 oracle FindMap 门丢弃"
+                    "INF",
+                    "Envir/Npcs.txt 装载完成：{} 条配置（FindMap 门丢 {}，其中属其它片 {foreign_npcs}，挂图失败 {}）⇒ 世界内固定 NPC {}，Npc_def 脚本 {} 条（解析异常 {}，文件缺失 {}）",
+                    report.lines,
+                    report.dropped_unknown_map.len() - foreign_npcs,
+                    report.dropped_add_to_map.len(),
+                    report.placed,
+                    report.placed_npcs.len() - report.script_missing.len(),
+                    report.script_failures.len(),
+                    report.script_missing.len()
                 );
+            } else {
+                glog!(
+                    "INF",
+                    "Envir/Npcs.txt 装载完成：{} 条配置（FindMap 门丢 {}，挂图失败 {}）⇒ 世界内固定 NPC {}，Npc_def 脚本 {} 条（解析异常 {}，文件缺失 {}）",
+                    report.lines,
+                    report.dropped_unknown_map.len(),
+                    report.dropped_add_to_map.len(),
+                    report.placed,
+                    report.placed_npcs.len() - report.script_missing.len(),
+                    report.script_failures.len(),
+                    report.script_missing.len()
+                );
+            }
+            for (name, map) in &report.dropped_unknown_map {
+                if reg
+                    .id_of(map)
+                    .is_some_and(|id| !shard_runtime.host_owns(id))
+                {
+                    glog!(
+                        "WRN",
+                        "固定 NPC {name} 的 MapName={map} 属其它片（P2-2 未路由）⇒ 不放置到宿主片"
+                    );
+                } else {
+                    glog!(
+                        "WRN",
+                        "固定 NPC {name} 的 MapName={map} 不在注册表 ⇒ 按 oracle FindMap 门丢弃"
+                    );
+                }
             }
             for name in &report.dropped_add_to_map {
                 glog!("WRN", "固定 NPC {name} 挂图失败 ⇒ 按 oracle RemoveAt 移除");
@@ -26055,9 +26142,15 @@ fn sim_loop(
         // 缺文件也算成功（空 `QuestList`，`result=1`）——此时仍会建 `QManage`/`QFunction`/
         // `RobotManage` 三个隐藏 NPC（目录存在时）。`rename_rand` 走**同一条** `world.rng`
         // （oracle `ScriptParsers.cs:857` 的 `SystemShare.RandomNumber.GetRandomNumber(1,200)`）。
-        match loader.load_map_quest(|name| {
-            reg.id_of(name)
-                .is_some_and(|id| shard_runtime.host_owns(id))
+        // **follow-up**：同 QFunction 路径——属其它片的记录单独计数，不伪装成未知地图。
+        let foreign_quest_npcs = std::cell::Cell::new(0usize);
+        match loader.load_map_quest(|name| match reg.id_of(name) {
+            None => false,
+            Some(id) if shard_runtime.host_owns(id) => true,
+            Some(_) => {
+                foreign_quest_npcs.set(foreign_quest_npcs.get() + 1);
+                false
+            }
         }) {
             Ok(load) => {
                 let mut rename_rand = |min: i32, max: i32| world.rng.get_random_number(min, max);
@@ -26094,6 +26187,13 @@ fn sim_loop(
                 "WRN",
                 "加载 Envir/MapQuest.txt 失败（{e}）⇒ 无 NPC 脚本宿主（登记）"
             ),
+        }
+        if foreign_quest_npcs.get() > 0 {
+            glog!(
+                "WRN",
+                "MapQuest：{} 条记录属其它片（P2-2 未路由）⇒ 不装载到 NPC 脚本宿主",
+                foreign_quest_npcs.get()
+            );
         }
     }
     // 取角色的加载队列（`FrnEngn` 的双缓冲 + `CharacterDataProcessor` 的读档循环，见 `load.rs`）
@@ -27761,16 +27861,17 @@ fn sim_loop(
                                         Ok((final_map_name, map_id))
                                             if !shard_runtime.host_owns(map_id) =>
                                         {
-                                            let count =
-                                                shard_runtime.note_cross_shard_entry_refused();
-                                            glog!(
-                                                "WRN",
-                                                "拒绝进图（跨片 fail-closed，P2-2）：ChrName:{} CurMap:{} map_id={} 属其它片（handoff 在 P2-5）；累计跨片进图拒绝 {}",
-                                                head.chr_name,
-                                                final_map_name,
-                                                map_id,
-                                                count
-                                            );
+                                            // 判定/计数/日志文本都在 `guard_cross_shard_enter`
+                                            // （可单测、可变异；删掉本臂会让接线用例变红）。
+                                            if let Some(line) =
+                                                shard_runtime.guard_cross_shard_enter(
+                                                    &head.chr_name,
+                                                    &final_map_name,
+                                                    map_id,
+                                                )
+                                            {
+                                                glog!("WRN", "{}", line);
+                                            }
                                         }
                                         Ok((final_map_name, map_id)) => {
                                         // 准入判据（oracle `WorldServer.cs:503` 的
