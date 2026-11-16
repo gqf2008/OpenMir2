@@ -37,6 +37,13 @@ namespace DBSrv
                 while (await _timer.WaitForNextTickAsync(stoppingToken))
                 {
                     currentTick = HUtil32.GetTickCount();
+                    // **入口遥测心跳**（卡 `openmir2-entry-load-reply-buckets`）：每 10s 且值有变化才打一行。
+                    // 被强杀（Stop-Process）时没有优雅关服 ⇒ 靠这行兜底，最后一行最多旧 10s。
+                    string telemetryLine = EntryTelemetry.Heartbeat(currentTick);
+                    if (telemetryLine != null)
+                    {
+                        LogService.Info(telemetryLine);
+                    }
                     if (currentTick - lastSocketTick > 10000)
                     {
                         lastSocketTick = HUtil32.GetTickCount();

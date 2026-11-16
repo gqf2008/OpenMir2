@@ -183,4 +183,64 @@ public class DBSrvEntryTelemetryTest
             Does.Contain("Messages.DBR_LOADHUMANRCD, nCheckCode"),
             "失败码样本必须紧跟 `DBR_LOADHUMANRCD, nCheckCode` 那条回包");
     }
+
+    // ---------- 3) 终值与心跳（卡面验收增补） ----------
+
+    /// <summary>心跳：不到间隔不打；到点但**值没变**也不打；值变了才打。</summary>
+    [Test]
+    public void HeartbeatRespectsIntervalAndChange()
+    {
+        EntryTelemetry.LoadRequestSeen();
+        var first = EntryTelemetry.Heartbeat(100_000);
+        Assert.That(first, Is.Not.Null, "第一次到点必须打（此前没有基线）");
+
+        Assert.That(
+            EntryTelemetry.Heartbeat(105_000),
+            Is.Null,
+            "间隔未到不得打（10s 心跳）");
+
+        Assert.That(
+            EntryTelemetry.Heartbeat(120_000),
+            Is.Null,
+            "到点但值没变不得打（去重）");
+
+        EntryTelemetry.LoadDroppedNoSession();
+        var changed = EntryTelemetry.Heartbeat(140_000);
+        Assert.That(changed, Is.Not.Null, "值变了必须打");
+        Assert.That(changed, Does.Contain("load_dropped_no_session=1"), changed);
+    }
+
+    /// <summary>
+    /// **终值去重牙**：即使与最后一行心跳完全相同，`FinalLine()` 也必须返回一行。
+    /// 把去重套到终值行上（`if (line == _lastSummary) return null;`）⇒ 本用例红。
+    /// </summary>
+    [Test]
+    public void FinalLineAlwaysPrintsEvenIfUnchanged()
+    {
+        EntryTelemetry.LoadRespondedOk();
+        var beat = EntryTelemetry.Heartbeat(200_000);
+        Assert.That(beat, Is.Not.Null);
+
+        var final1 = EntryTelemetry.FinalLine();
+        var final2 = EntryTelemetry.FinalLine();
+        Assert.That(final1, Is.Not.Null, "终值行不得被去重吞掉（即使与心跳完全相同）");
+        Assert.That(final2, Is.Not.Null, "连续两次终值都必须打印（终值不去重）");
+        Assert.That(final1, Does.Contain("final"), final1);
+        Assert.That(final1, Does.Contain("load_responded_ok=1"), final1);
+    }
+
+    /// <summary>接线：心跳必须挂在 TimedService 的 1s 定时循环里；终值必须挂在进程退出路径上。</summary>
+    [Test]
+    public void HeartbeatAndFinalAreWired()
+    {
+        var root = RepoRoot();
+        var timed = File.ReadAllText(Path.Combine(root, "src", "DBSrv", "TimedService.cs"));
+        var program = File.ReadAllText(Path.Combine(root, "src", "DBSrv", "Program.cs"));
+
+        var beatNeedle = string.Concat("EntryTelemetry.", "Heartbeat(");
+        Assert.That(Count(timed, beatNeedle), Is.EqualTo(1), $"{beatNeedle} 必须恰好一个调用点（TimedService）");
+
+        var finalNeedle = string.Concat("EntryTelemetry.", "FinalLine()");
+        Assert.That(Count(program, finalNeedle), Is.EqualTo(1), $"{finalNeedle} 必须恰好一个调用点（Program 退出路径）");
+    }
 }

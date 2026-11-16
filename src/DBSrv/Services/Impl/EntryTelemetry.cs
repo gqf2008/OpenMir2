@@ -64,6 +64,42 @@ namespace DBSrv.Services.Impl
             return Interlocked.Increment(ref _sampleDroppedNoSession) <= SampleLimit;
         }
 
+        /// <summary>心跳间隔（毫秒）：值没变则不打；终值行**不走**这条去重。</summary>
+        public const long HeartbeatIntervalMs = 10000;
+
+        private static long _lastHeartbeatTick;
+        private static string _lastSummary;
+
+        /// <summary>
+        /// 周期心跳：到点（<see cref="HeartbeatIntervalMs"/>）且**值有变化**才返回一行；
+        /// 否则返回 <c>null</c>。被强杀时最后一行最多旧一个心跳周期。
+        /// </summary>
+        public static string Heartbeat(long nowTickMs)
+        {
+            if (nowTickMs - Interlocked.Read(ref _lastHeartbeatTick) < HeartbeatIntervalMs)
+            {
+                return null;
+            }
+            Interlocked.Exchange(ref _lastHeartbeatTick, nowTickMs);
+            var line = SummaryLine();
+            if (line == _lastSummary)
+            {
+                return null; // 值没变就不打（只作用于心跳）
+            }
+            _lastSummary = line;
+            return line;
+        }
+
+        /// <summary>
+        /// **关服终值**：无条件返回一行（带 `final` 标识）。
+        /// **绝不去重**——即使与最后一行心跳完全相同也必须打印：
+        /// 去重吞掉终值就会让整轮只剩百位快照（卡 `openmir2-entry-load-reply-buckets` 的验收增补）。
+        /// </summary>
+        public static string FinalLine()
+        {
+            return $"[EntryTelemetry] final {SummaryLine()}";
+        }
+
         /// <summary>四桶一行汇总（字段名固定，供日志侧机判）。</summary>
         public static string SummaryLine()
         {
@@ -79,6 +115,8 @@ namespace DBSrv.Services.Impl
             Interlocked.Exchange(ref _droppedNoSession, 0);
             Interlocked.Exchange(ref _sampleReplyFail, 0);
             Interlocked.Exchange(ref _sampleDroppedNoSession, 0);
+            Interlocked.Exchange(ref _lastHeartbeatTick, 0);
+            _lastSummary = null;
         }
     }
 }
