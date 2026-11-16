@@ -13,6 +13,10 @@ namespace DBSrv.Services.Impl
     /// </summary>
     public class UserService : IService
     {
+        /// **入口遥测**（卡 `openmir2-entry-telemetry`）：`SM_STARTPLAY(525)` 发出数与失败数。
+        /// 只做旁路计数与每 100 条一行汇总，**不改任何业务分支**。
+        private static long _startPlaySent;
+        private static long _startPlayFail;
         private readonly SettingsModel _setting;
         private readonly IPlayDataStorage _playDataStorage;
         private readonly IPlayRecordStorage _playRecordStorage;
@@ -731,12 +735,25 @@ namespace DBSrv.Services.Impl
                 }
                 string sRouteMsg = EDCode.EncodeString(sRouteIp + "/" + (nRoutePort + nMapIndex));
                 SendUserSocket(curGate.ConnectionId, userInfo.SessionId, sDefMsg + sRouteMsg);
+                {
+                    long n = System.Threading.Interlocked.Increment(ref _startPlaySent);
+                    if (n % 100 == 0)
+                    {
+                        LogService.Info($"[EntryTelemetry] 525_sent={n} 525_fail={System.Threading.Interlocked.Read(ref _startPlayFail)}");
+                    }
+                }
                 _loginService.SetGlobaSessionPlay(userInfo.nSessionID);
                 result = true;
                 LogService.Debug($"玩家获取游戏网关信息 RunGame:{sRouteIp} Port:{nRoutePort + nMapIndex}");
             }
             else
             {
+                // **入口遥测**：`SM_STARTFAIL`（走不到 525 的那一段）。与原实现同样只回一帧，不改分支。
+                long nFail = System.Threading.Interlocked.Increment(ref _startPlayFail);
+                if (nFail % 100 == 0)
+                {
+                    LogService.Info($"[EntryTelemetry] 525_sent={System.Threading.Interlocked.Read(ref _startPlaySent)} 525_fail={nFail}");
+                }
                 SendUserSocket(curGate.ConnectionId, userInfo.SessionId, EDCode.EncodeMessage(Messages.MakeMessage(Messages.SM_STARTFAIL, 0, 0, 0, 0)));
             }
             return result;
