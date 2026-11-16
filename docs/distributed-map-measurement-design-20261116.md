@@ -15,8 +15,9 @@
    （289,618）与（650,631）；服务端启动日志确认 `StartPointSize=2`。
    500 档归档 `E:/UserFleet/load-360-recvnull-verify-20261116/stack-logs/game-svr.out.log` 的
    500 条 `进世界 ChrName:... CurMap:...` 里 **499 条 CurMap=0、1 条 CurMap=0136**；map 0 的
-   **分簇实测为 276/223**，两簇**落点中位数**为 289,617 / 650,631（单条日志里的 293,617 / 650,647
-   只是个体样本，不是簇中心）。⇒ **D3 对照必须是「map 0 × 两簇」**，不能是「500 一簇」；
+   **分簇实测为 276/223**，两簇**落点中位数**为 288,617 / 649,630（按 276/223 分簇统计；单条日志里的
+   293,617 / 650,647 只是个体样本，`289,618 / 650,631` 是 StartPoint 坐标/取整，不是簇中位数）。
+   ⇒ **D3 对照必须是「map 0 × 两簇」**，不能是「500 一簇」；
    主对照取**对称化 250/250**（去掉簇大小协变量），并在报告里同时列实测 276/223。
 2. **多图不增加地图装载成本。** 服务端启动即加载全部注册图：
    `Envir 真地图注册表：322 张`、`地图格子属性已灌入 ... maps=322 cells=11734654`
@@ -156,9 +157,9 @@
 
 ### 2.4 AOI 预期方向（推算，未实测）
 
-四份同图归档的**稳态** AVI（评审者复算，口径见 §3.4）为
-**recvnull 435.6 / A 555.7 / B 551.2 / profiled 534.0 帧/客户端/s**；整窗口径（含爬坡，仅作量级）
-为 349.49 / 492.09 / 486.63 / 445.37。本设计**只用稳态口径**做判据。
+四份同图归档的**稳态** AVI（按 §3.4/§4.3 的 `t1_avi = 最后 gate summary − 15s` 重算）为
+**recvnull 417.2 / A 535.0 / B 527.0 / profiled 508.9 帧/客户端/s**（区间 417–535，同树 A/B 差 ≈1.5%）；
+整窗口径（含爬坡，仅作量级）为 349.49 / 492.09 / 486.63 / 445.37。本设计**只用稳态口径**做判据。
 
 若广播量由「同簇 peer 收件人」主导，按 P 的比值，D1 ≈ D3 的 25%、D2 ≈ 49%。
 但这不是承诺：怪物走位扇出里 **`hear_targets_at` 的实体扫描是全局的**（§6.1 R2），
@@ -186,13 +187,17 @@
 | M1 | 进入世界的 bot 数 | `stack-logs/game-svr.out.log` 的 `进世界 ChrName:... CurMap:...`（按 ChrName 去重、取最后一次） | 500 个不同 ChrName |
 | M2 | 每图实际人数 | 同上，按 `CurMap` 分组 | 与 §2.3 计划**逐图相等** |
 | M3 | 每簇人数 | 实际 `(CurMap, 落点±3)` 分簇 | 与计划逐簇相等（±1 允许抖动越界） |
-| M4 | 结束时仍在该图 | **优雅停服后**（game-svr 命名管道存档成功）的 `characters` 快照，按 `LoginID` 分组 | 与 M2 相等（防中途换图/回城）；`STOPPED game-svr ... force` 或快照缺失 ⇒ PREREQ |
+| M4 | 结束时仍在该图 | **优雅停服且存档收尾成功**后的 `characters` 快照，按 `LoginID` 分组 | 与 M2 相等；`STOPPED game-svr ... force`、快照缺失、或日志无 `关服存档收尾：… 超时 false` 且 `应答==发起` ⇒ PREREQ |
 
 - M1/M2 来自**服务端自己**的进图日志，不依赖 BotSrv 自报；M4 来自 DB 存档（GameSvr 关服写回）。
 - M4 的生产者必须存在：`Stop-Process -Force` 不存档（§5.3），所以每档收尾必须走 game-svr 的
   `openmir2-gamesvr-shutdown-<pid>` 管道并确认 `STOPPED game-svr ... graceful`，随后在 MySQL
   仍可用时（若已停则单起一次）做跑后快照。夹具的「写前/写后」快照是**写库前后**，不是跑后，
   不能替代 M4。
+- **只看到 `graceful` 不够**：`shutdown_save_all` 超时也会正常退出并打印 `graceful`。
+  必须再断言 game-svr 日志的 `关服存档收尾：在册 N / 发起 N / 应答 N / 超时 false / 耗时 …ms`
+  中 **`超时` 为 false/0 且 `应答==发起`**；该行为假、缺行或 `应答<发起` ⇒ M4 PREREQ
+  （`snapshot-post` 同判）。
 - **假设**：每个 `loadbotN` 账号恰好 1 个未删除角色（本次未连库验证；夹具必须断言）。
   M4 以**账号**为计数单位；一个账号多角色时按账号整组写同图并只计一次。
 - 任一不满足 ⇒ **该档判 `DIST_RED`**，即使 `report.json` 是 GREEN 也不得出「分散场景达标」。
@@ -227,15 +232,17 @@ AVI    = [att(t1) − att(t0)] / 500 / (t1 − t0)
 `att(最后) / 500 / window_sec`：`window_sec`/`uptime_ms` 含爬坡，会与 §4.3「禁止全窗均值」
 直接矛盾。归档与报告必须同时列整窗值与稳态值，并注明两者不同。
 
-**四份同图归档的背景值**（复审复算 `0bc7b688`；整窗口径 vs 稳态口径）：
+**四份同图归档的背景值**（按 §4.3 的 `t1_avi` 定义重算；第二轮复审 `581d6977` 已更正边界错配）：
 
 | 归档 | 整窗（含爬坡） | 稳态 |
 | --- | --- | --- |
-| `load-360-recvnull-verify-20261116`（判据轮） | 349.49 | **435.6** |
-| `load-360-slowsep-A-20261116` | 492.09 | **555.7** |
-| `load-360-slowsep-B-20261116` | 486.63 | **551.2** |
-| `load-360-recvnull-verify-20261116-profiled` | 445.37 | **534.0** |
-| 区间 | 349–492（约 41%） | 436–556（约 27%） |
+| `load-360-recvnull-verify-20261116`（判据轮） | 349.49 | **417.2** |
+| `load-360-slowsep-A-20261116` | 492.09 | **535.0** |
+| `load-360-slowsep-B-20261116` | 486.63 | **527.0** |
+| `load-360-recvnull-verify-20261116-profiled` | 445.37 | **508.9** |
+| 区间 | 349–492（约 41%） | 417–535（22–28%） |
+
+（稳态列按 `t1_avi` 取点；summary 是 5s 栅格，允许 ±1 帧/客户端/s 的取点差。）
 
 | # | 判据 | 通过线 | 失败时的处置 |
 | --- | --- | --- | --- |
@@ -244,8 +251,8 @@ AVI    = [att(t1) − att(t0)] / 500 / (t1 − t0)
 | A3 | 网关无背压恶化 | `overflow_frames=0`、`degrade_inworld_frames=0`、`close_inworld_sessions=0` | RED |
 
 - 阈值 0.80 / 0.90 在**跑之前**登记；跑完不得改；**分母只能是同树 D3**。
-- 为什么不能跨树：同树 A/B 的稳态 AVI 只差 **0.8%**（555.7 vs 551.2），但跨树
-  recvnull/A/B/profiled 相差 **21–28%**（436–556）。⇒ 20% 的门槛只在同树内成立；
+- 为什么不能跨树：同树 A/B 的稳态 AVI 只差 **≈1.5%**（535.0 vs 527.0），但跨树
+  recvnull/A/B/profiled 相差 **22–28%**（417–535）。⇒ 20% 的门槛只在同树内成立；
   跨树的绝对值只作背景区间，**不得当门槛、不得混算**。
 - A1 的物理含义：如果分散只降低 game-svr 的发送编码（`HostAoiDownlink` 的 3–8%），而全局扫描不变，
   AVI 仍会明显下降——那说明收益在**网关侧**，不在 game-svr 工作段。两种结果都必须如实写。
@@ -255,7 +262,7 @@ AVI    = [att(t1) − att(t0)] / 500 / (t1 − t0)
 
 - **主对照 = 同树 D3**。D1/D2 的所有差值只对 D3 算，不跨树。
 - 既有同图数据（W2 `c74b4ce42`、A/B `57a0c9f12`）只作**背景量级**，用于检查新数据是否落在
-  已知区间（work 约 43.7–50.2ms、inbound 24.9–30.7ms、稳态 AVI 436–556 帧/s、实体均值约 4.7–4.9k）；
+  已知区间（work 约 43.7–50.2ms、inbound 24.9–30.7ms、稳态 AVI 417–535 帧/s、实体均值约 4.7–4.9k）；
   **不得**把跨树差值写成「分散收益」。
 - 如果 D3 无法在本窗口跑（例如 binary_stamp 已漂移），则本轮**只能出 D1/D2 的绝对量**，
   不得出「分散 vs 同图」的结论。
@@ -304,11 +311,16 @@ MIR2_TICK_PROFILE=1      MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态�
 2. **t_stop** = 发 game-svr `SHUTDOWN` 之前的墙钟时刻（`stack-stop.log` 的
    `STOPPED game-svr ... graceful` 行附近；`bots.log` 的 soft-close 可交叉核对）。
    收尾必须优雅存档，见 §5.2；`force` 停服的轮次 M4 判 PREREQ。
-3. 只取 **完整 50-tick TICKPROF 块**（5 tick/s ⇒ 10s/块），且满足
+3. **AVI 的 `t1_avi`（写死，全表统一）** = **最后一条 gate summary 的时间 − 15s**；
+   `att(t1)` 取时间最接近 `t1_avi` 的那条 summary（5s 栅格，允许 ±2.5s）。
+   本设计固定用 `t1_avi`；**不得**用「末条事件 att ÷ (t1−t0)」——那会把 t1 之后约 15s 的流量
+   算进分子，系统性偏高约 4%（第二轮复审 `581d6977` 的 P1）。若改用 `t_stop` 作 t1，
+   必须预先声明并全表统一（该口径下四值为 415.4 / 530.5 / 525.7 / 509.2），不得与 `t1_avi` 混用。
+4. **TICKPROF 稳态块**：只取完整 50-tick 块（5 tick/s ⇒ 10s/块），且满足
    `block_start >= t0` 且 `block_end <= t_stop − 15s`（15s 是 shutdown-drain 保护带）。
-4. 块内各段按 **ticks 加权平均**；缺 `HostSleep` 或 `HostTickTotal` 的块整块丢弃并计数。
-5. 上线爬坡段（t0 之前）单列，不混进 P99/均值；`ramp_ms` 单独报。
-6. 收尾 drain 块一律不进稳态：禁止用「最后一块」或「全窗均值」。
+5. 块内各段按 **ticks 加权平均**；缺 `HostSleep` 或 `HostTickTotal` 的块整块丢弃并计数。
+6. 上线爬坡段（t0 之前）单列，不混进 P99/均值；`ramp_ms` 单独报。
+7. 收尾 drain 块一律不进稳态：禁止用「最后一块」或「全窗均值」。
 
 ### 4.4 归一化公式
 
@@ -318,7 +330,7 @@ MIR2_TICK_PROFILE=1      MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态�
 | 每客户端 AOI 下行 | `HostAoiDownlink / 500` | 记录，不单独设阈 |
 | 工作段 | `HostTickTotal − HostSleep` | 与既有表同义 |
 | 工作段占比 | `work / HostTickTotal` | 记录 |
-| AVI | `[att(t1) − att(t0)] / 500 / (t1 − t0)`，att = `drop_noncritical + noncritical_sent`，t0/t1 = §4.3 稳态窗 | 帧/客户端/s；§3.4 用；**不得用 `window_sec`** |
+| AVI | `[att(t1) − att(t0)] / 500 / (t1 − t0)`，att = `drop_noncritical + noncritical_sent`；t0 = §4.3 第 1 条，t1 = §4.3 第 3 条的 `t1_avi` | 帧/客户端/s；§3.4 用；**不得用 `window_sec`；t_stop 口径须全表统一声明** |
 | 实体密度 | `entities_mean / 500` | 每客户端世界实体数（不是同屏） |
 | 每簇成本 | 若必须分簇，只按 M3 的落点归属做静态分摊；**不假装有 per-map 运行时计费**（见 §6.2） |
 
@@ -334,7 +346,7 @@ MIR2_TICK_PROFILE=1      MIR2_TICK_PROFILE_SLOW_MS 不设（与 A 轮同形态�
 ### 4.6 网关计数
 
 - 每个 gate 取 `uptime_ms` 最大的那条 `gate_backpressure_summary`（与 `analyze_window.py` 同法）。
-- gate summary 是**累计计数**（约 5s 一条）；AVI 必须做 t0/t1 差分（§3.4），
+- gate summary 是**累计计数**（约 5s 一条）；AVI 必须做 t0/`t1_avi` 差分（§3.4、§4.3），
   `window_sec`/`uptime_ms` 只用于整窗背景值，**不进判据**。
 - 报：`drop_noncritical_frames`、`noncritical_sent_frames`、`overflow_frames`、
   `degrade_inworld_frames`、`close_inworld_sessions`、`drop_pct`、`window_sec`。
@@ -414,7 +426,8 @@ tier | verdict | in_world | dist_ok(M1-M4) | work | HostInbound | per_client_inb
      `(LoginID, ChrName, MapName, CX, CY, HomeMap, Hp, MaxHP)` 快照，`after == plan` 否则 rc=1。
    - `verify-log` 模式：解析 game-svr 的 `进世界` 行，按 §3.2 输出每图/每簇计数与 mismatch。
    - `snapshot-post` 模式：优雅停栈后读 `characters`/`characters_ablity`（3306 须可用；必要时单起一次），
-     输出每账号 MapName/HP 与分簇计数，供 M4；拿不到 `graceful` 停服证据 ⇒ rc=2（不当作跑后状态）。
+     输出每账号 MapName/HP 与分簇计数，供 M4。**双重前置断言**：`STOPPED game-svr ... graceful`
+     且 `关服存档收尾：… 超时 false` + `应答==发起`；任一缺失/为假 ⇒ rc=2（不当作跑后状态）。
    - 自测：空输入、未知图、墙格坐标、计划 500/实际 499、单簇少 1、全在 map 0 必须红；
      不得连真库跑自测（合成夹具 + 假 DB）。
 2. **`tools/botload/distmap_window.ps1`（必需，或给 `load_gate` 加一个 `-PreTierHook`）** — 编排：
@@ -423,7 +436,8 @@ tier | verdict | in_world | dist_ok(M1-M4) | work | HostInbound | per_client_inb
      `load_gate -Tiers 500 -HoldSec 360 -SkipBuild`（栈已在跑，不再 restart）→
      `start_rust_stack.ps1 -Stop`（再次断言 `graceful`）→ fixture **跑后 DB 快照**（M4，
      MySQL 仍在；若 3306 已 DOWN 则单起一次）+ `verify-log` → 停 MySQL。
-   - 若停栈日志出现 `STOPPED game-svr ... force` 或没有 `graceful` 行 ⇒ 该档 M4 判 PREREQ，
+   - 若停栈日志出现 `STOPPED game-svr ... force`、没有 `graceful` 行、或 game-svr 日志缺
+     `关服存档收尾：… 超时 false` / `应答 != 发起` ⇒ 该档 M4 判 PREREQ，
      不得把快照当「跑后状态」。
    - 任一 rc≠0 立即中止，不跑下一档；把每档的计划、实际分布、HEAD、二进制 sha 写进归档。
    - 为什么必须新编排：`load_gate -RestartStackPerTier` 在**脚本内部**重启栈，外部无法在
@@ -460,7 +474,7 @@ tier | verdict | in_world | dist_ok(M1-M4) | work | HostInbound | per_client_inb
 | R12 | **1000 档分散被顺手加入** | 1000 档有 BotSrv 4GiB/网关丢帧/串行载入三项前置，均未解除 | 窗口必失败、证据作废 | 本设计**明确不含 1000 档**；另卡处理 |
 | R13 | **窗口独占/构建抢内存** | 项目既有规则：窗口期禁 cargo；多车道并行构建会被 reaper 杀 | 判据噪声/进程被杀 | preflight 记录 `heavy_samples`；窗口期不跑构建 |
 | R14 | **DB 共享测试数据被别的车道使用** | 500 账号/角色是共享夹具 | 别的车道跑出混合分布 | 写前快照、写后记录；与 Leader 约定窗口独占 `loadbot*` 账号 |
-| R15 | **强制停服会让 M4 没有生产者** | `start-all.ps1 -Stop` / `Stop-Process -Force` 不存档；M4 依赖关服写回的 `characters` | 跑后快照与在world分布不一致，或读不到最新存档 | 用 `start_rust_stack.ps1 -Stop` / `stop_mir2_server.ps1` 的命名管道；断言 `graceful`；快照前确认 3306 可用（必要时单起） |
+| R15 | **强制停服/存档超时会让 M4 没有生产者** | `start-all.ps1 -Stop` / `Stop-Process -Force` 不存档；`shutdown_save_all` 超时也会打印 graceful | 跑后快照与在world分布不一致，或读不到最新存档 | 命名管道优雅停；断言 `STOPPED game-svr ... graceful` **且** `关服存档收尾：… 超时 false`、`应答==发起`；快照前确认 3306 可用（必要时单起） |
 
 ### 6.2 不可行项（明确写出）
 
