@@ -441,3 +441,17 @@ for rel, count, hold in runs:
      **DBSrv 三产物根本不在印章体系内**（`m1-bin` 只有 game-gate/game-svr/login-gate/sel-gate 四件
      `.stamp.json`，**没有任何 `DBSrv*`**）⇒ 说「印章态 DBSrv」是错的说法；它的来源只能靠
      **构建记录 + 运行中进程 sha + 产物内字面量**自证。它是整条链路里唯一没有 provenance 锚的产物。
+  6. **release 产物不可位级复现（2026-11-17 实测，不是缺陷、是必须记住的前提）**：同一份源码
+     （`git diff --stat <old> <new> -- mir2-rs` 为空）在不同 worktree 重建后，
+     `game-svr.exe` 的 sha **会不同**（`ec125457…` → `92b2e6af…`）。本项目 Rust release 未做
+     reproducible-build 配置（嵌入路径/时间戳类差异）⇒ **sha 只能回答「这个文件是不是刚才那一份」，
+     不能回答「它是不是由同一份源码构建的」**。判源码同一性看 `git diff`/rev；判产物体在位看
+     **sha + 产物内字面量**。任何「同源应当同 sha」的断言都是错的，写判据前先记住这条。
+- **停服务进程用 `CTRL_BREAK_EVENT`，不要用 `CTRL_C_EVENT`（2026-11-17 实测，一轮白跑 120s）**：
+  本环境里子进程会**继承「忽略 Ctrl+C」的属性** ⇒ 向它发 `CTRL_C_EVENT` 会被内核**静默丢弃**
+  （无效果、无错误、无日志）；`Program.Main` 的 `Console.CancelKeyPress` 根本不会触发。
+  停 DBSrv 一律发 **`CTRL_BREAK_EVENT`**；**判据不是命令返回码**，而是两条同时成立：
+  ①日志出现 `Ctrl+C pressed`（`Program.Main` 的 `CancelKeyPress` 处理器打了这一行）；
+  ②**`FINAL_LINES >= 1`**（`[EntryTelemetry] final …` 存在）。缺任一条 = **没走优雅关服**，
+  终值不可用（只能拿到 ≤10s 旧的心跳快照）。这是与「产物看似对」「去重吞终值」同族的**静默失败**：
+  命令"成功返回"了，但程序根本没收到停止信号。
