@@ -11,6 +11,8 @@
 ## 0. 结论先读
 
 **主判断（分级）：③ 是【已证实】的负载来源与放大器；① 是【最可能假设】的直接丢帧点。**
+
+**③ 的量化佐证（硬数据）**：plateau 末行 `top_idents` 里 `41:15,047,739 + 10:15,046,464 = 30,094,203`，占 `hold_frames=30,352,774` 的 **99.15%**（top-5 = 99.82%，`SM_LOGON(50)` **不在 top-5**）⇒ **占满发送口的绝大多数是 AOI 帧**，这把「③ 作为放大器」从假设推向硬数据。
 现有证据只到「丢失发生在 S1 之后、S2/S3/S4 未分」；在探针给出 S2 的 SM_LOGON `decision` 分布
 与 S3 的 `MISDELIVER_DELIVER ident=50` 数之前，**不把 ① 写成已证实**。
 
@@ -78,7 +80,7 @@ BotSrv 发送 CM_SELCHR / **登录串
 | --- | --- | --- | --- | --- | --- |
 | G1 | game-svr | `mir2-rs/bins/game-svr/src/lib.rs` 的主 tick 循环（`host_prof.begin` / `TICK_INTERVAL_MS`，200ms 一拍） | **整个世界只有一个线程**：入站命令、读档发起、DB 应答消费、进图、AOI、发包全在同一拍里顺序执行；一拍超时后续全部顺延 | ① | `MIR2_TICK_PROFILE=1` 的段耗时日志；`sim: tick #N` 日志 |
 | G2 | game-svr | 同文件 DB「收侧轮询」块（`w.outstanding` + `r.take(qid)`） | 每拍把**所有已到达的应答一次处理完**，逐个做 parse → RNG → `enter_map` → 15 帧装配；**没有每拍上限**，1000 个应答同拍到达即同拍串行做完 | ①/③ | `收到角色数据 queryId=…` INF 行的时间分布；该块所在的 host 段计时 |
-| G3 | game-svr | 同文件 `进世界帧下发` 之后的 `for body in bodies { tx.send(SimToGate::SendFrame …) }` + `MarkInWorld` | 15 帧 × 1000 bot 的入队是**单线程顺序**，但目标是无界 mpsc，不阻塞。**注意**：`进世界帧下发` 是「入队意图」日志，不代表已上线 | ③ | `进世界帧下发：socket=… 共 N 条`、`进世界标记：socket=…`（各 1 行/bot） |
+| G3 | game-svr | 同文件 `进世界帧下发` 日志**之前**的 `for body in bodies { tx.send(SimToGate::SendFrame …) }` + `MarkInWorld`（日志在 `tx.send` 循环**之前**打印，是入队意图不是已上线） | 15 帧 × 1000 bot 的入队是**单线程顺序**，但目标是无界 mpsc，不阻塞。**注意**：`进世界帧下发` 是「入队意图」日志，不代表已上线 | ③ | `进世界帧下发：socket=… 共 N 条`、`进世界标记：socket=…`（各 1 行/bot） |
 | G4 | game-svr | 同文件 `send_gate_msg` / `send_decision` / `send_direct` / `flush_pending` / `queue_or_reject`；`mir2-rs/bins/game-svr/src/gate_criticality.rs` 的 `channel_of`；`mir2-rs/bins/game-svr/src/gate_queue.rs` 的 `PendingQueue` | **每条 gate 线只有 1 个 `SendChecked` 信用**：撞 `CheckBlock*10` 字节即发 `GM_RECEIVE_OK` 并停发，等网关回显或 50ms 超时；pre-patch 树「等回显期间 = 丢帧」，现树「关键帧入 256KiB/4096 帧队列，非关键帧丢弃」 | **①+②**（一进一出 + 字节预算） | `gate_stats.ndjson`：`queued/flushed/overflow/reject_login/degrade_inworld/close_inworld/max_depth`；`event=gate_frame_queued\|overflow\|degrade`；`MIR2_LOG_MISDELIVER=1` 的 `MISDELIVER_SRV event=send … decision=…` |
 | G5 | game-svr | `mir2-rs/bins/game-svr/src/dbclient.rs` 的 `run_db_link`（单写任务）+ `DbReplies::feed`（单读任务） | DB 写是单任务顺序 `write_all`，但请求是小帧且已实测 14.4/s，**不是瓶颈** | ①（证据排除） | `执行任务Id:{qid}成功` 速率；`收到角色数据` |
 | G6 | game-svr | `lib.rs` 的 `gate_conn`（每条 gate 线一个 tokio 任务）+ `apply_sim_cmd_async` | 同一条 gate 线的所有会话帧在**一个任务里逐帧 `await`**（写 socket + 流控）；`sim_rx` 一次只取一条 | ①（单线） | `WRN`「下发 SM_* 帧时 socket=… 槽不存在」；队列深度 |
