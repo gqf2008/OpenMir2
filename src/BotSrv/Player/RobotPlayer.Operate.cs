@@ -491,7 +491,10 @@ namespace BotSrv.Player
                 case Messages.SM_RUN:
                 case Messages.SM_HORSERUN:
                     desc = EDCode.DecodeBuffer<CharDesc>(body);
-                    if (msg.Recog != MShare.MySelf.RecogId)
+                    // 软关后 MyActor 已清空、残留排队帧仍进世界分支：MySelf==null 时旧代码在本行
+                    // 抛 NRE（帧被 RunPacketGuard 丢弃）；跳过本分支的 SendMsg 与「丢弃该帧」等价。
+                    // 改坏必红：--selftest-recv-null-context 的 null-walk/run 用例。
+                    if (MShare.MySelf != null && msg.Recog != MShare.MySelf.RecogId)
                     {
                         PlayScene.SendMsg(msg.Ident, msg.Recog, msg.Param, msg.Tag, (byte)msg.Series, desc.Feature, desc.Status, "", 0);
                     }
@@ -519,7 +522,7 @@ namespace BotSrv.Player
                     break;
                 case Messages.SM_BUTCH:// 挖肉动作封包
                     desc = EDCode.DecodeBuffer<CharDesc>(body);
-                    if (msg.Recog != MShare.MySelf.RecogId)
+                    if (MShare.MySelf != null && msg.Recog != MShare.MySelf.RecogId)
                     {
                         Actor = PlayScene.FindActor(msg.Recog);
                         if (Actor != null)
@@ -530,7 +533,7 @@ namespace BotSrv.Player
                     break;
                 case Messages.SM_SITDOWN:// 蹲下动作封包
                     desc = EDCode.DecodeBuffer<CharDesc>(body);
-                    if (msg.Recog != MShare.MySelf.RecogId)
+                    if (MShare.MySelf != null && msg.Recog != MShare.MySelf.RecogId)
                     {
                         Actor = PlayScene.FindActor(msg.Recog);
                         if (Actor != null)
@@ -547,7 +550,7 @@ namespace BotSrv.Player
                 case Messages.SM_WIDEHIT:
                 case Messages.SM_BIGHIT:
                 case Messages.SM_FIREHIT:
-                    if (msg.Recog != MShare.MySelf.RecogId)
+                    if (MShare.MySelf != null && msg.Recog != MShare.MySelf.RecogId)
                     {
                         Actor = PlayScene.FindActor(msg.Recog);
                         if (Actor != null)
