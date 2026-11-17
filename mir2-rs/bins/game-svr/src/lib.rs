@@ -25431,6 +25431,25 @@ impl EventDrain {
     }
 }
 
+/// **tick 顶部应答表读数**（到达积压 → `reply_table_max`）：每轮开头表内条数峰值。
+///
+/// 与 [`sample_reply_pending_after_drain`] 是**两个不同的量**（卡 `openmir2-tick-starvation`
+/// 复核分流）：顶部读数含本轮排水就会取走的新到达，度量消费端活性；排水后读数才是真滞留。
+/// 两者都要——只留顶部会把常态到达误读成滞留（今晚 649 的教训），只留排水后则在事件排水被
+/// 饿死的旧缺陷下永不执行。抽成生产函数是为了让「两处不得同源」有**行为牙**
+/// （`tick_starvation::reply_table_and_pending_do_not_alias`），不只是字符串断言。
+fn sample_reply_table_at_tick_top(len: u64) -> Option<String> {
+    telemetry::record_reply_table(len)
+}
+
+/// **应答排水结束后读数**（真滞留 → `reply_pending_max`，旧语义、历史可比）。
+///
+/// 口径见 [`telemetry::REPLY_PENDING_MAX`]：`take` 扫过一遍后仍没人取的条数；调用点必须在
+/// `w.outstanding = still;` 之后、用 `r.len()`。
+fn sample_reply_pending_after_drain(len: u64) -> Option<String> {
+    telemetry::record_reply_pending(len)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     // **T-202**：`!servertable.txt` 路由表（`SendChangeServer` 的 `GetMultiServerAddrPort` 输入）。
@@ -26655,12 +26674,13 @@ fn sim_loop(
                 entry_telemetry_last = Some(line);
             }
         }
-        // **滞留应答每轮采样**（卡 `openmir2-tick-starvation`）：采样点必须在 tick 循环顶部。
-        // 它原先只在「应答排水块」里采——那个块在事件排水**之后**，事件排水被饿死时它永不执行，
-        // `reply_pending_max` 会停在陈旧值。这里每轮都采，与事件排水是否被截断无关。
+        // **到达积压每轮采样**（卡 `openmir2-tick-starvation` 复核分流）：这是 tick 循环顶部的
+        // `reply_table_max`（每轮开头表内条数峰值），不是 `reply_pending_max`——后者是「排水后
+        // 残留」的旧语义，仍在应答排水块结束处采（见下面 `sample_reply_pending_after_drain`）。
+        // 顶部读数保证「每轮必采」，事件排水被预算截断也不影响它。
         if let Some(w) = db.as_ref() {
-            let pending = w.replies.lock().expect("DB 应答表锁被毒化").len() as u64;
-            if let Some(line) = telemetry::record_reply_pending(pending) {
+            let table_len = w.replies.lock().expect("DB 应答表锁被毒化").len() as u64;
+            if let Some(line) = sample_reply_table_at_tick_top(table_len) {
                 glog!("WRN", "{}", line);
             }
         }
@@ -29315,6 +29335,12 @@ fn sim_loop(
             }
             w.save_outstanding = still_saves;
             w.outstanding = still;
+            // **排水后残留**（卡 `openmir2-tick-starvation` 复核分流）：`reply_pending_max` 的旧语义
+            // ——`take` 扫过一遍后仍没人取的条数（真滞留），供与历史窗口横比。顶部采样是另一个
+            // 量（`reply_table_max` = 到达积压），两者**不得同源**。
+            if let Some(line) = sample_reply_pending_after_drain(r.len() as u64) {
+                glog!("WRN", "{}", line);
+            }
         }
         // 踢旧落地（oracle `RunNotice` 的 `BoKickFlag` 支）：oracle 是"置标志 → 下一 tick 的
         // RunNotice 落地"（≥1 tick）；本骨架在事件 drain 之后的**同一 tick 后段**落地，帧序不变。
@@ -92530,40 +92556,83 @@ mod entry_telemetry_wiring {
         assert!(window(DBC, i, 600).contains("record_reply_verify_fail("));
     }
 
-    /// 滞留应答采样必须挪到 **tick 循环顶部**（卡 `openmir2-tick-starvation`）。
+    /// **应答表两个读数各在自己该在的位置**（卡 `openmir2-tick-starvation` 复核分流）。
     ///
-    /// 旧接线只在「应答排水块」里采（`w.outstanding = still;` 之后）；那个块在事件排水**之后**，
-    /// 事件排水被饿死时它永不执行 ⇒ `reply_pending_max` 停在陈旧值。判据：
-    /// ①lib.rs 里恰好一个采样点；②它在循环顶部 5s 心跳块之后；③排水块结束点之后**没有**它
-    /// （负例：把采样挪回排水块 ⇒ 本用例红）。
+    /// 口径：`reply_pending_max` = 排水后残留峰值（旧语义，历史可比）；`reply_table_max` =
+    /// 每轮开头表内条数峰值（本轮新增，不与旧值横比）。判据（双向负例）：
+    /// ① 两个生产采样函数在 lib.rs 各**恰好一个调用点**；
+    /// ② 顶部函数在循环顶部 5s 心跳块之后、**不在**排水块；排水函数在 `w.outstanding = still;`
+    ///    之后、**不在**顶部；
+    /// ③ 两个记录函数（`record_reply_pending` / `record_reply_table`）各只有一处定义体内转发
+    ///    （多一处 = 有人绕开采样函数另接一条路径，读数会同源）。
+    /// 行为牙（同源/串源）见 `tick_starvation::reply_table_and_pending_do_not_alias`。
     #[test]
-    fn reply_pending_is_sampled_at_tick_top_not_in_drain_block() {
-        // needle 运行时拼：完整调用串不得出现在本文件里（`include_str!("lib.rs")` 会数到测试自己）。
-        let needle = format!("record_reply_{}(", "pending");
+    fn reply_table_and_pending_sampled_at_their_own_points() {
+        // needle 运行时拼、且带上**生产实参**：测试自己也会调用这两个函数（数字实参），
+        // 只锚函数名会数到测试调用点（本用例曾因此假红 left=6）。
+        let top = format!("sample_reply_table_at_tick_top({})", "table_len");
+        let drain = format!("sample_reply_pending_after_drain({})", "r.len() as u64");
         assert_eq!(
-            SRC.matches(&needle).count(),
+            SRC.matches(&top).count(),
             1,
-            "滞留采样必须恰好一个点（{needle}）"
+            "顶部采样必须恰好一个调用点（{top}）"
+        );
+        assert_eq!(
+            SRC.matches(&drain).count(),
+            1,
+            "排水后采样必须恰好一个调用点（{drain}）"
         );
         let i = SRC
             .find("entry_telemetry_next_ms = world.clock_ms + 5_000;")
             .expect("循环顶部 5s 心跳块");
         assert!(
-            window(SRC, i, 3000).contains(&needle),
-            "采样必须在 tick 循环顶部（5s 心跳块之后）"
+            window(SRC, i, 3000).contains(&top),
+            "到达积压采样必须在 tick 循环顶部（5s 心跳块之后）"
         );
-        let d = SRC.find("w.outstanding = still;").expect("排水结束点");
         assert!(
-            !window(SRC, d, 600).contains(&needle),
-            "采样不得留在应答排水块里（事件排水被饿死时那块不执行）"
+            !window(SRC, i, 3000).contains(&drain),
+            "排水后残留采样**不得**在循环顶部（那是另一个量）"
         );
-        // 值必须来自应答表的**当前长度**（写死常量 ⇒ 本用例红）。
+        // 锚 `w.save_outstanding = still_saves;`（生产唯一）：`w.outstanding = still;` 也出现在
+        // 采样函数的 doc 注释里，`find` 会先命中注释而非排水块。
+        let d = SRC
+            .find("w.save_outstanding = still_saves;")
+            .expect("排水结束点");
+        assert!(
+            window(SRC, d, 800).contains(&drain),
+            "残留采样必须在应答排水块结束处（`w.outstanding = still;` 之后）"
+        );
+        assert!(
+            !window(SRC, d, 800).contains(&top),
+            "到达积压采样**不得**在排水块里（会丢掉每轮必采）"
+        );
+        // 值必须取当前表长（写死常量 ⇒ 红）：顶部取 `w.replies.lock().len()`，排水后取 `r.len()`。
         let j = SRC
-            .find("let pending = w.replies.lock()")
-            .expect("滞留数取自应答表长度");
+            .find("let table_len = w.replies.lock()")
+            .expect("顶部读数取自应答表长度");
         assert!(
-            window(SRC, j, 400).contains(&needle),
-            "记录的必须是刚取到的应答表长度（不得写死常量）"
+            window(SRC, j, 400).contains(&top),
+            "顶部读数必须来自刚取到的应答表长度"
+        );
+        let k = SRC
+            .find("w.save_outstanding = still_saves;")
+            .expect("排水结束点");
+        assert!(
+            window(SRC, k, 800).contains("r.len()"),
+            "排水后读数必须取 `r.len()`（写死常量 ⇒ 本用例红）"
+        );
+        // 记录函数各自唯一：绕开采样函数再插一条 ⇒ 计数变 2，本用例红。
+        let rec_pending = format!("record_reply_{}(", "pending");
+        let rec_table = format!("record_reply_{}(", "table");
+        assert_eq!(
+            SRC.matches(&rec_pending).count(),
+            1,
+            "record_reply_pending 只许在排水后采样函数里转发一次"
+        );
+        assert_eq!(
+            SRC.matches(&rec_table).count(),
+            1,
+            "record_reply_table 只许在顶部采样函数里转发一次"
         );
     }
 
@@ -92817,7 +92886,11 @@ mod entry_telemetry_wiring {
 /// 计数行为见 `telemetry::tests::drain_counters_count_and_throttle`）。
 #[cfg(test)]
 mod tick_starvation {
-    use super::{EventDrain, EventDrainBudget, GateEvent};
+    use super::{
+        sample_reply_pending_after_drain, sample_reply_table_at_tick_top, EventDrain,
+        EventDrainBudget, GateEvent,
+    };
+    use crate::telemetry::{REPLY_PENDING_MAX, REPLY_TABLE_MAX};
     use std::sync::atomic::Ordering;
     use std::time::Duration;
 
@@ -92988,6 +93061,66 @@ mod tick_starvation {
         }
         assert_eq!(seen, vec![0, 1, 2], "零预算也必须 FIFO 全部处理");
         assert!(rounds >= 3, "零预算下每轮只放行一条（实际 {rounds} 轮）");
+    }
+
+    /// **两个应答表读数不得同源（写反牙）**。
+    ///
+    /// 场景复刻一轮真实的到达/消费差异：本轮开头表里 12 条（顶部=到达积压），排水期间
+    /// 取走 10 条、新到 6 条 ⇒ 排水后 8 条（排水后=真滞留）。两次采样分别调用**生产采样函数**
+    /// （`sample_reply_table_at_tick_top` / `sample_reply_pending_after_drain`），断言两个历史峰值
+    /// 各自等于自己的喂入值、**互不相等**。
+    ///
+    /// 变异咬合：把任一采样点换成另一个记录函数（顶部记 pending / 排水块记 table）或把两个
+    /// 采样函数体互换 ⇒ 峰值落到错的计数器上（12→pending 或 8→table）⇒ 本用例红。
+    /// 退化形态：顶部 0 条与排水后 0 条 ⇒ 都不打印、两个峰值都不变（不会被 0 覆盖/串源）。
+    #[test]
+    fn reply_table_and_pending_do_not_alias() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        REPLY_TABLE_MAX.store(0, Ordering::Relaxed);
+        REPLY_PENDING_MAX.store(0, Ordering::Relaxed);
+        // 退化形态：两处都读到 0 ⇒ 不打印、峰值保持 0。
+        assert!(
+            sample_reply_table_at_tick_top(0).is_none(),
+            "顶部 0 条不应打印"
+        );
+        assert!(
+            sample_reply_pending_after_drain(0).is_none(),
+            "排水后 0 条不应打印"
+        );
+        assert_eq!(REPLY_TABLE_MAX.load(Ordering::Relaxed), 0);
+        assert_eq!(REPLY_PENDING_MAX.load(Ordering::Relaxed), 0);
+
+        // 一轮：顶部 12 → 排水后 8（取走 10、新到 6）。
+        assert!(sample_reply_table_at_tick_top(12).is_some(), ">0 应打印");
+        assert!(sample_reply_pending_after_drain(8).is_some(), ">0 应打印");
+        assert_eq!(
+            REPLY_TABLE_MAX.load(Ordering::Relaxed),
+            12,
+            "顶部峰值必须来自顶部喂入值（写反 ⇒ 8）"
+        );
+        assert_eq!(
+            REPLY_PENDING_MAX.load(Ordering::Relaxed),
+            8,
+            "排水后峰值必须来自排水后喂入值（串源 ⇒ 12）"
+        );
+        assert_ne!(
+            REPLY_TABLE_MAX.load(Ordering::Relaxed),
+            REPLY_PENDING_MAX.load(Ordering::Relaxed),
+            "两个读数不得是同一个量"
+        );
+
+        // 下一轮：顶部 9、排水后 3 ⇒ 历史峰值不回落，也不串。
+        assert!(sample_reply_table_at_tick_top(9).is_some());
+        assert!(sample_reply_pending_after_drain(3).is_some());
+        assert_eq!(REPLY_TABLE_MAX.load(Ordering::Relaxed), 12);
+        assert_eq!(REPLY_PENDING_MAX.load(Ordering::Relaxed), 8);
+        // 再回落为 0：不打印，也不清零历史峰值。
+        assert!(sample_reply_table_at_tick_top(0).is_none());
+        assert!(sample_reply_pending_after_drain(0).is_none());
+        assert_eq!(REPLY_TABLE_MAX.load(Ordering::Relaxed), 12);
+        assert_eq!(REPLY_PENDING_MAX.load(Ordering::Relaxed), 8);
     }
 
     /// **墙钟阀**：单条处理比墙钟预算慢 ⇒ 第一条之后必须截断（条数阀远未到），
