@@ -239,6 +239,8 @@ cd mir2-rs && cargo run -p msgcodegen -- --check
 
 ## 交付
 小步提交，每个提交可构建；不合并；交付到 needs-review 为止（不自行 approve、不自行 merge）。
+**R 级卡在窗口证据补齐前，state 一律不得 closed**：合并后保持 `in-progress`（或 needs-review），
+把待窗口判据逐条写进 `work`；只有窗口证据回填后才签 `closed`。L 级卡合并后可 `closed`。
 报告：分支、commit SHA、改动摘要、红→绿证据、命令与结果、剩余风险、残留物清单。
 ```
 

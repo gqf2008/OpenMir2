@@ -220,6 +220,8 @@ M3 逐系统对齐争写集；**解冻条件 = M2 验收通过，或 owner 重�
 
 ### 每批收尾清单（Cleanup DoD，缺一不算完）
 
+> **R 卡状态**：窗口证据补齐前卡不得 `closed`——合并后保持 `in-progress` 并把待窗口判据写进 `work`（判据分级政策的落地形式；2026-11-17 起因 `openmir2-tick-starvation` 误签 closed 而显式化）。
+
 1. **worktree**：**保留不删**（D62；裁决见卡 `openmir2-collab-interface-wg-migration`）；`git worktree list` 里允许留已完成车道的工作树——它们是团队名册。只清理已合并的**分支**，退役身份用 `wg collab principal-revoke`；
 2. **分支**：已合并的本地/远端删除（`git push walgit --delete <分支>`；GitHub 镜像按需人工同步），未合并的写明原因与归宿；
 3. **看板**：该卡收口为 `status: closed` 且在【已完成】列——**只写代码不收卡片 = 没收尾**；
