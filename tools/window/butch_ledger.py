@@ -485,8 +485,16 @@ def _selftest():
     _cont = ("let s = \"abc" + chr(92) + chr(10) + "def\";" + chr(10))
     _cont_st = _strip_code(_cont)
     _cont_ok = _cont.count(chr(10)) == _cont_st.count(chr(10))
+    # 转义字面量单独验（复审 P3：M4 = 转义分支直接 -1 时，上面三条断言都不动 ⇒ 漏）：
+    # 剥离后引号必须清零、花括号只剩函数体那一对；`\u{7B}` 里的花括号不得漏进代码。
+    _esc = ("fn g() { let a = " + chr(39) + chr(92) + chr(39) + chr(39)
+            + "; let b = " + chr(39) + chr(92) + "u{7B}" + chr(39) + "; }" + chr(10))
+    _esc_st = _strip_code(_esc)
+    _esc_ok = (_esc_st.count(chr(39)) == 0
+               and _esc_st.count("{") == 1 and _esc_st.count("}") == 1)
     ok("o 剥注释三性质（合成）：生命周期不吞代码 / 字符字面量（含 { 与转义引号）被剥 / 行连接保换行",
-       _lt_ok and _cont_ok, (_lt_ok, _cont_ok, repr(_lt_st), repr(_cont_st)))
+       _lt_ok and _cont_ok and _esc_ok,
+       (_lt_ok, _cont_ok, _esc_ok, repr(_lt_st), repr(_cont_st), repr(_esc_st)))
 
     bad = [c for c in checks if not c[0]]
     for cond, name, detail in checks:
