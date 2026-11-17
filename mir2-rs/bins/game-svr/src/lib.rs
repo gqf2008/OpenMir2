@@ -25346,6 +25346,110 @@ async fn run_admin_listener_with(
     }
 }
 
+/// **每轮事件排水预算**（卡 `openmir2-tick-starvation`）：条数 + 墙钟双阀。
+///
+/// 背景（2026-11-17 2000 档窗口）：原 `while let Ok(ev) = ev_rx.try_recv()` **没有任何条数/墙钟
+/// 预算**；约 1300 在线时事件到达速率 ≈ 处理速率（实测每分钟 92k–98k 条 `sim: index`），队列
+/// 永远排不空 ⇒ 该 while 不退出 ⇒ 整个 tick 体（应答排水 / tick 工作 / 关服检查 / 5s 心跳）5 分
+/// 15 秒一次都没执行，世界时钟停在 24s。
+///
+/// 判据：**任何路径都不允许「排不空就永不退出」**。到预算即停止取事件；剩余事件留在 std mpsc
+/// 通道里（天然保序），下一轮继续按 FIFO 逐条完整处理——只**延后**，不丢弃、不改单条事件的
+/// 判定/出帧顺序语义。
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct EventDrainBudget {
+    /// 单轮最多取走的条数。
+    pub(crate) max_events: u64,
+    /// 单轮最多花在「取事件 + 处理事件」上的墙钟。
+    pub(crate) max_wall: std::time::Duration,
+}
+
+impl EventDrainBudget {
+    /// 生产预算：≤2000 条且 ≤50ms。2000 档实测约 100k 事件/分钟（≈67 条/tick），
+    /// 条数阀留足余量；墙钟阀兜住单条处理变慢（脚本/广播）而条数没到顶的情形。
+    pub(crate) const PRODUCTION: Self = Self {
+        max_events: 2_000,
+        max_wall: std::time::Duration::from_millis(50),
+    };
+}
+
+/// 单轮带预算排水器：`while let Some(ev) = drain.next(&ev_rx, &mut carry) { … }`。
+///
+/// `carry` 是**周转槽**：预算用尽时只 `try_recv` 一条来判断「通道里是否还有」（这个判断决定
+/// 要不要记 `drain_budget_hit`），取到的那条不能丢 ⇒ 存进 `carry`，下一轮先处理它。
+/// 序列化效果：每轮**产出**的事件数 ≤ `max_events`（结转那条占一格），FIFO 不变。
+pub(crate) struct EventDrain {
+    budget: EventDrainBudget,
+    /// 本轮已产出的事件数（结转的那条也占一格）。
+    processed: u64,
+    started: std::time::Instant,
+    /// 本轮因条数/墙钟预算被截断（通道里仍有事件被延后到下一轮）。
+    pub(crate) hit_budget: bool,
+}
+
+impl EventDrain {
+    pub(crate) fn begin(budget: EventDrainBudget) -> Self {
+        Self {
+            budget,
+            processed: 0,
+            started: std::time::Instant::now(),
+            hit_budget: false,
+        }
+    }
+
+    /// 取本轮的下一条事件；`None` = 本轮排水结束（通道空 **或** 预算用尽）。
+    pub(crate) fn next(
+        &mut self,
+        rx: &std::sync::mpsc::Receiver<GateEvent>,
+        carry: &mut Option<GateEvent>,
+    ) -> Option<GateEvent> {
+        // 结转优先：它上一轮已从通道取走并计入 `drain_events_drained`，这里只消耗它。
+        if let Some(ev) = carry.take() {
+            self.processed += 1;
+            return Some(ev);
+        }
+        if self.processed >= self.budget.max_events
+            || self.started.elapsed() >= self.budget.max_wall
+        {
+            // 预算用尽：探一条只为判断「有没有被截断」——取到的结转下一轮（不丢、不改序）。
+            if let Ok(ev) = rx.try_recv() {
+                // 它已经从通道取走 ⇒ 在这里计入累计排水数（下一轮消耗 carry 时不重复计）。
+                telemetry::record_drain_event_drained();
+                *carry = Some(ev);
+                self.hit_budget = true;
+            }
+            return None;
+        }
+        match rx.try_recv() {
+            Ok(ev) => {
+                telemetry::record_drain_event_drained();
+                self.processed += 1;
+                Some(ev)
+            }
+            Err(_) => None,
+        }
+    }
+}
+
+/// **tick 顶部应答表读数**（到达积压 → `reply_table_max`）：每轮开头表内条数峰值。
+///
+/// 与 [`sample_reply_pending_after_drain`] 是**两个不同的量**（卡 `openmir2-tick-starvation`
+/// 复核分流）：顶部读数含本轮排水就会取走的新到达，度量消费端活性；排水后读数才是真滞留。
+/// 两者都要——只留顶部会把常态到达误读成滞留（今晚 649 的教训），只留排水后则在事件排水被
+/// 饿死的旧缺陷下永不执行。抽成生产函数是为了让「两处不得同源」有**行为牙**
+/// （`tick_starvation::reply_table_and_pending_do_not_alias`），不只是字符串断言。
+fn sample_reply_table_at_tick_top(len: u64) -> Option<String> {
+    telemetry::record_reply_table(len)
+}
+
+/// **应答排水结束后读数**（真滞留 → `reply_pending_max`，旧语义、历史可比）。
+///
+/// 口径见 [`telemetry::REPLY_PENDING_MAX`]：`take` 扫过一遍后仍没人取的条数；调用点必须在
+/// `w.outstanding = still;` 之后、用 `r.len()`。
+fn sample_reply_pending_after_drain(len: u64) -> Option<String> {
+    telemetry::record_reply_pending(len)
+}
+
 #[allow(clippy::too_many_arguments)]
 fn sim_loop(
     // **T-202**：`!servertable.txt` 路由表（`SendChangeServer` 的 `GetMultiServerAddrPort` 输入）。
@@ -26496,6 +26600,9 @@ fn sim_loop(
     // 最后一个 5s 窗口，正常关服在下面的关服分支补一行终值。只打印、不改任何分支。
     let mut entry_telemetry_next_ms: i64 = 0;
     let mut entry_telemetry_last: Option<String> = None;
+    // **事件排水周转槽**（卡 `openmir2-tick-starvation`）：预算用尽时探到的那一条留到下一轮，
+    // 循环外持有 ⇒ 跨 tick 保序、不丢。预算常量见 [`EventDrainBudget::PRODUCTION`]。
+    let mut event_carry: Option<GateEvent> = None;
     loop {
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
@@ -26567,9 +26674,22 @@ fn sim_loop(
                 entry_telemetry_last = Some(line);
             }
         }
+        // **到达积压每轮采样**（卡 `openmir2-tick-starvation` 复核分流）：这是 tick 循环顶部的
+        // `reply_table_max`（每轮开头表内条数峰值），不是 `reply_pending_max`——后者是「排水后
+        // 残留」的旧语义，仍在应答排水块结束处采（见下面 `sample_reply_pending_after_drain`）。
+        // 顶部读数保证「每轮必采」，事件排水被预算截断也不影响它。
+        if let Some(w) = db.as_ref() {
+            let table_len = w.replies.lock().expect("DB 应答表锁被毒化").len() as u64;
+            if let Some(line) = sample_reply_table_at_tick_top(table_len) {
+                glog!("WRN", "{}", line);
+            }
+        }
         let next = std::time::Instant::now() + tick;
         let t = host_prof.begin();
-        while let Ok(ev) = ev_rx.try_recv() {
+        // **带预算的事件排水**（卡 `openmir2-tick-starvation`）：条数 + 墙钟双阀。到预算即停止
+        // 取事件，剩余留在 std mpsc 通道里（保序）下一轮继续；绝不「排不空就不退出」。
+        let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
+        while let Some(ev) = drain.next(&ev_rx, &mut event_carry) {
             match ev {
                 GateEvent::Opened { index, ip } => {
                     glog!(
@@ -27764,6 +27884,12 @@ fn sim_loop(
                     );
                     let _ = reply.send(out);
                 }
+            }
+        }
+        if drain.hit_budget {
+            // 到预算即停：剩余事件留到下一轮。WRN 按 100 次节流（高负载档几乎每轮触达）。
+            if let Some(line) = telemetry::record_drain_budget_hit() {
+                glog!("WRN", "{}", line);
             }
         }
         host_prof.end("HostInbound", t);
@@ -29209,8 +29335,10 @@ fn sim_loop(
             }
             w.save_outstanding = still_saves;
             w.outstanding = still;
-            // 排水后仍滞留在应答表里的条数（**fed 了但没进 attempt** 的直接量化）
-            if let Some(line) = telemetry::record_reply_pending(r.len() as u64) {
+            // **排水后残留**（卡 `openmir2-tick-starvation` 复核分流）：`reply_pending_max` 的旧语义
+            // ——`take` 扫过一遍后仍没人取的条数（真滞留），供与历史窗口横比。顶部采样是另一个
+            // 量（`reply_table_max` = 到达积压），两者**不得同源**。
+            if let Some(line) = sample_reply_pending_after_drain(r.len() as u64) {
                 glog!("WRN", "{}", line);
             }
         }
@@ -92428,18 +92556,83 @@ mod entry_telemetry_wiring {
         assert!(window(DBC, i, 600).contains("record_reply_verify_fail("));
     }
 
-    /// 滞留应答量化：必须在取档排水**结束处**（`w.outstanding = still;` 之后）。
+    /// **应答表两个读数各在自己该在的位置**（卡 `openmir2-tick-starvation` 复核分流）。
+    ///
+    /// 口径：`reply_pending_max` = 排水后残留峰值（旧语义，历史可比）；`reply_table_max` =
+    /// 每轮开头表内条数峰值（本轮新增，不与旧值横比）。判据（双向负例）：
+    /// ① 两个生产采样函数在 lib.rs 各**恰好一个调用点**；
+    /// ② 顶部函数在循环顶部 5s 心跳块之后、**不在**排水块；排水函数在 `w.outstanding = still;`
+    ///    之后、**不在**顶部；
+    /// ③ 两个记录函数（`record_reply_pending` / `record_reply_table`）各只有一处定义体内转发
+    ///    （多一处 = 有人绕开采样函数另接一条路径，读数会同源）。
+    /// 行为牙（同源/串源）见 `tick_starvation::reply_table_and_pending_do_not_alias`。
     #[test]
-    fn reply_pending_is_recorded_after_drain() {
-        let i = SRC.find("w.outstanding = still;").expect("排水结束点");
-        let seg = window(SRC, i, 600);
+    fn reply_table_and_pending_sampled_at_their_own_points() {
+        // needle 运行时拼、且带上**生产实参**：测试自己也会调用这两个函数（数字实参），
+        // 只锚函数名会数到测试调用点（本用例曾因此假红 left=6）。
+        let top = format!("sample_reply_table_at_tick_top({})", "table_len");
+        let drain = format!("sample_reply_pending_after_drain({})", "r.len() as u64");
+        assert_eq!(
+            SRC.matches(&top).count(),
+            1,
+            "顶部采样必须恰好一个调用点（{top}）"
+        );
+        assert_eq!(
+            SRC.matches(&drain).count(),
+            1,
+            "排水后采样必须恰好一个调用点（{drain}）"
+        );
+        let i = SRC
+            .find("entry_telemetry_next_ms = world.clock_ms + 5_000;")
+            .expect("循环顶部 5s 心跳块");
         assert!(
-            seg.contains("record_reply_pending("),
-            "必须在排水结束后记录滞留数"
+            window(SRC, i, 3000).contains(&top),
+            "到达积压采样必须在 tick 循环顶部（5s 心跳块之后）"
         );
         assert!(
-            seg.contains("r.len()"),
-            "滞留数必须取应答表当前长度（写死常量 ⇒ 本用例红）"
+            !window(SRC, i, 3000).contains(&drain),
+            "排水后残留采样**不得**在循环顶部（那是另一个量）"
+        );
+        // 锚 `w.save_outstanding = still_saves;`（生产唯一）：`w.outstanding = still;` 也出现在
+        // 采样函数的 doc 注释里，`find` 会先命中注释而非排水块。
+        let d = SRC
+            .find("w.save_outstanding = still_saves;")
+            .expect("排水结束点");
+        assert!(
+            window(SRC, d, 800).contains(&drain),
+            "残留采样必须在应答排水块结束处（`w.outstanding = still;` 之后）"
+        );
+        assert!(
+            !window(SRC, d, 800).contains(&top),
+            "到达积压采样**不得**在排水块里（会丢掉每轮必采）"
+        );
+        // 值必须取当前表长（写死常量 ⇒ 红）：顶部取 `w.replies.lock().len()`，排水后取 `r.len()`。
+        let j = SRC
+            .find("let table_len = w.replies.lock()")
+            .expect("顶部读数取自应答表长度");
+        assert!(
+            window(SRC, j, 400).contains(&top),
+            "顶部读数必须来自刚取到的应答表长度"
+        );
+        let k = SRC
+            .find("w.save_outstanding = still_saves;")
+            .expect("排水结束点");
+        assert!(
+            window(SRC, k, 800).contains("r.len()"),
+            "排水后读数必须取 `r.len()`（写死常量 ⇒ 本用例红）"
+        );
+        // 记录函数各自唯一：绕开采样函数再插一条 ⇒ 计数变 2，本用例红。
+        let rec_pending = format!("record_reply_{}(", "pending");
+        let rec_table = format!("record_reply_{}(", "table");
+        assert_eq!(
+            SRC.matches(&rec_pending).count(),
+            1,
+            "record_reply_pending 只许在排水后采样函数里转发一次"
+        );
+        assert_eq!(
+            SRC.matches(&rec_table).count(),
+            1,
+            "record_reply_table 只许在顶部采样函数里转发一次"
         );
     }
 
@@ -92678,5 +92871,323 @@ mod entry_telemetry_wiring {
             arm.contains(&call),
             "record_ok 必须用 world.clock_ms 作时间基准（换基准 ⇒ 本用例红）"
         );
+    }
+}
+
+/// 卡 `openmir2-tick-starvation` 的**行为牙**：带预算事件排水器 [`EventDrain`]。
+///
+/// 病态输入用**真 mpsc 通道**复现（`try_recv` 的语义与生产完全一致），
+/// 「模拟 tick」= 每轮排水后推进一次逻辑时钟，正对应 `sim_loop` 里 while 之后那段 tick 体。
+/// 三颗牙：
+/// ① 超预算突发 ⇒ `budget_hit` 为真 **且** 时钟/轮次继续推进；
+/// ② 删掉预算判断 ⇒ ①必红；
+/// ③ 滞留应答采样点必须在 tick 循环顶部（结构牙见
+/// `entry_telemetry_wiring::reply_pending_is_sampled_at_tick_top_not_in_drain_block`；
+/// 计数行为见 `telemetry::tests::drain_counters_count_and_throttle`）。
+#[cfg(test)]
+mod tick_starvation {
+    use super::{
+        sample_reply_pending_after_drain, sample_reply_table_at_tick_top, EventDrain,
+        EventDrainBudget, GateEvent,
+    };
+    use crate::telemetry::{REPLY_PENDING_MAX, REPLY_TABLE_MAX};
+    use std::sync::atomic::Ordering;
+    use std::time::Duration;
+
+    fn opened(index: i32) -> GateEvent {
+        GateEvent::Opened {
+            index,
+            ip: "127.0.0.1".to_string(),
+        }
+    }
+
+    fn index_of(ev: &GateEvent) -> i32 {
+        match ev {
+            GateEvent::Opened { index, .. } => *index,
+            other => panic!("本组用例只投递 Opened，收到 {other:?}"),
+        }
+    }
+
+    /// 一颗「模拟 tick」：跑到本轮排水结束，返回 `hit_budget`。
+    fn tick(
+        rx: &std::sync::mpsc::Receiver<GateEvent>,
+        carry: &mut Option<GateEvent>,
+        budget: EventDrainBudget,
+        out: &mut Vec<i32>,
+    ) -> bool {
+        let mut drain = EventDrain::begin(budget);
+        while let Some(ev) = drain.next(rx, carry) {
+            out.push(index_of(&ev));
+        }
+        drain.hit_budget
+    }
+
+    /// **牙①**：64 条突发 + 预算 4 条 ⇒ 必须多轮推进（不是一轮吞完），每轮都标记截断，
+    /// 且 64 条按 FIFO 逐条处理**恰好一次**（只延后，不丢、不重、不改序）。
+    /// 退化形态：空事件 ⇒ 不截断（见 `empty_burst_is_not_a_truncation`）；
+    /// 正好装满预算 ⇒ 也不算截断（见 `exactly_budget_is_not_a_truncation`）。
+    #[test]
+    fn oversized_burst_hits_budget_and_tick_keeps_advancing() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        for i in 0..64 {
+            tx.send(opened(i)).expect("通道未关");
+        }
+        let budget = EventDrainBudget {
+            max_events: 4,
+            max_wall: Duration::from_secs(3_600),
+        };
+        let drained_before = crate::telemetry::DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed);
+        let hit_before = crate::telemetry::DRAIN_BUDGET_HIT.load(Ordering::Relaxed);
+
+        let mut carry = None;
+        let mut seen = Vec::new();
+        let mut clock_ms: i64 = 0;
+        let mut rounds = 0u32;
+        let mut hit_rounds = 0u32;
+        loop {
+            // `hit_budget == false` = 本轮跑到通道空且无结转 ⇒ 全部排完（**不要**另探通道：
+            // `try_recv` 会把事件取走，探一次就丢一条）。
+            let hit = tick(&rx, &mut carry, budget, &mut seen);
+            if hit {
+                // 生产接线：截断时记账（这里调用生产计数器，证明它 +1）。
+                let _ = crate::telemetry::record_drain_budget_hit();
+                hit_rounds += 1;
+            }
+            // 模拟 tick 尾部：逻辑时钟推进（原缺陷里这一步 5 分 15 秒没执行过一次）。
+            clock_ms += 100;
+            rounds += 1;
+            assert!(
+                rounds <= 64,
+                "64 条 / 每轮 4 条不该超过 64 轮（疑似死循环）"
+            );
+            if !hit {
+                break;
+            }
+        }
+
+        assert!(hit_rounds > 0, "超预算突发必须触达 drain_budget_hit");
+        assert!(
+            rounds >= 16,
+            "64 条 / 每轮 4 条 ⇒ 至少 16 轮（一轮吞完 = 预算没生效）"
+        );
+        assert!(clock_ms >= 1_600, "逻辑时钟必须随轮次推进");
+        assert_eq!(
+            seen,
+            (0..64).collect::<Vec<_>>(),
+            "事件必须 FIFO、恰好一次（只延后，不丢不重不改序）"
+        );
+        let drained_after = crate::telemetry::DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed);
+        let hit_after = crate::telemetry::DRAIN_BUDGET_HIT.load(Ordering::Relaxed);
+        assert_eq!(
+            drained_after - drained_before,
+            64,
+            "drain_events_drained 必须恰好 +64（含截断时探到的那条）"
+        );
+        assert_eq!(
+            hit_after - hit_before,
+            u64::from(hit_rounds),
+            "每轮截断记账一次（记少 = 探到事件却没标记）"
+        );
+    }
+
+    /// 退化形态①：**空事件** ⇒ 一轮都不截断、不产生事件，时钟仍推进（不会因空集空过）。
+    #[test]
+    fn empty_burst_is_not_a_truncation() {
+        // 进程级计数（`DRAIN_EVENTS_DRAINED`）被本模块用例共享 ⇒ 串行，避免并行改数。
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (_tx, rx) = std::sync::mpsc::channel::<GateEvent>();
+        let budget = EventDrainBudget {
+            max_events: 4,
+            max_wall: Duration::from_millis(50),
+        };
+        let mut carry = None;
+        let mut seen = Vec::new();
+        assert!(
+            !tick(&rx, &mut carry, budget, &mut seen),
+            "空通道不得标记截断"
+        );
+        assert!(seen.is_empty(), "空通道不得产出事件");
+        assert!(carry.is_none(), "空通道不得留结转");
+    }
+
+    /// 退化形态②：**正好装满预算** ⇒ 通道探空 ⇒ 不算截断（否则每轮都会误记 budget_hit）。
+    #[test]
+    fn exactly_budget_is_not_a_truncation() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        for i in 0..4 {
+            tx.send(opened(i)).expect("通道未关");
+        }
+        let budget = EventDrainBudget {
+            max_events: 4,
+            max_wall: Duration::from_secs(3_600),
+        };
+        let mut carry = None;
+        let mut seen = Vec::new();
+        assert!(
+            !tick(&rx, &mut carry, budget, &mut seen),
+            "正好 4 条不是截断"
+        );
+        assert_eq!(seen, vec![0, 1, 2, 3]);
+    }
+
+    /// 退化形态③：**零预算**（病态配置）⇒ 仍然每条都有出路（结转槽保证），不丢、不死循环。
+    #[test]
+    fn zero_budget_still_makes_progress_and_loses_nothing() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        for i in 0..3 {
+            tx.send(opened(i)).expect("通道未关");
+        }
+        let budget = EventDrainBudget {
+            max_events: 0,
+            max_wall: Duration::from_secs(3_600),
+        };
+        let mut carry = None;
+        let mut seen = Vec::new();
+        let mut rounds = 0;
+        while seen.len() < 3 && rounds < 16 {
+            let _ = tick(&rx, &mut carry, budget, &mut seen);
+            rounds += 1;
+        }
+        assert_eq!(seen, vec![0, 1, 2], "零预算也必须 FIFO 全部处理");
+        assert!(rounds >= 3, "零预算下每轮只放行一条（实际 {rounds} 轮）");
+    }
+
+    /// **两个应答表读数不得同源（写反牙）**。
+    ///
+    /// 场景复刻一轮真实的到达/消费差异：本轮开头表里 12 条（顶部=到达积压），排水期间
+    /// 取走 10 条、新到 6 条 ⇒ 排水后 8 条（排水后=真滞留）。两次采样分别调用**生产采样函数**
+    /// （`sample_reply_table_at_tick_top` / `sample_reply_pending_after_drain`），断言两个历史峰值
+    /// 各自等于自己的喂入值、**互不相等**。
+    ///
+    /// 变异咬合：把任一采样点换成另一个记录函数（顶部记 pending / 排水块记 table）或把两个
+    /// 采样函数体互换 ⇒ 峰值落到错的计数器上（12→pending 或 8→table）⇒ 本用例红。
+    /// 退化形态：顶部 0 条与排水后 0 条 ⇒ 都不打印、两个峰值都不变（不会被 0 覆盖/串源）。
+    #[test]
+    fn reply_table_and_pending_do_not_alias() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        REPLY_TABLE_MAX.store(0, Ordering::Relaxed);
+        REPLY_PENDING_MAX.store(0, Ordering::Relaxed);
+        // 退化形态：两处都读到 0 ⇒ 不打印、峰值保持 0。
+        assert!(
+            sample_reply_table_at_tick_top(0).is_none(),
+            "顶部 0 条不应打印"
+        );
+        assert!(
+            sample_reply_pending_after_drain(0).is_none(),
+            "排水后 0 条不应打印"
+        );
+        assert_eq!(REPLY_TABLE_MAX.load(Ordering::Relaxed), 0);
+        assert_eq!(REPLY_PENDING_MAX.load(Ordering::Relaxed), 0);
+
+        // 一轮：顶部 12 → 排水后 8（取走 10、新到 6）。
+        assert!(sample_reply_table_at_tick_top(12).is_some(), ">0 应打印");
+        assert!(sample_reply_pending_after_drain(8).is_some(), ">0 应打印");
+        assert_eq!(
+            REPLY_TABLE_MAX.load(Ordering::Relaxed),
+            12,
+            "顶部峰值必须来自顶部喂入值（写反 ⇒ 8）"
+        );
+        assert_eq!(
+            REPLY_PENDING_MAX.load(Ordering::Relaxed),
+            8,
+            "排水后峰值必须来自排水后喂入值（串源 ⇒ 12）"
+        );
+        assert_ne!(
+            REPLY_TABLE_MAX.load(Ordering::Relaxed),
+            REPLY_PENDING_MAX.load(Ordering::Relaxed),
+            "两个读数不得是同一个量"
+        );
+
+        // 下一轮：顶部 9、排水后 3 ⇒ 历史峰值不回落，也不串。
+        assert!(sample_reply_table_at_tick_top(9).is_some());
+        assert!(sample_reply_pending_after_drain(3).is_some());
+        assert_eq!(REPLY_TABLE_MAX.load(Ordering::Relaxed), 12);
+        assert_eq!(REPLY_PENDING_MAX.load(Ordering::Relaxed), 8);
+        // 再回落为 0：不打印，也不清零历史峰值。
+        assert!(sample_reply_table_at_tick_top(0).is_none());
+        assert!(sample_reply_pending_after_drain(0).is_none());
+        assert_eq!(REPLY_TABLE_MAX.load(Ordering::Relaxed), 12);
+        assert_eq!(REPLY_PENDING_MAX.load(Ordering::Relaxed), 8);
+    }
+
+    /// **墙钟阀**：单条处理比墙钟预算慢 ⇒ 第一条之后必须截断（条数阀远未到），
+    /// 剩余事件留在通道/结转槽里，下一轮按序全部取回。
+    #[test]
+    fn wall_clock_budget_cuts_a_slow_round() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        for i in 0..10 {
+            tx.send(opened(i)).expect("通道未关");
+        }
+        let budget = EventDrainBudget {
+            max_events: 1_000,
+            max_wall: Duration::from_millis(1),
+        };
+        let mut carry = None;
+        let mut first_round = Vec::new();
+        let mut drain = EventDrain::begin(budget);
+        while let Some(ev) = drain.next(&rx, &mut carry) {
+            first_round.push(index_of(&ev));
+            std::thread::sleep(Duration::from_millis(5)); // 单条处理慢于墙钟预算
+        }
+        assert_eq!(first_round, vec![0], "墙钟阀必须在第二条前截断");
+        assert!(drain.hit_budget, "被墙钟截断必须标记 hit_budget");
+
+        // 剩余 9 条（结转 1 + 通道 8）一条不丢，顺序不变。
+        let mut rest = Vec::new();
+        let _ = tick(
+            &rx,
+            &mut carry,
+            EventDrainBudget {
+                max_events: 1_000,
+                max_wall: Duration::from_secs(3_600),
+            },
+            &mut rest,
+        );
+        assert_eq!(
+            rest,
+            (1..10).collect::<Vec<_>>(),
+            "截断后剩余事件必须保序取回"
+        );
+    }
+
+    /// **接线牙（调用点）**：生产 sim 排水必须经过预算器；不得回到无预算 `while try_recv`。
+    /// 变异：把 loop head 换回 `while let Ok(ev) = ev_rx.try_recv()` ⇒ 本用例红。
+    #[test]
+    fn production_loop_head_goes_through_budgeted_drain() {
+        let src = include_str!("lib.rs");
+        // needle 运行时拼：完整字面量不得出现在本文件（include_str! 会数到测试自己）。
+        let unbounded = format!("while let Ok(ev) = {}try_recv() {{", "ev_rx.");
+        assert_eq!(
+            src.matches(&unbounded).count(),
+            0,
+            "生产 sim 排水不得回到无预算 while（{unbounded}）"
+        );
+        let head = format!(
+            "while let Some(ev) = {}.next(&ev_rx, &mut event_carry)",
+            "drain"
+        );
+        assert_eq!(
+            src.matches(&head).count(),
+            1,
+            "生产排水必须经过预算器（唯一一处：{head}）"
+        );
+        let begin = format!("{}(EventDrainBudget::PRODUCTION)", "EventDrain::begin");
+        assert_eq!(src.matches(&begin).count(), 1, "预算必须每轮重新起算");
     }
 }

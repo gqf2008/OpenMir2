@@ -106,9 +106,31 @@ pub static REPLY_MATCHED: AtomicU64 = AtomicU64::new(0);
 
 /// 6000 面应答**签名/长度校验不过**的帧数（`ReplyVerdict` 非 Accept 且非 TooShort）。
 pub static REPLY_VERIFY_FAIL: AtomicU64 = AtomicU64::new(0);
-/// 每轮取档排水后**仍滞留在应答表里**的应答数（取**历史最大值**）：它直接把
-/// 「fed 了但没进 attempt」的差值量化出来（qid 对不上/会话已摘）。
+/// 应答表读数 ①：**排水后残留峰值**（取**历史最大值**）。语义是「**真滞留**」——
+/// 本轮 `take` 扫过一遍后仍没人取（qid 对不上 / 会话已摘），也就是「fed 了但没进 attempt」。
+///
+/// **口径（旧语义，历史可比）**：2026-11-17 那轮 649 的报告里 `reply_pending_max=0` 就是本字段，
+/// 按「排水后残留」读；修复前后的窗口读数可以直接横向对比。
+///
+/// 与 [`REPLY_TABLE_MAX`]（顶部=到达积压）**不是一个量**，两者都要：
+/// 排水后的这个数才是诊断「649 条躺在表里没人取」的判据；只说「表里有多少」会把本轮
+/// 本来就会被取走的新到达也算成滞留（2000 档每轮到达几十~上百条，那个数会常态很大）。
 pub static REPLY_PENDING_MAX: AtomicU64 = AtomicU64::new(0);
+/// 应答表读数 ②：**每轮开头表内条数峰值**（取**历史最大值**）。语义是「**到达积压**」——
+/// 本轮开头表里有多少条待处理（含本轮排水就会取走的新到达），度量的是消费端活性，
+/// **不度量滞留**。它放在 tick 循环顶部 ⇒ 即使事件排水被预算截断也**每轮必采**。
+///
+/// **口径（本轮新增）**：没有历史值可比，**不与旧窗口的 `reply_pending_max` 横比**——
+/// 两者量的不是一件事（见上）。与 [`REPLY_PENDING_MAX`] 对读：顶部大而排水后小 = 到达多
+/// 但都在被消费；两者都大 = 真的有滞留。只留一个读数就会像今晚一样被误读。
+pub static REPLY_TABLE_MAX: AtomicU64 = AtomicU64::new(0);
+
+/// **事件排水累计取走条数**（卡 `openmir2-tick-starvation`）：每轮 tick 从 `ev_rx` 取走一条 +1。
+/// 与 [`DRAIN_BUDGET_HIT`] 对读：没有预算时它会在**同一次 tick 内**无限增长（tick 永不返回）。
+pub static DRAIN_EVENTS_DRAINED: AtomicU64 = AtomicU64::new(0);
+/// **事件排水因预算被截断的轮次数**（卡 `openmir2-tick-starvation`）：>0 = 本轮还有事件留在
+/// 通道里、被延后到下一轮。它与 `world.clock_ms` 对读：截断而时钟仍前进 = 预算生效。
+pub static DRAIN_BUDGET_HIT: AtomicU64 = AtomicU64::new(0);
 
 /// 6000 面**断链重连**次数（成功建连但不是第一次；卡 `openmir2-db-link-request-drop`）。
 /// 与 `loaddb_request_sent`/`loaddb_write_error` 对读：重连前写成功的请求可能随旧连接一起丢。
@@ -350,7 +372,10 @@ pub fn record_reply_verify_fail() -> Option<String> {
     bump(&REPLY_VERIFY_FAIL)
 }
 
-/// 记录「排水后仍滞留在应答表里的应答数」（取历史最大值；>0 时返回一行汇总供日志）。
+/// 记录「**排水后残留峰值**」（取历史最大值；>0 时返回一行汇总供日志）。
+///
+/// 口径与 [`REPLY_PENDING_MAX`] 一致：调用点必须在**应答排水块结束处**（`w.outstanding = still;`
+/// 之后、用 `r.len()`），否则读数就不是「真滞留」。历史可比（649 那轮就是它）。
 #[must_use]
 pub fn record_reply_pending(pending: u64) -> Option<String> {
     let mut cur = REPLY_PENDING_MAX.load(Relaxed);
@@ -365,6 +390,40 @@ pub fn record_reply_pending(pending: u64) -> Option<String> {
     } else {
         Some(summary_line())
     }
+}
+
+/// 记录「**每轮开头应答表内条数峰值**」（取历史最大值；>0 时返回一行汇总供日志）。
+///
+/// 口径与 [`REPLY_TABLE_MAX`] 一致：调用点必须在 **tick 循环顶部**（每轮必采）；它度量的是
+/// 到达积压/消费端活性，**不是**滞留。本轮新增、无历史值可比（不与旧窗口横比）。
+#[must_use]
+pub fn record_reply_table(len: u64) -> Option<String> {
+    let mut cur = REPLY_TABLE_MAX.load(Relaxed);
+    while len > cur {
+        match REPLY_TABLE_MAX.compare_exchange(cur, len, Relaxed, Relaxed) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+    if len == 0 {
+        None
+    } else {
+        Some(summary_line())
+    }
+}
+
+/// 事件排水从通道取走一条 +1（调用点唯一：sim 侧带预算排水器的取事件处）。
+/// 无打印：它每 tick 都要动，汇总行里给累计值即可。
+pub fn record_drain_event_drained() {
+    DRAIN_EVENTS_DRAINED.fetch_add(1, Relaxed);
+}
+
+/// 本轮事件排水**因条数/墙钟预算被截断** +1；整百 ⇒ 返回一行汇总（调用方按 WRN 打）。
+///
+/// 用 [`bump`] 的节流：预算被触达可能是常态（高负载档每轮都触达），逐轮打会刷屏。
+#[must_use]
+pub fn record_drain_budget_hit() -> Option<String> {
+    bump(&DRAIN_BUDGET_HIT)
 }
 
 /// 6000 面重连 +1；整百 ⇒ 返回一行汇总。
@@ -422,10 +481,13 @@ pub(crate) fn reset_final_line_once_for_tests() {
 }
 
 /// 一行汇总（调用方决定何时打印（字段名固定，供日志侧机判）。
+///
+/// 应答表两个读数**不要混读**：`reply_pending_max` = **排水后残留峰值**（旧语义，历史可比）；
+/// `reply_table_max` = **每轮开头表内条数峰值**（本轮新增，不与旧值横比）。
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -456,7 +518,10 @@ pub fn summary_line() -> String {
         REPLY_CONSUMED.load(Relaxed),
         REPLY_MATCHED.load(Relaxed),
         REPLY_VERIFY_FAIL.load(Relaxed),
-        REPLY_PENDING_MAX.load(Relaxed)
+        REPLY_PENDING_MAX.load(Relaxed),
+        DRAIN_EVENTS_DRAINED.load(Relaxed),
+        DRAIN_BUDGET_HIT.load(Relaxed),
+        REPLY_TABLE_MAX.load(Relaxed)
     )
 }
 
@@ -531,6 +596,9 @@ mod tests {
             "reply_matched=",
             "reply_verify_fail=",
             "reply_pending_max=",
+            "drain_events_drained=",
+            "drain_budget_hit=",
+            "reply_table_max=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
@@ -602,6 +670,73 @@ mod tests {
             REPLY_PENDING_MAX.load(Ordering::Relaxed),
             5,
             "必须保留历史最大值，不得回落"
+        );
+    }
+
+    /// 顶部积压读数 `reply_table_max`：与 `reply_pending_max` 同构（历史最大值、>0 才打印），
+    /// 但**两个计数器互不串**——更新 table 不碰 pending，反之亦然。
+    /// 退化形态：0 不打印且不清零历史峰值。
+    #[test]
+    fn reply_table_tracks_its_own_max_and_does_not_alias_pending() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        REPLY_TABLE_MAX.store(0, Ordering::Relaxed);
+        REPLY_PENDING_MAX.store(0, Ordering::Relaxed);
+        assert!(record_reply_table(0).is_none(), "0 不应打印");
+        assert!(record_reply_table(5).is_some(), ">0 应打印");
+        assert!(record_reply_table(3).is_some(), ">0 应打印");
+        assert_eq!(
+            REPLY_TABLE_MAX.load(Ordering::Relaxed),
+            5,
+            "必须保留历史最大值，不得回落"
+        );
+        assert_eq!(
+            REPLY_PENDING_MAX.load(Ordering::Relaxed),
+            0,
+            "更新 table 不得碰 pending（串源 ⇒ 本用例红）"
+        );
+        assert!(record_reply_pending(9).is_some(), ">0 应打印");
+        assert_eq!(REPLY_PENDING_MAX.load(Ordering::Relaxed), 9);
+        assert_eq!(
+            REPLY_TABLE_MAX.load(Ordering::Relaxed),
+            5,
+            "更新 pending 不得碰 table（串源 ⇒ 本用例红）"
+        );
+    }
+
+    /// **事件排水两个计数**（卡 `openmir2-tick-starvation`）：
+    /// - 退化形态「空集」（0 次调用）：两个计数都不变、不打印；
+    /// - `drain_events_drained` 每次调用严格 +1，且从不打印（打印由汇总行承担）；
+    /// - `drain_budget_hit` 按 [`PRINT_EVERY`] 节流：任意连续 `PRINT_EVERY` 次里恰好一行
+    ///   （与起始相位无关），即预算每轮触达也不会逐轮刷屏。
+    #[test]
+    fn drain_counters_count_and_throttle() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 退化形态：不调用 ⇒ 读数不变（任何「初始化即非零」的接线都会在这里露馅）。
+        let before_drained = DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed);
+        let before_hit = DRAIN_BUDGET_HIT.load(Ordering::Relaxed);
+        assert_eq!(DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed), before_drained);
+        assert_eq!(DRAIN_BUDGET_HIT.load(Ordering::Relaxed), before_hit);
+
+        // 单条 +1（不打印：函数返回 ()，没有日志出口）。
+        record_drain_event_drained();
+        assert_eq!(
+            DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed),
+            before_drained + 1,
+            "每取走一条必须 +1"
+        );
+
+        // 节流：连续 PRINT_EVERY 次里恰好一次返回汇总行。
+        let mut printed = 0;
+        for _ in 0..PRINT_EVERY {
+            if record_drain_budget_hit().is_some() {
+                printed += 1;
+            }
+        }
+        assert_eq!(printed, 1, "每 {PRINT_EVERY} 次截断只许一行");
+        assert_eq!(
+            DRAIN_BUDGET_HIT.load(Ordering::Relaxed),
+            before_hit + PRINT_EVERY,
+            "每次截断都必须计数（打印可以节流，计数不能）"
         );
     }
 
