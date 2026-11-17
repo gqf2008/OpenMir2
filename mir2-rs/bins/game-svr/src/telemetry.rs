@@ -90,6 +90,8 @@ pub static LOGON_EXIT_UNCOUNTED: AtomicU64 = AtomicU64::new(0);
 pub static LOGON_PENDING_LISTS_MAX: AtomicU64 = AtomicU64::new(0);
 /// 应答**存进表**的次数（只数取档应答）：`reply_seen == reply_stored` 应恒成立。
 pub static REPLY_STORED: AtomicU64 = AtomicU64::new(0);
+/// 终值行一次性开关（`final_line_once` 用；测试可复位）。
+static FINAL_LINE_TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// 关服时**残留并被记账丢弃**的应答条数（卡 `openmir2-entry-gap-buckets`）：排水窗口后仍在表里的，
 /// 不再"消失"而是记在这里。判据：`reply_in_flight == reply_dropped_at_shutdown`（恒等，不是 0）。
 pub static REPLY_DROPPED_AT_SHUTDOWN: AtomicU64 = AtomicU64::new(0);
@@ -393,11 +395,30 @@ pub fn sample_load_reply_other() -> bool {
 /// 判据「关服后日志里有且仅有一条终值行」就靠它——重复调用不会多打，漏调用则由日志缺失暴露。
 #[must_use]
 pub fn final_line_once() -> Option<String> {
-    static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-    if ONCE.swap(true, Relaxed) {
+    if FINAL_LINE_TAKEN.swap(true, Relaxed) {
         return None;
     }
+    // **唯一记账出口**（卡 `openmir2-entry-gap-buckets`）：所有退出路径（正常/超时/信号/管道）都经过这里。
+    // 语义：`reply_dropped_at_shutdown` = **关服时仍未被消费的残留**的定义值，**不是"被处理过"**。
+    let inflight = reply_in_flight();
+    if inflight > 0 {
+        if let Ok(n) = u64::try_from(inflight) {
+            record_reply_dropped_at_shutdown(n);
+            crate::glog!(
+                "WRN",
+                "{} replies unconsumed at shutdown (reply_in_flight={})",
+                n,
+                inflight
+            );
+        }
+    }
     Some(summary_line())
+}
+
+/// 测试专用：复位终值行的一次性开关（生产路径不调用）。
+#[cfg(test)]
+pub(crate) fn reset_final_line_once_for_tests() {
+    FINAL_LINE_TAKEN.store(false, Relaxed);
 }
 
 /// 一行汇总（调用方决定何时打印（字段名固定，供日志侧机判）。
@@ -646,6 +667,8 @@ mod tests {
     /// **终值行只打一次**：第一次 `Some`、第二次 `None`（改成恒返回 ⇒ 红）。
     #[test]
     fn final_line_once_emits_exactly_once() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_final_line_once_for_tests();
         let first = final_line_once();
         assert!(first.is_some(), "首次调用必须返回终值行");
         assert!(first.unwrap().starts_with("ENTRY_TELEMETRY svc=game-svr "));
@@ -682,6 +705,26 @@ mod tests {
         let line = summary_line();
         assert!(line.contains("reply_dropped_at_shutdown=48"), "{line}");
         record_reply_dropped_at_shutdown(0);
+    }
+
+    /// **唯一记账出口**：终值行生成时若仍有残留，必须把快照写进 `reply_dropped_at_shutdown`，
+    /// 且终值行带该字段（删记账 ⇒ 红；把记账移到某一条路径上 ⇒ 其它路径的用例红）。
+    #[test]
+    fn final_line_accounts_leftover_replies() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_final_line_once_for_tests();
+        REPLY_STORED.store(3, Ordering::Relaxed);
+        REPLY_CONSUMED.store(0, Ordering::Relaxed);
+        REPLY_DROPPED_AT_SHUTDOWN.store(0, Ordering::Relaxed);
+        let line = final_line_once().expect("终值行");
+        assert!(
+            line.contains("reply_dropped_at_shutdown=3"),
+            "终值行必须带残留记账字段: {line}"
+        );
+        REPLY_STORED.store(0, Ordering::Relaxed);
+        REPLY_CONSUMED.store(0, Ordering::Relaxed);
+        REPLY_DROPPED_AT_SHUTDOWN.store(0, Ordering::Relaxed);
+        reset_final_line_once_for_tests();
     }
 
     /// 三个计数器互相独立：动一个不许动另一个（同族「删任一计数 ⇒ 对应断言红」的前提）。

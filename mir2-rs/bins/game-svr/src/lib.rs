@@ -26542,11 +26542,6 @@ fn sim_loop(
             }
             let logon_in_flight = telemetry::logon_in_flight();
             let reply_in_flight = telemetry::reply_in_flight();
-            if reply_in_flight > 0 {
-                if let Ok(n) = u64::try_from(reply_in_flight) {
-                    telemetry::record_reply_dropped_at_shutdown(n);
-                }
-            }
             if logon_in_flight != 0 || reply_in_flight != 0 {
                 glog!(
                     "WRN",
@@ -92279,6 +92274,8 @@ mod entry_telemetry_wiring {
     const DBC: &str = include_str!("dbclient.rs");
     /// 读档控制流（`SessionID==0` 与「保存中重排队」两条分支）。
     const LD: &str = include_str!("load.rs");
+    /// 遥测模块（记账落在 `final_line_once` 里）。
+    const TEL_SRC: &str = include_str!("telemetry.rs");
 
     fn needle(name: &str) -> String {
         format!("telemetry::record_{name}(")
@@ -92491,10 +92488,21 @@ mod entry_telemetry_wiring {
     /// 关服残留应答必须有去处：排水窗口 + `reply_dropped_at_shutdown` 记账；超时日志要六个数。
     #[test]
     fn shutdown_accounts_leftover_replies_and_prints_six_counters() {
+        // 记账合并到**唯一出口**（`final_line_once`）：lib.rs 里不得再有写入点
         let marker = format!("record_reply_{}_at_shutdown(", "dropped");
-        assert!(
-            SRC.contains(&marker),
-            "关服分支必须把残留应答记账（否则它们又『消失』了）"
+        assert_eq!(
+            SRC.matches(&marker).count(),
+            0,
+            "关服路径不得再各自记账（必须并到终值行的唯一出口）"
+        );
+        let f = TEL_SRC
+            .find("pub fn final_line_once()")
+            .expect("final_line_once");
+        let body = window(TEL_SRC, f, 900);
+        assert_eq!(
+            body.matches(&marker).count(),
+            1,
+            "final_line_once 必须恰好一处记账"
         );
         let i = SRC.find("关服等待超时（{}ms）").expect("超时日志点");
         let seg = window(SRC, i, 1200);
