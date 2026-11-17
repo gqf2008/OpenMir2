@@ -93972,6 +93972,45 @@ mod tick_starvation {
             events.len()
         );
         assert!(drain.hit_budget, "10 万条命令必然把本轮截断");
+
+        // **反饥饿面**：优先事件**多于**一轮上限时，命令通道本轮仍必须有进度。
+        // 变异：删掉 `priority_cap`（优先通道无上限）⇒ 一轮吞掉 2000 条优先事件、命令 0 条 ⇒ 红。
+        let (ntx2, nrx2) = std::sync::mpsc::channel();
+        let (ptx2, prx2) = std::sync::mpsc::channel();
+        for i in 0..5_000 {
+            ntx2.send(command_event(i)).expect("通道未关");
+        }
+        for i in 0..5_000 {
+            super::emit_gate_event(
+                &ntx2,
+                &ptx2,
+                GateEvent::Closed {
+                    index: i,
+                    chr_name: String::new(),
+                    socket: i,
+                },
+            );
+        }
+        let mut drain2 = EventDrain::begin(EventDrainBudget::PRODUCTION);
+        let mut carry2 = None;
+        let mut ctl_carry2 = None;
+        let mut commands = 0u64;
+        let mut controls = 0u64;
+        while let Some(ev) = drain2.next(&nrx2, &prx2, &mut carry2, &mut ctl_carry2) {
+            match ev {
+                GateEvent::Command { .. } => commands += 1,
+                GateEvent::Closed { .. } => controls += 1,
+                _ => {}
+            }
+        }
+        assert!(
+            commands > 0,
+            "反饥饿：优先事件再多，命令每轮也必须前进（删上限 ⇒ 命令 0 条）"
+        );
+        assert!(
+            controls <= EventDrainBudget::PRODUCTION.max_events / 2,
+            "优先通道每轮有界（实际 {controls}）"
+        );
     }
 
     /// **牙⑦（进入事件同机制）**：1 条 `LoadDbRequest` 排在 10 万命令之后 ⇒ 同轮第一条产出。
