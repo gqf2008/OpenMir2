@@ -83,6 +83,9 @@ REGISTRY = [
     ("dynamic_count_stamp_gate", ["tools/hygiene/dynamic_count_stamp_gate.py", "--selftest"], False),
     ("merge_tree_helper", ["tools/hygiene/merge_tree_helper.py", "--selftest"], False),
     ("stale_pointer_gate", ["tools/hygiene/stale_pointer_gate.py", "--selftest"], False),
+    # 卡 `openmir2-entry-gap-buckets`：主检出 / 影子 / 本次构建 三份 DBSrv 产物的 **sha 相等** 断言。
+    # 判据是相等而不是 `-Check GREEN`（旧的戳配旧的文件同样 GREEN，两次误报都源于此）。
+    ("assert_three_way_aligned", ["tools/hygiene/assert_three_way_aligned.ps1", "-Selftest"], False),
     ("board_coverage_gate", ["tools/hygiene/board_coverage_gate.py", "--selftest"], False),
     # 卡 `openmir2-scenario-manifest-gate`：卡面/文档引用的 probe 场景必须真的在 run3 清单里。
     ("scenario_manifest_gate", ["tools/hygiene/scenario_manifest_gate.py", "--selftest"], False),

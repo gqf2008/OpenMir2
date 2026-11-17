@@ -84,6 +84,19 @@ pub static REPLY_DUPLICATE_QID: AtomicU64 = AtomicU64::new(0);
 /// `logon_handler_exit_total` 在每个「离开 logon 处理链」的出口 +1（成功发出请求也计入），
 /// 断言 `logon_handler_enter == logon_handler_exit_total`；不闭合就说明还有没被计数的出口。
 pub static LOGON_HANDLER_EXIT_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// logon 出口理由里**未标注**的次数（RAII 守卫 `Uncounted`；>0 即有一条路径没标）。
+pub static LOGON_EXIT_UNCOUNTED: AtomicU64 = AtomicU64::new(0);
+/// 排水后**仍滞留在读档缓冲**里的 logon 条数（历史最大值；用来给「没有出口」的缺口归位）。
+pub static LOGON_PENDING_LISTS_MAX: AtomicU64 = AtomicU64::new(0);
+/// 应答**存进表**的次数（只数取档应答）：`reply_seen == reply_stored` 应恒成立。
+pub static REPLY_STORED: AtomicU64 = AtomicU64::new(0);
+/// 终值行一次性开关（`final_line_once` 用；测试可复位）。
+static FINAL_LINE_TAKEN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+/// 关服时**残留并被记账丢弃**的应答条数（卡 `openmir2-entry-gap-buckets`）：排水窗口后仍在表里的，
+/// 不再"消失"而是记在这里。判据：`reply_in_flight == reply_dropped_at_shutdown`（恒等，不是 0）。
+pub static REPLY_DROPPED_AT_SHUTDOWN: AtomicU64 = AtomicU64::new(0);
+/// `logon_in_flight` 的历史峰值（在**排水结束处**采样；守卫活着 = 该条目正在被处理）。
+pub static LOGON_IN_FLIGHT_MAX: AtomicU64 = AtomicU64::new(0);
 /// 断线抢占：`FrontEngine::delete_human` 把**尚未排水**的 logon 从 load/temp 两个缓冲里摘掉的条数。
 pub static LOGON_EXIT_DISCONNECT_DROP: AtomicU64 = AtomicU64::new(0);
 /// **应答表移除**计数（只数 `DBR_LOADHUMANRCD`）：`DbReplies::take` 取走条目时 +1。
@@ -152,17 +165,110 @@ pub fn record_loaddb_write_error() -> Option<String> {
     bump(&LOADDB_WRITE_ERROR)
 }
 
-/// logon 处理链出口 +1（任何离开路径都算，成功也算）。调用方**必须**与
-/// [`record_logon_handler_enter`] 成对使用：出口数 != 入口数 ⇒ 有未计数的出口。
-#[must_use]
-pub fn record_logon_handler_exit() -> Option<String> {
-    bump(&LOGON_HANDLER_EXIT_TOTAL)
-}
-
-/// 断线抢占摘掉未排水 logon 的条数。
+/// 断线抢占摘掉未排水 logon 的条数（**同时计入 exit_total**：被摘的条目也已离开处理链）。
 pub fn record_logon_disconnect_drop(n: u64) {
     if n > 0 {
         LOGON_EXIT_DISCONNECT_DROP.fetch_add(n, Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.fetch_add(n, Relaxed);
+    }
+}
+
+/// 应答存进表 +1（「记到」≠「存进表」，分开计）。
+pub fn record_reply_stored() {
+    REPLY_STORED.fetch_add(1, Relaxed);
+}
+
+/// **在飞量**：`enter − exit_total`。>0 = 有守卫还活着（条目正在处理，或处理被卡住）；
+/// **不等于丢失**。终值行应把它打到 0（关服后无处理在飞）。
+#[must_use]
+pub fn logon_in_flight() -> i64 {
+    let enter = LOGON_HANDLER_ENTER.load(Relaxed);
+    let exit = LOGON_HANDLER_EXIT_TOTAL.load(Relaxed);
+    i64::try_from(enter).unwrap_or(i64::MAX) - i64::try_from(exit).unwrap_or(i64::MAX)
+}
+
+/// **应答在飞量**：`stored − consumed`（>0 = 应答已入表但还没被取走）。
+#[must_use]
+pub fn reply_in_flight() -> i64 {
+    let stored = REPLY_STORED.load(Relaxed);
+    let consumed = REPLY_CONSUMED.load(Relaxed);
+    i64::try_from(stored).unwrap_or(i64::MAX) - i64::try_from(consumed).unwrap_or(i64::MAX)
+}
+
+/// 在排水结束处采样 `logon_in_flight` 的峰值。
+pub fn record_logon_in_flight_sample() {
+    let v = logon_in_flight();
+    if v <= 0 {
+        return;
+    }
+    let v = u64::try_from(v).unwrap_or(0);
+    let mut cur = LOGON_IN_FLIGHT_MAX.load(Relaxed);
+    while v > cur {
+        match LOGON_IN_FLIGHT_MAX.compare_exchange(cur, v, Relaxed, Relaxed) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+}
+
+/// 关服排水窗口结束后仍残留的应答 ⇒ 记账（调用方传入当时的 `reply_in_flight`）。
+pub fn record_reply_dropped_at_shutdown(n: u64) {
+    REPLY_DROPPED_AT_SHUTDOWN.store(n, Relaxed);
+}
+
+/// 记录读档缓冲里的滞留条数（取历史最大值）。
+pub fn record_logon_pending(n: u64) {
+    let mut cur = LOGON_PENDING_LISTS_MAX.load(Relaxed);
+    while n > cur {
+        match LOGON_PENDING_LISTS_MAX.compare_exchange(cur, n, Relaxed, Relaxed) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+}
+
+/// logon 出口理由（RAII 守卫用）。**未标注 = `Uncounted`**：它在读数里出现就说明有一条路径没标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogonExitReason {
+    /// 没有在任何出口显式设置理由（**漏标注**的直接信号）。
+    Uncounted,
+    /// 成功发出取档请求。
+    Success,
+    /// `SessionID == 0` 被读档循环跳过。
+    ZeroSession,
+    /// 角色数据保存中 ⇒ 重排队。
+    Requeue,
+    /// 读档失败/未连接 ⇒ 踢出。
+    Kicked,
+}
+
+/// **RAII 出口守卫**（卡 `openmir2-entry-gap-buckets` 第四轮）：入口创建、出口 `set(reason)`，
+/// `Drop` 统一 `exit_total += 1`（`Uncounted` 另计）。任何 `return`/`continue`/`?`/panic 展开都必然
+/// 经过 `Drop` ⇒ `enter == exit_total` 结构上不可能漏；漏的只可能是**理由**，由 `Uncounted` 暴露。
+pub struct LogonExitGuard {
+    reason: LogonExitReason,
+}
+
+impl LogonExitGuard {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            reason: LogonExitReason::Uncounted,
+        }
+    }
+
+    /// 离开作用域前标明出口理由。
+    pub fn set(&mut self, reason: LogonExitReason) {
+        self.reason = reason;
+    }
+}
+
+impl Drop for LogonExitGuard {
+    fn drop(&mut self) {
+        LOGON_HANDLER_EXIT_TOTAL.fetch_add(1, Relaxed);
+        if self.reason == LogonExitReason::Uncounted {
+            LOGON_EXIT_UNCOUNTED.fetch_add(1, Relaxed);
+        }
     }
 }
 
@@ -179,7 +285,21 @@ pub fn record_reply_matched() {
 /// logon 处理函数入口 +1。
 #[must_use]
 pub fn record_logon_handler_enter() -> Option<String> {
-    bump(&LOGON_HANDLER_ENTER)
+    let out = bump(&LOGON_HANDLER_ENTER);
+    // **峰值在增量处采样**（排水结束处采样会错过瞬时峰值：那时多半已排空）。
+    let v = logon_in_flight();
+    if v > 0 {
+        if let Ok(v) = u64::try_from(v) {
+            let mut cur = LOGON_IN_FLIGHT_MAX.load(Relaxed);
+            while v > cur {
+                match LOGON_IN_FLIGHT_MAX.compare_exchange(cur, v, Relaxed, Relaxed) {
+                    Ok(_) => break,
+                    Err(observed) => cur = observed,
+                }
+            }
+        }
+    }
+    out
 }
 
 /// 「收到 logon 但没发请求」分支⑤：`db` 未装配。
@@ -271,11 +391,41 @@ pub fn sample_load_reply_other() -> bool {
     SAMPLE_LOG_REPLY_OTHER.fetch_add(1, Relaxed) < SAMPLE_LIMIT
 }
 
-/// 三段计数 + 取档失败码应答的一行汇总（字段名固定，供日志侧机判）。
+/// **终值行只打一次**（信号处理路径与关服分支共用）：首次返回 `Some`，其后恒 `None`。
+/// 判据「关服后日志里有且仅有一条终值行」就靠它——重复调用不会多打，漏调用则由日志缺失暴露。
+#[must_use]
+pub fn final_line_once() -> Option<String> {
+    if FINAL_LINE_TAKEN.swap(true, Relaxed) {
+        return None;
+    }
+    // **唯一记账出口**（卡 `openmir2-entry-gap-buckets`）：所有退出路径（正常/超时/信号/管道）都经过这里。
+    // 语义：`reply_dropped_at_shutdown` = **关服时仍未被消费的残留**的定义值，**不是"被处理过"**。
+    let inflight = reply_in_flight();
+    if inflight > 0 {
+        if let Ok(n) = u64::try_from(inflight) {
+            record_reply_dropped_at_shutdown(n);
+            crate::glog!(
+                "WRN",
+                "{} replies unconsumed at shutdown (reply_in_flight={})",
+                n,
+                inflight
+            );
+        }
+    }
+    Some(summary_line())
+}
+
+/// 测试专用：复位终值行的一次性开关（生产路径不调用）。
+#[cfg(test)]
+pub(crate) fn reset_final_line_once_for_tests() {
+    FINAL_LINE_TAKEN.store(false, Relaxed);
+}
+
+/// 一行汇总（调用方决定何时打印（字段名固定，供日志侧机判）。
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_disconnect_drop={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -288,7 +438,13 @@ pub fn summary_line() -> String {
         DB_LINK_RECONNECT.load(Relaxed),
         LOGON_HANDLER_ENTER.load(Relaxed),
         LOGON_HANDLER_EXIT_TOTAL.load(Relaxed),
+        LOGON_EXIT_UNCOUNTED.load(Relaxed),
         LOGON_EXIT_DISCONNECT_DROP.load(Relaxed),
+        LOGON_PENDING_LISTS_MAX.load(Relaxed),
+        logon_in_flight(),
+        LOGON_IN_FLIGHT_MAX.load(Relaxed),
+        reply_in_flight(),
+        REPLY_DROPPED_AT_SHUTDOWN.load(Relaxed),
         LOGON_NO_REQUEST_DISCONNECTED.load(Relaxed),
         LOGON_NO_REQUEST_SEND_FAIL.load(Relaxed),
         LOGON_NO_REQUEST_ZERO_SESSION.load(Relaxed),
@@ -296,6 +452,7 @@ pub fn summary_line() -> String {
         LOGON_NO_REQUEST_NO_DB_LINK.load(Relaxed),
         REPLY_IDENT_OTHER.load(Relaxed),
         REPLY_DUPLICATE_QID.load(Relaxed),
+        REPLY_STORED.load(Relaxed),
         REPLY_CONSUMED.load(Relaxed),
         REPLY_MATCHED.load(Relaxed),
         REPLY_VERIFY_FAIL.load(Relaxed),
@@ -357,16 +514,19 @@ mod tests {
             "loaddb_write_error=",
             "db_link_reconnect=",
             "logon_handler_enter=",
+            "logon_handler_exit_total=",
+            "logon_exit_uncounted=",
+            "logon_disconnect_drop=",
+            "logon_pending_lists_max=",
+            "logon_in_flight=",
+            "logon_in_flight_max=",
+            "reply_in_flight=",
+            "reply_dropped_at_shutdown=",
             "logon_no_request[",
             "no_db_link=",
             "reply_ident_other=",
             "reply_duplicate_qid=",
-            "logon_handler_exit_total=",
-            "logon_disconnect_drop=",
-            "reply_consumed=",
-            "reply_matched=",
-            "logon_handler_exit_total=",
-            "logon_disconnect_drop=",
+            "reply_stored=",
             "reply_consumed=",
             "reply_matched=",
             "reply_verify_fail=",
@@ -443,6 +603,128 @@ mod tests {
             5,
             "必须保留历史最大值，不得回落"
         );
+    }
+
+    /// **RAII 守卫**：没 `set` 就 Drop ⇒ `exit_total` 与 `Uncounted` 各 +1；`set` 过 ⇒ 只 +total。
+    /// 这保证「漏标路径」一定可见（删掉 Drop 里的计数 ⇒ 本用例红）。
+    #[test]
+    fn exit_guard_counts_and_flags_unlabelled() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before_total = LOGON_HANDLER_EXIT_TOTAL.load(Ordering::Relaxed);
+        let before_unc = LOGON_EXIT_UNCOUNTED.load(Ordering::Relaxed);
+        {
+            let _guard = LogonExitGuard::new();
+        }
+        assert_eq!(
+            LOGON_HANDLER_EXIT_TOTAL.load(Ordering::Relaxed),
+            before_total + 1
+        );
+        assert_eq!(
+            LOGON_EXIT_UNCOUNTED.load(Ordering::Relaxed),
+            before_unc + 1,
+            "未标注必须计入 Uncounted"
+        );
+        {
+            let mut guard = LogonExitGuard::new();
+            guard.set(LogonExitReason::Success);
+        }
+        assert_eq!(
+            LOGON_HANDLER_EXIT_TOTAL.load(Ordering::Relaxed),
+            before_total + 2
+        );
+        assert_eq!(
+            LOGON_EXIT_UNCOUNTED.load(Ordering::Relaxed),
+            before_unc + 1,
+            "标注过的出口不得计入 Uncounted"
+        );
+    }
+
+    /// **在飞量 = enter − exit_total / stored − consumed**：直接是差值（删掉减法或写死 0 ⇒ 红）。
+    #[test]
+    fn in_flight_is_derived_from_counters() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        LOGON_HANDLER_ENTER.store(10, Ordering::Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.store(7, Ordering::Relaxed);
+        assert_eq!(
+            logon_in_flight(),
+            3,
+            "logon_in_flight 必须是 enter − exit_total"
+        );
+        REPLY_STORED.store(5, Ordering::Relaxed);
+        REPLY_CONSUMED.store(2, Ordering::Relaxed);
+        assert_eq!(
+            reply_in_flight(),
+            3,
+            "reply_in_flight 必须是 stored − consumed"
+        );
+        // 复位，别污染其它用例
+        LOGON_HANDLER_ENTER.store(0, Ordering::Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.store(0, Ordering::Relaxed);
+        REPLY_STORED.store(0, Ordering::Relaxed);
+        REPLY_CONSUMED.store(0, Ordering::Relaxed);
+    }
+
+    /// **终值行只打一次**：第一次 `Some`、第二次 `None`（改成恒返回 ⇒ 红）。
+    #[test]
+    fn final_line_once_emits_exactly_once() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_final_line_once_for_tests();
+        let first = final_line_once();
+        assert!(first.is_some(), "首次调用必须返回终值行");
+        assert!(first.unwrap().starts_with("ENTRY_TELEMETRY svc=game-svr "));
+        assert!(
+            final_line_once().is_none(),
+            "第二次及以后必须为 None（只打一条）"
+        );
+    }
+
+    /// **峰值在增量处采样**：enter 之后 `logon_in_flight_max` 必须跟上（只在排水后采样会漏 ⇒ 红）。
+    #[test]
+    fn in_flight_max_updates_on_enter() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        LOGON_HANDLER_ENTER.store(0, Ordering::Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.store(0, Ordering::Relaxed);
+        LOGON_IN_FLIGHT_MAX.store(0, Ordering::Relaxed);
+        let _ = record_logon_handler_enter();
+        let _ = record_logon_handler_enter();
+        LOGON_HANDLER_EXIT_TOTAL.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            LOGON_IN_FLIGHT_MAX.load(Ordering::Relaxed) >= 2,
+            "峰值必须 ≥ 增量处观测到的在飞数"
+        );
+        LOGON_HANDLER_ENTER.store(0, Ordering::Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.store(0, Ordering::Relaxed);
+        LOGON_IN_FLIGHT_MAX.store(0, Ordering::Relaxed);
+    }
+
+    /// 关服残留记账：`record_reply_dropped_at_shutdown(n)` 写入后汇总行必须带该值。
+    #[test]
+    fn reply_dropped_at_shutdown_is_recorded() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        record_reply_dropped_at_shutdown(48);
+        let line = summary_line();
+        assert!(line.contains("reply_dropped_at_shutdown=48"), "{line}");
+        record_reply_dropped_at_shutdown(0);
+    }
+
+    /// **唯一记账出口**：终值行生成时若仍有残留，必须把快照写进 `reply_dropped_at_shutdown`，
+    /// 且终值行带该字段（删记账 ⇒ 红；把记账移到某一条路径上 ⇒ 其它路径的用例红）。
+    #[test]
+    fn final_line_accounts_leftover_replies() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_final_line_once_for_tests();
+        REPLY_STORED.store(3, Ordering::Relaxed);
+        REPLY_CONSUMED.store(0, Ordering::Relaxed);
+        REPLY_DROPPED_AT_SHUTDOWN.store(0, Ordering::Relaxed);
+        let line = final_line_once().expect("终值行");
+        assert!(
+            line.contains("reply_dropped_at_shutdown=3"),
+            "终值行必须带残留记账字段: {line}"
+        );
+        REPLY_STORED.store(0, Ordering::Relaxed);
+        REPLY_CONSUMED.store(0, Ordering::Relaxed);
+        REPLY_DROPPED_AT_SHUTDOWN.store(0, Ordering::Relaxed);
+        reset_final_line_once_for_tests();
     }
 
     /// 三个计数器互相独立：动一个不许动另一个（同族「删任一计数 ⇒ 对应断言红」的前提）。

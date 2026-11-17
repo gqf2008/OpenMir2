@@ -359,6 +359,11 @@ impl DbReplies {
                         // 同一 qid 重复到达：表按 qid 覆盖 ⇒ 多出的那条会消失（卡 `openmir2-entry-gap-buckets`）
                         let _ = crate::telemetry::record_reply_duplicate_qid();
                     }
+                    if let Some((ident, _)) = parse_reply_message(&reply.message) {
+                        if ident == mir2_protocol::messages::DBR_LOADHUMANRCD {
+                            crate::telemetry::record_reply_stored();
+                        }
+                    }
                     self.map.insert(qid, reply);
                     accepted.push(qid);
                 }
@@ -513,6 +518,10 @@ mod tests {
     /// `take()` 的移除计数**只数取档应答**：取走 1102（存档）不得让 `reply_consumed` 增加。
     #[test]
     fn take_counts_only_load_replies() {
+        // 进程级计数器被并行用例共享：会断言「差值」的用例必须串行
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::sync::atomic::Ordering;
         let before = crate::telemetry::REPLY_CONSUMED.load(Ordering::Relaxed);
         let mut r = DbReplies::new();
@@ -550,9 +559,53 @@ mod tests {
         );
     }
 
+    /// `reply_stored` 与 `reply_seen` 分开计：两者都**只认取档应答**（1102 不计）。
+    #[test]
+    fn reply_stored_counts_only_load_replies() {
+        // 进程级计数器被并行用例共享：会断言「差值」的用例必须串行
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        use std::sync::atomic::Ordering;
+        let seen0 = crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed);
+        let stored0 = crate::telemetry::REPLY_STORED.load(Ordering::Relaxed);
+        let mut r = DbReplies::new();
+        let _ = r.feed(&reply_frame(
+            41,
+            mir2_protocol::messages::DBR_SAVEHUMANRCD,
+            1,
+            b"P",
+            false,
+        ));
+        assert_eq!(
+            crate::telemetry::REPLY_STORED.load(Ordering::Relaxed),
+            stored0,
+            "存档应答不入 stored"
+        );
+        let _ = r.feed(&reply_frame(
+            42,
+            mir2_protocol::messages::DBR_LOADHUMANRCD,
+            1,
+            b"P",
+            false,
+        ));
+        assert_eq!(
+            crate::telemetry::REPLY_STORED.load(Ordering::Relaxed),
+            stored0 + 1
+        );
+        assert_eq!(
+            crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed),
+            seen0 + 1
+        );
+    }
+
     /// 同 qid 重复到达必须计一桶（表按 qid 覆盖 ⇒ 多出的应答会消失）。
     #[test]
     fn duplicate_qid_is_counted() {
+        // 进程级计数器被并行用例共享：会断言「差值」的用例必须串行
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::sync::atomic::Ordering;
         let before = crate::telemetry::REPLY_DUPLICATE_QID.load(Ordering::Relaxed);
         let mut r = DbReplies::new();
@@ -592,6 +645,10 @@ mod tests {
     /// 记 `loaddb_reply_seen`——`DBR_SAVEHUMANRCD` 不计，签名不过不计。
     #[test]
     fn reply_seen_counts_only_accepted_load_replies() {
+        // 进程级计数器被并行用例共享：会断言「差值」的用例必须串行
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         use std::sync::atomic::Ordering;
         let before = crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed);
         let mut r = DbReplies::new();

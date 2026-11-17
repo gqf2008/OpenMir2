@@ -1654,6 +1654,11 @@ async fn run_inner(args: &[String]) -> Result<()> {
         let notify = std::sync::Arc::clone(&shutdown_signal);
         tokio::spawn(async move {
             wait_for_shutdown_signal().await;
+            // **信号路径 flush**（卡 `openmir2-entry-gap-buckets`）：Ctrl+Break/Ctrl+C 到达后立即打终值行，
+            // 不等 sim 线程赶到关服分支（实测出现过「进程优雅退出但没打终值」）。
+            if let Some(line) = telemetry::final_line_once() {
+                glog!("INF", "{}", line);
+            }
             glog!(
                 "INF",
                 "收到关服信号：停止接受新连接，转交 sim 线程保存在册会话"
@@ -1802,13 +1807,26 @@ async fn run_inner(args: &[String]) -> Result<()> {
         ),
         Ok(None) => glog!(
             "WRN",
-            "关服：sim 线程未回传存档读数（通道已关闭）⇒ 进程退出"
+            "关服：sim 线程未回传存档读数（通道已关闭）⇒ 进程退出（在册/发起/应答/超时=未回传）"
         ),
         Err(_) => glog!(
             "WRN",
-            "关服等待超时（{}ms）：sim 线程未在期限内完成存档 ⇒ 进程仍退出（不挂死）",
-            SHUTDOWN_JOIN_TIMEOUT.as_millis()
+            "关服等待超时（{}ms）：sim 线程未在期限内完成存档 ⇒ 进程仍退出（不挂死）；\
+             在册/发起/应答/超时=未回传 logon_handler_enter={} exit_total={} logon_in_flight={} reply_stored={} reply_consumed={} reply_in_flight={}",
+            SHUTDOWN_JOIN_TIMEOUT.as_millis(),
+            telemetry::LOGON_HANDLER_ENTER.load(std::sync::atomic::Ordering::Relaxed),
+            telemetry::LOGON_HANDLER_EXIT_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+            telemetry::logon_in_flight(),
+            telemetry::REPLY_STORED.load(std::sync::atomic::Ordering::Relaxed),
+            telemetry::REPLY_CONSUMED.load(std::sync::atomic::Ordering::Relaxed),
+            telemetry::reply_in_flight()
         ),
+    }
+    // **超时/通道关闭也必须打终值行再退**（卡 `openmir2-entry-gap-buckets`）：这条支路此前直接 `Ok(())`
+    // 返回，终值行只能靠 `run_with_args` 兜底——但兜底在 sim 线程卡死时同样可能来不及 flush 到磁盘；
+    // 这里显式打一次（`final_line_once` 全局一次性，正常路径已打过则为 None）。
+    if let Some(line) = telemetry::final_line_once() {
+        glog!("INF", "{}", line);
     }
     Ok(())
 }
@@ -11128,7 +11146,7 @@ const SHUTDOWN_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 
 /// 主线程等待 sim 线程完成关服存档的**总**上限（存档上限 + 收尾余量）。
 /// sim 自己的等待有界 ⇒ 正常路径用不到它；它是"DB 怎么卡都不挂死"的最后一道闸。
-const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(7);
+const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// 关服存档读数（日志 + 用例）：在册会话数 / 实际发起数 / 超时前应答数 / 是否超时 / 耗时。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26511,7 +26529,32 @@ fn sim_loop(
                 summary.elapsed.as_millis()
             );
             // **入口三段终值**（卡 `openmir2-game-svr-entry-triple`）：关服前补一行。
-            glog!("INF", "{}", telemetry::summary_line());
+            // **有界排水窗口**（卡 `openmir2-entry-gap-buckets`，≤800ms）：给已经发出的 DB 读最后一次机会
+            // 落进应答表；窗口结束仍在表里的不"消失"，逐条记账到 `reply_dropped_at_shutdown`。
+            // 关服期间没有消费者在跑（消费者是 sim 的 tick 排水，而它正在退出）⇒ 这里的"排水"只保证
+            // **到达面**收尾，不假装能消费；残留一律记账。
+            let drain_deadline = std::time::Instant::now() + std::time::Duration::from_millis(800);
+            while std::time::Instant::now() < drain_deadline {
+                if telemetry::reply_in_flight() <= 0 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            let logon_in_flight = telemetry::logon_in_flight();
+            let reply_in_flight = telemetry::reply_in_flight();
+            if logon_in_flight != 0 || reply_in_flight != 0 {
+                glog!(
+                    "WRN",
+                    "ENTRY_IN_FLIGHT_AT_SHUTDOWN logon_in_flight={} reply_in_flight={} load_list={} load_temp={}",
+                    logon_in_flight,
+                    reply_in_flight,
+                    engine.load_list_len(),
+                    engine.load_temp_len()
+                );
+            }
+            if let Some(line) = telemetry::final_line_once() {
+                glog!("INF", "{}", line);
+            }
             let _ = shutdown_done_tx.send(summary);
             return;
         }
@@ -31145,6 +31188,12 @@ pub fn run_with_args(args: &[String]) -> i32 {
         .build()
         .expect("Failed building the Runtime");
     let result = rt.block_on(run_inner(args));
+    // **进程退出兜底 flush**（卡 `openmir2-entry-gap-buckets`）：无论走信号、命名管道还是错误返回，
+    // 只要 `run_inner` 返回到这里就补一条终值行（`final_line_once` 保证全进程只有一条）。
+    // 之前只挂在信号任务与 sim 关服分支上 ⇒ 走管道停服的路径拿不到终值。
+    if let Some(line) = game_svr::telemetry::final_line_once() {
+        glog!("INF", "{}", line);
+    }
     let code = match result {
         Ok(()) => 0,
         Err(err) => {
@@ -92225,6 +92274,8 @@ mod entry_telemetry_wiring {
     const DBC: &str = include_str!("dbclient.rs");
     /// 读档控制流（`SessionID==0` 与「保存中重排队」两条分支）。
     const LD: &str = include_str!("load.rs");
+    /// 遥测模块（记账落在 `final_line_once` 里）。
+    const TEL_SRC: &str = include_str!("telemetry.rs");
 
     fn needle(name: &str) -> String {
         format!("telemetry::record_{name}(")
@@ -92392,19 +92443,125 @@ mod entry_telemetry_wiring {
         );
     }
 
-    /// **出口恒等式**的右端：`load.rs` 里每条离开路径（SessionID==0 / 保存中 / 成功 / 踢）各一处，
-    /// 外加 `delete_human`（断线抢占）。任何一条没计数 ⇒ 恒等式不闭合 ⇒ 本用例逐条点名。
+    /// **出口恒等式**的右端（RAII 守卫）：`load.rs` 每条路径都必须在离开前 `set(reason)`，
+    /// 否则 Drop 会把 `Uncounted` 加一——所以「漏标路径」会在读数里自己出现。
     #[test]
-    fn every_logon_exit_is_counted() {
+    fn every_logon_exit_is_labelled() {
         assert_eq!(
-            LD.matches("record_logon_handler_exit(").count(),
+            LD.matches("LogonExitReason::").count(),
             4,
-            "load.rs 必须恰好 4 个出口计数（zero/requeue/success/kick）"
+            "load.rs 必须恰好 4 个理由标注（ZeroSession/Requeue/Success/Kicked）"
+        );
+        assert!(
+            LD.contains("LogonExitGuard::new()"),
+            "每个条目都必须带 RAII 守卫（否则出口不会计数）"
+        );
+        assert!(
+            LD.contains("record_logon_pending("),
+            "排水后滞留数必须记录（否则「没有出口」的缺口无法归位）"
         );
         let i = LD.find("pub fn delete_human(").expect("delete_human");
         assert!(
             window(LD, i, 900).contains("record_logon_disconnect_drop("),
-            "断线抢占摘掉的未排水 logon 必须计数"
+            "断线抢占摘掉的未排水 logon 必须计数（且计入 exit_total）"
+        );
+    }
+
+    /// 在飞量必须：①排水结束处采样峰值；②关服终值处显式断言并打印细节。
+    #[test]
+    fn in_flight_is_sampled_and_asserted_at_shutdown() {
+        assert!(
+            LD.contains("record_logon_in_flight_sample("),
+            "排水结束处必须采样在飞峰值"
+        );
+        let marker = format!("ENTRY_IN_FLIGHT_AT_{}", "SHUTDOWN");
+        assert!(
+            SRC.contains(&marker),
+            "关服终值处必须显式打印在飞量（不为 0 时）"
+        );
+        assert!(
+            SRC.contains("logon_in_flight()") && SRC.contains("reply_in_flight()"),
+            "两侧在飞量都要取"
+        );
+    }
+
+    /// 关服残留应答必须有去处：排水窗口 + `reply_dropped_at_shutdown` 记账；超时日志要六个数。
+    #[test]
+    fn shutdown_accounts_leftover_replies_and_prints_six_counters() {
+        // 记账合并到**唯一出口**（`final_line_once`）：lib.rs 里不得再有写入点
+        let marker = format!("record_reply_{}_at_shutdown(", "dropped");
+        assert_eq!(
+            SRC.matches(&marker).count(),
+            0,
+            "关服路径不得再各自记账（必须并到终值行的唯一出口）"
+        );
+        let f = TEL_SRC
+            .find("pub fn final_line_once()")
+            .expect("final_line_once");
+        let body = window(TEL_SRC, f, 900);
+        assert_eq!(
+            body.matches(&marker).count(),
+            1,
+            "final_line_once 必须恰好一处记账"
+        );
+        let i = SRC.find("关服等待超时（{}ms）").expect("超时日志点");
+        let seg = window(SRC, i, 1200);
+        for key in [
+            "logon_handler_enter=",
+            "exit_total=",
+            "reply_stored=",
+            "reply_consumed=",
+        ] {
+            assert!(seg.contains(key), "超时日志缺计数快照 {key}");
+        }
+        // 值必须来自真实计数器（换成常量 0 ⇒ 本用例红）
+        for expr in [
+            "telemetry::LOGON_HANDLER_ENTER.load",
+            "telemetry::REPLY_STORED.load",
+            "telemetry::REPLY_CONSUMED.load",
+        ] {
+            assert!(
+                seg.contains(expr),
+                "超时日志的 {expr} 必须取自计数器，不得写死"
+            );
+        }
+    }
+
+    /// 终值行必须挂在**两处**：信号路径（Ctrl+Break 之后立刻）与 sim 关服分支（共用一次性）。
+    #[test]
+    fn final_line_is_wired_on_signal_and_shutdown_paths() {
+        // 运行时拼串：否则会数到本测试自己的字面量
+        let needle = format!("telemetry::final_{}()", "line_once");
+        assert_eq!(
+            SRC.matches(&needle).count(),
+            4,
+            "四处：信号路径 / sim 关服分支 / 关服等待超时分支 / run_with_args 退出兜底（多/少都不行）"
+        );
+        // 超时分支：必须在上限等待之后、`Ok(())` 之前打终值
+        let k = SRC.find("关服等待超时（{}ms）").expect("超时日志点");
+        assert!(
+            window(SRC, k, 1200).contains(&needle),
+            "超时分支必须打终值行再退"
+        );
+        // 有界等待放宽到 ≥10s（原 7s）
+        assert!(
+            super::SHUTDOWN_JOIN_TIMEOUT >= std::time::Duration::from_secs(10),
+            "关服有界等待应 ≥10s"
+        );
+        // 退出兜底：必须在 `rt.block_on(run_inner(..))` 之后（管道停服等路径靠它拿到终值）
+        let j = SRC
+            .find("rt.block_on(run_inner(")
+            .expect("run_inner 调用点");
+        assert!(
+            window(SRC, j, 900).contains(&needle),
+            "run_with_args 必须在 run_inner 返回后补终值（命名管道停服路径）"
+        );
+        let i = SRC
+            .find("wait_for_shutdown_signal().await")
+            .expect("信号等待点");
+        assert!(
+            window(SRC, i, 800).contains(&needle),
+            "信号返回后必须立刻 flush 终值（否则 Ctrl+Break 可能来不及走到关服分支）"
         );
     }
 
