@@ -152,8 +152,10 @@ impl FrontEngine {
         let temp = std::mem::take(&mut self.load_temp);
         let mut actions = Vec::with_capacity(temp.len());
         for info in &temp {
+            // **RAII 出口守卫**：本迭代无论从哪条路径离开（含 `continue`），Drop 都会计一次出口。
+            let mut exit_guard = crate::telemetry::LogonExitGuard::new();
             if info.session_id == 0 {
-                let _ = crate::telemetry::record_logon_handler_exit();
+                exit_guard.set(crate::telemetry::LogonExitReason::ZeroSession);
                 // 分支③：`SessionID == 0` 被跳过（卡 `openmir2-entry-gap-buckets`）
                 let _ = crate::telemetry::record_logon_no_request(
                     crate::telemetry::LogonNoRequest::ZeroSession,
@@ -161,7 +163,7 @@ impl FrontEngine {
                 continue; // `:102-105`
             }
             if self.in_save_rcd_list(&info.chr_name) {
-                let _ = crate::telemetry::record_logon_handler_exit();
+                exit_guard.set(crate::telemetry::LogonExitReason::Requeue);
                 // 分支④：保存中重排队（卡 `openmir2-entry-gap-buckets`）
                 let _ = crate::telemetry::record_logon_no_request(
                     crate::telemetry::LogonNoRequest::Requeue,
@@ -176,7 +178,7 @@ impl FrontEngine {
             }
             match query(info) {
                 Some(query_id) => {
-                    let _ = crate::telemetry::record_logon_handler_exit();
+                    exit_guard.set(crate::telemetry::LogonExitReason::Success);
                     actions.push(LoadAction::StartQuery {
                         query_id,
                         account: info.account.clone(),
@@ -184,7 +186,7 @@ impl FrontEngine {
                     });
                 }
                 None => {
-                    let _ = crate::telemetry::record_logon_handler_exit();
+                    exit_guard.set(crate::telemetry::LogonExitReason::Kicked);
                     actions.push(LoadAction::KickNoData {
                         gate_idx: info.gate_idx,
                         socket_id: info.socket_id,
@@ -194,6 +196,11 @@ impl FrontEngine {
                 }
             }
         }
+        // **滞留归位**：本轮排水后仍待在缓冲里（还没轮到下一拍 swap）的条数——用来给
+        // 「enter 与出口对不上」的缺口定位（卡 `openmir2-entry-gap-buckets`）。
+        crate::telemetry::record_logon_pending(
+            (self.load_list.len() + self.load_temp.len()) as u64,
+        );
         actions // temp 已被 take ⇒ 等价于 `ClearLoadRcdTempList`（`:145`）
     }
 }

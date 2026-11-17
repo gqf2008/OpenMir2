@@ -359,6 +359,11 @@ impl DbReplies {
                         // 同一 qid 重复到达：表按 qid 覆盖 ⇒ 多出的那条会消失（卡 `openmir2-entry-gap-buckets`）
                         let _ = crate::telemetry::record_reply_duplicate_qid();
                     }
+                    if let Some((ident, _)) = parse_reply_message(&reply.message) {
+                        if ident == mir2_protocol::messages::DBR_LOADHUMANRCD {
+                            crate::telemetry::record_reply_stored();
+                        }
+                    }
                     self.map.insert(qid, reply);
                     accepted.push(qid);
                 }
@@ -547,6 +552,42 @@ mod tests {
             crate::telemetry::REPLY_CONSUMED.load(Ordering::Relaxed),
             before + 1,
             "取档应答被取走必须 +1"
+        );
+    }
+
+    /// `reply_stored` 与 `reply_seen` 分开计：两者都**只认取档应答**（1102 不计）。
+    #[test]
+    fn reply_stored_counts_only_load_replies() {
+        use std::sync::atomic::Ordering;
+        let seen0 = crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed);
+        let stored0 = crate::telemetry::REPLY_STORED.load(Ordering::Relaxed);
+        let mut r = DbReplies::new();
+        let _ = r.feed(&reply_frame(
+            41,
+            mir2_protocol::messages::DBR_SAVEHUMANRCD,
+            1,
+            b"P",
+            false,
+        ));
+        assert_eq!(
+            crate::telemetry::REPLY_STORED.load(Ordering::Relaxed),
+            stored0,
+            "存档应答不入 stored"
+        );
+        let _ = r.feed(&reply_frame(
+            42,
+            mir2_protocol::messages::DBR_LOADHUMANRCD,
+            1,
+            b"P",
+            false,
+        ));
+        assert_eq!(
+            crate::telemetry::REPLY_STORED.load(Ordering::Relaxed),
+            stored0 + 1
+        );
+        assert_eq!(
+            crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed),
+            seen0 + 1
         );
     }
 

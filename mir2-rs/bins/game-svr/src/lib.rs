@@ -92392,19 +92392,27 @@ mod entry_telemetry_wiring {
         );
     }
 
-    /// **出口恒等式**的右端：`load.rs` 里每条离开路径（SessionID==0 / 保存中 / 成功 / 踢）各一处，
-    /// 外加 `delete_human`（断线抢占）。任何一条没计数 ⇒ 恒等式不闭合 ⇒ 本用例逐条点名。
+    /// **出口恒等式**的右端（RAII 守卫）：`load.rs` 每条路径都必须在离开前 `set(reason)`，
+    /// 否则 Drop 会把 `Uncounted` 加一——所以「漏标路径」会在读数里自己出现。
     #[test]
-    fn every_logon_exit_is_counted() {
+    fn every_logon_exit_is_labelled() {
         assert_eq!(
-            LD.matches("record_logon_handler_exit(").count(),
+            LD.matches("LogonExitReason::").count(),
             4,
-            "load.rs 必须恰好 4 个出口计数（zero/requeue/success/kick）"
+            "load.rs 必须恰好 4 个理由标注（ZeroSession/Requeue/Success/Kicked）"
+        );
+        assert!(
+            LD.contains("LogonExitGuard::new()"),
+            "每个条目都必须带 RAII 守卫（否则出口不会计数）"
+        );
+        assert!(
+            LD.contains("record_logon_pending("),
+            "排水后滞留数必须记录（否则「没有出口」的缺口无法归位）"
         );
         let i = LD.find("pub fn delete_human(").expect("delete_human");
         assert!(
             window(LD, i, 900).contains("record_logon_disconnect_drop("),
-            "断线抢占摘掉的未排水 logon 必须计数"
+            "断线抢占摘掉的未排水 logon 必须计数（且计入 exit_total）"
         );
     }
 
