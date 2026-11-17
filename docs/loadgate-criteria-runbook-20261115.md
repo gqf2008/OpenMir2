@@ -438,15 +438,23 @@ for rel, count, hold in runs:
      `head=2c1a3338 dirty=4 built=2026-11-16T23:22`，而 master 已是 `aa5267632` ⇒ **印章产物比 master 旧**。
      要「由目标 rev 构建」必须**比对 `stamp.head` 与目标 rev**（且 `dirty == 0`）；只核 sha 相等会
      把「旧但自洽」读成「就是我要的那份」。
-     **DBSrv 三产物根本不在印章体系内**（`m1-bin` 只有 game-gate/game-svr/login-gate/sel-gate 四件
-     `.stamp.json`，**没有任何 `DBSrv*`**）⇒ 说「印章态 DBSrv」是错的说法；它的来源只能靠
-     **构建记录 + 运行中进程 sha + 产物内字面量**自证。它是整条链路里唯一没有 provenance 锚的产物。
+     **DBSrv 三产物长期不在印章体系内**（历史：`m1-bin` 只有 game-gate/game-svr/login-gate/sel-gate
+     四件 `.stamp.json`，**没有任何 `DBSrv*`**）⇒ 说「印章态 DBSrv」是错的说法，它的来源只能靠
+     构建记录 + 运行中进程 sha + 产物内字面量自证。**2026-11-17 起已纳入**：
+     `tools/orchestration/stamp-binaries.ps1` 对 `DBSrv.exe` / `DBSrv.dll` / `DBSrv.Storage.MySQL.dll`
+     产 `.build.json` 戳，起栈脚本在**影子路径**上 `-Check -RequireAll` 后才起进程（卡 `openmir2-dbsrv-build-stamp`）。
   6. **release 产物不可位级复现（2026-11-17 实测，不是缺陷、是必须记住的前提）**：同一份源码
      （`git diff --stat <old> <new> -- mir2-rs` 为空）在不同 worktree 重建后，
      `game-svr.exe` 的 sha **会不同**（`ec125457…` → `92b2e6af…`）。本项目 Rust release 未做
      reproducible-build 配置（嵌入路径/时间戳类差异）⇒ **sha 只能回答「这个文件是不是刚才那一份」，
      不能回答「它是不是由同一份源码构建的」**。判源码同一性看 `git diff`/rev；判产物体在位看
      **sha + 产物内字面量**。任何「同源应当同 sha」的断言都是错的，写判据前先记住这条。
+- **本机 HIPS 会静默阻断「以 `Expect` 开头的 PowerShell 参数名」（2026-11-17 实测）**：与
+  `-ExecutionPolicy Bypass` 同现、且从 PowerShell 父进程**嵌套**启动时，整条命令行被吞——
+  子进程退出码 `-1`、stdout/stderr **全空**、脚本一行都没执行（无事件日志、无提示）。实测
+  `-ExpectHead` / `-ExpectedHead` / `-Expect` 被拦，`-RequireHead` / `-HeadExpect` / `-Other` 正常。
+  ⇒ 工具参数名避开 `Expect*`（本仓 `stamp-binaries.ps1` 用 `-RequireHead`）；脚本里对子进程 rc
+  **必须判 `-ne 0` 即 RED**（`-1` 不是「没跑」的免罪符，它就是失败）。
 - **停服务进程用 `CTRL_BREAK_EVENT`，不要用 `CTRL_C_EVENT`（2026-11-17 实测，一轮白跑 120s）**：
   本环境里子进程会**继承「忽略 Ctrl+C」的属性** ⇒ 向它发 `CTRL_C_EVENT` 会被内核**静默丢弃**
   （无效果、无错误、无日志）；`Program.Main` 的 `Console.CancelKeyPress` 根本不会触发。

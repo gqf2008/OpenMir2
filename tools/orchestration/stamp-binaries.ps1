@@ -45,6 +45,8 @@
 #   ... -BinDir <dir> -Heads game-svr=<sha>,game-gate=<sha> -HeadSource reflog_inferred
 #   # 校验（第 2 步起栈门禁的判据；现在可独立跑）
 #   ... -Check -BinDir <dir> -Names game-svr,game-gate,login-gate,sel-gate -RequireAll
+#   # 校验并断言来源提交（前缀 7..40 位；DBSrv 三件套示例，.dll 也支持）
+#   ... -Check -BinDir <dir> -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll -RequireAll -RequireHead <rev>
 #   # 自测（离线合成夹具；工具门登记项）
 #   ... -Selftest
 #
@@ -68,6 +70,7 @@ param(
   [string]$Head = '',
   [string[]]$Heads = @(),
   [string]$HeadSource = '',
+  [string]$RequireHead = '',
   [switch]$Check,
   [switch]$RequireAll,
   [switch]$Force,
@@ -102,6 +105,18 @@ function Fail([string]$msg) {
 
 # SHA256 用 .NET 直接算：Windows PowerShell 5.1 在 PSModulePath 缺 Microsoft.PowerShell.Utility
 # 时 `Get-FileHash` 不存在（2026-10-27 现场）。任何异常上抛，由调用点转 Fail。
+# `-RequireHead` 只在 `-Check` 下有效：产戳模式给它必须**用法错**（rc=2），
+# 不能静默忽略——否则调用方会以为「期望头已生效」。
+#
+# 命名注意（2026-11-17 实测，别改回去）：本机 HIPS 会把「以 `Expect` 开头的参数名」
+# 与 `-ExecutionPolicy Bypass` 同现的命令行整条静默阻断——嵌套 `powershell` 退出码 `-1`、
+# stdout/stderr 全空、脚本一行都没执行。`-ExpectHead`/`-Expect` 均被拦，`-RequireHead`
+# 同一位置照常工作。**任何从 PowerShell 父进程拉起本工具的调用方都受影响。**
+if ($RequireHead -ne '' -and -not $Check) {
+  [Console]::Out.WriteLine('RED: -RequireHead is only valid with -Check (write/selftest mode would silently ignore it)')
+  exit 2
+}
+
 function Get-Sha256Hex([string]$path) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
   $stream = $null
@@ -187,6 +202,20 @@ function Get-GitDirtyText([string]$Repo) {
 
 # ---- 名字 / 工具链 --------------------------------------------------------
 function Find-Exe([string]$Dir, [string]$Name) {
+  $lower = $Name.ToLowerInvariant()
+  # 显式扩展名（DBSrv.dll / DBSrv.exe）：按文件名精确解析——业务代码常常在 DLL 里，
+  # 只给 exe 产戳会把最关键的锚漏掉（卡 openmir2-dbsrv-build-stamp）。
+  if ($lower.EndsWith('.dll') -or $lower.EndsWith('.exe')) {
+    $exact = Join-Path $Dir $Name
+    if (Test-Path -LiteralPath $exact -PathType Leaf) { return (Resolve-Path -LiteralPath $exact).Path }
+    $want = [System.IO.Path]::GetFileName($Name).ToLowerInvariant()
+    $hitExact = Get-ChildItem -LiteralPath $Dir -File -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name.ToLowerInvariant() -eq $want } |
+                Select-Object -First 1
+    if ($hitExact) { return $hitExact.FullName }
+    return $null
+  }
+  # 老用法（无扩展名）：仍按 `<name>.exe` 解析，现有调用方一个都不改。
   $base = $Name
   if ($base.ToLowerInvariant().EndsWith('.exe')) { $base = $base.Substring(0, $base.Length - 4) }
   $direct = Join-Path $Dir ($base + '.exe')
@@ -204,6 +233,8 @@ function Find-Exe([string]$Dir, [string]$Name) {
 function Get-ToolchainKind([string]$ExePath) {
   $dir = Split-Path -Parent $ExePath
   $base = [System.IO.Path]::GetFileNameWithoutExtension($ExePath)
+  # `.dll` 目标按 .NET 程序集处理（Rust 侧的目标二进制都是 exe；DLL 不猜成 rust）。
+  if ($ExePath.ToLowerInvariant().EndsWith('.dll')) { return 'dotnet' }
   if ($script:DotnetNames -contains $base.ToLowerInvariant()) { return 'dotnet' }
   if (Test-Path -LiteralPath (Join-Path $dir ($base + '.d')) -PathType Leaf) { return 'rust' }
   if (Test-Path -LiteralPath (Join-Path $dir ($base + '.deps.json')) -PathType Leaf) { return 'dotnet' }
@@ -348,6 +379,12 @@ function Get-FieldText($Obj, [string]$Name) {
   $v = $Obj.$Name
   if ($null -eq $v) { return '' }
   return ([string]$v)
+}
+
+# 读戳为对象（校验模式的头部比对用；读不到 ⇒ $null，由调用点判红）。
+function Read-StampJsonAt([string]$Path) {
+  if (-not (Test-Path -LiteralPath $Path -PathType Leaf)) { return $null }
+  try { return ([System.IO.File]::ReadAllText($Path, $utf8) | ConvertFrom-Json) } catch { return $null }
 }
 
 function Parse-IsoInstant([string]$Text) {
@@ -548,7 +585,7 @@ if ($Selftest) {
     New-Item -ItemType Directory -Force -Path $dir | Out-Null
     $i = 1
     foreach ($n in $ExeNames) {
-      $p = Join-Path $dir ($n + '.exe')
+      $p = if ($n.ToLowerInvariant().EndsWith('.dll')) { Join-Path $dir $n } else { Join-Path $dir ($n + '.exe') }
       $bytes = New-Object byte[] (1024 * (2 + $i))
       for ($b = 0; $b -lt $bytes.Length; $b++) {
         $bytes[$b] = [byte](($b * 31 + $i * 7) % 251)
@@ -706,6 +743,40 @@ if ($Selftest) {
     SAssert (-not (Test-Path -LiteralPath $stamp8)) 'negative: write refused to create stamp' ("stamp=" + $stamp8)
     SAssert ($w8.Text.IndexOf('does not resolve', [StringComparison]::Ordinal) -ge 0) `
       'negative: write names the unresolvable head' ("out=" + $w8.Text)
+
+    # Case 9：DLL 目标（DBSrv.dll）——产戳 + 校验绿，工具链按 .NET 判定
+    $script:SelfCases++
+    $bin9 = New-Fixture $Tmp 'dllext' @('DBSrv', 'DBSrv.Storage.MySQL.dll')
+    $names9 = @('DBSrv.exe', 'DBSrv.Storage.MySQL.dll')
+    $w9 = Invoke-Child @('-BinDir', $bin9, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
+                         '-Names', ($names9 -join ','))
+    SAssert ($w9.Rc -eq 0) 'dll: write stamps rc=0' ("rc=" + $w9.Rc + " out=" + $w9.Text)
+    $dllStamp = Read-StampJson (Join-Path $bin9 'DBSrv.Storage.MySQL.dll.build.json')
+    SAssert (($null -ne $dllStamp) -and ((Get-FieldText $dllStamp 'toolchain_kind') -eq 'dotnet')) `
+      'dll: .dll target stamped with kind=dotnet' ("kind=" + (Get-FieldText $dllStamp 'toolchain_kind'))
+    $c9 = Invoke-Child @('-Check', '-BinDir', $bin9, '-RepoRoot', $Repo, '-RequireAll', '-Names', ($names9 -join ','))
+    SAssert ($c9.Rc -eq 0) 'dll: check healthy rc=0' ("rc=" + $c9.Rc + " out=" + $c9.Text)
+
+    # Case 10：-RequireHead 对齐 ⇒ 绿；给错 ⇒ HEAD_MISMATCH（rc=1）
+    $script:SelfCases++
+    $cA = Invoke-Child @('-Check', '-BinDir', $bin9, '-RepoRoot', $Repo, '-RequireAll',
+                         '-Names', ($names9 -join ','), '-RequireHead', $HeadSha)
+    SAssert ($cA.Rc -eq 0) 'expect-head: matching head rc=0' ("rc=" + $cA.Rc + " out=" + $cA.Text)
+    [void](Invoke-GitSanitized $Repo @('-c', 'user.name=stamp-selftest', '-c', 'user.email=stamp-selftest@invalid',
+                                       '-c', 'commit.gpgsign=false', 'commit', '--allow-empty', '-m', 'stamp-selftest-other'))
+    $hr2 = Invoke-GitSanitized $Repo @('rev-parse', 'HEAD')
+    $otherSha = (($hr2.Out | ForEach-Object { "$_" }) -join '').Trim()
+    $cB = Invoke-Child @('-Check', '-BinDir', $bin9, '-RepoRoot', $Repo, '-RequireAll',
+                         '-Names', ($names9 -join ','), '-RequireHead', $otherSha)
+    SAssert ($cB.Rc -eq 1) 'expect-head: wrong head rc=1' ("rc=" + $cB.Rc + " out=" + $cB.Text)
+    SAssert ($cB.Text.IndexOf('HEAD_MISMATCH', [StringComparison]::Ordinal) -ge 0) `
+      'expect-head: reports HEAD_MISMATCH' ("out=" + $cB.Text)
+
+    # Case 11：-RequireHead 与产戳模式同用 ⇒ 用法错 rc=2（不得静默忽略）
+    $script:SelfCases++
+    $u = Invoke-Child @('-BinDir', $bin9, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
+                        '-Names', 'DBSrv.exe', '-RequireHead', $HeadSha, '-Force')
+    SAssert ($u.Rc -eq 2) 'usage: -RequireHead without -Check rc=2' ("rc=" + $u.Rc + " out=" + $u.Text)
   }
 
   $tmpRoot = [System.IO.Path]::GetTempPath()
@@ -750,12 +821,12 @@ if ($Selftest) {
     Emit ("SELFTEST_INFRA " + $script:SelfInfra)
     exit 2
   }
-  SAssert ($script:SelfCases -eq 8) 'meta: expected case count executed' ("cases=" + $script:SelfCases)
+  SAssert ($script:SelfCases -eq 11) 'meta: expected case count executed' ("cases=" + $script:SelfCases)
   if ($script:SelfFails.Count -gt 0) {
     Emit ("stamp-binaries selftest: RED (" + $script:SelfFails.Count + " failed)")
     exit 1
   }
-  Emit "stamp-binaries selftest: GREEN (1 positive + 7 negative)"
+  Emit "stamp-binaries selftest: GREEN (11 cases)"
   exit 0
 }
 
@@ -768,6 +839,13 @@ if ($gitProbe.Rc -ne 0) {
 if ($Check) {
   if ([string]::IsNullOrWhiteSpace($BinDir)) { Fail "-BinDir is required with -Check" }
   if (-not (Test-Path -LiteralPath $BinDir -PathType Container)) { Fail ("BinDir not found: " + $BinDir) }
+  # `-RequireHead`：断言每个戳的 head 就是调用方要的那一版（前 7..40 位前缀匹配）。
+  # 不写死 sha：戳内 head 由产戳方给，这里只做「与期望 rev 对齐」。
+  $expectNorm = $RequireHead.Trim().ToLowerInvariant()
+  if ($expectNorm -ne '') {
+    if ($expectNorm -notmatch '^[0-9a-f]{7,40}$') { Fail ("-RequireHead must be 7..40 lowercase hex: " + $expectNorm) }
+    if (-not (Test-CommitExists $RepoRoot $expectNorm)) { Fail ("-RequireHead does not resolve to a commit: " + $expectNorm) }
+  }
   $binRoot = (Resolve-Path -LiteralPath $BinDir).Path
   $found = 0
   $problems = 0
@@ -786,6 +864,15 @@ if ($Check) {
     $errs = Test-OneStamp $exe $stampPath $RepoRoot
     if ($errs.Count -eq 0) {
       Emit ("STAMP_OK " + $exe)
+      if ($expectNorm -ne '') {
+        $obj = Read-StampJsonAt $stampPath
+        $stampHead = ''
+        if ($null -ne $obj) { $stampHead = [string](Get-FieldText $obj 'head') }
+        if (-not $stampHead.ToLowerInvariant().StartsWith($expectNorm)) {
+          Emit ("RED " + $exe + " HEAD_MISMATCH expected=" + $expectNorm + " stamp=" + $stampHead)
+          $problems++
+        }
+      }
     } else {
       foreach ($e in $errs) {
         Emit ("RED " + $exe + " " + $e)

@@ -171,6 +171,27 @@ function Start-One($Name, $Dir, $Exe, $Ports) {
   Start-Sleep -Milliseconds 400
 }
 
+# **DBSrv provenance 闸门**（卡 `openmir2-dbsrv-build-stamp`）：起**任何进程之前**校验 DBSrv 影子三件套。
+# 对象是**影子路径** `$Root/DBSrv`（不是 `src\DBSrvin\Release`）——本栈踩过「影子不刷新 ⇒ 静默跑旧 DBSrv」。
+# 判据：三件都有 `.build.json` 戳、戳内 sha256 与实物一致、built_at 与 mtime 差 ≤5 分钟；缺一即 RED，
+# **不写 pid 文件、不起任何进程**。工具内部用 SHA256::Create（本机 PowerShell 没有 Get-FileHash）。
+$stampTool = Join-Path $Repo 'tools\orchestration\stamp-binaries.ps1'
+$dbsShadow = Join-Path $Root 'DBSrv'
+if (-not (Test-Path -LiteralPath $stampTool)) {
+  Write-Output ('RED: 缺产戳工具 ' + $stampTool)
+  Log-Step 'RED missing stamp tool'
+  exit 1
+}
+& powershell -NoProfile -ExecutionPolicy Bypass -File $stampTool -Check -BinDir $dbsShadow -RepoRoot $Repo -RequireAll -Names 'DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll'
+$stampRc = $LASTEXITCODE
+if ($stampRc -ne 0) {
+  Write-Output ('RED: DBSrv 影子产物 provenance 校验失败 rc=' + $stampRc + '（bin=' + $dbsShadow + '）—— 不起任何进程')
+  Log-Step ('RED provenance rc=' + $stampRc)
+  exit 1
+}
+Write-Output ('STAMP_GATE OK ' + $dbsShadow)
+Log-Step 'STAMP_GATE OK'
+
 Log-Step 'BEGIN roles'
 foreach ($c in $components) {
   if ($c.Name -eq 'GameSvr' -and $rngLogText) {
