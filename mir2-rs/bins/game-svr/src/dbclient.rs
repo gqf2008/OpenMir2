@@ -346,6 +346,15 @@ impl DbReplies {
             match verify_sign(&reply) {
                 ReplyVerdict::Accept => {
                     let qid = reply.query_id;
+                    // **入口四段计数 ④**（卡 `openmir2-entry-db-chain-counters`）：取档应答**到达**——
+                    // 位置在 `recog` 判断之前、且只认 `DBR_LOADHUMANRCD`；签名不过的不计。
+                    if let Some((ident, _recog)) = parse_reply_message(&reply.message) {
+                        if ident == mir2_protocol::messages::DBR_LOADHUMANRCD {
+                            if let Some(line) = crate::telemetry::record_loaddb_reply_seen() {
+                                crate::glog!("INF", "{}", line);
+                            }
+                        }
+                    }
                     self.map.insert(qid, reply);
                     accepted.push(qid);
                 }
@@ -417,6 +426,10 @@ pub async fn run_db_link(
                 });
                 while let Some(frame) = req_rx.recv().await {
                     if wr.write_all(&frame).await.is_err() || wr.flush().await.is_err() {
+                        // **入口四段计数 ③**：写 6000 面失败 ⇒ 已排队的请求丢了（连接断开/对端不读）。
+                        if let Some(line) = crate::telemetry::record_loaddb_write_error() {
+                            crate::glog!("INF", "{}", line);
+                        }
                         crate::glog!("ERR", "写数据库服务器失败（连接断开？）");
                         break;
                     }
@@ -466,6 +479,60 @@ mod tests {
         frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
         frame.extend_from_slice(&body);
         frame
+    }
+
+    /// 卡 `openmir2-entry-db-chain-counters` 的行为牙：**只在收到 `DBR_LOADHUMANRCD` 且签名通过时**
+    /// 记 `loaddb_reply_seen`——`DBR_SAVEHUMANRCD` 不计，签名不过不计。
+    #[test]
+    fn reply_seen_counts_only_accepted_load_replies() {
+        use std::sync::atomic::Ordering;
+        let before = crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed);
+        let mut r = DbReplies::new();
+        assert_eq!(
+            r.feed(&reply_frame(
+                11,
+                mir2_protocol::messages::DBR_LOADHUMANRCD,
+                1,
+                b"P",
+                false
+            )),
+            vec![11]
+        );
+        let after_load = crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed);
+        assert_eq!(after_load, before + 1, "取档应答到达必须 +1");
+
+        // 存档应答（1102）不算
+        assert_eq!(
+            r.feed(&reply_frame(
+                12,
+                mir2_protocol::messages::DBR_SAVEHUMANRCD,
+                1,
+                b"P",
+                false
+            )),
+            vec![12]
+        );
+        assert_eq!(
+            crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed),
+            after_load,
+            "存档应答不得计入取档应答到达"
+        );
+
+        // 签名不过：入表失败 ⇒ 不计
+        assert!(r
+            .feed(&reply_frame(
+                13,
+                mir2_protocol::messages::DBR_LOADHUMANRCD,
+                1,
+                b"P",
+                true
+            ))
+            .is_empty());
+        assert_eq!(
+            crate::telemetry::LOADDB_REPLY_SEEN.load(Ordering::Relaxed),
+            after_load,
+            "签名不过的应答不得计入"
+        );
     }
 
     #[test]

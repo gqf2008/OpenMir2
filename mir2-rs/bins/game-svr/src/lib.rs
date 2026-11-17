@@ -27741,6 +27741,11 @@ fn sim_loop(
                 );
                 match w.req_tx.send(frame) {
                     Ok(()) => {
+                        // **入口四段计数 ②**（卡 `openmir2-entry-db-chain-counters`）：请求已排进 DB 链路。
+                        // 只计数，不改分支；与 DBSrv `load_request_seen` 对账即知链路里丢没丢。
+                        if let Some(line) = telemetry::record_loaddb_request_sent() {
+                            glog!("INF", "{}", line);
+                        }
                         w.outstanding.push((
                             qid,
                             info.socket_id,
@@ -92182,6 +92187,8 @@ mod t279_dress_eff_tests {
 #[cfg(test)]
 mod entry_telemetry_wiring {
     const SRC: &str = include_str!("lib.rs");
+    /// 6000 面链路（写失败 / 应答到达 两个计数都在这里）。
+    const DBC: &str = include_str!("dbclient.rs");
 
     fn needle(name: &str) -> String {
         format!("telemetry::record_{name}(")
@@ -92207,7 +92214,7 @@ mod entry_telemetry_wiring {
         let anchor = format!("GateEvent::LoadDbRequest({} =>", "info)");
         assert_eq!(SRC.matches(&anchor).count(), 1, "登录事件分支必须唯一");
         let i = SRC.find(&anchor).expect("登录事件分支");
-        let seg = &SRC[i..(i + 2000).min(SRC.len())];
+        let seg = window(SRC, i, 2000);
         assert!(
             seg.contains(&needle("logon")),
             "record_logon 必须在 GateEvent::LoadDbRequest 分支里（挪走或删掉 ⇒ 本用例红）"
@@ -92227,7 +92234,7 @@ mod entry_telemetry_wiring {
         );
         assert_eq!(SRC.matches(&anchor).count(), 1, "角色数据回包分支必须唯一");
         let i = SRC.find(&anchor).expect("角色数据回包分支");
-        let seg = &SRC[i..(i + 1200).min(SRC.len())];
+        let seg = window(SRC, i, 1200);
         assert!(
             seg.contains(&needle("attempt")),
             "record_attempt 必须在 DBR_LOADHUMANRCD(1100) recog==1 分支入口"
@@ -92253,6 +92260,63 @@ mod entry_telemetry_wiring {
         );
     }
 
+    /// 按字符边界截一段源码（中文注释是多字节，直接按字节切会 panic）。
+    fn window(s: &str, i: usize, max: usize) -> &str {
+        let mut end = (i + max).min(s.len());
+        while end > i && !s.is_char_boundary(end) {
+            end -= 1;
+        }
+        &s[i..end]
+    }
+
+    /// 四段链 ②：请求**排队**计数必须挂在**取档请求**这条链上
+    /// （`match w.req_tx.send(frame)` 在存/取两处都有，所以锚定**请求构造点**而不是 send 本身）。
+    #[test]
+    fn request_sent_counter_sits_in_send_ok_arm() {
+        // 锚点运行时拼：测试注释/断言里都不得出现完整调用串（否则 include_str! 会数到测试自己）
+        let anchor = format!("dbclient::{}{}", "load_human_rcd_request", "(");
+        assert_eq!(SRC.matches(&anchor).count(), 1, "取档请求构造点必须唯一");
+        let i = SRC.find(&anchor).expect("取档请求构造点");
+        let seg = window(SRC, i, 1500);
+        assert!(
+            seg.contains("telemetry::record_loaddb_request_sent("),
+            "record_loaddb_request_sent 必须紧跟取档请求的 send（排队成功时计数）"
+        );
+    }
+
+    /// 四段链 ③：写 6000 面失败计数必须挂在那条 `write_all/flush` 失败的 if 里。
+    #[test]
+    fn write_error_counter_sits_in_write_fail_branch() {
+        let anchor = format!(
+            "wr.write_all(&frame).await.is_err() || wr.{}().await.is_err()",
+            "flush"
+        );
+        assert_eq!(DBC.matches(&anchor).count(), 1, "写失败判据必须唯一");
+        let i = DBC.find(&anchor).expect("写失败判据");
+        let seg = window(DBC, i, 800);
+        assert!(
+            seg.contains("record_loaddb_write_error("),
+            "record_loaddb_write_error 必须在写失败分支里"
+        );
+    }
+
+    /// 四段链 ④：应答到达计数必须在 `ReplyVerdict::Accept` 臂内、且**先于**入表与 recog 判断。
+    #[test]
+    fn reply_seen_counter_sits_in_accept_arm_before_recog() {
+        let anchor = "ReplyVerdict::Accept => {";
+        assert_eq!(DBC.matches(anchor).count(), 1, "Accept 臂必须唯一");
+        let i = DBC.find(anchor).expect("Accept 臂");
+        let seg = window(DBC, i, 900);
+        assert!(
+            seg.contains("record_loaddb_reply_seen("),
+            "record_loaddb_reply_seen 必须在 Accept 臂内"
+        );
+        assert!(
+            seg.contains("parse_reply_message(") && seg.contains("DBR_LOADHUMANRCD"),
+            "只能在 ident == DBR_LOADHUMANRCD 时计（先于 recog 语义判断）"
+        );
+    }
+
     #[test]
     fn ok_counter_sits_in_enter_map_ok_arm() {
         let anchor = format!("match world.{}(", "enter_map_at");
@@ -92262,9 +92326,9 @@ mod entry_telemetry_wiring {
             "enter_map_at 调用点必须唯一"
         );
         let i = SRC.find(&anchor).expect("enter_map_at 调用点");
-        let seg = &SRC[i..(i + 3000).min(SRC.len())];
+        let seg = window(SRC, i, 3000);
         let ok = seg.find("Ok(id) => {").expect("enter_map_at 的 Ok 臂");
-        let arm = &seg[ok..(ok + 800).min(seg.len())];
+        let arm = window(seg, ok, 800);
         assert!(
             arm.contains(&needle("ok")),
             "record_ok 必须在 enter_map_at 的 Ok 臂里（挪到 Err 或删掉 ⇒ 本用例红）"
