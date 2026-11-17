@@ -1807,13 +1807,22 @@ async fn run_inner(args: &[String]) -> Result<()> {
         ),
         Ok(None) => glog!(
             "WRN",
-            "关服：sim 线程未回传存档读数（通道已关闭）⇒ 进程退出"
+            "关服：sim 线程未回传存档读数（通道已关闭）⇒ 进程退出（在册/发起/应答/超时=未回传）"
         ),
         Err(_) => glog!(
             "WRN",
-            "关服等待超时（{}ms）：sim 线程未在期限内完成存档 ⇒ 进程仍退出（不挂死）",
-            SHUTDOWN_JOIN_TIMEOUT.as_millis()
+            "关服等待超时（{}ms）：sim 线程未在期限内完成存档 ⇒ 进程仍退出（不挂死）；\
+             在册/发起/应答/超时=未回传 logon_in_flight={} reply_in_flight={}",
+            SHUTDOWN_JOIN_TIMEOUT.as_millis(),
+            telemetry::logon_in_flight(),
+            telemetry::reply_in_flight()
         ),
+    }
+    // **超时/通道关闭也必须打终值行再退**（卡 `openmir2-entry-gap-buckets`）：这条支路此前直接 `Ok(())`
+    // 返回，终值行只能靠 `run_with_args` 兜底——但兜底在 sim 线程卡死时同样可能来不及 flush 到磁盘；
+    // 这里显式打一次（`final_line_once` 全局一次性，正常路径已打过则为 None）。
+    if let Some(line) = telemetry::final_line_once() {
+        glog!("INF", "{}", line);
     }
     Ok(())
 }
@@ -11133,7 +11142,7 @@ const SHUTDOWN_SAVE_TIMEOUT: std::time::Duration = std::time::Duration::from_sec
 
 /// 主线程等待 sim 线程完成关服存档的**总**上限（存档上限 + 收尾余量）。
 /// sim 自己的等待有界 ⇒ 正常路径用不到它；它是"DB 怎么卡都不挂死"的最后一道闸。
-const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(7);
+const SHUTDOWN_JOIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 /// 关服存档读数（日志 + 用例）：在册会话数 / 实际发起数 / 超时前应答数 / 是否超时 / 耗时。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92468,8 +92477,19 @@ mod entry_telemetry_wiring {
         let needle = format!("telemetry::final_{}()", "line_once");
         assert_eq!(
             SRC.matches(&needle).count(),
-            3,
-            "三处：信号路径 / sim 关服分支 / run_with_args 退出兜底（多/少都不行）"
+            4,
+            "四处：信号路径 / sim 关服分支 / 关服等待超时分支 / run_with_args 退出兜底（多/少都不行）"
+        );
+        // 超时分支：必须在上限等待之后、`Ok(())` 之前打终值
+        let k = SRC.find("关服等待超时（{}ms）").expect("超时日志点");
+        assert!(
+            window(SRC, k, 1200).contains(&needle),
+            "超时分支必须打终值行再退"
+        );
+        // 有界等待放宽到 ≥10s（原 7s）
+        assert!(
+            super::SHUTDOWN_JOIN_TIMEOUT >= std::time::Duration::from_secs(10),
+            "关服有界等待应 ≥10s"
         );
         // 退出兜底：必须在 `rt.block_on(run_inner(..))` 之后（管道停服等路径靠它拿到终值）
         let j = SRC
