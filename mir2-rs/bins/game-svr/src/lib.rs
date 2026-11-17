@@ -27657,7 +27657,7 @@ fn sim_loop(
                     );
                     engine.add_to_load_rcd_list(info);
                     // **入口三段计数 ①**（卡 `openmir2-game-svr-entry-triple`）：只计数、不改分支。
-                    if let Some(line) = telemetry::record_logon() {
+                    if let Some(line) = telemetry::record_logon(world.clock_ms) {
                         glog!("INF", "{}", line);
                     }
                 }
@@ -28085,7 +28085,7 @@ fn sim_loop(
                                         ) {
                                             Ok(id) => {
                                                 // **入口三段计数 ③**：真正进入世界。只计数、不改分支。
-                                                if let Some(line) = telemetry::record_ok() {
+                                                if let Some(line) = telemetry::record_ok(world.clock_ms) {
                                                     glog!("INF", "{}", line);
                                                 }
                                                 // **诊断口径（审计 §4.4）**：`aoi_frames_total` 按
@@ -92184,7 +92184,13 @@ mod entry_telemetry_wiring {
     const SRC: &str = include_str!("lib.rs");
 
     fn needle(name: &str) -> String {
-        format!("telemetry::record_{name}()")
+        format!("telemetry::record_{name}(")
+    }
+
+    /// 时钟基准：这两个调用必须传**会话时钟** `world.clock_ms`——换成别的基准
+    /// （`Instant`、纪元毫秒、常量 0）都会让 `first_enter_ms/last_enter_ms` 与其它读数不可比。
+    fn clock_arg() -> &'static str {
+        "world.clock_ms"
     }
 
     /// 唯一性：每个计数恰好一个调用点（多一个 = 有人加了第二条路径，读数会重复计）。
@@ -92205,6 +92211,11 @@ mod entry_telemetry_wiring {
         assert!(
             seg.contains(&needle("logon")),
             "record_logon 必须在 GateEvent::LoadDbRequest 分支里（挪走或删掉 ⇒ 本用例红）"
+        );
+        let call = format!("{}{}", needle("logon"), clock_arg());
+        assert!(
+            seg.contains(&call),
+            "record_logon 必须用 world.clock_ms 作时间基准（换基准 ⇒ 本用例红）"
         );
     }
 
@@ -92257,6 +92268,11 @@ mod entry_telemetry_wiring {
         assert!(
             arm.contains(&needle("ok")),
             "record_ok 必须在 enter_map_at 的 Ok 臂里（挪到 Err 或删掉 ⇒ 本用例红）"
+        );
+        let call = format!("{}{}", needle("ok"), clock_arg());
+        assert!(
+            arm.contains(&call),
+            "record_ok 必须用 world.clock_ms 作时间基准（换基准 ⇒ 本用例红）"
         );
     }
 }
