@@ -9,7 +9,8 @@
 # 抓不到这种「stamp 与二进制脱节」，必须把内嵌值也核进来。
 #
 # 口径与 `E:\UserFleet\assert_three_way_aligned.py`（botfleet 版，A=sha/B=戳 head 相等/C=戳 head
-# 属于内嵌）**统一**，本脚本是其超集：三处 sha 相等 + 三处戳 head 相等 + 每处戳 head 属于该处内嵌。
+# 属于内嵌）**统一**：**本脚本是超集**——多查 build 份（三处而非两处）与「每个目录各自的内嵌」；
+# botfleet 版另有 `--allow-src-unsynced`（主检出未同步降为 rc=2 的三态），本脚本无此降级（一律 rc=1）。
 #
 # 退出码：0 = 全对齐；1 = 有红（sha 不等 / 戳缺失 / 戳 head 不等 / 戳 head 不在内嵌里）；
 #        2 = 判不了（路径缺失/用法错）——绝不静默通过。
