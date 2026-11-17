@@ -172,3 +172,14 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-bi
 **命名坑（务必别改回去）**：本机 HIPS 会把「以 `Expect` 开头的 PowerShell 参数名」与
 `-ExecutionPolicy Bypass` 同现的命令行**整条静默阻断**——嵌套 `powershell` 退出码 `-1`、
 stdout/stderr 全空、脚本一行都没跑。`-ExpectHead`/`-Expect` 实测被拦，`-RequireHead` 同位置正常。
+
+**拷贝必须保 mtime（2026-11-17 botfleet 实测）**：把三件套从 `bin/Release` 拷到 `runtime\DBSrv` 时，
+**裸 `cp`/`copy` 会把 mtime 改成"现在"** ⇒ 戳内 `built_at` 与文件 mtime 差 >5 分钟 ⇒ `BUILT_AT_SKEW` 判红。
+PowerShell `Copy-Item` 保 mtime（安全）；robocopy `/COPY:DAT` 也可以。判据不变：`built_at` 与 mtime 差 ≤5 分钟。
+
+**负向验证（botfleet 实测，每条起栈前都该会）**：藏掉任一 `.build.json` ⇒ `MISSING_STAMP` + **不起任何进程**；
+把影子换回旧二进制（戳没跟着换）⇒ `SHA256_MISMATCH` + 不起进程。两条都证明这道门是 fail-closed 的。
+
+**升级顺序约束**：`m1-stack/start-m1-stack.ps1` 调的是 `$CsharpRepo	ools\orchestration\stamp-binaries.ps1`
+——**主检出（master）那份**。因此本工具的任何修复**必须先合 master** 才会对真实起栈生效；
+在分支上「自测全绿」不等于生产路径绿（2026-11-17 实测：`.dll` 支持在分支上绿、master 上照旧 SKIP ⇒ 起栈必红）。

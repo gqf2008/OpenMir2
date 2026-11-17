@@ -744,18 +744,34 @@ if ($Selftest) {
     SAssert ($w8.Text.IndexOf('does not resolve', [StringComparison]::Ordinal) -ge 0) `
       'negative: write names the unresolvable head' ("out=" + $w8.Text)
 
-    # Case 9：DLL 目标（DBSrv.dll）——产戳 + 校验绿，工具链按 .NET 判定
+    # Case 9：**DBSrv 三件真名**目录 + 诱饵 `DBSrv.dll.exe`
+    #   —— 这一条钉的是「解析到的是哪个文件」，不只是 rc：
+    #   `Find-Exe` 若一律拼 `.exe`（历史缺陷），会去找 `DBSrv.dll.exe`（诱饵存在 ⇒ 悄悄戳到错文件；
+    #   诱饵不存在 ⇒ SKIP/MISSING_BINARY）。**两条都要靠断言文件名来抓，rc 抓不住。**
     $script:SelfCases++
-    $bin9 = New-Fixture $Tmp 'dllext' @('DBSrv', 'DBSrv.Storage.MySQL.dll')
-    $names9 = @('DBSrv.exe', 'DBSrv.Storage.MySQL.dll')
+    $bin9 = New-Fixture $Tmp 'dllext' @('DBSrv', 'DBSrv.dll', 'DBSrv.Storage.MySQL.dll')
+    # 诱饵：与 .dll 同名再加 .exe（旧实现会解析到它）
+    [System.IO.File]::WriteAllBytes((Join-Path $bin9 'DBSrv.dll.exe'), (New-Object byte[] 4096))
+    $names9 = @('DBSrv.exe', 'DBSrv.dll', 'DBSrv.Storage.MySQL.dll')
     $w9 = Invoke-Child @('-BinDir', $bin9, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
                          '-Names', ($names9 -join ','))
     SAssert ($w9.Rc -eq 0) 'dll: write stamps rc=0' ("rc=" + $w9.Rc + " out=" + $w9.Text)
-    $dllStamp = Read-StampJson (Join-Path $bin9 'DBSrv.Storage.MySQL.dll.build.json')
-    SAssert (($null -ne $dllStamp) -and ((Get-FieldText $dllStamp 'toolchain_kind') -eq 'dotnet')) `
-      'dll: .dll target stamped with kind=dotnet' ("kind=" + (Get-FieldText $dllStamp 'toolchain_kind'))
+    SAssert ($w9.Text.IndexOf('DBSrv.dll.exe.build.json', [StringComparison]::Ordinal) -lt 0) `
+      'dll: decoy DBSrv.dll.exe must NOT be stamped' ("out=" + $w9.Text)
+    $dllStamp = Read-StampJson (Join-Path $bin9 'DBSrv.dll.build.json')
+    SAssert ($null -ne $dllStamp) 'dll: stamp lands on DBSrv.dll (not on the decoy)' ("stamps=" + ((Get-ChildItem -LiteralPath $bin9 -Filter '*.build.json' | ForEach-Object { $_.Name }) -join ','))
+    if ($null -ne $dllStamp) {
+      SAssert (((Get-FieldText $dllStamp 'exe')) -like '*DBSrv.dll') `
+        'dll: stamp exe field points at DBSrv.dll' ("exe=" + (Get-FieldText $dllStamp 'exe'))
+      SAssert ((Get-FieldText $dllStamp 'toolchain_kind') -eq 'dotnet') `
+        'dll: .dll target stamped with kind=dotnet' ("kind=" + (Get-FieldText $dllStamp 'toolchain_kind'))
+    }
+    $msqlStamp = Read-StampJson (Join-Path $bin9 'DBSrv.Storage.MySQL.dll.build.json')
+    SAssert ($null -ne $msqlStamp) 'dll: stamp lands on DBSrv.Storage.MySQL.dll' ("stamps=" + ((Get-ChildItem -LiteralPath $bin9 -Filter '*.build.json' | ForEach-Object { $_.Name }) -join ','))
     $c9 = Invoke-Child @('-Check', '-BinDir', $bin9, '-RepoRoot', $Repo, '-RequireAll', '-Names', ($names9 -join ','))
     SAssert ($c9.Rc -eq 0) 'dll: check healthy rc=0' ("rc=" + $c9.Rc + " out=" + $c9.Text)
+    SAssert (($c9.Text -split "`n" | Where-Object { $_ -like '*STAMP_OK*DBSrv.dll' }).Count -ge 1) `
+      'dll: check reports STAMP_OK for DBSrv.dll by exact name' ("out=" + $c9.Text)
 
     # Case 10：-RequireHead 对齐 ⇒ 绿；给错 ⇒ HEAD_MISMATCH（rc=1）
     $script:SelfCases++
