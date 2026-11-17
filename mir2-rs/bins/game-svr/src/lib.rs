@@ -1812,9 +1812,13 @@ async fn run_inner(args: &[String]) -> Result<()> {
         Err(_) => glog!(
             "WRN",
             "关服等待超时（{}ms）：sim 线程未在期限内完成存档 ⇒ 进程仍退出（不挂死）；\
-             在册/发起/应答/超时=未回传 logon_in_flight={} reply_in_flight={}",
+             在册/发起/应答/超时=未回传 logon_handler_enter={} exit_total={} logon_in_flight={} reply_stored={} reply_consumed={} reply_in_flight={}",
             SHUTDOWN_JOIN_TIMEOUT.as_millis(),
+            telemetry::LOGON_HANDLER_ENTER.load(std::sync::atomic::Ordering::Relaxed),
+            telemetry::LOGON_HANDLER_EXIT_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
             telemetry::logon_in_flight(),
+            telemetry::REPLY_STORED.load(std::sync::atomic::Ordering::Relaxed),
+            telemetry::REPLY_CONSUMED.load(std::sync::atomic::Ordering::Relaxed),
             telemetry::reply_in_flight()
         ),
     }
@@ -26525,10 +26529,24 @@ fn sim_loop(
                 summary.elapsed.as_millis()
             );
             // **入口三段终值**（卡 `openmir2-game-svr-entry-triple`）：关服前补一行。
-            // **在飞量断言**（卡 `openmir2-entry-gap-buckets`）：关服后不应还有守卫活着；
-            // 不为 0 说明有条目真被卡住——**在飞不是丢失**，两个概念不能混写。
+            // **有界排水窗口**（卡 `openmir2-entry-gap-buckets`，≤800ms）：给已经发出的 DB 读最后一次机会
+            // 落进应答表；窗口结束仍在表里的不"消失"，逐条记账到 `reply_dropped_at_shutdown`。
+            // 关服期间没有消费者在跑（消费者是 sim 的 tick 排水，而它正在退出）⇒ 这里的"排水"只保证
+            // **到达面**收尾，不假装能消费；残留一律记账。
+            let drain_deadline = std::time::Instant::now() + std::time::Duration::from_millis(800);
+            while std::time::Instant::now() < drain_deadline {
+                if telemetry::reply_in_flight() <= 0 {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
             let logon_in_flight = telemetry::logon_in_flight();
             let reply_in_flight = telemetry::reply_in_flight();
+            if reply_in_flight > 0 {
+                if let Ok(n) = u64::try_from(reply_in_flight) {
+                    telemetry::record_reply_dropped_at_shutdown(n);
+                }
+            }
             if logon_in_flight != 0 || reply_in_flight != 0 {
                 glog!(
                     "WRN",
@@ -92468,6 +92486,37 @@ mod entry_telemetry_wiring {
             SRC.contains("logon_in_flight()") && SRC.contains("reply_in_flight()"),
             "两侧在飞量都要取"
         );
+    }
+
+    /// 关服残留应答必须有去处：排水窗口 + `reply_dropped_at_shutdown` 记账；超时日志要六个数。
+    #[test]
+    fn shutdown_accounts_leftover_replies_and_prints_six_counters() {
+        let marker = format!("record_reply_{}_at_shutdown(", "dropped");
+        assert!(
+            SRC.contains(&marker),
+            "关服分支必须把残留应答记账（否则它们又『消失』了）"
+        );
+        let i = SRC.find("关服等待超时（{}ms）").expect("超时日志点");
+        let seg = window(SRC, i, 1200);
+        for key in [
+            "logon_handler_enter=",
+            "exit_total=",
+            "reply_stored=",
+            "reply_consumed=",
+        ] {
+            assert!(seg.contains(key), "超时日志缺计数快照 {key}");
+        }
+        // 值必须来自真实计数器（换成常量 0 ⇒ 本用例红）
+        for expr in [
+            "telemetry::LOGON_HANDLER_ENTER.load",
+            "telemetry::REPLY_STORED.load",
+            "telemetry::REPLY_CONSUMED.load",
+        ] {
+            assert!(
+                seg.contains(expr),
+                "超时日志的 {expr} 必须取自计数器，不得写死"
+            );
+        }
     }
 
     /// 终值行必须挂在**两处**：信号路径（Ctrl+Break 之后立刻）与 sim 关服分支（共用一次性）。

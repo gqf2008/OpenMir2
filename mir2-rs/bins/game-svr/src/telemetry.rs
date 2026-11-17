@@ -90,6 +90,9 @@ pub static LOGON_EXIT_UNCOUNTED: AtomicU64 = AtomicU64::new(0);
 pub static LOGON_PENDING_LISTS_MAX: AtomicU64 = AtomicU64::new(0);
 /// 应答**存进表**的次数（只数取档应答）：`reply_seen == reply_stored` 应恒成立。
 pub static REPLY_STORED: AtomicU64 = AtomicU64::new(0);
+/// 关服时**残留并被记账丢弃**的应答条数（卡 `openmir2-entry-gap-buckets`）：排水窗口后仍在表里的，
+/// 不再"消失"而是记在这里。判据：`reply_in_flight == reply_dropped_at_shutdown`（恒等，不是 0）。
+pub static REPLY_DROPPED_AT_SHUTDOWN: AtomicU64 = AtomicU64::new(0);
 /// `logon_in_flight` 的历史峰值（在**排水结束处**采样；守卫活着 = 该条目正在被处理）。
 pub static LOGON_IN_FLIGHT_MAX: AtomicU64 = AtomicU64::new(0);
 /// 断线抢占：`FrontEngine::delete_human` 把**尚未排水**的 logon 从 load/temp 两个缓冲里摘掉的条数。
@@ -204,6 +207,11 @@ pub fn record_logon_in_flight_sample() {
             Err(observed) => cur = observed,
         }
     }
+}
+
+/// 关服排水窗口结束后仍残留的应答 ⇒ 记账（调用方传入当时的 `reply_in_flight`）。
+pub fn record_reply_dropped_at_shutdown(n: u64) {
+    REPLY_DROPPED_AT_SHUTDOWN.store(n, Relaxed);
 }
 
 /// 记录读档缓冲里的滞留条数（取历史最大值）。
@@ -396,7 +404,7 @@ pub fn final_line_once() -> Option<String> {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -415,6 +423,7 @@ pub fn summary_line() -> String {
         logon_in_flight(),
         LOGON_IN_FLIGHT_MAX.load(Relaxed),
         reply_in_flight(),
+        REPLY_DROPPED_AT_SHUTDOWN.load(Relaxed),
         LOGON_NO_REQUEST_DISCONNECTED.load(Relaxed),
         LOGON_NO_REQUEST_SEND_FAIL.load(Relaxed),
         LOGON_NO_REQUEST_ZERO_SESSION.load(Relaxed),
@@ -484,10 +493,6 @@ mod tests {
             "loaddb_write_error=",
             "db_link_reconnect=",
             "logon_handler_enter=",
-            "logon_no_request[",
-            "no_db_link=",
-            "reply_ident_other=",
-            "reply_duplicate_qid=",
             "logon_handler_exit_total=",
             "logon_exit_uncounted=",
             "logon_disconnect_drop=",
@@ -495,9 +500,11 @@ mod tests {
             "logon_in_flight=",
             "logon_in_flight_max=",
             "reply_in_flight=",
-            "logon_in_flight=",
-            "logon_in_flight_max=",
-            "reply_in_flight=",
+            "reply_dropped_at_shutdown=",
+            "logon_no_request[",
+            "no_db_link=",
+            "reply_ident_other=",
+            "reply_duplicate_qid=",
             "reply_stored=",
             "reply_consumed=",
             "reply_matched=",
@@ -665,6 +672,16 @@ mod tests {
         LOGON_HANDLER_ENTER.store(0, Ordering::Relaxed);
         LOGON_HANDLER_EXIT_TOTAL.store(0, Ordering::Relaxed);
         LOGON_IN_FLIGHT_MAX.store(0, Ordering::Relaxed);
+    }
+
+    /// 关服残留记账：`record_reply_dropped_at_shutdown(n)` 写入后汇总行必须带该值。
+    #[test]
+    fn reply_dropped_at_shutdown_is_recorded() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        record_reply_dropped_at_shutdown(48);
+        let line = summary_line();
+        assert!(line.contains("reply_dropped_at_shutdown=48"), "{line}");
+        record_reply_dropped_at_shutdown(0);
     }
 
     /// 三个计数器互相独立：动一个不许动另一个（同族「删任一计数 ⇒ 对应断言红」的前提）。
