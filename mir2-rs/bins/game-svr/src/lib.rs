@@ -20062,6 +20062,66 @@ fn collect_gm_kick_pending(
     added
 }
 
+/// 卡 `openmir2-session-close-attribution`：`GateEvent::Closed` 的拆除归因（本侧视角）。
+///
+/// - 该会话的下行槽若早已墓碑化（该 `(线号, socket)` 在 gate 侧已不存在）⇒ `tombstone`，
+///   并**消费**墓碑（同一条死槽只记一次，`UnregisterGate` 不再重复计）；
+/// - 否则原因只有 gate 知道 ⇒ `unknown`（**绝不**默认塞进 `client_fin`）。
+fn record_closed_event(index: i32, chr_name: &str, socket: i32) {
+    let close_line = u8::try_from(index).unwrap_or(u8::MAX);
+    let tombstoned = close_line != u8::MAX && socket_is_tombstoned(close_line, socket);
+    let reason = if tombstoned {
+        let _ = revive_tombstoned_socket(close_line, socket);
+        telemetry::CloseReason::Tombstone
+    } else {
+        telemetry::CloseReason::Unknown
+    };
+    let _ = telemetry::record_close(reason, None);
+    glog!(
+        "INF",
+        "{}",
+        telemetry::session_close_line(now_ms(), close_line, socket, None, chr_name, reason, None)
+    );
+}
+
+/// 卡 `openmir2-session-close-attribution`：网关线注销时的墓碑清扫 ⇒ 每个死槽记一次
+/// `tombstone`（返回清除条数；与 [`record_closed_event`] 不重复——那里的墓碑已被消费）。
+fn record_gate_line_sweep(service_id: u8) -> usize {
+    let forgotten = forget_tombstoned_gate_line(service_id);
+    if forgotten > 0 {
+        let ts = now_ms();
+        for _ in 0..forgotten {
+            let _ = telemetry::record_close(telemetry::CloseReason::Tombstone, None);
+        }
+        glog!(
+            "INF",
+            "SESSION_CLOSE_AGG ts_ms={ts} svc=game-svr gate_line={service_id} \
+             count={forgotten} cause=tombstone"
+        );
+    }
+    forgotten
+}
+
+/// 卡 `openmir2-session-close-attribution`：世界侧**服务端主动**摘会话（[`drain_kicks`] /
+/// [`drain_soft_close`]）记一次 `server_kick` + 每会话行。调用点必须在 `online_take` 成功之后
+/// （即确实摘掉了一条会话），否则会把「没有目标」也计成拆除。
+fn record_server_kick(e: &OnlineEntry) {
+    let _ = telemetry::record_close(telemetry::CloseReason::ServerKick, None);
+    glog!(
+        "INF",
+        "{}",
+        telemetry::session_close_line(
+            now_ms(),
+            u8::try_from(e.gate_idx).unwrap_or(u8::MAX),
+            e.socket,
+            u16::try_from(e.session_id).ok(),
+            &e.chr_name,
+            telemetry::CloseReason::ServerKick,
+            None
+        )
+    );
+}
+
 #[allow(clippy::too_many_arguments)]
 fn drain_kicks(
     world: &mut mir2_world_bevy::World,
@@ -20092,6 +20152,8 @@ fn drain_kicks(
             );
             continue;
         };
+        // 卡 `openmir2-session-close-attribution`：服务端主动踢 ⇒ `server_kick`（恰一次/会话）。
+        record_server_kick(&e);
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "踢掉旧会话") {
             let _ = tx.send(SimToGate::SendFrame {
                 socket: e.socket,
@@ -20279,6 +20341,8 @@ fn drain_soft_close(
             );
             continue;
         };
+        // 卡 `openmir2-session-close-attribution`：账号级顶号属服务端主动 ⇒ `server_kick`。
+        record_server_kick(&e);
         if let Some(tx) = route_to_gate(gates, e.gate_idx, e.socket, "软关账号级顶号的旧会话")
         {
             let _ = tx.send(SimToGate::KickUser { socket: e.socket });
@@ -27843,6 +27907,8 @@ fn sim_loop(
                     chr_name,
                     socket,
                 } => {
+                    // 卡 `openmir2-session-close-attribution`：拆除归因（本侧视角）。
+                    record_closed_event(index, &chr_name, socket);
                     // oracle `ChannelMessageHandler.CloseUser`（`:363-...`）：先
                     // `FrontEngine.DeleteHuman(i, socket)` 摘掉未完成的读档项；已进世界的 PlayObject
                     // 走 `BoSoftClose` ⇒ `RunNotice`（`PlayObject.cs:1082-1090`）的 `MakeGhost()`
@@ -28020,7 +28086,8 @@ fn sim_loop(
                 }
                 GateEvent::UnregisterGate { service_id } => {
                     // 卡 `openmir2-world-keeps-dead-session`：整条线注销 ⇒ 该线所有墓碑一起清。
-                    let forgotten = forget_tombstoned_gate_line(service_id);
+                    // 卡 `openmir2-session-close-attribution`：清扫同时记 `tombstone` 拆除。
+                    let forgotten = record_gate_line_sweep(service_id);
                     if gates.remove(&service_id).is_some() {
                         glog!("DBG", "sim: 注销网关线号 {service_id} 的命令通道");
                     }
@@ -94266,5 +94333,111 @@ mod tick_starvation {
             1,
             "生产预算必须每轮重新起算（唯一一处）"
         );
+    }
+}
+
+#[cfg(test)]
+mod close_attribution_teeth {
+    //! 卡 `openmir2-session-close-attribution`：svr 侧**接线牙**（行为断言，不靠源码文本）。
+    //!
+    //! 计数器是进程级全局量 ⇒ 先取 `telemetry::TEST_LOCK`；墓碑集合用本模块专属线号，
+    //! 避免与 `TOMBSTONE_LINE_A..E` 的既有用例互相踩。
+    use super::*;
+
+    const LINE: u8 = 210;
+
+    fn snap() -> telemetry::CloseSnapshot {
+        telemetry::close_snapshot()
+    }
+
+    /// `GateEvent::Closed` 且无墓碑 ⇒ `unknown`（**不得**默认落 `client_fin`）。
+    ///
+    /// 变异：`record_closed_event` 的 `else` 分支改成 `ClientFin` ⇒ 本用例红。
+    #[test]
+    fn closed_without_tombstone_is_unknown_not_client_fin() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(LINE);
+        let before = snap();
+        record_closed_event(i32::from(LINE), "chr_none", 999_001);
+        let after = snap();
+        assert_eq!(
+            after.count(telemetry::CloseReason::Unknown)
+                - before.count(telemetry::CloseReason::Unknown),
+            1,
+            "非墓碑 Closed 必须落 unknown"
+        );
+        assert_eq!(
+            after.count(telemetry::CloseReason::ClientFin),
+            before.count(telemetry::CloseReason::ClientFin),
+            "unknown 不得顺带 bump client_fin"
+        );
+        assert_eq!(after.total - before.total, 1);
+    }
+
+    /// 已墓碑化的 `(线号, socket)` ⇒ `tombstone`，并**消费**墓碑（同一条死槽只记一次）。
+    ///
+    /// 变异①：删掉 `revive_tombstoned_socket` ⇒ 第二次同名 Closed 仍记 tombstone ⇒ 红。
+    /// 变异②：把首次分支改成 `Unknown` ⇒ 红。
+    #[test]
+    fn closed_with_tombstone_is_tombstone_once_and_consumes() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(LINE);
+        let socket = 999_002;
+        assert!(tombstone_dead_socket(LINE, socket));
+        let before = snap();
+        record_closed_event(i32::from(LINE), "chr_dead", socket);
+        let mid = snap();
+        assert_eq!(
+            mid.count(telemetry::CloseReason::Tombstone)
+                - before.count(telemetry::CloseReason::Tombstone),
+            1
+        );
+        assert!(
+            !socket_is_tombstoned(LINE, socket),
+            "Closed 必须消费墓碑（否则 UnregisterGate 会二次计）"
+        );
+        // 重复 Closed（同一死槽）⇒ 不再记 tombstone，落 unknown。
+        record_closed_event(i32::from(LINE), "chr_dead", socket);
+        let after = snap();
+        assert_eq!(
+            after.count(telemetry::CloseReason::Tombstone),
+            mid.count(telemetry::CloseReason::Tombstone),
+            "同一死槽不得重复记 tombstone"
+        );
+        assert_eq!(
+            after.count(telemetry::CloseReason::Unknown)
+                - mid.count(telemetry::CloseReason::Unknown),
+            1
+        );
+    }
+
+    /// 整线注销 ⇒ 每个被清掉的墓碑记一次 `tombstone`；空集退化 = +0。
+    ///
+    /// 变异：把 `record_gate_line_sweep` 的 `record_close` 循环删掉 ⇒ 前段红。
+    #[test]
+    fn unregister_sweep_counts_each_forgotten_tombstone() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(LINE);
+        for socket in 999_010..999_013 {
+            assert!(tombstone_dead_socket(LINE, socket));
+        }
+        let before = snap();
+        assert_eq!(record_gate_line_sweep(LINE), 3);
+        let after = snap();
+        assert_eq!(
+            after.count(telemetry::CloseReason::Tombstone)
+                - before.count(telemetry::CloseReason::Tombstone),
+            3
+        );
+        assert_eq!(after.total - before.total, 3);
+        // 退化形态：空集再扫 ⇒ 0 条、计数不变。
+        assert_eq!(record_gate_line_sweep(LINE), 0);
+        assert_eq!(snap().total, after.total);
     }
 }

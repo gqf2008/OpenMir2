@@ -573,13 +573,186 @@ pub(crate) fn reset_final_line_once_for_tests() {
     FINAL_LINE_TAKEN.store(false, Relaxed);
 }
 
+// ===========================================================================
+// 会话拆除归因（卡 `openmir2-session-close-attribution`）
+// ===========================================================================
+//
+// 与 gate 侧同名同取值（`game-gate/src/close_attr.rs`）：`client_fin / server_kick /
+// tombstone / timeout / error(errno) / unknown`。game-svr 能观测到的子集与 gate 不同：
+//
+// - `GateEvent::Closed`：gate 已把该会话关了（原因只有 gate 知道）⇒ **非墓碑时落 `unknown`**
+//   （绝不默认塞进 `client_fin`）；已被墓碑化（下行槽早已不存在）⇒ `tombstone`；
+// - `UnregisterGate`：整条线注销时清掉的墓碑 = 该线已判死的会话 ⇒ 逐个 `tombstone`；
+// - `drain_kicks` / `drain_soft_close`（世界侧摘会话）⇒ `server_kick`（服务端主动踢/顶号）。
+//
+// 恒等式：`Σ 各原因 == close_total`（同一次 [`record_close`] 里递增）。
+
+/// 拆除原因（与 gate 侧同名字/同取值；本侧只用到其中几个）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CloseReason {
+    /// 客户端 socket 先 FIN（本侧只能由 gate 转述，故本进程不直接产生）。
+    ClientFin = 0,
+    /// 服务端主动踢/顶号（`drain_kicks` / `drain_soft_close`）。
+    ServerKick = 1,
+    /// 已判死的网关会话（墓碑）被清掉。
+    Tombstone = 2,
+    /// 空闲清理关会话（本侧不产生；gate 侧为准）。
+    Timeout = 3,
+    /// 套接字错误（本侧不产生；gate 侧带 errno）。
+    Error = 4,
+    /// 无法归因（`Closed` 非墓碑时的诚实默认值；**不得**并入 `client_fin`）。
+    Unknown = 255,
+}
+
+impl CloseReason {
+    /// 日志/聚合键名（与 gate 侧一致）。
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ClientFin => "client_fin",
+            Self::ServerKick => "server_kick",
+            Self::Tombstone => "tombstone",
+            Self::Timeout => "timeout",
+            Self::Error => "error",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn slot(self) -> usize {
+        match self {
+            Self::ClientFin => 0,
+            Self::ServerKick => 1,
+            Self::Tombstone => 2,
+            Self::Timeout => 3,
+            Self::Error => 4,
+            Self::Unknown => 5,
+        }
+    }
+}
+
+/// 本进程记到的拆除总数（与各原因桶同源递增）。
+pub static CLOSE_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+static CLOSE_BY_REASON: [AtomicU64; 6] = [
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+    AtomicU64::new(0),
+];
+
+fn close_errno_map() -> &'static Mutex<std::collections::BTreeMap<i32, u64>> {
+    static MAP: OnceLock<Mutex<std::collections::BTreeMap<i32, u64>>> = OnceLock::new();
+    MAP.get_or_init(|| Mutex::new(std::collections::BTreeMap::new()))
+}
+
+/// 记一次拆除：总数与分类桶同一次调用递增（恒等式按构造成立）。返回新总数。
+pub fn record_close(reason: CloseReason, errno: Option<i32>) -> u64 {
+    let total = CLOSE_TOTAL.fetch_add(1, Relaxed) + 1;
+    CLOSE_BY_REASON[reason.slot()].fetch_add(1, Relaxed);
+    if reason == CloseReason::Error {
+        if let Ok(mut m) = close_errno_map().lock() {
+            *m.entry(errno.unwrap_or(0)).or_insert(0) += 1;
+        }
+    }
+    total
+}
+
+/// 计数器快照（测试/对账用；生产日志走 [`summary_line`]）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CloseSnapshot {
+    pub total: u64,
+    /// 顺序同 `client_fin / server_kick / tombstone / timeout / error / unknown`。
+    pub by_reason: [u64; 6],
+    pub errno: Vec<(i32, u64)>,
+}
+
+/// 读当前计数快照。
+#[cfg_attr(not(test), allow(dead_code))]
+#[must_use]
+pub fn close_snapshot() -> CloseSnapshot {
+    let mut by_reason = [0u64; 6];
+    for (i, c) in CLOSE_BY_REASON.iter().enumerate() {
+        by_reason[i] = c.load(Relaxed);
+    }
+    let errno = close_errno_map()
+        .lock()
+        .map(|m| m.iter().map(|(k, v)| (*k, *v)).collect())
+        .unwrap_or_default();
+    CloseSnapshot {
+        total: CLOSE_TOTAL.load(Relaxed),
+        by_reason,
+        errno,
+    }
+}
+
+impl CloseSnapshot {
+    /// 某原因当前计数。
+    #[must_use]
+    pub fn count(&self, reason: CloseReason) -> u64 {
+        self.by_reason[reason.slot()]
+    }
+
+    /// 各原因之和（恒等式牙用）。
+    #[cfg(test)]
+    #[must_use]
+    pub fn sum_reasons(&self) -> u64 {
+        self.by_reason.iter().sum()
+    }
+}
+
+/// 汇总片段（拼进 `ENTRY_TELEMETRY` 汇总行）。
+#[must_use]
+pub fn close_summary_fragment() -> String {
+    let s = close_snapshot();
+    let errno = s
+        .errno
+        .iter()
+        .map(|(code, n)| format!("{code}:{n}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "close_total={} close_breakdown[client_fin={} server_kick={} tombstone={} timeout={} \
+         error={} unknown={}] close_errno=[{errno}]",
+        s.total,
+        s.count(CloseReason::ClientFin),
+        s.count(CloseReason::ServerKick),
+        s.count(CloseReason::Tombstone),
+        s.count(CloseReason::Timeout),
+        s.count(CloseReason::Error),
+        s.count(CloseReason::Unknown),
+    )
+}
+
+/// 每会话拆除行（与 gate 侧同前缀/同字段名；`sid` 在本侧可能未知 ⇒ `-`）。
+#[must_use]
+pub fn session_close_line(
+    ts_ms: i64,
+    gate_line: u8,
+    socket: i32,
+    sid: Option<u16>,
+    chr: &str,
+    reason: CloseReason,
+    errno: Option<i32>,
+) -> String {
+    let sid = sid.map_or_else(|| "-".to_string(), |s| s.to_string());
+    let errno = errno.map_or_else(|| "-".to_string(), |e| e.to_string());
+    format!(
+        "SESSION_CLOSE ts_ms={ts_ms} svc=game-svr gate_line={gate_line} socket={socket} sid={sid} \
+         cause={} errno={errno} chr={chr}",
+        reason.name()
+    )
+}
+
 /// 一行汇总（调用方决定何时打印（字段名固定，供日志侧机判）。
 ///
 /// 应答表两个读数**不要混读**：`reply_pending_max` = **排水后残留峰值**（旧语义，历史可比）；
 /// `reply_table_max` = **每轮开头表内条数峰值**（本轮新增，不与旧值横比）。
 #[must_use]
 pub fn summary_line() -> String {
-    format!(
+    let base = format!(
         "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={} downlink_skipped_by_tombstone_total={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
@@ -617,7 +790,9 @@ pub fn summary_line() -> String {
         REPLY_TABLE_MAX.load(Relaxed),
         DOWNLINK_DEAD_SOCKET_TOTAL.load(Relaxed),
         DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.load(Relaxed)
-    )
+    );
+    // 卡 `openmir2-session-close-attribution`：拆除归因终值拼进同一行。
+    format!("{base} {}", close_summary_fragment())
 }
 
 /// 测试专用：复位两个时间戳（生产路径不调用；计数器本身单调不减，只按差值断言）。
@@ -1131,5 +1306,119 @@ mod tests {
             last_entry_line.contains("logon_frames_seen="),
             "最后一条 ENTRY_TELEMETRY 行必须仍是汇总终值（聚合行顶掉 ⇒ 缺 logon_frames_seen=）: {last_entry_line}"
         );
+    }
+}
+
+#[cfg(test)]
+mod close_attr_tests {
+    //! 卡 `openmir2-session-close-attribution`：svr 侧计数与汇总行牙。
+    use super::*;
+
+    /// 五类各一次 ⇒ 各桶 +1、Σ == 总数；unknown 不被顺带 bump。
+    ///
+    /// 变异：把 `record_close` 的 `reason.slot()` 写死 ⇒ 分类或合计对不上 ⇒ 红。
+    #[test]
+    fn five_reasons_each_count_once_and_sum_to_total() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = close_snapshot();
+        for reason in [
+            CloseReason::ClientFin,
+            CloseReason::ServerKick,
+            CloseReason::Tombstone,
+            CloseReason::Timeout,
+            CloseReason::Error,
+        ] {
+            let _ = record_close(reason, None);
+        }
+        let after = close_snapshot();
+        assert_eq!(after.total - before.total, 5);
+        for reason in [
+            CloseReason::ClientFin,
+            CloseReason::ServerKick,
+            CloseReason::Tombstone,
+            CloseReason::Timeout,
+            CloseReason::Error,
+        ] {
+            assert_eq!(
+                after.count(reason) - before.count(reason),
+                1,
+                "{} 必须恰 +1",
+                reason.name()
+            );
+        }
+        assert_eq!(
+            after.sum_reasons() - before.sum_reasons(),
+            after.total - before.total,
+            "Σ各原因 != 拆除总数"
+        );
+        assert_eq!(
+            after.count(CloseReason::Unknown),
+            before.count(CloseReason::Unknown)
+        );
+    }
+
+    /// 汇总行必须带拆除归因字段（缺字段 = 窗口读数时看不出是 0 还是没接）。
+    #[test]
+    fn summary_line_carries_close_attribution_fields() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let line = summary_line();
+        for key in [
+            "close_total=",
+            "close_breakdown[client_fin=",
+            "server_kick=",
+            "tombstone=",
+            "timeout=",
+            "error=",
+            "unknown=",
+            "close_errno=[",
+        ] {
+            assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
+        }
+        assert!(line.starts_with("ENTRY_TELEMETRY svc=game-svr "), "{line}");
+    }
+
+    /// 每会话行字段固定；`sid` 未知时写 `-`（与 gate 侧同字段名）。
+    #[test]
+    fn session_line_fields_are_unified() {
+        let line = session_close_line(
+            1_700_000_000_000,
+            3,
+            4242,
+            None,
+            "chr1",
+            CloseReason::Unknown,
+            None,
+        );
+        for key in [
+            "SESSION_CLOSE ",
+            "svc=game-svr",
+            "gate_line=3",
+            "socket=4242",
+            "sid=-",
+            "cause=unknown",
+            "errno=-",
+        ] {
+            assert!(line.contains(key), "拆除行缺字段 {key}: {line}");
+        }
+        let with_sid = session_close_line(1, 0, 1, Some(7), "", CloseReason::ServerKick, Some(9));
+        assert!(with_sid.contains("sid=7"), "{with_sid}");
+        assert!(with_sid.contains("errno=9"), "{with_sid}");
+    }
+
+    /// errno 桶必须带数值（本侧虽不产生 error，但共享契约要成立）。
+    #[test]
+    fn errno_bucket_carries_value() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = close_snapshot();
+        let _ = record_close(CloseReason::Error, Some(10054));
+        let after = close_snapshot();
+        let got = |s: &CloseSnapshot| {
+            s.errno
+                .iter()
+                .find(|(c, _)| *c == 10054)
+                .map_or(0, |(_, n)| *n)
+        };
+        assert_eq!(got(&after) - got(&before), 1);
+        assert!(close_summary_fragment().contains("10054:"));
     }
 }
