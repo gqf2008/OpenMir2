@@ -228,6 +228,39 @@ enum GateEvent {
     },
 }
 
+impl GateEvent {
+    /// 该事件是否走**优先通道**（卡 `openmir2-world-keeps-dead-session` 扩展）。
+    ///
+    /// 只有两类：**控制事件**（关连接 / 网关线注册注销 / 服务器侧顶号）与**进入事件**
+    /// （`LoadDbRequest` = 取角色进世界）。它们不得排在命令洪流之后——窗口 37 里约 4,002 条
+    /// `GM_CLOSE` 在队列里排了 81s，关闭本身没有进展。命令 / 登记 / 认证未决仍走普通通道
+    /// （各自 FIFO 不变）。
+    fn is_priority(&self) -> bool {
+        matches!(
+            self,
+            GateEvent::Closed { .. }
+                | GateEvent::RegisterGate { .. }
+                | GateEvent::UnregisterGate { .. }
+                | GateEvent::LoadDbRequest(_)
+                | GateEvent::KickAccount { .. }
+        )
+    }
+}
+
+/// 按事件类别投递到对应通道：**优先通道** = 控制 + 进入事件（[`GateEvent::is_priority`]）。
+///
+/// 两个通道都是 std mpsc（单消费者 = sim 线程）：各自 FIFO 不变；跨通道由 sim 的
+/// [`EventDrain`] 先取优先通道，且**每轮有界**（反饥饿，见 `EventDrain::next` 的上限），
+/// 命令事件每轮都有进度。
+fn emit_gate_event(
+    normal: &std::sync::mpsc::Sender<GateEvent>,
+    priority: &std::sync::mpsc::Sender<GateEvent>,
+    ev: GateEvent,
+) {
+    let target = if ev.is_priority() { priority } else { normal };
+    let _ = target.send(ev);
+}
+
 /// admin 通道的逐行 JSON 响应（卡 `openmir2-mcp-gm-execute`，T-273）。
 ///
 /// 线上字段固定为 `{"ok":bool,"error":?string,"frames":N,"note":?string}`：
@@ -709,7 +742,11 @@ async fn run_inner(args: &[String]) -> Result<()> {
     };
 
     // sim 侧：一个专用线程独占 World（§4.2 第 1 条：不许并行 executor 驱动世界）
+    // **两条通道**（卡 `openmir2-world-keeps-dead-session` 扩展）：`ev_ctl` = 控制 + 进入事件
+    // （关连接/网关线生命周期/顶号/取角色），`ev` = 命令与登记。sim 每轮**先且有界**地排 `ev_ctl`
+    // ⇒ 关闭事件不再排在命令洪流之后（反饥饿：命令通道每轮都有进度）。
     let (ev_tx, ev_rx) = std::sync::mpsc::channel::<GateEvent>();
+    let (ev_ctl_tx, ev_ctl_rx) = std::sync::mpsc::channel::<GateEvent>();
     // 准入会话表（C# `AuthenticationService._sessionList`）：跨网关连接共享；
     // 填充它的是登录链的通知（S2b 的传输），本切片只实现表语义与认证匹配。
     let auth: Arc<std::sync::Mutex<auth::AdmissionStore>> =
@@ -1635,6 +1672,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                     cfg.red_msg_b_color,
                 ),
                 ev_rx,
+                ev_ctl_rx,
                 shutdown_rx,
                 shutdown_done_tx,
                 Some(db),
@@ -1711,7 +1749,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
         let store = Arc::clone(&auth);
         let ids_addr = cfg.ids_addr.clone();
         let ids_port = cfg.ids_port;
-        let kick_tx = ev_tx.clone();
+        // **控制事件走优先通道**（卡 `openmir2-world-keeps-dead-session` 扩展）：
+        // `SS_CLOSESESSION` 的顶号是服务器侧关连接，不得排在命令洪流之后。
+        let kick_tx = ev_ctl_tx.clone();
         let ids_payment_mode = cfg.payment_mode;
         let ids_count = std::sync::Arc::clone(&ids_online);
         tokio::spawn(async move {
@@ -1775,15 +1815,26 @@ async fn run_inner(args: &[String]) -> Result<()> {
         };
         glog!("DBG", "sim: 网关连接 {peer} 分配线号 {service_id}");
         let ev_tx = ev_tx.clone();
+        let ev_ctl_tx = ev_ctl_tx.clone();
         let check_block = cfg.check_block;
         let auth = Arc::clone(&auth);
         let slots_done = Arc::clone(&slots);
         tokio::spawn(async move {
-            if let Err(e) = gate_conn(sock, ev_tx.clone(), check_block, auth, service_id).await {
+            if let Err(e) = gate_conn(
+                sock,
+                ev_tx.clone(),
+                ev_ctl_tx.clone(),
+                check_block,
+                auth,
+                service_id,
+            )
+            .await
+            {
                 glog!("WRN", "网关连接结束：{e:#}");
             }
             // 注销线号通道并释放槽位（重连时复用回同一个最小空闲号，与 oracle 同）。
-            let _ = ev_tx.send(GateEvent::UnregisterGate { service_id });
+            // 网关线注销属**控制事件** ⇒ 优先通道（关服/重连时线号立即回收）。
+            emit_gate_event(&ev_tx, &ev_ctl_tx, GateEvent::UnregisterGate { service_id });
             slots_done
                 .lock()
                 .expect("gate slots poisoned")
@@ -1871,6 +1922,84 @@ impl DbWiring {
     }
 }
 
+/// **死槽墓碑**（卡 `openmir2-world-keeps-dead-session`）：`(网关线号, socket)` 在**网关侧首次
+/// 发现「下发时槽不存在」**时登记，世界侧路由（[`route_to_gate`]）命中即**在入队前**丢弃，
+/// 不再为死会话产生帧。
+///
+/// 为什么需要：oracle 的 `CloseUser` 是**调用线程即时**处理（`FrontEngine.DeleteHuman` +
+/// `BoSoftClose`），断开与摘会话之间没有队列；本仓的 `Closed` 事件与命令事件共用一条无界
+/// 队列、按 50ms/轮预算排 ⇒ 窗口 37 实测 5,003 次断开只处理了 1,001 条关闭，其余会话仍被
+/// 每 tick 广播（`downlink_dead_socket_total=4,168,609`），扇出本身没降。墓碑把「已知死槽」的
+/// 扇出提前到生产者，效果等价于 oracle 的即时摘除，**不改任何活会话的帧语义**。
+///
+/// 生命周期（防 socket 号复用误杀）：
+/// - 登记：网关侧下发落空（[`downlink_slot`]——该网关的 `UserList` 里已经没有这个 socket）；
+/// - 清除①：同一 `(线号, socket)` 收到**任何上行**帧（[`dispatch`] 入口）⇒ 客户端还活着
+///   （新连接的 `GM_OPEN` 也走这里 ⇒ socket 复用安全）；
+/// - 清除②：网关连接断开（`GateEvent::UnregisterGate`）⇒ 整条线的墓碑一起清。
+static TOMBSTONED_GATE_SOCKETS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashSet<(u8, i32)>>,
+> = std::sync::OnceLock::new();
+
+/// 墓碑条数（[`TOMBSTONED_GATE_SOCKETS`] 的镜像）。**快路径**：为 0 时 [`socket_is_tombstoned`]
+/// 不碰锁——正常态（无死会话）每帧路由零额外开销。
+static TOMBSTONED_GATE_SOCKET_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn tombstoned_gate_sockets() -> &'static std::sync::Mutex<std::collections::HashSet<(u8, i32)>> {
+    TOMBSTONED_GATE_SOCKETS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// 登记墓碑；返回 `true` = 本次新增（之前不在集合里）。
+fn tombstone_dead_socket(gate_line: u8, socket: i32) -> bool {
+    let inserted = tombstoned_gate_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((gate_line, socket));
+    if inserted {
+        TOMBSTONED_GATE_SOCKET_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    inserted
+}
+
+/// 该 `(线号, socket)` 是否已登记墓碑（无墓碑时走原子快路径、不碰锁）。
+fn socket_is_tombstoned(gate_line: u8, socket: i32) -> bool {
+    use std::sync::atomic::Ordering;
+    if TOMBSTONED_GATE_SOCKET_COUNT.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    tombstoned_gate_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&(gate_line, socket))
+}
+
+/// 上行 ⇒ 清除该槽墓碑；返回 `true` = 之前确实登记过（调用方打一行 DBG，便于复用回归排查）。
+fn revive_tombstoned_socket(gate_line: u8, socket: i32) -> bool {
+    let removed = tombstoned_gate_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&(gate_line, socket));
+    if removed {
+        TOMBSTONED_GATE_SOCKET_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    removed
+}
+
+/// 网关线注销 ⇒ 清掉整条线的墓碑；返回清除条数。
+fn forget_tombstoned_gate_line(gate_line: u8) -> usize {
+    let mut set = tombstoned_gate_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let before = set.len();
+    set.retain(|(line, _)| *line != gate_line);
+    let removed = before - set.len();
+    if removed > 0 {
+        TOMBSTONED_GATE_SOCKET_COUNT.fetch_sub(removed, std::sync::atomic::Ordering::Relaxed);
+    }
+    removed
+}
+
 /// `NetChannel` 按 gateIdx 选连接（`TCPNetChannel.cs:221-224`）：取该线号的 `sim → gate` 命令通道。
 ///
 /// 读档流程里的两条 sim→gate 命令（`KickUser`/`MarkInWorld`）**都**走这里 —— 每个 GameGate 连接的
@@ -1880,6 +2009,13 @@ impl DbWiring {
 /// oracle `TCPNetChannel.cs:213-218` 的 `GetGate(gateIdx)` 对越界/非法线号返回 `null` ⇒ **直接丢弃**；
 /// 本函数与之同构：`u8::try_from` 失败即记 WRN + 返回 `None`，**绝不** `unwrap_or(0)` 把非法线号
 /// 静默折算成 0 号线（与 N1「不许静默挑线」同族）。
+///
+/// **死槽墓碑**（卡 `openmir2-world-keeps-dead-session`）：该 `(线号, socket)` 若已被网关侧判死
+/// （[`TOMBSTONED_GATE_SOCKETS`]），这里**在入队前**就返回 `None` ⇒ 调用方不会产生帧，计数只进
+/// `downlink_skipped_by_tombstone_total`（**不**打 WRN：死槽风暴时每 tick 每会话都会命中）。
+/// 帧本来就会在最后一公里被丢弃，这里只是把丢弃点提前到生产者。
+/// 附带影响：`KickUser`/`MarkInWorld` 也走本函数 ⇒ 对墓碑 socket 同样不投递——等价，因为墓碑只在
+/// 「该网关的 `UserList` 里已经没有这个 socket」时登记，网关侧收到这两条命令本来也是空操作。
 fn route_to_gate<'a>(
     gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     gate_idx: i32,
@@ -1893,6 +2029,11 @@ fn route_to_gate<'a>(
         );
         return None;
     };
+    // 卡 `openmir2-world-keeps-dead-session`：墓碑命中 ⇒ 不产生帧（**入队前**丢，不计最后一公里的落空数）。
+    if socket_is_tombstoned(idx, socket) {
+        let _ = telemetry::record_downlink_skipped_by_tombstone();
+        return None;
+    }
     match gates.get(&idx) {
         Some(tx) => Some(tx),
         None => {
@@ -25373,15 +25514,26 @@ impl EventDrainBudget {
     };
 }
 
-/// 单轮带预算排水器：`while let Some(ev) = drain.next(&ev_rx, &mut carry) { … }`。
+/// 单轮带预算排水器：
+/// `while let Some(ev) = drain.next(&ev_rx, &ev_ctl_rx, &mut carry, &mut ctl_carry) { … }`。
 ///
-/// `carry` 是**周转槽**：预算用尽时只 `try_recv` 一条来判断「通道里是否还有」（这个判断决定
-/// 要不要记 `drain_budget_hit`），取到的那条不能丢 ⇒ 存进 `carry`，下一轮先处理它。
-/// 序列化效果：每轮**产出**的事件数 ≤ `max_events`（结转那条占一格），FIFO 不变。
+/// 两条来源（卡 `openmir2-world-keeps-dead-session` 扩展）：
+/// - `ctl_rx` = **优先通道**：控制事件 + 进入事件（[`GateEvent::is_priority`]）；
+/// - `rx` = 命令 / 登记事件。
+///
+/// 取数次序：优先结转 → 普通结转 → 优先通道（**每轮有界**）→ 普通通道。
+/// **反饥饿**：优先通道每轮最多取 `max_events/2` 条（至少 1）⇒ 只要普通通道还有事件，
+/// 命令每轮都有进度，不会被源源不断的关闭/进入事件饿死。
+///
+/// `carry` / `priority_carry` 是**周转槽**：预算用尽时只 `try_recv` 一条来判断「通道里是否还有」
+/// （这个判断决定要不要记 `drain_budget_hit`），取到的那条不能丢 ⇒ 存进对应周转槽，下一轮先处理。
+/// 序列化效果：每轮**产出**的事件数 ≤ `max_events`（结转那条占一格）；**各通道内** FIFO 不变。
 pub(crate) struct EventDrain {
     budget: EventDrainBudget,
     /// 本轮已产出的事件数（结转的那条也占一格）。
     processed: u64,
+    /// 本轮已从优先通道取走的条数（反饥饿上限用它判）。
+    priority_used: u64,
     started: std::time::Instant,
     /// 本轮因条数/墙钟预算被截断（通道里仍有事件被延后到下一轮）。
     pub(crate) hit_budget: bool,
@@ -25392,18 +25544,26 @@ impl EventDrain {
         Self {
             budget,
             processed: 0,
+            priority_used: 0,
             started: std::time::Instant::now(),
             hit_budget: false,
         }
     }
 
-    /// 取本轮的下一条事件；`None` = 本轮排水结束（通道空 **或** 预算用尽）。
+    /// 取本轮的下一条事件；`None` = 本轮排水结束（两条通道都空 **或** 预算用尽）。
     pub(crate) fn next(
         &mut self,
         rx: &std::sync::mpsc::Receiver<GateEvent>,
+        ctl_rx: &std::sync::mpsc::Receiver<GateEvent>,
         carry: &mut Option<GateEvent>,
+        priority_carry: &mut Option<GateEvent>,
     ) -> Option<GateEvent> {
-        // 结转优先：它上一轮已从通道取走并计入 `drain_events_drained`，这里只消耗它。
+        // 优先通道的结转先消耗（否则「控制事件先取」会被一条普通结转破坏）。
+        if let Some(ev) = priority_carry.take() {
+            self.processed += 1;
+            return Some(ev);
+        }
+        // 结转：它上一轮已从通道取走并计入 `drain_events_drained`，这里只消耗它。
         if let Some(ev) = carry.take() {
             self.processed += 1;
             return Some(ev);
@@ -25412,13 +25572,30 @@ impl EventDrain {
             || self.started.elapsed() >= self.budget.max_wall
         {
             // 预算用尽：探一条只为判断「有没有被截断」——取到的结转下一轮（不丢、不改序）。
+            // 优先通道先探：被截断的控制事件下一轮仍是第一顺位。
+            if let Ok(ev) = ctl_rx.try_recv() {
+                // 它已经从通道取走 ⇒ 在这里计入累计排水数（下一轮消耗结转时不重复计）。
+                telemetry::record_drain_event_drained();
+                *priority_carry = Some(ev);
+                self.hit_budget = true;
+                return None;
+            }
             if let Ok(ev) = rx.try_recv() {
-                // 它已经从通道取走 ⇒ 在这里计入累计排水数（下一轮消耗 carry 时不重复计）。
                 telemetry::record_drain_event_drained();
                 *carry = Some(ev);
                 self.hit_budget = true;
             }
             return None;
+        }
+        // **反饥饿上限**：优先通道每轮最多 `max_events/2` 条（至少 1），其余留给普通通道。
+        let priority_cap = (self.budget.max_events / 2).max(1);
+        if self.priority_used < priority_cap {
+            if let Ok(ev) = ctl_rx.try_recv() {
+                telemetry::record_drain_event_drained();
+                self.processed += 1;
+                self.priority_used += 1;
+                return Some(ev);
+            }
         }
         match rx.try_recv() {
             Ok(ev) => {
@@ -25463,6 +25640,8 @@ fn sim_loop(
     colors: MsgColors,
     party_cfg: mir2_world_bevy::PartyConfig,
     ev_rx: std::sync::mpsc::Receiver<GateEvent>,
+    // 卡 `openmir2-world-keeps-dead-session`（扩展）：控制 + 进入事件的**优先通道**。
+    ev_ctl_rx: std::sync::mpsc::Receiver<GateEvent>,
     shutdown_rx: std::sync::mpsc::Receiver<()>,
     shutdown_done_tx: tokio::sync::mpsc::UnboundedSender<ShutdownSaveSummary>,
     mut db: Option<DbWiring>,
@@ -26602,7 +26781,9 @@ fn sim_loop(
     let mut entry_telemetry_last: Option<String> = None;
     // **事件排水周转槽**（卡 `openmir2-tick-starvation`）：预算用尽时探到的那一条留到下一轮，
     // 循环外持有 ⇒ 跨 tick 保序、不丢。预算常量见 [`EventDrainBudget::PRODUCTION`]。
+    // 两条通道各一个周转槽；优先通道的结转**先**被消耗（「控制事件先取」不被普通结转破坏）。
     let mut event_carry: Option<GateEvent> = None;
+    let mut event_carry_ctl: Option<GateEvent> = None;
     loop {
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
@@ -26689,7 +26870,8 @@ fn sim_loop(
         // **带预算的事件排水**（卡 `openmir2-tick-starvation`）：条数 + 墙钟双阀。到预算即停止
         // 取事件，剩余留在 std mpsc 通道里（保序）下一轮继续；绝不「排不空就不退出」。
         let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
-        while let Some(ev) = drain.next(&ev_rx, &mut event_carry) {
+        while let Some(ev) = drain.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)
+        {
             match ev {
                 GateEvent::Opened { index, ip } => {
                     glog!(
@@ -27830,12 +28012,23 @@ fn sim_loop(
                     }
                 }
                 GateEvent::RegisterGate { service_id, tx } => {
+                    // 卡 `openmir2-world-keeps-dead-session`：线号被**新连接**复用时，旧线留下的
+                    // 墓碑一律作废（新连接的 socket 号空间是全新的）。
+                    let _ = forget_tombstoned_gate_line(service_id);
                     gates.insert(service_id, tx);
                     glog!("DBG", "sim: 登记网关线号 {service_id} 的命令通道");
                 }
                 GateEvent::UnregisterGate { service_id } => {
+                    // 卡 `openmir2-world-keeps-dead-session`：整条线注销 ⇒ 该线所有墓碑一起清。
+                    let forgotten = forget_tombstoned_gate_line(service_id);
                     if gates.remove(&service_id).is_some() {
                         glog!("DBG", "sim: 注销网关线号 {service_id} 的命令通道");
+                    }
+                    if forgotten > 0 {
+                        glog!(
+                            "DBG",
+                            "sim: 网关线号 {service_id} 注销：清除 {forgotten} 个死槽墓碑"
+                        );
                     }
                 }
                 GateEvent::KickAccount {
@@ -30267,6 +30460,7 @@ impl GateSlots {
 async fn gate_conn(
     sock: TcpStream,
     ev_tx: std::sync::mpsc::Sender<GateEvent>,
+    ev_ctl_tx: std::sync::mpsc::Sender<GateEvent>,
     check_block: usize,
     auth: Arc<std::sync::Mutex<auth::AdmissionStore>>,
     service_id: u8,
@@ -30275,10 +30469,14 @@ async fn gate_conn(
     let tx = Arc::new(Mutex::new(wr));
     // sim → gate：世界/读档流程要清某个用户的槽时走这条（`NetChannel.CloseUser(gateIdx, socket)`）
     let (sim_tx, mut sim_rx) = mpsc::unbounded_channel::<SimToGate>();
-    let _ = ev_tx.send(GateEvent::RegisterGate {
-        service_id,
-        tx: sim_tx,
-    });
+    emit_gate_event(
+        &ev_tx,
+        &ev_ctl_tx,
+        GateEvent::RegisterGate {
+            service_id,
+            tx: sim_tx,
+        },
+    );
     let mut users = UserList::new();
     let mut state = KeepAlive {
         send_keep_alive: false,
@@ -30371,6 +30569,7 @@ async fn gate_conn(
             &mut drop_stats,
             &tx,
             &ev_tx,
+            &ev_ctl_tx,
             check_block,
             &auth,
             service_id,
@@ -30458,6 +30657,11 @@ fn downlink_slot<'a>(
         return Ok(u);
     }
     let first_warn = telemetry::record_downlink_dead_socket(gate_line, socket);
+    // 卡 `openmir2-world-keeps-dead-session`：该槽在网关侧已不存在 ⇒ 登记墓碑，世界侧后续
+    // 广播在**入队前**就丢（本节是最后一公里，本次帧仍照 oracle 丢弃）。已登记则不重复加锁。
+    if !socket_is_tombstoned(gate_line, socket) {
+        tombstone_dead_socket(gate_line, socket);
+    }
     if first_warn {
         glog!(
             "WRN",
@@ -31120,10 +31324,20 @@ async fn dispatch(
     stats: &mut gate_backpressure::DropStats,
     tx: &Arc<Mutex<OwnedWriteHalf>>,
     ev_tx: &std::sync::mpsc::Sender<GateEvent>,
+    ev_ctl_tx: &std::sync::mpsc::Sender<GateEvent>,
     check_block: usize,
     auth: &Arc<std::sync::Mutex<auth::AdmissionStore>>,
     service_id: u8,
 ) -> Result<()> {
+    // 卡 `openmir2-world-keeps-dead-session`：**任何上行帧**都说明该 `(线号, socket)` 的客户端
+    // 还活着（socket 号被新连接复用时第一条就是 `GM_OPEN`）⇒ 清墓碑、恢复下发。
+    if revive_tombstoned_socket(service_id, msg.socket) {
+        glog!(
+            "DBG",
+            "墓碑清除：网关线号 service_id={service_id} socket={} 收到上行 ⇒ 恢复下发",
+            msg.socket
+        );
+    }
     match u8::try_from(msg.ident).unwrap_or(0) {
         grobal2::GM_OPEN => {
             // `:154-159`：体 = IP 字符串；登记后回 `GM_SERVERUSERINDEX`（索引 = 下标+1）
@@ -31158,7 +31372,7 @@ async fn dispatch(
                 users.online(),
                 users.slots()
             );
-            let _ = ev_tx.send(GateEvent::Opened { index, ip });
+            emit_gate_event(ev_tx, ev_ctl_tx, GateEvent::Opened { index, ip });
         }
         grobal2::GM_CLOSE => {
             // `:160-162`：**按 socket** 关。角色名要先读（`close_by_socket` 会把槽置空）。
@@ -31176,14 +31390,18 @@ async fn dispatch(
                     users.online(),
                     users.slots()
                 );
-                let _ = ev_tx.send(GateEvent::Closed {
-                    // **G3/T-102**：`GateEvent::Closed.index` 必须是**网关线号**（与
-                    // `OnlineEntry.gate_idx` 同源），不是 `UserList` 槽位下标；`service_id`
-                    // 是 `gates` 表的键，也是 oracle 的 `GateIdx`。
-                    index: i32::from(service_id),
-                    chr_name,
-                    socket: msg.socket,
-                });
+                emit_gate_event(
+                    ev_tx,
+                    ev_ctl_tx,
+                    GateEvent::Closed {
+                        // **G3/T-102**：`GateEvent::Closed.index` 必须是**网关线号**（与
+                        // `OnlineEntry.gate_idx` 同源），不是 `UserList` 槽位下标；`service_id`
+                        // 是 `gates` 表的键，也是 oracle 的 `GateIdx`。
+                        index: i32::from(service_id),
+                        chr_name,
+                        socket: msg.socket,
+                    },
+                );
             }
             purge_session_residue(state, released_session);
         }
@@ -31253,20 +31471,24 @@ async fn dispatch(
                             pay_ment
                         );
                         // `:323-337` 的 `LoadDBInfo`（字段逐个对应；`SocketId` = 客户端句柄、`GSocketIdx` = 网关 SessionId）
-                        let _ = ev_tx.send(GateEvent::LoadDbRequest(load::LoadDbInfo {
-                            account: cert.account.clone(),
-                            chr_name: cert.chr_name.clone(),
-                            ipaddr: ip.clone(),
-                            session_id,
-                            soft_version_date: cert.client_version,
-                            pay_ment,
-                            pay_mode: 0,
-                            socket_id: msg.socket,
-                            gate_socket_idx: msg.session_id,
-                            gate_idx: cert.gate_id,
-                            new_user_tick: now_ms(),
-                            play_time: 0,
-                        }));
+                        emit_gate_event(
+                            ev_tx,
+                            ev_ctl_tx,
+                            GateEvent::LoadDbRequest(load::LoadDbInfo {
+                                account: cert.account.clone(),
+                                chr_name: cert.chr_name.clone(),
+                                ipaddr: ip.clone(),
+                                session_id,
+                                soft_version_date: cert.client_version,
+                                pay_ment,
+                                pay_mode: 0,
+                                socket_id: msg.socket,
+                                gate_socket_idx: msg.session_id,
+                                gate_idx: cert.gate_id,
+                                new_user_tick: now_ms(),
+                                play_time: 0,
+                            }),
+                        );
                     }
                     cert::CertOutcome::Failed {
                         account,
@@ -31282,14 +31504,22 @@ async fn dispatch(
                         // 卡 `openmir2-gateway-frame-criticality-queue`（总监 P3 F2）：认证失败也是
                         // 会话释放，清掉该 `SessionId` 的队列残留（防复用误投）。
                         purge_session_residue(state, msg.session_id);
-                        let _ = ev_tx.send(GateEvent::Closed {
-                            index: i32::from(service_id),
-                            chr_name: String::new(),
-                            socket: msg.socket,
-                        });
+                        emit_gate_event(
+                            ev_tx,
+                            ev_ctl_tx,
+                            GateEvent::Closed {
+                                index: i32::from(service_id),
+                                chr_name: String::new(),
+                                socket: msg.socket,
+                            },
+                        );
                     }
                     cert::CertOutcome::Ignored => {
-                        let _ = ev_tx.send(GateEvent::CertificationPending { index, ip });
+                        emit_gate_event(
+                            ev_tx,
+                            ev_ctl_tx,
+                            GateEvent::CertificationPending { index, ip },
+                        );
                     }
                 }
                 return Ok(());
@@ -31307,13 +31537,17 @@ async fn dispatch(
                 ))
             };
             let tail = tail.map(|bytes| gbk_decode(&bytes));
-            let _ = ev_tx.send(GateEvent::Command {
-                index,
-                chr_name,
-                socket: msg.socket,
-                cmd,
-                tail,
-            });
+            emit_gate_event(
+                ev_tx,
+                ev_ctl_tx,
+                GateEvent::Command {
+                    index,
+                    chr_name,
+                    socket: msg.socket,
+                    cmd,
+                    tail,
+                },
+            );
         }
         other => {
             glog!("DBG", "未处理的 GM_{other}（socket={}）", msg.socket);
@@ -33442,7 +33676,7 @@ mod tests {
     }
 
     /// 真实 socket 对：返回（生产侧写端，网关侧读端）。
-    async fn queue_test_socket() -> (Arc<Mutex<OwnedWriteHalf>>, tokio::net::TcpStream) {
+    pub(crate) async fn queue_test_socket() -> (Arc<Mutex<OwnedWriteHalf>>, tokio::net::TcpStream) {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let accept = tokio::spawn(async move { listener.accept().await.unwrap().0 });
@@ -33540,6 +33774,7 @@ mod tests {
         stats.set_queue_limits(true, state.pending.max_bytes(), state.pending.max_frames());
         let auth = Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
         let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        let (ev_ctl_tx, _ev_ctl_rx) = std::sync::mpsc::channel();
 
         // ① GM_OPEN ⇒ 直发 SM_SERVERUSERINDEX（会话 42）。
         let open = ServerMessage {
@@ -33558,6 +33793,7 @@ mod tests {
             &mut stats,
             &tx,
             &ev_tx,
+            &ev_ctl_tx,
             12288,
             &auth,
             0,
@@ -33603,6 +33839,7 @@ mod tests {
             &mut stats,
             &tx,
             &ev_tx,
+            &ev_ctl_tx,
             12288,
             &auth,
             0,
@@ -33846,6 +34083,7 @@ mod tests {
         };
         let auth = Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
         let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        let (ev_ctl_tx, _ev_ctl_rx) = std::sync::mpsc::channel();
         let mut users = UserList::new();
         dispatch(
             &recv_ok,
@@ -33855,6 +34093,7 @@ mod tests {
             &mut stats,
             &tx,
             &ev_tx,
+            &ev_ctl_tx,
             12288,
             &auth,
             0,
@@ -34056,6 +34295,7 @@ mod tests {
         stats.set_queue_limits(true, state.pending.max_bytes(), state.pending.max_frames());
         let auth = Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
         let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        let (ev_ctl_tx, _ev_ctl_rx) = std::sync::mpsc::channel();
 
         // 会话 A：socket=900、gate SessionId=42。一帧关键帧在 Hold 期入队（= 残留）。
         users.open(900, 42, "1.1.1.1".into());
@@ -34084,6 +34324,7 @@ mod tests {
             &mut stats,
             &tx,
             &ev_tx,
+            &ev_ctl_tx,
             12288,
             &auth,
             0,
@@ -34981,6 +35222,238 @@ mod tests {
             !users0.find(1, 5).unwrap().in_world,
             "越界线号不得把 0 号线同号 socket 标成 in_world"
         );
+    }
+
+    // ---- 卡 `openmir2-world-keeps-dead-session`：死槽墓碑（入队前跳过扇出） ----
+
+    /// 墓碑用例各自独占一条**测试线号**（进程级集合被并行用例共享，清线只清自己那条）。
+    const TOMBSTONE_LINE_A: u8 = 200;
+    const TOMBSTONE_LINE_B: u8 = 201;
+    const TOMBSTONE_LINE_C: u8 = 202;
+    const TOMBSTONE_LINE_D: u8 = 203;
+    const TOMBSTONE_LINE_E: u8 = 204;
+
+    /// **牙①（红→绿）**：模拟「会话已断开、`Closed` 事件还排在队列里」⇒ 网关侧下发落空即登记
+    /// 墓碑；世界继续广播 N 次 ⇒ **入队 0 条**，`downlink_skipped_by_tombstone_total` 恰 +N，
+    /// 且 `downlink_dead_socket_total` **不再增长**（帧根本没产生，走不到最后一公里）。
+    ///
+    /// 退化形态（空集）：没有墓碑时同一路由**会**返回通道——对照见
+    /// [`tombstone_does_not_touch_live_socket`]，证明「rx 空」不是路由本身坏了。
+    /// 变异：删掉 `route_to_gate` 里的墓碑检查 ⇒ 64 条帧全部入队、skipped 不变 ⇒ 本用例红。
+    #[test]
+    fn tombstone_skips_dead_socket_fanout_before_enqueue() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_A);
+        let socket = 7_700_101i32;
+        let mut users = UserList::new();
+        users.open(socket, 7_701, "gone".into());
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(TOMBSTONE_LINE_A, tx);
+
+        // 前提：客户端已断开（网关槽释放），但 sim 的 `Closed` 还没被处理（世界仍保留会话）。
+        assert!(users.close_by_socket(socket).is_some());
+        assert!(
+            downlink_slot(&users, TOMBSTONE_LINE_A, socket, 12, " SM_* 帧时").is_err(),
+            "槽不存在 ⇒ 最后一公里落空（墓碑登记点）"
+        );
+        assert!(
+            socket_is_tombstoned(TOMBSTONE_LINE_A, socket),
+            "落空必须登记墓碑（否则世界侧无从提前跳过）"
+        );
+
+        let skipped_before = telemetry::downlink_skipped_by_tombstone_total();
+        let dead_before =
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        const N: u64 = 64;
+        for _ in 0..N {
+            assert!(
+                route_to_gate(&gates, i32::from(TOMBSTONE_LINE_A), socket, "死槽广播").is_none(),
+                "墓碑命中 ⇒ 不许产出帧"
+            );
+        }
+        assert_eq!(
+            telemetry::downlink_skipped_by_tombstone_total() - skipped_before,
+            N,
+            "每次墓碑命中必须计一次（新字段，不并入 downlink_dead_socket_total）"
+        );
+        assert_eq!(
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+            dead_before,
+            "帧根本没产生 ⇒ 最后一公里的落空计数不得增长"
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "判据是「没有产生/入队」，不是「落空 0 次」"
+        );
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_A);
+    }
+
+    /// **牙②（活会话回归）**：正常会话广播逐条入队（含载荷）、`skipped` 计数不变。
+    /// 退化形态（空集）：一开始就断言该键没有墓碑。
+    /// 变异：把墓碑判定反过来（活槽也跳）⇒ 首条 `route_to_gate` 返回 `None` ⇒ 本用例红。
+    #[test]
+    fn tombstone_does_not_touch_live_socket() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_B);
+        let socket = 7_700_202i32;
+        assert!(
+            !socket_is_tombstoned(TOMBSTONE_LINE_B, socket),
+            "退化形态前提：无墓碑"
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(TOMBSTONE_LINE_B, tx);
+        let skipped_before = telemetry::downlink_skipped_by_tombstone_total();
+        for i in 0..5u8 {
+            let tx = route_to_gate(&gates, i32::from(TOMBSTONE_LINE_B), socket, "活槽广播")
+                .expect("活槽必须能取到通道");
+            tx.send(SimToGate::SendFrame {
+                socket,
+                body: vec![i],
+            })
+            .expect("通道未关");
+        }
+        assert_eq!(
+            telemetry::downlink_skipped_by_tombstone_total(),
+            skipped_before,
+            "活槽不得计墓碑跳过（恒 0 的退化面）"
+        );
+        for i in 0..5u8 {
+            match rx.try_recv() {
+                Ok(SimToGate::SendFrame {
+                    socket: got_socket,
+                    body,
+                }) => {
+                    assert_eq!(got_socket, socket);
+                    assert_eq!(body, vec![i], "活会话帧必须逐条、按序、载荷不变");
+                }
+                other => panic!("活会话广播必须逐条入队，收到 {other:?}"),
+            }
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    /// **牙③（socket 复用）**：同一 `(线号, socket)` 先被判死；随后该 socket 收到一条**上行帧**
+    /// （复用 = 新连接的 `GM_OPEN`）⇒ 墓碑清除、后续广播恢复入队。
+    ///
+    /// 走**生产入口** [`dispatch`]（不是直接调清除函数），所以删掉 `dispatch` 入口的
+    /// `revive_tombstoned_socket` 调用 ⇒ 本用例红。
+    /// 退化形态：复用前后各断言一次路由结果（前 `None`、后 `Some`），证明判据不是恒真/恒假。
+    #[allow(clippy::await_holding_lock)] // 进程级墓碑/计数被并行用例共享 ⇒ 必须跨 await 串行
+    #[tokio::test]
+    async fn uplink_revives_tombstoned_socket_for_reuse() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_C);
+        let socket = 7_700_303i32;
+        assert!(
+            tombstone_dead_socket(TOMBSTONE_LINE_C, socket),
+            "登记墓碑（前提）"
+        );
+        let (gtx, mut grx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(TOMBSTONE_LINE_C, gtx);
+        assert!(
+            route_to_gate(&gates, i32::from(TOMBSTONE_LINE_C), socket, "复用前广播").is_none(),
+            "判死后必须先跳过"
+        );
+        assert!(matches!(
+            grx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        // socket 复用：新连接的第一条上行 = `GM_OPEN`（走生产 dispatch 入口）。
+        let (tx, _client) = queue_test_socket().await;
+        let auth = Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
+        let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        let (ev_ctl_tx, _ev_ctl_rx) = std::sync::mpsc::channel();
+        let mut users = UserList::new();
+        let mut state = KeepAlive::default();
+        let mut stats = gate_backpressure::DropStats::new(TOMBSTONE_LINE_C, now_ms());
+        let open = ServerMessage {
+            packet_code: grobal2::PacketCode,
+            socket,
+            session_id: 7_702,
+            ident: u16::from(grobal2::GM_OPEN),
+            session_index: 0,
+            pack_length: 0,
+        };
+        dispatch(
+            &open,
+            &[],
+            &mut users,
+            &mut state,
+            &mut stats,
+            &tx,
+            &ev_tx,
+            &ev_ctl_tx,
+            12288,
+            &auth,
+            TOMBSTONE_LINE_C,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !socket_is_tombstoned(TOMBSTONE_LINE_C, socket),
+            "上行 ⇒ 墓碑必须清除（socket 复用安全）"
+        );
+        assert!(
+            route_to_gate(&gates, i32::from(TOMBSTONE_LINE_C), socket, "复用后广播").is_some(),
+            "复用后必须恢复入队"
+        );
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_C);
+    }
+
+    /// **牙④（退化形态 + 整线清除）**：无任何死槽 ⇒ `skipped` 恒 0；网关线注销清整条线 ⇒
+    /// 同线同号 socket 重新可用，**别的线的同号 socket 不受影响**。
+    /// 变异：把 `forget_tombstoned_gate_line` 改成不清/清错线 ⇒ 本用例红。
+    #[test]
+    fn unregister_gate_clears_tombstones_and_empty_set_is_inert() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_D);
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_E);
+        // 空集形态：没有墓碑 ⇒ 查询恒 false、计数不变。
+        let skipped_before = telemetry::downlink_skipped_by_tombstone_total();
+        assert!(!socket_is_tombstoned(TOMBSTONE_LINE_D, 7_700_401));
+        assert!(!socket_is_tombstoned(TOMBSTONE_LINE_E, 7_700_401));
+        assert_eq!(
+            telemetry::downlink_skipped_by_tombstone_total(),
+            skipped_before
+        );
+        // 两条墓碑在本线，一条在邻线（同 socket 号）。
+        assert!(tombstone_dead_socket(TOMBSTONE_LINE_D, 7_700_401));
+        assert!(tombstone_dead_socket(TOMBSTONE_LINE_D, 7_700_402));
+        assert!(tombstone_dead_socket(TOMBSTONE_LINE_E, 7_700_401));
+        assert_eq!(
+            forget_tombstoned_gate_line(TOMBSTONE_LINE_D),
+            2,
+            "UnregisterGate 只清本线：本线 2 条"
+        );
+        assert!(!socket_is_tombstoned(TOMBSTONE_LINE_D, 7_700_401));
+        assert!(!socket_is_tombstoned(TOMBSTONE_LINE_D, 7_700_402));
+        assert!(
+            socket_is_tombstoned(TOMBSTONE_LINE_E, 7_700_401),
+            "邻线同号 socket 不得被误清"
+        );
+        let (tx, _rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(TOMBSTONE_LINE_D, tx);
+        assert!(
+            route_to_gate(&gates, i32::from(TOMBSTONE_LINE_D), 7_700_401, "注销后广播").is_some(),
+            "整线清除后同线同号 socket 重新可用"
+        );
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_E);
     }
 
     /// **S3 后半段（第一格）**：世界 tick 的 AOI `Show` ⇒ 每个观察者收到“对方”的
@@ -93046,6 +93519,10 @@ mod entry_telemetry_wiring {
 /// ③ 滞留应答采样点必须在 tick 循环顶部（结构牙见
 /// `entry_telemetry_wiring::reply_pending_is_sampled_at_tick_top_not_in_drain_block`；
 /// 计数行为见 `telemetry::tests::drain_counters_count_and_throttle`）。
+///
+/// 卡 `openmir2-world-keeps-dead-session`（扩展）追加：**控制/进入事件优先**（双通道 + 反饥饿）
+/// ——分类牙、`GM_CLOSE` 落优先通道的接线牙、关闭/进入事件压过 10 万命令洪流的延迟牙、
+/// 「墓碑不靠它归零」牙与「无优先事件时行为与旧实现一致」的退化牙。
 #[cfg(test)]
 mod tick_starvation {
     use super::{
@@ -93070,6 +93547,12 @@ mod tick_starvation {
         }
     }
 
+    /// 一条**永远空**的优先通道（本组预算用例只喂普通通道；丢掉的发送端让 `try_recv` 恒 `Err`）。
+    fn empty_priority_channel() -> std::sync::mpsc::Receiver<GateEvent> {
+        let (_tx, rx) = std::sync::mpsc::channel();
+        rx
+    }
+
     /// 一颗「模拟 tick」：跑到本轮排水结束，返回 `hit_budget`。
     fn tick(
         rx: &std::sync::mpsc::Receiver<GateEvent>,
@@ -93077,8 +93560,10 @@ mod tick_starvation {
         budget: EventDrainBudget,
         out: &mut Vec<i32>,
     ) -> bool {
+        let ctl_rx = empty_priority_channel();
+        let mut ctl_carry = None;
         let mut drain = EventDrain::begin(budget);
-        while let Some(ev) = drain.next(rx, carry) {
+        while let Some(ev) = drain.next(rx, &ctl_rx, carry, &mut ctl_carry) {
             out.push(index_of(&ev));
         }
         drain.hit_budget
@@ -93300,10 +93785,12 @@ mod tick_starvation {
             max_events: 1_000,
             max_wall: Duration::from_millis(1),
         };
+        let ctl_rx = empty_priority_channel();
         let mut carry = None;
+        let mut ctl_carry = None;
         let mut first_round = Vec::new();
         let mut drain = EventDrain::begin(budget);
-        while let Some(ev) = drain.next(&rx, &mut carry) {
+        while let Some(ev) = drain.next(&rx, &ctl_rx, &mut carry, &mut ctl_carry) {
             first_round.push(index_of(&ev));
             std::thread::sleep(Duration::from_millis(5)); // 单条处理慢于墙钟预算
         }
@@ -93328,28 +93815,456 @@ mod tick_starvation {
         );
     }
 
-    /// **接线牙（调用点）**：生产 sim 排水必须经过预算器；不得回到无预算 `while try_recv`。
-    /// 变异：把 loop head 换回 `while let Ok(ev) = ev_rx.try_recv()` ⇒ 本用例红。
+    // ---- 卡 `openmir2-world-keeps-dead-session`（扩展）：控制/进入事件优先 ----
+
+    /// 一条命令事件（普通通道）。
+    fn command_event(index: i32) -> GateEvent {
+        GateEvent::Command {
+            index,
+            chr_name: String::new(),
+            socket: index,
+            cmd: super::CommandMessage {
+                recog: 0,
+                ident: 0,
+                param: 0,
+                tag: 0,
+                series: 0,
+            },
+            tail: None,
+        }
+    }
+
+    /// 一条进入事件（优先通道；原卡 3 并入本卡）。
+    fn load_request(chr: &str) -> GateEvent {
+        GateEvent::LoadDbRequest(crate::load::LoadDbInfo {
+            account: "acct".to_string(),
+            chr_name: chr.to_string(),
+            ipaddr: "1.2.3.4".to_string(),
+            session_id: 1,
+            soft_version_date: 0,
+            pay_ment: 0,
+            pay_mode: 0,
+            socket_id: 1,
+            gate_socket_idx: 2,
+            gate_idx: 0,
+            new_user_tick: 0,
+            play_time: 0,
+        })
+    }
+
+    /// 分类牙：**控制 / 进入**事件判优先；**命令 / 登记 / 认证未决**必须留在普通通道。
+    /// 并把 `emit_gate_event` 的落点也钉住（分类函数自说自话不算数）。
+    /// 变异：`is_priority` 改恒 `false` ⇒ 前五条红；改恒 `true` ⇒ 后三条红。
+    #[test]
+    fn priority_classification_is_control_and_entry_only() {
+        let (sim_tx, _sim_rx) = tokio::sync::mpsc::unbounded_channel();
+        for ev in [
+            GateEvent::Closed {
+                index: 0,
+                chr_name: String::new(),
+                socket: 1,
+            },
+            GateEvent::UnregisterGate { service_id: 3 },
+            GateEvent::RegisterGate {
+                service_id: 4,
+                tx: sim_tx,
+            },
+            load_request("c"),
+            GateEvent::KickAccount {
+                account: "a".to_string(),
+                session_id: 1,
+            },
+        ] {
+            assert!(ev.is_priority(), "控制/进入事件必须先于命令：{ev:?}");
+        }
+        for ev in [
+            GateEvent::Opened {
+                index: 1,
+                ip: "1.2.3.4".to_string(),
+            },
+            GateEvent::CertificationPending {
+                index: 2,
+                ip: "1.2.3.4".to_string(),
+            },
+            command_event(3),
+        ] {
+            assert!(!ev.is_priority(), "命令/登记不得抢优先通道：{ev:?}");
+        }
+        // 接线：同一批事件按类别落进不同通道。
+        let (ntx, nrx) = std::sync::mpsc::channel();
+        let (ptx, prx) = std::sync::mpsc::channel();
+        super::emit_gate_event(
+            &ntx,
+            &ptx,
+            GateEvent::Closed {
+                index: 9,
+                chr_name: String::new(),
+                socket: 9,
+            },
+        );
+        super::emit_gate_event(&ntx, &ptx, command_event(9));
+        assert!(
+            matches!(prx.try_recv(), Ok(GateEvent::Closed { .. })),
+            "Closed 必须落优先通道"
+        );
+        assert!(
+            matches!(nrx.try_recv(), Ok(GateEvent::Command { .. })),
+            "Command 必须落普通通道"
+        );
+        assert!(matches!(
+            nrx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+        assert!(matches!(
+            prx.try_recv(),
+            Err(std::sync::mpsc::TryRecvError::Empty)
+        ));
+    }
+
+    /// **牙⑤（关闭事件优先，延迟有界）**：10 万条命令在普通通道 + 1 条 `Closed` 在优先通道 ⇒
+    /// 关闭事件在**第一轮的第一条**被产出（生产预算 2000 条/50ms 一轮 ⇒ 远小于 1s）；
+    /// 同一轮里命令也有进度（反饥饿），且单轮产出不超过预算。
+    ///
+    /// 退化形态：本用例同时覆盖「优先通道只有 1 条」与「普通通道非空」两个非退化面；
+    /// 空通道形态由既有 `empty_burst_is_not_a_truncation` 覆盖。
+    /// 变异：`EventDrain::next` 不再取优先通道（或 `is_priority` 恒 false）⇒ 首轮产出全是命令、
+    /// Closed 排在第 100,001 位 ⇒ `events[0]` 断言红。
+    #[test]
+    fn closed_event_overtakes_command_flood_within_one_round() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (ntx, nrx) = std::sync::mpsc::channel();
+        let (ptx, prx) = std::sync::mpsc::channel();
+        for i in 0..100_000 {
+            ntx.send(command_event(i)).expect("通道未关");
+        }
+        super::emit_gate_event(
+            &ntx,
+            &ptx,
+            GateEvent::Closed {
+                index: 0,
+                chr_name: "gone".to_string(),
+                socket: 7_700_601,
+            },
+        );
+        let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
+        let mut carry = None;
+        let mut ctl_carry = None;
+        let mut events = Vec::new();
+        while let Some(ev) = drain.next(&nrx, &prx, &mut carry, &mut ctl_carry) {
+            events.push(ev);
+        }
+        assert!(
+            matches!(events.first(), Some(GateEvent::Closed { .. })),
+            "首轮第一条必须是关闭事件（实际 {:?}）",
+            events.first()
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, GateEvent::Command { .. })),
+            "反饥饿：同一轮里命令通道必须也有进度"
+        );
+        assert!(
+            events.len() as u64 <= EventDrainBudget::PRODUCTION.max_events,
+            "单轮产出不得超过预算（实际 {}）",
+            events.len()
+        );
+        assert!(drain.hit_budget, "10 万条命令必然把本轮截断");
+
+        // **反饥饿面**：优先事件**多于**一轮上限时，命令通道本轮仍必须有进度。
+        // 变异：删掉 `priority_cap`（优先通道无上限）⇒ 一轮吞掉 2000 条优先事件、命令 0 条 ⇒ 红。
+        let (ntx2, nrx2) = std::sync::mpsc::channel();
+        let (ptx2, prx2) = std::sync::mpsc::channel();
+        for i in 0..5_000 {
+            ntx2.send(command_event(i)).expect("通道未关");
+        }
+        for i in 0..5_000 {
+            super::emit_gate_event(
+                &ntx2,
+                &ptx2,
+                GateEvent::Closed {
+                    index: i,
+                    chr_name: String::new(),
+                    socket: i,
+                },
+            );
+        }
+        let mut drain2 = EventDrain::begin(EventDrainBudget::PRODUCTION);
+        let mut carry2 = None;
+        let mut ctl_carry2 = None;
+        let mut commands = 0u64;
+        let mut controls = 0u64;
+        while let Some(ev) = drain2.next(&nrx2, &prx2, &mut carry2, &mut ctl_carry2) {
+            match ev {
+                GateEvent::Command { .. } => commands += 1,
+                GateEvent::Closed { .. } => controls += 1,
+                _ => {}
+            }
+        }
+        assert!(
+            commands > 0,
+            "反饥饿：优先事件再多，命令每轮也必须前进（删上限 ⇒ 命令 0 条）"
+        );
+        assert!(
+            controls <= EventDrainBudget::PRODUCTION.max_events / 2,
+            "优先通道每轮有界（实际 {controls}）"
+        );
+    }
+
+    /// **牙⑦（进入事件同机制）**：1 条 `LoadDbRequest` 排在 10 万命令之后 ⇒ 同轮第一条产出。
+    /// 变异：删优先通道 / 把 `LoadDbRequest` 移出 `is_priority` ⇒ 本用例红。
+    #[test]
+    fn entry_event_overtakes_command_flood_within_one_round() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (ntx, nrx) = std::sync::mpsc::channel();
+        let (ptx, prx) = std::sync::mpsc::channel();
+        for i in 0..100_000 {
+            ntx.send(command_event(i)).expect("通道未关");
+        }
+        super::emit_gate_event(&ntx, &ptx, load_request("newbie"));
+        let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
+        let mut carry = None;
+        let mut ctl_carry = None;
+        let first = drain.next(&nrx, &prx, &mut carry, &mut ctl_carry);
+        assert!(
+            matches!(first, Some(GateEvent::LoadDbRequest(_))),
+            "进入事件必须与关闭事件同一条优先通道（实际 {first:?}）"
+        );
+    }
+
+    /// **接线牙（行为）**：`dispatch(GM_CLOSE)` 的 `Closed` 必须落到**优先通道**（不是普通通道）。
+    /// 变异：把该发送点换回 `ev_tx.send`（或把 `Closed` 移出 `is_priority`）⇒ 本用例红。
+    #[tokio::test]
+    async fn gm_close_event_lands_on_priority_channel() {
+        let socket = 7_700_707i32;
+        let (tx, _client) = crate::tests::queue_test_socket().await;
+        let auth = std::sync::Arc::new(std::sync::Mutex::new(super::auth::AdmissionStore::new()));
+        let (ntx, nrx) = std::sync::mpsc::channel();
+        let (ptx, prx) = std::sync::mpsc::channel();
+        let mut users = super::UserList::new();
+        users.open(socket, 9, "1.2.3.4".to_string());
+        let mut state = super::KeepAlive::default();
+        let mut stats = super::gate_backpressure::DropStats::new(1, super::now_ms());
+        let close = super::ServerMessage {
+            packet_code: super::grobal2::PacketCode,
+            socket,
+            session_id: 9,
+            ident: u16::from(super::grobal2::GM_CLOSE),
+            session_index: 0,
+            pack_length: 0,
+        };
+        super::dispatch(
+            &close,
+            &[],
+            &mut users,
+            &mut state,
+            &mut stats,
+            &tx,
+            &ntx,
+            &ptx,
+            12288,
+            &auth,
+            1,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(nrx.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+            "GM_CLOSE 不得落普通通道（否则仍排在命令洪流之后）"
+        );
+        match prx.try_recv() {
+            Ok(GateEvent::Closed { socket: got, .. }) => assert_eq!(got, socket),
+            other => panic!("GM_CLOSE 必须落优先通道，实际 {other:?}"),
+        }
+    }
+
+    /// **牙⑥（墓碑不靠它归零）**：同一场景（关闭靠优先级及时处理）⇒ 世界在下一 tick 广播前
+    /// 已摘掉该会话 ⇒ 广播**零入队**、`downlink_skipped_by_tombstone_total` **不变**
+    /// （墓碑兜底一次都没触发）。
+    ///
+    /// 前提建模（与 sim 的事件处理进度**无关**）：网关侧在客户端断开时就已经关掉该槽 ⇒ 这里先用
+    /// **生产函数** [`downlink_slot`]（super::downlink_slot）在空 `UserList` 上打一颗墓碑
+    /// （= 最后一公里的登记点）。于是：
+    /// - 修复后：关闭事件本轮被处理 ⇒ 在线表已无该会话 ⇒ 广播**根本不路由**它 ⇒ skipped Δ=0；
+    /// - 关掉优先级（变异）：关闭排到 10 万命令之后、本轮处理不到 ⇒ 在线表仍有它 ⇒ 广播命中
+    ///   墓碑 ⇒ **skipped Δ>0**（实测 1，见失败断言原文）——帧靠墓碑兜住，但关闭本身已迟到。
+    #[test]
+    fn priority_alone_removes_session_before_next_broadcast_without_tombstone() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let line = 205u8;
+        let _ = super::forget_tombstoned_gate_line(line);
+        let socket = 7_700_606i32;
+        let (ntx, nrx) = std::sync::mpsc::channel();
+        let (ptx, prx) = std::sync::mpsc::channel();
+        for i in 0..100_000 {
+            ntx.send(command_event(i)).expect("通道未关");
+        }
+        // 在线登记（世界侧）：一个会话，网关线 line / socket。
+        let mut online: Vec<i32> = vec![socket];
+        let (gtx, _grx) = tokio::sync::mpsc::unbounded_channel();
+        let mut gates: std::collections::HashMap<
+            u8,
+            tokio::sync::mpsc::UnboundedSender<super::SimToGate>,
+        > = std::collections::HashMap::new();
+        gates.insert(line, gtx);
+        // 网关侧前提：断开时槽已关 ⇒ 生产登记点落空 ⇒ 墓碑（此项与 sim 是否已处理 `Closed` 无关）。
+        let empty_users = super::UserList::new();
+        assert!(
+            super::downlink_slot(&empty_users, line, socket, 12, " SM_* 帧时").is_err(),
+            "前提：网关侧槽不存在（墓碑登记点）"
+        );
+        let skipped_before = crate::telemetry::downlink_skipped_by_tombstone_total();
+        super::emit_gate_event(
+            &ntx,
+            &ptx,
+            GateEvent::Closed {
+                index: i32::from(line),
+                chr_name: "gone".to_string(),
+                socket,
+            },
+        );
+        // 一轮排水：处理到关闭事件即摘在线表（= sim 的 `online_take`），随后进入下一 tick 广播。
+        let mut drain = EventDrain::begin(EventDrainBudget::PRODUCTION);
+        let mut carry = None;
+        let mut ctl_carry = None;
+        let mut closed_handled = false;
+        while let Some(ev) = drain.next(&nrx, &prx, &mut carry, &mut ctl_carry) {
+            if let GateEvent::Closed {
+                socket: closed_socket,
+                ..
+            } = ev
+            {
+                online.retain(|s| *s != closed_socket);
+                closed_handled = true;
+                break;
+            }
+        }
+        // 下一 tick 广播：对仍在线的会话路由；墓碑命中则零产出。
+        let mut enqueued = 0u32;
+        for s in &online {
+            if let Some(tx) = super::route_to_gate(&gates, i32::from(line), *s, "下一 tick 广播")
+            {
+                tx.send(super::SimToGate::SendFrame {
+                    socket: *s,
+                    body: vec![1],
+                })
+                .expect("通道未关");
+                enqueued += 1;
+            }
+        }
+        let skipped_delta =
+            crate::telemetry::downlink_skipped_by_tombstone_total() - skipped_before;
+        assert!(
+            closed_handled,
+            "关闭事件必须在本轮被处理（优先级）——否则只剩墓碑兜底（实测 skipped_delta={skipped_delta} enqueued={enqueued}）"
+        );
+        assert_eq!(
+            skipped_delta, 0,
+            "及时关闭后广播不路由该会话 ⇒ 墓碑一次都不该触发"
+        );
+        assert_eq!(enqueued, 0, "会话已及时摘除 ⇒ 广播不得产出帧");
+        let _ = super::forget_tombstoned_gate_line(line);
+    }
+
+    /// **牙⑧（退化形态）**：无控制/进入事件 ⇒ 命令通道的 FIFO / 预算 / `drain_budget_hit`
+    /// 统计与旧实现逐条一致（优先通道空）。
+    /// 变异：把 `next` 改成「优先通道空就结束本轮」⇒ 命令一条都排不出 ⇒ 红。
+    #[test]
+    fn no_control_events_keeps_command_fifo_and_budget() {
+        let _g = crate::telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (tx, rx) = std::sync::mpsc::channel();
+        let ctl_rx = empty_priority_channel(); // 优先通道恒空
+        for i in 0..64 {
+            tx.send(command_event(i)).expect("通道未关");
+        }
+        let budget = EventDrainBudget {
+            max_events: 4,
+            max_wall: Duration::from_secs(3_600),
+        };
+        let hit_before = crate::telemetry::DRAIN_BUDGET_HIT.load(Ordering::Relaxed);
+        let drained_before = crate::telemetry::DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed);
+        let mut carry = None;
+        let mut ctl_carry = None;
+        let mut seen = Vec::new();
+        let mut rounds = 0u64;
+        let mut hit_rounds = 0u64;
+        loop {
+            let mut drain = EventDrain::begin(budget);
+            while let Some(ev) = drain.next(&rx, &ctl_rx, &mut carry, &mut ctl_carry) {
+                if let GateEvent::Command { index, .. } = ev {
+                    seen.push(index);
+                }
+            }
+            rounds += 1;
+            if drain.hit_budget {
+                let _ = crate::telemetry::record_drain_budget_hit();
+                hit_rounds += 1;
+            }
+            assert!(rounds <= 64, "64 条 / 每轮 4 条不该超过 64 轮");
+            if !drain.hit_budget {
+                break;
+            }
+        }
+        assert_eq!(
+            seen,
+            (0..64).collect::<Vec<_>>(),
+            "无优先事件时命令必须 FIFO、恰好一次"
+        );
+        assert!(rounds >= 16, "预算行为不变：64 条 / 每轮 4 条至少 16 轮");
+        let hit_after = crate::telemetry::DRAIN_BUDGET_HIT.load(Ordering::Relaxed);
+        assert_eq!(
+            hit_after - hit_before,
+            hit_rounds,
+            "drain_budget_hit 统计与每轮截断次数逐次一致"
+        );
+        // 「逐字节一致」的机判口径：③ `drain_events_drained` 恰 +64（含每轮截断时探到的那条，
+        // 与旧实现的取数次数相同）；④ 轮数 / 每轮条数由 `seen` 与 `hit_rounds` 唯一确定。
+        let drained_after = crate::telemetry::DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed);
+        assert_eq!(
+            drained_after - drained_before,
+            64,
+            "无优先事件时取数次数必须与旧实现一致（64 条 = 64 次取走）"
+        );
+    }
+
+    /// **接线牙（调用点）**：生产 sim 排水必须经过预算器、且**同时**喂两条通道；
+    /// 不得回到无预算 `while try_recv`，也不得只排命令通道（控制事件优先失效）。
+    /// 变异：把 loop head 换回 `while let Ok(ev) = ev_rx.try_recv()` ⇒ 本用例红；
+    /// 把 `&ev_ctl_rx` 从调用里删掉（只排普通通道）⇒ 第二颗断言红。
     #[test]
     fn production_loop_head_goes_through_budgeted_drain() {
         let src = include_str!("lib.rs");
+        // 只扫**生产面**：`mod tests {` 之前（用例自己也起预算器，不能计入）。
+        let prod = &src[..src.find("mod tests {").expect("`mod tests {` 行")];
         // needle 运行时拼：完整字面量不得出现在本文件（include_str! 会数到测试自己）。
         let unbounded = format!("while let Ok(ev) = {}try_recv() {{", "ev_rx.");
         assert_eq!(
-            src.matches(&unbounded).count(),
+            prod.matches(&unbounded).count(),
             0,
             "生产 sim 排水不得回到无预算 while（{unbounded}）"
         );
         let head = format!(
-            "while let Some(ev) = {}.next(&ev_rx, &mut event_carry)",
+            "{}.next(&ev_rx, &ev_ctl_rx, &mut event_carry, &mut event_carry_ctl)",
             "drain"
         );
         assert_eq!(
-            src.matches(&head).count(),
+            prod.matches(&head).count(),
             1,
-            "生产排水必须经过预算器（唯一一处：{head}）"
+            "生产排水必须经过预算器且同时取两条通道（唯一一处：{head}）"
         );
         let begin = format!("{}(EventDrainBudget::PRODUCTION)", "EventDrain::begin");
-        assert_eq!(src.matches(&begin).count(), 1, "预算必须每轮重新起算");
+        assert_eq!(
+            prod.matches(&begin).count(),
+            1,
+            "生产预算必须每轮重新起算（唯一一处）"
+        );
     }
 }
