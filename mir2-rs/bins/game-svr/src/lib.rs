@@ -1871,6 +1871,84 @@ impl DbWiring {
     }
 }
 
+/// **死槽墓碑**（卡 `openmir2-world-keeps-dead-session`）：`(网关线号, socket)` 在**网关侧首次
+/// 发现「下发时槽不存在」**时登记，世界侧路由（[`route_to_gate`]）命中即**在入队前**丢弃，
+/// 不再为死会话产生帧。
+///
+/// 为什么需要：oracle 的 `CloseUser` 是**调用线程即时**处理（`FrontEngine.DeleteHuman` +
+/// `BoSoftClose`），断开与摘会话之间没有队列；本仓的 `Closed` 事件与命令事件共用一条无界
+/// 队列、按 50ms/轮预算排 ⇒ 窗口 37 实测 5,003 次断开只处理了 1,001 条关闭，其余会话仍被
+/// 每 tick 广播（`downlink_dead_socket_total=4,168,609`），扇出本身没降。墓碑把「已知死槽」的
+/// 扇出提前到生产者，效果等价于 oracle 的即时摘除，**不改任何活会话的帧语义**。
+///
+/// 生命周期（防 socket 号复用误杀）：
+/// - 登记：网关侧下发落空（[`downlink_slot`]——该网关的 `UserList` 里已经没有这个 socket）；
+/// - 清除①：同一 `(线号, socket)` 收到**任何上行**帧（[`dispatch`] 入口）⇒ 客户端还活着
+///   （新连接的 `GM_OPEN` 也走这里 ⇒ socket 复用安全）；
+/// - 清除②：网关连接断开（`GateEvent::UnregisterGate`）⇒ 整条线的墓碑一起清。
+static TOMBSTONED_GATE_SOCKETS: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashSet<(u8, i32)>>,
+> = std::sync::OnceLock::new();
+
+/// 墓碑条数（[`TOMBSTONED_GATE_SOCKETS`] 的镜像）。**快路径**：为 0 时 [`socket_is_tombstoned`]
+/// 不碰锁——正常态（无死会话）每帧路由零额外开销。
+static TOMBSTONED_GATE_SOCKET_COUNT: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+fn tombstoned_gate_sockets() -> &'static std::sync::Mutex<std::collections::HashSet<(u8, i32)>> {
+    TOMBSTONED_GATE_SOCKETS.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
+}
+
+/// 登记墓碑；返回 `true` = 本次新增（之前不在集合里）。
+fn tombstone_dead_socket(gate_line: u8, socket: i32) -> bool {
+    let inserted = tombstoned_gate_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert((gate_line, socket));
+    if inserted {
+        TOMBSTONED_GATE_SOCKET_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    inserted
+}
+
+/// 该 `(线号, socket)` 是否已登记墓碑（无墓碑时走原子快路径、不碰锁）。
+fn socket_is_tombstoned(gate_line: u8, socket: i32) -> bool {
+    use std::sync::atomic::Ordering;
+    if TOMBSTONED_GATE_SOCKET_COUNT.load(Ordering::Relaxed) == 0 {
+        return false;
+    }
+    tombstoned_gate_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&(gate_line, socket))
+}
+
+/// 上行 ⇒ 清除该槽墓碑；返回 `true` = 之前确实登记过（调用方打一行 DBG，便于复用回归排查）。
+fn revive_tombstoned_socket(gate_line: u8, socket: i32) -> bool {
+    let removed = tombstoned_gate_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&(gate_line, socket));
+    if removed {
+        TOMBSTONED_GATE_SOCKET_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    removed
+}
+
+/// 网关线注销 ⇒ 清掉整条线的墓碑；返回清除条数。
+fn forget_tombstoned_gate_line(gate_line: u8) -> usize {
+    let mut set = tombstoned_gate_sockets()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let before = set.len();
+    set.retain(|(line, _)| *line != gate_line);
+    let removed = before - set.len();
+    if removed > 0 {
+        TOMBSTONED_GATE_SOCKET_COUNT.fetch_sub(removed, std::sync::atomic::Ordering::Relaxed);
+    }
+    removed
+}
+
 /// `NetChannel` 按 gateIdx 选连接（`TCPNetChannel.cs:221-224`）：取该线号的 `sim → gate` 命令通道。
 ///
 /// 读档流程里的两条 sim→gate 命令（`KickUser`/`MarkInWorld`）**都**走这里 —— 每个 GameGate 连接的
@@ -1880,6 +1958,13 @@ impl DbWiring {
 /// oracle `TCPNetChannel.cs:213-218` 的 `GetGate(gateIdx)` 对越界/非法线号返回 `null` ⇒ **直接丢弃**；
 /// 本函数与之同构：`u8::try_from` 失败即记 WRN + 返回 `None`，**绝不** `unwrap_or(0)` 把非法线号
 /// 静默折算成 0 号线（与 N1「不许静默挑线」同族）。
+///
+/// **死槽墓碑**（卡 `openmir2-world-keeps-dead-session`）：该 `(线号, socket)` 若已被网关侧判死
+/// （[`TOMBSTONED_GATE_SOCKETS`]），这里**在入队前**就返回 `None` ⇒ 调用方不会产生帧，计数只进
+/// `downlink_skipped_by_tombstone_total`（**不**打 WRN：死槽风暴时每 tick 每会话都会命中）。
+/// 帧本来就会在最后一公里被丢弃，这里只是把丢弃点提前到生产者。
+/// 附带影响：`KickUser`/`MarkInWorld` 也走本函数 ⇒ 对墓碑 socket 同样不投递——等价，因为墓碑只在
+/// 「该网关的 `UserList` 里已经没有这个 socket」时登记，网关侧收到这两条命令本来也是空操作。
 fn route_to_gate<'a>(
     gates: &'a std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
     gate_idx: i32,
@@ -1893,6 +1978,11 @@ fn route_to_gate<'a>(
         );
         return None;
     };
+    // 卡 `openmir2-world-keeps-dead-session`：墓碑命中 ⇒ 不产生帧（**入队前**丢，不计最后一公里的落空数）。
+    if socket_is_tombstoned(idx, socket) {
+        let _ = telemetry::record_downlink_skipped_by_tombstone();
+        return None;
+    }
     match gates.get(&idx) {
         Some(tx) => Some(tx),
         None => {
@@ -27830,12 +27920,23 @@ fn sim_loop(
                     }
                 }
                 GateEvent::RegisterGate { service_id, tx } => {
+                    // 卡 `openmir2-world-keeps-dead-session`：线号被**新连接**复用时，旧线留下的
+                    // 墓碑一律作废（新连接的 socket 号空间是全新的）。
+                    let _ = forget_tombstoned_gate_line(service_id);
                     gates.insert(service_id, tx);
                     glog!("DBG", "sim: 登记网关线号 {service_id} 的命令通道");
                 }
                 GateEvent::UnregisterGate { service_id } => {
+                    // 卡 `openmir2-world-keeps-dead-session`：整条线注销 ⇒ 该线所有墓碑一起清。
+                    let forgotten = forget_tombstoned_gate_line(service_id);
                     if gates.remove(&service_id).is_some() {
                         glog!("DBG", "sim: 注销网关线号 {service_id} 的命令通道");
+                    }
+                    if forgotten > 0 {
+                        glog!(
+                            "DBG",
+                            "sim: 网关线号 {service_id} 注销：清除 {forgotten} 个死槽墓碑"
+                        );
                     }
                 }
                 GateEvent::KickAccount {
@@ -30458,6 +30559,11 @@ fn downlink_slot<'a>(
         return Ok(u);
     }
     let first_warn = telemetry::record_downlink_dead_socket(gate_line, socket);
+    // 卡 `openmir2-world-keeps-dead-session`：该槽在网关侧已不存在 ⇒ 登记墓碑，世界侧后续
+    // 广播在**入队前**就丢（本节是最后一公里，本次帧仍照 oracle 丢弃）。已登记则不重复加锁。
+    if !socket_is_tombstoned(gate_line, socket) {
+        tombstone_dead_socket(gate_line, socket);
+    }
     if first_warn {
         glog!(
             "WRN",
@@ -31124,6 +31230,15 @@ async fn dispatch(
     auth: &Arc<std::sync::Mutex<auth::AdmissionStore>>,
     service_id: u8,
 ) -> Result<()> {
+    // 卡 `openmir2-world-keeps-dead-session`：**任何上行帧**都说明该 `(线号, socket)` 的客户端
+    // 还活着（socket 号被新连接复用时第一条就是 `GM_OPEN`）⇒ 清墓碑、恢复下发。
+    if revive_tombstoned_socket(service_id, msg.socket) {
+        glog!(
+            "DBG",
+            "墓碑清除：网关线号 service_id={service_id} socket={} 收到上行 ⇒ 恢复下发",
+            msg.socket
+        );
+    }
     match u8::try_from(msg.ident).unwrap_or(0) {
         grobal2::GM_OPEN => {
             // `:154-159`：体 = IP 字符串；登记后回 `GM_SERVERUSERINDEX`（索引 = 下标+1）
@@ -34981,6 +35096,236 @@ mod tests {
             !users0.find(1, 5).unwrap().in_world,
             "越界线号不得把 0 号线同号 socket 标成 in_world"
         );
+    }
+
+    // ---- 卡 `openmir2-world-keeps-dead-session`：死槽墓碑（入队前跳过扇出） ----
+
+    /// 墓碑用例各自独占一条**测试线号**（进程级集合被并行用例共享，清线只清自己那条）。
+    const TOMBSTONE_LINE_A: u8 = 200;
+    const TOMBSTONE_LINE_B: u8 = 201;
+    const TOMBSTONE_LINE_C: u8 = 202;
+    const TOMBSTONE_LINE_D: u8 = 203;
+    const TOMBSTONE_LINE_E: u8 = 204;
+
+    /// **牙①（红→绿）**：模拟「会话已断开、`Closed` 事件还排在队列里」⇒ 网关侧下发落空即登记
+    /// 墓碑；世界继续广播 N 次 ⇒ **入队 0 条**，`downlink_skipped_by_tombstone_total` 恰 +N，
+    /// 且 `downlink_dead_socket_total` **不再增长**（帧根本没产生，走不到最后一公里）。
+    ///
+    /// 退化形态（空集）：没有墓碑时同一路由**会**返回通道——对照见
+    /// [`tombstone_does_not_touch_live_socket`]，证明「rx 空」不是路由本身坏了。
+    /// 变异：删掉 `route_to_gate` 里的墓碑检查 ⇒ 64 条帧全部入队、skipped 不变 ⇒ 本用例红。
+    #[test]
+    fn tombstone_skips_dead_socket_fanout_before_enqueue() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_A);
+        let socket = 7_700_101i32;
+        let mut users = UserList::new();
+        users.open(socket, 7_701, "gone".into());
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(TOMBSTONE_LINE_A, tx);
+
+        // 前提：客户端已断开（网关槽释放），但 sim 的 `Closed` 还没被处理（世界仍保留会话）。
+        assert!(users.close_by_socket(socket).is_some());
+        assert!(
+            downlink_slot(&users, TOMBSTONE_LINE_A, socket, 12, " SM_* 帧时").is_err(),
+            "槽不存在 ⇒ 最后一公里落空（墓碑登记点）"
+        );
+        assert!(
+            socket_is_tombstoned(TOMBSTONE_LINE_A, socket),
+            "落空必须登记墓碑（否则世界侧无从提前跳过）"
+        );
+
+        let skipped_before = telemetry::downlink_skipped_by_tombstone_total();
+        let dead_before =
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        const N: u64 = 64;
+        for _ in 0..N {
+            assert!(
+                route_to_gate(&gates, i32::from(TOMBSTONE_LINE_A), socket, "死槽广播").is_none(),
+                "墓碑命中 ⇒ 不许产出帧"
+            );
+        }
+        assert_eq!(
+            telemetry::downlink_skipped_by_tombstone_total() - skipped_before,
+            N,
+            "每次墓碑命中必须计一次（新字段，不并入 downlink_dead_socket_total）"
+        );
+        assert_eq!(
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+            dead_before,
+            "帧根本没产生 ⇒ 最后一公里的落空计数不得增长"
+        );
+        assert!(
+            matches!(rx.try_recv(), Err(mpsc::error::TryRecvError::Empty)),
+            "判据是「没有产生/入队」，不是「落空 0 次」"
+        );
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_A);
+    }
+
+    /// **牙②（活会话回归）**：正常会话广播逐条入队（含载荷）、`skipped` 计数不变。
+    /// 退化形态（空集）：一开始就断言该键没有墓碑。
+    /// 变异：把墓碑判定反过来（活槽也跳）⇒ 首条 `route_to_gate` 返回 `None` ⇒ 本用例红。
+    #[test]
+    fn tombstone_does_not_touch_live_socket() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_B);
+        let socket = 7_700_202i32;
+        assert!(
+            !socket_is_tombstoned(TOMBSTONE_LINE_B, socket),
+            "退化形态前提：无墓碑"
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(TOMBSTONE_LINE_B, tx);
+        let skipped_before = telemetry::downlink_skipped_by_tombstone_total();
+        for i in 0..5u8 {
+            let tx = route_to_gate(&gates, i32::from(TOMBSTONE_LINE_B), socket, "活槽广播")
+                .expect("活槽必须能取到通道");
+            tx.send(SimToGate::SendFrame {
+                socket,
+                body: vec![i],
+            })
+            .expect("通道未关");
+        }
+        assert_eq!(
+            telemetry::downlink_skipped_by_tombstone_total(),
+            skipped_before,
+            "活槽不得计墓碑跳过（恒 0 的退化面）"
+        );
+        for i in 0..5u8 {
+            match rx.try_recv() {
+                Ok(SimToGate::SendFrame {
+                    socket: got_socket,
+                    body,
+                }) => {
+                    assert_eq!(got_socket, socket);
+                    assert_eq!(body, vec![i], "活会话帧必须逐条、按序、载荷不变");
+                }
+                other => panic!("活会话广播必须逐条入队，收到 {other:?}"),
+            }
+        }
+        assert!(matches!(
+            rx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+    }
+
+    /// **牙③（socket 复用）**：同一 `(线号, socket)` 先被判死；随后该 socket 收到一条**上行帧**
+    /// （复用 = 新连接的 `GM_OPEN`）⇒ 墓碑清除、后续广播恢复入队。
+    ///
+    /// 走**生产入口** [`dispatch`]（不是直接调清除函数），所以删掉 `dispatch` 入口的
+    /// `revive_tombstoned_socket` 调用 ⇒ 本用例红。
+    /// 退化形态：复用前后各断言一次路由结果（前 `None`、后 `Some`），证明判据不是恒真/恒假。
+    #[allow(clippy::await_holding_lock)] // 进程级墓碑/计数被并行用例共享 ⇒ 必须跨 await 串行
+    #[tokio::test]
+    async fn uplink_revives_tombstoned_socket_for_reuse() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_C);
+        let socket = 7_700_303i32;
+        assert!(
+            tombstone_dead_socket(TOMBSTONE_LINE_C, socket),
+            "登记墓碑（前提）"
+        );
+        let (gtx, mut grx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(TOMBSTONE_LINE_C, gtx);
+        assert!(
+            route_to_gate(&gates, i32::from(TOMBSTONE_LINE_C), socket, "复用前广播").is_none(),
+            "判死后必须先跳过"
+        );
+        assert!(matches!(
+            grx.try_recv(),
+            Err(mpsc::error::TryRecvError::Empty)
+        ));
+
+        // socket 复用：新连接的第一条上行 = `GM_OPEN`（走生产 dispatch 入口）。
+        let (tx, _client) = queue_test_socket().await;
+        let auth = Arc::new(std::sync::Mutex::new(auth::AdmissionStore::new()));
+        let (ev_tx, _ev_rx) = std::sync::mpsc::channel();
+        let mut users = UserList::new();
+        let mut state = KeepAlive::default();
+        let mut stats = gate_backpressure::DropStats::new(TOMBSTONE_LINE_C, now_ms());
+        let open = ServerMessage {
+            packet_code: grobal2::PacketCode,
+            socket,
+            session_id: 7_702,
+            ident: u16::from(grobal2::GM_OPEN),
+            session_index: 0,
+            pack_length: 0,
+        };
+        dispatch(
+            &open,
+            &[],
+            &mut users,
+            &mut state,
+            &mut stats,
+            &tx,
+            &ev_tx,
+            12288,
+            &auth,
+            TOMBSTONE_LINE_C,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !socket_is_tombstoned(TOMBSTONE_LINE_C, socket),
+            "上行 ⇒ 墓碑必须清除（socket 复用安全）"
+        );
+        assert!(
+            route_to_gate(&gates, i32::from(TOMBSTONE_LINE_C), socket, "复用后广播").is_some(),
+            "复用后必须恢复入队"
+        );
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_C);
+    }
+
+    /// **牙④（退化形态 + 整线清除）**：无任何死槽 ⇒ `skipped` 恒 0；网关线注销清整条线 ⇒
+    /// 同线同号 socket 重新可用，**别的线的同号 socket 不受影响**。
+    /// 变异：把 `forget_tombstoned_gate_line` 改成不清/清错线 ⇒ 本用例红。
+    #[test]
+    fn unregister_gate_clears_tombstones_and_empty_set_is_inert() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_D);
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_E);
+        // 空集形态：没有墓碑 ⇒ 查询恒 false、计数不变。
+        let skipped_before = telemetry::downlink_skipped_by_tombstone_total();
+        assert!(!socket_is_tombstoned(TOMBSTONE_LINE_D, 7_700_401));
+        assert!(!socket_is_tombstoned(TOMBSTONE_LINE_E, 7_700_401));
+        assert_eq!(
+            telemetry::downlink_skipped_by_tombstone_total(),
+            skipped_before
+        );
+        // 两条墓碑在本线，一条在邻线（同 socket 号）。
+        assert!(tombstone_dead_socket(TOMBSTONE_LINE_D, 7_700_401));
+        assert!(tombstone_dead_socket(TOMBSTONE_LINE_D, 7_700_402));
+        assert!(tombstone_dead_socket(TOMBSTONE_LINE_E, 7_700_401));
+        assert_eq!(
+            forget_tombstoned_gate_line(TOMBSTONE_LINE_D),
+            2,
+            "UnregisterGate 只清本线：本线 2 条"
+        );
+        assert!(!socket_is_tombstoned(TOMBSTONE_LINE_D, 7_700_401));
+        assert!(!socket_is_tombstoned(TOMBSTONE_LINE_D, 7_700_402));
+        assert!(
+            socket_is_tombstoned(TOMBSTONE_LINE_E, 7_700_401),
+            "邻线同号 socket 不得被误清"
+        );
+        let (tx, _rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(TOMBSTONE_LINE_D, tx);
+        assert!(
+            route_to_gate(&gates, i32::from(TOMBSTONE_LINE_D), 7_700_401, "注销后广播").is_some(),
+            "整线清除后同线同号 socket 重新可用"
+        );
+        let _ = forget_tombstoned_gate_line(TOMBSTONE_LINE_E);
     }
 
     /// **S3 后半段（第一格）**：世界 tick 的 AOI `Show` ⇒ 每个观察者收到“对方”的

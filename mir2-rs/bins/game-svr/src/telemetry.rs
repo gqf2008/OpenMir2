@@ -149,6 +149,16 @@ pub static LOADDB_REPLY_SEEN: AtomicU64 = AtomicU64::new(0);
 /// 该字段进 [`summary_line`]（`ENTRY_TELEMETRY`），降噪后的落空量仍可对账。
 pub static DOWNLINK_DEAD_SOCKET_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+/// **墓碑命中、在入队前就被放弃的帧批次**（进程级；卡 `openmir2-world-keeps-dead-session`）。
+///
+/// 与 [`DOWNLINK_DEAD_SOCKET_TOTAL`] **分开计**：后者是「帧一路排到最后一公里、到网关侧
+/// 才发现槽已不存在」，本字段是「世界侧路由时就知道该 `(线号, socket)` 已死、根本没产生帧」。
+/// 一个降一个升各自说明修复面的位置——混进同一个字段就分不开「帧没发」与「发了才发现没人收」。
+///
+/// 计数点在**生产者路由**（`route_to_gate`）：多数调用点一次路由 = 一帧；同一次路由后成批
+/// 入队的调用点按**批**计（真实帧数由最后一公里的 `downlink_dead_socket_total` 对账）。
+pub static DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL: AtomicU64 = AtomicU64::new(0);
+
 /// 已告警过的 `(网关线号, socket)`。键**必须带线号**：socket 号只在一条网关线内唯一
 /// （不同网关线的同号 socket 是不同会话，各自都该有自己的首告警）。
 static DEAD_SOCKET_WARNED: OnceLock<Mutex<HashSet<(u8, i32)>>> = OnceLock::new();
@@ -478,6 +488,19 @@ pub fn record_downlink_dead_socket(gate_line: u8, socket: i32) -> bool {
     warned.insert((gate_line, socket))
 }
 
+/// 墓碑命中一次（入队前丢弃）：+1 并返回累计值。与 [`DOWNLINK_DEAD_SOCKET_TOTAL`] 分开。
+#[must_use]
+pub fn record_downlink_skipped_by_tombstone() -> u64 {
+    DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.fetch_add(1, Relaxed) + 1
+}
+
+/// 读「墓碑跳过」累计值（测试/窗口对账用；生产日志走 [`summary_line`]）。
+#[cfg_attr(not(test), allow(dead_code))]
+#[must_use]
+pub fn downlink_skipped_by_tombstone_total() -> u64 {
+    DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.load(Relaxed)
+}
+
 /// 非首次落空的**按秒聚合**：`Some(行)` = 距上次聚合 ≥ [`DEAD_SOCKET_AGG_INTERVAL_MS`]，
 /// 行内带这段时间被抑制（未逐条 WRN）的条数与进程累计值。
 ///
@@ -557,7 +580,7 @@ pub(crate) fn reset_final_line_once_for_tests() {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={} downlink_skipped_by_tombstone_total={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -592,7 +615,8 @@ pub fn summary_line() -> String {
         DRAIN_EVENTS_DRAINED.load(Relaxed),
         DRAIN_BUDGET_HIT.load(Relaxed),
         REPLY_TABLE_MAX.load(Relaxed),
-        DOWNLINK_DEAD_SOCKET_TOTAL.load(Relaxed)
+        DOWNLINK_DEAD_SOCKET_TOTAL.load(Relaxed),
+        DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.load(Relaxed)
     )
 }
 
@@ -682,9 +706,29 @@ mod tests {
             "drain_budget_hit=",
             "reply_table_max=",
             "downlink_dead_socket_total=",
+            "downlink_skipped_by_tombstone_total=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
+    }
+
+    /// 墓碑跳过计数必须落进 `ENTRY_TELEMETRY` 汇总行（窗口对账读最后一条该行）。
+    /// 变异：把 `downlink_skipped_by_tombstone_total={}` 从 `summary_line` 的格式串删掉 ⇒ 本用例红。
+    #[test]
+    fn skipped_by_tombstone_counter_lands_in_summary_line() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let before = downlink_skipped_by_tombstone_total();
+        let after = record_downlink_skipped_by_tombstone();
+        assert!(
+            after > before,
+            "墓碑命中必须逐次 +1（before={before} after={after}）"
+        );
+        let line = summary_line();
+        let needle = format!(
+            "downlink_skipped_by_tombstone_total={}",
+            downlink_skipped_by_tombstone_total()
+        );
+        assert!(line.contains(&needle), "汇总行缺/错值：{needle} @ {line}");
     }
 
     /// 样本只打前 `SAMPLE_LIMIT` 条：第 1..=N 条为真、之后的都是假（空集形态：第一次调用必须为真）。
