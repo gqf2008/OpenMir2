@@ -149,9 +149,17 @@ impl FrontEngine {
         let mut actions = Vec::with_capacity(temp.len());
         for info in &temp {
             if info.session_id == 0 {
+                // 分支③：`SessionID == 0` 被跳过（卡 `openmir2-entry-gap-buckets`）
+                let _ = crate::telemetry::record_logon_no_request(
+                    crate::telemetry::LogonNoRequest::ZeroSession,
+                );
                 continue; // `:102-105`
             }
             if self.in_save_rcd_list(&info.chr_name) {
+                // 分支④：保存中重排队（卡 `openmir2-entry-gap-buckets`）
+                let _ = crate::telemetry::record_logon_no_request(
+                    crate::telemetry::LogonNoRequest::Requeue,
+                );
                 // `:154-158` ⇒ 调用方重排队（`:112-121`）
                 self.load_list.push(info.clone());
                 actions.push(LoadAction::RequeueSaving {

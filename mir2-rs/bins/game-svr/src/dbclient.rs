@@ -363,6 +363,7 @@ impl DbReplies {
                 ReplyVerdict::TooShort => {}
                 other => {
                     self.load_db_error_count += 1;
+                    let _ = crate::telemetry::record_reply_verify_fail();
                     crate::glog!(
                         "WRN",
                         "DB 应答被拒（{other:?}）queryId={} —— 照 oracle 只累 LoadDBErrorCount（本条日志是本实现加的可观测性差异）",
@@ -372,6 +373,12 @@ impl DbReplies {
             }
         }
         accepted
+    }
+
+    /// 当前滞留的应答条数（排水后仍未被取走 ⇒ `fed 了但没进 attempt`）。
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.map.len()
     }
 
     /// 取走某个 query 的应答（`GetDataSrvMessage` `:32-48`：命中即从表里移除）。

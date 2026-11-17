@@ -59,6 +59,22 @@ static LAST_ENTER_MS: AtomicI64 = AtomicI64::new(-1);
 pub static LOADDB_REQUEST_SENT: AtomicU64 = AtomicU64::new(0);
 /// 写 6000 面失败次数（`run_db_link` 的 `write_all/flush` 失败 ⇒ 已排队的请求丢了）。
 pub static LOADDB_WRITE_ERROR: AtomicU64 = AtomicU64::new(0);
+/// **收到 logon 但没发出取档请求**的四条分支（卡 `openmir2-entry-gap-buckets`）：
+/// `logon_no_request_disconnected`（DB 链路未连）/ `_send_fail`（req_tx.send 失败）/
+/// `_zero_session`（`SessionID == 0` 被读档循环跳过）/ `_requeue`（角色数据保存中 ⇒ 重排队）。
+pub static LOGON_NO_REQUEST_DISCONNECTED: AtomicU64 = AtomicU64::new(0);
+/// 见 [`LOGON_NO_REQUEST_DISCONNECTED`]：`req_tx.send` 失败。
+pub static LOGON_NO_REQUEST_SEND_FAIL: AtomicU64 = AtomicU64::new(0);
+/// 见 [`LOGON_NO_REQUEST_DISCONNECTED`]：`SessionID == 0` 跳过。
+pub static LOGON_NO_REQUEST_ZERO_SESSION: AtomicU64 = AtomicU64::new(0);
+/// 见 [`LOGON_NO_REQUEST_DISCONNECTED`]：保存中重排队。
+pub static LOGON_NO_REQUEST_REQUEUE: AtomicU64 = AtomicU64::new(0);
+/// 6000 面应答**签名/长度校验不过**的帧数（`ReplyVerdict` 非 Accept 且非 TooShort）。
+pub static REPLY_VERIFY_FAIL: AtomicU64 = AtomicU64::new(0);
+/// 每轮取档排水后**仍滞留在应答表里**的应答数（取**历史最大值**）：它直接把
+/// 「fed 了但没进 attempt」的差值量化出来（qid 对不上/会话已摘）。
+pub static REPLY_PENDING_MAX: AtomicU64 = AtomicU64::new(0);
+
 /// 6000 面**断链重连**次数（成功建连但不是第一次；卡 `openmir2-db-link-request-drop`）。
 /// 与 `loaddb_request_sent`/`loaddb_write_error` 对读：重连前写成功的请求可能随旧连接一起丢。
 pub static DB_LINK_RECONNECT: AtomicU64 = AtomicU64::new(0);
@@ -114,6 +130,53 @@ pub fn record_loaddb_write_error() -> Option<String> {
     bump(&LOADDB_WRITE_ERROR)
 }
 
+/// 「收到 logon 但没发请求」的四条分支各记一次；整百 ⇒ 返回一行汇总。
+#[must_use]
+pub fn record_logon_no_request(bucket: LogonNoRequest) -> Option<String> {
+    match bucket {
+        LogonNoRequest::Disconnected => bump(&LOGON_NO_REQUEST_DISCONNECTED),
+        LogonNoRequest::SendFail => bump(&LOGON_NO_REQUEST_SEND_FAIL),
+        LogonNoRequest::ZeroSession => bump(&LOGON_NO_REQUEST_ZERO_SESSION),
+        LogonNoRequest::Requeue => bump(&LOGON_NO_REQUEST_REQUEUE),
+    }
+}
+
+/// [`record_logon_no_request`] 的分支枚举。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogonNoRequest {
+    /// DB 链路未连接（`drain_read_storage` 的闭包直接 None）。
+    Disconnected,
+    /// `req_tx.send` 失败（链路已断）。
+    SendFail,
+    /// `SessionID == 0`（读档循环跳过）。
+    ZeroSession,
+    /// 角色数据保存中 ⇒ 重排队。
+    Requeue,
+}
+
+/// 应答签名/长度校验不过 +1；整百 ⇒ 返回一行汇总。
+#[must_use]
+pub fn record_reply_verify_fail() -> Option<String> {
+    bump(&REPLY_VERIFY_FAIL)
+}
+
+/// 记录「排水后仍滞留在应答表里的应答数」（取历史最大值；>0 时返回一行汇总供日志）。
+#[must_use]
+pub fn record_reply_pending(pending: u64) -> Option<String> {
+    let mut cur = REPLY_PENDING_MAX.load(Relaxed);
+    while pending > cur {
+        match REPLY_PENDING_MAX.compare_exchange(cur, pending, Relaxed, Relaxed) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+    if pending == 0 {
+        None
+    } else {
+        Some(summary_line())
+    }
+}
+
 /// 6000 面重连 +1；整百 ⇒ 返回一行汇总。
 #[must_use]
 pub fn record_db_link_reconnect() -> Option<String> {
@@ -142,7 +205,7 @@ pub fn sample_load_reply_other() -> bool {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_no_request[disconnected={} send_fail={} zero_session={} requeue={}]          reply_verify_fail={} reply_pending_max={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -152,7 +215,13 @@ pub fn summary_line() -> String {
         LOADDB_REQUEST_SENT.load(Relaxed),
         LOADDB_REPLY_SEEN.load(Relaxed),
         LOADDB_WRITE_ERROR.load(Relaxed),
-        DB_LINK_RECONNECT.load(Relaxed)
+        DB_LINK_RECONNECT.load(Relaxed),
+        LOGON_NO_REQUEST_DISCONNECTED.load(Relaxed),
+        LOGON_NO_REQUEST_SEND_FAIL.load(Relaxed),
+        LOGON_NO_REQUEST_ZERO_SESSION.load(Relaxed),
+        LOGON_NO_REQUEST_REQUEUE.load(Relaxed),
+        REPLY_VERIFY_FAIL.load(Relaxed),
+        REPLY_PENDING_MAX.load(Relaxed)
     )
 }
 
@@ -209,6 +278,9 @@ mod tests {
             "loaddb_reply_seen=",
             "loaddb_write_error=",
             "db_link_reconnect=",
+            "logon_no_request[",
+            "reply_verify_fail=",
+            "reply_pending_max=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
@@ -265,6 +337,21 @@ mod tests {
             FIRST_ENTER_MS.load(Ordering::Relaxed),
             -1,
             "enter_ok 不得写首时间戳（两者基准不同）"
+        );
+    }
+
+    /// 滞留应答取**历史最大值**：5 之后来 3 不回落；0 不打印。
+    #[test]
+    fn reply_pending_tracks_max_and_prints_only_when_positive() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        REPLY_PENDING_MAX.store(0, Ordering::Relaxed);
+        assert!(record_reply_pending(0).is_none(), "0 不应打印");
+        assert!(record_reply_pending(5).is_some(), ">0 应打印");
+        assert!(record_reply_pending(3).is_some(), ">0 应打印");
+        assert_eq!(
+            REPLY_PENDING_MAX.load(Ordering::Relaxed),
+            5,
+            "必须保留历史最大值，不得回落"
         );
     }
 
