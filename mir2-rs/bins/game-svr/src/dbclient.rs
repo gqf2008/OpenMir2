@@ -355,6 +355,10 @@ impl DbReplies {
                             }
                         }
                     }
+                    if self.map.contains_key(&qid) {
+                        // 同一 qid 重复到达：表按 qid 覆盖 ⇒ 多出的那条会消失（卡 `openmir2-entry-gap-buckets`）
+                        let _ = crate::telemetry::record_reply_duplicate_qid();
+                    }
                     self.map.insert(qid, reply);
                     accepted.push(qid);
                 }
@@ -494,6 +498,44 @@ mod tests {
         frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
         frame.extend_from_slice(&body);
         frame
+    }
+
+    /// 同 qid 重复到达必须计一桶（表按 qid 覆盖 ⇒ 多出的应答会消失）。
+    #[test]
+    fn duplicate_qid_is_counted() {
+        use std::sync::atomic::Ordering;
+        let before = crate::telemetry::REPLY_DUPLICATE_QID.load(Ordering::Relaxed);
+        let mut r = DbReplies::new();
+        assert_eq!(
+            r.feed(&reply_frame(
+                21,
+                mir2_protocol::messages::DBR_LOADHUMANRCD,
+                1,
+                b"P",
+                false
+            )),
+            vec![21]
+        );
+        assert_eq!(
+            crate::telemetry::REPLY_DUPLICATE_QID.load(Ordering::Relaxed),
+            before,
+            "首次到达不得计重复"
+        );
+        assert_eq!(
+            r.feed(&reply_frame(
+                21,
+                mir2_protocol::messages::DBR_LOADHUMANRCD,
+                1,
+                b"Q",
+                false
+            )),
+            vec![21]
+        );
+        assert_eq!(
+            crate::telemetry::REPLY_DUPLICATE_QID.load(Ordering::Relaxed),
+            before + 1,
+            "同 qid 第二次到达必须计一桶"
+        );
     }
 
     /// 卡 `openmir2-entry-db-chain-counters` 的行为牙：**只在收到 `DBR_LOADHUMANRCD` 且签名通过时**

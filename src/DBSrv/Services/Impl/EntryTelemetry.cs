@@ -28,6 +28,7 @@ namespace DBSrv.Services.Impl
         private static long _dbSignReject;
         private static long _dbFailReply;
         private static long _dbBadRequestInfo;
+        private static long _dbLoadHumanRcdDecoded;
 
         private static long _requestSeen;
         private static long _respondedOk;
@@ -53,6 +54,13 @@ namespace DBSrv.Services.Impl
 
         /// <summary>6000 面：`Received` 收到但 RequestInfo 不是本适配器类型（静默丢弃点）。</summary>
         public static long DbBadRequestInfo() => Interlocked.Increment(ref _dbBadRequestInfo);
+
+        /// <summary>
+        /// 6000 面：**只数 `DB_LOADHUMANRCD`（取档请求）**的解码成功帧——这才是与 game-svr
+        /// `loaddb_request_sent` 可比的量；`db_conn_frames_decoded` 是**全部帧**（含存档请求/其它），
+        /// 两者差 = 同连接上的非取档帧（卡 `openmir2-entry-gap-buckets`）。
+        /// </summary>
+        public static long DbLoadHumanRcdDecoded() => Interlocked.Increment(ref _dbLoadHumanRcdDecoded);
 
         /// <summary>请求到达 +1，返回累计值（调用方用返回值判「每 100 个打一行」）。</summary>
         public static long LoadRequestSeen()
@@ -129,7 +137,7 @@ namespace DBSrv.Services.Impl
         /// <summary>四桶一行汇总（字段名固定，供日志侧机判）。</summary>
         public static string SummaryLine()
         {
-            return $"[EntryTelemetry] load_request_seen={Interlocked.Read(ref _requestSeen)} load_responded_ok={Interlocked.Read(ref _respondedOk)} load_responded_fail={Interlocked.Read(ref _respondedFail)} load_dropped_no_session={Interlocked.Read(ref _droppedNoSession)} db_conn_bytes_read={Interlocked.Read(ref _dbBytesRead)} db_conn_frames_decoded={Interlocked.Read(ref _dbFramesDecoded)} db_conn_parse_error={Interlocked.Read(ref _dbParseError)} db_conn_sign_reject={Interlocked.Read(ref _dbSignReject)} db_conn_fail_reply={Interlocked.Read(ref _dbFailReply)} db_conn_bad_request_info={Interlocked.Read(ref _dbBadRequestInfo)}";
+            return $"[EntryTelemetry] load_request_seen={Interlocked.Read(ref _requestSeen)} load_responded_ok={Interlocked.Read(ref _respondedOk)} load_responded_fail={Interlocked.Read(ref _respondedFail)} load_dropped_no_session={Interlocked.Read(ref _droppedNoSession)} db_conn_bytes_read={Interlocked.Read(ref _dbBytesRead)} db_conn_frames_decoded={Interlocked.Read(ref _dbFramesDecoded)} db_conn_parse_error={Interlocked.Read(ref _dbParseError)} db_conn_sign_reject={Interlocked.Read(ref _dbSignReject)} db_conn_fail_reply={Interlocked.Read(ref _dbFailReply)} db_conn_bad_request_info={Interlocked.Read(ref _dbBadRequestInfo)} db_conn_loadhumanrcd_decoded={Interlocked.Read(ref _dbLoadHumanRcdDecoded)}";
         }
 
         /// <summary>测试专用：清零全部计数（生产路径不调用）。</summary>
@@ -147,6 +155,7 @@ namespace DBSrv.Services.Impl
             Interlocked.Exchange(ref _dbSignReject, 0);
             Interlocked.Exchange(ref _dbFailReply, 0);
             Interlocked.Exchange(ref _dbBadRequestInfo, 0);
+            Interlocked.Exchange(ref _dbLoadHumanRcdDecoded, 0);
             Interlocked.Exchange(ref _lastHeartbeatTick, 0);
             _lastSummary = null;
         }

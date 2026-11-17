@@ -81,6 +81,7 @@ public class DbLinkTelemetryTest
                  {
                      "db_conn_bytes_read=100", "db_conn_frames_decoded=1", "db_conn_parse_error=1",
                      "db_conn_sign_reject=1", "db_conn_fail_reply=1", "db_conn_bad_request_info=1",
+                     "db_conn_loadhumanrcd_decoded=0",
                  })
         {
             Assert.That(line, Does.Contain(key), $"汇总行缺/错 {key}: {line}");
@@ -129,7 +130,7 @@ public class DbLinkTelemetryTest
     public void DataServiceCallsEachDbCounterExactlyOnceInItsBranch()
     {
         var src = DataServiceSource();
-        foreach (var c in new[] { "DbFramesDecoded", "AddDbBytesRead", "DbParseError", "DbSignReject", "DbFailReply", "DbBadRequestInfo" })
+        foreach (var c in new[] { "DbFramesDecoded", "AddDbBytesRead", "DbParseError", "DbSignReject", "DbFailReply", "DbBadRequestInfo", "DbLoadHumanRcdDecoded" })
         {
             var needle = string.Concat("EntryTelemetry.", c, "(");
             Assert.That(Count(src, needle), Is.EqualTo(1), $"{needle} 必须恰好一个调用点");

@@ -117,6 +117,11 @@ namespace DBSrv.Services.Impl
         {
             int queryId = requestData.QueryId;
             ServerRequestMessage requestMessage = SerializerUtil.Deserialize<ServerRequestMessage>(EDCode.DecodeBuff(requestData.Message));
+            // **只数取档请求**（与 game-svr `loaddb_request_sent` 可比的量）
+            if (requestMessage.Ident == Messages.DB_LOADHUMANRCD)
+            {
+                EntryTelemetry.DbLoadHumanRcdDecoded();
+            }
             int packetLen = requestData.Message.Length + requestData.Packet.Length + ServerDataPacket.FixedHeaderLen;
             if (packetLen >= Messages.DefBlockSize && queryId > 0 && requestData.Packet != null && requestData.Sign != null)
             {

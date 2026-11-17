@@ -69,6 +69,17 @@ pub static LOGON_NO_REQUEST_SEND_FAIL: AtomicU64 = AtomicU64::new(0);
 pub static LOGON_NO_REQUEST_ZERO_SESSION: AtomicU64 = AtomicU64::new(0);
 /// 见 [`LOGON_NO_REQUEST_DISCONNECTED`]：保存中重排队。
 pub static LOGON_NO_REQUEST_REQUEUE: AtomicU64 = AtomicU64::new(0);
+/// **logon 处理函数入口**（`GateEvent::LoadDbRequest` 臂首行）：恒等式
+/// `logon_handler_enter == loaddb_request_sent + Σ(logon_no_request_*)`（**无重排队时**成立；
+/// `RequeueSaving` 会把同一次 logon 再处理一遍，此时按「每遍处理」计）。
+pub static LOGON_HANDLER_ENTER: AtomicU64 = AtomicU64::new(0);
+/// 「收到 logon 但没发请求」分支⑤：`db` 装配缺失（`drain_read_storage(|_| None)` 直接踢）。
+pub static LOGON_NO_REQUEST_NO_DB_LINK: AtomicU64 = AtomicU64::new(0);
+/// 取档循环里**被取走但 ident 不是 `DBR_LOADHUMANRCD`** 的应答数（原静默丢弃）。
+pub static REPLY_IDENT_OTHER: AtomicU64 = AtomicU64::new(0);
+/// `feed` 时同一 query_id **重复到达**（表按 qid 覆盖 ⇒ 多出的应答消失）的次数。
+pub static REPLY_DUPLICATE_QID: AtomicU64 = AtomicU64::new(0);
+
 /// 6000 面应答**签名/长度校验不过**的帧数（`ReplyVerdict` 非 Accept 且非 TooShort）。
 pub static REPLY_VERIFY_FAIL: AtomicU64 = AtomicU64::new(0);
 /// 每轮取档排水后**仍滞留在应答表里**的应答数（取**历史最大值**）：它直接把
@@ -128,6 +139,30 @@ pub fn record_loaddb_request_sent() -> Option<String> {
 #[must_use]
 pub fn record_loaddb_write_error() -> Option<String> {
     bump(&LOADDB_WRITE_ERROR)
+}
+
+/// logon 处理函数入口 +1。
+#[must_use]
+pub fn record_logon_handler_enter() -> Option<String> {
+    bump(&LOGON_HANDLER_ENTER)
+}
+
+/// 「收到 logon 但没发请求」分支⑤：`db` 未装配。
+#[must_use]
+pub fn record_logon_no_db_link() -> Option<String> {
+    bump(&LOGON_NO_REQUEST_NO_DB_LINK)
+}
+
+/// 取走但 ident 不是取档应答 +1。
+#[must_use]
+pub fn record_reply_ident_other() -> Option<String> {
+    bump(&REPLY_IDENT_OTHER)
+}
+
+/// 同一 qid 的重复应答 +1。
+#[must_use]
+pub fn record_reply_duplicate_qid() -> Option<String> {
+    bump(&REPLY_DUPLICATE_QID)
 }
 
 /// 「收到 logon 但没发请求」的四条分支各记一次；整百 ⇒ 返回一行汇总。
@@ -205,7 +240,7 @@ pub fn sample_load_reply_other() -> bool {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_no_request[disconnected={} send_fail={} zero_session={} requeue={}]          reply_verify_fail={} reply_pending_max={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={}          reply_verify_fail={} reply_pending_max={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -216,10 +251,14 @@ pub fn summary_line() -> String {
         LOADDB_REPLY_SEEN.load(Relaxed),
         LOADDB_WRITE_ERROR.load(Relaxed),
         DB_LINK_RECONNECT.load(Relaxed),
+        LOGON_HANDLER_ENTER.load(Relaxed),
         LOGON_NO_REQUEST_DISCONNECTED.load(Relaxed),
         LOGON_NO_REQUEST_SEND_FAIL.load(Relaxed),
         LOGON_NO_REQUEST_ZERO_SESSION.load(Relaxed),
         LOGON_NO_REQUEST_REQUEUE.load(Relaxed),
+        LOGON_NO_REQUEST_NO_DB_LINK.load(Relaxed),
+        REPLY_IDENT_OTHER.load(Relaxed),
+        REPLY_DUPLICATE_QID.load(Relaxed),
         REPLY_VERIFY_FAIL.load(Relaxed),
         REPLY_PENDING_MAX.load(Relaxed)
     )
@@ -278,7 +317,11 @@ mod tests {
             "loaddb_reply_seen=",
             "loaddb_write_error=",
             "db_link_reconnect=",
+            "logon_handler_enter=",
             "logon_no_request[",
+            "no_db_link=",
+            "reply_ident_other=",
+            "reply_duplicate_qid=",
             "reply_verify_fail=",
             "reply_pending_max=",
         ] {
