@@ -26511,6 +26511,20 @@ fn sim_loop(
                 summary.elapsed.as_millis()
             );
             // **入口三段终值**（卡 `openmir2-game-svr-entry-triple`）：关服前补一行。
+            // **在飞量断言**（卡 `openmir2-entry-gap-buckets`）：关服后不应还有守卫活着；
+            // 不为 0 说明有条目真被卡住——**在飞不是丢失**，两个概念不能混写。
+            let logon_in_flight = telemetry::logon_in_flight();
+            let reply_in_flight = telemetry::reply_in_flight();
+            if logon_in_flight != 0 || reply_in_flight != 0 {
+                glog!(
+                    "WRN",
+                    "ENTRY_IN_FLIGHT_AT_SHUTDOWN logon_in_flight={} reply_in_flight={} load_list={} load_temp={}",
+                    logon_in_flight,
+                    reply_in_flight,
+                    engine.load_list_len(),
+                    engine.load_temp_len()
+                );
+            }
             glog!("INF", "{}", telemetry::summary_line());
             let _ = shutdown_done_tx.send(summary);
             return;
@@ -92413,6 +92427,24 @@ mod entry_telemetry_wiring {
         assert!(
             window(LD, i, 900).contains("record_logon_disconnect_drop("),
             "断线抢占摘掉的未排水 logon 必须计数（且计入 exit_total）"
+        );
+    }
+
+    /// 在飞量必须：①排水结束处采样峰值；②关服终值处显式断言并打印细节。
+    #[test]
+    fn in_flight_is_sampled_and_asserted_at_shutdown() {
+        assert!(
+            LD.contains("record_logon_in_flight_sample("),
+            "排水结束处必须采样在飞峰值"
+        );
+        let marker = format!("ENTRY_IN_FLIGHT_AT_{}", "SHUTDOWN");
+        assert!(
+            SRC.contains(&marker),
+            "关服终值处必须显式打印在飞量（不为 0 时）"
+        );
+        assert!(
+            SRC.contains("logon_in_flight()") && SRC.contains("reply_in_flight()"),
+            "两侧在飞量都要取"
         );
     }
 

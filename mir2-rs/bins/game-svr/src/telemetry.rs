@@ -90,6 +90,8 @@ pub static LOGON_EXIT_UNCOUNTED: AtomicU64 = AtomicU64::new(0);
 pub static LOGON_PENDING_LISTS_MAX: AtomicU64 = AtomicU64::new(0);
 /// 应答**存进表**的次数（只数取档应答）：`reply_seen == reply_stored` 应恒成立。
 pub static REPLY_STORED: AtomicU64 = AtomicU64::new(0);
+/// `logon_in_flight` 的历史峰值（在**排水结束处**采样；守卫活着 = 该条目正在被处理）。
+pub static LOGON_IN_FLIGHT_MAX: AtomicU64 = AtomicU64::new(0);
 /// 断线抢占：`FrontEngine::delete_human` 把**尚未排水**的 logon 从 load/temp 两个缓冲里摘掉的条数。
 pub static LOGON_EXIT_DISCONNECT_DROP: AtomicU64 = AtomicU64::new(0);
 /// **应答表移除**计数（只数 `DBR_LOADHUMANRCD`）：`DbReplies::take` 取走条目时 +1。
@@ -169,6 +171,39 @@ pub fn record_logon_disconnect_drop(n: u64) {
 /// 应答存进表 +1（「记到」≠「存进表」，分开计）。
 pub fn record_reply_stored() {
     REPLY_STORED.fetch_add(1, Relaxed);
+}
+
+/// **在飞量**：`enter − exit_total`。>0 = 有守卫还活着（条目正在处理，或处理被卡住）；
+/// **不等于丢失**。终值行应把它打到 0（关服后无处理在飞）。
+#[must_use]
+pub fn logon_in_flight() -> i64 {
+    let enter = LOGON_HANDLER_ENTER.load(Relaxed);
+    let exit = LOGON_HANDLER_EXIT_TOTAL.load(Relaxed);
+    i64::try_from(enter).unwrap_or(i64::MAX) - i64::try_from(exit).unwrap_or(i64::MAX)
+}
+
+/// **应答在飞量**：`stored − consumed`（>0 = 应答已入表但还没被取走）。
+#[must_use]
+pub fn reply_in_flight() -> i64 {
+    let stored = REPLY_STORED.load(Relaxed);
+    let consumed = REPLY_CONSUMED.load(Relaxed);
+    i64::try_from(stored).unwrap_or(i64::MAX) - i64::try_from(consumed).unwrap_or(i64::MAX)
+}
+
+/// 在排水结束处采样 `logon_in_flight` 的峰值。
+pub fn record_logon_in_flight_sample() {
+    let v = logon_in_flight();
+    if v <= 0 {
+        return;
+    }
+    let v = u64::try_from(v).unwrap_or(0);
+    let mut cur = LOGON_IN_FLIGHT_MAX.load(Relaxed);
+    while v > cur {
+        match LOGON_IN_FLIGHT_MAX.compare_exchange(cur, v, Relaxed, Relaxed) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
 }
 
 /// 记录读档缓冲里的滞留条数（取历史最大值）。
@@ -336,7 +371,7 @@ pub fn sample_load_reply_other() -> bool {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -352,6 +387,9 @@ pub fn summary_line() -> String {
         LOGON_EXIT_UNCOUNTED.load(Relaxed),
         LOGON_EXIT_DISCONNECT_DROP.load(Relaxed),
         LOGON_PENDING_LISTS_MAX.load(Relaxed),
+        logon_in_flight(),
+        LOGON_IN_FLIGHT_MAX.load(Relaxed),
+        reply_in_flight(),
         LOGON_NO_REQUEST_DISCONNECTED.load(Relaxed),
         LOGON_NO_REQUEST_SEND_FAIL.load(Relaxed),
         LOGON_NO_REQUEST_ZERO_SESSION.load(Relaxed),
@@ -429,6 +467,12 @@ mod tests {
             "logon_exit_uncounted=",
             "logon_disconnect_drop=",
             "logon_pending_lists_max=",
+            "logon_in_flight=",
+            "logon_in_flight_max=",
+            "reply_in_flight=",
+            "logon_in_flight=",
+            "logon_in_flight_max=",
+            "reply_in_flight=",
             "reply_stored=",
             "reply_consumed=",
             "reply_matched=",
@@ -540,6 +584,31 @@ mod tests {
             before_unc + 1,
             "标注过的出口不得计入 Uncounted"
         );
+    }
+
+    /// **在飞量 = enter − exit_total / stored − consumed**：直接是差值（删掉减法或写死 0 ⇒ 红）。
+    #[test]
+    fn in_flight_is_derived_from_counters() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        LOGON_HANDLER_ENTER.store(10, Ordering::Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.store(7, Ordering::Relaxed);
+        assert_eq!(
+            logon_in_flight(),
+            3,
+            "logon_in_flight 必须是 enter − exit_total"
+        );
+        REPLY_STORED.store(5, Ordering::Relaxed);
+        REPLY_CONSUMED.store(2, Ordering::Relaxed);
+        assert_eq!(
+            reply_in_flight(),
+            3,
+            "reply_in_flight 必须是 stored − consumed"
+        );
+        // 复位，别污染其它用例
+        LOGON_HANDLER_ENTER.store(0, Ordering::Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.store(0, Ordering::Relaxed);
+        REPLY_STORED.store(0, Ordering::Relaxed);
+        REPLY_CONSUMED.store(0, Ordering::Relaxed);
     }
 
     /// 三个计数器互相独立：动一个不许动另一个（同族「删任一计数 ⇒ 对应断言红」的前提）。

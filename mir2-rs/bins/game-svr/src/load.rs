@@ -99,6 +99,18 @@ impl FrontEngine {
         removed
     }
 
+    /// 读档缓冲长度（只读诊断用）。
+    #[must_use]
+    pub fn load_list_len(&self) -> usize {
+        self.load_list.len()
+    }
+
+    /// swap 后暂存缓冲长度（只读诊断用）。
+    #[must_use]
+    pub fn load_temp_len(&self) -> usize {
+        self.load_temp.len()
+    }
+
     /// `InSaveRcdList`（`:156-176`）：**OrdinalIgnoreCase** 比较。
     #[must_use]
     pub fn in_save_rcd_list(&self, chr_name: &str) -> bool {
@@ -201,6 +213,7 @@ impl FrontEngine {
         crate::telemetry::record_logon_pending(
             (self.load_list.len() + self.load_temp.len()) as u64,
         );
+        crate::telemetry::record_logon_in_flight_sample();
         actions // temp 已被 take ⇒ 等价于 `ClearLoadRcdTempList`（`:145`）
     }
 }
