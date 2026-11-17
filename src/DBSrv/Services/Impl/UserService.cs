@@ -61,7 +61,11 @@ namespace DBSrv.Services.Impl
             for (int i = 0; i < _gateClients.Length; i++)
             {
                 SelGateInfo gateInfo = _gateClients[i];
-                if (gateInfo != null)
+                // **幂等化**（卡 `openmir2-db-link-request-drop`，关服时序缺陷 B）：`StopAsync` 可能被
+                // `Program.Main` 的 `cts.Token.Register(...)` 与 Host 的优雅关服各调一次；首次调用已把
+                // `UserList` 置 null，第二次解引用 `.Count` 抛 NRE ⇒ 打断 teardown（并在关服窗口诱发
+                // 接收线程与拆解竞态）。判空后跳过即可，行为等价。
+                if (gateInfo?.UserList != null)
                 {
                     for (int ii = 0; ii < gateInfo.UserList.Count; ii++)
                     {

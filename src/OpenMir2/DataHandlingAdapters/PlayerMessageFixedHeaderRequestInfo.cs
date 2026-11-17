@@ -11,9 +11,8 @@ namespace OpenMir2.DataHandlingAdapters
         /// </summary>
         public override int HeaderLength => 6;
 
-        private static readonly PlayerDataMessageFixedHeaderRequestInfo instance = new PlayerDataMessageFixedHeaderRequestInfo();
-
-        private static PlayerDataMessageFixedHeaderRequestInfo Instance => instance;
+        // 工厂语义：每次取实例都必须是新对象（卡 `openmir2-db-link-request-drop`）——
+        // 原先返回 static 单例，`_header/_bodyLength/_message` 会被下一帧覆盖 ⇒ 帧边界串台。
 
         /// <summary>
         /// 获取新实例
@@ -21,7 +20,7 @@ namespace OpenMir2.DataHandlingAdapters
         /// <returns></returns>
         protected override PlayerDataMessageFixedHeaderRequestInfo GetInstance()
         {
-            return Instance;
+            return new PlayerDataMessageFixedHeaderRequestInfo();
         }
     }
 
@@ -47,7 +46,8 @@ namespace OpenMir2.DataHandlingAdapters
 
         public bool OnParsingBody(byte[] body)
         {
-            this._message = body;
+            // 拷贝：即使上层复用传入数组，回调拿到的也是独立副本（第二道防线）。
+            this._message = body.Length == 0 ? System.Array.Empty<byte>() : (byte[])body.Clone();
             return true;
         }
     }

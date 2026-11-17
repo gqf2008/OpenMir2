@@ -54,15 +54,25 @@ namespace DBSrv.Services.Impl
         {
             if (e.RequestInfo is not PlayerDataMessageFixedHeaderRequestInfo fixedHeader)
             {
+                // **静默丢弃点 1**（卡 `openmir2-db-link-request-drop`）：原来这里零日志零计数。
+                EntryTelemetry.DbBadRequestInfo();
                 return Task.CompletedTask;
             }
 
             if (fixedHeader.Header.PacketCode != Grobal2.PacketCode)
             {
+                EntryTelemetry.DbParseError();
                 LogService.Error("验证玩家数据封包头出现异常...");
                 return Task.CompletedTask;
             }
             SocketClient clientSoc = (SocketClient)client;
+            // 6000 面帧级观测：body 字节累计 + 解出帧数（每 100 帧打一行四桶+六桶汇总）
+            EntryTelemetry.AddDbBytesRead(fixedHeader.Message.Length);
+            long dbFrames = EntryTelemetry.DbFramesDecoded();
+            if (dbFrames % 100 == 0)
+            {
+                LogService.Info(EntryTelemetry.SummaryLine());
+            }
             ServerRequestData messageData = SerializerUtil.Deserialize<ServerRequestData>(fixedHeader.Message);
             ProcessMessagePacket(clientSoc.Id, messageData);
             return Task.CompletedTask;
@@ -113,6 +123,7 @@ namespace DBSrv.Services.Impl
                     ProcessServerMsg(queryId, requestMessage, sData, connectionId);
                     return;
                 }
+                EntryTelemetry.DbSignReject();
                 if (_serverSocket.TryGetSocketClient(connectionId, out SocketClient client))
                 {
                     client.Close();
@@ -120,6 +131,7 @@ namespace DBSrv.Services.Impl
                 LogService.Error($"关闭错误的任务{queryId}查询请求.");
                 return;
             }
+            EntryTelemetry.DbFailReply();
             ServerRequestData responsePack = new ServerRequestData();
             ServerRequestMessage messagePacket = new ServerRequestMessage(Messages.DBR_FAIL, 0, 0, 0, 0);
             responsePack.Message = EDCode.EncodeBuffer(SerializerUtil.Serialize(messagePacket));

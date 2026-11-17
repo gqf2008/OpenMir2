@@ -399,11 +399,19 @@ pub async fn run_db_link(
     mut req_rx: mpsc::UnboundedReceiver<Vec<u8>>,
     replies: Arc<std::sync::Mutex<DbReplies>>,
 ) {
+    let mut connect_count: u64 = 0;
     loop {
         match tokio::net::TcpStream::connect((db_addr.as_str(), db_port)).await {
             Ok(sock) => {
                 sock.set_nodelay(true).ok();
                 state.set(true);
+                connect_count += 1;
+                if connect_count > 1 {
+                    // 断链重连：上一轮写成功的请求可能随旧连接一起丢（卡 `openmir2-db-link-request-drop`）
+                    if let Some(line) = crate::telemetry::record_db_link_reconnect() {
+                        crate::glog!("INF", "{}", line);
+                    }
+                }
                 crate::glog!("INF", "数据库服务器[{db_addr}:{db_port}]连接成功...");
                 // 收半边：分帧 + 签名判定 + 入查询表（`DataQueryServer.ProcessServerPacket/ProcessServerData`）
                 let (mut rd, mut wr) = sock.into_split();
