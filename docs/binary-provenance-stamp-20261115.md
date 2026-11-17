@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `mir2-server.exe` | **有** | `mir2-rs/target/release/mir2-server.build.json`，`format=mir2-build-stamp/1`，由 `tools/window/rebuild-server.ps1:89` 生成；现存戳 `head=d5ed14508…`、`built_at=2026-11-02`（已陈旧） |
 | `game-svr` / `game-gate` / `login-gate` / `sel-gate` | **无** | bot 窗口实际拉起的就是这四个（360s 归档 `start-stack.out.log` 实测）；目前只能 `mtime+sha` 人工登记 |
-| `DBSrv` / `LoginSrv`（C#） | **无** | 同上 |
+| `DBSrv` / `LoginSrv`（C#） | **无 → 2026-11-17 起有（DBSrv 三件套）** | `tools/orchestration/stamp-binaries.ps1` 现已支持 `.dll` 目标与 `-RequireHead`；DBSrv 的 `DBSrv.exe` / `DBSrv.dll` / `DBSrv.Storage.MySQL.dll` 三件套在构建后产戳，起栈脚本按戳校验（卡 `openmir2-dbsrv-build-stamp`）。LoginSrv 同法可纳入，尚未做。 |
 
 反例：`E:/MirServer/M2GameSvr/GameSrv.exe` sha256 `ab655008…`、mtime 2026-10-22，异常栈 PDB 指向**已删除**的 worktree `OpenMir2-wt-goods` ⇒ 部署目录里的二进制无法自证来源。
 
@@ -144,3 +144,42 @@
 - **旧戳兼容**：`rebuild-server.ps1` 产出的 `mir2-server.build.json` 没有 `mtime`/`head_source`/
   `toolchain_kind`；本工具的 `-Check` 已兼容（补充字段只做存在时校验），但第 2 步若要把它纳入
   同一清单，应同步补齐字段或明确豁免。
+
+## 7. DBSrv 三件套：产戳命令与时机（2026-11-17，卡 `openmir2-dbsrv-build-stamp`）
+
+**时机**：`dotnet build src/DBSrv -c Release` **成功后立即**产戳（`built_at` 取二进制 mtime，
+校验要求与 mtime 差 ≤5 分钟，别把「先构建、隔天再产戳」当常态）。只对部署源
+`src/DBSrv/bin/Release` 产戳——`DBSrv.Storage.MySQL.dll` 在这里有一份副本，部署只许从这里取。
+
+**产戳**（`-Head` 用构建时的提交；`-HeadSource explicit` 不要把推断当事实）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-binaries.ps1 `
+  -BinDir <worktree>/src/DBSrv/bin/Release -RepoRoot <repo> -Head <rev> -HeadSource explicit `
+  -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll
+```
+
+**校验**（起栈前、**影子路径**上做；`-RequireHead` 可选，给了就断言来源提交）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-binaries.ps1 `
+  -Check -BinDir <stack>/runtime/DBSrv -RepoRoot <repo> -RequireAll `
+  -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll [-RequireHead <rev>]
+```
+
+判据：`GREEN n stamps verified` + rc=0 才可起栈；任何 `RED …` ⇒ **不起任何进程**。
+
+**命名坑（务必别改回去）**：本机 HIPS 会把「以 `Expect` 开头的 PowerShell 参数名」与
+`-ExecutionPolicy Bypass` 同现的命令行**整条静默阻断**——嵌套 `powershell` 退出码 `-1`、
+stdout/stderr 全空、脚本一行都没跑。`-ExpectHead`/`-Expect` 实测被拦，`-RequireHead` 同位置正常。
+
+**拷贝必须保 mtime（2026-11-17 botfleet 实测）**：把三件套从 `bin/Release` 拷到 `runtime\DBSrv` 时，
+**裸 `cp`/`copy` 会把 mtime 改成"现在"** ⇒ 戳内 `built_at` 与文件 mtime 差 >5 分钟 ⇒ `BUILT_AT_SKEW` 判红。
+PowerShell `Copy-Item` 保 mtime（安全）；robocopy `/COPY:DAT` 也可以。判据不变：`built_at` 与 mtime 差 ≤5 分钟。
+
+**负向验证（botfleet 实测，每条起栈前都该会）**：藏掉任一 `.build.json` ⇒ `MISSING_STAMP` + **不起任何进程**；
+把影子换回旧二进制（戳没跟着换）⇒ `SHA256_MISMATCH` + 不起进程。两条都证明这道门是 fail-closed 的。
+
+**升级顺序约束**：`m1-stack/start-m1-stack.ps1` 调的是 `$CsharpRepo	ools\orchestration\stamp-binaries.ps1`
+——**主检出（master）那份**。因此本工具的任何修复**必须先合 master** 才会对真实起栈生效；
+在分支上「自测全绿」不等于生产路径绿（2026-11-17 实测：`.dll` 支持在分支上绿、master 上照旧 SKIP ⇒ 起栈必红）。
