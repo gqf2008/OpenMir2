@@ -106,9 +106,19 @@ pub static REPLY_MATCHED: AtomicU64 = AtomicU64::new(0);
 
 /// 6000 面应答**签名/长度校验不过**的帧数（`ReplyVerdict` 非 Accept 且非 TooShort）。
 pub static REPLY_VERIFY_FAIL: AtomicU64 = AtomicU64::new(0);
-/// 每轮取档排水后**仍滞留在应答表里**的应答数（取**历史最大值**）：它直接把
+/// **每轮 tick 顶部**采样的「仍滞留在应答表里」的应答数（取**历史最大值**）：它直接把
 /// 「fed 了但没进 attempt」的差值量化出来（qid 对不上/会话已摘）。
+///
+/// 采样点必须在 tick 循环顶部（卡 `openmir2-tick-starvation`）：它原先只在应答排水块里采，
+/// 而那个块位于事件排水之后——事件排水被饿死时它永不执行，读数会停在陈旧值。
 pub static REPLY_PENDING_MAX: AtomicU64 = AtomicU64::new(0);
+
+/// **事件排水累计取走条数**（卡 `openmir2-tick-starvation`）：每轮 tick 从 `ev_rx` 取走一条 +1。
+/// 与 [`DRAIN_BUDGET_HIT`] 对读：没有预算时它会在**同一次 tick 内**无限增长（tick 永不返回）。
+pub static DRAIN_EVENTS_DRAINED: AtomicU64 = AtomicU64::new(0);
+/// **事件排水因预算被截断的轮次数**（卡 `openmir2-tick-starvation`）：>0 = 本轮还有事件留在
+/// 通道里、被延后到下一轮。它与 `world.clock_ms` 对读：截断而时钟仍前进 = 预算生效。
+pub static DRAIN_BUDGET_HIT: AtomicU64 = AtomicU64::new(0);
 
 /// 6000 面**断链重连**次数（成功建连但不是第一次；卡 `openmir2-db-link-request-drop`）。
 /// 与 `loaddb_request_sent`/`loaddb_write_error` 对读：重连前写成功的请求可能随旧连接一起丢。
@@ -367,6 +377,20 @@ pub fn record_reply_pending(pending: u64) -> Option<String> {
     }
 }
 
+/// 事件排水从通道取走一条 +1（调用点唯一：sim 侧带预算排水器的取事件处）。
+/// 无打印：它每 tick 都要动，汇总行里给累计值即可。
+pub fn record_drain_event_drained() {
+    DRAIN_EVENTS_DRAINED.fetch_add(1, Relaxed);
+}
+
+/// 本轮事件排水**因条数/墙钟预算被截断** +1；整百 ⇒ 返回一行汇总（调用方按 WRN 打）。
+///
+/// 用 [`bump`] 的节流：预算被触达可能是常态（高负载档每轮都触达），逐轮打会刷屏。
+#[must_use]
+pub fn record_drain_budget_hit() -> Option<String> {
+    bump(&DRAIN_BUDGET_HIT)
+}
+
 /// 6000 面重连 +1；整百 ⇒ 返回一行汇总。
 #[must_use]
 pub fn record_db_link_reconnect() -> Option<String> {
@@ -425,7 +449,7 @@ pub(crate) fn reset_final_line_once_for_tests() {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -456,7 +480,9 @@ pub fn summary_line() -> String {
         REPLY_CONSUMED.load(Relaxed),
         REPLY_MATCHED.load(Relaxed),
         REPLY_VERIFY_FAIL.load(Relaxed),
-        REPLY_PENDING_MAX.load(Relaxed)
+        REPLY_PENDING_MAX.load(Relaxed),
+        DRAIN_EVENTS_DRAINED.load(Relaxed),
+        DRAIN_BUDGET_HIT.load(Relaxed)
     )
 }
 
@@ -531,6 +557,8 @@ mod tests {
             "reply_matched=",
             "reply_verify_fail=",
             "reply_pending_max=",
+            "drain_events_drained=",
+            "drain_budget_hit=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
@@ -602,6 +630,43 @@ mod tests {
             REPLY_PENDING_MAX.load(Ordering::Relaxed),
             5,
             "必须保留历史最大值，不得回落"
+        );
+    }
+
+    /// **事件排水两个计数**（卡 `openmir2-tick-starvation`）：
+    /// - 退化形态「空集」（0 次调用）：两个计数都不变、不打印；
+    /// - `drain_events_drained` 每次调用严格 +1，且从不打印（打印由汇总行承担）；
+    /// - `drain_budget_hit` 按 [`PRINT_EVERY`] 节流：任意连续 `PRINT_EVERY` 次里恰好一行
+    ///   （与起始相位无关），即预算每轮触达也不会逐轮刷屏。
+    #[test]
+    fn drain_counters_count_and_throttle() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        // 退化形态：不调用 ⇒ 读数不变（任何「初始化即非零」的接线都会在这里露馅）。
+        let before_drained = DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed);
+        let before_hit = DRAIN_BUDGET_HIT.load(Ordering::Relaxed);
+        assert_eq!(DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed), before_drained);
+        assert_eq!(DRAIN_BUDGET_HIT.load(Ordering::Relaxed), before_hit);
+
+        // 单条 +1（不打印：函数返回 ()，没有日志出口）。
+        record_drain_event_drained();
+        assert_eq!(
+            DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed),
+            before_drained + 1,
+            "每取走一条必须 +1"
+        );
+
+        // 节流：连续 PRINT_EVERY 次里恰好一次返回汇总行。
+        let mut printed = 0;
+        for _ in 0..PRINT_EVERY {
+            if record_drain_budget_hit().is_some() {
+                printed += 1;
+            }
+        }
+        assert_eq!(printed, 1, "每 {PRINT_EVERY} 次截断只许一行");
+        assert_eq!(
+            DRAIN_BUDGET_HIT.load(Ordering::Relaxed),
+            before_hit + PRINT_EVERY,
+            "每次截断都必须计数（打印可以节流，计数不能）"
         );
     }
 
