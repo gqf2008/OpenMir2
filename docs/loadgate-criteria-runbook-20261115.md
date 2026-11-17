@@ -172,6 +172,20 @@ powershell -ExecutionPolicy Bypass -File tools/botload/load_gate.ps1 `
   -Tiers '200,500,1000' -HoldSec 360 -RestartStackPerTier -OutDir 'E:\UserFleet\load-<时间戳>'
 ```
 
+### 4.1.1 开窗冻结（硬约束，2026-11-17 定）
+
+窗口期内**禁止任何 dotnet / cargo 构建**（含 `--no-incremental` 重建、`cargo build`、`cargo clean` 后的重建）：
+
+- C# 程序集内嵌 `SourceRevisionId`（构建时的 git HEAD）；任何一次重建都会改写二进制内容与 mtime，
+  并可能把内嵌 revision 换成新的 HEAD；
+- 戳的 `built_at` 取自文件 mtime；重建后同一份戳立即失效；
+- ⇒ `stamp head == 内嵌 revision == 文件 sha/mtime` 这一组三元组整体漂移：轻则起栈 provenance 校验判红，重则带着
+  「戳与二进制脱节」跑完整个窗口（2026-11-17 已发生过一次：父提交构建 + 新 head 产戳）。
+
+**正确顺序**：先落全部代码/工具改动 → 在**最终 head** 上构建（C# 两项目 `--no-incremental`、Rust `cargo clean -p` 后重建）
+→ 产出并校验戳（`stamp -Check` + 三路对齐含内嵌判据）→ 开窗。窗口之后若要再改：新 head 上**整套重做**
+（重建 + 重产戳 + 重跑对齐），不允许只改戳不改二进制。
+
 ### 4.2 写结论时必须带的四项
 
 | 字段 | 来源 | 说明 |
