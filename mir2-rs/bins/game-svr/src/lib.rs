@@ -94086,8 +94086,12 @@ mod tick_starvation {
     /// 已摘掉该会话 ⇒ 广播**零入队**、`downlink_skipped_by_tombstone_total` **不变**
     /// （墓碑兜底一次都没触发）。
     ///
-    /// 变异：把优先级关掉 ⇒ 本轮 2000 条全是命令、关闭没被处理 ⇒ 在线表仍有该会话 ⇒
-    /// 广播产出 1 帧 ⇒ 本用例红（此时只剩墓碑兜底）。
+    /// 前提建模（与 sim 的事件处理进度**无关**）：网关侧在客户端断开时就已经关掉该槽 ⇒ 这里先用
+    /// **生产函数** [`downlink_slot`]（super::downlink_slot）在空 `UserList` 上打一颗墓碑
+    /// （= 最后一公里的登记点）。于是：
+    /// - 修复后：关闭事件本轮被处理 ⇒ 在线表已无该会话 ⇒ 广播**根本不路由**它 ⇒ skipped Δ=0；
+    /// - 关掉优先级（变异）：关闭排到 10 万命令之后、本轮处理不到 ⇒ 在线表仍有它 ⇒ 广播命中
+    ///   墓碑 ⇒ **skipped Δ>0**（实测 1，见失败断言原文）——帧靠墓碑兜住，但关闭本身已迟到。
     #[test]
     fn priority_alone_removes_session_before_next_broadcast_without_tombstone() {
         let _g = crate::telemetry::TEST_LOCK
@@ -94103,12 +94107,18 @@ mod tick_starvation {
         }
         // 在线登记（世界侧）：一个会话，网关线 line / socket。
         let mut online: Vec<i32> = vec![socket];
-        let (gtx, mut grx) = tokio::sync::mpsc::unbounded_channel();
+        let (gtx, _grx) = tokio::sync::mpsc::unbounded_channel();
         let mut gates: std::collections::HashMap<
             u8,
             tokio::sync::mpsc::UnboundedSender<super::SimToGate>,
         > = std::collections::HashMap::new();
         gates.insert(line, gtx);
+        // 网关侧前提：断开时槽已关 ⇒ 生产登记点落空 ⇒ 墓碑（此项与 sim 是否已处理 `Closed` 无关）。
+        let empty_users = super::UserList::new();
+        assert!(
+            super::downlink_slot(&empty_users, line, socket, 12, " SM_* 帧时").is_err(),
+            "前提：网关侧槽不存在（墓碑登记点）"
+        );
         let skipped_before = crate::telemetry::downlink_skipped_by_tombstone_total();
         super::emit_gate_event(
             &ntx,
@@ -94135,26 +94145,30 @@ mod tick_starvation {
                 break;
             }
         }
+        // 下一 tick 广播：对仍在线的会话路由；墓碑命中则零产出。
+        let mut enqueued = 0u32;
+        for s in &online {
+            if let Some(tx) = super::route_to_gate(&gates, i32::from(line), *s, "下一 tick 广播")
+            {
+                tx.send(super::SimToGate::SendFrame {
+                    socket: *s,
+                    body: vec![1],
+                })
+                .expect("通道未关");
+                enqueued += 1;
+            }
+        }
+        let skipped_delta =
+            crate::telemetry::downlink_skipped_by_tombstone_total() - skipped_before;
         assert!(
             closed_handled,
-            "关闭事件必须在本轮被处理（优先级）——否则只剩墓碑兜底"
-        );
-        for s in &online {
-            let _ = super::route_to_gate(&gates, i32::from(line), *s, "下一 tick 广播");
-        }
-        assert!(
-            matches!(
-                grx.try_recv(),
-                Err(tokio::sync::mpsc::error::TryRecvError::Empty)
-            ),
-            "会话已及时摘除 ⇒ 广播不得再产出帧"
+            "关闭事件必须在本轮被处理（优先级）——否则只剩墓碑兜底（实测 skipped_delta={skipped_delta} enqueued={enqueued}）"
         );
         assert_eq!(
-            crate::telemetry::downlink_skipped_by_tombstone_total(),
-            skipped_before,
-            "墓碑一次都不该触发（及时关闭后没有死槽）"
+            skipped_delta, 0,
+            "及时关闭后广播不路由该会话 ⇒ 墓碑一次都不该触发"
         );
-        assert!(!super::socket_is_tombstoned(line, socket));
+        assert_eq!(enqueued, 0, "会话已及时摘除 ⇒ 广播不得产出帧");
         let _ = super::forget_tombstoned_gate_line(line);
     }
 
@@ -94176,6 +94190,7 @@ mod tick_starvation {
             max_wall: Duration::from_secs(3_600),
         };
         let hit_before = crate::telemetry::DRAIN_BUDGET_HIT.load(Ordering::Relaxed);
+        let drained_before = crate::telemetry::DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed);
         let mut carry = None;
         let mut ctl_carry = None;
         let mut seen = Vec::new();
@@ -94208,7 +94223,15 @@ mod tick_starvation {
         assert_eq!(
             hit_after - hit_before,
             hit_rounds,
-            "drain_budget_hit 统计与每轮截断次数一致"
+            "drain_budget_hit 统计与每轮截断次数逐次一致"
+        );
+        // 「逐字节一致」的机判口径：③ `drain_events_drained` 恰 +64（含每轮截断时探到的那条，
+        // 与旧实现的取数次数相同）；④ 轮数 / 每轮条数由 `seen` 与 `hit_rounds` 唯一确定。
+        let drained_after = crate::telemetry::DRAIN_EVENTS_DRAINED.load(Ordering::Relaxed);
+        assert_eq!(
+            drained_after - drained_before,
+            64,
+            "无优先事件时取数次数必须与旧实现一致（64 条 = 64 次取走）"
         );
     }
 
