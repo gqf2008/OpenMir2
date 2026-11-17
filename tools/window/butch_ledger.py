@@ -35,7 +35,9 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RUST_SRC = os.path.join(REPO_ROOT, "mir2-rs", "crates", "world-bevy", "src", "world.rs")
-RUST_FN_SIG = "fn butch_effect_now("
+#: 屠宰实现所在的签名。P5-A3 把实现抽到 `butch_effect_now_impl`，`butch_effect_now` 只剩转发；
+#: 账本站点（world.rs:LINE）落在**实现**里 ⇒ 优先实现签名，实现若被内联回 facade 再回落。
+RUST_FN_SIGS = ("fn butch_effect_now_impl", "fn butch_effect_now(")
 C_SRC = os.path.join(REPO_ROOT, "src", "M2Server", "Player", "PlayObject.Operate.cs")
 C_FN_SIG = "ClientGetButchItem("
 
@@ -70,6 +72,31 @@ def _strip_test_modules(text):
         else:
             return out[:at]
 
+def _char_literal_end(text, i):
+    """`text[i] == "'"`：是**字符字面量**则返回闭合引号下标，否则 -1（生命周期 / 未闭合）。
+
+    Rust 里生命周期 `'a` 与字符字面量 `'a'` 同形；旧 `_strip_code` 把两者一律当字面量，
+    `'a` 会一路吞到下一个 `'`（卡 `openmir2-butch-lifetime-stripper`：world.rs 新增生命周期后
+    剥注释前后行数 18773 → 16676，静态牙的 span 随之错位）。
+    """
+    n = len(text)
+    if i + 2 >= n:
+        return -1
+    c1 = text[i + 1]
+    if c1 == "\n":
+        return -1
+    if c1 == "\\":
+        # 转义字面量：'\n' / '\'' / '\u{1F600}' —— 跳过被转义的那个字符再找闭合 '
+        j = i + 4 if (i + 2 < n and text[i + 2] == "u") else i + 3
+        k = text.find("'", j)
+        if 0 <= k <= i + 15 and "\n" not in text[i:k]:
+            return k
+        return -1
+    if text[i + 2] == "'":
+        return i + 2
+    return -1
+
+
 def _strip_code(text):
     """去掉注释与字符串字面量（保留换行），供括号配平用。
 
@@ -96,10 +123,20 @@ def _strip_code(text):
                 state = "block"
                 i += 2
                 continue
-            if ch in ('"', "'"):
+            if ch == '"':
                 state = ch
                 out.append(" ")
                 i += 1
+                continue
+            if ch == "'":
+                close = _char_literal_end(text, i)
+                if close < 0:
+                    # 生命周期（`'a` / `'static`）等：按普通代码输出，**不得**进入字面量状态
+                    out.append(ch)
+                    i += 1
+                    continue
+                out.append(" ")
+                i = close + 1
                 continue
             out.append(ch)
             i += 1
@@ -121,12 +158,40 @@ def _strip_code(text):
             continue
         # 字符串字面量内部
         if ch == "\\":
+            # Rust 字符串里的行连接（反斜杠+换行）也是转义：跳过反斜杠与该字符，
+            # 但**换行必须保留**（否则剥注释前后行数不一致，静态牙 span 错位）。
+            esc = text[i + 1] if i + 1 < n else ""
+            if esc == "\n":
+                out.append(esc)
             i += 2
             continue
         if ch == state:
             state = None
         i += 1
     return "".join(out)
+
+
+def rust_butch_span():
+    """返回**确实包含抽数**的屠宰函数区间（优先 `butch_effect_now_impl`，回落 facade）。
+
+    只看签名会踩「实现被抽走后 facade 只剩转发」的坑：span 变成了 17 行的转发壳，
+    静态牙的「两抽在函数内」断言随之假红（卡 `openmir2-butch-lifetime-stripper` 一并修）。
+    找不到任何含 `random_below` 的区间 ⇒ `None`（调用方按不可判，fail-closed）。
+    """
+    try:
+        raw = io.open(RUST_SRC, "r", encoding="utf-8", errors="replace").read()
+    except OSError:
+        return None
+    text = _strip_test_modules(_strip_code(raw))
+    lines = text.split(chr(10))
+    for sig in RUST_FN_SIGS:
+        span = fn_span(RUST_SRC, sig)
+        if not span:
+            continue
+        seg = lines[span[0] - 1:span[1]]
+        if any("random_below" in l for l in seg):
+            return span
+    return None
 
 
 def fn_span(path, sig):
@@ -163,7 +228,7 @@ def fn_span(path, sig):
 
 def resolve_span(side):
     if side == "rust":
-        return fn_span(RUST_SRC, RUST_FN_SIG)
+        return rust_butch_span()
     return fn_span(C_SRC, C_FN_SIG)
 
 
@@ -336,7 +401,7 @@ def _selftest():
     ok("i Rust 拿不到 span ⇒ UNDECIDABLE", nospan["verdict"] == "UNDECIDABLE",
        nospan.get("problems"))
     # 真实源码的 span 必须能解析出来（否则工具在真机上恒 UNDECIDABLE）
-    real = fn_span(RUST_SRC, RUST_FN_SIG)
+    real = rust_butch_span()
     ok("j 仓库源码里能解析出 butch_effect_now 的区间", bool(real) and real[1] > real[0],
        real)
 
@@ -404,6 +469,24 @@ def _selftest():
         _nraw = _nstrip = _keep = -1
     ok("n 不变量：剥注释/字符串前后行数一致（N2 的 `'a` 吞噬会先撞这条）",
        _nraw == _nstrip and _nraw > 10000 and _keep >= 15, (_nraw, _nstrip, _keep))
+
+    # O（合成，不依赖仓库源码）：剥注释/字符串的**三条性质**各自有牙——生命周期不吞代码、
+    # 字符字面量仍被剥掉（含花括号/转义引号）、字符串行连接保留换行。任一条退化 ⇒ 本用例红；
+    # 用合成文本钉住，仓库里以后新增构造不会把这条牙弄成假红（真源码的覆盖仍由 k/n 管）。
+    _lt = ("fn f<'a>(x: &'a str) -> u8 {" + chr(10) +
+           "    let _ = 'x';" + chr(10) +
+           "    let _ = '{';" + chr(10) +
+           "    let _ = '\'';" + chr(10) +
+           "    1" + chr(10) + "}" + chr(10))
+    _lt_st = _strip_code(_lt)
+    _lt_ok = (_lt.count(chr(10)) == _lt_st.count(chr(10))
+              and "fn f<" in _lt_st and "x: &" in _lt_st
+              and _lt_st.count("{") == 1 and _lt_st.count("}") == 1)
+    _cont = ("let s = \"abc" + chr(92) + chr(10) + "def\";" + chr(10))
+    _cont_st = _strip_code(_cont)
+    _cont_ok = _cont.count(chr(10)) == _cont_st.count(chr(10))
+    ok("o 剥注释三性质（合成）：生命周期不吞代码 / 字符字面量（含 { 与转义引号）被剥 / 行连接保换行",
+       _lt_ok and _cont_ok, (_lt_ok, _cont_ok, repr(_lt_st), repr(_cont_st)))
 
     bad = [c for c in checks if not c[0]]
     for cond, name, detail in checks:
