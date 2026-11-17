@@ -453,8 +453,9 @@ for rel, count, hold in runs:
   `-ExecutionPolicy Bypass` 同现、且从 PowerShell 父进程**嵌套**启动时，整条命令行被吞——
   子进程退出码 `-1`、stdout/stderr **全空**、脚本一行都没执行（无事件日志、无提示）。实测
   `-ExpectHead` / `-ExpectedHead` / `-Expect` 被拦，`-RequireHead` / `-HeadExpect` / `-Other` 正常。
-  ⇒ 工具参数名避开 `Expect*`（本仓 `stamp-binaries.ps1` 用 `-RequireHead`）；脚本里对子进程 rc
-  **必须判 `-ne 0` 即 RED**（`-1` 不是「没跑」的免罪符，它就是失败）。
+  ⇒ 工具参数名避开 `Expect*`（本仓 `stamp-binaries.ps1` 用 `-RequireHead`）；
+  **所有包装调用方一律 `rc -ne 0` 即 RED**（`-1` 不是「没跑」的免罪符，它就是失败）——
+  静默阻断之所以危险，正是因为「看起来什么都没发生」，只有 rc 判据能在零输出的情况下仍然判红。
 - **停服务进程用 `CTRL_BREAK_EVENT`，不要用 `CTRL_C_EVENT`（2026-11-17 实测，一轮白跑 120s）**：
   本环境里子进程会**继承「忽略 Ctrl+C」的属性** ⇒ 向它发 `CTRL_C_EVENT` 会被内核**静默丢弃**
   （无效果、无错误、无日志）；`Program.Main` 的 `Console.CancelKeyPress` 根本不会触发。
