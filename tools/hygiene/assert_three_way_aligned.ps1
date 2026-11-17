@@ -12,6 +12,9 @@
 # 属于内嵌）**统一**：**本脚本是超集**——多查 build 份（三处而非两处）与「每个目录各自的内嵌」；
 # botfleet 版另有 `--allow-src-unsynced`（主检出未同步降为 rc=2 的三态），本脚本无此降级（一律 rc=1）。
 #
+# **前提（复审 P3）**：三处（main/shadow/build）必须是**同一份构建产物的拷贝**（同一 stamp 的 built_at）。
+# 把**各自独立重建**的产物当 build 会因「同源非位级可复现」判 sha_mismatch（假红）——那种场景要用
+# botfleet 版的 `--allow-src-unsynced`（降 rc=2 三态），本脚本无此降级。
 # 退出码：0 = 全对齐；1 = 有红（sha 不等 / 戳缺失 / 戳 head 不等 / 戳 head 不在内嵌里）；
 #        2 = 判不了（路径缺失/用法错）——绝不静默通过。
 # 机器可读输出：`THREE_WAY_OK <file> sha=<hex> stamp=<head> embedded=ok`
