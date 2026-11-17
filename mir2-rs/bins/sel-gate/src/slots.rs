@@ -75,8 +75,7 @@ impl SlotTable {
         self.slots.len()
     }
 
-    /// 当前非空槽数。
-    #[cfg(test)]
+    /// 当前非空槽数（观测/测试共用；oracle 从不写回 ⇒ 生产恒 0）。
     #[must_use]
     pub fn occupied(&self) -> usize {
         self.slots.iter().filter(|slot| slot.is_some()).count()

@@ -99,6 +99,52 @@ enum Admission {
     Slot(usize),
 }
 
+// ---------- 准入观测（卡 `openmir2-gateway-session-slot-exhaustion`，只读旁路）----------
+//
+// 目的：把「Round B 为什么只进来 977/0」从猜测变成读数。三支互斥（Accepted / Full / NotReady）
+// + `sid_max`（进程内 SessionId 已发到多少）。每 100 次 accept 打一行；**不改任何判定**。
+static ADM_TOTAL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ADM_ACCEPTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ADM_FULL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ADM_NOT_READY: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SID_MAX: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// 记一次准入并（每 100 次）返回一行汇总。`sid` 只用于维护 `sid_max`，不参与判定。
+fn record_admission(admission: &Admission, sid: u32) -> Option<String> {
+    use std::sync::atomic::Ordering::Relaxed;
+    let total = ADM_TOTAL.fetch_add(1, Relaxed) + 1;
+    match admission {
+        Admission::Slot(_) => {
+            ADM_ACCEPTED.fetch_add(1, Relaxed);
+        }
+        Admission::Full => {
+            ADM_FULL.fetch_add(1, Relaxed);
+        }
+        Admission::NotReady => {
+            ADM_NOT_READY.fetch_add(1, Relaxed);
+        }
+    }
+    let mut cur = SID_MAX.load(Relaxed);
+    while sid > cur {
+        match SID_MAX.compare_exchange(cur, sid, Relaxed, Relaxed) {
+            Ok(_) => break,
+            Err(observed) => cur = observed,
+        }
+    }
+    if total.is_multiple_of(100) {
+        Some(format!(
+            "LOGIN_GATE_ADMISSION total={} accepted={} full={} not_ready={} sid_max={}",
+            total,
+            ADM_ACCEPTED.load(Relaxed),
+            ADM_FULL.load(Relaxed),
+            ADM_NOT_READY.load(Relaxed),
+            SID_MAX.load(Relaxed)
+        ))
+    } else {
+        None
+    }
+}
+
 /// 绑定对外监听（卡 `openmir2-login-srv-bind-addr` A2 审计）：**按 conf `GateAddr0` 字面
 /// 绑定**——与 C# LoginGate 同语义（生产实况：conf GateAddr0=127.0.0.1 ⇒ 监听
 /// 127.0.0.1:7000；LoginGate 无广播下发字段）。conf 含不可本机绑定地址 ⇒ bind 报错
@@ -183,6 +229,9 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             admit(&mut table, sid, downstream_alive.load(Ordering::SeqCst))
         };
+        if let Some(line) = record_admission(&admission, sid) {
+            glog!("INF", "{}", line);
+        }
         let shared = GateShared {
             sessions: Arc::clone(&sessions),
             downstream_alive: Arc::clone(&downstream_alive),
@@ -591,8 +640,8 @@ mod tests {
     /// 牙：把判满与就绪顺序对调、或 `NotReady` 也分配槽 ⇒ 本用例红。
     #[test]
     fn admission_matches_oracle_branch_order() {
-        use super::{admit, Admission};
         use crate::slots::SlotTable;
+        use {admit, Admission};
 
         let mut table = SlotTable::with_capacity(4);
         // 未就绪：不分配槽位（oracle 的槽位循环在 ConnectState 判定之后）。
@@ -611,6 +660,40 @@ mod tests {
         // 满 + 未就绪：oracle 先判满 ⇒ Full（不是 NotReady）。
         assert!(matches!(admit(&mut table, 5, false), Admission::Full));
         assert!(matches!(admit(&mut table, 5, true), Admission::Full));
+    }
+
+    /// **准入观测牙**（卡 `openmir2-gateway-session-slot-exhaustion`）：三支计数互斥、`sid_max` 单调、
+    /// 汇总行每 100 次才出（删计数或改成无条件打印 ⇒ 本用例红）。
+    #[test]
+    fn admission_counters_are_exclusive_and_line_every_100() {
+        let a0 = super::ADM_ACCEPTED.load(Ordering::Relaxed);
+        let f0 = super::ADM_FULL.load(Ordering::Relaxed);
+        let n0 = super::ADM_NOT_READY.load(Ordering::Relaxed);
+        let mut lines = 0;
+        for i in 0..100u32 {
+            let adm = match i % 3 {
+                0 => Admission::Slot(usize::try_from(i).unwrap()),
+                1 => Admission::Full,
+                _ => Admission::NotReady,
+            };
+            if super::record_admission(&adm, 5_000 + i).is_some() {
+                lines += 1;
+            }
+        }
+        assert_eq!(lines, 1, "100 次里只该在整百处打一行");
+        let da = super::ADM_ACCEPTED.load(Ordering::Relaxed) - a0;
+        let df = super::ADM_FULL.load(Ordering::Relaxed) - f0;
+        let dn = super::ADM_NOT_READY.load(Ordering::Relaxed) - n0;
+        assert_eq!(da + df + dn, 100, "三支必须互斥且覆盖全部 accept");
+        assert!(da > 0 && df > 0 && dn > 0, "三支都应被走到");
+        assert!(
+            super::SID_MAX.load(Ordering::Relaxed) >= 5_099,
+            "sid_max 必须单调跟到最大值"
+        );
+        assert!(
+            super::record_admission(&Admission::Slot(0), 1).is_none(),
+            "非整百不打"
+        );
     }
 
     /// 判据 6（泄漏照抄）：cap=4 churn 5 次“连接→正常断开”后第 5 次仍被拒。
