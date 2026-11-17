@@ -80,7 +80,7 @@ pub fn summary_line() -> String {
     format!(
         "ENTRY_TELEMETRY frames_in={} gm_data_forwarded={} send_raw_fail={} login_parse_kick={} \
          rule_dropped[move={} attack={} spell={} chat={}] downlink_unknown={} downlink_write_fail={} \
-         unknown_idents=[{}] write_fail_idents=[{}]",
+         unknown_idents=[{}] write_fail_idents=[{}] {}",
         FRAMES_IN.load(Relaxed),
         GM_DATA_FORWARDED.load(Relaxed),
         SEND_RAW_FAIL.load(Relaxed),
@@ -92,7 +92,9 @@ pub fn summary_line() -> String {
         DOWNLINK_UNKNOWN.load(Relaxed),
         DOWNLINK_WRITE_FAIL.load(Relaxed),
         unknown,
-        write_fail
+        write_fail,
+        // 卡 `openmir2-session-close-attribution`：拆除归因终值（与 `断开链接` 同源计数）。
+        crate::close_attr::summary_fragment()
     )
 }
 
@@ -139,6 +141,10 @@ mod tests {
             "downlink_write_fail=",
             "unknown_idents=[",
             "write_fail_idents=[",
+            // 卡 `openmir2-session-close-attribution`：拆除归因终值必须进同一行。
+            "close_total=",
+            "close_breakdown[client_fin=",
+            "close_errno=[",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }

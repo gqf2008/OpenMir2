@@ -49,6 +49,9 @@
 // 文档逐字引用 C# 标识符/文件名，不加反引号改造。
 #![allow(clippy::doc_markdown)]
 
+mod close_attr;
+#[cfg(test)]
+mod close_attr_teeth;
 mod config;
 mod gbk;
 mod login;
@@ -56,7 +59,7 @@ mod rules;
 mod telemetry;
 
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, AtomicU64, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 
@@ -131,7 +134,20 @@ macro_rules! glog {
 }
 
 /// 会话表：`SessionId → 该客户端连接的发送端`（一条网关→服务器连接一张表）。
-type Sessions = Arc<Mutex<HashMap<u16, mpsc::UnboundedSender<(Vec<u8>, u16)>>>>;
+///
+/// 卡 `openmir2-session-close-attribution`：每格另带**拆除发起方**（`Arc<AtomicU8>`，取值即
+/// [`close_attr::CloseReason::code`]）。读循环退出时消费它：game-svr 的 `GM_CLOSE` 先把路由
+/// 摘掉（墓碑化）再让客户端连接退出时，不能被随后的客户端 FIN 改判成 `client_fin`。
+type Sessions = Arc<Mutex<HashMap<u16, SessionRoute>>>;
+
+/// 一条会话的下行路由 + 拆除发起方登记（见 [`Sessions`]）。
+#[derive(Clone)]
+struct SessionRoute {
+    /// 下行写端（读循环持有的 `tx`）。
+    tx: mpsc::UnboundedSender<(Vec<u8>, u16)>,
+    /// 发起方；`CloseReason::Unknown.code()` = 尚未登记。
+    initiator: Arc<AtomicU8>,
+}
 
 /// 卡 `openmir2-sm-logon-cross-session-delivery`：**诊断用**的会话键占用者登记
 /// （`SessionId → (handle, peer)`）。与 [`Sessions`] 同键、同生命周期，只用于把
@@ -904,9 +920,9 @@ async fn register_session(
     sid: u16,
     handle: i32,
     peer: &str,
-    route_tx: Option<mpsc::UnboundedSender<(Vec<u8>, u16)>>,
+    route: Option<SessionRoute>,
 ) {
-    let Some(route_tx) = route_tx else {
+    let Some(route) = route else {
         return;
     };
     let prev = ctx.route_owner.lock().await.get(&sid).cloned();
@@ -922,7 +938,40 @@ async fn register_session(
         .lock()
         .await
         .insert(sid, (handle, peer.to_string()));
-    ctx.sessions.lock().await.insert(sid, route_tx);
+    ctx.sessions.lock().await.insert(sid, route);
+}
+
+/// 读循环退出原因（`client_loop` 里每个 `break` 落一个明确取值）。
+enum CloseExit {
+    /// 客户端 socket 读到 EOF（对端先发 FIN）。
+    ClientFin,
+    /// 空闲清理发来关闭信号（`ProcessIdleSession` 等价物）。
+    IdleSweep,
+    /// 网关规则/登录解析要求关会话（`Step::Close`）。
+    RuleClose,
+    /// 客户端 socket 读出错（带 errno）。
+    ReadError(std::io::Error),
+    /// `handle_frame` 返回 Err（当前恒为非 io 错误）⇒ 不猜，落 `unknown`。
+    FrameError,
+}
+
+/// 退出原因 → 归因（纯判定；测试可逐个钉住，不必起网络）。
+///
+/// 优先级：已被 game-svr `GM_CLOSE` 墓碑化（`initiator == Tombstone`）时不看后续退出原因——
+/// 服务端先发起，之后客户端 FIN / 空闲扫除都只是收尾（否则「谁先发 FIN」被误记成 client_fin）。
+fn classify_close(initiator: u8, exit: &CloseExit) -> (close_attr::CloseReason, Option<i32>) {
+    use close_attr::CloseReason as R;
+    if R::from_code(initiator) == R::Tombstone {
+        return (R::Tombstone, None);
+    }
+    match exit {
+        CloseExit::ClientFin => (R::ClientFin, None),
+        CloseExit::IdleSweep => (R::Timeout, None),
+        CloseExit::RuleClose => (R::ServerKick, None),
+        CloseExit::ReadError(e) => (R::Error, e.raw_os_error()),
+        // 未分类的 handle_frame 错误落 unknown（不猜成 client_fin）。
+        CloseExit::FrameError => (R::Unknown, None),
+    }
 }
 
 /// 单客户端会话：登记会话表 → 发 `GM_OPEN` → 逐帧处置 → 断开发 `GM_CLOSE`。
@@ -946,14 +995,26 @@ async fn client_loop(
     let last_recv_ms = Arc::new(AtomicI64::new(now_ms()));
     // `ProcessIdleSession` 的 `Socket.Close()` 等价物：唤醒读循环 ⇒ 退出时关 socket、发 `GM_CLOSE`。
     let (close_tx, mut close_rx) = watch::channel(false);
+    // 卡 `openmir2-session-close-attribution`：本会话的拆除发起方。读循环退出时消费；
+    // game-svr 的 `GM_CLOSE`（`handle_server_message`）会先把它置成 `Tombstone`。
+    let initiator = Arc::new(AtomicU8::new(close_attr::CloseReason::Unknown.code()));
     // 槽满复用时，新会话在 oracle 里绑的是**宿主的** `SessionInfo`：下行仍经宿主的
     // `ConnectionId` 发出（`ClientSession.cs:908`）。宿主已断开（槽已释放）⇒ oracle 的
     // `Session.Socket == null` 静默丢弃；这里不登记新键，让 `handle_server_message` 走
     // 「会话不存在，丢弃下行」分支。
     let route_tx = match donor {
         None => Some(tx),
-        Some(donor_sid) => ctx.sessions.lock().await.get(&donor_sid).cloned(),
+        Some(donor_sid) => ctx
+            .sessions
+            .lock()
+            .await
+            .get(&donor_sid)
+            .map(|r| r.tx.clone()),
     };
+    let route = route_tx.map(|tx| SessionRoute {
+        tx,
+        initiator: Arc::clone(&initiator),
+    });
     // 每会话的规则状态：聊天计时 + 三条速度规则的计时 + 延时消息队列
     // （C# `ClientSession` 里的 `gameSpeed` / `SayMsgTick` / `MsgList`）。
     let mut session = SessionRules {
@@ -989,7 +1050,7 @@ async fn client_loop(
     // oracle 顺序：先 `UserEnter`（发 GM_OPEN）、后 `SessionContainer.AddSession`
     // （`ServerService.cs:147-159`）⇒ 这里同样**在发送之后**登记会话与空闲项；
     // 发送不再可失败（断链时按 `Send` 的 `Online` 门静默丢弃），也就不存在失败早退的泄漏路径。
-    register_session(&ctx, sid, handle, &peer, route_tx).await;
+    register_session(&ctx, sid, handle, &peer, route).await;
     // 只有**占槽**的会话进入 `SessionArray` 的空闲清理面（槽满复用分支不新增 SessionInfo）。
     if donor.is_none() {
         ctx.idle.lock().await.insert(
@@ -1033,13 +1094,16 @@ async fn client_loop(
     let mut buf = vec![0u8; MAX_READ];
     let mut logged_in = false;
     let mut closed = Ok(());
-    loop {
+    // 卡 `openmir2-session-close-attribution`：读循环的退出原因（分类的唯一输入）。
+    // 每个 `break` 都必须给出明确取值；未登记的退出路径不存在（编译期兜底）。
+    let exit = loop {
         let n = tokio::select! {
             // 空闲超时：oracle `ProcessIdleSession` 直接 `Socket.Close()`。
-            _ = close_rx.changed() => break,
+            _ = close_rx.changed() => break CloseExit::IdleSweep,
             read = rd.read(&mut buf) => match read {
-                Ok(0) | Err(_) => break,
+                Ok(0) => break CloseExit::ClientFin,
                 Ok(n) => n,
+                Err(e) => break CloseExit::ReadError(e),
             },
         };
         // C# `ClientSession.ProcessSessionPacket` 第一行：收到任何上行（含心跳/无效帧）都刷新。
@@ -1062,14 +1126,23 @@ async fn client_loop(
             }
             Ok(Step::Close(reason)) => {
                 glog!("WRN", "{reason} SessionId={sid}");
-                break;
+                break CloseExit::RuleClose;
             }
             Err(e) => {
                 closed = Err(e);
-                break;
+                break CloseExit::FrameError;
             }
         }
-    }
+    };
+    // 拆除唯一出口：归因计数与每会话行**只在这里**落（与 `断开链接` 同一处 ⇒
+    // `close_total` 与 `断开链接` 行数同源，不重复计）。
+    let (reason, errno) = classify_close(initiator.load(Ordering::Relaxed), &exit);
+    close_attr::record_close(reason, errno);
+    glog!(
+        "INF",
+        "{}",
+        close_attr::session_line(now_ms(), ctx.service_id, handle, sid, reason, errno)
+    );
 
     // 离开：GM_CLOSE(session_id=0, socket=handle)（实机取证确认）。
     //
@@ -1344,8 +1417,8 @@ async fn deliver_gm_data(ctx: &LinkCtx, msg: &ServerMessage, body: &[u8]) {
     // ident 只解一次：成功路径（随帧下传写失败归组）与「无路由」路径共用。
     let ident = inner_ident(body).unwrap_or(0);
     let guard = ctx.sessions.lock().await;
-    if let Some(tx) = guard.get(&msg.session_id) {
-        let ok = tx.send((wire, ident)).is_ok();
+    if let Some(route) = guard.get(&msg.session_id) {
+        let ok = route.tx.send((wire, ident)).is_ok();
         // **只对 SM_LOGON(50) 打行**：AOI 帧可达 1e4/s，逐帧日志会拖慢网关读循环
         // （2026-11-15 首轮 200 档实测：24.7 万行 DBG 把进世界流水拖到停滞，结果不可用）。
         if misdeliver_log_enabled() && ident == mir2_protocol::messages::SM_LOGON {
@@ -1393,7 +1466,14 @@ async fn handle_server_message(ctx: &LinkCtx, msg: ServerMessage, body: &[u8]) {
                     owner_label(owner.as_ref())
                 );
             }
-            ctx.sessions.lock().await.remove(&msg.session_id);
+            // 卡 `openmir2-session-close-attribution`：先给该会话登记**服务端发起**（墓碑），
+            // 再摘路由。之后客户端连接怎么退出（FIN/被扫除）都按 tombstone 归因，
+            // 不会被误记成 client_fin。
+            if let Some(route) = ctx.sessions.lock().await.remove(&msg.session_id) {
+                route
+                    .initiator
+                    .store(close_attr::CloseReason::Tombstone.code(), Ordering::Relaxed);
+            }
             ctx.indexes.lock().await.remove(&msg.session_id);
             glog!("INF", "游戏服务要求关闭会话[{}]", msg.session_id);
         }
