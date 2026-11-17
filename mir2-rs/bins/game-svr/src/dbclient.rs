@@ -388,7 +388,17 @@ impl DbReplies {
     /// 取走某个 query 的应答（`GetDataSrvMessage` `:32-48`：命中即从表里移除）。
     #[must_use]
     pub fn take(&mut self, query_id: i32) -> Option<Reply> {
-        self.map.remove(&query_id)
+        let taken = self.map.remove(&query_id);
+        // **应答表移除**（只数取档应答）：与 `REPLY_SEEN` 构成
+        // `reply_seen == reply_consumed + 仍在表里的条数`（卡 `openmir2-entry-gap-buckets`）。
+        if let Some(r) = &taken {
+            if let Some((ident, _)) = parse_reply_message(&r.message) {
+                if ident == mir2_protocol::messages::DBR_LOADHUMANRCD {
+                    crate::telemetry::record_reply_consumed();
+                }
+            }
+        }
+        taken
     }
 
     /// 用例专用：直接投一条应答进表（不经过签名校验/分帧），用于驱动「关服存档有界等待」的
@@ -498,6 +508,46 @@ mod tests {
         frame.extend_from_slice(&u16::try_from(body.len()).unwrap().to_le_bytes());
         frame.extend_from_slice(&body);
         frame
+    }
+
+    /// `take()` 的移除计数**只数取档应答**：取走 1102（存档）不得让 `reply_consumed` 增加。
+    #[test]
+    fn take_counts_only_load_replies() {
+        use std::sync::atomic::Ordering;
+        let before = crate::telemetry::REPLY_CONSUMED.load(Ordering::Relaxed);
+        let mut r = DbReplies::new();
+        assert_eq!(
+            r.feed(&reply_frame(
+                31,
+                mir2_protocol::messages::DBR_SAVEHUMANRCD,
+                1,
+                b"P",
+                false
+            )),
+            vec![31]
+        );
+        assert!(r.take(31).is_some());
+        assert_eq!(
+            crate::telemetry::REPLY_CONSUMED.load(Ordering::Relaxed),
+            before,
+            "存档应答被取走不得计入 reply_consumed"
+        );
+        assert_eq!(
+            r.feed(&reply_frame(
+                32,
+                mir2_protocol::messages::DBR_LOADHUMANRCD,
+                1,
+                b"P",
+                false
+            )),
+            vec![32]
+        );
+        assert!(r.take(32).is_some());
+        assert_eq!(
+            crate::telemetry::REPLY_CONSUMED.load(Ordering::Relaxed),
+            before + 1,
+            "取档应答被取走必须 +1"
+        );
     }
 
     /// 同 qid 重复到达必须计一桶（表按 qid 覆盖 ⇒ 多出的应答会消失）。

@@ -27822,6 +27822,9 @@ fn sim_loop(
             {
                 match r.take(qid) {
                     Some(reply) => {
+                        // **匹配到等待者**（取档循环 take 命中）：`reply_matched` 与 `reply_consumed`
+                        // 一起把「fed 了但没到 attempt」切干净（卡 `openmir2-entry-gap-buckets`）。
+                        telemetry::record_reply_matched();
                         let (ident, recog) =
                             dbclient::parse_reply_message(&reply.message).unwrap_or((0, 0));
                         if ident != mir2_protocol::messages::DBR_LOADHUMANRCD {
@@ -92386,6 +92389,43 @@ mod entry_telemetry_wiring {
         assert!(
             seg.contains("r.len()"),
             "滞留数必须取应答表当前长度（写死常量 ⇒ 本用例红）"
+        );
+    }
+
+    /// **出口恒等式**的右端：`load.rs` 里每条离开路径（SessionID==0 / 保存中 / 成功 / 踢）各一处，
+    /// 外加 `delete_human`（断线抢占）。任何一条没计数 ⇒ 恒等式不闭合 ⇒ 本用例逐条点名。
+    #[test]
+    fn every_logon_exit_is_counted() {
+        assert_eq!(
+            LD.matches("record_logon_handler_exit(").count(),
+            4,
+            "load.rs 必须恰好 4 个出口计数（zero/requeue/success/kick）"
+        );
+        let i = LD.find("pub fn delete_human(").expect("delete_human");
+        assert!(
+            window(LD, i, 900).contains("record_logon_disconnect_drop("),
+            "断线抢占摘掉的未排水 logon 必须计数"
+        );
+    }
+
+    /// 应答侧两条边：移除计数在 `take()` 里（按 ident 过滤），匹配计数在取档循环里。
+    #[test]
+    fn reply_consumed_and_matched_are_wired() {
+        let i = DBC
+            .find("pub fn take(&mut self, query_id: i32)")
+            .expect("take()");
+        let seg = window(DBC, i, 900);
+        assert!(seg.contains("record_reply_consumed()"), "take() 必须计移除");
+        assert!(
+            seg.contains("DBR_LOADHUMANRCD"),
+            "只数取档应答（存档应答不得计入）"
+        );
+        // 运行时拼串：否则 `SRC.find` 会命中本测试自己的字面量（本牙第一版就因此恒真）
+        let needle = format!("record_reply_{}()", "matched");
+        let j = SRC.find("收到角色数据 queryId=").expect("取档循环日志点");
+        assert!(
+            window(SRC, j.saturating_sub(800), 900).contains(&needle),
+            "reply_matched 必须在取档循环里"
         );
     }
 

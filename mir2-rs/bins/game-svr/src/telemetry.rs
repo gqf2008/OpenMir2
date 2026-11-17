@@ -80,6 +80,17 @@ pub static REPLY_IDENT_OTHER: AtomicU64 = AtomicU64::new(0);
 /// `feed` 时同一 query_id **重复到达**（表按 qid 覆盖 ⇒ 多出的应答消失）的次数。
 pub static REPLY_DUPLICATE_QID: AtomicU64 = AtomicU64::new(0);
 
+/// **logon 侧出口恒等式的两条边**（卡 `openmir2-entry-gap-buckets` 第三轮）：
+/// `logon_handler_exit_total` 在每个「离开 logon 处理链」的出口 +1（成功发出请求也计入），
+/// 断言 `logon_handler_enter == logon_handler_exit_total`；不闭合就说明还有没被计数的出口。
+pub static LOGON_HANDLER_EXIT_TOTAL: AtomicU64 = AtomicU64::new(0);
+/// 断线抢占：`FrontEngine::delete_human` 把**尚未排水**的 logon 从 load/temp 两个缓冲里摘掉的条数。
+pub static LOGON_EXIT_DISCONNECT_DROP: AtomicU64 = AtomicU64::new(0);
+/// **应答表移除**计数（只数 `DBR_LOADHUMANRCD`）：`DbReplies::take` 取走条目时 +1。
+pub static REPLY_CONSUMED: AtomicU64 = AtomicU64::new(0);
+/// **匹配到等待者**：取档循环里 `take(qid)` 命中后、进入 ident 判断之前 +1。
+pub static REPLY_MATCHED: AtomicU64 = AtomicU64::new(0);
+
 /// 6000 面应答**签名/长度校验不过**的帧数（`ReplyVerdict` 非 Accept 且非 TooShort）。
 pub static REPLY_VERIFY_FAIL: AtomicU64 = AtomicU64::new(0);
 /// 每轮取档排水后**仍滞留在应答表里**的应答数（取**历史最大值**）：它直接把
@@ -139,6 +150,30 @@ pub fn record_loaddb_request_sent() -> Option<String> {
 #[must_use]
 pub fn record_loaddb_write_error() -> Option<String> {
     bump(&LOADDB_WRITE_ERROR)
+}
+
+/// logon 处理链出口 +1（任何离开路径都算，成功也算）。调用方**必须**与
+/// [`record_logon_handler_enter`] 成对使用：出口数 != 入口数 ⇒ 有未计数的出口。
+#[must_use]
+pub fn record_logon_handler_exit() -> Option<String> {
+    bump(&LOGON_HANDLER_EXIT_TOTAL)
+}
+
+/// 断线抢占摘掉未排水 logon 的条数。
+pub fn record_logon_disconnect_drop(n: u64) {
+    if n > 0 {
+        LOGON_EXIT_DISCONNECT_DROP.fetch_add(n, Relaxed);
+    }
+}
+
+/// 应答被从表里移除（只数取档应答）。
+pub fn record_reply_consumed() {
+    REPLY_CONSUMED.fetch_add(1, Relaxed);
+}
+
+/// 应答匹配到等待者。
+pub fn record_reply_matched() {
+    REPLY_MATCHED.fetch_add(1, Relaxed);
 }
 
 /// logon 处理函数入口 +1。
@@ -240,7 +275,7 @@ pub fn sample_load_reply_other() -> bool {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={}          reply_verify_fail={} reply_pending_max={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_disconnect_drop={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -252,6 +287,8 @@ pub fn summary_line() -> String {
         LOADDB_WRITE_ERROR.load(Relaxed),
         DB_LINK_RECONNECT.load(Relaxed),
         LOGON_HANDLER_ENTER.load(Relaxed),
+        LOGON_HANDLER_EXIT_TOTAL.load(Relaxed),
+        LOGON_EXIT_DISCONNECT_DROP.load(Relaxed),
         LOGON_NO_REQUEST_DISCONNECTED.load(Relaxed),
         LOGON_NO_REQUEST_SEND_FAIL.load(Relaxed),
         LOGON_NO_REQUEST_ZERO_SESSION.load(Relaxed),
@@ -259,6 +296,8 @@ pub fn summary_line() -> String {
         LOGON_NO_REQUEST_NO_DB_LINK.load(Relaxed),
         REPLY_IDENT_OTHER.load(Relaxed),
         REPLY_DUPLICATE_QID.load(Relaxed),
+        REPLY_CONSUMED.load(Relaxed),
+        REPLY_MATCHED.load(Relaxed),
         REPLY_VERIFY_FAIL.load(Relaxed),
         REPLY_PENDING_MAX.load(Relaxed)
     )
@@ -322,6 +361,14 @@ mod tests {
             "no_db_link=",
             "reply_ident_other=",
             "reply_duplicate_qid=",
+            "logon_handler_exit_total=",
+            "logon_disconnect_drop=",
+            "reply_consumed=",
+            "reply_matched=",
+            "logon_handler_exit_total=",
+            "logon_disconnect_drop=",
+            "reply_consumed=",
+            "reply_matched=",
             "reply_verify_fail=",
             "reply_pending_max=",
         ] {
