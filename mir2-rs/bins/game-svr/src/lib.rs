@@ -30441,7 +30441,9 @@ struct DeadSlotNote {
 /// 槽存在 ⇒ `Ok`（调用方照常拼头发送）；槽不存在 ⇒ **帧照旧丢弃、去向照旧**，只把日志口径
 /// 从「每帧一条 WRN」改成：
 /// - 该 `(网关线号, socket)` **首次**落空打一条 WRN（键带线号：socket 号只在一条网关线内唯一）；
-/// - 后续落空不再逐条 WRN，按秒聚合成一行（[`telemetry::aggregate_downlink_dead_socket`]）；
+/// - 后续落空不再逐条 WRN，按秒聚合成一行（[`telemetry::aggregate_downlink_dead_socket`]，
+///   独立前缀 `DOWNLINK_DEAD_SOCKET_AGG`——**不得**以 `ENTRY_TELEMETRY` 开头，否则会顶掉
+///   「日志里最后一条 `ENTRY_TELEMETRY` 行 = 终值」口径）；
 /// - **每次落空都计数**（[`telemetry::DOWNLINK_DEAD_SOCKET_TOTAL`]，进 `ENTRY_TELEMETRY`）。
 ///
 /// `kind` 是原日志的主语（` SM_* 帧时` / `短包时`），保留「的槽不存在」子串便于日志侧机判。

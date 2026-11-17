@@ -481,6 +481,12 @@ pub fn record_downlink_dead_socket(gate_line: u8, socket: i32) -> bool {
 /// 非首次落空的**按秒聚合**：`Some(行)` = 距上次聚合 ≥ [`DEAD_SOCKET_AGG_INTERVAL_MS`]，
 /// 行内带这段时间被抑制（未逐条 WRN）的条数与进程累计值。
 ///
+/// **前缀必须是 `DOWNLINK_DEAD_SOCKET_AGG`，不得以 `ENTRY_TELEMETRY` 开头**：本项目口径是
+/// 「日志里**最后一条** `ENTRY_TELEMETRY` 行 = 终值」，舰队归档/停止脚本与窗口复核都按
+/// `Select-String 'ENTRY_TELEMETRY' | Select-Object -Last 1` 取它；风暴恰在窗口末段，若聚合行
+/// 复用该前缀，最后一条终值会被只有两个字段的聚合行顶掉、所有计数丢失
+/// （卡 `openmir2-missing-socket-warn-storm` P1 返工）。
+///
 /// 逐帧只做一次原子加、一次读：不到 1s 不分配、不打印 ⇒ 高负载下这个口子最多 1 行/秒。
 pub fn aggregate_downlink_dead_socket(now_ms: i64) -> Option<String> {
     DEAD_SOCKET_SUPPRESSED.fetch_add(1, Relaxed);
@@ -497,7 +503,7 @@ pub fn aggregate_downlink_dead_socket(now_ms: i64) -> Option<String> {
     }
     let suppressed = DEAD_SOCKET_SUPPRESSED.swap(0, Relaxed);
     Some(format!(
-        "ENTRY_TELEMETRY svc=game-svr downlink_dead_socket_suppressed={suppressed} downlink_dead_socket_total={}",
+        "DOWNLINK_DEAD_SOCKET_AGG svc=game-svr suppressed={suppressed} total={}",
         DOWNLINK_DEAD_SOCKET_TOTAL.load(Relaxed)
     ))
 }
@@ -1025,7 +1031,7 @@ mod tests {
         assert!(record_downlink_dead_socket(0, 5));
         let first = aggregate_downlink_dead_socket(10_000).expect("首次聚合行");
         assert!(
-            first.contains("downlink_dead_socket_suppressed=1"),
+            first.contains("suppressed=1"),
             "首行带本窗口被抑制条数: {first}"
         );
         for i in 1..1_000 {
@@ -1037,8 +1043,49 @@ mod tests {
         // 窗口内共 1 + 999 次抑制调用；满 1s 的这一次触发第二行，swap 前已含本次。
         let next = aggregate_downlink_dead_socket(11_001).expect("满 1s 必须出行");
         assert!(
-            next.contains("downlink_dead_socket_suppressed=1000"),
+            next.contains("suppressed=1000"),
             "第二行必须带整秒窗口的抑制条数: {next}"
+        );
+    }
+
+    /// 卡 `openmir2-missing-socket-warn-storm` P1 返工牙：**聚合行不得顶掉终值行**。
+    ///
+    /// 项目口径「日志里最后一条 `ENTRY_TELEMETRY` 行 = 终值」（舰队归档/停止脚本与窗口复核
+    /// 都取它）。构造「先打汇总行、再触发一次聚合行」的日志序列，按同一口径取最后一条
+    /// `ENTRY_TELEMETRY` 行：必须仍是汇总行（带 `logon_frames_seen=`），聚合行只能有自己的
+    /// 独立前缀。
+    ///
+    /// 变异：把聚合行前缀改回 `ENTRY_TELEMETRY` ⇒ 最后一条 `ENTRY_TELEMETRY` 行变成聚合行，
+    /// `logon_frames_seen=` 缺失 ⇒ 本用例红。
+    #[test]
+    fn aggregate_line_does_not_shadow_last_entry_telemetry_line() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_dead_socket_state_for_tests();
+        let summary = summary_line();
+        assert!(
+            summary.starts_with("ENTRY_TELEMETRY svc=game-svr "),
+            "前提：汇总行必须以 ENTRY_TELEMETRY 开头: {summary}"
+        );
+        // 风暴发生在窗口末段：汇总行之后紧跟聚合行是常态。
+        let agg = aggregate_downlink_dead_socket(10_000).expect("首次聚合行");
+        assert!(
+            !agg.starts_with("ENTRY_TELEMETRY"),
+            "聚合行不得复用 ENTRY_TELEMETRY 前缀（会顶掉终值行）: {agg}"
+        );
+        assert!(
+            agg.starts_with("DOWNLINK_DEAD_SOCKET_AGG "),
+            "聚合行必须用独立前缀: {agg}"
+        );
+        // 按舰队口径取「最后一条 ENTRY_TELEMETRY 行」。
+        let lines = [summary, agg];
+        let last_entry_line = lines
+            .iter()
+            .rev()
+            .find(|l| l.starts_with("ENTRY_TELEMETRY"))
+            .expect("日志里必须有 ENTRY_TELEMETRY 终值行");
+        assert!(
+            last_entry_line.contains("logon_frames_seen="),
+            "最后一条 ENTRY_TELEMETRY 行必须仍是汇总终值（聚合行顶掉 ⇒ 缺 logon_frames_seen=）: {last_entry_line}"
         );
     }
 }
