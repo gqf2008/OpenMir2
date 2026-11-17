@@ -1061,8 +1061,13 @@ mod tests {
         assert!(p.probes.is_empty(), "取走窗口后子探针必须清零");
     }
 
-    /// **时钟接线**：`probe()` 必须走 `probe_clock_now()`（计数器 +1）；不取时钟的实现会红。
-    /// 不比较耗时本身 ⇒ 与负载/时钟分辨率无关，不会 flake。
+    /// **时钟接线的两颗牙**：①`probe()` 必须走 `probe_clock_now()`（计数器 +1）；②**量到的耗时必须
+    /// 落进记录**（复审 P1：原实现删掉 `probes[0].1 > 0` 后没有等价补上，把量到的 ns 丢弃/写死 0
+    /// 可以全绿）。
+    ///
+    /// 耗时用 `thread::sleep` 造**确定的下界**：`sleep` 保证至少走这么多墙钟（可能超睡），
+    /// 所以 `>= 1ms` 是下界断言、与并行负载无关，不会 flake（上界才会 flake）。
+    /// 变异 t4（`probe` 仍取时钟但把 ns 写死 0）⇒ ②必红。
     #[test]
     fn probe_reads_the_clock_seam() {
         let mut p = HostTickProfile {
@@ -1078,6 +1083,23 @@ mod tests {
         assert!(
             probe_clock_calls_for_test() >= 1,
             "probe 必须经过 probe_clock_now()（删掉时钟读取 ⇒ 本用例红）"
+        );
+
+        // ②「耗时」牙：begin → sleep(2ms) → probe ⇒ 记录里的 ns 必须 ≥1ms（下界）。
+        let _ = probe_clock_calls_for_test();
+        let at = p.begin();
+        assert!(at.is_some(), "开启态 begin 必须取时钟");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+        p.probe("HostAoiAppearSleep", at);
+        let rec = p
+            .probes
+            .iter()
+            .find(|r| r.0 == "HostAoiAppearSleep")
+            .expect("sleep 之后必须记录一条");
+        assert!(
+            rec.1 >= 1_000_000,
+            "量到的耗时必须落进记录（休眠 2ms ⇒ ns ≥ 1ms；把 ns 写死 0 / 丢弃 ⇒ 本用例红）：实际 {}",
+            rec.1
         );
     }
 
