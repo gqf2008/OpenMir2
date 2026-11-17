@@ -260,6 +260,23 @@ python -I -B tools/hygiene/docs_anchor_gate.py --prose --base walgit/master
 `merge-base(master, HEAD) = master` ⇒ 空 diff ⇒「检查 0」，**什么都没扫**。
 该门是**增量**口径（只看新增行），对历史悬空锚无感；历史清理仍归 `stale_pointer_gate`，二者不可互相替代。
 
+### 门禁声称纪律（2026-11-17 定，卡 `openmir2-gate-claim-discipline`）
+
+**宣称「门禁全绿」必须指名门禁集合与总数**，否则一律按「没跑」处理：
+
+- **集合**：DoD 五门（`fmt` / `clippy` / `cargo test --workspace` / `msgcodegen --check` / 散文锚门）
+  **+ 工具门全量**（`python -I -B tools/hygiene/tool_selftest_gate.py`）；
+- **总数**：工具门贴 `TOTAL x 项：绿 a / 红 b / 需人工 c / 跳过 d` 与 rc；测试贴 `passed/failed/ignored`
+  三元组（多二进制时报合计与组数）；
+- **`--only <一项>` 只许用于调试，不得作为交付证据**；单文件、单用例、单个子命令的通过同样不算该门通过；
+- **红过必须留痕**：首次红的 rc、用例名、断言原句原样保留；复跑只能补充，不能覆盖首红记录；
+- **量化背景（为什么立这条）**：`butch_ledger` 的工具门自提交 `c5e36783b`（2026-11-13 13:53 +0800，
+  world.rs 引入字符串行连接）起一直红，至 2026-11-17 修复共 **4 天 6 小时**；期间 master 合入
+  **85 个 first-parent merge**、**61 张卡**、**214 条签名条目**在它红着时宣告过「门禁全绿」。
+  唯一写出工具门结果的 merge_result 用的是 `tool_selftest_gate --only stamp_binaries PASS`（1/69 项）。
+  ⇒ 这是「**较弱判据被当成完整判据**」，与「`-Check` GREEN ≠ 三处对齐」「戳 head ≠ 二进制内嵌 revision」
+  同族；修工具只是恢复能力，**口径**要靠这条规矩。
+
 ### 判据分级（tiered acceptance，owner 2026-10-13 裁决，卡 `openmir2-tiered-acceptance-policy`）
 
 「逐字节/逐字段等价」仍是**质量下限**，但**哪些片必须占用独占窗口**按级判定；**判级在审查时显式写进 `review`**，
