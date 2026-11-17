@@ -131,7 +131,7 @@ use tokio::net::tcp::OwnedWriteHalf;
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{mpsc, Mutex};
 
-use users::UserList;
+use users::{GateUser, UserList};
 
 /// C# `CommandMessage.Size`（`src/OpenMir2/Packets/ClientPackets/ClientMesaagePacket.cs:24`）。
 const COMMAND_MESSAGE_SIZE: usize = 12;
@@ -30310,7 +30310,7 @@ async fn gate_conn(
             let read = tokio::select! {
                 r = rd.read(&mut head[head_have..]) => r,
                 Some(cmd) = sim_rx.recv() => {
-                    if let Err(e) = apply_sim_cmd_async(cmd, &mut users, &tx, &mut state, &mut drop_stats, check_block).await {
+                    if let Err(e) = apply_sim_cmd_async(cmd, &mut users, &tx, &mut state, &mut drop_stats, check_block, service_id).await {
                         glog!("WRN", "sim→gate 命令发送失败：{e:#}");
                     }
                     continue;
@@ -30390,6 +30390,7 @@ async fn gate_conn(
                 &mut state,
                 &mut drop_stats,
                 check_block,
+                service_id,
             )
             .await
             {
@@ -30425,6 +30426,49 @@ fn apply_sim_cmd(cmd: SimToGate, users: &mut UserList) {
     }
 }
 
+/// 下发出口槽不存在时的记账结果（卡 `openmir2-missing-socket-warn-storm`）。
+///
+/// `first_warn` = 本次已打了一条 WRN（该 `(网关线号, socket)` 的首次落空）。字段只给测试
+/// 数「本该打几条 WRN」；生产路径不读它（只关心帧按 oracle 照旧丢弃）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeadSlotNote {
+    #[cfg_attr(not(test), allow(dead_code))]
+    first_warn: bool,
+}
+
+/// 下发出口的槽查找（`SM_*` 帧与短包共用；卡 `openmir2-missing-socket-warn-storm`）。
+///
+/// 槽存在 ⇒ `Ok`（调用方照常拼头发送）；槽不存在 ⇒ **帧照旧丢弃、去向照旧**，只把日志口径
+/// 从「每帧一条 WRN」改成：
+/// - 该 `(网关线号, socket)` **首次**落空打一条 WRN（键带线号：socket 号只在一条网关线内唯一）；
+/// - 后续落空不再逐条 WRN，按秒聚合成一行（[`telemetry::aggregate_downlink_dead_socket`]，
+///   独立前缀 `DOWNLINK_DEAD_SOCKET_AGG`——**不得**以 `ENTRY_TELEMETRY` 开头，否则会顶掉
+///   「日志里最后一条 `ENTRY_TELEMETRY` 行 = 终值」口径）；
+/// - **每次落空都计数**（[`telemetry::DOWNLINK_DEAD_SOCKET_TOTAL`]，进 `ENTRY_TELEMETRY`）。
+///
+/// `kind` 是原日志的主语（` SM_* 帧时` / `短包时`），保留「的槽不存在」子串便于日志侧机判。
+fn downlink_slot<'a>(
+    users: &'a UserList,
+    gate_line: u8,
+    socket: i32,
+    len: usize,
+    kind: &str,
+) -> Result<&'a GateUser, DeadSlotNote> {
+    if let Some(u) = users.find(0, socket) {
+        return Ok(u);
+    }
+    let first_warn = telemetry::record_downlink_dead_socket(gate_line, socket);
+    if first_warn {
+        glog!(
+            "WRN",
+            "下发{kind} socket={socket} 的槽不存在，丢弃 {len} 字节（该会话后续落空不再逐条告警）"
+        );
+    } else if let Some(line) = telemetry::aggregate_downlink_dead_socket(now_ms()) {
+        glog!("INF", "{line}");
+    }
+    Err(DeadSlotNote { first_warn })
+}
+
 /// sim → gate 命令的异步落地：`SendFrame` 按 oracle `PlayObject.Socket.cs:101-116` 拼
 /// `GM_DATA`（20B 头 + 12B 命令头 + 尾）并经 [`send_gate_msg`]（= `ProcessBufferSend` 规则）上路；
 /// 其余命令走纯槽操作。
@@ -30435,17 +30479,14 @@ async fn apply_sim_cmd_async(
     state: &mut KeepAlive,
     stats: &mut gate_backpressure::DropStats,
     check_block: usize,
+    gate_line: u8,
 ) -> Result<()> {
     match cmd {
         SimToGate::SendFrame { socket, body } => {
             // oracle `messageHead.Socket = SocketId` / `SessionId = SocketIdx`（`PlayObject.Socket.cs:104-115`）；
             // 按 socket 找回该槽（`SessionIndex` 在出包方向上 oracle 不设，保持 0）。
-            let Some(u) = users.find(0, socket) else {
-                glog!(
-                    "WRN",
-                    "下发 SM_* 帧时 socket={socket} 的槽不存在，丢弃 {} 字节",
-                    body.len()
-                );
+            let Ok(u) = downlink_slot(users, gate_line, socket, body.len(), " SM_* 帧时") else {
+                // 槽不存在：帧按 oracle 照旧丢弃；日志/计数已在 downlink_slot 里处理。
                 return Ok(());
             };
             let head = ServerMessage {
@@ -30482,7 +30523,17 @@ async fn apply_sim_cmd_async(
             Ok(())
         }
         SimToGate::SendRaw { socket, payload } => {
-            apply_sim_send_raw(socket, &payload, users, tx, state, stats, check_block).await
+            apply_sim_send_raw(
+                socket,
+                &payload,
+                users,
+                tx,
+                state,
+                stats,
+                check_block,
+                gate_line,
+            )
+            .await
         }
         other => {
             // 卡 `openmir2-gateway-frame-criticality-queue`（总监 P3 F2）：世界侧清槽（KickUser）
@@ -30501,6 +30552,7 @@ async fn apply_sim_cmd_async(
 }
 
 /// `SendRaw`（`SendSocket(string)` 的短包支）：`PackLength = -len`，网关端产出 `'#' + 正文 + '!'`。
+#[allow(clippy::too_many_arguments)] // 8 个参数同源于本连接的发送上下文（新增 `gate_line` 后超阈值）
 async fn apply_sim_send_raw(
     socket: i32,
     payload: &[u8],
@@ -30509,14 +30561,11 @@ async fn apply_sim_send_raw(
     state: &mut KeepAlive,
     stats: &mut gate_backpressure::DropStats,
     check_block: usize,
+    gate_line: u8,
 ) -> Result<()> {
     // `PlayObject.Socket.cs:63-64`：`Socket = SocketId`、`SessionId = SocketIdx`。
-    let Some(u) = users.find(0, socket) else {
-        glog!(
-            "WRN",
-            "下发短包时 socket={socket} 的槽不存在，丢弃 {} 字节",
-            payload.len()
-        );
+    let Ok(u) = downlink_slot(users, gate_line, socket, payload.len(), "短包时") else {
+        // 槽不存在：短包按 oracle 照旧丢弃；日志/计数已在 downlink_slot 里处理。
         return Ok(());
     };
     let head = ServerMessage {
@@ -31505,6 +31554,119 @@ fn char_literal_len(c: &[char], i: usize) -> Option<usize> {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+
+    /// 卡 `openmir2-missing-socket-warn-storm` 牙③（活槽）：槽存在 ⇒ 正常命中、**0 条 WRN**、
+    /// 计数不变。退化对照在 [`downlink_slot_no_send_empty_round_changes_nothing`]。
+    #[test]
+    fn downlink_slot_live_socket_counts_nothing() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        telemetry::reset_dead_socket_state_for_tests();
+        let mut users = UserList::new();
+        users.open(4_321, 7, "1.2.3.4".to_string());
+        let before =
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        let found =
+            downlink_slot(&users, 0, 4_321, 12, "短包时").expect("活槽必须命中，不得走告警路径");
+        assert_eq!(found.socket, 4_321, "必须命中该 socket 的槽");
+        assert_eq!(
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+            before,
+            "活槽（正常发送）不得改下空隙计数 ⇒ 0 条 WRN"
+        );
+    }
+
+    /// 卡 `openmir2-missing-socket-warn-storm` 牙①（生产接缝版）：同一死槽连发 **10,000** 帧 ⇒
+    /// `downlink_slot` 每帧都返回 `Err`（帧照丢），但 `first_warn` **恰 1 次**（= 1 条 WRN），
+    /// 计数**恰好 +10,000**。变异：去掉已告警集合判断 ⇒ `firsts == 1` 红；计数只随告警 +1 ⇒ 计数红。
+    #[test]
+    fn downlink_slot_same_dead_socket_warns_once_but_counts_all() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        telemetry::reset_dead_socket_state_for_tests();
+        let users = UserList::new();
+        let before =
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        let mut dropped = 0u64;
+        let mut firsts = 0u64;
+        for _ in 0..10_000 {
+            match downlink_slot(&users, 2, 999, 24, " SM_* 帧时") {
+                Ok(_) => panic!("空槽表不得命中任何槽"),
+                Err(note) => {
+                    dropped += 1;
+                    if note.first_warn {
+                        firsts += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(dropped, 10_000, "每次落空都必须返回 Err（帧照旧丢弃）");
+        assert_eq!(firsts, 1, "同一死槽连发 10,000 帧必须只打 1 条 WRN");
+        assert_eq!(
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+            before + 10_000,
+            "计数不能被告警节流"
+        );
+    }
+
+    /// 牙②（生产接缝版）：**10 个不同死槽各 1 帧** ⇒ 10 条 WRN、计数 +10
+    /// （不是全局只告警一次）。
+    #[test]
+    fn downlink_slot_distinct_dead_sockets_each_warn() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        telemetry::reset_dead_socket_state_for_tests();
+        let users = UserList::new();
+        let before =
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        let mut firsts = 0u64;
+        for socket in 0..10 {
+            match downlink_slot(&users, 0, 500 + socket, 1, "短包时") {
+                Ok(_) => panic!("空槽表不得命中"),
+                Err(note) => {
+                    if note.first_warn {
+                        firsts += 1;
+                    }
+                }
+            }
+        }
+        assert_eq!(firsts, 10, "10 个不同死槽必须各告警一次");
+        assert_eq!(
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+            before + 10
+        );
+    }
+
+    /// 牙④（空轮）：没有发出任何帧 ⇒ 无输出、计数不变；且空轮不得留下「幽灵已告警键」
+    /// （其后的第一次真实落空仍必须是首告警）。
+    #[test]
+    fn downlink_slot_no_send_empty_round_changes_nothing() {
+        let _g = telemetry::TEST_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        telemetry::reset_dead_socket_state_for_tests();
+        let before =
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed);
+        // 空轮：一次 downlink_slot 都没调用。
+        assert_eq!(
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+            before,
+            "空轮不得改下空隙计数 ⇒ 无输出"
+        );
+        let users = UserList::new();
+        let note = downlink_slot(&users, 5, 6_001, 8, "短包时").expect_err("死槽必须返回 Err");
+        assert!(
+            note.first_warn,
+            "空轮之后首次落空仍须打 WRN（无幽灵告警态）"
+        );
+        assert_eq!(
+            telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(std::sync::atomic::Ordering::Relaxed),
+            before + 1
+        );
+    }
 
     /// **异步上界牙**（卡 `openmir2-gamesvr-db-startup-hermeticity`）：慢异步加载在给定上界处
     /// 必须返回 `Timeout`（不许一直等）。生产上界由 [`STARTUP_DB_LOAD_BOUND`] 提供，这里用短

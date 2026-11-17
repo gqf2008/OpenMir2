@@ -29,7 +29,9 @@
 //! `logon ≥ attempt ≥ ok` 只在「无重排队」时成立；若读数违背它，先数日志里的
 //! 「角色数据保存中,稍后重新读取」。
 
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicI64, AtomicU64, Ordering::Relaxed};
+use std::sync::{Mutex, OnceLock};
 
 /// 汇总打印的事件间隔（每 N 次事件打印一行；0 = 从不打印）。
 const PRINT_EVERY: u64 = 100;
@@ -138,6 +140,25 @@ pub static DB_LINK_RECONNECT: AtomicU64 = AtomicU64::new(0);
 /// 收到 `DBR_LOADHUMANRCD` 应答的次数——**在 `recog` 判断之前**（签名通过即计），
 /// 用来区分「应答没回来」与「回来了却没进 attempt」（query 对不上的那 8 个）。
 pub static LOADDB_REPLY_SEEN: AtomicU64 = AtomicU64::new(0);
+
+/// **下发时目标槽已不存在**而丢弃的帧数（进程级；卡 `openmir2-missing-socket-warn-storm`）。
+///
+/// 每次落空 **+1**，**与是否已告警无关**——告警节流只压日志，不压计数。窗口 37（5000 档）
+/// 这一个口子打了 2,303,294 条 WRN（占全部 WRN 99.7%，日志 238MB）：客户端 60s play 超时先于
+/// 取档排队（尾部 p90 85s）⇒ 断开后世界仍保留会话每 tick 广播，每次落空逐条同步打一行。
+/// 该字段进 [`summary_line`]（`ENTRY_TELEMETRY`），降噪后的落空量仍可对账。
+pub static DOWNLINK_DEAD_SOCKET_TOTAL: AtomicU64 = AtomicU64::new(0);
+
+/// 已告警过的 `(网关线号, socket)`。键**必须带线号**：socket 号只在一条网关线内唯一
+/// （不同网关线的同号 socket 是不同会话，各自都该有自己的首告警）。
+static DEAD_SOCKET_WARNED: OnceLock<Mutex<HashSet<(u8, i32)>>> = OnceLock::new();
+
+/// 两次「落空聚合行」之间的最小间隔（毫秒）：非首次落空**最多 1 行/秒**，取代逐帧 WRN。
+const DEAD_SOCKET_AGG_INTERVAL_MS: i64 = 1_000;
+/// 自上次聚合行以来被抑制（未逐条 WRN）的落空次数。
+static DEAD_SOCKET_SUPPRESSED: AtomicU64 = AtomicU64::new(0);
+/// 上次聚合行的时钟（`i64::MIN` = 从未打过 ⇒ 第一条被抑制的落空立即聚合成行）。
+static DEAD_SOCKET_LAST_AGG_MS: AtomicI64 = AtomicI64::new(i64::MIN);
 
 /// 每个样本类别最多打印几条（前 N 条原样字段；之后只计数）。
 const SAMPLE_LIMIT: u64 = 5;
@@ -438,6 +459,55 @@ pub fn record_loaddb_reply_seen() -> Option<String> {
     bump(&LOADDB_REPLY_SEEN)
 }
 
+fn dead_socket_warned() -> &'static Mutex<HashSet<(u8, i32)>> {
+    DEAD_SOCKET_WARNED.get_or_init(|| Mutex::new(HashSet::new()))
+}
+
+/// 记一次「下发时槽不存在」并判定**该不该打 WRN**（卡 `openmir2-missing-socket-warn-storm`）。
+///
+/// - 计数 [`DOWNLINK_DEAD_SOCKET_TOTAL`] **总是 +1**（节流只压日志，不压计数）；
+/// - 返回 `true` = 该 `(网关线号, socket)` **首次**落空 ⇒ 调用方打**一条** WRN；
+///   同一键此后恒 `false`（不再逐条 WRN，后续量走 [`aggregate_downlink_dead_socket`] 的
+///   按秒聚合行 + 汇总行里的累计字段）。
+#[must_use]
+pub fn record_downlink_dead_socket(gate_line: u8, socket: i32) -> bool {
+    DOWNLINK_DEAD_SOCKET_TOTAL.fetch_add(1, Relaxed);
+    let mut warned = dead_socket_warned()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    warned.insert((gate_line, socket))
+}
+
+/// 非首次落空的**按秒聚合**：`Some(行)` = 距上次聚合 ≥ [`DEAD_SOCKET_AGG_INTERVAL_MS`]，
+/// 行内带这段时间被抑制（未逐条 WRN）的条数与进程累计值。
+///
+/// **前缀必须是 `DOWNLINK_DEAD_SOCKET_AGG`，不得以 `ENTRY_TELEMETRY` 开头**：本项目口径是
+/// 「日志里**最后一条** `ENTRY_TELEMETRY` 行 = 终值」，舰队归档/停止脚本与窗口复核都按
+/// `Select-String 'ENTRY_TELEMETRY' | Select-Object -Last 1` 取它；风暴恰在窗口末段，若聚合行
+/// 复用该前缀，最后一条终值会被只有两个字段的聚合行顶掉、所有计数丢失
+/// （卡 `openmir2-missing-socket-warn-storm` P1 返工）。
+///
+/// 逐帧只做一次原子加、一次读：不到 1s 不分配、不打印 ⇒ 高负载下这个口子最多 1 行/秒。
+pub fn aggregate_downlink_dead_socket(now_ms: i64) -> Option<String> {
+    DEAD_SOCKET_SUPPRESSED.fetch_add(1, Relaxed);
+    let last = DEAD_SOCKET_LAST_AGG_MS.load(Relaxed);
+    if now_ms.saturating_sub(last) < DEAD_SOCKET_AGG_INTERVAL_MS {
+        return None;
+    }
+    // 只有抢到窗口的那一次打印（并发调用不会各打一行）。
+    if DEAD_SOCKET_LAST_AGG_MS
+        .compare_exchange(last, now_ms, Relaxed, Relaxed)
+        .is_err()
+    {
+        return None;
+    }
+    let suppressed = DEAD_SOCKET_SUPPRESSED.swap(0, Relaxed);
+    Some(format!(
+        "DOWNLINK_DEAD_SOCKET_AGG svc=game-svr suppressed={suppressed} total={}",
+        DOWNLINK_DEAD_SOCKET_TOTAL.load(Relaxed)
+    ))
+}
+
 /// `recog != 1` 的取档应答 +1；整百 ⇒ 返回一行汇总。
 #[must_use]
 pub fn record_load_reply_other() -> Option<String> {
@@ -487,7 +557,7 @@ pub(crate) fn reset_final_line_once_for_tests() {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -521,7 +591,8 @@ pub fn summary_line() -> String {
         REPLY_PENDING_MAX.load(Relaxed),
         DRAIN_EVENTS_DRAINED.load(Relaxed),
         DRAIN_BUDGET_HIT.load(Relaxed),
-        REPLY_TABLE_MAX.load(Relaxed)
+        REPLY_TABLE_MAX.load(Relaxed),
+        DOWNLINK_DEAD_SOCKET_TOTAL.load(Relaxed)
     )
 }
 
@@ -530,6 +601,17 @@ pub fn summary_line() -> String {
 pub(crate) fn reset_timestamps_for_tests() {
     FIRST_ENTER_MS.store(-1, Relaxed);
     LAST_ENTER_MS.store(-1, Relaxed);
+}
+
+/// 测试专用：清空「已告警键」与按秒聚合的状态（生产路径不调用；累计计数只按差值断言）。
+#[cfg(test)]
+pub(crate) fn reset_dead_socket_state_for_tests() {
+    dead_socket_warned()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clear();
+    DEAD_SOCKET_SUPPRESSED.store(0, Relaxed);
+    DEAD_SOCKET_LAST_AGG_MS.store(i64::MIN, Relaxed);
 }
 
 /// 进程级计数器被并行用例共享 ⇒ 会互相改数的用例必须串行（否则断言「另一个计数不变」会被
@@ -599,6 +681,7 @@ mod tests {
             "drain_events_drained=",
             "drain_budget_hit=",
             "reply_table_max=",
+            "downlink_dead_socket_total=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
@@ -877,5 +960,132 @@ mod tests {
         );
         assert_eq!(ENTER_ATTEMPT.load(Ordering::Relaxed), b + 1);
         assert_eq!(ENTER_OK.load(Ordering::Relaxed), c, "attempt 不得动 ok");
+    }
+
+    /// 卡 `openmir2-missing-socket-warn-storm` 牙①：**同一死槽连发 10,000 帧** ⇒
+    /// 生产路径只在该函数返回 `true` 时打 WRN ⇒ **恰 1 条 WRN**；
+    /// 计数**恰好 +10,000**（节流只压日志，不能压计数）。
+    ///
+    /// 退化形态（空输入）：先断言 0 次调用不改计数，再开始循环（本用例内也覆盖「空集」）。
+    /// 变异：删掉 `HashSet::insert` 的返回值判断（恒 `true`）⇒ `firsts == 1` 红；
+    /// 把计数改成只在 `true` 时 +1 ⇒ `before + 10_000` 红。
+    #[test]
+    fn dead_socket_warns_once_but_counts_every_drop() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_dead_socket_state_for_tests();
+        let before = DOWNLINK_DEAD_SOCKET_TOTAL.load(Ordering::Relaxed);
+        // 空集形态：一次落空都没有 ⇒ 读数不变。
+        assert_eq!(DOWNLINK_DEAD_SOCKET_TOTAL.load(Ordering::Relaxed), before);
+        let mut firsts = 0u64;
+        for _ in 0..10_000 {
+            if record_downlink_dead_socket(3, 77) {
+                firsts += 1;
+            }
+        }
+        assert_eq!(
+            firsts, 1,
+            "同一 (网关线号, socket) 只许首告警一次（10,000 帧必须仍是 1 条 WRN）"
+        );
+        assert_eq!(
+            DOWNLINK_DEAD_SOCKET_TOTAL.load(Ordering::Relaxed),
+            before + 10_000,
+            "计数必须逐帧 +1，不受告警节流影响"
+        );
+    }
+
+    /// 牙②：**10 个不同死槽各 1 帧** ⇒ 10 条 WRN、计数 +10（不是全局只告警一次）；
+    /// 且键含**网关线号**——另一条网关线上的同号 socket 是新会话，必须各自告警。
+    #[test]
+    fn distinct_dead_sockets_each_warn_once_and_key_includes_gate_line() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_dead_socket_state_for_tests();
+        let before = DOWNLINK_DEAD_SOCKET_TOTAL.load(Ordering::Relaxed);
+        let mut firsts = 0u64;
+        for socket in 0..10 {
+            if record_downlink_dead_socket(0, 1_000 + socket) {
+                firsts += 1;
+            }
+        }
+        assert_eq!(firsts, 10, "10 个不同死槽必须各告警一次");
+        assert_eq!(
+            DOWNLINK_DEAD_SOCKET_TOTAL.load(Ordering::Relaxed),
+            before + 10
+        );
+        assert!(
+            record_downlink_dead_socket(1, 1_000),
+            "键必须含网关线号：另一条线的同号 socket 是新会话，仍须首告警"
+        );
+        assert_eq!(
+            DOWNLINK_DEAD_SOCKET_TOTAL.load(Ordering::Relaxed),
+            before + 11
+        );
+    }
+
+    /// 后续落空**按秒聚合**：1s 内只出 1 行（行内带被抑制条数），满 1s 再出 1 行；
+    /// 聚合行是独立 `ENTRY_TELEMETRY` 行，不冒充 WRN（牙①的「恰 1 条 WRN」不受影响）。
+    #[test]
+    fn suppressed_dead_sockets_aggregate_at_most_once_per_second() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_dead_socket_state_for_tests();
+        // 首次告警不计入抑制量。
+        assert!(record_downlink_dead_socket(0, 5));
+        let first = aggregate_downlink_dead_socket(10_000).expect("首次聚合行");
+        assert!(
+            first.contains("suppressed=1"),
+            "首行带本窗口被抑制条数: {first}"
+        );
+        for i in 1..1_000 {
+            assert!(
+                aggregate_downlink_dead_socket(10_000 + i).is_none(),
+                "1s 窗口内不得再出行（i={i}）"
+            );
+        }
+        // 窗口内共 1 + 999 次抑制调用；满 1s 的这一次触发第二行，swap 前已含本次。
+        let next = aggregate_downlink_dead_socket(11_001).expect("满 1s 必须出行");
+        assert!(
+            next.contains("suppressed=1000"),
+            "第二行必须带整秒窗口的抑制条数: {next}"
+        );
+    }
+
+    /// 卡 `openmir2-missing-socket-warn-storm` P1 返工牙：**聚合行不得顶掉终值行**。
+    ///
+    /// 项目口径「日志里最后一条 `ENTRY_TELEMETRY` 行 = 终值」（舰队归档/停止脚本与窗口复核
+    /// 都取它）。构造「先打汇总行、再触发一次聚合行」的日志序列，按同一口径取最后一条
+    /// `ENTRY_TELEMETRY` 行：必须仍是汇总行（带 `logon_frames_seen=`），聚合行只能有自己的
+    /// 独立前缀。
+    ///
+    /// 变异：把聚合行前缀改回 `ENTRY_TELEMETRY` ⇒ 最后一条 `ENTRY_TELEMETRY` 行变成聚合行，
+    /// `logon_frames_seen=` 缺失 ⇒ 本用例红。
+    #[test]
+    fn aggregate_line_does_not_shadow_last_entry_telemetry_line() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_dead_socket_state_for_tests();
+        let summary = summary_line();
+        assert!(
+            summary.starts_with("ENTRY_TELEMETRY svc=game-svr "),
+            "前提：汇总行必须以 ENTRY_TELEMETRY 开头: {summary}"
+        );
+        // 风暴发生在窗口末段：汇总行之后紧跟聚合行是常态。
+        let agg = aggregate_downlink_dead_socket(10_000).expect("首次聚合行");
+        assert!(
+            !agg.starts_with("ENTRY_TELEMETRY"),
+            "聚合行不得复用 ENTRY_TELEMETRY 前缀（会顶掉终值行）: {agg}"
+        );
+        assert!(
+            agg.starts_with("DOWNLINK_DEAD_SOCKET_AGG "),
+            "聚合行必须用独立前缀: {agg}"
+        );
+        // 按舰队口径取「最后一条 ENTRY_TELEMETRY 行」。
+        let lines = [summary, agg];
+        let last_entry_line = lines
+            .iter()
+            .rev()
+            .find(|l| l.starts_with("ENTRY_TELEMETRY"))
+            .expect("日志里必须有 ENTRY_TELEMETRY 终值行");
+        assert!(
+            last_entry_line.contains("logon_frames_seen="),
+            "最后一条 ENTRY_TELEMETRY 行必须仍是汇总终值（聚合行顶掉 ⇒ 缺 logon_frames_seen=）: {last_entry_line}"
+        );
     }
 }
