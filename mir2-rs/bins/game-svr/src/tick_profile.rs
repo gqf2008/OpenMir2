@@ -556,7 +556,11 @@ impl HostTickProfile {
     #[inline]
     pub fn probe(&mut self, name: &'static str, at: Option<Instant>) {
         let Some(at) = at else { return };
-        self.record_probe_ns(name, nanos_since(at), 1);
+        // 终点时钟走**同一接缝** `probe_clock_now()`（= `at.elapsed()` 等价写法）⇒ 测试构建里
+        // 「取过时钟」可被计数证明（卡 `openmir2-tickprofile-probe-clock-seam`）。
+        let ns = u64::try_from(probe_clock_now().saturating_duration_since(at).as_nanos())
+            .unwrap_or(u64::MAX);
+        self.record_probe_ns(name, ns, 1);
     }
 
     /// 记一条命名子探针（`calls` 次调用合计 `ns`）。窗口累计与逐 tick 行同口径；
@@ -572,6 +576,13 @@ impl HostTickProfile {
         if self.slow_threshold_ns.is_some() {
             self.tick_probe_rows.push((name, ns));
         }
+    }
+
+    /// **测试专用**：直接喂一条子探针的 `ns`（不取时钟）——确定性用例用它，
+    /// 避免「空操作的 `Instant` 差可为 0」这种计时噪声（卡 `openmir2-tickprofile-probe-clock-seam`）。
+    #[cfg(test)]
+    pub fn probe_ns_for_test(&mut self, name: &'static str, ns: u64) {
+        self.record_probe_ns(name, ns, 1);
     }
 
     /// 整 tick 终点：记 `HostTickTotal` + 残差 `HostUnaccounted`，并推进窗口计数。
@@ -1017,27 +1028,57 @@ mod tests {
         assert!(off_ref.probes.is_empty());
     }
 
-    /// **子探针不吃残差**：开启态记录 `probe` 后 `tick_sum_ns` 不变（父段与子探针可嵌套）。
-    /// 窗口取走后 `probes` 清零。
+    /// **子探针不吃残差**（确定性）+ **窗口取走后清零**；另有一条独立的「取时钟接线」用例。
+    ///
+    /// 原用例断言 `probes[0].1 > 0`（墙钟下界）⇒ 并行负载下空操作的 `Instant` 差可为 0，
+    /// 是计时型 flake（卡 `openmir2-tickprofile-probe-clock-seam`）。现在把两件事分开：
+    /// ①「记录成立/不吃残差/窗口清零」用**喂 ns** 的确定性断言；
+    /// ②「`probe()` 真的取了时钟」用 `probe_clock_calls_for_test()` 计数（**不断言 ns > 0**）。
     #[test]
-    fn probe_does_not_change_residual_and_window_takes_probes() {
+    fn probe_records_without_touching_residual_and_window_takes_probes() {
         let mut p = HostTickProfile {
             enabled: true,
             ..HostTickProfile::default()
         };
         p.tick_sum_ns = 123;
-        let at = p.begin();
-        assert!(at.is_some());
-        p.probe("HostAoiAppearBuild", at);
+        p.probe_ns_for_test("HostAoiAppearBuild", 456);
         assert_eq!(p.tick_sum_ns, 123, "probe 不得改 tick_sum_ns");
         assert_eq!(p.probes.len(), 1);
-        assert!(p.probes[0].1 > 0, "累计 ns 必须 > 0");
+        assert_eq!(
+            p.probes[0],
+            ("HostAoiAppearBuild", 456, 1),
+            "聚合必须逐字记录"
+        );
+        // 同名的第二次调用必须累加（calls 也是）
+        p.probe_ns_for_test("HostAoiAppearBuild", 44);
+        assert_eq!(p.probes[0], ("HostAoiAppearBuild", 500, 2));
         // 手工推进窗口（不依赖真实 tick）。
         p.window_ticks = 1;
         p.window_ns = 1;
         let w = p.take_window().expect("窗口非空");
         assert_eq!(w.probes.len(), 1);
+        assert_eq!(w.probes[0], ("HostAoiAppearBuild", 500, 2));
         assert!(p.probes.is_empty(), "取走窗口后子探针必须清零");
+    }
+
+    /// **时钟接线**：`probe()` 必须走 `probe_clock_now()`（计数器 +1）；不取时钟的实现会红。
+    /// 不比较耗时本身 ⇒ 与负载/时钟分辨率无关，不会 flake。
+    #[test]
+    fn probe_reads_the_clock_seam() {
+        let mut p = HostTickProfile {
+            enabled: true,
+            ..HostTickProfile::default()
+        };
+        // 先清零（该计数器是「取走并清零」语义），再断言本次至少调用一次
+        let _ = probe_clock_calls_for_test();
+        let at = p.begin();
+        assert!(at.is_some(), "开启态 begin 必须取时钟");
+        p.probe("HostAoiAppearBuild", at);
+        assert_eq!(p.probes.len(), 1, "probe 必须记录一条");
+        assert!(
+            probe_clock_calls_for_test() >= 1,
+            "probe 必须经过 probe_clock_now()（删掉时钟读取 ⇒ 本用例红）"
+        );
     }
 
     /// **`hear_targets_at` 子探针关闭态零开销**：累加器未置位（主门关 / 慢门未设）时，
