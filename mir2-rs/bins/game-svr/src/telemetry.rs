@@ -52,6 +52,17 @@ static FIRST_ENTER_MS: AtomicI64 = AtomicI64::new(-1);
 /// **末次进世界成功**的会话时钟；每次成功覆盖（只保留最后一条）。
 static LAST_ENTER_MS: AtomicI64 = AtomicI64::new(-1);
 
+/// 发往 6000 面的取档请求数（`req_tx.send` 成功 = 已排进 DB 链路；卡 `openmir2-entry-db-chain-counters`）。
+///
+/// 链路：`logon_frames_seen` → **`loaddb_request_sent`** → （DBSrv `load_request_seen`）→
+/// **`loaddb_reply_seen`** → `enter_attempt` → `enter_ok`，每一段独立对账。
+pub static LOADDB_REQUEST_SENT: AtomicU64 = AtomicU64::new(0);
+/// 写 6000 面失败次数（`run_db_link` 的 `write_all/flush` 失败 ⇒ 已排队的请求丢了）。
+pub static LOADDB_WRITE_ERROR: AtomicU64 = AtomicU64::new(0);
+/// 收到 `DBR_LOADHUMANRCD` 应答的次数——**在 `recog` 判断之前**（签名通过即计），
+/// 用来区分「应答没回来」与「回来了却没进 attempt」（query 对不上的那 8 个）。
+pub static LOADDB_REPLY_SEEN: AtomicU64 = AtomicU64::new(0);
+
 /// 每个样本类别最多打印几条（前 N 条原样字段；之后只计数）。
 const SAMPLE_LIMIT: u64 = 5;
 
@@ -88,6 +99,24 @@ pub fn record_ok(now_ms: i64) -> Option<String> {
     bump(&ENTER_OK)
 }
 
+/// 取档请求已排队 +1；整百 ⇒ 返回一行汇总。
+#[must_use]
+pub fn record_loaddb_request_sent() -> Option<String> {
+    bump(&LOADDB_REQUEST_SENT)
+}
+
+/// 写 6000 面失败 +1；整百 ⇒ 返回一行汇总。
+#[must_use]
+pub fn record_loaddb_write_error() -> Option<String> {
+    bump(&LOADDB_WRITE_ERROR)
+}
+
+/// 收到 `DBR_LOADHUMANRCD` 应答（recog 判断之前）+1；整百 ⇒ 返回一行汇总。
+#[must_use]
+pub fn record_loaddb_reply_seen() -> Option<String> {
+    bump(&LOADDB_REPLY_SEEN)
+}
+
 /// `recog != 1` 的取档应答 +1；整百 ⇒ 返回一行汇总。
 #[must_use]
 pub fn record_load_reply_other() -> Option<String> {
@@ -104,13 +133,16 @@ pub fn sample_load_reply_other() -> bool {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
         LOAD_REPLY_OTHER.load(Relaxed),
         FIRST_ENTER_MS.load(Relaxed),
-        LAST_ENTER_MS.load(Relaxed)
+        LAST_ENTER_MS.load(Relaxed),
+        LOADDB_REQUEST_SENT.load(Relaxed),
+        LOADDB_REPLY_SEEN.load(Relaxed),
+        LOADDB_WRITE_ERROR.load(Relaxed)
     )
 }
 
@@ -163,6 +195,9 @@ mod tests {
             "load_reply_other=",
             "first_enter_ms=",
             "last_enter_ms=",
+            "loaddb_request_sent=",
+            "loaddb_reply_seen=",
+            "loaddb_write_error=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
