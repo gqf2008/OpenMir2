@@ -92,7 +92,11 @@ impl FrontEngine {
         let before = self.load_list.len() + self.load_temp.len();
         self.load_list.retain(|i| i.socket_id != socket_id);
         self.load_temp.retain(|i| i.socket_id != socket_id);
-        before - (self.load_list.len() + self.load_temp.len())
+        let removed = before - (self.load_list.len() + self.load_temp.len());
+        // **出口⑤**（卡 `openmir2-entry-gap-buckets`）：断线抢占把**未排水**的 logon 摘掉——
+        // 这条路径原先完全不可见，是「enter 与 Σ出口对不上」的一个候选。
+        crate::telemetry::record_logon_disconnect_drop(removed as u64);
+        removed
     }
 
     /// `InSaveRcdList`（`:156-176`）：**OrdinalIgnoreCase** 比较。
@@ -149,9 +153,19 @@ impl FrontEngine {
         let mut actions = Vec::with_capacity(temp.len());
         for info in &temp {
             if info.session_id == 0 {
+                let _ = crate::telemetry::record_logon_handler_exit();
+                // 分支③：`SessionID == 0` 被跳过（卡 `openmir2-entry-gap-buckets`）
+                let _ = crate::telemetry::record_logon_no_request(
+                    crate::telemetry::LogonNoRequest::ZeroSession,
+                );
                 continue; // `:102-105`
             }
             if self.in_save_rcd_list(&info.chr_name) {
+                let _ = crate::telemetry::record_logon_handler_exit();
+                // 分支④：保存中重排队（卡 `openmir2-entry-gap-buckets`）
+                let _ = crate::telemetry::record_logon_no_request(
+                    crate::telemetry::LogonNoRequest::Requeue,
+                );
                 // `:154-158` ⇒ 调用方重排队（`:112-121`）
                 self.load_list.push(info.clone());
                 actions.push(LoadAction::RequeueSaving {
@@ -161,17 +175,23 @@ impl FrontEngine {
                 continue;
             }
             match query(info) {
-                Some(query_id) => actions.push(LoadAction::StartQuery {
-                    query_id,
-                    account: info.account.clone(),
-                    chr_name: info.chr_name.clone(),
-                }),
-                None => actions.push(LoadAction::KickNoData {
-                    gate_idx: info.gate_idx,
-                    socket_id: info.socket_id,
-                    account: info.account.clone(),
-                    chr_name: info.chr_name.clone(),
-                }),
+                Some(query_id) => {
+                    let _ = crate::telemetry::record_logon_handler_exit();
+                    actions.push(LoadAction::StartQuery {
+                        query_id,
+                        account: info.account.clone(),
+                        chr_name: info.chr_name.clone(),
+                    });
+                }
+                None => {
+                    let _ = crate::telemetry::record_logon_handler_exit();
+                    actions.push(LoadAction::KickNoData {
+                        gate_idx: info.gate_idx,
+                        socket_id: info.socket_id,
+                        account: info.account.clone(),
+                        chr_name: info.chr_name.clone(),
+                    });
+                }
             }
         }
         actions // temp 已被 take ⇒ 等价于 `ClearLoadRcdTempList`（`:145`）

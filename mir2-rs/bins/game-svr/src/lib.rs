@@ -27646,6 +27646,11 @@ fn sim_loop(
                     }
                 }
                 GateEvent::LoadDbRequest(info) => {
+                    // **logon 处理入口**（卡 `openmir2-entry-gap-buckets`）：与「发出取档请求 + 各提前返回桶」
+                    // 构成恒等式 `enter == request_sent + Σ(no_request_*)`（无重排队时）。
+                    if let Some(line) = telemetry::record_logon_handler_enter() {
+                        glog!("INF", "{}", line);
+                    }
                     glog!(
                         "INF",
                         "sim: 认证通过 ⇒ 取角色进世界 Account:{} ChrName:{} SessionId:{} GateIdx:{} \
@@ -27728,6 +27733,12 @@ fn sim_loop(
         let actions = match &mut db {
             Some(w) => engine.drain_read_storage(|info| {
                 if !w.state.is_connected() {
+                    // 「收到 logon 但没发请求」分支①（卡 `openmir2-entry-gap-buckets`）
+                    if let Some(line) =
+                        telemetry::record_logon_no_request(telemetry::LogonNoRequest::Disconnected)
+                    {
+                        glog!("INF", "{}", line);
+                    }
                     return None; // `IsConnected`（`DataQueryServer.cs:60`）
                 }
                 let qid = w.next_query_id();
@@ -27758,12 +27769,22 @@ fn sim_loop(
                         Some(qid)
                     }
                     Err(_) => {
+                        // 分支②：`req_tx.send` 失败（链路已断）——此前只置 `query_fail`、不计数
+                        if let Some(line) =
+                            telemetry::record_logon_no_request(telemetry::LogonNoRequest::SendFail)
+                        {
+                            glog!("INF", "{}", line);
+                        }
                         query_fail = true;
                         None
                     }
                 }
             }),
-            None => engine.drain_read_storage(|_| None),
+            None => engine.drain_read_storage(|_| {
+                // 分支⑤：`db` 未装配（链路窗未建立/已摘）⇒ 该 logon 直接踢、不发请求
+                let _ = telemetry::record_logon_no_db_link();
+                None
+            }),
         };
         let _ = query_fail;
         for action in actions {
@@ -27801,8 +27822,17 @@ fn sim_loop(
             {
                 match r.take(qid) {
                     Some(reply) => {
+                        // **匹配到等待者**（取档循环 take 命中）：`reply_matched` 与 `reply_consumed`
+                        // 一起把「fed 了但没到 attempt」切干净（卡 `openmir2-entry-gap-buckets`）。
+                        telemetry::record_reply_matched();
                         let (ident, recog) =
                             dbclient::parse_reply_message(&reply.message).unwrap_or((0, 0));
+                        if ident != mir2_protocol::messages::DBR_LOADHUMANRCD {
+                            // 应答到了但**不是取档应答**（原静默丢弃；卡 `openmir2-entry-gap-buckets`）
+                            if let Some(line) = telemetry::record_reply_ident_other() {
+                                glog!("WRN", "{}", line);
+                            }
+                        }
                         glog!(
                             "INF",
                             "收到角色数据 queryId={qid} Ident={ident} Recog={recog}"
@@ -29136,6 +29166,10 @@ fn sim_loop(
             }
             w.save_outstanding = still_saves;
             w.outstanding = still;
+            // 排水后仍滞留在应答表里的条数（**fed 了但没进 attempt** 的直接量化）
+            if let Some(line) = telemetry::record_reply_pending(r.len() as u64) {
+                glog!("WRN", "{}", line);
+            }
         }
         // 踢旧落地（oracle `RunNotice` 的 `BoKickFlag` 支）：oracle 是"置标志 → 下一 tick 的
         // RunNotice 落地"（≥1 tick）；本骨架在事件 drain 之后的**同一 tick 后段**落地，帧序不变。
@@ -92189,6 +92223,8 @@ mod entry_telemetry_wiring {
     const SRC: &str = include_str!("lib.rs");
     /// 6000 面链路（写失败 / 应答到达 两个计数都在这里）。
     const DBC: &str = include_str!("dbclient.rs");
+    /// 读档控制流（`SessionID==0` 与「保存中重排队」两条分支）。
+    const LD: &str = include_str!("load.rs");
 
     fn needle(name: &str) -> String {
         format!("telemetry::record_{name}(")
@@ -92297,6 +92333,135 @@ mod entry_telemetry_wiring {
         assert!(
             seg.contains("record_loaddb_write_error("),
             "record_loaddb_write_error 必须在写失败分支里"
+        );
+    }
+
+    /// 「收到 logon 但没发请求」四分支：每个枚举变体恰好一处，且落在对应分支。
+    /// 断言里的变体名**运行时拼**（否则 `include_str!("lib.rs")` 会数到本测试自己）。
+    fn variant(name: &str) -> String {
+        format!("LogonNoRequest::{}", name)
+    }
+
+    #[test]
+    fn logon_no_request_buckets_sit_in_their_branches() {
+        assert_eq!(SRC.matches(&variant("Disconnected")).count(), 1);
+        assert_eq!(SRC.matches(&variant("SendFail")).count(), 1);
+        assert_eq!(LD.matches(&variant("ZeroSession")).count(), 1);
+        assert_eq!(LD.matches(&variant("Requeue")).count(), 1);
+
+        // 注意：未连接判断在存档路径也有一处 ⇒ 这里锚到**取档**的 drain 闭包
+        let i = SRC
+            .find("engine.drain_read_storage(|info| {")
+            .expect("取档 drain 闭包");
+        assert!(window(SRC, i, 900).contains(&variant("Disconnected")));
+        // send 失败分支：记录在 `query_fail = true;` **之前**，所以锚到取档闭包里的 `Err(_) => {`
+        let d = SRC
+            .find("engine.drain_read_storage(|info| {")
+            .expect("取档 drain 闭包");
+        let e = d + SRC[d..].find("Err(_) => {").expect("send 失败分支");
+        assert!(window(SRC, e, 800).contains(&variant("SendFail")));
+        let i = LD
+            .find("if info.session_id == 0")
+            .expect("SessionID==0 分支");
+        assert!(window(LD, i, 500).contains(&variant("ZeroSession")));
+        let i = LD
+            .find("if self.in_save_rcd_list(&info.chr_name)")
+            .expect("保存中分支");
+        assert!(window(LD, i, 500).contains(&variant("Requeue")));
+    }
+
+    /// 应答校验失败桶：必须在 `feed` 的非 Accept 分支（`other =>`）里。
+    #[test]
+    fn reply_verify_fail_sits_in_non_accept_arm() {
+        let i = DBC.find("other => {").expect("非 Accept 分支");
+        assert!(window(DBC, i, 600).contains("record_reply_verify_fail("));
+    }
+
+    /// 滞留应答量化：必须在取档排水**结束处**（`w.outstanding = still;` 之后）。
+    #[test]
+    fn reply_pending_is_recorded_after_drain() {
+        let i = SRC.find("w.outstanding = still;").expect("排水结束点");
+        let seg = window(SRC, i, 600);
+        assert!(
+            seg.contains("record_reply_pending("),
+            "必须在排水结束后记录滞留数"
+        );
+        assert!(
+            seg.contains("r.len()"),
+            "滞留数必须取应答表当前长度（写死常量 ⇒ 本用例红）"
+        );
+    }
+
+    /// **出口恒等式**的右端：`load.rs` 里每条离开路径（SessionID==0 / 保存中 / 成功 / 踢）各一处，
+    /// 外加 `delete_human`（断线抢占）。任何一条没计数 ⇒ 恒等式不闭合 ⇒ 本用例逐条点名。
+    #[test]
+    fn every_logon_exit_is_counted() {
+        assert_eq!(
+            LD.matches("record_logon_handler_exit(").count(),
+            4,
+            "load.rs 必须恰好 4 个出口计数（zero/requeue/success/kick）"
+        );
+        let i = LD.find("pub fn delete_human(").expect("delete_human");
+        assert!(
+            window(LD, i, 900).contains("record_logon_disconnect_drop("),
+            "断线抢占摘掉的未排水 logon 必须计数"
+        );
+    }
+
+    /// 应答侧两条边：移除计数在 `take()` 里（按 ident 过滤），匹配计数在取档循环里。
+    #[test]
+    fn reply_consumed_and_matched_are_wired() {
+        let i = DBC
+            .find("pub fn take(&mut self, query_id: i32)")
+            .expect("take()");
+        let seg = window(DBC, i, 900);
+        assert!(seg.contains("record_reply_consumed()"), "take() 必须计移除");
+        assert!(
+            seg.contains("DBR_LOADHUMANRCD"),
+            "只数取档应答（存档应答不得计入）"
+        );
+        // 运行时拼串：否则 `SRC.find` 会命中本测试自己的字面量（本牙第一版就因此恒真）
+        let needle = format!("record_reply_{}()", "matched");
+        let j = SRC.find("收到角色数据 queryId=").expect("取档循环日志点");
+        assert!(
+            window(SRC, j.saturating_sub(800), 900).contains(&needle),
+            "reply_matched 必须在取档循环里"
+        );
+    }
+
+    /// logon 入口桶必须在 `GateEvent::LoadDbRequest` 臂首行；恒等式的左端就靠它。
+    #[test]
+    fn logon_handler_enter_sits_at_arm_entry() {
+        let anchor = format!("GateEvent::LoadDbRequest({} =>", "info)");
+        let i = SRC.find(&anchor).expect("登录事件分支");
+        assert!(window(SRC, i, 500).contains("record_logon_handler_enter("));
+    }
+
+    /// `db` 未装配分支：必须在 `None => engine.drain_read_storage(` 的闭包里计数。
+    #[test]
+    fn no_db_link_bucket_sits_in_none_arm() {
+        let i = SRC
+            .find("None => engine.drain_read_storage(")
+            .expect("db 未装配臂");
+        assert!(window(SRC, i, 400).contains("record_logon_no_db_link("));
+    }
+
+    /// 非取档应答：必须在取档循环里、ident 判等之后计数。
+    /// 锚点用**取档循环独有的日志串**（该串同样只出现在 lib.rs 生产代码里；测试自身不含完整解析表达式，
+    /// 避免 `include_str!` 数到本测试——本牙第一版就踩过：`rfind` 命中了测试自己的字面量而恒真）。
+    #[test]
+    fn ident_other_bucket_sits_after_ident_parse() {
+        let marker = format!("收到角色{} queryId=", "数据");
+        let k = SRC.find(&marker).expect("取档应答日志点");
+        let from = k.saturating_sub(700);
+        let seg = window(SRC, from, 800);
+        assert!(
+            seg.contains("record_reply_ident_other("),
+            "必须在 ident 判等分支计数"
+        );
+        assert!(
+            seg.contains("DBR_LOADHUMANRCD"),
+            "必须按 ident 判等（不是无条件计）"
         );
     }
 

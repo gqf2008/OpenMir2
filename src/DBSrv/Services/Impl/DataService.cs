@@ -45,9 +45,27 @@ namespace DBSrv.Services.Impl
             LogService.Info($"玩家数据存储服务[{_setting.ServerAddr}:{_setting.ServerPort}]已启动.等待链接...");
         }
 
+        /// <summary>关服一次性门（0 = 未停，1 = 已停/正在停）。</summary>
+        private int _stopping;
+
         public void Stop()
         {
-            _serverSocket.Stop();
+            // **一次性门 + 兜底**（卡 `openmir2-entry-gap-buckets`）：`StopAsync` 可能被 `Program.Main` 的
+            // `cts.Token.Register(...)` 与 Host 优雅关服各调一次；TouchSocket 的 `ReleaseAll()` 在并发枚举
+            // 自身连接集合时会抛 `Collection was modified`（关服 teardown 期，出现在 `final` 行之后）。
+            // 门保证只走一次；异常记 WRN **不上抛**——进程正在退出，但绝不静默。
+            if (Interlocked.Exchange(ref _stopping, 1) != 0)
+            {
+                return;
+            }
+            try
+            {
+                _serverSocket.Stop();
+            }
+            catch (Exception ex)
+            {
+                LogService.Warn($"[6000面] 关服释放异常（已记录，不向上抛）: {ex.GetType().Name}: {ex.Message}");
+            }
         }
 
         private Task Received(IClient client, ReceivedDataEventArgs e)
@@ -99,6 +117,11 @@ namespace DBSrv.Services.Impl
         {
             int queryId = requestData.QueryId;
             ServerRequestMessage requestMessage = SerializerUtil.Deserialize<ServerRequestMessage>(EDCode.DecodeBuff(requestData.Message));
+            // **只数取档请求**（与 game-svr `loaddb_request_sent` 可比的量）
+            if (requestMessage.Ident == Messages.DB_LOADHUMANRCD)
+            {
+                EntryTelemetry.DbLoadHumanRcdDecoded();
+            }
             int packetLen = requestData.Message.Length + requestData.Packet.Length + ServerDataPacket.FixedHeaderLen;
             if (packetLen >= Messages.DefBlockSize && queryId > 0 && requestData.Packet != null && requestData.Sign != null)
             {

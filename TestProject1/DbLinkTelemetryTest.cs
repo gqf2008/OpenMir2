@@ -81,6 +81,7 @@ public class DbLinkTelemetryTest
                  {
                      "db_conn_bytes_read=100", "db_conn_frames_decoded=1", "db_conn_parse_error=1",
                      "db_conn_sign_reject=1", "db_conn_fail_reply=1", "db_conn_bad_request_info=1",
+                     "db_conn_loadhumanrcd_decoded=0",
                  })
         {
             Assert.That(line, Does.Contain(key), $"汇总行缺/错 {key}: {line}");
@@ -129,7 +130,7 @@ public class DbLinkTelemetryTest
     public void DataServiceCallsEachDbCounterExactlyOnceInItsBranch()
     {
         var src = DataServiceSource();
-        foreach (var c in new[] { "DbFramesDecoded", "AddDbBytesRead", "DbParseError", "DbSignReject", "DbFailReply", "DbBadRequestInfo" })
+        foreach (var c in new[] { "DbFramesDecoded", "AddDbBytesRead", "DbParseError", "DbSignReject", "DbFailReply", "DbBadRequestInfo", "DbLoadHumanRcdDecoded" })
         {
             var needle = string.Concat("EntryTelemetry.", c, "(");
             Assert.That(Count(src, needle), Is.EqualTo(1), $"{needle} 必须恰好一个调用点");
@@ -149,6 +150,29 @@ public class DbLinkTelemetryTest
         var from = Math.Max(0, i - 600);
         var seg = src.Substring(from, Math.Min(1200, src.Length - from));
         Assert.That(seg, Does.Contain(string.Concat("EntryTelemetry.", counter, "(")), $"{counter} 必须落在{what}里");
+    }
+
+    /// <summary>
+    /// **6000 面关服幂等 + 零连接安全**（卡 `openmir2-entry-gap-buckets`）：`DataService.Stop()` 连调两次
+    /// 不抛；从未起服（零连接）时也不抛。原实现直接把 `_serverSocket.Stop()` 交出去，
+    /// TouchSocket 的 `ReleaseAll()` 在并发枚举连接集合时抛 `Collection was modified`（出现在 `final` 之后）。
+    /// </summary>
+    [Test]
+    public void DataServiceStopIsIdempotentAndSafeWithoutClients()
+    {
+        // Stop 的兜底分支会写 WRN ⇒ 需要一个可用 logger（生产由启动流程装配）
+        var prevLogger = LogService.Logger;
+        LogService.Logger = new Serilog.LoggerConfiguration().MinimumLevel.Verbose().CreateLogger();
+        try
+        {
+            var svc = new DataService(new DBSrv.Conf.SettingsModel(), null!, null!, null!);
+            Assert.DoesNotThrow(() => svc.Stop(), "零连接时 Stop 不得抛");
+            Assert.DoesNotThrow(() => svc.Stop(), "第二次 Stop 必须幂等");
+        }
+        finally
+        {
+            LogService.Logger = prevLogger;
+        }
     }
 
     // ---------- 4) 关服幂等 ----------
