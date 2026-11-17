@@ -29,7 +29,7 @@
 //! `logon ≥ attempt ≥ ok` 只在「无重排队」时成立；若读数违背它，先数日志里的
 //! 「角色数据保存中,稍后重新读取」。
 
-use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
+use std::sync::atomic::{AtomicI64, AtomicU64, Ordering::Relaxed};
 
 /// 汇总打印的事件间隔（每 N 次事件打印一行；0 = 从不打印）。
 const PRINT_EVERY: u64 = 100;
@@ -46,6 +46,12 @@ pub static ENTER_OK: AtomicU64 = AtomicU64::new(0);
 /// 「`logon_frames_seen - enter_attempt` 的缺口」到底是「没回包」还是「回了失败码」分不开。
 pub static LOAD_REPLY_OTHER: AtomicU64 = AtomicU64::new(0);
 
+/// **首个登录事件**的会话时钟（`world.clock_ms`）；只写一次（卡 `openmir2-entry-rate-instrument`）。
+/// 未发生 = `-1`。速率 = (`last_enter_ms` − `first_enter_ms`) 与条数一起算，不再靠外部日志推。
+static FIRST_ENTER_MS: AtomicI64 = AtomicI64::new(-1);
+/// **末次进世界成功**的会话时钟；每次成功覆盖（只保留最后一条）。
+static LAST_ENTER_MS: AtomicI64 = AtomicI64::new(-1);
+
 /// 每个样本类别最多打印几条（前 N 条原样字段；之后只计数）。
 const SAMPLE_LIMIT: u64 = 5;
 
@@ -60,9 +66,11 @@ fn bump(counter: &AtomicU64) -> Option<String> {
     Some(summary_line())
 }
 
-/// 网关侧登录事件 +1；该次触达整百 ⇒ 返回一行汇总（调用方负责 `glog!`）。
+/// 网关侧登录事件 +1，并把**首个**事件时刻记进 `FIRST_ENTER_MS`（只写一次，不碰热路径的时钟）；
+/// 该次触达整百 ⇒ 返回一行汇总（调用方负责 `glog!`）。
 #[must_use]
-pub fn record_logon() -> Option<String> {
+pub fn record_logon(now_ms: i64) -> Option<String> {
+    let _ = FIRST_ENTER_MS.compare_exchange(-1, now_ms, Relaxed, Relaxed);
     bump(&LOGON_FRAMES_SEEN)
 }
 
@@ -72,9 +80,11 @@ pub fn record_attempt() -> Option<String> {
     bump(&ENTER_ATTEMPT)
 }
 
-/// 进世界成功 +1；该次触达整百 ⇒ 返回一行汇总。
+/// 进世界成功 +1，并把本次时刻记进 `LAST_ENTER_MS`（**末次覆盖**：只留最后一条成功）；
+/// 该次触达整百 ⇒ 返回一行汇总。
 #[must_use]
-pub fn record_ok() -> Option<String> {
+pub fn record_ok(now_ms: i64) -> Option<String> {
+    LAST_ENTER_MS.store(now_ms, Relaxed);
     bump(&ENTER_OK)
 }
 
@@ -94,12 +104,21 @@ pub fn sample_load_reply_other() -> bool {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={} load_reply_other={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
-        LOAD_REPLY_OTHER.load(Relaxed)
+        LOAD_REPLY_OTHER.load(Relaxed),
+        FIRST_ENTER_MS.load(Relaxed),
+        LAST_ENTER_MS.load(Relaxed)
     )
+}
+
+/// 测试专用：复位两个时间戳（生产路径不调用；计数器本身单调不减，只按差值断言）。
+#[cfg(test)]
+pub(crate) fn reset_timestamps_for_tests() {
+    FIRST_ENTER_MS.store(-1, Relaxed);
+    LAST_ENTER_MS.store(-1, Relaxed);
 }
 
 /// 进程级计数器被并行用例共享 ⇒ 会互相改数的用例必须串行（否则断言「另一个计数不变」会被
@@ -119,8 +138,8 @@ mod tests {
         // 计数器是进程级全局量：用「差值」而不是绝对值（其它用例/并行测试也会动它们）。
         let before = LOGON_FRAMES_SEEN.load(Ordering::Relaxed);
         let mut printed = 0;
-        for _ in 0..PRINT_EVERY {
-            if record_logon().is_some() {
+        for i in 0..PRINT_EVERY {
+            if record_logon(1_000 + i as i64).is_some() {
                 printed += 1;
             }
         }
@@ -142,6 +161,8 @@ mod tests {
             "enter_attempt=",
             "enter_ok=",
             "load_reply_other=",
+            "first_enter_ms=",
+            "last_enter_ms=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
@@ -165,6 +186,39 @@ mod tests {
             SAMPLE_LOG_REPLY_OTHER.load(Ordering::Relaxed),
             before + SAMPLE_LIMIT + 1,
             "采样计数器必须逐次 +1（与业务计数分开）"
+        );
+    }
+
+    /// 首时间戳只记**第一次** logon：后续 logon 不得改写（删 `compare_exchange` ⇒ 本用例红）。
+    #[test]
+    fn first_enter_ms_records_only_first_logon() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_timestamps_for_tests();
+        let _ = record_logon(1_000);
+        let _ = record_logon(2_500);
+        assert_eq!(
+            FIRST_ENTER_MS.load(Ordering::Relaxed),
+            1_000,
+            "首个时间戳必须是第一次 logon 的时钟值"
+        );
+    }
+
+    /// 末时间戳**末次覆盖**：两次 enter_ok 之后必须等于后一次（删 `store` 或改成只写一次 ⇒ 红）。
+    #[test]
+    fn last_enter_ms_takes_last_enter_ok() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        reset_timestamps_for_tests();
+        let _ = record_ok(5_000);
+        let _ = record_ok(9_000);
+        assert_eq!(
+            LAST_ENTER_MS.load(Ordering::Relaxed),
+            9_000,
+            "末时间戳必须跟随最后一次进世界成功"
+        );
+        assert_eq!(
+            FIRST_ENTER_MS.load(Ordering::Relaxed),
+            -1,
+            "enter_ok 不得写首时间戳（两者基准不同）"
         );
     }
 
