@@ -117,10 +117,18 @@ namespace DBSrv.Services.Impl
         {
             int queryId = requestData.QueryId;
             ServerRequestMessage requestMessage = SerializerUtil.Deserialize<ServerRequestMessage>(EDCode.DecodeBuff(requestData.Message));
-            // **只数取档请求**（与 game-svr `loaddb_request_sent` 可比的量）
+            // **按 ident 分解**：取档 / 存档 / 其它（`db_conn_frames_decoded` 是三者之和）。
             if (requestMessage.Ident == Messages.DB_LOADHUMANRCD)
             {
                 EntryTelemetry.DbLoadHumanRcdDecoded();
+            }
+            else if (requestMessage.Ident == Messages.DB_SAVEHUMANRCD || requestMessage.Ident == Messages.DB_SAVEHUMANRCDEX)
+            {
+                EntryTelemetry.DbSaveDecoded();
+            }
+            else
+            {
+                EntryTelemetry.DbOtherDecoded();
             }
             int packetLen = requestData.Message.Length + requestData.Packet.Length + ServerDataPacket.FixedHeaderLen;
             if (packetLen >= Messages.DefBlockSize && queryId > 0 && requestData.Packet != null && requestData.Sign != null)

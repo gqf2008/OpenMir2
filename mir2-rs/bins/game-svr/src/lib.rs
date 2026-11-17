@@ -31166,6 +31166,12 @@ pub fn run_with_args(args: &[String]) -> i32 {
         .build()
         .expect("Failed building the Runtime");
     let result = rt.block_on(run_inner(args));
+    // **进程退出兜底 flush**（卡 `openmir2-entry-gap-buckets`）：无论走信号、命名管道还是错误返回，
+    // 只要 `run_inner` 返回到这里就补一条终值行（`final_line_once` 保证全进程只有一条）。
+    // 之前只挂在信号任务与 sim 关服分支上 ⇒ 走管道停服的路径拿不到终值。
+    if let Some(line) = game_svr::telemetry::final_line_once() {
+        glog!("INF", "{}", line);
+    }
     let code = match result {
         Ok(()) => 0,
         Err(err) => {
@@ -92462,8 +92468,16 @@ mod entry_telemetry_wiring {
         let needle = format!("telemetry::final_{}()", "line_once");
         assert_eq!(
             SRC.matches(&needle).count(),
-            2,
-            "信号路径与关服分支各一处（多/少都不行）"
+            3,
+            "三处：信号路径 / sim 关服分支 / run_with_args 退出兜底（多/少都不行）"
+        );
+        // 退出兜底：必须在 `rt.block_on(run_inner(..))` 之后（管道停服等路径靠它拿到终值）
+        let j = SRC
+            .find("rt.block_on(run_inner(")
+            .expect("run_inner 调用点");
+        assert!(
+            window(SRC, j, 900).contains(&needle),
+            "run_with_args 必须在 run_inner 返回后补终值（命名管道停服路径）"
         );
         let i = SRC
             .find("wait_for_shutdown_signal().await")
