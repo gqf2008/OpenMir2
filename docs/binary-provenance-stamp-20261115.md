@@ -17,7 +17,9 @@
 ## 2. 戳的内容（复用既有格式，不另造）
 
 每条戳至少含：`exe`/`path`、`sha256`、`mtime`、`head`（提交号）、`head_subject`、`built_at`、`dirty`、`cargo`/`rustc` 版本。
-**`sha256` 必须由写戳的一方自己从二进制文件算**（不得抄报告、不得抄上一次的戳）。已验证可行的模式：360s 窗口的
+**`sha256` 必须由写戳的一方自己从二进制文件算**（不得抄报告、不得抄上一次的戳）。
+
+**二进制身份只认戳，不跨构建比 sha**：Rust release 同源重建也不是位级可复现（2026-11-17 实测：`game-svr.exe` 在 Rust 源逐字相同的两个 head 上重建，sha256 从 `48f7eca3…` 变为 `457c8d5b…`，C# 同理——`SourceRevisionId` 之外还有编译期差异）。判「源码没变」看 `git diff`，判「产物来源」看戳的 `head`/`dirty`/`built_at`，**不要**用「sha 相同/不同」推源码同一性。已验证可行的模式：360s 窗口的
 `SELFTEST_BINARY sha256=36726fcd…` / `SELFTEST_DLL sha256=8d09c454…`——写者自算并绑定。
 
 ## 3. 通电条件（五项全过才接 `provenance=unknown ⇒ rc=2`）

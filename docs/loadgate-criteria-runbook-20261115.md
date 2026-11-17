@@ -321,6 +321,7 @@ for rel, count, hold in runs:
     `-type-present`、`-stack-present`）。
 - **门禁运行的三态：PASS / FAIL / INCOMPLETE**（2026-11-15 定）。凡出现下列任一形态，一律判
 - **工具门全量才算数**（2026-11-17 定，见 `docs/AGENTS.project.md`「门禁声称纪律」）：`tool_selftest_gate` 的 `--only <一项>` 只许调试，不得作为交付证据；报告里贴 TOTAL 三元组。
+- **二进制身份只认戳，不跨构建比 sha**（2026-11-17 定）：Rust/C# release 都不是位级可复现；判来源看戳（head/dirty/built_at）+ 内嵌 revision（C#），判源码同一性看 `git diff`；详见 `docs/binary-provenance-stamp-20261115.md` §2。
   **INCOMPLETE**——**既不得计入 PASS，也不得归咎于代码**：
   rustc/cargo 在编译期被外部或系统回收器杀死；进程异常退出且**无任何 `error[...]`/`could not` 诊断行**；
   日志里**没有 `test result:` 行**（⇒ 0 个测试执行）。
