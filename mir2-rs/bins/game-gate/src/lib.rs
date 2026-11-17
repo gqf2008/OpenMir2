@@ -1134,16 +1134,6 @@ async fn client_loop(
             }
         }
     };
-    // 拆除唯一出口：归因计数与每会话行**只在这里**落（与 `断开链接` 同一处 ⇒
-    // `close_total` 与 `断开链接` 行数同源，不重复计）。
-    let (reason, errno) = classify_close(initiator.load(Ordering::Relaxed), &exit);
-    close_attr::record_close(reason, errno);
-    glog!(
-        "INF",
-        "{}",
-        close_attr::session_line(now_ms(), ctx.service_id, handle, sid, reason, errno)
-    );
-
     // 离开：GM_CLOSE(session_id=0, socket=handle)（实机取证确认）。
     //
     // **同步发送**：oracle `ClientThread.UserLeave` → `SendServerMsg` → `Send` 是同步
@@ -1171,6 +1161,15 @@ async fn client_loop(
     };
     let _ = ctx.downstream.send_internal_sync(leave, &[]).await;
     writer.abort();
+    // 拆除唯一出口：归因计数与每会话行**只在这里**落——与 `断开链接` 同一条直线段
+    // （中间无 await / 无取消点）⇒ `close_total` 与 `断开链接` 行数同源，强杀时一起缺。
+    let (reason, errno) = classify_close(initiator.load(Ordering::Relaxed), &exit);
+    close_attr::record_close(reason, errno);
+    glog!(
+        "INF",
+        "{}",
+        close_attr::session_line(now_ms(), ctx.service_id, handle, sid, reason, errno)
+    );
     glog!("INF", "断开链接: {peer} (SessionId={sid})");
     closed
 }
