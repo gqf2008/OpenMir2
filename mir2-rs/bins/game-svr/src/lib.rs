@@ -1654,6 +1654,11 @@ async fn run_inner(args: &[String]) -> Result<()> {
         let notify = std::sync::Arc::clone(&shutdown_signal);
         tokio::spawn(async move {
             wait_for_shutdown_signal().await;
+            // **信号路径 flush**（卡 `openmir2-entry-gap-buckets`）：Ctrl+Break/Ctrl+C 到达后立即打终值行，
+            // 不等 sim 线程赶到关服分支（实测出现过「进程优雅退出但没打终值」）。
+            if let Some(line) = telemetry::final_line_once() {
+                glog!("INF", "{}", line);
+            }
             glog!(
                 "INF",
                 "收到关服信号：停止接受新连接，转交 sim 线程保存在册会话"
@@ -26525,7 +26530,9 @@ fn sim_loop(
                     engine.load_temp_len()
                 );
             }
-            glog!("INF", "{}", telemetry::summary_line());
+            if let Some(line) = telemetry::final_line_once() {
+                glog!("INF", "{}", line);
+            }
             let _ = shutdown_done_tx.send(summary);
             return;
         }
@@ -92445,6 +92452,25 @@ mod entry_telemetry_wiring {
         assert!(
             SRC.contains("logon_in_flight()") && SRC.contains("reply_in_flight()"),
             "两侧在飞量都要取"
+        );
+    }
+
+    /// 终值行必须挂在**两处**：信号路径（Ctrl+Break 之后立刻）与 sim 关服分支（共用一次性）。
+    #[test]
+    fn final_line_is_wired_on_signal_and_shutdown_paths() {
+        // 运行时拼串：否则会数到本测试自己的字面量
+        let needle = format!("telemetry::final_{}()", "line_once");
+        assert_eq!(
+            SRC.matches(&needle).count(),
+            2,
+            "信号路径与关服分支各一处（多/少都不行）"
+        );
+        let i = SRC
+            .find("wait_for_shutdown_signal().await")
+            .expect("信号等待点");
+        assert!(
+            window(SRC, i, 800).contains(&needle),
+            "信号返回后必须立刻 flush 终值（否则 Ctrl+Break 可能来不及走到关服分支）"
         );
     }
 

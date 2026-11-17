@@ -275,7 +275,21 @@ pub fn record_reply_matched() {
 /// logon 处理函数入口 +1。
 #[must_use]
 pub fn record_logon_handler_enter() -> Option<String> {
-    bump(&LOGON_HANDLER_ENTER)
+    let out = bump(&LOGON_HANDLER_ENTER);
+    // **峰值在增量处采样**（排水结束处采样会错过瞬时峰值：那时多半已排空）。
+    let v = logon_in_flight();
+    if v > 0 {
+        if let Ok(v) = u64::try_from(v) {
+            let mut cur = LOGON_IN_FLIGHT_MAX.load(Relaxed);
+            while v > cur {
+                match LOGON_IN_FLIGHT_MAX.compare_exchange(cur, v, Relaxed, Relaxed) {
+                    Ok(_) => break,
+                    Err(observed) => cur = observed,
+                }
+            }
+        }
+    }
+    out
 }
 
 /// 「收到 logon 但没发请求」分支⑤：`db` 未装配。
@@ -367,7 +381,18 @@ pub fn sample_load_reply_other() -> bool {
     SAMPLE_LOG_REPLY_OTHER.fetch_add(1, Relaxed) < SAMPLE_LIMIT
 }
 
-/// 三段计数 + 取档失败码应答的一行汇总（字段名固定，供日志侧机判）。
+/// **终值行只打一次**（信号处理路径与关服分支共用）：首次返回 `Some`，其后恒 `None`。
+/// 判据「关服后日志里有且仅有一条终值行」就靠它——重复调用不会多打，漏调用则由日志缺失暴露。
+#[must_use]
+pub fn final_line_once() -> Option<String> {
+    static ONCE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if ONCE.swap(true, Relaxed) {
+        return None;
+    }
+    Some(summary_line())
+}
+
+/// 一行汇总（调用方决定何时打印（字段名固定，供日志侧机判）。
 #[must_use]
 pub fn summary_line() -> String {
     format!(
@@ -609,6 +634,37 @@ mod tests {
         LOGON_HANDLER_EXIT_TOTAL.store(0, Ordering::Relaxed);
         REPLY_STORED.store(0, Ordering::Relaxed);
         REPLY_CONSUMED.store(0, Ordering::Relaxed);
+    }
+
+    /// **终值行只打一次**：第一次 `Some`、第二次 `None`（改成恒返回 ⇒ 红）。
+    #[test]
+    fn final_line_once_emits_exactly_once() {
+        let first = final_line_once();
+        assert!(first.is_some(), "首次调用必须返回终值行");
+        assert!(first.unwrap().starts_with("ENTRY_TELEMETRY svc=game-svr "));
+        assert!(
+            final_line_once().is_none(),
+            "第二次及以后必须为 None（只打一条）"
+        );
+    }
+
+    /// **峰值在增量处采样**：enter 之后 `logon_in_flight_max` 必须跟上（只在排水后采样会漏 ⇒ 红）。
+    #[test]
+    fn in_flight_max_updates_on_enter() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        LOGON_HANDLER_ENTER.store(0, Ordering::Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.store(0, Ordering::Relaxed);
+        LOGON_IN_FLIGHT_MAX.store(0, Ordering::Relaxed);
+        let _ = record_logon_handler_enter();
+        let _ = record_logon_handler_enter();
+        LOGON_HANDLER_EXIT_TOTAL.fetch_add(1, Ordering::Relaxed);
+        assert!(
+            LOGON_IN_FLIGHT_MAX.load(Ordering::Relaxed) >= 2,
+            "峰值必须 ≥ 增量处观测到的在飞数"
+        );
+        LOGON_HANDLER_ENTER.store(0, Ordering::Relaxed);
+        LOGON_HANDLER_EXIT_TOTAL.store(0, Ordering::Relaxed);
+        LOGON_IN_FLIGHT_MAX.store(0, Ordering::Relaxed);
     }
 
     /// 三个计数器互相独立：动一个不许动另一个（同族「删任一计数 ⇒ 对应断言红」的前提）。
