@@ -74,6 +74,12 @@ const COMMAND_FIXED_LENGTH: usize = 16;
 const COMMAND_MESSAGE_SIZE: usize = 12;
 /// C# `GateShare.MaxSession`（`GateShare.cs:14`）：每条网关→服务器连接的会话上限。
 const MAX_SESSION: usize = 10_000;
+
+// 准入/会话观测（卡 `openmir2-gateway-session-slot-exhaustion`，只读旁路）：
+// `full` = `allocate()` 走了「全满 ⇒ 返回最后一个非空槽的宿主会话」那条；`sessions_*` = 本线在用 SessionId 数。
+static GAME_ACCEPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static GAME_FULL: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static GAME_SESSIONS_MAX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 /// 测试注入：会话槽位数（oracle 恒为 `GateShare.MaxSession`=10000，生产不设该变量）。
 const MAX_SESSION_ENV: &str = "MIR2_GAME_GATE_MAX_SESSION";
 /// C# `TimedService.KeepAlive`（`TimedService.cs:69-88`）：健康帧周期 10000ms。
@@ -822,13 +828,44 @@ async fn accept_loop(
         // （`donor` 是那个宿主会话，复用其下行路由，见 `client_loop`）。
         // 卡 `openmir2-sm-logon-cross-session-delivery`（D-18）：同一把锁里给本线挑一个**唯一**的
         // `SessionId`（oracle 无此检查 ⇒ 撞号时后建连覆盖前建连的会话键）。
+        let mut live_now = 0u64;
+        let mut max_slots = 0u64;
         let (sid, slot_handle, donor) = match slots.lock() {
             Ok(mut table) => {
                 let (slot_handle, donor, sid) = table.allocate(candidate, handle);
+                live_now = u64::try_from(table.live_sids.len()).unwrap_or(u64::MAX);
+                max_slots = u64::try_from(table.slots.len()).unwrap_or(u64::MAX);
                 (sid, slot_handle, donor)
             }
             Err(_) => (candidate, handle, None),
         };
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let total = GAME_ACCEPTS.fetch_add(1, Relaxed) + 1;
+            if donor.is_some() {
+                GAME_FULL.fetch_add(1, Relaxed);
+            }
+            let mut cur = GAME_SESSIONS_MAX.load(Relaxed);
+            while live_now > cur {
+                match GAME_SESSIONS_MAX.compare_exchange(cur, live_now, Relaxed, Relaxed) {
+                    Ok(_) => break,
+                    Err(observed) => cur = observed,
+                }
+            }
+            if total.is_multiple_of(100) {
+                glog!(
+                    "INF",
+                    "GAME_GATE_ADMISSION total={} accepted={} full={} max_slots={} sessions_now={} sessions_max={} sid={}",
+                    total,
+                    total,
+                    GAME_FULL.load(Relaxed),
+                    max_slots,
+                    live_now,
+                    GAME_SESSIONS_MAX.load(Relaxed),
+                    sid
+                );
+            }
+        }
         if sid != candidate {
             glog!(
                 "WRN",
@@ -1988,6 +2025,22 @@ pub fn run_with_args(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// **汇总行接线牙**（卡 `openmir2-gateway-session-slot-exhaustion`）：标识、`full=`、
+    /// 槽表容量与会话峰值三个字段必须在源码里（删任一 ⇒ 红）。
+    #[test]
+    fn admission_line_is_wired() {
+        let src = include_str!("lib.rs");
+        let marker = format!("GAME_GATE_{}", "ADMISSION");
+        // 模板本身不得包含完整 needle（否则 include_str! 会数到本测试自己）
+        let full = format!("accepted={} {}{}", "{}", "full=", "{}");
+        let slots = format!("max_{}=", "slots");
+        let peak = format!("sessions_{}=", "max");
+        assert!(src.contains(&marker), "汇总行标识缺失");
+        assert!(src.contains(&full), "full 分支计数缺失");
+        assert!(src.contains(&slots), "槽表容量字段缺失");
+        assert!(src.contains(&peak), "会话峰值字段缺失");
+    }
+
     use super::*;
 
     fn deployed_speed() -> rules::SpeedRules {

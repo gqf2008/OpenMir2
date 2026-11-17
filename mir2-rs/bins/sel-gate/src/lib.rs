@@ -132,12 +132,54 @@ pub(crate) async fn run_inner(args: &[String]) -> Result<()> {
         cfg.gate_port
     );
 
+    // ---------- 准入/会话观测（卡 `openmir2-gateway-session-slot-exhaustion`，只读旁路）----------
+    // oracle 的槽位循环**从不写回数组** ⇒ `MaxSession` 上限不可达；这里显式打印 `full_unreachable=true`，
+    // 并把**实际会话表**（`sessions` map）的现值与峰值打出来（那才是真正在用的量）。
     let next_sid = Arc::new(AtomicU32::new(1));
     let timeout_ms = cfg.client_timeout_ms;
     loop {
         let (sock, peer) = listener.accept().await.context("accept 失败")?;
         sock.set_nodelay(true).ok();
         let sid = next_sid.fetch_add(1, Ordering::Relaxed);
+        // 观测：accept 总数 + 会话表现值/峰值 + 槽表占用（恒 0 ⇒ 上限不可达的直接证据）
+        {
+            use std::sync::atomic::Ordering::Relaxed;
+            let total = SEL_ACCEPTS.fetch_add(1, Relaxed) + 1;
+            let now = u64::try_from(
+                sessions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .len(),
+            )
+            .unwrap_or(u64::MAX);
+            let mut cur = SEL_SESSIONS_MAX.load(Relaxed);
+            while now > cur {
+                match SEL_SESSIONS_MAX.compare_exchange(cur, now, Relaxed, Relaxed) {
+                    Ok(_) => break,
+                    Err(observed) => cur = observed,
+                }
+            }
+            if total.is_multiple_of(100) {
+                let occupied = u64::try_from(
+                    slots
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .occupied(),
+                )
+                .unwrap_or(u64::MAX);
+                glog!(
+                    "INF",
+                    "SEL_GATE_ADMISSION total={} accepted={} slot_table_occupied={} full_unreachable=true \
+                     sessions_now={} sessions_max={} sid_max={}",
+                    total,
+                    total,
+                    occupied,
+                    now,
+                    SEL_SESSIONS_MAX.load(Relaxed),
+                    sid
+                );
+            }
+        }
         let shared = GateShared {
             sessions: Arc::clone(&sessions),
             downstream: downstream.clone(),
@@ -151,6 +193,10 @@ pub(crate) async fn run_inner(args: &[String]) -> Result<()> {
         });
     }
 }
+
+// 准入/会话观测（卡 `openmir2-gateway-session-slot-exhaustion`，只读旁路）。
+static SEL_ACCEPTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static SEL_SESSIONS_MAX: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 /// C# `RemoteEndPoint.GetIP()`（TouchSocket `SystemNetExtension.GetIP`）口径：只取对端 IP，
 /// **不含**客户端临时端口；IPv6 带方括号（实测 `[::1]`）。
@@ -472,6 +518,23 @@ pub fn run_with_args(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
+    /// **汇总行接线牙**（卡 `openmir2-gateway-session-slot-exhaustion`）：汇总行标识与
+    /// `上限不可达` 的事实标注必须在源码里（删任一 ⇒ 红）。判据是「接线在」，不是数值。
+    #[test]
+    fn admission_line_is_wired() {
+        let src = include_str!("lib.rs");
+        // 运行时拼串：否则会数到本测试自己的字面量（本牙第一版就因此恒真）
+        let marker = format!("SEL_GATE_{}", "ADMISSION");
+        let unreachable = format!(
+            "slot_table_occupied={} {}{}",
+            "{}", "full_unreachable", "=true"
+        );
+        let peak = format!("sessions_{}=", "max");
+        assert!(src.contains(&marker), "汇总行标识缺失");
+        assert!(src.contains(&unreachable), "上限不可达的事实标注缺失");
+        assert!(src.contains(&peak), "会话表峰值字段缺失");
+    }
+
     use super::{peer_ip, sel_gate_enter_body};
 
     /// 判据 1：SelGate Enter 体逐字节 == `"%K{sid}/{ip}/{ip}$"`（含尾 `$`）。
