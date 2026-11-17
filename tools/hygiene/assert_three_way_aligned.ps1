@@ -12,6 +12,9 @@
 # 属于内嵌）**统一**：**本脚本是超集**——多查 build 份（三处而非两处）与「每个目录各自的内嵌」；
 # botfleet 版另有 `--allow-src-unsynced`（主检出未同步降为 rc=2 的三态），本脚本无此降级（一律 rc=1）。
 #
+# **前提（复审 P3）**：三处（main/shadow/build）必须是**同一份构建产物的拷贝**（同一 stamp 的 built_at）。
+# 把**各自独立重建**的产物当 build 会因「同源非位级可复现」判 sha_mismatch（假红）——那种场景要用
+# botfleet 版的 `--allow-src-unsynced`（降 rc=2 三态），本脚本无此降级。
 # 退出码：0 = 全对齐；1 = 有红（sha 不等 / 戳缺失 / 戳 head 不等 / 戳 head 不在内嵌里）；
 #        2 = 判不了（路径缺失/用法错）——绝不静默通过。
 # 机器可读输出：`THREE_WAY_OK <file> sha=<hex> stamp=<head> embedded=ok`
@@ -22,16 +25,34 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/hygiene/assert_three_way_aligned.ps1 `
 #     -Build E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\<branch>\src\DBSrv\bin\Release
 #   省略 -Build ⇒ 以 -Main 充当「本次构建」（只验 主检出 == 影子，但戳/内嵌判据照跑）。
+#   `-Group DBSrv|LoginSrv` 选产物组（默认 DBSrv）：每组自带清单与默认目录；
+#   本轮起 **LoginSrv 也纳入**（`runtime/LoginSrv` 曾被漏在 provenance 之外）。
 # 自测：`-Selftest`（合成临时目录：1 正例 + 5 反例；含「三处 sha 相同、戳 head 也相同，但那个
 #       head 不在二进制内嵌里」——只比 sha 的旧判据会误判成全对齐）。
 param(
-  [string]$Main = 'E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release',
-  [string]$Shadow = 'E:\UserFleet\m1-stack\runtime\DBSrv',
+  [ValidateSet('DBSrv', 'LoginSrv')]
+  [string]$Group = 'DBSrv',
+  [string]$Main = '',
+  [string]$Shadow = '',
   [string]$Build = '',
   [switch]$Selftest
 )
-$ErrorActionPreference = 'Stop'
-$Files = @('DBSrv.exe', 'DBSrv.dll', 'DBSrv.Storage.MySQL.dll')
+# 产物组：每组一份「要比对的二进制清单」与默认的主检出/影子目录（卡 `openmir2-loginsrv-threeway`）。
+$Groups = @{
+  DBSrv = @{
+    Files = @('DBSrv.exe', 'DBSrv.dll', 'DBSrv.Storage.MySQL.dll')
+    Main = 'E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release'
+    Shadow = 'E:\UserFleet\m1-stack\runtime\DBSrv'
+  }
+  LoginSrv = @{
+    Files = @('LoginSrv.exe', 'LoginSrv.dll')
+    Main = 'E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release'
+    Shadow = 'E:\UserFleet\m1-stack\runtime\LoginSrv'
+  }
+}
+if ([string]::IsNullOrWhiteSpace($Main)) { $Main = $Groups[$Group].Main }
+if ([string]::IsNullOrWhiteSpace($Shadow)) { $Shadow = $Groups[$Group].Shadow }
+$Files = $Groups[$Group].Files
 # 内嵌 40-hex 扫描：C# 程序集里字面量可能是 ASCII，也可能是 UTF-16-LE（AssemblyInformationalVersion）
 $HexRe = [regex]'[0-9a-f]{40}'
 
@@ -135,76 +156,86 @@ function Assert-ThreeWay([string]$MainDir, [string]$ShadowDir, [string]$BuildDir
 }
 
 if ($Selftest) {
-  $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('three-way-selftest-' + [guid]::NewGuid().ToString('N'))
-  try {
-    function New-FixtureDir([string]$path, [string]$tag, [string]$head) {
-      New-Item -ItemType Directory -Force -Path $path | Out-Null
-      foreach ($f in $Files) {
-        $bytes = [System.Text.Encoding]::ASCII.GetBytes("BIN $tag $f $head")
-        [System.IO.File]::WriteAllBytes((Join-Path $path $f), $bytes)
-        $stamp = @{ format = 'mir2-build-stamp/1'; head = $head } | ConvertTo-Json -Compress
-        [System.IO.File]::WriteAllText((Join-Path $path ($f + '.build.json')), $stamp)
+  # 两组各跑一遍（卡 `openmir2-loginsrv-threeway`）：每组都是 1 正例 + 5 反例，
+  # 反例与 DBSrv 组同构——证明「清单换了判据不松」，不是只对 DBSrv 有牙。
+  $allOk = $true
+  foreach ($g in @('DBSrv', 'LoginSrv')) {
+    $Files = $Groups[$g].Files
+    $f0 = $Files[0]
+    $f1 = $Files[1]
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ('three-way-selftest-' + $g + '-' + [guid]::NewGuid().ToString('N'))
+    try {
+      function New-FixtureDir([string]$path, [string]$tag, [string]$head) {
+        New-Item -ItemType Directory -Force -Path $path | Out-Null
+        foreach ($f in $Files) {
+          $bytes = [System.Text.Encoding]::ASCII.GetBytes("BIN $tag $f $head")
+          [System.IO.File]::WriteAllBytes((Join-Path $path $f), $bytes)
+          $stamp = @{ format = 'mir2-build-stamp/1'; head = $head } | ConvertTo-Json -Compress
+          [System.IO.File]::WriteAllText((Join-Path $path ($f + '.build.json')), $stamp)
+        }
       }
-    }
-    $headA = ('a' * 40)
-    $a = Join-Path $tmp 'main'
-    $c = Join-Path $tmp 'shadow'
-    $d = Join-Path $tmp 'build'
-    New-FixtureDir $a 'A' $headA
-    New-FixtureDir $c 'A' $headA
-    New-FixtureDir $d 'A' $headA
-    $rc1 = Assert-ThreeWay $a $c $d
-    Write-Output ("selftest: aligned rc={0}" -f $rc1)
+      $headA = ('a' * 40)
+      $a = Join-Path $tmp 'main'
+      $c = Join-Path $tmp 'shadow'
+      $d = Join-Path $tmp 'build'
+      New-FixtureDir $a 'A' $headA
+      New-FixtureDir $c 'A' $headA
+      New-FixtureDir $d 'A' $headA
+      $rc1 = Assert-ThreeWay $a $c $d
+      Write-Output ("selftest[{0}]: aligned rc={1}" -f $g, $rc1)
 
-    # 反例①：改一份（sha 不等）⇒ 1
-    [System.IO.File]::WriteAllBytes((Join-Path $d 'DBSrv.dll'), (New-Object byte[] 77))
-    $rc2 = Assert-ThreeWay $a $c $d
-    Write-Output ("selftest: one-changed rc={0}" -f $rc2)
-    Copy-Item -LiteralPath (Join-Path $a 'DBSrv.dll') -Destination (Join-Path $d 'DBSrv.dll') -Force
+      # 反例①：改一份（sha 不等）⇒ 1
+      [System.IO.File]::WriteAllBytes((Join-Path $d $f1), (New-Object byte[] 77))
+      $rc2 = Assert-ThreeWay $a $c $d
+      Write-Output ("selftest[{0}]: one-changed rc={1}" -f $g, $rc2)
+      Copy-Item -LiteralPath (Join-Path $a $f1) -Destination (Join-Path $d $f1) -Force
 
-    # 反例②：删一份 ⇒ 2（「缺失」优先于其他判据：先还原上一步的改动）
-    Remove-Item -LiteralPath (Join-Path $c 'DBSrv.exe')
-    $rc3 = Assert-ThreeWay $a $c $d
-    Write-Output ("selftest: missing rc={0}" -f $rc3)
-    New-FixtureDir $c 'A' $headA
+      # 反例②：删一份 ⇒ 2（「缺失」优先于其他判据：先还原上一步的改动）
+      Remove-Item -LiteralPath (Join-Path $c $f0)
+      $rc3 = Assert-ThreeWay $a $c $d
+      Write-Output ("selftest[{0}]: missing rc={1}" -f $g, $rc3)
+      New-FixtureDir $c 'A' $headA
 
-    # 反例③：三处各自自洽（sha 相等、戳与内嵌一致）但彼此不同 ⇒ 1
-    $e = Join-Path $tmp 'build2'
-    New-FixtureDir $e 'E' ('e' * 40)
-    $rc4 = Assert-ThreeWay $a $c $e
-    Write-Output ("selftest: three-self-consistent-but-different rc={0}" -f $rc4)
+      # 反例③：三处各自自洽（sha 相等、戳与内嵌一致）但彼此不同 ⇒ 1
+      $e = Join-Path $tmp 'build2'
+      New-FixtureDir $e 'E' ('e' * 40)
+      $rc4 = Assert-ThreeWay $a $c $e
+      Write-Output ("selftest[{0}]: three-self-consistent-but-different rc={1}" -f $g, $rc4)
 
-    # 反例④（本题教训，2026-11-17「戳在说谎」）：三处 sha 全相同、三处戳 head 也相同，但那个
-    # head **不在任何一处二进制内嵌里** ⇒ 1。只比 sha 的旧判据会误判成全对齐。
-    $notEmbedded = ('b' * 40)
-    $stampBad = @{ format = 'mir2-build-stamp/1'; head = $notEmbedded } | ConvertTo-Json -Compress
-    foreach ($dir in @($a, $c, $d)) {
-      foreach ($f in $Files) {
-        [System.IO.File]::WriteAllText((Join-Path $dir ($f + '.build.json')), $stampBad)
+      # 反例④（本题教训，2026-11-17「戳在说谎」）：三处 sha 全相同、三处戳 head 也相同，但那个
+      # head **不在任何一处二进制内嵌里** ⇒ 1。只比 sha 的旧判据会误判成全对齐。
+      $notEmbedded = ('b' * 40)
+      $stampBad = @{ format = 'mir2-build-stamp/1'; head = $notEmbedded } | ConvertTo-Json -Compress
+      foreach ($dir in @($a, $c, $d)) {
+        foreach ($f in $Files) {
+          [System.IO.File]::WriteAllText((Join-Path $dir ($f + '.build.json')), $stampBad)
+        }
       }
-    }
-    $rc5 = Assert-ThreeWay $a $c $d
-    Write-Output ("selftest: stamp-head-not-embedded rc={0}" -f $rc5)
-    foreach ($dir in @($a, $c, $d)) {
-      New-FixtureDir $dir 'A' $headA
-    }
+      $rc5 = Assert-ThreeWay $a $c $d
+      Write-Output ("selftest[{0}]: stamp-head-not-embedded rc={1}" -f $g, $rc5)
+      foreach ($dir in @($a, $c, $d)) {
+        New-FixtureDir $dir 'A' $headA
+      }
 
-    # 反例⑤：戳缺失 ⇒ 1（缺戳就是红，不当作「判不了」）
-    Remove-Item -LiteralPath (Join-Path $c 'DBSrv.dll.build.json')
-    $rc6 = Assert-ThreeWay $a $c $d
-    Write-Output ("selftest: stamp-missing rc={0}" -f $rc6)
+      # 反例⑤：戳缺失 ⇒ 1（缺戳就是红，不当作「判不了」）
+      Remove-Item -LiteralPath (Join-Path $c ($f1 + '.build.json'))
+      $rc6 = Assert-ThreeWay $a $c $d
+      Write-Output ("selftest[{0}]: stamp-missing rc={1}" -f $g, $rc6)
 
-    if ($rc1 -eq 0 -and $rc2 -eq 1 -and $rc3 -eq 2 -and $rc4 -eq 1 -and $rc5 -eq 1 -and $rc6 -eq 1) {
-      Write-Output 'three-way selftest: GREEN (1 positive + 5 negative)'
-      exit 0
+      $groupOk = ($rc1 -eq 0 -and $rc2 -eq 1 -and $rc3 -eq 2 -and $rc4 -eq 1 -and $rc5 -eq 1 -and $rc6 -eq 1)
+      Write-Output ("selftest[{0}]: {1}" -f $g, $(if ($groupOk) { 'GREEN' } else { 'RED' }))
+      $allOk = $allOk -and $groupOk
+    } finally {
+      if (Test-Path -LiteralPath $tmp) { try { Remove-Item -LiteralPath $tmp -Recurse -Force } catch { } }
     }
-    Write-Output 'three-way selftest: RED'
-    exit 1
-  } finally {
-    if (Test-Path -LiteralPath $tmp) { try { Remove-Item -LiteralPath $tmp -Recurse -Force } catch { } }
   }
+  if ($allOk) {
+    Write-Output 'three-way selftest: GREEN (DBSrv + LoginSrv，各 1 正 + 5 负)'
+    exit 0
+  }
+  Write-Output 'three-way selftest: RED'
+  exit 1
 }
-
 if ([string]::IsNullOrWhiteSpace($Build)) { $Build = $Main }
 $rc = Assert-ThreeWay $Main $Shadow $Build
 exit $rc
