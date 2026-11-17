@@ -92300,6 +92300,24 @@ mod entry_telemetry_wiring {
         );
     }
 
+    /// 断链重连计数：必须在**建连成功**的分支里、且只在第二次及以后计（首次不算「重连」）。
+    #[test]
+    fn reconnect_counter_sits_in_connect_success_after_first() {
+        // 注：该字面量只在 dbclient.rs 里查（DBC），测试自身不会污染计数
+        let anchor = "Ok(sock) => {";
+        assert_eq!(DBC.matches(anchor).count(), 1, "建连成功臂必须唯一");
+        let i = DBC.find(anchor).expect("建连成功臂");
+        let seg = window(DBC, i, 1200);
+        assert!(
+            seg.contains("record_db_link_reconnect("),
+            "record_db_link_reconnect 必须在建连成功分支里"
+        );
+        assert!(
+            seg.contains("connect_count > 1"),
+            "只有第二次及以后才算重连（首次建连不得计入）"
+        );
+    }
+
     /// 四段链 ④：应答到达计数必须在 `ReplyVerdict::Accept` 臂内、且**先于**入表与 recog 判断。
     #[test]
     fn reply_seen_counter_sits_in_accept_arm_before_recog() {

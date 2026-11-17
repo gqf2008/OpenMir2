@@ -59,6 +59,9 @@ static LAST_ENTER_MS: AtomicI64 = AtomicI64::new(-1);
 pub static LOADDB_REQUEST_SENT: AtomicU64 = AtomicU64::new(0);
 /// 写 6000 面失败次数（`run_db_link` 的 `write_all/flush` 失败 ⇒ 已排队的请求丢了）。
 pub static LOADDB_WRITE_ERROR: AtomicU64 = AtomicU64::new(0);
+/// 6000 面**断链重连**次数（成功建连但不是第一次；卡 `openmir2-db-link-request-drop`）。
+/// 与 `loaddb_request_sent`/`loaddb_write_error` 对读：重连前写成功的请求可能随旧连接一起丢。
+pub static DB_LINK_RECONNECT: AtomicU64 = AtomicU64::new(0);
 /// 收到 `DBR_LOADHUMANRCD` 应答的次数——**在 `recog` 判断之前**（签名通过即计），
 /// 用来区分「应答没回来」与「回来了却没进 attempt」（query 对不上的那 8 个）。
 pub static LOADDB_REPLY_SEEN: AtomicU64 = AtomicU64::new(0);
@@ -111,6 +114,12 @@ pub fn record_loaddb_write_error() -> Option<String> {
     bump(&LOADDB_WRITE_ERROR)
 }
 
+/// 6000 面重连 +1；整百 ⇒ 返回一行汇总。
+#[must_use]
+pub fn record_db_link_reconnect() -> Option<String> {
+    bump(&DB_LINK_RECONNECT)
+}
+
 /// 收到 `DBR_LOADHUMANRCD` 应答（recog 判断之前）+1；整百 ⇒ 返回一行汇总。
 #[must_use]
 pub fn record_loaddb_reply_seen() -> Option<String> {
@@ -133,7 +142,7 @@ pub fn sample_load_reply_other() -> bool {
 #[must_use]
 pub fn summary_line() -> String {
     format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -142,7 +151,8 @@ pub fn summary_line() -> String {
         LAST_ENTER_MS.load(Relaxed),
         LOADDB_REQUEST_SENT.load(Relaxed),
         LOADDB_REPLY_SEEN.load(Relaxed),
-        LOADDB_WRITE_ERROR.load(Relaxed)
+        LOADDB_WRITE_ERROR.load(Relaxed),
+        DB_LINK_RECONNECT.load(Relaxed)
     )
 }
 
@@ -198,6 +208,7 @@ mod tests {
             "loaddb_request_sent=",
             "loaddb_reply_seen=",
             "loaddb_write_error=",
+            "db_link_reconnect=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }

@@ -21,12 +21,38 @@ namespace DBSrv.Services.Impl
         /// <summary>每类样本最多打印几条（前 N 条原样字段；之后只计数）。</summary>
         public const long SampleLimit = 5;
 
+        // **6000 面（game-svr↔DBSrv 单连接）六桶**（卡 `openmir2-db-link-request-drop`）
+        private static long _dbBytesRead;
+        private static long _dbFramesDecoded;
+        private static long _dbParseError;
+        private static long _dbSignReject;
+        private static long _dbFailReply;
+        private static long _dbBadRequestInfo;
+
         private static long _requestSeen;
         private static long _respondedOk;
         private static long _respondedFail;
         private static long _droppedNoSession;
         private static long _sampleReplyFail;
         private static long _sampleDroppedNoSession;
+
+        /// <summary>6000 面：解出帧的 **body 字节数**累计（原始 socket 字节不由 TouchSocket 暴露）。</summary>
+        public static long AddDbBytesRead(long n) => Interlocked.Add(ref _dbBytesRead, n);
+
+        /// <summary>6000 面：适配器解出并交给 `Received` 的帧数（= 帧解码成功）。</summary>
+        public static long DbFramesDecoded() => Interlocked.Increment(ref _dbFramesDecoded);
+
+        /// <summary>6000 面：解析失败（PacketCode 不符 / 反序列化异常）。</summary>
+        public static long DbParseError() => Interlocked.Increment(ref _dbParseError);
+
+        /// <summary>6000 面：签名不一致 ⇒ 关连接 的次数。</summary>
+        public static long DbSignReject() => Interlocked.Increment(ref _dbSignReject);
+
+        /// <summary>6000 面：`packetLen/queryId/Packet/Sign` 闸门拒绝（回 DBR_FAIL）的次数。</summary>
+        public static long DbFailReply() => Interlocked.Increment(ref _dbFailReply);
+
+        /// <summary>6000 面：`Received` 收到但 RequestInfo 不是本适配器类型（静默丢弃点）。</summary>
+        public static long DbBadRequestInfo() => Interlocked.Increment(ref _dbBadRequestInfo);
 
         /// <summary>请求到达 +1，返回累计值（调用方用返回值判「每 100 个打一行」）。</summary>
         public static long LoadRequestSeen()
@@ -103,7 +129,7 @@ namespace DBSrv.Services.Impl
         /// <summary>四桶一行汇总（字段名固定，供日志侧机判）。</summary>
         public static string SummaryLine()
         {
-            return $"[EntryTelemetry] load_request_seen={Interlocked.Read(ref _requestSeen)} load_responded_ok={Interlocked.Read(ref _respondedOk)} load_responded_fail={Interlocked.Read(ref _respondedFail)} load_dropped_no_session={Interlocked.Read(ref _droppedNoSession)}";
+            return $"[EntryTelemetry] load_request_seen={Interlocked.Read(ref _requestSeen)} load_responded_ok={Interlocked.Read(ref _respondedOk)} load_responded_fail={Interlocked.Read(ref _respondedFail)} load_dropped_no_session={Interlocked.Read(ref _droppedNoSession)} db_conn_bytes_read={Interlocked.Read(ref _dbBytesRead)} db_conn_frames_decoded={Interlocked.Read(ref _dbFramesDecoded)} db_conn_parse_error={Interlocked.Read(ref _dbParseError)} db_conn_sign_reject={Interlocked.Read(ref _dbSignReject)} db_conn_fail_reply={Interlocked.Read(ref _dbFailReply)} db_conn_bad_request_info={Interlocked.Read(ref _dbBadRequestInfo)}";
         }
 
         /// <summary>测试专用：清零全部计数（生产路径不调用）。</summary>
@@ -115,6 +141,12 @@ namespace DBSrv.Services.Impl
             Interlocked.Exchange(ref _droppedNoSession, 0);
             Interlocked.Exchange(ref _sampleReplyFail, 0);
             Interlocked.Exchange(ref _sampleDroppedNoSession, 0);
+            Interlocked.Exchange(ref _dbBytesRead, 0);
+            Interlocked.Exchange(ref _dbFramesDecoded, 0);
+            Interlocked.Exchange(ref _dbParseError, 0);
+            Interlocked.Exchange(ref _dbSignReject, 0);
+            Interlocked.Exchange(ref _dbFailReply, 0);
+            Interlocked.Exchange(ref _dbBadRequestInfo, 0);
             Interlocked.Exchange(ref _lastHeartbeatTick, 0);
             _lastSummary = null;
         }
