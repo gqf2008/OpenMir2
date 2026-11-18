@@ -214,6 +214,12 @@ pub fn search_view_range_with_updates<S: AoiStore>(
         0
     };
     let mut candidates: Vec<i32> = Vec::new();
+    #[cfg(test)]
+    let capture_universe = aoi_universe_capture_enabled();
+    #[cfg(test)]
+    if capture_universe {
+        AOI_LAST_SCAN_UNIVERSE.with(|c| c.borrow_mut().clear());
+    }
     let mut view_updates: Vec<(i32, i32)> = Vec::new();
     for x in (cx - view_range)..=(cx + view_range) {
         for y in (cy - view_range)..=(cy + view_range) {
@@ -232,6 +238,10 @@ pub fn search_view_range_with_updates<S: AoiStore>(
                 };
                 let Some(obj) = obj else { break };
                 if obj.actor_object {
+                    #[cfg(test)]
+                    if capture_universe {
+                        AOI_LAST_SCAN_UNIVERSE.with(|c| c.borrow_mut().push(obj.cell_obj_id));
+                    }
                     if !viewer_is_play && now_ms - obj.add_time >= CELL_OBJECT_EXPIRE_MS {
                         // C#：Remove(nIdx)；Count>0 ⇒ continue（不递增下标），否则 Clear + break
                         let (cell, _) = map.get_cell_info_mut(x, y);
@@ -852,6 +862,32 @@ thread_local! {
         const { std::cell::Cell::new(0) };
 }
 
+#[cfg(test)]
+thread_local! {
+    /// 测试专用：最近一次扫描实际遍历过的 `cell_obj_id`（**过滤前**的候选全集）。
+    static AOI_LAST_SCAN_UNIVERSE: std::cell::RefCell<Vec<i32>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// 测试专用：是否开启 universe 捕获（关闭态零开销）。
+    static AOI_UNIVERSE_CAPTURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+#[cfg(test)]
+fn aoi_universe_capture_enabled() -> bool {
+    AOI_UNIVERSE_CAPTURE.with(|c| c.get())
+}
+
+/// 测试专用：打开/关闭 universe 捕获。
+#[cfg(test)]
+pub(crate) fn aoi_universe_capture_set(enabled: bool) {
+    AOI_UNIVERSE_CAPTURE.with(|c| c.set(enabled));
+}
+
+/// 测试专用：读最近一次扫描的候选全集（**未排序**，按遍历顺序）。
+#[cfg(test)]
+pub(crate) fn aoi_last_scan_universe() -> Vec<i32> {
+    AOI_LAST_SCAN_UNIVERSE.with(|c| c.borrow().clone())
+}
+
 /// 环境值口径：只有先去空白后等于 `"1"` 才开启。
 fn aoi_stats_env_enabled(value: Option<&str>) -> bool {
     matches!(value, Some(v) if v.trim() == "1")
@@ -1027,6 +1063,30 @@ pub type AoiCell = (i32, i32);
 ///
 /// 用 `BTreeMap` 而不是 `HashMap`：迭代顺序确定 ⇒ 派生出的 feed 顺序也确定（差分可复现）。
 pub type AoiCellSnapshot = std::collections::BTreeMap<i32, AoiCell>;
+
+/// 与 legacy 扫描**同源**的世界快照：遍历地图格子里所有 `actor_object` 对象
+/// （Ghost / 刚死未清 也在内——它们同样是 legacy 候选集的一部分）。
+///
+/// **对齐判据**（卡 `openmir2-aoi-incremental`，opc-07 要求）：派生 feed 的输入全集必须与
+/// legacy 每 tick 实际遍历的候选集相等；否则两侧在解不同的问题，差分绿了也不证明等价。
+#[must_use]
+pub fn aoi_snapshot_from_map(map: &MapGrid) -> AoiCellSnapshot {
+    let mut snap = AoiCellSnapshot::new();
+    for x in 0..map.width {
+        for y in 0..map.height {
+            let (cell, ok) = map.get_cell_info(x, y);
+            if !ok {
+                continue;
+            }
+            for obj in &cell.obj_list {
+                if obj.actor_object {
+                    snap.insert(obj.cell_obj_id, (x, y));
+                }
+            }
+        }
+    }
+    snap
+}
 
 /// **派生 feed**（opc-07 定稿的第一步口径）：由相邻两个 tick 的快照比对得出，
 /// 完备性**由构造保证**——不依赖任何调用方"记得喂事件"。
@@ -2485,5 +2545,61 @@ mod tests {
         // 空对空 ⇒ 空 feed（退化形态）。
         let empty = derive_aoi_change_feed(&AoiCellSnapshot::new(), &AoiCellSnapshot::new());
         assert!(empty.is_empty());
+    }
+
+    /// **集合对齐牙**（opc-07 要求，卡 `openmir2-aoi-incremental`）：
+    /// 派生 feed 的输入全集（`aoi_snapshot_from_map`）必须与 legacy 每 tick 实际遍历的候选集相等。
+    /// 场景特意包含 **Ghost**、**已死未清（store 已移除但格子里还在）**——这两类最容易被"只收存活"
+    /// 的快照漏掉，进而让两侧解不同的问题。
+    #[test]
+    fn aoi_candidate_universe_aligns_with_legacy_scan() {
+        aoi_universe_capture_set(true);
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 5));
+        store.insert(monster_entity(900, 12, 10, 5));
+        put_typed(&mut map, 900, 12, 10, CellType::Monster, 0);
+        store.insert(monster_entity(901, 13, 10, 5));
+        put_typed(&mut map, 901, 13, 10, CellType::Monster, 0);
+        store.get_mut(901).expect("ghost 怪").life_cycle.ghost = true;
+        store.insert(monster_entity(902, 14, 10, 5));
+        put_typed(&mut map, 902, 14, 10, CellType::Monster, 0);
+        store.remove(902); // 已死未清：地图里还在
+
+        let _ = search_view_range_with_updates(&mut map, &mut store, 1, 0);
+        let mut got = aoi_last_scan_universe();
+        got.sort_unstable();
+
+        let snap = aoi_snapshot_from_map(&map);
+        let in_window = |x: i32, y: i32| (5..=15).contains(&x) && (5..=15).contains(&y);
+        let mut expected: Vec<i32> = snap
+            .iter()
+            .filter(|(_, (x, y))| in_window(*x, *y))
+            .map(|(id, _)| *id)
+            .collect();
+        expected.sort_unstable();
+
+        if got != expected {
+            let snap_only: Vec<i32> = expected
+                .iter()
+                .copied()
+                .filter(|i| !got.contains(i))
+                .collect();
+            let legacy_only: Vec<i32> = got
+                .iter()
+                .copied()
+                .filter(|i| !expected.contains(i))
+                .collect();
+            panic!(
+                "CANDIDATE_SET_MISMATCH tick=0 viewer=1 snapshot_only={snap_only:?} legacy_only={legacy_only:?}"
+            );
+        }
+        assert!(got.contains(&901), "Ghost 必须在候选全集里");
+        assert!(
+            got.contains(&902),
+            "已死未清对象必须仍在候选全集里（legacy 会遍历到）"
+        );
+        println!("[AOI_ALIGN] OK viewer=1 universe={got:?}");
+        aoi_universe_capture_set(false);
     }
 }
