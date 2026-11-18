@@ -465,8 +465,12 @@ pub async fn run_db_link(
                             crate::glog!("INF", "{}", line);
                         }
                         crate::glog!("ERR", "写数据库服务器失败（连接断开？）");
+                        // 断链后已排队的帧不会重放：排队计数归零（否则仪表永久挂住）。
+                        crate::telemetry::record_db_pending_reset();
                         break;
                     }
+                    // 卡 `openmir2-db-write-stall`：write_all+flush 都成功才算离开「排队未写出」。
+                    crate::telemetry::record_db_written();
                 }
                 state.set(false);
                 drain.abort();

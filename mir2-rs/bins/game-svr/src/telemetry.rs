@@ -61,6 +61,55 @@ static LAST_ENTER_MS: AtomicI64 = AtomicI64::new(-1);
 pub static LOADDB_REQUEST_SENT: AtomicU64 = AtomicU64::new(0);
 /// 写 6000 面失败次数（`run_db_link` 的 `write_all/flush` 失败 ⇒ 已排队的请求丢了）。
 pub static LOADDB_WRITE_ERROR: AtomicU64 = AtomicU64::new(0);
+/// **已排进 DB 链路但尚未写出**的帧数（卡 `openmir2-db-write-stall`）：
+/// `loaddb_request_sent` 是**排队成功**计数（`req_tx.send` 返回 Ok），不等于已写到 socket；
+/// 本计数在 `run_db_link` 的 `write_all+flush` 成功后递减，因此
+/// `db_write_pending > 0 且 db_flush_age_ms 持续增大` = 写端被对端背压卡住。
+pub static DB_WRITE_PENDING: AtomicU64 = AtomicU64::new(0);
+/// 队首（最老）未写出帧的入队时刻（进程时钟 ms；0 = 队列空）。
+/// `db_flush_age_ms = now − 本值`，与 [`DB_WRITE_PENDING`] 一起读才有意义。
+static DB_OLDEST_PENDING_MS: AtomicI64 = AtomicI64::new(0);
+
+/// 取档帧入队（`req_tx.send` 成功）：队首时刻只在 **0→1** 时写，保证是「最老」而不是「最新」。
+pub fn record_db_enqueued(now_ms: i64) {
+    let prev = DB_WRITE_PENDING.fetch_add(1, Relaxed);
+    if prev == 0 {
+        DB_OLDEST_PENDING_MS.store(now_ms, Relaxed);
+    }
+}
+
+/// 一帧写出（`write_all+flush` 成功）：递减；回到 0 时清空队首时刻。
+pub fn record_db_written() {
+    let prev = DB_WRITE_PENDING.fetch_sub(1, Relaxed);
+    if prev <= 1 {
+        DB_WRITE_PENDING.store(0, Relaxed);
+        DB_OLDEST_PENDING_MS.store(0, Relaxed);
+    }
+}
+
+/// 链路断开：已排队但未写出的帧随连接一起丢（重连后不会重放），计数归零。
+pub fn record_db_pending_reset() {
+    DB_WRITE_PENDING.store(0, Relaxed);
+    DB_OLDEST_PENDING_MS.store(0, Relaxed);
+}
+
+/// 当前排队未写出的帧数。
+#[must_use]
+pub fn db_write_pending() -> u64 {
+    DB_WRITE_PENDING.load(Relaxed)
+}
+
+/// 队首未写出帧的年龄（ms）；队列空 ⇒ 0。
+#[must_use]
+pub fn db_flush_age_ms(now_ms: i64) -> i64 {
+    let oldest = DB_OLDEST_PENDING_MS.load(Relaxed);
+    if oldest == 0 {
+        0
+    } else {
+        now_ms.saturating_sub(oldest)
+    }
+}
+
 /// **收到 logon 但没发出取档请求**的四条分支（卡 `openmir2-entry-gap-buckets`）：
 /// `logon_no_request_disconnected`（DB 链路未连）/ `_send_fail`（req_tx.send 失败）/
 /// `_zero_session`（`SessionID == 0` 被读档循环跳过）/ `_requeue`（角色数据保存中 ⇒ 重排队）。
@@ -753,7 +802,7 @@ pub fn session_close_line(
 #[must_use]
 pub fn summary_line() -> String {
     let base = format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={} downlink_skipped_by_tombstone_total={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={} downlink_skipped_by_tombstone_total={} db_write_pending={} db_flush_age_ms={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -789,7 +838,9 @@ pub fn summary_line() -> String {
         DRAIN_BUDGET_HIT.load(Relaxed),
         REPLY_TABLE_MAX.load(Relaxed),
         DOWNLINK_DEAD_SOCKET_TOTAL.load(Relaxed),
-        DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.load(Relaxed)
+        DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.load(Relaxed),
+        db_write_pending(),
+        db_flush_age_ms(crate::clock::now_ms())
     );
     // 卡 `openmir2-session-close-attribution`：拆除归因终值拼进同一行。
     format!("{base} {}", close_summary_fragment())
@@ -822,6 +873,36 @@ pub(crate) static TEST_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 mod tests {
     use super::*;
     use std::sync::atomic::Ordering;
+
+    /// 卡 `openmir2-db-write-stall`：`db_write_pending` 只数「已排队未写出」，
+    /// 年龄取**队首**（最老）而不是最新；空队列年龄为 0（不是 now−0 的巨值）；
+    /// 没有入队的「写出」不得下溢。（本测试独占这两个静态量，不与其他用例并发冲突。）
+    #[test]
+    fn db_write_pending_tracks_oldest_unwritten() {
+        record_db_pending_reset();
+        assert_eq!(db_write_pending(), 0);
+        assert_eq!(db_flush_age_ms(1_000), 0, "空队列的年龄必须是 0");
+
+        record_db_enqueued(1_000);
+        assert_eq!(db_write_pending(), 1);
+        assert_eq!(db_flush_age_ms(1_010), 10);
+
+        record_db_enqueued(2_000);
+        assert_eq!(db_write_pending(), 2);
+        assert_eq!(db_flush_age_ms(2_500), 1_500, "年龄必须取队首（最老）时刻");
+
+        record_db_written();
+        assert_eq!(db_write_pending(), 1);
+        assert_eq!(db_flush_age_ms(2_500), 1_500);
+
+        record_db_written();
+        assert_eq!(db_write_pending(), 0);
+        assert_eq!(db_flush_age_ms(2_500), 0, "队列清空后年龄归零");
+
+        // 牙：没有入队时的写出不得把计数减到下溢。
+        record_db_written();
+        assert_eq!(db_write_pending(), 0);
+    }
 
     /// 整百才打印：0 / 半档不打印，第 100 次触达返回 Summary；计数器本身每次 +1。
     #[test]
