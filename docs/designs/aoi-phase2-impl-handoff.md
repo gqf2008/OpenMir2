@@ -66,6 +66,20 @@
 - **改哪些行**：`cell_viewers` 的维护点收敛到"观察者搜索/移动/上下线时才更新"，并给 `idx_avg` 分 bucket 报告。
 - **绿判据**：同前 + 4k 两轮（`ns_avg`/`idx_avg` 分列）。
 
+
+### 第 1 步的前置设计决定（已核实，执行时先做这个）
+**先把可见性谓词抽成两侧共用的函数**，否则增量与 legacy 的过滤链必然分叉：
+- 现有谓词（`search_view_range_with_updates` 循环体中部）：
+  `!other.invisible && !other.ghost && !other.fixed_hide_mode && !other.ob_mode`
+  `&& (viewer_is_play || !other.death)`
+  `&& (base_pass || (other.master.is_some() && |dx|<=3 && |dy|<=3) || other.race == ACTOR_RACE_PLAY)`，
+  其中 `base_pass = viewer_is_play || viewer_master.is_some() || viewer_nasty || viewer_want_ref`；
+- 另有两处**随扫描发生副作用**的行为必须保留：非玩家观察者对过期对象做 `cell.remove_at`（`CELL_OBJECT_EXPIRE_MS`）、
+  玩家观察者对可见怪物投递 `view_updates.push((other_id, viewer_id))`；
+- 抽函数时 legacy 必须**改为调用它**（行为不变的纯重构，先用现有测试证明全绿），
+  增量路径再复用同一个函数 —— 这是"两侧解同一个问题"的结构性保证，比差分兜底更强。
+- 顺序：**先做这次纯重构并提交**（绿证 = 现有 28 条 AOI 测试全绿），再做 `entered/left`。
+
 ### 每步必须出现的输出行
 `[AOI_DIFF] DETERMINISM_OK snapshots=…`、`[AOI_DIFF] FUZZ_OK seed=0x5EED1234 steps=120 snapshots=240`、
 六条 `[AOI_MATRIX] <name> OK snapshots=… aligned_checks=… nonzero_visible=…`、`[AOI_ORDER] OK ticks=12`、
