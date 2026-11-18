@@ -2202,4 +2202,175 @@ mod tests {
         }
         assert!(a.len() == STEPS * 2, "每 step 两个观察者各一条快照");
     }
+
+    // ================= 覆盖矩阵（设计 §4.2 六类）：先只验"场景良构 + 确定性" =================
+    //
+    // 这些场景函数同时是增量实现的对照输入：现阶段的绿只证明"同实现两遍一致"，
+    // 等增量实现接上后，同一批场景必须 legacy-vs-incremental 也全绿（等价性的唯一标准）。
+
+    /// 从地图格子里摘掉一个对象（按 `cell_obj_id` 定位，保留其余对象顺序）。
+    fn remove_from_cell(map: &mut MapGrid, id: i32, x: i32, y: i32) {
+        let (cell, ok) = map.get_cell_info_mut(x, y);
+        if ok {
+            if let Some(i) = cell.obj_list.iter().position(|c| c.cell_obj_id == id) {
+                cell.remove_at(i);
+            }
+        }
+    }
+
+    /// 通用驱动：每 tick 先执行 `step(tick)` 变更世界，再让每个观察者扫一遍并记快照。
+    fn drive(
+        ticks: usize,
+        viewers: &[i32],
+        mut step: impl FnMut(&mut MapGrid, &mut EntityStore, usize),
+    ) -> Vec<TickSnapshot> {
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        for viewer in viewers {
+            store.insert(play_viewer(*viewer, 10, 10, 5));
+        }
+        let mut snaps = Vec::new();
+        for tick in 0..ticks {
+            step(&mut map, &mut store, tick);
+            for viewer in viewers {
+                let out = search_view_range_with_updates(
+                    &mut map,
+                    &mut store,
+                    *viewer,
+                    i64::try_from(tick).unwrap_or(0) * 1000,
+                );
+                snaps.push(TickSnapshot {
+                    tick,
+                    viewer: *viewer,
+                    visible: visible_of(&store, *viewer),
+                    removed: out.removed.clone(),
+                    view_updates: out.view_updates.clone(),
+                });
+            }
+        }
+        snaps
+    }
+
+    fn assert_scenario_deterministic(name: &str, run: impl Fn() -> Vec<TickSnapshot>) {
+        let a = run();
+        let b = run();
+        match compare_snapshots(&a, &b) {
+            Ok(()) => println!(
+                "[AOI_MATRIX] {name} OK snapshots={} nonzero_visible={}",
+                a.len(),
+                a.iter().filter(|s| !s.visible.is_empty()).count()
+            ),
+            Err(e) => panic!("[AOI_MATRIX] {name} 非确定：{e}"),
+        }
+        assert!(!a.is_empty(), "{name}: 场景必须产生快照");
+    }
+
+    /// 矩阵①：实体**进入格子**（窗内中心 / 边界格 x=15 / 窗外 x=20 三种位置各来一只）。
+    #[test]
+    fn aoi_matrix_entity_enters_cell() {
+        assert_scenario_deterministic("entity_enters_cell", || {
+            drive(6, &[1], |map, store, tick| {
+                if (2..=4).contains(&tick) {
+                    let x = 10 + i32::try_from(tick).unwrap_or(0) + 2;
+                    let id = 300 + i32::try_from(tick).unwrap_or(0);
+                    store.insert(monster_entity(id, x, 10, 5));
+                    put_typed(map, id, x, 10, CellType::Monster, tick as i64);
+                }
+            })
+        });
+    }
+
+    /// 矩阵②：实体**离开格子**（先在场、随后从 store 与地图同时摘除）。
+    #[test]
+    fn aoi_matrix_entity_leaves_cell() {
+        assert_scenario_deterministic("entity_leaves_cell", || {
+            drive(6, &[1], |map, store, tick| {
+                if tick == 0 {
+                    store.insert(monster_entity(400, 13, 10, 5));
+                    put_typed(map, 400, 13, 10, CellType::Monster, 0);
+                }
+                if tick == 3 {
+                    remove_from_cell(map, 400, 13, 10);
+                    store.remove(400);
+                }
+            })
+        });
+    }
+
+    /// 矩阵③：**观察者移动**（set_xy 平移；窗口随之平移）。
+    #[test]
+    fn aoi_matrix_viewer_moves() {
+        assert_scenario_deterministic("viewer_moves", || {
+            drive(6, &[1, 2], |map, store, tick| {
+                if tick == 0 {
+                    for id in 500..510 {
+                        let x = 12 + (id - 500);
+                        store.insert(monster_entity(id, x, 10, 5));
+                        put_typed(map, id, x, 10, CellType::Monster, 0);
+                    }
+                }
+                let _ = store.set_xy(1, 10 + i32::try_from(tick).unwrap_or(0), 10);
+            })
+        });
+    }
+
+    /// 矩阵④：**状态变化**（Ghost 来回切）。
+    #[test]
+    fn aoi_matrix_state_toggle() {
+        assert_scenario_deterministic("state_toggle", || {
+            drive(6, &[1], |map, store, tick| {
+                if tick == 0 {
+                    for id in 600..606 {
+                        store.insert(monster_entity(id, 11 + (id - 600), 11, 5));
+                        put_typed(map, id, 11 + (id - 600), 11, CellType::Monster, 0);
+                    }
+                }
+                if let Some(e) = store.get_mut(600 + i32::try_from(tick % 3).unwrap_or(0)) {
+                    e.life_cycle.ghost = tick % 2 == 0;
+                }
+            })
+        });
+    }
+
+    /// 矩阵⑤：**上下线**（候选实体上线/下线 + 观察者中途加入）。
+    #[test]
+    fn aoi_matrix_online_offline() {
+        assert_scenario_deterministic("online_offline", || {
+            drive(6, &[1, 2], |map, store, tick| {
+                if tick == 1 {
+                    store.insert(monster_entity(700, 12, 12, 5));
+                    put_typed(map, 700, 12, 12, CellType::Monster, 1);
+                }
+                if tick == 3 {
+                    remove_from_cell(map, 700, 12, 12);
+                    store.remove(700);
+                }
+            })
+        });
+    }
+
+    /// 矩阵⑥：**触发时机**（搜索间隔门）：同 now_ms 连续两趟扫描必须记录可复现的快照序列。
+    #[test]
+    fn aoi_matrix_search_gate() {
+        assert_scenario_deterministic("search_gate", || {
+            let mut map = MapGrid::new(32, 32);
+            let mut store = EntityStore::new();
+            store.insert(play_viewer(1, 10, 10, 5));
+            store.insert(monster_entity(800, 12, 10, 5));
+            put_typed(&mut map, 800, 12, 10, CellType::Monster, 0);
+            let mut snaps = Vec::new();
+            // 同一 now_ms 连扫三趟（间隔门未到期）——逐趟记录，交给差分比较。
+            for pass in 0..3usize {
+                let out = search_view_range_with_updates(&mut map, &mut store, 1, 0);
+                snaps.push(TickSnapshot {
+                    tick: pass,
+                    viewer: 1,
+                    visible: visible_of(&store, 1),
+                    removed: out.removed.clone(),
+                    view_updates: out.view_updates.clone(),
+                });
+            }
+            snaps
+        });
+    }
 }
