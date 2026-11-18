@@ -930,7 +930,11 @@ mod tests {
     /// 从未读到 ⇒ 0（不伪造「很久没读」）。
     #[test]
     fn db_read_age_tracks_last_read() {
-        assert_eq!(db_read_age_ms(9_999), 0, "从未读到 ⇒ 0，而不是 now−0 的巨值");
+        assert_eq!(
+            db_read_age_ms(9_999),
+            0,
+            "从未读到 ⇒ 0，而不是 now−0 的巨值"
+        );
         record_db_read(3_000);
         assert_eq!(db_read_age_ms(3_500), 500);
         record_db_read(4_000);
