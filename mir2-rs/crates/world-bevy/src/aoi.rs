@@ -1910,6 +1910,16 @@ mod tests {
     }
 
     /// 比较器：**自己**产出带上下文的分歧描述（不靠 `assert!` 的裸消息）。
+    ///
+    /// **检查顺序（写死，保证"报第一条分歧"可复现）**：
+    /// 1. `SNAPSHOT_COUNT_MISMATCH` —— **必须最先**：长度不等时 zip 会静默截断，
+    ///    "先集合后计数"的实现会把"少了一整个快照"错报成集合差异；
+    /// 2. `TICK_VIEWER_MISMATCH`（快照对齐校验）；
+    /// 3. `VISIBLE_SET_MISMATCH`（集合成员：missing / extra）——集合先于顺序；
+    /// 4. `VISIBLE_ORDER_MISMATCH`（集合相同、顺序不同）；
+    /// 5. `REMOVED_SET_MISMATCH`；
+    /// 6. `VIEW_UPDATES_MISMATCH`。
+    /// 顺序一旦改动，同一对输入可能报出不同类别 ⇒ 报告不可复现，故写进本注释并由测试钉住。
     fn compare_snapshots(a: &[TickSnapshot], b: &[TickSnapshot]) -> Result<(), String> {
         if a.len() != b.len() {
             return Err(format!(
@@ -2009,6 +2019,65 @@ mod tests {
         snaps
     }
 
+    /// 固定种子 fuzz：LCG 生成操作序列（加怪 / 切 Ghost / 什么都不做），逐步重扫全部玩家。
+    /// 返回 (快照, 操作日志)——**日志用于分歧时复现**。
+    fn run_fuzz(seed: u64, steps: usize) -> (Vec<TickSnapshot>, Vec<String>) {
+        let mut state = seed;
+        let mut next = move || {
+            state = state
+                .wrapping_mul(6_364_136_223_846_793_005)
+                .wrapping_add(1_442_695_040_888_963_407);
+            (state >> 33) as u32
+        };
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 5));
+        store.insert(play_viewer(2, 15, 12, 5));
+        let mut next_id = 200;
+        let mut ops = Vec::new();
+        let mut snaps = Vec::new();
+        for step in 0..steps {
+            let op = next() % 3;
+            match op {
+                0 => {
+                    let x = 6 + i32::try_from(next() % 12).unwrap_or(0);
+                    let y = 6 + i32::try_from(next() % 12).unwrap_or(0);
+                    store.insert(monster_entity(next_id, x, y, 5));
+                    put_typed(&mut map, next_id, x, y, CellType::Monster, step as i64);
+                    ops.push(format!("step={step} add id={next_id} at=({x},{y})"));
+                    next_id += 1;
+                }
+                1 => {
+                    let id = 200 + i32::try_from(next() % 8).unwrap_or(0);
+                    let flag = next() % 2 == 0;
+                    if let Some(e) = store.get_mut(id) {
+                        e.life_cycle.ghost = flag;
+                        ops.push(format!("step={step} ghost id={id} flag={flag}"));
+                    } else {
+                        ops.push(format!("step={step} ghost id={id} skipped(absent)"));
+                    }
+                }
+                _ => ops.push(format!("step={step} nop")),
+            }
+            for viewer in [1, 2] {
+                let out = search_view_range_with_updates(
+                    &mut map,
+                    &mut store,
+                    viewer,
+                    i64::try_from(step).unwrap_or(0) * 1000,
+                );
+                snaps.push(TickSnapshot {
+                    tick: step,
+                    viewer,
+                    visible: visible_of(&store, viewer),
+                    removed: out.removed.clone(),
+                    view_updates: out.view_updates.clone(),
+                });
+            }
+        }
+        (snaps, ops)
+    }
+
     /// 牙①（确定性）：同一实现对同一场景跑两遍 ⇒ 逐项相等。
     #[test]
     fn aoi_diff_skeleton_is_deterministic() {
@@ -2051,5 +2120,86 @@ mod tests {
         assert!(err.contains(&format!("tick={tick}")), "{err}");
         assert!(err.contains(&format!("viewer={viewer}")), "{err}");
         assert!(err.contains(&format!("missing=[{dropped}]")), "{err}");
+    }
+
+    /// 牙③：**顺序**类分歧必须被抓到（集合相同、顺序不同）。
+    #[test]
+    fn aoi_diff_harness_detects_order_mismatch() {
+        let a = run_diff_scenario();
+        let mut b = run_diff_scenario();
+        let (tick, viewer) = {
+            let target = b
+                .iter_mut()
+                .find(|s| s.visible.len() >= 2)
+                .expect("需要可见集 ≥2 的快照");
+            target.visible.swap(0, 1);
+            (target.tick, target.viewer)
+        };
+        let err = compare_snapshots(&a, &b).expect_err("顺序不同必须报红");
+        println!("[AOI_DIFF] ORDER_RED tick={tick} viewer={viewer} msg={err}");
+        assert!(err.contains("VISIBLE_ORDER_MISMATCH"), "{err}");
+    }
+
+    /// 牙④：**removed** 分歧必须被抓到。
+    #[test]
+    fn aoi_diff_harness_detects_removed_mismatch() {
+        let a = run_diff_scenario();
+        let mut b = run_diff_scenario();
+        let idx = b.len() / 2;
+        b[idx].removed.push(999_999);
+        let err = compare_snapshots(&a, &b).expect_err("removed 不同必须报红");
+        println!(
+            "[AOI_DIFF] REMOVED_RED tick={} viewer={} msg={err}",
+            b[idx].tick, b[idx].viewer
+        );
+        assert!(err.contains("REMOVED_SET_MISMATCH"), "{err}");
+    }
+
+    /// 牙⑤：**view_updates** 分歧必须被抓到。
+    #[test]
+    fn aoi_diff_harness_detects_view_updates_mismatch() {
+        let a = run_diff_scenario();
+        let mut b = run_diff_scenario();
+        let idx = b.len() / 3;
+        b[idx].view_updates.push((-1, -1));
+        let err = compare_snapshots(&a, &b).expect_err("view_updates 不同必须报红");
+        println!(
+            "[AOI_DIFF] VIEW_UPDATES_RED tick={} viewer={} msg={err}",
+            b[idx].tick, b[idx].viewer
+        );
+        assert!(err.contains("VIEW_UPDATES_MISMATCH"), "{err}");
+    }
+
+    /// 牙⑥：**快照数量**分歧必须被抓到（少一个快照）。
+    #[test]
+    fn aoi_diff_harness_detects_count_mismatch() {
+        let a = run_diff_scenario();
+        let mut b = run_diff_scenario();
+        b.pop();
+        let err = compare_snapshots(&a, &b).expect_err("快照数量不同必须报红");
+        println!("[AOI_DIFF] COUNT_RED msg={err}");
+        assert!(err.contains("SNAPSHOT_COUNT_MISMATCH"), "{err}");
+    }
+
+    /// 牙⑦：固定种子 fuzz——**同种子两遍完全一致**（确定性延伸）；分歧时 dump 操作日志。
+    #[test]
+    fn aoi_diff_fuzz_same_seed_is_deterministic() {
+        const SEED: u64 = 0x5EED_1234;
+        const STEPS: usize = 120;
+        let (a, ops_a) = run_fuzz(SEED, STEPS);
+        let (b, ops_b) = run_fuzz(SEED, STEPS);
+        assert_eq!(ops_a, ops_b, "同种子的操作序列必须一致");
+        match compare_snapshots(&a, &b) {
+            Ok(()) => println!(
+                "[AOI_DIFF] FUZZ_OK seed=0x{SEED:X} steps={STEPS} snapshots={} ops={}",
+                a.len(),
+                ops_a.len()
+            ),
+            Err(e) => panic!(
+                "fuzz 同种子两遍不一致：{e}\n操作日志（前 20 条）：{:?}",
+                &ops_a[..ops_a.len().min(20)]
+            ),
+        }
+        assert!(a.len() == STEPS * 2, "每 step 两个观察者各一条快照");
     }
 }
