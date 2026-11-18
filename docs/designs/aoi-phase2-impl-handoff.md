@@ -46,3 +46,34 @@
 ## 五、边界
 - 生产路径在骨架阶段**零改动**（所有新增项在 `#[cfg(test)]` 下）；判据：release `game-svr.exe` 中
   `CANDIDATE_SET_MISMATCH` / `AOI_ALIGN` / `AOI_MATRIX` 出现 0 次，同源测试二进制为 2/1/2。
+
+## 六、执行步骤 / 每步绿判据 / 风险清单（opc-07 要求，压缩前固化）
+
+### 第 1 步：`entered` / `left` 两类触发的可见性增删（含 `idx_avg` 首版）
+- **改哪些行**：`aoi.rs` 新增 `struct AoiIncremental { cell_viewers: BTreeMap<AoiCell, BTreeSet<i32>>, last_cell: AoiCellSnapshot }`；
+  `search_view_range_incremental` 改为：由 `derive_aoi_change_feed(&last_cell, &aoi_snapshot_from_map(map))` 取 feed，
+  只处理 `entered/left`（`moved` 暂按"旧格+新格都受影响"保守处理并标注 TODO）；
+  可见性判定**复用** legacy 的过滤链与扫描序插入；`idx_avg`（线性桶，32 µs）计时覆盖"快照重建 + feed 派生 + 索引更新"。
+- **绿判据**：`[AOI_DIFF] DETERMINISM_OK`（不变）+ 六条 `[AOI_MATRIX] … aligned_checks=N nonzero_visible=M`（数值与 legacy 一致）
+  + `[AOI_INC] STAGE1_EQ` 换成真正的双实现比较行（`legacy` vs `incremental` 逐 tick 相等）+ `[AOI_ORDER] OK` 不变。
+
+### 第 2 步：加 `moved`（跨格）
+- **改哪些行**：把第 1 步的"moved 保守处理"换成：受影响观察者 = `cell_viewers[old] ∪ cell_viewers[new]`，
+  对每个受影响观察者只更新该实体（移除/插入按扫描序）。
+- **绿判据**：同第 1 步全部；另加 `[AOI_MATRIX] viewer_moves` 的 `nonzero_visible` 保持 12/12。
+
+### 第 3 步：受影响观察者精确定位
+- **改哪些行**：`cell_viewers` 的维护点收敛到"观察者搜索/移动/上下线时才更新"，并给 `idx_avg` 分 bucket 报告。
+- **绿判据**：同前 + 4k 两轮（`ns_avg`/`idx_avg` 分列）。
+
+### 每步必须出现的输出行
+`[AOI_DIFF] DETERMINISM_OK snapshots=…`、`[AOI_DIFF] FUZZ_OK seed=0x5EED1234 steps=120 snapshots=240`、
+六条 `[AOI_MATRIX] <name> OK snapshots=… aligned_checks=… nonzero_visible=…`、`[AOI_ORDER] OK ticks=12`、
+以及**双实现比较行**（`legacy` 与 `incremental` 逐 tick 相等）。
+
+### 风险清单（每步都要盯）
+- **候选集**：Ghost 与"已死未清"必须进快照（对齐牙已覆盖）；
+- **`SearchTime` 门时点**：增量更新不得在未到期 tick 生效；
+- **扫描序插入**：x 外层升序、y 内层升序、同格按加入序；
+- **`idx_avg` 口径**：只含索引维护（快照重建 + feed 派生 + 索引更新），不含搜索段；
+- **开关**：默认 legacy，运行期不可切换（灰度靠重启）。
