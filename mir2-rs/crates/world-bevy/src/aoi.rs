@@ -617,8 +617,33 @@ pub fn visible_snapshot<S: AoiStore>(store: &S, id: i32) -> Vec<(i32, u8)> {
 /// 遥测环境门（**只有字面 `"1"` 开启**；默认关闭）。
 pub const ENV_AOI_STATS: &str = "MIR2_AOI_STATS";
 
-/// 汇总窗口：每 500 tick 打印一行。
+/// 汇总窗口默认长度：每 500 tick 打印一行。
 pub const AOI_STATS_REPORT_TICKS: u64 = 500;
+
+/// 汇总窗口的**环境变量覆盖**（正整数；缺失/非法一律回落 [`AOI_STATS_REPORT_TICKS`]）。
+/// 用途：360 s 跑批在 200 ms/tick 下默认只有 2 行，做不了时间序列；设小值（如 150 ≈ 30 s）
+/// 即可按窗口拿到序列。只在开启态解析一次（`OnceLock`），关闭态零成本。
+pub const ENV_AOI_STATS_TICKS: &str = "MIR2_AOI_STATS_TICKS";
+
+/// 解析规则（纯函数，便于单测）：缺省/非法/0 ⇒ 默认值。
+fn parse_report_ticks(value: Option<&str>) -> u64 {
+    match value {
+        Some(v) => v
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .unwrap_or(AOI_STATS_REPORT_TICKS),
+        None => AOI_STATS_REPORT_TICKS,
+    }
+}
+
+/// 本次进程实际使用的窗口长度（首次调用读一次环境变量）。
+#[must_use]
+pub fn aoi_stats_report_ticks() -> u64 {
+    static OVERRIDE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *OVERRIDE.get_or_init(|| parse_report_ticks(std::env::var(ENV_AOI_STATS_TICKS).ok().as_deref()))
+}
 
 /// log2 直方图桶数（`u64` 值域：0 桶 + 1..=64）。
 const AOI_HIST_BUCKETS: usize = 65;
@@ -642,22 +667,51 @@ fn aoi_hist_upper_bound(bucket: usize) -> u64 {
     }
 }
 
-/// 直方图近似分位数：返回覆盖目标分位的最小桶的上限；空直方图 => `None`。
-fn aoi_hist_percentile(hist: &[u64; AOI_HIST_BUCKETS], pct: u32) -> Option<u64> {
+/// **ns 直方图：线性桶**（每桶 32 µs；0..=63 覆盖 0–2048 µs，第 64 桶 = ≥2048 µs 溢出）。
+///
+/// 为什么不用 log2：报告出来会全是 2 的幂边界（131,072 / 524,288 ns），分辨率只有 ±2 倍，
+/// 两轮"完全相同"其实只是"落在同一个大桶"，支撑不了收益估算（2026-11-19 AOI 两轮复盘）。
+pub const AOI_NS_BUCKET_NS: u64 = 32_000;
+/// ns 直方图桶数：64 个线性桶 + 1 个溢出桶。
+const AOI_NS_BUCKETS: usize = 65;
+
+fn aoi_ns_bucket(ns: u64) -> usize {
+    let idx = ns / AOI_NS_BUCKET_NS;
+    usize::try_from(idx)
+        .unwrap_or(AOI_NS_BUCKETS - 1)
+        .min(AOI_NS_BUCKETS - 1)
+}
+
+/// 线性桶的上限（ns）；溢出桶返回 `None`（调用方改用 `ns_max`）。
+fn aoi_ns_bucket_upper(bucket: usize) -> Option<u64> {
+    if bucket >= AOI_NS_BUCKETS - 1 {
+        None
+    } else {
+        Some((bucket as u64 + 1) * AOI_NS_BUCKET_NS)
+    }
+}
+
+/// 通用分位：返回覆盖目标分位的最小桶经 `upper` 映射后的值。
+fn aoi_percentile(hist: &[u64], pct: u32, upper: impl Fn(usize) -> u64) -> Option<u64> {
     let total: u64 = hist.iter().sum();
     if total == 0 {
         return None;
     }
-    // ceil(total * pct / 100)，用 u128 防大计数溢出。
     let target = (u128::from(total) * u128::from(pct)).div_ceil(100) as u64;
     let mut cumulative = 0u64;
     for (bucket, &count) in hist.iter().enumerate() {
         cumulative = cumulative.saturating_add(count);
         if cumulative >= target {
-            return Some(aoi_hist_upper_bound(bucket));
+            return Some(upper(bucket));
         }
     }
-    Some(aoi_hist_upper_bound(AOI_HIST_BUCKETS - 1))
+    hist.len().checked_sub(1).map(upper)
+}
+
+/// `same_map` 用 log2 桶（实体计数跨几个数量级）；分位语义见 [`aoi_percentile`]。
+/// 直方图近似分位数：返回覆盖目标分位的最小桶的上限；空直方图 => `None`。
+fn aoi_hist_percentile(hist: &[u64; AOI_HIST_BUCKETS], pct: u32) -> Option<u64> {
+    aoi_percentile(hist, pct, aoi_hist_upper_bound)
 }
 
 /// 本线程一个汇总窗口的累计（**关闭态从不触碰**）。
@@ -680,8 +734,13 @@ struct AoiStatsState {
     #[allow(dead_code)]
     removed: u64,
     ns_max: u64,
+    /// ns 样本总和（`ns_avg` 用；桶类指标一律配均值）。
+    ns_sum: u64,
     same_map_max: u64,
-    ns_hist: [u64; AOI_HIST_BUCKETS],
+    /// 非空地图的实体数之和 / 计数 ⇒ `same_map_avg`（桶类分位对一档跳变过敏，均值更稳）。
+    same_map_sum: u64,
+    same_map_count: u64,
+    ns_hist: [u64; AOI_NS_BUCKETS],
     same_map_hist: [u64; AOI_HIST_BUCKETS],
 }
 
@@ -698,8 +757,11 @@ impl AoiStatsState {
             visible: 0,
             removed: 0,
             ns_max: 0,
+            ns_sum: 0,
             same_map_max: 0,
-            ns_hist: [0; AOI_HIST_BUCKETS],
+            same_map_sum: 0,
+            same_map_count: 0,
+            ns_hist: [0; AOI_NS_BUCKETS],
             same_map_hist: [0; AOI_HIST_BUCKETS],
         }
     }
@@ -723,7 +785,7 @@ impl AoiStatsState {
     /// - `ticks` = 本窗口 tick 数（正常 = `AOI_STATS_REPORT_TICKS`）；
     /// - `searches_in_window` = 本窗口搜索次数；`searches_total` = 本线程**跨窗口累计**（含本窗口）；
     /// - 自洽判据：相邻两行 `searches_in_window` 之和 == 后一行的 `searches_total` 增量。
-    fn report_line(&self, clock_ms: i64) -> String {
+    fn report_line(&self, clock_ms: i64, final_line: bool) -> String {
         let searches = self.searches;
         let ticks = self.window_ticks;
         let per_search = |n: u64| {
@@ -738,21 +800,36 @@ impl AoiStatsState {
         } else {
             searches as f64 / ticks as f64
         };
-        let percentile =
+        let same_map_pct =
             |hist: &[u64; AOI_HIST_BUCKETS], pct: u32| aoi_hist_percentile(hist, pct).unwrap_or(0);
+        let ns_max = self.ns_max;
+        let ns_pct = |hist: &[u64; AOI_NS_BUCKETS], pct: u32| {
+            aoi_percentile(hist, pct, |b| aoi_ns_bucket_upper(b).unwrap_or(ns_max)).unwrap_or(0)
+        };
+        let ns_avg = if self.searches == 0 {
+            0.0
+        } else {
+            self.ns_sum as f64 / self.searches as f64
+        };
+        let final_marker = if final_line { "final=1 " } else { "" };
         format!(
-            "[AOI_STATS] clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_max={}",
+            "[AOI_STATS] {final_marker}clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_bucket_ns={AOI_NS_BUCKET_NS} ns_avg={ns_avg:.1} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_avg={:.2} same_map_max={}",
             self.window_seq,
             self.tick_seq,
             self.total_searches,
             per_search(self.cells),
             per_search(self.candidates),
             per_search(self.visible),
-            percentile(&self.ns_hist, 50),
-            percentile(&self.ns_hist, 90),
+            ns_pct(&self.ns_hist, 50),
+            ns_pct(&self.ns_hist, 90),
             self.ns_max,
-            percentile(&self.same_map_hist, 50),
-            percentile(&self.same_map_hist, 90),
+            same_map_pct(&self.same_map_hist, 50),
+            same_map_pct(&self.same_map_hist, 90),
+            if self.same_map_count == 0 {
+                0.0
+            } else {
+                self.same_map_sum as f64 / self.same_map_count as f64
+            },
             self.same_map_max,
         )
     }
@@ -830,9 +907,31 @@ fn aoi_stats_record_search(
         state.visible = state.visible.saturating_add(visible);
         state.removed = state.removed.saturating_add(removed);
         state.ns_max = state.ns_max.max(ns);
-        let bucket = aoi_hist_bucket(ns);
+        state.ns_sum = state.ns_sum.saturating_add(ns);
+        let bucket = aoi_ns_bucket(ns);
         state.ns_hist[bucket] = state.ns_hist[bucket].saturating_add(1);
     });
+}
+
+/// **进程退出时的终值行**（opc-07 要求）：窗口未满也强制出一行，`final=1` 标记。
+///
+/// 线程局部 ⇒ 必须由**世界线程**在退出前调用；其它线程调用只会看到自己的空窗口（返回 `None`）。
+#[must_use]
+pub fn aoi_stats_final_line(clock_ms: i64) -> Option<String> {
+    if !aoi_stats_enabled() {
+        return None;
+    }
+    AOI_STATS_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        if state.window_ticks == 0 {
+            return None;
+        }
+        state.window_seq = state.window_seq.saturating_add(1);
+        state.total_searches = state.total_searches.saturating_add(state.searches);
+        let line = state.report_line(clock_ms, true);
+        state.reset_window();
+        Some(line)
+    })
 }
 
 /// 每个 `OutputAoi` tick 调用一次：累计分布；到窗口边界返回一行待打印文本并清零。
@@ -841,6 +940,7 @@ fn aoi_stats_tick(clock_ms: i64, map_entity_counts: impl Iterator<Item = u64>) -
     if !aoi_stats_enabled() {
         return None;
     }
+    let report_ticks = aoi_stats_report_ticks();
     let mut line = None;
     AOI_STATS_STATE.with(|cell| {
         let mut state = cell.borrow_mut();
@@ -850,15 +950,17 @@ fn aoi_stats_tick(clock_ms: i64, map_entity_counts: impl Iterator<Item = u64>) -
             if count == 0 {
                 continue; // 空图无信息量，不进入分布
             }
+            state.same_map_sum = state.same_map_sum.saturating_add(count);
+            state.same_map_count = state.same_map_count.saturating_add(1);
             let bucket = aoi_hist_bucket(count);
             state.same_map_hist[bucket] = state.same_map_hist[bucket].saturating_add(1);
             state.same_map_max = state.same_map_max.max(count);
         }
-        if state.window_ticks >= AOI_STATS_REPORT_TICKS {
+        if state.window_ticks >= report_ticks {
             state.window_seq = state.window_seq.saturating_add(1);
             // 先把本窗口计入累计，再出行（行里的 total 含本窗口）。
             state.total_searches = state.total_searches.saturating_add(state.searches);
-            line = Some(state.report_line(clock_ms));
+            line = Some(state.report_line(clock_ms, false));
             state.reset_window();
         }
     });
@@ -1571,7 +1673,7 @@ mod tests {
             "每趟搜索两次 Instant（起/止）"
         );
         // 行内平均口径 = 窗口总和 / 搜索数。
-        let line = snap.report_line(0);
+        let line = snap.report_line(0, false);
         assert!(
             line.contains(" cells_per_search=121.00 cand_per_search=3.00 vis_per_search=3.00 "),
             "报告行字段/均值不符：{line}"
@@ -1651,32 +1753,48 @@ mod tests {
         assert_eq!(aoi_hist_bucket(500), 9);
         assert_eq!(aoi_hist_bucket(1000), 10);
 
+        // ns 用**线性桶**（每桶 32 µs）：边界必须落在正确桶。
+        assert_eq!(aoi_ns_bucket(0), 0);
+        assert_eq!(aoi_ns_bucket(AOI_NS_BUCKET_NS - 1), 0);
+        assert_eq!(aoi_ns_bucket(AOI_NS_BUCKET_NS), 1);
+        assert_eq!(
+            aoi_ns_bucket(2_048_000),
+            AOI_NS_BUCKETS - 1,
+            "≥2048µs 进溢出桶"
+        );
+        assert_eq!(aoi_ns_bucket_upper(0), Some(AOI_NS_BUCKET_NS));
+        assert_eq!(
+            aoi_ns_bucket_upper(AOI_NS_BUCKETS - 1),
+            None,
+            "溢出桶无上限"
+        );
+
         let mut state = AoiStatsState::new();
         state.window_ticks = 1;
         for ns in 1..=1000u64 {
             state.searches += 1;
+            state.ns_sum += ns;
             state.ns_max = state.ns_max.max(ns);
-            let bucket = aoi_hist_bucket(ns);
-            state.ns_hist[bucket] += 1;
+            state.ns_hist[aoi_ns_bucket(ns)] += 1;
         }
-        // p50 = 第 500 个样本 (500)，桶 9（256..=511）=> 上限 512；
-        // p90 = 第 900 个样本 (900)，桶 10（512..=1023）=> 上限 1024。
-        assert_eq!(aoi_hist_percentile(&state.ns_hist, 50), Some(512));
-        assert_eq!(aoi_hist_percentile(&state.ns_hist, 90), Some(1024));
-        let line = state.report_line(0);
+        // 1000 个样本都 < 32 µs ⇒ 全在桶 0；p50/p90 都报桶 0 上限 32,000 ns；
+        // 均值 = (1+…+1000)/1000 = 500.5。
+        let line = state.report_line(0, false);
         assert!(
-            line.contains(" ns_p50=512 ns_p90=1024 ns_max=1000 "),
-            "分位桶不符：{line}"
+            line.contains(
+                " ns_bucket_ns=32000 ns_avg=500.5 ns_p50=32000 ns_p90=32000 ns_max=1000 "
+            ),
+            "ns 线性桶/均值不符：{line}"
         );
         assert!(
-            line.contains(" same_map_p50=0 same_map_p90=0 same_map_max=0"),
+            line.contains(" same_map_p50=0 same_map_p90=0 same_map_avg=0.00 same_map_max=0"),
             "same_map 无样本应为 0：{line}"
         );
 
         // 退化形态：空样本 => 分位 None、行内打 0（不 panic、不除零）。
         let empty = AoiStatsState::new();
-        assert_eq!(aoi_hist_percentile(&empty.ns_hist, 50), None);
-        let empty_line = empty.report_line(0);
+        assert_eq!(aoi_percentile(&empty.ns_hist, 50, |_b| 0), None);
+        let empty_line = empty.report_line(0, false);
         assert!(
             empty_line.contains(
                 "clock_ms=0 window_seq=0 tick_seq=0 ticks=0 searches_in_window=0 searches_total=0 searches_per_tick=0.00"
@@ -1728,5 +1846,38 @@ mod tests {
             "第二窗口径不符（total 必须 = 前窗 2 + 本窗 3）：{line2}"
         );
         assert!(line2.contains(" searches_total=5 "), "累计自洽：2 + 3 == 5");
+    }
+
+    /// 牙⑥：`MIR2_AOI_STATS_TICKS` 解析——缺省/非法/0 一律回落默认值，合法正整数生效。
+    #[test]
+    fn aoi_stats_report_ticks_env_parse_is_safe() {
+        assert_eq!(parse_report_ticks(None), AOI_STATS_REPORT_TICKS);
+        assert_eq!(parse_report_ticks(Some("100")), 100);
+        assert_eq!(parse_report_ticks(Some(" 100 ")), 100);
+        for bad in ["", "0", "-5", "abc", "1.5"] {
+            assert_eq!(
+                parse_report_ticks(Some(bad)),
+                AOI_STATS_REPORT_TICKS,
+                "非法值 {bad:?} 必须回落默认"
+            );
+        }
+    }
+
+    /// 牙⑦：`same_map_avg` 是**非空地图**的实体数均值；终值行带 `final=1` 且窗口未满也出行。
+    #[test]
+    fn aoi_stats_same_map_avg_and_final_line() {
+        let _guard = AoiStatsTestGuard::enabled();
+        // 两 tick：第一 tick 两张图（1、3 个实体），第二 tick 一张图（0 个 = 空图跳过）。
+        assert!(aoi_stats_tick(500, [1u64, 3].into_iter()).is_none());
+        assert!(aoi_stats_tick(1_000, [0u64].into_iter()).is_none());
+        let line = aoi_stats_final_line(1_500).expect("窗口未满也必须出终值行");
+        assert!(line.contains("final=1 "), "终值行必须带 final 标记：{line}");
+        assert!(
+            line.contains(" same_map_avg=2.00 "),
+            "非空地图均值 (1+3)/2 = 2.00：{line}"
+        );
+        assert!(line.contains(" clock_ms=1500 "), "clock 透传：{line}");
+        // 终值行后窗口已清空，再取一次应为 None。
+        assert!(aoi_stats_final_line(2_000).is_none());
     }
 }

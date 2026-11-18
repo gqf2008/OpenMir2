@@ -26907,6 +26907,11 @@ fn sim_loop(
             if let Some(line) = telemetry::final_line_once() {
                 glog!("INF", "{}", line);
             }
+            // AOI 遥测**终值行**（卡 `openmir2-aoi-incremental`）：窗口未满也在世界线程退出前强制补一行
+            //（`final=1`）。线程局部 ⇒ 必须在**本线程**调用；`MIR2_AOI_STATS` 未开时返回 `None`，零输出。
+            if let Some(line) = mir2_world_bevy::aoi::aoi_stats_final_line(world.clock_ms) {
+                eprintln!("{line}");
+            }
             let _ = shutdown_done_tx.send(summary);
             return;
         }
@@ -94512,5 +94517,22 @@ mod close_attribution_teeth {
         // 退化形态：空集再扫 ⇒ 0 条、计数不变。
         assert_eq!(record_gate_line_sweep(LINE), 0);
         assert_eq!(snap().total, after.total);
+    }
+}
+
+#[cfg(test)]
+mod aoi_shutdown_wiring {
+    /// 卡 `openmir2-aoi-incremental`：AOI 遥测终值行必须在**世界线程的关服分支**里补打，
+    /// 且走 stderr（与 `[AOI_STATS]` 其它行同通道）。删掉这处接线 ⇒ 本用例红。
+    #[test]
+    fn final_aoi_line_is_emitted_at_shutdown() {
+        const SRC: &str = include_str!("lib.rs");
+        let needle = concat!("aoi_stats_final", "_line(");
+        let i = SRC.find(needle).expect("找不到 AOI 终值行调用点");
+        let seg = &SRC[i..(i + 300).min(SRC.len())];
+        assert!(seg.contains("eprintln!"), "终值行必须打印（stderr）：{seg}");
+        let shutdown = SRC.find("let _ = shutdown_done_tx.send(summary);");
+        assert!(shutdown.is_some(), "关服分支标记缺失");
+        assert!(i < shutdown.unwrap(), "终值行必须在关服收尾返回之前");
     }
 }
