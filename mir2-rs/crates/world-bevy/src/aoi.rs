@@ -664,7 +664,15 @@ fn aoi_hist_percentile(hist: &[u64; AOI_HIST_BUCKETS], pct: u32) -> Option<u64> 
 #[derive(Clone)]
 struct AoiStatsState {
     window_ticks: u64,
+    /// 本窗口完成的搜索次数（旧字段名 `searches`，行内改名 `searches_in_window`）。
     searches: u64,
+    /// **跨窗口累计**的搜索次数（行内 `searches_total`）。与 `searches` 的差值是
+    /// 「相邻两行 in_window 之和 == total 增量」这条自洽判据的依据。
+    total_searches: u64,
+    /// 已输出的窗口序号（1 起；行内 `window_seq`）。
+    window_seq: u64,
+    /// 累计 tick 序号（1 起；行内 `tick_seq`）——分布要能对齐到 ramp/稳态，光有墙钟不够。
+    tick_seq: u64,
     cells: u64,
     candidates: u64,
     visible: u64,
@@ -682,6 +690,9 @@ impl AoiStatsState {
         Self {
             window_ticks: 0,
             searches: 0,
+            total_searches: 0,
+            window_seq: 0,
+            tick_seq: 0,
             cells: 0,
             candidates: 0,
             visible: 0,
@@ -693,8 +704,26 @@ impl AoiStatsState {
         }
     }
 
+    /// 窗口边界重置：**只清窗口量**，累计量（`total_searches` / `window_seq` / `tick_seq`）保留。
+    fn reset_window(&mut self) {
+        let total_searches = self.total_searches;
+        let window_seq = self.window_seq;
+        let tick_seq = self.tick_seq;
+        *self = Self::new();
+        self.total_searches = total_searches;
+        self.window_seq = window_seq;
+        self.tick_seq = tick_seq;
+    }
+
     /// 取一行报告；字段顺序/名称固定（报告机读）。
-    fn report_line(&self) -> String {
+    ///
+    /// 口径（报告必须照抄）：
+    /// - `clock_ms` = 世界时钟（`AoiParams.clock_ms`，同一时刻量）；
+    /// - `window_seq` / `tick_seq` = **本线程**已输出窗口序号 / 累计 tick 序号（均 1 起）；
+    /// - `ticks` = 本窗口 tick 数（正常 = `AOI_STATS_REPORT_TICKS`）；
+    /// - `searches_in_window` = 本窗口搜索次数；`searches_total` = 本线程**跨窗口累计**（含本窗口）；
+    /// - 自洽判据：相邻两行 `searches_in_window` 之和 == 后一行的 `searches_total` 增量。
+    fn report_line(&self, clock_ms: i64) -> String {
         let searches = self.searches;
         let ticks = self.window_ticks;
         let per_search = |n: u64| {
@@ -712,7 +741,10 @@ impl AoiStatsState {
         let percentile =
             |hist: &[u64; AOI_HIST_BUCKETS], pct: u32| aoi_hist_percentile(hist, pct).unwrap_or(0);
         format!(
-            "[AOI_STATS] ticks={ticks} searches={searches} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_max={}",
+            "[AOI_STATS] clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_max={}",
+            self.window_seq,
+            self.tick_seq,
+            self.total_searches,
             per_search(self.cells),
             per_search(self.candidates),
             per_search(self.visible),
@@ -805,7 +837,7 @@ fn aoi_stats_record_search(
 
 /// 每个 `OutputAoi` tick 调用一次：累计分布；到窗口边界返回一行待打印文本并清零。
 /// 关闭态直接返回 `None`（**不写线程局部、不消费迭代器**）。
-fn aoi_stats_tick(map_entity_counts: impl Iterator<Item = u64>) -> Option<String> {
+fn aoi_stats_tick(clock_ms: i64, map_entity_counts: impl Iterator<Item = u64>) -> Option<String> {
     if !aoi_stats_enabled() {
         return None;
     }
@@ -813,6 +845,7 @@ fn aoi_stats_tick(map_entity_counts: impl Iterator<Item = u64>) -> Option<String
     AOI_STATS_STATE.with(|cell| {
         let mut state = cell.borrow_mut();
         state.window_ticks = state.window_ticks.saturating_add(1);
+        state.tick_seq = state.tick_seq.saturating_add(1);
         for count in map_entity_counts {
             if count == 0 {
                 continue; // 空图无信息量，不进入分布
@@ -822,8 +855,11 @@ fn aoi_stats_tick(map_entity_counts: impl Iterator<Item = u64>) -> Option<String
             state.same_map_max = state.same_map_max.max(count);
         }
         if state.window_ticks >= AOI_STATS_REPORT_TICKS {
-            line = Some(state.report_line());
-            *state = AoiStatsState::new();
+            state.window_seq = state.window_seq.saturating_add(1);
+            // 先把本窗口计入累计，再出行（行里的 total 含本窗口）。
+            state.total_searches = state.total_searches.saturating_add(state.searches);
+            line = Some(state.report_line(clock_ms));
+            state.reset_window();
         }
     });
     line
@@ -1142,7 +1178,7 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
         }
     }
     // AOI 搜索遥测（默认关闭）：每 500 tick 汇总一行 `[AOI_STATS]`（stderr）。
-    if let Some(line) = aoi_stats_tick(by_map.iter().map(|v| v.len() as u64)) {
+    if let Some(line) = aoi_stats_tick(params.clock_ms, by_map.iter().map(|v| v.len() as u64)) {
         eprintln!("{line}");
     }
     scratch.by_map = by_map;
@@ -1497,7 +1533,7 @@ mod tests {
         );
         for _ in 0..AOI_STATS_REPORT_TICKS {
             assert!(
-                aoi_stats_tick(std::iter::empty()).is_none(),
+                aoi_stats_tick(0, std::iter::empty()).is_none(),
                 "关闭态 500 tick 也不得产生 `[AOI_STATS]` 行"
             );
         }
@@ -1535,7 +1571,7 @@ mod tests {
             "每趟搜索两次 Instant（起/止）"
         );
         // 行内平均口径 = 窗口总和 / 搜索数。
-        let line = snap.report_line();
+        let line = snap.report_line(0);
         assert!(
             line.contains(" cells_per_search=121.00 cand_per_search=3.00 vis_per_search=3.00 "),
             "报告行字段/均值不符：{line}"
@@ -1627,7 +1663,7 @@ mod tests {
         // p90 = 第 900 个样本 (900)，桶 10（512..=1023）=> 上限 1024。
         assert_eq!(aoi_hist_percentile(&state.ns_hist, 50), Some(512));
         assert_eq!(aoi_hist_percentile(&state.ns_hist, 90), Some(1024));
-        let line = state.report_line();
+        let line = state.report_line(0);
         assert!(
             line.contains(" ns_p50=512 ns_p90=1024 ns_max=1000 "),
             "分位桶不符：{line}"
@@ -1640,10 +1676,57 @@ mod tests {
         // 退化形态：空样本 => 分位 None、行内打 0（不 panic、不除零）。
         let empty = AoiStatsState::new();
         assert_eq!(aoi_hist_percentile(&empty.ns_hist, 50), None);
-        let empty_line = empty.report_line();
+        let empty_line = empty.report_line(0);
         assert!(
-            empty_line.contains("ticks=0 searches=0 searches_per_tick=0.00"),
+            empty_line.contains(
+                "clock_ms=0 window_seq=0 tick_seq=0 ticks=0 searches_in_window=0 searches_total=0 searches_per_tick=0.00"
+            ),
             "空窗口行格式不符：{empty_line}"
         );
+    }
+    /// 牙⑤（opc-07 要求）：**累计口径自洽** + 序号单调 + `clock_ms` 透传。
+    /// - 相邻两行 `searches_in_window` 之和 == 后一行 `searches_total`；
+    /// - `window_seq` 每窗 +1、`tick_seq` 每 tick +1（满窗 = 500）；
+    /// - 行内 `clock_ms` 就是调用方传入的世界时钟（不是墙钟/Instant）。
+    #[test]
+    fn aoi_stats_totals_and_sequences_are_self_consistent() {
+        let _guard = AoiStatsTestGuard::enabled();
+
+        for _ in 0..2 {
+            let start = aoi_stats_search_begin().expect("开启态必须有起点");
+            aoi_stats_record_search(start, 25, 3, 3, 0);
+        }
+        let mut line1 = None;
+        for _ in 0..AOI_STATS_REPORT_TICKS {
+            if let Some(l) = aoi_stats_tick(1_000, std::iter::empty::<u64>()) {
+                line1 = Some(l);
+            }
+        }
+        let line1 = line1.expect("满一窗必须出行");
+        assert!(
+            line1.contains(
+                " clock_ms=1000 window_seq=1 tick_seq=500 ticks=500 searches_in_window=2 searches_total=2 "
+            ),
+            "第一窗口径不符：{line1}"
+        );
+
+        for _ in 0..3 {
+            let start = aoi_stats_search_begin().expect("开启态必须有起点");
+            aoi_stats_record_search(start, 25, 3, 3, 0);
+        }
+        let mut line2 = None;
+        for _ in 0..AOI_STATS_REPORT_TICKS {
+            if let Some(l) = aoi_stats_tick(2_000, std::iter::empty::<u64>()) {
+                line2 = Some(l);
+            }
+        }
+        let line2 = line2.expect("第二窗必须出行");
+        assert!(
+            line2.contains(
+                " clock_ms=2000 window_seq=2 tick_seq=1000 ticks=500 searches_in_window=3 searches_total=5 "
+            ),
+            "第二窗口径不符（total 必须 = 前窗 2 + 本窗 3）：{line2}"
+        );
+        assert!(line2.contains(" searches_total=5 "), "累计自洽：2 + 3 == 5");
     }
 }
