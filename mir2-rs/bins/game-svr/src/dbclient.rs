@@ -449,6 +449,9 @@ pub async fn run_db_link(
                         match rd.read(&mut buf).await {
                             Ok(0) | Err(_) => break,
                             Ok(n) => {
+                                // 卡 `openmir2-db-write-stall`：记「最后一次读到字节」的时刻，
+                                // 停写时 `db_read_age_ms` 持续变大 ⇒ 读任务没在跑（对端 send 会堵）。
+                                crate::telemetry::record_db_read(crate::clock::now_ms());
                                 let mut r = replies_for_task.lock().expect("DB 应答表锁被毒化");
                                 for qid in r.feed(&buf[..n]) {
                                     // 照 `PlayerDataService.Enqueue` `:20-24` 的调试日志

@@ -93247,6 +93247,13 @@ mod entry_telemetry_wiring {
             window(DBC, fail, 800).contains(&needle("db_pending_reset")),
             "断链必须把排队计数归零，否则仪表永久挂住"
         );
+        // 读侧半：drain 任务读到字节时必须记时刻（否则「对端不读 ⇒ 发送缓冲满」这条
+        // 分支没有证据）。
+        assert_eq!(
+            DBC.matches(&needle("db_read")).count(),
+            1,
+            "record_db_read 必须唯一（在 drain 任务的 Ok(n) 分支里）"
+        );
     }
 
     /// 「收到 logon 但没发请求」四分支：每个枚举变体恰好一处，且落在对应分支。

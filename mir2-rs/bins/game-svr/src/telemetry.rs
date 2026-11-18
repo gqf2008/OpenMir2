@@ -93,6 +93,27 @@ pub fn record_db_pending_reset() {
     DB_OLDEST_PENDING_MS.store(0, Relaxed);
 }
 
+/// 收半边**最后一次读到字节**的时刻（进程时钟 ms；0 = 从未读到）。
+/// `db_read_age_ms = now − 本值`：停写时若它持续变大，说明 svr 的读任务**没在跑**
+/// （被饿死/已退出）——这是「DBSrv 卡在 send」的另一半证据（对端不读 ⇒ 发送缓冲满）。
+static DB_LAST_READ_MS: AtomicI64 = AtomicI64::new(0);
+
+/// 收半边读到 n>0 字节（drain 任务里调用）。只记时刻，不改分帧行为。
+pub fn record_db_read(now_ms: i64) {
+    DB_LAST_READ_MS.store(now_ms, Relaxed);
+}
+
+/// 距上次读到字节的年龄（ms）；从未读到 ⇒ 0（不伪造"很久没读"）。
+#[must_use]
+pub fn db_read_age_ms(now_ms: i64) -> i64 {
+    let last = DB_LAST_READ_MS.load(Relaxed);
+    if last == 0 {
+        0
+    } else {
+        now_ms.saturating_sub(last)
+    }
+}
+
 /// 当前排队未写出的帧数。
 #[must_use]
 pub fn db_write_pending() -> u64 {
@@ -802,7 +823,7 @@ pub fn session_close_line(
 #[must_use]
 pub fn summary_line() -> String {
     let base = format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={} downlink_skipped_by_tombstone_total={} db_write_pending={} db_flush_age_ms={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={} downlink_skipped_by_tombstone_total={} db_write_pending={} db_flush_age_ms={} db_read_age_ms={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -840,7 +861,8 @@ pub fn summary_line() -> String {
         DOWNLINK_DEAD_SOCKET_TOTAL.load(Relaxed),
         DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.load(Relaxed),
         db_write_pending(),
-        db_flush_age_ms(crate::clock::now_ms())
+        db_flush_age_ms(crate::clock::now_ms()),
+        db_read_age_ms(crate::clock::now_ms())
     );
     // 卡 `openmir2-session-close-attribution`：拆除归因终值拼进同一行。
     format!("{base} {}", close_summary_fragment())
@@ -902,6 +924,17 @@ mod tests {
         // 牙：没有入队时的写出不得把计数减到下溢。
         record_db_written();
         assert_eq!(db_write_pending(), 0);
+    }
+
+    /// 卡 `openmir2-db-write-stall`：`db_read_age_ms` 取**最后一次**读到字节的时刻；
+    /// 从未读到 ⇒ 0（不伪造「很久没读」）。
+    #[test]
+    fn db_read_age_tracks_last_read() {
+        assert_eq!(db_read_age_ms(9_999), 0, "从未读到 ⇒ 0，而不是 now−0 的巨值");
+        record_db_read(3_000);
+        assert_eq!(db_read_age_ms(3_500), 500);
+        record_db_read(4_000);
+        assert_eq!(db_read_age_ms(4_250), 250, "必须取最后一次读的时刻");
     }
 
     /// 整百才打印：0 / 半档不打印，第 100 次触达返回 Summary；计数器本身每次 +1。
