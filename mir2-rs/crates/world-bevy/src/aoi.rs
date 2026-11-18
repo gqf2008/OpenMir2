@@ -2353,18 +2353,61 @@ mod tests {
         }
     }
 
-    /// 通用驱动：每 tick 先执行 `step(tick)` 变更世界，再让每个观察者扫一遍并记快照。
+    /// 每 tick、每观察者做一次**集合对齐**（opc-07 要求"随矩阵走"）：
+    /// legacy 实际遍历的候选 id 集合 必须 == `aoi_snapshot_from_map` 在该观察者窗口内的 id 集合。
+    /// 不相等 ⇒ 该场景的差分结论无效，**立即停**。
+    fn assert_candidate_universe_aligned(
+        scenario: &str,
+        map: &MapGrid,
+        store: &EntityStore,
+        viewer: i32,
+        tick: usize,
+    ) {
+        let (vx, vy, _) = store.pos(viewer).expect("观察者必须在 store 里");
+        let range = store.get(viewer).map_or(0, |e| e.view_range);
+        let mut got = aoi_last_scan_universe();
+        got.sort_unstable();
+        got.dedup();
+        let snap = aoi_snapshot_from_map(map);
+        let mut expected: Vec<i32> = snap
+            .iter()
+            .filter(|(_, (x, y))| (*x - vx).abs() <= range && (*y - vy).abs() <= range)
+            .map(|(id, _)| *id)
+            .collect();
+        expected.sort_unstable();
+        if got != expected {
+            let snap_only: Vec<i32> = expected
+                .iter()
+                .copied()
+                .filter(|i| !got.contains(i))
+                .collect();
+            let legacy_only: Vec<i32> = got
+                .iter()
+                .copied()
+                .filter(|i| !expected.contains(i))
+                .collect();
+            panic!(
+                "CANDIDATE_SET_MISMATCH tick={tick} scenario={scenario} viewer={viewer} snapshot_only={snap_only:?} legacy_only={legacy_only:?}"
+            );
+        }
+    }
+
+    /// 通用驱动：每 tick 先执行 `step(tick)` 变更世界，再让每个观察者扫一遍、记快照，
+    /// 并**逐 tick 做集合对齐断言**（对齐不过直接 panic，该场景结论作废）。
     fn drive(
+        scenario: &str,
         ticks: usize,
         viewers: &[i32],
         mut step: impl FnMut(&mut MapGrid, &mut EntityStore, usize),
-    ) -> Vec<TickSnapshot> {
+    ) -> (Vec<TickSnapshot>, usize) {
+        aoi_universe_capture_set(true);
         let mut map = MapGrid::new(32, 32);
         let mut store = EntityStore::new();
         for viewer in viewers {
             store.insert(play_viewer(*viewer, 10, 10, 5));
         }
         let mut snaps = Vec::new();
+        let mut aligned = 0usize;
         for tick in 0..ticks {
             step(&mut map, &mut store, tick);
             for viewer in viewers {
@@ -2374,6 +2417,8 @@ mod tests {
                     *viewer,
                     i64::try_from(tick).unwrap_or(0) * 1000,
                 );
+                assert_candidate_universe_aligned(scenario, &map, &store, *viewer, tick);
+                aligned += 1;
                 snaps.push(TickSnapshot {
                     tick,
                     viewer: *viewer,
@@ -2383,20 +2428,24 @@ mod tests {
                 });
             }
         }
-        snaps
+        aoi_universe_capture_set(false);
+        (snaps, aligned)
     }
 
-    fn assert_scenario_deterministic(name: &str, run: impl Fn() -> Vec<TickSnapshot>) {
-        let a = run();
-        let b = run();
+    fn assert_scenario_deterministic(name: &str, run: impl Fn() -> (Vec<TickSnapshot>, usize)) {
+        let (a, aligned_a) = run();
+        let (b, aligned_b) = run();
         match compare_snapshots(&a, &b) {
             Ok(()) => println!(
-                "[AOI_MATRIX] {name} OK snapshots={} nonzero_visible={}",
+                "[AOI_MATRIX] {name} OK snapshots={} aligned_checks={} nonzero_visible={}",
                 a.len(),
+                aligned_a,
                 a.iter().filter(|s| !s.visible.is_empty()).count()
             ),
             Err(e) => panic!("[AOI_MATRIX] {name} 非确定：{e}"),
         }
+        assert_eq!(aligned_a, aligned_b, "{name}: 对齐检查次数必须一致");
+        assert!(aligned_a >= a.len(), "{name}: 每个快照都应对齐检查过");
         assert!(!a.is_empty(), "{name}: 场景必须产生快照");
     }
 
@@ -2404,7 +2453,7 @@ mod tests {
     #[test]
     fn aoi_matrix_entity_enters_cell() {
         assert_scenario_deterministic("entity_enters_cell", || {
-            drive(6, &[1], |map, store, tick| {
+            drive("entity_enters_cell", 6, &[1], |map, store, tick| {
                 if (2..=4).contains(&tick) {
                     let x = 10 + i32::try_from(tick).unwrap_or(0) + 2;
                     let id = 300 + i32::try_from(tick).unwrap_or(0);
@@ -2419,7 +2468,7 @@ mod tests {
     #[test]
     fn aoi_matrix_entity_leaves_cell() {
         assert_scenario_deterministic("entity_leaves_cell", || {
-            drive(6, &[1], |map, store, tick| {
+            drive("entity_leaves_cell", 6, &[1], |map, store, tick| {
                 if tick == 0 {
                     store.insert(monster_entity(400, 13, 10, 5));
                     put_typed(map, 400, 13, 10, CellType::Monster, 0);
@@ -2436,7 +2485,7 @@ mod tests {
     #[test]
     fn aoi_matrix_viewer_moves() {
         assert_scenario_deterministic("viewer_moves", || {
-            drive(6, &[1, 2], |map, store, tick| {
+            drive("viewer_moves", 6, &[1, 2], |map, store, tick| {
                 if tick == 0 {
                     for id in 500..510 {
                         let x = 12 + (id - 500);
@@ -2453,7 +2502,7 @@ mod tests {
     #[test]
     fn aoi_matrix_state_toggle() {
         assert_scenario_deterministic("state_toggle", || {
-            drive(6, &[1], |map, store, tick| {
+            drive("state_toggle", 6, &[1], |map, store, tick| {
                 if tick == 0 {
                     for id in 600..606 {
                         store.insert(monster_entity(id, 11 + (id - 600), 11, 5));
@@ -2471,7 +2520,7 @@ mod tests {
     #[test]
     fn aoi_matrix_online_offline() {
         assert_scenario_deterministic("online_offline", || {
-            drive(6, &[1, 2], |map, store, tick| {
+            drive("online_offline", 6, &[1, 2], |map, store, tick| {
                 if tick == 1 {
                     store.insert(monster_entity(700, 12, 12, 5));
                     put_typed(map, 700, 12, 12, CellType::Monster, 1);
@@ -2493,10 +2542,14 @@ mod tests {
             store.insert(play_viewer(1, 10, 10, 5));
             store.insert(monster_entity(800, 12, 10, 5));
             put_typed(&mut map, 800, 12, 10, CellType::Monster, 0);
+            aoi_universe_capture_set(true);
             let mut snaps = Vec::new();
-            // 同一 now_ms 连扫三趟（间隔门未到期）——逐趟记录，交给差分比较。
+            let mut aligned = 0usize;
+            // 同一 now_ms 连扫三趟（间隔门未到期）——逐趟记录并逐趟做集合对齐。
             for pass in 0..3usize {
                 let out = search_view_range_with_updates(&mut map, &mut store, 1, 0);
+                assert_candidate_universe_aligned("search_gate", &map, &store, 1, pass);
+                aligned += 1;
                 snaps.push(TickSnapshot {
                     tick: pass,
                     viewer: 1,
@@ -2505,7 +2558,8 @@ mod tests {
                     view_updates: out.view_updates.clone(),
                 });
             }
-            snaps
+            aoi_universe_capture_set(false);
+            (snaps, aligned)
         });
     }
 

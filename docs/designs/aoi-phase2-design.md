@@ -92,6 +92,9 @@ SNAPSHOT_COUNT → TICK_VIEWER → 可见集（集合 → 顺序） → REMOVED 
   候选 id 集合，不等即报 `CANDIDATE_SET_MISMATCH tick=… snapshot_only=[…] legacy_only=[…]`。
   场景必须含 **Ghost** 与 **已死未清（store 已移除、格子里还在）**——这两类最易被"只收存活"漏掉。
 - **`moved` 语义**：只记**跨格**；**格内微动不产生条目**（不触发观察者重扫）。
+- **生产构建不含捕获分支**：universe 捕获与对齐断言全部 `#[cfg(test)]`；已用构建产物佐证——
+  `CANDIDATE_SET_MISMATCH` / `AOI_ALIGN` / `AOI_MATRIX` 三个测试字样在 release `game-svr.exe` 中
+  出现 **0** 次，在同源测试二进制中分别出现 2/1/2 次。
 - **复杂度**：快照重建 `O(n log n)`（BTreeMap 插入）+ 比对 `O(n)`，每 tick 一次：
   4k 实体约 4k·12 ≈ 5 万次比较量级（微秒级），10k 约 2.5 倍；该开销归入 `idx_avg`，
   **不计入** `ns_*`（搜索段）。
