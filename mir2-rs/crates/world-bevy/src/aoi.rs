@@ -2054,6 +2054,7 @@ mod tests {
     /// 4. `VISIBLE_ORDER_MISMATCH`（集合相同、顺序不同）；
     /// 5. `REMOVED_SET_MISMATCH`；
     /// 6. `VIEW_UPDATES_MISMATCH`。
+    ///
     /// 顺序一旦改动，同一对输入可能报出不同类别 ⇒ 报告不可复现，故写进本注释并由测试钉住。
     fn compare_snapshots(a: &[TickSnapshot], b: &[TickSnapshot]) -> Result<(), String> {
         if a.len() != b.len() {
