@@ -6,6 +6,7 @@ using OpenMir2.Packets.ServerPackets;
 using System;
 using System.Collections.Generic;
 using System.Collections.Specialized;
+using System.Diagnostics;
 using System.Linq;
 
 namespace DBSrv.Storage.MySQL
@@ -158,6 +159,7 @@ namespace DBSrv.Storage.MySQL
                 return false;
             }
             using StorageContext context = new StorageContext(_storageOption);
+            long t0 = Stopwatch.GetTimestamp();
             try
             {
                 bool success = false;
@@ -184,6 +186,8 @@ namespace DBSrv.Storage.MySQL
             }
             finally
             {
+                // 旁路计时（卡 `openmir2-db-write-stall`）：一次取档的全部 SQL 耗时；不含关连接。
+                StorageTiming.RecordQuery((Stopwatch.GetTimestamp() - t0) * 1000L / Stopwatch.Frequency);
                 context.Dispose();
             }
             return true;

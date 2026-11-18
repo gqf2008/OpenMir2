@@ -65,7 +65,7 @@ namespace M2Server.Player
             };
             messageHead.PackLength = -msgBuff.Length;
             byte[] actionData = new byte[ServerMessage.PacketSize + msgBuff.Length];
-            MemoryCopy.BlockCopy(SerializerUtil.Serialize(messageHead), 0, actionData, 0, ServerMessage.PacketSize);
+            MemoryCopy.BlockCopy(SerializerUtil.Serialize(messageHead), 0, actionData, 0, ServerMessage.PacketSize); // 前提：序列化头长度 == 该常量（牙：PacketLayoutConstantsTest）
             MemoryCopy.BlockCopy(msgBuff, 0, actionData, ServerMessage.PacketSize, msgBuff.Length);
             M2Share.NetChannel.AddGateBuffer(GateIdx, actionData);
         }
@@ -93,8 +93,8 @@ namespace M2Server.Player
             };
             messageHead.PackLength = CommandMessage.Size;
             byte[] sendData = new byte[HeaderLen];
-            MemoryCopy.BlockCopy(SerializerUtil.Serialize(messageHead), 0, sendData, 0, ServerMessage.PacketSize);
-            MemoryCopy.BlockCopy(SerializerUtil.Serialize(defMsg), 0, sendData, ServerMessage.PacketSize, CommandMessage.Size);
+            MemoryCopy.BlockCopy(SerializerUtil.Serialize(messageHead), 0, sendData, 0, ServerMessage.PacketSize); // 前提：序列化头长度 == 该常量（牙：PacketLayoutConstantsTest）
+            MemoryCopy.BlockCopy(SerializerUtil.Serialize(defMsg), 0, sendData, ServerMessage.PacketSize, CommandMessage.Size); // 前提：序列化头长度 == 该常量（牙：PacketLayoutConstantsTest）
             M2Share.NetChannel.AddGateBuffer(GateIdx, sendData);
         }
 

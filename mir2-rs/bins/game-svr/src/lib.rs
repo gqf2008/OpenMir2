@@ -28186,6 +28186,9 @@ fn sim_loop(
                         if let Some(line) = telemetry::record_loaddb_request_sent() {
                             glog!("INF", "{}", line);
                         }
+                        // 排队成功 ≠ 写出（卡 `openmir2-db-write-stall`）：记录「已排队未写出」，
+                        // 由 `run_db_link` 在 write_all+flush 成功后递减。
+                        telemetry::record_db_enqueued(clock::now_ms());
                         w.outstanding.push((
                             qid,
                             info.socket_id,
@@ -93214,6 +93217,42 @@ mod entry_telemetry_wiring {
         assert!(
             seg.contains("record_loaddb_write_error("),
             "record_loaddb_write_error 必须在写失败分支里"
+        );
+    }
+
+    /// 卡 `openmir2-db-write-stall`：`db_write_pending` 的两端都必须接线——
+    /// 入队端紧跟 `record_loaddb_request_sent`（排队成功才算），写出端在 `run_db_link` 的
+    /// `write_all/flush` **成功**路径上递减；断链必须归零（否则仪表永久挂住）。
+    #[test]
+    fn db_write_pending_wiring_sits_on_both_ends() {
+        let i = SRC
+            .find(&needle("loaddb_request_sent"))
+            .expect("入队计数点");
+        assert!(
+            window(SRC, i, 600).contains(&needle("db_enqueued")),
+            "record_db_enqueued 必须挂在 req_tx.send 成功分支（删掉 ⇒「排队≠写出」盲区回来）"
+        );
+        assert_eq!(
+            DBC.matches(&needle("db_written")).count(),
+            1,
+            "写出计数必须唯一（在 run_db_link 写循环里）"
+        );
+        let fail = DBC.find(&needle("loaddb_write_error")).expect("写失败分支");
+        let ok = DBC.find(&needle("db_written")).expect("写出成功点");
+        assert!(
+            ok > fail,
+            "record_db_written 必须在写失败分支之后（即成功路径）"
+        );
+        assert!(
+            window(DBC, fail, 800).contains(&needle("db_pending_reset")),
+            "断链必须把排队计数归零，否则仪表永久挂住"
+        );
+        // 读侧半：drain 任务读到字节时必须记时刻（否则「对端不读 ⇒ 发送缓冲满」这条
+        // 分支没有证据）。
+        assert_eq!(
+            DBC.matches(&needle("db_read")).count(),
+            1,
+            "record_db_read 必须唯一（在 drain 任务的 Ok(n) 分支里）"
         );
     }
 
