@@ -145,6 +145,12 @@ namespace DBSrv.Services.Impl
                 + " reply_bytes=" + Volatile.Read(ref _replyBytes);
         }
 
+        /// <summary>累计慢请求数（供定时器决定汇总行的打印频率）。</summary>
+        public static long SlowCount()
+        {
+            return Interlocked.Read(ref _slowCount);
+        }
+
         /// <summary>累计汇总（`TimedService` 每 5 s 打一行）。</summary>
         public static string SummaryLine()
         {
