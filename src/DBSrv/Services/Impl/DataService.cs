@@ -264,8 +264,6 @@ namespace DBSrv.Services.Impl
                 loadHumData.HumDataInfo = humanRcd;
                 ServerRequestMessage messagePacket = new ServerRequestMessage(Messages.DBR_LOADHUMANRCD, 1, 0, 0, 1);
                 responsePack.Message = EDCode.EncodeBuffer(SerializerUtil.Serialize(messagePacket));
-                RequestWatchdog.Stage(RequestWatchdog.StageSend);
-                RequestWatchdog.NoteReplyBytes(responsePack.Packet.Length);
                 SendRequest(connectionId, queryId, responsePack, loadHumData);
                 EntryTelemetry.LoadRespondedOk();
                 LogService.Debug($"获取玩家[{loadHumanPacket.ChrName}]数据成功");
@@ -392,6 +390,11 @@ namespace DBSrv.Services.Impl
             byte[] data = new byte[ServerDataPacket.FixedHeaderLen + sendBuffer.Length];
             MemoryCopy.BlockCopy(dataBuff, 0, data, 0, data.Length);
             MemoryCopy.BlockCopy(sendBuffer, 0, data, dataBuff.Length, sendBuffer.Length);
+            // 卡 `openmir2-db-write-stall`：`send` 段**只覆盖** socket 发送本身；
+            // 上面的序列化/编解码仍算 `serialize_reply`（此前在调用点打 StageSend 会把
+            // 「卡在序列化」误标成「卡在发送」）。整帧长度 = data.Length。
+            RequestWatchdog.NoteReplyBytes(data.Length);
+            RequestWatchdog.Stage(RequestWatchdog.StageSend);
             _serverSocket.Send(connectionId, data);
         }
     }
