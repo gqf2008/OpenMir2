@@ -55,13 +55,16 @@ namespace DBSrv.Services.Impl
         }
 
         /// <summary>补充上下文字段（取档请求解出 `ChrName` 后调用）。</summary>
+        /// <remarks>仪表**不得**影响业务路径：任何异常形态都退化为「追加」，绝不抛。</remarks>
         public static void NoteChr(string chrName)
         {
-            if (!string.IsNullOrEmpty(chrName))
+            if (string.IsNullOrEmpty(chrName))
             {
-                _context = _context.Substring(0, _context.LastIndexOf(" chr=", System.StringComparison.Ordinal))
-                           + " chr=" + chrName;
+                return;
             }
+            string ctx = _context;
+            int i = ctx.LastIndexOf(" chr=", System.StringComparison.Ordinal);
+            _context = i < 0 ? ctx + " chr=" + chrName : ctx.Substring(0, i) + " chr=" + chrName;
         }
 
         /// <summary>回包体字节数（进入发送段前调用；-1 = 未走到该段）。</summary>
