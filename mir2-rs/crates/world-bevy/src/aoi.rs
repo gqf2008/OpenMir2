@@ -1012,6 +1012,81 @@ impl Drop for AoiStatsTestGuard {
     }
 }
 
+// ===================== AOI 增量变更馈送（phase 2 契约，卡 openmir2-aoi-incremental） =====================
+//
+// 增量可见集维护需要**变更事件**：实体跨格、进入/离开世界（或换图）。本结构是 tick 边界上
+// 「移动/生命周期系统 → AOI 索引」的唯一接缝，**第一步只定契约**（保守馈送：本 tick 位置或
+// 存在性变过的实体全进 feed），不做批量化/缓存优化——语义先拿证，优化另起提交。
+//
+// 注意：`moved` 只记**跨格**（格坐标变化）；同格内微动不影响可见关系，不产生条目。
+
+/// 实体的格坐标（地图格，不是像素坐标）。
+pub type AoiCell = (i32, i32);
+
+/// tick 边界的位置/存在性快照：`id -> 格坐标`（**只收参与世界/存活的实体**）。
+///
+/// 用 `BTreeMap` 而不是 `HashMap`：迭代顺序确定 ⇒ 派生出的 feed 顺序也确定（差分可复现）。
+pub type AoiCellSnapshot = std::collections::BTreeMap<i32, AoiCell>;
+
+/// **派生 feed**（opc-07 定稿的第一步口径）：由相邻两个 tick 的快照比对得出，
+/// 完备性**由构造保证**——不依赖任何调用方"记得喂事件"。
+///
+/// 语义：
+/// - 新出现的 id ⇒ `entered`；
+/// - 消失的 id ⇒ `left`；
+/// - 两 tick 都在且格坐标变化 ⇒ `moved(id, 旧格, 新格)`；
+/// - 同格微动**不产生**条目（不影响可见关系）。
+#[must_use]
+pub fn derive_aoi_change_feed(prev: &AoiCellSnapshot, curr: &AoiCellSnapshot) -> AoiChangeFeed {
+    let mut feed = AoiChangeFeed::default();
+    for (id, curr_cell) in curr {
+        match prev.get(id) {
+            None => feed.entered.push(*id),
+            Some(prev_cell) => {
+                if prev_cell != curr_cell {
+                    feed.moved.push((*id, *prev_cell, *curr_cell));
+                }
+            }
+        }
+    }
+    for id in prev.keys() {
+        if !curr.contains_key(id) {
+            feed.left.push(*id);
+        }
+    }
+    feed
+}
+
+/// 一个 tick 的 AOI 变更馈送。
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AoiChangeFeed {
+    /// 跨格移动：`(id, 旧格, 新格)`。
+    pub moved: Vec<(i32, AoiCell, AoiCell)>,
+    /// 进入世界/进入某图。
+    pub entered: Vec<i32>,
+    /// 离开世界/离开某图。
+    pub left: Vec<i32>,
+}
+
+impl AoiChangeFeed {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.moved.is_empty() && self.entered.is_empty() && self.left.is_empty()
+    }
+
+    pub fn clear(&mut self) {
+        self.moved.clear();
+        self.entered.clear();
+        self.left.clear();
+    }
+
+    /// 总变更条数（日志/仪器用）。
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.moved.len() + self.entered.len() + self.left.len()
+    }
+}
+
 // ============================ S3b：OutputAoi 系统 ============================
 
 /// `OutputAoi` 系统的输入快照（时钟 / 掉落清理门 / 事件与 sight 镜像）。
@@ -2372,5 +2447,43 @@ mod tests {
             }
             snaps
         });
+    }
+
+    /// phase 2 契约：`AoiChangeFeed` 的判空/清空/计数语义（实现与馈送方共同依赖）。
+    #[test]
+    fn aoi_change_feed_basic_contract() {
+        let mut feed = AoiChangeFeed::default();
+        assert!(feed.is_empty());
+        assert_eq!(feed.len(), 0);
+        feed.moved.push((7, (1, 2), (1, 3)));
+        feed.entered.push(8);
+        feed.left.push(9);
+        assert!(!feed.is_empty());
+        assert_eq!(feed.len(), 3);
+        feed.clear();
+        assert!(feed.is_empty());
+        assert_eq!(feed.len(), 0);
+    }
+
+    /// 派生 feed 的完备性语义：进/出/跨格/同格微动四类各一条，且顺序确定。
+    #[test]
+    fn aoi_derived_feed_covers_all_transitions() {
+        let mut prev = AoiCellSnapshot::new();
+        prev.insert(1, (0, 0));
+        prev.insert(2, (1, 1));
+        prev.insert(4, (5, 5));
+        let mut curr = AoiCellSnapshot::new();
+        curr.insert(1, (0, 1)); // 跨格
+        curr.insert(3, (2, 2)); // 新进
+        curr.insert(4, (5, 5)); // 同格微动（不在快照层面体现）
+        let feed = derive_aoi_change_feed(&prev, &curr);
+        assert_eq!(feed.moved, vec![(1, (0, 0), (0, 1))]);
+        assert_eq!(feed.entered, vec![3]);
+        assert_eq!(feed.left, vec![2]);
+        assert_eq!(feed.len(), 3);
+
+        // 空对空 ⇒ 空 feed（退化形态）。
+        let empty = derive_aoi_change_feed(&AoiCellSnapshot::new(), &AoiCellSnapshot::new());
+        assert!(empty.is_empty());
     }
 }
