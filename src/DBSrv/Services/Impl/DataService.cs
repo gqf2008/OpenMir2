@@ -388,7 +388,7 @@ namespace DBSrv.Services.Impl
             };
             byte[] dataBuff = SerializerUtil.Serialize(serverMessage);
             byte[] data = new byte[ServerDataPacket.FixedHeaderLen + sendBuffer.Length];
-            MemoryCopy.BlockCopy(dataBuff, 0, data, 0, data.Length);
+            MemoryCopy.BlockCopy(dataBuff, 0, data, 0, dataBuff.Length); // 卡 openmir2-db-write-stall：源只有包头长度，count 不得取目的长度
             MemoryCopy.BlockCopy(sendBuffer, 0, data, dataBuff.Length, sendBuffer.Length);
             // 卡 `openmir2-db-write-stall`：`send` 段**只覆盖** socket 发送本身；
             // 上面的序列化/编解码仍算 `serialize_reply`（此前在调用点打 StageSend 会把

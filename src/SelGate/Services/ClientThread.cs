@@ -272,7 +272,7 @@ namespace SelGate.Services
             };
             byte[] dataBuff = SerializerUtil.Serialize(serverMessage);
             byte[] data = new byte[ServerDataPacket.FixedHeaderLen + sendBuffer.Length];
-            MemoryCopy.BlockCopy(dataBuff, 0, data, 0, data.Length);
+            MemoryCopy.BlockCopy(dataBuff, 0, data, 0, dataBuff.Length); // 卡 openmir2-db-write-stall：源只有包头长度，count 不得取目的长度
             MemoryCopy.BlockCopy(sendBuffer, 0, data, dataBuff.Length, sendBuffer.Length);
             _clientSocket.Send(data);
         }
