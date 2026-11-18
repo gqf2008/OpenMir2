@@ -1880,4 +1880,176 @@ mod tests {
         // 终值行后窗口已清空，再取一次应为 None。
         assert!(aoi_stats_final_line(2_000).is_none());
     }
+
+    // ================= 差分骨架（phase 2 前置，卡 openmir2-aoi-incremental） =================
+    //
+    // 目的：给"增量实现 vs legacy 全量扫描"提供**可复用的快照 + 比较器**，并先用两颗前置牙证明
+    // 骨架本身不假绿：
+    //   ① 确定性牙：同一实现对同一输入跑两遍，逐项相等；
+    //   ② 检出力牙：比较器必须能**自己报出**"哪一 tick、哪个观察者、少了谁"。
+    // 快照里的可见集/离开集都是**有序**的——顺序本身是语义（出帧顺序受影响）。
+
+    /// 一个 (tick, viewer) 的可观测快照。
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    struct TickSnapshot {
+        tick: usize,
+        viewer: i32,
+        /// 观察者当前可见集（**有序**，来自 `visible_actors.target`）。
+        visible: Vec<i32>,
+        /// 本趟离开视野（**有序**）。
+        removed: Vec<i32>,
+        /// 本趟 `RM_UPDATEVIEWRANGE` 投递（扫描序）。
+        view_updates: Vec<(i32, i32)>,
+    }
+
+    fn visible_of(store: &EntityStore, viewer: i32) -> Vec<i32> {
+        match store.get(viewer) {
+            Some(e) => e.visible_actors.iter().map(|v| v.target).collect(),
+            None => Vec::new(),
+        }
+    }
+
+    /// 比较器：**自己**产出带上下文的分歧描述（不靠 `assert!` 的裸消息）。
+    fn compare_snapshots(a: &[TickSnapshot], b: &[TickSnapshot]) -> Result<(), String> {
+        if a.len() != b.len() {
+            return Err(format!(
+                "SNAPSHOT_COUNT_MISMATCH a={} b={}",
+                a.len(),
+                b.len()
+            ));
+        }
+        for (x, y) in a.iter().zip(b.iter()) {
+            if x.tick != y.tick || x.viewer != y.viewer {
+                return Err(format!(
+                    "TICK_VIEWER_MISMATCH a=({}, {}) b=({}, {})",
+                    x.tick, x.viewer, y.tick, y.viewer
+                ));
+            }
+            if x.visible != y.visible {
+                let missing: Vec<i32> = x
+                    .visible
+                    .iter()
+                    .copied()
+                    .filter(|e| !y.visible.contains(e))
+                    .collect();
+                let extra: Vec<i32> = y
+                    .visible
+                    .iter()
+                    .copied()
+                    .filter(|e| !x.visible.contains(e))
+                    .collect();
+                if missing.is_empty() && extra.is_empty() {
+                    return Err(format!(
+                        "VISIBLE_ORDER_MISMATCH tick={} viewer={} a={:?} b={:?}",
+                        x.tick, x.viewer, x.visible, y.visible
+                    ));
+                }
+                return Err(format!(
+                    "VISIBLE_SET_MISMATCH tick={} viewer={} missing={:?} extra={:?}",
+                    x.tick, x.viewer, missing, extra
+                ));
+            }
+            if x.removed != y.removed {
+                return Err(format!(
+                    "REMOVED_SET_MISMATCH tick={} viewer={} a={:?} b={:?}",
+                    x.tick, x.viewer, x.removed, y.removed
+                ));
+            }
+            if x.view_updates != y.view_updates {
+                return Err(format!(
+                    "VIEW_UPDATES_MISMATCH tick={} viewer={} a={:?} b={:?}",
+                    x.tick, x.viewer, x.view_updates, y.view_updates
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    /// 确定性场景：3 个玩家（view_range=5）+ 一片怪；每 tick 加一只怪、切一只怪的 Ghost 标记，
+    /// 再让每个玩家扫一遍。全部输入由 tick 决定 ⇒ 同实现两遍必须完全一致。
+    fn run_diff_scenario() -> Vec<TickSnapshot> {
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 5));
+        store.insert(play_viewer(2, 14, 10, 5));
+        store.insert(play_viewer(3, 28, 28, 5));
+        let mut next_id = 100;
+        for dy in -3..=3 {
+            for dx in -3..=3 {
+                let (x, y) = (10 + dx, 10 + dy);
+                store.insert(monster_entity(next_id, x, y, 5));
+                put_typed(&mut map, next_id, x, y, CellType::Monster, 0);
+                next_id += 1;
+            }
+        }
+        let mut snaps = Vec::new();
+        for tick in 0..12i64 {
+            // 新怪逐步进入视野（位置随 tick 变化）。
+            let x = 10 + i32::try_from(tick % 4).unwrap_or(0);
+            let y = 13;
+            store.insert(monster_entity(next_id, x, y, 5));
+            put_typed(&mut map, next_id, x, y, CellType::Monster, tick);
+            next_id += 1;
+            // Ghost 标记来回切（影响可见性过滤）。
+            let ghost_id = 100 + i32::try_from(tick % 5).unwrap_or(0);
+            if let Some(e) = store.get_mut(ghost_id) {
+                e.life_cycle.ghost = tick % 2 == 0;
+            }
+            for viewer in [1, 2, 3] {
+                let out = search_view_range_with_updates(&mut map, &mut store, viewer, tick * 1000);
+                snaps.push(TickSnapshot {
+                    tick: usize::try_from(tick).unwrap_or(0),
+                    viewer,
+                    visible: visible_of(&store, viewer),
+                    removed: out.removed.clone(),
+                    view_updates: out.view_updates.clone(),
+                });
+            }
+        }
+        snaps
+    }
+
+    /// 牙①（确定性）：同一实现对同一场景跑两遍 ⇒ 逐项相等。
+    #[test]
+    fn aoi_diff_skeleton_is_deterministic() {
+        let a = run_diff_scenario();
+        let b = run_diff_scenario();
+        match compare_snapshots(&a, &b) {
+            Ok(()) => println!(
+                "[AOI_DIFF] DETERMINISM_OK snapshots={} sample={:?}",
+                a.len(),
+                a.get(a.len() / 2)
+            ),
+            Err(e) => panic!("确定性牙红（同实现两遍不一致）：{e}"),
+        }
+        assert!(a.len() >= 30, "场景至少 12 tick × 3 viewer");
+        assert!(
+            a.iter().any(|s| s.visible.len() >= 2),
+            "场景必须产生非平凡可见集（否则检出力牙没有靶子）"
+        );
+    }
+
+    /// 牙②（检出力）：一侧故意丢一个可见实体 ⇒ 比较器必须报出 tick / viewer / 少了谁。
+    #[test]
+    fn aoi_diff_harness_detects_a_dropped_entity() {
+        let a = run_diff_scenario();
+        let mut b = run_diff_scenario();
+        let (tick, viewer, dropped) = {
+            let target = b
+                .iter_mut()
+                .find(|s| s.visible.len() >= 2)
+                .expect("场景里必须有一个可见集 ≥2 的快照");
+            let dropped = target.visible.remove(0);
+            (target.tick, target.viewer, dropped)
+        };
+        let err = compare_snapshots(&a, &b).expect_err("丢掉一个可见实体后比较器必须报红");
+        println!(
+            "[AOI_DIFF] DETECTION_RED tick={} viewer={} dropped={} msg={}",
+            tick, viewer, dropped, err
+        );
+        assert!(err.contains("VISIBLE_SET_MISMATCH"), "{err}");
+        assert!(err.contains(&format!("tick={tick}")), "{err}");
+        assert!(err.contains(&format!("viewer={viewer}")), "{err}");
+        assert!(err.contains(&format!("missing=[{dropped}]")), "{err}");
+    }
 }
