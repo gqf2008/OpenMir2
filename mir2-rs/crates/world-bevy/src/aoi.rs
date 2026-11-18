@@ -195,6 +195,39 @@ pub fn search_view_range_incremental<S: AoiStore>(
     search_view_range_with_updates(map, store, viewer_id, now_ms)
 }
 
+/// **可见性谓词（两侧共用）**（卡 `openmir2-aoi-incremental`）：
+/// legacy 全量扫描与增量更新**必须调用同一个函数**——否则两份过滤链迟早分叉，
+/// 差分绿了也只是"碰巧一致"。
+///
+/// 语义与 `search_view_range_with_updates` 循环体内原表达式**逐项、短路顺序不变**：
+/// `!invisible && !ghost && !fixed_hide_mode && !ob_mode`
+/// `&& (viewer_is_play || !death)`
+/// `&& (base_pass || (other.master && |dx|<=3 && |dy|<=3) || other.race == Play)`，
+/// 其中 `base_pass = viewer_is_play || viewer_has_master || viewer_nasty || viewer_want_ref`。
+///
+/// 注意：本函数**只判可见性**，不产生任何副作用；扫描侧的副作用（过期对象摘除、
+/// `view_updates` 投递）仍留在调用点，顺序不变。
+#[allow(clippy::too_many_arguments)]
+fn aoi_visible_predicate(
+    viewer_is_play: bool,
+    viewer_has_master: bool,
+    viewer_nasty: bool,
+    viewer_want_ref: bool,
+    cx: i32,
+    cy: i32,
+    other: &EntityRef<'_>,
+) -> bool {
+    let base_pass = viewer_is_play || viewer_has_master || viewer_nasty || viewer_want_ref;
+    !other.invisible
+        && !other.ghost
+        && !other.fixed_hide_mode
+        && !other.ob_mode
+        && (viewer_is_play || !other.death)
+        && (base_pass
+            || (other.master.is_some() && (other.x - cx).abs() <= 3 && (other.y - cy).abs() <= 3)
+            || other.race == ACTOR_RACE_PLAY)
+}
+
 /// [`search_view_range_with_updates`] 的兼容包装：只返回「离开视野」的目标（旧签名）。
 ///
 /// 非玩家自我扫描（卫士/宝宝，`BaseObject.SearchViewRange`/`GuardUnit.SearchViewRange`）
@@ -309,20 +342,15 @@ pub fn search_view_range_with_updates<S: AoiStore>(
                         //   `Master != null || NastyMode || WantRefMsg`。
                         // 其余两支（`baseObject.Master != null && 距离 <= 3`、
                         // `baseObject.Race == Play`）两份相同。
-                        let base_pass = viewer_is_play
-                            || viewer_master.is_some()
-                            || viewer_nasty
-                            || viewer_want_ref;
-                        let visible = !other.invisible
-                            && !other.ghost
-                            && !other.fixed_hide_mode
-                            && !other.ob_mode
-                            && (viewer_is_play || !other.death)
-                            && (base_pass
-                                || (other.master.is_some()
-                                    && (other.x - cx).abs() <= 3
-                                    && (other.y - cy).abs() <= 3)
-                                || other.race == ACTOR_RACE_PLAY);
+                        let visible = aoi_visible_predicate(
+                            viewer_is_play,
+                            viewer_master.is_some(),
+                            viewer_nasty,
+                            viewer_want_ref,
+                            cx,
+                            cy,
+                            &other,
+                        );
                         if visible {
                             candidates.push(obj.cell_obj_id);
                             // **`PlayObject.SearchViewRange` 的「进入附近怪物视野」段**
