@@ -26907,6 +26907,11 @@ fn sim_loop(
             if let Some(line) = telemetry::final_line_once() {
                 glog!("INF", "{}", line);
             }
+            // AOI 遥测**终值行**（卡 `openmir2-aoi-incremental`）：窗口未满也在世界线程退出前强制补一行
+            //（`final=1`）。线程局部 ⇒ 必须在**本线程**调用；`MIR2_AOI_STATS` 未开时返回 `None`，零输出。
+            if let Some(line) = mir2_world_bevy::aoi::aoi_stats_final_line(world.clock_ms) {
+                eprintln!("{line}");
+            }
             let _ = shutdown_done_tx.send(summary);
             return;
         }
@@ -30601,13 +30606,23 @@ async fn gate_conn(
             match read {
                 Ok(0) => {
                     glog!("ERR", "网关连接断开。");
-                    emit_final_drop_summary(&drop_stats);
+                    emit_final_drop_summary(
+                        &drop_stats,
+                        users.online(),
+                        state.pending.len(),
+                        state.pending.bytes(),
+                    );
                     return Ok(());
                 }
                 Ok(n) => head_have += n,
                 Err(e) => {
                     glog!("ERR", "网关连接断开：{e:#}");
-                    emit_final_drop_summary(&drop_stats);
+                    emit_final_drop_summary(
+                        &drop_stats,
+                        users.online(),
+                        state.pending.len(),
+                        state.pending.bytes(),
+                    );
                     return Ok(());
                 }
             }
@@ -30628,7 +30643,12 @@ async fn gate_conn(
         let mut body = vec![0u8; body_len];
         if body_len > 0 && rd.read_exact(&mut body).await.is_err() {
             glog!("ERR", "读取网关载荷失败。");
-            emit_final_drop_summary(&drop_stats);
+            emit_final_drop_summary(
+                &drop_stats,
+                users.online(),
+                state.pending.len(),
+                state.pending.bytes(),
+            );
             return Ok(());
         }
         if let Err(e) = dispatch(
@@ -30647,7 +30667,12 @@ async fn gate_conn(
         .await
         {
             // F4（reviewer-26）：终值汇总也要覆盖 `dispatch` 的早退路径（原实现只覆盖两处读错误）。
-            emit_final_drop_summary(&drop_stats);
+            emit_final_drop_summary(
+                &drop_stats,
+                users.online(),
+                state.pending.len(),
+                state.pending.bytes(),
+            );
             return Err(e);
         }
         // 处理与本帧同批到达的 sim 命令（清槽/入图发包等）
@@ -31371,8 +31396,22 @@ fn emit_drop_note(note: gate_backpressure::Note) {
 }
 
 /// 网关断线时的终值汇总（有丢帧才落；避免最后 5s 的计数只停在限速日志里）。
-fn emit_final_drop_summary(stats: &gate_backpressure::DropStats) {
+///
+/// 另发**停止排水事件**（卡 `openmir2-drain-stopped-event`）：独立一行 `event=drain_stopped`，
+/// 记录停排时刻与本线未消费下行积压，并把该时刻回填进 `ENTRY_TELEMETRY` 的 `drain_stopped_ms`。
+fn emit_final_drop_summary(
+    stats: &gate_backpressure::DropStats,
+    sessions_alive: usize,
+    pending_frames: usize,
+    pending_bytes: usize,
+) {
     let now = now_ms();
+    telemetry::record_drain_stopped_ms(now);
+    glog!(
+        "WRN",
+        "{}",
+        stats.drain_stopped_line(now, sessions_alive, pending_frames, pending_bytes)
+    );
     if let Some(line) = stats.final_summary(now) {
         glog!("WRN", "{line}");
     }
@@ -94478,5 +94517,22 @@ mod close_attribution_teeth {
         // 退化形态：空集再扫 ⇒ 0 条、计数不变。
         assert_eq!(record_gate_line_sweep(LINE), 0);
         assert_eq!(snap().total, after.total);
+    }
+}
+
+#[cfg(test)]
+mod aoi_shutdown_wiring {
+    /// 卡 `openmir2-aoi-incremental`：AOI 遥测终值行必须在**世界线程的关服分支**里补打，
+    /// 且走 stderr（与 `[AOI_STATS]` 其它行同通道）。删掉这处接线 ⇒ 本用例红。
+    #[test]
+    fn final_aoi_line_is_emitted_at_shutdown() {
+        const SRC: &str = include_str!("lib.rs");
+        let needle = concat!("aoi_stats_final", "_line(");
+        let i = SRC.find(needle).expect("找不到 AOI 终值行调用点");
+        let seg = &SRC[i..(i + 300).min(SRC.len())];
+        assert!(seg.contains("eprintln!"), "终值行必须打印（stderr）：{seg}");
+        let shutdown = SRC.find("let _ = shutdown_done_tx.send(summary);");
+        assert!(shutdown.is_some(), "关服分支标记缺失");
+        assert!(i < shutdown.unwrap(), "终值行必须在关服收尾返回之前");
     }
 }

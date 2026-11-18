@@ -205,6 +205,14 @@ pub fn search_view_range_with_updates<S: AoiStore>(
         }
     }
 
+    // 遥测（默认关闭）：起点覆盖「扫描 + UpdateVisibleGay + 差集收尾」。
+    let stats_start = aoi_stats_search_begin();
+    let stats_cells = if stats_start.is_some() {
+        let side = i64::from(view_range) * 2 + 1;
+        u64::try_from(side).map_or(0, |s| s.saturating_mul(s))
+    } else {
+        0
+    };
     let mut candidates: Vec<i32> = Vec::new();
     let mut view_updates: Vec<(i32, i32)> = Vec::new();
     for x in (cx - view_range)..=(cx + view_range) {
@@ -295,6 +303,11 @@ pub fn search_view_range_with_updates<S: AoiStore>(
         }
     }
 
+    let stats_candidates = if stats_start.is_some() {
+        candidates.len() as u64
+    } else {
+        0
+    };
     for target in candidates {
         update_visible_gay(store, viewer_id, target);
     }
@@ -319,7 +332,7 @@ pub fn search_view_range_with_updates<S: AoiStore>(
             i += 1;
         }
     }
-    let removed = removed
+    let removed: Vec<i32> = removed
         .into_iter()
         .filter(|t| {
             store
@@ -327,6 +340,18 @@ pub fn search_view_range_with_updates<S: AoiStore>(
                 .is_some_and(|e| !e.fixed_hide_mode && !e.ghost)
         })
         .collect();
+    if let Some(start) = stats_start {
+        let visible = store
+            .get(viewer_id)
+            .map_or(0, |e| e.visible_actors.len() as u64);
+        aoi_stats_record_search(
+            start,
+            stats_cells,
+            stats_candidates,
+            visible,
+            removed.len() as u64,
+        );
+    }
     SearchViewRangeOutcome {
         removed,
         view_updates,
@@ -562,6 +587,429 @@ pub fn visible_snapshot<S: AoiStore>(store: &S, id: i32) -> Vec<(i32, u8)> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+// ===================== AOI 搜索遥测（卡 `openmir2-aoi-incremental` phase 1） =====================
+//
+// **零行为变更**：只读局部量并累加到线程局部状态；不新增/删除/重排 `visible_actors`，
+// 不改 `aoi_order`、不改 `SearchTime` 门。
+//
+// **开关（默认关闭）**：只有 `MIR2_AOI_STATS=1` 开启；未设 / `0` / 空串 / 其它任何值一律关闭。
+// 关闭态每次搜索只做一次 `std::sync::OnceLock` 读取判别：**不取 `Instant`、不写线程局部、
+// 不打印**。开启态每趟搜索取两次 `Instant`（起/止），把 5 个计数 + 两组 log2 直方图累加进
+// 线程局部；`output_aoi_system` 每 [`AOI_STATS_REPORT_TICKS`] tick 向 stderr 打一行
+// `[AOI_STATS]`（字段名固定，供报告机读）。
+//
+// **字段口径**：
+// - `searches`：本窗口完成扫描的 `search_view_range_with_updates` 次数（viewer 不存在的
+//   早期返回不计——没有发生扫描）；
+// - `cells_per_search`：每趟正方形窗口的格数 `(2*ViewRange+1)^2`（实际循环访问数）；
+// - `cand_per_search`：每趟通过可见性过滤的候选数（`candidates.len()`）；
+// - `vis_per_search`：本趟结束时 `visible_actors.len()` = 新加入 + 既有保持；
+// - `ns_p50/ns_p90/ns_max`：每趟「扫描 + UpdateVisibleGay + 差集收尾」的墙钟 ns，分位为
+//   log2 直方图近似（桶 `k` 覆盖 `[2^(k-1), 2^k - 1]`，打印桶上限 `2^k`）；
+// - `same_map_p50/same_map_p90/same_map_max`：每 tick `by_map` 各图**实体总数**（全部实体，
+//   不只观察者）的分布，只统计实体数 > 0 的图（空图会把分位数退化到 0）。
+//
+// 另累计 `removed`（每趟离开视野的条数，取返回值长度——已经过 `FixedHideMode`/`Ghost`
+// 守卫）：卡要求记录，但行内字段固定，不打印（测试经快照读取）。
+
+/// 遥测环境门（**只有字面 `"1"` 开启**；默认关闭）。
+pub const ENV_AOI_STATS: &str = "MIR2_AOI_STATS";
+
+/// 汇总窗口默认长度：每 500 tick 打印一行。
+pub const AOI_STATS_REPORT_TICKS: u64 = 500;
+
+/// 汇总窗口的**环境变量覆盖**（正整数；缺失/非法一律回落 [`AOI_STATS_REPORT_TICKS`]）。
+/// 用途：360 s 跑批在 200 ms/tick 下默认只有 2 行，做不了时间序列；设小值（如 150 ≈ 30 s）
+/// 即可按窗口拿到序列。只在开启态解析一次（`OnceLock`），关闭态零成本。
+pub const ENV_AOI_STATS_TICKS: &str = "MIR2_AOI_STATS_TICKS";
+
+/// 解析规则（纯函数，便于单测）：缺省/非法/0 ⇒ 默认值。
+fn parse_report_ticks(value: Option<&str>) -> u64 {
+    match value {
+        Some(v) => v
+            .trim()
+            .parse::<u64>()
+            .ok()
+            .filter(|n| *n > 0)
+            .unwrap_or(AOI_STATS_REPORT_TICKS),
+        None => AOI_STATS_REPORT_TICKS,
+    }
+}
+
+/// 本次进程实际使用的窗口长度（首次调用读一次环境变量）。
+#[must_use]
+pub fn aoi_stats_report_ticks() -> u64 {
+    static OVERRIDE: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *OVERRIDE.get_or_init(|| parse_report_ticks(std::env::var(ENV_AOI_STATS_TICKS).ok().as_deref()))
+}
+
+/// log2 直方图桶数（`u64` 值域：0 桶 + 1..=64）。
+const AOI_HIST_BUCKETS: usize = 65;
+
+/// 值 → log2 直方图桶：`0 => 0`，`v > 0 => floor(log2(v)) + 1`（= `v` 的位宽）。
+///
+/// 桶 `k >= 1` 覆盖 `[2^(k-1), 2^k - 1]`；[`aoi_hist_upper_bound`] 返回桶上限 `2^k`。
+fn aoi_hist_bucket(v: u64) -> usize {
+    if v == 0 {
+        0
+    } else {
+        (u64::BITS - v.leading_zeros()) as usize
+    }
+}
+
+fn aoi_hist_upper_bound(bucket: usize) -> u64 {
+    if bucket == 0 {
+        0
+    } else {
+        1u64.checked_shl(bucket as u32).unwrap_or(u64::MAX)
+    }
+}
+
+/// **ns 直方图：线性桶**（每桶 32 µs；0..=63 覆盖 0–2048 µs，第 64 桶 = ≥2048 µs 溢出）。
+///
+/// 为什么不用 log2：报告出来会全是 2 的幂边界（131,072 / 524,288 ns），分辨率只有 ±2 倍，
+/// 两轮"完全相同"其实只是"落在同一个大桶"，支撑不了收益估算（2026-11-19 AOI 两轮复盘）。
+pub const AOI_NS_BUCKET_NS: u64 = 32_000;
+/// ns 直方图桶数：64 个线性桶 + 1 个溢出桶。
+const AOI_NS_BUCKETS: usize = 65;
+
+fn aoi_ns_bucket(ns: u64) -> usize {
+    let idx = ns / AOI_NS_BUCKET_NS;
+    usize::try_from(idx)
+        .unwrap_or(AOI_NS_BUCKETS - 1)
+        .min(AOI_NS_BUCKETS - 1)
+}
+
+/// 线性桶的上限（ns）；溢出桶返回 `None`（调用方改用 `ns_max`）。
+fn aoi_ns_bucket_upper(bucket: usize) -> Option<u64> {
+    if bucket >= AOI_NS_BUCKETS - 1 {
+        None
+    } else {
+        Some((bucket as u64 + 1) * AOI_NS_BUCKET_NS)
+    }
+}
+
+/// 通用分位：返回覆盖目标分位的最小桶经 `upper` 映射后的值。
+fn aoi_percentile(hist: &[u64], pct: u32, upper: impl Fn(usize) -> u64) -> Option<u64> {
+    let total: u64 = hist.iter().sum();
+    if total == 0 {
+        return None;
+    }
+    let target = (u128::from(total) * u128::from(pct)).div_ceil(100) as u64;
+    let mut cumulative = 0u64;
+    for (bucket, &count) in hist.iter().enumerate() {
+        cumulative = cumulative.saturating_add(count);
+        if cumulative >= target {
+            return Some(upper(bucket));
+        }
+    }
+    hist.len().checked_sub(1).map(upper)
+}
+
+/// `same_map` 用 log2 桶（实体计数跨几个数量级）；分位语义见 [`aoi_percentile`]。
+/// 直方图近似分位数：返回覆盖目标分位的最小桶的上限；空直方图 => `None`。
+fn aoi_hist_percentile(hist: &[u64; AOI_HIST_BUCKETS], pct: u32) -> Option<u64> {
+    aoi_percentile(hist, pct, aoi_hist_upper_bound)
+}
+
+/// 本线程一个汇总窗口的累计（**关闭态从不触碰**）。
+#[derive(Clone)]
+struct AoiStatsState {
+    window_ticks: u64,
+    /// 本窗口完成的搜索次数（旧字段名 `searches`，行内改名 `searches_in_window`）。
+    searches: u64,
+    /// **跨窗口累计**的搜索次数（行内 `searches_total`）。与 `searches` 的差值是
+    /// 「相邻两行 in_window 之和 == total 增量」这条自洽判据的依据。
+    total_searches: u64,
+    /// 已输出的窗口序号（1 起；行内 `window_seq`）。
+    window_seq: u64,
+    /// 累计 tick 序号（1 起；行内 `tick_seq`）——分布要能对齐到 ramp/稳态，光有墙钟不够。
+    tick_seq: u64,
+    cells: u64,
+    candidates: u64,
+    visible: u64,
+    /// 卡要求记录（行格式固定不打印）；见模块注释。
+    #[allow(dead_code)]
+    removed: u64,
+    ns_max: u64,
+    /// ns 样本总和（`ns_avg` 用；桶类指标一律配均值）。
+    ns_sum: u64,
+    same_map_max: u64,
+    /// 非空地图的实体数之和 / 计数 ⇒ `same_map_avg`（桶类分位对一档跳变过敏，均值更稳）。
+    same_map_sum: u64,
+    same_map_count: u64,
+    ns_hist: [u64; AOI_NS_BUCKETS],
+    same_map_hist: [u64; AOI_HIST_BUCKETS],
+}
+
+impl AoiStatsState {
+    const fn new() -> Self {
+        Self {
+            window_ticks: 0,
+            searches: 0,
+            total_searches: 0,
+            window_seq: 0,
+            tick_seq: 0,
+            cells: 0,
+            candidates: 0,
+            visible: 0,
+            removed: 0,
+            ns_max: 0,
+            ns_sum: 0,
+            same_map_max: 0,
+            same_map_sum: 0,
+            same_map_count: 0,
+            ns_hist: [0; AOI_NS_BUCKETS],
+            same_map_hist: [0; AOI_HIST_BUCKETS],
+        }
+    }
+
+    /// 窗口边界重置：**只清窗口量**，累计量（`total_searches` / `window_seq` / `tick_seq`）保留。
+    fn reset_window(&mut self) {
+        let total_searches = self.total_searches;
+        let window_seq = self.window_seq;
+        let tick_seq = self.tick_seq;
+        *self = Self::new();
+        self.total_searches = total_searches;
+        self.window_seq = window_seq;
+        self.tick_seq = tick_seq;
+    }
+
+    /// 取一行报告；字段顺序/名称固定（报告机读）。
+    ///
+    /// 口径（报告必须照抄）：
+    /// - `clock_ms` = 世界时钟（`AoiParams.clock_ms`，同一时刻量）；
+    /// - `window_seq` / `tick_seq` = **本线程**已输出窗口序号 / 累计 tick 序号（均 1 起）；
+    /// - `ticks` = 本窗口 tick 数（正常 = `AOI_STATS_REPORT_TICKS`）；
+    /// - `searches_in_window` = 本窗口搜索次数；`searches_total` = 本线程**跨窗口累计**（含本窗口）；
+    /// - 自洽判据：相邻两行 `searches_in_window` 之和 == 后一行的 `searches_total` 增量。
+    fn report_line(&self, clock_ms: i64, final_line: bool) -> String {
+        let searches = self.searches;
+        let ticks = self.window_ticks;
+        let per_search = |n: u64| {
+            if searches == 0 {
+                0.0
+            } else {
+                n as f64 / searches as f64
+            }
+        };
+        let per_tick = if ticks == 0 {
+            0.0
+        } else {
+            searches as f64 / ticks as f64
+        };
+        let same_map_pct =
+            |hist: &[u64; AOI_HIST_BUCKETS], pct: u32| aoi_hist_percentile(hist, pct).unwrap_or(0);
+        let ns_max = self.ns_max;
+        let ns_pct = |hist: &[u64; AOI_NS_BUCKETS], pct: u32| {
+            aoi_percentile(hist, pct, |b| aoi_ns_bucket_upper(b).unwrap_or(ns_max)).unwrap_or(0)
+        };
+        let ns_avg = if self.searches == 0 {
+            0.0
+        } else {
+            self.ns_sum as f64 / self.searches as f64
+        };
+        let final_marker = if final_line { "final=1 " } else { "" };
+        format!(
+            "[AOI_STATS] {final_marker}clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_bucket_ns={AOI_NS_BUCKET_NS} ns_avg={ns_avg:.1} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_avg={:.2} same_map_max={}",
+            self.window_seq,
+            self.tick_seq,
+            self.total_searches,
+            per_search(self.cells),
+            per_search(self.candidates),
+            per_search(self.visible),
+            ns_pct(&self.ns_hist, 50),
+            ns_pct(&self.ns_hist, 90),
+            self.ns_max,
+            same_map_pct(&self.same_map_hist, 50),
+            same_map_pct(&self.same_map_hist, 90),
+            if self.same_map_count == 0 {
+                0.0
+            } else {
+                self.same_map_sum as f64 / self.same_map_count as f64
+            },
+            self.same_map_max,
+        )
+    }
+}
+
+/// 环境门的进程级缓存（首次调用时读一次 `MIR2_AOI_STATS`）。
+static AOI_STATS_ENV_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+thread_local! {
+    /// 本线程窗口累计（关闭态不触碰）。
+    static AOI_STATS_STATE: std::cell::RefCell<AoiStatsState> =
+        const { std::cell::RefCell::new(AoiStatsState::new()) };
+    /// **测试专用**开关覆盖（`None` = 走环境门缓存）。
+    #[cfg(test)]
+    static AOI_STATS_TEST_OVERRIDE: std::cell::Cell<Option<bool>> =
+        const { std::cell::Cell::new(None) };
+    /// **测试专用**时钟调用计数（证明关闭态根本没取 `Instant`）。
+    #[cfg(test)]
+    static AOI_STATS_CLOCK_CALLS: std::cell::Cell<u64> =
+        const { std::cell::Cell::new(0) };
+}
+
+/// 环境值口径：只有先去空白后等于 `"1"` 才开启。
+fn aoi_stats_env_enabled(value: Option<&str>) -> bool {
+    matches!(value, Some(v) if v.trim() == "1")
+}
+
+/// 开关判断（**最外层**，每次搜索/tick 先过这里）：关闭态不取时钟、不写线程局部。
+#[inline]
+fn aoi_stats_enabled() -> bool {
+    #[cfg(test)]
+    {
+        if let Some(overridden) = AOI_STATS_TEST_OVERRIDE.with(|cell| cell.get()) {
+            return overridden;
+        }
+    }
+    *AOI_STATS_ENV_ENABLED
+        .get_or_init(|| aoi_stats_env_enabled(std::env::var(ENV_AOI_STATS).ok().as_deref()))
+}
+
+/// 遥测路径上唯一的时钟入口（测试构建里顺带数调用次数）。
+#[inline]
+fn aoi_stats_clock_now() -> std::time::Instant {
+    #[cfg(test)]
+    {
+        AOI_STATS_CLOCK_CALLS.with(|cell| cell.set(cell.get().wrapping_add(1)));
+    }
+    std::time::Instant::now()
+}
+
+/// 每趟搜索起点；关闭态 `None`（**不取 `Instant`**）。
+#[inline]
+fn aoi_stats_search_begin() -> Option<std::time::Instant> {
+    aoi_stats_enabled().then(aoi_stats_clock_now)
+}
+
+/// 记一趟搜索（只在起点为 `Some` 时调用）。
+fn aoi_stats_record_search(
+    start: std::time::Instant,
+    cells: u64,
+    candidates: u64,
+    visible: u64,
+    removed: u64,
+) {
+    // 终点也走计数包装：每趟搜索恰好两次时钟调用（起/止）。
+    let ns = aoi_stats_clock_now()
+        .duration_since(start)
+        .as_nanos()
+        .min(u128::from(u64::MAX)) as u64;
+    AOI_STATS_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        state.searches = state.searches.saturating_add(1);
+        state.cells = state.cells.saturating_add(cells);
+        state.candidates = state.candidates.saturating_add(candidates);
+        state.visible = state.visible.saturating_add(visible);
+        state.removed = state.removed.saturating_add(removed);
+        state.ns_max = state.ns_max.max(ns);
+        state.ns_sum = state.ns_sum.saturating_add(ns);
+        let bucket = aoi_ns_bucket(ns);
+        state.ns_hist[bucket] = state.ns_hist[bucket].saturating_add(1);
+    });
+}
+
+/// **进程退出时的终值行**（opc-07 要求）：窗口未满也强制出一行，`final=1` 标记。
+///
+/// 线程局部 ⇒ 必须由**世界线程**在退出前调用；其它线程调用只会看到自己的空窗口（返回 `None`）。
+#[must_use]
+pub fn aoi_stats_final_line(clock_ms: i64) -> Option<String> {
+    if !aoi_stats_enabled() {
+        return None;
+    }
+    AOI_STATS_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        if state.window_ticks == 0 {
+            return None;
+        }
+        state.window_seq = state.window_seq.saturating_add(1);
+        state.total_searches = state.total_searches.saturating_add(state.searches);
+        let line = state.report_line(clock_ms, true);
+        state.reset_window();
+        Some(line)
+    })
+}
+
+/// 每个 `OutputAoi` tick 调用一次：累计分布；到窗口边界返回一行待打印文本并清零。
+/// 关闭态直接返回 `None`（**不写线程局部、不消费迭代器**）。
+fn aoi_stats_tick(clock_ms: i64, map_entity_counts: impl Iterator<Item = u64>) -> Option<String> {
+    if !aoi_stats_enabled() {
+        return None;
+    }
+    let report_ticks = aoi_stats_report_ticks();
+    let mut line = None;
+    AOI_STATS_STATE.with(|cell| {
+        let mut state = cell.borrow_mut();
+        state.window_ticks = state.window_ticks.saturating_add(1);
+        state.tick_seq = state.tick_seq.saturating_add(1);
+        for count in map_entity_counts {
+            if count == 0 {
+                continue; // 空图无信息量，不进入分布
+            }
+            state.same_map_sum = state.same_map_sum.saturating_add(count);
+            state.same_map_count = state.same_map_count.saturating_add(1);
+            let bucket = aoi_hist_bucket(count);
+            state.same_map_hist[bucket] = state.same_map_hist[bucket].saturating_add(1);
+            state.same_map_max = state.same_map_max.max(count);
+        }
+        if state.window_ticks >= report_ticks {
+            state.window_seq = state.window_seq.saturating_add(1);
+            // 先把本窗口计入累计，再出行（行里的 total 含本窗口）。
+            state.total_searches = state.total_searches.saturating_add(state.searches);
+            line = Some(state.report_line(clock_ms, false));
+            state.reset_window();
+        }
+    });
+    line
+}
+
+#[cfg(test)]
+fn aoi_stats_reset_for_test() {
+    AOI_STATS_STATE.with(|cell| *cell.borrow_mut() = AoiStatsState::new());
+    AOI_STATS_CLOCK_CALLS.with(|cell| cell.set(0));
+}
+
+#[cfg(test)]
+fn aoi_stats_snapshot_for_test() -> AoiStatsState {
+    AOI_STATS_STATE.with(|cell| cell.borrow().clone())
+}
+
+#[cfg(test)]
+fn aoi_stats_clock_calls_for_test() -> u64 {
+    AOI_STATS_CLOCK_CALLS.with(|cell| cell.get())
+}
+
+/// RAII 测试开关：`Drop` 时恢复 `None` 并清零，保证同线程后续测试不受影响。
+#[cfg(test)]
+struct AoiStatsTestGuard;
+
+#[cfg(test)]
+impl AoiStatsTestGuard {
+    fn enabled() -> Self {
+        Self::set(true)
+    }
+
+    fn disabled() -> Self {
+        Self::set(false)
+    }
+
+    fn set(enabled: bool) -> Self {
+        AOI_STATS_TEST_OVERRIDE.with(|cell| cell.set(Some(enabled)));
+        aoi_stats_reset_for_test();
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for AoiStatsTestGuard {
+    fn drop(&mut self) {
+        AOI_STATS_TEST_OVERRIDE.with(|cell| cell.set(None));
+        aoi_stats_reset_for_test();
+    }
 }
 
 // ============================ S3b：OutputAoi 系统 ============================
@@ -830,6 +1278,10 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                 out.aoi_order.push(*id);
             }
         }
+    }
+    // AOI 搜索遥测（默认关闭）：每 500 tick 汇总一行 `[AOI_STATS]`（stderr）。
+    if let Some(line) = aoi_stats_tick(params.clock_ms, by_map.iter().map(|v| v.len() as u64)) {
+        eprintln!("{line}");
     }
     scratch.by_map = by_map;
     world.insert_resource(table);
@@ -1142,5 +1594,290 @@ mod tests {
             snap.iter().any(|(id, _)| *id == 2),
             "非 ghost ⇒ 必进可见集（门只挡 ghost）：{snap:?}"
         );
+    }
+
+    // ---------------------------------------------------------------------------------------
+    // 卡 `openmir2-aoi-incremental` phase 1：AOI 搜索遥测（tier=R）。
+    // 牙①关闭态零写/无行；②已知搜索计数；③行为等价（可见集 + aoi_order）；④直方图分位。
+    // ---------------------------------------------------------------------------------------
+
+    /// 牙①：默认关闭（只有 `MIR2_AOI_STATS=1` 开启）。关闭态：不取时钟、搜索不计数、
+    /// 500 tick 不出行。
+    ///
+    /// 红检：把 `aoi_stats_enabled` 写死 `true`（无视覆盖/环境）=> 本用例第一个快照
+    /// `searches == 1` 或时钟调用数 > 0 或 500 tick 后拿到 `Some(line)` => 红。
+    #[test]
+    fn aoi_stats_disabled_has_zero_counters_and_no_report() {
+        // 环境门口径：只有字面 "1" 开启。
+        assert!(!aoi_stats_env_enabled(None));
+        assert!(!aoi_stats_env_enabled(Some("0")));
+        assert!(!aoi_stats_env_enabled(Some("")));
+        assert!(!aoi_stats_env_enabled(Some("true")));
+        assert!(aoi_stats_env_enabled(Some("1")));
+        assert!(aoi_stats_env_enabled(Some(" 1 ")));
+
+        let _guard = AoiStatsTestGuard::disabled();
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 5));
+        store.insert(monster_entity(2, 11, 10, 5));
+        put_typed(&mut map, 2, 11, 10, CellType::Monster, 0);
+        let _ = search_view_range_with_updates(&mut map, &mut store, 1, 0);
+
+        let snap = aoi_stats_snapshot_for_test();
+        assert_eq!(snap.searches, 0, "关闭态不得累加搜索");
+        assert_eq!(snap.window_ticks, 0, "关闭态不得累加 tick");
+        assert!(snap.ns_hist.iter().all(|&count| count == 0));
+        assert_eq!(
+            aoi_stats_clock_calls_for_test(),
+            0,
+            "关闭态不得取 Instant（零开销）"
+        );
+        for _ in 0..AOI_STATS_REPORT_TICKS {
+            assert!(
+                aoi_stats_tick(0, std::iter::empty()).is_none(),
+                "关闭态 500 tick 也不得产生 `[AOI_STATS]` 行"
+            );
+        }
+        assert_eq!(aoi_stats_snapshot_for_test().window_ticks, 0);
+    }
+
+    /// 牙②：已知搜索的计数正确性（小地图、ViewRange=5、3 个候选）。
+    ///
+    /// 红检：把 `stats_cells` 写成 `2*R+1`（漏平方）或候选数从 `candidates.len()` 改成
+    /// 其它量 => 断言必红。
+    #[test]
+    fn aoi_stats_counts_known_search() {
+        let _guard = AoiStatsTestGuard::enabled();
+        let mut map = MapGrid::new(32, 32);
+        let mut store = EntityStore::new();
+        store.insert(play_viewer(1, 10, 10, 5));
+        for (id, x, y) in [(2, 11, 10), (3, 9, 10), (4, 10, 11)] {
+            store.insert(monster_entity(id, x, y, 5));
+            put_typed(&mut map, id, x, y, CellType::Monster, 0);
+        }
+        let outcome = search_view_range_with_updates(&mut map, &mut store, 1, 0);
+        assert!(outcome.removed.is_empty());
+
+        let snap = aoi_stats_snapshot_for_test();
+        assert_eq!(snap.searches, 1);
+        assert_eq!(snap.cells, 121, "(2*5+1)^2 = 121");
+        assert_eq!(snap.candidates, 3, "三只可见怪");
+        assert_eq!(snap.visible, 3, "新加入 3 条");
+        assert_eq!(snap.removed, 0);
+        assert!(snap.ns_max > 0, "每趟搜索耗时必须 > 0 ns");
+        assert_eq!(snap.ns_hist.iter().sum::<u64>(), 1);
+        assert_eq!(
+            aoi_stats_clock_calls_for_test(),
+            2,
+            "每趟搜索两次 Instant（起/止）"
+        );
+        // 行内平均口径 = 窗口总和 / 搜索数。
+        let line = snap.report_line(0, false);
+        assert!(
+            line.contains(" cells_per_search=121.00 cand_per_search=3.00 vis_per_search=3.00 "),
+            "报告行字段/均值不符：{line}"
+        );
+    }
+
+    /// 牙③：行为等价——同一输入（实体 + 移动）开/关遥测各跑一次，可见集逐项相等、
+    /// `aoi_order` 与 `hides` 相同。
+    #[test]
+    fn aoi_stats_behavior_equivalent() {
+        type VisibleRows = Vec<(i32, Vec<(i32, u8)>)>;
+
+        fn run() -> (Vec<crate::TickRecord>, VisibleRows) {
+            let mut w = crate::World::new(32, 32);
+            let mut player = crate::EntitySpawn::new(1, "p", 10, 10);
+            player.race = ACTOR_RACE_PLAY;
+            player.want_ref_msg = true;
+            player.view_range = 8;
+            w.add_entity(player);
+            for (id, x, y) in [(2, 12, 10), (3, 14, 12), (4, 20, 20)] {
+                let mut monster = crate::EntitySpawn::new(id, "m", x, y);
+                monster.race = ACTOR_RACE_MONSTER;
+                monster.view_range = 5;
+                w.add_entity(monster);
+            }
+            let mut records = Vec::new();
+            // 玩家 SearchTime=1000ms、tick=200ms => 第 6 tick(1200ms) 才发生首趟搜索。
+            for _ in 0..8 {
+                w.walk(1, 1, 0);
+                records.push(w.tick());
+            }
+            let visible = w
+                .entities
+                .order_index()
+                .iter()
+                .map(|id| (*id, visible_snapshot(&w.entities, *id)))
+                .collect();
+            (records, visible)
+        }
+
+        let (on_records, on_visible) = {
+            let _guard = AoiStatsTestGuard::enabled();
+            let out = run();
+            let snap = aoi_stats_snapshot_for_test();
+            assert!(
+                snap.searches > 0,
+                "开启态必须真的记录到搜索（否则等价性没有意义）"
+            );
+            out
+        };
+        let (off_records, off_visible) = {
+            let _guard = AoiStatsTestGuard::disabled();
+            let out = run();
+            assert_eq!(aoi_stats_snapshot_for_test().searches, 0);
+            out
+        };
+
+        assert_eq!(
+            on_visible, off_visible,
+            "可见集（含 flag/顺序）必须逐项相等"
+        );
+        let on_order: Vec<Vec<i32>> = on_records.iter().map(|r| r.aoi_order.clone()).collect();
+        let off_order: Vec<Vec<i32>> = off_records.iter().map(|r| r.aoi_order.clone()).collect();
+        assert_eq!(on_order, off_order, "aoi_order 必须相同");
+        let on_hides: Vec<Vec<(i32, i32)>> = on_records.iter().map(|r| r.hides.clone()).collect();
+        let off_hides: Vec<Vec<(i32, i32)>> = off_records.iter().map(|r| r.hides.clone()).collect();
+        assert_eq!(on_hides, off_hides, "hides 必须相同");
+    }
+
+    /// 牙④：log2 直方图分位——已知样本 1..=1000 落在正确桶。
+    #[test]
+    fn aoi_stats_histogram_percentiles_land_in_expected_buckets() {
+        assert_eq!(aoi_hist_bucket(0), 0);
+        assert_eq!(aoi_hist_bucket(1), 1);
+        assert_eq!(aoi_hist_bucket(2), 2);
+        assert_eq!(aoi_hist_bucket(3), 2);
+        assert_eq!(aoi_hist_bucket(500), 9);
+        assert_eq!(aoi_hist_bucket(1000), 10);
+
+        // ns 用**线性桶**（每桶 32 µs）：边界必须落在正确桶。
+        assert_eq!(aoi_ns_bucket(0), 0);
+        assert_eq!(aoi_ns_bucket(AOI_NS_BUCKET_NS - 1), 0);
+        assert_eq!(aoi_ns_bucket(AOI_NS_BUCKET_NS), 1);
+        assert_eq!(
+            aoi_ns_bucket(2_048_000),
+            AOI_NS_BUCKETS - 1,
+            "≥2048µs 进溢出桶"
+        );
+        assert_eq!(aoi_ns_bucket_upper(0), Some(AOI_NS_BUCKET_NS));
+        assert_eq!(
+            aoi_ns_bucket_upper(AOI_NS_BUCKETS - 1),
+            None,
+            "溢出桶无上限"
+        );
+
+        let mut state = AoiStatsState::new();
+        state.window_ticks = 1;
+        for ns in 1..=1000u64 {
+            state.searches += 1;
+            state.ns_sum += ns;
+            state.ns_max = state.ns_max.max(ns);
+            state.ns_hist[aoi_ns_bucket(ns)] += 1;
+        }
+        // 1000 个样本都 < 32 µs ⇒ 全在桶 0；p50/p90 都报桶 0 上限 32,000 ns；
+        // 均值 = (1+…+1000)/1000 = 500.5。
+        let line = state.report_line(0, false);
+        assert!(
+            line.contains(
+                " ns_bucket_ns=32000 ns_avg=500.5 ns_p50=32000 ns_p90=32000 ns_max=1000 "
+            ),
+            "ns 线性桶/均值不符：{line}"
+        );
+        assert!(
+            line.contains(" same_map_p50=0 same_map_p90=0 same_map_avg=0.00 same_map_max=0"),
+            "same_map 无样本应为 0：{line}"
+        );
+
+        // 退化形态：空样本 => 分位 None、行内打 0（不 panic、不除零）。
+        let empty = AoiStatsState::new();
+        assert_eq!(aoi_percentile(&empty.ns_hist, 50, |_b| 0), None);
+        let empty_line = empty.report_line(0, false);
+        assert!(
+            empty_line.contains(
+                "clock_ms=0 window_seq=0 tick_seq=0 ticks=0 searches_in_window=0 searches_total=0 searches_per_tick=0.00"
+            ),
+            "空窗口行格式不符：{empty_line}"
+        );
+    }
+    /// 牙⑤（opc-07 要求）：**累计口径自洽** + 序号单调 + `clock_ms` 透传。
+    /// - 相邻两行 `searches_in_window` 之和 == 后一行 `searches_total`；
+    /// - `window_seq` 每窗 +1、`tick_seq` 每 tick +1（满窗 = 500）；
+    /// - 行内 `clock_ms` 就是调用方传入的世界时钟（不是墙钟/Instant）。
+    #[test]
+    fn aoi_stats_totals_and_sequences_are_self_consistent() {
+        let _guard = AoiStatsTestGuard::enabled();
+
+        for _ in 0..2 {
+            let start = aoi_stats_search_begin().expect("开启态必须有起点");
+            aoi_stats_record_search(start, 25, 3, 3, 0);
+        }
+        let mut line1 = None;
+        for _ in 0..AOI_STATS_REPORT_TICKS {
+            if let Some(l) = aoi_stats_tick(1_000, std::iter::empty::<u64>()) {
+                line1 = Some(l);
+            }
+        }
+        let line1 = line1.expect("满一窗必须出行");
+        assert!(
+            line1.contains(
+                " clock_ms=1000 window_seq=1 tick_seq=500 ticks=500 searches_in_window=2 searches_total=2 "
+            ),
+            "第一窗口径不符：{line1}"
+        );
+
+        for _ in 0..3 {
+            let start = aoi_stats_search_begin().expect("开启态必须有起点");
+            aoi_stats_record_search(start, 25, 3, 3, 0);
+        }
+        let mut line2 = None;
+        for _ in 0..AOI_STATS_REPORT_TICKS {
+            if let Some(l) = aoi_stats_tick(2_000, std::iter::empty::<u64>()) {
+                line2 = Some(l);
+            }
+        }
+        let line2 = line2.expect("第二窗必须出行");
+        assert!(
+            line2.contains(
+                " clock_ms=2000 window_seq=2 tick_seq=1000 ticks=500 searches_in_window=3 searches_total=5 "
+            ),
+            "第二窗口径不符（total 必须 = 前窗 2 + 本窗 3）：{line2}"
+        );
+        assert!(line2.contains(" searches_total=5 "), "累计自洽：2 + 3 == 5");
+    }
+
+    /// 牙⑥：`MIR2_AOI_STATS_TICKS` 解析——缺省/非法/0 一律回落默认值，合法正整数生效。
+    #[test]
+    fn aoi_stats_report_ticks_env_parse_is_safe() {
+        assert_eq!(parse_report_ticks(None), AOI_STATS_REPORT_TICKS);
+        assert_eq!(parse_report_ticks(Some("100")), 100);
+        assert_eq!(parse_report_ticks(Some(" 100 ")), 100);
+        for bad in ["", "0", "-5", "abc", "1.5"] {
+            assert_eq!(
+                parse_report_ticks(Some(bad)),
+                AOI_STATS_REPORT_TICKS,
+                "非法值 {bad:?} 必须回落默认"
+            );
+        }
+    }
+
+    /// 牙⑦：`same_map_avg` 是**非空地图**的实体数均值；终值行带 `final=1` 且窗口未满也出行。
+    #[test]
+    fn aoi_stats_same_map_avg_and_final_line() {
+        let _guard = AoiStatsTestGuard::enabled();
+        // 两 tick：第一 tick 两张图（1、3 个实体），第二 tick 一张图（0 个 = 空图跳过）。
+        assert!(aoi_stats_tick(500, [1u64, 3].into_iter()).is_none());
+        assert!(aoi_stats_tick(1_000, [0u64].into_iter()).is_none());
+        let line = aoi_stats_final_line(1_500).expect("窗口未满也必须出终值行");
+        assert!(line.contains("final=1 "), "终值行必须带 final 标记：{line}");
+        assert!(
+            line.contains(" same_map_avg=2.00 "),
+            "非空地图均值 (1+3)/2 = 2.00：{line}"
+        );
+        assert!(line.contains(" clock_ms=1500 "), "clock 透传：{line}");
+        // 终值行后窗口已清空，再取一次应为 None。
+        assert!(aoi_stats_final_line(2_000).is_none());
     }
 }

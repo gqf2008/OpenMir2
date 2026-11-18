@@ -493,6 +493,11 @@ pub fn record_reply_pending(pending: u64) -> Option<String> {
     }
 }
 
+/// 记录「停止排水」时刻（wall ms）。只在网关连接退出路径调用一次；后到者覆盖为同一关服时刻。
+pub fn record_drain_stopped_ms(ms: i64) {
+    DRAIN_STOPPED_MS.store(ms, Relaxed);
+}
+
 /// 记录「**每轮开头应答表内条数峰值**」（取历史最大值；>0 时返回一行汇总供日志）。
 ///
 /// 口径与 [`REPLY_TABLE_MAX`] 一致：调用点必须在 **tick 循环顶部**（每轮必采）；它度量的是
@@ -704,6 +709,11 @@ impl CloseReason {
 /// 本进程记到的拆除总数（与各原因桶同源递增）。
 pub static CLOSE_TOTAL: AtomicU64 = AtomicU64::new(0);
 
+/// 关服收尾「停止排水」时刻（wall ms；`-1` = 未发生）。由网关连接退出路径写入，
+/// 并在 `summary_line()` 回填 `drain_stopped_ms=`——使「Δ关服段 = 终值 − 停排快照」有同一时刻的对账点。
+/// 卡 `openmir2-drain-stopped-event`（botfleet 规格）。
+pub static DRAIN_STOPPED_MS: AtomicI64 = AtomicI64::new(-1);
+
 static CLOSE_BY_REASON: [AtomicU64; 6] = [
     AtomicU64::new(0),
     AtomicU64::new(0),
@@ -823,7 +833,7 @@ pub fn session_close_line(
 #[must_use]
 pub fn summary_line() -> String {
     let base = format!(
-        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={} downlink_skipped_by_tombstone_total={} db_write_pending={} db_flush_age_ms={} db_read_age_ms={}",
+        "ENTRY_TELEMETRY svc=game-svr logon_frames_seen={} enter_attempt={} enter_ok={}          load_reply_other={} first_enter_ms={} last_enter_ms={}          loaddb_request_sent={} loaddb_reply_seen={} loaddb_write_error={} db_link_reconnect={}          logon_handler_enter={} logon_handler_exit_total={} logon_exit_uncounted={} logon_disconnect_drop={} logon_pending_lists_max={} logon_in_flight={} logon_in_flight_max={} reply_in_flight={} reply_dropped_at_shutdown={} logon_no_request[disconnected={} send_fail={} zero_session={} requeue={} no_db_link={}] reply_ident_other={} reply_duplicate_qid={} reply_stored={} reply_consumed={} reply_matched={}          reply_verify_fail={} reply_pending_max={}          drain_events_drained={} drain_budget_hit={}          reply_table_max={} downlink_dead_socket_total={} downlink_skipped_by_tombstone_total={} db_write_pending={} db_flush_age_ms={} db_read_age_ms={} drain_stopped_ms={}",
         LOGON_FRAMES_SEEN.load(Relaxed),
         ENTER_ATTEMPT.load(Relaxed),
         ENTER_OK.load(Relaxed),
@@ -862,7 +872,8 @@ pub fn summary_line() -> String {
         DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.load(Relaxed),
         db_write_pending(),
         db_flush_age_ms(crate::clock::now_ms()),
-        db_read_age_ms(crate::clock::now_ms())
+        db_read_age_ms(crate::clock::now_ms()),
+        DRAIN_STOPPED_MS.load(Relaxed)
     );
     // 卡 `openmir2-session-close-attribution`：拆除归因终值拼进同一行。
     format!("{base} {}", close_summary_fragment())
@@ -1000,6 +1011,7 @@ mod tests {
             "reply_table_max=",
             "downlink_dead_socket_total=",
             "downlink_skipped_by_tombstone_total=",
+            "drain_stopped_ms=",
         ] {
             assert!(line.contains(key), "汇总行缺字段 {key}: {line}");
         }
@@ -1157,6 +1169,28 @@ mod tests {
             DRAIN_BUDGET_HIT.load(Ordering::Relaxed),
             before_hit + PRINT_EVERY,
             "每次截断都必须计数（打印可以节流，计数不能）"
+        );
+    }
+
+    /// **停止排水时刻回填**（卡 `openmir2-drain-stopped-event`）：未记录时是 -1；记录后
+    /// `summary_line()` 带同一 ms 值；再记录覆盖为最新一次（后到者覆盖）。
+    /// 变异：把 setter 改成空实现 ⇒ 第一段仍绿、第二段红。
+    #[test]
+    fn drain_stopped_ms_is_backfilled_into_summary() {
+        let _g = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(
+            summary_line().contains("drain_stopped_ms=-1"),
+            "默认必须是 -1"
+        );
+        record_drain_stopped_ms(1_791_000_000_123);
+        assert!(
+            summary_line().contains("drain_stopped_ms=1791000000123"),
+            "必须回填记录值"
+        );
+        record_drain_stopped_ms(1_791_000_000_456);
+        assert!(
+            summary_line().contains("drain_stopped_ms=1791000000456"),
+            "后到者覆盖"
         );
     }
 
