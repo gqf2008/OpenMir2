@@ -151,6 +151,50 @@ pub struct SearchViewRangeOutcome {
     pub view_updates: Vec<(i32, i32)>,
 }
 
+/// **增量开关（行为层）**：`MIR2_AOI_INCREMENTAL=1` 才走增量路径；缺省/其它值一律 legacy。
+///
+/// 卡 `openmir2-aoi-incremental`。开关只决定**调用哪条路径**，不允许"两条都跑再挑结果"；
+/// legacy 路径不持有增量索引的任何引用（类型隔离），因此开关切换不会影响 legacy 的状态。
+pub const ENV_AOI_INCREMENTAL: &str = "MIR2_AOI_INCREMENTAL";
+
+/// AOI 搜索路径选择。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AoiSearchMode {
+    /// 现有全量窗口扫描（默认）。
+    Legacy,
+    /// 增量可见集维护（phase 2；当前为**委托实现**）。
+    Incremental,
+}
+
+/// 环境值解析（纯函数，便于单测）：只有字面 `"1"`（可含空白）开启增量。
+fn parse_search_mode(value: Option<&str>) -> AoiSearchMode {
+    match value {
+        Some(v) if v.trim() == "1" => AoiSearchMode::Incremental,
+        _ => AoiSearchMode::Legacy,
+    }
+}
+
+/// 本进程生效的路径（首次调用读一次环境变量）。
+#[must_use]
+pub fn aoi_search_mode() -> AoiSearchMode {
+    static MODE: std::sync::OnceLock<AoiSearchMode> = std::sync::OnceLock::new();
+    *MODE.get_or_init(|| parse_search_mode(std::env::var(ENV_AOI_INCREMENTAL).ok().as_deref()))
+}
+
+/// 增量路径入口（phase 2）。
+///
+/// **当前阶段（第一条提交）**：直接委托 [`search_view_range_with_updates`]——开关存在、
+/// 默认 legacy、**行为完全不变**，因此可以先合入；真正的增量实现在后续提交里替换函数体，
+/// 并由差分骨架（矩阵 + fuzz，legacy-vs-incremental）逐 tick 验证等价。
+pub fn search_view_range_incremental<S: AoiStore>(
+    map: &mut MapGrid,
+    store: &mut S,
+    viewer_id: i32,
+    now_ms: i64,
+) -> SearchViewRangeOutcome {
+    search_view_range_with_updates(map, store, viewer_id, now_ms)
+}
+
 /// [`search_view_range_with_updates`] 的兼容包装：只返回「离开视野」的目标（旧签名）。
 ///
 /// 非玩家自我扫描（卫士/宝宝，`BaseObject.SearchViewRange`/`GuardUnit.SearchViewRange`）
@@ -1382,8 +1426,14 @@ pub fn output_aoi_system(world: &mut bevy_ecs::world::World) {
                     if let Some(ai) = store.ai_mut(*id) {
                         ai.search_tick = params.clock_ms;
                     }
-                    let outcome =
-                        search_view_range_with_updates(map, &mut store, *id, params.clock_ms);
+                    let outcome = match aoi_search_mode() {
+                        AoiSearchMode::Legacy => {
+                            search_view_range_with_updates(map, &mut store, *id, params.clock_ms)
+                        }
+                        AoiSearchMode::Incremental => {
+                            search_view_range_incremental(map, &mut store, *id, params.clock_ms)
+                        }
+                    };
                     for target in outcome.removed {
                         out.hides.push((*id, target));
                         out.hide_observer_kinds.push((*id, target, observer_kind));
@@ -2656,5 +2706,50 @@ mod tests {
         );
         println!("[AOI_ALIGN] OK viewer=1 universe={got:?}");
         aoi_universe_capture_set(false);
+    }
+
+    /// 开关解析：只有字面 "1" 开启增量，其余（含空串/其它值/缺失）一律 legacy。
+    #[test]
+    fn aoi_search_mode_parses_safely() {
+        assert_eq!(parse_search_mode(None), AoiSearchMode::Legacy);
+        assert_eq!(parse_search_mode(Some("1")), AoiSearchMode::Incremental);
+        assert_eq!(parse_search_mode(Some(" 1 ")), AoiSearchMode::Incremental);
+        for bad in ["", "0", "true", "yes", "2"] {
+            assert_eq!(
+                parse_search_mode(Some(bad)),
+                AoiSearchMode::Legacy,
+                "非法值 {bad:?} 必须回落 legacy"
+            );
+        }
+    }
+
+    /// 第一条提交的等价性：增量入口当前委托 legacy ⇒ 两条路径的返回与可见集必须逐项相同。
+    /// （后续提交把委托替换成真实现后，这条测试仍必须绿——它就是双实现差分的最小版本。）
+    #[test]
+    fn aoi_incremental_stage1_delegates_to_legacy() {
+        let build = || {
+            let mut map = MapGrid::new(32, 32);
+            let mut store = EntityStore::new();
+            store.insert(play_viewer(1, 10, 10, 5));
+            for id in 10..20 {
+                let x = 10 + (id - 10);
+                store.insert(monster_entity(id, x, 11, 5));
+                put_typed(&mut map, id, x, 11, CellType::Monster, 0);
+            }
+            (map, store)
+        };
+        let (mut map_a, mut store_a) = build();
+        let (mut map_b, mut store_b) = build();
+        let legacy = search_view_range_with_updates(&mut map_a, &mut store_a, 1, 0);
+        let inc = search_view_range_incremental(&mut map_b, &mut store_b, 1, 0);
+        assert_eq!(legacy.removed, inc.removed);
+        assert_eq!(legacy.view_updates, inc.view_updates);
+        assert_eq!(visible_of(&store_a, 1), visible_of(&store_b, 1));
+        println!(
+            "[AOI_INC] STAGE1_EQ removed={:?} view_updates={:?} visible={:?}",
+            legacy.removed,
+            legacy.view_updates,
+            visible_of(&store_b, 1)
+        );
     }
 }
