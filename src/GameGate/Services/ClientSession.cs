@@ -654,7 +654,9 @@ namespace GameGate.Services
                     SendMsg.PackLength = CommandMessage.Size + tLen + 1;
                     sendLen = ServerMessage.PacketSize + SendMsg.PackLength;
                     bodyBuffer = GateShare.BytePool.Rent(sendLen);
+                    // 前提：Serialize(CommandMessage) 的长度恒等于 CommandMessage.Size（牙：PacketLayoutConstantsTest）。
                     MemoryCopy.BlockCopy(decodeBuff, 0, bodyBuffer, ServerMessage.PacketSize, CommandMessage.Size);
+                    // 前提：同上（CommandMessage.Size 与序列化长度一致，牙：PacketLayoutConstantsTest）。
                     MemoryCopy.BlockCopy(tempBuff, GateShare.CommandFixedLength, bodyBuffer, ServerMessage.PacketSize + CommandMessage.Size, tLen);//消息体
                 }
                 else
@@ -664,6 +666,7 @@ namespace GameGate.Services
                     SendMsg.PackLength = CommandMessage.Size;
                     MemoryCopy.BlockCopy(decodeBuff, 0, bodyBuffer, ServerMessage.PacketSize, decodeBuff.Length);
                 }
+                // 前提：Serialize(ServerMessage) 的长度恒等于 ServerMessage.PacketSize（牙：PacketLayoutConstantsTest）。
                 MemoryCopy.BlockCopy(SerializerUtil.Serialize(SendMsg), 0, bodyBuffer, 0, ServerMessage.PacketSize); //复制消息头
                 ClientThread.Send(bodyBuffer[..sendLen]);
                 GateShare.BytePool.Return(bodyBuffer);

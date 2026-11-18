@@ -12,6 +12,11 @@ namespace OpenMir2
         /// 5000 人压测里两次把 DBSrv 的取档连接打死。
         /// 这里把「越界」从进程级 AV 降级为托管异常；调用点仍必须传正确长度。
         /// </summary>
+        /// <remarks>
+        /// **能力边界**：只有源/目的**都有长度**的重载（byte[] / Span）能查两端；
+        /// `nint` 与 `void*` 重载<b>只能查目的端</b>——源端是否够长由调用方负责。
+        /// 别因为「有检查」就以为安全。
+        /// </remarks>
         private static void CheckRange(int offset, int count, int length, string paramName)
         {
             if (offset < 0 || count < 0 || (long)offset + count > length)
