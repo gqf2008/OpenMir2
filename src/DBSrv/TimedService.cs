@@ -32,6 +32,7 @@ namespace DBSrv
             int lastClearTick = currentTick;
             int syncSaveTick = currentTick;
             int marketPushTick = currentTick;
+            int lastWatchStatTick = currentTick;
             try
             {
                 while (await _timer.WaitForNextTickAsync(stoppingToken))
@@ -43,6 +44,19 @@ namespace DBSrv
                     if (telemetryLine != null)
                     {
                         LogService.Info(telemetryLine);
+                    }
+
+                    // **在飞请求看门狗**（卡 `openmir2-db-write-stall`）：请在飞 > 1 s 的请求，
+                    // 并每 5 s 汇总一行存储段计时/连接计数。纯旁路，不改业务。
+                    string slowLine = RequestWatchdog.Check(currentTick);
+                    if (slowLine != null)
+                    {
+                        LogService.Warn(slowLine);
+                    }
+                    if (currentTick - lastWatchStatTick > 5000)
+                    {
+                        lastWatchStatTick = HUtil32.GetTickCount();
+                        LogService.Info(RequestWatchdog.SummaryLine() + " " + StorageTiming.Describe());
                     }
                     if (currentTick - lastSocketTick > 10000)
                     {

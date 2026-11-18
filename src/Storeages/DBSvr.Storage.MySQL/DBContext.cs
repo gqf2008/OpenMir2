@@ -3,6 +3,7 @@ using NLog;
 using OpenMir2;
 using System;
 using System.Data;
+using System.Diagnostics;
 
 namespace DBSrv.Storage.MySQL
 {
@@ -12,6 +13,7 @@ namespace DBSrv.Storage.MySQL
         private readonly StorageOption _storageOption;
         private MySqlConnection? _connection;
         private MySqlTransaction? _transaction;
+        private bool _openedByUs;
 
         public StorageContext(StorageOption storageOption)
         {
@@ -21,6 +23,7 @@ namespace DBSrv.Storage.MySQL
         public void Open(ref bool success)
         {
             _connection = new MySqlConnection(_storageOption.ConnectionString);
+            long t0 = Stopwatch.GetTimestamp();
             try
             {
                 _connection.Open();
@@ -31,6 +34,16 @@ namespace DBSrv.Storage.MySQL
                 LogService.Error("打开数据库[MySql]失败.");
                 LogService.Error(e.StackTrace);
                 success = false;
+            }
+            finally
+            {
+                // 旁路计时（卡 `openmir2-db-write-stall`）：连接池借出/建连耗时；不改判定。
+                StorageTiming.RecordOpen((Stopwatch.GetTimestamp() - t0) * 1000L / Stopwatch.Frequency, success);
+                if (success)
+                {
+                    StorageTiming.ConnOpened();
+                    _openedByUs = true;
+                }
             }
         }
 
@@ -78,6 +91,11 @@ namespace DBSrv.Storage.MySQL
             {
                 _connection.Close();
                 _connection.Dispose();
+                if (_openedByUs)
+                {
+                    _openedByUs = false;
+                    StorageTiming.ConnClosed();
+                }
             }
         }
     }

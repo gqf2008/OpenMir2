@@ -130,6 +130,10 @@ namespace DBSrv.Services.Impl
             {
                 EntryTelemetry.DbOtherDecoded();
             }
+            // **在飞看门狗**（卡 `openmir2-db-write-stall`）：纯旁路记录阶段与耗时，不改判定/回包。
+            RequestWatchdog.Begin(queryId, RequestWatchdog.IdentName(requestMessage.Ident));
+            try
+            {
             int packetLen = requestData.Message.Length + requestData.Packet.Length + ServerDataPacket.FixedHeaderLen;
             if (packetLen >= Messages.DefBlockSize && queryId > 0 && requestData.Packet != null && requestData.Sign != null)
             {
@@ -167,6 +171,11 @@ namespace DBSrv.Services.Impl
             ServerRequestMessage messagePacket = new ServerRequestMessage(Messages.DBR_FAIL, 0, 0, 0, 0);
             responsePack.Message = EDCode.EncodeBuffer(SerializerUtil.Serialize(messagePacket));
             SendRequest(connectionId, queryId, responsePack);
+            }
+            finally
+            {
+                RequestWatchdog.End();
+            }
         }
 
         private void ProcessServerMsg(int nQueryId, ServerRequestMessage packet, byte[] sData, string connectionId)
@@ -200,6 +209,7 @@ namespace DBSrv.Services.Impl
         private void LoadHumanRcd(int queryId, byte[] data, string connectionId)
         {
             LoadCharacterData loadHumanPacket = SerializerUtil.Deserialize<LoadCharacterData>(data);
+            RequestWatchdog.NoteChr(loadHumanPacket.ChrName);
             if (loadHumanPacket.SessionID <= 0)
             {
                 // **入口遥测**：这里原来直接 `return`——**不回包、不打日志**，上游永远等不到应答。
@@ -216,6 +226,7 @@ namespace DBSrv.Services.Impl
             int nCheckCode = -1;
             if ((!string.IsNullOrEmpty(loadHumanPacket.Account)) && (!string.IsNullOrEmpty(loadHumanPacket.ChrName)))
             {
+                RequestWatchdog.Stage(RequestWatchdog.StageSessionCheck);
                 nCheckCode = _loginService.CheckSessionLoadRcd(loadHumanPacket.Account, loadHumanPacket.UserAddr, loadHumanPacket.SessionID, ref boFoundSession);
                 if ((nCheckCode < 0) || !boFoundSession)
                 {
@@ -224,12 +235,15 @@ namespace DBSrv.Services.Impl
             }
             if ((nCheckCode == 1) || boFoundSession)
             {
+                RequestWatchdog.Stage(RequestWatchdog.StageIndex);
                 int nIndex = _playDataStorage.Index(loadHumanPacket.ChrName);
                 if (nIndex >= 0)
                 {
+                    RequestWatchdog.Stage(RequestWatchdog.StageCacheGet);
                     humanRcd = _cacheStorage.Get(loadHumanPacket.ChrName, out bool isExist);
                     if (!isExist)
                     {
+                        RequestWatchdog.Stage(RequestWatchdog.StageStorageGet);
                         if (!_playDataStorage.Get(loadHumanPacket.ChrName, ref humanRcd))
                         {
                             nCheckCode = -2;
@@ -241,6 +255,7 @@ namespace DBSrv.Services.Impl
                     nCheckCode = -3;
                 }
             }
+            RequestWatchdog.Stage(RequestWatchdog.StageSerializeReply);
             ServerRequestData responsePack = new ServerRequestData();
             if ((nCheckCode == 1) || boFoundSession)
             {
@@ -249,6 +264,8 @@ namespace DBSrv.Services.Impl
                 loadHumData.HumDataInfo = humanRcd;
                 ServerRequestMessage messagePacket = new ServerRequestMessage(Messages.DBR_LOADHUMANRCD, 1, 0, 0, 1);
                 responsePack.Message = EDCode.EncodeBuffer(SerializerUtil.Serialize(messagePacket));
+                RequestWatchdog.Stage(RequestWatchdog.StageSend);
+                RequestWatchdog.NoteReplyBytes(responsePack.Packet.Length);
                 SendRequest(connectionId, queryId, responsePack, loadHumData);
                 EntryTelemetry.LoadRespondedOk();
                 LogService.Debug($"获取玩家[{loadHumanPacket.ChrName}]数据成功");
