@@ -30601,13 +30601,23 @@ async fn gate_conn(
             match read {
                 Ok(0) => {
                     glog!("ERR", "网关连接断开。");
-                    emit_final_drop_summary(&drop_stats);
+                    emit_final_drop_summary(
+                        &drop_stats,
+                        users.online(),
+                        state.pending.len(),
+                        state.pending.bytes(),
+                    );
                     return Ok(());
                 }
                 Ok(n) => head_have += n,
                 Err(e) => {
                     glog!("ERR", "网关连接断开：{e:#}");
-                    emit_final_drop_summary(&drop_stats);
+                    emit_final_drop_summary(
+                        &drop_stats,
+                        users.online(),
+                        state.pending.len(),
+                        state.pending.bytes(),
+                    );
                     return Ok(());
                 }
             }
@@ -30628,7 +30638,12 @@ async fn gate_conn(
         let mut body = vec![0u8; body_len];
         if body_len > 0 && rd.read_exact(&mut body).await.is_err() {
             glog!("ERR", "读取网关载荷失败。");
-            emit_final_drop_summary(&drop_stats);
+            emit_final_drop_summary(
+                &drop_stats,
+                users.online(),
+                state.pending.len(),
+                state.pending.bytes(),
+            );
             return Ok(());
         }
         if let Err(e) = dispatch(
@@ -30647,7 +30662,12 @@ async fn gate_conn(
         .await
         {
             // F4（reviewer-26）：终值汇总也要覆盖 `dispatch` 的早退路径（原实现只覆盖两处读错误）。
-            emit_final_drop_summary(&drop_stats);
+            emit_final_drop_summary(
+                &drop_stats,
+                users.online(),
+                state.pending.len(),
+                state.pending.bytes(),
+            );
             return Err(e);
         }
         // 处理与本帧同批到达的 sim 命令（清槽/入图发包等）
@@ -31371,8 +31391,22 @@ fn emit_drop_note(note: gate_backpressure::Note) {
 }
 
 /// 网关断线时的终值汇总（有丢帧才落；避免最后 5s 的计数只停在限速日志里）。
-fn emit_final_drop_summary(stats: &gate_backpressure::DropStats) {
+///
+/// 另发**停止排水事件**（卡 `openmir2-drain-stopped-event`）：独立一行 `event=drain_stopped`，
+/// 记录停排时刻与本线未消费下行积压，并把该时刻回填进 `ENTRY_TELEMETRY` 的 `drain_stopped_ms`。
+fn emit_final_drop_summary(
+    stats: &gate_backpressure::DropStats,
+    sessions_alive: usize,
+    pending_frames: usize,
+    pending_bytes: usize,
+) {
     let now = now_ms();
+    telemetry::record_drain_stopped_ms(now);
+    glog!(
+        "WRN",
+        "{}",
+        stats.drain_stopped_line(now, sessions_alive, pending_frames, pending_bytes)
+    );
     if let Some(line) = stats.final_summary(now) {
         glog!("WRN", "{line}");
     }

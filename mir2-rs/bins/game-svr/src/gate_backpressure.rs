@@ -696,6 +696,38 @@ impl DropStats {
         self.last_summary_ms = Some(now);
     }
 
+    /// **停止排水事件**（卡 `openmir2-drain-stopped-event`，botfleet 规格）：网关连接退出、
+    /// 排水停止的那一刻打一条独立事件（不是累计快照），供「Δ关服段 = 终值 − 本行」精确对账。
+    ///
+    /// 口径（报告必须照抄）：`sessions_alive` = **本网关线上的在册会话数**；
+    /// `downlink_pending_frames/bytes` = 本线未消费下行积压；
+    /// `tombstone_skipped / downlink_dead_socket / close_total` 是**进程级全局静态**，
+    /// 多条线各打一行时值相同——汇总只取一次，**不得相加**。
+    /// `uptime_ms` 取**绝对 wall ms**（停排时刻；便于与日志时间戳直接对齐），另给 `since_start_ms` 供人读。
+    pub(crate) fn drain_stopped_line(
+        &self,
+        now: i64,
+        sessions_alive: usize,
+        pending_frames: usize,
+        pending_bytes: usize,
+    ) -> String {
+        use std::sync::atomic::Ordering;
+        format!(
+            "event=drain_stopped uptime_ms={} since_start_ms={} gate={} sessions_alive={} \
+             downlink_pending_frames={} downlink_pending_bytes={} tombstone_skipped={} \
+             downlink_dead_socket={} close_total={}",
+            now,
+            now.saturating_sub(self.start_ms),
+            self.gate,
+            sessions_alive,
+            pending_frames,
+            pending_bytes,
+            crate::telemetry::DOWNLINK_SKIPPED_BY_TOMBSTONE_TOTAL.load(Ordering::Relaxed),
+            crate::telemetry::DOWNLINK_DEAD_SOCKET_TOTAL.load(Ordering::Relaxed),
+            crate::telemetry::CLOSE_TOTAL.load(Ordering::Relaxed),
+        )
+    }
+
     /// 连接结束时补一条汇总（有事件才产出）：避免「最后 5s 内的事件只在限速日志里、NDJSON 没落」。
     pub(crate) fn final_summary(&self, now: i64) -> Option<String> {
         self.has_activity().then(|| self.format_summary(now))
@@ -1235,5 +1267,29 @@ mod tests {
         let s = DropStats::new(0, 0);
         assert!(s.final_summary(10_000).is_none());
         assert!(s.final_summary_json(10_000).is_none());
+    }
+
+    /// **停止排水事件**（卡 `openmir2-drain-stopped-event`）：字段集合与口径写死。
+    /// `sessions_alive` / `downlink_pending_*` 是**本线**量；`tombstone_skipped` /
+    /// `downlink_dead_socket` / `close_total` 是**进程级全局**（多线汇总只取一次、不得相加）。
+    /// 变异：删任一字段 ⇒ 本用例红。
+    #[test]
+    fn drain_stopped_line_has_fixed_fields() {
+        let stats = DropStats::default();
+        let line = stats.drain_stopped_line(1_791_000_000_500, 7, 12, 3456);
+        for needle in [
+            "event=drain_stopped ",
+            "uptime_ms=1791000000500",
+            "since_start_ms=",
+            "gate=",
+            "sessions_alive=7",
+            "downlink_pending_frames=12",
+            "downlink_pending_bytes=3456",
+            "tombstone_skipped=",
+            "downlink_dead_socket=",
+            "close_total=",
+        ] {
+            assert!(line.contains(needle), "停止排水事件缺 {needle}：{line}");
+        }
     }
 }
