@@ -13417,6 +13417,31 @@ mod tests {
         assert_eq!(r2.clock_ms, 400);
     }
 
+    /// 卡 `openmir2-aoi-incremental`（opc-07 要求）：**`aoi_order` 逐 tick 也纳入差分范围**。
+    /// 增量实现最容易在"顺序类"语义上偏离；这里先把世界级 `aoi_order` 的确定性钉住——
+    /// 同一场景跑两次，逐 tick 比较；后续 legacy-vs-incremental 的差分也用同一口径。
+    #[test]
+    fn aoi_order_snapshot_is_deterministic_across_runs() {
+        let run = || {
+            let mut w = world_with(&[(1, 10, 10), (2, 12, 10), (3, 20, 20), (4, 11, 11)]);
+            w.walk(2, 1, 0);
+            w.walk(1, 0, 1);
+            let mut out = Vec::new();
+            for _ in 0..12 {
+                out.push(w.tick().aoi_order);
+            }
+            out
+        };
+        let a = run();
+        let b = run();
+        assert_eq!(a, b, "aoi_order 逐 tick 必须一致（顺序类语义）");
+        assert!(
+            a.iter().any(|o| o.len() >= 4),
+            "场景必须产生非平凡 aoi_order"
+        );
+        println!("[AOI_ORDER] OK ticks={} sample={:?}", a.len(), a.get(6));
+    }
+
     #[test]
     fn tick_order_is_deterministic_and_documented() {
         let mut w = world_with(&[(1, 10, 10), (2, 12, 10), (3, 20, 20)]);
