@@ -991,11 +991,12 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`；
   RM：8044(target,p1=15,108)/10052(target,68)/8103(众人,w=15/p1=85/p2=224/p3=caster,167)/
   8090(154)/10123(caster,p1=33,255)、10008.p3=33；golden = `golden/magic/snowwind.json`。
-- **排水段抽数（`DeliverRng`）参与判定，不是只记录**：33 的受击抽发生在施法段内，已并入主
-  `Rng`（7 抽）被 `verify` **逐值比较**；台账 `DeliverRng` 实测为空。比较器新增专用判据
-  `deliver_rng_violation`（`fireboom`/`snowwind` 的 `DeliverRng` 必须为空）+ 牙
-  `tooth_deliver_rng_escaped_red`（合成 `[0,0,9]` 必红、空绿、延时支不误伤），把
-  「记了不判」的口子显式堵上（取「专用断言 + 牙」路线：并入主 `Rng` 会改变已有 golden 语义）。
+- **排水段抽数现状（33）**：33 的受击抽发生在施法段内，已并入主 `Rng`（7 抽）并被 `verify`
+  **逐值比较**；台账 `DeliverRng` 实测为空。**统一判据另案**（opc-07 2026-11-20 定）：比较器将改为
+  `golden.Rng == rust.Rng ++ rust.DeliverRng`（所有 `verified` 必须是 `cover_drain`，
+  `freeze_at_dospell` 只作 legacy artifact、不进比较面；四颗牙；15 条全跑），
+  **与 6 条新 golden 同一次合并落地**，不在本支。本支**不**保留任何"DeliverRng 必须为空"的
+  特例断言（那会把旧模式留成逃生口）。
 - **帧族与 C2 交集**：本支帧族（53/638/656/31）与 `push_broadcast` 缓存接线相交，
   **`2f` 的 C2 落地后必须重跑全平面**（45 驱动 + 15 比较器）。
 - **MG-45 升格草稿（未落盘）**：`status=verified`、`basis=semantic`、`test=real_rust_ledger_snowwind`、

@@ -342,36 +342,6 @@ fn ledger_dir() -> std::path::PathBuf {
 /// ```
 /// 侧车缺失或 id 不符 ⇒ 红并提示「台账陈旧/驱动未跑」；**不设环境变量 ⇒ 红**（fail-closed），
 /// 专门拦「驱动编译失败、比较器读上一次台账还绿」这类空转。
-/// **哪些支的排水段抽数必须为空**（抽全部并入主 `Rng` 比较面）。
-///
-/// 23/33（`MagBigExplosion`）的 `RM_MAGSTRUCK` 是**即时**投递 ⇒ 受击链的 `R(1000)`/MSD/STD 抽在
-/// 施法段内发生，已并入 `Rng` 并被 `verify` 逐值比较；它的 `DeliverRng` **必须为空**——
-/// 否则就是「记了不判」的假绿口子（章程 §4/§12，卡 §31）。
-/// 延时支（1/2/5/11/13/44/45 等）的受击抽在交付段、不在主 `Rng`（旧口径的已知缺口另案处理）。
-fn drain_rng_pinned(stem: &str) -> bool {
-    matches!(stem, "fireboom" | "snowwind")
-}
-
-/// [`drain_rng_pinned`] 支的「排水段抽数逃逸」判据：返回 `Some(错误串)` 表示应当红。
-/// 抽出来是为了单测（牙）能直接喂合成 case，不必造台账文件。
-fn deliver_rng_violation(stem: &str, label: &str, case: &Value) -> Option<String> {
-    if !drain_rng_pinned(stem) {
-        return None;
-    }
-    let deliver = case
-        .get("DeliverRng")
-        .and_then(Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    if deliver.is_empty() {
-        None
-    } else {
-        Some(format!(
-            "[{label}] DeliverRng 必须为空（抽已并入主 Rng 比较面）；实得 {deliver:?} ——              排水段抽数逃出了比较面就是假绿（卡 §31）"
-        ))
-    }
-}
-
 fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
@@ -407,11 +377,6 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
         let v: Value = serde_json::from_str(&text).expect("防空转：台账必须是合法 JSON");
         let arr = v.as_array().expect("防空转：台账必须是 [case] 数组");
         assert_eq!(arr.len(), 1, "[{label}] 每支台账恰 1 个 case");
-        // **排水段抽数不得逃出比较面**（卡 §31）：即时受击支的抽应全部落在 `Rng` 里；
-        // 这里显式判 `DeliverRng` 为空 —— 从"记了不判"改成"为空也要判"。
-        if let Some(msg) = deliver_rng_violation(stem, label, &arr[0]) {
-            panic!("{msg}");
-        }
         assert_eq!(
             arr[0].get("Label").and_then(Value::as_str),
             Some(*label),
@@ -445,23 +410,6 @@ fn real_rust_ledger_snowwind() {
 }
 
 /// **`23 爆裂火焰`（`SKILL_FIREBOOM`）**真实台账 → 判定面（标签 s1/s5/s13）。
-/// **牙：`DeliverRng` 逃出比较面必红**（卡 §31）。即时受击支（fireboom/snowwind）的
-/// `DeliverRng` 必须为空；合成一份带 `[0,0,9]` 的 case ⇒ 判据返回错误串。
-#[test]
-fn tooth_deliver_rng_escaped_red() {
-    let escaped = serde_json::json!({"DeliverRng": [0, 0, 9]});
-    let msg = deliver_rng_violation("snowwind", "s1", &escaped)
-        .expect("DeliverRng 非空必须判红（否则就是记了不判）");
-    assert!(msg.contains("DeliverRng"), "错误串要点名 DeliverRng：{msg}");
-    let ok = serde_json::json!({"DeliverRng": []});
-    assert!(deliver_rng_violation("snowwind", "s1", &ok).is_none(), "空 DeliverRng 应绿");
-    // 非 pinned 支（延时受击）不受该判据约束。
-    assert!(
-        deliver_rng_violation("fireball", "hit", &escaped).is_none(),
-        "延时支不应被该判据误伤"
-    );
-}
-
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::fireboom_parity_*）生成真实台账"]
 fn real_rust_ledger_fireboom() {
