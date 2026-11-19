@@ -493,6 +493,16 @@ fn allow_build_guild_label(f: &mut Fixture) {
 
 /// 批 5 #17：给 hero 足够金币 + 一个祖玛头像（`make_index` 区分多次）。
 fn fund_and_piece(f: &mut Fixture, make_index: i32) {
+    // `BuildGuildRequest` 用 `castle_cfg.woma_horn` 做 `CheckItems`；`Fixture::new` 往 catalog[42]
+    // 塞的是 `zuma_piece`（另一个物品名）⇒ 必须改成沃玛号角名，否则建会 `result=-3`（无 42）。
+    let horn = f.castle_cfg.woma_horn.clone();
+    f.catalog.insert(
+        42,
+        mir2_data::StdItem {
+            name: horn,
+            ..mir2_data::StdItem::default()
+        },
+    );
     let sg = f.sessions.get_mut("hero").unwrap();
     sg.state.gold = 1_000_000;
     sg.state.item_list.push(BagItem {
@@ -524,13 +534,14 @@ fn username_frames(frames: &[(i32, Vec<u8>)]) -> HashMap<i32, usize> {
 fn build_guild_ref_show_name_cache_window_second_build_hits_cache() {
     let mut f = Fixture::new();
     allow_build_guild_label(&mut f);
-    f.add_player("o0", 2, 15, 10, 902);
-    f.add_player("o1", 3, 21, 10, 903);
-    f.add_player("o2", 4, 22, 10, 904);
-    f.add_player("o3", 5, 23, 10, 905);
+    f.add_player("o0", 10, 15, 10, 902);
+    f.add_player("o1", 11, 21, 10, 903);
+    f.add_player("o2", 12, 22, 10, 904);
+    f.add_player("o3", 13, 23, 10, 905);
     fund_and_piece(&mut f, 101);
     f.call("@@buildguildnow\r测试会A");
     let first = username_frames(&f.drain());
+
     assert_eq!(first.get(&901), Some(&1), "首建：自己收");
     assert_eq!(first.get(&902), Some(&1), "首建：+5 收");
     assert_eq!(first.get(&903), Some(&1), "首建：|Δ|=11 在 ±12 内");
@@ -554,7 +565,7 @@ fn build_guild_ref_show_name_cache_window_second_build_hits_cache() {
 fn build_guild_ref_show_name_hidden_hero_only_self() {
     let mut f = Fixture::new();
     allow_build_guild_label(&mut f);
-    f.add_player("o0", 2, 15, 10, 902);
+    f.add_player("o0", 10, 15, 10, 902);
     fund_and_piece(&mut f, 101);
     let hero = f
         .online
@@ -580,10 +591,10 @@ fn build_guild_ref_show_name_hidden_hero_only_self() {
 fn war_events_two_ref_show_name_same_member_share_cache_window() {
     use mir2_world_bevy::guild::GuildWarEvent;
     let mut f = Fixture::new();
-    f.add_player("o0", 2, 15, 10, 902);
-    f.add_player("o1", 3, 21, 10, 903);
-    f.add_player("o2", 4, 22, 10, 904);
-    f.add_player("o3", 5, 23, 10, 905);
+    f.add_player("o0", 10, 15, 10, 902);
+    f.add_player("o1", 11, 21, 10, 903);
+    f.add_player("o2", 12, 22, 10, 904);
+    f.add_player("o3", 13, 23, 10, 905);
     let hero = f
         .online
         .iter()

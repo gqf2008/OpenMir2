@@ -58,7 +58,6 @@
 use std::collections::HashMap;
 use tokio::sync::mpsc::UnboundedSender;
 
-use game_svr::chat;
 use game_svr::downlink::{self, DisplayTable};
 use mir2_data::guild::{GuildFileSections, GuildRecord, GuildStore};
 use mir2_protocol::messages;
@@ -430,7 +429,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
     }
 
     /// `BaseObject.RefShowName()`（`BaseObject.Base.cs:1174-1177`）⇒ `SendRefMsg(RM_USERNAME)`：
-    /// 收件人集合 = [`chat::hear_targets`]（含自己，已处理 `ObMode`/`FixedHideMode`）；
+    /// 收件人集合 = [`crate::chat::hear_targets`]（现走 `ref_msg_cache::targets`；含自己，已处理 `ObMode`/`FixedHideMode`）；
     /// `Recog` = **被展示者**的 `ActorId`，尾 = `GetShowName()` 的 GBK 字节（展示表缓存，与登录同源）。
     fn ref_show_name(&self, target_id: i32) {
         let Some(display) = self.displays.get(target_id) else {

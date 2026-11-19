@@ -92220,8 +92220,8 @@ GMEXECUTE f
         c.master_guild = Some(mir2_world_bevy::castle::GuildId(1));
         c.own_guild = Some("攻方".to_string());
         world.castles.push(c);
-        // 会话行会：t=防守方；+5(902)=攻方（城主会）；其余无会。
-        sessions.get_mut("t").unwrap().guild.guild_name = Some("防守方".to_string());
+        // 会话行会：+5(902)=攻方（**任何有会观察者**在战区都会 N1，见 `get_chr_color` 的
+        // else 支）；t 与其余观察者**无会** ⇒ 颜色支返回 Ok。若给 t 设会，它自己也会被 N1 丢。
         sessions.get_mut("o0").unwrap().guild.guild_name = Some("攻方".to_string());
         // 战区标记：t 与 902 都在战区；903/904 不在。
         let o0 = online.iter().find(|e| e.socket == 902).unwrap().actor_id;
@@ -92249,15 +92249,11 @@ GMEXECUTE f
             scanned.contains(&o0),
             "扫描面必须含 902（证明丢帧不是集合少给了收件人）"
         );
-        assert_eq!(
-            per.get(&901),
-            Some(&1),
-            "自己被展示（防方非城主会 ⇒ 不 N1）"
-        );
+        assert_eq!(per.get(&901), Some(&1), "自己无会 ⇒ 颜色支 Ok，收帧");
         assert_eq!(
             per.get(&902),
             None,
-            "攻方（城主会）观察者 ⇒ N1 丢帧（颜色判定处）"
+            "有会观察者 ⇒ N1 丢帧（颜色判定处；`get_chr_color` else 支）"
         );
         assert_eq!(per.get(&903), Some(&1), "无会观察者照收 ⇒ 丢帧只在颜色支");
         assert_eq!(per.get(&904), Some(&1), "|Δ|=12 无会观察者照收");
