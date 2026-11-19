@@ -140,3 +140,28 @@ DEPS_GREEN packages=48 files=1063
 
 `DBSrv.Storage.MongoDB.dll` 在 `runtime/DBSrv` 里**被部署但无戳**、也不在 `release-1af56267` 的 8 件里
 ⇒ 另卡 `docs/issues/openmir2-own-binary-without-stamp.md`（重构建补戳 / 从部署集移除，**10k 之后**）。
+
+### 锚必须可解析（红 → 改锚 → 绿，范例）
+
+合并 head M5 上 anchor gate **首跑红**（2026-11-19）：
+
+```
+PROSE_ANCHOR_PATH_MISSING      docs/issues/openmir2-deps-check-deploy-dir.md  `DBContext.cs:2`  base_dirs 都解析不到
+PROSE_ANCHOR_PATH_MISSING      docs/issues/openmir2-deps-check-deploy-dir.md  `PlayRecordStorage.cs:4`  base_dirs 都解析不到
+prose-anchor gate：检查 2 / 悬空 2 / 越界 0 / 符号缺失 0 / 高churn 0
+RESULT: RED
+```
+
+改法：裸文件名锚改成**全路径 + 「第 N 行」**叙述（不写 `path:line`，避免行号漂移）：
+
+> `src/Storeages/DBSvr.Storage.MySQL/DBContext.cs`（第 2 行）、
+> `src/Storeages/DBSvr.Storage.MySQL/PlayRecordStorage.cs`（第 4 行）
+
+复跑：
+
+```
+prose-anchor gate：检查 0 / 悬空 0 / 越界 0（新增行里没有任何 path:line 锚；仅反引号内 .rs/.cs，检查 0 ≠ 全部锚干净）
+RESULT: GREEN
+```
+
+**没有改 gate 规则**——红是 gate 在正常工作，修的是文档锚。
