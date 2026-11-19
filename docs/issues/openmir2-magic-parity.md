@@ -179,7 +179,7 @@ Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必�
 RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomNumber`（与原版同算法）。
 **未登记在该表里的 RM 条目一律判"口径未定义"（不标 verified）**，避免拿"没比到"当"比过了"。
 
-## 12. C# 侧两颗负向牙已过（2026-11-19，编码层真实 SM 帧）
+## 12. C# 侧记录面已支持两颗负向牙（**未断言**；判定在 Rust 比较器）
 
 装置改为**真实 SM 帧**：`RecordingPlayObject` 覆写 `PlayObject.Socket.cs:101` 的 **virtual**
 `SendSocket(CommandMessage,string)`，并用 `Operate(ProcessMessage)`（`PlayObject.Message.cs:768`）
@@ -314,7 +314,7 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 - **比较器顺序**：①总量（TSV 行数 == 金标准长度）→ ②RNG 逐次 `result` 列 → ③逐接收者 SM
   → ④HP 前后 → ⑤两颗负向牙。
 
-### 16b. 总量断言的写法（定死：强形式 + 行号分段 + site 允许清单）
+### 16b. 总量断言的写法（定死：强形式 + 行号分段 + site 允许清单；**当前未实现**，随 Rust 比较器落地）
 
 **事实**：夹具建实体本身会抽 RNG（`new_player_entity_with_login_ctor` 的注释写明
 "`new PlayObject()` 5 抽里存活到实体的两个值"，`lib.rs:15980`）⇒ 不能直接数整份 TSV。
@@ -372,3 +372,20 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 - 实测值：`RM_SPELL 24`、`RM_MAGICFIRE 136`、`RM_DELAYMAGIC 255`、`RM_STRUCK_MAG 167`、
   `RM_MAGSTRUCK 108`、`RM_HEALTHSPELLCHANGED 68`、`RM_CHANGENAMECOLOR 154`。
 - 比较器必须逐字段比 `priority`（不许只比 ident/params）；QA 将复核该列。
+
+## 19. 记录面 vs 判定面（QA-3，2026-11-19）
+
+**归属写清，避免再被读成"已有断言"**：
+
+| 面 | 产物 | 现状 |
+|---|---|---|
+| 记录面（C# 金标准） | `golden/magic/fireball.json`：每个接收者的 RM（含 `priority`）与真实 SM、RNG 账本、HP 前后 | **已具备**（QA-1 独立复现绿） |
+| 判定面（Rust 比较器） | 断言：逐接收者 RM/SM 逐字段、`priority`、HP 差、RNG 逐次；**以及两颗负向牙**（caster `SM_SPELL(17)` 计数 == 0；`obs_out` RM/SM 全空）与 §16b 的 RNG 总量/`site` 允许清单/`seq` 连续 | **未实现**（随驱动一起写） |
+
+**判定面必须有"咬得住"的证明**（缺一不可，各给原文）：
+1. 把金标准里 caster 的 SM 塞一条 `17` ⇒ 比较器红；
+2. 把某条 RNG 行的 `site` 改成清单外的值 ⇒ 比较器红；
+3. 删掉金标准里一条 RNG 行 ⇒ 比较器红（总量断言）；
+恢复后复绿。
+
+**没有比较器与这三条咬合证明之前，`1/5` 不得标 `verified`。**
