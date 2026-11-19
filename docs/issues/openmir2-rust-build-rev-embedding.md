@@ -34,6 +34,18 @@ Rust 侧交付件（`game-svr` / `game-gate` / `login-gate` / `sel-gate` / `mir2
 4. **部署后取证**：`m1-bin` 里的件自报 rev == 本轮期望 head，且侧车 sha256 == 实物 sha256；
    故意把侧车换成"同文件、错 head"⇒ 闸门红。
 
+## 实证（2026-11-19）：构建路径也会改变 sha
+
+同一份源码、同一工具链（`rustc 1.98.1` / `cargo 1.99.0`）、**大小完全相同**，但 sha 不同：
+- `aoi-phase2-impl` 车道 @ `717093150` → `game-svr.exe` = `9d4e4f16…`（9,164,288 B）
+- 主检出 @ `c3d3c271`（=M；`git diff 717093150 c3d3c271 -- mir2-rs` 为空）→ `37826a1b…`（9,164,288 B）
+- `ctrl-m1` 工作区 @ `c3d3c271` → `42171743…`（9,164,288 B，opc-07 报告值）
+
+⇒ **sha 不是跨机器/跨目录的稳定身份**，`rev` 才是。这抬高了"侧车戳 + 自报 rev"的必要性。
+
+追加验收牙（第 5 颗）：**同源码、不同目录构建 ⇒ sha 不同，但 `--version`/首行 `INF` 自报的
+`rev` 相同**——正好证明自报 rev 的必要性；反例牙：把 rev 改成常量或取自构建目录名 ⇒ 本牙红。
+
 ## 关联
 - 口径：`artifact-identity-proof`（被测/被部署的二进制必须自报身份并被断言）；`gate-green-must-name-the-set`
 - 窗口限制记录：`docs/BOTFLEET-M1-REPORT.md` §50（"Rust 件身份只由侧车戳保证"）
