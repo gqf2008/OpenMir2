@@ -181,3 +181,7 @@
    记录，是否另造方向型输入由 opc-07 裁决。
 2. **26/38 的 10s/恒真门二次调用**：每 case 用新施法者对象，未覆盖「同角色短时间重复施法」的状态残留。
 3. **调用方尾部**（`+GD/<uptime>`、`RM_MOVEFAIL`）按上文判据边界不入 golden。
+4. **caster 未走登录序重算**：`ClientSpellXYEntry` 的施法者沿用既有工具口径（只设
+   `Abil.Level/MC/SC` 与 `WAbil.MP`，**不**调 `RecalcLevelAbilitys`/`RecalcAbilitys`）⇒
+   `SM_HEALTHSPELLCHANGED(53)` 的 `MaxHP` 为 0；target 则**走**登录序重算（Level 20 ⇒ `MaxHP=224`）。
+   与 `openmir2-golden-fixture-drift` 的「重算是否入夹具/是否按 case 显式参数」同源，处置随该卡。
