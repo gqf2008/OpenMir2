@@ -13488,7 +13488,12 @@ fn handle_spell_cmd_with_magic(
             // 也给自己回帧 ⇒ 用 [`broadcast_ref_msg_with_self`]（不可用 [`broadcast_ref_msg`]）。
             //
             // **战士门（`:151-153`）**：已由本函数上方的 `default_arm && is_warr_skill` 块发出
-            // （`!is_warr_skill` 过滤 ⇒ 本块不会与它双发）。仍未接（登记）：`:167` 版本门。
+            // （`!is_warr_skill` 过滤 ⇒ 本块不会与它双发）。
+            // **订正（2026-11-20，卡 `openmir2-magic-parity`）**：`:167` 版本门**已实现**——
+            // 本函数上方、无条件 `SM_SPELL` 广播之后的 fail-closed 块（门在 `:159` 之后；失败 ⇒
+            // 无效果体/无尾/零抽）。旧注释"仍未接（登记）"作废。
+            // 牙：`spell_frame_unmodeled_magic_broadcasts_exactly_one`（`MagicId > 80` 子类）与
+            // `spell_tail_p1_excluded_magic_ids_unchanged`。
             let fail = smframe_ext::sm_magicfire_fail(actor_id);
             broadcast_ref_msg_with_self(world, online, gates, actor_id, &[fail]);
         }

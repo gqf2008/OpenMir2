@@ -19,9 +19,18 @@
   39 `GROUPDEDING`（`src/M2Server/Magic/MagicManager.cs:549-553`）。
 - 单独待办（不混进 implemented）：
   1. `buff_tick_gate` — 14/15/31 的 buff 生产链仅 `World::buff_tick_enabled()` 时生效（缺省关），
-     `mir2-rs/bins/game-svr/src/lib.rs` 的 `handle_spell_cmd_with_magic`（14/15/31 buff 生产链接线）；
-  2. `anti_magic_recalc` — 目标 `AntiMagic` 的 `RecalcAbilitys` 面未同步（`lib.rs` 的 `spell_target_anti_magic` 实体同步面）；
-  3. `version_gate_167` — `DoSpell` 版本门未接（`src/M2Server/Magic/MagicManager.cs:167`）。
+     `mir2-rs/bins/game-svr/src/lib.rs` 的 `handle_spell_cmd_with_magic`（14/15/31 buff 生产链接线）。
+     **现状（2026-11-20）**：生产 `sim_loop` 已 `enable_buff_tick()`；对拍夹具必须**显式开门**，
+     并以"关门 ⇒ 逐字节不变"作**负向断言**（门本身的牙）。
+  2. `anti_magic_recalc` — 目标 `AntiMagic` 的 `RecalcAbilitys` 面未同步（`lib.rs` 的 `spell_target_anti_magic` 实体同步面）。
+     **登记位置（2026-11-20 核对）**：本条 + `spell_target_anti_magic` 的文档注释
+     （"复活 `BaseObject.cs:2739`、怪物 `MakeClone`/`GainSlaveExp`、装备/卸下后的实体同步尚未建模"）；
+     白名单**无独立 T- 行**（T-18 是 `recalc_abilitys_with_prior` 的**装备路径 prior-SubAbility 语义**，
+     不覆盖目标侧同步）。涉及路径：复活、克隆、换装/卸装后的目标 `anti_magic` 同步。
+  3. ~~`version_gate_167`~~ **已收口（2026-11-20）**：`DoSpell` 版本门**已实现**——
+     `handle_spell_cmd_with_magic` 内、无条件 `SM_SPELL` 广播之后的 fail-closed 块（门在 `:159` 之后；
+     失败 ⇒ 无效果体/无尾/零抽）；牙见 `spell_frame_unmodeled_magic_broadcasts_exactly_one`
+     （`MagicId > 80` 子类）与 `spell_tail_p1_excluded_magic_ids_unchanged`。原"未接"说法作废。
 
 ## 2. 对拍装置（先建装置，再迁移/补分支）
 
