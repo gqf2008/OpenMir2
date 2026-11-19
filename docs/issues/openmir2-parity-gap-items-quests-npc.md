@@ -390,7 +390,7 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 3. `e.status == "missing" ⇒ e.deviation.id` 非空且能在 whitelist/差异登记中查到（`id` 必须是 T-*/B-*/D-*；技能块两条为 T-285/T-286，`legacy_source` 只作溯源）；
 4. `e.status == "verified" ⇒ e.evidence.test` 非空且 `test_file` 存在；
 5. `e.cost ∈ cost_enum ∪ {null}`；
-6. `sum(1 for e in entries if e.status=="verified")` 与文档汇总行一致（物品：7；任务：2；NPC：1）。
+6. `sum(1 for e in entries if e.status=="verified")` 与文档汇总行一致（物品：7；任务：7；NPC：1）。
 7. `dead_paths`（可选）不计入 `denominator.count`；其中每条 `status == "dead_in_oracle"`。
 
 ---

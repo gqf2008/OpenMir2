@@ -47,16 +47,19 @@
 > 每个账本旁落一份 `<name>.manifest.json`：`head`（40-hex）、`built_at`（实测 `date`）、
 > `rows`、`sha256`（账本自身）。
 
-### 3.1 `quest_action_ledger.tsv` —— 动作级（QT-05..09）
+### 3.1 `quest_action_ledger.tsv` —— 动作级（QT-05..09，**最终口径**）
 
 ```
-# case_id  cmd  script_line  init_flag_hex  init_unit_hex  init_open_hex  calls  final_flag_hex  final_unit_hex  final_open_hex  success
+# case_id  actions_parsed  flag_hex  unit_hex  unit_open_hex  exception  unchanged  script
 ```
-- `cmd`：`SET` / `RESET` / `SETOPEN` / `SETUNIT` / `RESETUNIT`。
-- `init_*_hex`：全 256 字符十六进制（128 字节），用例起始位图（多为全零，边界用例给非零）。
-- `calls`：按调用序，`Set:<arr>:<index>=<value>` / `Get:<arr>:<index>-><ret>` 用 `;` 连接，空串写 `-`。
-- `final_*_hex`：动作跑完后的三张位图（**从实体直读 S1–S3**，不是重算）。
-- `success`：`ref bool Success` 终值（`1` / `0`）。
+- `script`：`#ACT` 正文（换行转义为字面量 `
+`）——两侧跑**同一段**脚本，比较口径因此不依赖手抄参数表；
+- `actions_parsed`：解析出的动作条数（抓「动作被 `nCMDCode=0` 丢弃」这一类差异）；
+- 三张 `*_hex`：跑完后**从实体直读**的位图（oracle `PlayObject` / Rust `NpcPlayer.QuestBitmap`）；
+- `exception`：oracle 侧若抛异常记类型名（正常为 `-`）；
+- `unchanged`：缺参类用例（`SET [5]` / `RESET [5]` 等）专列——去掉末行再跑一遍前缀，三张位图
+  **逐字节相等**记 `1`、不等记 `0`（两侧同口径都断言；其余用例写 `-`）。
+- 起始状态一律全零（`init` 通过脚本正文里的前置动作构造），不另设 init 列。
 
 ### 3.2 `quest_gate_ledger.tsv` —— 选择门 / 条件（QT-01、QT-02）
 
@@ -96,10 +99,15 @@
 | QT-09 RESETUNIT | S2 + S4 | 同 QT-06 的边界集 |
 | QT-01 {Quest} | S1 + S5 + RNG | 整条已判 `dead_in_oracle`（§10）：oracle 侧 `IsQuest` 恒 false，选择门不可达；`#RAND` 支同样不可达，维持 B-13 |
 
-> 关键**不对称**（读码查实，必须有用例钉住、写进条目 notes）：
-> `SET` / `SETOPEN` / `SETUNIT` 用 `StrToInt(sParam1/sParam2, 0)`；`RESET` / `RESETUNIT` 用
-> **`nParam1/nParam2`**，而 `nParam2` 的默认值是 **1**（`ScriptParsers.cs` 动作解析段：`nParam1` 默认 0、
-> `nParam2` 默认 1），且**只有 `IsStringNumber` 为真时才解析** ⇒ `RESET 5 abc` 会清 1 个（不是 0 个也不报错）。
+> **参数口径（读码查实，2026-11-20 更正版；必须有用例钉住）**：
+> 1. 解析器对 `SET`/`RESET`/`SETOPEN`/`SETUNIT`/`RESETUNIT` 先 `ArrestStringEx(sParam1,"[","]")` 剥壳；
+> 2. **这是 oracle 的 bug**：符号锚 `HUtil32.IsStringNumber` 的实现是 `!string.IsNullOrEmpty(s) || 正则匹配`
+>    ——**任何非空字符串都为真**，正则分支被短路；只有**空参数**（缺参）才为假；
+> 3. 只要 sParam1 或 sParam2 为空 ⇒ `nCMDCode = 0` ⇒ **整条动作被丢弃**（不进处理器，只记一条脚本错误）；
+> 4. 处理器口径：`SET`/`SETOPEN`/`SETUNIT` 用 `StrToInt(sParam1,0)`/`StrToInt(sParam2,0)`
+>    （非数字值 ⇒ **0 ⇒ 清位**）；`RESET`/`RESETUNIT` 用 `nParam1/nParam2`，而动作解析里
+>    `nParam2` 的默认值是 **1** ⇒ 非数字 count ⇒ **清 1 个**。
+> 用例：`SET [5] abc`（清 5）、`RESET [5] abc`（清 1 个）、`RESET [5]` / `SET [5]`（整条被丢）。
 
 ## 5. 批序（一次只交一项）
 
@@ -215,3 +223,23 @@ Z5 / L1–L2b / L6 / I 组的「不适用」若 opc-07 不认可，以 opc-07 �
 `mir2-rs/tests/parity/m3/quests/fixtures/`：`quest_probe_a.txt`、`quest_probe_b.txt`、`README.md`（合成出处
 与「现网 0 命中」说明）、`SHA256SUMS.txt`（仓库字节口径）。探针改为**从仓库读夹具**
 （`--fixtures <dir>`，缺文件 ⇒ rc=2 PREREQ），不再内嵌脚本字符串。
+
+### 10.3 动作级对拍（QT-05..09）与三条新事实
+
+金标准 `mir2-rs/tests/parity/m3/quests/vectors/quest_action_ledger.tsv`（探针 `--actions`，31 个 case；
+真 `ScriptEngine.GotoLable` + 真解析器 + 真 `PlayObject`）。Rust 用例 `quest_actions_match_oracle_ledger`
+（`cargo test -p game-svr --test quests_parity`，2 passed / 0 failed，原文见仓外 `E:/UserFleet/qa/quests/qt01/rust_actions_test.log`）。
+
+1. **`#ACT` 里只有第一条已注册命令执行**：`GotoLableQuestActionProcess` 命中 `IsRegister` 后
+   `Execute(...); return result;` ⇒ 同块后续动作全部不执行（符号锚 `GotoLableQuestActionProcess` /
+   `ExecutionProcessing.IsRegister`）。Rust `run_actions` 1:1 复刻。用例 QT05-02/03/04、QT05-D1/D2/D3 钉住。
+   ——这也解释了首跑的「`SET [5] 1; SET [5] 0` 终值仍置位」：第二条根本没执行，**不是**位运算问题。
+2. **引号包空格的值会让 oracle 解析器崩**：`SET [5] " "` ⇒ `HUtil32.CaptureString` 的
+   `for (i = c + 1; i <= len; i++)` 在 `i == len` 时取 `source[i]` ⇒ `IndexOutOfRangeException`（解析期，
+   动作一条都没执行）。Rust 对应结构化 `LoadPanic::Capture(CaptureStringPanic)`（显示文本同样含
+   `IndexOutOfRangeException`），比较器按「同崩对拍」断言失败类型一致。
+   **副作用面**：`NormNpc.LoadNPCScript` 及其调用点（`WorldServer` 的 NPC/商人初始化循环）**没有 try/catch**
+   ⇒ 该异常会中止整批脚本装载。建议单独立卡（是否作为 oracle 缺陷 1:1 复刻需 opc-07 裁定）。
+3. **缺参不是「整条丢弃」**（更正先前口径）：`IsStringNumber("")` 因正则 `^[+-]?\d*[.]?\d*$` **匹配空串**而为真
+   ⇒ `nCMDCode` 照常设置；处理器按 `StrToInt` 默认值执行（`SET` 值 0 ⇒ 清位、`RESET` count 1 ⇒ 清 1 个）。
+   当前用例起始位图为全零，因此这两条只证明「被执行且不崩」，**未单独观测清位**；要观测需加「预置位」用例（下一步）。

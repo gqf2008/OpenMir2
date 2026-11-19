@@ -23,6 +23,7 @@ using System.IO;
 using System.Reflection;
 using System.Text;
 using M2Server.Npc;
+using M2Server.Player;
 using OpenMir2;
 using ScriptSystem;
 using Serilog;
@@ -58,6 +59,7 @@ internal static class Program
         string outDir = null;
         string fixturesDir = null;
         bool doGate = false;
+        bool doActions = false;
         bool negativeControl = false;
         for (int i = 0; i < args.Length; i++)
         {
@@ -68,6 +70,10 @@ internal static class Program
             else if (args[i] == "--gate")
             {
                 doGate = true;
+            }
+            else if (args[i] == "--actions")
+            {
+                doActions = true;
             }
             else if (args[i] == "--negative-control")
             {
@@ -92,6 +98,11 @@ internal static class Program
         if (negativeControl)
         {
             return NegativeControl();
+        }
+
+        if (doActions)
+        {
+            return RunActions(outDir);
         }
 
         var npc = new NormNpc();
@@ -174,6 +185,139 @@ internal static class Program
             return 1;
         }
         return 0;
+    }
+
+    private const string ActionPatch = "ActionProbe";
+
+    private static string HexBytes(byte[] b) => Convert.ToHexString(b).ToLowerInvariant();
+
+    private sealed class ActionOutcome
+    {
+        public int Parsed;
+        public string Flag;
+        public string Unit;
+        public string Open;
+        public string Exception = "-";
+        public string ParsedParams = "-";
+    }
+
+    /// 跑一段 `#ACT` 正文：真解析器 + 真 `ScriptEngine.GotoLable` + 真 `PlayObject`。
+    private static ActionOutcome RunOneBody(ScriptParsers parser, string id, string body)
+    {
+        string text = "[@main]\n#ACT\n" + body + "\n";
+        string path = SystemShare.GetEnvirFilePath(ActionPatch, id + ".txt");
+        Directory.CreateDirectory(Path.GetDirectoryName(path));
+        File.WriteAllText(path, text, new UTF8Encoding(false));
+
+        var npc = new NormNpc();
+        var outcome = new ActionOutcome();
+        var po = new PlayObject();
+        try
+        {
+            parser.LoadScriptFile(npc, ActionPatch, id, false);
+            if (npc.ScriptList.Count > 0
+                && npc.ScriptList[0].RecordList.TryGetValue("@main", out SayingRecord rec))
+            {
+                var parts = new List<string>();
+                foreach (SayingProcedure proc in rec.ProcedureList)
+                {
+                    outcome.Parsed += proc.ActionList.Count;
+                    foreach (QuestActionInfo a in proc.ActionList)
+                    {
+                        parts.Add(string.Format(CultureInfo.InvariantCulture, "c{0}/n{1},{2}/s[{3}][{4}]",
+                            a.nCmdCode, a.nParam1, a.nParam2, a.sParam1, a.sParam2));
+                    }
+                }
+                outcome.ParsedParams = parts.Count == 0 ? "-" : string.Join("|", parts);
+            }
+            new ScriptEngine().GotoLable(npc, po, "@main");
+        }
+        catch (Exception ex)
+        {
+            outcome.Exception = ex.GetType().Name;
+        }
+        outcome.Flag = HexBytes(po.QuestFlag);
+        outcome.Unit = HexBytes(po.QuestUnit);
+        outcome.Open = HexBytes(po.QuestUnitOpen);
+        return outcome;
+    }
+
+    /// 动作级对拍账本（QT-05..09）：**同一段脚本正文**两侧各跑一遍，比对最终三张位图。
+    ///
+    /// 参数门（oracle 的 bug，符号锚 `HUtil32.IsStringNumber`）：`!IsNullOrEmpty(s) || 正则`
+    /// ⇒ **任何非空串都为真**，正则分支被短路；真门是**空参数**（缺参 ⇒ `nCMDCode = 0` ⇒ 整条动作丢弃）。
+    /// 丢弃类用例另跑一遍「去掉末行」的前缀，断言三张位图**逐字节不变**（`unchanged=1`）。
+    private static int RunActions(string outDir)
+    {
+        var cases = new (string Id, string Body)[]
+        {
+            ("QT05-01", "SET [5] 1"),
+            ("QT05-02", "SET [5] 1\nSET [5] 0"),
+            ("QT05-03", "SET [5] 1\nSET [5] 2"),
+            ("QT05-04", "SET [5] 1\nSET [5] -1"),
+            ("QT05-D1", "SET [5] 1\nSET [6] 1"),
+            ("QT05-D2", "SET [6] 1\nSET [5] 1"),
+            ("QT05-D3", "SET [5] 1\nSET [5] 0\nSET [7] 1"),
+            ("QT05-05", "SET [1025] 1"),
+            ("QT05-06", "SET [0] 1"),
+            ("QT05-07", "SET [-3] 1"),
+            ("QT05-08", "SET [abc] 1"),
+            ("QT05-09", "SET [5] 1\nSET [5] abc"),
+            ("QT05-10", "SET [5]"),
+            ("QT05-11", "SET [5] 1\nSET [5] \" \""),
+            ("QT05-12", "SET [5] 1\nSET [5]"),
+            ("QT06-01", "SET [5] 1\nSET [6] 1\nSET [7] 1\nRESET [5] 3"),
+            ("QT06-02", "SET [5] 1\nSET [6] 1\nRESET [5] abc"),
+            ("QT06-03", "SET [5] 1\nRESET [5] 0"),
+            ("QT06-04", "SET [5] 1\nSET [6] 1\nRESET [abc] 2"),
+            ("QT06-05", "SET [5] 1\nRESET [5] -1"),
+            ("QT06-06", "SET [5] 1\nRESET [5]"),
+            ("QT06-07", "SET [5] 1\nSET [6] 1\nRESET [5]"),
+            ("QT07-01", "SETOPEN [5] 1"),
+            ("QT07-02", "SETOPEN [5] 1\nSETOPEN [5] 0"),
+            ("QT07-03", "SETOPEN [abc] 1"),
+            ("QT08-01", "SETUNIT [5] 1"),
+            ("QT08-02", "SETUNIT [5] 1\nSETUNIT [5] 0"),
+            ("QT08-03", "SETUNIT [abc] 1"),
+            ("QT09-01", "SETUNIT [5] 1\nSETUNIT [6] 1\nRESETUNIT [5] 2"),
+            ("QT09-02", "SETUNIT [5] 1\nSETUNIT [6] 1\nRESETUNIT [5] abc"),
+            ("QT09-03", "SETUNIT [5] 1\nRESETUNIT [5]"),
+        };
+        // 缺参 ⇒ 动作被丢弃：断言三张位图逐字节不变（不是「没看出变化」）。
+        var dropCases = new HashSet<string> { "QT05-10", "QT05-12", "QT06-06", "QT06-07", "QT09-03" };
+
+        var rows = new List<string>
+        {
+            "# case_id\tactions_parsed\tparsed_actions\tflag_hex\tunit_hex\tunit_open_hex\texception\tunchanged\tscript"
+        };
+        var parser = new ScriptParsers();
+        int failed = 0;
+        foreach ((string id, string body) in cases)
+        {
+            ActionOutcome o = RunOneBody(parser, id, body);
+            string unchanged = "-";
+            if (dropCases.Contains(id))
+            {
+                int cut = body.LastIndexOf('\n');
+                string prefix = cut >= 0 ? body[..cut] : "";
+                ActionOutcome p = RunOneBody(parser, id + "-prefix", prefix);
+                bool same = p.Flag == o.Flag && p.Unit == o.Unit && p.Open == o.Open;
+                unchanged = same ? "1" : "0";
+                if (!same)
+                {
+                    failed++;
+                    Console.WriteLine("FAIL {0} 缺参动作改动了位图（prefix 与 full 不等）", id);
+                }
+            }
+            rows.Add(string.Join("\t", id, o.Parsed.ToString(CultureInfo.InvariantCulture),
+                o.ParsedParams, o.Flag, o.Unit, o.Open, o.Exception, unchanged, body.Replace("\n", "\\n")));
+        }
+
+        string ledgerPath = Path.Combine(outDir, "quest_action_ledger.tsv");
+        File.WriteAllText(ledgerPath, string.Join("\n", rows) + "\n", new UTF8Encoding(false));
+        Console.WriteLine("ACTIONS cases={0} failed={1}", cases.Length, failed);
+        Console.WriteLine(ledgerPath);
+        return failed > 0 ? 1 : 0;
     }
 
     /// 判定「这条脚本是否证明死分支」：返回非空即 FAIL。正反两条路径共用同一判据。
