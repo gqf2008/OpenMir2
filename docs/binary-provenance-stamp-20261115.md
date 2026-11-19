@@ -56,7 +56,7 @@
 | --- | --- | --- |
 | 产戳（默认） | `-BinDir <dir> [-Names a,b,c] [-Head <sha> \| -Heads a=<sha>,b=<sha>] [-HeadSource <s>] [-Force]` | 对目录里**存在**的每个目标二进制写 `<exe>.build.json`；`sha256` 现算；`head` 写前必须 `git cat-file -e` 能解析 |
 | 校验 | `-Check -BinDir <dir> [-Names …] [-RequireAll]` | 逐条判：戳存在、必填字段、sha 实时一致、head 可解析、`built_at`/`mtime` 与文件 mtime 差 ≤5 分钟 |
-| 自测 | `-Selftest` | 离线合成夹具（临时 git 仓库 + 临时目录），1 正例 + 7 负例；`-NoToolchainProbe` 不跑 cargo/dotnet |
+| 自测 | `-Selftest` | 离线合成夹具（临时 git 仓库 + 临时目录），**16 例**（1 正例 + 15 负例/边界，矩阵见 §8）；`-NoToolchainProbe` 不跑 cargo/dotnet |
 
 字段（`mir2-build-stamp/1` 的超集，公共字段与 `tools/window/rebuild-server.ps1` 一致）：
 
@@ -122,8 +122,17 @@
 | 6 | 空目录 / 无二进制 | rc=2 + `NO_BINARIES`（不得静默通过） | 已实现 |
 | 7 | 产戳后往二进制追加 1 字节 | rc=1 + `SHA256_MISMATCH`（证明 sha 是现算，不是抄报告） | 已实现 |
 | 8 | 产戳时 `head` 不可解析 | rc=2 且**不产生戳文件** | 已实现 |
-| 9 | 第 2 步接线：删掉起栈前的 `-Check` 调用 | 起栈必须变红 | **未实施**（第 2 步） |
-| 10 | 第 2 步接线：伪造一份坏戳 | 起栈 rc=2 + `invalid_reason=binary_provenance` | **未实施**（第 2 步） |
+| 9 | `.dll` 扩展名解析 + 同名诱饵 `DBSrv.dll.exe`：戳必须落在 `DBSrv.dll`，诱饵不得被戳 | 戳文件名断言（rc 抓不住，须断言文件名） | 已实现 |
+| 10 | `-RequireHead` 对齐（绿）/ 给错（红） | 对齐 rc=0；给错 rc=1 + `HEAD_MISMATCH` | 已实现 |
+| 11 | `-RequireHead` 与产戳模式同用 | rc=2（用法错，不得静默忽略） | 已实现 |
+| 12 | Rust 件带自报标记但跑不起来 | rc=1 + `SELF_REPORT_UNAVAILABLE`（能力检测 ≠ 跳过） | 已实现 |
+| 13 | `-OwnGlobs` **不带** `-RequireAll`：目录里有无戳、未列入 `-Names` 的自家 DLL | rc=1 + `UNLISTED_OWN_BINARY`（独立生效） | 已实现 |
+| 14 | 同一场景**带** `-RequireAll` | rc=1 + `UNLISTED_OWN_BINARY`（与 RequireAll 无关） | 已实现 |
+| 15 | C# 件内嵌 rev ≠ 戳 head | rc=1 + `EMBEDDED_REV_MISMATCH stamp=… embedded=…` | 已实现 |
+| 16 | C# 件无内嵌 rev | rc=1 + `EMBEDDED_REV_MISSING` | 已实现 |
+
+第 2 步接线侧的两个门（删掉起栈前 `-Check` ⇒ 起栈必红；伪造坏戳 ⇒ 起栈 rc=2 +
+`invalid_reason=binary_provenance`）仍属第 2 步待实施项，不在 `-Selftest` 的 16 例内。
 
 自测的夹具全部在 `%TEMP%/stamp-binaries-selftest-<guid>` 内创建（临时 git 仓库 + 3 个合成
 二进制），结束后由创建方清理；不读真实仓库状态、不碰真实二进制、不跑 cargo/dotnet。
@@ -134,8 +143,10 @@
   `head` 只能是推断（`head_source` 标出来）；要拿到真实来源，**必须由构建车道在构建完成时立即产戳**。
 - **一个目录 ≠ 一个构建**：同一输出目录里各 exe 可能来自不同提交（§6.1 实例）。此时用 `-Heads`
   逐项指定，不能用一个 `-Head` 冒充全部。
-- **没有把 commit 内嵌进二进制**：`head` 始终是外部证据；二进制与戳分离运输时二者可能脱钩，
-  第 2 步必须让「起栈时 binary/stamp 同目录且 `-Check` 通过」成为硬前置。
+- **内嵌 commit（2026-11-20 起）**：dotnet 目标必须内嵌 `SourceRevisionId` 且与戳 head 一致（R5，见 §10）；
+  Rust 目标是**条件性**判据（仅当含 `MIR2_BUILD_SELF_REV=1` 才自报，缺标记静默跳过——见 §10 风险点）。
+  历史说明：2026-11-20 之前本工具只把 `head` 当外部证据、不检查内嵌，M9 的 MongoDB 插件正是这样把
+  「内嵌 M8 / 戳 M9」漏进了冻结集。
 - **C# 的 `runtime` 取二进制同目录的 `<base>.runtimeconfig.json`**；该文件缺失时回落到产戳机器的
   第一个 `Microsoft.NETCore.App`——此时该字段语义降级为「产戳机器工具链」，不是目标框架，需人工注意。
 - **窗口期不要跑产戳**：产戳模式会执行 `cargo --version` / `dotnet --version`，空载口径把
@@ -146,6 +157,14 @@
 - **旧戳兼容**：`rebuild-server.ps1` 产出的 `mir2-server.build.json` 没有 `mtime`/`head_source`/
   `toolchain_kind`；本工具的 `-Check` 已兼容（补充字段只做存在时校验），但第 2 步若要把它纳入
   同一清单，应同步补齐字段或明确豁免。
+- **短 head（7..40 位）的前缀匹配**：`-RequireHead` 与 R5 都按「戳 head 是内嵌 40-hex 的前缀」比较；
+  7 位前缀理论上可能碰撞，生产调用（起栈/冻结/三处对齐）一律给完整 40 位。
+- **PowerShell 变量名大小写不敏感**：参数 `$Head` 与内部哈希 `$heads` 是**同一变量**；冻结脚本曾因此
+  不可用（`$uniq[0]` 退化为字符串首字符、报「戳 head 5 ≠ 期望 …」）。脚本中禁止使用与参数仅差大小写的变量名。
+- **PS 5.1 没有 `Import-PowerShellDataFile`**，dot-source `.psd1` 在 5.1 上也返回 null（均实测）；
+  读取 `tools/orchestration/stamp-groups.psd1` 统一用 `Invoke-Expression (Get-Content -Raw)`。
+- **发布目录不使用 `dist`**：2026-11-20 检索 `docs/`、`tools/`、`E:/UserFleet` 均无发布级 `dist`
+  引用；此前未登记，特此写明（出现该说法即为历史误记）。
 
 ## 7. DBSrv 六件 / LoginSrv 三件：产戳命令与时机（2026-11-17 起；2026-11-20 扩到六件，卡 `openmir2-own-binary-without-stamp`）
 
@@ -174,6 +193,11 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-bi
 
 判据：`GREEN n stamps verified` + rc=0 才可起栈；任何 `RED …` ⇒ **不起任何进程**。
 
+**窗口 C# 栈门**（`tools/window/start-csharp.ps1`）：`$components` 会拉起 DBSrv 与 LoginSrv，
+戳门对 **DBSrv（6 件）与 LoginSrv（3 件）两组**跑同一 `-Check`（含 `-OwnGlobs`），每组输出
+`STAMP_GATE OK <group> shadow`；`-GateOnly` 只跑该门、不 `Start-One`（复核/演示用，rc=0 打
+`GATE_ONLY_OK`）。psd1 之外的组件（GameSvr/LoginGate/SelGate/RunGate）不在这道 C# 戳门内，按设计跳过。
+
 **`-OwnGlobs` 覆盖检查（2026-11-20，卡 `openmir2-own-binary-without-stamp` R3）**：匹配 glob 的
 每个 `.dll/.exe` 必须已出现在 `-Names` 里，否则 `RED <file> UNLISTED_OWN_BINARY`；该检查**独立于
 `-RequireAll`**（不给 `-RequireAll` 也生效）。目的：`CopyStoragePluginToDbSrv` 自动拷进输出的
@@ -184,7 +208,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-bi
 `-ExecutionPolicy Bypass` 同现的命令行**整条静默阻断**——嵌套 `powershell` 退出码 `-1`、
 stdout/stderr 全空、脚本一行都没跑。`-ExpectHead`/`-Expect` 实测被拦，`-RequireHead` 同位置正常。
 
-**拷贝必须保 mtime（2026-11-17 botfleet 实测）**：把三件套从 `bin/Release` 拷到 `runtime\DBSrv` 时，
+**拷贝必须保 mtime（2026-11-17 botfleet 实测）**：把六件（DBSrv 组）/三件（LoginSrv 组）从 `bin/Release` 拷到 `runtime\<组>` 时，
 **裸 `cp`/`copy` 会把 mtime 改成"现在"** ⇒ 戳内 `built_at` 与文件 mtime 差 >5 分钟 ⇒ `BUILT_AT_SKEW` 判红。
 PowerShell `Copy-Item` 保 mtime（安全）；robocopy `/COPY:DAT` 也可以。判据不变：`built_at` 与 mtime 差 ≤5 分钟。
 
@@ -194,3 +218,24 @@ PowerShell `Copy-Item` 保 mtime（安全）；robocopy `/COPY:DAT` 也可以。
 **升级顺序约束**：`m1-stack/start-m1-stack.ps1` 调的是 `$CsharpRepo	ools\orchestration\stamp-binaries.ps1`
 ——**主检出（master）那份**。因此本工具的任何修复**必须先合 master** 才会对真实起栈生效；
 在分支上「自测全绿」不等于生产路径绿（2026-11-17 实测：`.dll` 支持在分支上绿、master 上照旧 SKIP ⇒ 起栈必红）。
+## 10. R5：C# 内嵌 rev 与戳 head 一致性（2026-11-20，卡 `openmir2-own-binary-without-stamp`）
+
+**判据（dotnet 目标）**：读取二进制内嵌的 `SourceRevisionId`（ASCII 与 UTF-16LE 各扫 `[0-9a-f]{40}`），
+必须存在且**以戳 `head` 为前缀**；否则：
+
+- 无任何 40-hex ⇒ `EMBEDDED_REV_MISSING`（rc=1）；
+- 有但不匹配 ⇒ `EMBEDDED_REV_MISMATCH stamp=<head> embedded=<逗号列表>`（rc=1）。
+
+**dotnet 目标的识别**：`toolchain_kind=dotnet`；旧戳带 `dotnet` 字段；扩展名 `.dll`；或基名在
+`DotnetNames`（`DBSrv`/`LoginSrv`/`GameSrv`/…）。
+
+**Rust 目标（条件性判据，风险点）**：仅当二进制含 `MIR2_BUILD_SELF_REV=1` 标记时才跑 `--version` 自报
+并与戳 head 比对（`SELF_REV_MISMATCH` / `SELF_DIRTY`）；**缺标记则静默跳过**——漏嵌标记的 Rust 产物
+不会因 rev 不符而红，只能靠 sha 与构建车道纪律。Rust 车道应在构建时强制注入该标记
+（卡 `openmir2-rust-build-rev-embedding`）。
+
+**事故来源（为什么要加）**：M9 的增量构建跳过了 `DBSvr.Storage.MongoDB`（源码未变），二进制仍是 M8
+（内嵌 `a5643481…`），戳却按 M9（`572a0b8a…`）产；当时 `-Check` 只比戳头与文件 sha、冻结脚本只断言
+戳 head 一致 ⇒ 一路漏到冻结集。2026-11-20 已在 M29（`f5ae02c7…`）强制重编全 C# 栈并重产戳，
+R5 在部署目录全绿；旧 m9 集保留并加注（`PROVENANCE.ADDENDUM-20261120.txt`）。
+
