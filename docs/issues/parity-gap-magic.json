@@ -461,13 +461,22 @@
         "line": 289,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_lightning11",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/lightning-11.json（C# oracle 生成，同 rig 换 magic_id=11）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::lightning11_parity_miss",
+          "tests::lightning11_parity_edge",
+          "tests::lightning11_parity_hit"
+        ]
       },
       "cost": "S",
       "deviation": null,
@@ -1220,13 +1229,22 @@
         "line": 563,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_lightning45",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/lightning-45.json（C# oracle 生成，同 rig 换 magic_id=45）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::lightning45_parity_miss",
+          "tests::lightning45_parity_edge",
+          "tests::lightning45_parity_hit"
+        ]
       },
       "cost": "S",
       "deviation": null,
