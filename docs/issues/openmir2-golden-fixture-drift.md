@@ -172,6 +172,14 @@ legacy_artifact : true + legacy_reason                       # 仅 freeze_at_dos
 
 **另记**：`hangmajinbub`（及同类）`Fixture.target_max_hp=100` 与 52 尾里的 224 不一致 = 已知 stale
 元数据（§6 处置第 3 条），新件按登录派生值写。
+**装置侧根因（2026-11-20 复核，master `bc151fde6` 原文）**：`RunMagicCase` 的 `Fixture` 在**排水之后**
+构造——`DRAIN_PASSES` 打印在 `Program.cs:1090`、`RngSeam.Restore` 在 `:1094`、`int hpAfter = target.WAbil.HP`
+在 `:1096`、`target_hp = (int)target.WAbil.HP` 在 `:1118` ⇒ **当前代码对新生件记录的是术后值**
+（`a2` 重生成实测 `target_hp=85`）。既有 15 件是旧世代产物（记术前值 100）——两者不矛盾。
+处置：M56 由 `a2` 修 `RunMagicCase` 取施法前值 + 自测；**M57（比较器收紧 + 重生成）必须排在 M56 之后**；
+M57 交付须写明「新生件 `target_hp` 由 M56 保证为术前输入，并由 31 帧断言机检」。
+比较器红字含机检可 grep 的固定串「疑似输入/输出混淆」，牙⑦ 断言该串在错误消息中。
+
 
 ### 8.4 实现落点（本设计分支 `card/magic-rng-union`）
 

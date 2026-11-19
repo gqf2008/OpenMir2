@@ -599,7 +599,7 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             let pre = hp_after.saturating_add(dmg);
             if pre != target_hp {
                 return Err(format!(
-                    "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d；施法后值当输入会伪装成真分歧）"
+                    "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d）；**疑似输入/输出混淆**（施法后值当输入，帧面会整体错位且伪装成真分歧）"
                 ));
             }
         }
@@ -763,7 +763,7 @@ fn tooth_target_hp_must_be_pre_cast() {
     );
     let err = check_golden_contract(&mk(209), label).unwrap_err();
     assert!(
-        err.contains("target_hp") && err.contains("施法前"),
+        err.contains("target_hp") && err.contains("施法前") && err.contains("疑似输入/输出混淆"),
         "target_hp=209（施法后值）必须红并点名：{err}"
     );
 }
