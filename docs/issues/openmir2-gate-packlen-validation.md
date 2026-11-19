@@ -150,5 +150,13 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 - 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
 - **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
   实跑帧/JSON 产物为准。
-- 可独立重放的篡改分组（`packlen T1–T4` / `utf8 M1–M3` / `deps T1–T5`）：**待 QA 提供定义后
-  原样写入本卡**（本批未凭空补写）。
+> 来源：QA 签署摘要 `docs/issues/qa-merged-cards-signoff-20261119.md`。
+
+### 可独立重放的篡改（T1–T4）
+
+| 编号 | 改什么 | 怎么改 | 期望红在哪 | 还原 |
+|---|---|---|---|---|
+| T1 | `TryValidate` 的长度判断 | 删掉 `packetLen > available` 判断 | 4 条红：`Accepts_LegalNegativePackLength` / `EngineFrame_Oversize_IsRejectedByTheProcessor` / `Rejects_IntMaxValue` / `Rejects_LengthGreaterThanAvailable` | 复原后全绿 |
+| T2 | `int.MinValue` 拒绝支 | 删掉 `rawPackLength == int.MinValue` 拒绝 | 3 条红：`EngineFrame_MinValue_…` / `Magnitude_UsesSingleSourceOfTruth` / `Rejects_NegativeMagnitude` | 复原后全绿 |
+| T3 | GM_DATA 失败分支 | 删掉 `_clientSocket.Close()` | `GameGate_EngineFrame_UsesDecisionPointAndClosesOnFailure` 红 | 复原后全绿 |
+| T4 | Rust 上界 | `len <= MAX_UPSTREAM_BODY` 改成恒真 | `panicked at bins/game-gate/src/lib.rs:2179: assertion failed: !upstream_body_allowed(MAX_UPSTREAM_BODY + 1)` | 复原后全绿 |
