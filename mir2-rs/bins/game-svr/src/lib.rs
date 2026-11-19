@@ -12413,6 +12413,8 @@ mod spell_frame_buf_tests {
 ///   `SetPkFlag`（`PlayObject.cs:4326-4341`）命中时由**攻击方** `RefNameColor()`
 ///   （`BaseObject.cs:730-733`）发 656（154）——收件人 = 攻击方 ±`SendRefMsgRange` 的玩家
 ///   （含攻击方自己；与 oracle `SendRefMsg` 的收件人集合同源）。
+///   **该 656 不在本函数的 `buf` 里**：由返回值交给 [`flush_hitter_name_colors`]，在主批
+///   flush **之后**发出（卡 `openmir2-magstruck-order`；golden `[638, 31, 656]`）。
 ///
 /// `nDamage == 0` 的目标整段跳过（合同 §2.3(b)：无 53/31/656、不抽 `R(300)`）。
 fn drain_mag_struck_b2(
@@ -12421,14 +12423,15 @@ fn drain_mag_struck_b2(
     displays: &downlink::DisplayTable,
     sessions: &mut std::collections::HashMap<String, SessionGround>,
     buf: &mut SpellFrameBuf,
-) {
+) -> Vec<mir2_world_bevy::slave::NameColorDelivery> {
     const P_HEALTH: u8 = (mir2_protocol::messages::RM_HEALTHSPELLCHANGED & 0xFF) as u8;
     const P_CHANGENAME: u8 = (mir2_protocol::messages::RM_CHANGENAMECOLOR & 0xFF) as u8;
     const P_STRUCKMAG: u8 = (mir2_protocol::messages::RM_STRUCK_MAG & 0xFF) as u8;
-    // 玩家受击触发的 656（见下）在 oracle 里由**受击者自己的下一个队列周期**产生
-    // （`PlayObject.Message.cs:1562-1572` 是自投递的 `RM_STRUCK_MAG` 被出队时执行）
-    // ⇒ 进观察者队列的时刻晚于整批 `RM_STRUCK_MAG` 的 31；本函数把入队推迟到批次结束，
-    // 保持同优先级 31 的四叉堆出队序与 oracle 一致（跨 actor 的投递序本无契约）。
+    // 玩家受击触发的 656 在 oracle 里由**受击者自己的下一个队列周期**产生
+    // （`PlayObject.Message.cs:1562-1572` 是自投递的 `RM_STRUCK_MAG` 被出队时执行），
+    // 晚于同批 31 到达观察者。它**不能**进本批缓冲：`flush` 的 4 叉堆按 `(byte)ident`
+    // 出队，656(154) 会插到 31(167) 前面 ⇒ 与 golden `[638, 31, 656]` 相反。
+    // 故只做收集，由调用方在主批 flush 之后经 [`flush_hitter_name_colors`] 单独发出。
     let mut hitter_name_colors = Vec::new();
     for o in world.deliver_mag_struck() {
         if o.damage <= 0 {
@@ -12491,11 +12494,34 @@ fn drain_mag_struck_b2(
             buf.push_broadcast(world, online, o.target_id, true, P_CHANGENAME, &body);
         }
     }
-    for nc in hitter_name_colors {
+    hitter_name_colors
+}
+
+/// 玩家受击 656 的**独立后置缓冲**（卡 `openmir2-magstruck-order`）。
+///
+/// oracle 里这条 656 由受击者自己的下一个队列周期产生（自投递的 `RM_STRUCK_MAG`
+/// 被出队时），晚于同批 31 到达观察者；放进主缓冲会被 `SpellFrameBuf::flush` 的
+/// 4 叉堆按 `(byte)ident` 排到 31 前面（656=154 < 31=167），与 golden
+/// `[638, 31, 656]` 相反。这里在**主批 flush 之后**单独发一轮。
+///
+/// 受击**怪物**链的 656（`BreakHolySeizeMode → RefNameColor`，`AnimalObject.cs:118-133`）
+/// 仍在主批内（其 `656 → 31` 序由 b2 爆裂火焰用例钉住），不要一起挪过来。
+fn flush_hitter_name_colors(
+    world: &mir2_world_bevy::World,
+    online: &OnlineRegistry,
+    gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+    deliveries: &[mir2_world_bevy::slave::NameColorDelivery],
+) {
+    if deliveries.is_empty() {
+        return;
+    }
+    let mut late = SpellFrameBuf::new();
+    for nc in deliveries {
         // `nc.target_id` = 攻击方（不是受击者）：656 由攻击方 `RefNameColor` 发出，
         // 收件人按**攻击方**的可见玩家集合算（含攻击方自己）。
-        push_name_color_self(buf, world, online, nc.target_id, nc.color);
+        push_name_color_self(&mut late, world, online, nc.target_id, nc.color);
     }
+    late.flush(online, gates);
 }
 
 /// **P2（`openmir2-spell-shared-tail-p2`）**：14/15/31 的 `DoSpell` 共享尾
@@ -14433,8 +14459,11 @@ fn handle_spell_cmd_with_magic(
                     None,
                 );
                 // `RM_MAGSTRUCK` 交付段（世界抽数 + 帧），全部入同一优先级缓冲。
-                drain_mag_struck_b2(world, online, displays, ground_sessions, &mut buf);
+                let hitter_name_colors =
+                    drain_mag_struck_b2(world, online, displays, ground_sessions, &mut buf);
                 buf.flush(online, gates);
+                // 玩家受击 656：独立后置缓冲（主批 31 之后；卡 `openmir2-magstruck-order`）。
+                flush_hitter_name_colors(world, online, gates, &hitter_name_colors);
             }
         } else {
             glog!(
@@ -19841,8 +19870,9 @@ fn drain_b4_self_deliveries(
     buf.flush(online, gates);
     // `RM_DELAYMAGIC` 投递后目标侧的 `RM_MAGSTRUCK`（含 `R(1000)`/MSD/玩家 STD）。
     let mut struck = SpellFrameBuf::new();
-    drain_mag_struck_b2(world, online, displays, sessions, &mut struck);
+    let hitter_name_colors = drain_mag_struck_b2(world, online, displays, sessions, &mut struck);
     struck.flush(online, gates);
+    flush_hitter_name_colors(world, online, gates, &hitter_name_colors);
 }
 
 /// 在线用户的世界侧网关坐标（`PlayObject.GateIdx`/`SocketId` 的对应物）。
@@ -24992,8 +25022,9 @@ fn drain_b5_self_deliveries(
     gates: &std::collections::HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
 ) {
     let mut struck = SpellFrameBuf::new();
-    drain_mag_struck_b2(world, online, displays, sessions, &mut struck);
+    let hitter_name_colors = drain_mag_struck_b2(world, online, displays, sessions, &mut struck);
     struck.flush(online, gates);
+    flush_hitter_name_colors(world, online, gates, &hitter_name_colors);
 }
 
 /// `PlayObject.Run` 的状态到期帧（`PlayObject.Message.cs:54-64`）。
@@ -32704,8 +32735,10 @@ mod tests {
                 order: 1,
             });
         let mut buf = SpellFrameBuf::new();
-        drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
+        let hitter_name_colors =
+            drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
         buf.flush(&online, &gates);
+        flush_hitter_name_colors(&world, &online, &gates, &hitter_name_colors);
 
         let hp_after = world.entities.get(mon_id).unwrap().hp;
         let mp_after = world.entities.get(mon_id).unwrap().mp;
@@ -32743,8 +32776,10 @@ mod tests {
                 order: 2,
             });
         let mut buf = SpellFrameBuf::new();
-        drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
+        let hitter_name_colors =
+            drain_mag_struck_b2(&mut world, &online, &displays, &mut sessions, &mut buf);
         buf.flush(&online, &gates);
+        flush_hitter_name_colors(&world, &online, &gates, &hitter_name_colors);
         let mut extra = 0usize;
         while let Ok(SimToGate::SendFrame { .. }) = rx0.try_recv() {
             extra += 1;
@@ -70480,19 +70515,41 @@ SendRefMsgRange=15
                     4,
                     "M1/M2/M3 + 攻击方（受击玩家触发 SetPkFlag）各一条 656；实得 {seq:?}"
                 );
-                let nc: Vec<i32> = b2_seq(&frames, socket)
+                // 按来源分桶（卡 `openmir2-magstruck-order`）：怪物链 3 条仍在主批、
+                // 按优先级排在 31 前；玩家受击 1 条（Recog = caster）走独立后置缓冲，
+                // 排在全部 31 之后。
+                let nc: Vec<(usize, i32)> = b2_seq(&frames, socket)
                     .into_iter()
-                    .filter(|(id, _)| *id == SM_656)
-                    .map(|(_, r)| r)
+                    .enumerate()
+                    .filter(|(_, (id, _))| *id == SM_656)
+                    .map(|(i, (_, r))| (i, r))
                     .collect();
+                let monster656: Vec<usize> = nc
+                    .iter()
+                    .filter(|(_, r)| *r != rig.caster)
+                    .map(|(i, _)| *i)
+                    .collect();
+                let hitter656: Vec<usize> = nc
+                    .iter()
+                    .filter(|(_, r)| *r == rig.caster)
+                    .map(|(i, _)| *i)
+                    .collect();
+                assert_eq!(monster656.len(), 3, "怪物链 656 恰 3 条；实得 {nc:?}");
                 assert_eq!(
-                    nc.iter().filter(|r| **r == rig.caster).count(),
+                    hitter656.len(),
                     1,
-                    "多出的 656 由**攻击方**发出（Recog = caster）；实得 {nc:?}"
+                    "玩家受击 656 恰 1 条（Recog = caster）；实得 {nc:?}"
                 );
                 assert_eq!(i31.len(), 4, "31 给 4 个受击者；实得 {seq:?}");
                 assert!(i656.iter().all(|i| *i > i638) && i31.iter().all(|i| *i > i638));
-                assert!(i656.iter().max().unwrap() < i31.iter().min().unwrap());
+                assert!(
+                    monster656.iter().max().unwrap() < i31.iter().min().unwrap(),
+                    "怪物链 656 必须在 31 之前（b2 序不变）；实得 {seq:?}"
+                );
+                assert!(
+                    *hitter656.first().unwrap() > *i31.iter().max().unwrap(),
+                    "玩家受击 656 必须在全部 31 之后；实得 {seq:?}"
+                );
             }
             let p1_seq = sf_seq(&frames, 921);
             let i53 = p1_seq.iter().position(|x| *x == SM_53).unwrap();
@@ -72191,7 +72248,7 @@ SendRefMsgRange=15
             rig.world
                 .cast_big_explosion_spell(rig.caster, &m, 3, Some(rig.observer), 11, 10, 1, 0);
         let mut buf = SpellFrameBuf::new();
-        drain_mag_struck_b2(
+        let hitter_name_colors = drain_mag_struck_b2(
             &mut rig.world,
             &rig.online,
             &rig.displays,
@@ -72199,6 +72256,7 @@ SendRefMsgRange=15
             &mut buf,
         );
         buf.flush(&rig.online, &rig.gates);
+        flush_hitter_name_colors(&rig.world, &rig.online, &rig.gates, &hitter_name_colors);
         let frames = rig.drain();
         (frames, rig.world, rig.caster, rig.observer, obs2)
     }
@@ -72208,6 +72266,7 @@ SendRefMsgRange=15
     #[test]
     fn magstruck_player_656_symmetric_to_three_visible_players() {
         const SM_656: u16 = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        const SM_31: u16 = mir2_protocol::messages::SM_STRUCK;
         let (frames, world, caster, _target, obs2) =
             run_magstruck_player_scene(false, false, false);
         for (socket, who) in [
@@ -72218,6 +72277,17 @@ SendRefMsgRange=15
             assert_eq!(b3_count(&frames, socket, SM_656), 1, "{who} 恰一条 656");
         }
         assert_eq!(b3_count(&frames, 914, SM_656), 0, "范围外 obs_out 零条");
+        // 顺序（卡 `openmir2-magstruck-order`）：同批 31 先、玩家受击 656 在后
+        // （oracle golden `[638, 31, 656]` 的 31→656 段落；656 走独立后置缓冲）。
+        for socket in [911, 912, 913] {
+            let seq = sf_seq(&frames, socket);
+            let i31 = seq.iter().position(|x| *x == SM_31).unwrap();
+            let i656 = seq.iter().position(|x| *x == SM_656).unwrap();
+            assert!(
+                i31 < i656,
+                "socket {socket}: 31 必须早于玩家受击 656；实得 {seq:?}"
+            );
+        }
         // 逐字段：ident/recog/param/tag/series/tail。
         let body = frames
             .iter()
@@ -75006,7 +75076,7 @@ SendRefMsgRange=15
             self.world.clock_ms += advance_ms;
             self.world.run_map_events();
             let mut buf = SpellFrameBuf::new();
-            drain_mag_struck_b2(
+            let hitter_name_colors = drain_mag_struck_b2(
                 &mut self.world,
                 &self.online,
                 &self.displays,
@@ -75014,6 +75084,7 @@ SendRefMsgRange=15
                 &mut buf,
             );
             buf.flush(&self.online, &self.gates);
+            flush_hitter_name_colors(&self.world, &self.online, &self.gates, &hitter_name_colors);
             self.drain()
         }
 
