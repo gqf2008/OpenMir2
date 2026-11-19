@@ -572,6 +572,38 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             "[{label}] `len(Rng)`={rng_len} ≠ `Fixture.rng_total_draws`={total}：cover_drain 下抽数必须相等（§8.3c）"
         ));
     }
+    // ---- `target_hp` 是**施法前**输入（卡 §8.3d）----
+    // 有伤害时：`SM_STRUCK(31)` 的 `param` 是扣血后的 HP、`series` 是本次伤害
+    // ⇒ `param + series` 必须回到施法前值（= `Fixture.target_hp`）。
+    let target_hp = fixture
+        .get("target_hp")
+        .and_then(Value::as_i64)
+        .unwrap_or(i64::MIN);
+    for r in case
+        .get("Receivers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for f in r
+            .get("Sent")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if f.get("ident").and_then(Value::as_i64) != Some(31) {
+                continue;
+            }
+            let hp_after = f.get("param").and_then(Value::as_i64).unwrap_or(i64::MIN);
+            let dmg = f.get("series").and_then(Value::as_i64).unwrap_or(0);
+            let pre = hp_after.saturating_add(dmg);
+            if pre != target_hp {
+                return Err(format!(
+                    "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d；施法后值当输入会伪装成真分歧）"
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -708,6 +740,32 @@ fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
         c["DeliverRng"] = d;
     }
     serde_json::json!({ "magic_id": 33, "cases": [c] })
+}
+
+/// **牙⑦：`target_hp` 必须是施法前输入**（卡 §8.3d）。合成一个 31 帧（HP=85, damage=15）：
+/// `target_hp=100`（施法前）绿；`target_hp=209`（施法后值当输入）红并点名。
+#[test]
+fn tooth_target_hp_must_be_pre_cast() {
+    let label = "s1";
+    let mk = |target_hp: i64| {
+        let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+        g["cases"][0]["Fixture"]["target_hp"] = Value::from(target_hp);
+        g["cases"][0]["Receivers"] = serde_json::json!([{
+            "Who": "target",
+            "Rm": [],
+            "Sent": [{ "ident": 31, "param": 85, "tag": 224, "series": 15, "tail": "" }],
+        }]);
+        g
+    };
+    assert!(
+        check_golden_contract(&mk(100), label).is_ok(),
+        "target_hp=100（施法前）应绿"
+    );
+    let err = check_golden_contract(&mk(209), label).unwrap_err();
+    assert!(
+        err.contains("target_hp") && err.contains("施法前"),
+        "target_hp=209（施法后值）必须红并点名：{err}"
+    );
 }
 
 /// **牙⑥：含 `WAbil` 的 52 尾里 `Exp/MaxExp` 字节在比较面内**（卡 §8.7）。

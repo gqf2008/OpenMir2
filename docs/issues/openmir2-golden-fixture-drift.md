@@ -155,6 +155,24 @@ legacy_artifact : true + legacy_reason                       # 仅 freeze_at_dos
   mtime = `2026-10-09 01:32:29 +0800`、`Level20=6000`（供 `a2` 核对；表中以 `Exps.conf` 实值为准）。
 - 比较器：缺文件 / `sha256` 非 64 hex / 缺 `source` / 缺 `need_exps` ⇒ **红**（fail-closed）。
 
+### 8.3d `target_hp` 的语义 = **施法前**输入（2026-11-20 实读三条既有 golden）
+
+| 件 | `Fixture.target_hp` | `TargetHpBefore` | `TargetHp`（战后） | 31 帧 `param(HP_after)` / `series(damage)` | 结论 |
+|---|---|---|---|---|---|
+| `fireball`（旧 runner，无 `Fixture`） | — | 100 | 85（edge/hit） | 85 / 15 | 施法前=100，`param+damage` 复算一致 |
+| `hangmajinbub` | 100 | 100 | 100 | 无 31（14 无伤害） | `target_hp` = 战前 |
+| `lightning-11` | 100 | 100 | 85 | 85 / 15 | `target_hp` = 战前（复算一致） |
+
+⇒ 既有件的 `target_hp` 一律是**施法前**值。**比较器新增检查**（`check_golden_contract`）：
+对每个 `SM_STRUCK(31)` 帧校验 `param(HP_after) + series(damage) == Fixture.target_hp`，不等即红并点名
+"target_hp 必须是施法前输入"；无 31 帧（无伤害支）则只保留 `target_hp ≤ max_hp` 的结构检查。
+
+**已知反例（装置侧，交 a2）**：M52.1 样本 `fireball-login.json` 的 `target_hp=209`（= 224−15，**施法后**
+值）若当输入使用，会从 209 起手并使所有 HP 字段错位、极易伪装成真分歧 ⇒ 新件必须写 **224**。
+
+**另记**：`hangmajinbub`（及同类）`Fixture.target_max_hp=100` 与 52 尾里的 224 不一致 = 已知 stale
+元数据（§6 处置第 3 条），新件按登录派生值写。
+
 ### 8.4 实现落点（本设计分支 `card/magic-rng-union`）
 
 - `mir2-rs/tests/parity/tests/magic_fireball_parity.rs`：
