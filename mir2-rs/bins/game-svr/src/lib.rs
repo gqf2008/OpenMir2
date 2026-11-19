@@ -18296,7 +18296,7 @@ const BODYLUCK_UNIT: f64 = 5000.0;
 /// ⇒ 这里用 `f64::round_ties_even()`（**不是** Rust `round()` 的 half-away-from-zero）。
 /// `BodyLuck` 落 `characters.BodyLuck double(10,3)`（`sql/mir2_db.sql:46`）且被 `scoped_diff`
 /// 逐字节比对 ⇒ 累积必须与 oracle 同序（`GetExp` 的 `dwExp*0.002` 先于升级块 `+100`）。
-fn add_body_luck(body_luck: &mut f64, body_luck_level: &mut i32, d_luck: f64) {
+pub(crate) fn add_body_luck(body_luck: &mut f64, body_luck_level: &mut i32, d_luck: f64) {
     if d_luck > 0.0 && *body_luck < 5.0 * BODYLUCK_UNIT {
         *body_luck += d_luck;
     }

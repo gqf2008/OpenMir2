@@ -122,6 +122,8 @@ pub const RM_WEIGHTCHANGED: i32 = 10115;
 pub const RM_CHARSTATUSCHANGED: i32 = 10139;
 /// `RM_MYSTATUS`（`src/OpenMir2/Messages.cs:700`）——`RefMyStatus()` 在 `RecalcAbilitys()` 之后发（`PlayObject.Base.cs:288-292`）。
 pub const RM_MYSTATUS: i32 = 8102;
+/// `RM_WINEXP`（`src/OpenMir2/Messages.cs` 8075）——`GetExp` 的 `SendMsg(RM_WINEXP, 0, dwExp, 0, 0)`。
+pub const RM_WINEXP: i32 = mir2_protocol::messages::RM_WINEXP as i32;
 /// `PlayObject.HungerStatus` 的上限（`HUtil32._MIN(5000, HungerStatus)`，`PlayObject.Base.cs:2088`）。
 pub const HUNGER_STATUS_MAX: i32 = 5000;
 
@@ -450,8 +452,29 @@ pub fn use_item(
                                 }
                                 eaten = true;
                             }
-                            // StdMode 3/4（ExtraAbil/GetExp、书）未实现 ⇒ 与 oracle 在未禁药形态下的
-                            // 成功/条件成功路径**不同**，已证差异，登记在 T-17。
+                            // StdMode 3：oracle `EatItems` 的 case 3（`PlayObject.Base.cs:2099`，受 `boNODRUG` 门，已在上方）。
+                            // **IT-08**：`Shape 13 → GetExp(DuraMax)`，本片实现**非升级支**（Exp+= / AddBodyLuck(dwExp*0.002) /
+                            // RM_WINEXP）；**升级支**（`Exp>=MaxExp → GetLevelExp/RecalcLevelAbilitys/SM_LEVELUP/…`）**未实现**，登记 T-17。
+                            // IT-07（Shape12 ExtraAbil×6）与 default → EatUseItems（IT-09..16 move 组）亦未实现。
+                            3 if tpl.shape == 13 => {
+                                // `GetExp`（`PlayObject.Base.cs:149-166`）非升级支。
+                                state.wabil.exp =
+                                    state.wabil.exp.wrapping_add(i32::from(tpl.dura_max));
+                                crate::add_body_luck(
+                                    &mut state.extra.body_luck,
+                                    &mut state.extra.body_luck_level,
+                                    f64::from(tpl.dura_max) * 0.002,
+                                );
+                                notices.push(QueuedNotice {
+                                    ident: RM_WINEXP,
+                                    w_param: 0,
+                                    n_param1: i32::from(tpl.dura_max),
+                                    n_param2: 0,
+                                    n_param3: 0,
+                                });
+                                eaten = true;
+                            }
+                            // StdMode 4（书）与 StdMode 3 其余 Shape 未实现 ⇒ 已证差异，登记 T-17。
                             _ => {}
                         }
                         if eaten {
@@ -869,6 +892,69 @@ mod tests {
             UseItemActorState::default().extra,
             ItemsExtraState::default()
         );
+    }
+
+    /// **IT-08 非升级支**（StdMode3/Shape13 `GetExp(DuraMax)`）：吃掉、`WAbil.Exp += DuraMax`、
+    /// `AddBodyLuck(DuraMax*0.002)`、`RM_WINEXP(nParam1=DuraMax)`、`RM_WEIGHTCHANGED`、背包 -1。
+    /// **升级支未覆盖**（`Exp>=MaxExp → HasLevelUp 链`，登记 T-17）⇒ 本用例取 `Exp+DuraMax < MaxExp`。
+    #[test]
+    fn it08_stdmode3_shape13_getexp_nonlevelup() {
+        let mut catalog = StdItemCatalog::new();
+        catalog.insert(
+            70,
+            StdItem {
+                name: "经验卷".into(),
+                std_mode: 3,
+                shape: 13,
+                weight: 1,
+                dura_max: 100,
+                ..Default::default()
+            },
+        );
+        let unbind = no_unbind();
+        let ctx = UseItemContext {
+            catalog: &catalog,
+            can_use_item: true,
+            dead: false,
+            actor_id: 9,
+            make_index: 1,
+            no_drug: false,
+            function_npc_present: false,
+            unbind: &unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            recalc: None,
+        };
+        let mut state = UseItemActorState::default();
+        state.wabil.exp = 0;
+        state.wabil.max_exp = 10000;
+        state.wabil.level = 5;
+        let mut item_list = vec![BagItem {
+            make_index: 1,
+            index: 70,
+            dura: 0,
+            dura_max: 100,
+            desc: [0; 14],
+        }];
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        assert!(out.eaten, "经验卷吃掉");
+        assert_eq!(state.wabil.exp, 100, "GetExp: Exp += DuraMax");
+        assert_eq!(state.wabil.level, 5, "非升级支：等级不变");
+        assert!(
+            (state.extra.body_luck - 0.2).abs() < 1e-9,
+            "AddBodyLuck(DuraMax*0.002)"
+        );
+        assert_eq!(state.extra.body_luck_level, 0);
+        let win = out
+            .notices
+            .iter()
+            .find(|n| n.ident == RM_WINEXP)
+            .expect("RM_WINEXP");
+        assert_eq!(win.n_param1, 100, "RM_WINEXP.nParam1 = dwExp = DuraMax");
+        assert!(out.notices.iter().any(|n| n.ident == RM_WEIGHTCHANGED));
+        assert!(item_list.is_empty(), "经验卷被吃掉");
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
     }
 
     /// Z4 gate：golden 非零 ⇒ Rust 必须非零；golden 全零 ⇒ 不适用（合法全零失败例豁免）。
