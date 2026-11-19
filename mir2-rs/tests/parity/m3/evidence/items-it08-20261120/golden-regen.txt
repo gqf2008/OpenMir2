@@ -1,0 +1,14 @@
+# eat_vectors.json 重生成记录（为 golden 覆盖 SM_WEIGHTCHANGED(622) 与全序）
+# 背景：旧夹具 pumped 只含 3 条自足 RM(10052/8075/8086) 泵出的 53/44/45/52/752；
+#       RM_WEIGHTCHANGED(10115,prio131)→SM_WEIGHTCHANGED(622) 在 golden notices 里存在，但探针未泵 ⇒ pumped 缺 622。
+# 改动：eat-probe/Program.cs 的 pumpSet 由 {8075,8086,10052} 增 10115（RM_WEIGHTCHANGED）。
+#       其 handler(PlayObject.Message.cs case RM_WEIGHTCHANGED) 只读 WAbil + SendDefMessage，自足，无需 Envir。
+# 命令（仓库/worktree 根）：
+#   dotnet build mir2-rs/tests/parity/m3/eat-probe -c Release
+#   dotnet mir2-rs/tests/parity/m3/eat-probe/bin/Release/net8.0/eat-probe.dll \
+#       mir2-rs/tests/parity/m3/fixtures/eat_vectors.json
+# 结果：TEMPLATES 16 CASES 25（不变），RC=0。
+#   eat_ok_stdmode3_shape13_exp_levelup.pumped 由 [53,44,45,52,752] → [53,622,44,45,52,752]。
+#   其余 24 例 OLD-KEY 语义不变；仅 eat_ok_stdmode31_unbind_success 的 make_index（墙钟 TickCount）漂移，
+#   已还原为提交值以保持旧例 byte-identical（make_index 非确定，历史口径：只核递增不核绝对值）。
+#   oracle_source_sha256 未变（真锚点）；oracle_assembly_sha256 因重建变化 —— 该字段 note 明文"仅溯源、不校验"。

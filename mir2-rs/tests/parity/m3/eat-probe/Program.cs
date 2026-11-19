@@ -216,29 +216,49 @@ internal static class Program
         MaxHandWeight = a.MaxHandWeight,
     };
 
-    private static Ability BaseAbil(ushort hp, ushort mp, ushort maxHp, ushort maxMp) => new Ability
+    /// <summary>items 侧 derived 机检核心：用**真身** `RecalcLevelAbilitys()`+`RecalcAbilitys()`（Job=Warrior、无装备）
+    /// 按 `level` 复算等级派生的 `WAbil.MaxHP/MaxMP`（= oracle 登录路径 `UserLogon` 的两连调结果）。
+    /// 对等 `MagicGolden/FixtureContract.cs` 的 `derived` 门（rc=2 之一）；缺装备时 `Abil` 与 `WAbil` 等价。</summary>
+    private static (ushort maxHp, ushort maxMp) DeriveWarriorMaxHpMp(int level)
     {
-        Level = 1,
-        Reserved1 = 0,
-        AC = 0,
-        MAC = 0,
-        DC = 0x0101,
-        MC = 0,
-        SC = 0,
-        HP = hp,
-        MP = mp,
-        MaxHP = maxHp,
-        MaxMP = maxMp,
-        Reserved2 = 0,
-        ExpCount = 0,
-        ExpMaxCount = 0,
-        Exp = 0,
-        MaxExp = 10,
-        Weight = 0,
-        MaxWeight = 50,
-        MaxWearWeight = 15,
-        MaxHandWeight = 12,
-    };
+        var po = new PlayObject
+        {
+            Race = (byte)ActorRace.Play,
+            Job = PlayerJob.Warrior,
+            Envir = new Envirnoment(),
+            ItemList = new List<UserItem>(),
+            MagicList = new List<UserMagic>(),
+            Abil = new Ability { Level = (byte)level },
+        };
+        po.WAbil = CloneAbility(po.Abil);
+        po.RecalcLevelAbilitys();
+        po.RecalcAbilitys();
+        return (po.WAbil.MaxHP, po.WAbil.MaxMP);
+    }
+
+    /// <summary>构造**可达** Ability：`MaxHP/MaxMP`（及 AC/DC/MaxWeight 等等级派生字段）由真身
+    /// `RecalcLevelAbilitys()+RecalcAbilitys()` 按 `level` 派生（**不硬编码**）；HP/MP 用入参（须 ≤ 派生 Max）。
+    /// 取代旧 `BaseAbil(hp,mp,maxHp,maxMp)`（旧值 `level=1` 却写 `max_hp=100/80`，生产不可达）。</summary>
+    private static Ability ReachAbil(int level, ushort hp, ushort mp)
+    {
+        var po = new PlayObject
+        {
+            Race = (byte)ActorRace.Play,
+            Job = PlayerJob.Warrior,
+            Envir = new Envirnoment(),
+            ItemList = new List<UserItem>(),
+            MagicList = new List<UserMagic>(),
+            Abil = new Ability { Level = (byte)level },
+        };
+        po.WAbil = CloneAbility(po.Abil);
+        po.RecalcLevelAbilitys();
+        po.RecalcAbilitys();
+        var a = CloneAbility(po.WAbil);
+        a.HP = hp;
+        a.MP = mp;
+        a.MaxExp = 10; // 与原 BaseAbil 默认一致；exp 用例随后改 10000
+        return a;
+    }
 
     /// <summary>反射取 `ActorEntity.MsgQueue`（`protected readonly PriorityQueue&lt;SendMessage,byte&gt;`）。</summary>
     private static object GetMsgQueue(object po)
@@ -280,9 +300,10 @@ internal static class Program
     /// <summary>按**优先级升序出队**读出延时通知，抽空为止（上界 `MaxDrainPasses`）。
     /// `priority` 取自 `PriorityQueue.TryDequeue(out, out prio)`；`late` 取自 `SendMessage.LateDelivery`。
     /// **上界命中必报**（`hitCap=true` ⇒ 比较器红）。</summary>
-    private static (List<object> messages, int passes, bool hitCap) Drain(object pq)
+    private static (List<object> messages, List<object> raw, int passes, bool hitCap) Drain(object pq)
     {
         var list = new List<object>();
+        var raw = new List<object>();
         var t = pq.GetType();
         var countProp = t.GetProperty("Count") ?? throw new MissingMemberException("PriorityQueue.Count");
         var tryDequeue = t.GetMethod("TryDequeue") ?? throw new MissingMethodException("PriorityQueue.TryDequeue");
@@ -300,6 +321,7 @@ internal static class Program
                         break;
                     }
                     var m = args[0];
+                    raw.Add(m);
                     int prio = Convert.ToInt32(args[1]);
                     var mt = m.GetType();
                     list.Add(new
@@ -315,12 +337,12 @@ internal static class Program
                 }
                 return (int)countProp.GetValue(pq) > 0;
             });
-        return (list, passes, hitCap);
+        return (list, raw, passes, hitCap);
     }
 
     private static object RunCase(GameItemSystem table, CaptureNetChannel net, string name,
         Ctx ctx, List<Spec> itemList, int requestMakeIndex, string requestName,
-        Ability wabilPre, int incHealthPre, int incSpellPre, bool userUnlockPre)
+        Ability wabilPre, int incHealthPre, int incSpellPre, bool userUnlockPre, bool pump = false)
     {
         net.Frames.Clear();
 
@@ -351,6 +373,23 @@ internal static class Program
         po.Envir.Flag.boNODRUG = ctx.noDrug;
         SystemShare.FunctionNPC = ctx.functionNpc ? NpcProxy.CreateMerchant() : null;
 
+        // items 侧 derived 机检（对等 MagicGolden/FixtureContract.derived，rc=2）：按本 case 的 level 用**真身**
+        // `RecalcLevelAbilitys()+RecalcAbilitys()` 复算 `WAbil.MaxHP/MaxMP`，须 == 向量声明；不等 ⇒ stderr +
+        // `Environment.Exit(2)`，**不落盘**（此处在写盘之前、所有 case 构建阶段）。整段用完恢复 po.Abil/WAbil。
+        // 注意：**在独立 throwaway po 上**复算（`DeriveWarriorMaxHpMp`），绝不在 eat po 上调 Recalc——
+        // `RecalcLevelAbilitys` 会 `SendMsg(RM_ABILITY)`、`RecalcAbilitys` 会改 `CharStatus`，在 eat po 上跑会
+        // 污染其消息队列/状态（曾导致每例多出 SM 前置 RM_CHARSTATUSCHANGED(10139)）。
+        {
+            var (dHp, dMp) = DeriveWarriorMaxHpMp(wabilPre.Level);
+            if (dHp != wabilPre.MaxHP || dMp != wabilPre.MaxMP)
+            {
+                Console.Error.WriteLine(
+                    $"DERIVED_MISMATCH case={name} level={wabilPre.Level} "
+                    + $"declared=({wabilPre.MaxHP},{wabilPre.MaxMP}) derived=({dHp},{dMp})");
+                Environment.Exit(2);
+            }
+        }
+
         var mi = typeof(PlayObject).GetMethod("ClientUseItems", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("PlayObject.ClientUseItems");
         var beforeList = po.ItemList.Select(ItemDto).ToArray();
@@ -358,11 +397,70 @@ internal static class Program
         // `Ability` 是引用类型：`po.WAbil` 与 `wabilPre` 是同一对象，handler 会原地改。
         // 输入快照必须在 invoke **之前**取。
         var wabilBeforeDto = AbilityDto(wabilPre);
+        // IT-08：**基础 `PlayObject.Abil.Exp`**（`GetExp` 只改它，不改 `WAbil.Exp`）与 `BodyLuck`/`BodyLuckLevel` 前值。
+        var abilExpBefore = po.Abil.Exp;
+        var bodyLuckBefore = po.BodyLuck;
+        var bodyLuckLevelBefore = po.BodyLuckLevel;
         mi.Invoke(po, new object[] { requestMakeIndex, requestName });
         SystemShare.FunctionNPC = null;
 
-        var (messages, drainPasses, drainHitCap) = Drain(GetMsgQueue(po));
+        var (messages, rawMessages, drainPasses, drainHitCap) = Drain(GetMsgQueue(po));
         var immediate = net.Frames.ToList();
+        // IT-08 升级支（b 缩小版）：仅对 `RM_WINEXP`/`RM_LEVELUP`/`RM_HEALTHSPELLCHANGED` 三条自足 RM 逐条走 oracle `Operate`
+        // ⇒ 玩家可见的 SM 帧（SM_LEVELUP/SM_ABILITY/SM_SUBABILITY/SM_HEALTHSPELLCHANGED）落 golden。这三条 handler 只读
+        // PlayObject 字段 + SendSocket，不需 Envir/Map/定时；若实测某条抛错（需 Envir）则本探针直接失败（不造假 Envir）。
+        var pumpedFrames = new List<object>();
+        if (pump)
+        {
+            var pumpSet = new HashSet<int> { 8075, 8086, 10052, 10115 };
+            // `RM_HEALTHSPELLCHANGED` 的 handler 用 `baseObject.WAbil`（`Operate` 里 `baseObject=ActorMgr.Get(ActorId)`）
+            // ⇒ 把本 po 登进生产 `SystemShare.ActorMgr`（不是假 Envir），其 ActorId 须唯一（升级 case 用 7777）。
+            SystemShare.ActorMgr.Add(po);
+            var expected = rawMessages
+                .Select(m => (int)m.GetType().GetField("wIdent").GetValue(m))
+                .Where(id => pumpSet.Contains(id))
+                .ToList();
+            var pumpIdents = new List<int>();
+            var operate = typeof(PlayObject).GetMethod("Operate",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?? throw new MissingMethodException("PlayObject.Operate");
+            foreach (var m in rawMessages)
+            {
+                var mt = m.GetType();
+                int wid = (int)mt.GetField("wIdent").GetValue(m);
+                if (!pumpSet.Contains(wid))
+                {
+                    continue;
+                }
+                pumpIdents.Add(wid);
+                var pm = new ProcessMessage
+                {
+                    wIdent = wid,
+                    wParam = (int)mt.GetField("wParam").GetValue(m),
+                    nParam1 = (int)mt.GetField("nParam1").GetValue(m),
+                    nParam2 = (int)mt.GetField("nParam2").GetValue(m),
+                    nParam3 = (int)mt.GetField("nParam3").GetValue(m),
+                    ActorId = (int)mt.GetField("ActorId").GetValue(m),
+                    LateDelivery = (bool)mt.GetField("LateDelivery").GetValue(m),
+                    Msg = (string)mt.GetField("Buff").GetValue(m),
+                };
+                operate.Invoke(po, new object[] { pm });
+            }
+            // 约束②：pump 的 ident 序列 == 队列里这三条 RM 的 ident 序列（防漏喂/多喂）。
+            if (!pumpIdents.SequenceEqual(expected))
+            {
+                throw new InvalidOperationException(
+                    $"pump idents {string.Join(",", pumpIdents)} != queue的这三条 {string.Join(",", expected)}");
+            }
+            pumpedFrames = net.Frames.Skip(immediate.Count)
+                .Select(f => (object)new { ident = f.ident, recog = f.recog, param = f.param, tag = f.tag, series = f.series })
+                .ToList();
+        }
+        else if (rawMessages.Any(m => ((int)m.GetType().GetField("wIdent").GetValue(m)) is 8086))
+        {
+            // 约束④：旧例（不 pump）若队列里出现 RM_LEVELUP 却没 pump，说明该例被误标——直接失败（不静默漏 SM）。
+            throw new InvalidOperationException("非 pump 用例出现 RM_LEVELUP 但未开 pump（升级帧会漏）");
+        }
 
         return new
         {
@@ -383,6 +481,7 @@ internal static class Program
             inc_spell_before = incSpellPre,
             user_unlock_durg_before = userUnlockPre,
             hunger_status_before = ctx.hungerStatus,
+            abil_exp_before = abilExpBefore,
             item_list_before = beforeList,
             expect = new
             {
@@ -396,6 +495,16 @@ internal static class Program
                     .Where(it => !beforeMakeIndexes.Contains(it.MakeIndex))
                     .Select(ItemDto).ToArray(),
                 wabil = AbilityDto(po.WAbil),
+                // IT-08：基础 `Abil.Exp`（`GetExp` 落点）与 `BodyLuck`/`BodyLuckLevel` 后值（**追加字段**，旧键不变）。
+                abil_exp = po.Abil.Exp,
+                body_luck_before = bodyLuckBefore,
+                body_luck = po.BodyLuck,
+                body_luck_level_before = bodyLuckLevelBefore,
+                body_luck_level = po.BodyLuckLevel,
+                // IT-08 升级支：本 case 是否走宿主升级下行（pump）；pumped = 经 oracle `Operate` 出的玩家可见 SM 帧。
+                // 非 pump 用例 host_levelup=false、pumped=[]（纯追加）。
+                host_levelup = pump,
+                pumped = pumpedFrames,
                 inc_health = (int)po.IncHealth,
                 inc_spell = (int)po.IncSpell,
                 user_unlock_durg = po.UserUnLockDurg,
@@ -423,10 +532,51 @@ internal static class Program
     private static Spec S(int makeIndex, ushort index, ushort dura = 10, ushort duraMax = 20)
         => new Spec { MakeIndex = makeIndex, Index = index, Dura = dura, DuraMax = duraMax };
 
+    /// <summary>把冻结部署的 `Exps.conf`/`Server.conf` 拷进 `AppContext.BaseDirectory`（`SystemShare` 静态构造读它）；
+    /// 已在则跳过。IT-08 升级支前置：让 `GetLevelExp`/`RecalcLevelAbilitys` 用**生产**配置而非缺省。</summary>
+    private static bool EnsureConfFiles(out string info)
+    {
+        string confDir = Environment.GetEnvironmentVariable("EATPROBE_CONF_DIR") ?? @"E:\MirServer\M2GameSvr";
+        string baseDir = AppContext.BaseDirectory;
+        var missing = new System.Collections.Generic.List<string>();
+        foreach (var n in new[] { "Server.conf", "Exps.conf" })
+        {
+            var src = Path.Combine(confDir, n);
+            var dst = Path.Combine(baseDir, n);
+            if (!File.Exists(src)) { missing.Add(src); continue; }
+            File.Copy(src, dst, overwrite: true); // 总是覆盖：防 bin 目录里残留的空 conf 让"未载入"假绿。
+        }
+        var exps = Path.Combine(baseDir, "Exps.conf");
+        var srv = Path.Combine(baseDir, "Server.conf");
+        info = $"confDir={confDir} exps_sha={Sha256Hex(exps)} srv_sha={Sha256Hex(srv)} missing={string.Join(",", missing)}";
+        return missing.Count == 0;
+    }
+
+    private static string Sha256Hex(string path)
+    {
+        if (!File.Exists(path)) return "<missing>";
+        using var sha = SHA256.Create();
+        return Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(path))).ToLowerInvariant();
+    }
+
     public static int Main(string[] args)
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        // IT-08 升级支前置（opc-07 批准）：把生产 `Exps.conf`/`Server.conf` 拷进 `AppContext.BaseDirectory`，
+        // 使 `SystemShare.Config`（静态构造读该目录）拿到**生产** `NeedExps`/`nLevelValueOf*`；否则 golden 用缺省值=假。
+        if (!EnsureConfFiles(out string confInfo))
+        {
+            Console.Error.WriteLine("EATPROBE_CONF_MISSING " + confInfo);
+            return 2;
+        }
+        Console.Error.WriteLine("EATPROBE_CONF " + confInfo);
         LogService.Logger = new LoggerConfiguration().CreateLogger();
+        // 复刻生产 `GameSrv/GameShare.LoadConfig()`：把复制的 conf 真正灌进 `SystemShare.Config`（否则 Config 停在
+        // `new GameSvrConf()` 缺省、`NeedExps` 全 0）。只做配置装载，不连库/不建表/不起服务。
+        SystemShare.ServerConf.LoadConfig();
+        SystemShare.ExpConf.LoadConfig();
+        SystemShare.GlobalConf.LoadConfig();
+        SystemShare.GameSetting.LoadConfig();
 
         // D3 自测：排空趟循环的「自然命中」——假队列每趟都重满，跑到 MaxDrainPasses ⇒ hitCap 必真；
         // 一趟即空 ⇒ hitCap 假、passes=1；起于空队列 ⇒ passes=0。不进夹具、不依赖探针记录。
@@ -468,6 +618,7 @@ internal static class Program
         templates[2015] = Tpl("funitem_dispatch", 31, 1, 3, aniCount: 5);  // StdMode 31：AniCount!=0 ⇒ UseStdModeFunItem
         templates[2016] = Tpl("unbind_full", 31, 1, 3, aniCount: 0);        // StdMode 31：AniCount==0 ⇒ 解包（容量不足时不吃）
         templates[2017] = Tpl("unbind_item", 0, 0, 4, duraMax: 7);          // IT-18 解包产物（6 件）
+        templates[2018] = Tpl("exp_book", 3, 13, 1, duraMax: 100);          // IT-08 StdMode3/Shape13 经验书（GetExp）
         // 2009 故意不注册 ⇒ 模板缺失分支（稠密表该位置放空名占位 ⇒ `GetStdItem` 返回 null）
 
         // **用真身 `GameItemSystem`**：`GetStdItem`/`GetUpgradeStdItem`/`CopyToUserItemFromName`
@@ -489,74 +640,74 @@ internal static class Program
 
         cases.Add(RunCase(table, net, "eat_ok_shape1_fixed", new Ctx(),
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 2, hp: 2, mp: 2), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape1_clamp", new Ctx(),
             new List<Spec> { S(1, 2002) }, 1, "hp_mp_big",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 2, hp: 2, mp: 2), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape3_percent", new Ctx(),
             new List<Spec> { S(1, 2003) }, 1, "hp_mp_percent",
-            BaseAbil(hp: 50, mp: 40, maxHp: 101, maxMp: 55), 0, 0, false));
+            ReachAbil(level: 4, hp: 10, mp: 10), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape2_unlock", new Ctx(),
             new List<Spec> { S(1, 2004) }, 1, "unlock",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape0_inc_pool", new Ctx(),
             new List<Spec> { S(1, 2005) }, 1, "inc_pool",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 3, 4, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
         cases.Add(RunCase(table, net, "eat_ok_shape0_inc_zero", new Ctx(),
             new List<Spec> { S(1, 2006) }, 1, "inc_zero",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 3, 4, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
         cases.Add(RunCase(table, net, "eat_ok_weight_from_remaining_bag", new Ctx(),
             new List<Spec> { S(7, 2008), S(1, 2001), S(8, 2007) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_first_makeindex_wins", new Ctx(),
             new List<Spec> { S(1, 2001), S(1, 2003) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_not_found", new Ctx(),
             new List<Spec> { S(1, 2001) }, 99, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_stdmode_other", new Ctx(),
             new List<Spec> { S(1, 2007) }, 1, "other_mode",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_template_missing", new Ctx(),
             new List<Spec> { S(1, 2009) }, 1, "missing",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_can_use_item_false", new Ctx { canUseItem = false },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_dead", new Ctx { dead = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_stdmode2_noop", new Ctx(),
             new List<Spec> { S(1, 2011) }, 1, "noop",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_no_recalc", new Ctx(),
             new List<Spec> { S(1, 2012) }, 1, "food_small",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // 跨档 ⇒ `RefMyStatus()` ⇒ `RecalcAbilitys()`。运行时 `Abil` 已是**登录时的等级派生值**
         //（`PlayObject.cs:1308` 先跑 `RecalcLevelAbilitys()`）⇒ 这里用 level=1 战士的 19/15；
         // 且 `HP/MP <= MaxHP/MaxMP`（oracle 登录路径的 Play 分类钳位保证），否则会触发
         // `PlayObject.RecalcAbilitys` 尚未建模的 `WAbil.HP > MaxHP ⇒ HP=MaxHP` 尾钳。
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_recalc", new Ctx(),
             new List<Spec> { S(1, 2013) }, 1, "food_recalc",
-            BaseAbil(hp: 15, mp: 15, maxHp: 19, maxMp: 15), 0, 0, false));
+            ReachAbil(level: 1, hp: 15, mp: 15), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_clamp", new Ctx { hungerStatus = 4950 },
             new List<Spec> { S(1, 2014) }, 1, "food_clamp",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_nodrug_stdmode1", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2013) }, 1, "food_recalc",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_nodrug_no_consume", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // StdMode 31：`UseStdModeFunItem`（`PlayObject.Base.cs:1072`）= `SystemShare.FunctionNPC != null`。
         // 存在 ⇒ `GotoLable("@StdModeFunc" + AniCount)` 后返回 true ⇒ 吃 + SM_EAT_OK + RM_WEIGHTCHANGED。
         cases.Add(RunCase(table, net, "eat_ok_stdmode31_funitem", new Ctx { functionNpc = true },
             new List<Spec> { S(1, 2015) }, 1, "funitem_dispatch",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // FunctionNPC 缺失 ⇒ `UseStdModeFunItem` 返回 false ⇒ 不吃。
         cases.Add(RunCase(table, net, "eat_fail_stdmode31_no_functionnpc", new Ctx { functionNpc = false },
             new List<Spec> { S(1, 2015) }, 1, "funitem_dispatch",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // StdMode 31 / AniCount==0：解包需 `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）。
         // 背包 42 件 ⇒ 42+5=47 > 46 ⇒ 容量守卫失败（未到 `ClientUseItemsGetUnBindItems`）⇒ 不吃。
         var unbindFullBag = new List<Spec> { S(1, 2016) };
@@ -566,13 +717,26 @@ internal static class Program
         }
         cases.Add(RunCase(table, net, "eat_fail_stdmode31_unbind_bag_full", new Ctx(),
             unbindFullBag, 1, "unbind_full",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // IT-18 成功路径：背包仅 1 件解包件（2016，Shape=1/AniCount=0）⇒ 1+6-1=6 <= 46 ⇒
         // Dispose+RemoveAt 后 `ClientUseItemsGetUnBindItems("unbind_item", 6)` 建 6 件 2017，
         // 每件 `SendAddItem` ⇒ 6 条 SM_ADDITEM(200) 即时帧，再 SM_EAT_OK + RM_WEIGHTCHANGED。
         cases.Add(RunCase(table, net, "eat_ok_stdmode31_unbind_success", new Ctx(),
             new List<Spec> { S(1, 2016) }, 1, "unbind_full",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
+        // IT-08：StdMode3/Shape13 `GetExp(DuraMax=100)` **非升级支**（`MaxExp=10000` ⇒ `0+100<10000` 不升级）。
+        // 观测新增 `abil_exp`/`body_luck*`（追加字段）；`WAbil.Exp` 保持陈旧（GetExp 只改 Abil）。
+        var expBookAbil = ReachAbil(level: 1, hp: 10, mp: 8);
+        expBookAbil.MaxExp = 10000;
+        cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_nonlevelup", new Ctx(),
+            new List<Spec> { S(1, 2018) }, 1, "exp_book", expBookAbil, 0, 0, false));
+        // IT-08 **升级支**：Exp=9990/MaxExp=10000/DuraMax=100 ⇒ 9990+100>=10000 升级；pump 三条 RM
+        // （RM_WINEXP/RM_LEVELUP/RM_HEALTHSPELLCHANGED）⇒ golden 带玩家可见 SM 三帧。需生产 Exps.conf（已由 EnsureConfFiles 载入）。
+        var expUpAbil = ReachAbil(level: 5, hp: 10, mp: 10);
+        expUpAbil.MaxExp = 10000;
+        expUpAbil.Exp = 9990;
+        cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_levelup", new Ctx { actorId = 7777 },
+            new List<Spec> { S(1, 2018) }, 1, "exp_book", expUpAbil, 0, 0, false, pump: true));
 
         var templateDtos = new Dictionary<string, object>();
         foreach (var kv in templates)
@@ -606,6 +770,11 @@ internal static class Program
         string asmPath = typeof(M2Share).Assembly.Location;
         string asmSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(asmPath))).ToLowerInvariant();
 
+        // IT-08 升级支：证"生产 Exps.conf 真被载入"（Level6=80，来自部署 Exps.conf），否则缺省值会污染升级 golden。
+        int needExps6 = SystemShare.Config.NeedExps[6];
+        if (needExps6 != 80)
+            throw new InvalidOperationException(
+                $"NeedExps[6]={needExps6} != 80（生产 Exps.conf 未按预期载入；head={string.Join(",", SystemShare.Config.NeedExps.Take(8))}）");
         var doc = new
         {
             generator = "mir2-rs/tests/parity/m3/eat-probe",
@@ -637,6 +806,15 @@ internal static class Program
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
             unbind = M2Share.UnbindList.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),
+            // IT-08 升级支：配置文件身份钉进 golden（路径 + sha256；配置一变换 ⇒ 该 golden 失效）。
+            config = new
+            {
+                exps_conf = Path.Combine(AppContext.BaseDirectory, "Exps.conf"),
+                exps_conf_sha256 = Sha256Hex(Path.Combine(AppContext.BaseDirectory, "Exps.conf")),
+                server_conf_sha256 = Sha256Hex(Path.Combine(AppContext.BaseDirectory, "Server.conf")),
+                need_exps_head = SystemShare.Config.NeedExps.Take(8).ToArray(),
+                need_exps_6 = SystemShare.Config.NeedExps[6],
+            },
             templates = templateDtos,
             cases,
         };

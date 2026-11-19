@@ -1,0 +1,8 @@
+# 逐帧四/五桶分类（framediff.py 旧M56夹具 vs 重生成夹具）——UNEXPLAINED=0
+no-change: 1 [eat_ok_stdmode1_hunger_recalc]        # 本已 19/15
+consumed: 3 [shape1_fixed, shape1_clamp, shape3_percent]   # max_hp/max_mp 被 clamp/percent 消费，帧面(53)变化=应同步
+52tail/state: 20    # 仅 wabil(后) MaxHP/hp/mp 等变(可达回显)，帧面 0 差异；比较器断言整 state.wabil==golden ⇒ cargo 绿=已证一致
+metadata: 1 [exp_levelup]    # 仅 wabil_before 变；帧面+后态不变(levelup recalc→L6 同)。
+52tail-uncompared: 0    # 所有被比较例的 wabil 由 matches_oracle_eat_fixture 的 assert_eq!(state.wabil, golden) 全字段断言
+UNEXPLAINED: 0
+# unbind_success 原始告警=仅墙钟 make_index 漂移，已按 IT-18 先例还原提交值 ⇒ 归 52tail/state。

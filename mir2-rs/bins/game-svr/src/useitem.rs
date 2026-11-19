@@ -98,6 +98,9 @@
 use crate::ability::{recalc_abilitys, Ability, ItemCatalog, RecalcInputs};
 use crate::bag::{BagItem, Frame, MAX_BAG_ITEM};
 use crate::unbindlist::UnbindList;
+// `ExtraAbil` 槽数用宿主/oracle 同名常量（`mir2_world_bevy::components::EXTRA_ABIL_SLOTS` = 7，
+// 含 `EABIL_PWRRATE(6)`）；slice 1 曾误写 6（会静默丢掉 PWRRATE），此处对齐并加维度牙。
+use mir2_world_bevy::components::EXTRA_ABIL_SLOTS;
 
 /// `CM_EAT`（`src/OpenMir2/Messages.cs` 的 `CM_EAT = 1006`；
 /// `PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(nParam1, Msg)`）。
@@ -119,6 +122,8 @@ pub const RM_WEIGHTCHANGED: i32 = 10115;
 pub const RM_CHARSTATUSCHANGED: i32 = 10139;
 /// `RM_MYSTATUS`（`src/OpenMir2/Messages.cs:700`）——`RefMyStatus()` 在 `RecalcAbilitys()` 之后发（`PlayObject.Base.cs:288-292`）。
 pub const RM_MYSTATUS: i32 = 8102;
+/// `RM_WINEXP`（`src/OpenMir2/Messages.cs` 8075）——`GetExp` 的 `SendMsg(RM_WINEXP, 0, dwExp, 0, 0)`。
+pub const RM_WINEXP: i32 = mir2_protocol::messages::RM_WINEXP as i32;
 /// `PlayObject.HungerStatus` 的上限（`HUtil32._MIN(5000, HungerStatus)`，`PlayObject.Base.cs:2088`）。
 pub const HUNGER_STATUS_MAX: i32 = 5000;
 
@@ -203,7 +208,29 @@ pub struct UseItemContext<'a> {
 }
 
 /// 本动作会原地改的**演员侧**状态（`PlayObject` 上分散的字段；接缝把它们打包传入传出）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// items 线「额外状态」束（harness 状态扩展，`opc-07` 2026-11-20 定）：把 oracle `PlayObject` 上分散、
+/// `UseItemActorState` 原先未承载的状态集中一处，供 IT-07..17 逐条 wired。**未 wire 的字段保持 `Default`、
+/// 不参与判据**（各自按其宿主原语接入并加最小单测后再启用）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ItemsExtraState {
+    /// `PlayObject.BodyLuck`（double，`PlayObject.cs:520`），`AddBodyLuck` 维护（IT-08 `GetExp`）。宿主已有
+    /// 同源 `add_body_luck` 纯函数（`lib.rs`）。
+    pub body_luck: f64,
+    /// `PlayObject.BodyLuckLevel`（`clamp(BodyLuck/BODYLUCKUNIT, -10, 5)`）。
+    pub body_luck_level: i32,
+    /// `ExtraAbil[EXTRA_ABIL_SLOTS]`（EABIL_DCUP/MCUP/SCUP/HITSPEEDUP/HPUP/MPUP/PWRRATE；IT-07）。
+    pub extra_abil: [u16; EXTRA_ABIL_SLOTS],
+    /// `ExtraAbilFlag[EXTRA_ABIL_SLOTS]`（IT-07）。
+    pub extra_abil_flag: [u8; EXTRA_ABIL_SLOTS],
+    /// `ExtraAbilTimes[EXTRA_ABIL_SLOTS]`（宿主存 tick；墙钟派生 ⇒ 判据只核相对增量/单调，不核绝对值）。
+    pub extra_abil_times: [i64; EXTRA_ABIL_SLOTS],
+    /// 当前装备武器（`UseItems[Weapon]`）；`None` = 空手（IT-12 祝福油 / IT-14/15 修复油）。
+    pub weapon: Option<BagItem>,
+    /// `PlayObject.MagicList` 的 magic id 序列（IT-17 ReadBook 追加）。
+    pub magic_list: Vec<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct UseItemActorState {
     /// `PlayObject.WAbil`（读 `HP/MP/MaxHP/MaxMP`，写 `HP/MP/Weight`）。
     pub wabil: Ability,
@@ -215,6 +242,8 @@ pub struct UseItemActorState {
     pub user_unlock_durg: bool,
     /// `PlayObject.HungerStatus`（`PlayObject.cs:225`，`int`；StdMode 1 食物加 `DuraMax/10`、上限 5000）。
     pub hunger_status: i32,
+    /// 额外状态束（BodyLuck / ExtraAbil / 武器 / MagicList；见 [`ItemsExtraState`]）。
+    pub extra: ItemsExtraState,
 }
 
 impl Default for UseItemActorState {
@@ -249,6 +278,7 @@ impl Default for UseItemActorState {
             inc_spell: 0,
             user_unlock_durg: false,
             hunger_status: 0,
+            extra: ItemsExtraState::default(),
         }
     }
 }
@@ -271,6 +301,9 @@ pub struct UseItemOutcome {
     /// `SendDefMessage(SM_EAT_OK)` **之前** ⇒ 接线层必须先下发本列、再下发 `immediate_frames`。
     /// 空 = 本次没有解包（`StdMode != 31` / `AniCount != 0` / 容量门失败 / 空名或名字查不到模板）。
     pub added_items: Vec<BagItem>,
+    /// IT-08：本次 `GetExp` 的经验增量（基础 `Abil.Exp` 侧）。宿主落 `sg.equip.abil.exp`（**不改 `WAbil.Exp`**——
+    /// oracle `GetExp` 后 WAbil 陈旧，仅 `AbilCopyToWAbil` 在登录/重算时同步）。非 GetExp ⇒ `None`。
+    pub exp_delta: Option<i32>,
 }
 
 /// `ClientUseItems`（`PlayObject.Operate.cs:601`）的纯函数等价物（StdMode 0/1/2 + 31 的两支）。
@@ -286,6 +319,7 @@ pub fn use_item(
     item_number: &mut i32,
 ) -> UseItemOutcome {
     let mut eaten = false;
+    let mut exp_delta: Option<i32> = None;
     let mut removed_index: Option<usize> = None;
     let mut notices: Vec<QueuedNotice> = Vec::new();
     let mut added_items: Vec<BagItem> = Vec::new();
@@ -422,8 +456,29 @@ pub fn use_item(
                                 }
                                 eaten = true;
                             }
-                            // StdMode 3/4（ExtraAbil/GetExp、书）未实现 ⇒ 与 oracle 在未禁药形态下的
-                            // 成功/条件成功路径**不同**，已证差异，登记在 T-17。
+                            // StdMode 3：oracle `EatItems` 的 case 3（`PlayObject.Base.cs:2099`，受 `boNODRUG` 门，已在上方）。
+                            // **IT-08**：`Shape 13 → GetExp(DuraMax)`，本片实现**非升级支**（Exp+= / AddBodyLuck(dwExp*0.002) /
+                            // RM_WINEXP）；**升级支**（`Exp>=MaxExp → GetLevelExp/RecalcLevelAbilitys/SM_LEVELUP/…`）**未实现**，登记 T-17。
+                            // IT-07（Shape12 ExtraAbil×6）与 default → EatUseItems（IT-09..16 move 组）亦未实现。
+                            3 if tpl.shape == 13 => {
+                                // `GetExp`（`PlayObject.Base.cs:149-166`）非升级支：**不改 `WAbil.Exp`**
+                                //（oracle 后 WAbil 陈旧），经验增量经 `Outcome.exp_delta` 交宿主落基础 `sg.equip.abil.exp`。
+                                exp_delta = Some(i32::from(tpl.dura_max));
+                                crate::add_body_luck(
+                                    &mut state.extra.body_luck,
+                                    &mut state.extra.body_luck_level,
+                                    f64::from(tpl.dura_max) * 0.002,
+                                );
+                                notices.push(QueuedNotice {
+                                    ident: RM_WINEXP,
+                                    w_param: 0,
+                                    n_param1: i32::from(tpl.dura_max),
+                                    n_param2: 0,
+                                    n_param3: 0,
+                                });
+                                eaten = true;
+                            }
+                            // StdMode 4（书）与 StdMode 3 其余 Shape 未实现 ⇒ 已证差异，登记 T-17。
                             _ => {}
                         }
                         if eaten {
@@ -490,6 +545,7 @@ pub fn use_item(
         immediate_frames,
         notices,
         added_items,
+        exp_delta,
     }
 }
 
@@ -819,6 +875,101 @@ mod tests {
         "eat_fail_stdmode31_unbind_bag_full",
     ];
 
+    /// 状态扩展（slice 1）：`ItemsExtraState::default()` 为零值束；`UseItemActorState::default().extra` 同零。
+    /// 保证新增状态字段的初值可控（未 wire 的字段不影响既有判据）。
+    #[test]
+    fn items_extra_state_default_is_zero() {
+        let d = ItemsExtraState::default();
+        assert_eq!(d.body_luck, 0.0);
+        assert_eq!(d.body_luck_level, 0);
+        // 维度牙（编译器抓不到的"少一格"）：必须 == 宿主/oracle `EXTRA_ABIL_SLOTS`（=7，含 EABIL_PWRRATE(6)）。
+        assert_eq!(
+            EXTRA_ABIL_SLOTS, 7,
+            "= oracle EABIL 槽数（0..=EABIL_PWRRATE(6)）"
+        );
+        assert_eq!(d.extra_abil.len(), EXTRA_ABIL_SLOTS);
+        assert_eq!(d.extra_abil, [0u16; EXTRA_ABIL_SLOTS]);
+        assert_eq!(d.extra_abil_flag, [0u8; EXTRA_ABIL_SLOTS]);
+        assert_eq!(d.extra_abil_times, [0i64; EXTRA_ABIL_SLOTS]);
+        assert!(d.weapon.is_none());
+        assert!(d.magic_list.is_empty());
+        assert_eq!(
+            UseItemActorState::default().extra,
+            ItemsExtraState::default()
+        );
+    }
+
+    /// **IT-08 非升级支**（StdMode3/Shape13 `GetExp(DuraMax)`）：吃掉、`WAbil.Exp += DuraMax`、
+    /// `AddBodyLuck(DuraMax*0.002)`、`RM_WINEXP(nParam1=DuraMax)`、`RM_WEIGHTCHANGED`、背包 -1。
+    /// **升级支未覆盖**（`Exp>=MaxExp → HasLevelUp 链`，登记 T-17）⇒ 本用例取 `Exp+DuraMax < MaxExp`。
+    #[test]
+    fn it08_stdmode3_shape13_getexp_nonlevelup() {
+        let mut catalog = StdItemCatalog::new();
+        catalog.insert(
+            70,
+            StdItem {
+                name: "经验卷".into(),
+                std_mode: 3,
+                shape: 13,
+                weight: 1,
+                dura_max: 100,
+                ..Default::default()
+            },
+        );
+        let unbind = no_unbind();
+        let ctx = UseItemContext {
+            catalog: &catalog,
+            can_use_item: true,
+            dead: false,
+            actor_id: 9,
+            make_index: 1,
+            no_drug: false,
+            function_npc_present: false,
+            unbind: &unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            recalc: None,
+        };
+        let mut state = UseItemActorState::default();
+        state.wabil.exp = 0;
+        state.wabil.max_exp = 10000;
+        state.wabil.level = 5;
+        let mut item_list = vec![BagItem {
+            make_index: 1,
+            index: 70,
+            dura: 0,
+            dura_max: 100,
+            desc: [0; 14],
+        }];
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        assert!(out.eaten, "经验卷吃掉");
+        assert_eq!(
+            out.exp_delta,
+            Some(100),
+            "GetExp: exp_delta = DuraMax（交宿主落基础 Abil.Exp）"
+        );
+        assert_eq!(
+            state.wabil.exp, 0,
+            "use_item **不改 WAbil.Exp**（oracle GetExp 后 WAbil 陈旧，仅 AbilCopyToWAbil 同步）"
+        );
+        assert_eq!(state.wabil.level, 5, "非升级支：等级不变");
+        assert!(
+            (state.extra.body_luck - 0.2).abs() < 1e-9,
+            "AddBodyLuck(DuraMax*0.002)"
+        );
+        assert_eq!(state.extra.body_luck_level, 0);
+        let win = out
+            .notices
+            .iter()
+            .find(|n| n.ident == RM_WINEXP)
+            .expect("RM_WINEXP");
+        assert_eq!(win.n_param1, 100, "RM_WINEXP.nParam1 = dwExp = DuraMax");
+        assert!(out.notices.iter().any(|n| n.ident == RM_WEIGHTCHANGED));
+        assert!(item_list.is_empty(), "经验卷被吃掉");
+        assert_eq!(out.immediate_frames[0].ident, SM_EAT_OK);
+    }
+
     /// Z4 gate：golden 非零 ⇒ Rust 必须非零；golden 全零 ⇒ 不适用（合法全零失败例豁免）。
     fn z4_ok(golden_nonzero: bool, rust_nonzero: bool) -> bool {
         !golden_nonzero || rust_nonzero
@@ -916,8 +1067,22 @@ mod tests {
         let mut z4_applicable = 0usize;
         let mut z4_exempt_names: Vec<String> = Vec::new();
         let mut one_layer_names: Vec<String> = Vec::new();
+        let mut host_skipped = 0usize;
         for case in cases {
             let name = case["name"].as_str().unwrap();
+            // IT-08 升级支：`host_levelup` 用例由宿主级用例（真实 `Operate` 下行对拍 pumped SM 帧）覆盖，
+            // 纯 `use_item` 比较器跳过；但必须显式——被跳用例须 host_levelup 且 pumped 非空（有 oracle SM 帧）。
+            if case["expect"]["host_levelup"].as_bool().unwrap_or(false) {
+                assert!(
+                    case["expect"]["pumped"]
+                        .as_array()
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false),
+                    "{name}: host_levelup 用例必须有 pumped oracle SM 帧"
+                );
+                host_skipped += 1;
+                continue;
+            }
             let c = &case["ctx"];
             let mut item_list = bag_items(&case["item_list_before"]);
             let item_list_before = item_list.clone();
@@ -938,6 +1103,7 @@ mod tests {
                 recalc: Some(recalc),
             };
             let mut state = UseItemActorState {
+                extra: Default::default(),
                 wabil: abil.clone(),
                 inc_health: u16v(&case["inc_health_before"]),
                 inc_spell: u16v(&case["inc_spell_before"]),
@@ -946,8 +1112,41 @@ mod tests {
             };
 
             let mut item_number = 0;
+            state.extra.body_luck = case["expect"]["body_luck_before"].as_f64().unwrap_or(0.0);
+            state.extra.body_luck_level = case["expect"]["body_luck_level_before"]
+                .as_i64()
+                .unwrap_or(0) as i32;
             let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
             let expect = &case["expect"];
+
+            // IT-08：基础 `Abil.Exp` 增量（fixture `abil_exp` vs 顶层 `abil_exp_before`）与 `BodyLuck` 终值（追加字段）。
+            if let (Some(ab), Some(aa)) = (
+                case["abil_exp_before"].as_i64(),
+                expect["abil_exp"].as_i64(),
+            ) {
+                if aa != ab {
+                    assert_eq!(
+                        out.exp_delta,
+                        Some((aa - ab) as i32),
+                        "{name}: exp_delta = 基础 Abil.Exp 增量"
+                    );
+                } else {
+                    assert_eq!(out.exp_delta, None, "{name}: 非 GetExp ⇒ exp_delta=None");
+                }
+            }
+            if let Some(bl) = expect["body_luck"].as_f64() {
+                assert!(
+                    (state.extra.body_luck - bl).abs() < 1e-9,
+                    "{name}: BodyLuck 终值与 oracle 不符"
+                );
+            }
+            if let Some(bll) = expect["body_luck_level"].as_i64() {
+                assert_eq!(
+                    i64::from(state.extra.body_luck_level),
+                    bll,
+                    "{name}: BodyLuckLevel 终值与 oracle 不符"
+                );
+            }
 
             // Z4：golden 有非零期望 ⇒ Rust 必须有非零锚；golden 全零（合法失败例）⇒ 不适用。
             let golden_nonzero = has_nonzero_anchor(case);
@@ -1117,11 +1316,16 @@ mod tests {
             );
         }
         let total = cases.len();
+        assert!(
+            host_skipped >= 1,
+            "至少一个 host_levelup 用例应由宿主级用例覆盖（纯比较器当前跳过 {host_skipped} 例）"
+        );
+        let compared = total - host_skipped;
         // Z4 计数式 + 不适用名单（断言，非打印）。
         assert_eq!(
             z4_applicable + z4_exempt_names.len(),
-            total,
-            "Z4 计数式：适用 + 不适用 == 夹具例数"
+            compared,
+            "Z4 计数式：适用 + 不适用 == 被比较例数（排除 host_levelup）"
         );
         let mut z4_ex: Vec<&str> = z4_exempt_names.iter().map(String::as_str).collect();
         z4_ex.sort_unstable();
@@ -1133,11 +1337,11 @@ mod tests {
             "Z4 不适用名单漂移：须随夹具变更在同一次提交更新并写进提交信息"
         );
         // Z5 计数式 + 豁免名单（断言，非打印）。
-        let two_layer = total - one_layer_names.len();
+        let two_layer = compared - one_layer_names.len();
         assert_eq!(
             two_layer + one_layer_names.len(),
-            total,
-            "Z5 计数式：两层 + 豁免 == 总例数"
+            compared,
+            "Z5 计数式：两层 + 豁免 == 被比较例数（排除 host_levelup）"
         );
         let mut ol: Vec<&str> = one_layer_names.iter().map(String::as_str).collect();
         ol.sort_unstable();
@@ -1155,8 +1359,9 @@ mod tests {
         );
     }
 
-    /// Shape 3 的百分比是 `Round(...AwayFromZero)`；夹具的 `max_hp=101/ac=5`（5.05→5）与
-    /// `max_mp=55/mac=10`（5.5→**6**）钉住「半数进位」这一口径（改成截断/银行家舍入必红）。
+    /// Shape 3 的百分比是 `Round(...AwayFromZero)`；夹具的 `max_hp=37/ac=5`（1.85→2）与
+    /// `max_mp=25/mac=10`（**2.5→3**，银行家舍入得 2）钉住「半数远离零」这一口径
+    /// （改截断/银行家舍入必红；旧值 5.5 两种舍入都得 6，无区分力）。
     #[test]
     fn shape3_percent_rounds_away_from_zero() {
         let doc = fixture();
@@ -1168,6 +1373,7 @@ mod tests {
             .find(|c| c["name"] == "eat_ok_shape3_percent")
             .expect("夹具必须含 eat_ok_shape3_percent");
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
@@ -1192,8 +1398,11 @@ mod tests {
         let mut item_number = 0;
         let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(out.eaten);
-        assert_eq!(state.wabil.hp, 55, "101/100*5 = 5.05 ⇒ +5");
-        assert_eq!(state.wabil.mp, 46, "55/100*10 = 5.5 ⇒ +6（半数远离零）");
+        assert_eq!(state.wabil.hp, 12, "37/100*5 = 1.85 ⇒ +2");
+        assert_eq!(
+            state.wabil.mp, 13,
+            "25/100*10 = 2.5 ⇒ +3（半数远离零；银行家舍入=2）"
+        );
     }
 
     /// `BoCanUseItem == false`：只排一条 `RM_MENU_OK`（`nParam1 = ActorId`）并落 `SM_EAT_FAIL`，
@@ -1209,6 +1418,7 @@ mod tests {
             .find(|c| c["name"] == "eat_fail_can_use_item_false")
             .expect("夹具必须含 eat_fail_can_use_item_false");
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
@@ -1261,6 +1471,7 @@ mod tests {
             .find(|c| c["name"] == "eat_fail_stdmode_other")
             .expect("夹具必须含 eat_fail_stdmode_other");
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
@@ -1318,6 +1529,7 @@ mod tests {
             recalc: None,
         };
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 3,
             inc_spell: 4,
@@ -1365,6 +1577,7 @@ mod tests {
             recalc: None,
         };
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
@@ -1402,6 +1615,7 @@ mod tests {
 
         // 存在 FunctionNPC ⇒ 吃。
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: abil.clone(),
             inc_health: 0,
             inc_spell: 0,
@@ -1432,6 +1646,7 @@ mod tests {
 
         // 缺失 FunctionNPC ⇒ 不吃（`UseStdModeFunItem` 返回 false）。
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: abil.clone(),
             inc_health: 0,
             inc_spell: 0,
@@ -1565,6 +1780,7 @@ mod tests {
             .expect("夹具必须含 eat_ok_stdmode31_unbind_success（IT-18 成功路径）");
         let unbind = unbind_from(&doc);
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
