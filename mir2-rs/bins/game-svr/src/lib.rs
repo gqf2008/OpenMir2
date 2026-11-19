@@ -65822,6 +65822,17 @@ SendRefMsgRange=15
             tsg.state.wabil.max_mp = 0;
             rig.ground_sessions.insert("target".into(), tsg);
         }
+        // **28 心灵启示**：`SM_OPENHEALTH(1100)` 读被开血者的**实时** HP/MaxHP（卡 §25(b)）。
+        // 实体是运行时真源，登录后与 `WAbil` 同值；登录序下 20 级战士 MaxHP = 224。
+        // 只对 28 覆盖：其它魔号的 `SM_STRUCK` 头会带目标 MaxHP，不能动。
+        if magic_id == 28 {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 224;
+            let sg = rig.ground_sessions.get_mut("target").unwrap();
+            sg.state.wabil.hp = 100;
+            sg.state.wabil.max_hp = 224;
+        }
         // `UserMagic.Level`：44 的推挤 `Random(Level)-1` 需要 Level=3 才可能 >0（卡 §23）。
         rig.saves
             .get_mut("caster")
@@ -65948,6 +65959,21 @@ SendRefMsgRange=15
         // buff 施加事件（14/15/31）：来自 `World::buff_apply_log`（**内部事件的只读观测面**，
         // 不由 SM 帧反推）。必须在**施法之后**取。
         let buff_applies = rig.world.buff_apply_log.clone();
+        // **28 的前提断言（卡 §25(b)）**：`SM_OPENHEALTH(1100)` 的字段来自被开血者的实时
+        // HP/MaxHP；Rust 的实时真源是实体，登录后与 `WAbil` 同值。本 case 窗口内无 HP 变化
+        // ⇒ 恒等必须成立。把前提钉死，防止「夹具对齐」掩盖产品读错对象。
+        if magic_id == 28 {
+            let e = rig.world.entities.get(target).unwrap();
+            let sg = rig.ground_sessions.get("target").unwrap();
+            assert_eq!(
+                (i64::from(e.hp), i64::from(e.max_hp)),
+                (
+                    i64::from(sg.state.wabil.hp),
+                    i64::from(sg.state.wabil.max_hp)
+                ),
+                "[{label}] 28 前提：target 实体 HP/MaxHP 必须与登录派生后的 WAbil 同值"
+            );
+        }
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
 
@@ -65969,37 +65995,68 @@ SendRefMsgRange=15
             .find(|m| m.ident == mir2_world_bevy::slave::RM_DELAYPUSHED && m.actor_id == caster)
             .map(|m| (m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
 
-        // ---- 段②：推进世界时钟后交付；只推进/只交付，不跑 tick 循环 ----
-        // 1500ms 覆盖各支的最长自延迟：1/5/11/45/44 的 RM_DELAYMAGIC=600、13 的 =1200、
-        // RM_MAGIC_LVEXP=1000（构造时 `world.tick()` 已把时钟推到 200）。
-        rig.world.clock_ms += 1500;
-        let outs = rig.world.deliver_self_delay_msgs();
+        // **28 的 `RM_DOOPENHEALTH(8040)`**：交付前从**目标**的自延迟队列抓（prio=255、late）。
+        let open_health_msg = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .find(|m| m.ident == mir2_world_bevy::slave::RM_DOOPENHEALTH && m.actor_id == target)
+            .map(|m| m.priority);
+
+        // ---- 段②：**按 due 时刻分步**推进世界时钟并交付（镜像每 tick 排水）----
+        // 步长 100ms；总等待取 golden `Fixture.wait_ms`（缺省 1200，28 = 1600——卡 §25(a)），
+        // **两侧同值**。为什么分步而不是一次跳到末尾：oracle 的每条 `MsgQueue` 在**到期时刻**
+        // 才 `Operate`，跨 actor 的可见序 = 先到期先出（28：caster 的 10123@1000ms 必须先于
+        // target 的 DOOPENHEALTH@1500ms ⇒ 640 先于 1100）；一次跳满会让同一缓冲按优先级把
+        // 1100(170) 排到 640(255) 前面，与金标准相反。
+        let wait_ms = golden_wait_ms(stem, label);
+        let mut all_outs: Vec<mir2_world_bevy::slave::SelfDelayOutcome> = Vec::new();
+        let mut deliver_frames: Vec<SfFrame> = Vec::new();
+        let mut elapsed: u64 = 0;
+        while elapsed < wait_ms {
+            rig.world.clock_ms += 100;
+            elapsed += 100;
+            let outs = rig.world.deliver_self_delay_msgs();
+            if outs.is_empty() {
+                continue;
+            }
+            let rec = mir2_world_bevy::TickRecord {
+                slave_self_deliveries: outs.clone(),
+                ..Default::default()
+            };
+            drain_b4_self_deliveries(
+                &rec,
+                &mut rig.world,
+                &rig.online,
+                &mut rig.displays,
+                &mut rig.ground_sessions,
+                &rig.gates,
+                0,
+                0,
+                b"",
+            );
+            // **P3-B3**：`RM_DOOPENHEALTH` 到点 ⇒ 1100、`RM_MAGIC_LVEXP` 到点 ⇒ 640、
+            // `RM_TRANSPARENT` ⇒ 657。与 `sim_loop` 同序（B4 先、B3 后）。
+            drain_b3_self_deliveries(
+                &rec,
+                &rig.world,
+                &rig.online,
+                &mut rig.ground_sessions,
+                &rig.gates,
+            );
+            let (mut step_frames, _raws2) = rig.drain();
+            deliver_frames.append(&mut step_frames);
+            all_outs.extend(outs);
+        }
         // `RM_DELAYMAGIC` 到点投递的观察值（`struck` = 目标侧 `RM_MAGSTRUCK` 已入队）。
-        let delay_magic = outs.iter().find_map(|o| o.delay_magic);
-        let rec = mir2_world_bevy::TickRecord {
-            slave_self_deliveries: outs,
-            ..Default::default()
-        };
+        let delay_magic = all_outs.iter().find_map(|o| o.delay_magic);
         // **逐格 `RM_PUSH(8092)` 的来源 = 推挤决策**（`SelfDelayOutcome.pushes` 的 PushEvent），
         // 不是由我们自己发出的 `SM_BACKSTEP(9)` 帧反推（避免自证）。
-        let push_events: Vec<(i32, u8, i32, i32)> = rec
-            .slave_self_deliveries
+        let push_events: Vec<(i32, u8, i32, i32)> = all_outs
             .iter()
             .flat_map(|o| o.pushes.iter().map(|p| (p.actor_id, p.dir, p.x, p.y)))
             .collect();
-        drain_b4_self_deliveries(
-            &rec,
-            &mut rig.world,
-            &rig.online,
-            &mut rig.displays,
-            &mut rig.ground_sessions,
-            &rig.gates,
-            0,
-            0,
-            b"",
-        );
         let n2 = trace_line_count(&trace);
-        let (deliver_frames, _raws2) = rig.drain();
 
         let hp_after = rig.world.entities.get(target).unwrap().hp;
         let caster_mp = rig
@@ -66206,6 +66263,43 @@ SendRefMsgRange=15
                     255,
                     true,
                 ));
+            }
+        }
+        // `RM_DOOPENHEALTH(8040)`：**目标**自延迟队列（交付前抓；仅 pass 支有），prio=255、late。
+        if let Some(prio) = open_health_msg {
+            if let Some(who) = who_of(target) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    8040,
+                    0,
+                    0,
+                    0,
+                    0,
+                    i64::from(prio),
+                    true,
+                ));
+            }
+        }
+        // `RM_OPENHEALTH(10410)`：到点投递的 `MakeOpenHealth` → `SendRefMsg`；收件人 = 该 actor
+        // **当前格**的 `hear_targets`（含自）、prio=170、p1=HP、p2=MaxHP。来源 = 内部事件
+        // `SelfDelayOutcome.open_health`（**不由 SM 1100 反推**）。
+        for o in &all_outs {
+            if let Some(oh) = o.open_health {
+                let map_id = rig.world.entities.get(oh.target_id).map_or(0, |e| e.map_id);
+                let x = rig.world.entities.x(oh.target_id).unwrap_or(0);
+                let y = rig.world.entities.y(oh.target_id).unwrap_or(0);
+                for id in chat::hear_targets_at(&rig.world, oh.target_id, map_id, x, y, range) {
+                    if let Some(who) = who_of(id) {
+                        rm_by_who.entry(who).or_default().push(fireball_rm(
+                            10410,
+                            0,
+                            i64::from(oh.hp),
+                            i64::from(oh.max_hp),
+                            0,
+                            170,
+                            false,
+                        ));
+                    }
+                }
             }
         }
         // `RM_DELAYPUSHED(8043)`：施法者自延迟队列（late=true、prio = 255）。
@@ -67091,6 +67185,20 @@ SendRefMsgRange=15
             .unwrap_or_else(|| panic!("金标准缺 {label} 支"))
     }
 
+    /// 金标准某支的 `Fixture.wait_ms`（排水前等待 = 世界时钟推进量，**两侧同值**）。
+    /// 旧 golden 无该字段 ⇒ 缺省 1200（既有十支的口径）；28 = 1600（卡 §25(a)）。
+    fn golden_wait_ms(stem: &str, label: &str) -> u64 {
+        let file = match stem {
+            "fireball5" => "fireball-5.json".to_string(),
+            "lightning11" => "lightning-11.json".to_string(),
+            "lightning45" => "lightning-45.json".to_string(),
+            other => format!("{other}.json"),
+        };
+        golden_case(&file, label)["Fixture"]["wait_ms"]
+            .as_u64()
+            .unwrap_or(1200)
+    }
+
     /// `14/15`（`SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO`，护身符 + 范围 DefenceUp）驱动。
     /// 金标准 `golden/magic/{hangmajinbub,dejiwonho}.json`；三 seed（无 AntiMagic 骰，标签 s1/s5/s13）。
     fn defence_case(stem: &str, label: &str) -> serde_json::Value {
@@ -67234,6 +67342,127 @@ SendRefMsgRange=15
             rust_abil, gold_abil,
             "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
         );
+    }
+
+    /// **`28 心灵启示`**（`SKILL_SHOWHP`，`MagicManager.cs:431-442`）驱动。
+    /// golden `golden/magic/showhp.json`；三支 = `Random(6) <= Level+3` 门（卡 §25，**非 AntiMagic**）：
+    /// `miss` = 首抽 5（门不过）、`edge` = 4（==门）、`hit` = 3（<门）。
+    ///
+    /// 断言面：门过 ⇒ target 收 `SM_OPENHEALTH(1100)`（param=HP=100、tag=MaxHP=224）、caster/obs_in
+    /// 同样收（在 ±`SendRefMsgRange` 内）、caster 收 640 + RM 10123、RM 8040(目标 self-delay)/
+    /// 10410(每收件人) 各到位；`SM 53` 预计 0 条（无 HP 变化）。门不过 ⇒ 以上全 0。
+    /// 实体==WAbil 的前提断言在 [`fireball_parity_drive`] 内（卡 §25(b)）。
+    fn showhp_assert(stem: &str, label: &str, seed: i32, base: i32, pass: bool, rng_len: usize) {
+        fireball_parity_drive(stem, 28, 15, 1, label, seed, base);
+        fireball_case_assert(stem, label, 100, rng_len);
+        b1_golden_drain_assert("showhp.json", label, if pass { 3 } else { 2 });
+        let c = defence_case(stem, label);
+        let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
+        if pass {
+            for who in ["caster", "target", "obs_in"] {
+                assert_eq!(
+                    n(who, "Sent", 1100),
+                    1,
+                    "[{stem}/{label}] {who} 恰 1 条 SM 1100"
+                );
+                assert_eq!(
+                    n(who, "Rm", 10410),
+                    1,
+                    "[{stem}/{label}] {who} 恰 1 条 RM 10410"
+                );
+                assert_eq!(
+                    n(who, "Sent", 53),
+                    0,
+                    "[{stem}/{label}] {who} 不得有 SM 53（无 HP 变化）"
+                );
+            }
+            assert_eq!(
+                n("target", "Rm", 8040),
+                1,
+                "[{stem}/{label}] 目标恰 1 条 self-delay 8040"
+            );
+            assert_eq!(
+                n("caster", "Sent", 640),
+                1,
+                "[{stem}/{label}] caster 恰 1 条 SM 640"
+            );
+            assert_eq!(
+                n("caster", "Rm", 10123),
+                1,
+                "[{stem}/{label}] caster 恰 1 条 RM 10123"
+            );
+            assert_eq!(
+                n("obs_out", "Sent", 1100),
+                0,
+                "[{stem}/{label}] obs_out 不在范围"
+            );
+            // 帧序：caster = 638 → 640 → 1100（1000ms 的训练帧先于 1500ms 的开血帧）。
+            let seq: Vec<i64> = c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == "caster")
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|m| m["ident"].as_i64())
+                .collect();
+            assert_eq!(seq, vec![638, 640, 1100], "[{stem}/{label}] caster 帧序");
+            let tseq: Vec<i64> = c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == "target")
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|m| m["ident"].as_i64())
+                .collect();
+            assert_eq!(tseq, vec![17, 638, 1100], "[{stem}/{label}] target 帧序");
+        } else {
+            for who in ["caster", "target", "obs_in"] {
+                assert_eq!(
+                    n(who, "Sent", 1100),
+                    0,
+                    "[{stem}/{label}] 门不过 ⇒ {who} 无 1100"
+                );
+                assert_eq!(
+                    n(who, "Rm", 10410),
+                    0,
+                    "[{stem}/{label}] 门不过 ⇒ {who} 无 10410"
+                );
+            }
+            assert_eq!(
+                n("target", "Rm", 8040),
+                0,
+                "[{stem}/{label}] 门不过 ⇒ 无 self-delay 8040"
+            );
+            assert_eq!(
+                n("caster", "Sent", 640),
+                0,
+                "[{stem}/{label}] 门不过 ⇒ 无训练尾"
+            );
+        }
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn showhp_parity_miss() {
+        showhp_assert("showhp", "miss", 6, 1000, false, 1);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn showhp_parity_edge() {
+        showhp_assert("showhp", "edge", 2, 2000, true, 3);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn showhp_parity_hit() {
+        showhp_assert("showhp", "hit", 13, 3000, true, 3);
     }
 
     #[test]
