@@ -103,6 +103,8 @@ public static class Program
         {
             var name = args[Array.IndexOf(args, "--case") + 1];
             if (name == "fireball") return FireballCase();
+            if (name == "warrskill") return ClientSpellXYEntry.Run();
+            if (name == "warr-selftest") return ClientSpellXYEntry.SelfTest();
             if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" });
             if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" });
             if (name == "healing") return HealingBatch();
