@@ -412,3 +412,25 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
 原提的 `[@@sendMsg]`（`SETSENDMSGFLAG`）在 Rust 侧**无状态存储**（`ScriptPlayer::set_bo_send_msg_flag` 默认 no-op），
 无法作为判别量；最终改用同一真实文件的 `[@UserCmd6]`（第 382 行）：首条 `MOV S1 $PARAM(1)` 后
 `GAMEGOLD - 6` **不执行** ⇒ 元宝保持 10（全执行才 4）。文件 sha256 与行号见 §13.3。
+
+## 15. 子批② NP-07（动作返回 false 断链）——引擎门等价（2026-11-20）
+
+**前提先验（已核两侧源码）**：`TAKE <背包没有的物品>` 与 `GOTO <不存在的标签>` **都不返回 false**
+（`Take` 是 switch 分支、不改 `result`；`JmpToLable` 只对**计数上限**返回 false，`src/Modules/ScriptEngine/ScriptEngine.cs:626-635`）。
+确定性失败源是 **`BREAK`**：`case ExecutionCode.Break: result = false;`（`src/Modules/ScriptEngine/ScriptEngine.cs:914-916`）⇒
+`GotoLableQuestActionProcess` 返回 false ⇒ `GotoLable` **break 掉同 record 后续 procedure**。
+
+**语料事实**：全语料**没有**"首个 procedure 无 `#IF` 且 `#ACT` 带 `break`、同 record 还有后续 procedure"的构造
+（扫描 `Market_Def` 0 条）⇒ 按 opc-07 (a) 用 **synthetic 夹具**（四条已绑）。
+
+- 夹具：`mir2-rs/tests/parity/golden/npc/fixtures/np07_break_synthetic.txt`
+  sha256 = `4904046f19fd027003a33814799c18ad9d2cbc7745c104254558065240270c8e`
+- 内容：`[@brk]` proc1=`#ACT BREAK`+`#SAY P1`、proc2=`#IF`+`#SAY P2`；`[@other]`=`#SAY OTHER`。
+- 用例（两侧同一份、直驱 `GotoLable(label, boExtJmp=false)`）：
+  - `chain_break`（`@brk`）⇒ 说词**只有** `P1`（P2 不出现）；
+  - `other_record_intact`（`@other`）⇒ 说词 `OTHER`（证明断链只作用于本 record）。
+- golden：`mir2-rs/tests/parity/golden/npc/np07_chain_break.json`；Rust 断言在
+  `np01_click_main_matches_oracle_golden`（同一比较器）。
+- **牙 H**：把 Rust 的 `Break` 改成返回 `true` ⇒ `chain_break` 出现 `P2`、必红。
+- **报告口径**：本条为**引擎门等价证据**，非线上用例覆盖（冻结语料 0 条符合该构造）。
+

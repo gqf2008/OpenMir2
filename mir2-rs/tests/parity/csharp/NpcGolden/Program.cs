@@ -195,6 +195,8 @@ internal static class Program
         "E:/MirServer/M2GameSvr/Envir/Market_Def/任务NPC/打铁-0.txt";
     private const string QFUNCTION_SCRIPT =
         "E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt";
+    private const string NP07_FIXTURE =
+        "mir2-rs/tests/parity/golden/npc/fixtures/np07_break_synthetic.txt";
     private const string EXTJMP_FIXTURE =
         "mir2-rs/tests/parity/golden/npc/fixtures/np05_extjmp_synthetic.txt";
     private static readonly string[] CLICK_ORACLE_SOURCE =
@@ -592,6 +594,11 @@ internal static class Program
             RunCase(new CaseSpec { Name = "extjmp_allowed", Kind = "dlg_select", Label = "@sub", ScriptName = "老人", ScriptSourcePath = EXTJMP_FIXTURE }, tmp, envir, net),
             RunCase(new CaseSpec { Name = "extjmp_blocked", Kind = "dlg_select", Label = "@plain", ScriptName = "老人", ScriptSourcePath = EXTJMP_FIXTURE }, tmp, envir, net),
         };
+        var np07Cases = new List<object>
+        {
+            RunCase(new CaseSpec { Name = "chain_break", Kind = "direct_goto", Label = "@brk", ScriptName = "老人", ScriptSourcePath = NP07_FIXTURE }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "other_record_intact", Kind = "direct_goto", Label = "@other", ScriptName = "老人", ScriptSourcePath = NP07_FIXTURE }, tmp, envir, net),
+        };
 
         var outDir = args[0];
         Directory.CreateDirectory(outDir);
@@ -600,6 +607,7 @@ internal static class Program
         WriteDoc(Path.Combine(outDir, "np03_merchant_menu.json"), DIALOG_SCRIPT, np03Cases, DIALOG_ORACLE_SOURCE);
         WriteDoc(Path.Combine(outDir, "np04_main_selection.json"), CLICK_SCRIPT, np04Cases, CLICK_ORACLE_SOURCE);
         WriteDoc(Path.Combine(outDir, "np05_extjmp.json"), DIALOG_SCRIPT, np05Cases, DIALOG_ORACLE_SOURCE);
+        WriteDoc(Path.Combine(outDir, "np07_chain_break.json"), DIALOG_SCRIPT, np07Cases, DIALOG_ORACLE_SOURCE);
         Directory.Delete(tmp, true);
         return 0;
     }

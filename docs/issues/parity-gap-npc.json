@@ -246,17 +246,21 @@
         "line": 101,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "goto_executes_goto_not_endquest_after_flip",
-        "test_file": "mir2-rs/crates/script/tests/engine_tests.rs",
-        "fixture": null,
-        "cases": [],
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np07_chain_break.json",
+        "cases": [
+          "chain_break",
+          "other_record_intact"
+        ],
         "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "相邻覆盖（GOTO 语义），非本条的专门夹具"
+      "notes": "BREAK 置 result=false ⇒ 同 record 后续 procedure 不执行（ScriptEngine.cs:914-916）；synthetic 夹具（冻结语料 0 条符合该构造，sha256 4904046f…c8e）；引擎门等价证据；牙 H（Break 改 true ⇒ chain_break 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-08",

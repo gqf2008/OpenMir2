@@ -84573,6 +84573,44 @@ GMEXECUTE f
             drain_frames(&mut self.rx)
         }
 
+        /// 直驱 `GotoLable(label, boExtJmp=false)`（等价"可跳标签"入口；NP-04/07 用）。
+        fn direct_goto(&mut self, label: &str) {
+            let sg = self.sessions.get_mut("hero").unwrap();
+            let session = self.shop_sessions.entry("hero".to_string()).or_default();
+            let sell_off = self.sell_off_sessions.entry("hero".to_string()).or_default();
+            let mut rng = std::mem::replace(
+                &mut self.world.rng,
+                mir2_shared::rng::RandomNumber::with_seed(0),
+            );
+            let mut broadcasts: Vec<String> = Vec::new();
+            let (says, _f, _s, _w) = run_merchant_goto(
+                &self.book,
+                self.elder_id,
+                label,
+                false,
+                sg,
+                "hero",
+                "0",
+                &self.catalog,
+                &mut self.item_number,
+                &self.npc_vars,
+                session,
+                sell_off,
+                now_ms() as i32,
+                &mut rng,
+                None,
+                None,
+                &mut broadcasts,
+                false,
+            );
+            self.world.rng = rng;
+            if !says.is_empty() {
+                if let Some(tx) = route_to_gate(&self.gates, 0, 901, "测试直跳说词") {
+                    emit_npc_says(tx, 901, sg.actor_id, &says);
+                }
+            }
+        }
+
         fn game_gold(&self) -> i32 {
             self.sessions["hero"].game_gold
         }
@@ -84684,6 +84722,10 @@ GMEXECUTE f
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"))
     }
     const QFUNCTION_PATH: &str = r"E:\MirServer\M2GameSvr\Envir\Market_Def\QFunction-0.txt";
+    const NP07_FIXTURE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/parity/golden/npc/fixtures/np07_break_synthetic.txt"
+    );
     const EXTJMP_FIXTURE_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/parity/golden/npc/fixtures/np05_extjmp_synthetic.txt"
@@ -84732,11 +84774,13 @@ GMEXECUTE f
         let _np03 = read_cases("np03_merchant_menu.json");
         let np04 = read_cases("np04_main_selection.json");
         let np05 = read_cases("np05_extjmp.json");
+        let np07 = read_cases("np07_chain_break.json");
         let cases: Vec<&serde_json::Value> = np01
             .iter()
             .chain(np02.iter())
             .chain(np04.iter())
             .chain(np05.iter())
+            .chain(np07.iter())
             .collect();
         let mut n = 0usize;
         for case in cases {
@@ -84748,6 +84792,7 @@ GMEXECUTE f
             );
             let qf_text = read_gbk(QFUNCTION_PATH);
             let fx_text = read_utf8(EXTJMP_FIXTURE_PATH);
+            let np07_text = read_utf8(NP07_FIXTURE_PATH);
             let mut rig = match name {
                 "click_no_main_fallback" => T137Rig::new_with(
                     ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
@@ -84778,6 +84823,14 @@ GMEXECUTE f
                     &[
                         ("Npc_def/国王-0.txt", "[@main]\nking"),
                         ("Npc_def/老人-0.txt", &fx_text),
+                    ],
+                    2,
+                ),
+                "chain_break" | "other_record_intact" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &np07_text),
                     ],
                     2,
                 ),
@@ -84876,37 +84929,9 @@ GMEXECUTE f
                     assert_eq!(says, expect, "{name}: 切换后说词");
                 }
                 "act_usercmd6_first_only" => {
-                    // 与 golden 同一入口：直接 `GotoLable(label, boExtJmp=false)`（不经 UserSelect 的标签账本）。
                     rig.sessions.get_mut("hero").unwrap().game_gold = 10;
-                    let sg = rig.sessions.get_mut("hero").unwrap();
-                    let session = rig.shop_sessions.entry("hero".to_string()).or_default();
-                    let sell_off = rig.sell_off_sessions.entry("hero".to_string()).or_default();
-                    let mut rng = std::mem::replace(
-                        &mut rig.world.rng,
-                        mir2_shared::rng::RandomNumber::with_seed(0),
-                    );
-                    let mut broadcasts: Vec<String> = Vec::new();
-                    let (says, _f, _s, _w) = run_merchant_goto(
-                        &rig.book,
-                        rig.elder_id,
-                        "@UserCmd6",
-                        false,
-                        sg,
-                        "hero",
-                        "0",
-                        &rig.catalog,
-                        &mut rig.item_number,
-                        &rig.npc_vars,
-                        session,
-                        sell_off,
-                        now_ms() as i32,
-                        &mut rng,
-                        None,
-                        None,
-                        &mut broadcasts,
-                        false,
-                    );
-                    rig.world.rng = rng;
+                    rig.direct_goto("@UserCmd6");
+                    let says = T137Rig::says(&rig.drain());
                     assert!(says.is_empty(), "{name}: 无说词");
                 }
                 "extjmp_allowed" | "extjmp_blocked" => {
@@ -84922,6 +84947,16 @@ GMEXECUTE f
                         .map(|r| r["msg"].as_str().unwrap().to_string())
                         .collect();
                     assert_eq!(says, expect, "{name}: extjmp 说词");
+                }
+                "chain_break" | "other_record_intact" => {
+                    // golden 的 GameGold 前置为 0（与 C# 探针默认一致）。
+                    rig.sessions.get_mut("hero").unwrap().game_gold = 0;
+                    let label = case["ctx"]["label"].as_str().expect("label");
+                    rig.direct_goto(label);
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"].as_array().unwrap().iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string()).collect();
+                    assert_eq!(says, expect, "{name}: 断链说词");
                 }
                 other => panic!("golden 出现未知用例 {other}（禁止静默跳过）"),
             }
