@@ -1153,3 +1153,16 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 
 - 门禁：`dotnet build` rc=0；`antimagic-selftest` / `fixture-selftest` / `fireball-selftest` /
   `runmagic-input-selftest` 全 rc=0。入库 golden 未改（`healing.json` 替换归 `2d`）。
+- **补门（同日第 2 笔，应总监要求「别把 224 留成魔法数」）**：`full` 的输入 HP 不再写字面量，改为
+  `FixtureContract.Recompute(spec.Job, spec.TargetLevel).MaxHp`（与 `derived.max_hp` 同一条派生路径）；
+  并加生成期自检 `EnsureFullHpBranch`——调用点在 `EmitGolden` **之前**，断言
+  `Fixture.target_hp == derived.max_hp`，不等 ⇒ `RED FIXTURE_CONTRACT` rc=2、**不落盘**，
+  错误串点名「full 支必须整血构造」。效果：改 `TargetLevel` 时 `full` 自动跟到新 MaxHP；
+  有人手改成非满血，生成器直接拒绝——「满血不治疗」分支不会再静默消失。
+- **牙（实测，最终形态）**：把 `fullHp` 故意设成 `MaxHp - 1` ⇒ `--case healing` rc=2：
+  `RED FIXTURE_CONTRACT [healing/full] full 支必须整血构造：Fixture.target_hp=223 != derived.max_hp=224（Fixture.target_max_hp=224；…）`；
+  同次 `--out` 的目标文件**未创建**（`ls` 不存在）。还原（`cp` 快照、`sha256` 相等、无 MUTATION 残留）后复绿，
+  `healing-after-final.json` 与派生前的 `healing-after.json` 除墙钟 `delivery` 外逐字段相同。
+- **初版自证无牙（留痕，未入库）**：第一版把门槛复用构造用的 `fullHp` —— 「传什么就比什么」，门恒真；
+  变异 `MaxHP-1` 仍 rc=0 并落盘。改为在门内**从 spec 等级现算** `derived.max_hp` 后才咬住。
+  教训：自检的门槛必须独立于被检对象的来源，否则只是同义反复。

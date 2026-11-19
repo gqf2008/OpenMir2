@@ -1055,13 +1055,40 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             return 2;
         }
         var spec = new MagicSpec { Key = "healing", MagicId = 2, MagicName = "Healing" };
+        // `full` = 目标**整血**（`DoSpell` 的门是 `targetObject.WAbil.HP < targetObject.WAbil.MaxHP`，
+        // 见 `MagicConst.SKILL_HEALLING` 支）：输入 HP 必须**由等级派生**，不能写字面量——改 `TargetLevel` 时
+        // 字面量会让「满血」静默变成「未满血」，治疗分支又悄悄回来（12 号 2026-11-20 的回归）。
+        int fullHp = FixtureContract.Recompute(spec.Job, (byte)spec.TargetLevel).MaxHp;
         var cases = new[]
         {
             RunMagicCase(spec, "heal", 1, 1000, 50, false),
-            RunMagicCase(spec, "full", 5, 2000, 224, false),
+            RunMagicCase(spec, "full", 5, 2000, fullHp, false),
             RunMagicCase(spec, "self", 13, 3000, 50, true),
         };
+        // 生成期自检（在 `EmitGolden` 之前 ⇒ 失败即 rc=2、不落盘）。门槛由 **spec 等级现算**，
+        // 不复用上面的 `fullHp`——否则「传什么就比什么」，门恒真（负例证明见卡 §25）。
+        EnsureFullHpBranch("healing/full", cases[1].Fixture, spec);
         return EmitGolden(spec, cases);
+    }
+
+    /// <summary>
+    /// `full` 支必须**整血**构造：`Fixture.target_hp` 要等于该 spec 等级派生的 `MaxHP`（不是字面量）。
+    /// 不等 ⇒ `FixtureContractViolation`（顶层打 `RED FIXTURE_CONTRACT`、rc=2），且调用点在
+    /// `EmitGolden` 之前 ⇒ 不落盘。防的失效模式：改了 `TargetLevel` 或手改 HP，让「满血」静默变成
+    /// 「未满血」、治疗分支悄悄回来（12 号 2026-11-20 的回归）。
+    /// </summary>
+    private static void EnsureFullHpBranch(string where, object fixture, MagicSpec spec)
+    {
+        int derivedMaxHp = FixtureContract.Recompute(spec.Job, (byte)spec.TargetLevel).MaxHp;
+        int hp = (int)fixture.GetType().GetProperty("target_hp").GetValue(fixture);
+        int maxHp = (int)fixture.GetType().GetProperty("target_max_hp").GetValue(fixture);
+        if (hp != derivedMaxHp)
+        {
+            throw new FixtureContractViolation(
+                $"[{where}] full 支必须整血构造：Fixture.target_hp={hp} != derived.max_hp={derivedMaxHp}"
+                + "（Fixture.target_max_hp=" + maxHp + "；输入 HP 必须由等级派生、不得写字面量，"
+                + "否则「满血不治疗」分支会静默消失）");
+        }
     }
 
     /// <summary>
