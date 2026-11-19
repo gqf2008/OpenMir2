@@ -165,6 +165,8 @@ public static class FixtureContract
         public string UnreachableEvidence;
         public bool LegacyArtifact;
         public string LegacyReason;
+        /// <summary>`login_order=true` 时实跑后的 `Abil.MaxExp`（必须等于 `derived.max_exp`）。</summary>
+        public int? ActualMaxExp;
     }
 
     /// <summary>四道硬门 + 三条自洽门；违规抛 <see cref="FixtureContractViolation"/>（调用方 rc=2）。</summary>
@@ -215,6 +217,12 @@ public static class FixtureContract
             throw new FixtureContractViolation(
                 $"[{f.Label}] derived 与 oracle 复算不等：derived=max_hp/{f.Derived.MaxHp} max_mp/{f.Derived.MaxMp} dc/{f.Derived.Dc} ac/{f.Derived.Ac} mac/{f.Derived.Mac} max_exp/{f.Derived.MaxExp}；"
                 + $"oracle({f.Construction.Job} L{f.Construction.Level})=max_hp/{oracle.MaxHp} max_mp/{oracle.MaxMp} dc/{oracle.Dc} ac/{oracle.Ac} mac/{oracle.Mac} max_exp/{oracle.MaxExp}");
+        }
+        // 第 8 道门：登录序的 `Abil.MaxExp` 必须显式设成冻结表的 `GetLevelExp(Level)`（不得留 ctor 50）。
+        if (f.LoginOrder && f.ActualMaxExp is not null && f.ActualMaxExp != f.Derived.MaxExp)
+        {
+            throw new FixtureContractViolation(
+                $"[{f.Label}] Abil.MaxExp 未按登录序派生：actual={f.ActualMaxExp}，exps 表 GetLevelExp({f.Construction.Level})={f.Derived.MaxExp}（夹具必须显式设置）");
         }
         // 第 7 道门：reachable 时平铺值必须等于该可达组合的复算值（手设值不得凭空）。
         if (f.Reachability == "reachable")

@@ -1008,3 +1008,130 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   在 `login_order=false` 的可达手设件上做两模式对照；相同者必须给结构性依据（无延时受击 / 排水 `Operate` 不调 RNG），
   落到符号锚——缺依据即判非法声明。
 - 本表只落实测与归因，**不改变任何条目 status**；入库件替换与比较器收紧归 M53。
+## 22. M52.1：`fireball` 的 seam 证据（应 QA 条件②）
+
+- **装置**：`FireballCase(rngMode, loginOrder)` + `--fireball-rng-mode/--fireball-login-order`；cover 路径的
+  `draws` 捕获与 `RngSeam.Restore` **位于排水循环之后**（`DRAIN_PASSES` 行紧后），freeze 在 `DoSpell` 紧后收尾。
+  **返工记录（2026-11-20，QA 实测）**：首版误把 cover 块放在 `Thread.Sleep(700)` 与排水循环之前 ⇒
+  `QA_DRAIN_PROBE draws=5 total=5`（排水窗口抽取未经 LoggingRandom，cover 为空声明）；本笔已移到排水之后，
+  探针改为注入**真实排水阶段**（`Thread.Sleep` 之后、循环之前）——牙②方向改为"若把捕获/Restore 提前 ⇒ 探针红"。
+  `login_order=true` 时：`RecalcLevelAbilitys()` → `Abil.MaxExp = GetLevelExp(Level)`（冻结表）→
+  `RecalcAbilitys()` → `WAbil.HP = MaxHP` → `DrainRaw()`。
+- **记录面**：`LoggingRandom.TotalDraws`（不被 `Restore` 清零）；golden 记 `rng_total_draws` 与 `rng_recorded`；
+  生成器断言 cover 下 `Rng.Count == rng_total_draws`（不等 ⇒ rc=2）。
+- **实测事实（2026-11-20 返工后）**：火球在**真实排水窗口**确有抽取——cover 记 **8** 次、freeze 只记 **5** 次
+  （`cover=5,0,0,0,0,0,0,9` vs `freeze=5,0,0,0,0`；探针 `cover=8→9 / freeze=5→5`）⇒ 两模式**可区分**。
+  首版观察到的"5 次全在施法期、两模式相同"是 **cover 块误置于排水之前**导致的**空声明**，不是火球的真实性质。
+- **证据（自测探针，不进 golden）**：在**真实排水阶段**（`Thread.Sleep(700)` 之后、排水循环之前）注入一次抽取——
+  cover 记到（`8→9`）、freeze 不记（`5→5`）；变异 T2（把捕获/Restore 提前到排水前）⇒ `cover_caught=False`、
+  自测红；还原后逐字节相等（`git hash-object` == `HEAD:<path>`）、复绿。QA 侧独立探针（自带 `Random(1000)`，
+  不用本装置的 `probeDrainDraw`）复测：`cover draws=9 total=9`、`freeze draws=5 total=5`。
+- **MaxExp 门两例**：设 `GetLevelExp(20)=6000` ⇒ 绿；留 ctor `50` ⇒ rc=2。
+- 旧合成件（`login_order=false` + `freeze_at_dospell`，`anti_magic=3`/`target_max_hp=100`）可生成，
+  标 `legacy_artifact`；登录序主件（`anti_magic=1`、`max_hp=224`、`rng_total_draws=8`，三例均 8）可生成。
+
+## 31. 33 冰咆哮（`SKILL_SNOWWIND`）接线记录（2026-11-20，已重取）
+
+- **oracle 分派（只认魔号，不按名字）**：`src/M2Server/Magic/MagicManager.cs:489-494`
+  的 `case SKILL_SNOWWIND` → `MagBigExplosion(…, SystemShare.Config.SnowWindRange)`；
+  helper `:1100-1117`。判据全部来自 33 自己的 golden（不沿用 23 的结论）。
+- **范围来源落进夹具**：部署 `E:\MirServer\M2GameSvr\Server.conf`（sha256 `ce5e3ce9…`）
+  的 `SnowWindRange=1`；golden `Fixture` 记录 `snow_wind_range`、`fire_boom_rage`、
+  `elec_blizzard_range` 与 `server_conf_sha256`。
+- **实测（33 自己的 golden）**：target **HP 100→85（damage 15）**⇒ 本夹具
+  `IsProtectTarget` 为 true；`Rng` = **7 抽**（`[0,0,0,7,1,0,3]`）、`DrainPasses` = 4、`NotDue` = 0；
+  caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`；
+  RM：8044(target,p1=15,108)/10052(target,68)/8103(众人,w=15/p1=85/p2=224/p3=caster,167)/
+  8090(154)/10123(caster,p1=33,255)、10008.p3=33；golden = `golden/magic/snowwind.json`。
+- **`DeliverRng` 口径（统一判据下实测）**：33 的受击抽发生在**施法段内**，已并入主 `Rng`（7 抽）
+  并被 `verify` **逐值比较**；台账 `DeliverRng` 实测 = `[]`，按统一判据 `golden.Rng == rust.Rng
+  ++ rust.DeliverRng` 成立（7 == 7 + 0）。本支**不**保留任何"DeliverRng 必须为空"的特例断言
+  （`5ef8c923c` 已撤回）。比较器收紧（含 `rng_total_draws` 等式）另案（M57）。
+- **重取证据（同一 `run_id`）**：`MIR2_LEDGER_RUN_ID=magic33-retake-20261120T0625` 下
+  `cargo test -p game-svr --lib -- --exact --ignored tests::snowwind_parity_s1/s5/s13`
+  三支逐个 rc=0（1 passed each）；`cargo test -p mir2-parity-tests --test
+  magic_fireball_parity -- --exact --ignored real_rust_ledger_snowwind` rc=0；
+  三份侧车 `<stem>_<label>.run.json` 均记该 run_id。负对照：换 id（`WRONG-run-id-negctl`）
+  比较器 rc=101，报「台账陈旧：run_id 不匹配」。
+- **全平面回归（同一 run_id）**：`MIR2_LEDGER_RUN_ID=magic-plane-1795127273-1441175` 跑
+  `rerun_magic_plane.sh`（48 支驱动 + 16 条比较器，含 33 与既有 15 条）⇒ 49 个
+  `test result: ok`、0 failed、rc=0（`evidence/regression-33-plane-final.log`）。
+- **门禁（红→绿留痕）**：首跑 `cargo clippy --workspace --all-targets -- -D warnings` **rc=101**
+  —— `doc_lazy_continuation` 两处（`bins/game-svr/src/lib.rs:67718/67719`：列表项后的
+  「范围来源」段缺空行；`evidence/33-clippy.log` 原文保留）。修复 = 加一行 `///` 空行；
+  复跑 rc=0（`evidence/33-clippy-final.log`）。`cargo fmt --all -- --check` rc=0。
+- **帧族与 C2 交集**：本支帧族（53/638/656/31）与 `push_broadcast` 缓存接线相交，
+  **`2f` 的 C2 落地后必须重跑全平面**。
+- **MG-45 升格（已写入清单）**：`status=verified`、`basis=semantic`、
+  `test=real_rust_ledger_snowwind`、`fixture=golden/magic/snowwind.json`、
+  `cases=s1/s5/s13`、`unit_tests=tests::snowwind_parity_s1/s5/s13` ⇒ magic 域 16/65。
+
+## 23. M57 前序：`RunMagicCase` 的 `Fixture` 输入语义（2026-11-20）
+
+- `RunMagicCase` 的四个**驱动输入**（`target_level`/`target_hp`/`target_max_hp`/`anti_magic`）在
+  「target 构造完成、RNG/`DoSpell` 之前」捕获并写入 `Fixture`；术后状态（受击/治疗后的 HP 等）只在
+  结果顶层 `TargetHp`，**不得**回写成 `Fixture` 输入。
+- 缺陷史：合入 M52 的装置曾在排水循环之后取 `target.WAbil.HP`（术后值）；旧世代 golden 记的是输入（100）。
+  本笔改为施法前输入；附 `--case runmagic-input-selftest`（**`lightning-11` 的 `hit`（seed 13）：输入 100 →
+  术后 85，断言 `Fixture.target_hp == 100`**）——若捕获再被挪到排水后，该用例必红。
+- **为什么换样本（可证伪性留痕）**：最初用 `healing/heal`（输入 50），实测**术后 HP == 输入 50** ⇒ 在"把捕获
+  挪到排水后"的变异下断言仍成立、**牙咬不住**；故改用术后确实变化的雷电 hit。自测样本必须按"能否证伪捕获点
+  错位"来选，而不是按"看起来相关"。
+
+## 24. `card/golden-params-4`：A/B/C 三处装置缺陷（2026-11-20，`2d` 15 条重生成的前置）
+
+`2d` 在重生成 15 条 golden 时发现装置三处缺陷，均落在 `MagicGolden/Program.cs`（仓库自留的 oracle 侧
+装置，非 `src/**` 冻结面）；本笔只修这三处，不改 golden 内容（golden 由 `2d` 统一重生成）。
+
+### A. `RunMagicCase` 缺 `rng_total_draws` 与 cover 完整性守卫
+
+- `Fixture` 新增 `rng_total_draws`（seam 实例累计抽取数；排水后、`RngSeam.Restore` 前取值）与
+  `rng_recorded`（`Rng.Count` 快照）。`RunFireball` 早已有这两键，本笔只补齐 `RunMagicCase`。
+- 新增 `EnsureCoverAccounting`：`rng_mode=cover_drain` 时要求 `rng_recorded == rng_total_draws`，
+  否则抛 `FixtureContractViolation` ⇒ 顶层捕获打 `RED FIXTURE_CONTRACT`、rc=2。
+  `freeze_at_dospell` 是 legacy 口径（本来漏记排水期抽取），只记两值不判等。
+- 守卫咬的是**捕获点错位**（M52.1 的失效模式：`draws` 在排水前取快照、`totalDraws` 在排水后读）。
+  正确代码里两者相邻同值，一旦有人把捕获挪到排水之前就立刻不等。
+- **牙（实测，本 worktree）**：把 `RunMagicCase` 的 `draws` 改成「`DoSpell` 后立即取快照」
+  （`drawsEarly`）⇒ `--case lightning11` rc=2：
+  `RED FIXTURE_CONTRACT [runmagic/lightning-11/edge] cover_drain 记账不完整：Rng.Count=5 != rng_total_draws=8`
+  （该支排水期确有 3 次抽取）；`miss` 支无排水抽取、保持绿——守卫只在真有排水抽的支上发声。
+  还原（`cp` 快照；`sha256` 与快照相等、无 `MUTATION` 残留）后四支自测复绿。
+
+### B. `AntiMagicBatch` 的种子门槛必须用**生效** `AntiMagic`
+
+- 缺陷：`AntiMagicBatch` 用 `spec.AntiMagic`（缺省 3）选种子，但 `RunMagicCase` **恒走登录序**
+  （`RecalcLevelAbilitys(); RecalcAbilitys();`），而 `RecalcAbilitys()`（`BaseObject.Abil` 同名方法）
+  无条件 `AntiMagic = 1` 再 `+= AddAbil.AntiMagic`；本装置 `Equipment` 恒空 ⇒ 生效值 = 1。
+  于是三支首抽（2/3/5）在门槛 1 下**全是 hit**，miss/edge 丢失。
+- **选择与理由**：**不改 `MagicSpec.AntiMagic` 缺省**。它只是登录前的构造值（登录序里必被覆盖），
+  改缺省只是让巧合成立；一旦引入装备或登录序变化又会静默退化。改为显式常量
+  `LoginOrderAntiMagic = 1` 作门槛，并在 `RunMagicCase`/`RunFireball` 用 `CheckBranchThreshold`
+  与**实测** `target.AntiMagic` 断言相等——预测错了就生成失败，不会静默产出退化用例。
+- 三支首抽语义（`Random(10) >= AntiMagic` 才通过；11/45/13/44 与火球同式）：
+  miss = 首抽 < 门槛、edge = 首抽 == 门槛、hit = 首抽 > 门槛 ⇒ 门槛 1 下 **0 / 1 / ≥2**。
+- 同一缺陷在 `FireballCase`（`login_order=true`）同样存在（构造期 `antiMagic=3` 被登录序覆盖成 1），
+  按同一修法处理：`effectiveAnti = loginOrder ? LoginOrderAntiMagic : antiMagic`。
+- **牙**：把 `RunAntiMagicTriplet` 的门槛改回 `spec.AntiMagic` ⇒ `--case lightning11` rc=2，
+  `种子门槛与生效 AntiMagic 不符：门槛=3 实测 target.AntiMagic=1`；分支判定本身也有牙
+  （自测里把 `miss` 支的首抽当成 1 ⇒ 违规）。
+
+### C. `Fixture` 增 `seed_reason`（逐支写）
+
+- 每支写明种子来历，例如 `首抽=0(seed 14)，门槛 anti_magic=1（骰 Random(10) >= 门槛 才通过；miss）`。
+  值取自**实测**首抽与实测门槛（不是硬编码文案）；`RunFireball` 与 `RunMagicCase` 产物同带。
+
+### 自测与回归（本笔实测）
+
+- 新 `--case antimagic-selftest`：`lightning-11` 三支在生效 `AntiMagic=1` 下首抽 **0 / 1 / 3**
+  （seed 14 / 18 / 5），逐支断言 `fixture.anti_magic==1`、`seed_reason` 含门槛、
+  `rng_recorded==rng_total_draws`；另钉 A/B 三颗牙的负例（伪造 3 != 5、相等放行、freeze 放行、
+  miss 首抽=门槛、实测门槛不符）。rc=0，`ANTIMAGIC_SELFTEST OK`。
+- 回归：`fixture-selftest`、`fireball-selftest`（`FIREBALL_SEAM_PROBE cover=8->9 freeze=5->5`）、
+  `runmagic-input-selftest` 三者 rc=0。
+- 生成面抽查：`lightning11`/`lightning45`/`firecharm`/`hbfireball`/`fireball5` 五支 rc=0
+  （三支首抽落段断言全过）；`--case fireball` 三种组合（登录序 cover / 非登录序 cover /
+  登录序 freeze ⇒ rc=2 门 3）行为不变。
+- `dotnet build` rc=0（0 error）。
+- 已知遗留（不改，交 `2d` 判断）：`--case fireball` 顶层 `anti_magic` 仍是构造参数（3），
+  逐 case 的 `fixture.anti_magic` 才是生效值（登录序 1）；比较器若读顶层字段应按后者对齐。

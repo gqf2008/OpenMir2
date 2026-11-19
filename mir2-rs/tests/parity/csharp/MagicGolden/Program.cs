@@ -25,6 +25,8 @@ namespace MagicGolden;
 public sealed class LoggingRandom : Random
 {
     public List<long> Draws { get; } = new();
+    /// <summary>本 case 期间该包装层的累计抽取数（`Restore` 不会清零；每次 `Install` 新实例从 0 起）。</summary>
+    public long TotalDraws { get; private set; }
 
     public LoggingRandom(int seed) : base(seed) { }
 
@@ -32,6 +34,7 @@ public sealed class LoggingRandom : Random
     {
         int v = base.Next();
         Draws.Add(v);
+        TotalDraws++;
         return v;
     }
 
@@ -39,6 +42,7 @@ public sealed class LoggingRandom : Random
     {
         int v = base.Next(maxValue);
         Draws.Add(v);
+        TotalDraws++;
         return v;
     }
 
@@ -46,6 +50,7 @@ public sealed class LoggingRandom : Random
     {
         int v = base.Next(minValue, maxValue);
         Draws.Add(v);
+        TotalDraws++;
         return v;
     }
 
@@ -68,12 +73,18 @@ public static class RngSeam
         _ = RandomNumber.GetInstance();
         var logging = new LoggingRandom(seed);
         RandomField.SetValue(null, logging);
+        _current = logging;
         return logging;
     }
 
     public static void Restore(Random original) => RandomField.SetValue(null, original);
 
     public static Random Capture() => (Random)RandomField.GetValue(null);
+
+    private static LoggingRandom _current;
+
+    /// <summary>当前安装的包装层（`Install` 设置；`Restore` 不清空引用 ⇒ 计数可回读）。</summary>
+    public static long TotalDraws => _current?.TotalDraws ?? 0;
 }
 
 public static class Program
@@ -108,7 +119,15 @@ public static class Program
         {
             var name = args[Array.IndexOf(args, "--case") + 1];
             if (name == "fixture-selftest") return FixtureSelfTest();
-            if (name == "fireball") return FireballCase();
+            if (name == "runmagic-input-selftest") return RunMagicInputSelfTest();
+            if (name == "antimagic-selftest") return AntiMagicSelfTest();
+            if (name == "fireball")
+            {
+                string fbMode = ArgValue(args, "--fireball-rng-mode") ?? "cover_drain";
+                string fbLogin = ArgValue(args, "--fireball-login-order") ?? "true";
+                return FireballCase(fbMode, !string.Equals(fbLogin, "false", StringComparison.OrdinalIgnoreCase));
+            }
+            if (name == "fireball-selftest") return FireballSelfTest();
             if (name == "warrskill") return ClientSpellXYEntry.Run();
             if (name == "warr-selftest") return ClientSpellXYEntry.SelfTest();
             if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" });
@@ -125,6 +144,7 @@ public static class Program
             if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing" });
             if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 });
             if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" });
+            if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -139,6 +159,20 @@ public static class Program
     }
 
     private static readonly string[] ConfNames = { "Server.conf", "String.conf", "Exps.conf", "Global.conf", "setting.conf" };
+
+    /// <summary>
+    /// 部署配置 `Server.conf` 的 sha256（金标准夹具里落它的来源证明：范围类魔法的 range 值
+    /// 必须与**部署配置**同源，卡 §31）。优先取本进程工作目录里 `EnsureConfFiles` 拷进来的副本。
+    /// </summary>
+    private static string ServerConfSha256()
+    {
+        var copied = Path.Combine(AppContext.BaseDirectory, "Server.conf");
+        var src = Environment.GetEnvironmentVariable("MAGICGOLDEN_CONF_DIR") ?? @"E:\MirServer\M2GameSvr";
+        var path = File.Exists(copied) ? copied : Path.Combine(src, "Server.conf");
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        using var fs = File.OpenRead(path);
+        return Convert.ToHexString(sha.ComputeHash(fs)).ToLowerInvariant();
+    }
 
     /// <summary>把冻结部署的 5 个配置文件拷进输出目录（缺哪份拷哪份）；只读源，不改进生产文件。</summary>
     private static bool EnsureConfFiles(out List<string> copied, out List<string> missing)
@@ -290,7 +324,155 @@ public static class Program
     /// 三支：未命中（首抽 &lt; AntiMagic）、边界（首抽 == AntiMagic）、命中（首抽 &gt; AntiMagic）。
     /// 种子由扫描确定并**写进产物**，Rust 侧按同一 JSON 复现。
     /// </summary>
-    private static int FireballCase()
+    private static string ArgValue(string[] args, string key)
+    {
+        int i = Array.IndexOf(args, key);
+        return i >= 0 && i + 1 < args.Length ? args[i + 1] : null;
+    }
+
+    /// <summary>
+    /// `--case antimagic-selftest`（B 的牙）：登录序下生效 AntiMagic = 1（见 `LoginOrderAntiMagic`），
+    /// 断言三支首抽分别为 0 / 1 / &gt;=2，且每支 `Fixture.seed_reason` 写明首抽/种子/门槛；
+    /// 另钉住 A 的守卫（`EnsureCoverAccounting` 伪造 3 &lt; 5 ⇒ 违规；相等或 freeze 口径 ⇒ 放行）、
+    /// 分支判定（miss 支首抽 == 门槛 ⇒ 违规）与门槛断言（实测 3 != 门槛 1 ⇒ 违规）。
+    /// </summary>
+    private static int AntiMagicSelfTest()
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        int failures = 0;
+        void Check(string name, bool ok, string detail)
+        {
+            Console.Error.WriteLine("ANTIMAGIC_SELFTEST " + (ok ? "PASS " : "FAIL ") + name + " :: " + detail);
+            if (!ok) failures++;
+        }
+        var spec = new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" };
+        var cases = RunAntiMagicTriplet(spec);
+        if (cases == null)
+        {
+            Console.Error.WriteLine("SEED_SCAN_FAILED");
+            return 1;
+        }
+        long First(FireballResult r) => r.Rng.Count > 0 ? r.Rng[0] : -1;
+        Check("miss-first-draw", First(cases[0]) == 0, "first=" + First(cases[0]));
+        Check("edge-first-draw", First(cases[1]) == 1, "first=" + First(cases[1]));
+        Check("hit-first-draw", First(cases[2]) >= 2, "first=" + First(cases[2]));
+        for (int i = 0; i < cases.Length; i++)
+        {
+            var fx = cases[i].Fixture;
+            int anti = (int)fx.GetType().GetProperty("anti_magic").GetValue(fx);
+            string reason = (string)fx.GetType().GetProperty("seed_reason").GetValue(fx);
+            long total = Convert.ToInt64(fx.GetType().GetProperty("rng_total_draws").GetValue(fx));
+            long recorded = Convert.ToInt64(fx.GetType().GetProperty("rng_recorded").GetValue(fx));
+            Check("effective-anti#" + cases[i].Label, anti == LoginOrderAntiMagic, "fixture.anti_magic=" + anti);
+            Check("seed-reason#" + cases[i].Label, !string.IsNullOrEmpty(reason) && reason.Contains("门槛 anti_magic=1"), "reason=" + reason);
+            Check("cover-accounting#" + cases[i].Label, total == recorded, "total=" + total + " recorded=" + recorded);
+        }
+        Check("guard-bite", ThrowsFixtureViolation(() => EnsureCoverAccounting("cover_drain", 3, 5, "selftest")), "cover_drain 3 != 5 应违规");
+        Check("guard-pass-equal", !ThrowsFixtureViolation(() => EnsureCoverAccounting("cover_drain", 5, 5, "selftest")), "相等应放行");
+        Check("guard-freeze-legacy", !ThrowsFixtureViolation(() => EnsureCoverAccounting("freeze_at_dospell", 3, 5, "selftest")), "freeze 只记不判");
+        Check("branch-bite", ThrowsFixtureViolation(() => CheckAntiMagicBranch("selftest", new long[] { 1 }, 14, new AntiMagicBranchExpect { Kind = "miss", Threshold = 1 })), "miss 首抽=门槛 应违规");
+        Check("threshold-bite", ThrowsFixtureViolation(() => CheckBranchThreshold("selftest", 3, new AntiMagicBranchExpect { Kind = "hit", Threshold = 1 })), "实测 3 != 门槛 1 应违规");
+        Console.Error.WriteLine(failures == 0 ? "ANTIMAGIC_SELFTEST OK" : ("ANTIMAGIC_SELFTEST RED failures=" + failures));
+        return failures == 0 ? 0 : 1;
+    }
+
+    private static bool ThrowsFixtureViolation(Action a)
+    {
+        try { a(); return false; }
+        catch (FixtureContractViolation) { return true; }
+    }
+
+    /// <summary>
+    /// `--case fireball-selftest`：牙①（有排水抽的 cover vs freeze 可区分）+ 第 8 道门两例
+    /// （设了 MaxExp ⇒ 绿 / 不设 ⇒ rc=2）。
+    /// </summary>
+    private static int FireballSelfTest()
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        int failures = 0;
+        // 牙①：同一 case（hit，seed 13）在两种 seam 下的 Rng 对照。
+        // freeze 只与 login_order=false 合法（门 3）；两模式都在**同一合成夹具**（anti=3）上跑，
+        // 差异只来自 seam：cover 含排水期抽取、freeze 不含。
+        var cover = RunFireball("selftest", 13, 3, 7000, false, "cover_drain");
+        var freeze = RunFireball("selftest", 13, 3, 8000, false, "freeze_at_dospell");
+        // 探针（牙①）：注入一次「排水前」抽取。cover 必须记到（+1），freeze 不得记到（0 增量）。
+        var coverProbe = RunFireball("selftest-probe", 13, 3, 9000, false, "cover_drain", probeDrainDraw: true);
+        var freezeProbe = RunFireball("selftest-probe", 13, 3, 9100, false, "freeze_at_dospell", probeDrainDraw: true);
+        bool probeCoverCaught = coverProbe.Rng.Count == cover.Rng.Count + 1;
+        bool probeFreezeMissed = freezeProbe.Rng.Count == freeze.Rng.Count;
+        Console.Error.WriteLine("FIREBALL_SEAM_PROBE cover=" + cover.Rng.Count + "->" + coverProbe.Rng.Count
+            + " freeze=" + freeze.Rng.Count + "->" + freezeProbe.Rng.Count
+            + " cover_caught=" + probeCoverCaught + " freeze_missed=" + probeFreezeMissed);
+        if (!probeCoverCaught || !probeFreezeMissed)
+        {
+            Console.Error.WriteLine("FIREBALL_SELFTEST FAIL seam-probe");
+            failures++;
+        }
+        else
+        {
+            Console.Error.WriteLine("FIREBALL_SELFTEST PASS seam-probe (cover catches drain-window draw; freeze does not)");
+        }
+        bool distinguishable = cover.Rng.Count != freeze.Rng.Count
+            || !cover.Rng.SequenceEqual(freeze.Rng);
+        Console.Error.WriteLine("FIREBALL_SEAM_DIFF cover_len=" + cover.Rng.Count + " freeze_len=" + freeze.Rng.Count
+            + " cover=" + string.Join(",", cover.Rng) + " freeze=" + string.Join(",", freeze.Rng)
+            + (distinguishable ? " DISTINGUISHABLE" : " IDENTICAL"));
+        if (!distinguishable)
+        {
+            // 火球自身无排水抽：两模式相同属**结构性**结果（解释见卡面），不再据此判红；
+            // seam 是否真覆盖排水由下面的注入探针证明。
+            Console.Error.WriteLine("FIREBALL_SEAM_DIFF_INFO identical-by-construction (fireball draws only at cast; see probe)");
+        }
+        // MaxExp 门两例
+        var derived = FixtureContract.Recompute(OpenMir2.Enums.PlayerJob.Warrior, 20);
+        FixtureContract.FixtureInput Make(int? maxExp) => new()
+        {
+            Label = "selftest",
+            RngMode = "cover_drain",
+            LoginOrder = true,
+            Reachability = "reachable",
+            AntiMagic = 1,
+            TargetLevel = 20,
+            TargetHp = derived.MaxHp,
+            TargetMaxHp = derived.MaxHp,
+            Derived = derived,
+            Construction = new FixtureContract.Construction { Job = OpenMir2.Enums.PlayerJob.Warrior, Level = 20, Equipment = new List<string>(), Skills = new List<string> { "FireBall" } },
+            ScenarioNote = "",
+            ActualMaxExp = maxExp,
+        };
+        try
+        {
+            FixtureContract.Validate(Make(derived.MaxExp));
+            Console.Error.WriteLine("FIREBALL_SELFTEST PASS maxexp-set-green (expect=" + derived.MaxExp + ")");
+        }
+        catch (FixtureContractViolation ex)
+        {
+            Console.Error.WriteLine("FIREBALL_SELFTEST FAIL maxexp-set-green :: " + ex.Message);
+            failures++;
+        }
+        try
+        {
+            FixtureContract.Validate(Make(50));
+            Console.Error.WriteLine("FIREBALL_SELFTEST FAIL maxexp-unset-red :: 期望 rc=2 的输入通过了校验");
+            failures++;
+        }
+        catch (FixtureContractViolation)
+        {
+            Console.Error.WriteLine("FIREBALL_SELFTEST PASS maxexp-unset-red (rc=2)");
+        }
+        Console.Error.WriteLine(failures == 0 ? "FIREBALL_SELFTEST OK" : ("FIREBALL_SELFTEST RED failures=" + failures));
+        return failures == 0 ? 0 : 1;
+    }
+
+    private static int FireballCase(string rngMode, bool loginOrder)
     {
         if (!EnsureConfFiles(out _, out var missing))
         {
@@ -298,9 +480,12 @@ public static class Program
             return 2;
         }
         const int antiMagic = 3;
-        int seedMiss = FindSeedForFirstDraw(10, antiMagic - 1);
-        int seedEdge = FindSeedForFirstDraw(10, antiMagic);
-        int seedHit = FindSeedForFirstDraw(10, antiMagic + 2);
+        // 种子门槛取**生效值**：登录序里 `RecalcAbilitys()` 把 AntiMagic 置 1（构造期预置的 3 被覆盖）；
+        // 用 3 选种子会让三支首抽（2/3/5）在门槛 1 下全是 hit（miss/edge 丢失）。
+        int effectiveAnti = loginOrder ? LoginOrderAntiMagic : antiMagic;
+        int seedMiss = FindSeedForFirstDraw(10, effectiveAnti - 1);
+        int seedEdge = FindSeedForFirstDraw(10, effectiveAnti);
+        int seedHit = FindSeedForFirstDraw(10, effectiveAnti + 2);
         if (seedMiss < 0 || seedEdge < 0 || seedHit < 0)
         {
             Console.Error.WriteLine("SEED_SCAN_FAILED");
@@ -308,9 +493,9 @@ public static class Program
         }
         var cases = new[]
         {
-            RunFireball("miss", seedMiss, antiMagic, 1000),
-            RunFireball("edge", seedEdge, antiMagic, 2000),
-            RunFireball("hit", seedHit, antiMagic, 3000),
+            RunFireball("miss", seedMiss, antiMagic, 1000, loginOrder, rngMode, branchExpect: new AntiMagicBranchExpect { Kind = "miss", Threshold = effectiveAnti }),
+            RunFireball("edge", seedEdge, antiMagic, 2000, loginOrder, rngMode, branchExpect: new AntiMagicBranchExpect { Kind = "edge", Threshold = effectiveAnti }),
+            RunFireball("hit", seedHit, antiMagic, 3000, loginOrder, rngMode, branchExpect: new AntiMagicBranchExpect { Kind = "hit", Threshold = effectiveAnti }),
         };
         var outObj = new { magic_id = 1, anti_magic = antiMagic, cases };
         var json = JsonSerializer.Serialize(outObj, new JsonSerializerOptions { WriteIndented = true });
@@ -342,8 +527,80 @@ public static class Program
         return -1;
     }
 
+    /// <summary>
+    /// 生效 AntiMagic（种子门槛）：`RunMagicCase`/`RunFireball` 的登录序分支**恒**跑
+    /// `RecalcLevelAbilitys(); RecalcAbilitys();`（`PlayObject.cs:1308-1309`），而
+    /// `RecalcAbilitys()` 无条件 `AntiMagic = 1` 再 `+= AddAbil.AntiMagic`（`BaseObject.Abil.cs`）；
+    /// 本装置 `Equipment` 恒空 ⇒ 生效值 = 1。构造期预置的 `MagicSpec.AntiMagic`（缺省 3）会被登录序
+    /// **覆盖**，不能当种子门槛——否则 miss/edge/hit 三支退化为同一支（首抽 >=1 全过）。
+    /// 该预测值在每次生成时与实测 `target.AntiMagic` 断言一致（见 `CheckBranchThreshold`）。
+    /// </summary>
+    private const int LoginOrderAntiMagic = 1;
+
+    /// <summary>
+    /// 分支语义（骰 `Random(10) >= AntiMagic` 才通过；11/45/13/44 与火球同式）：
+    /// miss = 首抽 &lt; 门槛、edge = 首抽 == 门槛、hit = 首抽 &gt; 门槛。
+    /// </summary>
+    internal sealed class AntiMagicBranchExpect
+    {
+        public string Kind;
+        public int Threshold;
+    }
+
+    private static void CheckBranchThreshold(string where, int actualAntiMagic, AntiMagicBranchExpect expect)
+    {
+        if (expect == null) return;
+        if (actualAntiMagic != expect.Threshold)
+        {
+            throw new FixtureContractViolation(
+                $"[{where}] 种子门槛与生效 AntiMagic 不符：门槛={expect.Threshold} 实测 target.AntiMagic={actualAntiMagic}"
+                + "（登录序 RecalcAbilitys 会把 AntiMagic 置 1；改装备/改登录序后必须重新推导门槛）");
+        }
+    }
+
+    private static string BuildSeedReason(long firstDraw, int seed, AntiMagicBranchExpect expect)
+        => $"首抽={firstDraw}(seed {seed})，门槛 anti_magic={expect.Threshold}（骰 Random(10) >= 门槛 才通过；{expect.Kind}）";
+
+    private static void CheckAntiMagicBranch(string where, IReadOnlyList<long> draws, int seed, AntiMagicBranchExpect expect)
+    {
+        if (expect == null) return;
+        if (draws.Count == 0)
+        {
+            throw new FixtureContractViolation($"[{where}] 该支无任何抽取，无法判定 {expect.Kind} 分支（种子 seam 失效？）");
+        }
+        long first = draws[0];
+        bool ok = expect.Kind switch
+        {
+            "miss" => first < expect.Threshold,
+            "edge" => first == expect.Threshold,
+            "hit" => first > expect.Threshold,
+            _ => throw new FixtureContractViolation($"[{where}] 未知分支 kind={expect.Kind}"),
+        };
+        if (!ok)
+        {
+            throw new FixtureContractViolation(
+                $"[{where}] 分支与首抽不符：kind={expect.Kind} 首抽={first}(seed {seed}) 门槛={expect.Threshold}"
+                + "（三支必须分别落在 小于 / 等于 / 大于 门槛 三段）");
+        }
+    }
+
+    /// <summary>
+    /// `cover_drain` 记账完整性：`Rng`（排水结束后的快照）必须等于该 seam 实例累计抽取数
+    /// （`rng_total_draws`）。捕获点若被挪到排水之前，两者不等 ⇒ 生成失败（不是静默产出短账本）。
+    /// `freeze_at_dospell` 是 legacy 口径（本来漏记排水抽取），只记两值不判等。
+    /// </summary>
+    internal static void EnsureCoverAccounting(string rngMode, long recorded, long totalDraws, string where)
+    {
+        if (rngMode != "cover_drain") return;
+        if (recorded != totalDraws)
+        {
+            throw new FixtureContractViolation(
+                $"[{where}] cover_drain 记账不完整：Rng.Count={recorded} != rng_total_draws={totalDraws}");
+        }
+    }
+
     /// <summary>用给定种子跑一次火球，返回账本（各接收者的 RM 与真实 SM 帧 + RNG + 关键状态）。</summary>
-    private static FireballResult RunFireball(string label, int seed, int antiMagic, int idBase)
+    private static FireballResult RunFireball(string label, int seed, int antiMagic, int idBase, bool loginOrder, string rngMode, bool probeDrainDraw = false, AntiMagicBranchExpect branchExpect = null)
     {
         string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
         var env = new M2Server.Maps.Envirnoment();
@@ -356,9 +613,31 @@ public static class Program
         caster.WAbil.MC = 15;
         var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)antiMagic };
         target.Abil.Level = 20;
-        target.WAbil.MaxHP = 100;
-        target.WAbil.HP = 100;   // 关键：不给 HP 则伤害变化不可观测（账本里 0→0）
-        target.Abil.MaxHP = 100;
+        int actualMaxExp = 50;
+        if (loginOrder)
+        {
+            // 登录序：`RecalcLevelAbilitys()+RecalcAbilitys()`（`UserLogon` 同序），并按冻结表显式设
+            // `Abil.MaxExp = GetLevelExp(Level)`——不设会被契约第 8 道门判 rc=2（不留 ctor 50）。
+            target.RecalcLevelAbilitys();
+            // 派生值经  取（内部先  并读冻结表；直接读
+            //  会因未 LoadConfig 而得 0）。
+            var levelDerived = FixtureContract.Recompute(OpenMir2.Enums.PlayerJob.Warrior, (byte)target.Abil.Level);
+            target.Abil.MaxExp = levelDerived.MaxExp;
+            actualMaxExp = target.Abil.MaxExp;
+            target.RecalcAbilitys();
+            target.WAbil.HP = target.WAbil.MaxHP; // 登录后满血（ 保留旧 HP=0，需在之后置）
+            target.DrainRaw();
+        }
+        else
+        {
+            // 历史合成场景（`AntiMagic=3`/`MaxHP=100`）：保持旧夹具（legacy），不设 MaxExp。
+            target.WAbil.MaxHP = 100;
+            target.WAbil.HP = 100;
+            target.Abil.MaxHP = 100;
+        }
+        // **输入**语义：`Fixture.target_hp` = 施法前 HP（驱动用它设初始值）；施法后值走结果顶层
+        // `TargetHp`（只作断言、不作输入）。
+        int targetHpInput = target.WAbil.HP;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         // **记录面补全（卡 openmir2-magic-parity A 口径）**：所有下行最终都汇到
@@ -394,6 +673,12 @@ public static class Program
             Magic = new OpenMir2.Data.MagicInfo { MagicId = 1, MagicName = "FireBall", Effect = 1, EffectType = 1 },
         };
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, target.CurrX, target.CurrY, target);
+        List<long> draws = new();
+        if (rngMode == "freeze_at_dospell")
+        {
+            draws = rng.Draws.ToList();
+            RngSeam.Restore(original);
+        }
         if (Environment.GetEnvironmentVariable("MAGICGOLDEN_DIAG") == "1")
         {
             Console.Error.WriteLine("DIAG visible=" + string.Join(",", caster.VisibleHumanList) + " envW=" + env.Width + " envH=" + env.Height
@@ -402,8 +687,6 @@ public static class Program
                 + " get1004=" + (SystemModule.SystemShare.ActorMgr.Get(idBase + 4) != null)
                 + " obmode=" + caster.ObMode + " fixedhide=" + caster.FixedHideMode + " ghost=" + caster.Ghost);
         }
-        var draws = rng.Draws.ToList();
-        RngSeam.Restore(original);
 
         // 延时路径：RM_DELAYMAGIC 到期后才走 BaseObject.Base.cs:711（伤害 → RM_MAGSTRUCK）。
         // 真机语义是后续 tick；这里等价地等到到期（600ms）再排水。
@@ -418,6 +701,12 @@ public static class Program
         const int MaxDrainPasses = 8;
         int hpBefore = target.WAbil.HP;
         Thread.Sleep(700);
+        if (probeDrainDraw)
+        {
+            // 自测探针（不进 golden）：**在真实排水阶段**（`Thread.Sleep` 之后、排水循环之前）抽一次。
+            // cover 下 seam 仍安装 ⇒ 入账；freeze 下 seam 已在 DoSpell 后还原 ⇒ 这次抽不被记录。
+            _ = M2Server.M2Share.RandomNumber.Random(1000);
+        }
         var receivers = new List<ReceiverResult>();
         var pending = new List<object>();
         var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
@@ -457,14 +746,85 @@ public static class Program
         if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
         }
         Console.Error.WriteLine($"DRAIN_PASSES {label} passes={drainPasses} hit_cap={drainPassesHitCap}");
+        // **cover 的 draws 与 Restore 必须在排水循环之后**（`rng_mode=cover_drain` 的真实含义：
+        // 排水阶段的抽取也进账本）；freeze 已在 `DoSpell` 紧后收尾（legacy）。
+        if (rngMode != "freeze_at_dospell")
+        {
+            draws = rng.Draws.ToList();
+            RngSeam.Restore(original);
+        }
+        long totalDraws = rng.TotalDraws;
+        EnsureCoverAccounting(rngMode, draws.Count, totalDraws, "fireball/" + label);
+        CheckBranchThreshold("fireball/" + label, target.AntiMagic, branchExpect);
+        CheckAntiMagicBranch("fireball/" + label, draws, seed, branchExpect);
+        string seedReasonText = branchExpect != null && draws.Count > 0
+            ? BuildSeedReason(draws[0], seed, branchExpect)
+            : null;
         int hpAfter = target.WAbil.HP;
         foreach (var (who, obj) in byWho)
         {
             receivers.Add(new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = ParseFrames(recorder.Buffers, obj.ActorId) });
         }
 
+        // —— 契约（M52.1）：同一 `FixtureContract` 七道门 + 第 8 道门（MaxExp）。
+        var contract = new FixtureContract.FixtureInput
+        {
+            Label = "fireball/" + label,
+            RngMode = rngMode,
+            LoginOrder = loginOrder,
+            Reachability = loginOrder ? "reachable" : "unverified",
+            AntiMagic = target.AntiMagic,
+            TargetLevel = target.Abil.Level,
+            TargetHp = targetHpInput,
+            TargetMaxHp = target.WAbil.MaxHP,
+            Derived = FixtureContract.Recompute(OpenMir2.Enums.PlayerJob.Warrior, (byte)target.Abil.Level),
+            Construction = new FixtureContract.Construction
+            {
+                Job = OpenMir2.Enums.PlayerJob.Warrior,
+                Level = (byte)target.Abil.Level,
+                Equipment = new List<string>(),
+                Skills = new List<string> { "FireBall" },
+            },
+            ScenarioNote = loginOrder ? "" : "历史合成场景（AntiMagic=3/MaxHP=100；登录流程产不出，留档）",
+            LegacyArtifact = rngMode == "freeze_at_dospell",
+            LegacyReason = rngMode == "freeze_at_dospell" ? "rng ledger incomplete (drain-stage draws omitted)" : null,
+            ActualMaxExp = loginOrder ? actualMaxExp : null,
+        };
+        FixtureContract.Validate(contract);
         return new FireballResult
         {
+            Fixture = new
+            {
+                rng_mode = rngMode,
+                login_order = loginOrder,
+                reachability = contract.Reachability,
+                anti_magic = (int)target.AntiMagic,
+                target_level = (int)target.Abil.Level,
+                target_hp = targetHpInput,
+                target_max_hp = (int)target.WAbil.MaxHP,
+                derived = new
+                {
+                    max_hp = contract.Derived.MaxHp,
+                    max_mp = contract.Derived.MaxMp,
+                    dc = contract.Derived.Dc,
+                    ac = contract.Derived.Ac,
+                    mac = contract.Derived.Mac,
+                    max_exp = contract.Derived.MaxExp,
+                },
+                construction = new
+                {
+                    job = "Warrior",
+                    level = (int)target.Abil.Level,
+                    equipment = Array.Empty<string>(),
+                    skills = new[] { "FireBall" },
+                },
+                scenario_note = contract.ScenarioNote,
+                legacy_artifact = contract.LegacyArtifact,
+                legacy_reason = contract.LegacyReason,
+                seed_reason = seedReasonText,
+                rng_total_draws = totalDraws,
+                rng_recorded = draws.Count,
+            },
             Label = label,
             Seed = seed,
             DrainPasses = drainPasses,
@@ -650,21 +1010,36 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        int seedMiss = FindSeedForFirstDraw(10, spec.AntiMagic - 1);
-        int seedEdge = FindSeedForFirstDraw(10, spec.AntiMagic);
-        int seedHit = FindSeedForFirstDraw(10, spec.AntiMagic + 2);
-        if (seedMiss < 0 || seedEdge < 0 || seedHit < 0)
+        var cases = RunAntiMagicTriplet(spec);
+        if (cases == null)
         {
             Console.Error.WriteLine("SEED_SCAN_FAILED");
             return 1;
         }
-        var cases = new[]
-        {
-            RunMagicCase(spec, "miss", seedMiss, 1000, spec.TargetMaxHp, false),
-            RunMagicCase(spec, "edge", seedEdge, 2000, spec.TargetMaxHp, false),
-            RunMagicCase(spec, "hit", seedHit, 3000, spec.TargetMaxHp, false),
-        };
         return EmitGolden(spec, cases);
+    }
+
+    /// <summary>
+    /// 有 AntiMagic 骰的支（11/45/13/44/火球系）三支：门槛取**生效 AntiMagic**（登录序后 = 1，
+    /// 见 `LoginOrderAntiMagic`），逐支带 `AntiMagicBranchExpect` ⇒ 生成期断言首抽落段，
+    /// 退化（三支同一支）会让生成失败而不是静默产出重复用例。
+    /// </summary>
+    private static FireballResult[] RunAntiMagicTriplet(MagicSpec spec)
+    {
+        int threshold = LoginOrderAntiMagic;
+        int seedMiss = FindSeedForFirstDraw(10, threshold - 1);
+        int seedEdge = FindSeedForFirstDraw(10, threshold);
+        int seedHit = FindSeedForFirstDraw(10, threshold + 2);
+        if (seedMiss < 0 || seedEdge < 0 || seedHit < 0)
+        {
+            return null;
+        }
+        return new[]
+        {
+            RunMagicCase(spec, "miss", seedMiss, 1000, spec.TargetMaxHp, false, new AntiMagicBranchExpect { Kind = "miss", Threshold = threshold }),
+            RunMagicCase(spec, "edge", seedEdge, 2000, spec.TargetMaxHp, false, new AntiMagicBranchExpect { Kind = "edge", Threshold = threshold }),
+            RunMagicCase(spec, "hit", seedHit, 3000, spec.TargetMaxHp, false, new AntiMagicBranchExpect { Kind = "hit", Threshold = threshold }),
+        };
     }
 
     /// <summary>
@@ -819,6 +1194,33 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         };
     }
 
+    /// <summary>
+    /// `--case runmagic-input-selftest`（M57 前序的牙）：人造「术后 ≠ 输入」场景（29 的 `heal`：
+    /// target 输入 HP=50，治疗术后 HP 上升），断言 `Fixture.target_hp` 仍是**输入 50**、术后值只在
+    /// 结果顶层 `TargetHp`。若有人把捕获挪到排水后（术后取值），本用例必红。
+    /// </summary>
+    private static int RunMagicInputSelfTest()
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        // 11 雷电 hit 支（seed 13）：输入 targetHp=100，术后被打击到 85 ⇒ 术后 ≠ 输入（实测）。
+        var spec = new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" };
+        var res = RunMagicCase(spec, "hit", 13, 1000, 100, false);
+        var fx = res.Fixture;
+        int fxHp = (int)fx.GetType().GetProperty("target_hp").GetValue(fx);
+        int fxMax = (int)fx.GetType().GetProperty("target_max_hp").GetValue(fx);
+        int fxAnti = (int)fx.GetType().GetProperty("anti_magic").GetValue(fx);
+        bool postDiffers = res.TargetHp != 100;
+        bool ok = fxHp == 100 && postDiffers;
+        Console.Error.WriteLine("RUNMAGIC_INPUT_SELFTEST " + (ok ? "OK" : "FAIL")
+            + " fixture.target_hp=" + fxHp + " fixture.target_max_hp=" + fxMax + " fixture.anti_magic=" + fxAnti
+            + " post.TargetHp=" + res.TargetHp + " post_differs=" + postDiffers);
+        return ok ? 0 : 1;
+    }
+
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
         var outObj = new
@@ -857,7 +1259,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
 
     /// <summary>跑一支魔法（`DoSpell` 直调），返回账本。`targetNull=true` ⇒ 目标对象为 null（治愈 self 支）。</summary>
     private static FireballResult RunMagicCase(
-        MagicSpec spec, string label, int seed, int idBase, int targetHp, bool targetNull)
+        MagicSpec spec, string label, int seed, int idBase, int targetHp, bool targetNull,
+        AntiMagicBranchExpect branchExpect = null)
     {
         string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
         var env = new M2Server.Maps.Envirnoment();
@@ -894,6 +1297,14 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         // `WAbil.HP/MaxHP`（`PlayObject.Message.cs:2009-2011`），少了这一步 MaxHP 会是 ctor 的 0。
         target.RecalcAbilitys();
         target.DrainRaw();
+        // **驱动输入（输入/输出语义）**：这四个值在「target 构造完成、RNG/DoSpell 之前」捕获并写入
+        // `Fixture`——`2d` 的驱动用它们设 target 初始状态。术后状态（如受击后的 HP）只留在结果顶层
+        // `TargetHp`，**不得**回写成 `Fixture` 输入（否则驱动会从术后值起手）。
+        int inputTargetLevel = target.Abil.Level;
+        int inputTargetHp = target.WAbil.HP;
+        int inputTargetMaxHp = target.WAbil.MaxHP;
+        int inputAntiMagic = target.AntiMagic;
+        CheckBranchThreshold("runmagic/" + spec.Key + "/" + label, inputAntiMagic, branchExpect);
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         if (targetNull)
@@ -1088,11 +1499,18 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             }
         }
         Console.Error.WriteLine($"DRAIN_PASSES {spec.Key}/{label} passes={drainPasses} hit_cap={drainPassesHitCap}");
+        // 排水后、`RngSeam.Restore` 前取累计数（`Restore` 不清零该实例计数，但按约定顺序取值）。
+        long totalDraws = rng.TotalDraws;
         if (spec.RngMode != "freeze_at_dospell")
         {
             draws = rng.Draws.ToList();
             RngSeam.Restore(original);
         }
+        EnsureCoverAccounting(spec.RngMode, draws.Count, totalDraws, "runmagic/" + spec.Key + "/" + label);
+        CheckAntiMagicBranch("runmagic/" + spec.Key + "/" + label, draws, seed, branchExpect);
+        string seedReasonText = branchExpect != null && draws.Count > 0
+            ? BuildSeedReason(draws[0], seed, branchExpect)
+            : null;
         int hpAfter = target.WAbil.HP;
         var receivers = new List<ReceiverResult>();
         foreach (var (who, obj) in byWho)
@@ -1114,10 +1532,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 rng_mode = spec.RngMode,
                 login_order = spec.LoginOrder,
                 reachability = spec.Reachability,
-                target_level = (int)target.Abil.Level,
-                target_hp = (int)target.WAbil.HP,
-                target_max_hp = (int)target.WAbil.MaxHP,
-                anti_magic = (int)target.AntiMagic,
+                target_level = inputTargetLevel,
+                target_hp = inputTargetHp,
+                target_max_hp = inputTargetMaxHp,
+                anti_magic = inputAntiMagic,
                 derived = new
                 {
                     max_hp = contract.Derived.MaxHp,
@@ -1141,11 +1559,19 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                     : spec.ScenarioNote,
                 legacy_artifact = spec.RngMode == "freeze_at_dospell",
                 legacy_reason = spec.RngMode == "freeze_at_dospell" ? "rng ledger incomplete (drain-stage draws omitted)" : null,
+                seed_reason = seedReasonText,
+                rng_total_draws = totalDraws,
+                rng_recorded = draws.Count,
                 target_null = targetNull,
                 arm_ring_amulet = spec.ArmRingAmulet,
                 wait_ms = spec.WaitMs,
                 caster_hp = spec.CasterHp,
                 caster_max_hp = spec.CasterMaxHp,
+                // 范围类魔法（22/23/33/24/47）的 range 值与其部署配置来源（卡 §31）。
+                snow_wind_range = SystemModule.SystemShare.Config.SnowWindRange,
+                fire_boom_rage = SystemModule.SystemShare.Config.FireBoomRage,
+                elec_blizzard_range = SystemModule.SystemShare.Config.ElecBlizzardRange,
+                server_conf_sha256 = ServerConfSha256(),
                 caster_xy = new[] { 100, 100 },
                 target_xy = new[] { 101, 100 },
                 obs_in_xy = new[] { 105, 100 },

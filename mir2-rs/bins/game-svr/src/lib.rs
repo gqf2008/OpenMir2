@@ -10858,7 +10858,10 @@ fn broadcast_charstatuschanged_except_self(
     status: i32,
     range: i32,
 ) {
-    for target_id in chat::hear_targets(world, actor_id, range) {
+    // **T-287 残余 #3**：`StatusChanged()` 的"其它玩家"支同走 `SendRefMsg` 的 500ms 缓存
+    // （每次调用 = 一次 `SendRefMsg`；自己那两份由调用方按发送序另发）。隐藏发送者时
+    // `targets` 只返回 `[self]`，被下面的 skip 丢掉 ⇒ 观察者零帧（与 oracle 退化自投一致）。
+    for target_id in ref_msg_cache::targets(world, actor_id, range) {
         if target_id == actor_id {
             continue;
         }
@@ -17466,7 +17469,10 @@ fn drain_aoi_events(
 /// `broadcast_ref_msg` ⇒ `chat::hear_targets` 对**全部实体**做 `iter_ref()` 扫描，成本
 /// O(走位者数 × 实体数)（11k 实体 / 263 走位者 ≈ 108 ms/tick，占宿主段 92–96%）。
 ///
-/// 现在拆两阶段（行为等价，理由见 [`collect_monster_walk_batch`]）：扫描实体时顺带收集
+/// 现在拆两阶段（**单步等价**：每个走位者的**首次** `SendRefMsg` 与逐走位者即时广播相同；
+/// 同一 500ms 窗口内的第二步起走 `SendRefMsg` 缓存 `|Δ|<11`，见
+/// [`broadcast_ref_msg_from_walk_candidates`]。拆两阶段理由见 [`collect_monster_walk_batch`]）：
+/// 扫描实体时顺带收集
 /// `race == PLAY` 候选（[`WalkFanoutCandidate`]），再对每个走位者只在这些候选上按原判据重判
 /// 「同图 / ±range / `!ghost`」；走位者自己那条由 `include_self = false` 挡掉。
 /// 候选集**不用地图格子表**（原因见 [`WalkFanoutCandidate`] 的文档），也不改 `chat.rs` 的
@@ -17663,6 +17669,18 @@ fn hear_targets_from_walk_candidates(
 /// ±`SendRefMsgRange` 格内 `Race==Play && !Ghost` 的玩家（`BaseObject.Message.cs:383-444`），
 /// 计算方式见 [`hear_targets_from_walk_candidates`]；投递段与全扫描版共用
 /// [`send_ref_msg_to_targets`]（同一份 `include_self`/`route_to_gate`/`tx.send` 代码）。
+///
+/// **T-287 残余 #14**：收件人走 `SendRefMsg` 的 500ms 缓存。扫描面仍由候选集给，缓存两段由
+/// [`ref_msg_cache::targets_from_scan`] 收口（≥500ms 刷新全量；否则复用快照 + `|Δ|<11`）。
+///
+/// **为什么用快照入口是安全的（与 `drain_merchant_disappears` 的差异）**：
+/// 1. 候选集来自**本 tick 实体表**（[`collect_monster_walk_batch`] 收集），位置与调用时刻
+///    一致 ⇒ 不存在「发帧时刻 vs 排水时刻」的过期快照；
+/// 2. 隐藏走位者在收集阶段已被 `ob_mode || fixed_hide_mode` 门跳过 ⇒
+///    [`hear_targets_from_walk_candidates`] 的隐藏分支在本调用**不可达** ⇒ 不需要宿主层
+///    隐藏早退（行为依据：`hidden_walker_never_enters_walk_fanout`，`drain` 返回 0 步）。
+///    对比 `drain_merchant_disappears`：那条排水时 sender 已隐藏是**设计前提**，收件人必须
+///    用发帧时刻快照，所以继续用 `targets_from_scan` 且**不加**早退。
 fn broadcast_ref_msg_from_walk_candidates(
     world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
@@ -17671,8 +17689,9 @@ fn broadcast_ref_msg_from_walk_candidates(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
-    let targets =
+    let scanned =
         hear_targets_from_walk_candidates(world, candidates, actor_id, chat::send_ref_msg_range());
+    let targets = ref_msg_cache::targets_from_scan(world, actor_id, scanned);
     send_ref_msg_to_targets(online, gates, actor_id, targets, bodies, false);
 }
 
@@ -19825,7 +19844,10 @@ fn push_charstatuschanged(
     status: i32,
 ) {
     let priority = (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8;
-    for target_id in chat::hear_targets(world, actor_id, chat::send_ref_msg_range()) {
+    // **T-287 残余 #2**：收件人走 `SendRefMsg` 的 500ms 缓存（oracle `StatusChanged()` 的
+    // `SendRefMsg(RM_CHARSTATUSCHANGED, …)`）。每次调用 = 一次 `SendRefMsg`；同窗口内
+    // 第二次命中缓存（`|Δ|<11`）。含自己（`StatusChanged` 的 `SendRefMsg` 收件人含源）。
+    for target_id in ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range()) {
         let Some(entry) = online.iter().find(|e| e.actor_id == target_id) else {
             continue;
         };
@@ -66580,9 +66602,9 @@ SendRefMsgRange=15
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
-        if magic_id == 23 {
-            // 23 的受击链读实体/会话 MaxHP（`SM_STRUCK` 头与 RM 8103 的 p2）；登录序下目标
-            // `MaxHP=224`（C# golden 同源），HP 仍 100。
+        if matches!(magic_id, 23 | 33 | 47) {
+            // 23/33/47（`MagBigExplosion` 族）的受击链读实体/会话 MaxHP（`SM_STRUCK` 头与
+            // RM 8103 的 p2）；登录序下目标 `MaxHP=224`（C# golden 同源），HP 仍 100。
             let e = rig.world.entities.get_mut(target).unwrap();
             e.vitals.max_hp = 224;
             let sg = rig.ground_sessions.get_mut("target").unwrap();
@@ -68140,6 +68162,134 @@ SendRefMsgRange=15
             rust_abil, gold_abil,
             "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
         );
+    }
+
+    /// **`33 冰咆哮`**（`SKILL_SNOWWIND`，`MagicManager.cs:489-494` / helper `:1100-1117`）驱动。
+    /// golden `golden/magic/snowwind.json`（s1/s5/s13）。
+    ///
+    /// **本支的判据全部来自 33 自己的 golden 实测**（不沿用 23 的结论——卡 §31）：
+    /// - `IsProtectTarget`：**实测 target HP 100→85（damage 15）** ⇒ 本夹具下为 true、伤害链成立；
+    /// - `Rng` = **7 抽**（`[0,0,0,7,1,0,3]`）、`DrainPasses` = **4**、`NotDue` = 0；
+    /// - 帧（实测）：caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`；
+    /// - RM（实测）：8044(target,p1=15,108)、10052(target,68)、8103(众人,w=15/p1=85/p2=224/p3=caster,167)、
+    ///   8090(攻击方 hearers,154)、10123(caster,p1=33,255)、10008 的 p3=33。
+    ///
+    /// 范围来源：部署 `Server.conf` 的 `SnowWindRange=1`（golden `Fixture.snow_wind_range`）；
+    /// `Fixture.server_conf_sha256` = `ce5e3ce9…`（与部署文件 sha 一致）。
+    ///
+    /// **帧族与 C2 交集**：本支帧族（53/638/656/31）与 `push_broadcast` 缓存接线相交，
+    /// **`2f` 的 C2 落地后必须重跑全平面**（45 驱动 + 15 比较器）。
+    fn snowwind_assert(stem: &str, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, 33, 15, 1, label, seed, base);
+        fireball_case_assert(stem, label, 85, 7);
+        b1_golden_drain_assert("snowwind.json", label, 4);
+        let c = defence_case(stem, label);
+        let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
+        let seq_of = |who: &str| -> Vec<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|m| m["ident"].as_i64())
+                .collect()
+        };
+        assert_eq!(
+            seq_of("caster"),
+            vec![638, 640, 31, 656],
+            "[{stem}/{label}] caster 帧序"
+        );
+        assert_eq!(
+            seq_of("target"),
+            vec![17, 638, 53, 31, 656],
+            "[{stem}/{label}] target 帧序"
+        );
+        assert_eq!(
+            seq_of("obs_in"),
+            vec![17, 638, 31, 656],
+            "[{stem}/{label}] obs_in 帧序"
+        );
+        assert_eq!(
+            n("obs_out", "Sent", 31),
+            0,
+            "[{stem}/{label}] obs_out 不得有帧"
+        );
+        assert_eq!(
+            c["TargetHpBefore"].as_i64(),
+            Some(100),
+            "[{stem}/{label}] HP 前"
+        );
+        assert_eq!(
+            c["TargetHp"].as_i64(),
+            Some(85),
+            "[{stem}/{label}] HP 后（实测伤害 15）"
+        );
+        assert_eq!(n("target", "Rm", 8044), 1, "[{stem}/{label}] target 8044");
+        assert_eq!(n("target", "Rm", 10052), 1, "[{stem}/{label}] target 10052");
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(n(who, "Rm", 8103), 1, "[{stem}/{label}] {who} 8103");
+            assert_eq!(n(who, "Rm", 8090), 1, "[{stem}/{label}] {who} 8090");
+        }
+        assert_eq!(n("caster", "Rm", 10123), 1, "[{stem}/{label}] caster 10123");
+        // 魔号语义（oracle 分派）：RM 10008 的 p3 与 10123 的 p1 必须是 **33**。
+        let p3_of_10008 = |who: &str| -> Option<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Rm"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["ident"] == 10008)
+                .and_then(|m| m["p3"].as_i64())
+        };
+        assert_eq!(
+            p3_of_10008("caster"),
+            Some(33),
+            "[{stem}/{label}] RM 10008.p3 = 魔号 33"
+        );
+        let p1_of_10123 = |who: &str| -> Option<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Rm"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["ident"] == 10123)
+                .and_then(|m| m["p1"].as_i64())
+        };
+        assert_eq!(
+            p1_of_10123("caster"),
+            Some(33),
+            "[{stem}/{label}] RM 10123.p1 = 魔号 33"
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn snowwind_parity_s1() {
+        snowwind_assert("snowwind", "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn snowwind_parity_s5() {
+        snowwind_assert("snowwind", "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn snowwind_parity_s13() {
+        snowwind_assert("snowwind", "s13", 13, 3000);
     }
 
     /// **`23 爆裂火焰`**（`SKILL_FIREBOOM`，`MagicManager.cs:418-423` / helper `:1100-1117`）驱动。
@@ -89725,6 +89875,245 @@ GMEXECUTE f
         assert_eq!(per.get(&904), None, "+13：零帧");
     }
 
+    /// 657 夹具：发送者（Play，+0，socket 901）+ 观察者 +5/+11/+12/+13（socket 902–905）。
+    #[allow(clippy::type_complexity)]
+    fn refmsg_657_fixture() -> (
+        mir2_world_bevy::World,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+    ) {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut src = mir2_world_bevy::EntitySpawn::new(0, "src".to_string(), 10, 10);
+        src.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        src.hit_speed = 7;
+        let actor = world.add_entity(src);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "src".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        for (i, (dx, socket)) in [(5, 902), (11, 903), (12, 904), (13, 905)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            e.hit_speed = u16::try_from(20 + i).unwrap();
+            let id = world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        (world, online, gates, rx0, actor)
+    }
+
+    /// **T-287 残余 #2**（`push_charstatuschanged`，657）：每次调用 = 一次 `StatusChanged()`
+    /// 的 `SendRefMsg`；同窗口第二次命中缓存 ⇒ `|Δ|=11/12` 只收首份、`+5` 两份都收、
+    /// `+13` 零帧；**自己每份都收**（两份副本，钉住不吞自见）。
+    ///
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 第二份 +12 也收 ⇒ 红。
+    #[test]
+    fn push_charstatuschanged_cache_window_second_event_hits_cache() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut buf = SpellFrameBuf::new();
+        push_charstatuschanged(&mut buf, &world, &online, actor, 0x0001_0002);
+        buf.flush(&online, &gates);
+        let first = refmsg_b2_count(&mut rx);
+        assert_eq!(first.get(&901), Some(&1), "首份：自己收");
+        assert_eq!(first.get(&902), Some(&1), "首份：+5 收（±12 闭区间）");
+        assert_eq!(first.get(&903), Some(&1), "首份：|Δ|=11 在扫格内");
+        assert_eq!(first.get(&904), Some(&1), "首份：|Δ|=12 闭区间边界");
+        assert_eq!(first.get(&905), None, "首份：|Δ|=13 零帧");
+        let mut buf = SpellFrameBuf::new();
+        push_charstatuschanged(&mut buf, &world, &online, actor, 0x0001_0002);
+        buf.flush(&online, &gates);
+        let second = refmsg_b2_count(&mut rx);
+        assert_eq!(second.get(&901), Some(&1), "第二份：自己仍收（Δ0 < 11）");
+        assert_eq!(second.get(&902), Some(&1), "第二份：+5 仍收");
+        assert_eq!(second.get(&903), None, "第二份：|Δ|=11 被严格 <11 挡");
+        assert_eq!(second.get(&904), None, "第二份：|Δ|=12 被挡");
+        assert_eq!(second.get(&905), None, "第二份：+13 仍零帧");
+    }
+
+    /// **#2 隐藏 sender**（oracle `ObMode || FixedHideMode` 退化为只 `SendMsg` 自己）：
+    /// 每份只自己 1 条、观察者 0（含「旧快照里的 +12 不得复活」）。
+    /// 依赖前置隐藏发送者早退（`ref_msg_cache::targets`）。
+    #[test]
+    fn push_charstatuschanged_hidden_sender_only_self_each_event() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut buf = SpellFrameBuf::new();
+        push_charstatuschanged(&mut buf, &world, &online, actor, 1);
+        buf.flush(&online, &gates);
+        let warm = refmsg_b2_count(&mut rx);
+        assert_eq!(warm.get(&904), Some(&1), "预热：+12 在 ±12 内");
+        world.entities.flags_mut(actor).unwrap().ob_mode = true;
+        for _ in 0..2 {
+            let mut buf = SpellFrameBuf::new();
+            push_charstatuschanged(&mut buf, &world, &online, actor, 1);
+            buf.flush(&online, &gates);
+            let per = refmsg_b2_count(&mut rx);
+            assert_eq!(per.get(&901), Some(&1), "隐藏：每份只自己 1 条");
+            assert_eq!(per.get(&902), None, "隐藏：+5 零帧");
+            assert_eq!(per.get(&903), None, "隐藏：+11 零帧");
+            assert_eq!(per.get(&904), None, "隐藏：旧快照的 +12 不得复活");
+            assert_eq!(per.get(&905), None, "隐藏：+13 零帧");
+        }
+    }
+
+    /// **#2 的真实调用面**：`drain_b3_self_deliveries` 同 tick 两条 `RM_TRANSPARENT` 到点
+    /// （同 actor）⇒ 第一条扫格、第二条命中缓存：+12 只收一份、+5 两份、自己两份。
+    #[test]
+    fn drain_b3_two_transparent_events_share_cache_window() {
+        use mir2_world_bevy::slave::{SelfDelayOutcome, TransparentDelivery};
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let ev = SelfDelayOutcome {
+            actor_id: actor,
+            transparent: Some(TransparentDelivery {
+                target_id: actor,
+                status_changed: true,
+                status: 1,
+                n_h_time: 0,
+            }),
+            ..Default::default()
+        };
+        let rec = mir2_world_bevy::TickRecord {
+            slave_self_deliveries: vec![ev.clone(), ev],
+            ..Default::default()
+        };
+        drain_b3_self_deliveries(&rec, &world, &online, &mut sessions, &gates);
+        let per = refmsg_b2_count(&mut rx);
+        assert_eq!(per.get(&901), Some(&2), "自己两份（两份副本都出）");
+        assert_eq!(per.get(&902), Some(&2), "+5 两份");
+        assert_eq!(per.get(&903), Some(&1), "|Δ|=11 只收首份");
+        assert_eq!(per.get(&904), Some(&1), "|Δ|=12 只收首份");
+        assert_eq!(per.get(&905), None, "+13 零帧");
+    }
+
+    /// **T-287 残余 #3**（`broadcast_charstatuschanged_except_self`，657）：`StatusChanged()`
+    /// 的"其它玩家"支；同窗口两次事件 ⇒ `|Δ|=11/12` 只收首份、`+5` 收两份、`+13` 零帧、
+    /// 自己零帧（skip self）。
+    ///
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 第二份 +12 也收 ⇒ 红。
+    #[test]
+    fn broadcast_charstatuschanged_except_self_cache_window_second_event_hits_cache() {
+        let (world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 1, 12);
+        let first = refmsg_b2_count(&mut rx);
+        assert_eq!(first.get(&901), None, "skip self");
+        assert_eq!(first.get(&902), Some(&1), "首份：+5 收（±12 闭区间）");
+        assert_eq!(first.get(&903), Some(&1), "首份：|Δ|=11 在扫格内");
+        assert_eq!(first.get(&904), Some(&1), "首份：|Δ|=12 闭区间边界");
+        assert_eq!(first.get(&905), None, "首份：+13 零帧");
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 1, 12);
+        let second = refmsg_b2_count(&mut rx);
+        assert_eq!(second.get(&901), None, "第二份：self 仍被 skip");
+        assert_eq!(second.get(&902), Some(&1), "第二份：+5 仍收");
+        assert_eq!(second.get(&903), None, "第二份：|Δ|=11 被严格 <11 挡");
+        assert_eq!(second.get(&904), None, "第二份：|Δ|=12 被挡");
+        assert_eq!(second.get(&905), None, "第二份：+13 仍零帧");
+    }
+
+    /// **#3 隐藏 sender**：`targets` 只返回 `[self]`，被 skip ⇒ 观察者零帧
+    /// （oracle 退化为只 `SendMsg` 自己，本支无观察者帧）。
+    #[test]
+    fn broadcast_charstatuschanged_except_self_hidden_sender_has_no_observers() {
+        let (mut world, online, gates, mut rx, actor) = refmsg_657_fixture();
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 1, 12); // 预热
+        let warm = refmsg_b2_count(&mut rx);
+        assert_eq!(warm.get(&904), Some(&1), "预热：+12 收");
+        world.entities.flags_mut(actor).unwrap().fixed_hide_mode = true;
+        broadcast_charstatuschanged_except_self(&world, &online, &gates, actor, 1, 12);
+        let per = refmsg_b2_count(&mut rx);
+        assert_eq!(per.get(&902), None, "隐藏：+5 零帧");
+        assert_eq!(per.get(&903), None, "隐藏：+11 零帧");
+        assert_eq!(per.get(&904), None, "隐藏：旧快照 +12 不得复活");
+        assert_eq!(per.get(&905), None, "隐藏：+13 零帧");
+    }
+
+    /// **#3 的真实调用面（登录 657 补发）+ 同 tick 多事件**：同一 actor 两次
+    /// `drain_login_tail`（sim 时钟不推进）⇒ 第二次命中缓存：`|Δ|=11/12` 只收首份、
+    /// `+5` 两份、`+13` 零帧。
+    ///
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 第二事件 +12 也收 ⇒ 红。
+    #[test]
+    fn login_charstatus_two_events_same_tick_share_cache_window() {
+        let (mut world, id, mut online, gates, mut rx0, mut pending) = login_657_fixture();
+        for (i, (dx, sock)) in [(5, 902), (11, 903), (12, 904), (13, 905)]
+            .into_iter()
+            .enumerate()
+        {
+            let name = format!("o{i}");
+            world.open_session(&name);
+            let e = new_player_entity(name.clone(), 10 + dx, 10);
+            let oid = world.enter_map(&name, e, 0).expect("观察者进图");
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: name,
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket: sock,
+                    actor_id: oid,
+                },
+            );
+        }
+        let take657 = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| -> HashMap<i32, usize> {
+            let mut per: HashMap<i32, usize> = HashMap::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(&body)
+                    .expect("657/654 body 至少 12B");
+                if cm.ident == mir2_protocol::messages::SM_CHARSTATUSCHANGED && socket != 901 {
+                    *per.entry(socket).or_default() += 1;
+                }
+            }
+            per
+        };
+        drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        let first = take657(&mut rx0);
+        assert_eq!(first.get(&902), Some(&1), "首事件：+5 收");
+        assert_eq!(first.get(&903), Some(&1), "首事件：|Δ|=11 收");
+        assert_eq!(first.get(&904), Some(&1), "首事件：|Δ|=12 收");
+        assert_eq!(first.get(&905), None, "首事件：+13 零帧");
+        // 同一 actor 的第二次 `StatusChanged` 事件（同 sim tick；`search_tick` 门仍满足）。
+        pending.insert(
+            "p".to_string(),
+            smframe::EnterWorldInputs {
+                actor_id: id,
+                changelight: Some((0, game_svr::sessionwire::N_CLIENT_KEY_DEFAULT)),
+                char_status: Some((0, 0)),
+                ..Default::default()
+            },
+        );
+        drain_login_tail(&world, &online, &gates, &mut pending, 12);
+        let second = take657(&mut rx0);
+        assert_eq!(second.get(&902), Some(&1), "第二事件：+5 仍收");
+        assert_eq!(second.get(&903), None, "第二事件：|Δ|=11 被严格 <11 挡");
+        assert_eq!(second.get(&904), None, "第二事件：|Δ|=12 被挡");
+        assert_eq!(second.get(&905), None, "第二事件：+13 仍零帧");
+    }
+
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。
     ///
     /// 帧面两者都是零帧（所以「只断言零帧」抓不住区别），故此用例钉**分类** + 钉两条路径都可走：
@@ -91324,6 +91713,12 @@ GMEXECUTE f
     /// 这条钉住两件事：① 收件人集合等价；② 拆两阶段后**跨走位者的帧次序**不变（走位者按 id
     /// 升序、每个走位者的收件人按 id 升序）。
     ///
+    /// **单步前提（T-287 #14 起显式化）**：本用例每个走位者只走**一步**（首见建游标 → 一次
+    /// 移动）⇒ 每个走位者都是**首次** `SendRefMsg`（缓存必然刷新），「与全扫描参照逐条相同」
+    /// 只在这个前提下成立。同一 500ms 窗口内的第二步起走缓存（`|Δ|<11`）⇒ **不再**与全扫描
+    /// 参照相同，那是 `walk_cache_window_second_step_hits_cache` 的口径。**不得**把本断言推广
+    /// 成普遍等价。
+    ///
     /// 红检（会红）：候选集在种族门之外再提前剔同图/距离（漏收/错收）；把两阶段改成「先建全表、
     /// 再按 walkers 倒序广播」⇒ 序列断言红。
     #[test]
@@ -91470,7 +91865,10 @@ GMEXECUTE f
                 }
             }
         }
-        assert_eq!(got, want, "帧序列必须与全扫描参照逐条相同（集合 + 次序）");
+        assert_eq!(
+            got, want,
+            "单步等价：帧序列必须与全扫描参照逐条相同（集合 + 次序；每走位者首次 SendRefMsg）"
+        );
         assert!(
             got.iter().all(|(s, _)| *s != 903 && *s != 904 && *s != 905),
             "界外 / Ghost / 跨图玩家不收"
@@ -91479,6 +91877,155 @@ GMEXECUTE f
             got.iter().any(|(s, w)| *s == 906 && *w == m1),
             "走位者 m1 的 12/12 对角边界玩家必须收"
         );
+    }
+
+    /// **T-287 残余 #14**（`broadcast_ref_msg_from_walk_candidates`）：走怪同窗两步 ⇒
+    /// 第二步命中 500ms 缓存（`|Δ|<11`）。
+    ///
+    /// 几何：走怪 `x=10→11→12`（sim 时钟不推进）；`C(17,10)` 两拍都收；`B(23,10)` 第一步
+    /// `Δ=12`（±12 闭区间）收、第二步 `Δ=11` 被严格 `<11` 挡；`D(24,10)` 两步都超界。
+    ///
+    /// 牙：站点回退 `hear_targets_from_walk_candidates` 直投 ⇒ 第二步 `B` 也收 ⇒ 红。
+    #[test]
+    fn walk_cache_window_second_step_hits_cache() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let c = spawn_actor(&mut world, "c", 0, 17, 10, 0, false);
+        let b = spawn_actor(&mut world, "b", 0, 23, 10, 0, false);
+        let d = spawn_actor(&mut world, "d", 0, 24, 10, 0, false);
+        let m = spawn_actor(
+            &mut world,
+            "m",
+            0,
+            10,
+            10,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+        world.entities.get_mut(m).unwrap().ai.dir = 2; // 右
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            m,
+            downlink::ActorDisplay::new(2, 0, 0x3333_3333, 0, 0, 255, b"m".to_vec()),
+        );
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "c".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: c,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "b".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: b,
+            },
+            OnlineEntry {
+                account: "c".into(),
+                chr_name: "d".into(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 903,
+                actor_id: d,
+            },
+        ];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let rec = mir2_world_bevy::TickRecord::default();
+        let mut seen = std::collections::HashMap::new();
+        // 建游标（首见不出帧、也不进缓存）。
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            0
+        );
+        assert!(collect_raw(&mut rx0).is_empty());
+        // 第一步：x=11 ⇒ 首扫 ±12 闭区间（B 的 Δ=12 收）。
+        world.entities.transform_mut(m).unwrap().x = 11;
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            1
+        );
+        let first = refmsg_b2_count(&mut rx0);
+        assert_eq!(first.get(&901), Some(&1), "第一步：C(Δ=6) 收");
+        assert_eq!(first.get(&902), Some(&1), "第一步：B(Δ=12) 闭区间边界收");
+        assert_eq!(first.get(&903), None, "第一步：D(Δ=13) 不收");
+        // 第二步：x=12，同 500ms 窗口 ⇒ 命中缓存 |Δ|<11（B 的 Δ=11 被挡）。
+        world.entities.transform_mut(m).unwrap().x = 12;
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            1
+        );
+        let second = refmsg_b2_count(&mut rx0);
+        assert_eq!(second.get(&901), Some(&1), "第二步：C 仍收");
+        assert_eq!(
+            second.get(&902),
+            None,
+            "第二步：B 的 |Δ|=11 被严格 <11 挡（缓存生效）"
+        );
+        assert_eq!(second.get(&903), None, "第二步：D 仍零帧");
+    }
+
+    /// **#14 隐藏走位者反向（「早退不可达」的行为依据）**：`collect_monster_walk_batch` 的
+    /// `ob_mode || fixed_hide_mode` 门在**收集阶段**跳过隐藏走怪 ⇒
+    /// `drain_monster_walk_downlink` 返回 **0 步**（即 `broadcast_ref_msg_from_walk_candidates`
+    /// 根本未被调用），因此该站的快照入口不需要宿主层隐藏早退。
+    ///
+    /// 若本用例变红（隐藏走怪进入扇出）⇒ 必须按 `4174de804` 同款补宿主早退，不得以
+    /// 「上游应该挡住」放行。
+    #[test]
+    fn hidden_walker_never_enters_walk_fanout() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let near = spawn_actor(&mut world, "n", 0, 12, 10, 0, false);
+        let m = spawn_actor(
+            &mut world,
+            "m",
+            0,
+            10,
+            10,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.ai.dir = 2; // 右
+            e.flags.ob_mode = true; // 隐藏（GM @ObMode；FixedHideMode 同口径）
+        }
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            m,
+            downlink::ActorDisplay::new(2, 0, 0x4444_4444, 0, 0, 255, b"m".to_vec()),
+        );
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".into(),
+            chr_name: "n".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: near,
+        }];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let rec = mir2_world_bevy::TickRecord::default();
+        let mut seen = std::collections::HashMap::new();
+        // 建游标。
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            0
+        );
+        // 隐藏走怪走一格：方向门通过，但隐藏门在收集阶段跳过 ⇒ 0 步、零帧。
+        world.entities.transform_mut(m).unwrap().x = 11;
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            0,
+            "隐藏走怪必须在收集阶段被跳过（0 步 ⇒ 扇出未被调用）"
+        );
+        assert!(collect_raw(&mut rx0).is_empty(), "隐藏走怪不得产生 SM_WALK");
     }
 
     // =========================================================================================
