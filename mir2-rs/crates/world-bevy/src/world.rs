@@ -1031,6 +1031,21 @@ impl ProcessRunCounts {
 /// 实体组件仍在 `EntityStore` 的 bevy `World`；本类型在 tick 边界被移入同一个 bevy `World`
 /// 的 `SimState` 资源，供 tick 系统通过 `ResMut<SimState>` 访问（设计件 §4.1/§4.2）。
 /// 字段可见性/语义与迁移前 `World` 同名字段逐项一致；`World` 经 `Deref` 保留原访问形态。
+/// **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存条目**（偏差 `T-287`；卡
+/// `openmir2-visiblehumanlist-cache`）。oracle 锚：`BaseObject.Message.cs:395-466`。
+#[derive(Clone, Debug, Default)]
+pub struct RefMsgCacheEntry {
+    /// 上次刷新时的 sim 时钟（毫秒）。
+    pub tick: i64,
+    /// 上次扫描的收件人快照（`VisibleHumanList`）。
+    pub visible: Vec<i32>,
+}
+
+/// `SendRefMsg` 缓存窗口（oracle `(GetTickCount - SendRefMsgTick) >= 500`）。
+pub const REF_MSG_CACHE_TTL_MS: i64 = 500;
+/// 缓存命中时的二次过滤半径（oracle `Math.Abs(...) < 11`，**严格小于**）。
+pub const REF_MSG_CACHED_RANGE: i32 = 11;
+
 #[derive(bevy_ecs::prelude::Resource)]
 pub struct SimState {
     /// 地图表（下标 = `map_id`）；`World::new` 建一张 0 号图。
@@ -1041,6 +1056,10 @@ pub struct SimState {
     /// 非拥有图以 1×1 stub grid 承载**全局下标**，stub 上禁止实体（[`World::tick`] 的
     /// 不变式断言）。所有换图/落格入口统一查本表并 fail-closed（`SessionError::MapNotInShard`）。
     owned_maps: Vec<bool>,
+    /// **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（偏差 `T-287`）：按发送者 actor id 键控。
+    ///
+    /// `Mutex` 只为让 `&World` 侧（下行排水）也能读写；sim 线程单线程、无锁竞争。
+    pub ref_msg_cache: std::sync::Mutex<std::collections::HashMap<i32, RefMsgCacheEntry>>,
     /// **P2-3a release 可观测**：本 World 因「目标图不归自己」而拒绝的入口次数（单调累计）。
     ///
     /// 每个换图/落格入口在 fail-closed 时 `+1`；`MIR2_SHARDS=1` 恒 0。debug 的每 tick 断言之外，
@@ -1580,6 +1599,7 @@ impl SimState {
             maps,
             // 缺省全拥有（`MIR2_SHARDS=1` / 合成 golden：所有权检查恒过、零行为变化）。
             owned_maps: vec![true; maps_len],
+            ref_msg_cache: std::sync::Mutex::new(std::collections::HashMap::new()),
             unowned_refusal_count: 0,
             sessions: SessionRegistry::new(),
             clock_ms: 0,
@@ -18945,5 +18965,52 @@ mod weapon_durability_tests {
             w.entities.get(p).unwrap().use_items[ITEM_LOCATION_RIGHTHAND].dura,
             1499
         );
+    }
+}
+
+/// **`SendRefMsg` 的 500ms `VisibleHumanList` 缓存**（偏差 `T-287`；卡
+/// `openmir2-visiblehumanlist-cache`）。
+///
+/// oracle `BaseObject.Message.cs:395-466` 两段语义：
+/// ① `(now - SendRefMsgTick) >= 500 || VisibleHumanList.Count == 0` ⇒ 重扫 `±range`
+///    （调用方传入的 `scanned` 即本次扫描结果）并**全量**下发；
+/// ② 否则复用快照 + `target.Envir == Envir && !Ghost && |Δx| < 11 && |Δy| < 11` 二次过滤。
+impl World {
+    /// 走缓存两段，返回本次实际收件人。
+    #[must_use]
+    pub fn ref_msg_targets_from_scan(&self, sender_id: i32, scanned: Vec<i32>) -> Vec<i32> {
+        let now = self.clock_ms;
+        let mut map = self.ref_msg_cache.lock().unwrap_or_else(|e| e.into_inner());
+        let entry = map.entry(sender_id).or_default();
+        if now - entry.tick >= REF_MSG_CACHE_TTL_MS || entry.visible.is_empty() {
+            entry.tick = now;
+            entry.visible = scanned;
+            return entry.visible.clone();
+        }
+        let Some(sender) = self.entities.get(sender_id) else {
+            return Vec::new();
+        };
+        let (sx, sy, smap) = (sender.x, sender.y, sender.map_id);
+        entry
+            .visible
+            .iter()
+            .copied()
+            .filter(|target_id| {
+                self.entities.get(*target_id).is_some_and(|t| {
+                    t.map_id == smap
+                        && !t.ghost
+                        && (t.x - sx).abs() < REF_MSG_CACHED_RANGE
+                        && (t.y - sy).abs() < REF_MSG_CACHED_RANGE
+                })
+            })
+            .collect()
+    }
+
+    /// 清空本世界的缓存（测试夹具在同一世界里跑多例时使用）。
+    pub fn reset_ref_msg_cache(&self) {
+        self.ref_msg_cache
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clear();
     }
 }
