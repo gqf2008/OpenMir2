@@ -481,4 +481,5 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
   `menu_main`（643 说词）/ `menu_buy`（643→**645**）/ `menu_sell`（643→**646**）/
   `menu_storage`（`@cangku→@storage`，643→**700**）；比较器断言帧 ident 序列 + 说词尾 + `ScriptCurrLable`。
 - **flag-关**：全语料 0 条真实构造，不做 golden（既有单测覆盖，卡面已注明），不造脚本。
-- **牙 J**：让 `to_spawn` 丢弃 `record.flags` ⇒ `menu_buy` 的 645 消失、必红。
+- **牙 J**：让 `to_spawn` 的 `is_buy` 恒 `false` ⇒ `menu_buy` 红在"帧 ident 序列"；
+  原文 `E:/UserFleet/qa/npc-parity/np03-mutation-J-flags.txt`（恢复 sha 相等、复绿 `np03-green-final.txt`）。
