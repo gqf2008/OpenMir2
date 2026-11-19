@@ -193,6 +193,9 @@ Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必�
 | `RM_ABILITY(10051)` wParam=0, p1/p2/p3=0, prio=67（`10051 & 0xFF`） | `src/M2Server/Player/PlayObject.Message.cs:1732-1735`（→ `SM_ABILITY(52)`：`Gold`、`MakeWord(Job,99)`、`LoWord/HiWord(GameGold)`，尾 `EDCode.EncodeMessage(WAbil)`）。产生者：`RecalcAbilitys` 收尾（`src/M2Server/Actor/BaseObject.cs:2161`/`:2185`）与 buff 系统（`src/M2Server/ActorBuffSystem.cs:229`），均 `SendMsg(this)`；`src/M2Server/Player/PlayObject.cs:1385` 的 `SendPriorityMsg(..., High)` 亦给自己 | **收件人 = 该对象自己**；比较 = `SM_ABILITY(52)` 按序 + 尾字节；RM 列多重集 |
 | `RM_CHARSTATUSCHANGED(10139)` wParam=0, p1=`CharStatus`（int 位集，实测可为 `0x80000000`）, prio=155 | 产生者 `StatusChanged()`（`src/M2Server/Actor/BaseObject.cs:1514-1517`）走 `SendRefMsg`；handler → `src/M2Server/Player/PlayObject.Message.cs:1845`（`SM_CHARSTATUSCHANGED(657)`：`ActorId`、`LoWord/HiWord(nParam1)`、`this.HitSpeed`）；`src/M2Server/Player/PlayObject.cs:2876` 的 `SendUpdateMsg` 只给自己 | **收件人 = 产出者 ±`SendRefMsgRange` 的玩家（含自己）**；比较 = `SM 657` 严格序 + 字段；RM 列多重集 |
 | `RM_SYSMESSAGE(11004)` wParam=0, p1=前景色, p2=背景色, p3=0, prio=252, `Msg`=文本 | 产生者 `SysMsg`（`src/M2Server/Actor/BaseObject.cs:1617/1641/1648/1655/1666` 的 `SendMsg(RM_SYSMESSAGE, 0, fColor, bColor, 0, sMsg)`）→ `src/M2Server/Player/PlayObject.Message.cs:1696` 支（`SM_SYSMESSAGE(100)`：`ActorId`、`MakeWord(fColor, bColor)`、0、1；尾 `EDCode.EncodeString(Msg)`） | **收件人 = 自己**；比较 = `SM 100` 字段 + 尾文本逐字节；RM 列多重集（`msg` 文本与尾同源） |
+| `RM_DOOPENHEALTH(8040)` wParam=0, p1..p3=0, prio=255（`SendSelfDelayMsg`；**队列 = 目标自己**，延时 1500ms） | 产生者 `src/M2Server/Magic/MagicManager.cs:438`（28 支：`targetObject.SendSelfDelayMsg(RM_DOOPENHEALTH, 0,0,0,0, "", 1500)`）；到点处理 `src/M2Server/Actor/BaseObject.Base.cs:763` ⇒ `MakeOpenHealth()`（`src/M2Server/Actor/BaseObject.cs:944-950`：置 `ShowHp`、`CharStatusEx |= OPENHEATH`、`SendRefMsg(RM_OPENHEALTH, 0, WAbil.HP, WAbil.MaxHP, 0)`） | **服务端事件，不产 SM 帧**；比较 = RM 多重集（who=`目标`、priority=255、late）。**未到期时只进 `NotDue`（`now/delivery` 是墙钟、不可比）⇒ 需要 1100 帧的 case 必须把排水等待跨过 1500ms**（见 §25(a)） |
+| `RM_OPENHEALTH(10410)` wParam=0, p1=`WAbil.HP`, p2=`WAbil.MaxHP`, p3=0, prio=170（`10410 & 0xFF`） | 产生者 `src/M2Server/Actor/BaseObject.cs:949`（`SendRefMsg`，±`SendRefMsgRange` 的玩家**含自己**）；handler `src/M2Server/Player/PlayObject.Message.cs:2009-2011`（`SendDefMessage(SM_OPENHEALTH=1100, processMsg.ActorId, baseObject.WAbil.HP, baseObject.WAbil.MaxHP, 0)`；`baseObject = ActorMgr.Get(processMsg.ActorId)`，见 `:774-778`） | **收件人 = 目标 ±`SendRefMsgRange` 的玩家（含目标自己）**；比较 = `SM 1100` 严格序 + 字段（Recog=`ActorId`、Param1=HP、Param2=MaxHP、Tag=0）。**字段来源 = 被开血者的实时 `WAbil`**（Rust 侧对应实体 `vitals.hp/max_hp`，见 §25(b)） |
+| `RM_HEALTHSPELLCHANGED(10052)` wParam=0, p1..p3=0, prio=68（`10052 & 0xFF`） | 产生者 `src/M2Server/Actor/BaseObject.cs:700-711` 的 `HealthSpellChanged()`：`:704` `SendUpdateMsg(...)`（仅 `Race==Play`，给自己）+ `:708` `SendRefMsg(...)`（`ShowHp` 时，±range 含自）；handler `src/M2Server/Player/PlayObject.Message.cs:1736-1738`（`MakeMessage(SM_HEALTHSPELLCHANGED=53, processMsg.ActorId, baseObject.WAbil.HP, baseObject.WAbil.MP, baseObject.WAbil.MaxHP)`） | **收件人 = 自己（SendUpdateMsg）+ ±`SendRefMsgRange` 含自（SendRefMsg）**；比较 = `SM 53` 严格序 + 字段。28 支的 cast 窗口内无 HP 变化 ⇒ **预计 0 条**；**出现即须可比**（不得静默忽略） |
 
 RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomNumber`（与原版同算法）。
 **未登记在该表里的 RM 条目一律判"口径未定义"（不标 verified）**，避免拿"没比到"当"比过了"。
@@ -713,3 +716,48 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 **未做 / 登记**：`String.conf` 的 `DefenceUpTime`/`MagDefenceUpTime` 未接 `handle_spell_cmd`
 （文案用源码缺省 + 部署同串，替换点一旦接上需同步 100 尾）；buff 时长的 tick 淘汰由
 `enable_buff_tick` 生产线负责，本对拍夹具只显式开启、不推进淘汰窗口。
+
+### 25. 28 心灵启示（`SKILL_SHOWHP`）：接线前口径（opc-07 批准）
+
+清单条目 `MG-39`（`src/M2Server/Magic/MagicManager.cs:431-442`）；无外层组条目。以下三条口径先定死，
+实现（golden + 驱动 + 断言）另笔。
+
+#### (a) 排水等待：每 case 可配 `wait_ms`（默认 1200；28 用 1600）
+
+- 依据：28 通过 `SendSelfDelayMsg(..., 1500)`（`src/M2Server/Magic/MagicManager.cs:438`）把
+  `RM_DOOPENHEALTH` 排到**目标**队列；`MakeOpenHealth()` 只在到点后发生 ⇒ 不跨过 1500ms
+  就观察不到 `RM_OPENHEALTH`/`SM_OPENHEALTH(1100)`，账本里只留 `NotDue`（`now/delivery` 是墙钟，
+  不可比）。
+- 做法：C# `RunMagicCase` 的 `Thread.Sleep` 由魔法数改为**参数 `wait_ms`**（默认 1200，28 = 1600）；
+  Rust 驱动把写死的 `rig.world.clock_ms += 1500` 改为传参，**两侧推进量同值**。`wait_ms` 进 golden
+  的 `Fixture`，Rust 侧直接读它复现（**不手抄**）。
+- 既有 10 个 golden 不受影响（默认值不变）。
+
+#### (b) `SM_OPENHEALTH(1100)` 的 HP/MaxHP 来源：oracle 语义 = 被开血者的**实时 WAbil**
+
+- 锚：handler `src/M2Server/Player/PlayObject.Message.cs:2009-2011` 取
+  `baseObject.WAbil.HP/MaxHP`；而 `baseObject` 在 `Operate` 开头由
+  `SystemShare.ActorMgr.Get(processMsg.ActorId)` 取得（`src/M2Server/Player/PlayObject.Message.cs:774-778`）
+  ⇒ 是**消息源 actor（被开血者）**，不是收件人。C# 的 `WAbil` 是该对象的**实时** HP/MP 存储
+  （`HealthSpellChanged`/`IncHealthSpell`/受击均直接读写它；`BaseObject` 是所有 actor 的基类，
+  怪物同样只有这一个 `WAbil`）。
+- Rust 的对应物：**实体 `vitals.hp/max_hp`** 是运行时 HP 真源（伤害/回血都写它；怪物**没有**
+  会话 `wabil`）。会话 `state.wabil` 是快照，由 `apply_ability_to_entity`（wabil→entity，登录/重算）
+  与 `sg.state.wabil.hp = e.hp`（entity→wabil，多处同步点）保持同值。
+  **⇒ 产品读实体是对的，不改产品**；反过来读 `sg.state.wabil` 会在「快照未同步」或「怪物目标」
+  两种真实形态下读错（与 IT-08 的 Abil/WAbil 是同类坑，方向相反）。
+- 前提与钉法：登录后二者同源（`apply_ability_to_entity`），28 支窗口内无 HP 变化 ⇒ 恒等成立。
+  夹具必须把目标**实体与 `Abil`（登录派生后的 WAbil）对齐**，并加断言
+  「entity.hp/max_hp == 该 case 的 WAbil.hp/max_hp」；**不允许**用夹具对齐去掩盖产品读错对象——
+  本条的结论是产品读实体正确，断言只是把前提钉死。
+
+#### (c) 其它
+
+- 事件面**不缺**：`World::cast_show_hp_spell` 返回 `ShowHpOutcome`（门/抽/训练）、
+  `make_open_health` 返回 `OpenHealthDelivery`，宿主 `drain_b3_self_deliveries` 已出 1100/640
+  （`SM 1101` 的到期路径属 `openmir2-sm-closehealth-wire` 卡，不在本支）。
+- 骰与标签：门 = `Random(6) <= userMagic.Level + 3`（`src/M2Server/Magic/MagicManager.cs:434`；
+  非 AntiMagic 骰），按 **miss(roll=5)/edge(roll=4)/hit(roll≤3)** 三标签；seed 用
+  `FindSeedForFirstDraw(6, k)` 扫描（C# helper 由 `Random(10)` 版参数化）。
+- `GetRPow(SC)` 在 `HiByte<=LoByte` 时**不抽**（`src/M2Server/Magic/MagicManager.cs:121-131`）；
+  夹具 `SC=15` ⇒ pass 支只多 `GetPower13` 的 `Random(0)` 一抽；`boTrain=true` ⇒ 共享尾训练抽 `Random(3)+1`。
