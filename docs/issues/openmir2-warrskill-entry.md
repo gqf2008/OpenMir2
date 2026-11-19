@@ -58,6 +58,10 @@
 - 调用上下文与 `PlayObject.Message.cs` 的 `case Messages.CM_SPELL` **同参**：
   `ClientSpellXY(wIdent=CM_SPELL, nKey=MagIdx, nTargetX/nTargetY, targetObject=ActorMgr.Get(nParam3),
   boLateDelivery=false)`；私有方法经反射调用，`delayTime` 出参入账。
+- **施法者与目标同为登录序角色**（裁决 A）：两侧都调
+  `RecalcLevelAbilitys(); RecalcAbilitys();`，施法者 HP 置为公式 `MaxHP`；登录期产生的
+  `RM_CHARSTATUSCHANGED(10139)`（→ `SM_CHARSTATUSCHANGED(657)`）在施法窗口前**丢弃**
+  （`DrainRaw`，与 target 同口径），不混入 golden。
 - 夹具几何沿用既有用例（caster 100,100 / target 101,100 / obs_in 105,100 / obs_out 140,100）；
   `M2Share.NetChannel` 换只记录实现（三处 `SendSocket` 重载都汇到 `AddGateBuffer`）；
   排水「抽空为止」（上界 8，命中进产物）；等 1200ms 跨自延迟。

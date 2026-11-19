@@ -231,6 +231,10 @@ public static class ClientSpellXYEntry
         caster.RecalcLevelAbilitys();
         caster.RecalcAbilitys();
         caster.WAbil.HP = caster.WAbil.MaxHP;
+        // 登录帧不属于施法窗口：`RecalcAbilitys` 的 `StatusChanged()` 会在施法者队列里留
+        // `RM_CHARSTATUSCHANGED(10139)`（→ `SM_CHARSTATUSCHANGED(657)`），与 target 的
+        // `DrainRaw()` 同口径——**丢弃原始消息、不 Operate**，否则登录伪影会混入 golden。
+        caster.DrainRaw();
 
         var um = new OpenMir2.Packets.ClientPackets.UserMagic
         {
