@@ -41,15 +41,13 @@ namespace OpenMir2.DataHandlingAdapters
                 return false;
             }
 
-            if (_header.PackLength == int.MinValue)
+            // 卡 openmir2-gate-packlen-validation：帧层**只能交帧**（没有"拒绝并关连接"的出口），
+            // 所以这里把"无法表示的长度"降级为 0 字节交帧——**不是放行**：放行/拒绝的唯一判定在
+            // 下游 `ClientThread.TryBuildServerSessionMessage`，两层共用 `GatePacketLength.TryMagnitude`。
+            if (!GatePacketLength.TryMagnitude(_header.PackLength, out this.bodyLength))
             {
-                // 卡 openmir2-gate-packlen-validation：`-int.MinValue` 在 unchecked 下仍是它自己（负值），
-                // 负的 bodyLength 会把异常抛进 TouchSocket 的收包路径。这里**按 0 长度交帧**，
-                // 由 `ProcessServerPacket` 的显式校验（WRN + 关闭连接）做处置，问题不越过本层。
                 this.bodyLength = 0;
-                return true;
             }
-            this.bodyLength = _header.PackLength < 0 ? -_header.PackLength : _header.PackLength;
             return true;
         }
 

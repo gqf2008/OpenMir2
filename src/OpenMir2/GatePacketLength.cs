@@ -11,13 +11,25 @@ namespace OpenMir2
     public static class GatePacketLength
     {
         /// <summary>
-        /// 校验「包头声明的载荷长度」能否安全地当作 count/切片长度。
+        /// 原始包头字段 → 可安全当 count 的幅值（**单一真源**：帧层与判定层都用它）。
+        ///
+        /// 本协议的 `PackLength` **负值是合法语义**（"小包/已编码"，绝对值是长度），所以负字段
+        /// 本身不是错误；唯一无正值表示的是 `int.MinValue`（`-MinValue` 在 unchecked 下仍是负数）
+        /// ⇒ 返回 false，由调用方按非法帧处置。
         /// </summary>
-        /// <param name="packetLen">包头声明的长度（`ServerMessage.PackLength` 取绝对值后的值）。</param>
-        /// <param name="available">实际可用字节数（`data.Length` / `Span.Length`）。</param>
-        /// <param name="reason">失败原因（含原值，供 WRN 日志；通过时为空串）。</param>
-        /// <returns>通过 ⇒ true；不通过 ⇒ false，且 <paramref name="reason"/> 非空。</returns>
-        public static bool TryValidate(int packetLen, int available, out string reason)
+        public static bool TryMagnitude(int rawPackLength, out int magnitude)
+        {
+            if (rawPackLength == int.MinValue)
+            {
+                magnitude = 0;
+                return false;
+            }
+            magnitude = rawPackLength < 0 ? -rawPackLength : rawPackLength;
+            return true;
+        }
+
+        /// <summary>校验**幅值**能否当 count（负值/越界 ⇒ false）。</summary>
+        public static bool TryValidateMagnitude(int packetLen, int available, out string reason)
         {
             if (packetLen < 0)
             {
@@ -31,6 +43,17 @@ namespace OpenMir2
             }
             reason = string.Empty;
             return true;
+        }
+
+        /// <summary>生产调用点用的**一步校验**：原始字段 → 幅值 → 与可用长度比较。</summary>
+        public static bool TryValidate(int rawPackLength, int available, out string reason)
+        {
+            if (!TryMagnitude(rawPackLength, out int packetLen))
+            {
+                reason = $"raw PackLength={rawPackLength} 无正值表示（int.MinValue）";
+                return false;
+            }
+            return TryValidateMagnitude(packetLen, available, out reason);
         }
     }
 }

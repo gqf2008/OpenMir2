@@ -91,6 +91,46 @@ C# `GameGate` 的会话消息路径里，`packetLen` 直接取自**网络包头*
   理由：oracle 的"无上界"在 Rust 里表现为尝试分配同等内存（`vec![0u8; n]`，失败即 abort），
   与 C# 的 OOM 同族；防御上界是安全侧收敛。
 
+### 两层语义：帧层 vs 判定层（复审 ①）
+
+- **帧层**（`DataMessageFixedHeaderRequestInfo.OnParsingHeader`）只能交帧——TouchSocket 的固定头
+  适配器没有"拒绝并关连接"的出口；它把 `int.MinValue` 降级为 **0 字节交帧**，**不是放行**。
+- **判定层**（`ClientThread.TryBuildServerSessionMessage`，GM_DATA 的唯一判定点）负责放行/拒绝；
+  失败 ⇒ `WRN` + 关闭上游连接、不投递。两层共用 `GatePacketLength.TryMagnitude`（单一真源），
+  不会对同一字段得出相反结论。
+- 端到端断言（驱动**生产判定函数**本身）：`EngineFrame_MinValue_IsRejectedByTheProcessor`、
+  `EngineFrame_Oversize_IsRejectedByTheProcessor`、`EngineFrame_Valid_IsAcceptedAndCopiedWhole`；
+  接线牙 `GameGate_EngineFrame_UsesDecisionPointAndClosesOnFailure`（删判定、挪关闭、或分支内再出现
+  裸 `new byte[`/`MemoryCopy.BlockCopy` ⇒ 红）。
+- 协议语义：`PackLength` **负值合法**（"小包/已编码"，绝对值是长度）；"负 count"只可能来自
+  `int.MinValue`（`-MinValue` 在 unchecked 下仍是负数），这正是要拦的那一例。
+
+### Rust 上界依据与断链理由（复审 ②）
+
+- oracle（C#）**没有定义协议上限**；从代码能推出最硬的界：
+  - LoginGate/SelGate ↔ 服务端链路：`ServerDataPacket.PacketLen: ushort` ⇒ **64 KiB**
+    （`crates/protocol/src/frame.rs` / `src/OpenMir2/Packets/ServerPackets/ServerDataMessage.cs`）；
+  - 客户端→网关：`MaxClientPacketSize` 默认 **10,240 B**（`src/GameGate/Conf/GateConfig.cs`）；
+  - 最大合法服务端消息的构成量级：`MaxBagItem = 46`（`src/OpenMir2/Grobal2.cs`）等小常量。
+  - 取 **1 MiB = 64 KiB × 16**：高于最硬上界 16 倍、高于客户端上限 100 倍，合法帧不可能接近。
+- **为什么断链而不是丢帧**：声明长度超过上界后，要跳过该帧必须按这个**不可信长度**读/丢弃字节
+  （最多 2 GiB），读完后也无法确认下一个头的位置 ⇒ 流无法安全再对齐。断链让监督循环重建干净
+  链路，是唯一能保证"后续帧不被错位解析"的处置。WRN 行内带累计拒绝次数（`upstream_len_reject_count`）。
+
+### CloudClient 检索（复审 ③，不是 grep 猜）
+
+```
+grep -rn "new CloudClient" src --include=*.cs                                   → 无输出（rc=1）
+grep -rn "CloudClient" src --include=*.cs | grep -v Services/CloudClient.cs     → 无输出（rc=1）
+grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterType" src/GameGate --include=*.cs → 无输出（rc=1）
+```
+⇒ 无直接构造、无引用、无反射/DI 注册；判定"不改（未接线）"，将来接线前必须先补 `TryAbs`/校验。
+
+### D-* 落点
+
+- 本仓没有 D-* 的登记门（`tools/whitelist` 只覆盖 T-*）；按 opc-07 指示**只落卡面**
+  「偏差登记」小节，并注明"待 whitelist 支持 D-* 后迁移"。不另造新机制。
+
 ### 合并前门禁
 
 - C#：`dotnet build` 三网关工程 0 错误；`dotnet test TestProject1` 全量；

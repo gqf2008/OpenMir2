@@ -1538,10 +1538,26 @@ async fn handle_server_message(ctx: &LinkCtx, msg: ServerMessage, body: &[u8]) {
 
 /// 上游帧体长度上界（卡 `openmir2-gate-packlen-validation`）。
 ///
-/// C# oracle 不设上界（TouchSocket 按包头长度缓冲），但畸形头会尝试分配同等内存
-/// （`PackLength = i32::MIN` ⇒ 绝对值 2 GiB）。正常 GM_DATA 体远小于 1 MiB，这里取 1 MiB
-/// 作防御上界——只拒绝畸形帧，正常帧不受影响（有意对齐偏差，见卡面「同族扫描」）。
+/// **依据（oracle 未定义协议上限，只能从代码里最硬的界推）**：
+/// - 另一类网关链路（LoginGate/SelGate ↔ 服务端）用 `ServerDataPacket.PacketLen: ushort`
+///   （`crates/protocol/src/frame.rs` 的 `ServerDataPacket`，C# `ServerDataMessage.cs`）⇒ **64 KiB** 硬界；
+/// - 客户端→网关方向由网关配置封顶：`MaxClientPacketSize` 默认 **10,240 B**
+///   （`src/GameGate/Conf/GateConfig.cs` 的 `GateConfig` 默认值）；
+/// - `GM_DATA` 体是"发给客户端的消息"的再封装，其构造全部来自小常量/小数组（最大者如
+///   `MaxBagItem = 46` 件背包，`src/OpenMir2/Grobal2.cs`）。
+///
+/// 取 **1 MiB = 64 KiB × 16**：比代码里最硬的上界高 16 倍、比客户端配置上限高 100 倍，
+/// 任何合法帧都不可能接近；只拒绝畸形/恶意帧（`PackLength = i32::MIN` ⇒ 绝对值 2 GiB）。
 pub const MAX_UPSTREAM_BODY: usize = 1 << 20;
+
+/// 因长度上界被拒并断链的累计次数（WRN 行内带出；供外部观测/报告）。
+static UPSTREAM_LEN_REJECTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 累计拒绝次数（只增）。
+#[must_use]
+pub fn upstream_len_reject_count() -> u64 {
+    UPSTREAM_LEN_REJECTS.load(std::sync::atomic::Ordering::Relaxed)
+}
 
 /// 上游帧体是否在防御上界内（`body_len` = `PackLength` 的绝对值）。
 #[must_use]
@@ -1576,11 +1592,18 @@ async fn reader(
         // 但 `vec![0u8; body_len]` 对畸形头（`PackLength = i32::MIN` ⇒ 2 GiB）会尝试巨量分配。
         // 超上界 ⇒ WRN + 断开链路（读循环退出 ⇒ 监督循环判死）。
         if !upstream_body_allowed(body_len) {
+            // 为什么**断链**而不是"丢帧继续"：声明长度超过上界后，要跳过该帧必须按这个
+            // **不可信的长度**去读/丢弃字节（最多 2 GiB），读完也无法确认下一个头的位置
+            // ——流已无法安全再对齐。断链让监督循环重建一条干净的链路，是唯一能保证
+            // "后续帧不被错位解析"的处置；正常帧不受影响（上界见 `MAX_UPSTREAM_BODY` 注释）。
+            let rejects =
+                UPSTREAM_LEN_REJECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
             glog!(
                 "WRN",
-                "引擎帧头 PackLength={} 超出上界 {} 字节，断开链路",
+                "引擎帧头 PackLength={} 超出上界 {} 字节（累计拒绝 {} 次），断开链路",
                 msg.pack_length,
-                MAX_UPSTREAM_BODY
+                MAX_UPSTREAM_BODY,
+                rejects
             );
             break;
         }

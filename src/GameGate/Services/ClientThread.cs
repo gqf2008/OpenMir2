@@ -258,6 +258,31 @@ namespace GameGate.Services
             CheckServerFail = true;
         }
 
+        /// <summary>
+        /// `GM_DATA` 引擎帧 → 会话消息的**唯一判定点**（卡 `openmir2-gate-packlen-validation`）。
+        ///
+        /// 返回 `false` ⇒ 调用方必须 `WRN` + 关闭上游连接且**不投递**：包头长度是不可信输入，
+        /// 越界时不得进入 `new byte[]` / 拷贝（异常在 TouchSocket 收包回调里 ⇒ 该连接停读）。
+        /// 帧层（`DataMessageFixedHeaderRequestInfo`）与这里共用 `GatePacketLength.TryMagnitude`，
+        /// 两层不会对同一字段得出相反结论。
+        /// </summary>
+        public static bool TryBuildServerSessionMessage(
+            ServerMessage packetHeader,
+            ReadOnlySpan<byte> data,
+            out ServerSessionMessage message,
+            out string reason)
+        {
+            message = default;
+            if (!GatePacketLength.TryValidate(packetHeader.PackLength, data.Length, out reason))
+            {
+                return false;
+            }
+            reason = string.Empty;
+            // 长度已由 `TryValidate` 保证 <= data.Length；这里按同一真源取幅值并整段复制。
+            message = new ServerSessionMessage(packetHeader.SessionId, data.ToArray(), (short)packetHeader.PackLength);
+            return true;
+        }
+
         private void ProcessServerPacket(ServerMessage packetHeader, ReadOnlySpan<byte> data)
         {
             switch (packetHeader.Ident)
@@ -280,28 +305,16 @@ namespace GameGate.Services
                     SendServerMsg(Grobal2.GM_RECEIVE_OK, 0, 0, 0, "", 0);
                     break;
                 case Grobal2.GM_DATA:
-                    unsafe
+                    // 卡 openmir2-gate-packlen-validation：是否投递由**唯一判定点**决定；
+                    // 失败 ⇒ WRN + 关闭上游连接，不拷贝、不分配。
+                    if (!TryBuildServerSessionMessage(packetHeader, data, out ServerSessionMessage sendMsg, out string reason))
                     {
-                        int rawLength = packetHeader.PackLength;
-                        int packetLen = rawLength < 0 ? -rawLength : rawLength;
-                        // 卡 openmir2-gate-packlen-validation：包头长度是**不可信输入**。
-                        // 越界时不得走到 MemoryCopy 的抛异常路径（异常在收包回调里 ⇒ 该连接停读）；
-                        // `int.MaxValue` 还会让 `new byte[]` OOM。校验失败 ⇒ WRN + 关闭上游连接，不拷贝。
-                        if (!GatePacketLength.TryValidate(packetLen, data.Length, out string reason))
-                        {
-                            LogService.Warn(
-                                $"游戏网关[{EndPoint}] 引擎帧头长度非法（{reason}，raw PackLength={rawLength}），关闭连接");
-                            _clientSocket.Close();
-                            return;
-                        }
-                        ServerSessionMessage sendMsg = new ServerSessionMessage();
-                        sendMsg.SessionId = packetHeader.SessionId;
-                        sendMsg.BuffLen = (short)packetHeader.PackLength;
-                        //sendMsg.Buffer = GateShare.BytePool.Rent(packetLen);
-                        sendMsg.Buffer = new byte[packetLen];
-                        MemoryCopy.BlockCopy(data, 0, sendMsg.Buffer, 0, packetLen);
-                        _messageChannel.Writer.TryWrite(sendMsg);
+                        LogService.Warn(
+                            $"游戏网关[{EndPoint}] 引擎帧头长度非法（{reason}），关闭连接");
+                        _clientSocket.Close();
+                        return;
                     }
+                    _messageChannel.Writer.TryWrite(sendMsg);
                     break;
                 case Messages.GM_TEST:
                     break;
