@@ -309,3 +309,32 @@ A = `Outcome` 回 `exp_delta`，宿主落基础 + 同步（与宿主战斗版 `G
 - 对拍测试 `tests::it08_levelup_host_parity`：过滤 idents `{53,44,45,52,752}` 按**线上序逐字段**比 `pumped`，逐字段比派生
   `max_hp/max_mp/hp/mp/dc`（golden `wabil`），并断言升级后 `WAbil==Abil`（exp/level/max_exp）。`NeedExps` 取夹具 `config.need_exps_head`
   （生产 `Exps.conf` 前缀，sha `07d7801c…` 已入夹具，`[6]==80` 守卫同源）。
+
+### 9.8 IT-01/IT-03 可达性整改 + items 侧 `derived` 机检（A2）
+
+**问题**：`eat_vectors.json` 各例 `level=1` 却写 `max_hp=100/max_mp=80`（shape3 101/55）；战士登录派生
+`MaxHP(L)=14+Round((L/4+4.5+L/20)*L)`、`MaxMP(L)=11+Round(L*3.5)`（`Server.conf` WarrHP=4/Rate=4.5）⇒
+`L1=19/15`。这两字段被 **Shape1**（`IncHealthSpell(AC,MAC)` clamp 到 MaxHP/MaxMP）与 **Shape3**
+（`Round(MaxHP/100*AC)`/`Round(MaxMP/100*MAC)`）消费 ⇒ 生产不可达。
+
+**整改（A2，逐例挑可达级，保分支）**——`ReachAbil(level,hp,mp)` 用真身 `RecalcLevelAbilitys()`+`RecalcAbilitys()`
+按 level 派生 MaxHP/MaxMP/AC/DC/MaxWeight 等，HP/MP 用入参（须 ≤ 派生 Max）：
+| case | level | hp,mp | 保的分支 |
+|---|---|---|---|
+| `shape1_fixed` | **L2**(24/18) | 2,2 | `2+AC20=22<24` **固定量不触发 clamp**（A1 会丢） |
+| `shape1_clamp` | **L2**(24/18) | 2,2 | `22≥24`→clamp 24/18 |
+| `shape3_percent` | **L4**(37/25) | 10,10 | `Round(37/100*5=1.85)=2`；`Round(25/100*10=**2.5**)=**3**(远离零) |
+| 其余非消费例 | L1(19/15) | hp≤19,mp≤15 | max_hp 不被消费，只需状态可达 + 过 derived 门 |
+| `stdmode1_hunger_recalc` | L1(19/15) | 15,15 | 原已可达，保留 |
+
+**弱牙修**：旧 `shape3` 用 `max_mp=55/mac=10 ⇒ Round(5.5)=6`——AwayFromZero 与银行家都得 6，**无区分力**；
+改用 L4 的 `2.5`（远离零=3、银行家=2）。先实测 oracle（探针真身 `HUtil32.Round=(int)Math.Round(r,AwayFromZero)`）再写断言。Rust `round_away` 同 away。
+
+**`derived` 机检（items 侧对等 `MagicGolden/FixtureContract.cs` 的 rc=2 门）**：探针 `RunCase` 内、写盘前，
+按 case 的 `level` 用真身 `RecalcLevelAbilitys()+RecalcAbilitys()` 复算 `WAbil.MaxHP/MaxMP`，与向量声明断言相等；
+不等 ⇒ stderr `DERIVED_MISMATCH …` + `Environment.Exit(2)`，**不落盘**。**负对照**（真跑）：注入一个手填不可达
+`max_hp` 的 case ⇒ `DERIVED_MISMATCH` + `rc=2` + 夹具文件 sha 不变（证明"拒生成、不改盘"）。
+
+**影响面**：这是**夹具状态改为可达**的整批重生成（Rust 代码不改，已正确镜像 oracle）；`expect` 变化逐 case 记
+`old→new + 理由(夹具状态改为可达/golden 重生成)`，不得写"Rust 输出变了"。IT-08 的 exp 例 `wabil_before` 的
+max_hp 随之变为派生值（exp 不消费它；levelup 例经 recalc 覆盖为 L6 值，golden 行为不变），属无害重生成。
