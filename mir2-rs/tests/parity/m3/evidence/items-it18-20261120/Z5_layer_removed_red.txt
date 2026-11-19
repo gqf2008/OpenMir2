@@ -1,0 +1,51 @@
+# ts=2026-11-20T01:32:36+08:00
+# filter=useitem::tests::z5_single_layer_red
+# mutation: '    fn fixture_covers_two_layers(doc: &Value) -> bool {\n' -> '    fn fixture_covers_two_layers(doc: &Value) -> bool {\n        return true;\n'
+# expect: FAILED
+=== stderr (cargo/build) ===
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
+warning: unreachable expression
+   --> bins\game-svr\src\useitem.rs:789:9
+    |
+788 |           return true;
+    |           ----------- any code following this expression is unreachable
+789 | /         doc["cases"]
+790 | |             .as_array()
+791 | |             .map(|cs| {
+792 | |                 cs.iter().any(|c| {
+...   |
+803 | |             })
+804 | |             .unwrap_or(false)
+    | |_____________________________^ unreachable expression
+    |
+    = note: `#[warn(unreachable_code)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused variable: `doc`
+   --> bins\game-svr\src\useitem.rs:787:34
+    |
+787 |     fn fixture_covers_two_layers(doc: &Value) -> bool {
+    |                                  ^^^ help: if this is intentional, prefix it with an underscore: `_doc`
+    |
+    = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
+
+warning: `game-svr` (lib test) generated 2 warnings (run `cargo fix --lib -p game-svr --tests` to apply 1 suggestion)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.46s
+     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
+
+thread 'useitem::tests::z5_single_layer_red' (4592) panicked at bins\game-svr\src\useitem.rs:842:9:
+只有 SM 一层必须不合格
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p game-svr --lib`
+=== stdout (test harness) ===
+
+running 1 test
+test useitem::tests::z5_single_layer_red ... FAILED
+
+failures:
+
+failures:
+    useitem::tests::z5_single_layer_red
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
+
+# rc=101

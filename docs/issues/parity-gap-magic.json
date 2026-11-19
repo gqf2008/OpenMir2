@@ -1,5 +1,6 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
+  "schema_note": "v2：entries[].basis（semantic/bytes）随 verified 条目增加；其余字段与 v1 相同（卡 openmir2-magic-parity，2026-11-20）",
   "domain": "magic",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
@@ -253,13 +254,22 @@
         "line": 174,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_parity",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/fireball.json（C# oracle 生成；QA-1 独立复现）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::fireball_parity_miss",
+          "tests::fireball_parity_edge",
+          "tests::fireball_parity_hit"
+        ]
       },
       "cost": "S",
       "deviation": null,
@@ -274,17 +284,26 @@
         "line": 175,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_fireball5",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/fireball-5.json（C# oracle 生成，同 rig 换 magic_id=5）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::fireball5_parity_miss",
+          "tests::fireball5_parity_edge",
+          "tests::fireball5_parity_hit"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级；与 id=1 共用 `1|5` 实现臂，但尚无 id=5 的 golden/对拍（不升格）"
     },
     {
       "id": "MG-12",
@@ -295,13 +314,22 @@
         "line": 204,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_healing",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/healing.json（C# oracle 生成；三支 heal/full/self）",
+        "cases": [
+          "heal(seed=1)",
+          "full(seed=5)",
+          "self(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::healing_parity_heal",
+          "tests::healing_parity_full",
+          "tests::healing_parity_self"
+        ]
       },
       "cost": "S",
       "deviation": null,
@@ -442,13 +470,22 @@
         "line": 289,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_lightning11",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/lightning-11.json（C# oracle 生成，同 rig 换 magic_id=11）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::lightning11_parity_miss",
+          "tests::lightning11_parity_edge",
+          "tests::lightning11_parity_hit"
+        ]
       },
       "cost": "S",
       "deviation": null,
@@ -1201,13 +1238,22 @@
         "line": 563,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_lightning45",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/lightning-45.json（C# oracle 生成，同 rig 换 magic_id=45）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::lightning45_parity_miss",
+          "tests::lightning45_parity_edge",
+          "tests::lightning45_parity_hit"
+        ]
       },
       "cost": "S",
       "deviation": null,

@@ -1,0 +1,26 @@
+# ts=2026-11-20T01:33:26+08:00
+# filter=useitem::tests::matches_oracle_eat_fixture
+# mutation: 'expect["drain"]["hit_cap"].as_bool().unwrap_or(false)' -> 'true'
+# expect: FAILED
+=== stderr (cargo/build) ===
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.97s
+     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
+
+thread 'useitem::tests::matches_oracle_eat_fixture' (9736) panicked at bins\game-svr\src\useitem.rs:1037:13:
+eat_ok_shape1_fixed: 抽空上限异常 hit_cap=true max_passes=8
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p game-svr --lib`
+=== stdout (test harness) ===
+
+running 1 test
+test useitem::tests::matches_oracle_eat_fixture ... FAILED
+
+failures:
+
+failures:
+    useitem::tests::matches_oracle_eat_fixture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.01s
+
+# rc=101

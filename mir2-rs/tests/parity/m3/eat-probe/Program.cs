@@ -29,6 +29,7 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using M2Server;
+using M2Server.Items;
 using M2Server.Maps;
 using M2Server.Net;
 using M2Server.Player;
@@ -46,49 +47,11 @@ using SystemModule.SubSystem;
 namespace EatProbe;
 
 /// <summary>
-/// `SystemShare.ItemSystem` 的内存替身：
-/// - `GetStdItem(ushort)` 返回注入的模板；
-/// - `GetUpgradeStdItem` = **恒等拷贝**（有效物品 = 模板；Desc 升级不在本片作用域）；
-/// - `GetStdItemName` 返回模板名。
+/// 物品表用**真身 `GameItemSystem`**（`SystemShare.ItemSystem`）：`GetStdItem` / `GetUpgradeStdItem`
+/// / `CopyToUserItemFromName` 全走 oracle 同一份代码，避免"转写冒充 oracle"。探针只负责把模板
+/// 按 id 稠密铺进 `StdItemList`（位置 i = id i+1，见 `Main`）。
 /// </summary>
-internal sealed class ProbeItemSystem : IItemSystem
-{
-    public readonly Dictionary<ushort, StdItem> Items = new();
-
-    public StdItem GetStdItem(ushort nItemIdx)
-        => Items.TryGetValue(nItemIdx, out var it) ? it : null;
-
-    public string GetStdItemName(int itemIdx)
-        => Items.TryGetValue((ushort)itemIdx, out var it) ? it.Name : string.Empty;
-
-    public int GetUpgradeStdItem(StdItem stdItem, UserItem userItem, ref ClientItem clientItem)
-    {
-        if (clientItem == null)
-        {
-            clientItem = new ClientItem();
-        }
-        var d = clientItem.Item;
-        d.Name = stdItem.Name;
-        d.StdMode = stdItem.StdMode;
-        d.Shape = stdItem.Shape;
-        d.Weight = stdItem.Weight;
-        d.AC = stdItem.AC;
-        d.MAC = stdItem.MAC;
-        return 0;
-    }
-
-    public int RealAttackSpeed(short wAtkSpd) => wAtkSpd <= 10 ? -wAtkSpd : wAtkSpd - 10;
-    public void AddItem(StdItem stdItem) => throw new NotSupportedException();
-    public void Clear() => throw new NotSupportedException();
-    public int ItemCount => Items.Count;
-    public ushort GetStdItemIdx(string itemName) => throw new NotSupportedException();
-    public bool CopyToUserItemFromName(string sItemName, ref UserItem item) => throw new NotSupportedException();
-    public StdItem GetStdItem(string sItemName) => throw new NotSupportedException();
-    public int GetStdItemWeight(int nItemIdx) => throw new NotSupportedException();
-    public int GetUpgrade2(int x, int a) => throw new NotSupportedException();
-    public void RandomSetUnknownItem(StdItem stdItem, UserItem pu) => throw new NotSupportedException();
-    public void RandomUpgradeItem(StdItem stdItem, UserItem pu) => throw new NotSupportedException();
-}
+// (物品表直接用真身 `M2Server.Items.GameItemSystem`，见 `Main`：按 id 稠密铺 `StdItemList`。)
 
 /// <summary>截获到的一条**即时**帧（`CommandMessage` 在 `ServerMessage` 头之后）。</summary>
 internal sealed class CapFrame
@@ -291,30 +254,71 @@ internal static class Program
         throw new MissingFieldException("ActorEntity.MsgQueue");
     }
 
-    /// <summary>按**出队序**（优先级 = `(byte)wIdent`）读出延时通知。</summary>
-    private static List<object> Drain(object pq)
+    /// <summary>排空趟上限（记录面；超过即 `hitCap=true`，比较器必红）。</summary>
+    private const int MaxDrainPasses = 8;
+
+    /// <summary>排空**趟循环**（可单测的纯逻辑）：`hasWork` 为 false（起于空队列）⇒ `(0,false)`；
+    /// 否则每趟调 `drainOnePass`，返回 `true` 表示本趟后队列又满（需下一趟，模拟投递重入），
+    /// 最多 `maxPasses` 趟：某趟后不满 ⇒ `(pass+1,false)`；触顶仍满 ⇒ `(maxPasses,true)`（自然命中）。</summary>
+    private static (int passes, bool hitCap) DrainPassLoop(
+        int maxPasses, Func<bool> hasWork, Func<bool> drainOnePass)
+    {
+        if (!hasWork())
+        {
+            return (0, false);
+        }
+        for (int pass = 0; pass < maxPasses; pass++)
+        {
+            if (!drainOnePass())
+            {
+                return (pass + 1, false);
+            }
+        }
+        return (maxPasses, true);
+    }
+
+    /// <summary>按**优先级升序出队**读出延时通知，抽空为止（上界 `MaxDrainPasses`）。
+    /// `priority` 取自 `PriorityQueue.TryDequeue(out, out prio)`；`late` 取自 `SendMessage.LateDelivery`。
+    /// **上界命中必报**（`hitCap=true` ⇒ 比较器红）。</summary>
+    private static (List<object> messages, int passes, bool hitCap) Drain(object pq)
     {
         var list = new List<object>();
         var t = pq.GetType();
         var countProp = t.GetProperty("Count") ?? throw new MissingMemberException("PriorityQueue.Count");
-        var dequeue = t.GetMethod("Dequeue") ?? throw new MissingMethodException("PriorityQueue.Dequeue");
-        while ((int)countProp.GetValue(pq) > 0)
-        {
-            var m = dequeue.Invoke(pq, null);
-            var mt = m.GetType();
-            list.Add(new
+        var tryDequeue = t.GetMethod("TryDequeue") ?? throw new MissingMethodException("PriorityQueue.TryDequeue");
+        var (passes, hitCap) = DrainPassLoop(
+            MaxDrainPasses,
+            () => (int)countProp.GetValue(pq) > 0,
+            () =>
             {
-                ident = (int)mt.GetField("wIdent").GetValue(m),
-                w_param = (int)mt.GetField("wParam").GetValue(m),
-                n_param1 = (int)mt.GetField("nParam1").GetValue(m),
-                n_param2 = (int)mt.GetField("nParam2").GetValue(m),
-                n_param3 = (int)mt.GetField("nParam3").GetValue(m),
+                while ((int)countProp.GetValue(pq) > 0)
+                {
+                    var args = new object[] { null, null };
+                    bool ok = (bool)tryDequeue.Invoke(pq, args);
+                    if (!ok)
+                    {
+                        break;
+                    }
+                    var m = args[0];
+                    int prio = Convert.ToInt32(args[1]);
+                    var mt = m.GetType();
+                    list.Add(new
+                    {
+                        ident = (int)mt.GetField("wIdent").GetValue(m),
+                        w_param = (int)mt.GetField("wParam").GetValue(m),
+                        n_param1 = (int)mt.GetField("nParam1").GetValue(m),
+                        n_param2 = (int)mt.GetField("nParam2").GetValue(m),
+                        n_param3 = (int)mt.GetField("nParam3").GetValue(m),
+                        priority = prio,
+                        late = ((bool)mt.GetField("LateDelivery").GetValue(m)) ? 1 : 0,
+                    });
+                }
+                return (int)countProp.GetValue(pq) > 0;
             });
-        }
-        return list;
+        return (list, passes, hitCap);
     }
 
-    private static object RunCase(ProbeItemSystem table, CaptureNetChannel net, string name,
+    private static object RunCase(GameItemSystem table, CaptureNetChannel net, string name,
         Ctx ctx, List<Spec> itemList, int requestMakeIndex, string requestName,
         Ability wabilPre, int incHealthPre, int incSpellPre, bool userUnlockPre)
     {
@@ -350,13 +354,14 @@ internal static class Program
         var mi = typeof(PlayObject).GetMethod("ClientUseItems", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("PlayObject.ClientUseItems");
         var beforeList = po.ItemList.Select(ItemDto).ToArray();
+        var beforeMakeIndexes = new HashSet<int>(po.ItemList.Select(u => u.MakeIndex));
         // `Ability` 是引用类型：`po.WAbil` 与 `wabilPre` 是同一对象，handler 会原地改。
         // 输入快照必须在 invoke **之前**取。
         var wabilBeforeDto = AbilityDto(wabilPre);
         mi.Invoke(po, new object[] { requestMakeIndex, requestName });
         SystemShare.FunctionNPC = null;
 
-        var messages = Drain(GetMsgQueue(po));
+        var (messages, drainPasses, drainHitCap) = Drain(GetMsgQueue(po));
         var immediate = net.Frames.ToList();
 
         return new
@@ -385,12 +390,19 @@ internal static class Program
                     .Select(f => new { ident = f.ident, recog = f.recog, param = f.param, tag = f.tag, series = f.series })
                     .ToList(),
                 notices = messages,
+                // IT-18：解包新建的物品（`ItemList` 中不在 `beforeList` 里的项，按生成序）。
+                // `make_index` 含 `Environment.TickCount`（墙钟）⇒ 比较器排除绝对值（见 items-parity §3）。
+                added_items = po.ItemList
+                    .Where(it => !beforeMakeIndexes.Contains(it.MakeIndex))
+                    .Select(ItemDto).ToArray(),
                 wabil = AbilityDto(po.WAbil),
                 inc_health = (int)po.IncHealth,
                 inc_spell = (int)po.IncSpell,
                 user_unlock_durg = po.UserUnLockDurg,
                 hunger_status = po.HungerStatus,
                 item_list = po.ItemList.Select(ItemDto).ToArray(),
+                // 抽空为止：趟数 + 是否命中上界（命中 ⇒ 比较器必红，不得当完整账本）。
+                drain = new { passes = drainPasses, max_passes = 8, hit_cap = drainHitCap },
             },
         };
     }
@@ -416,32 +428,62 @@ internal static class Program
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         LogService.Logger = new LoggerConfiguration().CreateLogger();
 
+        // D3 自测：排空趟循环的「自然命中」——假队列每趟都重满，跑到 MaxDrainPasses ⇒ hitCap 必真；
+        // 一趟即空 ⇒ hitCap 假、passes=1；起于空队列 ⇒ passes=0。不进夹具、不依赖探针记录。
+        if (args.Length > 0 && args[0] == "--drain-selftest")
+        {
+            var (pFull, cFull) = DrainPassLoop(MaxDrainPasses, () => true, () => true); // 每趟重满
+            var (pOne, cOne) = DrainPassLoop(MaxDrainPasses, () => true, () => false); // 一趟即空
+            var (pNone, cNone) = DrainPassLoop(MaxDrainPasses, () => false, () => true); // 起于空
+            bool ok = cFull && pFull == MaxDrainPasses && !cOne && pOne == 1 && !cNone && pNone == 0;
+            Console.WriteLine(
+                $"DRAIN_SELFTEST ok={ok} always_full(passes={pFull},hitCap={cFull}) "
+                + $"one_pass(passes={pOne},hitCap={cOne}) none(passes={pNone},hitCap={cNone}) "
+                + $"maxPasses={MaxDrainPasses}");
+            return ok ? 0 : 1;
+        }
+
         string outPath = args.Length > 0
             ? args[0]
             : Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", "..", "fixtures", "eat_vectors.json");
 
-        var table = new ProbeItemSystem();
-        SystemShare.ItemSystem = table;
+        var templates = new Dictionary<ushort, StdItem>();
         var net = new CaptureNetChannel();
         M2Share.NetChannel = net;
         SystemShare.ManageNPC = NpcProxy.Create();
 
         // 模板：只覆盖 StdMode 0 药品分支读到的字段（StdMode/Shape/AC/MAC/Weight）。
-        table.Items[2001] = Tpl("hp_mp_fixed", 0, 1, 5, ac: 20, mac: 10);   // Shape 1：固定量
-        table.Items[2002] = Tpl("hp_mp_big", 0, 1, 5, ac: 200, mac: 200);    // Shape 1：溢出 MaxHP/MaxMP
-        table.Items[2003] = Tpl("hp_mp_percent", 0, 3, 5, ac: 5, mac: 10);   // Shape 3：百分比（含 .5 进位）
-        table.Items[2004] = Tpl("unlock", 0, 2, 5);                          // Shape 2：解锁
-        table.Items[2005] = Tpl("inc_pool", 0, 0, 5, ac: 15, mac: 7);        // default：进 IncHealth/IncSpell 池
-        table.Items[2006] = Tpl("inc_zero", 0, 0, 5);                        // default：AC/MAC 都为 0（两条 >0 守卫）
-        table.Items[2007] = Tpl("other_mode", 5, 0, 8);                      // StdMode 5：非药品 ⇒ 不吃
-        table.Items[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);          // 称重
-        table.Items[2011] = Tpl("noop", 2, 0, 3);                             // StdMode 2：无效果（result=true）
-        table.Items[2012] = Tpl("food_small", 1, 0, 2, duraMax: 200);        // StdMode 1：不跨档（不触发 RefMyStatus）
-        table.Items[2013] = Tpl("food_recalc", 1, 0, 2, duraMax: 12000);     // StdMode 1：0→1200 跨档 ⇒ RefMyStatus
-        table.Items[2014] = Tpl("food_clamp", 1, 0, 2, duraMax: 2000);       // StdMode 1：夹到 5000（不跨档）
-        table.Items[2015] = Tpl("funitem_dispatch", 31, 1, 3, aniCount: 5);  // StdMode 31：AniCount!=0 ⇒ UseStdModeFunItem
-        table.Items[2016] = Tpl("unbind_full", 31, 1, 3, aniCount: 0);        // StdMode 31：AniCount==0 ⇒ 解包（容量不足时不吃）
-        // 2009 故意不注册 ⇒ 模板缺失分支
+        templates[2001] = Tpl("hp_mp_fixed", 0, 1, 5, ac: 20, mac: 10);   // Shape 1：固定量
+        templates[2002] = Tpl("hp_mp_big", 0, 1, 5, ac: 200, mac: 200);    // Shape 1：溢出 MaxHP/MaxMP
+        templates[2003] = Tpl("hp_mp_percent", 0, 3, 5, ac: 5, mac: 10);   // Shape 3：百分比（含 .5 进位）
+        templates[2004] = Tpl("unlock", 0, 2, 5);                          // Shape 2：解锁
+        templates[2005] = Tpl("inc_pool", 0, 0, 5, ac: 15, mac: 7);        // default：进 IncHealth/IncSpell 池
+        templates[2006] = Tpl("inc_zero", 0, 0, 5);                        // default：AC/MAC 都为 0（两条 >0 守卫）
+        templates[2007] = Tpl("other_mode", 5, 0, 8);                      // StdMode 5：非药品 ⇒ 不吃
+        templates[2008] = Tpl("weighty", 0, 1, 9, ac: 1, mac: 1);          // 称重
+        templates[2011] = Tpl("noop", 2, 0, 3);                             // StdMode 2：无效果（result=true）
+        templates[2012] = Tpl("food_small", 1, 0, 2, duraMax: 200);        // StdMode 1：不跨档（不触发 RefMyStatus）
+        templates[2013] = Tpl("food_recalc", 1, 0, 2, duraMax: 12000);     // StdMode 1：0→1200 跨档 ⇒ RefMyStatus
+        templates[2014] = Tpl("food_clamp", 1, 0, 2, duraMax: 2000);       // StdMode 1：夹到 5000（不跨档）
+        templates[2015] = Tpl("funitem_dispatch", 31, 1, 3, aniCount: 5);  // StdMode 31：AniCount!=0 ⇒ UseStdModeFunItem
+        templates[2016] = Tpl("unbind_full", 31, 1, 3, aniCount: 0);        // StdMode 31：AniCount==0 ⇒ 解包（容量不足时不吃）
+        templates[2017] = Tpl("unbind_item", 0, 0, 4, duraMax: 7);          // IT-18 解包产物（6 件）
+        // 2009 故意不注册 ⇒ 模板缺失分支（稠密表该位置放空名占位 ⇒ `GetStdItem` 返回 null）
+
+        // **用真身 `GameItemSystem`**：`GetStdItem`/`GetUpgradeStdItem`/`CopyToUserItemFromName`
+        // 全走 oracle 同一份代码。`StdItemList` 按 id 稠密铺：位置 i = id i+1，空位放空名占位
+        // （`GetStdItem` 对空名返回 null；`CopyToUserItemFromName` 的 `stdItem.Name` 为空串、不 NRE）。
+        var table = new GameItemSystem();
+        ushort maxId = templates.Keys.Max();
+        for (ushort id = 1; id <= maxId; id++)
+        {
+            table.AddItem(templates.TryGetValue(id, out var t) ? t : new StdItem { Name = string.Empty });
+        }
+        SystemShare.ItemSystem = table;
+
+        // `M2Share.UnbindList`（`M2Share.cs:85`，默认 null）：`StdItem.Shape → 解包物名`。
+        // 只挂 Shape 1（2016 的 Shape）⇒ 成功解包出 6 件 2017；其余 Shape 未命中 ⇒ 空名 ⇒ 0 件。
+        M2Share.UnbindList = new Dictionary<int, string> { [1] = "unbind_item" };
 
         var cases = new List<object>();
 
@@ -525,9 +567,15 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_fail_stdmode31_unbind_bag_full", new Ctx(),
             unbindFullBag, 1, "unbind_full",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        // IT-18 成功路径：背包仅 1 件解包件（2016，Shape=1/AniCount=0）⇒ 1+6-1=6 <= 46 ⇒
+        // Dispose+RemoveAt 后 `ClientUseItemsGetUnBindItems("unbind_item", 6)` 建 6 件 2017，
+        // 每件 `SendAddItem` ⇒ 6 条 SM_ADDITEM(200) 即时帧，再 SM_EAT_OK + RM_WEIGHTCHANGED。
+        cases.Add(RunCase(table, net, "eat_ok_stdmode31_unbind_success", new Ctx(),
+            new List<Spec> { S(1, 2016) }, 1, "unbind_full",
+            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
 
         var templateDtos = new Dictionary<string, object>();
-        foreach (var kv in table.Items)
+        foreach (var kv in templates)
         {
             var t = kv.Value;
             templateDtos[kv.Key.ToString()] = new
@@ -551,6 +599,7 @@ internal static class Program
             "src/M2Server/Actor/BaseObject.Message.cs",
             "src/M2Server/Player/PlayObject.Socket.cs",
             "src/Modules/SystemModule/Data/SendMessage.cs",
+            "src/M2Server/Items/GameItemSystem.cs",
             "src/OpenMir2/Grobal2.cs",
         };
         string sourceAnchor = SourceAnchorSha256(oracleSourceFiles);
@@ -584,15 +633,19 @@ internal static class Program
                 "有效物品 = 模板（探针 GetUpgradeStdItem 是恒等拷贝；Desc 升级/StdMode 变换不在本片作用域）",
                 "即时帧 = SendDefMessage/SendSocket 直接写 gate buffer（SM_EAT_OK=635 / SM_EAT_FAIL=636）",
                 "延时通知 = SendMsg 入 MsgQueue（PriorityQueue，优先级 = (byte)wIdent），探针按出队序读；真实协议上它晚于即时帧由消息泵下发",
-                "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0，只看 `SystemShare.FunctionNPC` 是否存在）与 AniCount==0 的容量不足分支已覆盖；StdMode 3/4 与 StdMode 31 的解包分支（`UnbindList`，容量足够时解包出 6 件）本片未实现，已登记（T-17）",
+                "StdMode 2（无效果）已覆盖；StdMode 31 的 `UseStdModeFunItem`（AniCount!=0）、AniCount==0 的容量不足分支、以及 AniCount==0 的解包成功（`UnbindList[Shape]` 命中 ⇒ 6 件 `CopyToUserItemFromName` + 6 条 SM_ADDITEM）均已覆盖；StdMode 3/4 仍在 T-17。解包产物 `make_index` 含 Environment.TickCount（墙钟）⇒ 比较器排除绝对值。",
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
+            unbind = M2Share.UnbindList.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),
             templates = templateDtos,
             cases,
         };
 
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
-        File.WriteAllText(outPath, JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }) + "\n", new UTF8Encoding(false));
+        // 落盘统一 LF：Windows 上 `JsonSerializer` 缩进为 CRLF，仓库约定 LF，
+        // 否则 `git diff --check` 会逐行判 trailing whitespace。
+        string json = JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }).Replace("\r\n", "\n");
+        File.WriteAllText(outPath, json + "\n", new UTF8Encoding(false));
         Console.WriteLine($"WROTE {Path.GetFullPath(outPath)}");
         Console.WriteLine($"ORACLE_SOURCE_SHA256 {sourceAnchor}");
         Console.WriteLine($"TEMPLATES {templateDtos.Count} CASES {cases.Count}");
