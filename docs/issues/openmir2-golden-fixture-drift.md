@@ -209,6 +209,12 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 - 6 条延时受击：旧 golden 的 `Rng` 缺排水抽（`freeze_at_dospell`）⇒ 重生成后按拼接比较；
   Rust 侧现台账的 `DeliverRng` 已有对应抽（`3b` 判 **18/18 MATCH(count+values)**）。
 
+**旧世代件的处置（`anti_magic=3` / 无契约键 / 未登录序）**：移入 `golden/magic/legacy/`，件内加
+`legacy_artifact=true` + `legacy_reason`。**这两个键只供人读**——比较器按**路径**拒绝（`golden_file()`
+对 `legacy/` 前缀硬断言失败），并不读取键；不要以为"读键能判定能否作依据"。移完核三条：
+① 顶层 `golden/magic/*.json` 无 `"anti_magic": 3` 残留；② `legacy/` 下 16 件齐全；
+③ 比较器/驱动的显式文件名清单仍指向 `golden/magic/<name>.json`（未被移动破坏）。
+
 ### 8.7 M52 的登录序变体：状态契约 + 构造路径（Rust 侧已接缝，值待 a2 输出）
 
 **状态字段契约（`MagicGolden` 的 `Fixture`；a2 输出，Rust 只读）**：
