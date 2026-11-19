@@ -72,6 +72,9 @@
 - golden 每条落盘：`config`（5 个 conf 的 sha256、`conf_dir`、`0.map` 的 sha256、`repo_head`）、
   `fixture_spec`、以及每 case 的 `Fixture`（含 `entry_args` / `preset` / `entry_return` /
   `delay_time` / `dir`）。工具落盘统一 LF。
+- **统一字段契约**（opc-07 2026-11-20，每支 case 的 `Fixture` 必写、缺键比较器即红）：
+  `rng_mode="cover_drain"`（RNG seam 保持到排水结束，排水阶段抽取同样入账）、
+  `login_order=true`（两侧登录序角色）、`reachability="reachable"`。
 - 产物：`mir2-rs/tests/parity/golden/magic/warr-{3,4,7,12,25,26,27,34,38}.json`。
 - 复现：
   `dotnet run --project mir2-rs/tests/parity/csharp/MagicGolden -c Release -- --case warrskill --out-dir mir2-rs/tests/parity/golden/magic`
@@ -159,6 +162,26 @@
 - `RM_RUSH` / `RM_RUSHKUNG` → `SM_RUSH(6)` / `SM_RUSHKUNG(7)`（Param/Tag=x/y、Series=`MakeWord(Dir, Light)`）；
 - `RM_MAGIC_LVEXP` → `SM_MAGIC_LVEXP(640)`。
 
+## C. 登录期 `657` 的丢弃是显式取舍 + 牙（裁决 C）
+
+- **oracle 锚**：真人登录 `PlayObject.UserLogon()`（`src/M2Server/Player/PlayObject.cs` 的
+  `public void UserLogon`）在 `:1308-1309` 调 `RecalcLevelAbilitys(); RecalcAbilitys();`；
+  `PlayObject.RecalcAbilitys()` 内 `CharStatus = GetCharStatus(); StatusChanged();` ⇒
+  `BaseObject.StatusChanged()` 发 `SendRefMsg(RM_CHARSTATUSCHANGED(10139))`（自己 + 12 格内 Play）。
+  排水后即 `SM_CHARSTATUSCHANGED(657)`。
+- **捕获窗口**：本装置的 golden 只捕获**施法窗口**（`ClientSpellXY` 调用之后的 RM/SM 与状态）——
+  登录期帧不在范围内。因此施法者登录序产生的 10139 在**施法前**用 `DrainRaw()` 丢弃（与 target
+  的登录帧处置同口径）。**丢弃的是登录期 657，不是施法期 657。**
+- **牙（`--case warr-selftest`，三支断言）**：
+  1. `login_10139=True`：登录序确实在施法者队列留下 `RM_CHARSTATUSCHANGED`（证明"丢弃"不是空动作）；
+  2. `spell_window_657=True`：在「丢弃之后、调用之前」注入一条 10139（`InjectSpellWindowStatusRm`），
+     排水后必须出现 `SM_CHARSTATUSCHANGED(657)`（反向牙：把丢弃挪到调用之后 ⇒ 本断言红）；
+  3. `no_login_657=True`：不注入的正常 case 里**不得**出现 657（反向牙：删掉丢弃 ⇒ 本断言红）。
+- **变异证据**（快照 `E:/UserTemp/warrskill-snap/`，还原后 sha `499f0566…` 相等、复跑绿）：
+  - M1 删 `caster.DrainRaw()` ⇒ `WARR_SELFTEST FAIL … no_login_657=False`（rc=1）；
+  - M2 把 `caster.DrainRaw()` 挪到调用之后 ⇒ `… spell_window_657=False`（rc=1）；
+  - 还原后 `WARR_SELFTEST OK login_10139=True spell_window_657=True no_login_657=True`（rc=0）。
+
 ## 零变化证明与「入库 golden vs 当前工具」分类（按 opc-07 2026-11-20 裁决）
 
 - **本批改动的零影响（已证）**：同一棵树两次构建——`Program.cs` 含 / 去掉 `warrskill` 分派行
@@ -179,6 +202,15 @@
     入库 golden 的「未重算合成角色」不再同一 ⇒ **同 seed 下分支结果不同、帧字段不同**（如
     53/31 的 `MaxHP`）。**不下方向性结论**（哪个分支变真/变假以第 1/2 步实测与 oracle 分支原文为准）。
 - **状态**：按裁决第 4 条**已停下上报**；本批**未**重生成入库、**未**改 Rust 驱动期望。
+- **归因更正（如实留痕）**：我最初的二分里 `firecharm`/`healing` 仍不等，曾报"疑似第三变量"——
+  **该结论已撤回**。原因是我手写复刻旧夹具时把 `caster.WAbil.SC` 置 0，与生成期配方
+  （`spec.CasterSc=15`）不符；`3b` 的受控实验（只把 SC 改 0）逐项复现了我的症状，SC=15 下 6/6 全等。
+  我另用**生成期源码**（`git show <生成提交>:Program.cs`；5 个提交里的 `Program.cs` 为同一 blob
+  `903f97fe…`，`fireball-5` 为 `8dcafda4…`）原样重建并逐 case 重跑：**6/6 逐字段相等**
+  （排除 `delivery`/`now`），产物 `E:/UserFleet/qa/warrskill/bisect-oldtool/`。⇒ 无第三变量；
+  漂移全部来自装置版本（登录序重算 + 后述记录面），不是 oracle 事实变化。
+- **教训（写进卡面）**：复刻"旧夹具/旧行为"必须**以生成期源码为准**（`git show <提交>:<文件>`），
+  不得凭"应该是这样"手写取值；本次的 SC=0 就是反例。
 
 ## 未覆盖面（本批 golden 不覆盖，登记）
 

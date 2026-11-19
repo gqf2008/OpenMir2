@@ -78,6 +78,12 @@ public static class ClientSpellXYEntry
         public bool PresetCrsHitkill;
         /// <summary>26：预设 `LatestFireHitTick=now` ⇒ 命中 10s 门内的失败支（红字 + 不扣 MP）。</summary>
         public bool PresetFireHitBusy;
+        /// <summary>
+        /// **牙专用**（`--case warr-selftest`，裁决 C）：在「登录帧已丢弃、`ClientSpellXY` 尚未调用」
+        /// 之间往施法者队列注入一条 `RM_CHARSTATUSCHANGED(10139)`（→ `SM_CHARSTATUSCHANGED(657)`）。
+        /// 若有人把登录帧 `DrainRaw` 挪到调用之后，这条合成消息会被一并丢掉 ⇒ self-test 红。
+        /// </summary>
+        public bool InjectSpellWindowStatusRm;
     }
 
     /// <summary>9 条魔号的 case 分派（与 `ClientSpellXY` 的 switch 一一对应；读码依据见卡面 §B）。</summary>
@@ -196,6 +202,78 @@ public static class ClientSpellXYEntry
         return 0;
     }
 
+    /// <summary>
+    /// 裁决 C 的牙（`--case warr-selftest`）：
+    /// (a) 登录序确实会在施法者队列里留下 `RM_CHARSTATUSCHANGED(10139)`（证明"丢弃"不是空动作）；
+    /// (b) 施法窗口内的同一条 RM **必须**变成 `SM_CHARSTATUSCHANGED(657)` 进 golden——
+    ///     走的是 RunOne 同一条排水路径，注入点在「丢弃之后、调用之前」。
+    /// 红检：把 `caster.DrainRaw()` 挪到调用之后 ⇒ (b) 失败。
+    /// </summary>
+    public static int SelfTest()
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
+        string mapPath = Path.Combine(mapDir, "0.map");
+        if (!File.Exists(mapPath))
+        {
+            Console.Error.WriteLine("MAP_MISSING " + mapPath);
+            return 2;
+        }
+
+        // (a) 登录帧存在性
+        var c = new RecordingPlayObject { ChrName = "selftest-caster", ActorId = 1, CurrX = 10, CurrY = 10, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        c.Abil.Level = 30;
+        c.RecalcLevelAbilitys();
+        c.RecalcAbilitys();
+        var loginFrames = c.DrainRaw();
+        bool hasLogin10139 = loginFrames.Any(m => m.Msg.wIdent == (int)OpenMir2.Messages.RM_CHARSTATUSCHANGED);
+
+        // (b) 施法窗口内的 657 必须进 golden
+        var spec = new MagicSpec
+        {
+            MagicId = 12,
+            MagicName = "Thrusting",
+            Arm = "case SKILL_ERGUM",
+            Cases = new[] { new SubCase { Label = "spell_window_657", InjectSpellWindowStatusRm = true } },
+        };
+        var res = RunOne(spec, spec.Cases[0], 9001, mapPath);
+        bool hasSpell657 = res.Receivers.Any(r => HasIdent(r.Sent, 657));
+
+        // (c) 登录期的 657 **不得**进 golden：同一套 RunOne（不注入）跑一遍，断言 657 不存在。
+        //     红检：删掉 `caster.DrainRaw()` ⇒ 登录帧留下 ⇒ (c) 失败。
+        var cleanSpec = new MagicSpec
+        {
+            MagicId = 12,
+            MagicName = "Thrusting",
+            Arm = "case SKILL_ERGUM",
+            Cases = new[] { new SubCase { Label = "off2on" } },
+        };
+        var clean = RunOne(cleanSpec, cleanSpec.Cases[0], 9101, mapPath);
+        bool noLogin657 = !clean.Receivers.Any(r => HasIdent(r.Sent, 657));
+
+        bool ok = hasLogin10139 && hasSpell657 && noLogin657;
+        Console.Error.WriteLine(("WARR_SELFTEST " + (ok ? "OK" : "FAIL")
+            + " login_10139=" + hasLogin10139 + " spell_window_657=" + hasSpell657 + " no_login_657=" + noLogin657));
+        return ok ? 0 : 1;
+    }
+
+    private static bool HasIdent(IEnumerable<object> frames, int ident)
+    {
+        foreach (var f in frames)
+        {
+            var prop = f.GetType().GetProperty("ident");
+            if (prop != null && Convert.ToInt32(prop.GetValue(f), System.Globalization.CultureInfo.InvariantCulture) == ident)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>GetSpellPoint 的纯函数复算（只用于 golden 自述，判据仍以 oracle 运行为准）。</summary>
     private static int SpellPoint(MagicSpec s)
     {
@@ -293,6 +371,12 @@ public static class ClientSpellXYEntry
             env.AddMapObject(p.CurrX, p.CurrY, SystemModule.Data.CellType.Play, p.ActorId, p);
         }
 
+        if (sc.InjectSpellWindowStatusRm)
+        {
+            // 牙（裁决 C）：施法窗口内的 657 必须能进 golden——注入点刻意在「登录帧丢弃之后、
+            // `ClientSpellXY` 调用之前」；把丢弃挪后即吞掉它（self-test 会红）。
+            caster.SendMsg(caster, (int)OpenMir2.Messages.RM_CHARSTATUSCHANGED, 0, 0, 0, 0, "");
+        }
         int mpBefore = caster.WAbil.MP;
         int hpBefore = target.WAbil.HP;
         var original = RngSeam.Capture();
@@ -308,8 +392,9 @@ public static class ClientSpellXYEntry
         bool entryReturn = (bool)ClientSpellXYMethod.Invoke(caster, args);
         int delayTime = (int)args[6];
         byte dir = caster.Dir;
-        var draws = rng.Draws.ToList();
-        RngSeam.Restore(original);
+        // **`rng_mode=cover_drain`**（统一契约，opc-07 2026-11-20）：RNG seam 保持到排水结束，
+        // `draws` 在排水后取——排水阶段的真实抽取同样进账本（oracle 行为）。
+        // 本 9 条在排水阶段无抽取，故数值与旧口径相同；语义按契约写。
 
         // 排水：抽空为止（上界 8，命中进产物）；1200ms 跨过 `RM_MAGIC_LVEXP` 的 1000ms 自延迟。
         const int MaxDrainPasses = 8;
@@ -353,6 +438,8 @@ public static class ClientSpellXYEntry
             if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
         }
         Console.Error.WriteLine($"DRAIN_PASSES warr/{spec.MagicId}/{sc.Label} passes={drainPasses} hit_cap={drainPassesHitCap}");
+        var draws = rng.Draws.ToList();
+        RngSeam.Restore(original);
 
         var receivers = new List<ReceiverResult>();
         foreach (var (who, obj) in byWho)
@@ -367,6 +454,11 @@ public static class ClientSpellXYEntry
                 magic_id = spec.MagicId,
                 magic_name = spec.MagicName,
                 arm = spec.Arm,
+                // 统一字段契约（opc-07 2026-11-20）：比较器读 rng_mode，缺键即红；
+                // 本入口一律 cover_drain + 登录序角色 + reachable。
+                rng_mode = "cover_drain",
+                login_order = true,
+                reachability = "reachable",
                 user_magic_level = spec.UserMagicLevel,
                 caster_level = spec.CasterLevel,
                 caster_mc = spec.CasterMc,
