@@ -124,7 +124,7 @@
               "p3": 2,
               "msg": "",
               "late": true,
-              "delivery": 1119060140,
+              "delivery": 1120343125,
               "priority": 255
             }
           ],
@@ -178,7 +178,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1119059940,
+              "delivery": 1120342925,
               "priority": 255
             }
           ],
@@ -274,7 +274,7 @@
         "login_order": true,
         "reachability": "reachable",
         "target_level": 20,
-        "target_hp": 100,
+        "target_hp": 224,
         "target_max_hp": 224,
         "anti_magic": 1,
         "derived": {
@@ -297,8 +297,8 @@
         "legacy_artifact": false,
         "legacy_reason": null,
         "seed_reason": null,
-        "rng_total_draws": 5,
-        "rng_recorded": 5,
+        "rng_total_draws": 4,
+        "rng_recorded": 4,
         "target_null": false,
         "arm_ring_amulet": false,
         "wait_ms": 1200,
@@ -361,17 +361,6 @@
               "late": false,
               "delivery": 0,
               "priority": 136
-            },
-            {
-              "ident": 10123,
-              "wParam": 0,
-              "p1": 2,
-              "p2": 1,
-              "p3": 2,
-              "msg": "",
-              "late": true,
-              "delivery": 1119061390,
-              "priority": 255
             }
           ],
           "Sent": [
@@ -381,13 +370,6 @@
               "tag": 100,
               "series": 257,
               "tail": "Zghjd?"
-            },
-            {
-              "ident": 640,
-              "param": 1,
-              "tag": 2,
-              "series": 0,
-              "tail": ""
             }
           ]
         },
@@ -415,17 +397,6 @@
               "late": false,
               "delivery": 0,
               "priority": 136
-            },
-            {
-              "ident": 8034,
-              "wParam": 0,
-              "p1": 30,
-              "p2": 0,
-              "p3": 0,
-              "msg": "",
-              "late": true,
-              "delivery": 1119061190,
-              "priority": 255
             }
           ],
           "Sent": [
@@ -498,11 +469,10 @@
         0,
         0,
         0,
-        6,
-        1
+        6
       ],
-      "TargetHp": 100,
-      "TargetHpBefore": 100,
+      "TargetHp": 224,
+      "TargetHpBefore": 224,
       "NotDue": [],
       "CasterMp": 0
     },
@@ -616,7 +586,7 @@
               "p3": 1,
               "msg": "",
               "late": true,
-              "delivery": 1119062703,
+              "delivery": 1120345703,
               "priority": 255
             },
             {
@@ -627,7 +597,7 @@
               "p3": 0,
               "msg": "",
               "late": true,
-              "delivery": 1119062503,
+              "delivery": 1120345503,
               "priority": 255
             }
           ],

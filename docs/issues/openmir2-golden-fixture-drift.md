@@ -290,3 +290,80 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 ⇒ **三支在登录序场景下均可达**，不存在"某支不可达、覆盖率须收窄"的情形（`Random(10)=0/1` 的概率各 10%）。
 **最终以 M53 的实跑为准**：新种子由 `a2` 的生成器写入 golden `Fixture.seed`；本侧测试从
 `Fixture.seed` 读 **输入**，帧面**期望**只来自 golden 帧序列与比较器判据（绝不反向从 golden 构造期望）。
+
+
+### 8.9 实施记录（2026-11-20，比较器收紧 + 16 件重生成）
+
+**分支** `card/magic-rng-union`；**最终 run_id** `m59-final2-20261120T072058`（驱动 + 比较器同一 id）。
+
+**门禁原文**：`cargo check -p mir2-parity-tests -p game-svr --all-targets` rc=0（首行
+`Compiling game-svr v0.1.0`）；`cargo fmt --all -- --check` rc=0；`cargo clippy --workspace
+--all-targets -- -D warnings` rc=0；驱动 48/48 rc=0；比较器 16/16 ok；牙 17/17 ok。
+
+**重生成**：16 件（15 verified + `snowwind`）由装置 `--out` 直写入库路径，逐件 rc=0、`GOLDEN_WRITTEN`
+16 条。全件 `rng_mode=cover_drain`、`login_order=true`、`reachability=reachable`、逐 case
+`anti_magic=1`、`construction{job:"Warrior",level:20,equipment:[],skills:[魔号名]}`、`derived` 六键、
+`target_max_hp=224`、`rng_total_draws==len(Rng)`、`seed_reason` 记首抽判定。
+旧世代 16 件移 `golden/magic/legacy/`（附 `README.md`：标注只供人读、比较器按路径拒绝）。
+
+**`fireball` 8 = 施法 5 + 排水 3（逐值）**
+
+| case | golden `Rng`（8） | rust 施法段（5） | rust 交付段（3） | 拼接 |
+|---|---|---|---|---|
+| edge（seed 18，首抽 1） | `[1,0,0,0,3,0,0,4]` | `[1,0,0,0,3]` | `[0,0,4]` | ✅ |
+| hit（seed 5，首抽 3） | `[3,0,0,0,4,0,0,9]` | `[3,0,0,0,4]` | `[0,0,9]` | ✅ |
+
+交付段 sites = `crates/world-bevy/src/combat.rs:826` ×2（`nDam = Random(10)`）+ `:850` ×1（`Random(8)`）；
+miss（首抽 0）1 抽、无交付段、`DeliverRng=[]`。
+
+**`snowwind` 224**：三支 `target_max_hp=224`、`derived.max_hp=224`；依据 = `SM 31` 头 `tag=224`、
+`RM 8103` `p2=224`；`snow_wind_range=1`、`server_conf_sha256=ce5e3ce9…`（旧值 100 为 §6 第 3 条 stale）。
+
+**`AntiMagic=1` 分支实测**（`seed_reason` ↔ `Rng[0]` ↔ 逐 case `anti_magic` 三者一致）：
+门控六件（`fireball`/`fireball-5`/`lightning-11`/`lightning-45`/`firecharm`/`hbfireball`）统一
+seed **14/18/5**、首抽 **0/1/3**、`anti_magic=1`；miss/edge/hit 三支均可达、均有 case 覆盖。
+
+### 8.9b 12 号 `full` 支的三代对照（发现并修复静默覆盖回归）
+
+| 世代 | `Fixture.target_hp` | `target_max_hp` | `Rng` | 8034 / 10123 / 640 |
+|---|---|---|---|---|
+| 旧（master 入库，`max=100`） | 100 | 100 | `[0,0,0,6]`（4） | 无 / 无 / 无 |
+| 本批首轮（登录序 `max=224`，装置仍传 100） | 100 | 224 | `[0,0,0,6,1]`（5） | 有 / 有 / 有（**分支丢失**） |
+| 修后（`golden-params-5` 后重生成） | **224** | 224 | `[0,0,0,6]`（4） | 无 / 无 / 无 |
+
+根因：`HealingBatch` 给 `full` 传字面量 100，登录序 MaxHP=224 后 `100 < 224` ⇒ 治疗真实发生，
+「目标满血不治疗」这条玩法分支**零覆盖**且现象与 `heal` 支同型。修法：输入 HP 由
+`FixtureContract.Recompute(job, level).MaxHp` 派生 + `EnsureFullHpBranch` 落盘前独立现算比对
+（不等 rc=2 不落盘）。
+
+### 8.9c 三处「分支未编译」遗留（未编译即从未咬过）
+
+1. **牙⑥引用未定义变量**：`tooth_wabil_exp_bytes_compared_red` 遍历 52 帧写 `rust.get(...)`/`rust.clone()`，
+   函数内只有 `s1` ⇒ 编译失败。改 `s1`，牙语义不变（翻 Exp/MaxExp 字节 ⇒ 必红在 `tail`）。
+2. **`RngSites` 未随拼接**：`pin_union_rng` 只拼 `Rng`，`RngSites` 仍是施法段 5 条 ⇒ `verify` 的
+   「RngSites 与 Rng 长度不等」误红。现把 `RngSites`+`DeliverRngSites` 一并拼接。
+3. **牙①②诊断串大小写**：`contains("Rng")` 对实际诊断 `RNG 行数不等` 恒不命中 ⇒ 牙必红且红错原因。
+   改为不区分大小写。
+
+### 8.9d 被改常量（`old → new`，理由一律为「golden 变了」）
+
+| 位置 | old | new |
+|---|---|---|
+| 门控六件驱动 seed（`fireball*`/`lightning*`/`firecharm`/`hbfireball` miss/edge/hit） | 1 / 5 / 13 字面量 | `golden_seed` ⇒ 14 / 18 / 5 |
+| `fireball_case_assert` 施法前 HP | `100` 字面量 | `Fixture.target_hp`（100 或 224） |
+| 同上 术后 HP | `85`/`100` 字面量 | 金标准 `TargetHp` |
+| 同上 抽数 | `1`/`5`/`7` 字面量 | `golden.Rng` 长度（本轮 1 / 8 / 10） |
+| `healing_parity_drive` 目标/施法者 HP·MaxHP | `healing_rig` 缺省 100 | golden `Fixture`（50/224、224/224…） |
+| `healing` heal/full/self 断言 | 5 / 4 / 5 抽、HP 50/100/50、8034/640 有无写死 | 全部取自 golden |
+| `hbfireball` edge/hit 推挤条数 | 8043 `0`/`1`、8092 `0`/`1`、SM9 `0`/`1` | `golden_msg_count` |
+| `big_healing_assert` | `seed/hp_before/rng_len` 三常量（5/4/5 抽、HP 50/224/50） | `golden_seed` + `Fixture.target_hp` + 金标准 `TargetHp` |
+
+**旧断言错在哪**：`hbfireball` 旧断言把具体随机抽值写进期望（`Random(20)=18`、`Random(3)=0/2`）——
+换 seed（edge 18 / hit 5）与 10 抽后推挤判定落到不同抽位，edge 推、hit 不推；`healing full` 旧断言
+写死「100 = MaxHP 即满血」——MaxHP=224 后前提不成立（§8.9b）；healing 抽数 4→5 是同一后果。
+
+### 8.9e 已知遗留与另案
+
+- `golden/magic/warr-*.json`（9 件 15 case）仍是 `anti_magic=3` 旧世代，属 warrskill 域、比较器不读，
+  另案处理，本批未动。
+- `legacy/` 16 件只作历史留档（比较器按路径拒绝）。
