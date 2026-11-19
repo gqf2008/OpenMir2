@@ -1108,3 +1108,10 @@ M0 金标准验收状态（2026-10-10）：① 逐字节回放 0 差异、② �
 | 编号 | 差异/豁免点 | 为什么无害 / 触发条件 | 谁审的 |
 | --- | --- | --- | --- |
 | T-284 | **oracle 60s TTL 回收 vs 本实现 0ms 立即释放（只登记偏离，不登记豁免）**：冻结客户端 `gqf2008/MirClient @ c61d912d`（`MirClient/Source/MirClient`）的 `ClMain.pas:13842-13847` 有 60s TTL 回收器（`g_FreeActorList` 有界）；`PlayScn.pas` 的 `NewActor` 恒 `Create`、从不读该池。BotSrv 端口把池删除、驱逐点立即解除引用（0ms），功能等价但**释放时机不同**。 | **可观测差异=内存释放时机，行为等价**：不改变 actor 创建/删除/消息顺序，不改任何线上帧/协议/DB/golden/门禁判据；影响面仅 BotSrv 夹具的 actor 生命周期。oracle 池的 60s 缓冲在托管运行时无收益（GC 回收），删除后上界 N=0。 | 作者登记（`openmir2-worker-85`，卡 `openmir2-botsrv-actor-pool-leak`，tier=L）；审查 `4553f948` request_changes 要求登记 |
+
+## 技能块缺口转正（2026-11-19；卡 `card/parity-gap-survey`）
+
+| 编号 | 差异/豁免点 | 为什么无害 / 触发条件 | 谁审的 |
+| --- | --- | --- | --- |
+| T-285 | **`SKILL_WINDTEBO`(id=35) 未建模（缺口登记，非行为差异）**：oracle `src/M2Server/Magic/MagicManager.cs:525` 的 `MagWindTebo`（等级门 + `CharPushed` + helper `Random(20)`；函数体 `src/M2Server/Magic/MagicManager.cs:858`）在 Rust 侧无等效实现。登记源 = `E:/UserFleet/magic-parity.json` 条目 `SKILL_WINDTEBO(id=35)`；`deviation` 现指向本号，`legacy_source` 仅作溯源。 | 未实现 = 该技能不可用；不改变其余技能路径的帧字节。实现前按旧清单 A/B 口径补语义层与对拍，改前/改后读数另存。 | opc-07 指派转正（2026-11-19）；实现卡待开 |
+| T-286 | **`SKILL_GROUPDEDING`(id=39) 维持 missing（以旧清单为准，不升格）**：oracle `src/M2Server/Magic/MagicManager.cs:550` 的 `MagGroupDeDing`（范围物理伤害 + `Random(SpeedPoint)`；函数体 `src/M2Server/Magic/MagicManager.cs:942`）。Rust 侧 `crates/world-bevy/src/combat.rs` 有 group_melee 单目标结算与 `combat_skill_vectors` 用例，但是否覆盖 oracle 全链（多目标/RM/延迟帧）未复核。 | 维持 missing 不影响其它技能；若复核证明已齐，须由技能块重审卡按 `notes` 记录依据后升格，本号只登记缺口。 | opc-07（2026-11-19）；技能块重审卡待开 |

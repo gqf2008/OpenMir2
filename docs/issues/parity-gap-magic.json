@@ -1054,12 +1054,12 @@
       },
       "cost": "M",
       "deviation": {
-        "id": "legacy:SKILL_WINDTEBO(id=35)",
-        "file": "E:/UserFleet/magic-parity.json",
-        "section": "branches（旧清单条目即登记源；无 T-*/D-* 编号）",
+        "id": "T-285",
+        "file": "mir2-rs/tests/parity/whitelist.md",
+        "section": "技能块缺口转正（T-285）",
         "lines": null
       },
-      "notes": "MagWindTebo 未建模（推挤+等级门+Random(20) 骰）；旧清单 cost=天级"
+      "notes": "MagWindTebo 未建模（推挤+等级门+Random(20) 骰）；旧清单 cost=天级；已转正经编号 T-285（whitelist.md 登记行）"
     },
     {
       "id": "MG-48",
@@ -1143,12 +1143,12 @@
       },
       "cost": "M",
       "deviation": {
-        "id": "legacy:SKILL_GROUPDEDING(id=39)",
-        "file": "E:/UserFleet/magic-parity.json",
-        "section": "branches（旧清单条目即登记源；无 T-*/D-* 编号）",
+        "id": "T-286",
+        "file": "mir2-rs/tests/parity/whitelist.md",
+        "section": "技能块缺口转正（T-286）",
         "lines": null
       },
-      "notes": "MagGroupDeDing 未建模（范围伤害+RM_10205+延迟帧）；旧清单 cost=天级"
+      "notes": "MagGroupDeDing 未建模（范围伤害+RM_10205+延迟帧）；旧清单 cost=天级；已转正经编号 T-286（whitelist.md 登记行）"
     },
     {
       "id": "MG-52",

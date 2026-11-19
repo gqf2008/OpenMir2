@@ -368,9 +368,9 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 | `behavior` / `name` | string | 行为一句话 |
 | `oracle_anchor` | object | `{file, line, line_end?}`；`file` 相对仓库根 |
 | `status` | string | ∈ `status_enum` |
-| `evidence` | object | `{test, test_file, fixture, cases[], unit_tests[]}`；任一项可 `null`/空 |
+| `evidence` | object | `{test, test_file, fixture, cases[], unit_tests[]}`：`test` = **入口测试**（可跑的那个）；`cases` = **夹具里的 case 名**或空；多个测试共同证明时放 `unit_tests`，**不塞 `cases`**；任一项可 `null`/空 |
 | `cost` | string \| null | ∈ `cost_enum`；已完成项为 `null` |
-| `deviation` | object \| null | `{id, file, section, lines?}`；`missing` **必填**；`id` 可为 T-*/B-*/D-* 或**旧清单条目 id**（技能块用 `legacy:<旧 id>`，因该两条无 T-*/D-* 编号）；照搬 oracle 缺陷（如 CHECKOPEN 的 **T-37**）时也可填 |
+| `deviation` | object \| null | `{id, file, section, lines?}`；`missing` **必填**，`id` **必须是 T-*/B-*/D-* 编号**（技能块两条已转正为 **T-285/T-286**）；旧清单只作 `legacy_source` 溯源，不得当 `deviation.id`；照搬 oracle 缺陷（如 CHECKOPEN 的 **T-37**）时也可填 |
 | `notes` | string | 备注（可空串） |
 
 ### 12.3 状态枚举（脚本按此判定）
@@ -387,7 +387,7 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 
 1. `len(entries) == denominator.count`；
 2. `all(e.status in status_enum)`；
-3. `e.status == "missing" ⇒ e.deviation.id` 非空且能在 whitelist/差异登记中查到（技能块的 `legacy:<id>` 以 `legacy_source` 指向的旧清单为登记源）；
+3. `e.status == "missing" ⇒ e.deviation.id` 非空且能在 whitelist/差异登记中查到（`id` 必须是 T-*/B-*/D-*；技能块两条为 T-285/T-286，`legacy_source` 只作溯源）；
 4. `e.status == "verified" ⇒ e.evidence.test` 非空且 `test_file` 存在；
 5. `e.cost ∈ cost_enum ∪ {null}`；
 6. `sum(1 for e in entries if e.status=="verified")` 与文档汇总行一致（物品：7；任务：2；NPC：1）。
@@ -495,7 +495,7 @@ src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: Client
 
 - 机器清单：**`docs/issues/parity-gap-magic.json`**（与本节同 schema，由 `E:/UserFleet/magic-parity.json` **机械转写**）。
 - 分母：`src/M2Server/Magic/MagicManager.cs` 的 case 分支 **65**（含同名技能在多个分派位点，如 `SKILL_FIRECHARM` 在 `:315` 与 `:328`）。
-- 状态：**verified 0**、implemented（未验证）**63**、missing **2**（`SKILL_WINDTEBO(id=35)`、`SKILL_GROUPDEDING(id=39)`）。
+- 状态：**verified 0**、implemented（未验证）**63**、missing **2**（`SKILL_WINDTEBO(id=35)` = **T-285**、`SKILL_GROUPDEDING(id=39)` = **T-286**；均在 `whitelist.md` 有登记行）。
 - **未升格**：旧清单 `note` 明写"帧级对拍 **0/65**、`basis` 全空"，7 条带 `test` 的只是 Rust 侧用例名；按 opc-07 要求一律不升 `verified`。
 - 旧清单 3 条 `todos` 原样保留在 JSON（buff tick 门 / anti-magic recalc / `DoSpell :167` 版本门）。
 - 与前三块的差异：技能块未做口径重审（按"以旧清单为准"），分母沿用旧定义；将来重审另开卡。
