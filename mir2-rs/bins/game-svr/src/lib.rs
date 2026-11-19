@@ -65829,6 +65829,378 @@ SendRefMsgRange=15
         b1_golden_drain_assert("lightning-45.json", "hit", 4);
     }
 
+    /// `2 治愈` 的夹具（与火球同几何/ActorId 段；**SC=15**、目标 HP 与施法者 HP 可配）。
+    fn healing_rig(id_base: i32, target_hp: u16, caster_hp: u16) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            2,
+            &[(2, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id: 2,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.player_run.luck = 0;
+            e.player_run.power_rate = 100;
+            e.vitals.hp = caster_hp;
+            e.vitals.max_hp = u16::max(caster_hp, 100);
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 15;
+            sg.state.wabil.mp = 0;
+            sg.state.wabil.max_mp = 0;
+            sg.state.wabil.hp = caster_hp;
+            sg.state.wabil.max_hp = u16::max(caster_hp, 100);
+        }
+        let target = fireball_actor(&rig, "target");
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.anti_magic = 3;
+            e.vitals.hp = target_hp;
+            e.vitals.max_hp = 100;
+            e.progression.level = 20;
+        }
+        for e in rig.online.clone() {
+            if let Some(mut d) = rig.displays.get(e.actor_id).cloned() {
+                d.feature = 0;
+                rig.displays.set(e.actor_id, d);
+            }
+        }
+        rig
+    }
+
+    /// `2 治愈`（`MagicManager.cs:204-224`）真实台账驱动。三支 = `heal` / `full` / `self`
+    /// （本支**无 AntiMagic 骰**；语义差异见卡面 §23）。金标准 `golden/magic/healing.json`。
+    fn healing_parity_drive(
+        label: &str,
+        seed: i32,
+        id_base: i32,
+        hp: u16,
+        caster_hp: u16,
+        target_null: bool,
+    ) {
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let trace = dir.join(format!("healing_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启 ⇒ 流水不可信；请 --exact 单跑并清空 MIR2_RNG_LOG"
+        );
+        let _ = std::fs::remove_file(&trace);
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
+
+        let mut rig = healing_rig(id_base, hp, caster_hp);
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let n0 = trace_line_count(&trace);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+        let hp_before = rig.world.entities.get(target).unwrap().hp;
+
+        // ---- 段①：生产入口施法（`self` 支：target=0、点击格取施法者坐标）----
+        let (click, tid) = if target_null {
+            ((100, 100), 0)
+        } else {
+            ((101, 100), target)
+        };
+        rig.cast(2, click, tid);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+
+        // RM 来源（交付前抓）：`RM_MAGHEALING` 只对「HP<MaxHP 的 proper friend」入队。
+        let maghealing = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .find(|m| m.ident == mir2_world_bevy::slave::RM_MAGHEALING)
+            .map(|m| (m.actor_id, m.n_param1));
+
+        // ---- 段②：推进时钟（800ms 延时 + 余量）后交付；`RM_MAGHEALING` 到点只累计恢复量（无帧）----
+        rig.world.clock_ms += 1200;
+        let _outs = rig.world.deliver_self_delay_msgs();
+        let n2 = trace_line_count(&trace);
+        let (deliver_frames, _raws2) = rig.drain();
+
+        let hp_after = rig.world.entities.get(target).unwrap().hp;
+        let caster_mp = rig
+            .ground_sessions
+            .get("caster")
+            .map_or(0, |sg| i64::from(sg.state.wabil.mp));
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+        for pair in cast_rng.windows(2).chain(deliver_rng.windows(2)) {
+            assert_eq!(pair[1].0, pair[0].0 + 1, "[healing/{label}] seq 必须连续");
+        }
+        if let (Some(a), Some(b)) = (cast_rng.last(), deliver_rng.first()) {
+            assert_eq!(b.0, a.0 + 1, "[healing/{label}] 两段之间 seq 必须连续");
+        }
+
+        let mut all_frames = cast_frames;
+        all_frames.extend(deliver_frames);
+
+        // ---- RM 组装（**治愈分支专用**，与伤害链不同）----
+        //  - `RM_SPELL(10008)` / `RM_MAGICFIRE(10120)`：收件人 = hear_targets(caster)，参数取自 638 帧；
+        //  - `RM_MAGHEALING(8034)`：目标自己的自延迟队列（p1=nPower），交付前从 `self_delay_msgs` 抓；
+        //  - `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者；Rust 宿主即时发 `SM_MAGIC_LVEXP(640)`，
+        //    由该帧反推 (w=0, p1=MagicId(recog), p2=Level(param), p3=MakeLong(tag,series))，late=true。
+        let range = chat::send_ref_msg_range();
+        let in_range_caster = chat::hear_targets(&rig.world, caster, range);
+        let (fire_x, fire_y, fire_series, fire_target) = all_frames
+            .iter()
+            .find(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
+            .map(|(_, b)| {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+                (
+                    i32::from(cm.param),
+                    i32::from(cm.tag),
+                    i32::from(cm.series),
+                    fireball_tail_i32(b),
+                )
+            })
+            .expect("治愈必有 SM_MAGICFIRE 帧");
+        let mut rm_by_who: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        let who_of = |id: i32| {
+            rig.online
+                .iter()
+                .find(|e| e.actor_id == id)
+                .map(|e| e.chr_name.clone())
+        };
+        for id in &in_range_caster {
+            if let Some(who) = who_of(*id) {
+                let v = rm_by_who.entry(who).or_default();
+                v.push(fireball_rm(
+                    10008,
+                    1,
+                    i64::from(fire_x),
+                    i64::from(fire_y),
+                    2,
+                    24,
+                    false,
+                ));
+                v.push(fireball_rm(
+                    10120,
+                    0,
+                    i64::from(fire_series),
+                    i64::from(game_svr::feature::make_long(
+                        u16::try_from(fire_x).unwrap_or(0),
+                        u16::try_from(fire_y).unwrap_or(0),
+                    )),
+                    i64::from(fire_target),
+                    136,
+                    false,
+                ));
+            }
+        }
+        if let Some((healed, power)) = maghealing {
+            if let Some(who) = who_of(healed) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    8034,
+                    0,
+                    i64::from(power),
+                    0,
+                    0,
+                    255,
+                    true,
+                ));
+            }
+        }
+        if let Some((_, b)) = all_frames
+            .iter()
+            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+        {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+            if let Some(who) = who_of(caster) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    10123,
+                    0,
+                    i64::from(cm.recog),
+                    i64::from(cm.param),
+                    i64::from(game_svr::feature::make_long(cm.tag, cm.series)),
+                    255,
+                    true,
+                ));
+            }
+        }
+
+        let receivers = [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ]
+        .iter()
+        .map(|(who, socket)| {
+            serde_json::json!({
+                "Who": who,
+                "Rm": rm_by_who.get(*who).cloned().unwrap_or_default(),
+                "Sent": fireball_sent(&all_frames, *socket),
+            })
+        })
+        .collect::<Vec<_>>();
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, x)| x.replace('\\', "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(s, _, _)| *s).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, x)| x.replace('\\', "/")).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "NotDue": [],
+            "CasterMp": caster_mp,
+            "Fixture": {
+                "magic_id": 2,
+                "target_hp": hp,
+                "caster_hp": caster_hp,
+                "target_null": target_null,
+            },
+        }]);
+        let out = dir.join(format!("healing_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        eprintln!("[healing {label}] seed={seed} → {}", out.display());
+    }
+
+    fn healing_case(label: &str) -> serde_json::Value {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("healing_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        v[0].clone()
+    }
+
+    fn healing_count(case: &serde_json::Value, who: &str, list: &str, ident: i64) -> usize {
+        case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == who)
+            .unwrap()[list]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|m| m["ident"] == ident)
+            .count()
+    }
+
+    /// `heal`：HP 50/100 ⇒ 8034 入目标队列、训练尾 640 仅施法者、目标 HP 不变。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_heal() {
+        healing_parity_drive("heal", 1, 1000, 50, 500, false);
+        let c = healing_case("heal");
+        assert_eq!(
+            c["Rng"].as_array().unwrap().len(),
+            5,
+            "heal：4 抽 + 训练尾 1 抽"
+        );
+        assert_eq!(c["TargetHpBefore"], 50);
+        assert_eq!(
+            c["TargetHp"], 50,
+            "heal：采集窗口内 HP 增量为 0（恢复按 Run 周期）"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Rm", 8034),
+            1,
+            "RM_MAGHEALING 入目标队列"
+        );
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 10123),
+            1,
+            "训练尾 RM_MAGIC_LVEXP 仅施法者"
+        );
+        assert_eq!(
+            healing_count(&c, "caster", "Sent", 640),
+            1,
+            "SM_MAGIC_LVEXP 仅施法者"
+        );
+        assert_eq!(healing_count(&c, "target", "Sent", 640), 0);
+        b1_golden_drain_assert("healing.json", "heal", 2);
+    }
+
+    /// `full`：目标满血 ⇒ 无 8034/无 640，仍 4 抽 + 17/638。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_full() {
+        healing_parity_drive("full", 5, 2000, 100, 500, false);
+        let c = healing_case("full");
+        assert_eq!(c["Rng"].as_array().unwrap().len(), 4, "full：恰 4 抽");
+        assert_eq!(c["TargetHpBefore"], 100);
+        assert_eq!(c["TargetHp"], 100);
+        assert_eq!(
+            healing_count(&c, "target", "Rm", 8034),
+            0,
+            "满血不得入 RM_MAGHEALING"
+        );
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 10123),
+            0,
+            "无 8034 ⇒ 无训练尾"
+        );
+        assert_eq!(healing_count(&c, "caster", "Sent", 640), 0);
+        b1_golden_drain_assert("healing.json", "full", 2);
+    }
+
+    /// `self`：targetObject=null ⇒ 目标置为施法者、坐标取施法者；8034 入施法者队列、640 仅施法者。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn healing_parity_self() {
+        healing_parity_drive("self", 13, 3000, 50, 50, true);
+        let c = healing_case("self");
+        assert_eq!(c["Rng"].as_array().unwrap().len(), 5);
+        assert_eq!(c["TargetHpBefore"], 50);
+        assert_eq!(c["TargetHp"], 50);
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 8034),
+            1,
+            "self：RM_MAGHEALING 入施法者队列"
+        );
+        assert_eq!(healing_count(&c, "caster", "Rm", 10123), 1);
+        assert_eq!(healing_count(&c, "caster", "Sent", 640), 1);
+        // 尾帧坐标 = 施法者 (100,100)：`SM_MAGICFIRE` 的 param/tag。
+        let fire = c["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["ident"] == 638)
+            .unwrap()
+            .clone();
+        assert_eq!(fire["param"], 100);
+        assert_eq!(fire["tag"], 100);
+        b1_golden_drain_assert("healing.json", "self", 2);
+    }
+
     /// gate 通道上取到的一条下行：`(socket, 帧体 / `SendRaw` 短包字节)`。
     type SfFrame = (i32, Vec<u8>);
 
