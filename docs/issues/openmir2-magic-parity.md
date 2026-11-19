@@ -86,3 +86,19 @@
 - 不碰 AOI、网关/背压、性能（性能线已按 Owner 指示冻结）；
 - 不改 C# 原版逻辑（RNG 替换只在测试进程内，见第 2 节）；
 - 每批走 `card/magic-*` 分支 + `--no-ff`，小步提交，贴对拍原文。
+
+## 6. 装置进展（2026-11-19）
+
+- **骨架已建**：`mir2-rs/tests/parity/csharp/MagicGolden/`（net8.0，只读引用 `M2Server`/`OpenMir2`）。
+- **RNG 接缝已跑通**（`--rng-selftest`，rc=0）：
+  ```
+  seam=OpenMir2.RandomNumber.random  seed=12345
+  seq   = [6,7,77,51,79,82,16,73]
+  draws = [6,7,77,51,79,82,16,73]        （账本与业务取值逐次相等）
+  same_seed_same_seq=true  diff_seed_diff_seq=true  restored=true  ledger_matches=true
+  ```
+  自检四项：①反射找到私有静态字段并注入；②同种子两次安装序列全等；③不同种子序列不同（证明真的接上、
+  不是恒等）；④`Restore()` 后字段回到原实例。
+- **下一步（装置）**：确定 `DoSpell` 的帧捕获点——出帧走 `BaseObject.SendRefMsg` /
+  `SendSelfDelayMsg`（`src/M2Server/Actor/BaseObject.Message.cs:383` / `:188`），需要一个离线可记录的
+  发送面（候选：`MsgQueue`（`SendMsg` 入队点）或最小 `Envir` 桩）；确定后先打通 `1/5 火球`。
