@@ -354,20 +354,21 @@ public static class Program
             var raw = obj.DrainRaw();
             var rm = raw.Select(m => (object)new
             {
-                ident = m.wIdent,
-                wParam = m.wParam,
-                p1 = m.nParam1,
-                p2 = m.nParam2,
-                p3 = m.nParam3,
-                msg = m.Buff ?? "",
-                late = m.LateDelivery,
-                delivery = m.DeliveryTime,
+                ident = m.Msg.wIdent,
+                wParam = m.Msg.wParam,
+                p1 = m.Msg.nParam1,
+                p2 = m.Msg.nParam2,
+                p3 = m.Msg.nParam3,
+                msg = m.Msg.Buff ?? "",
+                late = m.Msg.LateDelivery,
+                delivery = m.Msg.DeliveryTime,
+                priority = m.Prio,
             }).ToList();
             int now = HUtil32.GetTickCount();
             foreach (var m in raw)
             {
-                if (!m.LateDelivery || m.DeliveryTime <= now) obj.OperatePublic(m);
-                else pending.Add(new { who, ident = m.wIdent, delivery = m.DeliveryTime, now });
+                if (!m.Msg.LateDelivery || m.Msg.DeliveryTime <= now) obj.OperatePublic(m.Msg);
+                else pending.Add(new { who, ident = m.Msg.wIdent, delivery = m.Msg.DeliveryTime, now });
             }
             rmAcc[who].AddRange(rm);
         }
@@ -421,10 +422,15 @@ public sealed class RecordingPlayObject : M2Server.Player.PlayObject
         });
     }
 
-    public List<SystemModule.Data.SendMessage> DrainRaw()
+    /// <summary>
+    /// 抽 RM 账本：连同**入队优先级**一起取（`priority` 必须进比较面——金标准要与
+    /// 比较器逐字段对齐；来源见 `BaseObject.Message.cs:181`（`Enqueue(..., (byte)wIdent)`）与
+    /// `:204`（`SendSelfDelayMsg` 的 `(byte)MessagePriority.Lowest`））。
+    /// </summary>
+    public List<(SystemModule.Data.SendMessage Msg, byte Prio)> DrainRaw()
     {
-        var list = new List<SystemModule.Data.SendMessage>();
-        while (MsgQueue.TryDequeue(out var m, out _)) list.Add(m);
+        var list = new List<(SystemModule.Data.SendMessage, byte)>();
+        while (MsgQueue.TryDequeue(out var m, out var prio)) list.Add((m, prio));
         return list;
     }
 

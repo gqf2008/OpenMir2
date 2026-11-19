@@ -171,7 +171,7 @@ Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必�
 
 | 原版 RM（本卡三支出现过的） | 产生 SM 帧的 C# 位置（**硬要求：没有行号不算映射**） | Rust 侧对应物 / 比较方式 |
 |---|---|---|
-| `RM_SPELL(10008)` wParam=Effect, p1/p2=坐标, p3=MagicId, prio=24 | `src/M2Server/Player/PlayObject.Message.cs:1454-1459`（`MakeMessage(SM_SPELL, …, nParam1, nParam2, wParam)`，p3 走尾串） | `SM_SPELL` 帧：Effect/坐标/MagicId 逐项。**注意自守卫**：`:1456` 的 `processMsg.ActorId != ActorId` ⇒ **施法者自己不会收到 SM_SPELL**（只发给范围内其他玩家），RM 账本里出现 ≠ 该玩家收到客户端帧 |
+| `RM_SPELL(10008)` wParam=Effect, p1/p2=坐标, p3=MagicId, prio=24 | `src/M2Server/Player/PlayObject.Message.cs:1454-1459`（`MakeMessage(SM_SPELL, …, nParam1, nParam2, wParam)`，p3 走尾串） | `SM_SPELL` 帧：Effect/坐标/MagicId 逐项。**注意自守卫**：`:1455` 的 `if (processMsg.ActorId != ActorId)`（`:1456` 只是它的 `{`）⇒ **施法者自己不会收到 SM_SPELL**（只发给范围内其他玩家），RM 账本里出现 ≠ 该玩家收到客户端帧 |
 | `RM_MAGICFIRE(10120)` wParam=0, p1=MakeWord(EffectType,Effect), p2=MakeLong(x,y), p3=目标ActorId, prio=136 | `src/M2Server/Player/PlayObject.Message.cs:1788-1794`（`SM_MAGICFIRE`，`LoWord/HiWord(nParam2)` + `nParam1`，`nParam3` 经 EDCode 作尾串） | `SM_MAGICFIRE` 帧：p3=0 表示无目标 |
 | `RM_DELAYMAGIC(8021)` wParam=伤害, p1=坐标, p2=nRage, p3=目标, prio=255 | **服务端事件，不是客户端帧**：`src/M2Server/Actor/BaseObject.Base.cs:711-728`（`GetMagStruckDamage` → 动物 race 伤害 `/1.2` → 范围内则发 `RM_MAGSTRUCK`） | 比较"是否登记延时事件 + 伤害 + nRage + 目标"；不产 SM 帧 |
 | `RM_MAGIC_LVEXP`（训练尾） | `src/M2Server/Player/PlayObject.Message.cs:1800-1801`（`SM_MAGIC_LVEXP`，p1/p2 + `LoWord/HiWord(nParam3)`） | `SM_MAGIC_LVEXP` 帧：字段逐项 |
@@ -193,7 +193,7 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 - 具体 `ident/param/series/tail` 逐字段以金标准为准（QA-1 已独立复现：绿）。
 
 - **牙①（负向）**：三支里施法者收到的 `SM_SPELL(17)` **恒为 0**（只有 `SM_MAGICFIRE 638`）⇒
-  `PlayObject.Message.cs:1456` 的自守卫被钉住。
+  `PlayObject.Message.cs:1455` 的 `if (processMsg.ActorId != ActorId)` 自守卫被钉住（`:1456` 是 `{`）。
 - **牙②（范围）**：范围内观察者与目标各收 2 帧，范围外观察者 **0 帧** ⇒ 范围判定被钉住，
   不是"发了一份"。
 - 金标准：`mir2-rs/tests/parity/golden/magic/fireball.json`（含每个接收者的 RM 与 SM 账本）。
@@ -362,3 +362,13 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 独立 worktree @ `d35550db7` 重跑 C# 火球用例：**RC=0，三支账本与已提交金标准 `ALL_IDENTICAL`**
 （仅 `delivery` 墙钟字段不同，不入比较面）。QA 同时指出卡面两处手抄数字陈旧（§10 的 `p3`、
 §12 的 SM 集合），已按建议改为**只引用金标准路径 + 要点**，不再手抄数字。
+
+## 18. `priority` 进比较面（QA-2，2026-11-19）
+
+- 金标准已补 `priority` 字段（`DrainRaw` 连同 `MsgQueue` 的入队优先级一起取），
+  `golden/magic/fireball.json` 三支全部带；取值来源：
+  **`BaseObject.Message.cs:181`**（`MsgQueue.Enqueue(sendMessage, (byte)wIdent)`，普通 RM 用 ident 当优先级）
+  与 **`:204`**（`SendSelfDelayMsg` 用 `(byte)MessagePriority.Lowest` = 255）。
+- 实测值：`RM_SPELL 24`、`RM_MAGICFIRE 136`、`RM_DELAYMAGIC 255`、`RM_STRUCK_MAG 167`、
+  `RM_MAGSTRUCK 108`、`RM_HEALTHSPELLCHANGED 68`、`RM_CHANGENAMECOLOR 154`。
+- 比较器必须逐字段比 `priority`（不许只比 ident/params）；QA 将复核该列。
