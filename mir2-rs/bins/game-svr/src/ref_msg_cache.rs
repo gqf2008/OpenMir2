@@ -58,7 +58,8 @@ mod tests {
     }
 
     /// 首扫全量（`+12` 闭区间含 22）；同窗口第二次只剩 `|Δ|<11`（22/23 被挡）。
-    /// 牙：把 `< REF_MSG_CACHED_RANGE` 放宽成 `<=` ⇒ 22 进第二帧 ⇒ 红。
+    /// 牙：**删掉二次过滤**（缓存命中时直接返回整份快照）⇒ 第二帧含 +12 ⇒ 红
+    /// （`< → <=` 不咬：`12 <= 11` 仍为假，两边行为相同——该写法已弃用）。
     #[test]
     fn ref_msg_cache_first_scan_then_strict_11_on_reuse() {
         let (mut w, sender, ids) = world_with_sender_and_players();

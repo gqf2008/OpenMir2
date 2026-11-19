@@ -55,7 +55,8 @@ for (i = 0; i < VisibleHumanList.Count; i++) {
 
 ## 5. 登记
 
-- 偏差号：`T-287`（`mir2-rs/tests/parity/whitelist.md`）——**2026-11-20 已消解**（见 §6）；
+- 偏差号：`T-287`（`mir2-rs/tests/parity/whitelist.md`）——**2026-11-20 部分消解**（C1+C3 收口：
+  `broadcast_ref_msg_opt` + 商人消失帧已接入；其余 19 处残余见 §6 与残余卡）；
 - NP-11 的 `verified` 覆盖声明已把该子面补回（`notes` 写明两例双绿）。
 
 ## 6. 实现记录（2026-11-20）
@@ -63,9 +64,16 @@ for (i = 0; i < VisibleHumanList.Count; i++) {
 - 落点：`mir2-rs/crates/world-bevy/src/world.rs` 的 `SimState.ref_msg_cache`（`Mutex<HashMap<actor_id, RefMsgCacheEntry>>`，
   按**世界**持有，避免线程级全局态在测试/多世界间串味）+ `World::ref_msg_targets_from_scan` /
   `World::reset_ref_msg_cache`；常量 `REF_MSG_CACHE_TTL_MS=500`、`REF_MSG_CACHED_RANGE=11`。
-- 宿主收口：`mir2-rs/bins/game-svr/src/ref_msg_cache.rs`（`targets` / `targets_from_scan` / `reset`）；
-  唯一调用点 `broadcast_ref_msg_opt`（**覆盖全部 `SendRefMsg` 路径**的 39 个调用点）与
-  `drain_merchant_disappears`（世界侧收件人快照当扫描面，同走缓存）。
+- 宿主收口（**实际范围**）：`mir2-rs/bins/game-svr/src/ref_msg_cache.rs`（`targets` / `targets_from_scan` / `reset`）；
+  接入点 = `broadcast_ref_msg_opt`（`broadcast_ref_msg` 的 38 处表达式 + `broadcast_ref_msg_with_self` /
+  `..._with_self_at` 的内部转调）与 `drain_merchant_disappears`（世界侧收件人快照当扫描面）。
+  **明确残余**：另有 19 处按 `chat::hear_targets` 直算收件人的广播点**未经缓存**（`push_broadcast` 的
+  53/638/656/31/1103/640、`push_charstatuschanged`/`broadcast_charstatuschanged_except_self` 的 657、
+  `flush_healthspell_slots`/`drain_stamina`/`flush_run_frames` 的 53、`handle_say_with_saves`/`fan_out_npc_hear`
+  的 RM_HEAR、`drain_slave_mutiny_downlink`、`drain_combat_downlink`×2、`drain_weapon_durability`、
+  `apply_pending_gm_target_ops`/`apply_pending_gm_guild_commands`、`broadcast_ref_msg_from_walk_candidates`、
+  `castle.rs::refresh_show_name_in_area`、`guild_cmd.rs::ref_show_name`、`guild_official.rs::handle_select`/
+  `war_events_to_frames`）⇒ 逐条见残余卡 **`docs/issues/openmir2-refmsg-cache-residual-sites.md`**（C2 单列）。
 - 判定：`np11_aoi_matches_oracle_golden` 的 `cache_window` 由**必红绊线**改**必绿**；`fresh_scan` 保持绿——
   两条同时成立（rig 在 `fresh_scan` 例每次发帧前把 sim 时钟推进 500，模拟 oracle 的 ≥500ms 重扫）。
 - 牙（§16：快照 `E:/UserTemp/vhlc-snap/` → 变异 → `cp` 还原核 sha → 复跑基线）：
