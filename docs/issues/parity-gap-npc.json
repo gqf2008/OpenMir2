@@ -270,20 +270,23 @@
         "line": 987,
         "line_end": 999
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "merchant_say_text_and_gbk_bytes",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "say_text_must_carry_chrname_prefix",
-          "run_login_emits_say_with_chrname_prefix"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np01_click_main.json（等各 np0x golden 的 sm[] 面）",
+        "cases": [
+          "click_main_ok",
+          "dlg_ask_ok",
+          "chain_break",
+          "var_username"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "M4 只比对 msg 11009 行文本，不覆盖线缆帧/优先级；优先级实现见 guild_official.rs 第 406-432 行"
+      "notes": "帧面（SM 643 ident/param/tag/series/tail + \"ChrName/\" 前缀）逐字断言；**优先级子面未断言**：Rust 无 wire 级 priority 字段，oracle 金标准记录本批为普通队列(1)；不许写成\"等价\"",
+      "basis": "semantic"
     },
     {
       "id": "NP-09",
@@ -353,7 +356,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "ProcessNpcs 逐 tick 驱动"
+      "notes": "装置未建（多观察者 AOI 金标准），需独立卡 openmir2-npc-multiobserve-golden"
     }
   ],
   "basis": "semantic",

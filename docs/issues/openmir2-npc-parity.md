@@ -446,3 +446,16 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
 - golden：`mir2-rs/tests/parity/golden/npc/np09_var_text.json`；探针 `PlayerName` 可在用例上覆盖（本用例 `hero`）。
 - **牙 I**：把 `NpcPlayer::line_variable_text`（`bins/game-svr/src/npc.rs`）改成原样返回 ⇒ `var_username` 红在"变量替换说词"；
   原文 `E:/UserFleet/qa/npc-parity/np09-mutation-I-vars.txt`（恢复 sha 相等、复绿 `np09-green-final.txt`）。
+
+## 17. 子批③ NP-08（说词帧，帧面）与未建模清单（2026-11-20）
+
+**NP-08 升 verified 的范围（opc-07 裁定 (a)）**：**帧面**——`SM_MERCHANTSAY(643)` 的
+`ident/param/tag/series/tail` 与 `ChrName/` 前缀在 NP-01/02/04/05/07/09 各用例中逐字断言
+（同一比较器 `np01_click_main_matches_oracle_golden`）。
+
+**未建模清单（显式登记，禁止写成"等价"）**：
+- **说词优先级子面未断言**：oracle 金标准记录 `rm_priorities`（本批为普通队列 `1`）；
+  Rust 的优先级**不落线缆**（帧头无 priority 字段），无法从帧面断言。NP-08 的 verified 不含该子面。
+
+**NP-11**：本轮不升 verified；装置卡 `docs/issues/openmir2-npc-multiobserve-golden.md`。
+
