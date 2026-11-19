@@ -147,3 +147,15 @@
   `ref_msg_cache::targets(world, e.actor_id, ref_range)`（按成员键控）。用例
   `war_events_two_ref_show_name_same_member_share_cache_window`（多副本专项：一次 events
   里两条同 member ⇒ 第二条命中缓存；Δ11/Δ12 只收首份、Δ5 两份、Δ13 零帧）。
+- **批 5 既有 42 用例核查（四条都无需改期望，QA 可逐条抽查）**：
+  1. `enter.rs::username_and_daychanging_are_wired_in_order` —— `enter.rs` 全文
+     `ref_msg_cache|hear_targets` 命中 **0**；用例经 `enter::apply` + `EnterWorldInputs::frames()`
+     纯编码器构造登录包（ClientQueryUserName + RefShowName 两条 42），不经缓存；
+  2. `smframe::ref_show_name_emits_second_username_frame_byte_identical` ——
+     `login_scenario_inputs(...).frames()` 纯编码器，同上；
+  3. `query_user_name_near_username_far_ghost_missing_no_frame` —— 经
+     `handle_query_user_name_cmd`（CM_QUERYUSERNAME）：单 body 直发请求者 socket，**不**走
+     `hear_targets`/缓存（函数体内无这两者）；
+  4. `slave_mutiny_downlink_emits_namecolor_then_username` —— 属 **批 6 的 #8**
+     （`drain_slave_mutiny_downlink` 仍走 `chat::hear_targets`），单事件单次 `SendRefMsg`；
+     批 5 未动该站点。
