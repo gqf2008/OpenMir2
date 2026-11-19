@@ -232,3 +232,23 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 `mir2-rs/tests/parity/fixtures/exps-need-exps.json`
 （`git cat-file -e <head>:mir2-rs/tests/parity/fixtures/exps-need-exps.json`，rc=0）；
 ② 该文件的 `sha256` 与部署 `Exps.conf` 实值一致；③ 全 15 条在同一 `run_id` 下的实测结果。
+
+### 8.8 `AntiMagic=1` 下的 miss/edge/hit 分支可达性（M53 必答项）
+
+**判据**：`DoSpell` 的首抽 `Random(10)` 与 `AntiMagic` 比较（`>=` ⇒ 命中；`<` ⇒ 未命中；`==` ⇒ 边界）。
+`AntiMagic=1` 时三支分别要求首抽 **0 / 1 / ≥2**。该首抽是 6 个 AntiMagic 魔号（1/5/11/13/44/45）与
+`fireball`（`FireballCase`，同为 `spec.AntiMagic`）的**第一个抽取**（护身符门与 `UseAmulet` 零抽）。
+
+**取数方法（可复核）**：用 .NET 兼容的 `Random(seed).Next(10)` 复刻（经典减法算法）扫描种子，
+并**用已入库 golden 记录的三个 `(seed, 首抽)` 校准**：`seed 1 → 2`、`seed 5 → 3`、`seed 13 → 5`
+（与 `fireball.json`/`anti_magic=3` 的 miss/edge/hit 一致，校准通过）。
+
+| 分支 | `Random(10)` 要求（AntiMagic=1） | 候选 seed | 该 seed 首抽 |
+|---|---|---|---|
+| miss | `< 1`（即 0） | **14** | 0 |
+| edge | `== 1` | **18** | 1 |
+| hit | `>= 2` | **1** | 2 |
+
+⇒ **三支在登录序场景下均可达**，不存在"某支不可达、覆盖率须收窄"的情形（`Random(10)=0/1` 的概率各 10%）。
+**最终以 M53 的实跑为准**：新种子由 `a2` 的生成器写入 golden `Fixture.seed`；本侧测试从
+`Fixture.seed` 读 **输入**，帧面**期望**只来自 golden 帧序列与比较器判据（绝不反向从 golden 构造期望）。
