@@ -3,9 +3,9 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "9f38e5b716a7d26f58063bd16e03fa9a613c8f59",
-    "time": "2026-11-20T01:44:31+08:00",
-    "note": "M22=9f38e5b71 合入 IT-18 后 master verified=8（实现提交 140d07b72 为分支 commit）"
+    "head": "13c583366bca8c9a81c8ca330bc52fac3d323bc4",
+    "time": "2026-11-20T06:27:13+08:00",
+    "note": "M55=13c583366 合入 IT-08(Shape13 GetExp 升级支) 后 master items verified=9（QA PASS @ f7cbaf91b）；本计数点取代 card/items-followups（作废不合）"
   },
   "status_enum": [
     "verified",
