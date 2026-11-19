@@ -477,3 +477,94 @@ fn flush_drains_per_recipient_heap() {
         "boss 队列独立成堆 ⇒ 混堆会给 [3,1]（别的会话的元素改变本会话 sift）"
     );
 }
+
+// ---- 批 5 #17：建会支 `RefShowName` 的 42 缓存 ----
+
+/// 批 5 #17：放行 `@@buildguildnow` 标签（`LableIsCanJmp` 第二支的白名单）。
+fn allow_build_guild_label(f: &mut Fixture) {
+    f.shop_sessions
+        .entry("hero".to_string())
+        .or_default()
+        .can_jmp_labels = ["@@buildguildnow"]
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+}
+
+/// 批 5 #17：给 hero 足够金币 + 一个祖玛头像（`make_index` 区分多次）。
+fn fund_and_piece(f: &mut Fixture, make_index: i32) {
+    let sg = f.sessions.get_mut("hero").unwrap();
+    sg.state.gold = 1_000_000;
+    sg.state.item_list.push(BagItem {
+        make_index,
+        index: 42,
+        dura: 10,
+        dura_max: 10,
+        desc: [0; 14],
+    });
+}
+
+/// 统计各 socket 上的 42 帧数。
+fn username_frames(frames: &[(i32, Vec<u8>)]) -> HashMap<i32, usize> {
+    let mut per: HashMap<i32, usize> = HashMap::new();
+    for (socket, body) in frames {
+        if ident(body) == messages::SM_USERNAME {
+            *per.entry(*socket).or_default() += 1;
+        }
+    }
+    per
+}
+
+/// **T-287 残余 #17**（`handle_select` 建会支的 42）：同窗两次建会（不同会名）⇒ 第二次
+/// 命中 500ms 缓存。几何：hero(10,10)；观察者 `(15,10)Δ5` / `(21,10)Δ11` / `(22,10)Δ12` /
+/// `(23,10)Δ13`。
+///
+/// 牙：站点回退 `game_svr::chat::hear_targets` ⇒ 次建 Δ11/Δ12 也收 ⇒ 红。
+#[test]
+fn build_guild_ref_show_name_cache_window_second_build_hits_cache() {
+    let mut f = Fixture::new();
+    allow_build_guild_label(&mut f);
+    f.add_player("o0", 2, 15, 10, 902);
+    f.add_player("o1", 3, 21, 10, 903);
+    f.add_player("o2", 4, 22, 10, 904);
+    f.add_player("o3", 5, 23, 10, 905);
+    fund_and_piece(&mut f, 101);
+    f.call("@@buildguildnow\r测试会A");
+    let first = username_frames(&f.drain());
+    assert_eq!(first.get(&901), Some(&1), "首建：自己收");
+    assert_eq!(first.get(&902), Some(&1), "首建：+5 收");
+    assert_eq!(first.get(&903), Some(&1), "首建：|Δ|=11 在 ±12 内");
+    assert_eq!(first.get(&904), Some(&1), "首建：|Δ|=12 闭区间");
+    assert_eq!(first.get(&905), None, "首建：+13 零帧");
+    // 第二次建会（新会名；先清会话行会使 `has_guild=false`）——同 sim 时钟。
+    f.set_guild(None, 0);
+    fund_and_piece(&mut f, 102);
+    f.call("@@buildguildnow\r测试会B");
+    let second = username_frames(&f.drain());
+    assert_eq!(second.get(&901), Some(&1), "次建：自己仍收（Δ0）");
+    assert_eq!(second.get(&902), Some(&1), "次建：+5 仍收");
+    assert_eq!(second.get(&903), None, "次建：|Δ|=11 被严格 <11 挡");
+    assert_eq!(second.get(&904), None, "次建：|Δ|=12 被挡");
+    assert_eq!(second.get(&905), None, "次建：+13 仍零帧");
+}
+
+/// **#17 隐藏被展示者反向**：oracle 退化只发自己 ⇒ 只 hero 自己收 42，观察者零帧。
+/// 依赖前置 `4174de804`。
+#[test]
+fn build_guild_ref_show_name_hidden_hero_only_self() {
+    let mut f = Fixture::new();
+    allow_build_guild_label(&mut f);
+    f.add_player("o0", 2, 15, 10, 902);
+    fund_and_piece(&mut f, 101);
+    let hero = f
+        .online
+        .iter()
+        .find(|e| e.chr_name == "hero")
+        .unwrap()
+        .actor_id;
+    f.world.entities.flags_mut(hero).unwrap().ob_mode = true;
+    f.call("@@buildguildnow\r测试会A");
+    let per = username_frames(&f.drain());
+    assert_eq!(per.get(&901), Some(&1), "隐藏：只自己收");
+    assert_eq!(per.get(&902), None, "隐藏：+5 零帧");
+}

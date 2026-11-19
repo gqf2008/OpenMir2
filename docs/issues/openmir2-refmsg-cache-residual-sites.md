@@ -138,3 +138,8 @@
   `ref_show_name_cache_window_second_call_hits_cache`、
   `ref_show_name_two_deferred_in_one_flush_share_cache_window`（多副本专项：一次 flush 两条）、
   `ref_show_name_hidden_target_only_self`（隐藏 ⇒ 只自己）。
+- #17 `guild_official.rs::handle_select`（建会成功支）：收件人改走
+  `ref_msg_cache::targets(world, actor_id, ref_range)`；隐藏被展示者 ⇒ `[self]`（oracle 退化
+  自投）。用例：`build_guild_ref_show_name_cache_window_second_build_hits_cache`（同窗两次
+  建会，不同会名：首建 Δ12 收、次建 Δ11/Δ12 挡）、
+  `build_guild_ref_show_name_hidden_hero_only_self`（隐藏 ⇒ 只自己）。

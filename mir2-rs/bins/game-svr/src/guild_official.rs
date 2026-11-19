@@ -733,7 +733,10 @@ pub(crate) fn handle_select(
         if outcome.my_guild.is_some() {
             if let Some(display) = displays.get(actor_id) {
                 let body = show_name_frame(actor_id, display);
-                for recipient in game_svr::chat::hear_targets(world, actor_id, ref_range) {
+                // **T-287 残余 #17**：`RefShowName()` 的 `SendRefMsg(RM_USERNAME, …)` 同走
+                // 500ms 缓存（按被展示者键控；首扫 `<= ref_range`、命中 `|Δ|<11`）。
+                // 隐藏被展示者 ⇒ `targets` 只返回 `[self]`（oracle 退化自投）。
+                for recipient in crate::ref_msg_cache::targets(world, actor_id, ref_range) {
                     push_frame(&mut queue, PRI_USERNAME, recipient, body.clone());
                 }
             } else {
