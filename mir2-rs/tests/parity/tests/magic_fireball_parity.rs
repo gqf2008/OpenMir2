@@ -18,12 +18,30 @@ use serde_json::Value;
 /// `site` 允许清单（§16b 表格的代码形态）：`(前缀, 理由)`。
 /// **扩充必须在此逐条写理由并进评审 diff**——不允许"能过就加"。
 pub const SITE_ALLOWLIST: &[(&str, &str)] = &[
-    ("crates/world-bevy/src/magic.rs", "原版 MagicManager 的威力/骰门/推挤纯函数取数点"),
-    ("crates/world-bevy/src/magic_effect.rs", "魔法效果计算（AntiMagic 骰门、GetPower*）"),
-    ("crates/world-bevy/src/world.rs", "cast_* 施法效果体，对应 DoSpell 的 case 体"),
-    ("crates/world-bevy/src/slave.rs", "deliver_delay_magic_impl：RM_DELAYMAGIC 到期结算"),
-    ("crates/world-bevy/src/combat.rs", "GetAttackPower 的随机区间"),
-    ("bins/game-svr/src/lib.rs", "宿主侧施法接线（帧参数/训练尾）"),
+    (
+        "crates/world-bevy/src/magic.rs",
+        "原版 MagicManager 的威力/骰门/推挤纯函数取数点",
+    ),
+    (
+        "crates/world-bevy/src/magic_effect.rs",
+        "魔法效果计算（AntiMagic 骰门、GetPower*）",
+    ),
+    (
+        "crates/world-bevy/src/world.rs",
+        "cast_* 施法效果体，对应 DoSpell 的 case 体",
+    ),
+    (
+        "crates/world-bevy/src/slave.rs",
+        "deliver_delay_magic_impl：RM_DELAYMAGIC 到期结算",
+    ),
+    (
+        "crates/world-bevy/src/combat.rs",
+        "GetAttackPower 的随机区间",
+    ),
+    (
+        "bins/game-svr/src/lib.rs",
+        "宿主侧施法接线（帧参数/训练尾）",
+    ),
 ];
 
 pub fn site_allowed(site: &str) -> bool {
@@ -276,7 +294,11 @@ fn vacuous_guard_missing_cases_red() {
 fn identity_accepts_golden() {
     let g = golden();
     let r = ledger_from(&g);
-    assert_eq!(verify(&g, &r), Ok(()), "identity 必须绿（比较器自身不假红）");
+    assert_eq!(
+        verify(&g, &r),
+        Ok(()),
+        "identity 必须绿（比较器自身不假红）"
+    );
 }
 
 #[test]
@@ -329,7 +351,10 @@ fn tooth_missing_rng_line_red() {
     let g = golden();
     let mut r = ledger_from(&g);
     let cases = r.get_mut("cases").and_then(Value::as_array_mut).unwrap();
-    let rng = cases[0].get_mut("Rng").and_then(Value::as_array_mut).unwrap();
+    let rng = cases[0]
+        .get_mut("Rng")
+        .and_then(Value::as_array_mut)
+        .unwrap();
     rng.pop();
     let err = verify(&g, &r).unwrap_err();
     assert!(
