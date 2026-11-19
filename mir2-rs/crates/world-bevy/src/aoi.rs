@@ -903,8 +903,14 @@ impl AoiStatsState {
             self.ns_sum as f64 / self.searches as f64
         };
         let final_marker = if final_line { "final=1 " } else { "" };
+        // **口径标注**（opc-07 要求）：增量路径不遍历格子 ⇒ `cells_per_search` 恒 0，
+        // 不得让读者把它读成「省了 97%」；`cand_per_search` 在增量下是复评数（touched）。
+        let (mode, cells_sem, cand_sem) = match aoi_search_mode() {
+            AoiSearchMode::Legacy => ("legacy", "real", "visited"),
+            AoiSearchMode::Incremental => ("incremental", "na", "touched"),
+        };
         let line = format!(
-            "[AOI_STATS] {final_marker}clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_bucket_ns={AOI_NS_BUCKET_NS} ns_avg={ns_avg:.1} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_avg={:.2} same_map_max={}",
+            "[AOI_STATS] {final_marker}clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_bucket_ns={AOI_NS_BUCKET_NS} ns_avg={ns_avg:.1} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_avg={:.2} same_map_max={} mode={} cells_sem={} cand_sem={}",
             self.window_seq,
             self.tick_seq,
             self.total_searches,
@@ -922,6 +928,9 @@ impl AoiStatsState {
                 self.same_map_sum as f64 / self.same_map_count as f64
             },
             self.same_map_max,
+            mode,
+            cells_sem,
+            cand_sem,
         );
         // `[AOI_IDX]` 与 `[AOI_STATS]` **同一窗口、同一 `clock_ms`**（opc-07 要求）：
         // 无样本时不追加，保持既有行格式逐字不变。
@@ -1318,22 +1327,27 @@ impl AoiChangeFeed {
     }
 }
 
-// ===================== AOI 增量可见集（phase 2 第 1 步；卡 openmir2-aoi-incremental） =====================
+// ===================== AOI 增量可见集（phase 2；卡 openmir2-aoi-incremental） =====================
 //
 // 设计：`docs/designs/aoi-phase2-design.md` §3 / `docs/designs/aoi-phase2-impl-handoff.md` §六。
 //
-// 第 1 步范围：
-// - `entered` / `left` 两类触发走增量；
+// 触发面：
+// - `entered` / `left`：新进/消失（派生 feed）；
 // - `moved`（跨格）：受影响观察者 = `cell_viewers[旧格] ∪ cell_viewers[新格]`，逐实体复评；
-// - 观察者移动 / ViewRange 变化：**窗口差分**（只重扫进入窗口的格子 + 处理离开窗口的可见项），
-//   一次平移超过 `AOI_WINDOW_DIFF_MAX_SHIFT` 格才整扫兜底；
-// - `idx_avg` 首版（线性桶 32 µs，只统计 tick 相：快照重建 + feed 派生 + 索引维护）。
+// - 状态指纹变化（Ghost/Death/…/格内微动）：两 tick 都在的实体逐实体复评；
+// - 观察者移动 / ViewRange 变化：**窗口差分**（只重扫进/出新窗口的格子），一次平移超过
+//   `AOI_WINDOW_DIFF_MAX_SHIFT` 格才整扫兜底。
+//
+// 性能口径（4k 两轮实测后重写，2026-11-19）：
+// - 观察者相**不再每趟重建/排序全量可见集**：成员表缓存（`visible_set`）、`view_updates`
+//   只在「怪物 + 距离门内」的小集合上排序、`is_visible_active` 直接读 tick 快照指纹；
+// - tick 相按**实体集合**重建快照（O(实体)），容器用 `HashMap` + 双缓冲复用容量；
+// - 可见性判断一律复用 [`aoi_visible_predicate`]（两侧同源），不另写过滤链。
 //
 // 等价目标：与 `search_view_range_with_updates` 的可观测面**逐项一致**——有序可见集、离开集
 // （含 `FixedHideMode/Ghost` 守卫）、`view_updates` 顺序、条目 `VisibleFlag`、`is_visible_active`。
-// 可见性判断一律复用 [`aoi_visible_predicate`]（两侧同源），不另写过滤链。
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 /// 谓词相关状态指纹（**字段写死**，逐项对应过滤链与投递段读到的字段；任何一项变化都必须触发复评）。
 ///
@@ -1381,9 +1395,14 @@ impl AoiEntityKey {
     }
 }
 
-/// tick 快照里每个实体除格坐标外的附加信息（`last_cell` 只存格坐标，直接喂派生 feed）。
+/// tick 快照里每个实体的记录（格坐标 + 谓词相关指纹 + 格内序）。
+///
+/// **合并成一张表**（4k 实测：原先 `id->cell` 与 `id->meta` 两张表，每实体两次 HashMap 插入
+/// ≈ 每 tick 0.7ms；合表后一次插入即可，feed 与复评都从同一条记录取）。
 #[derive(Clone, Copy, Debug)]
 struct AoiEntityMeta {
+    /// 实体所在格（= 当前坐标；legacy 候选全集按格子枚举）
+    cell: AoiCell,
     /// 谓词相关状态指纹
     key: AoiEntityKey,
     /// 格子登记类型（`PlayObject.SearchViewRange` 投递段的 `CellType == Monster` 门）
@@ -1511,21 +1530,32 @@ const AOI_WINDOW_DIFF_MAX_SHIFT: i32 = 4;
 /// 每图一份的增量索引（`AoiScratch.incremental[map_id]`，跨 tick 复用）。
 ///
 /// **类型隔离**：legacy 路径不持有本结构；开关只决定 `output_aoi_system` 调哪条路径。
+///
+/// 容器选择：**顺序无语义的容器一律 `HashMap`/`HashSet`**（4k 实测 BTreeMap 的插入/查找
+/// 常数是这里的瓶颈）；需要确定性顺序的只有 feed 的产出，它按入口给的 `ids` 顺序生成。
 #[derive(Default)]
 pub struct AoiIncremental {
     /// `cell -> 窗口覆盖该格的观察者集合`（只含已注册的**玩家**观察者；非玩家恒回退 legacy）。
-    cell_viewers: BTreeMap<AoiCell, BTreeSet<i32>>,
-    /// 上一次处理过的 tick 的快照（`id -> 格坐标`）：派生 feed 的唯一输入。
-    last_cell: AoiCellSnapshot,
-    /// 同 tick 的状态指纹（谓词相关 + 格子类型 + 格内序）。
-    last_meta: BTreeMap<i32, AoiEntityMeta>,
+    cell_viewers: HashMap<AoiCell, HashSet<i32>>,
+    /// 上一次处理过的 tick 的快照（`id -> 记录`）：派生 feed 与逐实体复评的唯一输入。
+    last_entity: HashMap<i32, AoiEntityMeta>,
+    /// 上一次快照里**成功入册**的 id 顺序（= 入口 `ids` 顺序；`left` 判定按它扫）。
+    last_ids: Vec<i32>,
     /// 同 tick 的 `非空格子 -> 实体列表`（窗口差分「新进入窗口的格子」按格枚举实体用）。
-    last_by_grid: BTreeMap<AoiCell, Vec<i32>>,
+    last_by_grid: HashMap<AoiCell, Vec<i32>>,
+    /// 双缓冲（复用 HashMap/Vec 容量，避免每 tick 重建分配）。
+    spare_entity: HashMap<i32, AoiEntityMeta>,
+    spare_by_grid: HashMap<AoiCell, Vec<i32>>,
     /// `观察者 -> 待复评实体`（跨 tick 累积；到该观察者搜索门到期那一趟才生效，
     /// 保证 `SearchTime` 门时点与 legacy 相同）。
-    pending: BTreeMap<i32, BTreeSet<i32>>,
+    pending: HashMap<i32, HashSet<i32>>,
     /// 已注册观察者的窗口/自身指纹（未注册 = 首搜未发生 ⇒ 整条回退全量扫）。
-    viewer_reg: BTreeMap<i32, AoiViewerKey>,
+    viewer_reg: HashMap<i32, AoiViewerKey>,
+    /// **缓存成员表**：观察者当前可见集（与 `visible_actors` 同步维护，回退时标脏重建）。
+    /// 增量 gate 用它做 O(1) 成员判定，不再每趟从 `visible_actors` 重建 `BTreeSet`。
+    visible_set: HashMap<i32, HashSet<i32>>,
+    /// 需要从 `visible_actors` 重建成员表的观察者（首搜/回退/整扫之后）。
+    visible_dirty: HashSet<i32>,
     /// 本 tick 已处理的时钟（懒触发：一图一 tick 至多一次）。
     tick_ms: Option<i64>,
     /// 本 tick 内是否有非玩家观察者的 legacy 全量扫（会在快照之后从格子里摘过期对象）；
@@ -1536,7 +1566,34 @@ pub struct AoiIncremental {
     /// 测试专用：每观察者累计复评条数——证明 `moved` 只通知 `cell_viewers[旧格] ∪ [新格]`
     /// 的覆盖者（第三格观察者必须为 0；「通知所有观察者」的保守实现会让它变正）。
     #[cfg(test)]
-    pub(crate) touched_per_viewer: BTreeMap<i32, u64>,
+    pub(crate) touched_per_viewer: HashMap<i32, u64>,
+}
+
+/// 快速派生 feed：语义与 [`derive_aoi_change_feed`] 完全相同（`entered`/`left`/`moved`），
+/// 但用 `HashMap` + 入口 `ids` 顺序，**不做 O(n log n) 的 BTreeMap 重建**。
+///
+/// 顺序约定：`entered` / `moved` 按 `ids` 顺序；`left` 按 `prev_ids` 顺序。
+fn derive_feed_fast(
+    prev: &HashMap<i32, AoiEntityMeta>,
+    prev_ids: &[i32],
+    curr: &HashMap<i32, AoiEntityMeta>,
+    ids: &[i32],
+) -> AoiChangeFeed {
+    let mut feed = AoiChangeFeed::default();
+    for &id in ids {
+        let Some(cur) = curr.get(&id) else { continue };
+        match prev.get(&id) {
+            None => feed.entered.push(id),
+            Some(old) if old.cell != cur.cell => feed.moved.push((id, old.cell, cur.cell)),
+            _ => {}
+        }
+    }
+    for &id in prev_ids {
+        if !curr.contains_key(&id) {
+            feed.left.push(id);
+        }
+    }
+    feed
 }
 
 impl AoiIncremental {
@@ -1552,10 +1609,13 @@ impl AoiIncremental {
         self.touched_per_viewer.get(&viewer).copied().unwrap_or(0)
     }
 
-    /// 测试专用：本 tick 快照（**实体集合口径**），用于与 [`aoi_snapshot_from_map`]（格子口径）对齐。
+    /// 测试专用：本 tick 快照里的实体 id（**实体集合口径**），用于与
+    /// [`aoi_snapshot_from_map`]（格子口径）对齐。
     #[cfg(test)]
-    pub(crate) fn snapshot_for_test(&self) -> &AoiCellSnapshot {
-        &self.last_cell
+    pub(crate) fn snapshot_ids_for_test(&self) -> Vec<i32> {
+        let mut ids: Vec<i32> = self.last_entity.keys().copied().collect();
+        ids.sort_unstable();
+        ids
     }
 
     /// tick 相（懒触发）：重建**实体口径**快照 → 派生 feed → 把「受影响实体」派给覆盖其格子的观察者。
@@ -1571,9 +1631,16 @@ impl AoiIncremental {
         self.pruned_after_snapshot = false;
         let idx_start = aoi_idx_begin();
         let snap_start = idx_start;
-        let mut curr = AoiCellSnapshot::new();
-        let mut curr_meta: BTreeMap<i32, AoiEntityMeta> = BTreeMap::new();
-        let mut by_grid: BTreeMap<AoiCell, Vec<i32>> = BTreeMap::new();
+        // 双缓冲：复用上一代容器的容量（clear 保留 capacity）。
+        let mut curr = std::mem::take(&mut self.spare_entity);
+        curr.clear();
+        curr.reserve(ids.len());
+        // `by_grid` 的内层 `Vec` 也复用（只清空、不丢容量），空格在收尾统一摘掉。
+        let mut by_grid = std::mem::take(&mut self.spare_by_grid);
+        for v in by_grid.values_mut() {
+            v.clear();
+        }
+        let mut curr_ids: Vec<i32> = Vec::with_capacity(ids.len());
         for &id in ids {
             let Some(e) = store.get(id) else { continue };
             let (cell, ok) = map.get_cell_info(e.x, e.y);
@@ -1588,35 +1655,37 @@ impl AoiIncremental {
                 continue;
             };
             let cell_type = cell.obj_list[pos].cell_type;
-            curr.insert(id, (e.x, e.y));
+            curr_ids.push(id);
             by_grid.entry((e.x, e.y)).or_default().push(id);
-            curr_meta.insert(
+            curr.insert(
                 id,
                 AoiEntityMeta {
+                    cell: (e.x, e.y),
                     key: AoiEntityKey::of(&e),
                     cell_type,
                     pos,
                 },
             );
         }
+        by_grid.retain(|_, v| !v.is_empty());
         if let Some(start) = snap_start {
             aoi_idx_record_phase(AoiIdxPhase::Snapshot, start);
         }
         let feed_start = aoi_idx_begin();
-        let feed = derive_aoi_change_feed(&self.last_cell, &curr);
+        let feed = derive_feed_fast(&self.last_entity, &self.last_ids, &curr, &curr_ids);
         let mut touched: Vec<(i32, AoiCell)> = Vec::new();
         for id in &feed.entered {
-            if let Some(c) = curr.get(id) {
-                touched.push((*id, *c));
+            if let Some(m) = curr.get(id) {
+                touched.push((*id, m.cell));
             }
         }
         for id in &feed.left {
-            if let Some(c) = self.last_cell.get(id) {
-                touched.push((*id, *c));
+            if let Some(m) = self.last_entity.get(id) {
+                touched.push((*id, m.cell));
             }
         }
         for (id, old, new) in &feed.moved {
-            // 跨格移动（第 2 步）：受影响观察者 = 旧格 ∪ 新格的覆盖者，**逐实体**复评——
+            // 跨格移动：受影响观察者 = 旧格 ∪ 新格的覆盖者，**逐实体**复评——
             // 旧窗口的观察者在其 gate 掉出可见集，新窗口的观察者按扫描序加入。
             touched.push((*id, *old));
             touched.push((*id, *new));
@@ -1626,11 +1695,12 @@ impl AoiIncremental {
         //
         // **只覆盖两 tick 都在的实体**（`is_some_and`）：新进/消失由 `entered` / `left` 两支
         // 负责——否则那两支会被这里兜住变成死代码，删掉也全绿（触发牙失效）。
-        for (id, meta) in &curr_meta {
-            if self.last_meta.get(id).is_some_and(|m| !m.state_eq(meta)) {
-                if let Some(c) = curr.get(id) {
-                    touched.push((*id, *c));
-                }
+        for &id in &curr_ids {
+            let Some(meta) = curr.get(&id) else {
+                continue;
+            };
+            if self.last_entity.get(&id).is_some_and(|m| !m.state_eq(meta)) {
+                touched.push((id, meta.cell));
             }
         }
         for (id, cell) in touched {
@@ -1645,9 +1715,9 @@ impl AoiIncremental {
         for id in &feed.left {
             self.unregister(*id);
         }
-        self.last_cell = curr;
-        self.last_meta = curr_meta;
-        self.last_by_grid = by_grid;
+        self.spare_entity = std::mem::replace(&mut self.last_entity, curr);
+        self.spare_by_grid = std::mem::replace(&mut self.last_by_grid, by_grid);
+        self.last_ids = curr_ids;
         if let Some(start) = feed_start {
             aoi_idx_record_phase(AoiIdxPhase::Feed, start);
         }
@@ -1699,6 +1769,8 @@ impl AoiIncremental {
             }
         }
         self.pending.remove(&viewer);
+        // 缓存成员表与刚跑完的全量扫同步：标记脏，下一次 gate 从 `visible_actors` 重建。
+        self.visible_dirty.insert(viewer);
     }
 
     /// 注销观察者（离开世界/换图/降级为非玩家）。
@@ -1707,6 +1779,8 @@ impl AoiIncremental {
             self.uncover(viewer, prev);
         }
         self.pending.remove(&viewer);
+        self.visible_set.remove(&viewer);
+        self.visible_dirty.remove(&viewer);
     }
 
     /// 窗口差分（第 3 步）：观察者移动 / ViewRange 变化时**不再整扫全窗**。
@@ -1721,13 +1795,13 @@ impl AoiIncremental {
     ///   都按最终可见集全量重算，天然跟随新中心。
     ///
     /// `cell_viewers` 也只动差集（进入的格加我、离开的格删我），不做整窗重建。
-    fn window_diff(
+    fn window_diff<S: AoiStore>(
         &mut self,
         viewer_id: i32,
         old: AoiViewerKey,
         new: AoiViewerKey,
-        visible: &[i32],
-        pending: &mut BTreeSet<i32>,
+        store: &S,
+        pending: &mut HashSet<i32>,
     ) {
         let in_old = |x: i32, y: i32| {
             (x - old.cx).abs() <= old.view_range && (y - old.cy).abs() <= old.view_range
@@ -1736,11 +1810,13 @@ impl AoiIncremental {
             (x - new.cx).abs() <= new.view_range && (y - new.cy).abs() <= new.view_range
         };
         // ① 可见集里已经离开新窗口的（含快照里已不存在的）→ 复评。
-        for &id in visible {
-            match self.last_cell.get(&id) {
-                Some(&(x, y)) if in_new(x, y) => {}
-                _ => {
-                    pending.insert(id);
+        if let Some(viewer) = store.get(viewer_id) {
+            for v in viewer.visible_actors.iter() {
+                match self.last_entity.get(&v.target).map(|m| m.cell) {
+                    Some((x, y)) if in_new(x, y) => {}
+                    _ => {
+                        pending.insert(v.target);
+                    }
                 }
             }
         }
@@ -1788,9 +1864,10 @@ impl AoiIncremental {
     /// （`CELL_OBJECT_EXPIRE_MS`），而 tick 快照在那之前建立 ⇒ 玩家的增量 gate 必须回查格子，
     /// 否则过期对象会晚一整 tick 才离开可见集（与 legacy 不同）。
     fn in_cell(&self, map: &MapGrid, id: i32) -> bool {
-        let Some(&(x, y)) = self.last_cell.get(&id) else {
+        let Some(meta) = self.last_entity.get(&id) else {
             return false;
         };
+        let (x, y) = meta.cell;
         let (cell, ok) = map.get_cell_info(x, y);
         ok && cell
             .obj_list
@@ -1809,9 +1886,10 @@ impl AoiIncremental {
         if !self.in_cell(map, id) {
             return false;
         }
-        let Some(&(x, y)) = self.last_cell.get(&id) else {
+        let Some(meta) = self.last_entity.get(&id) else {
             return false;
         };
+        let (x, y) = meta.cell;
         if (x - key.cx).abs() > key.view_range || (y - key.cy).abs() > key.view_range {
             return false;
         }
@@ -1829,26 +1907,24 @@ impl AoiIncremental {
         )
     }
 
-    /// 扫描序键：x 外层升序、y 内层升序、同格按 `obj_list` 下标。
+    /// 扫描序键：x 外层升序、y 内层升序、同格按 `obj_list` 下标（tick 快照的当前值）。
     fn scan_key(&self, id: i32) -> (i32, i32, usize) {
-        let (x, y) = self
-            .last_cell
+        self.last_entity
             .get(&id)
-            .copied()
-            .unwrap_or((i32::MAX, i32::MAX));
-        let pos = self.last_meta.get(&id).map_or(usize::MAX, |m| m.pos);
-        (x, y, pos)
+            .map_or((i32::MAX, i32::MAX, usize::MAX), |m| {
+                (m.cell.0, m.cell.1, m.pos)
+            })
     }
 }
 
-/// 增量搜索入口（phase 2 第 1 步）。
+/// 增量搜索入口（phase 2）。
 ///
 /// `ids` = 本图实体集合（生产：`by_map[map_id]`；测试：`store.order_index()`），用来**按实体**
 /// （而非按格子）重建 tick 快照。`state` 每图一份、跨 tick 复用。
 ///
 /// 整条回退 legacy 全量扫（行为逐字节等价）的情形：观察者不在 store / 非玩家观察者 /
 /// 首次搜索 / 观察者自身谓词相关字段变化 / 窗口一次平移超过 `AOI_WINDOW_DIFF_MAX_SHIFT`。
-/// 其余窗口变化走**窗口差分**（第 3 步），不整扫。
+/// 其余窗口变化走**窗口差分**，不整扫。
 pub fn search_view_range_incremental<S: AoiStore>(
     map: &mut MapGrid,
     store: &mut S,
@@ -1890,6 +1966,7 @@ pub fn search_view_range_incremental<S: AoiStore>(
                     .get(viewer_id)
                     .map_or(0, |e| e.visible_actors.len() as u64);
                 // 增量 gate 不遍历格子 ⇒ `cells = 0`；`candidates` = 本趟复评的 touched 数。
+                // 行内另有 `mode=` / `cells_sem=` 标注，避免把 0 读成「省了 97%」。
                 aoi_stats_record_search(start, 0, touched, visible, outcome.removed.len() as u64);
             }
             outcome
@@ -1920,11 +1997,8 @@ pub fn search_view_range_incremental<S: AoiStore>(
                 // —— 窗口差分（第 3 步）：不整扫，只处理进/出窗口的格子 ——
                 state.counters.inc_path_used = state.counters.inc_path_used.saturating_add(1);
                 let wdiff_start = aoi_idx_begin();
-                let visible: Vec<i32> = store.get(viewer_id).map_or_else(Vec::new, |e| {
-                    e.visible_actors.iter().map(|v| v.target).collect()
-                });
-                let mut extra: BTreeSet<i32> = BTreeSet::new();
-                state.window_diff(viewer_id, reg, key, &visible, &mut extra);
+                let mut extra: HashSet<i32> = HashSet::new();
+                state.window_diff(viewer_id, reg, key, store, &mut extra);
                 state.viewer_reg.insert(viewer_id, key);
                 state.pending.entry(viewer_id).or_default().extend(extra);
                 if let Some(start) = wdiff_start {
@@ -1980,6 +2054,13 @@ pub fn aoi_inc_counters_line(states: &[AoiIncremental], clock_ms: i64) -> Option
 
 /// 观察者相（增量）：只对「自上次搜索以来变过」的实体复评，产出与 legacy 同形的可观测面。
 ///
+/// 性能约束（4k 两轮实测后重写）：**不重建/排序全量可见集**。
+/// - 成员判定走缓存 `visible_set`（仅在注册/回退时从 `visible_actors` 重建一次）；
+/// - 移除用 `retain`（保序、O(V)），不做逐项 `Vec::remove`；
+/// - `view_updates` 只对「怪物 + 距离门内」的小集合取扫描键排序（全量枚举但零 `store.get`，
+///   字段全部来自 tick 快照 `last_entity`）；
+/// - `is_visible_active` 同源取指纹，不再逐目标 `store.get`。
+///
 /// 返回 `(结果, 复评条数)`。
 fn incremental_gate<S: AoiStore>(
     map: &MapGrid,
@@ -1988,16 +2069,20 @@ fn incremental_gate<S: AoiStore>(
     key: &AoiViewerKey,
     state: &mut AoiIncremental,
 ) -> (SearchViewRangeOutcome, u64) {
-    let visible: Vec<i32> = store.get(viewer_id).map_or_else(Vec::new, |e| {
-        e.visible_actors.iter().map(|v| v.target).collect()
-    });
-    let in_list: BTreeSet<i32> = visible.iter().copied().collect();
+    // 0) 缓存成员表（回退之后首趟重建一次）。
+    let dirty = state.visible_dirty.remove(&viewer_id);
+    let mut visible_set = match state.visible_set.remove(&viewer_id) {
+        Some(set) if !dirty => set,
+        _ => store.get(viewer_id).map_or_else(HashSet::new, |e| {
+            e.visible_actors.iter().map(|v| v.target).collect()
+        }),
+    };
     let mut to_remove: BTreeSet<i32> = BTreeSet::new();
     let mut to_add: Vec<i32> = Vec::new();
     // ① 陈旧成员核对：本 tick 若已有非玩家 legacy 扫摘掉了过期对象，可见集必须立刻同步。
     //    只在「快照之后真的发生过这种扫」时做——常驻核对会把 `left` 支兜成死代码（触发牙失效）。
     if state.pruned_after_snapshot {
-        for &t in &visible {
+        for &t in &visible_set {
             if !state.in_cell(map, t) {
                 to_remove.insert(t);
             }
@@ -2012,31 +2097,34 @@ fn incremental_gate<S: AoiStore>(
     }
     for &id in &touched {
         if state.entity_visible(map, store, id, key) {
-            if !in_list.contains(&id) {
+            if !visible_set.contains(&id) {
                 to_add.push(id);
             }
-        } else {
+        } else if visible_set.contains(&id) {
             to_remove.insert(id);
         }
     }
-    // ③ 移除：按 `visible_actors` 旧序收集（legacy 收尾也是按下标升序）。
+    // ③ 移除：`retain` 保序收集（legacy 收尾也是按下标升序）。
     let mut removed_raw: Vec<i32> = Vec::new();
     if let Some(viewer) = store.map_binding_mut(viewer_id) {
-        let mut i = 0;
-        while i < viewer.visible_actors.len() {
-            let target = viewer.visible_actors[i].target;
-            if to_remove.contains(&target) {
-                removed_raw.push(target);
-                viewer.visible_actors.remove(i);
-                continue;
+        viewer.visible_actors.retain(|v| {
+            if to_remove.contains(&v.target) {
+                removed_raw.push(v.target);
+                false
+            } else {
+                true
             }
-            i += 1;
-        }
+        });
         // 幸存者 flag 语义与 legacy 一致：全标 `Hidden` 后被本趟扫描命中 ⇒ `Invisible`；
         // 新加入者由 `update_visible_gay` 追加为 `Show`。
         for v in viewer.visible_actors.iter_mut() {
-            v.flag = VisibleFlag::Invisible;
+            if v.flag != VisibleFlag::Invisible {
+                v.flag = VisibleFlag::Invisible;
+            }
         }
+    }
+    for &t in &removed_raw {
+        visible_set.remove(&t);
     }
     let removed: Vec<i32> = removed_raw
         .into_iter()
@@ -2046,44 +2134,47 @@ fn incremental_gate<S: AoiStore>(
                 .is_some_and(|e| !e.fixed_hide_mode && !e.ghost)
         })
         .collect();
-    // ④ 新进按**扫描序**追加（与 legacy 的追加顺序一致，不是事件到达顺序）。
-    to_add.sort_by_key(|id| state.scan_key(*id));
+    // ④ 新进按**扫描序**追加（与 legacy 的追加顺序一致，不是事件到达顺序）。数量小，直接排。
+    to_add.sort_unstable_by_key(|id| state.scan_key(*id));
     for id in to_add {
         update_visible_gay(store, viewer_id, id);
+        visible_set.insert(id);
     }
-    // ⑤ `view_updates`：legacy 每趟对**所有**可见怪按扫描序投递 ⇒ 增量也用最终可见集按扫描序重算。
-    let mut ordered: Vec<i32> = store.get(viewer_id).map_or_else(Vec::new, |e| {
-        e.visible_actors.iter().map(|v| v.target).collect()
-    });
-    ordered.sort_by_key(|id| state.scan_key(*id));
-    let mut view_updates: Vec<(i32, i32)> = Vec::new();
-    for id in ordered {
-        let Some(meta) = state.last_meta.get(&id) else {
-            continue;
-        };
-        if meta.cell_type != CellType::Monster {
-            continue;
-        }
-        let Some(other) = store.get(id) else {
-            continue;
-        };
-        let span = key.view_range - other.view_range;
-        if (other.x - key.cx).abs() <= span && (other.y - key.cy).abs() <= span {
-            view_updates.push((id, viewer_id));
+    // ⑤ `view_updates`：legacy 每趟对**所有**可见怪按扫描序投递。这里全量枚举可见集，
+    //    但只对「怪物 + 距离门内」的候选取扫描键排序（字段全部来自 tick 快照，零 store.get）。
+    let mut updates: Vec<((i32, i32, usize), i32)> = Vec::new();
+    let mut active = false;
+    if let Some(viewer) = store.get(viewer_id) {
+        for v in viewer.visible_actors.iter() {
+            let Some(meta) = state.last_entity.get(&v.target) else {
+                // 快照缺失（极端边界）：退回 store 检查，保证与 legacy 同判。
+                if let Some(e) = store.get(v.target) {
+                    if e.race == ACTOR_RACE_PLAY || e.master.is_some() {
+                        active = true;
+                    }
+                }
+                continue;
+            };
+            if meta.key.race == ACTOR_RACE_PLAY || meta.key.has_master {
+                active = true;
+            }
+            if meta.cell_type != CellType::Monster {
+                continue;
+            }
+            let span = key.view_range - meta.key.view_range;
+            if (meta.key.x - key.cx).abs() <= span && (meta.key.y - key.cy).abs() <= span {
+                updates.push((state.scan_key(v.target), v.target));
+            }
         }
     }
+    updates.sort_unstable_by_key(|(k, _)| *k);
+    let view_updates: Vec<(i32, i32)> =
+        updates.into_iter().map(|(_, id)| (id, viewer_id)).collect();
     // ⑥ `is_visible_active` 按最终可见集重算（legacy 每趟重算；不能沿用上一趟的值）。
-    let targets: Vec<i32> = store.get(viewer_id).map_or_else(Vec::new, |e| {
-        e.visible_actors.iter().map(|v| v.target).collect()
-    });
-    let active = targets.iter().any(|t| {
-        store
-            .get(*t)
-            .is_some_and(|e| e.race == ACTOR_RACE_PLAY || e.master.is_some())
-    });
     if let Some(binding) = store.map_binding_mut(viewer_id) {
         binding.is_visible_active = active;
     }
+    state.visible_set.insert(viewer_id, visible_set);
     (
         SearchViewRangeOutcome {
             removed,
@@ -3428,8 +3519,7 @@ mod tests {
         inc: &AoiIncremental,
         tick: usize,
     ) {
-        let mut entity_based: Vec<i32> = inc.snapshot_for_test().keys().copied().collect();
-        entity_based.sort_unstable();
+        let entity_based: Vec<i32> = inc.snapshot_ids_for_test();
         let mut cell_based: Vec<i32> = aoi_snapshot_from_map(map).keys().copied().collect();
         cell_based.sort_unstable();
         assert_eq!(
@@ -3657,22 +3747,26 @@ mod tests {
                     store.insert(monster_entity(900, 13, 10, 5));
                     put_typed(&mut map, 900, 13, 10, CellType::Monster, 0);
                 }
-                if tick == 2 {
+                if tick == 2 || tick == 3 {
+                    // tick 2：旧格 -> 新格（观察者 1 掉出、观察者 2 加入）；
+                    // tick 3：**再移回来**（钉住缓存成员表：离开时必须从 `visible_set` 摘掉，
+                    //         否则回来时会被当成"已在列表"而漏加 —— visible-set-remove 牙）。
+                    let (from_x, to_x) = if tick == 2 { (13, 22) } else { (22, 13) };
                     let moved = map.move_object(
                         crate::map::MoveRequest {
-                            from_x: 13,
+                            from_x,
                             from_y: 10,
                             actor_id: 900,
-                            to_x: 22,
+                            to_x,
                             to_y: 10,
                             ignore_block: true,
-                            add_time: 2,
+                            add_time: i64::try_from(tick).unwrap_or(0),
                             cert_cell_type: CellType::Monster,
                         },
                         |_| false,
                     );
                     assert!(moved, "跨格移动必须成功");
-                    let _ = store.set_xy(900, 22, 10);
+                    let _ = store.set_xy(900, to_x, 10);
                 }
                 let ids = store.order_index();
                 for viewer in [1, 2, 3] {

@@ -107,6 +107,13 @@ SNAPSHOT_COUNT → TICK_VIEWER → 可见集（集合 → 顺序） → REMOVED 
 5. **顺序牙**：可见集顺序必须与扫描顺序一致（把增量结果排序化 ⇒ 顺序用例红）；
 6. **空输入退化**：零实体/零观察者时行为与现实现一致（不得 panic、不得空转）。
 
+> **牙的靶必须单独验证（2026-11-19 实测教训）**：「场景覆盖了触发类型」≠「每颗牙都有靶」。
+> 窗口差分的「离开项」支最初拿 `viewer_moves` 当靶，但该场景里观察者右移时**没有实体离开窗口**
+> ⇒ 删掉离开支仍全绿（假牙）。补了「观察者移走、怪留在旧窗口」的专测后，删支才红。同理，
+> `entered`/`left` 两支第一版被状态指纹环与无条件的陈旧成员核对兜住，删掉也不红——后来把状态环
+> 收窄为「两 tick 都在」、把陈旧核对限定在 `pruned_after_snapshot` 才让两支承重。**每条触发支
+> 都必须有一条删掉就红的用例，且该用例要能证明自己被触发。**
+
 ## 6. 性能验收（与遥测同口径）
 - 目标：4k AOI 段 p50 **≤150 ms**（达标 ≤100 ms）；10k **≤240 ms**（沿用容量预审口径）；
 - 判读用 `ns_avg` + 线性桶分位（桶宽 32 µs 已入行），不再用 2 的幂边界；
@@ -124,6 +131,23 @@ SNAPSHOT_COUNT → TICK_VIEWER → 可见集（集合 → 顺序） → REMOVED 
 ### 6c 内存（opc-07 要求，不设硬门槛但必须报）
 - 双索引（`viewer_cells` + `cell_viewers`）相对 legacy 的 **RSS 增量**：4k 时 p50/p90；
 - 报告口径：同一构建、同参数、`Get-Process WorkingSet` 每 10 s 采样；不设通过线，只作为取舍依据。
+
+### 6d. 2026-11-19 4k 两轮实测：增量（初版）比 legacy 慢 37%，按实测重写
+
+- 实测（同构建，只差 `MIR2_AOI_INCREMENTAL`）：tick 速率 3.51/s → 2.22/s；AOI 段
+  `ns_avg` 340µs → 950µs（final 窗口）、`ns_p50` 416µs → 1,056µs；`inc_rate` 0.965，
+  排除"回退太多"这条解释。
+- 分段实测（本地 `tick_bench --profile --bots 4000 11000`，V≈171）：每趟 gate 30µs 中
+  **`ordered` 全量收集 + `sort_by_key(scan_key)` 19µs（60%，`sort_by_key` 每次比较都重算
+  两次 BTreeMap 查找）+ `view_updates` 逐目标 `store.get` 9µs（30%）**；legacy 同场景 21µs。
+- 重写要点：可见成员表缓存（回退才重建）、移除用 `retain`、`view_updates` 只在「怪物 + 距离门
+  内」的小集合上排序且**零 `store.get`**（字段全部来自 tick 快照）、`is_visible_active` 同源；
+  tick 相容器换 `HashMap` 并合并为单表、双缓冲复用容量、`by_grid` 内层 `Vec` 复用。
+- 遥测口径：增量路径不遍历格子 ⇒ `cells_per_search` 在行内标 `cells_sem=na`，
+  `cand_per_search` 标 `cand_sem=touched`，并带 `mode=legacy|incremental`，禁止把 0 读成
+  「省了 97%」。
+- 剩余杠杆（未做，等重跑判读）：tick 相当前每实体仍做一次 `store.get`，`output_aoi_system`
+  主循环也做一次；可预扫一次共用。
 
 ## 7. 风险与回退
 - 风险①：顺序语义漂移（可见集顺序影响出帧）——用第 5 节顺序牙 + 有序差分盯住；
