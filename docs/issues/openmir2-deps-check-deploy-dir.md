@@ -1,6 +1,6 @@
 # openmir2-deps-check-deploy-dir
 
-> 状态：**实现完成，待 opc-07 复核三条牙后合并（2026-11-19，分支 `card/deps-check-deploy-dir`）**。
+> 状态：**已合并（`cfc154b92`）**。
 > 上游卡：`openmir2-deploy-deps-manifest`（其 `check` 只核 NuGet 缓存，不核部署目录）。
 > 触发：botfleet 实测把 `runtime/DBSrv/MemoryPack.Core.dll` 翻一个字节后 `check` 仍
 > `DEPS_GREEN 45/1010 rc=0`——"部署出去的那个文件被换了"当时不在闸门内。
@@ -105,7 +105,7 @@ DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll
 
 - `runtime/LoginSrv`（单项目）：`DEPS_GREEN packages=48 files=1063`，`UNCOVERED_DEPLOYED=0`。
 - `runtime/DBSrv`（并集 `src/DBSrv` + `DBSvr.Storage.MySQL`）：包数/文件数以机器产物为准 ——`E:/UserFleet/evidence-cardfix-20261119/deps-check-and-selftest.log`（`DEPS_GREEN …` 行）；**注意** `543e8e39b` 清掉 NLog 后包集与例外条目均已变化，卡面不再手抄数字。
-  **剩 1 条红**：`DEPS_RED MISSING_DEPLOYED NLog/5.2.8 NLog.dll`。
+  **（历史）当时还剩 1 条红**：`DEPS_RED MISSING_DEPLOYED NLog/5.2.8 NLog.dll`——已在 `543e8e39b` 清掉 NLog 依赖与例外条目，**现无 `DEPS_EXCEPTION`**。
   根因：`DBSvr.Storage.MySQL` 声明并随构建产出 `NLog.dll`（其 `bin/Debug` 有），但
   `Directory.Build.targets` 只把**插件 DLL 本身**拷进 DBSrv 输出 ⇒ 部署目录缺 NLog；
   现网 `runtime/DBSrv` 里 `MySqlConnector.dll` 是别的途径带进去的，`NLog.dll` 没有。
@@ -180,9 +180,18 @@ RESULT: GREEN
 
 | 编号 | 改什么 | 怎么改 | 期望红在哪 | 还原 |
 |---|---|---|---|---|
-| T1 | 部署副本 `MemoryPack.Core.dll` | 翻末字节 | `DEPS_RED DEPLOYED_SHA_MISMATCH MemoryPack.Core/1.10.0 MemoryPack.Core.dll` | 复原后全绿 |
+| T1 | 部署副本 `MemoryPack.Core.dll` | 翻末字节 | `DEPS_RED DEPLOYED_SHA_MISMATCH MemoryPack.Core/1.10.0 MemoryPack.Core.dll expected=<原 sha256> actual=<翻字节后 sha256>` | 复原后全绿 |
 | T2 | 部署副本 `Microsoft.Extensions.Logging.dll` | 删除 | `DEPS_RED MISSING_DEPLOYED Microsoft.Extensions.Logging/8.0.0` | 复原后全绿 |
 | T3 | 部署副本 | 新增 `Stray.Third.Party.dll` | `DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll` | 复原后全绿 |
 | T4a | 删 Logging.dll + manifest 副本加匹配例外 | 见左 | `DEPS_EXCEPTION …` + `DEPS_GREEN`（证明例外**只**压制 `MISSING_DEPLOYED`） | 复原后全绿 |
-| T4b | 恢复后翻字节 + 同一例外 | 见左 | `DEPS_EXCEPTION_UNUSED` + `DEPS_RED DEPLOYED_SHA_MISMATCH`（证明**不**压制 sha） | 复原后全绿 |
+| T4b | 恢复后翻字节 + 同一例外 | 见左 | `DEPS_EXCEPTION_UNUSED` + `DEPS_RED DEPLOYED_SHA_MISMATCH <pkg>/<ver> <file> expected=<原 sha256> actual=<翻字节后 sha256>`（证明**不**压制 sha） | 复原后全绿 |
 | T5 | 部署目录 | 改成缺目录 / 空目录 | `MISSING_DEPLOY_DIR` / `EMPTY_DEPLOY_DIR` | 复原后全绿 |
+### 统一整改（C4–C6）
+
+- **C4 `built_at`**：本族交付件的 `built_at` 口径**已由 `docs/issues/openmir2-stamp-built-at-single-source.md`
+  承接**——戳的 `built_at` 必须等于二进制自报的 `built_at`（单一来源），mtime 只作元数据、不参与比对；
+  M9 四件按 `CONDITIONAL`（身份可证、语义待统一）。
+- **C5 `SHA256SUMS`**：冻结件采用**双清单口径**——`SHA256SUMS.txt`（历史格式，带 `N bytes`，不改写）+
+  `SHA256SUMS.sha256`（`sha256sum -c` 兼容，`<sha>  <相对路径>`）；两者用途差异写在 `PROVENANCE.txt`。
+- **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
+  卡面凡引"章程 §N"均以此文件为准。

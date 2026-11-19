@@ -1,7 +1,7 @@
 # openmir2-deploy-deps-manifest
 
 > 状态：**已合并（`e7de2fbd9`；后续跟随 `543e8e39b` 清 NLog、`cfc154b92` 部署目录核验）**——生成器 + 两级检查器 +
-> 自测（10 例）已入仓并登记工具门（TOTAL 69 → **70**）。已登记（walgit 看板不可用，按 AGENTS.md §7
+> 自测用例数以 `python -I -B tools/deploy/deps_manifest.py selftest` 实跑为准（见 `E:/UserFleet/evidence-cardfix-20261119/deps-check-and-selftest.log`），已入仓并登记工具门（TOTAL 69 → **70**）。已登记（walgit 看板不可用，按 AGENTS.md §7
 > 过渡）。看板恢复后迁移为正式卡。tier 建议 **L**。
 
 ## 背景
@@ -105,6 +105,8 @@ check    src/LoginSrv → DEPS_GREEN packages=48 files=1063
 
 ## QA 整改（2026-11-19）
 
+> 来源：QA 签署摘要 `docs/issues/qa-merged-cards-signoff-20261119.md`。
+
 > 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
 
 - 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
@@ -113,3 +115,12 @@ check    src/LoginSrv → DEPS_GREEN packages=48 files=1063
   实跑帧/JSON 产物为准。
 - 可独立重放的篡改分组（`packlen T1–T4` / `utf8 M1–M3` / `deps T1–T5`）：**待 QA 提供定义后
   原样写入本卡**（本批未凭空补写）。
+### 统一整改（C4–C6）
+
+- **C4 `built_at`**：本族交付件的 `built_at` 口径**已由 `docs/issues/openmir2-stamp-built-at-single-source.md`
+  承接**——戳的 `built_at` 必须等于二进制自报的 `built_at`（单一来源），mtime 只作元数据、不参与比对；
+  M9 四件按 `CONDITIONAL`（身份可证、语义待统一）。
+- **C5 `SHA256SUMS`**：冻结件采用**双清单口径**——`SHA256SUMS.txt`（历史格式，带 `N bytes`，不改写）+
+  `SHA256SUMS.sha256`（`sha256sum -c` 兼容，`<sha>  <相对路径>`）；两者用途差异写在 `PROVENANCE.txt`。
+- **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
+  卡面凡引"章程 §N"均以此文件为准。

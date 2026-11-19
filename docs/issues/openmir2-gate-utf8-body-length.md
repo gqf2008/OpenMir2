@@ -1,6 +1,6 @@
 # openmir2-gate-utf8-body-length
 
-> 状态：**实现完成（2026-11-19，分支 `card/gate-utf8-body-length`）**——证据为**跨栈 golden**
+> 状态：**已合并（`3b96e89f6`）**——证据为**跨栈 golden**
 > （opc-07 裁定够当本卡证据；真机只能覆盖 ASCII IP，证明不了非 ASCII 缺陷，故不做）。
 > **本卡不改变现网行为（调用点全为 ASCII IP），属防御性正确化。**
 > 已登记（walgit 看板不可用，按 AGENTS.md §7 过渡）。
@@ -136,3 +136,12 @@ cargo test -p game-gate → 89 passed / 0 failed（含 golden）；
 | M1 | C# `BuildServerFrame` | `PackLength = strBuff.Length` 改成 `data.Length` | golden 行为牙红（输出 `PackLength=4`、只拷 4/8 字节） | 复原后全绿 |
 | M2 | golden `chinese` 行 | `PackLength` 8→9 | `panicked at lib.rs:2241: 样本 chinese 与 C# oracle 不一致` | 复原后全绿 |
 | M3 | golden `mixed` 行 | 删掉该行 | `panicked at lib.rs:2244: golden 必须覆盖 5 个样本 left: 4 right: 5` | 复原后全绿 |
+### 统一整改（C4–C6）
+
+- **C4 `built_at`**：本族交付件的 `built_at` 口径**已由 `docs/issues/openmir2-stamp-built-at-single-source.md`
+  承接**——戳的 `built_at` 必须等于二进制自报的 `built_at`（单一来源），mtime 只作元数据、不参与比对；
+  M9 四件按 `CONDITIONAL`（身份可证、语义待统一）。
+- **C5 `SHA256SUMS`**：冻结件采用**双清单口径**——`SHA256SUMS.txt`（历史格式，带 `N bytes`，不改写）+
+  `SHA256SUMS.sha256`（`sha256sum -c` 兼容，`<sha>  <相对路径>`）；两者用途差异写在 `PROVENANCE.txt`。
+- **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
+  卡面凡引"章程 §N"均以此文件为准。

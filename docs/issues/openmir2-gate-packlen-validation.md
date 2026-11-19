@@ -1,7 +1,6 @@
 # openmir2-gate-packlen-validation
 
-> 状态：**实现中（2026-11-19，分支 `card/gate-packlen-validation`）**——C# 修复 + Rust 对齐已完成，
-> 见文末「实现与验收」；待合并门禁。
+> 状态：**已合并（`b8ba0da6f`）**——C# 修复 + Rust 对齐；见文末「实现与验收」与「QA 整改」。
 > 已登记（本仓库 remote 无 `refs/collab/*`，walgit 看板不可用；按 AGENTS.md §7 「tracker 未就绪时
 > 先落 `docs/issues/`」过渡）。看板恢复后迁移为正式卡。
 > 发现于卡 `openmir2-db-write-stall` 的 44 处 `MemoryCopy.BlockCopy` 逐条审计（E 类）。
@@ -146,7 +145,17 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 
 > 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
 
-- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`、`packlen-rust-test.log`、`RUNS.txt`）；
+- **Rust 测试原文**（`mir2-rs/bins/game-gate/src/lib.rs` 的 `tests::upstream_body_bound_rejects_pathological_lengths`，
+  日志 `E:/UserFleet/evidence-cardfix-20261119/packlen-rust-test.log`）：
+  ```rust
+  assert!(upstream_body_allowed(0));
+  assert!(upstream_body_allowed(MAX_UPSTREAM_BODY));
+  assert!(!upstream_body_allowed(MAX_UPSTREAM_BODY + 1));
+  // pathological = ServerMessage { pack_length: i32::MIN, .. }
+  assert!(!upstream_body_allowed(pathological.body_len()));
+  ```
+- **构建命令 + `git status --porcelain` 原文**：`E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`（采集时 porcelain = 0 行）；
 - 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
 - **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
   实跑帧/JSON 产物为准。
@@ -156,7 +165,16 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 
 | 编号 | 改什么 | 怎么改 | 期望红在哪 | 还原 |
 |---|---|---|---|---|
-| T1 | `TryValidate` 的长度判断 | 删掉 `packetLen > available` 判断 | 4 条红：`Accepts_LegalNegativePackLength` / `EngineFrame_Oversize_IsRejectedByTheProcessor` / `Rejects_IntMaxValue` / `Rejects_LengthGreaterThanAvailable` | 复原后全绿 |
-| T2 | `int.MinValue` 拒绝支 | 删掉 `rawPackLength == int.MinValue` 拒绝 | 3 条红：`EngineFrame_MinValue_…` / `Magnitude_UsesSingleSourceOfTruth` / `Rejects_NegativeMagnitude` | 复原后全绿 |
+| T1 | `TryValidate` 的长度判断 | `if (packetLen > available)` → `if (false && packetLen > available)` | 4 条红：`Accepts_LegalNegativePackLength` / `EngineFrame_Oversize_IsRejectedByTheProcessor` / `Rejects_IntMaxValue` / `Rejects_LengthGreaterThanAvailable` | 复原后全绿 |
+| T2 | `int.MinValue` 拒绝支 | `if (rawPackLength == int.MinValue)` → `if (false && rawPackLength == int.MinValue)` | 3 条红：`EngineFrame_MinValue_…` / `Magnitude_UsesSingleSourceOfTruth` / `Rejects_NegativeMagnitude_beforeAnyCopy` | 复原后全绿 |
 | T3 | GM_DATA 失败分支 | 删掉 `_clientSocket.Close()` | `GameGate_EngineFrame_UsesDecisionPointAndClosesOnFailure` 红 | 复原后全绿 |
 | T4 | Rust 上界 | `len <= MAX_UPSTREAM_BODY` 改成恒真 | `panicked at bins/game-gate/src/lib.rs:2179: assertion failed: !upstream_body_allowed(MAX_UPSTREAM_BODY + 1)` | 复原后全绿 |
+### 统一整改（C4–C6）
+
+- **C4 `built_at`**：本族交付件的 `built_at` 口径**已由 `docs/issues/openmir2-stamp-built-at-single-source.md`
+  承接**——戳的 `built_at` 必须等于二进制自报的 `built_at`（单一来源），mtime 只作元数据、不参与比对；
+  M9 四件按 `CONDITIONAL`（身份可证、语义待统一）。
+- **C5 `SHA256SUMS`**：冻结件采用**双清单口径**——`SHA256SUMS.txt`（历史格式，带 `N bytes`，不改写）+
+  `SHA256SUMS.sha256`（`sha256sum -c` 兼容，`<sha>  <相对路径>`）；两者用途差异写在 `PROVENANCE.txt`。
+- **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
+  卡面凡引"章程 §N"均以此文件为准。
