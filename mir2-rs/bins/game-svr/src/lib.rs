@@ -65118,25 +65118,25 @@ SendRefMsgRange=15
     }
 
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。
-    fn fireball_rig(id_base: i32) -> SpellFrameRig {
+    fn fireball_rig(id_base: i32, magic_id: u16) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
             200,
             200,
             id_base,
             100,
             100,
-            1,
-            &[(1, 1)],
+            magic_id,
+            &[(magic_id, 1)],
             &[
                 ("target", 101, 100, false, 912),
                 ("obs_in", 105, 100, false, 913),
                 ("obs_out", 140, 100, false, 914),
             ],
         );
-        // 魔表行 = C# `new MagicInfo { MagicId=1, MagicName="FireBall", Effect=1, EffectType=1 }`；
+        // 魔表行 = C# `new MagicInfo { MagicId=<id>, MagicName="FireBall", Effect=1, EffectType=1 }`；
         // 其余字段缺省 0（Power/MaxPower/DefPower/DefMaxPower = 0 ⇒ 前两抽 `Random(0)`）。
         rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
-            magic_id: 1,
+            magic_id,
             effect: 1,
             effect_type: 1,
             ..mir2_data::MagicInfo::default()
@@ -65244,7 +65244,7 @@ SendRefMsgRange=15
     /// **串行前提**：`rng_trace` 是进程级 `OnceLock`。本函数在开启前断言「本进程第一次开 trace」，
     /// 并用头部 seed 自证；因此在同一进程里跑第二支会**红**（而不是静默读串的流水）。
     /// 单跑命令：`cargo test -p game-svr --lib fireball_parity_miss -- --exact --test-threads=1`。
-    fn fireball_parity_drive(label: &str, seed: i32, id_base: i32) {
+    fn fireball_parity_drive(stem: &str, magic_id: u16, label: &str, seed: i32, id_base: i32) {
         // 金标准的 `Sent` 是 **oracle 布局**（`SM_STRUCK` 头 = (受击者, HP, MaxHP, 伤害)、尾
         // `Param1=GetFeature()`）。生产默认是冻结客户端 `HIGHHP` 布局（拆位 HP、尾 Param1=MaxHP）；
         // 本用例**显式**切到 oracle 布局做语义对拍——`HIGHHP` 布局由
@@ -65252,7 +65252,7 @@ SendRefMsgRange=15
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let dir = magic_ledger_dir();
         std::fs::create_dir_all(&dir).expect("台账目录必须可建");
-        let trace = dir.join(format!("fireball_{label}_seed{seed}.rng.tsv"));
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
         assert!(
             !mir2_shared::rng_trace::enabled(),
             "rng_trace 已被本进程其它路径开启（MIR2_RNG_LOG 或先跑的用例）⇒ 流水不可信；\
@@ -65266,7 +65266,7 @@ SendRefMsgRange=15
             "trace 头部 seed 必须与本支一致"
         );
 
-        let mut rig = fireball_rig(id_base);
+        let mut rig = fireball_rig(id_base, magic_id);
         // 必须与 rng_trace::enable(path, seed) 的 seed 一致：trace 只记元数据，数值由 world.rng 产生。
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n0 = trace_line_count(&trace);
@@ -65275,7 +65275,7 @@ SendRefMsgRange=15
         let hp_before = rig.world.entities.get(target).unwrap().hp;
 
         // ---- 段①：生产入口施法 ----
-        rig.cast(1, (101, 100), target);
+        rig.cast(magic_id, (101, 100), target);
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
 
@@ -65384,7 +65384,7 @@ SendRefMsgRange=15
                     1,
                     i64::from(fire_x),
                     i64::from(fire_y),
-                    1,
+                    i64::from(magic_id),
                     24,
                     false,
                 ));
@@ -65490,7 +65490,7 @@ SendRefMsgRange=15
             "CasterMp": caster_mp,
         }]);
 
-        let out = dir.join(format!("fireball_{label}.json"));
+        let out = dir.join(format!("{stem}_{label}.json"));
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
         eprintln!(
             "[fireball {label}] seed={seed} rng(cast)={:?} rng(deliver)={:?} hp {hp_before}->{hp_after} \
@@ -65505,25 +65505,22 @@ SendRefMsgRange=15
         );
     }
 
-    /// §22 第 1 步：miss 支（seed=1）——真实帧 + 真实 RNG 台账落盘。
-    ///
-    /// 本用例只钉「已经在金标准里确认、且与收件人集合有关」的不变式；逐字段比较在比较器接线后做。
-    // `rng_trace` 是**进程级**全局状态（§16c）：三支必须各自独立进程、`--ignored --exact` 单跑；
-    // 默认 `cargo test --workspace` 不跑本组（台账/比较命令见卡面 §22 落地记录）。
-    #[test]
-    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
-    fn fireball_parity_miss() {
-        fireball_parity_drive("miss", 1, 1000);
+    /// 火球类用例的共用断言（id=1 与 id=5 同构；只差 magic id 进 SM17 尾串与 RM_SPELL 的 p3）。
+    fn fireball_case_assert(stem: &str, label: &str, hp_after: i64, rng_len: usize) {
         let dir = magic_ledger_dir();
-        let raw = std::fs::read_to_string(dir.join("fireball_miss.json")).expect("台账必须已落盘");
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
+            .expect("台账必须已落盘");
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let case = &v[0];
         assert_eq!(case["TargetHpBefore"], 100);
-        assert_eq!(case["TargetHp"], 100, "miss：目标 HP 不得变化");
+        assert_eq!(
+            case["TargetHp"], hp_after,
+            "[{stem}/{label}] 目标 HP 与金标准不符"
+        );
         assert_eq!(
             case["Rng"].as_array().unwrap().len(),
-            1,
-            "miss：施法段恰 1 抽（AntiMagic 骰门）"
+            rng_len,
+            "[{stem}/{label}] 施法段 RNG 抽数不符"
         );
         // 负向牙①：caster 不收 SM_SPELL(17)（`PlayObject.Message.cs:1455` 自守卫）。
         let caster = case["Receivers"]
@@ -65540,7 +65537,7 @@ SendRefMsgRange=15
                 .filter(|s| s["ident"] == 17)
                 .count(),
             0,
-            "caster 不得收 SM_SPELL(17)"
+            "[{stem}/{label}] caster 不得收 SM_SPELL(17)"
         );
         // 负向牙②：obs_out 全空。
         let obs_out = case["Receivers"]
@@ -65552,48 +65549,58 @@ SendRefMsgRange=15
         assert_eq!(
             obs_out["Sent"].as_array().unwrap().len(),
             0,
-            "obs_out 不得有帧"
+            "[{stem}/{label}] obs_out 不得有帧"
         );
+    }
+
+    /// §22 第 1 步：miss 支（seed=1）——真实帧 + 真实 RNG 台账落盘（id=1）。
+    // `rng_trace` 是**进程级**全局状态（§16c）：每支必须各自独立进程、`--ignored --exact` 单跑；
+    // 默认 `cargo test --workspace` 不跑本组（台账/比较命令见卡面 §22 落地记录）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_parity_miss() {
+        fireball_parity_drive("fireball", 1, "miss", 1, 1000);
+        fireball_case_assert("fireball", "miss", 100, 1);
     }
 
     /// §22 第 1 步：edge 支（seed=5）——首抽 == AntiMagic，与 hit 走同一支（原版语义）。
-    // `rng_trace` 是**进程级**全局状态（§16c）：三支必须各自独立进程、`--ignored --exact` 单跑；
-    // 默认 `cargo test --workspace` 不跑本组（台账/比较命令见卡面 §22 落地记录）。
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_edge() {
-        fireball_parity_drive("edge", 5, 2000);
-        let dir = magic_ledger_dir();
-        let raw = std::fs::read_to_string(dir.join("fireball_edge.json")).expect("台账必须已落盘");
-        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let case = &v[0];
-        assert_eq!(case["TargetHpBefore"], 100);
-        assert_eq!(case["TargetHp"], 85, "edge：目标 100 → 85（金标准）");
-        assert_eq!(
-            case["Rng"].as_array().unwrap().len(),
-            5,
-            "edge：施法段 1 骰 + 4 威力抽"
-        );
+        fireball_parity_drive("fireball", 1, "edge", 5, 2000);
+        fireball_case_assert("fireball", "edge", 85, 5);
     }
 
     /// §22 第 1 步：hit 支（seed=13）——首抽 > AntiMagic。
-    // `rng_trace` 是**进程级**全局状态（§16c）：三支必须各自独立进程、`--ignored --exact` 单跑；
-    // 默认 `cargo test --workspace` 不跑本组（台账/比较命令见卡面 §22 落地记录）。
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_hit() {
-        fireball_parity_drive("hit", 13, 3000);
-        let dir = magic_ledger_dir();
-        let raw = std::fs::read_to_string(dir.join("fireball_hit.json")).expect("台账必须已落盘");
-        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let case = &v[0];
-        assert_eq!(case["TargetHpBefore"], 100);
-        assert_eq!(case["TargetHp"], 85, "hit：目标 100 → 85（金标准）");
-        assert_eq!(
-            case["Rng"].as_array().unwrap().len(),
-            5,
-            "hit：施法段 1 骰 + 4 威力抽"
-        );
+        fireball_parity_drive("fireball", 1, "hit", 13, 3000);
+        fireball_case_assert("fireball", "hit", 85, 5);
+    }
+
+    /// **id=5（`SKILL_FIREBALL2`）**：与 id=1 共用 `1|5` 实现臂，金标准
+    /// `golden/magic/fireball-5.json`（C# 同 rig 换 magic_id=5；与 id=1 的唯一差异 =
+    /// `SM_SPELL(17)` 尾串 `'5'` 与 `RM_SPELL` 的 p3=5）。三支各自独立进程单跑。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball5_parity_miss() {
+        fireball_parity_drive("fireball5", 5, "miss", 1, 1000);
+        fireball_case_assert("fireball5", "miss", 100, 1);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball5_parity_edge() {
+        fireball_parity_drive("fireball5", 5, "edge", 5, 2000);
+        fireball_case_assert("fireball5", "edge", 85, 5);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball5_parity_hit() {
+        fireball_parity_drive("fireball5", 5, "hit", 13, 3000);
+        fireball_case_assert("fireball5", "hit", 85, 5);
     }
 
     /// gate 通道上取到的一条下行：`(socket, 帧体 / `SendRaw` 短包字节)`。

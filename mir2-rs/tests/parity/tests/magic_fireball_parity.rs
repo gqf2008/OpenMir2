@@ -320,28 +320,26 @@ fn ledger_dir() -> std::path::PathBuf {
 
 /// **真实台账 → 判定面**（卡 §22 的收口：不再是 `ledger_from(golden)` 的 identity）。
 ///
-/// 前置（三支必须**各自独立进程**，`rng_trace` 是进程级 `OnceLock`，见卡 §16c）：
+/// 前置（每支必须**各自独立进程**，`rng_trace` 是进程级 `OnceLock`，见卡 §16c）：
 /// ```text
-/// cargo test -p game-svr --lib tests::fireball_parity_miss -- --exact --ignored --test-threads=1
-/// cargo test -p game-svr --lib tests::fireball_parity_edge -- --exact --ignored --test-threads=1
-/// cargo test -p game-svr --lib tests::fireball_parity_hit  -- --exact --ignored --test-threads=1
-/// cargo test -p mir2-parity-tests --test magic_fireball_parity -- --ignored --exact real_rust_ledger_parity
+/// id=1：cargo test -p game-svr --lib tests::fireball_parity_miss  -- --exact --ignored --test-threads=1
+///       （edge / hit 同，换标签）
+/// id=5：cargo test -p game-svr --lib tests::fireball5_parity_miss -- --exact --ignored --test-threads=1
+///       （edge / hit 同）
+/// 比较：cargo test -p mir2-parity-tests --test magic_fireball_parity -- --ignored --exact <用例名>
 /// ```
 ///
 /// 防空转：任一份台账缺失/不是合法 JSON/不是恰 1 个 case/`Label` 不符 ⇒ 红（不静默跳过）。
-/// **已知红（卡 `openmir2-magstruck-name-color` 未修前）**：obs_in 的
-/// `SM_CHANGENAMECOLOR(656)`（Sent）与 `RM_CHANGENAMECOLOR(8090)`（Rm）——Rust
-/// `deliver_mag_struck` 对玩家的 `name_color` 恒 false。修好后本用例应全绿。
-#[test]
-#[ignore = "需先跑 game-svr 三支驱动生成真实台账（命令见本用例文档注释/卡面 §22）"]
-fn real_rust_ledger_parity() {
+fn real_ledger_verify(stem: &str, golden: &Value) {
     let dir = ledger_dir();
+    let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
+    let anti_magic = golden.get("anti_magic").cloned().unwrap_or(Value::from(0));
     let mut cases = Vec::new();
     for label in ["miss", "edge", "hit"] {
-        let path = dir.join(format!("fireball_{label}.json"));
+        let path = dir.join(format!("{stem}_{label}.json"));
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
             panic!(
-                "防空转：缺真实台账 {}（{e}）。先跑 game-svr 三支驱动（命令见文档注释）",
+                "防空转：缺真实台账 {}（{e}）。先跑 game-svr 对应驱动（命令见文档注释）",
                 path.display()
             )
         });
@@ -355,8 +353,8 @@ fn real_rust_ledger_parity() {
         );
         cases.push(arr[0].clone());
     }
-    let rust = serde_json::json!({"magic_id": 1, "anti_magic": 3, "cases": cases});
-    if let Err(errs) = verify(&golden(), &rust) {
+    let rust = serde_json::json!({"magic_id": magic_id, "anti_magic": anti_magic, "cases": cases});
+    if let Err(errs) = verify(golden, &rust) {
         panic!(
             "真实台账与金标准不等（{} 条）：\n{}",
             errs.len(),
@@ -365,13 +363,31 @@ fn real_rust_ledger_parity() {
     }
 }
 
+/// 火球 id=1（`SKILL_FIREBALL`）真实台账 → 判定面。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::fireball_parity_*）生成真实台账"]
+fn real_rust_ledger_parity() {
+    real_ledger_verify("fireball", &golden());
+}
+
+/// **id=5（`SKILL_FIREBALL2`）真实台账 → 判定面**；金标准 `golden/magic/fireball-5.json`。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::fireball5_parity_*）生成真实台账"]
+fn real_rust_ledger_fireball5() {
+    real_ledger_verify("fireball5", &golden_file("fireball-5.json"));
+}
+
 // ---------------------------------------------------------------------------
 // 比较器自检：金标准逐支喂回（identity）+ 三条篡改必须红 + 防空转必须红。
 // ---------------------------------------------------------------------------
-fn golden() -> Value {
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/golden/magic/fireball.json");
+fn golden_file(name: &str) -> Value {
+    let path = format!("{}/golden/magic/{name}", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(path).expect("金标准必须存在（缺文件即红）");
     serde_json::from_str(&text).expect("金标准必须是合法 JSON")
+}
+
+fn golden() -> Value {
+    golden_file("fireball.json")
 }
 
 /// 把金标准改造成"Rust 台账"同构输入（identity）：只为验证比较器本身，不代表驱动已跑通。
