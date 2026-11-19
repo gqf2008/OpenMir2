@@ -597,11 +597,119 @@ MG-11 状态仍 `implemented_unverified`**。
 - **本三条无抗魔骰**（首抽即 `GetPower13`/`GetRPow`）：三 seed（1/5/13）只覆盖随机支，标签
   **`s1`/`s5`/`s13`**，**不构造假骰**（治愈先例）。14/15 有护身符前置（rig 自带 `ArmRingl`
   的 `StdMode=25/Shape=5/Dura=600`），31 无门。
-- **帧量推导（不是夹具错，账本按 oracle 原样保留）**：14/15 的
-  `MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, btState)` 按 3×3 区域枚举 proper friend，
-  每个被点对象触发 `StatusChanged()`（`RM_CHARSTATUSCHANGED` → 657）与 `SysMsg`
-  （`RM_SYSMESSAGE` → 100）/`RM_ABILITY`（→ 52）；本夹具 49 次应用 ⇒ **target 每支 198 帧**
-  （52×49 + 657×98 + 100×49），obs_in 51、caster 53；`DrainPasses=2`、`hit_cap=false`。
+- **帧量推导（2026-11-20 按 oracle 源码更正，旧文本作废）**：`MagMakeDefenceArea(nTargetX,
+  nTargetY, 3, nPower, btState)`（`src/M2Server/Magic/MagicManager.cs:354/361`；`src/M2Server/Actor/BaseObject.cs:2094-2134`）的
+  `nRange=3` ⇒ **7×7 = 49 次循环**，且每轮 `Envir.GetCellInfo(nX, nY)` 固定读**中心格**
+  （oracle 原样，不是「区域枚举」）⇒ 中心格上的唯一 proper friend 被施加 49 次。
+  - **14**（`btState=1`，`MagDefenceUp`）：**无条件** `AddBuff` + `SysMsg` + `RecalcAbilitys()`
+    + `SendMsg(RM_ABILITY)` ⇒ 每次一组帧 ⇒ target 198 帧（52×49 + 657×98 + 100×49），
+    obs_in 51、caster 53。
+  - **15**（`btState=0`，`DefenceUp`，`src/M2Server/Actor/BaseObject.cs:2137-2147`）：首轮 `AddBuff` 出帧，其后
+    48 轮 `HasBuff ⇒ TryUpdate` **早退**（不 SysMsg/不 Recalc/不 SendMsg）⇒ target 仅 6 帧
+    （17 + 52 + 638 + 657×2 + 100），obs_in 3、caster 4。
+  三支均 `DrainPasses=2`、`hit_cap=false`。
 - 31（`MagBubbleDefenceUp`）：RNG 2 抽，各接收者 1 条 657。
 - **表外 RM 已入表**：`RM_ABILITY(10051)`、`RM_CHARSTATUSCHANGED(10139)`、`RM_SYSMESSAGE(11004)`
   （见 §11 表行：C# 位置、收件人、Rust 比较方式）。
+
+### 24. 14/15/31 接线收口（2026-11-20）
+
+**产品面**（提交 `051f0562e` + 本笔）：
+
+- `World::BuffApplyEvent`（`BuffApplyKind::{DefenceUp,MagDefenceUp,MagicShield}`）：只记录
+  「施加事实 + 当时 `CharStatus`」；`take_buff_applies` 供宿主消费、`buff_apply_log` 是只读观测面。
+  帧面由宿主按 §11 出，**不由 SM 帧反推**。
+- `World::defence_up` 补 oracle 早退（`src/M2Server/Actor/BaseObject.cs:2137-2147`）：已有 `DefensePower` ⇒ 只
+  `TryUpdate` 后 return（不 `CharStatus=GetCharStatus()`、不 `SysMsg`、不 `RecalcAbilitys()`、
+  不 `SendMsg(RM_ABILITY)`）。范围施法 49 次循环因此只有**首组**帧（§23 更正）。
+- 宿主（`bins/game-svr`）：31 支的 657 并入 `SpellFrameBuf`（`(byte)ident`：638=136 < 657=155 <
+  640=255）；14/15 支护身符 642（10125&0xFF=141）并入同批 buf；随后按事件出 SM 100（仅被施加者）
+  / 657×2 / 52（仅被施加者）。文案取 `MessageSettings` 源码缺省（`防御力增加{0}秒` /
+  `魔法防御力增加{0}秒`；部署 `E:\MirServer\M2GameSvr\String.conf` 同串），配置面未接入
+  `handle_spell_cmd`（登记）；绿色 `GreenMsgFColor/BColor = 219/255`（部署值）。
+
+**结构性原因：本仓把 oracle 的两个函数合并了**（本次分歧的根因，写死在此）：
+
+- oracle 登录序 `src/M2Server/Player/PlayObject.cs:1308-1309`：`CharStatus = GetCharStatus(); RecalcLevelAbilitys();
+  RecalcAbilitys();`；升级序 `:5245-5246` 同两函数连调。
+- `RecalcAbilitys()` 本体 `src/M2Server/Actor/BaseObject.Abil.cs:15-32`：`WAbil = Abil.Clone()`（保留旧 `HP/MP`、
+  三个重量清零），**不重算等级派生字段**——它假定 `Abil` 已由本会话更早的
+  `RecalcLevelAbilitys()` 写成自洽值。
+- 本仓 `recalc_session_ability`（`bins/game-svr/src/lib.rs`）是这两个函数的**合并实现**
+  （见其文档注释「`RecalcLevelAbilitys()` + `RecalcAbilitys()` 的单一实现」）。合并等价的前提是
+  输入 `sg.equip.abil` 与 `equip.abil.level` 自洽——生产成立（DB 记录的
+  `characters_ablity.MaxHP/MaxMP` 恒 0，必须靠等级派生补齐）；而旧 C# 夹具不成立。
+
+**C# 夹具修正**（`tests/parity/csharp/MagicGolden/Program.cs` 的 `RunMagicCase`）：target 原先只设
+`Abil.Level=20` + `Abil.MaxHP=100`，等于「等级 20 + `BaseObject` ctor 缺省 Abil」，于是
+`RecalcAbilitys()` 克隆出**不自洽**的 WAbil（MaxHP=100 / DC=1 / MaxMP=15）。现按登录序：
+
+```csharp
+target.Abil.Level = (byte)spec.TargetLevel;
+target.RecalcLevelAbilitys();   // PlayObject.cs:5254-5317：等级派生 MaxHP/MaxMP/Weight/DC/MC/SC/AC/MAC
+target.WAbil.HP = (ushort)targetHp;
+```
+
+并删去手动的 `target.Abil.MaxHP = spec.TargetMaxHp`。`Abil.MaxExp` 保持 ctor 缺省 50
+（登录后的 `Abil.MaxExp = GetLevelExp(...)` 属数据面，不在本夹具建模范围；Rust 夹具同置
+`equip.abil.max_exp = 50`）。**`spec.TargetMaxHp` 自此只作元数据与治愈 self 支输入**，
+14/15/31 的 target 实际 MaxHP = 等级派生值（20 级战士 = 224）。
+
+**golden 重生成（逐字段；C# 窗口 2026-11-20）**：
+
+| 文件 | old sha256 | new sha256 |
+|---|---|---|
+| `golden/magic/hangmajinbub.json` | `fb2cd3c8cb54…` | `1f267540d883…` |
+| `golden/magic/dejiwonho.json` | `9931589c2b04…` | `fb77993cd0a0…` |
+| `golden/magic/shield.json` | `a22c2af0b759…` | **未变**（重跑仅 `delivery` 墙钟不同） |
+
+变化面**只有** target 的 `SM_ABILITY(52)` 尾（EDCode 解出 40B `WAbil`）：hangmajinbub 每 label
+49 条、dejiwonho 每 label 1 条；**其余全部不变**：帧集合与顺序（17/52/638/640/642/657/100）、
+RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`、`TargetHpBefore/TargetHp`。
+
+逐字段（old → new，20 级战士 `RecalcLevelAbilitys` 派生值，`src/M2Server/Player/PlayObject.cs:5300-5310`）：
+
+| 字段 | old | new |
+|---|---|---|
+| Level | 20 | 20 |
+| AC | 0 | 0x0200 |
+| MAC | 0 | 0 |
+| DC | 1 | 0x0403（3–4） |
+| MC | 1 | 0 |
+| SC | 1 | 0 |
+| HP | 100 | 100（cur 值保留：`WAbil.HP = wOldHP`） |
+| MP | 0 | 0 |
+| MaxHP | 100 | **224** |
+| MaxMP | 15 | **81** |
+| MaxExp | 50 | 50（ctor 缺省） |
+| MaxWeight | 100 | **183** |
+| MaxWearWeight | 0 | **35** |
+| MaxHandWeight | 0 | **43** |
+
+另：`RM_MAGIC_LVEXP(10123)` 的 `delivery` 字段随墙钟变化——比较面**不含** `delivery`（§11/§19b
+口径），非语义变化。无新增表外 RM。
+
+**判定面**：
+
+- 驱动 `tests::hangmajinbub_parity_s{1,5,13}` / `tests::dejiwonho_parity_s{1,5,13}`：target 的
+  SM 52/100/657 计数（49/49/98 或 1/1/2）、caster/obs_in 657、`638→642→…→640` 顺序，以及
+  `sm_ability_wabil` 把 target 52 尾解码为 40B 后**与 golden 逐字节一致**且 Level=20 /
+  MaxHP=224 / MaxMP=81 / DC=0x0403——即「两侧同一登录语义」的直接断言。
+- 比较器 `real_rust_ledger_hangmajinbub` / `real_rust_ledger_dejiwonho`：0 红（SM 严格序+字段+尾，
+  RM 多重集）。`real_rust_ledger_shield` 继续 0 红。
+- **牙 1（门关）**：`tests::shield_buff_tick_gate_off_emits_no_buff_frames`（绿）——不开
+  `enable_buff_tick` ⇒ `buff_apply_log` 空、四 socket 均 0 条 657。
+- **牙 2（删事件面）**：把 `take_buff_applies` 改成返回空 ⇒ hangmajinbub s1
+  `target 的 SM 52 计数` 0≠49、dejiwonho s1 0≠1、shield s1 `caster 恰 1 条 SM 657` 0≠1 全红；
+  `git checkout -- crates/world-bevy/src/world.rs` 复原后 sha `ad47e746…` 相等、`MUTATION`
+  残留 0。证据：`mir2-rs/target/magic-parity/evidence/tooth-buff-surface-final.log`。
+- **回归**：30 支驱动全 rc=0（`--ignored --exact --test-threads=1` 逐进程）、10 支比较器全过、
+  既有 9 颗比较器牙全过。证据：`…/evidence/regression-1415-final.log`。
+
+**清单**：MG-28（`src/M2Server/Magic/MagicManager.cs:352`）/ MG-29（`:359`）/ MG-43（`:474`）升 `verified`
+（`basis=semantic`）；MG-21 / MG-22（`:316`/`:317` 外层护身符门组标签）保持
+`implemented_unverified`——组内其余魔号未验（同 MG-20 的 firecharm 先例）。
+
+**未做 / 登记**：`String.conf` 的 `DefenceUpTime`/`MagDefenceUpTime` 未接 `handle_spell_cmd`
+（文案用源码缺省 + 部署同串，替换点一旦接上需同步 100 尾）；buff 时长的 tick 淘汰由
+`enable_buff_tick` 生产线负责，本对拍夹具只显式开启、不推进淘汰窗口。

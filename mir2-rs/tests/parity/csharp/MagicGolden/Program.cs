@@ -611,9 +611,16 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         caster.WAbil.SC = (ushort)spec.CasterSc;
         var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)spec.AntiMagic };
         target.Abil.Level = (byte)spec.TargetLevel;
-        target.WAbil.MaxHP = (ushort)spec.TargetMaxHp;
+        // **真实登录序**（`PlayObject.cs:1308-1309`：`RecalcLevelAbilitys(); RecalcAbilitys();`）：
+        // 先按 Job+Level 把 `Abil` 的等级派生字段（MaxHP/MaxMP/MaxWeight/DC/MC/SC/AC/MAC）写成
+        // 自洽值，后续 `RecalcAbilitys()`（`BaseObject.Abil.cs:27` `WAbil = Abil.Clone()`）才有
+        // 语义。此前的夹具只设 `Abil.Level`/`Abil.MaxHP`，等价于「等级 20 但 Abil 仍是 ctor
+        // 缺省」，`RecalcAbilitys()` 克隆出的是不自洽的 WAbil（MaxHP=100/DC=1），Rust 侧
+        // `recalc_session_ability`（= 上述两函数的合并实现，见其文档注释）无法等价复现。
+        // `Abil.MaxExp` 保持 ctor 缺省 50：登录后的 `Abil.MaxExp = GetLevelExp(...)` 属数据面，
+        // 不在本对拍夹具的建模范围（Rust 夹具同置 max_exp=50）。
+        target.RecalcLevelAbilitys();
         target.WAbil.HP = (ushort)targetHp;
-        target.Abil.MaxHP = (ushort)spec.TargetMaxHp;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         if (targetNull)

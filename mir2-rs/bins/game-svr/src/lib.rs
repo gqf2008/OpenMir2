@@ -57555,7 +57555,16 @@ SendRefMsgRange=15
                 "[魔号 {magic_id}] 活目标 ⇒ RM_MAGICFIRE ActorId = 目标 id"
             );
 
-            // 发送序：SM_SPELL → SM_DURACHANGE → SM_MAGICFIRE → SM_MAGIC_LVEXP。
+            // 发送序：SM_SPELL → SM_MAGICFIRE(638) → SM_DURACHANGE(642) → SM_MAGIC_LVEXP(640)。
+            //
+            // **旧断言（`SM_DURACHANGE < SM_MAGICFIRE`）是「UseAmulet 直发」时代实现的发送序，
+            // 不是 oracle**：oracle 的 642 来自 `SendMsg(this, RM_DURACHANGE)`，与技能尾
+            // `RM_MAGICFIRE(10120)` 进同一 `ActorEntity.MsgQueue`，按 `(byte)ident` 出队 ——
+            // `(byte)RM_MAGICFIRE = 10120 & 0xFF = 136` < `(byte)RM_DURACHANGE = 10125 & 0xFF =
+            // 141` < `RM_MAGIC_LVEXP` 的 `SendSelfDelayMsg` 优先级 `Lowest` = 255（**不是**
+            // `(byte)10123` = 139）。13 的同类断言已在 `b60685e33` 按 oracle 改正；14/15 在
+            // `051f0562e` 把 642 纳入同一 `SpellFrameBuf`（卡 `openmir2-firecharm-14-15-order`）
+            // 后，本断言按同一依据改正。
             let seq = p2_seq(&frames);
             let i_spell = p2_pos(&seq, mir2_protocol::messages::SM_SPELL, "SM_SPELL");
             let i_dura = p2_pos(
@@ -57570,8 +57579,8 @@ SendRefMsgRange=15
                 "SM_MAGIC_LVEXP",
             );
             assert!(
-                i_spell < i_dura && i_dura < i_fire && i_fire < i_lv,
-                "[魔号 {magic_id}] 帧序必须 SM_SPELL < SM_DURACHANGE < SM_MAGICFIRE < SM_MAGIC_LVEXP；实得 {seq:?}"
+                i_spell < i_fire && i_fire < i_dura && i_dura < i_lv,
+                "[魔号 {magic_id}] 帧序必须 SM_SPELL < SM_MAGICFIRE < SM_DURACHANGE < SM_MAGIC_LVEXP（oracle 队列序 24 < 136 < 141 < 255）；实得 {seq:?}"
             );
 
             // 训练尾：门开 vs 同种子门关（`TrainLevel[1]=255 > Abil.Level`）恰多一次抽。
@@ -58026,9 +58035,29 @@ SendRefMsgRange=15
             draws_between(&rng_before, &world.rng) > 0,
             "过门 ⇒ `power_defence_area` 抽数（世界 RNG 前进）"
         );
-        assert!(
-            !a5_take_idents(&mut rx0).contains(&mir2_protocol::messages::SM_CHARSTATUSCHANGED),
-            "A-5 支不自行发 657（帧面走 `drain_buff_downlink` 读 `TickRecord`，见登记）"
+        // **657 帧面（2026-11-20 改口径）**：oracle `DefenceUp`（`BaseObject.cs:2137-2165`）在
+        // 施加后 `RecalcAbilitys()` → `StatusChanged()` 广播（`SendRefMsgRange` 内含自）+
+        // `SendUpdateMsg` 自更新 ⇒ 本支**必须**自行出 657（旧断言「A-5 支不自行发 657」是
+        // 帧面走 `drain_buff_downlink` 时代的实现约定，不是 oracle；卡 §24 记录）。
+        // 本布置只有 caster(911)/target(912) 两个在线者且都在广播范围内 ⇒
+        // target 收 2 条（广播 + 自更新）、caster 收 1 条 ⇒ 全局恰 3 条。
+        let idents = a5_take_idents(&mut rx0);
+        assert_eq!(
+            idents
+                .iter()
+                .filter(|i| **i == mir2_protocol::messages::SM_CHARSTATUSCHANGED)
+                .count(),
+            3,
+            "DefenceUp 广播含自 + 自更新 ⇒ 两收件人共 3 条 657；实得 {idents:?}"
+        );
+        // `SysMsg(...)` 只发自己 ⇒ target 的 912 一条 100。
+        assert_eq!(
+            idents
+                .iter()
+                .filter(|i| **i == mir2_protocol::messages::SM_SYSMESSAGE)
+                .count(),
+            1,
+            "DefenceUp 的 SysMsg 仅发给被施加者；实得 {idents:?}"
         );
     }
 
@@ -67077,6 +67106,81 @@ SendRefMsgRange=15
         fireball_case_assert(stem, label, 100, 4);
         b1_golden_drain_assert(&format!("{stem}.json"), label, 2);
         let c = defence_case(stem, label);
+        // 应用次数 = `MagMakeDefenceArea(...,3,...)` 的 7×7 = 49 次循环 × 中心格唯一 proper friend
+        // （oracle 的 `Envir.GetCellInfo(nX,nY)` 固定读中心格）。**出帧**次数按 buff 种类分叉：
+        //  · 14 `MagDefenceUp`（`BaseObject.cs:2167-2185`）：无条件 `AddBuff` ⇒ 49 组 52+100+657×2；
+        //  · 15 `DefenceUp`（`BaseObject.cs:2137-2165`）：已有 buff ⇒ 只 `TryUpdate` 早退
+        //    ⇒ 仅**第一次**出帧（1 组）。金标准 `dejiwonho.json` 的 target = 52×1/100×1/657×2 钉住。
+        let n: usize = if magic_id == 14 { 49 } else { 1 };
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 10125),
+            1,
+            "[{stem}/{label}] 护身符 642 恰 1 条"
+        );
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 10123),
+            1,
+            "[{stem}/{label}] 训练尾 10123 恰 1 条"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Rm", 10051),
+            n,
+            "[{stem}/{label}] 52 的 RM 恰 {n} 条"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Rm", 11004),
+            n,
+            "[{stem}/{label}] 100 的 RM 恰 {n} 条"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Rm", 10139),
+            n * 2,
+            "[{stem}/{label}] 657 的 RM 恰 {n}×2 条"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Sent", 52),
+            n,
+            "[{stem}/{label}] target 的 SM 52 计数"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Sent", 100),
+            n,
+            "[{stem}/{label}] target 的 SM 100 计数"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Sent", 657),
+            n * 2,
+            "[{stem}/{label}] target 的 SM 657 计数"
+        );
+        assert_eq!(
+            healing_count(&c, "caster", "Sent", 657),
+            n,
+            "[{stem}/{label}] caster 的 SM 657 计数"
+        );
+        assert_eq!(
+            healing_count(&c, "obs_in", "Sent", 657),
+            n,
+            "[{stem}/{label}] obs_in 的 SM 657 计数"
+        );
+        assert_eq!(healing_count(&c, "obs_out", "Sent", 657), 0);
+        // 帧序：caster = [638, 642, 657×n, 640]；target = [17, 52×n, 657×2n, 100×n]。
+        let seq: Vec<i64> = c["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["ident"].as_i64())
+            .collect();
+        assert_eq!(
+            &seq[..2],
+            &[638, 642],
+            "[{stem}/{label}] 642 必须在 638 之后（oracle 队列序）"
+        );
+        assert_eq!(seq[seq.len() - 1], 640, "[{stem}/{label}] 640 最后");
         // **两侧同一登录语义的证据**：Rust `recalc_session_ability`（= oracle
         // `RecalcLevelAbilitys()` + `RecalcAbilitys()` 的合并实现，见其文档注释）派生出的
         // `WAbil` 必须与金标准 target 的 `SM_ABILITY(52)` 尾逐字节一致。夹具 target 的
@@ -67130,61 +67234,6 @@ SendRefMsgRange=15
             rust_abil, gold_abil,
             "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
         );
-        // 应用次数 = `MagMakeDefenceArea(...,3,...)` 的 7×7 = 49 次循环 × 中心格唯一 proper friend
-        // （oracle 的 `Envir.GetCellInfo(nX,nY)` 固定读中心格）。**出帧**次数按 buff 种类分叉：
-        //  · 14 `MagDefenceUp`（`BaseObject.cs:2167-2185`）：无条件 `AddBuff` ⇒ 49 组 52+100+657×2；
-        //  · 15 `DefenceUp`（`BaseObject.cs:2137-2165`）：已有 buff ⇒ 只 `TryUpdate` 早退
-        //    ⇒ 仅**第一次**出帧（1 组）。金标准 `dejiwonho.json` 的 target = 52×1/100×1/657×2 钉住。
-        let n: usize = if magic_id == 14 { 49 } else { 1 };
-        assert_eq!(
-            healing_count(&c, "caster", "Rm", 10125),
-            1,
-            "[{stem}/{label}] 护身符 642 恰 1 条"
-        );
-        assert_eq!(
-            healing_count(&c, "caster", "Rm", 10123),
-            1,
-            "[{stem}/{label}] 训练尾 10123 恰 1 条"
-        );
-        assert_eq!(
-            healing_count(&c, "target", "Rm", 10051),
-            n,
-            "[{stem}/{label}] 52 的 RM 恰 {n} 条"
-        );
-        assert_eq!(
-            healing_count(&c, "target", "Rm", 11004),
-            n,
-            "[{stem}/{label}] 100 的 RM 恰 {n} 条"
-        );
-        assert_eq!(
-            healing_count(&c, "target", "Rm", 10139),
-            n * 2,
-            "[{stem}/{label}] 657 的 RM 恰 {n}×2 条"
-        );
-        assert_eq!(healing_count(&c, "target", "Sent", 52), n);
-        assert_eq!(healing_count(&c, "target", "Sent", 100), n);
-        assert_eq!(healing_count(&c, "target", "Sent", 657), n * 2);
-        assert_eq!(healing_count(&c, "caster", "Sent", 657), n);
-        assert_eq!(healing_count(&c, "obs_in", "Sent", 657), n);
-        assert_eq!(healing_count(&c, "obs_out", "Sent", 657), 0);
-        // 帧序：caster = [638, 642, 657×n, 640]；target = [17, 52×n, 657×2n, 100×n]。
-        let seq: Vec<i64> = c["Receivers"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|r| r["Who"] == "caster")
-            .unwrap()["Sent"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter_map(|m| m["ident"].as_i64())
-            .collect();
-        assert_eq!(
-            &seq[..2],
-            &[638, 642],
-            "[{stem}/{label}] 642 必须在 638 之后（oracle 队列序）"
-        );
-        assert_eq!(seq[seq.len() - 1], 640, "[{stem}/{label}] 640 最后");
     }
 
     #[test]
