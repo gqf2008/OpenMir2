@@ -43,3 +43,67 @@
 - 参数化设计经 opc-07 批准后实施；重生成前后逐字段比对，**行为类差异必须为空或逐条解释**；
 - 6 条 + `MG-10` 的最终状态由 opc-07 依据"可达性结论 + 新场景证据"决定；
 - 任何 status 变更单独一笔、走分支、经 QA 签署，**禁止与代码/装置改动混提**。
+
+## 6. 比较器收紧设计：`Rng` 全轴比较（2026-11-20，opc-07 定；实现待 `a2` 参数与重生成）
+
+### 6.1 判据
+
+- **统一比较**：`golden.Rng == rust.Rng ++ rust.DeliverRng`（拼接；`RngSeqs` 连续性断言保留）。
+- **不按 seam 字段分两种比法**：所有 `verified` 条目的 golden 必须是 **`cover_drain`**
+  （`Fixture.rng_mode == "cover_drain"`）；`freeze_at_dospell` 旧件只作 **legacy artifact**、
+  **不进比较面**（比较器直接红，牙③）。
+- **缺列即红**：`Rng` 与 `DeliverRng` 任一列缺失都不允许默认空（牙④）——"不记 = 不比"被禁止。
+- **适用面**：全 **15 条**（不止那 6 条）；拼接顺序靠实测证、不靠推断；任一条红 ⇒ 报 opc-07，
+  不改判据迁就。
+
+### 6.2 四颗牙（合成夹具，不依赖真实台账）
+
+| 牙 | 变异 | 期望 |
+|---|---|---|
+| ① | 删 `DeliverRng` 一条 | 红（`Rng` 序列不等） |
+| ② | 改 `DeliverRng` 任一值 | 红（`Rng` 值不等） |
+| ③ | 旧口径 golden（`freeze_at_dospell` / 无 `rng_mode`） | 红并点名 `cover_drain` |
+| ④ | 整列 `DeliverRng` 消失 | 红并点名 `DeliverRng` 缺列 |
+
+外加**正对照**：`golden.Rng = rust.Rng ++ rust.DeliverRng` ⇒ 绿（证明判据不是恒红）。
+
+### 6.2b 字段契约（交给 `a2`；双方向**不得各自造名字**）
+
+`MagicGolden/Program.cs` 由 **`a2` 独占**；Rust 侧只按下面的键名读。
+
+| 项 | 约定 |
+|---|---|
+| 键 | **`Fixture.rng_mode`**（每支 case 的 `Fixture` 内；顶层 `fixture_spec` 不需要） |
+| 取值 | `"cover_drain"` \| `"freeze_at_dospell"`（只此两个） |
+| 缺失 | **比较器直接红**（"金标准缺该支 rng_mode / 非 cover_drain"），**不得默认任何值** |
+| legacy artifact | 用 `rng_mode="freeze_at_dospell"` 表示；如需额外的人读标注可加 `Fixture.legacy_artifact=true`（比较器**不看**该键） |
+| 语义 | `cover_drain`：`Rng` 覆盖到排水结束，比较面 = `Rng ++ DeliverRng`；`freeze_at_dospell`：**不**进比较面（`verified` 条目禁止使用） |
+| 与 `login_order` 的关系 | 两者正交：`rng_mode` 只描述"抽数记录窗口"；`login_order` 描述角色状态来源。6 条新件应为 `login_order=false`（按 a2 的二分口径）+ `rng_mode="cover_drain"` |
+
+### 6.3 实现落点（本设计分支 `card/magic-rng-union`）
+
+- `mir2-rs/tests/parity/tests/magic_fireball_parity.rs`：
+  `union_rng` / `check_golden_cover_drain` / `pin_union_rng` / `verify_union` +
+  `union_rng_positive_control_green` + `tooth_union_*` 四颗；
+  `real_ledger_verify_labels` 在读取每份台账后走这三步（cover_drain 门 → 拼接 → `verify`）。
+- **`MagicGolden/Program.cs` 不在本分支改动**（a2 领地；它按 6.2b 输出 `Fixture.rng_mode`）。
+- **本分支不合并**：比较器收紧**必须与 6 条新 golden + `MG-10` 同一次合并落地**（M51；中间态
+  master 会红）。6 条重生成依赖 `a2` 的 `rng_seam`/`login_order` 参数（M50，批准后实施）。
+
+### 6.4 复跑脚本设计（槽位到手后执行；`run_id` 绑定）
+
+```sh
+export MIR2_LEDGER_RUN_ID="magic-plane-$(date +%s)-$$"
+for t in fireball_parity_miss fireball_parity_edge fireball_parity_hit          fireball5_parity_miss fireball5_parity_edge fireball5_parity_hit          lightning11_parity_miss lightning11_parity_edge lightning11_parity_hit          lightning45_parity_miss lightning45_parity_edge lightning45_parity_hit          healing_parity_heal healing_parity_full healing_parity_self          firecharm_parity_miss firecharm_parity_edge firecharm_parity_hit          hbfireball_parity_miss hbfireball_parity_edge hbfireball_parity_hit          shield_parity_s1 shield_parity_s5 shield_parity_s13          hangmajinbub_parity_s1 hangmajinbub_parity_s5 hangmajinbub_parity_s13          dejiwonho_parity_s1 dejiwonho_parity_s5 dejiwonho_parity_s13          showhp_parity_miss showhp_parity_edge showhp_parity_hit          cloak_parity_s1 cloak_parity_s5 cloak_parity_s13          big_healing_parity_heal big_healing_parity_full big_healing_parity_both          big_cloak_parity_s1 big_cloak_parity_s5 big_cloak_parity_s13          fireboom_parity_s1 fireboom_parity_s5 fireboom_parity_s13          snowwind_parity_s1 snowwind_parity_s5 snowwind_parity_s13; do
+  cargo test -p game-svr --lib -- --ignored --exact "tests::$t" --test-threads=1 || exit 1
+done
+cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity -- --ignored || exit 1
+```
+（每支独立进程 = rng_trace 进程级；任一步非零即停，不重试掩盖。）
+
+### 6.5 与已收口条目的兼容性
+
+- 23/33（即时受击）：受击抽在施法段内、已在 `Rng`；台账 `DeliverRng` 实测为空
+  ⇒ 统一判据下 `Rng ++ [] == Rng`，与现行 golden 一致。
+- 6 条延时受击：旧 golden 的 `Rng` 缺排水抽（`freeze_at_dospell`）⇒ 重生成后按拼接比较；
+  Rust 侧现台账的 `DeliverRng` 已有对应抽（`3b` 判 **18/18 MATCH(count+values)**）。

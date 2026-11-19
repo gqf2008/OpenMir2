@@ -342,6 +342,58 @@ fn ledger_dir() -> std::path::PathBuf {
 /// ```
 /// 侧车缺失或 id 不符 ⇒ 红并提示「台账陈旧/驱动未跑」；**不设环境变量 ⇒ 红**（fail-closed），
 /// 专门拦「驱动编译失败、比较器读上一次台账还绿」这类空转。
+/// **统一 RNG 判据（opc-07 2026-11-20 定；卡 `openmir2-golden-fixture-drift` §6）**：
+/// `golden.Rng == rust.Rng ++ rust.DeliverRng` —— 两段抽数都要比、按此序拼接；
+/// 不接受"记了不判"，也不接受按 seam 字段切换比法（`freeze_at_dospell` 旧件只作
+/// legacy artifact、不进比较面）。
+///
+/// 返回拼接后的序列；**缺列即红**（`Rng`/`DeliverRng` 任一缺失都不允许默认空——
+/// 牙④专门钉这一点）。
+fn union_rng(case: &Value, label: &str) -> Result<Vec<i64>, String> {
+    let seg = |k: &str| -> Result<Vec<i64>, String> {
+        let arr = case.get(k).and_then(Value::as_array).ok_or_else(|| {
+            format!("[{label}] 台账缺 `{k}` 列（不允许「不记 = 不比」；卡 §6 牙④）")
+        })?;
+        Ok(arr.iter().filter_map(Value::as_i64).collect())
+    };
+    let mut out = seg("Rng")?;
+    out.extend(seg("DeliverRng")?);
+    Ok(out)
+}
+
+/// 金标准该支必须是 `Fixture.rng_mode == "cover_drain"`（卡 §6 牙③）。
+fn check_golden_cover_drain(golden: &Value, label: &str) -> Result<(), String> {
+    let case = golden
+        .get("cases")
+        .and_then(Value::as_array)
+        .and_then(|cs| {
+            cs.iter()
+                .find(|c| c.get("Label").and_then(Value::as_str) == Some(label))
+        })
+        .ok_or_else(|| format!("[{label}] 金标准缺该支"))?;
+    match case
+        .get("Fixture")
+        .and_then(|f| f.get("rng_mode"))
+        .and_then(Value::as_str)
+    {
+        Some("cover_drain") => Ok(()),
+        other => Err(format!(
+            "[{label}] 金标准 rng_mode = {other:?}：`verified` 条目必须 cover_drain；             `freeze_at_dospell` 旧件只作 legacy artifact、不进比较面（卡 §6 牙③）"
+        )),
+    }
+}
+
+/// 把台账 case 的 `Rng` 换成 `Rng ++ DeliverRng`（`verify` 的 `Rng` 比较面即统一后序列）。
+fn pin_union_rng(case: &Value, label: &str) -> Result<Value, String> {
+    let union = union_rng(case, label)?;
+    let mut c = case.clone();
+    if let Some(obj) = c.as_object_mut() {
+        obj.insert("Rng".to_string(), Value::Array(union.into_iter().map(Value::from).collect()));
+        obj.remove("DeliverRng");
+    }
+    Ok(c)
+}
+
 fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
@@ -382,7 +434,12 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
             Some(*label),
             "[{label}] 台账 Label 不符"
         );
-        cases.push(arr[0].clone());
+        // **统一 RNG 判据**：金标准必须 cover_drain；台账 Rng 与 DeliverRng 拼接后参与比较。
+        if let Err(msg) = check_golden_cover_drain(golden, label) {
+            panic!("{msg}");
+        }
+        let pinned = pin_union_rng(&arr[0], label).unwrap_or_else(|m| panic!("{m}"));
+        cases.push(pinned);
     }
     let rust = serde_json::json!({"magic_id": magic_id, "anti_magic": anti_magic, "cases": cases});
     if let Err(errs) = verify(golden, &rust) {
@@ -392,6 +449,108 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
             errs.join("\n")
         );
     }
+}
+
+/// 牙用：把合成的 rust cases 走**与 `real_ledger_verify_labels` 同一条**判据路径
+/// （cover_drain 门 → `Rng ++ DeliverRng` 拼接 → `verify`）。
+fn verify_union(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
+    let mut out_cases = Vec::new();
+    let cases = rust
+        .get("cases")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for c in &cases {
+        let label = c.get("Label").and_then(Value::as_str).unwrap_or("?").to_string();
+        if let Err(msg) = check_golden_cover_drain(golden, &label) {
+            return Err(vec![msg]);
+        }
+        match pin_union_rng(c, &label) {
+            Ok(v) => out_cases.push(v),
+            Err(m) => return Err(vec![m]),
+        }
+    }
+    let r = serde_json::json!({
+        "magic_id": rust.get("magic_id").cloned().unwrap_or(Value::from(0)),
+        "anti_magic": rust.get("anti_magic").cloned().unwrap_or(Value::from(0)),
+        "cases": out_cases,
+    });
+    verify(golden, &r)
+}
+
+fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
+    let fixture = match mode {
+        Some(m) => serde_json::json!({ "rng_mode": m }),
+        None => serde_json::json!({}),
+    };
+    serde_json::json!({
+        "magic_id": 33,
+        "cases": [{ "Label": label, "Fixture": fixture, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": [] }],
+    })
+}
+
+fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
+    let mut c = serde_json::json!({
+        "Label": label, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": []
+    });
+    c["Rng"] = rng;
+    if let Some(d) = deliver {
+        c["DeliverRng"] = d;
+    }
+    serde_json::json!({ "magic_id": 33, "cases": [c] })
+}
+
+/// **正对照**：`golden.Rng = rust.Rng ++ rust.DeliverRng` ⇒ 绿（证明判据不是恒红）。
+#[test]
+fn union_rng_positive_control_green() {
+    let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
+    let r = synth_rust("s1", serde_json::json!([1, 2]), Some(serde_json::json!([3, 4])));
+    assert!(verify_union(&g, &r).is_ok(), "拼接一致必须绿");
+}
+
+/// **牙①**：删 `DeliverRng` 一条 ⇒ 拼接变短 ⇒ 红。
+#[test]
+fn tooth_union_drop_deliver_entry_red() {
+    let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
+    let r = synth_rust("s1", serde_json::json!([1, 2]), Some(serde_json::json!([3])));
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(err.iter().any(|e| e.contains("Rng")), "必须红在 Rng 序列：{err:?}");
+}
+
+/// **牙②**：改 `DeliverRng` 任一值 ⇒ 红。
+#[test]
+fn tooth_union_deliver_value_changed_red() {
+    let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
+    let r = synth_rust("s1", serde_json::json!([1, 2]), Some(serde_json::json!([3, 9])));
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(err.iter().any(|e| e.contains("Rng")), "必须红在 Rng 值：{err:?}");
+}
+
+/// **牙③**：旧口径（`freeze_at_dospell` / 无 `rng_mode`）的金标准 ⇒ 直接红。
+#[test]
+fn tooth_union_legacy_golden_red() {
+    let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("freeze_at_dospell"));
+    let r = synth_rust("s1", serde_json::json!([1, 2]), Some(serde_json::json!([3, 4])));
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("cover_drain")),
+        "必须点名 cover_drain：{err:?}"
+    );
+    let g2 = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), None);
+    let err2 = verify_union(&g2, &r).unwrap_err();
+    assert!(err2.iter().any(|e| e.contains("cover_drain")), "缺 rng_mode 同样红：{err2:?}");
+}
+
+/// **牙④**：整列 `DeliverRng` 消失（不记了）⇒ 红，**不允许默认空**。
+#[test]
+fn tooth_union_missing_deliver_column_red() {
+    let g = synth_golden("s1", serde_json::json!([1, 2]), Some("cover_drain"));
+    let r = synth_rust("s1", serde_json::json!([1, 2]), None);
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("DeliverRng")),
+        "必须点名 DeliverRng 缺列：{err:?}"
+    );
 }
 
 fn real_ledger_verify(stem: &str, golden: &Value) {
