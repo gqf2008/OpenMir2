@@ -156,6 +156,27 @@ SNAPSHOT_COUNT → TICK_VIEWER → 可见集（集合 → 顺序） → REMOVED 
 - 回退：增量实现置于**同一模块的独立入口**（例如 `search_view_range_incremental`），
   由常量/开关选择；差分测试默认双跑；生产切换需一次同构建两轮对照。
 
+## 附录 A：4k 前本地分段实测原始数据（2026-11-19）
+
+**目的**：留底 `incremental_gate` 各段的实测占比，避免下一轮无法回答「19µs 从哪来」。
+临时插桩（环境门 `MIR2_AOI_DBG=1`，**未入提交**）在 worktree 里跑完即复原（sha 校验一致）。
+
+- 命令（release）：
+  `MIR2_AOI_DBG=1 MIR2_AOI_STATS=1 MIR2_AOI_STATS_TICKS=20 MIR2_AOI_INCREMENTAL=1    target/release/tick_bench.exe --profile --bots 4000 11000 40`
+- 参数：200×200 地图，11,000 怪 + 4,000 假玩家；玩家 ViewRange=5（窗口 11×11），
+  故每趟 V≈171（`vis_per_search=171`）。
+- 原始行（累计到第 56,000 趟 gate 的每趟均值，单位 ns）：
+```
+[AOI_DBG] gates=56000 A_vis_inlist=1533 B_touch=61 C_sweep=113 D_filter=32 E_add=30 F_order=18984 G_vu=8975 H_active=367
+```
+- 分段口径：A=可见集收集+成员表构建；B=touched 复评；C=移除+flag 复位；D=离开集守卫过滤；
+  E=新进排序+追加；**F=可见集全量收集 + `sort_by_key(scan_key)`**；**G=`view_updates` 逐目标
+  `store.get`**；H=`is_visible_active` 逐目标 `store.get`。
+- 结论：F(19.0µs) + G(9.0µs) ≈ 28µs / 30µs；legacy 同场景 `ns_avg≈21µs`。`sort_by_key` 每次
+  比较重算键（每次 2 次 BTreeMap 查找）是 F 的主因；G/H 的 EntityRef 构造是第二主因。
+- 修复后同参数：增量 `ns_avg=1,964-2,715`（legacy 20,486-20,617），`idx_avg` 7.1→5.1-5.9ms。
+- **注意**：以上只是方向性验证，不能替代真机 5000 档；主判据仍以同参数两轮真机为准。
+
 ## 8. 交付顺序
 1. 差分测试骨架 + 覆盖矩阵（先红后绿：legacy 对 legacy 应全绿，证明骨架本身不假绿）；
 2. 增量实现（cell_viewers + 三类触发）；
