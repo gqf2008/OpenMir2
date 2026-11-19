@@ -317,3 +317,21 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 - **第二段**：`sim_self_deliver_stage_system(world)`，clock 用**推进后的世界时钟**（禁墙上时间）。
 - **比较器顺序**：①总量（TSV 行数 == 金标准长度）→ ②RNG 逐次 `result` 列 → ③逐接收者 SM
   → ④HP 前后 → ⑤两颗负向牙。
+
+### 16b. 总量断言的写法（定死：强形式 + 量测边界截断）
+
+**事实**：夹具建实体本身会抽 RNG（`new_player_entity_with_login_ctor` 的注释写明
+"`new PlayObject()` 5 抽里存活到实体的两个值"，`lib.rs:15980`）⇒ 不能直接数整份 TSV。
+
+**定死的写法（强形式）**：
+1. **量测边界截断**：夹具全部就绪后、调用 `handle_spell_cmd(_with_magic)` **之前**，把
+   `MIR2_RNG_LOG` 目标文件截断（记下偏移）；第一段结束、第二段 `sim_self_deliver_stage_system`
+   之前再记一次偏移。**账本只覆盖这两段**。
+2. **来源断言（强）**：账本里**每一行**的 `site` 必须落在 magic 允许清单内——
+   `crates/world-bevy/src/magic.rs`、`magic_effect.rs`、`world.rs` 的 `cast_*` 系列、
+   `slave.rs` 的延时结算（`deliver_delay_magic_impl`）、`bins/game-svr/src/lib.rs` 的施法处理器。
+   出现清单外站点 ⇒ **红**（"别的东西偷偷抽了随机"）。
+3. **数量断言**：两段合计行数 == 金标准账本长度（miss 1 / edge 5 / hit 5）。
+4. 若某条**合法** magic 取数的 `site` 落在清单外（例如经 `shared/rng.rs` 包装层），
+   只允许**扩充允许清单并写明理由**，不允许改成"数总数"来放行——
+   **不出现"总数对得上但来源不同"的假绿**。
