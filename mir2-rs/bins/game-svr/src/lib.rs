@@ -95742,6 +95742,429 @@ fn ",
             hits
         );
     }
+
+    /// 批 6 通用观察者夹具：sender 在 (10,10)，观察者 +5/+11/+12/+13（socket 902–905）。
+    fn add_657_observers(
+        world: &mut mir2_world_bevy::World,
+        online: &mut OnlineRegistry,
+    ) -> [i32; 4] {
+        let mut ids = [0i32; 4];
+        for (i, (dx, socket)) in [(5, 902), (11, 903), (12, 904), (13, 905)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = world.add_entity(e);
+            ids[i] = id;
+            online_set(
+                online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        ids
+    }
+
+    /// **T-287 残余 #9①**（`drain_combat_downlink` 受击帧）：同一受击者 500ms 内两帧 ⇒
+    /// 第二帧命中缓存。牙：站点回退 `chat::hear_targets` ⇒ 第二次 Δ12 也收 ⇒ 红。
+    #[test]
+    fn struck_broadcast_cache_window_second_frame_hits_cache() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut v = mir2_world_bevy::EntitySpawn::new(0, "victim", 10, 10);
+        v.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let victim = world.add_entity(v);
+        let mut online: OnlineRegistry = Vec::new();
+        let _ = add_657_observers(&mut world, &mut online);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            victim,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"victim".to_vec()),
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let rec = mir2_world_bevy::TickRecord::default();
+        let push = |world: &mut mir2_world_bevy::World| {
+            world
+                .pending_refmessage_frames
+                .push(mir2_world_bevy::slave::RefMessageFrame {
+                    actor_id: victim,
+                    ident: mir2_protocol::messages::RM_STRUCK,
+                    w_param: 5,
+                    n_param1: 90,
+                    n_param2: 100,
+                    n_param3: 1,
+                    order: 0,
+                });
+        };
+        let ident = mir2_protocol::messages::SM_STRUCK;
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                frames.push((socket, body));
+            }
+            count_by_socket_ident(&frames)
+        };
+        push(&mut world);
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
+        let first = take(&mut rx0);
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首帧：+5 收");
+        assert_eq!(first.get(&(903, ident)), Some(&1), "首帧：|Δ|=11 收");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首帧：|Δ|=12 收");
+        assert_eq!(first.get(&(905, ident)), None, "首帧：+13 零帧");
+        push(&mut world);
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
+        let second = take(&mut rx0);
+        assert_eq!(second.get(&(902, ident)), Some(&1), "次帧：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "次帧：|Δ|=11 被挡");
+        assert_eq!(second.get(&(904, ident)), None, "次帧：|Δ|=12 被挡");
+    }
+
+    /// **T-287 残余 #9②**（死亡帧）：同一死者同窗两次死亡事件 ⇒ 第二次命中缓存。
+    #[test]
+    fn death_broadcast_cache_window_second_frame_hits_cache() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut dead_e = mir2_world_bevy::EntitySpawn::new(0, "dead", 10, 10);
+        dead_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        dead_e.death = true;
+        let dead = world.add_entity(dead_e);
+        let mut online: OnlineRegistry = Vec::new();
+        let _ = add_657_observers(&mut world, &mut online);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            dead,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"dead".to_vec()),
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let mut rec = mir2_world_bevy::TickRecord::default();
+        rec.deaths.push((dead, 0, 0, None, 0));
+        let ident = mir2_protocol::messages::SM_NOWDEATH;
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                frames.push((socket, body));
+            }
+            count_by_socket_ident(&frames)
+        };
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
+        let first = take(&mut rx0);
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首帧：+5 收");
+        assert_eq!(first.get(&(903, ident)), Some(&1), "首帧：|Δ|=11 收");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首帧：|Δ|=12 收");
+        assert_eq!(first.get(&(905, ident)), None, "首帧：+13 零帧");
+        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
+        let second = take(&mut rx0);
+        assert_eq!(second.get(&(902, ident)), Some(&1), "次帧：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "次帧：|Δ|=11 被挡");
+        assert_eq!(second.get(&(904, ident)), None, "次帧：|Δ|=12 被挡");
+    }
+
+    /// **T-287 残余 #10**（`drain_weapon_durability` 1102）：两次破武器事件同窗 ⇒ 第二次命中缓存。
+    #[test]
+    fn weapon_break_broadcast_cache_window_second_event_hits_cache() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut hero_e = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
+        hero_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let hero = world.add_entity(hero_e);
+        let mut online: OnlineRegistry = Vec::new();
+        let _ = add_657_observers(&mut world, &mut online);
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let rec = mir2_world_bevy::TickRecord {
+            weapon_breaks: vec![mir2_world_bevy::WeaponUpgradeEvent {
+                actor_id: hero,
+                outcome: mir2_world_bevy::WeaponUpgradeOutcome::Broke,
+            }],
+            ..Default::default()
+        };
+        let ident = mir2_protocol::messages::SM_BREAKWEAPON;
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                frames.push((socket, body));
+            }
+            count_by_socket_ident(&frames)
+        };
+        let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
+        let first = take(&mut rx0);
+        assert_eq!(first.get(&(902, ident)), Some(&1), "首事件：+5 收");
+        assert_eq!(first.get(&(903, ident)), Some(&1), "首事件：|Δ|=11 收");
+        assert_eq!(first.get(&(904, ident)), Some(&1), "首事件：|Δ|=12 收");
+        assert_eq!(first.get(&(905, ident)), None, "首事件：+13 零帧");
+        let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
+        let second = take(&mut rx0);
+        assert_eq!(second.get(&(902, ident)), Some(&1), "次事件：+5 仍收");
+        assert_eq!(second.get(&(903, ident)), None, "次事件：|Δ|=11 被挡");
+        assert_eq!(second.get(&(904, ident)), None, "次事件：|Δ|=12 被挡");
+    }
+
+    /// **T-287 残余 #11 真实调用面多副本**：`gmcmd::execute` 两次 `@复活`（各自前置于一次死亡）
+    /// ＋生产排水 `apply_pending_gm_target_ops` 两次，同 sim 时钟 ⇒ 第二次 `RM_ALIVE` 命中缓存。
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 次轮 Δ12 也收 ⇒ 红。
+    #[test]
+    fn gm_revive_alive_cache_window_second_command_hits_cache() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut caller_e = mir2_world_bevy::EntitySpawn::new(0, "aaa", 5, 5);
+        caller_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let caller = world.add_entity(caller_e);
+        let mut victim_e = mir2_world_bevy::EntitySpawn::new(0, "victim", 10, 10);
+        victim_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        victim_e.death = true;
+        victim_e.hp = 1;
+        victim_e.max_hp = 100;
+        let victim = world.add_entity(victim_e);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "aaa".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: caller,
+            },
+        );
+        let _ = add_657_observers(&mut world, &mut online);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            victim,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"victim".to_vec()),
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg_caller = test_session_ground(caller);
+        // GM 命令门要求权限 10（oracle 现网恒 0；夹具显式构造可达支）。
+        sg_caller.gm.permission = 10;
+        sessions.insert("aaa".into(), sg_caller);
+        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
+        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
+        let catalog = game_svr::ability::StdItemCatalog::new();
+        let magic_table = magics::MagicTable::default();
+        let magic_cfg = MagicCfg {
+            table: &magic_table,
+            fire_ball_skill: "火球术",
+            heal_skill: "治愈术",
+        };
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 219,
+            green_b: 255,
+            blue_f: 251,
+            blue_b: 252,
+        };
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let guilds = mir2_world_bevy::GuildManager::new();
+        let cfg = gmcmd::GmConfig::default();
+        let ident = mir2_protocol::messages::SM_ALIVE;
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                frames.push((socket, body));
+            }
+            count_by_socket_ident(&frames)
+        };
+        for round in 0..2 {
+            if round == 1 {
+                // **不可省**：让第二次 `@复活` 真的发生——目标必须重新处于死亡态
+                // （首轮 apply 已把 death 清掉；不重死则第二轮命令仍发 RM_ALIVE 但语义是
+                // 「复活一个活人」，与 oracle 触发链不符）。
+                world.entities.get_mut(victim).unwrap().life_cycle.death = true;
+            }
+            let hit = {
+                let view = gmcmd::GmWorld {
+                    world: Some(&world),
+                    speaker: "aaa",
+                    speaker_id: caller,
+                    now_ms: world.clock_ms,
+                    ..gmcmd::GmWorld::new(&guilds)
+                };
+                let sg = sessions.get_mut("aaa").unwrap();
+                gmcmd::execute(&mut sg.gm, &cfg, &view, "@复活 victim")
+            };
+            assert!(
+                hit.msgs.iter().any(|m| m.text.contains("已获重生")),
+                "第 {round} 轮 @复活 必须命中"
+            );
+            apply_pending_gm_target_ops(
+                &mut sessions,
+                &mut pwd_sessions,
+                &mut saves,
+                &mut world,
+                &catalog,
+                magic_cfg,
+                &displays,
+                &online,
+                &gates,
+                &colors,
+                12,
+                "aaa",
+            );
+            let per = take(&mut rx0);
+            if round == 0 {
+                assert_eq!(per.get(&(902, ident)), Some(&1), "首轮：+5 收 RM_ALIVE");
+                assert_eq!(per.get(&(903, ident)), Some(&1), "首轮：|Δ|=11 收");
+                assert_eq!(per.get(&(904, ident)), Some(&1), "首轮：|Δ|=12 收");
+                assert_eq!(per.get(&(905, ident)), None, "首轮：+13 零帧");
+            } else {
+                assert_eq!(per.get(&(902, ident)), Some(&1), "次轮：+5 仍收");
+                assert_eq!(per.get(&(903, ident)), None, "次轮：|Δ|=11 被挡");
+                assert_eq!(per.get(&(904, ident)), None, "次轮：|Δ|=12 被挡");
+            }
+        }
+    }
+
+    /// **T-287 残余 #12 真实调用面多副本**：`gmcmd::execute` 两次 `@退出门派`（第二轮前重建
+    /// 成员关系）＋生产排水 `apply_pending_gm_guild_commands` 两次，同 sim 时钟 ⇒ 第二次
+    /// `RefShowName(42)` 命中缓存。
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 次轮 Δ12 也收 ⇒ 红。
+    #[test]
+    fn gm_end_guild_ref_show_name_cache_window_second_command_hits_cache() {
+        use std::collections::HashMap;
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut hero_e = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
+        hero_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let hero = world.add_entity(hero_e);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "h".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let _ = add_657_observers(&mut world, &mut online);
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            hero,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"hero".to_vec()),
+        );
+        let mut guilds = mir2_world_bevy::GuildManager::new();
+        let guild_cfg = mir2_world_bevy::GuildConfig::default();
+        assert!(guilds.add_guild("G", "chief", &guild_cfg), "建会");
+        let sections = mir2_data::guild::GuildFileSections::oracle_defaults();
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(hero);
+        sg.guild.guild_name = Some("G".into());
+        sg.guild.rank_no = 2;
+        // GM 命令门要求权限 10。
+        sg.gm.permission = 10;
+        sessions.insert("hero".into(), sg);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 219,
+            green_b: 255,
+            blue_f: 251,
+            blue_b: 252,
+        };
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let cfg = gmcmd::GmConfig::default();
+        let ident = mir2_protocol::messages::SM_USERNAME;
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
+            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
+                frames.push((socket, body));
+            }
+            count_by_socket_ident(&frames)
+        };
+        for round in 0..2 {
+            // **不可省**：让第二次 `@退出门派` 真的发生——首轮 apply 已把 hero 从 `G` 移除，
+            // 必须重建成员关系（重建后 `EndGuildCommand` 的 `is_member` 门才再次命中）。
+            guilds
+                .find_guild_mut("G")
+                .expect("会存在")
+                .add_member("hero", &guild_cfg, 0);
+            {
+                let sg = sessions.get_mut("hero").unwrap();
+                sg.guild.guild_name = Some("G".into());
+                sg.guild.rank_no = 2;
+            }
+            let caller_guild = gmcmd::GmGuildState {
+                guild_name: Some("G".into()),
+                rank_no: 2,
+            };
+            let hit = {
+                let view = gmcmd::GmWorld {
+                    world: Some(&world),
+                    speaker: "hero",
+                    speaker_id: hero,
+                    now_ms: world.clock_ms,
+                    caller_guild: Some(&caller_guild),
+                    m_host: true,
+                    ..gmcmd::GmWorld::new(&guilds)
+                };
+                let sg = sessions.get_mut("hero").unwrap();
+                gmcmd::execute(&mut sg.gm, &cfg, &view, "@退出门派")
+            };
+            assert!(hit.msgs.is_empty(), "成员退会成功支零红字：{:?}", hit.msgs);
+            assert!(
+                sessions["hero"].gm.pending_end_guild.is_some(),
+                "第 {round} 轮必须装填 pending_end_guild"
+            );
+            apply_pending_gm_guild_commands(
+                &mut sessions,
+                "hero",
+                &world,
+                &mut guilds,
+                &guild_cfg,
+                None,
+                &sections,
+                0,
+                &displays,
+                &online,
+                &gates,
+                &colors,
+                0,
+                12,
+            );
+            let per = take(&mut rx0);
+            if round == 0 {
+                assert_eq!(per.get(&(901, ident)), Some(&1), "首轮：自己收 42");
+                assert_eq!(per.get(&(902, ident)), Some(&1), "首轮：+5 收");
+                assert_eq!(per.get(&(903, ident)), Some(&1), "首轮：|Δ|=11 收");
+                assert_eq!(per.get(&(904, ident)), Some(&1), "首轮：|Δ|=12 收");
+                assert_eq!(per.get(&(905, ident)), None, "首轮：+13 零帧");
+            } else {
+                assert_eq!(per.get(&(901, ident)), Some(&1), "次轮：自己仍收");
+                assert_eq!(per.get(&(902, ident)), Some(&1), "次轮：+5 仍收");
+                assert_eq!(per.get(&(903, ident)), None, "次轮：|Δ|=11 被挡");
+                assert_eq!(per.get(&(904, ident)), None, "次轮：|Δ|=12 被挡");
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -101074,418 +101497,5 @@ mod aoi_shutdown_wiring {
         let shutdown = SRC.find("let _ = shutdown_done_tx.send(summary);");
         assert!(shutdown.is_some(), "关服分支标记缺失");
         assert!(i < shutdown.unwrap(), "终值行必须在关服收尾返回之前");
-    }
-
-    /// 批 6 通用观察者夹具：sender 在 (10,10)，观察者 +5/+11/+12/+13（socket 902–905）。
-    fn add_657_observers(
-        world: &mut mir2_world_bevy::World,
-        online: &mut OnlineRegistry,
-    ) -> [i32; 4] {
-        let mut ids = [0i32; 4];
-        for (i, (dx, socket)) in [(5, 902), (11, 903), (12, 904), (13, 905)]
-            .into_iter()
-            .enumerate()
-        {
-            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
-            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
-            let id = world.add_entity(e);
-            ids[i] = id;
-            online_set(
-                online,
-                OnlineEntry {
-                    account: format!("u{i}"),
-                    chr_name: format!("o{i}"),
-                    session_id: 2 + i as i32,
-                    gate_idx: 0,
-                    socket,
-                    actor_id: id,
-                },
-            );
-        }
-        ids
-    }
-
-    /// **T-287 残余 #9①**（`drain_combat_downlink` 受击帧）：同一受击者 500ms 内两帧 ⇒
-    /// 第二帧命中缓存。牙：站点回退 `chat::hear_targets` ⇒ 第二次 Δ12 也收 ⇒ 红。
-    #[test]
-    fn struck_broadcast_cache_window_second_frame_hits_cache() {
-        use std::collections::HashMap;
-        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
-        let mut v = mir2_world_bevy::EntitySpawn::new(0, "victim", 10, 10);
-        v.race = mir2_world_bevy::ACTOR_RACE_PLAY;
-        let victim = world.add_entity(v);
-        let mut online: OnlineRegistry = Vec::new();
-        let _ = add_657_observers(&mut world, &mut online);
-        let mut displays = downlink::DisplayTable::new();
-        displays.set(
-            victim,
-            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"victim".to_vec()),
-        );
-        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
-        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
-        gates.insert(0, tx0);
-        let rec = mir2_world_bevy::TickRecord::default();
-        let mut push = |world: &mut mir2_world_bevy::World| {
-            world
-                .pending_refmessage_frames
-                .push(mir2_world_bevy::slave::RefMessageFrame {
-                    actor_id: victim,
-                    ident: mir2_protocol::messages::RM_STRUCK,
-                    w_param: 5,
-                    n_param1: 90,
-                    n_param2: 100,
-                    n_param3: 1,
-                    order: 0,
-                });
-        };
-        let ident = mir2_protocol::messages::SM_STRUCK;
-        let mut take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
-            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
-            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
-                frames.push((socket, body));
-            }
-            count_by_socket_ident(&frames)
-        };
-        push(&mut world);
-        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
-        let first = take(&mut rx0);
-        assert_eq!(first.get(&(902, ident)), Some(&1), "首帧：+5 收");
-        assert_eq!(first.get(&(903, ident)), Some(&1), "首帧：|Δ|=11 收");
-        assert_eq!(first.get(&(904, ident)), Some(&1), "首帧：|Δ|=12 收");
-        assert_eq!(first.get(&(905, ident)), None, "首帧：+13 零帧");
-        push(&mut world);
-        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
-        let second = take(&mut rx0);
-        assert_eq!(second.get(&(902, ident)), Some(&1), "次帧：+5 仍收");
-        assert_eq!(second.get(&(903, ident)), None, "次帧：|Δ|=11 被挡");
-        assert_eq!(second.get(&(904, ident)), None, "次帧：|Δ|=12 被挡");
-    }
-
-    /// **T-287 残余 #9②**（死亡帧）：同一死者同窗两次死亡事件 ⇒ 第二次命中缓存。
-    #[test]
-    fn death_broadcast_cache_window_second_frame_hits_cache() {
-        use std::collections::HashMap;
-        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
-        let mut dead_e = mir2_world_bevy::EntitySpawn::new(0, "dead", 10, 10);
-        dead_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
-        dead_e.death = true;
-        let dead = world.add_entity(dead_e);
-        let mut online: OnlineRegistry = Vec::new();
-        let _ = add_657_observers(&mut world, &mut online);
-        let mut displays = downlink::DisplayTable::new();
-        displays.set(
-            dead,
-            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"dead".to_vec()),
-        );
-        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
-        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
-        gates.insert(0, tx0);
-        let mut rec = mir2_world_bevy::TickRecord::default();
-        rec.deaths.push((dead, 0, 0, None, 0));
-        let ident = mir2_protocol::messages::SM_NOWDEATH;
-        let mut take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
-            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
-            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
-                frames.push((socket, body));
-            }
-            count_by_socket_ident(&frames)
-        };
-        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
-        let first = take(&mut rx0);
-        assert_eq!(first.get(&(902, ident)), Some(&1), "首帧：+5 收");
-        assert_eq!(first.get(&(903, ident)), Some(&1), "首帧：|Δ|=11 收");
-        assert_eq!(first.get(&(904, ident)), Some(&1), "首帧：|Δ|=12 收");
-        assert_eq!(first.get(&(905, ident)), None, "首帧：+13 零帧");
-        drain_combat_downlink(&rec, &mut world, &displays, &online, &mut sessions, &gates);
-        let second = take(&mut rx0);
-        assert_eq!(second.get(&(902, ident)), Some(&1), "次帧：+5 仍收");
-        assert_eq!(second.get(&(903, ident)), None, "次帧：|Δ|=11 被挡");
-        assert_eq!(second.get(&(904, ident)), None, "次帧：|Δ|=12 被挡");
-    }
-
-    /// **T-287 残余 #10**（`drain_weapon_durability` 1102）：两次破武器事件同窗 ⇒ 第二次命中缓存。
-    #[test]
-    fn weapon_break_broadcast_cache_window_second_event_hits_cache() {
-        use std::collections::HashMap;
-        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
-        let mut hero_e = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
-        hero_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
-        let hero = world.add_entity(hero_e);
-        let mut online: OnlineRegistry = Vec::new();
-        let _ = add_657_observers(&mut world, &mut online);
-        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
-        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
-        gates.insert(0, tx0);
-        let rec = mir2_world_bevy::TickRecord {
-            weapon_breaks: vec![mir2_world_bevy::WeaponUpgradeEvent {
-                actor_id: hero,
-                outcome: mir2_world_bevy::WeaponUpgradeOutcome::Broke,
-            }],
-            ..Default::default()
-        };
-        let ident = mir2_protocol::messages::SM_BREAKWEAPON;
-        let mut take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
-            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
-            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
-                frames.push((socket, body));
-            }
-            count_by_socket_ident(&frames)
-        };
-        let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
-        let first = take(&mut rx0);
-        assert_eq!(first.get(&(902, ident)), Some(&1), "首事件：+5 收");
-        assert_eq!(first.get(&(903, ident)), Some(&1), "首事件：|Δ|=11 收");
-        assert_eq!(first.get(&(904, ident)), Some(&1), "首事件：|Δ|=12 收");
-        assert_eq!(first.get(&(905, ident)), None, "首事件：+13 零帧");
-        let _ = drain_weapon_durability(&rec, &mut world, &online, &gates);
-        let second = take(&mut rx0);
-        assert_eq!(second.get(&(902, ident)), Some(&1), "次事件：+5 仍收");
-        assert_eq!(second.get(&(903, ident)), None, "次事件：|Δ|=11 被挡");
-        assert_eq!(second.get(&(904, ident)), None, "次事件：|Δ|=12 被挡");
-    }
-
-    /// **T-287 残余 #11 真实调用面多副本**：`gmcmd::execute` 两次 `@复活`（各自前置于一次死亡）
-    /// ＋生产排水 `apply_pending_gm_target_ops` 两次，同 sim 时钟 ⇒ 第二次 `RM_ALIVE` 命中缓存。
-    /// 牙：站点回退 `chat::hear_targets` ⇒ 次轮 Δ12 也收 ⇒ 红。
-    #[test]
-    fn gm_revive_alive_cache_window_second_command_hits_cache() {
-        use std::collections::HashMap;
-        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
-        let mut caller_e = mir2_world_bevy::EntitySpawn::new(0, "aaa", 5, 5);
-        caller_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
-        let caller = world.add_entity(caller_e);
-        let mut victim_e = mir2_world_bevy::EntitySpawn::new(0, "victim", 10, 10);
-        victim_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
-        victim_e.death = true;
-        victim_e.hp = 1;
-        victim_e.max_hp = 100;
-        let victim = world.add_entity(victim_e);
-        let mut online: OnlineRegistry = Vec::new();
-        online_set(
-            &mut online,
-            OnlineEntry {
-                account: "a".into(),
-                chr_name: "aaa".into(),
-                session_id: 1,
-                gate_idx: 0,
-                socket: 901,
-                actor_id: caller,
-            },
-        );
-        let _ = add_657_observers(&mut world, &mut online);
-        let mut displays = downlink::DisplayTable::new();
-        displays.set(
-            victim,
-            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"victim".to_vec()),
-        );
-        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        sessions.insert("aaa".into(), test_session_ground(caller));
-        let mut pwd_sessions: HashMap<String, game_svr::inbound::PwdSession> = HashMap::new();
-        let mut saves: HashMap<String, SavedHuman> = HashMap::new();
-        let catalog = game_svr::ability::StdItemCatalog::new();
-        let magic_table = magics::MagicTable::default();
-        let magic_cfg = MagicCfg {
-            table: &magic_table,
-            fire_ball_skill: "火球术",
-            heal_skill: "治愈术",
-        };
-        let colors = MsgColors {
-            red_f: 255,
-            red_b: 56,
-            hear_f: 0,
-            hear_b: 255,
-            whisper_f: 0,
-            whisper_b: 0,
-            green_f: 219,
-            green_b: 255,
-            blue_f: 251,
-            blue_b: 252,
-        };
-        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
-        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
-        gates.insert(0, tx0);
-        let guilds = mir2_world_bevy::GuildManager::new();
-        let cfg = gmcmd::GmConfig::default();
-        let ident = mir2_protocol::messages::SM_ALIVE;
-        let mut take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
-            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
-            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
-                frames.push((socket, body));
-            }
-            count_by_socket_ident(&frames)
-        };
-        for round in 0..2 {
-            if round == 1 {
-                world.entities.get_mut(victim).unwrap().life_cycle.death = true;
-            }
-            let hit = {
-                let view = gmcmd::GmWorld {
-                    world: Some(&world),
-                    speaker: "aaa",
-                    speaker_id: caller,
-                    now_ms: world.clock_ms,
-                    ..gmcmd::GmWorld::new(&guilds)
-                };
-                let sg = sessions.get_mut("aaa").unwrap();
-                gmcmd::execute(&mut sg.gm, &cfg, &view, "@复活 victim")
-            };
-            assert!(
-                hit.msgs.iter().any(|m| m.text.contains("已获重生")),
-                "第 {round} 轮 @复活 必须命中"
-            );
-            apply_pending_gm_target_ops(
-                &mut sessions,
-                &mut pwd_sessions,
-                &mut saves,
-                &mut world,
-                &catalog,
-                magic_cfg,
-                &displays,
-                &online,
-                &gates,
-                &colors,
-                12,
-                "aaa",
-            );
-            let per = take(&mut rx0);
-            if round == 0 {
-                assert_eq!(per.get(&(902, ident)), Some(&1), "首轮：+5 收 RM_ALIVE");
-                assert_eq!(per.get(&(903, ident)), Some(&1), "首轮：|Δ|=11 收");
-                assert_eq!(per.get(&(904, ident)), Some(&1), "首轮：|Δ|=12 收");
-                assert_eq!(per.get(&(905, ident)), None, "首轮：+13 零帧");
-            } else {
-                assert_eq!(per.get(&(902, ident)), Some(&1), "次轮：+5 仍收");
-                assert_eq!(per.get(&(903, ident)), None, "次轮：|Δ|=11 被挡");
-                assert_eq!(per.get(&(904, ident)), None, "次轮：|Δ|=12 被挡");
-            }
-        }
-    }
-
-    /// **T-287 残余 #12 真实调用面多副本**：`gmcmd::execute` 两次 `@退出门派`（第二轮前重建
-    /// 成员关系）＋生产排水 `apply_pending_gm_guild_commands` 两次，同 sim 时钟 ⇒ 第二次
-    /// `RefShowName(42)` 命中缓存。
-    /// 牙：站点回退 `chat::hear_targets` ⇒ 次轮 Δ12 也收 ⇒ 红。
-    #[test]
-    fn gm_end_guild_ref_show_name_cache_window_second_command_hits_cache() {
-        use std::collections::HashMap;
-        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
-        let mut hero_e = mir2_world_bevy::EntitySpawn::new(0, "hero", 10, 10);
-        hero_e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
-        let hero = world.add_entity(hero_e);
-        let mut online: OnlineRegistry = Vec::new();
-        online_set(
-            &mut online,
-            OnlineEntry {
-                account: "h".into(),
-                chr_name: "hero".into(),
-                session_id: 1,
-                gate_idx: 0,
-                socket: 901,
-                actor_id: hero,
-            },
-        );
-        let _ = add_657_observers(&mut world, &mut online);
-        let mut displays = downlink::DisplayTable::new();
-        displays.set(
-            hero,
-            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"hero".to_vec()),
-        );
-        let mut guilds = mir2_world_bevy::GuildManager::new();
-        let guild_cfg = mir2_world_bevy::GuildConfig::default();
-        assert!(guilds.add_guild("G", "chief", &guild_cfg), "建会");
-        let sections = mir2_data::guild::GuildFileSections::oracle_defaults();
-        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
-        let mut sg = test_session_ground(hero);
-        sg.guild.guild_name = Some("G".into());
-        sg.guild.rank_no = 2;
-        sessions.insert("hero".into(), sg);
-        let colors = MsgColors {
-            red_f: 255,
-            red_b: 56,
-            hear_f: 0,
-            hear_b: 255,
-            whisper_f: 0,
-            whisper_b: 0,
-            green_f: 219,
-            green_b: 255,
-            blue_f: 251,
-            blue_b: 252,
-        };
-        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
-        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
-        gates.insert(0, tx0);
-        let cfg = gmcmd::GmConfig::default();
-        let ident = mir2_protocol::messages::SM_USERNAME;
-        let mut take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
-            let mut frames: Vec<(i32, Vec<u8>)> = Vec::new();
-            while let Ok(SimToGate::SendFrame { socket, body }) = rx.try_recv() {
-                frames.push((socket, body));
-            }
-            count_by_socket_ident(&frames)
-        };
-        for round in 0..2 {
-            guilds
-                .find_guild_mut("G")
-                .expect("会存在")
-                .add_member("hero", &guild_cfg, 0);
-            {
-                let sg = sessions.get_mut("hero").unwrap();
-                sg.guild.guild_name = Some("G".into());
-                sg.guild.rank_no = 2;
-            }
-            let caller_guild = gmcmd::GmGuildState {
-                guild_name: Some("G".into()),
-                rank_no: 2,
-            };
-            let hit = {
-                let view = gmcmd::GmWorld {
-                    world: Some(&world),
-                    speaker: "hero",
-                    speaker_id: hero,
-                    now_ms: world.clock_ms,
-                    caller_guild: Some(&caller_guild),
-                    m_host: true,
-                    ..gmcmd::GmWorld::new(&guilds)
-                };
-                let sg = sessions.get_mut("hero").unwrap();
-                gmcmd::execute(&mut sg.gm, &cfg, &view, "@退出门派")
-            };
-            assert!(hit.msgs.is_empty(), "成员退会成功支零红字：{:?}", hit.msgs);
-            assert!(
-                sessions["hero"].gm.pending_end_guild.is_some(),
-                "第 {round} 轮必须装填 pending_end_guild"
-            );
-            apply_pending_gm_guild_commands(
-                &mut sessions,
-                "hero",
-                &world,
-                &mut guilds,
-                &guild_cfg,
-                None,
-                &sections,
-                0,
-                &displays,
-                &online,
-                &gates,
-                &colors,
-                0,
-                12,
-            );
-            let per = take(&mut rx0);
-            if round == 0 {
-                assert_eq!(per.get(&(901, ident)), Some(&1), "首轮：自己收 42");
-                assert_eq!(per.get(&(902, ident)), Some(&1), "首轮：+5 收");
-                assert_eq!(per.get(&(903, ident)), Some(&1), "首轮：|Δ|=11 收");
-                assert_eq!(per.get(&(904, ident)), Some(&1), "首轮：|Δ|=12 收");
-                assert_eq!(per.get(&(905, ident)), None, "首轮：+13 零帧");
-            } else {
-                assert_eq!(per.get(&(901, ident)), Some(&1), "次轮：自己仍收");
-                assert_eq!(per.get(&(902, ident)), Some(&1), "次轮：+5 仍收");
-                assert_eq!(per.get(&(903, ident)), None, "次轮：|Δ|=11 被挡");
-                assert_eq!(per.get(&(904, ident)), None, "次轮：|Δ|=12 被挡");
-            }
-        }
     }
 }
