@@ -45,6 +45,23 @@ DEPS_RED_TOTAL 1                                       (rc=1)
 - `deps_manifest selftest` 扩充并进工具门（TOTAL 变化按口径记）；
 - 真实两份 manifest（DBSrv 46 包 / LoginSrv 48 包）复跑 `DEPS_GREEN`。
 
+## 连带要求：构建与产戳必须同一步（2026-11-19 窗口作废事故）
+
+同一天 `RUN-START aoi-default-verify` 窗口**作废**（零轮次数据），根因不是本卡的
+`build_config`，而是它的邻座问题——**"重建未重产戳"**：
+
+- 主检出 `src/DBSrv/bin/Release` 在 18:22 的 Release 构建后被替换（C# 件嵌 `HEAD` 的
+  `InformationalVersion`，M7→M8 换 head 即变字节，`OpenMir2.dll` 245,248 → 245,760 B）；
+- 但 `.build.json` 仍是 03:45/18:02 的旧戳（sha/size 对不上新件）；
+- `-RefreshRuntime` 把**未盖新戳**的件灌进影子，启动闸门按 `SHA_MISMATCH` 正确拦下 ⇒ 窗口作废。
+
+**要求（与本卡同批落实）**：
+1. 任何"产出部署件"的构建，**构建与产戳必须是同一步**（同一次调用内先 build 后 stamp，
+   或构建后立刻跑 `stamp-binaries` 并把"戳齐"作为构建成功的判据之一）；
+2. 不许只补戳不重建（等于给来历不明的件盖章）——重建用 `--no-incremental`；
+3. 闸门保持 fail-closed，不要为了"让栈起来"放宽 `SHA_MISMATCH`/`SIZE_MISMATCH`；
+4. 若做自动化，回执里必须给出"构建 head == 戳 head == 期望 head"三处对齐的原文。
+
 ## 背景实例（M7，2026-11-19）
 
 - 已在 M7 上用 Release 口径重生成两份 manifest 并双双 `DEPS_GREEN`（DBSrv 46/1030、LoginSrv 48/1063）；
