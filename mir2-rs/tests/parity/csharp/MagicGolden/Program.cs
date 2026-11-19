@@ -13,8 +13,10 @@
 //  * 判据（卡面）：帧逐字节 + RNG 抽取次数与逐次取值全等 ⇒ 分支可标 `verified`。
 
 using System.Reflection;
+using System.Text;
 using System.Text.Json;
 using OpenMir2;
+using OpenMir2.Packets.ServerPackets;
 
 namespace MagicGolden;
 
@@ -302,8 +304,16 @@ public static class Program
         target.Abil.MaxHP = 100;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
+        // **记录面补全（卡 openmir2-magic-parity A 口径）**：所有下行最终都汇到
+        // `M2Share.NetChannel.AddGateBuffer(GateIdx, bytes)`——把静态通道换成只记录不发送的实现，
+        // 就能同时捕获双参 virtual `SendSocket(msg, tail)`、私有单参 `SendSocket(msg)`
+        // （`SendDefMessage` 走这条）与 `SendSocket(string)` 动作短包。**生产类零改动**。
+        // 各玩家给唯一 GateIdx（= ActorId），用于把缓冲归属到接收者。
+        var recorder = new RecordingNetChannel();
+        M2Server.M2Share.NetChannel = recorder;
         foreach (var p in new[] { caster, target, obsIn, obsOut })
         {
+            p.GateIdx = p.ActorId;
             // 世界内正常玩家：不隐身（PlayObject 构造后 FixedHideMode 可能为 true，见卡面"洁癖区"）。
             p.FixedHideMode = false;
             p.ObMode = false;
@@ -376,7 +386,7 @@ public static class Program
         int hpAfter = target.WAbil.HP;
         foreach (var (who, obj) in byWho)
         {
-            receivers.Add(new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = obj.Sent.ToList() });
+            receivers.Add(new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = ParseFrames(recorder.Buffers, obj.ActorId) });
         }
 
         return new FireballResult
@@ -393,14 +403,75 @@ public static class Program
         };
     }
 
+/// <summary>
+/// 把某接收者的通道缓冲解析成与旧 `Sent` 同形的账本项。
+///
+/// 缓冲 = 20B `ServerMessage` 头 + 载荷：
+/// * `PackLength >= 0` ⇒ 载荷 = 12B `CommandMessage` + `tail`（GB2312 文本，EDCode 字符在 ASCII 区）；
+/// * `PackLength < 0` ⇒ `SendSocket(string)` 动作短包，载荷就是该字符串（记 `ident=0` 便于显形）。
+/// </summary>
+private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers, int gateIdx)
+{
+    var list = new List<object>();
+    foreach (var (g, data) in buffers)
+    {
+        if (g != gateIdx) continue;
+        int packLength = BitConverter.ToInt32(data, 16);
+        if (packLength < 0)
+        {
+            string action = Encoding.GetEncoding("GB2312").GetString(data, ServerMessage.PacketSize, data.Length - ServerMessage.PacketSize);
+            list.Add(new { ident = 0, param = 0, tag = 0, series = 0, tail = action });
+            continue;
+        }
+        int off = ServerMessage.PacketSize;
+        ushort ident = BitConverter.ToUInt16(data, off + 4);
+        ushort param = BitConverter.ToUInt16(data, off + 6);
+        ushort tag = BitConverter.ToUInt16(data, off + 8);
+        ushort series = BitConverter.ToUInt16(data, off + 10);
+        string tail = data.Length > off + 12
+            ? Encoding.GetEncoding("GB2312").GetString(data, off + 12, data.Length - off - 12)
+            : "";
+        list.Add(new { ident, param, tag, series, tail });
+    }
+    return list;
+}
+
     private static readonly string[] Unused = Array.Empty<string>();
 
 }
 
 /// <summary>
+/// **记录面补全**：`M2Share.NetChannel` 的只记录实现（`INetChannel.AddGateBuffer` 是全部下行
+/// 的唯一汇合点，见 `PlayObject.Socket.cs:70/98/128` 三处 SendSocket 重载）。
+/// 生产类零改动；`Runner`/网络线程相关成员在离线进程里不会被调用，空实现即可。
+/// </summary>
+public sealed class RecordingNetChannel : M2Server.Net.INetChannel
+{
+    public List<(int GateIdx, byte[] Data)> Buffers { get; } = new();
+
+    public void AddGateBuffer(int gateIdx, byte[] senData) => Buffers.Add((gateIdx, senData));
+
+    public void AddGameGateQueue(int gateIdx, ServerMessage packet, byte[] data) => Buffers.Add((gateIdx, data));
+
+    public void CloseAllGate() { }
+    public void CloseUser(int gateIdx, int nSocket) { }
+    public void Initialize() { }
+    public void KickUser(string account, int sessionId, int payMode) { }
+    public void Run() { }
+    public void SendOutConnectMsg(int gateIdx, int nSocket, ushort nGsIdx) { }
+    public void SendServerStopMsg() { }
+    public void SetGateUserList(int gateIdx, int nSocket, SystemModule.Actors.IPlayerActor playObject) { }
+    public Task Start(CancellationToken cancellationToken = default) => Task.CompletedTask;
+    public void Send(string connectId, byte[] buff) { }
+    public void CloseGate(string connectionId, string endPoint) { }
+    public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
+}
+
+/// <summary>
 /// 只记录不发送的玩家对象：
-///  * `SendSocket(CommandMessage, string)` 在 `PlayObject.Socket.cs:101` 是 **virtual** —— 覆写它
-///    就拿到**真正要发出去的 SM 帧**（在 `PlayObject.Message.cs` 的 RM→SM 编码与自守卫之后）；
+///  * 下行帧**不再在这里**记录：`M2Share.NetChannel` 换成 [`RecordingNetChannel`] 后，
+///    三处 `SendSocket` 重载（含 `SendDefMessage` 走的私有单参版）都汇到同一 `AddGateBuffer`，
+///    记录面由 [`ParseFrames`] 统一解析（**修复旧版只捕获双参 virtual 的缺口**）；
 ///  * `Operate(ProcessMessage)` 在 `PlayObject.Message.cs:768` 是 protected override —— 暴露一个
 ///    公共包装，用生产编码路径处理自己队列里的 RM 消息；
 ///  * `MsgQueue`（`ActorEntity.cs:16`，protected）用于抽 RM 账本。
@@ -408,19 +479,6 @@ public static class Program
 /// </summary>
 public sealed class RecordingPlayObject : M2Server.Player.PlayObject
 {
-    public List<object> Sent { get; } = new();
-
-    public override void SendSocket(OpenMir2.Packets.ClientPackets.CommandMessage defMsg, string sMsg)
-    {
-        Sent.Add(new
-        {
-            ident = defMsg.Ident,
-            param = defMsg.Param,
-            tag = defMsg.Tag,
-            series = defMsg.Series,
-            tail = sMsg ?? "",
-        });
-    }
 
     /// <summary>
     /// 抽 RM 账本：连同**入队优先级**一起取（`priority` 必须进比较面——金标准要与
