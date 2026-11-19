@@ -1072,5 +1072,8 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   「target 构造完成、RNG/`DoSpell` 之前」捕获并写入 `Fixture`；术后状态（受击/治疗后的 HP 等）只在
   结果顶层 `TargetHp`，**不得**回写成 `Fixture` 输入。
 - 缺陷史：合入 M52 的装置曾在排水循环之后取 `target.WAbil.HP`（术后值）；旧世代 golden 记的是输入（100）。
-  本笔改为施法前输入；附 `--case runmagic-input-selftest`（`healing/heal`：输入 50、术后 ≠ 50，断言
-  `Fixture.target_hp == 50`）——若捕获再被挪到排水后，该用例必红。
+  本笔改为施法前输入；附 `--case runmagic-input-selftest`（**`lightning-11` 的 `hit`（seed 13）：输入 100 →
+  术后 85，断言 `Fixture.target_hp == 100`**）——若捕获再被挪到排水后，该用例必红。
+- **为什么换样本（可证伪性留痕）**：最初用 `healing/heal`（输入 50），实测**术后 HP == 输入 50** ⇒ 在"把捕获
+  挪到排水后"的变异下断言仍成立、**牙咬不住**；故改用术后确实变化的雷电 hit。自测样本必须按"能否证伪捕获点
+  错位"来选，而不是按"看起来相关"。
