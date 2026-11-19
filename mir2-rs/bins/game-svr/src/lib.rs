@@ -84577,7 +84577,10 @@ GMEXECUTE f
         fn direct_goto(&mut self, label: &str) {
             let sg = self.sessions.get_mut("hero").unwrap();
             let session = self.shop_sessions.entry("hero".to_string()).or_default();
-            let sell_off = self.sell_off_sessions.entry("hero".to_string()).or_default();
+            let sell_off = self
+                .sell_off_sessions
+                .entry("hero".to_string())
+                .or_default();
             let mut rng = std::mem::replace(
                 &mut self.world.rng,
                 mir2_shared::rng::RandomNumber::with_seed(0),
@@ -84721,7 +84724,8 @@ GMEXECUTE f
     fn read_utf8(path: &str) -> String {
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"))
     }
-    const WUSHI_SCRIPT_PATH: &str = r"E:\MirServer\M2GameSvr\Envir\Market_Def\任务NPC\武士-0114.txt";
+    const WUSHI_SCRIPT_PATH: &str =
+        r"E:\MirServer\M2GameSvr\Envir\Market_Def\任务NPC\武士-0114.txt";
     const QFUNCTION_PATH: &str = r"E:\MirServer\M2GameSvr\Envir\Market_Def\QFunction-0.txt";
     const NP07_FIXTURE_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -84964,8 +84968,12 @@ GMEXECUTE f
                     rig.sessions.get_mut("hero").unwrap().game_gold = 0;
                     rig.direct_goto("@main");
                     let says = T137Rig::says(&rig.drain());
-                    let expect: Vec<String> = case["rm"].as_array().unwrap().iter()
-                        .map(|r| r["msg"].as_str().unwrap().to_string()).collect();
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
                     assert_eq!(says, expect, "{name}: 变量替换说词");
                 }
                 "chain_break" | "other_record_intact" => {
@@ -84974,8 +84982,12 @@ GMEXECUTE f
                     let label = case["ctx"]["label"].as_str().expect("label");
                     rig.direct_goto(label);
                     let says = T137Rig::says(&rig.drain());
-                    let expect: Vec<String> = case["rm"].as_array().unwrap().iter()
-                        .map(|r| r["msg"].as_str().unwrap().to_string()).collect();
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
                     assert_eq!(says, expect, "{name}: 断链说词");
                 }
                 other => panic!("golden 出现未知用例 {other}（禁止静默跳过）"),
