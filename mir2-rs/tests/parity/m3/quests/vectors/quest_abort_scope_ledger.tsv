@@ -1,0 +1,2 @@
+# case_id	scripts	loaded_prefix	failing_script	exception
+ABORT-1	quest_abort_good_a,quest_abort_bad,quest_abort_good_b	quest_abort_good_a	quest_abort_bad	IndexOutOfRangeException

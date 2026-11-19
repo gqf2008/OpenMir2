@@ -179,7 +179,7 @@ Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必�
 | `RM_DELAYMAGIC(8021)` wParam=伤害, p1=坐标, p2=nRage, p3=目标, prio=255 | **服务端事件，不是客户端帧**：`src/M2Server/Actor/BaseObject.Base.cs:711-728`（`GetMagStruckDamage` → 动物 race 伤害 `/1.2` → 范围内则发 `RM_MAGSTRUCK`） | 比较"是否登记延时事件 + 伤害 + nRage + 目标"；不产 SM 帧 |
 | `RM_MAGIC_LVEXP`（训练尾） | `src/M2Server/Player/PlayObject.Message.cs:1800-1801`（`SM_MAGIC_LVEXP`，p1/p2 + `LoWord/HiWord(nParam3)`） | `SM_MAGIC_LVEXP` 帧：字段逐项 |
 | `RM_MAGHEALING(8034)` wParam=0, p1=nPower, p2=0, p3=0, prio=255（`SendSelfDelayMsg`） | **服务端事件，不是客户端帧**：`src/M2Server/Player/PlayObject.Message.cs:1619-1629`（到点只累计 `IncHealing`/`PerHealing`，上限 300 的比较在 `:1620`；实际回血由后续 `Run` 的恢复周期另出 53） | 比较"是否登记延时治疗事件 + nPower + 目标"；**不产 SM 帧**（与 `RM_DELAYMAGIC` 同类） |
-| `RM_DURACHANGE(10125)` wParam=槽位, p1=持久, p2=DuraMax | `src/M2Server/Player/PlayObject.Message.cs:1803-1804`（→ `SM_DURACHANGE(642)`：Recog=Dura、Param=槽位、Tag/Series=DuraMax）。护身符支的触发者 = `MagicBase.UseAmulet`（`src/M2Server/Magic/MagicBase.cs:109-127`，每次 −100 持久；持久不足时改走 `SendDelItems` 并清 `Index`）⇒ **火符的 miss 支同样出现 642** | `SM_DURACHANGE` 帧逐字段 + `UseItems[ArmRingl].Dura` 的 −100 |
+| `RM_DURACHANGE(10125)` wParam=槽位, p1=持久, p2=DuraMax, prio=141（`10125 & 0xFF`）、late=false | `src/M2Server/Player/PlayObject.Message.cs:1803-1804`（→ `SM_DURACHANGE(642)`：Recog=Dura、Param=槽位、Tag/Series=DuraMax）。护身符支的触发者 = `MagicBase.UseAmulet`（`src/M2Server/Magic/MagicBase.cs:109-127`，每次 −100 持久；持久不足时改走 `SendDelItems` 并清 `Index`）⇒ **火符的 miss 支同样出现 642**。**队列序**：与 `RM_MAGICFIRE(10120, prio 136)` 同队、按 `(byte)ident` 出队 ⇒ **638 先、642 后**（火符修复卡按此把 642 纳入同批 `SpellFrameBuf`，仅 `UseAmulet` 路径） | `SM_DURACHANGE` 帧逐字段 + `UseItems[ArmRingl].Dura` 的 −100 + caster 的 638→642 顺序 |
 | `RM_DELAYPUSHED(8043)` wParam=nDir, p1=坐标, p2=push, p3=目标 | **服务端事件**：`src/M2Server/Actor/BaseObject.Base.cs:733-739`（到点 `CharPushed`，逐格 `SendRefMsg(RM_PUSH)`）；`RM_PUSH(8092)` → `src/M2Server/Player/PlayObject.Message.cs:1525-1533`（`SM_BACKSTEP(9)`）。夹具前提：**`UserMagic.Level=3`**（`Random(Level)-1`，Level<3 时恒 ≤0 ⇒ 永不推挤；产生点在 `src/M2Server/Magic/MagicManager.cs:1048-1052`） | `SM_BACKSTEP(9)` 帧逐字段 + 逐格条数；其余 SM 不变 |
 
 RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomNumber`（与原版同算法）。
@@ -537,7 +537,7 @@ ActorId 段 1001../2001../3001..、`M2Share.NetChannel` 旁路、排水「抽空
 |---|---|---|
 | 11/45 雷电 | `golden/magic/lightning-11.json`、`lightning-45.json` | **已接 Rust 驱动并升格**（MG-19 / MG-54，`basis=semantic`） |
 | 2 治愈 | `golden/magic/healing.json` | **已产出（C#）**；Rust 未接。三支 = heal/full/self（本支**无** AntiMagic 骰） |
-| 13 火符 | `golden/magic/firecharm.json` | **已产出（C#）**；Rust 未接 |
+| 13 火符 | `golden/magic/firecharm.json` | **已接驱动（红→产品修复→绿）**；MG-27（`:328` body）升 `verified`；MG-20（`:315` 7 魔号共用组标签）按口径保持 `implemented_unverified` |
 | 44 灭天火 | `golden/magic/hbfireball.json` | **已产出（C#）**；Rust 未接 |
 
 雷电三支 seed 由 `Random(10)` 与 AntiMagic 的关系扫描（miss=1 / edge=5 / hit=13，与火球同）；

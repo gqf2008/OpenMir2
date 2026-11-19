@@ -1,10 +1,10 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "domain": "npc",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
-    "time": "2026-11-19T23:28:45+08:00"
+    "head": "9f38e5b716a7d26f58063bd16e03fa9a613c8f59",
+    "time": "2026-11-20T01:45:00+08:00"
   },
   "status_enum": [
     "verified",
@@ -92,20 +92,24 @@
         "line": 674,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "t137_click_fixed_npc_main_says_menu_through_production_path",
+        "test": "np01_click_main_matches_oracle_golden",
         "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "click_npc_type0_fixed_npc_still_answers_643",
-          "t160_click_fixed_npc_main_take_item_and_gold_write_back"
-        ]
+        "fixture": "mir2-rs/tests/parity/golden/npc/np01_click_main.json",
+        "cases": [
+          "click_main_ok",
+          "click_main_far",
+          "click_main_dead",
+          "click_main_rate_limited",
+          "click_no_main_fallback"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "Rust 派发 lib.rs 第 6317/27383 行、NormNpc.Click 等价第 6033 行；无 oracle 夹具"
+      "notes": "行为面+状态面均断言；牙 A/B/C（E:/UserFleet/qa/npc-parity/）；golden 版本 sha256=42fd2930…2bc4（旧 41e87d9b…c5fce 因墙钟字段 ctx.click_npc_time 排除而作废重判；determinism=BEHAVIOR_IDENTICAL；rejudge rc=0）",
+      "basis": "semantic"
     },
     {
       "id": "NP-02",
@@ -115,19 +119,23 @@
         "line": 114,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "merchant_dialog_label_gate",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "merchant_dlgselect_exit_emits_one_merchantdlgclose_with_npc_recog"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np02_dialog_select.json",
+        "cases": [
+          "dlg_ask_ok",
+          "dlg_back_to_main",
+          "dlg_unknown_label",
+          "dlg_ask_back"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "1011 派发 lib.rs 第 7094 行；merchant_base_user_select 第 8907 行；guild_official.rs::handle_select 第 461 行"
+      "notes": "对话选择经 Merchant.UserSelect→GotoLable；对拍钉出状态差异：oracle 在 @back 空栈时写回 ScriptGoBackLable=@main，Rust 原只本地取默认值（已修）；牙 D 跳过 @back 二次跳转⇒dlg_ask_back 红（E:/UserFleet/qa/npc-parity/）",
+      "basis": "semantic"
     },
     {
       "id": "NP-03",
@@ -151,7 +159,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "商店子命令归交易面（M3⑤），不在本分母；CastleOfficial.cs:93 / GuildOfficial.cs:55 覆写"
+      "notes": "C# golden 已产（真实商家脚本，@buy→SM 645 / @sell→SM 646 / @storage 经 @cangku 序列）；Rust 驱动器（商家装载链）待 ca 合入新 master，未 verified"
     },
     {
       "id": "NP-04",
@@ -161,19 +169,21 @@
         "line": 46,
         "line_end": 75
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "check_quest_status"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np04_main_selection.json",
+        "cases": [
+          "click_switch",
+          "act_usercmd6_first_only"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "crates/script/src/engine/mod.rs 的 goto_label/check_quest_status（第 1008/1074 行附近）；无直接 oracle 夹具"
+      "notes": "真实脚本 QFunction-0.txt [@UserCmd6]（sha256 9c8187bf…09df，第 382 行）；#ACT 只执行首条 ⇒ 元宝 10 不变；牙 E（run_actions 改 continue ⇒ game_gold 10 vs 4 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-05",
@@ -183,17 +193,21 @@
         "line": 89,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "merchant_dialog_label_gate",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np05_extjmp.json",
+        "cases": [
+          "extjmp_allowed",
+          "extjmp_blocked"
+        ],
         "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "guild_official.rs 第 582 行注释 + 引擎判定"
+      "notes": "synthetic 夹具（冻结语料 Market_Def+MapQuest_def 0 使用 `] TRUE`；sha256 d7cd88bd…d028）；引擎门等价证据；牙 F（删 boExtJmp 门 ⇒ extjmp_blocked 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-06",
@@ -221,7 +235,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "7 条 port-free 用例：同脚本+同 label+同初始状态，C# 参照 vs Rust 逐行 diff"
+      "notes": "7 条 port-free 用例：同脚本+同 label+同初始状态，C# 参照 vs Rust 逐行 diff",
+      "basis": "semantic"
     },
     {
       "id": "NP-07",
@@ -231,17 +246,21 @@
         "line": 101,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "goto_executes_goto_not_endquest_after_flip",
-        "test_file": "mir2-rs/crates/script/tests/engine_tests.rs",
-        "fixture": null,
-        "cases": [],
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np07_chain_break.json",
+        "cases": [
+          "chain_break",
+          "other_record_intact"
+        ],
         "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "相邻覆盖（GOTO 语义），非本条的专门夹具"
+      "notes": "BREAK 置 result=false ⇒ 同 record 后续 procedure 不执行（ScriptEngine.cs:914-916）；synthetic 夹具（冻结语料 0 条符合该构造，sha256 4904046f…c8e）；引擎门等价证据；牙 H（Break 改 true ⇒ chain_break 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-08",
@@ -251,20 +270,23 @@
         "line": 987,
         "line_end": 999
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "merchant_say_text_and_gbk_bytes",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "say_text_must_carry_chrname_prefix",
-          "run_login_emits_say_with_chrname_prefix"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np01_click_main.json（等各 np0x golden 的 sm[] 面）",
+        "cases": [
+          "click_main_ok",
+          "dlg_ask_ok",
+          "chain_break",
+          "var_username"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "M4 只比对 msg 11009 行文本，不覆盖线缆帧/优先级；优先级实现见 guild_official.rs 第 406-432 行"
+      "notes": "帧面（SM 643 ident/param/tag/series/tail + \"ChrName/\" 前缀）逐字断言；**优先级子面未断言**：Rust 无 wire 级 priority 字段，oracle 金标准记录本批为普通队列(1)；不许写成\"等价\"",
+      "basis": "semantic"
     },
     {
       "id": "NP-09",
@@ -274,20 +296,20 @@
         "line": 275,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "merchant_click_main_say_expands_player_and_npc_vars",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "merchant_variable_text_vectors",
-          "line_variable_text_stops_at_first_non_variable_token"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np09_var_text.json",
+        "cases": [
+          "var_username"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "Merchant.GetVariableText 覆写在 src/GameSrv/Npc/Merchant.cs:1109"
+      "notes": "真实脚本 武士-0114.txt [@main] else 分支 <$USERNAME>（sha256 ead2df9f…bae7）；说词尾逐字断言；牙 I（line_variable_text 原样返回 ⇒ 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-10",
@@ -334,7 +356,9 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "ProcessNpcs 逐 tick 驱动"
+      "notes": "装置未建（多观察者 AOI 金标准），需独立卡 openmir2-npc-multiobserve-golden"
     }
-  ]
+  ],
+  "basis": "semantic",
+  "schema_note": "本域无旧清单来源：legacy_id 不适用（N/A）。"
 }

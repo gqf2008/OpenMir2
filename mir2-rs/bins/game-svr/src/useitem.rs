@@ -783,25 +783,41 @@ mod tests {
         frames_nonzero || notices_nonzero || rng_nonzero || case_state_changed(case)
     }
 
-    /// 两层非零（Z5）：夹具至少一例同时覆盖「SM 帧>0」与「RM 通知>0 或 状态有变」。
+    /// 单例两层（Z5）：`SM 帧>0` 且（`RM 通知>0` 或 `状态有变`）。
+    fn case_two_layer(c: &Value) -> bool {
+        let sm = c["expect"]["immediate_frames"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        let rm = c["expect"]["notices"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        sm && (rm || case_state_changed(c))
+    }
+
+    /// 夹具级（Z5）：至少一例两层。
     fn fixture_covers_two_layers(doc: &Value) -> bool {
         doc["cases"]
             .as_array()
-            .map(|cs| {
-                cs.iter().any(|c| {
-                    let sm = c["expect"]["immediate_frames"]
-                        .as_array()
-                        .map(|a| !a.is_empty())
-                        .unwrap_or(false);
-                    let rm = c["expect"]["notices"]
-                        .as_array()
-                        .map(|a| !a.is_empty())
-                        .unwrap_or(false);
-                    sm && (rm || case_state_changed(c))
-                })
-            })
+            .map(|cs| cs.iter().any(case_two_layer))
             .unwrap_or(false)
     }
+
+    /// Z4 不适用（golden 全零）的用例名单。**当前为空**（23 例均有 635/636 帧）。
+    /// 夹具一变（新增/改名/某例变全零）⇒ 名单 `assert_eq!` 红，须与用例同一次提交更新并写进提交信息。
+    const EXPECTED_Z4_EXEMPT: &[&str] = &[];
+
+    /// Z5 只需一层（纯失败：仅 `SM_EAT_FAIL`、无 RM/状态变化）的用例名单——合法「只发失败帧」，
+    /// 故豁免两层要求（强判会误红）。夹具一变须同步更新本名单（`assert_eq!` 会咬）。
+    const EXPECTED_ONE_LAYER: &[&str] = &[
+        "eat_fail_not_found",
+        "eat_fail_stdmode_other",
+        "eat_fail_template_missing",
+        "eat_fail_dead",
+        "eat_fail_stdmode31_no_functionnpc",
+        "eat_fail_stdmode31_unbind_bag_full",
+    ];
 
     /// Z4 gate：golden 非零 ⇒ Rust 必须非零；golden 全零 ⇒ 不适用（合法全零失败例豁免）。
     fn z4_ok(golden_nonzero: bool, rust_nonzero: bool) -> bool {
@@ -893,29 +909,13 @@ mod tests {
         let cases = cases_or_red(&doc).unwrap_or_else(|e| panic!("{e}"));
         // 夹具记录的解包表（Shape → 解包物名）；无该表 = 空表。
         let unbind = unbind_from(&doc);
-        let two_layer_cases = doc["cases"]
-            .as_array()
-            .map(|cs| {
-                cs.iter()
-                    .filter(|c| {
-                        let sm = c["expect"]["immediate_frames"]
-                            .as_array()
-                            .map(|a| !a.is_empty())
-                            .unwrap_or(false);
-                        let rm = c["expect"]["notices"]
-                            .as_array()
-                            .map(|a| !a.is_empty())
-                            .unwrap_or(false);
-                        sm && (rm || case_state_changed(c))
-                    })
-                    .count()
-            })
-            .unwrap_or(0);
         assert!(
             fixture_covers_two_layers(&doc),
             "Z5：夹具必须至少一例同时覆盖 SM 帧与 RM/状态两层"
         );
         let mut z4_applicable = 0usize;
+        let mut z4_exempt_names: Vec<String> = Vec::new();
+        let mut one_layer_names: Vec<String> = Vec::new();
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let c = &case["ctx"];
@@ -958,6 +958,11 @@ mod tests {
                 || item_list != item_list_before;
             if golden_nonzero {
                 z4_applicable += 1;
+            } else {
+                z4_exempt_names.push(name.to_string());
+            }
+            if !case_two_layer(case) {
+                one_layer_names.push(name.to_string());
             }
             assert!(
                 z4_ok(golden_nonzero, rust_nonzero),
@@ -1112,9 +1117,41 @@ mod tests {
             );
         }
         let total = cases.len();
+        // Z4 计数式 + 不适用名单（断言，非打印）。
+        assert_eq!(
+            z4_applicable + z4_exempt_names.len(),
+            total,
+            "Z4 计数式：适用 + 不适用 == 夹具例数"
+        );
+        let mut z4_ex: Vec<&str> = z4_exempt_names.iter().map(String::as_str).collect();
+        z4_ex.sort_unstable();
+        let mut z4_expect: Vec<&str> = EXPECTED_Z4_EXEMPT.to_vec();
+        z4_expect.sort_unstable();
+        assert_eq!(
+            z4_ex.as_slice(),
+            z4_expect.as_slice(),
+            "Z4 不适用名单漂移：须随夹具变更在同一次提交更新并写进提交信息"
+        );
+        // Z5 计数式 + 豁免名单（断言，非打印）。
+        let two_layer = total - one_layer_names.len();
+        assert_eq!(
+            two_layer + one_layer_names.len(),
+            total,
+            "Z5 计数式：两层 + 豁免 == 总例数"
+        );
+        let mut ol: Vec<&str> = one_layer_names.iter().map(String::as_str).collect();
+        ol.sort_unstable();
+        let mut ol_expect: Vec<&str> = EXPECTED_ONE_LAYER.to_vec();
+        ol_expect.sort_unstable();
+        assert_eq!(
+            ol.as_slice(),
+            ol_expect.as_slice(),
+            "Z5 豁免名单漂移：须随夹具变更在同一次提交更新并写进提交信息"
+        );
         eprintln!(
-            "Z4：本批 {total} 例中 {z4_applicable} 例适用（golden 非零），{} 例因 golden 全零不适用；Z5：本批 {two_layer_cases} 例带两层",
-            total - z4_applicable
+            "Z4：本批 {total} 例中 {z4_applicable} 例适用、{} 例不适用；Z5：本批 {two_layer} 例带两层、{} 例豁免（计数式与名单已断言）",
+            z4_exempt_names.len(),
+            one_layer_names.len()
         );
     }
 

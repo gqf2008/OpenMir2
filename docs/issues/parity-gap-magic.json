@@ -5,8 +5,9 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
   "counting_moment": {
-    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
-    "time": "2026-11-19T23:30:00+08:00"
+    "head": "8391ae4bbaf00f839635e117110c7d7f3cf1cd3b",
+    "time": "2026-11-20T02:03:38+0800",
+    "note": "M25 = 8391ae4bb（本域最后一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执。"
   },
   "status_enum": [
     "verified",
@@ -510,7 +511,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级；`src/M2Server/Magic/MagicManager.cs:315` 是外层护身符门 case 组（含 firecharm 等 7 个魔号），firecharm 的执行链由 `MG-27`（`:328`）的同一 golden 覆盖；该组其余 6 个魔号未验，故本组标签不升格"
     },
     {
       "id": "MG-21",
@@ -657,13 +658,22 @@
         "line": 328,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_firecharm",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/firecharm.json（C# oracle 生成；miss/edge/hit）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::firecharm_parity_miss",
+          "tests::firecharm_parity_edge",
+          "tests::firecharm_parity_hit"
+        ]
       },
       "cost": "M",
       "deviation": null,

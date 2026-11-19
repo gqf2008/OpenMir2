@@ -520,6 +520,197 @@ async fn bind_gate_listener(advertised_addr: &str, gate_port: u16) -> std::io::R
     TcpListener::bind((advertised_addr, gate_port)).await
 }
 
+/// 世界准入闸：oracle `M2Share.StartReady` 的**最小建模**（卡 `openmir2-quests-parity` §10.7）。
+///
+/// oracle 语义（`TCPNetChannel.cs:72-78`）：`StartReady` 为假 ⇒ 拒绝网关连接
+/// （`LogService.Info("服务器未就绪: {0}")` + `Close()`，不分配槽位）。`StartReady` 在
+/// `GameApp.InitializeWorld` 整块 try/catch 的**末尾**置真（`GameApp.cs:238`）⇒ 世界初始化
+/// 异常（如 NPC 脚本装载中止）时其后的赋值不执行：进程活着、世界内存里留着前缀 NPC、
+/// **网关永久连不上**。
+///
+/// 本仓状态机（`Booting → Ready | Aborted`，单向）：
+/// - `Booting`：网关连接**挂起**（TCP 已接受，不拒也不受理）。**未建模偏差**：oracle 在此
+///   窗口也拒连；Rust 的 listener 早于世界初始化 bind，若直接拒会与既有的「启动即连」
+///   进程测试/部署冲突，故只挂起（卡面 deviation 登记，不得读作等价）。
+/// - `Ready`：正常受理（与改动前逐字节同路径）。
+/// - `Aborted`：拒连（`服务器未就绪: {peer}` + 关 socket）+ sim 拒一切入世界事件。
+pub struct WorldStartGate {
+    state: std::sync::atomic::AtomicU8,
+    decision: tokio::sync::Notify,
+}
+
+/// `Booting`：世界初始化未出结论。
+const WORLD_GATE_BOOTING: u8 = 0;
+/// `Ready`：`M2Share.StartReady = true` 的等价物。
+const WORLD_GATE_READY: u8 = 1;
+/// `Aborted`：初始化中止 ⇒ 永久不就绪。
+const WORLD_GATE_ABORTED: u8 = 2;
+
+impl Default for WorldStartGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WorldStartGate {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::atomic::AtomicU8::new(WORLD_GATE_BOOTING),
+            decision: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// `M2Share.StartReady = true`：只在 `Booting → Ready` 生效；已中止则**不覆盖**。
+    pub fn mark_ready(&self) {
+        if self
+            .state
+            .compare_exchange(
+                WORLD_GATE_BOOTING,
+                WORLD_GATE_READY,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            self.decision.notify_waiters();
+        }
+    }
+
+    /// 初始化中止：永久不就绪（oracle 的 `StartReady = true` 不执行）。
+    pub fn abort(&self) {
+        let _ = self.state.compare_exchange(
+            WORLD_GATE_BOOTING,
+            WORLD_GATE_ABORTED,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        self.decision.notify_waiters();
+    }
+
+    /// 是否已就绪（`Booting`/`Aborted` 都为假）。
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::SeqCst) == WORLD_GATE_READY
+    }
+
+    /// 是否已中止（sim 事件排水据此拒绝入世界事件）。
+    #[must_use]
+    pub fn is_aborted(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::SeqCst) == WORLD_GATE_ABORTED
+    }
+
+    /// 等世界初始化给出结论：`true` = 就绪可受理；`false` = 中止拒连。
+    ///
+    /// `Booting` 期间挂起（`Notify` 先注册再读状态，见 tokio 的 `notified()` 口径）。
+    /// **不带上界**：生产路径一律用 [`Self::admitted_until`]（挂起必须有界，见其文档）。
+    pub async fn admitted(&self) -> bool {
+        loop {
+            let notified = self.decision.notified();
+            match self.state.load(std::sync::atomic::Ordering::SeqCst) {
+                WORLD_GATE_BOOTING => notified.await,
+                WORLD_GATE_READY => return true,
+                _ => return false,
+            }
+        }
+    }
+
+    /// 等世界初始化给出结论，**最多等 `bound`**：`true` = 就绪可受理；
+    /// `false` = 中止**或等待超时**（两者都按「服务器未就绪」拒连）。
+    ///
+    /// 为什么必须有界（opc-07 2026-11-20 裁定）：oracle 在 `StartReady` 未置时**直接拒连**；
+    /// 本仓为了不破坏启动时序改为挂起，若无界，世界初始化卡住时连接会永久挂起。
+    pub async fn admitted_until(&self, bound: std::time::Duration) -> bool {
+        tokio::select! {
+            ok = self.admitted() => ok,
+            () = tokio::time::sleep(bound) => false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod world_start_gate_tests {
+    use super::WorldStartGate;
+
+    /// `Booting`：既不就绪也未中止（网关连接挂起，sim 尚未出结论）。
+    #[test]
+    fn booting_state_is_neither_ready_nor_aborted() {
+        let g = WorldStartGate::new();
+        assert!(!g.is_ready());
+        assert!(!g.is_aborted());
+    }
+
+    /// `mark_ready` 之后 `abort` 不生效（oracle 的 `StartReady` 只有一次置真/永不置真）。
+    #[test]
+    fn abort_after_ready_does_not_downgrade() {
+        let g = WorldStartGate::new();
+        g.mark_ready();
+        assert!(g.is_ready());
+        g.abort();
+        assert!(g.is_ready());
+        assert!(!g.is_aborted());
+    }
+
+    /// 中止是永久的：此后的 `mark_ready` 不得把世界置回就绪（§10.7 ①）。
+    #[test]
+    fn abort_is_permanent() {
+        let g = WorldStartGate::new();
+        g.abort();
+        assert!(g.is_aborted());
+        g.mark_ready();
+        assert!(!g.is_ready());
+        assert!(g.is_aborted());
+    }
+
+    /// `Booting` 期间 `admitted()` 挂起；`Ready` 后放行。
+    #[tokio::test]
+    async fn admitted_waits_booting_then_true_on_ready() {
+        let g = std::sync::Arc::new(WorldStartGate::new());
+        let g2 = std::sync::Arc::clone(&g);
+        let waiter = tokio::spawn(async move { g2.admitted().await });
+        tokio::task::yield_now().await;
+        g.mark_ready();
+        assert!(waiter.await.expect("等待任务"));
+    }
+
+    /// 无决定时 `admitted_until` 必须在上界处返回 `false`（挂起有界，不无限等待）。
+    #[tokio::test]
+    async fn admitted_until_times_out_without_decision() {
+        let g = WorldStartGate::new();
+        let started = std::time::Instant::now();
+        let ok = g.admitted_until(std::time::Duration::from_millis(30)).await;
+        assert!(!ok, "无决定 ⇒ 超时按未就绪拒连");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(25),
+            "必须真的等到上界附近：{:?}",
+            started.elapsed()
+        );
+    }
+
+    /// 上界内就绪 ⇒ 放行（超时不得误伤正常路径）。
+    #[tokio::test]
+    async fn admitted_until_true_when_ready_within_bound() {
+        let g = std::sync::Arc::new(WorldStartGate::new());
+        let g2 = std::sync::Arc::clone(&g);
+        let waiter =
+            tokio::spawn(async move { g2.admitted_until(std::time::Duration::from_secs(5)).await });
+        tokio::task::yield_now().await;
+        g.mark_ready();
+        assert!(waiter.await.expect("等待任务"));
+    }
+
+    /// `Booting` 期间 `admitted()` 挂起；中止后必须返回 `false`（网关拒连）。
+    #[tokio::test]
+    async fn admitted_returns_false_after_abort() {
+        let g = std::sync::Arc::new(WorldStartGate::new());
+        let g2 = std::sync::Arc::clone(&g);
+        let waiter = tokio::spawn(async move { g2.admitted().await });
+        tokio::task::yield_now().await;
+        g.abort();
+        assert!(!waiter.await.expect("等待任务"));
+    }
+}
+
 /// 启动期 **connect 相位**的**快速观察**上界（卡 `openmir2-gamesvr-db-startup-hermeticity`，
 /// review F1/F3；三态拆分见卡 `openmir2-gamesvr-db-probe-threshold`）。
 ///
@@ -637,6 +828,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // **卡 `openmir2-test-permission-seam`**：测试注入缝，**默认关**（不设 ⇒ 权限仍恒 0，oracle 行为不变）。
     // 非法值 ⇒ fail-closed（与 `MIR2_RNG_SEED` / `MIR2_CLOCK_MS` 同款纪律：不许「以为注入了、其实没有」）。
     // **卡 `openmir2-ids-keepalive-timeout`**：LoginSrv 链路观测缝，默认关（不设 ⇒ 一行不多）。
+    // 世界就绪等待上界（挂起必须有界；oracle 同窗口直接拒连，卡 `openmir2-quests-parity` §10.8）。
+    let gate_ready_wait = std::time::Duration::from_millis(
+        test_seams::gate_ready_wait_ms_from_env().map_err(anyhow::Error::msg)?,
+    );
+    // 测试缝：就绪决策延迟（缺省 0；进程级用例构造「Ready 晚于上界」）。
+    test_seams::install_world_ready_delay_from_env().map_err(anyhow::Error::msg)?;
     if test_seams::install_log_ids_from_env().map_err(anyhow::Error::msg)? {
         glog!(
             "INF",
@@ -1476,6 +1673,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // **T-132**：闭包 move 整个 `cfg` 会与 spawn 之后的 `cfg.check_block` 冲突 ⇒ 先拷出
     // 四个名字色（`CastleNameColors` 是 Copy）。
     let castle_name_colors = cfg.castle_name_colors();
+    // 世界准入闸（卡 `openmir2-quests-parity` §10.7）：sim 序言末尾置 Ready；
+    // NPC 装载中止 ⇒ Aborted（网关拒连 + sim 拒入世界）。
+    let world_start = std::sync::Arc::new(WorldStartGate::new());
+    let sim_world_start = std::sync::Arc::clone(&world_start);
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1680,6 +1881,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 sim_ids_out,
                 cfg.payment_mode,
                 planes,
+                sim_world_start,
             )
         })
         .context("起 sim 线程失败")?;
@@ -1803,6 +2005,27 @@ async fn run_inner(args: &[String]) -> Result<()> {
         };
         sock.set_nodelay(true).ok();
         glog!("INF", "游戏网关连接：{peer}");
+        // oracle `TCPNetChannel.Connecting`（`TCPNetChannel.cs:72-78`）：`M2Share.StartReady`
+        // 为假 ⇒ `LogService.Info("服务器未就绪: {0}")` + `Close()`，不分配网关槽位。
+        // 本仓口径（见 [`WorldStartGate`]）：Booting 挂起等结论；Aborted 拒连；Ready 同旧路径。
+        let admitted = tokio::select! {
+            ok = world_start.admitted_until(gate_ready_wait) => ok,
+            _ = shutdown_signal.notified() => {
+                glog!("INF", "关服：停止接受新的网关连接");
+                break;
+            }
+        };
+        if !admitted {
+            // oracle `TCPNetChannel.cs:72-78` 的原文（`服务器未就绪: {ip}`）+ Close()：判据只看前缀。
+            // 后半句区分「中止」与「等待超时」两种本仓来源（oracle 没有挂起，故无此歧义）。
+            glog!(
+                "INF",
+                "服务器未就绪: {peer}（世界初始化中止或未在 {}ms 内给出就绪结论）",
+                gate_ready_wait.as_millis()
+            );
+            drop(sock);
+            continue;
+        }
         let service_id = {
             let mut g = slots.lock().expect("gate slots poisoned");
             match g.alloc() {
@@ -7222,11 +7445,12 @@ fn handle_shop_cmd_inner(
             }
             // `Merchant.cs:922-929` 的 `@back` 支：`ScriptGoBackLable` 空则回 `@main`。
             if game_svr::shop::eq_label(label, "@back") {
-                let target = if session.script_go_back_lable.is_empty() {
-                    "@main".to_string()
-                } else {
-                    session.script_go_back_lable.clone()
-                };
+                // oracle `Merchant.cs:922-929`：空栈时**写回** `ScriptGoBackLable = "@main"`，
+                // 不是只在本地取默认值（状态面差异由 NP-02 对拍钉出，2026-11-20）。
+                if session.script_go_back_lable.is_empty() {
+                    session.script_go_back_lable = "@main".to_string();
+                }
+                let target = session.script_go_back_lable.clone();
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
                 let mut script_broadcasts2: Vec<String> = Vec::new();
@@ -14115,6 +14339,12 @@ fn handle_spell_cmd_with_magic(
                 let anti_magic = spell_target_anti_magic(world, req.target_actor_id);
                 // 13 的 `boSpellFail`（oracle `:322`）：默认 false（1/5/11/44/45 无该站点）。
                 let mut bo_spell_fail = false;
+                // **火符（13）的 642 与共享尾同批出队**：oracle 的 `RM_DURACHANGE(10125, prio 141)` 与
+                // `RM_MAGICFIRE(10120, prio 136)` 进同一 `MsgQueue`，按 `(byte)ident` 出队 ⇒ 638 先、642 后。
+                // 若把 642 直发会抢在 638 前；故 13 支把护身符帧收进同一 [`SpellFrameBuf`]，
+                // **只影响 `UseAmulet` 这条路径**（其它产 642 的地方仍直发）。
+                let mut spell_buf: Option<SpellFrameBuf> =
+                    (req.magic_id == 13).then(SpellFrameBuf::new);
                 if req.magic_id == 13 {
                     // `:322 boSpellFail = true` → `:323 MagicBase.CheckAmulet(playObject, 1, 1, ref nAmuletIdx)`。
                     // 与 14/15（P2）**同一套** `amulet_slot`/`check_amulet`/`use_amulet` 与耐久帧。
@@ -14176,7 +14406,15 @@ fn handle_spell_cmd_with_magic(
                                     .and_then(Option::as_ref)
                                 {
                                     let body = smframe::sm_durachange(it.dura, slot, it.dura_max);
-                                    send_self_frame(online, gates, chr_name, body);
+                                    match spell_buf.as_mut() {
+                                        Some(buf) => buf.push_actor(
+                                            online,
+                                            actor_id,
+                                            (mir2_protocol::messages::RM_DURACHANGE & 0xFF) as u8,
+                                            body,
+                                        ),
+                                        None => send_self_frame(online, gates, chr_name, body),
+                                    }
                                 }
                             }
                         }
@@ -14295,10 +14533,14 @@ fn handle_spell_cmd_with_magic(
                         tx,
                         ty,
                         outcome.target.unwrap_or(0),
-                        None,
+                        spell_buf.as_mut(),
                         // P3-B1/A-5 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
                         None,
                     );
+                    // 13 支：与 638 同批的 642 在这里按 `(byte)ident` 出队（638=136 先、642=141 后）。
+                    if let Some(buf) = spell_buf.take() {
+                        buf.flush(online, gates);
+                    }
                 }
             }
         } else {
@@ -25806,6 +26048,8 @@ fn sim_loop(
     ids_out: tokio::sync::mpsc::UnboundedSender<String>,
     payment_mode: u8,
     planes: Option<planes::PlanesLink>,
+    // 世界准入闸（`M2Share.StartReady` 的最小建模；见 [`WorldStartGate`]）。
+    world_start: std::sync::Arc<WorldStartGate>,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
@@ -26654,13 +26898,45 @@ fn sim_loop(
         }) {
             Ok(load) => {
                 let mut rename_rand = |min: i32, max: i32| world.rng.get_random_number(min, max);
-                let host = game_svr::npc::NpcHost::load(
+                let host = match game_svr::npc::NpcHost::load(
                     &envir_root,
                     &load.quest_npcs,
                     &load.merchants,
                     enter_cfg.script_goto_count_limit,
                     &mut rename_rand,
-                );
+                ) {
+                    Ok(host) => host,
+                    Err(abort) => {
+                        // oracle：`LoadScriptFile` 的异常穿出 `WorldServer.Initialize` 整批中止
+                        // （无 try/catch）⇒ 进程活着但 `StartReady` 不置真。这里**不再 `panic!`**：
+                        // 保留异常前已装载的前缀宿主（§10.7 裁决②），并把准入闸钉死为 Aborted。
+                        let game_svr::npc::NpcLoadAbort {
+                            panic,
+                            partial,
+                            failing,
+                        } = *abort;
+                        let names = partial
+                            .defs
+                            .iter()
+                            .map(|d| d.chr_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        glog!(
+                            "ERR",
+                            "NPC 脚本装载中止（oracle 同输入整批中止，异常穿出初始化链）：{panic}；\
+                             失败脚本 ChrName={} file={}/{}.txt；保留异常前已装载的前缀 NPC {} 条（ChrName={}）\
+                             ——世界保持不就绪，准入将被拒绝",
+                            failing.chr_name,
+                            failing.file_path,
+                            failing.script_name,
+                            partial.defs.len(),
+                            if names.is_empty() { "-" } else { &names }
+                        );
+                        world_start.abort();
+                        // 与 Ok(host) 同形：match 产出宿主，下面统一 npc_host = Some(host)。
+                        partial
+                    }
+                };
                 glog!(
                     "INF",
                     "MapQuest 隐藏 NPC 宿主就绪：quest_npcs={} merchants={} 装载失败={} ManageNPC={} FunctionNPC={} goto_limit={}",
@@ -26941,6 +27217,30 @@ fn sim_loop(
     // 两条通道各一个周转槽；优先通道的结转**先**被消耗（「控制事件先取」不被普通结转破坏）。
     let mut event_carry: Option<GateEvent> = None;
     let mut event_carry_ctl: Option<GateEvent> = None;
+    // 测试缝：把就绪/中止的**决策点**延迟（缺省 0 = 不延迟；仅供进程级用例构造超时场景）。
+    let ready_delay = test_seams::world_ready_delay();
+    if !ready_delay.is_zero() {
+        glog!(
+            "WRN",
+            "测试缝 {}={}ms 生效：世界就绪决策点延迟",
+            test_seams::TEST_WORLD_READY_DELAY_MS_ENV,
+            ready_delay.as_millis()
+        );
+        std::thread::sleep(ready_delay);
+    }
+    // oracle `GameApp.InitializeWorld` 末尾 `M2Share.StartReady = true`（`GameApp.cs:238`）：
+    // 世界初始化**全部完成**后才置就绪；中止路径（上面的 `world_start.abort()`）不置真。
+    // 位置 = 序言末尾（首个 tick 之前），不是 NPC 装载处——oracle 的 try/catch 只跳过其后
+    // 的初始化与这一句赋值；本仓其后各步不可失败（最小口径，卡面 §10.7）。
+    if world_start.is_aborted() {
+        glog!(
+            "ERR",
+            "世界初始化中止：保持不就绪（oracle 的 `M2Share.StartReady = true` 不执行）；准入拒绝"
+        );
+    } else {
+        world_start.mark_ready();
+        glog!("INF", "世界初始化完成：准入就绪");
+    }
     loop {
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
@@ -27036,6 +27336,13 @@ fn sim_loop(
         {
             match ev {
                 GateEvent::Opened { index, ip } => {
+                    if world_start.is_aborted() {
+                        glog!(
+                            "ERR",
+                            "世界未就绪（初始化中止）：拒绝用户登记 index={index} ip={ip}（准入被拒）"
+                        );
+                        continue;
+                    }
                     glog!(
                         "DBG",
                         "sim: 新用户登记 index={index} ip={ip}（open_session 属 S2b-3）"
@@ -27048,6 +27355,13 @@ fn sim_loop(
                     cmd,
                     tail,
                 } => {
+                    if world_start.is_aborted() {
+                        glog!(
+                            "ERR",
+                            "世界未就绪（初始化中止）：拒绝命令 index={index} socket={socket}（准入被拒）"
+                        );
+                        continue;
+                    }
                     glog!(
                         "DBG",
                         "sim: index={index} 命令 Recog={} Ident={} Param={} Tag={} Series={} tail={:?}",
@@ -27995,6 +28309,13 @@ fn sim_loop(
                     );
                 }
                 GateEvent::CertificationPending { index, ip } => {
+                    if world_start.is_aborted() {
+                        glog!(
+                            "ERR",
+                            "世界未就绪（初始化中止）：拒绝认证 index={index} ip={ip}（准入被拒）"
+                        );
+                        continue;
+                    }
                     glog!(
                         "DBG",
                         "sim: index={index} ip={ip} 收到无 `!` 的帧 ⇒ 认证链返回 Ignored（oracle 的 `if` 不成立）"
@@ -28155,6 +28476,19 @@ fn sim_loop(
                     }
                 }
                 GateEvent::LoadDbRequest(info) => {
+                    if world_start.is_aborted() {
+                        // 入世界必须 Ready（卡口径：登录/取档/进图都过这道门）。sim 序言结束前
+                        // 不处理事件 ⇒ 本处只可能看到 Ready/Aborted，Booting 不可达。
+                        glog!(
+                            "ERR",
+                            "世界未就绪（初始化中止）：拒绝取档进世界 Account:{} ChrName:{} SessionId:{} GateIdx:{}（准入被拒）",
+                            info.account,
+                            info.chr_name,
+                            info.session_id,
+                            info.gate_idx
+                        );
+                        continue;
+                    }
                     // **logon 处理入口**（卡 `openmir2-entry-gap-buckets`）：与「发出取档请求 + 各提前返回桶」
                     // 构成恒等式 `enter == request_sent + Σ(no_request_*)`（无重排队时）。
                     if let Some(line) = telemetry::record_logon_handler_enter() {
@@ -65266,7 +65600,7 @@ SendRefMsgRange=15
     }
 
     /// 某支火球夹具（golden 几何 + golden ActorId 段）。
-    fn fireball_rig(id_base: i32, magic_id: u16) -> SpellFrameRig {
+    fn fireball_rig(id_base: i32, magic_id: u16, sc: u16) -> SpellFrameRig {
         let mut rig = SpellFrameRig::new_layout(
             200,
             200,
@@ -65302,7 +65636,7 @@ SendRefMsgRange=15
             let sg = rig.ground_sessions.get_mut("caster").unwrap();
             sg.state.wabil.level = 30;
             sg.state.wabil.mc = 15;
-            sg.state.wabil.sc = 0;
+            sg.state.wabil.sc = sc;
             sg.state.wabil.mp = 0;
             sg.state.wabil.max_mp = 0;
             sg.state.wabil.hp = 500;
@@ -65392,7 +65726,14 @@ SendRefMsgRange=15
     /// **串行前提**：`rng_trace` 是进程级 `OnceLock`。本函数在开启前断言「本进程第一次开 trace」，
     /// 并用头部 seed 自证；因此在同一进程里跑第二支会**红**（而不是静默读串的流水）。
     /// 单跑命令：`cargo test -p game-svr --lib fireball_parity_miss -- --exact --test-threads=1`。
-    fn fireball_parity_drive(stem: &str, magic_id: u16, label: &str, seed: i32, id_base: i32) {
+    fn fireball_parity_drive(
+        stem: &str,
+        magic_id: u16,
+        sc: u16,
+        label: &str,
+        seed: i32,
+        id_base: i32,
+    ) {
         // 金标准的 `Sent` 是 **oracle 布局**（`SM_STRUCK` 头 = (受击者, HP, MaxHP, 伤害)、尾
         // `Param1=GetFeature()`）。生产默认是冻结客户端 `HIGHHP` 布局（拆位 HP、尾 Param1=MaxHP）；
         // 本用例**显式**切到 oracle 布局做语义对拍——`HIGHHP` 布局由
@@ -65414,7 +65755,7 @@ SendRefMsgRange=15
             "trace 头部 seed 必须与本支一致"
         );
 
-        let mut rig = fireball_rig(id_base, magic_id);
+        let mut rig = fireball_rig(id_base, magic_id, sc);
         // 必须与 rng_trace::enable(path, seed) 的 seed 一致：trace 只记元数据，数值由 world.rng 产生。
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n0 = trace_line_count(&trace);
@@ -65424,6 +65765,15 @@ SendRefMsgRange=15
 
         // ---- 段①：生产入口施法 ----
         rig.cast(magic_id, (101, 100), target);
+        eprintln!(
+            "[dbg] clock={} delays={:?}",
+            rig.world.clock_ms,
+            rig.world
+                .self_delay_msgs
+                .iter()
+                .map(|m| (m.ident, m.actor_id, m.deliver_at_ms))
+                .collect::<Vec<_>>()
+        );
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
 
@@ -65436,11 +65786,19 @@ SendRefMsgRange=15
             .find(|m| m.ident == mir2_world_bevy::slave::RM_DELAYMAGIC && m.actor_id == caster)
             .map(|m| (m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
 
-        // ---- 段②：推进世界时钟（600ms 延时到期 + 余量）后交付；只推进/只交付，不跑 tick 循环 ----
-        rig.world.clock_ms += 800;
+        // ---- 段②：推进世界时钟后交付；只推进/只交付，不跑 tick 循环 ----
+        // 1500ms 覆盖各支的最长自延迟：1/5/11/45/44 的 RM_DELAYMAGIC=600、13 的 =1200、
+        // RM_MAGIC_LVEXP=1000（构造时 `world.tick()` 已把时钟推到 200）。
+        rig.world.clock_ms += 1500;
         let outs = rig.world.deliver_self_delay_msgs();
         // `RM_DELAYMAGIC` 到点投递的观察值（`struck` = 目标侧 `RM_MAGSTRUCK` 已入队）。
         let delay_magic = outs.iter().find_map(|o| o.delay_magic);
+        eprintln!(
+            "[dbg] after clock={} outs={} delay_magic={:?}",
+            rig.world.clock_ms,
+            outs.len(),
+            delay_magic
+        );
         let rec = mir2_world_bevy::TickRecord {
             slave_self_deliveries: outs,
             ..Default::default()
@@ -65606,6 +65964,27 @@ SendRefMsgRange=15
             }
         }
 
+        // `RM_DURACHANGE(10125)`（护身符消耗，`UseAmulet`）：C# 入施法者队列，prio = 10125 & 0xFF = 141，
+        // late=false；Rust 观测面 = 实际发出的 `SM_DURACHANGE(642)` 帧（SM 头 = Recog=Dura、
+        // Param=槽位、Tag/Series=DuraMax）⇒ 反推 RM 字段（wParam=槽位、p1=Dura、p2=MakeLong(tag,series)）。
+        if let Some((_, b)) = all_frames
+            .iter()
+            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_DURACHANGE)
+        {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+            if let Some(who) = who_of(caster) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    10125,
+                    i64::from(cm.param),
+                    i64::from(cm.recog),
+                    i64::from(game_svr::feature::make_long(cm.tag, cm.series)),
+                    0,
+                    141,
+                    false,
+                ));
+            }
+        }
+
         let receivers = [
             ("caster", 911),
             ("target", 912),
@@ -65707,7 +66086,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_miss() {
-        fireball_parity_drive("fireball", 1, "miss", 1, 1000);
+        fireball_parity_drive("fireball", 1, 0, "miss", 1, 1000);
         fireball_case_assert("fireball", "miss", 100, 1);
     }
 
@@ -65715,7 +66094,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_edge() {
-        fireball_parity_drive("fireball", 1, "edge", 5, 2000);
+        fireball_parity_drive("fireball", 1, 0, "edge", 5, 2000);
         fireball_case_assert("fireball", "edge", 85, 5);
     }
 
@@ -65723,7 +66102,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball_parity_hit() {
-        fireball_parity_drive("fireball", 1, "hit", 13, 3000);
+        fireball_parity_drive("fireball", 1, 0, "hit", 13, 3000);
         fireball_case_assert("fireball", "hit", 85, 5);
     }
 
@@ -65733,21 +66112,21 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_miss() {
-        fireball_parity_drive("fireball5", 5, "miss", 1, 1000);
+        fireball_parity_drive("fireball5", 5, 0, "miss", 1, 1000);
         fireball_case_assert("fireball5", "miss", 100, 1);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_edge() {
-        fireball_parity_drive("fireball5", 5, "edge", 5, 2000);
+        fireball_parity_drive("fireball5", 5, 0, "edge", 5, 2000);
         fireball_case_assert("fireball5", "edge", 85, 5);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn fireball5_parity_hit() {
-        fireball_parity_drive("fireball5", 5, "hit", 13, 3000);
+        fireball_parity_drive("fireball5", 5, 0, "hit", 13, 3000);
         fireball_case_assert("fireball5", "hit", 85, 5);
     }
 
@@ -65784,7 +66163,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_miss() {
-        fireball_parity_drive("lightning11", 11, "miss", 1, 1000);
+        fireball_parity_drive("lightning11", 11, 0, "miss", 1, 1000);
         fireball_case_assert("lightning11", "miss", 100, 1);
         b1_golden_drain_assert("lightning-11.json", "miss", 2);
     }
@@ -65792,7 +66171,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_edge() {
-        fireball_parity_drive("lightning11", 11, "edge", 5, 2000);
+        fireball_parity_drive("lightning11", 11, 0, "edge", 5, 2000);
         fireball_case_assert("lightning11", "edge", 85, 5);
         b1_golden_drain_assert("lightning-11.json", "edge", 4);
     }
@@ -65800,7 +66179,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning11_parity_hit() {
-        fireball_parity_drive("lightning11", 11, "hit", 13, 3000);
+        fireball_parity_drive("lightning11", 11, 0, "hit", 13, 3000);
         fireball_case_assert("lightning11", "hit", 85, 5);
         b1_golden_drain_assert("lightning-11.json", "hit", 4);
     }
@@ -65808,7 +66187,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_miss() {
-        fireball_parity_drive("lightning45", 45, "miss", 1, 1000);
+        fireball_parity_drive("lightning45", 45, 0, "miss", 1, 1000);
         fireball_case_assert("lightning45", "miss", 100, 1);
         b1_golden_drain_assert("lightning-45.json", "miss", 2);
     }
@@ -65816,7 +66195,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_edge() {
-        fireball_parity_drive("lightning45", 45, "edge", 5, 2000);
+        fireball_parity_drive("lightning45", 45, 0, "edge", 5, 2000);
         fireball_case_assert("lightning45", "edge", 85, 5);
         b1_golden_drain_assert("lightning-45.json", "edge", 4);
     }
@@ -65824,7 +66203,7 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn lightning45_parity_hit() {
-        fireball_parity_drive("lightning45", 45, "hit", 13, 3000);
+        fireball_parity_drive("lightning45", 45, 0, "hit", 13, 3000);
         fireball_case_assert("lightning45", "hit", 85, 5);
         b1_golden_drain_assert("lightning-45.json", "hit", 4);
     }
@@ -66199,6 +66578,61 @@ SendRefMsgRange=15
         assert_eq!(fire["param"], 100);
         assert_eq!(fire["tag"], 100);
         b1_golden_drain_assert("healing.json", "self", 2);
+    }
+
+    /// `13 火符`（`SKILL_FIRECHARM`，护身符支）真实台账驱动。
+    /// 金标准 `golden/magic/firecharm.json`；夹具 SC=15、护身符由 rig 自带（dura=600）。
+    ///
+    /// **队列序断言（oracle）**：caster 先收 `SM_MAGICFIRE(638, prio 136)` 再收
+    /// `SM_DURACHANGE(642, prio 141)`（C# 同一 `MsgQueue` 按 priority 出队）。
+    fn firecharm_order_assert(label: &str) {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("firecharm_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let case = &v[0];
+        let seq: Vec<i64> = case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["ident"].as_i64())
+            .collect();
+        assert!(
+            seq.len() >= 2 && seq[0] == 638 && seq[1] == 642,
+            "[firecharm/{label}] oracle 队列序应为 [638, 642, …]；实得 {seq:?}"
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firecharm_parity_miss() {
+        fireball_parity_drive("firecharm", 13, 15, "miss", 1, 1000);
+        fireball_case_assert("firecharm", "miss", 100, 1);
+        b1_golden_drain_assert("firecharm.json", "miss", 2);
+        firecharm_order_assert("miss");
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firecharm_parity_edge() {
+        fireball_parity_drive("firecharm", 13, 15, "edge", 5, 2000);
+        fireball_case_assert("firecharm", "edge", 85, 5);
+        b1_golden_drain_assert("firecharm.json", "edge", 4);
+        firecharm_order_assert("edge");
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn firecharm_parity_hit() {
+        fireball_parity_drive("firecharm", 13, 15, "hit", 13, 3000);
+        fireball_case_assert("firecharm", "hit", 85, 5);
+        b1_golden_drain_assert("firecharm.json", "hit", 4);
+        firecharm_order_assert("hit");
     }
 
     /// gate 通道上取到的一条下行：`(socket, 帧体 / `SendRaw` 短包字节)`。
@@ -70418,9 +70852,9 @@ SendRefMsgRange=15
     /// **B1-T3（魔号 13，灵魂火符）**：护身符门（`CheckAmulet(1,1)`/`UseAmulet(1,1)`）先于效果体；
     /// 过门 ⇒ 耐久帧 → 效果体取数 → 共享尾。**`boSpellFail` 失败支：恰一条 639、零抽、无尾**。
     ///
-    /// 红检：① 去掉护身符门 ⇒ 无护身符用例的零抽/639 断言红；② 把 `UseAmulet` 挪到效果体之后
-    /// ⇒ 自己帧序 `SM_DURACHANGE` 不再先于 `SM_MAGICFIRE` ⇒ 红；③ 把骰门挪到 `MagCanHitTarget`
-    /// 之前 ⇒ 不可攻击目标多 1 抽（见本条第三段）⇒ 红。
+    /// 红检：① 去掉护身符门 ⇒ 无护身符用例的零抽/639 断言红；② 把 13 支护身符帧从同批缓冲改回
+    /// **直发** ⇒ 帧序变 `[642, 638, …]`、本用例的 oracle 顺序断言红（与卡面火符牙同构）；
+    /// ③ 把骰门挪到 `MagCanHitTarget` 之前 ⇒ 不可攻击目标多 1 抽（见本条第三段）⇒ 红。
     #[test]
     fn spell_p3b1_firecharm_amulet_gate_tail_and_asymmetry() {
         const SM_DURACHANGE: u16 = mir2_protocol::messages::SM_DURACHANGE;
@@ -70451,9 +70885,20 @@ SendRefMsgRange=15
                 .iter()
                 .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
                 .expect("自己收 SM_MAGICFIRE");
+            let i_lv = self_seq
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_MAGIC_LVEXP)
+                .expect("训练尾 ⇒ 自己收 SM_MAGIC_LVEXP");
+            // **oracle 队列序**：`(byte)RM_MAGICFIRE(10120)` = 136 < `(byte)RM_DURACHANGE(10125)` = 141；
+            // 训练尾 `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg` 的 `MessagePriority.Lowest` = 255
+            // （**不是** `(byte)10123` = 139）⇒ 同一 `MsgQueue` 出队序 = 638 → 642 → 640。
+            // 依据：`MagicManager` 的护身符组（外层 case 组 + 内层 `switch(MagicId)`）+ `NetPriorityQueue`
+            // 按 `(byte)ident` 出队 + `golden/magic/firecharm.json` 里 caster 的 Sent 顺序 `[638, 642]`。
+            // **旧断言（`i_dura < i_fire`）是"UseAmulet 直发"时代实现的顺序，不是 oracle**——
+            // 卡 `openmir2-magic-parity` 火符修复（`9f420a94b`）已把 642 纳入同批 `SpellFrameBuf`。
             assert!(
-                i_dura < i_fire,
-                "UseAmulet 先于效果体/尾；实得 {self_seq:?}"
+                i_fire < i_dura && i_dura < i_lv,
+                "oracle 队列序应为 638 → 642 → 640；实得 {self_seq:?}"
             );
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
@@ -85628,6 +86073,30 @@ GMEXECUTE f
 
         /// 自定义脚本/`Npcs.txt` 的同构夹具（T-160：同一脚本经两条生产入口驱动）。
         fn new_with(npcs_txt: &str, scripts: &[(&str, &str)], placed: usize) -> Self {
+            Self::new_with_king_type(
+                npcs_txt,
+                scripts,
+                placed,
+                mir2_envir::npcs::NpcType::GuildOfficial,
+            )
+        }
+
+        /// 两个 NPC 都是 `Merchant`（NP-04 切换用例：两次点击都要过 `(IMerchant)` 硬转）。
+        fn new_two_merchants(npcs_txt: &str, scripts: &[(&str, &str)], placed: usize) -> Self {
+            Self::new_with_king_type(
+                npcs_txt,
+                scripts,
+                placed,
+                mir2_envir::npcs::NpcType::Merchant,
+            )
+        }
+
+        fn new_with_king_type(
+            npcs_txt: &str,
+            scripts: &[(&str, &str)],
+            placed: usize,
+            king_type: mir2_envir::npcs::NpcType,
+        ) -> Self {
             use std::sync::atomic::{AtomicU32, Ordering};
             static SEQ: AtomicU32 = AtomicU32::new(0);
             let n = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -85647,7 +86116,7 @@ GMEXECUTE f
             let npcs = vec![
                 mir2_envir::npcs::NpcInfo {
                     chr_name: "国王".to_string(),
-                    npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+                    npc_type: king_type,
                     map_name: "0".to_string(),
                     x: 11,
                     y: 10,
@@ -85801,6 +86270,47 @@ GMEXECUTE f
             drain_frames(&mut self.rx)
         }
 
+        /// 直驱 `GotoLable(label, boExtJmp=false)`（等价"可跳标签"入口；NP-04/07 用）。
+        fn direct_goto(&mut self, label: &str) {
+            let sg = self.sessions.get_mut("hero").unwrap();
+            let session = self.shop_sessions.entry("hero".to_string()).or_default();
+            let sell_off = self
+                .sell_off_sessions
+                .entry("hero".to_string())
+                .or_default();
+            let mut rng = std::mem::replace(
+                &mut self.world.rng,
+                mir2_shared::rng::RandomNumber::with_seed(0),
+            );
+            let mut broadcasts: Vec<String> = Vec::new();
+            let (says, _f, _s, _w) = run_merchant_goto(
+                &self.book,
+                self.elder_id,
+                label,
+                false,
+                sg,
+                "hero",
+                "0",
+                &self.catalog,
+                &mut self.item_number,
+                &self.npc_vars,
+                session,
+                sell_off,
+                now_ms() as i32,
+                &mut rng,
+                None,
+                None,
+                &mut broadcasts,
+                false,
+            );
+            self.world.rng = rng;
+            if !says.is_empty() {
+                if let Some(tx) = route_to_gate(&self.gates, 0, 901, "测试直跳说词") {
+                    emit_npc_says(tx, 901, sg.actor_id, &says);
+                }
+            }
+        }
+
         fn game_gold(&self) -> i32 {
             self.sessions["hero"].game_gold
         }
@@ -85898,6 +86408,332 @@ GMEXECUTE f
         );
         let says = T137Rig::says(&frames);
         assert!(says[0].starts_with("老人/"), "说词尾：{}", says[0]);
+    }
+
+    /// 读 GBK 语料（真实脚本按原字节→文本；测试侧再按 GBK 写回夹具）。
+    fn read_gbk(path: &str) -> String {
+        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"));
+        let (text, _, had_err) = encoding_rs::GBK.decode(&bytes);
+        assert!(!had_err, "{path} 不能按 GBK 解码");
+        text.into_owned()
+    }
+    /// 读入仓夹具（UTF-8；与真实语料的 GBK 分开）。
+    fn read_utf8(path: &str) -> String {
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"))
+    }
+    const WUSHI_SCRIPT_PATH: &str =
+        r"E:\MirServer\M2GameSvr\Envir\Market_Def\任务NPC\武士-0114.txt";
+    const QFUNCTION_PATH: &str = r"E:\MirServer\M2GameSvr\Envir\Market_Def\QFunction-0.txt";
+    const NP07_FIXTURE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/parity/golden/npc/fixtures/np07_break_synthetic.txt"
+    );
+    const EXTJMP_FIXTURE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/parity/golden/npc/fixtures/np05_extjmp_synthetic.txt"
+    );
+
+    /// **NP-01 对拍样板**（卡 `card/npc-parity`）：读 C# oracle 金标准
+    /// `tests/parity/golden/npc/np01_click_main.json`（生成器 `csharp/NpcGolden`），
+    /// 用**生产入口** `handle_click_npc_cmd` 复跑 4 例：
+    /// 即时帧严格序（`SM_MERCHANTSAY(643)`）+ 说词尾文本 + 三道门（超距/死亡/限频）零帧。
+    ///
+    /// **状态面缺口（登记，不伪造）**：`LastNpc`/`ScriptCurrLable` 在 Rust 会话未建模
+    /// （本文件的 T-137 残余①），故本样板不比 `last_npc_is_npc`/`script_selected`；
+    /// 补齐后在同用例加断言。
+    ///
+    /// **防空转**：golden 缺文件、零用例、未知 case、`drain_hit_cap=true` 一律 panic。
+    #[test]
+    fn np01_click_main_matches_oracle_golden() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/npc/np01_click_main.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读不到 {}: {e}", path.display()));
+        let doc: serde_json::Value = serde_json::from_str(&text).expect("golden JSON");
+        let np01 = doc["cases"].as_array().expect("cases 数组");
+        assert!(!np01.is_empty(), "golden 零用例 ⇒ 红（防空转）");
+        // NP-02 的对话选择 golden 独立成文件（同一批、同一比较器）。
+        let path2 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/npc/np02_dialog_select.json");
+        let text2 = std::fs::read_to_string(&path2)
+            .unwrap_or_else(|e| panic!("读不到 {}: {e}", path2.display()));
+        let doc2: serde_json::Value = serde_json::from_str(&text2).expect("np02 golden JSON");
+        let np02 = doc2["cases"].as_array().expect("np02 cases 数组");
+        assert!(!np02.is_empty(), "np02 golden 零用例 ⇒ 红（防空转）");
+        let read_cases = |file: &str| -> Vec<serde_json::Value> {
+            let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/parity/golden/npc")
+                .join(file);
+            let t = std::fs::read_to_string(&p)
+                .unwrap_or_else(|e| panic!("读不到 {}: {e}", p.display()));
+            let d: serde_json::Value = serde_json::from_str(&t).expect("golden JSON");
+            let arr = d["cases"].as_array().expect("cases").clone();
+            assert!(!arr.is_empty(), "{file} 零用例 ⇒ 红（防空转）");
+            arr
+        };
+        // NP-03 的 golden 已产，但 Rust 驱动器（商家装载链）等 ca 合入后再接；
+        // 这里只断言该 golden 非空（防空转），不把它塞进本比较器。
+        let _np03 = read_cases("np03_merchant_menu.json");
+        let np04 = read_cases("np04_main_selection.json");
+        let np05 = read_cases("np05_extjmp.json");
+        let np07 = read_cases("np07_chain_break.json");
+        let np09 = read_cases("np09_var_text.json");
+        let cases: Vec<&serde_json::Value> = np01
+            .iter()
+            .chain(np02.iter())
+            .chain(np04.iter())
+            .chain(np05.iter())
+            .chain(np07.iter())
+            .chain(np09.iter())
+            .collect();
+        let mut n = 0usize;
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            assert_eq!(
+                case["drain_hit_cap"].as_bool(),
+                Some(false),
+                "{name}: DrainPassesHitCap=true 必须红"
+            );
+            let qf_text = read_gbk(QFUNCTION_PATH);
+            let fx_text = read_utf8(EXTJMP_FIXTURE_PATH);
+            let np07_text = read_utf8(NP07_FIXTURE_PATH);
+            let wushi_text = read_gbk(WUSHI_SCRIPT_PATH);
+            let mut rig = match name {
+                "click_no_main_fallback" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", "[@greet]\nhi"),
+                    ],
+                    2,
+                ),
+                "click_switch" => T137Rig::new_two_merchants(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\n王：第二页"),
+                        ("Npc_def/老人-0.txt", "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>"),
+                    ],
+                    2,
+                ),
+                "act_usercmd6_first_only" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &qf_text),
+                    ],
+                    2,
+                ),
+                "extjmp_allowed" | "extjmp_blocked" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &fx_text),
+                    ],
+                    2,
+                ),
+                "var_username" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &wushi_text),
+                    ],
+                    2,
+                ),
+                "chain_break" | "other_record_intact" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &np07_text),
+                    ],
+                    2,
+                ),
+                _ => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>"),
+                    ],
+                    2,
+                ),
+            };
+            match name {
+                "click_main_ok" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 必须到达 Click 点");
+                    let frames = rig.drain();
+                    let idents: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
+                    assert_eq!(
+                        idents,
+                        vec![mir2_protocol::messages::SM_MERCHANTSAY],
+                        "{name}: 即时帧严格序"
+                    );
+                    let says = T137Rig::says(&frames);
+                    let expect = case["rm"][0]["msg"].as_str().expect("golden msg");
+                    assert_eq!(says, vec![expect.to_string()], "{name}: 说词尾文本");
+                }
+                "click_main_far" => {
+                    {
+                        let t = rig.world.entities.transform_mut(rig.elder_id).unwrap();
+                        t.x = 40;
+                        t.y = 40;
+                    }
+                    assert!(!rig.click(rig.elder_id), "{name}: 超距必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 超距零帧");
+                }
+                "click_main_dead" => {
+                    let hero = rig.sessions["hero"].actor_id;
+                    rig.world.entities.get_mut(hero).unwrap().life_cycle.death = true;
+                    assert!(!rig.click(rig.elder_id), "{name}: 死亡必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 死亡零帧");
+                }
+                "click_main_rate_limited" => {
+                    let now = rig.world.clock_ms;
+                    rig.sessions.get_mut("hero").unwrap().click_npc_time = Some(now);
+                    assert!(!rig.click(rig.elder_id), "{name}: 限频必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 限频零帧");
+                }
+                "click_no_main_fallback" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 必须到达 Click 点");
+                    assert!(rig.drain().is_empty(), "{name}: 无 @main 时零说词");
+                }
+                "dlg_ask_ok" | "dlg_back_to_main" | "dlg_unknown_label" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 先点击打开对话");
+                    let _ = rig.drain();
+                    let label = case["ctx"]["label"].as_str().expect("label");
+                    rig.dlg_select(rig.elder_id, label);
+                    let frames = rig.drain();
+                    let says = T137Rig::says(&frames);
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: 说词序列");
+                }
+                "dlg_ask_back" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 先点击");
+                    let _ = rig.drain();
+                    rig.dlg_select(rig.elder_id, "@ask");
+                    let _ = rig.drain();
+                    rig.dlg_select(rig.elder_id, "@back");
+                    let frames = rig.drain();
+                    let says = T137Rig::says(&frames);
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: @back 回 @main 说词");
+                }
+                "click_switch" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 第一次点击");
+                    let _ = rig.drain();
+                    // 过 `ClickNpcTime` 限频（oracle `Config.ClickNpcTime` 门）。
+                    rig.world.clock_ms += 2000;
+                    assert!(rig.click(rig.king_id), "{name}: 第二次点击");
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: 切换后说词");
+                }
+                "act_usercmd6_first_only" => {
+                    rig.sessions.get_mut("hero").unwrap().game_gold = 10;
+                    rig.direct_goto("@UserCmd6");
+                    let says = T137Rig::says(&rig.drain());
+                    assert!(says.is_empty(), "{name}: 无说词");
+                }
+                "extjmp_allowed" | "extjmp_blocked" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 先点击");
+                    let _ = rig.drain();
+                    let label = case["ctx"]["label"].as_str().expect("label");
+                    rig.dlg_select(rig.elder_id, label);
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: extjmp 说词");
+                }
+                "var_username" => {
+                    rig.sessions.get_mut("hero").unwrap().game_gold = 0;
+                    rig.direct_goto("@main");
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: 变量替换说词");
+                }
+                "chain_break" | "other_record_intact" => {
+                    // golden 的 GameGold 前置为 0（与 C# 探针默认一致）。
+                    rig.sessions.get_mut("hero").unwrap().game_gold = 0;
+                    let label = case["ctx"]["label"].as_str().expect("label");
+                    rig.direct_goto(label);
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: 断链说词");
+                }
+                other => panic!("golden 出现未知用例 {other}（禁止静默跳过）"),
+            }
+            // 状态面（oracle `LastNpc` / `playerActor.Script` / `ScriptCurrLable`）：
+            // 直接读会话态 `ShopSession`（实体/会话直读，不从帧反推）。
+            let st = &case["state"];
+            let expected_npc = if name == "click_switch" {
+                rig.king_id
+            } else {
+                rig.elder_id
+            };
+            let ss = rig.shop_sessions.get("hero");
+            assert_eq!(
+                ss.map(|s| s.last_npc == expected_npc).unwrap_or(false),
+                st["last_npc_is_npc"].as_bool().unwrap(),
+                "{name}: LastNpc 归属"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_index.is_some()).unwrap_or(false),
+                st["script_selected"].as_bool().unwrap(),
+                "{name}: Script 选中"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_curr_lable.clone()).unwrap_or_default(),
+                st["script_curr_lable"].as_str().unwrap(),
+                "{name}: ScriptCurrLable"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_go_back_lable.clone())
+                    .unwrap_or_default(),
+                st["script_go_back_lable"].as_str().unwrap(),
+                "{name}: ScriptGoBackLable"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_lable.clone()).unwrap_or_default(),
+                st["script_lable"].as_str().unwrap(),
+                "{name}: ScriptLable"
+            );
+            if let Some(g) = st["game_gold"].as_i64() {
+                assert_eq!(
+                    i64::from(rig.sessions["hero"].game_gold),
+                    g,
+                    "{name}: game_gold"
+                );
+            }
+            n += 1;
+        }
+        assert!(n >= 4, "golden 用例数异常：{n}");
     }
 
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。
@@ -95109,7 +95945,21 @@ mod entry_telemetry_wiring {
     fn logon_handler_enter_sits_at_arm_entry() {
         let anchor = format!("GateEvent::LoadDbRequest({} =>", "info)");
         let i = SRC.find(&anchor).expect("登录事件分支");
-        assert!(window(SRC, i, 500).contains("record_logon_handler_enter("));
+        // 卡 `openmir2-quests-parity` §10.7：臂首新增「世界未就绪 ⇒ 拒绝取档」守卫，计数点仍是
+        // 守卫之后的**第一条生产语句**。判据按「本臂切片」比位置（不设固定字符窗口）：
+        // 计数必须在入队点 `engine.add_to_load_rcd_list(` 之前（守卫本身不计数——被拒的取档没进 handler）。
+        let next = SRC[i..]
+            .find("GateEvent::RegisterGate")
+            .expect("下一事件臂（RegisterGate）")
+            + i;
+        let arm = &SRC[i..next];
+        let at = arm
+            .find("record_logon_handler_enter(")
+            .expect("handler 入口计数");
+        let queue = arm
+            .find("engine.add_to_load_rcd_list(")
+            .expect("取档入队点");
+        assert!(at < queue, "计数必须在入队之前（臂入口语义）");
     }
 
     /// `db` 未装配分支：必须在 `None => engine.drain_read_storage(` 的闭包里计数。

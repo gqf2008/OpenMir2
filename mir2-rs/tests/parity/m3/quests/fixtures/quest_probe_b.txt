@@ -1,0 +1,8 @@
+{Quest 2}
+[@main]
+#IF
+CHECK [1] 1
+#ACT
+SET [2] 1
+#SAY
+probe b
