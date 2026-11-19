@@ -1057,14 +1057,15 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        var spec = new MagicSpec { Key = "healing", MagicId = 2, MagicName = "Healing" };
-        var res = RunMagicCase(spec, "heal", 1, 1000, 50, false);
+        // 11 雷电 hit 支（seed 13）：输入 targetHp=100，术后被打击到 85 ⇒ 术后 ≠ 输入（实测）。
+        var spec = new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" };
+        var res = RunMagicCase(spec, "hit", 13, 1000, 100, false);
         var fx = res.Fixture;
         int fxHp = (int)fx.GetType().GetProperty("target_hp").GetValue(fx);
         int fxMax = (int)fx.GetType().GetProperty("target_max_hp").GetValue(fx);
         int fxAnti = (int)fx.GetType().GetProperty("anti_magic").GetValue(fx);
-        bool postDiffers = res.TargetHp != 50;
-        bool ok = fxHp == 50 && postDiffers;
+        bool postDiffers = res.TargetHp != 100;
+        bool ok = fxHp == 100 && postDiffers;
         Console.Error.WriteLine("RUNMAGIC_INPUT_SELFTEST " + (ok ? "OK" : "FAIL")
             + " fixture.target_hp=" + fxHp + " fixture.target_max_hp=" + fxMax + " fixture.anti_magic=" + fxAnti
             + " post.TargetHp=" + res.TargetHp + " post_differs=" + postDiffers);
