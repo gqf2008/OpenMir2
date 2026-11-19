@@ -479,6 +479,11 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
   target 的 `SM_HEALTHSPELLCHANGED(53)`（两趟版已含）之外，edge/hit 的 **caster / target /
   obs_in 三者的 `SM_CHANGENAMECOLOR(656)` 与 `RM_CHANGENAMECOLOR(8090)`**；miss 不变。
   **QA-1（`openmir2-3b`）必须在新的排水窗口上重跑**；旧 golden 的任何「ALL_IDENTICAL」结论作废。
+- **QA-1 重跑通过（`openmir2-3b`，钉死 head `c5a6c4484`，2026-11-19 23:48 +0800）**：
+  `--case fireball` rc=0；`DRAIN_PASSES miss=2 / edge=4 / hit=4、hit_cap=False`；产物与
+  `golden/magic/fireball.json` **语义全等**（含 priority 与 `DrainPasses`，排除 `delivery` 墙钟），
+  连跑两次逐项相同。QA 另对比较器三颗牙做变异验证：`late` 移出 `rm_fields` / 去掉 RM 排序 /
+  `p1` 移出 `rm_fields` 分别红在对应用例，还原后源文件 sha 一致（比较器 9 passed / 1 ignored）。
 - **判定口径（口径 B）**：RM 列改为**排序后按多重集**比较——顺序来自 C# `ActorEntity.MsgQueue`
   两趟排空与 `VisibleHumanList`，不是可复现的行为语义；SM 仍**严格按序逐字段 + 尾串**。
 - **`late` 列假绿已修**：旧比较器对 JSON bool 取 `as_i64()` ⇒ 两侧恒 `i64::MIN`，该列从未真正
