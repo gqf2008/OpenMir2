@@ -54,6 +54,9 @@ pub fn emit() {
         println!("cargo:rerun-if-changed={gitdir}/HEAD");
         println!("cargo:rerun-if-changed={gitdir}/index");
     }
+    // 包内文件变化也重跑（只发 .git 触发会丢掉 Cargo 默认的"包内任何文件"语义）——
+    // dirty 是**构建时**快照，源文件改了就必须重新记录，否则脏标记会停留在旧值。
+    println!("cargo:rerun-if-changed=.");
     println!("cargo:rerun-if-env-changed=MIR2_BUILD_REV");
 }
 
