@@ -7,7 +7,7 @@
   "counting_moment": {
     "head": "8391ae4bbaf00f839635e117110c7d7f3cf1cd3b",
     "time": "2026-11-20T02:03:38+0800",
-    "note": "M25 = 8391ae4bb（本域最后一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执。"
+    "note": "M25 = 8391ae4bb（本域最后一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执。；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；本次计数变更尚未合并 ⇒ head 暂留 M25，合并后由收口提交更新。"
   },
   "status_enum": [
     "verified",
@@ -534,7 +534,7 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-28 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
     },
     {
       "id": "MG-22",
@@ -557,7 +557,7 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级；外层护身符门 case 组标签（`:316`/`:317`），14/15 的执行链由内层 MG-29 的同一 golden 覆盖；组内其余魔号未验，故本组不升格（同 MG-20 先例）"
     },
     {
       "id": "MG-23",
@@ -688,17 +688,26 @@
         "line": 352,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_hangmajinbub",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/hangmajinbub.json（C# oracle 生成；s1/s5/s13，无 AntiMagic 骰）",
+        "cases": [
+          "s1(seed=1)",
+          "s5(seed=5)",
+          "s13(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::hangmajinbub_parity_s1",
+          "tests::hangmajinbub_parity_s5",
+          "tests::hangmajinbub_parity_s13"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。14=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格，`MagDefenceUp` 无条件 AddBuff ⇒ target 52×49/100×49/657×98；golden 于 2026-11-20 按登录序（RecalcLevelAbilitys→RecalcAbilitys）重生成，只有 target SM 52 尾变化（见卡 §24）。"
     },
     {
       "id": "MG-29",
@@ -709,17 +718,26 @@
         "line": 359,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_dejiwonho",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/dejiwonho.json（C# oracle 生成；s1/s5/s13，无 AntiMagic 骰）",
+        "cases": [
+          "s1(seed=1)",
+          "s5(seed=5)",
+          "s13(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::dejiwonho_parity_s1",
+          "tests::dejiwonho_parity_s5",
+          "tests::dejiwonho_parity_s13"
+        ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。15=`MagMakeDefenceArea(nRange=3)` 7×7=49 次循环读中心格；`DefenceUp` 已有 buff ⇒ TryUpdate 早退（BaseObject.cs:2137-2147）⇒ 只有首组 52/100/657×2；golden 同批重生成（见卡 §24）。"
     },
     {
       "id": "MG-30",
@@ -1005,19 +1023,28 @@
         "line": 474,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "real_rust_ledger_shield",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/shield.json（C# oracle 生成；s1/s5/s13）",
+        "cases": [
+          "s1(seed=1)",
+          "s5(seed=5)",
+          "s13(seed=13)"
+        ],
         "unit_tests": [
+          "tests::shield_parity_s1",
+          "tests::shield_parity_s5",
+          "tests::shield_parity_s13",
+          "tests::shield_buff_tick_gate_off_emits_no_buff_frames",
           "spell_tail_p2_shield_without_amulet_always_trains"
         ]
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级"
+      "notes": "旧清单 cost=天级。`MagBubbleDefenceUp`：AddBuff 后 CharStatus 变化才 StatusChanged ⇒ 657 并入 SpellFrameBuf（638<657<640）；门关牙见 gate-off 用例（卡 §24）。"
     },
     {
       "id": "MG-44",

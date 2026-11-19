@@ -45,3 +45,18 @@ case 组（`src/M2Server/Magic/MagicManager.cs:315` 起的外层组，`:325` 的
 
 - 本卡**不实现**代码；不碰 `bins/game-svr/src/lib.rs` 的 14/15 支、不改任何断言。
 - 不把 14/15 计入 `parity-gap-magic.json` 的 verified（在 golden 与驱动落地前）。
+
+## 实现记录（2026-11-20，由卡 `openmir2-magic-parity` 的 14/15 接线落地）
+
+- **产品**：14/15 支的护身符 `RM_DURACHANGE(10125)` 已纳入该支 `SpellFrameBuf`（与 13 同构）；
+  施法者帧序变为 `SM_MAGICFIRE(638) → SM_DURACHANGE(642) → SM_MAGIC_LVEXP(640)`
+  （`(byte)10120=136 < (byte)10125=141 < SendSelfDelayMsg Lowest=255`）。提交 `051f0562e`。
+- **断言**：`tests::spell_tail_p2_defence_amulet_consumed_and_tail_fires` 的旧期望
+  （`i_dura < i_fire`）已按 oracle 改正并写明依据（同 13 的 `b60685e33` 写法），红→绿证据见
+  `mir2-rs/target/magic-parity/evidence/p2-stale-red.log`。
+- **golden/驱动**：14/15 已按本卡「证据要求」落地 `golden/magic/{hangmajinbub,dejiwonho}.json`
+  与 `tests::hangmajinbub_parity_s{1,5,13}` / `dejiwonho_parity_s{1,5,13}` + 比较器
+  `real_rust_ledger_{hangmajinbub,dejiwonho}`（0 红）。另发现并修 `DefenceUp` 的
+  `HasBuff ⇒ TryUpdate` 早退（`BaseObject.cs:2137-2147`）：15 的 49 次循环只有首组帧。
+- 详细记录（结构性原因「Rust 合并了 oracle 的两个重算函数」、golden 逐字段变化、牙与回归）
+  见卡 `openmir2-magic-parity` §24。

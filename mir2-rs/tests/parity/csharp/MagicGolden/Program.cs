@@ -109,6 +109,9 @@ public static class Program
             if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true });
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 });
             if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" });
+            if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true });
+            if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true });
+            if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -536,6 +539,26 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         return EmitGolden(spec, cases);
     }
 
+    /// <summary>
+    /// **无 AntiMagic 骰**的支（14/15/31）：按注释的**同一行为**取三 seed（1/5/13）——
+    /// 不存在 miss/edge/hit 语义（不构造假骰）。标签 = `s1` / `s5` / `s13`。
+    /// </summary>
+    private static int BehaviorBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var cases = new[]
+        {
+            RunMagicCase(spec, "s1", 1, 1000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "s5", 5, 2000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "s13", 13, 3000, spec.TargetMaxHp, false),
+        };
+        return EmitGolden(spec, cases);
+    }
+
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
         var outObj = new
@@ -588,9 +611,16 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         caster.WAbil.SC = (ushort)spec.CasterSc;
         var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)spec.AntiMagic };
         target.Abil.Level = (byte)spec.TargetLevel;
-        target.WAbil.MaxHP = (ushort)spec.TargetMaxHp;
+        // **真实登录序**（`PlayObject.cs:1308-1309`：`RecalcLevelAbilitys(); RecalcAbilitys();`）：
+        // 先按 Job+Level 把 `Abil` 的等级派生字段（MaxHP/MaxMP/MaxWeight/DC/MC/SC/AC/MAC）写成
+        // 自洽值，后续 `RecalcAbilitys()`（`BaseObject.Abil.cs:27` `WAbil = Abil.Clone()`）才有
+        // 语义。此前的夹具只设 `Abil.Level`/`Abil.MaxHP`，等价于「等级 20 但 Abil 仍是 ctor
+        // 缺省」，`RecalcAbilitys()` 克隆出的是不自洽的 WAbil（MaxHP=100/DC=1），Rust 侧
+        // `recalc_session_ability`（= 上述两函数的合并实现，见其文档注释）无法等价复现。
+        // `Abil.MaxExp` 保持 ctor 缺省 50：登录后的 `Abil.MaxExp = GetLevelExp(...)` 属数据面，
+        // 不在本对拍夹具的建模范围（Rust 夹具同置 max_exp=50）。
+        target.RecalcLevelAbilitys();
         target.WAbil.HP = (ushort)targetHp;
-        target.Abil.MaxHP = (ushort)spec.TargetMaxHp;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         if (targetNull)
