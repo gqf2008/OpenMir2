@@ -221,6 +221,13 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 **M53（=旧 M52 顺延）报告须单列**：Exps 装置 bug 修复后若 `max_exp` 由 0 变为真实值，
 属**行为类差异**（帧内容变化），不得并入"元数据"；Rust 侧该字段若与 golden 不同 ⇒ **真分歧**，停下报。
 
+**M53 的 Rust 侧范围 = 7 条**：6 条（`lightning-11`/`lightning-45`/`fireball-5`/`firecharm`/`hbfireball`/`healing`）
+**加 `fireball`（`MG-10`）**。`fireball.json` 由独立 runner `FireballCase` 产出、当前**无 `Fixture`**；
+`a2` 改造该 runner 并在 M52 输出带契约键的新件后，本侧按同一套处理：
+`(Warrior, L, 无装备, 无技能) → anti_magic=1、target_max_hp=公式(L)`，逐条给构造路径。
+**勿按 a2 上一版迁移表（"fireball 迁移后 cover_drain"）准备**——该声明已撤回，`fireball` 归入
+"登录序主件 + 旧件留档"同一套处置。Rust 与新的登录序 golden 对不上 ⇒ **真分歧，停下报**。
+
 **M52 交付自检（必须逐条给出原文）**：① 被合的树里存在
 `mir2-rs/tests/parity/fixtures/exps-need-exps.json`
 （`git cat-file -e <head>:mir2-rs/tests/parity/fixtures/exps-need-exps.json`，rc=0）；
