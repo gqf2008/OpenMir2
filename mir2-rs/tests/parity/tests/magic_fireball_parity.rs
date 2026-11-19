@@ -640,7 +640,20 @@ fn pin_union_rng(case: &Value, label: &str) -> Result<Value, String> {
             "Rng".to_string(),
             Value::Array(union.into_iter().map(Value::from).collect()),
         );
+        // `RngSites` 与 `Rng` 同源：拼接后 `verify` 的长度自洽检查才成立（`DeliverRngSites` 一并并入）。
+        let sites = |k: &str| -> Vec<Value> {
+            case.get(k)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let mut all_sites = sites("RngSites");
+        all_sites.extend(sites("DeliverRngSites"));
+        if !all_sites.is_empty() {
+            obj.insert("RngSites".to_string(), Value::Array(all_sites));
+        }
         obj.remove("DeliverRng");
+        obj.remove("DeliverRngSites");
     }
     Ok(c)
 }
@@ -768,8 +781,20 @@ fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
     let mut c = serde_json::json!({
         "Label": label, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": []
     });
+    // 台账形态：`RngSites` 与 `Rng` 等长（`verify` 有长度自洽检查）；`DeliverRngSites` 同理。
+    let sites = |n: usize| -> Value {
+        Value::Array(
+            (0..n)
+                .map(|_| Value::from("crates/world-bevy/src/magic_effect.rs:1"))
+                .collect(),
+        )
+    };
+    let cast_n = rng.as_array().map_or(0, |a| a.len());
+    c["RngSites"] = sites(cast_n);
     c["Rng"] = rng;
     if let Some(d) = deliver {
+        let dn = d.as_array().map_or(0, |a| a.len());
+        c["DeliverRngSites"] = sites(dn);
         c["DeliverRng"] = d;
     }
     serde_json::json!({ "magic_id": 33, "cases": [c] })
@@ -961,7 +986,8 @@ fn union_rng_positive_control_green() {
         serde_json::json!([1, 2]),
         Some(serde_json::json!([3, 4])),
     );
-    assert!(verify_union(&g, &r).is_ok(), "拼接一致必须绿");
+    let res = verify_union(&g, &r);
+    assert!(res.is_ok(), "拼接一致必须绿：{res:?}");
 }
 
 /// **牙①**：删 `DeliverRng` 一条 ⇒ 拼接变短 ⇒ 红。
@@ -974,8 +1000,9 @@ fn tooth_union_drop_deliver_entry_red() {
         Some(serde_json::json!([3])),
     );
     let err = verify_union(&g, &r).unwrap_err();
+    // 诊断里的大小写是 `RNG 行数不等`/`RNG[i] 不等`：按不区分大小写匹配 RNG。
     assert!(
-        err.iter().any(|e| e.contains("Rng")),
+        err.iter().any(|e| e.to_lowercase().contains("rng")),
         "必须红在 Rng 序列：{err:?}"
     );
 }
@@ -991,7 +1018,7 @@ fn tooth_union_deliver_value_changed_red() {
     );
     let err = verify_union(&g, &r).unwrap_err();
     assert!(
-        err.iter().any(|e| e.contains("Rng")),
+        err.iter().any(|e| e.to_lowercase().contains("rng")),
         "必须红在 Rng 值：{err:?}"
     );
 }
