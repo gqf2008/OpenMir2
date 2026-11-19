@@ -67633,8 +67633,11 @@ SendRefMsgRange=15
     /// 各收一条 800ms `RM_TRANSPARENT(8045)`；到点由该目标自己 `MagMakePrivateTransparent` ⇒
     /// `StatusChanged()` ⇒ 657 广播（含自）。1000ms 的训练尾 640 落在两个 657 **之后**。
     ///
-    /// **顺序裁定（opc-07 2026-11-20）**：两条 657 在被比较字段上完全相同（`(0,0,0)`；`Recog`
-    /// 是收件人、不是来源 ⇒ 扩比较面也分不出，且对客户端无差异）⇒ **两条同形 657 的先后顺序不判**；
+    /// **顺序取舍（opc-07 2026-11-20 裁定；QA 复核后订正措辞）**：golden 与比较器**不记录
+    /// `Recog`**（`ParseFrames` 只取 `ident/param/tag/series/tail`）；两条 657 **仅 `Recog` 不同**
+    /// （`Recog` = 发起 `StatusChanged` 的 actor：`src/M2Server/Player/PlayObject.Message.cs:1845`、
+    /// `src/M2Server/Actor/BaseObject.Message.cs:149-154`）⇒ **按总监裁定不判先后**——这是**我们的
+    /// 取舍**（不扩比较面），**不是**「不可判」，也**不是**「对客户端无差异」。
     /// 判定面 = 每个 socket 内 657 的**条数（各 2）** + 字段逐项相等 + RM 多重集。
     /// **不是**「顺序相等」——是「不判」。
     fn big_cloak_assert(stem: &str, label: &str, seed: i32, base: i32) {

@@ -839,7 +839,7 @@
       },
       "cost": "M",
       "deviation": null,
-      "notes": "旧清单 cost=天级。3×3 有序枚举的 proper friend 各一条 800ms `RM_TRANSPARENT(8045)`；到点 `MagMakePrivateTransparent` ⇒ 657（实测 `(0,0,0)`，隐身位不进 CharStatus）；两条同形 657 的先后**不判**（字段相同、Recog 是收件人、客户端无差异）；C# 装置新增步进排水（StepDrainMs）修正 640/657 的记录面伪影。卡 §29。"
+      "notes": "旧清单 cost=天级。3×3 有序枚举的 proper friend 各一条 800ms `RM_TRANSPARENT(8045)`；到点 `MagMakePrivateTransparent` ⇒ 657（实测 `(0,0,0)`，隐身位不进 CharStatus）；两条同形 657 的先后**不判**——golden/比较器不记录 `Recog`、两条仅 `Recog` 不同；这是**按总监裁定的取舍**（不扩比较面），**不是**「不可判」/「对客户端无差异」；C# 装置新增步进排水（StepDrainMs）修正 640/657 的记录面伪影。卡 §29。"
     },
     {
       "id": "MG-34",

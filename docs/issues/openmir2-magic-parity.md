@@ -903,10 +903,8 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   **前面**（记录面伪影）；步进排水只在**到期时刻**处理（未到期按原优先级放回队列），与真机
   每 tick `Run()` 及 Rust 分步交付同序 ⇒ caster `[638,642,657,657,640]`。既有 golden 全部
   未重生成、不受影响。
-- **顺序裁定（opc-07 2026-11-20）**：两条 657 在被比较字段上完全相同（`(0,0,0)`；`Recog` 是
-  **收件人**、不是来源 ⇒ 扩比较面也分不出，且两条同形帧互换对客户端不可观测）⇒
-  **两条同形 657 的先后顺序不判**；判定面 = 每个 socket 内 657 的**条数（各 2）** + 字段逐项
-  相等 + RM 多重集。**卡面纪律：这是「不判」，不是「顺序相等」。**
+- **顺序取舍（opc-07 2026-11-20 裁定；QA 复核后订正措辞）**：golden 与比较器**不记录 `Recog`**（`ParseFrames` 只取 `ident/param/tag/series/tail`）；19 的两条 657 **仅 `Recog` 不同**（`SendDefMessage(SM_CHARSTATUSCHANGED, processMsg.ActorId, …)`，`src/M2Server/Player/PlayObject.Message.cs:1845`；`ActorId = baseObject.ActorId`，`src/M2Server/Actor/BaseObject.Message.cs:149-154`）⇒ **按总监裁定不判先后**——这是**我们的取舍**（不扩比较面），**不是**「不可判」，也**不是**「对客户端无差异」。判定面 = 每个 socket 内 657 的**条数（各 2）** + 字段逐项
+  相等 + RM 多重集。**纪律：这是「不判」，不是「顺序相等」。**
 - **golden `golden/magic/bigcloak.json`**：`DrainPasses=3`、`hit_cap=false`、`NotDue=0`；
   caster `[638,642,657,657,640]`、target/obs_in `[17,638,657,657]`；RM = 10008/10120（众人）
   + 10125（caster,642,141）+ 8045（caster/target 各 1，p1=95，255）+ 10139（各 2，155）
