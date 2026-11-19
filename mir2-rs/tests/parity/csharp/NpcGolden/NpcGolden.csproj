@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>npc-golden</AssemblyName>
+    <RootNamespace>NpcGolden</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    NPC 线（card/npc-parity）NP-01 的 oracle 金标准生成器。
+    引用真身 src/M2Server；`new PlayObject()` + `new NormNpc()` + 真 `ScriptEngine`，
+    反射调**私有** `PlayObject.ClientClickNpc`（PlayObject.Base.cs:674），再按真实消息泵
+    `GetMessage` → `Operate` 把 RM 映射成 SM。
+    产物 = mir2-rs/tests/parity/golden/npc/<case>.json；Rust 侧用例回读逐字段核对。
+    只读：不连 MySQL、不写现网文件（脚本写临时目录）、不发起 socket、不起服务。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+    <ProjectReference Include="..\..\..\..\..\src\GameSrv\GameSrv.csproj" />
+  </ItemGroup>
+
+</Project>

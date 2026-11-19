@@ -43,9 +43,16 @@ impl Engine<'_, '_> {
             "ConditionCheckUnit" => self.cond_check_unit(info, result),
             "ConditionOfCheckGold" => self.cond_check_gold(info, result),
             "ConditionOfCheckLevel" => self.cond_check_level(info, result),
-            "ConditionOfEqual" => self.cond_var_cmp(info, result, std::cmp::Ordering::Equal),
-            "ConditionOfLapge" => self.cond_var_cmp(info, result, std::cmp::Ordering::Greater),
-            "ConditionOfSmall" => self.cond_var_cmp(info, result, std::cmp::Ordering::Less),
+            // oracle 缺陷照搬（按值传参 ⇒ 比较值恒 0）：见 cond_oracle_broken_cmp 的注释与符号锚。
+            "ConditionOfEqual" => {
+                self.cond_oracle_broken_cmp(info, result, std::cmp::Ordering::Equal)
+            }
+            "ConditionOfLapge" => {
+                self.cond_oracle_broken_cmp(info, result, std::cmp::Ordering::Greater)
+            }
+            "ConditionOfSmall" => {
+                self.cond_oracle_broken_cmp(info, result, std::cmp::Ordering::Less)
+            }
             "ConditionOfRandom" => self.cond_random(info, result),
             "ConditionOfCheckSlaveListCount" => self.cond_slave_list_count(info, result),
             "ConditionOfCheckItem" => self.cond_check_item(info, result),
@@ -531,19 +538,28 @@ impl Engine<'_, '_> {
         }
     }
 
-    /// `ConditionOfEqual` / `ConditionOfLapge` / `ConditionOfSmall` 共用
-    /// `CheckVarNameNo` 取值后按序比较（C# 用 `nParam2` 作比较目标）。
-    fn cond_var_cmp(
+    /// `ConditionOfEqual` / `ConditionOfLapge` / `ConditionOfSmall`：**oracle 缺陷照搬**（卡 `card/npc-parity`，2026-11-20）。
+    ///
+    /// oracle `CheckVarNameNo`（`src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:4671`）的形参是
+    /// `int n140, int n180`（**按值**），函数内赋 `n140 = 变量值` / `n180 = nParam2` 只改局部；三个调用方
+    /// （`ConditionOfLapge` `:3857-3862`、`ConditionOfSmall` `:3874-3879`、`ConditionOfEqual` `:4660-4665`）
+    /// 返回后仍按 `n14 = 0`、`n18 = 0` 比较 ⇒ **LARGE 恒假、SMALL 恒假、EQUAL 恒真**（仅当变量名解析成功）。
+    ///
+    /// 本实现**显式对齐该缺陷**（行为等价优先于修 bug）。Rust 此前按真实变量值比较，属正确实现但与 oracle 不同；
+    /// 若日后要修正，是产品取舍，须 Owner 决定并保留改前/改后读数。
+    /// （其余条件不经过 `CheckVarNameNo` 的这条按值路径，未受影响。）
+    fn cond_oracle_broken_cmp(
         &mut self,
         info: &QuestConditionInfo,
         result: &mut bool,
         want: std::cmp::Ordering,
     ) {
-        let lhs = self.lookup_var_number(&info.s_param1, &info.s_param2);
-        let rhs = info.n_param2;
-        *result = match lhs {
-            Some(v) => v.cmp(&rhs) == want,
-            None => false,
+        let resolved = self
+            .lookup_var_number(&info.s_param1, &info.s_param2)
+            .is_some();
+        *result = match want {
+            std::cmp::Ordering::Greater | std::cmp::Ordering::Less => false,
+            std::cmp::Ordering::Equal => resolved,
         };
     }
 

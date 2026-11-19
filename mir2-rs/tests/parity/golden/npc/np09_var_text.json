@@ -1,0 +1,78 @@
+{
+  "generator": "mir2-rs/tests/parity/csharp/NpcGolden",
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.Operate.cs:114 (ClientMerchantDlgSelect)",
+    "src/M2Server/Npc/NormNpc.cs:1633 (NormNpc.UserSelect: label ledger only)",
+    "src/GameSrv/Npc/Merchant.cs:789 (Merchant.UserSelect -> GotoLable / @back)",
+    "src/Modules/ScriptEngine/ScriptEngine.cs:141 (GotoLable)",
+    "src/Modules/ScriptEngine/ScriptEngine.cs:987 (GotoLableSendMerChantSayMsg)",
+    "src/M2Server/Player/PlayObject.Message.cs:1702 (RM_MERCHANTSAY -> SM_MERCHANTSAY)"
+  ],
+  "script": "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>",
+  "max_drain_passes": 64,
+  "excluded_wallclock_fields": [
+    "ctx.click_npc_time"
+  ],
+  "cases": [
+    {
+      "name": "var_username",
+      "fixture": {
+        "source_path": "E:/MirServer/M2GameSvr/Envir/Market_Def/任务NPC/武士-0114.txt",
+        "sha256": "ead2df9f212f8c70f1d047e1289e72e607e5039c697e8f0cdf4e6e698735bae7"
+      },
+      "script_name": "老人",
+      "script_sha256": "ead2df9f212f8c70f1d047e1289e72e607e5039c697e8f0cdf4e6e698735bae7",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "direct_goto",
+        "label": "@main",
+        "labels": null
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5021,
+          "late": false,
+          "msg": "老人/\\你叫什么？\\hero？\\好名字！"
+        }
+      ],
+      "rm_priorities": [
+        1
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 1,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 75
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": true,
+        "game_gold": 0,
+        "send_msg_flag": false
+      }
+    }
+  ]
+}

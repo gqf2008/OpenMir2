@@ -1,0 +1,13 @@
+[@brk]
+#ACT
+BREAK
+#SAY
+P1
+
+#IF
+#SAY
+P2
+
+[@other]
+#SAY
+OTHER
