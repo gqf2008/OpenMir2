@@ -19,3 +19,6 @@ login-srv = { path = "../login-srv" }
 game-gate = { path = "../game-gate" }
 login-gate = { path = "../login-gate" }
 sel-gate = { path = "../sel-gate" }
+
+[build-dependencies]
+mir2-build-meta = { path = "../../crates/build-meta" }

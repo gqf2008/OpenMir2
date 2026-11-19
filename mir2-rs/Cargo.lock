@@ -425,6 +425,7 @@ dependencies = [
  "anyhow",
  "encoding_rs",
  "futures-util",
+ "mir2-build-meta",
  "mir2-protocol",
  "mir2-script",
  "mir2-storage",
@@ -727,6 +728,7 @@ name = "game-gate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mir2-build-meta",
  "mir2-protocol",
  "mir2-script",
  "tokio",
@@ -740,6 +742,7 @@ dependencies = [
  "base64 0.22.1",
  "chrono",
  "encoding_rs",
+ "mir2-build-meta",
  "mir2-data",
  "mir2-envir",
  "mir2-formula",
@@ -1193,6 +1196,7 @@ name = "login-gate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mir2-build-meta",
  "mir2-protocol",
  "mir2-script",
  "tokio",
@@ -1204,6 +1208,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "encoding_rs",
+ "mir2-build-meta",
  "mir2-protocol",
  "mir2-script",
  "mir2-shared",
@@ -1238,6 +1243,13 @@ dependencies = [
  "libc",
  "wasi",
  "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "mir2-build-meta"
+version = "0.1.0"
+dependencies = [
+ "chrono",
 ]
 
 [[package]]
@@ -1356,6 +1368,7 @@ dependencies = [
  "game-svr",
  "login-gate",
  "login-srv",
+ "mir2-build-meta",
  "sel-gate",
 ]
 
@@ -1734,6 +1747,7 @@ dependencies = [
  "http-body-util",
  "hyper",
  "hyper-util",
+ "mir2-build-meta",
  "mir2-encoding",
  "percent-encoding",
  "serde_json",
@@ -1865,6 +1879,7 @@ name = "sel-gate"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "mir2-build-meta",
  "mir2-protocol",
  "mir2-script",
  "tokio",

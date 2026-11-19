@@ -1,0 +1,12 @@
+[package]
+name = "mir2-build-meta"
+version = "0.1.0"
+edition = "2021"
+description = "构建元数据注入（卡 openmir2-rust-build-rev-embedding）：build.rs 调用 emit()，把 git head/dirty/构建时刻写成 cargo:rustc-env"
+license = "MIT"
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[dependencies]
+chrono = "0.4"

@@ -26,3 +26,6 @@ serde_json = "1"
 percent-encoding = "2.3"
 # 配置文本解码统一入口（.NET `StreamReader` 口径：BOM 探测 + GB2312 回退）。
 mir2-encoding = { path = "../../crates/encoding" }
+
+[build-dependencies]
+mir2-build-meta = { path = "../../crates/build-meta" }
