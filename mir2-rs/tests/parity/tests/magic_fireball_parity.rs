@@ -635,7 +635,9 @@ fn pin_union_rng(case: &Value, label: &str) -> Result<Value, String> {
 fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
-    let anti_magic = golden.get("anti_magic").cloned().unwrap_or(Value::from(0));
+    // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
+    // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
+    // 搬过来会把金标准与自身比较（恒等），制造"查过"的假象。
     let mut cases = Vec::new();
     for label in labels {
         let path = dir.join(format!("{stem}_{label}.json"));
@@ -679,7 +681,7 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
         let pinned = pin_union_rng(&arr[0], label).unwrap_or_else(|m| panic!("{m}"));
         cases.push(pinned);
     }
-    let rust = serde_json::json!({"magic_id": magic_id, "anti_magic": anti_magic, "cases": cases});
+    let rust = serde_json::json!({"magic_id": magic_id, "cases": cases});
     if let Err(errs) = verify(golden, &rust) {
         panic!(
             "真实台账与金标准不等（{} 条）：\n{}",
