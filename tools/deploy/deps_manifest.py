@@ -26,11 +26,18 @@
 
 **fail-closed**：缺 lock / 缺 manifest / manifest 空或字段缺失 ⇒ 红（rc=1），绝不当"没有依赖"。
 
+**构建口径是显式判据（卡 `openmir2-deps-build-config-pinning`）**：输出目录一律按
+`--build-config Release|Debug`（缺省取 manifest 里记录的 `build_config`）**确定性解析**
+（`bin/<config>/` 或 `bin/<config>/<tfm>/`），**不再按 mtime 探测"最新目录"**——
+曾经因为 manifest 在 Debug 口径生成、而部署走 Release，主仓库一次 Release 构建就让
+`BUILD_OUTPUT_MISMATCH` 变红、整栈起不来。manifest 的 `build_config` 缺失/非法、
+`--build-config` 与 manifest 不一致、或按配置解析不到输出目录 ⇒ 一律红（fail-closed）。
+
 用法：
   python -I -B tools/deploy/deps_manifest.py generate --projects <a;b;c> --out <manifest.json>
-      [--exceptions <exceptions.json>]
+      [--build-config Release|Debug] [--exceptions <exceptions.json>]
   python -I -B tools/deploy/deps_manifest.py check --projects <a;b;c> --manifest <manifest.json>
-      [--deploy-dir <目录>]
+      [--build-config Release|Debug] [--deploy-dir <目录>]
   python -I -B tools/deploy/deps_manifest.py selftest
 
 退出码：0 = 绿；1 = 判红（证伪，红项逐条打印）；2 = 用法错 / 判不了（环境缺目录等）。
@@ -43,6 +50,7 @@
 import argparse
 import base64
 import hashlib
+import io
 import json
 import os
 import re
@@ -51,6 +59,8 @@ import sys
 import tempfile
 
 MANIFEST_VERSION = 1
+# 构建配置是**显式口径**：输出目录按它确定性解析（不看 mtime）。
+BUILD_CONFIGS = ("Release", "Debug")
 REQUIRED_PKG_FIELDS = ("name", "requested", "resolved", "source", "toolchain", "content_hash",
                        "nupkg_sha512", "files", "runtime_assets", "shipped_assets")
 
@@ -260,28 +270,33 @@ def lock_packages(lock):
     return merged, ""
 
 
-def detect_output_dir(proj_dir):
-    """找本项目最新的 `bin/<config>/<tfm>` 输出目录（部署映射的"实际装运集"依据）。
+def resolve_output_dir(proj_dir, config):
+    """按**显式构建配置**解析输出目录（确定性；不看 mtime、不猜"最新"）。
+
+    两种布局：`bin/<config>/<tfm>/`（SDK 默认）与 `bin/<config>/`（`AppendTargetFrameworkToOutputPath=false`）。
+    判据：`bin/<config>` 本身含 DLL ⇒ 就是它；否则要求**恰好一个**子目录含 DLL；
+    其它情况返回 None，由调用方按 fail-closed 判红（绝不"挑一个看起来新的"）。
 
     为什么不能只看 assets 的 runtime 列表：`System.Text.Json` 等在 net8.0 共享框架里，
     assets 仍列为运行时资产但**不会复制到输出目录**；`_._` 是占位符。装运集必须来自构建输出。
     """
-    best, best_m = None, -1.0
-    for config in ("Release", "Debug"):
-        base = os.path.join(proj_dir, "bin", config)
-        if not os.path.isdir(base):
-            continue
-        # 两种布局：`bin/<config>/<tfm>/`（默认）与 `bin/<config>/`（AppendTargetFrameworkToOutputPath=false）
-        candidates = [base]
-        for name in os.listdir(base):
-            cand = os.path.join(base, name)
-            if os.path.isdir(cand):
-                candidates.append(cand)
-        for cand in candidates:
-            m = os.path.getmtime(cand)
-            if m > best_m:
-                best, best_m = cand, m
-    return best
+    base = os.path.join(proj_dir, "bin", config)
+    if not os.path.isdir(base):
+        return None
+
+    def has_dll(d):
+        try:
+            return any(fn.lower().endswith(".dll") and os.path.isfile(os.path.join(d, fn))
+                       for fn in os.listdir(d))
+        except OSError:
+            return False
+
+    if has_dll(base):
+        return base
+    subs = [os.path.join(base, name) for name in sorted(os.listdir(base))
+            if os.path.isdir(os.path.join(base, name))]
+    subs = [d for d in subs if has_dll(d)]
+    return subs[0] if len(subs) == 1 else None
 
 
 def package_dir(packages_dir, name, version):
@@ -338,6 +353,11 @@ def cmd_generate(args):
     assets_union = {}
     shipped_union = {}
     out_arg = getattr(args, "output_dir", None)
+    cfg_arg = getattr(args, "build_config", None)
+    if cfg_arg is not None and cfg_arg not in BUILD_CONFIGS:
+        emit("DEPS_RED BAD_BUILD_CONFIG --build-config=%r（只接受 %s）"
+             % (cfg_arg, "/".join(BUILD_CONFIGS)))
+        return 2
     loaded = []
     for proj in proj_paths:
         proj_dir = os.path.dirname(proj)
@@ -356,15 +376,32 @@ def cmd_generate(args):
         if assets is None:
             emit("DEPS_RED %s" % aerr)
             return 1
-        output_dir = os.path.abspath(out_arg) if out_arg else detect_output_dir(proj_dir)
-        config = ""
-        if output_dir:
+        if out_arg:
+            output_dir = os.path.abspath(out_arg)
+            config = ""
             parts = output_dir.replace("\\", "/").split("/")
             if "bin" in parts:
                 idx = len(parts) - 1 - parts[::-1].index("bin")
                 if idx + 1 < len(parts):
                     config = parts[idx + 1]
-        configs.add(config or "unknown")
+            if cfg_arg is not None:
+                if config in BUILD_CONFIGS and config != cfg_arg:
+                    emit("DEPS_RED BUILD_CONFIG_CONFLICT --output-dir 隐含 %s，--build-config=%s"
+                         % (config, cfg_arg))
+                    return 2
+                config = cfg_arg
+        else:
+            # 显式口径：--build-config 优先；否则按固定优先级（Release → Debug）取**存在的**，
+            # 只用存在性、不看 mtime。
+            config = cfg_arg or next(
+                (c for c in BUILD_CONFIGS if resolve_output_dir(proj_dir, c) is not None),
+                "")
+            output_dir = resolve_output_dir(proj_dir, config) if config else None
+            if not output_dir:
+                emit("DEPS_RED MISSING_OUTPUT_DIR %s bin/%s（按显式配置解析不到输出目录；"
+                     "先构建再 generate，或用 --build-config 指定）" % (proj, config or "?"))
+                return 2
+        configs.add(config)
         projects_rel.append(proj)
         output_dirs[proj] = output_dir or ""
         out_files = set()
@@ -385,6 +422,10 @@ def cmd_generate(args):
         emit("DEPS_RED BUILD_CONFIG_CONFLICT %s" % ",".join(sorted(configs)))
         return 1
     build_config = sorted(configs)[0]
+    if build_config not in BUILD_CONFIGS:
+        emit("DEPS_RED BAD_BUILD_CONFIG 无法从项目布局确定构建配置（%r）；请用 --build-config %s"
+             % (build_config, "|".join(BUILD_CONFIGS)))
+        return 2
     pkgs = merged
     assets = {k: sorted(v) for k, v in assets_union.items()}
     packages_dir = os.path.expanduser(args.packages_dir)
@@ -509,13 +550,31 @@ def cmd_check(args):
             if have != want:
                 _fail(reds, "PROJECT_SET_MISMATCH",
                       "manifest=%s args=%s" % (sorted(have), sorted(want)))
-        for proj, recorded in (manifest.get("output_dirs") or {}).items():
-            if not recorded:
-                continue
-            det = detect_output_dir(os.path.dirname(proj))
-            if det and os.path.abspath(det) != os.path.abspath(recorded):
-                _fail(reds, "BUILD_OUTPUT_MISMATCH",
-                      "%s manifest=%s now=%s" % (proj, recorded, det))
+        cfg_manifest = manifest.get("build_config")
+        cli_cfg = getattr(args, "build_config", None)
+        if cli_cfg is not None and cli_cfg not in BUILD_CONFIGS:
+            _fail(reds, "BAD_BUILD_CONFIG",
+                  "--build-config=%r（只接受 %s）" % (cli_cfg, "/".join(BUILD_CONFIGS)))
+        elif cfg_manifest not in BUILD_CONFIGS:
+            # fail-closed：manifest 没写清口径（缺失/空/"unknown"）就不猜。
+            _fail(reds, "BAD_BUILD_CONFIG",
+                  "manifest build_config=%r（必须是 %s；含糊一律红）"
+                  % (cfg_manifest, "/".join(BUILD_CONFIGS)))
+        elif cli_cfg is not None and cli_cfg != cfg_manifest:
+            _fail(reds, "BUILD_CONFIG_CONFLICT",
+                  "manifest=%s args=%s" % (cfg_manifest, cli_cfg))
+        else:
+            use_cfg = cli_cfg or cfg_manifest
+            for proj, recorded in (manifest.get("output_dirs") or {}).items():
+                resolved = resolve_output_dir(os.path.dirname(proj), use_cfg)
+                if resolved is None:
+                    _fail(reds, "MISSING_OUTPUT_DIR",
+                          "%s bin/%s（按 %s 口径解析不到输出目录）" % (proj, use_cfg, use_cfg))
+                    continue
+                if recorded and os.path.abspath(resolved) != os.path.abspath(recorded):
+                    _fail(reds, "BUILD_OUTPUT_MISMATCH",
+                          "%s manifest=%s now=%s（口径 %s）"
+                          % (proj, recorded, resolved, use_cfg))
     elif manifest is not None:
         _fail(reds, "BAD_MANIFEST", "顶层不是对象")
         manifest = None
@@ -750,6 +809,17 @@ def cmd_selftest(_args):
                 return cmd_generate(ns)
             return cmd_check(ns)
 
+        def run_out(argv):
+            """跑一次并捕获 stdout：牙必须钉**诊断码**（否则别的红也能让 rc=1 冒充）。"""
+            buf = io.StringIO()
+            old_stdout = sys.stdout
+            sys.stdout = buf
+            try:
+                rc = run(argv)
+            finally:
+                sys.stdout = old_stdout
+            return rc, buf.getvalue()
+
         # Case 1：正例 generate + check 全绿；manifest 字段齐全
         proj, feed = make_fixture("pos")
         man = os.path.join(tmp, "pos", "deps.manifest.json")
@@ -891,6 +961,75 @@ def cmd_selftest(_args):
                   "manifest": bad_out, "packages_dir": feed4})
         sassert(rc == 1, "output-dir mismatch red", "rc=%d" % rc)
 
+        # 卡 deps-build-config-pinning 牙①：--build-config 与 manifest 的口径冲突 ⇒ 红（不"迁就"参数）
+        rc, out = run_out({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                           "manifest": man4, "packages_dir": feed4, "build_config": "Release"})
+        sassert(rc == 1 and "BUILD_CONFIG_CONFLICT" in out,
+                "buildcfg: cli config conflict red", "rc=%d out=%r" % (rc, out[:160]))
+
+        # 牙②（反 mtime 探测）：Debug 口径 manifest + 另建一个**更晚**的 Release 输出目录 ⇒ 仍按 Debug 判、绿。
+        # 旧实现按 mtime 挑"最新" ⇒ 这里会 BUILD_OUTPUT_MISMATCH；删掉 mtime 探测后必须不再受影响。
+        proj7, feed7 = make_fixture("mtime")
+        man7 = os.path.join(tmp, "mtime", "m.json")
+        run({"cmd": "generate", "project": os.path.join(proj7, "App.csproj"), "out": man7,
+             "packages_dir": feed7})
+        data7 = json.load(open(man7, encoding="utf-8"))
+        rel_out = os.path.join(proj7, "bin", "Release", "net8.0")
+        os.makedirs(rel_out, exist_ok=True)
+        shutil.copy(os.path.join(feed7, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                    os.path.join(rel_out, "Alpha.dll"))
+        dbg_dir = os.path.join(proj7, "bin", "Debug")
+        rel_base = os.path.join(proj7, "bin", "Release")
+        tick = os.path.getmtime(dbg_dir) + 3600
+        os.utime(rel_out, (tick, tick))
+        os.utime(rel_base, (tick, tick))
+        newer = os.path.getmtime(rel_base) > os.path.getmtime(dbg_dir)
+        rc, out = run_out({"cmd": "check", "project": os.path.join(proj7, "App.csproj"),
+                           "manifest": man7, "packages_dir": feed7})
+        sassert(newer and data7.get("build_config") == "Debug" and rc == 0
+                and "BUILD_OUTPUT_MISMATCH" not in out,
+                "buildcfg: no mtime probing (newer Release must not flip)",
+                "newer=%s cfg=%r rc=%d out=%r"
+                % (newer, data7.get("build_config"), rc, out[:160]))
+
+        # 牙③（fail-closed）：manifest 的 build_config 缺失/空/非法 ⇒ 红（不猜默认）
+        for idx, bad_cfg in enumerate(("", "unknown", None)):
+            bad = os.path.join(tmp, "mtime", "bad_cfg_%d.json" % idx)
+            d = json.load(open(man7, encoding="utf-8"))
+            d["build_config"] = bad_cfg
+            json.dump(d, open(bad, "w", encoding="utf-8"))
+            rc, out = run_out({"cmd": "check", "project": os.path.join(proj7, "App.csproj"),
+                               "manifest": bad, "packages_dir": feed7})
+            sassert(rc == 1 and "BAD_BUILD_CONFIG" in out,
+                    "buildcfg: bad/absent build_config red (%r)" % (bad_cfg,),
+                    "rc=%d out=%r" % (rc, out[:160]))
+
+        # 牙④：口径是 Release 但该目录不存在 ⇒ MISSING_OUTPUT_DIR（绝不静默回落 Debug）
+        bad2 = os.path.join(tmp, "deploy", "release_only.json")
+        d2 = json.load(open(man4, encoding="utf-8"))
+        d2["build_config"] = "Release"
+        json.dump(d2, open(bad2, "w", encoding="utf-8"))
+        rc, out = run_out({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                           "manifest": bad2, "packages_dir": feed4})
+        sassert(rc == 1 and "MISSING_OUTPUT_DIR" in out,
+                "buildcfg: missing configured output dir red",
+                "rc=%d out=%r" % (rc, out[:160]))
+
+        # 牙⑤（生成侧）：两个目录都在时，--build-config Debug 仍按 Debug 写 manifest
+        proj8, feed8 = make_fixture("both")
+        os.makedirs(os.path.join(proj8, "bin", "Release", "net8.0"), exist_ok=True)
+        shutil.copy(os.path.join(feed8, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                    os.path.join(proj8, "bin", "Release", "net8.0", "Alpha.dll"))
+        man8 = os.path.join(tmp, "both", "m.json")
+        run({"cmd": "generate", "project": os.path.join(proj8, "App.csproj"), "out": man8,
+             "packages_dir": feed8, "build_config": "Debug"})
+        d8 = json.load(open(man8, encoding="utf-8"))
+        rc = run({"cmd": "check", "project": os.path.join(proj8, "App.csproj"),
+                  "manifest": man8, "packages_dir": feed8, "build_config": "Debug"})
+        sassert(d8.get("build_config") == "Debug" and rc == 0,
+                "buildcfg: generate honors explicit Debug",
+                "cfg=%r rc=%d" % (d8.get("build_config"), rc))
+
         # 显式例外：被例外覆盖的缺失件 ⇒ 绿 + DEPS_EXCEPTION（例外必须逐条有理由）
         exc = os.path.join(tmp, "deploy", "exc.json")
         with open(exc, "w", encoding="utf-8") as f:
@@ -958,12 +1097,16 @@ def build_parser():
     g.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
     g.add_argument("--output-dir", default=None)
     g.add_argument("--exceptions", default=None)
+    g.add_argument("--build-config", choices=list(BUILD_CONFIGS), default=None,
+                   help="输出目录口径（缺省按 Release → Debug 取**存在者**，只看存在性、不看 mtime）")
     c = sub.add_parser("check")
     c.add_argument("--project", required=False)
     c.add_argument("--projects", default=None)
     c.add_argument("--manifest", required=True)
     c.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
     c.add_argument("--deploy-dir", default=None)
+    c.add_argument("--build-config", choices=list(BUILD_CONFIGS), default=None,
+                   help="显式口径；缺省用 manifest 的 build_config（含糊即红，绝不按 mtime 猜）")
     sub.add_parser("selftest")
     return p
 
