@@ -304,7 +304,9 @@ Rust 用例 `quest_check_conditions_match_oracle_ledger`（`cargo test -p game-s
 
 **最小口径 / 未建模（登记 D-21）**
 - oracle 在 `StartReady` 未置的**启动窗口**也拒网关连接（`src/M2Server/Net/TCP/TCPNetChannel.cs:73-78`）；本仓 listener 早于
-  世界初始化 bind，`Booting` 窗口内**挂起**（不拒不受理）——玩家可见差异仅「连接时机」，不是玩法。
+  世界初始化 bind，`Booting` 窗口内**挂起但必须有界**：缺省上界 30s（`MIR2_GATE_READY_WAIT_MS` 可调，
+  `WorldStartGate::admitted_until`），超界即**主动关闭**并记 `服务器未就绪: <peer>（…未在 T ms 内给出就绪结论）`
+  ——玩家可见差异仅「连接时机 + 最多多等 T 秒」，不是玩法；**不得读作与 oracle 等价**。
 - `src/GameSrv/TimedService.cs:61` 的未就绪早退与 `src/M2Server/Net/TCP/TCPNetChannel.cs:414` 的 `Run` 未建模（本仓无等价物；
   中止后 tick 继续跑，但无会话可进）。
 - oracle 中位于 `WorldEngine.Initialize()` 之后的 `GuildMgr/CastleMgr/AutoBot` 与
@@ -322,12 +324,17 @@ Rust 用例 `quest_check_conditions_match_oracle_ledger`（`cargo test -p game-s
    同一行 ERR 可观测「保留异常前已装载的前缀 NPC 1 条（ChrName=QManage）」⇒ `partial` 在生产路径被使用。
 3. ③**正常路径不变**：同一用例正常配置半段（`GM_OPEN` ⇒ `GM_SERVERUSERINDEX`）+ 既有 `relay` 全绿 +
    `cargo test -p game-svr --lib` 全绿（三元组原文见证据目录）。
+4. 挂起的**上界**（opc-07 2026-11-20 裁定）：用例 `relay.rs::world_ready_hold_times_out_and_refuses`——
+   `MIR2_TEST_WORLD_READY_DELAY_MS=3000`（就绪决策延迟 3s）+ `MIR2_GATE_READY_WAIT_MS=200` ⇒ Booting 窗口内
+   建连后 ~200ms 被告方关闭（EOF），日志 `服务器未就绪: <peer>（世界初始化中止或未在 200ms 内给出就绪结论）`。
 
 **两颗牙（红→绿；原文 `E:/UserFleet/qa/quests/qt01/abort_scope/`）**
 - 牙 A（致命分支改回「记录后继续」）：`mutation_a.log` —— ① 用例红（`expect_err` 拿到 `Ok`，
   `good_b` 也被装载）。
 - 牙 B（中止后仍置就绪）：`mutation_b.log` —— ② 用例红（无「世界初始化中止」落账）；
   加强 B2（accept 不检查准入，`admitted()` 恒放行）：`mutation_b2.log` —— 红在「中止后必须读到 EOF」。
+- 牙 T（上界失效——`admitted_until` 改回无界 `admitted()`）：`mutation_t.log` —— 上界用例 10s 读超时红
+  （「挂起必须有界」）。
 - 还原：`git checkout -- <path>` 后 `git hash-object` 与 `HEAD:<path>` 逐字节相等（章程 §15 例外）。
 
 

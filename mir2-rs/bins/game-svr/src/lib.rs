@@ -603,6 +603,7 @@ impl WorldStartGate {
     /// 等世界初始化给出结论：`true` = 就绪可受理；`false` = 中止拒连。
     ///
     /// `Booting` 期间挂起（`Notify` 先注册再读状态，见 tokio 的 `notified()` 口径）。
+    /// **不带上界**：生产路径一律用 [`Self::admitted_until`]（挂起必须有界，见其文档）。
     pub async fn admitted(&self) -> bool {
         loop {
             let notified = self.decision.notified();
@@ -611,6 +612,18 @@ impl WorldStartGate {
                 WORLD_GATE_READY => return true,
                 _ => return false,
             }
+        }
+    }
+
+    /// 等世界初始化给出结论，**最多等 `bound`**：`true` = 就绪可受理；
+    /// `false` = 中止**或等待超时**（两者都按「服务器未就绪」拒连）。
+    ///
+    /// 为什么必须有界（opc-07 2026-11-20 裁定）：oracle 在 `StartReady` 未置时**直接拒连**；
+    /// 本仓为了不破坏启动时序改为挂起，若无界，世界初始化卡住时连接会永久挂起。
+    pub async fn admitted_until(&self, bound: std::time::Duration) -> bool {
+        tokio::select! {
+            ok = self.admitted() => ok,
+            () = tokio::time::sleep(bound) => false,
         }
     }
 }
@@ -655,6 +668,32 @@ mod world_start_gate_tests {
         let g = std::sync::Arc::new(WorldStartGate::new());
         let g2 = std::sync::Arc::clone(&g);
         let waiter = tokio::spawn(async move { g2.admitted().await });
+        tokio::task::yield_now().await;
+        g.mark_ready();
+        assert!(waiter.await.expect("等待任务"));
+    }
+
+    /// 无决定时 `admitted_until` 必须在上界处返回 `false`（挂起有界，不无限等待）。
+    #[tokio::test]
+    async fn admitted_until_times_out_without_decision() {
+        let g = WorldStartGate::new();
+        let started = std::time::Instant::now();
+        let ok = g.admitted_until(std::time::Duration::from_millis(30)).await;
+        assert!(!ok, "无决定 ⇒ 超时按未就绪拒连");
+        assert!(
+            started.elapsed() >= std::time::Duration::from_millis(25),
+            "必须真的等到上界附近：{:?}",
+            started.elapsed()
+        );
+    }
+
+    /// 上界内就绪 ⇒ 放行（超时不得误伤正常路径）。
+    #[tokio::test]
+    async fn admitted_until_true_when_ready_within_bound() {
+        let g = std::sync::Arc::new(WorldStartGate::new());
+        let g2 = std::sync::Arc::clone(&g);
+        let waiter =
+            tokio::spawn(async move { g2.admitted_until(std::time::Duration::from_secs(5)).await });
         tokio::task::yield_now().await;
         g.mark_ready();
         assert!(waiter.await.expect("等待任务"));
@@ -789,6 +828,12 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // **卡 `openmir2-test-permission-seam`**：测试注入缝，**默认关**（不设 ⇒ 权限仍恒 0，oracle 行为不变）。
     // 非法值 ⇒ fail-closed（与 `MIR2_RNG_SEED` / `MIR2_CLOCK_MS` 同款纪律：不许「以为注入了、其实没有」）。
     // **卡 `openmir2-ids-keepalive-timeout`**：LoginSrv 链路观测缝，默认关（不设 ⇒ 一行不多）。
+    // 世界就绪等待上界（挂起必须有界；oracle 同窗口直接拒连，卡 `openmir2-quests-parity` §10.8）。
+    let gate_ready_wait = std::time::Duration::from_millis(
+        test_seams::gate_ready_wait_ms_from_env().map_err(anyhow::Error::msg)?,
+    );
+    // 测试缝：就绪决策延迟（缺省 0；进程级用例构造「Ready 晚于上界」）。
+    test_seams::install_world_ready_delay_from_env().map_err(anyhow::Error::msg)?;
     if test_seams::install_log_ids_from_env().map_err(anyhow::Error::msg)? {
         glog!(
             "INF",
@@ -1964,14 +2009,20 @@ async fn run_inner(args: &[String]) -> Result<()> {
         // 为假 ⇒ `LogService.Info("服务器未就绪: {0}")` + `Close()`，不分配网关槽位。
         // 本仓口径（见 [`WorldStartGate`]）：Booting 挂起等结论；Aborted 拒连；Ready 同旧路径。
         let admitted = tokio::select! {
-            ok = world_start.admitted() => ok,
+            ok = world_start.admitted_until(gate_ready_wait) => ok,
             _ = shutdown_signal.notified() => {
                 glog!("INF", "关服：停止接受新的网关连接");
                 break;
             }
         };
         if !admitted {
-            glog!("INF", "服务器未就绪: {peer}");
+            // oracle `TCPNetChannel.cs:72-78` 的原文（`服务器未就绪: {ip}`）+ Close()：判据只看前缀。
+            // 后半句区分「中止」与「等待超时」两种本仓来源（oracle 没有挂起，故无此歧义）。
+            glog!(
+                "INF",
+                "服务器未就绪: {peer}（世界初始化中止或未在 {}ms 内给出就绪结论）",
+                gate_ready_wait.as_millis()
+            );
             drop(sock);
             continue;
         }
@@ -27071,6 +27122,17 @@ fn sim_loop(
     // 两条通道各一个周转槽；优先通道的结转**先**被消耗（「控制事件先取」不被普通结转破坏）。
     let mut event_carry: Option<GateEvent> = None;
     let mut event_carry_ctl: Option<GateEvent> = None;
+    // 测试缝：把就绪/中止的**决策点**延迟（缺省 0 = 不延迟；仅供进程级用例构造超时场景）。
+    let ready_delay = test_seams::world_ready_delay();
+    if !ready_delay.is_zero() {
+        glog!(
+            "WRN",
+            "测试缝 {}={}ms 生效：世界就绪决策点延迟",
+            test_seams::TEST_WORLD_READY_DELAY_MS_ENV,
+            ready_delay.as_millis()
+        );
+        std::thread::sleep(ready_delay);
+    }
     // oracle `GameApp.InitializeWorld` 末尾 `M2Share.StartReady = true`（`GameApp.cs:238`）：
     // 世界初始化**全部完成**后才置就绪；中止路径（上面的 `world_start.abort()`）不置真。
     // 位置 = 序言末尾（首个 tick 之前），不是 NPC 装载处——oracle 的 try/catch 只跳过其后

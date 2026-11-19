@@ -1377,6 +1377,20 @@ async fn spawn_quest_abort_server(
     std::path::PathBuf,
     u16,
 )> {
+    spawn_quest_server_with_env(tag, good_robot_manage, &[]).await
+}
+
+/// [`spawn_quest_abort_server`] 的带环境变量版本（进程级测试缝：就绪延迟/上界）。
+async fn spawn_quest_server_with_env(
+    tag: &str,
+    good_robot_manage: bool,
+    envs: &[(&str, &str)],
+) -> Option<(
+    tokio::process::Child,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    u16,
+)> {
     for _ in 0..5 {
         let dir = support::unique_temp_dir(tag);
         std::fs::remove_dir_all(&dir).ok();
@@ -1391,13 +1405,15 @@ async fn spawn_quest_abort_server(
         let log = dir.join("server.out.log");
         let out = std::fs::File::create(&log).unwrap();
         let err = out.try_clone().unwrap();
-        let mut proc = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"))
-            .arg(dir.join("Server.conf"))
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"));
+        cmd.arg(dir.join("Server.conf"))
             .stdout(out)
             .stderr(err)
-            .kill_on_drop(true)
-            .spawn()
-            .unwrap();
+            .kill_on_drop(true);
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        let mut proc = cmd.spawn().unwrap();
         let text = support::wait_child_ready(&mut proc, &log, port, Duration::from_secs(10)).await;
         if text.contains(&format!(":{port}]已启动")) {
             return Some((proc, dir, log, port));
@@ -1475,4 +1491,46 @@ async fn world_init_abort_refuses_admission_and_keeps_prefix_npcs() {
         "正常路径必须置就绪（oracle `StartReady = true` 等价物）；日志实得：{text}"
     );
     proc2.kill().await.ok();
+}
+
+/// 挂起必须**有界**（opc-07 2026-11-20 裁定）：世界就绪决策晚于上界 ⇒ 主动关闭 + `服务器未就绪`。
+///
+/// 构造：`MIR2_TEST_WORLD_READY_DELAY_MS=60000`（就绪决策延迟 60s，长于本用例全程 ⇒ 连接建立时
+/// 恒为 Booting，不受整文件并行跑批的启动延迟影响）+ `MIR2_GATE_READY_WAIT_MS=200`（挂起上界 200ms）
+/// ⇒ Booting 窗口内建立的连接必在 ~200ms 后被服务端关闭（读到 EOF），
+/// 日志含 `服务器未就绪` 且写明「未在 200ms 内给出就绪结论」。
+/// 红检：去掉 `admitted_until` 的 `sleep` 臂（改回无界 `admitted()`）⇒ 本用例读超时必红。
+#[tokio::test]
+async fn world_ready_hold_times_out_and_refuses() {
+    let Some((mut proc, dir, log, port)) = spawn_quest_server_with_env(
+        "gs-quest-ready-timeout",
+        true,
+        &[
+            ("MIR2_TEST_WORLD_READY_DELAY_MS", "60000"),
+            ("MIR2_GATE_READY_WAIT_MS", "200"),
+        ],
+    )
+    .await
+    else {
+        panic!("game-svr 连试 5 次都没能 bind 成功（端口被抢？）");
+    };
+    let _guard = support::TempDirGuard(dir.clone());
+    // bind 之后、就绪决策之前（Booting 窗口内）建连 ⇒ 挂起。
+    let mut gate = connect_with_retry(port).await;
+    let mut buf = [0u8; 20];
+    let n = tokio::time::timeout(Duration::from_secs(10), gate.read(&mut buf))
+        .await
+        .expect("读超时：挂起必须有界（上界 200ms 后必须关闭连接）")
+        .unwrap_or(0);
+    assert_eq!(n, 0, "超过上界必须读到 EOF（服务端主动关闭）");
+    let text = support::wait_log_contains(&log, "服务器未就绪", Duration::from_secs(5)).await;
+    assert!(
+        text.contains("服务器未就绪"),
+        "超时拒连必须落 oracle 原文前缀；日志实得：{text}"
+    );
+    assert!(
+        text.contains("200ms"),
+        "拒绝原因必须写明上界（可区分中止与超时）；日志实得：{text}"
+    );
+    proc.kill().await.ok();
 }
