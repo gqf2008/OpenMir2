@@ -535,7 +535,7 @@ pub struct RecalcOutput {
 /// `recalc_abilitys` 内部按该序先算等级基础值；对于登录之后的状态
 ///（`Abil` 已是等级派生值）它是幂等的。
 #[must_use]
-fn level_ability_base(abil: &Ability, job: u8) -> Ability {
+pub(crate) fn level_ability_base(abil: &Ability, job: u8) -> Ability {
     let job = match job {
         0 => PlayerJob::Warrior,
         1 => PlayerJob::Wizard,
