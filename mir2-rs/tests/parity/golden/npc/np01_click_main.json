@@ -16,7 +16,7 @@
     {
       "name": "click_main_ok",
       "script_name": "老人",
-      "script_sha256": "8257e39b7c4fccd139242459d2e1dfb9c5a81a5a1891bc04d67309c04e16c7ea",
+      "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
       "ctx": {
         "player_x": 10,
         "player_y": 10,
@@ -67,7 +67,7 @@
     {
       "name": "click_main_far",
       "script_name": "老人",
-      "script_sha256": "8257e39b7c4fccd139242459d2e1dfb9c5a81a5a1891bc04d67309c04e16c7ea",
+      "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
       "ctx": {
         "player_x": 10,
         "player_y": 10,
@@ -94,7 +94,7 @@
     {
       "name": "click_main_dead",
       "script_name": "老人",
-      "script_sha256": "8257e39b7c4fccd139242459d2e1dfb9c5a81a5a1891bc04d67309c04e16c7ea",
+      "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
       "ctx": {
         "player_x": 10,
         "player_y": 10,
@@ -121,7 +121,7 @@
     {
       "name": "click_main_rate_limited",
       "script_name": "老人",
-      "script_sha256": "8257e39b7c4fccd139242459d2e1dfb9c5a81a5a1891bc04d67309c04e16c7ea",
+      "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
       "ctx": {
         "player_x": 10,
         "player_y": 10,

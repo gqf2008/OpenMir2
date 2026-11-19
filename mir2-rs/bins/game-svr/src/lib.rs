@@ -7222,11 +7222,12 @@ fn handle_shop_cmd_inner(
             }
             // `Merchant.cs:922-929` 的 `@back` 支：`ScriptGoBackLable` 空则回 `@main`。
             if game_svr::shop::eq_label(label, "@back") {
-                let target = if session.script_go_back_lable.is_empty() {
-                    "@main".to_string()
-                } else {
-                    session.script_go_back_lable.clone()
-                };
+                // oracle `Merchant.cs:922-929`：空栈时**写回** `ScriptGoBackLable = "@main"`，
+                // 不是只在本地取默认值（状态面差异由 NP-02 对拍钉出，2026-11-20）。
+                if session.script_go_back_lable.is_empty() {
+                    session.script_go_back_lable = "@main".to_string();
+                }
+                let target = session.script_go_back_lable.clone();
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
                 let mut script_broadcasts2: Vec<String> = Vec::new();
@@ -84664,8 +84665,17 @@ GMEXECUTE f
         let text = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("读不到 {}: {e}", path.display()));
         let doc: serde_json::Value = serde_json::from_str(&text).expect("golden JSON");
-        let cases = doc["cases"].as_array().expect("cases 数组");
-        assert!(!cases.is_empty(), "golden 零用例 ⇒ 红（防空转）");
+        let np01 = doc["cases"].as_array().expect("cases 数组");
+        assert!(!np01.is_empty(), "golden 零用例 ⇒ 红（防空转）");
+        // NP-02 的对话选择 golden 独立成文件（同一批、同一比较器）。
+        let path2 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/npc/np02_dialog_select.json");
+        let text2 = std::fs::read_to_string(&path2)
+            .unwrap_or_else(|e| panic!("读不到 {}: {e}", path2.display()));
+        let doc2: serde_json::Value = serde_json::from_str(&text2).expect("np02 golden JSON");
+        let np02 = doc2["cases"].as_array().expect("np02 cases 数组");
+        assert!(!np02.is_empty(), "np02 golden 零用例 ⇒ 红（防空转）");
+        let cases: Vec<&serde_json::Value> = np01.iter().chain(np02.iter()).collect();
         let mut n = 0usize;
         for case in cases {
             let name = case["name"].as_str().expect("case name");
@@ -84676,20 +84686,26 @@ GMEXECUTE f
             );
             let mut rig = if name == "click_no_main_fallback" {
                 T137Rig::new_with(
-                    ";x
-国王 1 0 11 10 0 8
-老人 0 0 12 10 0 1
-",
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
                     &[
-                        ("Npc_def/国王-0.txt", "[@main]
-king"),
-                        ("Npc_def/老人-0.txt", "[@greet]
-hi"),
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", "[@greet]\nhi"),
                     ],
                     2,
                 )
             } else {
-                T137Rig::new()
+                // 与 golden 同源的脚本（NP-02 的 @ask/@back 记录必须在同一份脚本上比）。
+                T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        (
+                            "Npc_def/老人-0.txt",
+                            "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>",
+                        ),
+                    ],
+                    2,
+                )
             };
             match name {
                 "click_main_ok" => {
@@ -84730,6 +84746,29 @@ hi"),
                     assert!(rig.click(rig.elder_id), "{name}: 必须到达 Click 点");
                     assert!(rig.drain().is_empty(), "{name}: 无 @main 时零说词");
                 }
+                "dlg_ask_ok" | "dlg_back_to_main" | "dlg_unknown_label" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 先点击打开对话");
+                    let _ = rig.drain();
+                    let label = case["ctx"]["label"].as_str().expect("label");
+                    rig.dlg_select(rig.elder_id, label);
+                    let frames = rig.drain();
+                    let says = T137Rig::says(&frames);
+                    let expect: Vec<String> = case["rm"].as_array().unwrap().iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string()).collect();
+                    assert_eq!(says, expect, "{name}: 说词序列");
+                }
+                "dlg_ask_back" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 先点击");
+                    let _ = rig.drain();
+                    rig.dlg_select(rig.elder_id, "@ask");
+                    let _ = rig.drain();
+                    rig.dlg_select(rig.elder_id, "@back");
+                    let frames = rig.drain();
+                    let says = T137Rig::says(&frames);
+                    let expect: Vec<String> = case["rm"].as_array().unwrap().iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string()).collect();
+                    assert_eq!(says, expect, "{name}: @back 回 @main 说词");
+                }
                 other => panic!("golden 出现未知用例 {other}（禁止静默跳过）"),
             }
             // 状态面（oracle `LastNpc` / `playerActor.Script` / `ScriptCurrLable`）：
@@ -84750,6 +84789,16 @@ hi"),
                 ss.map(|s| s.script_curr_lable.clone()).unwrap_or_default(),
                 st["script_curr_lable"].as_str().unwrap(),
                 "{name}: ScriptCurrLable"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_go_back_lable.clone()).unwrap_or_default(),
+                st["script_go_back_lable"].as_str().unwrap(),
+                "{name}: ScriptGoBackLable"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_lable.clone()).unwrap_or_default(),
+                st["script_lable"].as_str().unwrap(),
+                "{name}: ScriptLable"
             );
             n += 1;
         }

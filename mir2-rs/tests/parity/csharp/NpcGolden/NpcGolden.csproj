@@ -19,6 +19,7 @@
   -->
   <ItemGroup>
     <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+    <ProjectReference Include="..\..\..\..\..\src\GameSrv\GameSrv.csproj" />
   </ItemGroup>
 
 </Project>

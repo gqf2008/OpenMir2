@@ -235,6 +235,33 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
 **重录后重出的 PASS 必须包含**：新 golden sha256 + 旧 golden sha256（本节当前值）+ 工具输出路径 +
 `BEHAVIOR_IDENTICAL` 原文。缺任一项 ⇒ PASS 不成立。
 
+## 12. NP-02（对话标签选择）交付记录（2026-11-20）
+
+- **机制**：`CM_MERCHANTDLGSELECT(1011)` → `ClientMerchantDlgSelect`（`src/M2Server/Player/PlayObject.Operate.cs:114`）
+  → `Merchant.UserSelect`（`src/GameSrv/Npc/Merchant.cs:789`）→ 标签账本 + `GotoLable` → 说词。
+  **oracle 细节**：`NormNpc.UserSelect`（`src/M2Server/Npc/NormNpc.cs:1633`）只记标签、不 `GotoLable`；
+  说词由 **Merchant 覆写**发出，且 `GotoLable(player, actorId, …)` 经 `SystemShare.ActorMgr.Get<INormNpc>` 解析 NPC
+  ⇒ 探针必须把 NPC 注册进 `ActorMgr`（已做）。
+- **golden**：`mir2-rs/tests/parity/golden/npc/np02_dialog_select.json`（4 例：`dlg_ask_ok` / `dlg_back_to_main` /
+  `dlg_unknown_label` / `dlg_ask_back`），与 NP-01 golden **分文件**（避免每加一条就换掉旧证据对象）。
+- **断言**：说词序列（`SM_MERCHANTSAY` 尾文本）+ `ScriptCurrLable` / `ScriptGoBackLable` / `ScriptLable`；
+  单 `@back`（无先前 `@ask`）与 `@nope` 均为零说词（oracle 真实行为）。
+- **对拍钉出的产品差异（已修）**：oracle `Merchant.cs:922-929` 在 `@back` 空栈时**写回**
+  `ScriptGoBackLable = "@main"`；Rust 原来只在本地取默认值、不落状态。已改为先写回再跳转。
+- **牙 D**：把 `@back` 二次跳转分支短路（`if false && eq_label("@back")`）⇒ `dlg_ask_back` 红在
+  `@back 回 @main 说词`；原文 `E:/UserFleet/qa/npc-parity/np02-mutation-D-back-jump.txt`，恢复 sha 相等、复绿
+  `E:/UserFleet/qa/npc-parity/np02-green-final.txt`。
+- **NP-01 未受影响的证明**：拆分后重生成 `np01_click_main.json`，`golden_recheck.py` 对已验收版本
+  （`E:/UserFleet/qa/npc-parity/rerecord/np01-after.json`，sha `42fd2930…2bc4`）判 `BEHAVIOR_IDENTICAL`（rc=0）。
+
+### 12.1 oracle `#ACT` 只执行第一条已注册命令（opc-07，2026-11-20；批量硬规则）
+
+`ScriptEngine.GotoLableQuestActionProcess`（`src/Modules/ScriptEngine/ScriptEngine.cs:884-893`）在 `#ACT` 列表里
+**命中第一条已注册命令就 `Execute; return;`** ⇒ 同段 `#ACT` 里后续已注册命令**不执行**。
+
+- 批量夹具一律按"第一条生效"建期望；**不得**为让两条都跑而拆脚本（等于帮 oracle 改行为）。
+- **NP-04 将加一条显式"第二条未执行"用例**（同一 `#ACT` 两条 `SET`/`SETOPEN`，断言只有第一条落状态），并引用本符号锚。
+
 ## 11. 行为牙（NP-01 样板）
 
 在**本 worktree** 内逐条变异、跑同一条测试，期望红，恢复后 sha 相等并复绿。原文落**仓外**：

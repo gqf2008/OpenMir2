@@ -119,19 +119,23 @@
         "line": 114,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "merchant_dialog_label_gate",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "merchant_dlgselect_exit_emits_one_merchantdlgclose_with_npc_recog"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np02_dialog_select.json",
+        "cases": [
+          "dlg_ask_ok",
+          "dlg_back_to_main",
+          "dlg_unknown_label",
+          "dlg_ask_back"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "1011 派发 lib.rs 第 7094 行；merchant_base_user_select 第 8907 行；guild_official.rs::handle_select 第 461 行"
+      "notes": "对话选择经 Merchant.UserSelect→GotoLable；对拍钉出状态差异：oracle 在 @back 空栈时写回 ScriptGoBackLable=@main，Rust 原只本地取默认值（已修）；牙 D 跳过 @back 二次跳转⇒dlg_ask_back 红（E:/UserFleet/qa/npc-parity/）",
+      "basis": "semantic"
     },
     {
       "id": "NP-03",

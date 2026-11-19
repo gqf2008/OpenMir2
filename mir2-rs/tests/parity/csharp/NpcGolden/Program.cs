@@ -33,6 +33,7 @@ using M2Server.Maps;
 using M2Server.Net;
 using M2Server.Npc;
 using M2Server.Player;
+using GameSrv.Npc;
 using OpenMir2;
 using OpenMir2.Data;
 using OpenMir2.Enums;
@@ -132,7 +133,7 @@ internal class WorldProxy : DispatchProxy
 
     protected override object Invoke(MethodInfo targetMethod, object[] args)
     {
-        if (targetMethod.Name == "FindNpc")
+        if (targetMethod.Name == "FindNpc" || targetMethod.Name == "FindMerchant")
         {
             return Npc;
         }
@@ -183,6 +184,66 @@ internal static class Program
         return list;
     }
 
+    private static int _npcSeq = 5001;
+
+    private const string CLICK_SCRIPT =
+        "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>";
+    private const string DIALOG_SCRIPT = CLICK_SCRIPT + "\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>";
+    private static readonly string[] CLICK_ORACLE_SOURCE =
+    {
+        "src/M2Server/Player/PlayObject.Base.cs:674 (ClientClickNpc)",
+        "src/M2Server/Npc/NormNpc.cs:68 (Click -> GotoLable @main)",
+        "src/Modules/ScriptEngine/ScriptEngine.cs:141 (GotoLable)",
+        "src/Modules/ScriptEngine/ScriptEngine.cs:987 (GotoLableSendMerChantSayMsg)",
+        "src/M2Server/Player/PlayObject.Message.cs:1702 (RM_MERCHANTSAY -> SM_MERCHANTSAY)",
+    };
+    private static readonly string[] DIALOG_ORACLE_SOURCE =
+    {
+        "src/M2Server/Player/PlayObject.Operate.cs:114 (ClientMerchantDlgSelect)",
+        "src/M2Server/Npc/NormNpc.cs:1633 (NormNpc.UserSelect: label ledger only)",
+        "src/GameSrv/Npc/Merchant.cs:789 (Merchant.UserSelect -> GotoLable / @back)",
+        "src/Modules/ScriptEngine/ScriptEngine.cs:141 (GotoLable)",
+        "src/Modules/ScriptEngine/ScriptEngine.cs:987 (GotoLableSendMerChantSayMsg)",
+        "src/M2Server/Player/PlayObject.Message.cs:1702 (RM_MERCHANTSAY -> SM_MERCHANTSAY)",
+    };
+    private static Dictionary<string, object> BuildCtx(CaseSpec spec)
+    {
+        var ctx = new Dictionary<string, object>
+        {
+            ["player_x"] = spec.PlayerX,
+            ["player_y"] = spec.PlayerY,
+            ["npc_x"] = spec.NpcX,
+            ["npc_y"] = spec.NpcY,
+            ["death"] = spec.Death,
+            ["rate_limited"] = spec.ClickNpcTime != 0 && spec.ClickNpcTimeConfig > 0,
+            ["click_npc_time_config"] = spec.ClickNpcTimeConfig,
+        };
+        if (spec.Kind != "click")
+        {
+            ctx["kind"] = spec.Kind;
+            ctx["label"] = spec.Label;
+            ctx["labels"] = spec.Labels;
+        }
+        return ctx;
+    }
+    private static Dictionary<string, object> BuildState(PlayObject po, string kind, int npcId)
+    {
+        var st = new Dictionary<string, object>
+        {
+            ["last_npc_is_npc"] = po.LastNpc == npcId,
+            ["script_curr_lable"] = po.ScriptCurrLable ?? string.Empty,
+            ["script_go_back_lable"] = po.ScriptGoBackLable ?? string.Empty,
+            ["script_lable"] = po.ScriptLable ?? string.Empty,
+            ["script_selected"] = po.Script != null,
+        };
+        if (kind.StartsWith("dlg", StringComparison.Ordinal))
+        {
+            st["can_jmp_labels"] = po.CanJmpScriptLableMap.Keys.Cast<string>()
+                .OrderBy(x => x, StringComparer.OrdinalIgnoreCase).ToArray();
+        }
+        return st;
+    }
+
     private sealed class CaseSpec
     {
         public string Name;
@@ -191,8 +252,11 @@ internal static class Program
         public int NpcX = 10;
         public int NpcY = 10;
         public bool Death;
+        public string Kind = "click";
+        public string Label = "";
+        public string[] Labels;
         public string ScriptName = "老人";
-        public string ScriptText = "MAIN_DEFAULT";
+        public string ScriptText = CLICK_SCRIPT;
         public int ClickNpcTime = 0;
         public int ClickNpcTimeConfig = 0;
     }
@@ -200,9 +264,8 @@ internal static class Program
     private static object RunCase(CaseSpec spec, string tmp, Envirnoment envir, CaptureNetChannel net)
     {
         net.Frames.Clear();
-        var scriptText = spec.ScriptText == "MAIN_DEFAULT"
-            ? "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\r\n"
-            : spec.ScriptText;
+        var npcId = _npcSeq++;
+        var scriptText = spec.ScriptText;
         var enc = new UTF8Encoding(true);
         var scriptBytes = enc.GetPreamble().Concat(enc.GetBytes(scriptText)).ToArray();
         File.WriteAllBytes(Path.Combine(tmp, "Npc_def", spec.ScriptName + ".txt"), scriptBytes);
@@ -212,9 +275,9 @@ internal static class Program
         // 走 oracle `FindMerchant(...) ?? FindNpc(...)` 的 **FindNpc 分支**（`Npcs.txt` 之外的
         // `AddQuestNpc` 型 NPC）；Rust 侧固定 NPC type0 为 `Merchant`，其 `Click` 覆写 = `base.Click`
         // （`Merchant.cs:1104`），点击面同形。
-        var npc = new NormNpc
+        var npc = new Merchant
         {
-            ActorId = 5001,
+            ActorId = npcId,
             ChrName = "老人",
             Envir = envir,
             CurrX = (short)spec.NpcX,
@@ -222,6 +285,8 @@ internal static class Program
             MapName = "0",
         };
         new ScriptParsers().LoadScript(npc, "Npc_def", spec.ScriptName);
+        SystemShare.ActorMgr.CleanObject();
+        SystemShare.ActorMgr.Add(npc);
         SystemShare.WorldEngine = WorldProxy.Create(npc);
 
         var po = new PlayObject
@@ -242,7 +307,49 @@ internal static class Program
 
         var click = typeof(PlayObject).GetMethod("ClientClickNpc", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("PlayObject.ClientClickNpc");
-        click.Invoke(po, new object[] { 5001 });
+        click.Invoke(po, new object[] { npcId });
+
+        // NP-02：先点击打开对话（上面的 Click），再把点击产生的帧排空丢弃，然后选择标签。
+        if (spec.Kind == "dlg_select" || spec.Kind == "dlg_sequence")
+        {
+            var pre = GetMsgQueue(po);
+            var preGet = typeof(PlayObject).GetMethod("GetMessage", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
+                null, new[] { typeof(int), typeof(ProcessMessage).MakeByRefType() }, null);
+            var preOp = typeof(PlayObject).GetMethod("Operate", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
+                null, new[] { typeof(ProcessMessage) }, null);
+            var box = new object[] { HUtil32.GetTickCount(), default(ProcessMessage) };
+            while ((bool)preGet.Invoke(po, box))
+            {
+                var pm0 = (ProcessMessage)box[1];
+                if (!(bool)preOp.Invoke(po, new object[] { pm0 })) break;
+                box[0] = HUtil32.GetTickCount();
+                box[1] = default(ProcessMessage);
+            }
+            var dlg = typeof(PlayObject).GetMethod("ClientMerchantDlgSelect", BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new MissingMethodException("PlayObject.ClientMerchantDlgSelect");
+            var labels = spec.Kind == "dlg_sequence" ? spec.Labels : new[] { spec.Label };
+            for (var li = 0; li < labels.Length; li++)
+            {
+                net.Frames.Clear();
+                dlg.Invoke(po, new object[] { npcId, labels[li] });
+                if (li == labels.Length - 1) { continue; } // 末步留给下面的主消息泵记录
+                // 中间步：按真实消息泵排空（保留状态副作用），只记录最后一步的帧。
+                var mid = GetMsgQueue(po);
+                var midGet = typeof(PlayObject).GetMethod("GetMessage", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
+                    null, new[] { typeof(int), typeof(ProcessMessage).MakeByRefType() }, null);
+                var midOp = typeof(PlayObject).GetMethod("Operate", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
+                    null, new[] { typeof(ProcessMessage) }, null);
+                var midBox = new object[] { HUtil32.GetTickCount(), default(ProcessMessage) };
+                while ((bool)midGet.Invoke(po, midBox))
+                {
+                    var pm1 = (ProcessMessage)midBox[1];
+                    if (!(bool)midOp.Invoke(po, new object[] { pm1 })) break;
+                    midBox[0] = HUtil32.GetTickCount();
+                    midBox[1] = default(ProcessMessage);
+                }
+                net.Frames.Clear();
+            }
+        }
 
         // 真实消息泵：GetMessage 按优先级出队 → Operate 映射成 SM（`PlayObject.Message.cs:355-363`）。
         var pq = GetMsgQueue(po);
@@ -291,7 +398,7 @@ internal static class Program
         {
             order = i,
             ident = f.ident,
-            recog_is_npc = f.recog == 5001,
+            recog_is_npc = f.recog == npcId,
             param = f.param,
             tag = f.tag,
             series = f.series,
@@ -303,30 +410,14 @@ internal static class Program
             name = spec.Name,
             script_name = spec.ScriptName,
             script_sha256 = scriptSha,
-            ctx = new
-            {
-                player_x = spec.PlayerX,
-                player_y = spec.PlayerY,
-                npc_x = spec.NpcX,
-                npc_y = spec.NpcY,
-                death = spec.Death,
-                rate_limited = spec.ClickNpcTime != 0 && spec.ClickNpcTimeConfig > 0,
-                click_npc_time_config = spec.ClickNpcTimeConfig,
-            },
+            ctx = BuildCtx(spec),
             rm = rms,
             rm_priorities = prioritiesBefore,
             max_drain_passes = 64,
             drain_passes = rms.Count,
             drain_hit_cap = pqCount > 0 || rms.Count >= 64,
             sm,
-            state = new
-            {
-                last_npc_is_npc = po.LastNpc == 5001,
-                script_curr_lable = po.ScriptCurrLable ?? string.Empty,
-                script_go_back_lable = po.ScriptGoBackLable ?? string.Empty,
-                script_lable = po.ScriptLable ?? string.Empty,
-                script_selected = po.Script != null,
-            },
+            state = BuildState(po, spec.Kind, npcId),
         };
     }
 
@@ -334,7 +425,7 @@ internal static class Program
     {
         if (args.Length < 1)
         {
-            Console.Error.WriteLine("usage: npc-golden <out.json>");
+            Console.Error.WriteLine("usage: npc-golden <out_dir>");
             return 2;
         }
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
@@ -351,7 +442,7 @@ internal static class Program
         M2Share.ScriptEngine = new ScriptEngine();
 
         var envir = new Envirnoment();
-        var cases = new List<object>
+        var clickCases = new List<object>
         {
             RunCase(new CaseSpec { Name = "click_main_ok" }, tmp, envir, net),
             RunCase(new CaseSpec { Name = "click_main_far", NpcX = 40, NpcY = 40 }, tmp, envir, net),
@@ -363,34 +454,39 @@ internal static class Program
                 ClickNpcTimeConfig = 1000,
             }, tmp, envir, net),
         };
-        cases.Add(RunCase(new CaseSpec
+        clickCases.Add(RunCase(new CaseSpec
         {
             Name = "click_no_main_fallback",
             ScriptText = "[@greet]\nhi\r\n",
         }, tmp, envir, net));
+        var dlgCases = new List<object>
+        {
+            RunCase(new CaseSpec { Name = "dlg_ask_ok", Kind = "dlg_select", Label = "@ask", ScriptText = DIALOG_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "dlg_back_to_main", Kind = "dlg_select", Label = "@back", ScriptText = DIALOG_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "dlg_unknown_label", Kind = "dlg_select", Label = "@nope", ScriptText = DIALOG_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "dlg_ask_back", Kind = "dlg_sequence", Labels = new[] { "@ask", "@back" }, ScriptText = DIALOG_SCRIPT }, tmp, envir, net),
+        };
 
+        var outDir = args[0];
+        Directory.CreateDirectory(outDir);
+        WriteDoc(Path.Combine(outDir, "np01_click_main.json"), CLICK_SCRIPT, clickCases, CLICK_ORACLE_SOURCE);
+        WriteDoc(Path.Combine(outDir, "np02_dialog_select.json"), DIALOG_SCRIPT, dlgCases, DIALOG_ORACLE_SOURCE);
+        Directory.Delete(tmp, true);
+        return 0;
+    }
+
+    private static void WriteDoc(string path, string script, List<object> cases, string[] oracleSource)
+    {
         var doc = new
         {
             generator = "mir2-rs/tests/parity/csharp/NpcGolden",
-            oracle_source = new[]
-            {
-                "src/M2Server/Player/PlayObject.Base.cs:674 (ClientClickNpc)",
-                "src/M2Server/Npc/NormNpc.cs:68 (Click -> GotoLable @main)",
-                "src/Modules/ScriptEngine/ScriptEngine.cs:141 (GotoLable)",
-                "src/Modules/ScriptEngine/ScriptEngine.cs:987 (GotoLableSendMerChantSayMsg)",
-                "src/M2Server/Player/PlayObject.Message.cs:1702 (RM_MERCHANTSAY -> SM_MERCHANTSAY)",
-            },
-            script = "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>",
+            oracle_source = oracleSource,
+            script,
             max_drain_passes = 64,
             excluded_wallclock_fields = new[] { "ctx.click_npc_time" },
             cases,
         };
-
-        var outPath = args[0];
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
-        File.WriteAllText(outPath, JsonSerializer.Serialize(doc, JsonOpts), new UTF8Encoding(false));
-        Directory.Delete(tmp, true);
-        Console.WriteLine("OK " + outPath);
-        return 0;
+        File.WriteAllText(path, JsonSerializer.Serialize(doc, JsonOpts), new UTF8Encoding(false));
+        Console.WriteLine("OK " + path);
     }
 }
