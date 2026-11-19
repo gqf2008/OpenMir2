@@ -18,12 +18,19 @@
 2. 内容一致性：manifest 记录的每个包文件 sha256 与磁盘逐项相等；nupkg 的 SHA512 与
    `.nupkg.sha512` 侧车一致（lock 的 `contentHash` 是 NuGet 对**包内容**的规范化哈希，
    **不是** .nupkg 的 SHA512——两个 hash 分开记录、分别核验）。
+3. **部署目录（`--deploy-dir`，可选）**：把 manifest 里每个包的**运行时资产**
+   （`project.assets.json` 的 `runtime`/`native` 列表，按 TFM 已选定）按 basename 映射到
+   `<deploy-dir>/<name>`：缺失 ⇒ `MISSING_DEPLOYED`；sha 不符 ⇒ `DEPLOYED_SHA_MISMATCH`；
+   两个**不同包**映射到同一文件名且 sha 不同 ⇒ `AMBIGUOUS_MAPPING`；部署目录里多余的 DLL
+   只 `WARN_EXTRA`（自家件由 `stamp-binaries` 管）。目录缺失/为空 ⇒ 红。
 
 **fail-closed**：缺 lock / 缺 manifest / manifest 空或字段缺失 ⇒ 红（rc=1），绝不当"没有依赖"。
 
 用法：
-  python -I -B tools/deploy/deps_manifest.py generate --project <csproj> --out <manifest.json>
-  python -I -B tools/deploy/deps_manifest.py check --project <csproj> --manifest <manifest.json>
+  python -I -B tools/deploy/deps_manifest.py generate --projects <a;b;c> --out <manifest.json>
+      [--exceptions <exceptions.json>]
+  python -I -B tools/deploy/deps_manifest.py check --projects <a;b;c> --manifest <manifest.json>
+      [--deploy-dir <目录>]
   python -I -B tools/deploy/deps_manifest.py selftest
 
 退出码：0 = 绿；1 = 判红（证伪，红项逐条打印）；2 = 用法错 / 判不了（环境缺目录等）。
@@ -45,7 +52,7 @@ import tempfile
 
 MANIFEST_VERSION = 1
 REQUIRED_PKG_FIELDS = ("name", "requested", "resolved", "source", "toolchain", "content_hash",
-                       "nupkg_sha512", "files")
+                       "nupkg_sha512", "files", "runtime_assets", "shipped_assets")
 
 
 def emit(text):
@@ -160,6 +167,69 @@ def parse_csproj_refs(csproj_path):
     return refs
 
 
+def load_assets_runtime(proj_dir):
+    """从 `obj/project.assets.json` 取每个包的运行时资产（runtime+native，已按 TFM 选定）。
+
+    返回 `(map, err)`：`map[name] = [relpath,...]`（去重排序）；缺文件/不可解析 ⇒ err。
+    """
+    path = os.path.join(proj_dir, "obj", "project.assets.json")
+    if not os.path.isfile(path):
+        return None, "MISSING_ASSETS %s" % path
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        return None, "BAD_ASSETS %s (%s)" % (path, exc)
+    out = {}
+    targets = data.get("targets") or {}
+    for _tfm, libs in targets.items():
+        for key, entry in (libs or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            name = key.split("/", 1)[0]
+            rels = set(out.get(name, []))
+            for group in ("runtime", "native"):
+                for rel in (entry.get(group) or {}):
+                    if rel.rsplit("/", 1)[-1] == "_._":
+                        continue  # NuGet 占位符：不是真实资产
+                    rels.add(rel)
+            out[name] = sorted(rels)
+    return out, ""
+
+
+def load_exceptions(proj_dir, explicit_path):
+    """读取**显式例外**（只压制 `MISSING_DEPLOYED`，逐条必须带理由）。
+
+    来源：`--exceptions <path>`，否则自动找主项目目录下的 `deps.exceptions.json`（可不存在）。
+    格式：`[{"pkg": "...", "version": "...", "reason": "..."}]`；理由为空 ⇒ 判红（不能空口豁免）。
+    """
+    path = explicit_path or os.path.join(proj_dir, "deps.exceptions.json")
+    if not explicit_path and not os.path.isfile(path):
+        return [], ""
+    if not os.path.isfile(path):
+        return None, "MISSING_EXCEPTIONS %s" % path
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        return None, "BAD_EXCEPTIONS %s (%s)" % (path, exc)
+    if not isinstance(data, list):
+        return None, "BAD_EXCEPTIONS %s（顶层必须是数组）" % path
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            return None, "BAD_EXCEPTIONS %s（条目必须是对象）" % path
+        pkg = item.get("pkg")
+        ver = item.get("version")
+        reason = (item.get("reason") or "").strip()
+        if not pkg or not ver:
+            return None, "BAD_EXCEPTIONS %s（缺 pkg/version）" % path
+        if not reason:
+            return None, "BAD_EXCEPTIONS %s（%s@%s 理由为空，禁止空口豁免）" % (path, pkg, ver)
+        out.append({"pkg": pkg, "version": ver, "reason": reason})
+    return out, ""
+
+
 def load_lock(proj_dir):
     path = os.path.join(proj_dir, "packages.lock.json")
     if not os.path.isfile(path):
@@ -190,6 +260,30 @@ def lock_packages(lock):
     return merged, ""
 
 
+def detect_output_dir(proj_dir):
+    """找本项目最新的 `bin/<config>/<tfm>` 输出目录（部署映射的"实际装运集"依据）。
+
+    为什么不能只看 assets 的 runtime 列表：`System.Text.Json` 等在 net8.0 共享框架里，
+    assets 仍列为运行时资产但**不会复制到输出目录**；`_._` 是占位符。装运集必须来自构建输出。
+    """
+    best, best_m = None, -1.0
+    for config in ("Release", "Debug"):
+        base = os.path.join(proj_dir, "bin", config)
+        if not os.path.isdir(base):
+            continue
+        # 两种布局：`bin/<config>/<tfm>/`（默认）与 `bin/<config>/`（AppendTargetFrameworkToOutputPath=false）
+        candidates = [base]
+        for name in os.listdir(base):
+            cand = os.path.join(base, name)
+            if os.path.isdir(cand):
+                candidates.append(cand)
+        for cand in candidates:
+            m = os.path.getmtime(cand)
+            if m > best_m:
+                best, best_m = cand, m
+    return best
+
+
 def package_dir(packages_dir, name, version):
     return os.path.join(packages_dir, name.lower(), version)
 
@@ -217,16 +311,82 @@ def find_nupkg(pkg_dir):
 
 # ---------------- generate ----------------
 
+def split_projects(args):
+    raw = getattr(args, "projects", None)
+    if raw:
+        parts = [p.strip() for p in re.split(r"[;,]", raw) if p.strip()]
+    else:
+        single = getattr(args, "project", None)
+        parts = [single] if single else []
+    return [os.path.abspath(p) for p in parts]
+
+
 def cmd_generate(args):
-    proj_dir = os.path.dirname(os.path.abspath(args.project))
-    lock, lock_path = load_lock(proj_dir)
-    if lock is None:
-        emit("DEPS_RED MISSING_LOCK %s" % lock_path)
+    proj_paths = split_projects(args)
+    if not proj_paths:
+        emit("DEPS_RED MISSING_PROJECTS（--project 或 --projects 必给）")
+        return 2
+    exceptions, eerr = load_exceptions(os.path.dirname(proj_paths[0]),
+                                       getattr(args, "exceptions", None))
+    if exceptions is None:
+        emit("DEPS_RED %s" % eerr)
         return 1
-    pkgs, err = lock_packages(lock)
-    if pkgs is None:
-        emit("DEPS_RED %s" % err)
+    projects_rel = []
+    output_dirs = {}
+    configs = set()
+    merged = {}
+    assets_union = {}
+    shipped_union = {}
+    out_arg = getattr(args, "output_dir", None)
+    loaded = []
+    for proj in proj_paths:
+        proj_dir = os.path.dirname(proj)
+        if not os.path.isfile(proj):
+            emit("DEPS_RED MISSING_PROJECT %s" % proj)
+            return 1
+        lock, lock_path = load_lock(proj_dir)
+        if lock is None:
+            emit("DEPS_RED MISSING_LOCK %s" % lock_path)
+            return 1
+        pkgs, err = lock_packages(lock)
+        if pkgs is None:
+            emit("DEPS_RED %s" % err)
+            return 1
+        assets, aerr = load_assets_runtime(proj_dir)
+        if assets is None:
+            emit("DEPS_RED %s" % aerr)
+            return 1
+        output_dir = os.path.abspath(out_arg) if out_arg else detect_output_dir(proj_dir)
+        config = ""
+        if output_dir:
+            parts = output_dir.replace("\\", "/").split("/")
+            if "bin" in parts:
+                idx = len(parts) - 1 - parts[::-1].index("bin")
+                if idx + 1 < len(parts):
+                    config = parts[idx + 1]
+        configs.add(config or "unknown")
+        projects_rel.append(proj)
+        output_dirs[proj] = output_dir or ""
+        out_files = set()
+        if output_dir and os.path.isdir(output_dir):
+            out_files = {fn for fn in os.listdir(output_dir)
+                         if os.path.isfile(os.path.join(output_dir, fn))}
+        loaded.append((proj, pkgs, assets, out_files))
+        for name, meta in pkgs.items():
+            # 部署集由**主项目**（第一个）的还原图决定；后续项目只"补缺"（典型：插件的 Direct 包）。
+            # 同名但版本不同时保留主项目的版本（运行时按主项目输出装配），不判冲突。
+            if name not in merged:
+                merged[name] = meta
+            assets_union.setdefault(name, set()).update(assets.get(name, []))
+            for rel in assets.get(name, []):
+                if rel.rsplit("/", 1)[-1] in out_files:
+                    shipped_union.setdefault(name, set()).add(rel)
+    if len(configs) > 1:
+        emit("DEPS_RED BUILD_CONFIG_CONFLICT %s" % ",".join(sorted(configs)))
         return 1
+    build_config = sorted(configs)[0]
+    pkgs = merged
+    assets = {k: sorted(v) for k, v in assets_union.items()}
     packages_dir = os.path.expanduser(args.packages_dir)
     if not os.path.isdir(packages_dir):
         emit("DEPS_RED MISSING_PACKAGES_DIR %s" % packages_dir)
@@ -269,11 +429,16 @@ def cmd_generate(args):
             "content_hash": meta["content_hash"],
             "nupkg_sha512": nupkg_sha,
             "files": files,
+            "runtime_assets": assets.get(name, []),
+            "shipped_assets": sorted(shipped_union.get(name, set())),
         })
 
     manifest = {
         "manifest_version": MANIFEST_VERSION,
-        "project": os.path.relpath(os.path.abspath(args.project)).replace(os.sep, "/"),
+        "projects": projects_rel,
+        "build_config": build_config,
+        "output_dirs": output_dirs,
+        "exceptions": exceptions,
         "generated_by": "tools/deploy/deps_manifest.py",
         "packages": entries,
     }
@@ -292,17 +457,20 @@ def _fail(lines, code, detail):
     lines.append("DEPS_RED %s %s" % (code, detail))
 
 
+SELF_BUILT = {
+    "dbsrv.exe", "dbsrv.dll", "dbsrv.storage.dll", "dbsrv.storage.mysql.dll",
+    "dbsrv.storage.mongodb.dll", "openmir2.dll", "loginsrv.exe", "loginsrv.dll",
+}
+
+
 def cmd_check(args):
     reds = []
-    proj_dir = os.path.dirname(os.path.abspath(args.project))
-    lock, lock_path = load_lock(proj_dir)
-    if lock is None:
-        _fail(reds, "MISSING_LOCK", lock_path)
+    proj_paths = split_projects(args)
     manifest_path = os.path.abspath(args.manifest)
+    manifest = None
     if not os.path.isfile(manifest_path):
         _fail(reds, "MISSING_MANIFEST", manifest_path)
-    manifest = None
-    if os.path.isfile(manifest_path):
+    else:
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
@@ -311,6 +479,19 @@ def cmd_check(args):
     if isinstance(manifest, dict):
         if manifest.get("manifest_version") != MANIFEST_VERSION:
             _fail(reds, "BAD_MANIFEST_VERSION", "manifest_version=%r" % manifest.get("manifest_version"))
+        for field in ("projects", "build_config", "output_dirs", "exceptions"):
+            if field not in manifest:
+                _fail(reds, "MISSING_FIELD", "<top>." + field)
+        excs = manifest.get("exceptions")
+        if not isinstance(excs, list):
+            _fail(reds, "BAD_EXCEPTIONS", "exceptions 必须是数组")
+            excs = []
+        else:
+            for e in excs:
+                if (not isinstance(e, dict) or not e.get("pkg") or not e.get("version")
+                        or not (e.get("reason") or "").strip()):
+                    _fail(reds, "BAD_EXCEPTIONS", "条目缺 pkg/version/reason")
+        manifest["_exceptions_valid"] = isinstance(excs, list)
         pkgs = manifest.get("packages")
         if not isinstance(pkgs, list) or not pkgs:
             _fail(reds, "EMPTY_MANIFEST", "packages 为空或非数组")
@@ -322,32 +503,52 @@ def cmd_check(args):
             for field in REQUIRED_PKG_FIELDS:
                 if field not in p:
                     _fail(reds, "MISSING_FIELD", "%s.%s" % (p.get("name", "?"), field))
+        if proj_paths:
+            have = {os.path.abspath(x) for x in (manifest.get("projects") or [])}
+            want = set(proj_paths)
+            if have != want:
+                _fail(reds, "PROJECT_SET_MISMATCH",
+                      "manifest=%s args=%s" % (sorted(have), sorted(want)))
+        for proj, recorded in (manifest.get("output_dirs") or {}).items():
+            if not recorded:
+                continue
+            det = detect_output_dir(os.path.dirname(proj))
+            if det and os.path.abspath(det) != os.path.abspath(recorded):
+                _fail(reds, "BUILD_OUTPUT_MISMATCH",
+                      "%s manifest=%s now=%s" % (proj, recorded, det))
     elif manifest is not None:
         _fail(reds, "BAD_MANIFEST", "顶层不是对象")
         manifest = None
 
-    # 一级：csproj 声明 vs lock resolved
-    refs = parse_csproj_refs(os.path.abspath(args.project))
-    if lock is not None:
+    # 一级：每个项目的 csproj 声明 vs 其 lock 的 resolved
+    level1_projects = proj_paths or [os.path.abspath(x) for x in
+                                     ((manifest or {}).get("projects") or [])]
+    for proj in level1_projects:
+        proj_dir = os.path.dirname(proj)
+        lock, lock_path = load_lock(proj_dir)
+        if lock is None:
+            _fail(reds, "MISSING_LOCK", lock_path)
+            continue
         pkgs_lock, err = lock_packages(lock)
         if pkgs_lock is None:
-            _fail(reds, "BAD_LOCK", err)
-        else:
-            direct = {n for n, m in pkgs_lock.items() if m.get("type") == "Direct"}
-            for name in sorted(set(refs) - set(pkgs_lock)):
-                _fail(reds, "NOT_IN_LOCK", "%s（csproj 声明但 lock 缺失）" % name)
-            for name in sorted(direct - set(refs)):
-                _fail(reds, "LOCK_DIRECT_NOT_DECLARED", "%s（lock Direct 但 csproj 未声明）" % name)
-            for name, rng in sorted(refs.items()):
-                meta = pkgs_lock.get(name)
-                if meta is None:
-                    continue
-                ok, why = range_satisfied(meta["resolved"], rng)
-                if not ok:
-                    _fail(reds, "RANGE_UNSATISFIED", "%s range=%s resolved=%s（%s）"
-                          % (name, rng, meta["resolved"], why))
+            _fail(reds, "BAD_LOCK", "%s %s" % (proj, err))
+            continue
+        refs = parse_csproj_refs(proj)
+        direct = {n for n, m in pkgs_lock.items() if m.get("type") == "Direct"}
+        for name in sorted(set(refs) - set(pkgs_lock)):
+            _fail(reds, "NOT_IN_LOCK", "%s %s（csproj 声明但 lock 缺失）" % (proj, name))
+        for name in sorted(direct - set(refs)):
+            _fail(reds, "LOCK_DIRECT_NOT_DECLARED", "%s %s（lock Direct 但 csproj 未声明）" % (proj, name))
+        for name, rng in sorted(refs.items()):
+            meta = pkgs_lock.get(name)
+            if meta is None:
+                continue
+            ok, why = range_satisfied(meta["resolved"], rng)
+            if not ok:
+                _fail(reds, "RANGE_UNSATISFIED", "%s %s range=%s resolved=%s（%s）"
+                      % (proj, name, rng, meta["resolved"], why))
 
-    # 二级：manifest vs 磁盘
+    # 二级：manifest vs 已还原包
     packages_dir = os.path.expanduser(args.packages_dir)
     if manifest is not None:
         for p in manifest.get("packages") or []:
@@ -355,7 +556,7 @@ def cmd_check(args):
                 continue
             name, version = p["name"], p["resolved"]
             if not all(field in p for field in REQUIRED_PKG_FIELDS):
-                continue  # 已在上面的 MISSING_FIELD 报过
+                continue
             pdir = package_dir(packages_dir, name, version)
             if not os.path.isdir(pdir):
                 _fail(reds, "MISSING_PACKAGE_DIR", "%s/%s" % (name, version))
@@ -379,7 +580,92 @@ def cmd_check(args):
                 if actual512 != p.get("nupkg_sha512"):
                     _fail(reds, "NUPKG_CHANGED", "%s/%s expected=%s actual=%s"
                           % (name, version, p.get("nupkg_sha512"), actual512))
-            file_count = len(recorded)
+
+    # 三级（可选）：部署目录映射
+    deploy_dir = getattr(args, "deploy_dir", None)
+    if deploy_dir:
+        ddir = os.path.abspath(deploy_dir)
+        deployed = []
+        if not os.path.isdir(ddir):
+            _fail(reds, "MISSING_DEPLOY_DIR", ddir)
+        else:
+            try:
+                deployed = [fn for fn in os.listdir(ddir)
+                            if os.path.isfile(os.path.join(ddir, fn))]
+            except OSError as exc:
+                _fail(reds, "BAD_DEPLOY_DIR", "%s (%s)" % (ddir, exc))
+            if not deployed:
+                _fail(reds, "EMPTY_DEPLOY_DIR", ddir)
+        deploy_red_start = len(reds)
+        if manifest is not None:
+            claims = {}
+            ship_total = 0
+            for p in manifest.get("packages") or []:
+                if not isinstance(p, dict) or not all(f in p for f in REQUIRED_PKG_FIELDS):
+                    continue
+                for rel in p.get("shipped_assets") or []:
+                    base = rel.rsplit("/", 1)[-1]
+                    claims.setdefault(base, []).append(
+                        (p["name"], p["resolved"], rel, p["files"].get(rel)))
+            mapped = set(claims)
+            for base in sorted(claims):
+                entries = claims[base]
+                shas = {e[3] for e in entries}
+                owners = {(e[0], e[1]) for e in entries}
+                ship_total += 1
+                if len(owners) > 1 and len(shas) > 1:
+                    _fail(reds, "AMBIGUOUS_MAPPING", "%s candidates=%s" % (
+                        base, ",".join("%s@%s" % kv for kv in sorted(owners))))
+                    continue
+                expected = sorted(sh for sh in shas if sh)[0] if any(shas) else None
+                if expected is None:
+                    _fail(reds, "MISSING_ASSET_HASH", base)
+                    continue
+                target = os.path.join(ddir, base)
+                if not os.path.isfile(target):
+                    _fail(reds, "MISSING_DEPLOYED",
+                          "%s/%s %s" % (entries[0][0], entries[0][1], base))
+                    continue
+                actual = sha256_file(target)
+                if actual != expected:
+                    _fail(reds, "DEPLOYED_SHA_MISMATCH",
+                          "%s/%s %s expected=%s actual=%s"
+                          % (entries[0][0], entries[0][1], base, expected, actual))
+            if ship_total == 0:
+                _fail(reds, "MISSING_SHIP_SET",
+                      "manifest 无 shipped_assets（生成时缺构建输出目录？）")
+            for fn in sorted(deployed):
+                if not fn.lower().endswith(".dll"):
+                    continue
+                if fn in mapped or fn.lower() in SELF_BUILT:
+                    continue
+                _fail(reds, "UNCOVERED_DEPLOYED", fn)
+            # 显式例外只压制 MISSING_DEPLOYED（逐条带理由）；其余红原样保留。
+            exceptions = [e for e in (manifest.get("exceptions") or [])
+                          if isinstance(e, dict) and e.get("pkg") and e.get("version")
+                          and (e.get("reason") or "").strip()]
+            used = set()
+            kept = []
+            for idx, line in enumerate(reds):
+                if idx < deploy_red_start or not line.startswith("DEPS_RED MISSING_DEPLOYED "):
+                    kept.append(line)
+                    continue
+                detail = line[len("DEPS_RED MISSING_DEPLOYED "):]
+                key = detail.split(" ", 1)[0]
+                pkg, _, ver = key.rpartition("/")
+                match = next((e for e in exceptions
+                              if e["pkg"] == pkg and e["version"] == ver), None)
+                if match is None:
+                    kept.append(line)
+                else:
+                    used.add((match["pkg"], match["version"]))
+            reds[:] = kept
+            for e in exceptions:
+                line = "DEPS_EXCEPTION %s/%s %s" % (e["pkg"], e["version"], e["reason"])
+                if (e["pkg"], e["version"]) in used:
+                    emit(line)
+                else:
+                    emit("DEPS_EXCEPTION_UNUSED %s/%s %s" % (e["pkg"], e["version"], e["reason"]))
 
     if reds:
         for line in reds:
@@ -438,6 +724,24 @@ def cmd_selftest(_args):
                 json.dump(lock, f)
             _write_pkg(feed, "Alpha", "1.0.0")
             _write_pkg(feed, "Beta", "2.0.0")
+            # 部署映射用的运行时资产 + 冲突样本（两包各带一个 Shared.dll，内容不同）
+            for name, payload in (("Alpha", b"shared-alpha"), ("Beta", b"shared-beta")):
+                with open(os.path.join(feed, name.lower(), "1.0.0" if name == "Alpha" else "2.0.0",
+                                       "lib", "net8.0", "Shared.dll"), "wb") as f:
+                    f.write(payload)
+            os.makedirs(os.path.join(proj, "obj"), exist_ok=True)
+            assets = {"targets": {"net8.0": {
+                "Alpha/1.0.0": {"runtime": {"lib/net8.0/Alpha.dll": {}}},
+                "Beta/2.0.0": {"runtime": {"lib/net8.0/Beta.dll": {}}},
+            }}}
+            with open(os.path.join(proj, "obj", "project.assets.json"), "w", encoding="utf-8") as f:
+                json.dump(assets, f)
+            out = os.path.join(proj, "bin", "Debug", "net8.0")
+            os.makedirs(out, exist_ok=True)
+            shutil.copy(os.path.join(feed, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                        os.path.join(out, "Alpha.dll"))
+            shutil.copy(os.path.join(feed, "beta", "2.0.0", "lib", "net8.0", "Beta.dll"),
+                        os.path.join(out, "Beta.dll"))
             return proj, feed
 
         def run(argv):
@@ -513,6 +817,117 @@ def cmd_selftest(_args):
                   "manifest": man, "packages_dir": feed2})
         sassert(rc == 1, "failclosed: missing lock red", "rc=%d" % rc)
 
+        # Case 8：--deploy-dir 正例（部署件与 manifest 一致 ⇒ 绿；多余 DLL 只 WARN_EXTRA）
+        proj4, feed4 = make_fixture("deploy")
+        man4 = os.path.join(tmp, "deploy", "m.json")
+        run({"cmd": "generate", "project": os.path.join(proj4, "App.csproj"), "out": man4,
+             "packages_dir": feed4})
+        ddir = os.path.join(tmp, "deploy", "out")
+        os.makedirs(ddir, exist_ok=True)
+        shutil.copy(os.path.join(feed4, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                    os.path.join(ddir, "Alpha.dll"))
+        shutil.copy(os.path.join(feed4, "beta", "2.0.0", "lib", "net8.0", "Beta.dll"),
+                    os.path.join(ddir, "Beta.dll"))
+        with open(os.path.join(ddir, "DBSrv.dll"), "wb") as f:
+            f.write(b"ours")
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir})
+        sassert(rc == 0, "deploydir: matching deploy dir green (self-built extra ignored)", "rc=%d" % rc)
+
+        # 牙①：翻部署件末字节 ⇒ DEPLOYED_SHA_MISMATCH
+        with open(os.path.join(ddir, "Alpha.dll"), "r+b") as f:
+            f.seek(-1, os.SEEK_END)
+            last = f.read(1)
+            f.seek(-1, os.SEEK_END)
+            f.write(bytes([(last[0] + 1) % 256]))
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir})
+        sassert(rc == 1, "tooth1: deployed byte flip red", "rc=%d" % rc)
+
+        # 牙②：删一个部署件 ⇒ MISSING_DEPLOYED
+        os.remove(os.path.join(ddir, "Beta.dll"))
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir})
+        sassert(rc == 1, "tooth2: missing deployed file red", "rc=%d" % rc)
+
+        # 牙③：两包映射到同名 DLL 且 sha 不同 ⇒ AMBIGUOUS_MAPPING
+        proj5, feed5 = make_fixture("ambiguous")
+        man5 = os.path.join(tmp, "ambiguous", "m.json")
+        run({"cmd": "generate", "project": os.path.join(proj5, "App.csproj"), "out": man5,
+             "packages_dir": feed5})
+        data5 = json.load(open(man5, encoding="utf-8"))
+        for pkg in data5["packages"]:
+            pkg["runtime_assets"] = ["lib/net8.0/Shared.dll"]
+            pkg["shipped_assets"] = ["lib/net8.0/Shared.dll"]
+        json.dump(data5, open(man5, "w", encoding="utf-8"))
+        adir = os.path.join(tmp, "ambiguous", "out")
+        os.makedirs(adir, exist_ok=True)
+        shutil.copy(os.path.join(feed5, "alpha", "1.0.0", "lib", "net8.0", "Shared.dll"),
+                    os.path.join(adir, "Shared.dll"))
+        rc = run({"cmd": "check", "project": os.path.join(proj5, "App.csproj"),
+                  "manifest": man5, "packages_dir": feed5, "deploy_dir": adir})
+        sassert(rc == 1, "tooth3: ambiguous mapping red", "rc=%d" % rc)
+
+        # 牙④：部署目录里出现不在 manifest、也不在自家件白名单的第三方 DLL ⇒ UNCOVERED_DEPLOYED
+        ddir2 = os.path.join(tmp, "deploy", "out2")
+        os.makedirs(ddir2, exist_ok=True)
+        shutil.copy(os.path.join(feed4, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                    os.path.join(ddir2, "Alpha.dll"))
+        shutil.copy(os.path.join(feed4, "beta", "2.0.0", "lib", "net8.0", "Beta.dll"),
+                    os.path.join(ddir2, "Beta.dll"))
+        with open(os.path.join(ddir2, "Stray.Third.Party.dll"), "wb") as f:
+            f.write(b"stray")
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir2})
+        sassert(rc == 1, "tooth4: uncovered third-party dll red", "rc=%d" % rc)
+
+        # 记录的输出目录与当前探测不一致 ⇒ BUILD_OUTPUT_MISMATCH
+        bad_out = os.path.join(tmp, "deploy", "badout.json")
+        data6 = json.load(open(man4, encoding="utf-8"))
+        for k in list(data6.get("output_dirs") or {}):
+            data6["output_dirs"][k] = os.path.join(tmp, "deploy", "elsewhere")
+        json.dump(data6, open(bad_out, "w", encoding="utf-8"))
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": bad_out, "packages_dir": feed4})
+        sassert(rc == 1, "output-dir mismatch red", "rc=%d" % rc)
+
+        # 显式例外：被例外覆盖的缺失件 ⇒ 绿 + DEPS_EXCEPTION（例外必须逐条有理由）
+        exc = os.path.join(tmp, "deploy", "exc.json")
+        with open(exc, "w", encoding="utf-8") as f:
+            json.dump([{"pkg": "Beta", "version": "2.0.0",
+                        "reason": "selftest: declared but zero API usage"}], f)
+        manE = os.path.join(tmp, "deploy", "mE.json")
+        rc = run({"cmd": "generate", "project": os.path.join(proj4, "App.csproj"), "out": manE,
+                  "packages_dir": feed4, "exceptions": exc})
+        sassert(rc == 0, "exception: generate with exceptions rc=0", "rc=%d" % rc)
+        ddirE = os.path.join(tmp, "deploy", "outE")
+        os.makedirs(ddirE, exist_ok=True)
+        shutil.copy(os.path.join(feed4, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                    os.path.join(ddirE, "Alpha.dll"))
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": manE, "packages_dir": feed4, "deploy_dir": ddirE})
+        sassert(rc == 0, "exception: missing-but-excepted green", "rc=%d" % rc)
+
+        # 例外理由为空 ⇒ 生成阶段红（禁止空口豁免）
+        bad_exc = os.path.join(tmp, "deploy", "bad_exc.json")
+        with open(bad_exc, "w", encoding="utf-8") as f:
+            json.dump([{"pkg": "Beta", "version": "2.0.0", "reason": "  "}], f)
+        rc = run({"cmd": "generate", "project": os.path.join(proj4, "App.csproj"),
+                  "out": os.path.join(tmp, "deploy", "mBad.json"),
+                  "packages_dir": feed4, "exceptions": bad_exc})
+        sassert(rc == 1, "exception: empty reason red", "rc=%d" % rc)
+
+        # fail-closed：部署目录缺失 / 为空
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4,
+                  "deploy_dir": os.path.join(tmp, "deploy", "nope")})
+        sassert(rc == 1, "deploydir: missing dir red", "rc=%d" % rc)
+        empty_dir = os.path.join(tmp, "deploy", "empty")
+        os.makedirs(empty_dir, exist_ok=True)
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": empty_dir})
+        sassert(rc == 1, "deploydir: empty dir red", "rc=%d" % rc)
+
         # Case 8：nupkg 侧车被改 ⇒ 红（生成阶段即拦，不自动重下）
         proj3, feed3 = make_fixture("sidecar")
         side = os.path.join(feed3, "alpha", "1.0.0", "alpha.1.0.0.nupkg.sha512")
@@ -537,13 +952,18 @@ def build_parser():
     p = argparse.ArgumentParser(description="部署依赖清单：生成与两级核验")
     sub = p.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("generate")
-    g.add_argument("--project", required=True)
+    g.add_argument("--project", required=False)
+    g.add_argument("--projects", default=None, help="多个项目用 ; 或 , 分隔（并集 manifest）")
     g.add_argument("--out", required=True)
     g.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
+    g.add_argument("--output-dir", default=None)
+    g.add_argument("--exceptions", default=None)
     c = sub.add_parser("check")
-    c.add_argument("--project", required=True)
+    c.add_argument("--project", required=False)
+    c.add_argument("--projects", default=None)
     c.add_argument("--manifest", required=True)
     c.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
+    c.add_argument("--deploy-dir", default=None)
     sub.add_parser("selftest")
     return p
 
