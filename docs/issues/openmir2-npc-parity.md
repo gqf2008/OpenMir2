@@ -186,7 +186,7 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 | # | 变异 | 期望红在 | 证据 |
 | --- | --- | --- | --- |
 | A | `handle_click_npc_cmd` 距离门 `<=15` → `<=155` | `click_main_far` | `E:/UserFleet/qa/npc-parity/np01-mutation-A-distance.txt`（FAILED 1；恢复 sha 相等） |
-| B | `@main` 派发（`run_merchant_goto` 的 label）改成不存在的 label | `click_main_ok` 说词为空 | 待 00:55 后补 |
+| B | `@main` 派发（`run_merchant_goto` 的 label）改成不存在的 label | `click_main_ok` 即时帧空 vs `[643]` | `E:/UserFleet/qa/npc-parity/np01-mutation-B-main-dispatch.txt`（FAILED 1；恢复 sha 相等；复绿 rc=0，green 原文同目录） |
 
 > 变异 B 与 A 同法：`git checkout -- mir2-rs/bins/game-svr/src/lib.rs` 恢复后断言 sha 相等并复绿；
 > 构建按总监窗口约束，窗口内不新起构建。
