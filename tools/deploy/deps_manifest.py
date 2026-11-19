@@ -18,12 +18,17 @@
 2. 内容一致性：manifest 记录的每个包文件 sha256 与磁盘逐项相等；nupkg 的 SHA512 与
    `.nupkg.sha512` 侧车一致（lock 的 `contentHash` 是 NuGet 对**包内容**的规范化哈希，
    **不是** .nupkg 的 SHA512——两个 hash 分开记录、分别核验）。
+3. **部署目录（`--deploy-dir`，可选）**：把 manifest 里每个包的**运行时资产**
+   （`project.assets.json` 的 `runtime`/`native` 列表，按 TFM 已选定）按 basename 映射到
+   `<deploy-dir>/<name>`：缺失 ⇒ `MISSING_DEPLOYED`；sha 不符 ⇒ `DEPLOYED_SHA_MISMATCH`；
+   两个**不同包**映射到同一文件名且 sha 不同 ⇒ `AMBIGUOUS_MAPPING`；部署目录里多余的 DLL
+   只 `WARN_EXTRA`（自家件由 `stamp-binaries` 管）。目录缺失/为空 ⇒ 红。
 
 **fail-closed**：缺 lock / 缺 manifest / manifest 空或字段缺失 ⇒ 红（rc=1），绝不当"没有依赖"。
 
 用法：
   python -I -B tools/deploy/deps_manifest.py generate --project <csproj> --out <manifest.json>
-  python -I -B tools/deploy/deps_manifest.py check --project <csproj> --manifest <manifest.json>
+  python -I -B tools/deploy/deps_manifest.py check --project <csproj> --manifest <manifest.json>       [--deploy-dir <目录>]
   python -I -B tools/deploy/deps_manifest.py selftest
 
 退出码：0 = 绿；1 = 判红（证伪，红项逐条打印）；2 = 用法错 / 判不了（环境缺目录等）。
@@ -45,7 +50,7 @@ import tempfile
 
 MANIFEST_VERSION = 1
 REQUIRED_PKG_FIELDS = ("name", "requested", "resolved", "source", "toolchain", "content_hash",
-                       "nupkg_sha512", "files")
+                       "nupkg_sha512", "files", "runtime_assets", "shipped_assets")
 
 
 def emit(text):
@@ -160,6 +165,36 @@ def parse_csproj_refs(csproj_path):
     return refs
 
 
+def load_assets_runtime(proj_dir):
+    """从 `obj/project.assets.json` 取每个包的运行时资产（runtime+native，已按 TFM 选定）。
+
+    返回 `(map, err)`：`map[name] = [relpath,...]`（去重排序）；缺文件/不可解析 ⇒ err。
+    """
+    path = os.path.join(proj_dir, "obj", "project.assets.json")
+    if not os.path.isfile(path):
+        return None, "MISSING_ASSETS %s" % path
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        return None, "BAD_ASSETS %s (%s)" % (path, exc)
+    out = {}
+    targets = data.get("targets") or {}
+    for _tfm, libs in targets.items():
+        for key, entry in (libs or {}).items():
+            if not isinstance(entry, dict):
+                continue
+            name = key.split("/", 1)[0]
+            rels = set(out.get(name, []))
+            for group in ("runtime", "native"):
+                for rel in (entry.get(group) or {}):
+                    if rel.rsplit("/", 1)[-1] == "_._":
+                        continue  # NuGet 占位符：不是真实资产
+                    rels.add(rel)
+            out[name] = sorted(rels)
+    return out, ""
+
+
 def load_lock(proj_dir):
     path = os.path.join(proj_dir, "packages.lock.json")
     if not os.path.isfile(path):
@@ -188,6 +223,30 @@ def lock_packages(lock):
                 "content_hash": entry.get("contentHash"),
             }
     return merged, ""
+
+
+def detect_output_dir(proj_dir):
+    """找本项目最新的 `bin/<config>/<tfm>` 输出目录（部署映射的"实际装运集"依据）。
+
+    为什么不能只看 assets 的 runtime 列表：`System.Text.Json` 等在 net8.0 共享框架里，
+    assets 仍列为运行时资产但**不会复制到输出目录**；`_._` 是占位符。装运集必须来自构建输出。
+    """
+    best, best_m = None, -1.0
+    for config in ("Release", "Debug"):
+        base = os.path.join(proj_dir, "bin", config)
+        if not os.path.isdir(base):
+            continue
+        # 两种布局：`bin/<config>/<tfm>/`（默认）与 `bin/<config>/`（AppendTargetFrameworkToOutputPath=false）
+        candidates = [base]
+        for name in os.listdir(base):
+            cand = os.path.join(base, name)
+            if os.path.isdir(cand):
+                candidates.append(cand)
+        for cand in candidates:
+            m = os.path.getmtime(cand)
+            if m > best_m:
+                best, best_m = cand, m
+    return best
 
 
 def package_dir(packages_dir, name, version):
@@ -227,6 +286,16 @@ def cmd_generate(args):
     if pkgs is None:
         emit("DEPS_RED %s" % err)
         return 1
+    assets, aerr = load_assets_runtime(proj_dir)
+    if assets is None:
+        emit("DEPS_RED %s" % aerr)
+        return 1
+    out_arg = getattr(args, "output_dir", None)
+    output_dir = os.path.abspath(out_arg) if out_arg else detect_output_dir(proj_dir)
+    out_files = set()
+    if output_dir and os.path.isdir(output_dir):
+        out_files = {fn for fn in os.listdir(output_dir)
+                     if os.path.isfile(os.path.join(output_dir, fn))}
     packages_dir = os.path.expanduser(args.packages_dir)
     if not os.path.isdir(packages_dir):
         emit("DEPS_RED MISSING_PACKAGES_DIR %s" % packages_dir)
@@ -269,6 +338,9 @@ def cmd_generate(args):
             "content_hash": meta["content_hash"],
             "nupkg_sha512": nupkg_sha,
             "files": files,
+            "runtime_assets": assets.get(name, []),
+            "shipped_assets": [rel for rel in assets.get(name, [])
+                               if rel.rsplit("/", 1)[-1] in out_files],
         })
 
     manifest = {
@@ -381,6 +453,62 @@ def cmd_check(args):
                           % (name, version, p.get("nupkg_sha512"), actual512))
             file_count = len(recorded)
 
+    # 三级（可选）：部署目录映射（卡 `openmir2-deps-check-deploy-dir`）
+    deploy_dir = getattr(args, "deploy_dir", None)
+    if deploy_dir:
+        ddir = os.path.abspath(deploy_dir)
+        deployed = []
+        if not os.path.isdir(ddir):
+            _fail(reds, "MISSING_DEPLOY_DIR", ddir)
+        else:
+            try:
+                deployed = [fn for fn in os.listdir(ddir)
+                            if os.path.isfile(os.path.join(ddir, fn))]
+            except OSError as exc:
+                _fail(reds, "BAD_DEPLOY_DIR", "%s (%s)" % (ddir, exc))
+            if not deployed:
+                _fail(reds, "EMPTY_DEPLOY_DIR", ddir)
+        if manifest is not None:
+            claims = {}
+            ship_total = 0
+            for p in manifest.get("packages") or []:
+                if not isinstance(p, dict) or not all(f in p for f in REQUIRED_PKG_FIELDS):
+                    continue
+                for rel in p.get("shipped_assets") or []:
+                    base = rel.rsplit("/", 1)[-1]
+                    claims.setdefault(base, []).append(
+                        (p["name"], p["resolved"], rel, p["files"].get(rel)))
+            mapped = set(claims)
+            for base in sorted(claims):
+                entries = claims[base]
+                shas = {e[3] for e in entries}
+                owners = {(e[0], e[1]) for e in entries}
+                ship_total += 1
+                if len(owners) > 1 and len(shas) > 1:
+                    _fail(reds, "AMBIGUOUS_MAPPING", "%s candidates=%s" % (
+                        base, ",".join("%s@%s" % kv for kv in sorted(owners))))
+                    continue
+                expected = sorted(sh for sh in shas if sh)[0] if any(shas) else None
+                if expected is None:
+                    _fail(reds, "MISSING_ASSET_HASH", base)
+                    continue
+                target = os.path.join(ddir, base)
+                if not os.path.isfile(target):
+                    _fail(reds, "MISSING_DEPLOYED",
+                          "%s/%s %s" % (entries[0][0], entries[0][1], base))
+                    continue
+                actual = sha256_file(target)
+                if actual != expected:
+                    _fail(reds, "DEPLOYED_SHA_MISMATCH",
+                          "%s/%s %s expected=%s actual=%s"
+                          % (entries[0][0], entries[0][1], base, expected, actual))
+            if ship_total == 0:
+                _fail(reds, "MISSING_SHIP_SET",
+                      "manifest 无 shipped_assets（生成时缺构建输出目录？）")
+            for fn in sorted(deployed):
+                if fn.lower().endswith(".dll") and fn not in mapped:
+                    emit("WARN_EXTRA %s" % fn)
+
     if reds:
         for line in reds:
             emit(line)
@@ -438,6 +566,24 @@ def cmd_selftest(_args):
                 json.dump(lock, f)
             _write_pkg(feed, "Alpha", "1.0.0")
             _write_pkg(feed, "Beta", "2.0.0")
+            # 部署映射用的运行时资产 + 冲突样本（两包各带一个 Shared.dll，内容不同）
+            for name, payload in (("Alpha", b"shared-alpha"), ("Beta", b"shared-beta")):
+                with open(os.path.join(feed, name.lower(), "1.0.0" if name == "Alpha" else "2.0.0",
+                                       "lib", "net8.0", "Shared.dll"), "wb") as f:
+                    f.write(payload)
+            os.makedirs(os.path.join(proj, "obj"), exist_ok=True)
+            assets = {"targets": {"net8.0": {
+                "Alpha/1.0.0": {"runtime": {"lib/net8.0/Alpha.dll": {}}},
+                "Beta/2.0.0": {"runtime": {"lib/net8.0/Beta.dll": {}}},
+            }}}
+            with open(os.path.join(proj, "obj", "project.assets.json"), "w", encoding="utf-8") as f:
+                json.dump(assets, f)
+            out = os.path.join(proj, "bin", "Debug", "net8.0")
+            os.makedirs(out, exist_ok=True)
+            shutil.copy(os.path.join(feed, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                        os.path.join(out, "Alpha.dll"))
+            shutil.copy(os.path.join(feed, "beta", "2.0.0", "lib", "net8.0", "Beta.dll"),
+                        os.path.join(out, "Beta.dll"))
             return proj, feed
 
         def run(argv):
@@ -513,6 +659,68 @@ def cmd_selftest(_args):
                   "manifest": man, "packages_dir": feed2})
         sassert(rc == 1, "failclosed: missing lock red", "rc=%d" % rc)
 
+        # Case 8：--deploy-dir 正例（部署件与 manifest 一致 ⇒ 绿；多余 DLL 只 WARN_EXTRA）
+        proj4, feed4 = make_fixture("deploy")
+        man4 = os.path.join(tmp, "deploy", "m.json")
+        run({"cmd": "generate", "project": os.path.join(proj4, "App.csproj"), "out": man4,
+             "packages_dir": feed4})
+        ddir = os.path.join(tmp, "deploy", "out")
+        os.makedirs(ddir, exist_ok=True)
+        shutil.copy(os.path.join(feed4, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                    os.path.join(ddir, "Alpha.dll"))
+        shutil.copy(os.path.join(feed4, "beta", "2.0.0", "lib", "net8.0", "Beta.dll"),
+                    os.path.join(ddir, "Beta.dll"))
+        with open(os.path.join(ddir, "OurOwn.dll"), "wb") as f:
+            f.write(b"ours")
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir})
+        sassert(rc == 0, "deploydir: matching deploy dir green (+WARN_EXTRA)", "rc=%d" % rc)
+
+        # 牙①：翻部署件末字节 ⇒ DEPLOYED_SHA_MISMATCH
+        with open(os.path.join(ddir, "Alpha.dll"), "r+b") as f:
+            f.seek(-1, os.SEEK_END)
+            last = f.read(1)
+            f.seek(-1, os.SEEK_END)
+            f.write(bytes([(last[0] + 1) % 256]))
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir})
+        sassert(rc == 1, "tooth1: deployed byte flip red", "rc=%d" % rc)
+
+        # 牙②：删一个部署件 ⇒ MISSING_DEPLOYED
+        os.remove(os.path.join(ddir, "Beta.dll"))
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir})
+        sassert(rc == 1, "tooth2: missing deployed file red", "rc=%d" % rc)
+
+        # 牙③：两包映射到同名 DLL 且 sha 不同 ⇒ AMBIGUOUS_MAPPING
+        proj5, feed5 = make_fixture("ambiguous")
+        man5 = os.path.join(tmp, "ambiguous", "m.json")
+        run({"cmd": "generate", "project": os.path.join(proj5, "App.csproj"), "out": man5,
+             "packages_dir": feed5})
+        data5 = json.load(open(man5, encoding="utf-8"))
+        for pkg in data5["packages"]:
+            pkg["runtime_assets"] = ["lib/net8.0/Shared.dll"]
+            pkg["shipped_assets"] = ["lib/net8.0/Shared.dll"]
+        json.dump(data5, open(man5, "w", encoding="utf-8"))
+        adir = os.path.join(tmp, "ambiguous", "out")
+        os.makedirs(adir, exist_ok=True)
+        shutil.copy(os.path.join(feed5, "alpha", "1.0.0", "lib", "net8.0", "Shared.dll"),
+                    os.path.join(adir, "Shared.dll"))
+        rc = run({"cmd": "check", "project": os.path.join(proj5, "App.csproj"),
+                  "manifest": man5, "packages_dir": feed5, "deploy_dir": adir})
+        sassert(rc == 1, "tooth3: ambiguous mapping red", "rc=%d" % rc)
+
+        # fail-closed：部署目录缺失 / 为空
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4,
+                  "deploy_dir": os.path.join(tmp, "deploy", "nope")})
+        sassert(rc == 1, "deploydir: missing dir red", "rc=%d" % rc)
+        empty_dir = os.path.join(tmp, "deploy", "empty")
+        os.makedirs(empty_dir, exist_ok=True)
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": empty_dir})
+        sassert(rc == 1, "deploydir: empty dir red", "rc=%d" % rc)
+
         # Case 8：nupkg 侧车被改 ⇒ 红（生成阶段即拦，不自动重下）
         proj3, feed3 = make_fixture("sidecar")
         side = os.path.join(feed3, "alpha", "1.0.0", "alpha.1.0.0.nupkg.sha512")
@@ -540,10 +748,12 @@ def build_parser():
     g.add_argument("--project", required=True)
     g.add_argument("--out", required=True)
     g.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
+    g.add_argument("--output-dir", default=None)
     c = sub.add_parser("check")
     c.add_argument("--project", required=True)
     c.add_argument("--manifest", required=True)
     c.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
+    c.add_argument("--deploy-dir", default=None)
     sub.add_parser("selftest")
     return p
 
