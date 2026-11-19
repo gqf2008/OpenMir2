@@ -5,9 +5,9 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
   "counting_moment": {
-    "head": "7b94dabb2a4cbbfd344e9ac9d9f4395ac30778dc",
+    "head": "1bc47dbc1312f255d5d29cfe5a61d04df0f353ee",
     "time": "2026-11-20T02:03:38+0800",
-    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）。"
+    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）。"
   },
   "status_enum": [
     "verified",
