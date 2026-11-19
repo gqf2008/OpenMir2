@@ -68794,33 +68794,27 @@ SendRefMsgRange=15
     fn big_healing_assert(
         stem: &str,
         label: &str,
-        seed: i32,
         base: i32,
-        hp_before: i64,
-        rng_len: usize,
         caster_frames: &[i64],
         heal_targets: &[&str],
     ) {
-        fireball_parity_drive(stem, 29, 15, 1, label, seed, base);
+        fireball_parity_drive(stem, 29, 15, 1, label, golden_seed(stem, label), base);
         let dir = magic_ledger_dir();
         let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
             .expect("台账必须已落盘");
         let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
         let c = &v[0];
+        // 期望取自金标准（§22：不写死随机抽值/条数）。
+        let g = golden_case_for(stem, label);
         assert_eq!(
             c["TargetHpBefore"].as_i64(),
-            Some(hp_before),
-            "[{stem}/{label}] 目标 HP 前"
+            g["Fixture"]["target_hp"].as_i64(),
+            "[{stem}/{label}] 目标 HP 前须等于 golden Fixture.target_hp"
         );
         assert_eq!(
             c["TargetHp"].as_i64(),
-            Some(hp_before),
-            "[{stem}/{label}] 窗口内不回血 ⇒ HP 不变"
-        );
-        assert_eq!(
-            c["Rng"].as_array().unwrap().len(),
-            rng_len,
-            "[{stem}/{label}] 施法段 RNG 抽数"
+            g["TargetHp"].as_i64(),
+            "[{stem}/{label}] 术后 HP 须等于 golden TargetHp（窗口内不回血）"
         );
         b1_golden_drain_assert("bighealing.json", label, 2);
         let cv = defence_case(stem, label);
@@ -68882,22 +68876,13 @@ SendRefMsgRange=15
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn big_healing_parity_heal() {
-        big_healing_assert(
-            "bighealing",
-            "heal",
-            1,
-            1000,
-            50,
-            5,
-            &[638, 640],
-            &["target"],
-        );
+        big_healing_assert("bighealing", "heal", 1000, &[638, 640], &["target"]);
     }
 
     #[test]
     #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
     fn big_healing_parity_full() {
-        big_healing_assert("bighealing", "full", 5, 2000, 224, 4, &[638], &[]);
+        big_healing_assert("bighealing", "full", 2000, &[638], &[]);
     }
 
     #[test]
@@ -68906,10 +68891,7 @@ SendRefMsgRange=15
         big_healing_assert(
             "bighealing",
             "both",
-            13,
             3000,
-            50,
-            5,
             &[638, 640],
             &["caster", "target"],
         );
