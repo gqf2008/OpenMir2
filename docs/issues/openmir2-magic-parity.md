@@ -573,7 +573,7 @@ miss/edge/hit 构造假骰）：
 同一 rig 换 `magic_id=5`。与 id=1 的唯一差异 = `SM_SPELL(17)` 尾串 `'5'`（magic id）与
 `RM_SPELL` 的 p3=5；抽数/帧集合/HP 与 id=1 逐项相同（RNG miss `[2]` / edge `[3,0,0,0,4]` /
 hit `[5,0,0,0,0]`，`DrainPasses` 2/4/4、`hit_cap=False`）。自检：两次连跑除 `delivery` 外
-逐字节一致；产物与仓库 golden 语义全等。**MG-11 暂不升格**（opc-07：一次只升一个，合并后再谈）。
+逐字节一致；产物与仓库 golden 语义全等。**MG-11 已接 Rust 驱动**（`tests::fireball5_parity_*` + `real_rust_ledger_fireball5`，0 红）并升 `verified`（M18）。
 
 **M17 合并的清单变更范围（补充说明，docs-only）**：本次 `docs/issues/parity-gap-magic.json`
 的改动 = MG-10 `status`→`verified`（+ `basis=semantic` + evidence 五字段）+ `schema_version` 1→2
