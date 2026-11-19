@@ -82,3 +82,13 @@
 - 前置（同批独立提交）：隐藏发送者早退，见主卡
   `docs/issues/openmir2-visiblehumanlist-cache.md` 第 7 节。
 - 门禁结果以本批交付的 `status` 条目原文为准（不在卡面预写"全绿"）。
+
+### 批 3（657 族）
+- #2 `push_charstatuschanged`：收件人改走 `ref_msg_cache::targets`（每次调用 = 一次
+  `StatusChanged()` 的 `SendRefMsg`；**含自己**；`Series` 逐收件人取各自 `HitSpeed`
+  ⇒ 不能共用 body、**不走** `SpellFrameBuf::push_broadcast`）。用例：
+  `push_charstatuschanged_cache_window_second_event_hits_cache`（同窗两份副本：`|Δ|=11/12`
+  只收首份、`+5` 收两份、`+13` 零帧、自己两份都收）、
+  `push_charstatuschanged_hidden_sender_only_self_each_event`（隐藏 ⇒ 只自己，旧快照 +12 不复活）、
+  `drain_b3_two_transparent_events_share_cache_window`（真实调用面：同 tick 两条
+  `RM_TRANSPARENT` 到点，第二条命中缓存）。
