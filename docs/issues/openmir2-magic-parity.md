@@ -822,3 +822,35 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   `implemented_unverified`（组内其它魔号未验）。
 - **衍生卡**：战士 9 技（3/4/7/12/25/26/27/34/38）不能用 `DoSpell` 直调产 golden——见
   `docs/issues/openmir2-warrskill-entry.md`；补 `ClientSpellXY` 入口前禁止标 verified。
+
+### 27. 29 群体治愈术（`SKILL_BIGHEALLING`）接线记录（2026-11-20）
+
+- **oracle**：`src/M2Server/Magic/MagicManager.cs:443-449`（`nPower = GetAttackPower(GetPower(MPow) +
+  Lo(SC)*2, (Hi-Lo)*2+1)`）→ `MagBigHealing`（`:54-76`）：`GetMapBaseObjects(nX,nY,1,...)` 的
+  **3×3 有序枚举**，对 `IsProperFriend && WAbil.HP < WAbil.MaxHP` 的每个对象
+  `SendSelfDelayMsg(RM_MAGHEALING, 0, nPower, 0, 0, "", 800)`（prio 255、late）。
+- **夹具几何（钉死）**：点击 (101,100) 的 3×3 = (100..102)×(99..101)，其中在线玩家只有
+  **caster(100,100) 与 target(101,100)** ⇒ friend 数 **N=2**；`heal` 只治 target（caster 满血）
+  ⇒ 8034 条数 = 1；`both`（施法者 50/100 + 目标 50/224）⇒ 条数 = **2**（覆盖 (d) 的枚举序/条数）。
+- **(a) 每 case 目标 HP 参数化**：rig 的 hp 不再写死——驱动从 golden `Fixture.target_hp`
+  （缺省 100）与 `caster_hp/caster_max_hp`（`0` = 不设）读取；登录序下目标 `MaxHP = 224`。
+  三案：`heal`(50/224)、`full`(224/224)、`both`(目标 50/224 + 施法者 50/100)。
+- **(b) 口径（写死）**：**本支窗口内不回血、不产 53**——`RM_MAGHEALING` 到点只累计
+  `IncHealing/PerHealing`（`src/M2Server/Player/PlayObject.Message.cs:1619-1629`），实际回血在后续
+  `Run` 的恢复周期。判据 = RM 8034 的**条数/载荷**（p1=nPower=30）+ RNG 抽数（heal/both 5、
+  full 4）+ 帧集合（caster `[638,640]` / `[638]`，target/obs_in `[17,638]`）。
+- **(c) `AbilSeeHealGauge`(1103) 显式未覆盖**：`UserMagic.Level=1` 恒 false ⇒ 本支 verified 的
+  覆盖声明**不含** 1103 分支（要覆盖需另立 Level≥2 的 case 与 §11 的 RM_ABILSEEHEALGAUGE 行）。
+- **golden `golden/magic/bighealing.json`**：`DrainPasses=2`、`hit_cap=false`；RM 10008/10120（众人）
+  + 8034（被治者各一条）+ 10123（caster，慢 255；仅 heal/both）。
+- **牙**（§16 快照：`E:/UserTemp/bighealing-snap/`，world.rs `ef61320b…`、lib.rs `8a9014d8…`）：
+  A 不组装 8034 ⇒ driver `target 的 8034 条数` 0≠1 + 比较器红；B 产品条件 `hp < max` 改 `<=`
+  ⇒ full 支多出 8034/640（比较器 5 条红）；C 驱动忽略 golden `target_hp` ⇒ `目标 HP 前`
+  100≠50/224 红。三颗均 `cp` 还原、sha 相等、基线复跑绿。
+  **过程披露**：牙 A 首跑用 `std::iter::empty::<>()` 作变异体，**编译失败**；当时比较器读的是
+  **陈旧台账**（驱动没跑成 ⇒ 没重写 ledger）⇒ 一度假绿。已按「编译失败不作判据、变异后必须重跑
+  驱动再看比较器」改正为 `&maghealing_msgs[..0]` 的有效变异。证据
+  `mir2-rs/target/magic-parity/evidence/tooth-bighealing.log`。
+- **回归**：39 支驱动全 rc=0（`…/evidence/regression-bighealing-1.log`）、13 支比较器 0 红、
+  9 颗比较器牙全过。
+- **清单**：MG-40 升 `verified`（magic 13/65）。

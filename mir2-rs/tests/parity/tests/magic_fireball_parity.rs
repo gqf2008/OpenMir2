@@ -368,6 +368,17 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
 }
 
+/// **`29 群体治愈术`（`SKILL_BIGHEALLING`）**真实台账 → 判定面（标签 heal/full/both）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::big_healing_parity_*）生成真实台账"]
+fn real_rust_ledger_bighealing() {
+    real_ledger_verify_labels(
+        "bighealing",
+        &golden_file("bighealing.json"),
+        &["heal", "full", "both"],
+    );
+}
+
 /// **`18 隐身术`（`SKILL_CLOAK`）**真实台账 → 判定面（标签 s1/s5/s13）。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::cloak_parity_*）生成真实台账"]
