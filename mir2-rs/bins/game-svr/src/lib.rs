@@ -66144,9 +66144,9 @@ SendRefMsgRange=15
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
-        if magic_id == 23 {
-            // 23 的受击链读实体/会话 MaxHP（`SM_STRUCK` 头与 RM 8103 的 p2）；登录序下目标
-            // `MaxHP=224`（C# golden 同源），HP 仍 100。
+        if matches!(magic_id, 23 | 33 | 47) {
+            // 23/33/47（`MagBigExplosion` 族）的受击链读实体/会话 MaxHP（`SM_STRUCK` 头与
+            // RM 8103 的 p2）；登录序下目标 `MaxHP=224`（C# golden 同源），HP 仍 100。
             let e = rig.world.entities.get_mut(target).unwrap();
             e.vitals.max_hp = 224;
             let sg = rig.ground_sessions.get_mut("target").unwrap();
@@ -67704,6 +67704,133 @@ SendRefMsgRange=15
             rust_abil, gold_abil,
             "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
         );
+    }
+
+    /// **`33 冰咆哮`**（`SKILL_SNOWWIND`，`MagicManager.cs:489-494` / helper `:1100-1117`）驱动。
+    /// golden `golden/magic/snowwind.json`（s1/s5/s13）。
+    ///
+    /// **本支的判据全部来自 33 自己的 golden 实测**（不沿用 23 的结论——卡 §31）：
+    /// - `IsProtectTarget`：**实测 target HP 100→85（damage 15）** ⇒ 本夹具下为 true、伤害链成立；
+    /// - `Rng` = **7 抽**（`[0,0,0,7,1,0,3]`）、`DrainPasses` = **4**、`NotDue` = 0；
+    /// - 帧（实测）：caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`；
+    /// - RM（实测）：8044(target,p1=15,108)、10052(target,68)、8103(众人,w=15/p1=85/p2=224/p3=caster,167)、
+    ///   8090(攻击方 hearers,154)、10123(caster,p1=33,255)、10008 的 p3=33。
+    /// 范围来源：部署 `Server.conf` 的 `SnowWindRange=1`（golden `Fixture.snow_wind_range`）；
+    /// `Fixture.server_conf_sha256` = `ce5e3ce9…`（与部署文件 sha 一致）。
+    ///
+    /// **帧族与 C2 交集**：本支帧族（53/638/656/31）与 `push_broadcast` 缓存接线相交，
+    /// **`2f` 的 C2 落地后必须重跑全平面**（45 驱动 + 15 比较器）。
+    fn snowwind_assert(stem: &str, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, 33, 15, 1, label, seed, base);
+        fireball_case_assert(stem, label, 85, 7);
+        b1_golden_drain_assert("snowwind.json", label, 4);
+        let c = defence_case(stem, label);
+        let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
+        let seq_of = |who: &str| -> Vec<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|m| m["ident"].as_i64())
+                .collect()
+        };
+        assert_eq!(
+            seq_of("caster"),
+            vec![638, 640, 31, 656],
+            "[{stem}/{label}] caster 帧序"
+        );
+        assert_eq!(
+            seq_of("target"),
+            vec![17, 638, 53, 31, 656],
+            "[{stem}/{label}] target 帧序"
+        );
+        assert_eq!(
+            seq_of("obs_in"),
+            vec![17, 638, 31, 656],
+            "[{stem}/{label}] obs_in 帧序"
+        );
+        assert_eq!(
+            n("obs_out", "Sent", 31),
+            0,
+            "[{stem}/{label}] obs_out 不得有帧"
+        );
+        assert_eq!(
+            c["TargetHpBefore"].as_i64(),
+            Some(100),
+            "[{stem}/{label}] HP 前"
+        );
+        assert_eq!(
+            c["TargetHp"].as_i64(),
+            Some(85),
+            "[{stem}/{label}] HP 后（实测伤害 15）"
+        );
+        assert_eq!(n("target", "Rm", 8044), 1, "[{stem}/{label}] target 8044");
+        assert_eq!(n("target", "Rm", 10052), 1, "[{stem}/{label}] target 10052");
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(n(who, "Rm", 8103), 1, "[{stem}/{label}] {who} 8103");
+            assert_eq!(n(who, "Rm", 8090), 1, "[{stem}/{label}] {who} 8090");
+        }
+        assert_eq!(n("caster", "Rm", 10123), 1, "[{stem}/{label}] caster 10123");
+        // 魔号语义（oracle 分派）：RM 10008 的 p3 与 10123 的 p1 必须是 **33**。
+        let p3_of_10008 = |who: &str| -> Option<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Rm"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["ident"] == 10008)
+                .and_then(|m| m["p3"].as_i64())
+        };
+        assert_eq!(
+            p3_of_10008("caster"),
+            Some(33),
+            "[{stem}/{label}] RM 10008.p3 = 魔号 33"
+        );
+        let p1_of_10123 = |who: &str| -> Option<i64> {
+            c["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Rm"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|m| m["ident"] == 10123)
+                .and_then(|m| m["p1"].as_i64())
+        };
+        assert_eq!(
+            p1_of_10123("caster"),
+            Some(33),
+            "[{stem}/{label}] RM 10123.p1 = 魔号 33"
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn snowwind_parity_s1() {
+        snowwind_assert("snowwind", "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn snowwind_parity_s5() {
+        snowwind_assert("snowwind", "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn snowwind_parity_s13() {
+        snowwind_assert("snowwind", "s13", 13, 3000);
     }
 
     /// **`23 爆裂火焰`**（`SKILL_FIREBOOM`，`MagicManager.cs:418-423` / helper `:1100-1117`）驱动。
