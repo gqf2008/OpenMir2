@@ -205,9 +205,10 @@ opc-07 定的三条前置已全部满足（见 §10.1 三证明）；NP-01 签�
 **重录不是免检操作——它把旧证据换成了新对象。** 每次重录必须：
 
 1. **重录前/后各存一份 JSON**（仓外 `E:/UserFleet/qa/npc-parity/`），并给 `git diff` 原文；
-2. 用 `mir2-rs/tests/parity/npc/golden_recheck.py before.json after.json` 证明差异**只落在新增元数据**
-   （`script_name`/`script_sha256`/`fixture`）；工具剥离这三键后整树逐字节比，行为字段有任何变化即
-   `BEHAVIOR_CHANGED`（rc=1）；
+2. 用 `mir2-rs/tests/parity/npc/golden_recheck.py before.json after.json` 证明差异**只落在新增元数据**。
+   **剥离键白名单写死为三个**：`script_name`、`script_sha256`、`fixture`。
+   **新增任何其它字段一律按行为变化处理**（工具不剥离，会报 `BEHAVIOR_CHANGED`）；要扩白名单必须改工具并报 opc-07。
+   工具剥离这三键后整树逐字节比，行为字段有任何变化即 `BEHAVIOR_CHANGED`（rc=1）；
 3. 行为字段一旦变化 ⇒ **原 PASS 作废**，按新 golden 重判并在报告说明原因；
 4. 报告写明"PASS 对应的 golden 版本 = sha256 + 提交"。
 
@@ -215,8 +216,13 @@ opc-07 定的三条前置已全部满足（见 §10.1 三证明）；NP-01 签�
 sha256 = `41e87d9b60c6e827833b2e9e755ea7ef0ef3f54aa9a4600b5a0be79b003c5fce`（提交 `4878fdbfe`）。
 探针已加 `script_name`/`script_sha256`，**重录后必须按本节重出 PASS**（窗口结束后执行）。
 
-工具自测（可复跑）：`python -I mir2-rs/tests/parity/npc/golden_recheck.py selftest`
+工具自测（可复跑，输出已落盘）：`python -I mir2-rs/tests/parity/npc/golden_recheck.py selftest`
 ⇒ 元数据新增=0 / 行为改动=1 / 零用例=2（ok）。
+原文：`E:/UserFleet/qa/npc-parity/golden-recheck-selftest.txt`
+（`selftest: metadata-only=0 behavior-change=1 empty=2 => OK`，rc=0）。
+
+**重录后重出的 PASS 必须包含**：新 golden sha256 + 旧 golden sha256（本节当前值）+ 工具输出路径 +
+`BEHAVIOR_IDENTICAL` 原文。缺任一项 ⇒ PASS 不成立。
 
 ## 11. 行为牙（NP-01 样板）
 
