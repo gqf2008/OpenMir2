@@ -68,7 +68,7 @@
 //!   oracle 对这些 StdMode 有**成功**路径（StdMode 3 的 Shape 13 **无条件**返回 true；其余为条件成功），
 //!   成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|1|2` 与 **31 的 `AniCount != 0`**
 //!   ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）。
-//!   **`EatUseItems` 的 10 个 Shape（IT-09…IT-16）逐条落点**（均 oracle `PlayObject.Base.cs`）：
+//!   **`EatUseItems` 的 8 个 case/Shape（IT-09…IT-16）逐条落点**（均 oracle `PlayObject.Base.cs`）：
 //!   - IT-09 Shape1 回城卷（`:2162→2163`、`:2233`）——未实现，T-17；
 //!   - IT-10 Shape2 随机传送（`:2238`，受 `boNORANDOMMOVE`）——未实现，T-17；
 //!   - IT-11 Shape3 地牢逃脱（`:2246`，`PvpLevel()<2` 回 Home，否则红名村）——未实现，T-17；
