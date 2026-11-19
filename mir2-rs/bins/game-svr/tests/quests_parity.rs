@@ -34,7 +34,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 /// 用真解析器 + 真引擎跑一段 `#ACT` 正文，返回（动作条数, 三张位图十六进制）。
-fn run_body(body: &str) -> Result<(usize, String, String, String), String> {
+fn run_body(body: &str, seed: &str) -> Result<(usize, String, String, String), String> {
     let text = format!("[@main]\n#ACT\n{body}\n");
     let fs = MemFs(vec![("root/npc_def/t.txt".to_string(), text)]);
     let parsers = ScriptParsers::new();
@@ -77,6 +77,12 @@ fn run_body(body: &str) -> Result<(usize, String, String, String), String> {
     };
     let mut rng1 = |_v: i32| 0;
     let mut player = NpcPlayer::empty(&mut rng1);
+    for part in seed.split(',').filter(|p| !p.is_empty()) {
+        match part.parse::<i32>() {
+            Ok(f) => player.quest_flag.set(f, 1),
+            Err(_) => return Err(format!("坏 seed: {part}")),
+        }
+    }
     let _ = host.goto_label("T", &mut player, "@main", false);
 
     Ok((
@@ -103,8 +109,8 @@ fn compare(ledger: &str) -> (usize, Vec<String>) {
             continue;
         }
         let f: Vec<&str> = line.split('\t').collect();
-        if f.len() != 9 {
-            bad.push(format!("列数 {} != 9: {line}", f.len()));
+        if f.len() != 10 {
+            bad.push(format!("列数 {} != 10: {line}", f.len()));
             continue;
         }
         let case_id = f[0];
@@ -117,7 +123,12 @@ fn compare(ledger: &str) -> (usize, Vec<String>) {
         };
         let body = f[8].replace("\\n", "\n");
         let oracle_err = f[6] != "-";
-        let (got_actions, got_flag, got_unit, got_open) = match run_body(&body) {
+        let seed = if f[9] == "-" {
+            String::new()
+        } else {
+            f[9].to_string()
+        };
+        let (got_actions, got_flag, got_unit, got_open) = match run_body(&body, &seed) {
             Ok(v) => {
                 if oracle_err {
                     bad.push(format!("{case_id}: 金标准侧解析失败 {}，Rust 侧成功", f[6]));
@@ -156,7 +167,7 @@ fn compare(ledger: &str) -> (usize, Vec<String>) {
         // 缺参用例：去掉末行重跑，三张位图必须逐字节不变（oracle 侧同口径断言在探针里）
         if f[7] == "1" {
             if let Some(cut) = body.rfind('\n') {
-                let Ok((_, pre_flag, pre_unit, pre_open)) = run_body(&body[..cut]) else {
+                let Ok((_, pre_flag, pre_unit, pre_open)) = run_body(&body[..cut], &seed) else {
                     bad.push(format!("{case_id}: 前缀重跑解析失败，无法证明 unchanged"));
                     rows += 1;
                     continue;
@@ -193,7 +204,7 @@ fn quest_actions_match_oracle_ledger() {
     // Z4：至少一个 case 的位图非零（全零互证不算绿）
     let non_zero = text.lines().any(|l| {
         let f: Vec<&str> = l.split('\t').collect();
-        f.len() == 9 && (f[3].chars().any(|c| c != '0') || f[4].chars().any(|c| c != '0'))
+        f.len() == 10 && (f[3].chars().any(|c| c != '0') || f[4].chars().any(|c| c != '0'))
     });
     assert!(non_zero, "金标准全是零位图 ⇒ 假绿（Z4）");
 }
@@ -212,7 +223,7 @@ fn quest_actions_comparator_rejects_degenerate_input() {
         .find(|l| !l.is_empty() && !l.starts_with('#'))
         .unwrap_or("QT05-01\t1\tc1/n5,1/s[5][1]\t00\t00\t00\t-\t-\tSET [5] 1");
     let mut f: Vec<String> = first_row.split('\t').map(|s| s.to_string()).collect();
-    if f.len() == 9 {
+    if f.len() == 10 {
         f[3] = "ff".to_string();
         let (_, bad) = compare(&f.join("\t"));
         assert!(!bad.is_empty(), "篡改 flag 后比较器仍报绿 ⇒ 假绿");

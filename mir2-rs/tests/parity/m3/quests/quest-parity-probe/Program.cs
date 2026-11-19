@@ -202,7 +202,7 @@ internal static class Program
     }
 
     /// 跑一段 `#ACT` 正文：真解析器 + 真 `ScriptEngine.GotoLable` + 真 `PlayObject`。
-    private static ActionOutcome RunOneBody(ScriptParsers parser, string id, string body)
+    private static ActionOutcome RunOneBody(ScriptParsers parser, string id, string body, string seed)
     {
         string text = "[@main]\n#ACT\n" + body + "\n";
         string path = SystemShare.GetEnvirFilePath(ActionPatch, id + ".txt");
@@ -212,6 +212,13 @@ internal static class Program
         var npc = new NormNpc();
         var outcome = new ActionOutcome();
         var po = new PlayObject();
+        if (!string.IsNullOrEmpty(seed))
+        {
+            foreach (string part in seed.Split(','))
+            {
+                po.SetQuestFlagStatus(int.Parse(part, CultureInfo.InvariantCulture), 1);
+            }
+        }
         try
         {
             parser.LoadScriptFile(npc, ActionPatch, id, false);
@@ -249,58 +256,68 @@ internal static class Program
     /// 丢弃类用例另跑一遍「去掉末行」的前缀，断言三张位图**逐字节不变**（`unchanged=1`）。
     private static int RunActions(string outDir)
     {
-        var cases = new (string Id, string Body)[]
+        var cases = new (string Id, string Body, string Seed)[]
         {
-            ("QT05-01", "SET [5] 1"),
-            ("QT05-02", "SET [5] 1\nSET [5] 0"),
-            ("QT05-03", "SET [5] 1\nSET [5] 2"),
-            ("QT05-04", "SET [5] 1\nSET [5] -1"),
-            ("QT05-D1", "SET [5] 1\nSET [6] 1"),
-            ("QT05-D2", "SET [6] 1\nSET [5] 1"),
-            ("QT05-D3", "SET [5] 1\nSET [5] 0\nSET [7] 1"),
-            ("QT05-05", "SET [1025] 1"),
-            ("QT05-06", "SET [0] 1"),
-            ("QT05-07", "SET [-3] 1"),
-            ("QT05-08", "SET [abc] 1"),
-            ("QT05-09", "SET [5] 1\nSET [5] abc"),
-            ("QT05-10", "SET [5]"),
-            ("QT05-11", "SET [5] 1\nSET [5] \" \""),
-            ("QT05-12", "SET [5] 1\nSET [5]"),
-            ("QT06-01", "SET [5] 1\nSET [6] 1\nSET [7] 1\nRESET [5] 3"),
-            ("QT06-02", "SET [5] 1\nSET [6] 1\nRESET [5] abc"),
-            ("QT06-03", "SET [5] 1\nRESET [5] 0"),
-            ("QT06-04", "SET [5] 1\nSET [6] 1\nRESET [abc] 2"),
-            ("QT06-05", "SET [5] 1\nRESET [5] -1"),
-            ("QT06-06", "SET [5] 1\nRESET [5]"),
-            ("QT06-07", "SET [5] 1\nSET [6] 1\nRESET [5]"),
-            ("QT07-01", "SETOPEN [5] 1"),
-            ("QT07-02", "SETOPEN [5] 1\nSETOPEN [5] 0"),
-            ("QT07-03", "SETOPEN [abc] 1"),
-            ("QT08-01", "SETUNIT [5] 1"),
-            ("QT08-02", "SETUNIT [5] 1\nSETUNIT [5] 0"),
-            ("QT08-03", "SETUNIT [abc] 1"),
-            ("QT09-01", "SETUNIT [5] 1\nSETUNIT [6] 1\nRESETUNIT [5] 2"),
-            ("QT09-02", "SETUNIT [5] 1\nSETUNIT [6] 1\nRESETUNIT [5] abc"),
-            ("QT09-03", "SETUNIT [5] 1\nRESETUNIT [5]"),
+            ("QT05-01", "SET [5] 1", ""),
+            ("QT05-02", "SET [5] 1\nSET [5] 0", ""),
+            ("QT05-03", "SET [5] 1\nSET [5] 2", ""),
+            ("QT05-04", "SET [5] 1\nSET [5] -1", ""),
+            ("QT05-D1", "SET [5] 1\nSET [6] 1", ""),
+            ("QT05-D2", "SET [6] 1\nSET [5] 1", ""),
+            ("QT05-D3", "SET [5] 1\nSET [5] 0\nSET [7] 1", ""),
+            ("QT05-05", "SET [1025] 1", ""),
+            ("QT05-06", "SET [0] 1", ""),
+            ("QT05-07", "SET [-3] 1", ""),
+            ("QT05-08", "SET [abc] 1", ""),
+            ("QT05-09", "SET [5] 1\nSET [5] abc", ""),
+            ("QT05-10", "SET [5]", ""),
+            ("QT05-10S", "SET [5]", "5"),
+            ("QT05-11", "SET [5] 1\nSET [5] \" \"", ""),
+            ("QT05-12", "SET [5] 1\nSET [5]", ""),
+            ("QT06-01", "SET [5] 1\nSET [6] 1\nSET [7] 1\nRESET [5] 3", ""),
+            ("QT06-02", "SET [5] 1\nSET [6] 1\nRESET [5] abc", ""),
+            ("QT06-03", "SET [5] 1\nRESET [5] 0", ""),
+            ("QT06-04", "SET [5] 1\nSET [6] 1\nRESET [abc] 2", ""),
+            ("QT06-05", "SET [5] 1\nRESET [5] -1", ""),
+            ("QT06-06", "SET [5] 1\nRESET [5]", ""),
+            ("QT06-06S", "RESET [5]", "5"),
+            ("QT06-07", "SET [5] 1\nSET [6] 1\nRESET [5]", ""),
+            ("QT07-01", "SETOPEN [5] 1", ""),
+            ("QT07-02", "SETOPEN [5] 1\nSETOPEN [5] 0", ""),
+            ("QT07-03", "SETOPEN [abc] 1", ""),
+            ("QT08-01", "SETUNIT [5] 1", ""),
+            ("QT08-02", "SETUNIT [5] 1\nSETUNIT [5] 0", ""),
+            ("QT08-03", "SETUNIT [abc] 1", ""),
+            ("QT09-01", "SETUNIT [5] 1\nSETUNIT [6] 1\nRESETUNIT [5] 2", ""),
+            ("QT09-02", "SETUNIT [5] 1\nSETUNIT [6] 1\nRESETUNIT [5] abc", ""),
+            ("QT09-03", "SETUNIT [5] 1\nRESETUNIT [5]", ""),
         };
         // 缺参 ⇒ 动作被丢弃：断言三张位图逐字节不变（不是「没看出变化」）。
         var dropCases = new HashSet<string> { "QT05-10", "QT05-12", "QT06-06", "QT06-07", "QT09-03" };
 
         var rows = new List<string>
         {
-            "# case_id\tactions_parsed\tparsed_actions\tflag_hex\tunit_hex\tunit_open_hex\texception\tunchanged\tscript"
+            "# case_id\tactions_parsed\tparsed_actions\tflag_hex\tunit_hex\tunit_open_hex\texception\tunchanged\tscript\tseed"
         };
         var parser = new ScriptParsers();
         int failed = 0;
-        foreach ((string id, string body) in cases)
+        foreach ((string id, string body, string seed) in cases)
         {
-            ActionOutcome o = RunOneBody(parser, id, body);
+            ActionOutcome o = RunOneBody(parser, id, body, seed);
             string unchanged = "-";
-            if (dropCases.Contains(id))
+            if (!string.IsNullOrEmpty(seed))
+            {
+                // 预置位用例：与「只 seed、不跑正文」的初始态比，直接给出前/后是否变化
+                ActionOutcome init = RunOneBody(parser, id + "-seedonly", "", seed);
+                bool same = init.Flag == o.Flag && init.Unit == o.Unit && init.Open == o.Open;
+                unchanged = same ? "1" : "0";
+                Console.WriteLine("SEEDED {0} init={1} final={2} changed={3}", id, init.Flag[..8], o.Flag[..8], same ? "0" : "1");
+            }
+            else if (dropCases.Contains(id))
             {
                 int cut = body.LastIndexOf('\n');
                 string prefix = cut >= 0 ? body[..cut] : "";
-                ActionOutcome p = RunOneBody(parser, id + "-prefix", prefix);
+                ActionOutcome p = RunOneBody(parser, id + "-prefix", prefix, seed);
                 bool same = p.Flag == o.Flag && p.Unit == o.Unit && p.Open == o.Open;
                 unchanged = same ? "1" : "0";
                 if (!same)
@@ -310,7 +327,7 @@ internal static class Program
                 }
             }
             rows.Add(string.Join("\t", id, o.Parsed.ToString(CultureInfo.InvariantCulture),
-                o.ParsedParams, o.Flag, o.Unit, o.Open, o.Exception, unchanged, body.Replace("\n", "\\n")));
+                o.ParsedParams, o.Flag, o.Unit, o.Open, o.Exception, unchanged, body.Replace("\n", "\\n"), string.IsNullOrEmpty(seed) ? "-" : seed));
         }
 
         string ledgerPath = Path.Combine(outDir, "quest_action_ledger.tsv");

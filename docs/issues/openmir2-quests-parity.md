@@ -5,6 +5,11 @@
 > 验收尺子：`E:/UserFleet/qa/module-harness-checklist-20261120.md`（42 条，**唯一标准**；要改只能找 opc-07）。
 > 本文件当前只交**判定面清单 + 账本格式**，未铺量；§8 有一条需要先裁决的阻塞项。
 
+> **必读（2026-11-20 查实，影响本线全部动作类条目）**：oracle 的 `#ACT` 块里**只有第一条已注册命令执行**——
+> `GotoLableQuestActionProcess` 命中 `ExecutionProcessing.IsRegister` 后直接 `Execute(...); return;`
+> （符号锚 `GotoLableQuestActionProcess`、`ExecutionProcessing.IsRegister`）。多行 `#ACT` 的后半段**不执行**。
+> Rust `run_actions` 1:1 复刻；负例 QT05-D1/D2/D3 钉住，变异证据见 §10.3。
+
 ## 1. 分母与不变量
 
 - 分母来源（机器清单，不手写）：`docs/issues/parity-gap-quests.json` 的 `denominator.count` = **9**。
@@ -243,3 +248,18 @@ Z5 / L1–L2b / L6 / I 组的「不适用」若 opc-07 不认可，以 opc-07 �
 3. **缺参不是「整条丢弃」**（更正先前口径）：`IsStringNumber("")` 因正则 `^[+-]?\d*[.]?\d*$` **匹配空串**而为真
    ⇒ `nCMDCode` 照常设置；处理器按 `StrToInt` 默认值执行（`SET` 值 0 ⇒ 清位、`RESET` count 1 ⇒ 清 1 个）。
    当前用例起始位图为全零，因此这两条只证明「被执行且不崩」，**未单独观测清位**；要观测需加「预置位」用例（下一步）。
+
+### 10.4 预置位与变异证据（2026-11-20 补）
+
+- **缺参不是丢弃**（§10.3-3）的观测证据：预置位用例先由探针直接 `PlayObject.SetQuestFlagStatus(5,1)`
+  把 bit5 置上（初始 `0800…`），再跑缺参动作：
+  `QT05-10S`（`SET [5]`）⇒ 终值 `0000…`；`QT06-06S`（`RESET [5]`）⇒ 终值 `0000…`
+  （探针 stdout 的 `SEEDED … init=08000000 final=00000000 changed=1`，原文
+  `E:/UserFleet/qa/quests/qt01/probe_actions_run.log`）。两侧比较器都带同一 seed 重放。
+- **`#ACT` 只有第一条执行的变异证据**：把 Rust `run_actions` 的 `return ok` 改成 `continue`
+  （让两条都执行）⇒ `cargo test -p game-svr --test quests_parity` **必红**，红的正是多行用例
+  QT05-02/09/D1/D2/D3（原文 `E:/UserFleet/qa/quests/qt01/mutation_first_action.log`）；
+  用 `git checkout --` 复原后 `sha256` 与变异前相等（`8ae0eff1…`），复跑 **2 passed / 0 failed**
+  （`…/mutation_restored.log`）。
+- **仍未做**：opc-07 要求的「坏行混在脚本集里时两侧最终可用 NPC/商家集合相同」这条**中止范围**等价证据，
+  下一批补。
