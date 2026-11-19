@@ -44,9 +44,37 @@
 - 6 条 + `MG-10` 的最终状态由 opc-07 依据"可达性结论 + 新场景证据"决定；
 - 任何 status 变更单独一笔、走分支、经 QA 签署，**禁止与代码/装置改动混提**。
 
-## 6. 比较器收紧设计：`Rng` 全轴比较（2026-11-20，opc-07 定；实现待 `a2` 参数与重生成）
+## 6. 可达性审计结论与处置（2026-11-20，四域 42 条 verified 逐条审计）
 
-### 6.1 判据
+> 证据：`docs/issues/qa-magic-audit-20261120.md`（magic 15 条）、`docs/issues/qa-reachability-audit-20261120.md`（四域汇总 + 整改台账 12 行 + 验收总则）、`docs/issues/qa-golden-fixture-drift-disposition-20261120.md`（处置文本）。
+
+**汇总：可达 6 ｜ 未验 8 ｜ 部分不可达 2 ｜ 不适用 26。无"行为面本身不可达"的条目。**
+
+| 域 | 结论 | 消费字段锚 |
+| --- | --- | --- |
+| magic | 未验 6（MG-10/11/19/27/53/54，均因 `AntiMagic=3`）；部分不可达 2（MG-28/29：52 尾封 `WAbil` 全量，`MaxExp=50` 为夹具构造值，登录给 `GetLevelExp(20)`）；可达 4（MG-12/37/39/40）；不适用 3（MG-32/33/43） | `MagicManager.cs` 对应 case 支的 `targetObject.AntiMagic`；52 尾 `EDCode.EncodeMessage(WAbil)` |
+| items | 未验 2（IT-01/03：向量 `max_hp=100/max_mp=80` 与 `level=1` 派生 19/15 冲突）；可达 2（IT-05、IT-18——`max_weight=50/15/12` 恰为 L1 登录值，可作自洽参照）；不适用 4 | `BaseObject.cs` 的 `IncHealthSpell` clamp / Shape3 百分比 / `ItemList.Count` 门 |
+| quests | 8/8 不适用（flag/unit 台账；向量无 `LEVEL/EXP/HP/GOLD` 命中） | — |
+| npc | 11/11 不适用（脚本 say/label；帧面 643/657/1100 无能力字段；NP-11 观测者用默认能力） | — |
+
+**处置（整改批次：夹具元组自洽化 + 生产可达变体）**
+
+1. **MG-10/11/19/27/53/54**：补**登录序变体**（`AntiMagic=1` + 公式 `MaxHP`），让这 6 条在确定可达的场景下被验一次；合成角色件降为**附加场景**。
+2. **MG-28/29**：夹具 `MaxExp` 改用登录派生 `GetLevelExp(20)`；该字段原值生产不可达，**不降级条目**。
+3. **MG-37**：`fixture_spec.target_max_hp=100` 与帧面 224 不符 = **stale 元数据**，重生成时按登录派生 224 写。
+4. **MG-40**：caster `L30 + MaxHP=100`（真实 L30=419）元组不自洽——改登录派生或显式声明为合成场景，二者择一。
+5. **IT-01/IT-03**：向量 `max_hp=100/max_mp=80` 与 `level=1` 冲突 ⇒ 二选一：①改用 L1 登录派生（19/15）；②给出装备/套装依据证明可达（`AddAbil.HP/MP` 来源 `PlayObject.cs:2542/2546/2550/2555/2628`）。两者都不成立才谈降级。
+
+## 7. 验收总则（整改批次的通用判据）
+
+- 整改完成后该条目 `reachability` 必须从 `unverified`/`unreachable` 变为 **`reachable`**，**附构造路径**：`(Job, Level, 装备/套装, 技能/状态) → 字段值`，且该构造要能在 `fixture_spec`/向量元数据里**机检**（字段 + 公式复算）。
+- **只改注释或判定词不算通过**；QA 独立重生成/只读核对后方可改状态。
+- `legacy_artifact` 件（`Fixture.rng_mode=freeze_at_dospell`）**不得**作为任何条目的 `verified` 依据。
+- 任何 `status` 变更单独一笔、走分支、经 QA 签署，禁止与代码/装置改动混提。
+
+## 8. 比较器收紧设计：`Rng` 全轴比较（M52；2026-11-20，opc-07 定）
+
+### 8.1 判据
 
 - **统一比较**：`golden.Rng == rust.Rng ++ rust.DeliverRng`（拼接；`RngSeqs` 连续性断言保留）。
 - **不按 seam 字段分两种比法**：所有 `verified` 条目的 golden 必须是 **`cover_drain`**
@@ -56,7 +84,7 @@
 - **适用面**：全 **15 条**（不止那 6 条）；拼接顺序靠实测证、不靠推断；任一条红 ⇒ 报 opc-07，
   不改判据迁就。
 
-### 6.2 四颗牙（合成夹具，不依赖真实台账）
+### 8.2 四颗牙（合成夹具，不依赖真实台账）
 
 | 牙 | 变异 | 期望 |
 |---|---|---|
@@ -67,7 +95,7 @@
 
 外加**正对照**：`golden.Rng = rust.Rng ++ rust.DeliverRng` ⇒ 绿（证明判据不是恒红）。
 
-### 6.2b 字段契约（交给 `a2`；双方向**不得各自造名字**）
+### 8.3 字段契约（交给 `a2`；双方向**不得各自造名字**）
 
 `MagicGolden/Program.cs` 由 **`a2` 独占**；Rust 侧只按下面的键名读。
 
@@ -80,7 +108,7 @@
 | 语义 | `cover_drain`：`Rng` 覆盖到排水结束，比较面 = `Rng ++ DeliverRng`；`freeze_at_dospell`：**不**进比较面（`verified` 条目禁止使用） |
 | 与 `login_order` 的关系 | 两者正交：`rng_mode` 只描述"抽数记录窗口"；`login_order` 描述角色状态来源。6 条新件应为 `login_order=false`（按 a2 的二分口径）+ `rng_mode="cover_drain"` |
 
-### 6.3 实现落点（本设计分支 `card/magic-rng-union`）
+### 8.4 实现落点（本设计分支 `card/magic-rng-union`）
 
 - `mir2-rs/tests/parity/tests/magic_fireball_parity.rs`：
   `union_rng` / `check_golden_cover_drain` / `pin_union_rng` / `verify_union` +
@@ -90,7 +118,7 @@
 - **本分支不合并**：比较器收紧**必须与 6 条新 golden + `MG-10` 同一次合并落地**（M51；中间态
   master 会红）。6 条重生成依赖 `a2` 的 `rng_seam`/`login_order` 参数（M50，批准后实施）。
 
-### 6.4 复跑脚本设计（槽位到手后执行；`run_id` 绑定）
+### 8.5 复跑脚本设计（槽位到手后执行；`run_id` 绑定）
 
 ```sh
 export MIR2_LEDGER_RUN_ID="magic-plane-$(date +%s)-$$"
@@ -101,7 +129,7 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 ```
 （每支独立进程 = rng_trace 进程级；任一步非零即停，不重试掩盖。）
 
-### 6.5 与已收口条目的兼容性
+### 8.6 与已收口条目的兼容性
 
 - 23/33（即时受击）：受击抽在施法段内、已在 `Rng`；台账 `DeliverRng` 实测为空
   ⇒ 统一判据下 `Rng ++ [] == Rng`，与现行 golden 一致。
