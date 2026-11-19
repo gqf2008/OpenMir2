@@ -315,5 +315,5 @@
 | T-280 | openmir2-botsrv-action-probe-turn-coords | 2026-11-14T17:15:08Z | 在用 |
 | T-281 | openmir2-gateway-backpressure-frame-drop | 2026-11-14T19:22:28Z | 在用 |
 | T-282 | openmir2-gateway-frame-criticality-queue | 2026-11-15T02:27:41Z | 在用 |
-| T-285 | openmir2-parity-gap-magic-windtebo | 2026-11-19T15:35:10Z | 在用 |
-| T-286 | openmir2-parity-gap-magic-groupdeding | 2026-11-19T15:35:21Z | 在用 |
+| T-285 | openmir2-parity-gap-magic-windtebo | 2026-11-19T15:35:10Z | 已落地 |
+| T-286 | openmir2-parity-gap-magic-groupdeding | 2026-11-19T15:35:21Z | 已落地 |

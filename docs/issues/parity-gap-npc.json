@@ -20,7 +20,13 @@
     "dead_in_oracle": "oracle 自身是死路径（调用点注释/丢弃），Rust 不应实现",
     "out_of_scope": "不属本分母（环境/工具/数据侧）"
   },
-  "cost_enum": ["S", "S-M", "M", "M-L", "L"],
+  "cost_enum": [
+    "S",
+    "S-M",
+    "M",
+    "M-L",
+    "L"
+  ],
   "denominator": {
     "kind": "behavior_leaf",
     "definition": "NPC 交互链上的行为叶子：点 NPC / 对话选择 / 特殊 NPC 覆写 / @main 脚本选择 / 标签+extjmp / procedure 执行 / 断链 / 说词帧 / 变量替换 / 隐藏 NPC / NPC 显示帧",
@@ -35,14 +41,20 @@
     {
       "id": "NX-01",
       "name": "脚本命令语言全集（条件/动作注册表）",
-      "oracle_anchor": { "file": "src/Modules/ScriptEngine/Consts/ConditionCode.cs", "line": 1, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Consts/ConditionCode.cs",
+        "line": 1,
+        "line_end": null
+      },
       "status": "out_of_scope",
       "evidence": {
         "test": null,
         "test_file": null,
         "fixture": null,
         "cases": [],
-        "unit_tests": ["implemented_registry_entries_are_actually_implemented"]
+        "unit_tests": [
+          "implemented_registry_entries_are_actually_implemented"
+        ]
       },
       "cost": null,
       "deviation": null,
@@ -53,9 +65,19 @@
     {
       "id": "NP-D1",
       "name": "MapQuest 自动对话触发（怪/物品事件点 NPC）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.cs", "line": 1670, "line_end": 1677 },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.cs",
+        "line": 1670,
+        "line_end": 1677
+      },
       "status": "dead_in_oracle",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": null,
       "deviation": null,
       "notes": "同 QT-D1；全仓无活 GetQuestNpc 调用点"
@@ -65,14 +87,21 @@
     {
       "id": "NP-01",
       "behavior": "点 NPC 打开对话（Click -> @main）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 674, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 674,
+        "line_end": null
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "t137_click_fixed_npc_main_says_menu_through_production_path",
         "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
         "fixture": null,
-        "cases": ["click_npc_type0_fixed_npc_still_answers_643", "t160_click_fixed_npc_main_take_item_and_gold_write_back"],
-        "unit_tests": []
+        "cases": [],
+        "unit_tests": [
+          "click_npc_type0_fixed_npc_still_answers_643",
+          "t160_click_fixed_npc_main_take_item_and_gold_write_back"
+        ]
       },
       "cost": null,
       "deviation": null,
@@ -81,14 +110,20 @@
     {
       "id": "NP-02",
       "behavior": "对话标签选择跳转（@back/同标签/新标签）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Operate.cs", "line": 114, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Operate.cs",
+        "line": 114,
+        "line_end": null
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "merchant_dialog_label_gate",
         "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
         "fixture": null,
-        "cases": ["merchant_dlgselect_exit_emits_one_merchantdlgclose_with_npc_recog"],
-        "unit_tests": []
+        "cases": [],
+        "unit_tests": [
+          "merchant_dlgselect_exit_emits_one_merchantdlgclose_with_npc_recog"
+        ]
       },
       "cost": null,
       "deviation": null,
@@ -97,14 +132,22 @@
     {
       "id": "NP-03",
       "behavior": "特殊 NPC 的 UserSelect 覆写（商店/城堡/行会）",
-      "oracle_anchor": { "file": "src/GameSrv/Npc/Merchant.cs", "line": 789, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/GameSrv/Npc/Merchant.cs",
+        "line": 789,
+        "line_end": null
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "t138_non_master_is_cancelled",
         "test_file": "mir2-rs/bins/game-svr/src/guild_official/tests.rs",
         "fixture": null,
-        "cases": ["t138_member_is_cancelled", "t138_without_zuma_piece_reports_missing", "t138_index_parsing_through_production_path"],
-        "unit_tests": []
+        "cases": [],
+        "unit_tests": [
+          "t138_member_is_cancelled",
+          "t138_without_zuma_piece_reports_missing",
+          "t138_index_parsing_through_production_path"
+        ]
       },
       "cost": null,
       "deviation": null,
@@ -113,9 +156,21 @@
     {
       "id": "NP-04",
       "behavior": "@main 脚本选择规则（LastNpc 保持 -> 逆序 Quest 门）",
-      "oracle_anchor": { "file": "src/Modules/ScriptEngine/ScriptEngine.cs", "line": 46, "line_end": 75 },
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 46,
+        "line_end": 75
+      },
       "status": "implemented_unverified",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": ["check_quest_status"] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "check_quest_status"
+        ]
+      },
       "cost": null,
       "deviation": null,
       "notes": "crates/script/src/engine/mod.rs 的 goto_label/check_quest_status（第 1008/1074 行附近）；无直接 oracle 夹具"
@@ -123,7 +178,11 @@
     {
       "id": "NP-05",
       "behavior": "标签记录查找 + boExtJmp 门",
-      "oracle_anchor": { "file": "src/Modules/ScriptEngine/ScriptEngine.cs", "line": 89, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 89,
+        "line_end": null
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "merchant_dialog_label_gate",
@@ -139,7 +198,11 @@
     {
       "id": "NP-06",
       "behavior": "逐 procedure 条件真/假分支 + 动作执行 + say 累积",
-      "oracle_anchor": { "file": "src/Modules/ScriptEngine/ScriptEngine.cs", "line": 95, "line_end": 125 },
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 95,
+        "line_end": 125
+      },
       "status": "verified",
       "evidence": {
         "test": "run_npc_cases.py",
@@ -163,7 +226,11 @@
     {
       "id": "NP-07",
       "behavior": "动作返回 false 断链",
-      "oracle_anchor": { "file": "src/Modules/ScriptEngine/ScriptEngine.cs", "line": 101, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 101,
+        "line_end": null
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "goto_executes_goto_not_endquest_after_flip",
@@ -179,14 +246,21 @@
     {
       "id": "NP-08",
       "behavior": "说词帧（ChrName 前缀、High/普通优先级）",
-      "oracle_anchor": { "file": "src/Modules/ScriptEngine/ScriptEngine.cs", "line": 987, "line_end": 999 },
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 987,
+        "line_end": 999
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "merchant_say_text_and_gbk_bytes",
         "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
         "fixture": null,
-        "cases": ["say_text_must_carry_chrname_prefix", "run_login_emits_say_with_chrname_prefix"],
-        "unit_tests": []
+        "cases": [],
+        "unit_tests": [
+          "say_text_must_carry_chrname_prefix",
+          "run_login_emits_say_with_chrname_prefix"
+        ]
       },
       "cost": null,
       "deviation": null,
@@ -195,14 +269,21 @@
     {
       "id": "NP-09",
       "behavior": "说词变量替换（玩家/NPC/价格等）",
-      "oracle_anchor": { "file": "src/M2Server/Npc/NormNpc.cs", "line": 275, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Npc/NormNpc.cs",
+        "line": 275,
+        "line_end": null
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "merchant_click_main_say_expands_player_and_npc_vars",
         "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
         "fixture": null,
-        "cases": ["merchant_variable_text_vectors", "line_variable_text_stops_at_first_non_variable_token"],
-        "unit_tests": []
+        "cases": [],
+        "unit_tests": [
+          "merchant_variable_text_vectors",
+          "line_variable_text_stops_at_first_non_variable_token"
+        ]
       },
       "cost": null,
       "deviation": null,
@@ -211,14 +292,20 @@
     {
       "id": "NP-10",
       "behavior": "隐藏脚本 NPC 可点/可选（QManage/QFunction/RobotManage）",
-      "oracle_anchor": { "file": "src/GameSrv/DB/LocalDB.cs", "line": 236, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/GameSrv/DB/LocalDB.cs",
+        "line": 236,
+        "line_end": null
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "manage_and_function_npc_gates_require_loaded",
         "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
         "fixture": null,
-        "cases": ["loads_from_disk_and_runs_login"],
-        "unit_tests": []
+        "cases": [],
+        "unit_tests": [
+          "loads_from_disk_and_runs_login"
+        ]
       },
       "cost": null,
       "deviation": null,
@@ -227,19 +314,23 @@
     {
       "id": "NP-11",
       "behavior": "NPC 显示/转向/受击/空闲帧",
-      "oracle_anchor": { "file": "src/GameSrv/Word/WorldServer.Merchant.cs", "line": 120, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/GameSrv/Word/WorldServer.Merchant.cs",
+        "line": 120,
+        "line_end": null
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "fixed_npc_display_frames_through_production_aoi",
         "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
         "fixture": null,
-        "cases": [
+        "cases": [],
+        "unit_tests": [
           "npc_and_merchant_turn_hit_frames_through_production_drain",
           "npc_random_idle_frames_through_production_drain_run",
           "npc_turn_hit_production_calls_are_wired_in_drain_run_downlinks",
           "npc_hit_frames_only_for_world_branch_and_never_to_npc"
-        ],
-        "unit_tests": []
+        ]
       },
       "cost": null,
       "deviation": null,

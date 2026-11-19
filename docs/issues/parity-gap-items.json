@@ -46,9 +46,9 @@
         "test": "bag::tests::matches_oracle_bag_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/bag.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/bag_vectors.json",
-        "cases": 21
+        "cases": []
       },
-      "notes": "不入主分母（穿/卸是通用迁移+校验+显示帧选择，不按物品类型分派）；卡 openmir2-m3-bag-equip-alignment 的双栈同序列判据仍 RED（BotSrv 驱动属登记面）"
+      "notes": "不入主分母（穿/卸是通用迁移+校验+显示帧选择，不按物品类型分派）；卡 openmir2-m3-bag-equip-alignment 的双栈同序列判据仍 RED（BotSrv 驱动属登记面）；夹具 21 条用例（见 bag_vectors.json）"
     }
   ],
   "entries": [
