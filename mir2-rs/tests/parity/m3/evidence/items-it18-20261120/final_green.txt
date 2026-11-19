@@ -1,0 +1,30 @@
+# restored; full filter: useitem::tests
+# rc=0
+
+
+running 18 tests
+test useitem::tests::can_not_use_item_still_menus_then_fails ... ok
+test useitem::tests::matches_oracle_eat_fixture ... ok
+test useitem::tests::nodrug_guard_does_not_consume ... ok
+test useitem::tests::shape3_percent_rounds_away_from_zero ... ok
+test useitem::tests::stdmode2_eats_without_effect ... ok
+test useitem::tests::stdmode31_funitem_eats_only_when_function_npc_present ... ok
+test useitem::tests::tooth_drain_hit_cap_red ... ok
+test useitem::tests::tooth_immediate_frame_changed_red ... ok
+test useitem::tests::tooth_notice_duplicate_count_red ... ok
+test useitem::tests::tooth_notice_priority_changed_red ... ok
+test useitem::tests::unbind_capacity_gate_uses_pre_removal_count ... ok
+test useitem::tests::unbind_missing_shape_eats_pack_but_creates_nothing ... ok
+test useitem::tests::unbind_stdmode31_creates_six_items_and_reweights ... ok
+test useitem::tests::unbind_stdmode31_success_matches_oracle_fixture ... ok
+test useitem::tests::unimplemented_stdmode_does_not_eat ... ok
+test useitem::tests::vacuous_guard_empty_or_missing_cases_red ... ok
+test useitem::tests::z4_golden_nonzero_rust_zero_red ... ok
+test useitem::tests::z5_single_layer_red ... ok
+
+test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 1965 filtered out; finished in 0.05s
+
+    Blocking waiting for file lock on package cache
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 0.86s
+     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
+Z4：本批 23 例中 23 例适用（golden 非零），0 例因 golden 全零不适用；Z5：本批 17 例带两层

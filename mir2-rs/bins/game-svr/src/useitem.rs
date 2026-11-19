@@ -753,6 +753,111 @@ mod tests {
         assert!(drain_ok(false, 8));
     }
 
+    /// 状态差（Z4/Z5 共用）：任一 `*_before` 与终态不同，或解包件非空。
+    fn case_state_changed(case: &Value) -> bool {
+        let ex = &case["expect"];
+        case["wabil_before"] != ex["wabil"]
+            || case["item_list_before"] != ex["item_list"]
+            || case["inc_health_before"] != ex["inc_health"]
+            || case["inc_spell_before"] != ex["inc_spell"]
+            || case["hunger_status_before"] != ex["hunger_status"]
+            || case["user_unlock_durg_before"] != ex["user_unlock_durg"]
+            || ex["added_items"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+    }
+
+    /// 非零锚（Z4）：帧(ident!=0) / 通知 / RNG / 状态差，任一非空即非「全零账本」。
+    fn has_nonzero_anchor(case: &Value) -> bool {
+        let ex = &case["expect"];
+        let frames_nonzero = ex["immediate_frames"]
+            .as_array()
+            .map(|a| a.iter().any(|f| f["ident"].as_u64().unwrap_or(0) != 0))
+            .unwrap_or(false);
+        let notices_nonzero = ex["notices"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        let rng_nonzero = ex["rng"].as_array().map(|a| !a.is_empty()).unwrap_or(false);
+        frames_nonzero || notices_nonzero || rng_nonzero || case_state_changed(case)
+    }
+
+    /// 两层非零（Z5）：夹具至少一例同时覆盖「SM 帧>0」与「RM 通知>0 或 状态有变」。
+    fn fixture_covers_two_layers(doc: &Value) -> bool {
+        doc["cases"]
+            .as_array()
+            .map(|cs| {
+                cs.iter().any(|c| {
+                    let sm = c["expect"]["immediate_frames"]
+                        .as_array()
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false);
+                    let rm = c["expect"]["notices"]
+                        .as_array()
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false);
+                    sm && (rm || case_state_changed(c))
+                })
+            })
+            .unwrap_or(false)
+    }
+
+    /// Z4 gate：golden 非零 ⇒ Rust 必须非零；golden 全零 ⇒ 不适用（合法全零失败例豁免）。
+    fn z4_ok(golden_nonzero: bool, rust_nonzero: bool) -> bool {
+        !golden_nonzero || rust_nonzero
+    }
+
+    /// Z4 专用负例：**golden 非零而 Rust 全零 ⇒ 红**；golden 全零 ⇒ 不适用（豁免）。
+    #[test]
+    fn z4_golden_nonzero_rust_zero_red() {
+        assert!(!z4_ok(true, false), "golden 非零而 Rust 全零必须红");
+        assert!(z4_ok(true, true), "两侧非零 ⇒ 合格");
+        assert!(z4_ok(false, false), "golden 全零 ⇒ 不适用（合法失败例）");
+        assert!(has_nonzero_anchor(&success_case(&fixture())));
+    }
+
+    /// Z5 专用负例：只比一层（SM 帧有、RM/状态都无）不得判绿；真实夹具两层都有。
+    #[test]
+    fn z5_single_layer_red() {
+        let single = serde_json::json!({
+            "cases": [{
+                "name": "sm_only",
+                "wabil_before": {"hp": 1},
+                "item_list_before": [],
+                "inc_health_before": 0,
+                "inc_spell_before": 0,
+                "hunger_status_before": 0,
+                "user_unlock_durg_before": false,
+                "expect": {
+                    "immediate_frames": [{"ident": 636}],
+                    "notices": [], "added_items": [], "rng": [],
+                    "wabil": {"hp": 1}, "item_list": [],
+                    "inc_health": 0, "inc_spell": 0,
+                    "hunger_status": 0, "user_unlock_durg": false
+                }
+            }]
+        });
+        assert!(
+            !fixture_covers_two_layers(&single),
+            "只有 SM 一层必须不合格"
+        );
+        assert!(
+            fixture_covers_two_layers(&fixture()),
+            "真实夹具必须两层都有"
+        );
+    }
+
+    /// Z6 牙③：SM 帧改字段必须红（帧面也进比较面）。
+    #[test]
+    fn tooth_immediate_frame_changed_red() {
+        let case = success_case(&fixture());
+        let want = frames(&case["expect"]["immediate_frames"]);
+        let mut got = want.clone();
+        got[0].ident += 1;
+        assert_ne!(got, want, "SM 帧改字段必须红");
+    }
+
     fn recalc_inputs_default<'a>(abil: &'a Ability, bag: &'a [u16]) -> RecalcInputs<'a> {
         const BONUS: NakedAbility = NakedAbility {
             dc: 0,
@@ -788,10 +893,34 @@ mod tests {
         let cases = cases_or_red(&doc).unwrap_or_else(|e| panic!("{e}"));
         // 夹具记录的解包表（Shape → 解包物名）；无该表 = 空表。
         let unbind = unbind_from(&doc);
+        let two_layer_cases = doc["cases"]
+            .as_array()
+            .map(|cs| {
+                cs.iter()
+                    .filter(|c| {
+                        let sm = c["expect"]["immediate_frames"]
+                            .as_array()
+                            .map(|a| !a.is_empty())
+                            .unwrap_or(false);
+                        let rm = c["expect"]["notices"]
+                            .as_array()
+                            .map(|a| !a.is_empty())
+                            .unwrap_or(false);
+                        sm && (rm || case_state_changed(c))
+                    })
+                    .count()
+            })
+            .unwrap_or(0);
+        assert!(
+            fixture_covers_two_layers(&doc),
+            "Z5：夹具必须至少一例同时覆盖 SM 帧与 RM/状态两层"
+        );
+        let mut z4_applicable = 0usize;
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let c = &case["ctx"];
             let mut item_list = bag_items(&case["item_list_before"]);
+            let item_list_before = item_list.clone();
             let abil = ability(&case["wabil_before"]);
             let bag: Vec<u16> = item_list.iter().map(|it| it.index).collect();
             let recalc = recalc_inputs_default(&abil, &bag);
@@ -819,6 +948,21 @@ mod tests {
             let mut item_number = 0;
             let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
             let expect = &case["expect"];
+
+            // Z4：golden 有非零期望 ⇒ Rust 必须有非零锚；golden 全零（合法失败例）⇒ 不适用。
+            let golden_nonzero = has_nonzero_anchor(case);
+            let rust_nonzero = !out.immediate_frames.is_empty()
+                || !out.notices.is_empty()
+                || !out.added_items.is_empty()
+                || state.wabil != abil
+                || item_list != item_list_before;
+            if golden_nonzero {
+                z4_applicable += 1;
+            }
+            assert!(
+                z4_ok(golden_nonzero, rust_nonzero),
+                "{name}: Z4 golden 非零但 Rust 全零"
+            );
 
             // 即时帧 = 解包产物逐件 `SM_ADDITEM(200)`（`MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)`）
             // 在前，再 `SM_EAT_OK/636`。Rust 把解包件放在 `added_items`，这里按同一顺序拼回帧序。
@@ -967,6 +1111,11 @@ mod tests {
                 "{name}: HungerStatus"
             );
         }
+        let total = cases.len();
+        eprintln!(
+            "Z4：本批 {total} 例中 {z4_applicable} 例适用（golden 非零），{} 例因 golden 全零不适用；Z5：本批 {two_layer_cases} 例带两层",
+            total - z4_applicable
+        );
     }
 
     /// Shape 3 的百分比是 `Round(...AwayFromZero)`；夹具的 `max_hp=101/ac=5`（5.05→5）与

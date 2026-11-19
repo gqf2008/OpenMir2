@@ -1,0 +1,8 @@
+cargo test -p game-svr --lib <filter> -- --test-threads=1  (CARGO_BUILD_JOBS=6)
+useitem.rs sha256=c8a217e02c9b5c99f4cdfd548bf04be8075ba37f76fbf873e7f03ede49c203c8
+
+M1_unbind_count: red_rc=101 red_failed=True green_rc=0 green_ok=True
+M2_unbind_dura: red_rc=101 red_failed=True green_rc=0 green_ok=True
+Z4_gate_removed: red_rc=101 red_failed=True green_rc=0 green_ok=True
+Z5_layer_removed: red_rc=101 red_failed=True green_rc=0 green_ok=True
+Z6_notice_equal_stubbed: red_rc=101 red_failed=True green_rc=0 green_ok=True
