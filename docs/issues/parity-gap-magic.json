@@ -284,13 +284,22 @@
         "line": 175,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_fireball5",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/fireball-5.json（C# oracle 生成，同 rig 换 magic_id=5）",
+        "cases": [
+          "miss(seed=1)",
+          "edge(seed=5)",
+          "hit(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::fireball5_parity_miss",
+          "tests::fireball5_parity_edge",
+          "tests::fireball5_parity_hit"
+        ]
       },
       "cost": "S",
       "deviation": null,
