@@ -1,0 +1,7 @@
+# ts=2026-11-20T01:33:57+08:00
+# restored (Program.cs sha256 == baseline)
+# expect: ok=True
+=== stderr ===
+=== stdout ===
+DRAIN_SELFTEST ok=True always_full(passes=8,hitCap=True) one_pass(passes=1,hitCap=False) none(passes=0,hitCap=False) maxPasses=8
+# rc=0

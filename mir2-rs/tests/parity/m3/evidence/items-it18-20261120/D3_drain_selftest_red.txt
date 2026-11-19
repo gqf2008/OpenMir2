@@ -1,0 +1,7 @@
+# ts=2026-11-20T01:33:56+08:00
+# mutated: DrainPassLoop does not set hitCap on cap
+# expect: ok=False
+=== stderr ===
+=== stdout ===
+DRAIN_SELFTEST ok=False always_full(passes=8,hitCap=False) one_pass(passes=1,hitCap=False) none(passes=0,hitCap=False) maxPasses=8
+# rc=1

@@ -1,0 +1,16 @@
+# ts=2026-11-20T01:32:51+08:00
+# filter=useitem::tests::z5_single_layer_red
+# restored (sha256 == sha_before)
+# expect: ok
+=== stderr (cargo/build) ===
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.68s
+     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
+=== stdout (test harness) ===
+
+running 1 test
+test useitem::tests::z5_single_layer_red ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
+
+# rc=0
