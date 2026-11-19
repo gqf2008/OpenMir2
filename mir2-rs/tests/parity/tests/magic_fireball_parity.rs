@@ -331,6 +331,17 @@ fn ledger_dir() -> std::path::PathBuf {
 ///
 /// 防空转：任一份台账缺失/不是合法 JSON/不是恰 1 个 case/`Label` 不符 ⇒ 红（不静默跳过）。
 /// **标签参数化只换"取哪几份台账"**：`verify` 与逐字段比对逻辑一行未改。
+///
+/// **空转防线（卡 §28，2026-11-20 牙 A 假绿事件后加）**：每份台账旁必须有 sidecar
+/// `<stem>_<label>.run.json`（驱动写，`{"run_id","seed"}`），且其 `run_id` 必须等于**本次**环境
+/// 变量 `MIR2_LEDGER_RUN_ID`。驱动与比较器用同一个 id 运行：
+/// ```text
+/// $env:MIR2_LEDGER_RUN_ID = "<时间戳+随机串>"
+/// cargo test -p game-svr --lib tests::<drive> -- --exact --ignored --test-threads=1
+/// cargo test -p mir2-parity-tests --test magic_fireball_parity -- --ignored --exact <用例名>
+/// ```
+/// 侧车缺失或 id 不符 ⇒ 红并提示「台账陈旧/驱动未跑」；**不设环境变量 ⇒ 红**（fail-closed），
+/// 专门拦「驱动编译失败、比较器读上一次台账还绿」这类空转。
 fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
@@ -344,6 +355,25 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
                 path.display()
             )
         });
+        // **空转防线（卡 §28）**：台账必须来自**本次**驱动运行。
+        let want = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+        assert!(
+            !want.is_empty(),
+            "未设置 MIR2_LEDGER_RUN_ID：比较器必须与驱动用同一 id（卡 §28 空转防线）"
+        );
+        let side = path.with_extension("run.json");
+        let side_text = std::fs::read_to_string(&side).unwrap_or_else(|e| {
+            panic!(
+                "防空转：台账缺 run.json 侧车 {}（{e}）——多见于「驱动未跑/编译失败，读到上一次的陈旧台账」；用同一 MIR2_LEDGER_RUN_ID 重跑驱动",
+                side.display()
+            )
+        });
+        let side_v: Value = serde_json::from_str(&side_text).expect("run.json 必须是合法 JSON");
+        assert_eq!(
+            side_v.get("run_id").and_then(Value::as_str),
+            Some(want.as_str()),
+            "[{label}] 台账陈旧：run_id 不匹配（当前环境 = {want}）；先用同一 id 重跑驱动"
+        );
         let v: Value = serde_json::from_str(&text).expect("防空转：台账必须是合法 JSON");
         let arr = v.as_array().expect("防空转：台账必须是 [case] 数组");
         assert_eq!(arr.len(), 1, "[{label}] 每支台账恰 1 个 case");
@@ -366,6 +396,17 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
 
 fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
+}
+
+/// **`29 群体治愈术`（`SKILL_BIGHEALLING`）**真实台账 → 判定面（标签 heal/full/both）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::big_healing_parity_*）生成真实台账"]
+fn real_rust_ledger_bighealing() {
+    real_ledger_verify_labels(
+        "bighealing",
+        &golden_file("bighealing.json"),
+        &["heal", "full", "both"],
+    );
 }
 
 /// **`18 隐身术`（`SKILL_CLOAK`）**真实台账 → 判定面（标签 s1/s5/s13）。

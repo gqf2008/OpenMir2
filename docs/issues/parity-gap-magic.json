@@ -976,17 +976,26 @@
         "line": 443,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_bighealing",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/bighealing.json（C# oracle 生成；heal/full/both）",
+        "cases": [
+          "heal(seed=1)",
+          "full(seed=5)",
+          "both(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::big_healing_parity_heal",
+          "tests::big_healing_parity_full",
+          "tests::big_healing_parity_both"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。3×3 有序枚举、只治 `HP<MaxHP` 的 proper friend（夹具 N=2：caster+target；`both` 支两条 8034）；**窗口内不回血、不产 53**（到点只累计 IncHealing）；**`AbilSeeHealGauge`(1103) 未覆盖**（Level=1 恒 false，显式排除）。卡 §27。"
     },
     {
       "id": "MG-41",

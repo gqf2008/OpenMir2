@@ -114,6 +114,7 @@ public static class Program
             if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" });
             if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
             if (name == "cloak") return BehaviorBatch(new MagicSpec { Key = "cloak", MagicId = 18, MagicName = "Cloak", ArmRingAmulet = true });
+            if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -492,6 +493,9 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public int TargetMaxHp = 100;
         public int AntiMagic = 3;
         public bool ArmRingAmulet;
+        /// <summary>`MagBigHealing` 的「多朋友」支要求施法者自身也 HP&lt;MaxHP（`0` = 不设）。</summary>
+        public int CasterHp;
+        public int CasterMaxHp;
         /// <summary>
         /// 排水前的等待（ms）。必须 > 该支最长自延迟，否则到点消息只进 `NotDue`
         /// （`now/delivery` 是墙钟、不可比拼），到点产生的帧会缺失。
@@ -499,6 +503,45 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         /// 该值写进 golden 的 `Fixture.wait_ms`，Rust 侧推进量取同值。
         /// </summary>
         public int WaitMs = 1200;
+    }
+
+    /// <summary>
+    /// 29 群体治愈术：三案按行为分支取（不是 miss/edge/hit）——
+    /// `heal`（目标 50/224！登录序 MaxHP=224）、`full`（224/224 ⇒ 无 8034）、
+    /// `both`（施法者 50/100 + 目标 50/224 ⇒ **两个** proper friend 各一条 8034，覆盖 (d) 的
+    /// 多朋友枚举序/条数）。`UserMagic.Level=1` ⇒ `AbilSeeHealGauge=false` ⇒ **1103 分支不覆盖**
+    /// （卡面显式登记）。
+    /// </summary>
+    private static int BigHealingBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var heal = RunMagicCase(spec, "heal", 1, 1000, 50, false);
+        var full = RunMagicCase(spec, "full", 5, 2000, 224, false);
+        var bothSpec = new MagicSpec
+        {
+            Key = spec.Key,
+            MagicId = spec.MagicId,
+            MagicName = spec.MagicName,
+            Effect = spec.Effect,
+            EffectType = spec.EffectType,
+            UserMagicLevel = spec.UserMagicLevel,
+            CasterLevel = spec.CasterLevel,
+            CasterMc = spec.CasterMc,
+            CasterSc = spec.CasterSc,
+            TargetLevel = spec.TargetLevel,
+            TargetMaxHp = spec.TargetMaxHp,
+            AntiMagic = spec.AntiMagic,
+            ArmRingAmulet = spec.ArmRingAmulet,
+            WaitMs = spec.WaitMs,
+            CasterHp = 50,
+            CasterMaxHp = 100,
+        };
+        var both = RunMagicCase(bothSpec, "both", 13, 3000, 50, false);
+        return EmitGolden(spec, new[] { heal, full, both });
     }
 
     /// <summary>
@@ -648,6 +691,12 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         caster.Abil.Level = (byte)spec.CasterLevel;
         caster.WAbil.MC = (ushort)spec.CasterMc;
         caster.WAbil.SC = (ushort)spec.CasterSc;
+        if (spec.CasterHp > 0)
+        {
+            // 29 的「多朋友」支：施法者自身也要 `HP < MaxHP` 才被 `MagBigHealing` 选中。
+            caster.WAbil.HP = (ushort)spec.CasterHp;
+            caster.WAbil.MaxHP = (ushort)spec.CasterMaxHp;
+        }
         var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)spec.AntiMagic };
         target.Abil.Level = (byte)spec.TargetLevel;
         // **真实登录序**（`PlayObject.cs:1308-1309`：`RecalcLevelAbilitys(); RecalcAbilitys();`）：
@@ -798,6 +847,8 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 target_null = targetNull,
                 arm_ring_amulet = spec.ArmRingAmulet,
                 wait_ms = spec.WaitMs,
+                caster_hp = spec.CasterHp,
+                caster_max_hp = spec.CasterMaxHp,
                 caster_xy = new[] { 100, 100 },
                 target_xy = new[] { 101, 100 },
                 obs_in_xy = new[] { 105, 100 },

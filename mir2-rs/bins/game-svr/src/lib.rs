@@ -65833,6 +65833,27 @@ SendRefMsgRange=15
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/magic-parity")
     }
 
+    /// **台账 run_id（空转防线，卡 §28）**：驱动与比较器必须用**同一个**由 harness 传入的 id
+    /// （环境变量 `MIR2_LEDGER_RUN_ID`）。驱动的每个 case 落一份侧车 `<stem>_<label>.run.json`；
+    /// 比较器断言侧车 id == 本次环境变量 —— 专门拦「驱动没跑/编译失败 ⇒ 比较器读上一次的陈旧
+    /// 台账还绿」这类空转（2026-11-20 29 支牙 A 首跑踩到）。
+    fn ledger_run_id() -> String {
+        let id = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+        assert!(
+            !id.is_empty(),
+            "未设置 MIR2_LEDGER_RUN_ID：驱动与比较器都必须用同一 id 运行（卡 §28 空转防线）"
+        );
+        id
+    }
+
+    /// 写 sidecar `<stem>_<label>.run.json`（`{"run_id","seed"}`）。
+    fn write_run_sidecar(out: &std::path::Path, run_id: &str, seed: i32) {
+        let sidecar = out.with_extension("run.json");
+        let v = serde_json::json!({ "run_id": run_id, "seed": seed });
+        std::fs::write(&sidecar, serde_json::to_string_pretty(&v).unwrap())
+            .expect("run.json 必须可写");
+    }
+
     /// rng_trace TSV 的行数（`LineWriter` 逐行 flush ⇒ 运行中读到的一定是完整行）。
     fn trace_line_count(path: &std::path::Path) -> usize {
         std::fs::read_to_string(path)
@@ -66061,6 +66082,7 @@ SendRefMsgRange=15
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let dir = magic_ledger_dir();
         std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
         let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
         assert!(
             !mir2_shared::rng_trace::enabled(),
@@ -66085,6 +66107,28 @@ SendRefMsgRange=15
         let n0 = trace_line_count(&trace);
         let caster = rig.caster;
         let target = fireball_actor(&rig, "target");
+        // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
+        // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
+        // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
+        if magic_id == 29 {
+            let thp = golden_fixture_u64(stem, label, "target_hp", 100) as u16;
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.hp = thp;
+            e.vitals.max_hp = 224;
+            let sg = rig.ground_sessions.get_mut("target").unwrap();
+            sg.state.wabil.hp = thp;
+            sg.state.wabil.max_hp = 224;
+            let chp = golden_fixture_u64(stem, label, "caster_hp", 0) as u16;
+            if chp > 0 {
+                let cmax = golden_fixture_u64(stem, label, "caster_max_hp", 100) as u16;
+                let ce = rig.world.entities.get_mut(caster).unwrap();
+                ce.vitals.hp = chp;
+                ce.vitals.max_hp = cmax;
+                let csg = rig.ground_sessions.get_mut("caster").unwrap();
+                csg.state.wabil.hp = chp;
+                csg.state.wabil.max_hp = cmax;
+            }
+        }
         let hp_before = rig.world.entities.get(target).unwrap().hp;
 
         // ---- 段①：生产入口施法 ----
@@ -66130,6 +66174,16 @@ SendRefMsgRange=15
             .iter()
             .find(|m| m.ident == mir2_world_bevy::slave::RM_DELAYPUSHED && m.actor_id == caster)
             .map(|m| (m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
+
+        // **治愈类 `RM_MAGHEALING(8034)`**：交付前抓全部（29 可能有多个 proper friend 各一条；
+        // 2 治愈走自己的驱动，不受影响）。
+        let maghealing_msgs: Vec<(i32, i32, u8)> = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .filter(|m| m.ident == mir2_world_bevy::slave::RM_MAGHEALING)
+            .map(|m| (m.actor_id, m.n_param1, m.priority))
+            .collect();
 
         // **28 的 `RM_DOOPENHEALTH(8040)`**：交付前从**目标**的自延迟队列抓（prio=255、late）。
         let open_health_msg = rig
@@ -66401,6 +66455,20 @@ SendRefMsgRange=15
                 ));
             }
         }
+        // `RM_MAGHEALING(8034)`：每个「HP<MaxHP 的 proper friend」一条（p1=nPower、prio=255、late）。
+        for (actor, power, prio) in &maghealing_msgs {
+            if let Some(who) = who_of(*actor) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    8034,
+                    0,
+                    i64::from(*power),
+                    0,
+                    0,
+                    i64::from(*prio),
+                    true,
+                ));
+            }
+        }
         // `RM_CHARSTATUSCHANGED(10139)`（18 隐身术）：`StatusChanged()` 的 `SendRefMsg` ⇒
         // 收件人 = 施法者 ±`SendRefMsgRange` 的玩家（含自）、prio=155、late=false、p1=CharStatus。
         // 来源 = 内部观测面 `World::status_changes`（**不由 SM 657 反推**）。
@@ -66544,6 +66612,7 @@ SendRefMsgRange=15
 
         let out = dir.join(format!("{stem}_{label}.json"));
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
         eprintln!(
             "[fireball {label}] seed={seed} rng(cast)={:?} rng(deliver)={:?} hp {hp_before}->{hp_after} \
              frames/socket: caster={} target={} obs_in={} obs_out={} → {}",
@@ -66988,6 +67057,7 @@ SendRefMsgRange=15
         }]);
         let out = dir.join(format!("healing_{label}.json"));
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &ledger_run_id(), seed);
         eprintln!("[healing {label}] seed={seed} → {}", out.display());
     }
 
@@ -67322,6 +67392,19 @@ SendRefMsgRange=15
         mir2_protocol::edcode::decode(tail.as_bytes())
     }
 
+    /// 金标准 `Fixture` 的某个整数字段（缺省回落，兼容旧 golden）。
+    fn golden_fixture_u64(stem: &str, label: &str, key: &str, default: u64) -> u64 {
+        let file = match stem {
+            "fireball5" => "fireball-5.json".to_string(),
+            "lightning11" => "lightning-11.json".to_string(),
+            "lightning45" => "lightning-45.json".to_string(),
+            other => format!("{other}.json"),
+        };
+        golden_case(&file, label)["Fixture"][key]
+            .as_u64()
+            .unwrap_or(default)
+    }
+
     /// 取金标准某支（`golden/magic/<file>`）的 case。
     fn golden_case(file: &str, label: &str) -> serde_json::Value {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -67495,6 +67578,144 @@ SendRefMsgRange=15
         assert_eq!(
             rust_abil, gold_abil,
             "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
+        );
+    }
+
+    /// **`29 群体治愈术`**（`SKILL_BIGHEALLING`，`MagicManager.cs:443-449` / helper `:54-76`）驱动。
+    ///
+    /// 三案按行为分支（不是 miss/edge/hit）：`heal`（目标 50/224）、`full`（224/224）、
+    /// `both`（施法者 50/100 + 目标 50/224 ⇒ 3×3 里**两个** proper friend 各一条 8034）。
+    /// **夹具几何**：点击 (101,100) 的 3×3 = (100..102)×(99..101)，其中只有 caster(100,100) 与
+    /// target(101,100) 两个在线玩家 ⇒ friend 数 N=2；`heal` 只治 target（caster 满血）⇒ 8034 条数=1，
+    /// `both` ⇒ 条数=2（`MagBigHealing` 按 `GetMapBaseObjects` 枚举序逐 friend 排 800ms 自延迟）。
+    ///
+    /// **口径（卡 §27，领导要求写死）**：本支窗口内**不回血、不产 53**——`RM_MAGHEALING` 到点只累计
+    /// `IncHealing/PerHealing`（`PlayObject.Message.cs:1619-1629`），实际回血在后续 `Run` 的恢复周期；
+    /// 判据 = RM 8034 的条数/载荷 + RNG 抽数 + 帧集合。
+    /// **`AbilSeeHealGauge` 分支（1103）未覆盖**：`UserMagic.Level=1` 恒 false；本支 verified 的覆盖
+    /// 声明**不含** 1103（显式登记，不含糊）。
+    #[allow(clippy::too_many_arguments)] // 期望值逐项显式给出（帧序/HP/抽数/被治者），便于核卡
+    fn big_healing_assert(
+        stem: &str,
+        label: &str,
+        seed: i32,
+        base: i32,
+        hp_before: i64,
+        rng_len: usize,
+        caster_frames: &[i64],
+        heal_targets: &[&str],
+    ) {
+        fireball_parity_drive(stem, 29, 15, 1, label, seed, base);
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let c = &v[0];
+        assert_eq!(
+            c["TargetHpBefore"].as_i64(),
+            Some(hp_before),
+            "[{stem}/{label}] 目标 HP 前"
+        );
+        assert_eq!(
+            c["TargetHp"].as_i64(),
+            Some(hp_before),
+            "[{stem}/{label}] 窗口内不回血 ⇒ HP 不变"
+        );
+        assert_eq!(
+            c["Rng"].as_array().unwrap().len(),
+            rng_len,
+            "[{stem}/{label}] 施法段 RNG 抽数"
+        );
+        b1_golden_drain_assert("bighealing.json", label, 2);
+        let cv = defence_case(stem, label);
+        let n = |who: &str, field: &str, ident: i64| healing_count(&cv, who, field, ident);
+        // caster 帧序：heal/both `[638,640]`、full `[638]`。
+        let seq: Vec<i64> = cv["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["ident"].as_i64())
+            .collect();
+        assert_eq!(seq, caster_frames, "[{stem}/{label}] caster 帧序");
+        // 目标/观测者：cast 帧 `[17,638]`，且**窗口内无 53**。
+        for who in ["target", "obs_in"] {
+            let s_: Vec<i64> = cv["Receivers"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["Who"] == who)
+                .unwrap()["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|m| m["ident"].as_i64())
+                .collect();
+            assert_eq!(s_, vec![17, 638], "[{stem}/{label}] {who} 帧序");
+            assert_eq!(n(who, "Sent", 53), 0, "[{stem}/{label}] {who} 不得有 53");
+        }
+        // 8034：按 `heal_targets` 逐 actor 恰 1 条（多朋友时条数 = N）。
+        for who in ["caster", "target", "obs_in"] {
+            let want = usize::from(heal_targets.contains(&who));
+            assert_eq!(
+                n(who, "Rm", 8034),
+                want,
+                "[{stem}/{label}] {who} 的 8034 条数（N={}）",
+                heal_targets.len()
+            );
+        }
+        // 640 / 10123：仅当 `boTrain`（至少一个被治）⇒ caster。
+        let trained = usize::from(!heal_targets.is_empty());
+        assert_eq!(n("caster", "Sent", 640), trained, "[{stem}/{label}] 640");
+        assert_eq!(
+            n("caster", "Rm", 10123),
+            trained,
+            "[{stem}/{label}] RM 10123"
+        );
+        assert_eq!(
+            n("obs_out", "Sent", 17),
+            0,
+            "[{stem}/{label}] obs_out 不得有帧"
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn big_healing_parity_heal() {
+        big_healing_assert(
+            "bighealing",
+            "heal",
+            1,
+            1000,
+            50,
+            5,
+            &[638, 640],
+            &["target"],
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn big_healing_parity_full() {
+        big_healing_assert("bighealing", "full", 5, 2000, 224, 4, &[638], &[]);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn big_healing_parity_both() {
+        big_healing_assert(
+            "bighealing",
+            "both",
+            13,
+            3000,
+            50,
+            5,
+            &[638, 640],
+            &["caster", "target"],
         );
     }
 
