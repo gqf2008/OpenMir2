@@ -445,3 +445,21 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 复跑：`cargo test -p mir2-parity-tests --test magic_fireball_parity`（6 例）。
 **已知局限（写死）**：以上证明的是"篡改副本必红"；**真实驱动台账接上后，必须再确认
 "清单外的真实 site 会红"**（现在只证明了"把已知 good 的 site 改成清单外会红"）。
+
+### 22. 现成夹具 `SpellFrameRig`（驱动最后一处弯路已消除）
+
+`lib.rs:64775` 的 `SpellFrameRig` 已具备火球所需的**全部**结构：
+
+- `SpellFrameRig::new(learned, &[(magic_id, effect)], observers: &[(&str, x, y, ghost, socket)])`
+  —— caster 固定 (10,10)/socket 911；观察者按参数建实体并登记 `OnlineRegistry`（各自 socket）；
+- 字段：`world / caster / online / saves / ground_sessions / magic_table / displays / gates / rx`；
+- 帧：`rx`（`mpsc::UnboundedReceiver<SimToGate>`），`SendFrame { socket, body }` 可按 socket 归属；
+- 先例 `b2_rig`（`lib.rs:70049`）已演示如何落属性：`world.entities.get_mut(id)` 改
+  `progression.level / vitals.hp / max_hp`，`ground_sessions["caster"].state.wabil.mc/level`。
+
+**火球夹具因此只需**：`SpellFrameRig::new(1, &[(1,1)], &[("target",11,10,false,912),
+("obs_in",15,10,false,913),("obs_out",60,10,false,914)])`
+→ 覆盖 `magic_table`（effect=1/effect_type=1）→ target `anti_magic=3 / vitals.hp=100`
+→ caster `state.wabil.mc=15 / level=30` → `world.rng = RandomNumber::with_seed(seed)`
+→ `rng_trace::enable(path, seed)`（同 seed）→ 记 `n0` → `handle_spell_cmd(...)` → 记 `n1`
+→ 从 `rx` 按 socket 归集 SM、从 TSV 取 `n0..n1` 的 RNG 行 → 组装与金标准同构的台账 JSON。
