@@ -67,9 +67,27 @@ dotnet test --filter FullyQualifiedName~GateUtf8BodyLengthTest
    当长度 ⇒ 红。
    （测试进程需 `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`，与各服务 `Program.cs` 同口径。）
 
-### 待办（R 级证据）
+### 待办（R 级证据）——先回答"证据从哪里取"
 
-- 窗口对拍：中文角色名/中文聊天样本的**逐字节**对拍（C# 与 Rust 同源构建）。
+**判断（先写死口径）**：Rust 侧本来就是字节口径，这份证据的价值是
+**"证明 C# 修完后与 Rust 逐字节一致"**，**不是**"证明 Rust 有 bug"。后来人不得把它读成 Rust 有问题。
+
+**现实约束**：m1-stack 跑的是 **Rust 三网关**，C# `GameGate` 不在该栈里；且生产今天唯一进入
+`SendServerMsg` 的非空正文是 `UserEnter` 的 **IP（ASCII）**。因此：
+
+1. **桌面跨栈 golden（首选，无需任何栈/窗口）**：
+   - C#：`TestProject1` 用**生产函数** `ClientThread.BuildServerFrame` 对样本表
+     `[空, "127.0.0.1", "中文角色", "热血传奇", 混合串]` 产出十六进制帧 → golden
+     （C# 是 oracle，golden 由它生成）；
+   - Rust：`game-gate` 测试用 `ServerMessage::to_bytes` + `gbk::encode`（模块注释：逐字节等于
+     .NET cp936）拼同构帧，`include_str!` 读同一批 golden，逐字节断言相等；
+   - 进程清单/端口/MySQL/客户端：**都不需要**（纯函数对拍）。
+2. **真机抽证（可选）**：m1-stack 已在跑 Rust 网关，用现成捕获（`tools/gw-capture`）在 5000 侧抓
+   `GM_OPEN` 帧（ASCII IP 正文），与第 1 级同 IP 样本的 golden 逐字节比。不需要额外起
+   MySQL/DBSrv，也不需要真实客户端（一个 bot/客户端连接即可触发 `UserEnter`）。
+3. **非 ASCII 的"真机"证据不可得**：今天没有可达入口把中文送进 `SendServerMsg`；中文样本只能由
+   第 1 级的合成输入证明。**把它写清楚，比伪造一个窗口诚实。**
+
 - **证据到位前不合并**（opc-07 约束：先补票后上车）。
 
 ### 范围核查
