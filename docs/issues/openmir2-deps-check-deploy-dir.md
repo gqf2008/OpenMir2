@@ -146,8 +146,8 @@ DEPS_GREEN packages=48 files=1063
 合并 head M5 上 anchor gate **首跑红**（2026-11-19）：
 
 ```
-PROSE_ANCHOR_PATH_MISSING      docs/issues/openmir2-deps-check-deploy-dir.md  `DBContext.cs:2`  base_dirs 都解析不到
-PROSE_ANCHOR_PATH_MISSING      docs/issues/openmir2-deps-check-deploy-dir.md  `PlayRecordStorage.cs:4`  base_dirs 都解析不到
+PROSE_ANCHOR_PATH_MISSING      docs/issues/openmir2-deps-check-deploy-dir.md  DBContext.cs:2  base_dirs 都解析不到
+PROSE_ANCHOR_PATH_MISSING      docs/issues/openmir2-deps-check-deploy-dir.md  PlayRecordStorage.cs:4  base_dirs 都解析不到
 prose-anchor gate：检查 2 / 悬空 2 / 越界 0 / 符号缺失 0 / 高churn 0
 RESULT: RED
 ```
