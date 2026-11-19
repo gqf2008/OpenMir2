@@ -11,7 +11,7 @@
 
 | # | 42 草案 | 本文件 | 依据 |
 |---|---|---|---|
-| G1 | 延时通知「按**优先级序**比」 | 改为**七字段多重集**比较（`ident,wParam,p1,p2,p3,priority,late`），不比顺序 | QA 清单 L2；魔法线 §22b「RM 顺序是堆布局产物」；`PriorityQueue` 同键序非行为契约 |
+| G1 | 延时通知「按**优先级序**比」 | 改为**按 `(priority, ident, 规范化 params)` 排序后的序列**逐位比（比纯多重集严、比原始到达序松）；重复条目计数；报告同 priority 内多 ident | QA 清单 L2；`opc-07` 2026-11-20 定死；魔法线 §22b「RM 顺序是堆布局产物」 |
 | G2 | 通知面列 `10052/10115/10309` | 补全为 `8102/10052/10115/10139/10309/11004`（现测并集） | 夹具 `eat_vectors.json` 实测；常量见 `useitem.rs` 顶部 |
 | G3 | 通知字段 = 5 元组 | 补 `priority`（`TryDequeue` 出队键）与 `late`（`SendMessage.LateDelivery`）⇒ 七字段 | QA L2；`eat-probe` 现只记 5 字段 |
 | G4 | 「抽空为止」仅写 `MaxDrainPasses=8` | 明确产物须带 **`DrainPasses` + `DrainPassesHitCap`**，`HitCap=true` ⇒ **红/显式 WARN**，禁静默 | QA D1/D2/D3；`eat-probe` 现为单趟无上限 `Drain` |
@@ -65,7 +65,7 @@
       { "ident":635, "recog":0, "param":0,  "tag":0,  "series":0,  "tail":"" }
     ],
     "added_items": [ /* 新增：解包产物结构化（生成序），与 SM_ADDITEM 一一对应 */ ],
-    "notices": [ /* 七字段多重集；顺序不参与判据 */
+    "notices": [ /* 七字段；按 (priority,ident,规范化 params) 排序后逐位比；重复条目计数 */
       { "ident":.., "w_param":.., "n_param1":.., "n_param2":.., "n_param3":..,
         "priority":.., "late":0|1 }
     ],
@@ -93,14 +93,19 @@
 ### 4.1 账本双面（L）
 - **L1 即时帧严格序**：`immediate_frames` 按 `ident/param/tag/series/tail` **逐帧按序**相等；顺序错即红。
   `SM_ADDITEM(200)` 的尾串（`EDCode.EncodeBuffer(ClientItem)`）另由结构化 `added_items` 逐字段钉住。
-- **L2 通知多重集**：`notices` 七字段排序后按多重集相等；**缺/多双向**逐条报；顺序**不**参与判据（G1）。
+- **L2 通知排序序列**（`opc-07` 2026-11-20 定死）：`notices` 按 `(priority, ident, 规范化 params)`
+  排序（同键组再按 `late` 定序，使全序唯一）后**逐位逐字段**比；**重复条目必须计数**（两条全等 ⇒ 必须两条）；
+  报告须**额外汇总「同 priority 内是否存在多个不同 ident」**（供裁定是否需要单列同优先级内序）。
+  为什么不是纯多重集：多重集对顺序完全不敏感，priority 互换仍相等，而优先级决定客户端处理先后（玩家可见）；
+  为什么不是原始到达序：`PriorityQueue` 同优先级内次序在 oracle 侧不稳定，比它等于测抖动。
 - **L3 状态量一级**：全部从 `UseItemActorState`/`ItemList`/`item_number` 直读，**禁止**从 `SM_*` 参数反推。
 - **L4 增删对称差为空**：`ItemList` 终态比较两侧「golden 有 rust 无」与「rust 有 golden 无」都为 0。
 - **L5 墙钟字段排除**：见 §3 排除清单，卡/报告须写明。
 - **L6 RNG 账本**：总量==夹具长度（不截断）、`seq` 连续、逐次 `result` 相等、每行 `site` ∈
   **代码里的允许清单**（清单外红）。物品线的 `site` 允许清单**逐条写理由**，随首条抽数条目落定；
   `file!()` 的 `\` 落盘前统一 `/`（沿用魔法线口径 C）。
-  **0 抽条目**：`rng=[]` 合法，但**必须配一个非零正锚**（HP 差/帧数/ItemList 差），否则 Z4 红。
+  **0 抽条目**：`rng=[]` 合法，但**必须配一个非零正锚**（HP 差/帧数/ItemList 差），否则 Z4 红；
+  且**正锚要能咬**：给一条负例——人为让该路径抽 1 次 ⇒ 该条必须红（证明「0 抽」是被核过的，不是没核）。
 
 ### 4.2 防空转（Z）
 - **Z1 空输入必红**：空 `cases` / 空 `expect` / 空 `notices`（对**应有多条**的条目）/ 空夹具 ⇒ 比较器非 0 且点名。
@@ -112,7 +117,8 @@
 
 ### 4.3 抽空为止（D）
 - **D1 上限可见**：每 case 落 `drain.passes` / `drain.max_passes=8` / `drain.hit_cap`，另有 stderr `DRAIN_PASSES` 行。
-- **D2 命中上限不是绿**：`hit_cap=true` ⇒ 比较器**红或显式 WARN 并进报告**；静默通过 = FAIL。
+- **D2 命中上限必红**：`hit_cap=true` ⇒ 比较器**必须红**（`opc-07` 2026-11-20 定死，**不接受 WARN**——
+  物品线没有「丢帧继续」的正当理由，与任务线同口径）；静默通过 = FAIL。
 - **D3 禁固定趟数冒充**：每 case 记**实际**趟数，不得保留「固定 N 趟」旧口径。
 
 > **物品线的诚实说明**：`eat-probe` 现只**排空队列、不跑 `Operate`**（通知是「已入队未投递」快照）。
@@ -145,7 +151,9 @@
 
 | 用例 | 改哪份副本 | 怎么改 | 期望红在哪条断言 |
 |---|---|---|---|
-| `tooth_notice_priority_changed_red` | 内存里的 `case.expect.notices` 克隆 | 翻转一条 `priority`（或 `late`） | L2 通知多重集不等 |
+| `tooth_notice_priority_changed_red` | 内存里的 `case.expect.notices` 克隆 | 翻转一条 `priority`（或 `late`） | L2 排序序列不等 |
+| `tooth_notice_duplicate_count_red` | 同上 | 复制一条全等通知（两处都加）/或删一条重复项 | L2 重复计数（多重集语义） |
+| `tooth_notice_same_priority_ident_swap_red` | 同上（构造同 priority、不同 ident 的两条） | 只互换两条的 `ident`（priority 不变） | L2 按 `(priority,ident,params)` 排序后逐位不等 |
 | `tooth_immediate_order_swap_red` | 内存里的 `expect.immediate_frames` 克隆（对有多帧的条目） | 交换两条 `SM_ADDITEM` / 把 `SM_EAT_OK` 提到前面 | L1 即时帧严格序 |
 | `tooth_state_field_changed_red` | 内存里的 `expect.wabil`/`item_list` 克隆 | 改一个 HP 或删一件物品 | L3/L4 状态量一级 / 对称差 |
 
