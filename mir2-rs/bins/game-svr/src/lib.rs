@@ -25,6 +25,10 @@
 // 合并进 lib 后，把 crate 自身绑成同名，使这些路径与 `crate::xxx` 等价。
 extern crate self as game_svr;
 
+/// **NPC 多观察者 AOI 金标准**（卡 `openmir2-npc-multiobserve-golden`；测试专用：读入/校验/比较）。
+#[cfg(test)]
+mod aoi_golden;
+
 mod auth;
 mod cert;
 mod clock;
