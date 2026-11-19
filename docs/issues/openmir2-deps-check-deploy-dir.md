@@ -180,7 +180,7 @@ RESULT: GREEN
 
 | 编号 | 改什么 | 怎么改 | 期望红在哪 | 还原 |
 |---|---|---|---|---|
-| T1 | 部署副本 `MemoryPack.Core.dll` | 翻末字节 | `DEPS_RED DEPLOYED_SHA_MISMATCH MemoryPack.Core/1.10.0 MemoryPack.Core.dll expected=<原 sha256> actual=<翻字节后 sha256>` | 复原后全绿 |
+| T1 | 部署副本 `MemoryPack.Core.dll` | 翻末字节 | `DEPS_RED DEPLOYED_SHA_MISMATCH MemoryPack.Core/1.10.0 MemoryPack.Core.dll expected=101f0cfbf844d0277b41cdff67bbb33f90e75dbe094387c321300e1434576bee actual=<翻字节方式以 QA 重放为准，前缀 8e137a6f…>` | 复原后全绿 |
 | T2 | 部署副本 `Microsoft.Extensions.Logging.dll` | 删除 | `DEPS_RED MISSING_DEPLOYED Microsoft.Extensions.Logging/8.0.0` | 复原后全绿 |
 | T3 | 部署副本 | 新增 `Stray.Third.Party.dll` | `DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll` | 复原后全绿 |
 | T4a | 删 Logging.dll + manifest 副本加匹配例外 | 见左 | `DEPS_EXCEPTION …` + `DEPS_GREEN`（证明例外**只**压制 `MISSING_DEPLOYED`） | 复原后全绿 |
@@ -188,9 +188,9 @@ RESULT: GREEN
 | T5 | 部署目录 | 改成缺目录 / 空目录 | `MISSING_DEPLOY_DIR` / `EMPTY_DEPLOY_DIR` | 复原后全绿 |
 ### 统一整改（C4–C6）
 
-- **C4 `built_at`**：本族交付件的 `built_at` 口径**已由 `docs/issues/openmir2-stamp-built-at-single-source.md`
-  承接**——戳的 `built_at` 必须等于二进制自报的 `built_at`（单一来源），mtime 只作元数据、不参与比对；
-  M9 四件按 `CONDITIONAL`（身份可证、语义待统一）。
+- **C4 `built_at`（裁定正文，引用不指向未合并分支）**：戳的 `built_at` 必须等于**二进制自报**的
+  `built_at`（单一来源）；文件 mtime 只作元数据、**不参与比对**；闸门断言"自报 == 戳"。
+  M9 四件因自报与戳相差 5 秒判 `CONDITIONAL`（身份可证、语义待统一），不算 FAIL。
 - **C5 `SHA256SUMS`**：冻结件采用**双清单口径**——`SHA256SUMS.txt`（历史格式，带 `N bytes`，不改写）+
   `SHA256SUMS.sha256`（`sha256sum -c` 兼容，`<sha>  <相对路径>`）；两者用途差异写在 `PROVENANCE.txt`。
 - **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；

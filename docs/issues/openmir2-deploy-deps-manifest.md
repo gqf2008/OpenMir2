@@ -117,9 +117,9 @@ check    src/LoginSrv → DEPS_GREEN packages=48 files=1063
   原样写入本卡**（本批未凭空补写）。
 ### 统一整改（C4–C6）
 
-- **C4 `built_at`**：本族交付件的 `built_at` 口径**已由 `docs/issues/openmir2-stamp-built-at-single-source.md`
-  承接**——戳的 `built_at` 必须等于二进制自报的 `built_at`（单一来源），mtime 只作元数据、不参与比对；
-  M9 四件按 `CONDITIONAL`（身份可证、语义待统一）。
+- **C4 `built_at`（裁定正文，引用不指向未合并分支）**：戳的 `built_at` 必须等于**二进制自报**的
+  `built_at`（单一来源）；文件 mtime 只作元数据、**不参与比对**；闸门断言"自报 == 戳"。
+  M9 四件因自报与戳相差 5 秒判 `CONDITIONAL`（身份可证、语义待统一），不算 FAIL。
 - **C5 `SHA256SUMS`**：冻结件采用**双清单口径**——`SHA256SUMS.txt`（历史格式，带 `N bytes`，不改写）+
   `SHA256SUMS.sha256`（`sha256sum -c` 兼容，`<sha>  <相对路径>`）；两者用途差异写在 `PROVENANCE.txt`。
 - **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；

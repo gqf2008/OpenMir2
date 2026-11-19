@@ -146,15 +146,7 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 > 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
 
 - 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`、`packlen-rust-test.log`、`RUNS.txt`）；
-- **Rust 测试原文**（`mir2-rs/bins/game-gate/src/lib.rs` 的 `tests::upstream_body_bound_rejects_pathological_lengths`，
-  日志 `E:/UserFleet/evidence-cardfix-20261119/packlen-rust-test.log`）：
-  ```rust
-  assert!(upstream_body_allowed(0));
-  assert!(upstream_body_allowed(MAX_UPSTREAM_BODY));
-  assert!(!upstream_body_allowed(MAX_UPSTREAM_BODY + 1));
-  // pathological = ServerMessage { pack_length: i32::MIN, .. }
-  assert!(!upstream_body_allowed(pathological.body_len()));
-  ```
+- **Rust 侧测试**：`mir2-rs/bins/game-gate/src/lib.rs` 的 `tests::upstream_body_bound_rejects_pathological_lengths`（`lib.rs:2176-2200`）；**原文见实跑日志** `E:/UserFleet/evidence-cardfix-20261119/packlen-rust-test.log`（卡面不再手抄代码块）。
 - **构建命令 + `git status --porcelain` 原文**：`E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`（采集时 porcelain = 0 行）；
 - 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
 - **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
@@ -171,9 +163,9 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 | T4 | Rust 上界 | `len <= MAX_UPSTREAM_BODY` 改成恒真 | `panicked at bins/game-gate/src/lib.rs:2179: assertion failed: !upstream_body_allowed(MAX_UPSTREAM_BODY + 1)` | 复原后全绿 |
 ### 统一整改（C4–C6）
 
-- **C4 `built_at`**：本族交付件的 `built_at` 口径**已由 `docs/issues/openmir2-stamp-built-at-single-source.md`
-  承接**——戳的 `built_at` 必须等于二进制自报的 `built_at`（单一来源），mtime 只作元数据、不参与比对；
-  M9 四件按 `CONDITIONAL`（身份可证、语义待统一）。
+- **C4 `built_at`（裁定正文，引用不指向未合并分支）**：戳的 `built_at` 必须等于**二进制自报**的
+  `built_at`（单一来源）；文件 mtime 只作元数据、**不参与比对**；闸门断言"自报 == 戳"。
+  M9 四件因自报与戳相差 5 秒判 `CONDITIONAL`（身份可证、语义待统一），不算 FAIL。
 - **C5 `SHA256SUMS`**：冻结件采用**双清单口径**——`SHA256SUMS.txt`（历史格式，带 `N bytes`，不改写）+
   `SHA256SUMS.sha256`（`sha256sum -c` 兼容，`<sha>  <相对路径>`）；两者用途差异写在 `PROVENANCE.txt`。
 - **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
