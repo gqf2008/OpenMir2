@@ -279,3 +279,12 @@ A = `Outcome` 回 `exp_delta`，宿主落基础 + 同步（与宿主战斗版 `G
 **A 已实现（`e42c43fdd` 返工）**：`use_item` 不再改 `WAbil.Exp`，回 `Outcome.exp_delta`；宿主 `handle_eat_cmd` 落**基础** `sg.equip.abil.exp`、
 **不同步 `WAbil`**。待补（据此再加证）：①宿主级用例（吃经验书后 `base_exp` 变、`wabil.exp` 未变；触发一次重算后两者相等）；②`SM_WINEXP` 取基础 exp；
 ③oracle 夹具（Shape13 非升级）；④升级支。
+
+### 9.6 宿主同步点与 oracle 触发点对应（IT-08 `WAbil.Exp = Abil.Exp`）
+
+- **oracle 触发点**：登录 ctor（`AbilCopyToWAbil()` 后 `RecalcLevelAbilitys()`→`RecalcAbilitys()`，再显式 `WAbil.Exp = Abil.Exp`）、
+  以及 `AbilCopyToWAbil()` 的全量克隆（`WAbil = Abil.Clone()`）。**吃物品的 `GetExp`（非升级支）不触发**这两条 ⇒ `WAbil.Exp` 陈旧。
+- **宿主对应物**：`recalc_session_ability`（`RecalcAbilitys` 等价，**携带 exp**：`level_ability_base(..abil.clone())`→`..base`→`wabil.exp=abil.exp`）。
+  生产调用事件（同一函数）：登录建会话、取/放装备、升级 downlink、`ChangeLevel`/脚本经验等。
+- **测试 `it08_eat_exp_book_view_stale_then_real_sync_catches_up`**：吃一本/两本（均**不调** recalc）⇒ `WAbil.Exp` 持续陈旧（`base` 变、视图仍旧，**不是**"过一会儿自然相等"）；
+  调**生产** `recalc_session_ability`（非自造函数）⇒ 视图追上。即**触发时机一致**：吃书不同步、登录/升级/换装才同步，与 oracle 同。

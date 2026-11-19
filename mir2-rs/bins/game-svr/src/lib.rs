@@ -53444,6 +53444,140 @@ SendRefMsgRange=15
         );
     }
 
+    /// **IT-08 宿主级：`GetExp` 只改基础 `Abil.Exp`，`WAbil.Exp` 陈旧；仅真实同步点后才追上。**
+    ///
+    /// **同步点等价性**：oracle `WAbil.Exp = Abil.Exp` 在登录 ctor（`RecalcLevelAbilitys()`→`RecalcAbilitys()` 之后）
+    /// 触发；宿主对应物 = `recalc_session_ability`（登录/升级/换装/取放装备等生产事件都调它，见其调用点）。本用例
+    /// **调用的就是这条生产函数**（不自造同步），断言：
+    /// ①吃一本 ⇒ `Abil.Exp += DuraMax`、`WAbil.Exp` 仍旧；②**再吃一本仍陈旧**（不自然相等）；③调 `recalc_session_ability` 后两者相等。
+    #[test]
+    fn it08_eat_exp_book_view_stale_then_real_sync_catches_up() {
+        use std::collections::HashMap;
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            311,
+            mir2_data::StdItem {
+                name: "经验书".into(),
+                std_mode: 3,
+                shape: 13,
+                weight: 1,
+                dura_max: 100,
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(7);
+        sg.equip.abil.exp = 0;
+        sg.equip.abil.max_exp = 10000;
+        sg.state.wabil.exp = 0;
+        sg.state.item_list = (1..=2)
+            .map(|mi| game_svr::bag::BagItem {
+                make_index: mi,
+                index: 311,
+                dura: 0,
+                dura_max: 100,
+                desc: [0; 14],
+            })
+            .collect();
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 7,
+            },
+        );
+        let (tx0, _rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        // ① 吃第一本（make_index=1）。
+        handle_eat_cmd(
+            1,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &colors,
+            None,
+            &unbind,
+            &mut item_number,
+            None,
+            &game_svr::npc::NpcVars::default(),
+            None,
+        );
+        assert_eq!(
+            sessions["hero"].equip.abil.exp, 100,
+            "base Abil.Exp += DuraMax（GetExp 落基础）"
+        );
+        assert_eq!(
+            sessions["hero"].state.wabil.exp, 0,
+            "WAbil.Exp 陈旧（GetExp 未同步视图——oracle 仅登录 ctor 才 WAbil.Exp=Abil.Exp）"
+        );
+        // ② 再吃一本（make_index=2）——仍不触发同步，继续陈旧（不是"过一会儿自然相等"）。
+        handle_eat_cmd(
+            2,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &colors,
+            None,
+            &unbind,
+            &mut item_number,
+            None,
+            &game_svr::npc::NpcVars::default(),
+            None,
+        );
+        assert_eq!(
+            sessions["hero"].equip.abil.exp, 200,
+            "再吃一本 base 继续 += DuraMax"
+        );
+        assert_eq!(
+            sessions["hero"].state.wabil.exp, 0,
+            "第二次吃书后 WAbil.Exp 仍旧陈旧——不会自然相等"
+        );
+        // ③ 真实同步点（登录/升级/换装都走 recalc_session_ability；非自造函数）。
+        let mut sg = sessions.remove("hero").unwrap();
+        let _ = recalc_session_ability(&mut sg, &catalog, None, None);
+        assert_eq!(
+            sg.state.wabil.exp, sg.equip.abil.exp,
+            "recalc_session_ability（宿主 RecalcAbilitys 等价）后 WAbil.Exp 追上基础"
+        );
+        assert_eq!(sg.state.wabil.exp, 200, "追上后的值 = 200");
+    }
+
     /// 本用例故意把 `param`/`tag` 传成**不是** `make_index` 的值（4242）——
     /// 若把派发改成从 `param` 读（或摘掉 `useitem::CM_EAT` 分支），`hit` 找不到 ⇒ 落 `SM_EAT_FAIL`
     /// ⇒ 本用例必红。
