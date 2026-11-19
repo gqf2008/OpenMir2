@@ -416,3 +416,18 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
   ① `ground_sessions["caster"].state.wabil.mc = 15;`（对应金标准 MC=15）
   ② 目标实体 `anti_magic = 3`、`hp = 100`；③ `world.rng = RandomNumber::with_seed(seed)`。
   **不再去找"实体 MC 组件"——它不存在。**
+
+### 19b. 判定面已落地（2026-11-19）：`mir2-rs/tests/parity/tests/magic_fireball_parity.rs`
+
+- **防空转**：金标准缺字段/`cases` 为空/两侧用例数不等 ⇒ 红（两条用例）。
+- **两颗负向牙**：caster `SM_SPELL(17)` 计数 == 0；`obs_out` 的 `Rm`/`Sent` 全空。
+- **逐接收者逐字段**：RM `ident/wParam/p1/p2/p3/priority/late`、SM `ident/param/tag/series` + `tail`。
+- **HP 一级断言**：`TargetHpBefore/TargetHp` 两侧相等。
+- **RNG**：行数、逐次取值、`RngSites` 每行 ∈ `SITE_ALLOWLIST`（代码里的表，逐条带理由）、`RngSeqs` 连续。
+- **咬合证明（三条篡改）已跑通**：塞 `SM_SPELL(17)` ⇒ 红在负向牙①；把某条 site 改成
+  `crates/world-bevy/src/mongen.rs` ⇒ 红在允许清单；删一条 RNG ⇒ 红在行数。
+  `cargo test -p mir2-parity-tests --test magic_fireball_parity` ⇒ **6 passed / 0 failed**
+  （两条防空转 + identity + 三条篡改）。
+- **未完成的部分**：identity 台账是从金标准克隆的（`RngSites/RngSeqs` 为占位），
+  **驱动的真实台账尚未接入** ⇒ `1/5` 仍不得标 `verified`；下一步是火球夹具产出真实台账后
+  把这两侧接上（比较器本身不再改动）。
