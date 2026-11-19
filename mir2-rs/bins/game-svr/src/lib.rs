@@ -12408,7 +12408,11 @@ mod spell_frame_buf_tests {
 /// - `SendRefMsg(RM_STRUCK_MAG)` ⇒ `SM_STRUCK(31)`（167）发给受击者视野内玩家（含受击者自己，
 ///   若它是玩家；怪物无连接）；
 /// - 受击怪物自消息链 `BreakHolySeizeMode → RefNameColor` ⇒ `SM_CHANGENAMECOLOR(656)`（154）
-///   每条命中怪物一条（`ObMode || FixedHideMode` 时抑制）。
+///   每条命中怪物一条（`ObMode || FixedHideMode` 时抑制）；
+/// - 受击玩家把 `RM_STRUCK_MAG` 回投给自己（`PlayObject.Message.cs:1562-1572`）⇒ 对攻击方
+///   `SetPkFlag`（`PlayObject.cs:4326-4341`）命中时由**攻击方** `RefNameColor()`
+///   （`BaseObject.cs:730-733`）发 656（154）——收件人 = 攻击方 ±`SendRefMsgRange` 的玩家
+///   （含攻击方自己；与 oracle `SendRefMsg` 的收件人集合同源）。
 ///
 /// `nDamage == 0` 的目标整段跳过（合同 §2.3(b)：无 53/31/656、不抽 `R(300)`）。
 fn drain_mag_struck_b2(
@@ -12421,6 +12425,11 @@ fn drain_mag_struck_b2(
     const P_HEALTH: u8 = (mir2_protocol::messages::RM_HEALTHSPELLCHANGED & 0xFF) as u8;
     const P_CHANGENAME: u8 = (mir2_protocol::messages::RM_CHANGENAMECOLOR & 0xFF) as u8;
     const P_STRUCKMAG: u8 = (mir2_protocol::messages::RM_STRUCK_MAG & 0xFF) as u8;
+    // 玩家受击触发的 656（见下）在 oracle 里由**受击者自己的下一个队列周期**产生
+    // （`PlayObject.Message.cs:1562-1572` 是自投递的 `RM_STRUCK_MAG` 被出队时执行）
+    // ⇒ 进观察者队列的时刻晚于整批 `RM_STRUCK_MAG` 的 31；本函数把入队推迟到批次结束，
+    // 保持同优先级 31 的四叉堆出队序与 oracle 一致（跨 actor 的投递序本无契约）。
+    let mut hitter_name_colors = Vec::new();
     for o in world.deliver_mag_struck() {
         if o.damage <= 0 {
             continue;
@@ -12474,10 +12483,18 @@ fn drain_mag_struck_b2(
             true,
         );
         buf.push_broadcast(world, online, o.target_id, true, P_STRUCKMAG, &body);
+        if let Some(nc) = o.hitter_name_color {
+            hitter_name_colors.push(nc);
+        }
         if o.name_color {
             let body = smframe::sm_changenamecolor(o.target_id, o.chr_color);
             buf.push_broadcast(world, online, o.target_id, true, P_CHANGENAME, &body);
         }
+    }
+    for nc in hitter_name_colors {
+        // `nc.target_id` = 攻击方（不是受击者）：656 由攻击方 `RefNameColor` 发出，
+        // 收件人按**攻击方**的可见玩家集合算（含攻击方自己）。
+        push_name_color_self(buf, world, online, nc.target_id, nc.color);
     }
 }
 
@@ -70367,7 +70384,10 @@ SendRefMsgRange=15
     }
 
     /// **B2-23（爆裂火焰）**：4 抽 + 交付段逐目标账本（怪物 `R(1000)`+`MSD`+`R(300)`；
-    /// 玩家 `MSD`+`STD R(10)`）；帧序 `638 → 656×3 → 31×4`，受击玩家 `53` 在 `638` 前。
+    /// 玩家 `MSD`+`STD R(10)`）；帧序 `638 → 656×4 → 31×4`，受击玩家 `53` 在 `638` 前。
+    ///
+    /// 第 4 条 656 来自卡 `openmir2-magstruck-name-color`：受击玩家 P1 的
+    /// `RM_STRUCK_MAG` 自投递支对攻击方 `SetPkFlag` ⇒ **攻击方**发 656（Recog = caster）。
     ///
     /// 红检：① 漏 `R(1000)`/`R(300)` ⇒ 对照流状态不等；② 用 `IsProperFriend` 冒充
     /// `IsProperTarget` ⇒ 怪物全漏；③ 无目标仍 `boTrain=true` ⇒ 训练抽多；④ `nDamage==0`
@@ -70455,7 +70475,21 @@ SendRefMsgRange=15
                     .filter(|(_, x)| **x == SM_31)
                     .map(|(i, _)| i)
                     .collect();
-                assert_eq!(i656.len(), 3, "M1/M2/M3 各一条 656；实得 {seq:?}");
+                assert_eq!(
+                    i656.len(),
+                    4,
+                    "M1/M2/M3 + 攻击方（受击玩家触发 SetPkFlag）各一条 656；实得 {seq:?}"
+                );
+                let nc: Vec<i32> = b2_seq(&frames, socket)
+                    .into_iter()
+                    .filter(|(id, _)| *id == SM_656)
+                    .map(|(_, r)| r)
+                    .collect();
+                assert_eq!(
+                    nc.iter().filter(|r| **r == rig.caster).count(),
+                    1,
+                    "多出的 656 由**攻击方**发出（Recog = caster）；实得 {nc:?}"
+                );
                 assert_eq!(i31.len(), 4, "31 给 4 个受击者；实得 {seq:?}");
                 assert!(i656.iter().all(|i| *i > i638) && i31.iter().all(|i| *i > i638));
                 assert!(i656.iter().max().unwrap() < i31.iter().min().unwrap());
@@ -70490,8 +70524,8 @@ SendRefMsgRange=15
             let seq: Vec<u16> = sf_seq(&frames, 912);
             assert_eq!(
                 seq.iter().filter(|x| **x == SM_656).count(),
-                2,
-                "零伤害怪物不产生 656；实得 {seq:?}"
+                3,
+                "零伤害怪物不产生 656；受击玩家 P1 仍触发攻击方 656（卡 openmir2-magstruck-name-color）；实得 {seq:?}"
             );
             assert_eq!(
                 seq.iter().filter(|x| **x == SM_31).count(),
@@ -72032,6 +72066,210 @@ SendRefMsgRange=15
         assert_eq!(b3_count(&frames, 911, SM_656), 1, "刷新后 61s 清");
         assert_eq!(b3_count(&frames, 912, SM_656), 1);
         assert!(!rig.world.entities.get(caster_id).unwrap().pvp_flag);
+    }
+
+    /// **`openmir2-magstruck-name-color`（world 面）**：魔法受击玩家在
+    /// `PlayObject.Message.cs:1562-1572` 的 `RM_STRUCK_MAG` 自投递支里对攻击方
+    /// `SetPkFlag`（`PlayObject.cs:4326-4341`）⇒ 攻击方 `PvpFlag=true` +
+    /// `PvpNameColorTick=now`，并由**攻击方**产出 `RefNameColor` 观察值（色 47）。
+    ///
+    /// 牙（改坏必红）：
+    /// - 删玩家支的 `set_pk_flag_impl` 调用 ⇒ `hitter_name_color` 为 `None` / 攻击方 flag 仍 false；
+    /// - 把 `msg.caster_id` 与 `msg.target_id` 对调 ⇒ `target_id` 断言与"受击方未置位"断言红。
+    #[test]
+    fn magstruck_player_setpkflag_marks_attacker_and_emits_delivery() {
+        let mut rig = B3Rig::new(16, 3, false); // 魔表仅占位（本用例直调 world 施法面）
+        {
+            let e = rig.world.entities.get_mut(rig.observer).unwrap();
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
+        }
+        let m = magstruck_test_magic();
+        let now = rig.world.clock_ms;
+        let _ =
+            rig.world
+                .cast_big_explosion_spell(rig.caster, &m, 3, Some(rig.observer), 11, 10, 1, 0);
+        let out = rig.world.deliver_mag_struck();
+        assert_eq!(out.len(), 1, "单目标");
+        let o = &out[0];
+        assert_eq!(o.target_id, rig.observer);
+        assert_eq!(o.caster_id, rig.caster);
+        assert!(o.damage > 0, "MSD 后伤害必须 > 0（= C# wParam>0 门）");
+        assert!(o.is_player, "受击方是玩家");
+        assert_eq!(
+            o.hitter_name_color,
+            Some(mir2_world_bevy::slave::NameColorDelivery {
+                target_id: rig.caster,
+                color: 47,
+            }),
+            "656 由**攻击方**发、色 47"
+        );
+        let caster = rig.world.entities.get(rig.caster).unwrap();
+        assert!(caster.pvp_flag, "攻击方 PvpFlag 置位");
+        assert_eq!(
+            caster.pvp_name_color_tick, now,
+            "PvpNameColorTick = 当前时钟"
+        );
+        assert!(
+            !rig.world.entities.get(rig.observer).unwrap().pvp_flag,
+            "受击方自己**不**置位（方向：给攻击方置位）"
+        );
+    }
+
+    fn magstruck_test_magic() -> mir2_data::MagicInfo {
+        mir2_data::MagicInfo {
+            magic_id: 23,
+            power: 20,
+            max_power: 20,
+            train_lv: 3,
+            ..mir2_data::MagicInfo::default()
+        }
+    }
+
+    fn add_visible_player(
+        rig: &mut B3Rig,
+        name: &str,
+        x: i32,
+        y: i32,
+        socket: i32,
+        shape: i32,
+    ) -> i32 {
+        let id = rig
+            .world
+            .add_entity(new_player_entity(name.to_string(), x, y));
+        rig.displays.set(
+            id,
+            downlink::ActorDisplay::new(4, 0, shape, 0, 0, 255, name.as_bytes().to_vec()),
+        );
+        online_set(
+            &mut rig.online,
+            OnlineEntry {
+                account: format!("u-{name}"),
+                chr_name: name.into(),
+                session_id: 100 + id,
+                gate_idx: 0,
+                socket,
+                actor_id: id,
+            },
+        );
+        id
+    }
+
+    /// 跑一格魔法受击并排帧（玩家目标）。`fight_zone` 为真时先给地图 0 置
+    /// `FightZone`；`target_flagged`/`caster_flagged` 先用公开 `set_pk_flag` 预置位。
+    fn run_magstruck_player_scene(
+        target_flagged: bool,
+        caster_flagged: bool,
+        fight_zone: bool,
+    ) -> (Vec<SfFrame>, mir2_world_bevy::World, i32, i32, i32) {
+        let mut rig = B3Rig::new(16, 3, false); // 魔表仅占位（本用例直调 world 施法面）
+        let obs2 = add_visible_player(&mut rig, "obs2", 9, 10, 913, 114);
+        {
+            let e = rig.world.entities.get_mut(rig.observer).unwrap();
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
+        }
+        if fight_zone {
+            rig.world.set_map_fight_zone(0, true, false);
+        }
+        if target_flagged {
+            assert!(
+                rig.world.set_pk_flag(rig.caster, rig.observer).is_some(),
+                "预置受击方 PvpFlag"
+            );
+        }
+        if caster_flagged {
+            assert!(
+                rig.world.set_pk_flag(rig.observer, rig.caster).is_some(),
+                "预置攻击方 PvpFlag"
+            );
+        }
+        // 预置产生的帧只用于清空通道。
+        let _ = rig.drain();
+        let m = magstruck_test_magic();
+        let _ =
+            rig.world
+                .cast_big_explosion_spell(rig.caster, &m, 3, Some(rig.observer), 11, 10, 1, 0);
+        let mut buf = SpellFrameBuf::new();
+        drain_mag_struck_b2(
+            &mut rig.world,
+            &rig.online,
+            &rig.displays,
+            &mut rig.ground_sessions,
+            &mut buf,
+        );
+        buf.flush(&rig.online, &rig.gates);
+        let frames = rig.drain();
+        (frames, rig.world, rig.caster, rig.observer, obs2)
+    }
+
+    /// **卡验收①（该发）**：条件全真 ⇒ caster / target / obs_in 三方各恰一条 656
+    /// （Recog = caster、Param = 47、Tag/Series = 0、无尾），范围外玩家 0 条。
+    #[test]
+    fn magstruck_player_656_symmetric_to_three_visible_players() {
+        const SM_656: u16 = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        let (frames, world, caster, _target, obs2) =
+            run_magstruck_player_scene(false, false, false);
+        for (socket, who) in [
+            (911, "caster 自己"),
+            (912, "受击者 target"),
+            (913, "obs_in"),
+        ] {
+            assert_eq!(b3_count(&frames, socket, SM_656), 1, "{who} 恰一条 656");
+        }
+        assert_eq!(b3_count(&frames, 914, SM_656), 0, "范围外 obs_out 零条");
+        // 逐字段：ident/recog/param/tag/series/tail。
+        let body = frames
+            .iter()
+            .find(|(s, b)| *s == 911 && sf_ident(b) == SM_656)
+            .map(|(_, b)| b)
+            .unwrap();
+        assert_eq!(body.len(), 12, "SM_CHANGENAMECOLOR 无尾（header-only）");
+        let cm = mir2_protocol::frame::CommandMessage::from_bytes(body).unwrap();
+        assert_eq!(cm.ident, SM_656);
+        assert_eq!(cm.recog, caster, "Recog = 攻击方（发 RefNameColor 的人）");
+        assert_eq!(cm.param, 47, "Param = PKFlagNameColor");
+        assert_eq!(cm.tag, 0);
+        assert_eq!(cm.series, 0);
+        // 收件人集合来自语义判定（±SendRefMsgRange 的可见玩家），不是硬编码三方。
+        assert!(
+            world.entities.get(obs2).is_some(),
+            "obs_in 是普通世界实体（走通用 range 判定）"
+        );
+        assert!(world.entities.get(caster).unwrap().pvp_flag);
+    }
+
+    /// **卡验收②（不该发）**：受击方已 `PvpFlag` / 攻击方已 `PvpFlag` / 受击方地图
+    /// `FightZone` ⇒ 三方都**不**出 656，且攻击方不被置位。
+    #[test]
+    fn magstruck_player_no_656_when_any_gate_fails() {
+        const SM_656: u16 = mir2_protocol::messages::SM_CHANGENAMECOLOR;
+        for (label, target_flagged, caster_flagged, fight_zone) in [
+            ("受击方已 PvpFlag", true, false, false),
+            ("攻击方已 PvpFlag", false, true, false),
+            ("受击方地图 FightZone", false, false, true),
+        ] {
+            let (frames, world, caster, target, obs2) =
+                run_magstruck_player_scene(target_flagged, caster_flagged, fight_zone);
+            for socket in [911, 912, 913, 914] {
+                assert_eq!(
+                    b3_count(&frames, socket, SM_656),
+                    0,
+                    "[{label}] socket {socket} 不得出 656"
+                );
+            }
+            if !caster_flagged {
+                assert!(
+                    !world.entities.get(caster).unwrap().pvp_flag,
+                    "[{label}] 攻击方不得被置位"
+                );
+            }
+            assert!(
+                !world.entities.get(target).unwrap().pvp_flag || target_flagged,
+                "[{label}] 受击方不被置位（预置情形除外）"
+            );
+            assert!(world.entities.get(obs2).is_some(), "[{label}] 观察者仍在");
+        }
     }
 
     /// **`openmir2-sm-closehealth-wire`**：`SM_CLOSEHEALTH(1101)` 的生产入口逐字节。
