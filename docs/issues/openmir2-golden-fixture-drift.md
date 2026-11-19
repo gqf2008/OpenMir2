@@ -135,3 +135,36 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
   ⇒ 统一判据下 `Rng ++ [] == Rng`，与现行 golden 一致。
 - 6 条延时受击：旧 golden 的 `Rng` 缺排水抽（`freeze_at_dospell`）⇒ 重生成后按拼接比较；
   Rust 侧现台账的 `DeliverRng` 已有对应抽（`3b` 判 **18/18 MATCH(count+values)**）。
+
+### 8.7 M52 的登录序变体：状态契约 + 构造路径（Rust 侧已接缝，值待 a2 输出）
+
+**状态字段契约（`MagicGolden` 的 `Fixture`；a2 输出，Rust 只读）**：
+
+| 键 | 类型 | 含义 |
+|---|---|---|
+| `login_order` | bool | `true` = 走真实登录序（`RecalcLevelAbilitys(); RecalcAbilitys();`，无手设覆盖） |
+| `anti_magic` | int | 该 case 的**实际**目标 `AntiMagic`（登录序无装备 ⇒ `1`） |
+| `target_level` | int | 目标 `Abil.Level`（构造路径的 L） |
+| `target_hp` / `target_max_hp` | int | 该 case 的**实际** HP / `MaxHP`（登录序 ⇒ `MaxHP` = 等级公式值） |
+| `rng_mode` | string | `cover_drain` / `freeze_at_dospell`（见 8.3） |
+
+**构造路径（机检口径）**：登录序、无装备、无 `AddAbil` 加成时
+`AntiMagic = 1 + 0 = 1`；`MaxHP = 14 + round(((L / WarrHP) + WarrHPRate + L / 20) × L)`，
+部署 `LevelValueOfWarrHP=4`、`WarrHPRate=4.5`：
+
+| L | `MaxHP` | 说明 |
+|---|---|---|
+| 11 | 14 + round(7.8×11) = **100** | 与存量的 `MaxHP=100` 数值相同（但语义是 L11 登录值，不是手设） |
+| 20 | 14 + round(10.5×20) = **224** | 与 23/29/33 装置观测到的 224 一致 |
+
+**逐条机检**：比较器/交付里对每条 case 复算：`Fixture.anti_magic == 1`、
+`Fixture.target_max_hp == 14 + round(((L/4)+4.5+L/20)*L)`、`Fixture.rng_mode == "cover_drain"`、
+`Fixture.login_order == true`；任一不等 ⇒ 该条不能被当作可达证据（§7）。
+
+**Rust 接缝（本分支已写，未编译）**：`fireball_parity_drive` 在建夹具后、魔号专属覆盖前，
+按 `Fixture.anti_magic / target_hp / target_max_hp` 设目标实体与会话（缺省 = 老件现状 ⇒
+既有台账零变化）。**healing 的专用驱动**（`healing_parity_drive`）待新 healing 金标准落地后
+同法接入（它的 `hp` 是显式参数，需要与新 `Fixture.target_hp` 对齐——届时一并改）。
+
+**合成角色件（`AntiMagic=3`/`MaxHP=100`）**：按 §6 处置第 1 条降为**附加场景**，
+`rng_mode=cover_drain` 保留作 RNG 轴对照，但 `reachability=unverified`、**不作 verified 依据**。

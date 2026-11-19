@@ -66144,6 +66144,28 @@ SendRefMsgRange=15
         // **29 群体治愈术**：按 golden 的 `Fixture` 设 HP——目标 `target_hp/224`（登录派生 MaxHP），
         // 「多朋友」支再设施法者 `caster_hp/caster_max_hp`（`MagBigHealing` 只治 `HP<MaxHP` 的
         // proper friend；3×3 里只有 caster 与 target 两个朋友）。其它魔号不动（`target_hp` 缺省 100）。
+        // **登录序变体的状态来自 golden `Fixture`**（卡 `openmir2-golden-fixture-drift` §6/§7）：
+        // 有 `anti_magic` / `target_hp` / `target_max_hp` 就按 golden 设——旧件里这些值等于夹具
+        // 缺省（行为不变）；新登录序件里是 `AntiMagic=1` + 等级公式 `MaxHP`（可达场景）。
+        // **必须在魔号专属覆盖（23/29/33/47 的 224）之前**（那些支另行对齐）。
+        if let Some(a) = golden_fixture_opt(stem, label, "anti_magic") {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.anti_magic = u16::try_from(a).unwrap_or(0);
+        }
+        if let Some(m) = golden_fixture_opt(stem, label, "target_max_hp") {
+            let m = u16::try_from(m).unwrap_or(0);
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.max_hp = m;
+            let sg = rig.ground_sessions.get_mut("target").unwrap();
+            sg.state.wabil.max_hp = m;
+        }
+        if let Some(h) = golden_fixture_opt(stem, label, "target_hp") {
+            let h = u16::try_from(h).unwrap_or(0);
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.hp = h;
+            let sg = rig.ground_sessions.get_mut("target").unwrap();
+            sg.state.wabil.hp = h;
+        }
         if magic_id == 23 {
             // 23 的受击链读实体/会话 MaxHP（`SM_STRUCK` 头与 RM 8103 的 p2）；登录序下目标
             // `MaxHP=224`（C# golden 同源），HP 仍 100。
@@ -67515,6 +67537,17 @@ SendRefMsgRange=15
             .unwrap_or_else(|| panic!("{who} 必须有 SM_ABILITY(52)"));
         let tail = f["tail"].as_str().expect("52 尾必须是串");
         mir2_protocol::edcode::decode(tail.as_bytes())
+    }
+
+    /// 金标准 `Fixture` 的某个整数字段（**不存在时返回 None**：有则按 golden、无则保持夹具缺省）。
+    fn golden_fixture_opt(stem: &str, label: &str, key: &str) -> Option<u64> {
+        let file = match stem {
+            "fireball5" => "fireball-5.json".to_string(),
+            "lightning11" => "lightning-11.json".to_string(),
+            "lightning45" => "lightning-45.json".to_string(),
+            other => format!("{other}.json"),
+        };
+        golden_case(&file, label)["Fixture"][key].as_u64()
     }
 
     /// 金标准 `Fixture` 的某个整数字段（缺省回落，兼容旧 golden）。
