@@ -34,8 +34,8 @@
   `HorseType` 无赋值点（记忆 `horse-riding-inert-server-side`）；不是物品使用分派。
 
 ## 4. 计数时刻
-- 仓库 HEAD：`572a0b8a3`（master＝本分支 base）；命令执行时间：2026-11-19 23:16（+0800）；
-- `src/` 在 `a5643481a..572a0b8a3` 之间无改动（`git diff --stat a5643481a master -- src/` 输出为空）⇒ 上一版 §4 的旁证计数时刻仍可比；
+- 仓库 HEAD：`3679403bd`（master；补齐 T-17 头部登记，注释-only）；命令执行时间：2026-11-19 23:16（+0800），T-17 登记复核 23:25（+0800）；
+- `src/` 在 `a5643481a..3679403bd` 之间无改动（`git diff --stat a5643481a 3679403bd -- src/` 输出为空）⇒ 上一版 §4 的旁证计数时刻仍可比；
 - 旁证①命令原文与输出：
 ```
 $ grep -rn 'StdMode ==\|Shape ==' --include=*.cs src/ | grep -v worktrees | wc -l
@@ -186,21 +186,22 @@ switch (stdItem.StdMode)                       PlayObject.Operate.cs:619
 | IT-07 | 卷轴·Shape12 六属性瞬间 buff（`ExtraAbil` ×6 + 计时） | `PlayObject.Base.cs:2101-2157` | **missing** | — | M | 命中 T-17（`ExtraAbil` 未实现；oracle 成功吃掉 / Rust 落 `SM_EAT_FAIL`；`useitem.rs` 第 66–70 行） |
 | IT-08 | 卷轴·Shape13 `GetExp(DuraMax)` | `PlayObject.Base.cs:2158` | **missing** | — | S | 命中 T-17（同上；oracle 此支**无条件**成功、必吃掉） |
 | IT-09 | 卷轴·default->Shape1 回城卷（回 `HomeMap` 随机点） | `PlayObject.Base.cs:2162->2163`、`:2233` | **missing** | — | S–M | 命中 T-17（`EatUseItems` 未实现；oracle 条件成功 / Rust 落 `SM_EAT_FAIL`） |
-| IT-10 | Shape2 随机传送（本图随机点，受 `boNORANDOMMOVE`） | `PlayObject.Base.cs:2238` | **missing** | — | S | 命中 T-17（`EatUseItems` 未实现）；地图 flag 门 |
+| IT-10 | Shape2 随机传送（本图随机点，受 `boNORANDOMMOVE`） | `PlayObject.Base.cs:2238` | **missing** | — | S | 命中 T-17（`EatUseItems` 未实现）；登记缺口已在 `useitem.rs` 头部补齐（`3679403bd`）；登记缺口已在 `useitem.rs` 头部补齐（`3679403bd`）；地图 flag 门 |
 | IT-11 | Shape3 地牢逃脱（`PvpLevel()<2` 回 Home，否则回红名村） | `PlayObject.Base.cs:2246` | **missing** | — | M | 命中 T-17（`EatUseItems` 未实现）；`Config.RedHome*` |
 | IT-12 | Shape4 祝福油 `WeaptonMakeLuck()` | `PlayObject.Base.cs:2258` | **missing** | — | M | 命中 T-17（`EatUseItems` 未实现）；改武器幸运/诅咒 |
-| IT-13 | Shape5 行会回城（城堡成员回城堡） | `PlayObject.Base.cs:2264` | **missing** | — | M–L | 命中 T-17（`EatUseItems` 未实现）；`CastleMgr.IsCastleMember` |
+| IT-13 | Shape5 行会回城（城堡成员回城堡） | `PlayObject.Base.cs:2264` | **missing** | — | M–L | 命中 T-17（`EatUseItems` 未实现）；`CastleMgr.IsCastleMember`；登记缺口已在 `useitem.rs` 头部补齐（`3679403bd`） |
 | IT-14 | Shape9 修复油 `RepairWeapon()` | `PlayObject.Base.cs:2286` | **missing** | — | S | 命中 T-17（`EatUseItems` 未实现） |
 | IT-15 | Shape10 特修油 `SuperRepairWeapon()` | `PlayObject.Base.cs:2292` | **missing** | — | S | 命中 T-17（`EatUseItems` 未实现） |
-| IT-16 | Shape11 彩票 `WinLottery()` | `PlayObject.Base.cs:2298` | **missing** | — | M | 命中 T-17（`EatUseItems` 未实现）；`Config.WinLotteryLevel1..6`（Rust 已有该组配置字段） |
+| IT-16 | Shape11 彩票 `WinLottery()` | `PlayObject.Base.cs:2298` | **missing** | — | M | 命中 T-17（`EatUseItems` 未实现）；`Config.WinLotteryLevel1..6`（Rust 已有该组配置字段）；登记缺口已在 `useitem.rs` 头部补齐（`3679403bd`） |
 | IT-17 | 技能书 StdMode 4 `ReadBook`（学魔法 + `+LNG/+WID`） | `PlayObject.Operate.cs:632 -> PlayObject.Base.cs:2171` | **missing** | — | S–M | 命中 T-17（`ReadBook` 未实现，`useitem.rs` 第 14 行）；Rust 有 `world-bevy::magic::can_read_book` 谓词但**未接线**到 `use_item` |
 | IT-18 | 解包 StdMode 31 / `AniCount==0`（容量门 + 按 Shape 发 6 件） | `PlayObject.Operate.cs:655-666` | **implemented（未验证）** | 单测：`useitem::tests::unbind_stdmode31_creates_six_items_and_reweights`/`_missing_shape_eats_pack_but_creates_nothing`/`_capacity_gate_uses_pre_removal_count`；对拍仅 `eat_fail_stdmode31_unbind_bag_full`（失败路径） | — | 成功路径无 oracle 夹具 => 不给 verified |
 | IT-19 | 解包 StdMode 31 / `AniCount!=0` -> 脚本 `@StdModeFunc{AniCount}` | `PlayObject.Operate.cs:668 -> PlayObject.Base.cs:1072` | **verified** | 同测试/夹具，用例 `eat_ok_stdmode31_funitem`、`eat_fail_stdmode31_no_functionnpc` | — | 脚本派发在 `lib.rs` `@StdModeFunc*` 接缝 |
 
 汇总：`verified` 7（IT-01/02/03/04/05/06/19）、`implemented（未验证）` 1（IT-18）、`missing` 11（IT-07…17）。
 `missing` 11 条**全部命中 T-17**（oracle 成功/条件成功吃掉 → Rust 落 `SM_EAT_FAIL`），不是静默跳过。
-T-17 登记条位置（`mir2-rs/bins/game-svr/src/useitem.rs` 头部「未做清单」）：
-第 64 行（标题"登记在卡 `openmir2-m3-bag-equip-alignment` 的 whitelist"）、第 66–70 行（StdMode 3/4 已证差异）、第 14 行（case 4 ReadBook 未实现）、第 78 行（T-17 字样）、第 413 行（"已证差异，登记在 T-17"）。
+T-17 登记条位置（`mir2-rs/bins/game-svr/src/useitem.rs` 头部「未做清单」，按 master `3679403bd` 复核）：
+第 64 行（标题"登记在卡 `openmir2-m3-bag-equip-alignment` 的 whitelist"）、第 66–70 行（StdMode 3/4 已证差异）、第 71–80 行（`EatUseItems` 的 8 个 Shape 逐条：IT-09…IT-16；第 76–79 行是 2026-11-19 补齐的 IT-13/14/15/16）、第 14 行（case 4 ReadBook 未实现）、第 88 行（T-17 字样）、第 426 行（"已证差异，登记在 T-17"）。
+2026-11-19 复核更正：头部补齐了 IT-13/14/15/16 四条（此前只被"等大地图副作用"概括），并更正第 16 行"解包未做（T-17）"与第 81 行"解包：已实现"的自相矛盾；合并点 `3679403bd`（注释-only，`git diff -U0` 非注释行为空）。
 
 `missing` 11 条的成本分层（按条点名）：
 - **S（4 条）**：IT-08 卷轴·经验、IT-10 随机传送、IT-14 修复油、IT-15 特修油；

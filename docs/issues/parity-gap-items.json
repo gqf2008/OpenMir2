@@ -3,8 +3,8 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "572a0b8a3ea244351a6633fe6af0d0fe4a20643a",
-    "time": "2026-11-19T23:16:00+08:00"
+    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
+    "time": "2026-11-19T23:25:52+08:00"
   },
   "status_enum": [
     "verified",
@@ -20,7 +20,13 @@
     "dead_in_oracle": "oracle 自身是死路径（调用点注释/丢弃），Rust 不应实现",
     "out_of_scope": "不属本分母（环境/工具/数据侧）"
   },
-  "cost_enum": ["S", "S-M", "M", "M-L", "L"],
+  "cost_enum": [
+    "S",
+    "S-M",
+    "M",
+    "M-L",
+    "L"
+  ],
   "denominator": {
     "kind": "behavior_leaf",
     "definition": "CM_EAT 唯一使用入口的分派树上、能产生玩家可见效果的叶子分支；一条 = 一种原版物品行为",
@@ -49,13 +55,20 @@
     {
       "id": "IT-01",
       "behavior": "药·Shape1 固定量补血补魔 IncHealthSpell(AC,MAC)",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2060, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2060,
+        "line_end": null
+      },
       "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
-        "cases": ["eat_ok_shape1_fixed", "eat_ok_shape1_clamp"],
+        "cases": [
+          "eat_ok_shape1_fixed",
+          "eat_ok_shape1_clamp"
+        ],
         "unit_tests": []
       },
       "cost": null,
@@ -65,13 +78,19 @@
     {
       "id": "IT-02",
       "behavior": "药·Shape2 解锁药 UserUnLockDurg=true",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2064, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2064,
+        "line_end": null
+      },
       "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
-        "cases": ["eat_ok_shape2_unlock"],
+        "cases": [
+          "eat_ok_shape2_unlock"
+        ],
         "unit_tests": []
       },
       "cost": null,
@@ -81,14 +100,22 @@
     {
       "id": "IT-03",
       "behavior": "药·Shape3 百分比补血补魔",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2068, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2068,
+        "line_end": null
+      },
       "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
-        "cases": ["eat_ok_shape3_percent"],
-        "unit_tests": ["useitem::tests::shape3_percent_rounds_away_from_zero"]
+        "cases": [
+          "eat_ok_shape3_percent"
+        ],
+        "unit_tests": [
+          "useitem::tests::shape3_percent_rounds_away_from_zero"
+        ]
       },
       "cost": null,
       "deviation": null,
@@ -97,13 +124,20 @@
     {
       "id": "IT-04",
       "behavior": "药·default 叠加 IncHealth/IncSpell 池",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2072, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2072,
+        "line_end": null
+      },
       "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
-        "cases": ["eat_ok_shape0_inc_pool", "eat_ok_shape0_inc_zero"],
+        "cases": [
+          "eat_ok_shape0_inc_pool",
+          "eat_ok_shape0_inc_zero"
+        ],
         "unit_tests": []
       },
       "cost": null,
@@ -113,13 +147,21 @@
     {
       "id": "IT-05",
       "behavior": "食物 HungerStatus += DuraMax/10（上限 5000、跨档刷新）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2085, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2085,
+        "line_end": null
+      },
       "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
-        "cases": ["eat_ok_stdmode1_hunger_no_recalc", "eat_ok_stdmode1_hunger_recalc", "eat_ok_stdmode1_hunger_clamp"],
+        "cases": [
+          "eat_ok_stdmode1_hunger_no_recalc",
+          "eat_ok_stdmode1_hunger_recalc",
+          "eat_ok_stdmode1_hunger_clamp"
+        ],
         "unit_tests": []
       },
       "cost": null,
@@ -129,13 +171,19 @@
     {
       "id": "IT-06",
       "behavior": "StdMode 2 空消耗（只吃掉）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2095, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2095,
+        "line_end": null
+      },
       "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
-        "cases": ["eat_ok_stdmode2_noop"],
+        "cases": [
+          "eat_ok_stdmode2_noop"
+        ],
         "unit_tests": []
       },
       "cost": null,
@@ -145,128 +193,327 @@
     {
       "id": "IT-07",
       "behavior": "卷轴·Shape12 六属性瞬间 buff（ExtraAbil ×6 + 计时）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2101, "line_end": 2157 },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2101,
+        "line_end": 2157
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "M",
       "deviation": {
         "id": "T-17",
         "file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "section": "未做清单",
-        "lines": [64, 81]
+        "lines": [
+          64,
+          80
+        ]
       },
       "notes": "oracle 成功吃掉 / Rust 落 SM_EAT_FAIL"
     },
     {
       "id": "IT-08",
       "behavior": "卷轴·Shape13 GetExp(DuraMax)",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2158, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2158,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "S",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
       "notes": "oracle 此支无条件成功（必吃掉）"
     },
     {
       "id": "IT-09",
       "behavior": "卷轴·default->Shape1 回城卷（回 HomeMap 随机点）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2233, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2233,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "S-M",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
       "notes": "经 Base.cs:2162 default -> EatUseItems(stdItem.Shape)"
     },
     {
       "id": "IT-10",
       "behavior": "Shape2 随机传送（本图随机点，受 boNORANDOMMOVE）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2238, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2238,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "S",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
       "notes": "地图 flag 门"
     },
     {
       "id": "IT-11",
       "behavior": "Shape3 地牢逃脱（PvpLevel()<2 回 Home，否则回红名村）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2246, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2246,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "M",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
       "notes": "Config.RedHome*"
     },
     {
       "id": "IT-12",
       "behavior": "Shape4 祝福油 WeaptonMakeLuck()",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2258, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2258,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "M",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
       "notes": "改武器幸运/诅咒"
     },
     {
       "id": "IT-13",
       "behavior": "Shape5 行会回城（城堡成员回城堡）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2264, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2264,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "M-L",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
-      "notes": "CastleMgr.IsCastleMember"
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
+      "notes": "CastleMgr.IsCastleMember；登记缺口已在 useitem.rs 头部补齐（3679403bd）"
     },
     {
       "id": "IT-14",
       "behavior": "Shape9 修复油 RepairWeapon()",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2286, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2286,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "S",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
-      "notes": ""
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
+      "notes": "登记缺口已在 useitem.rs 头部补齐（3679403bd）"
     },
     {
       "id": "IT-15",
       "behavior": "Shape10 特修油 SuperRepairWeapon()",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2292, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2292,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "S",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
-      "notes": ""
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
+      "notes": "登记缺口已在 useitem.rs 头部补齐（3679403bd）"
     },
     {
       "id": "IT-16",
       "behavior": "Shape11 彩票 WinLottery()",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2298, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2298,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "M",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [64, 81] },
-      "notes": "Config.WinLotteryLevel1..6（Rust 已有配置字段）"
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          64,
+          80
+        ]
+      },
+      "notes": "Config.WinLotteryLevel1..6（Rust 已有配置字段）；登记缺口已在 useitem.rs 头部补齐（3679403bd）"
     },
     {
       "id": "IT-17",
       "behavior": "技能书 StdMode 4 ReadBook（学魔法 + +LNG/+WID）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Base.cs", "line": 2171, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 2171,
+        "line_end": null
+      },
       "status": "missing",
-      "evidence": { "test": null, "test_file": null, "fixture": null, "cases": [], "unit_tests": [] },
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
       "cost": "S-M",
-      "deviation": { "id": "T-17", "file": "mir2-rs/bins/game-svr/src/useitem.rs", "section": "未做清单", "lines": [14, 14] },
+      "deviation": {
+        "id": "T-17",
+        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "section": "未做清单",
+        "lines": [
+          14,
+          14
+        ]
+      },
       "notes": "入口在 Operate.cs:632；Rust 有 world-bevy::magic::can_read_book 谓词但未接线到 use_item"
     },
     {
       "id": "IT-18",
       "behavior": "解包 StdMode 31 / AniCount==0（容量门 + 按 Shape 发 6 件）",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Operate.cs", "line": 655, "line_end": 666 },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Operate.cs",
+        "line": 655,
+        "line_end": 666
+      },
       "status": "implemented_unverified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
-        "cases": ["eat_fail_stdmode31_unbind_bag_full"],
+        "cases": [
+          "eat_fail_stdmode31_unbind_bag_full"
+        ],
         "unit_tests": [
           "useitem::tests::unbind_stdmode31_creates_six_items_and_reweights",
           "useitem::tests::unbind_missing_shape_eats_pack_but_creates_nothing",
@@ -280,13 +527,20 @@
     {
       "id": "IT-19",
       "behavior": "解包 StdMode 31 / AniCount!=0 -> 脚本 @StdModeFunc{AniCount}",
-      "oracle_anchor": { "file": "src/M2Server/Player/PlayObject.Operate.cs", "line": 668, "line_end": null },
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Operate.cs",
+        "line": 668,
+        "line_end": null
+      },
       "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
-        "cases": ["eat_ok_stdmode31_funitem", "eat_fail_stdmode31_no_functionnpc"],
+        "cases": [
+          "eat_ok_stdmode31_funitem",
+          "eat_fail_stdmode31_no_functionnpc"
+        ],
         "unit_tests": []
       },
       "cost": null,
