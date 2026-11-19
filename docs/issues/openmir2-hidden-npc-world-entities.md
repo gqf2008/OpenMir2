@@ -44,7 +44,9 @@
 
 ## 5. 牙（缺一不可）
 
-1. 把隐藏 NPC 从实体表移除 ⇒ 点击用例零帧、必红（T1，已跑红）；
+1. 把隐藏 NPC 从实体表移除 ⇒ **T1 红面 = rig 建实体断言 panic**（`np10_hidden_npc_matches_oracle_golden`
+   的 `.expect("隐藏 NPC 入世界")`，`lib.rs` 内；隐藏 NPC 不在世界 ⇒ 无从点击）；**click 零帧的
+   特异性由 T3 承担**（`ActorId` 与脚本表错位 ⇒ 点击命中不到脚本 ⇒ 零帧）；
 2. 【订正】"把 `IsHide` 置 false ⇒ AOI 负例红"**咬不住**：墙格挂图失败时 `IsHide=false`
    的实体被整体移除，AOI 里同样没有它。实际落地的同位牙是**删 `attach_npc_to_map` 的
    `&& !is_hide` 保留门**（T4）⇒ 墙格隐藏实体被移除 ⇒ world-bevy 的 "留在世界" 断言红；
@@ -101,7 +103,7 @@
 
 | 牙 | 变异 | 红面 |
 | --- | --- | --- |
-| T1 | `insert_hidden_quest_npc` 恒返回 `None`（不入实体表） | `np10_hidden_npc_matches_oracle_golden` 红 |
+| T1 | `insert_hidden_quest_npc` 恒返回 `None`（不入实体表） | `np10_hidden_npc_matches_oracle_golden` 红（**rig 建实体 `.expect` panic**，非 click 零帧路径；零帧特异性见 T3） |
 | T2 | `handle_shop_cmd_inner` 的 `mhide` 写回 `false` | 同上，`hidden_select_far_ishide` 帧数 0 ≠ 1 |
 | T3 | `set_actor_id` 写 `actor_id + 1` | 同上，`hidden_click_main` 帧数 0 ≠ 1 |
 | T4 | 删 `attach_npc_to_map` 的 `&& !is_hide` | world-bevy 墙格用例红（click 例仍绿：rig 的 (0,0) 可走，实体正常落格 —— 见卡面口径） |
