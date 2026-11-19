@@ -421,9 +421,9 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
                 .find(|c| c.get("Label").and_then(Value::as_str) == Some(label))
         })
         .ok_or_else(|| format!("[{label}] 金标准缺该支"))?;
-    let fixture = case
-        .get("Fixture")
-        .ok_or_else(|| format!("[{label}] 金标准缺 `Fixture`（契约键都应在 Fixture 内；卡 §8.3）"))?;
+    let fixture = case.get("Fixture").ok_or_else(|| {
+        format!("[{label}] 金标准缺 `Fixture`（契约键都应在 Fixture 内；卡 §8.3）")
+    })?;
     match fixture.get("rng_mode").and_then(Value::as_str) {
         Some("cover_drain") => {}
         other => {
@@ -441,7 +441,9 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
         }
     }
     if !fixture.get("login_order").is_some_and(Value::is_boolean) {
-        return Err(format!("[{label}] 金标准缺 `Fixture.login_order`（bool；卡 §8.7 缺键即红）"));
+        return Err(format!(
+            "[{label}] 金标准缺 `Fixture.login_order`（bool；卡 §8.7 缺键即红）"
+        ));
     }
     for k in ["anti_magic", "target_level", "target_hp", "target_max_hp"] {
         if !fixture.get(k).is_some_and(Value::is_i64) {
@@ -490,8 +492,14 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
         .get("equipment")
         .and_then(Value::as_array)
         .ok_or_else(|| format!("[{label}] `construction.equipment` 缺失/非数组（§8.3）"))?;
-    if construction.get("skills").and_then(Value::as_array).is_none() {
-        return Err(format!("[{label}] `construction.skills` 缺失/非数组（§8.3）"));
+    if construction
+        .get("skills")
+        .and_then(Value::as_array)
+        .is_none()
+    {
+        return Err(format!(
+            "[{label}] `construction.skills` 缺失/非数组（§8.3）"
+        ));
     }
     if fixture.get("target_level").and_then(Value::as_i64) != Some(level) {
         return Err(format!(
@@ -522,7 +530,9 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
         }
     }
     let Ok(level_u8) = u8::try_from(level) else {
-        return Err(format!("[{label}] `construction.level` = {level} 越界（§8.7）"));
+        return Err(format!(
+            "[{label}] `construction.level` = {level} 越界（§8.7）"
+        ));
     };
     let lv = recalc_level_abilitys(job, level_u8, &LevelValueConfig::default());
     let got = |k: &str| derived.get(k).and_then(Value::as_i64).unwrap_or(i64::MIN);
@@ -626,7 +636,10 @@ fn pin_union_rng(case: &Value, label: &str) -> Result<Value, String> {
     let union = union_rng(case, label)?;
     let mut c = case.clone();
     if let Some(obj) = c.as_object_mut() {
-        obj.insert("Rng".to_string(), Value::Array(union.into_iter().map(Value::from).collect()));
+        obj.insert(
+            "Rng".to_string(),
+            Value::Array(union.into_iter().map(Value::from).collect()),
+        );
         obj.remove("DeliverRng");
     }
     Ok(c)
@@ -701,7 +714,11 @@ fn verify_union(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
         .cloned()
         .unwrap_or_default();
     for c in &cases {
-        let label = c.get("Label").and_then(Value::as_str).unwrap_or("?").to_string();
+        let label = c
+            .get("Label")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string();
         if let Err(msg) = check_golden_contract(golden, &label) {
             return Err(vec![msg]);
         }
@@ -800,7 +817,7 @@ fn tooth_wabil_exp_bytes_compared_red() {
     // 找任意接收者里的 52 帧
     let (ri, fi, tail) = {
         let mut found = None;
-        for (ri, r) in rust
+        for (ri, r) in s1
             .get("Receivers")
             .and_then(Value::as_array)
             .unwrap()
@@ -815,7 +832,11 @@ fn tooth_wabil_exp_bytes_compared_red() {
                 .enumerate()
             {
                 if f.get("ident").and_then(Value::as_i64) == Some(52) {
-                    found = Some((ri, fi, f.get("tail").and_then(Value::as_str).unwrap().to_string()));
+                    found = Some((
+                        ri,
+                        fi,
+                        f.get("tail").and_then(Value::as_str).unwrap().to_string(),
+                    ));
                     break;
                 }
             }
@@ -827,7 +848,7 @@ fn tooth_wabil_exp_bytes_compared_red() {
     };
     let bytes = mir2_protocol::edcode::decode(tail.as_bytes());
     assert_eq!(bytes.len(), 40, "52 尾必须解出 40B WAbil");
-    let mut rust_case = rust.clone();
+    let mut rust_case = s1.clone();
     let with_tail = |c: &mut Value, new_tail: &str| {
         c["Receivers"][ri]["Sent"][fi]["tail"] = Value::from(new_tail);
     };
@@ -856,24 +877,39 @@ fn tooth_contract_missing_keys_red() {
     let label = "s1";
     // 缺 reachability
     let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
-    g["cases"][0]["Fixture"].as_object_mut().unwrap().remove("reachability");
+    g["cases"][0]["Fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("reachability");
     let msg = check_golden_contract(&g, label).unwrap_err();
     assert!(msg.contains("reachability"), "必须点名 reachability：{msg}");
     // reachability = unverified
     let mut g2 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
     g2["cases"][0]["Fixture"]["reachability"] = Value::from("unverified");
     let msg2 = check_golden_contract(&g2, label).unwrap_err();
-    assert!(msg2.contains("reachability"), "必须点名 reachability：{msg2}");
+    assert!(
+        msg2.contains("reachability"),
+        "必须点名 reachability：{msg2}"
+    );
     // 缺 anti_magic
     let mut g3 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
-    g3["cases"][0]["Fixture"].as_object_mut().unwrap().remove("anti_magic");
+    g3["cases"][0]["Fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("anti_magic");
     let msg3 = check_golden_contract(&g3, label).unwrap_err();
     assert!(msg3.contains("anti_magic"), "必须点名 anti_magic：{msg3}");
     // 缺 construction
     let mut g4 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
-    g4["cases"][0]["Fixture"].as_object_mut().unwrap().remove("construction");
+    g4["cases"][0]["Fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("construction");
     let msg4 = check_golden_contract(&g4, label).unwrap_err();
-    assert!(msg4.contains("construction"), "必须点名 construction：{msg4}");
+    assert!(
+        msg4.contains("construction"),
+        "必须点名 construction：{msg4}"
+    );
     // derived 与公式复算不一致（max_hp 改 100）
     let mut g5 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
     g5["cases"][0]["Fixture"]["derived"]["max_hp"] = Value::from(100);
@@ -883,7 +919,10 @@ fn tooth_contract_missing_keys_red() {
     let mut g6 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
     g6["cases"][0]["Fixture"]["target_max_hp"] = Value::from(100);
     let msg6 = check_golden_contract(&g6, label).unwrap_err();
-    assert!(msg6.contains("target_max_hp"), "必须点名 target_max_hp：{msg6}");
+    assert!(
+        msg6.contains("target_max_hp"),
+        "必须点名 target_max_hp：{msg6}"
+    );
     // 装备非空 ⇒ fail-closed
     let mut g7 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
     g7["cases"][0]["Fixture"]["construction"]["equipment"] = serde_json::json!(["MgAvoid=1"]);
@@ -896,12 +935,18 @@ fn tooth_contract_missing_keys_red() {
         .unwrap()
         .remove("rng_total_draws");
     let msg8 = check_golden_contract(&g8, label).unwrap_err();
-    assert!(msg8.contains("rng_total_draws"), "必须点名 rng_total_draws：{msg8}");
+    assert!(
+        msg8.contains("rng_total_draws"),
+        "必须点名 rng_total_draws：{msg8}"
+    );
     // rng_total_draws 与 len(Rng) 不等（手改金标准截短 Rng 的形态）
     let mut g9 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
     g9["cases"][0]["Fixture"]["rng_total_draws"] = Value::from(5);
     let msg9 = check_golden_contract(&g9, label).unwrap_err();
-    assert!(msg9.contains("rng_total_draws"), "必须点名 rng_total_draws：{msg9}");
+    assert!(
+        msg9.contains("rng_total_draws"),
+        "必须点名 rng_total_draws：{msg9}"
+    );
     // 正对照：齐全 ⇒ 绿
     let ok = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
     assert!(check_golden_contract(&ok, label).is_ok(), "齐全应绿");
@@ -911,7 +956,11 @@ fn tooth_contract_missing_keys_red() {
 #[test]
 fn union_rng_positive_control_green() {
     let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
-    let r = synth_rust("s1", serde_json::json!([1, 2]), Some(serde_json::json!([3, 4])));
+    let r = synth_rust(
+        "s1",
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([3, 4])),
+    );
     assert!(verify_union(&g, &r).is_ok(), "拼接一致必须绿");
 }
 
@@ -919,25 +968,47 @@ fn union_rng_positive_control_green() {
 #[test]
 fn tooth_union_drop_deliver_entry_red() {
     let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
-    let r = synth_rust("s1", serde_json::json!([1, 2]), Some(serde_json::json!([3])));
+    let r = synth_rust(
+        "s1",
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([3])),
+    );
     let err = verify_union(&g, &r).unwrap_err();
-    assert!(err.iter().any(|e| e.contains("Rng")), "必须红在 Rng 序列：{err:?}");
+    assert!(
+        err.iter().any(|e| e.contains("Rng")),
+        "必须红在 Rng 序列：{err:?}"
+    );
 }
 
 /// **牙②**：改 `DeliverRng` 任一值 ⇒ 红。
 #[test]
 fn tooth_union_deliver_value_changed_red() {
     let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
-    let r = synth_rust("s1", serde_json::json!([1, 2]), Some(serde_json::json!([3, 9])));
+    let r = synth_rust(
+        "s1",
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([3, 9])),
+    );
     let err = verify_union(&g, &r).unwrap_err();
-    assert!(err.iter().any(|e| e.contains("Rng")), "必须红在 Rng 值：{err:?}");
+    assert!(
+        err.iter().any(|e| e.contains("Rng")),
+        "必须红在 Rng 值：{err:?}"
+    );
 }
 
 /// **牙③**：旧口径（`freeze_at_dospell` / 无 `rng_mode`）的金标准 ⇒ 直接红。
 #[test]
 fn tooth_union_legacy_golden_red() {
-    let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("freeze_at_dospell"));
-    let r = synth_rust("s1", serde_json::json!([1, 2]), Some(serde_json::json!([3, 4])));
+    let g = synth_golden(
+        "s1",
+        serde_json::json!([1, 2, 3, 4]),
+        Some("freeze_at_dospell"),
+    );
+    let r = synth_rust(
+        "s1",
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([3, 4])),
+    );
     let err = verify_union(&g, &r).unwrap_err();
     assert!(
         err.iter().any(|e| e.contains("cover_drain")),
@@ -945,7 +1016,10 @@ fn tooth_union_legacy_golden_red() {
     );
     let g2 = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), None);
     let err2 = verify_union(&g2, &r).unwrap_err();
-    assert!(err2.iter().any(|e| e.contains("cover_drain")), "缺 rng_mode 同样红：{err2:?}");
+    assert!(
+        err2.iter().any(|e| e.contains("cover_drain")),
+        "缺 rng_mode 同样红：{err2:?}"
+    );
 }
 
 /// **牙④**：整列 `DeliverRng` 消失（不记了）⇒ 红，**不允许默认空**。
