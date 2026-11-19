@@ -107,6 +107,13 @@ SNAPSHOT_COUNT → TICK_VIEWER → 可见集（集合 → 顺序） → REMOVED 
 5. **顺序牙**：可见集顺序必须与扫描顺序一致（把增量结果排序化 ⇒ 顺序用例红）；
 6. **空输入退化**：零实体/零观察者时行为与现实现一致（不得 panic、不得空转）。
 
+> **牙的靶必须单独验证（2026-11-19 实测教训）**：「场景覆盖了触发类型」≠「每颗牙都有靶」。
+> 窗口差分的「离开项」支最初拿 `viewer_moves` 当靶，但该场景里观察者右移时**没有实体离开窗口**
+> ⇒ 删掉离开支仍全绿（假牙）。补了「观察者移走、怪留在旧窗口」的专测后，删支才红。同理，
+> `entered`/`left` 两支第一版被状态指纹环与无条件的陈旧成员核对兜住，删掉也不红——后来把状态环
+> 收窄为「两 tick 都在」、把陈旧核对限定在 `pruned_after_snapshot` 才让两支承重。**每条触发支
+> 都必须有一条删掉就红的用例，且该用例要能证明自己被触发。**
+
 ## 6. 性能验收（与遥测同口径）
 - 目标：4k AOI 段 p50 **≤150 ms**（达标 ≤100 ms）；10k **≤240 ms**（沿用容量预审口径）；
 - 判读用 `ns_avg` + 线性桶分位（桶宽 32 µs 已入行），不再用 2 的幂边界；
@@ -125,12 +132,50 @@ SNAPSHOT_COUNT → TICK_VIEWER → 可见集（集合 → 顺序） → REMOVED 
 - 双索引（`viewer_cells` + `cell_viewers`）相对 legacy 的 **RSS 增量**：4k 时 p50/p90；
 - 报告口径：同一构建、同参数、`Get-Process WorkingSet` 每 10 s 采样；不设通过线，只作为取舍依据。
 
+### 6d. 2026-11-19 4k 两轮实测：增量（初版）比 legacy 慢 37%，按实测重写
+
+- 实测（同构建，只差 `MIR2_AOI_INCREMENTAL`）：tick 速率 3.51/s → 2.22/s；AOI 段
+  `ns_avg` 340µs → 950µs（final 窗口）、`ns_p50` 416µs → 1,056µs；`inc_rate` 0.965，
+  排除"回退太多"这条解释。
+- 分段实测（本地 `tick_bench --profile --bots 4000 11000`，V≈171）：每趟 gate 30µs 中
+  **`ordered` 全量收集 + `sort_by_key(scan_key)` 19µs（60%，`sort_by_key` 每次比较都重算
+  两次 BTreeMap 查找）+ `view_updates` 逐目标 `store.get` 9µs（30%）**；legacy 同场景 21µs。
+- 重写要点：可见成员表缓存（回退才重建）、移除用 `retain`、`view_updates` 只在「怪物 + 距离门
+  内」的小集合上排序且**零 `store.get`**（字段全部来自 tick 快照）、`is_visible_active` 同源；
+  tick 相容器换 `HashMap` 并合并为单表、双缓冲复用容量、`by_grid` 内层 `Vec` 复用。
+- 遥测口径：增量路径不遍历格子 ⇒ `cells_per_search` 在行内标 `cells_sem=na`，
+  `cand_per_search` 标 `cand_sem=touched`，并带 `mode=legacy|incremental`，禁止把 0 读成
+  「省了 97%」。
+- 剩余杠杆（未做，等重跑判读）：tick 相当前每实体仍做一次 `store.get`，`output_aoi_system`
+  主循环也做一次；可预扫一次共用。
+
 ## 7. 风险与回退
 - 风险①：顺序语义漂移（可见集顺序影响出帧）——用第 5 节顺序牙 + 有序差分盯住；
 - 风险②：搜索间隔门与增量触发交互（间隔未到不应重算）——用例矩阵"触发时机"项；
 - 风险③：边界格与视野半径定义不一致——用边界格用例 + 与 `search_view_range` 同源的窗口枚举函数；
 - 回退：增量实现置于**同一模块的独立入口**（例如 `search_view_range_incremental`），
   由常量/开关选择；差分测试默认双跑；生产切换需一次同构建两轮对照。
+
+## 附录 A：4k 前本地分段实测原始数据（2026-11-19）
+
+**目的**：留底 `incremental_gate` 各段的实测占比，避免下一轮无法回答「19µs 从哪来」。
+临时插桩（环境门 `MIR2_AOI_DBG=1`，**未入提交**）在 worktree 里跑完即复原（sha 校验一致）。
+
+- 命令（release）：
+  `MIR2_AOI_DBG=1 MIR2_AOI_STATS=1 MIR2_AOI_STATS_TICKS=20 MIR2_AOI_INCREMENTAL=1    target/release/tick_bench.exe --profile --bots 4000 11000 40`
+- 参数：200×200 地图，11,000 怪 + 4,000 假玩家；玩家 ViewRange=5（窗口 11×11），
+  故每趟 V≈171（`vis_per_search=171`）。
+- 原始行（累计到第 56,000 趟 gate 的每趟均值，单位 ns）：
+```
+[AOI_DBG] gates=56000 A_vis_inlist=1533 B_touch=61 C_sweep=113 D_filter=32 E_add=30 F_order=18984 G_vu=8975 H_active=367
+```
+- 分段口径：A=可见集收集+成员表构建；B=touched 复评；C=移除+flag 复位；D=离开集守卫过滤；
+  E=新进排序+追加；**F=可见集全量收集 + `sort_by_key(scan_key)`**；**G=`view_updates` 逐目标
+  `store.get`**；H=`is_visible_active` 逐目标 `store.get`。
+- 结论：F(19.0µs) + G(9.0µs) ≈ 28µs / 30µs；legacy 同场景 `ns_avg≈21µs`。`sort_by_key` 每次
+  比较重算键（每次 2 次 BTreeMap 查找）是 F 的主因；G/H 的 EntityRef 构造是第二主因。
+- 修复后同参数：增量 `ns_avg=1,964-2,715`（legacy 20,486-20,617），`idx_avg` 7.1→5.1-5.9ms。
+- **注意**：以上只是方向性验证，不能替代真机 5000 档；主判据仍以同参数两轮真机为准。
 
 ## 8. 交付顺序
 1. 差分测试骨架 + 覆盖矩阵（先红后绿：legacy 对 legacy 应全绿，证明骨架本身不假绿）；
