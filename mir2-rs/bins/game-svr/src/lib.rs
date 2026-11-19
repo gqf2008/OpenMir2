@@ -84647,6 +84647,76 @@ GMEXECUTE f
         assert!(says[0].starts_with("老人/"), "说词尾：{}", says[0]);
     }
 
+    /// **NP-01 对拍样板**（卡 `card/npc-parity`）：读 C# oracle 金标准
+    /// `tests/parity/golden/npc/np01_click_main.json`（生成器 `csharp/NpcGolden`），
+    /// 用**生产入口** `handle_click_npc_cmd` 复跑 4 例：
+    /// 即时帧严格序（`SM_MERCHANTSAY(643)`）+ 说词尾文本 + 三道门（超距/死亡/限频）零帧。
+    ///
+    /// **状态面缺口（登记，不伪造）**：`LastNpc`/`ScriptCurrLable` 在 Rust 会话未建模
+    /// （本文件的 T-137 残余①），故本样板不比 `last_npc_is_npc`/`script_selected`；
+    /// 补齐后在同用例加断言。
+    ///
+    /// **防空转**：golden 缺文件、零用例、未知 case、`drain_hit_cap=true` 一律 panic。
+    #[test]
+    fn np01_click_main_matches_oracle_golden() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/npc/np01_click_main.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读不到 {}: {e}", path.display()));
+        let doc: serde_json::Value = serde_json::from_str(&text).expect("golden JSON");
+        let cases = doc["cases"].as_array().expect("cases 数组");
+        assert!(!cases.is_empty(), "golden 零用例 ⇒ 红（防空转）");
+        let mut n = 0usize;
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            assert_eq!(
+                case["drain_hit_cap"].as_bool(),
+                Some(false),
+                "{name}: DrainPassesHitCap=true 必须红"
+            );
+            let mut rig = T137Rig::new();
+            match name {
+                "click_main_ok" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 必须到达 Click 点");
+                    let frames = rig.drain();
+                    let idents: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
+                    assert_eq!(
+                        idents,
+                        vec![mir2_protocol::messages::SM_MERCHANTSAY],
+                        "{name}: 即时帧严格序"
+                    );
+                    let says = T137Rig::says(&frames);
+                    let expect = case["rm"][0]["msg"].as_str().expect("golden msg");
+                    assert_eq!(says, vec![expect.to_string()], "{name}: 说词尾文本");
+                }
+                "click_main_far" => {
+                    {
+                        let t = rig.world.entities.transform_mut(rig.elder_id).unwrap();
+                        t.x = 40;
+                        t.y = 40;
+                    }
+                    assert!(!rig.click(rig.elder_id), "{name}: 超距必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 超距零帧");
+                }
+                "click_main_dead" => {
+                    let hero = rig.sessions["hero"].actor_id;
+                    rig.world.entities.get_mut(hero).unwrap().life_cycle.death = true;
+                    assert!(!rig.click(rig.elder_id), "{name}: 死亡必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 死亡零帧");
+                }
+                "click_main_rate_limited" => {
+                    let now = rig.world.clock_ms;
+                    rig.sessions.get_mut("hero").unwrap().click_npc_time = Some(now);
+                    assert!(!rig.click(rig.elder_id), "{name}: 限频必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 限频零帧");
+                }
+                other => panic!("golden 出现未知用例 {other}（禁止静默跳过）"),
+            }
+            n += 1;
+        }
+        assert!(n >= 4, "golden 用例数异常：{n}");
+    }
+
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。
     ///
     /// 帧面两者都是零帧（所以「只断言零帧」抓不住区别），故此用例钉**分类** + 钉两条路径都可走：

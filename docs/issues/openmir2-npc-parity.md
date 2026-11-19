@@ -98,15 +98,46 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 - 驱动：Rust 侧走**生产入口**（`bins/game-svr` 的 `CM_CLICKNPC(1010)` / `CM_MERCHANTDLGSELECT(1011)` 派发），复用现有 `SpellFrameRig` 同族的会话/帧收集面；不新增测试专用分支。
 - 清单更新：只改 `docs/issues/parity-gap-npc.json` 的 `status`/`evidence`（分母与 axes 不动），每改一条同改 `notes` 并跑 `coverage-report.ps1`。
 
-## 8. 需 opc-07 裁决（开工前）
+## 8. opc-07 裁决（2026-11-20，已定）
 
-1. **客户端显示口径**：SM 645/652 的文本/字段与 MirClientZig 的显示口径有交叉——NPC 线判定是"服务端字节/语义"为准，还是必须按客户端显示口径？（按你的要求先问，不自定。）
-2. **NP-03 边界**：是否只判"菜单/面板打开"，成交链（BUY/SELL/REPAIR/STORAGE 的 OK/FAIL 与金币/背包）放到 NP-06 的动作副作用里？我建议后者，避免 NP-03 无限膨胀。
-3. **出队序**：说词帧的 High/普通优先级与出队序是否纳入判定？我建议纳入（按 `frames.ndjson` 实际序），与 magic 的 `priority` 面同口径。
-4. **B 层（逐字节）**：NPC 帧主要是文本帧；建议 A 层（ident/param/series/tail + 文本字节）+ 共享编码器，不单独立 B。
+1. **判定面以服务端 oracle 语义为准**（"M2Server 发了什么 + 状态变成什么"），不看客户端长什么样；显示口径冲突要停并上报，不在判定面放宽。
+2. **NP-03 只判"菜单/面板打开（帧 + 菜单门状态）"**；成交链（BUY/SELL/REPAIR/STORAGE 的 OK/FAIL + 金币/背包副作用）全部挂 **NP-06** 的动作副作用。
+3. **出队序纳入账本**：通知类按 **`(priority, ident, 规范化 params)` 排序后逐位比，且重复条目计数**；**即时帧仍严格序**；不用"原始到达序"，也不用"纯多重集"。报告另给一条"同优先级内是否出现多个不同 ident"。
+4. **只做 A 层语义；B 层暂不列**。A = 两侧各自解码后的字段级比较；**禁止共用编码器**（自证空转）。日后要字节证据须各用各的编码器再比，单列 B。
+5. 附加硬要求：`DrainPassesHitCap=true` **必须红**；状态量从实体/DB 直读、不许从回包反推；分母 11 不许动；每条 verified 至少一颗**行为牙**。
+
 
 ## 9. 边界
 
 - 不改分母；不碰 magic/物品/任务线文件（`tests/parity/tests/magic_*.rs`、`tests/parity/golden/magic/*`、`tests/parity/m3/*`、`docs/issues/openmir2-magic-parity.md`、`parity-gap-{magic,items,quests}.json`）。
 - 只在 `card/npc-parity` worktree 提交；不 `commit -a`、不 `checkout -- <path>`、不自己合 master。
 - 不派生下级代理。
+
+## 10. 样板进展（NP-01，2026-11-20）
+
+**装置（已落地）**
+- C# 金标准生成器：`mir2-rs/tests/parity/csharp/NpcGolden/`（引用真身 `src/M2Server`；`new PlayObject()` + `new NormNpc()` + 真 `ScriptEngine`；反射调私有 `ClientClickNpc`，再按真实消息泵 `GetMessage`→`Operate` 把 RM 映射成 SM）。
+- 金标准：`mir2-rs/tests/parity/golden/npc/np01_click_main.json`（4 例：ok / 超距 / Death / 限频；含 `rm[]`+`rm_priorities`+`sm[]`+`drain_passes`/`drain_hit_cap`）。
+- Rust 比较器：`mir2-rs/bins/game-svr/src/lib.rs` 的 `tests::np01_click_main_matches_oracle_golden`（生产入口 `handle_click_npc_cmd`，与既有 `T137Rig` 同源）。
+- 命令与 rc：`CARGO_BUILD_JOBS=6 cargo test -p game-svr --lib np01_click_main_matches_oracle_golden` ⇒ `1 passed / 0 failed`（原文见交付说明）。
+
+**判定面（本样板）**
+- 即时帧：`SM_MERCHANTSAY(643)` 严格序 + 说词尾文本（= golden `rm[0].msg`）。
+- 门：超距 / Death / 限频三例零帧（golden 与 Rust 同为 0）。
+- 通知账本：golden 记录 `(priority=1, ident=11009, params)`；Rust 侧该通知落在帧面（`SM 643`），**priority 不在线缆头**，故本样板按"golden 排序后的期望交付序 vs Rust 实际帧序"比较（单条时恒等）；多通知排序/重复计数在 NP-08 批量用例落地。
+- 状态面缺口：`LastNpc`/`ScriptCurrLable` 在 Rust 会话**未建模**（`lib.rs` 的 T-137 残余①）⇒ 本样板不比这两项，**不伪造**；补齐后再加断言。
+
+**QA 42 条自检（本样板）**
+- R2：`parity-gap-npc.json` 的 `denominator`/`entries` 未被改动（本批不碰）。
+- T2：本样板没有文本牙；行为牙见 §11（实现变异必红）。
+- L3：本样板的状态只读**会话/实体字段**（`click_npc_time`、`life_cycle.death`、`transform`），不从回包反推。
+- D1/D2：golden 每 case 带 `drain_passes`/`drain_hit_cap`；比较器断言 `drain_hit_cap == false`（true 即红）。
+- Z1/Z2/Z3：golden 缺文件、零 cases、未知 case 名、`drain_hit_cap=true` ⇒ panic（防空转）。
+
+## 11. 行为牙（NP-01 样板，待补原文）
+
+在**本 worktree** 内逐条变异、跑同一条测试，期望红，恢复后 sha 相等并复绿；命令与原文将随交付说明给出（不手抄）。
+
+1. 删 `handle_click_npc_cmd` 的距离门 ⇒ `click_main_far` 红；
+2. 删 `handle_click_npc_cmd` 的 `normNpc.Click` 派发 ⇒ `click_main_ok` 红；
+3. （可选）删 Death 门 / 限频门 ⇒ 对应用例红。
