@@ -1077,3 +1077,61 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - **为什么换样本（可证伪性留痕）**：最初用 `healing/heal`（输入 50），实测**术后 HP == 输入 50** ⇒ 在"把捕获
   挪到排水后"的变异下断言仍成立、**牙咬不住**；故改用术后确实变化的雷电 hit。自测样本必须按"能否证伪捕获点
   错位"来选，而不是按"看起来相关"。
+
+## 24. `card/golden-params-4`：A/B/C 三处装置缺陷（2026-11-20，`2d` 15 条重生成的前置）
+
+`2d` 在重生成 15 条 golden 时发现装置三处缺陷，均落在 `MagicGolden/Program.cs`（仓库自留的 oracle 侧
+装置，非 `src/**` 冻结面）；本笔只修这三处，不改 golden 内容（golden 由 `2d` 统一重生成）。
+
+### A. `RunMagicCase` 缺 `rng_total_draws` 与 cover 完整性守卫
+
+- `Fixture` 新增 `rng_total_draws`（seam 实例累计抽取数；排水后、`RngSeam.Restore` 前取值）与
+  `rng_recorded`（`Rng.Count` 快照）。`RunFireball` 早已有这两键，本笔只补齐 `RunMagicCase`。
+- 新增 `EnsureCoverAccounting`：`rng_mode=cover_drain` 时要求 `rng_recorded == rng_total_draws`，
+  否则抛 `FixtureContractViolation` ⇒ 顶层捕获打 `RED FIXTURE_CONTRACT`、rc=2。
+  `freeze_at_dospell` 是 legacy 口径（本来漏记排水期抽取），只记两值不判等。
+- 守卫咬的是**捕获点错位**（M52.1 的失效模式：`draws` 在排水前取快照、`totalDraws` 在排水后读）。
+  正确代码里两者相邻同值，一旦有人把捕获挪到排水之前就立刻不等。
+- **牙（实测，本 worktree）**：把 `RunMagicCase` 的 `draws` 改成「`DoSpell` 后立即取快照」
+  （`drawsEarly`）⇒ `--case lightning11` rc=2：
+  `RED FIXTURE_CONTRACT [runmagic/lightning-11/edge] cover_drain 记账不完整：Rng.Count=5 != rng_total_draws=8`
+  （该支排水期确有 3 次抽取）；`miss` 支无排水抽取、保持绿——守卫只在真有排水抽的支上发声。
+  还原（`cp` 快照；`sha256` 与快照相等、无 `MUTATION` 残留）后四支自测复绿。
+
+### B. `AntiMagicBatch` 的种子门槛必须用**生效** `AntiMagic`
+
+- 缺陷：`AntiMagicBatch` 用 `spec.AntiMagic`（缺省 3）选种子，但 `RunMagicCase` **恒走登录序**
+  （`RecalcLevelAbilitys(); RecalcAbilitys();`），而 `RecalcAbilitys()`（`BaseObject.Abil` 同名方法）
+  无条件 `AntiMagic = 1` 再 `+= AddAbil.AntiMagic`；本装置 `Equipment` 恒空 ⇒ 生效值 = 1。
+  于是三支首抽（2/3/5）在门槛 1 下**全是 hit**，miss/edge 丢失。
+- **选择与理由**：**不改 `MagicSpec.AntiMagic` 缺省**。它只是登录前的构造值（登录序里必被覆盖），
+  改缺省只是让巧合成立；一旦引入装备或登录序变化又会静默退化。改为显式常量
+  `LoginOrderAntiMagic = 1` 作门槛，并在 `RunMagicCase`/`RunFireball` 用 `CheckBranchThreshold`
+  与**实测** `target.AntiMagic` 断言相等——预测错了就生成失败，不会静默产出退化用例。
+- 三支首抽语义（`Random(10) >= AntiMagic` 才通过；11/45/13/44 与火球同式）：
+  miss = 首抽 < 门槛、edge = 首抽 == 门槛、hit = 首抽 > 门槛 ⇒ 门槛 1 下 **0 / 1 / ≥2**。
+- 同一缺陷在 `FireballCase`（`login_order=true`）同样存在（构造期 `antiMagic=3` 被登录序覆盖成 1），
+  按同一修法处理：`effectiveAnti = loginOrder ? LoginOrderAntiMagic : antiMagic`。
+- **牙**：把 `RunAntiMagicTriplet` 的门槛改回 `spec.AntiMagic` ⇒ `--case lightning11` rc=2，
+  `种子门槛与生效 AntiMagic 不符：门槛=3 实测 target.AntiMagic=1`；分支判定本身也有牙
+  （自测里把 `miss` 支的首抽当成 1 ⇒ 违规）。
+
+### C. `Fixture` 增 `seed_reason`（逐支写）
+
+- 每支写明种子来历，例如 `首抽=0(seed 14)，门槛 anti_magic=1（骰 Random(10) >= 门槛 才通过；miss）`。
+  值取自**实测**首抽与实测门槛（不是硬编码文案）；`RunFireball` 与 `RunMagicCase` 产物同带。
+
+### 自测与回归（本笔实测）
+
+- 新 `--case antimagic-selftest`：`lightning-11` 三支在生效 `AntiMagic=1` 下首抽 **0 / 1 / 3**
+  （seed 14 / 18 / 5），逐支断言 `fixture.anti_magic==1`、`seed_reason` 含门槛、
+  `rng_recorded==rng_total_draws`；另钉 A/B 三颗牙的负例（伪造 3 != 5、相等放行、freeze 放行、
+  miss 首抽=门槛、实测门槛不符）。rc=0，`ANTIMAGIC_SELFTEST OK`。
+- 回归：`fixture-selftest`、`fireball-selftest`（`FIREBALL_SEAM_PROBE cover=8->9 freeze=5->5`）、
+  `runmagic-input-selftest` 三者 rc=0。
+- 生成面抽查：`lightning11`/`lightning45`/`firecharm`/`hbfireball`/`fireball5` 五支 rc=0
+  （三支首抽落段断言全过）；`--case fireball` 三种组合（登录序 cover / 非登录序 cover /
+  登录序 freeze ⇒ rc=2 门 3）行为不变。
+- `dotnet build` rc=0（0 error）。
+- 已知遗留（不改，交 `2d` 判断）：`--case fireball` 顶层 `anti_magic` 仍是构造参数（3），
+  逐 case 的 `fixture.anti_magic` 才是生效值（登录序 1）；比较器若读顶层字段应按后者对齐。
