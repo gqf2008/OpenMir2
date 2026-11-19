@@ -1,10 +1,11 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "domain": "quests",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
+  "schema_note": "本域无旧清单（legacy_source 不适用 / N/A）：quests 机器清单 2026-11-19 由 master fb999d34a 新建，无 legacy 清单可迁移，故条目无需 legacy_id。",
   "counting_moment": {
-    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
-    "time": "2026-11-19T23:25:52+08:00"
+    "head": "fb999d34a110d67d743f2825ade9d669cb92537a",
+    "time": "2026-11-19T23:29:39+08:00"
   },
   "status_enum": [
     "verified",
@@ -47,6 +48,7 @@
         "line_end": 4110
       },
       "status": "verified",
+      "basis": "bytes",
       "evidence": {
         "test": "quest_bitmap_matches_oracle_byte_for_byte",
         "test_file": "mir2-rs/crates/script/tests/quest_state_vectors.rs",
@@ -225,12 +227,15 @@
         "line": 146,
         "line_end": 168
       },
-      "status": "implemented_unverified",
+      "status": "dead_in_oracle",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "quest_gate_is_dead_in_oracle_like_oracle",
+        "test_file": "mir2-rs/crates/script/tests/parser_tests.rs",
+        "fixture": "E:/UserFleet/qa/quests/qt01/quest_gate_reachability.tsv",
+        "cases": [
+          "QT01-A",
+          "QT01-B"
+        ],
         "unit_tests": [
           "quest_creates_new_script_info",
           "quest_block_keeps_writing_into_previous_record"
@@ -243,7 +248,7 @@
         "section": "scriptType==1 死分支",
         "lines": null
       },
-      "notes": "运行时 check_quest_status（crates/script/src/engine/mod.rs 第 1074 行）无 oracle 夹具；#RAND 支保守按 0，登记 B-13；语料 {Quest 0 个文件"
+      "notes": "oracle 死分支：`{Quest` 头解析只在 `scriptType == 1` 块内发生，而该局部变量在 LoadScriptFile 内 7 处赋值为 10/20/11/12/10/13/14、从不为 1 ⇒ ScriptInfo.IsQuest 恒 false ⇒ CheckGotoLableQuestStatus 恒真。证据：探针 mir2-rs/tests/parity/m3/quests/quest-parity-probe （真 LoadScriptFile 装载 2 份 {Quest 头脚本：先证装载成功，再断言 IsQuest=false / QuestInfo=null），产物 E:/UserFleet/qa/quests/qt01/quest_gate_reachability.tsv；全仓 IsQuest 赋值枚举见同目录 grep_isquest_all_cs.txt（唯一 true 赋值在死块内；NormNpc.IsQuest 是另一个类自己的字段）。Rust 侧 is_quest 无写入点，等价保持。语料 E:/MirServer 2640 个 .txt 中 0 个含 {Quest 头。偏差 B-13。"
     },
     {
       "id": "QT-02",
@@ -253,17 +258,31 @@
         "line": 4174,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "quest_check_conditions_match_oracle_ledger",
+        "test_file": "mir2-rs/bins/game-svr/tests/quests_parity.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quests/vectors/quest_check_ledger.tsv",
+        "cases": [
+          "QT02-01",
+          "QT02-02",
+          "QT02-03",
+          "QT02-04",
+          "QT02-05",
+          "QT02-06",
+          "QT02-07",
+          "QT02-08",
+          "QT02-09",
+          "QT02-10",
+          "QT02-11",
+          "QT02-12"
+        ],
         "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "impl cond_check（crates/script/src/engine/conditions.rs 第 456 行）；底层位读有 oracle 向量（QX-01），判定本身无直接夹具；语料 12 个文件使用"
+      "notes": "对拍用例 quest_check_conditions_match_oracle_ledger：金标准由探针 --checks 用真解析器取 QuestConditionInfo 再走真 ConditionProcessingSys.Execute（取数口是预置位的真 PlayObject）。覆盖 flag 5/9 × status 0/1 × value 0/1、非数字 flag/值、越界 flag 1025、flag 0。行为牙：删掉 cond_check 的「标记为 0 而期望非 0 ⇒ 假」一支 ⇒ 4 例必红，复原后 sha 相等。",
+      "basis": "semantic"
     },
     {
       "id": "QT-03",
@@ -291,7 +310,8 @@
         "section": "CHECKOPEN 恒假（oracle 缺陷 1:1 复刻）",
         "lines": null
       },
-      "notes": "缺陷照搬，不得修掉；改它与 oracle 不一致。将来修好须单开 S-* 批次。语料 0"
+      "notes": "缺陷照搬，不得修掉；改它与 oracle 不一致。将来修好须单开 S-* 批次。语料 0",
+      "basis": "semantic"
     },
     {
       "id": "QT-04",
@@ -314,7 +334,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "语料 0"
+      "notes": "语料 0",
+      "basis": "semantic"
     },
     {
       "id": "QT-05",
@@ -324,19 +345,34 @@
         "line": 2036,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "implemented_registry_entries_are_actually_implemented"
-        ]
+        "test": "quest_actions_match_oracle_ledger",
+        "test_file": "mir2-rs/bins/game-svr/tests/quests_parity.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quests/vectors/quest_action_ledger.tsv",
+        "cases": [
+          "QT05-01",
+          "QT05-02",
+          "QT05-03",
+          "QT05-04",
+          "QT05-05",
+          "QT05-06",
+          "QT05-07",
+          "QT05-08",
+          "QT05-09",
+          "QT05-10",
+          "QT05-11",
+          "QT05-12",
+          "QT05-D1",
+          "QT05-D2",
+          "QT05-D3"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "impl ActionOfSet（crates/script/src/engine/actions.rs 第 192 行）；无动作级 oracle 夹具；语料 18 个文件使用"
+      "notes": "对拍用例 quest_actions_match_oracle_ledger（金标准由探针 --actions 在真 ScriptEngine.GotoLable + 真 PlayObject 上生成）。覆盖：值 0/1/2/-1、flag 0/-3/1025、非数字 flag/值、缺 sParam2、引号空白值（oracle 解析期抛 IndexOutOfRangeException，Rust 侧结构化 CaptureStringPanic，同崩对拍）。另钉住「#ACT 里注册命令执行后立即 return ⇒ 多行动作只有第一条执行」（GotoLableQuestActionProcess 的 IsRegister 分支）。",
+      "basis": "semantic"
     },
     {
       "id": "QT-06",
@@ -346,19 +382,26 @@
         "line": 2043,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "implemented_registry_entries_are_actually_implemented"
-        ]
+        "test": "quest_actions_match_oracle_ledger",
+        "test_file": "mir2-rs/bins/game-svr/tests/quests_parity.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quests/vectors/quest_action_ledger.tsv",
+        "cases": [
+          "QT06-01",
+          "QT06-02",
+          "QT06-03",
+          "QT06-04",
+          "QT06-05",
+          "QT06-06",
+          "QT06-07"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "impl ActionOfReSet（actions.rs 第 199 行）；语料 0"
+      "notes": "对拍用例 quest_actions_match_oracle_ledger。覆盖 count 3/0/-1/非数字（nParam2 默认 1 ⇒ 非数字清 1 个）/缺参；j 同受「第一条注册命令后 return」影响（多行 RESET 只在首行生效）。",
+      "basis": "semantic"
     },
     {
       "id": "QT-07",
@@ -368,19 +411,22 @@
         "line": 2051,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "implemented_registry_entries_are_actually_implemented"
-        ]
+        "test": "quest_actions_match_oracle_ledger",
+        "test_file": "mir2-rs/bins/game-svr/tests/quests_parity.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quests/vectors/quest_action_ledger.tsv",
+        "cases": [
+          "QT07-01",
+          "QT07-02",
+          "QT07-03"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "impl ActionOfSetOpen（actions.rs 第 205 行）；语料 0"
+      "notes": "对拍用例 quest_actions_match_oracle_ledger。覆盖置位/清位/非数字 flag。",
+      "basis": "semantic"
     },
     {
       "id": "QT-08",
@@ -390,19 +436,22 @@
         "line": 2058,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "implemented_registry_entries_are_actually_implemented"
-        ]
+        "test": "quest_actions_match_oracle_ledger",
+        "test_file": "mir2-rs/bins/game-svr/tests/quests_parity.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quests/vectors/quest_action_ledger.tsv",
+        "cases": [
+          "QT08-01",
+          "QT08-02",
+          "QT08-03"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "impl ActionOfSetUnit（actions.rs 第 210 行）；语料 0"
+      "notes": "对拍用例 quest_actions_match_oracle_ledger。覆盖置位/清位/非数字 flag。",
+      "basis": "semantic"
     },
     {
       "id": "QT-09",
@@ -412,19 +461,25 @@
         "line": 2065,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "implemented_registry_entries_are_actually_implemented"
-        ]
+        "test": "quest_actions_match_oracle_ledger",
+        "test_file": "mir2-rs/bins/game-svr/tests/quests_parity.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quests/vectors/quest_action_ledger.tsv",
+        "cases": [
+          "QT09-01",
+          "QT09-02",
+          "QT09-03"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "impl ActionOfResetUnit（actions.rs 第 155 行）；语料 0"
+      "notes": "对拍用例 quest_actions_match_oracle_ledger。覆盖多清/非数字 count（默认 1）/缺参。",
+      "basis": "semantic"
     }
-  ]
+  ],
+  "schema_changelog": {
+    "2": "新增可选 basis 字段（verified 条目用；值域 semantic|bytes|mixed，缺省 semantic），见 docs/issues/openmir2-quests-parity.md §7"
+  }
 }

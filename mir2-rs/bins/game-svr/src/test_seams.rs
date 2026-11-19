@@ -167,6 +167,75 @@ pub fn move_log_enabled() -> bool {
     *LOG_MOVES.get().unwrap_or(&false)
 }
 
+// ---------------------------------------------------------------------------
+// 世界就绪等待上界 + 测试用决策延迟（卡 `openmir2-quests-parity` §10.8）
+// ---------------------------------------------------------------------------
+
+/// 网关连接等待世界就绪的上界（毫秒）。缺省 30000（opc-07 2026-11-20 裁定：挂起必须有界）。
+pub const GATE_READY_WAIT_MS_ENV: &str = "MIR2_GATE_READY_WAIT_MS";
+
+/// 缺省上界：30s（与既有网关判定周期同量级；oracle 在同窗口直接拒连，本仓挂起以保启动时序）。
+pub const DEFAULT_GATE_READY_WAIT_MS: u64 = 30_000;
+
+/// 测试缝：把 sim 的「世界就绪/中止」决策点延迟 N 毫秒（缺省 `0` = 不延迟）。
+///
+/// 只供进程级用例构造「Ready 晚于上界」的场景（与 `MIR2_CLOCK_MS` / `MIR2_TEST_PERMISSION`
+/// 同族：默认关、启动即固定、非法值 fail-closed）。
+pub const TEST_WORLD_READY_DELAY_MS_ENV: &str = "MIR2_TEST_WORLD_READY_DELAY_MS";
+
+static WORLD_READY_DELAY_MS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+fn parse_ms(name: &str, raw: Option<&str>, default_ms: u64) -> Result<u64, String> {
+    match raw {
+        None | Some("") => Ok(default_ms),
+        Some(s) => s
+            .parse::<u64>()
+            .map_err(|_| format!("{name} 非法：{s:?}（只接受十进制毫秒；空串=缺省）")),
+    }
+}
+
+/// 从进程环境读「等待世界就绪上界」（毫秒）。
+///
+/// # Errors
+/// 非 UTF-8 或非法十进制。
+pub fn gate_ready_wait_ms_from_env() -> Result<u64, String> {
+    match std::env::var_os(GATE_READY_WAIT_MS_ENV) {
+        None => Ok(DEFAULT_GATE_READY_WAIT_MS),
+        Some(os) => {
+            let s = os.to_str().ok_or_else(|| {
+                format!("{GATE_READY_WAIT_MS_ENV} 含非 UTF-8 字节（拒绝静默当未设）")
+            })?;
+            parse_ms(GATE_READY_WAIT_MS_ENV, Some(s), DEFAULT_GATE_READY_WAIT_MS)
+        }
+    }
+}
+
+/// 安装测试缝「就绪决策延迟」（进程内一次性）。
+///
+/// # Errors
+/// 非 UTF-8、非法十进制，或已安装过。
+pub fn install_world_ready_delay_from_env() -> Result<u64, String> {
+    let ms = match std::env::var_os(TEST_WORLD_READY_DELAY_MS_ENV) {
+        None => 0,
+        Some(os) => {
+            let s = os.to_str().ok_or_else(|| {
+                format!("{TEST_WORLD_READY_DELAY_MS_ENV} 含非 UTF-8 字节（拒绝静默当未设）")
+            })?;
+            parse_ms(TEST_WORLD_READY_DELAY_MS_ENV, Some(s), 0)?
+        }
+    };
+    WORLD_READY_DELAY_MS
+        .set(ms)
+        .map_err(|_| format!("{TEST_WORLD_READY_DELAY_MS_ENV} 只能安装一次"))?;
+    Ok(ms)
+}
+
+/// 就绪决策延迟（未安装 ⇒ `0`）。
+#[must_use]
+pub fn world_ready_delay() -> std::time::Duration {
+    std::time::Duration::from_millis(*WORLD_READY_DELAY_MS.get().unwrap_or(&0))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -195,6 +264,22 @@ mod tests {
         assert!(parse_log_ids(Some(" 1")).is_err(), "带空白不静默接受");
         assert!(!ids_log_enabled(), "本进程未安装 ⇒ 关");
         assert!(!move_log_enabled(), "走位缝同样默认关");
+    }
+
+    #[test]
+    fn parse_ms_contract() {
+        assert_eq!(parse_ms("X", None, 7), Ok(7), "未设 ⇒ 缺省");
+        assert_eq!(parse_ms("X", Some(""), 7), Ok(7), "空串 ⇒ 缺省");
+        assert_eq!(parse_ms("X", Some("0"), 7), Ok(0));
+        assert_eq!(parse_ms("X", Some("250"), 7), Ok(250));
+        assert!(parse_ms("X", Some("-1"), 7).is_err(), "负数非法");
+        assert!(parse_ms("X", Some(" 1"), 7).is_err(), "带空白不静默接受");
+        assert!(parse_ms("X", Some("1s"), 7).is_err(), "只认毫秒");
+        assert_eq!(
+            world_ready_delay(),
+            std::time::Duration::ZERO,
+            "本进程未安装 ⇒ 0"
+        );
     }
 
     #[test]

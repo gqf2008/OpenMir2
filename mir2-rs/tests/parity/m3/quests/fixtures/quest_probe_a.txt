@@ -1,0 +1,7 @@
+{Quest 1}
+[@main]
+#SAY
+probe main a
+[@other]
+#SAY
+probe other a

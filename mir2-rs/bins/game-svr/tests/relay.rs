@@ -1322,3 +1322,215 @@ async fn disconnect_clears_world_and_same_char_can_reenter() {
     );
     child.stop().await;
 }
+
+/// 给「中止范围」进程级用例造目录：`Envir/MapInfo.txt` + `Map/0.map` + 隐藏 NPC 脚本
+/// （`MapQuest_def/QManage.txt` 恒好 = 前缀；`Robot_def/RobotManage.txt` 由 `good_robot_manage`
+/// 决定好/坏）+ `Server.conf`（**无 `WorldMaps`**，走真注册表，形态同
+/// `starts_without_worldmaps_when_envir_present`）。
+///
+/// 坏脚本 = `SET [5] " "`：oracle `CaptureString` 在 `i == len` 越界（卡 §10.3 事实②），
+/// 解析期抛 `IndexOutOfRangeException` ⇒ `NpCinitialize` 全链无 try/catch ⇒ 整批中止。
+fn write_quest_abort_fixture(
+    dir: &std::path::Path,
+    port: u16,
+    ids_port: u16,
+    db_port: u16,
+    good_robot_manage: bool,
+) {
+    std::fs::create_dir_all(dir.join("Envir").join("MapQuest_def")).unwrap();
+    std::fs::create_dir_all(dir.join("Envir").join("Robot_def")).unwrap();
+    std::fs::create_dir_all(dir.join("Map")).unwrap();
+    std::fs::write(dir.join("Envir").join("MapInfo.txt"), "[0 town]\n").unwrap();
+    std::fs::write(dir.join("Map").join("0.map"), synth_map(3, 3)).unwrap();
+    std::fs::write(
+        dir.join("Envir").join("MapQuest_def").join("QManage.txt"),
+        "[@Login]\n#SAY\nquest abort probe\n",
+    )
+    .unwrap();
+    let robot = if good_robot_manage {
+        "[@main]\n#SAY\nrobot ok\n"
+    } else {
+        "[@main]\n#ACT\nSET [5] \" \"\n"
+    };
+    std::fs::write(
+        dir.join("Envir").join("Robot_def").join("RobotManage.txt"),
+        robot,
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("Server.conf"),
+        format!(
+            "[Server]\nCheckBlock=12288\nGateAddr= 127.0.0.1\nGatePort={port}\n\
+             IDSAddr= 127.0.0.1\nIDSPort={ids_port}\nDBAddr=127.0.0.1\nDBPort={db_port}\n"
+        ),
+    )
+    .unwrap();
+}
+
+/// 起一台带隐藏 NPC 脚本的 `game-svr`（等 bind 标记；端口被抢时有界重试）。
+async fn spawn_quest_abort_server(
+    tag: &str,
+    good_robot_manage: bool,
+) -> Option<(
+    tokio::process::Child,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    u16,
+)> {
+    spawn_quest_server_with_env(tag, good_robot_manage, &[]).await
+}
+
+/// [`spawn_quest_abort_server`] 的带环境变量版本（进程级测试缝：就绪延迟/上界）。
+async fn spawn_quest_server_with_env(
+    tag: &str,
+    good_robot_manage: bool,
+    envs: &[(&str, &str)],
+) -> Option<(
+    tokio::process::Child,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    u16,
+)> {
+    for _ in 0..5 {
+        let dir = support::unique_temp_dir(tag);
+        std::fs::remove_dir_all(&dir).ok();
+        let port = support::next_port();
+        write_quest_abort_fixture(
+            &dir,
+            port,
+            support::next_port(),
+            support::next_port(),
+            good_robot_manage,
+        );
+        let log = dir.join("server.out.log");
+        let out = std::fs::File::create(&log).unwrap();
+        let err = out.try_clone().unwrap();
+        let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_game-svr"));
+        cmd.arg(dir.join("Server.conf"))
+            .stdout(out)
+            .stderr(err)
+            .kill_on_drop(true);
+        for (k, v) in envs {
+            cmd.env(k, v);
+        }
+        let mut proc = cmd.spawn().unwrap();
+        let text = support::wait_child_ready(&mut proc, &log, port, Duration::from_secs(10)).await;
+        if text.contains(&format!(":{port}]已启动")) {
+            return Some((proc, dir, log, port));
+        }
+        proc.kill().await.ok();
+        std::fs::remove_dir_all(&dir).ok();
+    }
+    None
+}
+
+/// 卡 `openmir2-quests-parity` §10.7 三验收之 ②③：
+///
+/// ② **中止后不对外服务**：世界初始化被 NPC 脚本装载中止（oracle `NpCinitialize` 全链无
+/// try/catch）⇒ 网关连接被拒（读到 EOF + 日志 `服务器未就绪`，oracle `TCPNetChannel.cs:72-78`
+/// 原文/语义），且**异常前已装载的前缀 NPC 被保留**（ERR 行可观测 = `partial` 在生产路径被使用）。
+/// 连接在 **Booting 窗口内**建立也不得进世界（准入闸 Booting 挂起 → Aborted 拒）。
+/// ③ **正常路径不变**：同一动作（`GM_OPEN`）⇒ 放行（`GM_SERVERUSERINDEX`，索引 = 下标+1）。
+#[tokio::test]
+async fn world_init_abort_refuses_admission_and_keeps_prefix_npcs() {
+    // ---- ② 中止配置：QManage（好，前缀）+ RobotManage（坏 ⇒ 解析器越界）----
+    let Some((mut proc, dir, log, port)) = spawn_quest_abort_server("gs-quest-abort", false).await
+    else {
+        panic!("中止配置的 game-svr 连试 5 次都没能 bind 成功（端口被抢？）");
+    };
+    let _guard = support::TempDirGuard(dir.clone());
+    // **Booting 窗口内建立连接**（bind 已成功、世界未必初始化完）：随后中止必须被拒。
+    let mut gate = connect_with_retry(port).await;
+    let _ = gate
+        .write_all(&frame(grobal2::GM_OPEN, 1001, 1, 0, b"127.0.0.1"))
+        .await;
+    // 等 sim 的中止落账行：前缀 NPC 必须被保留（partial 生产保留的可观测断言）。
+    let text = support::wait_log_contains(&log, "世界初始化中止", Duration::from_secs(15)).await;
+    assert!(
+        text.contains("世界初始化中止"),
+        "中止落账行缺失；日志实得：{text}"
+    );
+    assert!(
+        text.contains("保留异常前已装载的前缀 NPC 1 条（ChrName=QManage）"),
+        "异常前的前缀 NPC 必须保留（partial 被生产路径使用）；日志实得：{text}"
+    );
+    // 连接必须被服务端关闭（读到 EOF）——不得收到 `GM_SERVERUSERINDEX`。
+    let mut buf = [0u8; 20];
+    let n = tokio::time::timeout(Duration::from_secs(10), gate.read(&mut buf))
+        .await
+        .expect("读超时：中止后网关连接必须被关闭")
+        .unwrap_or(0);
+    assert_eq!(n, 0, "中止后必须读到 EOF（不是任何 GM_* 帧）");
+    let text = support::wait_log_contains(&log, "服务器未就绪", Duration::from_secs(5)).await;
+    assert!(
+        text.contains("服务器未就绪"),
+        "拒绝原因必须落日志（oracle `TCPNetChannel.cs:72-78` 原文）；日志实得：{text}"
+    );
+    proc.kill().await.ok();
+
+    // ---- ③ 正常路径：同一动作必须放行 ----
+    let Some((mut proc2, dir2, log2, port2)) = spawn_quest_abort_server("gs-quest-ok", true).await
+    else {
+        panic!("正常配置的 game-svr 连试 5 次都没能 bind 成功（端口被抢？）");
+    };
+    let _guard2 = support::TempDirGuard(dir2.clone());
+    let mut gate2 = connect_with_retry(port2).await;
+    gate2
+        .write_all(&frame(grobal2::GM_OPEN, 1001, 1, 0, b"127.0.0.1"))
+        .await
+        .unwrap();
+    let (m, _) = recv_frame(&mut gate2)
+        .await
+        .expect("正常路径必须回 `GM_SERVERUSERINDEX`");
+    assert_eq!(m.session_index, 1, "正常路径必须放行（索引 = 下标+1）");
+    let text =
+        support::wait_log_contains(&log2, "世界初始化完成：准入就绪", Duration::from_secs(10))
+            .await;
+    assert!(
+        text.contains("世界初始化完成：准入就绪"),
+        "正常路径必须置就绪（oracle `StartReady = true` 等价物）；日志实得：{text}"
+    );
+    proc2.kill().await.ok();
+}
+
+/// 挂起必须**有界**（opc-07 2026-11-20 裁定）：世界就绪决策晚于上界 ⇒ 主动关闭 + `服务器未就绪`。
+///
+/// 构造：`MIR2_TEST_WORLD_READY_DELAY_MS=60000`（就绪决策延迟 60s，长于本用例全程 ⇒ 连接建立时
+/// 恒为 Booting，不受整文件并行跑批的启动延迟影响）+ `MIR2_GATE_READY_WAIT_MS=200`（挂起上界 200ms）
+/// ⇒ Booting 窗口内建立的连接必在 ~200ms 后被服务端关闭（读到 EOF），
+/// 日志含 `服务器未就绪` 且写明「未在 200ms 内给出就绪结论」。
+/// 红检：去掉 `admitted_until` 的 `sleep` 臂（改回无界 `admitted()`）⇒ 本用例读超时必红。
+#[tokio::test]
+async fn world_ready_hold_times_out_and_refuses() {
+    let Some((mut proc, dir, log, port)) = spawn_quest_server_with_env(
+        "gs-quest-ready-timeout",
+        true,
+        &[
+            ("MIR2_TEST_WORLD_READY_DELAY_MS", "60000"),
+            ("MIR2_GATE_READY_WAIT_MS", "200"),
+        ],
+    )
+    .await
+    else {
+        panic!("game-svr 连试 5 次都没能 bind 成功（端口被抢？）");
+    };
+    let _guard = support::TempDirGuard(dir.clone());
+    // bind 之后、就绪决策之前（Booting 窗口内）建连 ⇒ 挂起。
+    let mut gate = connect_with_retry(port).await;
+    let mut buf = [0u8; 20];
+    let n = tokio::time::timeout(Duration::from_secs(10), gate.read(&mut buf))
+        .await
+        .expect("读超时：挂起必须有界（上界 200ms 后必须关闭连接）")
+        .unwrap_or(0);
+    assert_eq!(n, 0, "超过上界必须读到 EOF（服务端主动关闭）");
+    let text = support::wait_log_contains(&log, "服务器未就绪", Duration::from_secs(5)).await;
+    assert!(
+        text.contains("服务器未就绪"),
+        "超时拒连必须落 oracle 原文前缀；日志实得：{text}"
+    );
+    assert!(
+        text.contains("200ms"),
+        "拒绝原因必须写明上界（可区分中止与超时）；日志实得：{text}"
+    );
+    proc.kill().await.ok();
+}

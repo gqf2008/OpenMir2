@@ -148,6 +148,21 @@ pub struct NpcLoadFailure {
     pub reason: String,
 }
 
+/// 脚本装载**中止**（oracle 异常穿透 `NpCinitialize` 整条初始化链）时携带的部分状态。
+///
+/// 卡 `openmir2-quests-parity` §10.7：调用方必须**保留** [`Self::partial`]（oracle 异常前已
+/// `new` 出来的前缀 NPC 留在内存里），而不是丢弃整批——否则「中止后前缀集合」无法与 oracle
+/// 对拍，且 `partial` 会变成死代码。
+#[derive(Debug)]
+pub struct NpcLoadAbort {
+    /// 触发中止的解析异常（`LoadScriptFile` 穿透）。
+    pub panic: mir2_script::LoadPanic,
+    /// 异常前已成功装载的前缀宿主（`defs` 顺序 = oracle 的构造顺序）。
+    pub partial: NpcHost,
+    /// 失败脚本的身份（oracle 的异常栈不带这些；由探针按「异常时正在装载的那条」记录，两侧对拍）。
+    pub failing: NpcLoadFailure,
+}
+
 /// 一个 NPC 的**运行时**记录（身份 + 脚本）。
 #[derive(Debug)]
 pub struct NpcDef {
@@ -526,17 +541,24 @@ impl NpcHost {
     ///
     /// `rename_rand` 是解析器重名 label 改名用的随机源（oracle `RandomNumber.GetRandomNumber(1,200)`；
     /// 生产路径必须传**世界同一条** RNG，见 R-4/Claim B）。
+    /// 返回 `Err` = **整批中止**：oracle 的 `LoadScriptFile` 抛异常时，
+    /// `WorldServer.Initialize → MerchantInitialize → NpCinitialize` 全链没有 try/catch，
+    /// 异常会穿出并中止整批 NPC/商家装载（卡 `openmir2-quests-parity` §10.6）。
+    ///
+    /// 中止时**不丢弃**已装载的结果：`Err(NpcLoadAbort)` 携带异常前的前缀宿主（`partial`）
+    /// 与失败脚本身份（`failing`）——oracle 的异常只中止**后续**装载，已 `new` 的 NPC 留在
+    /// 内存里（§10.7 裁决②），调用方据此保留部分宿主并与 oracle 对拍前缀集合。
     pub fn load(
         envir_root: &Path,
         quest_npcs: &[QuestNpcRecord],
         merchants: &[QuestNpcRecord],
         goto_count_limit: i32,
         rename_rand: &mut dyn FnMut(i32, i32) -> i32,
-    ) -> Self {
+    ) -> Result<Self, Box<NpcLoadAbort>> {
         let parsers = ScriptParsers::new();
         let fs = LocalFs;
         let mut defs: Vec<NpcDef> = Vec::new();
-        let mut failures: Vec<NpcLoadFailure> = Vec::new();
+        let failures: Vec<NpcLoadFailure> = Vec::new();
         // oracle 装载序：`MapQuestManager` 的 `AddQuestNpc` 记录先，`AddMerchant`（QFunction）后。
         for (idx, record) in quest_npcs.iter().chain(merchants.iter()).enumerate() {
             // `Merchant`（ScriptName 非空）走 `LoadScriptFile(..., boFlag=true)`；其余 `LoadScript` ⇒ false。
@@ -556,13 +578,33 @@ impl NpcHost {
                 Ok(Some(outcome)) => (outcome.scripts, true),
                 Ok(None) => (Vec::new(), false),
                 Err(panic) => {
-                    failures.push(NpcLoadFailure {
+                    // 行为与 oracle 一致：整批中止（不记录后继续）。日志不算偏离。
+                    // 但**保留前缀**：异常前已装载的 NPC 在 oracle 里已经 `new` 出来、留在内存里
+                    // （§10.7 裁决②），调用方据此保留部分宿主并与 oracle 对拍前缀集合。
+                    let failing = NpcLoadFailure {
                         chr_name: record.chr_name.clone(),
                         file_path: record.file_path.clone(),
                         script_name: script_name.clone(),
                         reason: panic.to_string(),
-                    });
-                    (Vec::new(), false)
+                    };
+                    eprintln!(
+                        "ERR NPC 脚本装载中止：chr_name={} file_path={} script_name={} reason={} 已装载={} 条",
+                        failing.chr_name,
+                        failing.file_path,
+                        failing.script_name,
+                        failing.reason,
+                        defs.len()
+                    );
+                    return Err(Box::new(NpcLoadAbort {
+                        panic,
+                        partial: NpcHost {
+                            envir_root: envir_root.to_path_buf(),
+                            defs,
+                            failures,
+                            goto_count_limit,
+                        },
+                        failing,
+                    }));
                 }
             };
             defs.push(NpcDef {
@@ -577,12 +619,12 @@ impl NpcHost {
                 actor_id: i32::try_from(idx + 1).unwrap_or(i32::MAX),
             });
         }
-        NpcHost {
+        Ok(NpcHost {
             envir_root: envir_root.to_path_buf(),
             defs,
             failures,
             goto_count_limit,
-        }
+        })
     }
 
     /// `QuestNpcList`/`MerchantList` 的 `FindNPC`/`GetNpc` 口径（`ChrName`，大小写不敏感）。
@@ -2610,7 +2652,8 @@ mod tests {
         };
         let mut rng = no_rng();
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty(), "{:?}", host.failures);
         assert_eq!(host.defs.len(), 1);
         assert!(host.defs[0].loaded, "QManage.txt 必须被解析");
@@ -2642,12 +2685,58 @@ mod tests {
             is_quest: false,
         };
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty());
         assert!(!host.defs[0].loaded);
         let mut rng = no_rng();
         let mut player = NpcPlayer::empty(&mut rng);
         assert!(host.run_login(&mut player).unwrap().is_empty());
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// **中止范围（卡 `openmir2-quests-parity` §10.7 ①）**：坏脚本**之前**的 good 留在
+    /// `NpcLoadAbort.partial` 里，坏脚本**之后**的 good 不得装载；失败脚本身份随 `Err` 返回。
+    ///
+    /// 红检：把 [`NpcHost::load`] 的致命分支改回「记录后继续」⇒ 本用例拿不到 `Err` ⇒ 必红。
+    #[test]
+    fn load_abort_keeps_loaded_prefix() {
+        let root = std::env::temp_dir().join(format!("gs-npc-abort-{}", std::process::id()));
+        let dir = root.join("Envir").join("AbortScope");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("good_a.txt"), "[@main]\n#SAY\nok a\n").unwrap();
+        // `SET [5] " "`：oracle `CaptureString` 在 `i == len` 越界（§10.3 事实②）⇒ 解析期中止。
+        std::fs::write(dir.join("bad.txt"), "[@main]\n#ACT\nSET [5] \" \"\n").unwrap();
+        std::fs::write(dir.join("good_b.txt"), "[@main]\n#SAY\nok b\n").unwrap();
+        let rec = |name: &str| QuestNpcRecord {
+            map_name: "0".to_string(),
+            curr_x: 0,
+            curr_y: 0,
+            chr_name: name.to_string(),
+            npc_flag: 0,
+            appr: 0,
+            file_path: "AbortScope".to_string(),
+            script_name: None,
+            is_hide: true,
+            is_quest: false,
+        };
+        let records = vec![rec("good_a"), rec("bad"), rec("good_b")];
+        let mut rename = move |_min: i32, _max: i32| 1;
+        let err = NpcHost::load(&root.join("Envir"), &records, &[], 40, &mut rename)
+            .expect_err("坏脚本必须让整批中止");
+        assert_eq!(err.failing.chr_name, "bad", "失败脚本身份必须是 bad");
+        assert!(
+            err.failing.reason.contains("IndexOutOfRangeException"),
+            "失败原因必须是解析器越界：{}",
+            err.failing.reason
+        );
+        let names: Vec<&str> = err
+            .partial
+            .defs
+            .iter()
+            .map(|d| d.chr_name.as_str())
+            .collect();
+        assert_eq!(names, ["good_a"], "前缀集合必须只含坏脚本之前的 good");
         std::fs::remove_dir_all(&root).ok();
     }
 
@@ -4234,7 +4323,8 @@ Other
             is_quest: false,
         };
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty(), "{:?}", host.failures);
         let mut rng = no_rng();
         let mut player = NpcPlayer::empty(&mut rng);
@@ -4303,7 +4393,8 @@ Other
             is_quest: false,
         };
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty(), "{:?}", host.failures);
         let mut rng = no_rng();
         let mut player = NpcPlayer::empty(&mut rng);
@@ -4479,7 +4570,8 @@ Other
             is_quest: false,
         };
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty(), "{:?}", host.failures);
         let mut rng = no_rng();
         let mut player = NpcPlayer::empty(&mut rng);
