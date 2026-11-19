@@ -655,7 +655,7 @@ target.WAbil.HP = (ushort)targetHp;
 `equip.abil.max_exp = 50`）。**`spec.TargetMaxHp` 自此只作元数据与治愈 self 支输入**，
 14/15/31 的 target 实际 MaxHP = 等级派生值（20 级战士 = 224）。
 
-**golden 重生成（逐字段；C# 窗口 2026-11-20）**：
+**golden 重生成（逐字段；C# 窗口 2026-11-20；提交 `6e86a0c10`）**：
 
 | 文件 | old sha256 | new sha256 |
 |---|---|---|
