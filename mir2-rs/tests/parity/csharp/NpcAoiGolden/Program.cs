@@ -80,6 +80,12 @@ internal static class Program
             return 2;
         }
         var outDir = args.Length > 0 ? args[0] : Path.Combine(Path.GetTempPath(), "npc-aoi-golden");
+        var caseName = args.Length > 1 ? args[1] : "fresh_scan";
+        if (caseName != "fresh_scan" && caseName != "cache_window")
+        {
+            Console.Error.WriteLine("BAD_CASE " + caseName);
+            return 2;
+        }
         Directory.CreateDirectory(outDir);
 
         var doc = new Dictionary<string, object>
@@ -95,9 +101,13 @@ internal static class Program
             },
             ["max_drain_passes"] = MaxDrainPasses,
             ["excluded_wallclock_fields"] = new[] { "delivery", "send_ref_msg_tick" },
-            ["cases"] = new List<object> { RunCase(mapDir) },
+            // 每进程只跑**一例**（`SystemShare` 跨例残留会静默改 B 例的收件人面；逐例隔离）。
+            ["cases"] = new List<object>
+            {
+                RunCase(mapDir, caseName, caseName == "fresh_scan"),
+            },
         };
-        var path = Path.Combine(outDir, "smoke.json");
+        var path = Path.Combine(outDir, caseName + ".json");
         File.WriteAllText(path, JsonSerializer.Serialize(doc, JsonOpts), new UTF8Encoding(false));
         Console.WriteLine("OK " + path);
         return 0;
@@ -173,8 +183,13 @@ internal static class Program
         throw new InvalidOperationException("NO_WALKABLE_STRIP");
     }
 
-    private static object RunCase(string mapDir)
+    /// <param name="resetEachSend">
+    /// `true` = 每次发帧前把 `SendRefMsgTick` 归零（等价 oracle "距上次 ≥500ms" 的重新扫格）；
+    /// `false` = 保持 500ms 缓存（oracle `SendRefMsg` 的真实怪癖：缓存后二次过滤 `<11`）。
+    /// </param>
+    private static object RunCase(string mapDir, string name, bool resetEachSend)
     {
+        SystemShare.ActorMgr.CleanObject();
         var env = new Envirnoment();
         if (!env.LoadMapData(Path.Combine(mapDir, "0.map")))
         {
@@ -250,10 +265,19 @@ internal static class Program
         SystemShare.ActorMgr.Add(hidden);
 
         // 施动次序与 oracle 的发帧点同形：出现（AddToMap 的 RM_TURN）、转向、受击、消失。
-        npc.SendRefMsg(Messages.RM_TURN, 4, nx, ny, 0, "");
-        npc.SendRefMsg(Messages.RM_TURN, 6, nx, ny, 0, "");
-        npc.SendRefMsg(Messages.RM_HIT, 4, nx, ny, 0, "");
-        npc.SendRefMsg(Messages.RM_DISAPPEAR, 0, 0, 0, 0, "");
+        void Send(int ident, int wParam, int p1, int p2)
+        {
+            if (resetEachSend)
+            {
+                npc.SendRefMsgTick = 0;
+            }
+            npc.SendRefMsg(ident, wParam, p1, p2, 0, "");
+        }
+
+        Send(Messages.RM_TURN, 4, nx, ny);
+        Send(Messages.RM_TURN, 6, nx, ny);
+        Send(Messages.RM_HIT, 4, nx, ny);
+        Send(Messages.RM_DISAPPEAR, 0, 0, 0);
 
         // 每个观察者做一次 SearchViewRange（AOI 可见面），再按生产 `Operate` 排干队列。
         var observers = new (string role, RecordingPlayObject po, Envirnoment env, string map)[]
@@ -267,7 +291,8 @@ internal static class Program
         var rows = new List<object>();
         foreach (var (role, po, e, map) in observers)
         {
-            if (Environment.GetEnvironmentVariable("NPCAOI_SKIP_SCAN") != "1") po.SearchViewRange();
+            // 本用例不驱动观察者侧的 `SearchViewRange`（它会产生玩家互发的 RM_TURN 噪声，
+            // 属独立面）；AOI 隐藏负例由 `hidden_visible`+`hidden_npc.on_map=false` 机判。
             var visible = po.VisibleActors
                 .Select(v => v.BaseObject)
                 .Where(b => b != null)
@@ -294,7 +319,7 @@ internal static class Program
 
         return new
         {
-            name = "smoke_turn_hit_disappear",
+            name,
             npc = new { actor_id = NpcId, chr_name = npc.ChrName, x = nx, y = ny, is_hide = false },
             hidden_npc = new
             {

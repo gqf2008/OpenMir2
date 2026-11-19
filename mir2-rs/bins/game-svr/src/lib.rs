@@ -87945,6 +87945,158 @@ GMEXECUTE f
         }
     }
 
+    /// **NP-11 对拍**（卡 `openmir2-npc-multiobserve-golden`）：多观察者 AOI 帧面。
+    ///
+    /// 金标准 `tests/parity/golden/npc/aoi/{fresh_scan,cache_window}.json`（生成器 `NpcAoiGolden`）。
+    /// `fresh_scan` = 每次发帧前把 oracle `SendRefMsgTick` 归零（等价"距上次 ≥500ms"的重新扫格）
+    /// ⇒ 5 类观察者 × `SM_TURN(10)`/`SM_FEATURECHANGED(41)`/`SM_HIT(14)`/`SM_DISAPPEAR(30)`；
+    /// `cache_window` = oracle 的 500ms `VisibleHumanList` 缓存怪癖（同窗口重复 `RM_TURN` 对
+    /// `edge` 只落地首条）——Rust 侧 `broadcast_ref_msg*` 无等价缓存 ⇒ **该例必须可复现地红**，
+    /// 偏差卡 `openmir2-visiblehumanlist-cache`（verified 覆盖声明已排除该子面）。
+    ///
+    /// **牙**：① `send_ref_msg_to_targets` 跳过任一目标 ⇒ `fresh_scan` 该接收者帧数红；
+    /// ② 收件半径 `<=` 改 `<`（`chat::hear_targets`）⇒ `edge` 丢帧、`fresh_scan` 红。
+    #[test]
+    fn np11_aoi_matches_oracle_golden() {
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/npc/aoi");
+        let mut compared = 0usize;
+        for name in ["fresh_scan", "cache_window"] {
+            let path = dir.join(format!("{name}.json"));
+            let doc = crate::aoi_golden::load(&path).expect("golden 必须可读（PREREQ 红）");
+            assert!(!doc.cases.is_empty(), "{name}: 零用例必须红");
+            for case in &doc.cases {
+                let (actual, npc_id) = np11_run_aoi_case(case);
+                let _ = npc_id;
+                if name == "fresh_scan" {
+                    compared = crate::aoi_golden::compare(&case.observers, &actual)
+                        .unwrap_or_else(|e| panic!("fresh_scan 对拍红（{name}）：{e:#?}"));
+                } else {
+                    let errs = crate::aoi_golden::compare(&case.observers, &actual).expect_err(
+                        "cache_window 必须红：Rust 无 oracle 的 500ms VisibleHumanList 缓存\
+                         （偏差卡 openmir2-visiblehumanlist-cache）；若此断言失败说明缓存已实现，\
+                         请改卡/偏差登记后重判",
+                    );
+                    assert!(
+                        errs.iter().any(|e| e.contains("edge")),
+                        "cache_window 的红面必须是 edge（其余接收者应与 fresh_scan 相同）：{errs:#?}"
+                    );
+                }
+            }
+        }
+        assert!(compared > 0, "fresh_scan 必须比较到非零帧（防空转）");
+    }
+
+    /// 用**生产下行**（`drain_npc_merchant_turns/hits` + `drain_merchant_disappears`）复跑一例，
+    /// 按 socket 归集帧面。几何/角色坐标全部从 golden 读（`Fixture` 口径，不手抄数字）。
+    fn np11_run_aoi_case(
+        case: &crate::aoi_golden::CaseGolden,
+    ) -> (Vec<crate::aoi_golden::ObserverActual>, i32) {
+        let nx = i32::try_from(case.npc.x).expect("npc.x");
+        let ny = i32::try_from(case.npc.y).expect("npc.y");
+        // 世界覆盖 golden 几何（另一张图给异图观察者）。
+        let mut world = mir2_world_bevy::World::with_maps(vec![(nx + 20, ny + 20), (64, 64)]);
+        let mut displays = downlink::DisplayTable::new();
+        let npc_id = world
+            .insert_npc(mir2_world_bevy::npc::NpcSpawn {
+                name: case.npc.chr_name.clone(),
+                x: nx,
+                y: ny,
+                map_id: 0,
+                state: mir2_world_bevy::npc::NpcState {
+                    npc_type: mir2_world_bevy::npc::NPC_TYPE_MERCHANT,
+                    ..Default::default()
+                },
+            })
+            .expect("NPC 入世界");
+        assert!(world.attach_npc_to_map(npc_id), "NPC 必须挂图");
+        // `Merchant : NormNpc`：`RaceImg=50`（`Merchant.cs:84`）、`Light=2`、`Dir=4`、`Appr=0`。
+        displays.set(npc_id, downlink::npc_display(4, 50, 0, &case.npc.chr_name));
+
+        let mut online: OnlineRegistry = Vec::new();
+        let mut actor_ids = Vec::new();
+        for (i, o) in case.observers.iter().enumerate() {
+            let map_id = match o.map.as_str() {
+                "0" => 0usize,
+                _ => 1usize,
+            };
+            let mut e = new_player_entity(
+                o.role.clone(),
+                i32::try_from(o.x).expect("obs.x"),
+                i32::try_from(o.y).expect("obs.y"),
+            );
+            e.id = 900 + i32::try_from(i).unwrap_or(0);
+            e.map_id = map_id;
+            let id = world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".to_string(),
+                    chr_name: o.role.clone(),
+                    session_id: i32::try_from(i).unwrap_or(0) + 1,
+                    gate_idx: 0,
+                    socket: 911 + i32::try_from(i).unwrap_or(0),
+                    actor_id: id,
+                },
+            );
+            actor_ids.push(id);
+        }
+
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        // 一条 TickRecord 承载 oracle 的四个发帧点（出现/转向 ×2、受击、消失）。
+        let recipients =
+            crate::chat::hear_targets(&world, npc_id, crate::chat::send_ref_msg_range());
+        let rec = mir2_world_bevy::TickRecord {
+            npc_turns: vec![(npc_id, 4), (npc_id, 6)],
+            npc_hits: vec![npc_id],
+            merchant_disappears: vec![(npc_id, recipients)],
+            ..Default::default()
+        };
+        drain_npc_merchant_turns(&rec, &world, &displays, &online, &gates);
+        drain_npc_merchant_hits(&rec, &world, &displays, &online, &gates);
+        drain_merchant_disappears(&rec, &online, &gates);
+
+        let mut per_socket: HashMap<i32, Vec<Vec<u8>>> = HashMap::new();
+        while let Ok(msg) = rx.try_recv() {
+            if let SimToGate::SendFrame { socket, body } = msg {
+                per_socket.entry(socket).or_default().push(body);
+            }
+        }
+        let actual = case
+            .observers
+            .iter()
+            .enumerate()
+            .map(|(i, o)| {
+                let socket = 911 + i32::try_from(i).unwrap_or(0);
+                let frames = per_socket
+                    .remove(&socket)
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|b| crate::aoi_golden::FrameGolden {
+                        ident: gnp_ident(&b),
+                        param: gnp_param(&b),
+                        tag: gnp_tag(&b),
+                        series: gnp_series(&b),
+                        // 与 C# 生成器同口径：golden 的 `tail` 是**线缆原文**（对 `SM_TURN` 是
+                        // EDCode 编码串），不做 EDCode 解码；`gnp_tail_text` 的解码面只适用于
+                        // `SM_MERCHANTSAY`（那一路的原文就是 EDCode(GBK 文本)）。
+                        tail: String::from_utf8_lossy(&b[12..]).into_owned(),
+                    })
+                    .collect();
+                crate::aoi_golden::ObserverActual {
+                    role: o.role.clone(),
+                    actor_id: i64::from(actor_ids[i]),
+                    frames,
+                    hidden_visible: false,
+                    drain_hit_cap: false,
+                }
+            })
+            .collect();
+        (actual, npc_id)
+    }
+
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。
     ///
     /// 帧面两者都是零帧（所以「只断言零帧」抓不住区别），故此用例钉**分类** + 钉两条路径都可走：
