@@ -16334,10 +16334,13 @@ fn broadcast_ref_msg_opt(
     // 偏差 `T-287`）。扫描面仍由 `chat::hear_targets*` 给（±range 闭区间），缓存两段由
     // `ref_msg_cache` 收口：≥500ms 刷新全量；否则复用快照 + `|Δ|<11` 严格小于。
     let targets = match at {
-        Some((map_id, x, y)) => ref_msg_cache::targets_from_scan(
+        Some((map_id, x, y)) => ref_msg_cache::targets_at(
             world,
             actor_id,
-            chat::hear_targets_at(world, actor_id, map_id, x, y, chat::send_ref_msg_range()),
+            map_id,
+            x,
+            y,
+            chat::send_ref_msg_range(),
         ),
         None => ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range()),
     };

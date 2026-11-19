@@ -82,3 +82,27 @@ for (i = 0; i < VisibleHumanList.Count; i++) {
 - 自带单测：`ref_msg_cache_first_scan_then_strict_11_on_reuse`（首扫 ±12 闭区间含 +12；同窗口第二次只剩 <11）、
   `ref_msg_cache_expires_after_500ms`（`>=500` 重扫恢复 +12 收件人）。
 - 覆盖声明同步：NP-11 的 `notes`/调查表从"cache_window 未覆盖（T-287）"改为"已覆盖"。
+
+## 7. 隐藏发送者早退（2026-11-20 补，独立条目，不属 C2 残余站点）
+
+- **缺陷**：oracle `SendRefMsg`（`BaseObject.Message.cs` 的 `SendRefMsg` 函数体）在
+  `ObMode || FixedHideMode` 时只 `SendMsg` 自己并 **return**，该分支**早于**
+  `SendRefMsgTick`/`VisibleHumanList` 的刷新判定；Rust 侧 `ref_msg_cache::targets`
+  以 `chat::hear_targets` 的扫描结果走 `World::ref_msg_targets_from_scan`，而缓存
+  **命中分支忽略扫描结果**、直接过滤旧快照 ⇒ 发送者隐藏且距上次刷新 <500ms 时，
+  11 格内的玩家会收到 oracle 不会发的帧（C1 的 `broadcast_ref_msg_opt`、C3、
+  批 1 的 `handle_say_with_saves` 均受影响）。
+- **修法**：宿主层早退——`ref_msg_cache::targets` 与新增的 `ref_msg_cache::targets_at`
+  （显式坐标扫描入口，供 `broadcast_ref_msg_opt` 的逐格分支）在扫描前判
+  `ob_mode || fixed_hide_mode` ⇒ 返回 `vec![sender]`，**不触碰缓存**（与 oracle
+  不推进 `SendRefMsgTick` 一致）。
+- **快照入口不加早退**：`ref_msg_cache::targets_from_scan` 的收件人是发帧时刻的快照，
+  `drain_merchant_disappears` 在排水时 sender 已隐藏属设计前提（不得改既有期望）。
+- **证据**：`hidden_sender_returns_self_only_without_refreshing_cache`（隐藏 ⇒ 只自己；
+  解除隐身仍在窗口 ⇒ 复用隐身前快照，专钉「缓存不刷新」）与
+  `hidden_sender_returns_self_only_through_targets_at`（显式坐标入口同判）。
+- **牙**（§16：快照 `E:/UserTemp/refmsg-b2-pre-snap/`，`cp` 还原并核 sha 相等）：
+  ① 删 `targets` 早退 ⇒ 断言 左 `[2, 3]` vs 右 `[1]` 红；
+  ② 只删 `targets_at` 早退 ⇒ 对应用例同形态红；③ 早退仍刷新缓存 ⇒ 第三段红。
+- **影响面**：`cargo test -p game-svr --lib` = 2001 passed / 0 failed / 49 ignored；
+  `np11_aoi` 双例（`fresh_scan` + `cache_window`）绿；golden 零改动。
