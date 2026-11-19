@@ -163,6 +163,40 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 opc-07 定的三条前置已全部满足（见 §10.1 三证明）；NP-01 签法改为 **PASS（basis=semantic）**。
 批量硬规则保留：NP-04 及任何依赖 `LastNpc`/`ScriptCurrLable` 的用例仍必须显式断言，不得省略。
 
+### 10.4 撤回记录（opc-07 要求：撤回什么、依据是什么）
+
+- **撤回的结论**：`LastNpc`/`ScriptCurrLable` 在 Rust 未建模（2026-11-20 早先版本 §10/§10.1 的写法）。
+- **依据（为什么撤回）**：
+  1. 状态载体不是 `SessionGround` 而是 `ShopSession`：`mir2-rs/bins/game-svr/src/lib.rs` 的 `ShopSession`
+     已有 `script_lable`、`script_curr_lable`、`script_go_back_lable`、`script_index: Option<usize>`、`last_npc: i32`（结构体定义约第 20508-20528 行）；
+  2. 引擎写入点：`crates/script/src/engine/mod.rs` 的 `goto_label`（约 979-1015）在 `@main` 命中与 fallback
+     两处都调 `set_last_npc`/`set_script_index`；
+  3. 会话同步：`run_merchant_goto` 在约 9373-9374 与 9427-9428 把 `player.last_npc/script_index` 与会话双向同步。
+- **替代结论**：状态已建模，缺的是**断言**与 **fallback 用例**；已补（§10.1 三证明）并把 NP-01 升 PASS。
+- **教训**：旧结论来自"只 grep `SessionGround` 字段"的窄搜索，漏了同文件里承载脚本态的另一 struct。
+  以后判"是否建模"必须沿**状态载体**（会话/实体/引擎三处）全量定位，且给出写入点。
+
+### 10.5 NP-03 用例来源（真实脚本，禁造）
+
+按 opc-07：商品/修理/仓库菜单一律用**部署件里真实存在的商家脚本**，不自行编造。
+
+- **脚本文件**：`E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt`（冻结语料）
+- **商人在册行**：`MerChant.txt` → `封魔谷/恶魔修理师 d2008 31 24 封魔修理师 0 15 0`
+- **可用标签（真实）**：`[@main]`（第 18 行）、`[@cangku]`(28)、`[@storage]`(36)、`[@getback]`(39)、
+  `[@Mbind]`(43)、`[@changeGold]`(54)、`[@changeMoney]`(65)、`[@z_bind]`(78)、`[@zum_bind1..4]`(85/94/112/121/139/148/166/175)、
+  `[@buy]`(194)、`[@sell]`(198)、`[goods]`(203)。
+- **用例映射（NP-03 = 菜单/面板打开）**：
+  | 动作 | 标签 | 期望帧（若对应 flag 开） |
+  | --- | --- | --- |
+  | 点 NPC | `@main` | `SM_MERCHANTSAY(643)` 文本 |
+  | 选购买 | `@buy` | `RM_SENDGOODSLIST(10128)→SM 645` |
+  | 选出售 | `@sell` | `RM_SENDUSERSELL(10129)→SM 646` |
+  | 选仓库 | `@storage` / `@cangku` | `RM_USERSTORAGEITEM(10146)→SM 700` |
+  | 选取回 | `@getback` | `RM_USERGETBACKITEM(10147)→SM 700/列表` |
+  | 货币兑换 | `@changeGold` | M4 已有双跑（`商店-货币兑换`） |
+- **flag 来源**：`is_buy`/`is_sell`/`is_storage`/`is_repair` 由 **加载器**从脚本 `[goods]`/`%` 指令解析
+  （`crates/envir/src/merchant.rs` 的 `merchant_flags`），**不得在用例里手设**；用例只断言"开/未开"两种真实形态。
+
 ## 11. 行为牙（NP-01 样板）
 
 在**本 worktree** 内逐条变异、跑同一条测试，期望红，恢复后 sha 相等并复绿。原文落**仓外**：
