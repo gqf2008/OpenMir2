@@ -1008,3 +1008,38 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   在 `login_order=false` 的可达手设件上做两模式对照；相同者必须给结构性依据（无延时受击 / 排水 `Operate` 不调 RNG），
   落到符号锚——缺依据即判非法声明。
 - 本表只落实测与归因，**不改变任何条目 status**；入库件替换与比较器收紧归 M53。
+## 31. 33 冰咆哮（`SKILL_SNOWWIND`）接线记录（2026-11-20，已重取）
+
+- **oracle 分派（只认魔号，不按名字）**：`src/M2Server/Magic/MagicManager.cs:489-494`
+  的 `case SKILL_SNOWWIND` → `MagBigExplosion(…, SystemShare.Config.SnowWindRange)`；
+  helper `:1100-1117`。判据全部来自 33 自己的 golden（不沿用 23 的结论）。
+- **范围来源落进夹具**：部署 `E:\MirServer\M2GameSvr\Server.conf`（sha256 `ce5e3ce9…`）
+  的 `SnowWindRange=1`；golden `Fixture` 记录 `snow_wind_range`、`fire_boom_rage`、
+  `elec_blizzard_range` 与 `server_conf_sha256`。
+- **实测（33 自己的 golden）**：target **HP 100→85（damage 15）**⇒ 本夹具
+  `IsProtectTarget` 为 true；`Rng` = **7 抽**（`[0,0,0,7,1,0,3]`）、`DrainPasses` = 4、`NotDue` = 0；
+  caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`；
+  RM：8044(target,p1=15,108)/10052(target,68)/8103(众人,w=15/p1=85/p2=224/p3=caster,167)/
+  8090(154)/10123(caster,p1=33,255)、10008.p3=33；golden = `golden/magic/snowwind.json`。
+- **`DeliverRng` 口径（统一判据下实测）**：33 的受击抽发生在**施法段内**，已并入主 `Rng`（7 抽）
+  并被 `verify` **逐值比较**；台账 `DeliverRng` 实测 = `[]`，按统一判据 `golden.Rng == rust.Rng
+  ++ rust.DeliverRng` 成立（7 == 7 + 0）。本支**不**保留任何"DeliverRng 必须为空"的特例断言
+  （`5ef8c923c` 已撤回）。比较器收紧（含 `rng_total_draws` 等式）另案（M57）。
+- **重取证据（同一 `run_id`）**：`MIR2_LEDGER_RUN_ID=magic33-retake-20261120T0625` 下
+  `cargo test -p game-svr --lib -- --exact --ignored tests::snowwind_parity_s1/s5/s13`
+  三支逐个 rc=0（1 passed each）；`cargo test -p mir2-parity-tests --test
+  magic_fireball_parity -- --exact --ignored real_rust_ledger_snowwind` rc=0；
+  三份侧车 `<stem>_<label>.run.json` 均记该 run_id。负对照：换 id（`WRONG-run-id-negctl`）
+  比较器 rc=101，报「台账陈旧：run_id 不匹配」。
+- **全平面回归（同一 run_id）**：`MIR2_LEDGER_RUN_ID=magic-plane-1795127273-1441175` 跑
+  `rerun_magic_plane.sh`（48 支驱动 + 16 条比较器，含 33 与既有 15 条）⇒ 49 个
+  `test result: ok`、0 failed、rc=0（`evidence/regression-33-plane-final.log`）。
+- **门禁（红→绿留痕）**：首跑 `cargo clippy --workspace --all-targets -- -D warnings` **rc=101**
+  —— `doc_lazy_continuation` 两处（`bins/game-svr/src/lib.rs:67718/67719`：列表项后的
+  「范围来源」段缺空行；`evidence/33-clippy.log` 原文保留）。修复 = 加一行 `///` 空行；
+  复跑 rc=0（`evidence/33-clippy-final.log`）。`cargo fmt --all -- --check` rc=0。
+- **帧族与 C2 交集**：本支帧族（53/638/656/31）与 `push_broadcast` 缓存接线相交，
+  **`2f` 的 C2 落地后必须重跑全平面**。
+- **MG-45 升格（已写入清单）**：`status=verified`、`basis=semantic`、
+  `test=real_rust_ledger_snowwind`、`fixture=golden/magic/snowwind.json`、
+  `cases=s1/s5/s13`、`unit_tests=tests::snowwind_parity_s1/s5/s13` ⇒ magic 域 16/65。

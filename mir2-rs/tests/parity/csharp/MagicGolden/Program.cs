@@ -125,6 +125,7 @@ public static class Program
             if (name == "bighealing") return BigHealingBatch(new MagicSpec { Key = "bighealing", MagicId = 29, MagicName = "BigHealing" });
             if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 });
             if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" });
+            if (name == "snowwind") return BehaviorBatch(new MagicSpec { Key = "snowwind", MagicId = 33, MagicName = "SnowWind" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -139,6 +140,20 @@ public static class Program
     }
 
     private static readonly string[] ConfNames = { "Server.conf", "String.conf", "Exps.conf", "Global.conf", "setting.conf" };
+
+    /// <summary>
+    /// 部署配置 `Server.conf` 的 sha256（金标准夹具里落它的来源证明：范围类魔法的 range 值
+    /// 必须与**部署配置**同源，卡 §31）。优先取本进程工作目录里 `EnsureConfFiles` 拷进来的副本。
+    /// </summary>
+    private static string ServerConfSha256()
+    {
+        var copied = Path.Combine(AppContext.BaseDirectory, "Server.conf");
+        var src = Environment.GetEnvironmentVariable("MAGICGOLDEN_CONF_DIR") ?? @"E:\MirServer\M2GameSvr";
+        var path = File.Exists(copied) ? copied : Path.Combine(src, "Server.conf");
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        using var fs = File.OpenRead(path);
+        return Convert.ToHexString(sha.ComputeHash(fs)).ToLowerInvariant();
+    }
 
     /// <summary>把冻结部署的 5 个配置文件拷进输出目录（缺哪份拷哪份）；只读源，不改进生产文件。</summary>
     private static bool EnsureConfFiles(out List<string> copied, out List<string> missing)
@@ -1146,6 +1161,11 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 wait_ms = spec.WaitMs,
                 caster_hp = spec.CasterHp,
                 caster_max_hp = spec.CasterMaxHp,
+                // 范围类魔法（22/23/33/24/47）的 range 值与其部署配置来源（卡 §31）。
+                snow_wind_range = SystemModule.SystemShare.Config.SnowWindRange,
+                fire_boom_rage = SystemModule.SystemShare.Config.FireBoomRage,
+                elec_blizzard_range = SystemModule.SystemShare.Config.ElecBlizzardRange,
+                server_conf_sha256 = ServerConfSha256(),
                 caster_xy = new[] { 100, 100 },
                 target_xy = new[] { 101, 100 },
                 obs_in_xy = new[] { 105, 100 },

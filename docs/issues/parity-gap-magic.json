@@ -1119,17 +1119,26 @@
         "line": 489,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_snowwind",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/snowwind.json（C# oracle 生成；s1/s5/s13；SnowWindRange=1 来自部署 Server.conf，sha256 记在 Fixture.server_conf_sha256）",
+        "cases": [
+          "s1(seed=1)",
+          "s5(seed=5)",
+          "s13(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::snowwind_parity_s1",
+          "tests::snowwind_parity_s5",
+          "tests::snowwind_parity_s13"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。`case SKILL_SNOWWIND`（MagicManager.cs:489-494）→ MagBigExplosion(SnowWindRange)；golden Rng 7 抽（受击抽在施法段内）、DeliverRng=[]；卡 §31（重取 run_id、clippy 红→绿留痕、全平面 48+16）。",
+      "basis": "semantic"
     },
     {
       "id": "MG-46",
