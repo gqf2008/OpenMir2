@@ -1023,8 +1023,10 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - **实测事实（2026-11-20 返工后）**：火球在**真实排水窗口**确有抽取——cover 记 **8** 次、freeze 只记 **5** 次
   （`cover=5,0,0,0,0,0,0,9` vs `freeze=5,0,0,0,0`；探针 `cover=8→9 / freeze=5→5`）⇒ 两模式**可区分**。
   首版观察到的"5 次全在施法期、两模式相同"是 **cover 块误置于排水之前**导致的**空声明**，不是火球的真实性质。
-- **证据（自测探针，不进 golden）**：排水前注入一次抽取——cover 记到（`5→6`）、freeze 不记（`5→5`）；
-  变异 T2（把 `Restore` 挪到排水前）⇒ `cover_caught=False`、自测红；还原后 sha `1e6c00c6…` 相等、复绿。
+- **证据（自测探针，不进 golden）**：在**真实排水阶段**（`Thread.Sleep(700)` 之后、排水循环之前）注入一次抽取——
+  cover 记到（`8→9`）、freeze 不记（`5→5`）；变异 T2（把捕获/Restore 提前到排水前）⇒ `cover_caught=False`、
+  自测红；还原后逐字节相等（`git hash-object` == `HEAD:<path>`）、复绿。QA 侧独立探针（自带 `Random(1000)`，
+  不用本装置的 `probeDrainDraw`）复测：`cover draws=9 total=9`、`freeze draws=5 total=5`。
 - **MaxExp 门两例**：设 `GetLevelExp(20)=6000` ⇒ 绿；留 ctor `50` ⇒ rc=2。
 - 旧合成件（`login_order=false` + `freeze_at_dospell`，`anti_magic=3`/`target_max_hp=100`）可生成，
-  标 `legacy_artifact`；登录序主件（`anti_magic=1`、`max_hp=224`、`rng_total_draws=5`）可生成。
+  标 `legacy_artifact`；登录序主件（`anti_magic=1`、`max_hp=224`、`rng_total_draws=8`，三例均 8）可生成。
