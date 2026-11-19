@@ -1,7 +1,1 @@
-[
-  {
-    "pkg": "NLog",
-    "version": "5.2.8",
-    "reason": "declared by DBSvr.Storage.MySQL, zero API usage (only using-directives), not on any runtime path"
-  }
-]
+[]

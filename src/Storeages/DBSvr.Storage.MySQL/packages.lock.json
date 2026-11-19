@@ -31,12 +31,6 @@
           "Microsoft.Extensions.Logging.Abstractions": "7.0.1"
         }
       },
-      "NLog": {
-        "type": "Direct",
-        "requested": "[5.2.8, )",
-        "resolved": "5.2.8",
-        "contentHash": "jAIELkWBs1CXFPp986KSGpDFQZHCFccO+LMbKBTTNm42KifaI1mYzFMFQQfuGmGMTrCx0TFPhDjHDE4cLAZWiQ=="
-      },
       "MemoryPack": {
         "type": "Transitive",
         "resolved": "1.10.0",
