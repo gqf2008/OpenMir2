@@ -75,3 +75,24 @@
 
 - `cargo fmt/clippy/test` 三项 rc；全量测试的构建窗口由 Leader 排期（2d/3b 占用中）。
 - 定点用例红→绿原文；三颗牙红→还原→`hash-object == HEAD:path` 相等。
+
+## 证据（2026-11-20，head `1ef08bbbd`）
+
+- 定点用例 `setmpamode_fight_refreshes_world_map_flags_and_world_consumers`：**rc=0，1 passed**
+  （四条脚本动作 `FIGHT/NEEDHOLE/NODROPITEM/EXPRATE`；未过下一 tick 断言宿主侧=世界侧逐项相等；
+  `set_pk_flag` 战区门生效）。
+- 门禁：`cargo fmt --all -- --check` **rc=0**；`cargo clippy -p game-svr --all-targets -- -D warnings`
+  **rc=0**（`CARGO_BUILD_JOBS=6`）。
+- 三颗牙（红后 `cp` 还原 + `sha256 == 5d3a2918…6401` 相等）：
+  - A 删回填：rc=101，`left: (false, false, false, None)` / `right: (true, true, true, Some(2))`
+  - B 回填挪到 flush 前：rc=101，同上
+  - C 只同步 FIGHT：rc=101，`left: (true, false, false, None)` /
+    `right: (true, true, true, Some(2))`（need_hole / no_drop_item / exp_rate 三项显式可见）
+- 写集（vs merge-base `1a2ae9cb0`）：
+  ```
+  docs/issues/openmir2-setmapmode-map-refresh.md |  77 +
+  mir2-rs/bins/game-svr/src/lib.rs               | 150 +
+  ```
+- 上游合并提示：合并时 master 已是 M18 `a43b5f6f6`；M17/M18 对 `lib.rs` 的增量只在文件末
+  测试区（新增约 552 行的单块），与本卡的三处改动区（`flush_map_mode_writes` 旁、`sim_loop`
+  调用点、T142 测试区）不相交；合并时必须保住 M17/M18 的测试增量。
