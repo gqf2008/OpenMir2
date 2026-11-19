@@ -454,10 +454,34 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
     let construction = fixture
         .get("construction")
         .ok_or_else(|| format!("[{label}] 金标准缺 `Fixture.construction`（§7 机检构造路径）"))?;
-    let job = construction
+    // 装置（`MagicGolden` `EmitGolden`/`FireballCase`）写的是职业**名**（`spec.Job.ToString()`），
+    // 早期设计稿写 0/1/2；两种写法都接受，其余一律红（不兜底）。
+    let job_field = construction
         .get("job")
-        .and_then(Value::as_i64)
-        .ok_or_else(|| format!("[{label}] `construction.job` 缺失/非整数（§8.3）"))?;
+        .ok_or_else(|| format!("[{label}] `construction.job` 缺失（§8.3）"))?;
+    let job = match job_field {
+        Value::String(s) => match s.as_str() {
+            "Warrior" => PlayerJob::Warrior,
+            "Wizard" => PlayerJob::Wizard,
+            "Taoist" => PlayerJob::Taoist,
+            other => {
+                return Err(format!(
+                    "[{label}] `construction.job` = {other:?} 不在 Warrior/Wizard/Taoist（§8.7）"
+                ))
+            }
+        },
+        Value::Number(n) => match n.as_i64() {
+            Some(0) => PlayerJob::Warrior,
+            Some(1) => PlayerJob::Wizard,
+            Some(2) => PlayerJob::Taoist,
+            _ => {
+                return Err(format!(
+                    "[{label}] `construction.job` = {n} 不在 0/1/2（§8.7）"
+                ))
+            }
+        },
+        _ => return Err(format!("[{label}] `construction.job` 类型非法（§8.3）")),
+    };
     let level = construction
         .get("level")
         .and_then(Value::as_i64)
@@ -497,16 +521,6 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             return Err(format!("[{label}] `derived.{k}` 缺失/非整数（§8.3）"));
         }
     }
-    let job = match job {
-        0 => PlayerJob::Warrior,
-        1 => PlayerJob::Wizard,
-        2 => PlayerJob::Taoist,
-        other => {
-            return Err(format!(
-                "[{label}] `construction.job` = {other} 不在 0/1/2（§8.7）"
-            ))
-        }
-    };
     let Ok(level_u8) = u8::try_from(level) else {
         return Err(format!("[{label}] `construction.level` = {level} 越界（§8.7）"));
     };
