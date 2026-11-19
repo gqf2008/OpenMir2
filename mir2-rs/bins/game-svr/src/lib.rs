@@ -2408,7 +2408,11 @@ fn handle_say_with_saves(
         &text,
     );
     let mut delivered = 0usize;
-    for target_id in chat::hear_targets(host.world, speaker.actor_id, chat::send_ref_msg_range()) {
+    // **T-287 残余站点 #7**：`RM_HEAR` 在 oracle 里走 `SendRefMsg`（`BaseObject.Base.cs`）⇒ 同走
+    // 500ms 缓存；连说两句时 12 格边界观察者只收首句。
+    for target_id in
+        ref_msg_cache::targets(host.world, speaker.actor_id, chat::send_ref_msg_range())
+    {
         let Some(t) = host.online.iter().find(|e| e.actor_id == target_id) else {
             continue;
         };
@@ -10150,7 +10154,8 @@ fn fan_out_npc_hear(
     if says.is_empty() {
         return 0;
     }
-    let targets = chat::hear_targets(world, npc_actor_id, chat::send_ref_msg_range());
+    // **T-287 残余站点 #13**：NPC 说词 `RM_HEAR`（`BaseObject.Base.cs` 的 `SendRefMsg`）同走缓存。
+    let targets = ref_msg_cache::targets(world, npc_actor_id, chat::send_ref_msg_range());
     let priority = (mir2_protocol::messages::RM_HEAR & 0xFF) as u8;
     let mut sent = 0usize;
     for target_id in targets {
@@ -88873,6 +88878,82 @@ GMEXECUTE f
             })
             .collect();
         (actual, npc_id)
+    }
+
+    /// **T-287 残余 #13**（卡 `openmir2-refmsg-cache-residual-sites`）：`fan_out_npc_hear` 的
+    /// NPC 说词（`RM_HEAR`）同窗口连说两句 ⇒ **12 格边界观察者只收首句**（oracle `SendRefMsg`
+    /// 的 500ms 缓存 + `|Δ|<11`）；11 格内两句都收、13 格零帧。
+    ///
+    /// 牙：把该站点改回 `chat::hear_targets` 自算 ⇒ 边界观察者第二句也收（2 vs 1）⇒ 红。
+    #[test]
+    fn npc_hear_cache_window_edge_gets_first_say_only() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let npc_id = world
+            .insert_npc(mir2_world_bevy::npc::NpcSpawn {
+                name: "QManage".to_string(),
+                x: 10,
+                y: 10,
+                map_id: 0,
+                state: mir2_world_bevy::npc::NpcState {
+                    npc_type: mir2_world_bevy::npc::NPC_TYPE_MERCHANT,
+                    ..Default::default()
+                },
+            })
+            .expect("NPC 入世界");
+        assert!(world.attach_npc_to_map(npc_id));
+        let mut online: OnlineRegistry = Vec::new();
+        let mut add = |id: i32, x: i32, y: i32, socket: i32, world: &mut mir2_world_bevy::World| {
+            let mut e = mir2_world_bevy::EntitySpawn::new(id, format!("p{id}"), x, y);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".to_string(),
+                    chr_name: format!("p{id}"),
+                    session_id: id,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        };
+        add(900, 10, 10, 910, &mut world); // caller（投递时跳过）
+        add(901, 15, 10, 911, &mut world); // +5
+        add(902, 22, 10, 912, &mut world); // +12（边界）
+        add(903, 23, 10, 913, &mut world); // +13
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        let says = vec![("hi".to_string(), 1u8, 2u8)];
+        let take = |rx: &mut mpsc::UnboundedReceiver<SimToGate>| {
+            let mut per: HashMap<i32, usize> = HashMap::new();
+            while let Ok(msg) = rx.try_recv() {
+                if let SimToGate::SendFrame { socket, .. } = msg {
+                    *per.entry(socket).or_default() += 1;
+                }
+            }
+            per
+        };
+        let _ = fan_out_npc_hear(&online, &world, &gates, 900, npc_id, &says);
+        let first = take(&mut rx);
+        assert_eq!(
+            first.get(&912),
+            Some(&1),
+            "首句：+12 边界收 1 帧（首扫 ±12 闭区间）"
+        );
+        assert_eq!(first.get(&911), Some(&1), "首句：+5 收 1");
+        assert_eq!(first.get(&913), None, "首句：+13 零帧");
+        assert_eq!(first.get(&910), None, "caller 自身不在本路径投递");
+        let _ = fan_out_npc_hear(&online, &world, &gates, 900, npc_id, &says);
+        let second = take(&mut rx);
+        assert_eq!(
+            second.get(&912),
+            None,
+            "第二句（同 500ms 窗口）：+12 边界必须被 |Δ|<11 挡掉"
+        );
+        assert_eq!(second.get(&911), Some(&1), "第二句：+5 仍收");
+        assert_eq!(second.get(&913), None, "第二句：+13 仍零帧");
     }
 
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。
