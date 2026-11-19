@@ -444,4 +444,5 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
 - 用例 `var_username`：直驱 `GotoLable("@main", boExtJmp=false)`，玩家名 `hero`；
   断言说词尾 = `老人/\你叫什么？\hero？\好名字！`（即 `<$USERNAME>` 已替换；两侧同一文件、同入口）。
 - golden：`mir2-rs/tests/parity/golden/npc/np09_var_text.json`；探针 `PlayerName` 可在用例上覆盖（本用例 `hero`）。
-- **牙 I**：把 `NpcPlayer::line_variable_text` 改成原样返回 ⇒ 说词出现 `<$USERNAME>`、必红。
+- **牙 I**：把 `NpcPlayer::line_variable_text`（`bins/game-svr/src/npc.rs`）改成原样返回 ⇒ `var_username` 红在"变量替换说词"；
+  原文 `E:/UserFleet/qa/npc-parity/np09-mutation-I-vars.txt`（恢复 sha 相等、复绿 `np09-green-final.txt`）。
