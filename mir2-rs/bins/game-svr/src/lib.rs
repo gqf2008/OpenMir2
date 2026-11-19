@@ -12494,7 +12494,7 @@ fn drain_mag_struck_b2(
     for nc in hitter_name_colors {
         // `nc.target_id` = 攻击方（不是受击者）：656 由攻击方 `RefNameColor` 发出，
         // 收件人按**攻击方**的可见玩家集合算（含攻击方自己）。
-        push_name_color(buf, world, online, nc.target_id, nc.color);
+        push_name_color_self(buf, world, online, nc.target_id, nc.color);
     }
 }
 
