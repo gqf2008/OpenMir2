@@ -854,3 +854,35 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - **回归**：39 支驱动全 rc=0（`…/evidence/regression-bighealing-1.log`）、13 支比较器 0 红、
   9 颗比较器牙全过。
 - **清单**：MG-40 升 `verified`（magic 13/65）。
+
+### 28. 空转防线：台账 `run_id`（2026-11-20，应 opc-07 要求并入 29 支）
+
+**触发**：29 支的牙 A 首跑用了一个**编译不过**的变异体 ⇒ 驱动根本没运行 ⇒ 比较器读到的是**上一次
+运行留下的台账**，一度判绿。这类「驱动没跑、比较器照绿」的空转必须由机制拦死。
+
+**纪律（写死）**：**编译失败不作判据**；**每次看比较器前必须确认台账来自本次驱动**——靠下面的
+`run_id` 机制自动证明，不靠人眼。
+
+**机制**：
+- 环境变量 `MIR2_LEDGER_RUN_ID`（建议「时间戳+随机串」），**驱动与比较器用同一个值**；
+  未设 ⇒ 两边都 **fail-closed 红**。
+- 驱动每个 case 在台账旁落侧车 `<stem>_<label>.run.json`（`{"run_id","seed"}`）——通用驱动
+  `fireball_parity_drive` 与治愈专用驱动 `healing_parity_drive` 都写。
+- 比较器 `real_ledger_verify_labels`（`mir2-rs/tests/parity/tests/magic_fireball_parity.rs`）：
+  侧车缺失 / `run_id` 不符 / 未设环境变量 ⇒ 红，错误串点名「台账陈旧，run_id 不匹配」。
+- 命令范本：
+  ```sh
+  export MIR2_LEDGER_RUN_ID="mp-$(date +%s)-$$"
+  cargo test -p game-svr --lib tests::<drive> -- --exact --ignored --test-threads=1   # 逐支
+  cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity -- --ignored
+  ```
+
+**牙 D（证据 `mir2-rs/target/magic-parity/evidence/tooth-runid.log`）**：
+- D1 **不跑驱动**、用不同 id 跑比较器 ⇒ `[miss] 台账陈旧：run_id 不匹配（当前环境 = …）` 红；
+- D2 不设环境变量 ⇒ `未设置 MIR2_LEDGER_RUN_ID…` 红（fail-closed）；
+- D3 删掉侧车 ⇒ `防空转：台账缺 run.json 侧车 …` 红；
+- 恢复后同 id 基线复跑绿。
+
+**回归（同一 id `mp-1795121294-1416322`）**：39 支驱动全 rc=0、13 支比较器 0 红、9 颗比较器牙全过
+（`…/evidence/regression-runid.log`）。**注意**：§27 及更早的证据日志产生于本机制之前，命令行未带
+`MIR2_LEDGER_RUN_ID`；此后所有驱动/比较器运行一律按上面范本执行。

@@ -65833,6 +65833,27 @@ SendRefMsgRange=15
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/magic-parity")
     }
 
+    /// **台账 run_id（空转防线，卡 §28）**：驱动与比较器必须用**同一个**由 harness 传入的 id
+    /// （环境变量 `MIR2_LEDGER_RUN_ID`）。驱动的每个 case 落一份侧车 `<stem>_<label>.run.json`；
+    /// 比较器断言侧车 id == 本次环境变量 —— 专门拦「驱动没跑/编译失败 ⇒ 比较器读上一次的陈旧
+    /// 台账还绿」这类空转（2026-11-20 29 支牙 A 首跑踩到）。
+    fn ledger_run_id() -> String {
+        let id = std::env::var("MIR2_LEDGER_RUN_ID").unwrap_or_default();
+        assert!(
+            !id.is_empty(),
+            "未设置 MIR2_LEDGER_RUN_ID：驱动与比较器都必须用同一 id 运行（卡 §28 空转防线）"
+        );
+        id
+    }
+
+    /// 写 sidecar `<stem>_<label>.run.json`（`{"run_id","seed"}`）。
+    fn write_run_sidecar(out: &std::path::Path, run_id: &str, seed: i32) {
+        let sidecar = out.with_extension("run.json");
+        let v = serde_json::json!({ "run_id": run_id, "seed": seed });
+        std::fs::write(&sidecar, serde_json::to_string_pretty(&v).unwrap())
+            .expect("run.json 必须可写");
+    }
+
     /// rng_trace TSV 的行数（`LineWriter` 逐行 flush ⇒ 运行中读到的一定是完整行）。
     fn trace_line_count(path: &std::path::Path) -> usize {
         std::fs::read_to_string(path)
@@ -66061,6 +66082,7 @@ SendRefMsgRange=15
         std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
         let dir = magic_ledger_dir();
         std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let run_id = ledger_run_id();
         let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
         assert!(
             !mir2_shared::rng_trace::enabled(),
@@ -66590,6 +66612,7 @@ SendRefMsgRange=15
 
         let out = dir.join(format!("{stem}_{label}.json"));
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &run_id, seed);
         eprintln!(
             "[fireball {label}] seed={seed} rng(cast)={:?} rng(deliver)={:?} hp {hp_before}->{hp_after} \
              frames/socket: caster={} target={} obs_in={} obs_out={} → {}",
@@ -67034,6 +67057,7 @@ SendRefMsgRange=15
         }]);
         let out = dir.join(format!("healing_{label}.json"));
         std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        write_run_sidecar(&out, &ledger_run_id(), seed);
         eprintln!("[healing {label}] seed={seed} → {}", out.display());
     }
 
