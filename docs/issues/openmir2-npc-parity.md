@@ -431,6 +431,7 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
   - `other_record_intact`（`@other`）⇒ 说词 `OTHER`（证明断链只作用于本 record）。
 - golden：`mir2-rs/tests/parity/golden/npc/np07_chain_break.json`；Rust 断言在
   `np01_click_main_matches_oracle_golden`（同一比较器）。
-- **牙 H**：把 Rust 的 `Break` 改成返回 `true` ⇒ `chain_break` 出现 `P2`、必红。
+- **牙 H**：把 Rust 的 `Break` 改成返回 `true` ⇒ `chain_break` 红在"断链说词"；
+  原文 `E:/UserFleet/qa/npc-parity/np07-mutation-H-break-true.txt`（恢复 sha 相等、复绿 `np07-green-final.txt`）。
 - **报告口径**：本条为**引擎门等价证据**，非线上用例覆盖（冻结语料 0 条符合该构造）。
 
