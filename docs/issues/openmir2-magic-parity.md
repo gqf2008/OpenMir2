@@ -1020,8 +1020,9 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   `RecalcAbilitys()` → `WAbil.HP = MaxHP` → `DrainRaw()`。
 - **记录面**：`LoggingRandom.TotalDraws`（不被 `Restore` 清零）；golden 记 `rng_total_draws` 与 `rng_recorded`；
   生成器断言 cover 下 `Rng.Count == rng_total_draws`（不等 ⇒ rc=2）。
-- **结构性事实（解释，不是证据）**：火球自身 5 次抽取全在施法期（`MagicManager` 的伤害/命中抽），排水期
-  handler（`RM_MAGSTRUCK` 等）不调 RNG ⇒ 本 case 在 cover/freeze 下 `Rng` 相同（`5,0,0,0,0`）。
+- **实测事实（2026-11-20 返工后）**：火球在**真实排水窗口**确有抽取——cover 记 **8** 次、freeze 只记 **5** 次
+  （`cover=5,0,0,0,0,0,0,9` vs `freeze=5,0,0,0,0`；探针 `cover=8→9 / freeze=5→5`）⇒ 两模式**可区分**。
+  首版观察到的"5 次全在施法期、两模式相同"是 **cover 块误置于排水之前**导致的**空声明**，不是火球的真实性质。
 - **证据（自测探针，不进 golden）**：排水前注入一次抽取——cover 记到（`5→6`）、freeze 不记（`5→5`）；
   变异 T2（把 `Restore` 挪到排水前）⇒ `cover_caught=False`、自测红；还原后 sha `1e6c00c6…` 相等、复绿。
 - **MaxExp 门两例**：设 `GetLevelExp(20)=6000` ⇒ 绿；留 ctor `50` ⇒ rc=2。
