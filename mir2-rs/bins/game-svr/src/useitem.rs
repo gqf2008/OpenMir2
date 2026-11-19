@@ -1067,8 +1067,22 @@ mod tests {
         let mut z4_applicable = 0usize;
         let mut z4_exempt_names: Vec<String> = Vec::new();
         let mut one_layer_names: Vec<String> = Vec::new();
+        let mut host_skipped = 0usize;
         for case in cases {
             let name = case["name"].as_str().unwrap();
+            // IT-08 升级支：`host_levelup` 用例由宿主级用例（真实 `Operate` 下行对拍 pumped SM 帧）覆盖，
+            // 纯 `use_item` 比较器跳过；但必须显式——被跳用例须 host_levelup 且 pumped 非空（有 oracle SM 帧）。
+            if case["expect"]["host_levelup"].as_bool().unwrap_or(false) {
+                assert!(
+                    case["expect"]["pumped"]
+                        .as_array()
+                        .map(|a| !a.is_empty())
+                        .unwrap_or(false),
+                    "{name}: host_levelup 用例必须有 pumped oracle SM 帧"
+                );
+                host_skipped += 1;
+                continue;
+            }
             let c = &case["ctx"];
             let mut item_list = bag_items(&case["item_list_before"]);
             let item_list_before = item_list.clone();
@@ -1302,11 +1316,16 @@ mod tests {
             );
         }
         let total = cases.len();
+        assert!(
+            host_skipped >= 1,
+            "至少一个 host_levelup 用例应由宿主级用例覆盖（纯比较器当前跳过 {host_skipped} 例）"
+        );
+        let compared = total - host_skipped;
         // Z4 计数式 + 不适用名单（断言，非打印）。
         assert_eq!(
             z4_applicable + z4_exempt_names.len(),
-            total,
-            "Z4 计数式：适用 + 不适用 == 夹具例数"
+            compared,
+            "Z4 计数式：适用 + 不适用 == 被比较例数（排除 host_levelup）"
         );
         let mut z4_ex: Vec<&str> = z4_exempt_names.iter().map(String::as_str).collect();
         z4_ex.sort_unstable();
@@ -1318,11 +1337,11 @@ mod tests {
             "Z4 不适用名单漂移：须随夹具变更在同一次提交更新并写进提交信息"
         );
         // Z5 计数式 + 豁免名单（断言，非打印）。
-        let two_layer = total - one_layer_names.len();
+        let two_layer = compared - one_layer_names.len();
         assert_eq!(
             two_layer + one_layer_names.len(),
-            total,
-            "Z5 计数式：两层 + 豁免 == 总例数"
+            compared,
+            "Z5 计数式：两层 + 豁免 == 被比较例数（排除 host_levelup）"
         );
         let mut ol: Vec<&str> = one_layer_names.iter().map(String::as_str).collect();
         ol.sort_unstable();

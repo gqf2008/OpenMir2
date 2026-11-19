@@ -280,9 +280,10 @@ internal static class Program
     /// <summary>按**优先级升序出队**读出延时通知，抽空为止（上界 `MaxDrainPasses`）。
     /// `priority` 取自 `PriorityQueue.TryDequeue(out, out prio)`；`late` 取自 `SendMessage.LateDelivery`。
     /// **上界命中必报**（`hitCap=true` ⇒ 比较器红）。</summary>
-    private static (List<object> messages, int passes, bool hitCap) Drain(object pq)
+    private static (List<object> messages, List<object> raw, int passes, bool hitCap) Drain(object pq)
     {
         var list = new List<object>();
+        var raw = new List<object>();
         var t = pq.GetType();
         var countProp = t.GetProperty("Count") ?? throw new MissingMemberException("PriorityQueue.Count");
         var tryDequeue = t.GetMethod("TryDequeue") ?? throw new MissingMethodException("PriorityQueue.TryDequeue");
@@ -300,6 +301,7 @@ internal static class Program
                         break;
                     }
                     var m = args[0];
+                    raw.Add(m);
                     int prio = Convert.ToInt32(args[1]);
                     var mt = m.GetType();
                     list.Add(new
@@ -315,12 +317,12 @@ internal static class Program
                 }
                 return (int)countProp.GetValue(pq) > 0;
             });
-        return (list, passes, hitCap);
+        return (list, raw, passes, hitCap);
     }
 
     private static object RunCase(GameItemSystem table, CaptureNetChannel net, string name,
         Ctx ctx, List<Spec> itemList, int requestMakeIndex, string requestName,
-        Ability wabilPre, int incHealthPre, int incSpellPre, bool userUnlockPre)
+        Ability wabilPre, int incHealthPre, int incSpellPre, bool userUnlockPre, bool pump = false)
     {
         net.Frames.Clear();
 
@@ -365,8 +367,63 @@ internal static class Program
         mi.Invoke(po, new object[] { requestMakeIndex, requestName });
         SystemShare.FunctionNPC = null;
 
-        var (messages, drainPasses, drainHitCap) = Drain(GetMsgQueue(po));
+        var (messages, rawMessages, drainPasses, drainHitCap) = Drain(GetMsgQueue(po));
         var immediate = net.Frames.ToList();
+        // IT-08 升级支（b 缩小版）：仅对 `RM_WINEXP`/`RM_LEVELUP`/`RM_HEALTHSPELLCHANGED` 三条自足 RM 逐条走 oracle `Operate`
+        // ⇒ 玩家可见的 SM 帧（SM_LEVELUP/SM_ABILITY/SM_SUBABILITY/SM_HEALTHSPELLCHANGED）落 golden。这三条 handler 只读
+        // PlayObject 字段 + SendSocket，不需 Envir/Map/定时；若实测某条抛错（需 Envir）则本探针直接失败（不造假 Envir）。
+        var pumpedFrames = new List<object>();
+        if (pump)
+        {
+            var pumpSet = new HashSet<int> { 8075, 8086, 10052 };
+            // `RM_HEALTHSPELLCHANGED` 的 handler 用 `baseObject.WAbil`（`Operate` 里 `baseObject=ActorMgr.Get(ActorId)`）
+            // ⇒ 把本 po 登进生产 `SystemShare.ActorMgr`（不是假 Envir），其 ActorId 须唯一（升级 case 用 7777）。
+            SystemShare.ActorMgr.Add(po);
+            var expected = rawMessages
+                .Select(m => (int)m.GetType().GetField("wIdent").GetValue(m))
+                .Where(id => pumpSet.Contains(id))
+                .ToList();
+            var pumpIdents = new List<int>();
+            var operate = typeof(PlayObject).GetMethod("Operate",
+                System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+                ?? throw new MissingMethodException("PlayObject.Operate");
+            foreach (var m in rawMessages)
+            {
+                var mt = m.GetType();
+                int wid = (int)mt.GetField("wIdent").GetValue(m);
+                if (!pumpSet.Contains(wid))
+                {
+                    continue;
+                }
+                pumpIdents.Add(wid);
+                var pm = new ProcessMessage
+                {
+                    wIdent = wid,
+                    wParam = (int)mt.GetField("wParam").GetValue(m),
+                    nParam1 = (int)mt.GetField("nParam1").GetValue(m),
+                    nParam2 = (int)mt.GetField("nParam2").GetValue(m),
+                    nParam3 = (int)mt.GetField("nParam3").GetValue(m),
+                    ActorId = (int)mt.GetField("ActorId").GetValue(m),
+                    LateDelivery = (bool)mt.GetField("LateDelivery").GetValue(m),
+                    Msg = (string)mt.GetField("Buff").GetValue(m),
+                };
+                operate.Invoke(po, new object[] { pm });
+            }
+            // 约束②：pump 的 ident 序列 == 队列里这三条 RM 的 ident 序列（防漏喂/多喂）。
+            if (!pumpIdents.SequenceEqual(expected))
+            {
+                throw new InvalidOperationException(
+                    $"pump idents {string.Join(",", pumpIdents)} != queue的这三条 {string.Join(",", expected)}");
+            }
+            pumpedFrames = net.Frames.Skip(immediate.Count)
+                .Select(f => (object)new { ident = f.ident, recog = f.recog, param = f.param, tag = f.tag, series = f.series })
+                .ToList();
+        }
+        else if (rawMessages.Any(m => ((int)m.GetType().GetField("wIdent").GetValue(m)) is 8086))
+        {
+            // 约束④：旧例（不 pump）若队列里出现 RM_LEVELUP 却没 pump，说明该例被误标——直接失败（不静默漏 SM）。
+            throw new InvalidOperationException("非 pump 用例出现 RM_LEVELUP 但未开 pump（升级帧会漏）");
+        }
 
         return new
         {
@@ -407,6 +464,10 @@ internal static class Program
                 body_luck = po.BodyLuck,
                 body_luck_level_before = bodyLuckLevelBefore,
                 body_luck_level = po.BodyLuckLevel,
+                // IT-08 升级支：本 case 是否走宿主升级下行（pump）；pumped = 经 oracle `Operate` 出的玩家可见 SM 帧。
+                // 非 pump 用例 host_levelup=false、pumped=[]（纯追加）。
+                host_levelup = pump,
+                pumped = pumpedFrames,
                 inc_health = (int)po.IncHealth,
                 inc_spell = (int)po.IncSpell,
                 user_unlock_durg = po.UserUnLockDurg,
@@ -434,10 +495,51 @@ internal static class Program
     private static Spec S(int makeIndex, ushort index, ushort dura = 10, ushort duraMax = 20)
         => new Spec { MakeIndex = makeIndex, Index = index, Dura = dura, DuraMax = duraMax };
 
+    /// <summary>把冻结部署的 `Exps.conf`/`Server.conf` 拷进 `AppContext.BaseDirectory`（`SystemShare` 静态构造读它）；
+    /// 已在则跳过。IT-08 升级支前置：让 `GetLevelExp`/`RecalcLevelAbilitys` 用**生产**配置而非缺省。</summary>
+    private static bool EnsureConfFiles(out string info)
+    {
+        string confDir = Environment.GetEnvironmentVariable("EATPROBE_CONF_DIR") ?? @"E:\MirServer\M2GameSvr";
+        string baseDir = AppContext.BaseDirectory;
+        var missing = new System.Collections.Generic.List<string>();
+        foreach (var n in new[] { "Server.conf", "Exps.conf" })
+        {
+            var src = Path.Combine(confDir, n);
+            var dst = Path.Combine(baseDir, n);
+            if (!File.Exists(src)) { missing.Add(src); continue; }
+            File.Copy(src, dst, overwrite: true); // 总是覆盖：防 bin 目录里残留的空 conf 让"未载入"假绿。
+        }
+        var exps = Path.Combine(baseDir, "Exps.conf");
+        var srv = Path.Combine(baseDir, "Server.conf");
+        info = $"confDir={confDir} exps_sha={Sha256Hex(exps)} srv_sha={Sha256Hex(srv)} missing={string.Join(",", missing)}";
+        return missing.Count == 0;
+    }
+
+    private static string Sha256Hex(string path)
+    {
+        if (!File.Exists(path)) return "<missing>";
+        using var sha = SHA256.Create();
+        return Convert.ToHexString(sha.ComputeHash(File.ReadAllBytes(path))).ToLowerInvariant();
+    }
+
     public static int Main(string[] args)
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        // IT-08 升级支前置（opc-07 批准）：把生产 `Exps.conf`/`Server.conf` 拷进 `AppContext.BaseDirectory`，
+        // 使 `SystemShare.Config`（静态构造读该目录）拿到**生产** `NeedExps`/`nLevelValueOf*`；否则 golden 用缺省值=假。
+        if (!EnsureConfFiles(out string confInfo))
+        {
+            Console.Error.WriteLine("EATPROBE_CONF_MISSING " + confInfo);
+            return 2;
+        }
+        Console.Error.WriteLine("EATPROBE_CONF " + confInfo);
         LogService.Logger = new LoggerConfiguration().CreateLogger();
+        // 复刻生产 `GameSrv/GameShare.LoadConfig()`：把复制的 conf 真正灌进 `SystemShare.Config`（否则 Config 停在
+        // `new GameSvrConf()` 缺省、`NeedExps` 全 0）。只做配置装载，不连库/不建表/不起服务。
+        SystemShare.ServerConf.LoadConfig();
+        SystemShare.ExpConf.LoadConfig();
+        SystemShare.GlobalConf.LoadConfig();
+        SystemShare.GameSetting.LoadConfig();
 
         // D3 自测：排空趟循环的「自然命中」——假队列每趟都重满，跑到 MaxDrainPasses ⇒ hitCap 必真；
         // 一趟即空 ⇒ hitCap 假、passes=1；起于空队列 ⇒ passes=0。不进夹具、不依赖探针记录。
@@ -591,6 +693,14 @@ internal static class Program
         expBookAbil.MaxExp = 10000;
         cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_nonlevelup", new Ctx(),
             new List<Spec> { S(1, 2018) }, 1, "exp_book", expBookAbil, 0, 0, false));
+        // IT-08 **升级支**：Exp=9990/MaxExp=10000/DuraMax=100 ⇒ 9990+100>=10000 升级；pump 三条 RM
+        // （RM_WINEXP/RM_LEVELUP/RM_HEALTHSPELLCHANGED）⇒ golden 带玩家可见 SM 三帧。需生产 Exps.conf（已由 EnsureConfFiles 载入）。
+        var expUpAbil = BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80);
+        expUpAbil.MaxExp = 10000;
+        expUpAbil.Exp = 9990;
+        expUpAbil.Level = 5;
+        cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_levelup", new Ctx { actorId = 7777 },
+            new List<Spec> { S(1, 2018) }, 1, "exp_book", expUpAbil, 0, 0, false, pump: true));
 
         var templateDtos = new Dictionary<string, object>();
         foreach (var kv in templates)
@@ -624,6 +734,11 @@ internal static class Program
         string asmPath = typeof(M2Share).Assembly.Location;
         string asmSha = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(asmPath))).ToLowerInvariant();
 
+        // IT-08 升级支：证"生产 Exps.conf 真被载入"（Level6=80，来自部署 Exps.conf），否则缺省值会污染升级 golden。
+        int needExps6 = SystemShare.Config.NeedExps[6];
+        if (needExps6 != 80)
+            throw new InvalidOperationException(
+                $"NeedExps[6]={needExps6} != 80（生产 Exps.conf 未按预期载入；head={string.Join(",", SystemShare.Config.NeedExps.Take(8))}）");
         var doc = new
         {
             generator = "mir2-rs/tests/parity/m3/eat-probe",
@@ -655,6 +770,15 @@ internal static class Program
                 "Envir.Flag.boNODRUG 分支（地图禁药）已覆盖：SysMsg(Red) 入 MsgQueue（RM_SYSMESSAGE=11004，颜色取自 Config.RedMsgFColor/RedMsgBColor），物品不消耗、背包不动、落 SM_EAT_FAIL",
             },
             unbind = M2Share.UnbindList.ToDictionary(kv => kv.Key.ToString(), kv => kv.Value),
+            // IT-08 升级支：配置文件身份钉进 golden（路径 + sha256；配置一变换 ⇒ 该 golden 失效）。
+            config = new
+            {
+                exps_conf = Path.Combine(AppContext.BaseDirectory, "Exps.conf"),
+                exps_conf_sha256 = Sha256Hex(Path.Combine(AppContext.BaseDirectory, "Exps.conf")),
+                server_conf_sha256 = Sha256Hex(Path.Combine(AppContext.BaseDirectory, "Server.conf")),
+                need_exps_head = SystemShare.Config.NeedExps.Take(8).ToArray(),
+                need_exps_6 = SystemShare.Config.NeedExps[6],
+            },
             templates = templateDtos,
             cases,
         };

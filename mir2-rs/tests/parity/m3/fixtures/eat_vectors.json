@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/eat-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "bf797951dcf1b3055f886f5f0a0e5d68397f016f513a43509530fed0d3b84e2d",
+  "oracle_assembly_sha256": "beb623fcb588f1597d670b75ce65a354907a5f43039994ab52aa72499600525b",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
   "oracle_source_sha256_files": [
@@ -36,6 +36,22 @@
   ],
   "unbind": {
     "1": "unbind_item"
+  },
+  "config": {
+    "exps_conf": "E:\\Users\\gxh\\Documents\\GitHub\\OpenMir2\\.worktrees\\items-parity\\mir2-rs\\tests\\parity\\m3\\eat-probe\\bin\\Release\\net8.0\\Exps.conf",
+    "exps_conf_sha256": "07d7801cad77082f0a23654771e4e9026d6ef3845214dc96d2593940bf4b71e9",
+    "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+    "need_exps_head": [
+      0,
+      10,
+      15,
+      20,
+      30,
+      50,
+      80,
+      100
+    ],
+    "need_exps_6": 80
   },
   "templates": {
     "2001": {
@@ -328,6 +344,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -468,6 +486,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -608,6 +628,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -739,6 +761,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": true,
@@ -870,6 +894,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 18,
         "inc_spell": 11,
         "user_unlock_durg": false,
@@ -1001,6 +1027,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 3,
         "inc_spell": 4,
         "user_unlock_durg": false,
@@ -1185,6 +1213,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1392,6 +1422,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1536,6 +1568,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1680,6 +1714,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1824,6 +1860,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1978,6 +2016,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2122,6 +2162,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2276,6 +2318,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2407,6 +2451,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2556,6 +2602,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2687,6 +2735,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2818,6 +2868,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2972,6 +3024,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -3126,6 +3180,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -3247,6 +3303,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -4293,6 +4351,8 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -5363,7 +5423,7 @@
         ],
         "added_items": [
           {
-            "make_index": 1107235282,
+            "make_index": 1108928359,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5385,7 +5445,7 @@
             ]
           },
           {
-            "make_index": 1107235283,
+            "make_index": 1108928360,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5407,7 +5467,7 @@
             ]
           },
           {
-            "make_index": 1107235284,
+            "make_index": 1108928361,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5429,7 +5489,7 @@
             ]
           },
           {
-            "make_index": 1107235285,
+            "make_index": 1108928362,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5451,7 +5511,7 @@
             ]
           },
           {
-            "make_index": 1107235286,
+            "make_index": 1108928379,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5473,7 +5533,7 @@
             ]
           },
           {
-            "make_index": 1107235287,
+            "make_index": 1108928380,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5524,13 +5584,15 @@
         "body_luck": 0,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 0,
         "item_list": [
           {
-            "make_index": 1107235282,
+            "make_index": 1108928359,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5552,7 +5614,7 @@
             ]
           },
           {
-            "make_index": 1107235283,
+            "make_index": 1108928360,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5574,7 +5636,7 @@
             ]
           },
           {
-            "make_index": 1107235284,
+            "make_index": 1108928361,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5596,7 +5658,7 @@
             ]
           },
           {
-            "make_index": 1107235285,
+            "make_index": 1108928362,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5618,7 +5680,7 @@
             ]
           },
           {
-            "make_index": 1107235286,
+            "make_index": 1108928379,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5640,7 +5702,7 @@
             ]
           },
           {
-            "make_index": 1107235287,
+            "make_index": 1108928380,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5797,6 +5859,222 @@
         "body_luck": 0.2,
         "body_luck_level_before": 0,
         "body_luck_level": 0,
+        "host_levelup": false,
+        "pumped": [],
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_stdmode3_shape13_exp_levelup",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 7777,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
+      },
+      "request": {
+        "make_index": 1,
+        "name": "exp_book"
+      },
+      "wabil_before": {
+        "level": 5,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 9990,
+        "max_exp": 10000,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 9990,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2018,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10052,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 68,
+            "late": 0
+          },
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8075,
+            "w_param": 0,
+            "n_param1": 100,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 139,
+            "late": 0
+          },
+          {
+            "ident": 8086,
+            "w_param": 0,
+            "n_param1": 90,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 150,
+            "late": 0
+          },
+          {
+            "ident": 10139,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 155,
+            "late": 0
+          },
+          {
+            "ident": 10139,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 155,
+            "late": 0
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 6,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 52,
+          "mp": 32,
+          "max_hp": 52,
+          "max_mp": 32,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 90,
+          "max_exp": 80,
+          "weight": 0,
+          "max_weight": 62,
+          "wear_weight": 0,
+          "max_wear_weight": 17,
+          "hand_weight": 0,
+          "max_hand_weight": 15
+        },
+        "abil_exp": 90,
+        "body_luck_before": 0,
+        "body_luck": 100.2,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "host_levelup": true,
+        "pumped": [
+          {
+            "ident": 53,
+            "recog": 7777,
+            "param": 52,
+            "tag": 32,
+            "series": 52
+          },
+          {
+            "ident": 44,
+            "recog": 90,
+            "param": 100,
+            "tag": 0,
+            "series": 0
+          },
+          {
+            "ident": 45,
+            "recog": 90,
+            "param": 6,
+            "tag": 0,
+            "series": 0
+          },
+          {
+            "ident": 52,
+            "recog": 0,
+            "param": 25344,
+            "tag": 0,
+            "series": 0
+          },
+          {
+            "ident": 752,
+            "recog": 1,
+            "param": 3845,
+            "tag": 0,
+            "series": 0
+          }
+        ],
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
