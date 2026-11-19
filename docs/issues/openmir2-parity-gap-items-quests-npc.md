@@ -337,7 +337,8 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 
 ## 12. 机器可读清单（schema v1）
 
-物品表已落机器清单：**`docs/issues/parity-gap-items.json`**（与本节 schema 同版）。任务块随后按同一 schema 同目录追加 `parity-gap-quests.json`。
+机器清单（**覆盖率的唯一机器事实源**）：`docs/issues/parity-gap-items.json`、`parity-gap-quests.json`、`parity-gap-npc.json`、`parity-gap-magic.json`。
+**改状态必须同时改 `notes` 并跑 `coverage-report.ps1` 自检**；覆盖率脚本切到 master 之前，不要移动这些文件的位置（`coverage-report.ps1` 读的是 worktree 路径）。
 
 ### 12.1 顶层字段
 
@@ -354,18 +355,22 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 | `axes` | array | 不进主分母但必须可见的轴（物品：装备轴；任务：QX-01…04） |
 | `dead_paths` | array | **可选**；死路径登记（`status` 固定 `dead_in_oracle`），不参与 `denominator.count`；与 `entries` 同形 |
 | `entries` | array | 主分母逐条，数量必须 == `denominator.count` |
+| `legacy_source` | string | 可选；旧清单绝对路径（技能块指向 `E:/UserFleet/magic-parity.json`） |
+| `migration_note` | string | 可选；旧 schema 转写规则（状态只降不升、cost 映射） |
+| `todos` | array | 可选；未分派到条目的遗留事项 `{id, desc, ref}` |
 
 ### 12.2 条目字段（`entries[]` / `axes[]` 同形）
 
 | 字段 | 类型 | 说明 |
 | --- | --- | --- |
 | `id` | string | `IT-01` / `EQ-01` / `QT-01` / `QX-01` |
+| `legacy_id` | string | 可选；旧清单条目 id（技能块用，保留同名技能的多个分派位点） |
 | `behavior` / `name` | string | 行为一句话 |
 | `oracle_anchor` | object | `{file, line, line_end?}`；`file` 相对仓库根 |
 | `status` | string | ∈ `status_enum` |
 | `evidence` | object | `{test, test_file, fixture, cases[], unit_tests[]}`；任一项可 `null`/空 |
 | `cost` | string \| null | ∈ `cost_enum`；已完成项为 `null` |
-| `deviation` | object \| null | `{id, file, section, lines?}`；`missing` **必填**（T-*/D-*）；照搬 oracle 缺陷（如 CHECKOPEN 的 **T-37**）或登记缺口时也可填 |
+| `deviation` | object \| null | `{id, file, section, lines?}`；`missing` **必填**；`id` 可为 T-*/B-*/D-* 或**旧清单条目 id**（技能块用 `legacy:<旧 id>`，因该两条无 T-*/D-* 编号）；照搬 oracle 缺陷（如 CHECKOPEN 的 **T-37**）时也可填 |
 | `notes` | string | 备注（可空串） |
 
 ### 12.3 状态枚举（脚本按此判定）
@@ -382,7 +387,7 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 
 1. `len(entries) == denominator.count`；
 2. `all(e.status in status_enum)`；
-3. `e.status == "missing" ⇒ e.deviation.id` 非空且能在 whitelist/差异登记中查到；
+3. `e.status == "missing" ⇒ e.deviation.id` 非空且能在 whitelist/差异登记中查到（技能块的 `legacy:<id>` 以 `legacy_source` 指向的旧清单为登记源）；
 4. `e.status == "verified" ⇒ e.evidence.test` 非空且 `test_file` 存在；
 5. `e.cost ∈ cost_enum ∪ {null}`；
 6. `sum(1 for e in entries if e.status=="verified")` 与文档汇总行一致（物品：7；任务：2；NPC：1）。
@@ -483,3 +488,14 @@ src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: Client
 - 主分母 11：`verified` 1（NP-06，经 M4 双跑逐行 diff）、`implemented（未验证）` 10、`missing` **0**。
 - 机制层没有 known-missing；缺口在**证据强度**：10 条只有 Rust 侧集成测试，没有 oracle 夹具。
 - **脚本命令语言全集**（条件/动作注册表）不在本块重复计数：M4 已有双跑对拍（7 条）与注册表门（`IMPLEMENTED_CONDITIONS`/`IMPLEMENTED_EXECUTIONS` + `implemented_registry_entries_are_actually_implemented`）；任务块 §11 的 9 条是其中的任务专属子集。
+
+---
+
+## 14. 技能块（magic，迁移清单）
+
+- 机器清单：**`docs/issues/parity-gap-magic.json`**（与本节同 schema，由 `E:/UserFleet/magic-parity.json` **机械转写**）。
+- 分母：`src/M2Server/Magic/MagicManager.cs` 的 case 分支 **65**（含同名技能在多个分派位点，如 `SKILL_FIRECHARM` 在 `:315` 与 `:328`）。
+- 状态：**verified 0**、implemented（未验证）**63**、missing **2**（`SKILL_WINDTEBO(id=35)`、`SKILL_GROUPDEDING(id=39)`）。
+- **未升格**：旧清单 `note` 明写"帧级对拍 **0/65**、`basis` 全空"，7 条带 `test` 的只是 Rust 侧用例名；按 opc-07 要求一律不升 `verified`。
+- 旧清单 3 条 `todos` 原样保留在 JSON（buff tick 门 / anti-magic recalc / `DoSpell :167` 版本门）。
+- 与前三块的差异：技能块未做口径重审（按"以旧清单为准"），分母沿用旧定义；将来重审另开卡。
