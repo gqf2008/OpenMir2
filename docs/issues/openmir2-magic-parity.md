@@ -431,3 +431,17 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 - **未完成的部分**：identity 台账是从金标准克隆的（`RngSites/RngSeqs` 为占位），
   **驱动的真实台账尚未接入** ⇒ `1/5` 仍不得标 `verified`；下一步是火球夹具产出真实台账后
   把这两侧接上（比较器本身不再改动）。
+
+### 19c. 三条咬合证明的可重放构造（QA 独立复核用）
+
+用例文件 `mir2-rs/tests/parity/tests/magic_fireball_parity.rs`；**每条都在内存里改副本，不碰金标准文件**：
+
+| 用例 | 改哪份副本 | 怎么改 | 期望红在哪条断言 |
+|---|---|---|---|
+| `tooth_caster_sm_spell_present_red` | `golden()` 的克隆（`tampered`） | 对 `cases[0].Receivers` 里 `Who=="caster"` 的 `Sent` **追加** `{"ident":17,"param":0,"tag":0,"series":1,"tail":"1"}` | `负向牙①：caster 收到 N 条 SM_SPELL(17)` |
+| `tooth_foreign_site_red` | `ledger_from(golden)`（Rust 侧台账） | `cases[0].RngSites[0] = "crates/world-bevy/src/mongen.rs"`（清单外） | `RNG[0] site 不在允许清单` |
+| `tooth_missing_rng_line_red` | 同上 | `cases[0].Rng` **弹掉最后一条**（行数与 `RngSites` 同步少一条） | `RNG 行数不等` |
+
+复跑：`cargo test -p mir2-parity-tests --test magic_fireball_parity`（6 例）。
+**已知局限（写死）**：以上证明的是"篡改副本必红"；**真实驱动台账接上后，必须再确认
+"清单外的真实 site 会红"**（现在只证明了"把已知 good 的 site 改成清单外会红"）。
