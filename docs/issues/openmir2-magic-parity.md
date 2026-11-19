@@ -1065,3 +1065,12 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - **MG-45 升格（已写入清单）**：`status=verified`、`basis=semantic`、
   `test=real_rust_ledger_snowwind`、`fixture=golden/magic/snowwind.json`、
   `cases=s1/s5/s13`、`unit_tests=tests::snowwind_parity_s1/s5/s13` ⇒ magic 域 16/65。
+
+## 23. M57 前序：`RunMagicCase` 的 `Fixture` 输入语义（2026-11-20）
+
+- `RunMagicCase` 的四个**驱动输入**（`target_level`/`target_hp`/`target_max_hp`/`anti_magic`）在
+  「target 构造完成、RNG/`DoSpell` 之前」捕获并写入 `Fixture`；术后状态（受击/治疗后的 HP 等）只在
+  结果顶层 `TargetHp`，**不得**回写成 `Fixture` 输入。
+- 缺陷史：合入 M52 的装置曾在排水循环之后取 `target.WAbil.HP`（术后值）；旧世代 golden 记的是输入（100）。
+  本笔改为施法前输入；附 `--case runmagic-input-selftest`（`healing/heal`：输入 50、术后 ≠ 50，断言
+  `Fixture.target_hp == 50`）——若捕获再被挪到排水后，该用例必红。

@@ -119,6 +119,7 @@ public static class Program
         {
             var name = args[Array.IndexOf(args, "--case") + 1];
             if (name == "fixture-selftest") return FixtureSelfTest();
+            if (name == "runmagic-input-selftest") return RunMagicInputSelfTest();
             if (name == "fireball")
             {
                 string fbMode = ArgValue(args, "--fireball-rng-mode") ?? "cover_drain";
@@ -1044,6 +1045,32 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         };
     }
 
+    /// <summary>
+    /// `--case runmagic-input-selftest`（M57 前序的牙）：人造「术后 ≠ 输入」场景（29 的 `heal`：
+    /// target 输入 HP=50，治疗术后 HP 上升），断言 `Fixture.target_hp` 仍是**输入 50**、术后值只在
+    /// 结果顶层 `TargetHp`。若有人把捕获挪到排水后（术后取值），本用例必红。
+    /// </summary>
+    private static int RunMagicInputSelfTest()
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var spec = new MagicSpec { Key = "healing", MagicId = 2, MagicName = "Healing" };
+        var res = RunMagicCase(spec, "heal", 1, 1000, 50, false);
+        var fx = res.Fixture;
+        int fxHp = (int)fx.GetType().GetProperty("target_hp").GetValue(fx);
+        int fxMax = (int)fx.GetType().GetProperty("target_max_hp").GetValue(fx);
+        int fxAnti = (int)fx.GetType().GetProperty("anti_magic").GetValue(fx);
+        bool postDiffers = res.TargetHp != 50;
+        bool ok = fxHp == 50 && postDiffers;
+        Console.Error.WriteLine("RUNMAGIC_INPUT_SELFTEST " + (ok ? "OK" : "FAIL")
+            + " fixture.target_hp=" + fxHp + " fixture.target_max_hp=" + fxMax + " fixture.anti_magic=" + fxAnti
+            + " post.TargetHp=" + res.TargetHp + " post_differs=" + postDiffers);
+        return ok ? 0 : 1;
+    }
+
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
         var outObj = new
@@ -1119,6 +1146,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         // `WAbil.HP/MaxHP`（`PlayObject.Message.cs:2009-2011`），少了这一步 MaxHP 会是 ctor 的 0。
         target.RecalcAbilitys();
         target.DrainRaw();
+        // **驱动输入（输入/输出语义）**：这四个值在「target 构造完成、RNG/DoSpell 之前」捕获并写入
+        // `Fixture`——`2d` 的驱动用它们设 target 初始状态。术后状态（如受击后的 HP）只留在结果顶层
+        // `TargetHp`，**不得**回写成 `Fixture` 输入（否则驱动会从术后值起手）。
+        int inputTargetLevel = target.Abil.Level;
+        int inputTargetHp = target.WAbil.HP;
+        int inputTargetMaxHp = target.WAbil.MaxHP;
+        int inputAntiMagic = target.AntiMagic;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         if (targetNull)
@@ -1339,10 +1373,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 rng_mode = spec.RngMode,
                 login_order = spec.LoginOrder,
                 reachability = spec.Reachability,
-                target_level = (int)target.Abil.Level,
-                target_hp = (int)target.WAbil.HP,
-                target_max_hp = (int)target.WAbil.MaxHP,
-                anti_magic = (int)target.AntiMagic,
+                target_level = inputTargetLevel,
+                target_hp = inputTargetHp,
+                target_max_hp = inputTargetMaxHp,
+                anti_magic = inputAntiMagic,
                 derived = new
                 {
                     max_hp = contract.Derived.MaxHp,
