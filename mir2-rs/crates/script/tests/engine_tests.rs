@@ -3061,3 +3061,67 @@ x
     assert!(script_errors(&errs).is_empty(), "{errs:?}");
     assert!(!player.bo_dec_game_gold);
 }
+
+// ---- 任务线（卡 `openmir2-quests-parity`）----
+
+/// QT-01 门控判决（Rust 侧，行为证据）：
+///   1. 不装臂时，非 `@main` 标签走 `check_quest_status`，`is_quest` 恒 false ⇒ 放行（与 oracle 一致）；
+///   2. 装臂后同路径必须拦（证明这条路径真的过门，用例能红）；
+///   3. `@main` 快路径**不过任务门**——oracle `ScriptEngine.GotoLable` 的 `@main` 分支同样不过，
+///      Rust 1:1 复刻；装臂也照样说话。
+///
+/// 装臂只在**测试内**完成（`npc.scripts[0].is_quest = true`），产品不加任何开关。
+#[test]
+fn quest_gate_only_applies_to_non_main_labels_like_oracle() {
+    let src = "{Quest 1}
+[@other]
+#SAY
+hello
+";
+
+    // 1) 不装臂：非 @main ⇒ 过门且 is_quest=false ⇒ 说话
+    let (mut npc, mut player) = setup(src);
+    let errors = run(&mut npc, &mut player, "@other");
+    assert!(errors.is_empty(), "{errors:?}");
+    assert!(
+        npc.says.iter().any(|(s, _)| s.contains("hello")),
+        "非 @main 路径在 is_quest=false 时必须放行；says={:?}",
+        npc.says
+    );
+
+    // 2) 装臂：同一路径必须拦
+    let (mut npc2, mut player2) = setup(src);
+    assert_eq!(npc2.scripts.len(), 1);
+    npc2.scripts[0].is_quest = true;
+    npc2.scripts[0].quest_info[0] = mir2_script::ScriptQuestInfo {
+        w_flag: 5,
+        bt_value: 1,
+        n_rand_rage: 0,
+    };
+    let _ = run(&mut npc2, &mut player2, "@other");
+    assert!(
+        !npc2.says.iter().any(|(s, _)| s.contains("hello")),
+        "装臂后非 @main 路径必须拦（证明用例能红）；says={:?}",
+        npc2.says
+    );
+
+    // 3) @main 快路径不过任务门（oracle ScriptEngine.GotoLable 的 @main 分支同样不过）
+    let src_main = "{Quest 1}
+[@main]
+#SAY
+hello
+";
+    let (mut npc3, mut player3) = setup(src_main);
+    npc3.scripts[0].is_quest = true;
+    npc3.scripts[0].quest_info[0] = mir2_script::ScriptQuestInfo {
+        w_flag: 5,
+        bt_value: 1,
+        n_rand_rage: 0,
+    };
+    let _ = run(&mut npc3, &mut player3, "@main");
+    assert!(
+        npc3.says.iter().any(|(s, _)| s.contains("hello")),
+        "@main 快路径不过任务门（与 oracle 同）；says={:?}",
+        npc3.says
+    );
+}

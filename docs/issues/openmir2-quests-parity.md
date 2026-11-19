@@ -188,3 +188,30 @@
 | S1–S4 | 全部适用 | — |
 
 Z5 / L1–L2b / L6 / I 组的「不适用」若 opc-07 不认可，以 opc-07 裁定为准（我不与 QA 私下谈口径）。
+
+### 10.1 门控判决（opc-07 追问：Rust 会不会按 `{Quest` 门控而 oracle 不会）
+
+**结论**：**两侧均不可达 ⇒ 无玩家可见差异，不需要 divergence 登记**（以行为证据为准，读码为其依据）。
+
+- **oracle 行为**：探针 `--gate` 反射调用真 `ScriptEngine.CheckGotoLableQuestStatus`——对**真实解析出的**
+  `ScriptInfo` 返回 true（不门控）；另三条「把门臂装上」的对照必须能返回 false，实测各得预期
+  （拦 / 放 / 放）⇒ 判据非恒真。产物 `E:/UserFleet/qa/quests/qt01/quest_gate_decision.tsv`，rc 见同目录
+  `probe_gate_run.log`。
+- **Rust 行为**：`quest_gate_only_applies_to_non_main_labels_like_oracle`
+  （`cargo test -p mir2-script --test engine_tests`）：非 `@main` 路径不装臂时说得出话、装臂后必须拦；
+  原文 `E:/UserFleet/qa/quests/qt01/rust_script_tests_full.log`。
+- **负控逼出来的新事实**：`@main` 快路径在**两侧都不过任务门**——oracle `ScriptEngine.GotoLable` 的
+  `@main` 分支直接按标签选脚本、不调 `CheckGotoLableQuestStatus`；Rust 1:1 同形，用例第 3 段钉住它。
+- **`is_quest` 枚举的范围**（同源问题）：代码里有**三个**同名 `is_quest`——`mir2_script::ScriptInfo`
+  （引擎读的那个：产品零写入，唯一 `= true` 出现在测试内，用于负控）、`bins/game-svr` 的 `NpcDef`
+  （镜像 oracle 的 `NormNpc.IsQuest`，确实有 `true`）、`crates/envir` 的 mapquest 字段。
+  命令与原文：`E:/UserFleet/qa/quests/qt01/grep_is_quest.txt`、`.../grep_is_quest_writes.txt`、
+  `.../grep_scriptinfo_literals.txt`（覆盖 `is_quest =` 赋值、`is_quest:` 结构体字面量、`ScriptInfo {` 构造点）。
+- **负控只在测试内注入**：Rust 侧是 `npc.scripts[0].is_quest = true` 一行测试代码；oracle 侧是探针在内存里
+  构造 `ScriptInfo`。产品代码不加任何开关。
+
+### 10.2 夹具入库（可复跑）
+
+`mir2-rs/tests/parity/m3/quests/fixtures/`：`quest_probe_a.txt`、`quest_probe_b.txt`、`README.md`（合成出处
+与「现网 0 命中」说明）、`SHA256SUMS.txt`（仓库字节口径）。探针改为**从仓库读夹具**
+（`--fixtures <dir>`，缺文件 ⇒ rc=2 PREREQ），不再内嵌脚本字符串。
