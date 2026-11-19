@@ -111,3 +111,32 @@ DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll
   现网 `runtime/DBSrv` 里 `MySqlConnector.dll` 是别的途径带进去的，`NLog.dll` 没有。
   **一件一议**：要么改 target 连依赖闭包一起拷（部署修复），要么把该插件的 NLog 依赖移除/标为不部署。
   在结论前，DBSrv 这条保持红——不降级、不默默 WARN。
+
+## 复审第 3 轮：显式例外（NLog）与身份缺口登记
+
+### NLog 处置 = (b) 显式例外（不改 DLL、不改 target；10k 冻结件不动）
+
+- 复核"零 API 使用"：`grep -rn "LogManager|Logger|Log\.|using NLog" src/Storeages/DBSvr.Storage.MySQL --include=*.cs`
+  → 只有 `DBContext.cs:2`、`PlayRecordStorage.cs:4` 两行 `using NLog;`，**没有任何调用** ⇒ 不在运行时引用。
+- 例外文件：`src/DBSrv/deps.exceptions.json`
+  `[{"pkg":"NLog","version":"5.2.8","reason":"declared by DBSvr.Storage.MySQL, zero API usage (only using-directives), not on any runtime path"}]`
+- `check` 语义：被例外覆盖的 `MISSING_DEPLOYED` 打印 `DEPS_EXCEPTION <pkg>/<ver> <reason>` 且**仍绿**；
+  未被用到的例外打印 `DEPS_EXCEPTION_UNUSED`（不红）；理由为空/缺字段 ⇒ 生成/读 manifest 阶段红
+  （禁止空口豁免）。例外只压制 `MISSING_DEPLOYED`，不影响 sha/覆盖判定。
+
+### 真实目录结果（只读，最终）
+
+```
+DBSrv（并集 47 包 / 1045 文件）：
+DEPS_EXCEPTION NLog/5.2.8 declared by DBSvr.Storage.MySQL, zero API usage (only using-directives), not on any runtime path
+DEPS_GREEN packages=47 files=1045
+
+LoginSrv（48 包 / 1063 文件）：
+DEPS_GREEN packages=48 files=1063
+```
+`UNCOVERED_DEPLOYED=0`；**显式例外共 1 笔**（NLog）。第四颗牙原文保持；自测 **21 例**。
+
+### 顺带登记的身份缺口
+
+`DBSrv.Storage.MongoDB.dll` 在 `runtime/DBSrv` 里**被部署但无戳**、也不在 `release-1af56267` 的 8 件里
+⇒ 另卡 `docs/issues/openmir2-own-binary-without-stamp.md`（重构建补戳 / 从部署集移除，**10k 之后**）。

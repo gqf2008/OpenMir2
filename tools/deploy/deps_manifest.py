@@ -27,8 +27,10 @@
 **fail-closed**：缺 lock / 缺 manifest / manifest 空或字段缺失 ⇒ 红（rc=1），绝不当"没有依赖"。
 
 用法：
-  python -I -B tools/deploy/deps_manifest.py generate --project <csproj> --out <manifest.json>
-  python -I -B tools/deploy/deps_manifest.py check --project <csproj> --manifest <manifest.json>       [--deploy-dir <目录>]
+  python -I -B tools/deploy/deps_manifest.py generate --projects <a;b;c> --out <manifest.json>
+      [--exceptions <exceptions.json>]
+  python -I -B tools/deploy/deps_manifest.py check --projects <a;b;c> --manifest <manifest.json>
+      [--deploy-dir <目录>]
   python -I -B tools/deploy/deps_manifest.py selftest
 
 退出码：0 = 绿；1 = 判红（证伪，红项逐条打印）；2 = 用法错 / 判不了（环境缺目录等）。
@@ -195,6 +197,39 @@ def load_assets_runtime(proj_dir):
     return out, ""
 
 
+def load_exceptions(proj_dir, explicit_path):
+    """读取**显式例外**（只压制 `MISSING_DEPLOYED`，逐条必须带理由）。
+
+    来源：`--exceptions <path>`，否则自动找主项目目录下的 `deps.exceptions.json`（可不存在）。
+    格式：`[{"pkg": "...", "version": "...", "reason": "..."}]`；理由为空 ⇒ 判红（不能空口豁免）。
+    """
+    path = explicit_path or os.path.join(proj_dir, "deps.exceptions.json")
+    if not explicit_path and not os.path.isfile(path):
+        return [], ""
+    if not os.path.isfile(path):
+        return None, "MISSING_EXCEPTIONS %s" % path
+    try:
+        with open(path, "r", encoding="utf-8-sig") as f:
+            data = json.load(f)
+    except (OSError, ValueError) as exc:
+        return None, "BAD_EXCEPTIONS %s (%s)" % (path, exc)
+    if not isinstance(data, list):
+        return None, "BAD_EXCEPTIONS %s（顶层必须是数组）" % path
+    out = []
+    for item in data:
+        if not isinstance(item, dict):
+            return None, "BAD_EXCEPTIONS %s（条目必须是对象）" % path
+        pkg = item.get("pkg")
+        ver = item.get("version")
+        reason = (item.get("reason") or "").strip()
+        if not pkg or not ver:
+            return None, "BAD_EXCEPTIONS %s（缺 pkg/version）" % path
+        if not reason:
+            return None, "BAD_EXCEPTIONS %s（%s@%s 理由为空，禁止空口豁免）" % (path, pkg, ver)
+        out.append({"pkg": pkg, "version": ver, "reason": reason})
+    return out, ""
+
+
 def load_lock(proj_dir):
     path = os.path.join(proj_dir, "packages.lock.json")
     if not os.path.isfile(path):
@@ -291,6 +326,11 @@ def cmd_generate(args):
     if not proj_paths:
         emit("DEPS_RED MISSING_PROJECTS（--project 或 --projects 必给）")
         return 2
+    exceptions, eerr = load_exceptions(os.path.dirname(proj_paths[0]),
+                                       getattr(args, "exceptions", None))
+    if exceptions is None:
+        emit("DEPS_RED %s" % eerr)
+        return 1
     projects_rel = []
     output_dirs = {}
     configs = set()
@@ -398,6 +438,7 @@ def cmd_generate(args):
         "projects": projects_rel,
         "build_config": build_config,
         "output_dirs": output_dirs,
+        "exceptions": exceptions,
         "generated_by": "tools/deploy/deps_manifest.py",
         "packages": entries,
     }
@@ -438,9 +479,19 @@ def cmd_check(args):
     if isinstance(manifest, dict):
         if manifest.get("manifest_version") != MANIFEST_VERSION:
             _fail(reds, "BAD_MANIFEST_VERSION", "manifest_version=%r" % manifest.get("manifest_version"))
-        for field in ("projects", "build_config", "output_dirs"):
+        for field in ("projects", "build_config", "output_dirs", "exceptions"):
             if field not in manifest:
                 _fail(reds, "MISSING_FIELD", "<top>." + field)
+        excs = manifest.get("exceptions")
+        if not isinstance(excs, list):
+            _fail(reds, "BAD_EXCEPTIONS", "exceptions 必须是数组")
+            excs = []
+        else:
+            for e in excs:
+                if (not isinstance(e, dict) or not e.get("pkg") or not e.get("version")
+                        or not (e.get("reason") or "").strip()):
+                    _fail(reds, "BAD_EXCEPTIONS", "条目缺 pkg/version/reason")
+        manifest["_exceptions_valid"] = isinstance(excs, list)
         pkgs = manifest.get("packages")
         if not isinstance(pkgs, list) or not pkgs:
             _fail(reds, "EMPTY_MANIFEST", "packages 为空或非数组")
@@ -545,6 +596,7 @@ def cmd_check(args):
                 _fail(reds, "BAD_DEPLOY_DIR", "%s (%s)" % (ddir, exc))
             if not deployed:
                 _fail(reds, "EMPTY_DEPLOY_DIR", ddir)
+        deploy_red_start = len(reds)
         if manifest is not None:
             claims = {}
             ship_total = 0
@@ -588,6 +640,32 @@ def cmd_check(args):
                 if fn in mapped or fn.lower() in SELF_BUILT:
                     continue
                 _fail(reds, "UNCOVERED_DEPLOYED", fn)
+            # 显式例外只压制 MISSING_DEPLOYED（逐条带理由）；其余红原样保留。
+            exceptions = [e for e in (manifest.get("exceptions") or [])
+                          if isinstance(e, dict) and e.get("pkg") and e.get("version")
+                          and (e.get("reason") or "").strip()]
+            used = set()
+            kept = []
+            for idx, line in enumerate(reds):
+                if idx < deploy_red_start or not line.startswith("DEPS_RED MISSING_DEPLOYED "):
+                    kept.append(line)
+                    continue
+                detail = line[len("DEPS_RED MISSING_DEPLOYED "):]
+                key = detail.split(" ", 1)[0]
+                pkg, _, ver = key.rpartition("/")
+                match = next((e for e in exceptions
+                              if e["pkg"] == pkg and e["version"] == ver), None)
+                if match is None:
+                    kept.append(line)
+                else:
+                    used.add((match["pkg"], match["version"]))
+            reds[:] = kept
+            for e in exceptions:
+                line = "DEPS_EXCEPTION %s/%s %s" % (e["pkg"], e["version"], e["reason"])
+                if (e["pkg"], e["version"]) in used:
+                    emit(line)
+                else:
+                    emit("DEPS_EXCEPTION_UNUSED %s/%s %s" % (e["pkg"], e["version"], e["reason"]))
 
     if reds:
         for line in reds:
@@ -813,6 +891,32 @@ def cmd_selftest(_args):
                   "manifest": bad_out, "packages_dir": feed4})
         sassert(rc == 1, "output-dir mismatch red", "rc=%d" % rc)
 
+        # 显式例外：被例外覆盖的缺失件 ⇒ 绿 + DEPS_EXCEPTION（例外必须逐条有理由）
+        exc = os.path.join(tmp, "deploy", "exc.json")
+        with open(exc, "w", encoding="utf-8") as f:
+            json.dump([{"pkg": "Beta", "version": "2.0.0",
+                        "reason": "selftest: declared but zero API usage"}], f)
+        manE = os.path.join(tmp, "deploy", "mE.json")
+        rc = run({"cmd": "generate", "project": os.path.join(proj4, "App.csproj"), "out": manE,
+                  "packages_dir": feed4, "exceptions": exc})
+        sassert(rc == 0, "exception: generate with exceptions rc=0", "rc=%d" % rc)
+        ddirE = os.path.join(tmp, "deploy", "outE")
+        os.makedirs(ddirE, exist_ok=True)
+        shutil.copy(os.path.join(feed4, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                    os.path.join(ddirE, "Alpha.dll"))
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": manE, "packages_dir": feed4, "deploy_dir": ddirE})
+        sassert(rc == 0, "exception: missing-but-excepted green", "rc=%d" % rc)
+
+        # 例外理由为空 ⇒ 生成阶段红（禁止空口豁免）
+        bad_exc = os.path.join(tmp, "deploy", "bad_exc.json")
+        with open(bad_exc, "w", encoding="utf-8") as f:
+            json.dump([{"pkg": "Beta", "version": "2.0.0", "reason": "  "}], f)
+        rc = run({"cmd": "generate", "project": os.path.join(proj4, "App.csproj"),
+                  "out": os.path.join(tmp, "deploy", "mBad.json"),
+                  "packages_dir": feed4, "exceptions": bad_exc})
+        sassert(rc == 1, "exception: empty reason red", "rc=%d" % rc)
+
         # fail-closed：部署目录缺失 / 为空
         rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
                   "manifest": man4, "packages_dir": feed4,
@@ -853,6 +957,7 @@ def build_parser():
     g.add_argument("--out", required=True)
     g.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
     g.add_argument("--output-dir", default=None)
+    g.add_argument("--exceptions", default=None)
     c = sub.add_parser("check")
     c.add_argument("--project", required=False)
     c.add_argument("--projects", default=None)
