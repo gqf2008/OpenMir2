@@ -200,6 +200,24 @@ opc-07 定的三条前置已全部满足（见 §10.1 三证明）；NP-01 签�
 - **flag 来源**：`is_buy`/`is_sell`/`is_storage`/`is_repair` 由 **加载器**从脚本 `[goods]`/`%` 指令解析
   （`crates/envir/src/merchant.rs` 的 `merchant_flags`），**不得在用例里手设**；用例只断言"开/未开"两种真实形态。
 
+### 10.6 golden 重录纪律（opc-07，2026-11-20；适用于以后任何一次重录）
+
+**重录不是免检操作——它把旧证据换成了新对象。** 每次重录必须：
+
+1. **重录前/后各存一份 JSON**（仓外 `E:/UserFleet/qa/npc-parity/`），并给 `git diff` 原文；
+2. 用 `mir2-rs/tests/parity/npc/golden_recheck.py before.json after.json` 证明差异**只落在新增元数据**
+   （`script_name`/`script_sha256`/`fixture`）；工具剥离这三键后整树逐字节比，行为字段有任何变化即
+   `BEHAVIOR_CHANGED`（rc=1）；
+3. 行为字段一旦变化 ⇒ **原 PASS 作废**，按新 golden 重判并在报告说明原因；
+4. 报告写明"PASS 对应的 golden 版本 = sha256 + 提交"。
+
+**当前 NP-01 的 PASS 对应 golden 版本**：`mir2-rs/tests/parity/golden/npc/np01_click_main.json`
+sha256 = `41e87d9b60c6e827833b2e9e755ea7ef0ef3f54aa9a4600b5a0be79b003c5fce`（提交 `4878fdbfe`）。
+探针已加 `script_name`/`script_sha256`，**重录后必须按本节重出 PASS**（窗口结束后执行）。
+
+工具自测（可复跑）：`python -I mir2-rs/tests/parity/npc/golden_recheck.py selftest`
+⇒ 元数据新增=0 / 行为改动=1 / 零用例=2（ok）。
+
 ## 11. 行为牙（NP-01 样板）
 
 在**本 worktree** 内逐条变异、跑同一条测试，期望红，恢复后 sha 相等并复绿。原文落**仓外**：
