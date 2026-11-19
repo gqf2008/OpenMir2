@@ -166,3 +166,18 @@
 3. `SendRefMsg` 的 `VisibleHumanList` 有 **500ms 刷新门**（`BaseObject.Message.cs:395`）：同一 tick
    内第二次调用会跳过重扫、可能少发。装置侧要求：每个用例用**全新对象**，或显式清
    `VisibleHumanList`；并加"两次调用不丢消息"的自检断言。
+
+## 11. A 路径的 RM↔SM 映射口径（Rust 侧驱动前必须定死）
+
+原版 `DoSpell` 产出的是 **RM_ 消息**（进 `ActorEntity.MsgQueue`，由会话编码层再编码成 SM_ 字节）；
+Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必须用一张**显式映射表**（写死、可审）：
+
+| 原版 RM（本卡三支出现过的） | Rust 侧对应物 | 比较方式 |
+|---|---|---|
+| `RM_SPELL(10008)` wParam=Effect, p1/p2=坐标, p3=MagicId, prio=24 | `SM_SPELL` 帧 | 帧尾/字段逐项：Effect、坐标、MagicId |
+| `RM_MAGICFIRE(10120)` wParam=0, p1=MakeWord(EffectType,Effect), p2=MakeLong(x,y), p3=目标ActorId, prio=136 | `SM_MAGICFIRE` 帧 | 同上 + p3=0 表示"无目标" |
+| `RM_DELAYMAGIC(8021)` wParam=伤害, p1=坐标, p2=2, p3=目标, prio=255 | **服务端延时伤害事件**（不直接出客户端帧） | 比较"是否登记延时事件 + 伤害值 + 到期 tick" |
+| `RM_MAGIC_LVEXP`（训练尾） | `SM_MAGIC_LVEXP` 帧（存在时） | 字段逐项 |
+
+RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomNumber`（与原版同算法）。
+**未登记在该表里的 RM 条目一律判"口径未定义"（不标 verified）**，避免拿"没比到"当"比过了"。
