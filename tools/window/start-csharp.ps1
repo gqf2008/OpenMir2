@@ -171,18 +171,31 @@ function Start-One($Name, $Dir, $Exe, $Ports) {
   Start-Sleep -Milliseconds 400
 }
 
-# **DBSrv provenance 闸门**（卡 `openmir2-dbsrv-build-stamp`）：起**任何进程之前**校验 DBSrv 影子三件套。
+# **DBSrv provenance 闸门**（卡 `openmir2-dbsrv-build-stamp`）：起**任何进程之前**校验 DBSrv 影子产物（清单单一来源 `tools/orchestration/stamp-groups.psd1`，6 件）。
 # 对象是**影子路径** `$Root/DBSrv`（不是 `src\DBSrvin\Release`）——本栈踩过「影子不刷新 ⇒ 静默跑旧 DBSrv」。
-# 判据：三件都有 `.build.json` 戳、戳内 sha256 与实物一致、built_at 与 mtime 差 ≤5 分钟；缺一即 RED，
+# 判据：清单每件都有 `.build.json` 戳、戳内 sha256 与实物一致、built_at 与 mtime 差 ≤5 分钟；缺一即 RED，
 # **不写 pid 文件、不起任何进程**。工具内部用 SHA256::Create（本机 PowerShell 没有 Get-FileHash）。
 $stampTool = Join-Path $Repo 'tools\orchestration\stamp-binaries.ps1'
+$groupsFile = Join-Path $Repo 'tools\orchestration\stamp-groups.psd1'
 $dbsShadow = Join-Path $Root 'DBSrv'
 if (-not (Test-Path -LiteralPath $stampTool)) {
   Write-Output ('RED: 缺产戳工具 ' + $stampTool)
   Log-Step 'RED missing stamp tool'
   exit 1
 }
-& powershell -NoProfile -ExecutionPolicy Bypass -File $stampTool -Check -BinDir $dbsShadow -RepoRoot $Repo -RequireAll -Names 'DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll'
+if (-not (Test-Path -LiteralPath $groupsFile)) {
+  Write-Output ('RED: 缺共享清单 ' + $groupsFile)
+  Log-Step 'RED missing stamp-groups.psd1'
+  exit 1
+}
+# 本机 `powershell` 5.1 的 Microsoft.PowerShell.Utility 不完整（`Import-PowerShellDataFile`
+# 不存在；dot-source `.psd1` 在 5.1 上不执行、返回 null，已实测）⇒ 用 Invoke-Expression 解析。
+# 该文件在仓库内、随 git 评审，与实际执行这些脚本同一信任级。
+$stampGroups = Invoke-Expression ((Get-Content -LiteralPath $groupsFile -Raw))
+$dbsNames = (@($stampGroups.Groups.DBSrv) -join ',')
+$dbsGlobs = (@($stampGroups.OwnGlobs.DBSrv) -join ',')
+# `-OwnGlobs` 独立于 `-RequireAll`（R3）：未入清单的自家 DLL ⇒ UNLISTED_OWN_BINARY。
+& powershell -NoProfile -ExecutionPolicy Bypass -File $stampTool -Check -BinDir $dbsShadow -RepoRoot $Repo -RequireAll -Names $dbsNames -OwnGlobs $dbsGlobs
 $stampRc = $LASTEXITCODE
 if ($stampRc -ne 0) {
   Write-Output ('RED: DBSrv 影子产物 provenance 校验失败 rc=' + $stampRc + '（bin=' + $dbsShadow + '）—— 不起任何进程')

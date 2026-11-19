@@ -1,7 +1,8 @@
 # openmir2-own-binary-without-stamp
 
-> 状态：**2026-11-20 只读复核：原缺陷已在 2026-11-19 的 M9 收口（有戳、在 9 件冻结集里）；本卡转为
-> 「结构性闸门补齐 + 陈旧文案清理」**，执行窗口由 Leader 排（详见文末「现状核实与准备」）。
+> 状态：**2026-11-20：R1–R4 已落地并验证；同时新发现 MongoDB 插件的戳与二进制内嵌 head 不符
+> （戳=572a0b8a/M9，内嵌=a5643481/M8），纳管后的三处对齐门因此判红——处置待 Leader 裁决**
+> （见文末「落地与复核」§7）。
 > 来源：卡 `openmir2-deps-check-deploy-dir` 复审（opc-07，2026-11-19）。
 
 ## 现象
@@ -216,4 +217,71 @@ DBSrv 的戳组**不在** `w-rust-gate.ps1`（那个脚本只管 Rust 四件 exe
 - **R3 硬要求**：`-OwnGlobs` 必须在 `-RequireAll` **之外独立生效**——「未列入 `-Names`、
   但匹配 own globs 且无戳」⇒ 红（`UNLISTED_OWN_BINARY`）；验收原文要求该场景在**不加**
   `-RequireAll` 时同样 rc=1。
+
+### 7. 落地与复核（2026-11-20，R1–R4 已实施）
+
+#### 7.1 R1 冻结计数：动态 + 自检（另修了一个既有脚本 bug）
+
+- `w-freeze-release.ps1`：PROVENANCE 的 `files=` 改由组清单动态求和（9+9=18），并在写清单前自检
+  `$lines.Count == $fileCount`；不等 ⇒ `RED COUNT_MISMATCH …`、`exit 2`。
+- **实测**：以 `-OutRoot E:/UserTemp/freeze-real`（临时目录）跑 → rc=0，PROVENANCE
+  `files=9 binaries + 9 .build.json (SHA256SUMS 覆盖全部 18 个文件)`，`SHA256SUMS` 18 行。
+- **T3（红）**：把 `$fileCount` 伪造成 16 后跑 → **rc=2**：
+  `RED COUNT_MISMATCH lines=18 expected=16`。
+- **顺带修复（真实 bug，非本卡设计）**：该脚本把参数 `$Head` 与内部哈希 `$heads` 当两个变量用——
+  PowerShell 变量名**大小写不敏感**，二者是同一变量；`$heads = @{}` 覆盖期望 head 后，`$uniq[0]`
+  退化成字符串首字符（现场报 `戳 head 5 ≠ 期望 …`）。**改动前的备份脚本同样报此错**，说明盘上这
+  份脚本当时已不可用（m9 冻结应由另一份副本产出）。已改名 `$headsByItem` 并用 `@(...)` 保证数组。
+
+#### 7.2 R2 清单单一来源
+
+- 新增 `tools/orchestration/stamp-groups.psd1`（随 git 版本化；sha256
+  `341deb377b8d707edb6bce9d37c4b40c031c0eb134acc13b62ea4fb6de7f03e7`），导出 `Groups`
+  （DBSrv 6 件 / LoginSrv 3 件）与 `OwnGlobs`。
+- 消费者改为同一来源：`tools/window/start-csharp.ps1`（六件 + `-OwnGlobs`）、
+  `tools/hygiene/assert_three_way_aligned.ps1`（DBSrv 6 件 / LoginSrv 3 件）、
+  `E:/UserFleet/m1-stack/start-m1-stack.ps1`（`$StampGroups`）、`E:/UserFleet/w-freeze-release.ps1`
+  （`$groups` + 计数）。
+- 本机 `powershell` 5.1 **没有** `Import-PowerShellDataFile`、dot-source `.psd1` 也返回 null（实测）
+  ⇒ 统一用 `Invoke-Expression (Get-Content -Raw)`（文件在仓库内、随 git 评审，同一信任级）。
+- 实测：`runtime/LoginSrv` 按 psd1 三件 + globs ⇒ `GREEN 3 stamps verified`；
+  `assert_three_way_aligned -Group LoginSrv` ⇒ 三件 `THREE_WAY_OK`；其 `-Selftest` GREEN。
+
+#### 7.3 R3 `-OwnGlobs` 独立覆盖检查
+
+- `stamp-binaries.ps1`：新增 `-OwnGlobs`（非 `-Check` 给参数 ⇒ rc=2）；`-Check` 主循环后、
+  `$found -eq 0` 判定前独立扫描——匹配 glob 的 `.dll/.exe` 若基名不在 `-Names` ⇒
+  `RED <file> UNLISTED_OWN_BINARY`，**与 `-RequireAll` 无关**；自测加 Case 13/14，meta 12→14。
+- **实现前（盲区，两条都 rc=0）**：临时副本放无戳 `DBSrv.Storage.LocalFile.dll`，
+  带/不带 `-RequireAll` 跑 6 件名单 ⇒ 均 `GREEN 6 stamps verified`。
+- **实现后（两条都红）**：同一目录加 `-OwnGlobs 'DBSrv*.dll,OpenMir2.dll,LoginSrv*'` ⇒
+  **rc=1**，`RED …\DBSrv.Storage.LocalFile.dll UNLISTED_OWN_BINARY`（带/不带 `-RequireAll` 各一次）。
+- 真目录回归：`runtime/DBSrv` 用 6 件 + globs ⇒ `GREEN 6 stamps verified`；
+  `-Selftest` ⇒ `GREEN (14 cases)`。
+- **T1（红）**：临时副本删 `DBSrv.Storage.MongoDB.dll.build.json` ⇒ rc=1，
+  `RED … MISSING_STAMP`，`RED 1 problem(s) across 6 binaries`。
+
+#### 7.4 R4 文档
+
+- `docs/binary-provenance-stamp-20261115.md`：DBSrv 6 件 / LoginSrv 3 件；清单单一来源；
+  `-OwnGlobs` 语义；并写明**部署件 head = `572a0b8a`，落后当前 master 是已知且可解释的状态**。
+
+#### 7.5 **新发现（待裁决）：MongoDB 插件的戳与内嵌 head 不符**
+
+- 二进制内嵌 `SourceRevisionId`（ASCII 与 UTF-16LE 各一处）＝ **`a5643481aded4d93a7a47867b7094097df6850f5`**
+  （M8：`merge: AOI 增量切成默认路径…`）；
+- 侧车戳 `head` ＝ **`572a0b8a…`**（M9：`merge: deps_manifest 构建口径显式化…`），
+  `built_at` = 文件 mtime（18:31，早于其余五件 19:03）；`src/DBSrv/bin/Release` 副本内嵌同为 `a5643481`。
+- ⇒ 这正是「MSBuild 增量构建跳过源码未变项目 + 事后按 M9 产戳」的典型：**二进制是 M8 产物、戳写成 M9**。
+  M9 的冻结之所以成功，是因为冻结脚本只断言**戳 head 一致**、不看二进制内嵌。
+- 把 MongoDB 纳入三处对齐清单后，`assert_three_way_aligned -Group DBSrv` 报
+  `THREE_WAY_RED DBSrv.Storage.MongoDB.dll reason=embedded_mismatch`（main/shadow/build 三处一致地红）。
+- **可选处置（Leader 裁决）**：
+  1. **只改戳**：用 `-Head a5643481… -HeadSource explicit` 重产该件戳（不动二进制/部署），
+     好处是身份立刻为真；代价是冻结脚本的「全组同一 head」断言不再成立（需改为逐件 head 可解析 +
+     记录混合 head），且要同步更新部署副本与既有冻结副本的戳（涉及"改部署/冻结件"，需授权）。
+  2. **重建**：在指定 head 上 `dotnet build` MongoDB 插件 + 产戳 + 替换部署 + 重冻结（需 C# 构建窗口；
+     与本轮"不重建 C#、不动冻结件"的口径冲突，需另排）。
+  3. **登记为已知坏件**：保持现状并在交付注记里写明"该件戳不可信、真实来源 M8"，闸门对该件显式
+     豁免（不推荐：等于把"部署了但身份错"制度化）。
 

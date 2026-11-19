@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `mir2-server.exe` | **有** | `mir2-rs/target/release/mir2-server.build.json`，`format=mir2-build-stamp/1`，由 `tools/window/rebuild-server.ps1:89` 生成；现存戳 `head=d5ed14508…`、`built_at=2026-11-02`（已陈旧） |
 | `game-svr` / `game-gate` / `login-gate` / `sel-gate` | **无** | bot 窗口实际拉起的就是这四个（360s 归档 `start-stack.out.log` 实测）；目前只能 `mtime+sha` 人工登记 |
-| `DBSrv` / `LoginSrv`（C#） | **无 → 2026-11-17 起有（DBSrv 三件套）** | `tools/orchestration/stamp-binaries.ps1` 现已支持 `.dll` 目标与 `-RequireHead`；DBSrv 的 `DBSrv.exe` / `DBSrv.dll` / `DBSrv.Storage.MySQL.dll` 三件套在构建后产戳，起栈脚本按戳校验（卡 `openmir2-dbsrv-build-stamp`）。LoginSrv 同法可纳入，尚未做。 |
+| `DBSrv` / `LoginSrv`（C#） | **有（DBSrv 6 件 / LoginSrv 3 件；2026-11-19 起）** | 清单单一来源 `tools/orchestration/stamp-groups.psd1`（起栈门/冻结/窗口门禁/三处对齐共用）；`stamp-binaries.ps1` 支持 `.dll` 目标、`-RequireHead` 与 `-OwnGlobs` 覆盖检查（未入清单的自家 DLL ⇒ `UNLISTED_OWN_BINARY`，独立于 `-RequireAll`）。部署件 head = `572a0b8a`，**落后当前 master 是已知且可解释的状态**——身份链只回答「这份件来自哪个提交」，部署件与冻结件 sha 一致即满足目的；为「跟到当前 master」重建/替换/重冻结会引入不必要的生产变更，故不做。 |
 
 反例：`E:/MirServer/M2GameSvr/GameSrv.exe` sha256 `ab655008…`、mtime 2026-10-22，异常栈 PDB 指向**已删除**的 worktree `OpenMir2-wt-goods` ⇒ 部署目录里的二进制无法自证来源。
 
@@ -147,18 +147,20 @@
   `toolchain_kind`；本工具的 `-Check` 已兼容（补充字段只做存在时校验），但第 2 步若要把它纳入
   同一清单，应同步补齐字段或明确豁免。
 
-## 7. DBSrv 三件套：产戳命令与时机（2026-11-17，卡 `openmir2-dbsrv-build-stamp`）
+## 7. DBSrv 六件 / LoginSrv 三件：产戳命令与时机（2026-11-17 起；2026-11-20 扩到六件，卡 `openmir2-own-binary-without-stamp`）
 
 **时机**：`dotnet build src/DBSrv -c Release` **成功后立即**产戳（`built_at` 取二进制 mtime，
 校验要求与 mtime 差 ≤5 分钟，别把「先构建、隔天再产戳」当常态）。只对部署源
-`src/DBSrv/bin/Release` 产戳——`DBSrv.Storage.MySQL.dll` 在这里有一份副本，部署只许从这里取。
+`src/DBSrv/bin/Release` 产戳——`DBSrv.Storage.MySQL.dll` 与 `DBSrv.Storage.MongoDB.dll`
+（`Directory.Build.targets` 的 `CopyStoragePluginToDbSrv` 会把 `DBSvr.Storage.*` 插件拷过来）
+在这里各有一份副本，部署只许从这里取。清单以 `tools/orchestration/stamp-groups.psd1` 为准。
 
 **产戳**（`-Head` 用构建时的提交；`-HeadSource explicit` 不要把推断当事实）：
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-binaries.ps1 `
   -BinDir <worktree>/src/DBSrv/bin/Release -RepoRoot <repo> -Head <rev> -HeadSource explicit `
-  -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll
+  -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.dll,DBSrv.Storage.MySQL.dll,DBSrv.Storage.MongoDB.dll,OpenMir2.dll
 ```
 
 **校验**（起栈前、**影子路径**上做；`-RequireHead` 可选，给了就断言来源提交）：
@@ -166,10 +168,17 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-bi
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/orchestration/stamp-binaries.ps1 `
   -Check -BinDir <stack>/runtime/DBSrv -RepoRoot <repo> -RequireAll `
-  -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll [-RequireHead <rev>]
+  -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.dll,DBSrv.Storage.MySQL.dll,DBSrv.Storage.MongoDB.dll,OpenMir2.dll `
+  -OwnGlobs 'DBSrv*.dll,OpenMir2.dll' [-RequireHead <rev>]
 ```
 
 判据：`GREEN n stamps verified` + rc=0 才可起栈；任何 `RED …` ⇒ **不起任何进程**。
+
+**`-OwnGlobs` 覆盖检查（2026-11-20，卡 `openmir2-own-binary-without-stamp` R3）**：匹配 glob 的
+每个 `.dll/.exe` 必须已出现在 `-Names` 里，否则 `RED <file> UNLISTED_OWN_BINARY`；该检查**独立于
+`-RequireAll`**（不给 `-RequireAll` 也生效）。目的：`CopyStoragePluginToDbSrv` 自动拷进输出的
+`DBSvr.Storage.*` 插件若没进名单，`-RequireAll` 原本完全看不见它——正是 MongoDB 插件
+「部署了但无身份」的生成机制。清单本身以 `tools/orchestration/stamp-groups.psd1` 为单一来源。
 
 **命名坑（务必别改回去）**：本机 HIPS 会把「以 `Expect` 开头的 PowerShell 参数名」与
 `-ExecutionPolicy Bypass` 同现的命令行**整条静默阻断**——嵌套 `powershell` 退出码 `-1`、

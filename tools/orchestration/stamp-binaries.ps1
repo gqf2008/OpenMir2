@@ -47,6 +47,9 @@
 #   ... -Check -BinDir <dir> -Names game-svr,game-gate,login-gate,sel-gate -RequireAll
 #   # 校验并断言来源提交（前缀 7..40 位；DBSrv 三件套示例，.dll 也支持）
 #   ... -Check -BinDir <dir> -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll -RequireAll -RequireHead <rev>
+#   # 自家件覆盖（卡 openmir2-own-binary-without-stamp R3）：匹配 glob 但**未列入 -Names** 的
+#   # 自家 .dll/.exe ⇒ RED UNLISTED_OWN_BINARY；**独立于 -RequireAll**（不加 RequireAll 也生效）
+#   ... -Check -BinDir <dir> -Names <已登记件> -OwnGlobs 'DBSrv*.dll,OpenMir2.dll'
 #   # 自测（离线合成夹具；工具门登记项）
 #   ... -Selftest
 #
@@ -61,6 +64,7 @@
 #   产戳：STAMP_WRITE <stamp> sha256=<hex> size=<n> head=<sha> kind=<rust|dotnet> head_source=<..>
 #         SKIP <name> (absent) / SKIP_STAMP_EXISTS <stamp> (use -Force to overwrite) / STAMPED <n>
 #   校验：STAMP_OK <exe> / RED <exe> <CODE> [detail] / SKIP <name> (absent) / GREEN <n> stamps verified
+#         RED <file> UNLISTED_OWN_BINARY（-OwnGlobs 命中的在册外自家件；独立于 -RequireAll）
 #   自测：stamp-binaries selftest: PASS|FAIL <case> [detail] / GREEN|RED (…)
 
 param(
@@ -73,6 +77,7 @@ param(
   [string]$RequireHead = '',
   [switch]$Check,
   [switch]$RequireAll,
+  [string[]]$OwnGlobs = @(),
   [switch]$Force,
   [switch]$NoToolchainProbe,
   [switch]$Selftest
@@ -114,6 +119,13 @@ function Fail([string]$msg) {
 # 同一位置照常工作。**任何从 PowerShell 父进程拉起本工具的调用方都受影响。**
 if ($RequireHead -ne '' -and -not $Check) {
   [Console]::Out.WriteLine('RED: -RequireHead is only valid with -Check (write/selftest mode would silently ignore it)')
+  exit 2
+}
+
+# `-OwnGlobs`（卡 openmir2-own-binary-without-stamp R3）只在 `-Check` 下生效；写戳模式给它
+# 必须是用法错（rc=2），不能静默忽略——否则调用方会以为「未入清单的自家件已被覆盖检查」。
+if (@($OwnGlobs | Where-Object { $_ -and $_.Trim() }).Count -gt 0 -and -not $Check) {
+  [Console]::Out.WriteLine('RED: -OwnGlobs is only valid with -Check (write mode would silently ignore it)')
   exit 2
 }
 
@@ -877,6 +889,26 @@ if ($Selftest) {
     $u = Invoke-Child @('-BinDir', $bin9, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
                         '-Names', 'DBSrv.exe', '-RequireHead', $HeadSha, '-Force')
     SAssert ($u.Rc -eq 2) 'usage: -RequireHead without -Check rc=2' ("rc=" + $u.Rc + " out=" + $u.Text)
+
+    # Case 13：-OwnGlobs 在**不带** -RequireAll 时独立生效（未入清单的自家 DLL ⇒ 红）
+    $script:SelfCases++
+    $binE = New-Fixture $Tmp 'ownglob' @('game-svr')
+    $wE = Write-FixtureStamps $binE $Repo $HeadSha @('game-svr')
+    SAssert ($wE.Rc -eq 0) 'negative-setup: ownglob fixture written' ("rc=" + $wE.Rc)
+    Copy-Item -LiteralPath (Join-Path $binE 'game-svr.exe') -Destination (Join-Path $binE 'DBSrv.Storage.LocalFile.dll')
+    $cE = Invoke-Child @('-Check', '-BinDir', $binE, '-RepoRoot', $Repo,
+                         '-Names', 'game-svr', '-OwnGlobs', 'DBSrv.Storage.*.dll')
+    SAssert ($cE.Rc -eq 1) 'own-glob: unlisted own dll rc=1 without -RequireAll' ("rc=" + $cE.Rc + " out=" + $cE.Text)
+    SAssert ($cE.Text.IndexOf('UNLISTED_OWN_BINARY', [StringComparison]::Ordinal) -ge 0) `
+      'own-glob: reports UNLISTED_OWN_BINARY without -RequireAll' ("out=" + $cE.Text)
+
+    # Case 14：同一场景**加** -RequireAll 仍红（证明与 RequireAll 无关）
+    $script:SelfCases++
+    $cF = Invoke-Child @('-Check', '-BinDir', $binE, '-RepoRoot', $Repo, '-RequireAll',
+                         '-Names', 'game-svr', '-OwnGlobs', 'DBSrv.Storage.*.dll')
+    SAssert ($cF.Rc -eq 1) 'own-glob: unlisted own dll rc=1 with -RequireAll' ("rc=" + $cF.Rc + " out=" + $cF.Text)
+    SAssert ($cF.Text.IndexOf('UNLISTED_OWN_BINARY', [StringComparison]::Ordinal) -ge 0) `
+      'own-glob: reports UNLISTED_OWN_BINARY with -RequireAll' ("out=" + $cF.Text)
   }
 
   $tmpRoot = [System.IO.Path]::GetTempPath()
@@ -921,12 +953,12 @@ if ($Selftest) {
     Emit ("SELFTEST_INFRA " + $script:SelfInfra)
     exit 2
   }
-  SAssert ($script:SelfCases -eq 12) 'meta: expected case count executed' ("cases=" + $script:SelfCases)
+  SAssert ($script:SelfCases -eq 14) 'meta: expected case count executed' ("cases=" + $script:SelfCases)
   if ($script:SelfFails.Count -gt 0) {
     Emit ("stamp-binaries selftest: RED (" + $script:SelfFails.Count + " failed)")
     exit 1
   }
-  Emit "stamp-binaries selftest: GREEN (12 cases)"
+  Emit "stamp-binaries selftest: GREEN (14 cases)"
   exit 0
 }
 
@@ -978,6 +1010,39 @@ if ($Check) {
         Emit ("RED " + $exe + " " + $e)
         $problems++
       }
+    }
+  }
+  # -OwnGlobs（卡 openmir2-own-binary-without-stamp R3）：**独立于 -RequireAll** 的自家件覆盖检查。
+  # 背景：名单靠人手维护时，被 Directory.Build.targets 自动拷进输出的自家插件（典型
+  # `DBSvr.Storage.*`）即使不在 `-Names` 里，`-RequireAll` 也完全看不见它。这里对匹配 glob 的
+  # 每个 .dll/.exe 要求其已出现在 `-Names`（或默认名单）中；未出现 ⇒ RED UNLISTED_OWN_BINARY。
+  # 只判「是否在册」；在册件的戳自洽仍由上面的主循环负责，不在这里重复判。
+  $ownGlobList = New-Object System.Collections.Generic.List[string]
+  foreach ($chunk in @($OwnGlobs)) {
+    foreach ($g in ([string]$chunk).Split(',')) {
+      if ($g -and $g.Trim()) { $ownGlobList.Add($g.Trim()) }
+    }
+  }
+  if ($ownGlobList.Count -gt 0) {
+    $wantedKeys = @{}
+    foreach ($n in $wanted) {
+      $ln = $n.ToLowerInvariant()
+      $wantedKeys[$ln] = $true
+      $wantedKeys[[System.IO.Path]::GetFileNameWithoutExtension($ln)] = $true
+    }
+    foreach ($f in @(Get-ChildItem -LiteralPath $binRoot -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+      $ext = [System.IO.Path]::GetExtension($f.Name).ToLowerInvariant()
+      if ($ext -ne '.dll' -and $ext -ne '.exe') { continue }
+      $matched = $false
+      foreach ($g in $ownGlobList) {
+        if ($f.Name -like $g) { $matched = $true; break }
+      }
+      if (-not $matched) { continue }
+      $fn = $f.Name.ToLowerInvariant()
+      $base = [System.IO.Path]::GetFileNameWithoutExtension($fn)
+      if ($wantedKeys.ContainsKey($fn) -or $wantedKeys.ContainsKey($base)) { continue }
+      Emit ("RED " + $f.FullName + " UNLISTED_OWN_BINARY")
+      $problems++
     }
   }
   if ($found -eq 0) {
