@@ -1,6 +1,6 @@
 # 玩法缺口表：物品（item parity gap）
 
-> 卡：`card/parity-gap-survey`（只读分析）。本文件**先出物品一块**，任务与 NPC 脚本按 opc-07 要求后续追加。
+> 卡：`card/parity-gap-survey`（只读分析）。本文件已出**物品**与**任务**两块；NPC 脚本按 opc-07 审后追加。
 > 口径基准时间：2026-11-19 23:16（+0800），仓库 HEAD 见文末"计数时刻"。
 
 ## 1. 分母定义（定下后不再改；要改必须写明改前/改后/原因）
@@ -210,3 +210,153 @@ T-17 登记条位置（`mir2-rs/bins/game-svr/src/useitem.rs` 头部「未做清
 
 **装备轴（§8.2，不入 19）**：`bag::tests::matches_oracle_bag_fixture`（21 条：穿成功/换装/失败码 0/-1/-4/卸下/满包/Dealing…）
 => 机制层 `verified`；卡 `openmir2-m3-bag-equip-alignment` 的"双栈同序列"判据仍 RED（BotSrv 驱动属登记面）。
+
+---
+
+## 11. 任务块（quest）
+
+### 11.1 分母定义
+
+| 角色 | 定义 | 可复跑命令 | 本次结果 |
+| --- | --- | --- | --- |
+| **主分母** | **任务专属脚本命令的行为分支**：条件 3（CHECK / CHECKOPEN / CHECKUNIT）+ 动作 5（SET / RESET / SETOPEN / SETUNIT / RESETUNIT）+ 脚本选择门 1（`{Quest N}`） | §11.3 | **9** |
+| 旁证③ | 任务态 API 调用位点（6 个 get/set 入口，含 GM/脚本/管理器） | `grep -rn 'GetQuestFalgStatus\|SetQuestFlagStatus\|GetQuestUnitStatus\|SetQuestUnitStatus\|GetQuestUnitOpenStatus\|SetQuestUnitOpenStatus' --include=*.cs src/ \| wc -l` | **30** |
+| 数据旁证 | 真实语料中各任务命令的使用文件数（`E:/MirServer/M2GameSvr/Envir`，冻结） | 见 §11.5 | CHECK **12** / SET **18** / CHECKUNIT·CHECKOPEN·SETUNIT·SETOPEN·RESETUNIT **0** / `{Quest` **0** |
+
+与物品块同一口径：**旁证（API 位点 30）与主分母（命令分支 9）不在同一集合上，比较无意义**；旁证只用来发现"还有别的入口/用法"。
+
+### 11.2 方法 5：任务入口（先证"没有任务专用消息号"）
+
+```
+$ grep -nE '\b(CM|SM|RM)_QUEST[A-Z_]*' src/OpenMir2/Messages.cs
+（零命中：无任务专用消息号）
+```
+任务行为全部走 **NPC 脚本**，客户端入口只有"点 NPC"与"进世界"两条：
+```
+CM_CLICKNPC = 1010                      src/OpenMir2/Messages.cs:62
+  PlayObject.Message.cs:885  case CM_CLICKNPC: ClientClickNpc(nParam1)
+  PlayObject.Base.cs:674     ClientClickNpc -> 校验 -> NPC.Click
+  src/M2Server/Npc/NormNpc.cs:68   Click(): GotoLable(PlayObject, "@main", false)   (:73)
+  src/Modules/ScriptEngine/ScriptEngine.cs:141  GotoLable(npc, player, label)
+  src/Modules/ScriptEngine/ScriptEngine.cs:146  CheckGotoLableQuestStatus（{Quest N} 选择门，调用点 :76）
+进世界（无客户端消息）：
+  src/M2Server/Player/PlayObject.cs:1440  ManageNPC.GotoLable(this, "@Login", false)
+帧：RM_MERCHANTSAY(11009) src/OpenMir2/Messages.cs:651 -> SM_MERCHANTSAY(643) :304
+```
+
+### 11.3 分派清单（9 条）
+
+| 类别 | 命令 | oracle 注册 | oracle 实现 |
+| --- | --- | --- | --- |
+| 选择门 | `{Quest N}` + `#IF [flag] value` / `#RAND` | — | `src/Modules/ScriptEngine/ScriptEngine.cs:146` |
+| 条件 | `CHECK [flag] value` | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:48` | `:4174` |
+| 条件 | `CHECKOPEN [flag] value` | `:52` | `:199` |
+| 条件 | `CHECKUNIT [flag] value` | `:53` | `:4104` |
+| 动作 | `SET flag value` | `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:34` | `:2036` |
+| 动作 | `RESET flag count` | `:35` | `:2043` |
+| 动作 | `SETOPEN flag value` | `:36` | `:2051` |
+| 动作 | `SETUNIT flag value` | `:37` | `:2058` |
+| 动作 | `RESETUNIT flag count` | `:38` | `:2065` |
+
+### 11.4 任务全表（9 条 + 轴 + 死路径）
+
+| ID | 原版行为 | 原版依据 | Rust 状态 | 测试名 / 证据路径 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| QT-01 | `{Quest N}` 脚本选择门（至多 10 组 `#IF`） | `src/Modules/ScriptEngine/ScriptEngine.cs:146-168` | **implemented（未验证）** | 解析：`crates/script/tests/parser_tests.rs::quest_creates_new_script_info`、`::quest_block_keeps_writing_into_previous_record`；运行时 `engine::mod.rs` 的 `check_quest_status`（第 1074 行）无 oracle 夹具 | `#RAND` 支按 0 保守处理，登记 **B-13**（`mir2-rs/tests/parity/whitelist.md`）；语料 `{Quest` 0 个文件 |
+| QT-02 | `CHECK [flag] value` | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:4174` | **implemented（未验证）** | `crates/script/src/engine/conditions.rs` 的 `cond_check`（第 456 行）；底层位读有 oracle 向量（见 QX-01） | 判定本身无 oracle 夹具；语料 **12** 个文件使用 |
+| QT-03 | `CHECKOPEN`（含 oracle 缺陷：恒假） | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:199` | **verified** | `crates/script/tests/engine_tests.rs::condition_truth_table_matches_oracle`（读 oracle 探针 `tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv`）、`::checkopen_is_always_false_like_oracle` | 语料 0；缺陷照搬 |
+| QT-04 | `CHECKUNIT` | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:4104` | **verified** | 同上的真值表 + `::checkunit_matches_quest_unit_status`、`::checkunit_checkopen_parse_anchors` | 语料 0 |
+| QT-05 | `SET flag value` | `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2036` | **implemented（未验证）** | `crates/script/src/engine/actions.rs` 的 `ActionOfSet`（第 192 行）；登记即实现守卫 `engine_tests.rs::implemented_registry_entries_are_actually_implemented` | 无动作级 oracle 夹具；语料 **18** 个文件使用 |
+| QT-06 | `RESET flag count` | `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2043` | **implemented（未验证）** | `actions.rs` 的 `ActionOfReSet`（第 199 行）+ 同一守卫 | 语料 0 |
+| QT-07 | `SETOPEN flag value` | `:2051` | **implemented（未验证）** | `actions.rs` 的 `ActionOfSetOpen`（第 205 行）+ 同一守卫 | 语料 0 |
+| QT-08 | `SETUNIT flag value` | `:2058` | **implemented（未验证）** | `actions.rs` 的 `ActionOfSetUnit`（第 210 行）+ 同一守卫 | 语料 0 |
+| QT-09 | `RESETUNIT flag count` | `:2065` | **implemented（未验证）** | `actions.rs` 的 `ActionOfResetUnit`（第 155 行）+ 同一守卫 | 语料 0 |
+
+轴（不进主分母）：
+
+| ID | 事项 | 原版依据 | Rust 状态 | 证据 |
+| --- | --- | --- | --- | --- |
+| QX-01 | 任务态载体 `QuestFlag`/`QuestUnit`/`QuestUnitOpen`（各 128B，MSB-first 位语义） | `PlayObject.cs:3966-4110` | **verified** | `crates/script/tests/quest_state_vectors.rs::quest_bitmap_matches_oracle_byte_for_byte`（oracle 探针 `quest_state_vectors.tsv`；红检 `redcheck_bit_direction`/`redcheck_comparator_detects_mutated_vector`） |
+| QX-02 | `MapQuest.txt` + 隐藏 NPC（QManage/QFunction/RobotManage）加载 | `src/GameSrv/DB/LocalDB.cs:341-405`、`src/GameSrv/Maps/MapQuestManager.cs:10` | **implemented（未验证）** | `crates/envir/tests/mapquest.rs::synthetic_vectors`、`::load_orders_hidden_npcs_and_reports_result`（合成向量）；`::deployment_mapquest` 为 `#[ignore]` 真数据门，无 oracle 探针 |
+| QX-03 | 会话载入/存档（`CharacterData.Quest*` ↔ `PlayObject.Quest*`） | `WorldServer.cs:1160-1162` / `:1291-1293` | **implemented（未验证）** | 接线在 `bins/game-svr/src/lib.rs`（载入第 3295/3429 行、写回第 21250 行）；结构往返 `crates/storage/tests/playerdatainfo_vectors.rs` 覆盖；无端到端 oracle 夹具 |
+| QX-04 | 落库（`characters_quest` / `characters` 任务列） | oracle 只 `DELETE` 不 `INSERT`，无调用点（`src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs:493-495`） | **dead_in_oracle（两侧一致：都不写）** | `bins/db-srv/tests/quest_no_persist.rs::db_srv_save_and_load_sql_have_no_quest_columns`、`::workspace_rust_sources_never_reference_characters_quest`、`::captured_cross_side_baselines_show_zero_characters_quest_rows` |
+
+死路径（**登记为不实现**，照搬 oracle 的"死"）：
+
+| ID | 死路径 | 证据 |
+| --- | --- | --- |
+| QT-D1 | `MapQuest` 怪/物品触发（`GetQuestNpc`） | 调用点被注释：`PlayObject.cs:1670` / `:1677`；定义 `src/GameSrv/Maps/MapQuestManager.cs:58` |
+| QT-D2 | `SendQuestMsg`（全服任务广播） | 唯一调用点在注释里：`src/Modules/GameCommand/Commands/StartQuestCommand.cs:22`；定义 `WorldServer.cs:1830` |
+| QT-D3 | `QuestDiary`（解析结果丢弃） | `src/GameSrv/DB/LocalDB.cs:804`/`:808` 的 `Add` 被注释 |
+| QT-D4 | `characters_quest` 写库 | 同 QX-04：`SaveQuest` 只 DELETE、从不 INSERT、全仓无调用点 |
+
+### 11.5 交叉核对（任务块）
+
+- 主分母 9 与旁证 30 **不在同一集合上**（命令分支 vs API 位点），比较无意义；这里只做归属：
+  30 个位点分布 = `PlayObject.cs` 7（位读写定义）、`IPlayerActor.cs` 6（接口）、`SetPassWordCommand.cs` 6（GM 密码门）、`ExecutionProcessingSys.cs` 5（动作）、`ConditionProcessingSys.cs` 3（条件）、`ScriptEngine.cs` 1（选择门）、`ShowHumanFlagCommand.cs` 1、`MapQuestManager.cs` 1。
+- 数据旁证（计数时刻同 §4；数据根 `E:/MirServer/M2GameSvr/Envir`）：
+```
+$ grep -rli "check \[" Market_Def MapQuest_def | wc -l      -> 12
+$ grep -rli "set \["   Market_Def MapQuest_def | wc -l      -> 18
+$ grep -rli "checkunit|checkopen|setunit|setopen|resetunit" Market_Def MapQuest_def | wc -l -> 0
+$ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
+```
+⇒ 真实语料只用到 2/9（CHECK + SET）；其余 7 条是"代码可达、语料未用"。这正是缺口优先级低的来源，但不等于不存在。
+
+### 11.6 结论（任务块）
+- 主分母 9：`verified` 2（CHECKOPEN / CHECKUNIT）、`implemented（未验证）` 7（选择门 + CHECK + 5 个动作）、`missing` **0**。
+- 真正的缺口不在命令实现，而在**用法**：真实语料只跑 CHECK/SET；`{Quest` / CHECKUNIT / CHECKOPEN / SETUNIT / SETOPEN / RESETUNIT 在冻结语料里 **0 用量**。
+- 4 条死路径（QT-D1…D4）必须保持"死"，不得顺手实现；QX-04 的"两侧都不落库"已由 `quest_no_persist` 门禁钉死。
+
+---
+
+## 12. 机器可读清单（schema v1）
+
+物品表已落机器清单：**`docs/issues/parity-gap-items.json`**（与本节 schema 同版）。任务块随后按同一 schema 同目录追加 `parity-gap-quests.json`。
+
+### 12.1 顶层字段
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `schema_version` | int | 固定 `1`；不兼容变更才升 |
+| `domain` | string | `items` / `quests` / `npc` |
+| `source_doc` | string | 人类可读表所在文档（相对仓库根） |
+| `counting_moment` | object | `{head: <40hex>, time: <ISO8601+08:00>}` |
+| `status_enum` | string[] | 见 §12.3 |
+| `status_legend` | object | 每个枚举值的判定口径（脚本只读 `status_enum` 做校验） |
+| `cost_enum` | string[] | `S` / `S-M` / `M` / `M-L` / `L` |
+| `denominator` | object | `{kind, definition, entry, count, commands[]}` |
+| `axes` | array | 不进主分母但必须可见的轴（物品：装备轴；任务：QX-01…04） |
+| `entries` | array | 主分母逐条，数量必须 == `denominator.count` |
+
+### 12.2 条目字段（`entries[]` / `axes[]` 同形）
+
+| 字段 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | string | `IT-01` / `EQ-01` / `QT-01` / `QX-01` |
+| `behavior` / `name` | string | 行为一句话 |
+| `oracle_anchor` | object | `{file, line, line_end?}`；`file` 相对仓库根 |
+| `status` | string | ∈ `status_enum` |
+| `evidence` | object | `{test, test_file, fixture, cases[], unit_tests[]}`；任一项可 `null`/空 |
+| `cost` | string \| null | ∈ `cost_enum`；已完成项为 `null` |
+| `deviation` | object \| null | `{id, file, section, lines?}`；`missing` 必填 |
+| `notes` | string | 备注（可空串） |
+
+### 12.3 状态枚举（脚本按此判定）
+
+| JSON 值 | 文档写法 | 判定规则 |
+| --- | --- | --- |
+| `verified` | verified | 有对拍测试名，且夹具由 oracle 生成（章程 §5） |
+| `implemented_unverified` | implemented（未验证） | Rust 有实现/单测，但无 oracle 对拍夹具 |
+| `missing` | missing | C# 有、Rust 无；**必须**带 `deviation.id`（T-* / D-*） |
+| `dead_in_oracle` | dead_in_oracle | oracle 自身死路径（调用点注释/结果丢弃），Rust 不应实现 |
+| `out_of_scope` | out_of_scope | 不属本分母（环境/工具/数据侧） |
+
+### 12.4 不变量（脚本可直接断言）
+
+1. `len(entries) == denominator.count`；
+2. `all(e.status in status_enum)`；
+3. `e.status == "missing" ⇒ e.deviation.id` 非空且能在 whitelist/差异登记中查到；
+4. `e.status == "verified" ⇒ e.evidence.test` 非空且 `test_file` 存在；
+5. `e.cost ∈ cost_enum ∪ {null}`；
+6. `sum(1 for e in entries if e.status=="verified")` 与文档汇总行一致（物品：7；任务：2）。
