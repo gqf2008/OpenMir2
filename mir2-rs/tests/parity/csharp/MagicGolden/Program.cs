@@ -476,8 +476,8 @@ public static class Program
             var levelDerived = FixtureContract.Recompute(OpenMir2.Enums.PlayerJob.Warrior, (byte)target.Abil.Level);
             target.Abil.MaxExp = levelDerived.MaxExp;
             actualMaxExp = target.Abil.MaxExp;
-            target.WAbil.HP = (ushort)target.WAbil.MaxHP;
             target.RecalcAbilitys();
+            target.WAbil.HP = target.WAbil.MaxHP; // 登录后满血（ 保留旧 HP=0，需在之后置）
             target.DrainRaw();
         }
         else
