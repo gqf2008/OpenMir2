@@ -254,6 +254,19 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
 - **NP-01 未受影响的证明**：拆分后重生成 `np01_click_main.json`，`golden_recheck.py` 对已验收版本
   （`E:/UserFleet/qa/npc-parity/rerecord/np01-after.json`，sha `42fd2930…2bc4`）判 `BEHAVIOR_IDENTICAL`（rc=0）。
 
+### 12.0 产品修复单列（NP-02，动过产品代码 ⇒ 合并门禁需全量窗口）
+
+| 项 | 内容 |
+| --- | --- |
+| 修复文件/行 | `mir2-rs/bins/game-svr/src/lib.rs` 的 `CM_MERCHANTDLGSELECT` `@back` 分支（`eq_label(label, "@back")` 内） |
+| 修复内容 | 空栈时先**写回** `session.script_go_back_lable = "@main"`，再按该值跳转（原来只在本地取默认值，不落状态） |
+| oracle 依据（符号锚） | `src/GameSrv/Npc/Merchant.cs:922-929` 的 `@back` 支：`if (string.IsNullOrEmpty(playObject.ScriptGoBackLable)) playObject.ScriptGoBackLable = "@main";` 然后 `GotoLable(...)` |
+| 牙 D | 短路 `@back` 二次跳转（`if false && eq_label("@back")`）⇒ `dlg_ask_back` 红在"@back 回 @main 说词"；恢复 sha 相等、复绿（`E:/UserFleet/qa/npc-parity/np02-mutation-D-back-jump.txt` / `np02-green-final.txt`） |
+| 合并门禁 | 本线**动过产品代码** ⇒ 合并前需单车道全量窗口（opc-07 排期） |
+
+**变异纪律（opc-07 2026-11-20 加硬）**：变异前除"先提交"外，还要**给目标文件拍 `sha256` 快照**；
+恢复后不只核 `git diff`，还要核**快照相等**——即使有未提交改动也不会被静默带走。
+
 ### 12.1 oracle `#ACT` 只执行第一条已注册命令（opc-07，2026-11-20；批量硬规则）
 
 `ScriptEngine.GotoLableQuestActionProcess`（`src/Modules/ScriptEngine/ScriptEngine.cs:884-893`）在 `#ACT` 列表里
