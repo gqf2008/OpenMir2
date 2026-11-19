@@ -143,3 +143,7 @@
   自投）。用例：`build_guild_ref_show_name_cache_window_second_build_hits_cache`（同窗两次
   建会，不同会名：首建 Δ12 收、次建 Δ11/Δ12 挡）、
   `build_guild_ref_show_name_hidden_hero_only_self`（隐藏 ⇒ 只自己）。
+- #18 `guild_official.rs::war_events_to_frames`：`GuildWarEvent::RefShowName` 的收件人改走
+  `ref_msg_cache::targets(world, e.actor_id, ref_range)`（按成员键控）。用例
+  `war_events_two_ref_show_name_same_member_share_cache_window`（多副本专项：一次 events
+  里两条同 member ⇒ 第二条命中缓存；Δ11/Δ12 只收首份、Δ5 两份、Δ13 零帧）。

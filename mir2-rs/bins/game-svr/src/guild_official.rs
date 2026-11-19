@@ -1116,7 +1116,10 @@ fn war_events_to_frames(
                     continue;
                 };
                 let body = show_name_frame(e.actor_id, display);
-                for recipient in game_svr::chat::hear_targets(world, e.actor_id, ref_range) {
+                // **T-287 残余 #18**：`RefShowName()` 的 `SendRefMsg(RM_USERNAME, …)` 同走
+                // 500ms 缓存（按成员键控；首扫 `<= ref_range`、命中 `|Δ|<11`）。一次 events
+                // 里同一 member 出现两次 ⇒ 第二条命中缓存。
+                for recipient in crate::ref_msg_cache::targets(world, e.actor_id, ref_range) {
                     push_frame(queue, PRI_USERNAME, recipient, body.clone());
                 }
             }

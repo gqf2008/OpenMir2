@@ -568,3 +568,60 @@ fn build_guild_ref_show_name_hidden_hero_only_self() {
     assert_eq!(per.get(&901), Some(&1), "隐藏：只自己收");
     assert_eq!(per.get(&902), None, "隐藏：+5 零帧");
 }
+
+// ---- 批 5 #18：行会战 `RefShowName` 事件的 42 缓存 ----
+
+/// **T-287 残余 #18**（`war_events_to_frames` 的 42）：**一次 `events` 里两条同 member 的
+/// `RefShowName`（多副本专项）** ⇒ 第二条命中 500ms 缓存。几何：member=hero(10,10)；
+/// 观察者 `(15,10)Δ5` / `(21,10)Δ11` / `(22,10)Δ12` / `(23,10)Δ13`。
+///
+/// 牙：站点回退 `game_svr::chat::hear_targets` ⇒ Δ11/Δ12 各收 2 ⇒ 红。
+#[test]
+fn war_events_two_ref_show_name_same_member_share_cache_window() {
+    use mir2_world_bevy::guild::GuildWarEvent;
+    let mut f = Fixture::new();
+    f.add_player("o0", 2, 15, 10, 902);
+    f.add_player("o1", 3, 21, 10, 903);
+    f.add_player("o2", 4, 22, 10, 904);
+    f.add_player("o3", 5, 23, 10, 905);
+    let hero = f
+        .online
+        .iter()
+        .find(|e| e.chr_name == "hero")
+        .unwrap()
+        .actor_id;
+    let events = vec![
+        GuildWarEvent::RefShowName {
+            guild: "测试会".into(),
+            member: "hero".into(),
+        },
+        GuildWarEvent::RefShowName {
+            guild: "测试会".into(),
+            member: "hero".into(),
+        },
+    ];
+    let ban: HashMap<String, bool> = HashMap::new();
+    let mut queue = Vec::new();
+    super::war_events_to_frames(
+        hero,
+        "hero",
+        &events,
+        &f.online,
+        &f.world,
+        &f.displays,
+        &f.guilds,
+        &f.guild_msg_cfg,
+        12,
+        (255, 56),
+        &ban,
+        &mut queue,
+    );
+    let sent = super::flush(&mut queue, &f.online, &f.gates);
+    assert!(sent > 0, "42 必须路由出去");
+    let per = username_frames(&f.drain());
+    assert_eq!(per.get(&901), Some(&2), "自己两份（Δ0 两拍都在 <11）");
+    assert_eq!(per.get(&902), Some(&2), "+5 两份");
+    assert_eq!(per.get(&903), Some(&1), "|Δ|=11 只收首份");
+    assert_eq!(per.get(&904), Some(&1), "|Δ|=12 只收首份");
+    assert_eq!(per.get(&905), None, "+13 零帧");
+}
