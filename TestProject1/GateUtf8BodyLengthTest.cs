@@ -112,3 +112,76 @@ public class GateUtf8BodyLengthTest
         Assert.That(region.Contains("new byte[ServerMessage.PacketSize + data.Length]", StringComparison.Ordinal), Is.False);
     }
 }
+
+/// <summary>
+/// 桌面**跨栈 golden**（卡 `openmir2-gate-utf8-body-length` 的 R 级替代证据，无需栈/窗口）：
+/// C# 生产函数 `ClientThread.BuildServerFrame` 是 oracle，把样本集的**完整线上帧 hex** 写成
+/// `mir2-rs/tests/parity/golden/gate_utf8_frame/gate_control_frames.txt`；Rust `game-gate`
+/// 的同名测试读同一份 golden 逐字节断言（Rust 侧用 `ServerMessage::to_bytes` + `gbk::encode`）。
+///
+/// 生成方式（**只在需要重产时**）：`GATE_UTF8_GOLDEN_WRITE=1 dotnet test --filter GateUtf8FrameGolden`。
+/// 平时断言：读 golden 与当前生产函数输出逐字节相等（改回字符数口径 ⇒ 红）。
+/// </summary>
+[TestFixture]
+public class GateUtf8FrameGolden
+{
+    /// <summary>(样本名, 正文, command, sessionId, socket, userIndex)</summary>
+    private static readonly (string Name, string Data, ushort Command, ushort SessionId, int Socket, ushort UserIndex)[]
+        Samples =
+        {
+            ("empty", "", Grobal2.GM_CLOSE, 0, 0, 0),
+            ("ip", "127.0.0.1", Grobal2.GM_OPEN, 7, 9, 0),
+            ("chinese", "中文角色", Grobal2.GM_OPEN, 3, 4, 0),
+            ("chinese2", "热血传奇", Grobal2.GM_OPEN, 1, 2, 0),
+            ("mixed", "ab热血12", Grobal2.GM_OPEN, 65535, 2147483647, 42),
+        };
+
+    private static string RepoRoot()
+    {
+        var dir = new DirectoryInfo(TestContext.CurrentContext.TestDirectory);
+        while (dir != null && !Directory.Exists(Path.Combine(dir.FullName, "src", "GameGate")))
+        {
+            dir = dir.Parent;
+        }
+
+        Assert.That(dir, Is.Not.Null, "找不到仓库根");
+        return dir!.FullName;
+    }
+
+    private static string Hex(byte[] bytes)
+    {
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private static string Render()
+    {
+        StringBuilder sb = new StringBuilder();
+        foreach (var s in Samples)
+        {
+            byte[] frame = GameGate.Services.ClientThread.BuildServerFrame(s.Command, s.SessionId, s.Socket, s.UserIndex, s.Data);
+            sb.Append(s.Name).Append('|').Append(Hex(frame)).Append((char)10);
+        }
+
+        return sb.ToString();
+    }
+
+    [Test]
+    public void golden_matches_or_is_regenerated()
+    {
+        Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
+        string path = Path.Combine(RepoRoot(), "mir2-rs", "tests", "parity", "golden", "gate_utf8_frame",
+            "gate_control_frames.txt");
+        string rendered = Render();
+        if (Environment.GetEnvironmentVariable("GATE_UTF8_GOLDEN_WRITE") == "1")
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, rendered, new UTF8Encoding(false));
+            TestContext.Out.WriteLine("GOLDEN_WRITTEN " + path);
+            return;
+        }
+
+        Assert.That(File.Exists(path), Is.True, "缺 golden：" + path);
+        string golden = File.ReadAllText(path).Replace(((char)13).ToString(), string.Empty);
+        Assert.That(rendered, Is.EqualTo(golden), "C# 生产帧与 golden 不一致（改口径会在这里翻红）");
+    }
+}

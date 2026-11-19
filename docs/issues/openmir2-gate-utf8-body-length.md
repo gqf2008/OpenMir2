@@ -75,13 +75,23 @@ dotnet test --filter FullyQualifiedName~GateUtf8BodyLengthTest
 **现实约束**：m1-stack 跑的是 **Rust 三网关**，C# `GameGate` 不在该栈里；且生产今天唯一进入
 `SendServerMsg` 的非空正文是 `UserEnter` 的 **IP（ASCII）**。因此：
 
-1. **桌面跨栈 golden（首选，无需任何栈/窗口）**：
+1. **桌面跨栈 golden（已实现，无需任何栈/窗口）**：
    - C#：`TestProject1` 用**生产函数** `ClientThread.BuildServerFrame` 对样本表
      `[空, "127.0.0.1", "中文角色", "热血传奇", 混合串]` 产出十六进制帧 → golden
      （C# 是 oracle，golden 由它生成）；
    - Rust：`game-gate` 测试用 `ServerMessage::to_bytes` + `gbk::encode`（模块注释：逐字节等于
      .NET cp936）拼同构帧，`include_str!` 读同一批 golden，逐字节断言相等；
    - 进程清单/端口/MySQL/客户端：**都不需要**（纯函数对拍）。
+   - **已落地**：`TestProject1/GateUtf8FrameGolden`（C# 产/断言 golden）+
+     `game-gate` 的 `control_frame_golden_matches_csharp_oracle`（Rust 逐字节断言同一份 golden）；
+     golden 文件 `mir2-rs/tests/parity/golden/gate_utf8_frame/gate_control_frames.txt`，
+     5 个样本（空 / IP / 中文 / 中文2 / 混合），含中文样本的 GB2312 字节。原文：
+```
+dotnet test --filter GateUtf8FrameGolden → 通过 1 / 失败 0
+cargo test -p game-gate → 89 passed / 0 failed（含 golden）；
+  另一 test binary 26 passed / 0 failed
+```
+     这是**离线可重复**的"两侧字节一致"证据（改回字符数口径 ⇒ C# golden 断言红；Rust 读 golden 也红）。
 2. **真机抽证（可选）**：m1-stack 已在跑 Rust 网关，用现成捕获（`tools/gw-capture`）在 5000 侧抓
    `GM_OPEN` 帧（ASCII IP 正文），与第 1 级同 IP 样本的 golden 逐字节比。不需要额外起
    MySQL/DBSrv，也不需要真实客户端（一个 bot/客户端连接即可触发 `UserEnter`）。

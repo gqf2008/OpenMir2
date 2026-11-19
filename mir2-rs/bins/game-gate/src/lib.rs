@@ -2196,6 +2196,54 @@ mod tests {
         assert!(upstream_body_allowed(normal.body_len()), "正常帧不得误伤");
     }
 
+    /// **跨栈 golden**（卡 `openmir2-gate-utf8-body-length`）：C# `ClientThread.BuildServerFrame`
+    /// 产出的完整线上帧，必须与 Rust 的 `ServerMessage::to_bytes` + `gbk::encode` 逐字节相等。
+    ///
+    /// golden 由 C# 生产函数生成（`GATE_UTF8_GOLDEN_WRITE=1 dotnet test --filter GateUtf8FrameGolden`），
+    /// 文件：`mir2-rs/tests/parity/golden/gate_utf8_frame/gate_control_frames.txt`。
+    /// 这个测试证明的是「**两侧字节一致**」，不是「Rust 有 bug」——Rust 一直是字节口径。
+    #[test]
+    fn control_frame_golden_matches_csharp_oracle() {
+        let golden =
+            include_str!("../../../tests/parity/golden/gate_utf8_frame/gate_control_frames.txt");
+        let mut checked = 0usize;
+        for line in golden.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let (name, expected) = line.split_once('|').expect("golden 行格式必须是 name|hex");
+            let (data, ident, session_id, socket, session_index): (&str, u16, u16, i32, i32) =
+                match name {
+                    "empty" => ("", u16::from(grobal2::GM_CLOSE), 0, 0, 0),
+                    "ip" => ("127.0.0.1", u16::from(grobal2::GM_OPEN), 7, 9, 0),
+                    "chinese" => ("中文角色", u16::from(grobal2::GM_OPEN), 3, 4, 0),
+                    "chinese2" => ("热血传奇", u16::from(grobal2::GM_OPEN), 1, 2, 0),
+                    "mixed" => ("ab热血12", u16::from(grobal2::GM_OPEN), 65535, i32::MAX, 42),
+                    other => panic!("未知 golden 样本：{other}"),
+                };
+            let body = gbk::encode(data);
+            let head = ServerMessage {
+                packet_code: grobal2::PacketCode,
+                socket,
+                session_id,
+                ident,
+                session_index,
+                pack_length: i32::try_from(body.len()).expect("样本长度可表示"),
+            };
+            let mut frame = head.to_bytes().to_vec();
+            frame.extend_from_slice(&body);
+            let mut actual = String::with_capacity(frame.len() * 2);
+            for byte in &frame {
+                use std::fmt::Write as _;
+                write!(actual, "{byte:02x}").expect("写入 String 不会失败");
+            }
+            assert_eq!(actual, expected, "样本 {name} 与 C# oracle 不一致");
+            checked += 1;
+        }
+        assert_eq!(checked, 5, "golden 必须覆盖 5 个样本");
+    }
+
     /// 接线牙：上界校验必须在 body 分配之前（删掉校验 ⇒ 红）。
     #[test]
     fn reader_validates_upstream_body_before_allocating() {
