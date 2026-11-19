@@ -161,6 +161,23 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 | **L3** 状态不许从回包反推 | 状态读取全部来自会话/实体：`sessions["hero"].click_npc_time`、`world.entities.get_mut(...).life_cycle.death`、`transform_mut(...).x/y`；帧只用来比帧 | 比较器源码（`lib.rs` 的 `np01_click_main_matches_oracle_golden`） |
 | **D2** 命中上限必须红 | golden 每 case 带 `drain_passes`/`drain_hit_cap`（4/4 例）；比较器断言 `drain_hit_cap == false`，true ⇒ panic | `grep -c drain_hit_cap` 于 golden 与 `lib.rs`（原文见交付说明） |
 
+### 10.3 CONDITIONAL 升 PASS 的前置条件（opc-07 裁定，2026-11-20）
+
+**CONDITIONAL 不是结项态。** NP-01 的签法（行为面 PASS / 状态面 CONDITIONAL）升 PASS 必须**同时**满足：
+
+1. **补齐两个状态量**：`LastNpc` 与 `ScriptCurrLable` 在 Rust 会话建模（`SessionGround` 或其脚本态载体），
+   写入点对齐 `NormNpc.Click`（清 `ScriptGotoCount`/`ScriptGoBackLable`/`ScriptCurrLable`）与
+   `ScriptEngine.GotoLable`（`LastNpc = normNpc.ActorId`、`playerActor.Script = script`）。
+2. **证明用例**（缺一不可）：
+   - 点击后 `LastNpc == 被点 NPC 的 actor id`（golden 已有 `last_npc_is_npc=true`，加同断言）；
+   - 点击后 `ScriptCurrLable` 已清空（golden 已有 `script_curr_lable=""`，加同断言）；
+   - **Fallback 证明**：脚本**没有 `@main`** 时，`GotoLable` 走的 `playerActor.Script` / 逆序 Quest 门
+     必须两侧选中同一脚本（这条同时是 **NP-04** 的前置）。
+3. 三项通过后把 NP-01 改为 PASS，并在 `evidence` 写测试名；未满足前不得改。
+
+**批量硬规则**：NP-04 及任何依赖 `LastNpc`/`ScriptCurrLable` 的用例，**必须先补建模再判**；
+不得沿用"行为面 PASS / 状态面 CONDITIONAL"糊过去（那会变成真正的假绿）。
+
 ## 11. 行为牙（NP-01 样板）
 
 在**本 worktree** 内逐条变异、跑同一条测试，期望红，恢复后 sha 相等并复绿。原文落**仓外**：
