@@ -55,3 +55,30 @@
 3. 牙：对每处构造"同窗口两帧 + 12 格边界观察者"的 golden 或单测，断言边界只收首帧；
    §16 流程（快照/还原核 sha/复跑基线）。
 4. 与魔法线交叉（#1 动 `push_broadcast`）需魔法对拍回归 ⇒ 排期由 opc-07 定。
+
+## 4. 进展（C2 分批，逐批一交）
+
+### 批 1（已合 M46）
+- #7 `handle_say_with_saves`、#13 `fan_out_npc_hear`（RM_HEAR）→ `ref_msg_cache::targets`；
+  行为用例 `npc_hear_cache_window_edge_gets_first_say_only`（同窗口连说两句：+12 只收首句、
+  +5 两句、+13 零帧）。
+
+### 批 2（53 族）
+- 站点：#4 `flush_healthspell_slots`、#6 `flush_run_frames`、#5 `drain_stamina`。
+- 修法：#4/#6 在 `SendRefMsg` 副本循环**内**原位换 `ref_msg_cache::targets`
+  （每次 `SendRefMsg` 各判一遍缓存；`ref_copies==0` 时零次调用，不得在循环外提前刷新）。
+- **#5 取舍（记录）**：旧实现把 `chat::hear_targets` 提到 `runs` 循环**外**只算一次、被
+  `runs × ref_copies` 复用。本批把目标集**下沉到 copy 循环内**逐次判缓存——oracle 每次
+  `SendRefMsg(53)` 各过一遍 `SendRefMsgTick` 门；若只算一次，`ref_copies>1` 时 12 格边界
+  仍会收满份数（这正是下游会漏的坑，已用用例钉住）。
+- 行为用例（同窗口两份观察者副本）：`flush_healthspell_cache_window_edge_gets_first_copy_only`
+  / `flush_run_frames_cache_window_edge_gets_first_copy_only`
+  / `drain_stamina_cache_window_edge_gets_first_copy_only`：+12 只收首份、+5 收两份、
+  +13 零帧、自见 3 条（`SendUpdateMsg` 1 + 自发副本 2）。
+- 牙（§16：快照 `E:/UserTemp/refmsg-b2-snap/`，`cp` 还原并核 sha 相等）：
+  M1/M2/M3 = 逐站点改回 `chat::hear_targets`，各自**只**红对应用例
+  （`left: Some(2) / right: Some(1)`，+12 边界）；M4 = #5 目标集上提（红，同断言）；
+  M5 = 去缓存 TTL ⇒ `ref_msg_cache_expires_after_500ms` 与 `np11_aoi` 的 `fresh_scan` 同红。
+- 前置（同批独立提交）：隐藏发送者早退，见主卡
+  `docs/issues/openmir2-visiblehumanlist-cache.md` 第 7 节。
+- 门禁结果以本批交付的 `status` 条目原文为准（不在卡面预写"全绿"）。

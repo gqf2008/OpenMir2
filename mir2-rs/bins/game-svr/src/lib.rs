@@ -16334,14 +16334,9 @@ fn broadcast_ref_msg_opt(
     // 偏差 `T-287`）。扫描面仍由 `chat::hear_targets*` 给（±range 闭区间），缓存两段由
     // `ref_msg_cache` 收口：≥500ms 刷新全量；否则复用快照 + `|Δ|<11` 严格小于。
     let targets = match at {
-        Some((map_id, x, y)) => ref_msg_cache::targets_at(
-            world,
-            actor_id,
-            map_id,
-            x,
-            y,
-            chat::send_ref_msg_range(),
-        ),
+        Some((map_id, x, y)) => {
+            ref_msg_cache::targets_at(world, actor_id, map_id, x, y, chat::send_ref_msg_range())
+        }
         None => ref_msg_cache::targets(world, actor_id, chat::send_ref_msg_range()),
     };
     send_ref_msg_to_targets(online, gates, actor_id, targets, bodies, include_self);
@@ -19056,8 +19051,11 @@ fn flush_healthspell_slots(
             }
         }
         // `ShowHp` 的 `SendRefMsg`：观察者各收 `ref_copies` 份（源自己那份已在上面的自见帧）。
+        // **T-287 残余 #4**：每次 `SendRefMsg(53)` 各判一遍 500ms 缓存（首扫 ±range 闭区间、
+        // 窗口内命中走 `|Δ|<11`）；不能在 copy 循环外只算一次，否则 `ref_copies>1` 时
+        // 12 格边界收满份数（oracle 不重扫）。
         for _ in 0..ref_copies {
-            for target_id in chat::hear_targets(world, actor_id, range) {
+            for target_id in ref_msg_cache::targets(world, actor_id, range) {
                 if target_id == actor_id {
                     continue;
                 }
@@ -19227,12 +19225,8 @@ fn drain_stamina(
                 e.vitals.mp = sg.state.wabil.mp;
             }
             if let Some(entry) = online.iter().find(|e| e.chr_name == name) {
-                // `SendRefMsg` 的观察者集合：源自己那份已由槽模型计入 `self_frames`，这里只发其它人。
-                let ref_targets = if show_hp {
-                    chat::hear_targets(world, actor_id, range)
-                } else {
-                    Vec::new()
-                };
+                // `SendRefMsg` 的观察者集合：源自己那份已由槽模型计入 `self_frames`，
+                // 这里只发其它人；目标集**逐份**判定 500ms 缓存（见下）。
                 // 每个 Run 一组槽；载荷 = 该 Run 终态（P8 命中时最后一 Run 已换成钳制终态）。
                 for (hp, mp, calls) in &runs {
                     let mut slots = game_svr::healthspell::HealthSpellSlots::new();
@@ -19252,7 +19246,15 @@ fn drain_stamina(
                             });
                         }
                     }
+                    // **T-287 残余 #5**：观察者集合**逐份**判 500ms 缓存（oracle 每次
+                    // `SendRefMsg(53)` 各走一遍 `SendRefMsgTick` 门）；提到 `runs` 循环外
+                    // 只算一次会让 `ref_copies>1` 时 12 格边界收满份数。
                     for _ in 0..ref_copies {
+                        let ref_targets = if show_hp {
+                            ref_msg_cache::targets(world, actor_id, range)
+                        } else {
+                            Vec::new()
+                        };
                         for target_id in &ref_targets {
                             if *target_id == actor_id {
                                 continue;
@@ -24698,8 +24700,9 @@ fn flush_run_frames(
             });
         }
         // `SendRefMsg(53)`（`ShowHp`）：观察者各 `ref_copies` 份；源自己那份已在上面。
+        // **T-287 残余 #6**：每次 `SendRefMsg(53)` 各判一遍 500ms 缓存（见 #4 同口径）。
         for _ in 0..ref_copies {
-            for target_id in chat::hear_targets(world, actor_id, range) {
+            for target_id in ref_msg_cache::targets(world, actor_id, range) {
                 if target_id == actor_id {
                     continue;
                 }
@@ -88957,6 +88960,179 @@ GMEXECUTE f
         );
         assert_eq!(second.get(&911), Some(&1), "第二句：+5 仍收");
         assert_eq!(second.get(&913), None, "第二句：+13 仍零帧");
+    }
+
+    /// 批 2 夹具：53 族发送者（Play，+0，socket 901）+ 观察者 +5/+12/+13（socket 902/903/904）。
+    /// `show_hp` 决定 `HealthSpellChanged()` 是否带 `SendRefMsg`（观察者副本）。
+    #[allow(clippy::type_complexity)]
+    fn refmsg_b2_fixture(
+        show_hp: bool,
+    ) -> (
+        mir2_world_bevy::World,
+        HashMap<String, SessionGround>,
+        OnlineRegistry,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        i32,
+        [i32; 3],
+    ) {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        world.open_session("hero");
+        let mut ent = mir2_world_bevy::EntitySpawn::new(0, "hero".to_string(), 10, 10);
+        ent.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        ent.hp = 90;
+        ent.max_hp = 100;
+        let actor = world.enter_map("hero", ent, 0).unwrap();
+        let mut sg = test_session_ground(actor);
+        sg.state.wabil.hp = 90;
+        sg.state.wabil.mp = 10;
+        sg.state.wabil.max_hp = 100;
+        sg.state.wabil.max_mp = 10;
+        sg.show_hp = show_hp;
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("hero".to_string(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: actor,
+            },
+        );
+        let mut obs = [0i32; 3];
+        for (i, (dx, socket)) in [(5, 902), (12, 903), (13, 904)].into_iter().enumerate() {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = world.add_entity(e);
+            obs[i] = id;
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+        }
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        (world, sessions, online, gates, rx0, actor, obs)
+    }
+
+    /// 按 socket 归集本夹具通道里的帧数。
+    fn refmsg_b2_count(rx: &mut mpsc::UnboundedReceiver<SimToGate>) -> HashMap<i32, usize> {
+        let mut per: HashMap<i32, usize> = HashMap::new();
+        while let Ok(SimToGate::SendFrame { socket, .. }) = rx.try_recv() {
+            *per.entry(socket).or_default() += 1;
+        }
+        per
+    }
+
+    /// **T-287 残余 #4**（卡 `openmir2-refmsg-cache-residual-sites`）：`flush_healthspell_slots`
+    /// 的 `ShowHp` 观察者副本 = 本组 `SendRefMsg(53)` 次数，**每次各判一遍缓存**
+    /// （oracle 逐次过 `SendRefMsg`；首扫 ±12 闭区间、窗口内命中走 `|Δ|<11`）。
+    ///
+    /// 构造：同组两次 `HealthSpellChanged(show_hp=true)` ⇒ 自见 3 条、观察者 2 份。
+    /// 断言：+12 边界只收**首份**、+5 收两份、+13 零帧。
+    ///
+    /// 牙：① 站点改回 `chat::hear_targets` 自算 ⇒ +12 收 2；② 目标集提到 copy 循环外只算一次
+    /// ⇒ +12 收 2。两种变异都必红（`|Δ|<11` 只剩首份生效）。
+    #[test]
+    fn flush_healthspell_cache_window_edge_gets_first_copy_only() {
+        let (world, sessions, online, gates, mut rx, actor, _obs) = refmsg_b2_fixture(true);
+        let mut slots = game_svr::healthspell::HealthSpellSlots::new();
+        slots.health_spell_changed(actor, true);
+        slots.health_spell_changed(actor, true);
+        flush_healthspell_slots(&mut slots, &world, &online, &sessions, &gates, 12);
+        let per = refmsg_b2_count(&mut rx);
+        assert_eq!(
+            per.get(&901),
+            Some(&3),
+            "自见：SendUpdateMsg 1 + 自发副本 2"
+        );
+        assert_eq!(per.get(&902), Some(&2), "+5：两份 SendRefMsg 都收");
+        assert_eq!(
+            per.get(&903),
+            Some(&1),
+            "+12 边界：只收首份（第二份走缓存命中 |Δ|<11 被挡）"
+        );
+        assert_eq!(per.get(&904), None, "+13：零帧");
+    }
+
+    /// **T-287 残余 #6**（`flush_run_frames`）：同 #4 的 G-B 组边界形态（`RunFrames` 槽）。
+    /// 牙：站点改回 `chat::hear_targets` ⇒ +12 收 2 ⇒ 红；目标集上提到 copy 循环外 ⇒ 同红。
+    #[test]
+    fn flush_run_frames_cache_window_edge_gets_first_copy_only() {
+        let (world, sessions, online, gates, mut rx, actor, _obs) = refmsg_b2_fixture(true);
+        let mut frames = game_svr::run_frames::RunFrames::new();
+        frames.health_spell_changed(actor, true);
+        frames.health_spell_changed(actor, true);
+        flush_run_frames(&mut frames, &world, &online, &sessions, &gates, 12);
+        let per = refmsg_b2_count(&mut rx);
+        assert_eq!(
+            per.get(&901),
+            Some(&3),
+            "自见：SendUpdateMsg 1 + 自发副本 2"
+        );
+        assert_eq!(per.get(&902), Some(&2), "+5：两份都收");
+        assert_eq!(per.get(&903), Some(&1), "+12 边界：只收首份");
+        assert_eq!(per.get(&904), None, "+13：零帧");
+    }
+
+    /// **T-287 残余 #5**（`drain_stamina`）：观察者目标集必须**下沉到 copy 循环内**逐次判缓存
+    /// ——旧实现把 `chat::hear_targets` 提到 `runs` 循环外只算一次，`ref_copies>1` 时 +12
+    /// 边界会收满份数。
+    ///
+    /// 构造：一次 `Run()` 内 HP 支 + MP 支各一次 `HealthSpellChanged()`（`calls=2` ⇒ 两份
+    /// 观察者副本）。断言：+12 只收首份、+5 收两份、+13 零帧。
+    ///
+    /// 牙：① 站点改回 `chat::hear_targets` ⇒ +12 收 2；② 目标集上提到 copy 循环外 ⇒ 同红。
+    #[test]
+    fn drain_stamina_cache_window_edge_gets_first_copy_only() {
+        let (mut world, mut sessions, online, gates, mut rx, _actor, _obs) =
+            refmsg_b2_fixture(true);
+        {
+            let sg = sessions.get_mut("hero").unwrap();
+            sg.state.wabil.hp = 50;
+            sg.state.wabil.mp = 5;
+            // HealthTick/SpellTick 都越过各自填充阈值 ⇒ 同一个 Run() 命中 HP 支 + MP 支。
+            sg.stamina.health_tick = 300;
+            sg.stamina.spell_tick = 800;
+            let base = now_ms() - 60;
+            sg.stamina.replay_cursor = base;
+            sg.stamina.auto_recovery_tick = base;
+        }
+        drain_stamina(
+            &mut sessions,
+            &mut world,
+            &online,
+            &gates,
+            12,
+            300,
+            800,
+            &[],
+        );
+        let per = refmsg_b2_count(&mut rx);
+        assert_eq!(
+            per.get(&901),
+            Some(&3),
+            "自见：SendUpdateMsg 1 + 自发副本 2"
+        );
+        assert_eq!(per.get(&902), Some(&2), "+5：两份都收");
+        assert_eq!(
+            per.get(&903),
+            Some(&1),
+            "+12 边界：只收首份（目标集必须逐次判缓存）"
+        );
+        assert_eq!(per.get(&904), None, "+13：零帧");
     }
 
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。
