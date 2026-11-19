@@ -94117,8 +94117,12 @@ mod entry_telemetry_wiring {
             .expect("下一事件臂（RegisterGate）")
             + i;
         let arm = &SRC[i..next];
-        let at = arm.find("record_logon_handler_enter(").expect("handler 入口计数");
-        let queue = arm.find("engine.add_to_load_rcd_list(").expect("取档入队点");
+        let at = arm
+            .find("record_logon_handler_enter(")
+            .expect("handler 入口计数");
+        let queue = arm
+            .find("engine.add_to_load_rcd_list(")
+            .expect("取档入队点");
         assert!(at < queue, "计数必须在入队之前（臂入口语义）");
     }
 
