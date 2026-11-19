@@ -109,6 +109,9 @@ public static class Program
             if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true });
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 });
             if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" });
+            if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true });
+            if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true });
+            if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -532,6 +535,26 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             RunMagicCase(spec, "heal", 1, 1000, 50, false),
             RunMagicCase(spec, "full", 5, 2000, 100, false),
             RunMagicCase(spec, "self", 13, 3000, 50, true),
+        };
+        return EmitGolden(spec, cases);
+    }
+
+    /// <summary>
+    /// **无 AntiMagic 骰**的支（14/15/31）：按注释的**同一行为**取三 seed（1/5/13）——
+    /// 不存在 miss/edge/hit 语义（不构造假骰）。标签 = `s1` / `s5` / `s13`。
+    /// </summary>
+    private static int BehaviorBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        var cases = new[]
+        {
+            RunMagicCase(spec, "s1", 1, 1000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "s5", 5, 2000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "s13", 13, 3000, spec.TargetMaxHp, false),
         };
         return EmitGolden(spec, cases);
     }

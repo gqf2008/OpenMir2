@@ -190,6 +190,9 @@ Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必�
 | `RM_MAGHEALING(8034)` wParam=0, p1=nPower, p2=0, p3=0, prio=255（`SendSelfDelayMsg`） | **服务端事件，不是客户端帧**：`src/M2Server/Player/PlayObject.Message.cs:1619-1629`（到点只累计 `IncHealing`/`PerHealing`，上限 300 的比较在 `:1620`；实际回血由后续 `Run` 的恢复周期另出 53） | 比较"是否登记延时治疗事件 + nPower + 目标"；**不产 SM 帧**（与 `RM_DELAYMAGIC` 同类） |
 | `RM_DURACHANGE(10125)` wParam=槽位, p1=持久, p2=DuraMax, prio=141（`10125 & 0xFF`）、late=false | `src/M2Server/Player/PlayObject.Message.cs:1803-1804`（→ `SM_DURACHANGE(642)`：Recog=Dura、Param=槽位、Tag/Series=DuraMax）。护身符支的触发者 = `MagicBase.UseAmulet`（`src/M2Server/Magic/MagicBase.cs:109-127`，每次 −100 持久；持久不足时改走 `SendDelItems` 并清 `Index`）⇒ **火符的 miss 支同样出现 642**。**队列序**：与 `RM_MAGICFIRE(10120, prio 136)` 同队、按 `(byte)ident` 出队 ⇒ **638 先、642 后**（火符修复卡按此把 642 纳入同批 `SpellFrameBuf`，仅 `UseAmulet` 路径） | `SM_DURACHANGE` 帧逐字段 + `UseItems[ArmRingl].Dura` 的 −100 + caster 的 638→642 顺序 |
 | `RM_DELAYPUSHED(8043)` wParam=nDir, p1=坐标, p2=push, p3=目标 | **服务端事件**：`src/M2Server/Actor/BaseObject.Base.cs:733-739`（到点 `CharPushed`，逐格 `SendRefMsg(RM_PUSH)`）；`RM_PUSH(8092)` → `src/M2Server/Player/PlayObject.Message.cs:1525-1533`（`SM_BACKSTEP(9)`）。夹具前提：**`UserMagic.Level=3`**（`Random(Level)-1`，Level<3 时恒 ≤0 ⇒ 永不推挤；产生点在 `src/M2Server/Magic/MagicManager.cs:1048-1052`） | `SM_BACKSTEP(9)` 帧逐字段 + 逐格条数；其余 SM 不变 |
+| `RM_ABILITY(10051)` wParam=0, p1/p2/p3=0, prio=67（`10051 & 0xFF`） | `src/M2Server/Player/PlayObject.Message.cs:1732-1735`（→ `SM_ABILITY(52)`：`Gold`、`MakeWord(Job,99)`、`LoWord/HiWord(GameGold)`，尾 `EDCode.EncodeMessage(WAbil)`）。产生者：`RecalcAbilitys` 收尾（`src/M2Server/Actor/BaseObject.cs:2161`/`:2185`）与 buff 系统（`src/M2Server/ActorBuffSystem.cs:229`），均 `SendMsg(this)`；`src/M2Server/Player/PlayObject.cs:1385` 的 `SendPriorityMsg(..., High)` 亦给自己 | **收件人 = 该对象自己**；比较 = `SM_ABILITY(52)` 按序 + 尾字节；RM 列多重集 |
+| `RM_CHARSTATUSCHANGED(10139)` wParam=0, p1=`CharStatus`（int 位集，实测可为 `0x80000000`）, prio=155 | 产生者 `StatusChanged()`（`src/M2Server/Actor/BaseObject.cs:1514-1517`）走 `SendRefMsg`；handler → `src/M2Server/Player/PlayObject.Message.cs:1845`（`SM_CHARSTATUSCHANGED(657)`：`ActorId`、`LoWord/HiWord(nParam1)`、`this.HitSpeed`）；`src/M2Server/Player/PlayObject.cs:2876` 的 `SendUpdateMsg` 只给自己 | **收件人 = 产出者 ±`SendRefMsgRange` 的玩家（含自己）**；比较 = `SM 657` 严格序 + 字段；RM 列多重集 |
+| `RM_SYSMESSAGE(11004)` wParam=0, p1=前景色, p2=背景色, p3=0, prio=252, `Msg`=文本 | 产生者 `SysMsg`（`src/M2Server/Actor/BaseObject.cs:1617/1641/1648/1655/1666` 的 `SendMsg(RM_SYSMESSAGE, 0, fColor, bColor, 0, sMsg)`）→ `src/M2Server/Player/PlayObject.Message.cs:1696` 支（`SM_SYSMESSAGE(100)`：`ActorId`、`MakeWord(fColor, bColor)`、0、1；尾 `EDCode.EncodeString(Msg)`） | **收件人 = 自己**；比较 = `SM 100` 字段 + 尾文本逐字节；RM 列多重集（`msg` 文本与尾同源） |
 
 RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomNumber`（与原版同算法）。
 **未登记在该表里的 RM 条目一律判"口径未定义"（不标 verified）**，避免拿"没比到"当"比过了"。
@@ -588,3 +591,17 @@ hit `[5,0,0,0,0]`，`DrainPasses` 2/4/4、`hit_cap=False`）。自检：两次�
 的改动 = MG-10 `status`→`verified`（+ `basis=semantic` + evidence 五字段）+ `schema_version` 1→2
 + `schema_note` + MG-11 `notes` 文本；**`denominator.count`（65）与 65 个条目 id 不变，
 MG-11 状态仍 `implemented_unverified`**。
+
+**14/15/31 的 C# golden（golden-only，Rust 未接）**：`golden/magic/{hangmajinbub,dejiwonho,shield}.json`。
+
+- **本三条无抗魔骰**（首抽即 `GetPower13`/`GetRPow`）：三 seed（1/5/13）只覆盖随机支，标签
+  **`s1`/`s5`/`s13`**，**不构造假骰**（治愈先例）。14/15 有护身符前置（rig 自带 `ArmRingl`
+  的 `StdMode=25/Shape=5/Dura=600`），31 无门。
+- **帧量推导（不是夹具错，账本按 oracle 原样保留）**：14/15 的
+  `MagMakeDefenceArea(nTargetX, nTargetY, 3, nPower, btState)` 按 3×3 区域枚举 proper friend，
+  每个被点对象触发 `StatusChanged()`（`RM_CHARSTATUSCHANGED` → 657）与 `SysMsg`
+  （`RM_SYSMESSAGE` → 100）/`RM_ABILITY`（→ 52）；本夹具 49 次应用 ⇒ **target 每支 198 帧**
+  （52×49 + 657×98 + 100×49），obs_in 51、caster 53；`DrainPasses=2`、`hit_cap=false`。
+- 31（`MagBubbleDefenceUp`）：RNG 2 抽，各接收者 1 条 657。
+- **表外 RM 已入表**：`RM_ABILITY(10051)`、`RM_CHARSTATUSCHANGED(10139)`、`RM_SYSMESSAGE(11004)`
+  （见 §11 表行：C# 位置、收件人、Rust 比较方式）。
