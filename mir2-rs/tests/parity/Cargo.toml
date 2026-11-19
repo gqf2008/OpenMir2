@@ -10,6 +10,7 @@ mir2-shared = { path = "../../crates/shared" }
 mir2-data = { path = "../../crates/data" }
 mir2-formula = { path = "../../crates/formula" }
 mir2-world-bevy = { path = "../../crates/world-bevy" }
+mir2-protocol = { path = "../../crates/protocol" }
 sqlx = { version = "0.8", features = ["runtime-tokio", "mysql", "chrono", "macros", "migrate"] }
 tokio = { version = "1", features = ["full"] }
 serde = { version = "1", features = ["derive"] }

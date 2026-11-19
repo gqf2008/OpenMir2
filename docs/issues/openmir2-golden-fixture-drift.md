@@ -215,6 +215,12 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 **旧件冻结后，任何人不得用新装置尝试重生成**：契约门（`equipment=[] ⇒ anti_magic==1`）会拒绝，
 重生成只会浪费时间，并可能引出"那就放宽门"的错误提案。
 
+**含 `WAbil` 的帧（`SM_ABILITY(52)`）**：其尾 = `EDCode.EncodeMessage(WAbil)`（40B，`Exp`@24..28、
+`MaxExp`@28..32），比较器对 `tail` 做严格串比较 ⇒ 这两个字段**已在判定面内**；牙
+`tooth_wabil_exp_bytes_compared_red` 取真实 golden 的 52 尾翻转 `Exp`/`MaxExp` 字节证明必红。
+**M53（=旧 M52 顺延）报告须单列**：Exps 装置 bug 修复后若 `max_exp` 由 0 变为真实值，
+属**行为类差异**（帧内容变化），不得并入"元数据"；Rust 侧该字段若与 golden 不同 ⇒ **真分歧**，停下报。
+
 **M52 交付自检（必须逐条给出原文）**：① 被合的树里存在
 `mir2-rs/tests/parity/fixtures/exps-need-exps.json`
 （`git cat-file -e <head>:mir2-rs/tests/parity/fixtures/exps-need-exps.json`，rc=0）；

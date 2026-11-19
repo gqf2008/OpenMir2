@@ -691,6 +691,72 @@ fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
     serde_json::json!({ "magic_id": 33, "cases": [c] })
 }
 
+/// **牙⑥：含 `WAbil` 的 52 尾里 `Exp/MaxExp` 字节在比较面内**（卡 §8.7）。
+///
+/// `SM_ABILITY(52)` 的尾 = `EDCode.EncodeMessage(WAbil)`（40B：`Exp` 在 24..28、`MaxExp` 在 28..32），
+/// 比较器对 `tail` 做严格串比较 ⇒ 这两个字段天然在判定面内。本牙取真实 golden 的 52 尾，
+/// 分别翻掉 `Exp`/`MaxExp` 的一个字节再编码回串，`verify` 必须红在 `tail`。
+#[test]
+fn tooth_wabil_exp_bytes_compared_red() {
+    let golden = golden_file("hangmajinbub.json");
+    let cases = golden.get("cases").and_then(Value::as_array).unwrap();
+    let s1 = cases
+        .iter()
+        .find(|c| c.get("Label").and_then(Value::as_str) == Some("s1"))
+        .expect("hangmajinbub 必须有 s1");
+    // 找任意接收者里的 52 帧
+    let (ri, fi, tail) = {
+        let mut found = None;
+        for (ri, r) in rust
+            .get("Receivers")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            for (fi, f) in r
+                .get("Sent")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .enumerate()
+            {
+                if f.get("ident").and_then(Value::as_i64) == Some(52) {
+                    found = Some((ri, fi, f.get("tail").and_then(Value::as_str).unwrap().to_string()));
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        found.expect("golden 必须含 SM_ABILITY(52) 帧")
+    };
+    let bytes = mir2_protocol::edcode::decode(tail.as_bytes());
+    assert_eq!(bytes.len(), 40, "52 尾必须解出 40B WAbil");
+    let mut rust_case = rust.clone();
+    let with_tail = |c: &mut Value, new_tail: &str| {
+        c["Receivers"][ri]["Sent"][fi]["tail"] = Value::from(new_tail);
+    };
+    for (name, off) in [("Exp", 24usize), ("MaxExp", 28usize)] {
+        let mut b = bytes.clone();
+        b[off] ^= 0xFF;
+        let t = String::from_utf8(mir2_protocol::edcode::encode(&b)).expect("EDCode 输出是 ASCII");
+        with_tail(&mut rust_case, &t);
+        let r = serde_json::json!({"magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
+                                   "cases": [rust_case.clone()]});
+        let g = serde_json::json!({"magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
+                                   "cases": [s1.clone()]});
+        let err = verify(&g, &r).unwrap_err();
+        assert!(
+            err.iter().any(|e| e.contains("tail")),
+            "翻掉 {name} 字节必须红在 tail：{err:?}"
+        );
+        // 复原以便下一字段独立测试
+        with_tail(&mut rust_case, &tail);
+    }
+}
+
 /// **牙⑤（契约键）**：`reachability` 缺失或非 `reachable`、或缺任一状态键 ⇒ 红。
 #[test]
 fn tooth_contract_missing_keys_red() {
