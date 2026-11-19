@@ -246,7 +246,7 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
   `dlg_unknown_label` / `dlg_ask_back`），与 NP-01 golden **分文件**（避免每加一条就换掉旧证据对象）。
 - **断言**：说词序列（`SM_MERCHANTSAY` 尾文本）+ `ScriptCurrLable` / `ScriptGoBackLable` / `ScriptLable`；
   单 `@back`（无先前 `@ask`）与 `@nope` 均为零说词（oracle 真实行为）。
-- **对拍钉出的产品差异（已修）**：oracle `Merchant.cs:922-929` 在 `@back` 空栈时**写回**
+- **对拍钉出的产品差异（已修）**：oracle `src/GameSrv/Npc/Merchant.cs:922-929` 在 `@back` 空栈时**写回**
   `ScriptGoBackLable = "@main"`；Rust 原来只在本地取默认值、不落状态。已改为先写回再跳转。
 - **牙 D**：把 `@back` 二次跳转分支短路（`if false && eq_label("@back")`）⇒ `dlg_ask_back` 红在
   `@back 回 @main 说词`；原文 `E:/UserFleet/qa/npc-parity/np02-mutation-D-back-jump.txt`，恢复 sha 相等、复绿
