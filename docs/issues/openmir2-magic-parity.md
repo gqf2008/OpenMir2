@@ -404,3 +404,15 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 
 **对 `1/5` 标 `verified` 的影响**：除三支全绿 + 两牙 + 三条篡改证明外，还需过
 `openmir2-3b` 的 QA-4。顺序：**夹具 → 比较器 → 篡改证明 → 交 QA**。
+
+### 21. MC / Level 的真实落点（2026-11-19 查实，夹具照此写）
+
+- **MC 与 SC 不在实体组件上**，而在**会话态** `SessionGround.state.wabil.mc / .sc`
+  （消费点：`lib.rs:13246`、`:14069`、`:14307`、`:14801`、`:15248` 均为
+  `i32::from(sg.state.wabil.mc)`）；现有测试直接赋值有先例：`lib.rs:70067`
+  `sg.state.wabil.mc = 0x0F05;`。
+- 存档记录侧同名字段在 `record.rs:254`（`Ability.mc`，由 `stage6_record()` 解出）。
+- **火球夹具**：`a5_spell_rig(1, 11, 10)` 之后
+  ① `ground_sessions["caster"].state.wabil.mc = 15;`（对应金标准 MC=15）
+  ② 目标实体 `anti_magic = 3`、`hp = 100`；③ `world.rng = RandomNumber::with_seed(seed)`。
+  **不再去找"实体 MC 组件"——它不存在。**
