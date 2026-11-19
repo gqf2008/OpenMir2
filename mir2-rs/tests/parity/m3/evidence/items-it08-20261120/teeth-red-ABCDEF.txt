@@ -1,0 +1,45 @@
+
+===== A_去recalc -> RED rc=101 ran=('0', '1') =====
+  thread 'tests::it08_levelup_host_parity' (27108) panicked at bins\game-svr\src\lib.rs:53791:9:
+  assertion `left == right` failed: 升级支全帧线上序不符（直发 635 先，泵出 53→622→44→45/52/752）；实得 [(635, 0, 0, 0, 0), (53, 7777, 0, 0, 0), (622, 0, 5, 0, 36686), (44, 90, 100, 0, 0), (45, 9990, 5, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 38
+  left: [(635, 0, 0, 0, 0), (53, 7777, 0, 0, 0), (622, 0, 5, 0, 36686), (44, 90, 100, 0, 0), (45, 9990, 5, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  right: [(635, 0, 0, 0, 0), (53, 7777, 52, 32, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2016 filtered out; finished in 0.01s
+
+===== B_去levelup_frames -> RED rc=101 ran=('0', '1') =====
+  thread 'tests::it08_levelup_host_parity' (11876) panicked at bins\game-svr\src\lib.rs:53791:9:
+  assertion `left == right` failed: 升级支全帧线上序不符（直发 635 先，泵出 53→622→44→45/52/752）；实得 [(635, 0, 0, 0, 0), (53, 7777, 52, 32, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0)] want [(635, 0, 0, 0, 0), (53, 7777, 52, 32, 52), (6
+  left: [(635, 0, 0, 0, 0), (53, 7777, 52, 32, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0)]
+  right: [(635, 0, 0, 0, 0), (53, 7777, 52, 32, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2016 filtered out; finished in 0.01s
+
+===== C_去53 -> RED rc=101 ran=('0', '1') =====
+  thread 'tests::it08_levelup_host_parity' (39200) panicked at bins\game-svr\src\lib.rs:53782:9:
+  assertion `left == right` failed: 升级支全帧线上序不符（直发 635 先，泵出 53→622→44→45/52/752）；实得 [(635, 0, 0, 0, 0), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)] want [(635, 
+  left: [(635, 0, 0, 0, 0), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  right: [(635, 0, 0, 0, 0), (53, 7777, 52, 32, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2016 filtered out; finished in 0.01s
+
+===== D_去inc_health -> RED rc=101 ran=('0', '1') =====
+  thread 'tests::it08_levelup_host_parity' (10244) panicked at bins\game-svr\src\lib.rs:53790:9:
+  assertion `left == right` failed: 升级支全帧线上序不符（直发 635 先，泵出 53→622→44→45/52/752）；实得 [(635, 0, 0, 0, 0), (53, 7777, 0, 0, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 384
+  left: [(635, 0, 0, 0, 0), (53, 7777, 0, 0, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  right: [(635, 0, 0, 0, 0), (53, 7777, 52, 32, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2016 filtered out; finished in 0.01s
+
+===== E_去luck100 -> RED rc=101 ran=('0', '1') =====
+  thread 'tests::it08_levelup_host_parity' (10492) panicked at bins\game-svr\src\lib.rs:53827:9:
+  body_luck：实得 0.2 golden 100.2
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2016 filtered out; finished in 0.01s
+
+===== F_53移回635之前 -> RED rc=101 ran=('0', '1') =====
+  thread 'tests::it08_levelup_host_parity' (41428) panicked at bins\game-svr\src\lib.rs:53791:9:
+  assertion `left == right` failed: 升级支全帧线上序不符（直发 635 先，泵出 53→622→44→45/52/752）；实得 [(53, 7777, 52, 32, 52), (635, 0, 0, 0, 0), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3
+  left: [(53, 7777, 52, 32, 52), (635, 0, 0, 0, 0), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  right: [(635, 0, 0, 0, 0), (53, 7777, 52, 32, 52), (622, 0, 0, 0, 36683), (44, 90, 100, 0, 0), (45, 90, 6, 0, 0), (52, 0, 25344, 0, 0), (752, 1, 3845, 0, 0)]
+  test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 2016 filtered out; finished in 0.01s
+
+===== BASELINE rc=0 ran=('1', '0') =====
+restore_sha_ok= True
+ALL_MUTATIONS_RED= True
+

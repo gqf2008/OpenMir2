@@ -53,6 +53,9 @@ pub struct WireSession {
     pub game_gold: i32,
     /// `BaseObject.WAbil`（`SM_WEIGHTCHANGED` 用**当下值**）。
     pub wabil: Ability,
+    /// `BaseObject.Abil.Exp`（**基础**，`SM_WINEXP` 的 `Recog` 取它——oracle `GetExp` 只改 `Abil`，
+    /// `WAbil.Exp` 在非升级后**陈旧**，不可用它当 `Recog`）。
+    pub abil_exp: i32,
     /// `MessageSettings.CanotPickUpItem` 的 GBK 原文；缺 ⇒ `RM_SYSMESSAGE` 不产出（缺口 1）。
     pub sys_msg: Option<Vec<u8>>,
     /// `PlayObject.HungerStatus`（`PlayObject.cs:225`）——`RM_MYSTATUS` 的 `GetMyStatus()`
@@ -111,6 +114,10 @@ pub fn notice_frame(n: &QueuedNotice, session: &WireSession) -> Option<Vec<u8>> 
             )
         }),
         RM_MENU_OK => Some(smframe::sm_menu_ok(n.n_param1, &[])),
+        // `RM_WINEXP`（8075）⇒ `SM_WINEXP(44)`：`PlayObject.Message.cs:1666-1669` 的
+        // `MakeMessage(SM_WINEXP, Abil.Exp, LoWord(nParam1), HiWord(nParam1), 0)`。`Recog` 取**基础** `Abil.Exp`
+        //（`session.abil_exp`），**不是** `WAbil.Exp`（非升级 `GetExp` 后 WAbil 陈旧）。IT-08 经此出帧。
+        RM_SCRIPT_WINEXP => Some(smframe::sm_winexp(session.abil_exp, n.n_param1)),
         // `RM_MYSTATUS`（`PlayObject.Base.cs:291` 的 `RefMyStatus()`）⇒
         // `SendDefMessage(SM_MYSTATUS, 0, (short)GetMyStatus(), 0, 0)`（`PlayObject.Message.cs:1950`）。
         // `GetMyStatus()` = `min(HungerStatus/1000, 4)` 的**当下**值（`PlayObject.Base.cs:1183`）。
@@ -450,9 +457,35 @@ mod tests {
             gold,
             game_gold,
             wabil: wire_ability(),
+            abil_exp: 0,
             sys_msg: sys_msg.map(<[u8]>::to_vec),
             hunger_status: 0,
         }
+    }
+
+    /// **IT-08 同源错位牙**：`notice_frame` 的 `RM_WINEXP` 必须用**基础** `Abil.Exp`（`abil_exp`）当
+    /// `SM_WINEXP.Recog`，**不是** `WAbil.Exp`（非升级 `GetExp` 后 WAbil 陈旧）。WAbil.exp=0、base=100 ⇒ Recog 必须 100。
+    /// 反向牙：把该分支改成读 `session.wabil.exp` ⇒ Recog=0 ⇒ 本用例红。
+    #[test]
+    fn notice_winexp_uses_base_exp_not_wabil() {
+        let mut s = session(7, 0, 0, None);
+        s.wabil.exp = 0; // 陈旧 WAbil.Exp
+        s.abil_exp = 100; // 基础 Abil.Exp
+        let n = QueuedNotice {
+            ident: RM_SCRIPT_WINEXP,
+            w_param: 0,
+            n_param1: 50,
+            n_param2: 0,
+            n_param3: 0,
+        };
+        let body = notice_frame(&n, &s).expect("SM_WINEXP");
+        let recog = i32::from_le_bytes([body[0], body[1], body[2], body[3]]);
+        assert_eq!(
+            recog, 100,
+            "SM_WINEXP.Recog = 基础 Abil.Exp（非陈旧 WAbil.Exp）"
+        );
+        let param = u16::from_le_bytes([body[6], body[7]]);
+        assert_eq!(param, 50, "SM_WINEXP.Param = LoWord(nParam1=增量)");
     }
 
     fn header(recog: i32, ident: u16, param: u16, tag: u16, series: u16) -> Vec<u8> {

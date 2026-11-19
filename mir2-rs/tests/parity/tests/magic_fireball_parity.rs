@@ -948,6 +948,17 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
 }
 
+/// **`33 冰咆哮`（`SKILL_SNOWWIND`）**真实台账 → 判定面（标签 s1/s5/s13）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::snowwind_parity_*）生成真实台账"]
+fn real_rust_ledger_snowwind() {
+    real_ledger_verify_labels(
+        "snowwind",
+        &golden_file("snowwind.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
 /// **`23 爆裂火焰`（`SKILL_FIREBOOM`）**真实台账 → 判定面（标签 s1/s5/s13）。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::fireboom_parity_*）生成真实台账"]

@@ -3,9 +3,9 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "9f38e5b716a7d26f58063bd16e03fa9a613c8f59",
-    "time": "2026-11-20T01:44:31+08:00",
-    "note": "M22=9f38e5b71 合入 IT-18 后 master verified=8（实现提交 140d07b72 为分支 commit）"
+    "head": "13c583366bca8c9a81c8ca330bc52fac3d323bc4",
+    "time": "2026-11-20T06:27:13+08:00",
+    "note": "M55=13c583366 合入 IT-08(Shape13 GetExp 升级支) 后 master items verified=9（QA PASS @ f7cbaf91b）；本计数点取代 card/items-followups（作废不合）"
   },
   "status_enum": [
     "verified",
@@ -256,25 +256,25 @@
         "line": 2158,
         "line_end": null
       },
-      "status": "missing",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
-      },
-      "cost": "S",
-      "deviation": {
-        "id": "T-17",
-        "file": "mir2-rs/bins/game-svr/src/useitem.rs",
-        "section": "未做清单",
-        "lines": [
-          64,
-          80
+        "test": "useitem::tests::matches_oracle_eat_fixture",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
+        "cases": [
+          "eat_ok_stdmode3_shape13_exp_nonlevelup",
+          "eat_ok_stdmode3_shape13_exp_levelup"
+        ],
+        "unit_tests": [
+          "useitem::tests::it08_stdmode3_shape13_getexp_nonlevelup",
+          "tests::it08_eat_exp_book_view_stale_then_real_sync_catches_up",
+          "tests::it08_levelup_host_parity"
         ]
       },
-      "notes": "oracle 此支无条件成功（必吃掉）"
+      "cost": "S",
+      "deviation": null,
+      "notes": "升级支已在宿主层实现并 oracle 对拍。非升级：Exp 落基础 Abil.Exp(exp_delta)、SM_WINEXP 取基础、WAbil 陈旧→recalc 追上。升级：Exp>=MaxExp 块按 oracle 序(exp-=max_exp→level+1→max_exp=get_level_exp→level_ability_base→recalc_session_ability→inc_health_spell→add_body_luck)；全帧线上序 golden 驱动 [635(SM_EAT_OK 直发),53,622,44,45,52,752](探针同通道捕获直发+泵出, 且泵 RM_WEIGHTCHANGED 得 622)。升级后 WAbil==Abil(旧实现陈旧必红)。升级门控=exp_delta.is_some()(修非授经验物品 0>=0 误升级)。golden 重生成/牙齿见 tests/parity/m3/evidence/items-it08-20261120/。",
+      "basis": "semantic"
     },
     {
       "id": "IT-09",
@@ -302,7 +302,7 @@
           80
         ]
       },
-      "notes": "经 Base.cs:2162 default -> EatUseItems(stdItem.Shape)"
+      "notes": "经 Base.cs:2162 default -> EatUseItems(stdItem.Shape)；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
     },
     {
       "id": "IT-10",
@@ -330,7 +330,7 @@
           80
         ]
       },
-      "notes": "地图 flag 门"
+      "notes": "地图 flag 门；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
     },
     {
       "id": "IT-11",
@@ -358,7 +358,7 @@
           80
         ]
       },
-      "notes": "Config.RedHome*"
+      "notes": "Config.RedHome*；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
     },
     {
       "id": "IT-12",
@@ -414,7 +414,7 @@
           80
         ]
       },
-      "notes": "CastleMgr.IsCastleMember；登记缺口已在 useitem.rs 头部补齐（3679403bd）"
+      "notes": "CastleMgr.IsCastleMember；登记缺口已在 useitem.rs 头部补齐（3679403bd）；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
     },
     {
       "id": "IT-14",
@@ -526,7 +526,7 @@
           14
         ]
       },
-      "notes": "入口在 Operate.cs:632；Rust 有 world-bevy::magic::can_read_book 谓词但未接线到 use_item"
+      "notes": "入口在 Operate.cs:632；Rust 有 world-bevy::magic::can_read_book 谓词但未接线到 use_item；magic_list 未 wire（IT-17 接 SavedHuman.record.data.magic 前保持 missing；实现未 wire 时 implemented_unverified）"
     },
     {
       "id": "IT-18",
