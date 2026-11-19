@@ -2,9 +2,10 @@
   "schema_version": 2,
   "domain": "quests",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
+  "schema_note": "本域无旧清单（legacy_source 不适用 / N/A）：quests 机器清单 2026-11-19 由 master fb999d34a 新建，无 legacy 清单可迁移，故条目无需 legacy_id。",
   "counting_moment": {
-    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
-    "time": "2026-11-19T23:25:52+08:00"
+    "head": "fb999d34a110d67d743f2825ade9d669cb92537a",
+    "time": "2026-11-19T23:29:39+08:00"
   },
   "status_enum": [
     "verified",
@@ -47,6 +48,7 @@
         "line_end": 4110
       },
       "status": "verified",
+      "basis": "bytes",
       "evidence": {
         "test": "quest_bitmap_matches_oracle_byte_for_byte",
         "test_file": "mir2-rs/crates/script/tests/quest_state_vectors.rs",
