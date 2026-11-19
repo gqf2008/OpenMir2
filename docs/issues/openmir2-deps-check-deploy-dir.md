@@ -117,7 +117,7 @@ DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll
 ### NLog 处置 = (b) 显式例外（不改 DLL、不改 target；10k 冻结件不动）
 
 - 复核"零 API 使用"：`grep -rn "LogManager|Logger|Log\.|using NLog" src/Storeages/DBSvr.Storage.MySQL --include=*.cs`
-  → 只有 `DBContext.cs:2`、`PlayRecordStorage.cs:4` 两行 `using NLog;`，**没有任何调用** ⇒ 不在运行时引用。
+  → 只有 `src/Storeages/DBSvr.Storage.MySQL/DBContext.cs`（第 2 行）、`src/Storeages/DBSvr.Storage.MySQL/PlayRecordStorage.cs`（第 4 行） 两行 `using NLog;`，**没有任何调用** ⇒ 不在运行时引用。
 - 例外文件：`src/DBSrv/deps.exceptions.json`
   `[{"pkg":"NLog","version":"5.2.8","reason":"declared by DBSvr.Storage.MySQL, zero API usage (only using-directives), not on any runtime path"}]`
 - `check` 语义：被例外覆盖的 `MISSING_DEPLOYED` 打印 `DEPS_EXCEPTION <pkg>/<ver> <reason>` 且**仍绿**；
