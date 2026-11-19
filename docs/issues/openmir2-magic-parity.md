@@ -1135,3 +1135,34 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - `dotnet build` rc=0（0 error）。
 - 已知遗留（不改，交 `2d` 判断）：`--case fireball` 顶层 `anti_magic` 仍是构造参数（3），
   逐 case 的 `fixture.anti_magic` 才是生效值（登录序 1）；比较器若读顶层字段应按后者对齐。
+
+## 25. `card/golden-params-5`：12 号 `healing` 的 `full` 支静默退化（2026-11-20）
+
+- **结论：12 号 `full` 应在登录序 `MaxHP` 下构造，29 号（`bighealing` 的 `full` 传 224）已是正确做法。**
+- 缺陷：`HealingBatch` 给 `full` 传的输入 HP 仍是 100，而登录序 `MaxHP=224` ⇒ `WAbil.HP < WAbil.MaxHP`
+  成立 ⇒ 治疗真的发生，`full` 与 `heal` 同型（8034/640/10123 齐发，「满血不该治疗」这条玩法行为被静默吃掉）。
+- 修法（一行）：`RunMagicCase(spec, "full", 5, 2000, 100, false)` → `224`。
+- 修前/修后（`--case healing --out`，仓外
+  `E:/UserFleet/qa/golden-params-5/healing-{before,after}.json`）：
+
+| 支 | 修前 | 修后 |
+| --- | --- | --- |
+| `full` | `rng=5`；target rm 含 **8034**、caster rm 含 **10123**、caster sm 含 **640** | `rng=4`；三帧**全部消失**（10008/10120/17/638 保留：施法本身仍发生） |
+| `heal` | `rng=5`，8034/640/10123 齐 | 逐字段不变（仅 `Rm[].delivery` 墙钟字段不同） |
+| `self` | `rng=5`，8034/640/10123 齐 | 逐字段不变（仅墙钟 `delivery` 不同） |
+
+- 门禁：`dotnet build` rc=0；`antimagic-selftest` / `fixture-selftest` / `fireball-selftest` /
+  `runmagic-input-selftest` 全 rc=0。入库 golden 未改（`healing.json` 替换归 `2d`）。
+- **补门（同日第 2 笔，应总监要求「别把 224 留成魔法数」）**：`full` 的输入 HP 不再写字面量，改为
+  `FixtureContract.Recompute(spec.Job, spec.TargetLevel).MaxHp`（与 `derived.max_hp` 同一条派生路径）；
+  并加生成期自检 `EnsureFullHpBranch`——调用点在 `EmitGolden` **之前**，断言
+  `Fixture.target_hp == derived.max_hp`，不等 ⇒ `RED FIXTURE_CONTRACT` rc=2、**不落盘**，
+  错误串点名「full 支必须整血构造」。效果：改 `TargetLevel` 时 `full` 自动跟到新 MaxHP；
+  有人手改成非满血，生成器直接拒绝——「满血不治疗」分支不会再静默消失。
+- **牙（实测，最终形态）**：把 `fullHp` 故意设成 `MaxHp - 1` ⇒ `--case healing` rc=2：
+  `RED FIXTURE_CONTRACT [healing/full] full 支必须整血构造：Fixture.target_hp=223 != derived.max_hp=224（Fixture.target_max_hp=224；…）`；
+  同次 `--out` 的目标文件**未创建**（`ls` 不存在）。还原（`cp` 快照、`sha256` 相等、无 MUTATION 残留）后复绿，
+  `healing-after-final.json` 与派生前的 `healing-after.json` 除墙钟 `delivery` 外逐字段相同。
+- **初版自证无牙（留痕，未入库）**：第一版把门槛复用构造用的 `fullHp` —— 「传什么就比什么」，门恒真；
+  变异 `MaxHP-1` 仍 rc=0 并落盘。改为在门内**从 spec 等级现算** `derived.max_hp` 后才咬住。
+  教训：自检的门槛必须独立于被检对象的来源，否则只是同义反复。
