@@ -189,7 +189,32 @@ public static class Program
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
+        // 牙 A（opc-07 2026-11-20）：**0 字节副本必须被重拷**。预置 0 字节 Exps.conf ⇒
+        // EnsureConfFiles 后文件必须非空、且 Level20 可读出（否则以后同类缺载还会漏过去）。
+        string expsDst = Path.Combine(baseDir, "Exps.conf");
+        if (File.Exists(expsDst))
+        {
+            File.WriteAllBytes(expsDst, Array.Empty<byte>());
+            EnsureConfFiles(out _, out _);
+            var text = File.ReadAllText(expsDst);
+            bool reCopied = new FileInfo(expsDst).Length > 0 && text.Contains("Level20=");
+            Console.Error.WriteLine((reCopied ? "ZERO_CONF_RECOPY OK" : "ZERO_CONF_RECOPY FAILED"));
+            if (!reCopied)
+            {
+                return 1;
+            }
+        }
+        // 生产路径在  初始化显式调 ； 静态构造不调。
+        SystemModule.SystemShare.ExpConf.LoadConfig();
         var cfg = SystemModule.SystemShare.Config;
+        // 牙 B：Exps 必须真的读进来（此前 `--config-selftest` 从不读 Exps ⇒ 缺载也能绿）。
+        int needExp20 = cfg.NeedExps.Length > 20 ? cfg.NeedExps[20] : -1;
+        if (cfg.NeedExps.Length <= 20 || needExp20 != 6000)
+        {
+            Console.Error.WriteLine("CONF_EXPS_FAILED need_exps_len=" + cfg.NeedExps.Length + " level20=" + needExp20);
+            return 1;
+        }
+        Console.Error.WriteLine("CONF_EXPS_OK level20=" + needExp20);
         var outObj = new
         {
             base_dir = baseDir,
@@ -197,6 +222,8 @@ public static class Program
             copied = copied,
             magic_attack_rage = cfg.MagicAttackRage,
             send_ref_msg_range = cfg.SendRefMsgRange,
+            need_exps_level20 = needExp20,
+            need_exps_len = cfg.NeedExps.Length,
             fireboom_rage = cfg.FireBoomRage,
             items = cfg.ItemNumber,
         };
