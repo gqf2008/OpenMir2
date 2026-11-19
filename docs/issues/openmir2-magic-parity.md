@@ -746,6 +746,10 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   与 `sg.state.wabil.hp = e.hp`（entity→wabil，多处同步点）保持同值。
   **⇒ 产品读实体是对的，不改产品**；反过来读 `sg.state.wabil` 会在「快照未同步」或「怪物目标」
   两种真实形态下读错（与 IT-08 的 Abil/WAbil 是同类坑，方向相反）。
+- **同一结构里两种字段的「实时性」不同（别拿 IT-08 的结论套到 HP 上）**：oracle 的
+  `WAbil.HP/MP` 是**实时被写**的（受击/回血/`HealthSpellChanged` 都直接读写它）；而
+  `WAbil.Exp` 只在**登录/重算**时从 `Abil` 同步（`PlayObject.cs:1310-1312`）——IT-08 说的
+  「Abil/WAbil 不同步」是**数据面（Exp 类）**问题，不能反向套到 HP/MP 上。
 - 前提与钉法：登录后二者同源（`apply_ability_to_entity`），28 支窗口内无 HP 变化 ⇒ 恒等成立。
   夹具必须把目标**实体与 `Abil`（登录派生后的 WAbil）对齐**，并加断言
   「entity.hp/max_hp == 该 case 的 WAbil.hp/max_hp」；**不允许**用夹具对齐去掩盖产品读错对象——
@@ -761,3 +765,25 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   `FindSeedForFirstDraw(6, k)` 扫描（C# helper 由 `Random(10)` 版参数化）。
 - `GetRPow(SC)` 在 `HiByte<=LoByte` 时**不抽**（`src/M2Server/Magic/MagicManager.cs:121-131`）；
   夹具 `SC=15` ⇒ pass 支只多 `GetPower13` 的 `Random(0)` 一抽；`boTrain=true` ⇒ 共享尾训练抽 `Random(3)+1`。
+
+#### (d) 实现记录（2026-11-20，提交 `fadb5db5e`）
+
+- **C#**：`RunMagicCase` 等待改 `spec.WaitMs`（默认 1200，28 = 1600，写进 `Fixture.wait_ms`）；
+  新增 `ShowHpBatch`（`FindSeedForFirstDraw(6, {5,4,3})` ⇒ miss/edge/hit，seed 6/2/13）；
+  登录序补最后一步 `target.RecalcAbilitys()`（把 `Abil` 物化到 `WAbil`）+ 装 NetChannel 前
+  `DrainRaw()` 清登录帧。**红证**：去掉这一步时 28 的 `SM_OPENHEALTH(1100)` 的 MaxHP=0
+  （RM 10410 的 p2 同）——证据 `mir2-rs/target/magic-parity/evidence/showhp-fixture-red.log`。
+- **golden `golden/magic/showhp.json`**：miss(RNG `[5]`, 2 趟) / edge(`[4,0,0]`, 3 趟) /
+  hit(`[3,0,2]`, 3 趟)，`hit_cap=false`。edge/hit：caster `[638,640,1100]`、
+  target `[17,638,1100]`、obs_in 同 target、obs_out 空；1100 的 param=100(HP)/tag=224(MaxHP)；
+  RM = 10008/10120（众人）+ 10123(仅 caster,255,late) + 8040(仅 target,255,late) + 10410(众人,170)。
+- **Rust 驱动**：交付段改为**按 due 时刻分步**（步长 100ms、总量 = golden `Fixture.wait_ms`），
+  每步按 `sim_loop` 同序 B4→B3 —— 28 的 640@1000ms 必须先于 1100@1500ms；一次跳满会让同一
+  `SpellFrameBuf` 按优先级把 1100(170) 排在 640(255) 前（牙 B 实测 `[638,1100,640]`）。
+  RM 8040/10410 由内部事件 `SelfDelayOutcome.open_health` 组装（不由 SM 帧反推）；28 的目标
+  实体/WAbil 对齐 HP=100/MaxHP=224，并在驱动内断言「实体 HP/MaxHP == WAbil HP/MaxHP」。
+- **牙**（`…/evidence/tooth-showhp-final.log`）：A 删 B3 调用 ⇒ `caster 恰 1 条 SM 1100` 0≠1；
+  B 一次跳满 ⇒ `caster 帧序` `[638,1100,640]`≠`[638,640,1100]`；C 实体 max_hp 置 100 ⇒
+  前提断言 (100,100)≠(100,224)。三颗复原后 `lib.rs` sha 相等、无 `MUTATION` 残留。
+- **回归**：33 支驱动全 rc=0（`…/evidence/regression-showhp-1.log`）、11 支比较器 0 红、
+  既有 9 颗比较器牙全过。**分步交付对既有 10 条 verified 的台账无影响**（同批回归已证）。
