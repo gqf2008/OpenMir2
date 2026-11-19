@@ -147,8 +147,8 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 
 - 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`、`packlen-rust-test.log`、`RUNS.txt`）；
 - **Rust 侧测试**：`mir2-rs/bins/game-gate/src/lib.rs` 的 `tests::upstream_body_bound_rejects_pathological_lengths`（`lib.rs:2176-2200`）；**原文见实跑日志** `E:/UserFleet/evidence-cardfix-20261119/packlen-rust-test.log`（卡面不再手抄代码块）。
-- **构建命令 + `git status --porcelain` 原文**：`E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`（采集时 porcelain = 0 行）；
-- 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
+- **构建命令 + `git status --porcelain` 的测量命令与输出**：`E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`（卡面不写行数）；
+- 实跑命令与 `git status --porcelain` 的测量命令：见上述日志（卡面不写行数）；
 - **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
   实跑帧/JSON 产物为准。
 > 来源：QA 签署摘要 —— 公共路径 `E:/UserFleet/qa/qa-merged-cards-signoff-20261119.md`。
