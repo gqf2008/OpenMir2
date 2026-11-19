@@ -357,3 +357,18 @@ DBSrv 的戳组**不在** `w-rust-gate.ps1`（那个脚本只管 Rust 四件 exe
   `SHA256SUMS.sha256` 18 条，`sha256sum -c` 全 `OK`）；旧 `release-csharp-m9-572a0b8a` 原样保留，
   新增 `PROVENANCE.ADDENDUM-20261120.txt` 标注 MongoDB 件的内嵌/戳不一致与 supersede 关系。
 
+### 7.10 a2 只读评审整改（2026-11-20）
+
+- **A1**：`start-m1-stack.ps1` 的 `$srcGroups`（源目录门）改为从 `tools/orchestration/stamp-groups.psd1`
+  取名单（此前同文件内联 6+3，与影子门两套清单会静默漂移）；源目录戳校验同时带 `-OwnGlobs`。
+- **D5**：`tools/window/start-csharp.ps1` 的戳门从「只 DBSrv」扩到「DBSrv 6 + LoginSrv 3」——
+  该脚本的 `$components` 本来就会拉起 LoginSrv。带 `-GateOnly` 只跑闸门不起进程；正/反例在
+  **夹具根**（`E:/UserTemp/d5-gate-root`，仅含 6+3 自有件与戳）上真跑，**未在真实栈根演示**
+  （真实栈根会起进程）。
+- **C4**：`start-m1-stack.ps1` 注释「两目录 8 件」→「两目录 9 件（DBSrv 6 + LoginSrv 3）」。
+- **B1–B4 / C2 / C3 / D1 / D2 / D4**：`docs/binary-provenance-stamp-20261115.md` 补 R5 判据与 §11；
+  改写「没有把 commit 内嵌进二进制」；登记 Rust 条件性判据的**静默跳过**风险；补短 head 前缀匹配弱化；
+  自测矩阵由 10 行改为 16 例（Case 9–16 补齐）；写入 `$Head`/`$heads` 大小写撞名与 PS 5.1 无
+  `Import-PowerShellDataFile` 的坑；`dist` 在仓库与 E:/UserFleet 均查无出处——**此前未登记**，已写明
+  发布目录不使用 `dist`。
+

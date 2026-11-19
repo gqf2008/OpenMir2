@@ -17,6 +17,7 @@
 #   powershell -NoProfile -ExecutionPolicy Bypass -File tools/window/start-csharp.ps1
 #   powershell ... -Seed 42 -RngLog E:/tmp/window/run3/login_only/csharp/rng-stream.tsv
 #   powershell ... -Plan            # 只打印将执行的命令/env，不启动
+#   powershell ... -GateOnly        # 只跑起栈前闸门（C# 戳门：DBSrv 6 + LoginSrv 3），不起任何进程
 #   powershell ... -Stop            # 按 pid 文件停掉本栈
 #
 # 退出码：0 = 全部角色端口就绪（或 -Plan/-Stop 成功）；1 = 缺件/构建失败/端口未就绪；2 = 参数错误。
@@ -30,6 +31,7 @@ param(
   [int]$WaitSeconds = 180,
   [switch]$SkipHookDeploy,
   [switch]$Plan,
+  [switch]$GateOnly,
   [switch]$Stop
 )
 $ErrorActionPreference = 'Stop'
@@ -171,13 +173,12 @@ function Start-One($Name, $Dir, $Exe, $Ports) {
   Start-Sleep -Milliseconds 400
 }
 
-# **DBSrv provenance 闸门**（卡 `openmir2-dbsrv-build-stamp`）：起**任何进程之前**校验 DBSrv 影子产物（清单单一来源 `tools/orchestration/stamp-groups.psd1`，6 件）。
+# **DBSrv provenance 闸门**（卡 `openmir2-dbsrv-build-stamp`）：起**任何进程之前**校验本栈拉起的 C# 产物——DBSrv 6 件 + LoginSrv 3 件（D5；清单单一来源 `tools/orchestration/stamp-groups.psd1`）。
 # 对象是**影子路径** `$Root/DBSrv`（不是 `src\DBSrvin\Release`）——本栈踩过「影子不刷新 ⇒ 静默跑旧 DBSrv」。
 # 判据：清单每件都有 `.build.json` 戳、戳内 sha256 与实物一致、built_at 与 mtime 差 ≤5 分钟；缺一即 RED，
 # **不写 pid 文件、不起任何进程**。工具内部用 SHA256::Create（本机 PowerShell 没有 Get-FileHash）。
 $stampTool = Join-Path $Repo 'tools\orchestration\stamp-binaries.ps1'
 $groupsFile = Join-Path $Repo 'tools\orchestration\stamp-groups.psd1'
-$dbsShadow = Join-Path $Root 'DBSrv'
 if (-not (Test-Path -LiteralPath $stampTool)) {
   Write-Output ('RED: 缺产戳工具 ' + $stampTool)
   Log-Step 'RED missing stamp tool'
@@ -192,18 +193,39 @@ if (-not (Test-Path -LiteralPath $groupsFile)) {
 # 不存在；dot-source `.psd1` 在 5.1 上不执行、返回 null，已实测）⇒ 用 Invoke-Expression 解析。
 # 该文件在仓库内、随 git 评审，与实际执行这些脚本同一信任级。
 $stampGroups = Invoke-Expression ((Get-Content -LiteralPath $groupsFile -Raw))
-$dbsNames = (@($stampGroups.Groups.DBSrv) -join ',')
-$dbsGlobs = (@($stampGroups.OwnGlobs.DBSrv) -join ',')
-# `-OwnGlobs` 独立于 `-RequireAll`（R3）：未入清单的自家 DLL ⇒ UNLISTED_OWN_BINARY。
-& powershell -NoProfile -ExecutionPolicy Bypass -File $stampTool -Check -BinDir $dbsShadow -RepoRoot $Repo -RequireAll -Names $dbsNames -OwnGlobs $dbsGlobs
-$stampRc = $LASTEXITCODE
-if ($stampRc -ne 0) {
-  Write-Output ('RED: DBSrv 影子产物 provenance 校验失败 rc=' + $stampRc + '（bin=' + $dbsShadow + '）—— 不起任何进程')
-  Log-Step ('RED provenance rc=' + $stampRc)
-  exit 1
+# D5：本栈 `$components` 同时拉起 DBSrv 与 LoginSrv ⇒ 两组都要过戳门（此前只覆盖 DBSrv）。
+$gateGroups = [ordered]@{
+  'DBSrv'    = @($stampGroups.Groups.DBSrv)
+  'LoginSrv' = @($stampGroups.Groups.LoginSrv)
 }
-Write-Output ('STAMP_GATE OK ' + $dbsShadow)
-Log-Step 'STAMP_GATE OK'
+foreach ($g in $gateGroups.Keys) {
+  $gdir = Join-Path $Root $g
+  if (-not (Test-Path -LiteralPath $gdir)) {
+    Write-Output ('RED: 缺影子目录 ' + $gdir + '（' + $g + '）—— 不起任何进程')
+    Log-Step ('RED missing shadow ' + $g)
+    exit 1
+  }
+  $gNames = (@($gateGroups[$g]) -join ',')
+  $gGlobs = (@($stampGroups.OwnGlobs[$g]) -join ',')
+  # `-OwnGlobs` 独立于 `-RequireAll`（R3）：未入清单的自家 DLL ⇒ UNLISTED_OWN_BINARY。
+  & powershell -NoProfile -ExecutionPolicy Bypass -File $stampTool -Check -BinDir $gdir -RepoRoot $Repo -RequireAll -Names $gNames -OwnGlobs $gGlobs
+  $stampRc = $LASTEXITCODE
+  # rc 可推不可见：显式打一行，反例日志里能直接读到子进程退出码。
+  Write-Output ('STAMP_RC ' + $g + '=' + $stampRc)
+  if ($stampRc -ne 0) {
+    Write-Output ('RED: ' + $g + ' 影子产物 provenance 校验失败 rc=' + $stampRc + '（bin=' + $gdir + '）—— 不起任何进程')
+    Log-Step ('RED provenance ' + $g + ' rc=' + $stampRc)
+    exit 1
+  }
+  Write-Output ('STAMP_GATE OK ' + $g + ' shadow')
+  Log-Step ('STAMP_GATE OK ' + $g)
+}
+# `-GateOnly`：只跑上面的 C# 戳门（DBSrv 6 + LoginSrv 3），不进入 roles、不起任何进程。
+if ($GateOnly) {
+  Write-Output 'GATE_ONLY_OK'
+  Log-Step 'GATE_ONLY_OK'
+  exit 0
+}
 
 Log-Step 'BEGIN roles'
 foreach ($c in $components) {
