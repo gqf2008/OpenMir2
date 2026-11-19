@@ -26578,13 +26578,21 @@ fn sim_loop(
         }) {
             Ok(load) => {
                 let mut rename_rand = |min: i32, max: i32| world.rng.get_random_number(min, max);
-                let host = game_svr::npc::NpcHost::load(
+                let host = match game_svr::npc::NpcHost::load(
                     &envir_root,
                     &load.quest_npcs,
                     &load.merchants,
                     enter_cfg.script_goto_count_limit,
                     &mut rename_rand,
-                );
+                ) {
+                    Ok(host) => host,
+                    Err(e) => {
+                        // oracle：`LoadScriptFile` 的异常穿出 `WorldServer.Initialize` 整批中止
+                        // （无 try/catch）；这里同样不吞，让世界初始化直接失败。
+                        glog!("ERR", "NPC 脚本装载中止（oracle 同输入整批中止）：{e}");
+                        panic!("NPC 脚本装载中止：{e}");
+                    }
+                };
                 glog!(
                     "INF",
                     "MapQuest 隐藏 NPC 宿主就绪：quest_npcs={} merchants={} 装载失败={} ManageNPC={} FunctionNPC={} goto_limit={}",

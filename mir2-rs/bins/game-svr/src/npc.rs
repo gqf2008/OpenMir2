@@ -526,13 +526,16 @@ impl NpcHost {
     ///
     /// `rename_rand` 是解析器重名 label 改名用的随机源（oracle `RandomNumber.GetRandomNumber(1,200)`；
     /// 生产路径必须传**世界同一条** RNG，见 R-4/Claim B）。
+    /// 返回 `Err` = **整批中止**：oracle 的 `LoadScriptFile` 抛异常时，
+    /// `WorldServer.Initialize → MerchantInitialize → NpCinitialize` 全链没有 try/catch，
+    /// 异常会穿出并中止整批 NPC/商家装载（卡 `openmir2-quests-parity` §10.6）。
     pub fn load(
         envir_root: &Path,
         quest_npcs: &[QuestNpcRecord],
         merchants: &[QuestNpcRecord],
         goto_count_limit: i32,
         rename_rand: &mut dyn FnMut(i32, i32) -> i32,
-    ) -> Self {
+    ) -> Result<Self, mir2_script::LoadPanic> {
         let parsers = ScriptParsers::new();
         let fs = LocalFs;
         let mut defs: Vec<NpcDef> = Vec::new();
@@ -556,13 +559,16 @@ impl NpcHost {
                 Ok(Some(outcome)) => (outcome.scripts, true),
                 Ok(None) => (Vec::new(), false),
                 Err(panic) => {
-                    failures.push(NpcLoadFailure {
-                        chr_name: record.chr_name.clone(),
-                        file_path: record.file_path.clone(),
-                        script_name: script_name.clone(),
-                        reason: panic.to_string(),
-                    });
-                    (Vec::new(), false)
+                    // 行为与 oracle 一致：整批中止（不记录后继续）。日志不算偏离。
+                    eprintln!(
+                        "ERR NPC 脚本装载中止：chr_name={} file_path={} script_name={} reason={} 已装载={} 条",
+                        record.chr_name,
+                        record.file_path,
+                        script_name,
+                        panic,
+                        defs.len()
+                    );
+                    return Err(panic);
                 }
             };
             defs.push(NpcDef {
@@ -577,12 +583,12 @@ impl NpcHost {
                 actor_id: i32::try_from(idx + 1).unwrap_or(i32::MAX),
             });
         }
-        NpcHost {
+        Ok(NpcHost {
             envir_root: envir_root.to_path_buf(),
             defs,
             failures,
             goto_count_limit,
-        }
+        })
     }
 
     /// `QuestNpcList`/`MerchantList` 的 `FindNPC`/`GetNpc` 口径（`ChrName`，大小写不敏感）。
@@ -2610,7 +2616,8 @@ mod tests {
         };
         let mut rng = no_rng();
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty(), "{:?}", host.failures);
         assert_eq!(host.defs.len(), 1);
         assert!(host.defs[0].loaded, "QManage.txt 必须被解析");
@@ -2642,7 +2649,8 @@ mod tests {
             is_quest: false,
         };
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty());
         assert!(!host.defs[0].loaded);
         let mut rng = no_rng();
@@ -4234,7 +4242,8 @@ Other
             is_quest: false,
         };
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty(), "{:?}", host.failures);
         let mut rng = no_rng();
         let mut player = NpcPlayer::empty(&mut rng);
@@ -4303,7 +4312,8 @@ Other
             is_quest: false,
         };
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty(), "{:?}", host.failures);
         let mut rng = no_rng();
         let mut player = NpcPlayer::empty(&mut rng);
@@ -4479,7 +4489,8 @@ Other
             is_quest: false,
         };
         let mut rename = move |_min: i32, _max: i32| 1;
-        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename);
+        let host = NpcHost::load(&root.join("Envir"), &[record], &[], 40, &mut rename)
+            .expect("脚本装载中止");
         assert!(host.failures.is_empty(), "{:?}", host.failures);
         let mut rng = no_rng();
         let mut player = NpcPlayer::empty(&mut rng);
