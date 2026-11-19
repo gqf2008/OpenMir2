@@ -1,0 +1,23 @@
+# mutation: '!hit_cap && max_passes == 8' -> '!hit_cap && max_passes == 1'
+# filter: useitem::tests::matches_oracle_eat_fixture
+# rc=101
+
+
+running 1 test
+test useitem::tests::matches_oracle_eat_fixture ... FAILED
+
+failures:
+
+failures:
+    useitem::tests::matches_oracle_eat_fixture
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.01s
+
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.83s
+     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
+
+thread 'useitem::tests::matches_oracle_eat_fixture' (37212) panicked at bins\game-svr\src\useitem.rs:1037:13:
+eat_ok_shape1_fixed: 抽空上限异常 hit_cap=false max_passes=8
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p game-svr --lib`

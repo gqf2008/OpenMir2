@@ -5,8 +5,8 @@
 running 1 test
 test useitem::tests::z4_golden_nonzero_rust_zero_red ... ok
 
-test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.01s
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
 
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.92s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.16s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)

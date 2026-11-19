@@ -63,6 +63,12 @@ MUTATIONS = [
         "        a.sort();\n        b.sort();\n        true\n    }",
         "useitem::tests::tooth_notice_priority_changed_red",
     ),
+    (
+        "D_drain_cap_removed",
+        "!hit_cap && max_passes == 8",
+        "!hit_cap && max_passes == 1",
+        "useitem::tests::matches_oracle_eat_fixture",
+    ),
 ]
 
 

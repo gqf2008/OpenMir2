@@ -13,6 +13,7 @@
 | `Z4_gate_removed` | `z4_ok` 恒 `true` | `z4_golden_nonzero_rust_zero_red`：golden 非零而 Rust 全零未检出 |
 | `Z5_layer_removed` | 两层判断恒 `true` | `z5_single_layer_red`：只 SM 一层被判合格 |
 | `Z6_notice_equal_stubbed` | `notices_equal` 恒 `true` | `tooth_notice_priority_changed_red`：改 priority 未被检出 |
+| `D_drain_cap_removed` | 测试 rig `drain_ok` 上限 `8→1` | `matches_oracle_eat_fixture`：抽空上限异常（`hit_cap=false max_passes=8` 被判不合格） |
 
 ## Z4/Z5 适用面（口径，非"每例强判"）
 

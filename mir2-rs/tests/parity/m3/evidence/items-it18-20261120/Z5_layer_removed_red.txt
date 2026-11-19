@@ -39,10 +39,10 @@ warning: unused variable: `doc`
     = note: `#[warn(unused_variables)]` (part of `#[warn(unused)]`) on by default
 
 warning: `game-svr` (lib test) generated 2 warnings (run `cargo fix --lib -p game-svr --tests` to apply 1 suggestion)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 17.76s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 19.92s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
-thread 'useitem::tests::z5_single_layer_red' (13916) panicked at bins\game-svr\src\useitem.rs:842:9:
+thread 'useitem::tests::z5_single_layer_red' (30288) panicked at bins\game-svr\src\useitem.rs:842:9:
 只有 SM 一层必须不合格
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 error: test failed, to rerun pass `-p game-svr --lib`

@@ -6,3 +6,4 @@ M2_unbind_dura: red_rc=101 red_failed=True green_rc=0 green_ok=True
 Z4_gate_removed: red_rc=101 red_failed=True green_rc=0 green_ok=True
 Z5_layer_removed: red_rc=101 red_failed=True green_rc=0 green_ok=True
 Z6_notice_equal_stubbed: red_rc=101 red_failed=True green_rc=0 green_ok=True
+D_drain_cap_removed: red_rc=101 red_failed=True green_rc=0 green_ok=True

@@ -14,10 +14,10 @@ failures:
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
 
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.32s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.66s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
-thread 'useitem::tests::tooth_notice_priority_changed_red' (25308) panicked at bins\game-svr\src\useitem.rs:735:9:
+thread 'useitem::tests::tooth_notice_priority_changed_red' (5204) panicked at bins\game-svr\src\useitem.rs:735:9:
 改 priority 必须红
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 error: test failed, to rerun pass `-p game-svr --lib`
