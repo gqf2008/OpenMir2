@@ -10612,6 +10612,11 @@ fn handle_eat_cmd(
         out.immediate_frames.len(),
         out.notices.len()
     );
+    // IT-08 `GetExp`：落**基础** `Abil.Exp`（`sg.equip.abil`）。`WAbil`（`sg.state.wabil`）保持**陈旧、不在此同步**——
+    // oracle `GetExp` 只改 `Abil`，仅 `AbilCopyToWAbil`（登录/重算）才 `WAbil = Abil.Clone()`。`SM_WINEXP` 取基础 exp。
+    if let Some(d) = out.exp_delta {
+        sg.equip.abil.exp = sg.equip.abil.exp.wrapping_add(d);
+    }
     // 状态迁移写回会话（`use_item` 只在成功分支改集合；失败分支原样返回）。
     sg.state.item_list = item_list;
     sg.state.wabil = state.wabil;

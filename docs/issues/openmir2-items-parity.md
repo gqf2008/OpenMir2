@@ -259,3 +259,23 @@ oracle 是 `int`（`GetTickCount()` i32，含回绕），宿主存 `[i64;7]`。�
 
 因新增 `f64`（`body_luck`）无法 `Eq`；保留 `PartialEq`（仍**逐全字段**比较，含 `extra`）。已 grep 确认无代码依赖 `Eq` 约束
 （`Eq` 仅标记；`==`/`assert_eq!` 用 `PartialEq`）⇒ 不存在「原本靠 Eq 的相等判定变恒真」。
+
+### 9.5 `Abil` vs `WAbil`（Exp 真值源；`opc-07` 2026-11-20 质询后钉死）
+
+**oracle：同 `Ability` 类型、两个实例**
+- `Abil` = 基础真值（`BaseObject.cs` `public Ability Abil`）；`WAbil` = 客户端/下发视图（`public Ability WAbil`），
+  `AbilCopyToWAbil()` 里 `WAbil = Abil.Clone()`。
+- `GetExp` 只写 `Abil.Exp/Level/MaxExp`；`RM_WINEXP→SM_WINEXP` 读 `Abil.Exp`；`WAbil.Exp` 仅在登录/重算块从 `Abil` 同步
+  ⇒ **非升级 `GetExp` 后 `WAbil.Exp` 是陈旧值**。
+
+**Rust 对应**
+- `sg.equip.abil` = 基础 `Abil`（`RecalcInputs.abil = &sg.equip.abil`；宿主战斗版 GetExp 写 `sg.equip.abil.exp/level/max_exp`）。
+- `sg.state.wabil` = `WAbil`（`recalc_session_ability` 输出；`UseItemActorState.wabil` 文档即「`PlayObject.WAbil`」）。
+
+**对本轮的后果**：`e42c43fdd` 的 IT-08 曾 `state.wabil.exp +=`（WAbil，**错对象**）⇒ **返工**：item `GetExp` 必须落到
+基础 `sg.equip.abil.exp` 并同步 WAbil/entity，`SM_WINEXP` 取基础 exp。返工方式（待 `opc-07` 定 A/B）：
+A = `Outcome` 回 `exp_delta`，宿主落基础 + 同步（与宿主战斗版 `GetExp` 同源）；B = `UseItemActorState` 加 `abil: Ability`（基础）字段。
+
+**A 已实现（`e42c43fdd` 返工）**：`use_item` 不再改 `WAbil.Exp`，回 `Outcome.exp_delta`；宿主 `handle_eat_cmd` 落**基础** `sg.equip.abil.exp`、
+**不同步 `WAbil`**。待补（据此再加证）：①宿主级用例（吃经验书后 `base_exp` 变、`wabil.exp` 未变；触发一次重算后两者相等）；②`SM_WINEXP` 取基础 exp；
+③oracle 夹具（Shape13 非升级）；④升级支。

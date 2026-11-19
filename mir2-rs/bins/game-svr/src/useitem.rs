@@ -301,6 +301,9 @@ pub struct UseItemOutcome {
     /// `SendDefMessage(SM_EAT_OK)` **之前** ⇒ 接线层必须先下发本列、再下发 `immediate_frames`。
     /// 空 = 本次没有解包（`StdMode != 31` / `AniCount != 0` / 容量门失败 / 空名或名字查不到模板）。
     pub added_items: Vec<BagItem>,
+    /// IT-08：本次 `GetExp` 的经验增量（基础 `Abil.Exp` 侧）。宿主落 `sg.equip.abil.exp`（**不改 `WAbil.Exp`**——
+    /// oracle `GetExp` 后 WAbil 陈旧，仅 `AbilCopyToWAbil` 在登录/重算时同步）。非 GetExp ⇒ `None`。
+    pub exp_delta: Option<i32>,
 }
 
 /// `ClientUseItems`（`PlayObject.Operate.cs:601`）的纯函数等价物（StdMode 0/1/2 + 31 的两支）。
@@ -316,6 +319,7 @@ pub fn use_item(
     item_number: &mut i32,
 ) -> UseItemOutcome {
     let mut eaten = false;
+    let mut exp_delta: Option<i32> = None;
     let mut removed_index: Option<usize> = None;
     let mut notices: Vec<QueuedNotice> = Vec::new();
     let mut added_items: Vec<BagItem> = Vec::new();
@@ -457,9 +461,9 @@ pub fn use_item(
                             // RM_WINEXP）；**升级支**（`Exp>=MaxExp → GetLevelExp/RecalcLevelAbilitys/SM_LEVELUP/…`）**未实现**，登记 T-17。
                             // IT-07（Shape12 ExtraAbil×6）与 default → EatUseItems（IT-09..16 move 组）亦未实现。
                             3 if tpl.shape == 13 => {
-                                // `GetExp`（`PlayObject.Base.cs:149-166`）非升级支。
-                                state.wabil.exp =
-                                    state.wabil.exp.wrapping_add(i32::from(tpl.dura_max));
+                                // `GetExp`（`PlayObject.Base.cs:149-166`）非升级支：**不改 `WAbil.Exp`**
+                                //（oracle 后 WAbil 陈旧），经验增量经 `Outcome.exp_delta` 交宿主落基础 `sg.equip.abil.exp`。
+                                exp_delta = Some(i32::from(tpl.dura_max));
                                 crate::add_body_luck(
                                     &mut state.extra.body_luck,
                                     &mut state.extra.body_luck_level,
@@ -541,6 +545,7 @@ pub fn use_item(
         immediate_frames,
         notices,
         added_items,
+        exp_delta,
     }
 }
 
@@ -939,7 +944,15 @@ mod tests {
         let mut item_number = 0;
         let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(out.eaten, "经验卷吃掉");
-        assert_eq!(state.wabil.exp, 100, "GetExp: Exp += DuraMax");
+        assert_eq!(
+            out.exp_delta,
+            Some(100),
+            "GetExp: exp_delta = DuraMax（交宿主落基础 Abil.Exp）"
+        );
+        assert_eq!(
+            state.wabil.exp, 0,
+            "use_item **不改 WAbil.Exp**（oracle GetExp 后 WAbil 陈旧，仅 AbilCopyToWAbil 同步）"
+        );
         assert_eq!(state.wabil.level, 5, "非升级支：等级不变");
         assert!(
             (state.extra.body_luck - 0.2).abs() < 1e-9,
