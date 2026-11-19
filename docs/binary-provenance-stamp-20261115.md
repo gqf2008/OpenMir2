@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | `mir2-server.exe` | **有** | `mir2-rs/target/release/mir2-server.build.json`，`format=mir2-build-stamp/1`，由 `tools/window/rebuild-server.ps1:89` 生成；现存戳 `head=d5ed14508…`、`built_at=2026-11-02`（已陈旧） |
 | `game-svr` / `game-gate` / `login-gate` / `sel-gate` | **无** | bot 窗口实际拉起的就是这四个（360s 归档 `start-stack.out.log` 实测）；目前只能 `mtime+sha` 人工登记 |
-| `DBSrv` / `LoginSrv`（C#） | **有（DBSrv 6 件 / LoginSrv 3 件；2026-11-19 起）** | 清单单一来源 `tools/orchestration/stamp-groups.psd1`（起栈门/冻结/窗口门禁/三处对齐共用）；`stamp-binaries.ps1` 支持 `.dll` 目标、`-RequireHead` 与 `-OwnGlobs` 覆盖检查（未入清单的自家 DLL ⇒ `UNLISTED_OWN_BINARY`，独立于 `-RequireAll`）。部署件 head = `572a0b8a`，**落后当前 master 是已知且可解释的状态**——身份链只回答「这份件来自哪个提交」，部署件与冻结件 sha 一致即满足目的；为「跟到当前 master」重建/替换/重冻结会引入不必要的生产变更，故不做。 |
+| `DBSrv` / `LoginSrv`（C#） | **有（DBSrv 6 件 / LoginSrv 3 件；2026-11-19 起）** | 清单单一来源 `tools/orchestration/stamp-groups.psd1`（起栈门/冻结/窗口门禁/三处对齐共用）；`stamp-binaries.ps1` 支持 `.dll` 目标、`-RequireHead` 与 `-OwnGlobs` 覆盖检查（未入清单的自家 DLL ⇒ `UNLISTED_OWN_BINARY`，独立于 `-RequireAll`）。2026-11-20 已在 M29（`f5ae02c7…`）强制重编全 C# 栈并重产戳：部署件与新冻结集 head 均为 `f5ae02c7…`；此前 m9 冻结集里的 MongoDB 插件曾出现「内嵌 M8 / 戳 M9」的不一致（增量构建跳过 + 事后产戳），已由本次重建消除，旧集原样保留并在其目录内加注（`PROVENANCE.ADDENDUM-20261120.txt`）。 |
 
 反例：`E:/MirServer/M2GameSvr/GameSrv.exe` sha256 `ab655008…`、mtime 2026-10-22，异常栈 PDB 指向**已删除**的 worktree `OpenMir2-wt-goods` ⇒ 部署目录里的二进制无法自证来源。
 
