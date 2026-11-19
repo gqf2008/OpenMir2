@@ -12,13 +12,13 @@
   首次产出：**verified 0 / implemented 63 / missing 2**。
 - `verified` 的门槛：**与原版同输入、帧级对拍通过**（帧逐字节 + RNG 抽取次数与逐次取值全等），
   并在清单里写测试名。没有测试名不许标 `verified`。
-- `missing` 2 条：35 `WINDTEBO`（`MagicManager.cs:524-529`）、
-  39 `GROUPDEDING`（`MagicManager.cs:549-553`）。
+- `missing` 2 条：35 `WINDTEBO`（`src/M2Server/Magic/MagicManager.cs:524-529`）、
+  39 `GROUPDEDING`（`src/M2Server/Magic/MagicManager.cs:549-553`）。
 - 单独待办（不混进 implemented）：
   1. `buff_tick_gate` — 14/15/31 的 buff 生产链仅 `World::buff_tick_enabled()` 时生效（缺省关），
-     `mir2-rs/bins/game-svr/src/lib.rs:13229`；
-  2. `anti_magic_recalc` — 目标 `AntiMagic` 的 `RecalcAbilitys` 面未同步（`lib.rs:12170`）；
-  3. `version_gate_167` — `DoSpell` 版本门未接（`MagicManager.cs:167`）。
+     `mir2-rs/bins/game-svr/src/lib.rs` 的 `handle_spell_cmd_with_magic`（14/15/31 buff 生产链接线）；
+  2. `anti_magic_recalc` — 目标 `AntiMagic` 的 `RecalcAbilitys` 面未同步（`lib.rs` 的 `spell_target_anti_magic` 实体同步面）；
+  3. `version_gate_167` — `DoSpell` 版本门未接（`src/M2Server/Magic/MagicManager.cs:167`）。
 
 ## 2. 对拍装置（先建装置，再迁移/补分支）
 
@@ -47,7 +47,7 @@
 
 ## 3. 批序（先高频且确定）
 
-1. `1/5 火球`（`MagicManager.cs:174-203`）
+1. `1/5 火球`（`src/M2Server/Magic/MagicManager.cs:174-203`）
 2. `11/45 雷电`（`:289-314` / `:563-588`）
 3. `2 治愈`（`:204-224`）
 4. `13 灵魂火符`（`:315-327`、`:328-351`）
@@ -63,18 +63,18 @@
 
 | # | 分支（原版） | Rust 现有入口 | oracle 依据 | 迁移顺序 |
 |---|---|---|---|---|
-| 1 | 21 瞬息移动 | `crates/world-bevy/src/magic.rs:904` `mag_sace_move`；`crates/world-bevy/src/world.rs:7070` `cast_space_move_spell`；host `bins/game-svr/src/lib.rs:13527` | `MagicManager.cs:403-410`、`:876-891` | 1 |
-| 2 | 31 魔法盾 | `crates/world-bevy/src/world.rs:4395` `cast_shield_spell`；host `lib.rs:13306` | `MagicManager.cs:474-478` | 2 |
-| 3 | 22 火墙 | `crates/world-bevy/src/world.rs:751` 返回值；`crates/world-bevy/src/magic.rs:188` `power_fire_wall`；host `lib.rs:15300` | `MagicManager.cs:412-413`、`:1064-1098` | 3 |
-| 4 | 8/37 推人 | `crates/world-bevy/src/magic.rs:826` `mag_push_arround`；host `lib.rs:13552`、`lib.rs:68031` | `MagicManager.cs:24-52`、`:259-264`、`:601-606` | 4 |
-| 5 | 46 分身 | `crates/world-bevy/src/magic.rs:967` `mag_make_clone`；`crates/world-bevy/src/slave.rs:2534` | `MagicManager.cs:589-594`、`:1337-1341` | 5 |
-| 6 | 20 驯服 | `crates/world-bevy/src/magic_effect.rs`（`mag_tamming`，经 `magic.rs:35` 再导出） | `MagicManager.cs:394-401`、`:704-825` | 6 |
-| 7 | 28 心灵启示 | `crates/world-bevy/src/world.rs:5801` `cast_show_hp_spell` | `MagicManager.cs:431-440` | 7 |
+| 1 | 21 瞬息移动 | `crates/world-bevy/src/magic.rs` 的 `mag_sace_move`；`crates/world-bevy/src/world.rs` 的 `cast_space_move_spell`；host `bins/game-svr/src/lib.rs` 的 `cast_space_move_spell_with` 调用点 | `src/M2Server/Magic/MagicManager.cs:403-410`、`:876-891` | 1 |
+| 2 | 31 魔法盾 | `crates/world-bevy/src/world.rs` 的 `cast_shield_spell`；host `lib.rs` 的 `cast_shield_spell` 调用点 | `src/M2Server/Magic/MagicManager.cs:474-478` | 2 |
+| 3 | 22 火墙 | `crates/world-bevy/src/world.rs` 的 `FireWallOutcome` 返回值；`crates/world-bevy/src/magic.rs` 的 `power_fire_wall`；host `lib.rs` 的 `handle_spell_cmd_with_magic`（22 支） | `src/M2Server/Magic/MagicManager.cs:412-413`、`:1064-1098` | 3 |
+| 4 | 8/37 推人 | `crates/world-bevy/src/magic.rs` 的 `mag_push_arround`；host `lib.rs` 的 `cast_firewind_spell` 调用点、测试 `spell_cmd_firewind_enters_effect_draws_and_pushes` | `src/M2Server/Magic/MagicManager.cs:24-52`、`:259-264`、`:601-606` | 4 |
+| 5 | 46 分身 | `crates/world-bevy/src/magic.rs` 的 `mag_make_clone`；`crates/world-bevy/src/slave.rs` 的 `spawn_clone` | `src/M2Server/Magic/MagicManager.cs:589-594`、`:1337-1341` | 5 |
+| 6 | 20 驯服 | `crates/world-bevy/src/magic_effect.rs`（`mag_tamming`，经 `magic.rs` 再导出） | `src/M2Server/Magic/MagicManager.cs:394-401`、`:704-825` | 6 |
+| 7 | 28 心灵启示 | `crates/world-bevy/src/world.rs` 的 `cast_show_hp_spell` | `src/M2Server/Magic/MagicManager.cs:431-440` | 7 |
 
 **要求（每个迁移必须同时给）**
 1. **状态组件化**：冷却/技能等级/施法目标/吟唱进度做成 Component，走 `Query`/`ResMut`；
 2. **行为系统化**：施法判定、MP 扣除、命中/伤害结算、特效广播各自成 system，注册进 `HeadRunner`
-   的 `TickStage` 序列（`crates/world-bevy/src/world.rs:1838-1856` 是现有序列）；
+   的 `TickStage` 序列（`crates/world-bevy/src/world.rs` 的 `HeadRunner::new` 注册序列）；
 3. **段序写死并测试钉住**：卡面写明"在 head 还是 tail、在 AOI 前后"及理由；新增顺序测试；
 4. **行为不变**：迁移提交必须附该分支的对拍证据（第 2 节装置）；
 5. **确定性**：系统顺序固定 ⇒ RNG 消耗顺序固定。
@@ -248,7 +248,7 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 ## 14. Rust 侧驱动实现计划（下一步，可按此直接开工）
 
 1. **位置**：`mir2-rs/bins/game-svr/src/lib.rs` 的测试模块——`handle_spell_cmd_with_magic`
-   （`lib.rs:12833`）是 crate 私有函数，集成测试用不了；现有法术测试（如
+   （`lib.rs` 的 `handle_spell_cmd_with_magic`）是 crate 私有函数，集成测试用不了；现有法术测试（如
    `spell_cmd_a5_defence_area_buffs_target_in_range`）就在同文件，直接沿用其夹具范式。
 2. **输入复现**：读 `mir2-rs/tests/parity/golden/magic/fireball.json`（`include_str!`），
    对每支：`seed`、`anti_magic`、四个 ActorId（1001/1002/1003/1004 + 支偏移）、坐标
@@ -276,9 +276,9 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 **裁定（opc-07 倾向 + 我同意）：方案 1「最小世界」**——
 - 第一段：**直接调用** `handle_spell_cmd(_with_magic)`（不 tick）；
 - 第二段：**只调用延时结算系统**，不跑整条 `HeadRunner`。已确认可直接调用的入口：
-  `mir2_world_bevy::world::sim_self_deliver_stage_system`（`world.rs:2864`，`pub fn`），
-  延时魔法的结算体在 `crates/world-bevy/src/slave.rs:1970` 的 `deliver_delay_magic_impl` /
-  `DelayMagicDelivery`（`slave.rs:1558`）。
+  `mir2_world_bevy::world::sim_self_deliver_stage_system`（`world.rs`，`pub fn`），
+  延时魔法的结算体在 `crates/world-bevy/src/slave.rs` 的 `deliver_delay_magic_impl` /
+  `DelayMagicDelivery`（`slave.rs`）。
 - 时钟推进：只改世界时钟字段（或把 `DeliveryTime` 直接置为已到期），**不跑 tick 循环**。
 
 **降级条款（必须写死，防止方案 1 不可行时悄悄走样）**：若最小世界在**不改生产代码**的前提下
@@ -299,9 +299,9 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 ## 16. Rust 侧夹具与记账配方（已勘察，可直接照做）
 
 - **RNG 构造与注入**：`RandomNumber::with_seed(i32)`（`crates/shared/src/rng.rs:251`）；
-  `World.rng` 是 **public 字段**（`crates/world-bevy/src/world.rs:1005`）⇒ 夹具里
+  `World.rng` 是 **public 字段**（`crates/world-bevy/src/world.rs` 的 `SimState::rng`）⇒ 夹具里
   `world.rng = RandomNumber::with_seed(seed);` 即可，无需改生产代码。
-- **实体属性落点**：`EntitySpawn` 有 `hp: u16`（`entity.rs:555`）、`anti_magic: u16`（`:565`）、
+- **实体属性落点**：`EntitySpawn` 有 `hp: u16`（`entity.rs` 的 `EntitySpawn::hp`）、`anti_magic: u16`（`:565`）、
   `abil: Option<BaseAbil>`（`:568`）⇒ 夹具按金标准置 `hp=100 / anti_magic=3`，MC/Level 走 `abil`。
 - **记账器（现成，别自己包）**：`crates/shared/src/rng_trace.rs` 的生产级逐次 trace——
   设 `MIR2_RNG_LOG=<tsv 路径>` 后，`RandomNumber` 的每个取数入口都会落
@@ -317,7 +317,7 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 ### 16b. 总量断言的写法（定死：强形式 + 行号分段 + site 允许清单；**当前未实现**，随 Rust 比较器落地）
 
 **事实**：夹具建实体本身会抽 RNG（`new_player_entity_with_login_ctor` 的注释写明
-"`new PlayObject()` 5 抽里存活到实体的两个值"，`lib.rs:15980`）⇒ 不能直接数整份 TSV。
+"`new PlayObject()` 5 抽里存活到实体的两个值"，`lib.rs` 的 `new_player_entity_with_login_ctor` 文档注释）⇒ 不能直接数整份 TSV。
 
 **定死的写法（强形式）**：
 1. **行号分段（不是截断文件）**：`rng_trace` 的写入端持句柄/缓冲，运行中截断会产生空洞或让
@@ -352,7 +352,7 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
    `world.rng = RandomNumber::with_seed(seed);   // 必须与 rng_trace::enable(path, seed) 的 seed 一致`
    —— 两处不一致 ⇒ 账本记的和世界抽的不是同一个流，比较全废。
 
-**属性落点（本轮查实，下一步直接用）**：`EntitySpawn` 直接有 `hp`（`entity.rs:555`）、
+**属性落点（本轮查实，下一步直接用）**：`EntitySpawn` 直接有 `hp`（`entity.rs` 的 `EntitySpawn::hp`）、
 `anti_magic`（`:565`）、`level`（`:571`）；`abil: Option<BaseAbil>` 只有 `dc / max_hp`（`:497-502`）
 —— **MC 不在这两个字段里**，需在 `AbilitySnapshot`/WAbil 组件上落，写夹具前先确认该组件字段
 （下一条提交解决，不猜）。
@@ -408,10 +408,10 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 ### 21. MC / Level 的真实落点（2026-11-19 查实，夹具照此写）
 
 - **MC 与 SC 不在实体组件上**，而在**会话态** `SessionGround.state.wabil.mc / .sc`
-  （消费点：`lib.rs:13246`、`:14069`、`:14307`、`:14801`、`:15248` 均为
-  `i32::from(sg.state.wabil.mc)`）；现有测试直接赋值有先例：`lib.rs:70067`
+  （消费点：`lib.rs` 的 `handle_spell_cmd_with_magic`、`:14069`、`:14307`、`:14801`、`:15248` 均为
+  `i32::from(sg.state.wabil.mc)`）；现有测试直接赋值有先例：`lib.rs` 的 `b2_rig`
   `sg.state.wabil.mc = 0x0F05;`。
-- 存档记录侧同名字段在 `record.rs:254`（`Ability.mc`，由 `stage6_record()` 解出）。
+- 存档记录侧同名字段在 `bins/game-svr/src/record.rs` 的 `Ability::mc`（由 `stage6_record()` 解出）。
 - **火球夹具**：`a5_spell_rig(1, 11, 10)` 之后
   ① `ground_sessions["caster"].state.wabil.mc = 15;`（对应金标准 MC=15）
   ② 目标实体 `anti_magic = 3`、`hp = 100`；③ `world.rng = RandomNumber::with_seed(seed)`。
@@ -448,13 +448,13 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 
 ### 22. 现成夹具 `SpellFrameRig`（驱动最后一处弯路已消除）
 
-`lib.rs:64775` 的 `SpellFrameRig` 已具备火球所需的**全部**结构：
+`lib.rs` 的 `SpellFrameRig` 已具备火球所需的**全部**结构：
 
 - `SpellFrameRig::new(learned, &[(magic_id, effect)], observers: &[(&str, x, y, ghost, socket)])`
   —— caster 固定 (10,10)/socket 911；观察者按参数建实体并登记 `OnlineRegistry`（各自 socket）；
 - 字段：`world / caster / online / saves / ground_sessions / magic_table / displays / gates / rx`；
 - 帧：`rx`（`mpsc::UnboundedReceiver<SimToGate>`），`SendFrame { socket, body }` 可按 socket 归属；
-- 先例 `b2_rig`（`lib.rs:70049`）已演示如何落属性：`world.entities.get_mut(id)` 改
+- 先例 `b2_rig`（`lib.rs` 的 `b2_rig`）已演示如何落属性：`world.entities.get_mut(id)` 改
   `progression.level / vitals.hp / max_hp`，`ground_sessions["caster"].state.wabil.mc/level`。
 
 **火球夹具因此只需**：`SpellFrameRig::new(1, &[(1,1)], &[("target",11,10,false,912),
@@ -496,6 +496,15 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
   Rust `deliver_mag_struck` 对玩家的 `name_color` 恒 false ⇒ 魔法受击链不置 `PvpFlag`、
   不发 `RefNameColor` 广播。已报 opc-07 立卡 `openmir2-magstruck-name-color`；修好前
   **`1/5` 保持 implemented，不得标 verified**。
+- **卡面锚清理（opc-07 批准，同日）**：31 条高 churn 文件的行号锚改为符号锚；
+  11 条裸 `MagicManager.cs:NNN` 补全成 `src/M2Server/Magic/MagicManager.cs:NNN`
+  （逐条核对 case 体：WINDTEBO / GROUPDEDING / 版本门 / 火球 / 瞬息移动 / 魔法盾 / 火墙 /
+  推人 / 分身 / 驯服 / 心灵启示，**不是**已删符号）。本分支自己的改动已让 `lib.rs` 里
+  `b2_rig` 一类行号漂移（70049→70613、70067→70627）——这就是改用符号锚的直接理由。
+  `docs_anchor_gate --prose --base master`：**GREEN**（检查 32 / 悬空 0 / 越界 0 / 符号缺失 0 / 高 churn 0）。
+- **2026-11-19 现场留痕**：曾因相对路径 `--out ../../golden/...` 把一份 golden 误落到主检出
+  `golden/magic/fireball.json`；已按清单（单文件 17739B、父目录空）删除文件与目录，主检出
+  `git status` 复原。后续删除一律「先列清单、再动手」，且报告在动手前。
 - 复跑顺序（三支各自独立进程 → 真实台账比较；比较器新用例 `real_rust_ledger_parity` 为
   `#[ignore]`，缺台账时硬红不跳过）：
   ```text
