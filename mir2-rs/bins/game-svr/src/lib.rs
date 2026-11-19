@@ -70574,8 +70574,9 @@ SendRefMsgRange=15
                 .iter()
                 .position(|id| *id == mir2_protocol::messages::SM_MAGIC_LVEXP)
                 .expect("训练尾 ⇒ 自己收 SM_MAGIC_LVEXP");
-            // **oracle 队列序**：`(byte)RM_MAGICFIRE(10120)` = 136 < `(byte)RM_DURACHANGE(10125)` = 141
-            // < `(byte)RM_MAGIC_LVEXP(10123)` = 255 ⇒ 同一 `MsgQueue` 出队序 = 638 → 642 → 640。
+            // **oracle 队列序**：`(byte)RM_MAGICFIRE(10120)` = 136 < `(byte)RM_DURACHANGE(10125)` = 141；
+            // 训练尾 `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg` 的 `MessagePriority.Lowest` = 255
+            // （**不是** `(byte)10123` = 139）⇒ 同一 `MsgQueue` 出队序 = 638 → 642 → 640。
             // 依据：`MagicManager` 的护身符组（外层 case 组 + 内层 `switch(MagicId)`）+ `NetPriorityQueue`
             // 按 `(byte)ident` 出队 + `golden/magic/firecharm.json` 里 caster 的 Sent 顺序 `[638, 642]`。
             // **旧断言（`i_dura < i_fire`）是"UseAmulet 直发"时代实现的顺序，不是 oracle**——

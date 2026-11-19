@@ -10,7 +10,7 @@
 
 - `(byte)RM_MAGICFIRE` = `10120 & 0xFF` = **136**
 - `(byte)RM_DURACHANGE` = `10125 & 0xFF` = **141**
-- `(byte)RM_MAGIC_LVEXP` = `10123 & 0xFF` = **255**
+- `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg` 的 `MessagePriority.Lowest` = **255**（**不是** `(byte)10123` = 139）
 
 ⇒ 施法者自身帧序必须是 **`SM_MAGICFIRE(638) → SM_DURACHANGE(642) → SM_MAGIC_LVEXP(640)`**。
 13 支已按此把 642 纳入同批 `SpellFrameBuf`（卡 `openmir2-magic-parity` 提交 `9f420a94b`）。
