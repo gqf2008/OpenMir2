@@ -10538,11 +10538,24 @@ fn handle_eat_cmd(
         inc_spell: sg.recovery.inc_spell,
         user_unlock_durg: sg.user_unlock_durg,
         hunger_status: sg.hunger_status,
-        extra: game_svr::useitem::ItemsExtraState {
-            // `PlayObject.BodyLuck`/`BodyLuckLevel`（`sg.equip` 已承载，与 `add_body_luck` 同源）。
-            body_luck: sg.equip.body_luck,
-            body_luck_level: sg.equip.body_luck_level,
-            ..Default::default()
+        extra: {
+            let ent = world.entities.get(actor_id);
+            game_svr::useitem::ItemsExtraState {
+                // `PlayObject.BodyLuck`/`BodyLuckLevel`（`sg.equip` 已承载，与 `add_body_luck` 同源）。
+                body_luck: sg.equip.body_luck,
+                body_luck_level: sg.equip.body_luck_level,
+                // `PlayObject.ExtraAbil[7]/Flag/Times`（实体组件，IT-07 用；现只读入、`use_item` 暂不改）。
+                extra_abil: ent.map(|e| e.extra_abil).unwrap_or_default(),
+                extra_abil_flag: ent.map(|e| e.extra_abil_flag).unwrap_or_default(),
+                extra_abil_times: ent.map(|e| e.extra_abil_times).unwrap_or_default(),
+                // 当前装备武器（`UseItems[SLOT_WEAPON]`，IT-12/14/15 用）。
+                weapon: sg
+                    .use_items
+                    .get(game_svr::ability::SLOT_WEAPON)
+                    .cloned()
+                    .flatten(),
+                ..Default::default()
+            }
         },
     };
     // `ItemList` 从会话态拿出（`use_item` 原地改）后马上放回。

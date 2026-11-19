@@ -98,6 +98,9 @@
 use crate::ability::{recalc_abilitys, Ability, ItemCatalog, RecalcInputs};
 use crate::bag::{BagItem, Frame, MAX_BAG_ITEM};
 use crate::unbindlist::UnbindList;
+// `ExtraAbil` 槽数用宿主/oracle 同名常量（`mir2_world_bevy::components::EXTRA_ABIL_SLOTS` = 7，
+// 含 `EABIL_PWRRATE(6)`）；slice 1 曾误写 6（会静默丢掉 PWRRATE），此处对齐并加维度牙。
+use mir2_world_bevy::components::EXTRA_ABIL_SLOTS;
 
 /// `CM_EAT`（`src/OpenMir2/Messages.cs` 的 `CM_EAT = 1006`；
 /// `PlayObject.Message.cs:826` 的 `case CM_EAT: ClientUseItems(nParam1, Msg)`）。
@@ -213,12 +216,12 @@ pub struct ItemsExtraState {
     pub body_luck: f64,
     /// `PlayObject.BodyLuckLevel`（`clamp(BodyLuck/BODYLUCKUNIT, -10, 5)`）。
     pub body_luck_level: i32,
-    /// `ExtraAbil[6]`（EABIL_DCUP/MCUP/SCUP/HITSPEEDUP/HPUP/MPUP；IT-07）。
-    pub extra_abil: [u16; 6],
-    /// `ExtraAbilFlag[6]`（IT-07）。
-    pub extra_abil_flag: [u8; 6],
-    /// `ExtraAbilTimes[6]`（绝对 tick；墙钟派生 ⇒ 判据只核相对增量/单调，不核绝对值）。
-    pub extra_abil_times: [i32; 6],
+    /// `ExtraAbil[EXTRA_ABIL_SLOTS]`（EABIL_DCUP/MCUP/SCUP/HITSPEEDUP/HPUP/MPUP/PWRRATE；IT-07）。
+    pub extra_abil: [u16; EXTRA_ABIL_SLOTS],
+    /// `ExtraAbilFlag[EXTRA_ABIL_SLOTS]`（IT-07）。
+    pub extra_abil_flag: [u8; EXTRA_ABIL_SLOTS],
+    /// `ExtraAbilTimes[EXTRA_ABIL_SLOTS]`（宿主存 tick；墙钟派生 ⇒ 判据只核相对增量/单调，不核绝对值）。
+    pub extra_abil_times: [i64; EXTRA_ABIL_SLOTS],
     /// 当前装备武器（`UseItems[Weapon]`）；`None` = 空手（IT-12 祝福油 / IT-14/15 修复油）。
     pub weapon: Option<BagItem>,
     /// `PlayObject.MagicList` 的 magic id 序列（IT-17 ReadBook 追加）。
@@ -851,9 +854,15 @@ mod tests {
         let d = ItemsExtraState::default();
         assert_eq!(d.body_luck, 0.0);
         assert_eq!(d.body_luck_level, 0);
-        assert_eq!(d.extra_abil, [0u16; 6]);
-        assert_eq!(d.extra_abil_flag, [0u8; 6]);
-        assert_eq!(d.extra_abil_times, [0i32; 6]);
+        // 维度牙（编译器抓不到的"少一格"）：必须 == 宿主/oracle `EXTRA_ABIL_SLOTS`（=7，含 EABIL_PWRRATE(6)）。
+        assert_eq!(
+            EXTRA_ABIL_SLOTS, 7,
+            "= oracle EABIL 槽数（0..=EABIL_PWRRATE(6)）"
+        );
+        assert_eq!(d.extra_abil.len(), EXTRA_ABIL_SLOTS);
+        assert_eq!(d.extra_abil, [0u16; EXTRA_ABIL_SLOTS]);
+        assert_eq!(d.extra_abil_flag, [0u8; EXTRA_ABIL_SLOTS]);
+        assert_eq!(d.extra_abil_times, [0i64; EXTRA_ABIL_SLOTS]);
         assert!(d.weapon.is_none());
         assert!(d.magic_list.is_empty());
         assert_eq!(
