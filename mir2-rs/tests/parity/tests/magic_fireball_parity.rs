@@ -368,6 +368,13 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
 }
 
+/// **`13 火符`**真实台账 → 判定面（金标准 `golden/magic/firecharm.json`）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::firecharm_parity_*）生成真实台账"]
+fn real_rust_ledger_firecharm() {
+    real_ledger_verify("firecharm", &golden_file("firecharm.json"));
+}
+
 /// **`2 治愈`**真实台账 → 判定面（标签 = `heal` / `full` / `self`；本支无 AntiMagic 骰）；
 /// 金标准 `golden/magic/healing.json`。
 #[test]
