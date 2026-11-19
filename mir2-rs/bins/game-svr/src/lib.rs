@@ -10629,6 +10629,30 @@ fn handle_eat_cmd(
     // IT-08（`GetExp` 的 `AddBodyLuck`）起生效。
     sg.equip.body_luck = state.extra.body_luck;
     sg.equip.body_luck_level = state.extra.body_luck_level;
+    // IT-08 升级支（宿主层，`GetExp` 的 `Exp>=MaxExp` 块；纯 use_item 不做）：复用宿主原语 `get_level_exp`/
+    // `level_ability_base`(RecalcLevelAbilitys)/`recalc_session_ability`(RecalcAbilitys)/`inc_health_spell`(IncHealthSpell)/
+    // `add_body_luck`。升级块内 `HasLevelUp→RecalcAbilitys` ⇒ **WAbil 追上 Abil**（与非升级的"陈旧"相反）。
+    let leveled = sg.equip.abil.exp >= sg.equip.abil.max_exp;
+    if leveled {
+        sg.equip.abil.exp -= sg.equip.abil.max_exp;
+        if sg.equip.abil.level < 255 {
+            sg.equip.abil.level = sg.equip.abil.level.wrapping_add(1);
+        }
+        sg.equip.abil.max_exp = mir2_formula::exp::get_level_exp(
+            &world.need_exps,
+            mir2_data::models::MAX_LEVEL,
+            i32::from(sg.equip.abil.level),
+        );
+        sg.equip.abil = game_svr::ability::level_ability_base(&sg.equip.abil, sg.equip.job);
+        let extra = world.entities.get(actor_id).map(|e| e.extra_abil);
+        let _ = recalc_session_ability(sg, catalog, extra.as_ref(), None);
+        let _ = game_svr::recover::inc_health_spell(&mut sg.state.wabil, 2000, 2000);
+        crate::add_body_luck(
+            &mut sg.equip.body_luck,
+            &mut sg.equip.body_luck_level,
+            100.0,
+        );
+    }
     // **药品写点镜像进实体**（卡 `openmir2-spell-fill-projection-mirror`，review 94159ca7d1 F1）：
     // oracle 的 `IncHealthSpell`（`BaseObject.cs:952-975`）写唯一一份 `WAbil`——本段覆盖的写点
     // 来自 `useitem.rs:306`（StdMode 0 Shape 1 固定量）、`:329`（Shape 3 百分比）、
@@ -10653,6 +10677,20 @@ fn handle_eat_cmd(
         return;
     };
     let mut sent = 0usize;
+    // IT-08 升级支：`IncHealthSpell(2000,2000)` 改 HP/MP ⇒ `HealthSpellChanged()` 的 `RM_HEALTHSPELLCHANGED`
+    // 经泵出 `SM_HEALTHSPELLCHANGED(53)`，**本批最前**（优先级字节 68 最小）。升级支才有 53，非升级支没有。
+    if leveled {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: game_svr::smframe::sm_healthspellchanged(
+                actor_id,
+                sg.state.wabil.hp,
+                sg.state.wabil.mp,
+                sg.state.wabil.max_hp,
+            ),
+        });
+        sent += 1;
+    }
     // **解包件的立即帧** `SendAddItem`（`PlayObject.Base.cs:198-228`）：`SM_ADDITEM(200)`、
     // `Recog = ActorId`、尾 = `EDCode.EncodeBuffer(ClientItem)`。oracle 在
     // `ClientUseItemsGetUnBindItems` 里逐件直发，位置在尾部 `SendDefMessage(SM_EAT_OK)` **之前**
@@ -10704,6 +10742,11 @@ fn handle_eat_cmd(
                 n.ident
             ),
         }
+    }
+    // IT-08 升级支：oracle `RM_LEVELUP` 处理器经泵出 `SM_LEVELUP(45)/SM_ABILITY(52)/SM_SUBABILITY(752)`，
+    // 线上序在 44（`SM_WINEXP`）之后 ⇒ 放在 notice 排水之后；复用 `send_levelup_frames`（读 sg.state.wabil/gold/job/sub）。
+    if leveled {
+        send_levelup_frames(sg, entry, gates, true);
     }
     glog!(
         "INF",
@@ -53576,6 +53619,184 @@ SendRefMsgRange=15
             "recalc_session_ability（宿主 RecalcAbilitys 等价）后 WAbil.Exp 追上基础"
         );
         assert_eq!(sg.state.wabil.exp, 200, "追上后的值 = 200");
+    }
+
+    /// **IT-08 升级支宿主级对拍**：吃经验书(Exp=9990/MaxExp=10000/dura=100)⇒升级；宿主发的
+    /// `SM_HEALTHSPELLCHANGED(53)/SM_WINEXP(44)/SM_LEVELUP(45)/SM_ABILITY(52)/SM_SUBABILITY(752)`
+    /// 按 **oracle 线上优先级序** == golden `pumped`（逐字段）；升级后 **`wabil==abil`**（exp/level/max_exp），
+    /// 派生 `max_hp/max_mp/hp/mp/dc` 逐字段对 golden。`Gold/GameGold=0`(离线对象真值)、`job=0`(Warrior)。
+    #[test]
+    fn it08_levelup_host_parity() {
+        use mir2_protocol::frame::CommandMessage;
+        use std::collections::HashMap;
+        let raw = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../tests/parity/m3/fixtures/eat_vectors.json"
+        ))
+        .expect("夹具");
+        let doc: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let sc = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_stdmode3_shape13_exp_levelup")
+            .expect("升级 case");
+        let exp = &sc["expect"];
+        let pumped: Vec<(i64, i64, i64, i64, i64)> = exp["pumped"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["ident"].as_i64().unwrap(),
+                    f["recog"].as_i64().unwrap(),
+                    f["param"].as_i64().unwrap(),
+                    f["tag"].as_i64().unwrap(),
+                    f["series"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        let mut catalog = game_svr::ability::StdItemCatalog::new();
+        catalog.insert(
+            2018,
+            mir2_data::StdItem {
+                name: "exp_book".into(),
+                std_mode: 3,
+                shape: 13,
+                weight: 1,
+                dura_max: 100,
+                ..Default::default()
+            },
+        );
+        let mut world = mir2_world_bevy::World::new(32, 32);
+        // 升级取新 `MaxExp` 走 `get_level_exp(need_exps, …)`（oracle `GetLevelExp` 同一张 `Exps.conf` NeedExps 表）。
+        // 测试 `World::new` 的 `need_exps` 默认全 0，这里用 golden 记录的 `config.need_exps_head`
+        // （生产 `Exps.conf` 前缀，sha 已入夹具）填前若干级 ⇒ 与 oracle 同源；`[6]==80` 守卫漂移。
+        let head: Vec<i32> = doc["config"]["need_exps_head"]
+            .as_array()
+            .expect("golden config.need_exps_head")
+            .iter()
+            .map(|v| v.as_i64().unwrap() as i32)
+            .collect();
+        assert_eq!(head.get(6).copied(), Some(80), "golden need_exps[6]==80（同源守卫）");
+        for (i, v) in head.iter().enumerate() {
+            world.need_exps[i] = *v;
+        }
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        let mut sg = test_session_ground(7777);
+        sg.equip.job = 0;
+        sg.equip.abil.exp = 9990;
+        sg.equip.abil.max_exp = 10000;
+        sg.equip.abil.level = 5;
+        sg.state.wabil.exp = 9990;
+        sg.state.wabil.max_exp = 10000;
+        sg.state.wabil.level = 5;
+        sg.state.item_list = vec![game_svr::bag::BagItem {
+            make_index: 1,
+            index: 2018,
+            dura: 0,
+            dura_max: 100,
+            desc: [0; 14],
+        }];
+        sessions.insert("hero".into(), sg);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ua".into(),
+                chr_name: "hero".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: 7777,
+            },
+        );
+        let (tx, mut rx) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx);
+        let colors = MsgColors {
+            red_f: 255,
+            red_b: 56,
+            hear_f: 0,
+            hear_b: 255,
+            whisper_f: 0,
+            whisper_b: 0,
+            green_f: 0xDB,
+            green_b: 0xFF,
+            blue_f: 0xFF,
+            blue_b: 0xFC,
+        };
+        let unbind = game_svr::unbindlist::UnbindList::default();
+        let mut item_number = 0;
+        handle_eat_cmd(
+            1,
+            0,
+            0,
+            None,
+            "hero",
+            901,
+            &online,
+            &mut sessions,
+            &gates,
+            &catalog,
+            &mut world,
+            &colors,
+            None,
+            &unbind,
+            &mut item_number,
+            None,
+            &game_svr::npc::NpcVars::default(),
+            None,
+        );
+        let want_ids = [53u16, 44, 45, 52, 752];
+        let mut got = Vec::new();
+        while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
+            let m = CommandMessage::from_bytes(&body).expect(">=12B");
+            if want_ids.contains(&m.ident) {
+                got.push((
+                    m.ident as i64,
+                    m.recog as i64,
+                    m.param as i64,
+                    m.tag as i64,
+                    m.series as i64,
+                ));
+            }
+        }
+        assert_eq!(got, pumped, "升级支 SM 帧按 oracle 优先级序逐字段不符；实得 {got:?}");
+        let sg = &sessions["hero"];
+        assert_eq!(
+            (sg.equip.abil.level, sg.equip.abil.exp, sg.equip.abil.max_exp),
+            (6, 90, 80),
+            "Abil 升级后：level/exp/max_exp"
+        );
+        assert_eq!(
+            (
+                sg.state.wabil.level,
+                sg.state.wabil.exp,
+                sg.state.wabil.max_exp
+            ),
+            (6, 90, 80),
+            "升级后 WAbil == Abil（HasLevelUp→RecalcAbilitys 追上，与非升级陈旧对照）"
+        );
+        let gw = &exp["wabil"];
+        let g_u16 = |k: &str| gw[k].as_u64().unwrap() as u16;
+        assert_eq!(sg.state.wabil.max_hp, g_u16("max_hp"), "max_hp");
+        assert_eq!(sg.state.wabil.max_mp, g_u16("max_mp"), "max_mp");
+        assert_eq!(sg.state.wabil.hp, g_u16("hp"), "hp（IncHealthSpell 2000 clamp）");
+        assert_eq!(sg.state.wabil.mp, g_u16("mp"), "mp");
+        assert_eq!(sg.state.wabil.dc, g_u16("dc"), "dc（RecalcLevelAbilitys 派生）");
+        // body_luck：非升级 `AddBodyLuck(DuraMax*0.002)`=0.2 由 `use_item` 落，升级再 `AddBodyLuck(100)` ⇒ golden 100.2。
+        let g_luck = exp["body_luck"].as_f64().unwrap();
+        let g_luck_level = exp["body_luck_level"].as_i64().unwrap() as i32;
+        assert!(
+            (sg.equip.body_luck - g_luck).abs() < 1e-9,
+            "body_luck：实得 {} golden {}",
+            sg.equip.body_luck,
+            g_luck
+        );
+        assert_eq!(sg.equip.body_luck_level, g_luck_level, "body_luck_level");
+        // 升级后经验书已吃掉 ⇒ 背包清空（golden item_list=[]）。
+        assert!(sg.state.item_list.is_empty(), "升级后经验书已消耗 ⇒ item_list 空");
     }
 
     /// 本用例故意把 `param`/`tag` 传成**不是** `make_index` 的值（4242）——
