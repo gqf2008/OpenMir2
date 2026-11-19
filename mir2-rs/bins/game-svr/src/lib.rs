@@ -30844,7 +30844,7 @@ async fn apply_sim_cmd_async(
                 _ => 0,
             };
             apply_sim_cmd(other, users);
-            purge_session_residue(state, released_session);
+            release_session_residue(state, stats, released_session);
             Ok(())
         }
     }
@@ -31289,6 +31289,8 @@ async fn flush_pending(
                 let (ident, session, _, _) = wire_identity(&frame);
                 let note = stats.note_oversize(ident, session, len, now_ms());
                 emit_drop_note(note);
+                // 观测卡：从队列弹出但未 flush 的帧要单列计数（闭合 queued 账目）。
+                stats.note_dequeued_oversize(state.pending.len(), state.pending.bytes());
                 continue;
             }
             send_check_frame(tx).await?;
@@ -31296,12 +31298,12 @@ async fn flush_pending(
             state.send_check_tick = now_ms();
             send_raw(tx, &frame).await?;
             state.send_block_count += len;
-            stats.note_flushed(len, true);
+            stats.note_flushed(len, true, state.pending.len(), state.pending.bytes());
             return Ok(());
         }
         send_raw(tx, &frame).await?;
         state.send_block_count += len;
-        stats.note_flushed(len, false);
+        stats.note_flushed(len, false, state.pending.len(), state.pending.bytes());
     }
     Ok(())
 }
@@ -31333,6 +31335,18 @@ fn wire_session_id(wire: &[u8]) -> u16 {
 /// `SessionId` 是 4 位随机数，在 ≤50ms 的队列窗口内**可能被新会话复用**。不清 ⇒ 旧会话的残留帧
 /// 被投给新会话（**玩家收到别人的数据，无法察觉，日志也无异常**）。服务端无权禁止网关复用 id，
 /// 只能保证队列不持有已释放会话的帧。返回清理的帧数（>0 时打 WRN，可观测）。
+fn release_session_residue(
+    state: &mut KeepAlive,
+    stats: &mut gate_backpressure::DropStats,
+    session: u16,
+) -> usize {
+    let purged = purge_session_residue(state, session);
+    // 观测卡：清掉的残留帧单列计数（闭合 queued 账目）+ 当前降级 gauge 回落。
+    stats.note_purged(purged, state.pending.len(), state.pending.bytes());
+    stats.note_session_released(session);
+    purged
+}
+
 fn purge_session_residue(state: &mut KeepAlive, session: u16) -> usize {
     if session == 0 {
         return 0;
@@ -31512,7 +31526,7 @@ async fn dispatch(
                     },
                 );
             }
-            purge_session_residue(state, released_session);
+            release_session_residue(state, stats, released_session);
         }
         grobal2::GM_CHECKCLIENT => {
             // `:163-165`：只置标志。**消费者在本进程**：`src/M2Server/Net/TCPNetChannel.cs:435-439`
@@ -31612,7 +31626,7 @@ async fn dispatch(
                         users.close_by_socket(msg.socket);
                         // 卡 `openmir2-gateway-frame-criticality-queue`（总监 P3 F2）：认证失败也是
                         // 会话释放，清掉该 `SessionId` 的队列残留（防复用误投）。
-                        purge_session_residue(state, msg.session_id);
+                        release_session_residue(state, stats, msg.session_id);
                         emit_gate_event(
                             ev_tx,
                             ev_ctl_tx,
@@ -33712,6 +33726,46 @@ mod tests {
     }
 
     /// F2（reviewer-2）的判据：`ProcessBufferSend` `:58-90` 的四条分支，**含"刚超时清零的那一包也要压住"**。
+    /// 观测卡接线牙：`release_session_residue` 必须（1）清队列残留、（2）计入 purged、
+    /// （3）让当前降级 gauge 回落。删掉任一接线 ⇒ 本用例红。
+    #[test]
+    fn release_session_residue_wires_purge_and_gauge() {
+        let mut state = KeepAlive::default();
+        let mut stats = gate_backpressure::DropStats::new(0, 0);
+        let f7 = ServerMessage {
+            packet_code: grobal2::PacketCode,
+            socket: 0,
+            session_id: 7,
+            ident: u16::from(grobal2::GM_DATA),
+            session_index: 0,
+            pack_length: 0,
+        };
+        let f9 = ServerMessage {
+            session_id: 9,
+            ..f7
+        };
+        assert_eq!(
+            state.pending.enqueue(f7.to_bytes().to_vec()),
+            gate_queue::EnqueueOutcome::Queued
+        );
+        assert_eq!(
+            state.pending.enqueue(f9.to_bytes().to_vec()),
+            gate_queue::EnqueueOutcome::Queued
+        );
+        let _ = stats.note_queued(41, 7, 20, state.pending.len(), state.pending.bytes(), 0, 1);
+        assert!(stats.claim_session_degrade(7));
+        let purged = release_session_residue(&mut state, &mut stats, 7);
+        assert_eq!(purged, 1, "必须只清 session=7 的那一帧");
+        assert_eq!(state.pending.len(), 1, "session=9 的帧必须保留");
+        assert_eq!(
+            stats.purged_frames(),
+            1,
+            "purged 必须计入（闭合 queued 账目）"
+        );
+        assert_eq!(stats.degraded_current(), 0, "当前降级 gauge 必须回落");
+        assert_eq!(stats.degraded_sessions(), 1, "累计值不算错");
+    }
+
     #[test]
     fn send_decision_matches_process_buffer_send() {
         let mut st = KeepAlive::default();
