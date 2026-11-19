@@ -1,0 +1,122 @@
+{
+  "magic_id": 1,
+  "anti_magic": 3,
+  "cases": [
+    {
+      "Label": "miss",
+      "Seed": 1,
+      "SpellReturn": true,
+      "Rm": [
+        {
+          "ident": 10008,
+          "wParam": 1,
+          "p1": 101,
+          "p2": 100,
+          "p3": 1,
+          "msg": "",
+          "priority": 24
+        },
+        {
+          "ident": 10120,
+          "wParam": 0,
+          "p1": 257,
+          "p2": 6553701,
+          "p3": 0,
+          "msg": "",
+          "priority": 136
+        }
+      ],
+      "Rng": [
+        2
+      ],
+      "TargetHp": 0,
+      "CasterMp": 0
+    },
+    {
+      "Label": "edge",
+      "Seed": 5,
+      "SpellReturn": true,
+      "Rm": [
+        {
+          "ident": 10008,
+          "wParam": 1,
+          "p1": 101,
+          "p2": 100,
+          "p3": 1,
+          "msg": "",
+          "priority": 24
+        },
+        {
+          "ident": 10120,
+          "wParam": 0,
+          "p1": 257,
+          "p2": 6553701,
+          "p3": 1002,
+          "msg": "",
+          "priority": 136
+        },
+        {
+          "ident": 8021,
+          "wParam": 15,
+          "p1": 6553701,
+          "p2": 2,
+          "p3": 1002,
+          "msg": "",
+          "priority": 255
+        }
+      ],
+      "Rng": [
+        3,
+        0,
+        0,
+        0,
+        4
+      ],
+      "TargetHp": 0,
+      "CasterMp": 0
+    },
+    {
+      "Label": "hit",
+      "Seed": 13,
+      "SpellReturn": true,
+      "Rm": [
+        {
+          "ident": 10008,
+          "wParam": 1,
+          "p1": 101,
+          "p2": 100,
+          "p3": 1,
+          "msg": "",
+          "priority": 24
+        },
+        {
+          "ident": 10120,
+          "wParam": 0,
+          "p1": 257,
+          "p2": 6553701,
+          "p3": 1002,
+          "msg": "",
+          "priority": 136
+        },
+        {
+          "ident": 8021,
+          "wParam": 15,
+          "p1": 6553701,
+          "p2": 2,
+          "p3": 1002,
+          "msg": "",
+          "priority": 255
+        }
+      ],
+      "Rng": [
+        5,
+        0,
+        0,
+        0,
+        0
+      ],
+      "TargetHp": 0,
+      "CasterMp": 0
+    }
+  ]
+}

@@ -222,7 +222,8 @@ public static class Program
 
     /// <summary>
     /// Slice 3 用例：`1/5 火球`（`MagicManager.cs:174-203`）语义层对拍（C# 侧）。
-    /// 输入：施法者/目标属性、地图、随机源种子；输出：施法者 MsgQueue 抽出的 RM 消息账本 + RNG 账本。
+    /// 三支：未命中（首抽 &lt; AntiMagic）、边界（首抽 == AntiMagic）、命中（首抽 &gt; AntiMagic）。
+    /// 种子由扫描确定并**写进产物**，Rust 侧按同一 JSON 复现。
     /// </summary>
     private static int FireballCase()
     {
@@ -231,14 +232,60 @@ public static class Program
             Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
             return 2;
         }
-        string envirDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_ENVIR") ?? @"E:\MirServer\M2GameSvr\Map";
-        var env = new M2Server.Maps.Envirnoment();
-        if (!env.LoadMapData(Path.Combine(envirDir, "0.map")))
+        const int antiMagic = 3;
+        int seedMiss = FindSeedForFirstDraw(10, antiMagic - 1);
+        int seedEdge = FindSeedForFirstDraw(10, antiMagic);
+        int seedHit = FindSeedForFirstDraw(10, antiMagic + 2);
+        if (seedMiss < 0 || seedEdge < 0 || seedHit < 0)
         {
-            Console.Error.WriteLine("MAP_LOAD_FAILED " + envirDir);
-            return 2;
+            Console.Error.WriteLine("SEED_SCAN_FAILED");
+            return 1;
         }
+        var cases = new[]
+        {
+            RunFireball("miss", seedMiss, antiMagic),
+            RunFireball("edge", seedEdge, antiMagic),
+            RunFireball("hit", seedHit, antiMagic),
+        };
+        var outObj = new { magic_id = 1, anti_magic = antiMagic, cases };
+        var json = JsonSerializer.Serialize(outObj, new JsonSerializerOptions { WriteIndented = true });
+        var outIdx = Array.IndexOf(Environment.GetCommandLineArgs(), "--out");
+        if (outIdx > 0 && outIdx + 1 < Environment.GetCommandLineArgs().Length)
+        {
+            var outPath = Environment.GetCommandLineArgs()[outIdx + 1];
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(outPath))!);
+            File.WriteAllText(outPath, json);
+            Console.Error.WriteLine("GOLDEN_WRITTEN " + outPath);
+        }
+        Console.Out.WriteLine(json);
+        Console.Error.WriteLine("FIREBALL_CASES " + string.Join(", ", cases.Select(c => c.Label + "=" + c.Rm.Count + "rm/" + c.Rng.Count + "rng")));
+        return 0;
+    }
 
+    /// <summary>扫描种子：找到首个 `Random(mod)` 抽取等于 want 的最小种子（1..200000）。</summary>
+    private static int FindSeedForFirstDraw(int mod, int want)
+    {
+        var rn = RandomNumber.GetInstance();
+        var original = RngSeam.Capture();
+        for (int seed = 1; seed <= 200000; seed++)
+        {
+            RngSeam.Install(seed);
+            int v = rn.Random(mod);
+            RngSeam.Restore(original);
+            if (v == want) return seed;
+        }
+        return -1;
+    }
+
+    /// <summary>用给定种子跑一次火球，返回账本（RM 消息 + RNG 抽取 + 关键状态）。</summary>
+    private static dynamic RunFireball(string label, int seed, int antiMagic)
+    {
+        string mapDir = Environment.GetEnvironmentVariable("MAGICGOLDEN_MAP_DIR") ?? @"E:\MirServer\M2GameSvr\Map";
+        var env = new M2Server.Maps.Envirnoment();
+        if (!env.LoadMapData(Path.Combine(mapDir, "0.map")))
+        {
+            throw new InvalidOperationException("MAP_LOAD_FAILED " + mapDir);
+        }
         var caster = new RecordingPlayObject
         {
             ChrName = "golden-caster",
@@ -249,7 +296,7 @@ public static class Program
             ClientTick = 5,
         };
         caster.Abil.Level = 30;
-        caster.WAbil.MC = 15;   // LoByte = 15, HiByte = 0 ⇒ GetAttackPower(..+15, ..+1)
+        caster.WAbil.MC = 15;
         var target = new M2Server.Player.PlayObject
         {
             ChrName = "golden-target",
@@ -258,12 +305,11 @@ public static class Program
             CurrY = 100,
             SoftVersionDateEx = 20240101,
             ClientTick = 5,
-            AntiMagic = 3,
+            AntiMagic = (ushort)antiMagic,
         };
         target.Abil.Level = 20;
         target.WAbil.MaxHP = 100;
         target.Abil.MaxHP = 100;
-
         caster.Envir = env;
         target.Envir = env;
         SystemModule.SystemShare.ActorMgr.Add(caster);
@@ -272,7 +318,7 @@ public static class Program
         env.AddMapObject(target.CurrX, target.CurrY, SystemModule.Data.CellType.Play, target.ActorId, target);
 
         var original = RngSeam.Capture();
-        var rng = RngSeam.Install(12345);
+        var rng = RngSeam.Install(seed);
         var um = new OpenMir2.Packets.ClientPackets.UserMagic
         {
             MagIdx = 1,
@@ -283,21 +329,20 @@ public static class Program
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, target.CurrX, target.CurrY, target);
         var msgs = caster.DrainMessages();
         RngSeam.Restore(original);
-
-        var outObj = new
+        return new FireballResult
         {
-            @case = "fireball",
-            seed = 12345,
-            input = new { caster = new { x = 100, y = 100, mc = 15, level = 30 }, target = new { x = 101, y = 100, antimagic = 3, level = 20 } },
-            spell_return = ok,
-            rm = msgs,
-            rng = rng.Draws,
-            state = new { target_hp = target.WAbil.HP, caster_mp = caster.WAbil.MP },
+            Label = label,
+            Seed = seed,
+            SpellReturn = ok,
+            Rm = msgs,
+            Rng = rng.Draws.ToList(),
+            TargetHp = target.WAbil.HP,
+            CasterMp = caster.WAbil.MP,
         };
-        Console.Out.WriteLine(JsonSerializer.Serialize(outObj, new JsonSerializerOptions { WriteIndented = true }));
-        Console.Error.WriteLine("FIREBALL_CASE ok=" + ok + " rm=" + msgs.Count + " rng=" + rng.Draws.Count);
-        return 0;
     }
+
+    private static readonly string[] Unused = Array.Empty<string>();
+
 }
 
 /// <summary>
@@ -325,4 +370,16 @@ public sealed class RecordingPlayObject : M2Server.Player.PlayObject
         }
         return list;
     }
+}
+
+/// <summary>火球单支结果（三支由 `--case fireball` 输出一份 JSON）。</summary>
+public sealed class FireballResult
+{
+    public string Label { get; set; }
+    public int Seed { get; set; }
+    public bool SpellReturn { get; set; }
+    public List<object> Rm { get; set; }
+    public List<long> Rng { get; set; }
+    public int TargetHp { get; set; }
+    public int CasterMp { get; set; }
 }

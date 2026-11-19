@@ -145,3 +145,24 @@
 - **Rust 侧驱动（待做）**：在 `bins/game-svr` 的测试路径上用 `handle_spell_cmd_with_magic`
   产出同结构的 RM/RNG 账本，再写比较器（帧逐项 + RNG 逐次），两条都过才标
   `verified(semantic)`。
+
+## 10. 火球三支 C# 侧账本（2026-11-19）
+
+`--case fireball --out mir2-rs/tests/parity/golden/magic/fireball.json`（种子由扫描确定并写入产物）：
+
+| 支 | 种子 | 首抽 `Random(10)` | RNG 账本 | RM 账本（ident, p3） |
+|---|---|---|---|---|
+| miss | 1 | 2（< AntiMagic=3） | `[2]` | `(RM_SPELL 10008, p3=1)`、`(RM_MAGICFIRE 10120, p3=0)` |
+| edge | 5 | 3（== AntiMagic） | `[3,0,0,0,4]` | 10008(p3=1)、10120(p3=1002)、8021(p3=1002) |
+| hit | 13 | 5（> AntiMagic） | `[5,0,0,0,0]` | 10008(p3=1)、10120(p3=1002)、8021(p3=1002) |
+
+（8021 = `RM_DELAYMAGIC`；命中支的额外抽取来自 `GetAttackPower` 与训练尾 `Random(3)`。）
+
+**洁癖区（不记下来下次必踩）**
+1. `ConfigFile.Load` 用 `Encoding.GetEncoding("GB2312")` ⇒ 进程必须先
+   `Encoding.RegisterProvider(CodePagesEncodingProvider.Instance)`，否则 `SystemShare` 静态构造即抛。
+2. `LogService.Logger` 是 `public static ILogger`（`src/OpenMir2/LogService.cs:9`）⇒ 离线进程要给一个
+   无 sink 的实例，否则错误路径（如地图缺失）以 NRE 掩盖真实原因。
+3. `SendRefMsg` 的 `VisibleHumanList` 有 **500ms 刷新门**（`BaseObject.Message.cs:395`）：同一 tick
+   内第二次调用会跳过重扫、可能少发。装置侧要求：每个用例用**全新对象**，或显式清
+   `VisibleHumanList`；并加"两次调用不丢消息"的自检断言。
