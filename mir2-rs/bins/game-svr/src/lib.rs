@@ -70537,9 +70537,9 @@ SendRefMsgRange=15
     /// **B1-T3（魔号 13，灵魂火符）**：护身符门（`CheckAmulet(1,1)`/`UseAmulet(1,1)`）先于效果体；
     /// 过门 ⇒ 耐久帧 → 效果体取数 → 共享尾。**`boSpellFail` 失败支：恰一条 639、零抽、无尾**。
     ///
-    /// 红检：① 去掉护身符门 ⇒ 无护身符用例的零抽/639 断言红；② 把 `UseAmulet` 挪到效果体之后
-    /// ⇒ 自己帧序 `SM_DURACHANGE` 不再先于 `SM_MAGICFIRE` ⇒ 红；③ 把骰门挪到 `MagCanHitTarget`
-    /// 之前 ⇒ 不可攻击目标多 1 抽（见本条第三段）⇒ 红。
+    /// 红检：① 去掉护身符门 ⇒ 无护身符用例的零抽/639 断言红；② 把 13 支护身符帧从同批缓冲改回
+    /// **直发** ⇒ 帧序变 `[642, 638, …]`、本用例的 oracle 顺序断言红（与卡面火符牙同构）；
+    /// ③ 把骰门挪到 `MagCanHitTarget` 之前 ⇒ 不可攻击目标多 1 抽（见本条第三段）⇒ 红。
     #[test]
     fn spell_p3b1_firecharm_amulet_gate_tail_and_asymmetry() {
         const SM_DURACHANGE: u16 = mir2_protocol::messages::SM_DURACHANGE;
@@ -70570,9 +70570,20 @@ SendRefMsgRange=15
                 .iter()
                 .position(|id| *id == mir2_protocol::messages::SM_MAGICFIRE)
                 .expect("自己收 SM_MAGICFIRE");
+            let i_lv = self_seq
+                .iter()
+                .position(|id| *id == mir2_protocol::messages::SM_MAGIC_LVEXP)
+                .expect("训练尾 ⇒ 自己收 SM_MAGIC_LVEXP");
+            // **oracle 队列序**：`(byte)RM_MAGICFIRE(10120)` = 136 < `(byte)RM_DURACHANGE(10125)` = 141；
+            // 训练尾 `RM_MAGIC_LVEXP` 走 `SendSelfDelayMsg` 的 `MessagePriority.Lowest` = 255
+            // （**不是** `(byte)10123` = 139）⇒ 同一 `MsgQueue` 出队序 = 638 → 642 → 640。
+            // 依据：`MagicManager` 的护身符组（外层 case 组 + 内层 `switch(MagicId)`）+ `NetPriorityQueue`
+            // 按 `(byte)ident` 出队 + `golden/magic/firecharm.json` 里 caster 的 Sent 顺序 `[638, 642]`。
+            // **旧断言（`i_dura < i_fire`）是"UseAmulet 直发"时代实现的顺序，不是 oracle**——
+            // 卡 `openmir2-magic-parity` 火符修复（`9f420a94b`）已把 642 纳入同批 `SpellFrameBuf`。
             assert!(
-                i_dura < i_fire,
-                "UseAmulet 先于效果体/尾；实得 {self_seq:?}"
+                i_fire < i_dura && i_dura < i_lv,
+                "oracle 队列序应为 638 → 642 → 640；实得 {self_seq:?}"
             );
             assert_eq!(
                 sf_count(&frames, 911, mir2_protocol::messages::SM_MAGIC_LVEXP),
