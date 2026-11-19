@@ -1,6 +1,6 @@
 # openmir2-gate-utf8-body-length
 
-> 状态：**实现完成（2026-11-19，分支 `card/gate-utf8-body-length`）**——证据为**跨栈 golden**
+> 状态：**已合并（`3b96e89f6`）**——证据为**跨栈 golden**
 > （opc-07 裁定够当本卡证据；真机只能覆盖 ASCII IP，证明不了非 ASCII 缺陷，故不做）。
 > **本卡不改变现网行为（调用点全为 ASCII IP），属防御性正确化。**
 > 已登记（walgit 看板不可用，按 AGENTS.md §7 过渡）。
@@ -58,7 +58,7 @@ MemoryCopy.BlockCopy(strBuff, 0, tempBuff, sendBuffer.Length, data.Length);  // 
 
 ```
 dotnet test --filter FullyQualifiedName~GateUtf8BodyLengthTest
-已通过! - 失败: 0，通过: 4，已跳过: 0，总计: 4
+（原卡手抄计数已删除）计数以机器产物为准：`E:/UserFleet/evidence-cardfix-20261119/utf8-test.log`（`dotnet test TestProject1/GameSrvTest.csproj --filter FullyQualifiedName~GateUtf8BodyLength`）。Rust 侧：`mir2-rs/bins/game-gate/src/lib.rs` 的 `control_frame_golden_matches_csharp_oracle`（`include_str!` 读同一批 golden，逐字节断言）。
 ```
 1. `EmptyBody_IsHeaderOnly`：空正文 ⇒ 20B、`PackLength=0`；
 2. `AsciiBody_MatchesByteLengthBaseline`：ASCII（IP 形态）帧长/`PackLength`/正文与字节口径一致
@@ -118,3 +118,35 @@ cargo test -p game-gate → 89 passed / 0 failed（含 golden）；
 ### 范围核查
 
 - 同族：`SendLoginMessage` 已按编码后字节数（`encodeLen + 3`）；Rust 侧字节口径；未发现第三组件。
+
+## QA 整改（2026-11-19）
+
+> 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
+
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
+- 实跑命令与 `git status --porcelain` 的测量命令：见上述日志（卡面不写行数）；
+- **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
+  实跑帧/JSON 产物为准。
+> 来源：QA 签署摘要 —— 公共路径 `E:/UserFleet/qa/qa-merged-cards-signoff-20261119.md`。
+
+### 可独立重放的篡改（M1–M3）
+
+| 编号 | 改什么 | 怎么改 | 期望红在哪 | 还原 |
+|---|---|---|---|---|
+| M1 | C# `BuildServerFrame` | `PackLength = strBuff.Length` 改成 `data.Length` | golden 行为牙红（输出 `PackLength=4`、只拷 4/8 字节） | 复原后全绿 |
+| M2 | golden `chinese` 行 | `PackLength` 8→9 | `panicked at lib.rs:2241: 样本 chinese 与 C# oracle 不一致` | 复原后全绿 |
+| M3 | golden `mixed` 行 | 删掉该行 | `panicked at lib.rs:2244: golden 必须覆盖 5 个样本 left: 4 right: 5` | 复原后全绿 |
+### 统一整改（C4–C6）
+
+- **C4 `built_at`（裁定正文，引用不指向未合并分支）**：戳的 `built_at` 必须等于**二进制自报**的
+  `built_at`（单一来源）；文件 mtime 只作元数据、**不参与比对**；闸门断言"自报 == 戳"。
+  M9 四件因自报与戳相差 5 秒判 `CONDITIONAL`（身份可证、语义待统一），不算 FAIL。
+- **C5 `SHA256SUMS`（已补实）**：两份冻结目录 `E:/UserFleet/release-csharp-m9-572a0b8a/` 与
+  `E:/UserFleet/release-m9-572a0b8a/` 均为双清单；`sha256sum -c` 的结果与 rc **见验证日志**
+  `E:/UserFleet/evidence-cardfix-20261119/sums-verify.log`（卡面不写行数/OK 数）；历史
+  `SHA256SUMS.txt` 不改写；用途差异见各自 `PROVENANCE.txt` 的 `sums_files=` 字段。
+- **C3 构建命令与仓库状态（已补实）**：两目录的 `PROVENANCE.txt` 均含 `build_cmd=` / `build_cwd=` /
+  `toolchain=` / `git_status_porcelain_measure=` 字段（**字段值照抄，卡面不写数字**）；
+  C# 侧实跑命令与仓库状态见 `E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`。
+- **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
+  卡面凡引"章程 §N"均以此文件为准。

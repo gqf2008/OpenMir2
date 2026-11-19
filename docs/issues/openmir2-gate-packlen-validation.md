@@ -1,7 +1,6 @@
 # openmir2-gate-packlen-validation
 
-> 状态：**实现中（2026-11-19，分支 `card/gate-packlen-validation`）**——C# 修复 + Rust 对齐已完成，
-> 见文末「实现与验收」；待合并门禁。
+> 状态：**已合并（`b8ba0da6f`）**——C# 修复 + Rust 对齐；见文末「实现与验收」与「QA 整改」。
 > 已登记（本仓库 remote 无 `refs/collab/*`，walgit 看板不可用；按 AGENTS.md §7 「tracker 未就绪时
 > 先落 `docs/issues/`」过渡）。看板恢复后迁移为正式卡。
 > 发现于卡 `openmir2-db-write-stall` 的 44 处 `MemoryCopy.BlockCopy` 逐条审计（E 类）。
@@ -54,7 +53,7 @@ C# `GameGate` 的会话消息路径里，`packetLen` 直接取自**网络包头*
 `dotnet test TestProject1/GameSrvTest.csproj --filter FullyQualifiedName~GatePacketLengthTest`：
 
 ```
-已通过! - 失败: 0，通过: 6，已跳过: 0，总计: 6
+（原卡手抄计数已删除）计数以机器产物为准：`E:/UserFleet/evidence-cardfix-20261119/packlen-test.log`（`dotnet test TestProject1/GameSrvTest.csproj --filter FullyQualifiedName~GatePacketLength`）。Rust 侧接线测试：`mir2-rs/bins/game-gate/src/lib.rs` 的 `upstream_body_bound_rejects_pathological_lengths`（`MAX_UPSTREAM_BODY` 上界与边界值）。
 ```
 
 - `Rejects_NegativeLength_beforeAnyCopy`：`packetLen=-1` / `int.MinValue` ⇒ false，原因含原值；
@@ -141,3 +140,38 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 ### 边界
 
 不碰 AOI、不碰 DBSrv、不改背压参数（`max_depth_frames` 等属另一张卡）。
+
+## QA 整改（2026-11-19）
+
+> 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
+
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`、`packlen-rust-test.log`、`RUNS.txt`）；
+- **Rust 侧测试**：`mir2-rs/bins/game-gate/src/lib.rs` 的 `tests::upstream_body_bound_rejects_pathological_lengths`（`lib.rs:2176-2200`）；**原文见实跑日志** `E:/UserFleet/evidence-cardfix-20261119/packlen-rust-test.log`（卡面不再手抄代码块）。
+- **构建命令 + `git status --porcelain` 的测量命令与输出**：`E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`（卡面不写行数）；
+- 实跑命令与 `git status --porcelain` 的测量命令：见上述日志（卡面不写行数）；
+- **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
+  实跑帧/JSON 产物为准。
+> 来源：QA 签署摘要 —— 公共路径 `E:/UserFleet/qa/qa-merged-cards-signoff-20261119.md`。
+
+### 可独立重放的篡改（T1–T4）
+
+| 编号 | 改什么 | 怎么改 | 期望红在哪 | 还原 |
+|---|---|---|---|---|
+| T1 | `TryValidate` 的长度判断 | `if (packetLen > available)` → `if (false && packetLen > available)` | 4 条红：`Accepts_LegalNegativePackLength` / `EngineFrame_Oversize_IsRejectedByTheProcessor` / `Rejects_IntMaxValue` / `Rejects_LengthGreaterThanAvailable` | 复原后全绿 |
+| T2 | `int.MinValue` 拒绝支 | `if (rawPackLength == int.MinValue)` → `if (false && rawPackLength == int.MinValue)` | 3 条红：`EngineFrame_MinValue_…` / `Magnitude_UsesSingleSourceOfTruth` / `Rejects_NegativeMagnitude_beforeAnyCopy` | 复原后全绿 |
+| T3 | GM_DATA 失败分支 | 删掉 `_clientSocket.Close()` | `GameGate_EngineFrame_UsesDecisionPointAndClosesOnFailure` 红 | 复原后全绿 |
+| T4 | Rust 上界 | `len <= MAX_UPSTREAM_BODY` 改成恒真 | `panicked at bins/game-gate/src/lib.rs:2179: assertion failed: !upstream_body_allowed(MAX_UPSTREAM_BODY + 1)` | 复原后全绿 |
+### 统一整改（C4–C6）
+
+- **C4 `built_at`（裁定正文，引用不指向未合并分支）**：戳的 `built_at` 必须等于**二进制自报**的
+  `built_at`（单一来源）；文件 mtime 只作元数据、**不参与比对**；闸门断言"自报 == 戳"。
+  M9 四件因自报与戳相差 5 秒判 `CONDITIONAL`（身份可证、语义待统一），不算 FAIL。
+- **C5 `SHA256SUMS`（已补实）**：两份冻结目录 `E:/UserFleet/release-csharp-m9-572a0b8a/` 与
+  `E:/UserFleet/release-m9-572a0b8a/` 均为双清单；`sha256sum -c` 的结果与 rc **见验证日志**
+  `E:/UserFleet/evidence-cardfix-20261119/sums-verify.log`（卡面不写行数/OK 数）；历史
+  `SHA256SUMS.txt` 不改写；用途差异见各自 `PROVENANCE.txt` 的 `sums_files=` 字段。
+- **C3 构建命令与仓库状态（已补实）**：两目录的 `PROVENANCE.txt` 均含 `build_cmd=` / `build_cwd=` /
+  `toolchain=` / `git_status_porcelain_measure=` 字段（**字段值照抄，卡面不写数字**）；
+  C# 侧实跑命令与仓库状态见 `E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`。
+- **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
+  卡面凡引"章程 §N"均以此文件为准。
