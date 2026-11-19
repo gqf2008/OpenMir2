@@ -487,6 +487,9 @@ public static class Program
             target.WAbil.HP = 100;
             target.Abil.MaxHP = 100;
         }
+        // **输入**语义：`Fixture.target_hp` = 施法前 HP（驱动用它设初始值）；施法后值走结果顶层
+        // `TargetHp`（只作断言、不作输入）。
+        int targetHpInput = target.WAbil.HP;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         // **记录面补全（卡 openmir2-magic-parity A 口径）**：所有下行最终都汇到
@@ -621,7 +624,7 @@ public static class Program
             Reachability = loginOrder ? "reachable" : "unverified",
             AntiMagic = target.AntiMagic,
             TargetLevel = target.Abil.Level,
-            TargetHp = target.WAbil.HP,
+            TargetHp = targetHpInput,
             TargetMaxHp = target.WAbil.MaxHP,
             Derived = FixtureContract.Recompute(OpenMir2.Enums.PlayerJob.Warrior, (byte)target.Abil.Level),
             Construction = new FixtureContract.Construction
@@ -646,7 +649,7 @@ public static class Program
                 reachability = contract.Reachability,
                 anti_magic = (int)target.AntiMagic,
                 target_level = (int)target.Abil.Level,
-                target_hp = (int)target.WAbil.HP,
+                target_hp = targetHpInput,
                 target_max_hp = (int)target.WAbil.MaxHP,
                 derived = new
                 {
