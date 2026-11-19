@@ -537,6 +537,35 @@ pub struct PendingMagStruck {
     pub order: u64,
 }
 
+/// **buff 施加时刻的观察事件**（卡 `openmir2-magic-parity` 14/15/31 接线）。
+///
+/// 与 oracle 的对应：`BaseObject.MagDefenceUp`/`DefenceUp`（14/15）与
+/// `CharacterObject.MagBubbleDefenceUp`（31）在 `AddBuff` 之后**立即**发
+/// `SysMsg`（RM_SYSMESSAGE）、`StatusChanged()`/`SendUpdateMsg(RM_CHARSTATUSCHANGED)`、
+/// `RecalcAbilitys()`+`SendMsg(RM_ABILITY)`；本结构只**记录**施加事实与当时的 `CharStatus`，
+/// 帧面由宿主（`bins/game-svr`）按 §11 映射表出，**不参与**任何世界行为。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BuffApplyEvent {
+    /// 被施加 buff 的 actor（14/15 可能是范围内的任意 proper friend；31 恒为施法者）。
+    pub actor_id: i32,
+    /// 施加的持续秒数（`nSec`；进入 SysMsg 文案）。
+    pub seconds: i32,
+    /// 施加后的 `GetCharStatus()`（进入 657 的 `nParam1`）。
+    pub char_status: i32,
+    pub kind: BuffApplyKind,
+}
+
+/// [`BuffApplyEvent::kind`] 的三类施加点（对应 §11 的三个 RM 组合）。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BuffApplyKind {
+    /// `BaseObject.DefenceUp`（15：`DefensePower`）。
+    DefenceUp,
+    /// `BaseObject.MagDefenceUp`（14：`MagicDefensePower`）。
+    MagDefenceUp,
+    /// `CharacterObject.MagBubbleDefenceUp`（31：`MagicShield`）。
+    MagicShield,
+}
+
 /// **P3-B2**：一条 `RM_MAGSTRUCK` 交付段处理后的观察值（`BaseObject.Base.cs:618-686`）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MagStruckOutcome {
@@ -1240,6 +1269,10 @@ pub struct SimState {
     /// 由效果体（23/24/33/47）入队，宿主调 `World::deliver_mag_struck` 逐目标处理
     /// （`R(1000)` → `MSD` → `nDamage>0` 链）。队列为空时零行为变化。
     pub pending_mag_struck: Vec<PendingMagStruck>,
+    /// **buff 施加事件**：供宿主出 657/100/52（消费方 `take_buff_applies`）；
+    /// `buff_apply_log` 是**只读观测面**（追加式，供对拍台账读取；不参与行为）。
+    pub pending_buff_applies: Vec<BuffApplyEvent>,
+    pub buff_apply_log: Vec<BuffApplyEvent>,
     /// **卡 `openmir2-run-gap-monster-specials`**：待执行的 `Operate(RM_ZEN_BEE)`
     /// （`BeeQueen`/`SpiderHouseMonster` 产仔），由 [`crate::slave::World::deliver_self_delay_msgs`]
     /// 在 500ms 自投递到点时入队；宿主用 [`World::flush_special_spawns`] 在同一条 `rng` 上造怪。
@@ -1586,6 +1619,8 @@ impl SimState {
             spirit_mutiny_tick: 0,
             slave_self_delay_enabled: false,
             pending_mag_struck: Vec::new(),
+            pending_buff_applies: Vec::new(),
+            buff_apply_log: Vec::new(),
             pending_special_spawns: Vec::new(),
             pending_special_ref_msgs: Vec::new(),
             pending_refmessage_frames: Vec::new(),
@@ -3984,16 +4019,30 @@ impl World {
     pub fn defence_up(&mut self, actor_id: i32, n_sec: i32) {
         let now = self.buff_now();
         if self.buffs.has_buff(actor_id, BuffType::DefensePower) {
+            // `BaseObject.cs:2137-2147`：已有 buff ⇒ **只** `TryUpdate` 后 `return true`，
+            // 不做 `CharStatus = GetCharStatus()`、不 `SysMsg`、不 `RecalcAbilitys()`、
+            // 不 `SendMsg(RM_ABILITY)`。范围施法 `MagMakeDefenceArea` 的 49 次循环因此只有
+            // **第一次**出帧（金标准 `dejiwonho.json`：target 恰 1 组 52/100/657×2）。
             self.buffs
                 .try_update(actor_id, BuffType::DefensePower, n_sec);
-        } else {
-            self.buffs
-                .add_buff(actor_id, BuffType::DefensePower, n_sec, n_sec, now);
+            return;
         }
+        self.buffs
+            .add_buff(actor_id, BuffType::DefensePower, n_sec, n_sec, now);
         let status = self.get_char_status(actor_id);
         if let Some(e) = self.entities.get_mut(actor_id) {
             e.buff.char_status = status;
         }
+        // oracle `DefenceUp`（`BaseObject.cs:2159/2161-2162`）：恒发 `SysMsg`、`RecalcAbilitys()`、
+        // `SendMsg(RM_ABILITY)` ⇒ 记录施加事件供宿主出 100/657×2/52。
+        let ev = BuffApplyEvent {
+            actor_id,
+            seconds: n_sec,
+            char_status: status,
+            kind: BuffApplyKind::DefenceUp,
+        };
+        self.pending_buff_applies.push(ev);
+        self.buff_apply_log.push(ev);
     }
 
     /// `BaseObject.MagDefenceUp`（`BaseObject.cs:2167-2185`）：无条件 `AddBuff`。
@@ -4005,16 +4054,43 @@ impl World {
         if let Some(e) = self.entities.get_mut(actor_id) {
             e.buff.char_status = status;
         }
+        // oracle `MagDefenceUp`（`BaseObject.cs:2183-2186`）：恒发 `SysMsg`、`RecalcAbilitys()`、
+        // `SendMsg(RM_ABILITY)`。
+        let ev = BuffApplyEvent {
+            actor_id,
+            seconds: n_sec,
+            char_status: status,
+            kind: BuffApplyKind::MagDefenceUp,
+        };
+        self.pending_buff_applies.push(ev);
+        self.buff_apply_log.push(ev);
     }
 
     /// `CharacterObject.MagicShield(nSec)`（`CharacterObject.cs:103`）：加魔法盾 buff + 置
     /// `MagicShield`（`DamageHealth` 的 MP 抵扣门）。
     pub fn magic_shield_on(&mut self, actor_id: i32, n_sec: i32) {
+        let old_status = self.get_char_status(actor_id);
         let now = self.buff_now();
         self.buffs
             .add_buff(actor_id, BuffType::MagicShield, n_sec, n_sec, now);
         if let Some(e) = self.entities.get_mut(actor_id) {
             e.buff.magic_shield = true;
+        }
+        // oracle `MagBubbleDefenceUp`（`CharacterObject.cs:102-110`）：`CharStatus = GetCharStatus();`
+        // 只在**变化**时 `StatusChanged()`。
+        let new_status = self.get_char_status(actor_id);
+        if let Some(e) = self.entities.get_mut(actor_id) {
+            e.buff.char_status = new_status;
+        }
+        if new_status != old_status {
+            let ev = BuffApplyEvent {
+                actor_id,
+                seconds: n_sec,
+                char_status: new_status,
+                kind: BuffApplyKind::MagicShield,
+            };
+            self.pending_buff_applies.push(ev);
+            self.buff_apply_log.push(ev);
         }
     }
 
@@ -5434,6 +5510,11 @@ impl World {
             });
         }
         out
+    }
+
+    /// 取走自上次以来的 **buff 施加事件**（宿主出帧用；观测日志 `buff_apply_log` 保留供对拍）。
+    pub fn take_buff_applies(&mut self) -> Vec<BuffApplyEvent> {
+        std::mem::take(&mut self.pending_buff_applies)
     }
 
     /// **P3-B2**：`RM_MAGSTRUCK` 交付处理器（`BaseObject.Base.cs:618-686`）的**有序**批量版。

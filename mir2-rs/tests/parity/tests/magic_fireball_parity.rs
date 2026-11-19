@@ -368,6 +368,35 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
 }
 
+/// **`14/15`（`SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO`）**真实台账 → 判定面（标签 s1/s5/s13）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::hangmajinbub_parity_*）生成真实台账"]
+fn real_rust_ledger_hangmajinbub() {
+    real_ledger_verify_labels(
+        "hangmajinbub",
+        &golden_file("hangmajinbub.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::dejiwonho_parity_*）生成真实台账"]
+fn real_rust_ledger_dejiwonho() {
+    real_ledger_verify_labels(
+        "dejiwonho",
+        &golden_file("dejiwonho.json"),
+        &["s1", "s5", "s13"],
+    );
+}
+
+/// **`31 魔法盾`**真实台账 → 判定面（标签 = `s1`/`s5`/`s13`；本支无 AntiMagic 骰）；
+/// 金标准 `golden/magic/shield.json`。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::shield_parity_*）生成真实台账"]
+fn real_rust_ledger_shield() {
+    real_ledger_verify_labels("shield", &golden_file("shield.json"), &["s1", "s5", "s13"]);
+}
+
 /// **`44 灭天火`**真实台账 → 判定面（金标准 `golden/magic/hbfireball.json`）。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::hbfireball_parity_*）生成真实台账"]

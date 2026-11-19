@@ -13575,7 +13575,26 @@ fn handle_spell_cmd_with_magic(
                 // ⇒ 无护身符也可施放（与 14/15 的 13..=19 组不同）。
                 mir2_world_bevy::world::SKILL_SHIELD => {
                     if let Some(magic) = magic_table.get(req.magic_id) {
+                        // **buff 应用事件 → 帧**（卡 `openmir2-magic-parity`）：oracle
+                        // `MagBubbleDefenceUp`（`CharacterObject.cs:96-114`）在 `AddBuff` 后若
+                        // `CharStatus` 变化 ⇒ `StatusChanged()`（`SendRefMsg(RM_CHARSTATUSCHANGED)`，
+                        // 收件人 = ±`SendRefMsgRange` 含自己）⇒ `SM_CHARSTATUSCHANGED(657)`。
+                        // 与 638/640 同批入 [`SpellFrameBuf`] ⇒ 按 `(byte)ident` 出队
+                        // （638=136 < 657=155 < 640=255）。
+                        let mut buf = SpellFrameBuf::new();
                         let _ = world.cast_shield_spell(actor_id, magic, magic_level, mc);
+                        for ev in world.take_buff_applies() {
+                            let body =
+                                smframe_ext::sm_charstatuschanged(ev.actor_id, ev.char_status, 0);
+                            buf.push_broadcast(
+                                world,
+                                online,
+                                ev.actor_id,
+                                true,
+                                (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
+                                &body,
+                            );
+                        }
                         // `bo_train = true`：见 [`finish_spell_tail`] 的文档（`MagBubbleDefenceUp`
                         // 在 `BubbleDefenceUP == 0` 时恒 true ⇒ 不能拿 `n_sec` 判）。
                         finish_spell_tail(
@@ -13594,10 +13613,11 @@ fn handle_spell_cmd_with_magic(
                             tx,
                             ty,
                             target_id.unwrap_or(0),
-                            None,
+                            Some(&mut buf),
                             // P1/P2 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
                             None,
                         );
+                        buf.flush(online, gates);
                     }
                 }
                 // 14/15 属于 oracle 的 13..=19 共享组（`MagicManager.cs:315-393`）：
@@ -13627,6 +13647,10 @@ fn handle_spell_cmd_with_magic(
                             },
                         );
                         if let Some((slot, count, armringl, bujuk)) = gate {
+                            // **14/15 的 642 与共享尾同批出队**（卡 `openmir2-firecharm-14-15-order`，
+                            // 与 13 的修法同构：`RM_DURACHANGE(10125)` prio 141 与 `RM_MAGICFIRE`
+                            // prio 136 / buff 帧一起按 `(byte)ident` 出队；只影响护身符路径）。
+                            let mut buf = SpellFrameBuf::new();
                             // `MagicBase.UseAmulet`（`MagicBase.cs:109-127`）——**先于**效果体
                             // （oracle `:325` 在 `:326-390` 的内层 switch 之前）。
                             let dura = match slot {
@@ -13670,7 +13694,12 @@ fn handle_spell_cmd_with_magic(
                                     .and_then(Option::as_ref)
                                 {
                                     let body = smframe::sm_durachange(it.dura, slot, it.dura_max);
-                                    send_self_frame(online, gates, chr_name, body);
+                                    buf.push_actor(
+                                        online,
+                                        actor_id,
+                                        (mir2_protocol::messages::RM_DURACHANGE & 0xFF) as u8,
+                                        body,
+                                    );
                                 }
                             }
                             // case 效果（`:352-365`）：`btState == 1` ⇒ `MagDefenceUp`（14）；
@@ -13691,6 +13720,85 @@ fn handle_spell_cmd_with_magic(
                                 ty,
                                 bt_state,
                             );
+                            // **buff 应用事件 → 帧**（卡 `openmir2-magic-parity` 14/15/31 接线）：
+                            // oracle `DefenceUp`/`MagDefenceUp`（`BaseObject.cs:2159/2165-2186`）恒发
+                            // `SysMsg(...)`（100，仅自己）+ `RecalcAbilitys()`（`StatusChanged()` 广播含自
+                            // + `SendUpdateMsg` 自更新 ⇒ 657×2）+ `SendMsg(RM_ABILITY)`（52，仅自己）。
+                            // 文案取自 `MessageSettings` 源码缺省（`防御力增加{0}秒`/`魔法防御力增加{0}秒`；
+                            // 部署 `String.conf` 同串，配置面未接入 `handle_spell_cmd`——登记）；
+                            // 绿色 `[Setup] GreenMsgFColor/BColor = 219/255`（部署值）。
+                            for ev in world.take_buff_applies() {
+                                let text = match ev.kind {
+                                    mir2_world_bevy::world::BuffApplyKind::MagDefenceUp => {
+                                        format!("魔法防御力增加{}秒", ev.seconds)
+                                    }
+                                    mir2_world_bevy::world::BuffApplyKind::DefenceUp => {
+                                        format!("防御力增加{}秒", ev.seconds)
+                                    }
+                                    mir2_world_bevy::world::BuffApplyKind::MagicShield => continue,
+                                };
+                                let body = smframe::sm_sysmessage(
+                                    ev.actor_id,
+                                    219,
+                                    255,
+                                    &enter::gbk(&text),
+                                );
+                                buf.push_actor(
+                                    online,
+                                    ev.actor_id,
+                                    (mir2_protocol::messages::RM_SYSMESSAGE & 0xFF) as u8,
+                                    body,
+                                );
+                                let body = smframe_ext::sm_charstatuschanged(
+                                    ev.actor_id,
+                                    ev.char_status,
+                                    0,
+                                );
+                                buf.push_broadcast(
+                                    world,
+                                    online,
+                                    ev.actor_id,
+                                    true,
+                                    (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
+                                    &body,
+                                );
+                                buf.push_actor(
+                                    online,
+                                    ev.actor_id,
+                                    (mir2_protocol::messages::RM_CHARSTATUSCHANGED & 0xFF) as u8,
+                                    body,
+                                );
+                                if let Some(entry) =
+                                    online.iter().find(|e| e.actor_id == ev.actor_id)
+                                {
+                                    let name = entry.chr_name.clone();
+                                    if let Some(sg) = ground_sessions.get_mut(&name) {
+                                        let extra =
+                                            world.entities.get(sg.actor_id).map(|e| e.extra_abil);
+                                        let _ = recalc_session_ability(
+                                            sg,
+                                            catalog,
+                                            extra.as_ref(),
+                                            None,
+                                        );
+                                        let body = smframe::sm_ability(
+                                            sg.state.gold,
+                                            sg.equip.job,
+                                            sg.game_gold,
+                                            &ability_tail(
+                                                &sg.state.wabil,
+                                                smframe::client_layout_enabled(),
+                                            ),
+                                        );
+                                        buf.push_actor(
+                                            online,
+                                            ev.actor_id,
+                                            (mir2_protocol::messages::RM_ABILITY & 0xFF) as u8,
+                                            body,
+                                        );
+                                    }
+                                }
+                            }
                             finish_spell_tail(
                                 world,
                                 online,
@@ -13707,10 +13815,11 @@ fn handle_spell_cmd_with_magic(
                                 tx,
                                 ty,
                                 target_id.unwrap_or(0),
-                                None,
+                                Some(&mut buf),
                                 // P1/P2 既有块：`RM_MAGIC_LVEXP` 仍立即发（登记）。
                                 None,
                             );
+                            buf.flush(online, gates);
                         } else {
                             // `boSpellFail` 保持 true ⇒ `:644-647 return false` ⇒ 调用方
                             // `Attack.cs:1279-1281` 发 `RM_MAGICFIREFAIL`（恰一条/收件人；
@@ -65664,6 +65773,26 @@ SendRefMsgRange=15
             e.vitals.max_hp = 100;
             e.progression.level = 20;
         }
+        // 目标的**地面会话**（14/15 的 `RecalcAbilitys` 52 帧读 `sg.state.wabil`；C# 目标为
+        // Level=20 / HP=MaxHP=100 / MP=0 的默认 WAbil）。
+        {
+            let mut tsg = spell_session_ground(target);
+            // `WAbil` 的**输入面**是 `sg.equip.abil`（oracle `Abil`）。C# 夹具的 target 是
+            // 「`BaseObject` ctor 缺省 Abil + `Abil.Level=20`」，其 `WAbil` 由
+            // `RecalcAbilitys()`（`BaseObject.Abil.cs:27` `WAbil = Abil.Clone()`）得到。
+            // 真实登录在 `PlayObject.cs:1308-1309` 先跑 `RecalcLevelAbilitys()` 再
+            // `RecalcAbilitys()`；本仓 `recalc_session_ability` 是这两者的**合并实现**
+            // （见其文档注释），等价前提是 `equip.abil` 与等级自洽 ⇒ 夹具按登录序给出
+            // 等级派生前的 `Abil`：`Level=20` + ctor 缺省 `MaxExp=50`（`BaseObject.cs:414-431`）。
+            tsg.equip.abil.level = 20;
+            tsg.equip.abil.max_exp = 50;
+            tsg.state.wabil.level = 20;
+            tsg.state.wabil.hp = 100;
+            tsg.state.wabil.max_hp = 100;
+            tsg.state.wabil.mp = 0;
+            tsg.state.wabil.max_mp = 0;
+            rig.ground_sessions.insert("target".into(), tsg);
+        }
         // `UserMagic.Level`：44 的推挤 `Random(Level)-1` 需要 Level=3 才可能 >0（卡 §23）。
         rig.saves
             .get_mut("caster")
@@ -65774,6 +65903,10 @@ SendRefMsgRange=15
         );
 
         let mut rig = fireball_rig(id_base, magic_id, sc, user_magic_level);
+        // **buff 生产链前提**（14/15/31 的 A-5 块）；其它魔号不受影响（A-5 块只认这三支）。
+        if matches!(magic_id, 14 | 15 | 31) {
+            rig.world.enable_buff_tick();
+        }
         // 必须与 rng_trace::enable(path, seed) 的 seed 一致：trace 只记元数据，数值由 world.rng 产生。
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n0 = trace_line_count(&trace);
@@ -65783,6 +65916,9 @@ SendRefMsgRange=15
 
         // ---- 段①：生产入口施法 ----
         rig.cast(magic_id, (101, 100), target);
+        // buff 施加事件（14/15/31）：来自 `World::buff_apply_log`（**内部事件的只读观测面**，
+        // 不由 SM 帧反推）。必须在**施法之后**取。
+        let buff_applies = rig.world.buff_apply_log.clone();
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
 
@@ -65980,6 +66116,67 @@ SendRefMsgRange=15
                         .or_default()
                         .push(fireball_rm(8090, 0, 0, 0, 0, 154, false));
                 }
+            }
+        }
+        // `RM_CHARSTATUSCHANGED(10139)`（14/15/31 的 buff 施加）：来自 `BuffApplyEvent`
+        // （`World::buff_apply_log` 观测面）。收件人 = 被施者 ±`SendRefMsgRange` 的玩家（含自己），
+        // prio = 10139 & 0xFF = 155、late=false；p1 = 施加后的 `CharStatus`。
+        for ev in &buff_applies {
+            let map_id = rig.world.entities.get(ev.actor_id).map_or(0, |e| e.map_id);
+            let (x, y) = rig
+                .world
+                .entities
+                .get(ev.actor_id)
+                .map_or((0, 0), |e| (e.x, e.y));
+            for id in chat::hear_targets_at(&rig.world, ev.actor_id, map_id, x, y, range) {
+                if let Some(who) = who_of(id) {
+                    rm_by_who.entry(who).or_default().push(fireball_rm(
+                        10139,
+                        0,
+                        i64::from(ev.char_status),
+                        0,
+                        0,
+                        155,
+                        false,
+                    ));
+                }
+            }
+            // 14/15（`DefenceUp`/`MagDefenceUp`）另有：`RecalcAbilitys` 的**自更新** 657（第二条）、
+            // `SendMsg(RM_ABILITY)`（52，自己，prio 67）、`SysMsg`（100，自己，prio 252）。
+            if !matches!(ev.kind, mir2_world_bevy::world::BuffApplyKind::MagicShield) {
+                if let Some(who) = who_of(ev.actor_id) {
+                    let v = rm_by_who.entry(who).or_default();
+                    v.push(fireball_rm(
+                        10139,
+                        0,
+                        i64::from(ev.char_status),
+                        0,
+                        0,
+                        155,
+                        false,
+                    ));
+                    v.push(fireball_rm(10051, 0, 0, 0, 0, 67, false));
+                    v.push(fireball_rm(11004, 0, 219, 255, 0, 252, false));
+                }
+            }
+        }
+        // `RM_MAGIC_LVEXP(10123)`：训练尾，仅施法者（Rust 宿主即时发 `SM_MAGIC_LVEXP(640)`，
+        // 由该帧反推 w=0/p1=MagicId(recog)/p2=Level(param)/p3=MakeLong(tag,series)、prio=255、late=true）。
+        if let Some((_, b)) = all_frames
+            .iter()
+            .find(|(s, b)| *s == 911 && sf_ident(b) == mir2_protocol::messages::SM_MAGIC_LVEXP)
+        {
+            let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+            if let Some(who) = who_of(caster) {
+                rm_by_who.entry(who).or_default().push(fireball_rm(
+                    10123,
+                    0,
+                    i64::from(cm.recog),
+                    i64::from(cm.param),
+                    i64::from(game_svr::feature::make_long(cm.tag, cm.series)),
+                    255,
+                    true,
+                ));
             }
         }
         // `RM_DELAYPUSHED(8043)`：施法者自延迟队列（late=true、prio = 255）。
@@ -66751,6 +66948,279 @@ SendRefMsgRange=15
             );
         }
         assert_eq!(healing_count(&c, "obs_out", "Sent", 9), 0);
+    }
+
+    /// `31 魔法盾`（`SKILL_SHIELD`）真实台账驱动。金标准 `golden/magic/shield.json`；
+    /// 三 seed（无 AntiMagic 骰，标签 `s1/s5/s13`）；夹具**显式** `enable_buff_tick`（A-5 前提）。
+    fn shield_case(label: &str) -> serde_json::Value {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("shield_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        v[0].clone()
+    }
+
+    fn shield_assert(label: &str, seed: i32, base: i32) {
+        fireball_parity_drive("shield", 31, 0, 1, label, seed, base);
+        fireball_case_assert("shield", label, 100, 2);
+        b1_golden_drain_assert("shield.json", label, 2);
+        let c = shield_case(label);
+        // 施加事件：31 恒作用于施法者 ⇒ caster 的 `CharStatus` 变化广播给 ±range（含自己）。
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(
+                healing_count(&c, who, "Rm", 10139),
+                1,
+                "[shield/{label}] {who} 恰 1 条 RM_CHARSTATUSCHANGED"
+            );
+            assert_eq!(
+                healing_count(&c, who, "Sent", 657),
+                1,
+                "[shield/{label}] {who} 恰 1 条 SM 657"
+            );
+        }
+        assert_eq!(healing_count(&c, "obs_out", "Sent", 657), 0);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn shield_parity_s1() {
+        shield_assert("s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn shield_parity_s5() {
+        shield_assert("s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn shield_parity_s13() {
+        shield_assert("s13", 13, 3000);
+    }
+
+    /// **门牙（buff_tick_gate）**：**不**开 `enable_buff_tick` ⇒ 14/15/31 的 A-5 生产链整段不跑
+    /// ⇒ 应用帧不出现（无 657、无施加事件）；开了才出现（上面三支）。
+    #[test]
+    fn shield_buff_tick_gate_off_emits_no_buff_frames() {
+        let mut rig = fireball_rig(1000, 31, 0, 1); // 注意：**不** enable_buff_tick
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(1);
+        let target = fireball_actor(&rig, "target");
+        rig.cast(31, (101, 100), target);
+        let (frames, _raws) = rig.drain();
+        assert!(
+            rig.world.buff_apply_log.is_empty(),
+            "门关时不得有 buff 施加事件；实得 {:?}",
+            rig.world.buff_apply_log
+        );
+        for socket in [911, 912, 913, 914] {
+            assert_eq!(
+                sf_count(
+                    &frames,
+                    socket,
+                    mir2_protocol::messages::SM_CHARSTATUSCHANGED
+                ),
+                0,
+                "门关时 socket {socket} 不得有 SM 657"
+            );
+        }
+    }
+
+    /// 从比较面 JSON 的某收件人里取 `SM_ABILITY(52)` 尾并 EDCode 解码 = oracle `WAbil` 40B
+    /// （`EncodeMessage` 丢掉成员数首字节，见 `record::encode_ability` 文档）。
+    fn sm_ability_wabil(case: &serde_json::Value, who: &str) -> Vec<u8> {
+        let sent = case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == who)
+            .unwrap_or_else(|| panic!("比较面缺 {who}"))["Sent"]
+            .as_array()
+            .unwrap();
+        let f = sent
+            .iter()
+            .find(|s| s["ident"] == 52)
+            .unwrap_or_else(|| panic!("{who} 必须有 SM_ABILITY(52)"));
+        let tail = f["tail"].as_str().expect("52 尾必须是串");
+        mir2_protocol::edcode::decode(tail.as_bytes())
+    }
+
+    /// 取金标准某支（`golden/magic/<file>`）的 case。
+    fn golden_case(file: &str, label: &str) -> serde_json::Value {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/magic")
+            .join(file);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("金标准必须存在 {}（{e}）", path.display()));
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        v["cases"]
+            .as_array()
+            .expect("金标准必须有 cases")
+            .iter()
+            .find(|c| c["Label"] == label)
+            .cloned()
+            .unwrap_or_else(|| panic!("金标准缺 {label} 支"))
+    }
+
+    /// `14/15`（`SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO`，护身符 + 范围 DefenceUp）驱动。
+    /// 金标准 `golden/magic/{hangmajinbub,dejiwonho}.json`；三 seed（无 AntiMagic 骰，标签 s1/s5/s13）。
+    fn defence_case(stem: &str, label: &str) -> serde_json::Value {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        v[0].clone()
+    }
+
+    fn defence_assert(stem: &str, magic_id: u16, label: &str, seed: i32, base: i32) {
+        fireball_parity_drive(stem, magic_id, 15, 1, label, seed, base);
+        fireball_case_assert(stem, label, 100, 4);
+        b1_golden_drain_assert(&format!("{stem}.json"), label, 2);
+        let c = defence_case(stem, label);
+        // **两侧同一登录语义的证据**：Rust `recalc_session_ability`（= oracle
+        // `RecalcLevelAbilitys()` + `RecalcAbilitys()` 的合并实现，见其文档注释）派生出的
+        // `WAbil` 必须与金标准 target 的 `SM_ABILITY(52)` 尾逐字节一致。夹具 target 的
+        // `Abil` 按登录序给（`Level=20` + ctor 缺省 `MaxExp=50`），等级 20 战士派生值 =
+        // MaxHP 224 / MaxMP 81 / DC 0x0403（`PlayObject.cs:5254-5317` 公式）。
+        let rust_abil = sm_ability_wabil(&c, "target");
+        let gold_abil = sm_ability_wabil(&golden_case(&format!("{stem}.json"), label), "target");
+        assert_eq!(rust_abil.len(), 40, "[{stem}/{label}] WAbil 解出必须 40B");
+        assert_eq!(
+            gold_abil.len(),
+            40,
+            "[{stem}/{label}] 金标准 WAbil 解出必须 40B"
+        );
+        let fld = |b: &[u8], o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
+        assert_eq!(rust_abil[0], 20, "[{stem}/{label}] Level 必须是夹具值 20");
+        assert_eq!(
+            rust_abil[0], gold_abil[0],
+            "[{stem}/{label}] Level 与金标准不一致"
+        );
+        assert_eq!(
+            fld(&rust_abil, 16),
+            224,
+            "[{stem}/{label}] MaxHP 必须是等级派生值"
+        );
+        assert_eq!(
+            fld(&rust_abil, 16),
+            fld(&gold_abil, 16),
+            "[{stem}/{label}] MaxHP 与金标准不一致"
+        );
+        assert_eq!(
+            fld(&rust_abil, 18),
+            81,
+            "[{stem}/{label}] MaxMP 必须是等级派生值"
+        );
+        assert_eq!(
+            fld(&rust_abil, 18),
+            fld(&gold_abil, 18),
+            "[{stem}/{label}] MaxMP 与金标准不一致"
+        );
+        assert_eq!(
+            fld(&rust_abil, 6),
+            0x0403,
+            "[{stem}/{label}] DC 必须是等级派生值"
+        );
+        assert_eq!(
+            fld(&rust_abil, 6),
+            fld(&gold_abil, 6),
+            "[{stem}/{label}] DC 与金标准不一致"
+        );
+        assert_eq!(
+            rust_abil, gold_abil,
+            "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
+        );
+        // 应用次数 = `MagMakeDefenceArea(...,3,...)` 的 7×7 = 49 次循环 × 中心格唯一 proper friend
+        // （oracle 的 `Envir.GetCellInfo(nX,nY)` 固定读中心格）。**出帧**次数按 buff 种类分叉：
+        //  · 14 `MagDefenceUp`（`BaseObject.cs:2167-2185`）：无条件 `AddBuff` ⇒ 49 组 52+100+657×2；
+        //  · 15 `DefenceUp`（`BaseObject.cs:2137-2165`）：已有 buff ⇒ 只 `TryUpdate` 早退
+        //    ⇒ 仅**第一次**出帧（1 组）。金标准 `dejiwonho.json` 的 target = 52×1/100×1/657×2 钉住。
+        let n: usize = if magic_id == 14 { 49 } else { 1 };
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 10125),
+            1,
+            "[{stem}/{label}] 护身符 642 恰 1 条"
+        );
+        assert_eq!(
+            healing_count(&c, "caster", "Rm", 10123),
+            1,
+            "[{stem}/{label}] 训练尾 10123 恰 1 条"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Rm", 10051),
+            n,
+            "[{stem}/{label}] 52 的 RM 恰 {n} 条"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Rm", 11004),
+            n,
+            "[{stem}/{label}] 100 的 RM 恰 {n} 条"
+        );
+        assert_eq!(
+            healing_count(&c, "target", "Rm", 10139),
+            n * 2,
+            "[{stem}/{label}] 657 的 RM 恰 {n}×2 条"
+        );
+        assert_eq!(healing_count(&c, "target", "Sent", 52), n);
+        assert_eq!(healing_count(&c, "target", "Sent", 100), n);
+        assert_eq!(healing_count(&c, "target", "Sent", 657), n * 2);
+        assert_eq!(healing_count(&c, "caster", "Sent", 657), n);
+        assert_eq!(healing_count(&c, "obs_in", "Sent", 657), n);
+        assert_eq!(healing_count(&c, "obs_out", "Sent", 657), 0);
+        // 帧序：caster = [638, 642, 657×n, 640]；target = [17, 52×n, 657×2n, 100×n]。
+        let seq: Vec<i64> = c["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["ident"].as_i64())
+            .collect();
+        assert_eq!(
+            &seq[..2],
+            &[638, 642],
+            "[{stem}/{label}] 642 必须在 638 之后（oracle 队列序）"
+        );
+        assert_eq!(seq[seq.len() - 1], 640, "[{stem}/{label}] 640 最后");
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn hangmajinbub_parity_s1() {
+        defence_assert("hangmajinbub", 14, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn hangmajinbub_parity_s5() {
+        defence_assert("hangmajinbub", 14, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn hangmajinbub_parity_s13() {
+        defence_assert("hangmajinbub", 14, "s13", 13, 3000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn dejiwonho_parity_s1() {
+        defence_assert("dejiwonho", 15, "s1", 1, 1000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn dejiwonho_parity_s5() {
+        defence_assert("dejiwonho", 15, "s5", 5, 2000);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn dejiwonho_parity_s13() {
+        defence_assert("dejiwonho", 15, "s13", 13, 3000);
     }
 
     /// gate 通道上取到的一条下行：`(socket, 帧体 / `SendRaw` 短包字节)`。
