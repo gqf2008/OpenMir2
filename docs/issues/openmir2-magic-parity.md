@@ -974,3 +974,25 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
      flush」的实现序，oracle 是后续趟处理受击）；② 同优先级 31 的 tie 序由 `NetPriorityQueue`
      两段模型的出队序给出（`[p1,m3,m2,m1]`），**不是** oracle 实证（本支多目标无 golden）。
 - **清单**：MG-37 升 `verified`（magic **15/65**）。
+
+### 31. 33 冰咆哮（`SKILL_SNOWWIND`）接线（草稿，待窗口重取）
+
+> **状态**：以下数值来自**暂停令前**那一轮驱动/比较器（已完成、全绿）；按 opc-07 要求，
+> **放行后须用同一 `run_id` 重取**，未重取前**不作最终证据**、清单 MG-45 **不升格**。
+
+- **oracle 分派（只认魔号，不按名字）**：`src/M2Server/Magic/MagicManager.cs:489-494`
+  的 `case SKILL_SNOWWIND` → `MagBigExplosion(…, SystemShare.Config.SnowWindRange)`；
+  helper `:1100-1117`。
+- **范围来源落进夹具**：部署 `E:\MirServer\M2GameSvr\Server.conf`（sha256 `ce5e3ce9…`）
+  的 `SnowWindRange=1`；golden `Fixture` 记录 `snow_wind_range`、`fire_boom_rage`、
+  `elec_blizzard_range` 与 `server_conf_sha256`。
+- **实测（33 自己的 golden，非沿用 23）**：target **HP 100→85（damage 15）**⇒ 本夹具
+  `IsProtectTarget` 为 true；`Rng` = **7 抽**（`[0,0,0,7,1,0,3]`）、`DrainPasses` = 4、`NotDue` = 0；
+  caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`；
+  RM：8044(target,p1=15,108)/10052(target,68)/8103(众人,w=15/p1=85/p2=224/p3=caster,167)/
+  8090(154)/10123(caster,p1=33,255)、10008.p3=33；golden = `golden/magic/snowwind.json`。
+- **帧族与 C2 交集**：本支帧族（53/638/656/31）与 `push_broadcast` 缓存接线相交，
+  **`2f` 的 C2 落地后必须重跑全平面**（45 驱动 + 15 比较器）。
+- **MG-45 升格草稿（未落盘）**：`status=verified`、`basis=semantic`、`test=real_rust_ledger_snowwind`、
+  `fixture=golden/magic/snowwind.json`、`cases=s1/s5/s13`、`unit_tests=snowwind_parity_s1/s5/s13`；
+  **待重取一致后再写入清单**。
