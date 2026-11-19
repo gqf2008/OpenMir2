@@ -19,7 +19,7 @@
 
 | # | 站点（file:符号） | 帧族 | oracle 锚 | 现行为 | 预期可观测差异 | 修法与牙 |
 | --- | --- | --- | --- | --- | --- | --- |
-| 1 | `bins/game-svr/src/lib.rs::push_broadcast` | `SM_MAGICFIRE(53)`/`SM_STRUCK(638)`/`SM_HIT`/`SM_ABILITY` 族（`53/638/656/31/1103/640`） | `src/M2Server/Magic/MagicManager.cs` 的 `playObject.SendRefMsg(Messages.RM_MAGICFIRE, …)` | 每帧重算 | 施法同 tick 多帧 ⇒ 12 格边界多收后续帧 | 改用 `ref_msg_cache::targets`；牙：魔法线双侧 golden（需魔法线回归，故单列 C2） |
+| 1 | `bins/game-svr/src/lib.rs::push_broadcast` | 施法尾帧族（ident `53`=SM_HEALTHSPELLCHANGED、`638`=SM_MAGICFIRE、`656`=SM_CHANGENAMECOLOR、`31`=SM_STRUCK、`1103`=SM_INSTANCEHEALGUAGE、`640`=SM_MAGIC_LVEXP） | `src/M2Server/Magic/MagicManager.cs` 的 `playObject.SendRefMsg(Messages.RM_MAGICFIRE, …)` | 每帧重算 | 施法同 tick 多帧 ⇒ 12 格边界多收后续帧 | 改用 `ref_msg_cache::targets`；牙：魔法线双侧 golden（需魔法线回归，故单列 C2） |
 | 2 | `lib.rs::push_charstatuschanged` | `SM_CHARSTATUSCHANGED(657)` | `src/M2Server/Actor/BaseObject.cs` 的 `SendRefMsg(Messages.RM_CHARSTATUSCHANGED, …)` | 每帧重算 | 同窗口两帧 ⇒ 边界多收 | 同 1；牙：golden 边界观察者帧数 |
 | 3 | `lib.rs::broadcast_charstatuschanged_except_self` | 657 | 同上 | 每帧重算 | 同上 | 同 1 |
 | 4 | `lib.rs::flush_healthspell_slots` | `SM_HEALTHSPELLCHANGED(53)` | `src/M2Server/Actor/BaseObject.cs` 的 `SendRefMsg(Messages.RM_HEALTHSPELLCHANGED, …)` | 每帧重算 | 同上 | 同 1 |
@@ -37,11 +37,14 @@
 | 16 | `guild_cmd.rs::ref_show_name` | `SM_USERNAME` | 同上 | 每帧重算 | 同上 | 同 1 |
 | 17 | `guild_official.rs::handle_select` | `SM_USERNAME`（`RefShowName`） | `RM_USERNAME` 同上 | 每帧重算 | 同上 | 同 1 |
 | 18 | `guild_official.rs::war_events_to_frames` | `SM_USERNAME` | 同上 | 每帧重算 | 同上 | 同 1 |
-| 19 | `lib.rs::drain_npc_merchant_turns`/`hits` 的收件人快照无缓存（仅帧下行走缓存） | 10/14 | `SendRefMsg(RM_TURN/RM_HIT)` | 收件人在 `broadcast_ref_msg_opt` 内走缓存（已覆盖） | — | 已覆盖，列此仅供对照 |
 
 > 说明：opc-07 点名的 13 处即 #1–#12 与 #9 的两处；本表另列 #13/#14/#15–#18 共 6 处同类
 > （`hear_targets` 直算），避免"数完了其实还有"。**两个例外不属 SendRefMsg、不列**：
 > 纯 `SendMsg` 点对点发送（不进 `SendRefMsg` 的扫格面）。
+>
+> **已覆盖对照（不占残余编号）**：`drain_npc_merchant_turns` / `drain_npc_merchant_hits` 的
+> 收件人走 `broadcast_ref_msg_opt`，已在 T-287 接入缓存；此处仅列作对照，不计入"残余 19 处"。
+> （残余计数 = #1–#18 共 18 行，其中 #9 含两处站点 ⇒ 19 处。）
 
 ## 3. 修法（统一）
 
