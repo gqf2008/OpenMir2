@@ -5,9 +5,9 @@
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "legacy_source": "E:/UserFleet/magic-parity.json",
   "counting_moment": {
-    "head": "d78170ec46c9c860d51bd2fde7f2a6c2474bfbb4",
+    "head": "849039901b803ca49f32a1c09103e1ada0d955b4",
     "time": "2026-11-20T02:03:38+0800",
-    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）。"
+    "note": "M25 = 8391ae4bb（上一次计数变更的合并提交）；实现提交：9f420a94b（火符接线+642 顺序修复）、b538b7ec5（MG-27 清单升格）；此前各笔实现提交见卡面/回执；14/15/31：051f0562e（buff 事件面+宿主角帧接线）、6e86a0c10（golden 按登录序重生成 + MG-28/29/43 升格）；M33 = 59900ebe7（14/15/31 升格的合并提交，2026-11-20）；M36 = 7b94dabb2（28/MG-39 升格，magic 域 11/65，2026-11-20）；M39 = 1bc47dbc1（18/MG-32 升格，magic 域 12/65，2026-11-20）；M41 = 2ca4be84a（29/MG-40 升格，magic 域 13/65，2026-11-20）；M43 = d78170ec4（19/MG-33 升格，magic 域 14/65，2026-11-20）；M47 = 849039901（23/MG-37 升格，magic 域 15/65，2026-11-20）。"
   },
   "status_enum": [
     "verified",
@@ -913,17 +913,26 @@
         "line": 418,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_fireboom",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/fireboom.json（C# oracle 生成；s1/s5/s13，无 AntiMagic 骰）",
+        "cases": [
+          "s1(seed=1)",
+          "s5(seed=5)",
+          "s13(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::fireboom_parity_s1",
+          "tests::fireboom_parity_s5",
+          "tests::fireboom_parity_s13"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。`MagBigExplosion` 3×3（FireBoomRage=1）单目标；golden 实证`IsProtectTarget=true`（target HP 100→85、damage 15）；RM 8044/10052/8103/8090 由内部`struck_log` 事件组装；C# 装置 `Rng` 覆盖到排水结束、宿主 23|33|47 两段出帧。卡 §30。"
     },
     {
       "id": "MG-38",

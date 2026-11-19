@@ -190,6 +190,9 @@ Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必�
 | `RM_MAGHEALING(8034)` wParam=0, p1=nPower, p2=0, p3=0, prio=255（`SendSelfDelayMsg`） | **服务端事件，不是客户端帧**：`src/M2Server/Player/PlayObject.Message.cs:1619-1629`（到点只累计 `IncHealing`/`PerHealing`，上限 300 的比较在 `:1620`；实际回血由后续 `Run` 的恢复周期另出 53） | 比较"是否登记延时治疗事件 + nPower + 目标"；**不产 SM 帧**（与 `RM_DELAYMAGIC` 同类） |
 | `RM_DURACHANGE(10125)` wParam=槽位, p1=持久, p2=DuraMax, prio=141（`10125 & 0xFF`）、late=false | `src/M2Server/Player/PlayObject.Message.cs:1803-1804`（→ `SM_DURACHANGE(642)`：Recog=Dura、Param=槽位、Tag/Series=DuraMax）。护身符支的触发者 = `MagicBase.UseAmulet`（`src/M2Server/Magic/MagicBase.cs:109-127`，每次 −100 持久；持久不足时改走 `SendDelItems` 并清 `Index`）⇒ **火符的 miss 支同样出现 642**。**队列序**：与 `RM_MAGICFIRE(10120, prio 136)` 同队、按 `(byte)ident` 出队 ⇒ **638 先、642 后**（火符修复卡按此把 642 纳入同批 `SpellFrameBuf`，仅 `UseAmulet` 路径） | `SM_DURACHANGE` 帧逐字段 + `UseItems[ArmRingl].Dura` 的 −100 + caster 的 638→642 顺序 |
 | `RM_TRANSPARENT(8045)` wParam=0, p1=`nHTime`, p2/p3=0, prio=255（`SendSelfDelayMsg`；**队列 = 该目标自己**，延时 800ms） | 产生者 `src/M2Server/Magic/MagicManager.cs:384-389`（19 支）/ helper `:1209-1228`（`SendSelfDelayMsg(RM_TRANSPARENT, 0, nHTime, 0, 0, "", 800)`）；到点处理 `src/M2Server/Actor/BaseObject.Base.cs:760-761` ⇒ `MagicManager.MagMakePrivateTransparent(this, (ushort)nParam1)` ⇒ `StatusChanged()` | **收件人 = 被施加者自己**（到点由它自己处理，不产 SM 帧）；比较 = RM 多重集（who=被施加者、p1=`nHTime`、priority=255、late）。到点后的 657 面见 `RM_CHARSTATUSCHANGED(10139)` 行 |
+| `RM_MAGSTRUCK(8044)` wParam=0, p1=`nPower`, prio=108（`8044 & 0xFF`） | 产生者 `src/M2Server/Magic/MagicManager.cs:1111`（23/33/47 的 `MagBigExplosion`）/`:1138`（24 的 `MagElecBlizzard`）/`src/M2Server/Actor/BaseObject.Base.cs:726`（`RM_DELAYMAGIC` 延时支）；handler `src/M2Server/Player/PlayObject.Message.cs:1563` 起（`wParam>0 && ActorId==自己` ⇒ `SetPkFlag(nParam3)`/`SetLastHiter`；`:1601` 出 `SM_STRUCK(31)`） | **收件人 = 受击者自己**（`SendMsg(baseObject, …)` 进其队列）；比较 = `SM 31` 严格序 + 字段（Recog=受击者、Param=HP、Tag=MaxHP、Series=damage）+ RM 多重集（p1=nPower、priority=108、late=false） |
+| `RM_STRUCK_MAG(8103)` wParam=`nDamage`, p1=HP, p2=MaxHP, p3=攻击方 ActorId, prio=167（`8103 & 0xFF`） | 产生者 `src/M2Server/Actor/BaseObject.Base.cs:629`（受击者 `SendRefMsg(RM_STRUCK_MAG, nDamage, WAbil.HP, WAbil.MaxHP, 攻击方)`）；handler 同 `PlayObject.Message.cs:1563` 支（收件人各自出 `SM_STRUCK(31)`，受击者自己此外还对攻击方 `SetPkFlag`） | **收件人 = 受击者 ±`SendRefMsgRange` 的玩家（含受击者自己）**；比较 = `SM 31` 帧集 + RM 多重集（wParam=damage、p1=hp_after、p2=max_hp、p3=攻击方、167） |
+| `RM_CHANGENAMECOLOR(8090)` wParam=0, p1..p3=0, prio=154（`8090 & 0xFF`） | 产生者 `src/M2Server/Actor/BaseObject.cs:730-733` `RefNameColor()`（受击者 `SetPkFlag(攻击方)` 命中后由**攻击方**发）；handler `src/M2Server/Player/PlayObject.Message.cs:1677-1679` ⇒ `SM_CHANGENAMECOLOR(656)` | **收件人 = 攻击方 ±`SendRefMsgRange`（含攻击方自己）**；比较 = `SM 656` 严格序 + 字段 + RM 多重集（priority=154）。**组装来源必须是内部事件 `hitter_name_color`，不得看 `SM 656` 帧是否存在来反推** |
 | `RM_DELAYPUSHED(8043)` wParam=nDir, p1=坐标, p2=push, p3=目标 | **服务端事件**：`src/M2Server/Actor/BaseObject.Base.cs:733-739`（到点 `CharPushed`，逐格 `SendRefMsg(RM_PUSH)`）；`RM_PUSH(8092)` → `src/M2Server/Player/PlayObject.Message.cs:1525-1533`（`SM_BACKSTEP(9)`）。夹具前提：**`UserMagic.Level=3`**（`Random(Level)-1`，Level<3 时恒 ≤0 ⇒ 永不推挤；产生点在 `src/M2Server/Magic/MagicManager.cs:1048-1052`） | `SM_BACKSTEP(9)` 帧逐字段 + 逐格条数；其余 SM 不变 |
 | `RM_ABILITY(10051)` wParam=0, p1/p2/p3=0, prio=67（`10051 & 0xFF`） | `src/M2Server/Player/PlayObject.Message.cs:1732-1735`（→ `SM_ABILITY(52)`：`Gold`、`MakeWord(Job,99)`、`LoWord/HiWord(GameGold)`，尾 `EDCode.EncodeMessage(WAbil)`）。产生者：`RecalcAbilitys` 收尾（`src/M2Server/Actor/BaseObject.cs:2161`/`:2185`）与 buff 系统（`src/M2Server/ActorBuffSystem.cs:229`），均 `SendMsg(this)`；`src/M2Server/Player/PlayObject.cs:1385` 的 `SendPriorityMsg(..., High)` 亦给自己 | **收件人 = 该对象自己**；比较 = `SM_ABILITY(52)` 按序 + 尾字节；RM 列多重集 |
 | `RM_CHARSTATUSCHANGED(10139)` wParam=0, p1=`CharStatus`（int 位集，实测可为 `0x80000000`）, prio=155 | 产生者 `StatusChanged()`（`src/M2Server/Actor/BaseObject.cs:1514-1517`）走 `SendRefMsg`；handler → `src/M2Server/Player/PlayObject.Message.cs:1845`（`SM_CHARSTATUSCHANGED(657)`：`ActorId`、`LoWord/HiWord(nParam1)`、`this.HitSpeed`）；`src/M2Server/Player/PlayObject.cs:2876` 的 `SendUpdateMsg` 只给自己 | **收件人 = 产出者 ±`SendRefMsgRange` 的玩家（含自己）**；比较 = `SM 657` 严格序 + 字段；RM 列多重集 |
@@ -923,3 +926,85 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   `…/evidence/regression-bigcloak.log`）。
 - **清单**：MG-33（`:384` body）升 `verified`（magic **14/65**）；MG-26（`:321` 外层组标签）
   保持 `implemented_unverified` 并补说明。
+
+### 30. 23 爆裂火焰（`SKILL_FIREBOOM`）接线记录（2026-11-20）
+
+- **oracle**：`src/M2Server/Magic/MagicManager.cs:418-423`（`MagBigExplosion(GetAttackPower(GetPower(MPow)
+  + Lo(MC), ΔMC+1), nTargetX, nTargetY, FireBoomRage)`）→ helper `:1100-1117`：对 3×3
+  （部署 `FireBoomRage=1`）内 `IsProperTarget` 的对象 `SendMsg(baseObject, RM_MAGSTRUCK, 0, nPower, 0, 0)`
+  并 `SetTargetCreat(target)`（只改施法者）。
+- **(a) `IsProtectTarget` 以 golden 实况为准**：golden 显示 **target HP 100→85（damage=15）**、
+  `SM_STRUCK(31)`/53/656 齐全 ⇒ 本夹具下 `IsProtectTarget` 实为 **true**、伤害链成立；`IsProperTarget`
+  自排除（`PlayObject.cs:1926-1928`）⇒ **单目标**（obs_in 只是观察者）。
+- **golden `golden/magic/fireboom.json`（s1/s5/s13）**：`DrainPasses=4`、`Rng` **7 抽**；
+  caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`；
+  RM = 10008/10120（众人）+ 8044(target,p1=15,108)+10052(target,68)+8103(众人,
+  w=15/p1=85/p2=224/p3=caster,167)+8090(攻击方 hearers,154)+10123(caster,255)。
+- **C# 装置两处改进（只影响新 golden）**：
+  1. **`Rng` = `DoSpell` + 排水的全部抽取**（RngSeam 直到排水结束才还原）：23 的 `RM_MAGSTRUCK`
+     是**即时**投递，`R(1000)`/MSD/STD 抽发生在排水 `Operate` 里；旧口径在 `DoSpell` 后就还原，
+     这些抽会落到未播种 RNG ⇒ 金标准不可复现、Rust（施法段内同步结算）无法对齐。
+  2. 宿主 **两段出帧**（代码条件 `if req.magic_id == 24 { 旧合并 flush } else { 两段 }`——
+     当前可达集合只有 {23,24,33,47}，故等价于「24 旧、23/33/47 两段」，但**卡面按代码事实写**）：
+     尾帧（638/640）先 flush，受击帧（53/31）再入独立缓冲 flush；
+     否则同一 `SpellFrameBuf` 按 `(byte)ident` 会把 53(68) 排到 638(136) 前面（golden 相反）。
+- **`struck_log` 观测面（新增，只记录）**：`World::struck_log()/clear_struck_log()`；生产点
+  `deliver_mag_struck`；宿主 `sim_loop` 每 tick 清空（有界）；驱动施法后与交付后各取一次并清。
+  **零行为证据**：既有 45 支驱动全绿（含 13 条 verified 的 golden 逐字节不变）、15 支比较器 0 红、
+  9 颗比较器牙；`game-svr --lib` 1996 / `world-bevy` 878。
+- **`8090` 组装改为内部事件**：原先「看是否发出 `SM_CHANGENAMECOLOR(656)` 帧」的反推式组装**删除**，
+  改用 `StruckEvent.hitter_name_color`（即时支 `struck_cast` / 延迟支 `struck_delivered`），
+  符合「RM 必须来自内部事件」的口径。
+- **牙（§16 快照 `E:/UserTemp/fireboom-snap/`，world.rs `09c59a33…`、lib.rs `e95da05a…`）**：
+  A2 把 `MagBigExplosion` 的目标门改成全部排除 ⇒ 三支 driver `目标 HP` 100≠85、比较器 24 条红；
+  B 不组装 8044/10052/8103 ⇒ driver `target 8044` 0≠1、比较器 3 条红。均 `cp` 还原、sha 相等、
+  三支驱动 + 比较器基线复跑绿。**如实登记两次无效判据**：① 首版牙 A「range→0」无效——点击格就是
+  目标格，1×1 仍含目标，driver 照常通过；② 同一轮只重跑 s1，比较器的红是 **run_id 陈旧**（§28 机制），
+  不是变异造成的红；均已在证据里标注并按有效变异重跑。证据
+  `mir2-rs/target/magic-parity/evidence/tooth-fireboom.log`。
+- **回归**：同一 run id 下 45 支驱动全 rc=0、15 支比较器 0 红、9 颗比较器牙全过
+  （`…/evidence/regression-fireboom.log`）。
+- **范围与登记（两处边界，写死）**：
+  1. **出帧分支的代码事实**：条件是 `if req.magic_id == 24 { 旧合并 flush } else { 两段出帧 }`；
+     当前可达集合 = {23,24,33,47} ⇒ 等价于「24 旧、其余两段」。24（`MagElecBlizzard`）的 31
+     同优先级 tie 序目前只有 Rust 单测钉着、没有 oracle golden，**留待 24 自己的 golden 统一定序**。
+     **将来新增即时受击魔号时需复核该条件**（新魔号默认落进两段支——若它与 24 同构则应显式纳入判断）。
+  2. **多目标 tie 序无 golden 可钉**：`spell_p3b2_fireboom_delivery_ledger_and_frames` 的两处
+     断言已按新模型改写并写明依据——① `53` 改为在 `638` 之后（旧期望是「尾帧+受击帧同批
+     flush」的实现序，oracle 是后续趟处理受击）；② 同优先级 31 的 tie 序由 `NetPriorityQueue`
+     两段模型的出队序给出（`[p1,m3,m2,m1]`），**不是** oracle 实证（本支多目标无 golden）。
+- **清单**：MG-37 升 `verified`（magic **15/65**）。
+
+## 21. M52 迁移清单（15 条逐条实测；应 QA 条件① 追加，2026-11-20）
+
+> 目的：M53 更换入库件前，把「每条 golden 的现状、迁移后形态、**实测**帧面变化、`MaxExp` 三态」逐条落盘。
+> 实测口径：用 M52 装置（`FixtureContract` 七道门 + `ExpConf.LoadConfig()` 修复）对 **15 条**逐条重生成到
+> 仓外 `E:/UserFleet/qa/warrskill/m52-migration/`，与入库件逐接收者逐字段比（排除 `delivery`/`now` 等墙钟）。
+> 变化归因只允许三种：**登录序重算 / `rng_mode` 口径 / Exps 修复**；不含者写「无」。
+
+| case | 现状（runner / 登录序 / Rng 口径） | 迁移后（M53） | 帧面变化（实测） | `MaxExp` 三态 | 变化归因 |
+| --- | --- | --- | --- | --- | --- |
+| fireball（MG-10，id=1） | `FireballCase` 独立 runner；无 `Fixture` 块；无登录序；`freeze_at_dospell` | **M52.1 改造 runner**（seam + login_order 参数）→ 登录序主件；旧件移 `golden/magic/legacy/` 标 `legacy_artifact` | **0 差异**（runner 未改造，重生成即原样；非「已对齐」） | 不涉及 | 无 |
+| fireboom | `BehaviorBatch`；target 登录序；`cover_drain` | 登录序主件（带契约字段） | **0 差异** | 不涉及 | 无 |
+| hangmajinbub（MG-28） | `BehaviorBatch`；target 登录序；`cover_drain` | 登录序主件；`Abil.MaxExp=GetLevelExp(Level)` | **0 差异** | **涉及且相等（50=50，非真值）**；整改后两侧同变 6000 | 无 |
+| dejiwonho（MG-29） | 同上 | 同上 | **0 差异** | **涉及且相等（50=50，非真值）**；同上 | 无 |
+| shield / cloak / bigcloak | `BehaviorBatch` | 登录序主件 | **0 差异** | 不涉及 | 无 |
+| bighealing（MG-40 的 caster 元组） | `BigHealingBatch` | caster L30 元组改公式 419（M53 整改） | **0 差异**（现行元组；整改后以重生成实测为准） | 不涉及 | 无 |
+| showhp | `ShowHpBatch` | 登录序主件 | **0 差异** | 不涉及 | 无 |
+| lightning-11 | `AntiMagicBatch`；target 登录序；`cover_drain` | 登录序主件（`anti_magic=1`、`max_hp`=公式值） | **变化**：3 子 case、18 处帧面差 | 不涉及 | **登录序**（唯一变量） |
+| lightning-45 | 同上 | 同上 | **变化**：3 子 case、18 处 | 不涉及 | **登录序** |
+| firecharm | 同上 | 同上 | **变化**：3 子 case、18 处 | 不涉及 | **登录序** |
+| hbfireball | 同上 | 同上 | **变化**：3 子 case、18 处 | 不涉及 | **登录序** |
+| fireball-5 | 同上 | 同上 | **变化**：3 子 case、18 处 | 不涉及 | **登录序** |
+| healing | `HealingBatch` | 登录序主件 | **变化**：3 处帧面差（1 子 case `Rng` 变） | 不涉及 | **登录序** |
+
+**结论与后续**
+- `MaxExp` 三态：仅 MG-28/29 为「涉及且相等（50=50，非真值）」，其余 12 条「不涉及」；**无「涉及但为 0」**。
+- **Exps 修复对 15 条帧面 0 影响**（实测：`hangmajinbub`/`dejiwonho`/`showhp`/`bighealing` 复跑 0 差异）；
+  真值 `Exps.conf Level20=6000`，整改后 MG-28/29 两侧同变 6000（**先落 `LoadConfig` 修复、再重生成**）。
+- 6 条变化的唯一变量是**登录序重算**（target 的 `AntiMagic`/`WAbil.MaxHP` 被消费）；`Rng` 口径在 master 已是
+  `cover_drain`（未切换）。
+- `cover_drain` 的**逐 case 真实性差分**（`case | cover Rng | freeze Rng | 判定依据`）作为 **M53 交接产物**：
+  在 `login_order=false` 的可达手设件上做两模式对照；相同者必须给结构性依据（无延时受击 / 排水 `Operate` 不调 RNG），
+  落到符号锚——缺依据即判非法声明。
+- 本表只落实测与归因，**不改变任何条目 status**；入库件替换与比较器收紧归 M53。
