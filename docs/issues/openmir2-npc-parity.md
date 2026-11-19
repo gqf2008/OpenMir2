@@ -295,3 +295,47 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
 
 > 变异 B 与 A 同法：`git checkout -- mir2-rs/bins/game-svr/src/lib.rs` 恢复后断言 sha 相等并复绿；
 > 构建按总监窗口约束，窗口内不新起构建。
+## 13. 子批①（NP-03/04/05）设计与裁定记录（2026-11-20）
+
+### 13.1 裁定
+
+- **NP-03**：等 `ca` 的 NPC 装载链改动合入后，从新 master 起；Rust 装置改用**商家装载链**（`crates/envir` 的 `load_merchants_loaded` + 真 `MerChant.txt` 行），不再用 `T137Rig` 固定 NPC。flag-开用真实语料；**flag-关无真实数据（全语料 0 条 `[@buy]` 标签而 flag 未开）⇒ 不造脚本，由既有单测覆盖并在卡面注明**；不改 `MerChant` 行凑负例。
+- **NP-05**：选"**synthetic 夹具**"方案，绑定四条：入仓夹具 + sha256；两侧同一份脚本；`notes` 写明冻结语料 **0 使用**；报告注明"引擎门等价证据，非线上用例覆盖"。
+- **NP-04**：不等产品改动，照常做。
+
+### 13.2 NP-03 用例来源（真实，禁造）
+
+- 脚本：`E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt`
+  首行 flag 指令 `(@buy @sell @repair @s_repair @storage @getback @getnextpage @getPreviouspage)`，`%100` 价格率；
+  sha256 = `14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210`。
+- 在册行：`MerChant.txt` → `封魔谷/恶魔修理师 d2008 31 24 封魔修理师 0 15 0`。
+- 用例（flag-开）：点 NPC → `@main` 说词；选 `@buy` → `RM_SENDGOODSLIST(10128)→SM 645`；
+  选 `@sell` → `SM 646`；选 `@storage` → `SM 700`。
+- **flag-关**：语料 0 条，不做 golden；由既有单测覆盖（卡面注明）。
+
+### 13.3 NP-04 用例（真实脚本 + 机制）
+
+1. **两 NPC 切换**（`click_switch`）：点 NPC-A → 排空 → 点 NPC-B ⇒ 说词 B；`LastNpc == B`、
+   `Script` 切到 B 的脚本（状态直读 `ShopSession`）。
+2. **`#ACT` 只执行第一条已注册命令**（真实脚本）：`E:/MirServer/M2GameSvr/Envir/Market_Def/任务NPC/打铁-0.txt`
+   （sha256 见下）`[@main]` 首个 `#IF`（`LARGE M6 9` + `CHECKBAGSIZE 1`）命中时：
+   - oracle（`src/Modules/ScriptEngine/ScriptEngine.cs:884-893`）只执行 `MOV M6 0`；
+   - `set [106] 0`、`MOVR D6 5`、`goto @jiasx` **均不执行**；
+   - 断言：说词="你的命运之刃已经完成…"、`M6==0`、`flag 106` **保持 1**（若全执行会被清 0）。
+   - 前置：M6=10、flag 106=1（两侧同一初始态）。
+   - 打铁-0 sha256：`356b53dfa49aad7f4fe0d20b0b9a4f777d33be0e88271da7265f6298a5d8b86e`（实测 2026-11-20）。
+
+### 13.4 NP-05 用例（synthetic 夹具，四条已绑）
+
+- 夹具：`mir2-rs/tests/parity/golden/npc/fixtures/np05_extjmp_synthetic.txt`
+  sha256 = `c8302373725443ac56d516ef18a7497f0c57bef0d563af5f7f8a50edf18b7575`
+- 内容：`[@main]`（**不**链接 `@sub`）/ `[@sub] TRUE` / `[@plain]`（未标 TRUE）。
+- 用例：`extjmp_allowed`（选 `@sub` ⇒ 说词"你已进入子页。"）/ `extjmp_blocked`（选 `@plain` ⇒ 零说词）。
+- **冻结语料 `Market_Def` + `MapQuest_def` 对 `] TRUE` 的用量为 0**（实测 `grep -rn "] TRUE"` 零命中）⇒
+  本条是**引擎门等价**证据，不是线上用例覆盖。
+
+### 13.5 进度
+
+C# 探针（`ScriptSourcePath`/fixture 元数据、`click_switch`、`act_first` 状态）与 Rust 断言骨架已写入工作树，
+**未编译未提交**（等 `ca` 合入 + opc-07 放行窗口）；NP-03 的 Rust 装置待新 master。
+
