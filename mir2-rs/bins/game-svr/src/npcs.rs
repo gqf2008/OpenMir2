@@ -249,7 +249,7 @@ pub fn load_npc_def_scripts(
                 }
             };
         book.insert(MerchantNpc {
-            def: NpcDef {
+            def: std::rc::Rc::new(NpcDef {
                 chr_name: npc.chr_name.clone(),
                 // `LoadNPCScript` 的 `FilePath = "Npc_def"`（`NormNpc.cs:1593`）——脚本动作按它
                 // 拼 `CHECKNAMELIST` 一类相对路径。
@@ -262,7 +262,7 @@ pub fn load_npc_def_scripts(
                 scripts,
                 loaded,
                 actor_id: npc.actor_id,
-            },
+            }),
             // `Merchant` ctor `PriceRate = 100`（`Merchant.cs:86`）；`Npcs.txt` 无该列。
             price_rate: 100,
             // `NormNpc.Initialize` 的 `CastleMgr.InCastleWarArea(this)`：城堡家族（⑧）未落地 ⇒ None。
@@ -270,6 +270,7 @@ pub fn load_npc_def_scripts(
             map_name: npc.map_name.clone(),
             curr_x: npc.x,
             curr_y: npc.y,
+            envir_root: None,
         });
     }
 }

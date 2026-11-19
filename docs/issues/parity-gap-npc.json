@@ -321,19 +321,26 @@
         "line": 236,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "manage_and_function_npc_gates_require_loaded",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
+        "test": "np10_hidden_npc_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np10_hidden_npc.json",
+        "cases": [
+          "hidden_click_main",
+          "hidden_click_far",
+          "hidden_select_far_ishide",
+          "hidden_select_far_not_hidden"
+        ],
         "unit_tests": [
-          "loads_from_disk_and_runs_login"
+          "hidden_npc_stays_world_on_wall_cell_and_is_absent_from_aoi",
+          "insert_npc_pre_drawn_uses_given_draws_and_does_not_consume_rng"
         ]
       },
       "cost": null,
       "deviation": null,
-      "notes": "装置未建 + Rust 侧隐藏 NPC 非世界实体（NpcHost 脚本宿主、ActorId=0、click/select 零帧）；见卡 openmir2-hidden-npc-world-entities"
+      "notes": "卡 openmir2-hidden-npc-world-entities：三只隐藏 NPC 落成世界实体（有真实实体 id），脚本表 Rc 共享（NpcHost 与 MerchantScriptBook 同一份 ScriptList）；click 同格 643、超距零帧、视距外 select 经 IsHide 放行、同输入 IsHide=false 零帧。AOI 面：部署件 0.map (0,0) 是 HighWall ⇒ CanWalk 假 ⇒ 挂图失败但 IsHide 保留 ⇒ 不在任何格 obj_list（world-bevy 用例含可走格对照组）。牙：T1 不入实体表/click 红、T2 mhide=false/select 红、T3 ActorId 错位/click 红、T4 删 IsHide 保留门/AOI 用例红、T5 预置抽改重抽/RNG 用例红。剩余：MapQuest.txt sQuest 与 MapInfo CHECKQUEST 的 QuestNpcList 记录仍未建实体；@Login/@StdModeFunc 入口仍 ActorId=0 口径",
+      "basis": "semantic"
     },
     {
       "id": "NP-11",

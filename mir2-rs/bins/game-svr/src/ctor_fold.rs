@@ -53,7 +53,10 @@
 //! 无其它 RNG 消费者（`GameShare.cs:83` 的 `GetRandpmRoute` 是运行期选网关，不在启动段）。
 
 use mir2_envir::{MapLoader, QuestNpcRecord};
-use mir2_world_bevy::{CtorFoldLedger, CtorFoldPlan, CtorFoldSite, CTOR_FOLD_BARRIER_A_MOD};
+use mir2_world_bevy::{
+    BaseAnimalCtorDraws, CtorFoldLedger, CtorFoldPlan, CtorFoldSite, BASE_ANIMAL_CTOR_DRAW_MODS,
+    CTOR_FOLD_BARRIER_A_MOD,
+};
 
 /// 从 `Envir` 语料算出构造段 fold 计划（主线程；**不抽数**）。
 ///
@@ -173,29 +176,53 @@ pub fn hidden_site_of(rec: &QuestNpcRecord) -> Option<CtorFoldSite> {
 /// ⇒ `None`（宿主据此**不建实体**并记 ERR，绝不静默补抽）。
 #[must_use]
 pub fn hidden_qfunction_run_tick(ledger: &CtorFoldLedger, now_ms: i64) -> Option<i64> {
-    let start = ledger
-        .entries
-        .iter()
-        .position(|e| e.site == CtorFoldSite::HiddenQFunction)?;
+    hidden_npc_ctor_draws(ledger, "QFunction").map(|d| now_ms + i64::from(d.run_tick_delta))
+}
+
+/// **隐藏脚本 NPC 的 ctor 4 抽**（`ChrName` → `CtorFoldSite` → 账本取用）。
+///
+/// 卡 `openmir2-hidden-npc-world-entities`：`QManage`/`RobotManage`（进 `QuestNpcList`）与
+/// `QFunction`（进 `MerchantList`）都是 oracle 的 `new Merchant`（`LocalDB.cs:210/268/312`），
+/// 其 ctor 公共链 4 抽已在构造段 fold 段③（`GameApp.cs:184` 尾）按序落账。建世界实体时
+/// **只能取用、不能重抽**（重抽 ⇒ 共享 RNG 流位置错 4、其后所有商人/怪物抽数错位）。
+///
+/// **fail-closed**：账本里必须**恰有一组 4 条连续**的该站点条目、`arg` 列 = 模数表
+/// `[1500, 2000, 3000, 3000]`，且其后不再出现同站点（一组唯一）。任何漂移 ⇒ `None`
+/// （宿主据此**不建实体**并记 ERR，绝不静默补抽）。
+#[must_use]
+pub fn hidden_npc_ctor_draws(
+    ledger: &CtorFoldLedger,
+    chr_name: &str,
+) -> Option<BaseAnimalCtorDraws> {
+    let site = match chr_name {
+        "QManage" => CtorFoldSite::HiddenQManage,
+        "QFunction" => CtorFoldSite::HiddenQFunction,
+        "RobotManage" => CtorFoldSite::HiddenRobotManage,
+        _ => return None,
+    };
+    let start = ledger.entries.iter().position(|e| e.site == site)?;
     let group = ledger
         .entries
         .get(start..start + mir2_world_bevy::CTOR_FOLD_DRAWS_PER_SITE)?;
-    let run_delta = match group {
-        [first, rest @ ..]
-            if first.arg == 1500
-                && rest
-                    .iter()
-                    .all(|e| e.site == CtorFoldSite::HiddenQFunction)
-                // 账本里只允许一组（`HIDDEN_NPCS` 里 QFunction 唯一）。
-                && !ledger.entries[start + mir2_world_bevy::CTOR_FOLD_DRAWS_PER_SITE..]
-                    .iter()
-                    .any(|e| e.site == CtorFoldSite::HiddenQFunction) =>
-        {
-            first.result
-        }
-        _ => return None,
-    };
-    Some(now_ms + run_delta)
+    let args_ok = group
+        .iter()
+        .zip(BASE_ANIMAL_CTOR_DRAW_MODS)
+        .all(|(e, m)| e.arg == i64::from(m));
+    // 账本里只允许一组（`HIDDEN_NPCS` 里每个 ChrName 唯一）。
+    let unique = !ledger.entries[start + mir2_world_bevy::CTOR_FOLD_DRAWS_PER_SITE..]
+        .iter()
+        .any(|e| e.site == site);
+    if !(args_ok && unique && group.iter().all(|e| e.site == site)) {
+        return None;
+    }
+    let to_i32 = |v: i64| i32::try_from(v).ok();
+    Some(BaseAnimalCtorDraws {
+        run_tick_delta: to_i32(group[0].result)?,
+        // 账本第 2 项存的是 `Random(2000)` 的**原值**（`fold_sites` 已减回偏移）。
+        base_search_time: to_i32(group[1].result)?.checked_add(BASE_ANIMAL_CTOR_DRAW_MODS[1])?,
+        attack_tick_delta: to_i32(group[2].result)?,
+        walk_tick_delta: to_i32(group[3].result)?,
+    })
 }
 
 #[cfg(test)]

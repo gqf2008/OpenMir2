@@ -173,6 +173,21 @@ pub struct NpcState {
     pub move_time: i32,
     /// `IMerchant.MoveTick`（`Merchant.cs:57`；ctor = `GetTickCount()`）。
     pub move_tick: i64,
+    /// `NormNpc.IsHide`（`NormNpc.cs:29`）。
+    ///
+    /// `LoadNpcs` 路径恒 `false`（`LoadNpcs` 不设、ctor 初值 `false`，`NormNpc.cs:47`）；
+    /// **隐藏脚本 NPC**（`QManage`/`QFunction`/`RobotManage` 与 `MapQuest.txt` 的 `sQuest`，
+    /// `LocalDB.cs:220/277/321`、`MapQuestManager.cs:49`、`Maps.cs:463`）恒 `true`。
+    ///
+    /// 唯一消费点是**两个挂图门**（oracle 只有两处读 `IsHide`）：① `NpCinitialize` 的
+    /// `AddtoMapSuccess && !IsHide ⇒ RemoveAt`（`WorldServer.Merchant.cs:47`）——隐藏 NPC
+    /// 放在墙格（部署件 `0.map` 的 `(0,0)` 是 `HighWall`）时挂图失败但**留在列表**；
+    /// ② `ClientMerchantDlgSelect`/`ClientTakeDlgItem` 的 `npc.Envir == Envir &&
+    /// IsWithinSight(npc) || npc.IsHide`（`PlayObject.Operate.cs:125` /
+    /// `PlayObject.Base.cs:3492`）——视距外的隐藏 NPC 仍可被选中。
+    /// **它不参与视野过滤**（`BaseObject.ViewRange.cs` 的过滤器只读 `Death/Invisible/Ghost/
+    /// FixedHideMode/ObMode`）⇒ 隐藏 NPC 不进他人 AOI 的原因是挂图失败（墙格）而不是本标志。
+    pub is_hide: bool,
 }
 
 /// 一条待挂图的固定 NPC（宿主从 [`crate::npc`] 的 `NpcInfo` + `map_id` 装配后的入参）。
@@ -200,6 +215,34 @@ impl World {
     ///
     /// 返回 `Some(id)` = 已入世界；`None` = `map_id` 越界（oracle 不可达，宿主 `FindMap` 门已保证）。
     pub fn insert_npc(&mut self, spawn: NpcSpawn) -> Option<i32> {
+        self.insert_npc_with_ctor(spawn, None)
+    }
+
+    /// **建实体（构造期，构造抽由调用方预置）**——卡 `openmir2-hidden-npc-world-entities`。
+    ///
+    /// 与 [`World::insert_npc`] 逐字段相同，**唯一区别**：不抽 [`BaseAnimalCtorDraws::draw`]，
+    /// 直接用 `ctor` 覆盖 `run_tick_delta/base_search_time/attack_tick_delta/walk_tick_delta`。
+    ///
+    /// # 为什么需要它
+    ///
+    /// 隐藏脚本 NPC（`QManage`/`RobotManage`）的 ctor 抽数已在**构造段 fold**
+    /// （`GameApp.cs:184` → `LocalDB.cs:403/405`）里按 oracle 次序落账
+    /// （`CtorFoldSite::HiddenQManage/HiddenRobotManage`）。建实体时若再调 [`World::insert_npc`]，
+    /// 共享 `world.rng` 会多抽 4 次 ⇒ 其后所有商人/怪物抽数错位。本入口把账本值**取用**
+    /// 而不重抽（与 `insert_hidden_qfunction` 的 `run_tick` 预置同一纪律）。
+    pub fn insert_npc_pre_drawn(
+        &mut self,
+        spawn: NpcSpawn,
+        ctor: BaseAnimalCtorDraws,
+    ) -> Option<i32> {
+        self.insert_npc_with_ctor(spawn, Some(ctor))
+    }
+
+    fn insert_npc_with_ctor(
+        &mut self,
+        spawn: NpcSpawn,
+        pre_drawn: Option<BaseAnimalCtorDraws>,
+    ) -> Option<i32> {
         if spawn.map_id >= self.maps.len() {
             return None;
         }
@@ -212,7 +255,11 @@ impl World {
         // oracle 构造链 `BaseObject`（`:439/441`）→ `AnimalObject`（`:76/77`）共 **4 抽**、次序固定；
         // 唯一抽数点 = `BaseAnimalCtorDraws::draw`。原 Rust 侧只抽 `BaseObject` 的 2 抽 ⇒ 每只固定
         // NPC 少抽 `AnimalObject` 的 2 抽，共享 RNG 流自首只 NPC 起整体错位（本卡订正）。
-        let ctor = BaseAnimalCtorDraws::draw(&mut self.rng);
+        // 预置路径（[`World::insert_npc_pre_drawn`]）**不抽**（构造段 fold 已落账）。
+        let ctor = match pre_drawn {
+            Some(c) => c,
+            None => BaseAnimalCtorDraws::draw(&mut self.rng),
+        };
         state.run_tick_delta = ctor.run_tick_delta;
         state.base_search_time = ctor.base_search_time;
         state.attack_tick_delta = ctor.attack_tick_delta;
@@ -261,9 +308,10 @@ impl World {
     }
 
     /// **挂图**：执行 oracle `BaseObject.Initialize()` 的挂图段
-    /// `AddtoMapSuccess = !(CanWalk(CurrX,CurrY,true) && AddToMap())`；为真 ⇒ 从世界移除
-    /// （`NpCinitialize` 的 `if (normNpc.AddtoMapSuccess && !normNpc.IsHide) RemoveAt`；`IsHide`
-    /// 在 `LoadNpcs` 路径恒 `false`（`NormNpc.cs:45` ctor 初值 + `LoadNpcs` 不设））。
+    /// `AddtoMapSuccess = !(CanWalk(CurrX,CurrY,true) && AddToMap())`；为真则按 `IsHide` 分两臂：
+    /// `AddtoMapSuccess && !IsHide ⇒ RemoveAt`（`NpCinitialize`，`WorldServer.Merchant.cs:47`）；
+    /// `IsHide` ⇒ **留在世界**（隐藏脚本 NPC，部署件 `0.map` 的 `(0,0)` 是 `HighWall` ⇒
+    /// `CanWalk` 假 ⇒ `AddToMap` 不执行 ⇒ 实体不在任何格 `obj_list`、不进他人 AOI）。
     ///
     /// 宿主按 `NpCinitialize` 的**倒序**逐条调用（map cell `obj_list` 追加序 = 倒序）；
     /// 该序与 [`World::insert_npc`] 决定的实体槽位序**互相独立**。
@@ -273,7 +321,12 @@ impl World {
         let Some(entity) = self.entities.get(id) else {
             return false;
         };
-        let (map_id, x, y) = (entity.map_id, entity.x, entity.y);
+        let (map_id, x, y, is_hide) = (
+            entity.map_id,
+            entity.x,
+            entity.y,
+            entity.npc.as_ref().is_some_and(|n| n.is_hide),
+        );
         if map_id >= self.maps.len() {
             return false;
         }
@@ -293,7 +346,7 @@ impl World {
             (can_walk, added)
         };
         let add_to_map_success = !(can_walk && added);
-        if add_to_map_success {
+        if add_to_map_success && !is_hide {
             // oracle `LogService.Warn("... Npc Initalize fail...") + RemoveAt(i)`。
             self.entities.remove(id);
             return false;
@@ -1291,5 +1344,132 @@ mod tests {
             assert!(!c.stick_mode, "{label} 的 StickMode 保持 ctor 缺省 false");
             assert_eq!(c.ai.dir, 0, "{label} 的 Dir 不被 NPC ctor 常量污染");
         }
+    }
+
+    /// **卡 `openmir2-hidden-npc-world-entities`**：`insert_npc_pre_drawn` 用给定 ctor 抽数、
+    /// **不从共享 RNG 抽**（构造段账本已抽过；重抽会让其后所有商人/怪物错位）。
+    ///
+    /// 牙：把 `insert_npc_pre_drawn` 改成走 `insert_npc`（重抽 4 次）⇒ 本用例 RNG 断言红。
+    #[test]
+    fn insert_npc_pre_drawn_uses_given_draws_and_does_not_consume_rng() {
+        use mir2_shared::rng::RandomNumber;
+        let ctor = BaseAnimalCtorDraws {
+            run_tick_delta: 7,
+            base_search_time: 2_500,
+            attack_tick_delta: 11,
+            walk_tick_delta: 13,
+        };
+        let mut world = World::with_maps(vec![(16, 16)]);
+        // 同种子参考流：若 `insert_npc_pre_drawn` 抽了数，`world.rng` 的下一抽就会与参考流错位。
+        let mut reference = RandomNumber::with_seed(4242);
+        let expected = reference.random_below(10_000);
+        world.rng = RandomNumber::with_seed(4242);
+        world.clock_ms = 1_000;
+        let id = world
+            .insert_npc_pre_drawn(spawn("QManage", 0, 0, 0), ctor)
+            .expect("实体入世界");
+        let actual = world.rng.random_below(10_000);
+        assert_eq!(
+            actual, expected,
+            "预置 ctor 的建实体路径必须零抽数（否则共享 RNG 流错位）"
+        );
+        let e = world.entities.get(id).unwrap();
+        let st = e.npc.expect("npc 态");
+        assert_eq!(
+            (
+                st.run_tick_delta,
+                st.base_search_time,
+                st.attack_tick_delta,
+                st.walk_tick_delta
+            ),
+            (7, 2_500, 11, 13),
+            "ctor 四分量必须取账本值"
+        );
+        assert_eq!(st.run_tick, 1_007, "RunTick = 构造时刻 + Random(1500) 分量");
+        // 对照：`insert_npc`（无预置）仍抽 4 次 ⇒ 与参考流第 5 抽对齐。
+        let mut reference2 = RandomNumber::with_seed(9);
+        let mut world2 = World::with_maps(vec![(16, 16)]);
+        world2.rng = RandomNumber::with_seed(9);
+        world2.insert_npc(spawn("老人", 0, 3, 3)).expect("入世界");
+        for _ in 0..4 {
+            let _ = reference2.random_below(3_000);
+        }
+        let first_after = reference2.random_below(10_000);
+        assert_eq!(
+            world2.rng.random_below(10_000),
+            first_after,
+            "`insert_npc` 必须恰抽 4 次（对照支）"
+        );
+    }
+
+    /// **隐藏 NPC 在墙格**：挂图失败但 `IsHide=true` ⇒ **留在世界**、不在该格 `obj_list`
+    /// ⇒ 不在他人 AOI；`IsHide=false` ⇒ 按 oracle `RemoveAt` 移除。
+    ///
+    /// 部署件事实：`0.map` 的 `(0,0)` 是 `HighWall`（`wBkImg bit15`，实读 `E:/MirServer/M2GameSvr/Map/0.map`）。
+    ///
+    /// 牙：删 `attach_npc_to_map` 的 `&& !is_hide` ⇒ 隐藏实体被移除 ⇒ 第一段红；
+    /// 把 `is_hide: true` 改 false ⇒ 第二段红。
+    #[test]
+    fn hidden_npc_stays_world_on_wall_cell_and_is_absent_from_aoi() {
+        use crate::entity::VisibleFlag;
+        use crate::map::CellAttribute;
+        let mut world = World::with_maps(vec![(16, 16)]);
+        let mut attrs = vec![CellAttribute::Walk; 16 * 16];
+        attrs[0] = CellAttribute::HighWall; // k = x*Height + y ⇒ (0,0)
+        assert_eq!(world.maps[0].set_cell_attributes(&attrs), 16 * 16);
+
+        // 隐藏 NPC（`is_hide = true`）：`(0,0)` 墙格 ⇒ 挂图失败但保留。
+        let mut sp = spawn("QManage", 0, 0, 0);
+        sp.state.is_hide = true;
+        let hidden = world.insert_npc(sp).expect("实体入世界");
+        assert!(world.attach_npc_to_map(hidden), "IsHide ⇒ 挂图失败不移除");
+        assert!(
+            world.entities.get(hidden).is_some(),
+            "隐藏在墙格必须留在世界"
+        );
+        assert!(
+            !world.entities.get(hidden).unwrap().add_to_mapped,
+            "墙格 ⇒ 未落格"
+        );
+        // `Envirnoment.AddMapObject` 只在 `cellInfo.Valid`（Walk）时才追加 ⇒ 墙格根本不会进
+        // `obj_list`（`add_cell_object` 的 `cell.valid()` 门）；AOI 段的断言在下面兜底。
+        assert_eq!(
+            world.maps[0].cell_attribute(0, 0),
+            Some(CellAttribute::HighWall)
+        );
+
+        // 正常固定 NPC 放在可走格：落格、进 AOI（对照组，证明扫描有效）。
+        let visible = world.spawn_npc(spawn("老人", 0, 3, 3)).expect("挂图成功");
+        // 玩家观察者（Race = Play ⇒ `PlayObject.SearchViewRange` 口径）。
+        let mut pe = crate::EntitySpawn::new(1, "hero", 2, 2);
+        pe.race = crate::ACTOR_RACE_PLAY;
+        let player = world.add_entity(pe);
+        let now = world.clock_ms;
+        let World { entities, sim, .. } = &mut world;
+        let _ = crate::aoi::search_view_range(&mut sim.maps[0], entities, player, now);
+        let visibles: Vec<i32> = world
+            .entities
+            .get(player)
+            .unwrap()
+            .visible_actors
+            .iter()
+            .filter(|v| v.flag == VisibleFlag::Show)
+            .map(|v| v.target)
+            .collect();
+        assert!(
+            visibles.contains(&visible),
+            "对照：可走格 NPC 必须在玩家视野（证明扫描非空跑；visibles={visibles:?}）"
+        );
+        assert!(
+            !visibles.contains(&hidden),
+            "隐藏 NPC 不得出现在他人 AOI（visibles={visibles:?}）"
+        );
+
+        // `IsHide=false` 的同位 NPC ⇒ 挂图失败 ⇒ 按 oracle RemoveAt 移除。
+        let mut sp2 = spawn("RobotManage", 0, 0, 0);
+        sp2.state.is_hide = false;
+        let gone = world.insert_npc(sp2).expect("实体入世界");
+        assert!(!world.attach_npc_to_map(gone), "非隐藏 NPC 挂图失败必移除");
+        assert!(world.entities.get(gone).is_none(), "RemoveAt 等价物");
     }
 }

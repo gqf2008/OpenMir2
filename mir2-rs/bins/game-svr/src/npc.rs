@@ -36,7 +36,12 @@
 //! - `playerActor.GetScriptLabel(sMsg)`（`<$...>`/`@...` 链的登记表）未建模：本片只产说词行。
 //! - [`NpcPlayer`] 的字段目前由**调用方**（第②片：`SessionGround`/`World` 适配）填充；
 //!   本片只保证「引擎 → 适配器 → 说词」这条链的取数/次序与 oracle 一致。
-//! - 隐藏 NPC 的 `ActorId`：oracle 里它们不经地图、`BaseObject.ActorId` 恒 0（本模块同）。
+//! - 隐藏 NPC 的 `ActorId`：oracle 里三只（`QManage`/`QFunction`/`RobotManage`）是 `new Merchant`
+//!   （`LocalDB.cs:210/268/312`）——由 `ActorMgr` 分配**真实 `ActorId`**、`NpCinitialize` 落
+//!   `Envir=FindMap("0")`（`WorldServer.Merchant.cs:37-62`）。本模块的 [`NpcHost::goto_label`]
+//!   （`@Login`/`@StdModeFunc` 入口）沿用 `ActorId=0`/`Envir=null` 的旧口径（登记）；
+//!   **click/select 入口**（卡 `openmir2-hidden-npc-world-entities`）走世界实体 id + 商人脚本表，
+//!   与 oracle 的真实 `ActorId` 口径一致。
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -430,7 +435,7 @@ impl Default for NpcVars {
 #[derive(Debug)]
 pub struct MerchantNpc {
     /// `Merchant.ScriptList` 与身份（`file_path` = `Market_Def`，`actor_id` = 世界实体 id）。
-    pub def: NpcDef,
+    pub def: std::rc::Rc<NpcDef>,
     /// `Merchant.PriceRate`（构造默认 100；脚本 `%` 行覆盖）。
     pub price_rate: i32,
     /// `NormNpc.Castle`（`Initialize` 的 `InCastleWarArea`；本宿主未建模 ⇒ `None`）。
@@ -438,6 +443,12 @@ pub struct MerchantNpc {
     pub map_name: String,
     pub curr_x: i32,
     pub curr_y: i32,
+    /// 该条目的 `Envir` 根（`SCRIPTNAMELIST`/`ADDNAMELIST` 等文件列表类条件/动作拼绝对路径用）。
+    ///
+    /// `Merchant.txt` 商人路径**不注入**（`None`；与接线前逐字节相同，T-220 登记）；隐藏脚本 NPC
+    /// （`QManage`/`QFunction`/`RobotManage`）由宿主在建实体时注入真实 `Envir` 根——它们与
+    /// `NpcHost::goto_label`（`@Login`/`@StdModeFunc`）走**同一份** `NpcDef`，两入口必须同源。
+    pub envir_root: Option<std::path::PathBuf>,
 }
 
 /// 商人脚本表（`ActorId → Merchant.ScriptList`）。
@@ -463,6 +474,41 @@ impl MerchantScriptBook {
 
     pub fn insert(&mut self, entry: MerchantNpc) {
         self.by_actor.insert(entry.def.actor_id, entry);
+    }
+
+    /// **隐藏脚本 NPC 的脚本登记**（卡 `openmir2-hidden-npc-world-entities`）。
+    ///
+    /// 把 `NpcHost` 的**同一份** `NpcDef`（[`NpcHost::def_rc`] 给出的 `Rc` 共享）以
+    /// `def.actor_id`（= 世界实体 id，[`NpcHost::set_actor_id`] 已改写）为键挂进本表。
+    ///
+    /// oracle 里"脚本表"就是 `ActorMgr` 里的那个 `Merchant` 对象本身：`@Login`/`@StdModeFunc`
+    /// 走 `SystemShare.ManageNPC`/`FunctionNPC`，`CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 走
+    /// `FindMerchant(actorId)`——**同一个对象、同一份 `ScriptList`**。本表用 `Rc` 共享复刻
+    /// 这一点（禁止二次解析：重名 label 会重抽 `rename_rand`，见 `crates/envir::LoadedMerchant`）。
+    ///
+    /// `price_rate` = `Merchant` ctor 缺省 100（`Merchant.cs:82-110`）；`castle` = `None`
+    /// （`NormNpc.Initialize` 的 `InCastleWarArea` 对 `(0,0)` 恒 `null`，部署件同）。
+    pub fn insert_host_def(
+        &mut self,
+        def: std::rc::Rc<NpcDef>,
+        map_name: String,
+        curr_x: i32,
+        curr_y: i32,
+        envir_root: Option<std::path::PathBuf>,
+    ) {
+        let actor_id = def.actor_id;
+        self.by_actor.insert(
+            actor_id,
+            MerchantNpc {
+                def,
+                price_rate: 100,
+                castle: None,
+                map_name,
+                curr_x,
+                curr_y,
+                envir_root,
+            },
+        );
     }
 
     #[must_use]
@@ -510,9 +556,9 @@ impl MerchantScriptBook {
             curr_x,
             curr_y,
             self.goto_count_limit,
-            // 商人脚本表未持有 Envir 根 ⇒ 文件列表类条件按「文件不存在」（与接线前行为一致；
-            // 商人路径的注入另开卡，见 T-220 登记）。
-            None,
+            // 商人路径恒 `None` ⇒ 文件列表类条件按「文件不存在」（与接线前逐字节相同；T-220 登记）。
+            // 隐藏脚本 NPC 条目由宿主注入真实 Envir 根（[`MerchantScriptBook::insert_host_def`]）。
+            entry.envir_root.as_deref(),
             player,
             label,
             bo_ext_jmp,
@@ -522,13 +568,56 @@ impl MerchantScriptBook {
     }
 }
 
+/// **隐藏任务 NPC 的世界实体**（卡 `openmir2-hidden-npc-world-entities`；`QuestNpcList` 侧）。
+///
+/// oracle 事实（逐行）：
+/// - `QMangeNpc()`/`RobotNpc()`（`LocalDB.cs:236/293`）把 `MapQuest_def/QManage.txt`、
+///   `Robot_def/RobotManage.txt` 建成 `new Merchant { MapName="0", CurrX=0, CurrY=0, IsHide=true }`
+///   并 `AddQuestNpc`（`:270/317`）⇒ 它们在 `ActorMgr` 里有**真实 `ActorId`**，
+///   `NpCinitialize`（`WorldServer.Merchant.cs:37`）给它们 `Envir = FindMap("0")` 并 `Initialize()`。
+/// - 部署件 `0.map` 的 `(0,0)` 是 `HighWall` ⇒ `CanWalk` 假 ⇒ `AddToMap` 不执行 ⇒ 挂图失败；
+///   `AddtoMapSuccess && !IsHide` 不成立（`IsHide=true`）⇒ **留在列表**、不在任何格 `obj_list`
+///   ⇒ 不进他人 AOI。
+/// - `FindMerchant(actorId)` 命中的是**同一批** `Merchant` 对象 ⇒ 用它们的 `ActorId` 发
+///   `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 会执行其 `ScriptList`（`NormNpc.Click`/`UserSelect`）。
+///
+/// 本函数建 `npc` 态实体（`npc_type = 0` = `Merchant`，`merchant_lookup` ⇒ `Merchant`；
+/// `npc_tick` 的 type 0 支 = `Merchant.Run`），ctor 4 抽**由调用方从构造段账本预置**
+/// （[`mir2_world_bevy::World::insert_npc_pre_drawn`]，不重抽）。
+#[must_use]
+pub fn insert_hidden_quest_npc(
+    world: &mut mir2_world_bevy::World,
+    record: &mir2_envir::QuestNpcRecord,
+    map_id: usize,
+    ctor: mir2_world_bevy::BaseAnimalCtorDraws,
+) -> Option<i32> {
+    world.insert_npc_pre_drawn(
+        mir2_world_bevy::npc::NpcSpawn {
+            name: record.chr_name.clone(),
+            x: i32::from(record.curr_x),
+            y: i32::from(record.curr_y),
+            map_id,
+            state: mir2_world_bevy::npc::NpcState {
+                // `LocalDB.cs:210/268/312` 三只都是 `new Merchant` ⇒ `LoadNpcs` 的 switch 口径
+                // 对应 `case 0`（`Merchant`）；`IsHide` 来自记录（oracle 恒 true）。
+                npc_type: mir2_world_bevy::npc::NPC_TYPE_MERCHANT,
+                npc_flag: record.npc_flag,
+                appr: record.appr,
+                is_hide: record.is_hide,
+                ..mir2_world_bevy::npc::NpcState::default()
+            },
+        },
+        ctor,
+    )
+}
+
 /// NPC 脚本运行时宿主。
 #[derive(Debug, Default)]
 pub struct NpcHost {
     /// Envir 根（`ScriptParsers.LoadScriptFile` 的 `envir_root`）。
     pub envir_root: PathBuf,
     /// 已装载的 NPC（顺序 = `add_quest_npc` 先、`add_merchant` 后）。
-    pub defs: Vec<NpcDef>,
+    pub defs: Vec<std::rc::Rc<NpcDef>>,
     /// 装载失败的脚本（`LoadPanic`）。
     pub failures: Vec<NpcLoadFailure>,
     /// `SystemShare.Config.ScriptGotoCountLimit`（`ScriptNpc::script_goto_count_limit`）。
@@ -557,7 +646,7 @@ impl NpcHost {
     ) -> Result<Self, Box<NpcLoadAbort>> {
         let parsers = ScriptParsers::new();
         let fs = LocalFs;
-        let mut defs: Vec<NpcDef> = Vec::new();
+        let mut defs: Vec<std::rc::Rc<NpcDef>> = Vec::new();
         let failures: Vec<NpcLoadFailure> = Vec::new();
         // oracle 装载序：`MapQuestManager` 的 `AddQuestNpc` 记录先，`AddMerchant`（QFunction）后。
         for (idx, record) in quest_npcs.iter().chain(merchants.iter()).enumerate() {
@@ -607,7 +696,7 @@ impl NpcHost {
                     }));
                 }
             };
-            defs.push(NpcDef {
+            defs.push(std::rc::Rc::new(NpcDef {
                 chr_name: record.chr_name.clone(),
                 file_path: record.file_path.clone(),
                 script_name: record.script_name.clone(),
@@ -617,7 +706,7 @@ impl NpcHost {
                 loaded,
                 // 稳定非 0（见字段文档；oracle 的精确流水号不复刻，登记）。
                 actor_id: i32::try_from(idx + 1).unwrap_or(i32::MAX),
-            });
+            }));
         }
         Ok(NpcHost {
             envir_root: envir_root.to_path_buf(),
@@ -661,7 +750,8 @@ impl NpcHost {
     ) -> Option<Vec<SayMsg>> {
         let idx = self.find(chr_name)?;
         let def = &self.defs[idx];
-        // 隐藏 NPC 不经地图：`ActorId/Envir/CurrX/CurrY` 均为 0（`BaseObject` 默认）。
+        // 本入口（`@Login`/`@StdModeFunc`）沿用 `ActorId=0` 的旧口径（登记，见模块头）；
+        // click/select 入口走 [`MerchantScriptBook::insert_host_def`] 的真实实体 id。
         Some(run_goto_label(
             def,
             0,
@@ -673,7 +763,8 @@ impl NpcHost {
             player,
             label,
             bo_ext_jmp,
-            // 隐藏 NPC 不经地图：`Envir == null`。
+            // 本入口按 `Envir == null` 处理（登记；click/select 入口的条目 `envir_root` 已注入，
+            // 但 `has_envir` 仍由世界实体身份决定——oracle 里它有 `Envir`，见卡面的历史登记）。
             false,
         ))
     }
@@ -681,6 +772,26 @@ impl NpcHost {
     /// `@Login`（`PlayObject.cs:1440` 用 `SystemShare.ManageNPC`，即 `QManage`）。
     pub fn run_login(&self, player: &mut NpcPlayer<'_, '_>) -> Option<Vec<SayMsg>> {
         self.goto_label("QManage", player, "@Login", false)
+    }
+
+    /// 取某 `ChrName` 的 `NpcDef`（**共享 `Rc`**）：隐藏脚本 NPC 的"脚本表"在世界侧
+    /// （本宿主）与商人书（[`MerchantScriptBook`]）之间是**同一份**——不复制 `ScriptInfo`
+    /// （`crates/script` 的类型不 `Clone`，且二次解析会重抽 `rename_rand`）。
+    #[must_use]
+    pub fn def_rc(&self, chr_name: &str) -> Option<std::rc::Rc<NpcDef>> {
+        self.find(chr_name)
+            .map(|i| std::rc::Rc::clone(&self.defs[i]))
+    }
+
+    /// 把某 `ChrName` 的 `NpcDef::actor_id` 改写为**世界实体 id**（oracle `new Merchant` 的
+    /// `ActorId` 由 `ActorMgr` 分配，就是 `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 的 `Recog`）。
+    ///
+    /// 返回 `None` = 无此 `ChrName`，或该 `Rc` 已被共享（`Rc::get_mut` 失败）——正常装载序下
+    /// 不会发生（宿主在把 def 交给商人书之前持有唯一所有权）。
+    pub fn set_actor_id(&mut self, chr_name: &str, actor_id: i32) -> Option<std::rc::Rc<NpcDef>> {
+        let idx = self.find(chr_name)?;
+        std::rc::Rc::get_mut(&mut self.defs[idx])?.actor_id = actor_id;
+        Some(std::rc::Rc::clone(&self.defs[idx]))
     }
 
     /// `@StdModeFunc<N>`（`PlayObject.Base.cs:1075` 用 `SystemShare.FunctionNPC`，即 `QFunction`）。
@@ -2535,7 +2646,7 @@ mod tests {
     fn host_with(defs: Vec<NpcDef>) -> NpcHost {
         NpcHost {
             envir_root: PathBuf::new(),
-            defs,
+            defs: defs.into_iter().map(std::rc::Rc::new).collect(),
             failures: Vec::new(),
             goto_count_limit: 40,
         }
@@ -3006,7 +3117,7 @@ mod tests {
     fn book_with_isonmap(actor_id: i32, chr_name: &str, script_map: &str) -> MerchantScriptBook {
         let mut book = MerchantScriptBook::new(30);
         book.insert(MerchantNpc {
-            def: NpcDef {
+            def: std::rc::Rc::new(NpcDef {
                 chr_name: chr_name.to_string(),
                 file_path: "Market_Def".to_string(),
                 script_name: Some("挂机商-0103".to_string()),
@@ -3034,12 +3145,14 @@ mod tests {
                 }],
                 loaded: true,
                 actor_id,
-            },
+            }),
             price_rate: 100,
             castle: None,
             map_name: "0103".to_string(),
             curr_x: 9,
             curr_y: 12,
+
+            envir_root: None,
         });
         book
     }
@@ -3107,7 +3220,7 @@ Other
                 r"..\TestList.txt".to_string();
             let host = NpcHost {
                 envir_root,
-                defs: vec![def],
+                defs: vec![std::rc::Rc::new(def)],
                 failures: Vec::new(),
                 goto_count_limit: 40,
             };
@@ -3124,7 +3237,7 @@ Other
         let run = |envir_root: std::path::PathBuf, chr: &str| {
             let host = NpcHost {
                 envir_root,
-                defs: vec![makes()],
+                defs: vec![std::rc::Rc::new(makes())],
                 failures: Vec::new(),
                 goto_count_limit: 40,
             };
@@ -3203,7 +3316,7 @@ Other
         };
         let host = NpcHost {
             envir_root: envir.clone(),
-            defs: vec![def],
+            defs: vec![std::rc::Rc::new(def)],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -3285,7 +3398,7 @@ Other
         let run = |def: NpcDef| {
             let host = NpcHost {
                 envir_root: envir.clone(),
-                defs: vec![def],
+                defs: vec![std::rc::Rc::new(def)],
                 failures: Vec::new(),
                 goto_count_limit: 40,
             };
@@ -3487,7 +3600,7 @@ Other
         };
         let host = NpcHost {
             envir_root: envir.clone(),
-            defs: vec![cond_def],
+            defs: vec![std::rc::Rc::new(cond_def)],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -3539,7 +3652,7 @@ Other
         };
         let del_host = NpcHost {
             envir_root: envir.clone(),
-            defs: vec![del_def],
+            defs: vec![std::rc::Rc::new(del_def)],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -3631,7 +3744,7 @@ Other
     ) -> MerchantScriptBook {
         let mut book = MerchantScriptBook::new(30);
         book.insert(MerchantNpc {
-            def: NpcDef {
+            def: std::rc::Rc::new(NpcDef {
                 chr_name: chr_name.to_string(),
                 file_path: "Market_Def".to_string(),
                 script_name: Some("卫家店-0103".to_string()),
@@ -3640,12 +3753,14 @@ Other
                 scripts: vec![merchant_script(pairs)],
                 loaded: true,
                 actor_id,
-            },
+            }),
             price_rate,
             castle: None,
             map_name: "0103".to_string(),
             curr_x: 9,
             curr_y: 12,
+
+            envir_root: None,
         });
         book
     }
@@ -3743,7 +3858,7 @@ Other
     ) -> MerchantScriptBook {
         let mut book = MerchantScriptBook::new(30);
         book.insert(MerchantNpc {
-            def: NpcDef {
+            def: std::rc::Rc::new(NpcDef {
                 chr_name: chr_name.to_string(),
                 file_path: "Market_Def".to_string(),
                 script_name: Some("寄售商-0103".to_string()),
@@ -3752,12 +3867,14 @@ Other
                 scripts: vec![merchant_script_with_actions(pairs)],
                 loaded: true,
                 actor_id,
-            },
+            }),
             price_rate: 100,
             castle: None,
             map_name: "0103".to_string(),
             curr_x: 9,
             curr_y: 12,
+
+            envir_root: None,
         });
         book
     }
@@ -4953,7 +5070,7 @@ Other
         let run = |envir_root: std::path::PathBuf| {
             let host = NpcHost {
                 envir_root,
-                defs: vec![makes()],
+                defs: vec![std::rc::Rc::new(makes())],
                 failures: Vec::new(),
                 goto_count_limit: 40,
             };
@@ -4995,7 +5112,7 @@ Other
         let list = envir.join("MerchantList.txt");
         let mut book = MerchantScriptBook::new(30);
         book.insert(MerchantNpc {
-            def: NpcDef {
+            def: std::rc::Rc::new(NpcDef {
                 chr_name: "商人".to_string(),
                 file_path: "Market_Def".to_string(),
                 script_name: Some("挂机商-0103".to_string()),
@@ -5033,12 +5150,14 @@ Other
                     }],
                     quest_count: 0,
                 }],
-            },
+            }),
             price_rate: 100,
             castle: None,
             map_name: "0103".to_string(),
             curr_x: 9,
             curr_y: 12,
+
+            envir_root: None,
         });
         // 名单**存在且命中**——但商人漏斗没有 Envir 根 ⇒ 恒 miss。
         std::fs::write(&list, "hero\r\n").unwrap();
