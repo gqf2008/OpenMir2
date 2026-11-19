@@ -57,3 +57,57 @@ WARN_EXTRA MySqlConnector.dll / OpenMir2.dll
 
 - 仍只做 NuGet；`runtime` 里自家件继续由 `stamp-binaries` 管，两边不重叠。
 - 不改任何二进制行为。
+
+## 复审第 2 轮（opc-07 要求）：来源查清、范围补齐、判据升级
+
+### 未声明来源（原文）
+
+`Directory.Build.targets:8-18`：
+
+```xml
+  <Target Name="CopyStoragePluginToDbSrv"
+          AfterTargets="Build"
+          Condition="$(MSBuildProjectName.StartsWith('DBSvr.Storage.'))">
+    <ItemGroup>
+      <StoragePluginFile Include="$(OutputPath)$(AssemblyName).dll" />
+    </ItemGroup>
+    <Copy SourceFiles="@(StoragePluginFile)"
+          DestinationFolder="$(MSBuildThisFileDirectory)src\DBSrvin\$(Configuration)\"
+          SkipUnchangedFiles="true"
+          ContinueOnError="true" />
+  </Target>
+```
+
+即：编 `DBSvr.Storage.*` 时把**插件 DLL** 拷进 `src/DBSrv/bin/<Configuration>/`——这就是
+`DBSrv.Storage.MySQL.dll`/`MySqlConnector.dll` 出现在 DBSrv 输出里的来源。注意它**只拷插件自身 DLL，
+不拷其依赖闭包**（见下"剩余红"）。
+
+### 范围补齐与判据升级
+
+- `generate`/`check` 支持 `--projects "a;b;c"`（并集 manifest）；部署集由**主项目（第一个）**的还原图
+  决定，后续项目只"补缺"（典型：插件的 Direct 包如 `MySqlConnector`）；同名不同版本保留主项目版本。
+- manifest 顶层新增：`projects`（绝对路径）、`build_config`（Debug/Release）、`output_dirs`（每项目
+  绝对输出目录）；`check` 时若探测到的输出目录与记录不一致 ⇒ `BUILD_OUTPUT_MISMATCH` 红；
+  `--projects` 与 manifest 的集合不一致 ⇒ `PROJECT_SET_MISMATCH` 红。
+- 部署目录判定升级：`manifest` 未覆盖、且不在自家件白名单（opc-07 给的 7 个 + **`DBSrv.Storage.MongoDB.dll`**）
+  的 `.dll` ⇒ **`UNCOVERED_DEPLOYED` 红**（不再是 `WARN_EXTRA`）。
+  **白名单偏离说明**：opc-07 的 8 项列表里没有 `DBSrv.Storage.MongoDB.dll`，但它在
+  `runtime/DBSrv` 里且是我们自己的插件产物（同样由上面的 target 拷贝），故补进白名单；若不认可请指出。
+
+### 第四颗牙（原文）
+
+```
+DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll
+```
+另：`BUILD_OUTPUT_MISMATCH` 也有失败原文（记录目录 vs 实际探测目录）。自测：**18 例**全绿。
+
+### 真实目录结果（只读）
+
+- `runtime/LoginSrv`（单项目）：`DEPS_GREEN packages=48 files=1063`，`UNCOVERED_DEPLOYED=0`。
+- `runtime/DBSrv`（并集 `src/DBSrv` + `DBSvr.Storage.MySQL`，manifest **47 包 / 1045 文件**）：
+  **剩 1 条红**：`DEPS_RED MISSING_DEPLOYED NLog/5.2.8 NLog.dll`。
+  根因：`DBSvr.Storage.MySQL` 声明并随构建产出 `NLog.dll`（其 `bin/Debug` 有），但
+  `Directory.Build.targets` 只把**插件 DLL 本身**拷进 DBSrv 输出 ⇒ 部署目录缺 NLog；
+  现网 `runtime/DBSrv` 里 `MySqlConnector.dll` 是别的途径带进去的，`NLog.dll` 没有。
+  **一件一议**：要么改 target 连依赖闭包一起拷（部署修复），要么把该插件的 NLog 依赖移除/标为不部署。
+  在结论前，DBSrv 这条保持红——不降级、不默默 WARN。

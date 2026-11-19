@@ -276,26 +276,77 @@ def find_nupkg(pkg_dir):
 
 # ---------------- generate ----------------
 
+def split_projects(args):
+    raw = getattr(args, "projects", None)
+    if raw:
+        parts = [p.strip() for p in re.split(r"[;,]", raw) if p.strip()]
+    else:
+        single = getattr(args, "project", None)
+        parts = [single] if single else []
+    return [os.path.abspath(p) for p in parts]
+
+
 def cmd_generate(args):
-    proj_dir = os.path.dirname(os.path.abspath(args.project))
-    lock, lock_path = load_lock(proj_dir)
-    if lock is None:
-        emit("DEPS_RED MISSING_LOCK %s" % lock_path)
-        return 1
-    pkgs, err = lock_packages(lock)
-    if pkgs is None:
-        emit("DEPS_RED %s" % err)
-        return 1
-    assets, aerr = load_assets_runtime(proj_dir)
-    if assets is None:
-        emit("DEPS_RED %s" % aerr)
-        return 1
+    proj_paths = split_projects(args)
+    if not proj_paths:
+        emit("DEPS_RED MISSING_PROJECTS（--project 或 --projects 必给）")
+        return 2
+    projects_rel = []
+    output_dirs = {}
+    configs = set()
+    merged = {}
+    assets_union = {}
+    shipped_union = {}
     out_arg = getattr(args, "output_dir", None)
-    output_dir = os.path.abspath(out_arg) if out_arg else detect_output_dir(proj_dir)
-    out_files = set()
-    if output_dir and os.path.isdir(output_dir):
-        out_files = {fn for fn in os.listdir(output_dir)
-                     if os.path.isfile(os.path.join(output_dir, fn))}
+    loaded = []
+    for proj in proj_paths:
+        proj_dir = os.path.dirname(proj)
+        if not os.path.isfile(proj):
+            emit("DEPS_RED MISSING_PROJECT %s" % proj)
+            return 1
+        lock, lock_path = load_lock(proj_dir)
+        if lock is None:
+            emit("DEPS_RED MISSING_LOCK %s" % lock_path)
+            return 1
+        pkgs, err = lock_packages(lock)
+        if pkgs is None:
+            emit("DEPS_RED %s" % err)
+            return 1
+        assets, aerr = load_assets_runtime(proj_dir)
+        if assets is None:
+            emit("DEPS_RED %s" % aerr)
+            return 1
+        output_dir = os.path.abspath(out_arg) if out_arg else detect_output_dir(proj_dir)
+        config = ""
+        if output_dir:
+            parts = output_dir.replace("\\", "/").split("/")
+            if "bin" in parts:
+                idx = len(parts) - 1 - parts[::-1].index("bin")
+                if idx + 1 < len(parts):
+                    config = parts[idx + 1]
+        configs.add(config or "unknown")
+        projects_rel.append(proj)
+        output_dirs[proj] = output_dir or ""
+        out_files = set()
+        if output_dir and os.path.isdir(output_dir):
+            out_files = {fn for fn in os.listdir(output_dir)
+                         if os.path.isfile(os.path.join(output_dir, fn))}
+        loaded.append((proj, pkgs, assets, out_files))
+        for name, meta in pkgs.items():
+            # 部署集由**主项目**（第一个）的还原图决定；后续项目只"补缺"（典型：插件的 Direct 包）。
+            # 同名但版本不同时保留主项目的版本（运行时按主项目输出装配），不判冲突。
+            if name not in merged:
+                merged[name] = meta
+            assets_union.setdefault(name, set()).update(assets.get(name, []))
+            for rel in assets.get(name, []):
+                if rel.rsplit("/", 1)[-1] in out_files:
+                    shipped_union.setdefault(name, set()).add(rel)
+    if len(configs) > 1:
+        emit("DEPS_RED BUILD_CONFIG_CONFLICT %s" % ",".join(sorted(configs)))
+        return 1
+    build_config = sorted(configs)[0]
+    pkgs = merged
+    assets = {k: sorted(v) for k, v in assets_union.items()}
     packages_dir = os.path.expanduser(args.packages_dir)
     if not os.path.isdir(packages_dir):
         emit("DEPS_RED MISSING_PACKAGES_DIR %s" % packages_dir)
@@ -339,13 +390,14 @@ def cmd_generate(args):
             "nupkg_sha512": nupkg_sha,
             "files": files,
             "runtime_assets": assets.get(name, []),
-            "shipped_assets": [rel for rel in assets.get(name, [])
-                               if rel.rsplit("/", 1)[-1] in out_files],
+            "shipped_assets": sorted(shipped_union.get(name, set())),
         })
 
     manifest = {
         "manifest_version": MANIFEST_VERSION,
-        "project": os.path.relpath(os.path.abspath(args.project)).replace(os.sep, "/"),
+        "projects": projects_rel,
+        "build_config": build_config,
+        "output_dirs": output_dirs,
         "generated_by": "tools/deploy/deps_manifest.py",
         "packages": entries,
     }
@@ -364,17 +416,20 @@ def _fail(lines, code, detail):
     lines.append("DEPS_RED %s %s" % (code, detail))
 
 
+SELF_BUILT = {
+    "dbsrv.exe", "dbsrv.dll", "dbsrv.storage.dll", "dbsrv.storage.mysql.dll",
+    "dbsrv.storage.mongodb.dll", "openmir2.dll", "loginsrv.exe", "loginsrv.dll",
+}
+
+
 def cmd_check(args):
     reds = []
-    proj_dir = os.path.dirname(os.path.abspath(args.project))
-    lock, lock_path = load_lock(proj_dir)
-    if lock is None:
-        _fail(reds, "MISSING_LOCK", lock_path)
+    proj_paths = split_projects(args)
     manifest_path = os.path.abspath(args.manifest)
+    manifest = None
     if not os.path.isfile(manifest_path):
         _fail(reds, "MISSING_MANIFEST", manifest_path)
-    manifest = None
-    if os.path.isfile(manifest_path):
+    else:
         try:
             with open(manifest_path, "r", encoding="utf-8") as f:
                 manifest = json.load(f)
@@ -383,6 +438,9 @@ def cmd_check(args):
     if isinstance(manifest, dict):
         if manifest.get("manifest_version") != MANIFEST_VERSION:
             _fail(reds, "BAD_MANIFEST_VERSION", "manifest_version=%r" % manifest.get("manifest_version"))
+        for field in ("projects", "build_config", "output_dirs"):
+            if field not in manifest:
+                _fail(reds, "MISSING_FIELD", "<top>." + field)
         pkgs = manifest.get("packages")
         if not isinstance(pkgs, list) or not pkgs:
             _fail(reds, "EMPTY_MANIFEST", "packages 为空或非数组")
@@ -394,32 +452,52 @@ def cmd_check(args):
             for field in REQUIRED_PKG_FIELDS:
                 if field not in p:
                     _fail(reds, "MISSING_FIELD", "%s.%s" % (p.get("name", "?"), field))
+        if proj_paths:
+            have = {os.path.abspath(x) for x in (manifest.get("projects") or [])}
+            want = set(proj_paths)
+            if have != want:
+                _fail(reds, "PROJECT_SET_MISMATCH",
+                      "manifest=%s args=%s" % (sorted(have), sorted(want)))
+        for proj, recorded in (manifest.get("output_dirs") or {}).items():
+            if not recorded:
+                continue
+            det = detect_output_dir(os.path.dirname(proj))
+            if det and os.path.abspath(det) != os.path.abspath(recorded):
+                _fail(reds, "BUILD_OUTPUT_MISMATCH",
+                      "%s manifest=%s now=%s" % (proj, recorded, det))
     elif manifest is not None:
         _fail(reds, "BAD_MANIFEST", "顶层不是对象")
         manifest = None
 
-    # 一级：csproj 声明 vs lock resolved
-    refs = parse_csproj_refs(os.path.abspath(args.project))
-    if lock is not None:
+    # 一级：每个项目的 csproj 声明 vs 其 lock 的 resolved
+    level1_projects = proj_paths or [os.path.abspath(x) for x in
+                                     ((manifest or {}).get("projects") or [])]
+    for proj in level1_projects:
+        proj_dir = os.path.dirname(proj)
+        lock, lock_path = load_lock(proj_dir)
+        if lock is None:
+            _fail(reds, "MISSING_LOCK", lock_path)
+            continue
         pkgs_lock, err = lock_packages(lock)
         if pkgs_lock is None:
-            _fail(reds, "BAD_LOCK", err)
-        else:
-            direct = {n for n, m in pkgs_lock.items() if m.get("type") == "Direct"}
-            for name in sorted(set(refs) - set(pkgs_lock)):
-                _fail(reds, "NOT_IN_LOCK", "%s（csproj 声明但 lock 缺失）" % name)
-            for name in sorted(direct - set(refs)):
-                _fail(reds, "LOCK_DIRECT_NOT_DECLARED", "%s（lock Direct 但 csproj 未声明）" % name)
-            for name, rng in sorted(refs.items()):
-                meta = pkgs_lock.get(name)
-                if meta is None:
-                    continue
-                ok, why = range_satisfied(meta["resolved"], rng)
-                if not ok:
-                    _fail(reds, "RANGE_UNSATISFIED", "%s range=%s resolved=%s（%s）"
-                          % (name, rng, meta["resolved"], why))
+            _fail(reds, "BAD_LOCK", "%s %s" % (proj, err))
+            continue
+        refs = parse_csproj_refs(proj)
+        direct = {n for n, m in pkgs_lock.items() if m.get("type") == "Direct"}
+        for name in sorted(set(refs) - set(pkgs_lock)):
+            _fail(reds, "NOT_IN_LOCK", "%s %s（csproj 声明但 lock 缺失）" % (proj, name))
+        for name in sorted(direct - set(refs)):
+            _fail(reds, "LOCK_DIRECT_NOT_DECLARED", "%s %s（lock Direct 但 csproj 未声明）" % (proj, name))
+        for name, rng in sorted(refs.items()):
+            meta = pkgs_lock.get(name)
+            if meta is None:
+                continue
+            ok, why = range_satisfied(meta["resolved"], rng)
+            if not ok:
+                _fail(reds, "RANGE_UNSATISFIED", "%s %s range=%s resolved=%s（%s）"
+                      % (proj, name, rng, meta["resolved"], why))
 
-    # 二级：manifest vs 磁盘
+    # 二级：manifest vs 已还原包
     packages_dir = os.path.expanduser(args.packages_dir)
     if manifest is not None:
         for p in manifest.get("packages") or []:
@@ -427,7 +505,7 @@ def cmd_check(args):
                 continue
             name, version = p["name"], p["resolved"]
             if not all(field in p for field in REQUIRED_PKG_FIELDS):
-                continue  # 已在上面的 MISSING_FIELD 报过
+                continue
             pdir = package_dir(packages_dir, name, version)
             if not os.path.isdir(pdir):
                 _fail(reds, "MISSING_PACKAGE_DIR", "%s/%s" % (name, version))
@@ -451,9 +529,8 @@ def cmd_check(args):
                 if actual512 != p.get("nupkg_sha512"):
                     _fail(reds, "NUPKG_CHANGED", "%s/%s expected=%s actual=%s"
                           % (name, version, p.get("nupkg_sha512"), actual512))
-            file_count = len(recorded)
 
-    # 三级（可选）：部署目录映射（卡 `openmir2-deps-check-deploy-dir`）
+    # 三级（可选）：部署目录映射
     deploy_dir = getattr(args, "deploy_dir", None)
     if deploy_dir:
         ddir = os.path.abspath(deploy_dir)
@@ -506,8 +583,11 @@ def cmd_check(args):
                 _fail(reds, "MISSING_SHIP_SET",
                       "manifest 无 shipped_assets（生成时缺构建输出目录？）")
             for fn in sorted(deployed):
-                if fn.lower().endswith(".dll") and fn not in mapped:
-                    emit("WARN_EXTRA %s" % fn)
+                if not fn.lower().endswith(".dll"):
+                    continue
+                if fn in mapped or fn.lower() in SELF_BUILT:
+                    continue
+                _fail(reds, "UNCOVERED_DEPLOYED", fn)
 
     if reds:
         for line in reds:
@@ -670,11 +750,11 @@ def cmd_selftest(_args):
                     os.path.join(ddir, "Alpha.dll"))
         shutil.copy(os.path.join(feed4, "beta", "2.0.0", "lib", "net8.0", "Beta.dll"),
                     os.path.join(ddir, "Beta.dll"))
-        with open(os.path.join(ddir, "OurOwn.dll"), "wb") as f:
+        with open(os.path.join(ddir, "DBSrv.dll"), "wb") as f:
             f.write(b"ours")
         rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
                   "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir})
-        sassert(rc == 0, "deploydir: matching deploy dir green (+WARN_EXTRA)", "rc=%d" % rc)
+        sassert(rc == 0, "deploydir: matching deploy dir green (self-built extra ignored)", "rc=%d" % rc)
 
         # 牙①：翻部署件末字节 ⇒ DEPLOYED_SHA_MISMATCH
         with open(os.path.join(ddir, "Alpha.dll"), "r+b") as f:
@@ -709,6 +789,29 @@ def cmd_selftest(_args):
         rc = run({"cmd": "check", "project": os.path.join(proj5, "App.csproj"),
                   "manifest": man5, "packages_dir": feed5, "deploy_dir": adir})
         sassert(rc == 1, "tooth3: ambiguous mapping red", "rc=%d" % rc)
+
+        # 牙④：部署目录里出现不在 manifest、也不在自家件白名单的第三方 DLL ⇒ UNCOVERED_DEPLOYED
+        ddir2 = os.path.join(tmp, "deploy", "out2")
+        os.makedirs(ddir2, exist_ok=True)
+        shutil.copy(os.path.join(feed4, "alpha", "1.0.0", "lib", "net8.0", "Alpha.dll"),
+                    os.path.join(ddir2, "Alpha.dll"))
+        shutil.copy(os.path.join(feed4, "beta", "2.0.0", "lib", "net8.0", "Beta.dll"),
+                    os.path.join(ddir2, "Beta.dll"))
+        with open(os.path.join(ddir2, "Stray.Third.Party.dll"), "wb") as f:
+            f.write(b"stray")
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": man4, "packages_dir": feed4, "deploy_dir": ddir2})
+        sassert(rc == 1, "tooth4: uncovered third-party dll red", "rc=%d" % rc)
+
+        # 记录的输出目录与当前探测不一致 ⇒ BUILD_OUTPUT_MISMATCH
+        bad_out = os.path.join(tmp, "deploy", "badout.json")
+        data6 = json.load(open(man4, encoding="utf-8"))
+        for k in list(data6.get("output_dirs") or {}):
+            data6["output_dirs"][k] = os.path.join(tmp, "deploy", "elsewhere")
+        json.dump(data6, open(bad_out, "w", encoding="utf-8"))
+        rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
+                  "manifest": bad_out, "packages_dir": feed4})
+        sassert(rc == 1, "output-dir mismatch red", "rc=%d" % rc)
 
         # fail-closed：部署目录缺失 / 为空
         rc = run({"cmd": "check", "project": os.path.join(proj4, "App.csproj"),
@@ -745,12 +848,14 @@ def build_parser():
     p = argparse.ArgumentParser(description="部署依赖清单：生成与两级核验")
     sub = p.add_subparsers(dest="cmd", required=True)
     g = sub.add_parser("generate")
-    g.add_argument("--project", required=True)
+    g.add_argument("--project", required=False)
+    g.add_argument("--projects", default=None, help="多个项目用 ; 或 , 分隔（并集 manifest）")
     g.add_argument("--out", required=True)
     g.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
     g.add_argument("--output-dir", default=None)
     c = sub.add_parser("check")
-    c.add_argument("--project", required=True)
+    c.add_argument("--project", required=False)
+    c.add_argument("--projects", default=None)
     c.add_argument("--manifest", required=True)
     c.add_argument("--packages-dir", default=os.path.join("~", ".nuget", "packages"))
     c.add_argument("--deploy-dir", default=None)
