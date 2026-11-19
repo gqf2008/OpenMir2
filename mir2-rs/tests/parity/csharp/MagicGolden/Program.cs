@@ -82,6 +82,12 @@ public static class Program
         // 原版日志门面是 public static ILogger（`src/OpenMir2/LogService.cs:9`）；离线进程给一个无 sink 的实例，
         // 避免错误路径（如地图缺失）因 Logger 为 null 抛 NRE 掩盖真实原因。
         OpenMir2.LogService.Logger = new Serilog.LoggerConfiguration().CreateLogger();
+        // 帧编码路径会读城堡/攻城区（`PlayObject.GetChrColor` → `SystemShare.CastleMgr.InCastleWarArea`）；
+        // 离线进程给一个空城堡管理器（`CastleManager` 参数构造，城堡列表为空 ⇒ 恒返回 null）。
+        if (SystemModule.SystemShare.CastleMgr == null)
+        {
+            SystemModule.SystemShare.CastleMgr = new M2Server.Castle.CastleManager();
+        }
         if (args.Contains("--rng-selftest"))
         {
             return RngSelfTest();
@@ -292,6 +298,7 @@ public static class Program
         var target = new RecordingPlayObject { ChrName = "golden-target", ActorId = idBase + 2, CurrX = 101, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5, AntiMagic = (ushort)antiMagic };
         target.Abil.Level = 20;
         target.WAbil.MaxHP = 100;
+        target.WAbil.HP = 100;   // 关键：不给 HP 则伤害变化不可观测（账本里 0→0）
         target.Abil.MaxHP = 100;
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
@@ -331,8 +338,18 @@ public static class Program
         var draws = rng.Draws.ToList();
         RngSeam.Restore(original);
 
+        // 延时路径：RM_DELAYMAGIC 到期后才走 BaseObject.Base.cs:711（伤害 → RM_MAGSTRUCK）。
+        // 真机语义是后续 tick；这里等价地等到到期（600ms）再排水，跨两趟把链式消息也处理掉。
+        int hpBefore = target.WAbil.HP;
+        Thread.Sleep(700);
         var receivers = new List<ReceiverResult>();
-        foreach (var (who, obj) in new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) })
+        var pending = new List<object>();
+        var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
+        var rmAcc = new Dictionary<string, List<object>>();
+        foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
+        for (int pass = 0; pass < 2; pass++)
+        {
+        foreach (var (who, obj) in byWho)
         {
             var raw = obj.DrainRaw();
             var rm = raw.Select(m => (object)new
@@ -350,8 +367,15 @@ public static class Program
             foreach (var m in raw)
             {
                 if (!m.LateDelivery || m.DeliveryTime <= now) obj.OperatePublic(m);
+                else pending.Add(new { who, ident = m.wIdent, delivery = m.DeliveryTime, now });
             }
-            receivers.Add(new ReceiverResult { Who = who, Rm = rm, Sent = obj.Sent.ToList() });
+            rmAcc[who].AddRange(rm);
+        }
+        }
+        int hpAfter = target.WAbil.HP;
+        foreach (var (who, obj) in byWho)
+        {
+            receivers.Add(new ReceiverResult { Who = who, Rm = rmAcc[who], Sent = obj.Sent.ToList() });
         }
 
         return new FireballResult
@@ -361,7 +385,9 @@ public static class Program
             SpellReturn = ok,
             Receivers = receivers,
             Rng = draws,
-            TargetHp = target.WAbil.HP,
+            TargetHp = hpAfter,
+            TargetHpBefore = hpBefore,
+            NotDue = pending,
             CasterMp = caster.WAbil.MP,
         };
     }
@@ -437,5 +463,7 @@ public sealed class FireballResult
     public List<ReceiverResult> Receivers { get; set; }
     public List<long> Rng { get; set; }
     public int TargetHp { get; set; }
+    public int TargetHpBefore { get; set; }
+    public List<object> NotDue { get; set; }
     public int CasterMp { get; set; }
 }

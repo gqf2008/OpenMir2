@@ -132,7 +132,9 @@
       "Rng": [
         2
       ],
-      "TargetHp": 0,
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
       "CasterMp": 0
     },
     {
@@ -171,7 +173,17 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1088790490
+              "delivery": 1088860600
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 85,
+              "p2": 100,
+              "p3": 2001,
+              "msg": "",
+              "late": false,
+              "delivery": 0
             }
           ],
           "Sent": [
@@ -181,6 +193,13 @@
               "tag": 100,
               "series": 257,
               "tail": "Zghjd?"
+            },
+            {
+              "ident": 31,
+              "param": 85,
+              "tag": 100,
+              "series": 15,
+              "tail": "ddhkddhkddy[gdhgedhkd?"
             }
           ]
         },
@@ -198,11 +217,41 @@
               "delivery": 0
             },
             {
+              "ident": 8044,
+              "wParam": 0,
+              "p1": 15,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
               "ident": 10120,
               "wParam": 0,
               "p1": 257,
               "p2": 6553701,
               "p3": 2002,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10052,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 85,
+              "p2": 100,
+              "p3": 2001,
               "msg": "",
               "late": false,
               "delivery": 0
@@ -222,6 +271,13 @@
               "tag": 100,
               "series": 257,
               "tail": "Zghjd?"
+            },
+            {
+              "ident": 31,
+              "param": 85,
+              "tag": 100,
+              "series": 15,
+              "tail": "ddhkddhkddy[gdhgedhkd?"
             }
           ]
         },
@@ -247,6 +303,26 @@
               "msg": "",
               "late": false,
               "delivery": 0
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 85,
+              "p2": 100,
+              "p3": 2001,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
             }
           ],
           "Sent": [
@@ -263,6 +339,13 @@
               "tag": 100,
               "series": 257,
               "tail": "Zghjd?"
+            },
+            {
+              "ident": 31,
+              "param": 85,
+              "tag": 100,
+              "series": 15,
+              "tail": "ddhkddhkddy[gdhgedhkd?"
             }
           ]
         },
@@ -279,7 +362,9 @@
         0,
         4
       ],
-      "TargetHp": 0,
+      "TargetHp": 85,
+      "TargetHpBefore": 100,
+      "NotDue": [],
       "CasterMp": 0
     },
     {
@@ -318,7 +403,17 @@
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1088790521
+              "delivery": 1088861412
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 85,
+              "p2": 100,
+              "p3": 3001,
+              "msg": "",
+              "late": false,
+              "delivery": 0
             }
           ],
           "Sent": [
@@ -328,6 +423,13 @@
               "tag": 100,
               "series": 257,
               "tail": "Bghad?"
+            },
+            {
+              "ident": 31,
+              "param": 85,
+              "tag": 100,
+              "series": 15,
+              "tail": "ddhkddhkddQKgdhcedhkd?"
             }
           ]
         },
@@ -345,11 +447,41 @@
               "delivery": 0
             },
             {
+              "ident": 8044,
+              "wParam": 0,
+              "p1": 15,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
               "ident": 10120,
               "wParam": 0,
               "p1": 257,
               "p2": 6553701,
               "p3": 3002,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 10052,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 85,
+              "p2": 100,
+              "p3": 3001,
               "msg": "",
               "late": false,
               "delivery": 0
@@ -369,6 +501,13 @@
               "tag": 100,
               "series": 257,
               "tail": "Bghad?"
+            },
+            {
+              "ident": 31,
+              "param": 85,
+              "tag": 100,
+              "series": 15,
+              "tail": "ddhkddhkddQKgdhcedhkd?"
             }
           ]
         },
@@ -394,6 +533,26 @@
               "msg": "",
               "late": false,
               "delivery": 0
+            },
+            {
+              "ident": 8103,
+              "wParam": 15,
+              "p1": 85,
+              "p2": 100,
+              "p3": 3001,
+              "msg": "",
+              "late": false,
+              "delivery": 0
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0
             }
           ],
           "Sent": [
@@ -410,6 +569,13 @@
               "tag": 100,
               "series": 257,
               "tail": "Bghad?"
+            },
+            {
+              "ident": 31,
+              "param": 85,
+              "tag": 100,
+              "series": 15,
+              "tail": "ddhkddhkddQKgdhcedhkd?"
             }
           ]
         },
@@ -426,7 +592,9 @@
         0,
         0
       ],
-      "TargetHp": 0,
+      "TargetHp": 85,
+      "TargetHpBefore": 100,
+      "NotDue": [],
       "CasterMp": 0
     }
   ]

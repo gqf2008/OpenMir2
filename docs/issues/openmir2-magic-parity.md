@@ -209,3 +209,42 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
    ActorId**，否则后面的用例会发给前面用例的旧对象（表现为"后续用例全 0 帧"）。
 6. `SendRefMsg` 的 500ms 门（`BaseObject.Message.cs:395`）已确认：首次调用扫描并填充
    `VisibleHumanList`，其后 500ms 内走缓存列表（`<11` 判距）。
+
+## 13. 三支差异清单（跨 tick 采集后；2026-11-19）
+
+采集方式：`DoSpell` → 等 700ms（`RM_DELAYMAGIC` 到期）→ 两趟排水 + 生产 `Operate`。
+目标 HP 初值 100（不给 HP 时账本为 0→0，不可观测——已入洁癖区）。
+
+| 字段 | miss | edge | hit |
+|---|---|---|---|
+| RNG 账本 | `[2]` | `[3,0,0,0,4]` | `[5,0,0,0,0]` |
+| 首抽 `Random(10)` | 2 (<3) | 3 (==3) | 5 (>3) |
+| `RM_DELAYMAGIC(8021)` | **无** | 有（p3=目标） | 有 |
+| `RM_MAGSTRUCK(8044)` | **无** | 有（target） | 有 |
+| `RM_STRUCK_MAG(8103)` | **无** | 有（caster/target/obs_in） | 有 |
+| `SM_STRUCK(31)` | **无** | 有：`param=85`（新 HP）、`series=15`（伤害） | 同 |
+| target HP | **100 → 100** | **100 → 85** | 100 → 85 |
+| caster `SM_SPELL(17)` | 0 | 0 | 0 |
+| obs_out 帧 | 无 | 无 | 无 |
+
+- **miss 与 edge/hit 的差异是实质性的**（有无伤害链 + HP 差 + 有无 8021/8044/8103/31）。
+- **edge 与 hit 行为相同**（`Random(10) == AntiMagic` 与 `> AntiMagic` 走同一支，这是原版语义），
+  差异只在 RNG 账本的首抽值——卡面如实写明，不把它当作"两个独立行为"。
+- 伤害链还产生 `RM_HEALTHSPELLCHANGED(10052)`、`RM_CHANGENAMECOLOR(8090)`（以及存在死亡时的
+  `RM_DEATH(10021)`），均已在映射表登记（下表）。
+- **未到期事件**：三支 `not_due` 均为 0（700ms 等待覆盖 600ms 延时）；若将来出现未到期条目，
+  必须单列为"未覆盖"，不得计入已比。
+
+### 映射表补充（伤害链，均带 C# 产生位置）
+
+| RM | 产生 SM 帧的 C# 位置 |
+|---|---|
+| `RM_MAGSTRUCK(8044)` / `RM_STRUCK_MAG(8103)` | `PlayObject.Message.cs:1562-1563`（→ `SM_STRUCK(31)`） |
+| `RM_HEALTHSPELLCHANGED(10052)` | `PlayObject.Message.cs:1736`（→ `SM_HEALTHSPELLCHANGED`） |
+| `RM_CHANGENAMECOLOR(8090)` | `PlayObject.Message.cs:1677-1678`（→ `SM_CHANGENAMECOLOR`，内部读 `GetChrColor`） |
+| `RM_DEATH(10021)` | `PlayObject.Message.cs:1630`（本三支未出现） |
+
+**洁癖区补充**
+7. 帧编码会读 `SystemShare.CastleMgr.InCastleWarArea` ⇒ 离线进程必须 `new CastleManager()` 赋给
+   `SystemShare.CastleMgr`（空列表 ⇒ 恒 null），否则 `GetChrColor` NRE。
+8. 观测 HP 变化前必须给目标 `WAbil.HP` 初值（默认 0 时伤害差不可见）。
