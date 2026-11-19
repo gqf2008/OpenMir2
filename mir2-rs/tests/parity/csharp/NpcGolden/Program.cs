@@ -22,6 +22,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
@@ -202,7 +203,10 @@ internal static class Program
         var scriptText = spec.ScriptText == "MAIN_DEFAULT"
             ? "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\r\n"
             : spec.ScriptText;
-        File.WriteAllText(Path.Combine(tmp, "Npc_def", spec.ScriptName + ".txt"), scriptText, new UTF8Encoding(true));
+        var enc = new UTF8Encoding(true);
+        var scriptBytes = enc.GetPreamble().Concat(enc.GetBytes(scriptText)).ToArray();
+        File.WriteAllBytes(Path.Combine(tmp, "Npc_def", spec.ScriptName + ".txt"), scriptBytes);
+        var scriptSha = Convert.ToHexString(SHA256.HashData(scriptBytes)).ToLowerInvariant();
         SystemShare.Config.ClickNpcTime = spec.ClickNpcTimeConfig;
 
         // 走 oracle `FindMerchant(...) ?? FindNpc(...)` 的 **FindNpc 分支**（`Npcs.txt` 之外的
@@ -297,6 +301,8 @@ internal static class Program
         return new
         {
             name = spec.Name,
+            script_name = spec.ScriptName,
+            script_sha256 = scriptSha,
             ctx = new
             {
                 player_x = spec.PlayerX,
