@@ -10680,20 +10680,6 @@ fn handle_eat_cmd(
         return;
     };
     let mut sent = 0usize;
-    // IT-08 升级支：`IncHealthSpell(2000,2000)` 改 HP/MP ⇒ `HealthSpellChanged()` 的 `RM_HEALTHSPELLCHANGED`
-    // 经泵出 `SM_HEALTHSPELLCHANGED(53)`，**本批最前**（优先级字节 68 最小）。升级支才有 53，非升级支没有。
-    if leveled {
-        let _ = tx.send(SimToGate::SendFrame {
-            socket,
-            body: game_svr::smframe::sm_healthspellchanged(
-                actor_id,
-                sg.state.wabil.hp,
-                sg.state.wabil.mp,
-                sg.state.wabil.max_hp,
-            ),
-        });
-        sent += 1;
-    }
     // **解包件的立即帧** `SendAddItem`（`PlayObject.Base.cs:198-228`）：`SM_ADDITEM(200)`、
     // `Recog = ActorId`、尾 = `EDCode.EncodeBuffer(ClientItem)`。oracle 在
     // `ClientUseItemsGetUnBindItems` 里逐件直发，位置在尾部 `SendDefMessage(SM_EAT_OK)` **之前**
@@ -10718,6 +10704,22 @@ fn handle_eat_cmd(
             &[],
         );
         let _ = tx.send(SimToGate::SendFrame { socket, body });
+        sent += 1;
+    }
+    // IT-08 升级支：`IncHealthSpell(2000,2000)` 改 HP/MP ⇒ `HealthSpellChanged()` 的 `RM_HEALTHSPELLCHANGED`。
+    // **oracle 线上序**：`SM_EAT_OK(635)`/`SM_ADDITEM(200)` 是 `ClientUseItems` 内的**直发**（先到），
+    // 而 `GetExp` 里的 `SendMsg(RM_*)` 进消息队列、随后才**泵出**；故 53 在直发帧**之后**。泵出内部按优先级
+    // 字节排（53=68 最小 → 最前，其次 RM_WINEXP(44)=139，再 RM_LEVELUP 派生 45/52/752=150）。升级支才有 53。
+    if leveled {
+        let _ = tx.send(SimToGate::SendFrame {
+            socket,
+            body: game_svr::smframe::sm_healthspellchanged(
+                actor_id,
+                sg.state.wabil.hp,
+                sg.state.wabil.mp,
+                sg.state.wabil.max_hp,
+            ),
+        });
         sent += 1;
     }
     // 延时通知（`SendMsg(RM_*)` ⇒ `SM_*`）。
@@ -53681,7 +53683,11 @@ SendRefMsgRange=15
             .iter()
             .map(|v| v.as_i64().unwrap() as i32)
             .collect();
-        assert_eq!(head.get(6).copied(), Some(80), "golden need_exps[6]==80（同源守卫）");
+        assert_eq!(
+            head.get(6).copied(),
+            Some(80),
+            "golden need_exps[6]==80（同源守卫）"
+        );
         for (i, v) in head.iter().enumerate() {
             world.need_exps[i] = *v;
         }
@@ -53751,24 +53757,48 @@ SendRefMsgRange=15
             &game_svr::npc::NpcVars::default(),
             None,
         );
-        let want_ids = [53u16, 44, 45, 52, 752];
         let mut got = Vec::new();
         while let Ok(SimToGate::SendFrame { body, .. }) = rx.try_recv() {
             let m = CommandMessage::from_bytes(&body).expect(">=12B");
-            if want_ids.contains(&m.ident) {
-                got.push((
-                    m.ident as i64,
-                    m.recog as i64,
-                    m.param as i64,
-                    m.tag as i64,
-                    m.series as i64,
-                ));
-            }
+            got.push((
+                m.ident as i64,
+                m.recog as i64,
+                m.param as i64,
+                m.tag as i64,
+                m.series as i64,
+            ));
         }
-        assert_eq!(got, pumped, "升级支 SM 帧按 oracle 优先级序逐字段不符；实得 {got:?}");
+        // **全帧线上序（golden 驱动，非读代码推断）**：golden 由探针一次性捕获直发帧 `immediate_frames`
+        //   ++ 泵出 `pumped`（两者同在一条 `net.Frames`，先直发后泵出，故拼接序即真实线上序）。
+        //   探针现在同时泵 RM_WEIGHTCHANGED(10115)→SM_WEIGHTCHANGED(622)，故 pumped 含 622，按优先级
+        //   68(53) < 131(622) < 139(44) < 150(45/52/752) 排列。⇒ 比较 got 全序 == immediate ++ pumped，
+        //   能咬「53 错放到 635 之前」「漏/多 622」「622 错位」等顺序缺陷。
+        let mut want: Vec<(i64, i64, i64, i64, i64)> = exp["immediate_frames"]
+            .as_array()
+            .expect("golden immediate_frames")
+            .iter()
+            .map(|f| {
+                (
+                    f["ident"].as_i64().unwrap(),
+                    f["recog"].as_i64().unwrap(),
+                    f["param"].as_i64().unwrap(),
+                    f["tag"].as_i64().unwrap(),
+                    f["series"].as_i64().unwrap(),
+                )
+            })
+            .collect();
+        want.extend(pumped.iter().copied());
+        assert_eq!(
+            got, want,
+            "升级支全帧线上序不符（直发 635 先，泵出 53→622→44→45/52/752）；实得 {got:?} want {want:?}"
+        );
         let sg = &sessions["hero"];
         assert_eq!(
-            (sg.equip.abil.level, sg.equip.abil.exp, sg.equip.abil.max_exp),
+            (
+                sg.equip.abil.level,
+                sg.equip.abil.exp,
+                sg.equip.abil.max_exp
+            ),
             (6, 90, 80),
             "Abil 升级后：level/exp/max_exp"
         );
@@ -53785,9 +53815,17 @@ SendRefMsgRange=15
         let g_u16 = |k: &str| gw[k].as_u64().unwrap() as u16;
         assert_eq!(sg.state.wabil.max_hp, g_u16("max_hp"), "max_hp");
         assert_eq!(sg.state.wabil.max_mp, g_u16("max_mp"), "max_mp");
-        assert_eq!(sg.state.wabil.hp, g_u16("hp"), "hp（IncHealthSpell 2000 clamp）");
+        assert_eq!(
+            sg.state.wabil.hp,
+            g_u16("hp"),
+            "hp（IncHealthSpell 2000 clamp）"
+        );
         assert_eq!(sg.state.wabil.mp, g_u16("mp"), "mp");
-        assert_eq!(sg.state.wabil.dc, g_u16("dc"), "dc（RecalcLevelAbilitys 派生）");
+        assert_eq!(
+            sg.state.wabil.dc,
+            g_u16("dc"),
+            "dc（RecalcLevelAbilitys 派生）"
+        );
         // body_luck：非升级 `AddBodyLuck(DuraMax*0.002)`=0.2 由 `use_item` 落，升级再 `AddBodyLuck(100)` ⇒ golden 100.2。
         let g_luck = exp["body_luck"].as_f64().unwrap();
         let g_luck_level = exp["body_luck_level"].as_i64().unwrap() as i32;
@@ -53799,7 +53837,10 @@ SendRefMsgRange=15
         );
         assert_eq!(sg.equip.body_luck_level, g_luck_level, "body_luck_level");
         // 升级后经验书已吃掉 ⇒ 背包清空（golden item_list=[]）。
-        assert!(sg.state.item_list.is_empty(), "升级后经验书已消耗 ⇒ item_list 空");
+        assert!(
+            sg.state.item_list.is_empty(),
+            "升级后经验书已消耗 ⇒ item_list 空"
+        );
     }
 
     /// 本用例故意把 `param`/`tag` 传成**不是** `make_index` 的值（4242）——

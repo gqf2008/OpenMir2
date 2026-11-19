@@ -375,7 +375,7 @@ internal static class Program
         var pumpedFrames = new List<object>();
         if (pump)
         {
-            var pumpSet = new HashSet<int> { 8075, 8086, 10052 };
+            var pumpSet = new HashSet<int> { 8075, 8086, 10052, 10115 };
             // `RM_HEALTHSPELLCHANGED` 的 handler 用 `baseObject.WAbil`（`Operate` 里 `baseObject=ActorMgr.Get(ActorId)`）
             // ⇒ 把本 po 登进生产 `SystemShare.ActorMgr`（不是假 Envir），其 ActorId 须唯一（升级 case 用 7777）。
             SystemShare.ActorMgr.Add(po);

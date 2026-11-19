@@ -1,11 +1,11 @@
-# 变异后还原 + 复跑基线（§16）
-# 快照: E:/UserTemp/it08-host-lib-snap.rs  sha256=8fdf82e6d5c2958240710ac5565102ca70ef2a6e03a2bde319f7aa2b884e7d20
-# 变异 E 进行中进程被低内存看守杀掉 => live lib.rs 偏离；cp 快照还原，核 sha 相等：
-RESTORED=8fdf82e6d5c2958240710ac5565102ca70ef2a6e03a2bde319f7aa2b884e7d20
-SNAP    =8fdf82e6d5c2958240710ac5565102ca70ef2a6e03a2bde319f7aa2b884e7d20
-# 变异残留检查(grep 三处变异标记) => NONE
-# 还原后基线复跑：
+# 变异后还原 + 复跑基线（§16）——最终轮（golden 重生成后）
+# 快照: E:/UserTemp/it08-host-lib-snap.rs  sha256=3648cb504b9f62966ee9714032e72f9f7925230b24e31dc034ee35f32b084b94
+LIVE=3648cb504b9f62966ee9714032e72f9f7925230b24e31dc034ee35f32b084b94
+SNAP4=3648cb504b9f62966ee9714032e72f9f7925230b24e31dc034ee35f32b084b94
+# 变异残留检查(4 处标记 grep)=0
+# 还原后基线：
 $ CARGO_BUILD_JOBS=4 cargo test -p game-svr --lib it08_levelup_host_parity
 running 1 test
 test tests::it08_levelup_host_parity ... ok
 test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2016 filtered out; finished in 0.01s
+# teeth runner 终态：ALL_MUTATIONS_RED=True, restore_sha_ok=True
