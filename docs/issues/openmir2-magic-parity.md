@@ -345,3 +345,18 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 4. **数量断言**：两段合计行数 == 金标准账本长度（miss 1 / edge 5 / hit 5）。
 5. 合法取数的 `site` 若落在清单外，只允许**按上表格式补条目并写理由**，不允许改成"数总数"
    来放行——**不出现"总数对得上但来源不同"的假绿**。
+
+### 16c. 火球用例的两个执行约束（opc-07，2026-11-19）
+
+1. **必须串行**：`rng_trace` 是**进程级全局状态**，并行测试同时 `enable` 会把 TSV 写串。
+   要求：这组用例单跑（`cargo test -p game-svr --lib fireball_parity -- --test-threads=1`
+   或 `--exact` 单测）；**夹具每次用唯一文件路径**（带用例名与种子），测完删除；
+   跑完以**`seq` 连续**作为"没有串写"的证据（与 §16b 的自证同一条）。
+2. **trace 的 seed 只作元数据**：真正驱动数值的是 `world.rng`。夹具里必须写成一行显式赋值并注释：
+   `world.rng = RandomNumber::with_seed(seed);   // 必须与 rng_trace::enable(path, seed) 的 seed 一致`
+   —— 两处不一致 ⇒ 账本记的和世界抽的不是同一个流，比较全废。
+
+**属性落点（本轮查实，下一步直接用）**：`EntitySpawn` 直接有 `hp`（`entity.rs:555`）、
+`anti_magic`（`:565`）、`level`（`:571`）；`abil: Option<BaseAbil>` 只有 `dc / max_hp`（`:497-502`）
+—— **MC 不在这两个字段里**，需在 `AbilitySnapshot`/WAbil 组件上落，写夹具前先确认该组件字段
+（下一条提交解决，不猜）。
