@@ -254,59 +254,67 @@ internal static class Program
         throw new MissingFieldException("ActorEntity.MsgQueue");
     }
 
-    /// <summary>按**优先级升序出队**读出延时通知，抽空为止（上界 `MaxDrainPasses = 8`）。
-    /// `priority` 取自 `PriorityQueue.TryDequeue(out, out prio)`（入队键 = `(byte)wIdent`）；
-    /// `late` 取自 `SendMessage.LateDelivery`（1/0）。**上界命中必报**（`hitCap=true` ⇒ 比较器红）。</summary>
+    /// <summary>排空趟上限（记录面；超过即 `hitCap=true`，比较器必红）。</summary>
+    private const int MaxDrainPasses = 8;
+
+    /// <summary>排空**趟循环**（可单测的纯逻辑）：`hasWork` 为 false（起于空队列）⇒ `(0,false)`；
+    /// 否则每趟调 `drainOnePass`，返回 `true` 表示本趟后队列又满（需下一趟，模拟投递重入），
+    /// 最多 `maxPasses` 趟：某趟后不满 ⇒ `(pass+1,false)`；触顶仍满 ⇒ `(maxPasses,true)`（自然命中）。</summary>
+    private static (int passes, bool hitCap) DrainPassLoop(
+        int maxPasses, Func<bool> hasWork, Func<bool> drainOnePass)
+    {
+        if (!hasWork())
+        {
+            return (0, false);
+        }
+        for (int pass = 0; pass < maxPasses; pass++)
+        {
+            if (!drainOnePass())
+            {
+                return (pass + 1, false);
+            }
+        }
+        return (maxPasses, true);
+    }
+
+    /// <summary>按**优先级升序出队**读出延时通知，抽空为止（上界 `MaxDrainPasses`）。
+    /// `priority` 取自 `PriorityQueue.TryDequeue(out, out prio)`；`late` 取自 `SendMessage.LateDelivery`。
+    /// **上界命中必报**（`hitCap=true` ⇒ 比较器红）。</summary>
     private static (List<object> messages, int passes, bool hitCap) Drain(object pq)
     {
-        const int MaxDrainPasses = 8;
         var list = new List<object>();
         var t = pq.GetType();
         var countProp = t.GetProperty("Count") ?? throw new MissingMemberException("PriorityQueue.Count");
         var tryDequeue = t.GetMethod("TryDequeue") ?? throw new MissingMethodException("PriorityQueue.TryDequeue");
-        int passes = 0;
-        bool hitCap = false;
-        while ((int)countProp.GetValue(pq) > 0)
-        {
-            if (passes >= MaxDrainPasses)
+        var (passes, hitCap) = DrainPassLoop(
+            MaxDrainPasses,
+            () => (int)countProp.GetValue(pq) > 0,
+            () =>
             {
-                hitCap = true;
-                break;
-            }
-            while ((int)countProp.GetValue(pq) > 0)
-            {
-                var args = new object[] { null, null };
-                bool ok = (bool)tryDequeue.Invoke(pq, args);
-                if (!ok)
+                while ((int)countProp.GetValue(pq) > 0)
                 {
-                    break;
+                    var args = new object[] { null, null };
+                    bool ok = (bool)tryDequeue.Invoke(pq, args);
+                    if (!ok)
+                    {
+                        break;
+                    }
+                    var m = args[0];
+                    int prio = Convert.ToInt32(args[1]);
+                    var mt = m.GetType();
+                    list.Add(new
+                    {
+                        ident = (int)mt.GetField("wIdent").GetValue(m),
+                        w_param = (int)mt.GetField("wParam").GetValue(m),
+                        n_param1 = (int)mt.GetField("nParam1").GetValue(m),
+                        n_param2 = (int)mt.GetField("nParam2").GetValue(m),
+                        n_param3 = (int)mt.GetField("nParam3").GetValue(m),
+                        priority = prio,
+                        late = ((bool)mt.GetField("LateDelivery").GetValue(m)) ? 1 : 0,
+                    });
                 }
-                var m = args[0];
-                int prio = Convert.ToInt32(args[1]);
-                var mt = m.GetType();
-                list.Add(new
-                {
-                    ident = (int)mt.GetField("wIdent").GetValue(m),
-                    w_param = (int)mt.GetField("wParam").GetValue(m),
-                    n_param1 = (int)mt.GetField("nParam1").GetValue(m),
-                    n_param2 = (int)mt.GetField("nParam2").GetValue(m),
-                    n_param3 = (int)mt.GetField("nParam3").GetValue(m),
-                    priority = prio,
-                    late = ((bool)mt.GetField("LateDelivery").GetValue(m)) ? 1 : 0,
-                });
-            }
-            passes++;
-            // items 线的通知只入队、不在本探针重入（不吃 `Operate`）⇒ 一轮即空；若将来需要投递重入，
-            // 把该轮再排一次，超上界则 `hitCap=true`。
-            if ((int)countProp.GetValue(pq) == 0)
-            {
-                break;
-            }
-        }
-        if (passes >= MaxDrainPasses && (int)countProp.GetValue(pq) > 0)
-        {
-            hitCap = true;
-        }
+                return (int)countProp.GetValue(pq) > 0;
+            });
         return (list, passes, hitCap);
     }
 
@@ -419,6 +427,21 @@ internal static class Program
     {
         Encoding.RegisterProvider(CodePagesEncodingProvider.Instance);
         LogService.Logger = new LoggerConfiguration().CreateLogger();
+
+        // D3 自测：排空趟循环的「自然命中」——假队列每趟都重满，跑到 MaxDrainPasses ⇒ hitCap 必真；
+        // 一趟即空 ⇒ hitCap 假、passes=1；起于空队列 ⇒ passes=0。不进夹具、不依赖探针记录。
+        if (args.Length > 0 && args[0] == "--drain-selftest")
+        {
+            var (pFull, cFull) = DrainPassLoop(MaxDrainPasses, () => true, () => true); // 每趟重满
+            var (pOne, cOne) = DrainPassLoop(MaxDrainPasses, () => true, () => false); // 一趟即空
+            var (pNone, cNone) = DrainPassLoop(MaxDrainPasses, () => false, () => true); // 起于空
+            bool ok = cFull && pFull == MaxDrainPasses && !cOne && pOne == 1 && !cNone && pNone == 0;
+            Console.WriteLine(
+                $"DRAIN_SELFTEST ok={ok} always_full(passes={pFull},hitCap={cFull}) "
+                + $"one_pass(passes={pOne},hitCap={cOne}) none(passes={pNone},hitCap={cNone}) "
+                + $"maxPasses={MaxDrainPasses}");
+            return ok ? 0 : 1;
+        }
 
         string outPath = args.Length > 0
             ? args[0]

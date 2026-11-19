@@ -1,14 +1,14 @@
-# ts=2026-11-20T01:24:46+08:00
+# ts=2026-11-20T01:31:46+08:00
 # filter=useitem::tests::unbind_stdmode31_success_matches_oracle_fixture
 # mutation: 'dura: tpl_unbind.dura_max,' -> 'dura: 0,'
 # expect: FAILED
 === stderr (cargo/build) ===
     Blocking waiting for file lock on package cache
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.11s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.21s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
-thread 'useitem::tests::unbind_stdmode31_success_matches_oracle_fixture' (13428) panicked at bins\game-svr\src\useitem.rs:1560:13:
+thread 'useitem::tests::unbind_stdmode31_success_matches_oracle_fixture' (37928) panicked at bins\game-svr\src\useitem.rs:1560:13:
 assertion `left == right` failed: 解包件 dura = tpl.DuraMax
   left: 0
  right: 7

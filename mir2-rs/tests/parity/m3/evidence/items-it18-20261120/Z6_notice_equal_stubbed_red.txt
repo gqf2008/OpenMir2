@@ -1,13 +1,13 @@
-# ts=2026-11-20T01:26:01+08:00
+# ts=2026-11-20T01:33:03+08:00
 # filter=useitem::tests::tooth_notice_priority_changed_red
 # mutation: '        a.sort();\n        b.sort();\n        a == b\n    }' -> '        a.sort();\n        b.sort();\n        true\n    }'
 # expect: FAILED
 === stderr (cargo/build) ===
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.51s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.75s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
-thread 'useitem::tests::tooth_notice_priority_changed_red' (29352) panicked at bins\game-svr\src\useitem.rs:735:9:
+thread 'useitem::tests::tooth_notice_priority_changed_red' (26056) panicked at bins\game-svr\src\useitem.rs:735:9:
 改 priority 必须红
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 error: test failed, to rerun pass `-p game-svr --lib`

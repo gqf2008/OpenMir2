@@ -1,10 +1,10 @@
-# ts=2026-11-20T01:26:12+08:00
+# ts=2026-11-20T01:33:14+08:00
 # filter=useitem::tests::tooth_notice_priority_changed_red
 # restored (sha256 == sha_before)
 # expect: ok
 === stderr (cargo/build) ===
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.53s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.94s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 === stdout (test harness) ===
 

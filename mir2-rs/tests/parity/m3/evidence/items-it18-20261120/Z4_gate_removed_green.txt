@@ -1,10 +1,10 @@
-# ts=2026-11-20T01:25:24+08:00
+# ts=2026-11-20T01:32:21+08:00
 # filter=useitem::tests::z4_golden_nonzero_rust_zero_red
 # restored (sha256 == sha_before)
 # expect: ok
 === stderr (cargo/build) ===
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.91s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.61s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 === stdout (test harness) ===
 

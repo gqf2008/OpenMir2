@@ -1,7 +1,8 @@
 cargo test -p game-svr --lib <filter> -- --test-threads=1 --nocapture  (CARGO_BUILD_JOBS=6)
 useitem.rs sha256=c8a217e02c9b5c99f4cdfd548bf04be8075ba37f76fbf873e7f03ede49c203c8
-M1_unbind_count ts=2026-11-20T01:24:31+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
-M2_unbind_dura ts=2026-11-20T01:24:59+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
-Z4_gate_removed ts=2026-11-20T01:25:24+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
-Z5_layer_removed ts=2026-11-20T01:25:52+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
-Z6_notice_equal_stubbed ts=2026-11-20T01:26:12+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
+M1_unbind_count ts=2026-11-20T01:31:35+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
+M2_unbind_dura ts=2026-11-20T01:31:58+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
+Z4_gate_removed ts=2026-11-20T01:32:21+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
+Z5_layer_removed ts=2026-11-20T01:32:51+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
+Z6_notice_equal_stubbed ts=2026-11-20T01:33:14+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True
+D2_hit_cap_forced ts=2026-11-20T01:33:37+08:00 red_rc=101 red_failed=True green_rc=0 green_ok=True

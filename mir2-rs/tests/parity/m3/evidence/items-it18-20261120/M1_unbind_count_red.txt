@@ -1,13 +1,13 @@
-# ts=2026-11-20T01:24:19+08:00
+# ts=2026-11-20T01:31:25+08:00
 # filter=useitem::tests::unbind_stdmode31_success_matches_oracle_fixture
 # mutation: 'for _ in 0..6 {' -> 'for _ in 0..5 {'
 # expect: FAILED
 === stderr (cargo/build) ===
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.15s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.52s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
-thread 'useitem::tests::unbind_stdmode31_success_matches_oracle_fixture' (10924) panicked at bins\game-svr\src\useitem.rs:1556:9:
+thread 'useitem::tests::unbind_stdmode31_success_matches_oracle_fixture' (31608) panicked at bins\game-svr\src\useitem.rs:1556:9:
 assertion `left == right` failed: 解包 6 件
   left: 5
  right: 6
@@ -23,6 +23,6 @@ failures:
 failures:
     useitem::tests::unbind_stdmode31_success_matches_oracle_fixture
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.01s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
 
 # rc=101

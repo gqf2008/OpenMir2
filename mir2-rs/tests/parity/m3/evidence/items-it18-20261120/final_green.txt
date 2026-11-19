@@ -1,9 +1,9 @@
-# ts=2026-11-20T01:26:21+08:00
+# ts=2026-11-20T01:33:47+08:00
 # full useitem::tests (restored)
 # expect: ok
 === stderr (cargo/build) ===
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 8.98s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.22s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 Z4：本批 23 例中 23 例适用（golden 非零），0 例因 golden 全零不适用；Z5：本批 17 例带两层
 === stdout (test harness) ===

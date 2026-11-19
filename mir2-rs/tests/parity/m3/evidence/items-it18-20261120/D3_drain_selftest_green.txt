@@ -1,0 +1,7 @@
+# ts=2026-11-20T01:33:54+08:00
+# baseline: eat-probe.dll --drain-selftest
+# expect: ok=True, always_full hitCap=True
+=== stderr ===
+=== stdout ===
+DRAIN_SELFTEST ok=True always_full(passes=8,hitCap=True) one_pass(passes=1,hitCap=False) none(passes=0,hitCap=False) maxPasses=8
+# rc=0

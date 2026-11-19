@@ -17,6 +17,8 @@ test 输出混排）：
 | `Z5_layer_removed` | useitem.rs | `fixture_covers_two_layers` 恒 `true` | `z5_single_layer_red`：只 SM 一层被判合格 |
 | `Z6_notice_equal_stubbed` | useitem.rs | `notices_equal` 恒 `true` | `tooth_notice_priority_changed_red`：改 priority 未被检出 |
 | `D_drain_cap` | eat-probe/Program.cs | `MaxDrainPasses` 8→1，记录 `max_passes` 8→1 | `matches_oracle_eat_fixture`：`抽空上限异常 ... max_passes=1` |
+| `D2_hit_cap_forced` | useitem.rs | 把记录的 `hit_cap` 强制读成 `true`（模拟"记录面命中上限"） | `matches_oracle_eat_fixture`：`抽空上限异常 ... hit_cap=true` |
+| `D3`（drain-selftest） | eat-probe/Program.cs | `DrainPassLoop` 触顶返回 `hitCap` `true→false` | `eat-probe.dll --drain-selftest`：`always_full` 跑到 `MaxDrainPasses` 后 `ok=False` |
 
 ## D（抽空上限）说明
 
@@ -26,8 +28,17 @@ test 输出混排）：
 - **红原文为何是 `max_passes=1` 而非 `hit_cap=true`**：物品线用例只跑 **1 趟**排空（通知只入队、探针不
   `Operate` 重入），`MaxDrainPasses ≥ 1` 时**不会触顶**（`passes=1` 即空）。故真实的"上限被改"信号是
   记录面 `max_passes=1`；主用例在 `drain_ok`（**上限检查**）断言处红：`抽空上限异常 hit_cap=false max_passes=1`。
-  失败点是上限检查本身，不是帧/通知/状态。若需 `hit_cap=true` 的字面演示，可另做"夹具 `hit_cap` 置真"的
-  篡改牙（红原文 `hit_cap=true`）—— 待 opc-07 定。
+  失败点是上限检查本身，不是帧/通知/状态。
+- **`hit_cap=true` 的字面牙（`D2_hit_cap_forced`，useitem.rs 变异）**：把主用例记录的 `hit_cap` 强制读成
+  `true`（模拟"记录面命中上限"），主用例在 `drain_ok` 处红 `抽空上限异常 hit_cap=true max_passes=8` ——
+  直接证明"`hit_cap=true` ⇒ 红"。文件 `D2_hit_cap_forced_{red,green}.txt`。
+- **D3 自然命中单测（`capture_drain_selftest.py`）**：把排空趟循环抽成纯函数 `DrainPassLoop(maxPasses, hasWork,
+  drainOnePass)`（`Drain` 复用之，行为不变：起于空 ⇒ 0 趟、一趟即空 ⇒ 1 趟）。自测用**假回调 `()=>true`**
+  （每趟重满）跑到 `MaxDrainPasses` ⇒ 辅助函数自己返回 `hitCap=True`；`one_pass` ⇒ passes=1/hitCap=False；
+  `none` ⇒ passes=0。`eat-probe.dll --drain-selftest` 打印 `ok=True`。变异"触顶返回 `true→false`" ⇒ `ok=False`（红），
+  还原 Program.cs sha 后复绿。文件 `D3_drain_selftest_{green,red,restored_green}.txt` / `D3_probe_diff.txt` /
+  `D3_sha_before.txt` / `D3_commands.txt`。**D3 是 dotnet 自测**（真实排空辅助函数在 C# 探针里；
+  用 Rust 重写一份来测即为"转写"，不采用）。主用例 gate 拒绝 `hit_cap=true` 由 D2 证明。
 - 文件：`D_probe_diff.txt`（Program.cs `8→1` 的 git diff）、`D_fixture_diff.txt`（夹具 `max_passes 8→1`）、
   `D_fixture_max_passes.txt`（变异后各例 `max_passes` 唯一值 = `[1]`）、`D_drain_cap_red.txt`（主用例红）、
   `D_drain_cap_green.txt`（还原后绿）、`D_sha_before.txt`、`D_build.txt`/`D_regen.txt`、`D_commands.txt`。

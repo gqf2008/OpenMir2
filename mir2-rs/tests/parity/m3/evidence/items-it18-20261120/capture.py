@@ -78,6 +78,13 @@ MUTATIONS = [
         "        a.sort();\n        b.sort();\n        true\n    }",
         "useitem::tests::tooth_notice_priority_changed_red",
     ),
+    # D2 字面牙：把记录的 hit_cap 强制读成 true（模拟"记录面命中上限"），主用例必红 hit_cap=true。
+    (
+        "D2_hit_cap_forced",
+        'expect["drain"]["hit_cap"].as_bool().unwrap_or(false)',
+        "true",
+        "useitem::tests::matches_oracle_eat_fixture",
+    ),
 ]
 
 

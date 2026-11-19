@@ -1,4 +1,4 @@
-# ts=2026-11-20T01:25:13+08:00
+# ts=2026-11-20T01:32:10+08:00
 # filter=useitem::tests::z4_golden_nonzero_rust_zero_red
 # mutation: '!golden_nonzero || rust_nonzero' -> 'true'
 # expect: FAILED
@@ -19,10 +19,10 @@ warning: unused variable: `rust_nonzero`
     |                                    ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_rust_nonzero`
 
 warning: `game-svr` (lib test) generated 2 warnings (run `cargo fix --lib -p game-svr --tests` to apply 2 suggestions)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.40s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 11.92s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
-thread 'useitem::tests::z4_golden_nonzero_rust_zero_red' (1244) panicked at bins\game-svr\src\useitem.rs:814:9:
+thread 'useitem::tests::z4_golden_nonzero_rust_zero_red' (19076) panicked at bins\game-svr\src\useitem.rs:814:9:
 golden 非零而 Rust 全零必须红
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 error: test failed, to rerun pass `-p game-svr --lib`
