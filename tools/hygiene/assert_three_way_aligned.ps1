@@ -37,15 +37,25 @@ param(
   [string]$Build = '',
   [switch]$Selftest
 )
-# 产物组：每组一份「要比对的二进制清单」与默认的主检出/影子目录（卡 `openmir2-loginsrv-threeway`）。
+# 产物组：清单单一来源 `tools/orchestration/stamp-groups.psd1`（卡 `openmir2-own-binary-without-stamp` R2；
+# DBSrv 6 件 / LoginSrv 3 件）；主检出/影子默认目录仍由本脚本给（卡 `openmir2-loginsrv-threeway`）。
+$groupsFile = Join-Path $PSScriptRoot '..\orchestration\stamp-groups.psd1'
+if (-not (Test-Path -LiteralPath $groupsFile)) {
+  Write-Output ('THREE_WAY_RED groups_missing file=' + $groupsFile)
+  exit 2
+}
+# 本机 `powershell` 5.1 的 Microsoft.PowerShell.Utility 不完整（`Import-PowerShellDataFile`
+# 不存在；dot-source `.psd1` 在 5.1 上不执行、返回 null，已实测）⇒ 用 Invoke-Expression 解析。
+# 该文件在仓库内、随 git 评审，与实际执行这些脚本同一信任级。
+$stampGroups = Invoke-Expression ((Get-Content -LiteralPath $groupsFile -Raw))
 $Groups = @{
   DBSrv = @{
-    Files = @('DBSrv.exe', 'DBSrv.dll', 'DBSrv.Storage.MySQL.dll')
+    Files = @($stampGroups.Groups.DBSrv)
     Main = 'E:\Users\gxh\Documents\GitHub\OpenMir2\src\DBSrv\bin\Release'
     Shadow = 'E:\UserFleet\m1-stack\runtime\DBSrv'
   }
   LoginSrv = @{
-    Files = @('LoginSrv.exe', 'LoginSrv.dll')
+    Files = @($stampGroups.Groups.LoginSrv)
     Main = 'E:\Users\gxh\Documents\GitHub\OpenMir2\src\LoginSrv\bin\Release'
     Shadow = 'E:\UserFleet\m1-stack\runtime\LoginSrv'
   }

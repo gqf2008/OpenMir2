@@ -47,6 +47,9 @@
 #   ... -Check -BinDir <dir> -Names game-svr,game-gate,login-gate,sel-gate -RequireAll
 #   # 校验并断言来源提交（前缀 7..40 位；DBSrv 三件套示例，.dll 也支持）
 #   ... -Check -BinDir <dir> -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll -RequireAll -RequireHead <rev>
+#   # 自家件覆盖（卡 openmir2-own-binary-without-stamp R3）：匹配 glob 但**未列入 -Names** 的
+#   # 自家 .dll/.exe ⇒ RED UNLISTED_OWN_BINARY；**独立于 -RequireAll**（不加 RequireAll 也生效）
+#   ... -Check -BinDir <dir> -Names <已登记件> -OwnGlobs 'DBSrv*.dll,OpenMir2.dll'
 #   # 自测（离线合成夹具；工具门登记项）
 #   ... -Selftest
 #
@@ -61,6 +64,9 @@
 #   产戳：STAMP_WRITE <stamp> sha256=<hex> size=<n> head=<sha> kind=<rust|dotnet> head_source=<..>
 #         SKIP <name> (absent) / SKIP_STAMP_EXISTS <stamp> (use -Force to overwrite) / STAMPED <n>
 #   校验：STAMP_OK <exe> / RED <exe> <CODE> [detail] / SKIP <name> (absent) / GREEN <n> stamps verified
+#         RED <file> UNLISTED_OWN_BINARY（-OwnGlobs 命中的在册外自家件；独立于 -RequireAll）
+#         RED <exe> EMBEDDED_REV_MISSING / EMBEDDED_REV_MISMATCH（dotnet 目标：二进制内嵌
+#           SourceRevisionId 必须存在且以戳 head 为前缀——防「增量构建跳过、戳却写新 head」）
 #   自测：stamp-binaries selftest: PASS|FAIL <case> [detail] / GREEN|RED (…)
 
 param(
@@ -73,6 +79,7 @@ param(
   [string]$RequireHead = '',
   [switch]$Check,
   [switch]$RequireAll,
+  [string[]]$OwnGlobs = @(),
   [switch]$Force,
   [switch]$NoToolchainProbe,
   [switch]$Selftest
@@ -117,6 +124,13 @@ if ($RequireHead -ne '' -and -not $Check) {
   exit 2
 }
 
+# `-OwnGlobs`（卡 openmir2-own-binary-without-stamp R3）只在 `-Check` 下生效；写戳模式给它
+# 必须是用法错（rc=2），不能静默忽略——否则调用方会以为「未入清单的自家件已被覆盖检查」。
+if (@($OwnGlobs | Where-Object { $_ -and $_.Trim() }).Count -gt 0 -and -not $Check) {
+  [Console]::Out.WriteLine('RED: -OwnGlobs is only valid with -Check (write mode would silently ignore it)')
+  exit 2
+}
+
 function Get-Sha256Hex([string]$path) {
   $sha = [System.Security.Cryptography.SHA256]::Create()
   $stream = $null
@@ -136,6 +150,19 @@ function Get-Sha256Hex([string]$path) {
     throw ("ComputeHash returned " + $(if ($null -eq $bytes) { 'null' } else { $bytes.Length.ToString() }) + " bytes (expected 32)")
   }
   return (($bytes | ForEach-Object { $_.ToString('x2') }) -join '')
+}
+
+# 读二进制里的 40-hex（C# 程序集内嵌 `SourceRevisionId`；ASCII 与 UTF-16LE 各扫一遍）。
+# 与 `tools/hygiene/assert_three_way_aligned.ps1` 的 Get-EmbeddedRevisions 同实现：
+# PS 5.1 没有 `[Text.Encoding]::Latin1`（.NET 5+ 才有），用 ISO-8859-1(28591) 做字节→字符一一映射。
+function Get-EmbeddedRevisions([string]$Path) {
+  $bytes = [System.IO.File]::ReadAllBytes($Path)
+  $set = New-Object 'System.Collections.Generic.HashSet[string]'
+  $ascii = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
+  foreach ($m in ([regex]'[0-9a-f]{40}').Matches($ascii)) { [void]$set.Add($m.Value) }
+  $utf16 = [System.Text.Encoding]::Unicode.GetString($bytes)
+  foreach ($m in ([regex]'[0-9a-f]{40}').Matches($utf16)) { [void]$set.Add($m.Value) }
+  return ,$set
 }
 
 # ---- git 辅助 -------------------------------------------------------------
@@ -572,6 +599,27 @@ function Test-OneStamp([string]$ExePath, [string]$StampPath, [string]$Repo) {
     }
   }
 
+  # C# 内嵌 `SourceRevisionId` 与侧车 head 的一致性（卡 openmir2-own-binary-without-stamp）。
+  # 事故：M9 的增量构建跳过了 `DBSvr.Storage.MongoDB`（源码未变），二进制仍是 M8
+  # （内嵌 a5643481…），戳却按 M9（572a0b8a…）产；只比戳头/文件 sha 抓不到。
+  # Rust 侧的等价判据是二进制**自报**（上面的 SELF_REV_MISMATCH 支），不在这里重复。
+  $isDotnet = ($kind -eq 'dotnet') -or
+              (($kind -eq '') -and (Test-HasField $obj 'dotnet')) -or
+              ($ExePath.ToLowerInvariant().EndsWith('.dll')) -or
+              ($script:DotnetNames -contains ([System.IO.Path]::GetFileNameWithoutExtension($ExePath).ToLowerInvariant()))
+  if ($isDotnet -and $null -ne $head -and $head -ne '') {
+    $revs = Get-EmbeddedRevisions $ExePath
+    if ($revs.Count -eq 0) {
+      $errors.Add('EMBEDDED_REV_MISSING')
+    } else {
+      $matched = $false
+      foreach ($r in $revs) { if ($r.StartsWith($head)) { $matched = $true; break } }
+      if (-not $matched) {
+        $errors.Add('EMBEDDED_REV_MISMATCH stamp=' + $head + ' embedded=' + (($revs | Sort-Object) -join ','))
+      }
+    }
+  }
+
   return ,$errors
 }
 
@@ -671,7 +719,24 @@ if ($Selftest) {
     [System.IO.File]::WriteAllText($Path, (($Obj | ConvertTo-Json -Depth 5) + "`n"), $utf8)
   }
 
+  function Add-FixtureEmbeddedRev([string]$Dir, [string]$Name, [string]$Rev) {
+    $p = if ($Name.ToLowerInvariant().EndsWith('.dll')) { Join-Path $Dir $Name } else { Join-Path $Dir ($Name + '.exe') }
+    if (-not (Test-Path -LiteralPath $p)) { return }
+    $u = [System.Text.Encoding]::Unicode.GetBytes($Rev)
+    $a = [System.Text.Encoding]::ASCII.GetBytes($Rev)
+    $fs = [System.IO.File]::Open($p, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    try { $fs.Write($u, 0, $u.Length); $fs.Write($a, 0, $a.Length) } finally { $fs.Dispose() }
+  }
+
   function Write-FixtureStamps([string]$Dir, [string]$Repo, [string]$Sha, [string[]]$ExeNames) {
+    # dotnet 目标的夹具要带内嵌 rev（否则 -Check 的 EMBEDDED_REV_MISSING 支会（正确）判红）。
+    foreach ($n in $ExeNames) {
+      $ln = $n.ToLowerInvariant()
+      $base = [System.IO.Path]::GetFileNameWithoutExtension($ln)
+      if ($ln.EndsWith('.dll') -or $script:DotnetNames -contains $base) {
+        Add-FixtureEmbeddedRev $Dir $n $Sha
+      }
+    }
     $childArgs = @('-BinDir', $Dir, '-RepoRoot', $Repo, '-Head', $Sha, '-NoToolchainProbe',
                    '-Names', ($ExeNames -join ','))
     return (Invoke-Child $childArgs)
@@ -813,6 +878,10 @@ if ($Selftest) {
     $bin9 = New-Fixture $Tmp 'dllext' @('DBSrv', 'DBSrv.dll', 'DBSrv.Storage.MySQL.dll')
     # 诱饵：与 .dll 同名再加 .exe（旧实现会解析到它）
     [System.IO.File]::WriteAllBytes((Join-Path $bin9 'DBSrv.dll.exe'), (New-Object byte[] 4096))
+    # dotnet 夹具需内嵌 rev（产戳前追加；否则 -Check 的 EMBEDDED_REV_MISSING 支会判红）
+    Add-FixtureEmbeddedRev $bin9 'DBSrv' $HeadSha
+    Add-FixtureEmbeddedRev $bin9 'DBSrv.dll' $HeadSha
+    Add-FixtureEmbeddedRev $bin9 'DBSrv.Storage.MySQL.dll' $HeadSha
     $names9 = @('DBSrv.exe', 'DBSrv.dll', 'DBSrv.Storage.MySQL.dll')
     $w9 = Invoke-Child @('-BinDir', $bin9, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
                          '-Names', ($names9 -join ','))
@@ -877,6 +946,49 @@ if ($Selftest) {
     $u = Invoke-Child @('-BinDir', $bin9, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
                         '-Names', 'DBSrv.exe', '-RequireHead', $HeadSha, '-Force')
     SAssert ($u.Rc -eq 2) 'usage: -RequireHead without -Check rc=2' ("rc=" + $u.Rc + " out=" + $u.Text)
+
+    # Case 13：-OwnGlobs 在**不带** -RequireAll 时独立生效（未入清单的自家 DLL ⇒ 红）
+    $script:SelfCases++
+    $binE = New-Fixture $Tmp 'ownglob' @('game-svr')
+    $wE = Write-FixtureStamps $binE $Repo $HeadSha @('game-svr')
+    SAssert ($wE.Rc -eq 0) 'negative-setup: ownglob fixture written' ("rc=" + $wE.Rc)
+    Copy-Item -LiteralPath (Join-Path $binE 'game-svr.exe') -Destination (Join-Path $binE 'DBSrv.Storage.LocalFile.dll')
+    $cE = Invoke-Child @('-Check', '-BinDir', $binE, '-RepoRoot', $Repo,
+                         '-Names', 'game-svr', '-OwnGlobs', 'DBSrv.Storage.*.dll')
+    SAssert ($cE.Rc -eq 1) 'own-glob: unlisted own dll rc=1 without -RequireAll' ("rc=" + $cE.Rc + " out=" + $cE.Text)
+    SAssert ($cE.Text.IndexOf('UNLISTED_OWN_BINARY', [StringComparison]::Ordinal) -ge 0) `
+      'own-glob: reports UNLISTED_OWN_BINARY without -RequireAll' ("out=" + $cE.Text)
+
+    # Case 14：同一场景**加** -RequireAll 仍红（证明与 RequireAll 无关）
+    $script:SelfCases++
+    $cF = Invoke-Child @('-Check', '-BinDir', $binE, '-RepoRoot', $Repo, '-RequireAll',
+                         '-Names', 'game-svr', '-OwnGlobs', 'DBSrv.Storage.*.dll')
+    SAssert ($cF.Rc -eq 1) 'own-glob: unlisted own dll rc=1 with -RequireAll' ("rc=" + $cF.Rc + " out=" + $cF.Text)
+    SAssert ($cF.Text.IndexOf('UNLISTED_OWN_BINARY', [StringComparison]::Ordinal) -ge 0) `
+      'own-glob: reports UNLISTED_OWN_BINARY with -RequireAll' ("out=" + $cF.Text)
+
+    # Case 15：dotnet 件内嵌 rev ≠ 戳 head ⇒ EMBEDDED_REV_MISMATCH（对应 MongoDB 事故）
+    $script:SelfCases++
+    $binG = New-Fixture $Tmp 'embedmismatch' @('DBSrv')
+    Add-FixtureEmbeddedRev $binG 'DBSrv' 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef'
+    $wG = Invoke-Child @('-BinDir', $binG, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
+                         '-Names', 'DBSrv')
+    SAssert ($wG.Rc -eq 0) 'negative-setup: embedmismatch fixture stamped' ("rc=" + $wG.Rc + " out=" + $wG.Text)
+    $cG = Invoke-Child @('-Check', '-BinDir', $binG, '-RepoRoot', $Repo, '-Names', 'DBSrv', '-RequireAll')
+    SAssert ($cG.Rc -eq 1) 'embedded-rev: mismatch rc=1' ("rc=" + $cG.Rc + " out=" + $cG.Text)
+    SAssert ($cG.Text.IndexOf('EMBEDDED_REV_MISMATCH', [StringComparison]::Ordinal) -ge 0) `
+      'embedded-rev: reports EMBEDDED_REV_MISMATCH' ("out=" + $cG.Text)
+
+    # Case 16：dotnet 件没有内嵌 rev ⇒ EMBEDDED_REV_MISSING
+    $script:SelfCases++
+    $binH = New-Fixture $Tmp 'embedmissing' @('DBSrv')
+    $wH = Invoke-Child @('-BinDir', $binH, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
+                         '-Names', 'DBSrv')
+    SAssert ($wH.Rc -eq 0) 'negative-setup: embedmissing fixture stamped' ("rc=" + $wH.Rc + " out=" + $wH.Text)
+    $cH = Invoke-Child @('-Check', '-BinDir', $binH, '-RepoRoot', $Repo, '-Names', 'DBSrv', '-RequireAll')
+    SAssert ($cH.Rc -eq 1) 'embedded-rev: missing rc=1' ("rc=" + $cH.Rc + " out=" + $cH.Text)
+    SAssert ($cH.Text.IndexOf('EMBEDDED_REV_MISSING', [StringComparison]::Ordinal) -ge 0) `
+      'embedded-rev: reports EMBEDDED_REV_MISSING' ("out=" + $cH.Text)
   }
 
   $tmpRoot = [System.IO.Path]::GetTempPath()
@@ -921,12 +1033,12 @@ if ($Selftest) {
     Emit ("SELFTEST_INFRA " + $script:SelfInfra)
     exit 2
   }
-  SAssert ($script:SelfCases -eq 12) 'meta: expected case count executed' ("cases=" + $script:SelfCases)
+  SAssert ($script:SelfCases -eq 16) 'meta: expected case count executed' ("cases=" + $script:SelfCases)
   if ($script:SelfFails.Count -gt 0) {
     Emit ("stamp-binaries selftest: RED (" + $script:SelfFails.Count + " failed)")
     exit 1
   }
-  Emit "stamp-binaries selftest: GREEN (12 cases)"
+  Emit "stamp-binaries selftest: GREEN (16 cases)"
   exit 0
 }
 
@@ -978,6 +1090,39 @@ if ($Check) {
         Emit ("RED " + $exe + " " + $e)
         $problems++
       }
+    }
+  }
+  # -OwnGlobs（卡 openmir2-own-binary-without-stamp R3）：**独立于 -RequireAll** 的自家件覆盖检查。
+  # 背景：名单靠人手维护时，被 Directory.Build.targets 自动拷进输出的自家插件（典型
+  # `DBSvr.Storage.*`）即使不在 `-Names` 里，`-RequireAll` 也完全看不见它。这里对匹配 glob 的
+  # 每个 .dll/.exe 要求其已出现在 `-Names`（或默认名单）中；未出现 ⇒ RED UNLISTED_OWN_BINARY。
+  # 只判「是否在册」；在册件的戳自洽仍由上面的主循环负责，不在这里重复判。
+  $ownGlobList = New-Object System.Collections.Generic.List[string]
+  foreach ($chunk in @($OwnGlobs)) {
+    foreach ($g in ([string]$chunk).Split(',')) {
+      if ($g -and $g.Trim()) { $ownGlobList.Add($g.Trim()) }
+    }
+  }
+  if ($ownGlobList.Count -gt 0) {
+    $wantedKeys = @{}
+    foreach ($n in $wanted) {
+      $ln = $n.ToLowerInvariant()
+      $wantedKeys[$ln] = $true
+      $wantedKeys[[System.IO.Path]::GetFileNameWithoutExtension($ln)] = $true
+    }
+    foreach ($f in @(Get-ChildItem -LiteralPath $binRoot -File -ErrorAction SilentlyContinue | Sort-Object Name)) {
+      $ext = [System.IO.Path]::GetExtension($f.Name).ToLowerInvariant()
+      if ($ext -ne '.dll' -and $ext -ne '.exe') { continue }
+      $matched = $false
+      foreach ($g in $ownGlobList) {
+        if ($f.Name -like $g) { $matched = $true; break }
+      }
+      if (-not $matched) { continue }
+      $fn = $f.Name.ToLowerInvariant()
+      $base = [System.IO.Path]::GetFileNameWithoutExtension($fn)
+      if ($wantedKeys.ContainsKey($fn) -or $wantedKeys.ContainsKey($base)) { continue }
+      Emit ("RED " + $f.FullName + " UNLISTED_OWN_BINARY")
+      $problems++
     }
   }
   if ($found -eq 0) {
