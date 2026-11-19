@@ -84674,7 +84674,23 @@ GMEXECUTE f
                 Some(false),
                 "{name}: DrainPassesHitCap=true 必须红"
             );
-            let mut rig = T137Rig::new();
+            let mut rig = if name == "click_no_main_fallback" {
+                T137Rig::new_with(
+                    ";x
+国王 1 0 11 10 0 8
+老人 0 0 12 10 0 1
+",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]
+king"),
+                        ("Npc_def/老人-0.txt", "[@greet]
+hi"),
+                    ],
+                    2,
+                )
+            } else {
+                T137Rig::new()
+            };
             match name {
                 "click_main_ok" => {
                     assert!(rig.click(rig.elder_id), "{name}: 必须到达 Click 点");
@@ -84710,8 +84726,31 @@ GMEXECUTE f
                     assert!(!rig.click(rig.elder_id), "{name}: 限频必须拒绝");
                     assert!(rig.drain().is_empty(), "{name}: 限频零帧");
                 }
+                "click_no_main_fallback" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 必须到达 Click 点");
+                    assert!(rig.drain().is_empty(), "{name}: 无 @main 时零说词");
+                }
                 other => panic!("golden 出现未知用例 {other}（禁止静默跳过）"),
             }
+            // 状态面（oracle `LastNpc` / `playerActor.Script` / `ScriptCurrLable`）：
+            // 直接读会话态 `ShopSession`（实体/会话直读，不从帧反推）。
+            let st = &case["state"];
+            let ss = rig.shop_sessions.get("hero");
+            assert_eq!(
+                ss.map(|s| s.last_npc == rig.elder_id).unwrap_or(false),
+                st["last_npc_is_npc"].as_bool().unwrap(),
+                "{name}: LastNpc 归属"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_index.is_some()).unwrap_or(false),
+                st["script_selected"].as_bool().unwrap(),
+                "{name}: Script 选中"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_curr_lable.clone()).unwrap_or_default(),
+                st["script_curr_lable"].as_str().unwrap(),
+                "{name}: ScriptCurrLable"
+            );
             n += 1;
         }
         assert!(n >= 4, "golden 用例数异常：{n}");

@@ -92,20 +92,24 @@
         "line": 674,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "t137_click_fixed_npc_main_says_menu_through_production_path",
+        "test": "np01_click_main_matches_oracle_golden",
         "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "click_npc_type0_fixed_npc_still_answers_643",
-          "t160_click_fixed_npc_main_take_item_and_gold_write_back"
-        ]
+        "fixture": "mir2-rs/tests/parity/golden/npc/np01_click_main.json",
+        "cases": [
+          "click_main_ok",
+          "click_main_far",
+          "click_main_dead",
+          "click_main_rate_limited",
+          "click_no_main_fallback"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "Rust 派发 lib.rs 第 6317/27383 行、NormNpc.Click 等价第 6033 行；无 oracle 夹具"
+      "notes": "行为面（SM 643 严格序 + 说词文本）+ 状态面（LastNpc/Script/ScriptCurrLable）均断言；牙 A 距离门 / B @main 派发 / C set_last_npc（原文 E:/UserFleet/qa/npc-parity/）",
+      "basis": "semantic"
     },
     {
       "id": "NP-02",

@@ -125,7 +125,7 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 - 即时帧：`SM_MERCHANTSAY(643)` 严格序 + 说词尾文本（= golden `rm[0].msg`）。
 - 门：超距 / Death / 限频三例零帧（golden 与 Rust 同为 0）。
 - 通知账本：golden 记录 `(priority=1, ident=11009, params)`；Rust 侧该通知落在帧面（`SM 643`），**priority 不在线缆头**，故本样板按"golden 排序后的期望交付序 vs Rust 实际帧序"比较（单条时恒等）；多通知排序/重复计数在 NP-08 批量用例落地。
-- 状态面缺口：`LastNpc`/`ScriptCurrLable` 在 Rust 会话**未建模**（`lib.rs` 的 T-137 残余①）⇒ 本样板不比这两项，**不伪造**；补齐后再加断言。
+- 状态面：`LastNpc`/`Script`/`ScriptCurrLable` **已建模**（`ShopSession.last_npc`/`script_index`/`script_curr_lable`；引擎 `goto_label` 写入）。**订正**：先前"未建模"的判断是错的（字段早已存在，缺的是断言语 fallback 用例），本批已补。
 
 **QA 42 条自检（本样板）**
 - R2：`parity-gap-npc.json` 的 `denominator`/`entries` 未被改动（本批不碰）。
@@ -134,24 +134,20 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 - D1/D2：golden 每 case 带 `drain_passes`/`drain_hit_cap`；比较器断言 `drain_hit_cap == false`（true 即红）。
 - Z1/Z2/Z3：golden 缺文件、零 cases、未知 case 名、`drain_hit_cap=true` ⇒ panic（防空转）。
 
-### 10.1 状态面缺位：会不会让 NP-01 变成假绿？
+### 10.1 状态面（已断言，不再 CONDITIONAL）
 
-**结论：本样板 4 例的行为面结论不受影响；但状态面必须单独标 CONDITIONAL，不能宣称对齐。**
+**订正（2026-11-20）**：早先写"`LastNpc`/`ScriptCurrLable` 未建模"是**错的**——`ShopSession` 已有
+`last_npc`/`script_index`/`script_curr_lable`/`script_go_back_lable`，引擎 `goto_label`
+（`crates/script/src/engine/mod.rs`）在 `@main` 命中与 fallback 两处都写 `set_last_npc`/`set_script_index`。
+缺的只是比较器断言与 fallback 用例，现已补：
 
-依据（oracle 代码）：
-1. 点击链 `ClientClickNpc → NormNpc.Click → GotoLable("@main")`。`GotoLable` 的脚本选择
-   （`src/Modules/ScriptEngine/ScriptEngine.cs:44-60`）先按 `RecordList["@main"]` 命中；
-   **只有没有 `@main` 时**才回退用 `playerActor.Script` / 逆序 Quest 门。本夹具只有一份脚本且含
-   `[@main]` ⇒ 选择结果**不依赖** `LastNpc`/`ScriptCurrLable`。
-2. 说词文本只由被选 record 的 `#SAY` 决定；三条负例（超距/Death/限频）在 `GotoLable` 之前就返回，
-   根本不读这两项。
-3. `LastNpc` 在 oracle 里只会影响**后续**的 `@main` 选择（NP-04）与 `LastNpc` 归属判断；
-   本样板没有第二次点击/选择用例，故不进入判定面。
+| 升 PASS 证明 | 用例锚 | 断言 |
+| --- | --- | --- |
+| 点击后 `LastNpc == 被点 NPC id` | `click_main_ok` / `click_no_main_fallback` | 读 `shop_sessions["hero"].last_npc`，与 golden `last_npc_is_npc` 逐例对齐 |
+| 点击后 `ScriptCurrLable` 已清空 | 同上 | 读 `script_curr_lable`，与 golden `script_curr_lable` 对齐 |
+| 无 `@main` 时 fallback 选同一脚本 | `click_no_main_fallback`（`[@greet]` 脚本） | 说词 0 条，但 `last_npc` 已设、`script_index` 有值（golden `script_selected=true`） |
 
-**风险（必须登记）**：Rust 未建模这两项 ⇒ 若实现漏设 `LastNpc`/`Script`，本样板**仍然绿**。
-因此交付口径写：**行为面 PASS；状态面 CONDITIONAL（缺 `LastNpc`、`ScriptCurrLable`，挂 T-137 残余①）**。
-批量时若出现依赖 `LastNpc` 的用例（NP-04 的 `@main` 回退），必须先补建模再加断言，不得跳过。
-
+结论：**NP-01 升 PASS（basis=semantic）**；状态面不再挂 CONDITIONAL。
 ### 10.2 QA 42 条四项自检（NP-01 样板）
 
 | 项 | 自检 | 证据/命令 |
@@ -160,23 +156,12 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 | **T2** 文本牙不算行为牙 | 本样板**没有**文本牙；牙 A 是实现变异（距离门 15→155 ⇒ `click_main_far` 红） | `E:/UserFleet/qa/npc-parity/np01-mutation-A-distance.txt` |
 | **L3** 状态不许从回包反推 | 状态读取全部来自会话/实体：`sessions["hero"].click_npc_time`、`world.entities.get_mut(...).life_cycle.death`、`transform_mut(...).x/y`；帧只用来比帧 | 比较器源码（`lib.rs` 的 `np01_click_main_matches_oracle_golden`） |
 | **D2** 命中上限必须红 | golden 每 case 带 `drain_passes`/`drain_hit_cap`（4/4 例）；比较器断言 `drain_hit_cap == false`，true ⇒ panic | `grep -c drain_hit_cap` 于 golden 与 `lib.rs`（原文见交付说明） |
+| **状态牙 C** | 删引擎 `@main` 分支的 `set_last_npc` ⇒ `click_main_ok` 红在 `LastNpc 归属` | `E:/UserFleet/qa/npc-parity/np01-mutation-C-last-npc.txt`（FAILED 1；恢复 sha 相等；复绿 rc=0，`np01-test-green-final.txt`） |
 
-### 10.3 CONDITIONAL 升 PASS 的前置条件（opc-07 裁定，2026-11-20）
+### 10.3 CONDITIONAL 升 PASS 记录（2026-11-20 已满足）
 
-**CONDITIONAL 不是结项态。** NP-01 的签法（行为面 PASS / 状态面 CONDITIONAL）升 PASS 必须**同时**满足：
-
-1. **补齐两个状态量**：`LastNpc` 与 `ScriptCurrLable` 在 Rust 会话建模（`SessionGround` 或其脚本态载体），
-   写入点对齐 `NormNpc.Click`（清 `ScriptGotoCount`/`ScriptGoBackLable`/`ScriptCurrLable`）与
-   `ScriptEngine.GotoLable`（`LastNpc = normNpc.ActorId`、`playerActor.Script = script`）。
-2. **证明用例**（缺一不可）：
-   - 点击后 `LastNpc == 被点 NPC 的 actor id`（golden 已有 `last_npc_is_npc=true`，加同断言）；
-   - 点击后 `ScriptCurrLable` 已清空（golden 已有 `script_curr_lable=""`，加同断言）；
-   - **Fallback 证明**：脚本**没有 `@main`** 时，`GotoLable` 走的 `playerActor.Script` / 逆序 Quest 门
-     必须两侧选中同一脚本（这条同时是 **NP-04** 的前置）。
-3. 三项通过后把 NP-01 改为 PASS，并在 `evidence` 写测试名；未满足前不得改。
-
-**批量硬规则**：NP-04 及任何依赖 `LastNpc`/`ScriptCurrLable` 的用例，**必须先补建模再判**；
-不得沿用"行为面 PASS / 状态面 CONDITIONAL"糊过去（那会变成真正的假绿）。
+opc-07 定的三条前置已全部满足（见 §10.1 三证明）；NP-01 签法改为 **PASS（basis=semantic）**。
+批量硬规则保留：NP-04 及任何依赖 `LastNpc`/`ScriptCurrLable` 的用例仍必须显式断言，不得省略。
 
 ## 11. 行为牙（NP-01 样板）
 
@@ -187,6 +172,7 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 | --- | --- | --- | --- |
 | A | `handle_click_npc_cmd` 距离门 `<=15` → `<=155` | `click_main_far` | `E:/UserFleet/qa/npc-parity/np01-mutation-A-distance.txt`（FAILED 1；恢复 sha 相等） |
 | B | `@main` 派发（`run_merchant_goto` 的 label）改成不存在的 label | `click_main_ok` 即时帧空 vs `[643]` | `E:/UserFleet/qa/npc-parity/np01-mutation-B-main-dispatch.txt`（FAILED 1；恢复 sha 相等；复绿 rc=0，green 原文同目录） |
+| C | 删 `goto_label` 的 `@main` 分支 `set_last_npc` | `click_main_ok` 的 `LastNpc 归属` | `E:/UserFleet/qa/npc-parity/np01-mutation-C-last-npc.txt`（FAILED 1；恢复 sha 相等；复绿 rc=0） |
 
 > 变异 B 与 A 同法：`git checkout -- mir2-rs/bins/game-svr/src/lib.rs` 恢复后断言 sha 相等并复绿；
 > 构建按总监窗口约束，窗口内不新起构建。

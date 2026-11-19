@@ -450,7 +450,7 @@ src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: Client
 
 | ID | 原版行为 | 原版依据 | Rust 状态 | 测试名 / 证据路径 | 备注 |
 | --- | --- | --- | --- | --- | --- |
-| NP-01 | 点 NPC 打开对话（`Click` → `@main`） | `src/M2Server/Player/PlayObject.Base.cs:674`、`src/M2Server/Npc/NormNpc.cs:68` | **implemented（未验证）** | 派发 `bins/game-svr/src/lib.rs`（CM_CLICKNPC 第 6317/27383 行、NormNpc.Click 等价第 6033 行）；测试 `bins/game-svr/src/lib.rs::t137_click_fixed_npc_main_says_menu_through_production_path`、`::click_npc_type0_fixed_npc_still_answers_643`、`::t160_click_fixed_npc_main_take_item_and_gold_write_back` | 点前门见 §13.5；无 oracle 夹具 |
+| NP-01 | 点 NPC 打开对话（`Click` → `@main`） | `src/M2Server/Player/PlayObject.Base.cs:674`、`src/M2Server/Npc/NormNpc.cs:68` | **verified** | `mir2-rs/bins/game-svr/src/lib.rs::np01_click_main_matches_oracle_golden`（oracle golden `mir2-rs/tests/parity/golden/npc/np01_click_main.json` 5 例，basis=semantic；行为面 + 状态面 `LastNpc`/`Script`/`ScriptCurrLable` 均断言） | 牙 A（距离门）/B（@main 派发）/C（set_last_npc）原文在 `E:/UserFleet/qa/npc-parity/`；无 `@main` 的 fallback 用例已覆盖 |
 | NP-02 | 对话标签选择跳转（@back/同标签/新标签） | `src/M2Server/Player/PlayObject.Operate.cs:114`、`src/M2Server/Npc/NormNpc.cs:1633` | **implemented（未验证）** | `lib.rs` 1011 派发（第 7094 行）+ `merchant_base_user_select`（第 8907 行）、`guild_official.rs::handle_select`（第 461 行）；测试 `::merchant_dlgselect_exit_emits_one_merchantdlgclose_with_npc_recog`、`npc.rs::merchant_dialog_label_gate` | |
 | NP-03 | 特殊 NPC 的 `UserSelect` 覆写（商店/城堡/行会） | `src/GameSrv/Npc/Merchant.cs:789`、`src/GameSrv/Npc/CastleOfficial.cs:93`、`src/GameSrv/Npc/GuildOfficial.cs:55` | **implemented（未验证）** | `guild_official.rs` 生产入口 + 测试 `guild_official/tests.rs::t138_non_master_is_cancelled` 等 7 条 | 商店子命令归交易面（M3⑤），不在本分母 |
 | NP-04 | `@main` 脚本选择规则（LastNpc → 逆序 → Quest 门） | `src/Modules/ScriptEngine/ScriptEngine.cs:46-75` | **implemented（未验证）** | `crates/script/src/engine/mod.rs::check_quest_status`（第 1074 行）与 `goto_label`（第 1008 行附近） | 无直接 oracle 夹具 |
@@ -485,7 +485,7 @@ src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: Client
 
 ### 13.8 结论（NPC 块）
 
-- 主分母 11：`verified` 1（NP-06，经 M4 双跑逐行 diff）、`implemented（未验证）` 10、`missing` **0**。
+- 主分母 11：`verified` **2**（NP-06 经 M4 双跑；NP-01 经 `np01_click_main_matches_oracle_golden`）、`implemented（未验证）` 9、`missing` **0**。
 - 机制层没有 known-missing；缺口在**证据强度**：10 条只有 Rust 侧集成测试，没有 oracle 夹具。
 - **脚本命令语言全集**（条件/动作注册表）不在本块重复计数：M4 已有双跑对拍（7 条）与注册表门（`IMPLEMENTED_CONDITIONS`/`IMPLEMENTED_EXECUTIONS` + `implemented_registry_entries_are_actually_implemented`）；任务块 §11 的 9 条是其中的任务专属子集。
 

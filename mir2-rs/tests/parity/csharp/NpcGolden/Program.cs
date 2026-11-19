@@ -190,13 +190,19 @@ internal static class Program
         public int NpcX = 10;
         public int NpcY = 10;
         public bool Death;
+        public string ScriptName = "老人";
+        public string ScriptText = "MAIN_DEFAULT";
         public int ClickNpcTime = 0;
         public int ClickNpcTimeConfig = 0;
     }
 
-    private static object RunCase(CaseSpec spec, string scriptPath, Envirnoment envir, CaptureNetChannel net)
+    private static object RunCase(CaseSpec spec, string tmp, Envirnoment envir, CaptureNetChannel net)
     {
         net.Frames.Clear();
+        var scriptText = spec.ScriptText == "MAIN_DEFAULT"
+            ? "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\r\n"
+            : spec.ScriptText;
+        File.WriteAllText(Path.Combine(tmp, "Npc_def", spec.ScriptName + ".txt"), scriptText, new UTF8Encoding(true));
         SystemShare.Config.ClickNpcTime = spec.ClickNpcTimeConfig;
 
         // 走 oracle `FindMerchant(...) ?? FindNpc(...)` 的 **FindNpc 分支**（`Npcs.txt` 之外的
@@ -211,7 +217,7 @@ internal static class Program
             CurrY = (short)spec.NpcY,
             MapName = "0",
         };
-        new ScriptParsers().LoadScript(npc, "Npc_def", "老人");
+        new ScriptParsers().LoadScript(npc, "Npc_def", spec.ScriptName);
         SystemShare.WorldEngine = WorldProxy.Create(npc);
 
         var po = new PlayObject
@@ -331,7 +337,6 @@ internal static class Program
         var tmp = Path.Combine(Path.GetTempPath(), "npc-golden-" + Environment.ProcessId);
         Directory.CreateDirectory(Path.Combine(tmp, "Npc_def"));
         // StringList 按 UTF-8 BOM 识别；内容与 Rust 侧夹具同源。
-        File.WriteAllText(Path.Combine(tmp, "Npc_def", "老人.txt"), "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\r\n", new UTF8Encoding(true));
         SystemShare.Config.EnvirDir = tmp;
 
         var net = new CaptureNetChannel();
@@ -342,16 +347,21 @@ internal static class Program
         var envir = new Envirnoment();
         var cases = new List<object>
         {
-            RunCase(new CaseSpec { Name = "click_main_ok" }, null, envir, net),
-            RunCase(new CaseSpec { Name = "click_main_far", NpcX = 40, NpcY = 40 }, null, envir, net),
-            RunCase(new CaseSpec { Name = "click_main_dead", Death = true }, null, envir, net),
+            RunCase(new CaseSpec { Name = "click_main_ok" }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "click_main_far", NpcX = 40, NpcY = 40 }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "click_main_dead", Death = true }, tmp, envir, net),
             RunCase(new CaseSpec
             {
                 Name = "click_main_rate_limited",
                 ClickNpcTime = HUtil32.GetTickCount(),
                 ClickNpcTimeConfig = 1000,
-            }, null, envir, net),
+            }, tmp, envir, net),
         };
+        cases.Add(RunCase(new CaseSpec
+        {
+            Name = "click_no_main_fallback",
+            ScriptText = "[@greet]\nhi\r\n",
+        }, tmp, envir, net));
 
         var doc = new
         {

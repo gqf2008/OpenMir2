@@ -117,7 +117,7 @@
         "npc_x": 10,
         "npc_y": 10,
         "death": false,
-        "click_npc_time": 1095727078,
+        "click_npc_time": 1097354625,
         "click_npc_time_config": 1000
       },
       "rm": [],
@@ -132,6 +132,31 @@
         "script_go_back_lable": "",
         "script_lable": "",
         "script_selected": false
+      }
+    },
+    {
+      "name": "click_no_main_fallback",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "click_npc_time": 0,
+        "click_npc_time_config": 0
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": true
       }
     }
   ]
