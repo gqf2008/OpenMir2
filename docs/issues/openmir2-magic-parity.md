@@ -535,7 +535,7 @@ ActorId 段 1001../2001../3001..、`M2Share.NetChannel` 旁路、排水「抽空
 | 11/45 雷电 | `golden/magic/lightning-11.json`、`lightning-45.json` | **已产出（C#）**；Rust 未接 |
 | 2 治愈 | `golden/magic/healing.json` | **已产出（C#）**；Rust 未接。三支 = heal/full/self（本支**无** AntiMagic 骰） |
 | 13 火符 | `golden/magic/firecharm.json` | **已产出（C#）**；Rust 未接 |
-| 44 灭天火 | 未入库（同上） | **停**：暴露表外 RM `8043 RM_DELAYPUSHED` / `8092 RM_PUSH` → SM 9，等裁定 |
+| 44 灭天火 | `golden/magic/hbfireball.json` | **已产出（C#）**；Rust 未接 |
 
 雷电三支 seed 由 `Random(10)` 与 AntiMagic 的关系扫描（miss=1 / edge=5 / hit=13，与火球同）；
 `DrainPasses` = miss 2 / edge 4 / hit 4，`hit_cap=False`；连跑两次除 `delivery` 外逐字节一致。
@@ -559,3 +559,9 @@ miss/edge/hit 构造假骰）：
 每支施法都会 −100 持久并回 `SM_DURACHANGE(642)`（Dura=500、槽位=5、DuraMax=1000）——**miss 支也有**；
 `RM_DELAYMAGIC` 延时 1200ms（等待窗口 1200ms 覆盖）；`RM_MAGHEALING` 类表外项不出现。
 实测：`RM 8021` 只在 edge/hit（命中才有延时事件）；三支 `DrainPasses` = 2/4/4、`hit_cap=False`。
+
+**44 灭天火的夹具前提与推挤支**：`UserMagic.Level=3` 是硬前提（`Random(Level)-1` 在 Level<3 时
+恒 ≤0，永不推挤）。`hit`（seed=13）推挤成立：`Random(20)=18 < 6+3*3+10=25`、`Random(3)=2 ⇒ push=1`，
+目标被推 1 格（101,100→102,100），观测面 = `RM_DELAYPUSHED(8043)` 登记 + `RM_PUSH(8092)`/
+`SM_BACKSTEP(9)`（param=102/tag=100/series=方向 6）；`edge`（seed=5）第 7 抽=0 ⇒ push=-1 不推；
+`miss` 无延时事件。三支 `DrainPasses` = 2/4/4、`hit_cap=False`。
