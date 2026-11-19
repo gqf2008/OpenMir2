@@ -120,3 +120,15 @@
   当前量级数百可接受，若走怪数显著上升需重评（不新增问题：T-287 既有设计）。
 - 牙：m9 = 站点回退 `hear_targets_from_walk_candidates` 直投 ⇒ 第二步 `Δ=12` 也收（红）；
   m10 = 去缓存 TTL ⇒ `ref_msg_cache_expires_after_500ms` + `np11 fresh_scan` 同红。
+
+### 批 5（RM_USERNAME / 42 族）
+- #15 `castle.rs::refresh_show_name_in_area`：内层收件人改走
+  `ref_msg_cache::targets(world, target_id, ref_range)`（按被展示者键控）。
+  **两个半径不许混**：外层 `range` 是 `GetMapRageHuman` 的目标筛选半径（`<=`），
+  `ref_range` 才是 `SendRefMsg` 的收件人半径；缓存只用 `ref_range`。用例
+  `castle_show_name_two_radii_are_independent` 钉住「外层半径变 ⇒ 收件人不变/无目标零帧」。
+- #15 N1 丢帧与收件人集合分开验：`castle_show_name_n1_drop_is_color_not_recipient_set` ——
+  `chat::hear_targets` 对照证明扫描面**含**攻方观察者，而它在 `query_user_name_color` 的
+  N1 支零帧；同集合无会观察者照收 ⇒ 丢帧发生在颜色判定，不是缓存少给收件人。
+- 同窗缓存证据：`castle_show_name_cache_window_second_refresh_hits_cache`
+  （首份 Δ12 收、次份 Δ11/Δ12 挡、Δ5 两拍收、Δ13 零帧）。
