@@ -169,9 +169,11 @@
     `hbfireball`、`healing`），共 104 处观测。例：`lightning-11` miss 入库 target 仅 2 条 RM、无伤害
     （HP 100）；重生成 6 条 RM / 5 条 SM（含 `SM_STRUCK(31)`、`SM 656`）、HP 85；`Rng` `[2]` vs
     `[2,0,0,0,6]`；53/31 帧的 `MaxHP` 字段 100 → 224；638 的尾编码文本也不同。
-  - **初判根因（待 opc-07 裁决）**：现行工具的登录序夹具（`RecalcLevelAbilitys` / `RecalcAbilitys`）
-    会重算目标能力——`AntiMagic` 被覆盖（miss 变成实伤）、`MaxHP` 100 → 224 ⇒ miss/edge/hit 的语义面
-    与入库 golden 不再同一。
+  - **已证事实**：真人登录（`PlayObject.UserLogon` → `RecalcLevelAbilitys(); RecalcAbilitys();`）
+    会把 `AntiMagic` 与 `WAbil.MaxHP` 重算覆盖（`AntiMagic` 是 `BaseObject` 属性，`RecalcAbilitys`
+    里置 1 后加 `AddAbil.AntiMagic`；`MaxHP` 由 Job/等级公式给出）。现行工具的登录序夹具因此与
+    入库 golden 的「未重算合成角色」不再同一 ⇒ **同 seed 下分支结果不同、帧字段不同**（如
+    53/31 的 `MaxHP`）。**不下方向性结论**（哪个分支变真/变假以第 1/2 步实测与 oracle 分支原文为准）。
 - **状态**：按裁决第 4 条**已停下上报**；本批**未**重生成入库、**未**改 Rust 驱动期望。
 
 ## 未覆盖面（本批 golden 不覆盖，登记）
@@ -181,7 +183,7 @@
    记录，是否另造方向型输入由 opc-07 裁决。
 2. **26/38 的 10s/恒真门二次调用**：每 case 用新施法者对象，未覆盖「同角色短时间重复施法」的状态残留。
 3. **调用方尾部**（`+GD/<uptime>`、`RM_MOVEFAIL`）按上文判据边界不入 golden。
-4. **caster 未走登录序重算**：`ClientSpellXYEntry` 的施法者沿用既有工具口径（只设
-   `Abil.Level/MC/SC` 与 `WAbil.MP`，**不**调 `RecalcLevelAbilitys`/`RecalcAbilitys`）⇒
-   `SM_HEALTHSPELLCHANGED(53)` 的 `MaxHP` 为 0；target 则**走**登录序重算（Level 20 ⇒ `MaxHP=224`）。
-   与 `openmir2-golden-fixture-drift` 的「重算是否入夹具/是否按 case 显式参数」同源，处置随该卡。
+4. **（已按裁决 A 修订）施法者也走登录序重算**：`ClientSpellXYEntry` 现对 caster 与 target
+   **同标准**调用 `RecalcLevelAbilitys(); RecalcAbilitys();`，并把施法者 HP 置为公式 `MaxHP` ⇒
+   本卡 golden 里 `SM_HEALTHSPELLCHANGED(53)` 的 `MaxHP` 不再是 0 的装置伪影。旧口径（caster 不重算）
+   已在提交历史中留痕；「重算是否按 case 显式参数化」属 `openmir2-golden-fixture-drift`。

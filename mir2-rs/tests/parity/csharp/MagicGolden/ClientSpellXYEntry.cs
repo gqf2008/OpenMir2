@@ -224,6 +224,13 @@ public static class ClientSpellXYEntry
         caster.WAbil.MP = (ushort)sc.CasterMp;
         // `ClientSpellXY` 的第一道门：`IsCanSpell`（`PlayObject.cs` 的自动属性，ctor 缺省 false）。
         caster.IsCanSpell = true;
+        // 裁决 A（opc-07 2026-11-20）：caster 与 target **同标准**——走真人登录序
+        // （`PlayObject.UserLogon` 的 `RecalcLevelAbilitys(); RecalcAbilitys();`），
+        // 并把 HP 置为公式 `MaxHP`（否则 SM_HEALTHSPELLCHANGED(53) 会带装置伪影 MaxHP=0）。
+        // 注意 `RecalcAbilitys` 保留重算前的旧 MP（`wOldMP`），所以上面的 CasterMp 仍然生效。
+        caster.RecalcLevelAbilitys();
+        caster.RecalcAbilitys();
+        caster.WAbil.HP = caster.WAbil.MaxHP;
 
         var um = new OpenMir2.Packets.ClientPackets.UserMagic
         {
