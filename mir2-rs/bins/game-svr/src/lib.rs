@@ -65405,6 +65405,23 @@ SendRefMsgRange=15
                 }
             }
         }
+        // `RM_CHANGENAMECOLOR(8090)`（卡 `openmir2-magstruck-name-color`）：受击玩家把
+        // `RM_STRUCK_MAG` 回投给自己 ⇒ 攻击方 `SetPkFlag` ⇒ 由**攻击方** `RefNameColor` 发 656。
+        // 观测面 = 实际发出的 `SM_CHANGENAMECOLOR(656)` 帧（有才记条目）；收件人 = 攻击方的
+        // `hear_targets`（含攻击方自己，与 `SendRefMsg` 同集合）；prio = 8090 & 0xFF = 154。
+        if all_frames
+            .iter()
+            .any(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_CHANGENAMECOLOR)
+        {
+            for id in &in_range_caster {
+                if let Some(who) = who_of(*id) {
+                    rm_by_who
+                        .entry(who)
+                        .or_default()
+                        .push(fireball_rm(8090, 0, 0, 0, 0, 154, false));
+                }
+            }
+        }
 
         let receivers = [
             ("caster", 911),
