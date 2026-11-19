@@ -534,7 +534,7 @@ ActorId 段 1001../2001../3001..、`M2Share.NetChannel` 旁路、排水「抽空
 |---|---|---|
 | 11/45 雷电 | `golden/magic/lightning-11.json`、`lightning-45.json` | **已产出（C#）**；Rust 未接 |
 | 2 治愈 | `golden/magic/healing.json` | **已产出（C#）**；Rust 未接。三支 = heal/full/self（本支**无** AntiMagic 骰） |
-| 13 火符 | 未入库（同上） | **停**：暴露表外 RM `10125 RM_DURACHANGE` → SM 642，等裁定 |
+| 13 火符 | `golden/magic/firecharm.json` | **已产出（C#）**；Rust 未接 |
 | 44 灭天火 | 未入库（同上） | **停**：暴露表外 RM `8043 RM_DELAYPUSHED` / `8092 RM_PUSH` → SM 9，等裁定 |
 
 雷电三支 seed 由 `Random(10)` 与 AntiMagic 的关系扫描（miss=1 / edge=5 / hit=13，与火球同）；
@@ -552,3 +552,10 @@ miss/edge/hit 构造假骰）：
 
 实测：`heal` RNG `[0,0,0,7,1]`（多一抽 = 训练尾 `TrainSkill(Random(3)+1)`）、`full` `[0,0,0,6]`、
 `self` `[0,0,0,3,0]`；三支 `DrainPasses=2`、`hit_cap=False`；两次连跑除 `delivery` 外逐字节一致。
+
+**13 火符的夹具前置（为触发路径必须造，复现时别丢）**：离线物品系统
+`SystemShare.ItemSystem = new GameItemSystem()` + `ArmRingl` 护身符
+（`StdMode=25 / Shape=5 / Dura=600 / DuraMax=1000`，`Round(600/100)=6 ≥ CheckAmulet(1,1)` 的门）。
+每支施法都会 −100 持久并回 `SM_DURACHANGE(642)`（Dura=500、槽位=5、DuraMax=1000）——**miss 支也有**；
+`RM_DELAYMAGIC` 延时 1200ms（等待窗口 1200ms 覆盖）；`RM_MAGHEALING` 类表外项不出现。
+实测：`RM 8021` 只在 edge/hit（命中才有延时事件）；三支 `DrainPasses` = 2/4/4、`hit_cap=False`。
