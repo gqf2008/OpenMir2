@@ -24,12 +24,44 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireCharm"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": "\u9996\u62BD=0(seed 14)\uFF0C\u95E8\u69DB anti_magic=1\uFF08\u9AB0 Random(10) \u003E= \u95E8\u69DB \u624D\u901A\u8FC7\uFF1Bmiss\uFF09",
+        "rng_total_draws": 1,
+        "rng_recorded": 1,
         "target_null": false,
         "arm_ring_amulet": true,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
         "caster_xy": [
           100,
           100
@@ -56,7 +88,7 @@
       "Label": "miss",
       "DrainPasses": 2,
       "DrainPassesHitCap": false,
-      "Seed": 1,
+      "Seed": 14,
       "SpellReturn": true,
       "Receivers": [
         {
@@ -206,7 +238,7 @@
         }
       ],
       "Rng": [
-        2
+        0
       ],
       "TargetHp": 100,
       "TargetHpBefore": 100,
@@ -223,12 +255,44 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireCharm"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": "\u9996\u62BD=1(seed 18)\uFF0C\u95E8\u69DB anti_magic=1\uFF08\u9AB0 Random(10) \u003E= \u95E8\u69DB \u624D\u901A\u8FC7\uFF1Bedge\uFF09",
+        "rng_total_draws": 8,
+        "rng_recorded": 8,
         "target_null": false,
         "arm_ring_amulet": true,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
         "caster_xy": [
           100,
           100
@@ -255,7 +319,7 @@
       "Label": "edge",
       "DrainPasses": 4,
       "DrainPassesHitCap": false,
-      "Seed": 5,
+      "Seed": 18,
       "SpellReturn": true,
       "Receivers": [
         {
@@ -302,14 +366,14 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1093804606,
+              "delivery": 1119051403,
               "priority": 255
             },
             {
               "ident": 8103,
               "wParam": 15,
               "p1": 85,
-              "p2": 100,
+              "p2": 224,
               "p3": 2001,
               "msg": "",
               "late": false,
@@ -346,7 +410,7 @@
             {
               "ident": 31,
               "param": 85,
-              "tag": 100,
+              "tag": 224,
               "series": 15,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
@@ -410,7 +474,7 @@
               "ident": 8103,
               "wParam": 15,
               "p1": 85,
-              "p2": 100,
+              "p2": 224,
               "p3": 2001,
               "msg": "",
               "late": false,
@@ -448,13 +512,13 @@
               "ident": 53,
               "param": 85,
               "tag": 0,
-              "series": 100,
+              "series": 224,
               "tail": ""
             },
             {
               "ident": 31,
               "param": 85,
-              "tag": 100,
+              "tag": 224,
               "series": 15,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
@@ -496,7 +560,7 @@
               "ident": 8103,
               "wParam": 15,
               "p1": 85,
-              "p2": 100,
+              "p2": 224,
               "p3": 2001,
               "msg": "",
               "late": false,
@@ -533,7 +597,7 @@
             {
               "ident": 31,
               "param": 85,
-              "tag": 100,
+              "tag": 224,
               "series": 15,
               "tail": "ddhkddhkddy[gdhgedhkd?"
             },
@@ -553,8 +617,11 @@
         }
       ],
       "Rng": [
-        3,
+        1,
         0,
+        0,
+        0,
+        3,
         0,
         0,
         4
@@ -574,12 +641,44 @@
         "caster_level": 30,
         "caster_mc": 15,
         "caster_sc": 15,
+        "rng_mode": "cover_drain",
+        "login_order": true,
+        "reachability": "reachable",
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
-        "anti_magic": 3,
+        "target_max_hp": 224,
+        "anti_magic": 1,
+        "derived": {
+          "max_hp": 224,
+          "max_mp": 81,
+          "dc": 1027,
+          "ac": 512,
+          "mac": 0,
+          "max_exp": 6000
+        },
+        "construction": {
+          "job": "Warrior",
+          "level": 20,
+          "equipment": [],
+          "skills": [
+            "FireCharm"
+          ]
+        },
+        "scenario_note": "\u767B\u5F55\u5E8F\uFF08UserLogon\u2192RecalcLevelAbilitys\u002BRecalcAbilitys\uFF1Btarget/caster \u540C\u6807\u51C6\uFF0CHP=\u516C\u5F0F MaxHP\uFF09",
+        "legacy_artifact": false,
+        "legacy_reason": null,
+        "seed_reason": "\u9996\u62BD=3(seed 5)\uFF0C\u95E8\u69DB anti_magic=1\uFF08\u9AB0 Random(10) \u003E= \u95E8\u69DB \u624D\u901A\u8FC7\uFF1Bhit\uFF09",
+        "rng_total_draws": 8,
+        "rng_recorded": 8,
         "target_null": false,
         "arm_ring_amulet": true,
+        "wait_ms": 1200,
+        "caster_hp": 0,
+        "caster_max_hp": 0,
+        "snow_wind_range": 1,
+        "fire_boom_rage": 1,
+        "elec_blizzard_range": 2,
+        "server_conf_sha256": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
         "caster_xy": [
           100,
           100
@@ -606,7 +705,7 @@
       "Label": "hit",
       "DrainPasses": 4,
       "DrainPassesHitCap": false,
-      "Seed": 13,
+      "Seed": 5,
       "SpellReturn": true,
       "Receivers": [
         {
@@ -653,14 +752,14 @@
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1093805903,
+              "delivery": 1119052715,
               "priority": 255
             },
             {
               "ident": 8103,
               "wParam": 15,
               "p1": 85,
-              "p2": 100,
+              "p2": 224,
               "p3": 3001,
               "msg": "",
               "late": false,
@@ -697,7 +796,7 @@
             {
               "ident": 31,
               "param": 85,
-              "tag": 100,
+              "tag": 224,
               "series": 15,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
@@ -761,7 +860,7 @@
               "ident": 8103,
               "wParam": 15,
               "p1": 85,
-              "p2": 100,
+              "p2": 224,
               "p3": 3001,
               "msg": "",
               "late": false,
@@ -799,13 +898,13 @@
               "ident": 53,
               "param": 85,
               "tag": 0,
-              "series": 100,
+              "series": 224,
               "tail": ""
             },
             {
               "ident": 31,
               "param": 85,
-              "tag": 100,
+              "tag": 224,
               "series": 15,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
@@ -847,7 +946,7 @@
               "ident": 8103,
               "wParam": 15,
               "p1": 85,
-              "p2": 100,
+              "p2": 224,
               "p3": 3001,
               "msg": "",
               "late": false,
@@ -884,7 +983,7 @@
             {
               "ident": 31,
               "param": 85,
-              "tag": 100,
+              "tag": 224,
               "series": 15,
               "tail": "ddhkddhkddQKgdhcedhkd?"
             },
@@ -904,11 +1003,14 @@
         }
       ],
       "Rng": [
-        5,
+        3,
         0,
         0,
         0,
-        0
+        4,
+        0,
+        0,
+        9
       ],
       "TargetHp": 85,
       "TargetHpBefore": 100,

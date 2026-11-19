@@ -262,9 +262,9 @@
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/fireball.json（C# oracle 生成；QA-1 独立复现）",
         "cases": [
-          "miss(seed=1)",
-          "edge(seed=5)",
-          "hit(seed=13)"
+          "miss(seed=14)",
+          "edge(seed=18)",
+          "hit(seed=5)"
         ],
         "unit_tests": [
           "tests::fireball_parity_miss",
@@ -292,9 +292,9 @@
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/fireball-5.json（C# oracle 生成，同 rig 换 magic_id=5）",
         "cases": [
-          "miss(seed=1)",
-          "edge(seed=5)",
-          "hit(seed=13)"
+          "miss(seed=14)",
+          "edge(seed=18)",
+          "hit(seed=5)"
         ],
         "unit_tests": [
           "tests::fireball5_parity_miss",
@@ -304,7 +304,7 @@
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级；与 id=1 共用 `1|5` 实现臂，但尚无 id=5 的 golden/对拍（不升格）"
+      "notes": "旧清单 cost=小时级。与 id=1 共用 `1|5` 实现臂；已有 id=5 的 golden 与对拍（`fireball-5.json` / `real_rust_ledger_fireball5`，卡 §8.9）。"
     },
     {
       "id": "MG-12",
@@ -478,9 +478,9 @@
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/lightning-11.json（C# oracle 生成，同 rig 换 magic_id=11）",
         "cases": [
-          "miss(seed=1)",
-          "edge(seed=5)",
-          "hit(seed=13)"
+          "miss(seed=14)",
+          "edge(seed=18)",
+          "hit(seed=5)"
         ],
         "unit_tests": [
           "tests::lightning11_parity_miss",
@@ -665,9 +665,9 @@
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/firecharm.json（C# oracle 生成；miss/edge/hit）",
         "cases": [
-          "miss(seed=1)",
-          "edge(seed=5)",
-          "hit(seed=13)"
+          "miss(seed=14)",
+          "edge(seed=18)",
+          "hit(seed=5)"
         ],
         "unit_tests": [
           "tests::firecharm_parity_miss",
@@ -1313,9 +1313,9 @@
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/hbfireball.json（C# oracle 生成；miss/edge/hit）",
         "cases": [
-          "miss(seed=1)",
-          "edge(seed=5)",
-          "hit(seed=13)"
+          "miss(seed=14)",
+          "edge(seed=18)",
+          "hit(seed=5)"
         ],
         "unit_tests": [
           "tests::hbfireball_parity_miss",
@@ -1343,9 +1343,9 @@
         "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
         "fixture": "mir2-rs/tests/parity/golden/magic/lightning-45.json（C# oracle 生成，同 rig 换 magic_id=45）",
         "cases": [
-          "miss(seed=1)",
-          "edge(seed=5)",
-          "hit(seed=13)"
+          "miss(seed=14)",
+          "edge(seed=18)",
+          "hit(seed=5)"
         ],
         "unit_tests": [
           "tests::lightning45_parity_miss",

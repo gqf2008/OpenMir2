@@ -15,6 +15,7 @@
 //! 4. **HP 一级断言**：`TargetHpBefore/TargetHp` 两侧相等（miss 100→100、edge/hit 100→85 由金标准决定）；
 //! 5. **RNG**：行数相等、逐次取值相等、`seq` 连续无缺号、**每一行 `site` ∈ 允许清单**（§16b）。
 
+use mir2_formula::level_ability::{recalc_level_abilitys, LevelValueConfig, PlayerJob};
 use serde_json::Value;
 
 /// `site` 允许清单（§16b 表格的代码形态）：`(前缀, 理由)`。
@@ -342,10 +343,327 @@ fn ledger_dir() -> std::path::PathBuf {
 /// ```
 /// 侧车缺失或 id 不符 ⇒ 红并提示「台账陈旧/驱动未跑」；**不设环境变量 ⇒ 红**（fail-closed），
 /// 专门拦「驱动编译失败、比较器读上一次台账还绿」这类空转。
+/// **统一 RNG 判据（opc-07 2026-11-20 定；卡 `openmir2-golden-fixture-drift` §6）**：
+/// `golden.Rng == rust.Rng ++ rust.DeliverRng` —— 两段抽数都要比、按此序拼接；
+/// 不接受"记了不判"，也不接受按 seam 字段切换比法（`freeze_at_dospell` 旧件只作
+/// legacy artifact、不进比较面）。
+///
+/// 返回拼接后的序列；**缺列即红**（`Rng`/`DeliverRng` 任一缺失都不允许默认空——
+/// 牙④专门钉这一点）。
+fn union_rng(case: &Value, label: &str) -> Result<Vec<i64>, String> {
+    let seg = |k: &str| -> Result<Vec<i64>, String> {
+        let arr = case.get(k).and_then(Value::as_array).ok_or_else(|| {
+            format!("[{label}] 台账缺 `{k}` 列（不允许「不记 = 不比」；卡 §6 牙④）")
+        })?;
+        Ok(arr.iter().filter_map(Value::as_i64).collect())
+    };
+    let mut out = seg("Rng")?;
+    out.extend(seg("DeliverRng")?);
+    Ok(out)
+}
+
+/// **冻结的 `NeedExps` 表**（`Exps.conf` 的 `[Exp] LevelN` → `SystemShare.Config.NeedExps[N]`，
+/// `GetLevelExp` 直接下标取；卡 §8.3）。文件由 M51 生成、与 golden 生成器**同源**：
+/// `tests/parity/fixtures/exps-need-exps.json` = `{source, sha256, mtime, need_exps[]}`，
+/// `need_exps[level]` 即 `NeedExps[level]`。**缺文件/坏文件即红**（fail-closed）。
+fn need_exps_table() -> serde_json::Value {
+    let path = format!(
+        "{}/fixtures/exps-need-exps.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+        panic!(
+            "冻结的 NeedExps 表缺失：{path}（{e}）——M51 应产出该件；缺它 `derived.max_exp` 无法机检"
+        )
+    });
+    let v: Value = serde_json::from_str(&text).expect("exps-need-exps.json 必须是合法 JSON");
+    let sha = v.get("sha256").and_then(Value::as_str).unwrap_or("");
+    assert!(
+        sha.len() == 64 && sha.chars().all(|c| c.is_ascii_hexdigit()),
+        "exps-need-exps.json 的 `sha256` 必须是 64 位 hex（卡 §8.3）"
+    );
+    assert!(
+        v.get("source")
+            .and_then(Value::as_str)
+            .is_some_and(|s| !s.is_empty()),
+        "exps-need-exps.json 缺 `source`（部署 Exps.conf 路径）"
+    );
+    assert!(
+        v.get("need_exps")
+            .and_then(Value::as_array)
+            .is_some_and(|a| !a.is_empty()),
+        "exps-need-exps.json 缺 `need_exps` 数组"
+    );
+    v
+}
+
+/// `NeedExps[level]`（= `GetLevelExp(level)`）。
+fn need_exp_for(level: i64) -> Result<i64, String> {
+    let table = need_exps_table();
+    let arr = table.get("need_exps").and_then(Value::as_array).unwrap();
+    usize::try_from(level)
+        .ok()
+        .and_then(|i| arr.get(i))
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("`need_exps` 未覆盖 level={level}（表长 {}）", arr.len()))
+}
+
+/// 金标准该支的 **`Fixture` 契约**（卡 `openmir2-golden-fixture-drift` §8.3/§8.7）：
+/// 必须同时满足 —— `rng_mode == "cover_drain"`、`reachability == "reachable"`、
+/// 且六类状态字段齐全（`login_order`/`anti_magic`/`target_level`/`target_hp`/`target_max_hp`）；
+/// **缺任意键即红**（不允许"默认值兜底"）。`legacy/` 目录的件**不作 verified 依据**。
+fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
+    let case = golden
+        .get("cases")
+        .and_then(Value::as_array)
+        .and_then(|cs| {
+            cs.iter()
+                .find(|c| c.get("Label").and_then(Value::as_str) == Some(label))
+        })
+        .ok_or_else(|| format!("[{label}] 金标准缺该支"))?;
+    let fixture = case.get("Fixture").ok_or_else(|| {
+        format!("[{label}] 金标准缺 `Fixture`（契约键都应在 Fixture 内；卡 §8.3）")
+    })?;
+    match fixture.get("rng_mode").and_then(Value::as_str) {
+        Some("cover_drain") => {}
+        other => {
+            return Err(format!(
+                "[{label}] 金标准 rng_mode = {other:?}：`verified` 条目必须 cover_drain；                 `freeze_at_dospell` 旧件只作 legacy artifact、不进比较面（卡 §6 牙③）"
+            ))
+        }
+    }
+    match fixture.get("reachability").and_then(Value::as_str) {
+        Some("reachable") => {}
+        other => {
+            return Err(format!(
+                "[{label}] 金标准 reachability = {other:?}：`verified` 依据必须是 reachable                 （卡 §7/§8.7；unverified/unreachable 不得作依据）"
+            ))
+        }
+    }
+    if !fixture.get("login_order").is_some_and(Value::is_boolean) {
+        return Err(format!(
+            "[{label}] 金标准缺 `Fixture.login_order`（bool；卡 §8.7 缺键即红）"
+        ));
+    }
+    for k in ["anti_magic", "target_level", "target_hp", "target_max_hp"] {
+        if !fixture.get(k).is_some_and(Value::is_i64) {
+            return Err(format!(
+                "[{label}] 金标准缺 `Fixture.{k}`（int；卡 §8.3 缺键即红，不许默认兜底）"
+            ));
+        }
+    }
+    // ---- construction（§7 要求的可机检构造路径）----
+    let construction = fixture
+        .get("construction")
+        .ok_or_else(|| format!("[{label}] 金标准缺 `Fixture.construction`（§7 机检构造路径）"))?;
+    // 装置（`MagicGolden` `EmitGolden`/`FireballCase`）写的是职业**名**（`spec.Job.ToString()`），
+    // 早期设计稿写 0/1/2；两种写法都接受，其余一律红（不兜底）。
+    let job_field = construction
+        .get("job")
+        .ok_or_else(|| format!("[{label}] `construction.job` 缺失（§8.3）"))?;
+    let job = match job_field {
+        Value::String(s) => match s.as_str() {
+            "Warrior" => PlayerJob::Warrior,
+            "Wizard" => PlayerJob::Wizard,
+            "Taoist" => PlayerJob::Taoist,
+            other => {
+                return Err(format!(
+                    "[{label}] `construction.job` = {other:?} 不在 Warrior/Wizard/Taoist（§8.7）"
+                ))
+            }
+        },
+        Value::Number(n) => match n.as_i64() {
+            Some(0) => PlayerJob::Warrior,
+            Some(1) => PlayerJob::Wizard,
+            Some(2) => PlayerJob::Taoist,
+            _ => {
+                return Err(format!(
+                    "[{label}] `construction.job` = {n} 不在 0/1/2（§8.7）"
+                ))
+            }
+        },
+        _ => return Err(format!("[{label}] `construction.job` 类型非法（§8.3）")),
+    };
+    let level = construction
+        .get("level")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("[{label}] `construction.level` 缺失/非整数（§8.3）"))?;
+    let equipment = construction
+        .get("equipment")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("[{label}] `construction.equipment` 缺失/非数组（§8.3）"))?;
+    if construction
+        .get("skills")
+        .and_then(Value::as_array)
+        .is_none()
+    {
+        return Err(format!(
+            "[{label}] `construction.skills` 缺失/非数组（§8.3）"
+        ));
+    }
+    if fixture.get("target_level").and_then(Value::as_i64) != Some(level) {
+        return Err(format!(
+            "[{label}] `construction.level` {level} ≠ `target_level` {:?}（§8.3）",
+            fixture.get("target_level")
+        ));
+    }
+    // 登录序无装备、无技能 ⇒ AntiMagic = 1 + 0 = 1。
+    if equipment.is_empty() {
+        if fixture.get("anti_magic").and_then(Value::as_i64) != Some(1) {
+            return Err(format!(
+                "[{label}] `construction.equipment=[]` ⇒ `anti_magic` 必须为 1；实得 {:?}",
+                fixture.get("anti_magic")
+            ));
+        }
+    } else {
+        return Err(format!(
+            "[{label}] `construction.equipment` 非空 ⇒ 装备 MgAvoid 复算未实现（fail-closed；卡 §8.7）"
+        ));
+    }
+    // ---- derived：按构造路径复算，必须与平铺值一致 ----
+    let derived = fixture
+        .get("derived")
+        .ok_or_else(|| format!("[{label}] 金标准缺 `Fixture.derived`（§8.3）"))?;
+    for k in ["max_hp", "max_mp", "dc", "ac", "mac", "max_exp"] {
+        if !derived.get(k).is_some_and(Value::is_i64) {
+            return Err(format!("[{label}] `derived.{k}` 缺失/非整数（§8.3）"));
+        }
+    }
+    let Ok(level_u8) = u8::try_from(level) else {
+        return Err(format!(
+            "[{label}] `construction.level` = {level} 越界（§8.7）"
+        ));
+    };
+    let lv = recalc_level_abilitys(job, level_u8, &LevelValueConfig::default());
+    let got = |k: &str| derived.get(k).and_then(Value::as_i64).unwrap_or(i64::MIN);
+    for (k, want) in [
+        ("max_hp", i64::from(lv.max_hp)),
+        ("max_mp", i64::from(lv.max_mp)),
+        ("dc", i64::from(lv.dc)),
+        ("ac", i64::from(lv.ac)),
+        ("mac", i64::from(lv.mac)),
+    ] {
+        if got(k) != want {
+            return Err(format!(
+                "[{label}] `derived.{k}` = {} 与 (job={:?},level={}) 的公式复算 {want} 不一致（§7）",
+                got(k),
+                job,
+                level_u8
+            ));
+        }
+    }
+    // 平铺 `target_max_hp` 必须等于 derived.max_hp（不是只信 derived）。
+    if fixture.get("target_max_hp").and_then(Value::as_i64) != Some(got("max_hp")) {
+        return Err(format!(
+            "[{label}] `target_max_hp` {:?} ≠ `derived.max_hp` {}（§8.3 复算一致）",
+            fixture.get("target_max_hp"),
+            got("max_hp")
+        ));
+    }
+    let hp = fixture
+        .get("target_hp")
+        .and_then(Value::as_i64)
+        .unwrap_or(i64::MIN);
+    if hp > got("max_hp") {
+        return Err(format!(
+            "[{label}] `target_hp` {hp} > `max_hp` {}（§8.3）",
+            got("max_hp")
+        ));
+    }
+    // `derived.max_exp` = `GetLevelExp(level)` = 冻结表的 `need_exps[level]`（卡 §8.3）。
+    // 该字段**有消费点**：MG-28/29 的 52 帧尾封 `WAbil` 全量（含 `Exp/MaxExp`），不可只查存在。
+    let want_exp = need_exp_for(level)?;
+    if got("max_exp") != want_exp {
+        return Err(format!(
+            "[{label}] `derived.max_exp` = {} 与冻结表 `need_exps[{level}]` = {want_exp} 不一致（§8.3）",
+            got("max_exp")
+        ));
+    }
+    // ---- 独立抽取计数器（卡 §8.3c）：防手改金标准把 `Rng` 截短以凑对 ----
+    let total = fixture
+        .get("rng_total_draws")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            format!("[{label}] 金标准缺 `Fixture.rng_total_draws`（int；缺键即红，§8.3c）")
+        })?;
+    let rng_len = case
+        .get("Rng")
+        .and_then(Value::as_array)
+        .map(|a| a.len() as i64)
+        .ok_or_else(|| format!("[{label}] 金标准缺 `Rng` 数组（§8.3c）"))?;
+    if rng_len != total {
+        return Err(format!(
+            "[{label}] `len(Rng)`={rng_len} ≠ `Fixture.rng_total_draws`={total}：cover_drain 下抽数必须相等（§8.3c）"
+        ));
+    }
+    // ---- `target_hp` 是**施法前**输入（卡 §8.3d）----
+    // 有伤害时：`SM_STRUCK(31)` 的 `param` 是扣血后的 HP、`series` 是本次伤害
+    // ⇒ `param + series` 必须回到施法前值（= `Fixture.target_hp`）。
+    let target_hp = fixture
+        .get("target_hp")
+        .and_then(Value::as_i64)
+        .unwrap_or(i64::MIN);
+    for r in case
+        .get("Receivers")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+    {
+        for f in r
+            .get("Sent")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if f.get("ident").and_then(Value::as_i64) != Some(31) {
+                continue;
+            }
+            let hp_after = f.get("param").and_then(Value::as_i64).unwrap_or(i64::MIN);
+            let dmg = f.get("series").and_then(Value::as_i64).unwrap_or(0);
+            let pre = hp_after.saturating_add(dmg);
+            if pre != target_hp {
+                return Err(format!(
+                    "[{label}] 31 帧 `HP_after({hp_after})+damage({dmg})` = {pre} ≠ `Fixture.target_hp` {target_hp}——`target_hp` 必须是**施法前**输入（§8.3d）；**疑似输入/输出混淆**（施法后值当输入，帧面会整体错位且伪装成真分歧）"
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// 把台账 case 的 `Rng` 换成 `Rng ++ DeliverRng`（`verify` 的 `Rng` 比较面即统一后序列）。
+fn pin_union_rng(case: &Value, label: &str) -> Result<Value, String> {
+    let union = union_rng(case, label)?;
+    let mut c = case.clone();
+    if let Some(obj) = c.as_object_mut() {
+        obj.insert(
+            "Rng".to_string(),
+            Value::Array(union.into_iter().map(Value::from).collect()),
+        );
+        // `RngSites` 与 `Rng` 同源：拼接后 `verify` 的长度自洽检查才成立（`DeliverRngSites` 一并并入）。
+        let sites = |k: &str| -> Vec<Value> {
+            case.get(k)
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default()
+        };
+        let mut all_sites = sites("RngSites");
+        all_sites.extend(sites("DeliverRngSites"));
+        if !all_sites.is_empty() {
+            obj.insert("RngSites".to_string(), Value::Array(all_sites));
+        }
+        obj.remove("DeliverRng");
+        obj.remove("DeliverRngSites");
+    }
+    Ok(c)
+}
+
 fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
-    let anti_magic = golden.get("anti_magic").cloned().unwrap_or(Value::from(0));
+    // **不**把金标准顶层 `anti_magic` 搬进比较对象：该字段是构造参数（`fireball` 顶层仍是 3），
+    // 生效值在**逐 case** 的 `Fixture.anti_magic`（登录序 1），已由 `check_golden_contract` 断言。
+    // 搬过来会把金标准与自身比较（恒等），制造"查过"的假象。
     let mut cases = Vec::new();
     for label in labels {
         let path = dir.join(format!("{stem}_{label}.json"));
@@ -382,9 +700,14 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
             Some(*label),
             "[{label}] 台账 Label 不符"
         );
-        cases.push(arr[0].clone());
+        // **统一 RNG 判据**：金标准必须 cover_drain；台账 Rng 与 DeliverRng 拼接后参与比较。
+        if let Err(msg) = check_golden_contract(golden, label) {
+            panic!("{msg}");
+        }
+        let pinned = pin_union_rng(&arr[0], label).unwrap_or_else(|m| panic!("{m}"));
+        cases.push(pinned);
     }
-    let rust = serde_json::json!({"magic_id": magic_id, "anti_magic": anti_magic, "cases": cases});
+    let rust = serde_json::json!({"magic_id": magic_id, "cases": cases});
     if let Err(errs) = verify(golden, &rust) {
         panic!(
             "真实台账与金标准不等（{} 条）：\n{}",
@@ -392,6 +715,350 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
             errs.join("\n")
         );
     }
+}
+
+/// 牙用：把合成的 rust cases 走**与 `real_ledger_verify_labels` 同一条**判据路径
+/// （cover_drain 门 → `Rng ++ DeliverRng` 拼接 → `verify`）。
+fn verify_union(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
+    let mut out_cases = Vec::new();
+    let cases = rust
+        .get("cases")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for c in &cases {
+        let label = c
+            .get("Label")
+            .and_then(Value::as_str)
+            .unwrap_or("?")
+            .to_string();
+        if let Err(msg) = check_golden_contract(golden, &label) {
+            return Err(vec![msg]);
+        }
+        match pin_union_rng(c, &label) {
+            Ok(v) => out_cases.push(v),
+            Err(m) => return Err(vec![m]),
+        }
+    }
+    let r = serde_json::json!({
+        "magic_id": rust.get("magic_id").cloned().unwrap_or(Value::from(0)),
+        "anti_magic": rust.get("anti_magic").cloned().unwrap_or(Value::from(0)),
+        "cases": out_cases,
+    });
+    verify(golden, &r)
+}
+
+fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
+    let total = rng.as_array().map_or(0, |a| a.len() as i64);
+    // 合成夹具按**统一 schema** 填全（Warrior L20 登录序：MaxHP=224/MaxMP=81/DC=0x0403/AC=0x0200）。
+    let mut fixture = serde_json::json!({
+        "login_order": true,
+        "anti_magic": 1,
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 224,
+        "reachability": "reachable",
+        "construction": { "job": 0, "level": 20, "equipment": [], "skills": [] },
+        "derived": {
+            "max_hp": 224, "max_mp": 81, "dc": 0x0403, "ac": 0x0200, "mac": 0,
+            "max_exp": need_exp_for(20).unwrap_or_else(|m| panic!("{m}")),
+        },
+        "rng_total_draws": total,
+    });
+    if let Some(m) = mode {
+        fixture["rng_mode"] = Value::from(m);
+    } else {
+        fixture["rng_mode"] = Value::from("cover_drain"); // 牙③用"缺失"以外的场景单独构造
+        fixture.as_object_mut().unwrap().remove("rng_mode");
+    }
+    serde_json::json!({
+        "magic_id": 33,
+        "cases": [{ "Label": label, "Fixture": fixture, "Rng": rng, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": [] }],
+    })
+}
+
+fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
+    let mut c = serde_json::json!({
+        "Label": label, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": []
+    });
+    // 台账形态：`RngSites` 与 `Rng` 等长（`verify` 有长度自洽检查）；`DeliverRngSites` 同理。
+    let sites = |n: usize| -> Value {
+        Value::Array(
+            (0..n)
+                .map(|_| Value::from("crates/world-bevy/src/magic_effect.rs:1"))
+                .collect(),
+        )
+    };
+    let cast_n = rng.as_array().map_or(0, |a| a.len());
+    c["RngSites"] = sites(cast_n);
+    c["Rng"] = rng;
+    if let Some(d) = deliver {
+        let dn = d.as_array().map_or(0, |a| a.len());
+        c["DeliverRngSites"] = sites(dn);
+        c["DeliverRng"] = d;
+    }
+    serde_json::json!({ "magic_id": 33, "cases": [c] })
+}
+
+/// **牙⑦：`target_hp` 必须是施法前输入**（卡 §8.3d）。合成一个 31 帧（HP=85, damage=15）：
+/// `target_hp=100`（施法前）绿；`target_hp=209`（施法后值当输入）红并点名。
+#[test]
+fn tooth_target_hp_must_be_pre_cast() {
+    let label = "s1";
+    let mk = |target_hp: i64| {
+        let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+        g["cases"][0]["Fixture"]["target_hp"] = Value::from(target_hp);
+        g["cases"][0]["Receivers"] = serde_json::json!([{
+            "Who": "target",
+            "Rm": [],
+            "Sent": [{ "ident": 31, "param": 85, "tag": 224, "series": 15, "tail": "" }],
+        }]);
+        g
+    };
+    assert!(
+        check_golden_contract(&mk(100), label).is_ok(),
+        "target_hp=100（施法前）应绿"
+    );
+    let err = check_golden_contract(&mk(209), label).unwrap_err();
+    assert!(
+        err.contains("target_hp") && err.contains("施法前") && err.contains("疑似输入/输出混淆"),
+        "target_hp=209（施法后值）必须红并点名：{err}"
+    );
+}
+
+/// **牙⑥：含 `WAbil` 的 52 尾里 `Exp/MaxExp` 字节在比较面内**（卡 §8.7）。
+///
+/// `SM_ABILITY(52)` 的尾 = `EDCode.EncodeMessage(WAbil)`（40B：`Exp` 在 24..28、`MaxExp` 在 28..32），
+/// 比较器对 `tail` 做严格串比较 ⇒ 这两个字段天然在判定面内。本牙取真实 golden 的 52 尾，
+/// 分别翻掉 `Exp`/`MaxExp` 的一个字节再编码回串，`verify` 必须红在 `tail`。
+#[test]
+fn tooth_wabil_exp_bytes_compared_red() {
+    let golden = golden_file("hangmajinbub.json");
+    let cases = golden.get("cases").and_then(Value::as_array).unwrap();
+    let s1 = cases
+        .iter()
+        .find(|c| c.get("Label").and_then(Value::as_str) == Some("s1"))
+        .expect("hangmajinbub 必须有 s1");
+    // 找任意接收者里的 52 帧
+    let (ri, fi, tail) = {
+        let mut found = None;
+        for (ri, r) in s1
+            .get("Receivers")
+            .and_then(Value::as_array)
+            .unwrap()
+            .iter()
+            .enumerate()
+        {
+            for (fi, f) in r
+                .get("Sent")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .enumerate()
+            {
+                if f.get("ident").and_then(Value::as_i64) == Some(52) {
+                    found = Some((
+                        ri,
+                        fi,
+                        f.get("tail").and_then(Value::as_str).unwrap().to_string(),
+                    ));
+                    break;
+                }
+            }
+            if found.is_some() {
+                break;
+            }
+        }
+        found.expect("golden 必须含 SM_ABILITY(52) 帧")
+    };
+    let bytes = mir2_protocol::edcode::decode(tail.as_bytes());
+    assert_eq!(bytes.len(), 40, "52 尾必须解出 40B WAbil");
+    let mut rust_case = s1.clone();
+    let with_tail = |c: &mut Value, new_tail: &str| {
+        c["Receivers"][ri]["Sent"][fi]["tail"] = Value::from(new_tail);
+    };
+    for (name, off) in [("Exp", 24usize), ("MaxExp", 28usize)] {
+        let mut b = bytes.clone();
+        b[off] ^= 0xFF;
+        let t = String::from_utf8(mir2_protocol::edcode::encode(&b)).expect("EDCode 输出是 ASCII");
+        with_tail(&mut rust_case, &t);
+        let r = serde_json::json!({"magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
+                                   "cases": [rust_case.clone()]});
+        let g = serde_json::json!({"magic_id": golden.get("magic_id").cloned().unwrap_or(Value::from(0)),
+                                   "cases": [s1.clone()]});
+        let err = verify(&g, &r).unwrap_err();
+        assert!(
+            err.iter().any(|e| e.contains("tail")),
+            "翻掉 {name} 字节必须红在 tail：{err:?}"
+        );
+        // 复原以便下一字段独立测试
+        with_tail(&mut rust_case, &tail);
+    }
+}
+
+/// **牙⑤（契约键）**：`reachability` 缺失或非 `reachable`、或缺任一状态键 ⇒ 红。
+#[test]
+fn tooth_contract_missing_keys_red() {
+    let label = "s1";
+    // 缺 reachability
+    let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g["cases"][0]["Fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("reachability");
+    let msg = check_golden_contract(&g, label).unwrap_err();
+    assert!(msg.contains("reachability"), "必须点名 reachability：{msg}");
+    // reachability = unverified
+    let mut g2 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g2["cases"][0]["Fixture"]["reachability"] = Value::from("unverified");
+    let msg2 = check_golden_contract(&g2, label).unwrap_err();
+    assert!(
+        msg2.contains("reachability"),
+        "必须点名 reachability：{msg2}"
+    );
+    // 缺 anti_magic
+    let mut g3 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g3["cases"][0]["Fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("anti_magic");
+    let msg3 = check_golden_contract(&g3, label).unwrap_err();
+    assert!(msg3.contains("anti_magic"), "必须点名 anti_magic：{msg3}");
+    // 缺 construction
+    let mut g4 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g4["cases"][0]["Fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("construction");
+    let msg4 = check_golden_contract(&g4, label).unwrap_err();
+    assert!(
+        msg4.contains("construction"),
+        "必须点名 construction：{msg4}"
+    );
+    // derived 与公式复算不一致（max_hp 改 100）
+    let mut g5 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g5["cases"][0]["Fixture"]["derived"]["max_hp"] = Value::from(100);
+    let msg5 = check_golden_contract(&g5, label).unwrap_err();
+    assert!(msg5.contains("max_hp"), "必须点名 derived.max_hp：{msg5}");
+    // 平铺 target_max_hp 与 derived.max_hp 不一致
+    let mut g6 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g6["cases"][0]["Fixture"]["target_max_hp"] = Value::from(100);
+    let msg6 = check_golden_contract(&g6, label).unwrap_err();
+    assert!(
+        msg6.contains("target_max_hp"),
+        "必须点名 target_max_hp：{msg6}"
+    );
+    // 装备非空 ⇒ fail-closed
+    let mut g7 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g7["cases"][0]["Fixture"]["construction"]["equipment"] = serde_json::json!(["MgAvoid=1"]);
+    let msg7 = check_golden_contract(&g7, label).unwrap_err();
+    assert!(msg7.contains("equipment"), "必须点名 equipment：{msg7}");
+    // 缺 rng_total_draws
+    let mut g8 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g8["cases"][0]["Fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("rng_total_draws");
+    let msg8 = check_golden_contract(&g8, label).unwrap_err();
+    assert!(
+        msg8.contains("rng_total_draws"),
+        "必须点名 rng_total_draws：{msg8}"
+    );
+    // rng_total_draws 与 len(Rng) 不等（手改金标准截短 Rng 的形态）
+    let mut g9 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g9["cases"][0]["Fixture"]["rng_total_draws"] = Value::from(5);
+    let msg9 = check_golden_contract(&g9, label).unwrap_err();
+    assert!(
+        msg9.contains("rng_total_draws"),
+        "必须点名 rng_total_draws：{msg9}"
+    );
+    // 正对照：齐全 ⇒ 绿
+    let ok = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    assert!(check_golden_contract(&ok, label).is_ok(), "齐全应绿");
+}
+
+/// **正对照**：`golden.Rng = rust.Rng ++ rust.DeliverRng` ⇒ 绿（证明判据不是恒红）。
+#[test]
+fn union_rng_positive_control_green() {
+    let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
+    let r = synth_rust(
+        "s1",
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([3, 4])),
+    );
+    let res = verify_union(&g, &r);
+    assert!(res.is_ok(), "拼接一致必须绿：{res:?}");
+}
+
+/// **牙①**：删 `DeliverRng` 一条 ⇒ 拼接变短 ⇒ 红。
+#[test]
+fn tooth_union_drop_deliver_entry_red() {
+    let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
+    let r = synth_rust(
+        "s1",
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([3])),
+    );
+    let err = verify_union(&g, &r).unwrap_err();
+    // 诊断里的大小写是 `RNG 行数不等`/`RNG[i] 不等`：按不区分大小写匹配 RNG。
+    assert!(
+        err.iter().any(|e| e.to_lowercase().contains("rng")),
+        "必须红在 Rng 序列：{err:?}"
+    );
+}
+
+/// **牙②**：改 `DeliverRng` 任一值 ⇒ 红。
+#[test]
+fn tooth_union_deliver_value_changed_red() {
+    let g = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), Some("cover_drain"));
+    let r = synth_rust(
+        "s1",
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([3, 9])),
+    );
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.to_lowercase().contains("rng")),
+        "必须红在 Rng 值：{err:?}"
+    );
+}
+
+/// **牙③**：旧口径（`freeze_at_dospell` / 无 `rng_mode`）的金标准 ⇒ 直接红。
+#[test]
+fn tooth_union_legacy_golden_red() {
+    let g = synth_golden(
+        "s1",
+        serde_json::json!([1, 2, 3, 4]),
+        Some("freeze_at_dospell"),
+    );
+    let r = synth_rust(
+        "s1",
+        serde_json::json!([1, 2]),
+        Some(serde_json::json!([3, 4])),
+    );
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("cover_drain")),
+        "必须点名 cover_drain：{err:?}"
+    );
+    let g2 = synth_golden("s1", serde_json::json!([1, 2, 3, 4]), None);
+    let err2 = verify_union(&g2, &r).unwrap_err();
+    assert!(
+        err2.iter().any(|e| e.contains("cover_drain")),
+        "缺 rng_mode 同样红：{err2:?}"
+    );
+}
+
+/// **牙④**：整列 `DeliverRng` 消失（不记了）⇒ 红，**不允许默认空**。
+#[test]
+fn tooth_union_missing_deliver_column_red() {
+    let g = synth_golden("s1", serde_json::json!([1, 2]), Some("cover_drain"));
+    let r = synth_rust("s1", serde_json::json!([1, 2]), None);
+    let err = verify_union(&g, &r).unwrap_err();
+    assert!(
+        err.iter().any(|e| e.contains("DeliverRng")),
+        "必须点名 DeliverRng 缺列：{err:?}"
+    );
 }
 
 fn real_ledger_verify(stem: &str, golden: &Value) {
@@ -547,6 +1214,10 @@ fn real_rust_ledger_fireball5() {
 // 比较器自检：金标准逐支喂回（identity）+ 三条篡改必须红 + 防空转必须红。
 // ---------------------------------------------------------------------------
 fn golden_file(name: &str) -> Value {
+    assert!(
+        !name.starts_with("legacy/"),
+        "`legacy/` 目录的 golden 只作历史留档，**不作 verified 依据**（卡 §7/§8.3）：{name}"
+    );
     let path = format!("{}/golden/magic/{name}", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(path).expect("金标准必须存在（缺文件即红）");
     serde_json::from_str(&text).expect("金标准必须是合法 JSON")
