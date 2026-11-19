@@ -1,0 +1,10 @@
+# derived 门负对照（真跑，§20）
+# 注入一个手填不可达 max_hp 的临时 case（derived_negative_control: ReachAbil(1,10,8) 后置 MaxHP=9999），
+# 目标输出为不存在的临时文件 E:/UserTemp/negctl_shouldnotexist.json（证明"拒生成、不落盘"）。
+$ dotnet eat-probe.dll E:/UserTemp/negctl_shouldnotexist.json
+DERIVED_MISMATCH case=derived_negative_control level=1 declared=(9999,15) derived=(19,15)
+NEGCTL_RC=2
+TEMP_TARGET_EXISTS=NO_GOOD      # 临时目标未创建 => 未落盘
+FIXTURE_SHA_BEFORE=9456c2afb339a02fe75a4fc57d2414558eed68bdb862fb26f9412c2eed13eca0
+FIXTURE_SHA_AFTER =9456c2afb339a02fe75a4fc57d2414558eed68bdb862fb26f9412c2eed13eca0  # 真夹具未动
+# 注入后已从 Program.cs 移除（grep derived_negative_control = 0），重新 build 0 错。

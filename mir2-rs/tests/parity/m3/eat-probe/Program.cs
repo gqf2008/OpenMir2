@@ -216,29 +216,49 @@ internal static class Program
         MaxHandWeight = a.MaxHandWeight,
     };
 
-    private static Ability BaseAbil(ushort hp, ushort mp, ushort maxHp, ushort maxMp) => new Ability
+    /// <summary>items 侧 derived 机检核心：用**真身** `RecalcLevelAbilitys()`+`RecalcAbilitys()`（Job=Warrior、无装备）
+    /// 按 `level` 复算等级派生的 `WAbil.MaxHP/MaxMP`（= oracle 登录路径 `UserLogon` 的两连调结果）。
+    /// 对等 `MagicGolden/FixtureContract.cs` 的 `derived` 门（rc=2 之一）；缺装备时 `Abil` 与 `WAbil` 等价。</summary>
+    private static (ushort maxHp, ushort maxMp) DeriveWarriorMaxHpMp(int level)
     {
-        Level = 1,
-        Reserved1 = 0,
-        AC = 0,
-        MAC = 0,
-        DC = 0x0101,
-        MC = 0,
-        SC = 0,
-        HP = hp,
-        MP = mp,
-        MaxHP = maxHp,
-        MaxMP = maxMp,
-        Reserved2 = 0,
-        ExpCount = 0,
-        ExpMaxCount = 0,
-        Exp = 0,
-        MaxExp = 10,
-        Weight = 0,
-        MaxWeight = 50,
-        MaxWearWeight = 15,
-        MaxHandWeight = 12,
-    };
+        var po = new PlayObject
+        {
+            Race = (byte)ActorRace.Play,
+            Job = PlayerJob.Warrior,
+            Envir = new Envirnoment(),
+            ItemList = new List<UserItem>(),
+            MagicList = new List<UserMagic>(),
+            Abil = new Ability { Level = (byte)level },
+        };
+        po.WAbil = CloneAbility(po.Abil);
+        po.RecalcLevelAbilitys();
+        po.RecalcAbilitys();
+        return (po.WAbil.MaxHP, po.WAbil.MaxMP);
+    }
+
+    /// <summary>构造**可达** Ability：`MaxHP/MaxMP`（及 AC/DC/MaxWeight 等等级派生字段）由真身
+    /// `RecalcLevelAbilitys()+RecalcAbilitys()` 按 `level` 派生（**不硬编码**）；HP/MP 用入参（须 ≤ 派生 Max）。
+    /// 取代旧 `BaseAbil(hp,mp,maxHp,maxMp)`（旧值 `level=1` 却写 `max_hp=100/80`，生产不可达）。</summary>
+    private static Ability ReachAbil(int level, ushort hp, ushort mp)
+    {
+        var po = new PlayObject
+        {
+            Race = (byte)ActorRace.Play,
+            Job = PlayerJob.Warrior,
+            Envir = new Envirnoment(),
+            ItemList = new List<UserItem>(),
+            MagicList = new List<UserMagic>(),
+            Abil = new Ability { Level = (byte)level },
+        };
+        po.WAbil = CloneAbility(po.Abil);
+        po.RecalcLevelAbilitys();
+        po.RecalcAbilitys();
+        var a = CloneAbility(po.WAbil);
+        a.HP = hp;
+        a.MP = mp;
+        a.MaxExp = 10; // 与原 BaseAbil 默认一致；exp 用例随后改 10000
+        return a;
+    }
 
     /// <summary>反射取 `ActorEntity.MsgQueue`（`protected readonly PriorityQueue&lt;SendMessage,byte&gt;`）。</summary>
     private static object GetMsgQueue(object po)
@@ -352,6 +372,23 @@ internal static class Program
         }
         po.Envir.Flag.boNODRUG = ctx.noDrug;
         SystemShare.FunctionNPC = ctx.functionNpc ? NpcProxy.CreateMerchant() : null;
+
+        // items 侧 derived 机检（对等 MagicGolden/FixtureContract.derived，rc=2）：按本 case 的 level 用**真身**
+        // `RecalcLevelAbilitys()+RecalcAbilitys()` 复算 `WAbil.MaxHP/MaxMP`，须 == 向量声明；不等 ⇒ stderr +
+        // `Environment.Exit(2)`，**不落盘**（此处在写盘之前、所有 case 构建阶段）。整段用完恢复 po.Abil/WAbil。
+        // 注意：**在独立 throwaway po 上**复算（`DeriveWarriorMaxHpMp`），绝不在 eat po 上调 Recalc——
+        // `RecalcLevelAbilitys` 会 `SendMsg(RM_ABILITY)`、`RecalcAbilitys` 会改 `CharStatus`，在 eat po 上跑会
+        // 污染其消息队列/状态（曾导致每例多出 SM 前置 RM_CHARSTATUSCHANGED(10139)）。
+        {
+            var (dHp, dMp) = DeriveWarriorMaxHpMp(wabilPre.Level);
+            if (dHp != wabilPre.MaxHP || dMp != wabilPre.MaxMP)
+            {
+                Console.Error.WriteLine(
+                    $"DERIVED_MISMATCH case={name} level={wabilPre.Level} "
+                    + $"declared=({wabilPre.MaxHP},{wabilPre.MaxMP}) derived=({dHp},{dMp})");
+                Environment.Exit(2);
+            }
+        }
 
         var mi = typeof(PlayObject).GetMethod("ClientUseItems", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("PlayObject.ClientUseItems");
@@ -603,74 +640,74 @@ internal static class Program
 
         cases.Add(RunCase(table, net, "eat_ok_shape1_fixed", new Ctx(),
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 2, hp: 2, mp: 2), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape1_clamp", new Ctx(),
             new List<Spec> { S(1, 2002) }, 1, "hp_mp_big",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 2, hp: 2, mp: 2), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape3_percent", new Ctx(),
             new List<Spec> { S(1, 2003) }, 1, "hp_mp_percent",
-            BaseAbil(hp: 50, mp: 40, maxHp: 101, maxMp: 55), 0, 0, false));
+            ReachAbil(level: 4, hp: 10, mp: 10), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape2_unlock", new Ctx(),
             new List<Spec> { S(1, 2004) }, 1, "unlock",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_shape0_inc_pool", new Ctx(),
             new List<Spec> { S(1, 2005) }, 1, "inc_pool",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 3, 4, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
         cases.Add(RunCase(table, net, "eat_ok_shape0_inc_zero", new Ctx(),
             new List<Spec> { S(1, 2006) }, 1, "inc_zero",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 3, 4, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 3, 4, false));
         cases.Add(RunCase(table, net, "eat_ok_weight_from_remaining_bag", new Ctx(),
             new List<Spec> { S(7, 2008), S(1, 2001), S(8, 2007) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_first_makeindex_wins", new Ctx(),
             new List<Spec> { S(1, 2001), S(1, 2003) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_not_found", new Ctx(),
             new List<Spec> { S(1, 2001) }, 99, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_stdmode_other", new Ctx(),
             new List<Spec> { S(1, 2007) }, 1, "other_mode",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_template_missing", new Ctx(),
             new List<Spec> { S(1, 2009) }, 1, "missing",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_can_use_item_false", new Ctx { canUseItem = false },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_dead", new Ctx { dead = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_stdmode2_noop", new Ctx(),
             new List<Spec> { S(1, 2011) }, 1, "noop",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_no_recalc", new Ctx(),
             new List<Spec> { S(1, 2012) }, 1, "food_small",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // 跨档 ⇒ `RefMyStatus()` ⇒ `RecalcAbilitys()`。运行时 `Abil` 已是**登录时的等级派生值**
         //（`PlayObject.cs:1308` 先跑 `RecalcLevelAbilitys()`）⇒ 这里用 level=1 战士的 19/15；
         // 且 `HP/MP <= MaxHP/MaxMP`（oracle 登录路径的 Play 分类钳位保证），否则会触发
         // `PlayObject.RecalcAbilitys` 尚未建模的 `WAbil.HP > MaxHP ⇒ HP=MaxHP` 尾钳。
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_recalc", new Ctx(),
             new List<Spec> { S(1, 2013) }, 1, "food_recalc",
-            BaseAbil(hp: 15, mp: 15, maxHp: 19, maxMp: 15), 0, 0, false));
+            ReachAbil(level: 1, hp: 15, mp: 15), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_ok_stdmode1_hunger_clamp", new Ctx { hungerStatus = 4950 },
             new List<Spec> { S(1, 2014) }, 1, "food_clamp",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_nodrug_stdmode1", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2013) }, 1, "food_recalc",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         cases.Add(RunCase(table, net, "eat_fail_nodrug_no_consume", new Ctx { noDrug = true },
             new List<Spec> { S(1, 2001) }, 1, "hp_mp_fixed",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // StdMode 31：`UseStdModeFunItem`（`PlayObject.Base.cs:1072`）= `SystemShare.FunctionNPC != null`。
         // 存在 ⇒ `GotoLable("@StdModeFunc" + AniCount)` 后返回 true ⇒ 吃 + SM_EAT_OK + RM_WEIGHTCHANGED。
         cases.Add(RunCase(table, net, "eat_ok_stdmode31_funitem", new Ctx { functionNpc = true },
             new List<Spec> { S(1, 2015) }, 1, "funitem_dispatch",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // FunctionNPC 缺失 ⇒ `UseStdModeFunItem` 返回 false ⇒ 不吃。
         cases.Add(RunCase(table, net, "eat_fail_stdmode31_no_functionnpc", new Ctx { functionNpc = false },
             new List<Spec> { S(1, 2015) }, 1, "funitem_dispatch",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // StdMode 31 / AniCount==0：解包需 `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）。
         // 背包 42 件 ⇒ 42+5=47 > 46 ⇒ 容量守卫失败（未到 `ClientUseItemsGetUnBindItems`）⇒ 不吃。
         var unbindFullBag = new List<Spec> { S(1, 2016) };
@@ -680,25 +717,24 @@ internal static class Program
         }
         cases.Add(RunCase(table, net, "eat_fail_stdmode31_unbind_bag_full", new Ctx(),
             unbindFullBag, 1, "unbind_full",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // IT-18 成功路径：背包仅 1 件解包件（2016，Shape=1/AniCount=0）⇒ 1+6-1=6 <= 46 ⇒
         // Dispose+RemoveAt 后 `ClientUseItemsGetUnBindItems("unbind_item", 6)` 建 6 件 2017，
         // 每件 `SendAddItem` ⇒ 6 条 SM_ADDITEM(200) 即时帧，再 SM_EAT_OK + RM_WEIGHTCHANGED。
         cases.Add(RunCase(table, net, "eat_ok_stdmode31_unbind_success", new Ctx(),
             new List<Spec> { S(1, 2016) }, 1, "unbind_full",
-            BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+            ReachAbil(level: 1, hp: 10, mp: 8), 0, 0, false));
         // IT-08：StdMode3/Shape13 `GetExp(DuraMax=100)` **非升级支**（`MaxExp=10000` ⇒ `0+100<10000` 不升级）。
         // 观测新增 `abil_exp`/`body_luck*`（追加字段）；`WAbil.Exp` 保持陈旧（GetExp 只改 Abil）。
-        var expBookAbil = BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80);
+        var expBookAbil = ReachAbil(level: 1, hp: 10, mp: 8);
         expBookAbil.MaxExp = 10000;
         cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_nonlevelup", new Ctx(),
             new List<Spec> { S(1, 2018) }, 1, "exp_book", expBookAbil, 0, 0, false));
         // IT-08 **升级支**：Exp=9990/MaxExp=10000/DuraMax=100 ⇒ 9990+100>=10000 升级；pump 三条 RM
         // （RM_WINEXP/RM_LEVELUP/RM_HEALTHSPELLCHANGED）⇒ golden 带玩家可见 SM 三帧。需生产 Exps.conf（已由 EnsureConfFiles 载入）。
-        var expUpAbil = BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80);
+        var expUpAbil = ReachAbil(level: 5, hp: 10, mp: 10);
         expUpAbil.MaxExp = 10000;
         expUpAbil.Exp = 9990;
-        expUpAbil.Level = 5;
         cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_levelup", new Ctx { actorId = 7777 },
             new List<Spec> { S(1, 2018) }, 1, "exp_book", expUpAbil, 0, 0, false, pump: true));
 

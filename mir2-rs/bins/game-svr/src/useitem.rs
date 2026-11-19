@@ -1359,8 +1359,9 @@ mod tests {
         );
     }
 
-    /// Shape 3 的百分比是 `Round(...AwayFromZero)`；夹具的 `max_hp=101/ac=5`（5.05→5）与
-    /// `max_mp=55/mac=10`（5.5→**6**）钉住「半数进位」这一口径（改成截断/银行家舍入必红）。
+    /// Shape 3 的百分比是 `Round(...AwayFromZero)`；夹具的 `max_hp=37/ac=5`（1.85→2）与
+    /// `max_mp=25/mac=10`（**2.5→3**，银行家舍入得 2）钉住「半数远离零」这一口径
+    /// （改截断/银行家舍入必红；旧值 5.5 两种舍入都得 6，无区分力）。
     #[test]
     fn shape3_percent_rounds_away_from_zero() {
         let doc = fixture();
@@ -1397,8 +1398,11 @@ mod tests {
         let mut item_number = 0;
         let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
         assert!(out.eaten);
-        assert_eq!(state.wabil.hp, 55, "101/100*5 = 5.05 ⇒ +5");
-        assert_eq!(state.wabil.mp, 46, "55/100*10 = 5.5 ⇒ +6（半数远离零）");
+        assert_eq!(state.wabil.hp, 12, "37/100*5 = 1.85 ⇒ +2");
+        assert_eq!(
+            state.wabil.mp, 13,
+            "25/100*10 = 2.5 ⇒ +3（半数远离零；银行家舍入=2）"
+        );
     }
 
     /// `BoCanUseItem == false`：只排一条 `RM_MENU_OK`（`nParam1 = ActorId`）并落 `SM_EAT_FAIL`，
