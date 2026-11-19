@@ -108,6 +108,7 @@ public static class Program
             if (name == "healing") return HealingBatch();
             if (name == "firecharm") return AntiMagicBatch(new MagicSpec { Key = "firecharm", MagicId = 13, MagicName = "FireCharm", ArmRingAmulet = true });
             if (name == "hbfireball") return AntiMagicBatch(new MagicSpec { Key = "hbfireball", MagicId = 44, MagicName = "HbFireBall", UserMagicLevel = 3 });
+            if (name == "fireball5") return AntiMagicBatch(new MagicSpec { Key = "fireball-5", MagicId = 5, MagicName = "FireBall2" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
