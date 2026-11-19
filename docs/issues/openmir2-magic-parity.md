@@ -1008,3 +1008,19 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   在 `login_order=false` 的可达手设件上做两模式对照；相同者必须给结构性依据（无延时受击 / 排水 `Operate` 不调 RNG），
   落到符号锚——缺依据即判非法声明。
 - 本表只落实测与归因，**不改变任何条目 status**；入库件替换与比较器收紧归 M53。
+
+## 22. M52.1：`fireball` 的 seam 证据（应 QA 条件②）
+
+- **装置**：`FireballCase(rngMode, loginOrder)` + `--fireball-rng-mode/--fireball-login-order`；cover 路径的
+  `draws` 取在排水之后（符号：`RunFireball` 内 `if (rngMode != "freeze_at_dospell")` 块位于排水循环之后）；
+  `login_order=true` 时：`RecalcLevelAbilitys()` → `Abil.MaxExp = GetLevelExp(Level)`（冻结表）→
+  `RecalcAbilitys()` → `WAbil.HP = MaxHP` → `DrainRaw()`。
+- **记录面**：`LoggingRandom.TotalDraws`（不被 `Restore` 清零）；golden 记 `rng_total_draws` 与 `rng_recorded`；
+  生成器断言 cover 下 `Rng.Count == rng_total_draws`（不等 ⇒ rc=2）。
+- **结构性事实（解释，不是证据）**：火球自身 5 次抽取全在施法期（`MagicManager` 的伤害/命中抽），排水期
+  handler（`RM_MAGSTRUCK` 等）不调 RNG ⇒ 本 case 在 cover/freeze 下 `Rng` 相同（`5,0,0,0,0`）。
+- **证据（自测探针，不进 golden）**：排水前注入一次抽取——cover 记到（`5→6`）、freeze 不记（`5→5`）；
+  变异 T2（把 `Restore` 挪到排水前）⇒ `cover_caught=False`、自测红；还原后 sha `1e6c00c6…` 相等、复绿。
+- **MaxExp 门两例**：设 `GetLevelExp(20)=6000` ⇒ 绿；留 ctor `50` ⇒ rc=2。
+- 旧合成件（`login_order=false` + `freeze_at_dospell`，`anti_magic=3`/`target_max_hp=100`）可生成，
+  标 `legacy_artifact`；登录序主件（`anti_magic=1`、`max_hp=224`、`rng_total_draws=5`）可生成。
