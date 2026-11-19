@@ -19,7 +19,7 @@
       "path": "E:\\MirServer\\M2GameSvr\\Map\\0.map",
       "sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7"
     },
-    "repo_head": "f55acce568a7b50d9da7103d4b55e30ceee6a663"
+    "repo_head": "d1d5e3985bba8cadbe518578ddd13ab9fb4785ed"
   },
   "fixture_spec": {
     "magic_name": "FireSword",
@@ -129,9 +129,9 @@
             },
             {
               "ident": 53,
-              "param": 0,
+              "param": 419,
               "tag": 90,
-              "series": 0,
+              "series": 419,
               "tail": ""
             },
             {
