@@ -370,6 +370,20 @@ fn real_rust_ledger_parity() {
     real_ledger_verify("fireball", &golden());
 }
 
+/// **11/45 雷电（`SKILL_LIGHTENING` / `SKILL_45`）真实台账 → 判定面**；
+/// 金标准 `golden/magic/lightning-11.json` / `lightning-45.json`。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::lightning11_parity_*）生成真实台账"]
+fn real_rust_ledger_lightning11() {
+    real_ledger_verify("lightning11", &golden_file("lightning-11.json"));
+}
+
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::lightning45_parity_*）生成真实台账"]
+fn real_rust_ledger_lightning45() {
+    real_ledger_verify("lightning45", &golden_file("lightning-45.json"));
+}
+
 /// **id=5（`SKILL_FIREBALL2`）真实台账 → 判定面**；金标准 `golden/magic/fireball-5.json`。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::fireball5_parity_*）生成真实台账"]

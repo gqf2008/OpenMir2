@@ -535,7 +535,7 @@ ActorId 段 1001../2001../3001..、`M2Share.NetChannel` 旁路、排水「抽空
 
 | 分支 | 产物 | 状态 |
 |---|---|---|
-| 11/45 雷电 | `golden/magic/lightning-11.json`、`lightning-45.json` | **已产出（C#）**；Rust 未接 |
+| 11/45 雷电 | `golden/magic/lightning-11.json`、`lightning-45.json` | **已接 Rust 驱动并升格**（MG-19 / MG-54，`basis=semantic`） |
 | 2 治愈 | `golden/magic/healing.json` | **已产出（C#）**；Rust 未接。三支 = heal/full/self（本支**无** AntiMagic 骰） |
 | 13 火符 | `golden/magic/firecharm.json` | **已产出（C#）**；Rust 未接 |
 | 44 灭天火 | `golden/magic/hbfireball.json` | **已产出（C#）**；Rust 未接 |
