@@ -198,3 +198,114 @@
 - **行尾归一（卡面记录）**：`eat_vectors.json` 原 blob 为 CRLF；按 `mir2-rs/.gitattributes` 的
   `*.json eol=lf` 归一为 LF。**语义改动仅**：+模板 `2017`、+用例 `eat_ok_stdmode31_unbind_success`、
   各例新增 `added_items`（旧例为 `[]`）、新增 `unbind` 表与 `drain` 字段；其余为行尾归一。
+
+## 9. items harness 状态扩展（`opc-07` 2026-11-20 路线1）+ 交付表
+
+> **显著事实（第 2 次「实现归类」修正）**：`use_item` 是**纯决策函数**——只产出 `immediate_frames`/`notices`/
+> `item_list` 迁移/`added_items`，**不做位置搬运**。IT-09/10/11/13 的 `EatUseItems→BaseObjectMove`（+ 随机点 `Rng`）
+> 是**宿主行为**，纯函数不覆盖，需宿主级 move 夹具对拍。（第 1 次修正：Rust 无 cap 排空实现，见 §4.3。）
+
+一次扩展、逐条 verified 前的前置：把 oracle `PlayObject` 上散落、`UseItemActorState` 原未承载的状态集中为
+`ItemsExtraState`，作为 `UseItemActorState.extra`（`useitem.rs`）。分批（slice）提交，每笔单独证明零回归；均**复用宿主已有原语
+（不重写）**：`add_body_luck`、实体 `extra_abil` 组件 + `apply_extra_abil`、`sg.use_items`、
+`mir2_formula::level_ability::recalc_level_abilitys`、`HasLevelUp`/`GetLevelExp`、`pvp_level`、`is_castle_member`、`smframe::send_add_magic`。
+
+### 9.1 交付表（**分两组**：纯状态组 / move 组）—— QA 判 `verified` 覆盖范围的依据
+
+**纯状态组（IT-07/08/12/14/15/17）——走现有 eat 夹具 + `ItemsExtraState`**
+
+| 字段 | 是否 wire | 宿主来源 | 用它的条目 |
+|---|---|---|---|
+| `body_luck` / `body_luck_level` | **✓**（slice 1） | `sg.equip.body_luck(_level)`，`add_body_luck` | IT-08 |
+| `extra_abil` / `_flag` / `_times`（`[_;7]`） | **✓**（slice 2） | 实体组件 `extra_abil(_flag/_times)` | IT-07 |
+| `weapon: Option<BagItem>` | **✓**（slice 2） | `sg.use_items[SLOT_WEAPON=1]` | IT-12 / IT-14 / IT-15 |
+| `magic_list` | **✗ 未 wire**（IT-17 接 `SavedHuman.record.data.magic`） | — | IT-17 |
+
+**move 组（IT-09/10/11/13）——需宿主 move 夹具；eat 夹具/Context 不覆盖**
+
+| 面 | 已覆盖 | 未覆盖（待宿主 move 夹具） | 条目 |
+|---|---|---|---|
+| `EatUseItems→BaseObjectMove` 位置搬运 + 随机点 `Rng` + 终态 `MapName/X/Y` | **✗ 全部未覆盖** | 全部 | IT-09 / IT-10 / IT-11 / IT-13 |
+
+**未 wire 字段 / 未覆盖面**：在受影响用例里标「**未判 / 未覆盖**」，不得当「已相等 / 已覆盖」。
+
+> **IT-09/10/11/13 当前 status = `missing`**（C# 有、Rust 无 ⇒ 未实现；**不是** `implemented_unverified`）。
+> 在宿主 move 夹具落地前保持 `missing`，`notes` 记「需宿主 move 夹具（`EatUseItems→BaseObjectMove` + 随机点 +
+> 终态 MapName/X/Y），`use_item` 纯函数不覆盖移动」。IT-17 同理当前 `missing`；实现但 `magic_list` 未 wire 时才是 `implemented_unverified`。
+
+### 9.2 3a / 3b 结论（防后人误以为已接）
+
+- **3a `magic_list`**：`handle_eat_cmd` 入参**无** `SavedHuman`（只有 `sessions: &mut HashMap<String,SessionGround>` + `world`）；
+  magic 在 `SavedHuman.record.data.magic`（`magic_list_mut`，`lib.rs`），而 `handle_eat_cmd` 有 **9+ 调用点**且无 saves 直取路径。
+  ⇒ 为单一（IT-17）用途穿 9+ 调用点「改动面与验证面不对等」⇒ **推迟到 IT-17** 接线；IT-17 在 `magic_list` wire 前保持
+  `implemented_unverified`，notes 写「待 saved 源接线」。
+- **3b map/session**：IT-09/10/11/13 是**宿主 move 行为**（`BaseObjectMove` + 随机点 `Rng`）；**纯函数 `use_item` 只返回帧/通知/状态、不搬运位置**。
+  故 map/session 不能用「只读入 `UseItemContext`」覆盖——它需要**宿主级 move 夹具**（仿 magic `a5_spell_rig`）+ 观测终态 `MapName/X/Y`，
+  `boNORANDOMMOVE`/`pk_point`/`home_map` 等只支撑「决策」分支。**move 组另立夹具，不并入本 Context 扩展。**
+
+### 9.2b move 组判定面（宿主 move 夹具落地时执行）
+
+三项缺一不可，**不许只断言「走了」**：
+1. **终态 `MapName/X/Y`**：`BaseObjectMove` 后落点/地图逐字段对 oracle；
+2. **`Rng` 逐次**：本图随机点 / Home 随机点每次抽取与 oracle 账本逐次相等（含 `site` 清单、`seq` 连续、不截断）；
+3. **目标点分支**：`PvpLevel()`（=`(byte)(PkPoint/100)`）<2 → Home，否则红名村（`RedHome*`）；`boNORANDOMMOVE` 拒绝随机传送；城堡成员 → castle home。
+
+### 9.3 `ExtraAbilTimes` 位宽
+
+oracle 是 `int`（`GetTickCount()` i32，含回绕），宿主存 `[i64;7]`。判据**按 oracle `int` 算术（i32 回绕）算、再以 i64 存储比较**
+（「宽存窄算」）——不因位数宽就判相等。
+
+### 9.4 `UseItemActorState` 去 `Eq`
+
+因新增 `f64`（`body_luck`）无法 `Eq`；保留 `PartialEq`（仍**逐全字段**比较，含 `extra`）。已 grep 确认无代码依赖 `Eq` 约束
+（`Eq` 仅标记；`==`/`assert_eq!` 用 `PartialEq`）⇒ 不存在「原本靠 Eq 的相等判定变恒真」。
+
+### 9.5 `Abil` vs `WAbil`（Exp 真值源；`opc-07` 2026-11-20 质询后钉死）
+
+**oracle：同 `Ability` 类型、两个实例**
+- `Abil` = 基础真值（`BaseObject.cs` `public Ability Abil`）；`WAbil` = 客户端/下发视图（`public Ability WAbil`），
+  `AbilCopyToWAbil()` 里 `WAbil = Abil.Clone()`。
+- `GetExp` 只写 `Abil.Exp/Level/MaxExp`；`RM_WINEXP→SM_WINEXP` 读 `Abil.Exp`；`WAbil.Exp` 仅在登录/重算块从 `Abil` 同步
+  ⇒ **非升级 `GetExp` 后 `WAbil.Exp` 是陈旧值**。
+
+**Rust 对应**
+- `sg.equip.abil` = 基础 `Abil`（`RecalcInputs.abil = &sg.equip.abil`；宿主战斗版 GetExp 写 `sg.equip.abil.exp/level/max_exp`）。
+- `sg.state.wabil` = `WAbil`（`recalc_session_ability` 输出；`UseItemActorState.wabil` 文档即「`PlayObject.WAbil`」）。
+
+**对本轮的后果**：`e42c43fdd` 的 IT-08 曾 `state.wabil.exp +=`（WAbil，**错对象**）⇒ **返工**：item `GetExp` 必须落到
+基础 `sg.equip.abil.exp` 并同步 WAbil/entity，`SM_WINEXP` 取基础 exp。返工方式（待 `opc-07` 定 A/B）：
+A = `Outcome` 回 `exp_delta`，宿主落基础 + 同步（与宿主战斗版 `GetExp` 同源）；B = `UseItemActorState` 加 `abil: Ability`（基础）字段。
+
+**A 已实现（`e42c43fdd` 返工）**：`use_item` 不再改 `WAbil.Exp`，回 `Outcome.exp_delta`；宿主 `handle_eat_cmd` 落**基础** `sg.equip.abil.exp`、
+**不同步 `WAbil`**。待补（据此再加证）：①宿主级用例（吃经验书后 `base_exp` 变、`wabil.exp` 未变；触发一次重算后两者相等）；②`SM_WINEXP` 取基础 exp；
+③oracle 夹具（Shape13 非升级）；④升级支。
+
+### 9.6 宿主同步点与 oracle 触发点对应（IT-08 `WAbil.Exp = Abil.Exp`）
+
+- **oracle 触发点**：登录 ctor（`AbilCopyToWAbil()` 后 `RecalcLevelAbilitys()`→`RecalcAbilitys()`，再显式 `WAbil.Exp = Abil.Exp`）、
+  以及 `AbilCopyToWAbil()` 的全量克隆（`WAbil = Abil.Clone()`）。**吃物品的 `GetExp`（非升级支）不触发**这两条 ⇒ `WAbil.Exp` 陈旧。
+- **宿主对应物**：`recalc_session_ability`（`RecalcAbilitys` 等价，**携带 exp**：`level_ability_base(..abil.clone())`→`..base`→`wabil.exp=abil.exp`）。
+  生产调用事件（同一函数）：登录建会话、取/放装备、升级 downlink、`ChangeLevel`/脚本经验等。
+- **测试 `it08_eat_exp_book_view_stale_then_real_sync_catches_up`**：吃一本/两本（均**不调** recalc）⇒ `WAbil.Exp` 持续陈旧（`base` 变、视图仍旧，**不是**"过一会儿自然相等"）；
+  调**生产** `recalc_session_ability`（非自造函数）⇒ 视图追上。即**触发时机一致**：吃书不同步、登录/升级/换装才同步，与 oracle 同。
+
+### 9.7 IT-08 升级支（`Exp>=MaxExp` 块）：宿主层实现与对拍
+
+`GetExp` 的升级块需要 `Exps.conf` 的 `NeedExps` 表（`GetLevelExp`）、`Job`、`Gold` 等**纯 `use_item` 拿不到的宿主上下文**，
+故按 §9 归类为**宿主层**行为，复用宿主既有原语，不塞进纯决策函数：
+
+- 顺序（对齐 oracle `BaseObject.GetExp`）：`abil.exp -= abil.max_exp` → `abil.level+1`（<255）→
+  `abil.max_exp = get_level_exp(world.need_exps, MAX_LEVEL, level)`（`RecalcLevelAbilitys` 等价，`level_ability_base`）→
+  `recalc_session_ability`（`RecalcAbilitys` 等价，把 `WAbil` 从基础重算）→ `inc_health_spell(2000,2000)`（`IncHealthSpell`）→
+  `add_body_luck(…, 100.0)`。
+- **帧/通知线上序**（oracle 经 `Operate` 泵出；golden `pumped` 实测）：
+  `SM_HEALTHSPELLCHANGED(53)`（`IncHealthSpell` 触发，本批最前）→ `SM_WINEXP(44)`（notice 排水）→
+  `SM_LEVELUP(45)/SM_ABILITY(52)/SM_SUBABILITY(752)`（`RM_LEVELUP` 处理器，notice 之后）。
+- **`WAbil == Abil`（升级后）是行为证据，非同义反复**：升级块内 `HasLevelUp→RecalcAbilitys` 让 `WAbil` 追上基础，
+  与非升级支"吃书后 `WAbil.Exp` 持续陈旧"形成对照。**旧实现**（只改基础、不 recalc）会让 `WAbil.exp/level/max_exp` 停在
+  升级前值 ⇒ `it08_levelup_host_parity` 的 `WAbil==Abil` 断言必红（§16 变异 A 证）。
+- **`53` 只在升级支出现，非升级支没有**（非升级 `IncHealthSpell` 不被触发）。
+- **`body_luck`**：非升级 `AddBodyLuck(DuraMax*0.002)`=0.2 由 `use_item` 落，升级再 `AddBodyLuck(100)` ⇒ 终值 100.2（golden）。
+- 对拍测试 `tests::it08_levelup_host_parity`：过滤 idents `{53,44,45,52,752}` 按**线上序逐字段**比 `pumped`，逐字段比派生
+  `max_hp/max_mp/hp/mp/dc`（golden `wabil`），并断言升级后 `WAbil==Abil`（exp/level/max_exp）。`NeedExps` 取夹具 `config.need_exps_head`
+  （生产 `Exps.conf` 前缀，sha `07d7801c…` 已入夹具，`[6]==80` 守卫同源）。
