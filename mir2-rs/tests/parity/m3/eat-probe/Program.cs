@@ -376,18 +376,11 @@ internal static class Program
         // items 侧 derived 机检（对等 MagicGolden/FixtureContract.derived，rc=2）：按本 case 的 level 用**真身**
         // `RecalcLevelAbilitys()+RecalcAbilitys()` 复算 `WAbil.MaxHP/MaxMP`，须 == 向量声明；不等 ⇒ stderr +
         // `Environment.Exit(2)`，**不落盘**（此处在写盘之前、所有 case 构建阶段）。整段用完恢复 po.Abil/WAbil。
+        // 注意：**在独立 throwaway po 上**复算（`DeriveWarriorMaxHpMp`），绝不在 eat po 上调 Recalc——
+        // `RecalcLevelAbilitys` 会 `SendMsg(RM_ABILITY)`、`RecalcAbilitys` 会改 `CharStatus`，在 eat po 上跑会
+        // 污染其消息队列/状态（曾导致每例多出 SM 前置 RM_CHARSTATUSCHANGED(10139)）。
         {
-            var savedAbil = po.Abil;
-            var savedWAbil = po.WAbil;
-            po.Job = PlayerJob.Warrior;
-            po.Abil = new Ability { Level = wabilPre.Level };
-            po.WAbil = CloneAbility(po.Abil);
-            po.RecalcLevelAbilitys();
-            po.RecalcAbilitys();
-            ushort dHp = po.WAbil.MaxHP;
-            ushort dMp = po.WAbil.MaxMP;
-            po.Abil = savedAbil;
-            po.WAbil = savedWAbil;
+            var (dHp, dMp) = DeriveWarriorMaxHpMp(wabilPre.Level);
             if (dHp != wabilPre.MaxHP || dMp != wabilPre.MaxMP)
             {
                 Console.Error.WriteLine(
