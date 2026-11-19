@@ -84721,6 +84721,7 @@ GMEXECUTE f
     fn read_utf8(path: &str) -> String {
         std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"))
     }
+    const WUSHI_SCRIPT_PATH: &str = r"E:\MirServer\M2GameSvr\Envir\Market_Def\任务NPC\武士-0114.txt";
     const QFUNCTION_PATH: &str = r"E:\MirServer\M2GameSvr\Envir\Market_Def\QFunction-0.txt";
     const NP07_FIXTURE_PATH: &str = concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -84775,12 +84776,14 @@ GMEXECUTE f
         let np04 = read_cases("np04_main_selection.json");
         let np05 = read_cases("np05_extjmp.json");
         let np07 = read_cases("np07_chain_break.json");
+        let np09 = read_cases("np09_var_text.json");
         let cases: Vec<&serde_json::Value> = np01
             .iter()
             .chain(np02.iter())
             .chain(np04.iter())
             .chain(np05.iter())
             .chain(np07.iter())
+            .chain(np09.iter())
             .collect();
         let mut n = 0usize;
         for case in cases {
@@ -84793,6 +84796,7 @@ GMEXECUTE f
             let qf_text = read_gbk(QFUNCTION_PATH);
             let fx_text = read_utf8(EXTJMP_FIXTURE_PATH);
             let np07_text = read_utf8(NP07_FIXTURE_PATH);
+            let wushi_text = read_gbk(WUSHI_SCRIPT_PATH);
             let mut rig = match name {
                 "click_no_main_fallback" => T137Rig::new_with(
                     ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
@@ -84823,6 +84827,14 @@ GMEXECUTE f
                     &[
                         ("Npc_def/国王-0.txt", "[@main]\nking"),
                         ("Npc_def/老人-0.txt", &fx_text),
+                    ],
+                    2,
+                ),
+                "var_username" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &wushi_text),
                     ],
                     2,
                 ),
@@ -84947,6 +84959,14 @@ GMEXECUTE f
                         .map(|r| r["msg"].as_str().unwrap().to_string())
                         .collect();
                     assert_eq!(says, expect, "{name}: extjmp 说词");
+                }
+                "var_username" => {
+                    rig.sessions.get_mut("hero").unwrap().game_gold = 0;
+                    rig.direct_goto("@main");
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"].as_array().unwrap().iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string()).collect();
+                    assert_eq!(says, expect, "{name}: 变量替换说词");
                 }
                 "chain_break" | "other_record_intact" => {
                     // golden 的 GameGold 前置为 0（与 C# 探针默认一致）。

@@ -435,3 +435,13 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
   原文 `E:/UserFleet/qa/npc-parity/np07-mutation-H-break-true.txt`（恢复 sha 相等、复绿 `np07-green-final.txt`）。
 - **报告口径**：本条为**引擎门等价证据**，非线上用例覆盖（冻结语料 0 条符合该构造）。
 
+
+## 16. 子批③ NP-09（说词变量替换）——真实脚本（2026-11-20）
+
+- 脚本：`E:/MirServer/M2GameSvr/Envir/Market_Def/任务NPC/武士-0114.txt`
+  （sha256 `ead2df9f212f8c70f1d047e1289e72e607e5039c697e8f0cdf4e6e698735bae7`）；
+  `[@main]` 的 else 分支说词含 `<$USERNAME>`。
+- 用例 `var_username`：直驱 `GotoLable("@main", boExtJmp=false)`，玩家名 `hero`；
+  断言说词尾 = `老人/\你叫什么？\hero？\好名字！`（即 `<$USERNAME>` 已替换；两侧同一文件、同入口）。
+- golden：`mir2-rs/tests/parity/golden/npc/np09_var_text.json`；探针 `PlayerName` 可在用例上覆盖（本用例 `hero`）。
+- **牙 I**：把 `NpcPlayer::line_variable_text` 改成原样返回 ⇒ 说词出现 `<$USERNAME>`、必红。

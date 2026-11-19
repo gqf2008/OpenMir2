@@ -193,6 +193,8 @@ internal static class Program
         "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt";
     private const string SMITH_SCRIPT =
         "E:/MirServer/M2GameSvr/Envir/Market_Def/任务NPC/打铁-0.txt";
+    private const string WUSHI_SCRIPT =
+        "E:/MirServer/M2GameSvr/Envir/Market_Def/任务NPC/武士-0114.txt";
     private const string QFUNCTION_SCRIPT =
         "E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt";
     private const string NP07_FIXTURE =
@@ -282,6 +284,7 @@ internal static class Program
         public string ScriptText2;
         public int Mnm6;
         public int GameGold;
+        public string PlayerName = "probe";
         public int Quest106;
         public string ScriptName2 = "国王";
         public string ScriptText = CLICK_SCRIPT;
@@ -355,7 +358,7 @@ internal static class Program
         {
             Race = (byte)ActorRace.Play,
             ActorId = 0x1234,
-            ChrName = "probe",
+            ChrName = spec.PlayerName,
             Envir = envir,
             CurrX = (short)spec.PlayerX,
             CurrY = (short)spec.PlayerY,
@@ -599,6 +602,10 @@ internal static class Program
             RunCase(new CaseSpec { Name = "chain_break", Kind = "direct_goto", Label = "@brk", ScriptName = "老人", ScriptSourcePath = NP07_FIXTURE }, tmp, envir, net),
             RunCase(new CaseSpec { Name = "other_record_intact", Kind = "direct_goto", Label = "@other", ScriptName = "老人", ScriptSourcePath = NP07_FIXTURE }, tmp, envir, net),
         };
+        var np09Cases = new List<object>
+        {
+            RunCase(new CaseSpec { Name = "var_username", Kind = "direct_goto", Label = "@main", ScriptName = "老人", ScriptSourcePath = WUSHI_SCRIPT, PlayerName = "hero" }, tmp, envir, net),
+        };
 
         var outDir = args[0];
         Directory.CreateDirectory(outDir);
@@ -608,6 +615,7 @@ internal static class Program
         WriteDoc(Path.Combine(outDir, "np04_main_selection.json"), CLICK_SCRIPT, np04Cases, CLICK_ORACLE_SOURCE);
         WriteDoc(Path.Combine(outDir, "np05_extjmp.json"), DIALOG_SCRIPT, np05Cases, DIALOG_ORACLE_SOURCE);
         WriteDoc(Path.Combine(outDir, "np07_chain_break.json"), DIALOG_SCRIPT, np07Cases, DIALOG_ORACLE_SOURCE);
+        WriteDoc(Path.Combine(outDir, "np09_var_text.json"), DIALOG_SCRIPT, np09Cases, DIALOG_ORACLE_SOURCE);
         Directory.Delete(tmp, true);
         return 0;
     }

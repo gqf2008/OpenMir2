@@ -458,7 +458,7 @@ src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: Client
 | NP-06 | 逐 procedure 条件真/假分支 + 动作执行 + say 累积 | `src/Modules/ScriptEngine/ScriptEngine.cs:95-125` | **verified** | `tests/parity/M4/run_npc_cases.py`（7 条 port-free 用例，C# 参照 vs Rust 逐行 diff；证据 `tests/parity/evidence/M4/npc-cases.txt`） | 用例：传送×2、行会(`@requestcastlewar`)、任务(`Q001@main`)、商店(`@changeGold`)、修理(`@StdModeFunc26`)、仓库(`@zum_bind1`) |
 | NP-07 | 动作返回 false 断链 | `src/Modules/ScriptEngine/ScriptEngine.cs:101`/`:113` | **verified** | `mir2-rs/bins/game-svr/src/lib.rs::np01_click_main_matches_oracle_golden`（golden `np07_chain_break.json` 2 例：`BREAK` 断同 record 后续 procedure、其它 record 不受影响） | synthetic 夹具（语料 0 条符合该构造，sha256 `4904046f…c8e`）；引擎门等价证据；牙 H 原文 `E:/UserFleet/qa/npc-parity/` |
 | NP-08 | 说词帧（ChrName 前缀、High/普通优先级） | `src/Modules/ScriptEngine/ScriptEngine.cs:987-999` → `src/M2Server/Player/PlayObject.Message.cs:1702` | **implemented（未验证）** | `npc.rs::merchant_say_text_and_gbk_bytes`、`::say_text_must_carry_chrname_prefix`、`::run_login_emits_say_with_chrname_prefix`；优先级 `guild_official.rs`（第 406-432 行） | M4 只比对 `msg 11009` 行文本，不覆盖线缆帧/优先级 |
-| NP-09 | 说词变量替换（玩家/NPC/价格等） | `src/M2Server/Npc/NormNpc.cs:275`、`src/GameSrv/Npc/Merchant.cs:1109` | **implemented（未验证）** | `npc.rs::merchant_click_main_say_expands_player_and_npc_vars`、`::merchant_variable_text_vectors`、`::line_variable_text_stops_at_first_non_variable_token` | |
+| NP-09 | 说词变量替换（玩家/NPC/价格等） | `src/M2Server/Npc/NormNpc.cs:275`、`src/GameSrv/Npc/Merchant.cs:1109` | **verified** | `mir2-rs/bins/game-svr/src/lib.rs::np01_click_main_matches_oracle_golden`（golden `np09_var_text.json`：`<$USERNAME>`→hero） | 真实脚本 武士-0114.txt（sha256 `ead2df9f…bae7`）；牙 I 原文 `E:/UserFleet/qa/npc-parity/` |
 | NP-10 | 隐藏脚本 NPC 可点/可选（QManage/QFunction/RobotManage） | `src/GameSrv/DB/LocalDB.cs:236`/`:192`/`:293` | **implemented（未验证）** | `npc.rs::manage_and_function_npc_gates_require_loaded`、`::loads_from_disk_and_runs_login`；加载见 QX-02 | |
 | NP-11 | NPC 显示/转向/受击/空闲帧 | `src/GameSrv/Word/WorldServer.Merchant.cs:120`（ProcessNpcs） | **implemented（未验证）** | `lib.rs::fixed_npc_display_frames_through_production_aoi`、`::npc_and_merchant_turn_hit_frames_through_production_drain`、`::npc_random_idle_frames_through_production_drain_run`、`::npc_turn_hit_production_calls_are_wired_in_drain_run_downlinks`、`::npc_hit_frames_only_for_world_branch_and_never_to_npc` | |
 
@@ -485,7 +485,7 @@ src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: Client
 
 ### 13.8 结论（NPC 块）
 
-- 主分母 11：`verified` **6**（NP-06 经 M4 双跑；NP-01/02/04/05/07 经 `np01_click_main_matches_oracle_golden`）、`implemented（未验证）` 5（NP-03 等 ca；NP-08..11 待做）、`missing` **0**。
+- 主分母 11：`verified` **7**（NP-06 经 M4 双跑；NP-01/02/04/05/07/09 经 `np01_click_main_matches_oracle_golden`）、`implemented（未验证）` 4（NP-03 等 ca；NP-08/10/11 待做）、`missing` **0**。
 - 机制层没有 known-missing；缺口在**证据强度**：10 条只有 Rust 侧集成测试，没有 oracle 夹具。
 - **脚本命令语言全集**（条件/动作注册表）不在本块重复计数：M4 已有双跑对拍（7 条）与注册表门（`IMPLEMENTED_CONDITIONS`/`IMPLEMENTED_EXECUTIONS` + `implemented_registry_entries_are_actually_implemented`）；任务块 §11 的 9 条是其中的任务专属子集。
 

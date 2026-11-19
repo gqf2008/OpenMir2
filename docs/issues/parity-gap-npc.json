@@ -293,20 +293,20 @@
         "line": 275,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "merchant_click_main_say_expands_player_and_npc_vars",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "merchant_variable_text_vectors",
-          "line_variable_text_stops_at_first_non_variable_token"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np09_var_text.json",
+        "cases": [
+          "var_username"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "Merchant.GetVariableText 覆写在 src/GameSrv/Npc/Merchant.cs:1109"
+      "notes": "真实脚本 武士-0114.txt [@main] else 分支 <$USERNAME>（sha256 ead2df9f…bae7）；说词尾逐字断言；牙 I（line_variable_text 原样返回 ⇒ 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-10",
