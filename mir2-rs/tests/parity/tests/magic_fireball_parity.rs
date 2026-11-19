@@ -555,6 +555,23 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
             got("max_exp")
         ));
     }
+    // ---- 独立抽取计数器（卡 §8.3c）：防手改金标准把 `Rng` 截短以凑对 ----
+    let total = fixture
+        .get("rng_total_draws")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| {
+            format!("[{label}] 金标准缺 `Fixture.rng_total_draws`（int；缺键即红，§8.3c）")
+        })?;
+    let rng_len = case
+        .get("Rng")
+        .and_then(Value::as_array)
+        .map(|a| a.len() as i64)
+        .ok_or_else(|| format!("[{label}] 金标准缺 `Rng` 数组（§8.3c）"))?;
+    if rng_len != total {
+        return Err(format!(
+            "[{label}] `len(Rng)`={rng_len} ≠ `Fixture.rng_total_draws`={total}：cover_drain 下抽数必须相等（§8.3c）"
+        ));
+    }
     Ok(())
 }
 
@@ -654,6 +671,7 @@ fn verify_union(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
 }
 
 fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
+    let total = rng.as_array().map_or(0, |a| a.len() as i64);
     // 合成夹具按**统一 schema** 填全（Warrior L20 登录序：MaxHP=224/MaxMP=81/DC=0x0403/AC=0x0200）。
     let mut fixture = serde_json::json!({
         "login_order": true,
@@ -667,6 +685,7 @@ fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
             "max_hp": 224, "max_mp": 81, "dc": 0x0403, "ac": 0x0200, "mac": 0,
             "max_exp": need_exp_for(20).unwrap_or_else(|m| panic!("{m}")),
         },
+        "rng_total_draws": total,
     });
     if let Some(m) = mode {
         fixture["rng_mode"] = Value::from(m);
@@ -676,7 +695,7 @@ fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
     }
     serde_json::json!({
         "magic_id": 33,
-        "cases": [{ "Label": label, "Fixture": fixture, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": [] }],
+        "cases": [{ "Label": label, "Fixture": fixture, "Rng": rng, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": [] }],
     })
 }
 
@@ -796,6 +815,19 @@ fn tooth_contract_missing_keys_red() {
     g7["cases"][0]["Fixture"]["construction"]["equipment"] = serde_json::json!(["MgAvoid=1"]);
     let msg7 = check_golden_contract(&g7, label).unwrap_err();
     assert!(msg7.contains("equipment"), "必须点名 equipment：{msg7}");
+    // 缺 rng_total_draws
+    let mut g8 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g8["cases"][0]["Fixture"]
+        .as_object_mut()
+        .unwrap()
+        .remove("rng_total_draws");
+    let msg8 = check_golden_contract(&g8, label).unwrap_err();
+    assert!(msg8.contains("rng_total_draws"), "必须点名 rng_total_draws：{msg8}");
+    // rng_total_draws 与 len(Rng) 不等（手改金标准截短 Rng 的形态）
+    let mut g9 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g9["cases"][0]["Fixture"]["rng_total_draws"] = Value::from(5);
+    let msg9 = check_golden_contract(&g9, label).unwrap_err();
+    assert!(msg9.contains("rng_total_draws"), "必须点名 rng_total_draws：{msg9}");
     // 正对照：齐全 ⇒ 绿
     let ok = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
     assert!(check_golden_contract(&ok, label).is_ok(), "齐全应绿");

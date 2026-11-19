@@ -92,7 +92,7 @@
 | ② | 改 `DeliverRng` 任一值 | 红（`Rng` 值不等） |
 | ③ | 旧口径 golden（`freeze_at_dospell` / 无 `rng_mode`） | 红并点名 `cover_drain` |
 | ④ | 整列 `DeliverRng` 消失 | 红并点名 `DeliverRng` 缺列 |
-| ⑤ | `Fixture` 缺 `reachability` / 非 `reachable` / 缺任一状态键 / 缺 `construction` / `derived` 与公式不一致 / 平铺 `target_max_hp` 与 `derived` 不一致 / 装备非空 | 各自红并点名缺键或字段 |
+| ⑤ | `Fixture` 缺 `reachability` / 非 `reachable` / 缺任一状态键 / 缺 `construction` / `derived` 与公式不一致 / 平铺 `target_max_hp` 与 `derived` 不一致 / 装备非空 / 缺 `rng_total_draws` / `len(Rng) ≠ rng_total_draws` | 各自红并点名缺键或字段 |
 
 外加**正对照**：`golden.Rng = rust.Rng ++ rust.DeliverRng` ⇒ 绿（证明判据不是恒红）。
 
@@ -121,6 +121,7 @@ target_hp       : int
 target_max_hp   : int
 derived         : { max_hp, max_mp, dc, ac, mac, max_exp }   # 必须与构造路径按公式复算一致
 construction    : { job, level, equipment[], skills[] }      # §7 的可机检构造路径
+rng_total_draws : int                                        # 整个 case 的真实抽取总数（独立计数器）
 scenario_note   : string                                     # login_order=false 必填（人读）
 legacy_artifact : true + legacy_reason                       # 仅 freeze_at_dospell 自动写（人读，比较器不看）
 ```
@@ -136,6 +137,11 @@ legacy_artifact : true + legacy_reason                       # 仅 freeze_at_dos
    `target_hp ≤ max_hp`；**`derived.max_exp` = `GetLevelExp(level)` = 冻结表 `need_exps[level]`**
    （见 8.3b；该字段**有消费点**——MG-28/29 的 52 帧尾封 `WAbil` 全量，含 `Exp/MaxExp`）；
 5. `legacy/` 目录：`golden/magic/legacy/**` 只作历史留档，`golden_file` 直接拒绝该前缀。
+6. **独立抽取计数器（§8.3c）**：`Fixture.rng_total_draws` 必填（int，缺即红）；`rng_mode=="cover_drain"`
+   时 **`len(golden["Rng"]) == rng_total_draws`**，不等即红并点名两值。作用：把"排水期无抽"从假设变成
+   被检查的事实（`fireball` 的 5 抽全在施法期、排水 handler 不调 RNG ⇒ 结构上合法），并防"手工截短
+   金标准 `Rng` 以对上 Rust"。生成器侧（a2，M52.1）另有 `rng_mode=cover_drain ⇒ Len(Rng)==rng_total_draws`
+   断言（不等 rc=2）。
 
 ### 8.3b 冻结 `NeedExps` 表（M51 产出，M52 读）
 
