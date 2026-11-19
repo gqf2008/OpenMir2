@@ -13,7 +13,7 @@
 //!     │               case 0/1/2/3 ⇒ if (EatItems(stdItem, userItem)) { Dispose; RemoveAt(i); eatSuccess=true }
 //!     │               case 4      ⇒ ReadBook（技能书）——未实现（T-17）
 //!     │               case 31     ⇒ AniCount==0 ? 解包（UnbindList）: UseStdModeFunItem
-//!     │                             ——`AniCount != 0` 已做（看 FunctionNPC 是否存在），解包未做（T-17）
+//!     │                             ——`AniCount != 0` 已做（看 FunctionNPC 是否存在），解包已实现（曾登记未做，2026-11-19 核对更正为已实现）
 //!     ├─ if (eatSuccess) { WeightChanged(); SendDefMessage(SM_EAT_OK,0,0,0,0) }
 //!     └─ else            { SendDefMessage(SM_EAT_FAIL,0,0,0,0) }
 //!
@@ -68,6 +68,16 @@
 //!   oracle 对这些 StdMode 有**成功**路径（StdMode 3 的 Shape 13 **无条件**返回 true；其余为条件成功），
 //!   成功时吃掉物品 + `SM_EAT_OK`，而本接缝只处理 `std_mode==0|1|2` 与 **31 的 `AniCount != 0`**
 //!   ⇒ 同一输入落 `SM_EAT_FAIL`，**这是已证的行为差异**（不是"一致地不吃"）。
+//!   **`EatUseItems` 的 8 个 case/Shape（IT-09…IT-16）逐条落点**（均 oracle `PlayObject.Base.cs`）：
+//!   - IT-09 Shape1 回城卷（`:2162→2163`、`:2233`）——未实现，T-17；
+//!   - IT-10 Shape2 随机传送（`:2238`，受 `boNORANDOMMOVE`）——未实现，T-17；
+//!   - IT-11 Shape3 地牢逃脱（`:2246`，`PvpLevel()<2` 回 Home，否则红名村）——未实现，T-17；
+//!   - IT-12 Shape4 祝福油 `WeaptonMakeLuck()`（`:2258`）——未实现，T-17；
+//!   - **IT-13 Shape5 行会回城**（`:2264`，`CastleMgr.IsCastleMember`）——未实现，T-17；
+//!   - **IT-14 Shape9 修复油 `RepairWeapon()`**（`:2286`）——未实现，T-17；
+//!   - **IT-15 Shape10 特修油 `SuperRepairWeapon()`**（`:2292`）——未实现，T-17；
+//!   - **IT-16 Shape11 彩票 `WinLottery()`**（`:2298`；`Config.WinLotteryLevel1..6` 本仓已有该组字段）——未实现，T-17。
+//!     （加粗四条为 2026-11-19 核对时发现「只被『等大地图副作用』概括」的登记缺口，本行补齐。）
 //! - **StdMode 31 / AniCount == 0（解包）**：已实现（卡 `openmir2-unbindlist-consumer`）——
 //!   `ItemList.Count + 6 - 1 <= Grobal2.MaxBagItem`（46）时移除本件并解包 6 件
 //!   （`UnbindList` 按 `StdItem.Shape` 查名；未命中 ⇒ 空串 ⇒ 0 件）。`StdMode=5`（`case` 名单外）
@@ -79,6 +89,9 @@
 //!   接线前必须先把这些分支补齐。
 //!   （注：`boNODRUG` 开关对 0/1/2/3 都在 `EatItems` 首部生效，故本接缝对 1/3 也做该守卫，
 //!   但未禁药时 1/3 仍落 `SM_EAT_FAIL`。）
+//! - **代码内登记指路**：`useitem.rs` 中段的「StdMode 3/4（ExtraAbil/GetExp、书）未实现」注释
+//!   （`eaten = true` 之后那段）**只覆盖 StdMode 3/4**；`EatUseItems` 的 10 个 Shape 见本节
+//!   「`StdMode 3` 的 `default`…」那一组条目（IT-09…IT-16）。
 //! - **`GetUpgradeStdItem` 的 Desc 升级差量**：同 `bag.rs`/`ability.rs`，传入的模板视为「有效物品」。
 //! - `ClientUseItems` 的 `sItemName` 形参在 oracle 里**未被使用**（只按 `MakeIndex` 找），已照搬。
 

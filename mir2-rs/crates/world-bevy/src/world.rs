@@ -556,6 +556,11 @@ pub struct MagStruckOutcome {
     pub name_color: bool,
     /// `GetChrColor`（656 的 Param）。
     pub chr_color: u8,
+    /// 魔法受击链：受击玩家自己的 `RM_STRUCK_MAG` 处理器（`PlayObject.Message.cs:1562-1572`）
+    /// 对攻击方调 `SetPkFlag`（`PlayObject.cs:4326-4341`）命中时，由**攻击方**
+    /// `RefNameColor()`（`BaseObject.cs:730-733`）发出的 `RM_CHANGENAMECOLOR` 观察值：
+    /// `target_id` = 攻击方、`color` = `PKFlagNameColor`(47)。未命中 ⇒ `None`。
+    pub hitter_name_color: Option<crate::slave::NameColorDelivery>,
 }
 
 /// **P3-B2**：治疗族（2/29）效果体返回值。
@@ -4674,7 +4679,11 @@ impl World {
     /// :4336     if (!targetObject.PvpFlag) { targetObject.PvpFlag = true; targetObject.RefNameColor(); }
     /// ```
     ///
-    /// 本仓 `FightZone`/`Fight3Zone` 未建模 ⇒ 恒 `false`（不阻塞置位）。
+    /// `FightZone`/`Fight3Zone` 取**受击方当前地图**的 `Envir.Flag`：本仓镜像 =
+    /// `MapGrid::is_fight_zone()`（`MapInfo.txt` 的 `FIGHT`/`FIGHT3` 经
+    /// [`World::set_map_fight_zone`] 灌入，与 `DieDropItems` 用同一来源、同一取数）。
+    /// 运行时 `@SetMapMode` 目前只回注册表、不回灌 `world.maps`（既有偏差，与
+    /// `settle_deaths` 同口径）。
     /// 返回 `RefNameColor` 的观察值（由 **`target_id`** 发出；颜色按接收侧
     /// `PlayObject.GetChrColor` 的 `PvpFlag` 支 = `PKFlagNameColor`）。
     pub fn set_pk_flag(
@@ -4699,12 +4708,13 @@ impl World {
         target_id: i32,
     ) -> Option<crate::slave::NameColorDelivery> {
         // oracle 的判据全在 `this`/`target` 的只读字段上；先取值再释放借用（供下面写计时）。
-        let (this_level, this_flagged, target_level, target_race, target_flagged) = {
+        let (this_level, this_flagged, this_map_id, target_level, target_race, target_flagged) = {
             let this = access.get(this_id)?;
             let target = access.get(target_id)?;
             (
                 Self::pvp_level(this.pk_point),
                 this.pvp_flag,
+                this.map_id,
                 Self::pvp_level(target.pk_point),
                 target.race,
                 target.pvp_flag,
@@ -4712,6 +4722,12 @@ impl World {
         };
         // `baseObject.Race == ActorRace.Play`
         if target_race != crate::entity::ACTOR_RACE_PLAY {
+            return None;
+        }
+        // `!Envir.Flag.FightZone && !Envir.Flag.Fight3Zone`（`Envir` = `this` 即受击方所在地图）。
+        // 数据源见上方 doc：`MapInfo.txt` 的 `FIGHT`/`FIGHT3`（C# `Maps.cs:106/111` ↔
+        // `mir2_envir::mapinfo`）经 `set_map_fight_zone` 灌入。
+        if sim.maps.get(this_map_id).is_some_and(|m| m.is_fight_zone()) {
             return None;
         }
         // `PvpLevel() < 2 && targetObject.PvpLevel() < 2 && !PvpFlag`
@@ -5476,6 +5492,7 @@ impl World {
                     show_hp: false,
                     name_color: false,
                     chr_color: 0,
+                    hitter_name_color: None,
                 });
                 continue;
             }
@@ -5491,6 +5508,7 @@ impl World {
                 crate::combat::get_mag_struck_damage(&mut self.rng, t.mac, msg.power, None);
             let mut name_color = false;
             let mut chr_color = 0u8;
+            let mut hitter_name_color = None;
             if damage > 0 {
                 // `base.StruckDamage`（`:827-851`）：本夹具配置倍率均缺省 10 => 数值不变；
                 // `LastHiter` 缩放面未在本层复刻（合同 §3.1 pin `LastHiter=null`，登记）。
@@ -5545,6 +5563,20 @@ impl World {
                         &mut t.use_items,
                         target_race,
                     );
+                    // `BaseObject.Base.cs:629` 的 `SendRefMsg(RM_STRUCK_MAG, nDamage, …)` 也回投
+                    // 受击者自己；受击玩家在 `PlayObject.Message.cs:1562-1572` 的
+                    // `wParam(nDamage) > 0 && ActorId == ActorId` 支里对 `nParam3`（攻击方）
+                    // 调 `SetPkFlag`（`PlayObject.cs:4326-4341`）：给**攻击方**置
+                    // `PvpFlag=true` + `PvpNameColorTick`，并由攻击方 `RefNameColor()`
+                    // （`BaseObject.cs:730-733`）发 656。非 Play 受击者没有这个处理器。
+                    if t.race == crate::entity::ACTOR_RACE_PLAY {
+                        hitter_name_color = Self::set_pk_flag_impl(
+                            &mut self.entities,
+                            &self.sim,
+                            msg.target_id,
+                            msg.caster_id,
+                        );
+                    }
                 }
             }
             let (hp_after, max_hp) = (t.hp, t.max_hp);
@@ -5564,6 +5596,7 @@ impl World {
                 show_hp,
                 name_color,
                 chr_color,
+                hitter_name_color,
             });
         }
         out

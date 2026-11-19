@@ -1,6 +1,6 @@
 # openmir2-deps-check-deploy-dir
 
-> 状态：**实现完成，待 opc-07 复核三条牙后合并（2026-11-19，分支 `card/deps-check-deploy-dir`）**。
+> 状态：**已合并（`cfc154b92`）**。
 > 上游卡：`openmir2-deploy-deps-manifest`（其 `check` 只核 NuGet 缓存，不核部署目录）。
 > 触发：botfleet 实测把 `runtime/DBSrv/MemoryPack.Core.dll` 翻一个字节后 `check` 仍
 > `DEPS_GREEN 45/1010 rc=0`——"部署出去的那个文件被换了"当时不在闸门内。
@@ -104,8 +104,8 @@ DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll
 ### 真实目录结果（只读）
 
 - `runtime/LoginSrv`（单项目）：`DEPS_GREEN packages=48 files=1063`，`UNCOVERED_DEPLOYED=0`。
-- `runtime/DBSrv`（并集 `src/DBSrv` + `DBSvr.Storage.MySQL`，manifest **47 包 / 1045 文件**）：
-  **剩 1 条红**：`DEPS_RED MISSING_DEPLOYED NLog/5.2.8 NLog.dll`。
+- `runtime/DBSrv`（并集 `src/DBSrv` + `DBSvr.Storage.MySQL`）：包数/文件数以机器产物为准 ——`E:/UserFleet/evidence-cardfix-20261119/deps-check-and-selftest.log`（`DEPS_GREEN …` 行）；**注意** `543e8e39b` 清掉 NLog 后包集与例外条目均已变化，卡面不再手抄数字。
+  **（历史）当时还剩 1 条红**：`DEPS_RED MISSING_DEPLOYED NLog/5.2.8 NLog.dll`——已在 `543e8e39b` 清掉 NLog 依赖与例外条目，**现无 `DEPS_EXCEPTION`**。
   根因：`DBSvr.Storage.MySQL` 声明并随构建产出 `NLog.dll`（其 `bin/Debug` 有），但
   `Directory.Build.targets` 只把**插件 DLL 本身**拷进 DBSrv 输出 ⇒ 部署目录缺 NLog；
   现网 `runtime/DBSrv` 里 `MySqlConnector.dll` 是别的途径带进去的，`NLog.dll` 没有。
@@ -165,3 +165,38 @@ RESULT: GREEN
 ```
 
 **没有改 gate 规则**——红是 gate 在正常工作，修的是文档锚。
+
+## QA 整改（2026-11-19）
+
+> 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
+
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
+- 实跑命令与 `git status --porcelain` 的测量命令：见上述日志（卡面不写行数）；
+- **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
+  实跑帧/JSON 产物为准。
+> 来源：QA 签署摘要 —— 公共路径 `E:/UserFleet/qa/qa-merged-cards-signoff-20261119.md`（QA 已放置）。
+
+### 可独立重放的篡改（T1–T5；**都在副本 `qa-deps/deploy` 上做，不碰真实目录**）
+
+| 编号 | 改什么 | 怎么改 | 期望红在哪 | 还原 |
+|---|---|---|---|---|
+| T1 | 副本 `qa-deps/deploy/MemoryPack.Core.dll`（包 `MemoryPack.Core/1.10.0`，size 207872） | **只翻最后一个字节** `0x00 → 0xFF`（`b[-1] ^= 0xFF`） | `DEPS_RED DEPLOYED_SHA_MISMATCH MemoryPack.Core/1.10.0 MemoryPack.Core.dll expected=101f0cfbf844d0277b41cdff67bbb33f90e75dbe094387c321300e1434576bee actual=8e137a6fe19278b52d95fe1c319d0adb48f50423c4b702b66040862e0cab9bea` | 复原后全绿 |
+| T2 | 部署副本 `Microsoft.Extensions.Logging.dll` | 删除 | `DEPS_RED MISSING_DEPLOYED Microsoft.Extensions.Logging/8.0.0` | 复原后全绿 |
+| T3 | 部署副本 | 新增 `Stray.Third.Party.dll` | `DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll` | 复原后全绿 |
+| T4a | 副本删 `Microsoft.Extensions.Logging.dll`；manifest 用副本 `qa-deps/dbsrv.exc.manifest.json`（`exceptions` 含 `{"pkg":"Microsoft.Extensions.Logging","version":"8.0.0"}`） | 见左 | `DEPS_EXCEPTION …` + `DEPS_GREEN packages=46 files=1030`（rc=0；证明例外**只**压制 `MISSING_DEPLOYED`） | 复原后全绿 |
+| T4b | 先 `cp` 原件回副本，再对 `qa-deps/deploy/Microsoft.Extensions.Logging.dll`（包 `Microsoft.Extensions.Logging/8.0.0`，size 50848）**只翻最后一个字节** `0x00 → 0xFF`；manifest 仍为 `qa-deps/dbsrv.exc.manifest.json` | 见左 | `DEPS_EXCEPTION_UNUSED` + `DEPS_RED DEPLOYED_SHA_MISMATCH Microsoft.Extensions.Logging/8.0.0 Microsoft.Extensions.Logging.dll expected=4330a5efe9d110afb7f8e567d5b43eee976e0f7f6802d13a211b65d747529179 actual=719a47903edabc4b715221b7bfc0c72ccf2a0347ce17e5170aaf7c42cc4a9637`（证明**不**压制 sha） | 复原后全绿 |
+| T5 | 部署目录 | 改成缺目录 / 空目录 | `MISSING_DEPLOY_DIR` / `EMPTY_DEPLOY_DIR` | 复原后全绿 |
+### 统一整改（C4–C6）
+
+- **C4 `built_at`（裁定正文，引用不指向未合并分支）**：戳的 `built_at` 必须等于**二进制自报**的
+  `built_at`（单一来源）；文件 mtime 只作元数据、**不参与比对**；闸门断言"自报 == 戳"。
+  M9 四件因自报与戳相差 5 秒判 `CONDITIONAL`（身份可证、语义待统一），不算 FAIL。
+- **C5 `SHA256SUMS`（已补实）**：两份冻结目录 `E:/UserFleet/release-csharp-m9-572a0b8a/` 与
+  `E:/UserFleet/release-m9-572a0b8a/` 均为双清单；`sha256sum -c` 的结果与 rc **见验证日志**
+  `E:/UserFleet/evidence-cardfix-20261119/sums-verify.log`（卡面不写行数/OK 数）；历史
+  `SHA256SUMS.txt` 不改写；用途差异见各自 `PROVENANCE.txt` 的 `sums_files=` 字段。
+- **C3 构建命令与仓库状态（已补实）**：两目录的 `PROVENANCE.txt` 均含 `build_cmd=` / `build_cwd=` /
+  `toolchain=` / `git_status_porcelain_measure=` 字段（**字段值照抄，卡面不写数字**）；
+  C# 侧实跑命令与仓库状态见 `E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`。
+- **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
+  卡面凡引"章程 §N"均以此文件为准。

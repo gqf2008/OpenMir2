@@ -1,0 +1,430 @@
+{
+  "schema_version": 1,
+  "domain": "quests",
+  "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
+  "counting_moment": {
+    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
+    "time": "2026-11-19T23:25:52+08:00"
+  },
+  "status_enum": [
+    "verified",
+    "implemented_unverified",
+    "missing",
+    "dead_in_oracle",
+    "out_of_scope"
+  ],
+  "status_legend": {
+    "verified": "有对拍测试名且夹具由 oracle 生成（章程 §5）",
+    "implemented_unverified": "Rust 有实现/单测，但没有 oracle 对拍夹具",
+    "missing": "C# 有、Rust 无；必须带 deviation.id 指向已登记的差异条目",
+    "dead_in_oracle": "oracle 自身是死路径（调用点注释/丢弃），Rust 不应实现",
+    "out_of_scope": "不属本分母（环境/工具/数据侧）"
+  },
+  "cost_enum": [
+    "S",
+    "S-M",
+    "M",
+    "M-L",
+    "L"
+  ],
+  "denominator": {
+    "kind": "behavior_branch",
+    "definition": "任务专属脚本命令分支：选择门 1 + 条件 3 + 动作 5（通用 NPC 脚本命令归 NPC 块，不在此计）",
+    "entry": "CM_CLICKNPC(1010) -> NormNpc.Click -> GotoLable(\"@main\"); 进世界 @Login",
+    "count": 9,
+    "commands": [
+      "grep -nE '\\b(CM|SM|RM)_QUEST[A-Z_]*' src/OpenMir2/Messages.cs",
+      "grep -rn 'GetQuestFalgStatus|SetQuestFlagStatus|GetQuestUnitStatus|SetQuestUnitStatus|GetQuestUnitOpenStatus|SetQuestUnitOpenStatus' --include=*.cs src/ | wc -l"
+    ]
+  },
+  "axes": [
+    {
+      "id": "QX-01",
+      "name": "任务态载体 QuestFlag/QuestUnit/QuestUnitOpen（各 128B，MSB-first 位语义）",
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.cs",
+        "line": 3966,
+        "line_end": 4110
+      },
+      "status": "verified",
+      "evidence": {
+        "test": "quest_bitmap_matches_oracle_byte_for_byte",
+        "test_file": "mir2-rs/crates/script/tests/quest_state_vectors.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quest-state-probe/vectors/quest_state_vectors.tsv",
+        "cases": [],
+        "unit_tests": [
+          "redcheck_bit_direction",
+          "redcheck_comparator_detects_mutated_vector"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "oracle 探针直接调真 PlayObject 的六个入口产出逐字节向量"
+    },
+    {
+      "id": "QX-02",
+      "name": "MapQuest.txt + 隐藏 NPC（QManage/QFunction/RobotManage）加载",
+      "oracle_anchor": {
+        "file": "src/GameSrv/DB/LocalDB.cs",
+        "line": 341,
+        "line_end": 405
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "load_orders_hidden_npcs_and_reports_result",
+        "test_file": "mir2-rs/crates/envir/tests/mapquest.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "synthetic_vectors",
+          "deployment_mapquest(#[ignore])"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "合成向量为显式输入/期望表；deployment_mapquest 读 E:/MirServer 真数据但默认 ignore，且无 oracle 探针"
+    },
+    {
+      "id": "QX-03",
+      "name": "会话载入/存档（CharacterData.Quest* <-> PlayObject.Quest*）",
+      "oracle_anchor": {
+        "file": "src/GameSrv/Word/WorldServer.cs",
+        "line": 1160,
+        "line_end": 1162
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "script_bridge_quests_write_caller_flags_through_host_drain"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "接线在 bins/game-svr/src/lib.rs（载入第 3295/3429 行、写回第 21250 行）；结构往返见 crates/storage/tests/playerdatainfo_vectors.rs；无端到端 oracle 夹具"
+    },
+    {
+      "id": "QX-04",
+      "name": "落库（characters_quest / characters 任务列）",
+      "oracle_anchor": {
+        "file": "src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs",
+        "line": 493,
+        "line_end": 495
+      },
+      "status": "dead_in_oracle",
+      "evidence": {
+        "test": "db_srv_save_and_load_sql_have_no_quest_columns",
+        "test_file": "mir2-rs/bins/db-srv/tests/quest_no_persist.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "redcheck_quest_delta_subassertion_bites",
+          "redcheck_scanner_bites_injected_quest_persistence",
+          "redcheck_sql_scanner_bites_injected_quest_columns",
+          "workspace_rust_sources_never_reference_characters_quest",
+          "db_srv_save_and_load_sql_have_no_quest_columns",
+          "captured_cross_side_baselines_show_zero_characters_quest_rows"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "oracle SaveQuest 只 DELETE 从不 INSERT 且无调用点；门禁钉死两侧都不写（口径是「不落库」，不是「跨重登保留」）"
+    }
+  ],
+  "dead_paths": [
+    {
+      "id": "QT-D1",
+      "name": "MapQuest 怪/物品触发（GetQuestNpc）",
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.cs",
+        "line": 1670,
+        "line_end": 1677
+      },
+      "status": "dead_in_oracle",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "调用点被注释；GetQuestNpc 定义在 src/GameSrv/Maps/MapQuestManager.cs:58，全仓无活调用点"
+    },
+    {
+      "id": "QT-D2",
+      "name": "SendQuestMsg（全服任务广播）",
+      "oracle_anchor": {
+        "file": "src/Modules/GameCommand/Commands/StartQuestCommand.cs",
+        "line": 22,
+        "line_end": 22
+      },
+      "status": "dead_in_oracle",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "唯一调用点在注释里；定义 src/GameSrv/Word/WorldServer.cs:1830"
+    },
+    {
+      "id": "QT-D3",
+      "name": "QuestDiary（解析结果丢弃）",
+      "oracle_anchor": {
+        "file": "src/GameSrv/DB/LocalDB.cs",
+        "line": 804,
+        "line_end": 808
+      },
+      "status": "dead_in_oracle",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "Add 被注释，解析完成后丢弃"
+    },
+    {
+      "id": "QT-D4",
+      "name": "characters_quest 写库",
+      "oracle_anchor": {
+        "file": "src/Storeages/DBSvr.Storage.MySQL/PlayDataStorage.Save.cs",
+        "line": 493,
+        "line_end": 495
+      },
+      "status": "dead_in_oracle",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "SaveQuest 只 DELETE、从不 INSERT、全仓无调用点；见 QX-04"
+    }
+  ],
+  "entries": [
+    {
+      "id": "QT-01",
+      "behavior": "{Quest N} 脚本选择门（至多 10 组 #IF [flag]=value / #RAND）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 146,
+        "line_end": 168
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "quest_creates_new_script_info",
+          "quest_block_keeps_writing_into_previous_record"
+        ]
+      },
+      "cost": null,
+      "deviation": {
+        "id": "B-13",
+        "file": "mir2-rs/tests/parity/whitelist.md",
+        "section": "scriptType==1 死分支",
+        "lines": null
+      },
+      "notes": "运行时 check_quest_status（crates/script/src/engine/mod.rs 第 1074 行）无 oracle 夹具；#RAND 支保守按 0，登记 B-13；语料 {Quest 0 个文件"
+    },
+    {
+      "id": "QT-02",
+      "behavior": "CHECK [flag] value（任务标记比较）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs",
+        "line": 4174,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "impl cond_check（crates/script/src/engine/conditions.rs 第 456 行）；底层位读有 oracle 向量（QX-01），判定本身无直接夹具；语料 12 个文件使用"
+    },
+    {
+      "id": "QT-03",
+      "behavior": "CHECKOPEN [flag] value（含 oracle 缺陷：恒假）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs",
+        "line": 199,
+        "line_end": null
+      },
+      "status": "verified",
+      "evidence": {
+        "test": "condition_truth_table_matches_oracle",
+        "test_file": "mir2-rs/crates/script/tests/engine_tests.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv",
+        "cases": [],
+        "unit_tests": [
+          "checkunit_checkopen_parse_anchors",
+          "checkopen_is_always_false_like_oracle"
+        ]
+      },
+      "cost": null,
+      "deviation": {
+        "id": "T-37",
+        "file": "mir2-rs/tests/parity/whitelist.md",
+        "section": "CHECKOPEN 恒假（oracle 缺陷 1:1 复刻）",
+        "lines": null
+      },
+      "notes": "缺陷照搬，不得修掉；改它与 oracle 不一致。将来修好须单开 S-* 批次。语料 0"
+    },
+    {
+      "id": "QT-04",
+      "behavior": "CHECKUNIT [flag] value（任务单元比较）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs",
+        "line": 4104,
+        "line_end": null
+      },
+      "status": "verified",
+      "evidence": {
+        "test": "condition_truth_table_matches_oracle",
+        "test_file": "mir2-rs/crates/script/tests/engine_tests.rs",
+        "fixture": "mir2-rs/tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv",
+        "cases": [],
+        "unit_tests": [
+          "checkunit_checkopen_parse_anchors",
+          "checkunit_matches_quest_unit_status"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "语料 0"
+    },
+    {
+      "id": "QT-05",
+      "behavior": "SET flag value（置任务标记）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
+        "line": 2036,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "implemented_registry_entries_are_actually_implemented"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "impl ActionOfSet（crates/script/src/engine/actions.rs 第 192 行）；无动作级 oracle 夹具；语料 18 个文件使用"
+    },
+    {
+      "id": "QT-06",
+      "behavior": "RESET flag count（批量清任务标记）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
+        "line": 2043,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "implemented_registry_entries_are_actually_implemented"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "impl ActionOfReSet（actions.rs 第 199 行）；语料 0"
+    },
+    {
+      "id": "QT-07",
+      "behavior": "SETOPEN flag value",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
+        "line": 2051,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "implemented_registry_entries_are_actually_implemented"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "impl ActionOfSetOpen（actions.rs 第 205 行）；语料 0"
+    },
+    {
+      "id": "QT-08",
+      "behavior": "SETUNIT flag value",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
+        "line": 2058,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "implemented_registry_entries_are_actually_implemented"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "impl ActionOfSetUnit（actions.rs 第 210 行）；语料 0"
+    },
+    {
+      "id": "QT-09",
+      "behavior": "RESETUNIT flag count",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs",
+        "line": 2065,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "implemented_registry_entries_are_actually_implemented"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "impl ActionOfResetUnit（actions.rs 第 155 行）；语料 0"
+    }
+  ]
+}

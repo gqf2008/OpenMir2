@@ -1,0 +1,1448 @@
+{
+  "schema_version": 1,
+  "domain": "magic",
+  "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
+  "legacy_source": "E:/UserFleet/magic-parity.json",
+  "counting_moment": {
+    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
+    "time": "2026-11-19T23:30:00+08:00"
+  },
+  "status_enum": [
+    "verified",
+    "implemented_unverified",
+    "missing",
+    "dead_in_oracle",
+    "out_of_scope"
+  ],
+  "status_legend": {
+    "verified": "有对拍测试名且夹具由 oracle 生成（章程 §5）",
+    "implemented_unverified": "Rust 有实现/单测，但没有 oracle 对拍夹具",
+    "missing": "C# 有、Rust 无；必须带 deviation.id 指向已登记的差异条目",
+    "dead_in_oracle": "oracle 自身是死路径（调用点注释/丢弃），Rust 不应实现",
+    "out_of_scope": "不属本分母（环境/工具/数据侧）"
+  },
+  "cost_enum": [
+    "S",
+    "S-M",
+    "M",
+    "M-L",
+    "L"
+  ],
+  "denominator": {
+    "kind": "dispatch_branch",
+    "definition": "照旧清单：src/M2Server/Magic/MagicManager.cs 的 case 分支（65 条，含同名技能的多个分派位点）；status 只按旧清单直译，未升格",
+    "entry": "CM_SPELL(3017) -> MagicManager.DoSpell -> case 分支",
+    "count": 65,
+    "commands": []
+  },
+  "migration_note": "由 E:/UserFleet/magic-parity.json（旧 schema）机械转写：implemented -> implemented_unverified（旧清单明示“帧级对拍 0/65、basis 全空” ⇒ verified=0，不升格）；missing 保持 2 条；cost 直译 小时级->S、天级->M，原始值保留在 notes。",
+  "axes": [],
+  "todos": [
+    {
+      "id": "buff_tick_gate",
+      "desc": "14/15/31 的 buff 生产链仅在 World::buff_tick_enabled() 时生效（缺省关）——需与 oracle 对照后决定默认开并补帧序对拍",
+      "ref": "bins/game-svr/src/lib.rs:13229"
+    },
+    {
+      "id": "anti_magic_recalc",
+      "desc": "目标 AntiMagic 依赖的 RecalcAbilitys 面未同步（装备/卸下后实体保持 0）⇒ 骰门输入可能恒 0",
+      "ref": "bins/game-svr/src/lib.rs:12170"
+    },
+    {
+      "id": "version_gate_167",
+      "desc": "DoSpell :167 版本门未接（当前以别的路径等价，需真机/对拍证明）",
+      "ref": "MagicManager.cs:167"
+    }
+  ],
+  "entries": [
+    {
+      "id": "MG-01",
+      "legacy_id": "SKILL_ONESWORD(id=3)",
+      "behavior": "SKILL_ONESWORD(id=3)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 87,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-02",
+      "legacy_id": "SKILL_ILKWANG(id=4)",
+      "behavior": "SKILL_ILKWANG(id=4)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 88,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-03",
+      "legacy_id": "SKILL_YEDO(id=7)",
+      "behavior": "SKILL_YEDO(id=7)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 89,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-04",
+      "legacy_id": "SKILL_ERGUM(id=12)",
+      "behavior": "SKILL_ERGUM(id=12)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 90,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-05",
+      "legacy_id": "SKILL_BANWOL(id=25)",
+      "behavior": "SKILL_BANWOL(id=25)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 91,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-06",
+      "legacy_id": "SKILL_FIRESWORD(id=26)",
+      "behavior": "SKILL_FIRESWORD(id=26)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 92,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-07",
+      "legacy_id": "SKILL_MOOTEBO(id=27)",
+      "behavior": "SKILL_MOOTEBO(id=27)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 93,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-08",
+      "legacy_id": "SKILL_CROSSMOON(id=34)",
+      "behavior": "SKILL_CROSSMOON(id=34)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 94,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-09",
+      "legacy_id": "SKILL_TWINBLADE(id=38)",
+      "behavior": "SKILL_TWINBLADE(id=38)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 95,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-10",
+      "legacy_id": "SKILL_FIREBALL(id=1)",
+      "behavior": "SKILL_FIREBALL(id=1)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 174,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-11",
+      "legacy_id": "SKILL_FIREBALL2(id=5)",
+      "behavior": "SKILL_FIREBALL2(id=5)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 175,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-12",
+      "legacy_id": "SKILL_HEALLING(id=2)",
+      "behavior": "SKILL_HEALLING(id=2)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 204,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-13",
+      "legacy_id": "SKILL_AMYOUNSUL(id=6)",
+      "behavior": "SKILL_AMYOUNSUL(id=6)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 225,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-14",
+      "legacy_id": "Shape=1",
+      "behavior": "Shape=1",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 239,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-15",
+      "legacy_id": "Shape=2",
+      "behavior": "Shape=2",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 243,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-16",
+      "legacy_id": "SKILL_FIREWIND(id=8)",
+      "behavior": "SKILL_FIREWIND(id=8)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 259,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-17",
+      "legacy_id": "SKILL_FIRE(id=9)",
+      "behavior": "SKILL_FIRE(id=9)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 265,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-18",
+      "legacy_id": "SKILL_SHOOTLIGHTEN(id=10)",
+      "behavior": "SKILL_SHOOTLIGHTEN(id=10)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 277,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-19",
+      "legacy_id": "SKILL_LIGHTENING(id=11)",
+      "behavior": "SKILL_LIGHTENING(id=11)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 289,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-20",
+      "legacy_id": "SKILL_FIRECHARM(id=13)",
+      "behavior": "SKILL_FIRECHARM(id=13)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 315,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-21",
+      "legacy_id": "SKILL_HANGMAJINBUB(id=14)",
+      "behavior": "SKILL_HANGMAJINBUB(id=14)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 316,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "spell_cmd_a5_defence_area_buffs_target_in_range"
+        ]
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-22",
+      "legacy_id": "SKILL_DEJIWONHO(id=15)",
+      "behavior": "SKILL_DEJIWONHO(id=15)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 317,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "spell_cmd_a5_defence_area_buffs_target_in_range"
+        ]
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-23",
+      "legacy_id": "SKILL_HOLYSHIELD(id=16)",
+      "behavior": "SKILL_HOLYSHIELD(id=16)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 318,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "spell_tail_p2_defence_amulet_consumed_and_tail_fires"
+        ]
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-24",
+      "legacy_id": "SKILL_SKELLETON(id=17)",
+      "behavior": "SKILL_SKELLETON(id=17)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 319,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-25",
+      "legacy_id": "SKILL_CLOAK(id=18)",
+      "behavior": "SKILL_CLOAK(id=18)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 320,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "spell_tail_p2_defence_amulet_consumed_and_tail_fires"
+        ]
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-26",
+      "legacy_id": "SKILL_BIGCLOAK(id=19)",
+      "behavior": "SKILL_BIGCLOAK(id=19)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 321,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "spell_tail_p2_defence_amulet_consumed_and_tail_fires"
+        ]
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-27",
+      "legacy_id": "SKILL_FIRECHARM(id=13)",
+      "behavior": "SKILL_FIRECHARM(id=13)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 328,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-28",
+      "legacy_id": "SKILL_HANGMAJINBUB(id=14)",
+      "behavior": "SKILL_HANGMAJINBUB(id=14)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 352,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-29",
+      "legacy_id": "SKILL_DEJIWONHO(id=15)",
+      "behavior": "SKILL_DEJIWONHO(id=15)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 359,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-30",
+      "legacy_id": "SKILL_HOLYSHIELD(id=16)",
+      "behavior": "SKILL_HOLYSHIELD(id=16)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 366,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-31",
+      "legacy_id": "SKILL_SKELLETON(id=17)",
+      "behavior": "SKILL_SKELLETON(id=17)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 372,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-32",
+      "legacy_id": "SKILL_CLOAK(id=18)",
+      "behavior": "SKILL_CLOAK(id=18)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 378,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-33",
+      "legacy_id": "SKILL_BIGCLOAK(id=19)",
+      "behavior": "SKILL_BIGCLOAK(id=19)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 384,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-34",
+      "legacy_id": "SKILL_TAMMING(id=20)",
+      "behavior": "SKILL_TAMMING(id=20)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 394,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-35",
+      "legacy_id": "SKILL_SPACEMOVE(id=21)",
+      "behavior": "SKILL_SPACEMOVE(id=21)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 403,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-36",
+      "legacy_id": "SKILL_EARTHFIRE(id=22)",
+      "behavior": "SKILL_EARTHFIRE(id=22)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 412,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-37",
+      "legacy_id": "SKILL_FIREBOOM(id=23)",
+      "behavior": "SKILL_FIREBOOM(id=23)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 418,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-38",
+      "legacy_id": "SKILL_LIGHTFLOWER(id=24)",
+      "behavior": "SKILL_LIGHTFLOWER(id=24)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 424,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-39",
+      "legacy_id": "SKILL_SHOWHP(id=28)",
+      "behavior": "SKILL_SHOWHP(id=28)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 431,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "drain_show_hp_health_changes_broadcasts_exact_53_bytes"
+        ]
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-40",
+      "legacy_id": "SKILL_BIGHEALLING(id=29)",
+      "behavior": "SKILL_BIGHEALLING(id=29)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 443,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-41",
+      "legacy_id": "SKILL_SINSU(id=30)",
+      "behavior": "SKILL_SINSU(id=30)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 450,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-42",
+      "legacy_id": "SKILL_ANGEL(id=41)",
+      "behavior": "SKILL_ANGEL(id=41)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 462,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-43",
+      "legacy_id": "SKILL_SHIELD(id=31)",
+      "behavior": "SKILL_SHIELD(id=31)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 474,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "spell_tail_p2_shield_without_amulet_always_trains"
+        ]
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-44",
+      "legacy_id": "SKILL_KILLUNDEAD(id=32)",
+      "behavior": "SKILL_KILLUNDEAD(id=32)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 480,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-45",
+      "legacy_id": "SKILL_SNOWWIND(id=33)",
+      "behavior": "SKILL_SNOWWIND(id=33)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 489,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-46",
+      "legacy_id": "SKILL_UNAMYOUNSUL(id=40)",
+      "behavior": "SKILL_UNAMYOUNSUL(id=40)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 495,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-47",
+      "legacy_id": "SKILL_WINDTEBO(id=35)",
+      "behavior": "SKILL_WINDTEBO(id=35)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 524,
+        "line_end": null
+      },
+      "status": "missing",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": {
+        "id": "T-285",
+        "file": "mir2-rs/tests/parity/whitelist.md",
+        "section": "技能块缺口转正（T-285）",
+        "lines": null
+      },
+      "notes": "MagWindTebo 未建模（推挤+等级门+Random(20) 骰）；旧清单 cost=天级；已转正经编号 T-285（whitelist.md 登记行）"
+    },
+    {
+      "id": "MG-48",
+      "legacy_id": "SKILL_MABE(id=50)",
+      "behavior": "SKILL_MABE(id=50)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 530,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-49",
+      "legacy_id": "SKILL_GROUPLIGHTENING(id=42)",
+      "behavior": "SKILL_GROUPLIGHTENING(id=42)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 537,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-50",
+      "legacy_id": "SKILL_GROUPAMYOUNSUL(id=48)",
+      "behavior": "SKILL_GROUPAMYOUNSUL(id=48)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 543,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-51",
+      "legacy_id": "SKILL_GROUPDEDING(id=39)",
+      "behavior": "SKILL_GROUPDEDING(id=39)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 549,
+        "line_end": null
+      },
+      "status": "missing",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": {
+        "id": "T-286",
+        "file": "mir2-rs/tests/parity/whitelist.md",
+        "section": "技能块缺口转正（T-286）",
+        "lines": null
+      },
+      "notes": "MagGroupDeDing 未建模（范围伤害+RM_10205+延迟帧）；旧清单 cost=天级；已转正经编号 T-286（whitelist.md 登记行）"
+    },
+    {
+      "id": "MG-52",
+      "legacy_id": "SKILL_43(id=43)",
+      "behavior": "SKILL_43(id=43)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 555,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-53",
+      "legacy_id": "SKILL_44(id=44)",
+      "behavior": "SKILL_44(id=44)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 557,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-54",
+      "legacy_id": "SKILL_45(id=45)",
+      "behavior": "SKILL_45(id=45)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 563,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-55",
+      "legacy_id": "SKILL_46(id=46)",
+      "behavior": "SKILL_46(id=46)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 589,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-56",
+      "legacy_id": "SKILL_47(id=47)",
+      "behavior": "SKILL_47(id=47)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 595,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-57",
+      "legacy_id": "SKILL_ENERGYREPULSOR(id=37)",
+      "behavior": "SKILL_ENERGYREPULSOR(id=37)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 601,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-58",
+      "legacy_id": "SKILL_49(id=49)",
+      "behavior": "SKILL_49(id=49)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 607,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-59",
+      "legacy_id": "SKILL_UENHANCER(id=36)",
+      "behavior": "SKILL_UENHANCER(id=36)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 610,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-60",
+      "legacy_id": "SKILL_51(id=51)",
+      "behavior": "SKILL_51(id=51)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 631,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-61",
+      "legacy_id": "SKILL_52(id=52)",
+      "behavior": "SKILL_52(id=52)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 634,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-62",
+      "legacy_id": "SKILL_53(id=53)",
+      "behavior": "SKILL_53(id=53)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 637,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-63",
+      "legacy_id": "SKILL_54(id=54)",
+      "behavior": "SKILL_54(id=54)",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 640,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "M",
+      "deviation": null,
+      "notes": "旧清单 cost=天级"
+    },
+    {
+      "id": "MG-64",
+      "legacy_id": "Shape=1",
+      "behavior": "Shape=1",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 919,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    },
+    {
+      "id": "MG-65",
+      "legacy_id": "Shape=2",
+      "behavior": "Shape=2",
+      "oracle_anchor": {
+        "file": "src/M2Server/Magic/MagicManager.cs",
+        "line": 923,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": "S",
+      "deviation": null,
+      "notes": "旧清单 cost=小时级"
+    }
+  ]
+}

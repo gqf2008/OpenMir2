@@ -1,0 +1,340 @@
+{
+  "schema_version": 1,
+  "domain": "npc",
+  "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
+  "counting_moment": {
+    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
+    "time": "2026-11-19T23:28:45+08:00"
+  },
+  "status_enum": [
+    "verified",
+    "implemented_unverified",
+    "missing",
+    "dead_in_oracle",
+    "out_of_scope"
+  ],
+  "status_legend": {
+    "verified": "有对拍测试名且夹具由 oracle 生成（章程 §5）",
+    "implemented_unverified": "Rust 有实现/单测，但没有 oracle 对拍夹具",
+    "missing": "C# 有、Rust 无；必须带 deviation.id 指向已登记的差异条目",
+    "dead_in_oracle": "oracle 自身是死路径（调用点注释/丢弃），Rust 不应实现",
+    "out_of_scope": "不属本分母（环境/工具/数据侧）"
+  },
+  "cost_enum": [
+    "S",
+    "S-M",
+    "M",
+    "M-L",
+    "L"
+  ],
+  "denominator": {
+    "kind": "behavior_leaf",
+    "definition": "NPC 交互链上的行为叶子：点 NPC / 对话选择 / 特殊 NPC 覆写 / @main 脚本选择 / 标签+extjmp / procedure 执行 / 断链 / 说词帧 / 变量替换 / 隐藏 NPC / NPC 显示帧",
+    "entry": "CM_CLICKNPC(1010) -> ClientClickNpc -> NormNpc.Click -> @main; CM_MERCHANTDLGSELECT(1011) -> UserSelect",
+    "count": 11,
+    "commands": [
+      "grep -rn 'UserSelect(' --include=*.cs src/ | wc -l",
+      "grep -rn 'GotoLable(' --include=*.cs src/ | wc -l"
+    ]
+  },
+  "axes": [
+    {
+      "id": "NX-01",
+      "name": "脚本命令语言全集（条件/动作注册表）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/Consts/ConditionCode.cs",
+        "line": 1,
+        "line_end": null
+      },
+      "status": "out_of_scope",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "implemented_registry_entries_are_actually_implemented"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "不在本块重复计数：M4 已有双跑对拍 run_npc_cases.py（7 条）与注册表门 IMPLEMENTED_CONDITIONS/IMPLEMENTED_EXECUTIONS；任务块 QT-01..09 是其中任务专属子集"
+    }
+  ],
+  "dead_paths": [
+    {
+      "id": "NP-D1",
+      "name": "MapQuest 自动对话触发（怪/物品事件点 NPC）",
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.cs",
+        "line": 1670,
+        "line_end": 1677
+      },
+      "status": "dead_in_oracle",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "同 QT-D1；全仓无活 GetQuestNpc 调用点"
+    }
+  ],
+  "entries": [
+    {
+      "id": "NP-01",
+      "behavior": "点 NPC 打开对话（Click -> @main）",
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Base.cs",
+        "line": 674,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "t137_click_fixed_npc_main_says_menu_through_production_path",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "click_npc_type0_fixed_npc_still_answers_643",
+          "t160_click_fixed_npc_main_take_item_and_gold_write_back"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "Rust 派发 lib.rs 第 6317/27383 行、NormNpc.Click 等价第 6033 行；无 oracle 夹具"
+    },
+    {
+      "id": "NP-02",
+      "behavior": "对话标签选择跳转（@back/同标签/新标签）",
+      "oracle_anchor": {
+        "file": "src/M2Server/Player/PlayObject.Operate.cs",
+        "line": 114,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "merchant_dialog_label_gate",
+        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "merchant_dlgselect_exit_emits_one_merchantdlgclose_with_npc_recog"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "1011 派发 lib.rs 第 7094 行；merchant_base_user_select 第 8907 行；guild_official.rs::handle_select 第 461 行"
+    },
+    {
+      "id": "NP-03",
+      "behavior": "特殊 NPC 的 UserSelect 覆写（商店/城堡/行会）",
+      "oracle_anchor": {
+        "file": "src/GameSrv/Npc/Merchant.cs",
+        "line": 789,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "t138_non_master_is_cancelled",
+        "test_file": "mir2-rs/bins/game-svr/src/guild_official/tests.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "t138_member_is_cancelled",
+          "t138_without_zuma_piece_reports_missing",
+          "t138_index_parsing_through_production_path"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "商店子命令归交易面（M3⑤），不在本分母；CastleOfficial.cs:93 / GuildOfficial.cs:55 覆写"
+    },
+    {
+      "id": "NP-04",
+      "behavior": "@main 脚本选择规则（LastNpc 保持 -> 逆序 Quest 门）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 46,
+        "line_end": 75
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": null,
+        "test_file": null,
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "check_quest_status"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "crates/script/src/engine/mod.rs 的 goto_label/check_quest_status（第 1008/1074 行附近）；无直接 oracle 夹具"
+    },
+    {
+      "id": "NP-05",
+      "behavior": "标签记录查找 + boExtJmp 门",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 89,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "merchant_dialog_label_gate",
+        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "guild_official.rs 第 582 行注释 + 引擎判定"
+    },
+    {
+      "id": "NP-06",
+      "behavior": "逐 procedure 条件真/假分支 + 动作执行 + say 累积",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 95,
+        "line_end": 125
+      },
+      "status": "verified",
+      "evidence": {
+        "test": "run_npc_cases.py",
+        "test_file": "mir2-rs/tests/parity/M4/run_npc_cases.py",
+        "fixture": "mir2-rs/tests/parity/evidence/M4/npc-cases.txt",
+        "cases": [
+          "传送-幻境（金币不足/无物品）",
+          "传送-幻境（背包有名为100000的物品）",
+          "行会-攻城申请缴金条（@requestcastlewar）",
+          "任务-地图出矿提示（Q001@main）",
+          "商店-货币兑换（@changeGold 足额金币→金条）",
+          "修理-RepairAll（@StdModeFunc26）",
+          "仓库-捆绑卷轴（@zum_bind1 6×地牢逃脱卷）"
+        ],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "7 条 port-free 用例：同脚本+同 label+同初始状态，C# 参照 vs Rust 逐行 diff"
+    },
+    {
+      "id": "NP-07",
+      "behavior": "动作返回 false 断链",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 101,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "goto_executes_goto_not_endquest_after_flip",
+        "test_file": "mir2-rs/crates/script/tests/engine_tests.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": []
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "相邻覆盖（GOTO 语义），非本条的专门夹具"
+    },
+    {
+      "id": "NP-08",
+      "behavior": "说词帧（ChrName 前缀、High/普通优先级）",
+      "oracle_anchor": {
+        "file": "src/Modules/ScriptEngine/ScriptEngine.cs",
+        "line": 987,
+        "line_end": 999
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "merchant_say_text_and_gbk_bytes",
+        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "say_text_must_carry_chrname_prefix",
+          "run_login_emits_say_with_chrname_prefix"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "M4 只比对 msg 11009 行文本，不覆盖线缆帧/优先级；优先级实现见 guild_official.rs 第 406-432 行"
+    },
+    {
+      "id": "NP-09",
+      "behavior": "说词变量替换（玩家/NPC/价格等）",
+      "oracle_anchor": {
+        "file": "src/M2Server/Npc/NormNpc.cs",
+        "line": 275,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "merchant_click_main_say_expands_player_and_npc_vars",
+        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "merchant_variable_text_vectors",
+          "line_variable_text_stops_at_first_non_variable_token"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "Merchant.GetVariableText 覆写在 src/GameSrv/Npc/Merchant.cs:1109"
+    },
+    {
+      "id": "NP-10",
+      "behavior": "隐藏脚本 NPC 可点/可选（QManage/QFunction/RobotManage）",
+      "oracle_anchor": {
+        "file": "src/GameSrv/DB/LocalDB.cs",
+        "line": 236,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "manage_and_function_npc_gates_require_loaded",
+        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "loads_from_disk_and_runs_login"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "QFunctionNpc/QMangeNpc/RobotNpc 分别在 LocalDB.cs:192/:236/:293；加载见 QX-02"
+    },
+    {
+      "id": "NP-11",
+      "behavior": "NPC 显示/转向/受击/空闲帧",
+      "oracle_anchor": {
+        "file": "src/GameSrv/Word/WorldServer.Merchant.cs",
+        "line": 120,
+        "line_end": null
+      },
+      "status": "implemented_unverified",
+      "evidence": {
+        "test": "fixed_npc_display_frames_through_production_aoi",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": null,
+        "cases": [],
+        "unit_tests": [
+          "npc_and_merchant_turn_hit_frames_through_production_drain",
+          "npc_random_idle_frames_through_production_drain_run",
+          "npc_turn_hit_production_calls_are_wired_in_drain_run_downlinks",
+          "npc_hit_frames_only_for_world_branch_and_never_to_npc"
+        ]
+      },
+      "cost": null,
+      "deviation": null,
+      "notes": "ProcessNpcs 逐 tick 驱动"
+    }
+  ]
+}

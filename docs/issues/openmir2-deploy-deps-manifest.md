@@ -1,7 +1,7 @@
 # openmir2-deploy-deps-manifest
 
-> 状态：**实现完成（2026-11-19，分支 `card/deploy-deps-manifest`）**——生成器 + 两级检查器 +
-> 自测（10 例）已入仓并登记工具门（TOTAL 69 → **70**）。已登记（walgit 看板不可用，按 AGENTS.md §7
+> 状态：**已合并（`e7de2fbd9`；后续跟随 `543e8e39b` 清 NLog、`cfc154b92` 部署目录核验）**——生成器 + 两级检查器 +
+> 自测用例数以 `python -I -B tools/deploy/deps_manifest.py selftest` 实跑为准（见 `E:/UserFleet/evidence-cardfix-20261119/deps-check-and-selftest.log`），已入仓并登记工具门（TOTAL 69 → **70**）。已登记（walgit 看板不可用，按 AGENTS.md §7
 > 过渡）。看板恢复后迁移为正式卡。tier 建议 **L**。
 
 ## 背景
@@ -90,7 +90,7 @@ check    src/LoginSrv → DEPS_GREEN packages=48 files=1063
   - 牙③：`DEPS_RED BAD_MANIFEST_VERSION manifest_version=None` + `DEPS_RED EMPTY_MANIFEST`；
     `DEPS_RED MISSING_FIELD Alpha.nupkg_sha512`（均 rc=1）。
   - 另两条 fail-closed：缺 manifest / 缺 lock ⇒ `MISSING_MANIFEST` / `MISSING_LOCK`（rc=1）。
-  - 汇总：`deps_manifest selftest: GREEN (10 cases)`。
+  - 汇总：以机器产物为准 —— `E:/UserFleet/evidence-cardfix-20261119/deps-check-and-selftest.log`（`python -I -B tools/deploy/deps_manifest.py selftest` 的最后一行）。
 - 锁文件不破坏构建（干净 clone）：`git clone --local` 后在分支 head 上 `dotnet build`
   DBSrv/LoginSrv/GameGate/LoginGate/SelGate **0 error**；`dotnet test TestProject1` →
   **通过 40 / 失败 0 / 跳过 0**。
@@ -102,3 +102,30 @@ check    src/LoginSrv → DEPS_GREEN packages=48 files=1063
 - 挂点由 botfleet 决定：建议构建车道（部署前）跑 `generate`，目标机（部署后/起栈前）跑 `check`。
 - 红格式示例：`DEPS_RED FILE_SHA_MISMATCH <pkg>/<ver> <file> expected=… actual=…`（rc=1）；
   判不了（缺目录等）rc=2，不静默通过。两边都不改对方仓库。
+
+## QA 整改（2026-11-19）
+
+> 来源：QA 签署摘要 —— 公共路径 `E:/UserFleet/qa/qa-merged-cards-signoff-20261119.md`。
+
+> 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
+
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
+- 实跑命令与 `git status --porcelain` 的测量命令：见上述日志（卡面不写行数）；
+- **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
+  实跑帧/JSON 产物为准。
+- 可独立重放的篡改分组（`packlen T1–T4` / `utf8 M1–M3` / `deps T1–T5`）：**待 QA 提供定义后
+  原样写入本卡**（本批未凭空补写）。
+### 统一整改（C4–C6）
+
+- **C4 `built_at`（裁定正文，引用不指向未合并分支）**：戳的 `built_at` 必须等于**二进制自报**的
+  `built_at`（单一来源）；文件 mtime 只作元数据、**不参与比对**；闸门断言"自报 == 戳"。
+  M9 四件因自报与戳相差 5 秒判 `CONDITIONAL`（身份可证、语义待统一），不算 FAIL。
+- **C5 `SHA256SUMS`（已补实）**：两份冻结目录 `E:/UserFleet/release-csharp-m9-572a0b8a/` 与
+  `E:/UserFleet/release-m9-572a0b8a/` 均为双清单；`sha256sum -c` 的结果与 rc **见验证日志**
+  `E:/UserFleet/evidence-cardfix-20261119/sums-verify.log`（卡面不写行数/OK 数）；历史
+  `SHA256SUMS.txt` 不改写；用途差异见各自 `PROVENANCE.txt` 的 `sums_files=` 字段。
+- **C3 构建命令与仓库状态（已补实）**：两目录的 `PROVENANCE.txt` 均含 `build_cmd=` / `build_cwd=` /
+  `toolchain=` / `git_status_porcelain_measure=` 字段（**字段值照抄，卡面不写数字**）；
+  C# 侧实跑命令与仓库状态见 `E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`。
+- **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
+  卡面凡引"章程 §N"均以此文件为准。
