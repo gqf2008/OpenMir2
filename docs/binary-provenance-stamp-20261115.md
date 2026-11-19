@@ -143,8 +143,8 @@
   `head` 只能是推断（`head_source` 标出来）；要拿到真实来源，**必须由构建车道在构建完成时立即产戳**。
 - **一个目录 ≠ 一个构建**：同一输出目录里各 exe 可能来自不同提交（§6.1 实例）。此时用 `-Heads`
   逐项指定，不能用一个 `-Head` 冒充全部。
-- **内嵌 commit（2026-11-20 起）**：dotnet 目标必须内嵌 `SourceRevisionId` 且与戳 head 一致（R5，见 §10）；
-  Rust 目标是**条件性**判据（仅当含 `MIR2_BUILD_SELF_REV=1` 才自报，缺标记静默跳过——见 §10 风险点）。
+- **内嵌 commit（2026-11-20 起）**：dotnet 目标必须内嵌 `SourceRevisionId` 且与戳 head 一致（R5，见 §11）；
+  Rust 目标是**条件性**判据（仅当含 `MIR2_BUILD_SELF_REV=1` 才自报，缺标记静默跳过——见 §11 风险点）。
   历史说明：2026-11-20 之前本工具只把 `head` 当外部证据、不检查内嵌，M9 的 MongoDB 插件正是这样把
   「内嵌 M8 / 戳 M9」漏进了冻结集。
 - **C# 的 `runtime` 取二进制同目录的 `<base>.runtimeconfig.json`**；该文件缺失时回落到产戳机器的
@@ -166,7 +166,7 @@
 - **发布目录不使用 `dist`**：2026-11-20 检索 `docs/`、`tools/`、`E:/UserFleet` 均无发布级 `dist`
   引用；此前未登记，特此写明（出现该说法即为历史误记）。
 
-## 7. DBSrv 六件 / LoginSrv 三件：产戳命令与时机（2026-11-17 起；2026-11-20 扩到六件，卡 `openmir2-own-binary-without-stamp`）
+## 10. DBSrv 六件 / LoginSrv 三件：产戳命令与时机（2026-11-17 起；2026-11-20 扩到六件，卡 `openmir2-own-binary-without-stamp`）
 
 **时机**：`dotnet build src/DBSrv -c Release` **成功后立即**产戳（`built_at` 取二进制 mtime，
 校验要求与 mtime 差 ≤5 分钟，别把「先构建、隔天再产戳」当常态）。只对部署源
@@ -218,7 +218,7 @@ PowerShell `Copy-Item` 保 mtime（安全）；robocopy `/COPY:DAT` 也可以。
 **升级顺序约束**：`m1-stack/start-m1-stack.ps1` 调的是 `$CsharpRepo	ools\orchestration\stamp-binaries.ps1`
 ——**主检出（master）那份**。因此本工具的任何修复**必须先合 master** 才会对真实起栈生效；
 在分支上「自测全绿」不等于生产路径绿（2026-11-17 实测：`.dll` 支持在分支上绿、master 上照旧 SKIP ⇒ 起栈必红）。
-## 10. R5：C# 内嵌 rev 与戳 head 一致性（2026-11-20，卡 `openmir2-own-binary-without-stamp`）
+## 11. R5：C# 内嵌 rev 与戳 head 一致性（2026-11-20，卡 `openmir2-own-binary-without-stamp`）
 
 **判据（dotnet 目标）**：读取二进制内嵌的 `SourceRevisionId`（ASCII 与 UTF-16LE 各扫 `[0-9a-f]{40}`），
 必须存在且**以戳 `head` 为前缀**；否则：

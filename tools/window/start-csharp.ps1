@@ -210,6 +210,8 @@ foreach ($g in $gateGroups.Keys) {
   # `-OwnGlobs` 独立于 `-RequireAll`（R3）：未入清单的自家 DLL ⇒ UNLISTED_OWN_BINARY。
   & powershell -NoProfile -ExecutionPolicy Bypass -File $stampTool -Check -BinDir $gdir -RepoRoot $Repo -RequireAll -Names $gNames -OwnGlobs $gGlobs
   $stampRc = $LASTEXITCODE
+  # rc 可推不可见：显式打一行，反例日志里能直接读到子进程退出码。
+  Write-Output ('STAMP_RC ' + $g + '=' + $stampRc)
   if ($stampRc -ne 0) {
     Write-Output ('RED: ' + $g + ' 影子产物 provenance 校验失败 rc=' + $stampRc + '（bin=' + $gdir + '）—— 不起任何进程')
     Log-Step ('RED provenance ' + $g + ' rc=' + $stampRc)

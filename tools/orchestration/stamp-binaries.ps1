@@ -60,6 +60,16 @@
 #   2 = 判不了 / 用法错（BinDir 不存在、目录里没有二进制、RepoRoot 不是 git 仓、写戳失败、
 #       自测基础设施不可用）——绝不静默通过
 #
+# 限制（已知风险点；规范文档 `docs/binary-provenance-stamp-20261115.md` §11 有完整版）：
+#   * 短 head（7..40 位）按**前缀**匹配：`-RequireHead` 与内嵌 rev 校验都是「戳 head 是内嵌 40-hex
+#     的前缀」；7 位前缀理论可碰撞，生产门（起栈/冻结/三处对齐）一律给完整 40 位。
+#   * Rust 自报是**条件性**判据：仅当二进制含 `MIR2_BUILD_SELF_REV=1` 才跑 `--version` 并与戳 head
+#     比对；**缺标记 ⇒ 静默跳过**（跳过不是绿）——漏嵌标记的产物不会因 rev 不符而红，只能靠 sha
+#     与构建车道的纪律兜底。
+#   * C# 内嵌 rev（R5）要求二进制真的带 `SourceRevisionId`；增量构建跳过项目时戳与内嵌会脱节
+#     （M9 MongoDB 事故），`-Check` 会判 `EMBEDDED_REV_MISMATCH` / `EMBEDDED_REV_MISSING`。
+#   * `-Check` 需要 git 对象库才能解析 head；无 git / 无对象库 ⇒ rc=2（判不了，不是绿）。
+#
 # 机器可读输出（stdout）：
 #   产戳：STAMP_WRITE <stamp> sha256=<hex> size=<n> head=<sha> kind=<rust|dotnet> head_source=<..>
 #         SKIP <name> (absent) / SKIP_STAMP_EXISTS <stamp> (use -Force to overwrite) / STAMPED <n>
@@ -421,7 +431,7 @@ function Parse-IsoInstant([string]$Text) {
 # 返回错误的 List[string]（空 List = 该戳健康）。
 # 卡 openmir2-rust-build-rev-embedding 第 4 条：Rust 件必须**自报** `rev` 且等于侧车 head。
 # 能力检测：二进制里含 `MIR2_BUILD_SELF_REV=1`（新件都带）才跑 `--version`；
-# 老件/合成夹具没有此串 ⇒ 跳过自报核验（不是"绿"，见文件头"限制"）。
+# 老件/合成夹具没有此串 ⇒ 跳过自报核验（不是"绿"，见文件头「限制」小节）。
 $script:SelfRevMarker = 'MIR2_BUILD_SELF_REV=1'
 $script:SelfReportTimeoutMs = 10000
 
