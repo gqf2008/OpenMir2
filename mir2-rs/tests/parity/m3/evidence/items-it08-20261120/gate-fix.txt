@@ -1,0 +1,20 @@
+# 升级门控修正（仅 exp_delta=Some 才判升级）—— 红→绿
+# 缺陷：`let leveled = exp >= max_exp` 无条件计算；非授经验物品(药品/解包) exp/max_exp 常同为 0
+#       ⇒ `0>=0` 误判升级，触发 53/45/52/752 误发。由 `cargo test -p game-svr --lib` 全量发现。
+#       该缺陷由 34823f8ce（IT-08 升级支实现）引入；本条为 follow-up 修复。
+# 红（修前）：
+$ cargo test -p game-svr --lib
+failures:
+    tests::eat_dead_rejected_636_entity_stays_zero_and_p21_heals_projection
+    tests::eat_drug_dispatches_and_updates_session
+    tests::eat_stdmode31_unbind_dispatches_six_additem_frames
+    tests::eat_sun_water_shape1_shape3_survive_p21_and_save_hp70_mp140
+    tests::recovery_tick_consumes_pool_and_broadcasts
+assertion `left == right` failed: 池药（Shape 0）不吃即时回血帧，只累加 IncHealth
+  left: [(0, 635), (1, 53), (0, 622), (0, 45), (0, 52), (1, 752)]   right: [(0, 635), (0, 622)]
+test result: FAILED. 1987 passed; 5 failed; 25 ignored; 0 measured; 0 filtered out; finished in 4.86s
+# 绿（修后，门控改为 `out.exp_delta.is_some() && exp>=max_exp`）：
+$ cargo test -p game-svr --lib
+test result: ok. 1992 passed; 0 failed; 25 ignored; 0 measured; 0 filtered out; finished in 4.39s
+# 注：绿跑在 final(gate+order+test) 代码上；gate-only(=HEAD+gate) 未再单独跑（cargo lane 已转 2f），
+#     但 5 失败的根因正是门控（Non-exp 物品 0>=0），门控一改即消。

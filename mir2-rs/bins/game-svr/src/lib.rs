@@ -10632,7 +10632,10 @@ fn handle_eat_cmd(
     // IT-08 升级支（宿主层，`GetExp` 的 `Exp>=MaxExp` 块；纯 use_item 不做）：复用宿主原语 `get_level_exp`/
     // `level_ability_base`(RecalcLevelAbilitys)/`recalc_session_ability`(RecalcAbilitys)/`inc_health_spell`(IncHealthSpell)/
     // `add_body_luck`。升级块内 `HasLevelUp→RecalcAbilitys` ⇒ **WAbil 追上 Abil**（与非升级的"陈旧"相反）。
-    let leveled = sg.equip.abil.exp >= sg.equip.abil.max_exp;
+    // 仅当本次吃确经 `GetExp`（`exp_delta` 为 Some，即 Exp 书/Shape13）才可能升级；否则（药品/解包等
+    // 不授经验，`exp_delta=None`）此处 `exp/max_exp` 可能同为 0，`0>=0` 会误判升级 ⇒ 必须按 oracle
+    // `GetExp` 的调用域门控（`GetExp` 只对授经验物品调用）。
+    let leveled = out.exp_delta.is_some() && sg.equip.abil.exp >= sg.equip.abil.max_exp;
     if leveled {
         sg.equip.abil.exp -= sg.equip.abil.max_exp;
         if sg.equip.abil.level < 255 {
