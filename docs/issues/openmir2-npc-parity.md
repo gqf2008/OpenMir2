@@ -468,3 +468,17 @@ M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 
   （`refs/collab/inbox/<actor>/*`）；有争议时以签名条目为准，不得把投影当权威。
 - 本卡的 issue/status 条目：`oid 1230171b…` / `4885d55e…`（actor `openmir2-bd`，已推 walgit 并逐 oid 核对远端）。
 
+
+## 19. NP-03（商家菜单/面板）——真实装载链（2026-11-20）
+
+- **装置**：测试侧 `np03_rig()`——临时 Envir 放**真实** `Merchant.txt` 行
+  （`封魔谷/恶魔修理师 d2008 31 24 封魔修理师 0 15 0`）+ **真实脚本字节**，
+  走生产装载链 `load_merchant_spawns` → `spawn_merchants_with_scripts`（flag 由脚本头
+  `(@buy @sell …)` 解析），玩家贴到 15 格内。
+- **脚本指纹**：`Market_Def/封魔谷/恶魔修理师-d2008.txt` sha256
+  `14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210`。
+- **用例（golden `np03_merchant_menu.json`，真实商人名 `封魔修理师`）**：
+  `menu_main`（643 说词）/ `menu_buy`（643→**645**）/ `menu_sell`（643→**646**）/
+  `menu_storage`（`@cangku→@storage`，643→**700**）；比较器断言帧 ident 序列 + 说词尾 + `ScriptCurrLable`。
+- **flag-关**：全语料 0 条真实构造，不做 golden（既有单测覆盖，卡面已注明），不造脚本。
+- **牙 J**：让 `to_spawn` 丢弃 `record.flags` ⇒ `menu_buy` 的 645 消失、必红。

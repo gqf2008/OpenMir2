@@ -86410,6 +86410,64 @@ GMEXECUTE f
         assert!(says[0].starts_with("老人/"), "说词尾：{}", says[0]);
     }
 
+    /// NP-03 的商家装载 rig：临时 Envir 放**真实** `Merchant.txt` 行 + **真实**脚本字节，
+    /// 走生产装载链（`load_merchant_spawns` → `spawn_merchants_with_scripts`）。
+    fn np03_rig() -> T142Rig {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static SEQ: AtomicU32 = AtomicU32::new(0);
+        let n = SEQ.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("gs-np03-{}-{n}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let envir = dir.join("Envir");
+        std::fs::create_dir_all(envir.join("Market_Def/封魔谷")).expect("建 Market_Def 目录");
+        let row = "封魔谷/恶魔修理师 d2008 31 24 封魔修理师 0 15 0
+";
+        std::fs::write(envir.join("Merchant.txt"), encoding_rs::GBK.encode(row).0)
+            .expect("写 Merchant.txt");
+        let real = std::fs::read(
+            "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt",
+        )
+        .expect("读真实商家脚本");
+        std::fs::write(envir.join("Market_Def/封魔谷/恶魔修理师-d2008.txt"), real)
+            .expect("写真实商家脚本");
+        let loader = mir2_envir::MapLoader::new(dir.clone(), "Map", "Envir");
+        let mut rng = mir2_shared::rng::RandomNumber::with_seed(7);
+        let (spawns, _report, seeds) =
+            game_svr::merchant::load_merchant_spawns(&loader, |_| Some(0), &mut rng)
+                .expect("Merchant.txt 装载不应失败");
+        let mut world = mir2_world_bevy::World::new(64, 64);
+        // 真实行坐标 (31,24)；玩家贴到 15 格内。
+        let hero = world.add_entity({
+            let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", 30, 24);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            e
+        });
+        let mut displays = game_svr::downlink::DisplayTable::new();
+        let (kept, _failed, book) =
+            game_svr::merchant::spawn_merchants_with_scripts(&mut world, spawns, seeds, &mut displays);
+        assert_eq!(kept, 1, "NP-03 商家必须进世界");
+        let merchant_id = *world.merchant_ids_sorted().first().expect("商人实体");
+        let mut rig = T142Rig::new(Vec::new());
+        rig.world = world;
+        rig.merchant_id = merchant_id;
+        rig.book = book;
+        rig.sessions.get_mut("hero").expect("会话").actor_id = hero;
+        rig.online.clear();
+        online_set(
+            &mut rig.online,
+            OnlineEntry {
+                account: "ua".to_string(),
+                chr_name: "hero".to_string(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: hero,
+            },
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+        rig
+    }
+
     /// 读 GBK 语料（真实脚本按原字节→文本；测试侧再按 GBK 写回夹具）。
     fn read_gbk(path: &str) -> String {
         let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"));
@@ -86473,7 +86531,7 @@ GMEXECUTE f
         };
         // NP-03 的 golden 已产，但 Rust 驱动器（商家装载链）等 ca 合入后再接；
         // 这里只断言该 golden 非空（防空转），不把它塞进本比较器。
-        let _np03 = read_cases("np03_merchant_menu.json");
+        let np03 = read_cases("np03_merchant_menu.json");
         let np04 = read_cases("np04_main_selection.json");
         let np05 = read_cases("np05_extjmp.json");
         let np07 = read_cases("np07_chain_break.json");
@@ -86485,6 +86543,7 @@ GMEXECUTE f
             .chain(np05.iter())
             .chain(np07.iter())
             .chain(np09.iter())
+            .chain(np03.iter())
             .collect();
         let mut n = 0usize;
         for case in cases {
@@ -86661,6 +86720,42 @@ GMEXECUTE f
                         .collect();
                     assert_eq!(says, expect, "{name}: extjmp 说词");
                 }
+                "menu_main" | "menu_buy" | "menu_sell" | "menu_storage" => {
+                    let mut m = np03_rig();
+                    assert!(m.click(), "{name}: 点 NPC 必须到达 @main");
+                    let mut frames = m.drain();
+                    match name {
+                        "menu_buy" => {
+                            m.dlg_select("@buy");
+                            frames = m.drain();
+                        }
+                        "menu_sell" => {
+                            m.dlg_select("@sell");
+                            frames = m.drain();
+                        }
+                        "menu_storage" => {
+                            m.dlg_select("@cangku");
+                            let _ = m.drain();
+                            m.dlg_select("@storage");
+                            frames = m.drain();
+                        }
+                        _ => {}
+                    }
+                    let idents: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
+                    let golden_idents: Vec<u16> = case["sm"].as_array().unwrap().iter()
+                        .map(|s| s["ident"].as_u64().unwrap() as u16).collect();
+                    assert_eq!(idents, golden_idents, "{name}: 帧 ident 序列");
+                    let says: Vec<String> = frames.iter()
+                        .filter(|b| gnp_ident(b) == mir2_protocol::messages::SM_MERCHANTSAY)
+                        .map(|b| gnp_tail_text(b)).collect();
+                    let golden_says: Vec<String> = case["rm"].as_array().unwrap().iter()
+                        .filter(|r| r["ident"].as_u64() == Some(11009))
+                        .map(|r| r["msg"].as_str().unwrap().to_string()).collect();
+                    assert_eq!(says, golden_says, "{name}: 说词尾");
+                    let want = case["state"]["script_curr_lable"].as_str().unwrap();
+                    let got = m.shop_sessions.get("hero").map(|s| s.script_curr_lable.clone()).unwrap_or_default();
+                    assert_eq!(got, want, "{name}: ScriptCurrLable");
+                }
                 "var_username" => {
                     rig.sessions.get_mut("hero").unwrap().game_gold = 0;
                     rig.direct_goto("@main");
@@ -86691,6 +86786,10 @@ GMEXECUTE f
             }
             // 状态面（oracle `LastNpc` / `playerActor.Script` / `ScriptCurrLable`）：
             // 直接读会话态 `ShopSession`（实体/会话直读，不从帧反推）。
+            if name.starts_with("menu_") {
+                n += 1;
+                continue;
+            }
             let st = &case["state"];
             let expected_npc = if name == "click_switch" {
                 rig.king_id

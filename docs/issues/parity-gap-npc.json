@@ -145,21 +145,23 @@
         "line": 789,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "t138_non_master_is_cancelled",
-        "test_file": "mir2-rs/bins/game-svr/src/guild_official/tests.rs",
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "t138_member_is_cancelled",
-          "t138_without_zuma_piece_reports_missing",
-          "t138_index_parsing_through_production_path"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np03_merchant_menu.json",
+        "cases": [
+          "menu_main",
+          "menu_buy",
+          "menu_sell",
+          "menu_storage"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "C# golden 已产（真实商家脚本，@buy→SM 645 / @sell→SM 646 / @storage 经 @cangku 序列）；Rust 驱动器（商家装载链）待 ca 合入新 master，未 verified"
+      "notes": "真实装载链（load_merchant_spawns→spawn_merchants_with_scripts）+ 真 MerChant 行与真脚本（sha256 14a3fd4d…7210）；@buy→645/@sell→646/@storage(经@cangku)→700；flag-关语料 0 条不做 golden；牙 J（to_spawn 丢 flags ⇒ menu_buy 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-04",

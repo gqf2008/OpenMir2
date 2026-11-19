@@ -452,7 +452,7 @@ src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: Client
 | --- | --- | --- | --- | --- | --- |
 | NP-01 | 点 NPC 打开对话（`Click` → `@main`） | `src/M2Server/Player/PlayObject.Base.cs:674`、`src/M2Server/Npc/NormNpc.cs:68` | **verified** | `mir2-rs/bins/game-svr/src/lib.rs::np01_click_main_matches_oracle_golden`（oracle golden `mir2-rs/tests/parity/golden/npc/np01_click_main.json` 5 例，basis=semantic；行为面 + 状态面 `LastNpc`/`Script`/`ScriptCurrLable` 均断言） | 牙 A（距离门）/B（@main 派发）/C（set_last_npc）原文在 `E:/UserFleet/qa/npc-parity/`；无 `@main` 的 fallback 用例已覆盖 |
 | NP-02 | 对话标签选择跳转（@back/同标签/新标签） | `src/M2Server/Player/PlayObject.Operate.cs:114`、`src/M2Server/Npc/NormNpc.cs:1633` | **verified** | `mir2-rs/bins/game-svr/src/lib.rs::np01_click_main_matches_oracle_golden`（golden `mir2-rs/tests/parity/golden/npc/np02_dialog_select.json` 4 例，basis=semantic；说词序列 + ScriptCurrLable/GoBackLable/ScriptLable） | 对拍钉出并修复 @back 空栈未写回 `ScriptGoBackLable=@main`；牙 D 原文在 `E:/UserFleet/qa/npc-parity/` |
-| NP-03 | 特殊 NPC 的 `UserSelect` 覆写（商店/城堡/行会） | `src/GameSrv/Npc/Merchant.cs:789`、`src/GameSrv/Npc/CastleOfficial.cs:93`、`src/GameSrv/Npc/GuildOfficial.cs:55` | **implemented（未验证）** | `guild_official.rs` 生产入口 + 测试 `guild_official/tests.rs::t138_non_master_is_cancelled` 等 7 条 | 商店子命令归交易面（M3⑤），不在本分母 |
+| NP-03 | 特殊 NPC 的 `UserSelect` 覆写（商店/城堡/行会） | `src/GameSrv/Npc/Merchant.cs:789`、`src/GameSrv/Npc/CastleOfficial.cs:93`、`src/GameSrv/Npc/GuildOfficial.cs:55` | **verified** | `mir2-rs/bins/game-svr/src/lib.rs::np01_click_main_matches_oracle_golden`（golden `np03_merchant_menu.json` 4 例：`@buy→645`、`@sell→646`、`@cangku→@storage→700`，真实装载链） | 真实脚本 sha256 `14a3fd4d…7210`；flag-关语料 0 条（单测覆盖）；牙 J 原文 `E:/UserFleet/qa/npc-parity/` |
 | NP-04 | `@main` 脚本选择规则（LastNpc → 逆序 → Quest 门） | `src/Modules/ScriptEngine/ScriptEngine.cs:46-75` | **verified** | `mir2-rs/bins/game-svr/src/lib.rs::np01_click_main_matches_oracle_golden`（golden `np04_main_selection.json` 2 例：两 NPC 切换 + `QFunction-0 [@UserCmd6]` “#ACT 只跑首条”；状态断言 `LastNpc`/`Script`/`game_gold`） | 真实脚本 sha256 `9c8187bf…09df`、标签第 382 行；牙 E 原文 `E:/UserFleet/qa/npc-parity/` |
 | NP-05 | 标签记录查找 + `boExtJmp` 门 | `src/Modules/ScriptEngine/ScriptEngine.cs:89` | **verified** | `mir2-rs/bins/game-svr/src/lib.rs::np01_click_main_matches_oracle_golden`（golden `np05_extjmp.json` 2 例：`@sub TRUE` 放行 / `@plain` 拦截） | **synthetic 夹具**（语料 0 使用，sha256 `d7cd88bd…d028`）；引擎门等价证据，非线上用例；牙 F 原文同目录 |
 | NP-06 | 逐 procedure 条件真/假分支 + 动作执行 + say 累积 | `src/Modules/ScriptEngine/ScriptEngine.cs:95-125` | **verified** | `tests/parity/M4/run_npc_cases.py`（7 条 port-free 用例，C# 参照 vs Rust 逐行 diff；证据 `tests/parity/evidence/M4/npc-cases.txt`） | 用例：传送×2、行会(`@requestcastlewar`)、任务(`Q001@main`)、商店(`@changeGold`)、修理(`@StdModeFunc26`)、仓库(`@zum_bind1`) |
@@ -485,7 +485,7 @@ src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: Client
 
 ### 13.8 结论（NPC 块）
 
-- 主分母 11：`verified` **8**（NP-06 经 M4 双跑；NP-01/02/04/05/07/08/09 经 `np01_click_main_matches_oracle_golden`）、`implemented（未验证）` 3（NP-03 等 a2；NP-10 等 a2；NP-11 装置未建）、`missing` **0**。
+- 主分母 11：`verified` **9**（NP-06 经 M4 双跑；其余 8 条经 `np01_click_main_matches_oracle_golden`）、`implemented（未验证）` 2（NP-10 等装载语义补测；NP-11 装置未建）、`missing` **0**。
 - 机制层没有 known-missing；缺口在**证据强度**：10 条只有 Rust 侧集成测试，没有 oracle 夹具。
 - **脚本命令语言全集**（条件/动作注册表）不在本块重复计数：M4 已有双跑对拍（7 条）与注册表门（`IMPLEMENTED_CONDITIONS`/`IMPLEMENTED_EXECUTIONS` + `implemented_registry_entries_are_actually_implemented`）；任务块 §11 的 9 条是其中的任务专属子集。
 
