@@ -318,20 +318,30 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 - **比较器顺序**：①总量（TSV 行数 == 金标准长度）→ ②RNG 逐次 `result` 列 → ③逐接收者 SM
   → ④HP 前后 → ⑤两颗负向牙。
 
-### 16b. 总量断言的写法（定死：强形式 + 量测边界截断）
+### 16b. 总量断言的写法（定死：强形式 + 行号分段 + site 允许清单）
 
 **事实**：夹具建实体本身会抽 RNG（`new_player_entity_with_login_ctor` 的注释写明
 "`new PlayObject()` 5 抽里存活到实体的两个值"，`lib.rs:15980`）⇒ 不能直接数整份 TSV。
 
 **定死的写法（强形式）**：
-1. **量测边界截断**：夹具全部就绪后、调用 `handle_spell_cmd(_with_magic)` **之前**，把
-   `MIR2_RNG_LOG` 目标文件截断（记下偏移）；第一段结束、第二段 `sim_self_deliver_stage_system`
-   之前再记一次偏移。**账本只覆盖这两段**。
-2. **来源断言（强）**：账本里**每一行**的 `site` 必须落在 magic 允许清单内——
-   `crates/world-bevy/src/magic.rs`、`magic_effect.rs`、`world.rs` 的 `cast_*` 系列、
-   `slave.rs` 的延时结算（`deliver_delay_magic_impl`）、`bins/game-svr/src/lib.rs` 的施法处理器。
-   出现清单外站点 ⇒ **红**（"别的东西偷偷抽了随机"）。
-3. **数量断言**：两段合计行数 == 金标准账本长度（miss 1 / edge 5 / hit 5）。
-4. 若某条**合法** magic 取数的 `site` 落在清单外（例如经 `shared/rng.rs` 包装层），
-   只允许**扩充允许清单并写明理由**，不允许改成"数总数"来放行——
-   **不出现"总数对得上但来源不同"的假绿**。
+1. **行号分段（不是截断文件）**：`rng_trace` 的写入端持句柄/缓冲，运行中截断会产生空洞或让
+   写入端偏移错乱 ⇒ **禁止截断**。改为在夹具就绪时记**已有行数 `n0`**、第一段结束记 `n1`、
+   第二段结束记 `n2`；账本 = 第 `n0..n1` 与 `n1..n2` 两段行（跳过前缀）。
+2. **连续性自检**：两段账本的首尾 `seq` 必须连续、无缺号（`seq` 由 trace 自带且全局单调），
+   `n2 - n0` 必须等于实际读到的行数——仪器自身先自证，再用它验魔法。
+3. **来源断言（强）**：账本里**每一行**的 `site` 必须落在允许清单内：
+
+   | site（前缀） | 为什么合法 |
+   |---|---|
+   | `crates/world-bevy/src/magic.rs` | 原版 `MagicManager` 的威力/骰门/推挤等纯函数取数点 |
+   | `crates/world-bevy/src/magic_effect.rs` | 魔法效果计算（AntiMagic 骰门、`GetPower*` 等）|
+   | `crates/world-bevy/src/world.rs`（`cast_*` 系列） | 施法效果体的落地实现，对应 `DoSpell` 的 case 体 |
+   | `crates/world-bevy/src/slave.rs`（`deliver_delay_magic_impl`） | `RM_DELAYMAGIC` 到期结算，对应 `BaseObject.Base.cs:711` |
+   | `crates/world-bevy/src/combat.rs`（攻击力区间） | `GetAttackPower(base,power)` 的随机区间（原版同函数）|
+   | `bins/game-svr/src/lib.rs`（施法处理器） | 宿主侧施法接线（帧参数/训练尾等）|
+
+   清单外站点 ⇒ **红**（"别的东西偷偷抽了随机"）。**扩充清单必须逐条写理由并进评审 diff**，
+   不允许"能过就加"。
+4. **数量断言**：两段合计行数 == 金标准账本长度（miss 1 / edge 5 / hit 5）。
+5. 合法取数的 `site` 若落在清单外，只允许**按上表格式补条目并写理由**，不允许改成"数总数"
+   来放行——**不出现"总数对得上但来源不同"的假绿**。
