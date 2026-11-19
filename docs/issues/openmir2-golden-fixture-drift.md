@@ -173,9 +173,10 @@ legacy_artifact : true + legacy_reason                       # 仅 freeze_at_dos
 **另记**：`hangmajinbub`（及同类）`Fixture.target_max_hp=100` 与 52 尾里的 224 不一致 = 已知 stale
 元数据（§6 处置第 3 条），新件按登录派生值写。
 **装置侧根因（2026-11-20 复核，master `bc151fde6` 原文）**：`RunMagicCase` 的 `Fixture` 在**排水之后**
-构造——`DRAIN_PASSES` 打印在 `Program.cs:1090`、`RngSeam.Restore` 在 `:1094`、`int hpAfter = target.WAbil.HP`
-在 `:1096`、`target_hp = (int)target.WAbil.HP` 在 `:1118` ⇒ **当前代码对新生件记录的是术后值**
-（`a2` 重生成实测 `target_hp=85`）。既有 15 件是旧世代产物（记术前值 100）——两者不矛盾。
+构造——在 `mir2-rs/tests/parity/csharp/MagicGolden/Program.cs` 的符号 `RunMagicCase` 内：`DRAIN_PASSES`
+打印、`RngSeam.Restore`、`int hpAfter = target.WAbil.HP`、`Fixture.target_hp = (int)target.WAbil.HP`
+依次出现于排水循环**之后** ⇒ **当时（`bc151fde6`）对新生件记录的是术后值**（`a2` 重生成实测
+`target_hp=85`）。既有 15 件是旧世代产物（记术前值 100）——两者不矛盾。
 处置：M56 由 `a2` 修 `RunMagicCase` 取施法前值 + 自测；**M57（比较器收紧 + 重生成）必须排在 M56 之后**；
 M57 交付须写明「新生件 `target_hp` 由 M56 保证为术前输入，并由 31 帧断言机检」。
 比较器红字含机检可 grep 的固定串「疑似输入/输出混淆」，牙⑦ 断言该串在错误消息中。
@@ -212,10 +213,11 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 **旧世代件的处置（`anti_magic=3` / 无契约键 / 未登录序）**：移入 `golden/magic/legacy/`，件内加
 `legacy_artifact=true` + `legacy_reason`。**这两个键只供人读**——比较器按**路径**拒绝（`golden_file()`
 对 `legacy/` 前缀硬断言失败），并不读取键；不要以为"读键能判定能否作依据"。移完核三条：
-① 顶层 `golden/magic/*.json` 无 `"anti_magic": 3` 残留；② `legacy/` 下 16 件齐全；
+① 顶层 `golden/magic/*.json` 的**每个 case** 的 `Fixture.anti_magic` 都必须为 1（注意：文件**顶层**
+`anti_magic` 仍是构造参数 3，**不作判据**；不要按字节串 `"anti_magic": 3` 判残留）；② `legacy/` 下 16 件齐全；
 ③ 比较器/驱动的显式文件名清单仍指向 `golden/magic/<name>.json`（未被移动破坏）。
 
-### 8.7 M52 的登录序变体：状态契约 + 构造路径（Rust 侧已接缝，值待 a2 输出）
+### 8.7 M52 的登录序变体：状态契约 + 构造路径（装置已输出，§8.9 已实跑）
 
 **状态字段契约（`MagicGolden` 的 `Fixture`；a2 输出，Rust 只读）**：
 
@@ -236,14 +238,20 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 | 11 | 14 + round(7.8×11) = **100** | 与存量的 `MaxHP=100` 数值相同（但语义是 L11 登录值，不是手设） |
 | 20 | 14 + round(10.5×20) = **224** | 与 23/29/33 装置观测到的 224 一致 |
 
+**`construction.skills` 的语义（QA 条件③）**：它是**场景标签**——记录"本 case 演练的道术/法术名"
+（如 `FireBall`、`HbFireBall`），**不参与** `derived` 复算、也不计入 `AddAbil.AntiMagic`；
+复算只依赖 `job + level + equipment=[]`。当前契约对"装备/技能带来的 MgAvoid"是 **fail-closed**
+（`equipment` 非空即红；skills 不读作加成）；将来真需要技能加成时，必须扩展契约并在 `derived`
+里体现，**不得**把 skills 默默当加成用。
+
 **逐条机检**：比较器/交付里对每条 case 复算：`Fixture.anti_magic == 1`、
 `Fixture.target_max_hp == 14 + round(((L/4)+4.5+L/20)*L)`、`Fixture.rng_mode == "cover_drain"`、
-`Fixture.login_order == true`；任一不等 ⇒ 该条不能被当作可达证据（§7）。
+`Fixture.login_order == true`、`derived.{max_hp,max_mp,dc,ac,mac}` 与 `recalc_level_abilitys(job,level)`
+一致；任一不等 ⇒ 该条不能被当作可达证据（§7）。
 
-**Rust 接缝（本分支已写，未编译）**：`fireball_parity_drive` 在建夹具后、魔号专属覆盖前，
-按 `Fixture.anti_magic / target_hp / target_max_hp` 设目标实体与会话（缺省 = 老件现状 ⇒
-既有台账零变化）。**healing 的专用驱动**（`healing_parity_drive`）待新 healing 金标准落地后
-同法接入（它的 `hp` 是显式参数，需要与新 `Fixture.target_hp` 对齐——届时一并改）。
+**Rust 接缝（已实现并实跑，§8.9）**：`fireball_parity_drive` 在建夹具后、魔号专属覆盖前，按
+`Fixture.anti_magic / target_hp / target_max_hp` 设目标实体与会话；`healing_parity_drive` 同法接入
+（`target_hp/max_hp/caster_hp/caster_max_hp`）。缺省（无该键）⇒ 保持夹具现状，兼容旧件。
 
 **合成角色件（`AntiMagic=3`/`MaxHP=100`）**：按 §6 处置第 1 条降为**附加场景**，
 `rng_mode=cover_drain` 保留作 RNG 轴对照，但 `reachability=unverified`、**不作 verified 依据**。
@@ -302,7 +310,8 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 
 **重生成**：16 件（15 verified + `snowwind`）由装置 `--out` 直写入库路径，逐件 rc=0、`GOLDEN_WRITTEN`
 16 条。全件 `rng_mode=cover_drain`、`login_order=true`、`reachability=reachable`、逐 case
-`anti_magic=1`、`construction{job:"Warrior",level:20,equipment:[],skills:[魔号名]}`、`derived` 六键、
+`anti_magic=1`、`construction{job:"Warrior",level:20,equipment:[],skills:[魔号名]}`（见 §8.7 的
+skills 语义）、`derived` 六键、
 `target_max_hp=224`、`rng_total_draws==len(Rng)`、`seed_reason` 记首抽判定。
 旧世代 16 件移 `golden/magic/legacy/`（附 `README.md`：标注只供人读、比较器按路径拒绝）。
 
@@ -313,7 +322,8 @@ cargo test --manifest-path tests/parity/Cargo.toml --test magic_fireball_parity 
 | edge（seed 18，首抽 1） | `[1,0,0,0,3,0,0,4]` | `[1,0,0,0,3]` | `[0,0,4]` | ✅ |
 | hit（seed 5，首抽 3） | `[3,0,0,0,4,0,0,9]` | `[3,0,0,0,4]` | `[0,0,9]` | ✅ |
 
-交付段 sites = `crates/world-bevy/src/combat.rs:826` ×2（`nDam = Random(10)`）+ `:850` ×1（`Random(8)`）；
+交付段 3 抽全部出自符号 `crates/world-bevy/src/combat.rs::struck_damage_durability`：`nDam = Random(10)`
+一次 + 每个已穿装备格 `Random(8)` 各一次（本夹具 2 格），合计 1+2 = 3；
 miss（首抽 0）1 抽、无交付段、`DeliverRng=[]`。
 
 **`snowwind` 224**：三支 `target_max_hp=224`、`derived.max_hp=224`；依据 = `SM 31` 头 `tag=224`、
@@ -361,6 +371,18 @@ seed **14/18/5**、首抽 **0/1/3**、`anti_magic=1`；miss/edge/hit 三支均�
 **旧断言错在哪**：`hbfireball` 旧断言把具体随机抽值写进期望（`Random(20)=18`、`Random(3)=0/2`）——
 换 seed（edge 18 / hit 5）与 10 抽后推挤判定落到不同抽位，edge 推、hit 不推；`healing full` 旧断言
 写死「100 = MaxHP 即满血」——MaxHP=224 后前提不成立（§8.9b）；healing 抽数 4→5 是同一后果。
+
+### 8.9f 当前 verified 依据的边界（QA 条件④）：目标侧可达，施法者侧为合成输入
+
+- **已验证的面**：目标侧 = 登录序可达（`AntiMagic=1`、`MaxHP` 等级公式、`construction` 可复算、
+  比较器机检），加引擎行为等价（帧面/RM/RNG 全量对拍）。
+- **未验证的面（已知限制）**：**施法者侧仍是合成输入**——`CasterLevel=30`、`MC=15`、`SC=15` 由装置
+  直接给定，**不在** `construction`/`derived` 里、也无登录派生复算；且战士施放火球/雷电这类法术
+  本身不是生产可达组合。
+- ⇒ 本批 16 条的结论只到「**目标侧登录序可达 + 引擎等价**」；施法者侧可达性**另立卡**
+  `openmir2-caster-reachability`（opc-07），届时把 `caster` 的等级/属性纳入构造路径与复算。
+- 评分口径：条目状态维持 `verified`（依据已从合成目标换成生产可达目标），但**不得**据此宣称
+  "整条施法链生产可达"。
 
 ### 8.9e 已知遗留与另案
 
