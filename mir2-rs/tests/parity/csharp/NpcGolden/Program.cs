@@ -201,6 +201,9 @@ internal static class Program
         "mir2-rs/tests/parity/golden/npc/fixtures/np07_break_synthetic.txt";
     private const string EXTJMP_FIXTURE =
         "mir2-rs/tests/parity/golden/npc/fixtures/np05_extjmp_synthetic.txt";
+    /// <summary>隐藏 NPC（`MapQuest_def/QManage.txt`）的 `[@main]` 夹具（与 Rust 侧同文）。</summary>
+    private const string HIDDEN_SCRIPT =
+        "[@main]\n任务管理：隐藏入口\\ <离开/@exit>";
     private static readonly string[] CLICK_ORACLE_SOURCE =
     {
         "src/M2Server/Player/PlayObject.Base.cs:674 (ClientClickNpc)",
@@ -217,6 +220,14 @@ internal static class Program
         "src/Modules/ScriptEngine/ScriptEngine.cs:141 (GotoLable)",
         "src/Modules/ScriptEngine/ScriptEngine.cs:987 (GotoLableSendMerChantSayMsg)",
         "src/M2Server/Player/PlayObject.Message.cs:1702 (RM_MERCHANTSAY -> SM_MERCHANTSAY)",
+    };
+    private static readonly string[] HIDDEN_ORACLE_SOURCE =
+    {
+        "src/GameSrv/DB/LocalDB.cs:236 (QMangeNpc -> new Merchant{IsHide=true} + AddQuestNpc)",
+        "src/GameSrv/Word/WorldServer.Merchant.cs:37 (NpCinitialize: FindMap/Initialize/AddtoMapSuccess && !IsHide)",
+        "src/M2Server/Player/PlayObject.Base.cs:674 (ClientClickNpc -> FindMerchant ?? FindNpc)",
+        "src/M2Server/Player/PlayObject.Operate.cs:114 (ClientMerchantDlgSelect: IsHide 放行视距门)",
+        "src/M2Server/Player/PlayObject.Operate.cs:125 (npc.Envir == Envir && IsWithinSight(npc) || npc.IsHide)",
     };
     private static Dictionary<string, object> BuildCtx(CaseSpec spec)
     {
@@ -289,6 +300,10 @@ internal static class Program
         public int Quest106;
         public string ScriptName2 = "国王";
         public string ScriptText = CLICK_SCRIPT;
+        /// <summary>`NormNpc.IsHide`（`LocalDB.cs:220/277/321` 的三只隐藏 NPC 恒 true）。</summary>
+        public bool IsHide;
+        /// <summary>非空 ⇒ `LoadScript(npc, ScriptDir, ScriptName)`（`NormNpc.LoadNPCScript` 口径）。</summary>
+        public string ScriptDir;
         public int ClickNpcTime = 0;
         public int ClickNpcTimeConfig = 0;
     }
@@ -340,12 +355,21 @@ internal static class Program
             CurrY = (short)spec.NpcY,
             MapName = "0",
         };
+        npc.IsHide = spec.IsHide;
         if (spec.MerchantScriptRel != null)
         {
             var mdPath = Path.Combine(tmp, "Market_Def", spec.MerchantScriptRel + ".txt");
             Directory.CreateDirectory(Path.GetDirectoryName(mdPath)!);
             File.WriteAllBytes(mdPath, scriptBytes);
             new ScriptParsers().LoadScriptFile(npc, "Market_Def", spec.MerchantScriptRel, true);
+        }
+        else if (spec.ScriptDir != null)
+        {
+            // `LocalDB.QMangeNpc()/RobotNpc()`：`FilePath = "MapQuest_def"/"Robot_def"`，脚本名 = `ChrName`
+            // ⇒ `NormNpc.LoadNPCScript` 的 `LoadScript(this, FilePath, ChrName)`。
+            Directory.CreateDirectory(Path.Combine(tmp, spec.ScriptDir));
+            File.WriteAllBytes(Path.Combine(tmp, spec.ScriptDir, spec.ScriptName + ".txt"), scriptBytes);
+            new ScriptParsers().LoadScript(npc, spec.ScriptDir, spec.ScriptName);
         }
         else
         {
@@ -607,6 +631,41 @@ internal static class Program
         {
             RunCase(new CaseSpec { Name = "var_username", Kind = "direct_goto", Label = "@main", ScriptName = "老人", ScriptSourcePath = WUSHI_SCRIPT, PlayerName = "hero" }, tmp, envir, net),
         };
+        // NP-10（卡 `openmir2-hidden-npc-world-entities`）：隐藏脚本 NPC 的 click/select。
+        // 坐标取部署件事实：`QManage` = `MapName "0"` / `(0,0)`（`LocalDB.cs:267-270`）。
+        var np10Cases = new List<object>
+        {
+            RunCase(new CaseSpec
+            {
+                Name = "hidden_click_main",
+                PlayerX = 0, PlayerY = 0, NpcX = 0, NpcY = 0,
+                NpcName = "QManage", ScriptName = "QManage", ScriptDir = "MapQuest_def",
+                IsHide = true, ScriptText = HIDDEN_SCRIPT,
+            }, tmp, envir, net),
+            RunCase(new CaseSpec
+            {
+                Name = "hidden_click_far",
+                PlayerX = 40, PlayerY = 40, NpcX = 0, NpcY = 0,
+                NpcName = "QManage", ScriptName = "QManage", ScriptDir = "MapQuest_def",
+                IsHide = true, ScriptText = HIDDEN_SCRIPT,
+            }, tmp, envir, net),
+            RunCase(new CaseSpec
+            {
+                Name = "hidden_select_far_ishide",
+                Kind = "dlg_select", Label = "@main",
+                PlayerX = 40, PlayerY = 40, NpcX = 0, NpcY = 0,
+                NpcName = "QManage", ScriptName = "QManage", ScriptDir = "MapQuest_def",
+                IsHide = true, ScriptText = HIDDEN_SCRIPT,
+            }, tmp, envir, net),
+            RunCase(new CaseSpec
+            {
+                Name = "hidden_select_far_not_hidden",
+                Kind = "dlg_select", Label = "@main",
+                PlayerX = 40, PlayerY = 40, NpcX = 0, NpcY = 0,
+                NpcName = "QManage", ScriptName = "QManage", ScriptDir = "MapQuest_def",
+                IsHide = false, ScriptText = HIDDEN_SCRIPT,
+            }, tmp, envir, net),
+        };
 
         var outDir = args[0];
         Directory.CreateDirectory(outDir);
@@ -617,6 +676,7 @@ internal static class Program
         WriteDoc(Path.Combine(outDir, "np05_extjmp.json"), DIALOG_SCRIPT, np05Cases, DIALOG_ORACLE_SOURCE);
         WriteDoc(Path.Combine(outDir, "np07_chain_break.json"), DIALOG_SCRIPT, np07Cases, DIALOG_ORACLE_SOURCE);
         WriteDoc(Path.Combine(outDir, "np09_var_text.json"), DIALOG_SCRIPT, np09Cases, DIALOG_ORACLE_SOURCE);
+        WriteDoc(Path.Combine(outDir, "np10_hidden_npc.json"), HIDDEN_SCRIPT, np10Cases, HIDDEN_ORACLE_SOURCE);
         Directory.Delete(tmp, true);
         return 0;
     }

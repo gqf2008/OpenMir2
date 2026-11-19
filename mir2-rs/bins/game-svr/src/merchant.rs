@@ -352,7 +352,7 @@ pub fn spawn_merchants_with_scripts(
                 world.merchant_refill_goods_now(id);
                 if let Some(seed) = seed {
                     book.insert(MerchantNpc {
-                        def: NpcDef {
+                        def: std::rc::Rc::new(NpcDef {
                             chr_name: seed.chr_name,
                             // `Merchant.LoadMerchantScript` 先把 `Path = "Market_Def"`
                             // （`Merchant.cs:1092`），`CHECKNAMELIST` 一类条件按它拼相对路径。
@@ -363,7 +363,7 @@ pub fn spawn_merchants_with_scripts(
                             loaded: !seed.scripts.is_empty(),
                             scripts: seed.scripts,
                             actor_id: id,
-                        },
+                        }),
                         price_rate: seed.price_rate,
                         // `NormNpc.Initialize` 的 `CastleMgr.InCastleWarArea(this)`：城堡家族（⑧）
                         // 未落地 ⇒ `None`（oracle 的 `Castle == null` 支，`"????"`）。
@@ -371,6 +371,7 @@ pub fn spawn_merchants_with_scripts(
                         map_name: seed.map_name,
                         curr_x: i32::from(seed.x),
                         curr_y: i32::from(seed.y),
+                        envir_root: None,
                     });
                 }
             }

@@ -71,7 +71,7 @@ fn run_body(body: &str, seed: &str) -> Result<(usize, String, String, String), S
     };
     let host = NpcHost {
         envir_root: PathBuf::from("root"),
-        defs: vec![def],
+        defs: vec![std::rc::Rc::new(def)],
         failures: Vec::new(),
         goto_count_limit: 40,
     };
@@ -262,7 +262,7 @@ fn run_check(line: &str, flag: i32, status: i32) -> Result<bool, String> {
     };
     let host = NpcHost {
         envir_root: PathBuf::from("root"),
-        defs: vec![def],
+        defs: vec![std::rc::Rc::new(def)],
         failures: Vec::new(),
         goto_count_limit: 40,
     };

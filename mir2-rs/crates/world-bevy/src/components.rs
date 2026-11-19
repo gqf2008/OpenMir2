@@ -819,6 +819,7 @@ mod tests {
             can_move: true,
             move_time: 148,
             move_tick: 149,
+            is_hide: false,
         });
         // GroupState
         e.allow_group = true;

@@ -1,0 +1,187 @@
+{
+  "generator": "mir2-rs/tests/parity/csharp/NpcGolden",
+  "oracle_source": [
+    "src/GameSrv/DB/LocalDB.cs:236 (QMangeNpc -> new Merchant{IsHide=true} + AddQuestNpc)",
+    "src/GameSrv/Word/WorldServer.Merchant.cs:37 (NpCinitialize: FindMap/Initialize/AddtoMapSuccess && !IsHide)",
+    "src/M2Server/Player/PlayObject.Base.cs:674 (ClientClickNpc -> FindMerchant ?? FindNpc)",
+    "src/M2Server/Player/PlayObject.Operate.cs:114 (ClientMerchantDlgSelect: IsHide 放行视距门)",
+    "src/M2Server/Player/PlayObject.Operate.cs:125 (npc.Envir == Envir && IsWithinSight(npc) || npc.IsHide)"
+  ],
+  "script": "[@main]\n任务管理：隐藏入口\\ <离开/@exit>",
+  "max_drain_passes": 64,
+  "excluded_wallclock_fields": [
+    "ctx.click_npc_time"
+  ],
+  "cases": [
+    {
+      "name": "hidden_click_main",
+      "fixture": null,
+      "script_name": "QManage",
+      "script_sha256": "7a1379a748896600f496f7354c2b99bc72945490b2e0728e7108895370dedd06",
+      "ctx": {
+        "player_x": 0,
+        "player_y": 0,
+        "npc_x": 0,
+        "npc_y": 0,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5022,
+          "late": false,
+          "msg": "QManage/任务管理：隐藏入口\\ <离开/@exit>"
+        }
+      ],
+      "rm_priorities": [
+        1
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 1,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 86
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": true
+      }
+    },
+    {
+      "name": "hidden_click_far",
+      "fixture": null,
+      "script_name": "QManage",
+      "script_sha256": "7a1379a748896600f496f7354c2b99bc72945490b2e0728e7108895370dedd06",
+      "ctx": {
+        "player_x": 40,
+        "player_y": 40,
+        "npc_x": 0,
+        "npc_y": 0,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": false,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": false
+      }
+    },
+    {
+      "name": "hidden_select_far_ishide",
+      "fixture": null,
+      "script_name": "QManage",
+      "script_sha256": "7a1379a748896600f496f7354c2b99bc72945490b2e0728e7108895370dedd06",
+      "ctx": {
+        "player_x": 40,
+        "player_y": 40,
+        "npc_x": 0,
+        "npc_y": 0,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_select",
+        "label": "@main",
+        "labels": null
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5024,
+          "late": false,
+          "msg": "QManage/任务管理：隐藏入口\\ <离开/@exit>"
+        }
+      ],
+      "rm_priorities": [
+        1
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 1,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 86
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "@main",
+        "script_go_back_lable": "",
+        "script_lable": "@main",
+        "script_selected": true,
+        "can_jmp_labels": [
+          "@exit"
+        ]
+      }
+    },
+    {
+      "name": "hidden_select_far_not_hidden",
+      "fixture": null,
+      "script_name": "QManage",
+      "script_sha256": "7a1379a748896600f496f7354c2b99bc72945490b2e0728e7108895370dedd06",
+      "ctx": {
+        "player_x": 40,
+        "player_y": 40,
+        "npc_x": 0,
+        "npc_y": 0,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_select",
+        "label": "@main",
+        "labels": null
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": false,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": false,
+        "can_jmp_labels": []
+      }
+    }
+  ]
+}

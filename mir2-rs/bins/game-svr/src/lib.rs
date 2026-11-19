@@ -7242,6 +7242,10 @@ fn handle_shop_cmd_inner(
         } else {
             // `Merchant` ctor（`Merchant.cs:82-110`）：`PriceRate=100`、`CastleMerchant=false`、
             // 全部 `Is*` 标志 false、`ItemTypeList` 空。
+            // `IsHide` 取 `NpcState`（卡 `openmir2-hidden-npc-world-entities`）：隐藏脚本 NPC
+            // （`QManage`/`QFunction`/`RobotManage`）**没有** `merchant` 态但 `NormNpc.IsHide=true`
+            // ⇒ `ClientMerchantDlgSelect` 的 `npc.IsHide` 放行门（`PlayObject.Operate.cs:125`）
+            // 必须对它们生效；`Npcs.txt` 固定 NPC 的 `is_hide` 恒 `false`（`LoadNpcs` 不设）。
             (
                 me.x,
                 me.y,
@@ -7250,7 +7254,7 @@ fn handle_shop_cmd_inner(
                 100,
                 false,
                 Vec::new(),
-                false,
+                me.npc.as_ref().is_some_and(|n| n.is_hide),
                 me.name.clone(),
             )
         }
@@ -26624,6 +26628,12 @@ fn sim_loop(
         // 挂图**不在这里**：`MerchantInitialize`（`:8`）倒序遍历 `MerchantList`，QFunction 首位
         // ⇒ 最后挂图；见 `Merchant.txt` 装载之后的挂图块。
         let mut qfunction_id: Option<i32> = None;
+        // **NP-10（卡 `openmir2-hidden-npc-world-entities`）**：`QMangeNpc`/`RobotNpc`
+        // （`LocalDB.cs:236/293`）走 `AddQuestNpc` ⇒ `QuestNpcList`，与 `QFunction`（`MerchantList`）
+        // 是**两个列表**。两者都是 `new Merchant { IsHide=true }`，ctor 4 抽已在构造段账本里落账
+        // ⇒ 建实体只用 [`ctor_fold::hidden_npc_ctor_draws`] 取值，**不重抽**。
+        let mut qmanage_id: Option<i32> = None;
+        let mut robotmanage_id: Option<i32> = None;
         // **follow-up**：`load_map_quest` 的谓词只返回 bool（无法带原因），用 `Cell` 把
         // 「注册表命中但属其它片」单独计数 ⇒ 后面能明确写「属其它片」，不伪装成未知地图。
         let foreign_quest_records = std::cell::Cell::new(0usize);
@@ -26635,7 +26645,8 @@ fn sim_loop(
                 false
             }
         }) {
-            Ok(load) => match load.merchants.iter().find(|r| r.chr_name == "QFunction") {
+            Ok(load) => {
+                match load.merchants.iter().find(|r| r.chr_name == "QFunction") {
                 Some(record) => match reg.id_of(&record.map_name) {
                     // `MerchantInitialize` 的 `FindMap(MapName) == null ⇒ Error + RemoveAt`
                     // （`WorldServer.Merchant.cs:24-31`）；本宿主等价于「不建实体」。
@@ -26690,7 +26701,57 @@ fn sim_loop(
                         );
                     }
                 }
-            },
+                }
+                // **NP-10**：`QMangeNpc()`/`RobotNpc()` 的 `AddQuestNpc`（`LocalDB.cs:270/317`）⇒
+                // `QuestNpcList` 世界实体。槽位序 = oracle 的 `new` 次序（QManage → RobotManage），
+                // 且**先于** `Npcs.txt`（`LoadNpcs` 的记录在 `QuestNpcList` 里排在它们之后）。
+                // 建实体位置 = `LoadMapQuest` 之后（`GameApp.cs:184`），与 QFunction 同段。
+                for name in ["QManage", "RobotManage"] {
+                    let Some(record) = load.hidden_npcs.iter().find(|r| r.chr_name == name) else {
+                        glog!(
+                            "WRN",
+                            "MapQuest 未产出隐藏 NPC {name}（目录/文件缺失 ⇒ oracle 的 `File.Exists` 为假，`*Npc()` 置 null）⇒ 不建实体（登记）"
+                        );
+                        continue;
+                    };
+                    let Some(map_id) = reg
+                        .id_of(&record.map_name)
+                        .filter(|id| shard_runtime.host_owns(*id))
+                    else {
+                        glog!(
+                            "ERR",
+                            "{} - Npc Initalize fail... (npc.PEnvir=nil)（MapName={} 不在注册表/属其它片 ⇒ 按 oracle 移除）",
+                            record.chr_name,
+                            record.map_name
+                        );
+                        continue;
+                    };
+                    let Some(ctor) = ctor_fold::hidden_npc_ctor_draws(&ctor_ledger_m1, name) else {
+                        glog!(
+                            "ERR",
+                            "构造段账本缺 {name} 站点（4 抽 / arg=1500,2000,3000,3000）⇒ 不建隐藏 NPC 实体（fail-closed，不静默补抽）"
+                        );
+                        continue;
+                    };
+                    match game_svr::npc::insert_hidden_quest_npc(&mut world, record, map_id, ctor) {
+                        Some(id) => {
+                            glog!(
+                                "INF",
+                                "隐藏任务 NPC {name} 已进世界 QuestNpcList（id={id}，map_id={map_id}，IsHide={}，ctor 抽取用账本不重抽）",
+                                record.is_hide
+                            );
+                            match name {
+                                "QManage" => qmanage_id = Some(id),
+                                _ => robotmanage_id = Some(id),
+                            }
+                        }
+                        None => glog!(
+                            "ERR",
+                            "隐藏任务 NPC {name} 入世界失败（map_id={map_id} 越界 ⇒ oracle 不可达）"
+                        ),
+                    }
+                }
+            }
             Err(e) => glog!(
                 "WRN",
                 "读 MapQuest.txt 失败（{e}）⇒ QFunction 隐藏商人未建（登记）"
@@ -26881,6 +26942,27 @@ fn sim_loop(
                 );
             }
         }
+        // **NP-10 挂图（`NpCinitialize` 倒序）**：卡 `openmir2-hidden-npc-world-entities`。
+        // `QuestNpcList` 尾部的 `RobotManage`/`QManage` 在倒序遍历里**最先**挂图（`Npcs.txt`
+        // 记录已在上面的 `place_fixed_npcs_with_scripts` 里按倒序挂过 ⇒ 本段紧随其后与之衔接）。
+        // 部署件 `0.map` 的 `(0,0)` 是 `HighWall` ⇒ `CanWalk` 假 ⇒ 挂图失败但 `IsHide=true`
+        // ⇒ 实体**留在世界**（不在任何格 `obj_list`，不进他人 AOI）。
+        for (name, id) in [("RobotManage", robotmanage_id), ("QManage", qmanage_id)] {
+            let Some(id) = id else { continue };
+            let kept = world.attach_npc_to_map(id);
+            let attached = world.entities.get(id).is_some_and(|e| e.add_to_mapped);
+            if let Some(e) = world.entities.get(id) {
+                let appr = e.appr;
+                displays.set(
+                    id,
+                    downlink::npc_display(e.ai.dir, e.race_img, appr, &e.name),
+                );
+            }
+            glog!(
+                "INF",
+                "隐藏任务 NPC {name} 挂图（NpCinitialize 倒序）：留在世界={kept}，落格={attached}（IsHide ⇒ 挂图失败不移除）"
+            );
+        }
         // **M3⑥-实现 3 第②片**：隐藏任务 NPC 脚本宿主（`LocalDB.LoadMapQuest` 的宿主侧消费，
         // `mapquest.rs:403-405` 的 `QMangeNpc()/QFunctionNpc()/RobotNpc()`）。`MapQuest.txt`
         // 缺文件也算成功（空 `QuestList`，`result=1`）——此时仍会建 `QManage`/`QFunction`/
@@ -26958,6 +27040,46 @@ fn sim_loop(
                     );
                 }
                 npc_host = Some(host);
+                // **NP-10（卡 `openmir2-hidden-npc-world-entities`）**：把三只隐藏 NPC 的脚本以
+                // **世界实体 id** 为 `ActorId` 挂进商人脚本表。oracle 里"脚本表"就是 `ActorMgr`
+                // 里那个 `Merchant` 对象本身（`@Login`/`@StdModeFunc` 走 `ManageNPC`/`FunctionNPC`，
+                // `CM_CLICKNPC`/`CM_MERCHANTDLGSELECT` 走 `FindMerchant(actorId)` ⇒ **同一份
+                // `ScriptList`**）；本宿主用 `Rc` 共享同一份 `NpcDef` 复刻（禁止二次解析 ⇒ 不重抽
+                // `rename_rand`）。`envir_root` 同步注入（文件列表类条件/动作与 `@Login` 同源）。
+                if let Some(host_mut) = npc_host.as_mut() {
+                    for (name, id) in [
+                        ("QManage", qmanage_id),
+                        ("QFunction", qfunction_id),
+                        ("RobotManage", robotmanage_id),
+                    ] {
+                        let Some(id) = id else {
+                            glog!(
+                                "WRN",
+                                "隐藏 NPC {name} 无世界实体 ⇒ 其脚本未挂进商人脚本表（click/select 命中不到，登记）"
+                            );
+                            continue;
+                        };
+                        match host_mut.set_actor_id(name, id) {
+                            Some(def) => {
+                                merchant_book.insert_host_def(
+                                    def,
+                                    "0".to_string(),
+                                    0,
+                                    0,
+                                    Some(envir_root.clone()),
+                                );
+                                glog!(
+                                    "INF",
+                                    "隐藏 NPC {name} 的脚本已挂进商人脚本表（ActorId={id}，与 @Login/@StdModeFunc 同一份 ScriptList）"
+                                );
+                            }
+                            None => glog!(
+                                "ERR",
+                                "隐藏 NPC {name} 的 def 不在宿主或 Rc 已共享 ⇒ 无法以实体 id 登记（fail-closed）"
+                            ),
+                        }
+                    }
+                }
             }
             Err(e) => glog!(
                 "WRN",
@@ -35443,7 +35565,7 @@ mod tests {
         // `@GroupCreate` 说词；`has_function_npc()` 只看 `loaded`。
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QFunction".into(),
                 file_path: "Market_Def".into(),
                 script_name: Some("QFunction".into()),
@@ -35467,7 +35589,7 @@ mod tests {
                     }],
                     quest_count: 0,
                 }],
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -40459,7 +40581,7 @@ mod tests {
                 .expect("商人入世界");
             let mut book = game_svr::npc::MerchantScriptBook::new(30);
             book.insert(game_svr::npc::MerchantNpc {
-                def: game_svr::npc::NpcDef {
+                def: std::rc::Rc::new(game_svr::npc::NpcDef {
                     chr_name: "寄售商".to_string(),
                     file_path: "Market_Def".to_string(),
                     script_name: Some("寄售商-0103".to_string()),
@@ -40473,12 +40595,14 @@ mod tests {
                     }],
                     loaded: true,
                     actor_id: merchant_id,
-                },
+                }),
                 price_rate: 100,
                 castle: None,
                 map_name: "0".to_string(),
                 curr_x: 11,
                 curr_y: 10,
+
+                envir_root: None,
             });
             let mut sg = test_session_ground(hero);
             sg.game_gold = 250;
@@ -40956,7 +41080,7 @@ break
         );
         let mut book = game_svr::npc::MerchantScriptBook::new(30);
         book.insert(game_svr::npc::MerchantNpc {
-            def: game_svr::npc::NpcDef {
+            def: std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "赌场老板".to_string(),
                 file_path: "Market_Def".to_string(),
                 script_name: Some("赌场-B013".to_string()),
@@ -40965,12 +41089,14 @@ break
                 scripts: outcome.scripts,
                 loaded: true,
                 actor_id: merchant_id,
-            },
+            }),
             price_rate: 100,
             castle: None,
             map_name: "0".to_string(),
             curr_x: 11,
             curr_y: 10,
+
+            envir_root: None,
         });
         book
     }
@@ -41466,7 +41592,7 @@ break
         );
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QManage".into(),
                 file_path: "MapQuest_def".into(),
                 script_name: Some("QManage".into()),
@@ -41475,7 +41601,7 @@ break
                 loaded: true,
                 actor_id: 0,
                 scripts: outcome.scripts,
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -53281,7 +53407,7 @@ SendRefMsgRange=15
         );
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QFunction".into(),
                 file_path: "Market_Def".into(),
                 script_name: Some("QFunction-0".into()),
@@ -53299,7 +53425,7 @@ SendRefMsgRange=15
                     )],
                     quest_count: 0,
                 }],
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -84623,7 +84749,7 @@ GMEXECUTE f
     fn party_goto_label_gmexecute_emits_sysmsg_and_restores_session() {
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QFunction".into(),
                 file_path: "Market_Def".into(),
                 script_name: Some("QFunction-0".into()),
@@ -84641,7 +84767,7 @@ GMEXECUTE f
                     )],
                     quest_count: 0,
                 }],
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -84768,7 +84894,7 @@ GMEXECUTE f
         );
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QFunction".into(),
                 file_path: "Market_Def".into(),
                 script_name: Some("QFunction-0".into()),
@@ -84777,7 +84903,7 @@ GMEXECUTE f
                 loaded: true,
                 actor_id: 0,
                 scripts: outcome.scripts,
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -84898,7 +85024,7 @@ GMEXECUTE f
         );
         let host = game_svr::npc::NpcHost {
             envir_root: envir.clone(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QFunction".into(),
                 // 夹具脚本由生产解析器读入，但 `check_string_list` 的 rel = `npc.path() + s_param1`；
                 // 这里 `path()` 必须是空（与 npc.rs 的同族用例一致），否则 `..\` 不会被剥离。
@@ -84909,7 +85035,7 @@ GMEXECUTE f
                 loaded: true,
                 actor_id: 0,
                 scripts: outcome.scripts,
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -85265,7 +85391,7 @@ GMEXECUTE f
         );
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QManage".into(),
                 file_path: "MapQuest_def".into(),
                 script_name: Some("QManage".into()),
@@ -85274,7 +85400,7 @@ GMEXECUTE f
                 loaded: true,
                 actor_id: 0,
                 scripts: outcome.scripts,
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -86963,6 +87089,332 @@ GMEXECUTE f
             n += 1;
         }
         assert!(n >= 4, "golden 用例数异常：{n}");
+    }
+
+    /// **NP-10（卡 `openmir2-hidden-npc-world-entities`）**：隐藏脚本 NPC（`QManage`）的
+    /// click/select 生产 rig。
+    ///
+    /// 建法 = oracle 装载链的等价物：
+    /// 1. `MapQuest_def/QManage.txt`（GBK；文本与 golden 的 `script` 字段同源）+ `Npc_def/老人.txt`
+    ///    （对照 NPC，脚本同文）；
+    /// 2. `NpcHost::load` 真解析（`LoadScript` 口径）→ `set_actor_id` → `insert_host_def`
+    ///    ⇒ 脚本表以**世界实体 id** 为键（`Rc` 共享同一份 `NpcDef`，不二次解析）；
+    /// 3. `insert_hidden_quest_npc`（npc 态 type 0、`IsHide` 按记录）→ 挂图。
+    struct Np10Rig {
+        world: mir2_world_bevy::World,
+        hidden_id: i32,
+        plain_id: i32,
+        book: game_svr::npc::MerchantScriptBook,
+        sessions: HashMap<String, SessionGround>,
+        online: OnlineRegistry,
+        gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        rx: mpsc::UnboundedReceiver<SimToGate>,
+        shop_sessions: HashMap<String, ShopSession>,
+        sell_off_sessions: HashMap<String, game_svr::selloff::SellOffState>,
+        npc_vars: game_svr::npc::NpcVars,
+        catalog: game_svr::ability::StdItemCatalog,
+        item_number: i32,
+        dir: std::path::PathBuf,
+    }
+
+    impl Drop for Np10Rig {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
+    }
+
+    impl Np10Rig {
+        fn new(script_text: &str, player_x: i32, player_y: i32) -> Self {
+            use std::sync::atomic::{AtomicU32, Ordering};
+            static SEQ: AtomicU32 = AtomicU32::new(0);
+            let n = SEQ.fetch_add(1, Ordering::Relaxed);
+            let dir = std::env::temp_dir().join(format!("gs-np10-{}-{n}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            t137_write(&dir, "MapQuest_def/QManage.txt", script_text);
+            t137_write(&dir, "Npc_def/老人.txt", script_text);
+            let envir_root = dir.join("Envir");
+            let qrec = mir2_envir::QuestNpcRecord {
+                map_name: "0".to_string(),
+                curr_x: 0,
+                curr_y: 0,
+                chr_name: "QManage".to_string(),
+                npc_flag: 0,
+                appr: 0,
+                file_path: "MapQuest_def".to_string(),
+                script_name: None,
+                is_hide: true,
+                is_quest: false,
+            };
+            let prec = mir2_envir::QuestNpcRecord {
+                chr_name: "老人".to_string(),
+                file_path: "Npc_def".to_string(),
+                is_hide: false,
+                curr_x: 10,
+                curr_y: 10,
+                ..qrec.clone()
+            };
+            let mut world = mir2_world_bevy::World::new(64, 64);
+            let hero = world.add_entity({
+                let mut e = mir2_world_bevy::EntitySpawn::new(1, "hero", player_x, player_y);
+                e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+                e
+            });
+            // ctor 四分量取固定值（本 rig 不考 RNG 位；预置入口由 world-bevy 用例钉零抽数）。
+            let ctor = mir2_world_bevy::BaseAnimalCtorDraws {
+                run_tick_delta: 0,
+                base_search_time: 2_000,
+                attack_tick_delta: 0,
+                walk_tick_delta: 0,
+            };
+            let hidden_id = game_svr::npc::insert_hidden_quest_npc(&mut world, &qrec, 0, ctor)
+                .expect("隐藏 NPC 入世界");
+            let plain_id = game_svr::npc::insert_hidden_quest_npc(&mut world, &prec, 0, ctor)
+                .expect("对照 NPC 入世界");
+            assert!(
+                world.attach_npc_to_map(hidden_id),
+                "IsHide ⇒ 挂图失败不移除"
+            );
+            assert!(world.attach_npc_to_map(plain_id), "对照 NPC 必须落格");
+            let mut rename_rng = mir2_shared::rng::RandomNumber::with_seed(11);
+            let mut rename = |min: i32, max: i32| rename_rng.get_random_number(min, max);
+            let mut host = game_svr::npc::NpcHost::load(
+                &envir_root,
+                &[qrec.clone(), prec.clone()],
+                &[],
+                30,
+                &mut rename,
+            )
+            .expect("NpcHost 装载");
+            assert!(host.failures.is_empty(), "两个脚本都必须解析成功");
+            let mut book = game_svr::npc::MerchantScriptBook::new(30);
+            for (name, id) in [("QManage", hidden_id), ("老人", plain_id)] {
+                let def = host
+                    .set_actor_id(name, id)
+                    .unwrap_or_else(|| panic!("{name} 的 def 必须可改写为实体 id"));
+                book.insert_host_def(def, "0".to_string(), 0, 0, Some(envir_root.clone()));
+            }
+            let mut sg = test_session_ground(hero);
+            // 真冻结客户端的 `SoftVersionDateEx != 0`（`SM_GAMEGOLDNAME` 的门）。
+            sg.soft_version_date = 120_020_522;
+            let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+            sessions.insert("hero".to_string(), sg);
+            let mut online: OnlineRegistry = Vec::new();
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: "ua".to_string(),
+                    chr_name: "hero".to_string(),
+                    session_id: 1,
+                    gate_idx: 0,
+                    socket: 901,
+                    actor_id: hero,
+                },
+            );
+            let (tx, rx) = mpsc::unbounded_channel::<SimToGate>();
+            let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+            gates.insert(0, tx);
+            Self {
+                world,
+                hidden_id,
+                plain_id,
+                book,
+                sessions,
+                online,
+                gates,
+                rx,
+                shop_sessions: HashMap::new(),
+                sell_off_sessions: HashMap::new(),
+                npc_vars: game_svr::npc::NpcVars::default(),
+                catalog: game_svr::ability::StdItemCatalog::new(),
+                item_number: 0,
+                dir,
+            }
+        }
+
+        fn click(&mut self, npc_id: i32) -> bool {
+            handle_click_npc_cmd(
+                npc_id,
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.world,
+                &self.book,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &self.npc_vars,
+                &self.catalog,
+                &mut self.item_number,
+                &self.gates,
+                None,
+                None,
+            )
+        }
+
+        fn dlg_select(&mut self, npc_id: i32, label: &str) {
+            let trade: HashMap<String, game_svr::trade::DealState> = HashMap::new();
+            let mut sell_off_book = game_svr::selloff::SellOffBook::default();
+            let mut item_number = 0;
+            handle_shop_cmd(
+                game_svr::shop::CM_MERCHANTDLGSELECT,
+                npc_id,
+                0,
+                0,
+                Some(label),
+                "hero",
+                901,
+                &self.online,
+                &mut self.sessions,
+                &mut self.shop_sessions,
+                &mut self.sell_off_sessions,
+                &mut sell_off_book,
+                &trade,
+                &self.gates,
+                &mut self.world,
+                &self.catalog,
+                &ShopCfg::default(),
+                &MsgColors {
+                    red_f: 255,
+                    red_b: 56,
+                    hear_f: 0,
+                    hear_b: 255,
+                    whisper_f: 0,
+                    whisper_b: 0,
+                    green_f: 0xDB,
+                    green_b: 0xFF,
+                    blue_f: 0xFF,
+                    blue_b: 0xFC,
+                },
+                None,
+                &mut item_number,
+                &self.book,
+                &self.npc_vars,
+                None,
+                None,
+            );
+        }
+
+        fn drain(&mut self) -> Vec<Vec<u8>> {
+            drain_frames(&mut self.rx)
+        }
+    }
+
+    /// **NP-10 对拍**（卡 `openmir2-hidden-npc-world-entities`）：C# 金标准
+    /// `tests/parity/golden/npc/np10_hidden_npc.json`（生成器 `csharp/NpcGolden`）。
+    ///
+    /// 四例 = `hidden_click_main`（同格点击 ⇒ 643）/ `hidden_click_far`（>15 格 ⇒ 零帧）/
+    /// `hidden_select_far_ishide`（视距外选择，`IsHide` 放行 ⇒ 643）/
+    /// `hidden_select_far_not_hidden`（同输入但 `IsHide=false` ⇒ 零帧，证明门在 `IsHide`）。
+    ///
+    /// **牙**：把 `attach_npc_to_map` 的 `!is_hide` 去掉 ⇒ 隐藏实体被移除 ⇒ click 例零帧红；
+    /// 把 `handle_shop_cmd_inner` 的 `mhide` 写回 `false` ⇒ select-IsHide 例零帧红；
+    /// 把 `insert_hidden_quest_npc` 的 `is_hide` 恒 false ⇒ 同上两条红。
+    #[test]
+    fn np10_hidden_npc_matches_oracle_golden() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/npc/np10_hidden_npc.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读不到 {}: {e}", path.display()));
+        let doc: serde_json::Value = serde_json::from_str(&text).expect("np10 golden JSON");
+        let script = doc["script"].as_str().expect("script").to_string();
+        let cases = doc["cases"].as_array().expect("cases 数组");
+        assert_eq!(cases.len(), 4, "np10 golden 必须四例（防空转）");
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            assert_eq!(
+                case["drain_hit_cap"].as_bool(),
+                Some(false),
+                "{name}: DrainPassesHitCap=true 必须红"
+            );
+            let px = case["ctx"]["player_x"].as_i64().expect("player_x") as i32;
+            let py = case["ctx"]["player_y"].as_i64().expect("player_y") as i32;
+            let mut rig = Np10Rig::new(&script, px, py);
+            // `IsHide=false` 的对照例打的是普通 NPC（同一段脚本），其余打隐藏 NPC。
+            let npc_id = if name.ends_with("not_hidden") {
+                rig.plain_id
+            } else {
+                rig.hidden_id
+            };
+            let kind = case["ctx"]["kind"].as_str().unwrap_or("click");
+            let mut click_ret = None;
+            match kind {
+                "click" => click_ret = Some(rig.click(npc_id)),
+                "dlg_select" => {
+                    let label = case["ctx"]["label"].as_str().expect("label").to_string();
+                    rig.dlg_select(npc_id, &label);
+                }
+                other => panic!("{name}: 未知 kind={other}"),
+            }
+            let frames = rig.drain();
+            let sm = case["sm"].as_array().expect("sm");
+            let got: Vec<(u16, i32, u16, u16, u16, usize)> = frames
+                .iter()
+                .map(|b| {
+                    (
+                        gnp_ident(b),
+                        gnp_recog(b),
+                        gnp_param(b),
+                        gnp_tag(b),
+                        gnp_series(b),
+                        // golden 的 `len` 是**线缆帧**长度（含 20B 网关头）；
+                        // 本侧 `body` 是 12B 头 + 尾 ⇒ 加 20 对齐。
+                        b.len() + 20,
+                    )
+                })
+                .collect();
+            let want: Vec<(u64, u64, u64, u64, u64, bool)> = sm
+                .iter()
+                .map(|s| {
+                    (
+                        s["ident"].as_u64().expect("ident"),
+                        s["param"].as_u64().expect("param"),
+                        s["tag"].as_u64().expect("tag"),
+                        s["series"].as_u64().expect("series"),
+                        s["len"].as_u64().expect("len"),
+                        s["recog_is_npc"].as_bool().expect("recog_is_npc"),
+                    )
+                })
+                .collect();
+            assert_eq!(
+                got.len(),
+                want.len(),
+                "{name}: 帧数（got={got:?} want={want:?}）"
+            );
+            for (g, w) in got.iter().zip(&want) {
+                assert_eq!(
+                    (
+                        u64::from(g.0),
+                        u64::from(g.2),
+                        u64::from(g.3),
+                        u64::from(g.4),
+                        g.5 as u64
+                    ),
+                    (w.0, w.1, w.2, w.3, w.4),
+                    "{name}: (ident,param,tag,series,len) 逐位"
+                );
+                assert_eq!(
+                    g.1 == npc_id,
+                    w.5,
+                    "{name}: `recog == npc 实体 id` 必须与 golden 的 recog_is_npc 一致"
+                );
+            }
+            if want.is_empty() {
+                if kind == "click" {
+                    assert_eq!(
+                        click_ret,
+                        Some(false),
+                        "{name}: 零帧例的 click 必须返回 false"
+                    );
+                }
+            } else {
+                if let Some(r) = click_ret {
+                    assert!(r, "{name}: 有点击帧 ⇒ `ClientClickNpc` 必须到达 Click 点");
+                }
+                let says = T137Rig::says(&frames);
+                let want_say = case["rm"][0]["msg"].as_str().expect("说词尾");
+                assert_eq!(says, vec![want_say.to_string()], "{name}: 643 说词尾");
+            }
+        }
     }
 
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。
@@ -89248,7 +89700,7 @@ GMEXECUTE f
         player.chr_name = "hero".to_string();
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::from("."),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QManage".to_string(),
                 file_path: "MapQuest_def".to_string(),
                 script_name: None,
@@ -89266,7 +89718,7 @@ GMEXECUTE f
                 }],
                 loaded: true,
                 actor_id: 0,
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 30,
         };
@@ -89311,7 +89763,7 @@ GMEXECUTE f
         // `[@StdModeFunc14]`：部署件里就是一条无条件 `SENDMSG 0`（`%s` 先替换成玩家名）。
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QFunction".into(),
                 file_path: "Market_Def".into(),
                 script_name: Some("QFunction-0".into()),
@@ -89329,7 +89781,7 @@ GMEXECUTE f
                     )],
                     quest_count: 0,
                 }],
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -89492,7 +89944,7 @@ GMEXECUTE f
         );
         game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QManage".into(),
                 file_path: "MapQuest_def".into(),
                 script_name: Some("QManage".into()),
@@ -89501,7 +89953,7 @@ GMEXECUTE f
                 loaded: true,
                 actor_id: 0,
                 scripts: outcome.scripts,
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         }
@@ -89689,7 +90141,7 @@ GMEXECUTE f
     fn playdie_constructed_case1_fans_out_through_qfunction_drain() {
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QFunction".into(),
                 file_path: "Market_Def".into(),
                 script_name: Some("QFunction-0".into()),
@@ -89707,7 +90159,7 @@ GMEXECUTE f
                     )],
                     quest_count: 0,
                 }],
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -89884,7 +90336,7 @@ GMEXECUTE f
         );
         let host = game_svr::npc::NpcHost {
             envir_root: std::path::PathBuf::new(),
-            defs: vec![game_svr::npc::NpcDef {
+            defs: vec![std::rc::Rc::new(game_svr::npc::NpcDef {
                 chr_name: "QFunction".into(),
                 file_path: "Market_Def".into(),
                 script_name: Some("QFunction-0".into()),
@@ -89902,7 +90354,7 @@ GMEXECUTE f
                     )],
                     quest_count: 0,
                 }],
-            }],
+            })],
             failures: Vec::new(),
             goto_count_limit: 40,
         };
@@ -95156,7 +95608,7 @@ mod t279_dress_eff_tests {
                 .expect("商人入世界");
             let mut book = game_svr::npc::MerchantScriptBook::new(30);
             book.insert(game_svr::npc::MerchantNpc {
-                def: game_svr::npc::NpcDef {
+                def: std::rc::Rc::new(game_svr::npc::NpcDef {
                     chr_name: "传送员".to_string(),
                     file_path: "Market_Def".to_string(),
                     script_name: Some("比奇省传送员-0".to_string()),
@@ -95170,12 +95622,14 @@ mod t279_dress_eff_tests {
                     }],
                     loaded: true,
                     actor_id: merchant_id,
-                },
+                }),
                 price_rate: 100,
                 castle: None,
                 map_name: "0".to_string(),
                 curr_x: 11,
                 curr_y: 10,
+
+                envir_root: None,
             });
             let mut sg = test_session_ground(hero);
             sg.state.gold = gold;
