@@ -330,12 +330,13 @@ fn ledger_dir() -> std::path::PathBuf {
 /// ```
 ///
 /// 防空转：任一份台账缺失/不是合法 JSON/不是恰 1 个 case/`Label` 不符 ⇒ 红（不静默跳过）。
-fn real_ledger_verify(stem: &str, golden: &Value) {
+/// **标签参数化只换"取哪几份台账"**：`verify` 与逐字段比对逻辑一行未改。
+fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
     let dir = ledger_dir();
     let magic_id = golden.get("magic_id").cloned().unwrap_or(Value::from(0));
     let anti_magic = golden.get("anti_magic").cloned().unwrap_or(Value::from(0));
     let mut cases = Vec::new();
-    for label in ["miss", "edge", "hit"] {
+    for label in labels {
         let path = dir.join(format!("{stem}_{label}.json"));
         let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
             panic!(
@@ -348,7 +349,7 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
         assert_eq!(arr.len(), 1, "[{label}] 每支台账恰 1 个 case");
         assert_eq!(
             arr[0].get("Label").and_then(Value::as_str),
-            Some(label),
+            Some(*label),
             "[{label}] 台账 Label 不符"
         );
         cases.push(arr[0].clone());
@@ -361,6 +362,22 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
             errs.join("\n")
         );
     }
+}
+
+fn real_ledger_verify(stem: &str, golden: &Value) {
+    real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
+}
+
+/// **`2 治愈`**真实台账 → 判定面（标签 = `heal` / `full` / `self`；本支无 AntiMagic 骰）；
+/// 金标准 `golden/magic/healing.json`。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::healing_parity_*）生成真实台账"]
+fn real_rust_ledger_healing() {
+    real_ledger_verify_labels(
+        "healing",
+        &golden_file("healing.json"),
+        &["heal", "full", "self"],
+    );
 }
 
 /// 火球 id=1（`SKILL_FIREBALL`）真实台账 → 判定面。
