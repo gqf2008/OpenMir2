@@ -1008,6 +1008,28 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   在 `login_order=false` 的可达手设件上做两模式对照；相同者必须给结构性依据（无延时受击 / 排水 `Operate` 不调 RNG），
   落到符号锚——缺依据即判非法声明。
 - 本表只落实测与归因，**不改变任何条目 status**；入库件替换与比较器收紧归 M53。
+## 22. M52.1：`fireball` 的 seam 证据（应 QA 条件②）
+
+- **装置**：`FireballCase(rngMode, loginOrder)` + `--fireball-rng-mode/--fireball-login-order`；cover 路径的
+  `draws` 捕获与 `RngSeam.Restore` **位于排水循环之后**（`DRAIN_PASSES` 行紧后），freeze 在 `DoSpell` 紧后收尾。
+  **返工记录（2026-11-20，QA 实测）**：首版误把 cover 块放在 `Thread.Sleep(700)` 与排水循环之前 ⇒
+  `QA_DRAIN_PROBE draws=5 total=5`（排水窗口抽取未经 LoggingRandom，cover 为空声明）；本笔已移到排水之后，
+  探针改为注入**真实排水阶段**（`Thread.Sleep` 之后、循环之前）——牙②方向改为"若把捕获/Restore 提前 ⇒ 探针红"。
+  `login_order=true` 时：`RecalcLevelAbilitys()` → `Abil.MaxExp = GetLevelExp(Level)`（冻结表）→
+  `RecalcAbilitys()` → `WAbil.HP = MaxHP` → `DrainRaw()`。
+- **记录面**：`LoggingRandom.TotalDraws`（不被 `Restore` 清零）；golden 记 `rng_total_draws` 与 `rng_recorded`；
+  生成器断言 cover 下 `Rng.Count == rng_total_draws`（不等 ⇒ rc=2）。
+- **实测事实（2026-11-20 返工后）**：火球在**真实排水窗口**确有抽取——cover 记 **8** 次、freeze 只记 **5** 次
+  （`cover=5,0,0,0,0,0,0,9` vs `freeze=5,0,0,0,0`；探针 `cover=8→9 / freeze=5→5`）⇒ 两模式**可区分**。
+  首版观察到的"5 次全在施法期、两模式相同"是 **cover 块误置于排水之前**导致的**空声明**，不是火球的真实性质。
+- **证据（自测探针，不进 golden）**：在**真实排水阶段**（`Thread.Sleep(700)` 之后、排水循环之前）注入一次抽取——
+  cover 记到（`8→9`）、freeze 不记（`5→5`）；变异 T2（把捕获/Restore 提前到排水前）⇒ `cover_caught=False`、
+  自测红；还原后逐字节相等（`git hash-object` == `HEAD:<path>`）、复绿。QA 侧独立探针（自带 `Random(1000)`，
+  不用本装置的 `probeDrainDraw`）复测：`cover draws=9 total=9`、`freeze draws=5 total=5`。
+- **MaxExp 门两例**：设 `GetLevelExp(20)=6000` ⇒ 绿；留 ctor `50` ⇒ rc=2。
+- 旧合成件（`login_order=false` + `freeze_at_dospell`，`anti_magic=3`/`target_max_hp=100`）可生成，
+  标 `legacy_artifact`；登录序主件（`anti_magic=1`、`max_hp=224`、`rng_total_draws=8`，三例均 8）可生成。
+
 ## 31. 33 冰咆哮（`SKILL_SNOWWIND`）接线记录（2026-11-20，已重取）
 
 - **oracle 分派（只认魔号，不按名字）**：`src/M2Server/Magic/MagicManager.cs:489-494`
