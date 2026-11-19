@@ -368,6 +368,17 @@ fn real_ledger_verify(stem: &str, golden: &Value) {
     real_ledger_verify_labels(stem, golden, &["miss", "edge", "hit"]);
 }
 
+/// **`28 心灵启示`（`SKILL_SHOWHP`）**真实台账 → 判定面（标签 miss/edge/hit = `Random(6)` 门）。
+#[test]
+#[ignore = "需先跑 game-svr 三支驱动（tests::showhp_parity_*）生成真实台账"]
+fn real_rust_ledger_showhp() {
+    real_ledger_verify_labels(
+        "showhp",
+        &golden_file("showhp.json"),
+        &["miss", "edge", "hit"],
+    );
+}
+
 /// **`14/15`（`SKILL_HANGMAJINBUB`/`SKILL_DEJIWONHO`）**真实台账 → 判定面（标签 s1/s5/s13）。
 #[test]
 #[ignore = "需先跑 game-svr 三支驱动（tests::hangmajinbub_parity_*）生成真实台账"]

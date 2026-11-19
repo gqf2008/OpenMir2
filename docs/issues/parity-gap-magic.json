@@ -937,19 +937,26 @@
         "line": 431,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "real_rust_ledger_showhp",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/showhp.json（C# oracle 生成；miss/edge/hit = Random(6) 门，非 AntiMagic）",
+        "cases": [
+          "miss(seed=6)",
+          "edge(seed=2)",
+          "hit(seed=13)"
+        ],
         "unit_tests": [
-          "drain_show_hp_health_changes_broadcasts_exact_53_bytes"
+          "tests::showhp_parity_miss",
+          "tests::showhp_parity_edge",
+          "tests::showhp_parity_hit"
         ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。门 = `Random(6) <= userMagic.Level + 3`（MagicManager.cs:434）；pass ⇒ 目标 1500ms 自延迟 DOOPENHEALTH ⇒ MakeOpenHealth ⇒ SM 1100（param=HP/tag=MaxHP，收件人 = 目标 ±SendRefMsgRange 含自）；caster 另有训练尾 640/RM 10123。卡 §25（wait_ms、1100 字段来源判定、分步交付、三颗牙）。"
     },
     {
       "id": "MG-40",

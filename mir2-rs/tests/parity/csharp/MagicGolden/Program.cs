@@ -112,6 +112,7 @@ public static class Program
             if (name == "hangmajinbub") return BehaviorBatch(new MagicSpec { Key = "hangmajinbub", MagicId = 14, MagicName = "HangMaJinBub", ArmRingAmulet = true });
             if (name == "dejiwonho") return BehaviorBatch(new MagicSpec { Key = "dejiwonho", MagicId = 15, MagicName = "DeJiWonHo", ArmRingAmulet = true });
             if (name == "shield") return BehaviorBatch(new MagicSpec { Key = "shield", MagicId = 31, MagicName = "Shield" });
+            if (name == "showhp") return ShowHpBatch(new MagicSpec { Key = "showhp", MagicId = 28, MagicName = "ShowHp" });
             Console.Error.WriteLine("未知用例: " + name);
             return 2;
         }
@@ -490,6 +491,43 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         public int TargetMaxHp = 100;
         public int AntiMagic = 3;
         public bool ArmRingAmulet;
+        /// <summary>
+        /// 排水前的等待（ms）。必须 > 该支最长自延迟，否则到点消息只进 `NotDue`
+        /// （`now/delivery` 是墙钟、不可比拼），到点产生的帧会缺失。
+        /// 默认 1200 覆盖 8/13/44 的自延迟；28 的 `RM_DOOPENHEALTH` = 1500 ⇒ 1600（卡 §25(a)）。
+        /// 该值写进 golden 的 `Fixture.wait_ms`，Rust 侧推进量取同值。
+        /// </summary>
+        public int WaitMs = 1200;
+    }
+
+    /// <summary>
+    /// 28 心灵启示：门是 `Random(6) <= userMagic.Level + 3`（`MagicManager.cs:434`，**不是**
+    /// AntiMagic 骰）。按同一物理意义取三支：miss = 首抽 5（>4）、edge = 首抽 4（==门）、
+    /// hit = 首抽 3（<门）。`WaitMs=1600` 跨过 1500ms 的 `RM_DOOPENHEALTH` 自延迟（卡 §25(a)）。
+    /// </summary>
+    private static int ShowHpBatch(MagicSpec spec)
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        int seedMiss = FindSeedForFirstDraw(6, 5);
+        int seedEdge = FindSeedForFirstDraw(6, 4);
+        int seedHit = FindSeedForFirstDraw(6, 3);
+        if (seedMiss < 0 || seedEdge < 0 || seedHit < 0)
+        {
+            Console.Error.WriteLine("SEED_SCAN_FAILED");
+            return 1;
+        }
+        spec.WaitMs = 1600;
+        var cases = new[]
+        {
+            RunMagicCase(spec, "miss", seedMiss, 1000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "edge", seedEdge, 2000, spec.TargetMaxHp, false),
+            RunMagicCase(spec, "hit", seedHit, 3000, spec.TargetMaxHp, false),
+        };
+        return EmitGolden(spec, cases);
     }
 
     /// <summary>有 AntiMagic 骰的支（11/45/13/44）：scan 三 seed ⇒ miss/edge/hit。</summary>
@@ -621,6 +659,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         // 不在本对拍夹具的建模范围（Rust 夹具同置 max_exp=50）。
         target.RecalcLevelAbilitys();
         target.WAbil.HP = (ushort)targetHp;
+        // 登录序的最后一步（`PlayObject.cs:1308-1309`：`RecalcLevelAbilitys(); RecalcAbilitys();`）：
+        // 由 `RecalcAbilitys()` 把 `Abil` 物化到 `WAbil`（`MaxHP/MaxMP/DC/...` 与登录后的
+        // 客户端视图一致）。**必须**在 `NetChannel` 安装/排水循环之前做，并清掉它产生的
+        // `RM_CHARSTATUSCHANGED`（登录帧不属于施法窗口）——28 的 `SM_OPENHEALTH(1100)` 直接读
+        // `WAbil.HP/MaxHP`（`PlayObject.Message.cs:2009-2011`），少了这一步 MaxHP 会是 ctor 的 0。
+        target.RecalcAbilitys();
+        target.DrainRaw();
         var obsIn = new RecordingPlayObject { ChrName = "golden-obs-in", ActorId = idBase + 3, CurrX = 105, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         var obsOut = new RecordingPlayObject { ChrName = "golden-obs-out", ActorId = idBase + 4, CurrX = 140, CurrY = 100, SoftVersionDateEx = 20240101, ClientTick = 5 };
         if (targetNull)
@@ -684,9 +729,11 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         // 与火球同口径：排水抽空为止（上界 8），上界命中可见。
         // 等到**最长**的自延迟到期：治愈的 RM_MAGHEALING=800ms、共享尾 RM_MAGIC_LVEXP=1000ms、
         // 44 的 RM_DELAYPUSHED=600ms ⇒ 1200ms（否则 `NotDue` 会带墙钟字段、两次跑不一致）。
+        // 28 的 `RM_DOOPENHEALTH`=1500ms ⇒ 该支 `WaitMs=1600`（卡 §25(a)：必须跨过自延迟，
+        // 否则 `MakeOpenHealth`/`SM_OPENHEALTH(1100)` 不会发生）。
         const int MaxDrainPasses = 8;
         int hpBefore = target.WAbil.HP;
-        Thread.Sleep(1200);
+        Thread.Sleep(spec.WaitMs);
         var pending = new List<object>();
         var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
         var rmAcc = new Dictionary<string, List<object>>();
@@ -749,6 +796,7 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 anti_magic = spec.AntiMagic,
                 target_null = targetNull,
                 arm_ring_amulet = spec.ArmRingAmulet,
+                wait_ms = spec.WaitMs,
                 caster_xy = new[] { 100, 100 },
                 target_xy = new[] { 101, 100 },
                 obs_in_xy = new[] { 105, 100 },
