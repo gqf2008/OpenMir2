@@ -1,0 +1,273 @@
+{
+  "magic_id": 38,
+  "anti_magic": 3,
+  "entry": {
+    "name": "ClientSpellXY",
+    "arm": "case SKILL_TWINBLADE",
+    "source": "src/M2Server/Player/PlayObject.Attack.cs::ClientSpellXY"
+  },
+  "config": {
+    "conf_dir": "E:\\MirServer\\M2GameSvr",
+    "files": {
+      "Server.conf": "ce5e3ce98b9bb71cbb18e6be1501e20e05642fd3eeaaffd9326caef8d9a4c0e2",
+      "String.conf": "db32ffd9ce5a0573c337289081dfc27fb1678c163bce9f318e269c9196ef2ebe",
+      "Exps.conf": "07d7801cad77082f0a23654771e4e9026d6ef3845214dc96d2593940bf4b71e9",
+      "Global.conf": "3f46b2515ffa57583cb6829375d0318cfc9a39b35a594b95c0e9fb63fb26e427",
+      "setting.conf": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "map": {
+      "path": "E:\\MirServer\\M2GameSvr\\Map\\0.map",
+      "sha256": "183e9d545e284275d7955e56dfc4af301e8af9e54c46470a4c7817ee7c5742e7"
+    },
+    "repo_head": "f55acce568a7b50d9da7103d4b55e30ceee6a663"
+  },
+  "fixture_spec": {
+    "magic_name": "TwinBlade",
+    "effect": 1,
+    "effect_type": 1,
+    "user_magic_level": 1,
+    "caster_level": 30,
+    "caster_mc": 15,
+    "caster_sc": 15,
+    "target_level": 20,
+    "target_max_hp": 100,
+    "magic_spell": 20,
+    "magic_def_spell": 0,
+    "spell_point": 10
+  },
+  "cases": [
+    {
+      "Fixture": {
+        "label": "go",
+        "magic_id": 38,
+        "magic_name": "TwinBlade",
+        "arm": "case SKILL_TWINBLADE",
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "caster_mp": 100,
+        "magic_spell": 20,
+        "magic_def_spell": 0,
+        "target_level": 20,
+        "target_max_hp": 100,
+        "anti_magic": 3,
+        "seed": 1,
+        "entry_args": {
+          "w_ident": 3017,
+          "n_key": 38,
+          "n_target_x": 101,
+          "n_target_y": 100,
+          "bo_late_delivery": false
+        },
+        "preset": {
+          "use_thrusting": false,
+          "use_half_moon": false,
+          "crs_hitkill": false,
+          "fire_hit_busy": false
+        },
+        "entry_return": true,
+        "delay_time": 0,
+        "dir": 4,
+        "wait_ms": 1200,
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ]
+      },
+      "Label": "go",
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 10052,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 68
+            },
+            {
+              "ident": 11004,
+              "wParam": 0,
+              "p1": 219,
+              "p2": 255,
+              "p3": 0,
+              "msg": "twin hit skill charged",
+              "late": false,
+              "delivery": 0,
+              "priority": 252
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 0,
+              "param": 0,
+              "tag": 0,
+              "series": 0,
+              "tail": "\u002BTWN"
+            },
+            {
+              "ident": 53,
+              "param": 0,
+              "tag": 90,
+              "series": 0,
+              "tail": ""
+            },
+            {
+              "ident": 100,
+              "param": 65499,
+              "tag": 0,
+              "series": 1,
+              "tail": "psAvn\\@ompHbsoAyllH\\olIyroEzl\u003E"
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 90
+    },
+    {
+      "Fixture": {
+        "label": "nomp",
+        "magic_id": 38,
+        "magic_name": "TwinBlade",
+        "arm": "case SKILL_TWINBLADE",
+        "user_magic_level": 1,
+        "caster_level": 30,
+        "caster_mc": 15,
+        "caster_sc": 15,
+        "caster_mp": 5,
+        "magic_spell": 20,
+        "magic_def_spell": 0,
+        "target_level": 20,
+        "target_max_hp": 100,
+        "anti_magic": 3,
+        "seed": 1,
+        "entry_args": {
+          "w_ident": 3017,
+          "n_key": 38,
+          "n_target_x": 101,
+          "n_target_y": 100,
+          "bo_late_delivery": false
+        },
+        "preset": {
+          "use_thrusting": false,
+          "use_half_moon": false,
+          "crs_hitkill": false,
+          "fire_hit_busy": false
+        },
+        "entry_return": true,
+        "delay_time": 0,
+        "dir": 4,
+        "wait_ms": 1200,
+        "caster_xy": [
+          100,
+          100
+        ],
+        "target_xy": [
+          101,
+          100
+        ],
+        "obs_in_xy": [
+          105,
+          100
+        ],
+        "obs_out_xy": [
+          140,
+          100
+        ]
+      },
+      "Label": "nomp",
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
+      "Seed": 1,
+      "SpellReturn": true,
+      "Receivers": [
+        {
+          "Who": "caster",
+          "Rm": [
+            {
+              "ident": 11004,
+              "wParam": 0,
+              "p1": 219,
+              "p2": 255,
+              "p3": 0,
+              "msg": "twin hit skill charged",
+              "late": false,
+              "delivery": 0,
+              "priority": 252
+            }
+          ],
+          "Sent": [
+            {
+              "ident": 100,
+              "param": 65499,
+              "tag": 0,
+              "series": 1,
+              "tail": "psAvn\\@ompHbsoAyllH\\olIyroEzl\u003E"
+            }
+          ]
+        },
+        {
+          "Who": "target",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "obs_in",
+          "Rm": [],
+          "Sent": []
+        },
+        {
+          "Who": "obs_out",
+          "Rm": [],
+          "Sent": []
+        }
+      ],
+      "Rng": [],
+      "TargetHp": 100,
+      "TargetHpBefore": 100,
+      "NotDue": [],
+      "CasterMp": 5
+    }
+  ]
+}
