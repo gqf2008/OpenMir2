@@ -134,10 +134,42 @@ docs/issues/openmir2-npc-parity.md              # 本文件（判定面/进展/�
 - D1/D2：golden 每 case 带 `drain_passes`/`drain_hit_cap`；比较器断言 `drain_hit_cap == false`（true 即红）。
 - Z1/Z2/Z3：golden 缺文件、零 cases、未知 case 名、`drain_hit_cap=true` ⇒ panic（防空转）。
 
-## 11. 行为牙（NP-01 样板，待补原文）
+### 10.1 状态面缺位：会不会让 NP-01 变成假绿？
 
-在**本 worktree** 内逐条变异、跑同一条测试，期望红，恢复后 sha 相等并复绿；命令与原文将随交付说明给出（不手抄）。
+**结论：本样板 4 例的行为面结论不受影响；但状态面必须单独标 CONDITIONAL，不能宣称对齐。**
 
-1. 删 `handle_click_npc_cmd` 的距离门 ⇒ `click_main_far` 红；
-2. 删 `handle_click_npc_cmd` 的 `normNpc.Click` 派发 ⇒ `click_main_ok` 红；
-3. （可选）删 Death 门 / 限频门 ⇒ 对应用例红。
+依据（oracle 代码）：
+1. 点击链 `ClientClickNpc → NormNpc.Click → GotoLable("@main")`。`GotoLable` 的脚本选择
+   （`src/Modules/ScriptEngine/ScriptEngine.cs:44-60`）先按 `RecordList["@main"]` 命中；
+   **只有没有 `@main` 时**才回退用 `playerActor.Script` / 逆序 Quest 门。本夹具只有一份脚本且含
+   `[@main]` ⇒ 选择结果**不依赖** `LastNpc`/`ScriptCurrLable`。
+2. 说词文本只由被选 record 的 `#SAY` 决定；三条负例（超距/Death/限频）在 `GotoLable` 之前就返回，
+   根本不读这两项。
+3. `LastNpc` 在 oracle 里只会影响**后续**的 `@main` 选择（NP-04）与 `LastNpc` 归属判断；
+   本样板没有第二次点击/选择用例，故不进入判定面。
+
+**风险（必须登记）**：Rust 未建模这两项 ⇒ 若实现漏设 `LastNpc`/`Script`，本样板**仍然绿**。
+因此交付口径写：**行为面 PASS；状态面 CONDITIONAL（缺 `LastNpc`、`ScriptCurrLable`，挂 T-137 残余①）**。
+批量时若出现依赖 `LastNpc` 的用例（NP-04 的 `@main` 回退），必须先补建模再加断言，不得跳过。
+
+### 10.2 QA 42 条四项自检（NP-01 样板）
+
+| 项 | 自检 | 证据/命令 |
+| --- | --- | --- |
+| **R2** 分母不许动 | `git diff --stat master...HEAD -- docs/issues/parity-gap-npc.json` ⇒ 空输出 | 本批未触碰该文件（自检命令原文见交付说明） |
+| **T2** 文本牙不算行为牙 | 本样板**没有**文本牙；牙 A 是实现变异（距离门 15→155 ⇒ `click_main_far` 红） | `E:/UserFleet/qa/npc-parity/np01-mutation-A-distance.txt` |
+| **L3** 状态不许从回包反推 | 状态读取全部来自会话/实体：`sessions["hero"].click_npc_time`、`world.entities.get_mut(...).life_cycle.death`、`transform_mut(...).x/y`；帧只用来比帧 | 比较器源码（`lib.rs` 的 `np01_click_main_matches_oracle_golden`） |
+| **D2** 命中上限必须红 | golden 每 case 带 `drain_passes`/`drain_hit_cap`（4/4 例）；比较器断言 `drain_hit_cap == false`，true ⇒ panic | `grep -c drain_hit_cap` 于 golden 与 `lib.rs`（原文见交付说明） |
+
+## 11. 行为牙（NP-01 样板）
+
+在**本 worktree** 内逐条变异、跑同一条测试，期望红，恢复后 sha 相等并复绿。原文落**仓外**：
+`E:/UserFleet/qa/npc-parity/`（不手抄到卡面）。
+
+| # | 变异 | 期望红在 | 证据 |
+| --- | --- | --- | --- |
+| A | `handle_click_npc_cmd` 距离门 `<=15` → `<=155` | `click_main_far` | `E:/UserFleet/qa/npc-parity/np01-mutation-A-distance.txt`（FAILED 1；恢复 sha 相等） |
+| B | `@main` 派发（`run_merchant_goto` 的 label）改成不存在的 label | `click_main_ok` 说词为空 | 待 00:55 后补 |
+
+> 变异 B 与 A 同法：`git checkout -- mir2-rs/bins/game-svr/src/lib.rs` 恢复后断言 sha 相等并复绿；
+> 构建按总监窗口约束，窗口内不新起构建。
