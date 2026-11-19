@@ -371,6 +371,32 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
 
 **牙**：把 `LARGE`（以及 `SMALL`/`EQUAL`）改回"按真实变量值比较" ⇒ 对应用例必红；恢复 sha 相等并复绿。
 
+### 14.0 变量名 → 槽号 → 可解析区间（实现严格按此表；符号锚 `SystemShare.GetValNameNo` / `CheckVarNameNo`）
+
+`GetValNameNo`（`src/Modules/SystemModule/SystemShare.cs:502`）产出的槽号，与 `CheckVarNameNo`
+（`src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:4671`）认的区间表**并不对齐**：
+
+| 变量形 | `GetValNameNo` 槽号 | 在 `CheckVarNameNo` 区间表内？ |
+| --- | --- | --- |
+| `P0..P99` | 0..99 | ✅（读 `Config.GlobalVal`） |
+| `P100+`（长 P） | 首位数字（如 `P123`→1） | ✅（落 0..99） |
+| `G0..G99`（短） | 100..199 | ❌ |
+| `G123`（长 G） | 先 +700，再被紧随的 `if/else` **覆盖为 100+首位**（C# 双 if/else 原样）⇒ `G123`→101 | ❌ |
+| `D0..D99` | 200..299 | ❌ |
+| `M0..M99` | 300..399 | ❌ |
+| `I0..I99` | 400..499 | ❌ |
+| `N0..N99` | 500..599 | ❌ |
+| `A123`（长 A） | 1223 | ✅（落 1200..1299，读 `MNMval[23]`） |
+| 其余前缀（S/T/E/W…） | 各自 600+/700+/1600+/1700+ | ❌ |
+
+**结论**：`LARGE`/`SMALL` 对**任何**可解析/不可解析变量都恒假；`EQUAL` 只在变量名落进区间表时恒真
+（如 `P*`、长 `A`），否则恒假。语料里 `equal/large/small` 全用 M/D ⇒ **线上全假**。
+实现严格按上表：`lookup_var_number` 复用 `check_var_name_no` 的区间判定，`EQUAL = resolved`。
+
+**用例**：`engine_tests::var_cmp_conditions_follow_oracle_pass_by_value_defect` 覆盖两类——
+M3 下三条件全假；P3 下 `LARGE`/`SMALL` 假、`EQUAL` 真（含 `P3` 值 0 vs 目标 5 的判别性断言）。
+**牙 G**：把 EQUAL 改成按真实值比较 ⇒ `EQUAL(P3,5)` 必红。
+
 ## 14.1 NP-04 `#ACT` 用例的最终形态
 
 原提的 `[@@sendMsg]`（`SETSENDMSGFLAG`）在 Rust 侧**无状态存储**（`ScriptPlayer::set_bo_send_msg_flag` 默认 no-op），

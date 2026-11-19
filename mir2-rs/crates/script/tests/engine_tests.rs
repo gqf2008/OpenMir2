@@ -3111,7 +3111,12 @@ fn var_cmp_conditions_follow_oracle_pass_by_value_defect() {
         );
         assert!(
             engine.check_conditions(&[mk(25, "P3", 0)]),
-            "EQUAL(P3) 恒真"
+            "EQUAL(P3,0) 恒真"
+        );
+        // 判别"恒真"而非"值相等"：P3 实际值 0、目标 5；oracle 仍真（0==0），按真实值比较才会假。
+        assert!(
+            engine.check_conditions(&[mk(25, "P3", 5)]),
+            "EQUAL(P3,5) 恒真（oracle 缺陷照搬）"
         );
     }
 }
