@@ -203,7 +203,29 @@ pub struct UseItemContext<'a> {
 }
 
 /// 本动作会原地改的**演员侧**状态（`PlayObject` 上分散的字段；接缝把它们打包传入传出）。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// items 线「额外状态」束（harness 状态扩展，`opc-07` 2026-11-20 定）：把 oracle `PlayObject` 上分散、
+/// `UseItemActorState` 原先未承载的状态集中一处，供 IT-07..17 逐条 wired。**未 wire 的字段保持 `Default`、
+/// 不参与判据**（各自按其宿主原语接入并加最小单测后再启用）。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ItemsExtraState {
+    /// `PlayObject.BodyLuck`（double，`PlayObject.cs:520`），`AddBodyLuck` 维护（IT-08 `GetExp`）。宿主已有
+    /// 同源 `add_body_luck` 纯函数（`lib.rs`）。
+    pub body_luck: f64,
+    /// `PlayObject.BodyLuckLevel`（`clamp(BodyLuck/BODYLUCKUNIT, -10, 5)`）。
+    pub body_luck_level: i32,
+    /// `ExtraAbil[6]`（EABIL_DCUP/MCUP/SCUP/HITSPEEDUP/HPUP/MPUP；IT-07）。
+    pub extra_abil: [u16; 6],
+    /// `ExtraAbilFlag[6]`（IT-07）。
+    pub extra_abil_flag: [u8; 6],
+    /// `ExtraAbilTimes[6]`（绝对 tick；墙钟派生 ⇒ 判据只核相对增量/单调，不核绝对值）。
+    pub extra_abil_times: [i32; 6],
+    /// 当前装备武器（`UseItems[Weapon]`）；`None` = 空手（IT-12 祝福油 / IT-14/15 修复油）。
+    pub weapon: Option<BagItem>,
+    /// `PlayObject.MagicList` 的 magic id 序列（IT-17 ReadBook 追加）。
+    pub magic_list: Vec<i32>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub struct UseItemActorState {
     /// `PlayObject.WAbil`（读 `HP/MP/MaxHP/MaxMP`，写 `HP/MP/Weight`）。
     pub wabil: Ability,
@@ -215,6 +237,8 @@ pub struct UseItemActorState {
     pub user_unlock_durg: bool,
     /// `PlayObject.HungerStatus`（`PlayObject.cs:225`，`int`；StdMode 1 食物加 `DuraMax/10`、上限 5000）。
     pub hunger_status: i32,
+    /// 额外状态束（BodyLuck / ExtraAbil / 武器 / MagicList；见 [`ItemsExtraState`]）。
+    pub extra: ItemsExtraState,
 }
 
 impl Default for UseItemActorState {
@@ -249,6 +273,7 @@ impl Default for UseItemActorState {
             inc_spell: 0,
             user_unlock_durg: false,
             hunger_status: 0,
+            extra: ItemsExtraState::default(),
         }
     }
 }
@@ -819,6 +844,24 @@ mod tests {
         "eat_fail_stdmode31_unbind_bag_full",
     ];
 
+    /// 状态扩展（slice 1）：`ItemsExtraState::default()` 为零值束；`UseItemActorState::default().extra` 同零。
+    /// 保证新增状态字段的初值可控（未 wire 的字段不影响既有判据）。
+    #[test]
+    fn items_extra_state_default_is_zero() {
+        let d = ItemsExtraState::default();
+        assert_eq!(d.body_luck, 0.0);
+        assert_eq!(d.body_luck_level, 0);
+        assert_eq!(d.extra_abil, [0u16; 6]);
+        assert_eq!(d.extra_abil_flag, [0u8; 6]);
+        assert_eq!(d.extra_abil_times, [0i32; 6]);
+        assert!(d.weapon.is_none());
+        assert!(d.magic_list.is_empty());
+        assert_eq!(
+            UseItemActorState::default().extra,
+            ItemsExtraState::default()
+        );
+    }
+
     /// Z4 gate：golden 非零 ⇒ Rust 必须非零；golden 全零 ⇒ 不适用（合法全零失败例豁免）。
     fn z4_ok(golden_nonzero: bool, rust_nonzero: bool) -> bool {
         !golden_nonzero || rust_nonzero
@@ -938,6 +981,7 @@ mod tests {
                 recalc: Some(recalc),
             };
             let mut state = UseItemActorState {
+                extra: Default::default(),
                 wabil: abil.clone(),
                 inc_health: u16v(&case["inc_health_before"]),
                 inc_spell: u16v(&case["inc_spell_before"]),
@@ -1168,6 +1212,7 @@ mod tests {
             .find(|c| c["name"] == "eat_ok_shape3_percent")
             .expect("夹具必须含 eat_ok_shape3_percent");
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
@@ -1209,6 +1254,7 @@ mod tests {
             .find(|c| c["name"] == "eat_fail_can_use_item_false")
             .expect("夹具必须含 eat_fail_can_use_item_false");
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
@@ -1261,6 +1307,7 @@ mod tests {
             .find(|c| c["name"] == "eat_fail_stdmode_other")
             .expect("夹具必须含 eat_fail_stdmode_other");
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
@@ -1318,6 +1365,7 @@ mod tests {
             recalc: None,
         };
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 3,
             inc_spell: 4,
@@ -1365,6 +1413,7 @@ mod tests {
             recalc: None,
         };
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,
@@ -1402,6 +1451,7 @@ mod tests {
 
         // 存在 FunctionNPC ⇒ 吃。
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: abil.clone(),
             inc_health: 0,
             inc_spell: 0,
@@ -1432,6 +1482,7 @@ mod tests {
 
         // 缺失 FunctionNPC ⇒ 不吃（`UseStdModeFunItem` 返回 false）。
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: abil.clone(),
             inc_health: 0,
             inc_spell: 0,
@@ -1565,6 +1616,7 @@ mod tests {
             .expect("夹具必须含 eat_ok_stdmode31_unbind_success（IT-18 成功路径）");
         let unbind = unbind_from(&doc);
         let mut state = UseItemActorState {
+            extra: Default::default(),
             wabil: ability(&case["wabil_before"]),
             inc_health: 0,
             inc_spell: 0,

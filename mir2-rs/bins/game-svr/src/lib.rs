@@ -10538,6 +10538,12 @@ fn handle_eat_cmd(
         inc_spell: sg.recovery.inc_spell,
         user_unlock_durg: sg.user_unlock_durg,
         hunger_status: sg.hunger_status,
+        extra: game_svr::useitem::ItemsExtraState {
+            // `PlayObject.BodyLuck`/`BodyLuckLevel`（`sg.equip` 已承载，与 `add_body_luck` 同源）。
+            body_luck: sg.equip.body_luck,
+            body_luck_level: sg.equip.body_luck_level,
+            ..Default::default()
+        },
     };
     // `ItemList` 从会话态拿出（`use_item` 原地改）后马上放回。
     let mut item_list = std::mem::take(&mut sg.state.item_list);
@@ -10600,6 +10606,10 @@ fn handle_eat_cmd(
     sg.recovery.inc_spell = state.inc_spell;
     sg.user_unlock_durg = state.user_unlock_durg;
     sg.hunger_status = state.hunger_status;
+    // items 扩展（状态扩展 slice 1）：`BodyLuck`/`BodyLuckLevel` 往返。`use_item` 暂不改它们 ⇒ 现为恒等；
+    // IT-08（`GetExp` 的 `AddBodyLuck`）起生效。
+    sg.equip.body_luck = state.extra.body_luck;
+    sg.equip.body_luck_level = state.extra.body_luck_level;
     // **药品写点镜像进实体**（卡 `openmir2-spell-fill-projection-mirror`，review 94159ca7d1 F1）：
     // oracle 的 `IncHealthSpell`（`BaseObject.cs:952-975`）写唯一一份 `WAbil`——本段覆盖的写点
     // 来自 `useitem.rs:306`（StdMode 0 Shape 1 固定量）、`:329`（Shape 3 百分比）、
