@@ -301,8 +301,8 @@ Rust 用例 `quest_check_conditions_match_oracle_ledger`（`cargo test -p game-s
 - `M2Share.StartReady` 的实际作用：`TCPNetChannel.Connecting` 先判它，为假 ⇒ **拒绝准入**
   （常量文本 `服务器未就绪: {0}`）；`TCPNetChannel.Run` 整段不放行；`TimedService.ExecuteInternal`
   直接 `return`。⇒ 未置就绪 = **玩家连不上、进程活着、内存里留着前缀 NPC**。
-- 顶层捕获点：`GameApp.InitializeWorld`（`GameApp.cs:222`）整块 `try/catch`，只 `LogService.Error(ex)`；
-  异常发生在 `SystemShare.WorldEngine.Initialize()`（`GameApp.cs:244`）⇒ 其后的
+- 顶层捕获点：`GameApp.InitializeWorld`（`src/GameSrv/GameApp.cs:222`）整块 `try/catch`，只 `LogService.Error(ex)`；
+  异常发生在 `SystemShare.WorldEngine.Initialize()`（`src/GameSrv/GameApp.cs:244`）⇒ 其后的
   `GuildMgr/CastleMgr/AutoBot` 与 **`M2Share.StartReady = true`** 都不执行。
 
 **裁定与落地形态**：
