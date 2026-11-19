@@ -1035,9 +1035,10 @@ fn condition_handlers_registered_keys() {
     assert!(engine.check_conditions(&[cond(7, "", "", 5)]), "等级够");
     // EQUAL 注册键 = 25：变量名 P1 → 槽 1（0..99 → 全局表，本 mock 下恒 0）与 nParam2 比较
     assert!(engine.check_conditions(&[cond(25, "P1", "0", 0)]));
-    // LAPGE 键 = 26（0 > 0 假）、SMALL 键 = 27（0 < 1 真）
+    // LAPGE 键 = 26、SMALL 键 = 27：oracle `CheckVarNameNo` 按值传参 ⇒ 比较值恒 0/0，
+    // 两者**恒假**（缺陷照搬；见 `var_cmp_conditions_follow_oracle_pass_by_value_defect`）。
     assert!(!engine.check_conditions(&[cond(26, "P1", "0", 0)]));
-    assert!(engine.check_conditions(&[cond(27, "P1", "1", 1)]));
+    assert!(!engine.check_conditions(&[cond(27, "P1", "1", 1)]));
     assert!(engine.errors.is_empty(), "{:?}", engine.errors);
 }
 
@@ -3060,4 +3061,57 @@ x
     let errs = run_act(&mut npc, &mut player, act_full(193, &["Stop"], &[]));
     assert!(script_errors(&errs).is_empty(), "{errs:?}");
     assert!(!player.bo_dec_game_gold);
+}
+
+/// **oracle 缺陷照搬**（卡 `card/npc-parity`，2026-11-20）：`LARGE`/`SMALL`/`EQUAL` 走
+/// `CheckVarNameNo`（`ConditionProcessingSys.cs:4671`）——它按值传参且**只认区间表**
+/// （0..99 / 1000..1099 / 1100..1119 / 1200..1399 / 1400..1499 / 2000..2499）；而 `GetValNameNo`
+/// 给 `M<n>` 的槽号是 `300+n`、`D<n>` 是 `200+n` 等**不在区间表里** ⇒ 这些变量名不可解析。
+/// 结果：`LARGE`/`SMALL`/`EQUAL` 对 M/D/N/G 变量全恒假；`EQUAL` 仅在变量名可解析时恒真（如 `P3`→0..99）。
+#[test]
+fn var_cmp_conditions_follow_oracle_pass_by_value_defect() {
+    let (mut npc, mut player) = setup(
+        "[@main]
+#SAY
+真
+#ELSESAY
+假
+",
+    );
+    player.mnm.insert(3, 100);
+    let mk = |code: i32, name: &str, target: i32| mir2_script::QuestConditionInfo {
+        cmd_code: code,
+        s_param1: name.into(),
+        n_param2: target,
+        ..Default::default()
+    };
+    {
+        let mut engine = Engine::new(&mut npc, &mut player);
+        // M3=100（正确语义：large 真 / small 假 / equal 假）；oracle 下三者全假（M 不可解析）。
+        assert!(
+            !engine.check_conditions(&[mk(26, "M3", 60)]),
+            "LARGE(M3) 恒假"
+        );
+        assert!(
+            !engine.check_conditions(&[mk(27, "M3", 60)]),
+            "SMALL(M3) 恒假"
+        );
+        assert!(
+            !engine.check_conditions(&[mk(25, "M3", 0)]),
+            "EQUAL(M3) 因不可解析恒假"
+        );
+        // P3 可解析（0..99 区间）：EQUAL 恒真（0 == 0），LARGE/SMALL 仍恒假。
+        assert!(
+            !engine.check_conditions(&[mk(26, "P3", 0)]),
+            "LARGE(P3) 恒假"
+        );
+        assert!(
+            !engine.check_conditions(&[mk(27, "P3", 0)]),
+            "SMALL(P3) 恒假"
+        );
+        assert!(
+            engine.check_conditions(&[mk(25, "P3", 0)]),
+            "EQUAL(P3) 恒真"
+        );
+    }
 }
