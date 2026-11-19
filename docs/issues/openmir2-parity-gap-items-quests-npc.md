@@ -1,6 +1,6 @@
 # 玩法缺口表：物品（item parity gap）
 
-> 卡：`card/parity-gap-survey`（只读分析）。本文件已出**物品**与**任务**两块；NPC 脚本按 opc-07 审后追加。
+> 卡：`card/parity-gap-survey`（只读分析）。本文件已出**物品**、**任务**、**NPC** 三块。
 > 口径基准时间：2026-11-19 23:16（+0800），仓库 HEAD 见文末"计数时刻"。
 
 ## 1. 分母定义（定下后不再改；要改必须写明改前/改后/原因）
@@ -265,13 +265,37 @@ CM_CLICKNPC = 1010                      src/OpenMir2/Messages.cs:62
 | --- | --- | --- | --- | --- | --- |
 | QT-01 | `{Quest N}` 脚本选择门（至多 10 组 `#IF`） | `src/Modules/ScriptEngine/ScriptEngine.cs:146-168` | **implemented（未验证）** | 解析：`crates/script/tests/parser_tests.rs::quest_creates_new_script_info`、`::quest_block_keeps_writing_into_previous_record`；运行时 `engine::mod.rs` 的 `check_quest_status`（第 1074 行）无 oracle 夹具 | `#RAND` 支按 0 保守处理，登记 **B-13**（`mir2-rs/tests/parity/whitelist.md`）；语料 `{Quest` 0 个文件 |
 | QT-02 | `CHECK [flag] value` | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:4174` | **implemented（未验证）** | `crates/script/src/engine/conditions.rs` 的 `cond_check`（第 456 行）；底层位读有 oracle 向量（见 QX-01） | 判定本身无 oracle 夹具；语料 **12** 个文件使用 |
-| QT-03 | `CHECKOPEN`（含 oracle 缺陷：恒假） | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:199` | **verified** | `crates/script/tests/engine_tests.rs::condition_truth_table_matches_oracle`（读 oracle 探针 `tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv`）、`::checkopen_is_always_false_like_oracle` | 语料 0；缺陷照搬 |
+| QT-03 | `CHECKOPEN`（含 oracle 缺陷：恒假） | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:199` | **verified** | `crates/script/tests/engine_tests.rs::condition_truth_table_matches_oracle`（读 oracle 探针 `tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv`）、`::checkopen_is_always_false_like_oracle` | 语料 0；**oracle 缺陷照搬，登记 T-37**（不得当 bug 修掉，改它会与 oracle 不一致；断言原文见 §11.4.1） |
 | QT-04 | `CHECKUNIT` | `src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:4104` | **verified** | 同上的真值表 + `::checkunit_matches_quest_unit_status`、`::checkunit_checkopen_parse_anchors` | 语料 0 |
 | QT-05 | `SET flag value` | `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2036` | **implemented（未验证）** | `crates/script/src/engine/actions.rs` 的 `ActionOfSet`（第 192 行）；登记即实现守卫 `engine_tests.rs::implemented_registry_entries_are_actually_implemented` | 无动作级 oracle 夹具；语料 **18** 个文件使用 |
 | QT-06 | `RESET flag count` | `src/Modules/ScriptEngine/Processings/ExecutionProcessingSys.cs:2043` | **implemented（未验证）** | `actions.rs` 的 `ActionOfReSet`（第 199 行）+ 同一守卫 | 语料 0 |
 | QT-07 | `SETOPEN flag value` | `:2051` | **implemented（未验证）** | `actions.rs` 的 `ActionOfSetOpen`（第 205 行）+ 同一守卫 | 语料 0 |
 | QT-08 | `SETUNIT flag value` | `:2058` | **implemented（未验证）** | `actions.rs` 的 `ActionOfSetUnit`（第 210 行）+ 同一守卫 | 语料 0 |
 | QT-09 | `RESETUNIT flag count` | `:2065` | **implemented（未验证）** | `actions.rs` 的 `ActionOfResetUnit`（第 155 行）+ 同一守卫 | 语料 0 |
+
+#### 11.4.1 CHECKOPEN 恒假：T-37 登记与断言原文
+
+`CHECKOPEN` 无论 `QuestUnitOpen` / `value` 如何都恒假——这是 oracle 的**怪行为**，不是 Rust 的 bug。
+登记编号 **T-37**（`mir2-rs/tests/parity/whitelist.md` 的 T-37 行；批准链 approve `e55c3d76` / merge `a443296e`）。
+**不得修掉**：改它会与 oracle 不一致（AGENTS.md 硬约束③「行为等价优先于修 bug」）；将来要"修好"必须单开 `S-*` 批次并保留改前/改后读数。
+
+oracle 探针向量（`tests/parity/m3/quest-state-probe/vectors/quest_condition_vectors.tsv`，真 `ConditionProcessingSys` 产出）4 行全 `success=0`：
+```
+ConditionOfCheckOpen	5	0	0	0
+ConditionOfCheckOpen	5	1	0	0
+ConditionOfCheckOpen	5	0	1	0
+ConditionOfCheckOpen	5	1	1	0
+```
+Rust 实现 `crates/script/src/engine/conditions.rs::cond_check_open` 起手 `*result = false;`，三个分支都不改回 `true`（与同族的 `cond_check` / `cond_check_unit` 起手 `true` 不对称）。
+Rust 断言原文（`crates/script/tests/engine_tests.rs::checkopen_is_always_false_like_oracle`）：
+```rust
+assert!(
+    npc.says.iter().any(|(s, _)| s.contains("关")),
+    "CHECKOPEN 应恒假（oracle 缺陷照搬）：open={open} value={value} says={:?}",
+    npc.says
+);
+```
+真值表测试 `condition_truth_table_matches_oracle` 逐行读上述 TSV 并断言同一结果（8 行：CHECKUNIT 4 + CHECKOPEN 4）。
 
 轴（不进主分母）：
 
@@ -328,6 +352,7 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 | `cost_enum` | string[] | `S` / `S-M` / `M` / `M-L` / `L` |
 | `denominator` | object | `{kind, definition, entry, count, commands[]}` |
 | `axes` | array | 不进主分母但必须可见的轴（物品：装备轴；任务：QX-01…04） |
+| `dead_paths` | array | **可选**；死路径登记（`status` 固定 `dead_in_oracle`），不参与 `denominator.count`；与 `entries` 同形 |
 | `entries` | array | 主分母逐条，数量必须 == `denominator.count` |
 
 ### 12.2 条目字段（`entries[]` / `axes[]` 同形）
@@ -340,7 +365,7 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 | `status` | string | ∈ `status_enum` |
 | `evidence` | object | `{test, test_file, fixture, cases[], unit_tests[]}`；任一项可 `null`/空 |
 | `cost` | string \| null | ∈ `cost_enum`；已完成项为 `null` |
-| `deviation` | object \| null | `{id, file, section, lines?}`；`missing` 必填 |
+| `deviation` | object \| null | `{id, file, section, lines?}`；`missing` **必填**（T-*/D-*）；照搬 oracle 缺陷（如 CHECKOPEN 的 **T-37**）或登记缺口时也可填 |
 | `notes` | string | 备注（可空串） |
 
 ### 12.3 状态枚举（脚本按此判定）
@@ -360,4 +385,101 @@ $ grep -rli "{Quest"   Market_Def MapQuest_def | wc -l      -> 0
 3. `e.status == "missing" ⇒ e.deviation.id` 非空且能在 whitelist/差异登记中查到；
 4. `e.status == "verified" ⇒ e.evidence.test` 非空且 `test_file` 存在；
 5. `e.cost ∈ cost_enum ∪ {null}`；
-6. `sum(1 for e in entries if e.status=="verified")` 与文档汇总行一致（物品：7；任务：2）。
+6. `sum(1 for e in entries if e.status=="verified")` 与文档汇总行一致（物品：7；任务：2；NPC：1）。
+7. `dead_paths`（可选）不计入 `denominator.count`；其中每条 `status == "dead_in_oracle"`。
+
+---
+
+## 13. NPC 块（NPC 交互链）
+
+### 13.1 分母定义
+
+| 角色 | 定义 | 可复跑命令 | 本次结果 |
+| --- | --- | --- | --- |
+| **主分母** | **NPC 交互链上的行为叶子**：点 NPC、对话选择、特殊 NPC 覆写、@main 脚本选择、标签+extjmp 门、procedure 执行、断链、说词帧、变量替换、隐藏 NPC、NPC 显示帧 | §13.3 | **11** |
+| 旁证④ | `UserSelect` 实现/调用位点 | `grep -rn 'UserSelect(' --include=*.cs src/ \| grep -v worktrees \| wc -l` | **9** |
+| 旁证⑤ | `GotoLable(` 调用位点 | `grep -rn 'GotoLable(' --include=*.cs src/ \| grep -v worktrees \| wc -l` | **133** |
+| 数据侧 | 内容量（不是行为量） | `wc -l Npcs.txt MerChant.txt`；`find Market_Def -name '*.txt' \| wc -l` | Npcs **6** 行 / MerChant **162** 行 / Market_Def **141** 个脚本 |
+
+旁证 9 / 133 与分母 11 **不在同一集合上**（位点 vs 行为叶子），比较无意义；它们只用来确认"入口不止一处、脚本调用遍布全仓"。
+
+### 13.2 方法 5：NPC 入口（与任务不同，**有**专用消息号）
+
+```
+CM_CLICKNPC = 1010               src/OpenMir2/Messages.cs:62
+CM_MERCHANTDLGSELECT = 1011      src/OpenMir2/Messages.cs:63
+src/M2Server/Player/PlayObject.Message.cs:885  case CM_CLICKNPC: ClientClickNpc(nParam1)
+src/M2Server/Player/PlayObject.Message.cs:888  case CM_MERCHANTDLGSELECT: ClientMerchantDlgSelect(...)
+
+点击链：ClientClickNpc（src/M2Server/Player/PlayObject.Base.cs:674）
+  -> NormNpc.Click（src/M2Server/Npc/NormNpc.cs:68）-> GotoLable("@main")（:73）
+  -> NormNpc.GotoLable（:1889）-> ScriptEngine.GotoLable（src/Modules/ScriptEngine/ScriptEngine.cs:141）
+选择链：ClientMerchantDlgSelect（src/M2Server/Player/PlayObject.Operate.cs:114）
+  -> npc.UserSelect（NormNpc 虚方法 :1633；Merchant :789；CastleOfficial :93；GuildOfficial :55）
+说词帧：RM_MERCHANTSAY(11009)（Messages.cs:651）-> SM_MERCHANTSAY(643)（:304）；
+        映射在 src/M2Server/Player/PlayObject.Message.cs:1702
+```
+客户端**没有**"请求说词"的消息——说词只由服务端推送。这是与"物品有 CM_EAT"、任务"无专用消息"并列的第三种入口形态。
+
+### 13.3 分派清单（11 条）
+```
+点 NPC（CM_CLICKNPC 1010）
+  |-- NP-01 Click() -> GotoLable("@main")                    NormNpc.cs:68/:73
+  `-- NP-02 对话选择 -> UserSelect 标签跳转（@back/同标签/新标签） Operate.cs:114 -> NormNpc.cs:1633
+特殊 NPC
+  `-- NP-03 UserSelect 覆写（Merchant/CastleOfficial/GuildOfficial） Merchant.cs:789 / CastleOfficial.cs:93 / GuildOfficial.cs:55
+脚本引擎（ScriptEngine.GotoLable :141）
+  |-- NP-04 @main 脚本选择（LastNpc 保持 -> 逆序 Quest 门）      :46-75
+  |-- NP-05 标签查找 + extjmp 门                               :89
+  |-- NP-06 逐 procedure 条件真/假分支 + 动作执行 + say 累积      :95-125
+  |-- NP-07 动作返回 false 断链                                :101 / :113
+  `-- NP-08 说词帧（ChrName 前缀、高/普通优先级）                 :987-999 -> Message.cs:1702
+说词内容
+  `-- NP-09 变量替换（$USERNAME/$PRICERATE/$USERWEAPON…）        NormNpc.cs:275 / Merchant.cs:1109
+实体
+  |-- NP-10 隐藏脚本 NPC 可点/可选（QManage/QFunction/RobotManage） LocalDB.cs:236/:192/:293
+  `-- NP-11 NPC 显示/转向/受击/空闲帧（ProcessNpcs 逐 tick）        WorldServer.Merchant.cs:120
+```
+
+### 13.4 NPC 全表（11 条）
+
+| ID | 原版行为 | 原版依据 | Rust 状态 | 测试名 / 证据路径 | 备注 |
+| --- | --- | --- | --- | --- | --- |
+| NP-01 | 点 NPC 打开对话（`Click` → `@main`） | `src/M2Server/Player/PlayObject.Base.cs:674`、`src/M2Server/Npc/NormNpc.cs:68` | **implemented（未验证）** | 派发 `bins/game-svr/src/lib.rs`（CM_CLICKNPC 第 6317/27383 行、NormNpc.Click 等价第 6033 行）；测试 `bins/game-svr/src/lib.rs::t137_click_fixed_npc_main_says_menu_through_production_path`、`::click_npc_type0_fixed_npc_still_answers_643`、`::t160_click_fixed_npc_main_take_item_and_gold_write_back` | 点前门见 §13.5；无 oracle 夹具 |
+| NP-02 | 对话标签选择跳转（@back/同标签/新标签） | `src/M2Server/Player/PlayObject.Operate.cs:114`、`src/M2Server/Npc/NormNpc.cs:1633` | **implemented（未验证）** | `lib.rs` 1011 派发（第 7094 行）+ `merchant_base_user_select`（第 8907 行）、`guild_official.rs::handle_select`（第 461 行）；测试 `::merchant_dlgselect_exit_emits_one_merchantdlgclose_with_npc_recog`、`npc.rs::merchant_dialog_label_gate` | |
+| NP-03 | 特殊 NPC 的 `UserSelect` 覆写（商店/城堡/行会） | `src/GameSrv/Npc/Merchant.cs:789`、`src/GameSrv/Npc/CastleOfficial.cs:93`、`src/GameSrv/Npc/GuildOfficial.cs:55` | **implemented（未验证）** | `guild_official.rs` 生产入口 + 测试 `guild_official/tests.rs::t138_non_master_is_cancelled` 等 7 条 | 商店子命令归交易面（M3⑤），不在本分母 |
+| NP-04 | `@main` 脚本选择规则（LastNpc → 逆序 → Quest 门） | `src/Modules/ScriptEngine/ScriptEngine.cs:46-75` | **implemented（未验证）** | `crates/script/src/engine/mod.rs::check_quest_status`（第 1074 行）与 `goto_label`（第 1008 行附近） | 无直接 oracle 夹具 |
+| NP-05 | 标签记录查找 + `boExtJmp` 门 | `src/Modules/ScriptEngine/ScriptEngine.cs:89` | **implemented（未验证）** | `bins/game-svr/src/guild_official.rs`（第 582 行注释 + 引擎判定）；`npc.rs::merchant_dialog_label_gate` | |
+| NP-06 | 逐 procedure 条件真/假分支 + 动作执行 + say 累积 | `src/Modules/ScriptEngine/ScriptEngine.cs:95-125` | **verified** | `tests/parity/M4/run_npc_cases.py`（7 条 port-free 用例，C# 参照 vs Rust 逐行 diff；证据 `tests/parity/evidence/M4/npc-cases.txt`） | 用例：传送×2、行会(`@requestcastlewar`)、任务(`Q001@main`)、商店(`@changeGold`)、修理(`@StdModeFunc26`)、仓库(`@zum_bind1`) |
+| NP-07 | 动作返回 `false` 断链 | `src/Modules/ScriptEngine/ScriptEngine.cs:101`/`:113` | **implemented（未验证）** | 引擎返回路径；`crates/script/tests/engine_tests.rs::goto_executes_goto_not_endquest_after_flip` 为相邻覆盖 | |
+| NP-08 | 说词帧（ChrName 前缀、High/普通优先级） | `src/Modules/ScriptEngine/ScriptEngine.cs:987-999` → `src/M2Server/Player/PlayObject.Message.cs:1702` | **implemented（未验证）** | `npc.rs::merchant_say_text_and_gbk_bytes`、`::say_text_must_carry_chrname_prefix`、`::run_login_emits_say_with_chrname_prefix`；优先级 `guild_official.rs`（第 406-432 行） | M4 只比对 `msg 11009` 行文本，不覆盖线缆帧/优先级 |
+| NP-09 | 说词变量替换（玩家/NPC/价格等） | `src/M2Server/Npc/NormNpc.cs:275`、`src/GameSrv/Npc/Merchant.cs:1109` | **implemented（未验证）** | `npc.rs::merchant_click_main_say_expands_player_and_npc_vars`、`::merchant_variable_text_vectors`、`::line_variable_text_stops_at_first_non_variable_token` | |
+| NP-10 | 隐藏脚本 NPC 可点/可选（QManage/QFunction/RobotManage） | `src/GameSrv/DB/LocalDB.cs:236`/`:192`/`:293` | **implemented（未验证）** | `npc.rs::manage_and_function_npc_gates_require_loaded`、`::loads_from_disk_and_runs_login`；加载见 QX-02 | |
+| NP-11 | NPC 显示/转向/受击/空闲帧 | `src/GameSrv/Word/WorldServer.Merchant.cs:120`（ProcessNpcs） | **implemented（未验证）** | `lib.rs::fixed_npc_display_frames_through_production_aoi`、`::npc_and_merchant_turn_hit_frames_through_production_drain`、`::npc_random_idle_frames_through_production_drain_run`、`::npc_turn_hit_production_calls_are_wired_in_drain_run_downlinks`、`::npc_hit_frames_only_for_world_branch_and_never_to_npc` | |
+
+### 13.5 点/选的校验门（不计入行为分母）
+
+| 门 | oracle 依据 |
+| --- | --- |
+| `IsCanDeal == false` → `RM_MENU_OK(CanotTryDealMsg)` | `PlayObject.Base.cs:676` |
+| `Death || Ghost` → 零帧 | `PlayObject.Base.cs:681`、`src/M2Server/Player/PlayObject.Operate.cs:116` |
+| `ClickNpcTime` 限频 | `PlayObject.Base.cs:685` |
+| 同图 + 15 格距 | `PlayObject.Base.cs:689` |
+| 对话选择：异图/超视距且非 `IsHide` | `PlayObject.Operate.cs:123` |
+
+### 13.6 交叉核对（NPC 块）
+
+- 旁证④ 9 个 `UserSelect(` 位点分布：接口 1（`INormNpc.cs`）、虚方法 1（`src/M2Server/Npc/NormNpc.cs:1633`）、覆写 3（`src/GameSrv/Npc/Merchant.cs:789`/`src/GameSrv/Npc/CastleOfficial.cs:93`/`src/GameSrv/Npc/GuildOfficial.cs:55`）、`Merchant` 内部子选择 4（`UserSelectBuyItem` 等）；旁证⑤ 133 个 `GotoLable(` 位点遍布脚本/命令/任务/行会。
+- 数据侧：`Npcs.txt` 6 行、`MerChant.txt` 162 行、`Market_Def` 141 个脚本——内容量，不是行为量。
+
+### 13.7 死路径（NPC 块）
+
+| ID | 死路径 | 证据 |
+| --- | --- | --- |
+| NP-D1 | MapQuest 自动对话触发（怪/物品事件点 NPC） | 同 QT-D1：`src/M2Server/Player/PlayObject.cs:1670`/`:1677` 被注释；全仓无活 `GetQuestNpc` 调用 |
+
+### 13.8 结论（NPC 块）
+
+- 主分母 11：`verified` 1（NP-06，经 M4 双跑逐行 diff）、`implemented（未验证）` 10、`missing` **0**。
+- 机制层没有 known-missing；缺口在**证据强度**：10 条只有 Rust 侧集成测试，没有 oracle 夹具。
+- **脚本命令语言全集**（条件/动作注册表）不在本块重复计数：M4 已有双跑对拍（7 条）与注册表门（`IMPLEMENTED_CONDITIONS`/`IMPLEMENTED_EXECUTIONS` + `implemented_registry_entries_are_actually_implemented`）；任务块 §11 的 9 条是其中的任务专属子集。
