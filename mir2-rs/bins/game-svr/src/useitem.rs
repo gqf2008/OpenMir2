@@ -639,20 +639,6 @@ mod tests {
         v.as_array().unwrap().iter().map(frame).collect()
     }
 
-    fn notice(v: &Value) -> QueuedNotice {
-        QueuedNotice {
-            ident: i32v(&v["ident"]),
-            w_param: i32v(&v["w_param"]),
-            n_param1: i32v(&v["n_param1"]),
-            n_param2: i32v(&v["n_param2"]),
-            n_param3: i32v(&v["n_param3"]),
-        }
-    }
-
-    fn notices(v: &Value) -> Vec<QueuedNotice> {
-        v.as_array().unwrap().iter().map(notice).collect()
-    }
-
     /// 构造一条与探针同口径的 `RecalcAbilitys` 输入：`Abil` = 用例的 `wabil_before`（探针里
     /// `po.Abil = wabilPre`）、无装备、`bag` = 当前背包 `Index` 列表、无 buff。
     /// 测试用**空解包表**（`M2Share.UnbindList` 空 = 未装载 / 无该 Shape）。
@@ -662,6 +648,230 @@ mod tests {
     /// 两者都不会读表，空表与 oracle 探针（未装载 UnbindList）同口径。
     fn no_unbind() -> UnbindList {
         UnbindList::default()
+    }
+
+    /// 夹具记录的解包表（`unbind`：`Shape 字符串 → 解包物名`）；缺失 = 空表
+    /// （oracle `M2Share.UnbindList` 未命中 ⇒ 空名 ⇒ `CopyToUserItemFromName` 恒 false ⇒ 0 件）。
+    fn unbind_from(doc: &Value) -> UnbindList {
+        let mut map = std::collections::BTreeMap::new();
+        if let Some(o) = doc.get("unbind").and_then(Value::as_object) {
+            for (k, v) in o {
+                map.insert(k.parse::<i32>().unwrap(), v.as_str().unwrap().to_string());
+            }
+        }
+        UnbindList { map }
+    }
+
+    /// 防空转 Z1/Z3：`cases` 缺字段 / 非数组 / 为空 / < 已知例数 ⇒ `Err`（零用例不得判绿）。
+    fn cases_or_red(doc: &Value) -> Result<&Vec<Value>, String> {
+        let cases = doc
+            .get("cases")
+            .and_then(Value::as_array)
+            .ok_or_else(|| "防空转：夹具缺 `cases` 数组".to_string())?;
+        if cases.len() < 12 {
+            return Err(format!("防空转：夹具用例数异常（{}）", cases.len()));
+        }
+        Ok(cases)
+    }
+
+    /// 通知七字段元组 `(priority, ident, wParam, p1, p2, p3, late)`（排序序列比较与负例牙共用）。
+    type NoticeTuple = (i32, i32, i32, i32, i32, i32, bool);
+    fn expect_notice_tuples(case: &Value) -> Vec<NoticeTuple> {
+        case["expect"]["notices"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| {
+                (
+                    i32v(&v["priority"]),
+                    i32v(&v["ident"]),
+                    i32v(&v["w_param"]),
+                    i32v(&v["n_param1"]),
+                    i32v(&v["n_param2"]),
+                    i32v(&v["n_param3"]),
+                    v["late"].as_u64().unwrap_or(0) != 0,
+                )
+            })
+            .collect()
+    }
+
+    /// 排序后多重集相等（重复条目计数）。
+    fn notices_equal(mut a: Vec<NoticeTuple>, mut b: Vec<NoticeTuple>) -> bool {
+        a.sort();
+        b.sort();
+        a == b
+    }
+
+    /// D1/D2：抽空未命中上界且 `MaxDrainPasses=8` 才算合格（`hit_cap=true` ⇒ false ⇒ 比较器红）。
+    fn drain_ok(hit_cap: bool, max_passes: u64) -> bool {
+        !hit_cap && max_passes == 8
+    }
+
+    fn success_case(doc: &Value) -> Value {
+        doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_stdmode31_unbind_success")
+            .expect("夹具必须含 eat_ok_stdmode31_unbind_success")
+            .clone()
+    }
+
+    /// Z1/Z3 牙：空 `cases` / 缺 `cases` ⇒ `cases_or_red` 红。
+    #[test]
+    fn vacuous_guard_empty_or_missing_cases_red() {
+        assert!(cases_or_red(&serde_json::json!({"cases": []})).is_err());
+        assert!(cases_or_red(&serde_json::json!({})).is_err());
+        assert!(cases_or_red(&fixture()).is_ok(), "真实夹具必须过防空转");
+    }
+
+    /// L2 牙①：把一条通知的 `priority` 改掉 ⇒ 排序序列不等（优先级进比较面）。
+    #[test]
+    fn tooth_notice_priority_changed_red() {
+        let case = success_case(&fixture());
+        let want = expect_notice_tuples(&case);
+        let mut got = want.clone();
+        got[0].0 += 1;
+        assert!(!notices_equal(got, want), "改 priority 必须红");
+    }
+
+    /// L2 牙②：重复条目必须计数（多一条全等 ⇒ 不等）。
+    #[test]
+    fn tooth_notice_duplicate_count_red() {
+        let case = success_case(&fixture());
+        let want = expect_notice_tuples(&case);
+        let mut got = want.clone();
+        got.push(want[0]);
+        assert!(!notices_equal(got, want), "重复条目未计数 ⇒ 假绿");
+    }
+
+    /// D2 牙：`hit_cap=true` ⇒ `drain_ok` false（比较器据此判红）；`max_passes!=8` 亦 false。
+    #[test]
+    fn tooth_drain_hit_cap_red() {
+        assert!(!drain_ok(true, 8), "命中上限必须不合格");
+        assert!(!drain_ok(false, 7), "上限不是 8 必须不合格");
+        assert!(drain_ok(false, 8));
+    }
+
+    /// 状态差（Z4/Z5 共用）：任一 `*_before` 与终态不同，或解包件非空。
+    fn case_state_changed(case: &Value) -> bool {
+        let ex = &case["expect"];
+        case["wabil_before"] != ex["wabil"]
+            || case["item_list_before"] != ex["item_list"]
+            || case["inc_health_before"] != ex["inc_health"]
+            || case["inc_spell_before"] != ex["inc_spell"]
+            || case["hunger_status_before"] != ex["hunger_status"]
+            || case["user_unlock_durg_before"] != ex["user_unlock_durg"]
+            || ex["added_items"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false)
+    }
+
+    /// 非零锚（Z4）：帧(ident!=0) / 通知 / RNG / 状态差，任一非空即非「全零账本」。
+    fn has_nonzero_anchor(case: &Value) -> bool {
+        let ex = &case["expect"];
+        let frames_nonzero = ex["immediate_frames"]
+            .as_array()
+            .map(|a| a.iter().any(|f| f["ident"].as_u64().unwrap_or(0) != 0))
+            .unwrap_or(false);
+        let notices_nonzero = ex["notices"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        let rng_nonzero = ex["rng"].as_array().map(|a| !a.is_empty()).unwrap_or(false);
+        frames_nonzero || notices_nonzero || rng_nonzero || case_state_changed(case)
+    }
+
+    /// 单例两层（Z5）：`SM 帧>0` 且（`RM 通知>0` 或 `状态有变`）。
+    fn case_two_layer(c: &Value) -> bool {
+        let sm = c["expect"]["immediate_frames"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        let rm = c["expect"]["notices"]
+            .as_array()
+            .map(|a| !a.is_empty())
+            .unwrap_or(false);
+        sm && (rm || case_state_changed(c))
+    }
+
+    /// 夹具级（Z5）：至少一例两层。
+    fn fixture_covers_two_layers(doc: &Value) -> bool {
+        doc["cases"]
+            .as_array()
+            .map(|cs| cs.iter().any(case_two_layer))
+            .unwrap_or(false)
+    }
+
+    /// Z4 不适用（golden 全零）的用例名单。**当前为空**（23 例均有 635/636 帧）。
+    /// 夹具一变（新增/改名/某例变全零）⇒ 名单 `assert_eq!` 红，须与用例同一次提交更新并写进提交信息。
+    const EXPECTED_Z4_EXEMPT: &[&str] = &[];
+
+    /// Z5 只需一层（纯失败：仅 `SM_EAT_FAIL`、无 RM/状态变化）的用例名单——合法「只发失败帧」，
+    /// 故豁免两层要求（强判会误红）。夹具一变须同步更新本名单（`assert_eq!` 会咬）。
+    const EXPECTED_ONE_LAYER: &[&str] = &[
+        "eat_fail_not_found",
+        "eat_fail_stdmode_other",
+        "eat_fail_template_missing",
+        "eat_fail_dead",
+        "eat_fail_stdmode31_no_functionnpc",
+        "eat_fail_stdmode31_unbind_bag_full",
+    ];
+
+    /// Z4 gate：golden 非零 ⇒ Rust 必须非零；golden 全零 ⇒ 不适用（合法全零失败例豁免）。
+    fn z4_ok(golden_nonzero: bool, rust_nonzero: bool) -> bool {
+        !golden_nonzero || rust_nonzero
+    }
+
+    /// Z4 专用负例：**golden 非零而 Rust 全零 ⇒ 红**；golden 全零 ⇒ 不适用（豁免）。
+    #[test]
+    fn z4_golden_nonzero_rust_zero_red() {
+        assert!(!z4_ok(true, false), "golden 非零而 Rust 全零必须红");
+        assert!(z4_ok(true, true), "两侧非零 ⇒ 合格");
+        assert!(z4_ok(false, false), "golden 全零 ⇒ 不适用（合法失败例）");
+        assert!(has_nonzero_anchor(&success_case(&fixture())));
+    }
+
+    /// Z5 专用负例：只比一层（SM 帧有、RM/状态都无）不得判绿；真实夹具两层都有。
+    #[test]
+    fn z5_single_layer_red() {
+        let single = serde_json::json!({
+            "cases": [{
+                "name": "sm_only",
+                "wabil_before": {"hp": 1},
+                "item_list_before": [],
+                "inc_health_before": 0,
+                "inc_spell_before": 0,
+                "hunger_status_before": 0,
+                "user_unlock_durg_before": false,
+                "expect": {
+                    "immediate_frames": [{"ident": 636}],
+                    "notices": [], "added_items": [], "rng": [],
+                    "wabil": {"hp": 1}, "item_list": [],
+                    "inc_health": 0, "inc_spell": 0,
+                    "hunger_status": 0, "user_unlock_durg": false
+                }
+            }]
+        });
+        assert!(
+            !fixture_covers_two_layers(&single),
+            "只有 SM 一层必须不合格"
+        );
+        assert!(
+            fixture_covers_two_layers(&fixture()),
+            "真实夹具必须两层都有"
+        );
+    }
+
+    /// Z6 牙③：SM 帧改字段必须红（帧面也进比较面）。
+    #[test]
+    fn tooth_immediate_frame_changed_red() {
+        let case = success_case(&fixture());
+        let want = frames(&case["expect"]["immediate_frames"]);
+        let mut got = want.clone();
+        got[0].ident += 1;
+        assert_ne!(got, want, "SM 帧改字段必须红");
     }
 
     fn recalc_inputs_default<'a>(abil: &'a Ability, bag: &'a [u16]) -> RecalcInputs<'a> {
@@ -696,16 +906,24 @@ mod tests {
     fn matches_oracle_eat_fixture() {
         let doc = fixture();
         let cat = catalog(&doc);
-        let cases = doc["cases"].as_array().expect("cases 数组");
-        assert!(cases.len() >= 12, "夹具用例数异常：{}", cases.len());
+        let cases = cases_or_red(&doc).unwrap_or_else(|e| panic!("{e}"));
+        // 夹具记录的解包表（Shape → 解包物名）；无该表 = 空表。
+        let unbind = unbind_from(&doc);
+        assert!(
+            fixture_covers_two_layers(&doc),
+            "Z5：夹具必须至少一例同时覆盖 SM 帧与 RM/状态两层"
+        );
+        let mut z4_applicable = 0usize;
+        let mut z4_exempt_names: Vec<String> = Vec::new();
+        let mut one_layer_names: Vec<String> = Vec::new();
         for case in cases {
             let name = case["name"].as_str().unwrap();
             let c = &case["ctx"];
             let mut item_list = bag_items(&case["item_list_before"]);
+            let item_list_before = item_list.clone();
             let abil = ability(&case["wabil_before"]);
             let bag: Vec<u16> = item_list.iter().map(|it| it.index).collect();
             let recalc = recalc_inputs_default(&abil, &bag);
-            let unbind = no_unbind();
             let ctx = UseItemContext {
                 catalog: &cat,
                 can_use_item: c["can_use_item"].as_bool().unwrap(),
@@ -731,16 +949,121 @@ mod tests {
             let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
             let expect = &case["expect"];
 
+            // Z4：golden 有非零期望 ⇒ Rust 必须有非零锚；golden 全零（合法失败例）⇒ 不适用。
+            let golden_nonzero = has_nonzero_anchor(case);
+            let rust_nonzero = !out.immediate_frames.is_empty()
+                || !out.notices.is_empty()
+                || !out.added_items.is_empty()
+                || state.wabil != abil
+                || item_list != item_list_before;
+            if golden_nonzero {
+                z4_applicable += 1;
+            } else {
+                z4_exempt_names.push(name.to_string());
+            }
+            if !case_two_layer(case) {
+                one_layer_names.push(name.to_string());
+            }
+            assert!(
+                z4_ok(golden_nonzero, rust_nonzero),
+                "{name}: Z4 golden 非零但 Rust 全零"
+            );
+
+            // 即时帧 = 解包产物逐件 `SM_ADDITEM(200)`（`MakeMessage(SM_ADDITEM, ActorId, 0, 0, 1)`）
+            // 在前，再 `SM_EAT_OK/636`。Rust 把解包件放在 `added_items`，这里按同一顺序拼回帧序。
+            let mut rust_frames: Vec<Frame> = out
+                .added_items
+                .iter()
+                .map(|_| Frame {
+                    ident: 200,
+                    recog: i32v(&c["actor_id"]),
+                    param: 0,
+                    tag: 0,
+                    series: 1,
+                })
+                .collect();
+            rust_frames.extend(out.immediate_frames.iter().cloned());
             assert_eq!(
-                out.immediate_frames,
+                rust_frames,
                 frames(&expect["immediate_frames"]),
-                "{name}: 即时帧与 oracle 不符"
+                "{name}: 即时帧(含 SM_ADDITEM)与 oracle 不符"
             );
+            // 通知：七字段 (ident,wParam,p1,p2,p3,priority,late) 按 (priority,ident,params,late) 排序后逐位比；
+            // items 线的通知都走 `SendMsg`（`SendUpdateMsg` 亦汇到它）⇒ priority=(byte)ident、late=false，
+            // Rust 据此派生；夹具记录 oracle 的入队键与 `LateDelivery`。`Vec` 相等即多重集（重复计数）。
+            let mut got: Vec<(i32, i32, i32, i32, i32, i32, bool)> = out
+                .notices
+                .iter()
+                .map(|n| {
+                    (
+                        n.ident & 0xFF,
+                        n.ident,
+                        n.w_param,
+                        n.n_param1,
+                        n.n_param2,
+                        n.n_param3,
+                        false,
+                    )
+                })
+                .collect();
+            let mut want: Vec<(i32, i32, i32, i32, i32, i32, bool)> = expect["notices"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|v| {
+                    (
+                        i32v(&v["priority"]),
+                        i32v(&v["ident"]),
+                        i32v(&v["w_param"]),
+                        i32v(&v["n_param1"]),
+                        i32v(&v["n_param2"]),
+                        i32v(&v["n_param3"]),
+                        v["late"].as_u64().unwrap_or(0) != 0,
+                    )
+                })
+                .collect();
+            got.sort();
+            want.sort();
+            assert_eq!(got, want, "{name}: 延时通知(七字段排序序列)与 oracle 不符");
+            // 报告同 priority 内是否多 ident（供裁定是否需要单列同优先级内序）。
+            let mut by_prio: std::collections::BTreeMap<i32, std::collections::BTreeSet<i32>> =
+                std::collections::BTreeMap::new();
+            for (prio, ident, ..) in &got {
+                by_prio.entry(*prio).or_default().insert(*ident);
+            }
+            for (prio, idents) in &by_prio {
+                if idents.len() > 1 {
+                    eprintln!("[{name}] 同 priority={prio} 内多 ident: {idents:?}");
+                }
+            }
+            // D1/D2/D3：抽空未命中上界且 MaxDrainPasses=8；`hit_cap=true` ⇒ 必红（不得当完整账本）。
+            let hit_cap = expect["drain"]["hit_cap"].as_bool().unwrap_or(false);
+            let max_passes = expect["drain"]["max_passes"].as_u64().unwrap_or(0);
+            assert!(
+                drain_ok(hit_cap, max_passes),
+                "{name}: 抽空上限异常 hit_cap={hit_cap} max_passes={max_passes}"
+            );
+            // 解包新建物品：结构化逐字段（`make_index` 含 `Environment.TickCount` 墙钟 ⇒ 只核递增不核绝对值）。
+            let exp_added = expect
+                .get("added_items")
+                .and_then(Value::as_array)
+                .cloned()
+                .unwrap_or_default();
             assert_eq!(
-                out.notices,
-                notices(&expect["notices"]),
-                "{name}: 延时通知与 oracle 不符"
+                out.added_items.len(),
+                exp_added.len(),
+                "{name}: added_items 条数与 oracle 不符"
             );
+            let mut last_mi = i32::MIN;
+            for (a, e) in out.added_items.iter().zip(exp_added.iter()) {
+                assert_eq!(a.index, u16v(&e["index"]), "{name}: added.index");
+                assert_eq!(a.dura, u16v(&e["dura"]), "{name}: added.dura");
+                assert_eq!(a.dura_max, u16v(&e["dura_max"]), "{name}: added.dura_max");
+                let e_desc: Vec<u8> = e["desc"].as_array().unwrap().iter().map(u8v).collect();
+                assert_eq!(a.desc.to_vec(), e_desc, "{name}: added.desc");
+                assert!(a.make_index > last_mi, "{name}: added.make_index 必须递增");
+                last_mi = a.make_index;
+            }
             assert_eq!(
                 out.eaten,
                 expect["immediate_frames"]
@@ -750,11 +1073,23 @@ mod tests {
                     .any(|f| u16v(&f["ident"]) == SM_EAT_OK),
                 "{name}: eaten ↔ SM_EAT_OK 存在性"
             );
+            // 背包终态：逐件比。解包追加的尾部件 `make_index` 是墙钟派生 ⇒ 只比 (index,dura,dura_max,desc)。
+            let exp_items = bag_items(&expect["item_list"]);
+            assert_eq!(item_list.len(), exp_items.len(), "{name}: ItemList 长度");
+            let k = out.added_items.len();
+            let split = item_list.len() - k;
             assert_eq!(
-                item_list,
-                bag_items(&expect["item_list"]),
-                "{name}: ItemList 与 oracle 不符"
+                &item_list[..split],
+                &exp_items[..split],
+                "{name}: ItemList 前段与 oracle 不符"
             );
+            for (a, e) in item_list[split..].iter().zip(exp_items[split..].iter()) {
+                assert_eq!(
+                    (a.index, a.dura, a.dura_max, a.desc),
+                    (e.index, e.dura, e.dura_max, e.desc),
+                    "{name}: 解包件字段与 oracle 不符（make_index 墙钟排除）"
+                );
+            }
             assert_eq!(
                 state.wabil,
                 ability(&expect["wabil"]),
@@ -781,6 +1116,43 @@ mod tests {
                 "{name}: HungerStatus"
             );
         }
+        let total = cases.len();
+        // Z4 计数式 + 不适用名单（断言，非打印）。
+        assert_eq!(
+            z4_applicable + z4_exempt_names.len(),
+            total,
+            "Z4 计数式：适用 + 不适用 == 夹具例数"
+        );
+        let mut z4_ex: Vec<&str> = z4_exempt_names.iter().map(String::as_str).collect();
+        z4_ex.sort_unstable();
+        let mut z4_expect: Vec<&str> = EXPECTED_Z4_EXEMPT.to_vec();
+        z4_expect.sort_unstable();
+        assert_eq!(
+            z4_ex.as_slice(),
+            z4_expect.as_slice(),
+            "Z4 不适用名单漂移：须随夹具变更在同一次提交更新并写进提交信息"
+        );
+        // Z5 计数式 + 豁免名单（断言，非打印）。
+        let two_layer = total - one_layer_names.len();
+        assert_eq!(
+            two_layer + one_layer_names.len(),
+            total,
+            "Z5 计数式：两层 + 豁免 == 总例数"
+        );
+        let mut ol: Vec<&str> = one_layer_names.iter().map(String::as_str).collect();
+        ol.sort_unstable();
+        let mut ol_expect: Vec<&str> = EXPECTED_ONE_LAYER.to_vec();
+        ol_expect.sort_unstable();
+        assert_eq!(
+            ol.as_slice(),
+            ol_expect.as_slice(),
+            "Z5 豁免名单漂移：须随夹具变更在同一次提交更新并写进提交信息"
+        );
+        eprintln!(
+            "Z4：本批 {total} 例中 {z4_applicable} 例适用、{} 例不适用；Z5：本批 {two_layer} 例带两层、{} 例豁免（计数式与名单已断言）",
+            z4_exempt_names.len(),
+            one_layer_names.len()
+        );
     }
 
     /// Shape 3 的百分比是 `Round(...AwayFromZero)`；夹具的 `max_hp=101/ac=5`（5.05→5）与
@@ -1173,6 +1545,75 @@ mod tests {
             }]
         );
         assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
+    }
+
+    /// **IT-18 对拍样板**：夹具 `eat_ok_stdmode31_unbind_success`（oracle 实测）逐字段复现——
+    /// 容量门通过 ⇒ 吃掉捆装包、按 `UnbindList[Shape]` 建 6 件、6 条 `SM_ADDITEM(200)` 在前再
+    /// `SM_EAT_OK`、`RM_WEIGHTCHANGED`、重量按解包后背包重算。`make_index` 墙钟派生 ⇒ 只核递增。
+    ///
+    /// 牙（改实现关键点必红）：①`for _ in 0..6` 改 `0..5` ⇒ 件数断言红；②`dura: tpl_unbind.dura_max`
+    /// 改 `0` ⇒ 字段断言红。
+    #[test]
+    fn unbind_stdmode31_success_matches_oracle_fixture() {
+        let doc = fixture();
+        let cat = catalog(&doc);
+        let case = doc["cases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["name"] == "eat_ok_stdmode31_unbind_success")
+            .expect("夹具必须含 eat_ok_stdmode31_unbind_success（IT-18 成功路径）");
+        let unbind = unbind_from(&doc);
+        let mut state = UseItemActorState {
+            wabil: ability(&case["wabil_before"]),
+            inc_health: 0,
+            inc_spell: 0,
+            user_unlock_durg: false,
+            hunger_status: 0,
+        };
+        let mut item_list = bag_items(&case["item_list_before"]);
+        let ctx = UseItemContext {
+            catalog: &cat,
+            can_use_item: true,
+            dead: false,
+            actor_id: i32v(&case["ctx"]["actor_id"]),
+            make_index: i32v(&case["request"]["make_index"]),
+            no_drug: false,
+            function_npc_present: false,
+            unbind: &unbind,
+            red_msg_fcolor: 255,
+            red_msg_bcolor: 56,
+            recalc: None,
+        };
+        let mut item_number = 0;
+        let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
+        let expect = &case["expect"];
+        assert!(out.eaten, "容量门通过 ⇒ 吃掉捆装包");
+        let exp_added = expect["added_items"].as_array().unwrap();
+        assert_eq!(out.added_items.len(), 6, "解包 6 件");
+        let mut last_mi = i32::MIN;
+        for (a, e) in out.added_items.iter().zip(exp_added.iter()) {
+            assert_eq!(a.index, u16v(&e["index"]), "解包件 index");
+            assert_eq!(a.dura, u16v(&e["dura"]), "解包件 dura = tpl.DuraMax");
+            assert_eq!(a.dura_max, u16v(&e["dura_max"]), "解包件 dura_max");
+            assert!(a.make_index > last_mi, "make_index 递增");
+            last_mi = a.make_index;
+        }
+        // 即时帧：解包产物逐件 SM_ADDITEM(200) 在前，再 SM_EAT_OK。
+        let mut frames_seq: Vec<u16> = std::iter::repeat_n(200u16, out.added_items.len()).collect();
+        frames_seq.extend(out.immediate_frames.iter().map(|f| f.ident));
+        let exp_seq: Vec<u16> = frames(&expect["immediate_frames"])
+            .iter()
+            .map(|f| f.ident)
+            .collect();
+        assert_eq!(frames_seq, exp_seq, "SM_ADDITEM×6 必须排在 SM_EAT_OK 之前");
+        assert_eq!(out.notices, vec![QueuedNotice::plain(RM_WEIGHTCHANGED)]);
+        assert_eq!(
+            state.wabil.weight,
+            ability(&expect["wabil"]).weight,
+            "重量按解包后背包重算"
+        );
+        assert_eq!(item_list.len(), 6, "移除 1 件 + 生成 6 件");
     }
 
     /// **未命中 Shape ⇒ 空串、0 件**（`ClientUseItemsGetUnbindItemName` 返回 `string.Empty`，

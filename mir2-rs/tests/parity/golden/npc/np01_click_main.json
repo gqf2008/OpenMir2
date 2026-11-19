@@ -1,0 +1,181 @@
+{
+  "generator": "mir2-rs/tests/parity/csharp/NpcGolden",
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.Base.cs:674 (ClientClickNpc)",
+    "src/M2Server/Npc/NormNpc.cs:68 (Click -> GotoLable @main)",
+    "src/Modules/ScriptEngine/ScriptEngine.cs:141 (GotoLable)",
+    "src/Modules/ScriptEngine/ScriptEngine.cs:987 (GotoLableSendMerChantSayMsg)",
+    "src/M2Server/Player/PlayObject.Message.cs:1702 (RM_MERCHANTSAY -> SM_MERCHANTSAY)"
+  ],
+  "script": "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>",
+  "max_drain_passes": 64,
+  "excluded_wallclock_fields": [
+    "ctx.click_npc_time"
+  ],
+  "cases": [
+    {
+      "name": "click_main_ok",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5001,
+          "late": false,
+          "msg": "老人/老人：你需要什么？\\ <打听/@ask> <离开/@exit>"
+        }
+      ],
+      "rm_priorities": [
+        1
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 1,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 98
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": true
+      }
+    },
+    {
+      "name": "click_main_far",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 40,
+        "npc_y": 40,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": false,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": false
+      }
+    },
+    {
+      "name": "click_main_dead",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": true,
+        "rate_limited": false,
+        "click_npc_time_config": 0
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": false,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": false
+      }
+    },
+    {
+      "name": "click_main_rate_limited",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": true,
+        "click_npc_time_config": 1000
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": false,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": false
+      }
+    },
+    {
+      "name": "click_no_main_fallback",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "4d9bb23728fe414973aed8ecdc2336e291ca3fcadb37e07b7aff4c40ab286629",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": true
+      }
+    }
+  ]
+}

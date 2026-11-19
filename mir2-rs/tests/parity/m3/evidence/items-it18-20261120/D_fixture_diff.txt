@@ -1,0 +1,330 @@
+# ts=2026-11-20T01:23:35+08:00
+# fixture regenerated (max_passes 8->1 per case)
+diff --git a/mir2-rs/tests/parity/m3/fixtures/eat_vectors.json b/mir2-rs/tests/parity/m3/fixtures/eat_vectors.json
+index d6e1ef5d0..f0433a3b6 100644
+--- a/mir2-rs/tests/parity/m3/fixtures/eat_vectors.json
++++ b/mir2-rs/tests/parity/m3/fixtures/eat_vectors.json
+@@ -1,7 +1,7 @@
+ {
+   "generator": "mir2-rs/tests/parity/m3/eat-probe",
+   "oracle_assembly": "M2Server.dll",
+-  "oracle_assembly_sha256": "a7a39e53c3609170604d01fd1cf00824cc0d542626d076f289ee5a05e9543418",
++  "oracle_assembly_sha256": "34b8a07f2536d18b69d4c1845a15399675822272f9639b3afe889e5c6b4ac5bf",
+   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
+   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
+   "oracle_source_sha256_files": [
+@@ -319,7 +319,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -453,7 +453,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -587,7 +587,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -712,7 +712,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -837,7 +837,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -962,7 +962,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -1185,7 +1185,7 @@
+         ],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -1364,7 +1364,7 @@
+         ],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -1502,7 +1502,7 @@
+         ],
+         "drain": {
+           "passes": 0,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -1640,7 +1640,7 @@
+         ],
+         "drain": {
+           "passes": 0,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -1778,7 +1778,7 @@
+         ],
+         "drain": {
+           "passes": 0,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -1926,7 +1926,7 @@
+         ],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -2064,7 +2064,7 @@
+         ],
+         "drain": {
+           "passes": 0,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -2189,7 +2189,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -2314,7 +2314,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -2457,7 +2457,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -2582,7 +2582,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -2730,7 +2730,7 @@
+         ],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -2878,7 +2878,7 @@
+         ],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -3003,7 +3003,7 @@
+         "item_list": [],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -3141,7 +3141,7 @@
+         ],
+         "drain": {
+           "passes": 0,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -5083,7 +5083,7 @@
+         ],
+         "drain": {
+           "passes": 0,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }
+@@ -5220,7 +5220,7 @@
+         ],
+         "added_items": [
+           {
+-            "make_index": 1097213594,
++            "make_index": 1098907516,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5242,7 +5242,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213595,
++            "make_index": 1098907517,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5264,7 +5264,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213596,
++            "make_index": 1098907518,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5286,7 +5286,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213597,
++            "make_index": 1098907519,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5308,7 +5308,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213598,
++            "make_index": 1098907520,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5330,7 +5330,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213599,
++            "make_index": 1098907521,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5382,7 +5382,7 @@
+         "hunger_status": 0,
+         "item_list": [
+           {
+-            "make_index": 1097213594,
++            "make_index": 1098907516,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5404,7 +5404,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213595,
++            "make_index": 1098907517,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5426,7 +5426,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213596,
++            "make_index": 1098907518,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5448,7 +5448,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213597,
++            "make_index": 1098907519,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5470,7 +5470,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213598,
++            "make_index": 1098907520,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5492,7 +5492,7 @@
+             ]
+           },
+           {
+-            "make_index": 1097213599,
++            "make_index": 1098907521,
+             "index": 2017,
+             "dura": 7,
+             "dura_max": 7,
+@@ -5516,7 +5516,7 @@
+         ],
+         "drain": {
+           "passes": 1,
+-          "max_passes": 8,
++          "max_passes": 1,
+           "hit_cap": false
+         }
+       }

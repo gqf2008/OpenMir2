@@ -1,0 +1,21 @@
+# z5_single_layer_red 合成夹具修复记录（改前红 → 改后绿）
+
+开发期发现：`z5_single_layer_red` 的合成 `expect` 最初把 after 状态字段
+（`inc_health/inc_spell/hunger_status/user_unlock_durg`）放在用例**顶层**而非 `expect` 内，
+致 `case_state_changed` 比较 `Some(0) != Null` 而误判"状态有变"，`fixture_covers_two_layers(&single)`
+返回 true ⇒ 断言失败。
+
+**改前（红）原文**（`cargo test -p game-svr --lib useitem::tests -- --test-threads=1`）：
+
+```
+thread 'useitem::tests::z5_single_layer_red' panicked at bins\game-svr\src\useitem.rs:837:9:
+test result: FAILED. 17 passed; 1 failed
+```
+
+**改法**：把 after 字段移入 `expect`（before 在顶层 `*_before`、after 在 `expect` 内），
+使合成"仅 SM 一层"用例状态确实无变。
+
+**改后（绿）**：`test result: ok. 18 passed; 0 failed`（见同目录 `final_green.txt`）。
+
+注：这是**合成夹具的构造错误**（非比较器逻辑错误）；修复后 Z5 gate 对"仅一层"正确判不合格，
+而真实夹具 17 例带两层（非全零）。

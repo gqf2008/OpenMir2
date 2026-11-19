@@ -1,10 +1,11 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
-    "time": "2026-11-19T23:25:52+08:00"
+    "head": "9f38e5b716a7d26f58063bd16e03fa9a613c8f59",
+    "time": "2026-11-20T01:44:31+08:00",
+    "note": "M22=9f38e5b71 合入 IT-18 后 master verified=8（实现提交 140d07b72 为分支 commit）"
   },
   "status_enum": [
     "verified",
@@ -46,9 +47,32 @@
         "test": "bag::tests::matches_oracle_bag_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/bag.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/bag_vectors.json",
-        "cases": []
+        "cases": [
+          "takeon_ok_empty_weapon",
+          "takeon_ok_swap_weapon",
+          "takeon_fail_wrong_slot_mode",
+          "takeon_fail_name_mismatch",
+          "takeon_fail_need_level",
+          "takeon_fail_hand_weight",
+          "takeon_fail_occupied_desc7",
+          "takeon_fail_occupied_itemdesc2",
+          "takeon_fail_occupied_itemdesc4",
+          "takeon_fail_disable_takeoff",
+          "takeon_fail_gender",
+          "takeon_ok_dress",
+          "takeon_fail_bad_slot_13",
+          "takeoff_ok",
+          "takeoff_fail_empty_slot",
+          "takeoff_fail_wrong_makeindex",
+          "takeoff_fail_name_mismatch",
+          "takeoff_fail_desc7",
+          "takeoff_fail_bag_full",
+          "takeoff_ok_bag_45",
+          "takeoff_fail_dealing"
+        ]
       },
-      "notes": "不入主分母（穿/卸是通用迁移+校验+显示帧选择，不按物品类型分派）；卡 openmir2-m3-bag-equip-alignment 的双栈同序列判据仍 RED（BotSrv 驱动属登记面）；夹具 21 条用例（见 bag_vectors.json）"
+      "notes": "不入主分母（穿/卸是通用迁移+校验+显示帧选择，不按物品类型分派）；卡 openmir2-m3-bag-equip-alignment 的双栈同序列判据仍 RED（BotSrv 驱动属登记面）；夹具 21 条用例（见 bag_vectors.json）",
+      "basis": "semantic"
     }
   ],
   "entries": [
@@ -73,7 +97,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": ""
+      "notes": "",
+      "basis": "semantic"
     },
     {
       "id": "IT-02",
@@ -95,7 +120,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "无即时帧"
+      "notes": "无即时帧",
+      "basis": "semantic"
     },
     {
       "id": "IT-03",
@@ -119,7 +145,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": ""
+      "notes": "",
+      "basis": "semantic"
     },
     {
       "id": "IT-04",
@@ -142,7 +169,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "ushort 回绕"
+      "notes": "ushort 回绕",
+      "basis": "semantic"
     },
     {
       "id": "IT-05",
@@ -166,7 +194,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "RefMyStatus 的 RecalcAbilitys 尾段登记 T-17（useitem.rs 第 75-79 行）"
+      "notes": "RefMyStatus 的 RecalcAbilitys 尾段登记 T-17（useitem.rs 第 75-79 行）",
+      "basis": "semantic"
     },
     {
       "id": "IT-06",
@@ -188,7 +217,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": ""
+      "notes": "",
+      "basis": "semantic"
     },
     {
       "id": "IT-07",
@@ -506,23 +536,26 @@
         "line": 655,
         "line_end": 666
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
         "cases": [
-          "eat_fail_stdmode31_unbind_bag_full"
+          "eat_fail_stdmode31_unbind_bag_full",
+          "eat_ok_stdmode31_unbind_success"
         ],
         "unit_tests": [
-          "useitem::tests::unbind_stdmode31_creates_six_items_and_reweights",
+          "useitem::tests::unbind_capacity_gate_uses_pre_removal_count",
           "useitem::tests::unbind_missing_shape_eats_pack_but_creates_nothing",
-          "useitem::tests::unbind_capacity_gate_uses_pre_removal_count"
+          "useitem::tests::unbind_stdmode31_creates_six_items_and_reweights",
+          "useitem::tests::unbind_stdmode31_success_matches_oracle_fixture"
         ]
       },
       "cost": null,
       "deviation": null,
-      "notes": "对拍夹具只有容量门失败路径；成功路径无 oracle 夹具 => 不给 verified"
+      "notes": "成功路径夹具 eat_ok_stdmode31_unbind_success（oracle 经真身 GameItemSystem 产出）：6xSM_ADDITEM(200)+SM_EAT_OK、added_items 6 件、Weight 按解包后背包重算；make_index 含 Environment.TickCount(墙钟)=>只核递增不核绝对值。L2/D/Z 判定面已接。",
+      "basis": "semantic"
     },
     {
       "id": "IT-19",
@@ -545,7 +578,13 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "脚本派发在 lib.rs @StdModeFunc* 接缝"
+      "notes": "脚本派发在 lib.rs @StdModeFunc* 接缝",
+      "basis": "semantic"
     }
-  ]
+  ],
+  "basis_legend": {
+    "semantic": "语义层对拍（帧/通知/状态/RNG），非逐字节",
+    "bytes": "编码层逐字节"
+  },
+  "schema_note": "items 域无旧版清单，legacy_id 不适用；来源 source_doc=docs/issues/openmir2-parity-gap-items-quests-npc.md"
 }

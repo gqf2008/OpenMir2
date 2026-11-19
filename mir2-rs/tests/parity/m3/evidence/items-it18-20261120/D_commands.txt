@@ -1,0 +1,4 @@
+Program.cs sha256(before)=6602025bf3aef2d8f32cf37a6e255eff24f2fa6587c09813ed1281e29440380f
+eat_vectors.json sha256(before)=d4d99e5c095eef01ddff0c71f023761c8d911968af8ae9aa70326d702a6a34c1
+mutation: 'const int MaxDrainPasses = 8;' -> 'const int MaxDrainPasses = 1;' ; 'max_passes = 8' -> 'max_passes = 1'
+restore_sha_ok=True red_ok=True green_ok=True ts=2026-11-20T01:24:01+08:00
