@@ -248,3 +248,26 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 7. 帧编码会读 `SystemShare.CastleMgr.InCastleWarArea` ⇒ 离线进程必须 `new CastleManager()` 赋给
    `SystemShare.CastleMgr`（空列表 ⇒ 恒 null），否则 `GetChrColor` NRE。
 8. 观测 HP 变化前必须给目标 `WAbil.HP` 初值（默认 0 时伤害差不可见）。
+
+## 14. Rust 侧驱动实现计划（下一步，可按此直接开工）
+
+1. **位置**：`mir2-rs/bins/game-svr/src/lib.rs` 的测试模块——`handle_spell_cmd_with_magic`
+   （`lib.rs:12833`）是 crate 私有函数，集成测试用不了；现有法术测试（如
+   `spell_cmd_a5_defence_area_buffs_target_in_range`）就在同文件，直接沿用其夹具范式。
+2. **输入复现**：读 `mir2-rs/tests/parity/golden/magic/fireball.json`（`include_str!`），
+   对每支：`seed`、`anti_magic`、四个 ActorId（1001/1002/1003/1004 + 支偏移）、坐标
+   (100,100)/(101,100)/(105,100)/(140,100)、目标 `WAbil.HP=100`。
+3. **世界构造**：加载 `Map/0.map`（夹具路径走环境变量，默认 `E:/MirServer/M2GameSvr/Map`）、
+   四个实体挂图；RNG 用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomNumber` 以同一
+   `seed` 初始化（`RngRes`），并在外层包一层**记账**取逐次抽取（与原版 `LoggingRandom` 同口径）。
+4. **调用**：`handle_spell_cmd_with_magic(recog, tag, param, series, chr_name, socket, …)`，
+   采 `SM_*` 帧（Rust 直接产帧，见 §11 的 RM↔SM 映射）。
+5. **延时**：推进世界时钟 ≥600ms 并 tick，采第二段帧（`SM_STRUCK`）与目标 HP 前后值。
+6. **比较器（逐接收者，不许比总数）**：
+   - 帧层：每个接收者的 `(ident, param/series, tail)` 逐项；
+   - 事件层：`RM_DELAYMAGIC` 等价事件是否登记（伤害/nRage/目标/到期）；
+   - 状态层：`target HP 100→100`（miss）/ `100→85`（edge/hit）作为一级断言；
+   - RNG 层：`[2]` / `[3,0,0,0,4]` / `[5,0,0,0,0]` **逐次取值**对齐；
+   - 负向牙：caster 收 `SM_SPELL(17)` 恒 0；`obs_out` 全空无帧。
+7. **全绿后**：`magic-parity.json` 第 1 条（`SKILL_FIREBALL` `:174`）改
+   `status=verified`、`basis=semantic`、`test=<用例名>`；跑 `coverage-report.ps1` 自检后报数。
