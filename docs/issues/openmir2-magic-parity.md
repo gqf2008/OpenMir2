@@ -299,3 +299,21 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 2. **总量断言（便宜且早暴露）**：两段跑完后必须满足
    `RNG 总抽取次数 == 金标准账本长度`（miss 1 / edge 5 / hit 5）。
    这条先于逐次比对执行——它能抓"某个东西偷偷抽了一次随机"，且失败信息更直接。
+
+## 16. Rust 侧夹具与记账配方（已勘察，可直接照做）
+
+- **RNG 构造与注入**：`RandomNumber::with_seed(i32)`（`crates/shared/src/rng.rs:251`）；
+  `World.rng` 是 **public 字段**（`crates/world-bevy/src/world.rs:1005`）⇒ 夹具里
+  `world.rng = RandomNumber::with_seed(seed);` 即可，无需改生产代码。
+- **实体属性落点**：`EntitySpawn` 有 `hp: u16`（`entity.rs:555`）、`anti_magic: u16`（`:565`）、
+  `abil: Option<BaseAbil>`（`:568`）⇒ 夹具按金标准置 `hp=100 / anti_magic=3`，MC/Level 走 `abil`。
+- **记账器（现成，别自己包）**：`crates/shared/src/rng_trace.rs` 的生产级逐次 trace——
+  设 `MIR2_RNG_LOG=<tsv 路径>` 后，`RandomNumber` 的每个取数入口都会落
+  `seq \t kind \t max/arg \t result \t site`（与 C# 钩子 `StartupHook.cs` 同列同义），
+  `site` 用 `#[track_caller]` 记到世界层调用点。**顺序即实际取数顺序**。
+  用法：驱动测试用 `--exact` 单跑（trace 是进程级 `OnceLock`），开跑前截断目标文件；
+  比较器的 **总量断言** 直接数 TSV 行数（应 = 金标准 `rng` 长度），再逐行比 `result` 列。
+- **帧**：沿用 `a5_spell_rig` 的 `gates`（`mpsc::UnboundedSender<SimToGate>`）取 `SM_*`；
+- **第二段**：`sim_self_deliver_stage_system(world)`，clock 用**推进后的世界时钟**（禁墙上时间）。
+- **比较器顺序**：①总量（TSV 行数 == 金标准长度）→ ②RNG 逐次 `result` 列 → ③逐接收者 SM
+  → ④HP 前后 → ⑤两颗负向牙。
