@@ -17390,7 +17390,10 @@ fn drain_aoi_events(
 /// `broadcast_ref_msg` ⇒ `chat::hear_targets` 对**全部实体**做 `iter_ref()` 扫描，成本
 /// O(走位者数 × 实体数)（11k 实体 / 263 走位者 ≈ 108 ms/tick，占宿主段 92–96%）。
 ///
-/// 现在拆两阶段（行为等价，理由见 [`collect_monster_walk_batch`]）：扫描实体时顺带收集
+/// 现在拆两阶段（**单步等价**：每个走位者的**首次** `SendRefMsg` 与逐走位者即时广播相同；
+/// 同一 500ms 窗口内的第二步起走 `SendRefMsg` 缓存 `|Δ|<11`，见
+/// [`broadcast_ref_msg_from_walk_candidates`]。拆两阶段理由见 [`collect_monster_walk_batch`]）：
+/// 扫描实体时顺带收集
 /// `race == PLAY` 候选（[`WalkFanoutCandidate`]），再对每个走位者只在这些候选上按原判据重判
 /// 「同图 / ±range / `!ghost`」；走位者自己那条由 `include_self = false` 挡掉。
 /// 候选集**不用地图格子表**（原因见 [`WalkFanoutCandidate`] 的文档），也不改 `chat.rs` 的
@@ -17587,6 +17590,18 @@ fn hear_targets_from_walk_candidates(
 /// ±`SendRefMsgRange` 格内 `Race==Play && !Ghost` 的玩家（`BaseObject.Message.cs:383-444`），
 /// 计算方式见 [`hear_targets_from_walk_candidates`]；投递段与全扫描版共用
 /// [`send_ref_msg_to_targets`]（同一份 `include_self`/`route_to_gate`/`tx.send` 代码）。
+///
+/// **T-287 残余 #14**：收件人走 `SendRefMsg` 的 500ms 缓存。扫描面仍由候选集给，缓存两段由
+/// [`ref_msg_cache::targets_from_scan`] 收口（≥500ms 刷新全量；否则复用快照 + `|Δ|<11`）。
+///
+/// **为什么用快照入口是安全的（与 `drain_merchant_disappears` 的差异）**：
+/// 1. 候选集来自**本 tick 实体表**（[`collect_monster_walk_batch`] 收集），位置与调用时刻
+///    一致 ⇒ 不存在「发帧时刻 vs 排水时刻」的过期快照；
+/// 2. 隐藏走位者在收集阶段已被 `ob_mode || fixed_hide_mode` 门跳过 ⇒
+///    [`hear_targets_from_walk_candidates`] 的隐藏分支在本调用**不可达** ⇒ 不需要宿主层
+///    隐藏早退（行为依据：`hidden_walker_never_enters_walk_fanout`，`drain` 返回 0 步）。
+///    对比 `drain_merchant_disappears`：那条排水时 sender 已隐藏是**设计前提**，收件人必须
+///    用发帧时刻快照，所以继续用 `targets_from_scan` 且**不加**早退。
 fn broadcast_ref_msg_from_walk_candidates(
     world: &mir2_world_bevy::World,
     online: &OnlineRegistry,
@@ -17595,8 +17610,9 @@ fn broadcast_ref_msg_from_walk_candidates(
     actor_id: i32,
     bodies: &[Vec<u8>],
 ) {
-    let targets =
+    let scanned =
         hear_targets_from_walk_candidates(world, candidates, actor_id, chat::send_ref_msg_range());
+    let targets = ref_msg_cache::targets_from_scan(world, actor_id, scanned);
     send_ref_msg_to_targets(online, gates, actor_id, targets, bodies, false);
 }
 
@@ -91139,6 +91155,12 @@ GMEXECUTE f
     /// 这条钉住两件事：① 收件人集合等价；② 拆两阶段后**跨走位者的帧次序**不变（走位者按 id
     /// 升序、每个走位者的收件人按 id 升序）。
     ///
+    /// **单步前提（T-287 #14 起显式化）**：本用例每个走位者只走**一步**（首见建游标 → 一次
+    /// 移动）⇒ 每个走位者都是**首次** `SendRefMsg`（缓存必然刷新），「与全扫描参照逐条相同」
+    /// 只在这个前提下成立。同一 500ms 窗口内的第二步起走缓存（`|Δ|<11`）⇒ **不再**与全扫描
+    /// 参照相同，那是 `walk_cache_window_second_step_hits_cache` 的口径。**不得**把本断言推广
+    /// 成普遍等价。
+    ///
     /// 红检（会红）：候选集在种族门之外再提前剔同图/距离（漏收/错收）；把两阶段改成「先建全表、
     /// 再按 walkers 倒序广播」⇒ 序列断言红。
     #[test]
@@ -91285,7 +91307,10 @@ GMEXECUTE f
                 }
             }
         }
-        assert_eq!(got, want, "帧序列必须与全扫描参照逐条相同（集合 + 次序）");
+        assert_eq!(
+            got, want,
+            "单步等价：帧序列必须与全扫描参照逐条相同（集合 + 次序；每走位者首次 SendRefMsg）"
+        );
         assert!(
             got.iter().all(|(s, _)| *s != 903 && *s != 904 && *s != 905),
             "界外 / Ghost / 跨图玩家不收"
@@ -91294,6 +91319,155 @@ GMEXECUTE f
             got.iter().any(|(s, w)| *s == 906 && *w == m1),
             "走位者 m1 的 12/12 对角边界玩家必须收"
         );
+    }
+
+    /// **T-287 残余 #14**（`broadcast_ref_msg_from_walk_candidates`）：走怪同窗两步 ⇒
+    /// 第二步命中 500ms 缓存（`|Δ|<11`）。
+    ///
+    /// 几何：走怪 `x=10→11→12`（sim 时钟不推进）；`C(17,10)` 两拍都收；`B(23,10)` 第一步
+    /// `Δ=12`（±12 闭区间）收、第二步 `Δ=11` 被严格 `<11` 挡；`D(24,10)` 两步都超界。
+    ///
+    /// 牙：站点回退 `hear_targets_from_walk_candidates` 直投 ⇒ 第二步 `B` 也收 ⇒ 红。
+    #[test]
+    fn walk_cache_window_second_step_hits_cache() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let c = spawn_actor(&mut world, "c", 0, 17, 10, 0, false);
+        let b = spawn_actor(&mut world, "b", 0, 23, 10, 0, false);
+        let d = spawn_actor(&mut world, "d", 0, 24, 10, 0, false);
+        let m = spawn_actor(
+            &mut world,
+            "m",
+            0,
+            10,
+            10,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+        world.entities.get_mut(m).unwrap().ai.dir = 2; // 右
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            m,
+            downlink::ActorDisplay::new(2, 0, 0x3333_3333, 0, 0, 255, b"m".to_vec()),
+        );
+        let online: OnlineRegistry = vec![
+            OnlineEntry {
+                account: "a".into(),
+                chr_name: "c".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: c,
+            },
+            OnlineEntry {
+                account: "b".into(),
+                chr_name: "b".into(),
+                session_id: 2,
+                gate_idx: 0,
+                socket: 902,
+                actor_id: b,
+            },
+            OnlineEntry {
+                account: "c".into(),
+                chr_name: "d".into(),
+                session_id: 3,
+                gate_idx: 0,
+                socket: 903,
+                actor_id: d,
+            },
+        ];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let rec = mir2_world_bevy::TickRecord::default();
+        let mut seen = std::collections::HashMap::new();
+        // 建游标（首见不出帧、也不进缓存）。
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            0
+        );
+        assert!(collect_raw(&mut rx0).is_empty());
+        // 第一步：x=11 ⇒ 首扫 ±12 闭区间（B 的 Δ=12 收）。
+        world.entities.transform_mut(m).unwrap().x = 11;
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            1
+        );
+        let first = refmsg_b2_count(&mut rx0);
+        assert_eq!(first.get(&901), Some(&1), "第一步：C(Δ=6) 收");
+        assert_eq!(first.get(&902), Some(&1), "第一步：B(Δ=12) 闭区间边界收");
+        assert_eq!(first.get(&903), None, "第一步：D(Δ=13) 不收");
+        // 第二步：x=12，同 500ms 窗口 ⇒ 命中缓存 |Δ|<11（B 的 Δ=11 被挡）。
+        world.entities.transform_mut(m).unwrap().x = 12;
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            1
+        );
+        let second = refmsg_b2_count(&mut rx0);
+        assert_eq!(second.get(&901), Some(&1), "第二步：C 仍收");
+        assert_eq!(
+            second.get(&902),
+            None,
+            "第二步：B 的 |Δ|=11 被严格 <11 挡（缓存生效）"
+        );
+        assert_eq!(second.get(&903), None, "第二步：D 仍零帧");
+    }
+
+    /// **#14 隐藏走位者反向（「早退不可达」的行为依据）**：`collect_monster_walk_batch` 的
+    /// `ob_mode || fixed_hide_mode` 门在**收集阶段**跳过隐藏走怪 ⇒
+    /// `drain_monster_walk_downlink` 返回 **0 步**（即 `broadcast_ref_msg_from_walk_candidates`
+    /// 根本未被调用），因此该站的快照入口不需要宿主层隐藏早退。
+    ///
+    /// 若本用例变红（隐藏走怪进入扇出）⇒ 必须按 `4174de804` 同款补宿主早退，不得以
+    /// 「上游应该挡住」放行。
+    #[test]
+    fn hidden_walker_never_enters_walk_fanout() {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let near = spawn_actor(&mut world, "n", 0, 12, 10, 0, false);
+        let m = spawn_actor(
+            &mut world,
+            "m",
+            0,
+            10,
+            10,
+            mir2_world_bevy::ACTOR_RACE_MONSTER,
+            false,
+        );
+        {
+            let e = world.entities.get_mut(m).unwrap();
+            e.ai.dir = 2; // 右
+            e.flags.ob_mode = true; // 隐藏（GM @ObMode；FixedHideMode 同口径）
+        }
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            m,
+            downlink::ActorDisplay::new(2, 0, 0x4444_4444, 0, 0, 255, b"m".to_vec()),
+        );
+        let online: OnlineRegistry = vec![OnlineEntry {
+            account: "a".into(),
+            chr_name: "n".into(),
+            session_id: 1,
+            gate_idx: 0,
+            socket: 901,
+            actor_id: near,
+        }];
+        let (tx0, mut rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        let rec = mir2_world_bevy::TickRecord::default();
+        let mut seen = std::collections::HashMap::new();
+        // 建游标。
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            0
+        );
+        // 隐藏走怪走一格：方向门通过，但隐藏门在收集阶段跳过 ⇒ 0 步、零帧。
+        world.entities.transform_mut(m).unwrap().x = 11;
+        assert_eq!(
+            drain_monster_walk_downlink(&rec, &world, &displays, &online, &gates, &mut seen, None),
+            0,
+            "隐藏走怪必须在收集阶段被跳过（0 步 ⇒ 扇出未被调用）"
+        );
+        assert!(collect_raw(&mut rx0).is_empty(), "隐藏走怪不得产生 SM_WALK");
     }
 
     // =========================================================================================

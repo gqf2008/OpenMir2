@@ -98,3 +98,25 @@
   `broadcast_charstatuschanged_except_self_hidden_sender_has_no_observers`、
   `login_charstatus_two_events_same_tick_share_cache_window`（真实调用面「登录 657 补发」，
   同 tick 两事件共享缓存窗口）。
+
+### 批 4（RM_PUSH / 走位扇出）
+- #14 `broadcast_ref_msg_from_walk_candidates`：收件人由「候选集扫描直投」改为
+  `ref_msg_cache::targets_from_scan(world, actor_id, scanned)`，`scanned` 仍由
+  `hear_targets_from_walk_candidates` 给（候选集，非全实体）。
+- **为什么用快照入口是安全的**（本批核心论点）：候选集来自**本 tick 实体表**
+  （`collect_monster_walk_batch` 收集），位置与调用时刻一致 ⇒ 不存在「发帧时刻 vs 排水时刻」
+  的过期快照。对比 `drain_merchant_disappears`：那条排水时 sender 已隐藏是**设计前提**，
+  收件人必须是发帧时刻快照，所以继续用 `targets_from_scan` 且**不加**隐藏早退。
+- **隐藏早退不可达的行为依据**：`collect_monster_walk_batch` 的 `ob_mode || fixed_hide_mode`
+  门在收集阶段跳过隐藏走怪；用例 `hidden_walker_never_enters_walk_fanout` 断言
+  `drain_monster_walk_downlink` 返回 **0 步**（扇出未被调用）+ 零帧。若该用例变红 ⇒ 必须按
+  `4174de804` 同款补宿主早退。
+- **单步等价（显式化）**：`monster_walk_frames_match_full_scan_reference` 的「与全扫描参照
+  逐条相同」只在**每走位者一步**（首次 `SendRefMsg`，缓存必然刷新）前提下成立；代码注释与
+  断言信息已改为「单步等价」。同窗第二步起走缓存，唯一证据是新用例
+  `walk_cache_window_second_step_hits_cache`（走怪 x=10→11→12：`Δ=12` 首步收、`Δ=11` 次步挡、
+  `Δ=5` 两拍都收、`Δ=13` 零帧）。
+- **缓存无淘汰**：`ref_msg_cache` 条目按走位者 id 常驻、无淘汰，随走怪数量**线性增长**；
+  当前量级数百可接受，若走怪数显著上升需重评（不新增问题：T-287 既有设计）。
+- 牙：m9 = 站点回退 `hear_targets_from_walk_candidates` 直投 ⇒ 第二步 `Δ=12` 也收（红）；
+  m10 = 去缓存 TTL ⇒ `ref_msg_cache_expires_after_500ms` + `np11 fresh_scan` 同红。
