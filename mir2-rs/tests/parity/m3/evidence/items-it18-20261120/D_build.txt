@@ -1,0 +1,16 @@
+# ts=2026-11-20T01:23:34+08:00
+# dotnet build (mutated probe)
+=== stderr ===
+=== stdout ===
+E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\src\M2Server\M2Server.csproj : warning NU1902: 包 "MySqlConnector" 2.3.5 具有已知的 中 严重性漏洞，https://github.com/advisories/GHSA-473q-m89c-ghf8 [E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\tests\parity\m3\eat-probe\EatProbe.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\src\M2Server\M2Server.csproj : warning NU1902: 包 "MySqlConnector" 2.3.5 具有已知的 中 严重性漏洞，https://github.com/advisories/GHSA-473q-m89c-ghf8
+
+已成功生成。
+
+E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\src\M2Server\M2Server.csproj : warning NU1902: 包 "MySqlConnector" 2.3.5 具有已知的 中 严重性漏洞，https://github.com/advisories/GHSA-473q-m89c-ghf8 [E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\tests\parity\m3\eat-probe\EatProbe.csproj]
+E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\src\M2Server\M2Server.csproj : warning NU1902: 包 "MySqlConnector" 2.3.5 具有已知的 中 严重性漏洞，https://github.com/advisories/GHSA-473q-m89c-ghf8
+    2 个警告
+    0 个错误
+
+已用时间 00:00:01.80
+# rc=0

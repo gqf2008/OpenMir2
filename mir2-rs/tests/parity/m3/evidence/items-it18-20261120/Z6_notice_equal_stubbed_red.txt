@@ -1,7 +1,17 @@
+# ts=2026-11-20T01:26:01+08:00
+# filter=useitem::tests::tooth_notice_priority_changed_red
 # mutation: '        a.sort();\n        b.sort();\n        a == b\n    }' -> '        a.sort();\n        b.sort();\n        true\n    }'
-# filter: useitem::tests::tooth_notice_priority_changed_red
-# rc=101
+# expect: FAILED
+=== stderr (cargo/build) ===
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 9.51s
+     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
+thread 'useitem::tests::tooth_notice_priority_changed_red' (29352) panicked at bins\game-svr\src\useitem.rs:735:9:
+改 priority 必须红
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p game-svr --lib`
+=== stdout (test harness) ===
 
 running 1 test
 test useitem::tests::tooth_notice_priority_changed_red ... FAILED
@@ -13,11 +23,4 @@ failures:
 
 test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
 
-   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 10.66s
-     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
-
-thread 'useitem::tests::tooth_notice_priority_changed_red' (5204) panicked at bins\game-svr\src\useitem.rs:735:9:
-改 priority 必须红
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-error: test failed, to rerun pass `-p game-svr --lib`
+# rc=101

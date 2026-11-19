@@ -1,7 +1,20 @@
+# ts=2026-11-20T01:24:46+08:00
+# filter=useitem::tests::unbind_stdmode31_success_matches_oracle_fixture
 # mutation: 'dura: tpl_unbind.dura_max,' -> 'dura: 0,'
-# filter: useitem::tests::unbind_stdmode31_success_matches_oracle_fixture
-# rc=101
+# expect: FAILED
+=== stderr (cargo/build) ===
+    Blocking waiting for file lock on package cache
+   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 15.11s
+     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
+thread 'useitem::tests::unbind_stdmode31_success_matches_oracle_fixture' (13428) panicked at bins\game-svr\src\useitem.rs:1560:13:
+assertion `left == right` failed: 解包件 dura = tpl.DuraMax
+  left: 0
+ right: 7
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+error: test failed, to rerun pass `-p game-svr --lib`
+=== stdout (test harness) ===
 
 running 1 test
 test useitem::tests::unbind_stdmode31_success_matches_oracle_fixture ... FAILED
@@ -11,15 +24,6 @@ failures:
 failures:
     useitem::tests::unbind_stdmode31_success_matches_oracle_fixture
 
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.01s
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
 
-   Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 12.14s
-     Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
-
-thread 'useitem::tests::unbind_stdmode31_success_matches_oracle_fixture' (9496) panicked at bins\game-svr\src\useitem.rs:1560:13:
-assertion `left == right` failed: 解包件 dura = tpl.DuraMax
-  left: 0
- right: 7
-note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
-error: test failed, to rerun pass `-p game-svr --lib`
+# rc=101

@@ -1,0 +1,24 @@
+# ts=2026-11-20T01:23:32+08:00
+# Program.cs mutated (MaxDrainPasses 8->1, max_passes 8->1)
+diff --git a/mir2-rs/tests/parity/m3/eat-probe/Program.cs b/mir2-rs/tests/parity/m3/eat-probe/Program.cs
+index dcfcb0e45..5198cc52e 100644
+--- a/mir2-rs/tests/parity/m3/eat-probe/Program.cs
++++ b/mir2-rs/tests/parity/m3/eat-probe/Program.cs
+@@ -259,7 +259,7 @@ internal static class Program
+     /// `late` 取自 `SendMessage.LateDelivery`（1/0）。**上界命中必报**（`hitCap=true` ⇒ 比较器红）。</summary>
+     private static (List<object> messages, int passes, bool hitCap) Drain(object pq)
+     {
+-        const int MaxDrainPasses = 8;
++        const int MaxDrainPasses = 1;
+         var list = new List<object>();
+         var t = pq.GetType();
+         var countProp = t.GetProperty("Count") ?? throw new MissingMemberException("PriorityQueue.Count");
+@@ -394,7 +394,7 @@ internal static class Program
+                 hunger_status = po.HungerStatus,
+                 item_list = po.ItemList.Select(ItemDto).ToArray(),
+                 // 抽空为止：趟数 + 是否命中上界（命中 ⇒ 比较器必红，不得当完整账本）。
+-                drain = new { passes = drainPasses, max_passes = 8, hit_cap = drainHitCap },
++                drain = new { passes = drainPasses, max_passes = 1, hit_cap = drainHitCap },
+             },
+         };
+     }

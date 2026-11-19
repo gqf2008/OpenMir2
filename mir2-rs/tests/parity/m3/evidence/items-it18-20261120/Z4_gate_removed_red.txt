@@ -1,18 +1,8 @@
+# ts=2026-11-20T01:25:13+08:00
+# filter=useitem::tests::z4_golden_nonzero_rust_zero_red
 # mutation: '!golden_nonzero || rust_nonzero' -> 'true'
-# filter: useitem::tests::z4_golden_nonzero_rust_zero_red
-# rc=101
-
-
-running 1 test
-test useitem::tests::z4_golden_nonzero_rust_zero_red ... FAILED
-
-failures:
-
-failures:
-    useitem::tests::z4_golden_nonzero_rust_zero_red
-
-test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
-
+# expect: FAILED
+=== stderr (cargo/build) ===
    Compiling game-svr v0.1.0 (E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\bins\game-svr)
 warning: unused variable: `golden_nonzero`
    --> bins\game-svr\src\useitem.rs:807:14
@@ -29,10 +19,23 @@ warning: unused variable: `rust_nonzero`
     |                                    ^^^^^^^^^^^^ help: if this is intentional, prefix it with an underscore: `_rust_nonzero`
 
 warning: `game-svr` (lib test) generated 2 warnings (run `cargo fix --lib -p game-svr --tests` to apply 2 suggestions)
-    Finished `test` profile [unoptimized + debuginfo] target(s) in 13.00s
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 14.40s
      Running unittests src\lib.rs (target\debug\deps\game_svr-e060a3808218482d.exe)
 
-thread 'useitem::tests::z4_golden_nonzero_rust_zero_red' (22676) panicked at bins\game-svr\src\useitem.rs:814:9:
+thread 'useitem::tests::z4_golden_nonzero_rust_zero_red' (1244) panicked at bins\game-svr\src\useitem.rs:814:9:
 golden 非零而 Rust 全零必须红
 note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
 error: test failed, to rerun pass `-p game-svr --lib`
+=== stdout (test harness) ===
+
+running 1 test
+test useitem::tests::z4_golden_nonzero_rust_zero_red ... FAILED
+
+failures:
+
+failures:
+    useitem::tests::z4_golden_nonzero_rust_zero_red
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1982 filtered out; finished in 0.00s
+
+# rc=101

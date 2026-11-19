@@ -1,0 +1,8 @@
+# ts=2026-11-20T01:23:34+08:00
+# dotnet eat-probe.dll -> fixture (cwd=repo root)
+=== stderr ===
+=== stdout ===
+WROTE E:\Users\gxh\Documents\GitHub\OpenMir2\.worktrees\items-parity\mir2-rs\tests\parity\m3\fixtures\eat_vectors.json
+ORACLE_SOURCE_SHA256 51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a
+TEMPLATES 15 CASES 23
+# rc=0
