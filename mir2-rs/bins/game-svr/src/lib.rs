@@ -65156,6 +65156,37 @@ SendRefMsgRange=15
             .collect()
     }
 
+    /// `SM_MAGICFIRE` 尾串（`EDCode.EncodeBuffer(int32 LE)`）解出目标 ActorId。
+    fn fireball_tail_i32(body: &[u8]) -> i32 {
+        let tail = &body[mir2_protocol::frame::CommandMessage::SIZE..];
+        let d = mir2_protocol::edcode::decode(tail);
+        assert!(d.len() >= 4, "SM_MAGICFIRE 尾解码后不足 4 字节: {d:?}");
+        i32::from_le_bytes([d[0], d[1], d[2], d[3]])
+    }
+
+    /// 一条 golden 同形的 RM 账本项（`msg`/`delivery` 不入比较面，取固定值）。
+    fn fireball_rm(
+        ident: i64,
+        w_param: i64,
+        p1: i64,
+        p2: i64,
+        p3: i64,
+        priority: i64,
+        late: bool,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "ident": ident,
+            "wParam": w_param,
+            "p1": p1,
+            "p2": p2,
+            "p3": p3,
+            "msg": "",
+            "late": late,
+            "delivery": 0,
+            "priority": priority,
+        })
+    }
+
     /// 跑一支火球：施法段 + 延时交付段，落真实台账到 `<ledger_dir>/fireball_<label>.json`。
     ///
     /// **串行前提**：`rng_trace` 是进程级 `OnceLock`。本函数在开启前断言「本进程第一次开 trace」，
@@ -65187,6 +65218,7 @@ SendRefMsgRange=15
         // 必须与 rng_trace::enable(path, seed) 的 seed 一致：trace 只记元数据，数值由 world.rng 产生。
         rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
         let n0 = trace_line_count(&trace);
+        let caster = rig.caster;
         let target = fireball_actor(&rig, "target");
         let hp_before = rig.world.entities.get(target).unwrap().hp;
 
@@ -65195,9 +65227,20 @@ SendRefMsgRange=15
         let n1 = trace_line_count(&trace);
         let (cast_frames, _raws) = rig.drain();
 
+        // **RM 列来源（弱比较面，卡 §11 映射表）**：`RM_DELAYMAGIC` 只在施法段入队，
+        // 交付前抓它的载荷（wParam=nPower / nParam1=MakeLong / nParam2=nRage / nParam3=target）。
+        let delay_msg = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .find(|m| m.ident == mir2_world_bevy::slave::RM_DELAYMAGIC && m.actor_id == caster)
+            .map(|m| (m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
+
         // ---- 段②：推进世界时钟（600ms 延时到期 + 余量）后交付；只推进/只交付，不跑 tick 循环 ----
         rig.world.clock_ms += 800;
         let outs = rig.world.deliver_self_delay_msgs();
+        // `RM_DELAYMAGIC` 到点投递的观察值（`struck` = 目标侧 `RM_MAGSTRUCK` 已入队）。
+        let delay_magic = outs.iter().find_map(|o| o.delay_magic);
         let rec = mir2_world_bevy::TickRecord {
             slave_self_deliveries: outs,
             ..Default::default()
@@ -65221,6 +65264,8 @@ SendRefMsgRange=15
             .ground_sessions
             .get("caster")
             .map_or(0, |sg| i64::from(sg.state.wabil.mp));
+        let target_max_hp = rig.world.entities.get(target).unwrap().max_hp;
+        let damage = i32::from(hp_before) - i32::from(hp_after);
 
         // 账本 = 段①（金标准 `Rng` 的比较面）+ 段②（另存 `DeliverRng`，供审计）。
         let cast_rng = trace_slice(&trace, n0, n1);
@@ -65240,6 +65285,110 @@ SendRefMsgRange=15
 
         let mut all_frames = cast_frames;
         all_frames.extend(deliver_frames);
+
+        // ---- RM 列组装（卡 §11 映射表；**弱比较面**：RM 是组装出来的，玩家可见证据是 SM）----
+        //
+        // 逐条来源（Rust 事件 → oracle RM）：
+        //  - `RM_SPELL(10008)` / `RM_MAGICFIRE(10120)`：施法广播，收件人 = `hear_targets(caster)`
+        //    （含施法者自己——oracle `SendRefMsg` 的收件集合含 self，自守卫只在 SM 编码层）；
+        //    参数取真实 `SM_MAGICFIRE(638)` 帧（与出帧同源，不重算 snap）。
+        //  - `RM_DELAYMAGIC(8021)`：`world.self_delay_msgs` 里 caster 的那条（交付前抓取）。
+        //  - `RM_MAGSTRUCK(8044)` / `RM_HEALTHSPELLCHANGED(10052)`：`delay_magic.struck` ⇒ 目标
+        //    侧消息（`BaseObject.Base.cs:711-729` 投递 + 目标 `Operate` 的 `HealthSpellChanged`）。
+        //  - `RM_STRUCK_MAG(8103)`：投递传播，收件人 = `hear_targets(target)`（含目标自己），
+        //    载荷 = (damage, hp_after, max_hp, caster)。
+        //  - **未组装**：`RM_CHANGENAMECOLOR(8090)`——Rust `deliver_mag_struck` 对玩家不发
+        //    （`name_color` 恒 false），卡 `openmir2-magstruck-name-color` 未修前该条目两侧不等。
+        let range = chat::send_ref_msg_range();
+        let in_range_caster = chat::hear_targets(&rig.world, caster, range);
+        let in_range_target = chat::hear_targets(&rig.world, target, range);
+        let (fire_x, fire_y, fire_series, fire_target) = all_frames
+            .iter()
+            .find(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
+            .map(|(_, b)| {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+                (
+                    i32::from(cm.param),
+                    i32::from(cm.tag),
+                    i32::from(cm.series),
+                    fireball_tail_i32(b),
+                )
+            })
+            .expect("火球必有 SM_MAGICFIRE 帧");
+        let mut rm_by_who: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        let who_of = |id: i32| {
+            rig.online
+                .iter()
+                .find(|e| e.actor_id == id)
+                .map(|e| e.chr_name.clone())
+        };
+        for id in &in_range_caster {
+            if let Some(who) = who_of(*id) {
+                let v = rm_by_who.entry(who).or_default();
+                // `RM_SPELL`：wParam=Effect(1)、p1/p2=施法坐标、p3=MagicId；priority=(byte)ident。
+                v.push(fireball_rm(
+                    10008,
+                    1,
+                    i64::from(fire_x),
+                    i64::from(fire_y),
+                    1,
+                    24,
+                    false,
+                ));
+                // `RM_MAGICFIRE`：p1=MakeWord(EffectType,Effect)、p2=MakeLong(x,y)、p3=目标 ActorId。
+                v.push(fireball_rm(
+                    10120,
+                    0,
+                    i64::from(fire_series),
+                    i64::from(game_svr::feature::make_long(
+                        u16::try_from(fire_x).unwrap_or(0),
+                        u16::try_from(fire_y).unwrap_or(0),
+                    )),
+                    i64::from(fire_target),
+                    136,
+                    false,
+                ));
+            }
+        }
+        if let (Some((w, n1, n2, n3, prio)), Some(d)) = (delay_msg, delay_magic) {
+            if d.struck {
+                if let Some(who) = who_of(caster) {
+                    rm_by_who.entry(who).or_default().push(fireball_rm(
+                        8021,
+                        i64::from(w),
+                        i64::from(n1),
+                        i64::from(n2),
+                        i64::from(n3),
+                        i64::from(prio),
+                        true,
+                    ));
+                }
+                if let Some(who) = who_of(target) {
+                    let v = rm_by_who.entry(who).or_default();
+                    // `RM_MAGSTRUCK`：p1 = 施法者算出的 nPower。
+                    v.push(fireball_rm(8044, 0, i64::from(w), 0, 0, 108, false));
+                    if damage > 0 {
+                        // `RM_HEALTHSPELLCHANGED`（目标 `Operate` 里的 `HealthSpellChanged`）。
+                        v.push(fireball_rm(10052, 0, 0, 0, 0, 68, false));
+                    }
+                }
+                for id in &in_range_target {
+                    if let Some(who) = who_of(*id) {
+                        rm_by_who.entry(who).or_default().push(fireball_rm(
+                            8103,
+                            i64::from(damage),
+                            i64::from(hp_after),
+                            i64::from(target_max_hp),
+                            i64::from(caster),
+                            167,
+                            false,
+                        ));
+                    }
+                }
+            }
+        }
+
         let receivers = [
             ("caster", 911),
             ("target", 912),
@@ -65250,9 +65399,7 @@ SendRefMsgRange=15
         .map(|(who, socket)| {
             serde_json::json!({
                 "Who": who,
-                // RM 列（原版 ActorEntity.MsgQueue）在 Rust 侧没有等价层：按卡 §11 映射表另步组装，
-                // 本步先留空——**这就是为什么本步不能标 verified**。
-                "Rm": [],
+                "Rm": rm_by_who.get(*who).cloned().unwrap_or_default(),
                 "Sent": fireball_sent(&all_frames, *socket),
             })
         })
@@ -65264,10 +65411,10 @@ SendRefMsgRange=15
             "SpellReturn": true,
             "Receivers": receivers,
             "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
-            "RngSites": cast_rng.iter().map(|(_, _, s)| s.clone()).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
             "RngSeqs": cast_rng.iter().map(|(s, _, _)| *s).collect::<Vec<_>>(),
             "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
-            "DeliverRngSites": deliver_rng.iter().map(|(_, _, s)| s.clone()).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
             "TargetHpBefore": hp_before,
             "TargetHp": hp_after,
             "NotDue": [],

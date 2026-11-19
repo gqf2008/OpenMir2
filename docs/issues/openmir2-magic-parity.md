@@ -463,3 +463,37 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 → caster `state.wabil.mc=15 / level=30` → `world.rng = RandomNumber::with_seed(seed)`
 → `rng_trace::enable(path, seed)`（同 seed）→ 记 `n0` → `handle_spell_cmd(...)` → 记 `n1`
 → 从 `rx` 按 socket 归集 SM、从 TSV 取 `n0..n1` 的 RNG 行 → 组装与金标准同构的台账 JSON。
+
+### 22b. 真实台账接线（2026-11-19）：A/B/C 已落地，比较器红在 D
+
+- **记录面补全（口径 A，先修 oracle）**：C# 驱动不再只覆写双参 `SendSocket(msg, tail)`，
+  改为把 `M2Share.NetChannel` 换成只记录不发送的 `RecordingNetChannel`（三处 `SendSocket`
+  重载最终都汇到 `AddGateBuffer`；各玩家 `GateIdx = ActorId` 用于归属）。golden 已按新记录面
+  重生成，除 `delivery`（墙钟字段，不入比较面）外**只新增两类帧**：
+  target 的 `SM_HEALTHSPELLCHANGED(53)` 与 obs_in 的 `SM_CHANGENAMECOLOR(656)`（edge/hit）。
+  **QA-1 的独立复现必须在新驱动上重跑**（旧 golden 缺这两类帧）。
+- **判定口径（口径 B）**：RM 列改为**排序后按多重集**比较——顺序来自 C# `ActorEntity.MsgQueue`
+  两趟排空与 `VisibleHumanList`，不是可复现的行为语义；SM 仍**严格按序逐字段 + 尾串**。
+  同时修 `late` 列：旧比较器对 JSON bool 取 `as_i64()` 落回 `i64::MIN`（两侧恒等 = 假绿），
+  现按 1/0 比较，并新增 `tooth_rm_late_changed_red`。
+- **site 归一（口径 C）**：`file!()` 在 Windows 产出反斜杠路径；台账落盘前统一成 `/`，
+  仅用于 site 允许清单比较（比较器不变）。
+- **Rust 真实台账**：`tests::fireball_parity_{miss,edge,hit}` 三支（`#[ignore]`，必须
+  `--ignored --exact` 单跑——`rng_trace` 是进程级状态），产出
+  `<workspace>/target/magic-parity/fireball_<label>.json`。RM 列按 §11 映射表由 Rust 事件组装
+  （`hear_targets` 收件人 + `self_delay_msgs` + `delay_magic` 观察值；逐条来源见驱动注释）——
+  **这是弱比较面，玩家可见的真实证据是 SM 帧**。
+- **实测（三支）**：施法段 RNG 与 golden 逐次全等（`[2]` / `[3,0,0,0,4]` / `[5,0,0,0,0]`），
+  HP 100→100/85/85；`SM_SPELL(17)` / `SM_MAGICFIRE(638)` / `SM_STRUCK(31)` 逐字段与尾串全等；
+  RM 列除 `8090` 外**每个接收者全部字段多重集相等**。
+- **当前红（恰 4 条，全部是 D）**：edge/hit 的 obs_in 缺 `RM_CHANGENAMECOLOR(8090)` 与
+  `SM_CHANGENAMECOLOR(656)`——Rust `deliver_mag_struck` 对玩家的 `name_color` 恒 false。
+  已报 opc-07 立卡 `openmir2-magstruck-name-color`；修好前 **`1/5` 保持 implemented，不得标 verified**。
+- 复跑顺序（三支各自独立进程 → 真实台账比较；比较器新用例 `real_rust_ledger_parity` 为
+  `#[ignore]`，缺台账时硬红不跳过）：
+  ```text
+  cargo test -p game-svr --lib tests::fireball_parity_miss -- --exact --ignored --test-threads=1
+  cargo test -p game-svr --lib tests::fireball_parity_edge -- --exact --ignored --test-threads=1
+  cargo test -p game-svr --lib tests::fireball_parity_hit  -- --exact --ignored --test-threads=1
+  cargo test -p mir2-parity-tests --test magic_fireball_parity -- --ignored --exact real_rust_ledger_parity
+  ```
