@@ -467,28 +467,35 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 ### 22b. 真实台账接线（2026-11-19）：A/B/C 已落地，比较器红在 D
 
 - **记录面补全（口径 A，先修 oracle）**：C# 驱动不再只覆写双参 `SendSocket(msg, tail)`，
-  改为把 `M2Share.NetChannel` 换成只记录不发送的 `RecordingNetChannel`（三处 `SendSocket`
-  重载最终都汇到 `AddGateBuffer`；各玩家 `GateIdx = ActorId` 用于归属）。golden 已按新记录面
-  重生成，除 `delivery`（墙钟字段，不入比较面）外**只新增两类帧**：
-  target 的 `SM_HEALTHSPELLCHANGED(53)` 与 obs_in 的 `SM_CHANGENAMECOLOR(656)`（edge/hit）。
-  **QA-1 的独立复现必须在新驱动上重跑**（旧 golden 缺这两类帧）。
+  改为把 `M2Share.NetChannel` 换成只记录不发送的 `RecordingNetChannel`——三处 `SendSocket`
+  重载最终都汇到 `AddGateBuffer`（生产 C# 零改动），各玩家 `GateIdx = ActorId` 用于归属。
+- **排水窗口 = 抽空为止（opc-07 裁定）**：固定两趟是**记录面伪影**——RM 由 `Operate` 触发
+  下一条（`RM_STRUCK_MAG` ⇒ `SetPkFlag` ⇒ `RM_CHANGENAMECOLOR`），两趟会把「已入队未排水」的
+  条目漏掉；真机上它们在后续 tick 会投给所有可见者。现循环到某趟无消息为止，硬上界
+  `MaxDrainPasses = 8`（防自发消息增生），**上界命中进产物**（`DrainPasses` /
+  `DrainPassesHitCap`，另有 stderr `DRAIN_PASSES` 行）——不得静默截断。
+  实测趟数：miss 2 / edge 4 / hit 4，均未命中上界。
+- **golden 重生成（新面）**：相对两趟版只新增（`delivery` 墙钟字段不入比较面）——
+  target 的 `SM_HEALTHSPELLCHANGED(53)`（两趟版已含）之外，edge/hit 的 **caster / target /
+  obs_in 三者的 `SM_CHANGENAMECOLOR(656)` 与 `RM_CHANGENAMECOLOR(8090)`**；miss 不变。
+  **QA-1（`openmir2-3b`）必须在新的排水窗口上重跑**；旧 golden 的任何「ALL_IDENTICAL」结论作废。
 - **判定口径（口径 B）**：RM 列改为**排序后按多重集**比较——顺序来自 C# `ActorEntity.MsgQueue`
   两趟排空与 `VisibleHumanList`，不是可复现的行为语义；SM 仍**严格按序逐字段 + 尾串**。
-  同时修 `late` 列：旧比较器对 JSON bool 取 `as_i64()` 落回 `i64::MIN`（两侧恒等 = 假绿），
-  现按 1/0 比较，并新增 `tooth_rm_late_changed_red`。
-- **site 归一（口径 C）**：`file!()` 在 Windows 产出反斜杠路径；台账落盘前统一成 `/`，
-  仅用于 site 允许清单比较（比较器不变）。
-- **Rust 真实台账**：`tests::fireball_parity_{miss,edge,hit}` 三支（`#[ignore]`，必须
-  `--ignored --exact` 单跑——`rng_trace` 是进程级状态），产出
-  `<workspace>/target/magic-parity/fireball_<label>.json`。RM 列按 §11 映射表由 Rust 事件组装
-  （`hear_targets` 收件人 + `self_delay_msgs` + `delay_magic` 观察值；逐条来源见驱动注释）——
-  **这是弱比较面，玩家可见的真实证据是 SM 帧**。
+- **`late` 列假绿已修**：旧比较器对 JSON bool 取 `as_i64()` ⇒ 两侧恒 `i64::MIN`，该列从未真正
+  比较；现按 1/0 比较。留档三颗牙：`tooth_rm_late_changed_red`、`rm_multiset_ignores_order_accepts`、
+  `tooth_rm_field_changed_red`。
+- **site 归一（口径 C）**：`file!()` 在 Windows 产出反斜杠；台账落盘前统一 `/`（只影响允许清单比较）。
+- **Rust 真实台账**：`tests::fireball_parity_{miss,edge,hit}`（`#[ignore]`，必须 `--ignored --exact`
+  单跑——`rng_trace` 进程级），产出 `<workspace>/target/magic-parity/fireball_<label>.json`。
+  RM 列按 §11 映射表由 Rust 事件组装（`hear_targets` 收件人 + `self_delay_msgs` + `delay_magic`
+  观察值；逐条来源见驱动注释）——**弱比较面**，玩家可见的真实证据是 SM 帧。
 - **实测（三支）**：施法段 RNG 与 golden 逐次全等（`[2]` / `[3,0,0,0,4]` / `[5,0,0,0,0]`），
   HP 100→100/85/85；`SM_SPELL(17)` / `SM_MAGICFIRE(638)` / `SM_STRUCK(31)` 逐字段与尾串全等；
   RM 列除 `8090` 外**每个接收者全部字段多重集相等**。
-- **当前红（恰 4 条，全部是 D）**：edge/hit 的 obs_in 缺 `RM_CHANGENAMECOLOR(8090)` 与
-  `SM_CHANGENAMECOLOR(656)`——Rust `deliver_mag_struck` 对玩家的 `name_color` 恒 false。
-  已报 opc-07 立卡 `openmir2-magstruck-name-color`；修好前 **`1/5` 保持 implemented，不得标 verified**。
+- **当前红（恰 12 条 = edge/hit × {caster,target,obs_in} × {Rm 8090, Sent 656}）**：
+  Rust `deliver_mag_struck` 对玩家的 `name_color` 恒 false ⇒ 魔法受击链不置 `PvpFlag`、
+  不发 `RefNameColor` 广播。已报 opc-07 立卡 `openmir2-magstruck-name-color`；修好前
+  **`1/5` 保持 implemented，不得标 verified**。
 - 复跑顺序（三支各自独立进程 → 真实台账比较；比较器新用例 `real_rust_ledger_parity` 为
   `#[ignore]`，缺台账时硬红不跳过）：
   ```text

@@ -4,6 +4,8 @@
   "cases": [
     {
       "Label": "miss",
+      "DrainPasses": 2,
+      "DrainPassesHitCap": false,
       "Seed": 1,
       "SpellReturn": true,
       "Receivers": [
@@ -145,6 +147,8 @@
     },
     {
       "Label": "edge",
+      "DrainPasses": 4,
+      "DrainPassesHitCap": false,
       "Seed": 5,
       "SpellReturn": true,
       "Receivers": [
@@ -181,7 +185,7 @@
               "p3": 2002,
               "msg": "",
               "late": true,
-              "delivery": 1092725068,
+              "delivery": 1093098818,
               "priority": 255
             },
             {
@@ -194,6 +198,17 @@
               "late": false,
               "delivery": 0,
               "priority": 167
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
             }
           ],
           "Sent": [
@@ -210,6 +225,13 @@
               "tag": 100,
               "series": 15,
               "tail": "ddhkddhkddy[gdhgedhkd?"
+            },
+            {
+              "ident": 656,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
             }
           ]
         },
@@ -270,6 +292,17 @@
               "late": false,
               "delivery": 0,
               "priority": 167
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
             }
           ],
           "Sent": [
@@ -300,6 +333,13 @@
               "tag": 100,
               "series": 15,
               "tail": "ddhkddhkddy[gdhgedhkd?"
+            },
+            {
+              "ident": 656,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
             }
           ]
         },
@@ -402,6 +442,8 @@
     },
     {
       "Label": "hit",
+      "DrainPasses": 4,
+      "DrainPassesHitCap": false,
       "Seed": 13,
       "SpellReturn": true,
       "Receivers": [
@@ -438,7 +480,7 @@
               "p3": 3002,
               "msg": "",
               "late": true,
-              "delivery": 1092725881,
+              "delivery": 1093099615,
               "priority": 255
             },
             {
@@ -451,6 +493,17 @@
               "late": false,
               "delivery": 0,
               "priority": 167
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
             }
           ],
           "Sent": [
@@ -467,6 +520,13 @@
               "tag": 100,
               "series": 15,
               "tail": "ddhkddhkddQKgdhcedhkd?"
+            },
+            {
+              "ident": 656,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
             }
           ]
         },
@@ -527,6 +587,17 @@
               "late": false,
               "delivery": 0,
               "priority": 167
+            },
+            {
+              "ident": 8090,
+              "wParam": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 154
             }
           ],
           "Sent": [
@@ -557,6 +628,13 @@
               "tag": 100,
               "series": 15,
               "tail": "ddhkddhkddQKgdhcedhkd?"
+            },
+            {
+              "ident": 656,
+              "param": 47,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
             }
           ]
         },

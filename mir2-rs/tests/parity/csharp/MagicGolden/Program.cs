@@ -349,7 +349,16 @@ public static class Program
         RngSeam.Restore(original);
 
         // 延时路径：RM_DELAYMAGIC 到期后才走 BaseObject.Base.cs:711（伤害 → RM_MAGSTRUCK）。
-        // 真机语义是后续 tick；这里等价地等到到期（600ms）再排水，跨两趟把链式消息也处理掉。
+        // 真机语义是后续 tick；这里等价地等到到期（600ms）再排水。
+        //
+        // **排水窗口 = 抽空为止（opc-07 裁定 2026-11-19）**：旧实现固定两趟是**记录面伪影**——
+        // RM 由 `Operate` 触发下一条（如 `RM_STRUCK_MAG` ⇒ `SetPkFlag` ⇒ `RM_CHANGENAMECOLOR`），
+        // 只跑两趟会把「已入队但尚未排水」的条目从账本里漏掉；真机上它们在后续 tick 都会投给
+        // 所有可见者。因此循环到某一趟**没排到任何消息**为止。
+        //
+        // 上界 `MaxDrainPasses = 8`：防自发消息无限增生（本用例链正常 ≤4 趟）。
+        // **上界命中必须可见**（`DrainPassesHitCap` 进产物 + stderr），不得静默截断。
+        const int MaxDrainPasses = 8;
         int hpBefore = target.WAbil.HP;
         Thread.Sleep(700);
         var receivers = new List<ReceiverResult>();
@@ -357,11 +366,15 @@ public static class Program
         var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
         var rmAcc = new Dictionary<string, List<object>>();
         foreach (var (who, _) in byWho) rmAcc[who] = new List<object>();
-        for (int pass = 0; pass < 2; pass++)
+        int drainPasses = 0;
+        bool drainPassesHitCap = false;
+        for (int pass = 0; pass < MaxDrainPasses; pass++)
         {
+        bool drainedAny = false;
         foreach (var (who, obj) in byWho)
         {
             var raw = obj.DrainRaw();
+            if (raw.Count > 0) drainedAny = true;
             var rm = raw.Select(m => (object)new
             {
                 ident = m.Msg.wIdent,
@@ -382,7 +395,11 @@ public static class Program
             }
             rmAcc[who].AddRange(rm);
         }
+        drainPasses = pass + 1;
+        if (!drainedAny) break;
+        if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
         }
+        Console.Error.WriteLine($"DRAIN_PASSES {label} passes={drainPasses} hit_cap={drainPassesHitCap}");
         int hpAfter = target.WAbil.HP;
         foreach (var (who, obj) in byWho)
         {
@@ -393,6 +410,8 @@ public static class Program
         {
             Label = label,
             Seed = seed,
+            DrainPasses = drainPasses,
+            DrainPassesHitCap = drainPassesHitCap,
             SpellReturn = ok,
             Receivers = receivers,
             Rng = draws,
@@ -522,6 +541,10 @@ public sealed class ReceiverResult
 public sealed class FireballResult
 {
     public string Label { get; set; }
+    /// 实际排水趟数（`DrainRaw` 到空为止；正常 ≤4）。
+    public int DrainPasses { get; set; }
+    /// 上界 `MaxDrainPasses` 命中（= 可能仍有未排干消息；不得当作完整账本）。
+    public bool DrainPassesHitCap { get; set; }
     public int Seed { get; set; }
     public bool SpellReturn { get; set; }
     public List<ReceiverResult> Receivers { get; set; }
