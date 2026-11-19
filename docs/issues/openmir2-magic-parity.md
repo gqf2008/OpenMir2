@@ -169,12 +169,15 @@
 原版 `DoSpell` 产出的是 **RM_ 消息**（进 `ActorEntity.MsgQueue`，由会话编码层再编码成 SM_ 字节）；
 Rust 宿主**没有 RM 层**，直接产出 SM_ 帧。因此语义层对拍必须用一张**显式映射表**（写死、可审）：
 
-| 原版 RM（本卡三支出现过的） | 产生 SM 帧的 C# 位置（**硬要求：没有行号不算映射**） | Rust 侧对应物 / 比较方式 |
+| 原版 RM（本卡各支出现过的） | 产生 SM 帧的 C# 位置（**硬要求：没有行号不算映射**） | Rust 侧对应物 / 比较方式 |
 |---|---|---|
 | `RM_SPELL(10008)` wParam=Effect, p1/p2=坐标, p3=MagicId, prio=24 | `src/M2Server/Player/PlayObject.Message.cs:1454-1459`（`MakeMessage(SM_SPELL, …, nParam1, nParam2, wParam)`，p3 走尾串） | `SM_SPELL` 帧：Effect/坐标/MagicId 逐项。**注意自守卫**：`:1455` 的 `if (processMsg.ActorId != ActorId)`（`:1456` 只是它的 `{`）⇒ **施法者自己不会收到 SM_SPELL**（只发给范围内其他玩家），RM 账本里出现 ≠ 该玩家收到客户端帧 |
 | `RM_MAGICFIRE(10120)` wParam=0, p1=MakeWord(EffectType,Effect), p2=MakeLong(x,y), p3=目标ActorId, prio=136 | `src/M2Server/Player/PlayObject.Message.cs:1788-1794`（`SM_MAGICFIRE`，`LoWord/HiWord(nParam2)` + `nParam1`，`nParam3` 经 EDCode 作尾串） | `SM_MAGICFIRE` 帧：p3=0 表示无目标 |
 | `RM_DELAYMAGIC(8021)` wParam=伤害, p1=坐标, p2=nRage, p3=目标, prio=255 | **服务端事件，不是客户端帧**：`src/M2Server/Actor/BaseObject.Base.cs:711-728`（`GetMagStruckDamage` → 动物 race 伤害 `/1.2` → 范围内则发 `RM_MAGSTRUCK`） | 比较"是否登记延时事件 + 伤害 + nRage + 目标"；不产 SM 帧 |
 | `RM_MAGIC_LVEXP`（训练尾） | `src/M2Server/Player/PlayObject.Message.cs:1800-1801`（`SM_MAGIC_LVEXP`，p1/p2 + `LoWord/HiWord(nParam3)`） | `SM_MAGIC_LVEXP` 帧：字段逐项 |
+| `RM_MAGHEALING(8034)` wParam=0, p1=nPower, p2=0, p3=0, prio=255（`SendSelfDelayMsg`） | **服务端事件，不是客户端帧**：`src/M2Server/Player/PlayObject.Message.cs:1619-1629`（到点只累计 `IncHealing`/`PerHealing`，上限 300 的比较在 `:1620`；实际回血由后续 `Run` 的恢复周期另出 53） | 比较"是否登记延时治疗事件 + nPower + 目标"；**不产 SM 帧**（与 `RM_DELAYMAGIC` 同类） |
+| `RM_DURACHANGE(10125)` wParam=槽位, p1=持久, p2=DuraMax | `src/M2Server/Player/PlayObject.Message.cs:1803-1804`（→ `SM_DURACHANGE(642)`：Recog=Dura、Param=槽位、Tag/Series=DuraMax）。护身符支的触发者 = `MagicBase.UseAmulet`（`src/M2Server/Magic/MagicBase.cs:109-127`，每次 −100 持久；持久不足时改走 `SendDelItems` 并清 `Index`）⇒ **火符的 miss 支同样出现 642** | `SM_DURACHANGE` 帧逐字段 + `UseItems[ArmRingl].Dura` 的 −100 |
+| `RM_DELAYPUSHED(8043)` wParam=nDir, p1=坐标, p2=push, p3=目标 | **服务端事件**：`src/M2Server/Actor/BaseObject.Base.cs:733-739`（到点 `CharPushed`，逐格 `SendRefMsg(RM_PUSH)`）；`RM_PUSH(8092)` → `src/M2Server/Player/PlayObject.Message.cs:1525-1533`（`SM_BACKSTEP(9)`）。夹具前提：**`UserMagic.Level=3`**（`Random(Level)-1`，Level<3 时恒 ≤0 ⇒ 永不推挤；产生点在 `src/M2Server/Magic/MagicManager.cs:1048-1052`） | `SM_BACKSTEP(9)` 帧逐字段 + 逐格条数；其余 SM 不变 |
 
 RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomNumber`（与原版同算法）。
 **未登记在该表里的 RM 条目一律判"口径未定义"（不标 verified）**，避免拿"没比到"当"比过了"。
