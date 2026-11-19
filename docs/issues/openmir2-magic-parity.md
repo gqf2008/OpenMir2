@@ -1012,7 +1012,10 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 ## 22. M52.1：`fireball` 的 seam 证据（应 QA 条件②）
 
 - **装置**：`FireballCase(rngMode, loginOrder)` + `--fireball-rng-mode/--fireball-login-order`；cover 路径的
-  `draws` 取在排水之后（符号：`RunFireball` 内 `if (rngMode != "freeze_at_dospell")` 块位于排水循环之后）；
+  `draws` 捕获与 `RngSeam.Restore` **位于排水循环之后**（`DRAIN_PASSES` 行紧后），freeze 在 `DoSpell` 紧后收尾。
+  **返工记录（2026-11-20，QA 实测）**：首版误把 cover 块放在 `Thread.Sleep(700)` 与排水循环之前 ⇒
+  `QA_DRAIN_PROBE draws=5 total=5`（排水窗口抽取未经 LoggingRandom，cover 为空声明）；本笔已移到排水之后，
+  探针改为注入**真实排水阶段**（`Thread.Sleep` 之后、循环之前）——牙②方向改为"若把捕获/Restore 提前 ⇒ 探针红"。
   `login_order=true` 时：`RecalcLevelAbilitys()` → `Abil.MaxExp = GetLevelExp(Level)`（冻结表）→
   `RecalcAbilitys()` → `WAbil.HP = MaxHP` → `DrainRaw()`。
 - **记录面**：`LoggingRandom.TotalDraws`（不被 `Restore` 清零）；golden 记 `rng_total_draws` 与 `rng_recorded`；

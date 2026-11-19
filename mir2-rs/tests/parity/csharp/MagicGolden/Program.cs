@@ -531,12 +531,6 @@ public static class Program
             draws = rng.Draws.ToList();
             RngSeam.Restore(original);
         }
-        if (probeDrainDraw)
-        {
-            // 自测探针（不进 golden）：在「施法后、排水前」抽一次。cover 下 seam 仍安装 ⇒ 入账；
-            // freeze 下 seam 已还原 ⇒ 这次抽不被记录。用于证明 seam 真的覆盖排水窗口。
-            _ = M2Server.M2Share.RandomNumber.Random(100);
-        }
         if (Environment.GetEnvironmentVariable("MAGICGOLDEN_DIAG") == "1")
         {
             Console.Error.WriteLine("DIAG visible=" + string.Join(",", caster.VisibleHumanList) + " envW=" + env.Width + " envH=" + env.Height
@@ -544,17 +538,6 @@ public static class Program
                 + " get1003=" + (SystemModule.SystemShare.ActorMgr.Get(idBase + 3) != null)
                 + " get1004=" + (SystemModule.SystemShare.ActorMgr.Get(idBase + 4) != null)
                 + " obmode=" + caster.ObMode + " fixedhide=" + caster.FixedHideMode + " ghost=" + caster.Ghost);
-        }
-        if (rngMode != "freeze_at_dospell")
-        {
-            draws = rng.Draws.ToList();
-            RngSeam.Restore(original);
-        }
-        long totalDraws = rng.TotalDraws;
-        if (rngMode == "cover_drain" && draws.Count != totalDraws)
-        {
-            throw new FixtureContractViolation(
-                $"[fireball/{label}] cover_drain 记账不完整：Rng.Count={draws.Count} != rng_total_draws={totalDraws}");
         }
 
         // 延时路径：RM_DELAYMAGIC 到期后才走 BaseObject.Base.cs:711（伤害 → RM_MAGSTRUCK）。
@@ -570,6 +553,12 @@ public static class Program
         const int MaxDrainPasses = 8;
         int hpBefore = target.WAbil.HP;
         Thread.Sleep(700);
+        if (probeDrainDraw)
+        {
+            // 自测探针（不进 golden）：**在真实排水阶段**（`Thread.Sleep` 之后、排水循环之前）抽一次。
+            // cover 下 seam 仍安装 ⇒ 入账；freeze 下 seam 已在 DoSpell 后还原 ⇒ 这次抽不被记录。
+            _ = M2Server.M2Share.RandomNumber.Random(1000);
+        }
         var receivers = new List<ReceiverResult>();
         var pending = new List<object>();
         var byWho = new (string, RecordingPlayObject)[] { ("caster", caster), ("target", target), ("obs_in", obsIn), ("obs_out", obsOut) };
@@ -609,6 +598,19 @@ public static class Program
         if (pass == MaxDrainPasses - 1) drainPassesHitCap = true;
         }
         Console.Error.WriteLine($"DRAIN_PASSES {label} passes={drainPasses} hit_cap={drainPassesHitCap}");
+        // **cover 的 draws 与 Restore 必须在排水循环之后**（`rng_mode=cover_drain` 的真实含义：
+        // 排水阶段的抽取也进账本）；freeze 已在 `DoSpell` 紧后收尾（legacy）。
+        if (rngMode != "freeze_at_dospell")
+        {
+            draws = rng.Draws.ToList();
+            RngSeam.Restore(original);
+        }
+        long totalDraws = rng.TotalDraws;
+        if (rngMode == "cover_drain" && draws.Count != totalDraws)
+        {
+            throw new FixtureContractViolation(
+                $"[fireball/{label}] cover_drain 记账不完整：Rng.Count={draws.Count} != rng_total_draws={totalDraws}");
+        }
         int hpAfter = target.WAbil.HP;
         foreach (var (who, obj) in byWho)
         {
