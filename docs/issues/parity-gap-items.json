@@ -256,13 +256,18 @@
         "line": 2158,
         "line_end": null
       },
-      "status": "missing",
+      "status": "implemented_unverified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "useitem::tests::matches_oracle_eat_fixture",
+        "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
+        "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
+        "cases": [
+          "eat_ok_stdmode3_shape13_exp_nonlevelup"
+        ],
+        "unit_tests": [
+          "useitem::tests::it08_stdmode3_shape13_getexp_nonlevelup",
+          "tests::it08_eat_exp_book_view_stale_then_real_sync_catches_up"
+        ]
       },
       "cost": "S",
       "deviation": {
@@ -274,7 +279,7 @@
           80
         ]
       },
-      "notes": "oracle 此支无条件成功（必吃掉）"
+      "notes": "非升级支已实现+oracle夹具(eat_ok_stdmode3_shape13_exp_nonlevelup)；Exp 落基础 Abil.Exp(exp_delta)，SM_WINEXP 取基础，宿主 stale->recalc 用例；升级支(HasLevelUp/GetLevelExp/RecalcLevelAbilitys/SM_LEVELUP...)未实现(T-17) => 不标 verified"
     },
     {
       "id": "IT-09",

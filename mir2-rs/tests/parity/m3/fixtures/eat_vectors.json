@@ -1,7 +1,7 @@
 {
   "generator": "mir2-rs/tests/parity/m3/eat-probe",
   "oracle_assembly": "M2Server.dll",
-  "oracle_assembly_sha256": "a7a39e53c3609170604d01fd1cf00824cc0d542626d076f289ee5a05e9543418",
+  "oracle_assembly_sha256": "bf797951dcf1b3055f886f5f0a0e5d68397f016f513a43509530fed0d3b84e2d",
   "oracle_assembly_sha256_note": "\u751F\u6210\u65F6 M2Server.dll \u6784\u5EFA\u4EA7\u7269 hash\uFF08\u968F\u7F16\u8BD1\u5668/SDK/\u73AF\u5883\u53D8\u5316\uFF09\uFF1B\u4EC5\u4F5C\u6EAF\u6E90\uFF0C\u4E0D\u53C2\u4E0E\u5411\u91CF\u6821\u9A8C\u2014\u2014\u6821\u9A8C\u951A\u70B9\u662F oracle_source_sha256",
   "oracle_source_sha256": "51a289e2e584c741d15e2f300cb51b4e5152f68199e2700b852b95c25eef398a",
   "oracle_source_sha256_files": [
@@ -187,6 +187,16 @@
       "mac": 0,
       "dura_max": 7,
       "ani_count": 0
+    },
+    "2018": {
+      "name": "exp_book",
+      "std_mode": 3,
+      "shape": 13,
+      "weight": 1,
+      "ac": 0,
+      "mac": 0,
+      "dura_max": 100,
+      "ani_count": 0
     }
   },
   "cases": [
@@ -233,6 +243,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -312,6 +323,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -367,6 +383,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -446,6 +463,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -501,6 +523,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -580,6 +603,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -635,6 +663,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -705,6 +734,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": true,
@@ -760,6 +794,7 @@
       "inc_spell_before": 4,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -830,6 +865,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 18,
         "inc_spell": 11,
         "user_unlock_durg": false,
@@ -885,6 +925,7 @@
       "inc_spell_before": 4,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -955,6 +996,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 3,
         "inc_spell": 4,
         "user_unlock_durg": false,
@@ -1010,6 +1056,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 7,
@@ -1133,6 +1180,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1233,6 +1285,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -1334,6 +1387,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1412,6 +1470,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -1472,6 +1531,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1550,6 +1614,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -1610,6 +1675,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1688,6 +1758,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -1748,6 +1819,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1826,6 +1902,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -1896,6 +1973,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -1974,6 +2056,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -2034,6 +2117,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2112,6 +2200,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -2182,6 +2271,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2237,6 +2331,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -2307,6 +2402,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2362,6 +2462,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -2450,6 +2551,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2505,6 +2611,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 4950,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -2575,6 +2682,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2630,6 +2742,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -2700,6 +2813,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2778,6 +2896,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -2848,6 +2967,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -2926,6 +3050,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -2996,6 +3121,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -3051,6 +3181,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -3111,6 +3242,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -3189,6 +3325,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -4151,6 +4288,11 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
@@ -5131,6 +5273,7 @@
       "inc_spell_before": 0,
       "user_unlock_durg_before": false,
       "hunger_status_before": 0,
+      "abil_exp_before": 0,
       "item_list_before": [
         {
           "make_index": 1,
@@ -5220,7 +5363,7 @@
         ],
         "added_items": [
           {
-            "make_index": 1097213594,
+            "make_index": 1107235282,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5242,7 +5385,7 @@
             ]
           },
           {
-            "make_index": 1097213595,
+            "make_index": 1107235283,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5264,7 +5407,7 @@
             ]
           },
           {
-            "make_index": 1097213596,
+            "make_index": 1107235284,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5286,7 +5429,7 @@
             ]
           },
           {
-            "make_index": 1097213597,
+            "make_index": 1107235285,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5308,7 +5451,7 @@
             ]
           },
           {
-            "make_index": 1097213598,
+            "make_index": 1107235286,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5330,7 +5473,7 @@
             ]
           },
           {
-            "make_index": 1097213599,
+            "make_index": 1107235287,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5376,13 +5519,18 @@
           "hand_weight": 0,
           "max_hand_weight": 12
         },
+        "abil_exp": 0,
+        "body_luck_before": 0,
+        "body_luck": 0,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
         "inc_health": 0,
         "inc_spell": 0,
         "user_unlock_durg": false,
         "hunger_status": 0,
         "item_list": [
           {
-            "make_index": 1097213594,
+            "make_index": 1107235282,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5404,7 +5552,7 @@
             ]
           },
           {
-            "make_index": 1097213595,
+            "make_index": 1107235283,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5426,7 +5574,7 @@
             ]
           },
           {
-            "make_index": 1097213596,
+            "make_index": 1107235284,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5448,7 +5596,7 @@
             ]
           },
           {
-            "make_index": 1097213597,
+            "make_index": 1107235285,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5470,7 +5618,7 @@
             ]
           },
           {
-            "make_index": 1097213598,
+            "make_index": 1107235286,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5492,7 +5640,7 @@
             ]
           },
           {
-            "make_index": 1097213599,
+            "make_index": 1107235287,
             "index": 2017,
             "dura": 7,
             "dura_max": 7,
@@ -5514,6 +5662,146 @@
             ]
           }
         ],
+        "drain": {
+          "passes": 1,
+          "max_passes": 8,
+          "hit_cap": false
+        }
+      }
+    },
+    {
+      "name": "eat_ok_stdmode3_shape13_exp_nonlevelup",
+      "ctx": {
+        "can_use_item": true,
+        "dead": false,
+        "actor_id": 4660,
+        "no_drug": false,
+        "function_npc_present": false,
+        "red_msg_fcolor": 255,
+        "red_msg_bcolor": 56
+      },
+      "request": {
+        "make_index": 1,
+        "name": "exp_book"
+      },
+      "wabil_before": {
+        "level": 1,
+        "reserved1": 0,
+        "ac": 0,
+        "mac": 0,
+        "dc": 257,
+        "mc": 0,
+        "sc": 0,
+        "hp": 50,
+        "mp": 40,
+        "max_hp": 100,
+        "max_mp": 80,
+        "reserved2": 0,
+        "exp_count": 0,
+        "exp_max_count": 0,
+        "exp": 0,
+        "max_exp": 10000,
+        "weight": 0,
+        "max_weight": 50,
+        "wear_weight": 0,
+        "max_wear_weight": 15,
+        "hand_weight": 0,
+        "max_hand_weight": 12
+      },
+      "inc_health_before": 0,
+      "inc_spell_before": 0,
+      "user_unlock_durg_before": false,
+      "hunger_status_before": 0,
+      "abil_exp_before": 0,
+      "item_list_before": [
+        {
+          "make_index": 1,
+          "index": 2018,
+          "dura": 10,
+          "dura_max": 20,
+          "desc": [
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0,
+            0
+          ]
+        }
+      ],
+      "expect": {
+        "immediate_frames": [
+          {
+            "ident": 635,
+            "recog": 0,
+            "param": 0,
+            "tag": 0,
+            "series": 0
+          }
+        ],
+        "notices": [
+          {
+            "ident": 10115,
+            "w_param": 0,
+            "n_param1": 0,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 131,
+            "late": 0
+          },
+          {
+            "ident": 8075,
+            "w_param": 0,
+            "n_param1": 100,
+            "n_param2": 0,
+            "n_param3": 0,
+            "priority": 139,
+            "late": 0
+          }
+        ],
+        "added_items": [],
+        "wabil": {
+          "level": 1,
+          "reserved1": 0,
+          "ac": 0,
+          "mac": 0,
+          "dc": 257,
+          "mc": 0,
+          "sc": 0,
+          "hp": 50,
+          "mp": 40,
+          "max_hp": 100,
+          "max_mp": 80,
+          "reserved2": 0,
+          "exp_count": 0,
+          "exp_max_count": 0,
+          "exp": 0,
+          "max_exp": 10000,
+          "weight": 0,
+          "max_weight": 50,
+          "wear_weight": 0,
+          "max_wear_weight": 15,
+          "hand_weight": 0,
+          "max_hand_weight": 12
+        },
+        "abil_exp": 100,
+        "body_luck_before": 0,
+        "body_luck": 0.2,
+        "body_luck_level_before": 0,
+        "body_luck_level": 0,
+        "inc_health": 0,
+        "inc_spell": 0,
+        "user_unlock_durg": false,
+        "hunger_status": 0,
+        "item_list": [],
         "drain": {
           "passes": 1,
           "max_passes": 8,

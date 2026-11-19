@@ -358,6 +358,10 @@ internal static class Program
         // `Ability` 是引用类型：`po.WAbil` 与 `wabilPre` 是同一对象，handler 会原地改。
         // 输入快照必须在 invoke **之前**取。
         var wabilBeforeDto = AbilityDto(wabilPre);
+        // IT-08：**基础 `PlayObject.Abil.Exp`**（`GetExp` 只改它，不改 `WAbil.Exp`）与 `BodyLuck`/`BodyLuckLevel` 前值。
+        var abilExpBefore = po.Abil.Exp;
+        var bodyLuckBefore = po.BodyLuck;
+        var bodyLuckLevelBefore = po.BodyLuckLevel;
         mi.Invoke(po, new object[] { requestMakeIndex, requestName });
         SystemShare.FunctionNPC = null;
 
@@ -383,6 +387,7 @@ internal static class Program
             inc_spell_before = incSpellPre,
             user_unlock_durg_before = userUnlockPre,
             hunger_status_before = ctx.hungerStatus,
+            abil_exp_before = abilExpBefore,
             item_list_before = beforeList,
             expect = new
             {
@@ -396,6 +401,12 @@ internal static class Program
                     .Where(it => !beforeMakeIndexes.Contains(it.MakeIndex))
                     .Select(ItemDto).ToArray(),
                 wabil = AbilityDto(po.WAbil),
+                // IT-08：基础 `Abil.Exp`（`GetExp` 落点）与 `BodyLuck`/`BodyLuckLevel` 后值（**追加字段**，旧键不变）。
+                abil_exp = po.Abil.Exp,
+                body_luck_before = bodyLuckBefore,
+                body_luck = po.BodyLuck,
+                body_luck_level_before = bodyLuckLevelBefore,
+                body_luck_level = po.BodyLuckLevel,
                 inc_health = (int)po.IncHealth,
                 inc_spell = (int)po.IncSpell,
                 user_unlock_durg = po.UserUnLockDurg,
@@ -468,6 +479,7 @@ internal static class Program
         templates[2015] = Tpl("funitem_dispatch", 31, 1, 3, aniCount: 5);  // StdMode 31：AniCount!=0 ⇒ UseStdModeFunItem
         templates[2016] = Tpl("unbind_full", 31, 1, 3, aniCount: 0);        // StdMode 31：AniCount==0 ⇒ 解包（容量不足时不吃）
         templates[2017] = Tpl("unbind_item", 0, 0, 4, duraMax: 7);          // IT-18 解包产物（6 件）
+        templates[2018] = Tpl("exp_book", 3, 13, 1, duraMax: 100);          // IT-08 StdMode3/Shape13 经验书（GetExp）
         // 2009 故意不注册 ⇒ 模板缺失分支（稠密表该位置放空名占位 ⇒ `GetStdItem` 返回 null）
 
         // **用真身 `GameItemSystem`**：`GetStdItem`/`GetUpgradeStdItem`/`CopyToUserItemFromName`
@@ -573,6 +585,12 @@ internal static class Program
         cases.Add(RunCase(table, net, "eat_ok_stdmode31_unbind_success", new Ctx(),
             new List<Spec> { S(1, 2016) }, 1, "unbind_full",
             BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80), 0, 0, false));
+        // IT-08：StdMode3/Shape13 `GetExp(DuraMax=100)` **非升级支**（`MaxExp=10000` ⇒ `0+100<10000` 不升级）。
+        // 观测新增 `abil_exp`/`body_luck*`（追加字段）；`WAbil.Exp` 保持陈旧（GetExp 只改 Abil）。
+        var expBookAbil = BaseAbil(hp: 50, mp: 40, maxHp: 100, maxMp: 80);
+        expBookAbil.MaxExp = 10000;
+        cases.Add(RunCase(table, net, "eat_ok_stdmode3_shape13_exp_nonlevelup", new Ctx(),
+            new List<Spec> { S(1, 2018) }, 1, "exp_book", expBookAbil, 0, 0, false));
 
         var templateDtos = new Dictionary<string, object>();
         foreach (var kv in templates)

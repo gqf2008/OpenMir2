@@ -1098,8 +1098,41 @@ mod tests {
             };
 
             let mut item_number = 0;
+            state.extra.body_luck = case["expect"]["body_luck_before"].as_f64().unwrap_or(0.0);
+            state.extra.body_luck_level = case["expect"]["body_luck_level_before"]
+                .as_i64()
+                .unwrap_or(0) as i32;
             let out = use_item(&ctx, &mut state, &mut item_list, &mut item_number);
             let expect = &case["expect"];
+
+            // IT-08：基础 `Abil.Exp` 增量（fixture `abil_exp` vs 顶层 `abil_exp_before`）与 `BodyLuck` 终值（追加字段）。
+            if let (Some(ab), Some(aa)) = (
+                case["abil_exp_before"].as_i64(),
+                expect["abil_exp"].as_i64(),
+            ) {
+                if aa != ab {
+                    assert_eq!(
+                        out.exp_delta,
+                        Some((aa - ab) as i32),
+                        "{name}: exp_delta = 基础 Abil.Exp 增量"
+                    );
+                } else {
+                    assert_eq!(out.exp_delta, None, "{name}: 非 GetExp ⇒ exp_delta=None");
+                }
+            }
+            if let Some(bl) = expect["body_luck"].as_f64() {
+                assert!(
+                    (state.extra.body_luck - bl).abs() < 1e-9,
+                    "{name}: BodyLuck 终值与 oracle 不符"
+                );
+            }
+            if let Some(bll) = expect["body_luck_level"].as_i64() {
+                assert_eq!(
+                    i64::from(state.extra.body_luck_level),
+                    bll,
+                    "{name}: BodyLuckLevel 终值与 oracle 不符"
+                );
+            }
 
             // Z4：golden 有非零期望 ⇒ Rust 必须有非零锚；golden 全零（合法失败例）⇒ 不适用。
             let golden_nonzero = has_nonzero_anchor(case);
