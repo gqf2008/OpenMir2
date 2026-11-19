@@ -533,10 +533,22 @@ ActorId 段 1001../2001../3001..、`M2Share.NetChannel` 旁路、排水「抽空
 | 分支 | 产物 | 状态 |
 |---|---|---|
 | 11/45 雷电 | `golden/magic/lightning-11.json`、`lightning-45.json` | **已产出（C#）**；Rust 未接 |
-| 2 治愈 | 未入库（产物在临时目录） | **停**：暴露表外 RM `8034 RM_MAGHEALING`，等裁定 |
+| 2 治愈 | `golden/magic/healing.json` | **已产出（C#）**；Rust 未接。三支 = heal/full/self（本支**无** AntiMagic 骰） |
 | 13 火符 | 未入库（同上） | **停**：暴露表外 RM `10125 RM_DURACHANGE` → SM 642，等裁定 |
 | 44 灭天火 | 未入库（同上） | **停**：暴露表外 RM `8043 RM_DELAYPUSHED` / `8092 RM_PUSH` → SM 9，等裁定 |
 
 雷电三支 seed 由 `Random(10)` 与 AntiMagic 的关系扫描（miss=1 / edge=5 / hit=13，与火球同）；
 `DrainPasses` = miss 2 / edge 4 / hit 4，`hit_cap=False`；连跑两次除 `delivery` 外逐字节一致。
 新表外 RM 的处置（是否进 §11 映射表）见 opc-07 裁定；**未自行扩大 oracle 补全范围**。
+
+**2 治愈三支的预期差异**（没有 AntiMagic 骰，按行为分支取，seed 固定 1/5/13；不要为凑
+miss/edge/hit 构造假骰）：
+
+| 支 | 目标 | 目标 HP 增量 | `RM_MAGHEALING(8034)` | 训练尾 `RM_MAGIC_LVEXP(10123)`→`SM 640` | `targetObject` |
+|---|---|---|---|---|---|
+| `heal` | 目标(101,100)，HP=50/100 | 采集窗口内 **0**（回血按后续 `Run` 的恢复周期，本采集不跑 `Run`） | 有（p1=nPower） | 有 | 目标对象 |
+| `full` | 目标 HP=100/100 | 0 | 无 | 无（仍 4 抽 + `SM 17/638`） | 目标对象 |
+| `self` | 施法者(100,100)，HP=50/100 | 0 | 有 | 有 | **null**（`DoSpell` 首句把目标置为施法者，坐标也取施法者） |
+
+实测：`heal` RNG `[0,0,0,7,1]`（多一抽 = 训练尾 `TrainSkill(Random(3)+1)`）、`full` `[0,0,0,6]`、
+`self` `[0,0,0,3,0]`；三支 `DrainPasses=2`、`hit_cap=False`；两次连跑除 `delivery` 外逐字节一致。
