@@ -15,6 +15,12 @@
   这些用例不在 scoped 集合内。**结论：凡改"共享判定逻辑"（如 `leveled`）必须跑全量 `--lib` 或显式纳入
   受影响的非目标分支用例；不能只跑目标分支的 scoped 用例。**
 
+> **章程 §6.2 对应（opc-07 2026-11-20 增）**：scoped 须覆盖"被改逻辑**取假值**的反向分支"——改共享
+> 判定逻辑（如 `leveled`）时，要么显式纳入条件为假时的受影响用例、要么跑全量；交付须回答"该条件在
+> 哪些调用方取假值、由哪条用例覆盖"。本条即：`leveled` 在 `exp_delta=None` 的药品(Shape0/1/3)/解包(StdMode31)/
+> 死亡拒绝调用方**取假值**，由 `eat_drug_*`/`eat_sun_water_*`/`eat_stdmode31_unbind_*`/`eat_dead_rejected_*` 覆盖
+> （scoped 未纳入 ⇒ 漏；全量 `--lib` 抓）。
+
 ### `--lib` 三元组（`-p game-svr --lib`）
 `passed 1992 / failed 0 / ignored 25`；**总数 2017（=1992+25+0）**。
 > ignored=25 是 **`-p game-svr --lib` 这一个测试二进制**的数。若在别处见过 49/52，那是**别的 package/测试二进制**
