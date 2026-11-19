@@ -271,3 +271,22 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
    - 负向牙：caster 收 `SM_SPELL(17)` 恒 0；`obs_out` 全空无帧。
 7. **全绿后**：`magic-parity.json` 第 1 条（`SKILL_FIREBALL` `:174`）改
    `status=verified`、`basis=semantic`、`test=<用例名>`；跑 `coverage-report.ps1` 自检后报数。
+
+## 15. 分段采集的 RNG 口径（裁定：选方案 1，带降级）
+
+**问题**：C# 侧 `DoSpell` 是**直接调用**、无世界 tick；Rust 侧若用完整 `world.tick()` 推时钟，
+其它系统抽 RNG 会插队，逐次比较会红得没有意义。
+
+**裁定（opc-07 倾向 + 我同意）：方案 1「最小世界」**——
+- 第一段：**直接调用** `handle_spell_cmd(_with_magic)`（不 tick）；
+- 第二段：**只调用延时结算系统**，不跑整条 `HeadRunner`。已确认可直接调用的入口：
+  `mir2_world_bevy::world::sim_self_deliver_stage_system`（`world.rs:2864`，`pub fn`），
+  延时魔法的结算体在 `crates/world-bevy/src/slave.rs:1970` 的 `deliver_delay_magic_impl` /
+  `DelayMagicDelivery`（`slave.rs:1558`）。
+- 时钟推进：只改世界时钟字段（或把 `DeliveryTime` 直接置为已到期），**不跑 tick 循环**。
+
+**降级条款（必须写死，防止方案 1 不可行时悄悄走样）**：若最小世界在**不改生产代码**的前提下
+装不起来（例如延时结算必须经由宿主某段只存在于 tick 的接线），则退到**方案 3「账本分段」**：
+记录"段 1（施法内）/ 段 2（延时结算）"两次采样，并加断言「两段之间 RNG 只被 magic 路径消耗」
+（用记账器在段边界取快照、空段或非 magic 消耗即红）。**方案 2（独立 RNG 实例）永不采用**——
+那是产品语义改动，除非登记 D-* 并有对拍证明。
