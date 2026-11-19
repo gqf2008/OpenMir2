@@ -1,6 +1,7 @@
 # openmir2-own-binary-without-stamp
 
-> 状态：**已登记，10k 窗口之后再做**（涉及重构建/补戳或调整部署集，会改变冻结件）。
+> 状态：**2026-11-20 只读复核：原缺陷已在 2026-11-19 的 M9 收口（有戳、在 9 件冻结集里）；本卡转为
+> 「结构性闸门补齐 + 陈旧文案清理」**，执行窗口由 Leader 排（详见文末「现状核实与准备」）。
 > 来源：卡 `openmir2-deps-check-deploy-dir` 复审（opc-07，2026-11-19）。
 
 ## 现象
@@ -98,3 +99,107 @@ DBSrv 的戳组**不在** `w-rust-gate.ps1`（那个脚本只管 Rust 四件 exe
 - `deps_manifest check --deploy-dir runtime/DBSrv` 仍 `DEPS_GREEN`（`dbsrv.storage.mongodb.dll`
   在 `SELF_BUILT` 名单内，不参与 NuGet 映射）；
 - 10k 冻结件（`release-ctrl-96422fd5` / `release-exp-c3d3c271`）互不影响：那两组是窗口期快照。
+
+## 现状核实与准备（2026-11-20，只读；未动构建/部署/冻结件）
+
+> 结论先行：原卡描述的具体缺陷（MongoDB 插件无戳、不在冻结/闸门清单）**已在 2026-11-19 的
+> M9（`572a0b8a`）收口**——实物与戳、冻结副本、两组 E:/UserFleet 脚本三者一致。本次复核的
+> 产出是**剩余结构性缺口**与改法/牙/计划；不重建、不替换任何部署件。
+
+### 1. 现状核实（逐件；命令与原文）
+
+命令：
+- `ls -la E:/UserFleet/m1-stack/runtime/DBSrv/`
+- `sha256sum <file>` / `cat <file>.build.json`
+- `powershell -File tools/orchestration/stamp-binaries.ps1 -Check -BinDir E:/UserFleet/m1-stack/runtime/DBSrv -RepoRoot <repo> -Names DBSrv.exe,DBSrv.dll,DBSrv.Storage.MySQL.dll,DBSrv.Storage.dll,DBSrv.Storage.MongoDB.dll,OpenMir2.dll -RequireAll`
+- `python -I -B tools/deploy/deps_manifest.py check --projects "src/DBSrv/DBSrv.csproj;src/Storeages/DBSvr.Storage.MySQL/DBSvr.Storage.MySQL.csproj" --manifest E:/UserFleet/m1-stack/deps/DBSrv.deps.json --deploy-dir E:/UserFleet/m1-stack/runtime/DBSrv`
+
+自家 DLL（6 件；其余为第三方，按设计无戳）：
+
+| 件 | size | 侧车戳 | head | 冻结副本（`release-csharp-m9-572a0b8a`） |
+|---|---|---|---|---|
+| `DBSrv.exe` | 151552 | 有 | `572a0b8a…` | 有（sha 一致） |
+| `DBSrv.dll` | 67584 | 有 | `572a0b8a…` | 有 |
+| `DBSrv.Storage.dll` | 12288 | 有 | `572a0b8a…` | 有 |
+| `DBSrv.Storage.MySQL.dll` | 64512 | 有 | `572a0b8a…` | 有 |
+| `DBSrv.Storage.MongoDB.dll` | 11776 | **有**（2026-11-19 18:31 产） | `572a0b8a…` | **有**（sha `38c7a440…` 与部署件相同） |
+| `OpenMir2.dll` | 245760 | 有 | `572a0b8a…` | 有 |
+
+原文：
+- `stamp-binaries -Check … -RequireAll` ⇒ `GREEN 6 stamps verified`（rc=0；六件逐个 `STAMP_OK`）。
+- `deps_manifest check --deploy-dir runtime/DBSrv` ⇒ `DEPS_GREEN packages=46 files=1030`（rc=0；
+  `dbsrv.storage.mongodb.dll` 在 `SELF_BUILT` 名单内，不参与 NuGet 映射）。
+- E:/UserFleet 侧两处清单均已含 MongoDB：`start-m1-stack.ps1` 的 `$StampGroups` = 6 件；
+  `w-freeze-release.ps1` 的 `'DBSrv'` 组 = 6 件（6+3=9 件，两组 `LoginSrv` 3 件已全部有戳）。
+- 冻结产物 `release-csharp-m9-572a0b8a`：9 binaries + 9 `.build.json`（`SHA256SUMS` 18 行、
+  `SHA256SUMS.sha256` 18 条），`PROVENANCE.txt` 记录构建命令（含 MongoDB 插件）与
+  `git status --porcelain ⇒ 0`。
+- 旧冻结 `release-1af56267/DBSrv` 只有 5 件——那是历史口径，保留不动。
+
+### 2. 剩余缺口（本次复核发现，均未修）
+
+- **R1 冻结脚本计数硬编码**：`E:/UserFleet/w-freeze-release.ps1` 的 PROVENANCE 文案仍写
+  「8 binaries + 8 .build.json（16 个文件）」，而组已是 9 件、m9 实际产出 18 行。下次冻结会
+  写出**错误计数**（内容拷对了，自述错）。
+- **R2 仓库内窗口/卫生脚本仍是 3 件名单**：`tools/window/start-csharp.ps1` 与
+  `tools/hygiene/assert_three_way_aligned.ps1` 只点名 `DBSrv.exe / DBSrv.dll /
+  DBSrv.Storage.MySQL.dll`，不含 `DBSrv.Storage.dll` / `DBSrv.Storage.MongoDB.dll` /
+  `OpenMir2.dll`。仓库侧窗口门禁与起栈门（6 件）覆盖不一致。
+- **R3 未入清单的自家 DLL 完全不可见（实测）**：在临时副本放入无戳
+  `DBSrv.Storage.LocalFile.dll`，用 6 件名单跑 `-Check -RequireAll` 仍 `GREEN 6 stamps
+  verified`（rc=0）；只有把文件名列进 `-Names` 才会 `MISSING_STAMP`。这正是原缺陷的生成
+  机制（名单靠人维护），未修。
+- **R4 文档陈旧**：`docs/binary-provenance-stamp-20261115.md` 仍写「DBSrv 三件套」与
+  「LoginSrv 同法可纳入，尚未做」，与现状（DBSrv 6 件、LoginSrv 3 件、均已冻结）不符。
+
+### 3. 改法设计（不实施）
+
+① **stamp-binaries 的清单扩展与覆盖**
+- 新增 `-OwnGlobs`（或 `-RequireStampedGlob`）：对 BinDir 里匹配自家模式（`DBSrv*.dll`、
+  `DBSrv.exe`、`OpenMir2.dll`、`LoginSrv*.dll` 等）的每个文件，要求同时满足「在 `-Names`
+  里」且「戳自洽」；未列/无戳 ⇒ `RED UNLISTED_OWN_BINARY`（rc=1）。这是 R3 的根治：把
+  「名单覆盖」从人工记忆变成机判。
+- **清单单一来源**：把 DBSrv/LoginSrv 两组抽到共享 `stamp-groups.psd1`（E:/UserFleet），
+  `start-m1-stack.ps1` 与 `w-freeze-release.ps1` dot-source 同一份；仓库侧
+  `tools/window/start-csharp.ps1` 用同一份或 `-OwnGlobs` 等价覆盖（消 R2）。
+② **冻结清单与自述**
+- 组内容已 9 件；把 `PROVENANCE` 的文件计数改为**动态计算**（`$groups.Values.Count` 求和 ×2），
+  并加自检：`PROVENANCE files=N` 必须等于本次实际拷贝条数，否则 rc=2（消 R1）。
+- 「8→9」的文字口径按动态计数输出，不再手写。
+③ **分工（谁管什么，避免重叠）**
+- `stamp-binaries` = **身份与覆盖**：来源提交 / sha / size / mtime / 全套自家件是否都在册；
+- `deps_manifest --deploy-dir` = **依赖闭包**：NuGet 映射、`UNCOVERED_DEPLOYED`、
+  `SELF_BUILT` 豁免；**不**承担 provenance，也不要求有戳；
+- `w-freeze-release.ps1` = **交付副本**：只读拷贝 + 断 head 一致 + 计数自检；
+- `start-m1-stack.ps1` = **起栈门**：调 `stamp-binaries -Check -RequireAll`（fail-closed）。
+- 明确不重叠：deps 不看戳；stamp 不看 NuGet 映射；冻结只看 head 一致与计数。
+
+### 4. 牙设计
+
+- **T1（删戳必红，已实测）**：临时副本删 `DBSrv.Storage.MongoDB.dll.build.json` ⇒
+  `stamp-binaries -Check -RequireAll` rc=1，原文：
+  `RED …\DBSrv.Storage.MongoDB.dll MISSING_STAMP` / `RED 1 problem(s) across 6 binaries`。
+- **T2（未入清单必须红，设计）**：加 `-OwnGlobs DBSrv*.dll,OpenMir2.dll,LoginSrv*` 后，
+  在临时副本放无戳 `DBSrv.Storage.LocalFile.dll` ⇒ rc=1、`UNLISTED_OWN_BINARY`。
+  **对照（已实测）**：同一目录在**加参数前** rc=0、`GREEN 6 stamps verified`——证明当前
+  盲区真实存在；把该件列进 `-Names` 时才 `MISSING_STAMP`。
+- **T3（计数自检必红，设计）**：把冻结脚本的 PROVENANCE 计数写死回 8，冻到临时目录 ⇒
+  自检 `COUNT_MISMATCH 8 != 18`（rc=2），不产出「自述正确」的冻结目录。
+- **T4（保留回证）**：改一个 `.build.json` 的 head ⇒ 冻结脚本「戳 head 不一致」rc=2。
+
+### 5. 执行计划（待 Leader 排窗口）
+
+- **窗口**：小型工具窗口（单车道 15–20 分钟）。**不需要重建 C# 产物**——实物与戳已在 M9
+  收口；本次只改工具/清单/文案。若 Leader 要求戳头跟到当前 master，则需另排 `dotnet build`
+  + 产戳 + 部署替换 + 重冻结（本卡默认不做）。
+- **会动的件**：仓库内 `tools/orchestration/stamp-binaries.ps1`、`tools/window/start-csharp.ps1`、
+  `tools/hygiene/assert_three_way_aligned.ps1`、文档；E:/UserFleet 的
+  `start-m1-stack.ps1`、`w-freeze-release.ps1`、新增 `stamp-groups.psd1`。
+- **不原地改冻结件**：既有 `release-1af56267`、`release-csharp-m9-572a0b8a`、10k 两组
+  （`release-ctrl-96422fd5` / `release-exp-c3d3c271`）保持原样；若需新冻结，产出**新目录**
+  `release-csharp-<head8>`。
+- **回滚**：仓库内改动走 git（独立分支，不合并即回滚）；E:/UserFleet 脚本改动前保存
+  `.bak-<ts>` 副本；部署目录不触碰。
+- **验证顺序**：先让 T2/T3 红（证明牙能咬）→ 实现 → T1/T2/T3 绿 → `stamp-binaries -Selftest`
+  → `start-m1-stack.ps1` 的 GateOnly 路径（若可用）全绿 → 下一次冻结的计数自检通过。
+
