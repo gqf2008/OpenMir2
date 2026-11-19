@@ -151,7 +151,7 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 - 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
 - **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
   实跑帧/JSON 产物为准。
-> 来源：QA 签署摘要 `docs/issues/qa-merged-cards-signoff-20261119.md`。
+> 来源：QA 签署摘要 —— 公共路径 `E:/UserFleet/qa/qa-merged-cards-signoff-20261119.md`。
 
 ### 可独立重放的篡改（T1–T4）
 
@@ -166,14 +166,12 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 - **C4 `built_at`（裁定正文，引用不指向未合并分支）**：戳的 `built_at` 必须等于**二进制自报**的
   `built_at`（单一来源）；文件 mtime 只作元数据、**不参与比对**；闸门断言"自报 == 戳"。
   M9 四件因自报与戳相差 5 秒判 `CONDITIONAL`（身份可证、语义待统一），不算 FAIL。
-- **C5 `SHA256SUMS`（已补实）**：两份冻结目录均为**双清单** —— `E:/UserFleet/release-csharp-m9-572a0b8a/`
-  与 `E:/UserFleet/release-m9-572a0b8a/`；标准清单 `SHA256SUMS.sha256`（`sha256sum -c` 全 OK；
-  Rust 目录 8 行、C# 目录 18 行），历史 `SHA256SUMS.txt` 不改写；用途差异见各自
-  `PROVENANCE.txt` 的 `sums_files=` 字段。
-- **C3 构建命令与仓库状态（已补实）**：Rust 冻结目录 `E:/UserFleet/release-m9-572a0b8a/PROVENANCE.txt`
-  含 `build_cmd=`（`cargo build --release -p game-svr -p game-gate -p login-gate -p sel-gate`）、
-  `build_cwd=`、`toolchain=`、`git_status_porcelain=(0 行)`。**口径约定（本仓统一）**：
-  `git_status_porcelain=(0 行)` 表示 `git status --porcelain` 输出为空（行数 0），用"行数"写法，
-  不贴空原文（空输出无法形成可读原文）；C# 侧命令与状态见 `E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`。
+- **C5 `SHA256SUMS`（已补实）**：两份冻结目录 `E:/UserFleet/release-csharp-m9-572a0b8a/` 与
+  `E:/UserFleet/release-m9-572a0b8a/` 均为双清单；`sha256sum -c` 的结果与 rc **见验证日志**
+  `E:/UserFleet/evidence-cardfix-20261119/sums-verify.log`（卡面不写行数/OK 数）；历史
+  `SHA256SUMS.txt` 不改写；用途差异见各自 `PROVENANCE.txt` 的 `sums_files=` 字段。
+- **C3 构建命令与仓库状态（已补实）**：两目录的 `PROVENANCE.txt` 均含 `build_cmd=` / `build_cwd=` /
+  `toolchain=` / `git_status_porcelain_measure=` 字段（**字段值照抄，卡面不写数字**）；
+  C# 侧实跑命令与仓库状态见 `E:/UserFleet/evidence-cardfix-20261119/RUNS.txt`。
 - **C6 章程引用**：权威 QA 章程在 **`E:\OPC\docs\qa-charter.md`（§10–§12）**，不在本仓库；
   卡面凡引"章程 §N"均以此文件为准。
