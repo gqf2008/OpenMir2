@@ -288,6 +288,49 @@ Rust 用例 `quest_check_conditions_match_oracle_ledger`（`cargo test -p game-s
   - ⇒ 这是**真实差异**：坏脚本在 oracle 里是「整批中止」，在 Rust 里是「单条失败、其余照常」。
     本条**不计入 QT-05..09 的 verified**；修法（让 Rust 也中止）会改变 Rust 现状，需 opc-07 裁定。
 
+### 10.8 A1 落地（2026-11-20，实现完成；不合 master，待 opc-07 排 QA）
+
+**实现落点**
+- `NpcHost::load` 的 `Err` = `Box<NpcLoadAbort { panic, partial, failing }>`
+  （符号锚 `NpcHost::load`、`NpcLoadAbort`，`bins/game-svr/src/npc.rs`）：中止时保留异常前的前缀宿主
+  与失败脚本身份（`chr_name/file_path/script_name/reason`）。
+- `WorldStartGate`（符号锚 `WorldStartGate`，`bins/game-svr/src/lib.rs`）三态 `Booting/Ready/Aborted`：
+  - `sim_loop` 序言末尾（首个 tick 之前）`mark_ready()`；NPC 装载中止 ⇒ `abort()`（**不再 `panic!`**），
+    前缀宿主照常写入 `npc_host`（oracle 的异常只中止后续装载，已 `new` 的 NPC 留在内存）。
+  - 网关 accept 循环：`world_start.admitted()`（Booting 挂起）⇒ `Aborted` 时按 oracle
+    `src/M2Server/Net/TCP/TCPNetChannel.cs:73-78` 打 `服务器未就绪: {peer}` 并关 socket（不分配槽位）。
+  - sim 事件排水：`Aborted` 下拒绝 `Opened/Command/CertificationPending/LoadDbRequest`
+    （「入世界必须 Ready」；sim 序言结束前不处理事件 ⇒ 本处只可能见 Ready/Aborted）。
+
+**最小口径 / 未建模（登记 D-21）**
+- oracle 在 `StartReady` 未置的**启动窗口**也拒网关连接（`src/M2Server/Net/TCP/TCPNetChannel.cs:73-78`）；本仓 listener 早于
+  世界初始化 bind，`Booting` 窗口内**挂起**（不拒不受理）——玩家可见差异仅「连接时机」，不是玩法。
+- `src/GameSrv/TimedService.cs:61` 的未就绪早退与 `src/M2Server/Net/TCP/TCPNetChannel.cs:414` 的 `Run` 未建模（本仓无等价物；
+  中止后 tick 继续跑，但无会话可进）。
+- oracle 中位于 `WorldEngine.Initialize()` 之后的 `GuildMgr/CastleMgr/AutoBot` 与
+  `src/GameSrv/GameApp.cs:248` 的 `StartReady = true` 同属 try/catch 尾部；本仓次序不同且其后各步不可失败
+  ⇒ 「就绪位 = 序言末尾」的最小口径以 **NPC 装载中止为唯一失败源**。
+
+**三条验收（证据路径；数字以产物为准）**
+1. ①**前缀集合逐条相等（含失败脚本名）**：用例
+   `quests_abort_scope.rs::abort_scope_prefix_set_matches_oracle_ledger`；金标准
+   `mir2-rs/tests/parity/m3/quests/vectors/quest_abort_scope_ledger.tsv`（探针 `--abort-scope` 生成，
+   2 好 1 坏夹具 `quests_abort_good_a/bad/good_b`；原始产物 `E:/UserFleet/qa/quests/qt01/abort_scope/`）。
+2. ②**中止后不对外服务（准入被拒）**：用例
+   `relay.rs::world_init_abort_refuses_admission_and_keeps_prefix_npcs`——真二进制 + 假网关，
+   **Booting 窗口内建连** → 中止后读到 EOF、无 `GM_SERVERUSERINDEX`，日志 `服务器未就绪: <peer>`；
+   同一行 ERR 可观测「保留异常前已装载的前缀 NPC 1 条（ChrName=QManage）」⇒ `partial` 在生产路径被使用。
+3. ③**正常路径不变**：同一用例正常配置半段（`GM_OPEN` ⇒ `GM_SERVERUSERINDEX`）+ 既有 `relay` 全绿 +
+   `cargo test -p game-svr --lib` 全绿（三元组原文见证据目录）。
+
+**两颗牙（红→绿；原文 `E:/UserFleet/qa/quests/qt01/abort_scope/`）**
+- 牙 A（致命分支改回「记录后继续」）：`mutation_a.log` —— ① 用例红（`expect_err` 拿到 `Ok`，
+  `good_b` 也被装载）。
+- 牙 B（中止后仍置就绪）：`mutation_b.log` —— ② 用例红（无「世界初始化中止」落账）；
+  加强 B2（accept 不检查准入，`admitted()` 恒放行）：`mutation_b2.log` —— 红在「中止后必须读到 EOF」。
+- 还原：`git checkout -- <path>` 后 `git hash-object` 与 `HEAD:<path>` 逐字节相等（章程 §15 例外）。
+
+
 ## 12. 自清理留痕
 
 - **2026-11-20（QT-02 提交 `7df84717` 前后）**：探针参数一次未被识别，`--checks` 被当作输出目录，
@@ -315,4 +358,4 @@ Rust 用例 `quest_check_conditions_match_oracle_ledger`（`cargo test -p game-s
 4. 验收三条：①前缀集合逐条相等（含失败脚本名）②中止后准入被拒（观测）③正常路径不变；
    牙 A：致命分支改回"记录后继续" ⇒ ①红；牙 B：中止后仍置就绪/仍放行准入 ⇒ ②红。
 
-**状态**：设计已定；`37ef010c1` 的 `Result` 形态保留，部分状态与就绪门**尚未实现**。
+**状态**：设计已定；`37ef010c1` 的 `Result` 形态保留。**部分状态与就绪门已实现**，见 §10.8（待 QA）。
