@@ -282,7 +282,18 @@ namespace GameGate.Services
                 case Grobal2.GM_DATA:
                     unsafe
                     {
-                        int packetLen = packetHeader.PackLength < 0 ? -packetHeader.PackLength : packetHeader.PackLength;
+                        int rawLength = packetHeader.PackLength;
+                        int packetLen = rawLength < 0 ? -rawLength : rawLength;
+                        // 卡 openmir2-gate-packlen-validation：包头长度是**不可信输入**。
+                        // 越界时不得走到 MemoryCopy 的抛异常路径（异常在收包回调里 ⇒ 该连接停读）；
+                        // `int.MaxValue` 还会让 `new byte[]` OOM。校验失败 ⇒ WRN + 关闭上游连接，不拷贝。
+                        if (!GatePacketLength.TryValidate(packetLen, data.Length, out string reason))
+                        {
+                            LogService.Warn(
+                                $"游戏网关[{EndPoint}] 引擎帧头长度非法（{reason}，raw PackLength={rawLength}），关闭连接");
+                            _clientSocket.Close();
+                            return;
+                        }
                         ServerSessionMessage sendMsg = new ServerSessionMessage();
                         sendMsg.SessionId = packetHeader.SessionId;
                         sendMsg.BuffLen = (short)packetHeader.PackLength;
