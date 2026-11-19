@@ -85,12 +85,17 @@ public static class Program
         // 原版日志门面是 public static ILogger（`src/OpenMir2/LogService.cs:9`）；离线进程给一个无 sink 的实例，
         // 避免错误路径（如地图缺失）因 Logger 为 null 抛 NRE 掩盖真实原因。
         OpenMir2.LogService.Logger = new Serilog.LoggerConfiguration().CreateLogger();
+        // 冻结配置必须**早于**任何  静态初始化（否则 Exps.conf 的 NeedExps 读成全 0，
+        // 登录序  与冻结表复算全部失真）。缺源时留给各模式自己报 PREREQ。
+        EnsureConfFiles(out _, out _);
         // 帧编码路径会读城堡/攻城区（`PlayObject.GetChrColor` → `SystemShare.CastleMgr.InCastleWarArea`）；
         // 离线进程给一个空城堡管理器（`CastleManager` 参数构造，城堡列表为空 ⇒ 恒返回 null）。
         if (SystemModule.SystemShare.CastleMgr == null)
         {
             SystemModule.SystemShare.CastleMgr = new M2Server.Castle.CastleManager();
         }
+        try
+        {
         if (args.Contains("--rng-selftest"))
         {
             return RngSelfTest();
@@ -102,6 +107,7 @@ public static class Program
         if (args.Contains("--case") && args.Length > Array.IndexOf(args, "--case") + 1)
         {
             var name = args[Array.IndexOf(args, "--case") + 1];
+            if (name == "fixture-selftest") return FixtureSelfTest();
             if (name == "fireball") return FireballCase();
             if (name == "lightning11") return AntiMagicBatch(new MagicSpec { Key = "lightning-11", MagicId = 11, MagicName = "Lightening" });
             if (name == "lightning45") return AntiMagicBatch(new MagicSpec { Key = "lightning-45", MagicId = 45, MagicName = "Lightening45" });
@@ -118,6 +124,12 @@ public static class Program
             if (name == "bigcloak") return BehaviorBatch(new MagicSpec { Key = "bigcloak", MagicId = 19, MagicName = "BigCloak", ArmRingAmulet = true, StepDrainMs = 100 });
             if (name == "fireboom") return BehaviorBatch(new MagicSpec { Key = "fireboom", MagicId = 23, MagicName = "FireBoom" });
             Console.Error.WriteLine("未知用例: " + name);
+            return 2;
+        }
+        }
+        catch (FixtureContractViolation ex)
+        {
+            Console.Error.WriteLine("RED FIXTURE_CONTRACT " + ex.Message);
             return 2;
         }
         Console.Error.WriteLine("用法: MagicGolden --rng-selftest   （魔法用例生成器在卡 openmir2-magic-parity 后续提交）");
@@ -139,7 +151,8 @@ public static class Program
             var src = Path.Combine(confDir, n);
             var dst = Path.Combine(baseDir, n);
             if (!File.Exists(src)) { missing.Add(src); continue; }
-            if (!File.Exists(dst)) { File.Copy(src, dst); copied.Add(n); }
+            // 冻结配置必须非空：0 字节的旧副本（构建产物/读回写坏）会让  全 0 ⇒ 重拷。
+            if (!File.Exists(dst) || new FileInfo(dst).Length == 0) { File.Copy(src, dst, overwrite: true); copied.Add(n); }
         }
         return missing.Count == 0;
     }
@@ -513,6 +526,22 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         /// 该值写进 golden 的 `Fixture.wait_ms`，Rust 侧推进量取同值。
         /// </summary>
         public int WaitMs = 1200;
+        /// <summary>契约（M51）：是否走登录序重算（true = target/caster 同标准；默认 true）。</summary>
+        public bool LoginOrder = true;
+        /// <summary>契约（M51）：`cover_drain`（默认，现行行为）| `freeze_at_dospell`（仅 legacy）。</summary>
+        public string RngMode = "cover_drain";
+        /// <summary>契约（M51）：`reachable` | `unverified` | `unreachable`（无默认，逐 case 显式）。</summary>
+        public string Reachability = "reachable";
+        /// <summary>契约（M51）：`construction` 的 Job（缺省战士）。</summary>
+        public OpenMir2.Enums.PlayerJob Job = OpenMir2.Enums.PlayerJob.Warrior;
+        /// <summary>`construction.equipment`（本批一律空：无装备登录序）。</summary>
+        public string[] Equipment = Array.Empty<string>();
+        /// <summary>`construction.skills`（本批写魔号名）。</summary>
+        public string[] Skills = Array.Empty<string>();
+        /// <summary>`scenario_note`（`login_order=false` 必填）。</summary>
+        public string ScenarioNote = "";
+        /// <summary>`unreachable` 时的依据（门 4）。</summary>
+        public string UnreachableEvidence = "";
     }
 
     /// <summary>
@@ -651,6 +680,116 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         return EmitGolden(spec, cases);
     }
 
+    /// <summary>把实跑状态装进契约输入（平铺值取 target 的实时字段）。</summary>
+    private static FixtureContract.FixtureInput BuildContractInput(MagicSpec spec, RecordingPlayObject target)
+    {
+        return new FixtureContract.FixtureInput
+        {
+            Label = spec.Key,
+            RngMode = spec.RngMode,
+            LoginOrder = spec.LoginOrder,
+            Reachability = spec.Reachability,
+            AntiMagic = target.AntiMagic,
+            TargetLevel = target.Abil.Level,
+            TargetHp = target.WAbil.HP,
+            TargetMaxHp = target.WAbil.MaxHP,
+            Derived = FixtureContract.Recompute(spec.Job, (byte)spec.TargetLevel),
+            Construction = new FixtureContract.Construction
+            {
+                Job = spec.Job,
+                Level = (byte)spec.TargetLevel,
+                Equipment = spec.Equipment.ToList(),
+                Skills = spec.Skills.Length == 0 ? new List<string> { spec.MagicName } : spec.Skills.ToList(),
+            },
+            ScenarioNote = spec.ScenarioNote,
+            UnreachableEvidence = spec.UnreachableEvidence,
+            LegacyArtifact = spec.RngMode == "freeze_at_dospell",
+            LegacyReason = spec.RngMode == "freeze_at_dospell" ? "rng ledger incomplete (drain-stage draws omitted)" : null,
+        };
+    }
+
+    /// <summary>
+    /// `--case fixture-selftest`：七道门逐条（每条都要 rc=2 的违规输入）+ 一个合法输入。
+    /// </summary>
+    private static int FixtureSelfTest()
+    {
+        if (!EnsureConfFiles(out _, out var missing))
+        {
+            Console.Error.WriteLine("CONF_MISSING " + string.Join(",", missing));
+            return 2;
+        }
+        int failures = 0;
+        void ExpectRed(string name, Action<FixtureContract.FixtureInput> mutate)
+        {
+            var ok = BaseInput();
+            mutate(ok);
+            try
+            {
+                FixtureContract.Validate(ok);
+                Console.Error.WriteLine($"FIXTURE_SELFTEST FAIL {name} :: 期望 rc=2 的输入通过了校验");
+                failures++;
+            }
+            catch (FixtureContractViolation)
+            {
+                Console.Error.WriteLine($"FIXTURE_SELFTEST PASS {name} (rc=2)");
+            }
+        }
+
+        // 合法输入：登录序 L20 无装备（reachable）。
+        var legal = BaseInput();
+        FixtureContract.Validate(legal);
+        Console.Error.WriteLine("FIXTURE_SELFTEST PASS legal-login-order");
+
+        ExpectRed("missing-rng_mode", f => f.RngMode = "");
+        ExpectRed("missing-reachability", f => f.Reachability = "");
+        ExpectRed("missing-construction", f => f.Construction = null);
+        ExpectRed("illegal-login+freeze", f => f.RngMode = "freeze_at_dospell");
+        ExpectRed("login-false-no-note", f =>
+        {
+            f.LoginOrder = false;
+            f.ScenarioNote = "";
+        });
+        ExpectRed("unreachable-no-evidence", f => f.Reachability = "unreachable");
+        ExpectRed("legacy-mismatch", f => f.LegacyArtifact = true);
+        ExpectRed("freeze-no-reason", f =>
+        {
+            f.LoginOrder = false;
+            f.ScenarioNote = "synthetic";
+            f.RngMode = "freeze_at_dospell";
+            f.LegacyReason = "";
+        });
+        ExpectRed("derived-forged", f => f.Derived.MaxHp += 1);
+        ExpectRed("reachable-flat-mismatch", f => f.AntiMagic = 3);
+
+        Console.Error.WriteLine(failures == 0 ? "FIXTURE_SELFTEST OK" : ("FIXTURE_SELFTEST RED failures=" + failures));
+        return failures == 0 ? 0 : 1;
+    }
+
+    private static FixtureContract.FixtureInput BaseInput()
+    {
+        var derived = FixtureContract.Recompute(OpenMir2.Enums.PlayerJob.Warrior, 20);
+        return new FixtureContract.FixtureInput
+        {
+            Label = "selftest",
+            RngMode = "cover_drain",
+            LoginOrder = true,
+            Reachability = "reachable",
+            AntiMagic = 1,
+            TargetLevel = 20,
+            TargetHp = derived.MaxHp,
+            TargetMaxHp = derived.MaxHp,
+            Derived = derived,
+            Construction = new FixtureContract.Construction
+            {
+                Job = OpenMir2.Enums.PlayerJob.Warrior,
+                Level = 20,
+                Equipment = new List<string>(),
+                Skills = new List<string> { "FireBall" },
+            },
+            ScenarioNote = "",
+        };
+    }
+
     private static int EmitGolden(MagicSpec spec, FireballResult[] cases)
     {
         var outObj = new
@@ -765,6 +904,10 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             env.AddMapObject(p.CurrX, p.CurrY, SystemModule.Data.CellType.Play, p.ActorId, p);
         }
 
+        // —— 夹具契约（M51）：construction/derived 由 oracle 复算，七道门任一不过 ⇒ FixtureContractViolation（rc=2）。
+        var contract = BuildContractInput(spec, target);
+        FixtureContract.Validate(contract);
+
         var original = RngSeam.Capture();
         var rng = RngSeam.Install(seed);
         var um = new OpenMir2.Packets.ClientPackets.UserMagic
@@ -783,6 +926,13 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
         short doX = targetNull ? caster.CurrX : target.CurrX;
         short doY = targetNull ? caster.CurrY : target.CurrY;
         bool ok = M2Server.Magic.MagicManager.DoSpell(caster, um, doX, doY, targetNull ? null : target);
+        List<long> draws = new();
+        if (spec.RngMode == "freeze_at_dospell")
+        {
+            // legacy 口径：漏记排水阶段抽取（只作审计件；`legacy_artifact=true`）。
+            draws = rng.Draws.ToList();
+            RngSeam.Restore(original);
+        }
         // **`Rng` = DoSpell + 排水的全部抽取**（种子的 seam 直到排水结束才还原）：
         // 23 的 `RM_MAGSTRUCK` 是**即时**投递（`MagBigExplosion` 直接 `SendMsg`），它的
         // `R(1000)`/MSD/STD 抽发生在排水的 `Operate` 里；若像旧口径那样在 DoSpell 后就还原，
@@ -909,8 +1059,11 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
             }
         }
         Console.Error.WriteLine($"DRAIN_PASSES {spec.Key}/{label} passes={drainPasses} hit_cap={drainPassesHitCap}");
-        var draws = rng.Draws.ToList();
-        RngSeam.Restore(original);
+        if (spec.RngMode != "freeze_at_dospell")
+        {
+            draws = rng.Draws.ToList();
+            RngSeam.Restore(original);
+        }
         int hpAfter = target.WAbil.HP;
         var receivers = new List<ReceiverResult>();
         foreach (var (who, obj) in byWho)
@@ -929,10 +1082,36 @@ private static List<object> ParseFrames(List<(int GateIdx, byte[] Data)> buffers
                 caster_level = spec.CasterLevel,
                 caster_mc = spec.CasterMc,
                 caster_sc = spec.CasterSc,
-                target_level = spec.TargetLevel,
-                target_hp = targetHp,
-                target_max_hp = spec.TargetMaxHp,
-                anti_magic = spec.AntiMagic,
+                rng_mode = spec.RngMode,
+                login_order = spec.LoginOrder,
+                reachability = spec.Reachability,
+                target_level = (int)target.Abil.Level,
+                target_hp = (int)target.WAbil.HP,
+                target_max_hp = (int)target.WAbil.MaxHP,
+                anti_magic = (int)target.AntiMagic,
+                derived = new
+                {
+                    max_hp = contract.Derived.MaxHp,
+                    max_mp = contract.Derived.MaxMp,
+                    dc = contract.Derived.Dc,
+                    ac = contract.Derived.Ac,
+                    mac = contract.Derived.Mac,
+                    max_exp = contract.Derived.MaxExp,
+                },
+                construction = new
+                {
+                    job = spec.Job.ToString(),
+                    level = (int)spec.TargetLevel,
+                    equipment = spec.Equipment,
+                    skills = spec.Skills.Length == 0 ? new[] { spec.MagicName } : spec.Skills,
+                },
+                scenario_note = string.IsNullOrWhiteSpace(spec.ScenarioNote)
+                    ? (spec.LoginOrder
+                        ? "登录序（UserLogon→RecalcLevelAbilitys+RecalcAbilitys；target/caster 同标准，HP=公式 MaxHP）"
+                        : spec.ScenarioNote)
+                    : spec.ScenarioNote,
+                legacy_artifact = spec.RngMode == "freeze_at_dospell",
+                legacy_reason = spec.RngMode == "freeze_at_dospell" ? "rng ledger incomplete (drain-stage draws omitted)" : null,
                 target_null = targetNull,
                 arm_ring_amulet = spec.ArmRingAmulet,
                 wait_ms = spec.WaitMs,
