@@ -14,5 +14,8 @@
 | --- | --- |
 | `quest_probe_a.txt` | `{Quest 1}` + 两个标签（`@main` / `@other`），证「装载成功 + 已知标签命中」 |
 | `quest_probe_b.txt` | `{Quest 2}` + `#IF` / `#ACT` 行，证条件/动作行在死分支下仍按普通记录解析 |
+| `quest_abort_good_a.txt` | 中止范围（§10.7 ①）前缀：坏脚本**之前**的合法脚本 ⇒ 必须装载 |
+| `quest_abort_bad.txt` | 中止范围（§10.7 ①）坏脚本：`SET [5] " "` ⇒ oracle `CaptureString` 越界（`IndexOutOfRangeException`），整批中止 |
+| `quest_abort_good_b.txt` | 中止范围（§10.7 ①）后缀：坏脚本**之后**的合法脚本 ⇒ **不得**装载（证「中止」而非「跳过」） |
 
 校验和见 `SHA256SUMS.txt`（仓库字节口径，LF）。

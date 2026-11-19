@@ -520,6 +520,158 @@ async fn bind_gate_listener(advertised_addr: &str, gate_port: u16) -> std::io::R
     TcpListener::bind((advertised_addr, gate_port)).await
 }
 
+/// 世界准入闸：oracle `M2Share.StartReady` 的**最小建模**（卡 `openmir2-quests-parity` §10.7）。
+///
+/// oracle 语义（`TCPNetChannel.cs:72-78`）：`StartReady` 为假 ⇒ 拒绝网关连接
+/// （`LogService.Info("服务器未就绪: {0}")` + `Close()`，不分配槽位）。`StartReady` 在
+/// `GameApp.InitializeWorld` 整块 try/catch 的**末尾**置真（`GameApp.cs:238`）⇒ 世界初始化
+/// 异常（如 NPC 脚本装载中止）时其后的赋值不执行：进程活着、世界内存里留着前缀 NPC、
+/// **网关永久连不上**。
+///
+/// 本仓状态机（`Booting → Ready | Aborted`，单向）：
+/// - `Booting`：网关连接**挂起**（TCP 已接受，不拒也不受理）。**未建模偏差**：oracle 在此
+///   窗口也拒连；Rust 的 listener 早于世界初始化 bind，若直接拒会与既有的「启动即连」
+///   进程测试/部署冲突，故只挂起（卡面 deviation 登记，不得读作等价）。
+/// - `Ready`：正常受理（与改动前逐字节同路径）。
+/// - `Aborted`：拒连（`服务器未就绪: {peer}` + 关 socket）+ sim 拒一切入世界事件。
+pub struct WorldStartGate {
+    state: std::sync::atomic::AtomicU8,
+    decision: tokio::sync::Notify,
+}
+
+/// `Booting`：世界初始化未出结论。
+const WORLD_GATE_BOOTING: u8 = 0;
+/// `Ready`：`M2Share.StartReady = true` 的等价物。
+const WORLD_GATE_READY: u8 = 1;
+/// `Aborted`：初始化中止 ⇒ 永久不就绪。
+const WORLD_GATE_ABORTED: u8 = 2;
+
+impl Default for WorldStartGate {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WorldStartGate {
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            state: std::sync::atomic::AtomicU8::new(WORLD_GATE_BOOTING),
+            decision: tokio::sync::Notify::new(),
+        }
+    }
+
+    /// `M2Share.StartReady = true`：只在 `Booting → Ready` 生效；已中止则**不覆盖**。
+    pub fn mark_ready(&self) {
+        if self
+            .state
+            .compare_exchange(
+                WORLD_GATE_BOOTING,
+                WORLD_GATE_READY,
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+            )
+            .is_ok()
+        {
+            self.decision.notify_waiters();
+        }
+    }
+
+    /// 初始化中止：永久不就绪（oracle 的 `StartReady = true` 不执行）。
+    pub fn abort(&self) {
+        let _ = self.state.compare_exchange(
+            WORLD_GATE_BOOTING,
+            WORLD_GATE_ABORTED,
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+        self.decision.notify_waiters();
+    }
+
+    /// 是否已就绪（`Booting`/`Aborted` 都为假）。
+    #[must_use]
+    pub fn is_ready(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::SeqCst) == WORLD_GATE_READY
+    }
+
+    /// 是否已中止（sim 事件排水据此拒绝入世界事件）。
+    #[must_use]
+    pub fn is_aborted(&self) -> bool {
+        self.state.load(std::sync::atomic::Ordering::SeqCst) == WORLD_GATE_ABORTED
+    }
+
+    /// 等世界初始化给出结论：`true` = 就绪可受理；`false` = 中止拒连。
+    ///
+    /// `Booting` 期间挂起（`Notify` 先注册再读状态，见 tokio 的 `notified()` 口径）。
+    pub async fn admitted(&self) -> bool {
+        loop {
+            let notified = self.decision.notified();
+            match self.state.load(std::sync::atomic::Ordering::SeqCst) {
+                WORLD_GATE_BOOTING => notified.await,
+                WORLD_GATE_READY => return true,
+                _ => return false,
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod world_start_gate_tests {
+    use super::WorldStartGate;
+
+    /// `Booting`：既不就绪也未中止（网关连接挂起，sim 尚未出结论）。
+    #[test]
+    fn booting_state_is_neither_ready_nor_aborted() {
+        let g = WorldStartGate::new();
+        assert!(!g.is_ready());
+        assert!(!g.is_aborted());
+    }
+
+    /// `mark_ready` 之后 `abort` 不生效（oracle 的 `StartReady` 只有一次置真/永不置真）。
+    #[test]
+    fn abort_after_ready_does_not_downgrade() {
+        let g = WorldStartGate::new();
+        g.mark_ready();
+        assert!(g.is_ready());
+        g.abort();
+        assert!(g.is_ready());
+        assert!(!g.is_aborted());
+    }
+
+    /// 中止是永久的：此后的 `mark_ready` 不得把世界置回就绪（§10.7 ①）。
+    #[test]
+    fn abort_is_permanent() {
+        let g = WorldStartGate::new();
+        g.abort();
+        assert!(g.is_aborted());
+        g.mark_ready();
+        assert!(!g.is_ready());
+        assert!(g.is_aborted());
+    }
+
+    /// `Booting` 期间 `admitted()` 挂起；`Ready` 后放行。
+    #[tokio::test]
+    async fn admitted_waits_booting_then_true_on_ready() {
+        let g = std::sync::Arc::new(WorldStartGate::new());
+        let g2 = std::sync::Arc::clone(&g);
+        let waiter = tokio::spawn(async move { g2.admitted().await });
+        tokio::task::yield_now().await;
+        g.mark_ready();
+        assert!(waiter.await.expect("等待任务"));
+    }
+
+    /// `Booting` 期间 `admitted()` 挂起；中止后必须返回 `false`（网关拒连）。
+    #[tokio::test]
+    async fn admitted_returns_false_after_abort() {
+        let g = std::sync::Arc::new(WorldStartGate::new());
+        let g2 = std::sync::Arc::clone(&g);
+        let waiter = tokio::spawn(async move { g2.admitted().await });
+        tokio::task::yield_now().await;
+        g.abort();
+        assert!(!waiter.await.expect("等待任务"));
+    }
+}
+
 /// 启动期 **connect 相位**的**快速观察**上界（卡 `openmir2-gamesvr-db-startup-hermeticity`，
 /// review F1/F3；三态拆分见卡 `openmir2-gamesvr-db-probe-threshold`）。
 ///
@@ -1476,6 +1628,10 @@ async fn run_inner(args: &[String]) -> Result<()> {
     // **T-132**：闭包 move 整个 `cfg` 会与 spawn 之后的 `cfg.check_block` 冲突 ⇒ 先拷出
     // 四个名字色（`CastleNameColors` 是 Copy）。
     let castle_name_colors = cfg.castle_name_colors();
+    // 世界准入闸（卡 `openmir2-quests-parity` §10.7）：sim 序言末尾置 Ready；
+    // NPC 装载中止 ⇒ Aborted（网关拒连 + sim 拒入世界）。
+    let world_start = std::sync::Arc::new(WorldStartGate::new());
+    let sim_world_start = std::sync::Arc::clone(&world_start);
     let _sim = std::thread::Builder::new()
         .name("m2-sim".to_string())
         // 公告文本（oracle `NoticeMgr.GetNoticeMsg("Notice")`，帧 658 `SM_SENDNOTICE`）：
@@ -1680,6 +1836,7 @@ async fn run_inner(args: &[String]) -> Result<()> {
                 sim_ids_out,
                 cfg.payment_mode,
                 planes,
+                sim_world_start,
             )
         })
         .context("起 sim 线程失败")?;
@@ -1803,6 +1960,21 @@ async fn run_inner(args: &[String]) -> Result<()> {
         };
         sock.set_nodelay(true).ok();
         glog!("INF", "游戏网关连接：{peer}");
+        // oracle `TCPNetChannel.Connecting`（`TCPNetChannel.cs:72-78`）：`M2Share.StartReady`
+        // 为假 ⇒ `LogService.Info("服务器未就绪: {0}")` + `Close()`，不分配网关槽位。
+        // 本仓口径（见 [`WorldStartGate`]）：Booting 挂起等结论；Aborted 拒连；Ready 同旧路径。
+        let admitted = tokio::select! {
+            ok = world_start.admitted() => ok,
+            _ = shutdown_signal.notified() => {
+                glog!("INF", "关服：停止接受新的网关连接");
+                break;
+            }
+        };
+        if !admitted {
+            glog!("INF", "服务器未就绪: {peer}");
+            drop(sock);
+            continue;
+        }
         let service_id = {
             let mut g = slots.lock().expect("gate slots poisoned");
             match g.alloc() {
@@ -25730,6 +25902,8 @@ fn sim_loop(
     ids_out: tokio::sync::mpsc::UnboundedSender<String>,
     payment_mode: u8,
     planes: Option<planes::PlanesLink>,
+    // 世界准入闸（`M2Share.StartReady` 的最小建模；见 [`WorldStartGate`]）。
+    world_start: std::sync::Arc<WorldStartGate>,
 ) {
     // 尺寸表已由调用方按「注册表优先，无注册表则 WorldMaps 占位（且非空，已 fail-closed）」算好；
     // `map_id` = 注册表下标，与 `resolve_map_id` 同源。
@@ -26586,11 +26760,35 @@ fn sim_loop(
                     &mut rename_rand,
                 ) {
                     Ok(host) => host,
-                    Err(e) => {
+                    Err(abort) => {
                         // oracle：`LoadScriptFile` 的异常穿出 `WorldServer.Initialize` 整批中止
-                        // （无 try/catch）；这里同样不吞，让世界初始化直接失败。
-                        glog!("ERR", "NPC 脚本装载中止（oracle 同输入整批中止）：{e}");
-                        panic!("NPC 脚本装载中止：{e}");
+                        // （无 try/catch）⇒ 进程活着但 `StartReady` 不置真。这里**不再 `panic!`**：
+                        // 保留异常前已装载的前缀宿主（§10.7 裁决②），并把准入闸钉死为 Aborted。
+                        let game_svr::npc::NpcLoadAbort {
+                            panic,
+                            partial,
+                            failing,
+                        } = *abort;
+                        let names = partial
+                            .defs
+                            .iter()
+                            .map(|d| d.chr_name.as_str())
+                            .collect::<Vec<_>>()
+                            .join(",");
+                        glog!(
+                            "ERR",
+                            "NPC 脚本装载中止（oracle 同输入整批中止，异常穿出初始化链）：{panic}；\
+                             失败脚本 ChrName={} file={}/{}.txt；保留异常前已装载的前缀 NPC {} 条（ChrName={}）\
+                             ——世界保持不就绪，准入将被拒绝",
+                            failing.chr_name,
+                            failing.file_path,
+                            failing.script_name,
+                            partial.defs.len(),
+                            if names.is_empty() { "-" } else { &names }
+                        );
+                        world_start.abort();
+                        // 与 Ok(host) 同形：match 产出宿主，下面统一 npc_host = Some(host)。
+                        partial
                     }
                 };
                 glog!(
@@ -26873,6 +27071,19 @@ fn sim_loop(
     // 两条通道各一个周转槽；优先通道的结转**先**被消耗（「控制事件先取」不被普通结转破坏）。
     let mut event_carry: Option<GateEvent> = None;
     let mut event_carry_ctl: Option<GateEvent> = None;
+    // oracle `GameApp.InitializeWorld` 末尾 `M2Share.StartReady = true`（`GameApp.cs:238`）：
+    // 世界初始化**全部完成**后才置就绪；中止路径（上面的 `world_start.abort()`）不置真。
+    // 位置 = 序言末尾（首个 tick 之前），不是 NPC 装载处——oracle 的 try/catch 只跳过其后
+    // 的初始化与这一句赋值；本仓其后各步不可失败（最小口径，卡面 §10.7）。
+    if world_start.is_aborted() {
+        glog!(
+            "ERR",
+            "世界初始化中止：保持不就绪（oracle 的 `M2Share.StartReady = true` 不执行）；准入拒绝"
+        );
+    } else {
+        world_start.mark_ready();
+        glog!("INF", "世界初始化完成：准入就绪");
+    }
     loop {
         // 整 tick 起点（含末尾节拍 sleep；`HostTickTotal`）。
         let slot = host_prof.begin();
@@ -26968,6 +27179,13 @@ fn sim_loop(
         {
             match ev {
                 GateEvent::Opened { index, ip } => {
+                    if world_start.is_aborted() {
+                        glog!(
+                            "ERR",
+                            "世界未就绪（初始化中止）：拒绝用户登记 index={index} ip={ip}（准入被拒）"
+                        );
+                        continue;
+                    }
                     glog!(
                         "DBG",
                         "sim: 新用户登记 index={index} ip={ip}（open_session 属 S2b-3）"
@@ -26980,6 +27198,13 @@ fn sim_loop(
                     cmd,
                     tail,
                 } => {
+                    if world_start.is_aborted() {
+                        glog!(
+                            "ERR",
+                            "世界未就绪（初始化中止）：拒绝命令 index={index} socket={socket}（准入被拒）"
+                        );
+                        continue;
+                    }
                     glog!(
                         "DBG",
                         "sim: index={index} 命令 Recog={} Ident={} Param={} Tag={} Series={} tail={:?}",
@@ -27927,6 +28152,13 @@ fn sim_loop(
                     );
                 }
                 GateEvent::CertificationPending { index, ip } => {
+                    if world_start.is_aborted() {
+                        glog!(
+                            "ERR",
+                            "世界未就绪（初始化中止）：拒绝认证 index={index} ip={ip}（准入被拒）"
+                        );
+                        continue;
+                    }
                     glog!(
                         "DBG",
                         "sim: index={index} ip={ip} 收到无 `!` 的帧 ⇒ 认证链返回 Ignored（oracle 的 `if` 不成立）"
@@ -28087,6 +28319,19 @@ fn sim_loop(
                     }
                 }
                 GateEvent::LoadDbRequest(info) => {
+                    if world_start.is_aborted() {
+                        // 入世界必须 Ready（卡口径：登录/取档/进图都过这道门）。sim 序言结束前
+                        // 不处理事件 ⇒ 本处只可能看到 Ready/Aborted，Booting 不可达。
+                        glog!(
+                            "ERR",
+                            "世界未就绪（初始化中止）：拒绝取档进世界 Account:{} ChrName:{} SessionId:{} GateIdx:{}（准入被拒）",
+                            info.account,
+                            info.chr_name,
+                            info.session_id,
+                            info.gate_idx
+                        );
+                        continue;
+                    }
                     // **logon 处理入口**（卡 `openmir2-entry-gap-buckets`）：与「发出取档请求 + 各提前返回桶」
                     // 构成恒等式 `enter == request_sent + Σ(no_request_*)`（无重排队时）。
                     if let Some(line) = telemetry::record_logon_handler_enter() {
@@ -93864,7 +94109,17 @@ mod entry_telemetry_wiring {
     fn logon_handler_enter_sits_at_arm_entry() {
         let anchor = format!("GateEvent::LoadDbRequest({} =>", "info)");
         let i = SRC.find(&anchor).expect("登录事件分支");
-        assert!(window(SRC, i, 500).contains("record_logon_handler_enter("));
+        // 卡 `openmir2-quests-parity` §10.7：臂首新增「世界未就绪 ⇒ 拒绝取档」守卫，计数点仍是
+        // 守卫之后的**第一条生产语句**。判据按「本臂切片」比位置（不设固定字符窗口）：
+        // 计数必须在入队点 `engine.add_to_load_rcd_list(` 之前（守卫本身不计数——被拒的取档没进 handler）。
+        let next = SRC[i..]
+            .find("GateEvent::RegisterGate")
+            .expect("下一事件臂（RegisterGate）")
+            + i;
+        let arm = &SRC[i..next];
+        let at = arm.find("record_logon_handler_enter(").expect("handler 入口计数");
+        let queue = arm.find("engine.add_to_load_rcd_list(").expect("取档入队点");
+        assert!(at < queue, "计数必须在入队之前（臂入口语义）");
     }
 
     /// `db` 未装配分支：必须在 `None => engine.drain_read_storage(` 的闭包里计数。

@@ -13,7 +13,12 @@
 // `LOADED` 三条证明（计数 +1 / 记录非空 / 已知标签命中）任一不成立即 FAIL，不许把「没装进来」当成证据。
 //
 // 用法（仓库根）：dotnet run --project mir2-rs/tests/parity/m3/quests/quest-parity-probe -c Release -- \
-//                  <产物目录> [--fixtures <夹具目录>] [--gate] [--negative-control]
+//                  <产物目录> [--fixtures <夹具目录>] [--gate] [--actions] [--checks] \
+//                  [--abort-scope] [--negative-control]
+//
+// `--abort-scope`（卡 openmir2-quests-parity §10.7 ①）：按装载顺序跑「2 好 1 坏」夹具，**不逐条
+// 捕获异常**（单一顶层 catch），记录异常前成功装载的前缀名单 + 失败脚本身份 + 异常类型 ⇒
+// `quest_abort_scope_ledger.tsv`。坏脚本必须真抛（否则夹具失效 ⇒ rc=1，防空转）。
 // 只读：不连 MySQL、不写现网文件、不发 socket；脚本只落探针自己的 bin/<EnvirDir>/<Patch>/ 与产物目录。
 
 using System;
@@ -62,6 +67,7 @@ internal static class Program
         bool doGate = false;
         bool doActions = false;
         bool doChecks = false;
+        bool doAbortScope = false;
         bool negativeControl = false;
         for (int i = 0; i < args.Length; i++)
         {
@@ -81,6 +87,10 @@ internal static class Program
             {
                 doChecks = true;
             }
+            else if (args[i] == "--abort-scope")
+            {
+                doAbortScope = true;
+            }
             else if (args[i] == "--negative-control")
             {
                 negativeControl = true;
@@ -99,6 +109,11 @@ internal static class Program
         {
             Console.Error.WriteLine("ZERO_CASES");
             return 2;
+        }
+
+        if (doAbortScope)
+        {
+            return RunAbortScope(outDir, fixturesDir);
         }
 
         if (negativeControl)
@@ -189,6 +204,87 @@ internal static class Program
         }
 
         Console.WriteLine("REACHABILITY cases={0} passed={1} failed={2}", Cases.Length, passed, failures.Count);
+        Console.WriteLine(ledger);
+        if (failures.Count > 0)
+        {
+            Console.Error.WriteLine("FAIL_DETAIL " + string.Join("; ", failures));
+            return 1;
+        }
+        return 0;
+    }
+
+    /// **中止范围**（§10.7 ①）：装载顺序 = good_a → **bad** → good_b。
+    ///
+    /// 语义钉死：异常必须**中止整批**（oracle `NpCinitialize` 全链无 try/catch）⇒ 前缀只有
+    /// `good_a`、失败脚本是 `bad`、`good_b` 不得装载。单一顶层 catch 只用来**记录**，绝不
+    /// 逐条捕获后继续（那样就变成 Rust 侧的旧缺陷形态）。
+    private const string AbortPatch = "AbortProbe";
+
+    private static readonly string[] AbortScripts =
+    {
+        "quest_abort_good_a",
+        "quest_abort_bad",
+        "quest_abort_good_b",
+    };
+
+    private static int RunAbortScope(string outDir, string fixturesDir)
+    {
+        var npc = new NormNpc();
+        var parser = new ScriptParsers();
+        var loaded = new List<string>();
+        string failing = "-";
+        string exception = "-";
+        int current = 0;
+        try
+        {
+            for (int i = 0; i < AbortScripts.Length; i++)
+            {
+                current = i;
+                string fixture = Path.Combine(fixturesDir, AbortScripts[i] + ".txt");
+                if (!File.Exists(fixture))
+                {
+                    Console.Error.WriteLine("PREREQ 夹具缺失: " + fixture);
+                    return 2;
+                }
+                string text = File.ReadAllText(fixture).Replace("\r\n", "\n");
+                string path = SystemShare.GetEnvirFilePath(AbortPatch, AbortScripts[i] + ".txt");
+                Directory.CreateDirectory(Path.GetDirectoryName(path));
+                File.WriteAllText(path, text, new UTF8Encoding(false));
+                parser.LoadScriptFile(npc, AbortPatch, AbortScripts[i], false);
+                loaded.Add(AbortScripts[i]);
+            }
+        }
+        catch (Exception ex)
+        {
+            // 单一顶层 catch：只记录，不吞。异常必须中止整批（oracle 初始化链语义）。
+            failing = AbortScripts[current];
+            exception = ex.GetType().Name;
+        }
+
+        var failures = new List<string>();
+        if (exception == "-")
+        {
+            failures.Add("BAD_SCRIPT_DID_NOT_THROW");
+        }
+        if (loaded.Count != 1)
+        {
+            failures.Add("LOADED=" + loaded.Count.ToString(CultureInfo.InvariantCulture));
+        }
+        if (failing != "quest_abort_bad")
+        {
+            failures.Add("FAILING=" + failing);
+        }
+
+        string loadedStr = loaded.Count == 0 ? "-" : string.Join(",", loaded);
+        var lines = new List<string>
+        {
+            "# case_id\tscripts\tloaded_prefix\tfailing_script\texception",
+            string.Join("\t", "ABORT-1", string.Join(",", AbortScripts), loadedStr, failing, exception),
+        };
+        string ledger = Path.Combine(outDir, "quest_abort_scope_ledger.tsv");
+        File.WriteAllText(ledger, string.Join("\n", lines) + "\n", new UTF8Encoding(false));
+        Console.WriteLine("ABORT_SCOPE scripts={0} loaded={1} failing={2} exception={3}",
+            AbortScripts.Length, loaded.Count, failing, exception);
         Console.WriteLine(ledger);
         if (failures.Count > 0)
         {
