@@ -4682,6 +4682,7 @@ fn handle_ground_cmd(
         gold: sg.state.gold,
         game_gold: sg.game_gold,
         wabil: sg.state.wabil.clone(),
+        abil_exp: sg.equip.abil.exp,
         sys_msg: sg.sys_msg.clone(),
         hunger_status: sg.hunger_status,
     };
@@ -10684,6 +10685,8 @@ fn handle_eat_cmd(
         gold: sg.state.gold,
         game_gold: sg.game_gold,
         wabil: sg.state.wabil.clone(),
+        // `SM_WINEXP.Recog` 取**基础** `Abil.Exp`（exp_delta 已在上面落到 `sg.equip.abil.exp`；WAbil 陈旧）。
+        abil_exp: sg.equip.abil.exp,
         sys_msg: None,
         hunger_status: sg.hunger_status,
     };
