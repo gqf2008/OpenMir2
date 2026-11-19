@@ -285,6 +285,7 @@ internal static class Program
         public int Mnm6;
         public int GameGold;
         public string PlayerName = "probe";
+        public string NpcName = "老人";
         public int Quest106;
         public string ScriptName2 = "国王";
         public string ScriptText = CLICK_SCRIPT;
@@ -333,7 +334,7 @@ internal static class Program
         var npc = new Merchant
         {
             ActorId = npcId,
-            ChrName = "老人",
+            ChrName = spec.NpcName,
             Envir = envir,
             CurrX = (short)spec.NpcX,
             CurrY = (short)spec.NpcY,
@@ -582,10 +583,10 @@ internal static class Program
         };
         var np03Cases = new List<object>
         {
-            RunCase(new CaseSpec { Name = "menu_main", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
-            RunCase(new CaseSpec { Name = "menu_buy", Kind = "dlg_select", Label = "@buy", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
-            RunCase(new CaseSpec { Name = "menu_sell", Kind = "dlg_select", Label = "@sell", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
-            RunCase(new CaseSpec { Name = "menu_storage", Kind = "dlg_sequence", Labels = new[] { "@cangku", "@storage" }, MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "menu_main", NpcName = "封魔修理师", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "menu_buy", NpcName = "封魔修理师", Kind = "dlg_select", Label = "@buy", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "menu_sell", NpcName = "封魔修理师", Kind = "dlg_select", Label = "@sell", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "menu_storage", NpcName = "封魔修理师", Kind = "dlg_sequence", Labels = new[] { "@cangku", "@storage" }, MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
         };
         var np04Cases = new List<object>
         {
