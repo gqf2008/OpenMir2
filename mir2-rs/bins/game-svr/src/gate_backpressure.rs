@@ -37,6 +37,18 @@
 //! `SM_SERVERUSERINDEX → SM_LOGON` 乱序——**乱序比丢帧更难查，因为不报错**。本模块只负责
 //! 计数与日志，顺序由 `lib.rs` 的入队/补发路径保证。
 //!
+//! ## 指标口径（卡 `openmir2-gateway-observability-gauge`）
+//!
+//! - `degraded_sessions` 在输出里改名 **`degraded_sessions_total_capped`**：去重集合的**累计值**，
+//!   集合上限 [`MAX_CLOSED_SESSIONS`] 且**从不清理** ⇒ 只增、到顶即恒定。「现在还降级吗」看
+//!   新增的 **`degraded_sessions_current`**（会话释放/重入时移除）。
+//! - `max_depth_frames_hw` / `max_depth_bytes_hw` 是**历史高水位**；当前深度看
+//!   **`depth_frames` / `depth_bytes`**（最近一次事件时采样）。
+//! - 队列账目闭合：`queued = flushed + purged + dequeued_oversize + 队列当前深度`。
+//!   `purged_frames` = 会话释放清理掉的残留帧；`dequeued_oversize_frames` = 补发时按 oracle
+//!   超阈值规则弹出丢弃的帧——这两类都「出队但未 flush」，此前会让 `queued−flushed` 被误读成
+//!   队列深度（10k 实测出现 4097–4144 的假超限）。
+//!
 //! ## 曝光通道
 //!
 //! - **入队日志**（默认开）：`WRN`、每条 gate 线最多每 [`LOG_INTERVAL_MS`] 一条，
@@ -182,7 +194,17 @@ pub(crate) struct DropStats {
     close_inworld_sessions: u64,
     /// 被标记降级的会话（去重；与 `close_inworld` 相反，这里只标记、不断开）。
     degraded_sessions: HashSet<u16>,
+    /// **当前**处于降级状态的会话（可回落；会话释放/重入时移除）——与累计集合分开。
+    degraded_current: HashSet<u16>,
     max_depth_frames: usize,
+    /// 最近一次事件时采样的队列深度（**当前值**；高水位见 `max_depth_*`）。
+    last_depth_frames: usize,
+    last_depth_bytes: usize,
+    /// 从队列移除但**未补发**的帧（会话释放清理）：闭合
+    /// `queued = flushed + purged + dequeued_oversize + 队列当前深度`。
+    purged_frames: u64,
+    /// 补发时因 oracle 单包超阈值而从队列弹出丢弃的帧（同属"出队未 flush"）。
+    dequeued_oversize_frames: u64,
     max_depth_bytes: usize,
     oversize_frames: u64,
     oversize_bytes: u64,
@@ -285,10 +307,28 @@ impl DropStats {
         self.degrade_inworld_frames
     }
 
-    /// 被标记降级的会话数（只给判据/测试读）。
+    /// 被标记降级的会话数（**累计去重、上限截断**；只给判据/测试读）。
     #[cfg(test)]
     pub(crate) fn degraded_sessions(&self) -> usize {
         self.degraded_sessions.len()
+    }
+
+    /// **当前**处于降级的会话数（可回落；只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn degraded_current(&self) -> usize {
+        self.degraded_current.len()
+    }
+
+    /// 会话释放清理掉的队列残余帧数（只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn purged_frames(&self) -> u64 {
+        self.purged_frames
+    }
+
+    /// 补发时按超阈值规则弹出丢弃的帧数（只给判据/测试读）。
+    #[cfg(test)]
+    pub(crate) fn dequeued_oversize_frames(&self) -> u64 {
+        self.dequeued_oversize_frames
     }
 
     /// 对已进世界会话发过 `GM_CLOSE` 的次数（不变量，目标 0；只给判据/测试读）。
@@ -328,6 +368,8 @@ impl DropStats {
         self.queued_bytes = self.queued_bytes.saturating_add(bytes);
         self.max_depth_frames = self.max_depth_frames.max(depth_frames);
         self.max_depth_bytes = self.max_depth_bytes.max(depth_bytes);
+        self.last_depth_frames = depth_frames;
+        self.last_depth_bytes = depth_bytes;
 
         let mut out = Note::default();
         let due = due(self.last_queued_log_ms, now);
@@ -441,6 +483,8 @@ impl DropStats {
         self.drop_noncritical_bytes = self.drop_noncritical_bytes.saturating_add(bytes);
         self.max_depth_frames = self.max_depth_frames.max(depth_frames);
         self.max_depth_bytes = self.max_depth_bytes.max(depth_bytes);
+        self.last_depth_frames = depth_frames;
+        self.last_depth_bytes = depth_bytes;
         self.bump_failure_hist(ident, session);
 
         let mut out = Note::default();
@@ -494,6 +538,8 @@ impl DropStats {
         self.reject_login_frames += 1;
         self.max_depth_frames = self.max_depth_frames.max(depth_frames);
         self.max_depth_bytes = self.max_depth_bytes.max(depth_bytes);
+        self.last_depth_frames = depth_frames;
+        self.last_depth_bytes = depth_bytes;
         if close == CloseOutcome::Sent {
             self.rejected_sessions += 1;
         } else if close == CloseOutcome::Failed {
@@ -560,6 +606,8 @@ impl DropStats {
         self.degrade_inworld_frames += 1;
         self.max_depth_frames = self.max_depth_frames.max(depth_frames);
         self.max_depth_bytes = self.max_depth_bytes.max(depth_bytes);
+        self.last_depth_frames = depth_frames;
+        self.last_depth_bytes = depth_bytes;
         let newly_marked = self.claim_session_degrade(session);
         self.bump_failure_hist(ident, session);
 
@@ -572,7 +620,7 @@ impl DropStats {
                 "event=gate_frame_degrade gate={} reason=QueueFull channel=critical stage=in_world \
                  in_world=1 ident={ident} session={session} bytes={bytes} \
                  depth_frames={depth_frames} depth_bytes={depth_bytes} queue_max_bytes={} \
-                 queue_max_frames={} close=none degraded_session={} degraded_sessions={} \
+                 queue_max_frames={} close=none degraded_session={} degraded_sessions_total_capped={} \
                  suppressed_since_last={} overflow_frames={} overflow_bytes={} \
                  degrade_inworld_frames={} close_inworld_sessions={} uptime_ms={}",
                 self.gate,
@@ -597,16 +645,42 @@ impl DropStats {
         out
     }
 
-    /// 首次把某会话标成「降级」时返回 true（去重；集合上限 [`MAX_CLOSED_SESSIONS`]）。
+    /// 首次把某会话标成「当前降级」时返回 true（去重；集合上限 [`MAX_CLOSED_SESSIONS`]）。
+    ///
+    /// **修正（卡 `openmir2-gateway-observability-gauge`）**：此前在集合已满、实际未插入时也返回
+    /// true ⇒ 逐帧日志 `degraded_session=1` 会虚报"首次标记"。现在返回**当前集合是否真的插入**。
     /// **只标记、不断开**——与 [`DropStats::claim_session_close`] 的语义严格分开。
     pub(crate) fn claim_session_degrade(&mut self, session: u16) -> bool {
-        if self.degraded_sessions.contains(&session) {
-            return false;
-        }
+        let newly_current = if self.degraded_current.len() < MAX_CLOSED_SESSIONS {
+            self.degraded_current.insert(session)
+        } else {
+            false
+        };
         if self.degraded_sessions.len() < MAX_CLOSED_SESSIONS {
             self.degraded_sessions.insert(session);
         }
-        true
+        newly_current
+    }
+
+    /// 会话释放：从**当前**降级集合移除（累计集合保留，作 `degraded_sessions_total_capped`）。
+    pub(crate) fn note_session_released(&mut self, session: u16) {
+        self.degraded_current.remove(&session);
+    }
+
+    /// 从队列**移除但未补发**的帧（会话释放清理）：计入 `purged_frames` 并刷新当前深度。
+    pub(crate) fn note_purged(&mut self, frames: usize, depth_frames: usize, depth_bytes: usize) {
+        self.purged_frames = self
+            .purged_frames
+            .saturating_add(u64::try_from(frames).unwrap_or(u64::MAX));
+        self.last_depth_frames = depth_frames;
+        self.last_depth_bytes = depth_bytes;
+    }
+
+    /// 补发时因 oracle 单包超阈值从队列弹出丢弃（同属"出队但未 flush"）。
+    pub(crate) fn note_dequeued_oversize(&mut self, depth_frames: usize, depth_bytes: usize) {
+        self.dequeued_oversize_frames = self.dequeued_oversize_frames.saturating_add(1);
+        self.last_depth_frames = depth_frames;
+        self.last_depth_bytes = depth_bytes;
     }
 
     /// 失败面直方图（reject/degrade/oversize/drop_noncritical 共用，按 ident/session 归因）。
@@ -664,7 +738,13 @@ impl DropStats {
     }
 
     /// 记录一次补发：`waited=true` 表示这一帧发完后撞了阈值、已发 `GM_RECEIVE_OK` 并等待回显。
-    pub(crate) fn note_flushed(&mut self, bytes: usize, waited: bool) {
+    pub(crate) fn note_flushed(
+        &mut self,
+        bytes: usize,
+        waited: bool,
+        depth_frames: usize,
+        depth_bytes: usize,
+    ) {
         self.flushed_frames += 1;
         self.flushed_bytes = self
             .flushed_bytes
@@ -672,6 +752,8 @@ impl DropStats {
         if waited {
             self.flush_waits += 1;
         }
+        self.last_depth_frames = depth_frames;
+        self.last_depth_bytes = depth_bytes;
     }
 
     /// 记录一次「因 50ms 超时（网关未回显）而清零并补发」。
@@ -748,9 +830,10 @@ impl DropStats {
              timeout_flushes={} overflow_frames={} overflow_bytes={} oversize_frames={} \
              oversize_bytes={} rejected_sessions={} close_failures={} \
              drop_noncritical_frames={} drop_noncritical_bytes={} noncritical_sent_frames={} \
-             reject_login_frames={} degrade_inworld_frames={} degraded_sessions={} \
-             close_inworld_sessions={} max_depth_frames={} \
-             max_depth_bytes={} top_idents={} top_sessions={} overflow_idents={} \
+             reject_login_frames={} degrade_inworld_frames={} degraded_sessions_total_capped={} \
+             degraded_sessions_current={} close_inworld_sessions={} purged_frames={} \
+             dequeued_oversize_frames={} max_depth_frames_hw={} max_depth_bytes_hw={} \
+             depth_frames={} depth_bytes={} top_idents={} top_sessions={} overflow_idents={} \
              overflow_sessions={} uptime_ms={}",
             self.gate,
             u8::from(self.queue_enabled),
@@ -777,9 +860,14 @@ impl DropStats {
             self.reject_login_frames,
             self.degrade_inworld_frames,
             self.degraded_sessions.len(),
+            self.degraded_current.len(),
             self.close_inworld_sessions,
+            self.purged_frames,
+            self.dequeued_oversize_frames,
             self.max_depth_frames,
             self.max_depth_bytes,
+            self.last_depth_frames,
+            self.last_depth_bytes,
             top_pairs(&self.by_ident),
             top_pairs(&self.by_session),
             self.ident_overflow,
@@ -801,8 +889,11 @@ impl DropStats {
              \"oversize_bytes\":{},\"rejected_sessions\":{},\"close_failures\":{},\
              \"drop_noncritical_frames\":{},\"drop_noncritical_bytes\":{},\
              \"noncritical_sent_frames\":{},\"reject_login_frames\":{},\
-             \"degrade_inworld_frames\":{},\"degraded_sessions\":{},\"close_inworld_sessions\":{},\
-             \"max_depth_frames\":{},\"max_depth_bytes\":{},\"top_idents\":\"{}\",\
+             \"degrade_inworld_frames\":{},\"degraded_sessions_total_capped\":{},\
+             \"degraded_sessions_current\":{},\"close_inworld_sessions\":{},\
+             \"purged_frames\":{},\"dequeued_oversize_frames\":{},\
+             \"max_depth_frames_hw\":{},\"max_depth_bytes_hw\":{},\
+             \"depth_frames\":{},\"depth_bytes\":{},\"top_idents\":\"{}\",\
              \"top_sessions\":\"{}\",\"overflow_idents\":{},\"overflow_sessions\":{}}}",
             now.saturating_sub(self.start_ms),
             self.gate,
@@ -830,9 +921,14 @@ impl DropStats {
             self.reject_login_frames,
             self.degrade_inworld_frames,
             self.degraded_sessions.len(),
+            self.degraded_current.len(),
             self.close_inworld_sessions,
+            self.purged_frames,
+            self.dequeued_oversize_frames,
             self.max_depth_frames,
             self.max_depth_bytes,
+            self.last_depth_frames,
+            self.last_depth_bytes,
             top_pairs(&self.by_ident),
             top_pairs(&self.by_session),
             self.ident_overflow,
@@ -1022,7 +1118,7 @@ mod tests {
             "in_world=1",
             "close=none",
             "degraded_session=1",
-            "degraded_sessions=1",
+            "degraded_sessions_total_capped=1",
             "degrade_inworld_frames=1",
             "close_inworld_sessions=0",
         ] {
@@ -1162,9 +1258,9 @@ mod tests {
     #[test]
     fn flush_counters() {
         let mut s = stats();
-        s.note_flushed(100, false);
-        s.note_flushed(100, true);
-        s.note_flushed(50, false);
+        s.note_flushed(100, false, 0, 0);
+        s.note_flushed(100, true, 0, 0);
+        s.note_flushed(50, false, 0, 0);
         assert_eq!(s.flushed_frames, 3);
         assert_eq!(s.flushed_bytes, 250);
         assert_eq!(s.flush_waits, 1);
@@ -1234,7 +1330,7 @@ mod tests {
             "\"rejected_sessions\":1",
             "\"reject_login_frames\":1",
             "\"degrade_inworld_frames\":0",
-            "\"degraded_sessions\":0",
+            "\"degraded_sessions_total_capped\":0",
             "\"close_inworld_sessions\":0",
             "\"drop_noncritical_frames\":1",
             "\"noncritical_sent_frames\":0",
@@ -1291,5 +1387,89 @@ mod tests {
         ] {
             assert!(line.contains(needle), "停止排水事件缺 {needle}：{line}");
         }
+    }
+
+    /// 观测卡：满集合时必须返回 false（不再虚报首次标记），当前 gauge 与累计值分开。
+    #[test]
+    fn degrade_claim_returns_false_when_capped_and_split_from_total() {
+        let mut s = stats();
+        for id in 0..MAX_CLOSED_SESSIONS as u16 {
+            assert!(
+                s.claim_session_degrade(id),
+                "前 {MAX_CLOSED_SESSIONS} 个必须首次为 true"
+            );
+        }
+        assert_eq!(s.degraded_sessions(), MAX_CLOSED_SESSIONS);
+        assert_eq!(s.degraded_current(), MAX_CLOSED_SESSIONS);
+        assert!(
+            !s.claim_session_degrade(60_000),
+            "集合已满、实际未插入 ⇒ 必须返回 false（日志不得虚报 degraded_session=1）"
+        );
+        assert_eq!(
+            s.degraded_sessions(),
+            MAX_CLOSED_SESSIONS,
+            "累计集合到顶后不变"
+        );
+    }
+
+    /// 会话释放只清**当前** gauge，累计值不动。
+    #[test]
+    fn session_release_clears_current_only() {
+        let mut s = stats();
+        assert!(s.claim_session_degrade(7));
+        s.note_session_released(7);
+        assert_eq!(s.degraded_current(), 0, "当前降级数必须回落到 0");
+        assert_eq!(s.degraded_sessions(), 1, "累计（_total_capped）保持");
+    }
+
+    /// 汇总行口径：当前深度 + 历史高水位分开；暴露改名后的字段。
+    #[test]
+    fn summary_reports_current_depth_and_capped_total() {
+        let mut s = stats();
+        let _ = s.note_queued(41, 7, 100, 3, 300, 0, 1_000);
+        s.note_purged(2, 1, 100);
+        s.note_dequeued_oversize(0, 0);
+        let line = s.format_summary(6_000);
+        for needle in [
+            "degraded_sessions_total_capped=",
+            "degraded_sessions_current=",
+            "max_depth_frames_hw=3",
+            "depth_frames=0",
+            "purged_frames=2",
+            "dequeued_oversize_frames=1",
+        ] {
+            assert!(line.contains(needle), "汇总行缺 {needle}：{line}");
+        }
+        let json = s.format_summary_json(6_000);
+        assert!(
+            json.contains("\"depth_frames\":0"),
+            "JSON 缺当前深度：{json}"
+        );
+        assert!(
+            json.contains("\"degraded_sessions_total_capped\":0"),
+            "JSON 缺改名后的累计字段：{json}"
+        );
+    }
+
+    /// 队列账目闭合：`queued = flushed + purged + dequeued_oversize + 队列当前深度`。
+    #[test]
+    fn queue_accounting_closes_with_purge() {
+        use crate::gate_queue::{EnqueueOutcome, PendingQueue};
+        let mut q = PendingQueue::new(true, 1_024, 8);
+        let mut s = stats();
+        for i in 0..3u8 {
+            assert_eq!(q.enqueue(vec![i; 10]), EnqueueOutcome::Queued);
+            let _ = s.note_queued(41, 7, 10, q.len(), q.bytes(), 0, 1_000 + i64::from(i));
+        }
+        let frame = q.pop_front().expect("有帧");
+        s.note_flushed(frame.len(), false, q.len(), q.bytes());
+        // 模拟"会话释放清理"：移除首字节为 2 的帧
+        let purged = q.retain(|wire| wire.first() != Some(&2));
+        s.note_purged(purged, q.len(), q.bytes());
+        let lhs = s.queued_frames();
+        let rhs =
+            s.flushed_frames() + s.purged_frames() + s.dequeued_oversize_frames() + q.len() as u64;
+        assert_eq!(lhs, rhs, "队列账目必须闭合：queued={lhs} rhs={rhs}");
+        assert_eq!(s.last_depth_frames, q.len(), "当前深度必须等于队列实际长度");
     }
 }
