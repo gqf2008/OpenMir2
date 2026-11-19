@@ -108,7 +108,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "行为面+状态面均断言；牙 A/B/C（E:/UserFleet/qa/npc-parity/）；golden 版本 sha256=42fd2930…2bc4（旧 41e87d9b…c5fce 因墙钟字段 ctx.click_npc_time 排除而作废重判；determinism=BEHAVIOR_IDENTICAL；rejudge rc=0）"
+      "notes": "行为面+状态面均断言；牙 A/B/C（E:/UserFleet/qa/npc-parity/）；golden 版本 sha256=42fd2930…2bc4（旧 41e87d9b…c5fce 因墙钟字段 ctx.click_npc_time 排除而作废重判；determinism=BEHAVIOR_IDENTICAL；rejudge rc=0）",
+      "basis": "semantic"
     },
     {
       "id": "NP-02",
@@ -133,7 +134,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "对话选择经 Merchant.UserSelect→GotoLable；对拍钉出状态差异：oracle 在 @back 空栈时写回 ScriptGoBackLable=@main，Rust 原只本地取默认值（已修）；牙 D 跳过 @back 二次跳转⇒dlg_ask_back 红（E:/UserFleet/qa/npc-parity/）"
+      "notes": "对话选择经 Merchant.UserSelect→GotoLable；对拍钉出状态差异：oracle 在 @back 空栈时写回 ScriptGoBackLable=@main，Rust 原只本地取默认值（已修）；牙 D 跳过 @back 二次跳转⇒dlg_ask_back 红（E:/UserFleet/qa/npc-parity/）",
+      "basis": "semantic"
     },
     {
       "id": "NP-03",
@@ -180,7 +182,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "真实脚本 QFunction-0.txt [@UserCmd6]（sha256 9c8187bf…09df，第 382 行）；#ACT 只执行首条 ⇒ 元宝 10 不变；牙 E（run_actions 改 continue ⇒ game_gold 10 vs 4 红）"
+      "notes": "真实脚本 QFunction-0.txt [@UserCmd6]（sha256 9c8187bf…09df，第 382 行）；#ACT 只执行首条 ⇒ 元宝 10 不变；牙 E（run_actions 改 continue ⇒ game_gold 10 vs 4 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-05",
@@ -203,7 +206,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "synthetic 夹具（冻结语料 Market_Def+MapQuest_def 0 使用 `] TRUE`；sha256 d7cd88bd…d028）；引擎门等价证据；牙 F（删 boExtJmp 门 ⇒ extjmp_blocked 红）"
+      "notes": "synthetic 夹具（冻结语料 Market_Def+MapQuest_def 0 使用 `] TRUE`；sha256 d7cd88bd…d028）；引擎门等价证据；牙 F（删 boExtJmp 门 ⇒ extjmp_blocked 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-06",
@@ -231,7 +235,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "7 条 port-free 用例：同脚本+同 label+同初始状态，C# 参照 vs Rust 逐行 diff"
+      "notes": "7 条 port-free 用例：同脚本+同 label+同初始状态，C# 参照 vs Rust 逐行 diff",
+      "basis": "semantic"
     },
     {
       "id": "NP-07",
@@ -348,5 +353,5 @@
     }
   ],
   "basis": "semantic",
-  "legacy_note": "本域不适用：NPC 条目无旧清单来源（无 legacy_id）"
+  "schema_note": "本域无旧清单来源：legacy_id 不适用（N/A）。"
 }

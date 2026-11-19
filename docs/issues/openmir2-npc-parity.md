@@ -297,10 +297,10 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
 > 构建按总监窗口约束，窗口内不新起构建。
 ## 12.3 清单 schema v2（opc-07，2026-11-20；四域统一）
 
-- `schema_version = 2`；`basis` **顶层**、覆盖所有 verified（含 axis；本域 `basis=semantic`）；
+- `schema_version = 2`；`basis` **顶层 + 每个 verified 条目/axis 各一份**（校验器实现按节点读取；本域 `semantic`）；
 - verified 必须 `test` 非空 **且**（`cases` 或 `unit_tests` 非空）；
 - `counting_moment.head` = 计数时的 **master commit**（本域计数在分支内变更、未合入，head 记录测量时 master）；
-- `legacy_id` 仅对旧清单来源必填；本域无旧清单 ⇒ `legacy_note` 声明"本域不适用"；
+- `legacy_id` 仅对旧清单来源必填；本域无旧清单 ⇒ `schema_note` 声明"不适用/N/A"（校验器匹配该措辞）；
 - 可选字段（`dead_paths`/`axes`/`todos` 等）在本文件 §12 集中声明；
 - 校验脚本（`E:\OPC	oolsalidate-parity-manifests.ps1`）出来后按 rc=0 自检。
 
