@@ -1,8 +1,8 @@
 # openmir2-own-binary-without-stamp
 
-> 状态：**2026-11-20：R1–R4 已落地并验证；同时新发现 MongoDB 插件的戳与二进制内嵌 head 不符
-> （戳=572a0b8a/M9，内嵌=a5643481/M8），纳管后的三处对齐门因此判红——处置待 Leader 裁决**
-> （见文末「落地与复核」§7）。
+> 状态：**2026-11-20：R1–R4 已落地；R5（`-Check` 内嵌 rev 一致性）已补。MongoDB 插件「戳=M9
+> 572a0b8a / 内嵌=M8 a5643481」已由 Leader 裁定按「重建」处置（选项 2），待 C# 构建窗口执行；
+> 在重建完成前该件如实判红、起栈门 fail-closed**（见 §7）。
 > 来源：卡 `openmir2-deps-check-deploy-dir` 复审（opc-07，2026-11-19）。
 
 ## 现象
@@ -284,4 +284,57 @@ DBSrv 的戳组**不在** `w-rust-gate.ps1`（那个脚本只管 Rust 四件 exe
      与本轮"不重建 C#、不动冻结件"的口径冲突，需另排）。
   3. **登记为已知坏件**：保持现状并在交付注记里写明"该件戳不可信、真实来源 M8"，闸门对该件显式
      豁免（不推荐：等于把"部署了但身份错"制度化）。
+
+### 7.6 R5：`-Check` 增加 C# 内嵌 rev 与戳 head 的一致性（根因牙，已落地）
+
+- **读内嵌 rev 的方法（实测命令 + 原文）**：
+  ```text
+  python - <<'PY'
+  import re
+  b = open(r'E:/UserFleet/m1-stack/runtime/DBSrv/DBSrv.Storage.MongoDB.dll','rb').read()
+  print([m.group().decode() for m in re.finditer(rb'[0-9a-f]{40}', b)])
+  PY
+  → ['a5643481aded4d93a7a47867b7094097df6850f5']
+  ```
+  工具内实现为 `Get-EmbeddedRevisions`：ASCII（ISO-8859-1/28591 字节→字符映射）与 UTF-16LE
+  各扫一遍 `[0-9a-f]{40}`；与 `tools/hygiene/assert_three_way_aligned.ps1` 同一实现
+  （PS 5.1 没有 `[Text.Encoding]::Latin1`，故用 28591）。
+- **判据**：dotnet 目标（`toolchain_kind=dotnet`、旧戳带 `dotnet` 字段、`.dll`、或基名在
+  `DotnetNames`）⇒ 二进制必须含内嵌 40-hex 且**以戳 head 为前缀**；无 ⇒ `EMBEDDED_REV_MISSING`；
+  有但不匹配 ⇒ `EMBEDDED_REV_MISMATCH stamp=… embedded=…`。Rust 目标不走此支（已有二进制自报的
+  `SELF_REV_MISMATCH`）。
+- **现场原文**（真实部署目录，6 件 + `-OwnGlobs 'DBSrv*.dll,OpenMir2.dll'`，rc=1）：
+  ```text
+  STAMP_OK …\DBSrv.exe
+  STAMP_OK …\DBSrv.dll
+  STAMP_OK …\DBSrv.Storage.dll
+  STAMP_OK …\DBSrv.Storage.MySQL.dll
+  RED …\DBSrv.Storage.MongoDB.dll EMBEDDED_REV_MISMATCH stamp=572a0b8a3ea244351a6633fe6af0d0fe4a20643a embedded=a5643481aded4d93a7a47867b7094097df6850f5
+  STAMP_OK …\OpenMir2.dll
+  RED 1 problem(s) across 6 binaries
+  ```
+  `runtime/LoginSrv` 同口径 ⇒ `GREEN 3 stamps verified`（rc=0）。
+- **牙（自测）**：Case 15（内嵌 `deadbeef…` ≠ 戳 head）⇒ `EMBEDDED_REV_MISMATCH` rc=1；
+  Case 16（无内嵌）⇒ `EMBEDDED_REV_MISSING` rc=1；`-Selftest` ⇒ `GREEN (16 cases)`。
+- **互不掩盖**：T1（删戳）仍只报 `MISSING_STAMP`；T2（未列自家 DLL）仍报 `UNLISTED_OWN_BINARY`
+  （若同目录 MongoDB 也在，会同时报它的 `EMBEDDED_REV_MISMATCH`，两条各自成立）。
+
+### 7.7 裁决与后续（2026-11-20，opc-07）
+
+- 裁定 **选项 2：重建该插件**。不改戳（事后改戳 = 构建期之外写身份；且 m9 冻结件不可变）。
+- 待执行：C# 构建窗口（与 `d4`/`bd`/`2d` 错峰）→ 重建 `DBSvr.Storage.MongoDB` → 产戳 → 替换部署副本
+  → 生成**新冻结集**；旧 `release-csharp-m9-572a0b8a` **保留**，并在其 `PROVENANCE`/文档里标注
+  「含一件内嵌 rev 与戳不一致的 MongoDB 插件（见本卡）」。
+- 当前口径：重建完成前，该件在 `stamp-binaries -Check` 下如实红、起栈门 fail-closed；UserFleet 两个
+  脚本已指向仓库内 psd1，**合并本分支前**若需起栈，用 `.bak-20261120-022849` 回滚后再应用。
+
+### 7.8 交付说明里需要单列的两点
+
+1. **`$Head` / `$heads` 大小写撞名（既有 bug，非本卡设计）**：PowerShell 变量名大小写不敏感 ⇒
+   参数 `$Head` 与内部哈希 `$heads` 是同一变量；`w-freeze-release.ps1` 旧版本运行即报
+   `戳 head 5 ≠ 期望 …`（`$uniq[0]` 退化为字符串首字符）。**改动前的备份脚本同样报此错**，
+   说明盘上那份当时已不可用，m9 冻结应由另一份副本产出。已改名 `$headsByItem` 并用 `@(...)`。
+2. **M8→M9 增量跳过证据链**：内嵌 rev `a5643481`（M8：AOI 增量切默认）与戳 head `572a0b8a`（M9：
+   deps_manifest 构建口径）并存；MongoDB 件 mtime 18:31、其余五件 19:03；`src/DBSrv/bin/Release`
+   副本内嵌同为 M8 ⇒ 不是"部署拷贝错"，而是**构建期就没重建**、事后按 M9 产戳。
 
