@@ -67715,6 +67715,7 @@ SendRefMsgRange=15
     /// - 帧（实测）：caster `[638,640,31,656]`、target `[17,638,53,31,656]`、obs_in `[17,638,31,656]`；
     /// - RM（实测）：8044(target,p1=15,108)、10052(target,68)、8103(众人,w=15/p1=85/p2=224/p3=caster,167)、
     ///   8090(攻击方 hearers,154)、10123(caster,p1=33,255)、10008 的 p3=33。
+    ///
     /// 范围来源：部署 `Server.conf` 的 `SnowWindRange=1`（golden `Fixture.snow_wind_range`）；
     /// `Fixture.server_conf_sha256` = `ce5e3ce9…`（与部署文件 sha 一致）。
     ///
