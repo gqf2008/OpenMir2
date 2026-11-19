@@ -65603,6 +65603,84 @@ SendRefMsgRange=15
         fireball_case_assert("fireball5", "hit", 85, 5);
     }
 
+    /// **金标准侧**的排水量断言：`DrainPasses` 与期望一致、**`DrainPassesHitCap` 必须为 false**
+    /// （上界命中 = 金标准账本可能不完整，必须红，见卡 §22b）。
+    ///
+    /// 断言对象是 C# 产物（`golden/magic/<name>.json`），不是 Rust 台账——Rust 侧没有
+    /// "排水趟数"这个概念（它只调一次交付 + 宿主出帧）。
+    fn b1_golden_drain_assert(golden: &str, label: &str, passes: i64) {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/magic")
+            .join(golden);
+        let raw = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("金标准必须存在 {}（{e}）", path.display()));
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let case = v["cases"]
+            .as_array()
+            .expect("金标准必须有 cases")
+            .iter()
+            .find(|c| c["Label"] == label)
+            .unwrap_or_else(|| panic!("金标准缺 {label} 支"));
+        assert_eq!(
+            case["DrainPasses"], passes,
+            "[{golden}/{label}] DrainPasses 与期望不符"
+        );
+        assert_eq!(
+            case["DrainPassesHitCap"], false,
+            "[{golden}/{label}] DrainPassesHitCap 为 true ⇒ 金标准账本可能不完整，必须红"
+        );
+    }
+
+    /// `11/45 雷电`（`SKILL_LIGHTENING` / `SKILL_45`，共用 `case` 臂）真实台账驱动。
+    /// 金标准：`golden/magic/lightning-11.json` / `lightning-45.json`；夹具与 `Fixture` 字段同火球。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_parity_miss() {
+        fireball_parity_drive("lightning11", 11, "miss", 1, 1000);
+        fireball_case_assert("lightning11", "miss", 100, 1);
+        b1_golden_drain_assert("lightning-11.json", "miss", 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_parity_edge() {
+        fireball_parity_drive("lightning11", 11, "edge", 5, 2000);
+        fireball_case_assert("lightning11", "edge", 85, 5);
+        b1_golden_drain_assert("lightning-11.json", "edge", 4);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning11_parity_hit() {
+        fireball_parity_drive("lightning11", 11, "hit", 13, 3000);
+        fireball_case_assert("lightning11", "hit", 85, 5);
+        b1_golden_drain_assert("lightning-11.json", "hit", 4);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning45_parity_miss() {
+        fireball_parity_drive("lightning45", 45, "miss", 1, 1000);
+        fireball_case_assert("lightning45", "miss", 100, 1);
+        b1_golden_drain_assert("lightning-45.json", "miss", 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning45_parity_edge() {
+        fireball_parity_drive("lightning45", 45, "edge", 5, 2000);
+        fireball_case_assert("lightning45", "edge", 85, 5);
+        b1_golden_drain_assert("lightning-45.json", "edge", 4);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn lightning45_parity_hit() {
+        fireball_parity_drive("lightning45", 45, "hit", 13, 3000);
+        fireball_case_assert("lightning45", "hit", 85, 5);
+        b1_golden_drain_assert("lightning-45.json", "hit", 4);
+    }
+
     /// gate 通道上取到的一条下行：`(socket, 帧体 / `SendRaw` 短包字节)`。
     type SfFrame = (i32, Vec<u8>);
 
