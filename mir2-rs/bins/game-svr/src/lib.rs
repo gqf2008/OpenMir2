@@ -23977,6 +23977,51 @@ fn flush_map_mode_writes(
     applied
 }
 
+/// **卡 `openmir2-setmapmode-map-refresh`**：把注册表的 `Envir.Flag` 回填进世界镜像。
+///
+/// oracle 只有**一份** `Envir.Flag`：脚本动作 `ActionOfSetMapMode`
+/// （`ExecutionProcessingSys.cs:4423-4881`）当场写 `envir.Flag.*`，所有读者立刻看到新值。
+/// 本仓世界侧消费者读的是 `world.maps` / `world.map_exp_rate`（启动时由注册表灌入一次）：
+/// `SetPkFlag` 的战区门（`PlayObject.cs:4331`）、`DieDropItems` 的
+/// `!FightZone && !Fight3Zone` 与 `NoDropItem`（`BaseObject.cs:2452`）、`NEEDHOLE`
+/// 落地门（`PlayObject.cs:1874`）、`EXPRATE` 杀怪经验（`BaseObject.GetExp` 系）。
+/// 不回填 ⇒ 这些消费者永远拿启动时的旧 Flag。
+///
+/// 只镜像**世界建了对应存储的四项**（与启动灌入同一组 setter、同一取数）；其它 Flag
+/// （SAFE/DARK/DECHP/…）本来就只由宿主读注册表，不需要镜像。
+fn sync_map_flags_into_world(
+    world: &mut mir2_world_bevy::World,
+    registry: &mir2_envir::MapRegistry,
+) {
+    for map_id in 0..world.maps.len() {
+        let Some(f) = registry.flag_of(map_id) else {
+            continue;
+        };
+        world.set_map_exp_rate(map_id, f.bo_exprate.then_some(f.exp_rate));
+        world.set_map_need_hole(map_id, f.bo_needhole);
+        world.set_map_fight_zone(map_id, f.fight_zone, f.fight3_zone);
+        world.set_map_no_drop_item(map_id, f.no_drop_item);
+    }
+}
+
+/// 生产调用面：`SETMPAMODE` 落库后**立即**回填世界镜像（先注册表、后世界，同一 tick）。
+///
+/// 顺序是语义的一部分：回填必须在 `flush_map_mode_writes` **之后**读注册表，否则拿到
+/// 的仍是旧 Flag（牙：把 `sync_map_flags_into_world` 挪到 flush 之前 ⇒ 新用例红）。
+fn flush_map_mode_writes_into_world(
+    shop_sessions: &mut std::collections::HashMap<String, ShopSession>,
+    mut registry: Option<&mut mir2_envir::MapRegistry>,
+    world: &mut mir2_world_bevy::World,
+) -> usize {
+    let applied = flush_map_mode_writes(shop_sessions, registry.as_deref_mut());
+    if applied > 0 {
+        if let Some(reg) = registry.as_deref() {
+            sync_map_flags_into_world(world, reg);
+        }
+    }
+    applied
+}
+
 /// **PL-3 / P25**：地图 `DECHP`/`INCHP`（`PlayObject.Message.cs:569-594`）。
 ///
 /// 逐会话（**按键排序**）读 `Envir.Flag`（`MapRegistry::flag_of(entity.map_id)`）：
@@ -30176,7 +30221,9 @@ fn sim_loop(
         // 相对次序变为「玩家 Run 段末尾」（设计件 §4.4，属 R 窗口证据）。
         // **A-21/T-85**：本 tick 各条命令里 `SETMPAMODE` 收集到的地图 Flag 写先落库，
         // 再进 P22/P25 的消费点（oracle 是脚本动作当场写、同 tick 后段消费）。
-        flush_map_mode_writes(&mut shop_sessions, registry.as_mut());
+        // **卡 `openmir2-setmapmode-map-refresh`**：落库后同一处回填 `world.maps`
+        // （世界侧消费者读镜像；oracle 只有一份 `Envir.Flag`）。
+        flush_map_mode_writes_into_world(&mut shop_sessions, registry.as_mut(), &mut world);
         drain_player_game_gold(
             &mut world,
             &mut ground_sessions,
@@ -41317,6 +41364,107 @@ break
             "HP -= nDECHPPOINT（:572-574）"
         );
         assert_eq!(rig.sessions["hero"].state.wabil.hp, 90, "53 投影同步");
+    }
+
+    /// **`openmir2-setmapmode-map-refresh`（证伪/修复面）**：脚本动作 `SETMPAMODE FIGHT`
+    /// 落库后，`world.maps` 必须与注册表 `Envir.Flag` 同步。
+    ///
+    /// oracle 只有**一份** `Envir.Flag`：`ExecutionProcessingSys.cs:4455-4462` 当场写
+    /// `envir.Flag.FightZone`，所有读者立刻看到新值。本仓世界侧读者
+    /// （`SetPkFlag` 的战区门、`DieDropItems`、`NEEDHOLE` 落地门、`EXPRATE`）读
+    /// `world.maps`/`map_exp_rate` 镜像 ⇒ 必须回填。
+    ///
+    /// 判据全部直读状态（不靠日志/帧推断）：
+    /// - 注册表 `flag_of(0).fight_zone`；
+    /// - `world.maps[0].is_fight_zone()`；
+    /// - `World::set_pk_flag` 的战区门（不置位、不产 RefNameColor 观察值）。
+    #[test]
+    fn setmpamode_fight_refreshes_world_map_flags_and_world_consumers() {
+        let mut rig = T142Rig::new(vec![t142_record(
+            "@main",
+            "",
+            vec![
+                setmapamode_act("A", "FIGHT", "1", ""),
+                // 另外三项世界镜像：只同步一项的变异必须被这条用例抓住。
+                setmapamode_act("A", "NEEDHOLE", "1", ""),
+                setmapamode_act("A", "NODROPITEM", "1", ""),
+                setmapamode_act("A", "EXPRATE", "2", ""),
+            ],
+        )]);
+        rig.npc_vars.map_names = vec!["A".to_string()];
+        rig.npc_vars.sys_msg = game_svr::npc::SysMsgCfg::default();
+        rig.dlg_select("@main");
+        let (mut registry, _dir) = pl3_registry("");
+        assert!(
+            !registry.flag_of(0).unwrap().fight_zone,
+            "前置：注册表未设 FIGHT"
+        );
+        assert!(!rig.world.maps[0].is_fight_zone(), "前置：world 未设 FIGHT");
+        let applied = flush_map_mode_writes_into_world(
+            &mut rig.shop_sessions,
+            Some(&mut registry),
+            &mut rig.world,
+        );
+        assert_eq!(applied, 4, "四条 SETMPAMODE 写必须落库");
+        // **同 tick 两侧相等**（oracle 语义：脚本动作当场写同一份 `Envir.Flag`）——
+        // 宿主侧读者 = 注册表、世界侧读者 = `world.maps`/`map_exp_rate` 镜像；
+        // 任何一项只同步一半或少同步一项，这里都不等。
+        // 先钉死宿主侧（注册表）四项的明确期望值。
+        let reg = registry.flag_of(0).unwrap();
+        assert!(
+            reg.fight_zone && reg.bo_needhole && reg.no_drop_item && reg.bo_exprate,
+            "注册表四项应均为新值：fight={} need_hole={} no_drop={} expr={}",
+            reg.fight_zone,
+            reg.bo_needhole,
+            reg.no_drop_item,
+            reg.bo_exprate
+        );
+        assert_eq!(reg.exp_rate, 2, "注册表 ExpRate = StrToInt(\"2\")");
+        // 再钉死世界镜像的**明确期望值**：牙 C（只同步 FIGHT）时这一条把
+        // need_hole / no_drop_item / exp_rate 三项的期望与实际一次打出。
+        let w = &rig.world.maps[0];
+        assert_eq!(
+            (
+                w.is_fight_zone(),
+                w.need_hole(),
+                w.no_drop_item(),
+                rig.world.map_exp_rate[0]
+            ),
+            (true, true, true, Some(2)),
+            "世界镜像的明确期望值（need_hole / no_drop_item / exp_rate 任一未同步即红）"
+        );
+        // 最终口径：同一 tick、未过下一 tick，宿主侧与世界侧**逐项相等**
+        //（比"最终一致"严，正是 oracle 单对象语义）。
+        assert_eq!(
+            (
+                w.is_fight_zone(),
+                w.need_hole(),
+                w.no_drop_item(),
+                rig.world.map_exp_rate[0]
+            ),
+            (
+                reg.fight_zone || reg.fight3_zone,
+                reg.bo_needhole,
+                reg.no_drop_item,
+                reg.bo_exprate.then_some(reg.exp_rate)
+            ),
+            "同一 tick：宿主侧（注册表）与世界侧（world.maps/map_exp_rate）读取必须逐项相等"
+        );
+        // 世界侧消费者：战区门挡住 SetPkFlag（不置位、不产 RefNameColor 观察值）。
+        let hero = rig.sessions["hero"].actor_id;
+        let spy = rig.world.add_entity({
+            let mut e = mir2_world_bevy::EntitySpawn::new(2, "spy".to_string(), 11, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            e
+        });
+        assert!(
+            rig.world.set_pk_flag(hero, spy).is_none(),
+            "FightZone 生效 ⇒ SetPkFlag 直接返回（PlayObject.cs:4331 的门）"
+        );
+        assert!(
+            !rig.world.entities.get(spy).unwrap().pvp_flag,
+            "攻击方不得被置位"
+        );
     }
 
     /// `take`/`give` 的 **`nParam2`** 口径（`ScriptParsers.cs:554`：动作的件数在 **sParam2** ⇒
