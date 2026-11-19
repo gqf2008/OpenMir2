@@ -120,3 +120,42 @@
   当前量级数百可接受，若走怪数显著上升需重评（不新增问题：T-287 既有设计）。
 - 牙：m9 = 站点回退 `hear_targets_from_walk_candidates` 直投 ⇒ 第二步 `Δ=12` 也收（红）；
   m10 = 去缓存 TTL ⇒ `ref_msg_cache_expires_after_500ms` + `np11 fresh_scan` 同红。
+
+### 批 5（RM_USERNAME / 42 族）
+- #15 `castle.rs::refresh_show_name_in_area`：内层收件人改走
+  `ref_msg_cache::targets(world, target_id, ref_range)`（按被展示者键控）。
+  **两个半径不许混**：外层 `range` 是 `GetMapRageHuman` 的目标筛选半径（`<=`），
+  `ref_range` 才是 `SendRefMsg` 的收件人半径；缓存只用 `ref_range`。用例
+  `castle_show_name_two_radii_are_independent` 钉住「外层半径变 ⇒ 收件人不变/无目标零帧」。
+- #15 N1 丢帧与收件人集合分开验：`castle_show_name_n1_drop_is_color_not_recipient_set` ——
+  `chat::hear_targets` 对照证明扫描面**含**攻方观察者，而它在 `query_user_name_color` 的
+  N1 支零帧；同集合无会观察者照收 ⇒ 丢帧发生在颜色判定，不是缓存少给收件人。
+- 同窗缓存证据：`castle_show_name_cache_window_second_refresh_hits_cache`
+  （首份 Δ12 收、次份 Δ11/Δ12 挡、Δ5 两拍收、Δ13 零帧）。
+- #16 `guild_cmd.rs::ref_show_name`：收件人改走
+  `ref_msg_cache::targets(self.world, target_id, self.ref_range)`；同一次 `flush` 里对同一
+  target 的两条 `Deferred::RefShowName` 各判一遍缓存。用例：
+  `ref_show_name_cache_window_second_call_hits_cache`、
+  `ref_show_name_two_deferred_in_one_flush_share_cache_window`（多副本专项：一次 flush 两条）、
+  `ref_show_name_hidden_target_only_self`（隐藏 ⇒ 只自己）。
+- #17 `guild_official.rs::handle_select`（建会成功支）：收件人改走
+  `ref_msg_cache::targets(world, actor_id, ref_range)`；隐藏被展示者 ⇒ `[self]`（oracle 退化
+  自投）。用例：`build_guild_ref_show_name_cache_window_second_build_hits_cache`（同窗两次
+  建会，不同会名：首建 Δ12 收、次建 Δ11/Δ12 挡）、
+  `build_guild_ref_show_name_hidden_hero_only_self`（隐藏 ⇒ 只自己）。
+- #18 `guild_official.rs::war_events_to_frames`：`GuildWarEvent::RefShowName` 的收件人改走
+  `ref_msg_cache::targets(world, e.actor_id, ref_range)`（按成员键控）。用例
+  `war_events_two_ref_show_name_same_member_share_cache_window`（多副本专项：一次 events
+  里两条同 member ⇒ 第二条命中缓存；Δ11/Δ12 只收首份、Δ5 两份、Δ13 零帧）。
+- **批 5 既有 42 用例核查（四条都无需改期望，QA 可逐条抽查）**：
+  1. `enter.rs::username_and_daychanging_are_wired_in_order` —— `enter.rs` 全文
+     `ref_msg_cache|hear_targets` 命中 **0**；用例经 `enter::apply` + `EnterWorldInputs::frames()`
+     纯编码器构造登录包（ClientQueryUserName + RefShowName 两条 42），不经缓存；
+  2. `smframe::ref_show_name_emits_second_username_frame_byte_identical` ——
+     `login_scenario_inputs(...).frames()` 纯编码器，同上；
+  3. `query_user_name_near_username_far_ghost_missing_no_frame` —— 经
+     `handle_query_user_name_cmd`（CM_QUERYUSERNAME）：单 body 直发请求者 socket，**不**走
+     `hear_targets`/缓存（函数体内无这两者）；
+  4. `slave_mutiny_downlink_emits_namecolor_then_username` —— 属 **批 6 的 #8**
+     （`drain_slave_mutiny_downlink` 仍走 `chat::hear_targets`），单事件单次 `SendRefMsg`；
+     批 5 未动该站点。

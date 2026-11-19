@@ -92297,6 +92297,238 @@ GMEXECUTE f
         assert!(collect_raw(&mut rx0).is_empty(), "隐藏走怪不得产生 SM_WALK");
     }
 
+    /// 批 5 城堡夹具：被展示者 `t(10,10)`（socket 901）+ 观察者 +5/+11/+12/+13（902–905）。
+    /// 外层 `range=1`、home=(10,10) ⇒ 只有 `t` 是被展示目标；`ref_range` 决定收件人。
+    #[allow(clippy::type_complexity)]
+    fn castle_show_name_fixture() -> (
+        mir2_world_bevy::World,
+        OnlineRegistry,
+        HashMap<String, SessionGround>,
+        HashMap<u8, mpsc::UnboundedSender<SimToGate>>,
+        mpsc::UnboundedReceiver<SimToGate>,
+        downlink::DisplayTable,
+        i32,
+    ) {
+        let mut world = mir2_world_bevy::World::with_maps(vec![(64, 64)]);
+        let mut t = mir2_world_bevy::EntitySpawn::new(0, "t", 10, 10);
+        t.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+        let target = world.add_entity(t);
+        let mut online: OnlineRegistry = Vec::new();
+        online_set(
+            &mut online,
+            OnlineEntry {
+                account: "ut".into(),
+                chr_name: "t".into(),
+                session_id: 1,
+                gate_idx: 0,
+                socket: 901,
+                actor_id: target,
+            },
+        );
+        let mut sessions: HashMap<String, SessionGround> = HashMap::new();
+        sessions.insert("t".into(), test_session_ground(target));
+        for (i, (dx, socket)) in [(5, 902), (11, 903), (12, 904), (13, 905)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut e = mir2_world_bevy::EntitySpawn::new(0, format!("o{i}"), 10 + dx, 10);
+            e.race = mir2_world_bevy::ACTOR_RACE_PLAY;
+            let id = world.add_entity(e);
+            online_set(
+                &mut online,
+                OnlineEntry {
+                    account: format!("u{i}"),
+                    chr_name: format!("o{i}"),
+                    session_id: 2 + i as i32,
+                    gate_idx: 0,
+                    socket,
+                    actor_id: id,
+                },
+            );
+            sessions.insert(format!("o{i}"), test_session_ground(id));
+        }
+        let mut displays = downlink::DisplayTable::new();
+        displays.set(
+            target,
+            downlink::ActorDisplay::new(0, 0, 0, 0, 0, 255, b"T-NAME".to_vec()),
+        );
+        let (tx0, rx0) = mpsc::unbounded_channel::<SimToGate>();
+        let mut gates: HashMap<u8, mpsc::UnboundedSender<SimToGate>> = HashMap::new();
+        gates.insert(0, tx0);
+        (world, online, sessions, gates, rx0, displays, target)
+    }
+
+    /// **T-287 残余 #15**（`castle::refresh_show_name_in_area`）：同窗两次触发 ⇒ 第二次走
+    /// 500ms 缓存（`|Δ|<11`）；首份 Δ12 收、次份 Δ11/Δ12 挡、Δ5 两拍收、Δ13 零帧。
+    ///
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 次份 Δ12 也收 ⇒ 红。
+    #[test]
+    fn castle_show_name_cache_window_second_refresh_hits_cache() {
+        let (world, online, sessions, gates, mut rx, displays, _target) =
+            castle_show_name_fixture();
+        let war_states = std::collections::HashMap::new();
+        let call = || {
+            game_svr::castle::refresh_show_name_in_area(
+                &online,
+                &world,
+                &displays,
+                &gates,
+                &sessions,
+                &war_states,
+                Some(0),
+                10,
+                10,
+                1,
+                12,
+            )
+        };
+        let _ = call();
+        let first = refmsg_b2_count(&mut rx);
+        assert_eq!(first.get(&901), Some(&1), "首份：被展示者自己收 42");
+        assert_eq!(first.get(&902), Some(&1), "首份：+5 收");
+        assert_eq!(first.get(&903), Some(&1), "首份：|Δ|=11 在 ±12 内");
+        assert_eq!(first.get(&904), Some(&1), "首份：|Δ|=12 闭区间边界");
+        assert_eq!(first.get(&905), None, "首份：+13 零帧");
+        let _ = call();
+        let second = refmsg_b2_count(&mut rx);
+        assert_eq!(second.get(&901), Some(&1), "第二份：自己仍收（Δ0 < 11）");
+        assert_eq!(second.get(&902), Some(&1), "第二份：+5 仍收");
+        assert_eq!(second.get(&903), None, "第二份：|Δ|=11 被严格 <11 挡");
+        assert_eq!(second.get(&904), None, "第二份：|Δ|=12 被挡");
+        assert_eq!(second.get(&905), None, "第二份：+13 仍零帧");
+    }
+
+    /// **#15 两个半径不许混**：外层 `range`（`GetMapRageHuman` 目标筛选）与 `ref_range`
+    /// （`SendRefMsg` 收件人）是两个量，缓存只用 `ref_range`。
+    ///
+    /// 牙：把内层换成 `range`（或把外层换成 `ref_range`）⇒ 本用例红。
+    #[test]
+    fn castle_show_name_two_radii_are_independent() {
+        let (world, online, sessions, gates, mut rx, displays, _target) =
+            castle_show_name_fixture();
+        let war_states = std::collections::HashMap::new();
+        // ① 外层 range=1、ref_range=5 ⇒ 只有自己与 +5（+11/+12 超 ref_range）。
+        let _ = game_svr::castle::refresh_show_name_in_area(
+            &online,
+            &world,
+            &displays,
+            &gates,
+            &sessions,
+            &war_states,
+            Some(0),
+            10,
+            10,
+            1,
+            5,
+        );
+        let per = refmsg_b2_count(&mut rx);
+        assert_eq!(per.get(&901), Some(&1));
+        assert_eq!(per.get(&902), Some(&1), "ref_range=5 ⇒ +5 收");
+        assert_eq!(per.get(&903), None, "ref_range=5 ⇒ +11 不收");
+        assert_eq!(per.get(&904), None, "ref_range=5 ⇒ +12 不收");
+        // ② 外层 range 不变、ref_range=12 ⇒ 收件人扩到 Δ12（外层半径不参与收件人判定）。
+        world.reset_ref_msg_cache();
+        let _ = game_svr::castle::refresh_show_name_in_area(
+            &online,
+            &world,
+            &displays,
+            &gates,
+            &sessions,
+            &war_states,
+            Some(0),
+            10,
+            10,
+            1,
+            12,
+        );
+        let per = refmsg_b2_count(&mut rx);
+        assert_eq!(
+            per.get(&904),
+            Some(&1),
+            "ref_range=12 ⇒ +12 收（外层 range 仍 1）"
+        );
+        // ③ 外层 range 把目标筛掉（home 移远）⇒ 零帧，即便 ref_range=12。
+        world.reset_ref_msg_cache();
+        let _ = game_svr::castle::refresh_show_name_in_area(
+            &online,
+            &world,
+            &displays,
+            &gates,
+            &sessions,
+            &war_states,
+            Some(0),
+            30,
+            30,
+            1,
+            12,
+        );
+        assert!(
+            refmsg_b2_count(&mut rx).is_empty(),
+            "外层 range 无目标 ⇒ 零帧（与 ref_range 无关）"
+        );
+    }
+
+    /// **#15 N1 丢帧与收件人集合分离**：收件人扫描面**包含**攻方观察者（`chat::hear_targets`
+    /// 对照），但它在颜色判定处命中 N1（城主会观察者）⇒ 该收件人零帧；同集合里的无会观察者
+    /// 照收 ⇒ 丢帧发生在 `query_user_name_color`，不是缓存少给收件人。
+    #[test]
+    fn castle_show_name_n1_drop_is_color_not_recipient_set() {
+        let (mut world, online, mut sessions, gates, mut rx, displays, target) =
+            castle_show_name_fixture();
+        // 城：`under_war` + 覆盖 t 的 war area + `OwnGuild=攻方`（`is_master_guild_name` 命中）。
+        let mut c = mir2_world_bevy::castle::UserCastle::new(
+            "沙巴克",
+            mir2_world_bevy::castle::CastleSiegeConfig::default(),
+        );
+        c.under_war = true;
+        c.castle_map_id = Some(0);
+        c.home_x = 10;
+        c.home_y = 10;
+        c.war_range_x = 20;
+        c.war_range_y = 20;
+        c.master_guild = Some(mir2_world_bevy::castle::GuildId(1));
+        c.own_guild = Some("攻方".to_string());
+        world.castles.push(c);
+        // 会话行会：+5(902)=攻方（**任何有会观察者**在战区都会 N1，见 `get_chr_color` 的
+        // else 支）；t 与其余观察者**无会** ⇒ 颜色支返回 Ok。若给 t 设会，它自己也会被 N1 丢。
+        sessions.get_mut("o0").unwrap().guild.guild_name = Some("攻方".to_string());
+        // 战区标记：t 与 902 都在战区；903/904 不在。
+        let o0 = online.iter().find(|e| e.socket == 902).unwrap().actor_id;
+        let mut war_states = std::collections::HashMap::new();
+        let mut st = mir2_world_bevy::castle::CastleWarState::new(0);
+        st.in_guild_war_area = true;
+        war_states.insert(target, st);
+        war_states.insert(o0, st);
+        let _ = game_svr::castle::refresh_show_name_in_area(
+            &online,
+            &world,
+            &displays,
+            &gates,
+            &sessions,
+            &war_states,
+            Some(0),
+            10,
+            10,
+            1,
+            12,
+        );
+        let per = refmsg_b2_count(&mut rx);
+        let scanned = chat::hear_targets(&world, target, 12);
+        assert!(
+            scanned.contains(&o0),
+            "扫描面必须含 902（证明丢帧不是集合少给了收件人）"
+        );
+        assert_eq!(per.get(&901), Some(&1), "自己无会 ⇒ 颜色支 Ok，收帧");
+        assert_eq!(
+            per.get(&902),
+            None,
+            "有会观察者 ⇒ N1 丢帧（颜色判定处；`get_chr_color` else 支）"
+        );
+        assert_eq!(per.get(&903), Some(&1), "无会观察者照收 ⇒ 丢帧只在颜色支");
+        assert_eq!(per.get(&904), Some(&1), "|Δ|=12 无会观察者照收");
+        assert_eq!(per.get(&905), None, "+13 零帧");
+    }
+
     // =========================================================================================
     // T-203：`SM_QUERYYBDEAL(23023)` / `SM_QUERYYBSELL(23021)` —— 可达性钉（**不可达登记**）
     //

@@ -1203,7 +1203,12 @@ pub(crate) fn refresh_show_name_in_area(
         let target_in_war = war_states
             .get(&target_id)
             .is_some_and(|s| s.in_guild_war_area);
-        for recipient in crate::chat::hear_targets(world, target_id, ref_range) {
+        // **T-287 残余 #15**：`RefShowName()` 的 `SendRefMsg(RM_USERNAME, …)` 同走 500ms
+        // 缓存（按**被展示者**键控；首扫 `<= ref_range`、命中 `|Δ|<11`）。
+        //
+        // **两个半径不许混**：外层 `range` 是 `GetMapRageHuman` 的**目标筛选**半径（`<=`），
+        // 这里的 `ref_range` 才是 `SendRefMsg` 的收件人半径；缓存只用 `ref_range`。
+        for recipient in crate::ref_msg_cache::targets(world, target_id, ref_range) {
             let viewer_guild = guild_name_of(online, sessions, recipient);
             let viewer_in_war = war_states
                 .get(&recipient)

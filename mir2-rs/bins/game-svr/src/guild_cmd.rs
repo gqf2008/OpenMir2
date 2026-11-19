@@ -58,7 +58,6 @@
 use std::collections::HashMap;
 use tokio::sync::mpsc::UnboundedSender;
 
-use game_svr::chat;
 use game_svr::downlink::{self, DisplayTable};
 use mir2_data::guild::{GuildFileSections, GuildRecord, GuildStore};
 use mir2_protocol::messages;
@@ -430,7 +429,7 @@ impl<S: GuildSessions> Ctx<'_, S> {
     }
 
     /// `BaseObject.RefShowName()`（`BaseObject.Base.cs:1174-1177`）⇒ `SendRefMsg(RM_USERNAME)`：
-    /// 收件人集合 = [`chat::hear_targets`]（含自己，已处理 `ObMode`/`FixedHideMode`）；
+    /// 收件人集合 = [`crate::chat::hear_targets`]（现走 `ref_msg_cache::targets`；含自己，已处理 `ObMode`/`FixedHideMode`）；
     /// `Recog` = **被展示者**的 `ActorId`，尾 = `GetShowName()` 的 GBK 字节（展示表缓存，与登录同源）。
     fn ref_show_name(&self, target_id: i32) {
         let Some(display) = self.displays.get(target_id) else {
@@ -441,7 +440,10 @@ impl<S: GuildSessions> Ctx<'_, S> {
             return;
         };
         let body = smframe::sm_username(target_id, display.name_color, &display.show_name);
-        for recipient in chat::hear_targets(self.world, target_id, self.ref_range) {
+        // **T-287 残余 #16**：`RefShowName()` 的 `SendRefMsg(RM_USERNAME, …)` 同走 500ms
+        // 缓存（按被展示者键控；首扫 `<= ref_range`、命中 `|Δ|<11`）。同一次 `flush`
+        // 里对同一 target 的两条 `Deferred::RefShowName` 各判一遍缓存。
+        for recipient in crate::ref_msg_cache::targets(self.world, target_id, self.ref_range) {
             self.send_to(recipient, body.clone(), "行会 RefShowName");
         }
     }
@@ -1547,5 +1549,140 @@ mod tests {
         }
         assert!(!set.contains(&1042), "1042 不进行会臂");
         assert!(!set.contains(&1043), "1043 不进行会臂");
+    }
+
+    // ---- 批 5 #16：`RefShowName` 的 42 缓存 ----
+
+    /// 批 5 #16：构建最小 `Ctx` 并交给闭包（`ref_show_name` 只读 world/online/displays/gates）。
+    fn with_ctx<R>(
+        rig: &mut Rig,
+        f: impl FnOnce(&Ctx<'_, HashMap<String, GuildSession>>) -> R,
+    ) -> R {
+        let me = rig
+            .online
+            .iter()
+            .find(|e| e.chr_name == GM)
+            .expect("GM 在线");
+        let cfg = GuildConfig::default();
+        let sections = GuildFileSections::oracle_defaults();
+        let msg_cfg = GuildMsgCfg::from_config(&cfg, false, "");
+        let ctx = Ctx {
+            tail: "",
+            chr_name: GM,
+            me,
+            online: &rig.online,
+            world: &rig.world,
+            displays: &rig.displays,
+            guilds: &mut rig.guilds,
+            cfg: &cfg,
+            sessions: &mut rig.sessions,
+            gates: &rig.gates,
+            ref_range: 12,
+            green: GREEN,
+            red: RED,
+            store: None,
+            sections: &sections,
+            msg_cfg: &msg_cfg,
+            server_index: 0,
+            now_tick: rig.now,
+            events: Vec::new(),
+        };
+        f(&ctx)
+    }
+
+    /// 给 Rig 追加一个观察者（world 实体 + online + 展示表）。
+    fn add_observer(rig: &mut Rig, name: &str, x: i32, y: i32, socket: i32) -> i32 {
+        let id = add_player(&mut rig.world, name, x, y, 0);
+        rig.displays.set(
+            id,
+            ActorDisplay::new(0, 0, 0, 0, 0, 255, downlink::gbk(name)),
+        );
+        rig.online.push(OnlineEntry {
+            account: name.to_string(),
+            chr_name: name.to_string(),
+            session_id: socket,
+            gate_idx: 0,
+            socket,
+            actor_id: id,
+        });
+        id
+    }
+
+    fn count_by_socket(frames: Vec<(i32, Vec<u8>)>) -> HashMap<i32, usize> {
+        let mut per: HashMap<i32, usize> = HashMap::new();
+        for (socket, _) in frames {
+            *per.entry(socket).or_default() += 1;
+        }
+        per
+    }
+
+    /// **T-287 残余 #16**（`guild_cmd::ref_show_name`，42）：同窗两次 `RefShowName` ⇒ 第二次
+    /// 命中 500ms 缓存（`|Δ|<11`）。几何：被展示者 `MEMBER(6,5)`；观察者
+    /// `(11,5)Δ5` / `(17,5)Δ11` / `(18,5)Δ12` / `(19,5)Δ13`。
+    ///
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 次份 Δ11/Δ12 也收 ⇒ 红。
+    #[test]
+    fn ref_show_name_cache_window_second_call_hits_cache() {
+        let mut rig = Rig::new();
+        let target = rig.actor(MEMBER);
+        add_observer(&mut rig, "o5", 11, 5, 911);
+        add_observer(&mut rig, "o11", 17, 5, 912);
+        add_observer(&mut rig, "o12", 18, 5, 913);
+        add_observer(&mut rig, "o13", 19, 5, 914);
+        with_ctx(&mut rig, |ctx| ctx.ref_show_name(target));
+        let first = count_by_socket(rig.drain());
+        assert_eq!(first.get(&102), Some(&1), "首份：被展示者自己收（含自）");
+        assert_eq!(first.get(&911), Some(&1), "首份：+5 收");
+        assert_eq!(first.get(&912), Some(&1), "首份：|Δ|=11 在 ±12 内");
+        assert_eq!(first.get(&913), Some(&1), "首份：|Δ|=12 闭区间边界");
+        assert_eq!(first.get(&914), None, "首份：+13 零帧");
+        with_ctx(&mut rig, |ctx| ctx.ref_show_name(target));
+        let second = count_by_socket(rig.drain());
+        assert_eq!(second.get(&102), Some(&1), "第二份：自己仍收（Δ0）");
+        assert_eq!(second.get(&911), Some(&1), "第二份：+5 仍收");
+        assert_eq!(second.get(&912), None, "第二份：|Δ|=11 被严格 <11 挡");
+        assert_eq!(second.get(&913), None, "第二份：|Δ|=12 被挡");
+        assert_eq!(second.get(&914), None, "第二份：+13 仍零帧");
+    }
+
+    /// **#16 一次 `flush` 两条同 target（多副本专项）**：第一条 `Deferred::RefShowName` 扫格、
+    /// 第二条命中缓存 ⇒ Δ11/Δ12 各只收**首份**一份，Δ5 收两份，Δ13 零帧。
+    ///
+    /// 牙：站点回退 `chat::hear_targets` ⇒ 912/913 各收 2 ⇒ 红。
+    #[test]
+    fn ref_show_name_two_deferred_in_one_flush_share_cache_window() {
+        let mut rig = Rig::new();
+        let target = rig.actor(MEMBER);
+        add_observer(&mut rig, "o5", 11, 5, 911);
+        add_observer(&mut rig, "o11", 17, 5, 912);
+        add_observer(&mut rig, "o12", 18, 5, 913);
+        add_observer(&mut rig, "o13", 19, 5, 914);
+        with_ctx(&mut rig, |ctx| {
+            ctx.flush(vec![
+                Deferred::RefShowName { target_id: target },
+                Deferred::RefShowName { target_id: target },
+            ]);
+        });
+        let per = count_by_socket(rig.drain());
+        assert_eq!(per.get(&102), Some(&2), "自己两份（Δ0 两拍都在 <11）");
+        assert_eq!(per.get(&911), Some(&2), "+5 两份");
+        assert_eq!(per.get(&912), Some(&1), "|Δ|=11 只收首份");
+        assert_eq!(per.get(&913), Some(&1), "|Δ|=12 只收首份");
+        assert_eq!(per.get(&914), None, "+13 零帧");
+    }
+
+    /// **#16 隐藏被展示者反向**：oracle 退化只发自己 ⇒ 只被展示者自己收 42，
+    /// 观察者（含 Δ1 的 GM）零帧。依赖前置 `4174de804`。
+    #[test]
+    fn ref_show_name_hidden_target_only_self() {
+        let mut rig = Rig::new();
+        let target = rig.actor(MEMBER);
+        add_observer(&mut rig, "o5", 11, 5, 911);
+        rig.world.entities.flags_mut(target).unwrap().ob_mode = true;
+        with_ctx(&mut rig, |ctx| ctx.ref_show_name(target));
+        let per = count_by_socket(rig.drain());
+        assert_eq!(per.get(&102), Some(&1), "隐藏：只自己收");
+        assert_eq!(per.get(&911), None, "隐藏：+5 零帧");
+        assert_eq!(per.get(&101), None, "隐藏：Δ1 的 GM 也零帧");
     }
 }
