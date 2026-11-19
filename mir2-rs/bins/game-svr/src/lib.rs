@@ -64994,9 +64994,37 @@ SendRefMsgRange=15
             table: &[(u16, u8)],
             observers: &[(&str, i32, i32, bool, i32)],
         ) -> Self {
+            Self::new_layout(64, 64, 0, 10, 10, learned, table, observers)
+        }
+
+        /// **卡 `openmir2-magic-parity` §22**：可指定世界尺寸、施法者起点与实体 id 段的构造器。
+        ///
+        /// `id_base == 0` ⇒ 由 `World::add_entity` 分配（与原 `new` 逐字节同行为）；
+        /// `id_base > 0` ⇒ caster = `id_base + 1`、第 i 个观察者 = `id_base + 2 + i`
+        /// （对齐 C# golden 的 ActorId 分段 1001/2001/3001——ActorId 会进 `SM_MAGICFIRE` 尾串，
+        /// 必须**构造时就同值**，不做落盘改名）。
+        ///
+        /// 世界尺寸/坐标是**行为输入**：`MagCanHitTarget` 沿格走位受 `get_next_position` 边界钳制
+        /// （施法者 (100,100) 朝 +x 走一步要求 `width >= 102`）；golden 用真实 `Map/0.map`，
+        /// 合成图必须至少覆盖 golden 几何 + 行走步长。
+        #[allow(clippy::too_many_arguments)]
+        fn new_layout(
+            width: i32,
+            height: i32,
+            id_base: i32,
+            caster_x: i32,
+            caster_y: i32,
+            learned: u16,
+            table: &[(u16, u8)],
+            observers: &[(&str, i32, i32, bool, i32)],
+        ) -> Self {
             use std::collections::HashMap;
-            let mut world = mir2_world_bevy::World::new(64, 64);
-            let caster = world.add_entity(new_player_entity("caster".to_string(), 10, 10));
+            let mut world = mir2_world_bevy::World::new(width, height);
+            let mut caster_spawn = new_player_entity("caster".to_string(), caster_x, caster_y);
+            if id_base > 0 {
+                caster_spawn.id = id_base + 1;
+            }
+            let caster = world.add_entity(caster_spawn);
             let mut displays = downlink::DisplayTable::new();
             displays.set(
                 caster,
@@ -65016,7 +65044,11 @@ SendRefMsgRange=15
             );
             for (i, o) in observers.iter().enumerate() {
                 let (name, x, y, ghost, socket): (&str, i32, i32, bool, i32) = *o;
-                let id = world.add_entity(new_player_entity(name.to_string(), x, y));
+                let mut spawn = new_player_entity(name.to_string(), x, y);
+                if id_base > 0 {
+                    spawn.id = id_base + 2 + i32::try_from(i).unwrap_or(0);
+                }
+                let id = world.add_entity(spawn);
                 if ghost {
                     world.entities.get_mut(id).unwrap().life_cycle.ghost = true;
                 }
@@ -65165,6 +65197,558 @@ SendRefMsgRange=15
             }
             (frames, raws)
         }
+    }
+
+    // ======================================================================
+    // 卡 `openmir2-magic-parity` §22：火球（1/5）**真实台账**驱动
+    // ======================================================================
+    //
+    // 输入 = 金标准 `mir2-rs/tests/parity/golden/magic/fireball.json` 的 C# 夹具（逐字段）：
+    // caster(100,100, ActorId=id_base+1, Abil.Level=30, WAbil.MC=15) /
+    // target(101,100, id_base+2, AntiMagic=3, HP=MaxHP=100, Abil.Level=20) /
+    // obs_in(105,100, id_base+3) / obs_out(140,100, id_base+4)；魔表行 `{MagicId=1,Effect=1,EffectType=1}`
+    // 其余字段缺省。三支的 ActorId 分段 = miss 1001.. / edge 2001.. / hit 3001..（C# ActorMgr 进程级，
+    // 同一进程多用例必须不同 id；Rust 每支独立世界，但**故意用同一组 id**，让尾串逐字节可比）。
+    //
+    // 台账 = 两段：① `handle_spell_cmd` 施法段；② 推进世界时钟 ≥600ms 后
+    // `World::deliver_self_delay_msgs` + 宿主出帧（`drain_b4_self_deliveries`，与 `sim_loop` 同一批函数）。
+    // RNG 账本走 `rng_trace`：**不截断**，按行号分段 `n0`（夹具就绪）/ `n1`（施法段结束）/
+    // `n2`（交付段结束）；交付段账本另存 `DeliverRng`（金标准只记施法段，故不进 `Rng` 比较面）。
+
+    /// 火球台账落盘目录：`MIR2_MAGIC_LEDGER_DIR` 可覆盖；缺省 `<workspace>/target/magic-parity`。
+    fn magic_ledger_dir() -> std::path::PathBuf {
+        if let Ok(d) = std::env::var("MIR2_MAGIC_LEDGER_DIR") {
+            return std::path::PathBuf::from(d);
+        }
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/magic-parity")
+    }
+
+    /// rng_trace TSV 的行数（`LineWriter` 逐行 flush ⇒ 运行中读到的一定是完整行）。
+    fn trace_line_count(path: &std::path::Path) -> usize {
+        std::fs::read_to_string(path)
+            .map(|s| s.lines().count())
+            .unwrap_or(0)
+    }
+
+    /// 读 rng_trace 的 `[from, to)` 行，解析为 `(seq, result, site)`。
+    ///
+    /// 头部两行（`INJECT_OK` / `SEED_PROBE`）落在 `n0` 之前，天然不进账本；这里仍对非数据行
+    /// **硬失败**：静默跳过会让「某段整体缺失」伪装成空账本。
+    fn trace_slice(path: &std::path::Path, from: usize, to: usize) -> Vec<(i64, i64, String)> {
+        let text = std::fs::read_to_string(path).expect("rng trace 文件必须存在");
+        let mut out = Vec::new();
+        for (i, line) in text.lines().enumerate() {
+            if i < from || i >= to {
+                continue;
+            }
+            let cols: Vec<&str> = line.split('\t').collect();
+            assert_eq!(
+                cols.len(),
+                5,
+                "rng trace 第 {} 行不是 5 列数据行（头部行不得落进账本区间）: {line}",
+                i + 1
+            );
+            let seq: i64 = cols[0].parse().expect("seq 必须是 int");
+            let result: i64 = cols[3].parse().expect("result 必须是 int");
+            out.push((seq, result, cols[4].to_string()));
+        }
+        assert_eq!(out.len(), to - from, "账本行数必须与行号区间一致");
+        out
+    }
+
+    /// trace 头部第二列 `INJECT_OK` 行的 seed（自证 `enable(path, seed)` 的 seed 与本支一致）。
+    fn trace_header_seed(path: &std::path::Path) -> i32 {
+        let text = std::fs::read_to_string(path).expect("rng trace 文件必须存在");
+        let first = text.lines().next().expect("trace 必须已有头部");
+        let cols: Vec<&str> = first.split('\t').collect();
+        assert_eq!(cols[1], "INJECT_OK", "trace 头部第一行必须是 INJECT_OK");
+        cols[2].parse().expect("INJECT_OK 的 seed 必须是 int")
+    }
+
+    /// 某支火球夹具（golden 几何 + golden ActorId 段）。
+    fn fireball_rig(id_base: i32, magic_id: u16) -> SpellFrameRig {
+        let mut rig = SpellFrameRig::new_layout(
+            200,
+            200,
+            id_base,
+            100,
+            100,
+            magic_id,
+            &[(magic_id, 1)],
+            &[
+                ("target", 101, 100, false, 912),
+                ("obs_in", 105, 100, false, 913),
+                ("obs_out", 140, 100, false, 914),
+            ],
+        );
+        // 魔表行 = C# `new MagicInfo { MagicId=<id>, MagicName="FireBall", Effect=1, EffectType=1 }`；
+        // 其余字段缺省 0（Power/MaxPower/DefPower/DefMaxPower = 0 ⇒ 前两抽 `Random(0)`）。
+        rig.magic_table = magics::MagicTable::new(vec![mir2_data::MagicInfo {
+            magic_id,
+            effect: 1,
+            effect_type: 1,
+            ..mir2_data::MagicInfo::default()
+        }]);
+        // 施法者：C# `Abil.Level = 30; WAbil.MC = 15`（Luck/PowerRate 的构造缺省 0/100）。
+        {
+            let e = rig.world.entities.get_mut(rig.caster).unwrap();
+            e.progression.level = 30;
+            e.player_run.luck = 0;
+            e.player_run.power_rate = 100;
+            e.vitals.hp = 500;
+            e.vitals.max_hp = 500;
+        }
+        {
+            let sg = rig.ground_sessions.get_mut("caster").unwrap();
+            sg.state.wabil.level = 30;
+            sg.state.wabil.mc = 15;
+            sg.state.wabil.sc = 0;
+            sg.state.wabil.mp = 0;
+            sg.state.wabil.max_mp = 0;
+            sg.state.wabil.hp = 500;
+            sg.state.wabil.max_hp = 500;
+        }
+        // 展示表 `feature` 归零：C# golden 的四个对象都未设外观 ⇒ `GetFeature() == 0`
+        // （进 `SM_STRUCK` 尾 `Param1`；rig 缺省给 111/112…，与金标准不一致）。
+        for e in rig.online.clone() {
+            if let Some(mut d) = rig.displays.get(e.actor_id).cloned() {
+                d.feature = 0;
+                rig.displays.set(e.actor_id, d);
+            }
+        }
+        // 目标：C# `AntiMagic=3; WAbil.MaxHP=100; HP=100; Abil.MaxHP=100; Abil.Level=20`。
+        let target = fireball_actor(&rig, "target");
+        {
+            let e = rig.world.entities.get_mut(target).unwrap();
+            e.vitals.anti_magic = 3;
+            e.vitals.hp = 100;
+            e.vitals.max_hp = 100;
+            e.progression.level = 20;
+        }
+        rig
+    }
+
+    fn fireball_actor(rig: &SpellFrameRig, who: &str) -> i32 {
+        rig.online
+            .iter()
+            .find(|e| e.chr_name == who)
+            .map_or_else(|| panic!("在线登记表缺 {who}"), |e| e.actor_id)
+    }
+
+    /// 把某 socket 的帧按 `golden.Receivers[].Sent` 的形状序列化（`ident/param/tag/series/tail`）。
+    fn fireball_sent(frames: &[SfFrame], socket: i32) -> Vec<serde_json::Value> {
+        frames
+            .iter()
+            .filter(|(s, _)| *s == socket)
+            .map(|(_, body)| {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(body)
+                    .unwrap_or_else(|| panic!("帧体长度不足 12 字节: {body:?}"));
+                serde_json::json!({
+                    "ident": cm.ident,
+                    "param": cm.param,
+                    "tag": cm.tag,
+                    "series": cm.series,
+                    // C# 侧 `tail` 是 `SendSocket(msg, sSendStr)` 的字符串本身；Rust 帧体的尾段
+                    // 就是同一串 EDCode 字节（ASCII）⇒ 按 UTF-8 直读。
+                    "tail": String::from_utf8_lossy(&body[mir2_protocol::frame::CommandMessage::SIZE..]),
+                })
+            })
+            .collect()
+    }
+
+    /// `SM_MAGICFIRE` 尾串（`EDCode.EncodeBuffer(int32 LE)`）解出目标 ActorId。
+    fn fireball_tail_i32(body: &[u8]) -> i32 {
+        let tail = &body[mir2_protocol::frame::CommandMessage::SIZE..];
+        let d = mir2_protocol::edcode::decode(tail);
+        assert!(d.len() >= 4, "SM_MAGICFIRE 尾解码后不足 4 字节: {d:?}");
+        i32::from_le_bytes([d[0], d[1], d[2], d[3]])
+    }
+
+    /// 一条 golden 同形的 RM 账本项（`msg`/`delivery` 不入比较面，取固定值）。
+    fn fireball_rm(
+        ident: i64,
+        w_param: i64,
+        p1: i64,
+        p2: i64,
+        p3: i64,
+        priority: i64,
+        late: bool,
+    ) -> serde_json::Value {
+        serde_json::json!({
+            "ident": ident,
+            "wParam": w_param,
+            "p1": p1,
+            "p2": p2,
+            "p3": p3,
+            "msg": "",
+            "late": late,
+            "delivery": 0,
+            "priority": priority,
+        })
+    }
+
+    /// 跑一支火球：施法段 + 延时交付段，落真实台账到 `<ledger_dir>/fireball_<label>.json`。
+    ///
+    /// **串行前提**：`rng_trace` 是进程级 `OnceLock`。本函数在开启前断言「本进程第一次开 trace」，
+    /// 并用头部 seed 自证；因此在同一进程里跑第二支会**红**（而不是静默读串的流水）。
+    /// 单跑命令：`cargo test -p game-svr --lib fireball_parity_miss -- --exact --test-threads=1`。
+    fn fireball_parity_drive(stem: &str, magic_id: u16, label: &str, seed: i32, id_base: i32) {
+        // 金标准的 `Sent` 是 **oracle 布局**（`SM_STRUCK` 头 = (受击者, HP, MaxHP, 伤害)、尾
+        // `Param1=GetFeature()`）。生产默认是冻结客户端 `HIGHHP` 布局（拆位 HP、尾 Param1=MaxHP）；
+        // 本用例**显式**切到 oracle 布局做语义对拍——`HIGHHP` 布局由
+        // `combat_downlink_sends_struck_and_nowdeath` 等既有用例钉住，不在本台账里重复。
+        std::env::set_var("MIR2_CLIENT_ABILITY_LAYOUT", "0");
+        let dir = magic_ledger_dir();
+        std::fs::create_dir_all(&dir).expect("台账目录必须可建");
+        let trace = dir.join(format!("{stem}_{label}_seed{seed}.rng.tsv"));
+        assert!(
+            !mir2_shared::rng_trace::enabled(),
+            "rng_trace 已被本进程其它路径开启（MIR2_RNG_LOG 或先跑的用例）⇒ 流水不可信；\
+             请以 --exact 单跑本用例、并清空 MIR2_RNG_LOG"
+        );
+        let _ = std::fs::remove_file(&trace); // enable 前清残留（此刻尚无写入端，不违反「不截断」）。
+        mir2_shared::rng_trace::enable(&trace, seed).expect("打开 rng trace");
+        assert_eq!(
+            trace_header_seed(&trace),
+            seed,
+            "trace 头部 seed 必须与本支一致"
+        );
+
+        let mut rig = fireball_rig(id_base, magic_id);
+        // 必须与 rng_trace::enable(path, seed) 的 seed 一致：trace 只记元数据，数值由 world.rng 产生。
+        rig.world.rng = mir2_shared::rng::RandomNumber::with_seed(seed);
+        let n0 = trace_line_count(&trace);
+        let caster = rig.caster;
+        let target = fireball_actor(&rig, "target");
+        let hp_before = rig.world.entities.get(target).unwrap().hp;
+
+        // ---- 段①：生产入口施法 ----
+        rig.cast(magic_id, (101, 100), target);
+        let n1 = trace_line_count(&trace);
+        let (cast_frames, _raws) = rig.drain();
+
+        // **RM 列来源（弱比较面，卡 §11 映射表）**：`RM_DELAYMAGIC` 只在施法段入队，
+        // 交付前抓它的载荷（wParam=nPower / nParam1=MakeLong / nParam2=nRage / nParam3=target）。
+        let delay_msg = rig
+            .world
+            .self_delay_msgs
+            .iter()
+            .find(|m| m.ident == mir2_world_bevy::slave::RM_DELAYMAGIC && m.actor_id == caster)
+            .map(|m| (m.w_param, m.n_param1, m.n_param2, m.n_param3, m.priority));
+
+        // ---- 段②：推进世界时钟（600ms 延时到期 + 余量）后交付；只推进/只交付，不跑 tick 循环 ----
+        rig.world.clock_ms += 800;
+        let outs = rig.world.deliver_self_delay_msgs();
+        // `RM_DELAYMAGIC` 到点投递的观察值（`struck` = 目标侧 `RM_MAGSTRUCK` 已入队）。
+        let delay_magic = outs.iter().find_map(|o| o.delay_magic);
+        let rec = mir2_world_bevy::TickRecord {
+            slave_self_deliveries: outs,
+            ..Default::default()
+        };
+        drain_b4_self_deliveries(
+            &rec,
+            &mut rig.world,
+            &rig.online,
+            &mut rig.displays,
+            &mut rig.ground_sessions,
+            &rig.gates,
+            0,
+            0,
+            b"",
+        );
+        let n2 = trace_line_count(&trace);
+        let (deliver_frames, _raws2) = rig.drain();
+
+        let hp_after = rig.world.entities.get(target).unwrap().hp;
+        let caster_mp = rig
+            .ground_sessions
+            .get("caster")
+            .map_or(0, |sg| i64::from(sg.state.wabil.mp));
+        let target_max_hp = rig.world.entities.get(target).unwrap().max_hp;
+        let damage = i32::from(hp_before) - i32::from(hp_after);
+
+        // 账本 = 段①（金标准 `Rng` 的比较面）+ 段②（另存 `DeliverRng`，供审计）。
+        let cast_rng = trace_slice(&trace, n0, n1);
+        let deliver_rng = trace_slice(&trace, n1, n2);
+        for pair in cast_rng.windows(2).chain(deliver_rng.windows(2)) {
+            assert_eq!(
+                pair[1].0,
+                pair[0].0 + 1,
+                "[{label}] seq 必须连续（串写或漏记的证据）: {} → {}",
+                pair[0].0,
+                pair[1].0
+            );
+        }
+        if let (Some(a), Some(b)) = (cast_rng.last(), deliver_rng.first()) {
+            assert_eq!(b.0, a.0 + 1, "[{label}] 两段之间 seq 必须连续");
+        }
+
+        let mut all_frames = cast_frames;
+        all_frames.extend(deliver_frames);
+
+        // ---- RM 列组装（卡 §11 映射表；**弱比较面**：RM 是组装出来的，玩家可见证据是 SM）----
+        //
+        // 逐条来源（Rust 事件 → oracle RM）：
+        //  - `RM_SPELL(10008)` / `RM_MAGICFIRE(10120)`：施法广播，收件人 = `hear_targets(caster)`
+        //    （含施法者自己——oracle `SendRefMsg` 的收件集合含 self，自守卫只在 SM 编码层）；
+        //    参数取真实 `SM_MAGICFIRE(638)` 帧（与出帧同源，不重算 snap）。
+        //  - `RM_DELAYMAGIC(8021)`：`world.self_delay_msgs` 里 caster 的那条（交付前抓取）。
+        //  - `RM_MAGSTRUCK(8044)` / `RM_HEALTHSPELLCHANGED(10052)`：`delay_magic.struck` ⇒ 目标
+        //    侧消息（`BaseObject.Base.cs:711-729` 投递 + 目标 `Operate` 的 `HealthSpellChanged`）。
+        //  - `RM_STRUCK_MAG(8103)`：投递传播，收件人 = `hear_targets(target)`（含目标自己），
+        //    载荷 = (damage, hp_after, max_hp, caster)。
+        //  - **未组装**：`RM_CHANGENAMECOLOR(8090)`——Rust `deliver_mag_struck` 对玩家不发
+        //    （`name_color` 恒 false），卡 `openmir2-magstruck-name-color` 未修前该条目两侧不等。
+        let range = chat::send_ref_msg_range();
+        let in_range_caster = chat::hear_targets(&rig.world, caster, range);
+        let in_range_target = chat::hear_targets(&rig.world, target, range);
+        let (fire_x, fire_y, fire_series, fire_target) = all_frames
+            .iter()
+            .find(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_MAGICFIRE)
+            .map(|(_, b)| {
+                let cm = mir2_protocol::frame::CommandMessage::from_bytes(b).unwrap();
+                (
+                    i32::from(cm.param),
+                    i32::from(cm.tag),
+                    i32::from(cm.series),
+                    fireball_tail_i32(b),
+                )
+            })
+            .expect("火球必有 SM_MAGICFIRE 帧");
+        let mut rm_by_who: std::collections::HashMap<String, Vec<serde_json::Value>> =
+            std::collections::HashMap::new();
+        let who_of = |id: i32| {
+            rig.online
+                .iter()
+                .find(|e| e.actor_id == id)
+                .map(|e| e.chr_name.clone())
+        };
+        for id in &in_range_caster {
+            if let Some(who) = who_of(*id) {
+                let v = rm_by_who.entry(who).or_default();
+                // `RM_SPELL`：wParam=Effect(1)、p1/p2=施法坐标、p3=MagicId；priority=(byte)ident。
+                v.push(fireball_rm(
+                    10008,
+                    1,
+                    i64::from(fire_x),
+                    i64::from(fire_y),
+                    i64::from(magic_id),
+                    24,
+                    false,
+                ));
+                // `RM_MAGICFIRE`：p1=MakeWord(EffectType,Effect)、p2=MakeLong(x,y)、p3=目标 ActorId。
+                v.push(fireball_rm(
+                    10120,
+                    0,
+                    i64::from(fire_series),
+                    i64::from(game_svr::feature::make_long(
+                        u16::try_from(fire_x).unwrap_or(0),
+                        u16::try_from(fire_y).unwrap_or(0),
+                    )),
+                    i64::from(fire_target),
+                    136,
+                    false,
+                ));
+            }
+        }
+        if let (Some((w, n1, n2, n3, prio)), Some(d)) = (delay_msg, delay_magic) {
+            if d.struck {
+                if let Some(who) = who_of(caster) {
+                    rm_by_who.entry(who).or_default().push(fireball_rm(
+                        8021,
+                        i64::from(w),
+                        i64::from(n1),
+                        i64::from(n2),
+                        i64::from(n3),
+                        i64::from(prio),
+                        true,
+                    ));
+                }
+                if let Some(who) = who_of(target) {
+                    let v = rm_by_who.entry(who).or_default();
+                    // `RM_MAGSTRUCK`：p1 = 施法者算出的 nPower。
+                    v.push(fireball_rm(8044, 0, i64::from(w), 0, 0, 108, false));
+                    if damage > 0 {
+                        // `RM_HEALTHSPELLCHANGED`（目标 `Operate` 里的 `HealthSpellChanged`）。
+                        v.push(fireball_rm(10052, 0, 0, 0, 0, 68, false));
+                    }
+                }
+                for id in &in_range_target {
+                    if let Some(who) = who_of(*id) {
+                        rm_by_who.entry(who).or_default().push(fireball_rm(
+                            8103,
+                            i64::from(damage),
+                            i64::from(hp_after),
+                            i64::from(target_max_hp),
+                            i64::from(caster),
+                            167,
+                            false,
+                        ));
+                    }
+                }
+            }
+        }
+        // `RM_CHANGENAMECOLOR(8090)`（卡 `openmir2-magstruck-name-color`）：受击玩家把
+        // `RM_STRUCK_MAG` 回投给自己 ⇒ 攻击方 `SetPkFlag` ⇒ 由**攻击方** `RefNameColor` 发 656。
+        // 观测面 = 实际发出的 `SM_CHANGENAMECOLOR(656)` 帧（有才记条目）；收件人 = 攻击方的
+        // `hear_targets`（含攻击方自己，与 `SendRefMsg` 同集合）；prio = 8090 & 0xFF = 154。
+        if all_frames
+            .iter()
+            .any(|(_, b)| sf_ident(b) == mir2_protocol::messages::SM_CHANGENAMECOLOR)
+        {
+            for id in &in_range_caster {
+                if let Some(who) = who_of(*id) {
+                    rm_by_who
+                        .entry(who)
+                        .or_default()
+                        .push(fireball_rm(8090, 0, 0, 0, 0, 154, false));
+                }
+            }
+        }
+
+        let receivers = [
+            ("caster", 911),
+            ("target", 912),
+            ("obs_in", 913),
+            ("obs_out", 914),
+        ]
+        .iter()
+        .map(|(who, socket)| {
+            serde_json::json!({
+                "Who": who,
+                "Rm": rm_by_who.get(*who).cloned().unwrap_or_default(),
+                "Sent": fireball_sent(&all_frames, *socket),
+            })
+        })
+        .collect::<Vec<_>>();
+
+        let ledger = serde_json::json!([{
+            "Label": label,
+            "Seed": seed,
+            "SpellReturn": true,
+            "Receivers": receivers,
+            "Rng": cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "RngSites": cast_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "RngSeqs": cast_rng.iter().map(|(s, _, _)| *s).collect::<Vec<_>>(),
+            "DeliverRng": deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            "DeliverRngSites": deliver_rng.iter().map(|(_, _, s)| s.replace('\\', "/")).collect::<Vec<_>>(),
+            "TargetHpBefore": hp_before,
+            "TargetHp": hp_after,
+            "NotDue": [],
+            "CasterMp": caster_mp,
+        }]);
+
+        let out = dir.join(format!("{stem}_{label}.json"));
+        std::fs::write(&out, serde_json::to_string_pretty(&ledger).unwrap()).expect("台账必须可写");
+        eprintln!(
+            "[fireball {label}] seed={seed} rng(cast)={:?} rng(deliver)={:?} hp {hp_before}->{hp_after} \
+             frames/socket: caster={} target={} obs_in={} obs_out={} → {}",
+            cast_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            deliver_rng.iter().map(|(_, r, _)| *r).collect::<Vec<_>>(),
+            all_frames.iter().filter(|(s, _)| *s == 911).count(),
+            all_frames.iter().filter(|(s, _)| *s == 912).count(),
+            all_frames.iter().filter(|(s, _)| *s == 913).count(),
+            all_frames.iter().filter(|(s, _)| *s == 914).count(),
+            out.display()
+        );
+    }
+
+    /// 火球类用例的共用断言（id=1 与 id=5 同构；只差 magic id 进 SM17 尾串与 RM_SPELL 的 p3）。
+    fn fireball_case_assert(stem: &str, label: &str, hp_after: i64, rng_len: usize) {
+        let dir = magic_ledger_dir();
+        let raw = std::fs::read_to_string(dir.join(format!("{stem}_{label}.json")))
+            .expect("台账必须已落盘");
+        let v: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let case = &v[0];
+        assert_eq!(case["TargetHpBefore"], 100);
+        assert_eq!(
+            case["TargetHp"], hp_after,
+            "[{stem}/{label}] 目标 HP 与金标准不符"
+        );
+        assert_eq!(
+            case["Rng"].as_array().unwrap().len(),
+            rng_len,
+            "[{stem}/{label}] 施法段 RNG 抽数不符"
+        );
+        // 负向牙①：caster 不收 SM_SPELL(17)（`PlayObject.Message.cs:1455` 自守卫）。
+        let caster = case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap();
+        assert_eq!(
+            caster["Sent"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|s| s["ident"] == 17)
+                .count(),
+            0,
+            "[{stem}/{label}] caster 不得收 SM_SPELL(17)"
+        );
+        // 负向牙②：obs_out 全空。
+        let obs_out = case["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "obs_out")
+            .unwrap();
+        assert_eq!(
+            obs_out["Sent"].as_array().unwrap().len(),
+            0,
+            "[{stem}/{label}] obs_out 不得有帧"
+        );
+    }
+
+    /// §22 第 1 步：miss 支（seed=1）——真实帧 + 真实 RNG 台账落盘（id=1）。
+    // `rng_trace` 是**进程级**全局状态（§16c）：每支必须各自独立进程、`--ignored --exact` 单跑；
+    // 默认 `cargo test --workspace` 不跑本组（台账/比较命令见卡面 §22 落地记录）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_parity_miss() {
+        fireball_parity_drive("fireball", 1, "miss", 1, 1000);
+        fireball_case_assert("fireball", "miss", 100, 1);
+    }
+
+    /// §22 第 1 步：edge 支（seed=5）——首抽 == AntiMagic，与 hit 走同一支（原版语义）。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_parity_edge() {
+        fireball_parity_drive("fireball", 1, "edge", 5, 2000);
+        fireball_case_assert("fireball", "edge", 85, 5);
+    }
+
+    /// §22 第 1 步：hit 支（seed=13）——首抽 > AntiMagic。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball_parity_hit() {
+        fireball_parity_drive("fireball", 1, "hit", 13, 3000);
+        fireball_case_assert("fireball", "hit", 85, 5);
+    }
+
+    /// **id=5（`SKILL_FIREBALL2`）**：与 id=1 共用 `1|5` 实现臂，金标准
+    /// `golden/magic/fireball-5.json`（C# 同 rig 换 magic_id=5；与 id=1 的唯一差异 =
+    /// `SM_SPELL(17)` 尾串 `'5'` 与 `RM_SPELL` 的 p3=5）。三支各自独立进程单跑。
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball5_parity_miss() {
+        fireball_parity_drive("fireball5", 5, "miss", 1, 1000);
+        fireball_case_assert("fireball5", "miss", 100, 1);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball5_parity_edge() {
+        fireball_parity_drive("fireball5", 5, "edge", 5, 2000);
+        fireball_case_assert("fireball5", "edge", 85, 5);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn fireball5_parity_hit() {
+        fireball_parity_drive("fireball5", 5, "hit", 13, 3000);
+        fireball_case_assert("fireball5", "hit", 85, 5);
     }
 
     /// gate 通道上取到的一条下行：`(socket, 帧体 / `SendRaw` 短包字节)`。
