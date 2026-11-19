@@ -1536,6 +1536,35 @@ async fn handle_server_message(ctx: &LinkCtx, msg: ServerMessage, body: &[u8]) {
     }
 }
 
+/// 上游帧体长度上界（卡 `openmir2-gate-packlen-validation`）。
+///
+/// **依据（oracle 未定义协议上限，只能从代码里最硬的界推）**：
+/// - 另一类网关链路（LoginGate/SelGate ↔ 服务端）用 `ServerDataPacket.PacketLen: ushort`
+///   （`crates/protocol/src/frame.rs` 的 `ServerDataPacket`，C# `ServerDataMessage.cs`）⇒ **64 KiB** 硬界；
+/// - 客户端→网关方向由网关配置封顶：`MaxClientPacketSize` 默认 **10,240 B**
+///   （`src/GameGate/Conf/GateConfig.cs` 的 `GateConfig` 默认值）；
+/// - `GM_DATA` 体是"发给客户端的消息"的再封装，其构造全部来自小常量/小数组（最大者如
+///   `MaxBagItem = 46` 件背包，`src/OpenMir2/Grobal2.cs`）。
+///
+/// 取 **1 MiB = 64 KiB × 16**：比代码里最硬的上界高 16 倍、比客户端配置上限高 100 倍，
+/// 任何合法帧都不可能接近；只拒绝畸形/恶意帧（`PackLength = i32::MIN` ⇒ 绝对值 2 GiB）。
+pub const MAX_UPSTREAM_BODY: usize = 1 << 20;
+
+/// 因长度上界被拒并断链的累计次数（WRN 行内带出；供外部观测/报告）。
+static UPSTREAM_LEN_REJECTS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// 累计拒绝次数（只增）。
+#[must_use]
+pub fn upstream_len_reject_count() -> u64 {
+    UPSTREAM_LEN_REJECTS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// 上游帧体是否在防御上界内（`body_len` = `PackLength` 的绝对值）。
+#[must_use]
+pub fn upstream_body_allowed(len: usize) -> bool {
+    len <= MAX_UPSTREAM_BODY
+}
+
 /// 下行读循环：逐帧读 20B 头 + body；EOF / 关闭信号 / 读失败 ⇒ 判死并通知监督循环。
 async fn reader(
     mut rd: OwnedReadHalf,
@@ -1558,6 +1587,26 @@ async fn reader(
             continue;
         };
         let body_len = msg.body_len();
+        // 卡 `openmir2-gate-packlen-validation`：头部长度是不可信输入。C# 侧的等价校验是
+        // 「拷贝前 `packetLen <= data.Length`」；Rust 是流式 `read_exact`（构造上不越界），
+        // 但 `vec![0u8; body_len]` 对畸形头（`PackLength = i32::MIN` ⇒ 2 GiB）会尝试巨量分配。
+        // 超上界 ⇒ WRN + 断开链路（读循环退出 ⇒ 监督循环判死）。
+        if !upstream_body_allowed(body_len) {
+            // 为什么**断链**而不是"丢帧继续"：声明长度超过上界后，要跳过该帧必须按这个
+            // **不可信的长度**去读/丢弃字节（最多 2 GiB），读完也无法确认下一个头的位置
+            // ——流已无法安全再对齐。断链让监督循环重建一条干净的链路，是唯一能保证
+            // "后续帧不被错位解析"的处置；正常帧不受影响（上界见 `MAX_UPSTREAM_BODY` 注释）。
+            let rejects =
+                UPSTREAM_LEN_REJECTS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            glog!(
+                "WRN",
+                "引擎帧头 PackLength={} 超出上界 {} 字节（累计拒绝 {} 次），断开链路",
+                msg.pack_length,
+                MAX_UPSTREAM_BODY,
+                rejects
+            );
+            break;
+        }
         let mut body = vec![0u8; body_len];
         if body_len > 0 {
             let read = tokio::select! {
@@ -2121,6 +2170,44 @@ mod tests {
     }
 
     use super::*;
+
+    /// 卡 `openmir2-gate-packlen-validation`：畸形/超大包头长度必须被拒（Rust 侧对齐）。
+    #[test]
+    fn upstream_body_bound_rejects_pathological_lengths() {
+        assert!(upstream_body_allowed(0));
+        assert!(upstream_body_allowed(MAX_UPSTREAM_BODY));
+        assert!(!upstream_body_allowed(MAX_UPSTREAM_BODY + 1));
+        let pathological = ServerMessage {
+            packet_code: 0,
+            socket: 0,
+            session_id: 0,
+            ident: 0,
+            session_index: 0,
+            pack_length: i32::MIN,
+        };
+        assert!(
+            !upstream_body_allowed(pathological.body_len()),
+            "PackLength=i32::MIN 的绝对值（2 GiB）必须被拒，不得进入 vec! 分配"
+        );
+        let normal = ServerMessage {
+            pack_length: -255,
+            ..pathological
+        };
+        assert!(upstream_body_allowed(normal.body_len()), "正常帧不得误伤");
+    }
+
+    /// 接线牙：上界校验必须在 body 分配之前（删掉校验 ⇒ 红）。
+    #[test]
+    fn reader_validates_upstream_body_before_allocating() {
+        let src = include_str!("lib.rs");
+        let check = src
+            .find("if !upstream_body_allowed(body_len)")
+            .expect("读循环缺上界校验");
+        let alloc = src
+            .find("let mut body = vec![0u8; body_len];")
+            .expect("缺 body 分配");
+        assert!(check < alloc, "上界校验必须在分配之前");
+    }
 
     fn deployed_speed() -> rules::SpeedRules {
         rules::SpeedRules {

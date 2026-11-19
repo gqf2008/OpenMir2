@@ -106,7 +106,16 @@ namespace GameGate.Services
             }
             Span<byte> destinationSpan = messagePacket.Data.AsSpan();
             ushort packetLen = messagePacket.BuffLen;
-            if (Config.IsDefenceCCPacket && (packetLen >= 5))
+            // 卡 openmir2-gate-packlen-validation：帧头字段一律当不可信输入。
+            // BuffLen/Data 由框架给出，但"声明长度 <= 实际长度"必须在**任何**切片/拷贝之前成立。
+            if (packetLen > destinationSpan.Length)
+            {
+                LogService.Warn(
+                    $"客户端封包头长度非法：BuffLen={packetLen} > Data.Length={destinationSpan.Length}，关闭会话");
+                _session.Socket.Close();
+                return;
+            }
+            if (Config.IsDefenceCCPacket && (packetLen >= 7))
             {
                 if (destinationSpan[..7].SequenceEqual(_httpSpan))
                 {

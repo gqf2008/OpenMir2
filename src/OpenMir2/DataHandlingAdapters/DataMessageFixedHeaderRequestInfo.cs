@@ -41,13 +41,12 @@ namespace OpenMir2.DataHandlingAdapters
                 return false;
             }
 
-            if (_header.PackLength < 0)
+            // 卡 openmir2-gate-packlen-validation：帧层**只能交帧**（没有"拒绝并关连接"的出口），
+            // 所以这里把"无法表示的长度"降级为 0 字节交帧——**不是放行**：放行/拒绝的唯一判定在
+            // 下游 `ClientThread.TryBuildServerSessionMessage`，两层共用 `GatePacketLength.TryMagnitude`。
+            if (!GatePacketLength.TryMagnitude(_header.PackLength, out this.bodyLength))
             {
-                this.bodyLength = -_header.PackLength;
-            }
-            else
-            {
-                this.bodyLength = _header.PackLength;
+                this.bodyLength = 0;
             }
             return true;
         }
