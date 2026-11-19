@@ -132,3 +132,9 @@
   N1 支零帧；同集合无会观察者照收 ⇒ 丢帧发生在颜色判定，不是缓存少给收件人。
 - 同窗缓存证据：`castle_show_name_cache_window_second_refresh_hits_cache`
   （首份 Δ12 收、次份 Δ11/Δ12 挡、Δ5 两拍收、Δ13 零帧）。
+- #16 `guild_cmd.rs::ref_show_name`：收件人改走
+  `ref_msg_cache::targets(self.world, target_id, self.ref_range)`；同一次 `flush` 里对同一
+  target 的两条 `Deferred::RefShowName` 各判一遍缓存。用例：
+  `ref_show_name_cache_window_second_call_hits_cache`、
+  `ref_show_name_two_deferred_in_one_flush_share_cache_window`（多副本专项：一次 flush 两条）、
+  `ref_show_name_hidden_target_only_self`（隐藏 ⇒ 只自己）。
