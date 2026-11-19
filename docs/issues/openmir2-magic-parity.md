@@ -124,3 +124,24 @@
 - **下一步（装置）**：确定 `DoSpell` 的帧捕获点——出帧走 `BaseObject.SendRefMsg` /
   `SendSelfDelayMsg`（`src/M2Server/Actor/BaseObject.Message.cs:383` / `:188`），需要一个离线可记录的
   发送面（候选：`MsgQueue`（`SendMsg` 入队点）或最小 `Envir` 桩）；确定后先打通 `1/5 火球`。
+
+## 9. 切片进展（2026-11-19 续）
+
+- **Slice 1（配置面）已完成**：`--config-selftest` 把冻结部署的 5 个 conf 拷进输出目录后读
+  `SystemShare.Config`：`magic_attack_rage=8 send_ref_msg_range=12 fireboom_rage=1`，
+  `CONFIG_SEAM_SELFTEST OK`。（GB2312 需先 `Encoding.RegisterProvider(CodePagesEncodingProvider)`，
+  与 `ConfigFile.Load` 的 `GetEncoding("GB2312")` 对应；`LogService.Logger` 需给无 sink 实例，
+  否则错误路径会以 NRE 掩盖真实原因。）
+- **C# 侧火球用例已跑通**（`--case fireball`，真实地图 `Map/0.map` + 真实 `Envirnoment` +
+  `SystemShare.ActorMgr` 登记 + `RecordingPlayObject` 抽 `MsgQueue`）：
+  ```
+  spell_return=true
+  rm=[{ident=10008(RM_SPELL),wParam=1,p1=101,p2=100,p3=1,priority=24},
+      {ident=10120(RM_MAGICFIRE),wParam=0,p1=257,p2=6553701,p3=0,priority=136}]
+  rng=[0]
+  ```
+  该种子上 `Random(10)=0 < AntiMagic=3` 不满足命中门 ⇒ 走「未命中」支（`targetObject=null`，
+  `RM_MAGICFIRE` 的 p3=0、无 `RM_DELAYMAGIC`）。命中支需另取种子（`Random(10) >= AntiMagic`）。
+- **Rust 侧驱动（待做）**：在 `bins/game-svr` 的测试路径上用 `handle_spell_cmd_with_magic`
+  产出同结构的 RM/RNG 账本，再写比较器（帧逐项 + RNG 逐次），两条都过才标
+  `verified(semantic)`。
