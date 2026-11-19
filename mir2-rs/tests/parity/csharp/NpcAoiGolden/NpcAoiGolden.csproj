@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!--
+    卡 openmir2-npc-multiobserve-golden：NPC 多观察者 AOI 金标准生成器（只读引用原版工程，不改生产代码）。
+    产物落盘到 mir2-rs/tests/parity/golden/npc/aoi/<case>.json；Rust 侧按接收者逐帧对拍。
+  -->
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>NpcAoiGolden</AssemblyName>
+    <RootNamespace>NpcAoiGolden</RootNamespace>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\src\OpenMir2\OpenMir2.csproj" />
+    <ProjectReference Include="..\..\..\..\..\src\M2Server\M2Server.csproj" />
+    <ProjectReference Include="..\..\..\..\..\src\GameSrv\GameSrv.csproj" />
+  </ItemGroup>
+</Project>

@@ -1,0 +1,372 @@
+{
+  "generator": "mir2-rs/tests/parity/csharp/NpcAoiGolden",
+  "oracle_source": [
+    "src/M2Server/Actor/BaseObject.Message.cs:383 (SendRefMsg: ±SendRefMsgRange 扫格 → Race==Play)",
+    "src/GameSrv/Npc/Merchant.cs:132/140 (RM_TURN/RM_HIT)",
+    "src/M2Server/Player/PlayObject.Message.cs:1436 (RM_HIT -> SM_HIT)",
+    "src/M2Server/Player/PlayObject.Message.cs:1542/1558 (RM_TURN -> SM_TURN + SM_FEATURECHANGED)",
+    "src/GameSrv/Word/WorldServer.Merchant.cs:47 (AddtoMapSuccess && !IsHide)"
+  ],
+  "max_drain_passes": 8,
+  "excluded_wallclock_fields": [
+    "delivery",
+    "send_ref_msg_tick"
+  ],
+  "cases": [
+    {
+      "name": "fresh_scan",
+      "npc": {
+        "actor_id": 6002,
+        "chr_name": "QManage",
+        "x": 300,
+        "y": 319,
+        "is_hide": false
+      },
+      "hidden_npc": {
+        "actor_id": 6001,
+        "chr_name": "RobotManage",
+        "x": 0,
+        "y": 0,
+        "is_hide": true,
+        "on_map": false
+      },
+      "send_ref_msg_range": 12,
+      "observers": [
+        {
+          "role": "self",
+          "actor_id": 5001,
+          "x": 300,
+          "y": 319,
+          "map": "0",
+          "gate": 5001,
+          "visible_actors": [],
+          "hidden_visible": false,
+          "drain_passes": 1,
+          "drain_hit_cap": false,
+          "rm": [
+            {
+              "ident": 10001,
+              "w_param": 4,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 17
+            },
+            {
+              "ident": 10001,
+              "w_param": 6,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 17
+            },
+            {
+              "ident": 10004,
+              "w_param": 4,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 20
+            },
+            {
+              "ident": 8061,
+              "w_param": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 125
+            }
+          ],
+          "frames": [
+            {
+              "ident": 10,
+              "param": 300,
+              "tag": 319,
+              "series": 516,
+              "tail": "bdhkddhkddK"
+            },
+            {
+              "ident": 41,
+              "param": 50,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            },
+            {
+              "ident": 10,
+              "param": 300,
+              "tag": 319,
+              "series": 518,
+              "tail": "bdhkddhkddK"
+            },
+            {
+              "ident": 41,
+              "param": 50,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            },
+            {
+              "ident": 14,
+              "param": 300,
+              "tag": 319,
+              "series": 4,
+              "tail": ""
+            },
+            {
+              "ident": 30,
+              "param": 0,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "role": "near",
+          "actor_id": 5002,
+          "x": 305,
+          "y": 319,
+          "map": "0",
+          "gate": 5002,
+          "visible_actors": [],
+          "hidden_visible": false,
+          "drain_passes": 1,
+          "drain_hit_cap": false,
+          "rm": [
+            {
+              "ident": 10001,
+              "w_param": 4,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 17
+            },
+            {
+              "ident": 10001,
+              "w_param": 6,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 17
+            },
+            {
+              "ident": 10004,
+              "w_param": 4,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 20
+            },
+            {
+              "ident": 8061,
+              "w_param": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 125
+            }
+          ],
+          "frames": [
+            {
+              "ident": 10,
+              "param": 300,
+              "tag": 319,
+              "series": 516,
+              "tail": "bdhkddhkddK"
+            },
+            {
+              "ident": 41,
+              "param": 50,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            },
+            {
+              "ident": 10,
+              "param": 300,
+              "tag": 319,
+              "series": 518,
+              "tail": "bdhkddhkddK"
+            },
+            {
+              "ident": 41,
+              "param": 50,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            },
+            {
+              "ident": 14,
+              "param": 300,
+              "tag": 319,
+              "series": 4,
+              "tail": ""
+            },
+            {
+              "ident": 30,
+              "param": 0,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "role": "edge",
+          "actor_id": 5003,
+          "x": 312,
+          "y": 319,
+          "map": "0",
+          "gate": 5003,
+          "visible_actors": [],
+          "hidden_visible": false,
+          "drain_passes": 1,
+          "drain_hit_cap": false,
+          "rm": [
+            {
+              "ident": 10001,
+              "w_param": 4,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 17
+            },
+            {
+              "ident": 10001,
+              "w_param": 6,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 17
+            },
+            {
+              "ident": 10004,
+              "w_param": 4,
+              "p1": 300,
+              "p2": 319,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 20
+            },
+            {
+              "ident": 8061,
+              "w_param": 0,
+              "p1": 0,
+              "p2": 0,
+              "p3": 0,
+              "msg": "",
+              "late": false,
+              "delivery": 0,
+              "priority": 125
+            }
+          ],
+          "frames": [
+            {
+              "ident": 10,
+              "param": 300,
+              "tag": 319,
+              "series": 516,
+              "tail": "bdhkddhkddK"
+            },
+            {
+              "ident": 41,
+              "param": 50,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            },
+            {
+              "ident": 10,
+              "param": 300,
+              "tag": 319,
+              "series": 518,
+              "tail": "bdhkddhkddK"
+            },
+            {
+              "ident": 41,
+              "param": 50,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            },
+            {
+              "ident": 14,
+              "param": 300,
+              "tag": 319,
+              "series": 4,
+              "tail": ""
+            },
+            {
+              "ident": 30,
+              "param": 0,
+              "tag": 0,
+              "series": 0,
+              "tail": ""
+            }
+          ]
+        },
+        {
+          "role": "out",
+          "actor_id": 5004,
+          "x": 313,
+          "y": 319,
+          "map": "0",
+          "gate": 5004,
+          "visible_actors": [],
+          "hidden_visible": false,
+          "drain_passes": 0,
+          "drain_hit_cap": false,
+          "rm": [],
+          "frames": []
+        },
+        {
+          "role": "other_map",
+          "actor_id": 5005,
+          "x": 3,
+          "y": 10,
+          "map": "0100",
+          "gate": 5005,
+          "visible_actors": [],
+          "hidden_visible": false,
+          "drain_passes": 0,
+          "drain_hit_cap": false,
+          "rm": [],
+          "frames": []
+        }
+      ]
+    }
+  ]
+}

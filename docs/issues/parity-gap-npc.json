@@ -350,22 +350,28 @@
         "line": 120,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "fixed_npc_display_frames_through_production_aoi",
+        "test": "np11_aoi_matches_oracle_golden",
         "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
-        "fixture": null,
-        "cases": [],
+        "fixture": "mir2-rs/tests/parity/golden/npc/aoi/fresh_scan.json",
+        "cases": [
+          "fresh_scan"
+        ],
         "unit_tests": [
           "npc_and_merchant_turn_hit_frames_through_production_drain",
           "npc_random_idle_frames_through_production_drain_run",
           "npc_turn_hit_production_calls_are_wired_in_drain_run_downlinks",
-          "npc_hit_frames_only_for_world_branch_and_never_to_npc"
+          "npc_hit_frames_only_for_world_branch_and_never_to_npc",
+          "aoi_golden_rejects_zero_cases",
+          "aoi_golden_rejects_missing_file",
+          "aoi_golden_rejects_all_zero_ledger"
         ]
       },
       "cost": null,
-      "deviation": null,
-      "notes": "装置未建（多观察者 AOI 金标准），需独立卡 openmir2-npc-multiobserve-golden"
+      "deviation": "T-287",
+      "notes": "装置卡 openmir2-npc-multiobserve-golden：C# NpcAoiGolden 产多观察者金标准，Rust 生产下行（drain_npc_merchant_turns/hits + drain_merchant_disappears）按 socket 归集对拍。覆盖 fresh_scan 子面：5 类观察者（self/near+5/edge+12/out+13/other_map）× SM_TURN(10)/SM_FEATURECHANGED(41)/SM_HIT(14)/SM_DISAPPEAR(30)；未覆盖 cache_window 子面（oracle SendRefMsg 的 500ms VisibleHumanList 缓存 + <11 二次过滤）——偏差 T-287，缺口卡 openmir2-visiblehumanlist-cache，该例在测试里钉成必须红的绊线。牙：T1 删 near 发送（帧数 6→1 红）、T2 边界 <=→<（edge 6→0 红）、比较器删帧/全零各红。",
+      "basis": "semantic"
     }
   ],
   "basis": "semantic",
