@@ -294,3 +294,25 @@ Rust 用例 `quest_check_conditions_match_oracle_ledger`（`cargo test -p game-s
   在 worktree 根建出 `--checks/`（内含 `quest_gate_reachability.tsv`、`scripts_applied/` 两件）。
   属**本任务自造的误产物**，已整目录删除（`rm -rf -- "--checks"`），并核对删除后
   `git status --porcelain` 为空、无残留 `./-*` 目录。
+
+### 10.7 中止范围等价的落地设计（opc-07 裁定，2026-11-20）
+
+**已查清的事实**（决定验收口径，不再重查）：
+- `M2Share.StartReady` 的实际作用：`TCPNetChannel.Connecting` 先判它，为假 ⇒ **拒绝准入**
+  （常量文本 `服务器未就绪: {0}`）；`TCPNetChannel.Run` 整段不放行；`TimedService.ExecuteInternal`
+  直接 `return`。⇒ 未置就绪 = **玩家连不上、进程活着、内存里留着前缀 NPC**。
+- 顶层捕获点：`GameApp.InitializeWorld`（`GameApp.cs:222`）整块 `try/catch`，只 `LogService.Error(ex)`；
+  异常发生在 `SystemShare.WorldEngine.Initialize()`（`GameApp.cs:244`）⇒ 其后的
+  `GuildMgr/CastleMgr/AutoBot` 与 **`M2Share.StartReady = true`** 都不执行。
+
+**裁定与落地形态**：
+1. `NpcHost::load` 的 `Err` 携带部分状态：`Err(NpcLoadAbort { panic, partial })`，调用方保留部分宿主；
+2. `lib.rs` 生产路径**去掉 `panic!`**：记 `ERR` + **不置世界就绪**（最小就绪门，只在**中止路径**生效；
+   正常路径行为一个字节都不变，用既有测试 + 定点证明）；若 Rust 无通道级/定时服级等价物，
+   就只做"不置就绪 + 不放行准入"这一层，卡面写明**未建模**，不冒充等价；
+3. 探针 `--abort-scope`：**不捕获异常**、记录"异常前成功装载名单"，外加失败脚本身份；
+   夹具 = 两份好脚本 + 一份会触发 `CaptureString` 越界的坏脚本；
+4. 验收三条：①前缀集合逐条相等（含失败脚本名）②中止后准入被拒（观测）③正常路径不变；
+   牙 A：致命分支改回"记录后继续" ⇒ ①红；牙 B：中止后仍置就绪/仍放行准入 ⇒ ②红。
+
+**状态**：设计已定；`37ef010c1` 的 `Result` 形态保留，部分状态与就绪门**尚未实现**。
