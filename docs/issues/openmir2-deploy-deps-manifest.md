@@ -1,6 +1,6 @@
 # openmir2-deploy-deps-manifest
 
-> 状态：**实现完成（2026-11-19，分支 `card/deploy-deps-manifest`）**——生成器 + 两级检查器 +
+> 状态：**已合并（`e7de2fbd9`；后续跟随 `543e8e39b` 清 NLog、`cfc154b92` 部署目录核验）**——生成器 + 两级检查器 +
 > 自测（10 例）已入仓并登记工具门（TOTAL 69 → **70**）。已登记（walgit 看板不可用，按 AGENTS.md §7
 > 过渡）。看板恢复后迁移为正式卡。tier 建议 **L**。
 
@@ -90,7 +90,7 @@ check    src/LoginSrv → DEPS_GREEN packages=48 files=1063
   - 牙③：`DEPS_RED BAD_MANIFEST_VERSION manifest_version=None` + `DEPS_RED EMPTY_MANIFEST`；
     `DEPS_RED MISSING_FIELD Alpha.nupkg_sha512`（均 rc=1）。
   - 另两条 fail-closed：缺 manifest / 缺 lock ⇒ `MISSING_MANIFEST` / `MISSING_LOCK`（rc=1）。
-  - 汇总：`deps_manifest selftest: GREEN (10 cases)`。
+  - 汇总：以机器产物为准 —— `E:/UserFleet/evidence-cardfix-20261119/deps-check-and-selftest.log`（`python -I -B tools/deploy/deps_manifest.py selftest` 的最后一行）。
 - 锁文件不破坏构建（干净 clone）：`git clone --local` 后在分支 head 上 `dotnet build`
   DBSrv/LoginSrv/GameGate/LoginGate/SelGate **0 error**；`dotnet test TestProject1` →
   **通过 40 / 失败 0 / 跳过 0**。
@@ -102,3 +102,14 @@ check    src/LoginSrv → DEPS_GREEN packages=48 files=1063
 - 挂点由 botfleet 决定：建议构建车道（部署前）跑 `generate`，目标机（部署后/起栈前）跑 `check`。
 - 红格式示例：`DEPS_RED FILE_SHA_MISMATCH <pkg>/<ver> <file> expected=… actual=…`（rc=1）；
   判不了（缺目录等）rc=2，不静默通过。两边都不改对方仓库。
+
+## QA 整改（2026-11-19）
+
+> 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
+
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
+- 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
+- **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
+  实跑帧/JSON 产物为准。
+- 可独立重放的篡改分组（`packlen T1–T4` / `utf8 M1–M3` / `deps T1–T5`）：**待 QA 提供定义后
+  原样写入本卡**（本批未凭空补写）。

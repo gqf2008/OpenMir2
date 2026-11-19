@@ -104,7 +104,7 @@ DEPS_RED UNCOVERED_DEPLOYED Stray.Third.Party.dll
 ### 真实目录结果（只读）
 
 - `runtime/LoginSrv`（单项目）：`DEPS_GREEN packages=48 files=1063`，`UNCOVERED_DEPLOYED=0`。
-- `runtime/DBSrv`（并集 `src/DBSrv` + `DBSvr.Storage.MySQL`，manifest **47 包 / 1045 文件**）：
+- `runtime/DBSrv`（并集 `src/DBSrv` + `DBSvr.Storage.MySQL`）：包数/文件数以机器产物为准 ——`E:/UserFleet/evidence-cardfix-20261119/deps-check-and-selftest.log`（`DEPS_GREEN …` 行）；**注意** `543e8e39b` 清掉 NLog 后包集与例外条目均已变化，卡面不再手抄数字。
   **剩 1 条红**：`DEPS_RED MISSING_DEPLOYED NLog/5.2.8 NLog.dll`。
   根因：`DBSvr.Storage.MySQL` 声明并随构建产出 `NLog.dll`（其 `bin/Debug` 有），但
   `Directory.Build.targets` 只把**插件 DLL 本身**拷进 DBSrv 输出 ⇒ 部署目录缺 NLog；
@@ -165,3 +165,14 @@ RESULT: GREEN
 ```
 
 **没有改 gate 规则**——红是 gate 在正常工作，修的是文档锚。
+
+## QA 整改（2026-11-19）
+
+> 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
+
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
+- 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
+- **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
+  实跑帧/JSON 产物为准。
+- 可独立重放的篡改分组（`packlen T1–T4` / `utf8 M1–M3` / `deps T1–T5`）：**待 QA 提供定义后
+  原样写入本卡**（本批未凭空补写）。

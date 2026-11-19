@@ -58,7 +58,7 @@ MemoryCopy.BlockCopy(strBuff, 0, tempBuff, sendBuffer.Length, data.Length);  // 
 
 ```
 dotnet test --filter FullyQualifiedName~GateUtf8BodyLengthTest
-已通过! - 失败: 0，通过: 4，已跳过: 0，总计: 4
+（原卡手抄计数已删除）计数以机器产物为准：`E:/UserFleet/evidence-cardfix-20261119/utf8-test.log`（`dotnet test TestProject1/GameSrvTest.csproj --filter FullyQualifiedName~GateUtf8BodyLength`）。Rust 侧：`mir2-rs/bins/game-gate/src/lib.rs` 的 `control_frame_golden_matches_csharp_oracle`（`include_str!` 读同一批 golden，逐字节断言）。
 ```
 1. `EmptyBody_IsHeaderOnly`：空正文 ⇒ 20B、`PackLength=0`；
 2. `AsciiBody_MatchesByteLengthBaseline`：ASCII（IP 形态）帧长/`PackLength`/正文与字节口径一致
@@ -118,3 +118,14 @@ cargo test -p game-gate → 89 passed / 0 failed（含 golden）；
 ### 范围核查
 
 - 同族：`SendLoginMessage` 已按编码后字节数（`encodeLen + 3`）；Rust 侧字节口径；未发现第三组件。
+
+## QA 整改（2026-11-19）
+
+> 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
+
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
+- 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
+- **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
+  实跑帧/JSON 产物为准。
+- 可独立重放的篡改分组（`packlen T1–T4` / `utf8 M1–M3` / `deps T1–T5`）：**待 QA 提供定义后
+  原样写入本卡**（本批未凭空补写）。

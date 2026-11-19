@@ -54,7 +54,7 @@ C# `GameGate` 的会话消息路径里，`packetLen` 直接取自**网络包头*
 `dotnet test TestProject1/GameSrvTest.csproj --filter FullyQualifiedName~GatePacketLengthTest`：
 
 ```
-已通过! - 失败: 0，通过: 6，已跳过: 0，总计: 6
+（原卡手抄计数已删除）计数以机器产物为准：`E:/UserFleet/evidence-cardfix-20261119/packlen-test.log`（`dotnet test TestProject1/GameSrvTest.csproj --filter FullyQualifiedName~GatePacketLength`）。Rust 侧接线测试：`mir2-rs/bins/game-gate/src/lib.rs` 的 `upstream_body_bound_rejects_pathological_lengths`（`MAX_UPSTREAM_BODY` 上界与边界值）。
 ```
 
 - `Rejects_NegativeLength_beforeAnyCopy`：`packetLen=-1` / `int.MinValue` ⇒ false，原因含原值；
@@ -141,3 +141,14 @@ grep -rn "Activator.CreateInstance|GetType(|AddSingleton|AddTransient|RegisterTy
 ### 边界
 
 不碰 AOI、不碰 DBSrv、不改背压参数（`max_depth_frames` 等属另一张卡）。
+
+## QA 整改（2026-11-19）
+
+> 统一口径：**卡面不再手抄测试数字**，一律引用机器产物路径；状态写"已合并（<sha>）"。
+
+- 机器产物：`E:/UserFleet/evidence-cardfix-20261119/`（`packlen-test.log`、`utf8-test.log`、`deps-check-and-selftest.log`）；
+- 实跑命令与 `git status --porcelain` 原文：见上述日志（本次采集时 `git status --porcelain` = 0 行）；
+- **源码文本/`grep` 型断言**：仅作"接线提示"，**不作行为证据**（QA 章程 §12）；行为判据以
+  实跑帧/JSON 产物为准。
+- 可独立重放的篡改分组（`packlen T1–T4` / `utf8 M1–M3` / `deps T1–T5`）：**待 QA 提供定义后
+  原样写入本卡**（本批未凭空补写）。
