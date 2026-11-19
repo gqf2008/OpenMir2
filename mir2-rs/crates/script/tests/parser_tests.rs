@@ -253,3 +253,39 @@ fn envir_path_dotdot() {
         root.join("Defines").join("a.txt")
     );
 }
+
+/// QT-01 死分支（卡 `openmir2-quests-parity`，偏差 B-13）。
+///
+/// oracle 侧证据：`mir2-rs/tests/parity/m3/quests/quest-parity-probe` —— 用**真**
+/// `ScriptParsers.LoadScriptFile` 装载两份含 `{Quest` 头的脚本，产物
+/// `quest_gate_reachability.tsv` 证明「脚本装进来了」（ScriptList +1 / 记录非空 / 已知标签命中）
+/// 之后仍是 `IsQuest = false`、`QuestInfo = null`。
+///
+/// 本用例钉住 Rust 侧的同一事实：`{Quest` 头会开新 Script 并记 `quest_count`，但 `is_quest`
+/// 无任何写入点 ⇒ 恒 false ⇒ `check_quest_status` 恒真。有人把 `is_quest` 改成 true（等于「修好」
+/// oracle 的死分支）时这条必红。
+#[test]
+fn quest_gate_is_dead_in_oracle_like_oracle() {
+    let fs = MemFs::new().with(
+        "root/npc_def/t.txt",
+        "{Quest 1}\n[@main]\n#SAY\nprobe\n[@other]\n#SAY\nx\n",
+    );
+    let out = load(&fs, "Npc_def", "t", false);
+    assert_eq!(out.stats.scripts, 1);
+    let s = &out.scripts[0];
+    assert_eq!(s.quest_count, 1);
+    assert!(
+        !s.is_quest,
+        "oracle 的 scriptType 从不被赋 1 ⇒ ScriptInfo.IsQuest 恒 false（B-13）"
+    );
+    // 装载证明：标签真的解析出来了 —— 「IsQuest 为假」不是因为没装上
+    assert!(s.contains_label("@main"), "缺 @main 记录");
+    assert!(s.contains_label("@other"), "缺 @other 记录");
+    // 死分支从未写 QuestInfo：全部保持默认
+    assert!(
+        s.quest_info
+            .iter()
+            .all(|q| q.w_flag == 0 && q.bt_value == 0 && q.n_rand_rage == 0),
+        "QuestInfo 应保持默认（死分支不执行）"
+    );
+}

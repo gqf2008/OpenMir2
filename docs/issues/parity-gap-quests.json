@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "domain": "quests",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
@@ -225,12 +225,15 @@
         "line": 146,
         "line_end": 168
       },
-      "status": "implemented_unverified",
+      "status": "dead_in_oracle",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
+        "test": "quest_gate_is_dead_in_oracle_like_oracle",
+        "test_file": "mir2-rs/crates/script/tests/parser_tests.rs",
+        "fixture": "E:/UserFleet/qa/quests/qt01/quest_gate_reachability.tsv",
+        "cases": [
+          "QT01-A",
+          "QT01-B"
+        ],
         "unit_tests": [
           "quest_creates_new_script_info",
           "quest_block_keeps_writing_into_previous_record"
@@ -243,7 +246,7 @@
         "section": "scriptType==1 死分支",
         "lines": null
       },
-      "notes": "运行时 check_quest_status（crates/script/src/engine/mod.rs 第 1074 行）无 oracle 夹具；#RAND 支保守按 0，登记 B-13；语料 {Quest 0 个文件"
+      "notes": "oracle 死分支：`{Quest` 头解析只在 `scriptType == 1` 块内发生，而该局部变量在 LoadScriptFile 内 7 处赋值为 10/20/11/12/10/13/14、从不为 1 ⇒ ScriptInfo.IsQuest 恒 false ⇒ CheckGotoLableQuestStatus 恒真。证据：探针 mir2-rs/tests/parity/m3/quests/quest-parity-probe （真 LoadScriptFile 装载 2 份 {Quest 头脚本：先证装载成功，再断言 IsQuest=false / QuestInfo=null），产物 E:/UserFleet/qa/quests/qt01/quest_gate_reachability.tsv；全仓 IsQuest 赋值枚举见同目录 grep_isquest_all_cs.txt（唯一 true 赋值在死块内；NormNpc.IsQuest 是另一个类自己的字段）。Rust 侧 is_quest 无写入点，等价保持。语料 E:/MirServer 2640 个 .txt 中 0 个含 {Quest 头。偏差 B-13。"
     },
     {
       "id": "QT-02",
@@ -291,7 +294,8 @@
         "section": "CHECKOPEN 恒假（oracle 缺陷 1:1 复刻）",
         "lines": null
       },
-      "notes": "缺陷照搬，不得修掉；改它与 oracle 不一致。将来修好须单开 S-* 批次。语料 0"
+      "notes": "缺陷照搬，不得修掉；改它与 oracle 不一致。将来修好须单开 S-* 批次。语料 0",
+      "basis": "semantic"
     },
     {
       "id": "QT-04",
@@ -314,7 +318,8 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "语料 0"
+      "notes": "语料 0",
+      "basis": "semantic"
     },
     {
       "id": "QT-05",
@@ -426,5 +431,8 @@
       "deviation": null,
       "notes": "impl ActionOfResetUnit（actions.rs 第 155 行）；语料 0"
     }
-  ]
+  ],
+  "schema_changelog": {
+    "2": "新增可选 basis 字段（verified 条目用；值域 semantic|bytes|mixed，缺省 semantic），见 docs/issues/openmir2-quests-parity.md §7"
+  }
 }

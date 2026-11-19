@@ -94,7 +94,7 @@
 | QT-07 SETOPEN | S3 + S4 | 同 QT-05 的边界集 |
 | QT-08 SETUNIT | S2 + S4 | 同 QT-05 的边界集 |
 | QT-09 RESETUNIT | S2 + S4 | 同 QT-06 的边界集 |
-| QT-01 {Quest} | S1 + S5 + RNG | `nRandRage=0` 的 10 组 flag 比较（全通过/首组不通过/中间不通过/末组不通过）；`#RAND` 先等 §8 裁决 |
+| QT-01 {Quest} | S1 + S5 + RNG | 整条已判 `dead_in_oracle`（§10）：oracle 侧 `IsQuest` 恒 false，选择门不可达；`#RAND` 支同样不可达，维持 B-13 |
 
 > 关键**不对称**（读码查实，必须有用例钉住、写进条目 notes）：
 > `SET` / `SETOPEN` / `SETUNIT` 用 `StrToInt(sParam1/sParam2, 0)`；`RESET` / `RESETUNIT` 用
@@ -107,7 +107,7 @@
 2. QT-06 RESET（引入「默认 1」不对称）
 3. QT-07 SETOPEN、QT-08 SETUNIT、QT-09 RESETUNIT（同构复用）
 4. QT-02 CHECK（条件侧）
-5. QT-01 {Quest}（**先等 §8 裁决**）
+5. QT-01 {Quest} —— **已裁决为 `dead_in_oracle`**（不计入分子，证据见 §10）
 
 每项交付：测试名（`--list` 可见）+ 命令 + rc + 全绿原文路径 + `coverage-report.ps1` 输出（只报脚本结果，不抄数）。
 
@@ -124,28 +124,45 @@
 
 ## 7. 偏差登记（沿用既有编号，不新造）
 
-- **B-13**：`scriptType == 1` 死分支——oracle 从不给 `scriptType` 赋 1（`ScriptParsers.cs` 该函数内 7 处赋值为
+- **B-13（QT-01 已据此改判 `dead_in_oracle`，探针证据见 §10）**：`scriptType == 1` 死分支——oracle 从不给 `scriptType` 赋 1（`ScriptParsers.cs` 该函数内 7 处赋值为
   10/20/11/12/10/13/14），`ScriptInfo.IsQuest = true` 仅存在于该不可达块内 ⇒ `{Quest}` 头解析不执行；
   Rust 侧 `check_quest_status` 对 `n_rand_rage > 0` 保守按失败、不抽 RNG。
 - **T-37**：`CHECKOPEN` 恒假（oracle 缺陷 1:1 复刻），不得修掉。
 
-## 8. 待裁决（开工前需要 opc-07 拍板）
+## 8. 裁决记录（opc-07，2026-11-20）
 
-1. **QT-01 是否应改判 `dead_in_oracle`**（分母不变、entries 不删）。证据：`ScriptParsers.cs` 的
-   `if (scriptType == 1 && ...)` 是 `{Quest}` 头解析的唯一入口，而该局部变量在全函数内从未被赋 1；
-   `ScriptInfo.IsQuest` 只在块内被置真 ⇒ 装载出来的脚本**永远 `IsQuest = false`** ⇒
-   `CheckGotoLableQuestStatus` 恒返 true。按 §1 第 2 条我不自行改。
-   装置建好后补一条**行为探针**：用真 `ScriptParsers.LoadScriptFile` 装载含 `{Quest 1}` 头的脚本，
-   断言 `IsQuest == false`，作为证据附上。
-2. **`basis` 字段**：checklist R3 要求每个 `verified` 带 `basis`（semantic/bytes），现有 entries 无此字段；
-   补 `basis` 会动 `entries`，与 R2 的字面读法冲突。请裁定 R2 是否只禁「改 count / 删 id」。
-3. **D1–D3 在任务线的口径**：本线无帧面，我拟以「动作链 drain」承接，请确认或另定。
+1. **QT-01 先做，探针必须防假绿**（已裁决）：证明「脚本真装进来了」后才允许断言 `IsQuest == false`；
+   至少 2 份脚本、全仓枚举 `IsQuest` 赋值路径；结论为 `dead_in_oracle` 时**分母 9 不动、id 不动**、
+   必须带 deviation id、**不计入分子**。见 §10 的四项证据。
+2. **`basis` 可以加**（已裁决）：R2 只禁「改 `denominator.count` / 删改 id / 改 `status_enum` 语义」。
+   已执行：`schema_version` 1→2 + `schema_changelog`；QT-03/QT-04 补 `basis: semantic`；
+   值域固定 `semantic|bytes|mixed`，缺省 `semantic`。
+3. **无帧面用「动作链 drain」，fixpoint 必须写死**（已裁决）：终止条件 = 状态量（S1–S3）+ 调用账本（S4）
+   + 控制结果（S5）**三样都不再产生新值**；每 case 记 `MaxDrainPasses` / `DrainPassesHitCap`（两侧同上限）；
+   **命中上限必须红**（不是 WARN）；GOTO 环必须有专门负例（人造环 ⇒ 命中上限 ⇒ 红）。
+4. **`RESET 5 abc` 实清 1 个**（已裁决）：这条「oracle 怪癖」必须是**独立 verified 条目**，不许并进别的 case；
+   行为牙 = 把 Rust 侧改成按 `sParam` 解析 ⇒ 该用例必红。
 
 ## 9. 边界与写集（交付前用 merge-base 核）
 
-- 新增：本卡文件、`mir2-rs/tests/parity/m3/quests/quest-parity-probe/**`、
-  `mir2-rs/tests/parity/m3/quests/vectors/**`、`tools/window/quests_compare.py`、
-  测试文件 `mir2-rs/crates/script/tests/quests_parity.rs`（或 game-svr lib 测试，视接线可构造性定）。
-- 允许改：`docs/issues/parity-gap-quests.json` 的**条目 status/evidence/notes**（不含 denominator 与 id 集合）。
+- 新增：本卡文件、`mir2-rs/tests/parity/m3/quests/quest-parity-probe/**`（csproj + Program.cs）、
+  `mir2-rs/tests/parity/m3/quests/vectors/**`（后续账本）、`tools/window/quests_compare.py`（后续）。
+- 改：`mir2-rs/crates/script/tests/parser_tests.rs`（QT-01 的 Rust 侧钉住用例；原计划新建
+  `quests_parity.rs`，因 `MemFs`/`load` 夹具在同文件、避免复制，改为就地追加并在提交里点名）。
+- 允许改：`docs/issues/parity-gap-quests.json` 的**条目 status/evidence/notes/basis** 与
+  `schema_version`（不含 denominator 与 id 集合）。
 - 不动：`src/**`（C# 冻结面）、魔法线/物品线文件、`mir2-rs/crates/script/src/**` 产品逻辑——
   若某条 verified 需要改实现才能对齐，先报 opc-07，不自行改。
+
+## 10. QT-01 裁决证据（四项，全部可复跑）
+
+| # | 证据 | 命令 | 产物 / 结果 |
+| --- | --- | --- | --- |
+| 1 | **装载证明** | `dotnet run --project mir2-rs/tests/parity/m3/quests/quest-parity-probe -c Release -- E:/UserFleet/qa/quests/qt01` | `E:/UserFleet/qa/quests/qt01/quest_gate_reachability.tsv`：两份脚本 `loaded_delta=1`、`records` 2/1、`known_label_hit=1`（`@other` / `@main`） |
+| 2 | **真实标签命中** | 同上 | 同上：`known_label=@other`、`@main` 均 `hit=1`（标签取自脚本原文，写死在探针里） |
+| 3 | **全仓 `IsQuest` 枚举** | `grep -rn "IsQuest" --include=*.cs .`（仓库根） | `E:/UserFleet/qa/quests/qt01/grep_isquest_all_cs.txt`：对 `ScriptInfo.IsQuest` 的**唯一** `true` 赋值在 `ScriptParsers.cs` 的死块内；`NormNpc` 的 `IsQuest` 是 **NormNpc 自己的字段**（另一个类，`src/M2Server/Npc/NormNpc.cs` 内自读自写）；其余全是 `false` |
+| 4 | **`IsQuest` 断言** | 同 1 | 同上 TSV：`is_quest=0`、`quest_info_null=1`、`verdict=PASS(dead_in_oracle)`；Rust 侧 `quest_gate_is_dead_in_oracle_like_oracle`（`cargo test -p mir2-script --test parser_tests`，15 passed / 0 failed / 0 ignored） |
+
+补充事实（写进卡面备查）：`scriptType` 在 `LoadScriptFile` 内 7 处赋值为 10/20/11/12/10/13/14、**从不为 1**
+（`grep_scripttype.txt`）；`E:/MirServer` 下 **2640** 个 `.txt` 中 **0** 个含 `{Quest` 头（`corpus_quest_headers.txt`）。
+⇒ 该特性在 oracle 与语料两侧都不可达，**无法与 oracle 对拍**，按裁决记 `dead_in_oracle`、不计入分子。

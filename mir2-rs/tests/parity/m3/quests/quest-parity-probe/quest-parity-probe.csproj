@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>quest-parity-probe</AssemblyName>
+    <RootNamespace>QuestParityProbe</RootNamespace>
+  </PropertyGroup>
+
+  <!--
+    卡 openmir2-quests-parity（任务线 2/9）真身探针。
+
+    目的：裁决 QT-01 `{Quest N}` 选择门在 oracle 里是否**可达**。
+    做法：用**真** `ScriptParsers.LoadScriptFile` 装载含 `{Quest` 头的脚本，
+    并先证明「脚本真的装进来了」，再断言 `ScriptInfo.IsQuest == false`：
+
+      - 装载证明：`npc.ScriptList` 计数增加、`RecordList` 非空、命中脚本原文里的已知标签；
+      - 再断言 `IsQuest == false` 且 `QuestInfo == null`（死分支从未分配 QuestInfo）；
+      - 0 用例 ⇒ rc=2（防空转，checklist Z3）。
+
+    只读：不连 MySQL、不写现网文件、不发起 socket；脚本只写进探针自己的 bin/Envir/QuestProbe/。
+  -->
+  <ItemGroup>
+    <ProjectReference Include="..\..\..\..\..\..\src\M2Server\M2Server.csproj" />
+  </ItemGroup>
+
+</Project>
