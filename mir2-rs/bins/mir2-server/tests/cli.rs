@@ -188,9 +188,11 @@ const LEGACY_BINS: [(&str, &str); 6] = [
     ("sel-gate", "sel_gate"),
 ];
 
-/// 旧六个 exe 的 `main.rs` 只能是三行薄包装：`fn main() { std::process::exit(<crate>::run()); }`。
+/// 旧六个 exe 的 `main.rs` 只能是三行薄包装：`fn main() { std::process::exit(<crate>::run()); }`，
+/// **外加**卡 `openmir2-rust-build-rev-embedding` 要求的 `--version` 自报门（固定形态，见下）。
 ///
-/// 牙：把任一 `main.rs` 改回内联体（搬回启动逻辑）⇒ 本用例红。
+/// 牙：把任一 `main.rs` 改回内联体（搬回启动逻辑）⇒ 本用例红；删掉自报门 ⇒ 本用例也红
+/// （门是"允许项"但**必须存在**，否则 rev 自报会在某个 exe 上悄悄消失）。
 #[test]
 fn legacy_bins_are_thin_wrappers_around_lib_run() {
     let bins = Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -201,16 +203,42 @@ fn legacy_bins_are_thin_wrappers_around_lib_run() {
         let path = bins.join(pkg).join("src").join("main.rs");
         let src = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("读不到 {}：{e}", path.display()));
-        let body: Vec<&str> = src
+        let lines: Vec<&str> = src
             .lines()
             .map(str::trim)
             .filter(|line| !line.is_empty())
             .collect();
+        assert!(
+            lines.iter().any(|line| line.contains("--version")),
+            "{} 缺 `--version` 自报门（卡 openmir2-rust-build-rev-embedding）",
+            path.display()
+        );
+        // 剥掉注释行与整个 `if … --version … { … }` 门（按行首/行尾花括号配平），
+        // 剩下必须恰好是薄包装——门内允许 `println!`/`option_env!`/`black_box`，门外的业务逻辑一律红。
+        let mut without_gate: Vec<&str> = Vec::new();
+        let mut i = 0;
+        while i < lines.len() {
+            let line = lines[i];
+            if line.starts_with("//") {
+                i += 1;
+                continue;
+            }
+            if line.contains("--version") {
+                i += 1;
+                while i < lines.len() && lines[i] != "}" {
+                    i += 1;
+                }
+                i += 1; // 跳过门的 `}`
+                continue;
+            }
+            without_gate.push(line);
+            i += 1;
+        }
         let call = format!("std::process::exit({krate}::run());");
         assert_eq!(
-            body,
+            without_gate,
             vec!["fn main() {", call.as_str(), "}"],
-            "{} 的 main 必须只调 lib 的 run()（薄包装）",
+            "{} 的 main 必须只调 lib 的 run()（薄包装 + 自报门）",
             path.display()
         );
     }
