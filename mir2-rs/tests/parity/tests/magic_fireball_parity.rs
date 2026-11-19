@@ -15,6 +15,7 @@
 //! 4. **HP 一级断言**：`TargetHpBefore/TargetHp` 两侧相等（miss 100→100、edge/hit 100→85 由金标准决定）；
 //! 5. **RNG**：行数相等、逐次取值相等、`seq` 连续无缺号、**每一行 `site` ∈ 允许清单**（§16b）。
 
+use mir2_formula::level_ability::{recalc_level_abilitys, LevelValueConfig, PlayerJob};
 use serde_json::Value;
 
 /// `site` 允许清单（§16b 表格的代码形态）：`(前缀, 理由)`。
@@ -399,9 +400,110 @@ fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
     for k in ["anti_magic", "target_level", "target_hp", "target_max_hp"] {
         if !fixture.get(k).is_some_and(Value::is_i64) {
             return Err(format!(
-                "[{label}] 金标准缺 `Fixture.{k}`（int；卡 §8.7 缺键即红，不许默认兜底）"
+                "[{label}] 金标准缺 `Fixture.{k}`（int；卡 §8.3 缺键即红，不许默认兜底）"
             ));
         }
+    }
+    // ---- construction（§7 要求的可机检构造路径）----
+    let construction = fixture
+        .get("construction")
+        .ok_or_else(|| format!("[{label}] 金标准缺 `Fixture.construction`（§7 机检构造路径）"))?;
+    let job = construction
+        .get("job")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("[{label}] `construction.job` 缺失/非整数（§8.3）"))?;
+    let level = construction
+        .get("level")
+        .and_then(Value::as_i64)
+        .ok_or_else(|| format!("[{label}] `construction.level` 缺失/非整数（§8.3）"))?;
+    let equipment = construction
+        .get("equipment")
+        .and_then(Value::as_array)
+        .ok_or_else(|| format!("[{label}] `construction.equipment` 缺失/非数组（§8.3）"))?;
+    if construction.get("skills").and_then(Value::as_array).is_none() {
+        return Err(format!("[{label}] `construction.skills` 缺失/非数组（§8.3）"));
+    }
+    if fixture.get("target_level").and_then(Value::as_i64) != Some(level) {
+        return Err(format!(
+            "[{label}] `construction.level` {level} ≠ `target_level` {:?}（§8.3）",
+            fixture.get("target_level")
+        ));
+    }
+    // 登录序无装备、无技能 ⇒ AntiMagic = 1 + 0 = 1。
+    if equipment.is_empty() {
+        if fixture.get("anti_magic").and_then(Value::as_i64) != Some(1) {
+            return Err(format!(
+                "[{label}] `construction.equipment=[]` ⇒ `anti_magic` 必须为 1；实得 {:?}",
+                fixture.get("anti_magic")
+            ));
+        }
+    } else {
+        return Err(format!(
+            "[{label}] `construction.equipment` 非空 ⇒ 装备 MgAvoid 复算未实现（fail-closed；卡 §8.7）"
+        ));
+    }
+    // ---- derived：按构造路径复算，必须与平铺值一致 ----
+    let derived = fixture
+        .get("derived")
+        .ok_or_else(|| format!("[{label}] 金标准缺 `Fixture.derived`（§8.3）"))?;
+    for k in ["max_hp", "max_mp", "dc", "ac", "mac", "max_exp"] {
+        if !derived.get(k).is_some_and(Value::is_i64) {
+            return Err(format!("[{label}] `derived.{k}` 缺失/非整数（§8.3）"));
+        }
+    }
+    let job = match job {
+        0 => PlayerJob::Warrior,
+        1 => PlayerJob::Wizard,
+        2 => PlayerJob::Taoist,
+        other => {
+            return Err(format!(
+                "[{label}] `construction.job` = {other} 不在 0/1/2（§8.7）"
+            ))
+        }
+    };
+    let Ok(level_u8) = u8::try_from(level) else {
+        return Err(format!("[{label}] `construction.level` = {level} 越界（§8.7）"));
+    };
+    let lv = recalc_level_abilitys(job, level_u8, &LevelValueConfig::default());
+    let got = |k: &str| derived.get(k).and_then(Value::as_i64).unwrap_or(i64::MIN);
+    for (k, want) in [
+        ("max_hp", i64::from(lv.max_hp)),
+        ("max_mp", i64::from(lv.max_mp)),
+        ("dc", i64::from(lv.dc)),
+        ("ac", i64::from(lv.ac)),
+        ("mac", i64::from(lv.mac)),
+    ] {
+        if got(k) != want {
+            return Err(format!(
+                "[{label}] `derived.{k}` = {} 与 (job={:?},level={}) 的公式复算 {want} 不一致（§7）",
+                got(k),
+                job,
+                level_u8
+            ));
+        }
+    }
+    // 平铺 `target_max_hp` 必须等于 derived.max_hp（不是只信 derived）。
+    if fixture.get("target_max_hp").and_then(Value::as_i64) != Some(got("max_hp")) {
+        return Err(format!(
+            "[{label}] `target_max_hp` {:?} ≠ `derived.max_hp` {}（§8.3 复算一致）",
+            fixture.get("target_max_hp"),
+            got("max_hp")
+        ));
+    }
+    let hp = fixture
+        .get("target_hp")
+        .and_then(Value::as_i64)
+        .unwrap_or(i64::MIN);
+    if hp > got("max_hp") {
+        return Err(format!(
+            "[{label}] `target_hp` {hp} > `max_hp` {}（§8.3）",
+            got("max_hp")
+        ));
+    }
+    // `derived.max_exp` 的来源是 Exps.conf（不在仓内，且本域无条目消费 `MaxExp`）——
+    // 只校验存在与非负；若将来有条目消费该字段，需把 Exps 表冻进仓后再复算（登记 §8.3）。
+    if got("max_exp") < 0 {
+        return Err(format!("[{label}] `derived.max_exp` 为负（§8.3）"));
     }
     Ok(())
 }
@@ -502,13 +604,16 @@ fn verify_union(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
 }
 
 fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
+    // 合成夹具按**统一 schema** 填全（Warrior L20 登录序：MaxHP=224/MaxMP=81/DC=0x0403/AC=0x0200）。
     let mut fixture = serde_json::json!({
-        "login_order": false,
-        "anti_magic": 3,
+        "login_order": true,
+        "anti_magic": 1,
         "target_level": 20,
         "target_hp": 100,
-        "target_max_hp": 100,
+        "target_max_hp": 224,
         "reachability": "reachable",
+        "construction": { "job": 0, "level": 20, "equipment": [], "skills": [] },
+        "derived": { "max_hp": 224, "max_mp": 81, "dc": 0x0403, "ac": 0x0200, "mac": 0, "max_exp": 50 },
     });
     if let Some(m) = mode {
         fixture["rng_mode"] = Value::from(m);
@@ -552,6 +657,26 @@ fn tooth_contract_missing_keys_red() {
     g3["cases"][0]["Fixture"].as_object_mut().unwrap().remove("anti_magic");
     let msg3 = check_golden_contract(&g3, label).unwrap_err();
     assert!(msg3.contains("anti_magic"), "必须点名 anti_magic：{msg3}");
+    // 缺 construction
+    let mut g4 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g4["cases"][0]["Fixture"].as_object_mut().unwrap().remove("construction");
+    let msg4 = check_golden_contract(&g4, label).unwrap_err();
+    assert!(msg4.contains("construction"), "必须点名 construction：{msg4}");
+    // derived 与公式复算不一致（max_hp 改 100）
+    let mut g5 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g5["cases"][0]["Fixture"]["derived"]["max_hp"] = Value::from(100);
+    let msg5 = check_golden_contract(&g5, label).unwrap_err();
+    assert!(msg5.contains("max_hp"), "必须点名 derived.max_hp：{msg5}");
+    // 平铺 target_max_hp 与 derived.max_hp 不一致
+    let mut g6 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g6["cases"][0]["Fixture"]["target_max_hp"] = Value::from(100);
+    let msg6 = check_golden_contract(&g6, label).unwrap_err();
+    assert!(msg6.contains("target_max_hp"), "必须点名 target_max_hp：{msg6}");
+    // 装备非空 ⇒ fail-closed
+    let mut g7 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g7["cases"][0]["Fixture"]["construction"]["equipment"] = serde_json::json!(["MgAvoid=1"]);
+    let msg7 = check_golden_contract(&g7, label).unwrap_err();
+    assert!(msg7.contains("equipment"), "必须点名 equipment：{msg7}");
     // 正对照：齐全 ⇒ 绿
     let ok = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
     assert!(check_golden_contract(&ok, label).is_ok(), "齐全应绿");
