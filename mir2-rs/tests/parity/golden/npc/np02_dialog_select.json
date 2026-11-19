@@ -1,0 +1,208 @@
+{
+  "generator": "mir2-rs/tests/parity/csharp/NpcGolden",
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.Operate.cs:114 (ClientMerchantDlgSelect)",
+    "src/M2Server/Npc/NormNpc.cs:1633 (NormNpc.UserSelect: label ledger only)",
+    "src/GameSrv/Npc/Merchant.cs:789 (Merchant.UserSelect -> GotoLable / @back)",
+    "src/Modules/ScriptEngine/ScriptEngine.cs:141 (GotoLable)",
+    "src/Modules/ScriptEngine/ScriptEngine.cs:987 (GotoLableSendMerChantSayMsg)",
+    "src/M2Server/Player/PlayObject.Message.cs:1702 (RM_MERCHANTSAY -> SM_MERCHANTSAY)"
+  ],
+  "script": "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>",
+  "max_drain_passes": 64,
+  "excluded_wallclock_fields": [
+    "ctx.click_npc_time"
+  ],
+  "cases": [
+    {
+      "name": "dlg_ask_ok",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "a8b50545fb03a61ca2834b276e2bcc0f44f1c1e5eee7ec3370d088d49a0816c5",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_select",
+        "label": "@ask",
+        "labels": null
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5006,
+          "late": false,
+          "msg": "老人/打听结果：一切正常\\ <返回/@back>"
+        }
+      ],
+      "rm_priorities": [
+        1
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 1,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 82
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "@ask",
+        "script_go_back_lable": "",
+        "script_lable": "@ask",
+        "script_selected": true,
+        "can_jmp_labels": [
+          "@back"
+        ]
+      }
+    },
+    {
+      "name": "dlg_back_to_main",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "a8b50545fb03a61ca2834b276e2bcc0f44f1c1e5eee7ec3370d088d49a0816c5",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_select",
+        "label": "@back",
+        "labels": null
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "@back",
+        "script_selected": true,
+        "can_jmp_labels": [
+          "@ask",
+          "@exit"
+        ]
+      }
+    },
+    {
+      "name": "dlg_unknown_label",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "a8b50545fb03a61ca2834b276e2bcc0f44f1c1e5eee7ec3370d088d49a0816c5",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_select",
+        "label": "@nope",
+        "labels": null
+      },
+      "rm": [],
+      "rm_priorities": [],
+      "max_drain_passes": 64,
+      "drain_passes": 0,
+      "drain_hit_cap": false,
+      "sm": [],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "@nope",
+        "script_go_back_lable": "",
+        "script_lable": "@nope",
+        "script_selected": true,
+        "can_jmp_labels": [
+          "@ask",
+          "@exit"
+        ]
+      }
+    },
+    {
+      "name": "dlg_ask_back",
+      "fixture": null,
+      "script_name": "老人",
+      "script_sha256": "a8b50545fb03a61ca2834b276e2bcc0f44f1c1e5eee7ec3370d088d49a0816c5",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_sequence",
+        "label": "",
+        "labels": [
+          "@ask",
+          "@back"
+        ]
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5009,
+          "late": false,
+          "msg": "老人/老人：你需要什么？\\ <打听/@ask> <离开/@exit>"
+        }
+      ],
+      "rm_priorities": [
+        1
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 1,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 98
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "",
+        "script_go_back_lable": "@main",
+        "script_lable": "@back",
+        "script_selected": true,
+        "can_jmp_labels": [
+          "@ask",
+          "@exit"
+        ]
+      }
+    }
+  ]
+}

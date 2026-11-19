@@ -7222,11 +7222,12 @@ fn handle_shop_cmd_inner(
             }
             // `Merchant.cs:922-929` 的 `@back` 支：`ScriptGoBackLable` 空则回 `@main`。
             if game_svr::shop::eq_label(label, "@back") {
-                let target = if session.script_go_back_lable.is_empty() {
-                    "@main".to_string()
-                } else {
-                    session.script_go_back_lable.clone()
-                };
+                // oracle `Merchant.cs:922-929`：空栈时**写回** `ScriptGoBackLable = "@main"`，
+                // 不是只在本地取默认值（状态面差异由 NP-02 对拍钉出，2026-11-20）。
+                if session.script_go_back_lable.is_empty() {
+                    session.script_go_back_lable = "@main".to_string();
+                }
+                let target = session.script_go_back_lable.clone();
                 let mut rng =
                     std::mem::replace(&mut world.rng, mir2_shared::rng::RandomNumber::with_seed(0));
                 let mut script_broadcasts2: Vec<String> = Vec::new();
@@ -85746,6 +85747,30 @@ GMEXECUTE f
 
         /// 自定义脚本/`Npcs.txt` 的同构夹具（T-160：同一脚本经两条生产入口驱动）。
         fn new_with(npcs_txt: &str, scripts: &[(&str, &str)], placed: usize) -> Self {
+            Self::new_with_king_type(
+                npcs_txt,
+                scripts,
+                placed,
+                mir2_envir::npcs::NpcType::GuildOfficial,
+            )
+        }
+
+        /// 两个 NPC 都是 `Merchant`（NP-04 切换用例：两次点击都要过 `(IMerchant)` 硬转）。
+        fn new_two_merchants(npcs_txt: &str, scripts: &[(&str, &str)], placed: usize) -> Self {
+            Self::new_with_king_type(
+                npcs_txt,
+                scripts,
+                placed,
+                mir2_envir::npcs::NpcType::Merchant,
+            )
+        }
+
+        fn new_with_king_type(
+            npcs_txt: &str,
+            scripts: &[(&str, &str)],
+            placed: usize,
+            king_type: mir2_envir::npcs::NpcType,
+        ) -> Self {
             use std::sync::atomic::{AtomicU32, Ordering};
             static SEQ: AtomicU32 = AtomicU32::new(0);
             let n = SEQ.fetch_add(1, Ordering::Relaxed);
@@ -85765,7 +85790,7 @@ GMEXECUTE f
             let npcs = vec![
                 mir2_envir::npcs::NpcInfo {
                     chr_name: "国王".to_string(),
-                    npc_type: mir2_envir::npcs::NpcType::GuildOfficial,
+                    npc_type: king_type,
                     map_name: "0".to_string(),
                     x: 11,
                     y: 10,
@@ -85919,6 +85944,47 @@ GMEXECUTE f
             drain_frames(&mut self.rx)
         }
 
+        /// 直驱 `GotoLable(label, boExtJmp=false)`（等价"可跳标签"入口；NP-04/07 用）。
+        fn direct_goto(&mut self, label: &str) {
+            let sg = self.sessions.get_mut("hero").unwrap();
+            let session = self.shop_sessions.entry("hero".to_string()).or_default();
+            let sell_off = self
+                .sell_off_sessions
+                .entry("hero".to_string())
+                .or_default();
+            let mut rng = std::mem::replace(
+                &mut self.world.rng,
+                mir2_shared::rng::RandomNumber::with_seed(0),
+            );
+            let mut broadcasts: Vec<String> = Vec::new();
+            let (says, _f, _s, _w) = run_merchant_goto(
+                &self.book,
+                self.elder_id,
+                label,
+                false,
+                sg,
+                "hero",
+                "0",
+                &self.catalog,
+                &mut self.item_number,
+                &self.npc_vars,
+                session,
+                sell_off,
+                now_ms() as i32,
+                &mut rng,
+                None,
+                None,
+                &mut broadcasts,
+                false,
+            );
+            self.world.rng = rng;
+            if !says.is_empty() {
+                if let Some(tx) = route_to_gate(&self.gates, 0, 901, "测试直跳说词") {
+                    emit_npc_says(tx, 901, sg.actor_id, &says);
+                }
+            }
+        }
+
         fn game_gold(&self) -> i32 {
             self.sessions["hero"].game_gold
         }
@@ -86016,6 +86082,332 @@ GMEXECUTE f
         );
         let says = T137Rig::says(&frames);
         assert!(says[0].starts_with("老人/"), "说词尾：{}", says[0]);
+    }
+
+    /// 读 GBK 语料（真实脚本按原字节→文本；测试侧再按 GBK 写回夹具）。
+    fn read_gbk(path: &str) -> String {
+        let bytes = std::fs::read(path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"));
+        let (text, _, had_err) = encoding_rs::GBK.decode(&bytes);
+        assert!(!had_err, "{path} 不能按 GBK 解码");
+        text.into_owned()
+    }
+    /// 读入仓夹具（UTF-8；与真实语料的 GBK 分开）。
+    fn read_utf8(path: &str) -> String {
+        std::fs::read_to_string(path).unwrap_or_else(|e| panic!("读不到 {path}: {e}"))
+    }
+    const WUSHI_SCRIPT_PATH: &str =
+        r"E:\MirServer\M2GameSvr\Envir\Market_Def\任务NPC\武士-0114.txt";
+    const QFUNCTION_PATH: &str = r"E:\MirServer\M2GameSvr\Envir\Market_Def\QFunction-0.txt";
+    const NP07_FIXTURE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/parity/golden/npc/fixtures/np07_break_synthetic.txt"
+    );
+    const EXTJMP_FIXTURE_PATH: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../tests/parity/golden/npc/fixtures/np05_extjmp_synthetic.txt"
+    );
+
+    /// **NP-01 对拍样板**（卡 `card/npc-parity`）：读 C# oracle 金标准
+    /// `tests/parity/golden/npc/np01_click_main.json`（生成器 `csharp/NpcGolden`），
+    /// 用**生产入口** `handle_click_npc_cmd` 复跑 4 例：
+    /// 即时帧严格序（`SM_MERCHANTSAY(643)`）+ 说词尾文本 + 三道门（超距/死亡/限频）零帧。
+    ///
+    /// **状态面缺口（登记，不伪造）**：`LastNpc`/`ScriptCurrLable` 在 Rust 会话未建模
+    /// （本文件的 T-137 残余①），故本样板不比 `last_npc_is_npc`/`script_selected`；
+    /// 补齐后在同用例加断言。
+    ///
+    /// **防空转**：golden 缺文件、零用例、未知 case、`drain_hit_cap=true` 一律 panic。
+    #[test]
+    fn np01_click_main_matches_oracle_golden() {
+        let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/npc/np01_click_main.json");
+        let text = std::fs::read_to_string(&path)
+            .unwrap_or_else(|e| panic!("读不到 {}: {e}", path.display()));
+        let doc: serde_json::Value = serde_json::from_str(&text).expect("golden JSON");
+        let np01 = doc["cases"].as_array().expect("cases 数组");
+        assert!(!np01.is_empty(), "golden 零用例 ⇒ 红（防空转）");
+        // NP-02 的对话选择 golden 独立成文件（同一批、同一比较器）。
+        let path2 = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../tests/parity/golden/npc/np02_dialog_select.json");
+        let text2 = std::fs::read_to_string(&path2)
+            .unwrap_or_else(|e| panic!("读不到 {}: {e}", path2.display()));
+        let doc2: serde_json::Value = serde_json::from_str(&text2).expect("np02 golden JSON");
+        let np02 = doc2["cases"].as_array().expect("np02 cases 数组");
+        assert!(!np02.is_empty(), "np02 golden 零用例 ⇒ 红（防空转）");
+        let read_cases = |file: &str| -> Vec<serde_json::Value> {
+            let p = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../../tests/parity/golden/npc")
+                .join(file);
+            let t = std::fs::read_to_string(&p)
+                .unwrap_or_else(|e| panic!("读不到 {}: {e}", p.display()));
+            let d: serde_json::Value = serde_json::from_str(&t).expect("golden JSON");
+            let arr = d["cases"].as_array().expect("cases").clone();
+            assert!(!arr.is_empty(), "{file} 零用例 ⇒ 红（防空转）");
+            arr
+        };
+        // NP-03 的 golden 已产，但 Rust 驱动器（商家装载链）等 ca 合入后再接；
+        // 这里只断言该 golden 非空（防空转），不把它塞进本比较器。
+        let _np03 = read_cases("np03_merchant_menu.json");
+        let np04 = read_cases("np04_main_selection.json");
+        let np05 = read_cases("np05_extjmp.json");
+        let np07 = read_cases("np07_chain_break.json");
+        let np09 = read_cases("np09_var_text.json");
+        let cases: Vec<&serde_json::Value> = np01
+            .iter()
+            .chain(np02.iter())
+            .chain(np04.iter())
+            .chain(np05.iter())
+            .chain(np07.iter())
+            .chain(np09.iter())
+            .collect();
+        let mut n = 0usize;
+        for case in cases {
+            let name = case["name"].as_str().expect("case name");
+            assert_eq!(
+                case["drain_hit_cap"].as_bool(),
+                Some(false),
+                "{name}: DrainPassesHitCap=true 必须红"
+            );
+            let qf_text = read_gbk(QFUNCTION_PATH);
+            let fx_text = read_utf8(EXTJMP_FIXTURE_PATH);
+            let np07_text = read_utf8(NP07_FIXTURE_PATH);
+            let wushi_text = read_gbk(WUSHI_SCRIPT_PATH);
+            let mut rig = match name {
+                "click_no_main_fallback" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", "[@greet]\nhi"),
+                    ],
+                    2,
+                ),
+                "click_switch" => T137Rig::new_two_merchants(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\n王：第二页"),
+                        ("Npc_def/老人-0.txt", "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>"),
+                    ],
+                    2,
+                ),
+                "act_usercmd6_first_only" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &qf_text),
+                    ],
+                    2,
+                ),
+                "extjmp_allowed" | "extjmp_blocked" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &fx_text),
+                    ],
+                    2,
+                ),
+                "var_username" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &wushi_text),
+                    ],
+                    2,
+                ),
+                "chain_break" | "other_record_intact" => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", &np07_text),
+                    ],
+                    2,
+                ),
+                _ => T137Rig::new_with(
+                    ";x\n国王 1 0 11 10 0 8\n老人 0 0 12 10 0 1\n",
+                    &[
+                        ("Npc_def/国王-0.txt", "[@main]\nking"),
+                        ("Npc_def/老人-0.txt", "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>"),
+                    ],
+                    2,
+                ),
+            };
+            match name {
+                "click_main_ok" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 必须到达 Click 点");
+                    let frames = rig.drain();
+                    let idents: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
+                    assert_eq!(
+                        idents,
+                        vec![mir2_protocol::messages::SM_MERCHANTSAY],
+                        "{name}: 即时帧严格序"
+                    );
+                    let says = T137Rig::says(&frames);
+                    let expect = case["rm"][0]["msg"].as_str().expect("golden msg");
+                    assert_eq!(says, vec![expect.to_string()], "{name}: 说词尾文本");
+                }
+                "click_main_far" => {
+                    {
+                        let t = rig.world.entities.transform_mut(rig.elder_id).unwrap();
+                        t.x = 40;
+                        t.y = 40;
+                    }
+                    assert!(!rig.click(rig.elder_id), "{name}: 超距必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 超距零帧");
+                }
+                "click_main_dead" => {
+                    let hero = rig.sessions["hero"].actor_id;
+                    rig.world.entities.get_mut(hero).unwrap().life_cycle.death = true;
+                    assert!(!rig.click(rig.elder_id), "{name}: 死亡必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 死亡零帧");
+                }
+                "click_main_rate_limited" => {
+                    let now = rig.world.clock_ms;
+                    rig.sessions.get_mut("hero").unwrap().click_npc_time = Some(now);
+                    assert!(!rig.click(rig.elder_id), "{name}: 限频必须拒绝");
+                    assert!(rig.drain().is_empty(), "{name}: 限频零帧");
+                }
+                "click_no_main_fallback" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 必须到达 Click 点");
+                    assert!(rig.drain().is_empty(), "{name}: 无 @main 时零说词");
+                }
+                "dlg_ask_ok" | "dlg_back_to_main" | "dlg_unknown_label" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 先点击打开对话");
+                    let _ = rig.drain();
+                    let label = case["ctx"]["label"].as_str().expect("label");
+                    rig.dlg_select(rig.elder_id, label);
+                    let frames = rig.drain();
+                    let says = T137Rig::says(&frames);
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: 说词序列");
+                }
+                "dlg_ask_back" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 先点击");
+                    let _ = rig.drain();
+                    rig.dlg_select(rig.elder_id, "@ask");
+                    let _ = rig.drain();
+                    rig.dlg_select(rig.elder_id, "@back");
+                    let frames = rig.drain();
+                    let says = T137Rig::says(&frames);
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: @back 回 @main 说词");
+                }
+                "click_switch" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 第一次点击");
+                    let _ = rig.drain();
+                    // 过 `ClickNpcTime` 限频（oracle `Config.ClickNpcTime` 门）。
+                    rig.world.clock_ms += 2000;
+                    assert!(rig.click(rig.king_id), "{name}: 第二次点击");
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: 切换后说词");
+                }
+                "act_usercmd6_first_only" => {
+                    rig.sessions.get_mut("hero").unwrap().game_gold = 10;
+                    rig.direct_goto("@UserCmd6");
+                    let says = T137Rig::says(&rig.drain());
+                    assert!(says.is_empty(), "{name}: 无说词");
+                }
+                "extjmp_allowed" | "extjmp_blocked" => {
+                    assert!(rig.click(rig.elder_id), "{name}: 先点击");
+                    let _ = rig.drain();
+                    let label = case["ctx"]["label"].as_str().expect("label");
+                    rig.dlg_select(rig.elder_id, label);
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: extjmp 说词");
+                }
+                "var_username" => {
+                    rig.sessions.get_mut("hero").unwrap().game_gold = 0;
+                    rig.direct_goto("@main");
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: 变量替换说词");
+                }
+                "chain_break" | "other_record_intact" => {
+                    // golden 的 GameGold 前置为 0（与 C# 探针默认一致）。
+                    rig.sessions.get_mut("hero").unwrap().game_gold = 0;
+                    let label = case["ctx"]["label"].as_str().expect("label");
+                    rig.direct_goto(label);
+                    let says = T137Rig::says(&rig.drain());
+                    let expect: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
+                    assert_eq!(says, expect, "{name}: 断链说词");
+                }
+                other => panic!("golden 出现未知用例 {other}（禁止静默跳过）"),
+            }
+            // 状态面（oracle `LastNpc` / `playerActor.Script` / `ScriptCurrLable`）：
+            // 直接读会话态 `ShopSession`（实体/会话直读，不从帧反推）。
+            let st = &case["state"];
+            let expected_npc = if name == "click_switch" {
+                rig.king_id
+            } else {
+                rig.elder_id
+            };
+            let ss = rig.shop_sessions.get("hero");
+            assert_eq!(
+                ss.map(|s| s.last_npc == expected_npc).unwrap_or(false),
+                st["last_npc_is_npc"].as_bool().unwrap(),
+                "{name}: LastNpc 归属"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_index.is_some()).unwrap_or(false),
+                st["script_selected"].as_bool().unwrap(),
+                "{name}: Script 选中"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_curr_lable.clone()).unwrap_or_default(),
+                st["script_curr_lable"].as_str().unwrap(),
+                "{name}: ScriptCurrLable"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_go_back_lable.clone())
+                    .unwrap_or_default(),
+                st["script_go_back_lable"].as_str().unwrap(),
+                "{name}: ScriptGoBackLable"
+            );
+            assert_eq!(
+                ss.map(|s| s.script_lable.clone()).unwrap_or_default(),
+                st["script_lable"].as_str().unwrap(),
+                "{name}: ScriptLable"
+            );
+            if let Some(g) = st["game_gold"].as_i64() {
+                assert_eq!(
+                    i64::from(rig.sessions["hero"].game_gold),
+                    g,
+                    "{name}: game_gold"
+                );
+            }
+            n += 1;
+        }
+        assert!(n >= 4, "golden 用例数异常：{n}");
     }
 
     /// **A3③**：`Absent`（C3：id 不在世界）与 `NotMerchant`（X：类型不符）**两条分支不混**。

@@ -3,8 +3,8 @@
   "domain": "items",
   "source_doc": "docs/issues/openmir2-parity-gap-items-quests-npc.md",
   "counting_moment": {
-    "head": "3679403bd288df92b2e72cc132f1fb2eb766fb16",
-    "time": "2026-11-19T23:25:52+08:00"
+    "head": "140d07b72f81bafe293eddf6dce3757c1dcda1e7",
+    "time": "2026-11-20T01:01:38+08:00"
   },
   "status_enum": [
     "verified",
@@ -506,23 +506,26 @@
         "line": 655,
         "line_end": 666
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
         "test": "useitem::tests::matches_oracle_eat_fixture",
         "test_file": "mir2-rs/bins/game-svr/src/useitem.rs",
         "fixture": "mir2-rs/tests/parity/m3/fixtures/eat_vectors.json",
         "cases": [
-          "eat_fail_stdmode31_unbind_bag_full"
+          "eat_fail_stdmode31_unbind_bag_full",
+          "eat_ok_stdmode31_unbind_success"
         ],
         "unit_tests": [
-          "useitem::tests::unbind_stdmode31_creates_six_items_and_reweights",
+          "useitem::tests::unbind_capacity_gate_uses_pre_removal_count",
           "useitem::tests::unbind_missing_shape_eats_pack_but_creates_nothing",
-          "useitem::tests::unbind_capacity_gate_uses_pre_removal_count"
-        ]
+          "useitem::tests::unbind_stdmode31_creates_six_items_and_reweights",
+          "useitem::tests::unbind_stdmode31_success_matches_oracle_fixture"
+        ],
+        "basis": "semantic"
       },
       "cost": null,
       "deviation": null,
-      "notes": "对拍夹具只有容量门失败路径；成功路径无 oracle 夹具 => 不给 verified"
+      "notes": "成功路径夹具 eat_ok_stdmode31_unbind_success（oracle 经真身 GameItemSystem 产出）：6xSM_ADDITEM(200)+SM_EAT_OK、added_items 6 件、Weight 按解包后背包重算；make_index 含 Environment.TickCount(墙钟)=>只核递增不核绝对值。L2/D/Z 判定面已接。"
     },
     {
       "id": "IT-19",
