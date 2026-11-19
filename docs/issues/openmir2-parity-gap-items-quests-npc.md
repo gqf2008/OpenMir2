@@ -12,8 +12,9 @@
 | 旁证② | **数据侧** `StdItems` 行数（内容量，不是行为量） | 见 §9.2 | 待数（不影响本块） |
 | 装备轴（不计入主分母） | `CM_TAKEONITEM`/`CM_TAKEOFFITEM` 的穿/卸机制：通用迁移 + 校验 + 属性重算；**不是按物品类型的行为分派**（理由见 §7.3） | `grep -n 'ClientTakeOnItems\|ClientTakeOffItems' src/M2Server/Player/PlayObject.Operate.cs` | 单列，见 §8.2 |
 
-**为什么主分母不用 111**：111 是"`==` 位点数"，同一行为可被拆成多处判断（虚高），一处 `switch` 也能覆盖多物品（漏计）；
-它只作旁证。§9 给出它的逐文件归属，说明 111 里**没有一条**落在 `CM_EAT` 分派树上。
+**为什么主分母不用 111**：111 是"`==` 位点数"，同一行为可被拆成多处判断（虚高），一处 `switch` 也能覆盖多物品（漏计）。
+**旁证只能证明覆盖广度，不能作为主分母的上界**；两者不在同一集合上（`==` 位点 vs 分派树的 case 叶子），比较无意义。
+反例：111 条里落在 `CM_EAT` 分派树上的命中数是 **0**（旁证的 grep 模式抓不到 `switch` 的 case；逐文件归属见 §9）。
 
 ## 2. 状态口径（照 opc-07 章程 §5）
 - `verified`：必须在 `mir2-rs` 里有**对拍测试名**可指（指向 oracle 生成的夹具）；本表出现的每一条 `verified` 都写在"测试名"列；
@@ -43,7 +44,7 @@ $ grep -rn 'StdMode ==\|Shape ==' --include=*.cs src/ | grep -v worktrees | wc -
 
 ## 5. 结论（物品块）
 - 主分母已钉死：**19** 条行为叶子（§8.1），其中 `verified` 7、`implemented（未验证）` 1、`missing` 11。
-- 离"能玩"最近的缺口（成本 S 起）：**技能书（StdMode 4）**、**卷轴 Shape 13 经验**、**修复油/特修油**、**随机传送**。
+- 离"能玩"最近的缺口：**S 级 4 条**（IT-08 卷轴·经验、IT-10 随机传送、IT-14 修复油、IT-15 特修油）+ **S–M 级 2 条**（IT-09 回城卷、IT-17 技能书）。
 - **已证行为差异**（不是"一致地不吃"）：StdMode 3/4 在 oracle 有成功吃掉路径，Rust 落 `SM_EAT_FAIL`；
   已登记在 `bins/game-svr/src/useitem.rs` 头部的 T-17 whitelist。§8.1 的 11 条 `missing` 全部落在这个差异面内。
 
@@ -52,9 +53,11 @@ $ grep -rn 'StdMode ==\|Shape ==' --include=*.cs src/ | grep -v worktrees | wc -
    所以位点数只能当**旁证**，用来给主分母设上界（主分母 ≤ 旁证数），不能直接当分母。
 2. **主分母必须是"分派点上的分支集合"**：找到**唯一的玩家物品使用入口**，把它对 `StdMode`/`Shape` 的
    `switch/case`（或等价 if 链）逐条列出 `文件:行`。这份集合才是"原版有多少种物品行为"的可数定义。
-3. **交叉核对**：主分母确定后，与旁证位点数比对——
-   - 若主分母 > 旁证：说明旁证漏了（有分派没被 `==` 捕获，如范围判断/查表），记下来；
-   - 若主分母 ≪ 旁证：说明旁证混入了非使用路径（商店/机器人/掉落），把它们逐条列进"已排除"。
+3. **旁证不能当上界**：主分母（分派树的 case 叶子）与旁证位点（`==` 出现次数）**不在同一集合上**，
+   数值大小关系没有信息量——旁证只能用来证明"覆盖面足够广/还存在别的入口"，不能给主分母设上界，也不能反推主分母漏了。
+   反例（本仓实测）：111 条旁证里，落在 `CM_EAT` 主分派树上的命中数 = **0**（grep 的 `==` 模式抓不到 `switch` 分派）。
+   因此**作废**"主分母 ≤ 111"这种比较；要核对"是否漏了入口"，用 §7 的调用点唯一性证明（`ClientUseItems` 全仓仅一处调用）。
+   旁证的正确用法是归属分类（§9）：把每条位点分到"使用/装备/商店/机器人/其他"，用来发现**别的**入口或已排除项。
 4. **数据侧单列**：`StdItems` 行数是**内容量**（有多少件物品），不是**行为量**（有多少种行为），两者不可混。
 5. **定位入口的方法（避免重复调查）**：不要从 `grep 'StdMode =='` 逆向猜——先从**协议入口**下手
    （客户端"使用物品"消息号 → 服务端 handler → 调用链），再在调用链内找分派；已排除的候选见 §3。
@@ -140,7 +143,8 @@ switch (stdItem.StdMode)                       PlayObject.Operate.cs:619
 ## 9. 交叉核对
 
 ### 9.1 主分母 19 vs 旁证 111
-**数值上 19 ≤ 111 成立**，但这两者不是同一把尺子，必须解释：
+**19 与 111 不在同一集合上，比较无意义**（`==` 位点 vs `switch` case 叶子），不能用它证明任何"上界"或"遗漏"。
+这里只做**归属核对**：
 - 旁证①的 grep 模式是 `StdMode ==|Shape ==`，而主入口的分派是 **`switch (…StdMode)` / `switch (…Shape)`**——
   **结构性地抓不到 switch 的 case**。111 条里落在 `CM_EAT` 链上的为 **0**；
 - 111 逐文件归属（合计 111）：
@@ -159,41 +163,50 @@ switch (stdItem.StdMode)                       PlayObject.Operate.cs:619
 | 气血石 | 1 | `CharacterObject.cs` |
 | 怪物生成 | 1 | `WorldServer.MonGen.cs` |
 
-=> 结论：**111 不是使用行为的上界，也不需要"主分母 ≤ 111"来兜底**；它能说明的只是"按 `==` 出现的物品判断遍布全仓"。
-主分母的独立性来自 §7.2 的唯一入口证明，而不是 111。
+=> 结论：**111 既不构成使用行为的上界，也不构成"使用行为都在这里"的覆盖证明**；它能说明的只是"按 `==` 出现的物品判断遍布全仓"。
+主分母的独立性来自 §7.2 的唯一入口证明（`ClientUseItems` 全仓仅一处调用），而不是 111。
 
 ### 9.2 数据侧（旁证②，单列）
 `StdItems` 行数 = 内容量（可掉/可买多少件物品），与行为量（19）不可比；本块不据此算覆盖率。
 
 ## 10. 物品全表（19 条行为叶子）
 
-> Rust 断言位置：`mir2-rs/bins/game-svr/src/useitem.rs`（`use_item`）；对拍夹具 `mir2-rs/tests/parity/m3/fixtures/eat_vectors.json`
-> 由 `tests/parity/m3/eat-probe` 反射调用 `src/M2Server` 真身生成（oracle_source 已写在夹具头）。
+> 证据全名：`verified` 行指向 `mir2-rs/bins/game-svr/src/useitem.rs` 的 `useitem::tests::matches_oracle_eat_fixture`（`#[test]`，第 683 行）；
+> 夹具 `mir2-rs/tests/parity/m3/fixtures/eat_vectors.json`（由 `mir2-rs/tests/parity/m3/eat-probe` 反射调用 `src/M2Server` 真身生成）；"用例"= 夹具 `cases[].name`。
+> `missing` 行均命中 T-17 已知差异：登记条在 `useitem.rs` 头部「未做清单」第 64–81 行（StdMode 3/4 在第 66–70 行、ReadBook 在第 14 行、T-17 字样在第 78 行）。
 
-| ID | 原版行为 | 原版依据（文件:行） | Rust 状态 | 测试名 | 成本 | 备注 |
+| ID | 原版行为 | 原版依据（文件:行） | Rust 状态 | 测试名 / 证据路径 | 成本 | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
-| IT-01 | 药·Shape1 固定量补血补魔 `IncHealthSpell(AC,MAC)` | `PlayObject.Base.cs:2060` | **verified** | `useitem::tests::matches_oracle_eat_fixture`（`eat_ok_shape1_fixed`/`_clamp`） | — | |
-| IT-02 | 药·Shape2 解锁药 `UserUnLockDurg=true` | `PlayObject.Base.cs:2064` | **verified** | 同上（`eat_ok_shape2_unlock`） | — | 无即时帧 |
-| IT-03 | 药·Shape3 百分比补血补魔 | `PlayObject.Base.cs:2068` | **verified** | 同上（`eat_ok_shape3_percent`）+ `shape3_percent_rounds_away_from_zero` | — | |
-| IT-04 | 药·default 叠加 `IncHealth/IncSpell` 池 | `PlayObject.Base.cs:2072` | **verified** | 同上（`eat_ok_shape0_inc_pool`/`_zero`） | — | ushort 回绕 |
-| IT-05 | 食物 `HungerStatus += DuraMax/10`（上限 5000、跨档刷新） | `PlayObject.Base.cs:2085` | **verified** | 同上（`eat_ok_stdmode1_hunger_no_recalc`/`_recalc`/`_clamp`） | — | `RefMyStatus` 的 `RecalcAbilitys` 尾段登记 T-17 |
-| IT-06 | StdMode 2 空消耗（只吃掉） | `PlayObject.Base.cs:2095` | **verified** | 同上（`eat_ok_stdmode2_noop`） | — | |
-| IT-07 | 卷轴·Shape12 六属性瞬间 buff（`ExtraAbil` ×6 + 计时） | `PlayObject.Base.cs:2101-2157` | **missing** | — | M | 需 `ExtraAbil/ExtraAbilTimes` + `RecalcAbilitys` |
-| IT-08 | 卷轴·Shape13 `GetExp(DuraMax)` | `PlayObject.Base.cs:2158` | **missing** | — | S | oracle **无条件**成功（必吃掉） |
-| IT-09 | 卷轴·default->Shape1 回城卷（回 `HomeMap` 随机点） | `PlayObject.Base.cs:2162->2163`、`:2233` | **missing** | — | S–M | `BaseObjectMove(HomeMap,0,0)` |
-| IT-10 | Shape2 随机传送（本图随机点，受 `boNORANDOMMOVE`） | `PlayObject.Base.cs:2238` | **missing** | — | S | 地图 flag 门 |
-| IT-11 | Shape3 地牢逃脱（`PvpLevel()<2` 回 Home，否则回红名村） | `PlayObject.Base.cs:2246` | **missing** | — | M | `Config.RedHome*` |
-| IT-12 | Shape4 祝福油 `WeaptonMakeLuck()` | `PlayObject.Base.cs:2258` | **missing** | — | M | 改武器幸运/诅咒 |
-| IT-13 | Shape5 行会回城（城堡成员回城堡） | `PlayObject.Base.cs:2264` | **missing** | — | M–L | `CastleMgr.IsCastleMember` |
-| IT-14 | Shape9 修复油 `RepairWeapon()` | `PlayObject.Base.cs:2286` | **missing** | — | S | |
-| IT-15 | Shape10 特修油 `SuperRepairWeapon()` | `PlayObject.Base.cs:2292` | **missing** | — | S | |
-| IT-16 | Shape11 彩票 `WinLottery()` | `PlayObject.Base.cs:2298` | **missing** | — | M | `Config.WinLotteryLevel1..6`（Rust 已有该组配置字段） |
-| IT-17 | 技能书 StdMode 4 `ReadBook`（学魔法 + `+LNG/+WID`） | `PlayObject.Operate.cs:632 -> PlayObject.Base.cs:2171` | **missing** | — | S–M | Rust 有 `world-bevy::magic::can_read_book` 谓词但**未接线**到 `use_item` |
-| IT-18 | 解包 StdMode 31 / `AniCount==0`（容量门 + 按 Shape 发 6 件） | `PlayObject.Operate.cs:655-666` | **implemented（未验证）** | 单测：`unbind_stdmode31_creates_six_items_and_reweights`/`_missing_shape_`/`_capacity_gate_`；对拍仅 `eat_fail_stdmode31_unbind_bag_full`（失败路径） | — | 成功路径无 oracle 夹具 => 不给 verified |
-| IT-19 | 解包 StdMode 31 / `AniCount!=0` -> 脚本 `@StdModeFunc{AniCount}` | `PlayObject.Operate.cs:668 -> PlayObject.Base.cs:1072` | **verified** | 同上（`eat_ok_stdmode31_funitem`/`eat_fail_stdmode31_no_functionnpc`） | — | 脚本派发在 `lib.rs` `@StdModeFunc*` 接缝 |
+| IT-01 | 药·Shape1 固定量补血补魔 `IncHealthSpell(AC,MAC)` | `PlayObject.Base.cs:2060` | **verified** | `useitem::tests::matches_oracle_eat_fixture` @ `bins/game-svr/src/useitem.rs`（第 683 行）；夹具用例 `eat_ok_shape1_fixed`、`eat_ok_shape1_clamp` | — | |
+| IT-02 | 药·Shape2 解锁药 `UserUnLockDurg=true` | `PlayObject.Base.cs:2064` | **verified** | 同测试/夹具，用例 `eat_ok_shape2_unlock` | — | 无即时帧 |
+| IT-03 | 药·Shape3 百分比补血补魔 | `PlayObject.Base.cs:2068` | **verified** | 同测试/夹具，用例 `eat_ok_shape3_percent`；另单测 `useitem::tests::shape3_percent_rounds_away_from_zero` | — | |
+| IT-04 | 药·default 叠加 `IncHealth/IncSpell` 池 | `PlayObject.Base.cs:2072` | **verified** | 同测试/夹具，用例 `eat_ok_shape0_inc_pool`、`eat_ok_shape0_inc_zero` | — | ushort 回绕 |
+| IT-05 | 食物 `HungerStatus += DuraMax/10`（上限 5000、跨档刷新） | `PlayObject.Base.cs:2085` | **verified** | 同测试/夹具，用例 `eat_ok_stdmode1_hunger_no_recalc`、`_hunger_recalc`、`_hunger_clamp` | — | `RefMyStatus` 的 `RecalcAbilitys` 尾段登记 T-17（第 75–79 行） |
+| IT-06 | StdMode 2 空消耗（只吃掉） | `PlayObject.Base.cs:2095` | **verified** | 同测试/夹具，用例 `eat_ok_stdmode2_noop` | — | |
+| IT-07 | 卷轴·Shape12 六属性瞬间 buff（`ExtraAbil` ×6 + 计时） | `PlayObject.Base.cs:2101-2157` | **missing** | — | M | 命中 T-17（`ExtraAbil` 未实现；oracle 成功吃掉 / Rust 落 `SM_EAT_FAIL`；`useitem.rs` 第 66–70 行） |
+| IT-08 | 卷轴·Shape13 `GetExp(DuraMax)` | `PlayObject.Base.cs:2158` | **missing** | — | S | 命中 T-17（同上；oracle 此支**无条件**成功、必吃掉） |
+| IT-09 | 卷轴·default->Shape1 回城卷（回 `HomeMap` 随机点） | `PlayObject.Base.cs:2162->2163`、`:2233` | **missing** | — | S–M | 命中 T-17（`EatUseItems` 未实现；oracle 条件成功 / Rust 落 `SM_EAT_FAIL`） |
+| IT-10 | Shape2 随机传送（本图随机点，受 `boNORANDOMMOVE`） | `PlayObject.Base.cs:2238` | **missing** | — | S | 命中 T-17（`EatUseItems` 未实现）；地图 flag 门 |
+| IT-11 | Shape3 地牢逃脱（`PvpLevel()<2` 回 Home，否则回红名村） | `PlayObject.Base.cs:2246` | **missing** | — | M | 命中 T-17（`EatUseItems` 未实现）；`Config.RedHome*` |
+| IT-12 | Shape4 祝福油 `WeaptonMakeLuck()` | `PlayObject.Base.cs:2258` | **missing** | — | M | 命中 T-17（`EatUseItems` 未实现）；改武器幸运/诅咒 |
+| IT-13 | Shape5 行会回城（城堡成员回城堡） | `PlayObject.Base.cs:2264` | **missing** | — | M–L | 命中 T-17（`EatUseItems` 未实现）；`CastleMgr.IsCastleMember` |
+| IT-14 | Shape9 修复油 `RepairWeapon()` | `PlayObject.Base.cs:2286` | **missing** | — | S | 命中 T-17（`EatUseItems` 未实现） |
+| IT-15 | Shape10 特修油 `SuperRepairWeapon()` | `PlayObject.Base.cs:2292` | **missing** | — | S | 命中 T-17（`EatUseItems` 未实现） |
+| IT-16 | Shape11 彩票 `WinLottery()` | `PlayObject.Base.cs:2298` | **missing** | — | M | 命中 T-17（`EatUseItems` 未实现）；`Config.WinLotteryLevel1..6`（Rust 已有该组配置字段） |
+| IT-17 | 技能书 StdMode 4 `ReadBook`（学魔法 + `+LNG/+WID`） | `PlayObject.Operate.cs:632 -> PlayObject.Base.cs:2171` | **missing** | — | S–M | 命中 T-17（`ReadBook` 未实现，`useitem.rs` 第 14 行）；Rust 有 `world-bevy::magic::can_read_book` 谓词但**未接线**到 `use_item` |
+| IT-18 | 解包 StdMode 31 / `AniCount==0`（容量门 + 按 Shape 发 6 件） | `PlayObject.Operate.cs:655-666` | **implemented（未验证）** | 单测：`useitem::tests::unbind_stdmode31_creates_six_items_and_reweights`/`_missing_shape_eats_pack_but_creates_nothing`/`_capacity_gate_uses_pre_removal_count`；对拍仅 `eat_fail_stdmode31_unbind_bag_full`（失败路径） | — | 成功路径无 oracle 夹具 => 不给 verified |
+| IT-19 | 解包 StdMode 31 / `AniCount!=0` -> 脚本 `@StdModeFunc{AniCount}` | `PlayObject.Operate.cs:668 -> PlayObject.Base.cs:1072` | **verified** | 同测试/夹具，用例 `eat_ok_stdmode31_funitem`、`eat_fail_stdmode31_no_functionnpc` | — | 脚本派发在 `lib.rs` `@StdModeFunc*` 接缝 |
 
 汇总：`verified` 7（IT-01/02/03/04/05/06/19）、`implemented（未验证）` 1（IT-18）、`missing` 11（IT-07…17）。
-已知行为差异：IT-07…17 的 oracle 成功/条件成功路径在 Rust 侧落 `SM_EAT_FAIL`（`useitem.rs` 头部 T-17 已登记，不是静默跳过）。
+`missing` 11 条**全部命中 T-17**（oracle 成功/条件成功吃掉 → Rust 落 `SM_EAT_FAIL`），不是静默跳过。
+T-17 登记条位置（`mir2-rs/bins/game-svr/src/useitem.rs` 头部「未做清单」）：
+第 64 行（标题"登记在卡 `openmir2-m3-bag-equip-alignment` 的 whitelist"）、第 66–70 行（StdMode 3/4 已证差异）、第 14 行（case 4 ReadBook 未实现）、第 78 行（T-17 字样）、第 413 行（"已证差异，登记在 T-17"）。
+
+`missing` 11 条的成本分层（按条点名）：
+- **S（4 条）**：IT-08 卷轴·经验、IT-10 随机传送、IT-14 修复油、IT-15 特修油；
+- **S–M（2 条）**：IT-09 回城卷、IT-17 技能书；
+- **M（4 条）**：IT-07 属性 buff、IT-11 地牢逃脱、IT-12 祝福油、IT-16 彩票；
+- **M–L（1 条）**：IT-13 行会回城。
 
 **装备轴（§8.2，不入 19）**：`bag::tests::matches_oracle_bag_fixture`（21 条：穿成功/换装/失败码 0/-1/-4/卸下/满包/Dealing…）
 => 机制层 `verified`；卡 `openmir2-m3-bag-equip-alignment` 的"双栈同序列"判据仍 RED（BotSrv 驱动属登记面）。
