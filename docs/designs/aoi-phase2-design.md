@@ -149,12 +149,28 @@ SNAPSHOT_COUNT → TICK_VIEWER → 可见集（集合 → 顺序） → REMOVED 
 - 剩余杠杆（未做，等重跑判读）：tick 相当前每实体仍做一次 `store.get`，`output_aoi_system`
   主循环也做一次；可预扫一次共用。
 
+### 6e. 2026-11-19 默认路径翻转为增量（卡 `openmir2-aoi-incremental-default-on`）
+
+**依据**：4k 两轮 + 10k 两轮同构建对照（增量 `ns_avg` 低一个量级、tick 速率更高）与
+差分/矩阵/fuzz 全绿；Owner 拍板把增量切成默认路径。
+
+- **默认**：未设置 `MIR2_AOI_INCREMENTAL` ⇒ [`AoiSearchMode::Incremental`]；
+- **kill switch**：只有字面 `0`（可含空白）⇒ legacy；`1` 及任何其它取值（含空串）⇒ 增量。
+  理由：默认已经是增量，唯一有语义的取值是"关"；把非法值判成 legacy 等于让写错的变量
+  **偷偷降级**性能路径；
+- **遥测如实**：`[AOI_STATS]` 的 `mode=` / `cells_sem` / `cand_sem` 由实际生效路径单一来源
+  派生（`aoi_mode_labels`），legacy 行不得因默认翻转被标成 incremental，反之亦然；
+- **运行期不可切换**：仍是 `OnceLock` 启动时读一次，切换/回退靠重启；
+- **验证**：M8 全量门禁 + 真机窗口两轮（默认一轮 + `MIR2_AOI_INCREMENTAL=0` 一轮）。
+
 ## 7. 风险与回退
 - 风险①：顺序语义漂移（可见集顺序影响出帧）——用第 5 节顺序牙 + 有序差分盯住；
 - 风险②：搜索间隔门与增量触发交互（间隔未到不应重算）——用例矩阵"触发时机"项；
 - 风险③：边界格与视野半径定义不一致——用边界格用例 + 与 `search_view_range` 同源的窗口枚举函数；
 - 回退：增量实现置于**同一模块的独立入口**（例如 `search_view_range_incremental`），
   由常量/开关选择；差分测试默认双跑；生产切换需一次同构建两轮对照。
+- **2026-11-19 更新**：默认已翻转为增量（见 6e）；回退方式改为 kill switch
+  `MIR2_AOI_INCREMENTAL=0`（重启生效），见卡 `openmir2-aoi-incremental-default-on`。
 
 ## 附录 A：4k 前本地分段实测原始数据（2026-11-19）
 
