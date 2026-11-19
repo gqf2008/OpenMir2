@@ -392,6 +392,49 @@ function Parse-IsoInstant([string]$Text) {
 }
 
 # 返回错误的 List[string]（空 List = 该戳健康）。
+# 卡 openmir2-rust-build-rev-embedding 第 4 条：Rust 件必须**自报** `rev` 且等于侧车 head。
+# 能力检测：二进制里含 `MIR2_BUILD_SELF_REV=1`（新件都带）才跑 `--version`；
+# 老件/合成夹具没有此串 ⇒ 跳过自报核验（不是"绿"，见文件头"限制"）。
+$script:SelfRevMarker = 'MIR2_BUILD_SELF_REV=1'
+$script:SelfReportTimeoutMs = 10000
+
+function Test-BinaryContainsMarker([string]$Path, [string]$Marker) {
+  try {
+    $bytes = [System.IO.File]::ReadAllBytes($Path)
+    $text = [System.Text.Encoding]::GetEncoding(28591).GetString($bytes)
+    return $text.IndexOf($Marker, [StringComparison]::Ordinal) -ge 0
+  } catch { return $false }
+}
+
+function Get-RustSelfReport([string]$ExePath) {
+  $psi = New-Object System.Diagnostics.ProcessStartInfo
+  $psi.FileName = $ExePath
+  $psi.Arguments = '--version'
+  $psi.UseShellExecute = $false
+  $psi.RedirectStandardOutput = $true
+  $psi.RedirectStandardError = $true
+  $psi.CreateNoWindow = $true
+  $proc = $null
+  try { $proc = [System.Diagnostics.Process]::Start($psi) } catch { return $null }
+  if ($null -eq $proc) { return $null }
+  if (-not $proc.WaitForExit($script:SelfReportTimeoutMs)) {
+    try { $proc.Kill() } catch {}
+    return $null
+  }
+  try {
+    $out = $proc.StandardOutput.ReadToEnd()
+    $code = $proc.ExitCode
+  } catch { return $null }
+  if ($code -ne 0) { return $null }
+  $m = [regex]::Match($out, 'rev=(\S+)\s+dirty=(\S+)\s+built_at=(\S+)')
+  if (-not $m.Success) { return $null }
+  return [pscustomobject]@{
+    rev      = $m.Groups[1].Value
+    dirty    = $m.Groups[2].Value
+    built_at = $m.Groups[3].Value
+  }
+}
+
 function Test-OneStamp([string]$ExePath, [string]$StampPath, [string]$Repo) {
   $errors = New-Object System.Collections.Generic.List[string]
   if (-not (Test-Path -LiteralPath $StampPath -PathType Leaf)) {
@@ -489,6 +532,24 @@ function Test-OneStamp([string]$ExePath, [string]$StampPath, [string]$Repo) {
   if ($kind -eq 'rust') {
     foreach ($f in @('cargo', 'rustc')) {
       if (-not (Test-HasField $obj $f)) { $errors.Add('MISSING_FIELD ' + $f) }
+    }
+    # 自报 rev 核验（卡 openmir2-rust-build-rev-embedding 第 4 条）：
+    # 侧车被换成"同文件、错 head"时，sha/大小仍自洽，只有二进制自报能证伪。
+    if (Test-BinaryContainsMarker $ExePath $script:SelfRevMarker) {
+      $self = Get-RustSelfReport $ExePath
+      if ($null -eq $self) {
+        $errors.Add('SELF_REPORT_UNAVAILABLE')
+      } else {
+        if ($null -ne $head -and $head -ne '' -and $self.rev -ne $head) {
+          $errors.Add('SELF_REV_MISMATCH stamp=' + $head + ' self=' + $self.rev)
+        }
+        if ($self.rev -notmatch '^[0-9a-f]{40}$') { $errors.Add('SELF_REV_NOT_40HEX self=' + $self.rev) }
+        if ($self.dirty -match '^[0-9]+$') {
+          if ([int]$self.dirty -gt 0) { $errors.Add('SELF_DIRTY self=' + $self.dirty) }
+        } else {
+          $errors.Add('SELF_DIRTY_UNKNOWN self=' + $self.dirty)
+        }
+      }
     }
   } elseif ($kind -eq 'dotnet') {
     foreach ($f in @('dotnet', 'runtime')) {
@@ -788,6 +849,29 @@ if ($Selftest) {
     SAssert ($cB.Text.IndexOf('HEAD_MISMATCH', [StringComparison]::Ordinal) -ge 0) `
       'expect-head: reports HEAD_MISMATCH' ("out=" + $cB.Text)
 
+    # Case 12：带自报能力标记、但**跑不起来**的件 ⇒ SELF_REPORT_UNAVAILABLE（rc=1）
+    #   钉住"能力检测 ≠ 跳过"：只要二进制声称支持自报，闸门就必须真的跑出结果，跑不动就红。
+    $script:SelfCases++
+    $binD = New-Fixture $Tmp 'selfrev' @('game-svr')
+    $wD = Write-FixtureStamps $binD $Repo $HeadSha @('game-svr')
+    SAssert ($wD.Rc -eq 0) 'negative-setup: selfrev fixture written' ("rc=" + $wD.Rc)
+    $exeD = Join-Path $binD 'game-svr.exe'
+    $markerBytes = [System.Text.Encoding]::ASCII.GetBytes('MIR2_BUILD_SELF_REV=1')
+    $fsD = [System.IO.File]::Open($exeD, [System.IO.FileMode]::Append, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
+    try { $fsD.Write($markerBytes, 0, $markerBytes.Length) } finally { $fsD.Dispose() }
+    $pD = Join-Path $binD 'game-svr.exe.build.json'
+    $oD = Read-StampJson $pD
+    if ($null -eq $oD) { $script:SelfInfra = 'cannot parse fixture stamp for selfrev case'; return }
+    $oD.sha256 = (Get-Sha256Hex $exeD)
+    $oD.size = (Get-Item -LiteralPath $exeD).Length
+    $oD.built_at = ([DateTimeOffset](Get-Item -LiteralPath $exeD).LastWriteTime).ToString('o')
+    $oD.mtime = $oD.built_at
+    Write-StampJson $oD $pD
+    $cD = Invoke-Child @('-Check', '-BinDir', $binD, '-RepoRoot', $Repo, '-Names', 'game-svr')
+    SAssert ($cD.Rc -eq 1) 'selfrev: non-runnable marked binary rc=1' ("rc=" + $cD.Rc + " out=" + $cD.Text)
+    SAssert ($cD.Text.IndexOf('SELF_REPORT_UNAVAILABLE', [StringComparison]::Ordinal) -ge 0) `
+      'selfrev: reports SELF_REPORT_UNAVAILABLE' ("out=" + $cD.Text)
+
     # Case 11：-RequireHead 与产戳模式同用 ⇒ 用法错 rc=2（不得静默忽略）
     $script:SelfCases++
     $u = Invoke-Child @('-BinDir', $bin9, '-RepoRoot', $Repo, '-Head', $HeadSha, '-NoToolchainProbe',
@@ -837,12 +921,12 @@ if ($Selftest) {
     Emit ("SELFTEST_INFRA " + $script:SelfInfra)
     exit 2
   }
-  SAssert ($script:SelfCases -eq 11) 'meta: expected case count executed' ("cases=" + $script:SelfCases)
+  SAssert ($script:SelfCases -eq 12) 'meta: expected case count executed' ("cases=" + $script:SelfCases)
   if ($script:SelfFails.Count -gt 0) {
     Emit ("stamp-binaries selftest: RED (" + $script:SelfFails.Count + " failed)")
     exit 1
   }
-  Emit "stamp-binaries selftest: GREEN (11 cases)"
+  Emit "stamp-binaries selftest: GREEN (12 cases)"
   exit 0
 }
 
