@@ -787,3 +787,38 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   前提断言 (100,100)≠(100,224)。三颗复原后 `lib.rs` sha 相等、无 `MUTATION` 残留。
 - **回归**：33 支驱动全 rc=0（`…/evidence/regression-showhp-1.log`）、11 支比较器 0 红、
   既有 9 颗比较器牙全过。**分步交付对既有 10 条 verified 的台账无影响**（同批回归已证）。
+
+### 26. 18 隐身术（`SKILL_CLOAK`）接线记录（2026-11-20）
+
+- **oracle**：组门 `CheckAmulet(1,1)`（`:315-327`，与 13/14/15 同组）→ `:378-383`
+  → `MagMakePrivateTransparent`（`:673-699`）：先置 `StatusTimeArr[STATETRANSPARENT]`、
+  `CharStatus = GetCharStatus()`、`StatusChanged()`，**再**置 `HideMode=true; Transparent=true`。
+- **观测面（新增，只记录）**：`crates/world-bevy/src/world.rs` 的 `StatusChangeEvent` +
+  `World::status_changes()/clear_status_changes()`；生产点 = `cast_private_transparent_spell`
+  （`d.status_changed` 时压一条）。**生产无行为变化**：宿主帧面仍走该函数的返回值；
+  **有界**：`sim_loop` 每 tick 清空一次。对拍驱动施法后取一次即清。
+- **golden `golden/magic/cloak.json`**（三 seed s1/s5/s13，无 AntiMagic 骰；`DrainPasses=2`）：
+  caster `[638,642,657,640]`、target/obs_in `[17,638,657]`、obs_out 空；RNG `[0,0]/[0,0]/[0,1]`
+  （`GetPower13(30)` 的 `Random(0)` + 训练尾 `Random(3)+1`），RM = 10008/10120（众人）+
+  10125(642,141)/10139(155)/10123(慢 255)（caster）。
+- **对领导 (b) 要求的数据订正**：要求写「657 的 param 含 `STATETRANSPARENT`」，但 **oracle
+  实测 657 的 `(param,tag,series) = (0,0,0)`、RM 10139 的 p1 = 0**——`GetCharStatus()` 不含
+  `STATETRANSPARENT`（隐身走 `HideMode/Transparent` 字段，不进 `CharStatus`）。断言据此改为
+  「657 在 638 之后 + caster 仍收 638（隐身不影响本次广播）+ 657 字段与 golden 逐项相等」；
+  牙 B 实测把 p1 改成 `0x80000000` 会红，证明该字段确实在比较面内。
+- **(c) 怪循环**：`MagMakePrivateTransparent` 的 9 格扫描只对 `Race>=Animal &&
+  TargetCret==caster` 的怪抽 `Random(2)`；**本夹具无怪 ⇒ 零抽**。将来若给夹具加怪观察者，
+  RNG 流会平移、账本变化——不得当作回归。
+- **(d) 不开 `enable_buff_tick`**：18 的 `StatusTimeArr[STATETRANSPARENT]` 由 `Run`/毒计时递减；
+  开 buff tick 可能在采集窗口内触发额外 `StatusChanged()`/657。夹具（`fireball_parity_drive`）
+  只对 14/15/31 开，18 保持关闭。
+- **牙**（§16 流程：快照 `E:/UserTemp/cloak-snap/` + sha；`cp` 还原 + sha 复核 + 基线复跑）：
+  A 删除观测面生产 ⇒ driver `caster 恰 1 条 RM 10139` 0≠1、比较器 3 条红；
+  B `char_status ^= 0x80000000` ⇒ 比较器 3 条红（p1 −2147483648 vs 0）。
+  证据 `mir2-rs/target/magic-parity/evidence/tooth-cloak.log`。
+- **回归**：36 支驱动全 rc=0（`…/evidence/regression-cloak-1.log`）、12 支比较器 0 红、
+  9 颗比较器牙全过。
+- **清单**：MG-32（`:378` body）升 `verified`；外层组标签 MG-25（`:320`）保持
+  `implemented_unverified`（组内其它魔号未验）。
+- **衍生卡**：战士 9 技（3/4/7/12/25/26/27/34/38）不能用 `DoSpell` 直调产 golden——见
+  `docs/issues/openmir2-warrskill-entry.md`；补 `ClientSpellXY` 入口前禁止标 verified。

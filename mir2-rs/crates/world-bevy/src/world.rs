@@ -566,6 +566,21 @@ pub enum BuffApplyKind {
     MagicShield,
 }
 
+/// **卡 `openmir2-magic-parity`（18 隐身术）**：`MagMakePrivateTransparent` 成功时的
+/// `StatusChanged()` 观测（**只记录、不驱动任何行为**；宿主帧面仍走
+/// [`World::cast_private_transparent_spell`] 的返回值，顺序/内容零变化）。
+///
+/// 有界：宿主 `sim_loop` **每 tick 清空一次**（[`World::clear_status_changes`]）；对拍驱动在
+/// 施法后取一次即清。为对拍可观测性新增，生产无行为变化。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct StatusChangeEvent {
+    /// 触发 `StatusChanged()` 的 actor（18 = 施法者自己）。
+    pub actor_id: i32,
+    /// 该次 `StatusChanged()` 时的 `GetCharStatus()`（进 RM 10139 的 p1；18 实测 0——
+    /// oracle 的 `CharStatus` **不含** `STATETRANSPARENT`，隐身走 `HideMode/Transparent` 字段）。
+    pub char_status: i32,
+}
+
 /// **P3-B2**：一条 `RM_MAGSTRUCK` 交付段处理后的观察值（`BaseObject.Base.cs:618-686`）。
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MagStruckOutcome {
@@ -1273,6 +1288,8 @@ pub struct SimState {
     /// `buff_apply_log` 是**只读观测面**（追加式，供对拍台账读取；不参与行为）。
     pub pending_buff_applies: Vec<BuffApplyEvent>,
     pub buff_apply_log: Vec<BuffApplyEvent>,
+    /// **18 隐身术的 `StatusChanged()` 观测**（只记录；`sim_loop` 每 tick 清空 ⇒ 有界）。
+    pub pending_status_changes: Vec<StatusChangeEvent>,
     /// **卡 `openmir2-run-gap-monster-specials`**：待执行的 `Operate(RM_ZEN_BEE)`
     /// （`BeeQueen`/`SpiderHouseMonster` 产仔），由 [`crate::slave::World::deliver_self_delay_msgs`]
     /// 在 500ms 自投递到点时入队；宿主用 [`World::flush_special_spawns`] 在同一条 `rng` 上造怪。
@@ -1621,6 +1638,7 @@ impl SimState {
             pending_mag_struck: Vec::new(),
             pending_buff_applies: Vec::new(),
             buff_apply_log: Vec::new(),
+            pending_status_changes: Vec::new(),
             pending_special_spawns: Vec::new(),
             pending_special_ref_msgs: Vec::new(),
             pending_refmessage_frames: Vec::new(),
@@ -5517,6 +5535,18 @@ impl World {
         std::mem::take(&mut self.pending_buff_applies)
     }
 
+    /// 18 隐身术的 `StatusChanged()` 观测（**只读**；与 `take_status_changes` 配对的清空是
+    /// `sim_loop` 每 tick 的 [`World::clear_status_changes`]）。
+    #[must_use]
+    pub fn status_changes(&self) -> &[StatusChangeEvent] {
+        &self.sim.pending_status_changes
+    }
+
+    /// 清空状态变化观测（宿主每 tick 一次；对拍驱动取用后清一次）。**不改变任何行为**。
+    pub fn clear_status_changes(&mut self) {
+        self.sim.pending_status_changes.clear();
+    }
+
     /// **P3-B2**：`RM_MAGSTRUCK` 交付处理器（`BaseObject.Base.cs:618-686`）的**有序**批量版。
     ///
     /// 逐目标（入队序）：
@@ -5851,6 +5881,14 @@ impl World {
             + i32::from(crate::magic_effect::get_rpow(&mut self.rng, sc)) * 3)
             as u16;
         let d = self.mag_make_private_transparent(caster_id, n_h_time);
+        // 观测面（卡 openmir2-magic-parity 18）：只记录 `StatusChanged()` 的事实，
+        // **不改帧面**——宿主仍用下面的返回值出 657。
+        if d.status_changed {
+            self.sim.pending_status_changes.push(StatusChangeEvent {
+                actor_id: caster_id,
+                char_status: d.status,
+            });
+        }
         PrivateTransparentOutcome {
             status_changed: d.status_changed,
             status: d.status,

@@ -30728,6 +30728,9 @@ fn sim_loop(
             &enter_cfg.pet_cfg,
         );
         host_prof.end("HostWorldHead", t);
+        // **18 的状态变化观测有界**（卡 `openmir2-magic-parity` §26）：每 tick 清空一次；
+        // 本观测面**只记录**，任何帧仍由各生产点的既有返回值出（此处清空不影响帧面）。
+        world.clear_status_changes();
         let t = host_prof.begin();
         // 同拍帧序：642（攻击者武器磨损）先于怪物 ref 656（目标 BreakHolySeizeMode）。
         let _attack_weapon_wear = drain_attack_wear_then_monster_refs(
@@ -66089,6 +66092,9 @@ SendRefMsgRange=15
         // buff 施加事件（14/15/31）：来自 `World::buff_apply_log`（**内部事件的只读观测面**，
         // 不由 SM 帧反推）。必须在**施法之后**取。
         let buff_applies = rig.world.buff_apply_log.clone();
+        // 18 隐身术的 `StatusChanged()` 观测（只记录面）：施法后取、随即清空（有界）。
+        let status_changes = rig.world.status_changes().to_vec();
+        rig.world.clear_status_changes();
         // **28 的前提断言（卡 §25(b)）**：`SM_OPENHEALTH(1100)` 的字段来自被开血者的实时
         // HP/MaxHP；Rust 的实时真源是实体，登录后与 `WAbil` 同值。本 case 窗口内无 HP 变化
         // ⇒ 恒等必须成立。把前提钉死，防止「夹具对齐」掩盖产品读错对象。
@@ -66393,6 +66399,24 @@ SendRefMsgRange=15
                     255,
                     true,
                 ));
+            }
+        }
+        // `RM_CHARSTATUSCHANGED(10139)`（18 隐身术）：`StatusChanged()` 的 `SendRefMsg` ⇒
+        // 收件人 = 施法者 ±`SendRefMsgRange` 的玩家（含自）、prio=155、late=false、p1=CharStatus。
+        // 来源 = 内部观测面 `World::status_changes`（**不由 SM 657 反推**）。
+        for ev in &status_changes {
+            for id in chat::hear_targets(&rig.world, ev.actor_id, range) {
+                if let Some(who) = who_of(id) {
+                    rm_by_who.entry(who).or_default().push(fireball_rm(
+                        10139,
+                        0,
+                        i64::from(ev.char_status),
+                        0,
+                        0,
+                        155,
+                        false,
+                    ));
+                }
             }
         }
         // `RM_DOOPENHEALTH(8040)`：**目标**自延迟队列（交付前抓；仅 pass 支有），prio=255、late。
@@ -67472,6 +67496,126 @@ SendRefMsgRange=15
             rust_abil, gold_abil,
             "[{stem}/{label}] target WAbil 40B 必须与金标准逐字节一致"
         );
+    }
+
+    /// **`18 隐身术`**（`SKILL_CLOAK`，body `MagicManager.cs:378-383`）驱动。
+    /// golden `golden/magic/cloak.json`；三 seed（无 AntiMagic 骰）标签 **s1/s5/s13**。
+    ///
+    /// 夹具：护身符同 13/14/15（`CheckAmulet(1,1)` ⇒ Dura 600→500 + 642）；**无怪**
+    /// （helper 的 9 格怪循环 `Race>=Animal && TargetCret==caster` 才抽 `Random(2)` ⇒ 零抽；
+    /// 将来加怪观察者会平移 RNG 流）。**显式不调 `enable_buff_tick`**：18 的计时由
+    /// `Run`/poison 计时递减，开 buff tick 可能在窗口内多出 `StatusChanged()`/657。
+    ///
+    /// 断言面（oracle 实测，见 golden）：
+    /// - caster 帧序 `[638, 642, 657, 640]`、target/obs_in `[17, 638, 657]`；
+    /// - **隐身不影响本次广播**：caster 仍收 638（`hear_targets` 只按 `ob_mode||fixed_hide_mode`
+    ///   过滤，不看 `hide_mode`，与 oracle `SendRefMsg` 一致），且 657 在 638 **之后**；
+    /// - 657 的 `(param, tag, series) == (0, 0, 0)`：oracle 的 `GetCharStatus()` **不含**
+    ///   `STATETRANSPARENT`（隐身走 `HideMode/Transparent` 字段），RM 10139 的 p1 同为 0；
+    /// - RM：caster 有 10125(642,141)/10139(155)/10123(慢 255)，众人有 10139。
+    fn cloak_assert(stem: &str, label: &str, seed: i32, base: i32, rng_len: usize) {
+        fireball_parity_drive(stem, 18, 15, 1, label, seed, base);
+        fireball_case_assert(stem, label, 100, rng_len);
+        b1_golden_drain_assert("cloak.json", label, 2);
+        let c = defence_case(stem, label);
+        let n = |who: &str, field: &str, ident: i64| healing_count(&c, who, field, ident);
+        let seq: Vec<i64> = c["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["ident"].as_i64())
+            .collect();
+        assert_eq!(
+            seq,
+            vec![638, 642, 657, 640],
+            "[{stem}/{label}] caster 帧序"
+        );
+        let tseq: Vec<i64> = c["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "target")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|m| m["ident"].as_i64())
+            .collect();
+        assert_eq!(tseq, vec![17, 638, 657], "[{stem}/{label}] target 帧序");
+        // 657 的字段（隐身位不进 CharStatus ⇒ 全 0；与 golden 同源）。
+        let f657 = c["Receivers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["Who"] == "caster")
+            .unwrap()["Sent"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["ident"] == 657)
+            .unwrap()
+            .clone();
+        assert_eq!(
+            (
+                f657["param"].as_i64(),
+                f657["tag"].as_i64(),
+                f657["series"].as_i64()
+            ),
+            (Some(0), Some(0), Some(0)),
+            "[{stem}/{label}] 657 的 (param,tag,series)"
+        );
+        assert_eq!(
+            n("caster", "Sent", 638),
+            1,
+            "[{stem}/{label}] 隐身不影响本次 638"
+        );
+        assert_eq!(
+            n("caster", "Rm", 10125),
+            1,
+            "[{stem}/{label}] 护身符 642 的 RM"
+        );
+        assert_eq!(
+            n("caster", "Rm", 10123),
+            1,
+            "[{stem}/{label}] 训练尾 RM 10123"
+        );
+        for who in ["caster", "target", "obs_in"] {
+            assert_eq!(n(who, "Sent", 657), 1, "[{stem}/{label}] {who} 恰 1 条 657");
+            assert_eq!(
+                n(who, "Rm", 10139),
+                1,
+                "[{stem}/{label}] {who} 恰 1 条 RM 10139"
+            );
+            assert_eq!(n(who, "Sent", 53), 0, "[{stem}/{label}] {who} 不得有 SM 53");
+        }
+        assert_eq!(
+            n("obs_out", "Sent", 657),
+            0,
+            "[{stem}/{label}] obs_out 不在范围"
+        );
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn cloak_parity_s1() {
+        cloak_assert("cloak", "s1", 1, 1000, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn cloak_parity_s5() {
+        cloak_assert("cloak", "s5", 5, 2000, 2);
+    }
+
+    #[test]
+    #[ignore = "需 --ignored --exact 单跑：rng_trace 进程级全局状态（§16c）"]
+    fn cloak_parity_s13() {
+        cloak_assert("cloak", "s13", 13, 3000, 2);
     }
 
     /// **`28 心灵启示`**（`SKILL_SHOWHP`，`MagicManager.cs:431-442`）驱动。
