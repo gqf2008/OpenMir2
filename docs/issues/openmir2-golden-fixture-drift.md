@@ -92,6 +92,7 @@
 | ② | 改 `DeliverRng` 任一值 | 红（`Rng` 值不等） |
 | ③ | 旧口径 golden（`freeze_at_dospell` / 无 `rng_mode`） | 红并点名 `cover_drain` |
 | ④ | 整列 `DeliverRng` 消失 | 红并点名 `DeliverRng` 缺列 |
+| ⑤ | `Fixture` 缺 `reachability` / 非 `reachable` / 缺任一状态键 | 红并点名缺键 |
 
 外加**正对照**：`golden.Rng = rust.Rng ++ rust.DeliverRng` ⇒ 绿（证明判据不是恒红）。
 
@@ -106,7 +107,21 @@
 | 缺失 | **比较器直接红**（"金标准缺该支 rng_mode / 非 cover_drain"），**不得默认任何值** |
 | legacy artifact | 用 `rng_mode="freeze_at_dospell"` 表示；如需额外的人读标注可加 `Fixture.legacy_artifact=true`（比较器**不看**该键） |
 | 语义 | `cover_drain`：`Rng` 覆盖到排水结束，比较面 = `Rng ++ DeliverRng`；`freeze_at_dospell`：**不**进比较面（`verified` 条目禁止使用） |
-| 与 `login_order` 的关系 | 两者正交：`rng_mode` 只描述"抽数记录窗口"；`login_order` 描述角色状态来源。6 条新件应为 `login_order=false`（按 a2 的二分口径）+ `rng_mode="cover_drain"` |
+| 与 `login_order` 的关系 | 两者正交：`rng_mode` 只描述"抽数记录窗口"；`login_order` 描述角色状态来源。**M52 起**：6 条 + `MG-10` 的 verified 依据 = **`login_order=true`**（登录序）+ `cover_drain`（据此撤回早先"`login_order=false`"的中间口径） |
+
+**`Fixture` 必填键（M52 起，缺任意一键即红；"六类" = 下面 6 组）**：
+
+| # | 键 | 类型 | 门槛 |
+|---|---|---|---|
+| 1 | `rng_mode` | string | 必须 `"cover_drain"`（`freeze_at_dospell` 只作 legacy、不进比较面） |
+| 2 | `login_order` | bool | 必须存在（M52 的 6 条 + `MG-10` 必须为 `true`；其余支按其实况） |
+| 3 | `reachability` | string | 必须 `"reachable"` 才能作 `verified` 依据（`unverified`/`unreachable` 红） |
+| 4 | `anti_magic` | int | 该 case 的**实际**目标 AntiMagic（登录序无装备 ⇒ 1） |
+| 5 | `target_level` | int | 构造路径的 L |
+| 6 | `target_hp` + `target_max_hp` | int×2 | 该 case 的实际 HP / MaxHP（登录序 ⇒ 等级公式值） |
+
+**`legacy/` 目录**：`golden/magic/legacy/**` 只作历史留档，比较器的 `golden_file` 直接拒绝该前缀
+（不作 `verified` 依据）。
 
 ### 8.4 实现落点（本设计分支 `card/magic-rng-union`）
 

@@ -361,8 +361,11 @@ fn union_rng(case: &Value, label: &str) -> Result<Vec<i64>, String> {
     Ok(out)
 }
 
-/// 金标准该支必须是 `Fixture.rng_mode == "cover_drain"`（卡 §6 牙③）。
-fn check_golden_cover_drain(golden: &Value, label: &str) -> Result<(), String> {
+/// 金标准该支的 **`Fixture` 契约**（卡 `openmir2-golden-fixture-drift` §8.3/§8.7）：
+/// 必须同时满足 —— `rng_mode == "cover_drain"`、`reachability == "reachable"`、
+/// 且六类状态字段齐全（`login_order`/`anti_magic`/`target_level`/`target_hp`/`target_max_hp`）；
+/// **缺任意键即红**（不允许"默认值兜底"）。`legacy/` 目录的件**不作 verified 依据**。
+fn check_golden_contract(golden: &Value, label: &str) -> Result<(), String> {
     let case = golden
         .get("cases")
         .and_then(Value::as_array)
@@ -371,16 +374,36 @@ fn check_golden_cover_drain(golden: &Value, label: &str) -> Result<(), String> {
                 .find(|c| c.get("Label").and_then(Value::as_str) == Some(label))
         })
         .ok_or_else(|| format!("[{label}] 金标准缺该支"))?;
-    match case
+    let fixture = case
         .get("Fixture")
-        .and_then(|f| f.get("rng_mode"))
-        .and_then(Value::as_str)
-    {
-        Some("cover_drain") => Ok(()),
-        other => Err(format!(
-            "[{label}] 金标准 rng_mode = {other:?}：`verified` 条目必须 cover_drain；             `freeze_at_dospell` 旧件只作 legacy artifact、不进比较面（卡 §6 牙③）"
-        )),
+        .ok_or_else(|| format!("[{label}] 金标准缺 `Fixture`（契约键都应在 Fixture 内；卡 §8.3）"))?;
+    match fixture.get("rng_mode").and_then(Value::as_str) {
+        Some("cover_drain") => {}
+        other => {
+            return Err(format!(
+                "[{label}] 金标准 rng_mode = {other:?}：`verified` 条目必须 cover_drain；                 `freeze_at_dospell` 旧件只作 legacy artifact、不进比较面（卡 §6 牙③）"
+            ))
+        }
     }
+    match fixture.get("reachability").and_then(Value::as_str) {
+        Some("reachable") => {}
+        other => {
+            return Err(format!(
+                "[{label}] 金标准 reachability = {other:?}：`verified` 依据必须是 reachable                 （卡 §7/§8.7；unverified/unreachable 不得作依据）"
+            ))
+        }
+    }
+    if !fixture.get("login_order").is_some_and(Value::is_boolean) {
+        return Err(format!("[{label}] 金标准缺 `Fixture.login_order`（bool；卡 §8.7 缺键即红）"));
+    }
+    for k in ["anti_magic", "target_level", "target_hp", "target_max_hp"] {
+        if !fixture.get(k).is_some_and(Value::is_i64) {
+            return Err(format!(
+                "[{label}] 金标准缺 `Fixture.{k}`（int；卡 §8.7 缺键即红，不许默认兜底）"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// 把台账 case 的 `Rng` 换成 `Rng ++ DeliverRng`（`verify` 的 `Rng` 比较面即统一后序列）。
@@ -435,7 +458,7 @@ fn real_ledger_verify_labels(stem: &str, golden: &Value, labels: &[&str]) {
             "[{label}] 台账 Label 不符"
         );
         // **统一 RNG 判据**：金标准必须 cover_drain；台账 Rng 与 DeliverRng 拼接后参与比较。
-        if let Err(msg) = check_golden_cover_drain(golden, label) {
+        if let Err(msg) = check_golden_contract(golden, label) {
             panic!("{msg}");
         }
         let pinned = pin_union_rng(&arr[0], label).unwrap_or_else(|m| panic!("{m}"));
@@ -462,7 +485,7 @@ fn verify_union(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
         .unwrap_or_default();
     for c in &cases {
         let label = c.get("Label").and_then(Value::as_str).unwrap_or("?").to_string();
-        if let Err(msg) = check_golden_cover_drain(golden, &label) {
+        if let Err(msg) = check_golden_contract(golden, &label) {
             return Err(vec![msg]);
         }
         match pin_union_rng(c, &label) {
@@ -479,10 +502,20 @@ fn verify_union(golden: &Value, rust: &Value) -> Result<(), Vec<String>> {
 }
 
 fn synth_golden(label: &str, rng: Value, mode: Option<&str>) -> Value {
-    let fixture = match mode {
-        Some(m) => serde_json::json!({ "rng_mode": m }),
-        None => serde_json::json!({}),
-    };
+    let mut fixture = serde_json::json!({
+        "login_order": false,
+        "anti_magic": 3,
+        "target_level": 20,
+        "target_hp": 100,
+        "target_max_hp": 100,
+        "reachability": "reachable",
+    });
+    if let Some(m) = mode {
+        fixture["rng_mode"] = Value::from(m);
+    } else {
+        fixture["rng_mode"] = Value::from("cover_drain"); // 牙③用"缺失"以外的场景单独构造
+        fixture.as_object_mut().unwrap().remove("rng_mode");
+    }
     serde_json::json!({
         "magic_id": 33,
         "cases": [{ "Label": label, "Fixture": fixture, "TargetHpBefore": 100, "TargetHp": 85, "Receivers": [] }],
@@ -498,6 +531,30 @@ fn synth_rust(label: &str, rng: Value, deliver: Option<Value>) -> Value {
         c["DeliverRng"] = d;
     }
     serde_json::json!({ "magic_id": 33, "cases": [c] })
+}
+
+/// **牙⑤（契约键）**：`reachability` 缺失或非 `reachable`、或缺任一状态键 ⇒ 红。
+#[test]
+fn tooth_contract_missing_keys_red() {
+    let label = "s1";
+    // 缺 reachability
+    let mut g = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g["cases"][0]["Fixture"].as_object_mut().unwrap().remove("reachability");
+    let msg = check_golden_contract(&g, label).unwrap_err();
+    assert!(msg.contains("reachability"), "必须点名 reachability：{msg}");
+    // reachability = unverified
+    let mut g2 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g2["cases"][0]["Fixture"]["reachability"] = Value::from("unverified");
+    let msg2 = check_golden_contract(&g2, label).unwrap_err();
+    assert!(msg2.contains("reachability"), "必须点名 reachability：{msg2}");
+    // 缺 anti_magic
+    let mut g3 = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    g3["cases"][0]["Fixture"].as_object_mut().unwrap().remove("anti_magic");
+    let msg3 = check_golden_contract(&g3, label).unwrap_err();
+    assert!(msg3.contains("anti_magic"), "必须点名 anti_magic：{msg3}");
+    // 正对照：齐全 ⇒ 绿
+    let ok = synth_golden(label, serde_json::json!([1, 2]), Some("cover_drain"));
+    assert!(check_golden_contract(&ok, label).is_ok(), "齐全应绿");
 }
 
 /// **正对照**：`golden.Rng = rust.Rng ++ rust.DeliverRng` ⇒ 绿（证明判据不是恒红）。
@@ -695,6 +752,10 @@ fn real_rust_ledger_fireball5() {
 // 比较器自检：金标准逐支喂回（identity）+ 三条篡改必须红 + 防空转必须红。
 // ---------------------------------------------------------------------------
 fn golden_file(name: &str) -> Value {
+    assert!(
+        !name.starts_with("legacy/"),
+        "`legacy/` 目录的 golden 只作历史留档，**不作 verified 依据**（卡 §7/§8.3）：{name}"
+    );
     let path = format!("{}/golden/magic/{name}", env!("CARGO_MANIFEST_DIR"));
     let text = std::fs::read_to_string(path).expect("金标准必须存在（缺文件即红）");
     serde_json::from_str(&text).expect("金标准必须是合法 JSON")
