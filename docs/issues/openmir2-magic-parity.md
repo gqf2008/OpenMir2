@@ -944,7 +944,9 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
   1. **`Rng` = `DoSpell` + 排水的全部抽取**（RngSeam 直到排水结束才还原）：23 的 `RM_MAGSTRUCK`
      是**即时**投递，`R(1000)`/MSD/STD 抽发生在排水 `Operate` 里；旧口径在 `DoSpell` 后就还原，
      这些抽会落到未播种 RNG ⇒ 金标准不可复现、Rust（施法段内同步结算）无法对齐。
-  2. 宿主 **23|33|47 两段出帧**：尾帧（638/640）先 flush，受击帧（53/31）再入独立缓冲 flush；
+  2. 宿主 **两段出帧**（代码条件 `if req.magic_id == 24 { 旧合并 flush } else { 两段 }`——
+     当前可达集合只有 {23,24,33,47}，故等价于「24 旧、23/33/47 两段」，但**卡面按代码事实写**）：
+     尾帧（638/640）先 flush，受击帧（53/31）再入独立缓冲 flush；
      否则同一 `SpellFrameBuf` 按 `(byte)ident` 会把 53(68) 排到 638(136) 前面（golden 相反）。
 - **`struck_log` 观测面（新增，只记录）**：`World::struck_log()/clear_struck_log()`；生产点
   `deliver_mag_struck`；宿主 `sim_loop` 每 tick 清空（有界）；驱动施法后与交付后各取一次并清。
@@ -963,8 +965,10 @@ RM 多重集、RNG 序列（4 抽 / 2 抽）、`DrainPasses=2`、`hit_cap=false`
 - **回归**：同一 run id 下 45 支驱动全 rc=0、15 支比较器 0 红、9 颗比较器牙全过
   （`…/evidence/regression-fireboom.log`）。
 - **范围与登记（两处边界，写死）**：
-  1. **24 暂走旧合并 flush**：两段出帧只对 **23|33|47** 生效；24（`MagElecBlizzard`）的 31
+  1. **出帧分支的代码事实**：条件是 `if req.magic_id == 24 { 旧合并 flush } else { 两段出帧 }`；
+     当前可达集合 = {23,24,33,47} ⇒ 等价于「24 旧、其余两段」。24（`MagElecBlizzard`）的 31
      同优先级 tie 序目前只有 Rust 单测钉着、没有 oracle golden，**留待 24 自己的 golden 统一定序**。
+     **将来新增即时受击魔号时需复核该条件**（新魔号默认落进两段支——若它与 24 同构则应显式纳入判断）。
   2. **多目标 tie 序无 golden 可钉**：`spell_p3b2_fireboom_delivery_ledger_and_frames` 的两处
      断言已按新模型改写并写明依据——① `53` 改为在 `638` 之后（旧期望是「尾帧+受击帧同批
      flush」的实现序，oracle 是后续趟处理受击）；② 同优先级 31 的 tie 序由 `NetPriorityQueue`
