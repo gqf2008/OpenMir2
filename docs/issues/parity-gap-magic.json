@@ -913,17 +913,26 @@
         "line": 418,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_fireboom",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/fireboom.json（C# oracle 生成；s1/s5/s13，无 AntiMagic 骰）",
+        "cases": [
+          "s1(seed=1)",
+          "s5(seed=5)",
+          "s13(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::fireboom_parity_s1",
+          "tests::fireboom_parity_s5",
+          "tests::fireboom_parity_s13"
+        ]
       },
       "cost": "S",
       "deviation": null,
-      "notes": "旧清单 cost=小时级"
+      "notes": "旧清单 cost=小时级。`MagBigExplosion` 3×3（FireBoomRage=1）单目标；golden 实证`IsProtectTarget=true`（target HP 100→85、damage 15）；RM 8044/10052/8103/8090 由内部`struck_log` 事件组装；C# 装置 `Rng` 覆盖到排水结束、宿主 23|33|47 两段出帧。卡 §30。"
     },
     {
       "id": "MG-38",
