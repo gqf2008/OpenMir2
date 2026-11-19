@@ -1,7 +1,9 @@
 # openmir2-gate-utf8-body-length
 
-> 状态：**实现中（2026-11-19，分支 `card/gate-utf8-body-length`）**——C# 修复与单测已完成；
-> **R 级窗口对拍证据到位前不合并**（opc-07 约束）。已登记（walgit 看板不可用，按 AGENTS.md §7 过渡）。
+> 状态：**实现完成（2026-11-19，分支 `card/gate-utf8-body-length`）**——证据为**跨栈 golden**
+> （opc-07 裁定够当本卡证据；真机只能覆盖 ASCII IP，证明不了非 ASCII 缺陷，故不做）。
+> **本卡不改变现网行为（调用点全为 ASCII IP），属防御性正确化。**
+> 已登记（walgit 看板不可用，按 AGENTS.md §7 过渡）。
 > 发现于卡 `openmir2-db-write-stall` 的 44 处 `MemoryCopy.BlockCopy` 逐条审计（C 类）。
 
 ## 现象
@@ -91,7 +93,20 @@ dotnet test --filter GateUtf8FrameGolden → 通过 1 / 失败 0
 cargo test -p game-gate → 89 passed / 0 failed（含 golden）；
   另一 test binary 26 passed / 0 failed
 ```
-     这是**离线可重复**的"两侧字节一致"证据（改回字符数口径 ⇒ C# golden 断言红；Rust 读 golden 也红）。
+     这是**离线可重复**的"两侧字节一致"证据。
+   - **同一份文件、生产函数产出**（验收①）：C# 由 `ClientThread.BuildServerFrame` 写，
+     Rust `include_str!` 读同一个路径；中间无手工转写、无第二份常量。
+   - **两侧独立构造**（验收③）：C# 走 `BuildServerFrame`（`HUtil32.GetBytes` + `SerializerUtil`），
+     Rust 走 `ServerMessage::to_bytes` + `gbk::encode`；**不共享编码辅助函数**。
+   - **生成幂等**（验收②）：连跑两次 `GATE_UTF8_GOLDEN_WRITE=1`，文件 sha256 三次一致：
+     `4f5fa84013a9178314bc010b26a7ff6ad93d7e39d920ba9b950f5e02204430df`（committed = write1 = write2）。
+   - **变异牙（验收④，原文）**：把 `BuildServerFrame` 改回字符数口径（`PackLength`/缓冲/拷贝全用
+     `data.Length`）——
+     - 牙①（正确 golden + 变异实现）：`golden_matches_or_is_regenerated` 红，
+       `But was: "...a9aaa04000000030001000000000004000000d6d0cec4..."`（PackLength=4、只拷 4/8 字节）；
+     - 牙②（用变异实现重产 golden 后跑 Rust）：`control_frame_golden_matches_csharp_oracle` 红，
+       `样本 chinese 与 C# oracle 不一致`（`test result: FAILED`）。
+     - 还原后：源文件 sha 与 golden sha 均复原（golden=`4f5fa840…`），两侧复跑全绿。
 2. **真机抽证（可选）**：m1-stack 已在跑 Rust 网关，用现成捕获（`tools/gw-capture`）在 5000 侧抓
    `GM_OPEN` 帧（ASCII IP 正文），与第 1 级同 IP 样本的 golden 逐字节比。不需要额外起
    MySQL/DBSrv，也不需要真实客户端（一个 bot/客户端连接即可触发 `UserEnter`）。
