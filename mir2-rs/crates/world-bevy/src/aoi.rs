@@ -151,26 +151,50 @@ pub struct SearchViewRangeOutcome {
     pub view_updates: Vec<(i32, i32)>,
 }
 
-/// **增量开关（行为层）**：`MIR2_AOI_INCREMENTAL=1` 才走增量路径；缺省/其它值一律 legacy。
+/// **增量开关（行为层，卡 `openmir2-aoi-incremental-default-on`）**：增量是**默认路径**；
+/// 只有 `MIR2_AOI_INCREMENTAL` 取字面 `"0"`（可含空白）才回退 legacy——这是**一键 kill switch**。
 ///
-/// 卡 `openmir2-aoi-incremental`。开关只决定**调用哪条路径**，不允许"两条都跑再挑结果"；
-/// legacy 路径不持有增量索引的任何引用（类型隔离），因此开关切换不会影响 legacy 的状态。
+/// 历史：卡 `openmir2-aoi-incremental` 落地时默认 legacy、`=1` 才开；4k 两轮 + 10k 两轮实测
+/// （增量 ns_avg 比 legacy 低一个量级）与差分/矩阵/fuzz 全绿后，由 Owner 拍板翻转默认
+/// （2026-11-19）。开关只决定**调用哪条路径**，不允许"两条都跑再挑结果"；legacy 路径不持有
+/// 增量索引的任何引用（类型隔离），因此开关切换不会影响 legacy 的状态。运行期不可切换：
+/// [`aoi_search_mode`] 用 `OnceLock` 只在进程启动时读一次，**灰度/回退靠重启**。
 pub const ENV_AOI_INCREMENTAL: &str = "MIR2_AOI_INCREMENTAL";
 
 /// AOI 搜索路径选择。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AoiSearchMode {
-    /// 现有全量窗口扫描（默认）。
+    /// 现有全量窗口扫描（**kill switch 路径**：`MIR2_AOI_INCREMENTAL=0`；不是默认）。
     Legacy,
-    /// 增量可见集维护（phase 2 第 1 步：entered/left 增量，moved 保守处理）。
+    /// 增量可见集维护（**默认路径**；entered/left 增量 + 窗口差分 + 窗口内排序）。
     Incremental,
 }
 
-/// 环境值解析（纯函数，便于单测）：只有字面 `"1"`（可含空白）开启增量。
+/// 环境值解析（纯函数，便于单测）：
+///
+/// - 未设置 ⇒ [`AoiSearchMode::Incremental`]（**默认**）；
+/// - 字面 `"0"`（可含空白）⇒ [`AoiSearchMode::Legacy`]（kill switch）；
+/// - 其它任何取值（`"1"`、`"true"`、空串、无法识别的串）⇒ 增量。
+///
+/// 为什么"其它取值"也走增量：默认已翻转成增量，唯一有语义的取值是"关"。把非法值判成 legacy
+/// 等于让一个写错的变量值**偷偷降级**性能路径，与"默认"自相矛盾（`=1` 仍兼容旧配）。
 fn parse_search_mode(value: Option<&str>) -> AoiSearchMode {
     match value {
-        Some(v) if v.trim() == "1" => AoiSearchMode::Incremental,
-        _ => AoiSearchMode::Legacy,
+        Some(v) if v.trim() == "0" => AoiSearchMode::Legacy,
+        _ => AoiSearchMode::Incremental,
+    }
+}
+
+/// `[AOI_STATS]` 行的**口径标签**（纯函数，便于单测）。
+///
+/// 卡 `openmir2-aoi-incremental-default-on` 的硬要求：默认翻转后，行里的 `mode=` 与
+/// `cells_sem` / `cand_sem` 必须**如实反映本次搜索实际走的那条路径**——legacy 行不得因为
+/// "默认变了"也被标成 incremental，反之亦然。标签从 [`AoiSearchMode`] 单一来源派生。
+#[must_use]
+fn aoi_mode_labels(mode: AoiSearchMode) -> (&'static str, &'static str, &'static str) {
+    match mode {
+        AoiSearchMode::Legacy => ("legacy", "real", "visited"),
+        AoiSearchMode::Incremental => ("incremental", "na", "touched"),
     }
 }
 
@@ -905,10 +929,7 @@ impl AoiStatsState {
         let final_marker = if final_line { "final=1 " } else { "" };
         // **口径标注**（opc-07 要求）：增量路径不遍历格子 ⇒ `cells_per_search` 恒 0，
         // 不得让读者把它读成「省了 97%」；`cand_per_search` 在增量下是复评数（touched）。
-        let (mode, cells_sem, cand_sem) = match aoi_search_mode() {
-            AoiSearchMode::Legacy => ("legacy", "real", "visited"),
-            AoiSearchMode::Incremental => ("incremental", "na", "touched"),
-        };
+        let (mode, cells_sem, cand_sem) = aoi_mode_labels(aoi_search_mode());
         let line = format!(
             "[AOI_STATS] {final_marker}clock_ms={clock_ms} window_seq={} tick_seq={} ticks={ticks} searches_in_window={searches} searches_total={} searches_per_tick={per_tick:.2} cells_per_search={:.2} cand_per_search={:.2} vis_per_search={:.2} ns_bucket_ns={AOI_NS_BUCKET_NS} ns_avg={ns_avg:.1} ns_p50={} ns_p90={} ns_max={} same_map_p50={} same_map_p90={} same_map_avg={:.2} same_map_max={} mode={} cells_sem={} cand_sem={}",
             self.window_seq,
@@ -4186,17 +4207,55 @@ mod tests {
         aoi_universe_capture_set(false);
     }
 
-    /// 开关解析：只有字面 "1" 开启增量，其余（含空串/其它值/缺失）一律 legacy。
+    /// 卡 `openmir2-aoi-incremental-default-on`：两种路径的标签必须各自如实，
+    /// 把任一支改成另一支的标签 ⇒ 本用例红（删除该支同理）。
+    #[test]
+    fn aoi_mode_labels_follow_effective_mode() {
+        assert_eq!(
+            aoi_mode_labels(AoiSearchMode::Legacy),
+            ("legacy", "real", "visited"),
+            "legacy 行必须标 legacy/real/visited（不得因默认翻转而改口径）"
+        );
+        assert_eq!(
+            aoi_mode_labels(AoiSearchMode::Incremental),
+            ("incremental", "na", "touched"),
+            "增量行必须标 incremental/na/touched"
+        );
+    }
+
+    /// 汇总行里的 `mode=`/`cells_sem`/`cand_sem` 必须取**本进程生效模式**，不得写死：
+    /// 把标签写死成 legacy（或反之）⇒ 本用例红。
+    #[test]
+    fn aoi_stats_line_reports_effective_mode_labels() {
+        let (mode, cells_sem, cand_sem) = aoi_mode_labels(aoi_search_mode());
+        let line = AoiStatsState::new().report_line(0, false);
+        let needle = format!("mode={mode} cells_sem={cells_sem} cand_sem={cand_sem}");
+        assert!(
+            line.contains(&needle),
+            "汇总行必须如实标注生效模式（缺 {needle}）：{line}"
+        );
+    }
+
+    /// 开关解析（卡 `openmir2-aoi-incremental-default-on`）：未设置 ⇒ 增量；只有字面 `0`
+    /// 回退 legacy；其余取值（含旧配 `1` 与非法值）一律增量。
     #[test]
     fn aoi_search_mode_parses_safely() {
-        assert_eq!(parse_search_mode(None), AoiSearchMode::Legacy);
-        assert_eq!(parse_search_mode(Some("1")), AoiSearchMode::Incremental);
-        assert_eq!(parse_search_mode(Some(" 1 ")), AoiSearchMode::Incremental);
-        for bad in ["", "0", "true", "yes", "2"] {
+        // 卡 `openmir2-aoi-incremental-default-on`：未设置 ⇒ **增量**（此断言即默认翻转的牙）。
+        assert_eq!(parse_search_mode(None), AoiSearchMode::Incremental);
+        // kill switch：只有字面 `0`（可含空白）回退 legacy。
+        for off in ["0", " 0 ", "0 ", "0  "] {
             assert_eq!(
-                parse_search_mode(Some(bad)),
+                parse_search_mode(Some(off)),
                 AoiSearchMode::Legacy,
-                "非法值 {bad:?} 必须回落 legacy"
+                "kill switch 取值 {off:?} 必须回退 legacy"
+            );
+        }
+        // 其余取值一律增量：`1` 兼容旧配；非法值不得偷偷降级性能路径。
+        for on in ["1", " 1 ", "true", "yes", "2", "", "  ", "off", "legacy"] {
+            assert_eq!(
+                parse_search_mode(Some(on)),
+                AoiSearchMode::Incremental,
+                "取值 {on:?} 必须走增量（默认）"
             );
         }
     }
