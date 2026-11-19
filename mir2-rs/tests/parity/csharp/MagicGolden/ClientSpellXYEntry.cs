@@ -183,7 +183,10 @@ public static class ClientSpellXYEntry
                 cases,
             };
             string path = Path.Combine(outDir, "warr-" + spec.MagicId + ".json");
-            File.WriteAllText(path, JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true }));
+            // 落盘一律 LF（Windows 上缩进 JSON 可能带 CRLF；仓库金标准用 LF，避免 diff --check 逐行红）。
+            string json = JsonSerializer.Serialize(doc, new JsonSerializerOptions { WriteIndented = true })
+                .Replace("\r\n", "\n");
+            File.WriteAllText(path, json, new UTF8Encoding(false));
             Console.Error.WriteLine("GOLDEN_WRITTEN " + path);
             Console.Out.WriteLine("WARR_" + spec.MagicId + " cases=" + cases.Count + " "
                 + string.Join(" | ", cases.Select(c => c.Label
