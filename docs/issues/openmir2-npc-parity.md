@@ -339,3 +339,34 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
 C# 探针（`ScriptSourcePath`/fixture 元数据、`click_switch`、`act_first` 状态）与 Rust 断言骨架已写入工作树，
 **未编译未提交**（等 `ca` 合入 + opc-07 放行窗口）；NP-03 的 Rust 装置待新 master。
 
+
+## 14. oracle 缺陷照搬：LARGE / SMALL / EQUAL（2026-11-20 裁定）
+
+**oracle 事实**：`CheckVarNameNo`（`src/Modules/ScriptEngine/Processings/ConditionProcessingSys.cs:4671`）形参是
+`int n140, int n180`（**按值**），函数内赋值只改局部；三个调用方返回后仍按 `n14 = 0` / `n18 = 0` 比较：
+- `ConditionOfLapge`（`:3857-3862`，`LARGE`）⇒ **恒假**（`0 > 0`）；
+- `ConditionOfSmall`（`:3874-3879`，`SMALL`）⇒ **恒假**（`0 < 0`）；
+- `ConditionOfEqual`（`:4660-4665`，`EQUAL`）⇒ **恒真**（`0 == 0`），前提是变量名解析成功。
+
+**裁定**：照搬缺陷（行为等价优先于修 bug）。Rust 实现改为显式 `cond_oracle_broken_cmp`
+（`crates/script/src/engine/conditions.rs`）：`LARGE`/`SMALL` 恒 `false`，`EQUAL` = 变量可解析。
+**登记**：Rust 此前按真实变量值比较（正确但与 oracle 不同）；现已对齐缺陷。**若日后修正，属产品取舍，须 Owner 决定并保留改前/改后读数。**
+**影响面**：`cond_var_cmp` 的调用方只有这三条条件（已核，无其它调用），其它条件路径未动。
+
+**三条用例（真实脚本，两侧同一文件）**
+| 条件 | 真实脚本 / 标签 | 变量与取值（判别性） | 断言 |
+| --- | --- | --- | --- |
+| `LARGE` 恒假 | `Market_Def/任务NPC/打铁-0.txt` `[@main]` 首 `#IF` 的 `LARGE M6 9`（第 7 行）；sha256 `356b53df…b86e` | M6=10（正确语义应为真） | 落第二分支说词（"正在努力打造中"），"已经完成"**不出现** |
+| `SMALL` 恒假 | `Market_Def/封魔谷/月老-M101.txt` `[@RequestMarry]` 的 `small M3 60`（第 115 行）；sha256 `b69c3c83…855f` | M3=0（正确语义应为真） | 该分支的动作/说词**不执行**（走后续/else 分支） |
+| `EQUAL` 恒真 | `Market_Def/任务NPC/武士-0114.txt` `[@st]` 的 `equal M3 0`（第 39 行）；sha256 `ead2df9f…bae7` | M3=2（正确语义应为假） | 第一分支说词（"你输了"）**出现** |
+
+**牙**：把 `LARGE`（以及 `SMALL`/`EQUAL`）改回"按真实变量值比较" ⇒ 对应用例必红；恢复 sha 相等并复绿。
+
+## 14.1 NP-04 `[@@sendMsg]` 用例（替代打铁-0，oracle 真实脚本）
+
+- 文件：`E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt`，sha256 = `9c8187bf5f90e17c2a423d27a30360828a1098da4cf8e2d670c7e7c0ed6b09df`；
+  标签 `[@@sendMsg]` 在第 **368** 行（由 `:366` 的 `<[进入后台管理]/@@sendMsg>` 链接，属可跳标签）。
+- 结构：`#IF CHECKGAMEGOLD > 4` → `#ACT GAMEGOLD - 5` / `SETSENDMSGFLAG` / `break`。
+- 判据：oracle `#ACT` 只执行第一条已注册命令（`src/Modules/ScriptEngine/ScriptEngine.cs:884-893`）⇒
+  元宝 10 → **5**；`SETSENDMSGFLAG` **不执行** ⇒ 发送标志保持 `false`。
+- 入口：`GotoLable(boExtJmp = false)`（等价于"可跳标签"的真实状态；不改脚本、不自造商家脚本）。
