@@ -302,7 +302,7 @@
           80
         ]
       },
-      "notes": "经 Base.cs:2162 default -> EatUseItems(stdItem.Shape)"
+      "notes": "经 Base.cs:2162 default -> EatUseItems(stdItem.Shape)；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
     },
     {
       "id": "IT-10",
@@ -330,7 +330,7 @@
           80
         ]
       },
-      "notes": "地图 flag 门"
+      "notes": "地图 flag 门；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
     },
     {
       "id": "IT-11",
@@ -358,7 +358,7 @@
           80
         ]
       },
-      "notes": "Config.RedHome*"
+      "notes": "Config.RedHome*；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
     },
     {
       "id": "IT-12",
@@ -414,7 +414,7 @@
           80
         ]
       },
-      "notes": "CastleMgr.IsCastleMember；登记缺口已在 useitem.rs 头部补齐（3679403bd）"
+      "notes": "CastleMgr.IsCastleMember；登记缺口已在 useitem.rs 头部补齐（3679403bd）；需宿主 move 夹具（EatUseItems→BaseObjectMove + 随机点 + 终态 MapName/X/Y）；use_item 纯函数不覆盖移动"
     },
     {
       "id": "IT-14",
@@ -526,7 +526,7 @@
           14
         ]
       },
-      "notes": "入口在 Operate.cs:632；Rust 有 world-bevy::magic::can_read_book 谓词但未接线到 use_item"
+      "notes": "入口在 Operate.cs:632；Rust 有 world-bevy::magic::can_read_book 谓词但未接线到 use_item；magic_list 未 wire（IT-17 接 SavedHuman.record.data.magic 前保持 missing；实现未 wire 时 implemented_unverified）"
     },
     {
       "id": "IT-18",
