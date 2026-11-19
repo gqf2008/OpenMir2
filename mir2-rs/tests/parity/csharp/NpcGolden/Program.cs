@@ -310,7 +310,7 @@ internal static class Program
                 npc_x = spec.NpcX,
                 npc_y = spec.NpcY,
                 death = spec.Death,
-                click_npc_time = spec.ClickNpcTime,
+                rate_limited = spec.ClickNpcTime != 0 && spec.ClickNpcTimeConfig > 0,
                 click_npc_time_config = spec.ClickNpcTimeConfig,
             },
             rm = rms,
@@ -382,6 +382,7 @@ internal static class Program
             },
             script = "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>",
             max_drain_passes = 64,
+            excluded_wallclock_fields = new[] { "ctx.click_npc_time" },
             cases,
         };
 

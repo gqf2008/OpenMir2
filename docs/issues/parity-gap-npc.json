@@ -108,7 +108,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "行为面（SM 643 严格序 + 说词文本）+ 状态面（LastNpc/Script/ScriptCurrLable）均断言；牙 A 距离门 / B @main 派发 / C set_last_npc（原文 E:/UserFleet/qa/npc-parity/）",
+      "notes": "行为面+状态面均断言；牙 A/B/C（E:/UserFleet/qa/npc-parity/）；golden 版本 sha256=42fd2930…2bc4（旧 41e87d9b…c5fce 因墙钟字段 ctx.click_npc_time 排除而作废重判；determinism=BEHAVIOR_IDENTICAL；rejudge rc=0）",
       "basis": "semantic"
     },
     {

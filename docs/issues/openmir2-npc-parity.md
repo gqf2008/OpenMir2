@@ -212,9 +212,20 @@ opc-07 定的三条前置已全部满足（见 §10.1 三证明）；NP-01 签�
 3. 行为字段一旦变化 ⇒ **原 PASS 作废**，按新 golden 重判并在报告说明原因；
 4. 报告写明"PASS 对应的 golden 版本 = sha256 + 提交"。
 
-**当前 NP-01 的 PASS 对应 golden 版本**：`mir2-rs/tests/parity/golden/npc/np01_click_main.json`
-sha256 = `41e87d9b60c6e827833b2e9e755ea7ef0ef3f54aa9a4600b5a0be79b003c5fce`（提交 `4878fdbfe`）。
-探针已加 `script_name`/`script_sha256`，**重录后必须按本节重出 PASS**（窗口结束后执行）。
+**NP-01 的 PASS 对应 golden 版本（重录后）**：`mir2-rs/tests/parity/golden/npc/np01_click_main.json`
+sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（提交见本批）。
+
+- **旧版本**：sha256 = `41e87d9b60c6e827833b2e9e755ea7ef0ef3f54aa9a4600b5a0be79b003c5fce`（提交 `4878fdbfe`）。
+- **重录判定（行为字段确有变化 ⇒ 旧 PASS 作废并重判）**：重录暴露 `ctx.click_npc_time` 是墙钟值（每次运行不同，
+  L5 必须排除）。修正为确定性布尔 `ctx.rate_limited`，根级加 `excluded_wallclock_fields: ["ctx.click_npc_time"]`。
+  - before/after 对比：`E:/UserFleet/qa/npc-parity/rerecord/np01-before-vs-after.txt`
+    （`BEHAVIOR_CHANGED`，差异**只有** `click_npc_time` 删除 + `rate_limited` 新增 + `excluded_wallclock_fields` 新增）；
+  - 确定性证明（同探针连录两次）：`E:/UserFleet/qa/npc-parity/rerecord/determinism-two-runs.txt`
+    ⇒ `BEHAVIOR_IDENTICAL`（rc=0），两次文件 sha256 相同（`42fd2930…2bc4`）；
+  - **重判**：新 golden 上跑 `np01_click_main_matches_oracle_golden` ⇒ `rc=0`，`1 passed / 0 failed`
+    （原文 `E:/UserFleet/qa/npc-parity/rerecord/np01-rejudge-green.txt`）。
+- **PASS 重出结论**：NP-01 PASS（basis=semantic）对应 golden sha `42fd2930…2bc4`；生效前提即上述三份原文。
+- **墙钟排除清单**：`ctx.click_npc_time`（仅此一项；golden 根级 `excluded_wallclock_fields` 记录）。
 
 工具自测（可复跑，输出已落盘）：`python -I mir2-rs/tests/parity/npc/golden_recheck.py selftest`
 ⇒ 元数据新增=0 / 行为改动=1 / 零用例=2（ok）。
