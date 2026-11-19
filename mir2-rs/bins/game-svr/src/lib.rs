@@ -86424,10 +86424,9 @@ GMEXECUTE f
 ";
         std::fs::write(envir.join("Merchant.txt"), encoding_rs::GBK.encode(row).0)
             .expect("写 Merchant.txt");
-        let real = std::fs::read(
-            "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt",
-        )
-        .expect("读真实商家脚本");
+        let real =
+            std::fs::read("E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt")
+                .expect("读真实商家脚本");
         std::fs::write(envir.join("Market_Def/封魔谷/恶魔修理师-d2008.txt"), real)
             .expect("写真实商家脚本");
         let loader = mir2_envir::MapLoader::new(dir.clone(), "Map", "Envir");
@@ -86443,8 +86442,12 @@ GMEXECUTE f
             e
         });
         let mut displays = game_svr::downlink::DisplayTable::new();
-        let (kept, _failed, book) =
-            game_svr::merchant::spawn_merchants_with_scripts(&mut world, spawns, seeds, &mut displays);
+        let (kept, _failed, book) = game_svr::merchant::spawn_merchants_with_scripts(
+            &mut world,
+            spawns,
+            seeds,
+            &mut displays,
+        );
         assert_eq!(kept, 1, "NP-03 商家必须进世界");
         let merchant_id = *world.merchant_ids_sorted().first().expect("商人实体");
         let mut rig = T142Rig::new(Vec::new());
@@ -86742,18 +86745,32 @@ GMEXECUTE f
                         _ => {}
                     }
                     let idents: Vec<u16> = frames.iter().map(|b| gnp_ident(b)).collect();
-                    let golden_idents: Vec<u16> = case["sm"].as_array().unwrap().iter()
-                        .map(|s| s["ident"].as_u64().unwrap() as u16).collect();
+                    let golden_idents: Vec<u16> = case["sm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .map(|s| s["ident"].as_u64().unwrap() as u16)
+                        .collect();
                     assert_eq!(idents, golden_idents, "{name}: 帧 ident 序列");
-                    let says: Vec<String> = frames.iter()
+                    let says: Vec<String> = frames
+                        .iter()
                         .filter(|b| gnp_ident(b) == mir2_protocol::messages::SM_MERCHANTSAY)
-                        .map(|b| gnp_tail_text(b)).collect();
-                    let golden_says: Vec<String> = case["rm"].as_array().unwrap().iter()
+                        .map(|b| gnp_tail_text(b))
+                        .collect();
+                    let golden_says: Vec<String> = case["rm"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
                         .filter(|r| r["ident"].as_u64() == Some(11009))
-                        .map(|r| r["msg"].as_str().unwrap().to_string()).collect();
+                        .map(|r| r["msg"].as_str().unwrap().to_string())
+                        .collect();
                     assert_eq!(says, golden_says, "{name}: 说词尾");
                     let want = case["state"]["script_curr_lable"].as_str().unwrap();
-                    let got = m.shop_sessions.get("hero").map(|s| s.script_curr_lable.clone()).unwrap_or_default();
+                    let got = m
+                        .shop_sessions
+                        .get("hero")
+                        .map(|s| s.script_curr_lable.clone())
+                        .unwrap_or_default();
                     assert_eq!(got, want, "{name}: ScriptCurrLable");
                 }
                 "var_username" => {

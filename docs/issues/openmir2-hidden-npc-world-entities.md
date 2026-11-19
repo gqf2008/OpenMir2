@@ -28,7 +28,7 @@
    QManage/RobotManage → `QuestNpcList`；QFunction → `MerchantList`），并分配 `ActorId`；
 2. `ActorId` 分配与 `NpcHost` 的脚本表索引对齐（脚本按 ChrName 装载，实体按 id 解析）；
 3. 与视野门的关系：`IsHide` 实体**不进视野广播**（AOI 不向他人下发出现帧），但保持可被 click/select 命中；
-4. 与装载链的顺序：在 `LoadMapQuest` 之后、地图/商人初始化之前（对齐 `GameApp.cs:184` 的次序）。
+4. 与装载链的顺序：在 `LoadMapQuest` 之后、地图/商人初始化之前（对齐 `src/GameSrv/GameApp.cs:184` 的次序）。
 
 ## 4. 验收
 
