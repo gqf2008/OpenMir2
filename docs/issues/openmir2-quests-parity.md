@@ -158,13 +158,13 @@
 
 | # | 证据 | 命令 | 产物 / 结果 |
 | --- | --- | --- | --- |
-| 1 | **装载证明** | `dotnet run --project mir2-rs/tests/parity/m3/quests/quest-parity-probe -c Release -- E:/UserFleet/qa/quests/qt01` | `E:/UserFleet/qa/quests/qt01/quest_gate_reachability.tsv`：两份脚本 `loaded_delta=1`、`records` 2/1、`known_label_hit=1`（`@other` / `@main`） |
+| 1 | **装载证明** | `dotnet run --project mir2-rs/tests/parity/m3/quests/quest-parity-probe -c Release -- E:/UserFleet/qa/quests/qt01` | `E:/UserFleet/qa/quests/qt01/quest_gate_reachability.tsv`：两份脚本的 `loaded_delta` 与 `known_label_hit` 逐行见该文件（`@other` / `@main`） |
 | 2 | **真实标签命中** | 同上 | 同上：`known_label=@other`、`@main` 均 `hit=1`（标签取自脚本原文，写死在探针里） |
 | 3 | **全仓 `IsQuest` 枚举** | `grep -rn "IsQuest" --include=*.cs .`（仓库根） | `E:/UserFleet/qa/quests/qt01/grep_isquest_all_cs.txt`：对 `ScriptInfo.IsQuest` 的**唯一** `true` 赋值在 `ScriptParsers.cs` 的死块内；`NormNpc` 的 `IsQuest` 是 **NormNpc 自己的字段**（另一个类，`src/M2Server/Npc/NormNpc.cs` 内自读自写）；其余全是 `false` |
-| 4 | **`IsQuest` 断言** | 同 1 | 同上 TSV：`is_quest=0`、`quest_info_null=1`、`verdict=PASS(dead_in_oracle)`；Rust 侧 `quest_gate_is_dead_in_oracle_like_oracle`（`cargo test -p mir2-script --test parser_tests`，15 passed / 0 failed / 0 ignored） |
+| 4 | **`IsQuest` 断言** | 同 1 | 同上 TSV：`is_quest=0`、`quest_info_null=1`、`verdict=PASS(dead_in_oracle)`；Rust 侧 `quest_gate_is_dead_in_oracle_like_oracle`（`cargo test -p mir2-script --test parser_tests`；原文 `E:/UserFleet/qa/quests/qt01/rust_parser_tests_full.log`，计数以该文件为准） |
 
 补充事实（写进卡面备查）：`scriptType` 在 `LoadScriptFile` 内 7 处赋值为 10/20/11/12/10/13/14、**从不为 1**
-（`grep_scripttype.txt`）；`E:/MirServer` 下 **2640** 个 `.txt` 中 **0** 个含 `{Quest` 头（`corpus_quest_headers.txt`）。
+（`E:/UserFleet/qa/quests/qt01/grep_scripttype.txt`）；`E:/MirServer` 下 `.txt` 全扫结果为 **0** 命中（`E:/UserFleet/qa/quests/qt01/corpus_quest_headers.txt`，计数以该文件为准）。
 ⇒ 该特性在 oracle 与语料两侧都不可达，**无法与 oracle 对拍**，按裁决记 `dead_in_oracle`、不计入分子。
 
 ## 11. 42 条清单在本线的落点（适用 / 排除，逐组写明）
