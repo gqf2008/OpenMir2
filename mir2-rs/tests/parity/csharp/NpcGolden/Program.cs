@@ -189,6 +189,14 @@ internal static class Program
     private const string CLICK_SCRIPT =
         "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>";
     private const string DIALOG_SCRIPT = CLICK_SCRIPT + "\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>";
+    private const string MERCHANT_SCRIPT =
+        "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt";
+    private const string SMITH_SCRIPT =
+        "E:/MirServer/M2GameSvr/Envir/Market_Def/任务NPC/打铁-0.txt";
+    private const string QFUNCTION_SCRIPT =
+        "E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt";
+    private const string EXTJMP_FIXTURE =
+        "mir2-rs/tests/parity/golden/npc/fixtures/np05_extjmp_synthetic.txt";
     private static readonly string[] CLICK_ORACLE_SOURCE =
     {
         "src/M2Server/Player/PlayObject.Base.cs:674 (ClientClickNpc)",
@@ -226,16 +234,27 @@ internal static class Program
         }
         return ctx;
     }
-    private static Dictionary<string, object> BuildState(PlayObject po, string kind, int npcId)
+    private static Dictionary<string, object> BuildState(PlayObject po, string kind, int lastNpcId)
     {
         var st = new Dictionary<string, object>
         {
-            ["last_npc_is_npc"] = po.LastNpc == npcId,
+            ["last_npc_is_npc"] = po.LastNpc == lastNpcId,
             ["script_curr_lable"] = po.ScriptCurrLable ?? string.Empty,
             ["script_go_back_lable"] = po.ScriptGoBackLable ?? string.Empty,
             ["script_lable"] = po.ScriptLable ?? string.Empty,
             ["script_selected"] = po.Script != null,
         };
+        if (kind == "act_first")
+        {
+            st["mnm6"] = po.MNMval[6];
+            st["flag106"] = (po.QuestFlag[13] & 64) != 0;
+            st["game_gold"] = po.GameGold;
+        }
+        if (kind == "direct_goto")
+        {
+            st["game_gold"] = po.GameGold;
+            st["send_msg_flag"] = po.BoSendMsgFlag;
+        }
         if (kind.StartsWith("dlg", StringComparison.Ordinal))
         {
             st["can_jmp_labels"] = po.CanJmpScriptLableMap.Keys.Cast<string>()
@@ -256,6 +275,13 @@ internal static class Program
         public string Label = "";
         public string[] Labels;
         public string ScriptName = "老人";
+        public string ScriptSourcePath;
+        public string MerchantScriptRel;
+        public string ScriptText2;
+        public int Mnm6;
+        public int GameGold;
+        public int Quest106;
+        public string ScriptName2 = "国王";
         public string ScriptText = CLICK_SCRIPT;
         public int ClickNpcTime = 0;
         public int ClickNpcTimeConfig = 0;
@@ -265,11 +291,35 @@ internal static class Program
     {
         net.Frames.Clear();
         var npcId = _npcSeq++;
+        var lastNpcId = npcId;
         var scriptText = spec.ScriptText;
         var enc = new UTF8Encoding(true);
         var scriptBytes = enc.GetPreamble().Concat(enc.GetBytes(scriptText)).ToArray();
+        string fixtureSource = null;
+        string scriptSha = null;
+        if (spec.ScriptSourcePath != null)
+        {
+            var raw = File.ReadAllBytes(spec.ScriptSourcePath);
+            // 真实语料是 GBK；入仓 synthetic 夹具是 UTF-8（无 BOM）⇒ 自动识别后按 GBK 写入。
+            var gbk = Encoding.GetEncoding("gb2312");
+            try
+            {
+                var strict = Encoding.GetEncoding(
+                    "gb2312",
+                    EncoderFallback.ExceptionFallback,
+                    DecoderFallback.ExceptionFallback);
+                var _ = strict.GetString(raw);
+                scriptBytes = raw;
+            }
+            catch (DecoderFallbackException)
+            {
+                scriptBytes = gbk.GetBytes(Encoding.UTF8.GetString(raw));
+            }
+            fixtureSource = spec.ScriptSourcePath;
+            scriptSha = Convert.ToHexString(SHA256.HashData(raw)).ToLowerInvariant();
+        }
         File.WriteAllBytes(Path.Combine(tmp, "Npc_def", spec.ScriptName + ".txt"), scriptBytes);
-        var scriptSha = Convert.ToHexString(SHA256.HashData(scriptBytes)).ToLowerInvariant();
+        scriptSha ??= Convert.ToHexString(SHA256.HashData(scriptBytes)).ToLowerInvariant();
         SystemShare.Config.ClickNpcTime = spec.ClickNpcTimeConfig;
 
         // 走 oracle `FindMerchant(...) ?? FindNpc(...)` 的 **FindNpc 分支**（`Npcs.txt` 之外的
@@ -284,7 +334,17 @@ internal static class Program
             CurrY = (short)spec.NpcY,
             MapName = "0",
         };
-        new ScriptParsers().LoadScript(npc, "Npc_def", spec.ScriptName);
+        if (spec.MerchantScriptRel != null)
+        {
+            var mdPath = Path.Combine(tmp, "Market_Def", spec.MerchantScriptRel + ".txt");
+            Directory.CreateDirectory(Path.GetDirectoryName(mdPath)!);
+            File.WriteAllBytes(mdPath, scriptBytes);
+            new ScriptParsers().LoadScriptFile(npc, "Market_Def", spec.MerchantScriptRel, true);
+        }
+        else
+        {
+            new ScriptParsers().LoadScript(npc, "Npc_def", spec.ScriptName);
+        }
         SystemShare.ActorMgr.CleanObject();
         SystemShare.ActorMgr.Add(npc);
         SystemShare.WorldEngine = WorldProxy.Create(npc);
@@ -304,10 +364,58 @@ internal static class Program
             MagicList = new List<UserMagic>(),
         };
         po.ClickNpcTime = spec.ClickNpcTime;
+        if (spec.Mnm6 != 0) { po.MNMval[6] = spec.Mnm6; }
+        if (spec.GameGold != 0) { po.GameGold = spec.GameGold; }
+        if (spec.Quest106 != 0) { po.QuestFlag[13] |= 64; }
 
         var click = typeof(PlayObject).GetMethod("ClientClickNpc", BindingFlags.Instance | BindingFlags.NonPublic)
             ?? throw new MissingMethodException("PlayObject.ClientClickNpc");
-        click.Invoke(po, new object[] { npcId });
+        if (spec.Kind == "direct_goto")
+        {
+            M2Share.ScriptEngine.GotoLable(po, npcId, spec.Label, false);
+        }
+        else
+        {
+            click.Invoke(po, new object[] { npcId });
+        }
+
+        if (spec.Kind == "click_switch")
+        {
+            // 第一次点击的帧按真实消息泵排空丢弃，只记第二次点击（LastNpc/Script 切换面）。
+            var preQ = GetMsgQueue(po);
+            var preG = typeof(PlayObject).GetMethod("GetMessage", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
+                null, new[] { typeof(int), typeof(ProcessMessage).MakeByRefType() }, null);
+            var preO = typeof(PlayObject).GetMethod("Operate", BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public,
+                null, new[] { typeof(ProcessMessage) }, null);
+            var preB = new object[] { HUtil32.GetTickCount(), default(ProcessMessage) };
+            while ((bool)preG.Invoke(po, preB))
+            {
+                var pmS = (ProcessMessage)preB[1];
+                if (!(bool)preO.Invoke(po, new object[] { pmS })) break;
+                preB[0] = HUtil32.GetTickCount();
+                preB[1] = default(ProcessMessage);
+            }
+            net.Frames.Clear();
+            var npc2Id = _npcSeq++;
+            var npc2 = new Merchant
+            {
+                ActorId = npc2Id,
+                ChrName = spec.ScriptName2,
+                Envir = envir,
+                CurrX = (short)spec.NpcX,
+                CurrY = (short)spec.NpcY,
+                MapName = "0",
+            };
+            var text2 = spec.ScriptText2 ?? "[@main]\n王：第二页";
+            var enc2 = new UTF8Encoding(true);
+            File.WriteAllBytes(Path.Combine(tmp, "Npc_def", spec.ScriptName2 + ".txt"), enc2.GetPreamble().Concat(enc2.GetBytes(text2)).ToArray());
+            new ScriptParsers().LoadScript(npc2, "Npc_def", spec.ScriptName2);
+            SystemShare.ActorMgr.Add(npc2);
+            SystemShare.WorldEngine = WorldProxy.Create(npc2);
+            po.ClickNpcTime = 0;
+            click.Invoke(po, new object[] { npc2Id });
+            lastNpcId = npc2Id;
+        }
 
         // NP-02：先点击打开对话（上面的 Click），再把点击产生的帧排空丢弃，然后选择标签。
         if (spec.Kind == "dlg_select" || spec.Kind == "dlg_sequence")
@@ -398,7 +506,7 @@ internal static class Program
         {
             order = i,
             ident = f.ident,
-            recog_is_npc = f.recog == npcId,
+            recog_is_npc = f.recog == lastNpcId,
             param = f.param,
             tag = f.tag,
             series = f.series,
@@ -408,6 +516,7 @@ internal static class Program
         return new
         {
             name = spec.Name,
+            fixture = fixtureSource == null ? null : new { source_path = fixtureSource, sha256 = scriptSha },
             script_name = spec.ScriptName,
             script_sha256 = scriptSha,
             ctx = BuildCtx(spec),
@@ -417,7 +526,7 @@ internal static class Program
             drain_passes = rms.Count,
             drain_hit_cap = pqCount > 0 || rms.Count >= 64,
             sm,
-            state = BuildState(po, spec.Kind, npcId),
+            state = BuildState(po, spec.Kind, lastNpcId),
         };
     }
 
@@ -466,11 +575,31 @@ internal static class Program
             RunCase(new CaseSpec { Name = "dlg_unknown_label", Kind = "dlg_select", Label = "@nope", ScriptText = DIALOG_SCRIPT }, tmp, envir, net),
             RunCase(new CaseSpec { Name = "dlg_ask_back", Kind = "dlg_sequence", Labels = new[] { "@ask", "@back" }, ScriptText = DIALOG_SCRIPT }, tmp, envir, net),
         };
+        var np03Cases = new List<object>
+        {
+            RunCase(new CaseSpec { Name = "menu_main", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "menu_buy", Kind = "dlg_select", Label = "@buy", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "menu_sell", Kind = "dlg_select", Label = "@sell", MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "menu_storage", Kind = "dlg_sequence", Labels = new[] { "@cangku", "@storage" }, MerchantScriptRel = "封魔谷/恶魔修理师-d2008", ScriptSourcePath = MERCHANT_SCRIPT }, tmp, envir, net),
+        };
+        var np04Cases = new List<object>
+        {
+            RunCase(new CaseSpec { Name = "click_switch", Kind = "click_switch", ScriptName = "老人", ScriptText2 = "[@main]\n王：第二页" }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "act_usercmd6_first_only", Kind = "direct_goto", Label = "@UserCmd6", ScriptName = "老人", ScriptSourcePath = QFUNCTION_SCRIPT, GameGold = 10 }, tmp, envir, net),
+        };
+        var np05Cases = new List<object>
+        {
+            RunCase(new CaseSpec { Name = "extjmp_allowed", Kind = "dlg_select", Label = "@sub", ScriptName = "老人", ScriptSourcePath = EXTJMP_FIXTURE }, tmp, envir, net),
+            RunCase(new CaseSpec { Name = "extjmp_blocked", Kind = "dlg_select", Label = "@plain", ScriptName = "老人", ScriptSourcePath = EXTJMP_FIXTURE }, tmp, envir, net),
+        };
 
         var outDir = args[0];
         Directory.CreateDirectory(outDir);
         WriteDoc(Path.Combine(outDir, "np01_click_main.json"), CLICK_SCRIPT, clickCases, CLICK_ORACLE_SOURCE);
         WriteDoc(Path.Combine(outDir, "np02_dialog_select.json"), DIALOG_SCRIPT, dlgCases, DIALOG_ORACLE_SOURCE);
+        WriteDoc(Path.Combine(outDir, "np03_merchant_menu.json"), DIALOG_SCRIPT, np03Cases, DIALOG_ORACLE_SOURCE);
+        WriteDoc(Path.Combine(outDir, "np04_main_selection.json"), CLICK_SCRIPT, np04Cases, CLICK_ORACLE_SOURCE);
+        WriteDoc(Path.Combine(outDir, "np05_extjmp.json"), DIALOG_SCRIPT, np05Cases, DIALOG_ORACLE_SOURCE);
         Directory.Delete(tmp, true);
         return 0;
     }

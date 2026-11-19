@@ -1,0 +1,322 @@
+{
+  "generator": "mir2-rs/tests/parity/csharp/NpcGolden",
+  "oracle_source": [
+    "src/M2Server/Player/PlayObject.Operate.cs:114 (ClientMerchantDlgSelect)",
+    "src/M2Server/Npc/NormNpc.cs:1633 (NormNpc.UserSelect: label ledger only)",
+    "src/GameSrv/Npc/Merchant.cs:789 (Merchant.UserSelect -> GotoLable / @back)",
+    "src/Modules/ScriptEngine/ScriptEngine.cs:141 (GotoLable)",
+    "src/Modules/ScriptEngine/ScriptEngine.cs:987 (GotoLableSendMerChantSayMsg)",
+    "src/M2Server/Player/PlayObject.Message.cs:1702 (RM_MERCHANTSAY -> SM_MERCHANTSAY)"
+  ],
+  "script": "[@main]\n老人：你需要什么？\\ <打听/@ask> <离开/@exit>\n\n[@ask]\n#SAY\n打听结果：一切正常\\ <返回/@back>",
+  "max_drain_passes": 64,
+  "excluded_wallclock_fields": [
+    "ctx.click_npc_time"
+  ],
+  "cases": [
+    {
+      "name": "menu_main",
+      "fixture": {
+        "source_path": "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt",
+        "sha256": "14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210"
+      },
+      "script_name": "老人",
+      "script_sha256": "14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5010,
+          "late": false,
+          "msg": "老人/???怎么，看见我很奇怪么？我生前可是个大慈善家。\\要什么东西，自己看吧！也可以把你的东西卖给我！ \\我会尽我的全力去帮助你的！\\<买/@buy> 东西\\<卖/@sell> 东西\\<特殊修理/@s_repair>\\<使用仓库/@cangku>\\<离开/@exit>"
+        }
+      ],
+      "rm_priorities": [
+        1
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 1,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 314
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "",
+        "script_go_back_lable": "",
+        "script_lable": "",
+        "script_selected": true
+      }
+    },
+    {
+      "name": "menu_buy",
+      "fixture": {
+        "source_path": "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt",
+        "sha256": "14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210"
+      },
+      "script_name": "老人",
+      "script_sha256": "14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_select",
+        "label": "@buy",
+        "labels": null
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5011,
+          "late": false,
+          "msg": "老人/你需要什么物品？\\ \\ \\<返 回/@Main>"
+        },
+        {
+          "order": 1,
+          "ident": 10128,
+          "w_param": 0,
+          "n_param1": 5011,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 4660,
+          "late": false,
+          "msg": ""
+        }
+      ],
+      "rm_priorities": [
+        1,
+        144
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 2,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 84
+        },
+        {
+          "order": 1,
+          "ident": 645,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 0,
+          "len": 32
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "@buy",
+        "script_go_back_lable": "",
+        "script_lable": "@buy",
+        "script_selected": true,
+        "can_jmp_labels": [
+          "@Main"
+        ]
+      }
+    },
+    {
+      "name": "menu_sell",
+      "fixture": {
+        "source_path": "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt",
+        "sha256": "14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210"
+      },
+      "script_name": "老人",
+      "script_sha256": "14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_select",
+        "label": "@sell",
+        "labels": null
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5012,
+          "late": false,
+          "msg": "老人/给我看看你的东西，我会给你一个估价……\\所以如果你不是急需的话在这里卖掉算了。\\ \\<返 回/@Main>"
+        },
+        {
+          "order": 1,
+          "ident": 10129,
+          "w_param": 0,
+          "n_param1": 5012,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 4660,
+          "late": false,
+          "msg": ""
+        }
+      ],
+      "rm_priorities": [
+        1,
+        145
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 2,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 163
+        },
+        {
+          "order": 1,
+          "ident": 646,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 0,
+          "len": 32
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "@sell",
+        "script_go_back_lable": "",
+        "script_lable": "@sell",
+        "script_selected": true,
+        "can_jmp_labels": [
+          "@Main"
+        ]
+      }
+    },
+    {
+      "name": "menu_storage",
+      "fixture": {
+        "source_path": "E:/MirServer/M2GameSvr/Envir/Market_Def/封魔谷/恶魔修理师-d2008.txt",
+        "sha256": "14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210"
+      },
+      "script_name": "老人",
+      "script_sha256": "14a3fd4d7c816bc31c0fce689a451bd15b2159736ea92c68e6b681c93fed7210",
+      "ctx": {
+        "player_x": 10,
+        "player_y": 10,
+        "npc_x": 10,
+        "npc_y": 10,
+        "death": false,
+        "rate_limited": false,
+        "click_npc_time_config": 0,
+        "kind": "dlg_sequence",
+        "label": "",
+        "labels": [
+          "@cangku",
+          "@storage"
+        ]
+      },
+      "rm": [
+        {
+          "order": 0,
+          "ident": 11009,
+          "w_param": 0,
+          "n_param1": 0,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 5013,
+          "late": false,
+          "msg": "老人/需要保管什么东西？\\ \\ \\<返 回/@Main>"
+        },
+        {
+          "order": 1,
+          "ident": 10146,
+          "w_param": 0,
+          "n_param1": 5013,
+          "n_param2": 0,
+          "n_param3": 0,
+          "actor_id": 4660,
+          "late": false,
+          "msg": ""
+        }
+      ],
+      "rm_priorities": [
+        1,
+        162
+      ],
+      "max_drain_passes": 64,
+      "drain_passes": 2,
+      "drain_hit_cap": false,
+      "sm": [
+        {
+          "order": 0,
+          "ident": 643,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 1,
+          "len": 87
+        },
+        {
+          "order": 1,
+          "ident": 700,
+          "recog_is_npc": true,
+          "param": 0,
+          "tag": 0,
+          "series": 0,
+          "len": 32
+        }
+      ],
+      "state": {
+        "last_npc_is_npc": true,
+        "script_curr_lable": "@storage",
+        "script_go_back_lable": "@cangku",
+        "script_lable": "@storage",
+        "script_selected": true,
+        "can_jmp_labels": [
+          "@Main"
+        ]
+      }
+    }
+  ]
+}

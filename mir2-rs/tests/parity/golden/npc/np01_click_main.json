@@ -15,6 +15,7 @@
   "cases": [
     {
       "name": "click_main_ok",
+      "fixture": null,
       "script_name": "老人",
       "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
       "ctx": {
@@ -66,6 +67,7 @@
     },
     {
       "name": "click_main_far",
+      "fixture": null,
       "script_name": "老人",
       "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
       "ctx": {
@@ -93,6 +95,7 @@
     },
     {
       "name": "click_main_dead",
+      "fixture": null,
       "script_name": "老人",
       "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
       "ctx": {
@@ -120,6 +123,7 @@
     },
     {
       "name": "click_main_rate_limited",
+      "fixture": null,
       "script_name": "老人",
       "script_sha256": "ed3eec5c861fc1a201bdb29e5aed863e2be92d78040a19692fc720e8ba505ece",
       "ctx": {
@@ -147,6 +151,7 @@
     },
     {
       "name": "click_no_main_fallback",
+      "fixture": null,
       "script_name": "老人",
       "script_sha256": "4d9bb23728fe414973aed8ecdc2336e291ca3fcadb37e07b7aff4c40ab286629",
       "ctx": {

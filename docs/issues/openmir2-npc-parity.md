@@ -313,32 +313,41 @@ sha256 = `42fd29302505b33188f5818c576a1fd7a88ac864d3c61ea1bd3b0d0de8fc2bc4`（�
   选 `@sell` → `SM 646`；选 `@storage` → `SM 700`。
 - **flag-关**：语料 0 条，不做 golden；由既有单测覆盖（卡面注明）。
 
-### 13.3 NP-04 用例（真实脚本 + 机制）
+### 13.3 NP-04 用例（真实脚本 + 机制，已落地）
 
-1. **两 NPC 切换**（`click_switch`）：点 NPC-A → 排空 → 点 NPC-B ⇒ 说词 B；`LastNpc == B`、
-   `Script` 切到 B 的脚本（状态直读 `ShopSession`）。
-2. **`#ACT` 只执行第一条已注册命令**（真实脚本）：`E:/MirServer/M2GameSvr/Envir/Market_Def/任务NPC/打铁-0.txt`
-   （sha256 见下）`[@main]` 首个 `#IF`（`LARGE M6 9` + `CHECKBAGSIZE 1`）命中时：
-   - oracle（`src/Modules/ScriptEngine/ScriptEngine.cs:884-893`）只执行 `MOV M6 0`；
-   - `set [106] 0`、`MOVR D6 5`、`goto @jiasx` **均不执行**；
-   - 断言：说词="你的命运之刃已经完成…"、`M6==0`、`flag 106` **保持 1**（若全执行会被清 0）。
-   - 前置：M6=10、flag 106=1（两侧同一初始态）。
-   - 打铁-0 sha256：`356b53dfa49aad7f4fe0d20b0b9a4f777d33be0e88271da7265f6298a5d8b86e`（实测 2026-11-20）。
+1. **两 NPC 切换**（`click_switch`）：点 NPC-A → 排空 → 推进时钟过限频 → 点 NPC-B ⇒ 说词 B；
+   `LastNpc == B`、`Script` 切到 B 的脚本（状态直读 `ShopSession`）。
+   Rust 侧需两个都是 `Merchant`（oracle 的 `(IMerchant)` 硬转）：测试 rig 新增 `new_two_merchants`。
+2. **`#ACT` 只执行第一条已注册命令**（真实脚本）：`E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt`
+   （sha256 `9c8187bf5f90e17c2a423d27a30360828a1098da4cf8e2d670c7e7c0ed6b09df`）`[@UserCmd6]`（第 **382** 行）：
+   - `#IF CHECKGAMEGOLD > 5` → `#ACT MOV S1 $PARAM(1)` / `GAMEGOLD - 6` / `SENDMSG …`；
+   - oracle（`src/Modules/ScriptEngine/ScriptEngine.cs:884-893`）只执行第一条 ⇒ **元宝保持 10**（全执行才会变 4）；
+   - 入口：两侧都走 `GotoLable(label, boExtJmp=false)`（等价"可跳标签"状态；C# 探针 `direct_goto`，
+     Rust 直接调 `run_merchant_goto`），不改脚本。
+   - **原方案（`打铁-0` 首 `#IF LARGE`）已作废**：该条件在 oracle 恒假（见 §14），不可达。
 
-### 13.4 NP-05 用例（synthetic 夹具，四条已绑）
+### 13.4 NP-05 用例（synthetic 夹具，四条已绑，已落地）
 
 - 夹具：`mir2-rs/tests/parity/golden/npc/fixtures/np05_extjmp_synthetic.txt`
-  sha256 = `c8302373725443ac56d516ef18a7497f0c57bef0d563af5f7f8a50edf18b7575`
-- 内容：`[@main]`（**不**链接 `@sub`）/ `[@sub] TRUE` / `[@plain]`（未标 TRUE）。
+  sha256 = `d7cd88bd8bcd0dbb286f72069816af3db8108d13d1edc5ee4fed1a13cdb3d028`
+- 内容：`[@main]`（**不**链接 `@sub`）/ `[@sub] TRUE` / `[@plain]`（未标 TRUE）；**记录之间必须空行**
+  （oracle 解析器在无空行时会把后续标签当说词吞掉——首版夹具即因此只解析出 `@main`，已修正）。
 - 用例：`extjmp_allowed`（选 `@sub` ⇒ 说词"你已进入子页。"）/ `extjmp_blocked`（选 `@plain` ⇒ 零说词）。
-- **冻结语料 `Market_Def` + `MapQuest_def` 对 `] TRUE` 的用量为 0**（实测 `grep -rn "] TRUE"` 零命中）⇒
+- 探针把入仓 UTF-8 夹具自动转 GBK 写盘（真实语料是 GBK）；`fixture.sha256` 对**源文件原字节**计算。
+- **冻结语料 `Market_Def` + `MapQuest_def` 对 `] TRUE` 的用量为 0**（实测零命中）⇒
   本条是**引擎门等价**证据，不是线上用例覆盖。
 
-### 13.5 进度
+### 13.5 子批①落地状态
 
-C# 探针（`ScriptSourcePath`/fixture 元数据、`click_switch`、`act_first` 状态）与 Rust 断言骨架已写入工作树，
-**未编译未提交**（等 `ca` 合入 + opc-07 放行窗口）；NP-03 的 Rust 装置待新 master。
-
+- **NP-04 / NP-05：已验证**（共同测试 `np01_click_main_matches_oracle_golden`，golden
+  `np04_main_selection.json` / `np05_extjmp.json`）；NP-01 golden 重生成后仍 `BEHAVIOR_IDENTICAL`。
+- **NP-03**：C# golden 已产（真实商家脚本，`menu_buy→SM 645`、`menu_sell→SM 646` 已出现；
+  `menu_storage` 走 `@cangku→@storage` 序列）；但 **Rust 驱动器（商家装载链）仍待 `ca` 合入新 master**，
+  未标 verified。
+- **牙**（三份原文在 `E:/UserFleet/qa/npc-parity/`）：
+  - E：`run_actions` 的"首条后 return"改成 `continue` ⇒ `act_usercmd6_first_only` 红在 `game_gold`（10 vs 4）；
+  - F：删 `goto_label` 的 `bo_ext_jmp && !record.bo_ext_jmp` 门 ⇒ `extjmp_blocked` 红（说词不该出现）。
+  两条均恢复 sha 相等、最终复绿（`subbatch1-green-final.txt`，rc=0，1 passed）。
 
 ## 14. oracle 缺陷照搬：LARGE / SMALL / EQUAL（2026-11-20 裁定）
 
@@ -362,11 +371,8 @@ C# 探针（`ScriptSourcePath`/fixture 元数据、`click_switch`、`act_first` 
 
 **牙**：把 `LARGE`（以及 `SMALL`/`EQUAL`）改回"按真实变量值比较" ⇒ 对应用例必红；恢复 sha 相等并复绿。
 
-## 14.1 NP-04 `[@@sendMsg]` 用例（替代打铁-0，oracle 真实脚本）
+## 14.1 NP-04 `#ACT` 用例的最终形态
 
-- 文件：`E:/MirServer/M2GameSvr/Envir/Market_Def/QFunction-0.txt`，sha256 = `9c8187bf5f90e17c2a423d27a30360828a1098da4cf8e2d670c7e7c0ed6b09df`；
-  标签 `[@@sendMsg]` 在第 **368** 行（由 `:366` 的 `<[进入后台管理]/@@sendMsg>` 链接，属可跳标签）。
-- 结构：`#IF CHECKGAMEGOLD > 4` → `#ACT GAMEGOLD - 5` / `SETSENDMSGFLAG` / `break`。
-- 判据：oracle `#ACT` 只执行第一条已注册命令（`src/Modules/ScriptEngine/ScriptEngine.cs:884-893`）⇒
-  元宝 10 → **5**；`SETSENDMSGFLAG` **不执行** ⇒ 发送标志保持 `false`。
-- 入口：`GotoLable(boExtJmp = false)`（等价于"可跳标签"的真实状态；不改脚本、不自造商家脚本）。
+原提的 `[@@sendMsg]`（`SETSENDMSGFLAG`）在 Rust 侧**无状态存储**（`ScriptPlayer::set_bo_send_msg_flag` 默认 no-op），
+无法作为判别量；最终改用同一真实文件的 `[@UserCmd6]`（第 382 行）：首条 `MOV S1 $PARAM(1)` 后
+`GAMEGOLD - 6` **不执行** ⇒ 元宝保持 10（全执行才 4）。文件 sha256 与行号见 §13.3。

@@ -159,7 +159,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "商店子命令归交易面（M3⑤），不在本分母；CastleOfficial.cs:93 / GuildOfficial.cs:55 覆写"
+      "notes": "C# golden 已产（真实商家脚本，@buy→SM 645 / @sell→SM 646 / @storage 经 @cangku 序列）；Rust 驱动器（商家装载链）待 ca 合入新 master，未 verified"
     },
     {
       "id": "NP-04",
@@ -169,19 +169,21 @@
         "line": 46,
         "line_end": 75
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": [
-          "check_quest_status"
-        ]
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np04_main_selection.json",
+        "cases": [
+          "click_switch",
+          "act_usercmd6_first_only"
+        ],
+        "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "crates/script/src/engine/mod.rs 的 goto_label/check_quest_status（第 1008/1074 行附近）；无直接 oracle 夹具"
+      "notes": "真实脚本 QFunction-0.txt [@UserCmd6]（sha256 9c8187bf…09df，第 382 行）；#ACT 只执行首条 ⇒ 元宝 10 不变；牙 E（run_actions 改 continue ⇒ game_gold 10 vs 4 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-05",
@@ -191,17 +193,21 @@
         "line": 89,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
       "evidence": {
-        "test": "merchant_dialog_label_gate",
-        "test_file": "mir2-rs/bins/game-svr/src/npc.rs",
-        "fixture": null,
-        "cases": [],
+        "test": "np01_click_main_matches_oracle_golden",
+        "test_file": "mir2-rs/bins/game-svr/src/lib.rs",
+        "fixture": "mir2-rs/tests/parity/golden/npc/np05_extjmp.json",
+        "cases": [
+          "extjmp_allowed",
+          "extjmp_blocked"
+        ],
         "unit_tests": []
       },
       "cost": null,
       "deviation": null,
-      "notes": "guild_official.rs 第 582 行注释 + 引擎判定"
+      "notes": "synthetic 夹具（冻结语料 Market_Def+MapQuest_def 0 使用 `] TRUE`；sha256 d7cd88bd…d028）；引擎门等价证据；牙 F（删 boExtJmp 门 ⇒ extjmp_blocked 红）",
+      "basis": "semantic"
     },
     {
       "id": "NP-06",
