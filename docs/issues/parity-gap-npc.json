@@ -333,7 +333,7 @@
       },
       "cost": null,
       "deviation": null,
-      "notes": "QFunctionNpc/QMangeNpc/RobotNpc 分别在 LocalDB.cs:192/:236/:293；加载见 QX-02"
+      "notes": "装置未建 + Rust 侧隐藏 NPC 非世界实体（NpcHost 脚本宿主、ActorId=0、click/select 零帧）；见卡 openmir2-hidden-npc-world-entities"
     },
     {
       "id": "NP-11",
