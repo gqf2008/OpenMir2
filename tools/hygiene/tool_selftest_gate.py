@@ -180,6 +180,8 @@ REGISTRY = [
     # 产戳后覆盖二进制 / 产戳时 head 不可解析）；临时 git 仓库在 tempdir，不碰真实仓库/
     # 真实二进制，`-NoToolchainProbe` 不跑 cargo/dotnet。
     ("stamp_binaries", ["tools/orchestration/stamp-binaries.ps1", "-Selftest"], False),
+    # 卡 openmir2-deploy-deps-manifest：部署依赖清单（生成器 + 两级核验，离线合成夹具）
+    ("deps_manifest", ["tools/deploy/deps_manifest.py", "selftest"], False),
 ]
 
 #: 清点用：仓库内其余带 selftest 的工具 → 为何**不**纳入本门禁（人工复核过的分类）。
