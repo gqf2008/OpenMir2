@@ -148,15 +148,12 @@
 
 ## 10. 火球三支 C# 侧账本（2026-11-19）
 
-`--case fireball --out mir2-rs/tests/parity/golden/magic/fireball.json`（种子由扫描确定并写入产物）：
+`--case fireball --out mir2-rs/tests/parity/golden/magic/fireball.json`（种子由扫描确定并写入产物）。
 
-| 支 | 种子 | 首抽 `Random(10)` | RNG 账本 | RM 账本（ident, p3） |
-|---|---|---|---|---|
-| miss | 1 | 2（< AntiMagic=3） | `[2]` | `(RM_SPELL 10008, p3=1)`、`(RM_MAGICFIRE 10120, p3=0)` |
-| edge | 5 | 3（== AntiMagic） | `[3,0,0,0,4]` | 10008(p3=1)、10120(p3=1002)、8021(p3=1002) |
-| hit | 13 | 5（> AntiMagic） | `[5,0,0,0,0]` | 10008(p3=1)、10120(p3=1002)、8021(p3=1002) |
-
-（8021 = `RM_DELAYMAGIC`；命中支的额外抽取来自 `GetAttackPower` 与训练尾 `Random(3)`。）
+**数字以太唯一事实源为准：`mir2-rs/tests/parity/golden/magic/fireball.json`**——卡面不手抄具体
+`p3`/`ident` 数字（手抄会随装置改进漂移；本表的旧数字已被 QA-1 抓到陈旧）。要点：
+三支各一份账本（种子、RNG 逐次、每个接收者的 RM 与 SM），`p3` 是**目标 ActorId**，
+按 1000/2000/3000 分段（同一进程多用例必须不同 ActorId，见洁癖区第 5 条）。
 
 **洁癖区（不记下来下次必踩）**
 1. `ConfigFile.Load` 用 `Encoding.GetEncoding("GB2312")` ⇒ 进程必须先
@@ -190,11 +187,10 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 
 场景：施法者(100,100)、目标(101,100)、观察者-范围内(105,100)、观察者-范围外(140,100)。
 
-| 支 | caster SM | target SM | obs_in SM | obs_out |
-|---|---|---|---|---|
-| miss | `638`(SM_MAGICFIRE) | `17`(SM_SPELL)+`638` | `17`+`638` | 无 |
-| edge | `638` | `17`+`638` | `17`+`638` | 无 |
-| hit | `638` | `17`+`638` | `17`+`638` | 无 |
+帧账本**以金标准 `golden/magic/fireball.json` 为准**（本表不再手抄帧号）。要点：
+- 三支里 target 与 obs_in 收到的帧集合**一致**（含 `RM_DELAYMAGIC` 到期后的伤害链帧），
+  obs_out 恒空；caster 只收广播类帧、**不收 `SM_SPELL`**；
+- 具体 `ident/param/series/tail` 逐字段以金标准为准（QA-1 已独立复现：绿）。
 
 - **牙①（负向）**：三支里施法者收到的 `SM_SPELL(17)` **恒为 0**（只有 `SM_MAGICFIRE 638`）⇒
   `PlayObject.Message.cs:1456` 的自守卫被钉住。
@@ -360,3 +356,9 @@ RNG 账本逐次比较用 `crates/shared/src/rng.rs` 的 `DotNetRandom`/`RandomN
 `anti_magic`（`:565`）、`level`（`:571`）；`abil: Option<BaseAbil>` 只有 `dc / max_hp`（`:497-502`）
 —— **MC 不在这两个字段里**，需在 `AbilitySnapshot`/WAbil 组件上落，写夹具前先确认该组件字段
 （下一条提交解决，不猜）。
+
+## 17. QA-1 独立复现（2026-11-19，worktree `qa-3b`）
+
+独立 worktree @ `d35550db7` 重跑 C# 火球用例：**RC=0，三支账本与已提交金标准 `ALL_IDENTICAL`**
+（仅 `delivery` 墙钟字段不同，不入比较面）。QA 同时指出卡面两处手抄数字陈旧（§10 的 `p3`、
+§12 的 SM 集合），已按建议改为**只引用金标准路径 + 要点**，不再手抄数字。
