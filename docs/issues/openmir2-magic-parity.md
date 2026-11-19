@@ -87,6 +87,28 @@
 - 不改 C# 原版逻辑（RNG 替换只在测试进程内，见第 2 节）；
 - 每批走 `card/magic-*` 分支 + `--no-ff`，小步提交，贴对拍原文。
 
+## 7. 对拍口径裁定（opc-07，2026-11-19）
+
+- **A（先做）＝语义层对拍**：比较 **RM 消息序列（ident + params + priority）+ RNG 账本 + 状态差**。
+  卡面口径写死：**`verified`（`basis=semantic`）= 语义对齐（RM+RNG+状态），不是逐字节**。
+- **B（第二阶段，必须有）＝编码层逐字节**：首批 **5 个分支必须做 B**
+  （`1/5 火球`、`11/45 雷电`、`2 治愈`、`13 火符`、`44 灭天火`），用共享编码器证明"语义对 ⇒ 字节对"；
+  卡面写「B 覆盖样本集 5 条，其余按共享编码器推定」。对外报两个数：
+  **`verified(semantic)/65`** 与 **`verified(bytes)/5`**。
+- 清单每条 `verified` 必须带 `basis` 字段（`semantic` / `bytes`）。
+- 两条线并行排：A 先出数，**不得**因为 A 容易跳过 B，也不得为 B 推迟首个分支。
+
+## 8. 帧捕获点的技术现状（下一步的硬骨头）
+
+- `SendSelfDelayMsg`（`BaseObject.Message.cs:188`）**不需要 Envir**，直接进 `ActorEntity.MsgQueue`
+  （`protected readonly PriorityQueue<SendMessage, byte>`，`src/M2Server/Actor/ActorEntity.cs:16`）——
+  `DoSpell` 的 `RM_DELAYMAGIC` 这类可被派生 `PlayObject` 直接取出。
+- `SendRefMsg`（`:383`）**需要 `Envir != null`**，且要 `Envir.CellMatch/GetCellInfo` + `SystemShare.ActorMgr`
+  才能把消息投递给范围内 actor（施法者自身也在其格内 ⇒ `RM_SPELL`/`RM_MAGICFIRE` 会落进**施法者自己的队列**）。
+- 因此 A 路径需要：真实 `Envirnoment`（有参数构造 + `LoadMapData`）或最小 `IEnvirnoment` 实现
+  （按格返回含施法者的 `ObjList`）+ 把施法者登记进 `SystemShare.ActorMgr`；二者都不改生产代码。
+  选定并跑通后，`1/5 火球` 的 RM+RNG+状态三项即可落第一个 `verified(semantic)`。
+
 ## 6. 装置进展（2026-11-19）
 
 - **骨架已建**：`mir2-rs/tests/parity/csharp/MagicGolden/`（net8.0，只读引用 `M2Server`/`OpenMir2`）。
