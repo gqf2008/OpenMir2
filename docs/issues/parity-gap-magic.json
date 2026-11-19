@@ -314,13 +314,22 @@
         "line": 204,
         "line_end": null
       },
-      "status": "implemented_unverified",
+      "status": "verified",
+      "basis": "semantic",
       "evidence": {
-        "test": null,
-        "test_file": null,
-        "fixture": null,
-        "cases": [],
-        "unit_tests": []
+        "test": "real_rust_ledger_healing",
+        "test_file": "mir2-rs/tests/parity/tests/magic_fireball_parity.rs",
+        "fixture": "mir2-rs/tests/parity/golden/magic/healing.json（C# oracle 生成；三支 heal/full/self）",
+        "cases": [
+          "heal(seed=1)",
+          "full(seed=5)",
+          "self(seed=13)"
+        ],
+        "unit_tests": [
+          "tests::healing_parity_heal",
+          "tests::healing_parity_full",
+          "tests::healing_parity_self"
+        ]
       },
       "cost": "S",
       "deviation": null,
